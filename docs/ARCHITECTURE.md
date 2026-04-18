@@ -5,121 +5,116 @@
 ## Overview
 
 ```
-                    naia-adk (OSS — this repo)
-                    ┌─────────────────────────┐
-                    │  Runtime Engine Spec     │
-                    │  Skill Execution Contract│
-                    │  Adapter Interface       │
-                    │  .naia/ Directory Spec   │
-                    │  Safety / Permission     │
-                    └────────────┬────────────┘
-                                 │
-          ┌──────────────────────┼──────────────────────┐
-          │                      │                      │
-          ▼                      ▼                      ▼
-   naia-adk-b              {company}-adk            naia-os
-   (business layer)        (company workspace)      (desktop product)
-   ┌──────────────┐        ┌──────────────┐        ┌──────────────┐
-   │ naia-adk     │        │ naia-adk-b   │        │ naia-adk     │
-   │ + CLI        │        │ + Company    │        │ + naia-shell │
-   │ + Base Skills│        │   context    │        │ + Agent      │
-   │ + Docgen     │        │ + Company    │        │ + Gateway    │
-   │ + PDF/Sign   │        │   skills     │        │              │
-   └──────────────┘        │ + Branding   │        │ = Desktop App│
-                            └──────────────┘        └──────────────┘
-                                   │
-                          ┌────────┴────────┐
-                          ▼                 ▼
-                   nextain-adk         onmam-adk
-                   (Nextain CEO)       (Onmam CTO)
-                   개발자 워크스페이스    온맘 팀원 워크스페이스
+            naia-adk (OSS — this repo)
+            ┌─────────────────────────┐
+            │  Individual Skills      │
+            │  review-pass, email     │
+            │  sms, read-doc          │
+            │  doc-coauthoring        │
+            │  document-generation    │
+            │  channel-management     │
+            │  web-monitoring         │
+            │  service-management     │
+            └────────────┬────────────┘
+                         │ extends
+                         ▼
+                  naia-adk-b (private)
+                  ┌─────────────────────┐
+                  │  + Business Skills  │
+                  │  payroll, contract  │
+                  │  expense, accounting│
+                  │  CRM, patent, PR    │
+                  │  + CLI, Docgen, PDF │
+                  └────────┬────────────┘
+                           │ naia init
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+        nextain-adk   onmam-adk    {company}-adk
+        (CEO Luke)    (Onmam CTO)  (any company)
+        .naia/        .naia/        .naia/
+        context.yaml  context.yaml  context.yaml
+        data/         data/         data/
 ```
-
-## How naia-adk Is Used
-
-### Usage 1: Business Scaffold → naia-adk-b
-
-```
-naia-adk (this repo)
-  ↓ fork + extend
-naia-adk-b
-  CLI: naia init / skill add / adapter connect
-  Base Skills: review-pass, document-generation, email
-  Scripts: generate-pdf.py, sign-pdf.py
-  Templates: contract, resolution, payroll
-```
-
-**Who**: Companies wanting AI business operations toolkit.
-
-**What naia-adk provides**: Runtime engine loads skills, executes contracts, manages adapters. naia-adk-b adds ready-made business skills on top.
-
-### Usage 2: Company Workspace → nextain-adk
-
-```
-naia-adk (this repo)
-  ↓ fork → naia-adk-b → fork + init
-nextain-adk
-  .naia/context.yaml    ← Nextain company info (name, biz_no, branding)
-  .naia/skills/payroll/  ← 급여명세서
-  .naia/skills/contract/ ← 근로계약서
-  .naia/skills/expense/  ← 지출결의서
-  data/employees.yaml    ← git-crypt encrypted
-  accounting/ hr/ documents/
-```
-
-**Who**: A specific company (Nextain) running their AI business.
-
-**What naia-adk provides**: The runtime that loads company context, executes company skills, manages company data securely.
-
-### Usage 3: Desktop Product → naia-os
-
-```
-naia-adk (this repo)
-  ↓ consumed as runtime dependency
-naia-os
-  Agent (Node.js): 9 LLM providers, 20+ skills, gateway adapter
-  Shell (Tauri 2 + React + Three.js): Desktop UI with VRM avatar
-  Gateway (OpenClaw): System access daemon
-  = Full desktop app for end users
-```
-
-**Who**: End users running Naia on their desktop.
-
-**What naia-adk provides**: SkillRegistry, LlmProviderRegistry, SafetyPredicate, adapter interface — proven patterns extracted from naia-os's 20k+ LOC agent.
 
 ## Layer Rules
 
-| Rule | Description |
-|------|-------------|
-| Each layer only **adds**, never replaces | naia-adk-b extends naia-adk, doesn't modify it |
-| naia-adk is **agnostic** | No company data, no business logic, no UI |
-| naia-adk-b is **generic business** | No company-specific data or branding |
-| {company}-adk is **specific** | One company's context, skills, and data |
-| naia-os is a **product** | Bundles runtime + UI + system access |
+| Layer | What | For Who |
+|-------|------|---------|
+| **naia-adk** | 개인용 스킬 (9) | 모든 개인 — 개발자, 크리에이터, 프리랜서 |
+| **naia-adk-b** | 개인용 + 비즈니스 스킬 (20) | 회사 운영하는 슈퍼개인 / 소규모 팀 |
+| **{company}-adk** | naia-adk-b + 회사 데이터 | 특정 회사의 업무 환경 |
 
-## Dependency Flow
+## naia-adk Skills (9 — Individual)
+
+| Skill | Description |
+|-------|-------------|
+| `review-pass` | 4-stage multi-AI cross-validation review |
+| `email` | SMTP email with templates |
+| `sms` | SMS/알림톡 |
+| `read-doc` | HWP/PDF/DOCX/XLSX text extraction |
+| `doc-coauthoring` | Structured document co-authoring |
+| `document-generation` | PDF generation (contract/resolution/payroll) |
+| `channel-management` | Discord/Slack channel management |
+| `web-monitoring` | SEO, uptime, analytics |
+| `service-management` | Service monitoring, incident response |
+
+## naia-adk-b Skills (11 — Business, adds on top)
+
+| Skill | Description |
+|-------|-------------|
+| `payroll` | 급여명세서 PDF + 이메일 발송 |
+| `contract` | 근로계약서 (근로기준법) + 디지털 서명 |
+| `expense` | 지출결의서 + 영수증 OCR |
+| `accounting` | 장부 기록, 월마감, 세무 |
+| `crm` | 파일 기반 경량 CRM |
+| `client-communication` | 고객 소통 관리 |
+| `copyright-reg` | 어문저작권 등록 서류 |
+| `patent-draft` | 특허 명세서 초안 |
+| `patent-pipeline` | 특허 발굴·평가·출원 |
+| `press-release` | 보도자료 작성·발송 |
+| `weekly-report` | 주간 업무 결과 |
+
+## {company}-adk (Company Workspace)
+
+`naia init {name}` creates:
 
 ```
-naia-adk ──────────────────────────────────────────┐
-   │ npm workspace                                  │ npm package
-   ▼                                                ▼
-naia-adk-b ──┐                              ┌── naia-os
-   │          │                              │      │
-   │ fork     │                              │      │ naia-shell
-   │ + init   │                              │      │ (Tauri + React)
-   ▼          │                              │      │
-nextain-adk   │                              │      │
-              │                              │      │
-              └── skills loaded by ──────────┘──────┘
-                  naia-adk runtime (skill loader)
+{name}-adk/
+├── .naia/
+│   ├── context.yaml      ← 회사 정보
+│   ├── config.yaml        ← 런타임 설정
+│   ├── skills/            ← 회사 전용 스킬 (필요시)
+│   ├── adapters/          ← 이메일, SMS, 서명 설정
+│   └── templates/         ← 회사 브랜딩 템플릿
+├── .local/                ← 개인 확장 (gitignore)
+├── data/                  ← 직원, 고객, 비용 데이터
+├── documents/             ← 생성된 문서
+├── accounting/            ← 회계 파일
+└── hr/                    ← 인사 파일
 ```
 
-## Quick Reference
+## Real Examples
 
-| Project | = naia-adk + | Repo | Public |
-|---------|-------------|------|:------:|
-| naia-adk | — (base) | `nextain/naia-adk` | Yes |
-| naia-adk-b | CLI + base skills + docgen | `nextain/naia-adk-b` | No |
-| nextain-adk | naia-adk-b + Nextain context | TBD | No |
-| naia-shell | Tauri 2 + React + VRM UI | `nextain/naia-os` (/shell) | Yes |
-| naia-os | shell + agent + gateway | `nextain/naia-os` | Yes |
+### nextain-adk (= Luke's workspace)
+
+```
+D:\dev\                    ← 이게 곧 nextain-adk
+├── .naia/
+│   └── context.yaml       ← 넥스테인 회사정보
+├── .agents/               ← 개발 워크플로우
+├── naia-adk/              ← OSS 개발 (submodule)
+├── naia-adk-b/            ← 비즈니스 개발 (submodule)
+├── naia-os/               ← 데스크톱 제품 (submodule)
+├── home.onmam.com/        ← 온맘 프로젝트 (submodule)
+└── ...
+```
+
+### onmam-adk (= Onmam team workspace)
+
+```
+onmam-adk/
+├── .naia/
+│   └── context.yaml       ← 온맘 회사정보
+├── data/                   ← 온맘 직원/고객 데이터
+└── documents/              ← 온맘 문서
+```
