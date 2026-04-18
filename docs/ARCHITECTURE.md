@@ -17,16 +17,22 @@
           ┌──────────────────────┼──────────────────────┐
           │                      │                      │
           ▼                      ▼                      ▼
-   naia-adk-b              nextain-adk             naia-os
-   (business layer)        (company layer)         (desktop product)
+   naia-adk-b              {company}-adk            naia-os
+   (business layer)        (company workspace)      (desktop product)
    ┌──────────────┐        ┌──────────────┐        ┌──────────────┐
    │ naia-adk     │        │ naia-adk-b   │        │ naia-adk     │
-   │ + CLI        │        │ + Nextain    │        │ + naia-shell │
+   │ + CLI        │        │ + Company    │        │ + naia-shell │
    │ + Base Skills│        │   context    │        │ + Agent      │
    │ + Docgen     │        │ + Company    │        │ + Gateway    │
    │ + PDF/Sign   │        │   skills     │        │              │
    └──────────────┘        │ + Branding   │        │ = Desktop App│
-                           └──────────────┘        └──────────────┘
+                            └──────────────┘        └──────────────┘
+                                   │
+                          ┌────────┴────────┐
+                          ▼                 ▼
+                   nextain-adk         onmam-adk
+                   (Nextain CEO)       (Onmam CTO)
+                   개발자 워크스페이스    온맘 팀원 워크스페이스
 ```
 
 ## How naia-adk Is Used
