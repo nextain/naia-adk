@@ -1,0 +1,27 @@
+# {company}-adk .gitignore template
+# Each company-adk should have this pattern for per-developer extensions
+
+# Personal extensions (per-developer, never committed)
+# Developers put their own scripts, configs, overrides here
+.local/
+
+# Environment secrets
+.env
+.env.*
+
+# Generated documents (reproducible from skills)
+documents/
+*.pdf
+
+# Encrypted data (if using git-crypt instead)
+data/employees.yaml
+data/salaries/
+hr/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
