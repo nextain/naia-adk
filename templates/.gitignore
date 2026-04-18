@@ -3,7 +3,7 @@
 
 # Personal extensions (per-developer, never committed)
 # Developers put their own scripts, configs, overrides here
-.local/
+.private/
 
 # Environment secrets
 .env
