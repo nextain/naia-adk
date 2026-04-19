@@ -1,5 +1,7 @@
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3141";
+
 async function getSkills() {
-  const res = await fetch("http://localhost:3141/api/skills", { cache: "no-store" })
+  const res = await fetch(`${API}/api/skills`, { cache: "no-store" })
   if (!res.ok) return []
   return res.json()
 }

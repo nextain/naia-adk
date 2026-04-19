@@ -8,12 +8,15 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "tsx packages/server/src/cli.ts serve",
+    "dev": "concurrently -n server,dashboard -c blue,green \"tsx packages/server/src/cli.ts serve\" \"pnpm --filter @naia-adk/dashboard dev\"",
+    "dev:server": "tsx packages/server/src/cli.ts serve",
+    "dev:dashboard": "pnpm --filter @naia-adk/dashboard dev",
     "serve": "tsx packages/server/src/cli.ts serve",
     "build": "tsc --build"
   },
   "devDependencies": {
-    "typescript": "^5.8.0",
-    "tsx": "^4.19.0"
+    "concurrently": "^9.2.1",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
   }
 }

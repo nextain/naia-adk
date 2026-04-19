@@ -1,11 +1,13 @@
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3141";
+
 async function getTree() {
-  const res = await fetch("http://localhost:3141/api/workspace/tree?depth=1", { cache: "no-store" })
+  const res = await fetch(`${API}/api/workspace/tree?depth=1`, { cache: "no-store" })
   if (!res.ok) return null
   return res.json()
 }
 
 async function getIndex() {
-  const res = await fetch("http://localhost:3141/api/workspace/index", { cache: "no-store" })
+  const res = await fetch(`${API}/api/workspace/index`, { cache: "no-store" })
   if (!res.ok) return null
   return res.json()
 }
