@@ -1,6 +1,8 @@
 import { promises as fs } from "fs"
 import path from "path"
 
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3141";
+
 async function getConfigFiles(root: string) {
   const files: { name: string; path: string }[] = []
   const configDir = path.join(root, ".agents", "context")
@@ -13,8 +15,19 @@ async function getConfigFiles(root: string) {
   return files
 }
 
+async function getServerHealth() {
+  try {
+    const res = await fetch(`${API}/api/health`, { cache: "no-store" })
+    if (res.ok) return await res.json()
+  } catch {}
+  return null
+}
+
 export default async function SettingsPage() {
-  const files = await getConfigFiles(process.cwd())
+  const [files, health] = await Promise.all([
+    getConfigFiles(process.cwd()),
+    getServerHealth(),
+  ])
 
   return (
     <div className="space-y-6">
@@ -32,6 +45,12 @@ export default async function SettingsPage() {
       <div>
         <h2 className="text-lg font-semibold mb-3 text-neutral-300">Server</h2>
         <div className="p-4 rounded-lg border border-neutral-800 space-y-2">
+          <div className="flex justify-between items-center">
+            <span className="text-neutral-400">Status</span>
+            <span className={`text-xs px-2 py-0.5 rounded ${
+              health ? "bg-green-900/30 text-green-400" : "bg-red-900/30 text-red-400"
+            }`}>{health ? "connected" : "disconnected"}</span>
+          </div>
           <div className="flex justify-between">
             <span className="text-neutral-400">API Port</span>
             <span className="font-mono">3141</span>
@@ -44,6 +63,12 @@ export default async function SettingsPage() {
             <span className="text-neutral-400">Host</span>
             <span className="font-mono">localhost</span>
           </div>
+          {health && (
+            <div className="flex justify-between">
+              <span className="text-neutral-400">Workspace</span>
+              <span className="font-mono text-xs truncate max-w-xs">{health.root}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -54,7 +79,9 @@ export default async function SettingsPage() {
             <div key={client}
               className="p-4 rounded-lg border border-neutral-800 flex items-center justify-between">
               <span className="font-medium">{client}</span>
-              <span className="text-xs px-2 py-0.5 rounded bg-neutral-800 text-neutral-500">disconnected</span>
+              <span className={`text-xs px-2 py-0.5 rounded ${
+                client === "opencode" && health ? "bg-green-900/30 text-green-400" : "bg-neutral-800 text-neutral-500"
+              }`}>{client === "opencode" && health ? "connected" : "disconnected"}</span>
             </div>
           ))}
         </div>
