@@ -1,0 +1,30 @@
+트리아젠트 완료. 결과 요약:
+
+## Daily Triage — 2026-04-08
+
+| 항목 | 수치 |
+|------|------|
+| 전체 오픈 이슈 | **130** (+5 from 125) |
+| 신규 이슈 | **5** (naia-os 2, aiedu 3) |
+| 라벨 추가 | **5** |
+| 폐쇄 | **0** |
+
+### 신규 이슈 평가
+- **naia-os #219** (voice: /v1/omni → /v1/realtime 마이그레이션) → P2-medium
+- **naia-os #220** (voice: Silero ONNX VAD 교체) → P2-medium
+- **aiedu #73** (실습 환경 다국어) → P1-high (maintainer 수동 설정, 존중)
+- **aiedu #74** (E2E terminal-test) → P2-medium
+- **aiedu #75** (mark_lesson_complete AI tool) → P2-medium
+
+### 주요 이상 징후
+1. **naia-os P0 3건 8-9일 방치** — #187, #182, #175. 3회 연속 플래깅. B2C가 실제 최우선이라면 P1 강등 권장
+2. **close velocity 0 — 14일+** — 이슈만 늘고 닫히지 않음. 완료된 작업의 이슈 close 필요
+3. **aiedu #68 (P0) revenue blocker** — 2일차. 구매 페이지 로그인 불가
+4. **Voice 이슈 클러스터 8건** — 모두 계획 단계, 실행 없음
+
+### 최우선 권고
+1. **aiedu #68** 오늘 수정 (매출 차단)
+2. **admin #14→#15→#16** 순차 진행 (B2C 파이프라인)
+3. **stale P0 3건** P1 강등 검토
+
+리포트: `scripts/triage/reports/2026-04-08.md`

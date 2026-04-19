@@ -1,0 +1,21 @@
+{
+  "issue": "#184 태스크 라이프사이클 프레임워크",
+  "issue_url": "https://github.com/nextain/naia-os/issues/184",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "plan", "build", "review", "e2e_test", "post_test_review", "sync", "sync_verify", "report", "commit", "close"],
+  "current_task": "완료",
+  "key_decisions": [
+    "인메모리 라이프사이클 MVP",
+    "ref-cc 패턴만 참고, 코드/흔적 금지 (public repo)",
+    "이전 vs 이후 개선 효과 테스트 포함",
+    "타입명: JobState/JobTracker (ref-cc Task와 다르게)",
+    "3 Phase: 타입+레지스트리 → 실행 통합 → 효과 테스트"
+  ],
+  "commits": [
+    "6e4e0f79 feat(agent): job lifecycle tracking (#184)",
+    "3685c6a7 fix(agent): defensive job tracking (#184)",
+    "9826503b test(agent): combined filter test (#184)"
+  ],
+  "closed": true,
+  "note": "세션 중단으로 close 단계 누락 → 복구 처리 (2026-04-03)"
+}

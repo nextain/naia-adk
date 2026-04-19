@@ -1,0 +1,27 @@
+id: REQ-042
+title: "LemonSqueezy Billing"
+title_ko: "LemonSqueezy 결제"
+product: naia.nextain.io
+module: billing
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  LemonSqueezy-powered billing with subscription lifecycle management, credit purchases, and idempotent webhook handling.
+
+acceptance_criteria:
+  - "Subscription lifecycle (create, renew, cancel) works"
+  - "Credit purchases complete successfully"
+  - "Webhooks are handled idempotently"
+  - "Billing status reflects in user dashboard"
+
+trace:
+  code:
+    - path: "src/app/api/webhooks/lemonsqueezy/route.ts"
+      symbol: "LemonSqueezyWebhook"
+      coverage: full

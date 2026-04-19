@@ -1,0 +1,417 @@
+# Lessons Learned
+# Copyright 2026 Nextain Inc. All rights reserved.
+#
+# Accumulated lessons from past development cycles.
+# Read during INVESTIGATE phase.
+# Updated during SYNC phase, OR immediately when a correction occurs mid-session (anti-compact).
+#
+# Format:
+#   - date: YYYY-MM-DD
+#     issue_type: category keyword
+#     mistake: what went wrong
+#     root_cause: why it went wrong
+#     lesson: what to do instead
+
+version: 1
+
+entries:
+  - date: "2026-03-03"
+    issue_type: upstream-integration
+    mistake: "Built rsync-based install flow from scratch instead of using existing ostreecontainer"
+    root_cause: "Did not analyze titanoboa's ci_dummy_hook_postrootfs.sh before designing"
+    lesson: "Always read upstream's existing implementation before designing a solution"
+
+  - date: "2026-03-03"
+    issue_type: upstream-integration
+    mistake: "image-info.json had Bazzite references, causing wrong ostreecontainer ref"
+    root_cause: "Did not check all config files that reference image identity"
+    lesson: "Check all config/identity files when changing image references"
+
+  - date: "2026-03-03"
+    issue_type: environment
+    mistake: "/run tmpfs expansion via serial did not reflect in SSH namespace"
+    root_cause: "Different mount namespaces between serial console and SSH session"
+    lesson: "Namespace-sensitive operations must run in the correct session context"
+
+  - date: "2026-03-03"
+    issue_type: testing
+    mistake: "E2E timeout measured with wall clock (date +%s) included sleep time"
+    root_cause: "Wall clock vs active time confusion"
+    lesson: "Use counter-based accumulation for timeout, not wall clock"
+
+  - date: "2026-03-04"
+    issue_type: code-review
+    mistake: "Classified entire section as 'keep' without line-by-line comparison"
+    root_cause: "Reviewed at section granularity, not line granularity"
+    lesson: "Even 'keep' sections must be compared line-by-line against upstream original"
+
+  - date: "2026-03-04"
+    issue_type: upstream-integration
+    mistake: "Used bootc switch (network-dependent) for offline install → hang"
+    root_cause: "Referenced CI dummy hook instead of actual production hook"
+    lesson: "Distinguish CI/test code from production code — always reference production"
+
+  - date: "2026-03-04"
+    issue_type: working-code
+    mistake: "Switched SSH-based Anaconda launch to serial/debug mode → D-Bus crash"
+    root_cause: "Replaced working flow with 'better' alternative without preserving original"
+    lesson: "Never break working code by switching modes — preserve first, then improve"
+
+  - date: "2026-03-06"
+    issue_type: misdiagnosis
+    mistake: "Diagnosed SDDM/GPU card0 issue, applied --device flag → kwin crash, worsened problem"
+    root_cause: "Acted on symptom (black screen) without identifying root cause (Plymouth hang)"
+    lesson: "Identify root cause before applying fixes. Ask user to describe exact symptom first"
+
+  - date: "2026-03-06"
+    issue_type: platform-knowledge
+    mistake: "Wrote Plymouth naia.script using Math.Sin/Math.Abs (JavaScript API)"
+    root_cause: "Plymouth script language is NOT JavaScript — simple C-like, no Math object"
+    lesson: "Plymouth script = custom language, not JS. Use two-step module for standard themes"
+
+  - date: "2026-03-06"
+    issue_type: testing-gap
+    mistake: "Plymouth theme hang not caught by QEMU/VNC E2E tests"
+    root_cause: "Plymouth gracefully falls back in virtual environment, only hangs on real hardware"
+    lesson: "Plymouth theme validation requires real hardware testing, not just VM/E2E"
+
+  - date: "2026-03-06"
+    issue_type: ci-maintenance
+    mistake: "Build Naia CI silently failing for unknown duration due to wrong font package name"
+    root_cause: "google-noto-sans-cjk-kr-fonts renamed to google-noto-sans-cjk-vf-fonts in Fedora 43"
+    lesson: "Monitor CI status actively. Package names change across Fedora releases"
+
+  - date: "2026-03-07"
+    issue_type: context-reading
+    mistake: "Explained naia-os context update process based only on root CLAUDE.md, missed triple-mirror structure"
+    root_cause: "Did not read project entry point (naia-os/CLAUDE.md) before answering about that project"
+    lesson: "When discussing or working on a submodule, ALWAYS read its entry point first — even for questions, not just coding"
+
+  - date: "2026-03-07"
+    issue_type: workflow-violation
+    mistake: "Committed after Review but before E2E Test (Build → Review → Commit, skipping E2E Test)"
+    root_cause: "Completed implementation + review loop, felt 'done', forgot E2E Test comes before Commit"
+    lesson: "Follow issue-driven-development.yaml phase order strictly: Build → Review → E2E Test → Sync → Commit. Never commit before testing."
+
+  - date: "2026-03-07"
+    issue_type: doc-contradiction
+    mistake: "Entry point said 'issues/PRs in any language' while workflow said 'Issue comments in English' — AI tools gave contradictory answers"
+    root_cause: "Two docs serving different audiences (contributor-facing vs process-facing) used conflicting language without clarification"
+    lesson: "When multiple docs cover the same topic for different audiences, entry point must explicitly distinguish the contexts. Test with headless AI to catch contradictions."
+
+  - date: "2026-03-07"
+    issue_type: iteration-discipline
+    mistake: "Iteration review found issues on 3rd and 4th passes that should have been caught on 2nd and 3rd"
+    root_cause: "Earlier passes were not thorough enough — reviewed at section level instead of checking every cross-reference"
+    lesson: "Two consecutive clean passes means TWO genuinely thorough passes. Each pass must check cross-references, not just surface content."
+
+  - date: "2026-03-07"
+    issue_type: upstream-contribution
+    mistake: "Initially planned to submit PR to titanoboa for bootc switch workaround without verifying the issue was real"
+    root_cause: "Assumed our hang was the known upstream bootc bug without checking if the fix was already released or if our own config caused it"
+    lesson: >
+      Upstream issue discovery process:
+      1. Discover potential issue during development
+      2. Verify: is it really upstream, or our mistake? (check our config, environment differences)
+      3. Check: has it already been reported/fixed upstream? (search issues, commits, changelogs)
+      4. If confirmed and unfixed → submit PR with reproduction steps
+      5. If uncertain → open issue to ask (not PR) — avoids wasting maintainer time on invalid contributions
+      Hardware/environment variability (UEFI, disk, GPU, network) can mask the root cause.
+
+  - date: "2026-03-18"
+    issue_type: iteration-discipline
+    mistake: "Declared '2 consecutive clean passes' after checklist-style verification instead of genuinely re-reading files"
+    root_cause: "AI treated iterative review as a checklist exercise — mentally verifying sections from memory rather than actually re-reading each file from the top with fresh eyes"
+    lesson: >
+      Iterative review means: open the file, read it fully from line 1, look for NEW issues you didn't notice before.
+      It does NOT mean: recall what you edited, verify those edits look correct, call it a pass.
+      Signs of false pass: finishing a pass in seconds, no new observations, no cross-references checked.
+      Genuine pass: reads take time, you notice things you hadn't considered, you check inter-file consistency.
+
+  - date: "2026-03-18"
+    issue_type: workflow-wiring
+    mistake: "Skills added to CLAUDE.md but AI could still skip them because skill 실행 시점 had only conditional triggers"
+    root_cause: "Conditional trigger language ('when X happens', 'if doing Y') gives AI discretion to skip if it judges the condition unmet"
+    lesson: >
+      When a skill is wired into the workflow as a mandatory step, add an explicit unconditional trigger line
+      at the TOP of the skill's 실행 시점 section:
+        "**[Phase명] 단계마다** — [workflow file]에 의해 자동 호출됨 (조건 없이 항상 실행)"
+      Without this, the AI treats the trigger as optional and may skip the skill when it 'seems' unnecessary.
+
+  - date: "2026-03-18"
+    issue_type: document-extraction
+    project: read-doc skill
+    mistake: "Used hwp5txt for HWP extraction, got only 875 chars (table placeholders only)"
+    root_cause: "hwp5txt outputs <표><그림> placeholders instead of actual table cell content"
+    lesson: >
+      For HWP extraction, always use hwp5html (not hwp5txt).
+      hwp5txt skips all table content. hwp5html generates full XHTML including tables — strip
+      <style> blocks first (re.DOTALL), then strip all tags, then html.unescape.
+
+  - date: "2026-03-18"
+    issue_type: document-extraction
+    project: read-doc skill
+    mistake: "PPTX/HWPX file lists sorted alphabetically, giving wrong order for 10+ items"
+    root_cause: "sorted() on strings like 'slide1.xml','slide10.xml','slide2.xml' is alphabetic, not numeric"
+    lesson: >
+      When sorting numbered filenames (slide\d+.xml, section\d+.xml), always use numeric key:
+        key=lambda x: int(re.search(r'\d+', x).group())
+      Plain sorted() gives wrong order for 10+ items.
+
+  - date: "2026-03-18"
+    issue_type: document-extraction
+    project: read-doc skill
+    mistake: "DOCX extraction using only doc.paragraphs missed all table content"
+    root_cause: "python-docx paragraphs property does not include table cells"
+    lesson: >
+      For DOCX, always iterate both doc.paragraphs AND doc.tables.
+      Table-heavy documents (e.g. resumes, forms) may have near-zero paragraph text.
+
+  - date: "2026-03-20"
+    issue_type: document-review
+    mistake: "기획/설계 문서 반복 리뷰 중 구현과 다르다는 이유로 설계 내용을 변경함"
+    root_cause: "반복 리뷰 로직이 파일 유형을 구분하지 않음. 코드 리뷰와 기획 문서 리뷰를 동일하게 취급"
+    lesson: >
+      설계 문서에서 AI의 역할은 리뷰어(검토자)이지 저자가 아니다.
+      허용: 오타, 내부 모순, 깨진 링크 — 이것만.
+      금지: 구현이 다르다는 이유로 설계 결정(기술 선택, 인터페이스, 수치 범위 등) 변경.
+      설계 문서 리뷰 클린패스 = "새 발견사항 없음" (코드 리뷰 클린패스 "수정사항 없음"과 다름).
+      구현≠설계 발견 시 에스컬레이션 경로 따를 것:
+        1. 설계 문서 수정 금지
+        2. 조용히 구현에 맞추는 것도 금지
+        3. 사용자에게 보고: 괴리 내용 + 선택지(A설계수정/B구현수정/C의도적차이수용)
+        4. 사용자 결정 대기
+      (시험 문제를 바꿔서 정답 처리하는 것과 같다)
+
+  - date: "2026-03-21"
+    issue_type: harness-design
+    mistake: "하네스가 증상을 억제(설계 결정 변경 금지)했지만 근본 원인(BUILD 중 설계 오류 발견 → 에스컬레이션 누락)을 해결하지 못했음"
+    root_cause: >
+      행동 제약(Action Constraint) — '설계 결정 변경 금지' — 은 증상 억제에 불과.
+      실제 문제는 프로세스 제약 부재: BUILD 중 설계-구현 괴리 발견 시 에스컬레이션 경로가 없었음.
+      AI가 설계 오류를 발견하면 '구현에 맞춰 조용히 해결'하거나 '설계를 바꿔 맞추는' 패턴이 생김.
+    lesson: >
+      하네스 설계 원칙:
+      - 행동 제약만으로는 부족 — 프로세스 제약(무엇을 해야 하는가)이 함께 있어야 함
+      - 권한 모델: 코드(AI=구현자) vs 설계문서(AI=리뷰어) 명시
+      - 에스컬레이션 경로: 발견 → 사용자 보고 → 결정 대기
+      - BUILD 단계가 특히 위험: 구현 중 설계 오류를 발견하기 가장 쉽고,
+        '그냥 넘어가자'는 압박이 가장 강한 시점
+
+  - date: "2026-03-20"
+    issue_type: destructive-action
+    mistake: "git checkout -- 명령을 사용자 확인 없이 즉시 실행함"
+    root_cause: "되돌리기 맥락에서 파괴적 명령의 위험성을 충분히 인지하지 못함"
+    lesson: >
+      git checkout --, git reset --hard, git clean -f 등 변경사항을 영구 삭제하는 명령은
+      사용자 확인 없이 절대 실행하면 안 된다.
+      실행 전 "이 명령을 실행하면 X가 삭제됩니다. 진행할까요?"로 반드시 확인받을 것.
+
+  - date: "2026-03-18"
+    issue_type: architecture-assumption
+    project: vllm-omni / MiniCPM-o
+    mistake: "Assumed CosyVoice2+HiFi-GAN was a heavy addition on top of the model"
+    root_cause: "Treated CosyVoice2 as a full TTS system addition, not as a compatible decoder for existing s3tokenizer codes"
+    lesson: >
+      When a model uses a specific audio codec (e.g. s3tokenizer = CosyVoice-family),
+      using a compatible decoder (CosyVoice2+HiFi-GAN) is NOT adding a new heavy component —
+      it's just decoding the existing codec output. Check the codec lineage before judging VRAM impact.
+      The real VRAM determinant is always the LLM backbone, not the vocoder.
+
+  - date: "2026-03-22"
+    issue_type: indexeddb-cache
+    project: issue-desk (#91)
+    mistake: "cacheIssues used store.put() only — closed/deleted issues accumulated indefinitely"
+    root_cause: "IndexedDB put() is upsert, never delete. Assumed re-sync would overwrite stale records."
+    lesson: >
+      When using IndexedDB as a sync cache, always delete stale records for the synced scope
+      before re-inserting. Use a repo-keyed index cursor to remove old entries first, then put new ones.
+      put()-only patterns accumulate stale data silently across syncs.
+
+  - date: "2026-03-22"
+    issue_type: race-condition
+    project: issue-desk (#91)
+    mistake: "toggleWip async handler had no double-click guard — rapid clicks caused duplicate WIP entries"
+    root_cause: "async event handlers can be re-entered before the first await resolves"
+    lesson: >
+      Any async click handler that mutates shared state (DB + store) needs an isLoading/isToggling
+      flag checked at entry and cleared in finally. Also disable the triggering button while in-flight.
+
+  - date: "2026-03-22"
+    issue_type: silent-failure
+    project: issue-desk (#91)
+    mistake: "fetchMyPRs: regex failure on repository_url set repoStr='unknown', causing id collisions"
+    root_cause: "Used ?? [] fallback after regex match without checking owner/repo validity separately"
+    lesson: >
+      When destructuring regex match results, use flatMap to skip-on-failure rather than
+      a fallback sentinel value like 'unknown'. Sentinel values collapse distinct items to the same key.
+
+  - date: "2026-03-23"
+    issue_type: indexeddb-transaction
+    project: issue-desk (#91)
+    mistake: "addInboxItem resolved on req.onsuccess instead of tx.oncomplete"
+    root_cause: "req.onsuccess fires before the transaction commits; abort between onsuccess and oncomplete causes UI/DB inconsistency"
+    lesson: >
+      IndexedDB write functions must always resolve/reject in tx.oncomplete/tx.onerror.
+      Store the IDBRequest result in an intermediate variable in req.onsuccess, then
+      use it inside tx.oncomplete. Never resolve on req.onsuccess for write operations.
+
+  - date: "2026-03-23"
+    issue_type: review-aggregation
+    project: issue-desk (#91)
+    mistake: "fetchGitHubReviewState used last-in-array aggregation for review state"
+    root_cause: "Array order approach failed when a reviewer's approval was DISMISSED — the dismissed entry was filtered out, leaving the prior approval counted"
+    lesson: >
+      Per-reviewer aggregation requires a Map keyed by reviewer login.
+      DISMISSED reviews should be stored in the Map as neutral (not filtered out),
+      so they correctly supersede prior approvals/rejections for that reviewer.
+      Skip reviews from deleted accounts (null user.login) rather than using a sentinel key.
+
+  - date: "2026-03-23"
+    issue_type: form-save-ordering
+    project: issue-desk (#91)
+    mistake: "Settings.tsx WIP limit validation was placed after store writes, causing partial saves"
+    root_cause: "Validation added at bottom of save() after setPat/setRepos/etc had already executed"
+    lesson: >
+      In a save() function, ALL validation must complete before ANY store writes.
+      If any validation can return early with setError(), it must be positioned
+      before the first setter call. Violating this creates partial-save states where
+      some fields are persisted and others are not.
+
+  - date: "2026-03-23"
+    issue_type: github-api-limitation
+    project: issue-desk (#91)
+    mistake: "Added direction=asc to fetchIssueComments URL — GitHub Issues Comments API ignores it"
+    root_cause: "Assumed GitHub Comments API supports direction/sort params like Issues API does"
+    lesson: >
+      GitHub Issues Comments API (GET /repos/{owner}/{repo}/issues/{n}/comments) does NOT
+      support direction or sort parameters. It always returns oldest-first. If code expects
+      newest-last order (for newest-wins logic), rely on the default oldest-first ordering
+      and scan from end of array. Do not add direction=desc — it is silently ignored.
+
+  - date: "2026-03-23"
+    issue_type: regex-false-positive
+    project: issue-desk (#91)
+    mistake: "MD_PHASE_RE without lookahead matched plain content headers like '## 구현' as IDD phases"
+    root_cause: "phase: prefix was optional in the regex, so any markdown header containing a KEYWORD_MAP key triggered false detection"
+    lesson: >
+      When a regex must distinguish 'intentional markers' from 'incidental content', add
+      a positive lookahead to require at least one distinguishing indicator.
+      For IDD phase detection in MD headers, use (?=.*(?:phase:|단계)) to require either
+      a 'phase:' prefix or '단계' suffix. This prevents false-positives on ordinary
+      section headers that happen to contain phase keywords.
+
+  - date: "2026-03-23"
+    issue_type: regex-character-class
+    project: issue-desk (#91)
+    mistake: "contextRe and MD_PHASE_RE missing digits — 'E2E' (contains '2') was not captured as a single token"
+    root_cause: "Character class [a-zA-Z_\uAC00-\uD7A3] excludes digits, breaking alphanumeric phase names"
+    lesson: >
+      When building regex character classes for phase/keyword matching, include [0-9]
+      if any valid keyword contains digits (e.g. 'E2E', 'e2e_test'). Omitting digits
+      causes the regex to silently split 'E2E' into 'E' + '2E', failing KEYWORD_MAP lookup.
+
+  - date: "2026-03-23"
+    issue_type: react-race-condition
+    project: issue-desk (#91)
+    mistake: "Morning briefing trigger was in a separate useEffect([issues]) — fired before loadCache completed"
+    root_cause: "useEffect([issues]) runs after React batches the setState, but issues may still be [] at that point"
+    lesson: >
+      Do not use a separate useEffect to react to state changes that were set by an async
+      operation (e.g. loadCache). Instead, put the follow-up logic directly inside the
+      async function's completion callback, after the setState call, using
+      useIssuesStore.getState() to read the latest values synchronously.
+      This avoids the empty-state window between setState and useEffect re-run.
+
+  - date: "2026-03-23"
+    issue_type: postmessage-security
+    project: issue-desk (#91)
+    mistake: "postMessage response handler did not validate event.source, allowing any window to resolve the promise"
+    root_cause: "Only event.data.id was checked; a different window could coincidentally send matching id"
+    lesson: >
+      In postMessage response handlers, always validate event.source === window.parent
+      before processing the message. event.origin is not always available (cross-origin
+      SecurityError), but event.source is safe to compare. This prevents other iframes or
+      scripts from accidentally or maliciously resolving bridge promises.
+      Note: targetOrigin='*' on the sending side is a separate concern (necessary when
+      parent origin is unknown due to cross-origin constraints).
+
+  - date: "2026-03-28"
+    issue_type: pattern-compliance
+    project: vllm-omni / MiniCPM-o
+    mistake: "Used pipeline.yaml + StageConfigFactory (unproven new pattern) instead of stage_configs/*.yaml (proven pattern used by all other models)"
+    root_cause: "Chose 'newer' pattern without checking what other models actually use. qwen3_omni, qwen2_5_omni, fish_speech all use stage_configs/*.yaml"
+    lesson: >
+      When a project has two co-existing patterns (old and new), follow the one that
+      other working implementations use. Count how many models use each pattern.
+      If the new pattern has 0 real users, do not be the first — use the proven one.
+      'Newer' does NOT mean 'better'. Stability and legacy compatibility are priorities.
+
+  - date: "2026-03-28"
+    issue_type: operational-completeness
+    project: vllm-omni / MiniCPM-o
+    mistake: "6-pass adversarial code review declared 'clean' but fresh install failed — missing deps, wrong flags, pattern mismatch"
+    root_cause: "Review lenses (accuracy/completeness/consistency) only checked code logic. Did not check: pattern compliance, dependency completeness, fresh install reproducibility, server start flags"
+    lesson: >
+      Code review is necessary but not sufficient. After code review, also verify:
+      1. Pattern compliance: does this match how other implementations work in the same project?
+      2. Dependency completeness: every import has a corresponding entry in requirements
+      3. Fresh install: git clone → pip install → server start → API call works?
+      4. Flag documentation: all required CLI flags documented in scripts and docs
+      These are not optional extras — they are part of 'review complete'.
+
+  - date: "2026-03-28"
+    issue_type: environment-recording
+    project: vllm-omni / MiniCPM-o
+    mistake: "Manual pip installs (minicpmo-utils, s3tokenizer) on RunPod not recorded in requirements or scripts"
+    root_cause: "Treated manual installs as temporary fixes, planned to 'add later', forgot"
+    lesson: >
+      Every manual pip install / apt install must be recorded in requirements/scripts
+      IMMEDIATELY — not 'later'. If you run 'pip install X' on a remote server,
+      the next line must be adding X to requirements.txt.
+      Docstring 'Requires: pip install X' is NOT a substitute for requirements entry.
+
+  - date: "2026-03-28"
+    issue_type: upstream-rebase-compatibility
+    project: vllm-omni / MiniCPM-o
+    mistake: "upstream vllm v0.18.0 rebase broke omni mode — OpenAIServingResponses, OmniOpenAIServingChat crash with model_config=None"
+    root_cause: "Our code depended on vllm internal APIs that changed in the rebase. pipeline.yaml pattern was more fragile than stage_configs pattern"
+    lesson: >
+      When working on a fork, prefer patterns that minimize coupling with upstream internals.
+      stage_configs/*.yaml is self-contained config, pipeline.yaml routes through StageConfigFactory
+      which depends on multiple upstream code paths. More indirection = more breakage surface.
+
+  - date: "2026-03-23"
+    issue_type: react-double-sampling
+    project: issue-desk (#91)
+    mistake: "Used both daysSince(iso) and isStale(iso) in same render — two Date.now() calls, tooltip could show 29 while badge shows stale"
+    root_cause: "isStale() internally calls daysSince() which calls Date.now() again; if clock ticks between the two calls around midnight, the values can diverge"
+    lesson: >
+      When a derived boolean (stale) and its numeric value (staleDays) are needed in the
+      same render, compute the number once and derive the boolean from it inline.
+      Do NOT call the helper function separately — it re-samples Date.now().
+      Pattern: const staleDays = daysSince(iso); const stale = staleDays >= 30;
+
+  - date: "2026-03-23"
+    issue_type: react-useeffect-loop
+    project: issue-desk (#91)
+    mistake: "TriageView useEffect depended on triageBuckets which it modified via setTriageBuckets — caused extra render cycle on every drag-drop"
+    root_cause: "cleanup effect reads triageBuckets and calls setTriageBuckets; adding triageBuckets to deps re-runs the effect after each cleanup"
+    lesson: >
+      When a cleanup useEffect reads then modifies a piece of state, do NOT include that
+      state in the deps array. Instead, read the latest value via store.getState() inside
+      the effect body. This avoids the extra render cycle while still reading fresh data.
+      Pattern: const current = useWorkflowStore.getState().triageBuckets; (inside effect,
+      deps array only includes the trigger, e.g. [issues, setTriageBuckets])
+
+  - date: "2026-03-23"
+    issue_type: uncaught-async-event-handler
+    project: issue-desk (#91)
+    mistake: "handleDrop and handleRemove were async functions called from JSX event props; Promise rejection from IndexedDB not caught"
+    root_cause: "onDrop={(e) => handleDrop(e, key)} discards the returned Promise; if IndexedDB fails, the rejection is unhandled"
+    lesson: >
+      Async functions used as React event handlers must have internal try/catch because
+      JSX event props (onDrop, onClick) do not propagate Promise rejections.
+      The unhandled rejection silently swallows errors with no user feedback.
+      Pattern: wrap the await call in try { ... } catch (err) { console.error(...); }
+      inside the async function itself, not at the call site.

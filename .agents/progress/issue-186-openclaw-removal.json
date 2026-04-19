@@ -1,0 +1,23 @@
+{
+  "issue": "#186 OpenClaw 런타임 제거 (Epic)",
+  "issue_url": "https://github.com/nextain/naia-os/issues/186",
+  "current_phase": "plan",
+  "gates_cleared": ["understand", "scope"],
+  "current_task": "하위 이슈 생성 완료 — Phase 1 (#198) 부터 진행",
+  "key_decisions": [
+    "스킬 생태계: Agent Skills (SKILL.md) 표준이 1등 시민, MCP는 외부 브릿지로만",
+    "호환 방식: 전환 도구 (OpenClaw→Naia, Claude Code→Naia, Naia→export)",
+    "4단계 마이그레이션: #198→#199→#200→#201",
+    "각 Phase를 별도 워크트리로 작업"
+  ],
+  "sub_issues": {
+    "#198": "Phase 1: ToolExecutor 추상화 계층",
+    "#199": "Phase 2: 자체 명령 실행 엔진",
+    "#200": "Phase 3: MCP 스킬 브릿지",
+    "#201": "Phase 4: 완전 제거 + 이관"
+  },
+  "dependencies_completed": {
+    "member-luke#14": "CLOSED",
+    "member-luke#15": "CLOSED"
+  }
+}

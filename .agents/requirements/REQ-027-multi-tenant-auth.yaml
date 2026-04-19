@@ -1,0 +1,27 @@
+id: REQ-027
+title: "Multi-Tenant Auth"
+title_ko: "Î©Ä?∞ÌÖå?åÌä∏ ?∏Ï¶ù"
+product: aiedu.nextain.io
+module: auth
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Multi-tenant authentication supporting API key, SSO (OIDC), and Naia account methods. Organization resolution chain determines the tenant context for each request.
+
+acceptance_criteria:
+  - "API key authentication works for tenant access"
+  - "SSO (OIDC) authentication is supported"
+  - "Naia account authentication is supported"
+  - "Organization resolution chain correctly identifies tenant"
+
+trace:
+  code:
+    - path: "lib/gateway-client.ts"
+      symbol: "fetchOrgConfig"
+      coverage: full

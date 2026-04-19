@@ -1,0 +1,27 @@
+id: REQ-018
+title: "LLM Cost Dashboard"
+title_ko: "?¤ì‹œê°?LLM ë¹„ìš© ?€?œë³´??
+product: naia-os
+module: shell
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Real-time dashboard showing token usage, cost per conversation, and aggregated costs per provider. Helps users monitor and manage their LLM spending.
+
+acceptance_criteria:
+  - "Token usage is tracked and displayed per conversation"
+  - "Cost is calculated and shown per conversation"
+  - "Costs are aggregated and displayed per provider"
+  - "Dashboard updates in real time during conversations"
+
+trace:
+  code:
+    - path: "shell/src/components/CostDashboard.tsx"
+      symbol: "CostDashboard"
+      coverage: full

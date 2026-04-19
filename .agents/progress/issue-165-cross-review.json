@@ -1,0 +1,35 @@
+{
+  "issue": "#165",
+  "issue_url": "https://github.com/nextain/naia-os/issues/165",
+  "title": "Multi-Agent Mutual Verification Framework (cross-review)",
+  "project": "naia-os",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "plan", "sync"],
+  "current_task": "Phase 14: Close — 에스컬레이션 4건 사용자 확인 후 close",
+  "e2e_result": "PASS",
+  "review_log": {
+    "phase": "post_test_review",
+    "type": "code",
+    "mode": "standard",
+    "total_passes": 9,
+    "auto_fixes": 20,
+    "escalations": 4,
+    "result": "2_consecutive_clean",
+    "timestamp": "2026-03-29T14:30:00Z"
+  },
+  "commit": "e60a2c45",
+  "key_decisions": [
+    "14-phase workflow (Close phase added)",
+    "Mock bad reviewer (6 SLOP patterns)",
+    "Domain-aware strike counting",
+    "Phase 2↔3 dependency clarified",
+    "Skill symlink 수정 (plain text → symlink)"
+  ],
+  "escalations": [
+    "consensus.strategy Phase 2 미반영",
+    "R=2 Phase 3 무한루프",
+    "Phase 3 strike 합산 미정",
+    "Dead fields (quorum.dismiss, participant_dismissal, health_check)"
+  ],
+  "updated_at": "2026-03-29T15:00Z"
+}

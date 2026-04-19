@@ -1,0 +1,27 @@
+id: REQ-033
+title: "i18n (ko/en)"
+title_ko: "?�국??지??
+product: aiedu.nextain.io
+module: platform
+status: active
+source: candidate
+priority: low
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Internationalization support for Korean and English locales using next-intl. Locale-aware routing and content delivery.
+
+acceptance_criteria:
+  - "Korean locale is fully supported"
+  - "English locale is fully supported"
+  - "Locale routing works via next-intl"
+  - "Content switches correctly based on selected locale"
+
+trace:
+  code:
+    - path: "i18n/routing.ts"
+      symbol: "routing"
+      coverage: full

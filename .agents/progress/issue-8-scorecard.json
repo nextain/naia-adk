@@ -1,0 +1,31 @@
+{
+  "issue": "#8 하네스 성과 스코어카드",
+  "issue_url": "https://github.com/nextain/member-luke/issues/8",
+  "current_phase": "commit",
+  "gates_cleared": ["understand", "scope", "plan", "build", "review", "e2e_test", "post_test_review", "sync", "sync_verify"],
+  "current_task": "커밋 + 푸시",
+  "key_decisions": [
+    "triage 데일리 보고서와 통합",
+    "자동 수집 + 이상 탐지 + IP 추천",
+    "자동 재오픈 안 함 — 보고만",
+    "allowedTools 정확 명령 제한"
+  ],
+  "review_log": {
+    "phase": "review",
+    "type": "code",
+    "mode": "standard",
+    "total_passes": 5,
+    "auto_fixes": 5,
+    "escalations": 0,
+    "result": "2_consecutive_clean",
+    "timestamp": "2026-04-02T08:40:00"
+  },
+  "e2e_test": {
+    "scorecard_execution": "pass",
+    "throughput_collected": true,
+    "quality_collected": true,
+    "ip_recommendations": 4,
+    "anomalies_detected": true,
+    "timestamp": "2026-04-02T09:18:00"
+  }
+}

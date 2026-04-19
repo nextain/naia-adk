@@ -1,0 +1,85 @@
+{
+  "issue": "#181",
+  "issue_url": "https://github.com/nextain/naia-os/issues/181",
+  "title": "MiniCPM-o 4.5 vllm-omni upstream PR — clean rewrite on upstream/main",
+  "project": "vllm-omni",
+  "current_phase": "post_test_review",
+  "gates_cleared": ["understand", "scope", "plan", "review"],
+  "current_task": "이슈 #181 close — 최종 보고서 + VoiceBench 완료",
+  "completed_this_session": [
+    "Talker max_tokens 2048→512",
+    "Debug logger 제거, finished bool→tensor",
+    "async_chunk=false 안정화 + TODO 문서화",
+    "upstream 리뷰 2회 연속 클린 패스",
+    "E2E 검증: HTTP 200, 텍스트+오디오 정상",
+    "Code2Wav _trim_silence() 추가",
+    "이슈 #205 등록",
+    "#205 Phase 1+2: E2E 대화 테스트 프레임워크 (OmniSpeaker)",
+    "whisper base + 구두점 무시 → STT 98%",
+    "conversation_benchmark.py: 6시나리오 EN 92%",
+    "language_test.py: EN/ZH/KO 비교 — KO Omni TTS 완전 실패 확인",
+    "benchmark_analysis.md + benchmark_summary.md: 종합 분석 — 산업 표준 비교",
+    "ffmpeg 설치 (distrobox vllm-dev)",
+    "해외 벤치마크 조사: OmniBench, SOVA-Bench, MTalk-Bench, DialZara",
+    "CJK 메트릭 구현: metrics/cjk_metrics.py (CER, Semantic Similarity)",
+    "대화 품질 프레임워크: metrics/conversation_quality.py (Relevance, Coherence, Knowledge Retention)",
+    "language_test.py CJK 메트릭 수정: word_accuracy → CER + Semantic Similarity",
+    "conversation_benchmark.py CJK 메트릭 수정: semantic_similarity 추가",
+    "중국어 재검증: CER 76.1% + Semantic 95% → 정상 작동 확인",
+    "공인 테스트 표준 연구 완료: VoiceBench/SOVA-Bench/MTalk-Bench/DialZara 조사",
+    "commit 22a3903b: CJK metrics fix",
+    "SESSION_HANDOFF.md: 세션 종료 정리"
+  ],
+  "benchmark_results": {
+    "english": {
+      "stt_accuracy": "92%",
+      "avg_response_time": "2.3s",
+      "tts_quality": "good",
+      "overall_grade": "A"
+    },
+    "chinese": {
+      "stt_accuracy_cer": "76.1%",
+      "stt_semantic_similarity": "95.0%",
+      "avg_response_time": "1.5s",
+      "tts_quality": "good",
+      "overall_grade": "B+",
+      "notes": "CJK metrics fix resolved - previous 0% was false negative"
+    },
+    "korean": {
+      "text_generation": "correct",
+      "tts_quality": "failed",
+      "stt_accuracy": "N/A (garbled audio)",
+      "notes": "CosyVoice2 not trained on Korean - requires fine-tuning",
+      "overall_grade": "F (TTS only)"
+    },
+    "industry_comparison": {
+      "librispeech_sota": "97-98% STT accuracy",
+      "gpt_4o_latency": "~240ms",
+      "ttft_target": "<300ms",
+      "omnibench_qwen25": "94.8% omni accuracy (7B)",
+      "sova_bench": "4-property evaluation (Knowledge, Recognition, Understanding, Generation)",
+      "voicebench": "Knowledge, Instruction, Robustness, Safety",
+      "mtalk_bench": "3 dimensions (Semantic, Paralinguistic, Ambient)",
+      "dialzara": "5 metrics for conversational AI (2025)"
+    },
+    "remaining_issues": {
+      "stop_token_6561": "Talker가 stop token 6561 미생성 → 오디오 20.4s 고정 (conditioning 필요)",
+      "async_chunk": "true 필요사항: thinker2talker_async_chunk + Talker 스트리밍 + SharedMemoryConnector",
+      "korean_tts": "CosyVoice2 한국어 미지원 → TTS 실패. AI챔피언 파인튜닝 과제 검토",
+      "chinese_cer_improvement": "현재 76.1%는 양호하나 LibriSpeech SOTA(97-98%)보다 낮음 - CJK 언어 특성 고려 필요"
+    },
+    "next_steps": [
+      "이슈 #181 close — 댓글 작성 + close",
+      "이슈 #72 스트리밍 (async_chunk) — 다음 작업",
+      "이슈 #206 KO 평가셋 — 별도 트랙"
+    ],
+    "voicebench_results": {
+      "knowledge": "100% pass rate (20 samples)",
+      "instruction": "95% pass rate (20 samples)",
+      "robustness": "100% pass rate (20 samples)",
+      "safety": "100% pass rate (15 samples)",
+      "overall": "98.0% avg score, 98.7% pass rate",
+      "mode": "text-only, rule-based scoring",
+      "runner": "examples/online_serving/minicpm_o/voicebench_runner.py"
+    }
+}

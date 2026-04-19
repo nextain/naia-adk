@@ -1,0 +1,19 @@
+{
+  "issue": "#199 OpenClaw 제거 Phase 2 — 자체 명령 실행 엔진",
+  "issue_url": "https://github.com/nextain/naia-os/issues/199",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "plan"],
+  "current_task": "완료",
+  "build_summary": {
+    "commit": "ac1cd053",
+    "new_files": 2,
+    "modified_files": 4,
+    "test_results": "864 passed, 10 new"
+  },
+  "review_log": {
+    "type": "code",
+    "total_passes": 9,
+    "auto_fixes": 6,
+    "result": "2_consecutive_clean"
+  }
+}

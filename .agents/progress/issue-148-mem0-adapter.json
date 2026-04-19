@@ -1,0 +1,19 @@
+{
+  "issue": "#148",
+  "issue_url": "https://github.com/nextain/naia-os/issues/148",
+  "title": "feat: mem0 MemoryAdapter 구현",
+  "project": "naia-os",
+  "epic": "#145",
+  "current_phase": "build",
+  "gates_cleared": ["understand", "scope", "plan"],
+  "current_task": "Mem0Adapter 코드 완성. Live 테스트는 Gateway embeddings 엔드포인트 필요.",
+  "key_decisions": [
+    "mem0ai/oss SDK 직접 사용 (Gateway 플러그인이 아닌 Agent 내장)",
+    "pg peer dep 필요 (mem0가 내부에서 import)",
+    "Live 테스트는 MEM0_LIVE_TEST=1 환경변수로 게이팅"
+  ],
+  "blockers": [
+    "Gateway /v1/embeddings 엔드포인트 미지원 (405 error) — live 테스트 불가"
+  ],
+  "updated_at": "2026-03-27T02:10Z"
+}

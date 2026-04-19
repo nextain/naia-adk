@@ -1,0 +1,27 @@
+id: REQ-003
+title: "TTS Provider Registry"
+title_ko: "?¥Î∞±???¨Ìï®??TTS ?ÑÎ°úÎ∞îÏù¥???àÏ??§Ìä∏Î¶?
+product: naia-os
+module: agent
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Registry-based TTS system with multiple providers: Edge, Google, OpenAI, ElevenLabs, and Nextain. Automatic fallback to Edge TTS when the primary provider fails, ensuring uninterrupted voice synthesis.
+
+acceptance_criteria:
+  - "Edge TTS, Google TTS, OpenAI TTS, ElevenLabs, and Nextain providers are registered"
+  - "Automatic fallback to Edge TTS when primary provider fails"
+  - "Provider selection is configurable per session or user preference"
+  - "Audio synthesis produces playable output for all registered providers"
+
+trace:
+  code:
+    - path: "agent/src/tts/registry.ts"
+      symbol: "synthesize"
+      coverage: full

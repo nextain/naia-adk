@@ -1,0 +1,28 @@
+{
+  "issue": "#213 naia.nextain.io 메모리 백업 UI",
+  "issue_url": "https://github.com/nextain/naia.nextain.io/issues/213",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "investigate", "plan", "build", "review"],
+  "current_task": "complete",
+  "key_decisions": [
+    "Settings page는 Server Component이므로 gateway-client 직접 호출 (BFF 라우트는 미래 클라이언트용으로 유지)",
+    "slot 타입은 string 대신 'A'|'B' union으로 좁힘",
+    "envelope unwrap 로직 추가 (listKeys/getModelPricing 패턴 동일)",
+    "!slotA && !slotB guard로 빈 카드 방지"
+  ],
+  "commit": "2a44dea",
+  "review_log": {
+    "phase": "review",
+    "type": "code",
+    "mode": "standard",
+    "total_passes": 9,
+    "auto_fixes": 6,
+    "escalations": 2,
+    "result": "2_consecutive_clean",
+    "timestamp": "2026-04-04T09:00:00Z"
+  },
+  "escalations": [
+    "blob_sha256/blob_size 미표시 — 제품 결정 필요",
+    "Server Component UTC 날짜 표시 — UX 결정 필요"
+  ]
+}

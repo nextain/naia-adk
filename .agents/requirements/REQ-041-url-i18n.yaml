@@ -1,0 +1,27 @@
+id: REQ-041
+title: "URL-Based i18n"
+title_ko: "URL 기반 ?�국??
+product: naia.nextain.io
+module: i18n
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  14 locales served via URL path prefix (e.g., /en/, /ko/). hreflang tags for SEO. Language detection and redirect for root path.
+
+acceptance_criteria:
+  - "14 locales are served via URL path prefix"
+  - "hreflang tags are generated for SEO"
+  - "Root path detects language and redirects"
+  - "Locale switching updates URL correctly"
+
+trace:
+  code:
+    - path: "src/i18n/config.ts"
+      symbol: "i18nConfig"
+      coverage: full

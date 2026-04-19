@@ -1,0 +1,58 @@
+{
+  "issue": "#189 Memory benchmark 1000-fact comparison / 1000개 팩트 메모리 시스템 비교 벤치마크",
+  "issue_url": "https://github.com/nextain/naia-os/issues/189",
+  "current_phase": "build",
+  "gates_cleared": ["understand", "scope", "plan"],
+  "current_task": "KO 벤치마크 실행 중 (백그라운드 진행 중, ~66% 완료)",
+  "key_decisions": [
+    "judge: claude-cli (EN 완료분) → GLM-5.1 배치 judge로 전환 (저렴 + 공정성)",
+    "graphiti = zep 대체 (오픈소스 temporal knowledge graph)",
+    "zep CE deprecated → 제외",
+    "grading: S(95+)/A(85-95)/B(75-85)/C(50-75)/D(40-50)/E(30-40)/F(<30%) + (-abstention)",
+    "GLM_API_KEY 저장 위치: my-envs/naia.nextain.io.env",
+    "GEMINI_API_KEY: AIzaSyChynkHYQeJ_iARP8NqxaH30kM_igDZS_k",
+    "batch judge: 20개씩 묶어서 GLM API 호출 (240 × 9 = 2160번 → ~108번)",
+    "llm: Gemini 2.5 Flash (응답 생성), judge: GLM-5.1 (채점), embedder: Gemini"
+  ],
+  "en_results_completed": [
+    { "adapter": "naia", "lang": "en", "score": "71%", "grade": "F (abstention fail)", "log": "full-bench-en-20260407.log" },
+    { "adapter": "mem0", "lang": "en", "score": "53%", "grade": "F (abstention fail)", "log": "full-bench-en-20260407.log" },
+    { "adapter": "sillytavern", "lang": "en", "score": "67%", "grade": "F (abstention fail)", "log": "full-bench-en-20260407.log" },
+    { "adapter": "sap", "lang": "en", "score": "26%", "grade": "F (-abstention)", "log": "sap-en-20260407-v2.log" },
+    { "adapter": "openclaw", "lang": "en", "score": "25%", "grade": "F (-abstention)", "log": "openclaw-en-20260407.log" }
+  ],
+  "en_results_incomplete": [
+    "letta: 218/240 (91%)",
+    "starnion: 201/240 (84%)",
+    "open-llm-vtuber: 220/240 (92%)",
+    "airi: 0/240 (not started)",
+    "graphiti: 157/240 (65%)"
+  ],
+  "ko_results_status": "실행 중 - 2026-04-07 22:48 시작, 9개 어댑터 병렬, ~160/240 완료 (약 67%)",
+  "adapters_available": [
+    "naia", "mem0", "sap", "sillytavern", "letta", "starnion", "open-llm-vtuber", "airi", "graphiti"
+  ],
+  "servers_running": [
+    "letta: podman letta-bench port 8283",
+    "starnion: podman starnion-gateway port 8080 (postgres:5432, minio:9000)",
+    "graphiti: uv run port 8100 (neo4j port 7687)"
+  ],
+  "run_command": "cd naia-os/agent && export GEMINI_API_KEY=... GLM_API_KEY=... STARNION_URL=http://localhost:8080 STARNION_EMAIL=bench@example.com STARNION_PASSWORD='Benchmark1234!' GRAPHITI_URL=http://localhost:8100 && node_modules/.bin/tsx src/memory/benchmark/comparison/run-comparison.ts --adapters {adapter} --lang ko --judge glm --llm gemini --embedder gemini",
+  "starnion_setup": {
+    "user": "bench@example.com",
+    "password": "Benchmark1234!",
+    "note": "POST /api/v1/auth/register 엔드포인트로 사용자 생성"
+  },
+  "graphiti_setup": {
+    "neo4j_password": "benchpassword",
+    "start_server": "cd /tmp/graphiti/server && OPENAI_API_KEY=$GEMINI_API_KEY OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/ MODEL_NAME=gemini-2.5-flash EMBEDDING_MODEL_NAME=text-embedding-004 NEO4J_URI=bolt://localhost:7687 NEO4J_USER=neo4j NEO4J_PASSWORD=benchpassword uv run uvicorn graph_service.main:app --host 0.0.0.0 --port 8100"
+  },
+  "todo_next_session": [
+    "1. KO 결과 수집 (백그라운드 프로세스 완료 확인)",
+    "2. EN 미완료분 재실행: letta/starnion/open-llm-vtuber/airi/graphiti (GLM judge)",
+    "3. openclaw EN 재확인 (abstention만 있어서 점수 낮을 수 있음)",
+    "4. KO + EN 종합 보고서 작성 (alpha-memory/docs 업데이트)",
+    "5. 이슈 최종 완료 보고 후 close"
+  ],
+  "updated_at": "2026-04-08T00:00Z"
+}

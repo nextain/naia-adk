@@ -1,0 +1,27 @@
+id: REQ-010
+title: "Discord DM Integration"
+title_ko: "Discord DM ?∞Îèô"
+product: naia-os
+module: gateway
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Discord bot integration enabling direct message conversations with the AI agent. Users can interact with Naia through Discord DMs with full conversation context.
+
+acceptance_criteria:
+  - "Discord bot connects and authenticates successfully"
+  - "DM messages are received and processed by the AI"
+  - "AI responses are sent back as Discord DMs"
+  - "Conversation context is maintained across messages"
+
+trace:
+  code:
+    - path: "gateway/src/channels/discord.ts"
+      symbol: "DiscordChannel"
+      coverage: full

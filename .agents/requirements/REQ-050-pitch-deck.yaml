@@ -1,0 +1,27 @@
+id: REQ-050
+title: "Pitch Deck"
+title_ko: "IR ?¼ì¹˜??
+product: about.nextain.io
+module: pitch-deck
+status: active
+source: candidate
+priority: low
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Investor relations page presenting the company pitch deck with key metrics, market opportunity, and product roadmap.
+
+acceptance_criteria:
+  - "Pitch deck page renders with investor-focused content"
+  - "Key metrics are clearly displayed"
+  - "Market opportunity section is informative"
+  - "Product roadmap is presented visually"
+
+trace:
+  code:
+    - path: "src/app/[locale]/pitch-deck/"
+      symbol: "PitchDeckPage"
+      coverage: full

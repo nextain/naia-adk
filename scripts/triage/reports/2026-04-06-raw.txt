@@ -1,0 +1,32 @@
+`knowledge.json` 업데이트에 권한이 필요합니다. 허용 후 업데이트하겠습니다. 현재까지 완료 상황:
+
+---
+
+## 2026-04-06 트리아지 완료
+
+**보고서**: `scripts/triage/reports/2026-04-06.md`
+**last-run.json**: 업데이트 완료
+
+---
+
+### 요약
+- **총 오픈 이슈**: 114 (어제: 112, +2)
+  - naia-os: 82, member-luke: 7(↑1), aiedu: 15(↑1), naia.nextain.io: 4, admin: 4(↑2), any-llm: 2(↓2)
+- **델타 이슈 (4개 신규)**:
+  - `member-luke #17` — 하네스 보강: 보고-멈춤 프로토콜 + git push 보호 → **P1 권장**
+  - `admin #12` — B2C 상품 연결 파이프라인 → **P1 권장** (any-llm#17 빌드 실패로 블로킹)
+  - `admin #13` — 커리큘럼 개발 현황 가시화 → **P2 권장**
+  - `aiedu #66` — 커리큘럼 ID 정규화 → **CLOSE 권장** (커밋 831b079 완료)
+
+### 주요 발견
+1. **any-llm #17 신규 블로커**: `embedding.py` SyntaxError → admin #12 B2C 배포 전체 차단. 즉시 수정 필요.
+2. **aiedu #66 완료 미close**: 작업 완료됐으나 GitHub 이슈 open 유지 중. close 필요.
+3. **standards 변경 없음**: anthropics/skills (`98669c1`), MCP spec (`531e8e7`) 모두 변경 없음.
+
+### 즉각 권장 행동
+1. `any-llm #17` SyntaxError 수정 (B2C 블로커 해제)
+2. `aiedu #66` GitHub close
+3. `naia-os #184` GitHub close (progress 파일 완료 확인)
+4. `naia-os #175` P0→P1 다운그레이드 (6일 stale)
+
+`knowledge.json`에 2개 신규 패턴 추가가 필요합니다 (any-llm 빌드 캐스케이드 패턴, 완료 이슈 미close 패턴). 파일 쓰기 권한을 허용해주시면 업데이트하겠습니다.

@@ -1,0 +1,27 @@
+id: REQ-005
+title: "SQLite Audit Logging"
+title_ko: "SQLite 감사 로깅"
+product: naia-os
+module: shell
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  All tool executions are recorded in SQLite WAL mode for durability and auditability. Payload data is truncated to 4096 bytes to prevent unbounded storage growth while preserving essential audit information.
+
+acceptance_criteria:
+  - "All tool executions are logged to SQLite"
+  - "SQLite operates in WAL mode for concurrent access"
+  - "Payload data is truncated at 4096 bytes"
+  - "Audit logs can be queried and reviewed"
+
+trace:
+  code:
+    - path: "shell/src-tauri/src/audit.rs"
+      symbol: "AuditEvent"
+      coverage: full

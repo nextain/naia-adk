@@ -1,0 +1,27 @@
+id: REQ-039
+title: "API Key Management"
+title_ko: "API ??ê´€ë¦?
+product: naia.nextain.io
+module: keys
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  API key lifecycle management: create, view (one-time reveal via httpOnly cookie), and revoke. Keys are never stored in plain text after creation.
+
+acceptance_criteria:
+  - "API keys can be created with custom names"
+  - "Key value is revealed only once via httpOnly cookie"
+  - "API keys can be revoked"
+  - "Key list shows metadata without exposing secret values"
+
+trace:
+  code:
+    - path: "src/app/[lang]/(protected)/keys/page.tsx"
+      symbol: "KeysPage"
+      coverage: full

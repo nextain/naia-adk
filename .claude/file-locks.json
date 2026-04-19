@@ -1,0 +1,32 @@
+{
+	"_comment": "세션 간 파일 충돌 방지용 잠금 파일. 편집 전 확인, 편집 시작 시 등록, 완료 시 해제.",
+	"locks": {
+		"naia-os/shell/src/components/ChannelsTab.tsx": {
+			"owner": "main",
+			"task": "Discord DM 메시징 뷰 전환",
+			"since": "2026-02-22"
+		},
+		"naia-os/shell/src/components/SettingsTab.tsx": {
+			"owner": "main",
+			"task": "채널 설정 섹션 통합",
+			"since": "2026-02-22"
+		},
+		"naia-os/shell/src/styles/global.css": {
+			"owner": "main",
+			"task": "DM 메시지 스타일 추가",
+			"since": "2026-02-22",
+			"note": "google-chat은 .googlechat-* prefix만 추가 가능"
+		},
+		"naia-os/agent/src/__tests__/discord-dm-send.test.ts": {
+			"owner": "main",
+			"task": "Discord DM E2E 테스트",
+			"since": "2026-02-22"
+		}
+	},
+	"free": [
+		"naia-os/agent/src/skills/built-in/naia-googlechat.ts",
+		"naia-os/agent/src/__tests__/googlechat-*.test.ts",
+		"naia-os/shell/src/components/GoogleChatView.tsx",
+		"naia-os/shell/src/lib/googlechat-poll.ts"
+	]
+}

@@ -1,0 +1,17 @@
+{
+  "issue": "#191",
+  "issue_url": "https://github.com/nextain/naia-os/issues/191",
+  "title": "MiniCPM-o audio input support — Whisper processor for vllm-omni",
+  "project": "vllm-omni",
+  "current_phase": "e2e_test",
+  "gates_cleared": ["understand", "scope", "plan"],
+  "current_task": "E2E PASS — audio input → audio output working",
+  "result": "SUCCESS: 200 OK, 3.7MB WAV audio response from audio input",
+  "key_fixes": [
+    "Use vllm MiniCPMOMultiModalProcessor (not MiniCPMV)",
+    "audio_features kwarg (not input_audio_features)",
+    "embed_multimodal aligned with MiniCPMO4_5 parsing",
+    "get_placeholder_str returns (<audio>./</audio>)",
+    "Talker/Code2Wav limit_mm_per_prompt includes audio:0"
+  ]
+}

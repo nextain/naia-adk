@@ -1,0 +1,68 @@
+# Copyright 2026 Nextain Inc. All rights reserved.
+#
+# Core philosophy of the Naia OS project.
+# This is the "why" — separated from "what" (architecture) and "how" (workflows).
+
+version: 1
+
+principles:
+  ai_sovereignty:
+    title: "AI Sovereignty"
+    statement: "Users choose their AI — no vendor lock-in"
+    details:
+      - "Support multiple LLM providers (Vertex AI, Anthropic, xAI, local models)"
+      - "Users own their AI configuration and can switch freely"
+      - "No single provider dependency in core architecture"
+
+  privacy_first:
+    title: "Privacy First"
+    statement: "Local execution by default — cloud is opt-in"
+    details:
+      - "Desktop-first architecture (Tauri, not Electron cloud)"
+      - "User data stays on device unless explicitly shared"
+      - "Local LLM support (Ollama) as first-class citizen"
+
+  transparency:
+    title: "Transparency"
+    statement: "Open source — verify by reading the code"
+    details:
+      - "All core logic is open source (Apache 2.0)"
+      - "AI context is open and forkable (CC-BY-SA 4.0)"
+      - "No hidden telemetry or data collection"
+
+  assembly_philosophy:
+    title: "Assembly over Invention"
+    statement: "Compose from proven components — don't reinvent"
+    details:
+      - "Use upstream projects as building blocks (OpenClaw, Tauri, etc.)"
+      - "Contribute back to upstream when possible"
+      - "Reference submodules (ref-*) for learning and tracking"
+
+  always_on:
+    title: "Always On"
+    statement: "AI companion as a daemon — always present, always ready"
+    details:
+      - "Background agent architecture (Node.js daemon)"
+      - "Gateway process management (spawn, restart, health check)"
+      - "Persistent AI character state across sessions"
+
+  avatar_centric:
+    title: "Avatar-Centric"
+    statement: "AI as a living character — not just a tool"
+    details:
+      - "Naia: named AI character with personality and voice"
+      - "3D avatar with TTS and emotional expression"
+      - "Soul document (SOUL.md) defines character identity"
+
+  vibe_coding_era:
+    title: "Vibe Coding Era"
+    statement: "AI context files are the new contribution infrastructure"
+    details:
+      - ".agents/ directories encode project philosophy, not just config"
+      - "Context quality determines AI collaboration quality"
+      - "Dual-directory architecture: AI-optimized + human-readable"
+      - "CC-BY-SA licensing preserves the contribution chain"
+
+mirrors:
+  korean: ".users/context/philosophy.md"
+  english: ".users/context/en/philosophy.md"

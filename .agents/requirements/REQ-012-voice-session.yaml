@@ -1,0 +1,28 @@
+id: REQ-012
+title: "Voice Session"
+title_ko: "?§Ï§ë ?ÑÎ°úÎ∞îÏù¥???§ÏãúÍ∞??åÏÑ± ?∏ÏÖò"
+product: naia-os
+module: shell
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Real-time voice sessions supporting multiple providers: Gemini Live, OpenAI Realtime, MiniCPM-O, and vLLM Omni. Integrates STT and TTS for full-duplex voice interaction.
+
+acceptance_criteria:
+  - "Gemini Live provider supports real-time voice interaction"
+  - "OpenAI Realtime provider supports real-time voice interaction"
+  - "MiniCPM-O and vLLM Omni providers are supported"
+  - "STT captures user speech accurately"
+  - "TTS produces natural voice output"
+
+trace:
+  code:
+    - path: "shell/src/lib/voice/gemini-live.ts"
+      symbol: "GeminiLiveVoice"
+      coverage: full

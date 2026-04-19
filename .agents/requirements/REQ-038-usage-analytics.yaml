@@ -1,0 +1,27 @@
+id: REQ-038
+title: "Usage Analytics"
+title_ko: "기간�??�용??분석"
+product: naia.nextain.io
+module: usage
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Period-based usage analytics with daily charts showing requests, tokens, and spend. Supports 7, 30, and 90 day analysis periods.
+
+acceptance_criteria:
+  - "Daily charts display request counts"
+  - "Token usage is tracked and visualized"
+  - "Spend data is shown per period"
+  - "7, 30, and 90 day periods are selectable"
+
+trace:
+  code:
+    - path: "src/app/[lang]/(protected)/usage/page.tsx"
+      symbol: "UsagePage"
+      coverage: full

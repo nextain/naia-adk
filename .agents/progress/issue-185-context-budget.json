@@ -1,0 +1,21 @@
+{
+  "issue": "#185 컨텍스트 윈도우 예산 관리",
+  "issue_url": "https://github.com/nextain/naia-os/issues/185",
+  "current_phase": "open",
+  "gates_cleared": ["understand", "scope", "plan", "build", "review", "e2e_test", "post_test_review", "sync", "sync_verify", "report", "commit"],
+  "current_task": "Phase 2-3 대기 중 (#174 의존성)",
+  "key_decisions": [
+    "Phase 1만 (토큰 경고). 컴팩션은 #174 이후",
+    "모델별 컨텍스트 윈도우 테이블 추가 (40+ 모델)",
+    "provider.stream() 전 pre-flight 체크",
+    "85% 경고, 95% 에러 threshold",
+    "ref-cc 패턴만 참고, 코드/흔적 금지"
+  ],
+  "phase1_completed": true,
+  "phase1_commits": [
+    "4b20a6e9 feat(agent): token budget warning system (#185)",
+    "3d8eaf2e fix(agent): review fixes — sync model list, safe prefix match, DRY budget check (#185)"
+  ],
+  "blocked_by": "#174 (Shell 연결) — Phase 2 단순 컴팩션, Phase 3 3중 방어",
+  "note": "이슈는 Phase 2-3 추적용으로 의도적으로 OPEN 유지"
+}

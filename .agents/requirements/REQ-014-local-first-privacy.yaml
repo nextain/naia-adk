@@ -1,0 +1,27 @@
+id: REQ-014
+title: "Local-First Privacy"
+title_ko: "Î°úÏª¨ ?∞ÏÑ† ?∞Ïù¥???ÑÎùº?¥Î≤Ñ??
+product: naia-os
+module: shell
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  All user data is stored locally by default. API keys are secured in the OS keystore. No external data transmission occurs except for user-initiated LLM API calls.
+
+acceptance_criteria:
+  - "All user data is stored locally by default"
+  - "API keys are stored in OS keystore (not plaintext)"
+  - "No external data transmission except user-initiated LLM calls"
+  - "Privacy settings are clearly communicated to users"
+
+trace:
+  code:
+    - path: "shell/src/lib/secure-store.ts"
+      symbol: "saveSecretKey"
+      coverage: full

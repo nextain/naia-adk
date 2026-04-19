@@ -1,0 +1,28 @@
+id: REQ-011
+title: "GUI Onboarding Wizard"
+title_ko: "GUI ?�보??마법??
+product: naia-os
+module: shell
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Multi-step onboarding wizard guiding new users through initial setup: provider selection, API key entry, agent naming, user naming, character selection, personality configuration, and speech style preference.
+
+acceptance_criteria:
+  - "Multi-step wizard guides through provider selection and API key entry"
+  - "Agent name and user name can be configured"
+  - "Character and personality can be selected"
+  - "Speech style preference can be set"
+  - "Wizard saves all configuration on completion"
+
+trace:
+  code:
+    - path: "shell/src/components/OnboardingWizard.tsx"
+      symbol: "OnboardingWizard"
+      coverage: full

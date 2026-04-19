@@ -1,0 +1,28 @@
+id: REQ-021
+title: "3-Context Curriculum"
+title_ko: "3-컨텍?�트 커리?�럼 ?�동 ?�성"
+product: aiedu.nextain.io
+module: curriculum
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Curriculum auto-generation synthesizing from three contexts: source context (what to teach), pedagogy context (how to teach), and platform context (where to teach). Produces structured, multi-lesson curricula.
+
+acceptance_criteria:
+  - "Source context defines what to teach"
+  - "Pedagogy context defines how to teach"
+  - "Platform context defines where to teach"
+  - "Curriculum is synthesized from all three contexts"
+  - "Output is structured as multi-lesson curriculum"
+
+trace:
+  code:
+    - path: "curriculum/ai-coding-part1/index.md"
+      symbol: "CurriculumIndex"
+      coverage: full

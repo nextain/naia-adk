@@ -1,0 +1,19 @@
+{
+  "issue": "#147",
+  "issue_url": "https://github.com/nextain/naia-os/issues/147",
+  "title": "spec: 3세션 체감 시나리오 정의",
+  "project": "naia-os",
+  "epic": "#145",
+  "current_phase": "commit",
+  "gates_cleared": ["understand", "scope", "investigate", "plan", "build", "review"],
+  "current_task": "완료 — 55개 테스트 확장, before/after 구조 추가",
+  "key_decisions": [
+    "13개 → 55개 테스트로 확장 (12개 능력)",
+    "Fact bank 15개 사실 × 5 도메인 (가상 인물)",
+    "before/after 3단계 측정: baseline → after_mem0 → after_fixes",
+    "abstention 9개로 확대 (유사 이름 구분 포함), FAIL=자동 F등급",
+    "노이즈 내성 테스트 3개 추가",
+    "PII 보호: agents-rules.json에 pii_in_public_repo 트랩 추가"
+  ],
+  "updated_at": "2026-03-27T01:30Z"
+}

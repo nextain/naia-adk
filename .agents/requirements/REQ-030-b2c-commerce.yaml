@@ -1,0 +1,27 @@
+id: REQ-030
+title: "B2C Commerce"
+title_ko: "B2C ?ÅÌíà Î∞??ºÏù¥?†Ïä§"
+product: aiedu.nextain.io
+module: licensing
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  B2C product catalog, license purchase flow, and credit deduction system. Users can browse products, purchase licenses, and consume credits for AI features.
+
+acceptance_criteria:
+  - "Product catalog displays available B2C products"
+  - "License purchase flow completes end-to-end"
+  - "Credit deduction works for AI feature usage"
+  - "License status is visible to users"
+
+trace:
+  code:
+    - path: "lib/gateway-client.ts"
+      symbol: "gwListB2cProducts"
+      coverage: full

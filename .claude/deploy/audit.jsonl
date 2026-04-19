@@ -1,0 +1,65 @@
+{"event":"blocked","project":"unknown","command":"vercel --prod","session":"unknown","reason":"unknown_project","ts":"2026-04-03T02:34:34.580Z"}
+{"event":"blocked","project":"unknown","command":"vercel --prod","session":"unknown","reason":"unknown_project","ts":"2026-04-03T03:45:39.074Z"}
+{"event":"blocked","project":"naia-gateway","command":"gcloud run deploy naia-gateway --region asia-northeast3 --source .","session":"unknown","reason":"no_approval","ts":"2026-04-03T03:45:40.270Z"}
+{"event":"blocked","project":"unknown","command":"vercel --prod","session":"unknown","reason":"unknown_project","ts":"2026-04-03T03:46:41.300Z"}
+{"event":"blocked","project":"unknown","command":"vercel --prod","session":"unknown","reason":"unknown_project","ts":"2026-04-03T03:46:42.476Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T04:42:04.308Z"}
+{"event":"blocked","project":"aiedu.nextain.io","command":"vercel --production","session":"unknown","reason":"no_approval","ts":"2026-04-03T04:42:05.500Z"}
+{"event":"executed","project":"naia.nextain.io","session":"test-session","command":"vercel --prod","approved_by":"user:luke","approval_expires":"2026-04-03T05:12:22Z","ts":"2026-04-03T04:42:33.085Z"}
+{"event":"approval_consumed","project":"naia.nextain.io","single_use":true,"ts":"2026-04-03T04:42:33.085Z"}
+{"event":"blocked","project":"unknown","command":"echo {tool_name:Bash,cwd:/var/home/luke/dev/naia.nextain.io,tool_input:{command:vercel --prod}} | node /var/home/luke/dev/.claude/hooks/deploy-guard.js | head -1","session":"24c8d0bf-0b66-4e39-afbe-74194cfcf8e8","reason":"unknown_project","ts":"2026-04-03T05:04:36.443Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T05:38:58.119Z"}
+{"event":"blocked","project":"aiedu.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T05:38:58.177Z"}
+{"event":"blocked","project":"about.nextain.io","command":"vercel --production","session":"unknown","reason":"no_approval","ts":"2026-04-03T05:38:58.230Z"}
+{"event":"blocked","project":"naia-gateway","command":"gcloud run deploy naia-gateway --region asia-northeast3 --source .","session":"unknown","reason":"no_approval","ts":"2026-04-03T05:38:58.285Z"}
+{"event":"blocked","project":"unknown","command":"gcloud app deploy","session":"unknown","reason":"unknown_project","ts":"2026-04-03T05:38:58.339Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T05:38:58.391Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T05:43:43.881Z"}
+{"event":"blocked","project":"aiedu.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T05:43:43.938Z"}
+{"event":"blocked","project":"about.nextain.io","command":"vercel --production","session":"unknown","reason":"no_approval","ts":"2026-04-03T05:43:43.989Z"}
+{"event":"blocked","project":"naia-gateway","command":"gcloud run deploy naia-gateway --region asia-northeast3 --source .","session":"unknown","reason":"no_approval","ts":"2026-04-03T05:43:44.050Z"}
+{"event":"blocked","project":"unknown","command":"gcloud app deploy","session":"unknown","reason":"unknown_project","ts":"2026-04-03T05:43:44.103Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T05:43:44.174Z"}
+{"event":"blocked","project":"unknown","command":"echo {tool_name:Bash,tool_input:{command:vercel --prod}} | node /var/home/luke/dev/.claude/hooks/deploy-guard.js; echo exit: $?","session":"24c8d0bf-0b66-4e39-afbe-74194cfcf8e8","reason":"unknown_project","ts":"2026-04-03T06:53:18.213Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T06:53:30.573Z"}
+{"event":"blocked","project":"aiedu.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T06:53:30.623Z"}
+{"event":"blocked","project":"about.nextain.io","command":"vercel --production","session":"unknown","reason":"no_approval","ts":"2026-04-03T06:53:30.675Z"}
+{"event":"blocked","project":"naia-gateway","command":"gcloud run deploy naia-gateway --region asia-northeast3 --source .","session":"unknown","reason":"no_approval","ts":"2026-04-03T06:53:30.727Z"}
+{"event":"blocked","project":"unknown","command":"gcloud app deploy","session":"unknown","reason":"unknown_project","ts":"2026-04-03T06:53:30.777Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T06:53:30.831Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T06:57:51.489Z"}
+{"event":"blocked","project":"aiedu.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T06:57:51.545Z"}
+{"event":"blocked","project":"about.nextain.io","command":"vercel --production","session":"unknown","reason":"no_approval","ts":"2026-04-03T06:57:51.602Z"}
+{"event":"blocked","project":"naia-gateway","command":"gcloud run deploy naia-gateway --region asia-northeast3 --source .","session":"unknown","reason":"no_approval","ts":"2026-04-03T06:57:51.656Z"}
+{"event":"blocked","project":"unknown","command":"gcloud app deploy","session":"unknown","reason":"unknown_project","ts":"2026-04-03T06:57:51.722Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T06:57:51.773Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T07:04:46.890Z"}
+{"event":"blocked","project":"aiedu.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T07:04:46.946Z"}
+{"event":"blocked","project":"about.nextain.io","command":"vercel --production","session":"unknown","reason":"no_approval","ts":"2026-04-03T07:04:47.002Z"}
+{"event":"blocked","project":"naia-gateway","command":"gcloud run deploy naia-gateway --region asia-northeast3 --source .","session":"unknown","reason":"no_approval","ts":"2026-04-03T07:04:47.054Z"}
+{"event":"blocked","project":"unknown","command":"gcloud app deploy","session":"unknown","reason":"unknown_project","ts":"2026-04-03T07:04:47.106Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-03T07:04:47.162Z"}
+{"ts":"2026-04-03T07:20:47Z","event":"blocked","project":"naia.nextain.io","reason":"no_approval"}
+{"ts":"2026-04-03T07:21:11Z","event":"pre_check","project":"naia.nextain.io","result":"pass"}
+{"ts":"2026-04-03T07:21:11Z","event":"dry_run","project":"naia.nextain.io","command":"vercel --prod"}
+{"event":"blocked","project":"unknown","command":"# progress file 업데이트: E2E 완료, commit 단계로\nNOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)\npython3 -c \nimport json\nwith open(/var/home/luke/dev/.agents/progress/deploy-guard.json) as f:\n    d = json.load(f)\nd[curren","session":"24c8d0bf-0b66-4e39-afbe-74194cfcf8e8","reason":"unknown_project","ts":"2026-04-03T07:21:58.419Z"}
+{"event":"blocked","project":"unknown","command":"git commit -m $(cat <<EOF\nfeat: prod 배포 안전망 구축 - hook 기반 차단 + 승인 + 감사 로그\n\n- deploy-guard.js: vercel --prod, gcloud prod 명령어 차단 (PreToolUse → Bash)\n  * stripQuotes()로 따옴표 난독화 우회 방어\n  * echo/printf 오탐 방","session":"24c8d0bf-0b66-4e39-afbe-74194cfcf8e8","reason":"unknown_project","ts":"2026-04-03T07:24:09.031Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-04T17:46:43.407Z"}
+{"event":"blocked","project":"aiedu.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-04T17:46:43.478Z"}
+{"event":"blocked","project":"about.nextain.io","command":"vercel --production","session":"unknown","reason":"no_approval","ts":"2026-04-04T17:46:43.546Z"}
+{"event":"blocked","project":"naia-gateway","command":"gcloud run deploy naia-gateway --region asia-northeast3 --source .","session":"unknown","reason":"no_approval","ts":"2026-04-04T17:46:43.615Z"}
+{"event":"blocked","project":"unknown","command":"gcloud app deploy","session":"unknown","reason":"unknown_project","ts":"2026-04-04T17:46:43.686Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-04T17:46:43.753Z"}
+{"event":"blocked","project":"unknown","command":"gcloud builds submit --tag gcr.io/my-project/app","session":"unknown","reason":"unknown_project","ts":"2026-04-04T17:46:44.206Z"}
+{"event":"blocked","project":"unknown","command":"gcloud run services update my-service --image gcr.io/proj/img","session":"unknown","reason":"unknown_project","ts":"2026-04-04T17:46:45.249Z"}
+{"event":"blocked","project":"unknown","command":"gcloud run services replace service.yaml","session":"unknown","reason":"unknown_project","ts":"2026-04-04T17:46:46.201Z"}
+{"event":"blocked","project":"unknown","command":"docker push us-central1-docker.pkg.dev/my-project/repo/image:latest","session":"unknown","reason":"unknown_project","ts":"2026-04-04T17:46:47.531Z"}
+{"event":"blocked","project":"unknown","command":"docker push gcr.io/my-project/app:v1","session":"unknown","reason":"unknown_project","ts":"2026-04-04T17:46:48.433Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-04T17:47:14.095Z"}
+{"event":"blocked","project":"aiedu.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-04T17:47:14.141Z"}
+{"event":"blocked","project":"about.nextain.io","command":"vercel --production","session":"unknown","reason":"no_approval","ts":"2026-04-04T17:47:14.184Z"}
+{"event":"blocked","project":"naia-gateway","command":"gcloud run deploy naia-gateway --region asia-northeast3 --source .","session":"unknown","reason":"no_approval","ts":"2026-04-04T17:47:14.227Z"}
+{"event":"blocked","project":"unknown","command":"gcloud app deploy","session":"unknown","reason":"unknown_project","ts":"2026-04-04T17:47:14.270Z"}
+{"event":"blocked","project":"naia.nextain.io","command":"vercel --prod","session":"unknown","reason":"no_approval","ts":"2026-04-04T17:47:14.313Z"}
+{"event":"blocked","project":"unknown","command":"cd /var/home/luke/dev/home.onmam.com/scripts && gcloud builds submit --tag asia-northeast3-docker.pkg.dev/www-onmam-com/onmam/healthcheck:v2 --project=www-onmam-com 2>&1","session":"1a0d0ef9-d394-4c87-9504-59d241184754","reason":"unknown_project","ts":"2026-04-08T13:55:34.903Z"}
+{"event":"blocked","project":"unknown","command":"cd /var/home/luke/dev/home.onmam.com/scripts && gcloud builds submit --tag asia-northeast3-docker.pkg.dev/www-onmam-com/onmam/healthcheck:latest --project=www-onmam-com 2>&1","session":"1a0d0ef9-d394-4c87-9504-59d241184754","reason":"unknown_project","ts":"2026-04-08T15:43:59.638Z"}

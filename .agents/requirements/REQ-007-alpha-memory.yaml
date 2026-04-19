@@ -1,0 +1,28 @@
+id: REQ-007
+title: "Alpha Memory System"
+title_ko: "?ŒíŒŒ ë©”ëª¨ë¦??œìŠ¤??(4-?¤í† ??"
+product: naia-os
+module: shell
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Four-store memory architecture: Episodes (conversation history), Facts (extracted knowledge), Reflections (insights), and Working Memory (current context). All data is stored locally at ~/.naia/memory/.
+
+acceptance_criteria:
+  - "Episodes store maintains conversation history"
+  - "Facts store holds extracted knowledge"
+  - "Reflections store captures insights"
+  - "Working Memory manages current session context"
+  - "All data is stored locally at ~/.naia/memory/"
+
+trace:
+  code:
+    - path: "shell/src-tauri/src/memory.rs"
+      symbol: "MemoryStore"
+      coverage: full

@@ -1,0 +1,42 @@
+{
+  "issue": "Review-Pass v3 + Requirements Infrastructure",
+  "issue_url": "internal",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "plan", "build", "review", "e2e_test", "sync", "report", "commit"],
+  "current_task": "All phases complete",
+  "key_decisions": [
+    "4-stage review: planning/development/test/integration",
+    "REQ-ID flat structure with product/module fields (no 3-tier PROD/MOD/REQ)",
+    "Requirements: .agents/ single source, no .users/ mirror, title_ko field",
+    "Session-inject: requirements-index NOT injected, on-demand only",
+    "Trace: file+symbol references, never line numbers",
+    "Retrofitted: status:candidate, code wins over REQ",
+    "Lightweight cycle: <3 files, single module = skip REQ-ID",
+    "R=2: min supporters >= 2 for CONFIRMED, never auto-confirm single reviewer",
+    "Arbiter: must NOT be in reviewer pool, auto-select when config=auto",
+    "Lens iteration: ALL active lenses in one prompt per reviewer per round",
+    "Escalation: inline user prompt, loop resumes (no break)",
+    "Auto-fix: git stash snapshot + diff + rollback on low health",
+    "Anti-anchoring: suppress_hash invalidated on code change",
+    "Project-agnostic: review-pass is naia-adk-b level skill, not workspace-specific",
+    "Config search: ./review-pass.yaml → skill_dir → XDG/APPDATA"
+  ],
+  "peer_reviews_completed": [
+    "기획 리뷰 시뮬레이션 (3 agents): 10 findings → all resolved",
+    "피어 리뷰 #1 (3 agents): 10 findings → all resolved in v2",
+    "피어 리뷰 #2 (2 agents): 10 findings → all resolved in v3",
+    "최종 피어 리뷰 (1 agent): 2 CRITICAL + 8 INFO → all resolved",
+    "E2E test (claude+gemini+opencode): 1 CONFIRMED (codex cmd) → fixed"
+  ],
+  "commits": [
+    "2108dd0 feat: review-pass v3 (4-stage multi-AI review) + requirements infrastructure (REQ-001~050)",
+    "e07e536 chore(requirements): activate REQ-001~050",
+    "5a8ef3b fix(review-pass): align codex command between section 2.3 and 10.2",
+    "c6f5daa feat: naia-adk-b initial scaffold — Phase 5 + 6"
+  ],
+  "naia_adk_b": {
+    "repo": "https://github.com/nextain/naia-adk-b",
+    "pushed": true,
+    "structure": "Phase 5 (CLI+docgen+skills) + Phase 6 (peer review runner+schema)"
+  }
+}

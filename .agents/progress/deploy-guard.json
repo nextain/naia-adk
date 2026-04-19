@@ -1,0 +1,60 @@
+{
+  "issue": "Deploy Guard — 배포 안전망 구축",
+  "issue_url": null,
+  "title": "Deploy Guard — prod 배포 차단 훅 + 승인 + 감사 로그",
+  "project": "member-luke",
+  "current_phase": "close",
+  "gates_cleared": [
+    "understand",
+    "scope",
+    "plan",
+    "e2e_test",
+    "commit"
+  ],
+  "current_task": "완료",
+  "key_decisions": [
+    "hook 기반 deny-by-default",
+    "프로젝트별 TTL 승인 (30분 기본)",
+    "audit.jsonl append-only 감사 로그",
+    "pre-deploy-check.sh로 sourcemap/env 검사",
+    "prod-deploy.sh 유일 배포 경로",
+    "stripQuotes로 따옴표 난독화 우회 방어",
+    "echo/printf 오탐 방지",
+    "bash -c + 신뢰 바이너리 검증으로 eval 제거"
+  ],
+  "review_log": {
+    "phase": "review",
+    "type": "code",
+    "mode": "standard",
+    "total_passes": 6,
+    "auto_fixes": 9,
+    "escalations": 0,
+    "result": "2_consecutive_clean",
+    "timestamp": "2026-04-03T06:00:00Z",
+    "details": [
+      "P1 정확성: 16 findings (6 CRITICAL) — stripQuotes 보존, 쉘 인젝션 수정, set -e 충돌 수정",
+      "P2 완전성: 16 findings (3 CRITICAL) — 원본 명령어 로깅, single_use 가드, eval→bash -c",
+      "P3 일관성: 6 findings (1 CRITICAL) — stripped 변수 순서 버그 수정 (핵심!), [Harness] prefix 통일",
+      "P4 패턴준수: 10 findings — set -euo pipefail 통일, 나머지 정당한 패턴 확장",
+      "P5 운영완성도: CRITICAL 0건 — echo 오탐 낮음, GNU date 비호환(현재 환경 OK)",
+      "P6 테스트유효성: CRITICAL 0건 — 승인 경로 미테스트(INFO), 핵심 차단 경로 11/11 통과"
+    ]
+  },
+  "e2e_test_log": {
+    "timestamp": "2026-04-03T07:21:11Z",
+    "tests": [
+      {"test": "deploy-guard 차단", "result": "PASS", "details": "승인 없이 vercel --prod 차단 확인"},
+      {"test": "prod-deploy.sh 승인 확인", "result": "PASS", "details": "승인 후 Approval found 메시지 출력"},
+      {"test": "pre-deploy-check", "result": "PASS", "details": "sourcemap/env/gitignore 검사 통과"},
+      {"test": "dry-run", "result": "PASS", "details": "--dry-run 옵션 작동 확인, 실제 배포 미실행"},
+      {"test": "audit 로그", "result": "PASS", "details": "blocked/pre_check/dry_run 이벤트 기록 확인"}
+    ],
+    "verdict": "PASS"
+  },
+  "lessons_learned": [
+    "stripQuotes 변수 선언 순서 버그는 치명적 — 모든 prod 배포가 통과되는 원인",
+    "shell 변수 확장 인젝션 → process.argv 사용",
+    "set -e + subshell 패턴은 $? 체크 불가 → || { ... } 패턴 사용",
+    "다중세션 간섭 해결: Priority 0(session_id in file) > Priority 1(session-map) > Priority 2(mtime fallback)"
+  ]
+}

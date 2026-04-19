@@ -1,0 +1,27 @@
+id: REQ-026
+title: "Math Widgets (JSXGraph)"
+title_ko: "?¸í„°?™í‹°ë¸??˜í•™ ?„ì ¯"
+product: aiedu.nextain.io
+module: math-widgets
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Interactive math widgets using JSXGraph with sliders, draggable points, and mission-based exercises. Configuration-driven widget system for flexible math education content.
+
+acceptance_criteria:
+  - "Interactive sliders adjust mathematical parameters"
+  - "Draggable points enable geometric exploration"
+  - "Mission-based exercises guide student learning"
+  - "Widget configuration is data-driven"
+
+trace:
+  code:
+    - path: "lib/widget-config.ts"
+      symbol: "WidgetConfig"
+      coverage: full

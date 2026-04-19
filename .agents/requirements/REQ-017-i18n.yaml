@@ -1,0 +1,27 @@
+id: REQ-017
+title: "14-Language i18n"
+title_ko: "14ê°??¸ì–´ êµ? œ??
+product: naia-os
+module: shell
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Internationalization support for 14 languages with automatic locale detection and formality level adjustments per locale.
+
+acceptance_criteria:
+  - "14 languages are fully supported"
+  - "Locale detection works automatically based on system settings"
+  - "Formality levels adjust per locale"
+  - "Language switching works at runtime"
+
+trace:
+  code:
+    - path: "shell/src/lib/i18n.ts"
+      symbol: "getLocale"
+      coverage: full

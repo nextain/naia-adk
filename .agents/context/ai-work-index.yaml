@@ -1,0 +1,47 @@
+# Copyright 2026 Nextain Inc. All rights reserved.
+version: 1
+categories:
+  - name: "submodule-management"
+    keywords: ["submodule", "init", "update", "sync"]
+    quick_ref: "git submodule update --init --recursive"
+    workflows: []
+  - name: "documentation"
+    keywords: ["docs", "document", "proposal", "business", "hwp", "hwpx", "pdf", "docx", "xlsx", "pptx", "발표", "제안서", "사업계획서", "이력서"]
+    quick_ref: "See docs-business/AGENTS.md. Use /read-doc skill for any HWP/HWPX/PDF/DOCX/XLSX/PPTX file."
+    skill: "read-doc"
+    skill_trigger: "Any time a non-code document (.hwp/.hwpx/.pdf/.docx/.xlsx/.pptx) needs to be read or analyzed — run /read-doc <file> FIRST before attempting to answer questions about the document."
+    workflows: []
+  - name: "work-logs"
+    keywords: ["log", "worklog", "progress"]
+    quick_ref: "See docs-work-logs/AGENTS.md"
+    workflows: []
+  - name: "cafelua-service"
+    keywords: ["cafelua", "service", "gateway", "credit", "auth", "proxy", "any-llm", "lab"]
+    quick_ref: "See project-any-llm/README.md"
+    workflows:
+      - ".agents/workflows/development-cycle.yaml"
+  - name: "infra"
+    keywords: ["gcp", "cloud-run", "cloud-sql", "docker", "deploy", "domain"]
+    quick_ref: "GCP project: cafelua-prod, Cloud Run + Cloud SQL (asia-northeast3)"
+    workflows: []
+  - name: "demo-video"
+    keywords: ["demo", "video", "recording", "tts", "narration", "playwright", "ffmpeg"]
+    quick_ref: "See naia-os/.agents/context/demo-video.yaml"
+    workflows: []
+  - name: "patent"
+    keywords: ["특허", "patent", "출원", "명세서", "청구항", "kipo", "발명"]
+    quick_ref: "See docs-business/05. 특허/patent-history.json. Use /patent-draft skill."
+    skill: "patent-draft"
+    skill_trigger: "특허 초안 생성, 특허 명세서 작성, 출원 문서 작성 요청 시 반드시 사용."
+    workflows: []
+  - name: "issue-driven-development"
+    keywords: ["feature", "feature development", "upstream", "investigate", "plan", "review", "bug fix"]
+    quick_ref: "Feature-level work (default, 13 phases). ISSUE → UNDERSTAND → SCOPE → INVESTIGATE → PLAN → BUILD → REVIEW → E2E TEST → POST-TEST REVIEW → SYNC → SYNC VERIFY → REPORT → COMMIT"
+    workflows:
+      - ".agents/workflows/issue-driven-development.yaml"
+notes:
+  - "Each submodule has its own entry point - read it before modifications"
+  - "Add workflow files to .agents/workflows/ as needed"
+  - "Workflows are loaded on demand, not all at once"
+  - "Default for feature-level work (new features, broad bug fixes): issue-driven-development.yaml"
+  - "For non-feature changes (typos, config values, simple directives): development-cycle.yaml"

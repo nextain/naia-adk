@@ -1,0 +1,27 @@
+id: REQ-049
+title: "Contact Modal"
+title_ko: "비즈?�스 문의 모달"
+product: about.nextain.io
+module: contact
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Business inquiry modal with pre-filled subject lines based on the current locale. Supports structured inquiry submission.
+
+acceptance_criteria:
+  - "Contact modal opens and closes smoothly"
+  - "Subject line is pre-filled per locale"
+  - "Inquiry form submits valid data"
+  - "Form validation prevents incomplete submissions"
+
+trace:
+  code:
+    - path: "src/components/ContactModal.tsx"
+      symbol: "ContactModal"
+      coverage: full

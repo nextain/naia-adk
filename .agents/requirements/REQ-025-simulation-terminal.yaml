@@ -1,0 +1,27 @@
+id: REQ-025
+title: "Simulation Terminal"
+title_ko: "AI ÏΩîÎî© ?ÑÍµ¨ ?úÎ??àÏù¥???∞Î???
+product: aiedu.nextain.io
+module: simulation-terminal
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Simulated AI assistant terminal demonstrating how AI coding tools work. Features agent loop visualization, token usage gauge, and step-by-step process display for educational purposes.
+
+acceptance_criteria:
+  - "Simulated AI assistant demonstrates coding tool behavior"
+  - "Agent loop visualization shows step-by-step process"
+  - "Token usage gauge displays consumption"
+  - "Terminal UI mimics real AI coding tool experience"
+
+trace:
+  code:
+    - path: "components/terminal/SimTerminal.tsx"
+      symbol: "SimTerminal"
+      coverage: full

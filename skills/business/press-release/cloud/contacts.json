@@ -1,0 +1,26 @@
+{
+  "priority": [
+    { "name": "김태훈", "outlet": "MS투데이", "email": "taehoon@mstoday.co.kr", "note": "AI 에이전트 특허 관련" },
+    { "name": "장우진", "outlet": "디지털타임스", "email": "jwj17@dt.co.kr", "note": "AI 에이전트 규제·정책 관련" },
+    { "name": "백봉삼", "outlet": "지디넷코리아", "email": "paikshow@zdnet.co.kr", "note": "스타트업·SaaS 관련" },
+    { "name": "심재석", "outlet": "바이라인네트워크", "email": "shimsky@byline.network", "note": "AI 에이전트 관련" },
+    { "name": "최광민", "outlet": "인공지능신문", "email": "ckm0081@aitimes.kr", "note": "AI 스타트업 관련" },
+    { "name": "김수진", "outlet": "블로터", "email": "kimsuzin09@bloter.net", "note": "AI 스타트업 관련" },
+    { "name": "황정호", "outlet": "테크42", "email": "jhh@tech42.co.kr", "note": "AI 스타트업 현장 취재 관련" }
+  ],
+  "general": [
+    { "name": "장세민", "outlet": "AI타임스", "email": "semim99@aitimes.com", "note": "AI 특허·기술 관련" },
+    { "name": "윤대원", "outlet": "전자신문", "email": "yun1972@etnews.com", "note": "AI 전환 관련" },
+    { "name": "김민석", "outlet": "뉴스1", "email": "ideaed@news1.kr", "note": "AI 특허·기술 관련" },
+    { "name": "박정훈", "outlet": "이넷뉴스", "email": "parkhoon@enetnews.co.kr", "note": "AI 플랫폼 관련" },
+    { "name": "진형근", "outlet": "글로벌이코노믹", "email": "jinwook@g-enews.com", "note": "AI 에이전트 시장 관련" },
+    { "name": "남도영", "outlet": "테크M", "email": "hyun@techm.kr", "note": "AI 스타트업 관련" }
+  ],
+  "outlet_general": [
+    { "name": "편집부", "outlet": "플래텀", "email": "editor@platum.kr", "note": "" },
+    { "name": "편집부", "outlet": "스타트업레시피", "email": "news@startuprecipe.co.kr", "note": "" },
+    { "name": "편집부", "outlet": "벤처스퀘어", "email": "editor@venturesquare.net", "note": "" },
+    { "name": "편집부", "outlet": "AI포스트", "email": "aipostkorea@naver.com", "note": "" },
+    { "name": "콘텐츠팀", "outlet": "Nextain", "email": "contents@nextain.io", "note": "" }
+  ]
+}

@@ -1,0 +1,36 @@
+knowledge.json 파일에 쓰기 권한이 필요합니다. 승인해 주시면 계속 진행하겠습니다.
+
+승인 대기 중인 동안, 지금까지의 작업 결과를 요약합니다:
+
+---
+
+## Triage 완료 — 2026-04-10 결과 요약
+
+**통계**: 총 133개 이슈 (어제와 동일), 신규 0, 업데이트 51
+
+**라벨 변경**: 2건
+- naia-os #146 (mem0 로컬 검증) → P2-medium 추가
+- naia-os #150 (Memory 와이어링) → P2-medium 추가
+
+**P0 현황** (4개):
+- aiedu #68 (purchase 로그인) — 유일한 활성 P0, 런칭 블로커
+- naia-os #182, #175, #187 — 모두 9-10일 비활성 (4회 연속 플래그)
+
+**Standards Monitoring**:
+- Agent Skills: 신규 커밋 — SKILL.md front-matter 스펙 추가
+- MCP spec: 4개 신규 커밋 — April 2026 maintainer updates
+- AAIF: 404 (스킵)
+
+**Scorecard**: 7일간 0건 close, 12건 리뷰 100% clean pass rate
+
+**핵심 권고**:
+1. aiedu #68 (purchase login) 이번 주 해결
+2. Stale P0 3건 (#182, #175, #187) 등급 조정 검토
+3. 무라벨 17건 일괄 라벨링
+4. Agent Skills front-matter 변경사항 Naia SKILL.md에 반영 검토
+
+리포트: `scripts/triage/reports/2026-04-10.md`
+
+---
+
+`knowledge.json` 업데이트와 `triage_history` 추가를 위해 파일 쓰기 권한을 승인해 주세요.
