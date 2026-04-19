@@ -1,17 +1,19 @@
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3141";
+
 async function getMeta() {
-  const res = await fetch("http://localhost:3141/api/workspace/meta", { cache: "no-store" })
+  const res = await fetch(`${API}/api/workspace/meta`, { cache: "no-store" })
   if (!res.ok) return null
   return res.json()
 }
 
 async function getSkills() {
-  const res = await fetch("http://localhost:3141/api/skills", { cache: "no-store" })
+  const res = await fetch(`${API}/api/skills`, { cache: "no-store" })
   if (!res.ok) return []
   return res.json()
 }
 
 async function getIndex() {
-  const res = await fetch("http://localhost:3141/api/workspace/index", { cache: "no-store" })
+  const res = await fetch(`${API}/api/workspace/index`, { cache: "no-store" })
   if (!res.ok) return null
   return res.json()
 }
