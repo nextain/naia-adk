@@ -37,11 +37,15 @@ __pycache__/
 
 # Data directories (managed locally per fork)
 data-company/
-data-business/
+!data-company/README.md
+data-teams/
+!data-teams/README.md
 data-private/
+!data-private/README.md
 
 # Project repositories (cloned per fork)
 projects/
+!projects/README.md
 
 # Temp
 *.tmp

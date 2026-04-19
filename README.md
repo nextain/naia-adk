@@ -2,19 +2,70 @@
 
 # Naia ADK
 
-**AI Development Kit for personal and business operations.**
+**Workspace scaffold + dashboard for AI coding agents.**
 
-An open-source framework that connects AI agents, skills, data, and workflows into a unified workspace. Fork it, configure it, make it yours.
+An open-source framework that provides a structured workspace scaffold for AI coding tools (opencode, Claude Code, Codex, Naia OS) and a built-in dashboard for managing it.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 ## What is Naia ADK?
 
-Naia ADK is the foundation for AI-driven operations — a structured workspace that any individual or organization can fork and customize:
+Naia ADK is a **workspace scaffold** — a pre-configured directory structure, skills, context files, and data tiers that AI coding agents use as their working environment. It also includes a **dashboard** for monitoring and configuring the workspace itself.
 
-- **For individuals** — Personal AI workspace with skills, automation, and project management
-- **For businesses** — Fork, inject company data and submodules, deploy across your team
-- **For products** — Connects to [Naia OS](https://github.com/nextain/naia-os) as the skill and data backend via MCP/WebSocket
+```
+naia-adk = Workspace Scaffold + Dashboard
+
+┌─────────────────────────────────────────────┐
+│  naia-adk                                    │
+│                                              │
+│  Scaffold (워크스페이스 스캐폴드)             │
+│  ├── .agents/    skills/  scripts/           │
+│  ├── data-company/  data-teams/              │
+│  ├── data-private/  projects/                │
+│  └── context files (agents-rules.json, etc.) │
+│                                              │
+│  Dashboard (대시보드)                         │
+│  ├── Workspace viewer                        │
+│  ├── Skills catalog                          │
+│  └── Settings & monitoring                   │
+│                                              │
+└──────────┬───────────────────────────────────┘
+           │
+     ┌─────┼─────┬──────────┐
+     ▼     ▼     ▼          ▼
+ opencode  Claude  Codex   Naia OS
+           Code            (Desktop)
+```
+
+**Workflow clients** (opencode, Claude Code, Codex, Naia OS) use naia-adk as their workspace. The dashboard is for *managing* the workspace — not for doing work.
+
+**Tool-agnostic**: naia-adk is not dependent on any specific AI tool. It provides its own API and workspace structure that any coding agent can connect to — Claude Code, Codex, opencode, Naia OS, or any future tool.
+
+**Plugin-adaptive**: The scaffold adapts to what you plug in. Skills, data directories, project submodules, and AI tool connections are all pluggable — add what you need, ignore what you don't.
+
+```
+Plugin-Adaptive Structure
+
+naia-adk (core scaffold)
+│
+├── Plugins (plug in what you need)
+│   ├── Skills/              ← Skill plugins (SKILL.md)
+│   ├── Data submodules      ← data-company/, data-teams/
+│   ├── Project submodules   ← projects/your-project
+│   ├── AI tool configs      ← .claude/, .agents/
+│   └── Custom workflows     ← .agents/workflows/
+│
+├── Adapters (adapt to your environment)
+│   ├── AI tool adapter      ← opencode / Claude Code / Codex / Naia OS
+│   ├── Data source adapter  ← local filesystem / cloud / git
+│   └── Language adapter     ← .users/ mirror in any language
+│
+└── Ports (connect from anywhere)
+    ├── REST API             ← Any HTTP client
+    ├── WebSocket            ← Real-time events
+    ├── Direct filesystem    ← CLI tools
+    └── Tauri IPC            ← Naia OS native
+```
 
 ### The Fork Chain
 
@@ -62,8 +113,8 @@ Fork from any layer. Individuals can fork `naia-adk` directly. Organizations go 
 
 | Directory | Scope | Content |
 |-----------|-------|---------|
-| `data-company/` | Business | Company-wide docs, shared resources |
-| `data-business/` | Business | Sensitive business data (accounting, contracts) |
+| `data-company/` | Company | Company-wide docs, shared resources |
+| `data-teams/` | Team | Team-specific documents (strategy, accounting) |
 | `data-private/` | Personal | Personal data, env files, private docs |
 | `projects/` | Personal | Project repos (submodules) |
 
@@ -102,28 +153,52 @@ Additional skills available in [Naia Business ADK](#business-extension):
 
 ## Architecture
 
-Naia ADK follows a **Base + Extension** model:
+Naia ADK is a **workspace scaffold with its own API** — tool-agnostic by design:
 
 ```
-┌─────────────────────────────────────────┐
-│  naia-adk (Base)                        │
-│  ┌─────────────────────────────────────┐│
-│  │  .agents/  .users/  .claude/        ││
-│  │  skills/   scripts/  templates/     ││
-│  │  docs/     packages/               ││
-│  └─────────────────────────────────────┘│
-│  + data-company/  (fork: business)      │
-│  + data-business/ (fork: business)      │
-│  + data-private/  (fork: personal)      │
-│  + projects/      (fork: personal)      │
-└─────────────────────────────────────────┘
-         │ MCP / WebSocket
-         ▼
-┌─────────────────────────────────────────┐
-│  Naia OS (Desktop App)                  │
-│  Tauri 2 + React + Node.js Agent        │
-└─────────────────────────────────────────┘
+naia-adk
+├── Scaffold (workspace structure)
+│   ├── .agents/  .users/  .claude/  skills/  scripts/
+│   ├── data-company/  data-teams/  data-private/
+│   └── projects/
+│
+├── API Server (Fastify)
+│   ├── /api/workspace   ← Workspace metadata, file tree, classification
+│   ├── /api/skills      ← Skill catalog and content
+│   ├── /api/files       ← File read/write
+│   └── /api/ws          ← WebSocket (file change events)
+│
+└── Dashboard (Next.js)
+    ├── /                ← Overview
+    ├── /workspace       ← Projects, submodules, visibility
+    ├── /skills          ← Skill catalog viewer
+    └── /settings        ← Server config, client status, data dirs
 ```
+
+Any AI tool can connect — not limited to Claude Code, Codex, or Naia OS:
+
+| Client | Connection | Role |
+|--------|-----------|------|
+| opencode | Direct filesystem | TUI coding agent |
+| Claude Code | Direct filesystem + hooks | CLI coding agent |
+| Codex | REST API | CLI coding agent |
+| Naia OS | REST API + WebSocket | Desktop app |
+| Browser | Dashboard | Monitoring & settings |
+
+### LLM Connection
+
+naia-adk includes **naia-anyllm** — a built-in LLM adapter that connects to [any-llm](https://github.com/nextain/any-llm) gateway or directly to LLM providers:
+
+```
+naia-adk
+└── packages/
+    └── naia-anyllm/        ← LLM adapter (plugin)
+        ├── Any-LLM Gateway ← nextain/any-llm (credits, auth, routing)
+        ├── Direct providers ← OpenAI, Anthropic, Google, etc.
+        └── Config           ← .agents/context/llm-config.yaml
+```
+
+CLI tools (opencode, Claude Code, Codex) use their own LLM connections. naia-os connects through naia-anyllm to the any-llm gateway.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
 

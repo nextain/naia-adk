@@ -1,0 +1,20 @@
+{
+  "name": "@naia-adk/core",
+  "version": "0.1.0",
+  "description": "Naia ADK core parsing engine",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "yaml": "^2.7.0",
+    "gray-matter": "^4.0.3",
+    "fast-glob": "^3.3.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}
