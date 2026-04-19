@@ -14,7 +14,7 @@ async function getConfigFiles(root: string) {
 }
 
 export default async function SettingsPage() {
-  const files = await getConfigFiles(".")
+  const files = await getConfigFiles(process.cwd())
 
   return (
     <div className="space-y-6">
