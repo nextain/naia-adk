@@ -26,6 +26,17 @@ naia-adk                      ← Base framework (public, Apache 2.0)
 
 Anyone can start their own chain — fork `naia-adk`, add your organization's data, then each member forks again for personal workspace.
 
+### Business Pack
+
+**[Naia Business ADK](https://nextain.io/adk)** — paid extension for organizations that need:
+
+- Pre-built business skills (payroll, accounting, HR document generation)
+- Multi-tenant team management
+- Priority support and SLA
+- Compliance-ready templates (GDPR, PIPA)
+
+The Business Pack is a private fork of `naia-adk` with additional skills and configurations. [Contact us](https://nextain.io/contact) for licensing.
+
 Each layer adds only what belongs to that scope. The base stays clean and reusable.
 
 ## What's Inside
