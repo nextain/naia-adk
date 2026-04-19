@@ -19,25 +19,31 @@ Naia ADK is the foundation for AI-driven operations — a structured workspace t
 ### The Fork Chain
 
 ```
-naia-adk                      ← Base framework (public, Apache 2.0)
-  └── nextain-adk             ← Fork: Nextain company data + business submodules
-        └── alpha-adk         ← Fork: Luke's personal data + project submodules
+naia-adk                  ← Base framework (public, Apache 2.0)
+  ├─ naia-business-adk   ← Business extension (paid): payroll, HR, compliance
+  │    └── {org}-adk     ← Organization fork: company data + submodules
+  │          └── {user}-adk  ← Personal fork: personal data + projects
+  └── {user}-adk         ← Direct fork: for individual use
 ```
 
-Anyone can start their own chain — fork `naia-adk`, add your organization's data, then each member forks again for personal workspace.
+Example — Nextain's chain:
 
-### Business Pack
+```
+naia-adk → naia-business-adk → nextain-adk → alpha-adk
+```
 
-**[Naia Business ADK](https://nextain.io/adk)** — paid extension for organizations that need:
+Fork from any layer. Individuals can fork `naia-adk` directly. Organizations go through the business extension.
+
+### Business Extension
+
+**[Naia Business ADK](https://nextain.io/adk)** — paid extension for organizations:
 
 - Pre-built business skills (payroll, accounting, HR document generation)
 - Multi-tenant team management
 - Priority support and SLA
 - Compliance-ready templates (GDPR, PIPA)
 
-The Business Pack is a private fork of `naia-adk` with additional skills and configurations. [Contact us](https://nextain.io/contact) for licensing.
-
-Each layer adds only what belongs to that scope. The base stays clean and reusable.
+[Contact us](https://nextain.io/contact) for licensing.
 
 ## What's Inside
 
@@ -110,30 +116,27 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
 
 ## Quick Start
 
-### 1. Fork this repo
+### For Individuals
 
-Fork `naia-adk` to your GitHub account or organization.
+1. **Private fork** — Fork `naia-adk` to your account (uncheck "Public fork" if available, or fork then change to private in Settings)
+2. **Clone** — `git clone https://github.com/YOUR-USER/your-adk.git && cd your-adk`
+3. **Add upstream** — `git remote add upstream https://github.com/nextain/naia-adk.git`
+4. **Create data dirs** — `mkdir -p data-private projects`
+5. **Start working** — Add projects, configure `.agents/`, use skills
+6. **Sync upstream** — Periodically: `git fetch upstream && git merge upstream/main`
 
-### 2. Clone and set up
+### For Organizations
 
-```bash
-git clone https://github.com/YOUR-ORG/your-adk.git
-cd your-adk
-```
+1. **Get Business Pack** — [Contact us](https://nextain.io/contact) for `naia-business-adk` access
+2. **Private fork** — Fork `naia-business-adk` to your org as private
+3. **Clone** — `git clone https://github.com/YOUR-ORG/your-org-adk.git && cd your-org-adk`
+4. **Add upstream** — `git remote add upstream https://github.com/nextain/naia-business-adk.git`
+5. **Add company data** — `mkdir -p data-company data-business projects`
+6. **Add submodules** — `git submodule add <repo> projects/<name>`
+7. **Team onboarding** — Each member forks the org ADK for their personal workspace
+8. **Sync upstream** — Periodically: `git fetch upstream && git merge upstream/main`
 
-### 3. Add your data
-
-```bash
-mkdir -p data-company data-business data-private projects
-```
-
-### 4. Add project submodules
-
-```bash
-git submodule add https://github.com/your-org/your-project projects/your-project
-```
-
-### 5. Connect to Naia OS (optional)
+### Connect to Naia OS (optional)
 
 If you use [Naia OS](https://github.com/nextain/naia-os), point its workspace path to your ADK directory. Skills and data are served via MCP/WebSocket.
 
