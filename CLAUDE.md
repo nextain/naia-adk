@@ -33,7 +33,7 @@ Fork on GitHub, then periodically sync upstream: `git fetch upstream && git merg
 | Directory | Tier | Purpose |
 |-----------|------|---------|
 | `data-company/` | T2 | Company general data (gitignored, per-fork) |
-| `data-business/` | T3 | Company sensitive data (gitignored, per-fork) |
+| `data-teams/` | T3 | Team-specific documents (gitignored, per-fork) |
 | `data-private/` | T3 | Personal data (gitignored, per-fork) |
 | `projects/` | T2 | Project repos (gitignored, per-fork) |
 | `projects/refs/` | T2 | Reference repos (gitignored, per-fork) |

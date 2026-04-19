@@ -49,7 +49,7 @@ After forking, create a `FORK.md` in the fork root with:
 
 - Organization/user info
 - Project list (submodules in `projects/`)
-- Data submodules (`data-company/`, `data-business/`)
+- Data submodules (`data-company/`, `data-teams/`)
 - Default language for `.users/` mirror
 - Any fork-specific conventions
 

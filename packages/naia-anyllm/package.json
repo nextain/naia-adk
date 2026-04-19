@@ -1,0 +1,17 @@
+{
+  "name": "@naia-adk/naia-anyllm",
+  "version": "0.1.0",
+  "description": "LLM adapter for naia-adk — connects to any-llm gateway or direct providers",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "openai": "^4.93.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0"
+  }
+}

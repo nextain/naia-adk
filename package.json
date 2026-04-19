@@ -1,0 +1,19 @@
+{
+  "name": "naia-adk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Naia ADK — AI Development Kit workspace with backend server and dashboard",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "tsx packages/server/src/server.ts",
+    "serve": "tsx packages/server/src/cli.ts serve",
+    "build": "tsc --build"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.0",
+    "tsx": "^4.19.0"
+  }
+}
