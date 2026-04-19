@@ -97,21 +97,36 @@ For non-feature changes: typos, config values, simple directives.
 
 AI assistant skills. **SoT: `.agents/skills/`** — `.claude/skills/` is symlinks.
 
+### Base Skills
+
 | Skill | Description | Management |
 |-------|-------------|------------|
-| `merge-worktree` | Squash-merge worktree → main with semantic commits | Manual (phase 13) |
 | `review-pass` | Multi-agent cross-validation review (4 stages) | Auto (phase 7, 9) |
 | `verify-implementation` | Run all `verify-*` skills, generate unified report | Auto (phase 7, 9) |
 | `manage-skills` | Analyze changes, create/update `verify-*` skills | Auto (phase 10) |
+| `merge-worktree` | Squash-merge worktree → main with semantic commits | Manual (phase 13) |
 | `read-doc` | Extract text from HWP/PDF/DOCX/XLSX/PPTX | Manual |
 | `webapp-testing` | Playwright E2E testing for local web apps | Manual |
-| `weekly-report` | Weekly work report from git commits | Manual |
 | `doc-coauthoring` | Structured document co-authoring (3-step) | Manual |
+
+### Business Extension Skills
+
+Available in `naia-business-adk`:
+
+| Skill | Description | Management |
+|-------|-------------|------------|
+| `payroll` | Payroll PDF generation + email dispatch | Manual |
+| `press-release` | Press release writing, outreach, distribution | Manual |
 | `patent-draft` | KIPO-format patent specification drafting | Manual |
 | `patent-pipeline` | AI patent discovery, evaluation, and filing | Manual |
 | `copyright-reg` | Copyright registration document generation | Manual |
-| `payroll` | Payroll PDF generation + email dispatch | Manual |
-| `press-release` | Press release writing, outreach, distribution | Manual |
+| `weekly-report` | Weekly work report from git commits | Manual |
+| `email` | Email composition and dispatch | Manual |
+| `sms` | SMS notification sending | Manual |
+| `channel-management` | Multi-channel communication management | Manual |
+| `service-management` | Service monitoring and management | Manual |
+| `web-monitoring` | Web content monitoring and alerting | Manual |
+| `document-generation` | Automated document generation | Manual |
 
 ## Directory Structure (Dual-directory Architecture)
 

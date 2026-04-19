@@ -74,18 +74,31 @@ Built-in skills for AI-assisted operations:
 | Skill | Description |
 |-------|-------------|
 | `review-pass` | Multi-agent cross-validation review (4 stages) |
-| `doc-coauthoring` | Structured document co-authoring workflow |
+| `verify-implementation` | Run all verification skills, generate unified report |
+| `manage-skills` | Auto-detect and update verification skills |
+| `merge-worktree` | Squash-merge worktree branches with semantic commits |
 | `read-doc` | Extract text from HWP/PDF/DOCX/XLSX/PPTX |
+| `webapp-testing` | Playwright E2E testing for local web apps |
+| `doc-coauthoring` | Structured document co-authoring (3-step) |
+
+### Business Extension Skills
+
+Additional skills available in [Naia Business ADK](#business-extension):
+
+| Skill | Description |
+|-------|-------------|
+| `payroll` | Payroll statement PDF generation + email dispatch |
 | `press-release` | Press release writing, journalist outreach, distribution |
 | `patent-draft` | KIPO-format patent specification drafting |
 | `patent-pipeline` | AI-powered patent discovery, evaluation, and filing |
 | `copyright-reg` | Copyright registration document generation |
-| `payroll` | Payroll statement PDF generation + email dispatch |
 | `weekly-report` | Weekly work report generation from git commits |
-| `webapp-testing` | Playwright E2E testing for local web apps |
-| `merge-worktree` | Squash-merge worktree branches with semantic commits |
-| `verify-implementation` | Run all verification skills, generate unified report |
-| `manage-skills` | Auto-detect and update verification skills |
+| `email` | Email composition and dispatch |
+| `sms` | SMS notification sending |
+| `channel-management` | Multi-channel communication management |
+| `service-management` | Service monitoring and management |
+| `web-monitoring` | Web content monitoring and alerting |
+| `document-generation` | Automated document generation |
 
 ## Architecture
 
