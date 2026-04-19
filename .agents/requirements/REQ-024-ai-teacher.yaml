@@ -1,0 +1,27 @@
+id: REQ-024
+title: "AI Teacher"
+title_ko: "?§Ïäµ ?®ÎÑê ?úÏñ¥ AI ÍµêÏÇ¨"
+product: aiedu.nextain.io
+module: ai-teacher
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  AI teacher that controls the practice panel including Monaco editor highlights, code suggestions, and lesson completion detection. Provides interactive, contextual guidance during exercises.
+
+acceptance_criteria:
+  - "AI teacher controls Monaco editor highlights"
+  - "Code suggestions are provided contextually"
+  - "Lesson completion is detected automatically"
+  - "Interactive guidance adapts to student progress"
+
+trace:
+  code:
+    - path: "components/ai-teacher/AiTeacherChat.tsx"
+      symbol: "AiTeacherChat"
+      coverage: full

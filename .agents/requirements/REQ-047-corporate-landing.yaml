@@ -1,0 +1,27 @@
+id: REQ-047
+title: "Corporate Landing"
+title_ko: "기업 ?�개 ?�딩"
+product: about.nextain.io
+module: landing
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Multi-section corporate landing page with glassmorphism dark theme design. Showcases three product axes with visual storytelling and smooth scroll animations.
+
+acceptance_criteria:
+  - "Multi-section layout renders correctly"
+  - "Glassmorphism dark theme is applied consistently"
+  - "Three product axes are clearly presented"
+  - "Scroll animations enhance user experience"
+
+trace:
+  code:
+    - path: "src/app/[locale]/page.tsx"
+      symbol: "LandingPage"
+      coverage: full

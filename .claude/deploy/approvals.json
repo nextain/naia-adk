@@ -1,0 +1,13 @@
+{
+  "approvals": [
+    {
+      "project": "naia.nextain.io",
+      "approved_by": "user:luke",
+      "approved_at": "2026-04-03T07:21:11Z",
+      "expires_at": "2026-04-03T07:51:11Z",
+      "session_id": "24c8d0bf-0b66-4e39-afbe-74194cfcf8e8",
+      "reason": "deploy-guard E2E 테스트",
+      "single_use": false
+    }
+  ]
+}

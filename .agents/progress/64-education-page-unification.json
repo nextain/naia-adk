@@ -1,0 +1,14 @@
+{
+  "issue": "#64 교육 페이지 공통 레이아웃 통합",
+  "issue_url": "https://github.com/nextain/aiedu.nextain.io/issues/64",
+  "current_phase": "commit",
+  "gates_cleared": ["understand", "scope", "plan", "build", "review", "e2e_test"],
+  "current_task": "커밋 및 푸시",
+  "key_decisions": [
+    "editor(파이썬)가 검증된 디자인 기준",
+    "공통 컴포넌트: useEducationPage, TextbookPanel, EducationHeader, StatusBar, ConsentScreen",
+    "terminal-test 재작성: 인라인 다크 → Tailwind 팔레트 시스템",
+    "math 리팩토링: 973줄 → 566줄",
+    "실습 패널(Monaco/SimTerminal/JSXGraph)은 독립 유지"
+  ]
+}

@@ -1,0 +1,27 @@
+id: REQ-032
+title: "Layered System Prompt"
+title_ko: "ê³„ì¸µ???œìŠ¤???„ë¡¬?„íŠ¸"
+product: aiedu.nextain.io
+module: ai-core
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Layered system prompt architecture with SOUL, IDENTITY, and USER layers. Persona priority chain resolves the final prompt by merging layers with defined precedence.
+
+acceptance_criteria:
+  - "SOUL layer defines core personality and values"
+  - "IDENTITY layer defines specific persona traits"
+  - "USER layer incorporates user-specific context"
+  - "Persona priority chain resolves layer conflicts"
+
+trace:
+  code:
+    - path: "app/api/ai/route.ts"
+      symbol: "buildSystemPrompt"
+      coverage: full

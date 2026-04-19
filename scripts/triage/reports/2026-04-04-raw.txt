@@ -1,0 +1,29 @@
+Triage complete. Here's the summary:
+
+---
+
+## 2026-04-04 트리아주 완료
+
+| 지표 | 값 |
+|------|-----|
+| 총 오픈 이슈 | **108** (전날 116 → -8) |
+| 신규 이슈 | **6** |
+| 종료된 이슈 (since 4/3) | **~8** (naia-os 6 + any-llm 6 - 중복) |
+| 우선순위 변경 권고 | **6** |
+| 이상 징후 | **3** |
+
+**주요 발견:**
+
+1. **close velocity 회복** — OpenClaw 제거 스프린트 완료 (#201, #208, #209). 7일 연속 0 → 약 10건 처리.
+2. **naia-os #207 신규 P1** — Talker stop token 6561 미생성 → 모든 음성 응답 20초 고정. #181 벤치마크에서 발견.
+3. **naia-os #184 GitHub 미종료** — progress file은 close, GitHub는 open. 직접 닫아야 함.
+4. **member-luke #16 P1** — prod 배포 사고(4/3) 후 deploy-guard 완성. 이슈는 tracking 용으로 open.
+5. **admin.nextain.io 첫 이슈 등장** — #11 (서버 헬스체크, P2), #10 (알림 관리, P3). B2B 운영 이슈 새롭게 발생.
+6. **any-llm 대규모 클린업** — 10 → 4 open (6건 종료). 릴리즈 준비 가능 상태에 근접.
+
+**즉시 조치 필요:**
+- naia-os #184 GitHub close
+- naia-os #67 obsolete close (OpenClaw 제거로 무효)
+- knowledge.json에서 AAIF 모니터링 소스 제거 (3회 연속 404)
+
+보고서: `scripts/triage/reports/2026-04-04.md`

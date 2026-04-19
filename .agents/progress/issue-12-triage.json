@@ -1,0 +1,42 @@
+{
+  "issue": "#12 Automated issue triage",
+  "issue_url": "https://github.com/nextain/member-luke/issues/12",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "plan", "build", "review", "e2e_test", "post_test_review", "sync", "sync_verify"],
+  "current_task": "커밋 완료 (cf5cded), close 단계",
+  "key_decisions": [
+    "에이전트 주도 설계 (프로세스는 트리거만)",
+    "매일 9AM KST systemd timer",
+    "delta 캐시 — 변경분만 재평가",
+    "한글 HTML 보고서",
+    "병행 작업 추천 + 릴리즈 판단",
+    "지식 파일 기반 이식성",
+    "aiedu 런칭 블로커 6건 해결"
+  ],
+  "review_log": {
+    "phase": "review",
+    "type": "code",
+    "mode": "standard",
+    "total_passes": 8,
+    "auto_fixes": 8,
+    "escalations": 0,
+    "result": "2_consecutive_clean",
+    "timestamp": "2026-04-01T11:30:00"
+  },
+  "post_test_review_log": {
+    "phase": "post_test_review",
+    "type": "code",
+    "mode": "light",
+    "total_passes": 1,
+    "auto_fixes": 0,
+    "escalations": 0,
+    "result": "2_consecutive_clean",
+    "timestamp": "2026-04-01T11:10:00"
+  },
+  "e2e_test": {
+    "dry_run": "pass",
+    "timer_status": "active",
+    "email_test": "pass",
+    "timestamp": "2026-04-01T11:00:00"
+  }
+}

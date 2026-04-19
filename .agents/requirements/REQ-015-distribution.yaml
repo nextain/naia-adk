@@ -1,0 +1,28 @@
+id: REQ-015
+title: "Multi-Format Distribution"
+title_ko: "?�중 ?�맷 배포"
+product: naia-os
+module: distribution
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Naia OS is distributed in multiple formats: Flatpak, AppImage, DEB, RPM, and bootable ISO. Each format is built and tested to ensure consistent behavior across Linux distributions.
+
+acceptance_criteria:
+  - "Flatpak package builds and installs correctly"
+  - "AppImage runs without installation"
+  - "DEB package installs on Debian-based systems"
+  - "RPM package installs on Fedora/RHEL-based systems"
+  - "ISO produces a bootable live system"
+
+trace:
+  code:
+    - path: "flatpak/io.nextain.naia.yml"
+      symbol: "FlatpakManifest"
+      coverage: full

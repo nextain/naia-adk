@@ -1,0 +1,27 @@
+id: REQ-044
+title: "Admin CMS"
+title_ko: "관리자 CMS"
+product: naia.nextain.io
+module: admin
+status: active
+source: candidate
+priority: low
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Localhost-only admin interface for post CRUD operations and crossposting to external platforms.
+
+acceptance_criteria:
+  - "Admin panel is accessible only from localhost"
+  - "Post CRUD operations work (create, read, update, delete)"
+  - "Crossposting publishes to external platforms"
+  - "Admin authentication is required"
+
+trace:
+  code:
+    - path: "src/app/[lang]/admin/page.tsx"
+      symbol: "AdminPage"
+      coverage: full

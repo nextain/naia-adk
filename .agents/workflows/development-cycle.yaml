@@ -1,0 +1,41 @@
+# Development Cycle — Lightweight
+# For non-feature changes: typos, config values, simple directives.
+# For feature-level work, use issue-driven-development.yaml.
+
+version: 1
+name: development-cycle
+description: "Lightweight cycle for non-feature changes (typos, config values, simple directives)."
+
+phases:
+  change:
+    description: "Read, modify, verify"
+    steps:
+      - "Read the file to be modified"
+      - "Make the requested change"
+      - "Re-read the changed section once — confirm no unintended edits or typos (single-pass visual review)"
+      - "Verify the change is correct (visual check or test run)"
+    rules:
+      - "Minimal changes only — do exactly what was asked"
+      - "No over-engineering or refactoring beyond the request"
+    output: "Correct change applied"
+
+  commit:
+    description: "Stage and commit"
+    steps:
+      - "Stage only relevant files"
+      - "Write descriptive commit message"
+    output: "Clean commit"
+
+  push:
+    description: "Pre-push verification then push"
+    steps:
+      - "Run git status — verify ALL files referenced in the build are git-tracked (not untracked)"
+      - "For Vercel web projects (aiedu, naia, about, admin, etc.):"
+      - "  1. pnpm build / npm run build — must pass with no errors"
+      - "  2. Start local server — open modified page, confirm no browser console errors"
+      - "  3. Only after steps 1+2 pass: git push"
+      - "For non-Vercel projects: git push directly after commit"
+    rules:
+      - "Local build passing ≠ Vercel build passing — local has the file, Vercel does not if it is untracked"
+      - "ENOENT on Vercel = file exists locally but not committed. Always run git status first"
+    output: "Verified push"

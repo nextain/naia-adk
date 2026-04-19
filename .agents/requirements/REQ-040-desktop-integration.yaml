@@ -1,0 +1,27 @@
+id: REQ-040
+title: "Desktop Deep Link"
+title_ko: "?∞Ïä§?¨ÌÜ± ?•ÎßÅ???∞Îèô"
+product: naia.nextain.io
+module: desktop
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  naia:// custom URI scheme for desktop deep linking. HTTPS redirect fallback for Chrome and CDP-based browsers that don't support custom schemes.
+
+acceptance_criteria:
+  - "naia:// URI scheme launches the desktop app"
+  - "HTTPS redirect fallback works in Chrome/CDP browsers"
+  - "Deep links carry authentication and context data"
+  - "Callback page handles incoming deep link data"
+
+trace:
+  code:
+    - path: "src/app/[lang]/(auth)/callback/page.tsx"
+      symbol: "CallbackPage"
+      coverage: full

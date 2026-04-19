@@ -1,0 +1,27 @@
+id: REQ-023
+title: "Browser Python (Pyodide)"
+title_ko: "Î∏åÎùº?∞Ï? ??Python ?§Ìñâ"
+product: aiedu.nextain.io
+module: editor
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Browser-based Python execution using Pyodide WASM runtime with Monaco Editor integration. Supports matplotlib PNG output for data visualization exercises.
+
+acceptance_criteria:
+  - "Python code executes in browser via Pyodide WASM"
+  - "Monaco Editor provides code editing with syntax highlighting"
+  - "matplotlib output renders as PNG images"
+  - "Execution results display in output panel"
+
+trace:
+  code:
+    - path: "app/[locale]/editor/page.tsx"
+      symbol: "runCode"
+      coverage: full

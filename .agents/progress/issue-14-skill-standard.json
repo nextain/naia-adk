@@ -1,0 +1,21 @@
+{
+  "issue": "#14 Agent Skills 표준 준수 — SKILL.md 스펙 정합성 + 검증 테스트",
+  "issue_url": "https://github.com/nextain/member-luke/issues/14",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "plan"],
+  "current_task": "완료 — CLOSED",
+  "key_decisions": [
+    "Agent Skills 표준(agentskills.io) 엄격 준수",
+    "Claude Code 확장 키 유지 (metadata 미지원)",
+    "SKILL_TEMPLATE.md 표준 vs 확장 분리"
+  ],
+  "review_log": {
+    "phase": "review",
+    "type": "code",
+    "mode": "standard",
+    "total_passes": 9,
+    "auto_fixes": 7,
+    "escalations": 0,
+    "result": "2_consecutive_clean"
+  }
+}

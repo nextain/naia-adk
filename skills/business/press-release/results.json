@@ -1,0 +1,51 @@
+{
+  "campaigns": [
+    {
+      "id": "2026-04-13-onmam-mou",
+      "subject": "교회 1.4만개·회원 32만 플랫폼, AI 전환 착수 — 넥스테인×데이스톤 MOU",
+      "sentAt": "2026-04-13T01:49:53+09:00",
+      "scheduledAt": "2026-04-13T08:55:00+09:00",
+      "note": "Scheduler 권한 이슈로 08:55 대신 01:49에 발송됨",
+      "total": 19,
+      "sent": 17,
+      "bounced": 2,
+      "recipients": [
+        { "name": "김태훈", "outlet": "MS투데이", "email": "taehoon@mstoday.co.kr", "status": "sent" },
+        { "name": "장우진", "outlet": "디지털타임스", "email": "jwj17@dt.co.kr", "status": "sent" },
+        { "name": "백봉삼", "outlet": "지디넷코리아", "email": "paikshow@zdnet.co.kr", "status": "sent" },
+        { "name": "심재석", "outlet": "바이라인네트워크", "email": "shimsky@byline.network", "status": "sent" },
+        { "name": "최광민", "outlet": "인공지능신문", "email": "ckm0081@aitimes.kr", "status": "sent" },
+        { "name": "김수진", "outlet": "블로터", "email": "kimsuzin09@bloter.net", "status": "sent" },
+        { "name": "황정호", "outlet": "테크42", "email": "jhh@tech42.co.kr", "status": "sent" },
+        { "name": "장세민", "outlet": "AI타임스", "email": "semim99@aitimes.com", "status": "sent" },
+        { "name": "윤대원", "outlet": "전자신문", "email": "yun1972@etnews.com", "status": "sent" },
+        { "name": "김민석", "outlet": "뉴스1", "email": "ideaed@news1.kr", "status": "sent" },
+        { "name": "박정훈", "outlet": "이넷뉴스", "email": "parkhoon@enetnews.co.kr", "status": "bounced", "error": "550 5.1.1 No such user" },
+        { "name": "진형근", "outlet": "글로벌이코노믹", "email": "jinwook@g-enews.com", "status": "bounced", "error": "550 5.1.1 No such user" },
+        { "name": "남도영", "outlet": "테크M", "email": "hyun@techm.kr", "status": "sent" },
+        { "name": "편집부", "outlet": "플래텀", "email": "editor@platum.kr", "status": "sent" },
+        { "name": "편집부", "outlet": "스타트업레시피", "email": "news@startuprecipe.co.kr", "status": "sent" },
+        { "name": "편집부", "outlet": "벤처스퀘어", "email": "editor@venturesquare.net", "status": "sent" },
+        { "name": "편집부", "outlet": "AI포스트", "email": "aipostkorea@naver.com", "status": "sent" },
+        { "name": "콘텐츠팀", "outlet": "Nextain", "email": "contents@nextain.io", "status": "sent" }
+      ],
+      "autoReplies": [
+        { "outlet": "벤처스퀘어", "type": "auto-reply-sales", "note": "자동 회신 (세일)" }
+      ],
+      "articles": [],
+      "insights": {
+        "deliveryRate": "89% (17/19)",
+        "bounceRate": "11% (2/19)",
+        "bounceReason": "AI 검색으로 수집한 이메일 주소 정확도 한계",
+        "junkClassified": true,
+        "junkReason": "신규 도메인 + 새벽 발송 + HTML 메일",
+        "lessonsLearned": [
+          "이메일 주소는 기자명과 ID 일치 여부 사전 검증 필수",
+          "Scheduler 권한 부여 시 즉시 재시도되므로 enable 타이밍 주의",
+          "발송 시간은 08:30-09:30 KST 준수",
+          "도메인 평판 구축을 위해 소량부터 시작 권장"
+        ]
+      }
+    }
+  ]
+}

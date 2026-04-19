@@ -1,0 +1,29 @@
+{
+  "issue": "#208 OpenClaw 스킬 컨버터 + 주요 스킬 번들 + ClawHub UI 안내",
+  "issue_url": "https://github.com/nextain/naia-os/issues/208",
+  "worktree": "/var/home/luke/dev-issue-208",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "plan", "build", "review", "commit", "close"],
+  "current_task": "완료",
+  "key_decisions": [
+    "default-skills에 skill.json 있음, SKILL.md 없음 → ref-openclaw SKILL.md 복사",
+    "컨버터: generate-skill-manifests.ts에 --source 플래그 추가 (ref-openclaw/skills 지원)",
+    "신규 스킬: xurl, node-connect, gh-issues (ref-openclaw에만 있음)",
+    "UI: SkillsTab에 ClawHub 링크 카드 추가",
+    "ClawHub URL: clawhub.com (not clawhub.openclaw.dev)",
+    "gh-issues/xurl: tier 1 (bins-only, no env required)",
+    "fileURLToPath(import.meta.url) 사용 — Windows-safe ESM path"
+  ],
+  "commits": [
+    "5f7389ba — feat: Bundle SKILL.md + ClawHub UI",
+    "146c3222 — fix: ClawHub URL to clawhub.com",
+    "00c81f8f — fix: fileURLToPath + gh-issues/xurl tests",
+    "b74e305a — fix: skill.json tiers + descriptions aligned",
+    "f4d03773 — feat: preload test + canvas SKILL.md fix (merged to main)"
+  ],
+  "sub_phases": {
+    "A": "done — SKILL.md 복사 + 컨버터 --source 플래그",
+    "B": "done — 신규 cross-platform 스킬 추가 (gh-issues, xurl)",
+    "C": "done — SkillsTab ClawHub 링크 UI"
+  }
+}

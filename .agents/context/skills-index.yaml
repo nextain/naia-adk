@@ -1,0 +1,87 @@
+# Skills Index — naia-adk
+# 매 세션 시작 시 SKILL.md를 다시 읽지 않아도 되도록 핵심 정보를 요약.
+# SKILL.md가 변경되면 이 파일도 함께 업데이트할 것.
+
+skills:
+  copyright-reg:
+    trigger: "저작권 등록, 업무상저작물 확인서, copyright"
+    what: "어문저작권 등록 서류 생성 (확인서 PDF + 신청명세서 초안)"
+    arg: "[저작물 제호 | PDF 경로]"
+    scripts: []
+
+  doc-coauthoring:
+    trigger: "문서 작성, 스펙 작성, 제안서, RFC, 설계 문서, PRD"
+    what: "3단계 공동 작성 (컨텍스트 수집 → 구조화·작성 → 독자 테스트)"
+    arg: null
+    scripts: []
+
+  manage-skills:
+    trigger: "Sync 단계, 새 패턴/규칙 도입 후, PR 전 검증 스킬 커버리지"
+    what: "verify-* 스킬 드리프트 탐지, 자동 생성/업데이트"
+    arg: "[스킬 이름 또는 영역]"
+    disable-model-invocation: true
+    scripts: [validate-skill-frontmatter.sh]
+
+  merge-worktree:
+    trigger: "워크트리 브랜치 머지, issue-driven-development Commit 단계"
+    what: "Squash-merge + git history 분석 기반 시맨틱 커밋 생성"
+    arg: "[target-branch]"
+    disable-model-invocation: true
+    scripts: []
+
+  patent-draft:
+    trigger: "특허, patent, 출원, 명세서, 청구항"
+    what: "KIPO 전자출원 양식 기반 특허 명세서 초안 생성"
+    arg: "[slug or description]"
+    scripts: []
+
+  patent-pipeline:
+    trigger: "특허, 가출원, patent, 발명 발굴"
+    what: "코드베이스 AI 분석 → 특허 후보 발굴 → 평가 → 가출원 초안"
+    arg: "[target=repo/path] [scope=full|module|feature] [step=0-8]"
+    scripts: []
+
+  payroll:
+    trigger: "급여명세서, 급여 보내기, payroll"
+    what: "급여명세서 A4 PDF 생성 + 사원 이메일 발송"
+    arg: "[YYYY-MM | 직접 입력]"
+    scripts: [send_payroll.py]
+
+  press-release:
+    trigger: "보도자료, press release, 기자 발송, PR 배포"
+    what: "보도자료 작성 → 기자 조사 → 개인화 발송 → 결과 수집 → 인사이트"
+    arg: null
+    scripts: []  # 실제 스크립트는 scripts/press-release/ (워크스페이스 레벨)
+
+  read-doc:
+    trigger: ".hwp/.hwpx/.pdf/.docx/.xlsx/.pptx 파일 언급, 문서 내용 검토/분석"
+    what: "문서 파일 텍스트 추출 → 컨텍스트 로드 (HWP/HWPX/PDF/DOCX/XLSX/PPTX)"
+    arg: "<file-path-or-glob>"
+    scripts: [extract_doc.py]
+    note: "Windows에서 PYTHONIOENCODING=utf-8 필요. 사이드카 .txt 있으면 우선 사용."
+
+  review-pass:
+    trigger: "코드 리뷰, 교차 검증, stage-gated review"
+    what: "4단계 멀티 AI 상호검증 리뷰 (planning/development/test/integration)"
+    arg: null
+    scripts: []
+    note: "894줄 — 가장 긴 SKILL.md. input_schema, steps 등 상세 frontmatter 포함."
+
+  verify-implementation:
+    trigger: "기능 구현 후, PR 전, 코드 리뷰 시, Review/Post-test Review 단계"
+    what: "등록된 모든 verify-* 스킬 순차 실행 → 통합 검증 보고서"
+    arg: "[특정 verify 스킬 이름]"
+    disable-model-invocation: true
+    scripts: []
+
+  webapp-testing:
+    trigger: "naia.nextain.io, about.nextain.io, aiedu.nextain.io E2E 테스트"
+    what: "Playwright로 로컬 웹 앱 E2E 테스트, 스크린샷, 콘솔 로그 캡처"
+    arg: null
+    scripts: [with_server.py]
+
+  weekly-report:
+    trigger: "주간 업무 결과, 결과 작성, 이번 주 뭐 했는지"
+    what: "git 커밋 + 작업 로그에서 주간 업무 결과 마크다운 생성"
+    arg: "[YYYYMMDD-YYYYMMDD | 이번주 | 지난주]"
+    scripts: []

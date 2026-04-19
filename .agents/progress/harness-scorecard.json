@@ -1,0 +1,21 @@
+{
+  "issue": "GCP Migration SSL & Media Verification",
+  "issue_url": "https://github.com/nextain/home.onmam.com/issues/5",
+  "current_phase": "build",
+  "gates_cleared": ["understand", "scope", "plan"],
+  "current_task": "Resolving 421 Misdirected Request & Resuming Media Transfer",
+  "key_decisions": [
+    "Switched Host Apache to 80/443 and Docker to 8080 to handle SSL at Host level",
+    "Created 89 internal vhosts in Docker to resolve 403 Forbidden errors",
+    "Identified IDC 65 firewall as the root cause for missing shinam.org media"
+  ],
+  "surprises": [
+    "IDC 65 blocks direct GCP access via SSH/rsync (Connection Timed Out)",
+    "Apache 421 error triggered by HTTP/2 protocol and multiple SSL certs on one IP"
+  ],
+  "next_steps": [
+    "Apply 'Protocols http/1.1' to all host vhosts to kill 421 errors",
+    "Establish rsync bridge: IDC-65 -> IDC-64 -> GCP-WP to bypass firewall",
+    "Final E2E check for all 89 independent domains"
+  ]
+}

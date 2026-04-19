@@ -1,0 +1,32 @@
+{
+  "issue": "#151",
+  "issue_url": "https://github.com/nextain/naia-os/issues/151",
+  "title": "test: 체감 검증 + 약점 개선 (최대 2라운드)",
+  "project": "naia-os",
+  "epic": "#145",
+  "current_phase": "report",
+  "gates_cleared": ["understand", "scope", "build", "review"],
+  "current_task": "Round 2 완료. 50개 테스트로 확장, 이중 채점 결과 64-66%.",
+  "benchmark_final": {
+    "test_count": 50,
+    "categories": "recall(10), abstention(10), semantic(10), contradiction(10), synthesis(10)",
+    "gemini_pro_judge": "64% (32/50)",
+    "claude_judge": "66% (33/50)",
+    "no_memory_baseline": "39% (9/23 → 50개 기준 미측정)",
+    "memory_contribution": "+25~27pp"
+  },
+  "strengths": ["contradiction 9/10", "recall 7/10"],
+  "weaknesses": ["abstention 3-6/10", "semantic 4-6/10", "synthesis judge간 차이 큼"],
+  "key_findings": [
+    "23개 테스트 87% → 50개 테스트 66% — 소규모 테스트 과대평가 확인",
+    "self-judge vs Claude 차이 ~4pp (미미)",
+    "gemini-2.5-pro max_tokens 부족 문제 발견 및 수정 (500→8192)",
+    "semantic 검색은 동작하지만 judge expected_answer가 좁아서 실패한 경우 있음"
+  ],
+  "next_steps": [
+    "#152 (출시 판정) 진행",
+    "qwen3:8b 50개 테스트 비교 (추후)",
+    "abstention 개선 — LLM relevance 판단 또는 프롬프트 최적화"
+  ],
+  "updated_at": "2026-03-27T06:00Z"
+}

@@ -1,0 +1,38 @@
+{
+  "issue": "#201 OpenClaw 제거 Phase 4 — 완전 제거 + 이관",
+  "issue_url": "https://github.com/nextain/naia-os/issues/201",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "plan", "build", "review", "commit", "close"],
+  "current_task": "완료 — main 머지, 이슈 클로즈",
+  "key_decisions": [
+    "6 sub-phase: A(Agent)→B(Shell)→C(Rust)→D(Config)→E(Docs)→F(ClawHub)",
+    "Invoke 키 SoT: sync_gateway_config, reset_gateway_data",
+    "Backward-compat 경로: ~/.openclaw/, /opt/naia/openclaw/ 유지",
+    "ClawHub backward-compat: metadata.openclaw v1.x 유지",
+    "pkill: openclaw → naia-node (모든 플랫폼 파일 업데이트됨)"
+  ],
+  "sub_phases_completed": {
+    "A": "78bd165e — Agent 소스 마이그레이션 (40+ 파일)",
+    "B": "99f44fe1 — Shell 프론트엔드 (20 파일, openclaw-sync.ts → gateway-sync.ts)",
+    "C": "ac7c39fb — Rust/Tauri 백엔드 (4 파일, invoke 명령 rename)",
+    "D": "4c7050ac — Config/Scripts/systemd (5 파일)",
+    "E": "7b6e0087 — Docs/Context (21 파일, openclaw-sync.yaml → gateway-sync.yaml)",
+    "EF": "815f5d96 — Docs/Scripts 마무리 (26 파일)"
+  },
+  "test_status": {
+    "shell": "44 passed, 1 skipped (Edge TTS network — pre-existing)",
+    "agent": "84 passed, 2 failed (Edge TTS live network — pre-existing, unrelated)"
+  },
+  "merge_commit": "1e049285",
+  "review_log": {
+    "phase": "review",
+    "type": "code",
+    "mode": "standard",
+    "total_passes": 5,
+    "auto_fixes": 8,
+    "escalations": 0,
+    "result": "2_consecutive_clean",
+    "timestamp": "2026-04-03T00:00:00"
+  },
+  "next_action": "완료"
+}

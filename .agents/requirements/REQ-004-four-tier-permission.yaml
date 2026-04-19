@@ -1,0 +1,27 @@
+id: REQ-004
+title: "Four-Tier Tool Permission"
+title_ko: "4?¨ê³„ ?„êµ¬ ê¶Œí•œ ?œìŠ¤??
+product: naia-os
+module: agent
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  T0-T3 permission hierarchy for tool execution. T0 (auto-approve) through T3 (always-ask). Panel tools register dynamic tier overrides to escalate or de-escalate permission levels based on context.
+
+acceptance_criteria:
+  - "T0 (auto-approve), T1, T2, and T3 (always-ask) tiers are defined"
+  - "Tool execution respects the assigned permission tier"
+  - "Panel tools can register dynamic tier overrides"
+  - "Permission escalation and de-escalation work correctly"
+
+trace:
+  code:
+    - path: "agent/src/gateway/tool-tiers.ts"
+      symbol: "getToolTier"
+      coverage: full

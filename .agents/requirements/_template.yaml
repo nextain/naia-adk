@@ -1,0 +1,35 @@
+id: REQ-{NNN}-{kebab-title}
+title: ""
+title_ko: ""
+product: ""
+module: ""
+status: candidate
+source: candidate
+priority: medium
+created: {YYYY-MM-DD}
+updated: {YYYY-MM-DD}
+
+issue_url: ""
+
+description: |
+  {What this requirement demands}
+
+acceptance_criteria:
+  - ""
+
+trace:
+  code:
+    - path: ""
+      symbol: ""
+      coverage: none
+  tests:
+    - path: ""
+      symbol: ""
+      coverage: none
+  reviews:
+    planning: null
+    development: null
+    test: null
+    integration: null
+
+decisions: []

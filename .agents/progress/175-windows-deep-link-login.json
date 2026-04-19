@@ -1,0 +1,15 @@
+{
+  "issue": "#175",
+  "issue_url": "https://github.com/nextain/naia-os/issues/175",
+  "title": "Windows deep link login — protocol handler not registered in dev builds",
+  "project": "naia-os",
+  "current_phase": "understand",
+  "gates_cleared": [],
+  "current_task": "Phase 2: Understand — analyze deep link login flow on Windows",
+  "key_decisions": [],
+  "rejected_alternatives": [],
+  "constraints_discovered": [],
+  "surprises": [],
+  "blockers": [],
+  "updated_at": "2026-03-29T08:00Z"
+}

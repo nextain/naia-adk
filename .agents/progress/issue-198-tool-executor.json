@@ -1,0 +1,24 @@
+{
+  "issue": "#198 OpenClaw 제거 Phase 1 — ToolExecutor 추상화 계층",
+  "issue_url": "https://github.com/nextain/naia-os/issues/198",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "plan"],
+  "current_task": "커밋 완료, 이슈 클로즈 대기",
+  "key_decisions": [
+    "인터페이스는 gateway/types.ts에 집중 (프로젝트 패턴 준수)",
+    "CommandResult 독립 타입 도입 (SkillResult 역방향 의존 해소)",
+    "DefaultPathResolver가 기존 ~/.openclaw/ 경로 유지 (Phase 2에서 전환)"
+  ],
+  "build_summary": {
+    "commit": "8ea80820 — feat(agent): CommandExecutor + PathResolver abstraction layer (#198)",
+    "new_files": 4,
+    "modified_files": 5,
+    "test_results": "855 passed, 32 new/updated"
+  },
+  "review_log": {
+    "type": "code",
+    "total_passes": 9,
+    "auto_fixes": 7,
+    "result": "2_consecutive_clean"
+  }
+}

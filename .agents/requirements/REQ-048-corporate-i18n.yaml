@@ -1,0 +1,27 @@
+id: REQ-048
+title: "Corporate i18n"
+title_ko: "?úÏòÅ ?¥Ï§ë?∏Ïñ¥"
+product: about.nextain.io
+module: i18n
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Korean and English dual-language support using next-intl. All corporate content is available in both languages with consistent quality.
+
+acceptance_criteria:
+  - "Korean translations are complete and natural"
+  - "English translations are complete and natural"
+  - "next-intl handles locale routing"
+  - "Language switching works across all pages"
+
+trace:
+  code:
+    - path: "src/messages/ko.json"
+      symbol: "KoreanMessages"
+      coverage: full

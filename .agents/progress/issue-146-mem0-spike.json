@@ -1,0 +1,30 @@
+{
+  "issue": "#146",
+  "issue_url": "https://github.com/nextain/naia-os/issues/146",
+  "title": "spike: mem0 로컬 실행 가능성 검증",
+  "project": "naia-os",
+  "epic": "#145",
+  "current_phase": "report",
+  "gates_cleared": ["understand", "scope", "investigate"],
+  "current_task": "GO 판정 완료, 이슈 코멘트 기록됨",
+  "key_decisions": [
+    "mem0ai/oss TypeScript SDK 사용 (v2.4.2)",
+    "@mem0/openclaw-mem0 Gateway 플러그인 활용",
+    "mem0는 벡터 검색/저장 백엔드, 기존 뇌과학 모듈은 위에 유지",
+    "LLM 이중 계층: 자율신경계(4B, 상시) + 의식적 사고(대형, 필요시)",
+    "개인정보 접촉 작업은 전부 로컬 필수",
+    "HW 티어: 128GB(풀) / 48GB(기본) / 32GB(omni 마지노) / 16GB(텍스트 최소)"
+  ],
+  "rejected_alternatives": [],
+  "constraints_discovered": [
+    "mem0는 LLM + 임베딩 둘 다 필요",
+    "better-sqlite3 native addon — Tauri sidecar Node.js에서는 OK",
+    "사용자 원문 접촉 AI 작업은 전부 로컬 (프라이버시 원칙)"
+  ],
+  "surprises": [
+    "@mem0/openclaw-mem0 플러그인이 이미 존재 — Auto-Recall + Auto-Capture 내장",
+    "이슈 2a, 2c 범위가 크게 축소될 수 있음"
+  ],
+  "blockers": [],
+  "updated_at": "2026-03-27T00:30Z"
+}

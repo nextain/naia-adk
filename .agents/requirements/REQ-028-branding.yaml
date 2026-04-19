@@ -1,0 +1,27 @@
+id: REQ-028
+title: "White-Label Branding"
+title_ko: "?”ì´?¸ë¼ë²?ë¸Œëœ??
+product: aiedu.nextain.io
+module: branding
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Per-organization white-label branding with customizable display name and logo. Each tenant sees their own branded experience.
+
+acceptance_criteria:
+  - "Per-org display name is configurable"
+  - "Per-org logo is configurable"
+  - "Branding is applied consistently across all pages"
+  - "Default branding is used when no org-specific config exists"
+
+trace:
+  code:
+    - path: "app/api/branding/route.ts"
+      symbol: "BrandingRoute"
+      coverage: full

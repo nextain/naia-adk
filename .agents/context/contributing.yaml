@@ -1,0 +1,88 @@
+# Copyright 2026 Nextain Inc. All rights reserved.
+#
+# AI contribution guide for the Naia OS project.
+# How AI agents (and humans using AI tools) should contribute to Naia OS.
+
+version: 1
+
+# Context reading order for new contributors
+onboarding:
+  required_reads:
+    - path: ".agents/context/agents-rules.json"
+      purpose: "Project rules (SoT)"
+    - path: ".agents/context/ai-work-index.yaml"
+      purpose: "Work type index"
+    - path: ".agents/context/project-index.yaml"
+      purpose: "Submodule entry points"
+    - path: ".agents/context/philosophy.yaml"
+      purpose: "Core philosophy"
+  submodule_rule: "When working in a submodule, read its rulesEntrypoint first"
+
+# Code contribution rules
+code:
+  process: "PLAN → CHECK → BUILD (TDD) → VERIFY → CLEAN → COMMIT"
+  workflow_ref: ".agents/workflows/development-cycle.yaml"
+  rules:
+    - "TDD: write test first (RED) → minimal code (GREEN) → refactor"
+    - "VERIFY: actually run the app — type-check alone is insufficient"
+    - "No console.log/warn/error — use structured Logger only"
+    - "Follow Biome for linting and formatting"
+    - "Integration tests first, then unit tests if needed"
+    - "Minimal change principle — only modify what's needed"
+
+# Context contribution rules
+context:
+  license: "CC-BY-SA-4.0"
+  rules:
+    - "All .agents/ YAML files must have SPDX header"
+    - "All .agents/ JSON files must have _license field"
+    - "All .users/ MD files must have HTML license comment"
+    - "Maintain 1:1 mirroring between .agents/ and .users/"
+    - "SoT lives in .agents/ — .users/ is the human-readable mirror"
+  cascade:
+    description: "When modifying context, propagate changes"
+    order: ["self", "parent", "siblings", "children", "mirror"]
+    ref: "agents-rules.json cascadeRules section"
+
+# Philosophy compliance
+philosophy:
+  ref: ".agents/context/philosophy.yaml"
+  must_preserve:
+    - "AI sovereignty — no vendor lock-in"
+    - "Privacy first — local execution default"
+    - "Transparency — open source, no hidden behavior"
+  may_extend:
+    - "Add new principles that don't conflict"
+    - "Add new skills, workflows, integrations"
+
+# Skill contribution
+skills:
+  format: "Claude Code skill format (SKILL.md with YAML frontmatter)"
+  location: ".agents/skills/{skill-name}/SKILL.md"
+  mirror_location: ".users/skills/{skill-name}/SKILL.md (symlink or copy)"
+  rules:
+    - "Each skill needs SKILL.md at .agents/skills/{name}/SKILL.md with name/description frontmatter"
+    - "Naming: kebab-case without prefix (e.g. review-pass, merge-worktree)"
+    - "After adding a skill, run /manage-skills to register it in CLAUDE.md"
+    - "Test by invoking the skill via /skill-name in a real session"
+
+# PR guidelines
+pull_requests:
+  title_format: "type(scope): description"
+  types: ["feat", "fix", "refactor", "docs", "chore", "test"]
+  checklist:
+    - "Tests pass (npm test / pytest)"
+    - "VERIFY step completed (app actually runs)"
+    - "Context files updated if architecture changed"
+    - "No console.log/warn/error left in code"
+    - "Work log entry if significant change"
+
+# Communication
+language:
+  code_and_context: "English"
+  responses_and_logs: "Korean (한국어)"
+  commit_messages: "English"
+
+mirrors:
+  korean: ".users/context/contributing.md"
+  english: ".users/context/en/contributing.md"

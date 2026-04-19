@@ -1,0 +1,27 @@
+id: REQ-036
+title: "BFF Gateway Proxy"
+title_ko: "BFF 게이?�웨???�록??
+product: naia.nextain.io
+module: api
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  All gateway API calls are proxied through a server-side BFF (Backend for Frontend) layer. The master API key never reaches the browser, ensuring credential security.
+
+acceptance_criteria:
+  - "All gateway calls route through server-side BFF"
+  - "Master API key is never exposed to the browser"
+  - "BFF proxy handles authentication and authorization"
+  - "Error responses are properly forwarded to the client"
+
+trace:
+  code:
+    - path: "src/lib/gateway-client.ts"
+      symbol: "gw/gwJson"
+      coverage: full

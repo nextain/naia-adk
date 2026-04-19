@@ -1,0 +1,1 @@
+I need your approval to run `gh` commands to scan GitHub issues. The sandbox is blocking them. Could you approve the `gh issue list` command so I can proceed with the triage?

@@ -1,0 +1,27 @@
+id: REQ-045
+title: "Channel Integration (Discord)"
+title_ko: "?∏Î? Ï±ÑÎÑê ?∞Îèô"
+product: naia.nextain.io
+module: channels
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Discord channel linking supporting web and desktop authentication flows. Users can connect their Discord accounts for cross-platform AI interaction.
+
+acceptance_criteria:
+  - "Discord accounts can be linked to Naia accounts"
+  - "Web authentication flow completes successfully"
+  - "Desktop authentication flow completes successfully"
+  - "Linked channels are listed and manageable"
+
+trace:
+  code:
+    - path: "src/app/api/gateway/linked-channels/route.ts"
+      symbol: "LinkedChannelsRoute"
+      coverage: full

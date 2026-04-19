@@ -1,0 +1,27 @@
+id: REQ-006
+title: "Always-On Gateway Daemon"
+title_ko: "?ÅÏãú ?§Ìñâ Í≤åÏù¥?∏Ïõ® ?∞Î™¨"
+product: naia-os
+module: gateway
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Persistent systemd daemon providing WebSocket RPC with 88+ methods for tool execution, skill management, and communication. The Shell auto-spawns the gateway if it is not already running.
+
+acceptance_criteria:
+  - "Gateway runs as a persistent systemd daemon"
+  - "WebSocket RPC supports 88+ methods"
+  - "Tool execution and skill management are accessible via RPC"
+  - "Shell auto-spawns the gateway when not running"
+
+trace:
+  code:
+    - path: "agent/src/gateway/client.ts"
+      symbol: "GatewayClient"
+      coverage: full

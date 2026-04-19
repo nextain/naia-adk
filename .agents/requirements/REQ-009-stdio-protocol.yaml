@@ -1,0 +1,28 @@
+id: REQ-009
+title: "Shell-Agent stdio Protocol"
+title_ko: "Shell-Agent stdio ?„ë¡œ? ì½œ"
+product: naia-os
+module: agent
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  JSON lines communication protocol over stdio between Shell and Agent. Supports chat_request, cancel_stream, approval_response, tool_request, and tts_request message types.
+
+acceptance_criteria:
+  - "JSON lines protocol works over stdio"
+  - "chat_request messages are processed correctly"
+  - "cancel_stream messages abort active streams"
+  - "approval_response messages resolve pending approvals"
+  - "tool_request and tts_request messages are handled"
+
+trace:
+  code:
+    - path: "agent/src/protocol.ts"
+      symbol: "ChatRequest"
+      coverage: full

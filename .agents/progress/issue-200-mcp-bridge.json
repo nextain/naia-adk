@@ -1,0 +1,19 @@
+{
+  "issue": "#200 OpenClaw 제거 Phase 3 — MCP 스킬 브릿지",
+  "issue_url": "https://github.com/nextain/naia-os/issues/200",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "plan"],
+  "current_task": "완료",
+  "build_summary": {
+    "commit": "b8998771",
+    "new_files": 4,
+    "modified_files": 4,
+    "test_results": "876 passed, 11 new"
+  },
+  "review_log": {
+    "type": "code",
+    "total_passes": 11,
+    "auto_fixes": 8,
+    "result": "2_consecutive_clean"
+  }
+}

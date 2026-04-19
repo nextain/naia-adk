@@ -1,0 +1,28 @@
+{
+  "issue": "#173",
+  "issue_url": "https://github.com/nextain/naia-os/issues/173",
+  "title": "feat(agent): Memory System P2 — scale tests, activate decay/KG, cross-session",
+  "project": "naia-os",
+  "current_phase": "review",
+  "gate_approvals": {
+    "understand": "테스트 확대 + 벤치마킹 확인",
+    "scope": "Phase A(테스트 인프라) → Phase B(코드 개선) 순서 확정",
+    "plan": "A1-A4 테스트 확대 → B1-B4 코드 개선 플랜 승인"
+  },
+  "decisions": [],
+  "rejected_alternatives": [],
+  "constraints_discovered": [],
+  "review_log": {
+    "phase": "review",
+    "type": "code",
+    "mode": "standard",
+    "total_passes": 8,
+    "auto_fixes": 7,
+    "escalations": 1,
+    "result": "2_consecutive_clean",
+    "timestamp": "2026-03-30T16:30:00+09:00"
+  },
+  "surprises": [],
+  "blockers": [],
+  "updated_at": "2026-03-30T15:00:00+09:00"
+}

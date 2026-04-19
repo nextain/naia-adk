@@ -1,0 +1,440 @@
+# Issue-Driven Development Cycle
+# Copyright 2026 Nextain Inc. All rights reserved.
+#
+# Upstream-first, code-centric development methodology
+# for fork-based / upstream-dependent projects (e.g., Naia OS on Bazzite).
+#
+# Key insight: front-load user involvement (issue understanding, scope, plan),
+# then AI executes autonomously with built-in quality gates.
+#
+# Scope: Default for all feature-level work (new features, broad bug fixes).
+# For non-feature changes (typos, config values, simple directives), use development-cycle.yaml.
+
+version: 1
+name: issue-driven-development
+
+scope:
+  applies_to: "Default for all feature-level work"
+  includes:
+    - "New feature development"
+    - "Bug fixes that touch a broadly-built feature (most bugs lead to full feature review)"
+    - "Any work where surrounding code quality is uncertain"
+  unit: "Feature (may span multiple issues)"
+  not_for: "Non-feature changes (typos, config values, simple directives) — use development-cycle.yaml"
+
+# ─── Principles ───────────────────────────────────────────────
+
+principles:
+  upstream_analysis_first:
+    rule: "Before writing code, fully understand how upstream implements the feature"
+    anti_pattern: "Guessing upstream behavior without reading the code"
+
+  minimal_modification:
+    rule: "Follow upstream's working flow, overlay customizations with minimal changes"
+    anti_pattern: "Rebuilding what upstream already provides"
+
+  no_guessing:
+    rule: "Never design based on assumptions — read the actual code"
+    anti_pattern: "Assuming behavior from docs or naming conventions alone"
+
+  no_symptom_patching:
+    rule: "Before stacking patches, verify you're on the correct path"
+    anti_pattern: "Fixing symptoms with 5 patches when 1 root-cause fix suffices"
+
+  no_autonomous_development:
+    rule: "Propose improvements to the user — never decide to build on your own"
+    anti_pattern: "Deciding 'this would be better' and implementing without asking"
+
+  working_code_preservation:
+    rule: "Never break working code by 'improving' or 'switching modes'"
+    anti_pattern: "Refactoring a working flow into a 'better' one that crashes"
+
+  discovery_protocol:
+    rule: |
+      When encountering unexpected problems during work, classify before acting:
+      T0 (informational): Expected friction (port in use, missing deps) → auto-fix silently
+      T1 (in-scope): Blocks current task, fix within plan scope → auto-fix, log to progress
+      T2 (out-of-scope): Problem outside current task → report to user, do NOT fix
+      T3 (shared resource): git push, deploy, shared DB → always require user confirmation
+      T4 (security): Credentials, data loss → report immediately, never auto-fix
+    classification: |
+      Ask: (1) Is fix within currently approved plan scope? (2) Does it touch shared resources?
+      If YES to (2) → T3. If NO to (1) → T2. Otherwise T0 or T1.
+    modes:
+      supervised: "Default. T0/T1 auto-fix. T2+ report and stop."
+      auto: "User grants explicitly. T0/T1/T2 auto-fix with log. T3/T4 still require confirmation."
+    auto_mode_rules:
+      grant: "User explicitly says '자동으로 해', 'auto mode', etc."
+      ttl: "60 minutes, or until task/phase changes"
+      revoke: "User says '멈춰', gate phase entered, TTL expired, task changed"
+    rapid_fix_guard: "3+ fixes in 5 minutes → pause and verify root cause"
+    anti_pattern: "Immediately fixing a discovered problem without classifying it. Stacking patches on symptoms."
+
+# ─── Iteration Termination Rule ───────────────────────────────
+
+iteration_rule:
+  description: "All loops in this workflow terminate only after TWO consecutive clean passes"
+  rationale: "A single clean pass can be a false negative. Two consecutive clean passes reduce the risk of missed issues."
+  applies_to: ["plan", "build", "review", "post_test_review", "sync_verify"]
+
+# ─── Phases ───────────────────────────────────────────────────
+
+phases:
+
+  # ── User-Involved (front-loaded) ──────────────────────────
+
+  issue:
+    description: "Define or receive the issue"
+    steps:
+      - "Identify or create a GitHub Issue"
+      - "All subsequent artifacts link back to this Issue"
+    output: "GitHub Issue URL"
+
+  understand:
+    description: "Confirm understanding of the issue before investigating"
+    gate: true  # must not proceed without user confirmation
+    steps:
+      - "Analyze the issue and summarize understanding across 3 dimensions:"
+      - "  - Goal: What changes when this is resolved? (observable outcome)"
+      - "  - Constraints: What must NOT be touched or changed?"
+      - "  - Criteria: How will success be verified? (concrete, checkable)"
+      - "Surface unresolved assumptions in each dimension before presenting"
+      - "Present to user: 'Is my understanding correct? Are there assumptions I'm missing?'"
+      - "User confirms or corrects"
+    output: "Confirmed issue understanding"
+    record: "Post understanding summary as Issue comment"
+
+  scope:
+    description: "Define investigation scope and depth, with user approval"
+    gate: true  # must not proceed without user confirmation
+    steps:
+      - "Determine issue type (see issue_type_calibration) — choose scope starting posture"
+      - "Propose scope (which files/modules/repos to examine)"
+      - "Propose depth for each scope area"
+      - "Present to user with rationale"
+      - "User confirms or adjusts"
+    output: "Confirmed scope and depth"
+    record: "Post scope definition as Issue comment"
+
+    issue_type_calibration:
+      description: "Adjust default scope width based on issue type before proposing scope"
+      types:
+        GREENFIELD:
+          signals: ["new feature", "add", "implement", "create", "initial"]
+          default_scope: "L1 + L2 + L3 (upstream)"
+          rationale: "Unknown terrain — read upstream before designing"
+        EXPANSION:
+          signals: ["extend", "support", "add X to existing", "also handle"]
+          default_scope: "L1 + L2 (direct callers/callees)"
+          rationale: "Existing pattern likely applies — check integration points"
+        BUG_FIX:
+          signals: ["fix", "broken", "not working", "regression", "error", "crash"]
+          default_scope: "HOLD — start narrow (L1 only), expand only if root cause not found"
+          rationale: "Symptom patching risk — locate root cause first, resist broadening"
+        REFACTOR:
+          signals: ["refactor", "clean up", "move", "rename", "reorganize"]
+          default_scope: "SELECTIVE — L1 + affected callsites only"
+          rationale: "Scope creep risk — do NOT touch logic while restructuring"
+      note: "EMERGENCY (prod down, security breach) → use development-cycle.yaml, not IDD"
+
+    scope_levels:
+      L1: "Files to be directly modified"
+      L2: "Dependencies of L1 (imports, callers, callees)"
+      L3: "Upstream originals (how the same feature is implemented upstream)"
+
+    depth_levels:
+      surface: "Function signatures, config values, interfaces only"
+      flow: "Execution flow tracing (call chains, ordering)"
+      internal: "Line-by-line implementation logic"
+
+  investigate:
+    description: "Code-centric investigation within confirmed scope"
+    steps:
+      - "Read lessons-learned for this issue type"
+      - "loop:"
+      - "  - Read ALL code in scope (not just until first finding)"
+      - "  - List findings with evidence (file:line citations required)"
+      - "  - Re-read scope for additional findings"
+      - "  - If new findings → continue loop"
+      - "  - If TWO consecutive passes find nothing new → investigation complete"
+    rules:
+      - "NEVER stop at the first bug found — complete full scope review"
+      - "Every finding MUST cite specific code location (file:line)"
+      - "No 'it seems like...' — only evidence-backed findings"
+      - "Code over docs — read actual implementation, not just documentation"
+      - "Distinguish CI/dummy code from production code"
+      - "Trace ALL execution paths — not just the happy path:"
+      - "  happy_path: normal user flow (always traced)"
+      - "  error_path: what happens when calls fail (catch/fallback blocks)"
+      - "  edge_path: boundary inputs (empty, null, max length, concurrent)"
+      - "  security_path: untrusted input entry points (HTTP body, headers, env, files)"
+    output: "Complete findings list with evidence"
+    record: "Post investigation results as Issue comment"
+
+  plan:
+    description: "Comprehensive plan based on ALL findings"
+    gate: true  # must not proceed without user confirmation
+    steps:
+      - "Select scope_mode based on issue type (see scope_mode_selection below)"
+      - "Draft plan addressing all findings (not just the first one)"
+      - "Split phases by testable boundaries — each phase must have a verification method"
+      - "REQ-ID assignment (feature-level work only, skip for lightweight cycle):"
+      - "  1. Analyze Issue requirements → assign REQ-{NNN} IDs"
+      - "  2. Create REQ files in .agents/requirements/ (or project requirements dir)"
+      - "  3. Each REQ gets: title, acceptance_criteria, priority"
+      - "  4. Map plan phases to REQ-IDs (which phase implements which REQ)"
+      - "  5. Present REQ-ID mapping to user as part of plan approval"
+      - "  6. Update progress file with req_ids array"
+      - "loop:"
+      - "  - Re-read plan against findings and actual code"
+      - "  - Check for missing items, inconsistencies, unverified references"
+      - "  - Verify REQ-ID coverage: every Issue requirement has a REQ-ID"
+      - "  - List alternatives considered and why they were rejected (one line each)"
+      - "  - List top-3 failure scenarios (adversarial pre-mortem) — adjust plan or document accepted risk"
+      - "  - If corrections needed → update plan, continue loop"
+      - "  - If TWO consecutive passes find nothing to fix → plan is stable"
+      - "Present stable plan to user for approval"
+      - "User confirms or adjusts"
+    rules:
+      - "Each phase MUST define its verification method (build check, unit test, E2E, manual, file review)"
+      - "If a phase cannot be tested locally, note it explicitly and state what CAN be verified"
+      - "Never group untestable and testable work in the same phase"
+      - "No vague terms without metrics ('fast' → 'p99 < 200ms', 'improve' → specific measurable outcome)"
+      - "Include error_rescue_map for each phase (see error_rescue_map_format below)"
+      - "Add diagram: architecture + data flow are mandatory when 3+ components interact. State machine, error flow, deployment are conditional."
+    output: "Approved implementation plan with per-phase verification methods"
+
+    scope_mode_selection:
+      description: "Select AI ambition level based on issue type — prevents scope creep and under-delivery"
+      modes:
+        EXPANSION:
+          when: "GREENFIELD or EXPANSION issue type"
+          behavior: "Completeness-first — implement all planned items, no shortcuts"
+          risk: "Over-engineering. Mitigate: stick to plan, no unplanned features"
+        SELECTIVE_EXPANSION:
+          when: "EXPANSION with tight deadline or limited scope"
+          behavior: "Implement core items, defer nice-to-haves to follow-up issues"
+          risk: "Deferred items forgotten. Mitigate: create follow-up issues immediately"
+        HOLD_SCOPE:
+          when: "BUG_FIX — fix only what's broken"
+          behavior: "Minimal change — no refactoring, no improvements beyond the fix"
+          risk: "Missing root cause. Mitigate: investigate thoroughly before coding"
+        SCOPE_REDUCTION:
+          when: "Emergency hotfix (use development-cycle.yaml instead if truly urgent)"
+          behavior: "Absolute minimum — band-aid allowed if documented with follow-up issue"
+          risk: "Tech debt. Mitigate: always create follow-up issue for proper fix"
+      rule: "State selected scope_mode in plan header. Reviewer checks plan against mode."
+
+    error_rescue_map_format:
+      description: "Structured failure planning per phase"
+      format: |
+        # Phase N: {phase name}
+        | Method/Step | Failure Mode | Recovery Action | User Visible? |
+        |-------------|-------------|-----------------|:------------:|
+        | {method}    | {what fails}| {how to recover}| YES/NO       |
+      rules:
+        - "User Visible = YES → must be CRITICAL priority in review"
+        - "Every phase with external calls (API, DB, file I/O) MUST have an error_rescue_map"
+        - "Phases with pure logic changes can skip if no I/O"
+    record: "Post plan as Issue comment"
+
+  # ── AI-Autonomous (with quality gates) ────────────────────
+
+  build:
+    description: "Implement according to approved plan"
+    steps:
+      - "Set up workspace (see git_integration.isolation for worktree vs branch)"
+      - "Implement changes per plan, one phase at a time"
+      - "After each phase:"
+      - "  1. Run '/review-pass stage=development files=<changed files> context=<phase summary> req_ids=<phase REQ-IDs>'"
+      - "  2. Continue until stage convergence threshold met"
+      - "  3. Run defined verification method (test/build check)"
+      - "  4. Do NOT proceed to next phase until both are clean"
+      - "After ALL phases complete:"
+      - "  - Run '/review-pass stage=development files=<all changed files> context=full build summary req_ids=<all REQ-IDs>'"
+      - "  - Continue until stage convergence threshold met"
+      - "Follow TDD where applicable (RED → GREEN → REFACTOR)"
+    rules:
+      - "Stay within plan scope — no unplanned changes"
+      - "Follow upstream patterns, don't invent new ones"
+      - "Do NOT proceed to the next phase if review or verification fails"
+      - "If you discover a design flaw or design-implementation gap during build: follow agents-rules.json ai_workflow.escalation_path.design_gap_found_during_build — surface to user, do NOT silently fix"
+    output: "Implementation on worktree or branch (verified per-phase + full review)"
+
+  review:
+    description: "Multi-AI cross-validation review via review-pass v3"
+    trigger: "After EVERY phase completion (not just at the end)"
+    steps:
+      - "Run '/review-pass stage=development files=<modified files> context=<what was implemented> req_ids=<REQ-IDs>'"
+      - "Review-pass runs convergence loop automatically (2 clean rounds default)"
+      - "Multi-phase builds: run '/review-pass' after each phase before proceeding"
+      - "Run '/verify-implementation' after review is clean"
+    clean_pass_definition: "Convergence threshold met: 2 consecutive clean rounds (development stage)"
+    output: "Clean, reviewed code (convergence confirmed)"
+
+    checklist:
+      - "plan_compliance: Does the code implement every item in the plan?"
+      - "issue_resolution: Does it actually solve the original issue?"
+      - "scope_discipline: Are there changes beyond what was planned?"
+      - "working_code_preserved: Does it break anything that was working?"
+      - "upstream_pattern: Does it follow upstream conventions, not invent new ones?"
+      - "side_effects: Could this change affect other parts unexpectedly?"
+      - "hardcoded_strings: Are there any hardcoded UI strings that should use i18n?"
+      - "type_safety: Are there any unvalidated external inputs (body, params)?"
+      - "unused_code: Are there unused props, imports, or dead code paths?"
+
+  e2e_test:
+    description: "End-to-end test by running the actual application"
+    steps:
+      - "Start the actual dev server / application (not a mock or stub)"
+      - "BEFORE running tests: verify test validity — trace each test's import → call → assertion path to confirm it exercises the actual changed code (not a mock, stub, or different module)"
+      - "Run ONLY the tests covering changed code first (targeted test)"
+      - "After targeted tests pass, run the full E2E suite"
+      - "Test through the real UI/Shell path as a real user would"
+      - "Tests must pass completely clean (no partial passes)"
+    rules:
+      - "MUST actually run the web server or application — never just check integration flow"
+      - "Test data comes from .env files — if required env vars are missing, ask user before proceeding"
+      - "No runtime patches to make tests pass"
+      - "No manual post-processing"
+      - "User's goal must be achieved without additional intervention"
+    execution_order:
+      - "1. Check .env for required test data (API keys, tokens, URLs)"
+      - "2. If .env vars missing → ask user to provide them"
+      - "3. Start dev server / app"
+      - "4. Run targeted tests (changed scope only) for fast feedback"
+      - "5. On pass → run full E2E suite"
+      - "6. On fail → diagnose (read full output), fix root cause, re-run targeted tests"
+    on_failure:
+      mandatory_first_step: "DIAGNOSE — read full test output before any code change"
+      diagnose:
+        - "Read FULL test output (error message, stack trace, actual vs expected values)"
+        - "Read relevant test code to confirm assertions are correct"
+        - "Identify root cause: is it implementation, design, or investigation gap?"
+        - "Record diagnosis in progress file (test_findings field)"
+      then_route:
+        implementation_issue: "→ return to BUILD (with specific diagnosis of what to fix)"
+        design_issue: "→ return to PLAN (with specific diagnosis of design flaw)"
+        investigation_gap: "→ return to INVESTIGATE (with specific diagnosis of missing knowledge)"
+      rules:
+        - "NEVER return to BUILD without first reading the full test failure output"
+        - "NEVER modify test assertions as the first response to a failure"
+        - "The diagnosis must identify a specific root cause, not just 'test failed'"
+    output: "E2E diagnostic complete — all tests pass with correct assertions (targeted + full suite)"
+
+  post_test_review:
+    description: "Post-test review — catch issues that testing context reveals"
+    steps:
+      - "Run '/review-pass stage=test files=<test files> context=<test results> req_ids=<REQ-IDs>'"
+      - "Run '/review-pass stage=integration files=<all modified files> context=<full build + test summary> req_ids=<all REQ-IDs>'"
+      - "Review-pass runs convergence loop automatically"
+      - "Run '/verify-implementation' after both stages are clean"
+    clean_pass_definition: "Both test and integration stages converged"
+    output: "Final clean code (all stages converged)"
+
+  sync:
+    description: "Synchronize contexts, record lessons, present to user"
+    gate: true  # must not proceed without user confirmation
+    steps:
+      - "Reflect on trial-and-error during this issue's work"
+      - "Before writing: check if content already exists elsewhere (prevent duplication/scattering)"
+      - "Use context_routing below to decide WHERE each piece of knowledge goes"
+      - "Update .agents/ context files if implementation changed project knowledge"
+      - "Update .users/ mirrors (1:1 mirroring)"
+      - "Update CLAUDE.md / entry points if needed"
+      - "Review: were there mistakes or lessons this cycle?"
+      - "  YES → add to lessons-learned"
+      - "  NO → skip"
+      - "Run '/manage-skills' to analyze session changes and update/create verify-* skill coverage"
+      - "Present sync summary to user for confirmation"
+    rules:
+      - "Check existing context files before adding — avoid scattering same content across multiple files"
+      - "Lessons from trial-and-error MUST be captured, not just code changes"
+      - "When modifying any context file (workflows/*.yaml, skills/*/SKILL.md, context/*.json, hooks, or .users/ mirrors): write a validation test and run it BEFORE committing — YAML parse, required sections, .agents ↔ .users mirror consistency, referenced file existence"
+    context_routing:
+      agents-rules.json: "Rules to enforce across ALL AI sessions for this project — architecture decisions, coding conventions, process rules, validated patterns"
+      lessons-learned.yaml: "Incident-based lessons — mistakes made, corrections received, recurring traps. Write immediately when corrected mid-session (anti-compact)."
+      CLAUDE.md_or_AGENTS.md: "Session entry points — rules that apply across ALL projects (root) or define the project structure. Cascade target when rules change."
+      .env_files: "Secrets, API keys, env vars — never in context files"
+      nowhere: "Things already in code (read the file), things in git log (use git blame), MEMORY.md (auto-managed by Claude Code, AI must not directly edit)"
+      decision_rule: "If unsure: ask 'should every AI session for this project enforce this?' YES → agents-rules.json. 'Was this a mistake I should not repeat?' YES → lessons-learned. 'Does every project need this?' YES → root CLAUDE.md."
+    output: "User-confirmed context updates"
+
+  sync_verify:
+    description: "Verify context updates are accurate and complete"
+    steps:
+      - "loop:"
+      - "  - Re-read all updated context files"
+      - "  - Check accuracy against actual implementation"
+      - "  - Check mirror consistency (.agents/ ↔ .users/)"
+      - "  - Fix any inaccuracies or missing updates"
+      - "  - If TWO consecutive passes find nothing to fix → verification complete"
+    output: "Verified, synchronized context files"
+
+  report:
+    description: "Report results to user and Issue"
+    steps:
+      - "Summarize what was done, what changed, and any remaining items"
+      - "Post completion status as Issue comment (English)"
+    output: "Completion report"
+
+  commit:
+    description: "Commit and link to Issue"
+    prerequisite: "ALL prior phases (build, review, e2e_test, post_test_review, sync, sync_verify) must be complete before committing"
+    steps:
+      - "If in worktree: run '/merge-worktree' (squash-merge + semantic commit)"
+      - "If not in worktree: stage relevant files only, commit with message referencing Issue number"
+      - "Pre-push verification (run BEFORE git push):"
+      - "  1. git status — verify ALL files referenced in the build are git-tracked (not untracked)"
+      - "  2. For Vercel web projects: pnpm build / npm run build — must pass"
+      - "  3. For Vercel web projects: start local server, open modified page, confirm no console errors"
+      - "  4. Only after all checks pass: git push"
+      - "Then follow repo-type branching rule (see below)"
+    push_rules:
+      - "Local build passing ≠ Vercel build passing if referenced files (images, fonts, etc.) are untracked"
+      - "ENOENT on Vercel = file exists locally but not in git — always check git status first"
+    repo_type:
+      nextain_repo:
+        when: "Working in a nextain/* repository where Luke is maintainer"
+        action: "Push directly to main — no PR. (pr-guard hook blocks `gh pr create`.)"
+      external_contribution:
+        when: "Contributing to an upstream/third-party repository"
+        action: "Create PR against the upstream repository, linked to the originating Issue"
+    output: "Commit pushed (nextain: direct to main / external: PR opened)"
+
+# ─── Gates (user confirmation required) ──────────────────────
+
+gates:
+  - phase: understand
+    prompt: "Is my understanding of this issue correct?"
+  - phase: scope
+    prompt: "I propose investigating scope L{n} / depth {level}. Does this look right?"
+  - phase: plan
+    prompt: "Here is my implementation plan. Shall I proceed?"
+  - phase: sync
+    prompt: "Here are the context updates from this work. Please review before I proceed."
+
+# ─── Feedback Loop ────────────────────────────────────────────
+
+lessons_learned:
+  file: ".agents/context/lessons-learned.yaml"
+  read_at: ["investigate"]
+  write_at: ["sync", "immediately on correction"]
+  purpose: "Accumulate recurring mistakes/patterns to prevent repetition. Write immediately when corrected mid-session (anti-compact)."
+
+# ─── Git Integration ─────────────────────────────────────────
+
+git_integration:
+  issue: "Each cycle starts from a GitHub Issue"
+  branch_naming: "issue-{number}-{short-description}"
+  isolation:
+    worktree:
+      when: "Default — concurrent work (multiple issues active in the same project)"
+      command: "git worktree add ../{project}-issue-{N}-{desc} issue-{N}-{desc}"
+      note: "Creates an independent working directory with its own branch. No stash/switch needed."
+    branch_only:
+      when: "Solo work — only one issue at a time in the repository"
+      command: "git checkout -b issue-{N}-{desc}"
+  comments: "Investigation results, scope, plan posted as Issue comments"
+  pr: "Links back to Issue on completion"
+  transparency: "Full decision trail visible in Issue timeline"

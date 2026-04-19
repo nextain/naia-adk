@@ -1,0 +1,280 @@
+{
+  "version": 1,
+  "last_updated": "2026-04-09",
+  "strategic_context": {
+    "primary_goal": "aiedu 바이브코딩 런칭 (매출)",
+    "secondary_goals": [
+      "AI 네이티브 개발 체계 확립 (가속기)",
+      "IITP 과제 수주 준비 (과제3 코드생성 + 과제6 운용개선)",
+      "교회 홈페이지 10K 모던화 (매출 + IITP 실증)"
+    ],
+    "team_size": "1 (Luke)",
+    "constraints": [
+      "품질 체크 시간 부족",
+      "릴리즈 기준 미확립",
+      "인력 충원 전까지 AI 자동화로 버티기"
+    ]
+  },
+  "learned_patterns": [
+    {
+      "pattern": "aiedu launch-blockers form dependency chains",
+      "detail": "#58 must land before #59; #53 (data) before #54 (UX). ALL RESOLVED 2026-04-01.",
+      "learned": "2026-04-01"
+    },
+    {
+      "pattern": "naia-os P0 inflation from epics",
+      "detail": "Epic #182 + 2 children (#183, #184) all P0 = 3 P0s from one initiative. Epic itself could be P1 tracking issue.",
+      "learned": "2026-04-01"
+    },
+    {
+      "pattern": "all issues pre-labeled by maintainer",
+      "detail": "Only exception found: #189 (new issue, no labels at creation). Agent added P2-medium.",
+      "learned": "2026-04-01"
+    },
+    {
+      "pattern": "dual priority labels exist on some issues",
+      "detail": "#159 (P1+P2), #4 (P1+P3), #6 (P2+P3). Maintainer-set, not agent-modified. Flagged for cleanup.",
+      "learned": "2026-04-01"
+    },
+    {
+      "pattern": "aiedu burst closures indicate focused sprint",
+      "detail": "6 issues closed in ~10 min window (01:35-01:44 UTC) suggests concentrated work session. Launch-blockers cleared in single push.",
+      "learned": "2026-04-01"
+    },
+    {
+      "pattern": "memory v2 research active with detailed benchmarks",
+      "detail": "#145 epic has 7 comments with quantitative benchmark data (47%→66% progression). Active research, not stale.",
+      "learned": "2026-04-01"
+    },
+    {
+      "pattern": "Chrome embedding subsystem has bug cluster",
+      "detail": "#162 (X11 overlay, P1) and #197 (broken in dev, unlabeled) both in Chrome embedding. Likely share root cause. Recommend investigating together.",
+      "learned": "2026-04-03"
+    },
+    {
+      "pattern": "any-llm repo redirects from nextain/nextiani-any-llm",
+      "detail": "API calls to nextain/any-llm get redirected. Old issues still reference old repo name.",
+      "learned": "2026-04-03"
+    },
+    {
+      "pattern": "new issues created without labels",
+      "detail": "#203, #202, #197, #193, #192, #11, #15, #14 all created without priority labels. Pattern: maintainer creates issues quickly, triage catches up.",
+      "learned": "2026-04-03"
+    },
+    {
+      "pattern": "zero close velocity in reporting periods",
+      "detail": "Scorecard shows 0 closed issues in 7-day window. New issue creation (8) outpaces closure. Research/benchmark phase may explain.",
+      "learned": "2026-04-03"
+    },
+    {
+      "pattern": "progress file phase=close doesn't mean GitHub issue is closed",
+      "detail": "#184 progress file has closed=true and phase=close but GitHub issue still open. Session interruption can prevent the final GitHub close step. Check for divergence.",
+      "learned": "2026-04-04"
+    },
+    {
+      "pattern": "prod accident creates immediate safety tooling sprint",
+      "detail": "2026-04-03 prod accident (any-llm deployed without user approval) → deploy-guard built same day with 2-consecutive-clean review. Reaction time: <8h.",
+      "learned": "2026-04-04"
+    },
+    {
+      "pattern": "any-llm open issues can drop sharply in single session",
+      "detail": "any-llm went 10→4 open issues between 2026-04-03 and 2026-04-04. Indicates focused cleanup sessions happen periodically.",
+      "learned": "2026-04-04"
+    },
+    {
+      "pattern": "OpenClaw removal epic spans multiple child issues",
+      "detail": "#186 epic → #201 (Phase 4 complete), #208 (skill bundle), #209 (dist cleanup). After all children done, epic itself may be closeable.",
+      "learned": "2026-04-04"
+    },
+    {
+      "pattern": "voice stop token bug surfaces from benchmark research",
+      "detail": "#181 benchmark work revealed #207 (Talker stop token 6561 not generated → 20s fixed audio). Research issues generate bug discoveries as side effects.",
+      "learned": "2026-04-04"
+    },
+    {
+      "pattern": "alpha-memory sprint creates burst of dependent issues",
+      "detail": "#210-#214 all created 2026-04-04 in chain: export→backup API→backup UI→npm publish→docs. Memory v2 sprint pattern: plan all children at once.",
+      "learned": "2026-04-05"
+    },
+    {
+      "pattern": "aiedu B2C sprint creates purchase flow bug cluster",
+      "detail": "2026-04-06: #68 (purchase page login), #71 (purchase flow), #70 (landing layout) all created same day. B2C prep sessions create grouped bug discovery.",
+      "learned": "2026-04-07"
+    },
+    {
+      "pattern": "admin B2C pipeline issues created in burst before aiedu launch",
+      "detail": "2026-04-06: admin #14-#17 all created same day. Pattern: admin B2C readiness sprint precedes aiedu launch.",
+      "learned": "2026-04-07"
+    },
+    {
+      "pattern": "zero close velocity during active sprint is normal",
+      "detail": "Scorecard shows 0 closes/7d but active hotfix commits (4 files, 3+edits/24h). Work happening but issue closure lagging. Not a blocker signal.",
+      "learned": "2026-04-07"
+    },
+    {
+      "pattern": "voice sprint issues created in pairs targeting same file",
+      "detail": "#219 (migrate /v1/omni → /v1/realtime) and #220 (Silero ONNX VAD) both target minicpm-o.ts. Created same day, tightly coupled. Should be worked in single session.",
+      "learned": "2026-04-08"
+    },
+    {
+      "pattern": "stale P0s flagged 3 consecutive triages without action",
+      "detail": "#187, #182, #175 flagged as stale on 2026-04-06, 04-07, 04-08. 8-9 days inactive. Pattern: P0 inflation without deprioritization when focus shifts to B2C sprint.",
+      "learned": "2026-04-08"
+    },
+    {
+      "pattern": "temporal memory benchmark gap drives new issue creation",
+      "detail": "naia-os 221 created directly from benchmark finding (temporal 0/25 = 0 percent). Benchmark research directly generates actionable issues with quantitative acceptance criteria.",
+      "learned": "2026-04-09"
+    },
+    {
+      "pattern": "harness maturity analysis creates strategic meta-issues",
+      "detail": "member-luke 19/20 are meta-level analysis issues (not feature work). Gap analysis from external training material. Pattern: periodic self-assessment creates meta-issues that spawn child implementation issues.",
+      "learned": "2026-04-09"
+    }
+  ],
+  "standards_monitoring": {
+    "sources": [
+      {
+        "name": "Agent Skills spec",
+        "repo": "anthropics/skills",
+        "last_seen_sha": "ca1e7dc",
+        "last_checked": "2026-04-09"
+      },
+      {
+        "name": "MCP spec",
+        "repo": "modelcontextprotocol/specification",
+        "last_seen_sha": "0dd7a90",
+        "last_checked": "2026-04-09"
+      }
+    ]
+  },
+  "maintainer_corrections": [],
+  "triage_history": [
+    {
+      "date": "2026-04-01",
+      "type": "baseline",
+      "total_issues": 106,
+      "by_priority": {
+        "P0": 12,
+        "P1": 23,
+        "P2": 54,
+        "P3": 17
+      },
+      "changes_made": 0,
+      "anomalies_flagged": 3,
+      "report": "scripts/triage/reports/2026-04-01.md"
+    },
+    {
+      "date": "2026-04-01",
+      "type": "delta",
+      "total_issues": 96,
+      "by_priority": {
+        "P0": 6,
+        "P1": 21,
+        "P2": 52,
+        "P3": 18
+      },
+      "changes_made": 1,
+      "anomalies_flagged": 3,
+      "report": "scripts/triage/reports/2026-04-01.md"
+    },
+    {
+      "date": "2026-04-03",
+      "type": "delta",
+      "total_issues": 116,
+      "by_priority": {
+        "P0": 3,
+        "P1": 16,
+        "P2": 55,
+        "P3": 17
+      },
+      "changes_made": 0,
+      "anomalies_flagged": 5,
+      "report": "scripts/triage/reports/2026-04-03.md"
+    },
+    {
+      "date": "2026-04-04",
+      "type": "delta",
+      "total_issues": 108,
+      "by_priority": {
+        "P0": 2,
+        "P1": 17,
+        "P2": 52,
+        "P3": 17
+      },
+      "changes_made": 0,
+      "anomalies_flagged": 3,
+      "new_issues": 6,
+      "closed_since_last": 8,
+      "report": "scripts/triage/reports/2026-04-04.md"
+    },
+    {
+      "date": "2026-04-05",
+      "type": "delta",
+      "total_issues": 112,
+      "by_priority": {
+        "P0": 3,
+        "P1": 16,
+        "P2": 57,
+        "P3": 19,
+        "NONE": 17
+      },
+      "changes_made": 0,
+      "anomalies_flagged": 4,
+      "new_issues": 7,
+      "updated_issues": 2,
+      "report": "scripts/triage/reports/2026-04-05.md"
+    },
+    {
+      "date": "2026-04-07",
+      "type": "delta",
+      "total_issues": 125,
+      "by_priority": {
+        "P0": 4,
+        "P1": 23,
+        "P2": 60,
+        "P3": 19,
+        "NONE": 19
+      },
+      "changes_made": 11,
+      "anomalies_flagged": 4,
+      "new_issues": 11,
+      "updated_issues": 0,
+      "report": "scripts/triage/reports/2026-04-07.md"
+    },
+    {
+      "date": "2026-04-08",
+      "type": "delta",
+      "total_issues": 130,
+      "by_priority": {
+        "P0": 4,
+        "P1": 24,
+        "P2": 60,
+        "P3": 19,
+        "NONE": 23
+      },
+      "changes_made": 5,
+      "anomalies_flagged": 4,
+      "new_issues": 5,
+      "closed_since_last": 0,
+      "report": "scripts/triage/reports/2026-04-08.md"
+    },
+    {
+      "date": "2026-04-09",
+      "type": "delta",
+      "total_issues": 133,
+      "by_priority": {
+        "P0": 5,
+        "P1": 27,
+        "P2": 63,
+        "P3": 19,
+        "NONE": 17
+      },
+      "changes_made": 3,
+      "anomalies_flagged": 2,
+      "new_issues": 3,
+      "closed_since_last": 0,
+      "report": "scripts/triage/reports/2026-04-09.md"
+    }
+  ]
+}

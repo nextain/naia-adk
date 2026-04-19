@@ -1,0 +1,27 @@
+id: REQ-029
+title: "Demo Quota"
+title_ko: "?∞Î™® ?†ÌÅ∞ ÏøºÌÑ∞ Í¥ÄÎ¶?
+product: aiedu.nextain.io
+module: licensing
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Fixed token allocation management for trial and demo users. Enforces quota limits on AI API calls to prevent abuse during trial periods.
+
+acceptance_criteria:
+  - "Fixed token allocation is enforced for demo users"
+  - "Quota consumption is tracked per session"
+  - "Users are notified when approaching quota limits"
+  - "Quota resets appropriately for new trial periods"
+
+trace:
+  code:
+    - path: "app/api/ai/route.ts"
+      symbol: "POST"
+      coverage: full

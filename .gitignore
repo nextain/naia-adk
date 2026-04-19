@@ -1,0 +1,63 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+.next/
+*.tsbuildinfo
+
+# Environment & Secrets (T4)
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Cache
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Python
+__pycache__/
+*.pyc
+
+# Data — private env files
+data-private/envs/
+!data-private/envs/.gitkeep
+
+# Temp
+*.tmp
+*.temp
+
+# Claude worktrees (large LFS objects)
+.claude/worktrees/
+
+# Review outputs
+review-*.txt
+rerun-*.txt
+
+nul
+
+# Non-submodule project directories (cloned manually, no .git)
+projects/9router/
+projects/onmam-php/
+projects/vllm-omni/
+projects/refs/ref-cc/
+data-business/accounting/
+
+# Legacy member workspace (to be removed)
+member-luke/

@@ -1,0 +1,20 @@
+Triage complete. Here's the summary:
+
+**Total: 106 → 96 open issues** (10 net closures)
+
+### Key findings
+
+1. **aiedu P0 launch-blockers ALL cleared** — #53, #54, #58, #59 closed. aiedu P0: 4 → 0. This is the biggest win. 5 P1s remain before soft launch (#56 i18n, #55 cert trigger, #51 teacher guide, #39 B2C purchase, #60 math curriculum).
+
+2. **1 new issue triaged** — naia-os #189 (Memory benchmark 500-fact scale test) labeled P2-medium + `triaged-by: agent`.
+
+3. **3 anomalies flagged**:
+   - Dual priority labels on 3 naia-os issues (#159, #4, #6) — recommend cleanup
+   - naia-os #175 (Windows deep link) still P0 — may be over-prioritized
+   - Epic #182 P0 inflation — consider P1 for the epic itself
+
+4. **Priority shift**: P0 count 12 → 6. All remaining P0s are naia-os architecture (#182 epic) + member-luke #12 (this triage system).
+
+5. **Release readiness**: aiedu approaching launch (0 P0, 5 P1 remaining). naia-os not ready (5 P0s still open).
+
+Report: `scripts/triage/reports/2026-04-01.md`

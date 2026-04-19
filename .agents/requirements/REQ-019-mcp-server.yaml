@@ -1,0 +1,30 @@
+id: REQ-019
+title: "MCP Server Support"
+title_ko: "MCP ?�버 지??
+product: naia-os
+module: agent
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Model Context Protocol (MCP) client and server support, enabling standardized tool and context exchange between Naia and external MCP-compatible services.
+
+acceptance_criteria:
+  - "MCP client connects to external MCP servers"
+  - "MCP server exposes Naia tools to external clients"
+  - "Tool discovery and invocation work via MCP protocol"
+  - "Context exchange follows MCP specification"
+
+trace:
+  code:
+    - path: "agent/src/mcp/client.ts"
+      symbol: "McpClient"
+      coverage: full
+    - path: "agent/src/mcp/server.ts"
+      symbol: "McpServer"
+      coverage: full

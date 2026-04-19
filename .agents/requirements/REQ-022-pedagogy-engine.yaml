@@ -1,0 +1,27 @@
+id: REQ-022
+title: "Pedagogy Library"
+title_ko: "êµìˆ˜?™ìŠµë²??¼ì´ë¸ŒëŸ¬ë¦?
+product: aiedu.nextain.io
+module: pedagogy
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Library of 14+ pedagogical strategies defined in YAML format. buildPedagogyPrompt() constructs teaching prompts by combining selected strategies with lesson content.
+
+acceptance_criteria:
+  - "14+ pedagogical strategies are defined in YAML"
+  - "buildPedagogyPrompt() generates teaching prompts"
+  - "Strategies can be combined for composite teaching approaches"
+  - "YAML definitions are extensible for new strategies"
+
+trace:
+  code:
+    - path: "lib/pedagogy.ts"
+      symbol: "buildPedagogyPrompt"
+      coverage: full

@@ -1,0 +1,27 @@
+id: REQ-037
+title: "Credit Dashboard"
+title_ko: "?¬ë ˆ???€?œë³´??
+product: naia.nextain.io
+module: dashboard
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  User dashboard showing credit balance, usage summary, and navigation to related features. Central hub for account and usage management.
+
+acceptance_criteria:
+  - "Credit balance is displayed accurately"
+  - "Usage summary shows recent consumption"
+  - "Navigation links to related features work"
+  - "Dashboard loads quickly with fresh data"
+
+trace:
+  code:
+    - path: "src/app/[lang]/(protected)/dashboard/page.tsx"
+      symbol: "DashboardPage"
+      coverage: full

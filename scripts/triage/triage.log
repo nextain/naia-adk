@@ -1,0 +1,45 @@
+[2026-04-01T10:55:04+09:00] Triage started
+[2026-04-01T10:59:34+09:00] Triage completed
+[2026-04-01T10:59:34+09:00] DRY RUN: skipping email, report at /var/home/luke/dev/scripts/triage/reports/2026-04-01.md
+[2026-04-02T09:00:04+09:00] Triage started
+[2026-04-02T09:02:00+09:00] Triage completed
+[2026-04-02T09:02:00+09:00] WARNING: No report generated
+[2026-04-03T09:00:04+09:00] Triage started
+SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] failed: /bin/sh: 줄 1: node: 명령을 찾을 수 없음
+
+[2026-04-03T09:11:05+09:00] Triage completed
+[2026-04-03T09:11:06+09:00] Report emailed
+[2026-04-04T09:00:04+09:00] Triage started
+[2026-04-04T09:10:11.522793+09:00] Triage completed
+SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] failed: /bin/sh: 줄 1: node: 명령을 찾을 수 없음
+
+[2026-04-04T09:10:28+09:00] Triage completed
+[2026-04-04T09:10:29+09:00] Report emailed
+[2026-04-05T09:00:04+09:00] Triage started
+SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] failed: /bin/sh: 줄 1: node: 명령을 찾을 수 없음
+
+[2026-04-05T09:07:10+09:00] Triage completed
+[2026-04-05T09:07:11+09:00] Report emailed
+[2026-04-06T09:00:04+09:00] Triage started
+SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] failed: /bin/sh: 줄 1: node: 명령을 찾을 수 없음
+
+[2026-04-06T09:07:38+09:00] Triage completed
+[2026-04-06T09:07:40+09:00] Report emailed
+[2026-04-07T09:00:01+09:00] Triage started
+[2026-04-07T09:07:44+09:00] Triage completed
+[2026-04-07T09:07:44+09:00] Report emailed
+[2026-04-08T09:00:04+09:00] Triage started
+SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] failed: /bin/sh: 줄 1: node: 명령을 찾을 수 없음
+
+[2026-04-08T09:06:35+09:00] Triage completed
+[2026-04-08T09:06:37+09:00] Report emailed
+[2026-04-09T09:00:00+09:00] Triage started
+SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] failed: /bin/sh: 줄 1: node: 명령을 찾을 수 없음
+
+[2026-04-09T09:09:26+09:00] Triage completed
+[2026-04-09T09:09:27+09:00] Report emailed
+[2026-04-10T09:00:03+09:00] Triage started
+SessionEnd hook [node "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-cleanup.mjs"] failed: /bin/sh: 줄 1: node: 명령을 찾을 수 없음
+
+[2026-04-10T09:07:09+09:00] Triage completed
+[2026-04-10T09:07:11+09:00] Report emailed

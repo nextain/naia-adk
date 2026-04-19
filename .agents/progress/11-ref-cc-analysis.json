@@ -1,0 +1,24 @@
+{
+  "issue": "#11 ref-claude-code 소스 분석",
+  "issue_url": "https://github.com/nextain/member-luke/issues/11",
+  "current_phase": "commit",
+  "gates_cleared": ["understand", "scope", "plan", "build", "review", "e2e_test", "post_test_review", "sync", "sync_verify"],
+  "current_task": "커밋 + 푸시",
+  "key_decisions": [
+    "순수 분석/문서 작업 — plan/build/review/e2e는 분석 라운드로 대체",
+    "1라운드: 6개 전문 영역 분석 완료",
+    "2라운드: 6개 심층 분석 완료 (utils, components, E2E 흐름, commands, Naia OS 비교, types/schemas)",
+    "3라운드: 3개 크로스체크 완료 (아키텍처 정확성, Naia OS 실현가능성, 누락/오류)",
+    "보고서 2개 작성 완료 (분석 보고서 + Naia OS 도입 계획)",
+    "이슈 #11 댓글 작성 완료"
+  ],
+  "analysis_stats": {
+    "round1_agents": 6,
+    "round2_agents": 6,
+    "round3_agents": 3,
+    "total_agents": 15,
+    "total_tool_calls": "~600+",
+    "coverage": "~60%+",
+    "crosscheck_corrections": 8
+  }
+}

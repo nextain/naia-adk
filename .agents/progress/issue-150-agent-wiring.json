@@ -1,0 +1,28 @@
+{
+  "issue": "#150",
+  "issue_url": "https://github.com/nextain/naia-os/issues/150",
+  "title": "feat: Agent 와이어링 + 프롬프트 주입",
+  "project": "naia-os",
+  "epic": "#145",
+  "current_phase": "commit",
+  "gates_cleared": ["understand", "scope", "plan", "build", "review", "e2e_test"],
+  "current_task": "완료 — 코드 + 버그수정 + 통합테스트 + E2E 101 passed",
+  "key_decisions": [
+    "sessionRecall → <recalled_memories> XML 태그로 감싸 주입 (프롬프트 주입 방지)",
+    "lastUserMsg만 encode (중복 인코딩 O(N²) 버그 수정)",
+    "메시지 길이 제한 2000자",
+    "SIGTERM/SIGINT에서 memorySystem.close() 호출",
+    "저장 위치: ~/.naia/memory/alpha-memory.json"
+  ],
+  "test_results": {
+    "memory_tests": "101 passed, 3 skipped, 0 failed",
+    "baseline_benchmark": "47% (26/55) — 현재 키워드 매칭 성능"
+  },
+  "remaining": [
+    "mem0 벡터 검색 전환 (Gateway embeddings 엔드포인트 필요)",
+    "after_mem0 벤치마크 재측정 (#149)",
+    "#151 체감 검증 시나리오 55개 실행 (앱 띄워서)",
+    "#152 출시 판정"
+  ],
+  "updated_at": "2026-03-27T02:30Z"
+}

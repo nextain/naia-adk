@@ -1,0 +1,19 @@
+## 트라이아지 완료 — 2026-04-09
+
+### 핵심 결과
+- **총 오픈 이슈**: 133 (↑3)
+- **신규**: 3개 — naia-os #221 (memory temporal recall), member-luke #20/#19 (인프라 성숙도/하네스 갭 분석)
+- **7일 폐쇄**: 32개 (관측 최고 기록)
+- **라벨 변경**: 3개 (모든 신규 이슈에 우선순위 할당)
+
+### 주요 발견
+1. **Stale P0 4회 연속 플래그** — naia-os #187, #182, #175이 9일+ 비활성. P1 강등 권장
+2. **B2C 파이프라인이 크리티컬 패스** — admin 3개 → aiedu 2개 순서로 해결 필요
+3. **7일 폐쇄 속도 32개** — 기록 최고. naia-os OpenClaw 제거 완료 + workspace 버스트
+4. **Standards**: Agent Skills 1 commit (Managed Agents), MCP 5 commits (doc-only), AAIF 404
+
+### 리포트
+`scripts/triage/reports/2026-04-09.md`에 전체 리포트 작성 완료.
+
+### 참고
+임시 스크립트 `scripts/triage/_triage_run.py`, `_update_knowledge.py`가 sandbox 제한으로 삭제되지 않았습니다. 수동 삭제 부탁드립니다.

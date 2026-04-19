@@ -1,0 +1,27 @@
+id: REQ-016
+title: "Panel Plugin System"
+title_ko: "?®ÎÑê ?åÎü¨Í∑∏Ïù∏ ?úÏä§??
+product: naia-os
+module: shell
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Panel plugin system where panels register PanelToolDescriptors, the agent creates proxy stubs for panel tools, and an iframe bridge routes tool execution between the shell and panel iframes.
+
+acceptance_criteria:
+  - "Panels register PanelToolDescriptors with the system"
+  - "Agent creates proxy stubs for registered panel tools"
+  - "Iframe bridge routes tool execution between shell and panels"
+  - "Panel plugins can be loaded and unloaded dynamically"
+
+trace:
+  code:
+    - path: "shell/src/lib/panel-registry.ts"
+      symbol: "PanelRegistry"
+      coverage: full

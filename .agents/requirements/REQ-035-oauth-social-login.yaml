@@ -1,0 +1,27 @@
+id: REQ-035
+title: "OAuth Social Login"
+title_ko: "OAuth ?�셜 로그??
+product: naia.nextain.io
+module: auth
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Google and Discord OAuth authentication via NextAuth v5. Gateway identity linking associates social accounts with Naia accounts. GDPR consent management included.
+
+acceptance_criteria:
+  - "Google OAuth login works via NextAuth v5"
+  - "Discord OAuth login works via NextAuth v5"
+  - "Gateway identity linking associates social accounts"
+  - "GDPR consent is collected and managed"
+
+trace:
+  code:
+    - path: "src/lib/auth.ts"
+      symbol: "NextAuth"
+      coverage: full

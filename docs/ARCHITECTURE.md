@@ -5,46 +5,60 @@
 ## Overview
 
 ```
-            naia-adk (OSS — this repo)
-            ┌─────────────────────────┐
-            │  Individual Skills      │
-            │  review-pass, email     │
-            │  sms, read-doc          │
-            │  doc-coauthoring        │
-            │  document-generation    │
-            │  channel-management     │
-            │  web-monitoring         │
-            │  service-management     │
-            └────────────┬────────────┘
-                         │ extends
+            naia-adk (OSS — this repo, public)
+            ┌─────────────────────────────┐
+            │  Base Skills (9)            │
+            │  review-pass, email         │
+            │  sms, read-doc              │
+            │  doc-coauthoring            │
+            │  document-generation        │
+            │  channel-management         │
+            │  web-monitoring             │
+            │  service-management         │
+            │                             │
+            │  + Runtime Engine (TS)      │
+            │  + Skill Spec & SDK         │
+            │  + Templates & Docs         │
+            └────────────┬────────────────┘
+                         │ naia install business
                          ▼
-                  naia-adk-b (private)
-                  ┌─────────────────────┐
-                  │  + Business Skills  │
-                  │  payroll, contract  │
-                  │  expense, accounting│
-                  │  CRM, patent, PR    │
-                  │  + CLI, Docgen, PDF │
-                  └────────┬────────────┘
-                           │ naia init
+              naia-adk-business-pack (private)
+              ┌─────────────────────────────┐
+              │  + Business Skills (11)     │
+              │  payroll, contract          │
+              │  expense, accounting        │
+              │  CRM, patent, PR            │
+              │  + CLI, Docgen, PDF         │
+              └────────────┬────────────────┘
+                           │ install into workspace
               ┌────────────┼────────────┐
               ▼            ▼            ▼
         nextain-adk   onmam-adk    {company}-adk
         (CEO Luke)    (Onmam CTO)  (any company)
-        .naia/        .naia/        .naia/
-        context.yaml  context.yaml  context.yaml
-        data/         data/         data/
+        .agents/      .agents/      .agents/
+        data-company/ data-company/ data-company/
+        data-business/ data-business/ data-business/
+        data-private/  data-private/  data-private/
 ```
 
-## Layer Rules
+## Security Tiers
+
+| Tier | Name | Strategy | Examples |
+|------|------|----------|---------|
+| T1 | Public | naia-adk public repo | skills, packages, templates, docs |
+| T2 | Internal | private subrepo | `.agents/`, `data-company/`, `documents/` |
+| T3 | Confidential | private subrepo (git-crypt optional) | `data-business/`, `data-private/` |
+| T4 | Secret | `.gitignore` (outside git) | `.env`, certificates, API keys |
+
+## Model: Base + Extension Pack + Config
 
 | Layer | What | For Who |
 |-------|------|---------|
-| **naia-adk** | 개인용 스킬 (9) | 모든 개인 — 개발자, 크리에이터, 프리랜서 |
-| **naia-adk-b** | 개인용 + 비즈니스 스킬 (20) | 회사 운영하는 슈퍼개인 / 소규모 팀 |
-| **{company}-adk** | naia-adk-b + 회사 데이터 | 특정 회사의 업무 환경 |
+| **naia-adk** | Base runtime + individual skills (9) | All individuals — developers, creators, freelancers |
+| **naia-adk-business-pack** | + Business skills (11) + CLI + Docgen | Super-individuals running a company / small teams |
+| **{company}-adk** | Workspace with company data | Specific company's AI operations environment |
 
-## naia-adk Skills (9 — Individual)
+## naia-adk Base Skills (9 — Individual)
 
 | Skill | Description |
 |-------|-------------|
@@ -58,7 +72,7 @@
 | `web-monitoring` | SEO, uptime, analytics |
 | `service-management` | Service monitoring, incident response |
 
-## naia-adk-b Skills (11 — Business, adds on top)
+## naia-adk-business-pack Skills (11 — Business)
 
 | Skill | Description |
 |-------|-------------|
@@ -80,41 +94,96 @@
 
 ```
 {name}-adk/
-├── .naia/
-│   ├── context.yaml      ← 회사 정보
-│   ├── config.yaml        ← 런타임 설정
-│   ├── skills/            ← 회사 전용 스킬 (필요시)
-│   ├── adapters/          ← 이메일, SMS, 서명 설정
-│   └── templates/         ← 회사 브랜딩 템플릿
-├── .local/                ← 개인 확장 (gitignore)
-├── data/                  ← 직원, 고객, 비용 데이터
-├── documents/             ← 생성된 문서
-├── accounting/            ← 회계 파일
-└── hr/                    ← 인사 파일
+├── .agents/                   ← AAIF standard
+│   ├── context/               ← Company info, rules, config
+│   ├── skills/                ← Company-specific skills (if needed)
+│   ├── workflows/             ← Workflow definitions
+│   ├── commands/              ← Slash commands
+│   └── hooks/                 ← Lifecycle hooks
+├── .users/                    ← Human-readable mirror (Korean)
+├── .claude/                   ← Claude Code settings
+├── data-company/              ← T2: Company general data
+│   ├── docs-{company}/        ← Company docs (submodule)
+│   ├── docs-work-logs/        ← Work logs (submodule)
+│   └── caretive/              ← Reference data
+├── data-business/             ← T3: Company sensitive data
+│   ├── docs-business/         ← Business docs (submodule)
+│   ├── accounting/            ← Accounting (submodule)
+│   └── documents/             ← Generated documents (submodule)
+├── data-private/              ← T3: Personal data
+│   ├── envs/                  ← .env, key files
+│   ├── personal/              ← Personal documents
+│   └── memo/                  ← Personal memos
+├── projects/                  ← Project repos (submodules)
+│   └── refs/                  ← Reference repos (read-only)
+├── skills/                    ← naia-adk + business pack skills
+├── packages/                  ← Runtime packages
+├── scripts/                   ← PDF/sign engine, tools
+├── templates/                 ← Document templates
+├── docs/                      ← Architecture, specs
+├── AGENTS.md
+└── .gitignore
 ```
+
+## naia-os Integration
+
+naia-adk serves as the **skill backend** for the naia-os desktop app:
+
+```
+naia-os (Desktop App, Tauri 2)
+  └─ agent ──WebSocket/MCP──> naia-adk Runtime
+                                  ├─ Business skill execution
+                                  ├─ Document generation (PDF)
+                                  ├─ Approval workflows
+                                  └─ MCP Server → expose skills to naia-os
+```
+
+Integration paths (phased):
+1. **MCP**: naia-adk runs MCP Server → naia-os connects as MCP Client
+2. **Gateway**: naia-adk implements `GatewayAdapter` → naia-os agent calls directly
+3. **Shared SDK**: Extract `@naia/skill-sdk` from common interfaces
 
 ## Real Examples
 
 ### nextain-adk (= Luke's workspace)
 
 ```
-D:\dev\                    ← 이게 곧 nextain-adk
-├── .naia/
-│   └── context.yaml       ← 넥스테인 회사정보
-├── .agents/               ← 개발 워크플로우
-├── naia-adk/              ← OSS 개발 (submodule)
-├── naia-adk-b/            ← 비즈니스 개발 (submodule)
-├── naia-os/               ← 데스크톱 제품 (submodule)
-├── home.onmam.com/        ← 온맘 프로젝트 (submodule)
-└── ...
+D:\naia-adk                       ← this repo = nextain workspace
+├── .agents/                      ← AAIF (context, skills, workflows)
+├── .users/                       ← Korean mirror
+├── .claude/                      ← Claude Code settings
+├── data-company/
+│   ├── docs-nextain/             ← submodule: nextain/docs-nextain
+│   ├── docs-work-logs/           ← submodule: nextain/docs-work-logs
+│   └── caretive/                 ← Reference data
+├── data-business/
+│   ├── docs-business/            ← submodule: nextain/docs-business
+│   ├── accounting/               ← submodule: nextain/nextain-accounting
+│   └── documents/                ← submodule: nextain/nextain-documents
+├── data-private/                 ← submodule: nextain/luke-private
+├── projects/
+│   ├── naia-os/                  ← submodule: nextain/naia-os
+│   ├── about.nextain.io/         ← submodule
+│   ├── naia.nextain.io/          ← submodule
+│   ├── 9router/                  ← submodule
+│   └── refs/                     ← read-only upstream tracking
+├── skills/                       ← base + business skills
+├── packages/                     ← runtime engine (future)
+├── scripts/                      ← triage, PDF, tools
+├── templates/                    ← document templates
+└── docs/                         ← architecture, specs
 ```
 
 ### onmam-adk (= Onmam team workspace)
 
 ```
 onmam-adk/
-├── .naia/
-│   └── context.yaml       ← 온맘 회사정보
-├── data/                   ← 온맘 직원/고객 데이터
-└── documents/              ← 온맘 문서
+├── .agents/
+│   └── context/                  ← Onmam company info
+├── data-company/
+│   └── docs-onmam/               ← Onmam docs
+├── data-business/
+│   └── documents/                ← Onmam documents
+└── projects/
+    └── home.onmam.com/           ← Onmam project
 ```

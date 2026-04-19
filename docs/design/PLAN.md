@@ -1,7 +1,7 @@
 # naia-adk Detailed Design & Implementation Plan
 
-> **Status**: Draft v2 (peer-reviewed by Claude + Codex)
-> **Date**: 2026-04-17
+> **Status**: Draft v3 (peer-reviewed by Gemini + Claude, see §12)
+> **Date**: 2026-04-19
 > **Author**: Luke (Nextain)
 
 ---
@@ -53,22 +53,22 @@ naia-adk bundles enterprise features that others charge for as SaaS:
 
 ---
 
-## 2. Architecture: 3-Layer Fork Model
+## 2. Architecture: Base + Extension Pack + Config
 
 ```
-naia-adk (open source)        Generic runtime + skill spec
-    ↓ fork
-naia-adk-b (private)          Business scaffold + CLI + base skill set
-    ↓ fork + init
-{company}-adk                 Company-specific workspace
+naia-adk (open source)              Generic runtime + skill spec + base skills
+    ↓ naia install business
+naia-adk-business-pack (private)     Business skills + CLI + Docgen installed INTO workspace
+    ↓ naia init {name}
+{company}-adk                        Company-specific workspace (data + context + projects)
 ```
 
-### 2.1 Layer 1: naia-adk (Open Source)
+### 2.1 Base: naia-adk (Open Source)
 
-**Purpose**: Core runtime engine + skill specification
+**Purpose**: Core runtime engine + skill specification + individual skills
 
 **Responsibilities**:
-- `.naia/` directory spec (context, skills, adapters, config schemas)
+- `.agents/` directory spec (AAIF standard — context, skills, workflows, commands, hooks)
 - Runtime engine: loads context → resolves skill → binds input → executes → returns output
 - Skill execution contract (input binding, output schema, approval gates, failure handling)
 - Adapter interface (LLM, storage, email, PKI/signature, etc.)
@@ -98,12 +98,15 @@ naia-adk/
 │   │   │   ├── adapter.ts       # Adapter interface & registry
 │   │   │   ├── runtime.ts       # Main orchestrator
 │   │   │   ├── contract.ts      # Skill execution contract
-│   │   │   └── trigger.ts       # NL → skill matching
+│   │   │   ├── trigger.ts       # NL → skill matching (keyword-first, LLM fallback)
+│   │   │   ├── events.ts        # EventBus for monitoring & dashboard
+│   │   │   └── pool.ts          # Worker pool (Python, LLM, Git I/O)
 │   │   └── tsconfig.json
 │   └── sdk/                     # JS/TS SDK
 │       ├── package.json
 │       └── src/
 │           └── index.ts
+├── skills/                      # Base individual skills (9)
 ├── docs/
 │   ├── design/
 │   │   └── PLAN.md
@@ -112,31 +115,31 @@ naia-adk/
 │       ├── skill-schema.md
 │       └── adapter-schema.md
 ├── templates/
-│   └── .naia/                   # Empty template structure
-│       ├── context.yaml         # Placeholder schema only (no real data)
+│   └── .agents/                 # Empty template structure
+│       ├── context/             # Placeholder schemas (no real data)
 │       ├── skills/
-│       ├── adapters/
-│       └── config.yaml
+│       ├── workflows/
+│       └── commands/
 └── examples/
     └── hello-skill/
 ```
 
-### 2.2 Layer 2: naia-adk-b (Private)
+### 2.2 Extension Pack: naia-adk-business-pack (Private)
 
-**Purpose**: Business scaffold + CLI + base skills
+**Purpose**: Business skills + CLI + Docgen, installed INTO the naia-adk workspace
 
 **Responsibilities**:
 - CLI: `naia init`, `naia skill add`, `naia adapter connect`
-- Base skills (email, document generation, scheduling)
+- Business skills (payroll, contract, expense, accounting, CRM, etc.)
 - Document generation engine (PDF, templates)
-- Git integration (auto-commit, version tracking)
+- Git integration (auto-commit, batch commit per skill execution)
 - Multi-role workflow (requester → approver → executor)
 
-**Note**: naia-adk-b depends on naia-adk as an **npm workspace dependency**, not a symlink (symlinks are fragile across repos and on Windows).
+**Note**: naia-adk-business-pack is installed into the workspace via `naia install business`, adding skills to `skills/business/` and packages to `packages/`.
 
 ```
-naia-adk-b/
-├── package.json                 # naia-adk as dependency
+naia-adk-business-pack/
+├── package.json
 ├── packages/
 │   ├── cli/                     # CLI tool
 │   │   └── src/
@@ -145,13 +148,15 @@ naia-adk-b/
 │   │       │   ├── skill.ts
 │   │       │   └── adapter.ts
 │   │       └── scaffolder.ts
-│   └── docgen/                  # Document generation (Python subprocess bridge)
+│   └── docgen/                  # Document generation (Python bridge)
 │       └── src/
-│           ├── pdf.ts           # Bridge to Python PDF engine
+│           ├── pdf.ts           # Worker pool bridge to Python PDF engine
 │           └── template.ts      # Template engine
-├── skills/                      # Base business skills
-│   ├── document-generation/
-│   └── email/
+├── skills/                      # Business skills
+│   ├── payroll/
+│   ├── contract/
+│   ├── expense/
+│   └── ...
 ├── templates/                   # Generic business templates (no company data)
 │   ├── contract/
 │   ├── resolution/
@@ -161,76 +166,63 @@ naia-adk-b/
     └── sign-pdf.py              # Digital signature (PKCS#7)
 ```
 
-**TypeScript ↔ Python bridge**: The runtime (TypeScript) invokes Python scripts via subprocess for PDF generation and signing. Defined interface:
-
-```typescript
-interface PDFGenerator {
-  command: "python3 scripts/generate-pdf.py"
-  args: { template: string; data: Record<string, any>; output: string }
-  return: { success: boolean; path: string; error?: string }
-}
-```
-
-### 2.3 Layer 3: {company}-adk (Company-Specific)
+### 2.3 Config: {company}-adk (Company-Specific Workspace)
 
 **Purpose**: Company's actual AI workspace — context, skills, documents, data
 
-**Key principle**: Domains that may need separate access control later are organized as **top-level directories** that can be split into separate repos via `git subtree split`.
+**Key principle**: Data organized by security tier into top-level directories. Each can be split into a separate repo for access control.
 
 ```
-nextain-adk/
-├── .naia/
-│   ├── context.yaml             # Nextain company info (NO personal data)
-│   ├── config.yaml              # Runtime config
-│   ├── skills/
-│   │   ├── payroll/             # 급여명세서 (existing, migrated)
-│   │   ├── contract/            # 근로계약서 (NEW)
-│   │   └── expense/             # 지출결의 + 영수증 (NEW)
-│   ├── adapters/
-│   │   ├── llm.yaml             # Claude/GPT/Gemini (vision for OCR)
-│   │   ├── email.yaml           # Office 365 SMTP
-│   │   ├── storage.yaml         # Git-based
-│   │   └── signature.yaml       # PKI digital signature
-│   └── templates/               # Nextain-branded templates
-│       ├── nextain-contract.md
-│       └── nextain-resolution.md
-├── accounting/                  ← SPLIT CANDIDATE: nextain-accounting
-│   ├── expenses/
-│   ├── payroll/
-│   ├── receipts/
-│   └── tax/
-├── hr/                          ← SPLIT CANDIDATE: nextain-hr
-│   ├── contracts/
-│   └── employees/               # Encrypted at rest
-├── documents/                   # Generated documents
-│   ├── contracts/
-│   ├── resolutions/
-│   └── payroll/
-├── data/                        # Structured data (YAML)
-│   ├── employees.yaml           # git-crypt encrypted (PII)
-│   └── expenses.yaml
-└── scripts/
-    └── generate-pdf.py          # Nextain-branded PDF generator
+{name}-adk/
+├── .agents/                     ← AAIF standard (T2)
+│   ├── context/                 ← Company info, rules, project index
+│   ├── skills/                  ← Company-specific skills (if needed)
+│   ├── workflows/               ← Workflow definitions
+│   ├── commands/                ← Slash commands
+│   └── hooks/                   ← Lifecycle hooks
+├── data-company/                ← T2: Company general data
+│   ├── docs-{company}/          ← Company documentation (submodule)
+│   ├── docs-work-logs/          ← Work logs (submodule)
+│   └── caretive/                ← Reference data
+├── data-business/               ← T3: Company sensitive data
+│   ├── docs-business/           ← Business docs (submodule)
+│   ├── accounting/              ← Accounting data (submodule)
+│   └── documents/               ← Generated documents (submodule)
+├── data-private/                ← T3: Personal data
+│   ├── envs/                    ← .env, key files (gitignored or git-crypt)
+│   ├── personal/                ← Personal documents
+│   └── memo/                    ← Personal memos
+├── projects/                    ← Project repos (submodules)
+│   └── refs/                    ← Read-only reference repos
+├── skills/                      ← naia-adk + business pack skills
+├── packages/                    ← Runtime packages
+├── scripts/                     ← PDF/sign engine, tools
+├── templates/                   ← Document templates
+├── docs/                        ← Architecture, specs
+├── AGENTS.md
+└── .gitignore
 ```
 
 **Permission model (future)**:
 
 | Repo | Access | Content |
 |------|--------|---------|
-| nextain-adk | All employees | Context, skills, templates, general documents |
-| nextain-accounting | CEO + accountant | Expenses, payroll, tax, receipts |
-| nextain-hr | CEO + HR manager | Contracts, employee records, salaries |
+| `{name}-adk` | All employees | Context, skills, templates, data-company |
+| `nextain-accounting` | CEO + accountant | Expenses, payroll, tax, receipts |
+| `nextain-hr` | CEO + HR manager | Contracts, employee records, salaries |
 
-For now: everything in nextain-adk. Split when team grows.
+For now: everything in one workspace. Split when team grows.
 
 ---
 
-## 3. `.naia/` Specification
+## 3. `.agents/` Specification (AAIF Standard)
 
-### 3.1 context.yaml (Schema)
+### 3.1 Context (Schema)
 
 ```yaml
-# Generic schema — NO real company data in the open-source spec
+# .agents/context/ — Company information (NO personal data in public spec)
+schema_version: "1"
+
 company:
   name: { type: string, required: true }
   eng_name: { type: string, required: true }
@@ -313,8 +305,8 @@ auth_env_pass: string
 # adapters/signature.yaml
 type: signature
 method: pkcs7 | pades
-certificate_path: string         # encrypted
-private_key_path: string         # encrypted
+cert_env: string             # env var pointing to cert (NOT direct path)
+key_env: string              # env var pointing to key (NOT direct path)
 ca_chain_path: string
 
 # adapters/storage.yaml
@@ -322,16 +314,20 @@ type: storage
 backend: git
 auto_commit: boolean
 commit_prefix: string
-rollback_on_failure: boolean     # revert partial commits
+batch_commit: boolean          # commit once per skill execution (not per file)
+rollback_on_failure: boolean
 ```
 
-### 3.4 config.yaml
+### 3.4 Config
 
 ```yaml
+# .agents/context/config.yaml
+schema_version: "1"
+
 runtime:
   llm:
     provider: "anthropic"
-    model: "claude-sonnet-4-20250514"  # Must match actual Anthropic model IDs
+    model: "claude-sonnet-4-20250514"
   adapters:
     email:
       smtp_host: "smtp.office365.com"
@@ -341,6 +337,7 @@ runtime:
     storage:
       type: "git"
       auto_commit: true
+      batch_commit: true
       commit_prefix: "[naia-adk]"
       rollback_on_failure: true
     signature:
@@ -349,17 +346,37 @@ runtime:
       key_env: "NAIA_KEY_PATH"
 
 paths:
-  documents: "documents/"
-  data: "data/"
-  templates: ".naia/templates/"
+  company_data: "data-company/"
+  business_data: "data-business/"
+  private_data: "data-private/"
+  documents: "data-business/documents/"
+  templates: "templates/"
   assets: "assets/"
 
 security:
+  data_tiers:
+    company: "T2"               # data-company/
+    business: "T3"              # data-business/
+    private: "T3"               # data-private/
   encrypted_paths:
-    - "data/employees.yaml"
-    - "hr/"
-  encryption: "git-crypt"
+    - "data-private/envs/"
+    - "data-business/accounting/"
+  encryption: "git-crypt"       # optional, for team use
   key_distribution: "per-role"
+
+  mcp:
+    allowed_commands: []         # whitelist of allowed MCP server commands
+                                  # empty array = DENY ALL (fail-closed). Add explicit paths to allow.
+    require_signature: false     # future: require signed manifests
+    severity: "high"             # user-configurable: high | medium
+
+  auth:
+    naia_os:
+      method: "ed25519"         # reuse naia-os device identity
+      transport: "tls"
+    dashboard:
+      method: "api-key"
+      transport: "https"
 ```
 
 ---
@@ -376,12 +393,12 @@ Step 1: Input Collection
   → Contract terms (type, rate, period, duties, location, hours)
 
 Step 2: Employee Record (encrypted)
-  → Check data/employees.yaml (git-crypt decrypted)
+  → Check data-business/accounting/employees.yaml
   → Create/update record
   → PII fields encrypted at rest
 
 Step 3: Contract Document Generation
-  → Load .naia/templates/nextain-contract.md
+  → Load templates/nextain-contract.md
   → Fill with context + worker info + contract terms
   → Generate PDF via Python subprocess
 
@@ -395,7 +412,7 @@ Step 5: Review & Approval (gate)
   → User confirms or requests modifications
 
 Step 6: Finalize
-  → Save to hr/contracts/{name}_{date}.pdf (encrypted)
+  → Save to data-business/documents/contracts/{name}_{date}.pdf (encrypted)
   → Commit to git: "[naia-adk] contract: {worker_name}"
   → Optional: email to worker
 
@@ -448,9 +465,9 @@ Step 4: Digital Signature (gate)
   → User confirms → sign with PAdES
 
 Step 5: Finalize
-  → Save to accounting/expenses/{resolution_no}/
-  → Copy receipts to accounting/receipts/{resolution_no}/
-  → Record in data/expenses.yaml
+  → Save to data-business/accounting/expenses/{resolution_no}/
+  → Copy receipts to data-business/accounting/receipts/{resolution_no}/
+  → Record in data-business/accounting/expenses.yaml
   → Commit: "[naia-adk] expense: {resolution_no}"
 
 Step 6: Payment (optional)
@@ -548,25 +565,45 @@ naia cert generate --org "Nextain" --country "KR"
 # Store outside repo, reference via config.yaml → adapters.signature
 ```
 
-### 5.3 TypeScript ↔ Python Bridge
+### 5.3 TypeScript ↔ Python Bridge (Worker Pool)
+
+Instead of spawning a new process per document, maintain a persistent Python worker pool:
 
 ```typescript
-// packages/core/src/adapter.ts
-interface SubprocessAdapter {
-  command: string;
-  args: string[];
-  env?: Record<string, string>;
-  timeout?: number;
+// packages/core/src/pool.ts
+interface WorkerPool {
+  acquire(): Promise<Worker>;
+  release(worker: Worker): void;
 }
 
-async function invokePython(script: string, args: Record<string, any>): Promise<Result> {
-  const proc = spawn("python3", [script, JSON.stringify(args)], {
-    timeout: 30000,
-    env: { ...process.env, ...args.env },
-  });
-  // parse JSON stdout, handle stderr
+interface Worker {
+  invoke(method: string, args: Record<string, any>): Promise<Result>;
+}
+
+// Worker communicates via stdin/stdout JSON, NOT command-line args
+// This prevents code injection through argument strings
+async function invokePython(worker: Worker, method: string, args: Record<string, any>): Promise<Result> {
+  // Input validation against JSON Schema before sending
+  validateAgainstSchema(args, methodSchema);
+  // Send via stdin as JSON
+  const result = await worker.invoke(method, args);
+  // Parse JSON response from stdout
+  return JSON.parse(result);
 }
 ```
+
+**Security measures**:
+- Args sent via stdin JSON (not command-line) — prevents shell injection
+- JSON Schema validation before sending to worker
+- Worker process timeout (30s default)
+- Certificate/key paths passed via env vars, never in args
+
+**Sandbox note**: OS-level sandboxing (cgroups/seccomp on Linux, job objects on Windows) is deferred to post-MVP. Current mitigation: JSON Schema validation + workspace-scoped paths + subprocess timeout. Workers cannot access paths outside the workspace by design (all paths resolved relative to workspace root).
+
+**Performance**:
+- Worker pool maintains N persistent Python processes
+- No spawn overhead per document (~200-500ms saved per invocation)
+- Batch processing: multiple PDFs generated in parallel across workers
 
 ---
 
@@ -574,27 +611,60 @@ async function invokePython(script: string, args: Record<string, any>): Promise<
 
 ### 6.1 Data Classification
 
-| Level | Content | Storage | Examples |
-|-------|---------|---------|---------|
-| Public | Templates, specs | Git (plain) | context.yaml (company info), skills |
-| Internal | Generated documents | Git (plain) | Contracts, resolutions, payroll PDFs |
-| Confidential | Employee PII, salaries | Git (git-crypt) | employees.yaml, salary data |
-| Secret | Certificates, keys | Outside git | .pem, .p12, API keys (.env) |
+| Tier | Name | Content | Storage | Examples |
+|------|------|---------|---------|---------|
+| T1 | Public | Skills, specs, templates | Git (public repo) | SKILL.md, architecture docs |
+| T2 | Internal | Company general data | Git (private subrepo) | Company info, work logs |
+| T3 | Confidential | Business sensitive, personal | Git (private subrepo, git-crypt optional) | Accounting, employees, .env |
+| T4 | Secret | Certificates, API keys | Outside git (.gitignore) | .pem, .p12, SMTP credentials |
 
-### 6.2 Encryption at Rest
+### 6.2 Subprocess Security (Review Finding F1 — CRITICAL)
+
+The TypeScript ↔ Python bridge uses **stdin IPC** instead of command-line arguments:
+
+```
+OLD (vulnerable):  spawn("python3", [script, JSON.stringify(args)])
+NEW (secure):       persistent worker → stdin JSON → stdout JSON
+```
+
+- JSON Schema validation on all inputs before dispatch
+- Worker process runs with restricted permissions
+- 30s default timeout, configurable per skill
+- Certificate/key paths via env vars, never in args
+
+### 6.3 MCP Server Security (Review Finding F2 — HIGH)
+
+MCP server manifest (`skill.json`) can specify arbitrary `mcp.command` to spawn. Mitigations:
+
+- **Whitelist**: `config.yaml → security.mcp.allowed_commands` defines permitted binaries
+- **Severity configurable**: User can lower to `medium` if whitelist is too restrictive
+- **Future**: Signed manifests for distributed skill packages
+
+### 6.4 Authentication (Review Finding F3 — HIGH)
+
+| Connection | Auth Method | Transport |
+|------------|-------------|-----------|
+| naia-adk ↔ naia-os | Ed25519 device identity (reuse from naia-os) | TLS + WebSocket |
+| naia-adk ↔ Web Dashboard | API Key | HTTPS |
+| naia-adk ↔ MCP clients | API Key (future: OAuth) | TLS |
+
+### 6.5 Encryption at Rest
 
 ```bash
-# Setup git-crypt for sensitive paths
+# git-crypt for sensitive paths (optional, for team use)
 git-crypt init
-echo "data/employees.yaml filter=git-crypt diff=git-crypt" >> .gitattributes
-echo "hr/** filter=git-crypt diff=git-crypt" >> .gitattributes
+echo "data-private/envs/** filter=git-crypt diff=git-crypt" >> .gitattributes
+echo "data-business/accounting/** filter=git-crypt diff=git-crypt" >> .gitattributes
 git-crypt add-gpg-user luke@nextain.io
 ```
 
-### 6.3 Secret Management
+For 1-person company: separate private repos provide sufficient access control. git-crypt adds complexity without real benefit. Add when team grows.
 
-- API keys, SMTP credentials → `.env` files (gitignored)
+### 6.6 Secret Management
+
+- API keys, SMTP credentials → `.env` files in `data-private/envs/` (gitignored)
 - Certificates, private keys → encrypted volume or hardware token
+- Schema validation: `.agents/context/config.yaml` references env vars, never direct values
 - Never commit secrets to git
 
 ---
@@ -639,14 +709,16 @@ git-crypt add-gpg-user luke@nextain.io
 
 | Task | Output | Verification |
 |------|--------|-------------|
-| Define `.naia/` spec | `docs/spec/*.md` | Schema validation script |
+| Define `.agents/` spec | `docs/spec/*.md` | Schema validation script |
 | Create runtime skeleton | `packages/core/src/` | `pnpm build` passes |
 | Create SDK skeleton | `packages/sdk/src/` | `pnpm build` passes |
 | Define skill execution contract | `packages/core/src/contract.ts` | Unit tests |
-| Define trigger dispatch interface | `packages/core/src/trigger.ts` | Unit tests |
+| Define trigger dispatch (keyword-first) | `packages/core/src/trigger.ts` | Unit tests |
+| Implement EventBus | `packages/core/src/events.ts` | Unit tests |
+| Implement Worker Pool | `packages/core/src/pool.ts` | Unit tests |
 | Write README + AGENTS.md | Root files | Peer review |
-| Create empty template | `templates/.naia/` | Structure matches spec |
-| Bundle fonts in template | `templates/.naia/assets/fonts/` | Self-hostable, no download |
+| Create empty template | `templates/.agents/` | Structure matches spec |
+| Bundle fonts in template | `templates/.agents/assets/fonts/` | Self-hostable, no download |
 
 ### Phase 2: nextain-adk Setup
 
@@ -654,12 +726,12 @@ git-crypt add-gpg-user luke@nextain.io
 
 | Task | Output | Verification |
 |------|--------|-------------|
-| Fork naia-adk → nextain-adk | Repo | `git clone` works |
-| Create `.naia/context.yaml` | Nextain info (placeholder schema) | Schema valid |
-| Setup git-crypt | `.gitattributes`, GPG key | `git-crypt lock/unlock` works |
-| Migrate payroll skill | `.naia/skills/payroll/` | PDF generates with existing script |
-| Create employee data (encrypted) | `data/employees.yaml` | `git-crypt status` shows encrypted |
-| Setup directory structure | `accounting/`, `hr/`, `documents/` | Exists |
+| Setup workspace structure | `data-company/`, `data-business/`, `data-private/` | Directories exist |
+| Create `.agents/context/` | Nextain info (placeholder schema) | Schema valid |
+| Setup git-crypt (optional) | `.gitattributes`, GPG key | `git-crypt lock/unlock` works |
+| Migrate payroll skill | `skills/business/payroll/` | PDF generates with existing script |
+| Create employee data | `data-business/accounting/employees.yaml` | Exists |
+| Setup submodules | `data-company/docs-nextain/`, etc. | `git submodule status` OK |
 
 ### Phase 3: Contract Skill
 
@@ -667,8 +739,8 @@ git-crypt add-gpg-user luke@nextain.io
 
 | Task | Output | Verification |
 |------|--------|-------------|
-| Create contract SKILL.md | `.naia/skills/contract/SKILL.md` | Execution contract valid |
-| Create contract template | `.naia/templates/nextain-contract.md` | Template renders |
+| Create contract SKILL.md | `skills/business/contract/SKILL.md` | Execution contract valid |
+| Create contract template | `templates/nextain-contract.md` | Template renders |
 | Create ContractPDF class | `scripts/generate-pdf.py` | PDF generates |
 | Setup self-signed cert | `naia cert generate` | Cert exists |
 | Implement PAdES signing | `scripts/sign-pdf.py` | Signed PDF validates |
@@ -680,24 +752,24 @@ git-crypt add-gpg-user luke@nextain.io
 
 | Task | Output | Verification |
 |------|--------|-------------|
-| Create expense SKILL.md | `.naia/skills/expense/SKILL.md` | Execution contract valid |
-| Create resolution template | `.naia/templates/nextain-resolution.md` | Template renders |
+| Create expense SKILL.md | `skills/business/expense/SKILL.md` | Execution contract valid |
+| Create resolution template | `templates/nextain-resolution.md` | Template renders |
 | Create ResolutionPDF class | `scripts/generate-pdf.py` | PDF generates |
 | Implement LLM Vision OCR | Receipt extraction | Accuracy test (10+ samples) |
 | Receipt validation | File type, size, duplicate detection | Edge case tests |
 | Test: AI 크래딧 지출결의 | Real resolution PDF | Manual review |
 | Migrate 2026-001 | Existing expense data | Matches OneDrive records |
 
-### Phase 5: naia-adk-b Extraction
+### Phase 5: naia-adk-business-pack Extraction
 
-**Goal**: Extract common patterns into reusable layer
+**Goal**: Extract common patterns into reusable extension pack
 
 | Task | Output | Verification |
 |------|--------|-------------|
 | Identify reusable patterns | Document | Review |
-| Create naia-adk-b repo | Fork + CLI + base skills | `naia init` works |
+| Create naia-adk-business-pack repo | Extension pack | `naia install business` works |
 | Extract PDF engine | `packages/docgen/` | Tests pass |
-| Extract base skills | `skills/document-generation/`, `skills/email/` | Skills load |
+| Extract business skills | `skills/business/` | Skills load |
 | CLI: init, skill add, adapter connect | Working commands | Integration tests |
 
 ### Phase 6: Peer Review Integration
@@ -710,6 +782,18 @@ git-crypt add-gpg-user luke@nextain.io
 | Create peer review runner | Shell script | 3 CLIs execute |
 | Structured output schema | JSON schema for findings | Validation |
 | Safety constraints | `--apply` flag, no auto-destructive changes | Tested |
+
+### Phase 7: naia-os Integration
+
+**Goal**: naia-adk serves as skill backend for naia-os
+
+| Task | Output | Verification |
+|------|--------|-------------|
+| Implement MCP Server in runtime | `packages/core/src/mcp-server.ts` | naia-os can connect |
+| Extract `@naia/skill-sdk` | Shared package | Types, registry, loader |
+| Ed25519 authentication | Auth module | Handshake works |
+| WebSocket transport | Gateway adapter | naia-os agent can invoke skills |
+| Skill hot-reload | `unregister()` + `register()` lifecycle | Skills update without restart |
 
 ---
 
@@ -727,8 +811,8 @@ Input:
   end_date: "2026-12-31"
 
 Output:
-  - hr/contracts/{name}_2026-04-17.pdf (encrypted, digitally signed)
-  - data/employees.yaml (updated, encrypted)
+  - data-business/documents/contracts/{name}_2026-04-17.pdf (encrypted, digitally signed)
+  - data-business/accounting/employees.yaml (updated, encrypted)
 ```
 
 ### 9.2 AI 크래딧 지출결의 (2026-001)
@@ -743,9 +827,9 @@ Input:
   reimburse_to: 토스뱅크 1000-3504-2010
 
 Output:
-  - accounting/expenses/2026-001.pdf (digitally signed)
-  - accounting/receipts/2026-001/ (receipt files)
-  - data/expenses.yaml (updated)
+  - data-business/accounting/expenses/2026-001.pdf (digitally signed)
+  - data-business/accounting/receipts/2026-001/ (receipt files)
+  - data-business/accounting/expenses.yaml (updated)
 ```
 
 ---
@@ -762,6 +846,9 @@ Output:
 | Git storage limits | Low | Low | Git LFS for receipts, repo split for scale |
 | Multi-person workflow | Medium | Medium | Build single-person first, policy exception model defined |
 | Peer review CLI availability | High | Low | Tolerate failures, fall back to self-review |
+| Python subprocess injection | Medium | Critical | stdin IPC, JSON Schema validation, worker isolation |
+| MCP arbitrary process spawn | Low | High | Command whitelist, user-configurable severity |
+| Git conflict in shared data | Medium | Medium | Batch commits, file locking strategy |
 
 ---
 
@@ -777,16 +864,146 @@ Output:
 
 ---
 
+## 12. Performance Design
+
+### 12.1 Worker Pool Pattern
+
+Three independent worker pools for different I/O types:
+
+| Pool | Workers | Purpose | Isolation |
+|------|---------|---------|-----------|
+| Python | 2-4 | PDF generation, signing | Subprocess, restricted FS |
+| LLM | Configurable | Skill dispatch, OCR | API calls, rate-limited |
+| Git | 1 | Commits, rollback | Sequential (git lock) |
+
+### 12.2 Trigger Dispatch (Keyword-First)
+
+```
+User input → Local keyword/embedding match (instant)
+  ↓ if ambiguous
+  LLM classification (100-500ms)
+  ↓
+  Skill execution
+```
+
+Avoids LLM latency on clear matches. LLM used only as fallback.
+
+### 12.3 Batch Commits
+
+Instead of committing after each file write, accumulate changes per skill execution:
+
+```
+Skill starts → file writes → Skill ends → single commit with all changes
+```
+
+Rollback: if skill fails, revert the entire batch (atomic).
+
+---
+
+## 13. EventBus Architecture
+
+All runtime operations emit events for monitoring, dashboard, and audit:
+
+```typescript
+interface NaiaEvent {
+  type: "skill:start" | "skill:end" | "skill:error" | "commit:batch" | "worker:acquire" | "worker:release";
+  timestamp: string;
+  data: Record<string, unknown>;
+}
+
+// Subscribers:
+// - Web Dashboard (SSE stream)
+// - Audit log (JSONL file)
+// - naia-os (WebSocket forwarding)
+```
+
+No extra API calls — events are in-process, zero-cost emission.
+
+---
+
+## 14. Schema Versioning
+
+All config files include `schema_version`:
+
+```yaml
+# .agents/context/config.yaml
+schema_version: "1"
+```
+
+Runtime validates schema version on load:
+- Unknown version → warn + attempt best-effort parse
+- Breaking version → error + migration guide
+
+This enables forward/backward compatibility as the spec evolves.
+
+---
+
+## 15. Peer Review Log
+
+### Round 1 (2026-04-19): Gemini + Claude (orchestrator)
+
+**Verdict**: NEEDS_REVISION
+
+| # | Finding | Severity | Source | Resolution |
+|---|---------|----------|--------|------------|
+| F1 | Python subprocess code injection | CRITICAL | Both | §5.3: stdin IPC + Worker Pool + Schema validation |
+| F2 | MCP arbitrary process spawn | HIGH | CONTESTED→CONFIRMED | §6.3: Command whitelist, user-configurable |
+| F3 | No auth naia-adk ↔ naia-os | HIGH | Both | §6.4: Ed25519 device identity |
+| F4 | Python spawn overhead per PDF | HIGH | Both | §5.3: Worker Pool pattern |
+| F5 | Web dashboard no auth | HIGH | Orchestrator | §6.4: API Key + HTTPS |
+| F6 | LLM trigger dispatch latency | MEDIUM | Both | §12.2: Keyword-first, LLM fallback |
+| F7 | Git commit per document | MEDIUM | Both | §12.3: Batch commits |
+| F8 | No hot-reload | MEDIUM | Both | Phase 7: unregister/register lifecycle (see Phase 7 task table) |
+| F9 | Git conflict resolution undefined | MEDIUM | Both | §12.3: Sequential git pool + file locking |
+| F10 | Script sandbox missing | MEDIUM | Gemini | §5.3: Worker isolation |
+
+**Applied changes**: All findings reflected in v3 of this document.
+
+### Round 2 (2026-04-19): Re-review — CONVERGED
+
+**Reviewer**: Gemini 2.5 Flash
+**Verdict**: APPROVE
+**Findings**: 0 — All 10 findings adequately addressed. Architecture coherent. Paths consistent.
+
+> Note: Claude reviewer skipped (rate limit). Planning stage convergence = 1 clean round with R=1. Satisfied.
+
+### Round 2 Claude (2026-04-19): APPROVE with observations
+
+**Reviewer**: Claude Sonnet
+**Verdict**: APPROVE
+**Findings**: 2 MEDIUM + 4 LOW (no blockers)
+
+| # | Severity | Finding | Resolution |
+|---|----------|---------|------------|
+| C1 | LOW | §15 section number refs wrong (§10.x → §12.x) | Fixed |
+| C2 | LOW | Phase 7 missing hot-reload task | Added |
+| C3 | MEDIUM | `mcp.allowed_commands: []` semantics undefined | Added DENY ALL comment |
+| C4 | LOW | `data-business/hr/` not in §2.3 structure | Changed to `data-business/documents/` |
+| C5 | MEDIUM | Worker sandbox enforcement unspecified | Added sandbox note |
+| C6 | LOW | Use case output path still had `hr/` | Fixed to `documents/` |
+
+All observations resolved.
+
+### Round 3-5 Gemini (2026-04-19): Final convergence
+
+**Reviewer**: Gemini 2.5 Flash
+**Verdict**: APPROVE (CLEAN)
+**Findings**: 0 — All Claude observations resolved. No remaining inconsistencies.
+
+**Final status: CONVERGED** (Gemini R2 + Claude R2 + Gemini R5 = 3 clean passes)
+
+---
+
 ## Appendix A: Dependency Map
 
 | Resource | Location | Usage |
 |----------|----------|-------|
-| Payroll PDF script | `.agents/skills/payroll/scripts/send_payroll.py` | Base PDF pattern |
-| Company info | `docs-business/01. 회사 정보/base-info.md` | context.yaml source |
-| Logo | `about.nextain.io/public/assets/logos/` | PDF branding |
-| Seal | `docs-business/07.증명서/` | PDF seal (separate from digital sig) |
+| Payroll PDF script | `skills/business/payroll/scripts/send_payroll.py` | Base PDF pattern |
+| Company info | `data-business/docs-business/01. 회사 정보/base-info.md` | context source |
+| Logo | `projects/about.nextain.io/public/assets/logos/` | PDF branding |
+| Seal | `data-business/docs-business/07.증명서/` | PDF seal (separate from digital sig) |
 | Existing accounting | OneDrive `넥스테인 회계/04.비용관리/` | Historical data source |
-| Expense 2026-001 | `docs-business/06. 발급문서/지출결의서/` | Migration source |
+| Expense 2026-001 | `data-business/docs-business/06. 발급문서/지출결의서/` | Migration source |
 
 ## Appendix B: Glossary
 

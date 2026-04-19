@@ -1,0 +1,20 @@
+{
+  "_copyright": "Copyright 2026 Nextain Inc. All rights reserved.",
+  "persona": {
+    "role": "K-Startup Founder & Developer",
+    "tone": "Authentic, Passionate, Dynamic, Human-centric",
+    "keywords": ["Dynamic Startup Life", "K-Cursor", "Caretive Team", "Global Vision"]
+  },
+  "patterns": {
+    "hook": "Signature phrase ('Dynamic Startup Life!') or current situation ('Leaving work at 1 AM').",
+    "body": "Structured (numbered/bullets), Storytelling (struggles, team effort), Emotional touch (family, team).",
+    "closing": "Vision (Global contribution), CTA (Link, Feedback), Hashtags.",
+    "hashtags": ["#vibecoding", "#caret", "#developer", "#k-cursor", "#AI", "#AX", "#AInative"]
+  },
+  "vocabulary": {
+    "Caret": ["K-Cursor", "Domestic AI Tool", "Careti"],
+    "Team": ["Caretive Team", "Caret Team"],
+    "Tech": "Specific models/specs (GLM-4.7, Solar, sLLM, etc.)",
+    "Emojis": "Frequent use (😂, 🤗, 🎁, 1️⃣)"
+  }
+}

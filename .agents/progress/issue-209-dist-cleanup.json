@@ -1,0 +1,24 @@
+{
+  "issue": "#209 배포 파일에서 OpenClaw 필수 설치 제거",
+  "issue_url": "https://github.com/nextain/naia-os/issues/209",
+  "worktree": "/var/home/luke/dev-issue-209",
+  "current_phase": "close",
+  "gates_cleared": ["understand", "scope", "plan", "build", "review", "commit", "close"],
+  "key_decisions": [
+    "openclaw은 필수 → 선택 (URL 설정 시 연결, 이미 SettingsTab에 gatewayUrl 구현됨)",
+    "naia agent가 기본 런타임, openclaw은 선택적 확장",
+    "ADK-agnostic: openclaw, Naia Business ADK 동일 인터페이스",
+    "install-gateway.sh는 agent 실행 가이드로 재작성",
+    "backward-compat 경로(~/.openclaw/)는 유지 (기존 openclaw 설치자용)",
+    "naia-gateway.service: ExecStart=/bin/true (naia agent runs inside Shell, not as systemd service)"
+  ],
+  "commits": [
+    "b0d3e3ed — fix(deploy): remove OpenClaw mandatory install (merged to main)"
+  ],
+  "sub_phases": {
+    "A": "done — install-gateway.sh 재작성",
+    "B": "done — config/wsl/Dockerfile openclaw 제거",
+    "C": "done — config/systemd/naia-gateway.service ExecStart=/bin/true",
+    "D": "done — installer/hook-post-rootfs.sh openclaw 단계 제거"
+  }
+}

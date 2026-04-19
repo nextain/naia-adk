@@ -1,0 +1,30 @@
+id: REQ-008
+title: "Skill Ecosystem"
+title_ko: "?¤í‚¬ ?íƒœê³?
+product: naia-os
+module: agent
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Built-in TypeScript skills with bundled skill.json metadata. Skills can be enabled or disabled per session, allowing flexible agent capabilities without code changes.
+
+acceptance_criteria:
+  - "Built-in TypeScript skills load with bundled skill.json metadata"
+  - "Skills can be enabled per session"
+  - "Skills can be disabled per session"
+  - "Skill loader discovers and registers available skills"
+
+trace:
+  code:
+    - path: "agent/src/skills/loader.ts"
+      symbol: "loadSkills"
+      coverage: full
+    - path: "agent/src/skills/registry.ts"
+      symbol: "SkillRegistry"
+      coverage: full

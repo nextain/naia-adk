@@ -1,0 +1,256 @@
+# Copyright 2026 Nextain Inc. All rights reserved.
+#
+# Naia OS 워크스페이스 인덱스
+# AI가 서브모듈별 규칙과 진입점을 찾는 데 사용
+version: "2.0"
+
+workspace:
+  type: personal
+  name: member-luke
+  owner: luke
+  org: nextain
+  repo: nextain/member-luke
+  visibility: private
+
+# 서브모듈 정의
+submodules:
+  # === 문서 ===
+  docs-work-logs:
+    path: ./docs-work-logs
+    type: docs
+    description: "Developer work logs (per-person folders)"
+    repo: nextain/docs-work-logs
+    visibility: private
+    rulesEntrypoint: AGENTS.md
+    myFolder: luke/
+    status: active
+
+  docs-nextain:
+    path: ./docs-nextain
+    type: docs
+    description: "Nextain internal docs (onboarding, meetings, design, reports)"
+    repo: nextain/docs-nextain
+    visibility: private
+    rulesEntrypoint: AGENTS.md
+    status: active
+
+  docs-business:
+    path: ./docs-business
+    type: docs
+    description: "Business docs for board (proposals, strategy, IR)"
+    repo: nextain/docs-business
+    visibility: private
+    rulesEntrypoint: README.md
+    status: active
+
+  # === 프로젝트 ===
+  cafelua.com:
+    path: ./cafelua.com
+    type: project
+    description: "Cafelua personal website"
+    repo: luke-n-alpha/cafelua-private
+    visibility: private
+    rulesEntrypoint: README.md
+    status: active
+
+  project-any-llm:
+    path: ./project-any-llm
+    type: lib
+    description: "Any-LLM SDK + FastAPI gateway (LLM proxy, credits, auth, usage tracking)"
+    repo: nextain/any-llm
+    visibility: public
+    rulesEntrypoint: README.md
+    status: active
+
+  # === 참조용 (Upstream Tracking, Read-Only) ===
+  ref-cline:
+    path: ./ref-cline
+    type: reference
+    description: "Cline upstream reference (VS Code AI extension)"
+    source: https://github.com/cline/cline
+    visibility: public  # external
+    status: active
+
+  ref-opencode:
+    path: ./ref-opencode
+    type: reference
+    description: "OpenCode reference (TUI-based AI coding agent)"
+    source: https://github.com/anomalyco/opencode
+    visibility: public  # external
+    status: active
+
+  ref-nanoclaw:
+    path: ./ref-nanoclaw
+    type: reference
+    description: "NanoClaw reference (lightweight AI agent framework)"
+    source: https://github.com/qwibitai/nanoclaw
+    visibility: public  # external
+    status: active
+
+  ref-moltbot:
+    path: ./ref-moltbot
+    type: reference
+    description: "Moltbot reference"
+    source: https://github.com/moltbot/moltbot
+    visibility: public  # external
+    status: active
+
+  ref-project-airi:
+    path: ./ref-project-airi
+    type: reference
+    description: "AIRI reference (AI character project)"
+    source: https://github.com/moeru-ai/airi
+    visibility: public  # external
+    status: active
+
+  ref-jikime-adk:
+    path: ./ref-jikime-adk
+    type: reference
+    description: "Jikime ADK reference (Agent Development Kit)"
+    source: https://github.com/jikime/jikime-adk
+    visibility: public  # external
+    status: active
+
+  ref-jikime-mem:
+    path: ./ref-jikime-mem
+    type: reference
+    description: "Jikime Memory reference"
+    source: https://github.com/jikime/jikime-mem
+    visibility: public  # external
+    status: active
+
+  ref-cc:
+    path: ./ref-cc
+    type: reference
+    description: "Claude Code CLI reference (AI coding agent, TypeScript, 1884 files)"
+    source: "Extracted from Claude Code CLI (Anthropic)"
+    visibility: private  # internal analysis
+    rulesEntrypoint: AGENTS.md
+    status: active
+    notes: "Dual-mirror context (.agents/ + .users/). Naia OS adoption analysis in .agents/context/naia-os-adoption.yaml"
+
+# 로컬 프로젝트 (서브모듈 아님)
+local_projects:
+  naia-os:
+    path: ./naia-os
+    type: project
+    description: "Naia OS desktop app (Tauri 2 + React + Three.js + Node.js agent)"
+    repo: nextain/naia-os
+    visibility: public
+    rulesEntrypoint: AGENTS.md
+    status: active
+
+  about.nextain.io:
+    path: ./about.nextain.io
+    type: project
+    description: "Nextain corporate website (Next.js 14 + next-intl)"
+    repo: nextain/about.nextain.io
+    visibility: public
+    rulesEntrypoint: README.md
+    status: active
+
+  naia.nextain.io:
+    path: ./naia.nextain.io
+    type: project
+    description: "Naia web app / Lab portal (Next.js + BFF for gateway)"
+    repo: nextain/naia.nextain.io
+    visibility: private
+    rulesEntrypoint: AGENTS.md
+    status: active
+
+  aiedu.nextain.io:
+    path: ./aiedu.nextain.io
+    type: project
+    description: "AI education platform — curriculum-driven AI teacher (Next.js + Monaco + Pyodide + any-llm)"
+    repo: nextain/aiedu.nextain.io
+    visibility: private
+    rulesEntrypoint: AGENTS.md
+    status: active
+    notes: "B2B commercial product. Dual-mirror context. Curriculum as plugin. Depends on any-llm B2B extension."
+
+  admin.nextain.io:
+    path: ./admin.nextain.io
+    type: project
+    description: "Nextain B2B admin control plane (license key mgmt, token tracking, client mgmt)"
+    repo: nextain/admin.nextain.io
+    visibility: private
+    rulesEntrypoint: AGENTS.md
+    status: active
+    notes: "Internal tool. Manages aiedu.nextain.io and future B2B products."
+
+  9router:
+    path: ./9router
+    type: project
+    description: "9Router — Free AI Router dashboard (Next.js). Auto-routes Claude Code, Cursor, Cline, etc. to 40+ AI providers & 100+ models."
+    repo: decolua/9router
+    visibility: public
+    rulesEntrypoint: README.md
+    status: active
+    notes: "Standalone git repo (not a submodule). External open-source project maintained by luke."
+
+  issue-desk:
+    path: ./issue-desk
+    type: project
+    description: "IssueDesk — standalone Vite+React panel for naia-os. GitHub issue/PR triage, community assistant, notification triage."
+    repo: nextain/issue-desk
+    visibility: private
+    rulesEntrypoint: README.md
+    status: active
+    notes: "Standalone git repo (not a submodule). Served as panel.json + index.html from naia-os shell. Design doc: naia-os/docs/design/issue-desk.ko.md"
+
+# GitHub-only repos (not in workspace)
+github_only_repos:
+  titanoboa:
+    type: tool
+    description: "Naia OS Live ISO builder (fork of ublue-os/titanoboa)"
+    repo: nextain/titanoboa
+    visibility: public
+    usedBy: naia-os  # .github/workflows/iso.yml
+    status: active
+
+  member-template:
+    type: template
+    description: "Member workspace template for onboarding"
+    repo: nextain/member-template
+    visibility: private
+    status: active
+
+  project-any-llm:
+    type: duplicate
+    description: "DUPLICATE of nextain/any-llm — TO BE DELETED"
+    repo: nextain/project-any-llm
+    visibility: public
+    status: deprecated
+
+# work-logs 폴더 매핑
+workLogsFolders:
+  naia-os: naia-os/work-logs/
+  cafelua.com: cafelua.com/work-logs/
+
+# 네이밍 컨벤션
+namingConventions:
+  projects: "project-*"
+  libs: "lib-*"
+  docs: "docs-*"
+  references: "ref-*"
+
+# 컨텍스트 파일 인덱스
+contextFiles:
+  philosophy:
+    path: .agents/context/philosophy.yaml
+    description: "Core project philosophy (the 'why')"
+    mirrors:
+      korean: .users/context/philosophy.md
+      english: .users/context/en/philosophy.md
+  contributing:
+    path: .agents/context/contributing.yaml
+    description: "AI contribution guide"
+    mirrors:
+      korean: .users/context/contributing.md
+      english: .users/context/en/contributing.md
+
+# 진입점 우선순위
+entrypointPriority:
+  - CLAUDE.md    # = AGENTS.md = GEMINI.md (always identical, pick any)
+  - .agents/context/agents-rules.json
+  - README.md

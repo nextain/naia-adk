@@ -1,0 +1,100 @@
+# Requirements Index — on-demand load only (NOT session-injected)
+# Read this file when entering Plan or Review phases
+version: 1
+updated: 2026-04-18
+total: 50
+
+# Status counts
+by_status:
+  candidate: 0
+  active: 50
+  implemented: 0
+  verified: 0
+  withdrawn: 0
+
+# Per-product summary
+products:
+  - product: naia-os
+    title: "Naia OS Desktop App"
+    req_count: 20
+    priority_high: 13
+    priority_medium: 7
+    modules: [agent, shell, gateway, distribution]
+    requirements:
+      - { id: REQ-001, title: "Multi-LLM Provider System", status: active }
+      - { id: REQ-002, title: "3D VRM Avatar Rendering", status: active }
+      - { id: REQ-003, title: "TTS Provider Registry", status: active }
+      - { id: REQ-004, title: "Four-Tier Tool Permission", status: active }
+      - { id: REQ-005, title: "SQLite Audit Logging", status: active }
+      - { id: REQ-006, title: "Always-On Gateway Daemon", status: active }
+      - { id: REQ-007, title: "Alpha Memory System (4-Store)", status: active }
+      - { id: REQ-008, title: "Skill Ecosystem", status: active }
+      - { id: REQ-009, title: "Shell-Agent stdio Protocol", status: active }
+      - { id: REQ-010, title: "Discord DM Integration", status: active }
+      - { id: REQ-011, title: "GUI Onboarding Wizard", status: active }
+      - { id: REQ-012, title: "Real-Time Voice Session", status: active }
+      - { id: REQ-013, title: "Workspace Management", status: active }
+      - { id: REQ-014, title: "Local-First Data Privacy", status: active }
+      - { id: REQ-015, title: "Multi-Format Distribution", status: active }
+      - { id: REQ-016, title: "Panel Plugin System", status: active }
+      - { id: REQ-017, title: "14-Language i18n", status: active }
+      - { id: REQ-018, title: "LLM Cost Dashboard", status: active }
+      - { id: REQ-019, title: "MCP Server Support", status: active }
+      - { id: REQ-020, title: "Atomic OS Image Update", status: active }
+
+  - product: aiedu.nextain.io
+    title: "AI Education Platform"
+    req_count: 14
+    priority_high: 8
+    priority_medium: 5
+    priority_low: 1
+    modules: [curriculum, pedagogy, editor, ai-teacher, simulation-terminal, math-widgets, auth, branding, licensing, session-log, ai-core, platform]
+    requirements:
+      - { id: REQ-021, title: "3-Context Curriculum", status: active }
+      - { id: REQ-022, title: "Pedagogy Library", status: active }
+      - { id: REQ-023, title: "Browser Python (Pyodide)", status: active }
+      - { id: REQ-024, title: "AI Teacher with Panel Control", status: active }
+      - { id: REQ-025, title: "Simulation Terminal", status: active }
+      - { id: REQ-026, title: "Math Widgets (JSXGraph)", status: active }
+      - { id: REQ-027, title: "Multi-Tenant Auth", status: active }
+      - { id: REQ-028, title: "White-Label Branding", status: active }
+      - { id: REQ-029, title: "Demo Quota Management", status: active }
+      - { id: REQ-030, title: "B2C Commerce", status: active }
+      - { id: REQ-031, title: "Session Logging", status: active }
+      - { id: REQ-032, title: "Layered System Prompt", status: active }
+      - { id: REQ-033, title: "i18n (ko/en)", status: active }
+      - { id: REQ-034, title: "Multi-Deploy Modes", status: active }
+
+  - product: naia.nextain.io
+    title: "Naia Web App / Lab Portal"
+    req_count: 12
+    priority_high: 6
+    priority_medium: 5
+    priority_low: 1
+    modules: [auth, api, dashboard, usage, keys, desktop, i18n, billing, blog, admin, channels, public]
+    requirements:
+      - { id: REQ-035, title: "OAuth Social Login", status: active }
+      - { id: REQ-036, title: "BFF Gateway Proxy", status: active }
+      - { id: REQ-037, title: "Credit Dashboard", status: active }
+      - { id: REQ-038, title: "Usage Analytics", status: active }
+      - { id: REQ-039, title: "API Key Management", status: active }
+      - { id: REQ-040, title: "Desktop Deep Link", status: active }
+      - { id: REQ-041, title: "URL-Based i18n", status: active }
+      - { id: REQ-042, title: "LemonSqueezy Billing", status: active }
+      - { id: REQ-043, title: "Blog CMS", status: active }
+      - { id: REQ-044, title: "Admin CMS", status: active }
+      - { id: REQ-045, title: "Channel Integration", status: active }
+      - { id: REQ-046, title: "Landing & Legal Pages", status: active }
+
+  - product: about.nextain.io
+    title: "Nextain Corporate Site"
+    req_count: 4
+    priority_high: 2
+    priority_medium: 1
+    priority_low: 1
+    modules: [landing, i18n, contact, pitch-deck]
+    requirements:
+      - { id: REQ-047, title: "Corporate Landing", status: active }
+      - { id: REQ-048, title: "Corporate i18n", status: active }
+      - { id: REQ-049, title: "Contact Modal", status: active }
+      - { id: REQ-050, title: "Pitch Deck", status: active }

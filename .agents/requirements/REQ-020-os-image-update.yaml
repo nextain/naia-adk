@@ -1,0 +1,27 @@
+id: REQ-020
+title: "Atomic OS Image Update"
+title_ko: "?ì??OS ?´ë?ì§€ ?…ë°?´íŠ¸"
+product: naia-os
+module: distribution
+status: active
+source: candidate
+priority: high
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Bazzite/Fedora Atomic based OS image with atomic deploy and instant rollback via GRUB. System updates are applied as complete image replacements, enabling reliable rollback on failure.
+
+acceptance_criteria:
+  - "OS image is based on Bazzite/Fedora Atomic"
+  - "Updates are deployed atomically as complete images"
+  - "Instant rollback via GRUB on failed update"
+  - "Previous image remains bootable after update"
+
+trace:
+  code:
+    - path: "recipes/"
+      symbol: "ImageRecipe"
+      coverage: full

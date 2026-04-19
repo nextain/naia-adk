@@ -1,0 +1,153 @@
+# Harness Verification Checklist
+# Copyright 2026 Nextain Inc. All rights reserved.
+#
+# Checklist for verifying harness (hooks + rules + workflow) correctness.
+# Use when adding/modifying hooks, rules, or workflow steps.
+
+version: 1
+
+# ─── Verification Checklist ───────────────────────────────────
+
+checklist:
+  - id: H1
+    name: false_positive_test
+    description: "Does the hook block things it shouldn't?"
+    how_to_verify:
+      - "Write 5 test cases: 3 that SHOULD pass, 2 that SHOULD block"
+      - "Run each with: echo '<json>' | node .claude/hooks/<hook>.js"
+      - "Verify exit behavior and output JSON"
+    common_failures:
+      - "Regex matching quoted strings (e.g. echo 'git reset --hard' triggering destructive-git-guard)"
+      - "Path matching too broadly (e.g. a file named 'design-notes.md' in a non-design dir)"
+
+  - id: H2
+    name: root_cause_vs_symptom
+    description: "Is the hook treating root cause or suppressing symptoms?"
+    how_to_verify:
+      - "Ask: 'What behavior does this hook prevent?'"
+      - "Ask: 'Can the undesired outcome still happen through a different path?'"
+      - "If yes → the hook is symptom suppression, not root cause treatment"
+    example:
+      symptom_suppression: "Block 'git reset --hard' (symptom: destructive action)"
+      root_cause: "Require user confirmation before any destructive action (root: missing checkpoint)"
+
+  - id: H3
+    name: scope_check
+    description: "Does the hook scope match its intent?"
+    how_to_verify:
+      - "PreToolUse: does it fire BEFORE the action? Is that early enough?"
+      - "PostToolUse: does it fire AFTER? Is it too late (irreversible action already taken)?"
+      - "Rule: hooks that prevent irreversible actions MUST be PreToolUse"
+
+  - id: H4
+    name: process_vs_action_constraint
+    description: "Is there a process constraint paired with every action constraint?"
+    how_to_verify:
+      - "For every 'you cannot do X' rule, check: 'what SHOULD the AI do instead?'"
+      - "If no positive alternative is defined → the rule is incomplete"
+    example:
+      incomplete: "NEVER change design decisions"
+      complete: "NEVER change design decisions. If design differs from implementation → follow escalation_path"
+
+  - id: H5
+    name: permission_model_coverage
+    description: "Is the AI's role (implementer vs reviewer) clearly defined for each file type?"
+    how_to_verify:
+      - "Check agents-rules.json permission_model covers all file types the AI touches"
+      - "Verify design_doc_paths is up to date"
+      - "Test: design-doc-guard.js blocks edits to docs/design/ files"
+
+  - id: H6
+    name: escalation_path_defined
+    description: "For every 'stop and report' rule, is the escalation path explicit?"
+    how_to_verify:
+      - "Check agents-rules.json escalation_path covers: design_gap_found_during_build, design_flaw_found_during_review"
+      - "The path must be: find → report → wait. Not: find → silently fix"
+
+  - id: H7
+    name: review_quality
+    description: "Are iterative reviews using /review-pass with adversarial framing?"
+    how_to_verify:
+      - "Check IDD workflow review and post_test_review phases reference '/review-pass'"
+      - "Check /review-pass skill exists at .agents/skills/review-pass/SKILL.md"
+      - "Verify two-consecutive-clean-pass rule is enforced"
+
+# ─── Retroactive Verification of Existing Hooks ───────────────
+
+existing_hooks:
+  destructive_git_guard:
+    file: ".claude/hooks/destructive-git-guard.js"
+    type: PreToolUse
+    H1: "PASS — strips quoted strings before regex match"
+    H2: "PASS — requires user confirmation (process constraint)"
+    H3: "PASS — PreToolUse, fires before git command"
+    H4: "PASS — paired with: 'ask user first'"
+    verified_date: "2026-03-20"
+
+  design_doc_guard:
+    file: ".claude/hooks/design-doc-guard.js"
+    type: PreToolUse
+    H1: "PASS — regex requires /design/ as directory component (not filename). src/design-notes.md passes; design/README.md blocks (correct)."
+    H2: "PASS — blocks before edit, requires surfacing to user (process constraint)"
+    H3: "PASS — PreToolUse, fires before Edit|Write"
+    H4: "PASS — paired with: escalation_path in agents-rules.json"
+    H5: "PASS — permission_model defined in agents-rules.json"
+    H6: "PASS — escalation_path covers both build-phase and review-phase discovery"
+    verified_date: "2026-03-21"
+
+  pr_guard:
+    file: ".claude/hooks/pr-guard.js"
+    type: PreToolUse
+    H1: "PASS — regex (?:^|[;&|])\\s*gh\\s+pr\\s+create\\b catches real commands and chained (cd proj && gh pr create) but NOT text inside echo args or --body content. Verified T6-T10 (5/5)."
+    H2: "PASS — root cause: maintainer should commit directly"
+    H3: "PASS — PreToolUse"
+    H4: "PASS — paired with: commit directly to main"
+    verified_date: "2026-03-22"
+    test_run: "2026-03-22 — T6,T7,T8,T9,T10: 5/5 PASS"
+
+  commit_guard:
+    file: ".claude/hooks/commit-guard.js"
+    type: PreToolUse
+    H1: "PASS — regex (?:^|[;&|])\\s*git\\s+commit\\b catches real commands and chained (git add && git commit) but NOT git commit inside echo args. Missing progress file → silent pass. Verified T1-T5 (5/5)."
+    H2: "PASS — blocks the git commit itself before it runs (PreToolUse). Root cause: IDD phases enforce quality gates."
+    H3: "PASS — PreToolUse. Upgraded from PostToolUse (2026-03-22) to block before commit executes."
+    H4: "PASS — reason message lists remaining phases, guiding next steps."
+    verified_date: "2026-03-22"
+    test_run: "2026-03-22 — T1,T2,T3,T4,T5: 5/5 PASS"
+
+  cascade_check:
+    file: ".claude/hooks/cascade-check.js"
+    type: PostToolUse
+    H1: "PASS — path regex requires exact directory components (e.g. .agents/context/*.yaml). Unrelated edits pass silently."
+    H2: "INFO — PostToolUse is advisory (reminder), not blocking. Mirror updates are AI responsibility, not automated. Acceptable: mirrors are human-readable, not machine-critical."
+    H3: "PASS — PostToolUse is appropriate for advisory cascades (no irreversible action to prevent)."
+    H4: "PASS — message specifies exactly which mirrors to update."
+    verified_date: "2026-03-22"
+
+  session_inject:
+    file: ".claude/hooks/session-inject.js"
+    type: UserPromptSubmit
+    H1: "PASS — no-op if progress directory missing or empty. False positives impossible (only injects, never blocks)."
+    H2: "PASS — anti-compact mechanism: injects session state on every prompt so context compression cannot erase active issue/phase."
+    H3: "PASS — UserPromptSubmit is the correct event (fires before AI processes the prompt)."
+    H4: "PASS — output is advisory context, not a constraint. Also warns if design-doc-unlock file is active."
+    verified_date: "2026-03-22"
+
+  deploy_guard:
+    file: ".claude/hooks/deploy-guard.js"
+    type: PreToolUse
+    H1: "PASS — strips quoted strings, skips echo/printf. Verified via test-deploy-guard.cjs."
+    H2: "PASS — root cause: AI deploying to prod without approval"
+    H3: "PASS — PreToolUse, fires before deploy command"
+    H4: "PASS — paired with: approval system (.claude/deploy/approvals.json)"
+    coverage: "vercel --prod, gcloud run deploy, gcloud app deploy, gcloud builds submit, gcloud run services update/replace, docker push (GCP registries)"
+    verified_date: "2026-04-05"
+
+  git_push_guard:
+    file: ".claude/hooks/git-push-guard.js"
+    type: PreToolUse
+    H1: "PENDING"
+    H2: "PASS — root cause: AI pushed broken code without confirmation"
+    H3: "PASS — PreToolUse, fires before git push"
+    H4: "PASS — paired with: ask user with remote/branch info"
+    verified_date: "2026-04-05"

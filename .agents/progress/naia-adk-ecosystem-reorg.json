@@ -1,0 +1,33 @@
+{
+  "issue": "naia-adk ecosystem reorganization",
+  "issue_url": "https://github.com/nextain/naia-adk-b/issues/1",
+  "current_phase": "sync",
+  "current_task": "Session paused. Repo naming decision needed next session.",
+  "repos": {
+    "member-luke": "current D:\\dev\\ workspace repo — rename to what?",
+    "naia-adk": "https://github.com/nextain/naia-adk (public) — 9 individual skills + arch doc",
+    "naia-adk-b": "https://github.com/nextain/naia-adk-b (private) — 11 business skills + CLI + docgen",
+    "onmam-adk": "https://github.com/nextain/onmam-adk (private) — onmam team workspace",
+    "nextain-adk": "https://github.com/nextain/nextain-adk — DELETE (workspace root IS nextain-adk)"
+  },
+  "open_question": "member-luke repo를 어떻게 할 것인가? 옵션: 1) rename to nextain-adk, 2) naia-adk-b를 submodule로, 3) 현재 구조 유지",
+  "todo_next_session": [
+    "Decide: member-luke repo naming/architecture",
+    "Delete nextain-adk repo (needs gh auth refresh -s delete_repo)",
+    "Clean up workspace .agents/skills/ — remove moved skills",
+    "Update AGENTS.md with new architecture",
+    "Update .agents/context/agents-rules.json with .naia/ references",
+    "Wire naia-adk and naia-adk-b as submodules or deps",
+    "Test onmam-adk end-to-end"
+  ],
+  "completed_this_session": [
+    "review-pass v3 E2E test (3 reviewers, codex fix)",
+    "REQ-001~050 activated (candidate → active)",
+    "naia-adk-b scaffold (Phase 5+6) with 3-round code review",
+    "naia-adk-b issue #1 — integration plan with naia-os",
+    "naia-adk/naia-adk-b skill split (individual vs business)",
+    "onmam-adk initial setup",
+    "workspace .naia/ setup (context.yaml, config.yaml)",
+    "ARCHITECTURE.md — ecosystem relationship doc"
+  ]
+}

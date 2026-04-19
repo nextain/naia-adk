@@ -1,0 +1,27 @@
+id: REQ-034
+title: "Multi-Deploy Modes"
+title_ko: "?�중 배포 모드"
+product: aiedu.nextain.io
+module: platform
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Three deployment modes: cloud, on-premise, and airgap. DEPLOY_MODE environment variable controls behavior including session logging, external API access, and feature availability.
+
+acceptance_criteria:
+  - "Cloud mode enables full external API access"
+  - "On-premise mode supports local deployment"
+  - "Airgap mode disables all external communication"
+  - "DEPLOY_MODE env var controls mode selection"
+
+trace:
+  code:
+    - path: "lib/session-log/index.ts"
+      symbol: "deployMode"
+      coverage: full

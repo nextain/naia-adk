@@ -1,0 +1,27 @@
+id: REQ-043
+title: "Blog CMS"
+title_ko: "블로�?CMS"
+product: naia.nextain.io
+module: blog
+status: active
+source: candidate
+priority: medium
+created: 2026-04-18
+updated: 2026-04-18
+
+issue_url: ""
+
+description: |
+  Markdown-based blog with GA4 view analytics, Firebase-powered comments, and email notification subscriptions.
+
+acceptance_criteria:
+  - "Markdown blog posts render correctly"
+  - "GA4 tracks page views for blog posts"
+  - "Firebase comments work on blog posts"
+  - "Email notifications can be subscribed/unsubscribed"
+
+trace:
+  code:
+    - path: "src/app/[lang]/(public)/blog/page.tsx"
+      symbol: "BlogPage"
+      coverage: full
