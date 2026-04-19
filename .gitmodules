@@ -1,0 +1,27 @@
+[submodule "projects/naia-os"]
+	path = projects/naia-os
+	url = https://github.com/nextain/naia-os
+[submodule "projects/about.nextain.io"]
+	path = projects/about.nextain.io
+	url = https://github.com/nextain/about.nextain.io
+[submodule "projects/naia.nextain.io"]
+	path = projects/naia.nextain.io
+	url = https://github.com/nextain/naia.nextain.io
+[submodule "projects/aiedu.nextain.io"]
+	path = projects/aiedu.nextain.io
+	url = https://github.com/nextain/aiedu.nextain.io
+[submodule "projects/admin.nextain.io"]
+	path = projects/admin.nextain.io
+	url = https://github.com/nextain/admin.nextain.io
+[submodule "projects/cafelua.com"]
+	path = projects/cafelua.com
+	url = https://github.com/luke-n-alpha/cafelua-private
+[submodule "projects/project-any-llm"]
+	path = projects/project-any-llm
+	url = https://github.com/nextain/any-llm
+[submodule "projects/alpha-memory"]
+	path = projects/alpha-memory
+	url = https://github.com/nextain/alpha-memory
+[submodule "projects/onmam-adk"]
+	path = projects/onmam-adk
+	url = https://github.com/nextain/onmam-adk

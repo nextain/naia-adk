@@ -35,13 +35,8 @@ desktop.ini
 __pycache__/
 *.pyc
 
-# Data directories (managed locally per fork)
-data-company/
-data-business/
+# Data directories (data-private stays gitignored)
 data-private/
-
-# Project repositories (cloned per fork)
-projects/
 
 # Temp
 *.tmp
