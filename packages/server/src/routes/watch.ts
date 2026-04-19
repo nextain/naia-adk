@@ -8,7 +8,7 @@ export const watchRoutes: FastifyPluginCallback = (app, _opts, done) => {
 
   app.get("/*", { websocket: true }, (socket, req) => {
     const watchPath = (req.params as { "*": string })["*"]
-    const absPath = watchPath ? `${root}/${watchPath}` : root
+    const absPath = watchPath ? path.join(root, watchPath) : root
 
     const watcher = chokidar.watch(absPath, {
       ignored: /(^|[\/\\])\../,
