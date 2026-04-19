@@ -35,15 +35,19 @@ desktop.ini
 __pycache__/
 *.pyc
 
-# Data — private env files
-data-private/envs/
-!data-private/envs/.gitkeep
+# Data directories (managed locally per fork)
+data-company/
+data-business/
+data-private/
+
+# Project repositories (cloned per fork)
+projects/
 
 # Temp
 *.tmp
 *.temp
 
-# Claude worktrees (large LFS objects)
+# Claude worktrees
 .claude/worktrees/
 
 # Review outputs
@@ -51,13 +55,3 @@ review-*.txt
 rerun-*.txt
 
 nul
-
-# Non-submodule project directories (cloned manually, no .git)
-projects/9router/
-projects/onmam-php/
-projects/vllm-omni/
-projects/refs/ref-cc/
-data-business/accounting/
-
-# Legacy member workspace (to be removed)
-member-luke/
