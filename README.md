@@ -39,7 +39,15 @@ naia-adk = Workspace Scaffold + Dashboard
 
 **Workflow clients** (opencode, Claude Code, Codex, Naia OS) use naia-adk as their workspace. The dashboard is for *managing* the workspace — not for doing work.
 
-**Tool-agnostic**: naia-adk is not dependent on any specific AI tool. It provides its own API and workspace structure that any coding agent can connect to — Claude Code, Codex, opencode, Naia OS, or any future tool.
+### Interfaces, not dependencies
+
+naia-adk is a **tool-agnostic workspace format**. It does not depend on any specific AI tool, and AI tools do not have to depend on naia-adk's runtime either:
+
+- **The format is the contract** — directory layout (`.agents/`, `.users/`, `skills/`, `data-*/`), file schemas (`agents-rules.json`, SKILL.md), and conventions. Any AI coding tool that can read these can consume a naia-adk workspace.
+- **No runtime coupling** — Claude Code, OpenCode, Codex, and naia-agent all read the same format independently. None of them embed naia-adk's code.
+- **Swap freely** — switch tools, fork the workspace for a new org, or mix tools within the same project. The workspace keeps working.
+
+This is part of the broader Naia ecosystem philosophy: repos are coupled through **published interfaces and formats**, not runtime dependencies. See the [naia-agent README](https://github.com/nextain/naia-agent) for the full picture.
 
 **Plugin-adaptive**: The scaffold adapts to what you plug in. Skills, data directories, project submodules, and AI tool connections are all pluggable — add what you need, ignore what you don't.
 
