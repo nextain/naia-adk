@@ -10,7 +10,7 @@ naia-adk is a **tool-agnostic workspace format**. Format changes are visible
 to every AI coding tool that consumes the workspace (Claude Code, OpenCode,
 Codex, naia-agent, …). Handle accordingly.
 
-- [ ] Changes `packages/skill-spec` shape (when it exists) — **MAJOR** impact
+- [ ] Changes `@naia-adk/skill-spec` shape (published contract — **MAJOR** if breaking)
 - [ ] Changes SKILL.md format / workspace directory layout
 - [ ] Changes `agents-rules.json` schema
 - [ ] Internal / docs / tooling only — no external consumer impact
