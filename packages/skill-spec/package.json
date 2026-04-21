@@ -1,6 +1,6 @@
 {
   "name": "@naia-adk/skill-spec",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Tool-agnostic skill format spec — SkillDescriptor, SkillLoader contracts. Zero runtime deps.",
   "type": "module",
   "main": "./dist/index.js",
