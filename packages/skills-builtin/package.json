@@ -1,0 +1,32 @@
+{
+  "name": "@naia-adk/skills-builtin",
+  "version": "0.0.1",
+  "description": "Generic skills catalog for Naia (10 skills migrated from naia-os): TTS / Cron / Memo / Time / Weather / Notify / Diagnostics / Sessions / Skill-manager / Config / SystemStatus. Zero runtime deps.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "default": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "files": ["dist", "src"],
+  "license": "Apache-2.0",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@naia-adk/skill-spec": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}
