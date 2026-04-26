@@ -5,7 +5,13 @@
  *   - naia-adk process (본 pkg) = workflow spec (정적 패턴)
  *   - naia-agent supervisor = workflow 실행 (orchestration)
  *
- * Phase 4.0 = spec/skeleton only. 실 enforcement는 naia-agent supervisor.
+ * ⚠ **Enforcement gap (Paranoid P0-4)**:
+ * 본 spec은 documentation only. WorkflowSpec.steps의 gate/iterativeReview는
+ * naia-agent supervisor가 runtime에 enforce해야 함. spec만으로는 강제 X.
+ * Phase 4.2 wire 시 supervisor에 gate-sequencing 강제 logic 필요
+ * (out-of-order step → reject, gate 미통과 → halt).
+ *
+ * Phase 4.0 = spec/skeleton only.
  */
 
 export type WorkflowGate =
