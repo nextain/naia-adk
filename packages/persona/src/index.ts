@@ -56,6 +56,12 @@ export const NAIA_DEFAULT_PERSONA: PersonaSpec = {
  * Example persona override — alpha (luke 인스턴스).
  * alpha-adk가 본 example 참고하여 자체 persona 정의.
  *
+ * ⚠ **보안 경고 (Paranoid P0-3 fix)**:
+ * - `systemPromptPrefix`는 LLM system prompt에 직접 inject됨
+ * - prompt injection 위험 (LLM이 instruction 무시 가능, "기존 명령 무시" 등)
+ * - production 사용 시: prefix 내용을 사용자 검증 필수 (외부 입력 그대로 X)
+ * - guidelines.dont는 LLM 권고 수준 (강제 enforcement는 naia-agent gate logic)
+ *
  * Note: 본 export는 공식 persona가 아님. alpha-adk 또는 다른 인스턴스
  * 호스트가 자체적으로 PersonaSpec 정의하여 naia-agent에 inject.
  */
