@@ -278,6 +278,11 @@
     "response_language": "Korean (한국어로 응답)",
     "development_approach": "Issue-driven development (default). TDD where applicable.",
     "test_code_review": "After writing tests, never trust results blindly. Review test logic itself with iterative review (2 consecutive clean passes) before trusting outcomes. Signs of invalid tests: assertions that always pass, mocked internals that diverge from real behavior, missing negative cases.",
+    "tmp_files": {
+      "rule": "All temporary/debug/scratch scripts MUST be created inside tmp/ at the root of the active working directory. NEVER create tmp-* or tmp_* files in the repo root or subproject roots.",
+      "gitignore": "tmp/, tmp-*, tmp_* are gitignored at root. Files placed there are never tracked.",
+      "naming": "Use descriptive names inside tmp/ (e.g. tmp/check-db.php, tmp/debug-redis.sh) — no tmp- prefix needed since the directory provides the namespace."
+    },
     "work_logs": "Don't modify unless explicitly requested",
     "git_workflow": {
       "maintainer_rule": "Luke is a maintainer of all Nextain repos. NEVER create PRs for Nextain repos — commit and push directly to main (or the relevant branch). PRs are for external contributors only.",
