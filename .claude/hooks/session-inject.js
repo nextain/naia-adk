@@ -152,30 +152,75 @@ async function main() {
 		}
 	}
 
-	// Priority 2: fallback to most recently modified progress file across all dirs
-	// After selection, register this session → file mapping to prevent future cross-session drift
+	// Priority 2: new session with no mapping — ask user to select an issue
+	// Do NOT auto-assign to most-recently-modified file (causes all sessions to pile onto one issue)
 	if (!latestFile) {
-		let latestMtime = 0;
+		// Collect active issues (phase !== 'close') across all progress files
+		const activeIssues = [];
 		for (const filePath of allProgressFiles) {
 			try {
-				const stat = fs.statSync(filePath);
-				if (stat.mtimeMs > latestMtime) {
-					latestMtime = stat.mtimeMs;
-					latestFile = filePath;
-				}
+				const content = JSON.parse(fs.readFileSync(filePath, "utf8"));
+				if (content.current_phase === "close") continue;
+				activeIssues.push({
+					file: filePath,
+					issue: content.issue || path.basename(filePath, ".json"),
+					phase: PHASE_LABELS[content.current_phase] || content.current_phase || "unknown",
+					task: content.current_task || "",
+				});
 			} catch {
 				continue;
 			}
 		}
 
-		// Register the mtime-selected file in session-map so this session sticks to it
-		if (latestFile && sessionId) {
-			sessionMap[sessionId] = latestFile;
-			sessionMapDirty = true;
+		// Sort by most recently modified
+		activeIssues.sort((a, b) => {
+			try {
+				return fs.statSync(b.file).mtimeMs - fs.statSync(a.file).mtimeMs;
+			} catch {
+				return 0;
+			}
+		});
+
+		const issueList = activeIssues.length > 0
+			? activeIssues.map((i, idx) =>
+				`  ${idx + 1}. ${i.issue} [${i.phase}]${i.task ? " — " + i.task : ""}\n     파일: ${path.basename(i.file)}`
+			).join("\n")
+			: "  (활성 이슈 없음)";
+
+		const selectionContext = [
+			"══ [HARNESS: NEW SESSION] ════════════════════════════════",
+			"이 세션에 연결된 이슈가 없습니다.",
+			"",
+			"활성 이슈 목록:",
+			issueList,
+			"",
+			"▶ 작업할 이슈를 사용자에게 물어보세요.",
+			"  확인 후 .agents/progress/.session-map.json 에 아래 형식으로 등록하세요:",
+			`  "${sessionId || "<session_id>"}": "<progress_파일_절대경로>"`,
+			"══════════════════════════════════════════════════════════",
+		].join("\n");
+
+		// Flush any stale-pruning changes before exiting
+		if (sessionMapDirty) {
+			try {
+				fs.writeFileSync(sessionMapPath, JSON.stringify(sessionMap, null, 2));
+			} catch {
+				// Best-effort
+			}
 		}
+
+		process.stdout.write(
+			JSON.stringify({
+				hookSpecificOutput: {
+					hookEventName: "UserPromptSubmit",
+					additionalContext: selectionContext,
+				},
+			})
+		);
+		process.exit(0);
 	}
 
-	// Flush session-map if any changes were made (stale pruning or new registration)
+	// Flush session-map if stale entries were pruned
 	if (sessionMapDirty) {
 		try {
 			fs.writeFileSync(sessionMapPath, JSON.stringify(sessionMap, null, 2));
