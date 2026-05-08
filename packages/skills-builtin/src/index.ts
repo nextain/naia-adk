@@ -36,9 +36,5 @@
  *   - Channel adapter (Discord/GoogleChat/Slack) → naia-os/gateway
  */
 
-// Phase 4.0 Day 0.5 — stub exports (D42 Multi-repo parallel gate)
-export const PHASE_4_0_STUB = "skills-builtin pending Day 3-7" as const;
-
-// Stub: real exports will be added in Day 3-7 migration.
-// Until then, naia-os wire (Phase 4.1) imports this constant to verify
-// the package resolution chain works (file: dep → tsconfig refs → typecheck).
+// Phase 4.0 — weather descriptor (first real export, #243)
+export { weatherDescriptor } from "./weather.js";
