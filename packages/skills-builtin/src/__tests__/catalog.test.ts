@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import type { SkillDescriptor } from "@naia-adk/skill-spec";
 import {
 	ALL_DESCRIPTORS,
+	agentBrowserDescriptor,
 	agentsDescriptor,
 	approvalsDescriptor,
 	botmadangDescriptor,
@@ -31,17 +32,19 @@ import {
 	ttsDescriptor,
 	voicewakeDescriptor,
 	weatherDescriptor,
+	welcomeDescriptor,
 } from "../index.js";
 
 const VALID_TIERS = new Set(["T0", "T1", "T2", "T3"]);
 
 describe("@naia-adk/skills-builtin catalog", () => {
-	it("exports 21 descriptors total (Phase 4.0 Day 3-7 complete)", () => {
-		expect(ALL_DESCRIPTORS).toHaveLength(21);
+	it("exports 23 descriptors total (Day 3-7 + OpenClaw port via #274)", () => {
+		expect(ALL_DESCRIPTORS).toHaveLength(23);
 	});
 
 	it("ALL_DESCRIPTORS contains each named export", () => {
 		const expected = [
+			agentBrowserDescriptor,
 			agentsDescriptor,
 			approvalsDescriptor,
 			botmadangDescriptor,
@@ -63,6 +66,7 @@ describe("@naia-adk/skills-builtin catalog", () => {
 			ttsDescriptor,
 			voicewakeDescriptor,
 			weatherDescriptor,
+			welcomeDescriptor,
 		];
 		for (const d of expected) {
 			expect(ALL_DESCRIPTORS).toContain(d);
@@ -88,7 +92,9 @@ describe("@naia-adk/skills-builtin catalog", () => {
 		expect(uniq.size, `duplicates: ${[...names].sort()}`).toBe(names.length);
 	});
 
-	it("tier distribution matches runtime (7 T0, 12 T1, 2 T2)", () => {
+	it("tier distribution matches runtime (8 T0, 13 T1, 2 T2)", () => {
+		// T0 grew by 1 (welcome — read-only prompt template).
+		// T1 grew by 1 (agent_browser — browser activity, similar profile to notify).
 		// T2 = approvals + botmadang. agents.ts has runtime tier=1 so descriptor
 		// is T1 (matches runtime). Raising agents to T2 is a separate decision.
 		const byTier = new Map<string, SkillDescriptor[]>();
@@ -97,8 +103,8 @@ describe("@naia-adk/skills-builtin catalog", () => {
 			list.push(d);
 			byTier.set(d.tier, list);
 		}
-		expect(byTier.get("T0")?.length, "T0 (free)").toBe(7);
-		expect(byTier.get("T1")?.length, "T1 (notify)").toBe(12);
+		expect(byTier.get("T0")?.length, "T0 (free)").toBe(8);
+		expect(byTier.get("T1")?.length, "T1 (notify)").toBe(13);
 		expect(byTier.get("T2")?.length, "T2 (approval)").toBe(2);
 		expect(byTier.get("T3")?.length, "T3 (blocked)").toBeUndefined();
 	});
