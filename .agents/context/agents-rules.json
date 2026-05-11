@@ -274,7 +274,21 @@
     },
     "submodule_rule": "Each submodule has own rules. Read entry_point before modifications."
   },
-  "conventions": {
+  "financial_integrity": {
+      "cost_estimation_first": "Before performing any large-scale cloud operations, the agent MUST estimate the potential cost and obtain explicit user approval.",
+      "expensive_operations_blacklist": [
+        "GCS: Data movement > 10GB or API ops > 1,000 via mount points (e.g., rsync via gcsfuse)",
+        "GCE: Provisioning high-tier GPU instances (A100, H100, etc.)",
+        "Vertex AI/LLM: Massive batch inference or fine-tuning jobs",
+        "Cloud SQL: Massive data migrations or large-scale index rebuilds"
+      ],
+      "resource_awareness": "Always monitor Class A/B API operation counts for GCS and egress traffic costs for GCE/Cloud Run."
+    },
+    "language_harness": {
+      "no_korean_in_agents": "Strictly prohibit Korean characters in .agents/ directory to optimize token usage. All context files here must be in concise English.",
+      "concise_session_output": "AI responses should be extremely brief (less than 3 lines) to minimize history weight. Avoid long Korean preambles."
+    },
+    "conventions": {
     "response_language": "Korean (한국어로 응답)",
     "development_approach": "Issue-driven development (default). TDD where applicable.",
     "test_code_review": "After writing tests, never trust results blindly. Review test logic itself with iterative review (2 consecutive clean passes) before trusting outcomes. Signs of invalid tests: assertions that always pass, mocked internals that diverge from real behavior, missing negative cases.",
