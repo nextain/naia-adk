@@ -550,6 +550,110 @@ export const notifySlackDescriptor: SkillDescriptor = {
 	tags: ["slack", "notify", "webhook", "tier-1"],
 };
 
+// ── Ported from OpenClaw (issue #274) ───────────────────────────────────────
+
+/**
+ * agent-browser — wraps the `agent-browser` npm package (CLI subprocess).
+ * Ported from OpenClaw container/skills/agent-browser/SKILL.md.
+ *
+ * Tier 1: browser activity is non-destructive locally but may take real
+ * network actions on user's behalf. Same risk profile as notify-*.
+ */
+export const agentBrowserDescriptor: SkillDescriptor = {
+	name: "agent_browser",
+	description:
+		"Browse the web — research topics, read articles, interact with web apps, " +
+		"fill forms, take screenshots, extract data, test web pages. " +
+		"Backed by the agent-browser CLI. " +
+		"Use whenever a browser would help, not only when explicitly asked.",
+	version: "0.1.0",
+	tier: "T1",
+	inputSchema: {
+		type: "object",
+		properties: {
+			cmd: {
+				type: "string",
+				description:
+					"agent-browser sub-command: open, back, forward, reload, close, " +
+					"snapshot, click, dblclick, fill, type, press, hover, check, " +
+					"uncheck, select, scroll, upload, get, screenshot, pdf.",
+				enum: [
+					"open",
+					"back",
+					"forward",
+					"reload",
+					"close",
+					"snapshot",
+					"click",
+					"dblclick",
+					"fill",
+					"type",
+					"press",
+					"hover",
+					"check",
+					"uncheck",
+					"select",
+					"scroll",
+					"upload",
+					"get",
+					"screenshot",
+					"pdf",
+				],
+			},
+			args: {
+				type: "array",
+				items: { type: "string" },
+				description:
+					"Sub-command arguments. Examples: ['https://example.com'] for open, " +
+					"['-i'] for snapshot (interactive elements only), ['@e1'] for click, " +
+					"['@e2', 'text to type'] for fill.",
+			},
+			timeoutMs: {
+				type: "number",
+				description: "Subprocess timeout in milliseconds (default 30000).",
+			},
+		},
+		required: ["cmd"],
+	},
+	tags: ["browser", "web", "external-ported", "openclaw-port", "tier-1"],
+};
+
+/**
+ * welcome — channel onboarding greeting. Returns a formatted greeting payload
+ * (persona name + intro + capability ladder) for the LLM to compose into a
+ * concrete send_message call. Ported from OpenClaw container/skills/welcome.
+ *
+ * Tier 0: read-only — composes text from persona, no side effect on its own.
+ * The LLM must use a separate notify-* / channel skill to actually send.
+ */
+export const welcomeDescriptor: SkillDescriptor = {
+	name: "welcome",
+	description:
+		"Generate a channel-onboarding greeting template — persona name + intro + " +
+		"ordered capability ladder for drip-feed reveal. Returns the template; " +
+		"caller composes the send via send_message or notify-*. Triggered when a " +
+		"channel is first wired.",
+	version: "0.1.0",
+	tier: "T0",
+	inputSchema: {
+		type: "object",
+		properties: {
+			channel: {
+				type: "string",
+				description:
+					"Target channel hint (discord/slack/google-chat/telegram/dm). " +
+					"Tunes capability ladder for the channel (e.g., file-attachment hints).",
+				enum: ["discord", "slack", "google-chat", "telegram", "dm", "generic"],
+			},
+			locale: {
+				type: "string",
+				description: "BCP-47 locale for the greeting (default 'ko'). Used to pick KO/EN ladder.",
+			},
+		},
+	},
+	tags: ["welcome", "onboarding", "openclaw-port", "tier-0"],
+};
+
 // ── Tier 2 (approval required) ──────────────────────────────────────────────
 
 // NOTE: tier="T1" here matches the runtime tier (agents.ts has `tier: 1`).
@@ -670,6 +774,7 @@ export const ALL_DESCRIPTORS: SkillDescriptor[] = [
 	ttsDescriptor,
 	skillManagerDescriptor,
 	weatherDescriptor,
+	welcomeDescriptor, // ported from OpenClaw (#274)
 	memoDescriptor,
 	configDescriptor,
 	channelsDescriptor,
@@ -681,6 +786,7 @@ export const ALL_DESCRIPTORS: SkillDescriptor[] = [
 	notifyDiscordDescriptor,
 	notifyGoogleChatDescriptor,
 	notifySlackDescriptor,
+	agentBrowserDescriptor, // ported from OpenClaw (#274)
 	agentsDescriptor,
 	approvalsDescriptor,
 	botmadangDescriptor,
