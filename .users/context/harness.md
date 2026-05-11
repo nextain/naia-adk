@@ -70,13 +70,46 @@ AI의 역할(구현자 vs 리뷰어)이 파일 유형별로 명확히 정의되�
 | `pr-guard.js` | PreToolUse | PASS | PASS | PASS | PASS | 2026-03-22 |
 | `commit-guard.js` | PreToolUse | PASS | PASS | PASS | PASS | 2026-03-22 |
 | `cascade-check.js` | PostToolUse | PASS | INFO | PASS | PASS | 2026-03-22 |
-| `session-inject.js` | UserPromptSubmit | PASS | PASS | PASS | PASS | 2026-03-22 |
+| `session-inject.js` | UserPromptSubmit | PASS | PASS | PASS | PASS | 2026-04-26 |
 
 **참고:**
 - `pr-guard.js` H1: regex `(?:^|[;&|])\s*gh\s+pr\s+create\b` (2026-03-22). 체인 명령 catch + echo/body 인자 안의 텍스트 false positive 방지. T6-T10 5/5 PASS.
 - `commit-guard.js`: PostToolUse → PreToolUse 전환 (2026-03-22). regex `(?:^|[;&|])\s*git\s+commit\b`. echo 인자 안 텍스트 false positive 방지. T1-T5 5/5 PASS.
 - `cascade-check.js` H2 INFO: PostToolUse 알림이 차단이 아님 — 미러 업데이트는 AI 책임, 자동화 아님. 허용된 설계.
 - `session-inject.js` H4: design-doc-unlock 파일 활성화 시 경고 출력 기능 추가 (2026-03-22).
+- `session-inject.js` 동작 모델 재설계 (2026-04-26): 자동 바인딩 제거, opt-out 메커니즘 추가, `/harness` 슬래시 명령어 도입. 아래 섹션 참조.
+
+---
+
+## session_inject 동작 모델 (2026-04-26 개정)
+
+**해결 우선순위 (auto-bind 없음):**
+1. **P0** — progress 파일 안의 `session_id` 필드가 현재 세션 ID와 일치하는 파일 (가장 권위적, session-map 손상에도 견고)
+2. **P1** — `.session-map.json[session_id]`가 가리키는 파일
+3. **둘 다 없으면 SELECTION PROMPT만 inject** — 절대 추측해서 자동 바인딩하지 않음
+
+**활성 후보 정의:** `mtime ≤ 24h` AND `current_phase != "close"` — 안내문에 후보 목록으로 표시됨.
+
+**Opt-out (HARNESS 끔):**
+- `CLAUDE_HARNESS=off` (또는 `0`/`false`/`no`) 환경변수
+- `<cwd>/.claude/no-harness` 마커 파일 (내용 무관, 존재만으로 opt-out)
+- 위 둘 중 하나면 hook은 매 턴 조용히 종료
+
+**명시적 제어 — `/harness` 슬래시 명령어:**
+
+| 명령 | 동작 |
+|------|------|
+| `/harness status` | 현재 바인딩 상태(P0/P1/UNBOUND) + opt-out 여부 + 활성 후보 표시 |
+| `/harness off` | `<cwd>/.claude/no-harness` 생성 → opt-out |
+| `/harness on` | `no-harness` 마커 제거 → HARNESS 재활성 |
+| `/harness bind <file or issue#>` | 지정 progress 파일에 `session_id` 기재 (P0 anchor) |
+| `/harness unbind` | session-map + progress 파일 양쪽에서 현재 세션 흔적 제거 |
+
+명세는 `.claude/commands/harness.md` 참조.
+
+**왜 자동 바인딩(P2-singleton)을 제거했나:** 멀티세션 워크플로우에서 새 세션이 활성 작업 1개에 자동으로 끌려가면서 cross-session context drift가 발생. 새 세션이 자유 작업이거나 다른 이슈를 다루려는 경우에도 #N HARNESS가 강제 inject됐음. 명시적 바인딩만 허용하는 모델로 전환.
+
+**왜 atomic write인가:** 동시 세션이 `.session-map.json`을 동시에 갱신하면 JSON 손상 가능. tmp 파일에 쓴 뒤 rename으로 원자성 확보.
 
 ---
 
