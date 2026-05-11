@@ -84,6 +84,18 @@ importers:
         specifier: ^5.8.0
         version: 5.9.3
 
+  packages/persona:
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
+
+  packages/process:
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
+
   packages/server:
     dependencies:
       '@fastify/cors':
@@ -119,6 +131,16 @@ importers:
         version: 5.9.3
 
   packages/skill-spec: {}
+
+  packages/skills-builtin:
+    dependencies:
+      '@naia-adk/skill-spec':
+        specifier: workspace:*
+        version: link:../skill-spec
+    devDependencies:
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
 
 packages:
 
