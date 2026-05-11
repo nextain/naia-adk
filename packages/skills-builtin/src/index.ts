@@ -39,6 +39,26 @@
 // Phase 4.0 Day 0.5 — stub exports (D42 Multi-repo parallel gate)
 export const PHASE_4_0_STUB = "skills-builtin pending Day 3-7" as const;
 
-// Stub: real exports will be added in Day 3-7 migration.
-// Until then, naia-os wire (Phase 4.1) imports this constant to verify
-// the package resolution chain works (file: dep → tsconfig refs → typecheck).
+// First real descriptor (landed via naia-os#272 reconcile): weather is the
+// simplest of the 10 skills — pure external API call (wttr.in), no naia-memory
+// dep, no audio. Other descriptors follow the same shape and will land during
+// Day 3-7.
+import type { SkillDescriptor } from "@naia-adk/skill-spec";
+
+export const weatherDescriptor: SkillDescriptor = {
+	name: "weather",
+	description: "Get current weather for a given location via wttr.in (external API).",
+	version: "0.1.0",
+	tier: "T0",
+	inputSchema: {
+		type: "object",
+		properties: {
+			location: {
+				type: "string",
+				description: "City name or coordinates (e.g. 'Seoul', 'Tokyo', '37.5,127.0').",
+			},
+		},
+		required: ["location"],
+	},
+	tags: ["weather", "external-api", "tier-0"],
+};
