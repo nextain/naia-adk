@@ -88,7 +88,9 @@ describe("@naia-adk/skills-builtin catalog", () => {
 		expect(uniq.size, `duplicates: ${[...names].sort()}`).toBe(names.length);
 	});
 
-	it("tier distribution matches plan (7 T0, 11 T1, 3 T2)", () => {
+	it("tier distribution matches runtime (7 T0, 12 T1, 2 T2)", () => {
+		// T2 = approvals + botmadang. agents.ts has runtime tier=1 so descriptor
+		// is T1 (matches runtime). Raising agents to T2 is a separate decision.
 		const byTier = new Map<string, SkillDescriptor[]>();
 		for (const d of ALL_DESCRIPTORS) {
 			const list = byTier.get(d.tier) ?? [];
@@ -96,8 +98,8 @@ describe("@naia-adk/skills-builtin catalog", () => {
 			byTier.set(d.tier, list);
 		}
 		expect(byTier.get("T0")?.length, "T0 (free)").toBe(7);
-		expect(byTier.get("T1")?.length, "T1 (notify)").toBe(11);
-		expect(byTier.get("T2")?.length, "T2 (approval)").toBe(3);
+		expect(byTier.get("T1")?.length, "T1 (notify)").toBe(12);
+		expect(byTier.get("T2")?.length, "T2 (approval)").toBe(2);
 		expect(byTier.get("T3")?.length, "T3 (blocked)").toBeUndefined();
 	});
 
@@ -110,11 +112,20 @@ describe("@naia-adk/skills-builtin catalog", () => {
 	});
 
 	it("tier-2 descriptors all have approval-worthy actions in description", () => {
-		for (const d of [agentsDescriptor, approvalsDescriptor, botmadangDescriptor]) {
+		for (const d of [approvalsDescriptor, botmadangDescriptor]) {
 			// soft check: tier-2 should mention manage/create/delete/post or similar mutation verbs
 			expect(d.description, `${d.name}: tier-2 mutation hint`).toMatch(
 				/manage|create|delete|update|post|register|set/i,
 			);
+		}
+	});
+
+	it("naia-discord descriptor preserves all six LLM-facing params (data-loss check)", () => {
+		// Adversarial review #273 P0-1: previous draft lost userId + accountId.
+		// Locked here so a future descriptor edit drops these → catalog test breaks.
+		const props = naiaDiscordDescriptor.inputSchema.properties as Record<string, unknown>;
+		for (const key of ["action", "message", "to", "channelId", "userId", "accountId", "limit"]) {
+			expect(props, `naia_discord missing param: ${key}`).toHaveProperty(key);
 		}
 	});
 });

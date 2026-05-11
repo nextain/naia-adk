@@ -229,7 +229,7 @@ export const skillManagerDescriptor: SkillDescriptor = {
 			},
 			enabled: {
 				type: "boolean",
-				description: "Enabled state (for action: enable/disable).",
+				description: "Enable/disable flag (for action: update_config).",
 			},
 		},
 		required: ["action"],
@@ -484,7 +484,18 @@ export const naiaDiscordDescriptor: SkillDescriptor = {
 				type: "string",
 				description: "Shortcut: target channel ID (converted to to=channel:<id>)",
 			},
-			limit: { type: "number", description: "History limit (for action='history', optional)" },
+			userId: {
+				type: "string",
+				description: "Shortcut: target user ID (converted to to=user:<id>) — for DM send",
+			},
+			accountId: {
+				type: "string",
+				description: "Discord account ID to send from (when multiple accounts are wired). If omitted, uses default account.",
+			},
+			limit: {
+				type: "number",
+				description: "Number of messages to retrieve for history action (default: 20, max: 100)",
+			},
 		},
 		required: ["action"],
 	},
@@ -541,11 +552,15 @@ export const notifySlackDescriptor: SkillDescriptor = {
 
 // ── Tier 2 (approval required) ──────────────────────────────────────────────
 
+// NOTE: tier="T1" here matches the runtime tier (agents.ts has `tier: 1`).
+// The Gateway agent CRUD operations (create/delete/files_set) are arguably
+// approval-worthy (T2); raising the tier is a deliberate separate decision —
+// see follow-up to reclassify agents/devices to T2 after review.
 export const agentsDescriptor: SkillDescriptor = {
 	name: "agents",
 	description: "Manage Gateway agents. Actions: list, create, update, delete, files_list, files_get, files_set.",
 	version: "0.1.0",
-	tier: "T2",
+	tier: "T1",
 	inputSchema: {
 		type: "object",
 		properties: {
