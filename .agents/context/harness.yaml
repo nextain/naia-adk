@@ -130,8 +130,21 @@ existing_hooks:
     H1: "PASS — no-op if progress directory missing or empty. False positives impossible (only injects, never blocks)."
     H2: "PASS — anti-compact mechanism: injects session state on every prompt so context compression cannot erase active issue/phase."
     H3: "PASS — UserPromptSubmit is the correct event (fires before AI processes the prompt)."
-    H4: "PASS — output is advisory context, not a constraint. Also warns if design-doc-unlock file is active."
-    verified_date: "2026-03-22"
+    H4: "PASS — output is advisory context, not a constraint. Warns if design-doc-unlock file is active. Nudges P0 anchor when bound via P1."
+    verified_date: "2026-04-26"
+    resolution_order:
+      - "P0: progress file with `session_id` field == current session_id (most authoritative — survives session-map corruption)"
+      - "P1: .session-map.json[session_id] → progress file path"
+      - "(no auto-bind: if neither matches, emit SELECTION PROMPT — never guess)"
+    active_definition: "mtime within 24h AND current_phase != 'close'"
+    opt_out:
+      env: "CLAUDE_HARNESS in {off, 0, false, no}"
+      file: "<cwd>/.claude/no-harness (presence = opt-out, any content)"
+    explicit_control: ".claude/commands/harness.md → /harness <status|off|on|bind|unbind>"
+    notes:
+      - "2026-04-26: P2-singleton auto-binding REMOVED. In multi-session workflows, the previous behavior silently bound new sessions to whatever single active progress file existed, causing cross-session context drift."
+      - "2026-04-26: session-map writes are now atomic (tmp + rename) to prevent race-condition corruption when multiple sessions update concurrently."
+      - "2026-04-26: AI receives an explicit nudge to write `session_id` into the progress file when bound via P1, strengthening the P0 anchor for resilience."
 
   deploy_guard:
     file: ".claude/hooks/deploy-guard.js"
