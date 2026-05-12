@@ -1,0 +1,39 @@
+{
+	"name": "@naia-adk/openclaw-compat",
+	"version": "0.1.0",
+	"description": "OpenClaw → naia skill catalog migration tool. Parses OpenClaw SKILL.md frontmatter (name/description/allowed-tools) and emits @naia-adk/skill-spec SkillDescriptor objects. Includes a CLI for one-shot migration.",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			}
+		},
+		"./cli": {
+			"import": {
+				"types": "./dist/cli.d.ts",
+				"default": "./dist/cli.js"
+			}
+		}
+	},
+	"bin": {
+		"naia-openclaw-migrate": "./dist/cli.js"
+	},
+	"files": ["dist"],
+	"scripts": {
+		"build": "tsc -b",
+		"test": "vitest run",
+		"clean": "rm -rf dist"
+	},
+	"dependencies": {
+		"@naia-adk/skill-spec": "workspace:*"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"typescript": "^5.9.3",
+		"vitest": "^3.2.4"
+	}
+}
