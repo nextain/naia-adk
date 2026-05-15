@@ -2,7 +2,7 @@
 
 # Naia ADK
 
-**Workspace scaffold + dashboard for AI coding agents.**
+**Workspace scaffold + governance baseline for AI-assisted work.**
 
 An open-source framework that provides a structured workspace scaffold for AI coding tools (opencode, Claude Code, Codex, Naia OS) and a built-in dashboard for managing it.
 
@@ -11,6 +11,12 @@ An open-source framework that provides a structured workspace scaffold for AI co
 ## What is Naia ADK?
 
 Naia ADK is a **workspace scaffold** — a pre-configured directory structure, skills, context files, and data tiers that AI coding agents use as their working environment. It also includes a **dashboard** for monitoring and configuring the workspace itself.
+
+It is also the **minimum governance baseline** for solo AI collaboration:
+
+- It separates `read`, `write`, `execute`, and `publish` as different concerns.
+- It gives AI tools a shared vocabulary for disclosure levels and approval-gated actions.
+- It provides a common place to encode context discipline before workspaces scale into teams or companies.
 
 ```
 naia-adk = Workspace Scaffold + Dashboard
@@ -75,14 +81,25 @@ naia-adk (core scaffold)
     └── Tauri IPC            ← Naia OS native
 ```
 
+### Minimum Governance Baseline
+
+Even a single-user workspace needs governance once AI and automation are involved.
+
+- **Disclosure levels** — `public`, `controlled`, `internal`, `confidential`
+- **Action vocabulary** — `read`, `write`, `execute`, `publish`, `approve`, `administer`
+- **Approval-gated actions** — production mutation, secret handling, and public-facing claims are separate from normal local edits
+- **Context discipline** — session-local context should not be promoted into persistent/shared context without intent
+
+`naia-adk` is the personal base. Company-specific org charts, tenant rules, and approval chains belong in higher layers.
+
 ### The Fork Chain
 
 ```
-naia-adk                  ← Base framework (public, Apache 2.0)
-  ├─ naia-business-adk   ← Business extension (paid): payroll, HR, compliance
-  │    └── {org}-adk     ← Organization fork: company data + submodules
-  │          └── {user}-adk  ← Personal fork: personal data + projects
-  └── {user}-adk         ← Direct fork: for individual use
+naia-adk                  ← Personal base (public, Apache 2.0)
+  ├─ naia-business-adk   ← Business upstream (private)
+  │    └── {org}-adk     ← Company instance: org data + projects + policy
+  │          └── {user}-adk  ← Company-linked personal instance
+  └── {user}-adk         ← Direct personal instance
 ```
 
 Example — Nextain's chain:
@@ -91,16 +108,16 @@ Example — Nextain's chain:
 naia-adk → naia-business-adk → nextain-adk → alpha-adk
 ```
 
-Fork from any layer. Individuals can fork `naia-adk` directly. Organizations go through the business extension.
+Fork from any layer. Individuals can fork `naia-adk` directly. Organizations go through `naia-business-adk`, then instantiate company and member workspaces from there.
 
 ### Business Extension
 
-**[Naia Business ADK](https://nextain.io/adk)** — paid extension for organizations:
+**[Naia Business ADK](https://nextain.io/adk)** — organizational extension of `naia-adk`:
 
-- Pre-built business skills (payroll, accounting, HR document generation)
-- Multi-tenant team management
-- Priority support and SLA
-- Compliance-ready templates (GDPR, PIPA)
+- Extends the baseline with **assets / process / permissions** governance
+- Adds team ownership, delegated approval, and business workflow expectations
+- May include organizational skills and templates, but those are outputs of the governance layer rather than the product definition
+- Supports private company instances and member instances
 
 [Contact us](https://nextain.io/contact) for licensing.
 
@@ -140,9 +157,9 @@ Built-in skills for AI-assisted operations:
 | `webapp-testing` | Playwright E2E testing for local web apps |
 | `doc-coauthoring` | Structured document co-authoring (3-step) |
 
-### Business Extension Skills
+### Organizational Extension Examples
 
-Additional skills available in [Naia Business ADK](#business-extension):
+Examples that may live in [Naia Business ADK](#business-extension) or company instances:
 
 | Skill | Description |
 |-------|-------------|
@@ -223,7 +240,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
 
 ### For Organizations
 
-1. **Get Business Pack** — [Contact us](https://nextain.io/contact) for `naia-business-adk` access
+1. **Get Naia Business ADK** — [Contact us](https://nextain.io/contact) for `naia-business-adk` access
 2. **Private fork** — Fork `naia-business-adk` to your org as private
 3. **Clone** — `git clone https://github.com/YOUR-ORG/your-org-adk.git && cd your-org-adk`
 4. **Add upstream** — `git remote add upstream https://github.com/nextain/naia-business-adk.git`
@@ -236,14 +253,16 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
 
 If you use [Naia OS](https://github.com/nextain/naia-os), point its workspace path to your ADK directory. Skills and data are served via MCP/WebSocket.
 
-## Security Tiers
+## Disclosure Levels
 
-| Tier | Level | Example |
-|------|-------|---------|
-| T1 | Public | Open-source code, public docs |
-| T2 | Company | Internal docs, shared resources |
-| T3 | Confidential | Accounting, contracts, personal data |
-| T4 | Secret | API keys, credentials (`.env`, never committed) |
+| Level | Meaning | Example |
+|------|---------|---------|
+| `public` | Safe for public website, public README, public repo context | Open-source code, public docs |
+| `controlled` | Shareable externally with review, but not fully public by default | Approved brand assets, vetted partner material |
+| `internal` | Company or workspace internal | Shared docs, internal resources |
+| `confidential` | Sensitive, customer-bound, financial, credential, or production-critical | Contracts, credentials, personal data |
+
+Credentials and secret material usually live outside git, but they still belong to the `confidential` disclosure level.
 
 ## Development Process
 
