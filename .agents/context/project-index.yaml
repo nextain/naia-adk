@@ -249,6 +249,23 @@ contextFiles:
       korean: .users/context/contributing.md
       english: .users/context/en/contributing.md
 
+# opt-in localmodel backends (2026-05-15)
+# naia-adk 의 localmodel 설정에서 선택 가능한 외부 음성/모달 backend.
+# naia-agent 가 호출. 항상 X — 한국어 음성/노래 vertical 필요 시 opt-in.
+# RAG / context 관리 / 장기기억 / 도메인 지식 = naia-agent / naia-memory (backend X).
+optInLocalmodels:
+  - name: naia-minicpm-ko-serve
+    repo: nextain/naia-minicpm-ko-serve
+    visibility: private (nextain org)
+    provides: 한국어 full-duplex 음성 대화 backend (MiniCPM-o-4.5 ko fine-tune) + 품질 벤치마크
+    selectedVia: localmodel 설정 (opt-in)
+    boundary: 모델 serving + system prompt + 벤치마크만. RAG/context/기억은 naia-agent.
+  - name: naia-sing
+    repo: nextain/naia-sing
+    visibility: private (nextain org)
+    provides: 노래(SVS) backend — ref voice + 곡 → 사용자 음색 가창
+    selectedVia: localmodel 설정 (opt-in)
+
 # 진입점 우선순위
 entrypointPriority:
   - CLAUDE.md    # = AGENTS.md = GEMINI.md (always identical, pick any)
