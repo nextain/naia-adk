@@ -65,6 +65,10 @@
           {
             "type": "command",
             "command": "node .claude/hooks/cascade-check.js"
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/agents-context-mirror.js"
           }
         ]
       }
