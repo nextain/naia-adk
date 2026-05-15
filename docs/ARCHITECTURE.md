@@ -1,62 +1,75 @@
 # Naia Ecosystem Architecture
 
-> naia-adk is the foundation. Everything else is an example of how it's used.
+> naia-adk is the personal base. Higher layers extend it for organizational governance and concrete company/member instances.
 
 ## Overview
 
 ```
             naia-adk (OSS — this repo, public)
             ┌─────────────────────────────┐
-            │  Base Skills (9)            │
-            │  review-pass, email         │
-            │  sms, read-doc              │
-            │  doc-coauthoring            │
-            │  document-generation        │
-            │  channel-management         │
-            │  web-monitoring             │
-            │  service-management         │
-            │                             │
-            │  + Runtime Engine (TS)      │
-            │  + Skill Spec & SDK         │
-            │  + Templates & Docs         │
+            │  Personal Base              │
+            │  - workspace scaffold       │
+            │  - tool-agnostic format     │
+            │  - base skills              │
+            │  - solo governance baseline │
             └────────────┬────────────────┘
-                         │ naia install business
+                         │ business upstream
                          ▼
-              naia-adk-business-pack (private)
+              naia-business-adk (private)
               ┌─────────────────────────────┐
-              │  + Business Skills (11)     │
-              │  payroll, contract          │
-              │  expense, accounting        │
-              │  CRM, patent, PR            │
-              │  + CLI, Docgen, PDF         │
+              │  Organizational Extension   │
+              │  - assets / process /       │
+              │    permissions governance   │
+              │  - team ownership           │
+              │  - delegated approval       │
+              │  - business workflows       │
               └────────────┬────────────────┘
-                           │ install into workspace
+                           │ instantiate
               ┌────────────┼────────────┐
               ▼            ▼            ▼
         nextain-adk   onmam-adk    {company}-adk
-        (CEO Luke)    (Onmam CTO)  (any company)
+        (company)     (company)    (company)
         .agents/      .agents/      .agents/
         data-company/ data-company/ data-company/
         data-business/ data-business/ data-business/
         data-private/  data-private/  data-private/
 ```
 
-## Security Tiers
+## Disclosure Levels
 
-| Tier | Name | Strategy | Examples |
-|------|------|----------|---------|
-| T1 | Public | naia-adk public repo | skills, packages, templates, docs |
-| T2 | Internal | private subrepo | `.agents/`, `data-company/`, `documents/` |
-| T3 | Confidential | private subrepo (git-crypt optional) | `data-business/`, `data-private/` |
-| T4 | Secret | `.gitignore` (outside git) | `.env`, certificates, API keys |
+| Level | Meaning | Strategy | Examples |
+|------|---------|----------|---------|
+| `public` | Safe for public repos and websites | open repo / public docs | skills, packages, templates, docs |
+| `controlled` | Shareable externally with review | approved external sharing only | vetted partner material, approved brand assets |
+| `internal` | Workspace or company internal | private repo / limited audience | `.agents/`, `data-company/`, internal documents |
+| `confidential` | Sensitive operational or customer-bound material | private repo or outside git, need-to-know handling | `data-business/`, `data-private/`, `.env`, certificates, API keys |
 
-## Model: Base + Extension Pack + Config
+Levels also imply different expectations for AI behavior:
+
+- `public`: may be summarized and published
+- `controlled`: may be shared externally only with intent and review
+- `internal`: may be read and worked on, but not publicly published by default
+- `confidential`: stronger need-to-know handling, caution for memory promotion, never treated as normal publishable context
+
+## Model: Personal Base + Organizational Extension + Instances
 
 | Layer | What | For Who |
 |-------|------|---------|
-| **naia-adk** | Base runtime + individual skills (9) | All individuals — developers, creators, freelancers |
-| **naia-adk-business-pack** | + Business skills (11) + CLI + Docgen | Super-individuals running a company / small teams |
-| **{company}-adk** | Workspace with company data | Specific company's AI operations environment |
+| **naia-adk** | Personal base: scaffold + format + minimum solo governance | Individuals using AI-assisted workspaces |
+| **naia-business-adk** | Organizational extension: assets / process / permissions governance | Teams and companies |
+| **{company}-adk** | Company instance with real products, teams, and policy | Specific organization's AI operations |
+| **{member}-adk** | Company-linked personal instance | Members working within company context |
+
+## Solo Governance Baseline
+
+The base layer should define a minimum collaboration model even for one person:
+
+- `read`, `write`, `execute`, and `publish` are not the same action
+- public, internal, confidential, and secret are not just storage tiers but disclosure semantics
+- production mutation, secret handling, and public claims require stronger gates than local edits
+- session-local context should not be promoted into persistent/shared context without intent
+
+This belongs in `naia-adk` because solo AI collaboration can fail before any company layer exists.
 
 ## naia-adk Base Skills (9 — Individual)
 
@@ -72,7 +85,7 @@
 | `web-monitoring` | SEO, uptime, analytics |
 | `service-management` | Service monitoring, incident response |
 
-## naia-adk-business-pack Skills (11 — Business)
+## naia-business-adk Skills (11 — Business)
 
 | Skill | Description |
 |-------|-------------|
@@ -88,9 +101,23 @@
 | `press-release` | 보도자료 작성·발송 |
 | `weekly-report` | 주간 업무 결과 |
 
+## Organizational Governance Extension
+
+`naia-business-adk` should not be described as a premium skill bundle only.
+
+It is the organizational extension that adds:
+
+- team ownership
+- delegated approval
+- need-to-know handling for customer/legal/finance data
+- audit-ready workflow expectations
+- business workflow classes and policy
+
+Skills are one output of that extension, not the whole product.
+
 ## {company}-adk (Company Workspace)
 
-`naia init {name}` creates:
+At the organizational layer, `naia-business-adk` scaffolding creates:
 
 ```
 {name}-adk/
@@ -116,7 +143,7 @@
 │   └── memo/                  ← Personal memos
 ├── projects/                  ← Project repos (submodules)
 │   └── refs/                  ← Reference repos (read-only)
-├── skills/                    ← naia-adk + business pack skills
+├── skills/                    ← base + organization/company-specific extensions
 ├── packages/                  ← Runtime packages
 ├── scripts/                   ← PDF/sign engine, tools
 ├── templates/                 ← Document templates
@@ -127,14 +154,14 @@
 
 ## naia-os Integration
 
-naia-adk serves as the **skill backend** for the naia-os desktop app:
+The active ADK instance serves as the **skill backend** for the naia-os desktop app:
 
 ```
 naia-os (Desktop App, Tauri 2)
-  └─ agent ──WebSocket/MCP──> naia-adk Runtime
-                                  ├─ Business skill execution
-                                  ├─ Document generation (PDF)
-                                  ├─ Approval workflows
+  └─ agent ──WebSocket/MCP──> {active-adk} Runtime
+                                  ├─ Base skill execution
+                                  ├─ Document generation (when provided by the active instance)
+                                  ├─ Approval / org workflows (only in business/company layers)
                                   └─ MCP Server → expose skills to naia-os
 ```
 
@@ -145,10 +172,10 @@ Integration paths (phased):
 
 ## Real Examples
 
-### nextain-adk (= Luke's workspace)
+### nextain-adk (= company instance)
 
 ```
-D:\naia-adk                       ← this repo = nextain workspace
+nextain-adk/                     ← company workspace root
 ├── .agents/                      ← AAIF (context, skills, workflows)
 ├── .users/                       ← Korean mirror
 ├── .claude/                      ← Claude Code settings
@@ -174,7 +201,11 @@ D:\naia-adk                       ← this repo = nextain workspace
 └── docs/                         ← architecture, specs
 ```
 
-### onmam-adk (= Onmam team workspace)
+### alpha-adk (= company-linked personal instance)
+
+`alpha-adk` is not a generic personal fork. It is a member instance that inherits company context while preserving local working memory and experiments.
+
+### onmam-adk (= company instance)
 
 ```
 onmam-adk/
