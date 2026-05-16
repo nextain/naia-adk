@@ -1,7 +1,9 @@
 # Naia ADK
 
-AI Development Kit — an open-source framework for personal and business AI operations.
+AI Development Kit — personal AI development infrastructure for solo developers.
 Fork, configure, connect to your AI tools. [`nextain/naia-adk`](https://github.com/nextain/naia-adk)
+
+**Scope**: `naia-adk` = personal / solo. Team collaboration → [`naia-business-adk`](https://nextain.io/adk).
 
 ## Fork Chain
 
@@ -33,7 +35,7 @@ Fork on GitHub, then periodically sync upstream: `git fetch upstream && git merg
 | Directory | Tier | Purpose |
 |-----------|------|---------|
 | `data-company/` | T2 | Company general data (gitignored, per-fork) |
-| `data-teams/` | T3 | Team-specific documents (gitignored, per-fork) |
+| `data-business/` | T3 | Company sensitive data (gitignored, per-fork) |
 | `data-private/` | T3 | Personal data (gitignored, per-fork) |
 | `projects/` | T2 | Project repos (gitignored, per-fork) |
 | `projects/refs/` | T2 | Reference repos (gitignored, per-fork) |
@@ -49,7 +51,7 @@ After forking, create a `FORK.md` in the fork root with:
 
 - Organization/user info
 - Project list (submodules in `projects/`)
-- Data submodules (`data-company/`, `data-business/`)
+- Data submodules (`data-company/`, `data-teams/`)
 - Default language for `.users/` mirror
 - Any fork-specific conventions
 

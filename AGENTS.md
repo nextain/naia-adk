@@ -1,7 +1,9 @@
 # Naia ADK
 
-AI Development Kit — an open-source framework for personal and business AI operations.
+AI Development Kit — personal AI development infrastructure for solo developers.
 Fork, configure, connect to your AI tools. [`nextain/naia-adk`](https://github.com/nextain/naia-adk)
+
+**Scope**: `naia-adk` = personal / solo. Team collaboration → [`naia-business-adk`](https://nextain.io/adk).
 
 ## Fork Chain
 
