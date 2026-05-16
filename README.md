@@ -45,6 +45,8 @@ naia-adk = Workspace Scaffold + Dashboard
 
 **Workflow clients** (opencode, Claude Code, Codex, Naia OS) use naia-adk as their workspace. The dashboard is for *managing* the workspace — not for doing work.
 
+> **Scope**: `naia-adk` is for **solo / personal** use. Team collaboration, RBAC, and shared knowledge belong in [`naia-business-adk`](https://nextain.io/adk).
+
 ### Interfaces, not dependencies
 
 naia-adk is a **tool-agnostic workspace format**. It does not depend on any specific AI tool, and AI tools do not have to depend on naia-adk's runtime either:
@@ -80,6 +82,34 @@ naia-adk (core scaffold)
     ├── Direct filesystem    ← CLI tools
     └── Tauri IPC            ← Naia OS native
 ```
+
+### Context Knowledge Management (Planned)
+
+The current file-based context system (`.agents/context/*.yaml`) requires loading entire files to find any piece of information — wasting tokens and injecting unrelated noise into LLM context.
+
+The planned evolution:
+
+```
+Current:  Grep files → load entire file (~4000 tokens) → 50x waste
+Planned:  query atom → get exact knowledge unit (~80 tokens)
+```
+
+**Knowledge atoms** — the smallest meaningful knowledge unit, tagged and linked:
+
+```json
+{
+  "id": "naia-os:gateway_health_cmd",
+  "title": "gateway_health Tauri Command",
+  "tags": ["tauri", "rust", "health-check"],
+  "related": ["naia-os:naia_agent_lifecycle"],
+  "content": "...",
+  "updated": "2026-05-17"
+}
+```
+
+**AI-agnostic access** via CLI or MCP — works with Claude Code, Codex, naia-agent, or any tool with shell access. No runtime lock-in.
+
+`naia-business-adk` extends this with shared team knowledge, RBAC, and conflict resolution.
 
 ### Minimum Governance Baseline
 

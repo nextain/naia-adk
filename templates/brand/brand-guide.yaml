@@ -1,0 +1,78 @@
+# Nextain Brand Guide
+# Source: naia.nextain.io (globals.css) — Light theme for documents
+
+company:
+  name_ko: 주식회사 넥스테인
+  name_en: Nextain Inc.
+  slogan: Next AI Networks
+  tagline: The AI-Native Development Platform
+  website: https://naia.nextain.io
+  email: luke.yang@nextain.io
+  address: 경기도 화성시 효행구 매송면 매송고색로 422번길 77, 나동 107호
+
+palette:
+  # Brand Gradient: Blue → Cyan → Emerald
+  gradient_from: "#2563EB"   # blue-600 / Nextain Blue
+  gradient_via: "#06B6D4"    # cyan-500 / Flow Cyan
+  gradient_to: "#10B981"     # emerald-500
+
+  # Light theme (document default)
+  primary: "#2563EB"         # hsl(221 83% 53%) / Nextain Blue
+  primary_light: "#3B82F6"   # blue-500
+  primary_dark: "#1D4ED8"    # blue-700
+  secondary: "#DBEAFE"       # hsl(214 32% 91%)
+  background: "#F8FAFC"      # hsl(210 40% 98%) / Cloud White
+  foreground: "#171717"      # hsl(0 0% 9%) / Terminal Black
+  card: "#FFFFFF"
+  muted: "#F1F5F9"           # hsl(210 40% 96%) / Slate-100
+  muted_foreground: "#64748B" # hsl(215 16% 47%) / Slate-500
+  accent: "#06B6D4"          # Flow Cyan
+  border: "#E2E8F0"          # Slate-200
+
+  # Document-specific
+  table_header_bg: "#2563EB"
+  table_header_text: "#FFFFFF"
+  table_alt_row: "#F1F5F9"
+  table_border: "#DBEAFE"
+  cover_bg: "#FFFFFF"
+  sidebar_accent: "#06B6D4"
+
+fonts:
+  body: "Pretendard"
+  body_fallback: "'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif"
+  heading: "Pretendard"
+  heading_fallback: "'Malgun Gothic', sans-serif"
+  mono: "'JetBrains Mono', 'Consolas', monospace"
+
+logo:
+  file: logo-nextain.png
+  file_small: logo-nextain-48.png
+  width_cm: 3.5
+  height_cm: 3.5
+
+document:
+  page_size: A4
+  margin_top_cm: 2.0
+  margin_bottom_cm: 1.5
+  margin_left_cm: 2.5
+  margin_right_cm: 2.0
+  body_size_pt: 10.5
+  small_size_pt: 9
+  heading1_size_pt: 18
+  heading2_size_pt: 14
+  heading3_size_pt: 12
+  line_spacing: 1.6
+  line_spacing Tight: 1.4
+
+  # Standard colors for ODT generation
+  odt_colors:
+    primary_hex: "2563EB"
+    accent_hex: "06B6D4"
+    gradient_end_hex: "10B981"
+    text_hex: "171717"
+    muted_hex: "64748B"
+    white_hex: "FFFFFF"
+    bg_hex: "F8FAFC"
+    table_header_hex: "2563EB"
+    table_alt_hex: "F1F5F9"
+    border_hex: "DBEAFE"
