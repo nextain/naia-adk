@@ -1,375 +1,493 @@
-<!-- Copyright 2026 Nextain Inc. All rights reserved. -->
+<!-- AUTO-GENERATED from .agents/context/agents-rules.json — DO NOT EDIT BY HAND.
+     SoT = json. 수정은 json 에서, 이 파일은 hook 이 자동 동기화. -->
 
-# Naia OS 규칙 가이드
+# agents-rules (mirror)
 
-`.agents/context/agents-rules.json`에 대한 사람이 읽을 수 있는 가이드입니다.
+> 기계 SoT: `.agents/context/agents-rules.json` — 이 md 는 자동 파생.
+- **_copyright**: Copyright 2026 Nextain Inc. All rights reserved.
 
-## 목적
+## project_identity
 
-`agents-rules.json` 파일은 AI 에이전트 규칙의 **단일 진실 소스(SoT)**입니다.
-이 문서는 개발자를 위해 규칙을 자세히 설명합니다.
+- **name**: Naia OS
+- **nature**: AI desktop companion — open-source project for AI sovereignty
+- **philosophy**: Users choose their AI, privacy first, local execution by default
+- **org**: nextain
+- **repo**: nextain/member-luke
 
----
+## local_projects
 
-## 프로젝트 개요
 
-### Naia OS
+### naia-os
 
-Luke의 개발 워크스페이스 (`nextain/member-luke`, private). 주력 오픈소스 프로젝트인 Naia OS를 중심으로 관련 서비스를 관리합니다.
+- **purpose**: Naia OS desktop app (Tauri 2 + React + Three.js + Node.js agent)
+- **repo**: nextain/naia-os
+- **visibility**: public
+- **entry_point**: naia-os/AGENTS.md
 
-**조직**: nextain
+### issue-desk
 
----
+- **purpose**: IssueDesk — standalone Vite+React panel for naia-os. GitHub issue/PR triage, community assistant, notification triage.
+- **repo**: nextain/issue-desk
+- **visibility**: private
+- **entry_point**: issue-desk/panel.json
+- **notes**: Standalone git repo, not a submodule. Design doc: naia-os/docs/design/issue-desk.ko.md
 
-## 로컬 프로젝트
+### about.nextain.io
 
-| 프로젝트 | 용도 | 레포 | 공개 |
-|---------|------|------|:---:|
-| `naia-os` | Naia OS 데스크톱 앱 (Tauri 2 + React + Three.js + Node.js agent) | `nextain/naia-os` | public |
-| `issue-desk` | IssueDesk — naia-os용 standalone Vite+React 패널. 이슈/PR 트리아지, 커뮤니티 어시스턴트, 알림 트리아지 | `nextain/issue-desk` | private |
-| `about.nextain.io` | Nextain 회사 소개 사이트 (Next.js 14 + next-intl) | `nextain/about.nextain.io` | public |
-| `naia.nextain.io` | Naia 웹앱 / Lab 포털 (Next.js + BFF) | `nextain/naia.nextain.io` | private |
-| `aiedu.nextain.io` | AI 교육 플랫폼 — 커리큘럼 기반 AI 선생님 (Next.js + Monaco + Pyodide + any-llm) | `nextain/aiedu.nextain.io` | private |
-| `admin.nextain.io` | Nextain B2B 어드민 제어판 (라이선스 키 관리, 토큰 추적, 클라이언트 관리) | `nextain/admin.nextain.io` | private |
+- **purpose**: Nextain corporate website (Next.js 14 + next-intl)
+- **repo**: nextain/about.nextain.io
+- **visibility**: public
+- **entry_point**: about.nextain.io/README.md
 
----
+### naia.nextain.io
 
-## 인프라 (공유 게이트웨이)
+- **purpose**: Naia web app / Lab portal (Next.js + BFF for gateway)
+- **repo**: nextain/naia.nextain.io
+- **visibility**: private
+- **entry_point**: naia.nextain.io/AGENTS.md
 
-### any-llm 게이트웨이
+### aiedu.nextain.io
 
-naia, aiedu, admin 모두 동일한 any-llm 게이트웨이를 사용합니다.
+- **purpose**: AI education platform — curriculum-driven AI teacher (Next.js + Monaco + Pyodide + any-llm)
+- **repo**: nextain/aiedu.nextain.io
+- **visibility**: private
+- **entry_point**: aiedu.nextain.io/AGENTS.md
+- **notes**: B2B commercial product. Dual-mirror context. Curriculum as plugin. Depends on any-llm B2B extension.
 
-| 환경 | URL | Key |
-|------|-----|-----|
-| **prod** | `https://naia-gateway-181404717065.asia-northeast3.run.app` | `GATEWAY_MASTER_KEY` 환경변수 |
-| **dev** | `https://naia-gateway-dev-181404717065.asia-northeast3.run.app` | `qliT3Q4SC128rtR5o2dwud0vP25tu4usuvyFAP1oGAE` |
+### admin.nextain.io
 
-**DB**: `cafelua-db` (Cloud SQL PostgreSQL 15, asia-northeast3-a)
-- prod: `any_llm_gateway`
-- dev: `any_llm_gateway_dev` (동일 인스턴스, 별도 DB)
+- **purpose**: Nextain B2B admin control plane (license key mgmt, token tracking, client mgmt)
+- **repo**: nextain/admin.nextain.io
+- **visibility**: private
+- **entry_point**: admin.nextain.io/AGENTS.md
+- **notes**: Internal tool. Manages aiedu.nextain.io and future B2B products.
 
-**규칙**
-- `.env.local` → **dev** 게이트웨이 사용
-- `.env.production.local` → **prod** 게이트웨이 사용
-- `.env.local`에 prod 크레덴셜 절대 금지 → `prod-gateway-guard.js` 훅이 차단
-- prod→dev 동기화: `project-any-llm/scripts/sync-prod-to-dev.sh` (수동, "yes" 확인 필요, dev 데이터 전체 덮어씀)
+## infrastructure
 
-### GitHub Actions 셀프호스트 러너
 
-| 항목 | 값 |
-|------|----|
-| **러너명** | `luke-bazzite` |
-| **호스트** | 이 Bazzite PC (`/opt/actions-runner`) |
-| **적용 범위** | nextain org **프라이빗 레포 전용** |
-| **레이블** | `self-hosted, linux, x64, bazzite` |
-| **systemd 서비스** | `actions.runner.nextain.luke-bazzite.service` |
+### gateway
 
-**워크플로우 사용법**: `runs-on: [self-hosted, linux, x64]`
 
-**주의사항**
-- 퍼블릭 레포에 셀프호스트 러너 절대 금지 (fork PR 보안 위협)
-- 재설치 시 `/var/home`은 SELinux exec 차단 → 반드시 `/opt/` 하위에 설치
+#### prod
 
----
+- **url**: https://naia-gateway-181404717065.asia-northeast3.run.app
+- **key_env**: GATEWAY_MASTER_KEY
+- **db**: any_llm_gateway (cafelua-db, Cloud SQL PostgreSQL 15, asia-northeast3-a)
 
-## 서브모듈 구조
+#### dev
 
-| 서브모듈 | 용도 | 레포 | 공개 |
-|---------|------|------|:---:|
-| `docs-work-logs` | 개발자 작업 로그 | `nextain/docs-work-logs` | private |
-| `docs-nextain` | 내부 문서함 (온보딩, 회의록, 디자인) | `nextain/docs-nextain` | private |
-| `docs-business` | 사업 문서 (제안서, 전략, IR) | `nextain/docs-business` | private |
-| `cafelua.com` | Cafelua 개인 웹사이트 | `luke-n-alpha/cafelua-private` | private |
-| `project-any-llm` | Any-LLM SDK + FastAPI Gateway | `nextain/any-llm` | public |
+- **url**: https://naia-gateway-dev-181404717065.asia-northeast3.run.app
+- **key**: qliT3Q4SC128rtR5o2dwud0vP25tu4usuvyFAP1oGAE
+- **db**: any_llm_gateway_dev (same cafelua-db instance, separate DB)
+- **min_instances**: 0
+- **env_rule**: .env.local → dev gateway. .env.production.local → prod gateway. NEVER write prod credentials to .env.local.
+- **guard_hook**: .claude/hooks/prod-gateway-guard.js — blocks prod credentials in .env.local at Edit|Write time
+- **sync_script**: project-any-llm/scripts/sync-prod-to-dev.sh — manual only, requires 'yes' confirmation, OVERWRITES all dev data
 
-### 참조용 서브모듈 (Read-Only)
+### ci_runners
 
-| 서브모듈 | 용도 | 소스 |
-|---------|------|------|
-| `ref-cline` | Cline 업스트림 참조 | [cline/cline](https://github.com/cline/cline) |
-| `ref-opencode` | OpenCode 참조 | [anomalyco/opencode](https://github.com/anomalyco/opencode) |
-| `ref-nanoclaw` | NanoClaw 참조 | [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw) |
-| `ref-moltbot` | Moltbot 참조 | [moltbot/moltbot](https://github.com/moltbot/moltbot) |
-| `ref-project-airi` | AIRI 참조 | [moeru-ai/airi](https://github.com/moeru-ai/airi) |
-| `ref-jikime-adk` | Jikime ADK 참조 | [jikime/jikime-adk](https://github.com/jikime/jikime-adk) |
-| `ref-jikime-mem` | Jikime Memory 참조 | [jikime/jikime-mem](https://github.com/jikime/jikime-mem) |
 
-**중요**: 서브모듈에서 작업할 때는 해당 서브모듈의 진입점 파일을 먼저 읽어야 합니다.
+#### self_hosted
 
----
+- **name**: luke-bazzite
+- **host**: this Bazzite PC (/opt/actions-runner)
+- **scope**: nextain org — private repos only (public repos use free GitHub-hosted runners)
 
-## 수정 레벨
+##### labels
 
-### L1 - 독립 (자유롭게 수정 가능)
-- `docs-work-logs` (개인 폴더)
+- self-hosted
+- linux
+- x64
+- bazzite
+- **service**: actions.runner.nextain.luke-bazzite.service
+- **note**: DO NOT attach self-hosted runners to public repos — fork PR security risk
+- **install_note**: /var/home causes SELinux exec block; always install under /opt/
+- **workflow_usage**: runs-on: [self-hosted, linux, x64]
 
-### L2 - 조건부 (제약 있음)
-- `docs-nextain`
-- `docs-business`
-- `cafelua.com`
-- `project-any-llm`
+## submodules
 
----
 
-## 스킬
+### docs-work-logs
+
+- **purpose**: Developer work logs (per-person folders)
+- **repo**: nextain/docs-work-logs
+- **visibility**: private
+- **entry_point**: docs-work-logs/AGENTS.md
+
+### docs-nextain
+
+- **purpose**: Internal docs (onboarding, meetings, design)
+- **repo**: nextain/docs-nextain
+- **visibility**: private
+- **entry_point**: docs-nextain/AGENTS.md
+
+### docs-business
+
+- **purpose**: Business docs (proposals, strategy, IR)
+- **repo**: nextain/docs-business
+- **visibility**: private
+- **entry_point**: docs-business/README.md
+
+### cafelua.com
+
+- **purpose**: Cafelua personal website
+- **repo**: luke-n-alpha/cafelua-private
+- **visibility**: private
+- **entry_point**: cafelua.com/README.md
+
+### project-any-llm
+
+- **purpose**: Any-LLM SDK + FastAPI gateway (LLM proxy, credits, auth, usage tracking)
+- **repo**: nextain/any-llm
+- **visibility**: public
+- **entry_point**: project-any-llm/README.md
+
+## reference_submodules
+
+- **_description**: Reference repos for upstream tracking (read-only, periodic sync)
+
+### ref-cline
+
+- **purpose**: Cline upstream reference (VS Code AI extension)
+- **source**: https://github.com/cline/cline
+- **usage**: Architecture/pattern reference
+
+### ref-opencode
+
+- **purpose**: OpenCode reference (TUI-based AI coding agent)
+- **source**: https://github.com/anomalyco/opencode
+- **usage**: Architecture/pattern reference for CLI features
+
+### ref-nanoclaw
+
+- **purpose**: NanoClaw reference (lightweight AI agent framework)
+- **source**: https://github.com/qwibitai/nanoclaw
+- **usage**: Agent framework reference
+
+### ref-moltbot
+
+- **purpose**: Moltbot reference
+- **source**: https://github.com/moltbot/moltbot
+- **usage**: Bot framework reference
+
+### ref-project-airi
+
+- **purpose**: AIRI reference (AI character project)
+- **source**: https://github.com/moeru-ai/airi
+- **usage**: AI character/avatar reference
+
+### ref-jikime-adk
+
+- **purpose**: Jikime ADK reference (Agent Development Kit)
+- **source**: https://github.com/jikime/jikime-adk
+- **usage**: Agent development reference
+
+### ref-jikime-mem
+
+- **purpose**: Jikime Memory reference
+- **source**: https://github.com/jikime/jikime-mem
+- **usage**: Memory/RAG reference
+
+## architecture_rules
+
+
+### modification_levels
+
+- **L1_independent**: docs-work-logs (personal folders)
+- **L2_conditional**: docs-nextain, docs-business, cafelua.com, project-any-llm
+
+## skills
+
 
 ### read-doc
 
-> **문서 파일을 읽어야 할 때 반드시 사용**
+- **trigger**: MANDATORY — any time a file with extension .hwp, .hwpx, .pdf, .docx, .xlsx, .pptx needs to be read or analyzed
+- **command**: /read-doc <file-path>
+- **rule**: NEVER say 'I cannot read this file type'. Always use /read-doc first. The skill handles all extraction automatically.
+- **sidecar_note**: docs-business HWP/HWPX files have pre-extracted .txt sidecars — /read-doc checks these first automatically
 
-| 항목 | 내용 |
-|------|------|
-| **실행 조건** | `.hwp` `.hwpx` `.pdf` `.docx` `.xlsx` `.pptx` 파일을 읽거나 분석해야 할 때 |
-| **명령** | `/read-doc <파일경로>` |
-| **규칙** | **"파일을 읽을 수 없다"는 말 절대 금지** — 항상 `/read-doc`으로 읽을 수 있음 |
-| **사이드카** | `docs-business` HWP/HWPX 파일은 `.txt` 사이드카가 있으면 자동으로 먼저 사용 |
+#### use_cases
 
-**활용 예시**:
-- `docs-business` 제안서/사업계획서 분석
+- docs-business 제안서/사업계획서 분석
 - 발표 자료(PPTX) 내용 파악
 - 이력서(DOCX) 검토
 - 정부과제 제출서류 검토
 
 ### webapp-testing
 
-> **로컬 웹 앱 테스트 시 반드시 사용 — 사용자에게 수동 테스트 시키지 말 것**
+- **trigger**: MANDATORY — any E2E test, UI behavior verification, screenshot capture, or console log check for local web apps (naia.nextain.io, about.nextain.io, aiedu.nextain.io, etc.)
+- **command**: /webapp-testing
+- **rule**: NEVER ask the user to manually test. Always use this skill to verify directly. Uses Playwright Python scripts.
 
-| 항목 | 내용 |
-|------|------|
-| **실행 조건** | E2E 테스트, UI 동작 검증, 스크린샷 캡처, 콘솔 로그 확인 (로컬 웹 앱 대상) |
-| **명령** | `/webapp-testing` |
-| **규칙** | 사용자에게 직접 확인 요청 금지. Playwright Python 스크립트로 AI가 직접 검증 |
+#### use_cases
 
-**활용 예시**:
-- Next.js 앱 E2E 테스트 (naia.nextain.io, about.nextain.io, aiedu.nextain.io)
+- Next.js 앱 E2E 테스트
 - UI 동작 검증 (버튼 클릭, 폼 제출 등)
-- 스크린샷 캡처 및 콘솔 로그/에러 확인
+- 스크린샷 캡처
+- 콘솔 로그/에러 확인
 
 ### doc-coauthoring
 
-> **구조화된 문서 작성 요청 시 반드시 사용**
+- **trigger**: MANDATORY — any request to write a structured document: tech spec, proposal, RFC, design doc, PRD, decision record
+- **command**: /doc-coauthoring
+- **rule**: Invoke before writing the document. 3-stage workflow: context collection → structured writing → reader test.
 
-| 항목 | 내용 |
-|------|------|
-| **실행 조건** | 기술 스펙, 제안서, RFC, 설계 문서, PRD, 결정 기록 등 비코드 문서 작성 요청 시 |
-| **명령** | `/doc-coauthoring` |
-| **워크플로우** | 3단계: 컨텍스트 수집 → 구조화 작성 → 독자 테스트 |
+#### use_cases
 
-**활용 예시**:
-- 기술 스펙 / RFC 작성
-- 제안서 / IR 문서
+- 기술 스펙 작성
+- 제안서/IR 문서
+- RFC / 설계 결정 기록
 - GitHub Issue 기반 기능 설계 스펙
 
----
+## ai_workflow
 
-## AI 워크플로우 원칙
+- **knowledge_principle**: AI knowledge = Developer knowledge (1:1 parity)
+- **default_workflow**: issue-driven-development.yaml (feature-level work)
+- **lightweight_workflow**: development-cycle.yaml (non-feature changes: typos, config values, simple directives)
 
-### 지식 동등 원칙
-```
-AI 지식 = 개발자 지식 (1:1 동등)
-```
+### permission_model
 
-### 기본 워크플로우
-- **기능 단위 작업 (기본값)**: `issue-driven-development.yaml` — 이해 확인 → 범위 확인 → 조사 → plan 확인 → 구현 → 리뷰 → E2E → 동기화 → 커밋
-- **단순 변경 지시**: `development-cycle.yaml` — 기능 변경이 아닌 오타, 설정값 등
+- **code_files**: AI = implementer. Can read, modify, create, delete freely.
+- **design_docs**: AI = reviewer. CANNOT modify unless: (A) typo/grammar, (B) internal contradiction within the doc, (C) broken link/reference. ANY other change requires surfacing to user first.
 
-### 권한 모델
+#### design_doc_paths
 
-| 파일 유형 | AI 역할 | 허용 |
-|-----------|---------|------|
-| 코드 파일 | 구현자 | 읽기·수정·생성·삭제 자유 |
-| 설계 문서 | 리뷰어 | 오타/내부모순/깨진링크만. 나머지는 사용자에게 먼저 보고 |
+- docs/design/
+- design/
+- spec/
 
-**설계 문서 경로**: `docs/design/`, `design/`, `spec/` 디렉토리 내 `.md/.txt/.yaml/.json` 파일
+#### design_doc_extensions
 
-**설계-구현 괴리 발견 시 에스컬레이션:**
-1. 설계 문서 수정 금지
-2. 구현을 조용히 맞추는 것도 금지
-3. 사용자에게 보고: "설계는 X, 구현은 Y — 선택지: A) 설계 업데이트, B) 구현 수정, C) 의도적 차이로 수용"
-4. 사용자 결정 대기
+- .md
+- .txt
+- .yaml
+- .json
+- **note**: Any file matching these path prefixes + extensions is treated as a design doc. Hook enforces this at Edit|Write time.
+- **key_distinction**: Code review clean pass = no code issues. Design doc review clean pass = no NEW findings (typos/contradictions/broken links). Never: 'design should match implementation'.
 
-**리뷰 클린패스 정의:**
-- 코드 리뷰: 수정사항 없음
-- 설계 문서 리뷰: 새 발견사항 없음 (구현과 비교는 허용되지 않는 발견사항)
+### escalation_path
 
-### 필수 사전 점검
-1. `agents-rules.json` 먼저 읽기
-2. 서브모듈에서 작업 시 해당 진입점 파일 읽기
-3. 기능 단위 작업 시: issue-driven-development.yaml 게이트 준수 (이해 → 범위 → plan 확인 필수)
-4. 최소 변경 원칙 적용
-5. `.hwp/.hwpx/.pdf/.docx/.xlsx/.pptx` 파일 → `/read-doc` 스킬 먼저 실행
-6. **설계 문서** (`docs/design/`, `design/`, `spec/`) + 확장자 `.md/.txt/.yaml/.json`: 위 권한 모델 참조. 훅이 편집 시 경고 — 근거 유형을 사용자에게 먼저 보고할 것.
-7. **파괴적 git 명령**(`git checkout --`, `git reset --hard`, `git clean -f`) 실행 전: 무엇이 삭제되는지 명시하며 반드시 사용자 확인 먼저. 예외 없음.
 
-### 반복 리뷰 — /review-pass 스킬 사용
+#### design_gap_found_during_build
 
-코드 리뷰는 `/review-pass` 스킬로 실행 (4단계 멀티 AI 상호검증):
-- `stage=planning|development|test|integration`: 단계별 렌즈·리뷰어·수렴 기준 차등 적용
-- REQ-ID 추적: 기능 수준 작업에서 요구사항→코드→테스트 추적 (lightweight cycle 제외)
-- **수렴**: development/integration 2연속 clean, planning/test 1연속 clean
-- 적용 범위: Build→Review(development), E2E→Post-test(test+integration)
+- 1. Do NOT modify the design doc to match implementation
+- 2. Do NOT silently adapt implementation to paper over the gap
+- 3. Surface to user: state the gap (design says X, implementation does Y), present options (A: update design, B: fix implementation, C: accept as intentional deviation)
+- 4. Wait for user decision before proceeding
 
-### 완전성 원칙 (Completeness Principle)
+#### design_flaw_found_during_review
 
-AI 한계비용 ≈ 0 → 승인된 작업은 완전하게 구현한다 (엣지케이스, 에러 처리, 테스트 포함).
+- 1. Report to user: 'Found potential design issue at [file:line]: [description]'
+- 2. Propose: 'Options: A) fix typo/grammar (allowed), B) this is a design decision I should not change — your call'
+- 3. Do not make the change until user confirms it's (A)
 
-**3가지 원칙의 적용 대상 구분:**
+### mandatory_pre_checks
 
-| 원칙 | 적용 대상 | 설명 |
-|------|---------|------|
-| `no_autonomous_development` | **무엇을** 만들지 | 사용자 결정. 묻지 않고 기능 추가 금지 |
-| `minimal_modification` | **얼마나** upstream에서 이탈할지 | fork 기반 작업에서 최소 변경 유지 |
-| `completeness` | 승인된 것의 **품질** | 만들기로 결정됐으면 완전하게. A(완전) vs B(부분) → A 추천 |
+- Read agents-rules.json first
+- When working in submodule, read its entry point file
+- For feature-level work: follow issue-driven-development.yaml gates (understand → scope → plan confirmation required before proceeding)
+- Apply minimal-change principles
+- For any .hwp/.hwpx/.pdf/.docx/.xlsx/.pptx file: use /read-doc skill FIRST — never claim inability to read documents
+- Design docs (docs/design/, spec/, design/) + extensions (.md/.txt/.yaml/.json): see permission_model above. Hook fires on edits — surface reason to user first.
+- Before running destructive git commands (git checkout --, git reset --hard, git clean -f): ALWAYS ask user for explicit confirmation first. State exactly what will be deleted. No exceptions.
 
-**Boilable Lake 규칙**: 범위가 유한한 모듈은 완전히 구현한다. AI에게 추가 비용이 거의 없을 때 부분 구현을 선택하지 않는다.
+### completeness_principle
 
-### AskUserQuestion 표준 형식
+- **statement**: AI marginal cost ≈ 0 — when approved to build something, build it completely (all edge cases, error handling, tests included).
 
-사용자 결정이 필요한 질문(게이트, 옵션 선택, 범위 결정)의 표준 구조:
+#### three_principles_distinction
 
-1. **Re-ground** (1-2문장): 프로젝트 + 현재 단계 + 질문 대상을 평이하게 서술
-2. **Simplify**: 기술 용어 없이, 비개발자도 이해할 수 있도록 질문
-3. **Recommend**: 명시적 추천 + 완전성 점수(1-10) + AI 소요시간 + 검토 소요시간
-4. **Options**: A/B/C 레터링, 각각 노력 + 완전성 점수 + 한 줄 트레이드오프
+- **no_autonomous_development**: WHAT to build = user decides. Never add features or scope without asking.
+- **minimal_modification**: HOW FAR to deviate from upstream = minimize. For fork-based work: overlay custom changes with minimal delta from upstream.
+- **completeness**: QUALITY of approved work = complete. If user approves X, implement X fully. Option A (complete) vs Option B (partial) → always recommend A unless user explicitly asks for partial.
+- **boilable_lake_rule**: A bounded, scoped module is 'boilable'. If scope is finite, implement it completely. Never deliver partial when complete costs AI nothing extra.
 
-```
-RECOMMENDATION: A (완전성 9/10 | AI: ~30분 | 검토: ~10분)
-A) 전체 구현 — 엣지케이스 모두 처리 [완전성 9/10]
-B) 최소 구현 — 빨리 출시, 나중에 재방문 [완전성 5/10]
-```
+### ask_user_question_format
 
-### 세션 종료 규칙
-모든 세션 종료 시: 컨텍스트 업데이트 → 교훈 기록 → MEMORY.md 업데이트 → 커밋 & 푸시.
-목적: 다음 세션의 AI가 이번 세션의 학습을 물려받게 하는 것.
+- **description**: Standard structure for user-facing decision questions (gates, options, scope choices). Makes trade-offs explicit.
 
-### 컨텍스트 생존 (Anti-Compact)
-중요한 결정/교정은 대화에 의존하지 말고 파일/Issue에 즉시 기록.
-대화 컨텍스트 압축 시 휘발 방지.
+#### structure
 
-### 서브모듈 규칙
-각 서브모듈은 자체 규칙이 있습니다. 수정 전 `entry_point`를 읽으세요.
+- 1. Re-ground (1-2 sentences): state the project, current phase, and specific question in plain terms
+- 2. Simplify: ask without jargon — as if explaining to a non-engineer
+- 3. Recommend: explicit recommendation with completeness score (1-10) + AI time + human review time
+- 4. Options: lettered A/B/C, each with effort estimate + completeness score + one-sentence trade-off
+- **example**: RECOMMENDATION: A (completeness 9/10 | AI: ~30min | review: ~10min)
+A) Full implementation — all edge cases covered [completeness 9/10]
+B) Minimal — ships faster, revisit later [completeness 5/10]
+- **review_skill**: Use '/review-pass stage=planning|development|test|integration files=...' for stage-specific multi-AI cross-validation review. REQ-IDs required for feature-level work. Simple changes (lightweight cycle: <3 files, single module) skip REQ-ID creation. Read .agents/requirements/_index.yaml when entering Plan or Review phases.
 
-### Git 워크플로우 규칙
-- **메인테이너 직접 커밋**: Luke는 모든 Nextain 레포의 메인테이너. Nextain 레포에 PR 생성 절대 금지 — main(또는 해당 브랜치)에 직접 커밋 & 푸시.
-- **PR은 외부 기여자 전용**: `gh pr create`는 pr-guard 훅이 자동 차단.
+### requirements_management
 
----
+- **storage**: .agents/requirements/
+- **index**: .agents/requirements/_index.yaml
+- **load_timing**: on-demand when entering Plan or Review phases (NOT session-injected)
+- **req_id_threshold**: Feature-level work only. Lightweight cycle changes (typos, config, <3 files, single module) skip REQ-ID creation.
 
-## 컨벤션
+#### source_authority
 
-| 항목 | 규칙 |
-|-----|------|
-| 응답 언어 | 한국어로 응답 |
-| 개발 접근법 | Issue-driven development (기본값). TDD는 해당 시 적용 |
-| 테스트 코드 리뷰 | 테스트 작성 후 결과 맹신 금지. 테스트 로직 자체를 반복 리뷰(연속 2회 클린 패스) 후 실행. 무효 테스트 징후: 항상 통과하는 단언, 실제 동작과 괴리된 mock, 음성 케이스 누락 |
-| 임시 파일 위치 | 모든 임시/디버그/스크래치 스크립트는 반드시 현재 작업 디렉토리 루트의 `tmp/` 폴더에 생성. 루트나 서브프로젝트 루트에 `tmp-*`, `tmp_*` 파일 직접 생성 금지. `tmp/`는 `.gitignore`에 등록되어 추적되지 않음. |
-| 작업 로그 | 명시적 요청 없이 수정하지 않음 |
+- **candidate**: Code is source of truth. Requirements are descriptive (derived from existing code).
+- **human**: Requirements are normative. Code must conform.
+- **default**: When requirements conflict with code: candidate→code wins, human→REQ wins.
+- **retrofitted_requirements**: Always status: candidate. Require explicit human promotion to active/verified.
+- **dual_mirror**: Requirements live in .agents/requirements/ ONLY (no .users/ mirror). Use title_ko field for Korean title.
+- **trace_format**: Use file + symbol references. Never hardcode line numbers (they rot immediately).
+- **submodule_rule**: Each submodule has own rules. Read entry_point before modifications.
 
-### 외부 레포 대응 정책
+## financial_integrity
 
-**원칙: 정보 수집 먼저 → 내부 검증 → 사용자 허락 → 외부 커뮤니케이션**
+- **cost_estimation_first**: Before performing any large-scale cloud operations, the agent MUST estimate the potential cost and obtain explicit user approval.
 
-1. **커뮤니티 컨텍스트 수집 우선** — 레포, Discord, Slack, 포럼 등 어떤 커뮤니티든 활동 전에:
-   - **말투** — 격식체/구어체, 간결함/상세함, 영어 수준
-   - **규칙** — CoC, PR/이슈 템플릿, 라벨링 컨벤션
-   - **성향** — 무엇을 중요하게 여기는지, 무엇을 거부하는지, 외부인에게 어떻게 반응하는지, 영향력 있는 멤버가 누구인지, 과거 유사 상호작용 사례
-2. 외부 레포의 CONTRIBUTING.md / 가이드 먼저 읽기
-3. 기존 이슈/PR 검색 (중복 방지)
-4. 코드 패턴 및 컨벤션 파악
-5. 내부에서 충분히 프로토타입/검증
-6. 이슈/PR 초안 작성 후 사용자에게 검토 요청
-7. 사용자 명시적 승인 후에만 외부에 게시
+### expensive_operations_blacklist
 
-**외부 레포에 이슈/PR/코멘트를 사용자 허락 없이 올리지 않는다.**
+- GCS: Data movement > 10GB or API ops > 1,000 via mount points (e.g., rsync via gcsfuse)
+- GCE: Provisioning high-tier GPU instances (A100, H100, etc.)
+- Vertex AI/LLM: Massive batch inference or fine-tuning jobs
+- Cloud SQL: Massive data migrations or large-scale index rebuilds
+- **resource_awareness**: Always monitor Class A/B API operation counts for GCS and egress traffic costs for GCE/Cloud Run.
 
-**분위기 맞추기**: 기술 이슈/PR도 사람이 읽는다. 커뮤니티 분위기에 맞는 글을 쓴다 — RFC 스타일의 커뮤니티라면 간결한 기술적 문체, 친근한 커뮤니티라면 그에 맞는 톤. 기술적으로 옳은 것만큼 문화적으로도 적절해야 한다.
+## language_harness
 
-**AI 작성 명시 + 연락처**: 외부 레포에 AI 보조로 작성한 내용을 게시할 때는 반드시 (1) AI 작성 명시, (2) 문제 있을 시 개발자에게 연락 요청을 함께 적는다.
-예: `🤖 Written with AI assistance. If anything looks off, please ping @luke-n-alpha or open a discussion.`
-투명성과 책임 모두 필요.
+- **no_korean_in_agents**: Strictly prohibit Korean characters in .agents/ directory to optimize token usage. All context files here must be in concise English.
+- **concise_session_output**: AI responses should be extremely brief (less than 3 lines) to minimize history weight. Avoid long Korean preambles.
 
-> **[훅 강제]** 이 규칙은 루트 하네스 `.claude/hooks/pr-guard.js` 가 강제한다 — 외부 repo content op(`gh issue/pr create`·`comment`, `pr review`, `release create`)에 disclosure footer(🤖 / AI assistance) 미포함이면 차단(OSS-access 마커 소비 전). 내부 `nextain/*` 면제, `merge`/`reopen`/`edit` 등 비-content op 면제.
+## conventions
 
-### 기여 Fork 정책
+- **response_language**: Korean (한국어로 응답)
+- **development_approach**: Issue-driven development (default). TDD where applicable.
+- **test_code_review**: After writing tests, never trust results blindly. Review test logic itself with iterative review (2 consecutive clean passes) before trusting outcomes. Signs of invalid tests: assertions that always pass, mocked internals that diverge from real behavior, missing negative cases.
 
-upstream에 기여하기 위한 fork 레포 관리 규칙.
+### tmp_files
 
-| 항목 | 규칙 |
-|------|------|
-| **계정** | `nextain` 조직 — 개인 기여가 아닌 Nextain 공식 기여 |
-| **레포명** | upstream과 동일 이름 (prefix 없음) |
-| **main 브랜치** | upstream main + AGENTS.md (AI 컨텍스트, 여기서 버전 관리) |
-| **feature 브랜치** | upstream main 기준, 코드 변경만 — AGENTS.md 절대 포함 금지 |
-| **PR** | feature 브랜치 → upstream. AGENTS.md는 main에만 있으므로 PR diff에 자동 제외 |
-| **main 동기화** | upstream main과 항상 동기화 유지 (정기적으로 rebase/merge) |
-| **수명** | upstream PR 머지 후 아카이브 또는 삭제 |
+- **rule**: All temporary/debug/scratch scripts MUST be created inside tmp/ at the root of the active working directory. NEVER create tmp-* or tmp_* files in the repo root or subproject roots.
+- **gitignore**: tmp/, tmp-*, tmp_* are gitignored at root. Files placed there are never tracked.
+- **naming**: Use descriptive names inside tmp/ (e.g. tmp/check-db.php, tmp/debug-redis.sh) — no tmp- prefix needed since the directory provides the namespace.
+- **work_logs**: Don't modify unless explicitly requested
 
-**README 필수 기재 항목** (기여 fork임을 명확히):
-1. 이 레포는 기여 fork임 (hard fork 아님)
-2. upstream 레포 링크
-3. 기여하는 기능/수정 내용
-4. 현재 상태 (진행 중 / PR 제출 / 머지 완료)
-5. 연락처: @luke-n-alpha
+### git_workflow
 
-**GitHub 레포 설명**: `Contribution fork — [feature] upstream PR in progress. See [upstream url]`
+- **maintainer_rule**: Luke is a maintainer of all Nextain repos. NEVER create PRs for Nextain repos — commit and push directly to main (or the relevant branch). PRs are for external contributors only.
+- **pr_prohibition**: DO NOT run `gh pr create` for nextain/* repos. The pr-guard hook will block this automatically.
 
----
+### external_repo_policy
 
-## 컨텍스트 전파 규칙 (Cascade Rules)
+- **principle**: Information gathering first — before any action on external repos
 
-컨텍스트가 변경되면 관련 상위/하위/형제 모듈의 컨텍스트도 함께 업데이트해야 합니다.
+#### steps
 
-### 1. 서브모듈 추가 시 (onSubmoduleAdd)
+- 1. Read CONTRIBUTING.md / contributing guide of the external repo
+- 2. Search existing issues and PRs to avoid duplicates
+- 3. Study code patterns and conventions used in the repo
+- 4. Prototype and validate internally before reaching out
+- 5. Draft issue/PR content and show to user for review
+- 6. Get explicit user approval before posting anything
+- **community_context_first**: Before engaging in any external community (repo, Discord, Slack, forum, etc.), gather context first: (1) communication tone — formal/casual, terse/verbose, (2) explicit rules — CoC, PR/issue templates, labeling conventions, (3) community tendencies — what they value, what they reject, how they respond to outsiders, who the influential members are, what past interactions look like
+- **rule**: Never post issues, PRs, or comments to external repos without explicit user approval of the reviewed content
+- **tone_matching**: Technical issues and PRs are read by people. Write in a tone that fits the community's atmosphere — not just technically correct, but culturally appropriate. A dry RFC-style community expects concise technical prose; a friendly community expects warmth. Match the room.
+- **ai_disclosure**: When posting AI-assisted content to external repos, always include a disclosure footer: state it was written with AI assistance AND provide a contact point for the developer in case of issues (e.g. '🤖 Written with AI assistance. If anything looks off, please ping @luke-n-alpha or open a discussion.'). Transparency and accountability both required. [HOOK-ENFORCED 2026-05-16: .claude/hooks/pr-guard.js — 외부 repo content op(gh issue/pr create·comment, pr review, release create) 시 disclosure footer(🤖/AI assistance) 미포함이면 차단(OSS-access 마커 소비 전). 내부 nextain/* 면제. merge/reopen/edit 등 비-content op 면제.]
 
-**전파 대상**: parent (상위 모듈)
+### contribution_fork_policy
 
-**필요 작업**:
-- `parent/.gitmodules`에 서브모듈 항목 추가
-- `parent/.agents/context/agents-rules.json`의 `submodules`에 항목 추가
-- `parent/CLAUDE.md`의 서브모듈 테이블 업데이트
-- `parent/.agents/context/ai-work-index.yaml`에 카테고리 추가 (필요 시)
+- **account**: Use nextain org (e.g. nextain/vllm) — this is an official Nextain-backed contribution, not a personal side project
+- **naming**: Same name as upstream repo — no prefix
+- **readme_required**: Every contribution fork MUST have a README clearly stating: (1) this is a contribution fork, not a hard fork, (2) upstream repo link, (3) what feature/fix is being contributed, (4) current status (in progress / PR submitted / merged), (5) contact: @luke-n-alpha
+- **repo_description**: Set GitHub repo description to: 'Contribution fork — [feature] upstream PR in progress. See [upstream url]'
 
-### 2. 서브모듈 제거 시 (onSubmoduleRemove)
+#### branch_strategy
 
-**전파 대상**: parent (상위 모듈)
+- **main**: fork main = upstream main + AGENTS.md (AI context, version controlled here)
+- **feature**: feature branch = based on upstream main, code changes only — NEVER add AGENTS.md here
+- **pr**: PR = feature branch → upstream. AGENTS.md is on main only, so it is automatically excluded from the PR diff
+- **main_sync**: Keep main branch in sync with upstream at all times (rebase or merge upstream main regularly)
+- **work_branch**: All work on feature branches only (e.g. feat/minicpm-audio-output)
+- **lifecycle**: Archive or delete after upstream PR is merged
 
-**필요 작업**:
-- `parent/.gitmodules`에서 제거
-- `parent/.agents/context/agents-rules.json`의 `submodules`에서 제거
-- `parent/CLAUDE.md`의 서브모듈 테이블에서 제거
+## cascadeRules
 
-### 3. 규칙 파일 변경 시 (onRulesChange)
+- **_description**: When context changes, propagate to related modules.
 
-**전파 대상**: mirror (`.users/` 미러)
+### onSubmoduleAdd
 
-**필요 작업**:
-- `.users/context/agents-rules.md` 동기화 업데이트 (1:1 미러링 원칙)
+- **trigger**: New submodule added
 
-### 전파 순서
+#### propagateTo
 
-1. **자기 자신 (self)** 변경 완료
-2. **부모 (parent)** 컨텍스트 업데이트
-3. **형제 (siblings)** 중 참조하는 모듈 업데이트
-4. **자식 (children)** 중 참조하는 모듈 업데이트
-5. **미러 (.users/)** 동기화
+- parent
 
----
+#### actions
 
-## 서브모듈 초기화
+- Add entry to parent/.gitmodules
+- Add entry to parent/.agents/context/agents-rules.json submodules
+- Update parent/CLAUDE.md submodule table
+- Add category to parent/.agents/context/ai-work-index.yaml (if needed)
 
-```bash
-git submodule update --init --recursive
-```
+### onSubmoduleRemove
 
----
+- **trigger**: Submodule removed
 
-## 업데이트 방법
+#### propagateTo
 
-1. `.agents/context/agents-rules.json`에서 AI 규칙 수정
-2. 이 파일을 업데이트하여 사람을 위한 변경 사항 설명
-3. 두 파일을 항상 동기화 유지
+- parent
 
-## 금융 무결성 (Financial Integrity)
-- **비용 추산 우선**: 대규모 클라우드 작업 전 반드시 비용 산출 및 사용자 승인 필수.
-- **고비용 작업 블랙리스트**: GCS 10GB+ 이동, 1,000+ API 호출, 고성능 GPU 생성, 배치 추론 등.
+#### actions
+
+- Remove from parent/.gitmodules
+- Remove from parent/.agents/context/agents-rules.json submodules
+- Remove from parent/CLAUDE.md submodule table
+
+### onRulesChange
+
+- **trigger**: .agents/context/agents-rules.json changed
+
+#### propagateTo
+
+- mirror
+
+#### actions
+
+- Sync update .users/context/agents-rules.md (1:1 mirroring)
+
+### onEntryPointChange
+
+- **trigger**: CLAUDE.md or AGENTS.md or GEMINI.md changed
+
+#### propagateTo
+
+- self
+
+#### actions
+
+- Copy the changed file to the other two (CLAUDE.md = AGENTS.md = GEMINI.md, always identical)
+
+### propagationOrder
+
+- **_description**: Propagation order (dependency order)
+
+#### order
+
+- 1. self — complete own changes
+- 2. parent — update parent context
+- 3. siblings — update referencing sibling modules
+- 4. children — update referencing child modules
+- 5. mirror — sync .users/
+
+## workflows
+
+- **instruction**: Read workflows on demand. Do not load all at once.
+
+### selection_guide
+
+- **reference**: .agents/context/ai-work-index.yaml
+
+#### steps
+
+- Extract keywords from the user request
+- Match the category in ai-work-index.yaml
+- Read the matching root quick reference first
+- Load the workflow document only if the task still needs details
+
+### index
+
+- **submodule_init**: git submodule update --init --recursive
+- **development_cycle**: .agents/workflows/development-cycle.yaml
+- **issue_driven_development**: .agents/workflows/issue-driven-development.yaml
