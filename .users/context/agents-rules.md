@@ -289,6 +289,8 @@ B) 최소 구현 — 빨리 출시, 나중에 재방문 [완전성 5/10]
 예: `🤖 Written with AI assistance. If anything looks off, please ping @luke-n-alpha or open a discussion.`
 투명성과 책임 모두 필요.
 
+> **[훅 강제]** 이 규칙은 루트 하네스 `.claude/hooks/pr-guard.js` 가 강제한다 — 외부 repo content op(`gh issue/pr create`·`comment`, `pr review`, `release create`)에 disclosure footer(🤖 / AI assistance) 미포함이면 차단(OSS-access 마커 소비 전). 내부 `nextain/*` 면제, `merge`/`reopen`/`edit` 등 비-content op 면제.
+
 ### 기여 Fork 정책
 
 upstream에 기여하기 위한 fork 레포 관리 규칙.
