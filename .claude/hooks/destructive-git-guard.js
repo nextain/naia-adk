@@ -1,41 +1,23 @@
 #!/usr/bin/env node
 /**
- * Destructive Git Guard Hook (PreToolUse on Bash)
+ * Destructive Git Guard Hook (PreToolUse on Bash) — policy-only adapter.
+ * Envelope: ./_claude-bash-guard.js. Sanitizer: harness-core (tool-agnostic).
+ * Behavior byte-identical to the original (G-OC01 part1 S2, pure refactor).
  *
- * Blocks destructive git commands that permanently discard changes.
- * These commands require explicit user confirmation before execution.
- *
- * Blocked patterns:
- *   git checkout -- <file>  (discard uncommitted changes)
- *   git reset --hard        (hard reset to commit)
- *   git clean -f / -fd / -fx (remove untracked files)
+ * Blocks: git checkout -- <file> | git reset --hard | git clean -f/-fd/-fx
  */
+const path = require("path");
+let H, core;
+try {
+	H = require("./_claude-bash-guard.js");
+	core = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "harness-core.js"));
+} catch {
+	process.exit(0); // original main().catch fail-open
+}
 
-async function main() {
-	let input = "";
-	for await (const chunk of process.stdin) {
-		input += chunk;
-	}
-
-	let data;
-	try {
-		data = JSON.parse(input);
-	} catch {
-		process.exit(0);
-	}
-
-	const toolName = data.tool_name || "";
-	const command = data.tool_input?.command || "";
-
-	if (toolName !== "Bash") {
-		process.exit(0);
-	}
-
+H.start((command) => {
 	// Strip quoted strings to avoid false positives from echo/test commands
-	// e.g. echo 'git reset --hard' | node hook.js should NOT be blocked
-	const stripped = command
-		.replace(/'[^']*'/g, "''")
-		.replace(/"[^"]*"/g, '""');
+	const stripped = core.stripQuotesBlank(command);
 
 	const destructivePatterns = [
 		{ pattern: /git\s+checkout\s+--\s/, label: "git checkout -- <file>" },
@@ -45,20 +27,14 @@ async function main() {
 
 	for (const { pattern, label } of destructivePatterns) {
 		if (pattern.test(stripped)) {
-			const result = {
-				decision: "block",
+			return {
 				reason:
 					`[Harness] 파괴적 git 명령 차단: \`${label}\`\n` +
 					"이 명령은 변경사항을 영구 삭제합니다. 되돌릴 수 없습니다.\n" +
 					"실행 전 사용자에게 반드시 확인받으세요:\n" +
 					`  \"이 명령을 실행하면 X가 삭제됩니다. 진행할까요?\"`,
 			};
-			process.stdout.write(JSON.stringify(result));
-			process.exit(0);
 		}
 	}
-
-	process.exit(0);
-}
-
-main().catch(() => process.exit(0));
+	return null;
+});

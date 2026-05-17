@@ -1,42 +1,25 @@
 #!/usr/bin/env node
 /**
- * Cascade Rule Check Hook (PostToolUse on Edit|Write)
- *
- * Detects edits to context files and reminds agent to update mirrors.
- * Based on project-index.yaml mirror_pairs and triple-mirror structure.
- *
- * Pattern: .agents/context/*.yaml edited → remind .users/context/*.md + .users/context/ko/*.md
+ * Cascade Rule Check Hook (PostToolUse on Edit|Write) — policy-only adapter.
+ * Envelope: ./_claude-edit-hook.js. Behavior byte-identical to original
+ * (G-OC01 part1 S3, pure refactor). Reminds agent to update mirrors.
  */
+let H;
+try {
+	H = require("./_claude-edit-hook.js");
+} catch {
+	process.exit(0); // original main().catch fail-open
+}
 
-const fs = require("fs");
-const path = require("path");
-
-async function main() {
-	let input = "";
-	for await (const chunk of process.stdin) {
-		input += chunk;
-	}
-
-	let data;
-	try {
-		data = JSON.parse(input);
-	} catch {
-		process.exit(0);
-	}
-
-	const toolName = data.tool_name || "";
+H.start((data) => {
 	const filePath = data.tool_input?.file_path || data.parameters?.file_path || "";
-
-	if (toolName !== "Edit" && toolName !== "Write") {
-		process.exit(0);
-	}
 
 	const reminders = [];
 
 	// Normalize path for matching
 	const normalized = filePath.replace(/\\/g, "/");
 
-	// Pattern 1: .agents/context/*.yaml or .agents/context/*.json → remind .users/ mirrors
+	// Pattern 1: .agents/context/*.yaml or *.json → remind .users/ mirrors
 	const agentsMatch = normalized.match(/\.agents\/context\/([^/]+)\.(yaml|json)$/);
 	if (agentsMatch) {
 		const baseName = agentsMatch[1];
@@ -48,7 +31,7 @@ async function main() {
 		);
 	}
 
-	// Pattern 2: .users/context/*.md (not in en/) → remind .agents/ and .users/context/en/
+	// Pattern 2: .users/context/*.md (not in en/) → remind .agents/ and en/
 	const usersKoMatch = normalized.match(/\.users\/context\/([^/]+)\.md$/);
 	if (usersKoMatch && !normalized.includes("/en/")) {
 		const baseName = usersKoMatch[1];
@@ -97,17 +80,7 @@ async function main() {
 	}
 
 	if (reminders.length > 0) {
-		const result = {
-			reason: "",
-			hookSpecificOutput: {
-				hookEventName: "PostToolUse",
-				additionalContext: reminders.join("\n"),
-			},
-		};
-		process.stdout.write(JSON.stringify(result));
+		return { postContext: reminders.join("\n") };
 	}
-
-	process.exit(0);
-}
-
-main().catch(() => process.exit(0));
+	return null;
+});

@@ -1,0 +1,44 @@
+{
+  "slug": "g-oc01-part1-harness-core",
+  "title": "G-OC01 part1: extract tool-agnostic harness-core (pure refactor)",
+  "parent": "D-OC10 (naia own orchestrator — pi substrate)",
+  "refs": ["naia-os#300 (G-OC01)", "alpha-adk .agents/progress/adr-naia-own-orchestrator-2026-05-18.md", "cr-20260517-152553 (CLEAN x2)"],
+  "issue": "PENDING (GitHub Issue creation held — outward, user-gated)",
+  "current_phase": "build",
+  "status": "PART1 COMPLETE (S1+S2+S3 all 2-consecutive-clean). Pending: commit (user decision — upstream-shared base ADK), GH issue/sub-issues (outward, user-gated).",
+  "scope_decision": "A — extract machinery only; behavior byte-identical (pure refactor). No forbidden_actions schema (deferred=B). pi adapter=part2.",
+  "slices": {
+    "S1": {
+      "name": "harness-core SoT + anti-compact pair (session-inject, post-compact-context)",
+      "status": "COMPLETE",
+      "artifacts": [".agents/hooks/core/harness-core.js (new, tool-agnostic SoT: session/anti-compact + 3 sanitizers, params optOutEnvVar/hostConfigDir/entryPoint)", ".agents/hooks/package.json (new CJS pin)", ".claude/hooks/session-inject.js (thin adapter)", ".claude/hooks/post-compact-context.js (thin adapter)"],
+      "parity": "8/8 byte-identical + param-test 8/0",
+      "cross_review": "cr-20260517-170413 — 4 rounds, R3+R4 2-consecutive-clean (fixed M1/M2/M3/L1)"
+    },
+    "S2": {
+      "name": "6 Bash guards (pr/destructive-git/commit/deploy/git-push/email-send)",
+      "status": "COMPLETE",
+      "artifacts": [".claude/hooks/_claude-bash-guard.js (new, Claude PreToolUse-Bash envelope)", "harness-core.js +3 sanitizers (stripQuotesBlank/Collapse/Unwrap, additive — S1 untouched)", "6 guards → policy-only adapters"],
+      "parity": "42/42 byte-identical, fail-modes preserved (5 fail-open, pr-guard fail-closed)",
+      "cross_review": "cr-20260517-175029 — R1+R2 2-consecutive-clean"
+    },
+    "S3": {
+      "name": "Edit|Write hooks (design-doc-guard, prod-gateway-guard, cascade-check)",
+      "status": "COMPLETE",
+      "artifacts": [".claude/hooks/_claude-edit-hook.js (new, Claude Edit|Write envelope: allow/block/postContext)", "3 hooks → policy-only adapters", "agents-context-mirror.js UNCHANGED (scope-A: no shared machinery — review-judged defensible)"],
+      "parity": "19/19 byte-identical",
+      "cross_review": "cr-20260517-180707 — R1+R2 2-consecutive-clean"
+    }
+  },
+  "totals": {
+    "hooks_refactored": "11 (.claude/hooks: session-inject, post-compact-context, 6 bash guards, design-doc-guard, prod-gateway-guard, cascade-check)",
+    "hooks_unchanged_by_design": "agents-context-mirror.js (distinct sync fd-0 + console.log envelope, no shared machinery)",
+    "new_files": ".agents/hooks/core/harness-core.js, .agents/hooks/package.json, .claude/hooks/_claude-bash-guard.js, .claude/hooks/_claude-edit-hook.js",
+    "golden_parity": "8 + 42 + 19 = 69 scenarios byte-identical, all stderr clean, zero regression across slices",
+    "cross_review": "3 slices × multi-AI (port-fidelity/security/tool-agnostic), every slice reached 2-consecutive-clean"
+  },
+  "surfaced_not_fixed": "settings.json references .claude/hooks/sync-entry-points.js which does not exist (pre-existing dangling reference; out of pure-refactor scope; review-confirmed correct to surface not silently fix).",
+  "tool_agnostic_outcome": "harness-core.js = host-neutral SoT (session/anti-compact logic + 3 sanitizers; pi passes optOutEnvVar/hostConfigDir/entryPoint). Claude envelopes isolated in .claude/hooks/{_claude-bash-guard,_claude-edit-hook}.js. Policy bodies host-neutral. A future pi adapter (part2) reuses harness-core + policies with a pi-shaped envelope, ZERO core change.",
+  "holds": ["commit: NOT done — upstream-shared public base ADK; user decision", "GitHub Issue + D-OC10 sub-issues: outward, user-gated", ".agents/progress/.session-map.json + .users/context/writing-style.md working-tree mods are session-managed/pre-existing, not part of this refactor"],
+  "next": "part2 = pi adapter (.pi/extensions/naia-harness.ts reusing harness-core + policies); gated by D-OC10 ADR rollout. Plus user decisions: commit part1? create sub-issues?"
+}
