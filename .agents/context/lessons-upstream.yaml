@@ -1,0 +1,63 @@
+# Auto-split from lessons-learned.yaml on 2026-05-17
+# ctx-section-format: v1
+id: naia-adk:lessons_upstream
+title: "Lessons Learned — Upstream Integration & Contribution"
+tags: [upstream, integration, contribution, pattern-compliance, fork, rebase]
+related: [naia-adk:lessons_platform, naia-adk:lessons_workflow]
+updated_at: "2026-03-28"
+source: "lessons-learned.yaml (migrated)"
+
+version: 1
+
+entries:
+  - date: "2026-03-03"
+    issue_type: upstream-integration
+    mistake: "Built rsync-based install flow from scratch instead of using existing ostreecontainer"
+    root_cause: "Did not analyze titanoboa's ci_dummy_hook_postrootfs.sh before designing"
+    lesson: "Always read upstream's existing implementation before designing a solution"
+
+  - date: "2026-03-03"
+    issue_type: upstream-integration
+    mistake: "image-info.json had Bazzite references, causing wrong ostreecontainer ref"
+    root_cause: "Did not check all config files that reference image identity"
+    lesson: "Check all config/identity files when changing image references"
+
+  - date: "2026-03-04"
+    issue_type: upstream-integration
+    mistake: "Used bootc switch (network-dependent) for offline install → hang"
+    root_cause: "Referenced CI dummy hook instead of actual production hook"
+    lesson: "Distinguish CI/test code from production code — always reference production"
+
+  - date: "2026-03-07"
+    issue_type: upstream-contribution
+    mistake: "Initially planned to submit PR to titanoboa for bootc switch workaround without verifying the issue was real"
+    root_cause: "Assumed our hang was the known upstream bootc bug without checking if the fix was already released or if our own config caused it"
+    lesson: >
+      Upstream issue discovery process:
+      1. Discover potential issue during development
+      2. Verify: is it really upstream, or our mistake? (check our config, environment differences)
+      3. Check: has it already been reported/fixed upstream? (search issues, commits, changelogs)
+      4. If confirmed and unfixed → submit PR with reproduction steps
+      5. If uncertain → open issue to ask (not PR) — avoids wasting maintainer time on invalid contributions
+      Hardware/environment variability (UEFI, disk, GPU, network) can mask the root cause.
+
+  - date: "2026-03-28"
+    issue_type: pattern-compliance
+    project: vllm-omni / MiniCPM-o
+    mistake: "Used pipeline.yaml + StageConfigFactory (unproven new pattern) instead of stage_configs/*.yaml (proven pattern used by all other models)"
+    root_cause: "Chose 'newer' pattern without checking what other models actually use. qwen3_omni, qwen2_5_omni, fish_speech all use stage_configs/*.yaml"
+    lesson: >
+      When a project has two co-existing patterns (old and new), follow the one that
+      other working implementations use. Count how many models use each pattern.
+      If the new pattern has 0 real users, do not be the first — use the proven one.
+      'Newer' does NOT mean 'better'. Stability and legacy compatibility are priorities.
+
+  - date: "2026-03-28"
+    issue_type: upstream-rebase-compatibility
+    project: vllm-omni / MiniCPM-o
+    mistake: "upstream vllm v0.18.0 rebase broke omni mode — OpenAIServingResponses, OmniOpenAIServingChat crash with model_config=None"
+    root_cause: "Our code depended on vllm internal APIs that changed in the rebase. pipeline.yaml pattern was more fragile than stage_configs pattern"
+    lesson: >
+      When working on a fork, prefer patterns that minimize coupling with upstream internals.
+      stage_configs/*.yaml is self-contained config, pipeline.yaml routes through StageConfigFactory
+      which depends on multiple upstream code paths. More indirection = more breakage surface.

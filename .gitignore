@@ -31,6 +31,9 @@ desktop.ini
 .mypy_cache/
 .pytest_cache/
 
+# ctx index (auto-rebuilt by hook, never committed)
+.agents/context/.ctx-index.json
+
 # Python
 __pycache__/
 *.pyc

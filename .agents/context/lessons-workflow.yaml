@@ -1,0 +1,95 @@
+# Auto-split from lessons-learned.yaml on 2026-05-17
+# ctx-section-format: v1
+id: naia-adk:lessons_workflow
+title: "Lessons Learned — Workflow & Process"
+tags: [workflow, idd, code-review, iteration, harness-design, document-review, destructive-action, doc-contradiction]
+related: [naia-adk:lessons_upstream, naia-adk:lessons_platform, naia-adk:lessons_frontend, naia-adk:lessons_documents]
+updated_at: "2026-03-21"
+source: "lessons-learned.yaml (migrated)"
+
+version: 1
+
+entries:
+  - date: "2026-03-04"
+    issue_type: code-review
+    mistake: "Classified entire section as 'keep' without line-by-line comparison"
+    root_cause: "Reviewed at section granularity, not line granularity"
+    lesson: "Even 'keep' sections must be compared line-by-line against upstream original"
+
+  - date: "2026-03-07"
+    issue_type: workflow-violation
+    mistake: "Committed after Review but before E2E Test (Build → Review → Commit, skipping E2E Test)"
+    root_cause: "Completed implementation + review loop, felt 'done', forgot E2E Test comes before Commit"
+    lesson: "Follow issue-driven-development.yaml phase order strictly: Build → Review → E2E Test → Sync → Commit. Never commit before testing."
+
+  - date: "2026-03-07"
+    issue_type: doc-contradiction
+    mistake: "Entry point said 'issues/PRs in any language' while workflow said 'Issue comments in English' — AI tools gave contradictory answers"
+    root_cause: "Two docs serving different audiences (contributor-facing vs process-facing) used conflicting language without clarification"
+    lesson: "When multiple docs cover the same topic for different audiences, entry point must explicitly distinguish the contexts. Test with headless AI to catch contradictions."
+
+  - date: "2026-03-07"
+    issue_type: iteration-discipline
+    mistake: "Iteration review found issues on 3rd and 4th passes that should have been caught on 2nd and 3rd"
+    root_cause: "Earlier passes were not thorough enough — reviewed at section level instead of checking every cross-reference"
+    lesson: "Two consecutive clean passes means TWO genuinely thorough passes. Each pass must check cross-references, not just surface content."
+
+  - date: "2026-03-18"
+    issue_type: iteration-discipline
+    mistake: "Declared '2 consecutive clean passes' after checklist-style verification instead of genuinely re-reading files"
+    root_cause: "AI treated iterative review as a checklist exercise — mentally verifying sections from memory rather than actually re-reading each file from the top with fresh eyes"
+    lesson: >
+      Iterative review means: open the file, read it fully from line 1, look for NEW issues you didn't notice before.
+      It does NOT mean: recall what you edited, verify those edits look correct, call it a pass.
+      Signs of false pass: finishing a pass in seconds, no new observations, no cross-references checked.
+      Genuine pass: reads take time, you notice things you hadn't considered, you check inter-file consistency.
+
+  - date: "2026-03-18"
+    issue_type: workflow-wiring
+    mistake: "Skills added to CLAUDE.md but AI could still skip them because skill 실행 시점 had only conditional triggers"
+    root_cause: "Conditional trigger language ('when X happens', 'if doing Y') gives AI discretion to skip if it judges the condition unmet"
+    lesson: >
+      When a skill is wired into the workflow as a mandatory step, add an explicit unconditional trigger line
+      at the TOP of the skill's 실행 시점 section:
+        "**[Phase명] 단계마다** — [workflow file]에 의해 자동 호출됨 (조건 없이 항상 실행)"
+      Without this, the AI treats the trigger as optional and may skip the skill when it 'seems' unnecessary.
+
+  - date: "2026-03-20"
+    issue_type: document-review
+    mistake: "기획/설계 문서 반복 리뷰 중 구현과 다르다는 이유로 설계 내용을 변경함"
+    root_cause: "반복 리뷰 로직이 파일 유형을 구분하지 않음. 코드 리뷰와 기획 문서 리뷰를 동일하게 취급"
+    lesson: >
+      설계 문서에서 AI의 역할은 리뷰어(검토자)이지 저자가 아니다.
+      허용: 오타, 내부 모순, 깨진 링크 — 이것만.
+      금지: 구현이 다르다는 이유로 설계 결정(기술 선택, 인터페이스, 수치 범위 등) 변경.
+      설계 문서 리뷰 클린패스 = "새 발견사항 없음" (코드 리뷰 클린패스 "수정사항 없음"과 다름).
+      구현≠설계 발견 시 에스컬레이션 경로 따를 것:
+        1. 설계 문서 수정 금지
+        2. 조용히 구현에 맞추는 것도 금지
+        3. 사용자에게 보고: 괴리 내용 + 선택지(A설계수정/B구현수정/C의도적차이수용)
+        4. 사용자 결정 대기
+      (시험 문제를 바꿔서 정답 처리하는 것과 같다)
+
+  - date: "2026-03-21"
+    issue_type: harness-design
+    mistake: "하네스가 증상을 억제(설계 결정 변경 금지)했지만 근본 원인(BUILD 중 설계 오류 발견 → 에스컬레이션 누락)을 해결하지 못했음"
+    root_cause: >
+      행동 제약(Action Constraint) — '설계 결정 변경 금지' — 은 증상 억제에 불과.
+      실제 문제는 프로세스 제약 부재: BUILD 중 설계-구현 괴리 발견 시 에스컬레이션 경로가 없었음.
+      AI가 설계 오류를 발견하면 '구현에 맞춰 조용히 해결'하거나 '설계를 바꿔 맞추는' 패턴이 생김.
+    lesson: >
+      하네스 설계 원칙:
+      - 행동 제약만으로는 부족 — 프로세스 제약(무엇을 해야 하는가)이 함께 있어야 함
+      - 권한 모델: 코드(AI=구현자) vs 설계문서(AI=리뷰어) 명시
+      - 에스컬레이션 경로: 발견 → 사용자 보고 → 결정 대기
+      - BUILD 단계가 특히 위험: 구현 중 설계 오류를 발견하기 가장 쉽고,
+        '그냥 넘어가자'는 압박이 가장 강한 시점
+
+  - date: "2026-03-20"
+    issue_type: destructive-action
+    mistake: "git checkout -- 명령을 사용자 확인 없이 즉시 실행함"
+    root_cause: "되돌리기 맥락에서 파괴적 명령의 위험성을 충분히 인지하지 못함"
+    lesson: >
+      git checkout --, git reset --hard, git clean -f 등 변경사항을 영구 삭제하는 명령은
+      사용자 확인 없이 절대 실행하면 안 된다.
+      실행 전 "이 명령을 실행하면 X가 삭제됩니다. 진행할까요?"로 반드시 확인받을 것.

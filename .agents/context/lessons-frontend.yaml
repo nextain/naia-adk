@@ -1,0 +1,164 @@
+# Auto-split from lessons-learned.yaml on 2026-05-17
+# ctx-section-format: v1
+id: naia-adk:lessons_frontend
+title: "Lessons Learned — Frontend (React, IndexedDB, GitHub API)"
+tags: [react, indexeddb, github-api, regex, race-condition, postmessage, issue-desk]
+related: [naia-adk:lessons_workflow, naia-adk:lessons_platform]
+updated_at: "2026-03-23"
+source: "lessons-learned.yaml (migrated)"
+
+version: 1
+
+entries:
+  - date: "2026-03-22"
+    issue_type: indexeddb-cache
+    project: issue-desk (#91)
+    mistake: "cacheIssues used store.put() only — closed/deleted issues accumulated indefinitely"
+    root_cause: "IndexedDB put() is upsert, never delete. Assumed re-sync would overwrite stale records."
+    lesson: >
+      When using IndexedDB as a sync cache, always delete stale records for the synced scope
+      before re-inserting. Use a repo-keyed index cursor to remove old entries first, then put new ones.
+      put()-only patterns accumulate stale data silently across syncs.
+
+  - date: "2026-03-22"
+    issue_type: race-condition
+    project: issue-desk (#91)
+    mistake: "toggleWip async handler had no double-click guard — rapid clicks caused duplicate WIP entries"
+    root_cause: "async event handlers can be re-entered before the first await resolves"
+    lesson: >
+      Any async click handler that mutates shared state (DB + store) needs an isLoading/isToggling
+      flag checked at entry and cleared in finally. Also disable the triggering button while in-flight.
+
+  - date: "2026-03-22"
+    issue_type: silent-failure
+    project: issue-desk (#91)
+    mistake: "fetchMyPRs: regex failure on repository_url set repoStr='unknown', causing id collisions"
+    root_cause: "Used ?? [] fallback after regex match without checking owner/repo validity separately"
+    lesson: >
+      When destructuring regex match results, use flatMap to skip-on-failure rather than
+      a fallback sentinel value like 'unknown'. Sentinel values collapse distinct items to the same key.
+
+  - date: "2026-03-23"
+    issue_type: indexeddb-transaction
+    project: issue-desk (#91)
+    mistake: "addInboxItem resolved on req.onsuccess instead of tx.oncomplete"
+    root_cause: "req.onsuccess fires before the transaction commits; abort between onsuccess and oncomplete causes UI/DB inconsistency"
+    lesson: >
+      IndexedDB write functions must always resolve/reject in tx.oncomplete/tx.onerror.
+      Store the IDBRequest result in an intermediate variable in req.onsuccess, then
+      use it inside tx.oncomplete. Never resolve on req.onsuccess for write operations.
+
+  - date: "2026-03-23"
+    issue_type: review-aggregation
+    project: issue-desk (#91)
+    mistake: "fetchGitHubReviewState used last-in-array aggregation for review state"
+    root_cause: "Array order approach failed when a reviewer's approval was DISMISSED — the dismissed entry was filtered out, leaving the prior approval counted"
+    lesson: >
+      Per-reviewer aggregation requires a Map keyed by reviewer login.
+      DISMISSED reviews should be stored in the Map as neutral (not filtered out),
+      so they correctly supersede prior approvals/rejections for that reviewer.
+      Skip reviews from deleted accounts (null user.login) rather than using a sentinel key.
+
+  - date: "2026-03-23"
+    issue_type: form-save-ordering
+    project: issue-desk (#91)
+    mistake: "Settings.tsx WIP limit validation was placed after store writes, causing partial saves"
+    root_cause: "Validation added at bottom of save() after setPat/setRepos/etc had already executed"
+    lesson: >
+      In a save() function, ALL validation must complete before ANY store writes.
+      If any validation can return early with setError(), it must be positioned
+      before the first setter call. Violating this creates partial-save states where
+      some fields are persisted and others are not.
+
+  - date: "2026-03-23"
+    issue_type: github-api-limitation
+    project: issue-desk (#91)
+    mistake: "Added direction=asc to fetchIssueComments URL — GitHub Issues Comments API ignores it"
+    root_cause: "Assumed GitHub Comments API supports direction/sort params like Issues API does"
+    lesson: >
+      GitHub Issues Comments API (GET /repos/{owner}/{repo}/issues/{n}/comments) does NOT
+      support direction or sort parameters. It always returns oldest-first. If code expects
+      newest-last order (for newest-wins logic), rely on the default oldest-first ordering
+      and scan from end of array. Do not add direction=desc — it is silently ignored.
+
+  - date: "2026-03-23"
+    issue_type: regex-false-positive
+    project: issue-desk (#91)
+    mistake: "MD_PHASE_RE without lookahead matched plain content headers like '## 구현' as IDD phases"
+    root_cause: "phase: prefix was optional in the regex, so any markdown header containing a KEYWORD_MAP key triggered false detection"
+    lesson: >
+      When a regex must distinguish 'intentional markers' from 'incidental content', add
+      a positive lookahead to require at least one distinguishing indicator.
+      For IDD phase detection in MD headers, use (?=.*(?:phase:|단계)) to require either
+      a 'phase:' prefix or '단계' suffix. This prevents false-positives on ordinary
+      section headers that happen to contain phase keywords.
+
+  - date: "2026-03-23"
+    issue_type: regex-character-class
+    project: issue-desk (#91)
+    mistake: "contextRe and MD_PHASE_RE missing digits — 'E2E' (contains '2') was not captured as a single token"
+    root_cause: "Character class [a-zA-Z_\uAC00-\uD7A3] excludes digits, breaking alphanumeric phase names"
+    lesson: >
+      When building regex character classes for phase/keyword matching, include [0-9]
+      if any valid keyword contains digits (e.g. 'E2E', 'e2e_test'). Omitting digits
+      causes the regex to silently split 'E2E' into 'E' + '2E', failing KEYWORD_MAP lookup.
+
+  - date: "2026-03-23"
+    issue_type: react-race-condition
+    project: issue-desk (#91)
+    mistake: "Morning briefing trigger was in a separate useEffect([issues]) — fired before loadCache completed"
+    root_cause: "useEffect([issues]) runs after React batches the setState, but issues may still be [] at that point"
+    lesson: >
+      Do not use a separate useEffect to react to state changes that were set by an async
+      operation (e.g. loadCache). Instead, put the follow-up logic directly inside the
+      async function's completion callback, after the setState call, using
+      useIssuesStore.getState() to read the latest values synchronously.
+      This avoids the empty-state window between setState and useEffect re-run.
+
+  - date: "2026-03-23"
+    issue_type: postmessage-security
+    project: issue-desk (#91)
+    mistake: "postMessage response handler did not validate event.source, allowing any window to resolve the promise"
+    root_cause: "Only event.data.id was checked; a different window could coincidentally send matching id"
+    lesson: >
+      In postMessage response handlers, always validate event.source === window.parent
+      before processing the message. event.origin is not always available (cross-origin
+      SecurityError), but event.source is safe to compare. This prevents other iframes or
+      scripts from accidentally or maliciously resolving bridge promises.
+      Note: targetOrigin='*' on the sending side is a separate concern (necessary when
+      parent origin is unknown due to cross-origin constraints).
+
+  - date: "2026-03-23"
+    issue_type: react-double-sampling
+    project: issue-desk (#91)
+    mistake: "Used both daysSince(iso) and isStale(iso) in same render — two Date.now() calls, tooltip could show 29 while badge shows stale"
+    root_cause: "isStale() internally calls daysSince() which calls Date.now() again; if clock ticks between the two calls around midnight, the values can diverge"
+    lesson: >
+      When a derived boolean (stale) and its numeric value (staleDays) are needed in the
+      same render, compute the number once and derive the boolean from it inline.
+      Do NOT call the helper function separately — it re-samples Date.now().
+      Pattern: const staleDays = daysSince(iso); const stale = staleDays >= 30;
+
+  - date: "2026-03-23"
+    issue_type: react-useeffect-loop
+    project: issue-desk (#91)
+    mistake: "TriageView useEffect depended on triageBuckets which it modified via setTriageBuckets — caused extra render cycle on every drag-drop"
+    root_cause: "cleanup effect reads triageBuckets and calls setTriageBuckets; adding triageBuckets to deps re-runs the effect after each cleanup"
+    lesson: >
+      When a cleanup useEffect reads then modifies a piece of state, do NOT include that
+      state in the deps array. Instead, read the latest value via store.getState() inside
+      the effect body. This avoids the extra render cycle while still reading fresh data.
+      Pattern: const current = useWorkflowStore.getState().triageBuckets; (inside effect,
+      deps array only includes the trigger, e.g. [issues, setTriageBuckets])
+
+  - date: "2026-03-23"
+    issue_type: uncaught-async-event-handler
+    project: issue-desk (#91)
+    mistake: "handleDrop and handleRemove were async functions called from JSX event props; Promise rejection from IndexedDB not caught"
+    root_cause: "onDrop={(e) => handleDrop(e, key)} discards the returned Promise; if IndexedDB fails, the rejection is unhandled"
+    lesson: >
+      Async functions used as React event handlers must have internal try/catch because
+      JSX event props (onDrop, onClick) do not propagate Promise rejections.
+      The unhandled rejection silently swallows errors with no user feedback.
+      Pattern: wrap the await call in try { ... } catch (err) { console.error(...); }
+      inside the async function itself, not at the call site.

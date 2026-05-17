@@ -69,6 +69,10 @@
           {
             "type": "command",
             "command": "node .claude/hooks/agents-context-mirror.js"
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/ctx-index-rebuild.js"
           }
         ]
       }

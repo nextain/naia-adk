@@ -1,0 +1,94 @@
+# Auto-split from lessons-learned.yaml on 2026-05-17
+# ctx-section-format: v1
+id: naia-adk:lessons_platform
+title: "Lessons Learned — Platform, Environment & CI"
+tags: [platform, environment, ci, testing, plymouth, vllm, bazzite, naia-os, architecture]
+related: [naia-adk:lessons_upstream, naia-adk:lessons_workflow]
+updated_at: "2026-03-28"
+source: "lessons-learned.yaml (migrated)"
+
+version: 1
+
+entries:
+  - date: "2026-03-03"
+    issue_type: environment
+    mistake: "/run tmpfs expansion via serial did not reflect in SSH namespace"
+    root_cause: "Different mount namespaces between serial console and SSH session"
+    lesson: "Namespace-sensitive operations must run in the correct session context"
+
+  - date: "2026-03-03"
+    issue_type: testing
+    mistake: "E2E timeout measured with wall clock (date +%s) included sleep time"
+    root_cause: "Wall clock vs active time confusion"
+    lesson: "Use counter-based accumulation for timeout, not wall clock"
+
+  - date: "2026-03-04"
+    issue_type: working-code
+    mistake: "Switched SSH-based Anaconda launch to serial/debug mode → D-Bus crash"
+    root_cause: "Replaced working flow with 'better' alternative without preserving original"
+    lesson: "Never break working code by switching modes — preserve first, then improve"
+
+  - date: "2026-03-06"
+    issue_type: misdiagnosis
+    mistake: "Diagnosed SDDM/GPU card0 issue, applied --device flag → kwin crash, worsened problem"
+    root_cause: "Acted on symptom (black screen) without identifying root cause (Plymouth hang)"
+    lesson: "Identify root cause before applying fixes. Ask user to describe exact symptom first"
+
+  - date: "2026-03-06"
+    issue_type: platform-knowledge
+    mistake: "Wrote Plymouth naia.script using Math.Sin/Math.Abs (JavaScript API)"
+    root_cause: "Plymouth script language is NOT JavaScript — simple C-like, no Math object"
+    lesson: "Plymouth script = custom language, not JS. Use two-step module for standard themes"
+
+  - date: "2026-03-06"
+    issue_type: testing-gap
+    mistake: "Plymouth theme hang not caught by QEMU/VNC E2E tests"
+    root_cause: "Plymouth gracefully falls back in virtual environment, only hangs on real hardware"
+    lesson: "Plymouth theme validation requires real hardware testing, not just VM/E2E"
+
+  - date: "2026-03-06"
+    issue_type: ci-maintenance
+    mistake: "Build Naia CI silently failing for unknown duration due to wrong font package name"
+    root_cause: "google-noto-sans-cjk-kr-fonts renamed to google-noto-sans-cjk-vf-fonts in Fedora 43"
+    lesson: "Monitor CI status actively. Package names change across Fedora releases"
+
+  - date: "2026-03-07"
+    issue_type: context-reading
+    mistake: "Explained naia-os context update process based only on root CLAUDE.md, missed triple-mirror structure"
+    root_cause: "Did not read project entry point (naia-os/CLAUDE.md) before answering about that project"
+    lesson: "When discussing or working on a submodule, ALWAYS read its entry point first — even for questions, not just coding"
+
+  - date: "2026-03-18"
+    issue_type: architecture-assumption
+    project: vllm-omni / MiniCPM-o
+    mistake: "Assumed CosyVoice2+HiFi-GAN was a heavy addition on top of the model"
+    root_cause: "Treated CosyVoice2 as a full TTS system addition, not as a compatible decoder for existing s3tokenizer codes"
+    lesson: >
+      When a model uses a specific audio codec (e.g. s3tokenizer = CosyVoice-family),
+      using a compatible decoder (CosyVoice2+HiFi-GAN) is NOT adding a new heavy component —
+      it's just decoding the existing codec output. Check the codec lineage before judging VRAM impact.
+      The real VRAM determinant is always the LLM backbone, not the vocoder.
+
+  - date: "2026-03-28"
+    issue_type: operational-completeness
+    project: vllm-omni / MiniCPM-o
+    mistake: "6-pass adversarial code review declared 'clean' but fresh install failed — missing deps, wrong flags, pattern mismatch"
+    root_cause: "Review lenses (accuracy/completeness/consistency) only checked code logic. Did not check: pattern compliance, dependency completeness, fresh install reproducibility, server start flags"
+    lesson: >
+      Code review is necessary but not sufficient. After code review, also verify:
+      1. Pattern compliance: does this match how other implementations work in the same project?
+      2. Dependency completeness: every import has a corresponding entry in requirements
+      3. Fresh install: git clone → pip install → server start → API call works?
+      4. Flag documentation: all required CLI flags documented in scripts and docs
+      These are not optional extras — they are part of 'review complete'.
+
+  - date: "2026-03-28"
+    issue_type: environment-recording
+    project: vllm-omni / MiniCPM-o
+    mistake: "Manual pip installs (minicpmo-utils, s3tokenizer) on RunPod not recorded in requirements or scripts"
+    root_cause: "Treated manual installs as temporary fixes, planned to 'add later', forgot"
+    lesson: >
+      Every manual pip install / apt install must be recorded in requirements/scripts
+      IMMEDIATELY — not 'later'. If you run 'pip install X' on a remote server,
+      the next line must be adding X to requirements.txt.
+      Docstring 'Requires: pip install X' is NOT a substitute for requirements entry.
