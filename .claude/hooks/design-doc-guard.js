@@ -1,53 +1,21 @@
 #!/usr/bin/env node
 /**
- * Design Doc Guard Hook (PreToolUse on Edit|Write)
- *
- * Blocks edits to design/spec documents BEFORE they happen.
- * Design docs are the Source of Truth — the AI is a reviewer, not an author.
- *
- * Permission model:
- *   Code files:   AI = implementer (can read, modify, create, delete)
- *   Design docs:  AI = reviewer   (can ONLY report findings, not decide)
- *
- * Bypass: create .claude/design-doc-unlock to allow edits in current session.
- *   The AI must ask the user first, then create the unlock file, edit, and remove it.
- *
- * Allowed edits (after surfacing to user):
- *   - Typos / grammar
- *   - Internal contradictions within the doc
- *   - Broken links / references
- *   - Research additions / reference updates (with user approval)
- *
- * Forbidden edits (always, even with unlock):
- *   - Changing design decisions to match current implementation
- *   - Modifying tech choices, interface specs, numeric ranges without user approval
- *
- * If implementation diverges from design → escalate to user, do NOT silently fix.
+ * Design Doc Guard Hook (PreToolUse on Edit|Write) — policy-only adapter.
+ * Envelope: ./_claude-edit-hook.js. Behavior byte-identical to original
+ * (G-OC01 part1 S3, pure refactor). Blocks edits to design/spec docs;
+ * .claude/design-doc-unlock bypasses (→ {decision:"allow"}).
  */
-
 const { existsSync } = require("fs");
 const { resolve } = require("path");
+let H;
+try {
+	H = require("./_claude-edit-hook.js");
+} catch {
+	process.exit(0); // original main().catch fail-open
+}
 
-async function main() {
-	let input = "";
-	for await (const chunk of process.stdin) {
-		input += chunk;
-	}
-
-	let data;
-	try {
-		data = JSON.parse(input);
-	} catch {
-		process.exit(0);
-	}
-
-	const toolName = data.tool_name || "";
+H.start((data) => {
 	const filePath = data.tool_input?.file_path || data.parameters?.file_path || "";
-
-	if (toolName !== "Edit" && toolName !== "Write") {
-		process.exit(0);
-	}
-
 	const normalized = filePath.replace(/\\/g, "/");
 
 	// Match design/spec document paths (path prefix + extension filter)
@@ -58,20 +26,17 @@ async function main() {
 		(/\/spec\//.test(normalized) && hasDesignExt);
 
 	if (!isDesignDoc) {
-		process.exit(0);
+		return null;
 	}
 
 	// Check for user-approved unlock file (.claude/design-doc-unlock)
 	const unlockFile = resolve(__dirname, "..", "design-doc-unlock");
 	if (existsSync(unlockFile)) {
-		// Allowed — user has explicitly approved this edit session
-		process.stdout.write(JSON.stringify({ decision: "allow" }));
-		process.exit(0);
+		return { allow: true }; // user has explicitly approved this edit session
 	}
 
-	const result = {
-		decision: "block",
-		reason:
+	return {
+		block:
 			`[Harness] 설계 문서 편집 차단: ${filePath}\n` +
 			"\n" +
 			"설계 문서에서 AI의 역할은 리뷰어입니다 — 저자가 아닙니다.\n" +
@@ -87,8 +52,4 @@ async function main() {
 			"\n" +
 			"사용자 승인 후: .claude/design-doc-unlock 파일 생성 → 편집 → 파일 삭제\n",
 	};
-	process.stdout.write(JSON.stringify(result));
-	process.exit(0);
-}
-
-main().catch(() => process.exit(0));
+});

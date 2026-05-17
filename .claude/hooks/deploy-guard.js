@@ -1,41 +1,32 @@
 #!/usr/bin/env node
 /**
- * Deploy Guard Hook (PreToolUse on Bash)
- *
- * Blocks production deployment commands unless explicitly approved
- * via .claude/deploy/approvals.json with valid TTL.
- *
- * Blocked:
- *   vercel --prod, vercel --production, vercel deploy --prod
- *   gcloud run deploy <prod-service>
- *
- * Allowed:
- *   vercel (preview), vercel env ..., gcloud run deploy <dev-service>
+ * Deploy Guard Hook (PreToolUse on Bash) — policy-only adapter.
+ * Envelope: ./_claude-bash-guard.js. Sanitizer: harness-core (unwrap).
+ * Behavior byte-identical to original (G-OC01 part1 S2, pure refactor).
+ * Blocks prod deploy unless approved via .claude/deploy/approvals.json.
  */
-
 const fs = require("fs");
 const path = require("path");
+let H, core;
+try {
+	H = require("./_claude-bash-guard.js");
+	core = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "harness-core.js"));
+} catch {
+	process.exit(0); // original main().catch fail-open
+}
 
 const DEPLOY_DIR = path.resolve(__dirname, "..", "deploy");
 const CONFIG_PATH = path.join(DEPLOY_DIR, "config.json");
 const APPROVALS_PATH = path.join(DEPLOY_DIR, "approvals.json");
 const AUDIT_PATH = path.join(DEPLOY_DIR, "audit.jsonl");
 
-// Prod deployment patterns to block
 const PROD_PATTERNS = [
-	// Vercel prod
 	{ pattern: /\bvercel\b.*(?:--prod|--production)\b/, platform: "vercel", label: "vercel --prod" },
-	// gcloud run deploy (will check service name against config)
 	{ pattern: /\bgcloud\s+run\s+deploy\s+(\S+)/, platform: "gcloud", label: "gcloud run deploy", serviceGroup: 1 },
-	// gcloud app deploy
 	{ pattern: /\bgcloud\s+app\s+deploy\b/, platform: "gcloud", label: "gcloud app deploy" },
-	// gcloud builds submit (always block — pushes images to shared registries)
 	{ pattern: /\bgcloud\s+builds?\s+submit\b/, platform: "gcloud", label: "gcloud builds submit", alwaysBlock: true },
-	// gcloud run services update
 	{ pattern: /\bgcloud\s+run\s+services?\s+update\s+(\S+)/, platform: "gcloud", label: "gcloud run services update", serviceGroup: 1 },
-	// gcloud run services replace
 	{ pattern: /\bgcloud\s+run\s+services?\s+replace\b/, platform: "gcloud", label: "gcloud run services replace" },
-	// docker push to GCP registries
 	{ pattern: /\bdocker\s+push\s+\S*(?:pkg\.dev|gcr\.io)\b/, platform: "gcloud", label: "docker push (registry)" },
 ];
 
@@ -54,16 +45,6 @@ function appendAudit(entry) {
 	} catch {
 		// Audit logging failure should not block
 	}
-}
-
-/**
- * Strip quoted content while preserving inner text for pattern matching.
- * e.g. vercel '--p'r'o'd' → vercel --prod (was: vercel '''''' with old approach)
- */
-function stripQuotes(command) {
-	return command
-		.replace(/'([^']*)'/g, "$1")
-		.replace(/"([^"]*)"/g, "$1");
 }
 
 function detectProject(command, config, cwd) {
@@ -85,7 +66,6 @@ function detectProject(command, config, cwd) {
 		}
 	}
 
-	// Fallback: match by cwd for vercel projects
 	if (/\bvercel\b/.test(command) && /(?:--prod|--production)\b/.test(command)) {
 		for (const [name, proj] of Object.entries(config.projects || {})) {
 			if (proj.platform === "vercel" && cwd.includes(proj.cwd)) return name;
@@ -109,9 +89,6 @@ function findApproval(project) {
 	return null;
 }
 
-/**
- * Atomically consume a single-use approval by approved_at timestamp.
- */
 function consumeApproval(project, approvedAt) {
 	try {
 		const raw = fs.readFileSync(APPROVALS_PATH, "utf8");
@@ -128,37 +105,15 @@ function consumeApproval(project, approvedAt) {
 	}
 }
 
-async function main() {
-	let input = "";
-	for await (const chunk of process.stdin) {
-		input += chunk;
-	}
-
-	let data;
-	try {
-		data = JSON.parse(input);
-	} catch {
-		// Malformed input — not a hook call, pass through
-		process.exit(0);
-	}
-
-	const toolName = data.tool_name || "";
-	const command = data.tool_input?.command || "";
-
-	if (toolName !== "Bash") {
-		process.exit(0);
-	}
-
+H.start((command, data) => {
 	// Strip quoted strings while preserving inner text
-	const stripped = stripQuotes(command);
+	const stripped = core.stripQuotesUnwrap(command);
 
 	// Skip display-only commands (false positive prevention)
-	// Only skip if echo/printf is the ONLY command (not piped to another tool)
 	if (/^\s*(echo|printf)\s/.test(stripped) && !stripped.includes("|")) {
-		process.exit(0);
+		return null;
 	}
 
-	// Check if any prod pattern matches
 	let matchedPattern = null;
 	for (const p of PROD_PATTERNS) {
 		if (p.pattern.test(stripped)) {
@@ -168,10 +123,10 @@ async function main() {
 	}
 
 	if (!matchedPattern) {
-		process.exit(0);
+		return null;
 	}
 
-	// For gcloud: check if it's a dev service (allow), but never for alwaysBlock patterns
+	// For gcloud: dev service allowed, never for alwaysBlock
 	if (matchedPattern.platform === "gcloud" && matchedPattern.serviceGroup && !matchedPattern.alwaysBlock) {
 		const serviceMatch = stripped.match(matchedPattern.pattern);
 		if (serviceMatch) {
@@ -179,23 +134,20 @@ async function main() {
 			const config = loadJSON(CONFIG_PATH, { projects: {} });
 			for (const proj of Object.values(config.projects || {})) {
 				if (proj.dev_service === service || service.endsWith("-dev")) {
-					process.exit(0); // Dev service — allow
+					return null; // Dev service — allow
 				}
 			}
 		}
 	}
 
-	// Load config and detect project
 	const config = loadJSON(CONFIG_PATH, { projects: {} });
 	const cwd = data.cwd || process.cwd();
 	const project = detectProject(stripped, config, cwd);
 	const sessionId = data.session_id || "unknown";
 
-	// Check approvals
 	const approval = findApproval(project);
 
 	if (approval) {
-		// Valid approval — log and allow
 		appendAudit({
 			event: "executed",
 			project: project || "unknown",
@@ -206,7 +158,6 @@ async function main() {
 			approval_expires: approval.expires_at,
 		});
 
-		// If single_use, consume the approval
 		if (approval.single_use) {
 			consumeApproval(project, approval.approved_at);
 			appendAudit({
@@ -216,10 +167,9 @@ async function main() {
 			});
 		}
 
-		process.exit(0);
+		return null;
 	}
 
-	// No valid approval — BLOCK
 	appendAudit({
 		event: "blocked",
 		project: project || "unknown",
@@ -231,8 +181,7 @@ async function main() {
 	const projectLabel = project || "(project not detected from cwd)";
 	const remainingMin = config.default_ttl_minutes || 30;
 
-	const result = {
-		decision: "block",
+	return {
 		reason:
 			`[Harness] prod 배포 명령 차단: \`${matchedPattern.label}\`\n` +
 			`프로젝트: ${projectLabel}\n\n` +
@@ -243,8 +192,4 @@ async function main() {
 			`승인 TTL: ${remainingMin}분\n` +
 			"AI는 prod 배포를 직접 실행하지 않습니다.",
 	};
-	process.stdout.write(JSON.stringify(result));
-	process.exit(0);
-}
-
-main().catch(() => process.exit(0));
+});
