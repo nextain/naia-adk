@@ -266,6 +266,45 @@ optInLocalmodels:
     provides: 노래(SVS) backend — ref voice + 곡 → 사용자 음색 가창
     selectedVia: localmodel 설정 (opt-in)
 
+# ctx on-demand loading (ctx-section-format v1)
+# 필요한 섹션만 정밀 로드 가능. AI는 전체 파일 대신 관련 섹션 ID만 읽을 것.
+# 인덱스: .agents/context/.ctx-index.json (gitignored, 훅으로 자동 재빌드)
+on_demand_loading:
+  index: .agents/context/.ctx-index.json
+  sections:
+    - id: naia-adk:lessons_workflow
+      file: .agents/context/lessons-workflow.yaml
+      description: "Workflow & process lessons (IDD violations, review, harness-design, destructive-action)"
+      tags: [workflow, idd, review, harness, iteration]
+    - id: naia-adk:lessons_upstream
+      file: .agents/context/lessons-upstream.yaml
+      description: "Upstream integration & contribution lessons (fork, rebase, pattern-compliance)"
+      tags: [upstream, integration, contribution, fork]
+    - id: naia-adk:lessons_platform
+      file: .agents/context/lessons-platform.yaml
+      description: "Platform, environment & CI lessons (Plymouth, vLLM, Bazzite, naia-os)"
+      tags: [platform, ci, environment, testing, vllm]
+    - id: naia-adk:lessons_frontend
+      file: .agents/context/lessons-frontend.yaml
+      description: "Frontend lessons (React, IndexedDB, GitHub API, regex) — all issue-desk"
+      tags: [react, indexeddb, github-api, regex, issue-desk]
+    - id: naia-adk:lessons_documents
+      file: .agents/context/lessons-documents.yaml
+      description: "Document extraction lessons — HWP/DOCX/PPTX (read-doc skill)"
+      tags: [document-extraction, hwp, docx, pptx]
+    - id: naia-adk:gstack_comparison
+      file: .agents/context/gstack-comparison.md
+      description: "gstack vs naia-adk comparison — completeness, scope, review, verification (sections 1-8)"
+      tags: [gstack, code-review, scope, completeness]
+    - id: naia-adk:gstack_hooks
+      file: .agents/context/gstack-hooks.md
+      description: "gstack hook system analysis + all findings (A-E, F1-F10)"
+      tags: [gstack, hooks, harness, findings]
+    - id: naia-adk:gstack_priority
+      file: .agents/context/gstack-priority.md
+      description: "gstack improvement priority list (P0-P3)"
+      tags: [gstack, priority]
+
 # 진입점 우선순위
 entrypointPriority:
   - CLAUDE.md    # = AGENTS.md = GEMINI.md (always identical, pick any)

@@ -1,0 +1,40 @@
+# Auto-split from lessons-learned.yaml on 2026-05-17
+# ctx-section-format: v1
+id: naia-adk:lessons_documents
+title: "Lessons Learned — Document Extraction (read-doc skill)"
+tags: [document-extraction, hwp, docx, pptx, read-doc, python]
+related: [naia-adk:lessons_workflow, naia-adk:lessons_platform]
+updated_at: "2026-03-18"
+source: "lessons-learned.yaml (migrated)"
+
+version: 1
+
+entries:
+  - date: "2026-03-18"
+    issue_type: document-extraction
+    project: read-doc skill
+    mistake: "Used hwp5txt for HWP extraction, got only 875 chars (table placeholders only)"
+    root_cause: "hwp5txt outputs <표><그림> placeholders instead of actual table cell content"
+    lesson: >
+      For HWP extraction, always use hwp5html (not hwp5txt).
+      hwp5txt skips all table content. hwp5html generates full XHTML including tables — strip
+      <style> blocks first (re.DOTALL), then strip all tags, then html.unescape.
+
+  - date: "2026-03-18"
+    issue_type: document-extraction
+    project: read-doc skill
+    mistake: "PPTX/HWPX file lists sorted alphabetically, giving wrong order for 10+ items"
+    root_cause: "sorted() on strings like 'slide1.xml','slide10.xml','slide2.xml' is alphabetic, not numeric"
+    lesson: >
+      When sorting numbered filenames (slide\d+.xml, section\d+.xml), always use numeric key:
+        key=lambda x: int(re.search(r'\d+', x).group())
+      Plain sorted() gives wrong order for 10+ items.
+
+  - date: "2026-03-18"
+    issue_type: document-extraction
+    project: read-doc skill
+    mistake: "DOCX extraction using only doc.paragraphs missed all table content"
+    root_cause: "python-docx paragraphs property does not include table cells"
+    lesson: >
+      For DOCX, always iterate both doc.paragraphs AND doc.tables.
+      Table-heavy documents (e.g. resumes, forms) may have near-zero paragraph text.

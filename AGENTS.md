@@ -28,6 +28,23 @@ Fork on GitHub, then periodically sync upstream: `git fetch upstream && git merg
 4. `.agents/requirements/_index.yaml` — Product requirements index
 5. `.agents/context/skills-index.yaml` — Skill trigger/summary index
 
+**ctx on-demand sections (load ONLY what you need — never load the full file):**
+
+`project-index.yaml` → `on_demand_loading` lists available section IDs. Load by topic:
+
+| Need | Load |
+|------|------|
+| workflow / IDD / review lessons | `.agents/context/lessons-workflow.yaml` |
+| upstream / fork / contribution lessons | `.agents/context/lessons-upstream.yaml` |
+| platform / CI / vLLM / Bazzite lessons | `.agents/context/lessons-platform.yaml` |
+| React / IndexedDB / GitHub API lessons | `.agents/context/lessons-frontend.yaml` |
+| document extraction (HWP/DOCX/PPTX) | `.agents/context/lessons-documents.yaml` |
+| gstack comparison (sections 1-8) | `.agents/context/gstack-comparison.md` |
+| gstack hook findings (A-E, F1-F10) | `.agents/context/gstack-hooks.md` |
+| gstack priority list (P0-P3) | `.agents/context/gstack-priority.md` |
+
+Index for search: `.agents/context/.ctx-index.json` (auto-rebuilt by hook, gitignored)
+
 ## Project Structure
 
 ### Workspace Directories
