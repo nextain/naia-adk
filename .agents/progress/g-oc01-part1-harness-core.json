@@ -4,8 +4,9 @@
   "parent": "D-OC10 (naia own orchestrator — pi substrate)",
   "refs": ["naia-os#300 (G-OC01)", "alpha-adk .agents/progress/adr-naia-own-orchestrator-2026-05-18.md", "cr-20260517-152553 (CLEAN x2)"],
   "issue": "PENDING (GitHub Issue creation held — outward, user-gated)",
-  "current_phase": "build",
-  "status": "PART1 COMPLETE (S1+S2+S3 all 2-consecutive-clean). Pending: commit (user decision — upstream-shared base ADK), GH issue/sub-issues (outward, user-gated).",
+  "session_id": "6b8c540f-de0e-4542-a271-58aa5a87341d",
+  "current_phase": "e2e_test",
+  "status": "PART1 refactor COMMITTED naia-adk@6b95d6a. Now e2e_test: verify harness works on a real intended coding task + ADK structure understanding (user-defined goal endpoint). Pending: GH issue/sub-issues (outward, user-gated).",
   "scope_decision": "A — extract machinery only; behavior byte-identical (pure refactor). No forbidden_actions schema (deferred=B). pi adapter=part2.",
   "slices": {
     "S1": {
