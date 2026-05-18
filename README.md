@@ -206,9 +206,16 @@ Any AI tool can connect — not limited to Claude Code, Codex, or Naia OS:
 |--------|-----------|------|
 | opencode | Direct filesystem | TUI coding agent |
 | Claude Code | Direct filesystem + hooks | CLI coding agent |
+| pi | Direct filesystem + extension | CLI coding agent |
 | Codex | REST API | CLI coding agent |
 | Naia OS | REST API + WebSocket | Desktop app |
 | Browser | Dashboard | Monitoring & settings |
+
+The enforcement harness is **tool-agnostic**: a host-neutral core
+(`.agents/hooks/core/`) + policies (`.agents/hooks/policies/`) drive both
+the Claude Code hooks (`.claude/hooks/`) and the pi extension
+(`.pi/extensions/naia-harness.ts`) — the same guards run on either host
+with zero core change.
 
 ### LLM Connection
 

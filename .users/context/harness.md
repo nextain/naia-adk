@@ -10,6 +10,19 @@
 
 ---
 
+## 아키텍처 (G-OC01: 도구 비종속 하네스, 2026-05-18)
+
+도구별 모놀리식 훅 → **도구 비종속 코어 + 정책 + 호스트 어댑터** 구조로 리팩터하고, 두 번째 호스트(pi)에서 실증.
+
+- **core** `.agents/hooks/core/harness-core.js` — 호스트 중립 SoT(세션/anti-compact + 새니타이저). 호스트 결합 0.
+- **policies** `.agents/hooks/policies/{bash,edit}.js` — 호스트 중립 가드 정책. `process.exit`·호스트 I/O 봉투 없음.
+- **host adapters** — Claude(`.claude/hooks/_claude-{bash,edit}-*.js` + 얇은 어댑터, 리팩터 전과 byte-동일) / **pi**(`.pi/extensions/naia-harness.ts` — 동일 정책·코어 재사용, core 무변경).
+- **fail-mode 불변식**: 가드별 **하드코딩**(데이터 아님) — pr-guard fail-CLOSED, 나머지 5 bash 가드 fail-OPEN. 양 호스트 보존(적대 검증 완료).
+
+**상태**: part1+part2 **완료 & 적대 2-consecutive-clean(6라운드)** — 실 pi@0.74.1 런타임 게이트 20/20, Claude parity(golden 8/42/19 + E2E 64 + system 13) byte-동일. **cross-tool 목표(Claude+pi 동일 하네스, core 무변경) 달성·검증.** partB(선언적 guard_policies) = 3라운드 설계리뷰 → **DEFER 권고**(SoT-정책화에 건전한 무결성 루트 없음; 2/9 가드만 적합; cross-tool 목표 이미 달성). 상세 = `.agents/progress/g-oc01-partB-forbidden-actions-plan.md`.
+
+---
+
 ## 검증 항목
 
 ### H1 — False Positive 테스트

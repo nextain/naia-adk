@@ -6,6 +6,33 @@
 
 version: 1
 
+# ─── Architecture (G-OC01: tool-agnostic harness) ─────────────
+# 2026-05-18: the harness was refactored from per-tool monolithic hooks
+# into a tool-agnostic core, then proven on a second host (pi).
+architecture:
+  core:
+    file: ".agents/hooks/core/harness-core.js"
+    role: "host-neutral SoT — session/anti-compact (buildSessionInject, compactReminderMessage) + sanitizers. ZERO host coupling."
+  policies:
+    files: [".agents/hooks/policies/bash.js", ".agents/hooks/policies/edit.js"]
+    role: "host-neutral guard policies (command|data,opts)->{reason}|{block}|{allow}|{postContext}|null. No process.exit, no host I/O envelope."
+  host_adapters:
+    claude:
+      files: [".claude/hooks/_claude-bash-guard.js", ".claude/hooks/_claude-edit-hook.js", "+ thin .claude/hooks/*.js adapters"]
+      role: "Claude Code stdin/exit envelope around the shared policies. Behavior byte-identical to the pre-refactor monolithic hooks."
+    pi:
+      file: ".pi/extensions/naia-harness.ts"
+      role: "earendil-works/pi extension — maps pi events (tool_call/before_agent_start/tool_result) to the SAME policies + core. ZERO core change."
+  fail_mode_invariant: "HARDCODED per guard, never data: pr-guard fail-CLOSED; the other 5 bash guards fail-OPEN. Preserved on BOTH hosts (adversarially proven)."
+  status:
+    part1: "COMPLETE — tool-agnostic extraction, byte-identical (golden 8/42/19 + E2E 64 + system 13)."
+    part2: "COMPLETE & adversarially 2-consecutive-clean (6 rounds) — policy neutralization + pi adapter + real pi@0.74.1 runtime gate (20/20). Cross-tool goal (same harness on Claude + pi, zero core change) MET & verified."
+    partB: "declarative guard_policies schema — design-reviewed 3 rounds -> FIRM DEFER (no sound integrity root for SoT-as-policy; only 2/9 guards qualify; cross-tool goal already met). See .agents/progress/g-oc01-partB-forbidden-actions-plan.md."
+  gates:
+    - ".claude/hooks/e2e/run.sh — 64 real-condition contract assertions (committed)"
+    - ".claude/hooks/e2e/scenario.sh — 13-step system E2E via real settings.json dispatch"
+    - ".claude/hooks/e2e/pi-runtime-e2e.mjs — real pi-runtime gate, 20/20 (prereq: npm i @earendil-works/pi-coding-agent@0.74.1)"
+
 # ─── Verification Checklist ───────────────────────────────────
 
 checklist:
