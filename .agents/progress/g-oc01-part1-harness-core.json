@@ -82,5 +82,11 @@
     "conclusion": "DEFER. Structural security CRITICAL (R3): SoT-as-policy has no sound integrity root (hardcoded baseline defeats fork-JSON-only purpose; .lock collapses to admittedly-leaky Layer-A) — not spec-fixable. Only 2/9 guards safely qualify. Cross-tool goal ALREADY met by part2. No concrete fork demand. Reviewers converged on §9 defer recommendation.",
     "user_options": "(1) DEFER [recommended] close design-not-built; (2) minimal B1 (destructive_git+email_send) accepting Layer-B is bar-raiser-not-guarantee w/ documented risk; (3) redesign integrity root (signing/human-review-gate) as separate larger effort first.",
     "no_code": "NO implementation — behavior-surface, user-gated, recommended defer. Plan preserved as re-openable design record."
+  },
+  "propagation": {
+    "status": "ASSESSED — pending user scope decision",
+    "finding": "onmam-adk + naia-business-adk are on the PRE-refactor monolithic harness (no harness-core.js/policies/pi-adapter; missing _claude-{bash,edit} envelopes; naia-business-adk also missing agents-context-mirror.js). NO fork-unique hooks (clean-ish), but all 11 common hooks differ from naia-adk — overwhelmingly the refactor itself, BUT each must be verified for fork-specific regex/reason deviations before replacement (partial-merge-trap risk). No upstream remote configured → manual port, not git-merge.",
+    "scope": "= re-run G-OC01 part1+part2 for 2 production ADK forks: port harness-core+policies+envelopes+pi-adapter+e2e gates; per-fork verify each monolithic hook for bespoke deviations (carry into shared policy or keep as fork override); golden parity per fork; adversarial verify. High-impact (security-boundary, production).",
+    "decision_needed": "user scope/sequencing (both now as deliberate workstream / pilot one fork / schedule). Not auto-launched at session end (hard-to-reverse outward, partial-merge-trap class)."
   }
 }
