@@ -124,8 +124,12 @@ try {
   try { bo = await runner.emitBeforeAgentStart("hi", undefined, "BASE", { cwd: WS }); }
   catch (e) { console.log("  (emitBeforeAgentStart opt-out err: " + e.message + ")"); }
   const so = bo && (bo.systemPrompt || "");
-  ok(!/\[HARNESS: SESSION STATE\]/.test(so) && !/SESSION UNBOUND/.test(so),
-     "pi before_agent_start: .pi/no-harness suppresses session-state (hostConfigDir threaded)");
+  // !!so + positive reminder check: a handler crash → so undefined →
+  // FAIL (not false-clean). Faithful to Claude: opt-out suppresses
+  // session-state but the independent post-compact reminder still fires.
+  ok(!!so && /MANDATORY|AGENTS\.md/.test(so)
+       && !/\[HARNESS: SESSION STATE\]/.test(so) && !/SESSION UNBOUND/.test(so),
+     "pi before_agent_start: .pi/no-harness suppresses session-state, reminder still fires (hostConfigDir threaded)");
   fs.rmSync(path.join(WS, ".pi/no-harness"), { force: true });
 } catch (e) {
   console.log("FATAL " + (e && e.stack || e)); F++;
