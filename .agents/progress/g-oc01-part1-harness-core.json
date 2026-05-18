@@ -10,7 +10,7 @@
   "issue": "nextain/naia-adk#6 (G-OC01) — umbrella nextain/naia-agent#37 (D-OC10)",
   "issue_url": "https://github.com/nextain/naia-adk/issues/6",
   "session_id": "6b8c540f-de0e-4542-a271-58aa5a87341d",
-  "current_phase": "post-test-review-PASSED → B (declarative forbidden_actions, own IDD)",
+  "current_phase": "part2 COMPLETE · B = design-reviewed → DEFER recommended (user Plan-gate decision pending)",
   "status": "PART1 refactor COMMITTED naia-adk@6b95d6a + system-E2E @30a33da. E2E verdict: NATIVE LIVE PROOF is primary — alpha-adk (itself one of our ADK forks) harness fires live in the working session (session-inject SESSION STATE injection every prompt; destructive-git-guard blocked a real `git checkout --`; pr-guard blocked a real external `gh pr create`). Synthetic dispatch was over-engineering. Refactor correctness = byte-identical (golden 69) + system-dispatch E2E 13/13. Cross-ADK = via sync-upstream propagation (nextain-adk↔alpha↔onmam↔business-adk), each fork's live session runs it natively. Pending: GH issue/sub-issues (outward), sync-upstream propagation, push (user).",
   "scope_decision": "A — extract machinery only; behavior byte-identical (pure refactor). No forbidden_actions schema (deferred=B). pi adapter=part2.",
   "slices": {
@@ -74,5 +74,13 @@
     "④_DONE": "adversarial 2-consecutive-clean ACHIEVED (R5+R6 all CLEAN). 6 rounds, findings HIGH→HIGH→LOW→CRITICAL→LOW→LOW(advisory), every confirmed defect fixed: R1 notify→systemPrompt/tool_result + tool_result(not execution_end) + per-guard fail-mode + gate coverage 9→16; R2 sessionId via ctx.sessionManager.getSessionId() (R1 null was factual error) + gate hardened bound/opt-out discriminating; R3 gate opt-out !!so crash-safe (prior-session worktree stub contamination = env-only, never committed, remediated); R4 CRITICAL pi {path,edits,content}≠{file_path} normalization in adapter + edit.js unlockHint default-preserving + gate pi-real shapes 18→19; R5 close gate gap prodGateway-via-edits-synthesis 19→20; R6 cascade append-vs-replace precision. Fix commits 58982bc,30bc67f,d83ae96,c6a1089,4ec179d,b30331c. Gate: pi-runtime 20/20 real pi@0.74.1; Claude parity golden 8/42/19 + E2E 64 + system 13 byte-identical throughout. Tool coverage proven complete (pi registry: bash/edit/write guarded, read/grep/find/ls read-only, no custom tools). cr-20260518-002911.",
     "accepted_non_blocking": "R2/R4 allow-path gate gaps (deploy approval-allow, git-push marker-allow, designDoc unlock-allow) — block paths = the security guarantee, fully exercised; allow/secondary paths non-blocking, review-judged acceptable for part2 acceptance gate."
   },
-  "next": "part2 COMPLETE & adversarially verified. NEXT = B (user 'A되면 B진행'): declarative forbidden_actions schema — migrate hardcoded guard policies → data-driven rules in agents-rules.json. This is a BEHAVIOR-SURFACE change (NOT pure refactor; S2/S3/part1 flagged higher regression risk) → starts with its OWN IDD understand/scope/plan + adversarial design review BEFORE any code. B does not inherit part2's byte-identical contract — it deliberately changes the policy source-of-truth surface, so it needs explicit design + a new acceptance bar."
+  "next": "AWAIT USER at G-OC01 partB Plan gate (decide DEFER[rec] / minimal-B1 / redesign-integrity-root). G-OC01 part1+part2 are COMPLETE & adversarially verified (2-clean). part2 fix commits 58982bc,30bc67f,d83ae96,c6a1089,4ec179d,b30331c + progress ec99c27. B = design-reviewed, DEFER recommended. Nothing further to implement until user decides on B.",
+  "partB": {
+    "status": "DESIGN-REVIEWED → DEFER (firm, self-rigorous) — user Plan-gate decision pending",
+    "plan": ".agents/progress/g-oc01-partB-forbidden-actions-plan.md (v3, review-hardened)",
+    "design_review": "cr-20260518-014328-partB-design — 3 rounds (R1 19 / R2 ~13 / R3 ~10), 3 independent axes (design-soundness, security/fail-safe, feasibility/test-plan)",
+    "conclusion": "DEFER. Structural security CRITICAL (R3): SoT-as-policy has no sound integrity root (hardcoded baseline defeats fork-JSON-only purpose; .lock collapses to admittedly-leaky Layer-A) — not spec-fixable. Only 2/9 guards safely qualify. Cross-tool goal ALREADY met by part2. No concrete fork demand. Reviewers converged on §9 defer recommendation.",
+    "user_options": "(1) DEFER [recommended] close design-not-built; (2) minimal B1 (destructive_git+email_send) accepting Layer-B is bar-raiser-not-guarantee w/ documented risk; (3) redesign integrity root (signing/human-review-gate) as separate larger effort first.",
+    "no_code": "NO implementation — behavior-surface, user-gated, recommended defer. Plan preserved as re-openable design record."
+  }
 }
