@@ -92,6 +92,10 @@ try {
      "pi tool_call: designDoc block message shows pi-native unlock path");
   r = await tc("write", { path: ".env.local", content: "naia-gateway-181404717065.asia-northeast3.run.app" });
   ok(r && r.block === true && /prod 게이트웨이/.test(r.reason || ""), "pi tool_call: prodGateway BLOCKED (pi {path,content})");
+  // R5 LOW close: exercise the edits→new_string synthesis branch the R4
+  // fix introduced — a prod KEY smuggled via edit[].newText must block.
+  r = await tc("edit", { path: ".env.local", edits: [{ oldText: "x", newText: "11ypvgv9LEBEeeOLXsJODhEyhCyQr36UzNA6nl5-Ptg" }] });
+  ok(r && r.block === true && /prod 게이트웨이/.test(r.reason || ""), "pi tool_call: prodGateway BLOCKED via edit newText (edits→new_string synthesis)");
   r = await tc("write", { path: "src/app.ts", content: "ok" });
   ok(!r || r.block !== true, "pi tool_call: normal code write NOT blocked");
 
