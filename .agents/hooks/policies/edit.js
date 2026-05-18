@@ -38,7 +38,7 @@ function designDoc(data, opts) {
 			"      1. GitHub Issue 코멘트: 설계-구현 괴리 발견 내용 + 선택지 제시\n" +
 			"      2. 사용자 결정 대기\n" +
 			"\n" +
-			"사용자 승인 후: .claude/design-doc-unlock 파일 생성 → 편집 → 파일 삭제\n",
+			`사용자 승인 후: ${(opts && opts.unlockHint) || ".claude/design-doc-unlock"} 파일 생성 → 편집 → 파일 삭제\n`,
 	};
 }
 
