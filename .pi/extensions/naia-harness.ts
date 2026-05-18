@@ -49,6 +49,7 @@ const edit = require(path.join(WS, ".agents", "hooks", "policies", "edit.js"));
 
 const DEPLOY_DIR = path.join(WS, ".claude", "deploy"); // workspace-level approvals
 const UNLOCK_FILE = path.join(WS, ".pi", "design-doc-unlock"); // pi-native marker
+const UNLOCK_HINT = ".pi/design-doc-unlock"; // shown in the block message (pi-native)
 const HOST = { optOutEnvVar: "NAIA_HARNESS", hostConfigDir: ".pi", entryPoint: "AGENTS.md" };
 
 export default function (pi: ExtensionAPI) {
@@ -86,9 +87,29 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		if (event.toolName === "edit" || event.toolName === "write") {
-			const data = { tool_input: event.input };
+			// pi EditToolInput={path,edits:[{oldText,newText}]},
+			// WriteToolInput={path,content} — the field is `path`, NOT
+			// `file_path`. Policies are host-neutral, keyed to the Claude-
+			// shaped contract (tool_input.file_path/content/new_string)
+			// which Claude stdin provides natively; the adapter translates
+			// pi's native shape into it. [part2 ④ R4 fix: raw event.input
+			// had only `path` → designDoc/prodGateway/cascade silently
+			// inoperative in pi = security regression.]
+			const inp: any = event.input || {};
+			const data = {
+				tool_input: {
+					file_path: inp.path ?? inp.file_path,
+					content: inp.content,
+					new_string: Array.isArray(inp.edits)
+						? inp.edits.map((e: any) => (e && e.newText) || "").join("\n")
+						: inp.new_string,
+				},
+			};
 			try {
-				const dd = edit.designDoc(data, { unlockFile: UNLOCK_FILE });
+				const dd = edit.designDoc(data, {
+					unlockFile: UNLOCK_FILE,
+					unlockHint: UNLOCK_HINT,
+				});
 				if (dd && dd.block !== undefined) return { block: true, reason: dd.block };
 				// {allow:true} → no block (pi has no explicit allow; absence = proceed)
 			} catch {
@@ -135,7 +156,11 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_result", async (event: any) => {
 		try {
 			if (event.toolName === "edit" || event.toolName === "write") {
-				const r = edit.cascadeCheck({ tool_input: event.input });
+				// pi {path,...} → policy contract {file_path} (see tool_call note)
+				const inp: any = event.input || {};
+				const r = edit.cascadeCheck({
+					tool_input: { file_path: inp.path ?? inp.file_path },
+				});
 				if (r && r.postContext) {
 					return {
 						content: [

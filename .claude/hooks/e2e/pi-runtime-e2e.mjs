@@ -82,11 +82,17 @@ try {
   r = await tc("bash", { command: "git status" });
   ok(!r || r.block !== true, "pi tool_call: safe bash NOT blocked");
   // ── edit chain ──
-  r = await tc("edit", { file_path: "/p/docs/design/x.md", new_string: "y" });
-  ok(r && r.block === true && /설계 문서 편집 차단/.test(r.reason || ""), "pi tool_call: designDoc BLOCKED");
-  r = await tc("write", { file_path: ".env.local", content: "naia-gateway-181404717065.asia-northeast3.run.app" });
-  ok(r && r.block === true && /prod 게이트웨이/.test(r.reason || ""), "pi tool_call: prodGateway BLOCKED");
-  r = await tc("write", { file_path: "src/app.ts", content: "ok" });
+  // pi-ACTUAL input shapes: EditToolInput={path,edits:[{oldText,newText}]},
+  // WriteToolInput={path,content} — NOT Claude's {file_path,new_string}.
+  // (R4 fix: prior fixtures fabricated {file_path} → masked that the
+  // adapter never normalized pi's `path` → guards were inoperative.)
+  r = await tc("edit", { path: "/p/docs/design/x.md", edits: [{ oldText: "a", newText: "y" }] });
+  ok(r && r.block === true && /설계 문서 편집 차단/.test(r.reason || ""), "pi tool_call: designDoc BLOCKED (pi {path,edits})");
+  ok(r && /\.pi\/design-doc-unlock/.test(r.reason || "") && !/\.claude\/design-doc-unlock/.test(r.reason || ""),
+     "pi tool_call: designDoc block message shows pi-native unlock path");
+  r = await tc("write", { path: ".env.local", content: "naia-gateway-181404717065.asia-northeast3.run.app" });
+  ok(r && r.block === true && /prod 게이트웨이/.test(r.reason || ""), "pi tool_call: prodGateway BLOCKED (pi {path,content})");
+  r = await tc("write", { path: "src/app.ts", content: "ok" });
   ok(!r || r.block !== true, "pi tool_call: normal code write NOT blocked");
 
   // ── cascade via tool_result (R1 fix: was tool_execution_end no-input;
@@ -95,7 +101,7 @@ try {
   try {
     tr = await runner.emitToolResult({
       type: "tool_result", toolName: "edit", toolCallId: "tr1",
-      input: { file_path: WS + "/.agents/context/agents-rules.json" },
+      input: { path: WS + "/.agents/context/agents-rules.json" },
       content: [{ type: "text", text: "edited" }], details: {}, isError: false,
     });
   } catch (e) { console.log("  (emitToolResult err: " + e.message + ")"); }
