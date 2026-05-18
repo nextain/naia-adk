@@ -52,5 +52,5 @@
     "remaining": "④ adversarial 2-clean review of part2 (port-fidelity: part1 byte-identity preserved through policy-extraction; pi mapping correctness; security: deploy opts.deployDir / pr fail-closed-in-pi / cascade-notify analog; test validity).",
     "pi_api_confirmed": "docs/extensions.md: export default function(pi){pi.on('tool_call',async(e,ctx)=>...return {block:true,reason}); pi.on('before_agent_start',async(e)=>({systemPrompt:e.systemPrompt+'\\n\\n'+inject}))}. Auto-discover .pi/extensions/*.ts (jiti, TS, node builtins+CJS require ok). event.toolName(bash/edit/write/…)+event.input typed."
   },
-  "next": "part2 slice loop continues: finish policy neutralization (10 policies) → pi adapter → ref-pi live E2E → adversarial 2-clean. Committed-increment discipline (internal repo = normal maintainer flow)."
+  "next": "④ part2 adversarial 2-clean review IN PROGRESS (cr review of policy-extraction byte-identity + pi mapping + security + pi-runtime test validity). THEN QUEUED by user (A되면 B진행): option B = declarative forbidden_actions schema — migrate hardcoded guard policies to data-driven rules in agents-rules.json (deferred from part1 scope-A; this is a BEHAVIOR-SURFACE change, NOT pure refactor → needs its own IDD design/plan/adversarial review; S2/S3 reviewers flagged higher regression risk). B starts after ④ reaches 2-clean."
 }

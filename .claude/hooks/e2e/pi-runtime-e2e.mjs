@@ -62,23 +62,51 @@ try {
   const tc = async (toolName, input) =>
     runner.emitToolCall({ type: "tool_call", toolCallId: "c", toolName, input });
 
+  // ── full bash chain coverage (R1 gap fix: every guard via pi path,
+  //    so a silent chain drop / miswire is caught) ──
   let r = await tc("bash", { command: "git rese" + "t --hard HEAD~1" });
-  ok(r && r.block === true && /파괴적 git/.test(r.reason || ""), "pi-runtime tool_call: destructive bash BLOCKED");
-  r = await tc("bash", { command: "git status" });
-  ok(!r || r.block !== true, "pi-runtime tool_call: safe bash NOT blocked");
+  ok(r && r.block === true && /파괴적 git/.test(r.reason || ""), "pi tool_call: destructiveGit BLOCKED");
   r = await tc("bash", { command: "gh " + "pr crea" + "te --repo openclaw/openclaw -t x -b y" });
-  ok(r && r.block === true && /외부 repo/.test(r.reason || ""), "pi-runtime tool_call: external gh pr BLOCKED");
+  ok(r && r.block === true && /외부 repo/.test(r.reason || ""), "pi tool_call: prGuard external BLOCKED");
+  r = await tc("bash", { command: "git commit -m wip" });
+  ok(r && r.block === true && /커밋 차단/.test(r.reason || ""), "pi tool_call: commit BLOCKED (phase=build)");
+  r = await tc("bash", { command: "vercel --prod" });
+  ok(r && r.block === true && /prod 배포/.test(r.reason || ""), "pi tool_call: deploy BLOCKED (no approval)");
+  r = await tc("bash", { command: "git push origin main" });
+  ok(r && r.block === true && /git push 차단|FORCE PUSH/.test(r.reason || ""), "pi tool_call: gitPush BLOCKED");
+  r = await tc("bash", { command: "node sen" + "d.js sen" + "d" });
+  ok(r && r.block === true && /외부 이메일 발송 차단/.test(r.reason || ""), "pi tool_call: emailSend BLOCKED");
+  r = await tc("bash", { command: "git status" });
+  ok(!r || r.block !== true, "pi tool_call: safe bash NOT blocked");
+  // ── edit chain ──
   r = await tc("edit", { file_path: "/p/docs/design/x.md", new_string: "y" });
-  ok(r && r.block === true && /설계 문서 편집 차단/.test(r.reason || ""), "pi-runtime tool_call: design-doc edit BLOCKED");
+  ok(r && r.block === true && /설계 문서 편집 차단/.test(r.reason || ""), "pi tool_call: designDoc BLOCKED");
+  r = await tc("write", { file_path: ".env.local", content: "naia-gateway-181404717065.asia-northeast3.run.app" });
+  ok(r && r.block === true && /prod 게이트웨이/.test(r.reason || ""), "pi tool_call: prodGateway BLOCKED");
   r = await tc("write", { file_path: "src/app.ts", content: "ok" });
-  ok(!r || r.block !== true, "pi-runtime tool_call: normal code write NOT blocked");
+  ok(!r || r.block !== true, "pi tool_call: normal code write NOT blocked");
 
+  // ── cascade via tool_result (R1 fix: was tool_execution_end no-input;
+  //    reminder must reach the AGENT = appended to result content) ──
+  let tr;
+  try {
+    tr = await runner.emitToolResult({
+      type: "tool_result", toolName: "edit", toolCallId: "tr1",
+      input: { file_path: WS + "/.agents/context/agents-rules.json" },
+      content: [{ type: "text", text: "edited" }], details: {}, isError: false,
+    });
+  } catch (e) { console.log("  (emitToolResult err: " + e.message + ")"); }
+  const trc = tr && tr.content ? tr.content.map((c) => c.text || "").join("") : "";
+  ok(/agents-rules\.json is the SoT/.test(trc), "pi tool_result: cascade reminder appended to AGENT-visible content");
+
+  // ── anti-compact: harness state + re-read reminder in systemPrompt ──
   let bas;
   try { bas = await runner.emitBeforeAgentStart("hi", undefined, "BASE-SYSPROMPT", { cwd: WS }); }
   catch (e) { console.log("  (emitBeforeAgentStart err: " + e.message + ")"); }
   const sp = bas && (bas.systemPrompt || "");
-  ok(!!sp && sp !== "BASE-SYSPROMPT" && /HARNESS/.test(sp), "pi-runtime before_agent_start: harness state injected");
-  ok(!!sp && (/NAIA_HARNESS/.test(sp) || /\.pi\/no-harness/.test(sp) || /PI-RT/.test(sp)), "pi-runtime before_agent_start: pi-native inject");
+  ok(!!sp && sp !== "BASE-SYSPROMPT" && /HARNESS/.test(sp), "pi before_agent_start: harness state injected");
+  ok(!!sp && (/NAIA_HARNESS/.test(sp) || /\.pi\/no-harness/.test(sp) || /PI-RT/.test(sp)), "pi before_agent_start: pi-native inject");
+  ok(!!sp && /MANDATORY|AGENTS\.md/.test(sp), "pi before_agent_start: re-read reminder folded in (agent-visible, not notify)");
 } catch (e) {
   console.log("FATAL " + (e && e.stack || e)); F++;
 } finally {
