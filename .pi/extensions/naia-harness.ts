@@ -24,12 +24,14 @@
  *                      Claude PostToolUse additionalContext). [R1 fix:
  *                      was tool_execution_end (no input field) + notify.]
  *
- * pi has no per-extension session id (ExtensionContext exposes cwd +
- * sessionManager only; BeforeAgentStartEvent has no sessionId). So pi's
- * binding is cwd + active-progress presence (buildSessionInject handles
- * sessionId=null → candidate/unbound). P0/P1 session_id binding is
- * Claude-stdin-specific and intentionally absent here. [R1: honest, not
- * faked.] cwd comes from ctx.cwd (real pi workspace).
+ * Session id: pi DOES expose a stable per-session id to extensions via
+ * ctx.sessionManager.getSessionId() (ReadonlySessionManager, uuidv7,
+ * created at session start — session-manager.ts:830). Used for P0/P1
+ * binding exactly like Claude's stdin session_id: the AI is instructed
+ * to write it into the progress file → next turn binds stable (P0).
+ * [part2 ④ R2 fix: R1's sessionId:null was a factual error — it left pi
+ * permanently UNBOUND even after the AI annotated the progress file.]
+ * cwd comes from ctx.cwd (real pi workspace).
  *
  * pi-native: hostConfigDir ".pi" · optOutEnvVar "NAIA_HARNESS" ·
  * entryPoint "AGENTS.md" · unlock <ws>/.pi/design-doc-unlock. Deploy
@@ -107,10 +109,13 @@ export default function (pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event: any, ctx: any) => {
 		try {
 			const cwd = (ctx && ctx.cwd) || process.cwd();
+			const sm = ctx && ctx.sessionManager;
+			const sessionId =
+				sm && typeof sm.getSessionId === "function" ? sm.getSessionId() || null : null;
 			const parts: string[] = [];
 			const res = core.buildSessionInject({
 				cwd,
-				sessionId: null, // pi exposes no per-extension session id (Claude-stdin only)
+				sessionId, // pi ReadonlySessionManager.getSessionId() — P0/P1 like Claude stdin
 				hooksDir: __dirname,
 				...HOST,
 			});

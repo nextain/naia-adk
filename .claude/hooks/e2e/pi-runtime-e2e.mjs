@@ -35,8 +35,11 @@ fs.cpSync(path.join(NAK, ".agents/hooks"), path.join(WS, ".agents/hooks"), { rec
 fs.mkdirSync(path.join(WS, ".pi/extensions"), { recursive: true });
 fs.copyFileSync(path.join(NAK, ".pi/extensions/naia-harness.ts"), path.join(WS, ".pi/extensions/naia-harness.ts"));
 fs.mkdirSync(path.join(WS, ".agents/progress"), { recursive: true });
+const sm = pi.SessionManager.inMemory(WS);
+const SID = sm.getSessionId();
+// P0 fixture: progress file carries the live pi session id → must bind stable.
 fs.writeFileSync(path.join(WS, ".agents/progress/t.json"),
-  JSON.stringify({ issue: "PI-RT", current_phase: "build", session_id: "RTSID" }));
+  JSON.stringify({ issue: "PI-RT", current_phase: "build", session_id: SID }));
 fs.mkdirSync(path.join(WS, ".claude/deploy"), { recursive: true });
 fs.writeFileSync(path.join(WS, ".claude/deploy/config.json"), '{"projects":{}}');
 fs.writeFileSync(path.join(WS, ".claude/deploy/approvals.json"), '{"approvals":[]}');
@@ -49,7 +52,7 @@ try {
 
   const runner = new pi.ExtensionRunner(
     res.extensions, res.runtime, WS,
-    pi.SessionManager.inMemory(),
+    sm,
     pi.ModelRegistry.create(pi.AuthStorage.create(path.join(WS, "auth.json"))),
   );
   try {
@@ -105,8 +108,25 @@ try {
   catch (e) { console.log("  (emitBeforeAgentStart err: " + e.message + ")"); }
   const sp = bas && (bas.systemPrompt || "");
   ok(!!sp && sp !== "BASE-SYSPROMPT" && /HARNESS/.test(sp), "pi before_agent_start: harness state injected");
-  ok(!!sp && (/NAIA_HARNESS/.test(sp) || /\.pi\/no-harness/.test(sp) || /PI-RT/.test(sp)), "pi before_agent_start: pi-native inject");
   ok(!!sp && /MANDATORY|AGENTS\.md/.test(sp), "pi before_agent_start: re-read reminder folded in (agent-visible, not notify)");
+  // R2 fix (discriminating): real pi session id via ctx.sessionManager
+  //   .getSessionId() → P0 BOUND. sessionId:null regression → SESSION
+  //   UNBOUND + no SID + no "bind: p0" → all three below fail.
+  ok(!!sp && /\[HARNESS: SESSION STATE\]/.test(sp) && !/SESSION UNBOUND/.test(sp),
+     "pi before_agent_start: P0 BOUND (not unbound)");
+  ok(!!sp && sp.includes(SID) && /bind:\s*p0/.test(sp),
+     "pi before_agent_start: bound via live pi session id (P0)");
+  // pi-native host config (discriminating): hostConfigDir ".pi" must be
+  //   threaded — .pi/no-harness must suppress session-state. Claude's
+  //   ".claude" default would NOT find it → still inject → this fails.
+  fs.writeFileSync(path.join(WS, ".pi/no-harness"), "");
+  let bo;
+  try { bo = await runner.emitBeforeAgentStart("hi", undefined, "BASE", { cwd: WS }); }
+  catch (e) { console.log("  (emitBeforeAgentStart opt-out err: " + e.message + ")"); }
+  const so = bo && (bo.systemPrompt || "");
+  ok(!/\[HARNESS: SESSION STATE\]/.test(so) && !/SESSION UNBOUND/.test(so),
+     "pi before_agent_start: .pi/no-harness suppresses session-state (hostConfigDir threaded)");
+  fs.rmSync(path.join(WS, ".pi/no-harness"), { force: true });
 } catch (e) {
   console.log("FATAL " + (e && e.stack || e)); F++;
 } finally {
