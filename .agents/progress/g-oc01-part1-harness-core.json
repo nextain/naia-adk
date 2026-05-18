@@ -2,32 +2,49 @@
   "slug": "g-oc01-part1-harness-core",
   "title": "G-OC01 part1: extract tool-agnostic harness-core (pure refactor)",
   "parent": "D-OC10 (naia own orchestrator — pi substrate)",
-  "refs": ["naia-os#300 (G-OC01)", "alpha-adk .agents/progress/adr-naia-own-orchestrator-2026-05-18.md", "cr-20260517-152553 (CLEAN x2)"],
+  "refs": [
+    "naia-os#300 (G-OC01)",
+    "alpha-adk .agents/progress/adr-naia-own-orchestrator-2026-05-18.md",
+    "cr-20260517-152553 (CLEAN x2)"
+  ],
   "issue": "nextain/naia-adk#6 (G-OC01) — umbrella nextain/naia-agent#37 (D-OC10)",
   "issue_url": "https://github.com/nextain/naia-adk/issues/6",
   "session_id": "6b8c540f-de0e-4542-a271-58aa5a87341d",
-  "current_phase": "e2e_test",
+  "current_phase": "post-test-review-PASSED → B (declarative forbidden_actions, own IDD)",
   "status": "PART1 refactor COMMITTED naia-adk@6b95d6a + system-E2E @30a33da. E2E verdict: NATIVE LIVE PROOF is primary — alpha-adk (itself one of our ADK forks) harness fires live in the working session (session-inject SESSION STATE injection every prompt; destructive-git-guard blocked a real `git checkout --`; pr-guard blocked a real external `gh pr create`). Synthetic dispatch was over-engineering. Refactor correctness = byte-identical (golden 69) + system-dispatch E2E 13/13. Cross-ADK = via sync-upstream propagation (nextain-adk↔alpha↔onmam↔business-adk), each fork's live session runs it natively. Pending: GH issue/sub-issues (outward), sync-upstream propagation, push (user).",
   "scope_decision": "A — extract machinery only; behavior byte-identical (pure refactor). No forbidden_actions schema (deferred=B). pi adapter=part2.",
   "slices": {
     "S1": {
       "name": "harness-core SoT + anti-compact pair (session-inject, post-compact-context)",
       "status": "COMPLETE",
-      "artifacts": [".agents/hooks/core/harness-core.js (new, tool-agnostic SoT: session/anti-compact + 3 sanitizers, params optOutEnvVar/hostConfigDir/entryPoint)", ".agents/hooks/package.json (new CJS pin)", ".claude/hooks/session-inject.js (thin adapter)", ".claude/hooks/post-compact-context.js (thin adapter)"],
+      "artifacts": [
+        ".agents/hooks/core/harness-core.js (new, tool-agnostic SoT: session/anti-compact + 3 sanitizers, params optOutEnvVar/hostConfigDir/entryPoint)",
+        ".agents/hooks/package.json (new CJS pin)",
+        ".claude/hooks/session-inject.js (thin adapter)",
+        ".claude/hooks/post-compact-context.js (thin adapter)"
+      ],
       "parity": "8/8 byte-identical + param-test 8/0",
       "cross_review": "cr-20260517-170413 — 4 rounds, R3+R4 2-consecutive-clean (fixed M1/M2/M3/L1)"
     },
     "S2": {
       "name": "6 Bash guards (pr/destructive-git/commit/deploy/git-push/email-send)",
       "status": "COMPLETE",
-      "artifacts": [".claude/hooks/_claude-bash-guard.js (new, Claude PreToolUse-Bash envelope)", "harness-core.js +3 sanitizers (stripQuotesBlank/Collapse/Unwrap, additive — S1 untouched)", "6 guards → policy-only adapters"],
+      "artifacts": [
+        ".claude/hooks/_claude-bash-guard.js (new, Claude PreToolUse-Bash envelope)",
+        "harness-core.js +3 sanitizers (stripQuotesBlank/Collapse/Unwrap, additive — S1 untouched)",
+        "6 guards → policy-only adapters"
+      ],
       "parity": "42/42 byte-identical, fail-modes preserved (5 fail-open, pr-guard fail-closed)",
       "cross_review": "cr-20260517-175029 — R1+R2 2-consecutive-clean"
     },
     "S3": {
       "name": "Edit|Write hooks (design-doc-guard, prod-gateway-guard, cascade-check)",
       "status": "COMPLETE",
-      "artifacts": [".claude/hooks/_claude-edit-hook.js (new, Claude Edit|Write envelope: allow/block/postContext)", "3 hooks → policy-only adapters", "agents-context-mirror.js UNCHANGED (scope-A: no shared machinery — review-judged defensible)"],
+      "artifacts": [
+        ".claude/hooks/_claude-edit-hook.js (new, Claude Edit|Write envelope: allow/block/postContext)",
+        "3 hooks → policy-only adapters",
+        "agents-context-mirror.js UNCHANGED (scope-A: no shared machinery — review-judged defensible)"
+      ],
       "parity": "19/19 byte-identical",
       "cross_review": "cr-20260517-180707 — R1+R2 2-consecutive-clean"
     }
@@ -41,16 +58,21 @@
   },
   "surfaced_not_fixed": "settings.json references .claude/hooks/sync-entry-points.js which does not exist (pre-existing dangling reference; out of pure-refactor scope; review-confirmed correct to surface not silently fix).",
   "tool_agnostic_outcome": "harness-core.js = host-neutral SoT (session/anti-compact logic + 3 sanitizers; pi passes optOutEnvVar/hostConfigDir/entryPoint). Claude envelopes isolated in .claude/hooks/{_claude-bash-guard,_claude-edit-hook}.js. Policy bodies host-neutral. A future pi adapter (part2) reuses harness-core + policies with a pi-shaped envelope, ZERO core change.",
-  "holds": ["commit: NOT done — upstream-shared public base ADK; user decision", "GitHub Issue + D-OC10 sub-issues: outward, user-gated", ".agents/progress/.session-map.json + .users/context/writing-style.md working-tree mods are session-managed/pre-existing, not part of this refactor"],
+  "holds": [
+    "commit: NOT done — upstream-shared public base ADK; user decision",
+    "GitHub Issue + D-OC10 sub-issues: outward, user-gated",
+    ".agents/progress/.session-map.json + .users/context/writing-style.md working-tree mods are session-managed/pre-existing, not part of this refactor"
+  ],
   "part2": {
     "issue": "nextain/naia-adk#6 (G-OC01) / umbrella nextain/naia-agent#37 (D-OC10)",
-    "status": "IN PROGRESS — slice loop",
+    "status": "④ PASSED — part2 COMPLETE",
     "step1_policy_neutralization": "pattern PROVEN byte-identical: destructive-git policy → .agents/hooks/policies/bash.js (tool-agnostic CJS, requires harness-core for sanitizers); .claude/hooks/destructive-git-guard.js re-pointed to import it. golden 8/42/19 + E2E 64 all still green. Remaining 10 policies to extract.",
     "byte_identical_trap": "deploy DEPLOY_DIR = path.resolve(__dirname,'..','deploy') and design-doc unlock = resolve(__dirname,'..','design-doc-unlock') are __dirname-DEPENDENT — moving policy to .agents/hooks/policies/ changes __dirname → MUST parameterize those two paths via an opts arg the adapter supplies (adapter knows its own __dirname). git-push MARKER_PATH = path.join('.claude',…) is cwd-relative (resolved vs process.cwd() at call time) → move-safe. Other policies have no path dep → clean move.",
     "DONE": "① policy neutralization COMPLETE (10 policies → .agents/hooks/policies/{bash,edit}.js; deploy=opts.deployDir, design-doc=opts.unlockFile; agents-context-mirror unchanged scope-A) — byte-identical golden 8/42/19 + param 8/0 + E2E 64 + system-E2E 13, commits 5963cf8/073178a/96d7227. ② pi adapter .pi/extensions/naia-harness.ts WRITTEN + logic-sanity 9/9 (core/policy reuse w/ pi-native opts NAIA_HARNESS/.pi/AGENTS.md — proves part1 S1 param works for 2nd host), commit 5ced788.",
     "③_DONE": "REAL pi-runtime live E2E PASS 9/9 — pi@0.74.1 actual discoverAndLoadExtensions(jiti) loaded our real .pi/extensions/naia-harness.ts (0 errors); pi's real ExtensionRunner.emitToolCall blocked destructive/external-pr/design-doc + passed safe/write; emitBeforeAgentStart injected harness state into systemPrompt (pi-native NAIA_HARNESS/.pi). Genuine pi-dispatch, not simulation. Gate committed: .claude/hooks/e2e/pi-runtime-e2e.mjs (prereq: npm i @earendil-works/pi-coding-agent@0.74.1; portable NAK via NAIA_ADK_ROOT or file location). = part2's purpose realized & verified: pi runs the SAME harness as Claude, ZERO core change.",
-    "remaining": "④ adversarial 2-clean review of part2 (port-fidelity: part1 byte-identity preserved through policy-extraction; pi mapping correctness; security: deploy opts.deployDir / pr fail-closed-in-pi / cascade-notify analog; test validity).",
-    "pi_api_confirmed": "docs/extensions.md: export default function(pi){pi.on('tool_call',async(e,ctx)=>...return {block:true,reason}); pi.on('before_agent_start',async(e)=>({systemPrompt:e.systemPrompt+'\\n\\n'+inject}))}. Auto-discover .pi/extensions/*.ts (jiti, TS, node builtins+CJS require ok). event.toolName(bash/edit/write/…)+event.input typed."
+    "pi_api_confirmed": "docs/extensions.md: export default function(pi){pi.on('tool_call',async(e,ctx)=>...return {block:true,reason}); pi.on('before_agent_start',async(e)=>({systemPrompt:e.systemPrompt+'\\n\\n'+inject}))}. Auto-discover .pi/extensions/*.ts (jiti, TS, node builtins+CJS require ok). event.toolName(bash/edit/write/…)+event.input typed.",
+    "④_DONE": "adversarial 2-consecutive-clean ACHIEVED (R5+R6 all CLEAN). 6 rounds, findings HIGH→HIGH→LOW→CRITICAL→LOW→LOW(advisory), every confirmed defect fixed: R1 notify→systemPrompt/tool_result + tool_result(not execution_end) + per-guard fail-mode + gate coverage 9→16; R2 sessionId via ctx.sessionManager.getSessionId() (R1 null was factual error) + gate hardened bound/opt-out discriminating; R3 gate opt-out !!so crash-safe (prior-session worktree stub contamination = env-only, never committed, remediated); R4 CRITICAL pi {path,edits,content}≠{file_path} normalization in adapter + edit.js unlockHint default-preserving + gate pi-real shapes 18→19; R5 close gate gap prodGateway-via-edits-synthesis 19→20; R6 cascade append-vs-replace precision. Fix commits 58982bc,30bc67f,d83ae96,c6a1089,4ec179d,b30331c. Gate: pi-runtime 20/20 real pi@0.74.1; Claude parity golden 8/42/19 + E2E 64 + system 13 byte-identical throughout. Tool coverage proven complete (pi registry: bash/edit/write guarded, read/grep/find/ls read-only, no custom tools). cr-20260518-002911.",
+    "accepted_non_blocking": "R2/R4 allow-path gate gaps (deploy approval-allow, git-push marker-allow, designDoc unlock-allow) — block paths = the security guarantee, fully exercised; allow/secondary paths non-blocking, review-judged acceptable for part2 acceptance gate."
   },
-  "next": "④ part2 adversarial 2-clean review IN PROGRESS (cr review of policy-extraction byte-identity + pi mapping + security + pi-runtime test validity). THEN QUEUED by user (A되면 B진행): option B = declarative forbidden_actions schema — migrate hardcoded guard policies to data-driven rules in agents-rules.json (deferred from part1 scope-A; this is a BEHAVIOR-SURFACE change, NOT pure refactor → needs its own IDD design/plan/adversarial review; S2/S3 reviewers flagged higher regression risk). B starts after ④ reaches 2-clean."
+  "next": "part2 COMPLETE & adversarially verified. NEXT = B (user 'A되면 B진행'): declarative forbidden_actions schema — migrate hardcoded guard policies → data-driven rules in agents-rules.json. This is a BEHAVIOR-SURFACE change (NOT pure refactor; S2/S3/part1 flagged higher regression risk) → starts with its OWN IDD understand/scope/plan + adversarial design review BEFORE any code. B does not inherit part2's byte-identical contract — it deliberately changes the policy source-of-truth surface, so it needs explicit design + a new acceptance bar."
 }
