@@ -31,12 +31,17 @@ location consumed by `naia-agent`.
 `llm.json` is a git-tracked backup unit. It **must never contain a raw
 API key**. Keyed providers reference a secret by name only:
 
-- `apiKeyRef` = an OS-keychain entry name **or** an environment variable
-  name. The actual secret lives in the OS keychain (device-key
-  encrypted) or the process env — **never in this file, never on disk in
-  plaintext** (cleanroom deep-audit F8/§128: keytar / OS keychain
-  required; in-memory Map / plaintext forbidden).
-- Local Ollama / vLLM need no key — omit `apiKeyRef`.
+- `apiKeyRef` = an environment variable name **(Slice A, now)** or an OS
+  keychain entry name **(Slice B, device-key encrypted — in progress)**.
+  The actual secret lives in the process env or the OS keychain — **never
+  in this file** (cleanroom deep-audit F8/§128: plaintext forbidden).
+- **Enforced, not just convention**: the `naia-agent` reader actively
+  rejects the whole `llm.json` (warn + skip; value never logged) if any
+  role carries a plaintext-secret-looking key (`apiKey`/`key`/`token`/…)
+  or value (`sk-…`/`AIza…`/40-hex/…). A raw key here is refused, not
+  silently consumed into git.
+- Local Ollama / vLLM need no key — omit `apiKeyRef` (a loopback/private
+  `baseUrl` gets a dummy key automatically; remote URLs do **not**).
 
 ## Resolution priority (naia-agent)
 
