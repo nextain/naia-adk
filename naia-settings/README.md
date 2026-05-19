@@ -43,6 +43,20 @@ API key**. Keyed providers reference a secret by name only:
 - Local Ollama / vLLM need no key — omit `apiKeyRef` (a loopback/private
   `baseUrl` gets a dummy key automatically; remote URLs do **not**).
 
+## Configure via `naia-agent login`
+
+```
+pnpm naia-agent login --adk <this-workspace> \
+  --main "openai-compat|http://127.0.0.1:11434/v1|gemma3n:e4b" \
+  --embedded "ollama-embed|http://127.0.0.1:11434/v1|bge-m3|1024" \
+  [--key ANTHROPIC_API_KEY=sk-…]   # → OS keychain, never written here
+```
+
+Writes this `llm.json` (config only) + `~/.naia-agent/config.json`
+(`naiaAdkPath`, so later runs need no `NAIA_ADK_PATH`). `--key` is stored
+device-key-encrypted in the OS keychain; if unavailable, login refuses
+(no plaintext) and tells you to `export` it as an env var instead.
+
 ## Resolution priority (naia-agent)
 
 ```
