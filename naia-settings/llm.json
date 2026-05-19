@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "main": {
+    "provider": "openai-compat",
+    "baseUrl": "http://127.0.0.1:11434/v1",
+    "model": "gemma3n:e4b"
+  },
+  "sub": {
+    "provider": "openai-compat",
+    "baseUrl": "http://127.0.0.1:11434/v1",
+    "model": "gemma3n:e2b"
+  },
+  "embedded": {
+    "provider": "ollama-embed",
+    "baseUrl": "http://127.0.0.1:11434/v1",
+    "model": "bge-m3",
+    "dims": 1024
+  }
+}
