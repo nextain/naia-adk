@@ -298,6 +298,29 @@
       "naming": "Use descriptive names inside tmp/ (e.g. tmp/check-db.php, tmp/debug-redis.sh) — no tmp- prefix needed since the directory provides the namespace."
     },
     "work_logs": "Don't modify unless explicitly requested",
+    "workfile_lifecycle": {
+      "principle": "All work files (progress reports, scratch scripts, temp data) MUST follow explicit lifecycle. No accumulation without policy.",
+      "directories": {
+        ".agents/context/": "Permanent context (on_demand loaded). Long-lived. In-place corrections only. Never delete.",
+        ".agents/progress/": "Active work reports + completed reports. JSON files = harness 1st-class (session-inject reads). MD reports = lifecycle-tracked.",
+        ".agents/progress/archive/YYYY-MM/": "Completed reports moved here (preserved + searchable). readdirSync skips subdirs = automatically excluded from session-inject/commit-guard active set.",
+        ".agents/work/": "Temporary work scripts. gitignored at root (.gitignore: .agents/work/). User-managed cleanup (no AI auto-delete).",
+        "tmp/, tmp-*, tmp_*": "Debug/scratch (see tmp_files above). gitignored."
+      },
+      "completion_criteria": "A work file is 'complete' when 2+ of: (a) related code committed/pushed to origin, (b) user explicitly declares done/closed, (c) cross-review GO + user acceptance, (d) superseded by next-step plan/issue. AI self-declaring 'complete' is prohibited.",
+      "triggers": {
+        "work_start": "Create or update one progress file (1 per work, not 1 per session).",
+        "session_end_or_milestone": "Add status line ('✅ done' / '⏳ in-progress' / '🔴 blocked').",
+        "after_commit_push": "Move that work's progress to .agents/progress/archive/YYYY-MM/ (selective — mention in commit message).",
+        "monthly_cleanup": "Review 30+ day progress files; archive completed or inline-resolve.",
+        "work_30d": ".agents/work/ 30+ day = user-decided deletion (volatile by design)."
+      },
+      "naming": "Existing convention: <topic>-YYYY-MM-DD.md OR <issue-slug>.json (naia-adk progress pattern). On archive: move only (no rename) to preserve cross-references.",
+      "archive_unit": "Archive MD/JSON pair together (same base name). If JSON has current_phase != close, set to close OR unbind before move — otherwise session-inject still treats it active.",
+      "inbound_references": "Default: allow link breakage on archive (archived = historical). On case-by-case need: leave 1-line stub at original path. No automatic archive index — over-engineering.",
+      "harness_scope_asymmetry": "session-inject collects cwd + IMMEDIATE child subdirs only. 2nd-level subs not scanned. commit-guard scans cwd only. Policy applies repo-wide as convention but ENFORCEMENT range is root + direct children. 2nd-level subs need own hooks for enforcement.",
+      "session_map_cleanup": "On archive: .agents/progress/.session-map.json entries pointing to archived files become stale. session-inject auto-prunes on next run, but explicit cleanup is cleaner."
+    },
     "git_workflow": {
       "maintainer_rule": "Luke is a maintainer of all Nextain repos. NEVER create PRs for Nextain repos — commit and push directly to main (or the relevant branch). PRs are for external contributors only.",
       "pr_prohibition": "DO NOT run `gh pr create` for nextain/* repos. The pr-guard hook will block this automatically."
