@@ -364,6 +364,28 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 - **naming**: Use descriptive names inside tmp/ (e.g. tmp/check-db.php, tmp/debug-redis.sh) — no tmp- prefix needed since the directory provides the namespace.
 - **work_logs**: Don't modify unless explicitly requested
 
+### workfile_lifecycle
+
+- **principle**: All work files (progress reports, scratch scripts, temp data) MUST follow explicit lifecycle. No accumulation without policy.
+- **directories**:
+  - `.agents/context/`: Permanent context (on_demand loaded). Long-lived. In-place corrections only.
+  - `.agents/progress/`: Active/completed work reports. JSON = harness 1st-class (session-inject). MD = lifecycle-tracked.
+  - `.agents/progress/archive/YYYY-MM/`: Completed reports preserved (searchable). readdirSync skips subdirs = excluded from active set.
+  - `.agents/work/`: Temporary work scripts. `.gitignore`. User-managed cleanup (no AI auto-delete).
+  - `tmp/, tmp-*, tmp_*`: Debug/scratch (see tmp_files above).
+- **completion_criteria** (2+ required): (a) code committed/pushed to origin, (b) user explicitly declares done/closed, (c) cross-review GO + user acceptance, (d) superseded by next-step plan/issue. AI self-declaring "complete" is prohibited.
+- **triggers**:
+  - work_start: Create or update one progress file (1 per work, not per session).
+  - session_end_or_milestone: Add status line (`✅ done` / `⏳ in-progress` / `🔴 blocked`).
+  - after_commit_push: Move that work's progress to `archive/YYYY-MM/` (mention in commit message).
+  - monthly_cleanup: Review 30+ day progress; archive completed or inline-resolve.
+  - `.agents/work/` 30+ day: User-decided deletion (volatile by design).
+- **naming**: `<topic>-YYYY-MM-DD.md` OR `<issue-slug>.json` (naia-adk pattern). On archive: move only (no rename).
+- **archive_unit**: Archive MD/JSON pair together (same base name). JSON `current_phase != close` → close/unbind before move.
+- **inbound_references**: Default = allow link breakage on archive. On case-by-case: 1-line stub at original path. No automatic index (over-engineering).
+- **harness_scope_asymmetry**: session-inject collects cwd + IMMEDIATE child subdirs only. 2nd-level subs not scanned. commit-guard scans cwd only. Policy applies repo-wide as convention but ENFORCEMENT = root + direct children. 2nd-level subs need own hooks.
+- **session_map_cleanup**: archive 시 `.agents/progress/.session-map.json` stale → session-inject 자가 정리하나 명시적 cleanup 권장.
+
 ### git_workflow
 
 - **maintainer_rule**: Luke is a maintainer of all Nextain repos. NEVER create PRs for Nextain repos — commit and push directly to main (or the relevant branch). PRs are for external contributors only.
