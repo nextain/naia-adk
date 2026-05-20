@@ -15,6 +15,7 @@
     "build": "tsc --build"
   },
   "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.1",
     "concurrently": "^9.2.1",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0"
