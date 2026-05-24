@@ -1,6 +1,7 @@
 ---
 name: email
 version: "0.1.0"
+tier: T3
 description: >
   Send emails via SMTP adapter with template support.
   Supports attachments (PDF, images) and HTML body.

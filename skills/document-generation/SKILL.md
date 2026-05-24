@@ -1,6 +1,7 @@
 ---
 name: document-generation
 version: "0.1.0"
+tier: T2
 description: >
   Generate business documents (contracts, resolutions, payroll) as branded PDFs
   with optional digital signature (PAdES).

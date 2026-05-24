@@ -1,6 +1,7 @@
 ---
 name: service-management
 version: "0.1.0"
+tier: T2
 description: Monitor and manage deployed services — uptime checks, cost tracking, incident response.
 triggers:
   - "service management"

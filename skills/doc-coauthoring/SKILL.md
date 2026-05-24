@@ -1,6 +1,12 @@
 ---
 name: doc-coauthoring
 description: 기술 스펙, 제안서, 결정 문서, PRD 등 구조화된 문서를 3단계로 공동 작성합니다. "문서 작성", "스펙 작성", "제안서", "RFC", "설계 문서", "PRD" 등 비코드 문서 작성 요청 시 반드시 사용. /doc-coauthoring으로 호출.
+tier: T1
+input_schema:
+  topic:
+    type: string
+    required: false
+    description: "Document topic or title"
 ---
 
 # 문서 공동 작성
