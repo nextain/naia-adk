@@ -1,7 +1,13 @@
 ---
 name: read-doc
 description: 문서 파일(HWP/HWPX/PDF/DOCX/XLSX/PPTX)의 텍스트를 추출해 컨텍스트에 로드합니다. docs-business/ 폴더의 파일이나 .hwp/.hwpx/.pdf/.docx/.xlsx/.pptx 파일이 언급될 때, 또는 문서 내용을 검토/분석해야 할 때 반드시 사용.
+tier: T0
 argument-hint: "<file-path-or-glob>"
+input_schema:
+  file:
+    type: string
+    required: true
+    description: "File path to read"
 ---
 
 # Read Document

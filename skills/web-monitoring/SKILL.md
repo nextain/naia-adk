@@ -1,6 +1,7 @@
 ---
 name: web-monitoring
 version: "0.1.0"
+tier: T2
 description: Web presence monitoring — SEO, uptime, analytics, competitive analysis.
 triggers:
   - "web monitoring"

@@ -1,6 +1,7 @@
 ---
 name: sms
 version: "0.1.0"
+tier: T3
 description: Send SMS messages via gateway adapter. Korean business SMS (알림톡, 문자).
 triggers:
   - "send sms"

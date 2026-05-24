@@ -1,6 +1,7 @@
 ---
 name: channel-management
 version: "0.1.0"
+tier: T3
 description: Manage Discord/Slack channels — create, archive, notify, summarize.
 triggers:
   - "channel management"
