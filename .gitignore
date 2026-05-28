@@ -15,6 +15,11 @@ dist/
 *.pfx
 *.key
 
+# Auth secrets (AES-256-GCM encrypted at rest, naia-os #337)
+# Format: <ADK_ROOT>/naia-settings/auth/{dev,prod}.json.enc
+# Master password lives in OS keychain, not in this repo.
+naia-settings/auth/*.enc
+
 # OS
 .DS_Store
 Thumbs.db
