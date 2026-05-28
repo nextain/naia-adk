@@ -35,6 +35,7 @@ Fork on GitHub, then periodically sync upstream: `git fetch upstream && git merg
 
 | Need | Load |
 |------|------|
+| repo structure / SDLC / RBAC / fork customization | `.agents/context/repo-structure-standard.yaml` |
 | workflow / IDD / review lessons | `.agents/context/lessons-workflow.yaml` |
 | upstream / fork / contribution lessons | `.agents/context/lessons-upstream.yaml` |
 | platform / CI / vLLM / Bazzite lessons | `.agents/context/lessons-platform.yaml` |
@@ -147,6 +148,19 @@ Available in `naia-business-adk`:
 | `service-management` | Service monitoring and management | Manual |
 | `web-monitoring` | Web content monitoring and alerting | Manual |
 | `document-generation` | Automated document generation | Manual |
+
+## Repository Structure Standard
+
+Per-repo documentation, SDLC artifact lifecycle, RBAC tiers, multi-project management, and fork customization rules.
+
+**SoT**: `.agents/context/repo-structure-standard.yaml`
+**Human mirror (Korean)**: `.users/context/repo-structure-standard.md`
+
+Covers: repo types (`workspace_adk` / `runtime_library` / `app_os`) · mirror patterns (dual/triple/split) · harness sync · `.agents/progress/` lifecycle · T0~T3 RBAC tiers + `naia-business-adk` extension points · multi-project blocking rules · fork override mechanism.
+
+**Fork customization**: create `FORK.md` in fork root with `overrides:` section. Precedence: naia-adk defaults → naia-business-adk additions → {org}-adk FORK.md → {user}-adk FORK.md (highest).
+
+---
 
 ## Directory Structure (Dual-directory Architecture)
 
