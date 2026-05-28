@@ -1,0 +1,120 @@
+_copyright: "Copyright 2026 Nextain Inc. All rights reserved."
+
+# Terminology & Communication Policy — naia-adk 표준
+#
+# 적용 범위:
+#   - 모든 문서 (docs/, README, AGENTS.md, CLAUDE.md, GEMINI.md, .users/ mirror)
+#   - 코드 주석 (인라인 + 모듈 docstring)
+#   - JSON/YAML 안의 prose 텍스트 (description, why, notes)
+#   - PR / Issue 본문 / 커밋 메시지의 자연어 부분
+#   - 메모리 entry / .agents/progress / .agents/reviews
+#   - 외부 발표·슬라이드·대외 카피
+#
+# 적용 면제:
+#   - 코드 식별자 (변수 / 함수 / 클래스 / 파일명 / 모듈명) — 영문 그대로 OK
+#   - JSON/YAML key — schema 안정성 위해 영문 그대로 OK
+#   - GitHub URL / PR 번호 / 커밋 SHA — 변환 불가
+
+policy:
+  principle: |
+    우리만의 신조어·합성어를 만들지 않는다. 일반인이 알아들을 수 있는 용어를 default 로 쓰고,
+    학계용어와 약자는 첫 등장 시 한국어 풀이 + 괄호로 원문 표기를 동반한다.
+
+  why: |
+    1. 우리 신조어가 본문에 가득하면 사용자 본인도 못 알아본다 (2026-05-28 B2B 미팅 사고).
+    2. 학계용어를 풀이 없이 쓰면 일반 청중은 부담스러워한다.
+    3. 표준 용어와 신조어가 섞이면 신뢰성이 떨어진다.
+    4. 컨텍스트는 미래의 AI/사람 모두에게 읽힌다 — "지금 우리"만 아는 단어는 빠르게 무용해진다.
+
+  three_category_classification:
+    standard_terms_keep_as_is:
+      description: |
+        업계 표준 용어 / 제품명 / 컴공 일반 용어. 그대로 쓴다.
+      examples:
+        industry_acronyms:
+          - "AI / LLM / RAG / API / SDK / CLI / STT / TTS / VAD / E2E / MoE / RBAC / CRM"
+          - "SQLite / ICLR / LongMemEval / KsponSpeech / KEMDy20"
+        product_names:
+          - "Claude / Gemini / Codex / ollama / Whisper / vLLM / faster-whisper"
+          - "VoxCPM2 / Vevo / HuBERT / librosa / LiveKit / mem0"
+          - "naia-adk / naia-agent / naia-memory / naia-os / naia-cognitive (브랜드명)"
+        cs_common_terms:
+          - "도메인 / 모듈 / 백엔드 / 런타임 / 게이트웨이 / 프리셋 / 폴백 / 카탈로그"
+          - "프로세스 / 스레드 / 컨테이너 / 컨피그 / 캐시 / 큐"
+      exception_harness:
+        rule: |
+          "harness" 는 외부 표면(발표·슬라이드·대외 README)에 사용 금지.
+          한국어 청중에게 "하네스"는 "안전 끈"으로 받아들여짐.
+        replace_with: "벤치마크 / 평가 체계 / 측정 도구"
+        internal_ok: |
+          내부 코드·메모리·.agents/ 안에서는 harness 그대로 OK.
+
+    academic_terms_translate_with_paren:
+      description: |
+        학계용어 / 측정 약어는 첫 등장 시 "한국어 풀이 (영문/약어 + 출처)" 형식.
+        두 번째 등장부터는 한국어 풀이 또는 약어 단독 OK.
+      pattern: "<한국어 풀이> (<영문 또는 약어>[, <출처 또는 풀이>])"
+      examples:
+        - "예측적 동기화 (Predictive Entrainment, Keller & Appel 2010)"
+        - "세계 모델 (World Model, 얀 르쿤 2022)"
+        - "음정 곡선 (F0 contour)"
+        - "개방 루프 / 폐쇄 루프 (open-loop / closed-loop)"
+        - "글자 오류율 (CER)"
+        - "단어 오류율 (WER)"
+        - "주관 청취 점수 (MOS, 1-5)"
+        - "첫 응답까지 시간 (TTFB)"
+        - "동기화 어긋남 (sync drift)"
+
+    our_neologisms_must_replace:
+      description: |
+        우리만 만든 합성어. 발견 즉시 평이한 한국어 또는 표준 용어로 교체.
+      examples_to_replace:
+        - from: "4-CLI judge ensemble"
+          to: "외부 AI 4종 교차 검증"
+        - from: "skills overlay"
+          to: "업종별 기능 모듈"
+        - from: "vertical preset"
+          to: "업종 사전 설정"
+        - from: "ref_audio hotswap"
+          to: "음성 즉시 교체"
+        - from: "score memory" (prose)
+          to: "곡 기억 모듈"
+          code_identifier_ok: "score_memory_poc.py 같은 파일·식별자는 그대로"
+        - from: "emotion vec" (prose)
+          to: "감정 벡터"
+          code_identifier_ok: "JSON key emotion_vec 는 그대로"
+        - from: "spectrum switch" (prose)
+          to: "말↔노래 전환"
+        - from: "mismatch DSP" (prose)
+          to: "음정 차이 보정"
+        - from: "look-ahead predictor" (prose)
+          to: "선행 예측기 (look-ahead predictor)"
+          note: "학계 paraphrase 인 경우 두 번째 분류 적용"
+
+gates:
+  detection:
+    - "사용자 본인이 처음 보고 갸우뚱하면 그게 신조어 신호 → 즉시 교체."
+    - "컴공 교과서·AI 업계 표준 문서·논문에 그대로 나오면 표준. 아니면 신조어."
+    - "Google/검색에 한 줄 안 보이면 신조어 후보 — 풀이 또는 교체."
+    - "Brand name (naia-* 시리즈) 은 게이트 면제. 단 첫 등장 시 '음성 인지 모듈 (naia-cognitive)' 식 한국어 풀이 권장."
+
+  enforcement_points:
+    review:
+      - "phase 7 (Review) 와 phase 9 (Post-test Review) 에서 terminology gate 통과 확인."
+      - "외부 표면 (블로그·슬라이드·대외 README) commit 전 사용자 본인 1회 통독."
+    code_review:
+      - "PR 의 markdown / docstring / 주석 안 신조어 발견 시 즉시 교체 제안."
+
+cross_references:
+  related_memories:
+    - "feedback_neologism_no_external_exposure (적용 범위 확장 SoT)"
+    - "feedback_copy_tone_show_dont_tell (대외 카피 톤)"
+    - "project_naia_ax_businessadk_taxonomy (public-surface-copy SoT)"
+
+  related_files:
+    - ".agents/context/writing-style.json (K-Startup SNS persona — 별 SoT, 어조 정책)"
+    - ".agents/context/contributing.yaml (커밋·이슈 규칙)"
+
+revision_history:
+  - date: "2026-05-28"
+    note: "신조어 금지 정책을 외부 표면 → 내부 컨텍스트까지 확장. 사용자 명시 지시 (Phase 0 review 시점)."

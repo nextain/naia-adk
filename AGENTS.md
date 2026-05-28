@@ -22,6 +22,7 @@ Fork on GitHub, then periodically sync upstream: `git fetch upstream && git merg
 1. `.agents/context/agents-rules.json` — Project rules (SoT)
 2. `.agents/context/ai-work-index.yaml` — Work type → workflow index
 3. `.agents/context/project-index.yaml` — Context index + entry points
+4. `.agents/context/terminology.yaml` — Terminology & communication policy (no neologisms, plain Korean default, parenthesize academic/acronym)
 
 **On-demand (read when entering Plan or Review phases):**
 
