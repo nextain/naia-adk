@@ -1,0 +1,230 @@
+# Naia ADK — Repository Structure Standard
+# SoT for per-repo documentation, SDLC artifact, and RBAC structure.
+#
+# Inherited by: naia-business-adk → {org}-adk → {user}-adk (e.g., alpha-adk)
+# Fork customization: create FORK.md with an `overrides:` section.
+# Human mirror: .users/context/repo-structure-standard.md (Korean)
+
+version: "1.0"
+spec_date: "2026-05-27"
+
+# ─── Repo Types ──────────────────────────────────────────────────────────────
+# Classify each repo by purpose to determine mirror pattern and required dirs.
+
+repo_types:
+  workspace_adk:
+    description: "ADK workspace repos — the top-level shell a developer works inside"
+    examples: [naia-adk, naia-business-adk, alpha-adk, "{org}-adk", "{user}-adk"]
+    visibility_default: "public base; forks are typically private"
+    required_dirs:
+      - .agents/context/     # AI SoT — agents-rules.json + project-index.yaml mandatory
+      - .users/context/      # Human mirror (default lang per FORK.md)
+    optional_dirs:
+      - .agents/workflows/
+      - .agents/skills/
+      - .agents/hooks/
+      - .agents/requirements/
+      - .agents/progress/    # SDLC artifacts (gitignored)
+      - .agents/work/        # temp work (gitignored)
+      - skills/              # published skills
+      - packages/
+      - scripts/
+      - templates/
+      - docs/
+
+  runtime_library:
+    description: "Runtime/library repos — standalone packages used by hosts"
+    examples: [naia-agent, naia-memory]
+    visibility_default: public
+    required_dirs:
+      - .agents/context/     # AI SoT
+      - docs/                # English SoT — primary human docs
+      - .users/docs/ko/      # Korean mirror
+    optional_dirs:
+      - .agents/progress/
+      - .agents/work/
+      - packages/
+      - src/
+
+  app_os:
+    description: "Full application / OS repos — user-facing product with community contributors"
+    examples: [naia-os]
+    visibility_default: public
+    required_dirs:
+      - .agents/context/
+      - .users/context/      # English mirror (primary)
+      - .users/context/ko/   # Korean mirror
+    optional_dirs:
+      - ".users/context/{lang}/"  # additional community languages
+      - .users/guides/
+      - .users/workflows/
+      - docs/
+      - work-logs/
+
+# ─── Mirror Patterns ─────────────────────────────────────────────────────────
+
+mirror_patterns:
+  dual:
+    applies_to: "workspace_adk (private fork), early-stage runtime_library"
+    layers:
+      - path: .agents/context/
+        format: "JSON/YAML"
+        lang: English
+        role: AI SoT
+      - path: .users/context/
+        format: Markdown
+        lang: "fork default lang (declared in FORK.md → default_lang)"
+        role: human mirror
+    rule: "Changes in .agents/ must propagate to .users/ before commit"
+
+  triple:
+    applies_to: "app_os, public workspace_adk base (naia-adk itself)"
+    layers:
+      - path: .agents/context/
+        format: "JSON/YAML"
+        lang: English
+        role: AI SoT
+      - path: .users/context/
+        format: Markdown
+        lang: English
+        role: English human mirror (primary)
+      - path: .users/context/ko/
+        format: Markdown
+        lang: Korean
+        role: Korean mirror
+    additional_langs: ".users/context/{lang}/ — community-contributed, opt-in"
+
+  split:
+    applies_to: "runtime_library using docs/ as primary (naia-agent pattern)"
+    layers:
+      - path: .agents/context/
+        format: "JSON/YAML"
+        lang: English
+        role: AI SoT
+      - path: docs/
+        format: Markdown
+        lang: English
+        role: English SoT for humans
+      - path: .users/docs/ko/
+        format: Markdown
+        lang: Korean
+        role: Korean mirror
+    rule: "'Edit English first' — docs/ must be updated before .users/docs/ko/"
+
+# ─── Multi-tool Harness ──────────────────────────────────────────────────────
+
+harness:
+  description: "Entry-point files for AI tools must be identical in content"
+  canonical: AGENTS.md
+  mirrors:
+    - CLAUDE.md    # Claude Code
+    - GEMINI.md    # Gemini CLI
+    - OPENCODE.md  # opencode
+    - CODEX.md     # Codex
+  sync_mechanism: "scripts/sync-harness-mirrors.sh or pre-commit hook"
+  rule: "Edit AGENTS.md only; sync script overwrites all mirrors"
+  minimum: "AGENTS.md + CLAUDE.md + GEMINI.md acceptable for early-stage repos"
+
+# ─── SDLC Artifact Lifecycle ─────────────────────────────────────────────────
+
+sdlc_artifacts:
+  progress:
+    dir: .agents/progress/
+    gitignored: true
+    format: "{issue-slug}-{YYYY-MM-DD}.md + {issue-slug}.json (paired)"
+    lifecycle:
+      active: "remains in .agents/progress/ while work is ongoing"
+      done_criteria: "2+ objective signals (e.g., PR merge AND issue close AND/OR deploy)"
+      done_action: "move to .agents/progress/archive/YYYY-MM/"
+      ai_self_declare_forbidden: true  # AI cannot unilaterally declare done
+      max_active_days: 30              # stale entries → user decides
+    no_commit: true  # session-local; never committed to repo
+
+  work_logs:
+    dir: work-logs/{username}/
+    gitignored: true
+    lang: any   # personal notes — no language restriction
+
+  work_temp:
+    dir: .agents/work/
+    gitignored: true
+    ttl: "30 days — then user decides: keep, archive, or delete"
+    content: "scratch scripts, temp analyses, intermediate artifacts"
+
+# ─── RBAC Tiers ──────────────────────────────────────────────────────────────
+
+rbac_tiers:
+  base:   # naia-adk baseline — T0~T3
+    T0:
+      name: public
+      description: "Public-safe — no secrets, no PII"
+      dirs: ["skills/", "scripts/", "docs/", ".agents/context/", "templates/"]
+    T1:
+      name: org-general
+      description: "Organization general data — internal but not sensitive"
+      dirs: ["data-company/", "projects/"]
+      gitignore: true
+    T2:
+      name: org-sensitive
+      description: "Sensitive org data — financials, strategy, contracts"
+      dirs: ["data-business/"]
+      gitignore: true
+    T3:
+      name: private
+      description: "Personal / user-only data"
+      dirs: ["data-private/"]
+      gitignore: true
+
+  business_extension:   # naia-business-adk additions
+    T2_teams:
+      name: team-documents
+      description: "Team-specific documents (HR, ops, per-department)"
+      dirs: ["data-teams/"]
+      gitignore: true
+      added_by: naia-business-adk
+    T1_skills:
+      description: "Business skills — org-internal tools"
+      dirs: ["skills/business/"]
+      added_by: naia-business-adk
+
+# ─── Multi-project Management ────────────────────────────────────────────────
+
+multi_project:
+  description: |
+    Rules for {user}-adk and {org}-adk workspaces that manage multiple
+    subproject repos under projects/.
+  structure:
+    projects_dir: projects/
+    refs_dir: projects/refs/
+    index_file: .agents/context/project-index.yaml
+    ref_rule: "projects/refs/ — read-only upstream references; no edits"
+
+  mandatory_context_per_project:
+    rule: "Before any action inside projects/<name>/, read that project's AGENTS.md first"
+    blocking: true
+    trigger: "Entering any subproject directory"
+    re_trigger: "Switching between subprojects mid-session"
+    substitutes: false  # root CLAUDE.md does NOT substitute per-project context
+
+  fork_project_index:
+    rule: "Each fork maintains its own project-index.yaml listing active submodules"
+    note: "Per-fork content; do not commit fork-specific entries to upstream"
+
+# ─── Fork Customization ──────────────────────────────────────────────────────
+
+fork_customization:
+  mechanism: "FORK.md in fork root"
+  required_fields:
+    - org_name
+    - default_lang     # .users/ mirror default language
+    - fork_type        # "org-adk" | "user-adk"
+  optional_fields:
+    - project_list     # submodules under projects/
+    - data_submodules  # data-company/, data-teams/ etc.
+    - overrides        # override any section of this standard
+  override_precedence:
+    "1": "naia-adk defaults (this file)"
+    "2": "naia-business-adk additions (if fork chain includes business-adk)"
+    "3": "{org}-adk FORK.md overrides"
+    "4": "{user}-adk FORK.md overrides — highest priority"
+  rule: "More specific fork takes precedence. Overrides are additive unless explicitly replacing."
