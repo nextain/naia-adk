@@ -53,6 +53,20 @@ skills:
     arg: null
     scripts: []  # 실제 스크립트는 scripts/press-release/ (워크스페이스 레벨)
 
+  project-create:
+    trigger: "새 프로젝트 생성, 새 레포 scaffold, 프로젝트 부트스트랩, template-project로 시작"
+    what: "naia-template-project base로 새 프로젝트 scaffold + 정본 레포 생성 + (선택) submodule 등록"
+    arg: "[프로젝트명] [한 줄 설명]"
+    scripts: [scaffold.mjs]
+    note: "repo_type별 mirror pattern 자동 적용. 외부 push는 mass-export guard로 사용자 직접."
+
+  project-migration:
+    trigger: "프로젝트 별도 레포 분리, submodule 등록, 기존 디렉토리를 레포로, 하네스 적용/마이그레이션"
+    what: "기존 프로젝트를 정본 레포+submodule로 분리(extract) 또는 self-trust 하네스 점진 적용(harden)"
+    arg: "[대상 경로] [extract|harden]"
+    scripts: []
+    note: "push-first → 재clone 패턴(in-place 변환 금지). Windows lock·gitignore force-add 교훈 내장."
+
   read-doc:
     trigger: ".hwp/.hwpx/.pdf/.docx/.xlsx/.pptx 파일 언급, 문서 내용 검토/분석"
     what: "문서 파일 텍스트 추출 → 컨텍스트 로드 (HWP/HWPX/PDF/DOCX/XLSX/PPTX)"
