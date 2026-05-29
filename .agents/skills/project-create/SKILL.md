@@ -87,6 +87,17 @@ node <skill-dir>/scripts/scaffold.mjs --root <target-dir> \
 grep -rn "{{[A-Z_]*}}" <target-dir> --include="*.md" --include="*.json" --include="*.yaml" || echo "치환 완료"
 ```
 
+### Step 2b — base repo 전용 자산 제거 (payload 아님)
+
+base 의 `README.md`(naia-template-project **소개**)와 `about-docs/`(표준 *자체*에 대한 메타·검증·실험)는
+새 프로젝트에 **복제되면 안 된다**. 새 프로젝트의 README 는 `README.template.md`(치환된 skeleton)를 쓴다.
+```bash
+cd <target-dir>
+mv -f README.template.md README.md   # 새 프로젝트 README = 치환된 skeleton (base 소개 README 덮어씀)
+rm -rf about-docs                      # 표준 자체 메타 — 새 프로젝트엔 불필요
+```
+> 확인: `README.md` 존재 + `{{` 0개, `about-docs/`·`README.template.md` 부재여야.
+
 ### Step 3 — repo_type별 mirror pattern 적용
 
 위 입력 표의 mapping대로:
