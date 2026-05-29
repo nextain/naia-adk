@@ -1,0 +1,115 @@
+_copyright: "Copyright 2026 Nextain Inc. All rights reserved."
+
+# Push Policy — research / development / service 분리 표준
+# 사용자 directive 2026-05-29: research/development 단계는 push marker 불필요.
+# service 단계 (prod 배포 영향) 만 strict marker 게이트.
+
+policy:
+  principle: |
+    push marker 게이트는 service 단계 (운영 배포 / prod 사용자 영향) 에만 적용.
+    research / development 단계는 marker 불필요 — 자유롭게 push 가능.
+
+  why: |
+    1. 연구개발 작업의 push 빈도 높음. strict marker 가 작업 흐름 끊음.
+    2. service 영향 (prod 사용자) 없는 변경에 동일 수준 게이트 = 과도.
+    3. 단계별 권한 분리 = ADK 의 RBAC 정합.
+
+three_tier_classification:
+  research:
+    description: |
+      paradigm 탐구, 실험, 측정, peer review. prod 영향 없음.
+    examples:
+      - "naia-cognitive (인지 layer 연구)"
+      - "naia-memory (메모리 인프라 연구)"
+      - "naia-sing (SVS 연구)"
+      - "naia-labs (실험)"
+    push_policy: 자율 (marker 불요)
+
+  development:
+    description: |
+      ADK base / workspace / 개발 도구. 서비스 배포 전 작업.
+    examples:
+      - "naia-adk (workspace base)"
+      - "alpha-adk (luke fork)"
+      - "naia-business-adk"
+      - "onmam-adk (개발 도구, prod 배포 X)"
+      - "data-company / data-teams (자료)"
+    push_policy: 자율 (marker 불요)
+
+  service:
+    description: |
+      운영 배포. prod 사용자 영향.
+    examples:
+      - "onmam (alpha/staging/prod deploy)"
+      - "naia.nextain.io (web vertical)"
+      - "naia-os (desktop / kiosk 배포)"
+      - "naia-model-infra (RunPod / 가동 backend)"
+      - "naia-agent (gateway 배포)"
+    push_policy: strict marker
+    detail: |
+      - 사용자 prompt sentinel (`마커발급 <uses> <duration> [reason]`)
+      - cf [[project_marker_issue_sentinel_hook]]
+
+gates:
+  decision_test: |
+    "이 push 가 prod 사용자에게 직접 영향을 주는가?"
+    - YES → service → strict marker
+    - NO  → research / development → 자율 (marker 불요)
+
+  edge_cases:
+    deploy_script_in_research_repo: |
+      research repo 안의 deploy script (예: naia-model-infra/deploy/runpod/) 가
+      실제 prod 배포에 사용되면 = 그 부분만 service 정책 적용.
+    config_change: |
+      운영 config (port, credential) 변경은 service.
+      research config (학습 hyperparam 등) 은 development.
+
+implementation_paths:
+  current_state: |
+    현재 marker hook 은 모든 repo 에 일률 적용. 정책 분리 미구현.
+  paths:
+    - id: A
+      name: per-repo no-harness file
+      action: |
+        각 research / development repo 의 `.claude/no-harness` 파일 생성.
+        cwd 에 no-harness 있으면 hook 비활성.
+      pros: 단순, 즉시 가능
+      cons: 명시적 정책 표현 부족 (파일 하나만)
+    - id: B
+      name: settings.json git push permission
+      action: |
+        global / per-cwd 설정. settings.json 의 hook 비활성.
+      pros: global 적용
+      cons: granular 제어 어려움
+    - id: C
+      name: marker-issue-from-prompt.js cwd 별 정책
+      action: |
+        hook 자체 patch. cwd 가 research/development/service 어느 카테고리인지
+        판단 (예: 본 push-policy.yaml 의 examples 매칭) → marker 적용 여부 결정.
+      pros: 가장 정확, ADK 표준
+      cons: 작업 큼 (별 cycle)
+  recommended: A (즉시) + C (ADK 표준, 별 cycle)
+
+ai_classifier_note: |
+  AI 가 자율적으로 no-harness 파일 생성 / marker 직접 작성 등 = classifier 가
+  "Auto-Mode Bypass" 로 차단. 정상 동작. 정책 변경 = 사용자 직접 결정.
+
+  → AI 는 push 게이트 만나면:
+  1. 본 push-policy 분류에 따라 service 여부 판단
+  2. service 면 사용자 marker 요청
+  3. research / development 면 사용자에게 path A/B/C 안내
+  4. 작업 자체는 자율 가능 부분 진행
+
+cross_references:
+  related_memories:
+    - "feedback_push_marker_only_for_service (사용자 directive SoT)"
+    - "project_marker_issue_sentinel_hook (현재 marker hook 동작)"
+  related_files:
+    - ".claude/hooks/marker-issue-from-prompt.js (root)"
+    - ".claude/no-harness (root 비활성 표시)"
+
+revision_history:
+  - date: "2026-05-29"
+    note: |
+      사용자 directive (Phase 3 cycle 1 push 게이트 작업 중) 로 정책 분리 표준 신규 작성.
+      "연구 개발 작업에 push 체크 요구는 과한 것" — research + development = marker 불요.
