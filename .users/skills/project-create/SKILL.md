@@ -60,10 +60,10 @@ cd <name>
 template 표시가 안 되어 있으면 한 번만: `gh repo edit nextain/naia-template-project --template`.
 
 **Strategy B (오프라인/fallback, 로컬 복제):** 현재 워크스페이스에 submodule로
-mount된 `projects/template-project`를 복사.
+mount된 `projects/naia-template-project`를 복사.
 
 ```bash
-cp -r projects/template-project <target-dir>
+cp -r projects/naia-template-project <target-dir>
 rm -rf <target-dir>/.git        # base 이력 분리 — 새 프로젝트는 자체 이력으로 시작
 ```
 
@@ -146,7 +146,7 @@ bash scripts/sync-harness-mirrors.sh && git diff --exit-code   # mirror 동기�
 | 파일 | 용도 |
 |------|------|
 | `scripts/scaffold.mjs` | placeholder 치환 (결정론적, 의존성 없음) |
-| `projects/template-project/` | 로컬 mount된 base (Strategy B 복사원) |
+| `projects/naia-template-project/` | 로컬 mount된 base (Strategy B 복사원) |
 | `nextain/naia-template-project` | 정본 base 레포 (Strategy A template) |
 | `.agents/context/repo-structure-standard.yaml` | repo_type → mirror/필수디렉토리 SoT |
 

@@ -126,7 +126,7 @@ bash scripts/enforce-root-structure.sh # 위반 0 (삭제 없이 검사만)
 
 | 파일 | 용도 |
 |------|------|
-| `projects/template-project/` | harden 시 하네스 자산 복사원 |
+| `projects/naia-template-project/` | harden 시 하네스 자산 복사원 |
 | `.agents/context/repo-structure-standard.yaml` | repo_type → mirror/구조 SoT |
 | `<parent>/.gitmodules` | submodule 등록 결과 |
 | `<parent>/.gitignore` | force-add 표식 위치 |

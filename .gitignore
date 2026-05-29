@@ -57,7 +57,7 @@ data-private/
 # Project repositories (cloned per fork)
 projects/
 !projects/README.md
-!projects/template-project
+!projects/naia-template-project
 
 # Temp — all scratch/debug scripts go in tmp/ (never in root)
 tmp/
