@@ -44,6 +44,7 @@ Fork on GitHub, then periodically sync upstream: `git fetch upstream && git merg
 | gstack comparison (sections 1-8) | `.agents/context/gstack-comparison.md` |
 | gstack hook findings (A-E, F1-F10) | `.agents/context/gstack-hooks.md` |
 | gstack priority list (P0-P3) | `.agents/context/gstack-priority.md` |
+| push gating (research/dev/service) | `.agents/context/push-policy.yaml` |
 
 Index for search: `.agents/context/.ctx-index.json` (auto-rebuilt by hook, gitignored)
 
