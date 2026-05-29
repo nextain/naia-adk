@@ -22,6 +22,7 @@ Fork on GitHub, then periodically sync upstream: `git fetch upstream && git merg
 1. `.agents/context/agents-rules.json` — Project rules (SoT)
 2. `.agents/context/ai-work-index.yaml` — Work type → workflow index
 3. `.agents/context/project-index.yaml` — Context index + entry points
+4. `.agents/context/terminology.yaml` — Terminology & communication policy (no neologisms, plain Korean default, parenthesize academic/acronym)
 
 **On-demand (read when entering Plan or Review phases):**
 
@@ -43,6 +44,7 @@ Fork on GitHub, then periodically sync upstream: `git fetch upstream && git merg
 | gstack comparison (sections 1-8) | `.agents/context/gstack-comparison.md` |
 | gstack hook findings (A-E, F1-F10) | `.agents/context/gstack-hooks.md` |
 | gstack priority list (P0-P3) | `.agents/context/gstack-priority.md` |
+| push gating (research/dev/service) | `.agents/context/push-policy.yaml` |
 
 Index for search: `.agents/context/.ctx-index.json` (auto-rebuilt by hook, gitignored)
 
