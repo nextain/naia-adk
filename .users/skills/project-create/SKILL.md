@@ -59,13 +59,17 @@ cd <name>
 
 template 표시가 안 되어 있으면 한 번만: `gh repo edit nextain/naia-template-project --template`.
 
-**Strategy B (오프라인/fallback, 로컬 복제):** 현재 워크스페이스에 submodule로
-mount된 `projects/naia-template-project`를 복사.
+**Strategy B (위치 독립, GitHub clone):** 어느 워크스페이스·PC·컨텍스트에서도
+동일하게 동작 — 정본 base를 GitHub에서 직접 clone (로컬 mount 경로에 의존하지 않음).
 
 ```bash
-cp -r projects/naia-template-project <target-dir>
+git clone https://github.com/nextain/naia-template-project.git <target-dir>
 rm -rf <target-dir>/.git        # base 이력 분리 — 새 프로젝트는 자체 이력으로 시작
 ```
+
+> 완전 오프라인이면 로컬 mount를 복사. 단 경로가 컨텍스트마다 다름:
+> naia-adk 안에선 `projects/naia-template-project`, alpha-adk 루트에선
+> `projects/naia-adk/projects/naia-template-project`. 가능하면 GitHub clone을 쓸 것.
 
 ### Step 2 — placeholder 치환 (결정론적)
 
@@ -123,7 +127,9 @@ PowerShell이면 `&&` 대신 `;`로 체인.
 
 ```bash
 cd <target-dir>
-node --test src/test/                          # 115개 self-trust 테스트
+# 115개 self-trust 테스트 — 각 파일을 직접 실행(CI 방식). node:test 프레임워크가
+# 아니라 자체 assert 스크립트라 `node --test`로는 파일 수만 세고 실제 검증이 안 됨.
+fail=0; for t in src/test/*.test.mjs; do node "$t" || fail=1; done; [ $fail -eq 0 ] && echo "✓ 전체 통과"
 bash scripts/enforce-root-structure.sh          # F12/F13 구조 (--fix 없이 검사만)
 bash scripts/sync-harness-mirrors.sh && git diff --exit-code   # mirror 동기화 멱등성
 ```
@@ -146,8 +152,8 @@ bash scripts/sync-harness-mirrors.sh && git diff --exit-code   # mirror 동기�
 | 파일 | 용도 |
 |------|------|
 | `scripts/scaffold.mjs` | placeholder 치환 (결정론적, 의존성 없음) |
-| `projects/naia-template-project/` | 로컬 mount된 base (Strategy B 복사원) |
-| `nextain/naia-template-project` | 정본 base 레포 (Strategy A template) |
+| `nextain/naia-template-project` (GitHub) | 정본 base (Strategy A template / Strategy B clone 소스) |
+| `projects/naia-template-project/` (로컬 mount) | 오프라인 복사용 fallback (경로는 컨텍스트 의존) |
 | `.agents/context/repo-structure-standard.yaml` | repo_type → mirror/필수디렉토리 SoT |
 
 ## 참고

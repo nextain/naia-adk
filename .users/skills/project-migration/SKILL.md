@@ -103,7 +103,11 @@ git submodule status <path>           # 등록 확인
 > 모두 등록한다. 등록 누락 = 기존 코드 삭제 사고.
 
 ### B2 — 하네스 자산 복사 (advisory 모드)
-template-project에서 가져옴 (경로 충돌 없는 것부터):
+정본 base를 임시로 clone해서 자산을 가져온다 (위치 독립 — 로컬 mount 경로에 의존 안 함):
+```bash
+git clone --depth 1 https://github.com/nextain/naia-template-project.git /tmp/_naia-tpl
+```
+다음을 대상 프로젝트로 복사 (`/tmp/_naia-tpl/`에서, 경로 충돌 없는 것부터):
 ```
 .agents/hooks/{charter,completion-evidence,sdlc-gate,structure}-guard.js + lib/self-trust-core.mjs
 scripts/ci-verify-*.mjs, check-*.mjs, enforce-root-structure.sh, sync-harness-mirrors.sh
@@ -118,7 +122,8 @@ repo_type에 맞는 mirror pattern은 [[repo-structure-standard.yaml]] 참조.
 
 ### B4 — 검증
 ```bash
-node --test src/test/                  # 도입한 가드 테스트
+# 도입한 가드 테스트 — 각 파일 직접 실행(CI 방식, `node --test` 아님)
+fail=0; for t in src/test/*.test.mjs; do node "$t" || fail=1; done; [ $fail -eq 0 ] && echo "✓ 통과"
 bash scripts/enforce-root-structure.sh # 위반 0 (삭제 없이 검사만)
 ```
 
@@ -126,7 +131,7 @@ bash scripts/enforce-root-structure.sh # 위반 0 (삭제 없이 검사만)
 
 | 파일 | 용도 |
 |------|------|
-| `projects/naia-template-project/` | harden 시 하네스 자산 복사원 |
+| `nextain/naia-template-project` (GitHub) | harden 자산 복사원 (B2에서 임시 clone) |
 | `.agents/context/repo-structure-standard.yaml` | repo_type → mirror/구조 SoT |
 | `<parent>/.gitmodules` | submodule 등록 결과 |
 | `<parent>/.gitignore` | force-add 표식 위치 |
