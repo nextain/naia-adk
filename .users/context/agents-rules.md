@@ -290,6 +290,7 @@
 - For any .hwp/.hwpx/.pdf/.docx/.xlsx/.pptx file: use /read-doc skill FIRST — never claim inability to read documents
 - Design docs (docs/design/, spec/, design/) + extensions (.md/.txt/.yaml/.json): see permission_model above. Hook fires on edits — surface reason to user first.
 - Before running destructive git commands (git checkout --, git reset --hard, git clean -f): ALWAYS ask user for explicit confirmation first. State exactly what will be deleted. No exceptions.
+- Before deleting ANY code/branch/file (even temp/work files): treat it as risky, NOT harmless — understand why it is dead, back it up, get user confirmation. No AI-only deletion. (see dead_code_safety)
 
 ### completeness_principle
 
@@ -301,6 +302,15 @@
 - **minimal_modification**: HOW FAR to deviate from upstream = minimize. For fork-based work: overlay custom changes with minimal delta from upstream.
 - **completeness**: QUALITY of approved work = complete. If user approves X, implement X fully. Option A (complete) vs Option B (partial) → always recommend A unless user explicitly asks for partial.
 - **boilable_lake_rule**: A bounded, scoped module is 'boilable'. If scope is finite, implement it completely. Never deliver partial when complete costs AI nothing extra.
+
+### dead_code_safety
+
+- **statement**: Dead/unused code, branches, files, and artifacts are NOT harmless. The AI's assumption that 'this seems unused, so removing/ignoring it is safe' is frequently wrong: deletion is irreversible, and orphaned dead code misleads the next session into treating it as normal. Default to RISK-assumption, not harmlessness.
+- **rules**:
+  - Do not casually delete OR ignore dead/unused code, branches, or files.
+  - Before deletion: (1) understand WHY it is dead (intentional retention? migration leftover? not-yet-wired?) (2) back it up (3) get explicit user confirmation.
+  - No AI-only deletion — even for temp/work files, follow an explicit lifecycle rule or ask the user first.
+- **rationale**: Known AI cognitive bias — underweighting the risk of dead code. Same root cause as the 'recurring-symptom misclassification' failure pattern.
 
 ### ask_user_question_format
 
