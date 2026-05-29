@@ -248,6 +248,12 @@ contextFiles:
     mirrors:
       korean: .users/context/contributing.md
       english: .users/context/en/contributing.md
+  terminology:
+    path: .agents/context/terminology.yaml
+    description: "Terminology & communication policy — no neologisms, plain Korean default, parenthesize academic/acronym"
+    mirrors:
+      korean: .users/context/terminology.md
+      english: .users/context/en/terminology.md
 
 # opt-in localmodel backends (2026-05-15)
 # naia-adk 의 localmodel 설정에서 선택 가능한 외부 음성/모달 backend.
