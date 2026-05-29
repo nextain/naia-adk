@@ -20,6 +20,9 @@ dist/
 # Master password lives in OS keychain, not in this repo.
 naia-settings/auth/*.enc
 
+# Local machine config (per-machine paths, local gateway URL, test persona)
+naia-settings/config.json
+
 # OS
 .DS_Store
 Thumbs.db
