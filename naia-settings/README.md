@@ -26,6 +26,20 @@ location consumed by `naia-agent`.
 `provider`: `openai-compat` | `ollama-embed` | `anthropic` | `glm`
 (local Ollama/vLLM = `openai-compat`/`ollama-embed`, no auth).
 
+## `review.json` — cross-review reviewer panel + tier policy (SoT)
+
+`llm.json` 의 형제. **실질 적대 검증(substantive review) 역할의 정본** — `main`/`sub` 단일 모델과 달리 **플래그십 다중 독립 리뷰어 패널**을 표현한다. `review-pass` 스킬 + naia-agent 가 소비.
+
+| 키 | 의미 |
+|---|---|
+| `tier_policy` | 활동별 모델 tier (naia-agent 원조 2계층 정규화): 머리쓰기·설계·실질검증=`flagship` / 형식검증=`light` / 구조=`deterministic` |
+| `reviewers[]` | 플래그십 리뷰어 패널 (`claude` · `codex` · `glm-5.1`), 각 `{id, tier, command, stdin, parse}` |
+| `excluded` | 제외 도구 + 사유 (gemini-CLI = 응답 불안정) |
+| `stages` | 단계별 리뷰어·수렴 (review-pass 정합) |
+
+> **tier 정책**: 리뷰어 = 플래그십(검증=고위험, 강한 모델). 형식검증·번역·미러·드리프트 검출 = 라이트(`sub`). 구조검사 = LLM 무(스크립트). 상세 = `naia-template-project/docs/llm-roles.md` 3-레벨 표.
+> **secret 정책 동일**: 이 파일도 git-tracked backup — 키 값 금지, `apiKeyRef`(이름)만.
+
 ## Secret policy — **no plaintext, ever**
 
 `llm.json` is a git-tracked backup unit. It **must never contain a raw
