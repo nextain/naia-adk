@@ -28,9 +28,16 @@
       "tier": "flagship",
       "command": "opencode run \"{prompt}\" --dir \"{repo}\" -m openrouter/z-ai/glm-5.1",
       "stdin": false,
-      "parse": "text_fallback"
+      "parse": "text_fallback",
+      "_speed_note": "⚠️ opencode run = agentic build 모드라 리뷰엔 너무 느림(2026-05-30 실측 150s 타임아웃, 출력 0). 빠른 경로 = GLM 직접 API(GLM_API_KEY → open.bigmodel.cn). 키 없으면 R2(claude+codex)로 degradation.",
+      "preferred_command": "curl -s https://open.bigmodel.cn/api/paas/v4/chat/completions (GLM_API_KEY 필요)"
     }
   ],
+  "degradation": {
+    "_doc": "느린/불응 리뷰어는 timeout 후 R-1 graceful degradation (review-pass §7). 검증은 멈추지 않는다. 2026-05-30 실측: glm 타임아웃 → R2(claude+codex)가 이슈 정상 검출.",
+    "per_call_timeout_sec": 90,
+    "on_timeout": "drop reviewer, continue at R-1 (min R=2)"
+  },
   "excluded": {
     "gemini-cli": "응답 5분+ 불안정 (2026-05-30 실측). 검증층은 timeout+graceful degradation 필요. 속도·신뢰 필요 시 Vertex 등 유료 API 옵션."
   },
