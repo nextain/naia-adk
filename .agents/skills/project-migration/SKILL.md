@@ -103,6 +103,9 @@ git submodule status <path>           # 등록 확인
 > `structure-guard` / `enforce-root-structure.sh --fix`는 **미등록 루트 파일/디렉토리를 삭제**한다.
 > 하네스를 켜기 **전에** 모든 비표준 항목을 처분하고 누락 표준 항목을 채운다.
 > 처분 누락 = 삭제 사고 / 보안 항목 방치 = 유출 사고.
+> ⚠️ 단, enforce 는 **gitignore 된 루트 항목은 스킵**한다(구조 표준은 *추적되는* 트리만 관할 — 로컬
+>   캐시·`*.db`·격리 실물 오삭제 방지). 즉 위험 대상 = **추적 중이거나 gitignore 안 된** 미등록 루트 항목.
+>   이미 gitignore 된 로컬 산출물은 처분 안 해도 enforce 가 안 건드린다(추적 제외만 확인).
 
 **B1.0 — 누락 자산 동적 산출 + 시드 (고정 목록 쓰지 말 것 — 프로젝트마다 다름)**
 > harden 의 본질 = **"표준에 있는데 대상에 없는 것을 채운다"**. 채울 대상은 F12/F13 뿐 아니라
@@ -127,7 +130,7 @@ for k in tpl:                        # 템플릿의 모든 표준 key 순회 (�
 > F12/F13 은 템플릿 표준값으로 시드됨 → B1 처분표의 "고유 등록"·"정렬" 항목을 그 위에 반영.
 > **검증**: 시드 전 대상 key 전부가 시드 후에도 존재(보존)하는지 diff.
 
-**처분 5가지** — 모든 항목을 빠짐없이(상호배타·전수) 아래 중 하나로:
+**처분 6가지** — 모든 항목을 빠짐없이(상호배타·전수) 아래 중 하나로:
 
 | 처분 | 언제 | 처리 | 자동 / 문의 |
 |------|------|------|------------|
@@ -136,12 +139,14 @@ for k in tpl:                        # 템플릿의 모든 표준 key 순회 (�
 | **고유 등록** | 표준엔 없지만 프로젝트 고유·필수 자산 (`data/`, `_imports/`, 연구 산출물) | `agents-rules.json` F12/F13 에 추가 + note 이유 기록 | 명백하면 **자동**, 애매하면 **문의** |
 | **추적 제외** | 추적 불필요 산출물·캐시 (`ckpts/`, `*.npy`, `node_modules`) | `.gitignore` (+ 필요시 고유 등록 병행) | **자동** |
 | **보안 격리** ★ | 키·토큰·시크릿·개인정보(음성/얼굴 등) | **반드시 gitignore 된 위치에만 존재**. 추적 중이면 즉시 `git rm --cached` + `.gitignore` 등록 후 표준 시크릿 위치(`data-private/`, 그 자체가 gitignore)로 이동. **이미 push 됐으면 history purge(filter-repo)+force push** | **항상 사용자 보고** (유출은 사용자 결정·게이트) |
+| **보류 격리** ★ | **방치 의심** 회색 자산 — 빌드 미연결(workspaces·참조 0) + 커밋 정체(한두 커밋 뒤 방치)인 과거 AI 스캐폴드/잔재인데 **지금 지우기도 유지하기도 애매**한 것 | `node scripts/quarantine.mjs add <경로> --reason "…" [--retention <개월>]` → `quarantine/<name>/` 이동(`git rm --cached`=이력·디스크 보존) + `MANIFEST.json`(추적) 정책 기록. 만료 시 cron 자동 압축, 삭제는 사용자 처분 | **사용자 처분** (보관기간·압축은 격리 시 선택. 5분류 강제 양자택일이 오판 부르는 경우의 도피처) |
 
 **처분 원칙**:
 - **누락은 채운다** — 표준이 정한 것이므로 임의 판단 아님, 자동 채움.
 - **임의 결정이 진짜 어려운 항목만 사용자에게 문의** — 명백한 건(채움·추적제외·명백한 고유등록) AI 가 진행, 애매한 것(정렬 전부·의도 불명 고유등록)만 게이트. *매 항목 다 묻지 않는다.*
 - **정렬은 제안만, 실행은 승인** — 기존 프로젝트를 AI 가 함부로 `git mv` 하면 소실/빌드붕괴. "정렬 권장하되 프로젝트 의도 우선". (정렬 vs 고유등록 갈리면 정렬 우선 — 표준 명칭으로 맞춰야 템플릿 테스트와 정합.)
 - **보안 격리는 무조건 우선·보고** — 보안 데이터 위치 표준 = `data-private/`(추적 제외) 또는 외부 시크릿 매니저. 추적 경로에 키/개인정보 발견 시 다른 모든 처분보다 먼저 격리.
+- **보류 격리는 "방치 의심"에만** — 객관 신호로 확인하라(빌드 미연결 = workspaces/루트참조 0, 커밋 정체 = `git log --oneline -- <path>` 한두 건 후 멈춤, placeholder 마커). **AI 가 "죽었다" 단정해 지우지 않는다**(안 만든 걸 못 지움). 격리는 비파괴(이력·디스크 보존)라 안전한 default — 정렬/고유등록/제거 사이에서 결정이 갈리면 격리해두고 사용자 처분으로 넘긴다. cf [[feedback_training_stop_is_user_gated]](정지/제거 = 사용자 게이트).
 - **단위(granularity)**: 디렉터리 전체로 처분할지 내부 파일별로 쪼갤지 모호하면 — 디렉터리에 혼재(고유자산 + 시크릿 등)면 **파일 단위로 분리 처분**.
 
 **특정 항목 결정 규칙** (매번 묻지 말 것 — 아래는 결정됨):
@@ -154,6 +159,7 @@ for k in tpl:                        # 템플릿의 모든 표준 key 순회 (�
 | `benchmarks`→`benchmark`, `tests`→`src/test` | **정렬** (표준 명칭). 코드 경로 참조 갱신 동반. |
 | `data/`, `_imports/`, 연구 산출물 | **고유 등록** (F12). 표준에 없는 게 정상인 프로젝트 자산. |
 | `ckpts/`, 대용량 `*.npy`/모델 | **추적 제외** (+ 필요시 F12 등록 — 삭제 방지). |
+| 방치 의심 스캐폴드 (빌드 미연결 + 커밋 정체 + placeholder) | **보류 격리** (`quarantine.mjs add`). 지우지도 표준에 편입하지도 말고 정책 기록 후 사용자 처분. |
 
 > ⚠️ 모든 처분(채움·보안격리 포함)을 **enforcement(--fix) 이전에** 끝낸다.
 > 순서: 보안격리 → 채움 → 정렬(승인 후) → 고유등록 → 추적제외 권장 (보안 먼저).
@@ -181,9 +187,9 @@ TGT=<대상 프로젝트 루트>
 comm -23 <(cd "$TPL" && git ls-files|sort) <(cd "$TGT" && git ls-files|sort) \
   | while read f; do mkdir -p "$TGT/$(dirname "$f")"; cp "$TPL/$f" "$TGT/$f"; done
 ```
-> 전형적 누락 자산(참고용 예시 — 실제는 차집합이 결정): self-trust hooks(`charter/structure/sdlc-gate/completion-evidence-guard` + `lib/self-trust-core`),
-> `scripts/ci-verify-*`·`enforce-root-structure.sh`·`sync-harness-mirrors.sh`·`check-doc-graph.mjs`·`mirror-translate.mjs`·`verify-watch.sh`(주기 검증 러너),
-> `.github/workflows/`, `src/test/*.test.mjs`, `docs/{README,project-structure,threat-model,llm-roles}`.
+> 전형적 누락 자산(참고용 예시 — 실제는 차집합이 결정): self-trust hooks(`charter/structure/sdlc-gate/completion-evidence-guard`/`quarantine-notice` + `lib/self-trust-core`),
+> `scripts/ci-verify-*`·`enforce-root-structure.sh`·`sync-harness-mirrors.sh`·`check-doc-graph.mjs`·`mirror-translate.mjs`·`gen-lists.mjs`·`verify-watch.sh`(주기 검증 러너)·`quarantine.mjs`(보류 격리),
+> `quarantine/{MANIFEST.json,README.md}`(격리 정책 seed), `.github/workflows/`, `src/test/*.test.mjs`, `docs/{README,project-structure,threat-model,llm-roles}`.
 > ⚠️ **복제 제외(base 전용, payload 아님)**: `README.md`(base 소개), `about-docs/`(표준 자체 메타), `README.template.md`.
 >   대상에 README 가 없으면 base 의 `README.template.md` 를 치환해 README.md 로. 있으면 **기존 README 보존**(덮어쓰기 금지).
 > 대상에 **이미 있는 설정 파일(`agents-rules.json` 등)은 덮어쓰지 말고 B1.0 union merge** 적용.
@@ -199,6 +205,9 @@ comm -23 <(cd "$TPL" && git ls-files|sort) <(cd "$TGT" && git ls-files|sort) \
 - entry SoT(`AGENTS.md`)의 구조/디렉터리 트리·License·하네스 항목을 **harden 결과와 일치**시킴
   (정렬된 이름, 채워진 자산, 등록된 고유 dir, 실제 LICENSE).
 - `README*`·`.agents/context/project-index.yaml`·기타 구조 언급 문서를 동일 갱신.
+- **보류 격리한 게 있으면 컨텍스트가 알게** — `project-index.yaml` 에 `quarantine/MANIFEST.json` 포인터를
+  둬서 세션이 "백업 자산이 있었다"를 인지하게 한다(template 표준엔 이미 포함). 격리 자산은 `git rm --cached`
+  라 추적에선 사라지지만 manifest(추적)가 존재 사실을 보존.
 - 점검: 정렬 전 이름(`benchmarks`/`tests` 등)·"미정"류 잔존 문구를 grep 으로 0 확인.
 
 **B3.1b — `docs/README.md` 허브 (문서 고립 방지)**: `docs/` 의 **큐레이트 문서(날짜 없는 참조 문서)는
@@ -266,6 +275,10 @@ bash scripts/verify-watch.sh cron       # 출력된 crontab 줄을 crontab -e �
 - **검출·보고만 자동.** 자동 수정 절대 금지 — 작은 모델/자동 수정은 맥락 소실로 정합성을 깬다.
   신규 drift 발견 시 **사람/큰 모델 세션**이 cross-check 동반해 수정한다.
 - enforce 는 러너가 **`--fix` 없이(읽기전용)만** 호출 — 백그라운드에서 `rm -rf` 절대 안 돈다.
+- **보류 격리 라이프사이클도 cron 이 처리** — 러너가 `quarantine.mjs check` 를 부른다. 만료(`review_by` 경과)
+  항목은 **자동 압축(tar.gz, 비파괴)**까지만 하고 `pending_notice` 로 표시, **삭제는 절대 안 한다**.
+  대기 항목은 `SessionStart` hook(`quarantine-notice.js`)이 **첫 세션 진입 시 surface** → AI 가 **권한 유저에게
+  삭제/연장/복원 질의** → 승인 후에만 `quarantine.mjs purge`. (백그라운드 자동 삭제 금지 + 파괴는 사람 게이트.)
 - 보고는 **baseline 대비 delta(신규)만** → alert fatigue 방지. 같은 위반 반복 기록 안 함.
 - 가시 채널 = `.agents/work/verify-status.txt`(최신, 덮어씀). 세션 시작 시/사람이 이걸 본다.
 - ⚠️ phase 진입·active_phase 변경 같은 **게이트 항목은 러너가 "지적"만** — 자율 판정 금지(사용자 게이트).
@@ -284,4 +297,4 @@ bash scripts/verify-watch.sh cron       # 출력된 crontab 줄을 crontab -e �
 - extract와 [[project-create]] Step 6은 같은 "submodule 등록" 서브절차를 공유한다.
 - behind/ahead 상태에서 마이그레이션 commit을 쌓으면 이후 merge가 복잡해진다 — 가능하면 upstream sync를 먼저.
 - 부모가 그 자체로 submodule이면(예: alpha-adk 안의 naia-adk) `.git`은 gitfile이고 실제 gitdir는 `<super>/.git/modules/...`다. modules 경로를 찾을 땐 `git rev-parse --git-dir` 사용.
-- mirror 정책: 이 파일 수정 시 `.users/skills/project-migration/SKILL.md`도 동일 갱신.
+- skills 표현 모델: skills 는 `.users/` 에 per-item 미러하지 않는다. SoT = `.agents/skills/`, 사람용은 **단일 색인** `.users/skills-list.md`. 이 파일 수정 후 `node scripts/gen-lists.mjs skills` 로 색인 재생성.
