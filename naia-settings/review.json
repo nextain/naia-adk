@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "_doc": "크로스리뷰 리뷰어 패널 (플래그십 tier) + 모델 tier 정책. naia-settings cross-repo SoT. review-pass 스킬 + naia-agent 가 소비. llm.json 의 main/sub/embedded 역할과 형제 — 이 파일은 '실질 적대 검증' 역할(플래그십 다중 독립).",
+  "tier_policy": {
+    "_doc": "naia-agent 원조 2계층의 하네스 정규화. 머리쓰기·설계·실질검증=상위(플래그십) / 형식검증=하위(라이트) / 구조=결정론(LLM 무).",
+    "reasoning_design_fix": "flagship",
+    "substantive_review": "flagship",
+    "formal_verification": "light",
+    "structural": "deterministic"
+  },
+  "reviewers": [
+    {
+      "id": "claude",
+      "tier": "flagship",
+      "command": "claude -p --output-format json --allowedTools \"Read,Glob,Grep\" --max-turns 5",
+      "stdin": true,
+      "parse": "json"
+    },
+    {
+      "id": "codex",
+      "tier": "flagship",
+      "command": "codex exec \"{prompt}\" --sandbox read-only --skip-git-repo-check",
+      "stdin": false,
+      "parse": "text_fallback"
+    },
+    {
+      "id": "glm-5.1",
+      "tier": "flagship",
+      "command": "opencode run \"{prompt}\" --dir \"{repo}\" -m openrouter/z-ai/glm-5.1",
+      "stdin": false,
+      "parse": "text_fallback"
+    }
+  ],
+  "excluded": {
+    "gemini-cli": "응답 5분+ 불안정 (2026-05-30 실측). 검증층은 timeout+graceful degradation 필요. 속도·신뢰 필요 시 Vertex 등 유료 API 옵션."
+  },
+  "stages": {
+    "planning":    { "reviewers": ["claude", "codex", "glm-5.1"], "arbiter": null, "convergence": 1 },
+    "development": { "reviewers": ["claude", "codex", "glm-5.1"], "arbiter": null, "convergence": 2 },
+    "test":        { "reviewers": ["claude", "codex", "glm-5.1"], "arbiter": null, "convergence": 1 },
+    "integration": { "reviewers": ["claude", "codex", "glm-5.1"], "arbiter": null, "convergence": 2 }
+  }
+}
