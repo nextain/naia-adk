@@ -2447,7 +2447,7 @@ exec
    115	
    116	## 9. Cross-ref
    117	
-   118	- ko-serve(`nextain/naia-minicpm-ko-serve`) = PAUSED. agent-flow 평가
+   118	- ko-serve(`nextain/naia-ko-serve`) = PAUSED. agent-flow 평가
    119	  프레임웍은 **여기(naia-agent)** 책임. ko-serve `current.json` 에 본
    120	  문서로의 포인터 기록됨(cross-ref).
 
