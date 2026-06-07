@@ -1,0 +1,11 @@
+{
+  "_comment": "gcs-guard 버킷 정책 예시. 실제 사용 repo에서는 gcs-guard.config.json 으로 복사하고 실버킷명 기입 + gcs-guard.required marker 생성. naia-adk(public)에는 실버킷명을 두지 않음.",
+  "_riskClasses": {
+    "archive": "ARCHIVE/Coldline class — read마다 GB당 retrieval 비용. read(cp/cat/rsync/du/ls-r) 차단.",
+    "prod": "운영 버킷 — lifecycle/IAM 변경·대량 transfer 차단/확인."
+  },
+  "buckets": {
+    "example-archive-bucket": "archive",
+    "example-prod-bucket": "prod"
+  }
+}
