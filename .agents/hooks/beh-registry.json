@@ -109,6 +109,30 @@
       "fail_mode": "death/absence has no effect on deterministic enforcement",
       "escalation": "none (advisory)",
       "recovery": "n/a"
+    },
+    {
+      "name": "manifest-propagation",
+      "surface": "external",
+      "hook_file": "beh-manifest.js",
+      "registered": false,
+      "trigger": "SoT publishes / fork verifies the managed harness region",
+      "check": "signed manifest (HMAC) + monotonic epoch (anti-rollback) + 3-way managed-region hash diff (base-only)",
+      "action": "generate beh-manifest.lock (SoT) / verify + report drift (fork)",
+      "fail_mode": "bad signature / epoch rollback / file drift → exit 1 (gate downstream)",
+      "escalation": "central-ci enforces across forks",
+      "recovery": "re-sync the drifted file from SoT / re-publish with bumped epoch"
+    },
+    {
+      "name": "central-ci",
+      "surface": "external",
+      "hook_file": "beh-ci.sh",
+      "registered": false,
+      "trigger": "scheduled job / each fork CI",
+      "check": "verify local managed region vs beh-manifest.lock (sig + epoch floor + hashes)",
+      "action": "fail the dependency-gate on drift/rollback/bad-sig",
+      "fail_mode": "exit 1 → block propagation; catches CI-less / unaware / stale forks",
+      "escalation": "alert + block until re-synced",
+      "recovery": "re-sync from SoT; bump epoch floor"
     }
   ]
 }

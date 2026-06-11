@@ -91,5 +91,12 @@
 6. ✅ **DONE (2026-06-12)** — 2nd-stream advisory(3.5).
    - 코어 `.agents/hooks/core/beh-second-stream.js`: `summarizeForAdvisory`(원장→구조 요약, 소스내용 0) + `runAdvisory`(llmFn 주입식, **게이트 안 함**, throw/부재=clean no-op). CLI `.claude/hooks/beh-second-stream.js`(기본 llmFn 없음=plumbing만). 단위테스트로 plumbing 검증(plan §3.5 "plumbing만 단위테스트").
    - 5+6 테스트: `run-beh-registry-test.js` 12/12 → E2E **72/72 green**.
-7. 드리프트해결+sign/epoch/central-CI(5).
-naia-adk 추가 → sync 전파 + 서브모듈 bump.
+7. ✅ **DONE (2026-06-12)** — 전파 enforcement(§5: sign/epoch/central-CI).
+   - 코어 `.agents/hooks/core/beh-manifest.js`: `generateManifest`(managed region 파일 sha256 + 단조 epoch + HMAC 서명) / `verifyManifest`(timing-safe 서명 + epoch anti-rollback) / `diffManagedRegion`(SoT vs downstream, **managed region만 비교** — fork 고유 파일 비-플래그).
+   - CLI `.claude/hooks/beh-manifest.js`(generate/verify, 키=env BEH_SIGN_KEY|`.claude/beh-sign-key`, **키 미출력**) + 중앙 CI `.claude/hooks/beh-ci.sh`(스케줄/fork CI가 managed region 검증 → CI부재·미인지·stale fork 차단).
+   - 테스트: `run-beh-manifest-test.js` 14/14(round-trip·변조·wrong-key·epoch 롤백·region drift·CLI generate/verify/drift/rollback/no-key) → E2E **73/73 green**. 서명키 gitignore.
+   - **남은 라이브 액션(루크 인지 필요)**: ① SoT 서명키로 `beh-manifest.lock` 발행(운영, 키=루크 보유) ② **alpha-adk tool-agnostic 채택**(구형 monolithic `.claude/hooks/*.js` 복사본 → naia-adk `.agents/hooks/{core,policies}` SoT 채택) = **실행 중 세션의 라이브 하네스 변경**이라 자율 flip 금지, 별도 의도된 마이그레이션으로.
+
+---
+## ✅ §6 구현 전체 완료 (2026-06-12)
+설계 2-AI 2-clean(63aa745) → §6.1~§6.7 구현 7단계 전부 완료. 코어 7개(`beh-ledger·receipts·supervise-core·launch-core·registry·second-stream·manifest`) + 어댑터/도구 10개(`beh-record·tick·stop·watchdog·supervise·pretool·session-start·launch.sh·second-stream·manifest·ci.sh`) + 레지스트리 카탈로그. 테스트: fault-injection(LLM 드리프트 재현 대신 *신호* 검증) + 실프로세스/replay/CLI = **canonical E2E 73/73 green**. 전부 opt-in(`.claude/beh-on`) + fail-safe exit 0 → 미옵트인 세션 무영향. naia-adk SoT 커밋, alpha-adk 미러. **라이브 활성화(beh-on + 락 발행 + alpha 채택)는 루크 결정.**
