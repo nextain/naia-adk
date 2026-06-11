@@ -66,6 +66,9 @@
 - 전파=enforcement: **서명 manifest + 단조 epoch(anti-rollback) + 3-way managed-region**(base만 비교) + **중앙 scheduled CI/dependency-gate**(downstream CI 부재·미인지 fork·stale 무기한 방지; 전환기 미선언 fork = 최소호환 epoch 강제).
 
 ## 6. 구현 순서 (2-clean 후)
-1. 하네스 원장(3.1: 활성항목 new-value·페이즈 budget·외부 watchdog·blocked disposition·inject barrier·user-reset) + 직접재현/false-positive E2E.
+1. ✅ **DONE (2026-06-12)** — 하네스 원장(3.1: 활성항목 new-value·페이즈 budget·외부 watchdog·blocked disposition·inject barrier·user-reset) + 직접재현/false-positive E2E.
+   - 코어(순수 평가기, tool-agnostic SoT): `.agents/hooks/core/beh-ledger.js` — append-only 원장 I/O(jsonl), `canonTarget`, `matchMilestone`(path/bash_ok/manual 결정적 predicate), `deriveProgressMarks`(one-shot), `evaluateDrift`(active_stall/starvation/phase_ceiling/new_value_zero/scope_undeclared/blocked_termination + inject barrier K + escalation hard-stop), 세션상태·P0 바인딩 I/O, `behEnabled`(opt-in `.claude/beh-on`).
+   - 어댑터(thin, Claude Code): `.claude/hooks/beh-record.js`(PostToolUse 원장기록) · `beh-tick.js`(UserPromptSubmit turn++·phase 누적·평가·inject) · `beh-stop.js`(Stop 종료게이트+hard-stop 차단·`beh-reset` 해제) · `beh-watchdog.js`(외부 wall-clock tool-less-spin 감시 + selftest). settings.json 등록(전부 opt-in 게이트 + fail-safe exit 0 → 미옵트인 세션 무영향).
+   - 테스트(fault-injection = 재현 어려운 LLM 드리프트 대신 *신호* 검증, plan §4): `run-beh-ledger-test.js` 24/24 + `run-beh-adapter-test.js`(replay E2E) 6/6 + watchdog selftest. canonical E2E(run.sh)에 통합 → **67/67 green**(기존 64 + BEH 3).
 2. 완료 receipt(3.2: Report/Tasks-end·tree 결속). 3. supervise(3.3: 기본 cgroup+wall·populated=0·degraded 차단·probe-type·grace·lease·staging) + #2 E2E. 4. 외부 launcher session-start(3.4). 5. 레지스트리. 6. 2nd-stream advisory. 7. 드리프트해결+sign/epoch/central-CI(5).
 naia-adk 추가 → sync 전파 + 서브모듈 bump.

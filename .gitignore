@@ -42,6 +42,13 @@ desktop.ini
 # ctx index (auto-rebuilt by hook, never committed)
 .agents/context/.ctx-index.json
 
+# BEH runtime artifacts (per-session ledger/state + opt-in/runtime markers)
+.agents/harness/ledger/
+.agents/harness/state/
+.claude/beh-on
+.claude/beh-stuck
+.claude/beh-reset
+
 # Python
 __pycache__/
 *.pyc
