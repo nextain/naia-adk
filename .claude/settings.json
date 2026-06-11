@@ -46,6 +46,24 @@
             "command": "node .claude/hooks/prod-gateway-guard.js"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/beh-pretool.js"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/beh-session-start.js"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

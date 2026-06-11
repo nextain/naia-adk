@@ -50,6 +50,8 @@ desktop.ini
 .claude/beh-on
 .claude/beh-stuck
 .claude/beh-reset
+.claude/beh-handshake
+.claude/beh-launch-bypass
 
 # Python
 __pycache__/
