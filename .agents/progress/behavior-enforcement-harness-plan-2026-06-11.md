@@ -70,5 +70,10 @@
    - 코어(순수 평가기, tool-agnostic SoT): `.agents/hooks/core/beh-ledger.js` — append-only 원장 I/O(jsonl), `canonTarget`, `matchMilestone`(path/bash_ok/manual 결정적 predicate), `deriveProgressMarks`(one-shot), `evaluateDrift`(active_stall/starvation/phase_ceiling/new_value_zero/scope_undeclared/blocked_termination + inject barrier K + escalation hard-stop), 세션상태·P0 바인딩 I/O, `behEnabled`(opt-in `.claude/beh-on`).
    - 어댑터(thin, Claude Code): `.claude/hooks/beh-record.js`(PostToolUse 원장기록) · `beh-tick.js`(UserPromptSubmit turn++·phase 누적·평가·inject) · `beh-stop.js`(Stop 종료게이트+hard-stop 차단·`beh-reset` 해제) · `beh-watchdog.js`(외부 wall-clock tool-less-spin 감시 + selftest). settings.json 등록(전부 opt-in 게이트 + fail-safe exit 0 → 미옵트인 세션 무영향).
    - 테스트(fault-injection = 재현 어려운 LLM 드리프트 대신 *신호* 검증, plan §4): `run-beh-ledger-test.js` 24/24 + `run-beh-adapter-test.js`(replay E2E) 6/6 + watchdog selftest. canonical E2E(run.sh)에 통합 → **67/67 green**(기존 64 + BEH 3).
-2. 완료 receipt(3.2: Report/Tasks-end·tree 결속). 3. supervise(3.3: 기본 cgroup+wall·populated=0·degraded 차단·probe-type·grace·lease·staging) + #2 E2E. 4. 외부 launcher session-start(3.4). 5. 레지스트리. 6. 2nd-stream advisory. 7. 드리프트해결+sign/epoch/central-CI(5).
+2. ✅ **DONE (2026-06-12)** — 완료 receipt(3.2: Report/Tasks-end·tree 결속).
+   - 코어 `.agents/hooks/core/beh-receipts.js`: receipt store(jsonl), `captureClosure`(declared closure glob/literal → sha256), `treeStateId`, `evaluateCompletion`(순수: done 항목별 exit-0 receipt 부재→"검증 없음" / closure 해시≠현재→stale / `undeclared_input`→fail-closed), `isVerifyCommand`(사전선언 verify.cmd_pattern 매칭), `listCandidates`(git ls-files, glob일 때만·cold path).
+   - 배선: beh-record가 verify.cmd_pattern 매칭 성공 Bash에서 receipt 기록(closure 해시 캡처); beh-stop이 종료 시 done 항목 closure 재측정→`evaluateCompletion` incomplete면 차단.
+   - 테스트: `run-beh-receipts-test.js` 12/12 + adapter replay에 receipt 3케이스(기록/무receipt 차단/유효→허용·stale→차단) → E2E **68/68 green**.
+   - bound(plan §3.2): closure = *선언* closure 해시결속까지(측정 read-set·완전 hermetic·생성 provenance = impl-phase). §3.1 진전-0 backstop이 독립 이중포착.
+3. supervise(3.3: 기본 cgroup+wall·populated=0·degraded 차단·probe-type·grace·lease·staging) + #2 E2E. 4. 외부 launcher session-start(3.4). 5. 레지스트리. 6. 2nd-stream advisory. 7. 드리프트해결+sign/epoch/central-CI(5).
 naia-adk 추가 → sync 전파 + 서브모듈 bump.

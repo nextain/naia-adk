@@ -15,9 +15,10 @@
  */
 const fs = require("fs");
 const path = require("path");
-let beh;
+let beh, rcpt;
 try {
 	beh = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "beh-ledger.js"));
+	rcpt = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "beh-receipts.js"));
 } catch {
 	process.exit(0);
 }
@@ -69,11 +70,26 @@ async function main() {
 		barrier: st.barrier,
 	});
 
-	if (result.blockTermination || result.hardStop) {
+	// §3.2 completion receipts: every "done" item must carry a valid, non-stale
+	// verification receipt. Measure each done item's declared closure NOW and
+	// compare to its receipt-time hashes.
+	const receipts = rcpt.readReceipts(rcpt.receiptsPath(beh.behPaths(cwd, sessionId).dir, sessionId));
+	const doneItems = (progress.scope_items || []).filter((it) => it.state === "done");
+	let candidates = null;
+	const currentClosureById = {};
+	for (const it of doneItems) {
+		const specs = (it.verify && it.verify.closure) || [];
+		if (specs.some((s) => /[*?[\]]/.test(s)) && candidates === null) candidates = rcpt.listCandidates(cwd);
+		currentClosureById[it.id] = rcpt.captureClosure(cwd, specs, beh.globToRe, candidates || []);
+	}
+	const completion = rcpt.evaluateCompletion({ items: doneItems, receipts, currentClosureById });
+
+	if (result.blockTermination || result.hardStop || completion.incomplete.length > 0) {
 		const reason = [
 			result.hardStop ? result.hardStopReason : "[BEH] 종료 차단 (termination gate).",
 			...result.injects.filter((i) => i.invariant === "blocked_termination").map((i) => i.message),
-			"해제: 각 항목 disposition(done/deferred/abandoned) | 세션 해제(rm .claude/beh-on) | 사용자 reset(touch .claude/beh-reset).",
+			...completion.incomplete.map((c) => `[BEH] 완료주장 무효 — 항목 "${c.item}": ${c.reason} (plan §3.2).`),
+			"해제: 각 항목 disposition(done/deferred/abandoned) + 유효 검증 receipt | 세션 해제(rm .claude/beh-on) | 사용자 reset(touch .claude/beh-reset).",
 		].join("\n");
 		process.stdout.write(JSON.stringify({ decision: "block", reason }));
 		process.exit(0);

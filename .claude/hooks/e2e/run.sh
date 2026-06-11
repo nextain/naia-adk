@@ -201,7 +201,8 @@ a_has "pcc: subproject rule" "subproject"
 echo "beh-ledger:"
 TESTD="$(cd "$HOOKS/test" && pwd)"
 node "$TESTD/run-beh-ledger-test.js"     >/dev/null 2>&1 && ok || bad "beh ledger fault-injection suite (24 cases)"
-node "$TESTD/run-beh-adapter-test.js"    >/dev/null 2>&1 && ok || bad "beh adapter replay suite (6 cases)"
+node "$TESTD/run-beh-receipts-test.js"   >/dev/null 2>&1 && ok || bad "beh receipts fault-injection suite (12 cases)"
+node "$TESTD/run-beh-adapter-test.js"    >/dev/null 2>&1 && ok || bad "beh adapter replay suite (10 cases)"
 node "$HOOKS/beh-watchdog.js" --selftest >/dev/null 2>&1 && ok || bad "beh watchdog selftest (flat→STUCK, fresh→clear)"
 
 # ─────────────────────────────────────────────────────────────────────────────
