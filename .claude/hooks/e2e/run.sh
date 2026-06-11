@@ -197,6 +197,13 @@ echo "post-compact-context:"
 fire post-compact-context '';                                                                                 a_has  "pcc: mandatory re-read msg" "agents-rules.json"
 a_has "pcc: subproject rule" "subproject"
 
+# ── BEH §3.1 ledger harness (fault-injection core + adapter replay + watchdog) ─
+echo "beh-ledger:"
+TESTD="$(cd "$HOOKS/test" && pwd)"
+node "$TESTD/run-beh-ledger-test.js"     >/dev/null 2>&1 && ok || bad "beh ledger fault-injection suite (24 cases)"
+node "$TESTD/run-beh-adapter-test.js"    >/dev/null 2>&1 && ok || bad "beh adapter replay suite (6 cases)"
+node "$HOOKS/beh-watchdog.js" --selftest >/dev/null 2>&1 && ok || bad "beh watchdog selftest (flat→STUCK, fresh→clear)"
+
 # ─────────────────────────────────────────────────────────────────────────────
 echo "═══════════════════════════════════════════════"
 echo "E2E RESULT: $PASS passed, $FAIL failed"

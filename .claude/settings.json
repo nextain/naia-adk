@@ -54,6 +54,10 @@
           {
             "type": "command",
             "command": "node .claude/hooks/session-inject.js"
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/beh-tick.js"
           }
         ]
       }
@@ -77,6 +81,24 @@
           {
             "type": "command",
             "command": "node .claude/hooks/ctx-index-rebuild.js"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/beh-record.js"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/beh-stop.js"
           }
         ]
       }
