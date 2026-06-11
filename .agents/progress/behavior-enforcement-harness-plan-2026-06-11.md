@@ -75,5 +75,10 @@
    - 배선: beh-record가 verify.cmd_pattern 매칭 성공 Bash에서 receipt 기록(closure 해시 캡처); beh-stop이 종료 시 done 항목 closure 재측정→`evaluateCompletion` incomplete면 차단.
    - 테스트: `run-beh-receipts-test.js` 12/12 + adapter replay에 receipt 3케이스(기록/무receipt 차단/유효→허용·stale→차단) → E2E **68/68 green**.
    - bound(plan §3.2): closure = *선언* closure 해시결속까지(측정 read-set·완전 hermetic·생성 provenance = impl-phase). §3.1 진전-0 backstop이 독립 이중포착.
-3. supervise(3.3: 기본 cgroup+wall·populated=0·degraded 차단·probe-type·grace·lease·staging) + #2 E2E. 4. 외부 launcher session-start(3.4). 5. 레지스트리. 6. 2nd-stream advisory. 7. 드리프트해결+sign/epoch/central-CI(5).
+3. ✅ **DONE (2026-06-12)** — supervise(3.3: cgroup+wall·populated=0·degraded·probe-type·grace·lease).
+   - 코어 `.agents/hooks/core/beh-supervise-core.js`: status 상태기계(RUNNING|STALL|TIMEOUT|DONE|FAIL|UNSUPERVISED-DEGRADED) + `evaluateSupervisor`(순수: wall·stall·grace(첫10%wall|5분)·monotonic strict-increase만 진전·rate-sanity) + degraded(미승인→짧은 강제wall) + `acquireLease`(획득/갱신/거부/stale 회수) + probe-type allowlist(`file_lines/file_bytes/file_mtime/path_count/log_match_count`, free-form 금지).
+   - 래퍼 `.claude/hooks/beh-supervise.js`: **우선** systemd-run --user transient service(자체 cgroup v2) → kill=`systemctl --user stop` 후 **cgroup.events populated=0 확인**(미확인→hard-failure); **degraded** 폴백=detached PGID(setsid) → TERM→KILL + PGID 소멸 확인(**pkill -f 금지, 대상 PGID만**).
+   - 테스트: `run-beh-supervise-test.js` 16/16(순수) + `run-beh-supervise-wrapper-test.js` 실프로세스 5/5(**대상만 죽고 독립 형제 생존** + free-form 거부) + systemd cgroup 경로 스모크(격리→STALL→populated=0→유닛 GC 실증) → E2E **70/70 green**.
+   - bound: **명시 장기작업의 supervise 래퍼 + 코어**까지 구현. "모든 tool 프로세스 기본 cgroup+wall(ambient auto-wrap)"은 모든 Bash를 systemd-run으로 자동 재작성 = 실행 의미 변경·고위험 → **§6.4 PreToolUse "선언-장기 supervise 미경유 → block" 강제와 짝**으로 점진 롤아웃(bounded). staging/atomic open-writer = 후속.
+4. 외부 launcher session-start(3.4) + PreToolUse 미경유 장기 block. 5. 레지스트리. 6. 2nd-stream advisory. 7. 드리프트해결+sign/epoch/central-CI(5).
 naia-adk 추가 → sync 전파 + 서브모듈 bump.

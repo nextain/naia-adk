@@ -46,6 +46,7 @@ desktop.ini
 .agents/harness/ledger/
 .agents/harness/state/
 .agents/harness/receipts/
+.agents/harness/leases/
 .claude/beh-on
 .claude/beh-stuck
 .claude/beh-reset
