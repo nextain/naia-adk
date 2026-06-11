@@ -45,6 +45,7 @@ desktop.ini
 # BEH runtime artifacts (per-session ledger/state + opt-in/runtime markers)
 .agents/harness/ledger/
 .agents/harness/state/
+.agents/harness/receipts/
 .claude/beh-on
 .claude/beh-stuck
 .claude/beh-reset

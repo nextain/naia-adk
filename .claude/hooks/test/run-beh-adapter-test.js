@@ -19,6 +19,7 @@ const path = require("path");
 
 const HOOKS = path.join(__dirname, "..");
 const beh = require(path.join(__dirname, "..", "..", "..", ".agents", "hooks", "core", "beh-ledger.js"));
+const rcpt = require(path.join(__dirname, "..", "..", "..", ".agents", "hooks", "core", "beh-receipts.js"));
 
 let PASS = 0,
 	FAIL = 0;
@@ -107,11 +108,13 @@ const OLD_TS = () => Date.now() - 20 * 60 * 1000; // 20 min ago → past stallMs
 	fs.rmSync(cwd, { recursive: true, force: true });
 }
 
-// 4. beh-stop ALLOWS when all items are disposed (false-positive guard).
+// 4. beh-stop ALLOWS when all items are disposed via deferral/abandonment
+//    (false-positive guard; deferred/abandoned are not completion claims so
+//    they need no receipt — only "done" does, tested in #8/#9).
 {
 	const cwd = setup({
 		items: [
-			{ id: "a", state: "done", milestones: [] },
+			{ id: "a", state: "abandoned", milestones: [] },
 			{ id: "b", state: "deferred", milestones: [] },
 		],
 	});
@@ -139,6 +142,43 @@ const OLD_TS = () => Date.now() - 20 * 60 * 1000; // 20 min ago → past stallMs
 	const out = fire("beh-stop.js", { cwd, session_id: SID, hook_event_name: "Stop" });
 	const released = !/"decision":"block"/.test(out) && !fs.existsSync(path.join(cwd, ".claude", "beh-reset"));
 	assert(released, "6. beh-reset → Stop allowed + marker consumed", out.slice(0, 120));
+	fs.rmSync(cwd, { recursive: true, force: true });
+}
+
+// 7. §3.2 — successful verify command records a completion receipt.
+{
+	const cwd = setup({ items: [{ id: "v", state: "running", started_ts: Date.now(), milestones: [{ id: "m1" }], verify: { cmd_pattern: "^npm test", closure: ["src/x.ts"] } }] });
+	fs.mkdirSync(path.join(cwd, "src"), { recursive: true });
+	fs.writeFileSync(path.join(cwd, "src", "x.ts"), "alpha");
+	fire("beh-tick.js", { cwd, session_id: SID, hook_event_name: "UserPromptSubmit" });
+	fire("beh-record.js", { cwd, session_id: SID, hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm test" }, tool_response: { ok: true } });
+	const recs = rcpt.readReceipts(rcpt.receiptsPath(beh.behPaths(cwd, SID).dir, SID));
+	const rr = recs.find((r) => r.item_id === "v");
+	assert(rr && rr.exit === 0 && rr.closure[0] && rr.closure[0].path === "src/x.ts" && rr.closure[0].hash, "7. record: verify cmd → receipt w/ closure hash", JSON.stringify(recs));
+	fs.rmSync(cwd, { recursive: true, force: true });
+}
+
+// 8. §3.2 — Stop BLOCKS a "done" item with no verification receipt.
+{
+	const cwd = setup({ items: [{ id: "v", state: "done", verify: { cmd_pattern: "^npm test", closure: ["src/x.ts"] } }] });
+	fire("beh-tick.js", { cwd, session_id: SID, hook_event_name: "UserPromptSubmit" });
+	const out = fire("beh-stop.js", { cwd, session_id: SID, hook_event_name: "Stop" });
+	assert(/"decision":"block"/.test(out) && /완료주장 무효/.test(out), "8. stop: done w/o receipt → block", out.slice(0, 200));
+	fs.rmSync(cwd, { recursive: true, force: true });
+}
+
+// 9. §3.2 — valid receipt → allow; mutate closure → stale → block.
+{
+	const cwd = setup({ items: [{ id: "v", state: "done", verify: { cmd_pattern: "^npm test", closure: ["src/x.ts"] } }] });
+	fs.mkdirSync(path.join(cwd, "src"), { recursive: true });
+	fs.writeFileSync(path.join(cwd, "src", "x.ts"), "alpha");
+	fire("beh-tick.js", { cwd, session_id: SID, hook_event_name: "UserPromptSubmit" });
+	fire("beh-record.js", { cwd, session_id: SID, hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: { command: "npm test" }, tool_response: { ok: true } });
+	const allow = fire("beh-stop.js", { cwd, session_id: SID, hook_event_name: "Stop" });
+	assert(!/"decision":"block"/.test(allow), "9. stop: valid receipt + unchanged closure → allow", allow.slice(0, 160));
+	fs.writeFileSync(path.join(cwd, "src", "x.ts"), "beta-CHANGED");
+	const block = fire("beh-stop.js", { cwd, session_id: SID, hook_event_name: "Stop" });
+	assert(/"decision":"block"/.test(block) && /stale/.test(block), "9. stop: mutated closure → stale block", block.slice(0, 200));
 	fs.rmSync(cwd, { recursive: true, force: true });
 }
 
