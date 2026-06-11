@@ -80,5 +80,10 @@
    - 래퍼 `.claude/hooks/beh-supervise.js`: **우선** systemd-run --user transient service(자체 cgroup v2) → kill=`systemctl --user stop` 후 **cgroup.events populated=0 확인**(미확인→hard-failure); **degraded** 폴백=detached PGID(setsid) → TERM→KILL + PGID 소멸 확인(**pkill -f 금지, 대상 PGID만**).
    - 테스트: `run-beh-supervise-test.js` 16/16(순수) + `run-beh-supervise-wrapper-test.js` 실프로세스 5/5(**대상만 죽고 독립 형제 생존** + free-form 거부) + systemd cgroup 경로 스모크(격리→STALL→populated=0→유닛 GC 실증) → E2E **70/70 green**.
    - bound: **명시 장기작업의 supervise 래퍼 + 코어**까지 구현. "모든 tool 프로세스 기본 cgroup+wall(ambient auto-wrap)"은 모든 Bash를 systemd-run으로 자동 재작성 = 실행 의미 변경·고위험 → **§6.4 PreToolUse "선언-장기 supervise 미경유 → block" 강제와 짝**으로 점진 롤아웃(bounded). staging/atomic open-writer = 후속.
-4. 외부 launcher session-start(3.4) + PreToolUse 미경유 장기 block. 5. 레지스트리. 6. 2nd-stream advisory. 7. 드리프트해결+sign/epoch/central-CI(5).
+4. ✅ **DONE (2026-06-12)** — 외부 launcher session-start(3.4) + PreToolUse 미경유 장기 block.
+   - 코어 `.agents/hooks/core/beh-launch-core.js`(순수): `isBackgrounded`(trailing &/nohup/setsid/disown, 인용 & 오탐 방지) · `isSuperviseWrapper` · `isLauncher` · `evaluateHandshake`(부재/해시 불일치(드리프트)/stale → !ok).
+   - 어댑터 `.claude/hooks/beh-pretool.js`(PreToolUse, 전 도구): ① **session-start handshake fail-CLOSED**(settings.json 해시결속 — 부재/stale/드리프트 시 전 도구 block, 복구=beh-launch.sh, launcher·supervise-wrapper 면제, admin `beh-launch-bypass` 1회) ② **미감독 백그라운드 block**(&/nohup/setsid/run_in_background → supervise 미경유 차단). `beh-session-start.js`(SessionStart 경고, advisory).
+   - 외부 launcher `.claude/hooks/beh-launch.sh`: 필수 훅 등록 + 코어 require self-probe 검증 → settings.json 해시결속 handshake 기록(미등록/미로드 시 FAIL·미기록). **자기-미호출 못 잡는 갭의 외부 root**(plan §3.4).
+   - 테스트: `run-beh-pretool-test.js` 23/23(core predicate + adapter replay 8 + launcher 성공/실패) → E2E **71/71 green**. settings.json PreToolUse(전 도구)+SessionStart 등록(opt-in 게이트). 런타임 handshake/bypass gitignore.
+5. 레지스트리. 6. 2nd-stream advisory. 7. 드리프트해결+sign/epoch/central-CI(5).
 naia-adk 추가 → sync 전파 + 서브모듈 bump.
