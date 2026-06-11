@@ -205,6 +205,7 @@ node "$TESTD/run-beh-receipts-test.js"   >/dev/null 2>&1 && ok || bad "beh recei
 node "$TESTD/run-beh-supervise-test.js"  >/dev/null 2>&1 && ok || bad "beh supervise fault-injection suite (16 cases)"
 node "$TESTD/run-beh-pretool-test.js"    >/dev/null 2>&1 && ok || bad "beh pretool/launcher suite (23 cases)"
 node "$TESTD/run-beh-registry-test.js"   >/dev/null 2>&1 && ok || bad "beh registry + second-stream suite (12 cases)"
+node "$TESTD/run-beh-manifest-test.js"   >/dev/null 2>&1 && ok || bad "beh manifest/propagation suite (14 cases)"
 node "$TESTD/run-beh-adapter-test.js"    >/dev/null 2>&1 && ok || bad "beh adapter replay suite (10 cases)"
 node "$HOOKS/beh-watchdog.js" --selftest >/dev/null 2>&1 && ok || bad "beh watchdog selftest (flat→STUCK, fresh→clear)"
 timeout 60 node "$TESTD/run-beh-supervise-wrapper-test.js" >/dev/null 2>&1 && ok || bad "beh supervise wrapper real-process (kill target, spare sibling)"
