@@ -1,0 +1,114 @@
+{
+  "_doc": "BEH enforcement registry (§3.6, §6.5). Authoritative catalog of every Behavior Enforcement Harness point. Schema validated + cross-checked against .claude/settings.json by beh-registry.js (registration-drift guard). Plan: .agents/progress/behavior-enforcement-harness-plan-2026-06-11.md",
+  "version": 1,
+  "entries": [
+    {
+      "name": "drift-ledger",
+      "surface": "PostToolUse",
+      "hook_file": "beh-record.js",
+      "registered": true,
+      "trigger": "any tool completes",
+      "check": "append-only ledger entry; match against the running scope item's pre-declared milestones; record verify-command receipts (§3.2)",
+      "action": "record (never blocks)",
+      "fail_mode": "fail-safe exit 0 (best-effort append)",
+      "escalation": "none (feeds drift-tick / termination-gate)",
+      "recovery": "n/a"
+    },
+    {
+      "name": "drift-tick",
+      "surface": "UserPromptSubmit",
+      "hook_file": "beh-tick.js",
+      "registered": true,
+      "trigger": "each user/agent turn",
+      "check": "evaluateDrift over ledger + bound progress: active_stall / starvation / phase_ceiling / new_value_zero / scope_undeclared",
+      "action": "inject drift notice + persist inject barrier",
+      "fail_mode": "fail-safe exit 0 (no inject)",
+      "escalation": "same invariant ignored K turns after inject → hard-stop (surfaced by drift-tick, enforced by termination-gate)",
+      "recovery": "advance a milestone / re-evaluate approach / user disposition"
+    },
+    {
+      "name": "termination-gate",
+      "surface": "Stop",
+      "hook_file": "beh-stop.js",
+      "registered": true,
+      "trigger": "session attempts to stop",
+      "check": "all scope items disposed (done/deferred/abandoned)? every done item has a valid, non-stale completion receipt (§3.2)? latched hard-stop?",
+      "action": "block stop (decision:block) until satisfied",
+      "fail_mode": "fail-safe exit 0 (allow stop) on any error — never trap on a bug",
+      "escalation": "hard-stop persists until reset",
+      "recovery": "dispose items + valid receipts | rm .claude/beh-on | touch .claude/beh-reset (user-auth)"
+    },
+    {
+      "name": "tool-less-watchdog",
+      "surface": "external",
+      "hook_file": "beh-watchdog.js",
+      "registered": false,
+      "trigger": "wall-clock timer (between turns / pure reasoning)",
+      "check": "evaluateDrift with real clock — catches a running item gone silent past its wall stall window with no new turn",
+      "action": "write .claude/beh-stuck flag (surfaced next turn) + exit 3 on --once",
+      "fail_mode": "best-effort; platform limit = mid-turn injection not guaranteed (Stop-time + flag only)",
+      "escalation": "flag → drift-tick next turn → termination-gate",
+      "recovery": "n/a (advisory flag)"
+    },
+    {
+      "name": "supervise",
+      "surface": "external",
+      "hook_file": "beh-supervise.js",
+      "registered": false,
+      "trigger": "explicit long/background tool process wrapped by the agent",
+      "check": "evaluateSupervisor: wall + stall (grace, monotonic, rate-sanity) + degraded + lease + probe-type allowlist",
+      "action": "kill via systemd cgroup (confirm populated=0) or PGID (degraded), targeted",
+      "fail_mode": "free-form probe → fail-closed kill; unconfirmed kill → hard-failure report",
+      "escalation": "degraded + unapproved → shorter forced wall",
+      "recovery": "--approve-degraded | fix probe-type | --lease stale recovery"
+    },
+    {
+      "name": "pretool-gate",
+      "surface": "PreToolUse",
+      "hook_file": "beh-pretool.js",
+      "registered": true,
+      "trigger": "before any tool",
+      "check": "session-start handshake valid (settings.json hash-bound, fresh)? unsupervised background (&/nohup/setsid/run_in_background) not via supervise?",
+      "action": "block (decision:block) on fail-closed handshake or unsupervised background",
+      "fail_mode": "fail-safe exit 0 (allow) on any error; launcher + supervise wrapper always allowed",
+      "escalation": "blocks every tool until handshake re-established",
+      "recovery": "bash .claude/hooks/beh-launch.sh <cwd> | touch .claude/beh-launch-bypass (admin 1-time)"
+    },
+    {
+      "name": "session-start-notice",
+      "surface": "SessionStart",
+      "hook_file": "beh-session-start.js",
+      "registered": true,
+      "trigger": "session start",
+      "check": "session-start handshake valid?",
+      "action": "inject advisory warning (cannot block — pretool-gate enforces)",
+      "fail_mode": "fail-safe exit 0",
+      "escalation": "none (advisory)",
+      "recovery": "bash .claude/hooks/beh-launch.sh <cwd>"
+    },
+    {
+      "name": "launcher",
+      "surface": "external",
+      "hook_file": "beh-launch.sh",
+      "registered": false,
+      "trigger": "before/at agent session start (external)",
+      "check": "required hooks registered in settings.json + cores load (require self-probe)",
+      "action": "write settings-hash-bound handshake; FAIL (no handshake) if verification fails",
+      "fail_mode": "exit 1 + no handshake → pretool-gate keeps blocking (fail-closed root)",
+      "escalation": "n/a (the external root)",
+      "recovery": "register the missing hook / fix the core, then re-run"
+    },
+    {
+      "name": "second-stream",
+      "surface": "external",
+      "hook_file": "beh-second-stream.js",
+      "registered": false,
+      "trigger": "advisory review of ledger (out-of-band)",
+      "check": "probabilistic 2nd-LLM reads ONLY structured ledger events",
+      "action": "advisory note only — NEVER gates",
+      "fail_mode": "death/absence has no effect on deterministic enforcement",
+      "escalation": "none (advisory)",
+      "recovery": "n/a"
+    }
+  ]
+}

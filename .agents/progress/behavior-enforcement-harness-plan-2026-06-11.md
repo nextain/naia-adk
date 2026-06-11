@@ -85,5 +85,11 @@
    - 어댑터 `.claude/hooks/beh-pretool.js`(PreToolUse, 전 도구): ① **session-start handshake fail-CLOSED**(settings.json 해시결속 — 부재/stale/드리프트 시 전 도구 block, 복구=beh-launch.sh, launcher·supervise-wrapper 면제, admin `beh-launch-bypass` 1회) ② **미감독 백그라운드 block**(&/nohup/setsid/run_in_background → supervise 미경유 차단). `beh-session-start.js`(SessionStart 경고, advisory).
    - 외부 launcher `.claude/hooks/beh-launch.sh`: 필수 훅 등록 + 코어 require self-probe 검증 → settings.json 해시결속 handshake 기록(미등록/미로드 시 FAIL·미기록). **자기-미호출 못 잡는 갭의 외부 root**(plan §3.4).
    - 테스트: `run-beh-pretool-test.js` 23/23(core predicate + adapter replay 8 + launcher 성공/실패) → E2E **71/71 green**. settings.json PreToolUse(전 도구)+SessionStart 등록(opt-in 게이트). 런타임 handshake/bypass gitignore.
-5. 레지스트리. 6. 2nd-stream advisory. 7. 드리프트해결+sign/epoch/central-CI(5).
+5. ✅ **DONE (2026-06-12)** — 레지스트리(3.6).
+   - 데이터 `.agents/hooks/beh-registry.json`: 9개 강제점 카탈로그(name/surface/trigger/check/action/fail_mode/escalation/recovery + hook_file/registered).
+   - 코어 `.agents/hooks/core/beh-registry.js`: `validateRegistry`(스키마) + `crossCheckSettings`(**등록 드리프트 가드** — registered hook은 settings.json에 있어야·settings의 beh 훅은 카탈로그에 있어야). 테스트가 실 registry↔settings 일치 + 모든 hook_file 디스크 존재 검증.
+6. ✅ **DONE (2026-06-12)** — 2nd-stream advisory(3.5).
+   - 코어 `.agents/hooks/core/beh-second-stream.js`: `summarizeForAdvisory`(원장→구조 요약, 소스내용 0) + `runAdvisory`(llmFn 주입식, **게이트 안 함**, throw/부재=clean no-op). CLI `.claude/hooks/beh-second-stream.js`(기본 llmFn 없음=plumbing만). 단위테스트로 plumbing 검증(plan §3.5 "plumbing만 단위테스트").
+   - 5+6 테스트: `run-beh-registry-test.js` 12/12 → E2E **72/72 green**.
+7. 드리프트해결+sign/epoch/central-CI(5).
 naia-adk 추가 → sync 전파 + 서브모듈 bump.
