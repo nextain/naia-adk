@@ -361,6 +361,16 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 - **no_korean_in_agents**: Strictly prohibit Korean characters in .agents/ directory to optimize token usage. All context files here must be in concise English.
 - **concise_session_output**: AI responses should be extremely brief (less than 3 lines) to minimize history weight. Avoid long Korean preambles.
 
+## context_governance — runtime context budgeting (absorbed from A.4)
+
+> Source: harness-books Book1 Appendix A.4. Absorption review = `.agents/progress/harness-books-integration-findings-2026-06-18.md` (section A, gap 2).
+> **Layer note:** this is the *runtime session-window* token axis only, NOT the naia-memory product axis (long-term / real memory). Do not conflate them — naia-memory decides what to remember across sessions; this decides what to keep live in the current window.
+
+- **on_demand_loading**: Load only the project-index.yaml on_demand section needed for the task. Never load a full context file (A.4: separate entrypoint vs body files to prevent index bloat).
+- **reserve_for_compact**: Reserve compact output space before the window is full — never wait for overflow then handle it as an emergency.
+- **restore_after_compact**: After compact, reconstruct work semantics (active plan, loaded skills, key files, tool state) via post-compact-context.js hook.
+- **layered_lifetimes**: Keep long-lived rules, persistent memory, session continuity, and temporary dialogue as distinct layers with different entry costs.
+
 ## conventions
 
 - **response_language**: Korean (한국어로 응답)

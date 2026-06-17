@@ -191,3 +191,33 @@ existing_hooks:
     H3: "PASS — PreToolUse, fires before git push"
     H4: "PASS — paired with: ask user with remote/branch info"
     verified_date: "2026-04-05"
+
+# ─── Design / Proposal Review Questions (G-AB01) ──────────────
+# Absorbed from harness-books Book1 Appendix A.8 (proposal review set, L106-119).
+# Source brief: .agents/progress/harness-books-integration-findings-2026-06-18.md (section A).
+# H1-H7 above review OUR HOOKS' quality. The questions below review an AGENT/HARNESS
+# DESIGN PROPOSAL (a different artifact). H5 (permission_model_coverage) partially
+# overlaps SA2; the rest are new coverage. Use at: new harness/agent design PR,
+# IDD Plan-gate, or when absorbing an external harness.
+
+design_review_questions:
+  source: "harness-books Book1 Appendix A.8 (L106-119)"
+  applies_to: "agent/harness design proposals (hook quality is covered by H1-H7)"
+  questions:
+    - id: SA1
+      q: "Which behaviors are constrained by prompt, and which are enforced by runtime?"
+    - id: SA2
+      q: "Who blocks tool misuse, and at what layer?"
+    - id: SA3
+      q: "When is context compacted, and how are work semantics (plan / skills / key files / tool state) reconstructed afterward?"
+    - id: SA4
+      q: "Are prompt-too-long and max-output-tokens recovered differently?"
+    - id: SA5
+      q: "After an interruption, how is transcript consistency maintained with tool results?"
+    - id: SA6
+      q: "In multi-agent flows, who owns synthesis and who owns verification?"
+    - id: SA7
+      q: "Does failure recovery include circuit breakers and anti-loop guards?"
+    - id: SA8
+      q: "How does the team audit what the agent did and why?"
+  red_flag: "If answers frequently reduce to 'we can add that later', the runtime is likely not truly designed yet."
