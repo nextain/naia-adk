@@ -6,6 +6,24 @@
 > tools use as their working environment.
 > This guide explains *what* you can help with and *how*.
 
+## First time here? — your first contribution in 15 minutes
+
+Don't be intimidated by the workflow below. The Issue-Driven workflow and structure rules
+are for **new features**. **Small changes — typos, docs, translations, small fixes — need
+none of that**; an issue is enough.
+
+Setup: [Node.js](https://nodejs.org/) 22+, [pnpm](https://pnpm.io/) (`corepack enable`),
+then `pnpm install`. The dashboard is Next.js and the other packages are plain TypeScript,
+so **no native build tools (Rust, C++) are needed** for most work.
+
+Using an AI coding tool (Cursor, Claude Code, …)? Open this folder and paste:
+
+> Read this repo's `.github/CONTRIBUTING.md`, `README.md`, and `.agents/context/agents-rules.json`,
+> then suggest 3 'good first issue' candidates I could finish in 30 minutes, which files to edit
+> for each, and whether each needs the full contribution workflow.
+
+Stuck? Ask on [Discord](https://discord.gg/FGYJN7auty).
+
 ## 1. No permission needed
 
 Clone the repo and open it in your AI coding tool (Claude Code, Cursor, opencode,
