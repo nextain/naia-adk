@@ -1,10 +1,14 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { emitCatalog } from "../emitter.js";
 import { parseOpenClawCatalog } from "../parser.js";
 
-const REAL_OPENCLAW = "/var/home/luke/alpha-adk/projects/refs/ref-openclaw/container/skills";
+// Integration tests against a real OpenClaw checkout (external reference repo, not
+// vendored). Point at it via env var and skip when absent — keeps CI green.
+const REAL_OPENCLAW = process.env.OPENCLAW_SKILLS_DIR ?? "";
+const hasRealOpenClaw = REAL_OPENCLAW !== "" && existsSync(REAL_OPENCLAW);
 
-describe("emitCatalog", () => {
+describe.skipIf(!hasRealOpenClaw)("emitCatalog", () => {
 	it("emits valid TypeScript header with import", () => {
 		const skills = parseOpenClawCatalog(REAL_OPENCLAW);
 		const ts = emitCatalog(skills);
