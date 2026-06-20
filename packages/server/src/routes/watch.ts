@@ -1,7 +1,8 @@
+import path from "node:path"
 import type { FastifyInstance, FastifyPluginCallback } from "fastify"
-import chokidar from "chokidar"
+import chokidar, { type FSWatcher } from "chokidar"
 
-const watchers = new Map<string, chokidar.FSWatcher>()
+const watchers = new Map<string, FSWatcher>()
 
 export const watchRoutes: FastifyPluginCallback = (app, _opts, done) => {
   const root = (app as FastifyInstance & { adkRoot: string }).adkRoot

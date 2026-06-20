@@ -4,6 +4,9 @@ import YAML from "yaml"
 import fg from "fast-glob"
 import matter from "gray-matter"
 import type { ProjectIndex, SkillMeta, SubmoduleEntry, FileTreeNode, WorkspaceMeta } from "./types.js"
+// Re-export the public domain types so consumers (e.g. @naia-adk/server) can import
+// them from the package entry point, not only the functions that use them.
+export type { ProjectIndex, SkillMeta, SubmoduleEntry, FileTreeNode, WorkspaceMeta } from "./types.js"
 
 export function loadProjectIndex(root: string): ProjectIndex | null {
   const indexPath = path.join(root, ".agents", "context", "project-index.yaml")

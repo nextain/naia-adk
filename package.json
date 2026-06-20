@@ -12,7 +12,7 @@
     "dev:server": "tsx packages/server/src/cli.ts serve",
     "dev:dashboard": "pnpm --filter @naia-adk/dashboard dev",
     "serve": "tsx packages/server/src/cli.ts serve",
-    "build": "tsc --build"
+    "build": "pnpm -r build"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.1",
