@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { parseFrontmatter, parseOpenClawSkill, parseOpenClawCatalog, parseOpenClawGroups } from "../parser.js";
-import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const REAL_OPENCLAW = "/var/home/luke/alpha-adk/projects/refs/ref-openclaw/container/skills";
+// Integration tests against a real OpenClaw checkout. The OpenClaw skills tree is
+// an external reference repo (not vendored here), so point at it via env var and
+// skip when it is absent — keeps the suite green in CI / for contributors.
+const REAL_OPENCLAW = process.env.OPENCLAW_SKILLS_DIR ?? "";
+const hasRealOpenClaw = REAL_OPENCLAW !== "" && existsSync(REAL_OPENCLAW);
 
 describe("parseFrontmatter", () => {
 	it("parses minimal frontmatter (name + description)", () => {
@@ -40,7 +44,7 @@ describe("parseFrontmatter", () => {
 	});
 });
 
-describe("parseOpenClawSkill — against real OpenClaw skills", () => {
+describe.skipIf(!hasRealOpenClaw)("parseOpenClawSkill — against real OpenClaw skills", () => {
 	it("parses agent-browser correctly", () => {
 		const parsed = parseOpenClawSkill(join(REAL_OPENCLAW, "agent-browser"));
 		expect(parsed.descriptor.name).toBe("agent_browser");
@@ -117,7 +121,7 @@ describe("parseOpenClawSkill — against real OpenClaw skills", () => {
 	});
 });
 
-describe("parseOpenClawCatalog — full OpenClaw catalog", () => {
+describe.skipIf(!hasRealOpenClaw)("parseOpenClawCatalog — full OpenClaw catalog", () => {
 	it("parses all 6 OpenClaw production skills without errors", () => {
 		const skills = parseOpenClawCatalog(REAL_OPENCLAW);
 		expect(skills.length).toBeGreaterThanOrEqual(6);

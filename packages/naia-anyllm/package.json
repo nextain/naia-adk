@@ -5,8 +5,7 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "build": "tsc",
-    "test": "vitest"
+    "build": "tsc"
   },
   "dependencies": {
     "openai": "^4.93.0",
