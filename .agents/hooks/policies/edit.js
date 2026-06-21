@@ -11,6 +11,7 @@
  * dependency.
  */
 const { existsSync } = require("fs");
+const { createHash } = require("crypto");
 
 /** design-doc-guard. opts.unlockFile REQUIRED (adapter: resolve(__dirname,"..","design-doc-unlock")). */
 function designDoc(data, opts) {
@@ -50,12 +51,25 @@ function prodGateway(data) {
 		filePath.endsWith("/.env") ||
 		filePath === ".env";
 	if (!isEnvLocal) return null;
-	const PROD_GATEWAY_URL = "naia-gateway-181404717065.asia-northeast3.run.app";
-	const PROD_MASTER_KEY = "11ypvgv9LEBEeeOLXsJODhEyhCyQr36UzNA6nl5-Ptg";
+	// Prod gateway host/key are NOT embedded as literals (this file is public).
+	// URL is matched by its stable host prefix; the key is matched by SHA-256
+	// digest so the literal secret never lives in the repo. The maintainer fork
+	// may override the host prefix / key digest via env without code changes.
+	const PROD_GATEWAY_HOST_FRAGMENT =
+		process.env.PROD_GATEWAY_HOST_FRAGMENT || "naia-gateway-";
+	const PROD_MASTER_KEY_SHA256 =
+		process.env.PROD_MASTER_KEY_SHA256 ||
+		"800749e91c9a52d265927d03d0b4281052da96c898a7607d3feb9c969e6230de";
+	const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 	const contentToCheck =
 		data.tool_input?.content || data.tool_input?.new_string || "";
-	const hasProdUrl = contentToCheck.includes(PROD_GATEWAY_URL);
-	const hasProdKey = contentToCheck.includes(PROD_MASTER_KEY);
+	const hasProdUrl =
+		/naia-gateway-\d{6,}\.[a-z0-9-]+\.run\.app/.test(contentToCheck) &&
+		contentToCheck.includes(PROD_GATEWAY_HOST_FRAGMENT) &&
+		!/naia-gateway-dev-/.test(contentToCheck);
+	const hasProdKey = [...contentToCheck.matchAll(/[A-Za-z0-9_-]{20,}/g)].some(
+		(m) => sha256(m[0]) === PROD_MASTER_KEY_SHA256,
+	);
 	if (hasProdUrl || hasProdKey) {
 		const detected = [
 			hasProdUrl ? "prod GATEWAY_URL" : null,
@@ -65,7 +79,7 @@ function prodGateway(data) {
 			block:
 				`[Harness] prod 게이트웨이 자격증명 차단: ${detected}\n` +
 				".env.local에는 dev 게이트웨이를 사용해야 합니다.\n\n" +
-				"  DEV URL:  https://naia-gateway-dev-181404717065.asia-northeast3.run.app\n" +
+				"  DEV URL:  <DEV_GATEWAY_URL — .env.local 에서 주입, 레포 커밋 금지>\n" +
 				"  DEV KEY:  <DEV_GATEWAY_KEY — .env.local 에서 주입, 레포 커밋 금지>\n\n" +
 				"prod 값은 .env.production.local에만 허용됩니다.",
 		};

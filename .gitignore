@@ -101,3 +101,22 @@ skills/business/press-release/_review_plan.md
 .agents/reviews/
 skills/business/press-release/contacts.json
 skills/business/press-release/results.json
+
+# Deploy-guard maintainer state/ops (per-fork; contains real project list, paths,
+# approvals, audit log). Schema docs are tracked as *.sample.json. Hook itself
+# = .claude/hooks/deploy-guard.js (tracked, fork-agnostic).
+.claude/deploy/config.json
+.claude/deploy/approvals.json
+.claude/deploy/audit.jsonl
+.claude/deploy/pre-deploy-check.sh
+.claude/deploy/prod-deploy.sh
+.claude/deploy/test-deploy-guard-block.sh
+.claude/deploy/test-deploy-guard.cjs
+.claude/deploy/test-deploy-guard.sh
+
+# Internal GitHub-issue triage tooling (maintainer-only; hardcodes the
+# maintainer's workspace path + project list + generated reports/logs).
+scripts/triage/
+
+# 워크스페이스 UUID(개인 식별자) 비추적
+.naia/

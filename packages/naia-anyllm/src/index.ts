@@ -12,7 +12,9 @@ const DEFAULT_CONFIG: LLMConfig = {
       id: "any-llm",
       name: "Any-LLM Gateway",
       type: "gateway",
-      endpoint: "https://naia-gateway-181404717065.asia-northeast3.run.app/v1",
+      // Gateway endpoint comes from env so no deployment-specific URL is baked
+      // into the public source. Set GATEWAY_URL to your gateway's base URL.
+      endpoint: (process.env.GATEWAY_URL || "https://your-gateway.example.com") + "/v1",
       apiKeyEnv: "GATEWAY_MASTER_KEY",
       models: ["claude-sonnet-4-20250514", "gpt-4.1", "gemini-2.5-pro"],
       defaultModel: "claude-sonnet-4-20250514",

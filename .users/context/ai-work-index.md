@@ -39,9 +39,9 @@
 - **빠른 참조**: `docs-work-logs/AGENTS.md` 참조
 - **설명**: 개발자 작업 로그 관리
 
-### 5. Cafelua 서비스 (cafelua-service)
+### 5. Cafelua 서비스 (example-project-service)
 
-- **키워드**: cafelua, service, gateway, credit, auth, proxy, any-llm, lab
+- **키워드**: example-project, service, gateway, credit, auth, proxy, any-llm, lab
 - **빠른 참조**: `project-any-llm/README.md` 참조
 - **워크플로우**: `.agents/workflows/development-cycle.yaml`
 - **설명**: Any-LLM SDK, FastAPI 게이트웨이, 크레딧/인증/프록시 관련 작업
@@ -49,7 +49,7 @@
 ### 6. 인프라 (infra)
 
 - **키워드**: gcp, cloud-run, cloud-sql, docker, deploy, domain
-- **빠른 참조**: GCP project: cafelua-prod, Cloud Run + Cloud SQL (asia-northeast3)
+- **빠른 참조**: GCP project: <GCP_PROJECT>, Cloud Run + Cloud SQL (asia-northeast3)
 - **설명**: 클라우드 인프라 배포/설정 작업
 
 ### 7. 데모 영상 (demo-video)

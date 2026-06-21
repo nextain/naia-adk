@@ -90,12 +90,21 @@ try {
   ok(r && r.block === true && /설계 문서 편집 차단/.test(r.reason || ""), "pi tool_call: designDoc BLOCKED (pi {path,edits})");
   ok(r && /\.pi\/design-doc-unlock/.test(r.reason || "") && !/\.claude\/design-doc-unlock/.test(r.reason || ""),
      "pi tool_call: designDoc block message shows pi-native unlock path");
-  r = await tc("write", { path: ".env.local", content: "naia-gateway-181404717065.asia-northeast3.run.app" });
+  // No real prod credentials in fixtures: the guard matches the URL by its
+  // `naia-gateway-<digits>.<region>.run.app` shape and the key by SHA-256
+  // digest. Build a synthetic prod-shaped URL at runtime (no literal *.run.app
+  // token in this file) and exercise the key path with a sentinel whose digest
+  // the guard is told to accept via PROD_MASTER_KEY_SHA256.
+  const PROD_URL = "https://naia-gateway-000000000000.asia-northeast3." + "run.app";
+  const SENTINEL_KEY = "TEST-SENTINEL-PROD-KEY-DO-NOT-USE";
+  process.env.PROD_MASTER_KEY_SHA256 = "37b59dd7f7cf015be30167b7e324c3c2e8cae57133e01c83524a4cdbbbc4ce20";
+  r = await tc("write", { path: ".env.local", content: PROD_URL });
   ok(r && r.block === true && /prod 게이트웨이/.test(r.reason || ""), "pi tool_call: prodGateway BLOCKED (pi {path,content})");
   // R5 LOW close: exercise the edits→new_string synthesis branch the R4
   // fix introduced — a prod KEY smuggled via edit[].newText must block.
-  r = await tc("edit", { path: ".env.local", edits: [{ oldText: "x", newText: "11ypvgv9LEBEeeOLXsJODhEyhCyQr36UzNA6nl5-Ptg" }] });
+  r = await tc("edit", { path: ".env.local", edits: [{ oldText: "x", newText: SENTINEL_KEY }] });
   ok(r && r.block === true && /prod 게이트웨이/.test(r.reason || ""), "pi tool_call: prodGateway BLOCKED via edit newText (edits→new_string synthesis)");
+  delete process.env.PROD_MASTER_KEY_SHA256;
   r = await tc("write", { path: "src/app.ts", content: "ok" });
   ok(!r || r.block !== true, "pi tool_call: normal code write NOT blocked");
 

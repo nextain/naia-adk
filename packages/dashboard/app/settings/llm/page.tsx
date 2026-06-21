@@ -31,7 +31,7 @@ export default function LLMSettingsPage() {
               </div>
               {p.id === "any-llm" && (
                 <div className="mt-2 text-xs text-neutral-500">
-                  Gateway URL: <span className="text-neutral-400">https://naia-gateway-181404717065.asia-northeast3.run.app</span>
+                  Gateway URL: <span className="text-neutral-400">{process.env.GATEWAY_URL || "(set GATEWAY_URL)"}</span>
                 </div>
               )}
             </div>

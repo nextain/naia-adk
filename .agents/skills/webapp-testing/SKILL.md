@@ -56,7 +56,7 @@ with sync_playwright() as p:
 ```bash
 # Next.js 단일 서버
 python .agents/skills/webapp-testing/scripts/with_server.py \
-  --server "cd /var/home/luke/dev/naia.nextain.io && npm run dev" \
+  --server "cd \"$WORKSPACE/your-web-app\" && npm run dev" \
   --port 3000 --timeout 90 \
   -- python /tmp/test_script.py
 

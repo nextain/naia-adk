@@ -44,11 +44,11 @@ submodules:
     status: active
 
   # === 프로젝트 ===
-  cafelua.com:
-    path: ./cafelua.com
+  example.com:
+    path: ./example.com
     type: project
     description: "Cafelua personal website"
-    repo: luke-n-alpha/cafelua-private
+    repo: luke-n-alpha/example-project-private
     visibility: private
     rulesEntrypoint: README.md
     status: active
@@ -225,7 +225,7 @@ github_only_repos:
 # work-logs 폴더 매핑
 workLogsFolders:
   naia-os: naia-os/work-logs/
-  cafelua.com: cafelua.com/work-logs/
+  example.com: example.com/work-logs/
 
 # 네이밍 컨벤션
 namingConventions:

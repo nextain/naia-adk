@@ -145,12 +145,21 @@ if [ "$UNLOCK_PREEXIST" = 0 ]; then rm -f "$UNLOCK"; fi
 fire design-doc-guard 'NOT JSON';                                                                             a_pass  "ddg pass: bad json"
 
 # ── prod-gateway-guard ──────────────────────────────────────────────────────
+# No real prod credentials in fixtures: the guard matches the URL by the
+# `naia-gateway-<digits>.<region>.run.app` shape and the key by SHA-256 digest.
+# We build a synthetic prod-shaped URL at runtime (so no literal *.run.app lives
+# in this file) and exercise the key path via a sentinel whose digest the guard
+# is told to recognize through PROD_MASTER_KEY_SHA256.
 echo "prod-gateway-guard:"
+RA="run.app"; PROD_URL="https://naia-gateway-000000000000.asia-northeast3.${RA}"
+SENTINEL_KEY="TEST-SENTINEL-PROD-KEY-DO-NOT-USE"
+export PROD_MASTER_KEY_SHA256="37b59dd7f7cf015be30167b7e324c3c2e8cae57133e01c83524a4cdbbbc4ce20"
 fire prod-gateway-guard "$(J '{"tool_name":"Edit","tool_input":{"file_path":"src/x.ts","new_string":"x"}}')"; a_pass  "pgg pass: non-env file"
-fire prod-gateway-guard "$(J '{"tool_name":"Write","tool_input":{"file_path":".env.production.local","content":"URL=https://naia-gateway-181404717065.asia-northeast3.run.app"}}')"; a_pass "pgg pass: .env.production.local exempt"
+fire prod-gateway-guard "$(J "$(printf '{"tool_name":"Write","tool_input":{"file_path":".env.production.local","content":"URL=%s"}}' "$PROD_URL")")"; a_pass "pgg pass: .env.production.local exempt"
 fire prod-gateway-guard "$(J '{"tool_name":"Write","tool_input":{"file_path":".env.local","content":"GATEWAY=dev"}}')"; a_pass "pgg pass: env.local clean"
-fire prod-gateway-guard "$(J '{"tool_name":"Write","tool_input":{"file_path":".env.local","content":"URL=https://naia-gateway-181404717065.asia-northeast3.run.app"}}')"; a_block "pgg block: prod url in .env.local"
-fire prod-gateway-guard "$(J '{"tool_name":"Edit","tool_input":{"file_path":".env.local","new_string":"K=11ypvgv9LEBEeeOLXsJODhEyhCyQr36UzNA6nl5-Ptg"}}')"; a_block "pgg block: prod key in .env.local (Edit new_string)"
+fire prod-gateway-guard "$(J "$(printf '{"tool_name":"Write","tool_input":{"file_path":".env.local","content":"URL=%s"}}' "$PROD_URL")")"; a_block "pgg block: prod url in .env.local"
+fire prod-gateway-guard "$(J "$(printf '{"tool_name":"Edit","tool_input":{"file_path":".env.local","new_string":"K=%s"}}' "$SENTINEL_KEY")")"; a_block "pgg block: prod key in .env.local (Edit new_string)"
+unset PROD_MASTER_KEY_SHA256
 
 # ── cascade-check (PostToolUse) ─────────────────────────────────────────────
 echo "cascade-check:"
