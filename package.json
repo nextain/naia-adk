@@ -4,6 +4,11 @@
   "private": true,
   "description": "Naia ADK — AI Development Kit workspace with backend server and dashboard",
   "type": "module",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.0.0",
   "workspaces": [
     "packages/*"
   ],

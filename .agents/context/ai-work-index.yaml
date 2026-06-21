@@ -15,14 +15,14 @@ categories:
     keywords: ["log", "worklog", "progress"]
     quick_ref: "See docs-work-logs/AGENTS.md"
     workflows: []
-  - name: "cafelua-service"
-    keywords: ["cafelua", "service", "gateway", "credit", "auth", "proxy", "any-llm", "lab"]
+  - name: "example-project-service"
+    keywords: ["example-project", "service", "gateway", "credit", "auth", "proxy", "any-llm", "lab"]
     quick_ref: "See project-any-llm/README.md"
     workflows:
       - ".agents/workflows/development-cycle.yaml"
   - name: "infra"
     keywords: ["gcp", "cloud-run", "cloud-sql", "docker", "deploy", "domain"]
-    quick_ref: "GCP project: cafelua-prod, Cloud Run + Cloud SQL (asia-northeast3)"
+    quick_ref: "GCP project: <GCP_PROJECT>, Cloud Run + Cloud SQL (asia-northeast3)"
     workflows: []
   - name: "demo-video"
     keywords: ["demo", "video", "recording", "tts", "narration", "playwright", "ffmpeg"]

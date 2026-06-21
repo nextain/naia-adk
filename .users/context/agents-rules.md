@@ -70,15 +70,15 @@
 
 #### prod
 
-- **url**: https://naia-gateway-181404717065.asia-northeast3.run.app
+- **url_env**: GATEWAY_URL — prod gateway base URL, injected per-fork; never committed
 - **key_env**: GATEWAY_MASTER_KEY
-- **db**: any_llm_gateway (cafelua-db, Cloud SQL PostgreSQL 15, asia-northeast3-a)
+- **db**: any-llm gateway DB (Cloud SQL PostgreSQL, region per-fork)
 
 #### dev
 
-- **url**: https://naia-gateway-dev-181404717065.asia-northeast3.run.app
+- **url_env**: DEV_GATEWAY_URL — dev gateway base URL, injected via .env.local; never committed
 - **key**: <DEV_GATEWAY_KEY — .env.local 에서 주입, 레포 커밋 금지>
-- **db**: any_llm_gateway_dev (same cafelua-db instance, separate DB)
+- **db**: any-llm gateway dev DB (same instance, separate DB)
 - **min_instances**: 0
 - **env_rule**: .env.local → dev gateway. .env.production.local → prod gateway. NEVER write prod credentials to .env.local.
 - **guard_hook**: .claude/hooks/prod-gateway-guard.js — blocks prod credentials in .env.local at Edit|Write time
@@ -128,12 +128,12 @@
 - **visibility**: private
 - **entry_point**: docs-business/README.md
 
-### cafelua.com
+### example.com
 
 - **purpose**: Cafelua personal website
-- **repo**: luke-n-alpha/cafelua-private
+- **repo**: luke-n-alpha/example-project-private
 - **visibility**: private
-- **entry_point**: cafelua.com/README.md
+- **entry_point**: example.com/README.md
 
 ### project-any-llm
 
@@ -194,7 +194,7 @@
 ### modification_levels
 
 - **L1_independent**: docs-work-logs (personal folders)
-- **L2_conditional**: docs-nextain, docs-business, cafelua.com, project-any-llm
+- **L2_conditional**: docs-nextain, docs-business, example.com, project-any-llm
 
 ## skills
 

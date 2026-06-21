@@ -26,16 +26,17 @@ date -d "last monday" +%Y-%m-%d 2>/dev/null || date -v-monday +%Y-%m-%d
 각 로컬 프로젝트에서 해당 기간 커밋을 수집합니다:
 
 ```bash
-for dir in naia-os naia.nextain.io about.nextain.io aiedu.nextain.io admin.nextain.io project-any-llm cafelua.com; do
+# WORKSPACE = your ADK workspace root (set it once, e.g. export WORKSPACE in your shell)
+for dir in $(ls "$WORKSPACE/projects"); do
   echo "=== $dir ==="
-  git -C /var/home/luke/dev/$dir log --oneline --since="SINCE" --until="UNTIL" 2>/dev/null
+  git -C "$WORKSPACE/projects/$dir" log --oneline --since="SINCE" --until="UNTIL" 2>/dev/null
 done
 ```
 
 루트 워크스페이스도 확인합니다:
 
 ```bash
-git -C /var/home/luke/dev log --oneline --since="SINCE" --until="UNTIL"
+git -C "$WORKSPACE" log --oneline --since="SINCE" --until="UNTIL"
 ```
 
 ### Step 3: 작업 로그 확인
@@ -43,7 +44,7 @@ git -C /var/home/luke/dev log --oneline --since="SINCE" --until="UNTIL"
 `docs-work-logs/luke/03.done/`에서 해당 기간 파일을 찾습니다:
 
 ```bash
-find /var/home/luke/dev/docs-work-logs/luke/03.done -name "*.md" \
+find "$WORKSPACE/docs-work-logs" -name "*.md" \
   -newermt "SINCE" 2>/dev/null | sort
 ```
 
@@ -72,7 +73,7 @@ MD(Man-Day)는 커밋 수와 복잡도를 기준으로 추정합니다.
 | [인프라] | CI/CD, titanoboa, ISO 빌드, 서버 설정 |
 | [리서치] | R&D, 참조 프로젝트 분석 |
 | [사업/문서] | docs-business, docs-nextain |
-| [개인] | cafelua.com |
+| [개인] | example.com |
 | [기타] | 위에 해당하지 않는 것 |
 
 ## Key Files

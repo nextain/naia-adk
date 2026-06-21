@@ -1,0 +1,20 @@
+{
+  "_comment": "Sample deploy-guard config. Copy to config.json and edit for your fork. The real config.json is gitignored (per-fork, contains your project list). All paths/projects below are placeholders.",
+  "projects": {
+    "your-web-app": {
+      "platform": "vercel",
+      "cwd": "your-web-app",
+      "prod_command": "vercel --prod",
+      "dev_command": "vercel"
+    },
+    "your-gateway": {
+      "platform": "gcloud",
+      "cwd": "your-gateway-repo",
+      "prod_command": "gcloud run deploy your-gateway --region YOUR_REGION",
+      "dev_command": "gcloud run deploy your-gateway-dev --region YOUR_REGION",
+      "dev_service": "your-gateway-dev"
+    }
+  },
+  "default_ttl_minutes": 30,
+  "max_ttl_minutes": 60
+}

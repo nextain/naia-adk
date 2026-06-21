@@ -1,0 +1,14 @@
+{
+  "_comment": "Sample deploy-guard approvals store. The real approvals.json is gitignored (per-fork runtime state). Approvals are created by the prod-access skill and expire after default_ttl_minutes. Values below are placeholders.",
+  "approvals": [
+    {
+      "project": "your-web-app",
+      "approved_by": "user:your-name",
+      "approved_at": "2026-01-01T00:00:00Z",
+      "expires_at": "2026-01-01T00:30:00Z",
+      "session_id": "00000000-0000-0000-0000-000000000000",
+      "reason": "example approval entry",
+      "single_use": false
+    }
+  ]
+}
