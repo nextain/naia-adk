@@ -162,7 +162,9 @@ Fork from any layer. Individuals can fork `naia-adk` directly. Organizations go 
 | `scripts/` | Utility scripts (monitoring, triage, etc.) |
 | `templates/` | Document templates |
 | `docs/` | Architecture docs, design specs |
-| `packages/` | Runtime packages (future) |
+| `packages/` | Runtime packages (pnpm workspace) — see below |
+
+**`packages/` (9 active):** `core` (workspace/skill parsing engine) · `server` (Fastify REST/WS API) · `dashboard` (Next.js UI) · `skill-spec` (tool-agnostic skill format contracts) · `skills-builtin` (generic skills catalog) · `openclaw-compat` (OpenClaw → naia skill migration) · `persona` (system-prompt convention spec) · `process` (workflow pattern spec) · `naia-anyllm` (LLM adapter for any-llm gateway / direct providers).
 
 ### Data Directories (gitignored — managed per fork)
 
@@ -175,36 +177,40 @@ Fork from any layer. Individuals can fork `naia-adk` directly. Organizations go 
 
 ## Skills
 
-Built-in skills for AI-assisted operations:
+naia-adk ships with **two skill trees** (see [AGENTS.md](AGENTS.md#skills) for the full list):
+
+- **`.agents/skills/`** — AI-assistant / workflow skills, used by Claude Code via `.claude/skills/` symlinks. Indexed by `.agents/context/skills-index.yaml`.
+- **`skills/`** — operational / runtime skills, discovered by the dashboard API (`discoverSkills()` scans `skills/**/SKILL.md`) and served at `/api/skills`.
+
+Workflow skills (`.agents/skills/`):
 
 | Skill | Description |
 |-------|-------------|
 | `review-pass` | Multi-agent cross-validation review (4 stages) |
 | `verify-implementation` | Run all verification skills, generate unified report |
+| `verify-contract-conformance` | Verify declared API/interface contracts vs implementation |
 | `manage-skills` | Auto-detect and update verification skills |
 | `merge-worktree` | Squash-merge worktree branches with semantic commits |
 | `read-doc` | Extract text from HWP/PDF/DOCX/XLSX/PPTX |
 | `webapp-testing` | Playwright E2E testing for local web apps |
 | `doc-coauthoring` | Structured document co-authoring (3-step) |
+| `project-create` · `project-migration` · `migrate-ctx` | Scaffold / extract / migrate workspace repos & context |
+| `payroll` · `press-release` · `patent-draft` · `patent-pipeline` · `copyright-reg` · `weekly-report` | Document & business-workflow skills (also present in this base repo) |
 
-### Organizational Extension Examples
-
-Examples that may live in [Naia Business ADK](#business-extension) or company instances:
+Operational skills (`skills/`):
 
 | Skill | Description |
 |-------|-------------|
-| `payroll` | Payroll statement PDF generation + email dispatch |
-| `press-release` | Press release writing, journalist outreach, distribution |
-| `patent-draft` | KIPO-format patent specification drafting |
-| `patent-pipeline` | AI-powered patent discovery, evaluation, and filing |
-| `copyright-reg` | Copyright registration document generation |
-| `weekly-report` | Weekly work report generation from git commits |
-| `email` | Email composition and dispatch |
-| `sms` | SMS notification sending |
-| `channel-management` | Multi-channel communication management |
-| `service-management` | Service monitoring and management |
-| `web-monitoring` | Web content monitoring and alerting |
-| `document-generation` | Automated document generation |
+| `email` | Send emails via SMTP adapter with template support |
+| `sms` | SMS / Korean business messages (알림톡) via gateway adapter |
+| `notify` | Send a notification to a channel (channel-agnostic) |
+| `channel-management` | Discord/Slack channel management |
+| `service-management` | Service monitoring, cost tracking, incident response |
+| `web-monitoring` | SEO, uptime, analytics monitoring |
+| `document-generation` | Branded PDF generation (contracts, resolutions, payroll) |
+| `config` · `cron` · `diagnostics` · `system-status` · `sessions` · `memo` · `skill-manager` · `time` · `weather` | Runtime utilities |
+
+> **Note:** Organizational layers ([Naia Business ADK](#business-extension)) extend these with team ownership, delegated approval, and additional org-specific skills.
 
 ## Architecture
 
@@ -257,14 +263,37 @@ naia-adk
     └── naia-anyllm/        ← LLM adapter (plugin)
         ├── Any-LLM Gateway ← nextain/any-llm (credits, auth, routing)
         ├── Direct providers ← OpenAI, Anthropic, Google, etc.
-        └── Config           ← .agents/context/llm-config.yaml
+        └── Config           ← .agents/context/llm-config.yaml (optional)
 ```
+
+Config is **optional** — `naia-anyllm` ships sensible defaults (any-llm gateway + OpenAI / Anthropic / Google direct providers). To override them, copy [`.agents/context/llm-config.yaml.example`](.agents/context/llm-config.yaml.example) to `.agents/context/llm-config.yaml`. API keys live in env vars (see [`.env.example`](.env.example)), never in the config file.
 
 CLI tools (opencode, Claude Code, Codex) use their own LLM connections. naia-os connects through naia-anyllm to the any-llm gateway.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
 
 ## Quick Start
+
+### Run the dashboard & API
+
+Requires **Node ≥ 22** and **pnpm ≥ 9**.
+
+```bash
+pnpm install          # install workspace deps
+pnpm dev              # start API (:3141) + dashboard (:3142) together
+# or run them separately:
+pnpm dev:server       # API only  → http://localhost:3141
+pnpm dev:dashboard    # dashboard → http://localhost:3142
+```
+
+Convenience launchers are also provided: `./start.sh` (Linux/macOS) and `start.bat` (Windows), both of which run `pnpm dev`. The server CLI accepts `--port`, `--host`, and `--root` (e.g. `pnpm serve -- --root /path/to/workspace`).
+
+| Service | Default URL | Source |
+|---------|-------------|--------|
+| API server (Fastify) | `http://localhost:3141` | `packages/server` |
+| Dashboard (Next.js) | `http://localhost:3142` | `packages/dashboard` |
+
+The dashboard proxies `/api/*` to the API server on port 3141.
 
 ### For Individuals
 

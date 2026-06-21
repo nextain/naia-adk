@@ -1,16 +1,16 @@
 # Copyright 2026 Nextain Inc. All rights reserved.
 #
-# Naia OS 워크스페이스 인덱스
+# Naia ADK 워크스페이스 인덱스
 # AI가 서브모듈별 규칙과 진입점을 찾는 데 사용
 version: "2.0"
 
 workspace:
-  type: personal
-  name: member-luke
-  owner: luke
+  type: workspace_adk
+  name: naia-adk
+  owner: nextain
   org: nextain
-  repo: nextain/member-luke
-  visibility: private
+  repo: nextain/naia-adk
+  visibility: public
 
 # 서브모듈 정의
 submodules:

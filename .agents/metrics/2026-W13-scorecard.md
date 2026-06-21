@@ -1,4 +1,4 @@
-# Harness Scorecard: member-luke (Total)
+# Harness Scorecard: naia-adk (Total)
 > Period: 2026-03-17 → 2026-03-24 (7d) | Generated: 2026-03-24T13:11:11.823Z
 
 | Metric | Total | naia-os | aiedu | admin |

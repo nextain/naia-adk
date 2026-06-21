@@ -132,7 +132,9 @@ naia-adk → naia-business-adk → nextain-adk → alpha-adk
 | `scripts/` | 유틸리티 스크립트 (모니터링, 트리아지 등) |
 | `templates/` | 문서 템플릿 |
 | `docs/` | 아키텍처 문서, 설계 스펙 |
-| `packages/` | 런타임 패키지 (예정) |
+| `packages/` | 런타임 패키지 (pnpm workspace — 9개 활성) |
+
+**`packages/` (9개 활성):** `core` (워크스페이스/스킬 파싱 엔진) · `server` (Fastify REST/WS API) · `dashboard` (Next.js UI) · `skill-spec` (도구 비종속 스킬 포맷 계약) · `skills-builtin` (일반 스킬 카탈로그) · `openclaw-compat` (OpenClaw → naia 스킬 마이그레이션) · `persona` (시스템 프롬프트 컨벤션 스펙) · `process` (워크플로우 패턴 스펙) · `naia-anyllm` (any-llm 게이트웨이 / 직접 프로바이더 LLM 어댑터).
 
 ### 데이터 디렉터리 (gitignore — 포크별 관리)
 
@@ -145,36 +147,40 @@ naia-adk → naia-business-adk → nextain-adk → alpha-adk
 
 ## 스킬
 
-AI 보조 작업을 위한 내장 스킬:
+naia-adk에는 **두 개의 스킬 트리**가 있습니다(전체 목록은 [AGENTS.md](../AGENTS.md#skills) 참고):
+
+- **`.agents/skills/`** — AI 보조 / 워크플로우 스킬. `.claude/skills/` 심링크를 통해 Claude Code가 사용. `.agents/context/skills-index.yaml`이 색인.
+- **`skills/`** — 운영 / 런타임 스킬. 대시보드 API(`discoverSkills()`가 `skills/**/SKILL.md` 스캔)가 발견해 `/api/skills`로 제공.
+
+워크플로우 스킬 (`.agents/skills/`):
 
 | 스킬 | 설명 |
 |-------|-------------|
 | `review-pass` | 멀티 에이전트 상호검증 리뷰 (4단계) |
 | `verify-implementation` | 모든 검증 스킬 실행, 통합 리포트 생성 |
+| `verify-contract-conformance` | 선언된 API/인터페이스 계약 vs 구현 검증 |
 | `manage-skills` | 검증 스킬 자동 감지·업데이트 |
 | `merge-worktree` | 시맨틱 커밋으로 워크트리 브랜치 스쿼시 머지 |
 | `read-doc` | HWP/PDF/DOCX/XLSX/PPTX 텍스트 추출 |
 | `webapp-testing` | 로컬 웹 앱 Playwright E2E 테스트 |
 | `doc-coauthoring` | 구조화 문서 공동작성 (3단계) |
+| `project-create` · `project-migration` · `migrate-ctx` | 프로젝트 레포 scaffold / 분리 / 컨텍스트 마이그레이션 |
+| `payroll` · `press-release` · `patent-draft` · `patent-pipeline` · `copyright-reg` · `weekly-report` | 문서·비즈니스 워크플로우 스킬 (본 베이스 레포에도 포함) |
 
-### 조직 확장 스킬 예시
-
-[Naia Business ADK](#비즈니스-확장)나 회사 인스턴스에 들어갈 수 있는 예시:
+운영 스킬 (`skills/`):
 
 | 스킬 | 설명 |
 |-------|-------------|
-| `payroll` | 급여명세서 PDF 생성 + 이메일 발송 |
-| `press-release` | 보도자료 작성, 기자 아웃리치, 배포 |
-| `patent-draft` | KIPO 양식 특허 명세서 작성 |
-| `patent-pipeline` | AI 기반 특허 발굴·평가·출원 |
-| `copyright-reg` | 저작권 등록 서류 생성 |
-| `weekly-report` | git 커밋 기반 주간 업무 보고서 생성 |
-| `email` | 이메일 작성 및 발송 |
-| `sms` | SMS 알림 발송 |
-| `channel-management` | 멀티채널 커뮤니케이션 관리 |
-| `service-management` | 서비스 모니터링 및 관리 |
-| `web-monitoring` | 웹 콘텐츠 모니터링 및 알림 |
-| `document-generation` | 자동 문서 생성 |
+| `email` | SMTP 어댑터 기반 이메일 발송 (템플릿 지원) |
+| `sms` | 게이트웨이 어댑터 기반 SMS / 알림톡 발송 |
+| `notify` | 채널 비종속 알림 발송 |
+| `channel-management` | Discord/Slack 채널 관리 |
+| `service-management` | 서비스 모니터링, 비용 추적, 장애 대응 |
+| `web-monitoring` | SEO·가동시간·애널리틱스 모니터링 |
+| `document-generation` | 브랜드 PDF 생성 (계약서, 결의서, 급여명세서) |
+| `config` · `cron` · `diagnostics` · `system-status` · `sessions` · `memo` · `skill-manager` · `time` · `weather` | 런타임 유틸리티 |
+
+> **참고:** 조직 레이어([Naia Business ADK](#비즈니스-확장))는 팀 소유권·위임 승인·조직 전용 스킬로 위 스킬들을 확장합니다.
 
 ## 아키텍처
 
@@ -223,14 +229,37 @@ naia-adk
     └── naia-anyllm/        ← LLM adapter (plugin)
         ├── Any-LLM Gateway ← nextain/any-llm (credits, auth, routing)
         ├── Direct providers ← OpenAI, Anthropic, Google, etc.
-        └── Config           ← .agents/context/llm-config.yaml
+        └── Config           ← .agents/context/llm-config.yaml (선택)
 ```
+
+설정은 **선택 사항**입니다 — `naia-anyllm`은 기본값(any-llm 게이트웨이 + OpenAI / Anthropic / Google 직접 프로바이더)을 내장합니다. 재정의하려면 [`.agents/context/llm-config.yaml.example`](../.agents/context/llm-config.yaml.example)을 `.agents/context/llm-config.yaml`로 복사하세요. API 키는 설정 파일이 아니라 환경 변수에 둡니다([`.env.example`](../.env.example) 참고).
 
 CLI 도구(opencode, Claude Code, Codex)는 자체 LLM 연결을 사용합니다. naia-os는 naia-anyllm을 통해 any-llm 게이트웨이에 연결합니다.
 
 자세한 내용은 [docs/ARCHITECTURE.md](ARCHITECTURE.md)를 참고하세요.
 
 ## 시작하기
+
+### 대시보드 & API 실행
+
+**Node ≥ 22**, **pnpm ≥ 9** 필요.
+
+```bash
+pnpm install          # 워크스페이스 의존성 설치
+pnpm dev              # API(:3141) + 대시보드(:3142) 동시 실행
+# 또는 개별 실행:
+pnpm dev:server       # API 만   → http://localhost:3141
+pnpm dev:dashboard    # 대시보드 → http://localhost:3142
+```
+
+런처도 제공됩니다: `./start.sh`(Linux/macOS), `start.bat`(Windows) — 둘 다 `pnpm dev` 실행. 서버 CLI는 `--port`, `--host`, `--root` 옵션을 받습니다.
+
+| 서비스 | 기본 URL | 소스 |
+|--------|----------|------|
+| API 서버 (Fastify) | `http://localhost:3141` | `packages/server` |
+| 대시보드 (Next.js) | `http://localhost:3142` | `packages/dashboard` |
+
+대시보드는 `/api/*`를 3141 포트의 API 서버로 프록시합니다.
 
 ### 개인용
 

@@ -55,12 +55,12 @@ Index for search: `.agents/context/.ctx-index.json` (auto-rebuilt by hook, gitig
 | Directory | Tier | Purpose |
 |-----------|------|---------|
 | `data-company/` | T2 | Company general data (gitignored, per-fork) |
-| `data-business/` | T3 | Company sensitive data (gitignored, per-fork) |
-| `data-private/` | T3 | Personal data (gitignored, per-fork) |
+| `data-teams/` | T2 | Team-specific data — strategy, accounting (gitignored, per-fork) |
+| `data-private/` | T3 | Personal data, env files (gitignored, per-fork) |
 | `projects/` | T2 | Project repos (gitignored, per-fork) |
 | `projects/refs/` | T2 | Reference repos (gitignored, per-fork) |
-| `skills/` | T1 | AI skills |
-| `packages/` | T1 | Runtime packages (future) |
+| `skills/` | T1 | Operational/runtime skills (served via dashboard API) |
+| `packages/` | T1 | Runtime packages (pnpm workspace — 9 active) |
 | `scripts/` | T1 | Utility scripts, tools |
 | `templates/` | T1 | Document templates |
 | `docs/` | T1 | Architecture, specs |
@@ -117,38 +117,67 @@ For non-feature changes: typos, config values, simple directives.
 
 ## Skills
 
-AI assistant skills. **SoT: `.agents/skills/`** — `.claude/skills/` is symlinks.
+There are **two skill trees** on disk, with different SoTs and consumers:
 
-### Base Skills
+| Tree | SoT for | Consumed by | Index |
+|------|---------|-------------|-------|
+| `.agents/skills/` | AI-assistant / workflow skills | Claude Code (via `.claude/skills/` symlinks) | `.agents/context/skills-index.yaml` |
+| `skills/` | operational / runtime skills | dashboard API (`core.discoverSkills()` scans `skills/**/SKILL.md`) | served at `/api/skills` |
+
+`skills-index.yaml` is the human/AI summary index for the `.agents/skills/` tree.
+
+### `.agents/skills/` (Claude Code SoT — `.claude/skills/` symlinks point here)
 
 | Skill | Description | Management |
 |-------|-------------|------------|
 | `review-pass` | Multi-agent cross-validation review (4 stages) | Auto (phase 7, 9) |
 | `verify-implementation` | Run all `verify-*` skills, generate unified report | Auto (phase 7, 9) |
+| `verify-contract-conformance` | Verify declared API/interface contracts vs implementation | Auto |
 | `manage-skills` | Analyze changes, create/update `verify-*` skills | Auto (phase 10) |
 | `merge-worktree` | Squash-merge worktree → main with semantic commits | Manual (phase 13) |
 | `read-doc` | Extract text from HWP/PDF/DOCX/XLSX/PPTX | Manual |
 | `webapp-testing` | Playwright E2E testing for local web apps | Manual |
 | `doc-coauthoring` | Structured document co-authoring (3-step) | Manual |
-
-### Business Extension Skills
-
-Available in `naia-business-adk`:
-
-| Skill | Description | Management |
-|-------|-------------|------------|
-| `payroll` | Payroll PDF generation + email dispatch | Manual |
+| `project-create` | Scaffold a new project repo from the template | Manual |
+| `project-migration` | Extract a directory into its own repo / harden harness | Manual |
+| `migrate-ctx` | Migrate context files to the current standard | Manual |
+| `payroll` | Payroll statement PDF + email dispatch | Manual |
 | `press-release` | Press release writing, outreach, distribution | Manual |
 | `patent-draft` | KIPO-format patent specification drafting | Manual |
 | `patent-pipeline` | AI patent discovery, evaluation, and filing | Manual |
 | `copyright-reg` | Copyright registration document generation | Manual |
 | `weekly-report` | Weekly work report from git commits | Manual |
-| `email` | Email composition and dispatch | Manual |
-| `sms` | SMS notification sending | Manual |
-| `channel-management` | Multi-channel communication management | Manual |
-| `service-management` | Service monitoring and management | Manual |
-| `web-monitoring` | Web content monitoring and alerting | Manual |
-| `document-generation` | Automated document generation | Manual |
+
+### `skills/` (operational tree — scanned by the dashboard API)
+
+| Skill | Description |
+|-------|-------------|
+| `email` | Send emails via SMTP adapter with template support |
+| `sms` | Send SMS / Korean business messages (알림톡) via gateway adapter |
+| `notify` | Send a notification to a channel (channel-agnostic) |
+| `channel-management` | Manage Discord/Slack channels — create, archive, notify, summarize |
+| `service-management` | Monitor deployed services — uptime, cost, incident response |
+| `web-monitoring` | Web presence monitoring — SEO, uptime, analytics |
+| `document-generation` | Generate branded PDFs (contracts, resolutions, payroll) |
+| `read-doc` | Extract text from HWP/HWPX/PDF/DOCX/XLSX/PPTX |
+| `doc-coauthoring` | Structured document co-authoring (3-step) |
+| `review-pass` | Multi-agent cross-validation review (4 stages) |
+| `config` | Read or update configuration values |
+| `cron` | Schedule recurring / one-shot skill invocations |
+| `diagnostics` | System diagnostics — health, resources, network |
+| `system-status` | High-level OS / runtime status |
+| `sessions` | List, query, or summarize past conversation sessions (read-only) |
+| `memo` | Write a memo to long-term memory |
+| `skill-manager` | Manage the skill catalog — list, install from trusted repos |
+| `time` | Get current time in any timezone |
+| `weather` | Get current weather or forecast for a location |
+
+> `read-doc`, `doc-coauthoring`, and `review-pass` exist in **both** trees; the dashboard
+> API only sees the `skills/` copies (its glob never descends into `.agents/`).
+
+Business/organizational layers (`naia-business-adk`) extend these with team ownership,
+delegated approval, and additional org-specific skills — but the skills listed above ship
+in this base repo.
 
 ## Repository Structure Standard
 
