@@ -87,3 +87,11 @@ rerun-*.txt
 
 nul
 .claude/beh-sign-key
+
+# 보안(보안 리뷰 HIGH): 머신로컬·런타임상태·prod토큰·제3자 PII 비추적
+.claude/settings.local.json
+.claude/prod-access-approved.marker
+.claude/file-locks.json
+.claude/stage-files.sh
+skills/business/press-release/cloud/contacts.json
+skills/business/press-release/_review_plan.md
