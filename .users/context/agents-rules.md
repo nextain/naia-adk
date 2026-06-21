@@ -8,11 +8,11 @@
 
 ## project_identity
 
-- **name**: Naia OS
-- **nature**: AI desktop companion — open-source project for AI sovereignty
-- **philosophy**: Users choose their AI, privacy first, local execution by default
+- **name**: Naia ADK
+- **nature**: Workspace scaffold + governance baseline for AI-assisted work (public, Apache 2.0)
+- **philosophy**: Tool-agnostic workspace format; interfaces over runtime coupling; minimum solo governance baseline
 - **org**: nextain
-- **repo**: nextain/member-luke
+- **repo**: nextain/naia-adk
 
 ## local_projects
 

@@ -42,7 +42,7 @@ CSS: `docs-business/08.저작권/확인서.css`
 2. md-to-pdf로 PDF 변환:
 
 ```bash
-cd member-luke && npx md-to-pdf "docs-business/08.저작권/{출력파일}.md"
+cd naia-adk && npx md-to-pdf "docs-business/08.저작권/{출력파일}.md"
 ```
 
 포함 요소:

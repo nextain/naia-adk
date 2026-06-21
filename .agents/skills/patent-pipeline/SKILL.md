@@ -344,7 +344,7 @@ NONE
       "slug": "patent-pipeline",
       "name": "코드베이스 기반 AI 자동 특허 발굴·출원 파이프라인",
       "source": "manual",
-      "target": "member-luke (root workspace)",
+      "target": "naia-adk (root workspace)",
       "status": "drafted",
       "value_score": 7.5,
       "novelty": "high",

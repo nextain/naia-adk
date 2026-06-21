@@ -102,7 +102,7 @@ docs/                  ← 영어 SoT (human 1차 문서)
 |------|------|-------------|
 | T0 | public | `skills/`, `scripts/`, `docs/`, `.agents/context/` |
 | T1 | org-general | `data-company/`, `projects/` |
-| T2 | org-sensitive | `data-business/` |
+| T2 | org-sensitive | `data-teams/` |
 | T3 | private | `data-private/` |
 
 T1~T3은 gitignored (포크별 데이터, upstream에 커밋 안 함).
@@ -141,7 +141,7 @@ fork_type: user-adk   # org-adk | user-adk
 overrides:
   rbac_tiers:
     T2:
-      dirs: [data-business/, data-finance/]  # 추가 디렉토리
+      dirs: [data-teams/, data-finance/]  # 추가 디렉토리
 ```
 
 **우선순위** (높을수록 우선):

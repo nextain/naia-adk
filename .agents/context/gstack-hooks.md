@@ -288,4 +288,4 @@ command.match(/\bgh\s+pr\s+create\b/)  // ^ 제거, \b로 word boundary만 체�
 
 ## GitHub Issue
 
-https://github.com/nextain/member-luke/issues/6
+https://github.com/nextain/naia-adk/issues/6

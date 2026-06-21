@@ -167,7 +167,7 @@ rbac_tiers:
     T2:
       name: org-sensitive
       description: "Sensitive org data — financials, strategy, contracts"
-      dirs: ["data-business/"]
+      dirs: ["data-teams/"]
       gitignore: true
     T3:
       name: private

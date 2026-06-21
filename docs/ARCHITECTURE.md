@@ -71,35 +71,63 @@ The base layer should define a minimum collaboration model even for one person:
 
 This belongs in `naia-adk` because solo AI collaboration can fail before any company layer exists.
 
-## naia-adk Base Skills (9 — Individual)
+## naia-adk Skill Trees (two trees, both ship in this base repo)
+
+naia-adk has **two skill trees** with different SoTs and consumers. The disk is the
+single source of truth; the lists below mirror it.
+
+### `.agents/skills/` — AI-assistant / workflow tree
+
+SoT for Claude Code (via `.claude/skills/` symlinks); indexed by
+`.agents/context/skills-index.yaml`.
 
 | Skill | Description |
 |-------|-------------|
 | `review-pass` | 4-stage multi-AI cross-validation review |
-| `email` | SMTP email with templates |
-| `sms` | SMS/알림톡 |
-| `read-doc` | HWP/PDF/DOCX/XLSX text extraction |
-| `doc-coauthoring` | Structured document co-authoring |
-| `document-generation` | PDF generation (contract/resolution/payroll) |
-| `channel-management` | Discord/Slack channel management |
-| `web-monitoring` | SEO, uptime, analytics |
-| `service-management` | Service monitoring, incident response |
+| `verify-implementation` | Run all `verify-*` skills → unified report |
+| `verify-contract-conformance` | Declared API/interface contract vs implementation |
+| `manage-skills` | Detect drift, create/update `verify-*` skills |
+| `merge-worktree` | Squash-merge worktree → main, semantic commits |
+| `read-doc` | HWP/HWPX/PDF/DOCX/XLSX/PPTX text extraction |
+| `webapp-testing` | Playwright E2E for local web apps |
+| `doc-coauthoring` | Structured document co-authoring (3-step) |
+| `project-create` / `project-migration` / `migrate-ctx` | Scaffold / extract / migrate workspace repos & context |
+| `payroll` | 급여명세서 PDF + 이메일 발송 |
+| `press-release` | 보도자료 작성·기자 조사·발송 |
+| `patent-draft` | KIPO 특허 명세서 초안 |
+| `patent-pipeline` | 특허 발굴·평가·출원 |
+| `copyright-reg` | 어문저작권 등록 서류 |
+| `weekly-report` | 주간 업무 결과 (git 커밋 기반) |
 
-## naia-business-adk Skills (11 — Business)
+### `skills/` — operational / runtime tree
+
+Discovered by the dashboard API (`core.discoverSkills()` scans `skills/**/SKILL.md`)
+and served at `/api/skills`.
 
 | Skill | Description |
 |-------|-------------|
-| `payroll` | 급여명세서 PDF + 이메일 발송 |
+| `email` | SMTP email with templates |
+| `sms` | SMS / 알림톡 via gateway adapter |
+| `notify` | Channel-agnostic notification |
+| `channel-management` | Discord/Slack channel management |
+| `service-management` | Service monitoring, cost, incident response |
+| `web-monitoring` | SEO, uptime, analytics |
+| `document-generation` | Branded PDF (contract/resolution/payroll) |
+| `read-doc` · `doc-coauthoring` · `review-pass` | Also present here (dashboard-visible copies) |
+| `config` · `cron` · `diagnostics` · `system-status` · `sessions` · `memo` · `skill-manager` · `time` · `weather` | Runtime utilities |
+
+## naia-business-adk Skills (organizational extension)
+
+`naia-business-adk` adds team-scoped governance and additional org skills on top of the
+base trees above. Examples (not exhaustive, and not shipped in this base repo):
+
+| Skill | Description |
+|-------|-------------|
 | `contract` | 근로계약서 (근로기준법) + 디지털 서명 |
 | `expense` | 지출결의서 + 영수증 OCR |
 | `accounting` | 장부 기록, 월마감, 세무 |
 | `crm` | 파일 기반 경량 CRM |
 | `client-communication` | 고객 소통 관리 |
-| `copyright-reg` | 어문저작권 등록 서류 |
-| `patent-draft` | 특허 명세서 초안 |
-| `patent-pipeline` | 특허 발굴·평가·출원 |
-| `press-release` | 보도자료 작성·발송 |
-| `weekly-report` | 주간 업무 결과 |
 
 ## Organizational Governance Extension
 

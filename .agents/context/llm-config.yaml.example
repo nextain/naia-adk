@@ -1,0 +1,54 @@
+# Naia ADK — LLM config (example)
+#
+# Copy to `.agents/context/llm-config.yaml` to override the built-in defaults
+# in packages/naia-anyllm. The file is OPTIONAL: if it is absent, naia-anyllm
+# falls back to DEFAULT_CONFIG (see packages/naia-anyllm/src/index.ts), which
+# already defines the four providers below.
+#
+# Values here are shallow-merged over the defaults:
+#   loadLLMConfig() = { ...DEFAULT_CONFIG, ...parse(llm-config.yaml) }
+#
+# API keys are NEVER stored in this file — only the *name* of the env var that
+# holds each key (apiKeyEnv). Set those vars in .env.local (see .env.example).
+
+defaultProvider: any-llm
+defaultModel: claude-sonnet-4-20250514
+
+providers:
+  any-llm:
+    id: any-llm
+    name: Any-LLM Gateway
+    type: gateway
+    # Endpoint base URL. In code this comes from $GATEWAY_URL + "/v1".
+    # Set it explicitly here, or leave the default and export GATEWAY_URL.
+    endpoint: https://your-gateway.example.com/v1
+    apiKeyEnv: GATEWAY_MASTER_KEY
+    models:
+      - claude-sonnet-4-20250514
+      - gpt-4.1
+      - gemini-2.5-pro
+    defaultModel: claude-sonnet-4-20250514
+
+  openai:
+    id: openai
+    name: OpenAI
+    type: direct
+    endpoint: https://api.openai.com/v1
+    apiKeyEnv: OPENAI_API_KEY
+    models: [gpt-4.1, gpt-4.1-mini, o3, o4-mini]
+
+  anthropic:
+    id: anthropic
+    name: Anthropic
+    type: direct
+    endpoint: https://api.anthropic.com/v1
+    apiKeyEnv: ANTHROPIC_API_KEY
+    models: [claude-sonnet-4-20250514, claude-opus-4-20250514]
+
+  google:
+    id: google
+    name: Google
+    type: direct
+    endpoint: https://generativelanguage.googleapis.com/v1beta/openai
+    apiKeyEnv: GOOGLE_API_KEY
+    models: [gemini-2.5-pro, gemini-2.5-flash]
