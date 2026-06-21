@@ -66,7 +66,7 @@ function prodGateway(data) {
 				`[Harness] prod 게이트웨이 자격증명 차단: ${detected}\n` +
 				".env.local에는 dev 게이트웨이를 사용해야 합니다.\n\n" +
 				"  DEV URL:  https://naia-gateway-dev-181404717065.asia-northeast3.run.app\n" +
-				"  DEV KEY:  qliT3Q4SC128rtR5o2dwud0vP25tu4usuvyFAP1oGAE\n\n" +
+				"  DEV KEY:  <DEV_GATEWAY_KEY — .env.local 에서 주입, 레포 커밋 금지>\n\n" +
 				"prod 값은 .env.production.local에만 허용됩니다.",
 		};
 	}

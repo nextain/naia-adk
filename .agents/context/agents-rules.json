@@ -57,7 +57,7 @@
       },
       "dev": {
         "url": "https://naia-gateway-dev-181404717065.asia-northeast3.run.app",
-        "key": "qliT3Q4SC128rtR5o2dwud0vP25tu4usuvyFAP1oGAE",
+        "key": "<DEV_GATEWAY_KEY — .env.local 에서 주입, 레포 커밋 금지>",
         "db": "any_llm_gateway_dev (same cafelua-db instance, separate DB)",
         "min_instances": 0
       },

@@ -29,8 +29,8 @@ pip install reportlab
   "company": {
     "name": "(주)넥스테인",
     "eng_name": "nextain Inc.",
-    "biz_no": "529-81-03749",
-    "ceo": "양병석",
+    "biz_no": "<YOUR_BIZ_NO>",
+    "ceo": "<YOUR_CEO_NAME>",
     "address": "경기도 화성시 효행구 매송면 매송고색로 422번길 77, 나동 107호"
   },
   "employees": [

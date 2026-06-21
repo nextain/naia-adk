@@ -14,7 +14,7 @@ argument-hint: "[저작물 제호 | 저작물 PDF 경로]"
 
 - `md-to-pdf` 글로벌 설치 (`npm i -g md-to-pdf`)
 - 회사 정보: `docs-business/01. 회사 정보/base-info.md`, `team.md`
-- 인감/서명: `docs-business/07.증명서/nextain-인감.png`, `양병석-서명.png`
+- 인감/서명: `docs-business/07.증명서/nextain-인감.png`, `<YOUR_CEO_NAME>-서명.png`
 - 로고: `about.nextain.io/public/assets/logos/nextain-light-logo.png`
 
 ## 워크플로우
@@ -49,7 +49,7 @@ cd member-luke && npx md-to-pdf "docs-business/08.저작권/{출력파일}.md"
 - nextain 로고 (상단)
 - 저작물 정보 테이블 (제호, 종류, 저작자)
 - 확인 문구 + 발급일
-- 법인인감 + "(주)넥스테인 대표이사 양병석"
+- 법인인감 + "(주)넥스테인 대표이사 <YOUR_CEO_NAME>"
 - 확인자 정보 테이블 (성명, 직함, 서명, 전화번호, 주민등록번호, 주소)
 - 안내문 (한국저작권위원회 공식 양식)
 - 회사 정보 푸터
