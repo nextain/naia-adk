@@ -7,6 +7,16 @@
 
 ---
 
+## 언어 기본 / 오버라이드
+
+기본: 공개 OSS 레포는 영어-primary로 문서화(국제 접근성), 메인테이너/사용자 포크는 한국어-primary(메인테이너 언어).
+
+**메인테이너 오버라이드 (2026-06-22)**: 아래 공개 OSS 레포는 메인테이너 결정(한국어 우선 팀)으로 **진입문서 한국어-primary** — `README.md`와 `AGENTS.md == CLAUDE.md == GEMINI.md`가 한국어, 영어는 `*.en.md`로 보존, `.users/` base = 한국어(`en/` 서브디렉터리 = 영어 미러):
+- `naia-adk`
+- `naia-memory`
+
+---
+
 ## 개요
 
 naia-adk 생태계 전체 레포의 **문서 구조 · SDLC 산출물 · RBAC** 표준.

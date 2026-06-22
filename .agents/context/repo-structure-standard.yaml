@@ -8,6 +8,17 @@
 version: "1.0"
 spec_date: "2026-05-27"
 
+# ─── Language Defaults / Overrides ───────────────────────────────────────────
+# Default: public OSS repos are documented English-primary (international reach);
+# maintainer/user forks Korean-primary (maintainer language).
+# Maintainer override (2026-06-22): the following public OSS repos use Korean-
+# primary entry docs by maintainer decision (Korean-first team) — README.md and
+# AGENTS.md == CLAUDE.md == GEMINI.md in Korean, English preserved as *.en.md;
+# .users/ base = Korean (en/ subdir = English mirror).
+language_primary_overrides:
+  - naia-adk
+  - naia-memory
+
 # ─── Repo Types ──────────────────────────────────────────────────────────────
 # Classify each repo by purpose to determine mirror pattern and required dirs.
 
