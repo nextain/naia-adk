@@ -37,25 +37,97 @@ export function detectAdkRoot(startDir: string): string | null {
   return null
 }
 
+/** One front-matter contract violation found in a SKILL.md file. */
+export interface SkillManifestError {
+  field: string
+  message: string
+}
+
+/**
+ * Validate parsed SKILL.md front-matter against the required fields of the
+ * `@naia-adk/skill-spec` SkillManifest contract (name + description required;
+ * tier/tags constrained when present). Pure — returns [] when valid; callers
+ * decide how to react. Kept here (not imported from skill-spec) so `@naia-adk/core`
+ * stays consumable from source with no built-dist dependency.
+ */
+export function validateSkillManifest(data: unknown): SkillManifestError[] {
+  if (typeof data !== "object" || data === null) {
+    return [{ field: "<frontmatter>", message: "missing or not a YAML object" }]
+  }
+  const d = data as Record<string, unknown>
+  const errors: SkillManifestError[] = []
+  if (typeof d.name !== "string" || d.name.trim() === "") {
+    errors.push({ field: "name", message: "required non-empty string" })
+  }
+  if (typeof d.description !== "string" || d.description.trim() === "") {
+    errors.push({ field: "description", message: "required non-empty string" })
+  }
+  if (d.tier !== undefined && !["T0", "T1", "T2", "T3"].includes(d.tier as string)) {
+    errors.push({ field: "tier", message: "must be one of T0|T1|T2|T3 when present" })
+  }
+  if (d.tags !== undefined) {
+    if (!Array.isArray(d.tags)) {
+      errors.push({ field: "tags", message: "must be a string array when present" })
+    } else if (!d.tags.every((t) => typeof t === "string")) {
+      errors.push({ field: "tags", message: "every tag must be a string" })
+    }
+  }
+  return errors
+}
+
+/**
+ * Discover operational skills under `<root>/skills/ ** /SKILL.md`.
+ *
+ * Fail-closed: if any SKILL.md violates the skill-spec manifest contract
+ * (missing name/description front-matter) OR is unreadable / has malformed YAML,
+ * throws an aggregated error naming every offending file rather than silently
+ * serving a broken entry. On a fully-valid tree this is a no-op (behavior
+ * unchanged). NOTE: this is intentionally all-or-nothing — a single bad
+ * SKILL.md makes the whole catalog (and the `/api/skills` surface that consumes
+ * it) fail, so the operator fixes the manifest rather than shipping a silently
+ * incomplete catalog. Correctness-first by design.
+ */
 export function discoverSkills(root: string): SkillMeta[] {
   const pattern = path.join(root, "skills", "**", "SKILL.md").replace(/\\/g, "/")
   const files = fg.sync(pattern)
-  return files.map((filePath) => {
-    const raw = fs.readFileSync(filePath, "utf-8")
-    const { data, content } = matter(raw)
+  const skills: SkillMeta[] = []
+  const invalid: string[] = []
+  for (const filePath of files) {
     const relPath = path.relative(root, filePath)
+    let data: Record<string, unknown>
+    let content: string
+    try {
+      const parsed = matter(fs.readFileSync(filePath, "utf-8"))
+      data = parsed.data
+      content = parsed.content
+    } catch (err) {
+      invalid.push(`${relPath}: unreadable or malformed front-matter (${(err as Error).message})`)
+      continue
+    }
+    const manifestErrors = validateSkillManifest(data)
+    if (manifestErrors.length > 0) {
+      invalid.push(`${relPath}: ${manifestErrors.map((e) => `${e.field} (${e.message})`).join(", ")}`)
+      continue
+    }
     const parts = relPath.split(path.sep)
     const name = parts.length > 1 ? parts[parts.length - 2] : path.basename(filePath, ".md")
-    return {
+    skills.push({
       name,
       path: relPath,
-      description: (data.description as string) || "",
+      description: data.description as string,
       trigger: data.trigger as string | undefined,
       management: data.management as string | undefined,
       frontmatter: data,
       content,
-    }
-  })
+    })
+  }
+  if (invalid.length > 0) {
+    throw new Error(
+      `discoverSkills: ${invalid.length} SKILL.md file(s) violate the skill-spec manifest contract:\n` +
+        invalid.map((s) => `  - ${s}`).join("\n"),
+    )
+  }
+  return skills
 }
 
 export function classifySubmodules(index: ProjectIndex): Map<string, string> {
