@@ -42,8 +42,8 @@ Industry acronyms:
 > SQLite / ICLR / LongMemEval / KsponSpeech / KEMDy20
 
 Product names:
-> Claude / Gemini / Codex / ollama / Whisper / vLLM / faster-whisper /
-> VoxCPM2 / Vevo / HuBERT / librosa / LiveKit / mem0 /
+> Claude / Gemini / Codex / ollama / vLLM /
+> mem0 /
 > naia-adk / naia-agent / naia-memory / naia-os / naia-cognitive (brand names)
 
 CS common terms:

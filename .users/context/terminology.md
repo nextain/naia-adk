@@ -41,8 +41,8 @@ default 로 쓰고, 학계용어와 약자는 첫 등장 시 한국어 풀이 + 
 > SQLite / ICLR / LongMemEval / KsponSpeech / KEMDy20
 
 제품명:
-> Claude / Gemini / Codex / ollama / Whisper / vLLM / faster-whisper /
-> VoxCPM2 / Vevo / HuBERT / librosa / LiveKit / mem0 /
+> Claude / Gemini / Codex / ollama / vLLM /
+> mem0 /
 > naia-adk / naia-agent / naia-memory / naia-os / naia-cognitive (브랜드명)
 
 컴공 일반 용어:
