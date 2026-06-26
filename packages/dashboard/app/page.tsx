@@ -1,5 +1,14 @@
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3141";
 
+type IndexEntry = {
+  path?: string;
+  type?: string;
+  visibility?: string;
+  description?: string;
+  rulesEntrypoint?: string;
+  present?: boolean;
+};
+
 async function getMeta() {
   const res = await fetch(`${API}/api/workspace/meta`, { cache: "no-store" })
   if (!res.ok) return null
@@ -18,12 +27,24 @@ async function getIndex() {
   return res.json()
 }
 
+function countPresent(entries: Record<string, IndexEntry>, keys: string[]): number {
+  return keys.filter((k) => entries[k]?.present).length
+}
+
 export default async function Home() {
   const [meta, skills, index] = await Promise.all([getMeta(), getSkills(), getIndex()])
 
-  const submodules = index?.submodules ? Object.keys(index.submodules) : []
-  const localProjects = index?.local_projects ? Object.keys(index.local_projects) : []
-  const refs = submodules.filter((k: string) => k.startsWith("ref-"))
+  const submodules: Record<string, IndexEntry> = index?.submodules ?? {}
+  const localProjects: Record<string, IndexEntry> = index?.local_projects ?? {}
+
+  const submoduleKeys = Object.keys(submodules)
+  const localProjectKeys = Object.keys(localProjects)
+  const refKeys = submoduleKeys.filter((k) => k.startsWith("ref-"))
+  const nonRefSubmoduleKeys = submoduleKeys.filter((k) => !k.startsWith("ref-"))
+
+  const presentProjects = countPresent(localProjects, localProjectKeys)
+  const presentRefs = countPresent(submodules, refKeys)
+  const presentNonRefSubmodules = countPresent(submodules, nonRefSubmoduleKeys)
 
   return (
     <div className="space-y-8">
@@ -33,9 +54,9 @@ export default async function Home() {
       </div>
 
       <div className="grid grid-cols-4 gap-4">
-        <Card label="Projects" value={localProjects.length} />
-        <Card label="Submodules" value={submodules.length - refs.length} />
-        <Card label="References" value={refs.length} />
+        <Card label="Projects" value={presentProjects} declared={localProjectKeys.length} />
+        <Card label="Submodules" value={presentNonRefSubmodules} declared={nonRefSubmoduleKeys.length} />
+        <Card label="References" value={presentRefs} declared={refKeys.length} />
         <Card label="Skills" value={Array.isArray(skills) ? skills.length : 0} />
       </div>
 
@@ -56,18 +77,24 @@ export default async function Home() {
         <div>
           <h2 className="text-lg font-semibold mb-3">Projects</h2>
           <div className="space-y-2">
-            {localProjects.map((name: string) => {
-              const entry = index?.local_projects?.[name]
+            {localProjectKeys.map((name: string) => {
+              const entry = localProjects[name]
+              const missing = entry?.present === false
               return (
                 <a key={name} href={`/workspace#${name}`}
-                  className="block p-3 rounded-lg border border-neutral-800 hover:border-neutral-600 transition-colors">
+                  className={`block p-3 rounded-lg border border-neutral-800 hover:border-neutral-600 transition-colors ${missing ? "opacity-50" : ""}`}>
                   <div className="flex items-center justify-between">
                     <span className="font-medium">{name}</span>
-                    {entry?.visibility && (
-                      <span className={`text-xs px-2 py-0.5 rounded ${
-                        entry.visibility === "public" ? "bg-green-900/30 text-green-400" : "bg-neutral-800 text-neutral-400"
-                      }`}>{entry.visibility}</span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {missing && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-amber-900/30 text-amber-400">missing</span>
+                      )}
+                      {entry?.visibility && (
+                        <span className={`text-xs px-2 py-0.5 rounded ${
+                          entry.visibility === "public" ? "bg-green-900/30 text-green-400" : "bg-neutral-800 text-neutral-400"
+                        }`}>{entry.visibility}</span>
+                      )}
+                    </div>
                   </div>
                   <div className="text-sm text-neutral-400 mt-0.5">{entry?.description}</div>
                 </a>
@@ -80,11 +107,15 @@ export default async function Home() {
   )
 }
 
-function Card({ label, value }: { label: string; value: number }) {
+function Card({ label, value, declared }: { label: string; value: number; declared?: number }) {
+  const phantom = declared !== undefined && declared > value
   return (
     <div className="p-4 rounded-lg border border-neutral-800">
       <div className="text-3xl font-bold">{value}</div>
       <div className="text-sm text-neutral-400 mt-1">{label}</div>
+      {phantom && (
+        <div className="text-xs text-amber-500 mt-1">{declared} declared</div>
+      )}
     </div>
   )
 }

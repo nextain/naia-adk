@@ -19,6 +19,10 @@ export interface SubmoduleEntry {
   rulesEntrypoint?: string
   status: string
   notes?: string
+  /** Whether `path` actually exists under the workspace root. Stamped by
+   *  `resolveIndexPresence` so consumers can tell "declared in project-index.yaml"
+   *  apart from "present on disk" (nextain/naia-adk#11). Absent until resolved. */
+  present?: boolean
 }
 
 export interface ProjectIndex {
