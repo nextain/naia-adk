@@ -5,6 +5,7 @@ import {
   getWorkspaceMeta,
   classifySubmodules,
   buildFileTree,
+  resolveIndexPresence,
 } from "@naia-adk/core"
 
 export const workspaceRoutes: FastifyPluginCallback = (app, _opts, done) => {
@@ -19,7 +20,9 @@ export const workspaceRoutes: FastifyPluginCallback = (app, _opts, done) => {
   app.get("/index", async () => {
     const index = loadProjectIndex(root)
     if (!index) return { error: "No project-index.yaml found" }
-    return index
+    // Stamp on-disk presence so the dashboard distinguishes declared vs present
+    // (nextain/naia-adk#11). Additive — existing yaml keys are preserved.
+    return resolveIndexPresence(root, index)
   })
 
   app.get("/tree", async (req) => {

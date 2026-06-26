@@ -15,6 +15,33 @@ export function loadProjectIndex(root: string): ProjectIndex | null {
   return YAML.parse(raw) as ProjectIndex
 }
 
+/**
+ * Stamp each `submodules` / `local_projects` entry with `present` = whether its
+ * `path` actually exists under `root`. Returns a shallow clone (input is not
+ * mutated). The dashboard uses this to distinguish entries DECLARED in
+ * `project-index.yaml` from those actually PRESENT on disk — without it, counts
+ * reflect the (possibly example) catalog rather than the real workspace
+ * (nextain/naia-adk#11). A falsy/empty `path` resolves to `present: false`.
+ */
+export function resolveIndexPresence(root: string, index: ProjectIndex): ProjectIndex {
+  const mark = (entries?: Record<string, SubmoduleEntry>): Record<string, SubmoduleEntry> => {
+    const out: Record<string, SubmoduleEntry> = {}
+    for (const [name, entry] of Object.entries(entries ?? {})) {
+      const present =
+        typeof entry.path === "string" && entry.path.length > 0
+          ? fs.existsSync(path.join(root, entry.path))
+          : false
+      out[name] = { ...entry, present }
+    }
+    return out
+  }
+  return {
+    ...index,
+    submodules: mark(index.submodules),
+    local_projects: mark(index.local_projects),
+  }
+}
+
 export function loadAgentsRules(root: string): Record<string, unknown> | null {
   const rulesPath = path.join(root, ".agents", "context", "agents-rules.json")
   if (!fs.existsSync(rulesPath)) return null
