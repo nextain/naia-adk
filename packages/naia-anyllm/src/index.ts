@@ -4,6 +4,16 @@ import YAML from "yaml"
 import OpenAI from "openai"
 import type { LLMConfig, LLMProvider, LLMMessage, LLMResponse } from "./types.js"
 
+// Phase 5: sub-LLM 배치 소비 경로(§5.1) 재노출.
+export {
+	loadSubLlmConfig,
+	subLlmChat,
+	type SubLlmRuntimeConfig,
+	type SubLlmFs,
+	type SubLlmLoadDeps,
+	type SubLlmFetch,
+} from "./sub-llm.js"
+
 const DEFAULT_CONFIG: LLMConfig = {
   defaultProvider: "any-llm",
   defaultModel: "claude-sonnet-4-20250514",
