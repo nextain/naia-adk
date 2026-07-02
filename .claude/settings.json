@@ -31,6 +31,10 @@
           {
             "type": "command",
             "command": "node .claude/hooks/gcs-guard.js"
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/rdd-experiment-guard.js"
           }
         ]
       },
