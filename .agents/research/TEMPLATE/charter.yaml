@@ -1,0 +1,33 @@
+# RDD Charter — INVARIANT. Changed ONLY via explicit user gate.
+# Every experiment must trace to a sub-goal here. If a result tempts you to change
+# the goal → STOP, that is drift. Change the PLAN (hypothesis-ledger), never this
+# without the user.
+# Copyright 2026 Nextain Inc. All rights reserved.
+version: 1
+program: "<program-name>"           # e.g. real-singing-ai
+
+goal: >
+  <the invariant north star — observable end state.
+   e.g. "성대 물리 제어로 스스로 부르는 AI (복사/합성/변환 아님)">
+
+success_definition: >
+  <what concretely proves the whole program done — the final judge.
+   e.g. "사람이 '한국어 노래'로 알아듣는 naia 가창 (외부 청취 게이트 통과)">
+
+sub_goals:                          # experiments trace to these ids
+  - id: SG1
+    text: "<a decomposed question the program must answer>"
+  - id: SG2
+    text: "<...>"
+
+constraints:                        # HARD limits — violating = drift
+  - "<e.g. 가창 경로에 사람 녹음 파형 0바이트>"
+  - "<e.g. 런타임 가수 = 물리 (신경 합성 아님)>"
+
+non_goals:                          # explicitly out — resist these
+  - "<e.g. 커버곡 클로닝 (SVC) — 폐기>"
+
+status:
+  sub_goals_advanced: []
+  sub_goals_refuted: []
+  open_questions: []
