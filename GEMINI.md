@@ -60,12 +60,14 @@ GitHub에서 포크한 뒤, 주기적으로 upstream을 동기화하세요: `git
 | `data-teams/` | T2 | 팀별 데이터 — 전략, 회계 (gitignore, 포크별) |
 | `data-private/` | T3 | 개인 데이터, env 파일 (gitignore, 포크별) |
 | `projects/` | T2 | 프로젝트 레포 (gitignore, 포크별) |
-| `projects/refs/` | T2 | 레퍼런스 레포 (gitignore, 포크별) |
+| `ref-*/` | T2 | 레퍼런스 레포 — 워크스페이스 루트에 `ref-cline`, `ref-opencode` 등으로 둠 (gitignore, 포크별. `project-index.yaml` 참조) |
 | `skills/` | T1 | 운영/런타임 스킬 (대시보드 API로 제공) |
-| `packages/` | T1 | 런타임 패키지 (pnpm workspace — 9개 활성) |
+| `packages/` | T1 | 런타임 패키지 (pnpm workspace — 10개 활성) |
 | `scripts/` | T1 | 유틸리티 스크립트, 도구 |
 | `templates/` | T1 | 문서 템플릿 |
 | `docs/` | T1 | 아키텍처, 스펙 |
+
+**`packages/` (10개):** `core`·`server`·`dashboard`·`skill-spec`·`skills-builtin`·`openclaw-compat`·`persona`·`process`·`naia-anyllm`·`artifacts-spec` (권한(RBAC)·개발 수명주기(SDLC) 산출물 표준 스키마 — 15종 산출물을 JSON Schema로 정의).
 
 ### 포크 커스터마이징 (Fork Customization)
 
@@ -123,12 +125,12 @@ GitHub에서 포크한 뒤, 주기적으로 upstream을 동기화하세요: `git
 
 | 트리 | SoT 대상 | 소비 주체 | 색인 |
 |------|---------|-------------|-------|
-| `.agents/skills/` | AI 보조 / 워크플로우 스킬 | Claude Code (`.claude/skills/` 심링크 경유) | `.agents/context/skills-index.yaml` |
+| `.agents/skills/` | AI 보조 / 워크플로우 스킬 | Claude Code (`.claude/skills/` 포인터 경유) | `.agents/context/skills-index.yaml` |
 | `skills/` | 운영 / 런타임 스킬 | 대시보드 API (`core.discoverSkills()`가 `skills/**/SKILL.md` 스캔) | `/api/skills`로 제공 |
 
 `skills-index.yaml`은 `.agents/skills/` 트리에 대한 사람/AI 요약 색인입니다.
 
-### `.agents/skills/` (Claude Code SoT — `.claude/skills/` 심링크가 여기를 가리킴)
+### `.agents/skills/` (Claude Code SoT — `.claude/skills/`의 포인터가 여기를 가리킴)
 
 | 스킬 | 설명 | 관리 |
 |-------|-------------|------------|
@@ -149,6 +151,9 @@ GitHub에서 포크한 뒤, 주기적으로 upstream을 동기화하세요: `git
 | `patent-pipeline` | AI 특허 발굴, 평가, 출원 | 수동 |
 | `copyright-reg` | 저작권 등록 서류 생성 | 수동 |
 | `weekly-report` | git 커밋 기반 주간 업무 보고 | 수동 |
+| `finetune-persona` | 페르소나 fine-tune 자산 준비 | 수동 |
+| `secret-vault` | age 암호화 시크릿 볼트 열기/수정/재잠금 | 수동 |
+| `youtube-upload` | YouTube Data API v3로 영상 업로드 (자막·썸네일 포함) | 수동 |
 
 ### `skills/` (운영 트리 — 대시보드 API가 스캔)
 
@@ -214,12 +219,12 @@ GitHub에서 포크한 뒤, 주기적으로 upstream을 동기화하세요: `git
 .claude/                    # Claude Code configuration
 ├── settings.json           # Hooks registration
 ├── hooks/                  # PostToolUse hooks
-└── skills/                 # Symlinks → .agents/skills/
+└── skills/                 # Pointers → .agents/skills/
 ```
 
 ## 핵심 원칙 (Core Principles)
 
-1. **1:1 미러링**: `.users/`는 `.agents/` 구조를 정확히 미러합니다
+1. **부분 미러링**: `.users/`는 사람이 읽어야 할 핵심 문서를 `.agents/`에서 미러합니다(전체 복제가 아니며, 스킬 등 일부는 `.agents/` 쪽만 있습니다)
 2. **SoT**: `.agents/context/agents-rules.json`이 단일 진실 공급원입니다
 3. **응답 언어**: 기여자가 선호하는 언어
 

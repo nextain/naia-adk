@@ -1,0 +1,30 @@
+# review-spec.yaml — 최소 예제 (24h 야간 reviewer-loop 환산)
+
+version: 1
+id: design-doc-review
+
+sources:
+  - kind: cli
+    name: codex exec
+    weight: 40
+  - kind: cli
+    name: opencode run
+    weight: 40
+  - kind: session
+    name: 다른 naia 세션 (peer)
+    weight: 30
+  - kind: human
+    name: 사용자
+    weight: 100
+  - kind: self
+    name: 작성자 셀프리뷰
+    weight: 10
+
+min_independent: 2
+self_ok_max_tier: R1
+
+downgrade_rule:
+  on_dissent: claim.downgrade-1
+  max_rounds_warn: 4
+
+audit_required: true

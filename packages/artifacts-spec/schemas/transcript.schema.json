@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/transcript.schema.json",
+  "title": "Transcript Entry",
+  "description": "세션 간 대화의 한 줄(JSONL). naia-os shell 의 transcript 뷰 입력 — 사용자가 N 세션 흐름을 본다. capability-gated 구독. append-only.",
+  "type": "object",
+  "required": ["ts", "session_id", "role", "content"],
+  "properties": {
+    "ts": { "type": "string", "format": "date-time" },
+    "session_id": {
+      "type": "string",
+      "description": "발화 세션 id (session-manifest.id)."
+    },
+    "topic": {
+      "type": "string",
+      "description": "transcript 주제 (파일 경로 또는 자유 식별자). 같은 주제의 발화들이 모이는 단위."
+    },
+    "role": {
+      "enum": ["user", "agent", "system", "tool"],
+      "description": "발화 역할. 같은 사용자 안에서 'user' = 본인, 'agent' = 그 세션의 AI, 'tool' = 그 세션이 호출한 외부."
+    },
+    "content": {
+      "type": "string",
+      "description": "발화 본문 (markdown 허용)."
+    },
+    "thread_id": {
+      "type": "string",
+      "description": "동일 thread 묶음 (선택, naia-os 시각화용)."
+    },
+    "ref": {
+      "type": "string",
+      "description": "참조 (파일·이슈·URL). 선택."
+    },
+    "metadata": {
+      "type": "object",
+      "description": "자유 메타 (token 비용·LLM model·tool name 등). 시크릿 값 금지.",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "append_only": "기존 줄 수정 = 정합 위반. 정정 = 새 줄.",
+    "capability_gated": "다른 세션이 본 transcript 를 읽으려면 capability-profile 허가 필요 (advisory).",
+    "ui_input": "naia-os shell 이 본 파일 구독 → multi-pane transcript 뷰. 사용자 = 지휘자(릴레이 X)."
+  }
+}

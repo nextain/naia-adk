@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/review-spec.schema.json",
+  "title": "Review Spec",
+  "description": "semi-automatic reviewer-loop 구성. claim → 기계 검증 → 사람 판단 게이트. dissent 시 claim mechanical downgrade (semi-automatic; 종결 verdict = 사람 게이트). Track A 8라운드 over-claim 경험 → mechanism 화.",
+  "type": "object",
+  "required": ["version", "id", "sources"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "id": { "type": "string", "description": "리뷰 spec 식별자 (예: 'security-claim', 'design-doc', 'p0-incident')." },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+          "kind": { "enum": ["cli", "session", "human", "self"] },
+          "name": { "type": "string", "description": "예: 'codex exec', 'opencode run', '다른 naia 세션'" },
+          "weight": { "type": "integer", "minimum": 0, "maximum": 100 }
+        }
+      },
+      "description": "허용 리뷰 출처. cli = 외부 LLM CLI 호출(codex/opencode 등). session = 다른 naia 세션. human = 사용자 본인. self = 셀프(저위험만)."
+    },
+    "min_independent": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 2,
+      "description": "권고 독립 리뷰 수. min 미달 = hard-fail 아님(audit + 위험등급별 경고 강화)."
+    },
+    "self_ok_max_tier": {
+      "type": "string",
+      "default": "R1",
+      "description": "셀프 리뷰만으로 충분한 위험 상한 (risk-matrix tier). R1 이하면 self 허용, 그 위는 독립 출처 필수."
+    },
+    "downgrade_rule": {
+      "type": "object",
+      "description": "reviewer dissent 시 claim 강등 규칙. 기계 적용(mechanical) + 종결 verdict 는 사람(semi-automatic).",
+      "properties": {
+        "on_dissent": { "enum": ["claim.downgrade-1", "claim.reopen", "no-op"], "default": "claim.downgrade-1" },
+        "max_rounds_warn": { "type": "integer", "minimum": 1, "default": 4, "description": "같은 op 재리뷰 N 라운드 이상 = 'diminishing returns' 경고 (Track A 8라운드 회피)." }
+      }
+    },
+    "audit_required": {
+      "type": "boolean",
+      "default": true,
+      "description": "본 리뷰 결과 = audit-log 에 기록 강제."
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "semi_automatic": "기계 검증(테스트/lint/diff) = 자동. 최종 verdict(convergence) = 사람 게이트. Track A 8라운드 over-claim 경험에서 도출.",
+    "advisory": "review.sh 는 비-게이트 advisory 도구 (실 게이트 = risk-matrix 와 host 훅)."
+  }
+}

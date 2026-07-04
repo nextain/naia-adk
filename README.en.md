@@ -2,383 +2,254 @@
 
 # Naia ADK
 
-**Workspace scaffold + governance baseline for AI-assisted work.**
+**A pre-arranged workspace scaffold for AI coding agents to work in.**
 
-An open-source framework that provides a structured workspace scaffold for AI coding tools (opencode, Claude Code, Codex, Naia OS) and a built-in dashboard for managing it.
+When you use AI coding tools like Claude Code or Codex, every tool keeps its rule
+files in a different place, and questions like "can this document be published?"
+or "where do skills go?" get answered ad hoc. Naia ADK lays out that skeleton in
+advance. Just as you set up a dev environment on a new laptop, it hands an AI
+agent a tidy desk to start from. It also ships a dashboard so you can see the
+workspace state at a glance.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-## What is Naia ADK?
+## Up and running in 5 minutes
 
-Naia ADK is a **workspace scaffold** — a pre-configured directory structure, skills, context files, and data tiers that AI coding agents use as their working environment. It also includes a **dashboard** for monitoring and configuring the workspace itself.
+You need **Node 22+** and **pnpm 9+**.
 
-It is also the **minimum governance baseline** for solo AI collaboration:
-
-- It separates `read`, `write`, `execute`, and `publish` as different concerns.
-- It gives AI tools a shared vocabulary for disclosure levels and approval-gated actions.
-- It provides a common place to encode context discipline before workspaces scale into teams or companies.
-
-```
-naia-adk = Workspace Scaffold + Dashboard
-
-┌─────────────────────────────────────────────┐
-│  naia-adk                                    │
-│                                              │
-│  Scaffold (워크스페이스 스캐폴드)             │
-│  ├── .agents/    skills/  scripts/           │
-│  ├── data-company/  data-teams/              │
-│  ├── data-private/  projects/                │
-│  └── context files (agents-rules.json, etc.) │
-│                                              │
-│  Dashboard (대시보드)                         │
-│  ├── Workspace viewer                        │
-│  ├── Skills catalog                          │
-│  └── Settings & monitoring                   │
-│                                              │
-└──────────┬───────────────────────────────────┘
-           │
-     ┌─────┼─────┬──────────┐
-     ▼     ▼     ▼          ▼
- opencode  Claude  Codex   Naia OS
-           Code            (Desktop)
+```bash
+pnpm install    # install workspace dependencies
+pnpm dev        # run the API server (:3141) and dashboard (:3142) together
 ```
 
-**Workflow clients** (opencode, Claude Code, Codex, Naia OS) use naia-adk as their workspace. The dashboard is for *managing* the workspace — not for doing work.
+Open `http://localhost:3142` in your browser to see the dashboard. Three things
+are visible right away:
 
-> **Scope**: `naia-adk` is for **solo / personal** use. Team collaboration, RBAC, and shared knowledge belong in [`naia-business-adk`](https://nextain.io/adk).
+- **Workspace** — projects and submodules, the file tree, and each item's
+  disclosure level.
+- **Skills catalog** — the list of skills registered in this workspace, and their
+  content.
+- **Settings / monitoring** — server config, client status, data directories.
 
-### Interfaces, not dependencies
+The dashboard forwards `/api/*` requests to the API server on port 3141. To run
+just one of them, use `pnpm dev:server` (→ 3141) or `pnpm dev:dashboard`
+(→ 3142). The launcher scripts `./start.sh` (Linux/macOS) and `start.bat`
+(Windows) both run `pnpm dev`. The server CLI accepts `--port`, `--host`, and
+`--root`; for example, point it at another workspace with
+`pnpm serve -- --root /path/to/workspace`.
 
-naia-adk is a **tool-agnostic workspace format**. It does not depend on any specific AI tool, and AI tools do not have to depend on naia-adk's runtime either:
+## What's inside
 
-- **The format is the contract** — directory layout (`.agents/`, `.users/`, `skills/`, `data-*/`), file schemas (`agents-rules.json`, SKILL.md), and conventions. Any AI coding tool that can read these can consume a naia-adk workspace.
-- **No runtime coupling** — Claude Code, OpenCode, Codex, and naia-agent all read the same format independently. None of them embed naia-adk's code.
-- **Swap freely** — switch tools, fork the workspace for a new org, or mix tools within the same project. The workspace keeps working.
+### The workspace scaffold
 
-This is part of the broader Naia ecosystem philosophy: repos are coupled through **published interfaces and formats**, not runtime dependencies. See the [naia-agent README](https://github.com/nextain/naia-agent) for the full picture.
+It gives an AI agent a set of directories with fixed places for everything, so it
+can start working immediately. AI-facing context lives in `.agents/` (English,
+JSON/YAML), and a human-readable mirror lives in `.users/` (Korean, Markdown).
+That mirror is partial, not a full copy — it holds the documents a human needs
+to read (for example, skills are canonical under `.agents/skills/`, and only some
+are mirrored into `.users/skills/`). Skills, data, and projects all have
+designated locations, so the workspace looks the same no matter which tool opens
+it.
 
-**Plugin-adaptive**: The scaffold adapts to what you plug in. Skills, data directories, project submodules, and AI tool connections are all pluggable — add what you need, ignore what you don't.
+### Dashboard and API
+
+A Next.js dashboard manages the workspace visually, backed by a Fastify API
+server. The API exposes workspace metadata (`/api/workspace`), the skill catalog
+(`/api/skills`), file read/write (`/api/files`), and a WebSocket that streams
+file-change events (`/api/ws`). Thanks to this API, programs other than the
+dashboard can reach the workspace too.
+
+### Skill system
+
+Repeated tasks are bundled into reusable skills. Each skill is defined by a single
+`SKILL.md`, and the API server scans `skills/` to build the catalog. If even one
+skill violates the format, the whole catalog throws an error (fail-closed): rather
+than silently dropping the broken skill and serving the rest, the operator is made
+to fix it on the spot. It's a deliberate choice to prevent shipping an
+incomplete catalog by accident.
+
+### Rules and minimum governance
+
+Even a workspace you use alone needs some minimal rules the moment AI and
+automation touch it. Naia ADK separates `read`, `write`, `execute`, and `publish`
+as distinct concerns, and attaches a disclosure level to each document.
+Hard-to-undo actions — production changes, secret handling, public-facing
+claims — are split off from ordinary local edits and routed through approval
+gates.
+
+Disclosure has four levels. `public` is safe to ship as-is to a public site or
+open-source repo; `controlled` can be shared externally after review; `internal`
+stays inside the workspace; `confidential` covers sensitive material like
+contracts, credentials, and personal data. Credentials usually live outside git,
+but by level they are still `confidential`.
+
+### LLM adapter (naia-anyllm)
+
+For features that need to reach an LLM, the `naia-anyllm` adapter is built in. It
+connects through the [any-llm](https://github.com/nextain/any-llm) gateway, or
+directly to providers such as OpenAI, Anthropic, and Google. It ships with a
+default provider config, but to actually make a call you must set that
+provider's API key as an environment variable; without the key the adapter
+throws right away. To switch providers or models, copy
+[`.agents/context/llm-config.yaml.example`](.agents/context/llm-config.yaml.example),
+and keep API keys in environment variables, not in the config file (see
+[`.env.example`](.env.example)).
+
+## Why it's built this way
+
+### The format is the contract
+
+The heart of Naia ADK is not a particular tool but a **format**. The directory
+layout (`.agents/`, `.users/`, `skills/`, `data-*/`) and the file schemas
+(`agents-rules.json`, `SKILL.md`) are a fixed agreement, and any tool that can
+read that agreement can consume the same workspace. Claude Code, opencode, Codex,
+and naia-agent each read the same workspace without embedding one another's code.
+So you can swap tools or mix several, and the workspace keeps working.
+
+The rule enforcement itself is tool-agnostic too. A host-neutral core
+(`.agents/hooks/core/`) and policies (`.agents/hooks/policies/`) drive both the
+Claude Code hooks and the pi extension with the same rules.
+
+### A personal base before it grows into a team
+
+Naia ADK is strictly single-user, for personal use. Company org charts, tenant
+rules, and delegated approval chains belong to a higher layer. What it does give
+you is a single place to write down context discipline before the workspace grows
+to team or company scale.
+
+When you need team collaboration and shared knowledge, extend to
+[Naia Business ADK](https://nextain.io/adk). That extension widens the baseline
+into asset, process, and permission governance, and adds team ownership and
+delegated approvals.
+
+### The fork chain
+
+Naia ADK is meant to be forked into your own. Individuals fork `naia-adk`
+directly; organizations go through `naia-business-adk` to instantiate company and
+member workspaces.
 
 ```
-Plugin-Adaptive Structure
-
-naia-adk (core scaffold)
-│
-├── Plugins (plug in what you need)
-│   ├── Skills/              ← Skill plugins (SKILL.md)
-│   ├── Data submodules      ← data-company/, data-teams/
-│   ├── Project submodules   ← projects/your-project
-│   ├── AI tool configs      ← .claude/, .agents/
-│   └── Custom workflows     ← .agents/workflows/
-│
-├── Adapters (adapt to your environment)
-│   ├── AI tool adapter      ← opencode / Claude Code / Codex / Naia OS
-│   ├── Data source adapter  ← local filesystem / cloud / git
-│   └── Language adapter     ← .users/ mirror in any language
-│
-└── Ports (connect from anywhere)
-    ├── REST API             ← Any HTTP client
-    ├── WebSocket            ← Real-time events
-    ├── Direct filesystem    ← CLI tools
-    └── Tauri IPC            ← Naia OS native
+naia-adk                  ← personal base (public, Apache 2.0)
+  └── {org}-adk           ← org fork: company data + business submodules
+        └── {user}-adk    ← personal fork: personal data + project submodules
 ```
 
-### Context Knowledge Management (Planned)
+Nextain's actual chain runs
+`naia-adk → naia-business-adk → nextain-adk → alpha-adk`.
 
-The current file-based context system (`.agents/context/*.yaml`) requires loading entire files to find any piece of information — wasting tokens and injecting unrelated noise into LLM context.
+## Structure
 
-The planned evolution:
-
-```
-Current:  Grep files → load entire file (~4000 tokens) → 50x waste
-Planned:  query atom → get exact knowledge unit (~80 tokens)
-```
-
-**Knowledge atoms** — the smallest meaningful knowledge unit, tagged and linked:
-
-```json
-{
-  "id": "naia-os:gateway_health_cmd",
-  "title": "gateway_health Tauri Command",
-  "tags": ["tauri", "rust", "health-check"],
-  "related": ["naia-os:naia_agent_lifecycle"],
-  "content": "...",
-  "updated": "2026-05-17"
-}
-```
-
-**AI-agnostic access** via CLI or MCP — works with Claude Code, Codex, naia-agent, or any tool with shell access. No runtime lock-in.
-
-`naia-business-adk` extends this with shared team knowledge, RBAC, and conflict resolution.
-
-### Minimum Governance Baseline
-
-Even a single-user workspace needs governance once AI and automation are involved.
-
-- **Disclosure levels** — `public`, `controlled`, `internal`, `confidential`
-- **Action vocabulary** — `read`, `write`, `execute`, `publish`, `approve`, `administer`
-- **Approval-gated actions** — production mutation, secret handling, and public-facing claims are separate from normal local edits
-- **Context discipline** — session-local context should not be promoted into persistent/shared context without intent
-
-`naia-adk` is the personal base. Company-specific org charts, tenant rules, and approval chains belong in higher layers.
-
-### The Fork Chain
-
-```
-naia-adk                  ← Personal base (public, Apache 2.0)
-  ├─ naia-business-adk   ← Business upstream (private)
-  │    └── {org}-adk     ← Company instance: org data + projects + policy
-  │          └── {user}-adk  ← Company-linked personal instance
-  └── {user}-adk         ← Direct personal instance
-```
-
-Example — Nextain's chain:
-
-```
-naia-adk → naia-business-adk → nextain-adk → alpha-adk
-```
-
-Fork from any layer. Individuals can fork `naia-adk` directly. Organizations go through `naia-business-adk`, then instantiate company and member workspaces from there.
-
-### Business Extension
-
-**[Naia Business ADK](https://nextain.io/adk)** — organizational extension of `naia-adk`:
-
-- Extends the baseline with **assets / process / permissions** governance
-- Adds team ownership, delegated approval, and business workflow expectations
-- May include organizational skills and templates, but those are outputs of the governance layer rather than the product definition
-- Supports private company instances and member instances
-
-[Contact us](https://nextain.io/contact) for licensing.
-
-## What's Inside
+The repository divides into runtime code (`packages/`), rules and context
+(`.agents/`, `.users/`), skills (`skills/`, `.agents/skills/`), and the data
+directories each fork fills in.
 
 | Directory | Purpose |
 |-----------|---------|
-| `.agents/` | AI-optimized context (English, JSON/YAML) |
+| `.agents/` | AI-facing context (English, JSON/YAML) — single source of truth for rules |
 | `.users/` | Human-readable mirror (Korean, Markdown) |
-| `.claude/` | Claude Code configuration, hooks, skills |
-| `skills/` | Reusable AI skills (review, email, SMS, docs, etc.) |
-| `scripts/` | Utility scripts (monitoring, triage, etc.) |
+| `.claude/` | Claude Code config, hooks, skill symlinks |
+| `skills/` | Operational/runtime skills (served by the dashboard API) |
+| `scripts/` | Utility scripts |
 | `templates/` | Document templates |
 | `docs/` | Architecture docs, design specs |
-| `packages/` | Runtime packages (pnpm workspace) — see below |
+| `packages/` | Runtime packages (pnpm workspace) |
 
-**`packages/` (9 active):** `core` (workspace/skill parsing engine) · `server` (Fastify REST/WS API) · `dashboard` (Next.js UI) · `skill-spec` (tool-agnostic skill format contracts) · `skills-builtin` (generic skills catalog) · `openclaw-compat` (OpenClaw → naia skill migration) · `persona` (system-prompt convention spec) · `process` (workflow pattern spec) · `naia-anyllm` (LLM adapter for any-llm gateway / direct providers).
+### Runtime packages (packages/, 10 of them)
 
-### Data Directories (gitignored — managed per fork)
+Three are actual running programs; the rest are thin packages that define formats
+and specs.
+
+- `core` — the engine that parses the workspace and skills.
+- `server` — the Fastify REST/WebSocket API.
+- `dashboard` — the Next.js dashboard UI.
+- `skill-spec` — the tool-agnostic skill format contract (`SkillDescriptor`,
+  `SkillLoader`).
+- `skills-builtin` — the generic skills catalog.
+- `openclaw-compat` — a tool that migrates OpenClaw skills into the naia format.
+- `persona` — the system-prompt convention spec.
+- `process` — the workflow pattern spec (review → decide → execute, issue-driven
+  development, and so on).
+- `naia-anyllm` — the any-llm gateway / direct-provider LLM adapter.
+- `artifacts-spec` — the standard schema for permission (RBAC) and development
+  lifecycle (SDLC) artifacts. It defines 15 artifact types as JSON Schema and
+  specifies, for each, whether the instance is git-tracked or session-scoped.
+
+### Data directories (gitignored, filled per fork)
+
+These four never get committed. Whoever forks the repo fills in their own data.
 
 | Directory | Scope | Content |
 |-----------|-------|---------|
 | `data-company/` | Company | Company-wide docs, shared resources |
-| `data-teams/` | Team | Team-specific documents (strategy, accounting) |
+| `data-teams/` | Team | Team documents (strategy, accounting, etc.) |
 | `data-private/` | Personal | Personal data, env files, private docs |
 | `projects/` | Personal | Project repos (submodules) |
 
-## Skills
+### Two skill trees
 
-naia-adk ships with **two skill trees** (see [AGENTS.md](AGENTS.md#skills) for the full list):
+Skills live in two places, consumed by different parties.
 
-- **`.agents/skills/`** — AI-assistant / workflow skills, used by Claude Code via `.claude/skills/` symlinks. Indexed by `.agents/context/skills-index.yaml`.
-- **`skills/`** — operational / runtime skills, discovered by the dashboard API (`discoverSkills()` scans `skills/**/SKILL.md`) and served at `/api/skills`.
+- `.agents/skills/` — AI-assist and workflow skills. Claude Code uses them via the
+  `.claude/skills/` symlink. Includes review (`review-pass`), verification
+  (`verify-implementation`), worktree merge (`merge-worktree`), document
+  extraction (`read-doc`), business skills like patent/copyright/payroll, and
+  others such as `finetune-persona`, `secret-vault`, and `youtube-upload`.
+- `skills/` — operational/runtime skills. The API server scans
+  `skills/**/SKILL.md` and serves them to the dashboard. These include email/SMS/
+  notification sending, channel management, service and web monitoring, and
+  document generation; `skills/business/` holds org skills such as
+  `press-release`.
 
-Workflow skills (`.agents/skills/`):
+The most accurate list is the skill catalog in the dashboard. A text table is
+also kept in [AGENTS.en.md](AGENTS.en.md#skills).
 
-| Skill | Description |
-|-------|-------------|
-| `review-pass` | Multi-agent cross-validation review (4 stages) |
-| `verify-implementation` | Run all verification skills, generate unified report |
-| `verify-contract-conformance` | Verify declared API/interface contracts vs implementation |
-| `manage-skills` | Auto-detect and update verification skills |
-| `merge-worktree` | Squash-merge worktree branches with semantic commits |
-| `read-doc` | Extract text from HWP/PDF/DOCX/XLSX/PPTX |
-| `webapp-testing` | Playwright E2E testing for local web apps |
-| `doc-coauthoring` | Structured document co-authoring (3-step) |
-| `project-create` · `project-migration` · `migrate-ctx` | Scaffold / extract / migrate workspace repos & context |
-| `payroll` · `press-release` · `patent-draft` · `patent-pipeline` · `copyright-reg` · `weekly-report` | Document & business-workflow skills (also present in this base repo) |
+## Getting started
 
-Operational skills (`skills/`):
+### Personal
 
-| Skill | Description |
-|-------|-------------|
-| `email` | Send emails via SMTP adapter with template support |
-| `sms` | SMS / Korean business messages (알림톡) via gateway adapter |
-| `notify` | Send a notification to a channel (channel-agnostic) |
-| `channel-management` | Discord/Slack channel management |
-| `service-management` | Service monitoring, cost tracking, incident response |
-| `web-monitoring` | SEO, uptime, analytics monitoring |
-| `document-generation` | Branded PDF generation (contracts, resolutions, payroll) |
-| `config` · `cron` · `diagnostics` · `system-status` · `sessions` · `memo` · `skill-manager` · `time` · `weather` | Runtime utilities |
+1. Fork `naia-adk` into your own account (private if you can).
+2. Clone it: `git clone https://github.com/YOUR-USER/your-adk.git && cd your-adk`
+3. Add the upstream: `git remote add upstream https://github.com/nextain/naia-adk.git`
+4. Create data directories: `mkdir -p data-private projects`
+5. Add projects, configure `.agents/`, and start working.
+6. Sync periodically: `git fetch upstream && git merge upstream/main`
 
-> **Note:** Organizational layers ([Naia Business ADK](#business-extension)) extend these with team ownership, delegated approval, and additional org-specific skills.
+### Company
 
-## Architecture
+1. [Contact us](https://nextain.io/contact) for access to `naia-business-adk`.
+2. Fork `naia-business-adk` privately into your org account, then clone it.
+3. Add the upstream: `git remote add upstream https://github.com/nextain/naia-business-adk.git`
+4. Fill in company data and project submodules: `mkdir -p data-company projects`,
+   `git submodule add <repo> projects/<name>`
+5. Each member forks the org ADK again as their personal workspace.
 
-Naia ADK is a **workspace scaffold with its own API** — tool-agnostic by design:
+### Naia OS integration (optional)
 
-```
-naia-adk
-├── Scaffold (workspace structure)
-│   ├── .agents/  .users/  .claude/  skills/  scripts/
-│   ├── data-company/  data-teams/  data-private/
-│   └── projects/
-│
-├── API Server (Fastify)
-│   ├── /api/workspace   ← Workspace metadata, file tree, classification
-│   ├── /api/skills      ← Skill catalog and content
-│   ├── /api/files       ← File read/write
-│   └── /api/ws          ← WebSocket (file change events)
-│
-└── Dashboard (Next.js)
-    ├── /                ← Overview
-    ├── /workspace       ← Projects, submodules, visibility
-    ├── /skills          ← Skill catalog viewer
-    └── /settings        ← Server config, client status, data dirs
-```
-
-Any AI tool can connect — not limited to Claude Code, Codex, or Naia OS:
-
-| Client | Connection | Role |
-|--------|-----------|------|
-| opencode | Direct filesystem | TUI coding agent |
-| Claude Code | Direct filesystem + hooks | CLI coding agent |
-| pi | Direct filesystem + extension | CLI coding agent |
-| Codex | REST API | CLI coding agent |
-| Naia OS | REST API + WebSocket | Desktop app |
-| Browser | Dashboard | Monitoring & settings |
-
-The enforcement harness is **tool-agnostic**: a host-neutral core
-(`.agents/hooks/core/`) + policies (`.agents/hooks/policies/`) drive both
-the Claude Code hooks (`.claude/hooks/`) and the pi extension
-(`.pi/extensions/naia-harness.ts`) — the same guards run on either host
-with zero core change.
-
-### LLM Connection
-
-naia-adk includes **naia-anyllm** — a built-in LLM adapter that connects to [any-llm](https://github.com/nextain/any-llm) gateway or directly to LLM providers:
-
-```
-naia-adk
-└── packages/
-    └── naia-anyllm/        ← LLM adapter (plugin)
-        ├── Any-LLM Gateway ← nextain/any-llm (credits, auth, routing)
-        ├── Direct providers ← OpenAI, Anthropic, Google, etc.
-        └── Config           ← .agents/context/llm-config.yaml (optional)
-```
-
-Config is **optional** — `naia-anyllm` ships sensible defaults (any-llm gateway + OpenAI / Anthropic / Google direct providers). To override them, copy [`.agents/context/llm-config.yaml.example`](.agents/context/llm-config.yaml.example) to `.agents/context/llm-config.yaml`. API keys live in env vars (see [`.env.example`](.env.example)), never in the config file.
-
-CLI tools (opencode, Claude Code, Codex) use their own LLM connections. naia-os connects through naia-anyllm to the any-llm gateway.
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
-
-## Quick Start
-
-### Run the dashboard & API
-
-Requires **Node ≥ 22** and **pnpm ≥ 9**.
-
-```bash
-pnpm install          # install workspace deps
-pnpm dev              # start API (:3141) + dashboard (:3142) together
-# or run them separately:
-pnpm dev:server       # API only  → http://localhost:3141
-pnpm dev:dashboard    # dashboard → http://localhost:3142
-```
-
-Convenience launchers are also provided: `./start.sh` (Linux/macOS) and `start.bat` (Windows), both of which run `pnpm dev`. The server CLI accepts `--port`, `--host`, and `--root` (e.g. `pnpm serve -- --root /path/to/workspace`).
-
-| Service | Default URL | Source |
-|---------|-------------|--------|
-| API server (Fastify) | `http://localhost:3141` | `packages/server` |
-| Dashboard (Next.js) | `http://localhost:3142` | `packages/dashboard` |
-
-The dashboard proxies `/api/*` to the API server on port 3141.
-
-### For Individuals
-
-1. **Private fork** — Fork `naia-adk` to your account (uncheck "Public fork" if available, or fork then change to private in Settings)
-2. **Clone** — `git clone https://github.com/YOUR-USER/your-adk.git && cd your-adk`
-3. **Add upstream** — `git remote add upstream https://github.com/nextain/naia-adk.git`
-4. **Create data dirs** — `mkdir -p data-private projects`
-5. **Start working** — Add projects, configure `.agents/`, use skills
-6. **Sync upstream** — Periodically: `git fetch upstream && git merge upstream/main`
-
-### For Organizations
-
-1. **Get Naia Business ADK** — [Contact us](https://nextain.io/contact) for `naia-business-adk` access
-2. **Private fork** — Fork `naia-business-adk` to your org as private
-3. **Clone** — `git clone https://github.com/YOUR-ORG/your-org-adk.git && cd your-org-adk`
-4. **Add upstream** — `git remote add upstream https://github.com/nextain/naia-business-adk.git`
-5. **Add company data** — `mkdir -p data-company data-business projects`
-6. **Add submodules** — `git submodule add <repo> projects/<name>`
-7. **Team onboarding** — Each member forks the org ADK for their personal workspace
-8. **Sync upstream** — Periodically: `git fetch upstream && git merge upstream/main`
-
-### Connect to Naia OS (optional)
-
-If you use [Naia OS](https://github.com/nextain/naia-os), point its workspace path to your ADK directory. Skills and data are served via MCP/WebSocket.
-
-## Disclosure Levels
-
-| Level | Meaning | Example |
-|------|---------|---------|
-| `public` | Safe for public website, public README, public repo context | Open-source code, public docs |
-| `controlled` | Shareable externally with review, but not fully public by default | Approved brand assets, vetted partner material |
-| `internal` | Company or workspace internal | Shared docs, internal resources |
-| `confidential` | Sensitive, customer-bound, financial, credential, or production-critical | Contracts, credentials, personal data |
-
-Credentials and secret material usually live outside git, but they still belong to the `confidential` disclosure level.
-
-## Development Process
-
-### Issue-Driven Development (default)
-
-14-phase workflow for feature-level work:
-
-Issue → Understand → Scope → Investigate → Plan → Build → Review → E2E Test → Post-test Review → Sync → Sync Verify → Report → Commit → Close
-
-Gates (user confirmation required): Understand, Scope, Plan, Sync, Close.
-
-### Simple Changes
-
-For typos, config values, simple directives — lightweight cycle without full phase flow.
-
-See [`.agents/workflows/issue-driven-development.yaml`](.agents/workflows/issue-driven-development.yaml) for details.
-
-## Context Structure
-
-Dual-directory architecture optimized for both AI and human consumption:
-
-```
-.agents/                    # AI-optimized (English, token-efficient)
-├── context/                # Project rules, work index, requirements
-├── workflows/              # Development workflows
-├── skills/                 # Skill definitions (SoT)
-├── hooks/                  # AI session hooks
-├── progress/               # Session handoff files (gitignored)
-└── requirements/           # Product requirements (REQ-001 ~)
-
-.users/                     # Human-readable mirror (Korean, detailed)
-├── context/                # .agents/ mirror in Markdown
-├── workflows/              # Workflow docs
-└── skills/                 # Skill docs
-```
+If you use the [Naia OS](https://github.com/nextain/naia-os) desktop app, point
+its workspace path at your ADK directory. Skills and data are served over the API.
 
 ## Contributing
 
-**Any language is welcome.** Issues, PRs, discussions can be in your native language — AI bridges communication.
+Write issues, PRs, and discussions in whatever language you're comfortable with;
+AI mediates the communication. Just keep the git record (commits, context, shared
+artifacts) in English. For the full process and rules, see
+[CONTRIBUTING.md](CONTRIBUTING.md). Development defaults to issue-driven
+development; the detailed flow lives in [AGENTS.en.md](AGENTS.en.md) and
+[`.agents/workflows/`](.agents/workflows/).
 
-Git records (commits, context, shared artifacts) in English.
+## Roadmap
 
-1. **Issue first** — Create or pick a GitHub Issue before coding
-2. **Fork + Branch** — Work on `issue-{N}-{desc}` branch
-3. **Test** — Write tests, verify before PR
-4. **One PR** — Code + tests + context in a single PR
+The following is planned, not a feature that works today.
 
-10 contribution types: Translation, Skill, Feature, Bug Report, Code/PR, Documentation, Testing, Design/UX, Security Report, Context.
+- **Knowledge atoms** — today's context is file-based, so finding one piece of
+  information means loading the whole file and wasting tokens. The idea is to
+  break context into the smallest meaningful units, link them with tags, and pull
+  out only the exact piece you need. Access would go through the CLI or MCP so it
+  stays tool-agnostic.
 
 ## License
+
+Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ```
 Copyright 2026 Nextain Inc.
@@ -388,12 +259,6 @@ you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
 ```
 
 ## Links

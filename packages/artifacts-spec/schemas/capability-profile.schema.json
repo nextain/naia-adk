@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/capability-profile.schema.json",
+  "title": "Capability Profile",
+  "description": "세션이 *할 수 있는 일의 범위* — advisory 가드레일. 파일 접근·tool 호출·LLM provider·네트워크·서브세션 spawn 등. 강제 sandbox 아님 — 호스트 정책 + 사용자 통제와 함께 운영적 가드레일.",
+  "type": "object",
+  "required": ["version", "id", "purpose"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "id": {
+      "type": "string",
+      "description": "프로파일 식별자 — session-manifest 가 참조 (예: 'read-mostly', 'full-coder', 'reviewer-only', 'no-network')."
+    },
+    "purpose": {
+      "type": "string",
+      "description": "이 프로파일이 의도하는 사용 케이스 (사람 이해용)."
+    },
+    "file_access": {
+      "type": "object",
+      "description": "파일 접근 허용 패턴 (advisory).",
+      "properties": {
+        "read": { "type": "array", "items": { "type": "string" }, "description": "글롭/접두사. 미명시 = 광범위 허용(advisory).", "default": ["**"] },
+        "write": { "type": "array", "items": { "type": "string" }, "description": "기본 = 빈 배열 (write 0)." },
+        "deny": { "type": "array", "items": { "type": "string" }, "description": "명시적 금지 패턴 (예: '**/.env', '**/secrets/**'). 우선." }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "description": "tool 호출 허용/금지.",
+      "properties": {
+        "allow": { "type": "array", "items": { "type": "string" }, "description": "허용 tool 이름 패턴. 미명시 = host default." },
+        "deny": { "type": "array", "items": { "type": "string" }, "description": "명시 금지." }
+      }
+    },
+    "llm": {
+      "type": "object",
+      "description": "허용 LLM provider/model. session-manifest.llm 보다 우선(상한).",
+      "properties": {
+        "providers": { "type": "array", "items": { "type": "string" } },
+        "models": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "outbound_allow": { "type": "array", "items": { "type": "string" }, "description": "허용 호스트/패턴. 미명시 = host default." },
+        "outbound_deny": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "subsession": {
+      "type": "object",
+      "description": "subsession 운영 권한 (예: codex-cli sub-spawn). reviewer-loop primitive 와 협업.",
+      "properties": {
+        "spawn_allow": { "type": "boolean", "default": false },
+        "max_depth": { "type": "integer", "minimum": 0, "default": 1 }
+      }
+    },
+    "runtime_limits": {
+      "type": "object",
+      "properties": {
+        "max_concurrent_tools": { "type": "integer", "minimum": 1, "default": 4 },
+        "idle_timeout_seconds": { "type": "integer", "minimum": 60 }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "purpose": "협업·조정 모델 — 같은 사용자 안에서 N 세션이 서로 발 안 밟게 하는 운영적 가드레일.",
+    "non-sandbox": "강제 sandbox 아님. 같은 사용자 셸 권한을 가진 코드는 deny 도 우회 가능 (advisory + audit). 강제 격리는 호스트 OS 수준 sandbox (Flatpak/seccomp 등) 별 영역."
+  }
+}

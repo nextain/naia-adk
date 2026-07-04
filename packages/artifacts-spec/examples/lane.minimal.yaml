@@ -1,0 +1,49 @@
+# lane.yaml — 최소 예제 (24h 야간 lane 분리 환산)
+
+# T-A lane: service-ops 프레임 전용
+- lane_id: tool-builder
+  session_id: T-A-service-ops
+  role: "naia-business-adk service-ops 프레임 빌드 (정책·lib·테스트)"
+  scope_allow:
+    - "projects/naia-business-adk/templates/service-ops/**"
+  scope_deny:
+    - "projects/onmam-dev/www.onmam.com-branches/**"
+    - "projects/onmam-dev/scripts/dev-targets.conf (구조 변경)"
+    - "onmam-web prod"
+  interaction:
+    handoff_to: [worktree-owner]
+    consumes_from: []
+  active: true
+
+# T-B lane: prod 조사·spec 공급
+- lane_id: spec-supplier
+  session_id: T-B-prod-investigation
+  role: "prod 읽기전용 조사·계획·spec 공급 (worktree mutate 금지)"
+  scope_allow:
+    - ".agents/progress/**"
+    - "projects/naia-adk/packages/artifacts-spec/**"
+  scope_deny:
+    - "projects/onmam-dev/www.onmam.com-branches/** (write)"
+    - "origin push"
+    - "onmam-web prod"
+  interaction:
+    handoff_to: [worktree-owner]
+    consumes_from: [tool-builder]
+  active: true
+
+# dev-side lane: 운영 직렬 오너
+- lane_id: worktree-owner
+  session_id: dev-side-session
+  role: "워크트리·git-history·deploy·replica-standup 단일 직렬 오너"
+  scope_allow:
+    - "projects/onmam-dev/www.onmam.com-branches/{luke,dev,main}"
+    - "origin push (dev/feature 브랜치 정렬)"
+    - "onmam-dev 서버"
+  scope_deny:
+    - "onmam-web prod (직접 mutate)"
+    - "main → prod 자동배포 유발"
+  interaction:
+    handoff_to: [user]
+    consumes_from: [spec-supplier, tool-builder]
+  active: false
+  notes: "야간 무진척 — morning-report §0 정직 플래그."

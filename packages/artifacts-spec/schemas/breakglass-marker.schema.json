@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/breakglass-marker.schema.json",
+  "title": "Breakglass Marker",
+  "description": "비상 승격 토큰 spec. 사용자가 명시 발급, 1회성, scope/expiry/nonce. AI 자율 사용 절대 불허, audit 강제. host marker 파일 패턴(atomic mkdir).",
+  "type": "object",
+  "required": ["version", "issuer", "scope", "expiry", "nonce"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "issuer": {
+      "type": "string",
+      "description": "발급자 — 단일 사용자 모델에서 사용자 본인 식별자. 본 spec 의 모든 발급 = 사용자 본인 의도."
+    },
+    "scope": {
+      "type": "object",
+      "required": ["max_tier"],
+      "properties": {
+        "max_tier": { "type": "string", "description": "risk-matrix tier 까지만 일시 승격 (예: 'R3')." },
+        "ops": { "type": "array", "items": { "type": "string" }, "description": "허용 작업 명시 리스트 (선택)." },
+        "duration_seconds": { "type": "integer", "minimum": 1, "description": "발급 후 유효 시간(절대시각 expiry 보강용)." }
+      }
+    },
+    "expiry": {
+      "type": "string",
+      "format": "date-time",
+      "description": "토큰 만료 절대시각 (ISO 8601). 만료 후 사용 시도 = 거부 + audit."
+    },
+    "nonce": {
+      "type": "string",
+      "description": "1회성 식별자. consumed_marker_path 에 atomic mkdir 으로 소비 표시."
+    },
+    "consumed_marker_path": {
+      "type": "string",
+      "description": "소비 표시 디렉터리 경로. atomic mkdir 패턴 — 동일 nonce 재사용 시도 = mkdir 실패 → 거부."
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reason": {
+      "type": "string",
+      "description": "발급 사유 (audit 용)."
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "user_only": "사용자 명시 발급만. AI 자율 발급 절대 금지.",
+    "single_use": "atomic mkdir nonce 1회성 — 재사용 시도 = mkdir 충돌·거부.",
+    "audit_mandatory": "발급·소비·만료 모두 audit-log 에 기록. 감사 추적 = 정직 종착.",
+    "marker_responsibility": "marker 파일 무결성은 호스트/사용자 책임. 본 spec 의 검증 = advisory + audit. 실 통제 = 호스트 훅 + 사용자."
+  }
+}

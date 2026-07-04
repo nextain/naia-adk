@@ -1,0 +1,51 @@
+# capability-profile.yaml — 최소 예제 (24h 야간 T-B "read-mostly-with-spec-write" 환산)
+
+version: 1
+id: read-mostly-with-spec-write
+purpose: |
+  prod 조사·spec 공급 lane. worktree/origin/dev-server mutate 금지.
+  spec/계획/리뷰 결과는 .agents/progress/ 에 write 허용.
+
+file_access:
+  read:
+    - "**"
+  write:
+    - ".agents/progress/**"
+    - "projects/naia-adk/packages/artifacts-spec/**"
+  deny:
+    - "**/.env"
+    - "**/secrets/**"
+    - "**/.git/config"
+    - "projects/onmam-dev/www.onmam.com-branches/**"
+
+tools:
+  allow:
+    - "Read"
+    - "Bash"
+    - "Edit"
+    - "Write"
+    - "Grep"
+    - "TaskCreate"
+  deny:
+    - "git push"
+    - "git reset --hard"
+    - "git filter-repo"
+
+llm:
+  providers: ["anthropic"]
+  models: ["claude-opus-4-7-1m"]
+
+network:
+  outbound_allow:
+    - "api.github.com"
+    - "*.googleapis.com"
+  outbound_deny:
+    - "*"
+
+subsession:
+  spawn_allow: true
+  max_depth: 2
+
+runtime_limits:
+  max_concurrent_tools: 6
+  idle_timeout_seconds: 3600

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/session-manifest.schema.json",
+  "title": "Session Manifest",
+  "description": "naia 의 N 세션 모델 — 한 사용자 단일 인격 아래 동시 운영되는 세션의 정체. 세션 = projects/<name> 서브트리에 바인딩 + capability-profile + LLM 모델 + persona base + tool 권한.",
+  "type": "object",
+  "required": ["version", "id", "bound_project", "persona", "capability_profile"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "id": {
+      "type": "string",
+      "description": "세션 식별자 (사람이 읽을 수 있는 슬러그). 예: 'coder-onmam', 'docs-naia-os', 'reviewer-pr-42'."
+    },
+    "bound_project": {
+      "type": "string",
+      "description": "naia-adk projects/ 컨벤션 [user 2026-05-20] — 'projects/<name>' 형식. 세션이 주로 작업하는 서브트리."
+    },
+    "persona": {
+      "type": "object",
+      "description": "세션의 persona base. 같은 사용자의 N 세션이라도 *역할별 페르소나* 는 다를 수 있음 (예: 코딩 어시스턴트 vs 문서 작가). 다만 사용자에 대한 *정체성/기억* 은 공유 (naia-memory 통합).",
+      "required": ["base"],
+      "properties": {
+        "base": {
+          "type": "string",
+          "description": "naia-adk persona 카탈로그 이름 (e.g., 'alpha', 'coder', 'reviewer'). naia-adk persona base + naia-memory user context 결합으로 인스턴스화 [vision-statement §4b]."
+        },
+        "extra_system_prompt": {
+          "type": "string",
+          "description": "선택. base 위에 얹는 세션별 추가 지시."
+        }
+      }
+    },
+    "capability_profile": {
+      "type": "string",
+      "description": "capability-profile.yaml 의 profile id 참조 — 세션이 할 수 있는 일의 범위 (advisory)."
+    },
+    "llm": {
+      "type": "object",
+      "description": "선택. LLM provider/model 지정. 미지정 시 host(naia-os)의 default 사용.",
+      "properties": {
+        "provider": { "type": "string", "examples": ["anthropic", "openai", "google", "vertex", "local-vllm"] },
+        "model": { "type": "string" },
+        "cost_budget_ref": { "type": "string", "description": "cost-budget.yaml 의 budget id (선택, multi-session 비용 추적용)" }
+      }
+    },
+    "ephemeral_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "세션 종속 ephemeral 경로 (파일 또는 디렉터리 — transcript, inbox, lock, progress doc 등). 세션 종료 시 정리 후보."
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "notes": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "isolation": "같은 사용자의 세션 간 = 협업·조정 모델. 강제 격리 아님. capability_profile = advisory 가드레일.",
+    "lifecycle": "세션 종료 시 transcript/inbox 등 ephemeral 정리 후보. persona 누적은 naia-memory 로 (persistent).",
+    "binding": "bound_project = projects/<name> 1-path 컨벤션 (naia-adk fork chain 일관). 다중 project 동시 작업 = 별 세션 운영 권장."
+  }
+}
