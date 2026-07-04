@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/lane.schema.json",
+  "title": "Session Lane Set",
+  "description": "runtime control-state — 세션의 작업 lane(역할 + 허용 영역 + 금지) 명시. ownership-table 의 동기 게이트와 협업. 한 사용자의 N 세션이 lane 별로 분담. 한 YAML 파일 = 활성 lane 의 집합(array).",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["lane_id", "session_id", "role"],
+    "properties": {
+      "lane_id": {
+        "type": "string",
+        "description": "lane 식별자 (예: 'worktree-owner', 'spec-supplier', 'reviewer', 'tool-builder')."
+      },
+      "session_id": {
+        "type": "string",
+        "description": "이 lane 을 점유한 세션 id."
+      },
+      "role": {
+        "type": "string",
+        "description": "lane 역할 한 줄."
+      },
+      "scope_allow": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "이 lane 이 허용된 자원/영역 (글롭/패턴/논리이름)."
+      },
+      "scope_deny": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "명시 금지 영역."
+      },
+      "interaction": {
+        "type": "object",
+        "description": "다른 lane 과의 상호작용 정책.",
+        "properties": {
+          "handoff_to": { "type": "array", "items": { "type": "string" }, "description": "산출을 넘기는 lane 들 (session-manifest.id 또는 lane_id)." },
+          "consumes_from": { "type": "array", "items": { "type": "string" }, "description": "입력을 받는 lane 들." }
+        }
+      },
+      "active": {
+        "type": "boolean",
+        "default": true
+      },
+      "notes": { "type": "string" }
+    },
+    "additionalProperties": false
+  },
+  "x-honest-framing": {
+    "advisory": "lane 분리 = 운영적 가드레일 (협업·조정 모델). 강제 격리 아님.",
+    "ephemeral": "lane 은 작업·세션 종속. 새 작업 = 새 lane assignment.",
+    "lifecycle": "runtime control-state — git-tracked 아님."
+  }
+}

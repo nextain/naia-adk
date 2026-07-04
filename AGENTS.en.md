@@ -60,12 +60,14 @@ Index for search: `.agents/context/.ctx-index.json` (auto-rebuilt by hook, gitig
 | `data-teams/` | T2 | Team-specific data — strategy, accounting (gitignored, per-fork) |
 | `data-private/` | T3 | Personal data, env files (gitignored, per-fork) |
 | `projects/` | T2 | Project repos (gitignored, per-fork) |
-| `projects/refs/` | T2 | Reference repos (gitignored, per-fork) |
+| `ref-*/` | T2 | Reference repos — placed at the workspace root as `ref-cline`, `ref-opencode`, etc. (gitignored, per-fork; see `project-index.yaml`) |
 | `skills/` | T1 | Operational/runtime skills (served via dashboard API) |
-| `packages/` | T1 | Runtime packages (pnpm workspace — 9 active) |
+| `packages/` | T1 | Runtime packages (pnpm workspace — 10 active) |
 | `scripts/` | T1 | Utility scripts, tools |
 | `templates/` | T1 | Document templates |
 | `docs/` | T1 | Architecture, specs |
+
+**`packages/` (10):** `core`·`server`·`dashboard`·`skill-spec`·`skills-builtin`·`openclaw-compat`·`persona`·`process`·`naia-anyllm`·`artifacts-spec` (standard schema for permission (RBAC) and development-lifecycle (SDLC) artifacts — 15 artifact types defined as JSON Schema).
 
 ### Fork Customization
 
@@ -123,12 +125,12 @@ There are **two skill trees** on disk, with different SoTs and consumers:
 
 | Tree | SoT for | Consumed by | Index |
 |------|---------|-------------|-------|
-| `.agents/skills/` | AI-assistant / workflow skills | Claude Code (via `.claude/skills/` symlinks) | `.agents/context/skills-index.yaml` |
+| `.agents/skills/` | AI-assistant / workflow skills | Claude Code (via `.claude/skills/` pointers) | `.agents/context/skills-index.yaml` |
 | `skills/` | operational / runtime skills | dashboard API (`core.discoverSkills()` scans `skills/**/SKILL.md`) | served at `/api/skills` |
 
 `skills-index.yaml` is the human/AI summary index for the `.agents/skills/` tree.
 
-### `.agents/skills/` (Claude Code SoT — `.claude/skills/` symlinks point here)
+### `.agents/skills/` (Claude Code SoT — `.claude/skills/` pointers point here)
 
 | Skill | Description | Management |
 |-------|-------------|------------|
@@ -149,6 +151,9 @@ There are **two skill trees** on disk, with different SoTs and consumers:
 | `patent-pipeline` | AI patent discovery, evaluation, and filing | Manual |
 | `copyright-reg` | Copyright registration document generation | Manual |
 | `weekly-report` | Weekly work report from git commits | Manual |
+| `finetune-persona` | Prepare persona fine-tune assets | Manual |
+| `secret-vault` | Open/edit/re-lock the age-encrypted secret vault | Manual |
+| `youtube-upload` | Upload videos via YouTube Data API v3 (captions, thumbnail) | Manual |
 
 ### `skills/` (operational tree — scanned by the dashboard API)
 
@@ -214,12 +219,12 @@ Covers: repo types (`workspace_adk` / `runtime_library` / `app_os`) · mirror pa
 .claude/                    # Claude Code configuration
 ├── settings.json           # Hooks registration
 ├── hooks/                  # PostToolUse hooks
-└── skills/                 # Symlinks → .agents/skills/
+└── skills/                 # Pointers → .agents/skills/
 ```
 
 ## Core Principles
 
-1. **1:1 Mirroring**: `.users/` mirrors `.agents/` structure exactly
+1. **Partial mirroring**: `.users/` mirrors the human-facing core documents from `.agents/` (not a full copy — some things, like skills, exist only under `.agents/`)
 2. **SoT**: `.agents/context/agents-rules.json` is the single source of truth
 3. **Response language**: Contributor's preferred language
 

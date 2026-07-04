@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/risk-matrix.schema.json",
+  "title": "Risk Matrix",
+  "description": "RBAC-Tiered Ops 위험 등급 분류 정책 SoT. 본 스키마는 YAML 톱레벨 필드를 검증. 실 규칙은 MACHINE block(라인지향 코멘트형식)으로 표현되며 host adapter(예: naia-business-adk/templates/service-ops/lib/_risk.sh)가 파싱·집행. 본 spec 은 advisory + defense-in-depth — 실 안전망은 사용자 + 호스트 훅.",
+  "type": "object",
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "스키마 버전. 현재 = 1."
+    },
+    "machine": {
+      "type": "string",
+      "description": "line-oriented MACHINE block (literal scalar) — host adapter (lib/_risk.sh 등)가 줄단위 파싱. TIER|name|ceiling_role|gate / RANK|role|n / META|key|value / RULE|id|owner|env|change|blast|tier (first-match, * = any, default_failclosed 필수)."
+    }
+  },
+  "additionalProperties": true,
+  "x-machine-block": {
+    "description": "본 파일은 YAML 코멘트로 표현된 MACHINE block을 포함한다. host adapter (lib/_risk.sh 등)가 파싱. 형식:",
+    "axes": {
+      "owner": ["client", "shared"],
+      "env": ["personal", "dev", "staging", "prod"],
+      "change": ["content", "code", "deploy", "infra", "destructive"],
+      "blast": ["1", "gt1"],
+      "actor": ["ai", "human"]
+    },
+    "directives": {
+      "TIER": "name|ceiling_role|gate — gate ∈ {none, confirm, confirm_notice, hard_confirm, out_of_band}",
+      "RANK": "role|n — role precedence ordering",
+      "META": "key|value — config (ai_max_tier, require_audit_above, breakglass_marker_env, review_min, review_self_ok_max_tier, review_independent_kinds)",
+      "RULE": "id|owner|env|change|blast|tier — first match wins, * = any, default_failclosed 필수"
+    },
+    "honest_framing": "본 매트릭스 = advisory. risk_gate 는 호스트 정책 + 사용자 통제와 함께 *방어심층* 의 한 층. 강제 차단 모델 아님. (Track A v3 정직 종착선언, codex/opencode 8라운드 합의.)",
+    "reference_impl": "projects/naia-business-adk/templates/service-ops/policy/risk-matrix.yaml + lib/_risk.sh (9 스위트 PASS)"
+  }
+}

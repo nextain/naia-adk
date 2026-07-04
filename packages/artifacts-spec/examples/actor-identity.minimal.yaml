@@ -1,0 +1,24 @@
+# actor-identity.yaml — 최소 예제 (24h 야간 T-B 세션 환산)
+
+version: 1
+actor_class: ai
+tgt_role: R-senior
+
+identity_sources:
+  - kind: id-un
+    weight: 30
+    fail_mode: warn-and-continue
+  - kind: host-marker
+    path: /run/user/1000/naia/host-marker
+    weight: 60
+    fail_mode: warn-and-continue
+  - kind: roles-adapter
+    path: projects/onmam-dev/.agents/context/agents-rules.json
+    weight: 10
+    fail_mode: warn-and-continue
+
+breakglass:
+  marker_path: /run/user/1000/naia/breakglass-marker
+  scope: "risk-matrix R3 까지 일시 승격, 사용자 명시 발급 한정"
+  expiry: "2026-05-21T00:00:00Z"
+  nonce_consumed_path: .naia/.run/bg-consumed

@@ -1,0 +1,19 @@
+# persona GGUF ollama 배포 설정
+# ⚠️ 핵심: convert_hf_to_gguf 가 Qwen3 채팅 템플릿을 GGUF에 안 박는 경우가 있어
+#    ollama가 raw 프롬프트만 던져 (특히 8B+) 반복 붕괴한다. TEMPLATE를 명시해야 정상.
+FROM ./out/<persona>.gguf
+TEMPLATE """{{ if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+"""
+PARAMETER stop "<|im_end|>"
+PARAMETER temperature 0.85
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.2
+PARAMETER num_predict 200

@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/audit-log.schema.json",
+  "title": "Audit Log Entry",
+  "description": "append-only audit log 의 한 줄 (JSONL). artifact lifecycle 이벤트·게이트 결정·세션 활동을 기록. immutable trail — 회상·분석·정직 종착선언의 증거. 강제 차단 도구 아님(advisory + 사후 추적).",
+  "type": "object",
+  "required": ["ts", "actor", "event", "subject"],
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC. 단조 증가 권장."
+    },
+    "actor": {
+      "type": "string",
+      "description": "이벤트 주체 — ownership-table.owners[].id 또는 자유 식별자. AI 세션은 자기 session_id."
+    },
+    "event": {
+      "enum": [
+        "artifact.read",
+        "artifact.write",
+        "artifact.delete",
+        "session.start",
+        "session.end",
+        "session.crash",
+        "lock.acquire",
+        "lock.release",
+        "lock.contend",
+        "gate.pass",
+        "gate.deny",
+        "review.request",
+        "review.verdict",
+        "claim.submit",
+        "claim.downgrade",
+        "breakglass.use",
+        "cost.charge"
+      ],
+      "description": "이벤트 타입. 본 enum 은 v0 — 필요 시 보강(어제부터 진화)."
+    },
+    "subject": {
+      "type": "string",
+      "description": "이벤트 대상 (자원 패턴·session id·gate id 등)."
+    },
+    "outcome": {
+      "enum": ["ok", "denied", "error", "n/a"],
+      "default": "ok"
+    },
+    "tier": {
+      "type": "string",
+      "description": "선택. risk-matrix tier 가 적용된 경우 (R0..R5)."
+    },
+    "details": {
+      "type": "object",
+      "description": "이벤트별 자유 메타데이터. 시크릿 값 금지 (set 여부·길이만)."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "선택. 세션 컨텍스트에서 발생한 이벤트면 session-manifest id."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "선택. 연관 이벤트 묶음 (예: review.request + review.verdict + claim.downgrade 한 라운드)."
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "purpose": "사후 추적 (사용자 회상·정직 증거·디버깅). 사전 차단 모델 아님.",
+    "append-only": "기존 줄 수정 = 정합 위반. 정정 = 새 줄 (`event: artifact.write` + `details.corrects: <prior-ts>`).",
+    "secret-policy": "시크릿 값 금지. 'set: true, length: 64' 같은 메타만."
+  }
+}

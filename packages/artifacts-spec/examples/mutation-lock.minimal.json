@@ -1,0 +1,8 @@
+{
+  "holder": "dev-side-session",
+  "claimed_at": "2026-05-20T01:30:00Z",
+  "heartbeat": "2026-05-20T01:45:00Z",
+  "scope": "worktree:www.onmam.com-branches/{luke,dev,main} + origin push",
+  "protocol": "비보유 세션 = 읽기전용/검증·divergence STOP·force-push·blind-merge·reset --hard 타브랜치 금지. heartbeat 30분 stale 시 reclaim 가능.",
+  "stale_after_seconds": 1800
+}
