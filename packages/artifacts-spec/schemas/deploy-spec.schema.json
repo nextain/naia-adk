@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/deploy-spec.schema.json",
+  "title": "Deploy Spec",
+  "description": "배포 환경별 명세 — verify URL, snapshot 정책, rollback 경로. 실 배포 enforce 는 host 훅(deploy-guard/prod-access). 본 spec 은 advisory + 계획 input.",
+  "type": "object",
+  "required": ["version", "envs"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "envs": {
+      "type": "object",
+      "description": "환경별(dev/staging/prod 등) 배포 설정.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["target"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "배포 대상 식별자 (예: 'onmam-dev', 'onmam-web', 'replica-comixv')."
+          },
+          "branch": { "type": "string", "description": "git 브랜치 (예: 'main', 'dev', 'luke')." },
+          "method": {
+            "enum": ["git-pull", "git-archive", "rsync", "container-restart"],
+            "description": "배포 방식. git-pull 권장 (rsync 제거 = #218 목표)."
+          },
+          "verify": {
+            "type": "object",
+            "properties": {
+              "url": { "type": "string", "format": "uri" },
+              "expect_status": { "type": "array", "items": { "type": "integer" }, "default": [200] },
+              "timeout_sec": { "type": "integer", "default": 15 }
+            }
+          },
+          "snapshot": {
+            "type": "object",
+            "description": "배포 전 스냅샷 정책.",
+            "properties": {
+              "kind": { "enum": ["gcp-disk", "git-tag", "tar", "none"] },
+              "required": { "type": "boolean", "default": false }
+            }
+          },
+          "rollback": {
+            "type": "object",
+            "properties": {
+              "method": { "enum": ["snapshot-restore", "git-revert", "manual"] },
+              "playbook_ref": { "type": "string", "description": "rollback runbook 위치." }
+            }
+          },
+          "risk_tier": {
+            "type": "string",
+            "description": "risk-matrix tier (예: 'R0' dev, 'R3' staging, 'R4' prod-shared)."
+          },
+          "human_required": {
+            "type": "boolean",
+            "description": "사람 실행 강제 여부 (RBAC 정합). prod 는 일반적으로 true.",
+            "default": false
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "enforce_locus": "실 enforce = host 훅(deploy-guard/prod-access) + 사람 RBAC. 본 spec = 계획·체크리스트.",
+    "rollback_first_class": "rollback 경로 미정의 = 위험. 본 spec 의 모든 env 는 rollback 명시 권장(특히 prod)."
+  }
+}

@@ -1,0 +1,19 @@
+# breakglass-marker.yaml — 최소 예제
+
+version: 1
+issuer: luke
+
+scope:
+  max_tier: R3
+  ops:
+    - "naia-business-adk staging deploy"
+    - "onmam-dev cache bust"
+  duration_seconds: 3600
+
+expiry: "2026-05-20T15:00:00Z"
+nonce: "bg-2026-05-20-1430-7f3a9c"
+consumed_marker_path: ".naia/.run/bg-consumed/bg-2026-05-20-1430-7f3a9c"
+issued_at: "2026-05-20T14:00:00Z"
+
+reason: |
+  staging 긴급 배포 검증 1회. luke 명시 발급. R3 까지 일시 승격.

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/actor-identity.schema.json",
+  "title": "Actor Identity",
+  "description": "actor 정체 spec — NAIA_ACTOR_CLASS, role 매핑, 신뢰원천. Track A v3 결론 준수: env-신뢰 제거(env override 가능 = 신뢰근원 안 됨), 신원 = host-marker + 적합한 adapter ROLES + 사용자 발급 break-glass. advisory + mitigation, 강제 차단 모델 아님.",
+  "type": "object",
+  "required": ["version", "actor_class", "identity_sources"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "actor_class": {
+      "enum": ["ai", "human", "automated"],
+      "description": "NAIA_ACTOR_CLASS — 호스트 marker 기반(env 신뢰 X)."
+    },
+    "tgt_role": {
+      "type": "string",
+      "description": "선택. risk-matrix RANK 매핑 (R-dev / R-senior / R-lead 등). actor_class=ai 의 경우 ROLES adapter 가 ceiling 결정."
+    },
+    "identity_sources": {
+      "type": "array",
+      "description": "신원 확인 출처 — 우선순위 순. 모든 출처가 일치할 때만 high-confidence. 미달 = fail-closed (= 다음 단계 차단 아님, *경고 + audit + R5 으로 보수적 분류*).",
+      "items": {
+        "type": "object",
+        "required": ["kind"],
+        "properties": {
+          "kind": { "enum": ["id-un", "host-marker", "roles-adapter", "breakglass-marker", "self-declared"] },
+          "path": { "type": "string", "description": "출처 경로. host marker 는 절대 경로(예: /run/user/.../naia/host-marker), roles-adapter 는 workspace-relative 경로(예: projects/<name>/.agents/context/agents-rules.json) 모두 허용." },
+          "weight": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "fail_mode": { "enum": ["block", "warn-and-continue", "ignore"], "default": "warn-and-continue" }
+        }
+      }
+    },
+    "breakglass": {
+      "type": "object",
+      "description": "비상 승격 — 사용자 발급 토큰만. AI 자율 사용 절대 불허, audit 강제.",
+      "properties": {
+        "marker_path": { "type": "string", "description": "breakglass-marker 파일 위치 (NAIA_BREAKGLASS_MARKER env 가 가리키는 경로)." },
+        "scope": { "type": "string", "description": "토큰이 승격하는 범위 (예: 'risk-matrix R3 까지', '특정 명령 1회')." },
+        "expiry": { "type": "string", "format": "date-time" },
+        "nonce_consumed_path": { "type": "string", "description": "1회성 토큰의 소비 표시 — atomic mkdir 패턴." }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "env_distrust": "환경변수는 호출자가 조작 가능 = 신뢰근원 아님 (Track A v3 정직 종착 + codex 8라운드 결론).",
+    "fail-closed_meaning": "여기서 fail-closed = '경고 + 보수적 분류'. 강제 차단 모델 아님. 실 차단 = 호스트 훅 + 사용자.",
+    "marker_responsibility": "marker 무결성 = 하네스/사용자 책임 — 본 spec 의 advisory check 가 그 무결성을 보장하지 않음."
+  }
+}

@@ -1,0 +1,242 @@
+# Research-Driven Development (RDD) Cycle
+# Copyright 2026 Nextain Inc. All rights reserved.
+#
+# Research counterpart of Issue-Driven Development (IDD).
+#
+# Key distinction from IDD:
+#   IDD locks the PLAN (design-doc-guard forbids changing the design mid-build).
+#   RESEARCH requires the plan to change as results come in — so RDD does NOT lock the plan.
+#   Instead RDD locks the GOAL (Charter) and forces every plan change / experiment to prove
+#   it is still aligned with the invariant goal.
+#
+#   "연구개발은 가설이 있고, 해보고 결과에 따라 계획을 바꿀 수도 있는데, 목표에서 벗어나면
+#    안 되니 반드시 목표와 얼라인 되게 해야 한다." (user, 2026-07-02)
+#
+# Scope: research / R&D work where the outcome is unknown and the method evolves with results
+#   (model/algorithm research, capability probing, "does approach X work?"). NOT for feature
+#   development (use issue-driven-development.yaml) or simple changes (development-cycle.yaml).
+
+version: 1
+name: research-driven-development
+
+scope:
+  applies_to: "R&D where the answer is unknown and the plan must evolve with results"
+  includes:
+    - "Capability research ('can approach X achieve goal Y?')"
+    - "Algorithm/model experiments with unknown outcome"
+    - "Multi-cycle exploration where each result reshapes the next step"
+  unit: "Research program (one Charter, many experiments)"
+  not_for: "Feature development (issue-driven-development.yaml) / simple changes (development-cycle.yaml)"
+
+# ─── The drift failure modes this workflow exists to stop ─────
+# (Observed empirically. Each principle + gate below maps to one of these.)
+drift_failure_modes:
+  method_substitution: "Swap the planned hard method for an easy adjacent task; an impressive number hides the swap."
+  result_chasing_pivot: "A good metric → abandon the hypothesis → wander to a new, easier direction."
+  goal_amnesia: "Lose the invariant goal; follow the last result instead of the Charter."
+  metric_bait: "Treat an aggregate number (0.99, 7/7) as success without checking it tests the hypothesis or serves the goal."
+  in_loop_rationalization: "Judge one's own work inside the loop; only admit drift when the user catches it."
+  insight_amnesia: "Fail to recall prior insights → re-discover and re-run the same experiment / re-learn the same lesson."
+
+# ─── Two modes (anti-bureaucratization) ──────────────────────
+# Adversarial review: pre-registering EVERY experiment kills cheap exploration and
+# spawns empty pre-registrations. So gate on BELIEF-CHANGING actions, not on "ran an experiment".
+modes:
+  EXPLORE:
+    when: "Cheap look-first probing (observe-before-build). No pre-registration required."
+    freedom: "Run whatever, fast."
+    quarantine:
+      - "Outputs are QUARANTINED: cannot be cited as evidence in the Insight Ledger."
+      - "Cannot mark a Charter sub-goal advanced/refuted."
+      - "Cannot trigger a pivot / next-step decision."
+    promote: "To make an EXPLORE finding count, re-run it under CONFIRM (pre-register + audit)."
+    note: "Experiment scripts named exp*.py are treated as CONFIRM (guarded). Explore with scratch/ or non-exp* names."
+  CONFIRM:
+    when: "Any experiment whose result will change belief or the plan."
+    requires: "Full pre-registration + out-of-loop align-audit PASS (enforced by rdd-experiment-guard hook)."
+    only_these: "Only CONFIRM results update the Insight Ledger, advance/refute Charter sub-goals, or drive decisions."
+
+# ─── Principles ───────────────────────────────────────────────
+principles:
+  goal_invariant_plan_mutable:
+    rule: "The Charter (goal + success definition + constraints) is invariant; the plan/hypotheses evolve freely with results."
+    anti_pattern: "Changing the goal to fit a nice result, OR refusing to change a falsified plan."
+
+  no_method_substitution:
+    rule: "An experiment's inputs/method MUST match its pre-registered method contract. Swapping the hard planned method for an easier one is drift even if the number is good."
+    anti_pattern: "Plan says 'invert VoxCPM2 audio'; you invert hand-typed formant numbers instead and report 7/7."
+
+  pre_register_gate:
+    rule: "Decide what result CONFIRMS vs REFUTES the hypothesis BEFORE running the experiment. No post-hoc goalpost moving."
+    anti_pattern: "Run first, then declare whatever number came out as 'success'."
+
+  decision_from_map:
+    rule: "The next action after a result MUST come from the pre-registered decision map (pass→X, fail→Y). New directions require a new Hypothesis entry that passes Align-Audit — not an ad-hoc pivot."
+    anti_pattern: "Good number → immediately chase a new idea not derived from the Charter."
+
+  recall_before_decide:
+    rule: "Before pre-registering an experiment or deciding a next step, search the Insight Ledger for similar prior work/insights and reconcile ('did I do this before? what did I learn? why is it different now?')."
+    anti_pattern: "Re-running an experiment (or re-learning a lesson) already recorded."
+
+  metric_is_not_truth:
+    rule: "Aggregate metrics are necessary, not sufficient. Prefer falsification; a metric that does not track the goal (e.g. formant-match ≠ perceived Korean) is not success. Final judgment often needs an external judge (human, held-out, second ASR)."
+    anti_pattern: "Declaring victory on an in-distribution / self-comparison number (self-copy bubble)."
+
+  out_of_loop_audit:
+    rule: "In-loop self-judgment is not trusted. Alignment + recall are checked out-of-loop (fresh context / deterministic file checks), before acting."
+    anti_pattern: "Trusting your own mid-loop 'this is still aligned' judgment."
+
+# ─── Artifacts (the state this workflow reads/writes) ─────────
+artifacts:
+  charter:
+    file: ".agents/research/<program>/charter.yaml"
+    mutability: "INVARIANT — changed only via explicit user gate"
+    fields: [goal, success_definition, constraints, out_of_scope, non_goals]
+    role: "The north star. Every experiment must trace to a charter sub-goal."
+  hypothesis_ledger:
+    file: ".agents/research/<program>/hypothesis-ledger.json"   # JSON — machine-enforced (hook + rdd-audit runner parse it)
+    mutability: "MUTABLE — append/evolve as results come in"
+    entry_fields:
+      - "id"
+      - "hypothesis: falsifiable if/then"
+      - "charter_subgoal: which goal question this tests (must reference charter)"
+      - "method_contract: exact inputs/method (anti-substitution — e.g. input=VoxCPM2-generated audio file, NOT hand-typed numbers)"
+      - "gate: pre-registered CONFIRM vs REFUTE criteria (set BEFORE running)"
+      - "decision_map: pass→<next>, fail→<fallback>"
+      - "recall_refs: prior insight-ledger entries reconciled (or 'none found')"
+      - "status: registered | audited | run | recorded | decided"
+  insight_ledger:
+    file: ".agents/research/<program>/insight-ledger.md"
+    mutability: "APPEND-ONLY — never edited or deleted"
+    entry_fields: [date, experiment_id, what_was_done, result_vs_gate, insight, tags]
+    role: "Institutional memory. Searched at recall. Prevents re-discovery."
+
+# ─── Phases ───────────────────────────────────────────────────
+phases:
+
+  charter:
+    description: "Define the invariant research goal"
+    gate: true
+    steps:
+      - "State GOAL (observable end state), SUCCESS_DEFINITION (what proves the program done), CONSTRAINTS (hard limits), NON_GOALS."
+      - "Write charter.yaml. Present to user."
+    rules:
+      - "Charter changes ONLY via explicit user gate. Experiments cannot alter it."
+    output: "User-confirmed Charter"
+
+  hypothesis:
+    description: "State a falsifiable hypothesis tied to a Charter sub-goal"
+    gate: true
+    steps:
+      - "Write hypothesis as if/then, falsifiable."
+      - "Name which Charter sub-goal it advances (trace)."
+    output: "Registered hypothesis (status: registered)"
+
+  pre_register:
+    description: "Lock the method, gate, and decision map BEFORE running"
+    steps:
+      - "method_contract: the exact inputs/method (the anti-substitution contract)."
+      - "gate: what result CONFIRMS vs REFUTES (decided now, not after)."
+      - "decision_map: pass→<next step>, fail→<fallback> (both named now)."
+      - "RECALL: search insight-ledger for similar prior work; list recall_refs and reconcile (why is this not a repeat?)."
+      - "Write the hypothesis-ledger entry."
+    rules:
+      - "No 'we'll see what the number says' — gate must be falsifiable and pre-set."
+    output: "Pre-registered ledger entry (status: registered → to be audited)"
+
+  align_audit:
+    description: "OUT-OF-LOOP alignment + recall check — the teeth. Before running AND before deciding."
+    enforcement: "Fresh judgment (separate subagent) + deterministic file checks. NOT in-loop self-judgment."
+    steps:
+      - "Deterministic checks (mechanical): charter.yaml exists; ledger entry has method_contract + pre-registered gate + decision_map + recall_refs; entry references a real charter sub-goal."
+      - "Fresh-judgment checks (independent subagent given ONLY charter + ledger entry, not the AI's rationalization):"
+      - "  1. Does the experiment trace to the Charter goal?"
+      - "  2. Does the method_contract match the planned method (no substitution of hard→easy)?"
+      - "  3. Is the gate pre-registered (not post-hoc)?"
+      - "  4. (at decide-time) Is the next action in the decision_map?"
+      - "  5. Recall: are there prior insight-ledger entries that should change this? Were they reconciled?"
+      - "ANY fail → STOP. Re-anchor to Charter. Do not run / do not act."
+    output: "Audit PASS marker (required to proceed) OR stop+re-anchor"
+
+  experiment:
+    description: "Run the experiment — strictly per the method contract"
+    steps:
+      - "Execute exactly the method_contract inputs/method. Deviation = drift (re-register, re-audit)."
+    rules:
+      - "If the method must change mid-run → stop, amend ledger entry, re-audit. Never silently substitute."
+    output: "Raw result"
+
+  record:
+    description: "Append to the Insight Ledger (institutional memory)"
+    steps:
+      - "Append {date, experiment_id, what_was_done, result_vs_gate, insight, tags} to insight-ledger.md."
+      - "result_vs_gate states PASS/REFUTE against the PRE-REGISTERED gate (not a re-interpreted one)."
+    rules:
+      - "Append-only. Never edit/delete prior entries."
+      - "Record the insight even (especially) on failure — negative results are the point."
+    output: "Insight ledger updated"
+
+  adversarial_verify:
+    description: "For any positive result, attack it before believing it"
+    trigger: "result_vs_gate == PASS (or any 'it worked' claim)"
+    steps:
+      - "Run '/review-pass' (or fresh skeptic subagent) framed to REFUTE: is this metric-bait? method substitution? self-copy/in-distribution bubble? does it track the goal or just the metric?"
+      - "Require an external/held-out/second-judge check where the metric is perception-adjacent."
+    output: "Confirmed-or-demoted result"
+
+  decide:
+    description: "Choose the next step — from the decision map only"
+    steps:
+      - "Look up the pre-registered decision_map for this result."
+      - "Re-run align_audit (recall + alignment) on the chosen next step."
+      - "If the result suggests a direction NOT in the decision_map → that is a NEW hypothesis: register + audit it, do not pivot ad-hoc."
+    output: "Next step (audited)"
+
+  sync:
+    description: "Update Charter status, ledgers, lessons; present to user"
+    gate: true
+    steps:
+      - "Update Charter progress (sub-goals advanced/refuted)."
+      - "Ensure insight-ledger captured this cycle's lesson."
+      - "Present cycle summary to user."
+    output: "User-confirmed research state"
+
+# ─── Gates (user confirmation required) ──────────────────────
+gates:
+  - phase: charter
+    prompt: "Is this the invariant research goal + success definition + constraints?"
+  - phase: hypothesis
+    prompt: "This hypothesis (tied to charter sub-goal X). Proceed to pre-register?"
+  - phase: sync
+    prompt: "Here is the cycle result + ledger updates. Review before continuing."
+
+# ─── Iteration / termination ─────────────────────────────────
+iteration_rule:
+  description: "The research program continues (loop: hypothesis→...→decide) until the Charter success_definition is met OR the user ends it."
+  per_result: "Each result is PASS or REFUTE against its pre-registered gate; both are progress and both are recorded."
+
+# ─── Feedback loop ────────────────────────────────────────────
+insight_recall:
+  file: ".agents/research/<program>/insight-ledger.md"
+  read_at: ["pre_register", "decide"]
+  write_at: ["record", "immediately on any insight/correction"]
+  purpose: "Institutional memory — prevent re-discovery and re-learning. Recall BEFORE deciding."
+
+# ─── Enforcement note (see agents-rules.json + hooks) ─────────
+enforcement:
+  note: "Phases/gates are METHODOLOGY (prompt-level). The ONE deterministic tooth is a fail-CLOSED hook."
+  deterministic_teeth:
+    experiment_guard:
+      file: ".claude/hooks/rdd-experiment-guard.js → .agents/hooks/policies/experiment.js"
+      type: "PreToolUse/Bash, fail-CLOSED inside an RDD project (fail-OPEN if no .agents/research/)"
+      blocks: "running exp*.py unless (a) an OPEN ledger entry with method_contract+gate+decision_map+tags exists AND (b) a fresh align-audit stamp bound to the CURRENT ledger hash exists"
+      why_ledger_hash: "binding the stamp to ledger_hash means lowering the gate after auditing invalidates the stamp (anti post-hoc goalpost)"
+    align_audit_runner:
+      file: "scripts/rdd-audit.cjs"
+      independence: "OUT-OF-LOOP runner (NOT a skill the AI calls). It reads the ledger DIRECTLY (AI cannot curate audit input) and writes the stamp only if deterministic gates pass."
+      gates: "G1 field completeness · G2 charter_subgoal traces to charter · G3 decision_map has pass&fail · G4 tag-recall (prior insight sharing a tag must be referenced)"
+  honest_residual_attacks:
+    - "naming evasion: run experiment as non-exp* / import / REPL → hook's regex misses it. Mitigate: whitelist experiment naming convention; treat undeclared runs as drift."
+    - "self-serving ledger: AI can still write a favorable ledger and run the runner. Deterministic gates (G1-G4) force the discipline (fields, both branches, recall); semantic honesty of the hypothesis is LLM-judge advice only (P2, no block power)."
+  design_principle: "Reduce drift's PHYSICAL TRACES to syntactic invariants (fingerprint/timestamp/metric-key/tag-intersection) enforced by hook; the LLM audit is a hairline crack, not a load-bearing wall. (adversarial review, 2026-07-02)"
+  tests: "scripts/test-rdd-guard.cjs — mutation-probe 9/9 (5 block, 4 allow) + runner G2/G4."

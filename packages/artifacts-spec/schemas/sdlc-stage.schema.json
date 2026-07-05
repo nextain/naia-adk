@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/sdlc-stage.schema.json",
+  "title": "SDLC Stage Tracker",
+  "description": "per-feature SDLC 단계 추적: plan → code → review → merge → deploy → verify → operate. 단계 전환 = advisory 게이트(host 훅 또는 사람이 실 enforce).",
+  "type": "object",
+  "required": ["version", "feature_id", "current_stage"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "feature_id": {
+      "type": "string",
+      "description": "feature 식별자 (예: 'multi-session-supervisor', 'onmam-#218')."
+    },
+    "title": { "type": "string" },
+    "current_stage": {
+      "enum": ["plan", "code", "review", "merge", "deploy", "verify", "operate", "done", "blocked"]
+    },
+    "stages": {
+      "type": "object",
+      "description": "각 단계별 상태·산출·게이트.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "status": { "enum": ["pending", "in_progress", "complete", "skipped", "blocked"] },
+          "started_at": { "type": "string", "format": "date-time" },
+          "completed_at": { "type": "string", "format": "date-time" },
+          "outputs": { "type": "array", "items": { "type": "string" }, "description": "산출물 경로/URL 리스트." },
+          "gate": {
+            "type": "object",
+            "properties": {
+              "kind": { "enum": ["review", "test", "human-approval", "deploy-guard", "none"] },
+              "passed": { "type": "boolean" },
+              "evidence_ref": { "type": "string" }
+            }
+          },
+          "blocked_reason": { "type": "string" }
+        }
+      }
+    },
+    "issue_refs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "관련 GitHub 이슈 (예: 'nextain/naia-agent#43')."
+    },
+    "risk_tier": {
+      "type": "string",
+      "description": "feature 의 위험 등급 (risk-matrix). 영향 큰 stage 전환은 게이트 강화."
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "advisory": "stage 게이트 = advisory checklist. host 훅(예: deploy-guard) 과 사람 승인이 실 enforce 의 주체.",
+    "feature_first": "본 spec 은 *per-feature* tracker. 전체 프로젝트 leveling 아님."
+  }
+}

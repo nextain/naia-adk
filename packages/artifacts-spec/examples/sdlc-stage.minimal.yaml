@@ -1,0 +1,49 @@
+# sdlc-stage.yaml — 최소 예제 (naia-agent#43 multi-session-supervisor feature)
+
+version: 1
+feature_id: multi-session-supervisor
+title: "multi-session supervisor + capability boundaries (G1·G9·G10·G11)"
+
+current_stage: plan
+
+stages:
+  plan:
+    status: in_progress
+    started_at: "2026-05-20T09:00:00Z"
+    outputs:
+      - ".agents/progress/naia-os-workspace-multiagent-gap-2026-05-20-v2.md"
+      - ".agents/progress/naia-agent-philosophy-addition-proposal-2026-05-20-v2.md"
+    gate:
+      kind: review
+      passed: true
+      evidence_ref: "codex + opencode peer review (양 산출 보존)"
+
+  code:
+    status: pending
+    gate:
+      kind: review
+      passed: false
+
+  review:
+    status: pending
+
+  merge:
+    status: pending
+
+  deploy:
+    status: pending
+    gate:
+      kind: deploy-guard
+      passed: false
+
+  verify:
+    status: pending
+
+  operate:
+    status: pending
+
+issue_refs:
+  - "nextain/naia-agent#43"
+  - "nextain/naia-agent#42 (meta epic)"
+
+risk_tier: R3

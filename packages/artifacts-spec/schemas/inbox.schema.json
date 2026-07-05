@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/inbox.schema.json",
+  "title": "Session Inbox Entry",
+  "description": "세션 간 비동기 메시지 큐의 한 줄(JSONL). peer↔peer 통신 — 사용자 라우터 없이도 세션이 서로에게 메시지 전달. capability-profile 에 따라 읽기 제한.",
+  "type": "object",
+  "required": ["ts", "from", "to", "message"],
+  "properties": {
+    "ts": { "type": "string", "format": "date-time" },
+    "from": {
+      "type": "string",
+      "description": "발신 세션 id (session-manifest.id) 또는 'user' / 'system'."
+    },
+    "to": {
+      "type": "string",
+      "description": "수신 세션 id. '*' = 브로드캐스트 (capability 허용 시)."
+    },
+    "kind": {
+      "enum": ["request", "response", "notify", "ack", "broadcast"],
+      "default": "notify"
+    },
+    "message": {
+      "type": "string",
+      "description": "메시지 본문 (사람 읽을 수 있는 자연어 또는 구조화 텍스트)."
+    },
+    "ref": {
+      "type": "string",
+      "description": "참조 (이슈/PR/파일 경로). 선택."
+    },
+    "trace_id": {
+      "type": "string",
+      "description": "request/response 페어링용. 선택."
+    },
+    "priority": {
+      "enum": ["low", "normal", "high"],
+      "default": "normal"
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "append_only": "수정 = 새 줄 (ack/correction 등). 기존 줄 변경 금지.",
+    "capability_gated": "수신 세션의 capability-profile 이 발신을 거부하면 advisory 경고 + audit. 강제 차단 아님."
+  }
+}

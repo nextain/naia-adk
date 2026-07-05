@@ -1,6 +1,6 @@
 <!-- Copyright 2026 Nextain Inc. All rights reserved. -->
 
-# Naia OS 기여 가이드
+# Naia ADK 기여 가이드
 
 `.agents/context/contributing.yaml`에 대한 사람이 읽을 수 있는 가이드입니다.
 
