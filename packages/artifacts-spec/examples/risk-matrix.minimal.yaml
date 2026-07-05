@@ -1,0 +1,48 @@
+# risk-matrix.yaml — 최소 예제 (artifacts-spec MVP, v0.0.2 — YAML valid)
+#
+# Reference impl(전체): projects/naia-business-adk/templates/service-ops/policy/risk-matrix.yaml
+# 본 minimal 예제 = 새 adapter 부트스트랩용 기본 set. 실 서비스는 adapter 의 targets.conf 와 함께 보강.
+#
+# 정직 framing: 본 매트릭스 = advisory + defense-in-depth. 실 안전망 = 사용자 + 호스트 훅.
+#
+# 본 예제는 codex peer-review (round 1) 의 YAML 무효 지적 [codex HIGH 1] 반영:
+# MACHINE 라인 블록을 literal scalar (`machine: |`) 로 래핑해 YAML 정합 확보.
+# host adapter (lib/_risk.sh 등) 는 `machine` 키의 문자열 값을 줄단위 파싱 (기존 ^TIER|/^RULE| grep 변경 없음).
+
+version: 1
+
+machine: |
+  # TIER|name|ceiling_role|gate
+  TIER|R0|R-dev|none
+  TIER|R1|R-dev|none
+  TIER|R2|R-senior|confirm
+  TIER|R3|R-senior|confirm_notice
+  TIER|R4|R-lead|hard_confirm
+  TIER|R5|R-lead+approver|out_of_band
+
+  # RANK|role|n
+  RANK|R-dev|1
+  RANK|R-senior|2
+  RANK|R-lead|3
+  RANK|R-lead+approver|4
+
+  # META|key|value
+  META|ai_max_tier|R0
+  META|require_audit_above|R1
+  META|breakglass_marker_env|NAIA_BREAKGLASS_MARKER
+  META|review_min|2
+  META|review_self_ok_max_tier|R1
+  META|review_independent_kinds|cli,session,human
+
+  # RULE|id|owner|env|change|blast|tier   (first match wins; * = any; 마지막 = fail-closed)
+  RULE|destructive|*|*|destructive|*|R5
+  RULE|shared_prod|shared|prod|*|*|R4
+  RULE|prod_infra|*|prod|infra|*|R4
+  RULE|prod_blast_multi|*|prod|*|gt1|R4
+  RULE|staging_write|*|staging|*|*|R3
+  RULE|prod_client_content|client|prod|content|1|R2
+  RULE|prod_client_codedeploy|client|prod|*|*|R3
+  RULE|dev_deploy|*|dev|deploy|*|R1
+  RULE|devsafe_personal|*|personal|*|*|R0
+  RULE|devsafe_dev|*|dev|*|*|R0
+  RULE|default_failclosed|*|*|*|*|R5

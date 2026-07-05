@@ -1,0 +1,52 @@
+# deploy-spec.yaml — 최소 예제 (24h onmam 배포파이프라인 환산)
+
+version: 1
+
+envs:
+  dev:
+    target: onmam-dev
+    branch: dev
+    method: git-archive
+    verify:
+      url: https://www.onmampick.org
+      expect_status: [200, 301, 302]
+    snapshot:
+      kind: tar
+      required: false
+    rollback:
+      method: snapshot-restore
+      playbook_ref: docs/runbook/dev-rollback.md
+    risk_tier: R1
+    human_required: false
+
+  staging:
+    target: onmam-dev
+    branch: main
+    method: git-pull
+    verify:
+      url: https://www.onmam.net
+      expect_status: [200]
+    snapshot:
+      kind: tar
+      required: true
+    rollback:
+      method: snapshot-restore
+      playbook_ref: docs/runbook/staging-rollback.md
+    risk_tier: R3
+    human_required: true
+
+  prod:
+    target: onmam-web
+    branch: main
+    method: git-pull
+    verify:
+      url: https://www.onmam.com
+      expect_status: [200]
+    snapshot:
+      kind: gcp-disk
+      required: true
+    rollback:
+      method: snapshot-restore
+      playbook_ref: docs/runbook/prod-rollback.md
+    risk_tier: R4
+    human_required: true

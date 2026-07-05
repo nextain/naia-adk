@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/mutation-lock.schema.json",
+  "title": "Mutation Lock",
+  "description": "runtime control-state — 자원 변경 직렬화 marker. 같은 사용자 N 세션의 공유 자원(워크트리·origin·서버)에 동시 mutate 충돌 방지. atomic test-and-set(noclobber) 패턴 권장. ephemeral — 세션·작업 종속.",
+  "type": "object",
+  "required": ["holder", "claimed_at"],
+  "properties": {
+    "holder": {
+      "type": "string",
+      "description": "락 보유자 식별자 (session-manifest.id 또는 사람 이름)."
+    },
+    "claimed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "최초 claim 시각."
+    },
+    "heartbeat": {
+      "type": "string",
+      "format": "date-time",
+      "description": "보유자가 살아있음을 갱신. 정해진 임계(예: 30분) 초과 시 다른 세션이 reclaim 가능."
+    },
+    "scope": {
+      "type": "string",
+      "description": "락이 직렬화하는 자원 범위 (예: 'worktree:luke·dev·main + origin', 'onmam-dev:opt/onmam/legacy')."
+    },
+    "protocol": {
+      "type": "string",
+      "description": "비-보유 세션이 따라야 할 프로토콜 한 줄 (예: '비보유 = 읽기전용/검증·divergence STOP·force-push 금지')."
+    },
+    "stale_after_seconds": {
+      "type": "integer",
+      "minimum": 60,
+      "default": 1800,
+      "description": "heartbeat 미갱신 시 stale 판정 임계. 다른 세션이 reclaim 가능."
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "control_state": "본 파일 = runtime control-state (declarative spec 과 다른 lifecycle). git-tracked 아님, 세션 종속.",
+    "advisory_lock": "같은 사용자 셸 권한자는 락을 무시할 수 있음. advisory + audit, 강제 잠금 아님.",
+    "atomic_create": "원자 생성 = `set -o noclobber; > lockfile` 또는 `mkdir lockdir` 패턴. 첫 writer 승."
+  }
+}

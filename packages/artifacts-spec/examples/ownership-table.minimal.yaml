@@ -1,0 +1,57 @@
+# ownership-table.yaml — 최소 예제
+# 24h onmam 야간실험을 ownership-table 로 환산한 형태 (T-A + T-B + dev-side 세션 협업).
+
+version: 1
+
+owners:
+  - id: luke
+    kind: human
+    role: R-lead
+    notes: "primary user. 모든 자원의 ultimate owner."
+  - id: T-A-service-ops
+    kind: ai-session
+    role: R-senior
+    notes: "service-ops 프레임 빌드 (naia-business-adk)"
+  - id: T-B-prod-investigation
+    kind: ai-session
+    role: R-senior
+    notes: "prod 조사·계획·spec 공급 (workspace 분석)"
+  - id: dev-side-session
+    kind: ai-session
+    role: R-senior
+    notes: "워크트리·deploy 운영 오너 (#219 deploy-git.sh #221 푸시)"
+  - id: shared
+    kind: automated
+    notes: "공유 자원 마커 — 특정 owner 없이 N 세션 협업 (sync_gate 로만 조정)"
+
+resources:
+  - pattern: "projects/naia-business-adk/templates/service-ops/**"
+    owner: T-A-service-ops
+    capabilities:
+      T-B-prod-investigation: [read]
+      luke: [read, write]
+    notes: "Track A 프레임 전용 영역"
+
+  - pattern: "projects/onmam-dev/scripts/dev-targets.conf"
+    owner: T-A-service-ops
+    capabilities:
+      T-B-prod-investigation: [read]
+      dev-side-session: [read]
+      luke: [read, write]
+    sync_gate: "구조 변경은 Track A 경유, adapter 값은 dev-side 가 자체 conf 에서 조정"
+
+  - pattern: "www.onmam.com-branches/{luke,dev,main}"
+    owner: dev-side-session
+    capabilities:
+      T-B-prod-investigation: [read]
+      T-A-service-ops: []
+      luke: [read, write, execute]
+    sync_gate: "단일 직렬 오너 mutate (다중세션 병렬 git mutate 금지)"
+
+  - pattern: ".agents/progress/onmam-sot.md"
+    owner: shared
+    capabilities:
+      T-A-service-ops: [read, write]
+      T-B-prod-investigation: [read, write]
+      luke: [read, write]
+    sync_gate: "수정 시 이 표·dual-track-checklist 에 선공지 후 단독 편집"

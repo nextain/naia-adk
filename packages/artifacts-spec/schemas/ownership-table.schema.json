@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/ownership-table.schema.json",
+  "title": "Ownership Table",
+  "description": "자원·세션·역할 매핑 표. 누가 무엇을 mutate/read 할 수 있는지 advisory 명세. 강제 차단 모델 아님 — 실 안전망은 사용자 + 호스트 훅. Track A v3 정직 종착선언 준수.",
+  "type": "object",
+  "required": ["version", "owners", "resources"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "owners": {
+      "type": "array",
+      "description": "참여 actor 정의 (사람 + AI 세션). 단일 사용자 모델에서 'owner' = 사용자 본인의 한 역할/세션, multi-user 격리 의미 아님.",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind"],
+        "properties": {
+          "id": { "type": "string", "description": "고유 식별자 (예: 'luke', 'session-coder-1', 'reviewer-codex')" },
+          "kind": { "enum": ["human", "ai-session", "automated"] },
+          "role": { "type": "string", "description": "선택. risk-matrix RANK 매핑 (R-dev / R-senior / R-lead 등)" },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "description": "자원(파일·디렉터리·서비스·외부 API 등) 별 owner·capabilities 표.",
+      "items": {
+        "type": "object",
+        "required": ["pattern", "owner"],
+        "properties": {
+          "pattern": { "type": "string", "description": "자원 식별 패턴 (글롭 또는 URL 또는 논리 이름)" },
+          "owner": { "type": "string", "description": "owners[].id 참조" },
+          "capabilities": {
+            "type": "object",
+            "description": "다른 owner 가 가질 수 있는 권한 (advisory). 명시되지 않은 owner = 기본 read-only (fail-closed 의미 아님 — UI/log 경고 수준).",
+            "additionalProperties": {
+              "type": "array",
+              "items": { "enum": ["read", "write", "delete", "execute", "subscribe"] }
+            }
+          },
+          "sync_gate": { "type": "string", "description": "변경 시 거쳐야 할 동기 게이트 설명 (자유서식)" },
+          "notes": { "type": "string" }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "purpose": "협업·조정 모델 — 같은 사용자 안에서 N 세션이 서로 망치지 않게 하는 운영적 가드레일.",
+    "coordination_scope": "같은 사용자 셸 권한 내 운영적 가드레일. advisory + audit. 실 통제 = 호스트 훅 + 사용자."
+  }
+}

@@ -2,379 +2,221 @@
 
 # Naia ADK
 
-**AI 협업 작업을 위한 워크스페이스 스캐폴드 + 거버넌스 베이스라인.**
+**AI 코딩 에이전트가 일할 작업 공간을, 미리 정돈해 둔 스캐폴드.**
 
-AI 코딩 도구(opencode, Claude Code, Codex, Naia OS)를 위한 구조화된 워크스페이스 스캐폴드와, 그것을 관리하는 내장 대시보드를 제공하는 오픈소스 프레임워크입니다.
+Claude Code나 Codex 같은 AI 코딩 도구를 쓰다 보면, 도구마다 규칙 파일 위치도 다르고
+"이 문서는 공개해도 되는지", "스킬은 어디에 두는지"가 제각각입니다. Naia ADK는 그 뼈대를
+미리 깔아 둔 워크스페이스입니다. 새 노트북에 개발 환경을 세팅하듯, AI 에이전트에게도 정돈된
+책상을 먼저 내주는 셈입니다. 여기에 워크스페이스 상태를 눈으로 확인할 수 있는 대시보드가 함께
+들어 있습니다.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-## Naia ADK란?
+## 5분 만에 띄워보기
 
-Naia ADK는 **워크스페이스 스캐폴드**입니다 — AI 코딩 에이전트가 작업 환경으로 사용하는, 사전 구성된 디렉터리 구조·스킬·컨텍스트 파일·데이터 계층의 묶음입니다. 또한 워크스페이스 자체를 모니터링하고 설정하는 **대시보드**를 포함합니다.
+**Node 22 이상, pnpm 9 이상**이 필요합니다.
 
-동시에 1인 AI 협업을 위한 **최소 거버넌스 베이스라인**이기도 합니다:
-
-- `read`, `write`, `execute`, `publish`를 서로 다른 관심사로 분리합니다.
-- AI 도구에 공개 등급과 승인 게이트 액션을 위한 공통 어휘를 제공합니다.
-- 워크스페이스가 팀이나 회사 규모로 커지기 전에 컨텍스트 규율을 명문화할 공통 장소를 제공합니다.
-
-```
-naia-adk = Workspace Scaffold + Dashboard
-
-┌─────────────────────────────────────────────┐
-│  naia-adk                                    │
-│                                              │
-│  Scaffold (워크스페이스 스캐폴드)             │
-│  ├── .agents/    skills/  scripts/           │
-│  ├── data-company/  data-teams/              │
-│  ├── data-private/  projects/                │
-│  └── context files (agents-rules.json, etc.) │
-│                                              │
-│  Dashboard (대시보드)                         │
-│  ├── Workspace viewer                        │
-│  ├── Skills catalog                          │
-│  └── Settings & monitoring                   │
-│                                              │
-└──────────┬───────────────────────────────────┘
-           │
-     ┌─────┼─────┬──────────┐
-     ▼     ▼     ▼          ▼
- opencode  Claude  Codex   Naia OS
-           Code            (Desktop)
+```bash
+pnpm install    # 워크스페이스 의존성 설치
+pnpm dev        # API 서버(:3141) + 대시보드(:3142) 동시 실행
 ```
 
-**워크플로우 클라이언트**(opencode, Claude Code, Codex, Naia OS)는 naia-adk를 워크스페이스로 사용합니다. 대시보드는 워크스페이스를 *관리*하기 위한 것이지, 작업을 수행하기 위한 것이 아닙니다.
+브라우저에서 `http://localhost:3142`를 열면 대시보드가 뜹니다. 여기서 세 가지를 바로 볼 수 있습니다.
 
-> **범위(Scope)**: `naia-adk`는 **1인 / 개인** 용도입니다. 팀 협업, RBAC, 공유 지식은 [`naia-business-adk`](https://nextain.io/adk)에 속합니다.
+- **워크스페이스** — 프로젝트와 서브모듈, 파일 트리, 그리고 각 항목의 공개 등급.
+- **스킬 카탈로그** — 이 워크스페이스에 등록된 스킬 목록과 내용.
+- **설정 / 모니터링** — 서버 설정, 클라이언트 상태, 데이터 디렉터리.
 
-### 의존이 아닌 인터페이스
+대시보드는 `/api/*` 요청을 3141 포트의 API 서버로 넘겨줍니다. 서버만, 또는 대시보드만
+띄우고 싶다면 각각 `pnpm dev:server`(→ 3141), `pnpm dev:dashboard`(→ 3142)를 쓰면 됩니다.
+런처 스크립트 `./start.sh`(Linux/macOS)와 `start.bat`(Windows)도 결국 `pnpm dev`를 실행합니다.
+서버 CLI는 `--port`, `--host`, `--root` 옵션을 받습니다. 예를 들어 다른 워크스페이스를
+가리키려면 `pnpm serve -- --root /path/to/workspace`처럼 씁니다.
 
-naia-adk는 **도구 비종속(tool-agnostic) 워크스페이스 포맷**입니다. 특정 AI 도구에 의존하지 않으며, AI 도구도 naia-adk의 런타임에 의존할 필요가 없습니다:
+## 무엇이 들어있나
 
-- **포맷이 곧 계약** — 디렉터리 레이아웃(`.agents/`, `.users/`, `skills/`, `data-*/`), 파일 스키마(`agents-rules.json`, SKILL.md), 그리고 컨벤션. 이것들을 읽을 수 있는 AI 코딩 도구라면 무엇이든 naia-adk 워크스페이스를 소비할 수 있습니다.
-- **런타임 결합 없음** — Claude Code, OpenCode, Codex, naia-agent 모두 동일한 포맷을 각자 독립적으로 읽습니다. 어느 것도 naia-adk의 코드를 내장하지 않습니다.
-- **자유로운 교체** — 도구를 바꾸거나, 새 조직을 위해 워크스페이스를 포크하거나, 같은 프로젝트 안에서 여러 도구를 섞어 써도 워크스페이스는 그대로 동작합니다.
+### 워크스페이스 스캐폴드
 
-이는 더 넓은 Naia 생태계 철학의 일부입니다: 레포는 런타임 의존이 아니라 **공개된 인터페이스와 포맷**으로 연결됩니다. 전체 그림은 [naia-agent README](https://github.com/nextain/naia-agent)를 참고하세요.
+AI 에이전트가 곧바로 일할 수 있도록, 자리가 정해진 디렉터리 묶음을 제공합니다. AI가 읽을
+컨텍스트는 `.agents/`(영어, JSON/YAML)에 두고, 사람이 읽을 미러는 `.users/`(한국어, Markdown)에
+둡니다. 이 미러는 전체를 그대로 복제한 것이 아니라 사람이 읽어야 할 핵심 문서 위주로 두는
+부분 미러입니다(예컨대 스킬은 `.agents/skills/` 쪽이 원본이고 `.users/skills/`에는 일부만
+있습니다). 스킬, 데이터, 프로젝트는 모두 정해진 위치가 있어서, 어떤 도구로 열어도 같은
+모양으로 보입니다.
 
-**플러그인 적응형(Plugin-adaptive)**: 스캐폴드는 꽂는 것에 맞춰 적응합니다. 스킬, 데이터 디렉터리, 프로젝트 서브모듈, AI 도구 연결이 모두 플러그형입니다 — 필요한 것은 추가하고, 필요 없는 것은 무시하세요.
+### 대시보드와 API
 
-```
-Plugin-Adaptive Structure
+워크스페이스를 눈으로 관리하는 Next.js 대시보드와, 그 뒤를 받치는 Fastify API 서버가
+포함됩니다. API는 워크스페이스 메타데이터(`/api/workspace`), 스킬 카탈로그(`/api/skills`),
+파일 읽기·쓰기(`/api/files`), 그리고 파일 변경을 실시간으로 알리는 WebSocket(`/api/ws`)을
+제공합니다. 이 API 덕분에 대시보드뿐 아니라 다른 프로그램도 워크스페이스에 접근할 수 있습니다.
 
-naia-adk (core scaffold)
-│
-├── Plugins (plug in what you need)
-│   ├── Skills/              ← Skill plugins (SKILL.md)
-│   ├── Data submodules      ← data-company/, data-teams/
-│   ├── Project submodules   ← projects/your-project
-│   ├── AI tool configs      ← .claude/, .agents/
-│   └── Custom workflows     ← .agents/workflows/
-│
-├── Adapters (adapt to your environment)
-│   ├── AI tool adapter      ← opencode / Claude Code / Codex / Naia OS
-│   ├── Data source adapter  ← local filesystem / cloud / git
-│   └── Language adapter     ← .users/ mirror in any language
-│
-└── Ports (connect from anywhere)
-    ├── REST API             ← Any HTTP client
-    ├── WebSocket            ← Real-time events
-    ├── Direct filesystem    ← CLI tools
-    └── Tauri IPC            ← Naia OS native
-```
+### 스킬 시스템
 
-### 컨텍스트 지식 관리 (예정)
+반복 작업을 스킬로 묶어 재사용합니다. 각 스킬은 `SKILL.md` 한 파일로 정의되고, API 서버가
+`skills/` 아래를 훑어 카탈로그로 만듭니다. 이때 스킬 하나라도 규격을 어기면 카탈로그 전체가
+에러를 내도록 설계했습니다(fail-closed). 깨진 스킬을 조용히 빼고 나머지만 내보내는 대신,
+운영자가 그 자리에서 고치도록 만든 것입니다. 잘못된 목록을 모르고 서비스하는 사고를 막기 위한
+선택입니다.
 
-현재의 파일 기반 컨텍스트 시스템(`.agents/context/*.yaml`)은 어떤 정보 한 조각을 찾으려 해도 파일 전체를 로드해야 합니다 — 토큰을 낭비하고 무관한 노이즈를 LLM 컨텍스트에 주입합니다.
+### 규칙 묶음과 최소 거버넌스
 
-향후 발전 방향:
+혼자 쓰는 워크스페이스라도, AI와 자동화가 손을 대는 순간 최소한의 규칙이 필요합니다. Naia
+ADK는 `read`, `write`, `execute`, `publish`를 서로 다른 관심사로 나눠 두고, 문서마다 공개
+등급을 붙입니다. 프로덕션 변경이나 시크릿 취급, 대외 공개처럼 되돌리기 어려운 작업은 일반
+로컬 편집과 분리해 승인 게이트를 거치게 합니다.
 
-```
-Current:  Grep files → load entire file (~4000 tokens) → 50x waste
-Planned:  query atom → get exact knowledge unit (~80 tokens)
-```
+공개 등급은 네 단계입니다. `public`은 공개 웹사이트나 오픈소스 레포에 그대로 나가도 되는
+것, `controlled`은 검토를 거치면 외부에 공유할 수 있는 것, `internal`은 워크스페이스 안에서만
+쓰는 것, `confidential`은 계약서·크리덴셜·개인정보처럼 민감한 것입니다. 크리덴셜은 보통 git
+밖에 두지만, 등급으로는 여전히 `confidential`입니다.
 
-**지식 원자(Knowledge atoms)** — 의미를 가진 가장 작은 지식 단위로, 태그가 붙고 서로 링크됩니다:
+### LLM 어댑터 (naia-anyllm)
 
-```json
-{
-  "id": "naia-os:gateway_health_cmd",
-  "title": "gateway_health Tauri Command",
-  "tags": ["tauri", "rust", "health-check"],
-  "related": ["naia-os:naia_agent_lifecycle"],
-  "content": "...",
-  "updated": "2026-05-17"
-}
-```
+LLM에 연결해야 하는 기능을 위해 `naia-anyllm` 어댑터를 내장합니다. [any-llm](https://github.com/nextain/any-llm)
+게이트웨이를 거치거나, OpenAI·Anthropic·Google 같은 프로바이더에 직접 붙습니다. 기본 프로바이더
+설정은 들어 있지만, 실제로 호출하려면 해당 프로바이더의 API 키를 환경 변수로 넣어야 합니다.
+키가 없으면 어댑터가 곧바로 오류를 냅니다. 프로바이더나 모델을 바꾸고 싶으면
+[`.agents/context/llm-config.yaml.example`](.agents/context/llm-config.yaml.example)을 복사해 쓰고,
+API 키는 설정 파일이 아니라 환경 변수에 둡니다([`.env.example`](.env.example) 참고).
 
-**AI 비종속 접근** — CLI 또는 MCP를 통해 접근하며, Claude Code, Codex, naia-agent 등 셸 접근이 가능한 어떤 도구와도 동작합니다. 런타임 종속이 없습니다.
+## 왜 이렇게 만들었나
 
-`naia-business-adk`는 이를 공유 팀 지식, RBAC, 충돌 해결로 확장합니다.
+### 포맷이 곧 계약
 
-### 최소 거버넌스 베이스라인
+Naia ADK의 핵심은 특정 도구가 아니라 **포맷**입니다. 디렉터리 레이아웃(`.agents/`, `.users/`,
+`skills/`, `data-*/`)과 파일 스키마(`agents-rules.json`, `SKILL.md`)가 정해진 약속이고, 이
+약속을 읽을 수 있는 도구라면 무엇이든 같은 워크스페이스를 소비할 수 있습니다. Claude Code,
+opencode, Codex, naia-agent가 서로의 코드를 내장하지 않고도 같은 워크스페이스를 각자 읽습니다.
+그래서 도구를 바꾸거나 여러 도구를 섞어 써도, 워크스페이스는 그대로 동작합니다.
 
-1인 워크스페이스라도 AI와 자동화가 개입되는 순간 거버넌스가 필요합니다.
+이 규칙 강제(enforcement) 자체도 도구에 매이지 않습니다. 호스트 중립 코어(`.agents/hooks/core/`)와
+정책(`.agents/hooks/policies/`)이 Claude Code 훅과 pi 익스텐션 양쪽을 같은 규칙으로 구동합니다.
 
-- **공개 등급(Disclosure levels)** — `public`, `controlled`, `internal`, `confidential`
-- **액션 어휘** — `read`, `write`, `execute`, `publish`, `approve`, `administer`
-- **승인 게이트 액션** — 프로덕션 변경, 시크릿 취급, 대외 공개 주장은 일반 로컬 편집과 분리됩니다
-- **컨텍스트 규율** — 세션 로컬 컨텍스트는 의도 없이 영속/공유 컨텍스트로 승격되어서는 안 됩니다
+### 팀으로 커지기 전의 개인용 베이스
 
-`naia-adk`는 개인용 베이스입니다. 회사별 조직도, 테넌트 규칙, 승인 체인은 상위 레이어에 속합니다.
+Naia ADK는 어디까지나 1인, 개인용입니다. 회사 조직도나 테넌트 규칙, 위임 승인 체인 같은
+것은 상위 레이어의 몫입니다. 대신 워크스페이스가 팀이나 회사 규모로 커지기 전에, 컨텍스트를
+어떻게 다룰지에 대한 규율을 미리 한곳에 적어 둘 자리를 줍니다.
+
+팀 협업과 공유 지식이 필요해지면 [Naia Business ADK](https://nextain.io/adk)로 확장합니다.
+이 확장은 베이스라인을 자산·프로세스·권한 거버넌스로 넓히고, 팀 소유권과 위임 승인을 더합니다.
 
 ### 포크 체인
 
-```
-naia-adk                  ← Personal base (public, Apache 2.0)
-  ├─ naia-business-adk   ← Business upstream (private)
-  │    └── {org}-adk     ← Company instance: org data + projects + policy
-  │          └── {user}-adk  ← Company-linked personal instance
-  └── {user}-adk         ← Direct personal instance
-```
-
-예시 — Nextain의 체인:
+Naia ADK는 포크해서 자기 것으로 만드는 것을 전제로 합니다. 개인은 `naia-adk`를 직접 포크하고,
+조직은 `naia-business-adk`를 거쳐 회사·멤버 워크스페이스를 만듭니다.
 
 ```
-naia-adk → naia-business-adk → nextain-adk → alpha-adk
+naia-adk                  ← 개인용 베이스 (공개, Apache 2.0)
+  └── {org}-adk           ← 조직 포크: 회사 데이터 + 비즈니스 서브모듈
+        └── {user}-adk    ← 개인 포크: 개인 데이터 + 프로젝트 서브모듈
 ```
 
-어느 레이어에서든 포크할 수 있습니다. 개인은 `naia-adk`를 직접 포크할 수 있습니다. 조직은 `naia-business-adk`를 거친 뒤, 거기서 회사 및 멤버 워크스페이스를 인스턴스화합니다.
+Nextain의 실제 체인은 `naia-adk → naia-business-adk → nextain-adk → alpha-adk`처럼 이어집니다.
 
-### 비즈니스 확장
+## 구조
 
-**[Naia Business ADK](https://nextain.io/adk)** — `naia-adk`의 조직용 확장:
-
-- 베이스라인을 **자산 / 프로세스 / 권한** 거버넌스로 확장
-- 팀 소유권, 위임 승인, 비즈니스 워크플로우 기대치 추가
-- 조직용 스킬과 템플릿을 포함할 수 있으나, 이는 제품 정의가 아니라 거버넌스 레이어의 산출물입니다
-- 비공개 회사 인스턴스 및 멤버 인스턴스 지원
-
-라이선스 문의는 [Contact us](https://nextain.io/contact).
-
-## 구성
+저장소는 크게 런타임 코드(`packages/`), 규칙과 컨텍스트(`.agents/`, `.users/`), 스킬(`skills/`,
+`.agents/skills/`), 그리고 포크마다 채워 넣는 데이터 디렉터리로 나뉩니다.
 
 | 디렉터리 | 용도 |
 |-----------|---------|
-| `.agents/` | AI 최적화 컨텍스트 (영어, JSON/YAML) |
+| `.agents/` | AI용 컨텍스트 (영어, JSON/YAML) — 규칙의 단일 진실 공급원 |
 | `.users/` | 사람이 읽는 미러 (한국어, Markdown) |
-| `.claude/` | Claude Code 설정, 훅, 스킬 |
-| `skills/` | 재사용 가능한 AI 스킬 (review, email, SMS, docs 등) |
-| `scripts/` | 유틸리티 스크립트 (모니터링, 트리아지 등) |
+| `.claude/` | Claude Code 설정, 훅, 스킬 심링크 |
+| `skills/` | 운영/런타임 스킬 (대시보드 API가 제공) |
+| `scripts/` | 유틸리티 스크립트 |
 | `templates/` | 문서 템플릿 |
 | `docs/` | 아키텍처 문서, 설계 스펙 |
-| `packages/` | 런타임 패키지 (pnpm workspace) — 아래 참고 |
+| `packages/` | 런타임 패키지 (pnpm 워크스페이스) |
 
-**`packages/` (9개 활성):** `core` (워크스페이스/스킬 파싱 엔진) · `server` (Fastify REST/WS API) · `dashboard` (Next.js UI) · `skill-spec` (도구 비종속 스킬 포맷 계약) · `skills-builtin` (일반 스킬 카탈로그) · `openclaw-compat` (OpenClaw → naia 스킬 마이그레이션) · `persona` (시스템 프롬프트 컨벤션 스펙) · `process` (워크플로우 패턴 스펙) · `naia-anyllm` (any-llm 게이트웨이 / 직접 프로바이더 LLM 어댑터).
+### 런타임 패키지 (packages/, 10개)
 
-### 데이터 디렉터리 (gitignore — 포크별 관리)
+세 개는 실제로 도는 프로그램이고, 나머지는 포맷과 규격을 정의하는 얇은 패키지입니다.
+
+- `core` — 워크스페이스와 스킬을 파싱하는 엔진.
+- `server` — Fastify 기반 REST/WebSocket API.
+- `dashboard` — Next.js 대시보드 UI.
+- `skill-spec` — 도구 비종속 스킬 포맷 계약(`SkillDescriptor`, `SkillLoader`).
+- `skills-builtin` — 일반 스킬 카탈로그.
+- `openclaw-compat` — OpenClaw 스킬을 naia 포맷으로 옮기는 마이그레이션 도구.
+- `persona` — 시스템 프롬프트 컨벤션 스펙.
+- `process` — 워크플로우 패턴 스펙(리뷰 → 결정 → 실행, 이슈 기반 개발 등).
+- `naia-anyllm` — any-llm 게이트웨이 / 직접 프로바이더 LLM 어댑터.
+- `artifacts-spec` — 권한(RBAC)과 개발 수명주기(SDLC) 산출물의 표준 스키마. 15종 산출물을
+  JSON Schema로 정의하고, 각 산출물이 git으로 추적되는지 세션 한정인지까지 규정합니다.
+
+### 데이터 디렉터리 (gitignore, 포크마다 채움)
+
+이 네 디렉터리는 저장소에 올라가지 않습니다. 포크한 사람이 자기 데이터를 넣습니다.
 
 | 디렉터리 | 범위 | 내용 |
 |-----------|-------|---------|
 | `data-company/` | 회사 | 회사 전체 문서, 공유 리소스 |
-| `data-teams/` | 팀 | 팀별 문서 (전략, 회계) |
+| `data-teams/` | 팀 | 팀별 문서 (전략, 회계 등) |
 | `data-private/` | 개인 | 개인 데이터, env 파일, 비공개 문서 |
 | `projects/` | 개인 | 프로젝트 레포 (서브모듈) |
 
-## 스킬
+### 스킬 트리 두 개
 
-naia-adk에는 **두 개의 스킬 트리**가 있습니다(전체 목록은 [AGENTS.md](AGENTS.md#skills) 참고):
+스킬은 두 곳에 나뉘어 있고, 소비하는 주체가 다릅니다.
 
-- **`.agents/skills/`** — AI 보조 / 워크플로우 스킬. `.claude/skills/` 심링크를 통해 Claude Code가 사용. `.agents/context/skills-index.yaml`이 색인.
-- **`skills/`** — 운영 / 런타임 스킬. 대시보드 API(`discoverSkills()`가 `skills/**/SKILL.md` 스캔)가 발견해 `/api/skills`로 제공.
+- `.agents/skills/` — AI 보조와 워크플로우 스킬. Claude Code가 `.claude/skills/` 심링크를
+  통해 사용합니다. 리뷰(`review-pass`), 검증(`verify-implementation`), 워크트리 머지
+  (`merge-worktree`), 문서 추출(`read-doc`), 특허·저작권·급여 같은 업무 스킬, 그리고
+  `finetune-persona`, `secret-vault`, `youtube-upload` 등이 들어 있습니다.
+- `skills/` — 운영/런타임 스킬. API 서버가 `skills/**/SKILL.md`를 훑어 대시보드에 제공합니다.
+  이메일·SMS·알림 발송, 채널 관리, 서비스·웹 모니터링, 문서 생성 같은 것들이 있고,
+  `skills/business/`에는 조직용 스킬(예: `press-release`)이 담깁니다.
 
-워크플로우 스킬 (`.agents/skills/`):
-
-| 스킬 | 설명 |
-|-------|-------------|
-| `review-pass` | 멀티 에이전트 상호검증 리뷰 (4단계) |
-| `verify-implementation` | 모든 검증 스킬 실행, 통합 리포트 생성 |
-| `verify-contract-conformance` | 선언된 API/인터페이스 계약 vs 구현 검증 |
-| `manage-skills` | 검증 스킬 자동 감지·업데이트 |
-| `merge-worktree` | 시맨틱 커밋으로 워크트리 브랜치 스쿼시 머지 |
-| `read-doc` | HWP/PDF/DOCX/XLSX/PPTX 텍스트 추출 |
-| `webapp-testing` | 로컬 웹 앱 Playwright E2E 테스트 |
-| `doc-coauthoring` | 구조화 문서 공동작성 (3단계) |
-| `project-create` · `project-migration` · `migrate-ctx` | 프로젝트 레포 scaffold / 분리 / 컨텍스트 마이그레이션 |
-| `payroll` · `press-release` · `patent-draft` · `patent-pipeline` · `copyright-reg` · `weekly-report` | 문서·비즈니스 워크플로우 스킬 (본 베이스 레포에도 포함) |
-
-운영 스킬 (`skills/`):
-
-| 스킬 | 설명 |
-|-------|-------------|
-| `email` | SMTP 어댑터 기반 이메일 발송 (템플릿 지원) |
-| `sms` | 게이트웨이 어댑터 기반 SMS / 알림톡 발송 |
-| `notify` | 채널 비종속 알림 발송 |
-| `channel-management` | Discord/Slack 채널 관리 |
-| `service-management` | 서비스 모니터링, 비용 추적, 장애 대응 |
-| `web-monitoring` | SEO·가동시간·애널리틱스 모니터링 |
-| `document-generation` | 브랜드 PDF 생성 (계약서, 결의서, 급여명세서) |
-| `config` · `cron` · `diagnostics` · `system-status` · `sessions` · `memo` · `skill-manager` · `time` · `weather` | 런타임 유틸리티 |
-
-> **참고:** 조직 레이어([Naia Business ADK](#비즈니스-확장))는 팀 소유권·위임 승인·조직 전용 스킬로 위 스킬들을 확장합니다.
-
-## 아키텍처
-
-Naia ADK는 **자체 API를 가진 워크스페이스 스캐폴드**입니다 — 설계상 도구 비종속:
-
-```
-naia-adk
-├── Scaffold (workspace structure)
-│   ├── .agents/  .users/  .claude/  skills/  scripts/
-│   ├── data-company/  data-teams/  data-private/
-│   └── projects/
-│
-├── API Server (Fastify)
-│   ├── /api/workspace   ← Workspace metadata, file tree, classification
-│   ├── /api/skills      ← Skill catalog and content
-│   ├── /api/files       ← File read/write
-│   └── /api/ws          ← WebSocket (file change events)
-│
-└── Dashboard (Next.js)
-    ├── /                ← Overview
-    ├── /workspace       ← Projects, submodules, visibility
-    ├── /skills          ← Skill catalog viewer
-    └── /settings        ← Server config, client status, data dirs
-```
-
-어떤 AI 도구든 연결할 수 있습니다 — Claude Code, Codex, Naia OS에 한정되지 않습니다:
-
-| 클라이언트 | 연결 방식 | 역할 |
-|--------|-----------|------|
-| opencode | 직접 파일시스템 | TUI 코딩 에이전트 |
-| Claude Code | 직접 파일시스템 + 훅 | CLI 코딩 에이전트 |
-| pi | 직접 파일시스템 + 익스텐션 | CLI 코딩 에이전트 |
-| Codex | REST API | CLI 코딩 에이전트 |
-| Naia OS | REST API + WebSocket | 데스크톱 앱 |
-| 브라우저 | 대시보드 | 모니터링 & 설정 |
-
-엔포스먼트 하네스는 **도구 비종속**입니다: 호스트 중립 코어(`.agents/hooks/core/`) + 정책(`.agents/hooks/policies/`)이 Claude Code 훅(`.claude/hooks/`)과 pi 익스텐션(`.pi/extensions/naia-harness.ts`) 양쪽을 구동합니다 — 동일한 가드가 코어 변경 없이 어느 호스트에서나 실행됩니다.
-
-### LLM 연결
-
-naia-adk는 **naia-anyllm**을 포함합니다 — [any-llm](https://github.com/nextain/any-llm) 게이트웨이 또는 LLM 프로바이더에 직접 연결하는 내장 LLM 어댑터입니다:
-
-```
-naia-adk
-└── packages/
-    └── naia-anyllm/        ← LLM adapter (plugin)
-        ├── Any-LLM Gateway ← nextain/any-llm (credits, auth, routing)
-        ├── Direct providers ← OpenAI, Anthropic, Google, etc.
-        └── Config           ← .agents/context/llm-config.yaml (선택)
-```
-
-설정은 **선택 사항**입니다 — `naia-anyllm`은 기본값(any-llm 게이트웨이 + OpenAI / Anthropic / Google 직접 프로바이더)을 내장합니다. 재정의하려면 [`.agents/context/llm-config.yaml.example`](.agents/context/llm-config.yaml.example)을 `.agents/context/llm-config.yaml`로 복사하세요. API 키는 설정 파일이 아니라 환경 변수에 둡니다([`.env.example`](.env.example) 참고).
-
-CLI 도구(opencode, Claude Code, Codex)는 자체 LLM 연결을 사용합니다. naia-os는 naia-anyllm을 통해 any-llm 게이트웨이에 연결합니다.
-
-자세한 내용은 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)를 참고하세요.
+전체 목록은 대시보드의 스킬 카탈로그에서 확인하는 것이 가장 정확합니다. 텍스트로 정리된 표는
+[AGENTS.md](AGENTS.md#스킬-skills)에 있습니다.
 
 ## 시작하기
 
-### 대시보드 & API 실행
-
-**Node ≥ 22**, **pnpm ≥ 9** 필요.
-
-```bash
-pnpm install          # 워크스페이스 의존성 설치
-pnpm dev              # API(:3141) + 대시보드(:3142) 동시 실행
-# 또는 개별 실행:
-pnpm dev:server       # API 만   → http://localhost:3141
-pnpm dev:dashboard    # 대시보드 → http://localhost:3142
-```
-
-런처도 제공됩니다: `./start.sh`(Linux/macOS), `start.bat`(Windows) — 둘 다 `pnpm dev` 실행. 서버 CLI는 `--port`, `--host`, `--root` 옵션을 받습니다(예: `pnpm serve -- --root /path/to/workspace`).
-
-| 서비스 | 기본 URL | 소스 |
-|--------|----------|------|
-| API 서버 (Fastify) | `http://localhost:3141` | `packages/server` |
-| 대시보드 (Next.js) | `http://localhost:3142` | `packages/dashboard` |
-
-대시보드는 `/api/*`를 3141 포트의 API 서버로 프록시합니다.
-
 ### 개인용
 
-1. **비공개 포크** — `naia-adk`를 본인 계정으로 포크 (가능하면 "Public fork" 체크 해제, 또는 포크 후 Settings에서 private으로 변경)
-2. **클론** — `git clone https://github.com/YOUR-USER/your-adk.git && cd your-adk`
-3. **upstream 추가** — `git remote add upstream https://github.com/nextain/naia-adk.git`
-4. **데이터 디렉터리 생성** — `mkdir -p data-private projects`
-5. **작업 시작** — 프로젝트 추가, `.agents/` 설정, 스킬 사용
-6. **upstream 동기화** — 주기적으로: `git fetch upstream && git merge upstream/main`
+1. `naia-adk`를 본인 계정으로 포크합니다(가능하면 비공개로).
+2. 클론합니다: `git clone https://github.com/YOUR-USER/your-adk.git && cd your-adk`
+3. upstream을 추가합니다: `git remote add upstream https://github.com/nextain/naia-adk.git`
+4. 데이터 디렉터리를 만듭니다: `mkdir -p data-private projects`
+5. 프로젝트를 추가하고 `.agents/`를 설정한 뒤 작업을 시작합니다.
+6. 주기적으로 동기화합니다: `git fetch upstream && git merge upstream/main`
 
 ### 기업용
 
-1. **Naia Business ADK 발급** — `naia-business-adk` 접근을 위해 [Contact us](https://nextain.io/contact)
-2. **비공개 포크** — `naia-business-adk`를 조직 계정으로 private 포크
-3. **클론** — `git clone https://github.com/YOUR-ORG/your-org-adk.git && cd your-org-adk`
-4. **upstream 추가** — `git remote add upstream https://github.com/nextain/naia-business-adk.git`
-5. **회사 데이터 추가** — `mkdir -p data-company data-business projects`
-6. **서브모듈 추가** — `git submodule add <repo> projects/<name>`
-7. **팀 온보딩** — 각 멤버는 조직 ADK를 포크해 개인 워크스페이스로 사용
-8. **upstream 동기화** — 주기적으로: `git fetch upstream && git merge upstream/main`
+1. `naia-business-adk` 접근을 위해 [문의](https://nextain.io/contact)합니다.
+2. `naia-business-adk`를 조직 계정으로 비공개 포크한 뒤 클론합니다.
+3. upstream을 추가합니다: `git remote add upstream https://github.com/nextain/naia-business-adk.git`
+4. 회사 데이터와 프로젝트 서브모듈을 채웁니다: `mkdir -p data-company projects`,
+   `git submodule add <repo> projects/<name>`
+5. 각 멤버는 조직 ADK를 다시 포크해 개인 워크스페이스로 씁니다.
 
 ### Naia OS 연동 (선택)
 
-[Naia OS](https://github.com/nextain/naia-os)를 사용한다면, 워크스페이스 경로를 본인의 ADK 디렉터리로 지정하세요. 스킬과 데이터는 MCP/WebSocket으로 제공됩니다.
-
-## 공개 등급 (Disclosure Levels)
-
-| 등급 | 의미 | 예시 |
-|------|---------|---------|
-| `public` | 공개 웹사이트, 공개 README, 공개 레포 컨텍스트에 안전 | 오픈소스 코드, 공개 문서 |
-| `controlled` | 검토를 거치면 외부 공유 가능하나 기본 완전 공개는 아님 | 승인된 브랜드 자산, 검증된 파트너 자료 |
-| `internal` | 회사 또는 워크스페이스 내부 | 공유 문서, 내부 리소스 |
-| `confidential` | 민감·고객 귀속·재무·크리덴셜·프로덕션 핵심 | 계약서, 크리덴셜, 개인정보 |
-
-크리덴셜과 시크릿 자료는 보통 git 밖에 두지만, 여전히 `confidential` 공개 등급에 속합니다.
-
-## 개발 프로세스
-
-### 이슈 기반 개발 (기본)
-
-기능 단위 작업을 위한 14단계 워크플로우:
-
-Issue → Understand → Scope → Investigate → Plan → Build → Review → E2E Test → Post-test Review → Sync → Sync Verify → Report → Commit → Close
-
-게이트 (사용자 확인 필요): Understand, Scope, Plan, Sync, Close.
-
-### 간단한 변경
-
-오타, 설정값, 단순 지시 — 전체 단계 흐름 없는 경량 사이클.
-
-자세한 내용은 [`.agents/workflows/issue-driven-development.yaml`](.agents/workflows/issue-driven-development.yaml) 참고.
-
-## 컨텍스트 구조
-
-AI와 사람 양쪽 소비에 최적화된 이중 디렉터리 아키텍처:
-
-```
-.agents/                    # AI-optimized (English, token-efficient)
-├── context/                # Project rules, work index, requirements
-├── workflows/              # Development workflows
-├── skills/                 # Skill definitions (SoT)
-├── hooks/                  # AI session hooks
-├── progress/               # Session handoff files (gitignored)
-└── requirements/           # Product requirements (REQ-001 ~)
-
-.users/                     # Human-readable mirror (Korean, detailed)
-├── context/                # .agents/ mirror in Markdown
-├── workflows/              # Workflow docs
-└── skills/                 # Skill docs
-```
+[Naia OS](https://github.com/nextain/naia-os) 데스크톱 앱을 쓴다면 워크스페이스 경로를 본인의
+ADK 디렉터리로 지정하세요. 스킬과 데이터가 API로 제공됩니다.
 
 ## 기여
 
-**어떤 언어든 환영합니다.** 이슈, PR, 토론은 모국어로 작성해도 됩니다 — AI가 소통을 중개합니다.
+이슈, PR, 토론은 편한 언어로 써도 됩니다. AI가 소통을 중개합니다. 다만 git 기록(커밋, 컨텍스트,
+공유 산출물)은 영어로 남깁니다. 자세한 절차와 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를
+참고하세요. 개발 프로세스는 이슈 기반 개발을 기본으로 하며, 상세 흐름은 [AGENTS.md](AGENTS.md)와
+[`.agents/workflows/`](.agents/workflows/)에 정리돼 있습니다.
 
-Git 기록(커밋, 컨텍스트, 공유 산출물)은 영어로 남깁니다.
+## 로드맵
 
-1. **이슈 먼저** — 코딩 전에 GitHub 이슈를 생성하거나 선택
-2. **포크 + 브랜치** — `issue-{N}-{desc}` 브랜치에서 작업
-3. **테스트** — 테스트 작성, PR 전 검증
-4. **단일 PR** — 코드 + 테스트 + 컨텍스트를 하나의 PR로
+아래는 아직 구현되지 않은 계획으로, 현재 동작하는 기능이 아닙니다.
 
-10가지 기여 유형: 번역(Translation), 스킬(Skill), 기능(Feature), 버그 리포트(Bug Report), 코드/PR(Code/PR), 문서(Documentation), 테스트(Testing), 디자인/UX(Design/UX), 보안 리포트(Security Report), 컨텍스트(Context).
+- **지식 원자(Knowledge atoms)** — 지금의 컨텍스트는 파일 단위라, 정보 한 조각을 찾으려 해도
+  파일 전체를 로드해 토큰을 낭비합니다. 이를 의미를 가진 가장 작은 지식 단위로 쪼개고 태그와
+  링크로 연결해, 필요한 조각만 정확히 꺼내 쓰는 방향을 검토 중입니다. CLI나 MCP로 접근해 도구에
+  매이지 않게 하는 것이 목표입니다.
 
 ## 라이선스
+
+Apache License 2.0. 자세한 내용은 [LICENSE](LICENSE)를 참고하세요.
 
 ```
 Copyright 2026 Nextain Inc.
@@ -384,12 +226,6 @@ you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
 ```
 
 ## 링크

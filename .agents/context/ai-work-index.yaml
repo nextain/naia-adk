@@ -34,6 +34,12 @@ categories:
     skill: "patent-draft"
     skill_trigger: "특허 초안 생성, 특허 명세서 작성, 출원 문서 작성 요청 시 반드시 사용."
     workflows: []
+  - name: "research-driven-development"
+    keywords: ["research", "experiment", "hypothesis", "연구", "실험", "가설", "probe", "does approach X work"]
+    quick_ref: "R&D where the answer is unknown and the plan evolves with results. Charter(invariant goal) + Hypothesis Ledger(mutable) + Insight Ledger(append-only) + fail-CLOSED experiment guard + out-of-loop align-audit runner. EXPLORE(free, quarantined) vs CONFIRM(pre-registered+audited, belief-changing)."
+    workflows:
+      - ".agents/workflows/research-driven-development.yaml"
+
   - name: "issue-driven-development"
     keywords: ["feature", "feature development", "upstream", "investigate", "plan", "review", "bug fix"]
     quick_ref: "Feature-level work (default, 13 phases). ISSUE → UNDERSTAND → SCOPE → INVESTIGATE → PLAN → BUILD → REVIEW → E2E TEST → POST-TEST REVIEW → SYNC → SYNC VERIFY → REPORT → COMMIT"

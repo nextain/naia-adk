@@ -19,6 +19,14 @@
 - **워크플로우**: `.agents/workflows/issue-driven-development.yaml`
 - **설명**: 기능 단위 작업의 기본 워크플로우. 신규 기능, 기능 단위 버그 수정, 주변 코드 품질이 불확실한 작업에 사용.
 
+### 1-R. 연구 기반 개발 (research-driven-development) — 연구/R&D
+
+- **키워드**: research, experiment, hypothesis, 연구, 실험, 가설, probe
+- **빠른 참조**: `CHARTER(불변 목표) → HYPOTHESIS → PRE-REGISTER(+회상) → ALIGN-AUDIT(루프밖) → EXPERIMENT → RECORD → DECIDE → SYNC`
+- **워크플로우**: `.agents/workflows/research-driven-development.yaml`
+- **설명**: 답을 모르는 R&D. IDD가 **계획**을 잠그는 반면 RDD는 **목표(Charter)를 잠그고 계획은 결과 따라 진화**시키되 목표 정렬을 강제. 드리프트(방법 바꿔치기·결과추종·metric-bait·회상누락) 차단이 목적.
+- **강제(결정론)**: `rdd-experiment-guard` 훅(fail-CLOSED) — 사전등록+루프밖 감사(`scripts/rdd-audit.cjs`) 통과 없이는 `exp*.py` 실행 차단. EXPLORE(격리 탐색) vs CONFIRM(등록·감사, belief 변경).
+
 ### 2. 서브모듈 관리 (submodule-management)
 
 - **키워드**: submodule, init, update, sync

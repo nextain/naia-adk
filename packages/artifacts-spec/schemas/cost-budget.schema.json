@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia-adk.dev/artifacts-spec/cost-budget.schema.json",
+  "title": "Cost Budget",
+  "description": "토큰 비용 예산. multi-session 환경에서 세션 간 비용 할당·임계치 알림. measurement 가 sole 안전망 — 차단 모델 아님(임계 도달 시 알림 + 사용자 결정).",
+  "type": "object",
+  "required": ["version", "id", "currency", "limits"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "id": {
+      "type": "string",
+      "description": "예산 식별자 — session-manifest.llm.cost_budget_ref 참조 (예: 'budget-personal-2026-05', 'budget-project-foo')."
+    },
+    "currency": {
+      "enum": ["USD", "KRW", "credits", "tokens"],
+      "description": "예산 단위. tokens = provider-agnostic count."
+    },
+    "limits": {
+      "type": "object",
+      "required": ["soft", "hard"],
+      "properties": {
+        "soft": { "type": "number", "description": "soft 한계 — 도달 시 사용자 알림 + audit. 차단 아님." },
+        "hard": { "type": "number", "description": "hard 한계 — 도달 시 새 LLM 호출 거부 권장 (host adapter 가 enforce, advisory 의 한계 인정)." }
+      }
+    },
+    "period": {
+      "type": "object",
+      "properties": {
+        "kind": { "enum": ["session", "daily", "weekly", "monthly", "rolling"] },
+        "days": { "type": "integer", "minimum": 1, "description": "rolling 의 경우 윈도우." }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "description": "provider 별 가중치/한계 (선택). LLM provider 호출 시 토큰을 currency 로 환산.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "input_rate": { "type": "number", "description": "currency per 1k input tokens" },
+          "output_rate": { "type": "number", "description": "currency per 1k output tokens" },
+          "session_share_cap": { "type": "number", "minimum": 0, "maximum": 1, "description": "다중 세션 사용 시 이 provider 의 단일 세션 점유율 상한 (0-1)." }
+        }
+      }
+    },
+    "alerts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "at_percent": { "type": "integer", "minimum": 1, "maximum": 100 },
+          "channels": { "type": "array", "items": { "enum": ["log", "audit", "ui-toast", "ui-modal"] } }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "x-honest-framing": {
+    "soft_vs_hard": "soft = 알림. hard = 거부 권장(host adapter 가 실 enforce, 본 spec 의 advisory 만으론 강제 못 함).",
+    "measurement_first": "비용 추적 자체가 가치 — 차단보다 *측정·시각화·사용자 결정* 이 우선. (Track A 8라운드 교훈: 강제 enforce 보다 정직 측정.)",
+    "multi-session": "본 spec 의 핵심 use case = naia 멀티세션. 한 사용자의 N 세션이 같은 budget 을 공유할 때 분배·알림."
+  }
+}

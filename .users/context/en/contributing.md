@@ -1,12 +1,12 @@
 <!-- Copyright 2026 Nextain Inc. All rights reserved. -->
 
-# Naia OS Contributing Guide
+# Naia ADK Contributing Guide
 
 Human-readable guide for `.agents/context/contributing.yaml`.
 
 ## Purpose
 
-How AI agents (and humans using AI tools) should contribute to the Naia OS project.
+How AI agents (and humans using AI tools) should contribute to the Naia ADK project.
 
 ---
 

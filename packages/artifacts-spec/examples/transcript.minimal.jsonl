@@ -1,0 +1,6 @@
+{"ts":"2026-05-20T01:00:00Z","session_id":"T-B-prod-investigation","topic":"onmam-prod-pulldown","role":"user","content":"prod 읽기전용으로 drift목록화 해줘. 그리고 git 미추적 누락 부분도"}
+{"ts":"2026-05-20T01:05:30Z","session_id":"T-B-prod-investigation","topic":"onmam-prod-pulldown","role":"agent","content":"prod read-only probe 진행. luke@onmam-web IAP 접속 + git status/diff + docroot mount inspection. 쓰기 0.","thread_id":"prod-probe-1"}
+{"ts":"2026-05-20T01:08:15Z","session_id":"T-B-prod-investigation","topic":"onmam-prod-pulldown","role":"tool","content":"git remote -v 출력에 GitHub PAT 평문 노출 발견 — S1 P0.","ref":"onmam-web:opt/onmam/.git/config","metadata":{"redaction":"value omitted"}}
+{"ts":"2026-05-20T03:25:00Z","session_id":"T-A-service-ops","topic":"increment-6a","role":"agent","content":"6a P0 — env-신뢰 제거, id -un + ROLES + marker 패턴 적용. 10/10 테스트 (claim: resolved-overclaim, 실제 라벨은 review 후 결정).","thread_id":"t-a-6a"}
+{"ts":"2026-05-20T03:27:00Z","session_id":"T-A-service-ops","topic":"increment-6a","role":"tool","content":"codex 재리뷰 verdict: trust-root 여전히 호출자 통제 — 실 상태 = mitigated 라벨이 정확.","metadata":{"trace_id":"t-a-6a-round-2"}}
+{"ts":"2026-05-20T03:27:30Z","session_id":"T-A-service-ops","topic":"increment-6a","role":"agent","content":"정직 강등 수용. claim downgrade: resolved-overclaim → mitigated.","thread_id":"t-a-6a"}
