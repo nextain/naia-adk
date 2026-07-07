@@ -43,7 +43,7 @@ entries:
 
   - date: "2026-03-28"
     issue_type: pattern-compliance
-    project: vllm-omni / MiniCPM-o
+    project: 로컬 omni 백엔드 / MiniCPM-o
     mistake: "Used pipeline.yaml + StageConfigFactory (unproven new pattern) instead of stage_configs/*.yaml (proven pattern used by all other models)"
     root_cause: "Chose 'newer' pattern without checking what other models actually use. qwen3_omni, qwen2_5_omni, fish_speech all use stage_configs/*.yaml"
     lesson: >
@@ -54,7 +54,7 @@ entries:
 
   - date: "2026-03-28"
     issue_type: upstream-rebase-compatibility
-    project: vllm-omni / MiniCPM-o
+    project: 로컬 omni 백엔드 / MiniCPM-o
     mistake: "upstream vllm v0.18.0 rebase broke omni mode — OpenAIServingResponses, OmniOpenAIServingChat crash with model_config=None"
     root_cause: "Our code depended on vllm internal APIs that changed in the rebase. pipeline.yaml pattern was more fragile than stage_configs pattern"
     lesson: >

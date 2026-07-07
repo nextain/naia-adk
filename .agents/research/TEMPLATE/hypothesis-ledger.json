@@ -4,15 +4,15 @@
   "entries": [
     {
       "id": "H1",
-      "hypothesis": "<falsifiable if/then, e.g. VoxCPM2 한글 오디오를 역추정→재합성하면 그 단어로 들린다>",
+      "hypothesis": "<falsifiable if/then, e.g. 로컬 TTS 한글 오디오를 역추정→재합성하면 그 단어로 들린다>",
       "charter_subgoal": "SG1",
-      "method_contract": "<EXACT inputs/method. anti-substitution. e.g. input = VoxCPM2-generated wav (model=VoxCPM2, ref=<hash>), NOT hand-typed formant numbers. script = packages/.../expN_*.py>",
+      "method_contract": "<EXACT inputs/method. anti-substitution. e.g. input = 로컬 TTS-generated wav (model=로컬 TTS, ref=<hash>), NOT hand-typed formant numbers. script = packages/.../expN_*.py>",
       "gate": "<pre-registered CONFIRM vs REFUTE, set BEFORE running. e.g. STT CER < 0.3 on held-out word AND user hears the word>",
       "decision_map": {
         "pass": "<next step if confirmed>",
         "fail": "<fallback if refuted>"
       },
-      "tags": ["<controlled-vocab tags, e.g. inversion, korean, voxcpm2>"],
+      "tags": ["<controlled-vocab tags, e.g. inversion, korean, tts>"],
       "references": ["<insight-ledger entry ids reconciled at recall; [] only if none share tags>"],
       "status": "open"
     }

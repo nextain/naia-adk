@@ -64,7 +64,7 @@ principles:
 
   no_method_substitution:
     rule: "An experiment's inputs/method MUST match its pre-registered method contract. Swapping the hard planned method for an easier one is drift even if the number is good."
-    anti_pattern: "Plan says 'invert VoxCPM2 audio'; you invert hand-typed formant numbers instead and report 7/7."
+    anti_pattern: "Plan says 'invert 로컬 TTS audio'; you invert hand-typed formant numbers instead and report 7/7."
 
   pre_register_gate:
     rule: "Decide what result CONFIRMS vs REFUTES the hypothesis BEFORE running the experiment. No post-hoc goalpost moving."
@@ -100,7 +100,7 @@ artifacts:
       - "id"
       - "hypothesis: falsifiable if/then"
       - "charter_subgoal: which goal question this tests (must reference charter)"
-      - "method_contract: exact inputs/method (anti-substitution — e.g. input=VoxCPM2-generated audio file, NOT hand-typed numbers)"
+      - "method_contract: exact inputs/method (anti-substitution — e.g. input=로컬 TTS-generated audio file, NOT hand-typed numbers)"
       - "gate: pre-registered CONFIRM vs REFUTE criteria (set BEFORE running)"
       - "decision_map: pass→<next>, fail→<fallback>"
       - "recall_refs: prior insight-ledger entries reconciled (or 'none found')"
