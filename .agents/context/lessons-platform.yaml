@@ -60,7 +60,7 @@ entries:
 
   - date: "2026-03-18"
     issue_type: architecture-assumption
-    project: vllm-omni / MiniCPM-o
+    project: 로컬 omni 백엔드 / MiniCPM-o
     mistake: "Assumed CosyVoice2+HiFi-GAN was a heavy addition on top of the model"
     root_cause: "Treated CosyVoice2 as a full TTS system addition, not as a compatible decoder for existing s3tokenizer codes"
     lesson: >
@@ -71,7 +71,7 @@ entries:
 
   - date: "2026-03-28"
     issue_type: operational-completeness
-    project: vllm-omni / MiniCPM-o
+    project: 로컬 omni 백엔드 / MiniCPM-o
     mistake: "6-pass adversarial code review declared 'clean' but fresh install failed — missing deps, wrong flags, pattern mismatch"
     root_cause: "Review lenses (accuracy/completeness/consistency) only checked code logic. Did not check: pattern compliance, dependency completeness, fresh install reproducibility, server start flags"
     lesson: >
@@ -84,7 +84,7 @@ entries:
 
   - date: "2026-03-28"
     issue_type: environment-recording
-    project: vllm-omni / MiniCPM-o
+    project: 로컬 omni 백엔드 / MiniCPM-o
     mistake: "Manual pip installs (minicpmo-utils, s3tokenizer) on RunPod not recorded in requirements or scripts"
     root_cause: "Treated manual installs as temporary fixes, planned to 'add later', forgot"
     lesson: >

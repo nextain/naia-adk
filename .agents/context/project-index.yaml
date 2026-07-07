@@ -260,10 +260,10 @@ contextFiles:
 # naia-agent 가 호출. 항상 X — 한국어 음성/노래 vertical 필요 시 opt-in.
 # RAG / context 관리 / 장기기억 / 도메인 지식 = naia-agent / naia-memory (backend X).
 optInLocalmodels:
-  - name: naia-ko-serve
-    repo: nextain/naia-ko-serve
+  - name: naia-omni-cascade
+    repo: nextain/naia-omni-cascade
     visibility: private (nextain org)
-    provides: 한국어 full-duplex 음성 대화 backend (MiniCPM-o-4.5 ko fine-tune) + 품질 벤치마크
+    provides: 한국어 full-duplex 음성 대화 backend (로컬 TTS int8 + 립싱크 아바타 캐스케이드) + 품질 벤치마크
     selectedVia: localmodel 설정 (opt-in)
     boundary: 모델 serving + system prompt + 벤치마크만. RAG/context/기억은 naia-agent.
   - name: naia-sing

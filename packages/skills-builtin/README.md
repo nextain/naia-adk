@@ -75,4 +75,4 @@
 ## TTS/STT 제외 (D43)
 
 TTS/STT는 본 catalog X — naia-agent **audio provider layer** (Vercel AI SDK 패턴).
-이유: omni model (vllm-omni / GPT-4o realtime) 호환을 위해 audio stream을 naia-agent 1급 시민으로 처리.
+이유: omni model (로컬 omni 백엔드 / GPT-4o realtime) 호환을 위해 audio stream을 naia-agent 1급 시민으로 처리.

@@ -35,8 +35,8 @@ policy:
           - "AI / LLM / RAG / API / SDK / CLI / STT / TTS / VAD / E2E / MoE / RBAC / CRM"
           - "SQLite / ICLR / LongMemEval / KsponSpeech / KEMDy20"
         product_names:
-          - "Claude / Gemini / Codex / ollama / Whisper / vLLM / faster-whisper"
-          - "VoxCPM2 / Vevo / HuBERT / librosa / LiveKit / mem0"
+          - "Claude / Gemini / Codex / ollama / vLLM"
+          - "PyTorch / CUDA / TensorRT / ffmpeg / NumPy / Redis"
           - "naia-adk / naia-agent / naia-memory / naia-os / naia-cognitive (브랜드명)"
         cs_common_terms:
           - "도메인 / 모듈 / 백엔드 / 런타임 / 게이트웨이 / 프리셋 / 폴백 / 카탈로그"

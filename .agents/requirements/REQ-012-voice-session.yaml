@@ -1,6 +1,6 @@
 id: REQ-012
 title: "Voice Session"
-title_ko: "?�중 ?�로바이???�시�??�성 ?�션"
+title_ko: "?�중 ?�로바이???�시�??�성 ?�션"
 product: naia-os
 module: shell
 status: active
@@ -12,12 +12,12 @@ updated: 2026-04-18
 issue_url: ""
 
 description: |
-  Real-time voice sessions supporting multiple providers: Gemini Live, OpenAI Realtime, MiniCPM-O, and vLLM Omni. Integrates STT and TTS for full-duplex voice interaction.
+  Real-time voice sessions supporting multiple providers: Gemini Live, OpenAI Realtime, and a local omni cascade backend (naia-omni-cascade). Integrates STT and TTS for full-duplex voice interaction.
 
 acceptance_criteria:
   - "Gemini Live provider supports real-time voice interaction"
   - "OpenAI Realtime provider supports real-time voice interaction"
-  - "MiniCPM-O and vLLM Omni providers are supported"
+  - "Local omni cascade backend (naia-omni-cascade) is supported"
   - "STT captures user speech accurately"
   - "TTS produces natural voice output"
 
