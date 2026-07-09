@@ -1,0 +1,24 @@
+# Upstream sync baseline — fork-chain hygiene SoT.
+# Maintained by the sync-upstream skill.
+# Top repo (naia-adk): upstream_repo = null. Downstream forks record their upstream
+# + last synced commit. Drift detection compares adk_version / upstream_commit to upstream.
+#
+# When propagating this file to a downstream, that fork edits its own values below
+# (upstream_repo, upstream_commit, last_synced_at) — the sync-upstream skill does this.
+
+adk_version: 0.1.0
+upstream_repo: null          # null = top of chain (naia-adk). downstream = e.g. nextain/naia-adk
+upstream_commit: null        # last synced upstream commit sha (short). null at top.
+upstream_version: null       # upstream's VERSION at last sync
+last_synced_at: null         # ISO date of last clean merge
+
+# Canonical fork chain (top -> bottom). Each fork syncs from the one directly above it.
+fork_chain:
+  - naia-adk                 # generic/personal base (TOP)
+  - naia-business-adk        # company layer
+  - nextain-adk              # Nextain org
+  - alpha-adk                # Luke (Nextain employee)
+# onmam-adk branches off naia-business-adk (not in the linear chain).
+
+# Conflict resolution during merge.
+conflict_policy: upstream-structure-first

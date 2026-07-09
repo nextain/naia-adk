@@ -88,6 +88,13 @@ skills:
     scripts: [parse-session.js]
     note: "3포맷 자동 감지. stdout은 ASCII-safe, 한국어 본문은 UTF-8 digest 파일로 출력. interrupt(quota/mid-action 등) 자동 판정."
 
+  sync-upstream:
+    trigger: "upstream sync, fork 동기화, naia-adk에서 받아와, sync-upstream"
+    what: "ADK fork chain 정식 동기화(git merge upstream/main) — drift 감지→fetch→merge→버전 스탬프. selective cherry-pick 체인 부패 예방"
+    arg: "[--merge] [--remote URL]"
+    scripts: [sync-upstream.js]
+    note: "VERSION + .agents/upstream-sync.yaml로 drift 감지. 충돌 정책 = upstream-structure-first. 최상위(naia-adk)는 no-op."
+
   verify-implementation:
     trigger: "기능 구현 후, PR 전, 코드 리뷰 시, Review/Post-test Review 단계"
     what: "등록된 모든 verify-* 스킬 순차 실행 → 통합 검증 보고서"
