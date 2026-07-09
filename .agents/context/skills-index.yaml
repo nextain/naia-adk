@@ -81,6 +81,13 @@ skills:
     scripts: []
     note: "894줄 — 가장 긴 SKILL.md. input_schema, steps 등 상세 frontmatter 포함."
 
+  session-resume:
+    trigger: "claude --resume, codex/opencode 세션 이어서, 이전 세션 뭐했지, 세션 기록 봐줘"
+    what: "Claude Code/Codex/opencode 세션(JSONL·SQLite) 통합 파싱 → 대화 흐름 요약 → 끊긴 작업 이어하기"
+    arg: "[session-id | 경로] [--tool claude|codex|opencode] [--list]"
+    scripts: [parse-session.js]
+    note: "3포맷 자동 감지. stdout은 ASCII-safe, 한국어 본문은 UTF-8 digest 파일로 출력. interrupt(quota/mid-action 등) 자동 판정."
+
   verify-implementation:
     trigger: "기능 구현 후, PR 전, 코드 리뷰 시, Review/Post-test Review 단계"
     what: "등록된 모든 verify-* 스킬 순차 실행 → 통합 검증 보고서"

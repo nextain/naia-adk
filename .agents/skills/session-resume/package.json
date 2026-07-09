@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "commonjs",
+  "comment": "Force CommonJS for parse-session.js regardless of any parent package.json type:module."
+}
