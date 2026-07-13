@@ -108,3 +108,33 @@ Replace on sight with plain Korean or a standard term.
 - `.agents/context/contributing.yaml` (commit / issue conventions)
 - Memory [[feedback_neologism_no_external_exposure]] (the originating incident)
 - Memory [[feedback_copy_tone_show_dont_tell]] (external copy tone)
+
+## Definitions
+
+> **Policy says *how* to write; definitions say *what a term means*.** Without definitions,
+> humans and AI alike guess — and a guess that becomes code is drift.
+>
+> Real incident — 2026-07-13: an AI read `FE` as "Frontend" and wrote the wrong contract.
+> (UC/FE had been discussed earlier but never made it into the dictionary because "it got too long".)
+
+**Rules**
+
+- Do not use an acronym in docs, issues, or commits unless it is defined here. New acronym → **add it here first**.
+- On encountering an undefined acronym, the AI **asks instead of guessing** (asking back is a first-class action).
+- To change a term, **this dictionary changes first** — before code or docs.
+
+### Development method (contract chain)
+
+**Contract → UC → UC test → FE → FE test → implement → verify**
+
+| Term | Means | Is NOT |
+|------|-------|--------|
+| **Contract** | Rules pinned down before development. Deviation only through a gate (marker). | |
+| **UC** (Use Case) | **What the user wants.** Page + scenario (action → expected result). The entry ticket to start development. | Not a design or an implementation plan |
+| **UC test** | Actually walking the UC scenario and checking the expected result. **The execution of the done-criterion.** | |
+| **FE** (FEature) | **What to build** in order to fulfil the UC — the feature specification. | ⚠ **NOT "Frontend".** Write "frontend" in full when you mean the UI layer |
+| **FE test** | Verifying that the FE (feature) behaves as specified. | |
+| **Drift** | Source (git) and reality (server/production) out of sync. The common root of recurring incidents. | |
+
+Project-specific domain terms (e.g. onmam's portal / hompi / lynx) live in each project's
+`.agents/context/glossary.md`. This document holds **only the method vocabulary shared across all forks**.

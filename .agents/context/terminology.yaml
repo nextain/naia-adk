@@ -105,6 +105,40 @@ gates:
     code_review:
       - "PR 의 markdown / docstring / 주석 안 신조어 발견 시 즉시 교체 제안."
 
+definitions:
+  _why: |
+    policy 는 "어떻게 쓰나"(신조어 금지·풀이 규칙), definitions 는 "무슨 뜻인가"(용어의 정의).
+    둘은 다르다. 정의가 없으면 사람도 AI 도 추측하고, 추측이 코드가 되면 드리프트다.
+    사고 실례 — 2026-07-13: AI 가 `FE` 를 "Frontend" 로 오독해 엉뚱한 계약을 작성.
+    (그 전에 UC/FE 를 논의했으나 "너무 길어서" 사전에 못 들어갔던 것이 원인.)
+
+  rules:
+    - "여기 없는 약어는 문서·이슈·커밋에 쓰지 않는다. 새 약어는 **먼저 여기 추가**한다."
+    - "정의 없는 약어를 만난 AI 는 **추측하지 말고 되묻는다** (되묻기 = 1급 행위)."
+    - "용어를 바꾸면 코드·문서보다 **이 사전이 먼저** 바뀐다."
+
+  development_method:
+    chain: "계약 → UC → UC 테스트 → FE → FE 테스트 → 구현 → 검증"
+    terms:
+      - term: "계약 (contract)"
+        means: "개발 전에 못 박는 규칙 문서(.agents/context/*). 일탈은 게이트(마커)로만 연다."
+      - term: "UC (Use Case, 유저 시나리오)"
+        means: "**무엇을 원하는가.** 페이지 + 시나리오(행동 → 기대 결과). 개발 착수의 입장권."
+        not: "설계도·구현안이 아니다. 사용자 관점의 요구다."
+      - term: "UC 테스트 (유저 시나리오 테스트)"
+        means: "UC 의 시나리오를 실제로 밟아 기대 결과가 나오는지 확인. **완료 판정의 실행.**"
+      - term: "FE (FEature, 기능)"
+        means: "**UC 를 이루기 위해 무엇을 만들 것인가**의 기능 명세."
+        not: "⚠ **Frontend 가 아니다.** 프론트엔드를 뜻하려면 '프론트엔드'라고 풀어 쓴다."
+      - term: "FE 테스트 (기능 테스트)"
+        means: "FE(기능)가 명세대로 동작하는지 검증."
+      - term: "드리프트 (drift)"
+        means: "소스(git)와 실제(서버·운영)가 어긋난 상태. 반복 사고의 공통 뿌리."
+
+  project_glossary: |
+    프로젝트 고유 도메인 용어(예: onmam 의 포털·홈피·lynx·채널)는 각 프로젝트의
+    `.agents/context/glossary.md` 에 둔다. 이 파일은 **전 포크 공통 방법론 용어**만 담는다.
+
 cross_references:
   related_memories:
     - "feedback_neologism_no_external_exposure (적용 범위 확장 SoT)"
