@@ -22,5 +22,5 @@ trace:
     - { path: "scripts/request-contract-review-runner.cjs", symbol: "trusted reviewer launch and ingestion", coverage: full }
   tests:
     - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "sandbox, snapshot, privacy, signature, and output-closure fault cases", coverage: full }
-  reviews: { planning: null, development: "2026-07-14-north-mimo-clean", test: "2026-07-14-pickle-nemotron-clean", integration: "2026-07-14-deepseek-pickle-clean" }
+  reviews: { planning: "2026-07-14-deepseek-pickle-clean", development: "2026-07-14-deepseek-nemotron-post-manage-clean", test: "2026-07-14-deepseek-nemotron-post-manage-clean", integration: "2026-07-14-deepseek-nemotron-post-manage-clean" }
 decisions: []

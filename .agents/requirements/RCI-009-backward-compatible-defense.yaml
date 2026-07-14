@@ -22,5 +22,5 @@ trace:
   tests:
     - { path: ".claude/hooks/e2e/run.sh", symbol: "BEH and request-contract native integration", coverage: full }
     - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "disabled mode is a silent allow", coverage: full }
-  reviews: { planning: null, development: "2026-07-14-north-mimo-clean", test: "2026-07-14-pickle-nemotron-clean", integration: "2026-07-14-deepseek-pickle-clean" }
+  reviews: { planning: "2026-07-14-deepseek-pickle-clean", development: "2026-07-14-deepseek-nemotron-post-manage-clean", test: "2026-07-14-deepseek-nemotron-post-manage-clean", integration: "2026-07-14-deepseek-nemotron-post-manage-clean" }
 decisions: []

@@ -6,6 +6,15 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 const suite = path.join(root, ".claude", "hooks", "test", "run-request-contract-test.js");
+const requirements = path.join(root, "scripts", "validate-request-contract-requirements.cjs");
+const requirementResult = cp.spawnSync(process.execPath, [requirements], { cwd: root, encoding: "utf8" });
+if (requirementResult.error || requirementResult.status !== 0) {
+	if (requirementResult.stdout) process.stderr.write(requirementResult.stdout);
+	if (requirementResult.stderr) process.stderr.write(requirementResult.stderr);
+	process.stderr.write("request-contract requirements-trace: FAIL\n");
+	process.exit(requirementResult.status || 1);
+}
+process.stdout.write("request-contract requirements-trace: PASS\n");
 const runs = [
 	{ label: "fault-suite", env: { ...process.env, TEST_FILTER: "" } },
 	{ label: "persisted-client-parity", env: { ...process.env, TEST_FILTER: "full persisted lifecycle" } },

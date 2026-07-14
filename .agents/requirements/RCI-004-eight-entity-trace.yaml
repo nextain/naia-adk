@@ -22,5 +22,5 @@ trace:
   tests:
     - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "trace artifact, edge, atom, and tombstone fault cases", coverage: full }
     - { path: "packages/artifacts-spec/test/validate-request-contract.cjs", symbol: "schema and runtime example validation", coverage: full }
-  reviews: { planning: null, development: "2026-07-14-north-mimo-clean", test: "2026-07-14-pickle-nemotron-clean", integration: "2026-07-14-deepseek-pickle-clean" }
+  reviews: { planning: "2026-07-14-deepseek-pickle-clean", development: "2026-07-14-deepseek-nemotron-post-manage-clean", test: "2026-07-14-deepseek-nemotron-post-manage-clean", integration: "2026-07-14-deepseek-nemotron-post-manage-clean" }
 decisions: []
