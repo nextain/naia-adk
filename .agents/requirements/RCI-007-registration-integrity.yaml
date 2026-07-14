@@ -22,5 +22,5 @@ trace:
     - { path: ".codex/hooks.json", symbol: "hooks", coverage: full }
   tests:
     - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "client registry mutation matrix", coverage: full }
-  reviews: { planning: "2026-07-14-deepseek-pickle-clean", development: "2026-07-14-deepseek-nemotron-post-manage-clean", test: "2026-07-14-deepseek-nemotron-post-manage-clean", integration: "2026-07-14-deepseek-nemotron-post-manage-clean" }
+  reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

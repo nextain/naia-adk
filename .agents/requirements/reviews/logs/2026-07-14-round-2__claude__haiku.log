@@ -1,0 +1,70 @@
+Based on my comprehensive static review of the request-contract integrity scripts, documentation, and receipt infrastructure, I'm now ready to report my findings.
+
+## Scope Digest
+
+sha256:45c7424e0e416e7a164fe9d5125b33bdf1cfb720f56fb4a7c4befbb735fef6ba
+
+## Files Read
+
+- scripts/request-contract-review-scope.cjs
+- scripts/request-contract-review-transcript.cjs
+- scripts/issue-review-receipt.cjs
+- scripts/validate-request-contract-requirements.cjs
+- scripts/run-request-contract-tests.cjs
+- .agents/context/harness.yaml
+- .users/context/harness.md
+- .agents/skills/verify-request-contract/SKILL.md
+- .users/skills/verify-request-contract/SKILL.md
+- .agents/requirements/RCI-001-source-provenance.yaml
+- .agents/requirements/RCI-002-complete-scope-review.yaml
+- .agents/requirements/RCI-011-deduplicated-scope-authority.yaml
+- .agents/requirements/reviews/2026-07-14-round-1.json
+- .agents/requirements/reviews/logs/2026-07-14-round-1__claude__opus.log
+- .agents/requirements/reviews/logs/2026-07-14-round-1__claude__sonnet.log
+- .gitignore
+
+## RCI Coverage
+
+- RCI-001: COVERED — trace names request-contract.js + fault suite; `parseReviews` extracts receipt ids from trace.reviews; `validateReceipt` validates the quorum and verdict
+- RCI-002: COVERED — trace names review-pass SKILL.md; `stageMinimumReviewers` (2/3/2/3) match review-pass §1 stage profiles; `requiredCleanRounds = 2` enforced at line 249
+- RCI-003: COVERED — trace paths checked for existence at lines 240-243; `scopeFiles()` verifies all traced paths are tracked before digesting
+- RCI-004: COVERED — artifacts-spec schema traced; validator checks path existence via `exists()` callback
+- RCI-005: COVERED — entire receipt gate is this requirement's implementation; `verifyReviewerAgainstTranscript` (lines 137-171) re-parses transcripts and rejects Clean claims over FOUND_ISSUES verdicts
+- RCI-006: COVERED — registration files traced; validator checks path existence; parity suite in `run-request-contract-tests.cjs` gates before fault suite
+- RCI-007: COVERED — registration files traced; negative self-test at lines 612-624 verifies quorum logic when a reviewer doesn't cover RCI-007
+- RCI-008: COVERED — honest_limits at line 74 documents sandboxed-runtime scope is distinct from this always-on gate
+- RCI-009: COVERED — `.agents/context/harness.yaml` is in `EXTRA_SCOPE_FILES` (line 34); harness edits this round move the digest and void both prior receipts (as intended)
+- RCI-010: COVERED — scope derivation is repository-relative throughout: `path.resolve(__dirname, "..")`, `git ls-files`, `path.posix.join()` for store paths; no machine-local paths in tracked artifacts
+- RCI-011: COVERED — trace paths tracked; `scopeFiles()` dedupes via Set so a path reachable by pattern and trace is digested once
+
+## Planning Findings
+
+NONE
+
+## Planning Verdict
+
+CLEAN
+
+## Development Findings
+
+NONE
+
+## Development Verdict
+
+CLEAN
+
+## Test Findings
+
+NONE
+
+## Test Verdict
+
+CLEAN
+
+## Integration Findings
+
+NONE
+
+## Integration Verdict
+
+CLEAN

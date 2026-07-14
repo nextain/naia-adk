@@ -61,6 +61,20 @@ request_contract_integrity:
     - "the core verifies signed user-presence/non-exportable assertions but cannot independently attest the external signer's hardware properties"
     - "deterministic parity covers the tracked native adapter processes; installed host-client dispatch is separate operational smoke evidence"
 
+requirement_review_trace:
+  status: "always-on; independent of the opt-in request-contract runtime above"
+  purpose: "the RCI requirement files claim four-stage review evidence; this makes the claim falsifiable without the governed runtime being enabled"
+  scripts:
+    scope: "scripts/request-contract-review-scope.cjs"
+    validator: "scripts/validate-request-contract-requirements.cjs"
+    issuer: "scripts/issue-review-receipt.cjs"
+  store: ".agents/requirements/reviews/ (receipt JSON + verbatim reviewer transcripts under logs/)"
+  binding: "a stage names receipt ids, not a free-text label. Each receipt must exist, carry a Clean verdict with zero findings from the stage's minimum distinct reviewers, preserve each reviewer's untouched transcript and re-hash to it, list only requirements its reviewers reported COVERED, and match the scope_digest of the tree it judged. The digest is derived from git ls-files, and excludes the reviews lines and the receipt store so that recording a verdict does not invalidate it. Editing reviewed content after a round moves the digest and voids the receipt, which is how review-pass's 'any later revision restarts the Clean streak' becomes mechanical rather than honour-system."
+  honest_limits:
+    - "the receipt store is an ordinary Git-tracked directory: an agent with write access can forge a receipt together with a matching fabricated transcript, and both hash checks will pass. What this closes is the cheap failure — declaring review evidence that was never produced, or keeping a verdict alive across edits to the reviewed code. Closing forgery itself requires the opt-in runtime above, whose reviewer runs under bubblewrap isolation and whose receipts are signed from a process identity distinct from the writer."
+    - "the reviewed file set is derived from three sources: tracked paths naming the feature, every code/test path the requirement files themselves declare in their trace, and a short declared list for the governing skills and the review machinery. A reviewed file reachable by none of the three sits outside the digest until it is traced or declared; every declared or traced path fails closed if untracked. This cannot infer intent, but it no longer depends on remembering to extend a hand-kept list when the implementation grows."
+    - "reviewer identity is tool+model. Two runs of the same model do not count as two reviewers, by design; the caller must supply distinct reviewers to reach quorum."
+
 # ─── Verification Checklist ───────────────────────────────────
 
 checklist:
