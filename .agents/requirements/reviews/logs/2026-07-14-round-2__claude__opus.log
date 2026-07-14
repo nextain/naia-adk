@@ -1,0 +1,68 @@
+코드 네 개와 이번 라운드에서 갱신된 문서를 모두 읽었습니다. 결론부터: **네 단계 모두 Clean, 결함 없음.** 문서는 코드가 실제로 하는 일과 일치합니다(receipt 결박·전사 재해시·재파싱·digest 일치·같은 전사 두 번 사용 거부·합성 fixture 상시 실행 — 전부 코드에 실재). 음성 자가검증 21종을 실행 경로 순서대로 따라가며 각 테스트가 **이름이 가리키는 검사에 실제로 도달하는지** 확인했고, 이번에 추가된 `covers` 패딩 테스트는 quorum 필터를 통과한 뒤 `transcript does not report covering it` 에서 정확히 걸립니다. `.agents/requirements/reviews/` 는 `.gitignore` 의 `.agents/reviews/`(루트 앵커)에 걸리지 않아 커밋 가능하고, 보존된 전사에 머신 로컬 경로·개인 식별자는 없습니다.
+
+### Scope Digest
+
+sha256:45c7424e0e416e7a164fe9d5125b33bdf1cfb720f56fb4a7c4befbb735fef6ba
+
+### Files Read
+- scripts/request-contract-review-scope.cjs
+- scripts/request-contract-review-transcript.cjs
+- scripts/issue-review-receipt.cjs
+- scripts/validate-request-contract-requirements.cjs
+- scripts/run-request-contract-tests.cjs
+- .agents/context/harness.yaml
+- .users/context/harness.md
+- .agents/skills/verify-request-contract/SKILL.md
+- .users/skills/verify-request-contract/SKILL.md
+- .agents/requirements/RCI-001-source-provenance.yaml
+- .agents/requirements/RCI-002-complete-scope-review.yaml
+- .agents/requirements/RCI-003-governed-workspace.yaml
+- .agents/requirements/RCI-004-eight-entity-trace.yaml
+- .agents/requirements/RCI-005-review-bound-completion.yaml
+- .agents/requirements/RCI-006-client-policy-parity.yaml
+- .agents/requirements/RCI-007-registration-integrity.yaml
+- .agents/requirements/RCI-008-private-isolated-review.yaml
+- .agents/requirements/RCI-009-backward-compatible-defense.yaml
+- .agents/requirements/RCI-010-project-neutral-distribution.yaml
+- .agents/requirements/RCI-011-deduplicated-scope-authority.yaml
+- .agents/requirements/reviews/2026-07-14-round-1.json
+- .gitignore
+
+### RCI Coverage
+- RCI-001: COVERED — 요구사항 파일·trace 경로(request-contract.js, run-request-contract-test.js)·4단계 receipt 결박을 검사했고, reviews 줄이 receipt id 목록으로 전환되어 parseReviews 가 자유 문자열을 거부함을 확인
+- RCI-002: COVERED — trace 가 가리키는 review-pass SKILL.md 가 EXTRA_SCOPE_FILES/tracedFiles 로 digest 에 포함되어 범위 이력이 리뷰 대상에 들어감을 확인
+- RCI-003: COVERED — 요구사항·trace 경로 검사 및 해당 stage 의 receipt·전사 재파싱 경로(verifyReviewerAgainstTranscript)를 추적
+- RCI-004: COVERED — trace 의 schema/test 경로 실재 검사(parseTracePaths + exists)와 receipt 결박을 확인
+- RCI-005: COVERED — requiredCleanRounds=2, spent 맵의 전사 중복 사용 거부, digest 드리프트 무효화가 "Clean 연속 2회" 를 기계적으로 강제함을 코드에서 확인
+- RCI-006: COVERED — 요구사항 파일과 trace 경로를 읽고, 해당 stage 의 receipt·quorum·전사 대조 경로를 추적
+- RCI-007: COVERED — trace 의 .claude/settings.json / .codex/hooks.json 경로 존재 검사와 receipt 결박을 확인
+- RCI-008: COVERED — 요구사항·trace 경로 및 이 게이트가 닫는 범위와 sandboxed-signer 로 넘기는 한계가 harness.yaml honest_limits 와 일치함을 대조
+- RCI-009: COVERED — trace 가 harness.yaml 을 직접 가리키고 그 파일이 digest 에 포함되어, 이번 문서 갱신이 digest 를 움직였음을 확인
+- RCI-010: COVERED — trace 경로 검사와 scope 도출이 git ls-files 기반(하드코딩 절대경로 없음)임을 확인
+- RCI-011: COVERED — 요구사항·trace 경로 및 receipt 중복 라운드 거부(같은 전사 = 한 라운드) 로직을 확인
+
+### Planning Findings
+NONE
+
+### Planning Verdict
+CLEAN
+
+### Development Findings
+NONE
+
+### Development Verdict
+CLEAN
+
+참고(결함 아님): receipt 최상위 `covers` 배열은 검사기가 읽지 않습니다 — 판정은 전적으로 리뷰어별 `covers` × 전사 재파싱으로 이뤄지므로 게이트 결과에는 영향이 없습니다.
+
+### Test Findings
+NONE
+
+### Test Verdict
+CLEAN
+
+### Integration Findings
+NONE
+
+### Integration Verdict
+CLEAN

@@ -20,6 +20,9 @@ node -c .codex/hooks/request-contract.cjs
 node -c scripts/request-contract.cjs
 node -c scripts/request-contract-review-runner.cjs
 node -c scripts/validate-request-contract-requirements.cjs
+node -c scripts/request-contract-review-scope.cjs
+node -c scripts/request-contract-review-transcript.cjs
+node -c scripts/issue-review-receipt.cjs
 ```
 
 2. fault-injection 전체를 실행한다.
@@ -30,7 +33,15 @@ node scripts/run-request-contract-tests.cjs
 
 PASS 기준: 종료코드 0이며 마지막 줄에 `request-contract orchestrator: PASS`가 있다. orchestrator는 실제 두 native adapter 프로세스의 전체 persisted lifecycle 동등성을 누적 fault fixture와 메모리 상태를 공유하지 않는 두 번째 프로세스에서 검증한다. 검사는 동시 전역 lineage 승계와 출발/도착 chain 교차 결박 quarantine, 거부된 prompt envelope와 중복 runtime binding 차단의 원문 보존, 원문 exact-partition obligation atom과 target·criterion·REQ·UC·UC-test·FE·FE-test→implementation→evidence의 atom별 7개 간선 연결, source 변조·누락·재분류, lifecycle state/baseline 단독 변조, 재귀 Git-tree clean genesis, 수정→되돌림→재수정 occurrence, native stdin event 누락·불일치, Claude/Codex `apply_patch` preflight parity, native `PreCompact` 완료평가·압축 차단·proof 생성과 `PostCompact` proof/workspace 재검증, trace 전체 tombstone 불변성, exact authority source/tombstone/change mapping, 종료 지시 재활성화와 target/criterion 부분 삭제 거부, operation별 metadata 소유권과 단일 mixed pending transaction, 비종료 상태 자율 전환, 권한 challenge·counter·replay, HEAD·index·재귀 submodule 실제 바이트·전 레포 변경 추적, 현재/과거 scope-version의 완전한 불투명 관계 매핑, reviewer stdout의 원문·경로·locator·요약·digest 부재, writer host와 다른 reviewer PID+kernel identity, 코어 발급 run ID와 verdict 일치 고정 finding code, 실제 reviewer stdout과 동일한 일회성 live-runner provenance, runner 고정 시각과 거부 출력 비반사, digest-verified reviewer+bundle 익명 descriptor snapshot과 실제 PID/network/repository/home bubblewrap 격리, 설정 고정 attestor snapshot digest+review payload digest 이중서명, direct review JSON 접수 거부, 발급 후 드리프트 접수 거부, 완료 직전 변조 재검증, review-bound completion proof와 위조 success 압축 거부, manifest/bundle tampering, compaction 뒤 전역 ID 재사용 거부, bind/review/resume/session crash 복구, session 소유 lease Stop 복구와 실행 중 lease의 리뷰 차단, 동일실패 Stop 제한, terminal lock, 무작위 재시도 고정 receipt 비민감 압축을 포함한다.
 
-orchestrator는 시작 전에 RCI-001~RCI-011 파일과 인덱스의 ID·상태·제목·원요청 지시 연결·acceptance·실재 code/test trace 경로·planning/development/test/integration 리뷰 증거를 검사하고, 대표 변조 음성 테스트가 모두 거부되는지도 확인한다.
+orchestrator는 시작 전에 RCI-001~RCI-011 파일과 인덱스의 ID·상태·제목·원요청 지시 연결·acceptance·실재 code/test trace 경로를 검사하고, 4단계 리뷰 증거가 **자유 문자열이 아니라 receipt** 임을 확인한다. receipt 는 실존해야 하고, 해당 단계 최소 인원의 서로 다른 리뷰어에게서 findings 0 인 Clean 판정을 받아야 하며, 각 리뷰어의 원문 전사를 보존하고 그 바이트로 재해시·재파싱해 receipt 의 주장과 일치해야 하고, 리뷰어가 실제로 COVERED 라고 적은 요구사항만 나열해야 하며, 리뷰어가 심사한 트리의 `scope_digest` 와 일치해야 한다. 서로 다른 두 receipt 가 같은 전사에 기대면 한 라운드를 두 번 쓴 것으로 보고 거부한다. 음성 테스트는 합성 fixture 위에서 항상 실행되므로 receipt 저장소 상태와 무관하게 회귀를 잡는다.
+
+리뷰 라운드를 마치면 receipt 를 발급한다.
+
+```bash
+node scripts/issue-review-receipt.cjs <review-id> "$(date -Iseconds)" <tool>:<model>=<log> ...
+```
+
+리뷰어에게는 `node scripts/request-contract-review-scope.cjs` 결과를 프롬프트에 주고 전사의 `### Scope Digest` 절에 그대로 적게 한다. 리뷰 후 리뷰 대상 코드를 고치면 digest 가 움직여 receipt 가 무효가 된다 — review-pass 의 "이후 수정은 Clean 연속 기록을 리셋한다"가 기계적으로 강제된다.
 
 3. Claude Code와 Codex의 생명주기 등록을 대조한다.
 
@@ -107,5 +118,9 @@ FAIL이면 실패한 불변식과 파일을 수정하고 1번부터 전부 다�
 | `packages/artifacts-spec/schemas/request-contract.schema.json` | 공유 계약 스키마 |
 | `.claude/hooks/test/run-request-contract-test.js` | 결정론 fault-injection |
 | `scripts/run-request-contract-tests.cjs` | broad suite와 메모리 격리 parity suite 순차 실행 |
-| `scripts/validate-request-contract-requirements.cjs` | RCI 요구사항·인덱스·실재 trace·4단계 리뷰 증거 드리프트 검사 |
+| `scripts/validate-request-contract-requirements.cjs` | RCI 요구사항·인덱스·실재 trace 검사 + 4단계 리뷰 증거를 receipt 에 결박 |
+| `scripts/request-contract-review-scope.cjs` | 리뷰 대상 파일 집합(git ls-files + RCI trace 선언 경로)과 `scope_digest` |
+| `scripts/request-contract-review-transcript.cjs` | 리뷰어 전사 파서 (발급기·검사기 공용). 절단·모순·프롬프트 템플릿 상속을 Clean 으로 읽지 않음 |
+| `scripts/issue-review-receipt.cjs` | 전사에서 receipt 발급. 아무것도 지어내지 않음 |
+| `.agents/requirements/reviews/` | receipt + 리뷰어 원문 전사(`logs/`). 커밋 대상 |
 | `.gitignore` | private runtime unit·bundle·claim·lock 커밋 방지 |
