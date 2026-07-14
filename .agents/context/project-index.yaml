@@ -315,6 +315,10 @@ on_demand_loading:
       file: .agents/context/gstack-priority.md
       description: "gstack improvement priority list (P0-P3)"
       tags: [gstack, priority]
+    - id: naia-adk:lessons_craft
+      file: .agents/context/lessons-craft.yaml
+      description: "AI craft discipline — 4 coding principles, 6 core behaviors, 8 anti-patterns, anti-overengineering, prompting best-practices (transplanted from moai-adk; public/Apache/MIT sources)"
+      tags: [craft, discipline, anti-pattern, simplicity, scope, verify, behavior]
 
 # 진입점 우선순위
 entrypointPriority:

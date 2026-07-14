@@ -23,6 +23,12 @@ naia-settings/auth/*.enc
 # Local machine config (per-machine paths, local gateway URL, test persona)
 naia-settings/config.json
 
+# Chat session transcripts — personal conversation data, never shared
+naia-settings/.sessions/
+
+# Per-machine LLM routing (points at whatever pod this machine happens to run)
+.agents/context/llm-config.yaml
+
 # OS
 .DS_Store
 Thumbs.db
