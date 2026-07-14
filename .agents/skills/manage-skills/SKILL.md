@@ -32,7 +32,7 @@ argument-hint: "[선택사항: 특정 스킬 이름 또는 집중할 영역]"
 | 스킬 | 설명 | 커버 파일 패턴 |
 |------|------|---------------|
 | `verify-contract-conformance` | 선언 계약↔구현 심볼 드리프트 | `scripts/conform/**`, `docs/contracts/**` |
-| `verify-request-contract` | 원요청 source→증거·권한·리뷰·양 클라이언트 동등성 | `.agents/hooks/core/request-contract*`, `.agents/context/{request-contract.json,harness.yaml}`, `.claude/{hooks/request-contract.js,settings.json}`, `.codex/**`, `scripts/*request-contract*`, `packages/artifacts-spec/**`, `.agents/skills/{review-pass,verify-request-contract}/**`, `.users/context/{harness,request-contract}.md`, `.gitignore` |
+| `verify-request-contract` | 원요청 source→증거·권한·리뷰·양 클라이언트 동등성 | `.agents/hooks/core/request-contract*`, `.agents/context/{request-contract.json,harness.yaml,project-index.yaml,skills-index.yaml}`, `.agents/requirements/{RCI-*.yaml,_index.yaml}`, `.claude/{hooks/request-contract.js,hooks/e2e/run.sh,hooks/test/**,settings.json,skills/verify-request-contract}`, `.codex/**`, `scripts/*request-contract*`, `packages/artifacts-spec/**`, `.agents/skills/{manage-skills,review-pass,verify-implementation,verify-request-contract}/**`, `.users/{context/{harness,request-contract}.md,skills/verify-request-contract/**}`, `{AGENTS,CLAUDE,GEMINI}.md`, `package.json`, `.gitignore` |
 
 ## 워크플로우
 
