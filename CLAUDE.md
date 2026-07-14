@@ -137,6 +137,7 @@ GitHub에서 포크한 뒤, 주기적으로 upstream을 동기화하세요: `git
 | `review-pass` | 멀티 에이전트 상호검증 리뷰 (4단계) | 자동 (단계 7, 9) |
 | `verify-implementation` | 모든 `verify-*` 스킬 실행, 통합 리포트 생성 | 자동 (단계 7, 9) |
 | `verify-contract-conformance` | 선언된 API/인터페이스 계약 vs 구현 검증 | 자동 |
+| `verify-request-contract` | 원요청 source→증거·권한·2회 Clean·Claude Code/Codex 동등성 검증 | 자동 |
 | `manage-skills` | 변경 분석, `verify-*` 스킬 생성/업데이트 | 자동 (단계 10) |
 | `merge-worktree` | 시맨틱 커밋으로 워크트리 → main 스쿼시 머지 | 수동 (단계 13) |
 | `read-doc` | HWP/PDF/DOCX/XLSX/PPTX 텍스트 추출 | 수동 |
@@ -169,6 +170,7 @@ GitHub에서 포크한 뒤, 주기적으로 upstream을 동기화하세요: `git
 | `read-doc` | HWP/HWPX/PDF/DOCX/XLSX/PPTX 텍스트 추출 |
 | `doc-coauthoring` | 구조화 문서 공동작성 (3단계) |
 | `review-pass` | 멀티 에이전트 상호검증 리뷰 (4단계) |
+| `verify-request-contract` | 원요청 무결성 하네스 결정론 검증 |
 | `config` | 설정값 읽기 또는 업데이트 |
 | `cron` | 반복 / 1회성 스킬 호출 스케줄링 |
 | `diagnostics` | 시스템 진단 — 헬스, 리소스, 네트워크 |
@@ -218,7 +220,7 @@ GitHub에서 포크한 뒤, 주기적으로 upstream을 동기화하세요: `git
 
 .claude/                    # Claude Code configuration
 ├── settings.json           # Hooks registration
-├── hooks/                  # PostToolUse hooks
+├── hooks/                  # lifecycle hooks (Pre/PostToolUse 포함)
 └── skills/                 # Pointers → .agents/skills/
 ```
 

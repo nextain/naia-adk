@@ -1,0 +1,25 @@
+id: RCI-011
+title: "Deduplicated Scope Authority"
+title_ko: "중복 없는 범위 권한"
+product: naia-adk-request-contract
+module: authority
+status: verified
+source: human
+priority: high
+created: 2026-07-14
+updated: 2026-07-14
+issue_url: ""
+source_directives: [USR-007]
+description: |
+  최초 계약과 범위 변경만 서명된 사용자 권한을 요구하고, 파생 작업 revision은 자율 진행한다. 동일한 pending 요청은 재사용하고 의미 있는 scope·conflict·operation·affected/replacement·presentation 변경만 새 요청을 만든다.
+acceptance_criteria:
+  - "Canonical authority receipts bind authorized scope digest, scope epoch, binding epoch, user presence, non-exportable assertion, counter, and exact operation ownership."
+  - "Retries, restarts, and concurrency reuse one request; each material request component changed alone creates exactly one new request."
+  - "Ordinary requirement/use-case/test/feature/implementation/evidence revisions do not request renewed scope authority."
+trace:
+  code:
+    - { path: ".agents/hooks/core/request-contract.js", symbol: "authorityPresentation / issueAuthorityChallenge / validateAuthorityReceipt / bindContract", coverage: full }
+  tests:
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "authority deduplication, replay, amendment, exact ownership, and autonomous derived-work cases", coverage: full }
+  reviews: { planning: null, development: "2026-07-14-north-mimo-clean", test: "2026-07-14-pickle-nemotron-clean", integration: "2026-07-14-deepseek-pickle-clean" }
+decisions: []

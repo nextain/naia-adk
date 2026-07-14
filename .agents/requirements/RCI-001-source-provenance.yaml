@@ -1,0 +1,25 @@
+id: RCI-001
+title: "Source Provenance and Continuity"
+title_ko: "원요청 출처와 연속성"
+product: naia-adk-request-contract
+module: source-provenance
+status: verified
+source: human
+priority: high
+created: 2026-07-14
+updated: 2026-07-14
+issue_url: ""
+source_directives: [USR-001, USR-002, USR-004]
+description: |
+  활성화된 신뢰 세션의 모든 host prompt를 배타적 genesis와 독립 head/count에 결박된 로컬 해시체인으로 보존하고, 연속성을 증명할 수 없으면 성공 종료를 거부한다.
+acceptance_criteria:
+  - "Prompt-like content is never suppressed without authenticated native-origin metadata."
+  - "Genesis, source head/count, gaps, truncation, rewriting, rollback, and quarantine adoption are validated fail-closed."
+  - "Disabled or untrusted host hooks are documented as outside the enforcement boundary."
+trace:
+  code:
+    - { path: ".agents/hooks/core/request-contract.js", symbol: "createGenesis / appendSource / verifySourceChain / adoptQuarantine", coverage: full }
+  tests:
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "source-chain, quarantine, genesis, rollback fault cases", coverage: full }
+  reviews: { planning: null, development: "2026-07-14-north-mimo-clean", test: "2026-07-14-pickle-nemotron-clean", integration: "2026-07-14-deepseek-pickle-clean" }
+decisions: []

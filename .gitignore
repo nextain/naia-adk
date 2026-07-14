@@ -47,6 +47,12 @@ desktop.ini
 .agents/harness/state/
 .agents/harness/receipts/
 .agents/harness/leases/
+.agents/harness/units/
+.agents/harness/quarantine/
+.agents/harness/receipts-v2/
+.agents/harness/claims/
+.agents/harness/locks/
+.agents/harness/request-contract-on
 .claude/beh-on
 .claude/beh-stuck
 .claude/beh-reset
@@ -90,6 +96,7 @@ nul
 
 # 보안(보안 리뷰 HIGH): 머신로컬·런타임상태·prod토큰·제3자 PII 비추적
 .claude/settings.local.json
+.claude/git-push-approved.marker
 .claude/prod-access-approved.marker
 .claude/file-locks.json
 .claude/stage-files.sh

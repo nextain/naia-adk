@@ -254,6 +254,11 @@ contextFiles:
     mirrors:
       korean: .users/context/terminology.md
       english: .users/context/en/terminology.md
+  request_contract:
+    path: .agents/context/request-contract.json
+    description: "Opt-in original-request integrity policy shared by Claude Code and Codex adapters"
+    mirrors:
+      korean: .users/context/request-contract.md
 
 # opt-in localmodel backends (2026-05-15)
 # naia-adk 의 localmodel 설정에서 선택 가능한 외부 음성/모달 backend.

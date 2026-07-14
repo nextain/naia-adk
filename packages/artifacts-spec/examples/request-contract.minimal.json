@@ -1,0 +1,90 @@
+{
+  "kind": "request-contract",
+  "version": 1,
+  "id": "RC_EXAMPLE",
+  "status": "complete",
+  "sources": [
+    {
+      "id": "SRC-0123456789abcdef0123456789abcdef",
+      "classification": "directive",
+      "directive_ids": ["REQ_001"],
+      "obligation_atoms": [{ "id": "OBL_001", "text": "Implement the complete user request without silent scope reduction.", "directive_ids": ["REQ_001"] }]
+    }
+  ],
+  "directives": [
+    {
+      "id": "REQ_001",
+      "statement": "Implement the complete user request without silent scope reduction.",
+      "state": "done",
+      "source_ids": ["SRC-0123456789abcdef0123456789abcdef"],
+      "targets": [{ "id": "TGT_001", "path": "packages/artifacts-spec/examples/request-contract.evidence.txt", "obligation_atom_ids": ["OBL_001"] }],
+      "acceptance_criteria": [{ "id": "AC_001", "statement": "Every source directive has current evidence.", "obligation_atom_ids": ["OBL_001"] }],
+      "trace": {
+        "requirements": ["RQM_001"],
+        "use_cases": ["UC_001"],
+        "use_case_tests": ["UCT_001"],
+        "features": ["FE_001"],
+        "feature_tests": ["FET_001"],
+        "implementations": ["IMP_001"],
+        "evidence": ["EVD_001"]
+      }
+    }
+  ],
+  "artifacts": {
+    "requirements": [{ "id": "RQM_001", "statement": "Preserve the complete source request.", "obligation_atom_ids": ["OBL_001"] }],
+    "use_cases": [{ "id": "UC_001", "statement": "Agent carries the full request through completion.", "obligation_atom_ids": ["OBL_001"] }],
+    "use_case_tests": [{ "id": "UCT_001", "statement": "A missing source directive blocks completion.", "obligation_atom_ids": ["OBL_001"] }],
+    "features": [{ "id": "FE_001", "statement": "Request-contract lifecycle enforcement.", "obligation_atom_ids": ["OBL_001"] }],
+    "feature_tests": [{ "id": "FET_001", "statement": "Fault-injection suite passes.", "obligation_atom_ids": ["OBL_001"] }],
+    "implementations": [{ "id": "IMP_001", "statement": "Shared policy core and native adapters.", "obligation_atom_ids": ["OBL_001"] }],
+    "evidence": [{ "id": "EVD_001", "statement": "Deterministic test report.", "obligation_atom_ids": ["OBL_001"], "kind": "test-report", "subject_id": "IMP_001", "locator": "packages/artifacts-spec/examples/request-contract.evidence.txt", "digest": "83edbffb68bd811b6376bb2212b840351c6dc4b8939de2dd6a045ea83cd87419" }]
+  },
+  "edges": [
+    { "id": "EDGE_001", "kind": "directives_to_requirements", "from": "REQ_001", "to": "RQM_001" },
+    { "id": "EDGE_002", "kind": "requirements_to_use_cases", "from": "RQM_001", "to": "UC_001" },
+    { "id": "EDGE_003", "kind": "use_cases_to_use_case_tests", "from": "UC_001", "to": "UCT_001" },
+    { "id": "EDGE_004", "kind": "use_case_tests_to_features", "from": "UCT_001", "to": "FE_001" },
+    { "id": "EDGE_005", "kind": "features_to_feature_tests", "from": "FE_001", "to": "FET_001" },
+    { "id": "EDGE_006", "kind": "feature_tests_to_implementations", "from": "FET_001", "to": "IMP_001" },
+    { "id": "EDGE_007", "kind": "implementations_to_evidence", "from": "IMP_001", "to": "EVD_001" }
+  ],
+  "authorities": [
+    {
+      "id": "AUTH_001",
+      "operation": "authorize_contract",
+      "source_id": "SRC-0123456789abcdef0123456789abcdef",
+      "source_digest": "aed52c85f8919f1f188025abe1c614a853497a84fa451f58d8648e8eeb552b5a",
+      "target_directive_ids": ["REQ_001"],
+      "affected_source_ids": [],
+      "affected_prior_ids": [],
+      "replacement_ids": ["REQ_001"],
+      "tombstone_ids": [],
+      "receipt": {
+        "operation": "authorize_contract",
+        "nonce": "0123456789abcdef",
+        "issued_at": 1783960000000,
+        "expires_at": 1783960060000,
+        "resulting_scope_digest": "46f94a9c716c1fc0fa1b2bf4c41bfa041e1ca74f4abaa3164d1de377c6f033e1",
+        "resulting_scope_epoch": 0,
+        "binding_epoch": 1,
+        "challenge": "AUT-0123456789abcdef0123456789abcdef",
+        "presentation_digest": "904f7428708de462a11b66f90d7632c5cf8c743e278d2077ca74d78727cb2db4",
+        "target_directive_ids": ["REQ_001"],
+        "affected_source_ids": [],
+        "affected_prior_ids": [],
+        "replacement_ids": ["REQ_001"],
+        "tombstone_ids": [],
+        "sign_count": 1,
+        "user_presence": {
+          "present": true,
+          "non_exportable": true,
+          "credential_id": "request-contract-example-test-key",
+          "authenticator_kind": "hardware"
+        },
+        "signature": "IE+R2QrPhkL4rNQMKdM4f8gNtWYluTrpLB2W2FoaDi2Lqsi/zAvON9a2R8xYzB8mzCbxTMELEZm2WWaThf16Bg=="
+      }
+    }
+  ],
+  "tombstones": [],
+  "changes": []
+}

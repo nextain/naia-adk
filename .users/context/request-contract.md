@@ -1,0 +1,51 @@
+# 원요청 무결성 설정
+
+정본은 `.agents/context/request-contract.json`입니다. 이 문서는 downstream 운영자가 설정 의도를 읽기 위한 사람용 미러입니다.
+
+## 활성화
+
+- 기본값은 `enabled_by_default: false`인 opt-in입니다.
+- 세션 단위: `REQUEST_CONTRACT=on`
+- 저장소 단위: `node scripts/request-contract.cjs enable`
+- 미해결 unit이나 미수용 quarantine이 생긴 뒤에는 마커 삭제, `REQUEST_CONTRACT=off`, `disable` 명령으로 중간 해제할 수 없습니다.
+- 활성화 전에 서로 다른 권한 서명자, 리뷰 실행자, 격리 실행기(review runner)의 고정 공개키와 credential ID, 허용 reviewer·reviewer attestor·runner attestor 실행파일 SHA-256 목록을 downstream 설정에 공급해야 합니다. credential ID뿐 아니라 공개키 지문도 세 역할 사이에서 모두 달라야 하며, 값이 없거나 바뀌면 governed mode는 fail-closed 합니다. 일반 입력을 그대로 서명하는 범용 signer를 허용목록에 넣어서는 안 됩니다.
+- Claude Code와 Codex는 각각 설정에 고정된 최소 버전 이상이어야 합니다. `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop`은 정확한 어댑터 경로·이벤트 인자·저장소 루트 해석·matcher로 각 1회만 등록되어야 하며, 누락·중복·충돌 등록은 fail-closed 합니다. 명령행 event 인자는 라우팅용일 뿐이며 native stdin의 event 필드가 반드시 존재하고 같은 값이어야 합니다. Codex의 `SessionStart|PreCompact|PostCompact` 차단은 native dispatcher가 실제로 중단하는 `continue:false`/`stopReason` 형식을 사용하고, compact 이벤트에는 지원되지 않는 Claude 전용 `decision:block`/context 봉투를 내보내지 않습니다.
+
+## 범위
+
+- `product_roots: ["."]`는 현재 Git 저장소 전체를 관찰합니다. gitlink는 상태 문자열만 기록하지 않고 하위 저장소의 실제 파일·index·HEAD를 재귀 해시하므로 이미 dirty인 파일의 바이트가 다시 바뀌어도 새 변경으로 잡힙니다. Git 명령 실패·출력 파싱 실패를 빈 상태로 바꾸지 않으며, 읽을 수 없는 디렉터리나 지원하지 않는 파일 형식을 만나면 manifest 생성을 중단합니다. Linux에서는 역슬래시를 경로 구분자로 바꾸지 않아 `a\\b`와 `a/b`를 서로 다른 파일로 보존하고, canonical key가 겹치면 덮어쓰지 않고 거부합니다. 설정된 root가 실제로 없는 경우는 `missing` 상태로 명시해 이후 생성도 드리프트로 잡습니다.
+- `.agents/harness`, `.agents/progress`, `.agents/reviews`, 모든 깊이의 `node_modules`만 기본 제외합니다. 계약 target이나 evidence가 제외 경로를 가리키면 결박을 거부합니다.
+- Git HEAD, index, 재귀 submodule 상태도 파일 내용과 별도 occurrence로 기록합니다. evidence는 실제 경로를 확인해 심볼릭 링크로 product root 밖을 읽을 수 없습니다.
+- 중첩 Git 저장소는 각 저장소의 하네스가 관찰하며, 상위 저장소에서는 gitlink commit으로 기록합니다.
+
+## 권한과 리뷰
+
+- 초기 계약과 범위 변경은 challenge, presentation digest, 단조 서명 counter, 일회 nonce, 정확한 대상 지시 집합을 포함한 외부 사용자-presence 서명을 요구합니다. `authorize_contract`는 최초 계약에 정확히 한 번만 쓸 수 있습니다. 순수 추가는 `amend_scope_add`, 기존 비종료 범위 교정은 `amend_scope_replace`, 제거 상태는 `supersede|defer|abandon`으로 서로 구분됩니다. `pending→active→done` 같은 비종료 진행 상태와 파생 trace 갱신은 의미 범위를 바꾸지 않으므로 별도 사용자 승인이 필요 없습니다. 반대로 target이나 acceptance criterion을 기존 지시에서 부분 삭제할 수 없으며, 이전 지시를 정확한 tombstone과 함께 종료하고 축소된 새 지시를 추가해야 합니다. 한 번 처분된 지시는 그 뒤 계약에서 전체 canonical directive가 바뀌면 거부하며, 모든 tombstone도 일부 필드·설명·authority·실체·간선 어느 하나를 바꿀 수 없는 canonical 불변 기록입니다. 한 번 `superseded|deferred|abandoned`로 처분된 지시는 `active|done`으로 되살리거나 다른 처분으로 바꿀 수 없습니다. 코어는 고정키 서명과 서명된 presence/non-exportable 주장을 검증하지만 키가 실제 하드웨어 비반출형인지 독립 증명하지는 못하므로, 그 속성과 물리/OS 제스처는 외부 signer의 명시적 provisioning 신뢰 경계입니다.
+- 모든 authority는 계약에 포함된 정확한 `source_id`, 원문 `source_digest`, 대상 지시를 상호 연결하며 이 값들은 사용자-presence presentation digest에 포함됩니다. authority가 인용하는 source는 호출자가 보낸 `origin` 문자열이 아니라 등록된 native `UserPromptSubmit` 이벤트에서 어댑터가 직접 판정한 `native_user` 출처여야 합니다. 거부돼 quarantine에 보존된 prompt도 같은 파생 출처를 유지합니다. 후속 범위 authority는 이전 계약에 없던 뒤 시점 source를 인용해야 합니다. 기존 source 재분류와 tombstone의 설명·authority 기록 수정도 새 범위 authority 없이는 적용되지 않으며, tombstone의 처분 상태와 전체 실체·간선 ID 집합은 새 권한으로도 바꿀 수 없습니다.
+- 각 source는 이어 붙였을 때 원문과 byte-for-byte 같은 비어 있지 않은 `obligation_atoms`로 분해합니다. directive·approval·authority 성격 atom은 하나 이상의 directive에 매핑되고, source 수준 매핑과 atom 매핑의 합집합이 정확히 같아야 합니다. 해당 directive의 statement·target description·acceptance criterion 중 하나에 atom 원문이 그대로 선언돼야 합니다. 각 target, acceptance criterion, REQ·UC·UC-test·FE·FE-test·implementation·evidence artifact도 자신이 충족하는 `obligation_atom_ids`를 명시하며, atom마다 7개 trace 간선 전체가 실제로 연결돼야 하므로 문장에 원문만 인용하고 뒤 단계에서 일부 의무를 버리는 축소도 의미 리뷰 전에 거부합니다.
+- `scripts/request-contract-review-runner.cjs`는 Linux reference launcher입니다. reviewer와 bundle 바이트를 익명 descriptor로 고정하고 PID·네트워크·IPC·UTS가 분리된 `bubblewrap`에서 실행합니다. review 접수는 동일 프로세스의 일회성 `runSandbox` 증거를 소비하며, 실제 reviewer stdout의 의미 필드와 접수 review가 다르면 실패합니다. 공개 실행 결과는 `verdict`와 불투명 `run_id`만 내보내며 `record_hash`와 bundle 결박값은 보호된 저장소에만 둡니다. 일반 operator CLI에는 review JSON 직접 접수 명령이 없습니다. reviewer/runner attestor는 설정에 고정된 실행파일 스냅샷만 실행하고 각 digest와 review payload digest를 서명합니다. writer host와 reviewer의 PID 및 `/proc` boot/start identity도 invocation에 결박해 동일 프로세스를 독립 reviewer로 셀 수 없습니다. 리뷰 시각은 runner 증거로 고정하고 reviewer stderr와 거부 필드·값은 외부 오류에 반사하지 않습니다. 다른 OS는 같은 계약의 platform runner가 필요합니다.
+- 같은 `run_id`, challenge, reviewer context/process, 격리 실행 ID는 저장소 전역 claim으로 영구 예약되어, 원 unit이 압축된 뒤에도 다시 사용할 수 없습니다. `run_id`는 코어가 발급한 불투명 ID만 허용하고 finding은 고정된 코드 집합만 허용하므로 원문이 공개 결과로 흘러나가지 않습니다.
+- review invocation의 불변 필드와 writer session·host process 집합은 전역 claim이 결박한 manifest digest로 보호됩니다. 원문과 obligation atom이 든 review bundle은 mode 0600 런타임 경로에만 기록되고, stdout에는 불투명 locator만 나오며 receipt 수락 또는 challenge 만료 후 삭제됩니다.
+- 성공에는 현재 source/scope/work/config/binding과 정확히 결박되고, 현재와 모든 과거 무작위 scope-version ID 및 각 version의 source/atom/directive/target/criterion/authority/tombstone/change/artifact/edge 관계를 빠짐없이 재확인한 연속 Clean 2회가 필요합니다. exact canonical 계약은 비공개 bundle에서 검토하며, 격리 reviewer stdout에는 verdict·고정 finding code·불투명 ID 관계만 남고 원문·경로·locator·요약·digest는 남지 않습니다. trusted runner가 발급 당시 결박 필드를 sandbox 종료 뒤 주입합니다. 리뷰 접수 시에는 발급 후 현재 source·contract·workspace·scope·work·binding과 bundle digest를 다시 계산하므로 중간 드리프트가 있으면 receipt를 기록하지 않습니다. 완료 판정도 저장소·lineage lock을 함께 잡은 채 동일 검증을 한 번 더 실행하고 두 snapshot이 같을 때만 성공 proof를 기록합니다. 두 회차는 서로 다른 reviewer context와 실제 process identity를 가져야 하며 동일 실행 맥락을 재사용할 수 없습니다.
+
+## 보존
+
+- 원문과 상세 기록은 `.agents/harness/` 아래 비공개 런타임 상태입니다.
+- 최초 결박 전에도 실제 훅 경로가 교착되지 않도록 `Write|Edit`와 Codex `apply_patch`는 현재 unit의 `pending/{contract-input,authority-presentation-input,resume-receipt-input}.json` 세 파일에만 제어 입력을 쓸 수 있습니다. Codex patch는 공식 native `tool_input.command`에서 단일 `Add|Update File` 구간만 엄격히 해석하며 다중 파일, delete/move, 절대경로, 다른 대상은 거부합니다. `Bash`는 신뢰된 Node 실행파일과 저장소의 `scripts/request-contract.cjs` 또는 고정 digest가 확인된 review runner/attestor의 단일 명령만 제어 명령으로 분류합니다. unit·session·파일 경로·플래그가 정확히 일치해야 하며 shell 연결, 치환, redirection, 알 수 없는 옵션은 일반 mutation으로 돌아가 미결박 상태에서 차단됩니다. 이 제어 경로는 product 변경 lease를 만들지 않으므로 최초 `authority-challenge|bind`와 결박 후 review runner가 자기 lease에 막히지 않습니다.
+- `PreCompact`는 호스트가 문맥을 줄이기 전에 실제 완료 평가를 실행합니다. 미완료 계약은 압축을 차단하지만 이 검사는 실제 `Stop` 시도 횟수나 terminal-incomplete 전환을 소비하지 않습니다. 완료 가능한 계약은 현재 workspace·source/scope/review chain에 결박된 completion proof와 client/session에 묶인 일회성 압축 승인을 먼저 생성합니다. `PostCompact`는 그 승인을 정확히 한 번 소비하면서 같은 proof와 현재 workspace를 재검증합니다. 직접 호출, 다른 client/session, 재호출, 사전 proof 부재, 압축 사이 드리프트는 모두 fail-closed 합니다.
+- 성공 terminal 이후의 `Stop`과 같은 완료 재보고도 completion proof와 현재 workspace를 다시 검증합니다. 성공 뒤 우회 변경이 생기면 이전 성공을 그대로 재사용하지 않고 완료를 차단합니다.
+- 성공한 기존 session이 다시 `Stop|SessionStart|PreCompact|PostCompact`를 보고하면 보존 중인 proof를 현재 설정·작업공간에 대해 다시 검증합니다. 별도 새 session은 새 요청 lineage이므로 생성 직전에 모든 기존 성공 proof가 아직 현재인지 검증하고, 새 unit에 그 시점의 `genesis_workspace_digest`를 결박해 명시적인 작업공간 handoff를 남깁니다. 이후 새 요청이 작업공간을 바꾸더라도 이전 session이 성공을 재보고할 수는 없지만, 보존 정리는 검증된 handoff를 통해 이전 terminal을 역사적 완료로 확인할 수 있습니다.
+- 성공 종료 후 보존기간이 지나면 version, 무작위 receipt ID, 상태, 시작·종료·압축 시각과 source/change/review 개수만 남깁니다. handoff 전 unit은 삭제 직전에도 terminal의 completion proof, 현재 config/workspace digest, source/scope/review chain, 계약·binding digest, 연속 Clean record hash를 두 번 다시 검증합니다. handoff된 unit은 후속 genesis에 결박된 정확한 terminal workspace digest와 내부 proof chain을 두 번 검증합니다. state에 `success`만 써 넣거나 성공 뒤 새 lineage 없이 파일·설정을 바꾼 unit은 압축할 수 없습니다. receipt를 먼저 durable journal에 기록한 뒤 unit 전체를 원자적으로 staging 이름으로 바꾸고, 그 이후에만 소비된 quarantine과 비공개 staging을 지웁니다. staging 직후 중단돼도 다음 보존 실행이 receipt와 proof를 확인해 정리를 끝냅니다. receipt ID는 내부 unit/terminal digest에서 만들지 않으며, 압축 중단 후 재시도에는 head에 준비된 같은 무작위 ID를 씁니다. 원자적 파일 교체는 내용과 부모 디렉터리를 fsync하고 transaction 삭제도 부모를 fsync합니다. 불완전 lineage는 자동 압축하지 않고 원문·계약·서명 resume 상태를 계속 보존합니다.
+- source append, 계약 결박, review ingestion, signed resume, session binding뿐 아니라 lifecycle state와 head의 교체도 준비 transaction을 먼저 쓰고 중단 시 다음 lock 획득에서 멱등 복구합니다. 전체 lifecycle state와 그 안의 baseline 자체 digest는 unit head에 결박되어 state 파일 하나만 고쳐 occurrence나 Stop 횟수를 지울 수 없습니다. unit/quarantine 저장소가 읽히지 않는 상황을 빈 목록으로 간주하지 않으므로 sticky governance가 조용히 풀리지 않습니다. 잠금 owner는 비공개 후보 디렉터리에서 먼저 완성한 뒤 한 번의 rename으로 공개하고, 공개 직후와 진입·해제 시 디렉터리 identity와 nonce를 다시 확인합니다. stale 회수자는 별도 reaper로 직렬화해 다른 회수자가 새 owner를 가져갈 수 없게 합니다. 새 client/session이 붙으면 binding epoch와 work revision이 함께 올라 기존 Clean을 무효화합니다.
+- incomplete 전환 횟수는 source/contract/config/workspace/binding을 포함한 동일 failure fingerprint가 연속될 때만 증가합니다. 실제 진행으로 fingerprint가 바뀌면 새 failure episode의 1회차로 시작하며, 바뀌지 않은 같은 실패만 설정된 횟수에 도달할 때 terminal incomplete가 됩니다.
+- `minimum_clean_rounds`, `stop_attempt_limit`, `retention.success_hours`는 유한한 정수와 허용 범위를 엄격히 검사합니다. 문자열·소수·범위 밖 값은 기본값으로 조용히 바꾸지 않고 설정 오류로 fail-closed 합니다.
+- 다른 세션에서 먼저 포착된 quarantine source를 채택할 때는 출발 chain의 head/count/source ID 집합을 도착 unit head에 함께 결박합니다. 출발 파일의 변경 가능한 `consumed` 표지만으로는 소비된 것으로 인정하지 않으며, 중단 뒤 재시도도 동일한 결박을 한 번만 기록합니다.
+- `PreToolUse`는 genesis뿐 아니라 활성 계약 binding과 모든 source 분류가 없는 mutating tool을 실행 전에 차단합니다. `PostToolUse`는 허용된 실행 뒤 직전 관측 manifest와 비교해 수정·되돌림·동일 재수정을 각각 새로운 occurrence로 수집합니다.
+- 다른 guard나 호스트 권한 거절 때문에 `PostToolUse`가 오지 않은 lease는 같은 client/session의 Stop만 현재 workspace를 먼저 관찰한 뒤 취소 기록과 함께 닫습니다. 다른 세션 소유 lease가 하나라도 실행 중이면 Stop은 시도 횟수를 소비하지 않고 차단되며, 리뷰 발급도 모든 lease가 닫힐 때까지 거부됩니다. 실제 변경이 있으면 occurrence로 남고, 변경이 없어도 소유 세션이 영구 `mutation_in_flight` 상태에 갇히지 않습니다.
+- native `UserPromptSubmit` 등록과 envelope metadata가 충돌하거나 유효한 prompt가 중복 runtime binding으로 차단되는 경우에도 문자열 prompt는 실패 응답을 내기 전에 quarantine에 보존합니다. 성공한 Codex `Stop`은 Codex의 공식 hook 해석 규칙에 따라 빈 stdout을 정상적인 계속 진행으로 사용하며, 차단 때만 명시적인 봉투를 출력합니다. Claude Code와 Codex의 변경 사전 hook은 모두 `apply_patch`를 포함합니다.
+
+권한이 필요한 변경이 한 번에 여러 종류여도 코어는 정렬된 전체 presentation digest 집합으로 하나의 pending transaction만 만듭니다. 각 서명 receipt는 자기 presentation을 정확히 한 번 소비하고, 전체 집합이 소비된 뒤에만 transaction이 닫힙니다. 집합이 달라지면 기존 transaction 전체를 supersede하고 하나의 새 transaction으로 교체합니다.
+
+## 정직한 한계
+
+이 계층은 정상적으로 실행되는 로컬 훅과 외부 서명자를 전제로 한 협업 무결성 방어입니다. 훅 설정 자체를 끈 경우, 모든 로컬 기록과 고정키를 함께 바꾸는 행위자, 외부 signer가 거짓 presence/non-exportable 주장을 서명하는 경우, 훅 경계 사이에서 실행 후 완전히 복원된 외부 부작용까지 독립적으로 막는 보안 경계는 아닙니다. Claude/Codex 결정론 테스트는 각 네이티브 어댑터 프로세스 경계까지 검증하며, 설치된 호스트 클라이언트의 dispatcher 동작은 별도 운영 smoke 범위입니다.

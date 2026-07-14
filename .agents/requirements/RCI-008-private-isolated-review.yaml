@@ -1,0 +1,26 @@
+id: RCI-008
+title: "Private Isolated Exact-Text Review"
+title_ko: "비공개 격리 원문 리뷰"
+product: naia-adk-request-contract
+module: privacy
+status: verified
+source: human
+priority: high
+created: 2026-07-14
+updated: 2026-07-14
+issue_url: ""
+source_directives: [USR-003, USR-004]
+description: |
+  원문과 비공개 증거는 mode-0600 로컬 파일에만 두고, exact-text 리뷰를 네트워크·저장소·home에서 격리된 별도 프로세스로 실행하며 닫힌 불투명 결과만 접수한다.
+acceptance_criteria:
+  - "Sandbox denies network, inherited secret/FD access, repository/home access, symlink escape, and persistent writable storage outside one destroyed scratch."
+  - "Reviewer, runner, bundle, payload, process identity, and signatures are pinned and revalidated before ingestion."
+  - "Rejected output, stderr, paths, prompt text, summaries, and prompt-derived digests never escape the closed result envelope."
+trace:
+  code:
+    - { path: ".agents/hooks/core/request-contract-review-runner.js", symbol: "runSandbox / consumeRunEvidence / pinnedExecutableDigest", coverage: full }
+    - { path: "scripts/request-contract-review-runner.cjs", symbol: "trusted reviewer launch and ingestion", coverage: full }
+  tests:
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "sandbox, snapshot, privacy, signature, and output-closure fault cases", coverage: full }
+  reviews: { planning: null, development: "2026-07-14-north-mimo-clean", test: "2026-07-14-pickle-nemotron-clean", integration: "2026-07-14-deepseek-pickle-clean" }
+decisions: []

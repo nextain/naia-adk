@@ -21,6 +21,24 @@
 
 **상태**: part1+part2 **완료 & 적대 2-consecutive-clean(6라운드)** — 실 pi@0.74.1 런타임 게이트 20/20, Claude parity(golden 8/42/19 + E2E 64 + system 13) byte-동일. **cross-tool 목표(Claude+pi 동일 하네스, core 무변경) 달성·검증.** partB(선언적 guard_policies) = 3라운드 설계리뷰 → **DEFER 권고**(SoT-정책화에 건전한 무결성 루트 없음; 2/9 가드만 적합; cross-tool 목표 이미 달성). 상세 = `.agents/progress/g-oc01-partB-forbidden-actions-plan.md`.
 
+### 원요청 무결성 계층 (Claude Code + Codex)
+
+- 공통 코어: `.agents/hooks/core/request-contract.js`, `request-contract-adapter.js`
+- 얇은 어댑터: `.claude/hooks/request-contract.js`, `.codex/hooks/request-contract.cjs`
+- 동일 생명주기: `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop`
+- 원문 프롬프트 해시체인부터 지시→REQ→UC/UC-test→FE/FE-test→구현→증거의 8개 실체·7개 간선을 의무 atom별로 완전 추적하고, 현재 상태에 결박된 외부서명 Clean 리뷰 2회가 있어야 성공 종료합니다.
+- Linux reference review runner는 허용목록 reviewer와 발급 digest가 일치하는 bundle을 익명 descriptor로 고정해 `bubblewrap`에서 실행합니다. 접수는 같은 프로세스의 일회성 runner 증거를 소비하고 실제 reviewer stdout의 의미 필드와 저장 review가 정확히 같아야 하며, 임의 review JSON 직접 접수 명령은 없습니다. reviewer/runner attestor도 설정에 고정된 바이트 스냅샷만 실행하고 두 실행파일 digest와 review payload digest를 서명합니다. 작성 host와 reviewer의 PID 및 kernel boot/start identity 충돌도 거부합니다. 리뷰 시각은 runner 증거로 덮어쓰며 거부 필드·값·stderr는 반사하지 않습니다.
+- 전역 run/context/process/execution ID claim, digest-protected invocation manifest, owner 완성 후 원자적으로 공개되고 identity를 재확인하는 저장소/lineage lock, state+head를 포함한 crash-recovery transaction이 compaction·동시 세션·중단 뒤의 replay와 부분 커밋을 막습니다. stale 회수도 별도 reaper로 직렬화합니다. 읽을 수 없는 unit/quarantine 저장소, 잘못된 숫자 설정, Git 명령·파싱 실패, platform-native 경로 key 충돌은 빈 상태로 축소하지 않습니다. quarantine 채택은 출발 chain의 head/count/source ID를 도착 unit에 교차 결박하고 재시도 시 중복 기록하지 않습니다.
+- 초기 계약과 범위 변경은 고정 공개키로 검증되는 외부 사용자-presence 서명을 요구합니다. 코어는 서명된 presence/non-exportable 주장을 확인하지만 실제 하드웨어 속성은 외부 signer provisioning 신뢰 경계입니다.
+- `authorize_contract`는 최초 한 번뿐이며, 후속 추가·교정·종료 권한은 각 operation의 실제 변경분을 정확히 소유해야 합니다. 여러 operation이 동시에 필요해도 하나의 pending transaction으로 제시하고 전체 presentation을 소비한 뒤 닫습니다. 비종료 진행 상태 전환은 별도 승인 없이 진행됩니다.
+- 종료 처분된 지시는 이후 전체 canonical directive를 바꿀 수 없고 다시 active/done으로 되살릴 수 없습니다. tombstone도 설명·authority를 포함한 전체 canonical 기록이 불변입니다. 격리 reviewer stdout은 verdict·고정 finding code와 불투명 source/atom/directive/target/criterion/authority/tombstone/change/artifact/edge 관계 투영만 내보내며 원문·경로·locator·요약·digest를 내보내지 않습니다. exact canonical 계약은 비공개 bundle 안에서 검토되고 trusted runner가 발급 당시 결박 필드를 sandbox 종료 뒤 주입합니다. Clean은 finding 0개·Dirty는 1개 이상이며, 현재와 모든 과거 scope-version의 완전한 불투명 관계 투영을 요구합니다. 성공에 쓰이는 Clean 2회는 서로 다른 reviewer context와 process에서 나와야 합니다.
+- lifecycle state와 baseline digest는 unit head에 결박되며, Git 기준선과 dirty submodule은 실제 파일·index·HEAD를 재귀 해시합니다. 성공 보존 정리는 최종 proof 검증 뒤 정확한 receipt를 journal하고 unit을 원자적으로 staging한 후에만 quarantine과 비공개 상태를 지우며, 중단된 staging은 다음 실행이 receipt의 전체 필드 결박과 비공개 proof를 다시 검증한 뒤에만 정리합니다. 취소된 mutating tool lease는 그 lease를 소유한 client/session의 Stop만 workspace를 재확인하고 닫을 수 있습니다. 다른 세션의 실행 중 lease가 하나라도 있으면 Stop과 리뷰 발급을 차단합니다.
+- native stdin event가 없거나 명령행 event와 충돌하면 fail-closed 하며, prompt envelope가 거부돼도 원문 prompt는 실패 응답 전에 quarantine에 보존됩니다. 유효한 prompt가 중복 runtime binding 때문에 차단되는 경우도 같습니다. 각 source는 이어 붙이면 원문과 정확히 같은 `obligation_atoms`로 분할하며, directive·approval·authority atom은 매핑된 지시문에 원문 그대로 선언되고 target·acceptance criterion·모든 trace artifact와 7개 간선에 ID로 이어져야 합니다. Claude Code와 Codex 모두 `apply_patch`를 변경 전 lease 대상으로 등록합니다. 리뷰 접수는 현재 bundle과 모든 결박을 다시 계산해 발급 후 드리프트를 기록하지 않습니다. 완료 판정은 저장소·lineage lock 안에서 같은 검증을 재실행해 성공 proof를 만들며, 압축은 그 proof와 연속 Clean record hash를 다시 검증합니다.
+- 최초 계약 전용 비공개 pending 입력 3종과 엄격히 파싱한 단일 Node 제어 명령만 product mutation lease 없이 허용합니다. 이 경로로 실제 native `PreToolUse`를 거친 `authority-challenge|bind|resume`과 고정 reviewer 실행기가 최초 binding/리뷰 발급 전에 자기 lease로 교착되지 않습니다. shell 연결·치환·redirection, 틀린 unit/session/path, 고정되지 않은 reviewer·attestor는 제어 명령으로 인정하지 않습니다.
+- 기존 프로젝트를 갑자기 가두지 않도록 기본은 opt-in입니다. `REQUEST_CONTRACT=on` 또는 `node scripts/request-contract.cjs enable`로 활성화합니다.
+- unit이나 미수용 quarantine이 하나라도 생긴 뒤에는 opt-in 마커 삭제, `REQUEST_CONTRACT=off`, `disable` 명령으로 중간 해제할 수 없습니다. 성공 종료된 lineage도 보존 정리가 완료될 때까지 고정 대상입니다. 같은 session의 후속 lifecycle은 현재 proof를 재검증하고, 새 session은 기존 성공 proof를 검증한 시점의 workspace digest를 새 genesis에 handoff한 뒤 별도 요청을 시작합니다. 불완전 상태는 서명된 resume를 거쳐 계속 보호됩니다.
+- 정직한 한계: 훅 비활성/비신뢰 등록, 모든 로컬 기록을 함께 바꿀 수 있는 행위자, 외부 signer의 거짓 속성 서명, 훅 경계 사이에 완전히 실행·복원된 변경, 외부 부작용은 이 로컬 계층만으로 완전 관측할 수 없습니다. 결정론 parity는 추적된 네이티브 어댑터 프로세스까지이며 설치된 호스트 dispatcher는 별도 smoke 범위입니다.
+
 ---
 
 ## 검증 항목
@@ -71,6 +89,17 @@ AI의 역할(구현자 vs 리뷰어)이 파일 유형별로 명확히 정의되�
 - IDD workflow review/post_test_review 단계 확인
 - `/review-pass` 스킬 파일 존재 확인
 - 연속 2회 클린패스 규칙 적용 확인
+
+### H8 — 원요청 무결성
+리뷰나 완료 주장이 최초·후속 사용자 지시를 조용히 누락·재분류·축소할 수 있는가?
+- genesis 누락, 원문 삭제/변조, 후속 지시, 범위 제거, stale 리뷰, Claude/Codex parity 결함을 fault-injection으로 재현
+- 모든 실행 지시가 REQ→UC/UC-test→FE/FE-test→구현→증거로 이어지는지 확인
+- 복합 원문을 인용만 하고 일부 atom을 target·criterion·trace artifact 또는 간선에서 누락할 수 없는지 확인
+- 초기 결박과 모든 범위 epoch 변경에 사용자-presence 서명 요구
+- 비공개 리뷰 bundle에 결박되고 작성 세션과 분리된 외부서명 Clean 2회를 요구
+- 현재와 과거 scope-version 전체 매핑, 서로 다른 reviewer context/process, 코어 발급 run ID와 고정 finding code를 검증
+- 부분 target/acceptance-criterion 삭제, 후속 genesis 재승인, operation 간 metadata 섞기, 변경 가능한 quarantine 소비 표식 위조를 거부하는지 검증
+- 완료 직전 workspace 변조, native event 누락, review 없는 `success` state 압축을 거부하는지 검증
 
 ---
 

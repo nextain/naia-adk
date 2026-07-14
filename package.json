@@ -18,7 +18,8 @@
     "dev:dashboard": "pnpm --filter @naia-adk/dashboard dev",
     "serve": "tsx packages/server/src/cli.ts serve",
     "build": "pnpm -r build",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "test:request-contract": "node scripts/run-request-contract-tests.cjs"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.1",

@@ -1,0 +1,25 @@
+id: RCI-003
+title: "Governed Workspace Coverage"
+title_ko: "관리 모드 작업공간 범위"
+product: naia-adk-request-contract
+module: workspace-scope
+status: verified
+source: human
+priority: high
+created: 2026-07-14
+updated: 2026-07-14
+issue_url: ""
+source_directives: [USR-002, USR-004]
+description: |
+  관리 모드는 product root와 exclusion 설정을 genesis에 고정하고 모든 baseline·후속 변경을 불투명 occurrence로 기록해 지시·구현·증거에 연결하며, 기본 비활성 동작과 3회 Stop 종료 규칙을 유지한다.
+acceptance_criteria:
+  - "Root removal, exclusion insertion, configuration drift, ignored changes, and state-only tampering fail closed."
+  - "Every occurrence maps change to directive, implementation, and evidence; disabled mode remains inert."
+  - "The third identical failed Stop writes an honest terminal-incomplete receipt."
+trace:
+  code:
+    - { path: ".agents/hooks/core/request-contract.js", symbol: "referenceManifest / workspaceManifest / captureWorkspaceOccurrences / evaluateCompletion", coverage: full }
+  tests:
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "workspace manifest, occurrence, disabled mode, and Stop lineage fault cases", coverage: full }
+  reviews: { planning: null, development: "2026-07-14-north-mimo-clean", test: "2026-07-14-pickle-nemotron-clean", integration: "2026-07-14-deepseek-pickle-clean" }
+decisions: []

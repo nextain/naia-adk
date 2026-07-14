@@ -1,0 +1,25 @@
+id: RCI-002
+title: "Complete Scope-History Review"
+title_ko: "전체 범위 이력 리뷰"
+product: naia-adk-request-contract
+module: review
+status: verified
+source: human
+priority: high
+created: 2026-07-14
+updated: 2026-07-14
+issue_url: ""
+source_directives: [USR-001, USR-003, USR-004]
+description: |
+  독립 로컬 reviewer가 정확한 source 원문과 현재·과거의 모든 지시, 상태, target, acceptance criterion, authority, tombstone 및 매핑을 빠짐없이 검토한다.
+acceptance_criteria:
+  - "Review ingestion rejects omitted, extra, narrowed, or stale current and historical scope-version mappings."
+  - "Reviewer output is limited to opaque identifiers, closed verdicts, finding codes, classifications, mappings, and coverage."
+trace:
+  code:
+    - { path: ".agents/hooks/core/request-contract.js", symbol: "buildReviewBundle / issueReviewInvocation / appendReview", coverage: full }
+    - { path: ".agents/skills/review-pass/SKILL.md", symbol: "Governed-mode preflight", coverage: full }
+  tests:
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "review bundle and scope-history coverage fault cases", coverage: full }
+  reviews: { planning: null, development: "2026-07-14-north-mimo-clean", test: "2026-07-14-pickle-nemotron-clean", integration: "2026-07-14-deepseek-pickle-clean" }
+decisions: []

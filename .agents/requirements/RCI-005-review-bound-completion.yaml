@@ -1,0 +1,24 @@
+id: RCI-005
+title: "Review-Bound Completion"
+title_ko: "리뷰 결박 완료 판정"
+product: naia-adk-request-contract
+module: completion
+status: verified
+source: human
+priority: high
+created: 2026-07-14
+updated: 2026-07-14
+issue_url: ""
+source_directives: [USR-003, USR-004]
+description: |
+  성공 종료는 현재 source, contract, workspace fingerprint, scope epoch, work revision에 결박된 해시체인 리뷰 로그의 연속 Clean 2회를 요구한다.
+acceptance_criteria:
+  - "Review rollback, truncation, reinitialization, stale bindings, duplicate runs, Dirty interruption, and one-Clean completion are rejected."
+  - "Completion and compaction revalidate a current review-bound proof under repository and lineage locks."
+trace:
+  code:
+    - { path: ".agents/hooks/core/request-contract.js", symbol: "verifyReviewChain / evaluateReviews / evaluateCompletion / verifyCompletionProof", coverage: full }
+  tests:
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "Clean streak, stale review, completion proof, and compaction fault cases", coverage: full }
+  reviews: { planning: null, development: "2026-07-14-north-mimo-clean", test: "2026-07-14-pickle-nemotron-clean", integration: "2026-07-14-deepseek-pickle-clean" }
+decisions: []
