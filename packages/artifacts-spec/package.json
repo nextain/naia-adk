@@ -1,10 +1,16 @@
 {
   "name": "@naia-adk/artifacts-spec",
   "version": "0.0.1",
-  "description": "RBAC + SDLC artifact 표준 — declarative spec + runtime control-state (15 artifact types). Reference impl in naia-business-adk/templates/service-ops/.",
+  "description": "RBAC + SDLC artifact 표준 — declarative spec + runtime control-state (16 artifact types). Reference impl in naia-business-adk/templates/service-ops/.",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
+  "scripts": {
+    "test": "node test/validate-request-contract.cjs"
+  },
+  "devDependencies": {
+    "ajv": "^8.18.0"
+  },
   "files": [
     "schemas/",
     "examples/",

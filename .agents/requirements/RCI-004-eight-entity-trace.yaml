@@ -1,0 +1,26 @@
+id: RCI-004
+title: "Eight-Entity Trace Chain"
+title_ko: "8개 실체 추적 사슬"
+product: naia-adk-request-contract
+module: traceability
+status: verified
+source: human
+priority: high
+created: 2026-07-14
+updated: 2026-07-14
+issue_url: ""
+source_directives: [USR-002, USR-004]
+description: |
+  모든 활성 지시는 directive→requirement→use case→use-case test→feature→feature test→implementation→evidence의 8개 실체와 7개 간선을 완전하게 가져야 한다.
+acceptance_criteria:
+  - "Validator rejects every missing entity and each missing edge independently."
+  - "Terminal dispositions require exact signed authority and immutable tombstone coverage."
+trace:
+  code:
+    - { path: ".agents/hooks/core/request-contract.js", symbol: "TRACE_KEYS / TRACE_EDGES / validateContract", coverage: full }
+    - { path: "packages/artifacts-spec/schemas/request-contract.schema.json", symbol: "trace schema", coverage: full }
+  tests:
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "trace artifact, edge, atom, and tombstone fault cases", coverage: full }
+    - { path: "packages/artifacts-spec/test/validate-request-contract.cjs", symbol: "schema and runtime example validation", coverage: full }
+  reviews: { planning: null, development: "2026-07-14-north-mimo-clean", test: "2026-07-14-pickle-nemotron-clean", integration: "2026-07-14-deepseek-pickle-clean" }
+decisions: []

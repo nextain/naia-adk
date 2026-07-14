@@ -1,19 +1,38 @@
 # Requirements Index — on-demand load only (NOT session-injected)
 # Read this file when entering Plan or Review phases
 version: 1
-updated: 2026-04-18
-total: 50
+updated: 2026-07-14
+total: 61
 
 # Status counts
 by_status:
   candidate: 0
   active: 50
   implemented: 0
-  verified: 0
+  verified: 11
   withdrawn: 0
 
 # Per-product summary
 products:
+  - product: naia-adk-request-contract
+    title: "Original Request Contract Integrity"
+    req_count: 11
+    priority_high: 11
+    priority_medium: 0
+    modules: [source-provenance, review, workspace-scope, traceability, completion, adapters, registration, privacy, compatibility, distribution, authority]
+    requirements:
+      - { id: RCI-001, title: "Source Provenance and Continuity", status: verified }
+      - { id: RCI-002, title: "Complete Scope-History Review", status: verified }
+      - { id: RCI-003, title: "Governed Workspace Coverage", status: verified }
+      - { id: RCI-004, title: "Eight-Entity Trace Chain", status: verified }
+      - { id: RCI-005, title: "Review-Bound Completion", status: verified }
+      - { id: RCI-006, title: "Claude Code and Codex Policy Parity", status: verified }
+      - { id: RCI-007, title: "Client Registration Integrity", status: verified }
+      - { id: RCI-008, title: "Private Isolated Exact-Text Review", status: verified }
+      - { id: RCI-009, title: "Backward-Compatible Defense in Depth", status: verified }
+      - { id: RCI-010, title: "Project-Neutral Distribution", status: verified }
+      - { id: RCI-011, title: "Deduplicated Scope Authority", status: verified }
+
   - product: naia-os
     title: "Naia OS Desktop App"
     req_count: 20

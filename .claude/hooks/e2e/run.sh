@@ -115,13 +115,24 @@ printf '{"approvals":[]}' > "$DG/approvals.json"
 # project-scoped approval matches (detectProject→null for a fixture cwd,
 # real approvals.json has no blanket entry), preview→pass, -dev→pass,
 # alwaysBlock(builds submit)→block. This is true E2E against real config,
-# just not hermetic for deploy-guard's approval state.
+# just not hermetic for deploy-guard's approval state. Temporarily install a
+# minimal config at that real adapter path so the documented -dev bypass is
+# exercised deterministically, then restore any machine-local config.
+DEPLOY_CONFIG="$HOOKS/../deploy/config.json"
+DEPLOY_CONFIG_BACKUP="$ROOT/deploy-config.backup"
+DEPLOY_CONFIG_EXISTED=0
+if [ -f "$DEPLOY_CONFIG" ]; then
+  DEPLOY_CONFIG_EXISTED=1
+  cp "$DEPLOY_CONFIG" "$DEPLOY_CONFIG_BACKUP"
+fi
+printf '{"projects":{"e2e":{"platform":"gcloud","dev_service":"svc-dev"}},"default_ttl_minutes":30}' > "$DEPLOY_CONFIG"
 fire deploy-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"vercel"}}')";                            a_pass  "dpg pass: vercel preview"
 fire deploy-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"vercel env ls"}}')";                     a_pass  "dpg pass: vercel env"
 fire deploy-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"echo '\''vercel --prod'\''"}}')";        a_pass  "dpg pass: quoted (unwrap→still contains; echo-skip)"
 fire deploy-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"vercel --prod"}}')";                     a_block "dpg block: vercel --prod (no approval)"
 fire deploy-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"gcloud builds submit"}}')";              a_block "dpg block: builds submit (alwaysBlock)"
 fire deploy-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"gcloud run deploy svc-dev --image x"}}')"; a_pass "dpg pass: dev service (-dev)"
+if [ "$DEPLOY_CONFIG_EXISTED" = 1 ]; then cp "$DEPLOY_CONFIG_BACKUP" "$DEPLOY_CONFIG"; else rm -f "$DEPLOY_CONFIG"; fi
 
 # ── email-send-guard ────────────────────────────────────────────────────────
 echo "email-send-guard:"
@@ -218,6 +229,24 @@ node "$TESTD/run-beh-manifest-test.js"   >/dev/null 2>&1 && ok || bad "beh manif
 node "$TESTD/run-beh-adapter-test.js"    >/dev/null 2>&1 && ok || bad "beh adapter replay suite (10 cases)"
 node "$HOOKS/beh-watchdog.js" --selftest >/dev/null 2>&1 && ok || bad "beh watchdog selftest (flat→STUCK, fresh→clear)"
 timeout 60 node "$TESTD/run-beh-supervise-wrapper-test.js" >/dev/null 2>&1 && ok || bad "beh supervise wrapper real-process (kill target, spare sibling)"
+
+# ── request-contract native integration (full fault suite is its own gate) ──
+echo "request-contract:"
+request_contract_case() {
+  local filter="$1" expected="$2" output
+  if output="$(TEST_FILTER="$filter" node "$TESTD/run-request-contract-test.js" 2>&1)" \
+    && grep -Fq "ok 1 - $expected" <<<"$output" \
+    && grep -Fq 'request-contract: PASS (1 cases)' <<<"$output"; then
+    ok
+  else
+    bad "request-contract: $expected"
+  fi
+}
+request_contract_case 'native Claude Code and Codex processes' 'native Claude Code and Codex processes discover the same nested project root'
+request_contract_case 'native PreCompact blocks' 'native PreCompact blocks incomplete work before compaction for both clients'
+request_contract_case 'native Codex apply_patch' 'native Codex apply_patch can bootstrap only one exact private control input'
+request_contract_case 'client-native capability maps' 'client-native capability maps reject undeclared aliases and map native outputs explicitly'
+request_contract_case 'full persisted lifecycle' 'full persisted lifecycle is policy-equivalent across Claude Code and Codex'
 
 # ─────────────────────────────────────────────────────────────────────────────
 echo "═══════════════════════════════════════════════"

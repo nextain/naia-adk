@@ -1,0 +1,26 @@
+id: RCI-009
+title: "Backward-Compatible Defense in Depth"
+title_ko: "하위 호환 심층 방어"
+product: naia-adk-request-contract
+module: compatibility
+status: verified
+source: human
+priority: high
+created: 2026-07-14
+updated: 2026-07-14
+issue_url: ""
+source_directives: [USR-002, USR-004]
+description: |
+  기존 범위 ledger와 receipt 동작을 유지하고 원요청 선언 이전의 누락을 보완하되 모든 도구 변경을 완전 관측한다고 주장하지 않는다.
+acceptance_criteria:
+  - "Existing BEH and full hook E2E suites remain green with request-contract disabled by default."
+  - "Documentation states host trust, coordinated local rewriting, between-hook reversion, signer trust, and external-side-effect limits."
+trace:
+  code:
+    - { path: ".agents/hooks/core/request-contract.js", symbol: "governed / handleEvent", coverage: full }
+    - { path: ".agents/context/harness.yaml", symbol: "request_contract_integrity.honest_limits", coverage: full }
+  tests:
+    - { path: ".claude/hooks/e2e/run.sh", symbol: "BEH and request-contract native integration", coverage: full }
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "disabled mode is a silent allow", coverage: full }
+  reviews: { planning: null, development: "2026-07-14-north-mimo-clean", test: "2026-07-14-pickle-nemotron-clean", integration: "2026-07-14-deepseek-pickle-clean" }
+decisions: []

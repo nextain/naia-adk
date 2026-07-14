@@ -31,6 +31,7 @@ argument-hint: "[선택사항: 특정 verify 스킬 이름]"
 | # | 스킬 | 설명 |
 |---|------|------|
 | 1 | `verify-contract-conformance` | 계약↔코드 드리프트(시그니처/계약만/코드만) 결정론 검출 |
+| 2 | `verify-request-contract` | 원요청 source→증거·권한·2회 Clean·Claude Code/Codex 동등성 결정론 검증 |
 
 <!-- 스킬이 추가되면 위 형식으로 등록 -->>
 

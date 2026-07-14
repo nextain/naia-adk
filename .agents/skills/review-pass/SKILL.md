@@ -19,6 +19,10 @@ input_schema:
     type: "string[]"
     required: true
     description: "File paths to review"
+  request_contract_bundle:
+    type: string
+    required: false
+    description: "Exact review-bundle JSON exported by scripts/request-contract.cjs; mandatory in governed mode"
   context:
     type: string
     required: false
@@ -74,8 +78,9 @@ traceability for requirements-driven projects.
 - **Project-agnostic**: No hardcoded paths, tools, or conventions. All configurable.
 - **Multi-AI**: Independent reviewers via CLI tools reduce single-model blind spots
 - **Stage-aware**: Planning, development, test, and integration have different needs
-- **Convergent**: Automated loop until N consecutive clean rounds
+- **Convergent**: Automated loop until at least 2 consecutive clean rounds for every standard stage
 - **Traceable**: REQ-ID coverage validated at every stage (when applicable, optional)
+- **Source-complete**: In governed mode the exact source chain and full current/prior scope history are mandatory review inputs; caller-selected files cannot redefine scope
 - **Safe**: Auto-fix with diff preview, rollback, and safety guard
 
 ## Arguments
@@ -84,6 +89,7 @@ traceability for requirements-driven projects.
 |----------|----------|-------------|
 | `stage` | **yes** | `planning` / `development` / `test` / `integration` |
 | `files` | **yes** | Comma-separated file paths to review |
+| `request_contract_bundle` | governed mode | Private bundle locator returned by `node scripts/request-contract.cjs review-challenge --unit <id> --writer-session <id>` |
 | `context` | recommended | What was implemented/changed, issue reference |
 | `req_ids` | optional | Comma-separated REQ-IDs to validate coverage |
 | `deferred_req_ids` | optional | Comma-separated REQ-IDs intentionally deferred |
@@ -105,6 +111,19 @@ traceability for requirements-driven projects.
 > **CONFIRMED findings are auto-fixed with diff preview (see section 6.6).**
 > **CONTESTED findings at R=2 trigger inline user prompt, then loop resumes.**
 > **Only the final report is shown after convergence.**
+> **Governed mode forbids `--light`, caller-only file scope, unsigned deferral, and review without the exact current request-contract bundle.**
+
+### Governed-mode preflight (before every stage)
+
+When request-contract integrity is enabled (`REQUEST_CONTRACT=on` or the runtime marker exists):
+
+1. Issue a one-time review challenge, load its mode-0600 private bundle, and recompute the canonical digest. Reject stale, partial, expired, or replayed input. Raw sources never cross stdout or command arguments.
+2. Review every exact source prompt and its byte-exact partition of obligation atoms plus every current and prior directive, state, target, acceptance criterion, authority, tombstone, change occurrence, implementation mapping, and evidence mapping in the bundle. Every directive atom must appear verbatim in a mapped directive surface before review can start.
+3. Treat the bundle as the scope floor. `files`, `req_ids`, and prose `context` may add focus but may not remove anything.
+4. A deferred/superseded/abandoned requirement counts as disposed only when the bundle carries a valid signed user-presence authority and an immutable tombstone covering its directive, target, criterion, trace-artifact, and trace-edge IDs.
+5. Launch only a configured SHA-256-allowlisted reviewer through the trusted platform runner. The Linux reference is `scripts/request-contract-review-runner.cjs`: it pins reviewer and bundle bytes, runs them through isolated `bubblewrap`, and accepts a receipt only while consuming the same-process, one-time run evidence whose semantic fields exactly equal actual reviewer stdout. There is no direct review-JSON ingestion command. It records the sandbox child kernel boot/start identity and rejects collision with every writer host identity. Reviewer and review-runner attestors are SHA-256-pinned snapshots that bind their executable digests and the exact review-payload digest. Reviewer time, stderr, and rejected fields never control public output. Never allowlist a generic blind signer.
+6. Reviewer stdout must list only the complete opaque relationship projection: source and obligation-atom IDs, directive/target/criterion, authority/tombstone, trace, change, implementation/evidence, and every current/prior scope-version mapping. It must never contain text, paths, locators, summaries, or digests. The trusted runner injects issued binding fields only after sandbox exit. The final receipt must be signed by the configured reviewer credential from a context and kernel process identity distinct from every writer session/host. The core issues the opaque `run_id`; `CLEAN` has zero closed finding codes and `DIRTY` has at least one. Invocation fields, writer sessions, and writer process identities are digest-bound, and run/context/process/execution identities are compaction-persistent global claims.
+7. Review issuance is denied while any mutation lease is active. At ingestion, recompute the complete bundle and source/contract/workspace/scope/work/config/binding values; reject the receipt instead of recording it if any post-launch drift exists. Any later revision restarts the Clean streak. Every standard stage requires two consecutive Clean receipts.
 
 ---
 
@@ -114,7 +133,7 @@ Each lens includes actionable checks for headless reviewers.
 
 ### planning
 - **Reviewers**: 2 (configurable)
-- **Convergence**: 1 consecutive clean round
+- **Convergence**: 2 consecutive clean rounds (1 only in explicit non-governed `--light`)
 - **Arbiter**: none (CONTESTED → inline user prompt, loop resumes)
 - **Lenses (with REQ-IDs)**:
   1. `req_completeness` — Check: every requirement from the issue has a REQ-ID; no orphan REQ-IDs; acceptance criteria are testable
@@ -145,7 +164,7 @@ Each lens includes actionable checks for headless reviewers.
 
 ### test
 - **Reviewers**: 2 (configurable)
-- **Convergence**: 1 consecutive clean round
+- **Convergence**: 2 consecutive clean rounds (1 only in explicit non-governed `--light`)
 - **Arbiter**: none (CONTESTED → inline user prompt, loop resumes)
 - **Lenses (with REQ-IDs)**:
   1. `test_validity` — Check: tests import and call the changed code; assertions execute after the code under test runs; mocks don't replace the actual logic being tested
@@ -543,9 +562,9 @@ while consecutive_clean < convergence_threshold:
 
 | Stage | Standard | --light |
 |-------|----------|---------|
-| planning | 1 clean | 1 clean |
+| planning | 2 clean | 1 clean (non-governed only) |
 | development | 2 clean | 1 clean |
-| test | 1 clean | 1 clean |
+| test | 2 clean | 1 clean (non-governed only) |
 | integration | 2 clean | 1 clean |
 
 ### 6.3 Budget Guard
@@ -722,7 +741,7 @@ stages:
   planning:
     reviewers: [claude, gemini]
     arbiter: null
-    convergence: 1
+    convergence: 2
     lenses: [req_completeness, design_coherence, feasibility, traceability_setup]
     lenses_no_req: [completeness, design_coherence, feasibility, clarity]
   development:
@@ -734,7 +753,7 @@ stages:
   test:
     reviewers: [gemini, opencode]
     arbiter: null
-    convergence: 1
+    convergence: 2
     lenses: [test_validity, coverage, assertion_quality, req_to_test]
     lenses_no_req: [test_validity, coverage, assertion_quality]
   integration:

@@ -33,6 +33,34 @@ architecture:
     - ".claude/hooks/e2e/scenario.sh — 13-step system E2E via real settings.json dispatch"
     - ".claude/hooks/e2e/pi-runtime-e2e.mjs — real pi-runtime gate, 20/20 (prereq: npm i @earendil-works/pi-coding-agent@0.74.1)"
 
+request_contract_integrity:
+  status: "opt-in; shared core and lifecycle parity implemented for Claude Code and Codex"
+  config: ".agents/context/request-contract.json"
+  schema: "packages/artifacts-spec/schemas/request-contract.schema.json"
+  core:
+    files: [".agents/hooks/core/request-contract.js", ".agents/hooks/core/request-contract-adapter.js", ".agents/hooks/core/request-contract-review-runner.js"]
+    role: "exact prompt hash chain, complete source classification, scope epochs, signed authority receipts, change trace, review chain, completion gate, successful-lineage retention compaction; incomplete lineages remain resume-capable and sticky"
+  host_adapters:
+    claude:
+      registry: ".claude/settings.json"
+      adapter: ".claude/hooks/request-contract.js"
+    codex:
+      registry: ".codex/hooks.json"
+      adapter: ".codex/hooks/request-contract.cjs"
+  lifecycle_events: [PreToolUse, SessionStart, UserPromptSubmit, PostToolUse, PreCompact, PostCompact, Stop]
+  enable: "REQUEST_CONTRACT=on or node scripts/request-contract.cjs enable"
+  fail_mode: "governed mode fails closed; default is opt-in so existing projects are not trapped before they provision an external user-presence signer"
+  authority_root: "external user-presence signer with pinned public key; hardware/non-exportable truth is an explicit provisioning and signer trust boundary"
+  source_capture: "native-user provenance is derived only from an exact registered UserPromptSubmit envelope and never from a caller-supplied origin label; every rejected native prompt envelope, including a valid prompt blocked by duplicate runtime bindings, is preserved exactly with that derived provenance in quarantine before the adapter fails closed; every scope authority must cite a native-user source in addition to its signed user-presence receipt"
+  reviewer_boundary: "pre-execution digest-verified reviewer + bundle bytes pinned through anonymous read-only descriptors before real bubblewrap PID/network/repository/home isolation with one writable scratch; reviewer stdout is a closed envelope containing only verdict/finding codes and opaque source/atom/directive/target/criterion/authority/tombstone/change/artifact/edge relationship projections—never text, paths, locators, summaries, or digests; the public review-runner result contains only verdict and opaque run_id while protected storage retains record hashes; trusted runner injects issued binding fields after sandbox exit, then review ingestion consumes one live same-process runner evidence object and requires the remaining semantic review to equal actual reviewer stdout; direct review-JSON ingestion is absent; configuration-pinned reviewer and runner attestor snapshots bind their digests and review-payload digest; writer host and reviewer PID plus kernel boot/start identity must differ; runner-owned reviewed_at and non-reflective rejected output; ingestion revalidates exact canonical contract coverage inside the private bundle and every current/prior opaque scope projection plus all issue-time bindings; two counted Clean rounds require distinct reviewer contexts/processes; private mode-0600 bundle removed after ingestion, expiry, or corrupt/orphan manifest"
+  atomicity: "repository + lineage locks with complete-owner atomic publication, directory-identity verification, serialized process-start-aware stale takeover, fsynced file/parent create-replace-unlink ordering, fail-closed unit/quarantine listing and recursive workspace traversal, strict bounded numeric configuration, strict Git command/parse failures, collision-free platform-native workspace path keys, recursive Git-tree genesis baseline, transaction-recoverable lifecycle-state/head replacement, head-pinned lifecycle-state/baseline/genesis-workspace digests, exact prompt-partition obligation atoms carried through every target/criterion/REQ/UC/UC-test/FE/FE-test/implementation/evidence and atom-specific trace edge, sticky governance while any uncompacted/staged unit or unconsumed quarantine exists, validated successful-workspace handoff into each new lineage, disable-command rejection during sticky governance, three exact private pre-binding control-input paths via Claude Write/Edit or strict single-file Codex apply_patch plus shell-metacharacter-free exact Node command parsing and pinned review executables to avoid bind/review self-deadlock, prepared crash-recovery source/bind/review/resume/session/state transactions, session-owned Stop-time canceled mutation-lease reconciliation with review issuance blocked while any unrelated lease is active, native-stdin event presence/equality and event-specific Codex lifecycle stop envelopes, Claude/Codex apply_patch preflight parity, destination-bound and retry-idempotent quarantine adoption, canonical immutability of disposed directives and all tombstones, one mixed-operation pending authority transaction, digest-protected invocation manifests including writer process identities, repository-locked double completion validation with a review-bound completion proof, non-counting proof-generating/blocking native PreCompact plus one-time client/session/proof-bound authorization consumed by PostCompact, proof-verified double-validated handoff-aware successful retention compaction that journals the exact receipt, atomically stages the unit, revalidates the full staged proof after restart, and only then removes consumed quarantine/private state, compaction-persistent global review/run/context/process/execution ID claims, and random retry-stable non-sensitive compaction receipt IDs"
+  honest_limits:
+    - "disabled hooks and untrusted host hook configuration are outside enforcement"
+    - "a coordinated actor able to rewrite all local records is outside the local integrity model"
+    - "external side effects and mutations fully completed and reverted between observed hook boundaries may be invisible"
+    - "the core verifies signed user-presence/non-exportable assertions but cannot independently attest the external signer's hardware properties"
+    - "deterministic parity covers the tracked native adapter processes; installed host-client dispatch is separate operational smoke evidence"
+
 # ─── Verification Checklist ───────────────────────────────────
 
 checklist:
@@ -98,6 +126,16 @@ checklist:
       - "Check IDD workflow review and post_test_review phases reference '/review-pass'"
       - "Check /review-pass skill exists at .agents/skills/review-pass/SKILL.md"
       - "Verify two-consecutive-clean-pass rule is enforced"
+
+  - id: H8
+    name: original_request_integrity
+    description: "Can a review or completion claim silently omit, reclassify, or narrow any original or later user directive?"
+    how_to_verify:
+      - "Replay missing-genesis, source deletion/tamper, later-directive, scope-removal, stale-review, and client-parity fault cases"
+      - "Require every actionable source to map through requirement, use case, use-case test, feature, feature test, implementation, and evidence"
+      - "Require signed user-presence authority for initial binding and every scope epoch transition"
+      - "Require two current, distinct, externally signed exact-coverage Clean receipts over the complete private review bundle"
+      - "Run node .claude/hooks/test/run-request-contract-test.js and the real client registration smoke tests"
 
 # ─── Retroactive Verification of Existing Hooks ───────────────
 
