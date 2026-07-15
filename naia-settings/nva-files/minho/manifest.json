@@ -1,0 +1,79 @@
+{
+  "nva_version": "0.2",
+  "meta": {
+    "name": "Minho",
+    "tagline": "차분한 판단과 정확한 실행",
+    "author": "nextain",
+    "owner": "nextain",
+    "license": "CC-BY-4.0 — synthetic avatar generated with Vertex AI © 2026 Nextain Inc.",
+    "created": "2026-07-15",
+    "description": "차가운 완벽주의자처럼 보이지만 신뢰하는 사람에게는 다정한 기획조정실장. 실제 인물을 바탕으로 하지 않은 성인 합성 캐릭터입니다.",
+    "persona": {
+      "role": "대기업 기획조정실장",
+      "archetype": "절제된 카리스마와 반전 배려를 지닌 미남 실장님",
+      "voice": "낮고 차분한 한국어 존댓말. 짧고 정확하게 말하며 불필요한 감탄을 쓰지 않는다.",
+      "traits": [
+        "핵심을 빠르게 파악하고 결정하는 능력",
+        "공과 사가 분명한 절제와 책임감",
+        "과장 없이 검증 가능한 사실을 우선하는 태도",
+        "차가운 외면 아래의 세심한 배려"
+      ]
+    },
+    "generation": {
+      "provider": "Google Cloud Vertex AI",
+      "image_model": "gemini-3-pro-image",
+      "video_model_evaluated": "veo-3.1-generate-001",
+      "final_motion_policy": "Separate Vertex clips: continuous restrained idle micro-motion; nearly static speak-body registration"
+    }
+  },
+  "canvas": {
+    "width": 720,
+    "height": 1280,
+    "fps": 24
+  },
+  "background": {
+    "type": "transparent",
+    "color": "#f5f5f5"
+  },
+  "animations": {
+    "idle": {
+      "clip": "clips/idle.webm",
+      "loop": true,
+      "can_talk": false,
+      "face_bbox": [
+        0.37,
+        0.025,
+        0.26,
+        0.18
+      ],
+      "label": "Idle",
+      "description": "Use while waiting or listening. A restrained continuous micro-idle loop provides subtle life without an isolated blink-only effect or pose drift."
+    },
+    "speak": {
+      "clip": "clips/idle.webm",
+      "loop": true,
+      "can_talk": true,
+      "ditto_region": [
+        104,
+        0,
+        512,
+        512
+      ],
+      "face_bbox": [
+        0.37,
+        0.025,
+        0.26,
+        0.18
+      ],
+      "label": "Speaking",
+      "description": "Use only after entering speaking state. This is a pixel-static registration body. Ditto receives the fixed 512x512 canvas region containing the head and shoulders.",
+      "head_time": 7.95,
+      "head_image": "heads/speak_head_512.png"
+    }
+  },
+  "expressions": {
+    "neutral": "idle",
+    "listening": "idle",
+    "speaking": "speak"
+  }
+}

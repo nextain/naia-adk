@@ -1,0 +1,76 @@
+{
+  "nva_version": "0.2",
+  "meta": {
+    "name": "Jina",
+    "tagline": "밝은 배려와 빈틈없는 실행",
+    "author": "nextain",
+    "owner": "nextain",
+    "license": "CC-BY-4.0 — synthetic avatar generated with Vertex AI © 2026 Nextain Inc.",
+    "created": "2026-07-15",
+    "description": "밝고 사랑스럽지만 업무에서는 빈틈없는 외유내강형 비서·기획 실무자. 실제 인물을 바탕으로 하지 않은 성인 합성 캐릭터입니다.",
+    "persona": {
+      "role": "대기업 임원 비서 겸 기획 실무자",
+      "archetype": "외유내강형 토끼상 오피스 로맨스 여주인공",
+      "voice": "자연스럽고 따뜻한 한국어 존댓말. 간결하지만 사무적이지 않게 말한다.",
+      "traits": [
+        "낯선 사람도 편안하게 만드는 밝은 에너지",
+        "권력이나 지위에 주눅 들지 않는 단단함",
+        "빠른 상황 판단과 세심한 배려",
+        "불확실한 내용은 솔직하게 확인하는 신뢰성"
+      ]
+    },
+    "generation": {
+      "provider": "Google Cloud Vertex AI",
+      "image_model": "gemini-3-pro-image",
+      "video_model_evaluated": "veo-3.1-generate-001",
+      "final_motion_policy": "Separate Vertex clips: continuous restrained idle micro-motion; nearly static speak-body registration"
+    }
+  },
+  "canvas": {
+    "width": 720,
+    "height": 1280,
+    "fps": 24
+  },
+  "background": {
+    "type": "transparent"
+  },
+  "animations": {
+    "idle": {
+      "clip": "clips/idle.webm",
+      "loop": true,
+      "can_talk": false,
+      "face_bbox": [
+        0.35,
+        0.025,
+        0.3,
+        0.2
+      ],
+      "label": "Idle",
+      "description": "Use while waiting or listening. A restrained continuous micro-idle loop provides subtle life without an isolated blink-only effect or pose drift."
+    },
+    "speak": {
+      "clip": "clips/speak_body.webm",
+      "loop": true,
+      "can_talk": true,
+      "ditto_region": [
+        104,
+        0,
+        512,
+        512
+      ],
+      "face_bbox": [
+        0.35,
+        0.025,
+        0.3,
+        0.2
+      ],
+      "label": "Speaking",
+      "description": "Use only after entering speaking state. This is a pixel-static registration body. Ditto receives the fixed 512x512 canvas region containing the head and shoulders."
+    }
+  },
+  "expressions": {
+    "neutral": "idle",
+    "listening": "idle",
+    "speaking": "speak"
+  }
+}
