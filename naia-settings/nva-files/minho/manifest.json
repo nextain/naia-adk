@@ -68,7 +68,7 @@
       "label": "Speaking",
       "description": "Use only after entering speaking state. This is a pixel-static registration body. Ditto receives the fixed 512x512 canvas region containing the head and shoulders.",
       "head_time": 7.95,
-      "head_image": "heads/speak_head_512.png"
+      "head_image": "clips/speak_head.png"
     }
   },
   "expressions": {
