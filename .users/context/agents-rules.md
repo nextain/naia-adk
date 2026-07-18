@@ -245,6 +245,20 @@
 - **default_workflow**: issue-driven-development.yaml (feature-level work)
 - **lightweight_workflow**: development-cycle.yaml (non-feature changes: typos, config values, simple directives)
 
+### documentation_impact_policy
+
+- **purpose**: 프로덕션 변경은 세 문서 독자층의 영향을 모두 판정하고 증거를 남겨야 완료할 수 있습니다.
+- **targets**:
+  - `repository_docs`: 저장소의 동작, 계약, 구조, 검증, 기여자 안내
+  - `user_manual`: 사용자의 설정, 조작, 발견 경로, 개인정보 보호, 알려진 한계
+  - `reusable_learning`: 다른 프로젝트에도 재사용할 수 있는 근거 기반 원리와 사례
+- **allowed_statuses**: `UPDATED` 또는 `N/A`
+- **UPDATED evidence**: 이번 변경에 포함된 파일이나 변경 불가능한 외부 커밋 URL
+- **N/A evidence**: 구체적인 비적용 근거. 단순한 “관련 없음”은 무효입니다.
+- **applicability**: 사용자 행동, 공개 API·wire, 권한, 개인정보 보호, 안전, 가용성, 저장소 간 스키마 변경은 전체 검토 대상입니다. 기존 계약을 복구하는 회귀 수정, 동작 불변 리팩터링, 테스트 전용·생성·서식·주석·lockfile 변경은 기존 ID와 검증 증거를 연결하고 구체적인 이유를 적으면 N/A가 가능합니다.
+- **reusable learning threshold**: 재사용 가능하고 기존 내용과 중복되지 않으며 고정된 출처가 있고 검증 한계를 밝힐 때만 갱신합니다.
+- **receipt**: 프로젝트 템플릿이 정한 추적 가능한 이슈별 JSON 증적을 사용합니다. 새 프로젝트와 템플릿으로 마이그레이션한 프로젝트는 로컬 훅·CI가 강제합니다. 기존 프로젝트는 저장소별 source glob·receipt 경로·훅·테스트 이식 전까지 workflow 정책으로 검사하며 자동 강제라고 주장하지 않습니다. Sync에서 확정하고 Sync Verify에서 다시 검사하며 Report와 Commit의 필수 증거로 사용합니다.
+
 ### permission_model
 
 - **code_files**: AI = implementer. Can read, modify, create, delete freely.

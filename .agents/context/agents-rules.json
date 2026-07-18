@@ -199,6 +199,28 @@
     "knowledge_principle": "AI knowledge = Developer knowledge (1:1 parity)",
     "default_workflow": "issue-driven-development.yaml (feature-level work)",
     "lightweight_workflow": "development-cycle.yaml (non-feature changes: typos, config values, simple directives)",
+    "documentation_impact_policy": {
+      "purpose": "A production change is not complete until its impact on all three documentation audiences is decided and evidenced.",
+      "targets": {
+        "repository_docs": "Repository-facing behavior, contracts, architecture, verification, and contributor guidance.",
+        "user_manual": "User-facing setup, operation, discovery, privacy, and known limitations.",
+        "reusable_learning": "Evidence-backed principles or case studies reusable beyond the changed product."
+      },
+      "allowed_statuses": [
+        "UPDATED",
+        "N/A"
+      ],
+      "updated_evidence": "List changed local files or immutable external commit URLs.",
+      "na_evidence": "Give a concrete applicability rationale; bare 'not relevant' is invalid.",
+      "applicability": {
+        "full_review": "User behavior, public API or wire contract, permissions, privacy, safety, availability, or cross-repository schema changes.",
+        "existing_contract_fix": "A regression fix may mark new scenario/requirement documents N/A only when it links the existing IDs and adds regression evidence.",
+        "behavior_preserving": "Refactor, test-only, generated, formatting, comment, or lockfile-only changes may use N/A with a concrete reason.",
+        "reusable_learning_threshold": "Update only when the lesson is reusable, non-duplicative, backed by an immutable source, and states its validation limits."
+      },
+      "receipt": "Use one tracked, per-issue JSON receipt. New or migrated template-based projects define its path and enforce it in local hooks and CI; existing projects require an explicit project migration before claiming machine enforcement.",
+      "completion_rule": "The receipt is finalized during Sync, checked again during Sync Verify, included in Report, and required before Commit."
+    },
     "permission_model": {
       "code_files": "AI = implementer. Can read, modify, create, delete freely.",
       "design_docs": "AI = reviewer. CANNOT modify unless: (A) typo/grammar, (B) internal contradiction within the doc, (C) broken link/reference. ANY other change requires surfacing to user first.",
