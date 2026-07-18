@@ -336,6 +336,10 @@ phases:
     description: "Synchronize contexts, record lessons, present to user"
     gate: true  # must not proceed without user confirmation
     steps:
+      - "Run the documentation impact review defined by agents-rules.json documentation_impact_policy"
+      - "Classify repository_docs, user_manual, and reusable_learning as UPDATED or N/A"
+      - "For UPDATED, record changed files or immutable external commit URLs; for N/A, record a concrete applicability rationale"
+      - "Write or update the tracked per-issue documentation impact receipt required by the project template"
       - "Reflect on trial-and-error during this issue's work"
       - "Before writing: check if content already exists elsewhere (prevent duplication/scattering)"
       - "Use context_routing below to decide WHERE each piece of knowledge goes"
@@ -348,6 +352,7 @@ phases:
       - "Run '/manage-skills' to analyze session changes and update/create verify-* skill coverage"
       - "Present sync summary to user for confirmation"
     rules:
+      - "A missing target, PENDING status, bare 'not relevant', or evidence outside the current diff without an immutable commit URL blocks Sync completion"
       - "Check existing context files before adding — avoid scattering same content across multiple files"
       - "Lessons from trial-and-error MUST be captured, not just code changes"
       - "When modifying any context file (workflows/*.yaml, skills/*/SKILL.md, context/*.json, hooks, or .users/ mirrors): write a validation test and run it BEFORE committing — YAML parse, required sections, .agents ↔ .users mirror consistency, referenced file existence"
@@ -367,6 +372,7 @@ phases:
       - "  - Re-read all updated context files"
       - "  - Check accuracy against actual implementation"
       - "  - Check mirror consistency (.agents/ ↔ .users/)"
+      - "  - Re-run the documentation impact receipt validator and compare every claim with the actual diff and external commit evidence"
       - "  - Fix any inaccuracies or missing updates"
       - "  - If TWO consecutive passes find nothing to fix → verification complete"
     output: "Verified, synchronized context files"
@@ -375,12 +381,13 @@ phases:
     description: "Report results to user and Issue"
     steps:
       - "Summarize what was done, what changed, and any remaining items"
+      - "Include the three-target documentation impact receipt summary and its evidence"
       - "Post completion status as Issue comment (English)"
     output: "Completion report"
 
   commit:
     description: "Commit and link to Issue"
-    prerequisite: "ALL prior phases (build, review, e2e_test, post_test_review, sync, sync_verify) must be complete before committing"
+    prerequisite: "ALL prior phases (build, review, e2e_test, post_test_review, sync, sync_verify) and the validated three-target documentation impact receipt must be complete before committing"
     steps:
       - "If in worktree: run '/merge-worktree' (squash-merge + semantic commit)"
       - "If not in worktree: stage relevant files only, commit with message referencing Issue number"

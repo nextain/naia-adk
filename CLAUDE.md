@@ -94,8 +94,8 @@ GitHub에서 포크한 뒤, 주기적으로 upstream을 동기화하세요: `git
 7. **Review** — 반복 리뷰 (연속 2회 무결 통과까지 반복) → `/verify-implementation` 실행
 8. **E2E Test** — 실제 앱/서버 실행, 타깃 테스트 먼저 후 전체 스위트
 9. **Post-test Review** — 테스트 통과 후 재리뷰 (연속 2회 무결 통과까지 반복) → `/verify-implementation` 실행
-10. **Sync** — `.agents/` + `.users/` 컨텍스트 업데이트 → `/manage-skills` 실행 → 사용자 확인 (게이트)
-11. **Sync Verify** — 컨텍스트 정확성 검증 (연속 2회 무결 통과까지 반복)
+10. **Sync** — 저장소 문서·사용자 사용법·재사용 학습 자료 영향을 각각 `UPDATED` 또는 근거 있는 `N/A`로 판정해 이슈별 증적에 기록 → `.agents/` + `.users/` 컨텍스트 업데이트 → `/manage-skills` 실행 → 사용자 확인 (게이트)
+11. **Sync Verify** — 문서 영향 증적과 컨텍스트 정확성 검증 (연속 2회 무결 통과까지 반복)
 12. **Report** — 결과를 사용자에게 요약
 13. **Commit** — 워크트리 작업 시: `/merge-worktree` 사용. 그 외: 이슈 번호를 참조한 커밋, PR 생성
 14. **Close** — 단계별 완료 보고를 이슈 코멘트로 + 사용자 확인 (게이트)
@@ -105,6 +105,8 @@ GitHub에서 포크한 뒤, 주기적으로 upstream을 동기화하세요: `git
 **원칙:** upstream 코드를 먼저 읽기. 최소한의 수정. 동작하는 코드를 절대 깨뜨리지 말 것. 개선은 제안하되, 단독으로 결정하지 말 것.
 
 **진행 파일 (필수):** 모든 단계 전환 시점에 `.agents/progress/{issue-slug}.json`을 작성/갱신하세요.
+
+**문서 영향 증적 (필수):** 프로덕션 변경은 세 독자층(`repository_docs`, `user_manual`, `reusable_learning`)을 빠짐없이 판정합니다. `UPDATED`는 이번 변경 파일 또는 변경 불가능한 외부 커밋 URL을, `N/A`는 구체적인 비적용 근거를 남깁니다. 새 프로젝트와 템플릿으로 마이그레이션한 프로젝트는 로컬 훅과 CI가 불완전한 이슈별 JSON 증적을 차단합니다. 기존 프로젝트는 저장소별 source glob·receipt 경로·훅·테스트를 이식하기 전까지 workflow 정책으로 검사하며, 자동 강제라고 주장하지 않습니다.
 
 ### 모든 세션 종료 시 (필수)
 
