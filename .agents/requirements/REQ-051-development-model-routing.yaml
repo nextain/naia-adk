@@ -18,8 +18,9 @@ description: |
 acceptance_criteria:
   - "A tracked config defines expert, monitoring, main, sub, adversarial_review, and translation_verification roles."
   - "Expert escalation uses Sol for architecture and high-risk triggers."
-  - "Monitoring, user communication, and adversarial review use Terra; adversarial review has no non-Terra default reviewer."
-  - "Main and sub route through OpenCode with an OpenRouter HY3 model by default."
+  - "Monitoring and user communication use Terra; adversarial review requires Terra high and HY3 high independent passes."
+  - "Main, implementation, testing, and HY3 adversarial review route through OpenCode with OpenRouter HY3 by default."
+  - "Main uses HY3 high, implementation uses HY3 medium, and testing uses HY3 low."
   - "Translation verification routes through Claude CLI with a configurable fast model."
   - "The router validates role, runner, model, prompt, and repository and uses argv rather than a shell string."
 

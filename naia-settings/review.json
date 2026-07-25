@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_doc": "Substantive adversarial review is a dedicated Terra responsibility. This config preserves the existing tier policy for formal and deterministic checks while preventing another default LLM reviewer from being selected.",
+  "_doc": "Substantive adversarial review requires independent Terra high and HY3 high passes; deterministic checks remain separate.",
   "tier_policy": {
     "_doc": "naia-agent 원조 2계층의 하네스 정규화. 머리쓰기·설계·실질검증=상위(플래그십) / 형식검증=하위(라이트) / 구조=결정론(LLM 무).",
     "reasoning_design_fix": "flagship",
@@ -17,10 +17,19 @@
       "command": "codex exec -m gpt-5.6-terra \"{prompt}\" --sandbox read-only --skip-git-repo-check",
       "stdin": false,
       "parse": "text_fallback"
+    },
+    {
+      "id": "hy3-high",
+      "role": "adversarial_review_hy3",
+      "model": "openrouter/tencent/hy3",
+      "tier": "high",
+      "command": "opencode run --pure --auto --variant high -m openrouter/tencent/hy3 \"{prompt}\"",
+      "stdin": false,
+      "parse": "text_fallback"
     }
   ],
   "degradation": {
-    "_doc": "Terra is the only substantive reviewer. A timeout or failure does not substitute another LLM; rerun Terra after resolving the execution problem.",
+    "_doc": "Both required substantive reviewers must pass. A timeout or failure of either reviewer does not substitute another LLM; rerun that reviewer after resolving the execution problem.",
     "per_call_timeout_sec": 90,
     "on_timeout": "do not substitute another LLM; rerun Terra"
   },
@@ -30,28 +39,28 @@
   "stages": {
     "planning": {
       "reviewers": [
-        "terra"
+        "terra", "hy3-high"
       ],
       "arbiter": null,
       "convergence": 1
     },
     "development": {
       "reviewers": [
-        "terra"
+        "terra", "hy3-high"
       ],
       "arbiter": null,
       "convergence": 2
     },
     "test": {
       "reviewers": [
-        "terra"
+        "terra", "hy3-high"
       ],
       "arbiter": null,
       "convergence": 1
     },
     "integration": {
       "reviewers": [
-        "terra"
+        "terra", "hy3-high"
       ],
       "arbiter": null,
       "convergence": 2
