@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "authority": { "runner": "codex", "responsibility": "workspace commands, integration decisions, and final file changes" },
+  "roles": {
+    "expert": { "runner": "codex", "model": "gpt-5.6-sol", "reasoningEffort": "high", "purpose": "architecture, high-risk decisions, and design escalation" },
+    "monitoring": { "runner": "codex", "model": "gpt-5.6-terra", "reasoningEffort": "medium", "purpose": "normal monitoring and user communication" },
+    "main": { "runner": "opencode", "model": "openrouter/tencent/hy3", "reasoningEffort": "high", "purpose": "development orchestration and implementation planning" },
+    "sub": { "runner": "opencode", "model": "openrouter/tencent/hy3", "reasoningEffort": "low", "purpose": "bounded implementation, verification, tests, and translation" },
+    "adversarial_review": { "runner": "codex", "model": "gpt-5.6-terra", "reasoningEffort": "high", "purpose": "independent adversarial review only" },
+    "translation_verification": { "runner": "claude", "model": "fast", "purpose": "fast independent translation verification" }
+  },
+  "routes": {
+    "design": "expert", "high_risk": "expert", "monitoring": "monitoring", "user_communication": "monitoring",
+    "orchestration": "main", "implementation": "sub", "verification": "sub", "testing": "sub", "translation": "sub",
+    "translation_verification": "translation_verification", "adversarial_review": "adversarial_review"
+  },
+  "expertEscalation": {
+    "mode": "automatic",
+    "triggers": [
+      "cross-repository contract or public API change",
+      "security, permission, secret, or data-loss risk",
+      "architecture choice with material alternatives",
+      "repeated failure after the approved implementation path"
+    ]
+  }
+}

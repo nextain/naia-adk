@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "_doc": "크로스리뷰 리뷰어 패널 (플래그십 tier) + 모델 tier 정책. naia-settings cross-repo SoT. review-pass 스킬 + naia-agent 가 소비. llm.json 의 main/sub/embedded 역할과 형제 — 이 파일은 '실질 적대 검증' 역할(플래그십 다중 독립).",
+  "_doc": "Substantive adversarial review is a dedicated Terra responsibility. This config preserves the existing tier policy for formal and deterministic checks while preventing another default LLM reviewer from being selected.",
   "tier_policy": {
     "_doc": "naia-agent 원조 2계층의 하네스 정규화. 머리쓰기·설계·실질검증=상위(플래그십) / 형식검증=하위(라이트) / 구조=결정론(LLM 무).",
     "reasoning_design_fix": "flagship",
@@ -10,41 +10,51 @@
   },
   "reviewers": [
     {
-      "id": "claude",
+      "id": "terra",
+      "role": "adversarial_review",
+      "model": "gpt-5.6-terra",
       "tier": "flagship",
-      "command": "claude -p --output-format json --allowedTools \"Read,Glob,Grep\" --max-turns 5",
-      "stdin": true,
-      "parse": "json"
-    },
-    {
-      "id": "codex",
-      "tier": "flagship",
-      "command": "codex exec \"{prompt}\" --sandbox read-only --skip-git-repo-check",
+      "command": "codex exec -m gpt-5.6-terra \"{prompt}\" --sandbox read-only --skip-git-repo-check",
       "stdin": false,
       "parse": "text_fallback"
-    },
-    {
-      "id": "glm-5.1",
-      "tier": "flagship",
-      "command": "opencode run \"{prompt}\" --dir \"{repo}\" -m openrouter/z-ai/glm-5.1",
-      "stdin": false,
-      "parse": "text_fallback",
-      "_speed_note": "⚠️ opencode run = agentic build 모드라 리뷰엔 너무 느림(2026-05-30 실측 150s 타임아웃, 출력 0). 빠른 경로 = GLM 직접 API(GLM_API_KEY → open.bigmodel.cn). 키 없으면 R2(claude+codex)로 degradation.",
-      "preferred_command": "curl -s https://open.bigmodel.cn/api/paas/v4/chat/completions (GLM_API_KEY 필요)"
     }
   ],
   "degradation": {
-    "_doc": "느린/불응 리뷰어는 timeout 후 R-1 graceful degradation (review-pass §7). 검증은 멈추지 않는다. 2026-05-30 실측: glm 타임아웃 → R2(claude+codex)가 이슈 정상 검출.",
+    "_doc": "Terra is the only substantive reviewer. A timeout or failure does not substitute another LLM; rerun Terra after resolving the execution problem.",
     "per_call_timeout_sec": 90,
-    "on_timeout": "drop reviewer, continue at R-1 (min R=2)"
+    "on_timeout": "do not substitute another LLM; rerun Terra"
   },
   "excluded": {
     "gemini-cli": "응답 5분+ 불안정 (2026-05-30 실측). 검증층은 timeout+graceful degradation 필요. 속도·신뢰 필요 시 Vertex 등 유료 API 옵션."
   },
   "stages": {
-    "planning":    { "reviewers": ["claude", "codex", "glm-5.1"], "arbiter": null, "convergence": 1 },
-    "development": { "reviewers": ["claude", "codex", "glm-5.1"], "arbiter": null, "convergence": 2 },
-    "test":        { "reviewers": ["claude", "codex", "glm-5.1"], "arbiter": null, "convergence": 1 },
-    "integration": { "reviewers": ["claude", "codex", "glm-5.1"], "arbiter": null, "convergence": 2 }
+    "planning": {
+      "reviewers": [
+        "terra"
+      ],
+      "arbiter": null,
+      "convergence": 1
+    },
+    "development": {
+      "reviewers": [
+        "terra"
+      ],
+      "arbiter": null,
+      "convergence": 2
+    },
+    "test": {
+      "reviewers": [
+        "terra"
+      ],
+      "arbiter": null,
+      "convergence": 1
+    },
+    "integration": {
+      "reviewers": [
+        "terra"
+      ],
+      "arbiter": null,
+      "convergence": 2
+    }
   }
 }
