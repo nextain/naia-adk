@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://io.nextain.naia-adk/stage-gate/v1/schema.json",
+  "title": "naia-adk stage-gate v1",
+  "description": "Structural schema for the P0 stage-gate core types. NOTE: raw byte fields (requestBytes, scopeBytes, artifact.bytes) MUST be genuine Uint8Array instances at runtime; JSON Schema cannot express that, so they are annotated but validated in code. Digests are lowercase hex SHA-256 (64 chars). This schema mirrors core.mjs exactly: DOMAIN io.nextain.naia-adk.stage-gate, VERSION v1.",
+  "$defs": {
+    "domain": { "const": "io.nextain.naia-adk.stage-gate" },
+    "version": { "const": "v1" },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifactId": { "enum": ["D01", "R01", "I01", "A01", "P01", "P02", "P03"] },
+    "artifactKind": {
+      "enum": [
+        "expert_design",
+        "adversarial_review",
+        "main_integration",
+        "operator_approval",
+        "scenarios",
+        "coverage",
+        "requirements"
+      ]
+    },
+    "artifactPath": {
+      "enum": [
+        ".agents/requirements/design.md",
+        ".agents/reviews/adversarial-review.md",
+        ".agents/requirements/integration.md",
+        ".agents/requirements/operator-approval.md",
+        ".agents/requirements/scenarios.yaml",
+        ".agents/requirements/coverage.yaml",
+        ".agents/requirements/requirements.yaml"
+      ]
+    },
+    "stage": {
+      "enum": [
+        "expert_design",
+        "adversarial_review",
+        "main_integration",
+        "operator_approval",
+        "planning_contract"
+      ]
+    },
+    "bytes": {
+      "description": "Runtime type MUST be Uint8Array; represented here as an array of octets for documentation only.",
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestBytes", "scopeBytes"],
+      "properties": {
+        "requestBytes": { "$ref": "#/$defs/bytes" },
+        "scopeBytes": { "$ref": "#/$defs/bytes" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "path", "bytes"],
+      "properties": {
+        "id": { "$ref": "#/$defs/artifactId" },
+        "kind": { "$ref": "#/$defs/artifactKind" },
+        "path": { "$ref": "#/$defs/artifactPath" },
+        "bytes": { "$ref": "#/$defs/bytes" }
+      }
+    },
+    "manifestEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/artifactId" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stage",
+        "previousDigest",
+        "requestDigest",
+        "scopeDigest",
+        "manifest",
+        "digest"
+      ],
+      "properties": {
+        "stage": { "$ref": "#/$defs/stage" },
+        "previousDigest": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }]
+        },
+        "requestDigest": { "$ref": "#/$defs/digest" },
+        "scopeDigest": { "$ref": "#/$defs/digest" },
+        "manifest": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/manifestEntry" }
+        },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "receiptPreimage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "previousDigest", "requestDigest", "scopeDigest", "manifest"],
+      "properties": {
+        "stage": { "$ref": "#/$defs/stage" },
+        "previousDigest": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }]
+        },
+        "requestDigest": { "$ref": "#/$defs/digest" },
+        "scopeDigest": { "$ref": "#/$defs/digest" },
+        "manifest": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/manifestEntry" }
+        }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifacts", "receipts"],
+      "properties": {
+        "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },
+        "receipts": { "type": "array", "items": { "$ref": "#/$defs/receipt" } }
+      }
+    },
+    "evaluationResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prefix", "terminalCandidate", "violations"],
+      "properties": {
+        "prefix": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "terminalCandidate": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["requestDigest", "scopeDigest", "finalReceiptDigest"],
+              "properties": {
+                "requestDigest": { "$ref": "#/$defs/digest" },
+                "scopeDigest": { "$ref": "#/$defs/digest" },
+                "finalReceiptDigest": { "$ref": "#/$defs/digest" }
+              }
+            }
+          ]
+        },
+        "violations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "path"],
+            "properties": {
+              "code": {
+                "enum": [
+                  "STATE_INVALID",
+                  "OBSERVATION_INVALID",
+                  "ARTIFACT_INVALID",
+                  "ARTIFACT_UNKNOWN",
+                  "ARTIFACT_KIND_MISMATCH",
+                  "ARTIFACT_PATH_MISMATCH",
+                  "ARTIFACT_DUPLICATE",
+                  "RECEIPT_INVALID",
+                  "RECEIPT_STAGE_MISMATCH",
+                  "RECEIPT_PREVIOUS_MISMATCH",
+                  "RECEIPT_REQUEST_MISMATCH",
+                  "RECEIPT_SCOPE_MISMATCH",
+                  "RECEIPT_MANIFEST_MISMATCH",
+                  "RECEIPT_DIGEST_MISMATCH",
+                  "RECEIPT_DUPLICATE",
+                  "REPLAY",
+                  "ARTIFACT_MISSING",
+                  "ARTIFACT_EXTRA"
+                ]
+              },
+              "path": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["state", "observation"],
+  "properties": {
+    "state": { "$ref": "#/$defs/state" },
+    "observation": { "$ref": "#/$defs/observation" }
+  }
+}

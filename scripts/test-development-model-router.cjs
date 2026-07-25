@@ -158,31 +158,40 @@ test('tracked development config: preserves the required role and escalation pol
   const roles = config.roles;
   assert.deepStrictEqual(Object.keys(roles).sort(), [
     'adversarial_review',
+    'adversarial_review_hy3',
     'expert',
     'main',
     'monitoring',
     'sub',
+    'testing',
     'translation_verification',
   ]);
   assert.strictEqual(roles.expert.runner, 'codex');
   assert.strictEqual(roles.expert.model, 'gpt-5.6-sol');
-  for (const roleName of ['main', 'sub']) {
+  for (const roleName of ['main', 'sub', 'testing', 'adversarial_review_hy3']) {
     assert.strictEqual(roles[roleName].runner, 'opencode');
     assert.strictEqual(roles[roleName].model, 'openrouter/tencent/hy3');
   }
   assert.strictEqual(roles.monitoring.model, 'gpt-5.6-terra');
   assert.strictEqual(roles.adversarial_review.model, 'gpt-5.6-terra');
+  assert.strictEqual(roles.main.reasoningEffort, 'high');
+  assert.strictEqual(roles.sub.reasoningEffort, 'medium');
+  assert.strictEqual(roles.testing.reasoningEffort, 'low');
+  assert.strictEqual(roles.adversarial_review_hy3.reasoningEffort, 'high');
+  assert.deepStrictEqual(config.routes.adversarial_review, ['adversarial_review', 'adversarial_review_hy3']);
   assert.strictEqual(roles.translation_verification.runner, 'claude');
   assert.strictEqual(config.expertEscalation.mode, 'automatic');
   assert.strictEqual(config.expertEscalation.triggers.length, 4);
 });
 
-test('tracked review panel: names Terra alone for substantive adversarial review', () => {
+test('tracked review panel: requires Terra and HY3 high for substantive adversarial review', () => {
   const panel = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../naia-settings/review.json'), 'utf8'));
-  assert.deepStrictEqual(panel.reviewers.map((reviewer) => reviewer.id), ['terra']);
+  assert.deepStrictEqual(panel.reviewers.map((reviewer) => reviewer.id), ['terra', 'hy3-high']);
   assert.strictEqual(panel.reviewers[0].model, 'gpt-5.6-terra');
+  assert.strictEqual(panel.reviewers[1].model, 'openrouter/tencent/hy3');
+  assert.strictEqual(panel.reviewers[1].tier, 'high');
   for (const stage of Object.values(panel.stages)) {
-    assert.deepStrictEqual(stage.reviewers, ['terra']);
+    assert.deepStrictEqual(stage.reviewers, ['terra', 'hy3-high']);
   }
 });
 
