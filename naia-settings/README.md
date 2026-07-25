@@ -80,3 +80,11 @@ process.env  >  naia-settings/llm.json  >  ./naia-agent.env  >  ~/.naia-agent
 `naia-agent` finds this file via `NAIA_ADK_PATH` (the naia-adk workspace
 root). `main` maps onto the existing provider resolution; `sub` /
 `embedded` are exposed as `NAIA_SUB_*` / `NAIA_EMBED_*`.
+
+## `development-models.json` ? ADK development role routing
+
+This file is separate from runtime `llm.json`. It routes ADK development work:
+Codex is the integration authority, Sol is automatically escalated for expert
+triggers, Terra handles monitoring/user communication and substantive adversarial
+review, HY3 runs `main`/`sub` through OpenCode, and Claude CLI verifies
+translations. See [`../docs/development-model-routing.md`](../docs/development-model-routing.md).

@@ -1,13 +1,13 @@
 # Requirements Index — on-demand load only (NOT session-injected)
 # Read this file when entering Plan or Review phases
 version: 1
-updated: 2026-07-14
-total: 61
+updated: 2026-07-25
+total: 62
 
 # Status counts
 by_status:
   candidate: 0
-  active: 50
+  active: 51
   implemented: 0
   verified: 11
   withdrawn: 0
@@ -32,6 +32,15 @@ products:
       - { id: RCI-009, title: "Backward-Compatible Defense in Depth", status: verified }
       - { id: RCI-010, title: "Project-Neutral Distribution", status: verified }
       - { id: RCI-011, title: "Deduplicated Scope Authority", status: verified }
+
+  - product: naia-adk
+    title: "Naia ADK Development Process"
+    req_count: 1
+    priority_high: 1
+    priority_medium: 0
+    modules: [development-process]
+    requirements:
+      - { id: REQ-051, title: "Development Model Routing", status: active }
 
   - product: naia-os
     title: "Naia OS Desktop App"

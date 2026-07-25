@@ -1,0 +1,46 @@
+id: REQ-051
+title: "Development Model Routing"
+title_ko: "Development model role and runner routing"
+product: naia-adk
+module: development-process
+status: active
+source: human
+priority: high
+created: 2026-07-25
+updated: 2026-07-25
+issue_url: ""
+
+description: |
+  The ADK development process must keep Codex as integration authority while
+  routing expert, monitoring, orchestration, bounded implementation,
+  adversarial review, and translation verification to explicit configurable roles.
+
+acceptance_criteria:
+  - "A tracked config defines expert, monitoring, main, sub, adversarial_review, and translation_verification roles."
+  - "Expert escalation uses Sol for architecture and high-risk triggers."
+  - "Monitoring, user communication, and adversarial review use Terra; adversarial review has no non-Terra default reviewer."
+  - "Main and sub route through OpenCode with an OpenRouter HY3 model by default."
+  - "Translation verification routes through Claude CLI with a configurable fast model."
+  - "The router validates role, runner, model, prompt, and repository and uses argv rather than a shell string."
+
+trace:
+  code:
+    - path: "naia-settings/development-models.json"
+      symbol: "roles and routes"
+      coverage: full
+    - path: "scripts/development-model-router.cjs"
+      symbol: "run"
+      coverage: full
+  tests:
+    - path: "scripts/test-development-model-router.cjs"
+      symbol: "router suite"
+      coverage: full
+  reviews:
+    planning: null
+    development: null
+    test: null
+    integration: null
+
+decisions:
+  - "Codex remains the integration authority even when OpenCode executes a HY3 role."
+  - "OpenCode is limited to alpha-adk and naia-adk collaboration; it is not the naia-shell or naia-agent execution route."
