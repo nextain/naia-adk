@@ -16,12 +16,12 @@ description: |
   adversarial review, and translation verification to explicit configurable roles.
 
 acceptance_criteria:
-  - "A tracked config defines expert, monitoring, main, sub, adversarial_review, and translation_verification roles."
+  - "A tracked config defines expert, monitoring, main, sub, adversarial_review, translation, and two translation-review roles."
   - "Expert escalation uses Sol for architecture and high-risk triggers."
-  - "Monitoring and user communication use Terra; adversarial review requires Terra high and HY3 high independent passes."
+  - "Monitoring and user communication use Terra; adversarial review requires Terra high and HY3 high parallel clean passes in different sessions from each other and the implementation session."
   - "Main, implementation, testing, and HY3 adversarial review route through OpenCode with OpenRouter HY3 by default."
-  - "Main uses HY3 high, implementation uses HY3 medium, and testing uses HY3 low."
-  - "Translation verification routes through Claude CLI with a configurable fast model."
+  - "Main uses HY3 high; implementation and testing use HY3 medium; HY3 low is reserved for translation only."
+  - "Translation uses HY3 low only. Translation review requires parallel clean passes from Claude Haiku and HY3 medium in separate sessions."
   - "The router validates role, runner, model, prompt, and repository and uses argv rather than a shell string."
 
 trace:
@@ -45,3 +45,4 @@ trace:
 decisions:
   - "Codex remains the integration authority even when OpenCode executes a HY3 role."
   - "OpenCode is limited to alpha-adk and naia-adk collaboration; it is not the naia-shell or naia-agent execution route."
+  - "A reviewer is always a distinct role, session, and execution from the implementer. HY3 high may review HY3 medium output when those execution boundaries differ."

@@ -2,9 +2,9 @@
   "version": 1,
   "_doc": "Substantive adversarial review requires independent Terra high and HY3 high passes; deterministic checks remain separate.",
   "tier_policy": {
-    "_doc": "naia-agent 원조 2계층의 하네스 정규화. 머리쓰기·설계·실질검증=상위(플래그십) / 형식검증=하위(라이트) / 구조=결정론(LLM 무).",
-    "reasoning_design_fix": "flagship",
-    "substantive_review": "flagship",
+    "_doc": "naia-agent 원조 2계층의 하네스 정규화. 머리쓰기·설계·실질검증=high / 형식검증=light / 구조=결정론(LLM 무).",
+    "reasoning_design_fix": "high",
+    "substantive_review": "high",
     "formal_verification": "light",
     "structural": "deterministic"
   },
@@ -13,7 +13,7 @@
       "id": "terra",
       "role": "adversarial_review",
       "model": "gpt-5.6-terra",
-      "tier": "flagship",
+      "tier": "high",
       "command": "codex exec -m gpt-5.6-terra \"{prompt}\" --sandbox read-only --skip-git-repo-check",
       "stdin": false,
       "parse": "text_fallback"
