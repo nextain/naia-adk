@@ -223,15 +223,22 @@ test('all historical receipts revalidate immutable role attestations', function 
 });
 
 test('a self-consistent forged role snapshot cannot replace the trusted current configuration', function () {
-  const prepared = preparedRun(0, function (state) {
+  const prepared = preparedRun(1, function (state) {
     // An attacker can recompute the run-local hashes, receipt digests, and
-    // bindings.  The evaluator must still derive the expected static roles
-    // from the current trusted configuration rather than trusting this input.
-    state.run.roleSnapshot.design.model = 'forged-model';
+    // bindings, including a completed historical receipt.  Every static role
+    // field is forged together so the test cannot pass merely because one
+    // field happens to remain trusted.
+    const forged = {
+      runner: 'forged-runner',
+      model: 'forged-model',
+      modelFamily: 'forged-family',
+      reasoningEffort: 'forged-effort'
+    };
+    Object.assign(state.run.roleSnapshot.design, forged);
     state.run.roleSnapshotHash = mod.sha256(mod.canonicalJSON(state.run.roleSnapshot));
-    state.all[0].attestation.model = 'forged-model';
+    Object.assign(state.all[0].attestation, forged);
   });
-  const result = mod.evaluateRun(prepared.run, observation(prepared, 'design'));
+  const result = mod.evaluateRun(prepared.run, observation(prepared, 'review_terra'));
   assert.strictEqual(result.allow, false);
   assert.match(result.reason, /roleSnapshot does not match the trusted current role configuration/i);
 });
