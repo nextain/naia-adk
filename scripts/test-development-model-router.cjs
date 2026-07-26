@@ -159,16 +159,27 @@ test('tracked development config: preserves the required role and escalation pol
   assert.deepStrictEqual(Object.keys(roles).sort(), [
     'adversarial_review',
     'adversarial_review_hy3',
+    'approval_boundary',
     'expert',
+    'integration',
     'main',
     'monitoring',
     'sub',
     'testing',
+    'translation',
+    'translation_review_hy3',
     'translation_verification',
   ]);
   assert.strictEqual(roles.expert.runner, 'codex');
   assert.strictEqual(roles.expert.model, 'gpt-5.6-sol');
-  for (const roleName of ['main', 'sub', 'testing', 'adversarial_review_hy3']) {
+  for (const roleName of [
+    'main',
+    'sub',
+    'testing',
+    'translation',
+    'translation_review_hy3',
+    'adversarial_review_hy3',
+  ]) {
     assert.strictEqual(roles[roleName].runner, 'opencode');
     assert.strictEqual(roles[roleName].model, 'openrouter/tencent/hy3');
   }
@@ -176,12 +187,68 @@ test('tracked development config: preserves the required role and escalation pol
   assert.strictEqual(roles.adversarial_review.model, 'gpt-5.6-terra');
   assert.strictEqual(roles.main.reasoningEffort, 'high');
   assert.strictEqual(roles.sub.reasoningEffort, 'medium');
-  assert.strictEqual(roles.testing.reasoningEffort, 'low');
+  assert.strictEqual(roles.testing.reasoningEffort, 'medium');
+  assert.strictEqual(roles.translation.reasoningEffort, 'low');
+  assert.strictEqual(roles.translation_review_hy3.reasoningEffort, 'medium');
   assert.strictEqual(roles.adversarial_review_hy3.reasoningEffort, 'high');
+  assert.strictEqual(roles.approval_boundary.runner, 'external');
+  assert.strictEqual(roles.integration.runner, 'codex');
   assert.deepStrictEqual(config.routes.adversarial_review, ['adversarial_review', 'adversarial_review_hy3']);
+  assert.strictEqual(config.routes.translation, 'translation');
+  assert.deepStrictEqual(config.routes.translation_review, [
+    'translation_verification',
+    'translation_review_hy3',
+  ]);
   assert.strictEqual(roles.translation_verification.runner, 'claude');
+  assert.strictEqual(roles.translation_verification.model, 'haiku');
+  assert.strictEqual(roles.translation_verification.modelFamily, 'claude-haiku');
   assert.strictEqual(config.expertEscalation.mode, 'automatic');
   assert.strictEqual(config.expertEscalation.triggers.length, 4);
+});
+
+test('tracked translation review panel: requires independent Claude Haiku and HY3 medium reviewers', () => {
+  const config = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, '../naia-settings/development-models.json'), 'utf8')
+  );
+  const translation = { roleName: 'translation', ...config.roles.translation };
+  const reviewers = config.routes.translation_review.map((roleName) => ({
+    roleName,
+    ...config.roles[roleName],
+  }));
+
+  assert.strictEqual(translation.modelFamily, 'hy3');
+  assert.strictEqual(translation.reasoningEffort, 'low');
+  assert.deepStrictEqual(reviewers.map(({ roleName }) => roleName), [
+    'translation_verification',
+    'translation_review_hy3',
+  ]);
+  assert.deepStrictEqual(reviewers.map(({ runner, model, reasoningEffort }) => ({
+    runner,
+    model,
+    reasoningEffort,
+  })), [
+    { runner: 'claude', model: 'haiku', reasoningEffort: undefined },
+    { runner: 'opencode', model: 'openrouter/tencent/hy3', reasoningEffort: 'medium' },
+  ]);
+  assert.notStrictEqual(reviewers[0].modelFamily, translation.modelFamily);
+  assert.notStrictEqual(reviewers[0].runner, translation.runner);
+  assert.notStrictEqual(reviewers[0].roleName, translation.roleName);
+  assert.notStrictEqual(reviewers[1].roleName, translation.roleName);
+  assert.notStrictEqual(reviewers[1].reasoningEffort, translation.reasoningEffort);
+});
+
+test('tracked substantive reviewers: roles are distinct from implementation and test roles', () => {
+  const config = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, '../naia-settings/development-models.json'), 'utf8')
+  );
+  const substantiveReviewers = config.routes.adversarial_review;
+
+  assert.deepStrictEqual(substantiveReviewers, ['adversarial_review', 'adversarial_review_hy3']);
+  for (const reviewerRole of substantiveReviewers) {
+    assert.notStrictEqual(reviewerRole, config.routes.implementation);
+    assert.notStrictEqual(reviewerRole, config.routes.testing);
+  }
+  assert.notStrictEqual(config.routes.implementation, config.routes.testing);
 });
 
 test('tracked review panel: requires Terra and HY3 high for substantive adversarial review', () => {
