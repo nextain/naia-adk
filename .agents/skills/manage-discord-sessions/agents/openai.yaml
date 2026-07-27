@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Discord Sessions"
+  short_description: "Rotate idle Discord AI sessions without model heartbeats"
+  default_prompt: "Inspect and apply the Discord session idle-rotation policy, then verify it with a short injected timeout."
