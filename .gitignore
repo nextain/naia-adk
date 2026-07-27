@@ -26,6 +26,14 @@ naia-settings/config.json
 # Chat session transcripts — personal conversation data, never shared
 naia-settings/.sessions/
 
+# Local runtime state and credentials (never commit)
+/conversations/
+/naia-settings/.keys/
+/naia-settings/credentials
+/naia-settings/processing.json
+/naia-settings/slots-manifest.json
+/naia-settings/ui-config.json
+
 # Per-machine LLM routing (points at whatever pod this machine happens to run)
 .agents/context/llm-config.yaml
 

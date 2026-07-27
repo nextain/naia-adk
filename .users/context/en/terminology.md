@@ -96,6 +96,19 @@ Replace on sight with plain Korean or a standard term.
 - Brand names (`naia-*` series) are exempt, but a plain gloss on first use is encouraged:
   e.g. "음성 인지 모듈 (naia-cognitive)".
 
+## Development Work Units
+
+| Term | Definition |
+|---|---|
+| Issue | A delivery unit that can be planned, implemented, verified, and merged independently |
+| UC (Use Case) | An actor goal and its observable system outcome |
+| FE (Feature) | A code-level functional unit reusable by one or more UCs |
+| UCT (Use Case Test) | A test of the UC journey and observable outcome |
+| FT (Feature Test) | A test of an FE's code contract, boundaries, and failure handling |
+
+`FE` does not mean a button, page, click step, or Front-end. UC and FE have a
+many-to-many relationship. The default trace is `Issue → UC ↔ FE → UCT/FT`.
+
 ## When to Enforce
 
 - Development phases 7 (Review) and 9 (Post-test Review) verify this guide passes.

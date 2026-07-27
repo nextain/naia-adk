@@ -95,6 +95,13 @@ skills:
     scripts: [scripts/vault.sh]
     note: "표준 소비자=data-private 서브모듈. 비번은 AI를 거치지 않음(사용자 `!` 직접 실행)."
 
+  manage-discord-sessions:
+    trigger: "Discord Codex session cost, idle history rotation, prompt cache expiry, or long-idle resume"
+    what: "Keep the Discord Gateway idle without model heartbeats and rotate bounded transient history after a configurable timeout"
+    arg: null
+    scripts: []
+    note: "Production default is 30 minutes. Verify boundary behavior with an injected short timeout and fake clock."
+
   session-resume:
     trigger: "claude --resume, codex/opencode 세션 이어서, 이전 세션 뭐했지, 세션 기록 봐줘"
     what: "Claude Code/Codex/opencode 세션(JSONL·SQLite) 통합 파싱 → 대화 흐름 요약 → 끊긴 작업 이어하기"

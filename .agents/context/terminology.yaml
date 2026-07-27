@@ -49,6 +49,28 @@ policy:
         internal_ok: |
           내부 코드·메모리·.agents/ 안에서는 harness 그대로 OK.
 
+  development_work_units:
+    description: |
+      이슈, 사용자 목표, 코드 기능, 테스트를 서로 다른 수준으로 구분한다.
+      FE는 UI 요소나 화면 흐름의 줄임말이 아니라 Feature의 식별자다.
+    terms:
+      issue:
+        definition: "독립적으로 계획·개발·검증·병합할 수 있는 개발 전달 단위."
+      uc:
+        full_name: "Use Case"
+        definition: "행위자가 시스템을 사용해 달성하려는 목표와 관찰 가능한 결과."
+      fe:
+        full_name: "Feature"
+        definition: "하나 이상의 UC에서 재사용될 수 있는 코드 수준 기능 단위."
+        not: "버튼, 화면, 클릭 단계 또는 프론트엔드(Front-end)의 약자."
+      uct:
+        full_name: "Use Case Test"
+        definition: "UC의 사용자 여정과 관찰 가능한 결과를 검증하는 테스트."
+      ft:
+        full_name: "Feature Test"
+        definition: "FE의 코드 계약, 경계값과 실패 처리를 검증하는 테스트."
+    relationship: "Issue -> UC <-> FE -> UCT/FT. UC와 FE는 다대다 관계다."
+
     academic_terms_translate_with_paren:
       description: |
         학계용어 / 측정 약어는 첫 등장 시 "한국어 풀이 (영문/약어 + 출처)" 형식.
@@ -77,17 +99,17 @@ policy:
           to: "업종 사전 설정"
         - from: "ref_audio hotswap"
           to: "음성 즉시 교체"
-        - from: "score memory" (prose)
+        - from: '"score memory" (prose)'
           to: "곡 기억 모듈"
           code_identifier_ok: "score_memory_poc.py 같은 파일·식별자는 그대로"
-        - from: "emotion vec" (prose)
+        - from: '"emotion vec" (prose)'
           to: "감정 벡터"
           code_identifier_ok: "JSON key emotion_vec 는 그대로"
-        - from: "spectrum switch" (prose)
+        - from: '"spectrum switch" (prose)'
           to: "말↔노래 전환"
-        - from: "mismatch DSP" (prose)
+        - from: '"mismatch DSP" (prose)'
           to: "음정 차이 보정"
-        - from: "look-ahead predictor" (prose)
+        - from: '"look-ahead predictor" (prose)'
           to: "선행 예측기 (look-ahead predictor)"
           note: "학계 paraphrase 인 경우 두 번째 분류 적용"
 
@@ -150,5 +172,7 @@ cross_references:
     - ".agents/context/contributing.yaml (커밋·이슈 규칙)"
 
 revision_history:
+  - date: "2026-07-12"
+    note: "Issue/UC/FE/UCT/FT 정의와 UC-FE 다대다 추적 관계 추가."
   - date: "2026-05-28"
     note: "신조어 금지 정책을 외부 표면 → 내부 컨텍스트까지 확장. 사용자 명시 지시 (Phase 0 review 시점)."

@@ -9,6 +9,7 @@
 | copyright-reg | `.agents/skills/copyright-reg/SKILL.md` | 어문저작권 등록 서류 생성. 업무상저작물 확인서 PDF(넥스테인 브랜딩) + 저작권등록신청명세서 내용란 초안을 생성합니다. "저작권 등록", "업무상저작물 확인서", "copyright" 등 요청 시 사용. |
 | doc-coauthoring | `.agents/skills/doc-coauthoring/SKILL.md` | 기술 스펙, 제안서, 결정 문서, PRD 등 구조화된 문서를 3단계로 공동 작성합니다. "문서 작성", "스펙 작성", "제안서", "RFC", "설계 문서", "PRD" 등 비코드 문서 작성 요청 시 반드시 사용. /doc-coauthoring으로 호출. |
 | finetune-persona | `.agents/skills/finetune-persona/SKILL.md` | > |
+| manage-discord-sessions | `.agents/skills/manage-discord-sessions/SKILL.md` | Discord Gateway는 모델 호출 없이 대기하고, 오래 유휴 상태인 임시 대화 기록을 설정된 시간에 회전시킨다. |
 | manage-skills | `.agents/skills/manage-skills/SKILL.md` | 세션 변경사항을 분석해 verify-* 스킬 드리프트를 탐지하고 자동 생성/업데이트합니다. issue-driven-development Sync 단계, 새 패턴/규칙 도입 후, PR 전 검증 스킬 커버리지 확인 시 반드시 사용. /manage-skills로 호출. |
 | merge-worktree | `.agents/skills/merge-worktree/SKILL.md` | Squash-merge the current worktree branch into the main branch (or a specified target). Analyzes git history and source code to craft a comprehensive commit mess |
 | migrate-ctx | `.agents/skills/migrate-ctx/SKILL.md` | > |
