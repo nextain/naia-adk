@@ -1,0 +1,1 @@
+{"revision":"native-platform-v1","kind":"deterministic_structural","input_contract":"platform_runner_declaration","decision":"Windows passes only with a native Node or PowerShell command and false WSL, Bash, and symlink dependency flags","rules":["Linux CI cannot stand in for Windows support","a skipped platform capability is not a pass"]}

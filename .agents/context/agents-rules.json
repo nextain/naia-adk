@@ -427,7 +427,7 @@
         "self"
       ],
       "actions": [
-        "Copy the changed file to the other two (CLAUDE.md = AGENTS.md = GEMINI.md, always identical)"
+        "Treat AGENTS.md as the canonical source. When AGENTS.md changes, copy it to CLAUDE.md and GEMINI.md. When a mirror changes, restore that mirror from AGENTS.md; a tool-specific mirror must never overwrite the canonical contract."
       ]
     },
     "propagationOrder": {

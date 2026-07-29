@@ -2,12 +2,12 @@
 
 # Naia OS Project Philosophy
 
-Human-readable guide for `.agents/context/philosophy.yaml`.
+This is a human-readable guide to `.agents/context/philosophy.yaml`.
 
 ## Purpose
 
-This document explains the core philosophy of the Naia OS project — **"why we build this"**.
-Separated from architecture (what) and workflows (how), this is the reason the project exists.
+This document explains the core philosophy of the Naia OS project — **“why we are building this.”**
+It is the reason the project exists, separate from the architecture (what) and workflows (how).
 
 ---
 
@@ -15,23 +15,23 @@ Separated from architecture (what) and workflows (how), this is the reason the p
 
 ### 1. AI Sovereignty
 
-**"Users choose their AI — no vendor lock-in"**
+**“Users choose their AI — no vendor lock-in”**
 
-- Support multiple LLM providers (Vertex AI, Anthropic, xAI, local models)
+- Support for multiple LLM providers (Vertex AI, Anthropic, xAI, local models)
 - Users own their AI configuration and can switch freely
-- No single provider dependency in core architecture
+- No dependency on a single provider in the core architecture
 
-### 2. Privacy First
+### 2. privacy-by-default
 
-**"Local execution by default — cloud is opt-in"**
+**“Local execution by default — the cloud is optional”**
 
 - Desktop-first architecture (Tauri, not Electron cloud)
-- User data stays on device unless explicitly shared
-- Local LLM support (Ollama) as first-class citizen
+- User data remains on the device unless explicitly shared
+- Local LLM support (Ollama) treated as a first-class citizen
 
 ### 3. Transparency
 
-**"Open source — verify by reading the code"**
+**“Open source — verify by reading the code”**
 
 - All core logic is open source (Apache 2.0)
 - AI context is open and forkable (CC-BY-SA 4.0)
@@ -39,40 +39,42 @@ Separated from architecture (what) and workflows (how), this is the reason the p
 
 ### 4. Assembly over Invention
 
-**"Compose from proven components — don't reinvent the wheel"**
+**“Assemble verified components — do not reinvent the wheel”**
 
 - Use upstream projects as building blocks (OpenClaw, Tauri, etc.)
-- Contribute back to upstream when possible
-- Reference submodules (ref-*) for learning and tracking
+- Contribute to upstream whenever possible
+- Learn from and track through reference submodules (ref-*)
 
 ### 5. Always On
 
-**"AI companion as a daemon — always present, always ready"**
+**“The AI companion is a daemon — always present, always ready”**
 
 - Background agent architecture (Node.js daemon)
 - Gateway process management (spawn, restart, health check)
-- Persistent AI character state across sessions
+- AI character state that persists across sessions
 
 ### 6. Avatar-Centric
 
-**"AI as a living character — not just a tool"**
+**“The AI is a living character — not merely a tool”**
 
-- Naia: named AI character with personality and voice
+- Naia: an AI character with a name, personality, and voice
 - 3D avatar with TTS and emotional expression
-- Soul document (SOUL.md) defines character identity
+- Character identity defined in SOUL.md
 
 ### 7. Vibe Coding Era
 
-**"AI context files are the new contribution infrastructure"**
+**“AI context files are the new contribution infrastructure”**
 
-- `.agents/` directories encode project philosophy, not just config
-- Context quality determines AI collaboration quality
-- Dual-directory architecture: AI-optimized + human-readable
-- CC-BY-SA licensing preserves the contribution chain
+- The `.agents/` directory encodes the project philosophy, rather than serving merely as configuration
+- Context quality determines the quality of AI collaboration
+- Dual-directory architecture: AI-optimized + human-readable versions
+- Preserve the contribution chain through the CC-BY-SA license
 
 ---
 
 ## Related Files
 
 - **SoT**: `.agents/context/philosophy.yaml`
-- **Korean mirror**: `.users/context/philosophy.md`
+- **English mirror**: `.users/context/en/philosophy.md`
+
+---

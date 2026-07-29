@@ -1,0 +1,49 @@
+{
+  "id": "ROUTING-PRE-RECOVERY-2026-07-29",
+  "revision": "v1",
+  "digest": "b1325caacd02d2699b258a35feb1f6a0ddb52667845518bc660e0bf0d58c70be",
+  "frozen_at": "2026-07-29T00:00:00Z",
+  "task_classes": ["baseline_recovery"],
+  "routes": [
+    {
+      "id": "route-sol-high",
+      "task_class": "baseline_recovery",
+      "risk_class": "reference",
+      "selection_features": ["reference_arm", "main_llm", "highest_reasoning"],
+      "exact_model_id": "gpt-5.6-sol",
+      "provider": "OpenAI",
+      "configuration_digest": "26f3e02e73558bb658db6fb32bc4fd6ef4a54df011c0626b5e1d4f1be4825b0e",
+      "order": 1
+    },
+    {
+      "id": "route-luna-economy",
+      "task_class": "baseline_recovery",
+      "risk_class": "candidate",
+      "selection_features": ["candidate_arm", "cost_optimized", "escalate_on_declared_trigger"],
+      "exact_model_id": "gpt-5.6-luna",
+      "provider": "OpenAI",
+      "configuration_digest": "882db2bd41abc1299f87bef0ae940b30eab024efb1880c6a5e6f64389ea6c766",
+      "order": 2
+    }
+  ],
+  "fallback_triggers": ["declared_model_unavailable", "retry_budget_exhausted", "required_capability_missing"],
+  "escalation_triggers": ["high_risk_gate", "candidate_invalid_outcome", "independent_review_disagreement"],
+  "abort_triggers": ["cost_budget_exhausted", "fixture_digest_mismatch", "control_digest_mismatch", "scorer_failure"],
+  "budgets": {"retry_max": 1, "quota_max": 200000, "latency_ms_max": 120000, "cost_max": 2},
+  "reference_route_id": "route-sol-high",
+  "paired_comparison_unit": "task",
+  "statistical_plan": {
+    "id": "STAT-PRE-RECOVERY-V1",
+    "paired_task_min": 12,
+    "deterministic_repetitions": 1,
+    "stochastic_repetitions": 5,
+    "confidence_level": 0.95,
+    "alpha": 0.05,
+    "quality_noninferiority_margin": 0.05,
+    "minimum_cost_improvement": 0.15,
+    "max_ci_width": 0.25,
+    "multiple_comparison_family": "three-layer-pre-recovery",
+    "multiple_comparison_method": "holm",
+    "bootstrap_resamples": 10000
+  }
+}

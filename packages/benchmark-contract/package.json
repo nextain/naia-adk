@@ -1,0 +1,16 @@
+{
+  "name": "@naia-adk/benchmark-contract",
+  "version": "0.1.0",
+  "description": "Permanent benchmark and governance evidence contracts shared by naia-adk and naia-agent",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "test": "node test/validate-benchmark-contract.mjs && node test/validate-pre-recovery-baseline.mjs && node test/native-runner.test.mjs && node test/codex-cli-adapter.test.mjs",
+    "baseline:plan": "node src/native-runner.mjs plan --route route-luna-economy"
+  },
+  "devDependencies": {
+    "ajv": "^8.18.0"
+  },
+  "files": ["schemas/", "examples/", "fixtures/", "scorers/", "baselines/", "src/", "README.md"]
+}

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia.dev/schemas/benchmark/task.schema.json",
+  "title": "Benchmark Task",
+  "type": "object",
+  "additionalProperties": false,
+    "required": ["id","contract_version","layer","suite","task_class","risk_class","execution_kind","purpose","asset_id","fixture_digest","source_revision","platform_scope","tool_schema_revision","scorer","required_metrics","hard_gate_ids","scheduled_runs","max_steps","time_limit_ms","data_classification","holdout_class"],
+  "properties": {
+    "id": {"type":"string","pattern":"^TASK-[A-Z0-9_-]{3,120}$"},
+    "contract_version": {"type":"string","minLength":1},
+    "layer": {"enum":["A_model_capability","B_agent_runtime","C_governance_harness"]},
+    "suite": {"type":"string","minLength":1},
+    "task_class": {"type":"string","minLength":1},
+    "risk_class": {"type":"string","minLength":1},
+    "execution_kind": {"enum":["deterministic","stochastic"]},
+    "purpose": {"type":"string","minLength":1},
+    "asset_id": {"type":"string","minLength":1},
+    "fixture_digest": {"$ref":"#/$defs/digest"},
+    "source_revision": {"type":"string","minLength":1},
+    "platform_scope": {"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["windows","linux","macos"]}},
+    "tool_schema_revision": {"type":"string","minLength":1},
+    "scorer": {
+      "type":"object","additionalProperties":false,"required":["kind","revision","artifact_locator","digest"],
+      "properties": {
+        "kind":{"enum":["executable","deterministic_structural","calibrated_model_judge"]},
+        "revision":{"type":"string","minLength":1},
+        "artifact_locator":{"type":"string","pattern":"^(?!/)(?![A-Za-z]:)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
+        "digest":{"$ref":"#/$defs/digest"},
+        "calibration_digest":{"$ref":"#/$defs/digest"}
+      },
+      "allOf":[{"if":{"properties":{"kind":{"const":"calibrated_model_judge"}}},"then":{"required":["calibration_digest"]}}]
+    },
+    "required_metrics": {"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["id","calculation_kind","formula_revision","unit","numerator_definition","denominator_definition","required_for_acceptance"],"properties":{"id":{"type":"string"},"calculation_kind":{"enum":["task_pass_rate","task_valid_rate","external_scorer"]},"formula_revision":{"type":"string"},"unit":{"type":"string"},"numerator_definition":{"type":"string","minLength":1},"denominator_definition":{"type":"string","minLength":1},"required_for_acceptance":{"const":true}}}},
+    "hard_gate_ids": {"type":"array","uniqueItems":true,"items":{"type":"string","pattern":"^HG-[A-Z0-9-]+$"}},
+    "scheduled_runs": {"type":"integer","minimum":1},
+    "max_steps": {"type":"integer","minimum":1},
+    "time_limit_ms": {"type":"integer","minimum":1},
+    "data_classification": {"enum":["public","synthetic_private","local_private"]},
+    "holdout_class": {"enum":["development","validation","holdout","live_rotation"]}
+  },
+  "$defs": {"digest":{"type":"string","pattern":"^[a-f0-9]{64}$"}}
+}
