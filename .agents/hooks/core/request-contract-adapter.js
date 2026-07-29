@@ -171,7 +171,14 @@ function processEnvelope(client, input, fallbackEvent, opts = {}) {
 		const result = core.handleEvent(event, opts);
 		return { event, result, output: formatOutput(client, event.eventName, result) };
 	} catch (error) {
-		if (!core.governed(event.cwd, opts.env || process.env)) return { event, result: { kind: "allow", code: "request_contract_disabled" }, output: null };
+		// An unreadable governance store is itself a fail-closed condition.  Do not
+		// let the exception handler repeat that read and escape without a native
+		// block response; only a successful, explicit disabled result may allow.
+		let governed = true;
+		try { governed = core.governed(event.cwd, opts.env || process.env); } catch {}
+		if (!governed) return { event, result: { kind: "allow", code: "request_contract_disabled" }, output: null };
+		try { preserveRejectedPrompt(client, input, event, opts); }
+		catch (preservationError) { error.preservation_error = preservationError.code || "prompt_preservation_failed"; }
 		return { event, error, result: { kind: "block", code: error.code || "request_contract_internal_error" }, output: failureOutput(client, event.eventName, error) };
 	}
 }

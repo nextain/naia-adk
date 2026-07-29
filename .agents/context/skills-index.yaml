@@ -123,6 +123,13 @@ skills:
     disable-model-invocation: true
     scripts: []
 
+  verify-benchmark-contract:
+    trigger: "packages/benchmark-contract 또는 개발 모델 라우팅 수정 후, Review/Post-test Review 및 커밋 전"
+    what: "벤치 스키마·공급자 영수증·비용 집계·HMAC 저널·Windows DPAPI·듀얼 컨텍스트 결정론 검증"
+    arg: null
+    disable-model-invocation: true
+    scripts: []
+
   verify-request-contract:
     trigger: "request-contract 코어/어댑터/등록/스키마/review-pass 수정 후, Review/Post-test Review 및 커밋 전"
     what: "원요청 source 해시체인→REQ→UC/UC-test→FE/FE-test→구현→증거, 서명 권한, 2회 Clean, Claude Code/Codex 동등성 결정론 검증"

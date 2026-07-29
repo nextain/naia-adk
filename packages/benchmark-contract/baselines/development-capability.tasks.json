@@ -1,0 +1,35 @@
+{
+  "schema_revision": "development-capability-v1",
+  "status": "development_only_no_production_claim",
+  "execution_owner": "candidate-model-provider-adapter",
+  "profile": "common-no-tool-json",
+  "tasks": [
+    {"id":"DEV-ALG-01","family":"algorithmic_output","prompt":"Return JSON {\"outputs\":[...]} for sumArray on cases [[1,2,3],[0,-1,5],[],[100]].","response_shape":{"outputs":"array"}},
+    {"id":"DEV-ALG-02","family":"algorithmic_output","prompt":"Return JSON {\"outputs\":[...]} for reverseWords, collapsing extra spaces, on [\"hello world\",\"the sky is blue\",\"  hello   world  \",\"a\"].","response_shape":{"outputs":"array"}},
+    {"id":"DEV-ALG-03","family":"algorithmic_output","prompt":"Return JSON {\"outputs\":[...]} for isPrime on [2,3,4,17,1,0,97,100].","response_shape":{"outputs":"array"}},
+    {"id":"DEV-ALG-04","family":"algorithmic_output","prompt":"Return JSON {\"outputs\":[...]} for twoSum, using [smallerIndex,largerIndex], on [[[2,7,11,15],9],[[3,2,4],6],[[3,3],6]].","response_shape":{"outputs":"array"}},
+    {"id":"DEV-ALG-05","family":"algorithmic_output","prompt":"Return JSON {\"outputs\":[...]} for valid brackets on [\"()\",\"()[]{}\",\"(]\",\"([)]\",\"{[]}\",\"\",\"]\"].","response_shape":{"outputs":"array"}},
+    {"id":"DEV-ALG-06","family":"algorithmic_output","prompt":"Return JSON {\"outputs\":[...]} for maximum contiguous subarray sum on [[-2,1,-3,4,-1,2,1,-5,4],[1],[5,4,-1,7,8],[-1,-2,-3]].","response_shape":{"outputs":"array"}},
+    {"id":"DEV-ALG-07","family":"algorithmic_output","prompt":"Return JSON {\"outputs\":[...]} for longest common prefix on [[\"flower\",\"flow\",\"flight\"],[\"dog\",\"racecar\",\"car\"],[\"interview\",\"intercom\"],[\"a\"],[\" \",\" \"]].","response_shape":{"outputs":"array"}},
+    {"id":"DEV-ALG-08","family":"algorithmic_output","prompt":"Return JSON {\"outputs\":[...]} for mergeIntervals on [[[1,3],[2,6],[8,10],[15,18]],[[1,4],[4,5]],[[1,4],[2,3]],[[1,2]]]. Each output is an array of intervals.","response_shape":{"outputs":"array"}},
+    {"id":"DEV-ALG-09","family":"algorithmic_output","prompt":"Return JSON {\"outputs\":[...]} for climbStairs with steps 1 or 2 on [1,2,3,5,10].","response_shape":{"outputs":"array"}},
+
+    {"id":"DEV-REV-01","family":"review_detection","prompt":"Review this half-open-interval binary search. Report only actual defects as JSON {\"findings\":[codes]}, choosing from right-initialization and left-progress: function f(a,t){let l=0,r=a.length;while(l<r){const m=Math.floor((l+r)/2);if(a[m]===t)return m;if(a[m]<t)l=m;else r=m;}return -1}","response_shape":{"findings":"sorted-string-array"}},
+    {"id":"DEV-REV-02","family":"review_detection","prompt":"Return only JSON {\"findings\":[codes]} using code swallowed-error when applicable: async function save(){try{await write()}catch{}}","response_shape":{"findings":"sorted-string-array"}},
+    {"id":"DEV-REV-03","family":"review_detection","prompt":"Return only JSON {\"findings\":[codes]} using code missing-await when applicable: async function load(){const r=fetch('/x');return r.json()}","response_shape":{"findings":"sorted-string-array"}},
+    {"id":"DEV-REV-04","family":"review_detection","prompt":"Return only JSON {\"findings\":[codes]} using code sql-injection when applicable: db.query(\"SELECT * FROM users WHERE id=\"+req.query.id)","response_shape":{"findings":"sorted-string-array"}},
+    {"id":"DEV-REV-05","family":"review_detection","prompt":"A producer receipt and review receipt have the same session_id and execution_id. Return only JSON {\"findings\":[codes]} using review-not-independent when applicable.","response_shape":{"findings":"sorted-string-array"}},
+
+    {"id":"DEV-CTX-01","family":"contract_reasoning","prompt":"Root rule says use JavaScript. Active subproject rule says use TypeScript and subproject rules override root details. Return only JSON {\"selected\":\"root|project\"}.","response_shape":{"selected":"enum"}},
+    {"id":"DEV-CTX-02","family":"contract_reasoning","prompt":"Windows support requires running `wsl bash test.sh`. Contract says Windows must work without WSL or Bash. Return only JSON {\"decision\":\"accept|reject\"}.","response_shape":{"decision":"enum"}},
+    {"id":"DEV-CTX-03","family":"contract_reasoning","prompt":"A context translation attempt and every declared fallback fail. Contract says the previous verified human mirror must remain unchanged. Return only JSON {\"mirror_action\":\"replace|preserve\"}.","response_shape":{"mirror_action":"enum"}},
+    {"id":"DEV-CTX-04","family":"contract_reasoning","prompt":"Reuse search finds an active feature with the same semantic scope and compatible contract. Return only JSON {\"decision\":\"reuse|extend|replace|new\"}.","response_shape":{"decision":"enum"}},
+    {"id":"DEV-CTX-05","family":"contract_reasoning","prompt":"A tool attempt times out and its consumption cannot be measured. Contract says unknown consumption fails closed and never counts as a task failure or pass. Return only JSON {\"status\":\"valid_pass|valid_fail|invalid\"}.","response_shape":{"status":"enum"}},
+
+    {"id":"DEV-STR-01","family":"structured_extraction","prompt":"Text: Requirement REQ-7 is covered by use case UC-2 and feature FE-9. Return only JSON {\"ids\":[...]} in appearance order.","response_shape":{"ids":"string-array"}},
+    {"id":"DEV-STR-02","family":"structured_extraction","prompt":"Data contains a person's private notes and must stay on their own machine. Return only JSON {\"classification\":\"public|synthetic_private|local_private\"}.","response_shape":{"classification":"enum"}},
+    {"id":"DEV-STR-03","family":"structured_extraction","prompt":"Translation routing order is Haiku then Luna then Sonnet. Haiku is unavailable, Luna is available. Return only JSON {\"route\":\"haiku|luna|sonnet\"}.","response_shape":{"route":"enum"}},
+    {"id":"DEV-STR-04","family":"structured_extraction","prompt":"Trace has directive, requirement, use_case, use_case_test, feature, implementation, evidence. Required order includes feature_test between feature and implementation. Return only JSON {\"first_missing\":\"node-kind\"}.","response_shape":{"first_missing":"string"}},
+    {"id":"DEV-STR-05","family":"structured_extraction","prompt":"An exclusive semantic-scope reservation is held by another live execution. Return only JSON {\"implementation_state\":\"allowed|blocked\"}.","response_shape":{"implementation_state":"enum"}}
+  ]
+}

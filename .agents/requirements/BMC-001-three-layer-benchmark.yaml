@@ -7,7 +7,7 @@ status: active
 source: human
 priority: high
 created: 2026-07-29
-updated: 2026-07-29
+updated: 2026-07-30
 issue_url: "https://github.com/nextain/naia-adk/issues/16"
 description: |
   Model capability, naia-agent runtime, and naia-adk governance must be measured as separate causal layers with frozen controls and no aggregate score.
@@ -15,7 +15,7 @@ acceptance_criteria:
   - "A versioned task and run manifest pins every evaluated variable and every fixed-control digest."
   - "A comparison is invalid when a declared fixed control differs or when layers are aggregated into one acceptance score."
 trace:
-  code: [{ path: "packages/benchmark-contract/schemas/comparison.schema.json", symbol: "layer-scoped paired comparison", coverage: full }, { path: "packages/benchmark-contract/src/validate-bundle.mjs", symbol: "fixed-control and cross-layer rejection", coverage: full }]
-  tests: [{ path: "packages/benchmark-contract/test/validate-benchmark-contract.mjs", symbol: "causal-control negative fixtures", coverage: full }]
+  code: [{ path: "packages/benchmark-contract/schemas/comparison.schema.json", symbol: "model-only versus model-provider-adapter comparison scope", coverage: full }, { path: "packages/benchmark-contract/src/validate-bundle.mjs", symbol: "fixed-control, composite-route, and cross-layer rejection", coverage: full }, { path: "packages/benchmark-contract/baselines/development-capability.tasks.json", symbol: "public A-layer development task families", coverage: full }, { path: "packages/benchmark-contract/src/development-capability-suite.mjs", symbol: "public input and hidden development-oracle separation", coverage: full }]
+  tests: [{ path: "packages/benchmark-contract/test/validate-benchmark-contract.mjs", symbol: "model-only and composite-route causal-control fixtures", coverage: full }, { path: "packages/benchmark-contract/test/development-capability-suite.test.mjs", symbol: "24-cluster A-layer suite and oracle-separation mutations", coverage: full }]
   reviews: { planning: ["NAIA-BENCH-CONTRACT-001 sequences 2 and 3"], development: null, test: null, integration: null }
 decisions: ["NAIA-BENCH-CONTRACT-001"]

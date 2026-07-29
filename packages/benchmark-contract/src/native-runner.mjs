@@ -180,7 +180,11 @@ const terminalWithCosts = (result,costs) => {
 
 function executionBudgetState(records,plan){
   const costs=records.flatMap((record)=>record.type==='attempt_failed'?[record.cost]:record.type==='attempt_observed'?[record.result.cost]:[]);
-  for(const [metric,limit] of [['monetary',plan.budgets.cost_max],['quota_units',plan.budgets.quota_max]]){
+  const limits={monetary:plan.budgets.cost_max,quota_units:plan.budgets.quota_max};
+  const enforced=plan.budgets.enforced_metrics ?? ['monetary','quota_units'];
+  for(const metric of enforced){
+    const limit=limits[metric];
+    if(!Number.isFinite(limit)||limit<0)return {exhausted:true,reason:`${metric} budget limit invalid`,metric};
     const observations=costs.map((cost)=>cost?.[metric]);
     if(observations.some((item)=>!item||!['measured','provider_proven_zero'].includes(item.state)))return {exhausted:true,reason:`${metric} budget accounting unavailable`,metric};
     const consumed=observations.reduce((sum,item)=>sum+item.value,0);
@@ -189,8 +193,9 @@ function executionBudgetState(records,plan){
   return {exhausted:false};
 }
 
-export async function runPlan({ plan, adapter, journalPath, integrityKey, stopAfter = Infinity, afterInvoke, recoverStaleLock = false }) {
-  const frozenPlan=createPlan({routeId:plan?.route?.id});
+export async function runBoundPlan({ plan, adapter, journalPath, integrityKey, stopAfter = Infinity, afterInvoke, recoverStaleLock = false, expectedPlanFactory }) {
+  if(typeof expectedPlanFactory!=="function")throw Object.assign(new Error("expectedPlanFactory is required"),{code:"plan_factory_invalid"});
+  const frozenPlan=expectedPlanFactory(plan);
   if (!plan?.plan_digest || digestCanonical(Object.fromEntries(Object.entries(plan).filter(([key]) => key !== "plan_digest"))) !== plan.plan_digest || frozenPlan.plan_digest !== plan.plan_digest) throw Object.assign(new Error("plan is not the frozen baseline plan"), { code:"plan_tampered" });
   plan=deepFreeze(structuredClone(frozenPlan));
   if (!adapter || typeof adapter.invoke !== "function") throw Object.assign(new Error("adapter.invoke is required"), { code:"adapter_invalid" });
@@ -254,6 +259,10 @@ export async function runPlan({ plan, adapter, journalPath, integrityKey, stopAf
     const complete = results.length === plan.scheduled_denominator && new Set(results.map((result) => `${result.task_id}#${result.run_index}`)).size === plan.scheduled_denominator;
     return {status:complete ? "complete" : "incomplete",plan_digest:plan.plan_digest,route_id:plan.route.id,scheduled_denominator:plan.scheduled_denominator,terminal_count:results.length,remaining:plan.scheduled_denominator - results.length,abort_reason:abortReason,results,claims_allowed:complete ? plan.claims_allowed : [],claims_forbidden:plan.claims_forbidden,unobserved_hard_gate_ids:plan.unobserved_hard_gate_ids,journal_tail_digest:records.at(-1).record_digest};
   });
+}
+
+export function runPlan(options) {
+  return runBoundPlan({...options,expectedPlanFactory:(plan)=>createPlan({routeId:plan?.route?.id})});
 }
 
 async function main(argv) {
