@@ -43,7 +43,7 @@
       "attempts": [
         {
           "adapter": "claude:haiku",
-          "diagnostic": "claude:haiku exit 1: You've hit your session limit · resets 6pm (Asia/Seoul)",
+          "diagnostic": "Command '['claude.cmd', '--model', 'haiku', '-p', '--input-format', 'text', '--output-format', 'text', '--no-session-persistence', '--setting-sources', 'user', '--tools', '', '--disable-slash-commands']' timed out after 60 seconds",
           "status": "failed"
         },
         {
@@ -52,10 +52,10 @@
         }
       ],
       "backend": "cli:codex:gpt-5.6-luna",
-      "output_sha256": "619a69e31a5d68ba5f3c62501e4b987b4172dbf64ff53f4eda019d0c41d644f0",
+      "output_sha256": "b0e016709b18451b57fcfada1938d49a11b1c949a3c24161261aabf5eb246bd8",
       "source_path": ".users/context/development-model-routing.md",
-      "source_sha256": "7d7ee1733516fb3bbd197a980a6ee723472dd4ed02b95769a14434434947fbd5",
-      "translated_at": "2026-07-27T08:47:07+00:00"
+      "source_sha256": "5cb76b28aef02a1cc513e4d0532d12a430c0f8fa5ba96f220b8f8c92a7868b36",
+      "translated_at": "2026-07-29T18:28:45+00:00"
     },
     "harness": {
       "attempts": [
@@ -65,10 +65,10 @@
         }
       ],
       "backend": "cli:codex:gpt-5.6-luna",
-      "output_sha256": "8664abe31e573df7d37cb9aabc5924aaee9982ca0408eb1bdb80248594077a2e",
+      "output_sha256": "f5ea59e027df04afbc5c43ccdf8474fca75f380e6074b60e4b523dbd76ee1d27",
       "source_path": ".users/context/harness.md",
-      "source_sha256": "18b4c54e75a89aee0f4ad08e94656cf26077db374de9fdc5fd00955521725838",
-      "translated_at": "2026-07-29T03:14:51+00:00"
+      "source_sha256": "175e43829c4720ba44c08cac80cef177eec5b97859969729d50ad4c67f6b1f55",
+      "translated_at": "2026-07-29T19:02:11+00:00"
     },
     "philosophy": {
       "attempts": [

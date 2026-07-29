@@ -38,6 +38,7 @@
 - 기존 프로젝트를 갑자기 가두지 않도록 기본은 opt-in입니다. `REQUEST_CONTRACT=on` 또는 `node scripts/request-contract.cjs enable`로 활성화합니다.
 - unit이나 미수용 quarantine이 하나라도 생긴 뒤에는 opt-in 마커 삭제, `REQUEST_CONTRACT=off`, `disable` 명령으로 중간 해제할 수 없습니다. 성공 종료된 lineage도 보존 정리가 완료될 때까지 고정 대상입니다. 같은 session의 후속 lifecycle은 현재 proof를 재검증하고, 새 session은 기존 성공 proof를 검증한 시점의 workspace digest를 새 genesis에 handoff한 뒤 별도 요청을 시작합니다. 불완전 상태는 서명된 resume를 거쳐 계속 보호됩니다.
 - 정직한 한계: 훅 비활성/비신뢰 등록, 모든 로컬 기록을 함께 바꿀 수 있는 행위자, 외부 signer의 거짓 속성 서명, 훅 경계 사이에 완전히 실행·복원된 변경, 외부 부작용은 이 로컬 계층만으로 완전 관측할 수 없습니다. 결정론 parity는 추적된 네이티브 어댑터 프로세스까지이며 설치된 호스트 dispatcher는 별도 smoke 범위입니다.
+- Windows/Linux 공통 회귀 묶음은 Node 진입점만 허용하고 `shell=false`로 직접 실행하며 WSL/Bash/MSYS 환경값을 사용할 수 없게 오염시킵니다. 이는 묶음 자체가 WSL·Bash를 호출하지 않는다는 증거이며, 모든 하위 프로세스를 운영체제 수준에서 관찰했다는 뜻은 아닙니다. Linux의 셸 기반 E2E는 별도 추가 증거이고 Windows 통과를 대신하지 않습니다.
 
 ---
 

@@ -39,6 +39,11 @@ function invs(r) {
 	assert(c === "file:src/x.ts", "canon: Edit abs→rel", `got ${c}`);
 	const b = beh.canonTarget("Bash", { command: "npm   test  'foo bar'" });
 	assert(b === "bash:npm test ''", "canon: Bash collapse+quote-blank", `got ${b}`);
+	const posixBackslash = beh.canonTarget("Edit", { file_path: "src/a\\b.ts" }, { cwd: "/repo", platform: "linux" });
+	const posixSlash = beh.canonTarget("Edit", { file_path: "src/a/b.ts" }, { cwd: "/repo", platform: "linux" });
+	assert(posixBackslash === "file:src/a\\b.ts" && posixBackslash !== posixSlash, "canon: POSIX literal backslash remains distinct", `${posixBackslash} vs ${posixSlash}`);
+	const windows = beh.canonTarget("Edit", { file_path: "src\\a\\b.ts" }, { cwd: "C:\\repo", platform: "win32" });
+	assert(windows === "file:src/a/b.ts", "canon: Windows separators normalize to slash", `got ${windows}`);
 }
 
 // ── unit: matchMilestone ──────────────────────────────────────────────────

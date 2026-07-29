@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://naia.dev/schemas/benchmark/provider-receipt.schema.json",
+  "title": "Provider-neutral benchmark receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_revision", "provider_id", "endpoint_id", "api_version",
+    "source_model_id", "deployment_or_route_model_id", "actual_upstream_provider",
+    "adapter_revision", "adapter_build_digest", "request_configuration_digest",
+    "usage_mapping_revision", "unsupported_parameters", "redacted_request_digest",
+    "redacted_response_digest", "normalized_usage_digest", "cache_mode",
+    "session_isolated", "started_at", "completed_at", "monotonic_latency_ms",
+    "usage", "price_evidence", "secret_redaction"
+  ],
+  "properties": {
+    "schema_revision": {"const": "provider-receipt-v1"},
+    "provider_id": {"type": "string", "minLength": 1},
+    "endpoint_id": {"type": "string", "minLength": 1},
+    "api_version": {"type": "string", "minLength": 1},
+    "source_model_id": {"type": "string", "minLength": 1},
+    "deployment_or_route_model_id": {"type": "string", "minLength": 1},
+    "actual_upstream_provider": {"$ref": "#/$defs/textObservation"},
+    "adapter_revision": {"type": "string", "minLength": 1},
+    "adapter_build_digest": {"$ref": "#/$defs/digest"},
+    "request_configuration_digest": {"$ref": "#/$defs/digest"},
+    "usage_mapping_revision": {"type": "string", "minLength": 1},
+    "unsupported_parameters": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "redacted_request_digest": {"$ref": "#/$defs/digest"},
+    "redacted_response_digest": {"$ref": "#/$defs/digest"},
+    "normalized_usage_digest": {"$ref": "#/$defs/digest"},
+    "cache_mode": {"enum": ["disabled", "provider_default", "explicit_read", "unknown"]},
+    "session_isolated": {"const": true},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "monotonic_latency_ms": {"type": "number", "minimum": 0},
+    "usage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["input_tokens", "cached_input_tokens", "output_tokens", "reasoning_tokens"],
+      "properties": {
+        "input_tokens": {"$ref": "#/$defs/countObservation"},
+        "cached_input_tokens": {"$ref": "#/$defs/countObservation"},
+        "output_tokens": {"$ref": "#/$defs/countObservation"},
+        "reasoning_tokens": {"$ref": "#/$defs/countObservation"}
+      }
+    },
+    "price_evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "reason"],
+      "properties": {
+        "state": {"enum": ["measured", "unavailable"]},
+        "snapshot_digest": {"$ref": "#/$defs/digest"},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {"if": {"properties": {"state": {"const": "measured"}}}, "then": {"required": ["snapshot_digest"]}},
+        {"if": {"properties": {"state": {"const": "unavailable"}}}, "then": {"not": {"required": ["snapshot_digest"]}}}
+      ]
+    },
+    "secret_redaction": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "excluded_fields", "verified"],
+      "properties": {
+        "revision": {"const": "secret-redaction-v1"},
+        "excluded_fields": {"type": "array", "minItems": 4, "uniqueItems": true, "items": {"enum": ["authorization", "api_key", "signed_url", "credential_value"]}},
+        "verified": {"const": true}
+      }
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "textObservation": {
+      "type": "object", "additionalProperties": false, "required": ["state", "reason"],
+      "properties": {"state": {"enum": ["measured", "unavailable", "not_applicable"]}, "value": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}},
+      "allOf": [
+        {"if": {"properties": {"state": {"const": "measured"}}}, "then": {"required": ["value"]}},
+        {"if": {"properties": {"state": {"enum": ["unavailable", "not_applicable"]}}}, "then": {"not": {"required": ["value"]}}}
+      ]
+    },
+    "countObservation": {
+      "type": "object", "additionalProperties": false, "required": ["state", "reason"],
+      "properties": {"state": {"enum": ["measured", "provider_proven_zero", "unavailable"]}, "value": {"type": "integer", "minimum": 0}, "reason": {"type": "string", "minLength": 1}},
+      "allOf": [
+        {"if": {"properties": {"state": {"enum": ["measured", "provider_proven_zero"]}}}, "then": {"required": ["value"]}},
+        {"if": {"properties": {"state": {"const": "provider_proven_zero"}}}, "then": {"properties": {"value": {"const": 0}}}},
+        {"if": {"properties": {"state": {"const": "unavailable"}}}, "then": {"not": {"required": ["value"]}}}
+      ]
+    }
+  }
+}

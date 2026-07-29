@@ -50,6 +50,8 @@ from threading import Lock
 import urllib.request
 from pathlib import Path
 
+from cli_process import run_cli_process
+
 from cli_invocation import build_cli_invocation
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -173,15 +175,7 @@ def parse_cli_route(route: str) -> list[tuple[str, str]]:
 def call_cli_adapter(cli: str, model: str, prompt: str, timeout: int) -> str:
     """Execute one adapter; command construction remains centralized above."""
     cmd, stdin_text = build_cli_invocation(cli, model, prompt, REPO_ROOT)
-    r = subprocess.run(
-        cmd,
-        input=stdin_text,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-    )
+    r = run_cli_process(cmd, stdin_text, timeout)
     if r.returncode != 0:
         diagnostic = (r.stderr.strip() or r.stdout.strip() or "no diagnostic output")
         raise RuntimeError(f"{cli}:{model} exit {r.returncode}: {diagnostic[:300]}")

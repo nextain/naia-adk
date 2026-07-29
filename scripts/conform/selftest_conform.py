@@ -112,9 +112,9 @@ def main():
 
     print("\n" + "=" * 56)
     if _fail:
-        print(f"  {_fail} FAILURE(S) — oracle broken.")
+        print(f"  {_fail} FAILURE(S) - oracle broken.")
         sys.exit(1)
-    print("  ALL PASS — conform oracle sound (model-agnostic, no LLM).")
+    print("  ALL PASS - conform oracle sound (model-agnostic, no LLM).")
     sys.exit(0)
 
 

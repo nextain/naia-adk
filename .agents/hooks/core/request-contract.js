@@ -504,6 +504,7 @@ function withDirectoryLock(lock, fn, now = Date.now(), timeoutMs = 5000, opts = 
 	const deadline = Date.now() + timeoutMs;
 	let ownerNonce = null;
 	let acquiredIdentity = null;
+	let lastPublicationCollision = null;
 	for (;;) {
 		const candidateNonce = opaqueId("LOCK-");
 		const candidate = `${lock}.candidate.${candidateNonce}`;
@@ -519,15 +520,35 @@ function withDirectoryLock(lock, fn, now = Date.now(), timeoutMs = 5000, opts = 
 			if (opts.afterLockPublished) opts.afterLockPublished({ lock, nonce: ownerNonce, identity: acquiredIdentity });
 			break;
 		} catch (error) {
-			const windowsCollision = process.platform === "win32" && error.code === "EPERM" && fs.existsSync(lock) && fs.existsSync(candidate);
+			// Windows reports rename-to-existing-directory as EPERM. The winning
+			// owner may release the destination before this catch block observes
+			// it, so destination existence cannot be required. Preserve the raw
+			// publication diagnostic because EPERM can also mean a permission fault;
+			// the fail-closed retry remains intentionally conservative.
+			const windowsCollision = process.platform === "win32" && error.code === "EPERM" && fs.existsSync(candidate);
+			if (windowsCollision || ["EEXIST", "ENOTEMPTY"].includes(error.code)) {
+				lastPublicationCollision = {
+					code: error.code,
+					message: error.message,
+					destination_observed: fs.existsSync(lock),
+				};
+			}
 			try { durableRemoveTree(candidate); } catch (cleanupError) { if (cleanupError.code !== "ENOENT") throw cleanupError; }
 			if (!windowsCollision && !["EEXIST", "ENOTEMPTY"].includes(error.code)) throw error;
 			try {
-				if (reapStaleDirectoryLock(lock, Date.now())) continue;
+				if (reapStaleDirectoryLock(lock, Date.now()) && Date.now() < deadline) continue;
 			} catch {
 				/* retry until the owner record is stable or the timeout expires */
 			}
-			if (Date.now() >= deadline) throw Object.assign(new Error("lifecycle lock busy"), { code: "lifecycle_lock_busy" });
+			if (Date.now() >= deadline) {
+				const detail = lastPublicationCollision
+					? `; last publication error ${lastPublicationCollision.code}; destination observed=${lastPublicationCollision.destination_observed}`
+					: "";
+				throw Object.assign(new Error(`lifecycle lock busy${detail}`), {
+					code: "lifecycle_lock_busy",
+					publication_error: lastPublicationCollision,
+				});
+			}
 			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
 		}
 	}
@@ -3267,8 +3288,18 @@ function trustedNodeWord(word, cwd) {
 		if (path.isAbsolute(word)) return fs.realpathSync(word) === expected;
 		if (word.includes("/")) return fs.realpathSync(path.resolve(cwd, word)) === expected;
 		if (word !== "node") return false;
-		const resolved = cp.execFileSync("which", [word], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-		return Boolean(resolved) && fs.realpathSync(resolved) === expected;
+		const searchPath = process.env.PATH || process.env.Path || "";
+		const extensions = process.platform === "win32"
+			? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+			: [""];
+		for (const directory of searchPath.split(path.delimiter).filter(Boolean)) {
+			for (const extension of extensions) {
+				const candidate = path.join(directory.replace(/^"|"$/g, ""), `${word}${extension.toLowerCase()}`);
+				if (!fs.existsSync(candidate)) continue;
+				return fs.realpathSync(candidate) === expected;
+			}
+		}
+		return false;
 	} catch {
 		return false;
 	}
@@ -3393,7 +3424,9 @@ function clientRegistrySupports(cwd, client) {
 	for (const [registeredEvent, entries] of Object.entries(registry.hooks)) {
 		if (!Array.isArray(entries)) continue;
 		for (const entry of entries) for (const hook of Array.isArray(entry.hooks) ? entry.hooks : []) {
-			if (typeof hook.command !== "string" || !hook.command.includes("request-contract")) continue;
+			const registrationText = [hook.command, hook.commandWindows, ...(Array.isArray(hook.args) ? hook.args : [])]
+				.filter((value) => typeof value === "string");
+			if (!registrationText.some((value) => value.includes(adapterPath))) continue;
 			seen.push({ registeredEvent, entry, hook });
 		}
 	}
@@ -3402,8 +3435,15 @@ function clientRegistrySupports(cwd, client) {
 		const matches = seen.filter((candidate) => candidate.registeredEvent === eventName);
 		if (matches.length !== 1) return false;
 		const { entry, hook } = matches[0];
-		const expected = `node \"$(git rev-parse --show-toplevel)/${adapterPath}\" ${eventName}`;
-		if (hook.type !== "command" || hook.command !== expected) return false;
+		if (hook.type !== "command") return false;
+		if (client === "claude") {
+			const expectedArgs = [`${"${CLAUDE_PROJECT_DIR}"}/${adapterPath}`, eventName];
+			if (hook.command !== "node" || hook.commandWindows != null || JSON.stringify(hook.args) !== JSON.stringify(expectedArgs)) return false;
+		} else {
+			const expected = `node \"$(git rev-parse --show-toplevel)/${adapterPath}\" ${eventName}`;
+			const expectedWindows = `powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '${adapterPath}') ${eventName}\"`;
+			if (hook.command !== expected || hook.commandWindows !== expectedWindows) return false;
+		}
 		if (eventName === "PreToolUse") return entry.matcher === preToolMatcher;
 		return entry.matcher == null || entry.matcher === "";
 	});

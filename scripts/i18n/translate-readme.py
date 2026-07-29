@@ -41,6 +41,7 @@ import re
 from pathlib import Path
 
 from cli_invocation import build_cli_invocation
+from cli_process import run_cli_process
 
 LANG_NAMES = {
     "ja": "Japanese", "zh": "Chinese (Simplified)", "fr": "French",
@@ -62,15 +63,7 @@ def call_cli(prompt: str, timeout: int) -> str:
         cmd, stdin_text = build_cli_invocation(LLM_CLI, "", prompt, Path(__file__).resolve().parents[2])
     except ValueError as error:
         raise SystemExit(str(error)) from error
-    r = subprocess.run(
-        cmd,
-        input=stdin_text,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-    )
+    r = run_cli_process(cmd, stdin_text, timeout)
     if r.returncode != 0:
         raise RuntimeError(f"{LLM_CLI} exit {r.returncode}: {r.stderr.strip()[:300]}")
     return r.stdout

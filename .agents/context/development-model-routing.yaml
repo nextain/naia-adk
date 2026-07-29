@@ -39,7 +39,7 @@ portable_contract:
 principles:
   - Contract and deterministic validation run before model work whenever possible.
   - Use the lowest-cost role that can safely perform the bounded task; escalate by risk and unresolved evidence, not by habit.
-  - OpenCode and HY3 are not permitted in this workspace routing.
+  - OpenCode is not permitted in this workspace routing. HY3 is prohibited in production routing and is allowed only inside the sealed benchmark until a later explicit policy change; benchmark success alone does not override this prohibition.
   - A producer self-check is useful but never counts as adversarial review.
 
 adapter_role_map:
@@ -146,3 +146,56 @@ cost_controls:
   deterministic_first: schema, hash, mirror, index, and receipt checks must not call an LLM
   batch_lightweight_work: translation and mechanical classification must process only changed inputs with cached hashes
   escalation: Sol high is reserved for arbitration or genuinely high-risk work
+
+benchmark_candidate_registry:
+  status: evidence_required_before_production_routing
+  fixed_constraint: Codex gpt-5.6-sol remains the main orchestrator and final integrator
+  comparison_scope: compare bounded worker-role model-provider-adapter composites; do not describe cross-provider results as model-only causality
+  hy3_exception: benchmark-only; production routing remains prohibited until a separate explicit policy decision after evidence review
+  candidates:
+    - { id: codex-terra, provider: OpenAI Codex, model: gpt-5.6-terra, intended_roles: [explorer, implementer, tester, independent_reviewer] }
+    - { id: codex-luna, provider: OpenAI Codex, model: gpt-5.6-luna, intended_roles: [translator, mechanical_classifier, bounded_explorer] }
+    - { id: azure-deepseek-v4-flash, provider: Azure Foundry, model: DeepSeek-V4-Flash, intended_roles: [analysis, code_generation, structured_output], restrictions: [no_tool_calling_claim] }
+    - { id: openrouter-hy3, provider: OpenRouter, model: tencent/hy3, intended_roles: [analysis, code_generation, tool_use_after_probe], restrictions: [pin_routing_mode_and_actual_upstream_provider] }
+    - { id: upstage-solar-open2, provider: Upstage private beta, model: solar-open2, credential_env: UPSTAGE_KEY, intended_roles: [korean_analysis, code_generation, document_work, tool_use_after_probe], restrictions: [never_commit_key, freeze_hosted_api_identity_and_price_evidence] }
+  suite_boundary:
+    model_capability: invoke candidate models on frozen task inputs and score outputs independently
+    agent_runtime: invoke the actual runtime with a fixed control model and fault-injected tools
+    governance_harness: invoke deterministic hooks and validators without asking a model to guess expected state
+    common_text_profile: no tools; identical public input and response schema for every eligible candidate
+    provider_tool_profile: separate compatibility evidence only; never aggregate with the common text profile
+  sealed_execution:
+    candidate_view: empty scratch cwd plus public-input only
+    hidden_assets: oracle, scorer, manifest, and expected outputs stay outside the candidate process permission boundary and installed package
+    access_order: bind candidate output digest before the scorer process can access hidden assets
+    isolation: new provider session/thread per attempt; no output sharing; cache mode recorded; holdout input never promoted from development fixtures
+    leak_response: invalidate the affected run, rotate the task family, and record a tombstone receipt
+  sol_control:
+    route: worker-sol-control
+    separation: distinct minimal worker session with no oracle access; orchestrator decisions and cost are recorded as common overhead and excluded from worker response scoring
+  acceptance_statistics:
+    development_pilot: 24 public task clusters per route with 3 attempts per cluster; no production claim
+    sealed_minimum: 80 hidden task clusters per qualifying route with 5 attempts per cluster, subject to a pre-run power calculation that may increase but never decrease the frozen sample
+    primary_quality: task-clustered paired bootstrap with 10000 resamples and a 95 percent interval; candidate-minus-Sol lower bound must be at least -0.05
+    primary_cost: provider-receipted paired execution cost; upper confidence bound must demonstrate at least 15 percent improvement
+    family_control: five candidate-versus-Sol comparisons in one Holm-corrected family
+    invalid_policy: invalid, timeout, infrastructure failure, retry, and fallback attempts stay in scheduled denominators and costs
+  receipt_contract:
+    required_identity: [provider_id, endpoint_id, api_version, source_model_id, deployment_or_route_model_id, actual_upstream_provider, adapter_revision, adapter_build_digest, request_configuration_digest, usage_mapping_revision, unsupported_parameters]
+    required_evidence: [redacted_request_digest, redacted_response_digest, normalized_usage_digest, monotonic_latency_ms, price_snapshot_digest]
+    secret_redaction: authorization headers, API keys, signed URLs, and credential values never enter receipts, logs, journals, or digests
+  durable_journal:
+    integrity: every record is HMAC chained and must be independently re-readable before analysis
+    windows_key_storage: use CurrentUser DPAPI through the native PowerShell helper; never store or print the plaintext HMAC key
+    portability: the core runner accepts an externally supplied key on every platform; DPAPI is a Windows adapter, not a cross-platform dependency
+    development_rule: an execution whose integrity key is not durably recoverable is calibration evidence only and cannot support routing claims
+  native_windows_gate:
+    runtime: Node 22 or later plus native PowerShell where needed
+    poison_checks: [no_wsl, no_bash, no_required_symlink, no_linux_vm_or_container_dependency]
+    rule: remote hosted-model success never substitutes for the local native-Windows harness receipt
+  promotion_gates:
+    - all applicable hard contracts remain green
+    - every scheduled attempt, retry, fallback, timeout, and terminal failure remains in quality and cost denominators
+    - paired quality non-inferiority and cost improvement satisfy the frozen statistical rule
+    - Korean dual-context fidelity and native Windows behavior pass their separate suites
+    - two independent clean adversarial reviews inspect the same immutable snapshot; producer self-check never counts

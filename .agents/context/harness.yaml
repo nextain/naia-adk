@@ -29,8 +29,10 @@ architecture:
     part2: "COMPLETE & adversarially 2-consecutive-clean (6 rounds) — policy neutralization + pi adapter + real pi@0.74.1 runtime gate (20/20). Cross-tool goal (same harness on Claude + pi, zero core change) MET & verified."
     partB: "declarative guard_policies schema — design-reviewed 3 rounds -> FIRM DEFER (no sound integrity root for SoT-as-policy; only 2/9 guards qualify; cross-tool goal already met). See .agents/progress/g-oc01-partB-forbidden-actions-plan.md."
   gates:
-    - ".claude/hooks/e2e/run.sh — 64 real-condition contract assertions (committed)"
-    - ".claude/hooks/e2e/scenario.sh — 13-step system E2E via real settings.json dispatch"
+    - "scripts/run-native-harness-tests.cjs — Windows/Linux native aggregate that accepts only Node entrypoints, invokes them directly with shell=false, and supplies hostile WSL/Bash/MSYS variables; it does not claim to observe every descendant process"
+    - ".claude/hooks/beh-supervise.js — Windows Job helper pins transitive CPython to an absolute PE path and verifies sys.platform=win32 plus sys.executable identity before launch"
+    - ".claude/hooks/e2e/run.sh — native Linux 64 real-condition contract assertions; never a Windows dependency"
+    - ".claude/hooks/e2e/scenario.sh — native Linux 13-step system E2E via real settings.json dispatch; never a Windows dependency"
     - ".claude/hooks/e2e/pi-runtime-e2e.mjs — real pi-runtime gate, 20/20 (prereq: npm i @earendil-works/pi-coding-agent@0.74.1)"
 
 request_contract_integrity:

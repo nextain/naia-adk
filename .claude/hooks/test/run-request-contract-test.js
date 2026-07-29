@@ -84,7 +84,17 @@ function fixture() {
 	fs.writeFileSync(path.join(cwd, ".agents", "context", "runner.pub"), runnerPublicKeyPem, { mode: 0o600 });
 	for (const [directory, file] of [[".claude", "settings.json"], [".codex", "hooks.json"]]) {
 		const adapterFile = directory === ".claude" ? "request-contract.js" : "request-contract.cjs";
-		const hooks = Object.fromEntries(["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"].map((eventName) => [eventName, [{ ...(eventName === "PreToolUse" ? { matcher: "Bash|Edit|Write|NotebookEdit|apply_patch" } : {}), hooks: [{ type: "command", command: `node \"$(git rev-parse --show-toplevel)/${directory}/hooks/${adapterFile}\" ${eventName}` }] }]]));
+		const adapterPath = `${directory}/hooks/${adapterFile}`;
+		const hooks = Object.fromEntries(["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"].map((eventName) => {
+			const hook = directory === ".claude"
+				? { type: "command", command: "node", args: [`${"${CLAUDE_PROJECT_DIR}"}/${adapterPath}`, eventName] }
+				: {
+					type: "command",
+					command: `node \"$(git rev-parse --show-toplevel)/${adapterPath}\" ${eventName}`,
+					commandWindows: `powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '${adapterPath}') ${eventName}\"`,
+				};
+			return [eventName, [{ ...(eventName === "PreToolUse" ? { matcher: "Bash|Edit|Write|NotebookEdit|apply_patch" } : {}), hooks: [hook] }]];
+		}));
 		fs.writeFileSync(path.join(cwd, directory, file), JSON.stringify({ hooks }));
 	}
 	fs.writeFileSync(
@@ -738,7 +748,7 @@ test("registered native control preflight reaches initial bind and the pinned re
 	coverOccurrences(contract, unit);
 	core.secureJson(contractInput, contract);
 	const operatorScript = path.join(fx.cwd, "scripts", "request-contract.cjs");
-	const bindWords = [process.execPath, operatorScript, "bind", "--unit", unit.id, "--file", contractInput];
+	const bindWords = ["node", operatorScript, "bind", "--unit", unit.id, "--file", contractInput];
 	const injected = runInstalledNativeAdapter("claude", { ...fx }, { hook_event_name: "PreToolUse", session_id: "S1", cwd: fx.cwd, tool_name: "Bash", tool_use_id: "control-injected", tool_input: { command: `${shellCommand(bindWords)}; touch escaped` } }, "PreToolUse");
 	assert.equal(injected.decision, "block");
 	assert(injected.reason.includes("request_contract_unbound"));
@@ -788,7 +798,7 @@ test("native Codex apply_patch can bootstrap only one exact private control inpu
 		assert(blocked.reason.includes("request_contract_unbound"));
 	}
 	const operatorScript = path.join(fx.cwd, "scripts", "request-contract.cjs");
-	const bindWords = [process.execPath, operatorScript, "bind", "--unit", unit.id, "--file", contractInput];
+	const bindWords = ["node", operatorScript, "bind", "--unit", unit.id, "--file", contractInput];
 	envelope = nativeEnvelope("codex", fx, "PreToolUse", "CX-CONTROL", { tool_name: "Bash", tool_use_id: "codex-control-bind", tool_input: { command: shellCommand(bindWords) } });
 	assert.equal(runInstalledNativeAdapter("codex", fx, envelope, "PreToolUse"), null);
 	cp.execFileSync(bindWords[0], bindWords.slice(1), { cwd: fx.cwd, encoding: "utf8" });
@@ -1966,7 +1976,13 @@ test("unreadable unit and quarantine storage can never disengage sticky governan
 	let fx = fixture();
 	start(fx);
 	const units = path.join(core.harnessRoot(fx.cwd), "units");
-	withDeniedReaddir(units, () => assert.throws(() => core.hasStickyGovernanceState(fx.cwd), (error) => error.code === "unit_storage_unreadable"));
+	withDeniedReaddir(units, () => {
+		assert.throws(() => core.hasStickyGovernanceState(fx.cwd), (error) => error.code === "unit_storage_unreadable");
+		const processed = adapter.processEnvelope("claude", { hook_event_name: "UserPromptSubmit", session_id: "S1", cwd: fx.cwd, prompt: "preserve during unreadable unit storage" });
+		assert.equal(processed.output.decision, "block");
+	});
+	const preserved = core.listUnconsumedQuarantine(fx.cwd);
+	assert.equal(core.readJsonl(path.join(preserved[0].dir, "sources.jsonl"))[0].prompt, "preserve during unreadable unit storage");
 	fx = fixture();
 	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "Q", cwd: fx.cwd, prompt: "preserve me", origin: "native_user" });
 	const quarantine = path.join(core.harnessRoot(fx.cwd), "quarantine");
@@ -2980,7 +2996,13 @@ test("unsupported client versions fail closed", () => {
 	assert.equal(result.code, "request_contract_client_version_unsupported");
 });
 
-test("both client registries reject every missing event plus wrong adapters, arguments, roots, matchers, duplicates, and conflicts", () => {
+test("checked-in client registries satisfy the exact native lifecycle contract", () => {
+	const root = path.resolve(__dirname, "..", "..", "..");
+	assert.equal(core.clientRegistrySupports(root, "claude"), true);
+	assert.equal(core.clientRegistrySupports(root, "codex"), true);
+});
+
+test("both client registries reject every missing event plus wrong adapters, arguments, roots, native Windows commands, matchers, duplicates, and conflicts", () => {
 	const requiredEvents = ["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"];
 	for (const client of ["claude", "codex"]) {
 		const relativeRegistry = client === "claude" ? [".claude", "settings.json"] : [".codex", "hooks.json"];
@@ -2988,19 +3010,26 @@ test("both client registries reject every missing event plus wrong adapters, arg
 		const adapterPath = client === "claude" ? ".claude/hooks/request-contract.js" : ".codex/hooks/request-contract.cjs";
 		const locate = (registry, event) => {
 			for (const entry of registry.hooks[event] || []) {
-				const hook = (entry.hooks || []).find((candidate) => typeof candidate.command === "string" && candidate.command.includes("request-contract"));
+				const hook = (entry.hooks || []).find((candidate) => [candidate.command, candidate.commandWindows, ...(candidate.args || [])].some((value) => typeof value === "string" && value.includes(adapterPath)));
 				if (hook) return { entry, hook };
 			}
 			throw new Error(`missing request-contract fixture hook for ${client}:${event}`);
 		};
+		const replaceEverywhere = (hook, pattern, replacement) => {
+			if (typeof hook.command === "string") hook.command = hook.command.replace(pattern, replacement);
+			if (typeof hook.commandWindows === "string") hook.commandWindows = hook.commandWindows.replace(pattern, replacement);
+			if (Array.isArray(hook.args)) hook.args = hook.args.map((arg) => arg.replace(pattern, replacement));
+		};
 		const mutations = requiredEvents.flatMap((event) => [
 			{ name: `${event}:missing`, mutate: (registry) => { delete registry.hooks[event]; } },
-			{ name: `${event}:wrong-adapter`, mutate: (registry) => { const { hook } = locate(registry, event); hook.command = hook.command.replace(adapterName, `wrong-${adapterName}`); } },
-			{ name: `${event}:wrong-event-argument`, mutate: (registry) => { const { hook } = locate(registry, event); const replacement = event === "Stop" ? "PostCompact" : "Stop"; hook.command = hook.command.replace(new RegExp(` ${event}$`), ` ${replacement}`); } },
-			{ name: `${event}:wrong-root`, mutate: (registry) => { const { hook } = locate(registry, event); hook.command = `node ${adapterPath} ${event}`; } },
+			{ name: `${event}:wrong-adapter`, mutate: (registry) => { const { hook } = locate(registry, event); replaceEverywhere(hook, adapterName, `wrong-${adapterName}`); } },
+			{ name: `${event}:wrong-event-argument`, mutate: (registry) => { const { hook } = locate(registry, event); const replacement = event === "Stop" ? "PostCompact" : "Stop"; replaceEverywhere(hook, new RegExp(`${event}$`), replacement); } },
+			{ name: `${event}:wrong-root`, mutate: (registry) => { const { hook } = locate(registry, event); if (client === "claude") hook.args[0] = adapterPath; else { hook.command = `node ${adapterPath} ${event}`; hook.commandWindows = `node ${adapterPath} ${event}`; } } },
 			{ name: `${event}:wrong-matcher`, mutate: (registry) => { const { entry } = locate(registry, event); entry.matcher = event === "PreToolUse" ? "Bash" : "Bash|Edit"; } },
 			{ name: `${event}:duplicate`, mutate: (registry) => { const { entry, hook } = locate(registry, event); entry.hooks.push({ ...hook }); } },
 			{ name: `${event}:conflicting-registration`, mutate: (registry) => { const { hook } = locate(registry, event); registry.hooks[`Conflict${event}`] = [{ hooks: [{ ...hook }] }]; } },
+			...(client === "claude" ? [{ name: `${event}:unexpected-commandWindows`, mutate: (registry) => { locate(registry, event).hook.commandWindows = `node wrong-${adapterName} ${event}`; } }] : []),
+			...(client === "codex" ? [{ name: `${event}:missing-commandWindows`, mutate: (registry) => { delete locate(registry, event).hook.commandWindows; } }] : []),
 		]);
 		for (const { name, mutate } of mutations) {
 			const fx = fixture();
@@ -3062,6 +3091,20 @@ test("a lock owner is complete before publication and cannot enter through a rep
 	});
 	assert.equal(entered, "parent");
 	assert(!fs.existsSync(lock));
+});
+
+test("Windows lock retries preserve the underlying publication diagnostic", () => {
+	if (process.platform !== "win32") return;
+	const fx = fixture();
+	const lock = path.join(fx.cwd, ".agents", "harness", "locks", "diagnostic-test");
+	assert.throws(
+		() => core.withDirectoryLock(lock, () => "never", Date.now(), 30, {
+			afterCandidatePrepared: () => { throw Object.assign(new Error("simulated access denial"), { code: "EPERM" }); },
+		}),
+		(error) => error.code === "lifecycle_lock_busy"
+			&& error.publication_error?.code === "EPERM"
+			&& /last publication error EPERM/.test(error.message),
+	);
 });
 
 test("an index change starts a fresh consecutive Stop episode", () => {

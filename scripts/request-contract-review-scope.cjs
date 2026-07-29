@@ -47,15 +47,19 @@ function stripReviewsLine(text) {
 }
 
 function requirementFilenames() {
-	return fs
-		.readdirSync(requirementsDir)
-		.filter((name) => /^RCI-\d{3}-.+\.yaml$/.test(name))
+	return trackedFiles()
+		.filter((name) => /^\.agents\/requirements\/RCI-\d{3}-.+\.yaml$/.test(name))
+		.map((name) => path.posix.basename(name))
 		.sort();
 }
 
 function trackedFiles() {
 	const stdout = cp.execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
 	return stdout.split("\0").filter((entry) => entry !== "");
+}
+
+function stagedBytes(relativePath) {
+	return cp.execFileSync("git", ["show", `:${relativePath}`], { cwd: root, maxBuffer: 32 * 1024 * 1024 });
 }
 
 /**
@@ -66,7 +70,7 @@ function trackedFiles() {
 function tracedFiles() {
 	const traced = new Set();
 	for (const filename of requirementFilenames()) {
-		const text = fs.readFileSync(path.join(requirementsDir, filename), "utf8");
+		const text = stagedBytes(path.posix.join(".agents", "requirements", filename)).toString("utf8");
 		/** The trace block runs to the next top-level key or to end of file — a requirement that ends on its trace must not lose it. */
 		const trace = text.match(/^trace:\s*$([\s\S]*?)(?=^\S|$(?![\s\S]))/m)?.[1];
 		if (trace === undefined) throw new Error(`review scope: ${filename} has no trace block`);
@@ -93,18 +97,21 @@ function scopeFiles() {
 		selected.add(relativePath);
 	}
 	/** A symlinked skill pointer resolves to a directory; digest the real file, not the pointer. */
-	return [...selected].filter((relativePath) => fs.statSync(path.join(root, relativePath)).isFile()).sort();
+	return [...selected].filter((relativePath) => {
+		try { return cp.execFileSync("git", ["cat-file", "-t", `:${relativePath}`], { cwd: root, encoding: "utf8" }).trim() === "blob"; }
+		catch { return false; }
+	}).sort();
 }
 
 function computeScopeDigest() {
 	const entries = [];
 	for (const relativePath of scopeFiles()) {
-		const digest = crypto.createHash("sha256").update(fs.readFileSync(path.join(root, relativePath))).digest("hex");
+		const digest = crypto.createHash("sha256").update(stagedBytes(relativePath)).digest("hex");
 		entries.push(`${relativePath}\t${digest}`);
 	}
 	for (const filename of requirementFilenames()) {
 		const relativePath = path.posix.join(".agents", "requirements", filename);
-		const text = fs.readFileSync(path.join(requirementsDir, filename), "utf8");
+		const text = stagedBytes(relativePath).toString("utf8");
 		const digest = crypto.createHash("sha256").update(stripReviewsLine(text)).digest("hex");
 		entries.push(`${relativePath}\t${digest}`);
 	}
@@ -141,7 +148,7 @@ function selfTest(report = (message) => process.stderr.write(`${message}\n`)) {
 	return failures.length === 0;
 }
 
-module.exports = { root, requirementsDir, receiptsDir, stripReviewsLine, requirementFilenames, tracedFiles, scopeFiles, computeScopeDigest, selfTest };
+module.exports = { root, requirementsDir, receiptsDir, stripReviewsLine, requirementFilenames, trackedFiles, stagedBytes, tracedFiles, scopeFiles, computeScopeDigest, selfTest };
 
 if (require.main === module) {
 	if (process.argv[2] === "--list") process.stdout.write(`${scopeFiles().join("\n")}\n`);

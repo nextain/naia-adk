@@ -9,6 +9,8 @@ import os
 import subprocess
 import sys
 import shutil
+import tempfile
+import time
 import uuid
 from types import SimpleNamespace
 from pathlib import Path
@@ -16,13 +18,15 @@ from pathlib import Path
 SCRIPT = Path(__file__).with_name("translate-ctx.py")
 SCRIPT_SOURCE = SCRIPT.read_text("utf-8")
 CLI_SOURCE = Path(__file__).with_name("cli_invocation.py").read_text("utf-8")
-SUBPROCESS_SOURCE = SCRIPT_SOURCE + CLI_SOURCE
+PROCESS_SOURCE = Path(__file__).with_name("cli_process.py").read_text("utf-8")
+SUBPROCESS_SOURCE = SCRIPT_SOURCE + CLI_SOURCE + PROCESS_SOURCE
 EN_REPO_STRUCTURE = SCRIPT.parents[2] / ".users" / "context" / "en" / "repo-structure-standard.md"
 assert "(Korean mirror)" not in EN_REPO_STRUCTURE.read_text("utf-8"), "English mirror title incorrectly labels itself Korean"
 
 for required_cli_guard in ["build_cli_invocation", "parse_cli_route", "call_cli_adapter", '"--no-session-persistence"', '"--setting-sources"',
                            '"--skip-git-repo-check"', 'model_reasoning_effort=',
-                           '"features.hooks=false"', "diagnostic = (r.stderr.strip() or r.stdout.strip()"]:
+                           '"features.hooks=false"', "diagnostic = (r.stderr.strip() or r.stdout.strip()",
+                           "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE", "TerminateJobObject", "os.killpg", "run_cli_process"]:
     assert required_cli_guard in SUBPROCESS_SOURCE, f"translation subprocess lacks {required_cli_guard}"
 
 spec = importlib.util.spec_from_file_location("translate_ctx", SCRIPT)
@@ -45,19 +49,19 @@ assert translate_ctx.parse_cli_route(translate_ctx.DEFAULT_CLI_ROUTE) == [
 
 # The shared runner must advance after a diagnostic failure and report the
 # adapter that actually produced the bytes used for the receipt.
-original_run = translate_ctx.subprocess.run
+original_run = translate_ctx.run_cli_process
 attempts = []
-def fake_run(cmd, **kwargs):
+def fake_run(cmd, stdin_text, timeout):
     attempts.append(cmd)
     if len(attempts) == 1:
         return SimpleNamespace(returncode=1, stderr="", stdout="session limit")
     return SimpleNamespace(returncode=0, stderr="", stdout="# translated\n")
-translate_ctx.subprocess.run = fake_run
+translate_ctx.run_cli_process = fake_run
 translate_ctx.LLM_CLI = ""
 translate_ctx.CLI_ROUTE = "claude:haiku,codex:gpt-5.6-luna,claude:sonnet"
 fallback_output, fallback_backend, fallback_attempts = translate_ctx.call_cli(sample_prompt, 10)
 second_output, second_backend, second_attempts = translate_ctx.call_cli(sample_prompt, 10)
-translate_ctx.subprocess.run = original_run
+translate_ctx.run_cli_process = original_run
 assert fallback_output == "# translated\n"
 assert fallback_backend == "cli:codex:gpt-5.6-luna"
 assert fallback_attempts == [
@@ -68,6 +72,35 @@ assert "haiku" in attempts[0] and "gpt-5.6-luna" in attempts[1]
 assert second_output == '# translated\n' and second_backend == 'cli:codex:gpt-5.6-luna'
 assert second_attempts[0] == {'adapter': 'claude:haiku', 'status': 'skipped', 'diagnostic': 'batch circuit breaker open'}
 assert len(attempts) == 3 and 'gpt-5.6-luna' in attempts[2]
+
+# A timed-out CLI wrapper must not leave the actual model process (or any of
+# its descendants) holding inherited pipes on Windows or POSIX.
+with tempfile.TemporaryDirectory(prefix="translate-cli-tree-") as timeout_dir:
+    child_pid_file = Path(timeout_dir) / "child.pid"
+    parent_code = (
+        "import pathlib,subprocess,sys,time;"
+        "child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+        f"pathlib.Path({str(child_pid_file)!r}).write_text(str(child.pid));"
+        "time.sleep(60)"
+    )
+    started = time.monotonic()
+    try:
+        translate_ctx.run_cli_process([sys.executable, "-c", parent_code], "", 1)
+        raise AssertionError("timed-out CLI unexpectedly returned")
+    except subprocess.TimeoutExpired:
+        pass
+    assert time.monotonic() - started < 20, "CLI timeout did not terminate promptly"
+    child_pid = int(child_pid_file.read_text())
+    child_dead = False
+    for _ in range(20):
+        try:
+            os.kill(child_pid, 0)
+        except OSError:
+            child_dead = True
+            break
+        time.sleep(0.1)
+    assert child_dead, f"timed-out CLI descendant still alive: {child_pid}"
+
 gemini_cmd, gemini_stdin = translate_ctx.build_cli_invocation(
     "gemini", "gemini-2.5-flash", sample_prompt, translate_ctx.REPO_ROOT
 )
