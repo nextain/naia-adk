@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "purpose": "Deterministic health contract for root entry points and the curated Korean-to-English context queue.",
+  "entrypoints": {
+    "canonical": "AGENTS.md",
+    "mirrors": ["CLAUDE.md", "GEMINI.md"]
+  },
+  "translation": {
+    "source_dir": ".users/context",
+    "destination_dir": ".users/context/en",
+    "state_file": ".users/context/en/.translate-state.json",
+    "queue_file": ".agents/work/context-translation-queue.json",
+    "exclude_auto_generated": true,
+    "batching": "PostToolUse queues changed Korean mirrors; Stop translates the sorted unique batch once",
+    "failure_policy": "Preserve existing outputs and retain the queue for retry"
+  },
+  "safety": {
+    "curated_mirrors": "Files under .users/context are human-curated. The batch hook updates only their English counterparts after a hash-detected change.",
+    "mechanical_mirrors": "AUTO-GENERATED sources are excluded from LLM translation. A prior managed translation is retired if its source becomes mechanical; unrelated English-only files without receipts are preserved."
+  }
+}

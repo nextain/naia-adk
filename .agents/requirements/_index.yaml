@@ -1,19 +1,35 @@
 # Requirements Index — on-demand load only (NOT session-injected)
 # Read this file when entering Plan or Review phases
 version: 1
-updated: 2026-07-14
-total: 61
+updated: 2026-07-29
+total: 69
 
 # Status counts
 by_status:
   candidate: 0
-  active: 50
+  active: 58
   implemented: 0
   verified: 11
   withdrawn: 0
 
 # Per-product summary
 products:
+  - product: naia-benchmark-contract
+    title: "Permanent Benchmark and Harness Recovery Contract"
+    req_count: 8
+    priority_high: 8
+    priority_medium: 0
+    modules: [architecture, accounting, cost-routing, governance, dual-context, evaluation-integrity, review, platform-recovery]
+    requirements:
+      - { id: BMC-001, title: "Three-Layer Causal Benchmark", status: active }
+      - { id: BMC-002, title: "Fail-Closed Gate and Result Accounting", status: active }
+      - { id: BMC-003, title: "Statistical Cost and Routing Evidence", status: active }
+      - { id: BMC-004, title: "Trace, Reuse, and Canonical Structure", status: active }
+      - { id: BMC-005, title: "Verified Dual-Context Translation", status: active }
+      - { id: BMC-006, title: "Contamination and Judge Controls", status: active }
+      - { id: BMC-007, title: "Independent Review and Freeze", status: active }
+      - { id: BMC-008, title: "Native Platform Baseline and Recovery", status: active }
+
   - product: naia-adk-request-contract
     title: "Original Request Contract Integrity"
     req_count: 11

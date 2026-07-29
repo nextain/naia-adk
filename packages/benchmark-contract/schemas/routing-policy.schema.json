@@ -1,0 +1,17 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://naia.dev/schemas/benchmark/routing-policy.schema.json",
+  "title":"Frozen Routing Policy",
+  "type":"object","additionalProperties":false,
+  "required":["id","revision","digest","frozen_at","task_classes","routes","fallback_triggers","escalation_triggers","abort_triggers","budgets","reference_route_id","paired_comparison_unit","statistical_plan"],
+  "properties":{
+    "id":{"type":"string","minLength":1},"revision":{"type":"string","minLength":1},"digest":{"$ref":"#/$defs/digest"},"frozen_at":{"type":"string","format":"date-time"},
+    "task_classes":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string"}},
+    "routes":{"type":"array","minItems":2,"items":{"type":"object","additionalProperties":false,"required":["id","task_class","risk_class","selection_features","exact_model_id","provider","configuration_digest","order"],"properties":{"id":{"type":"string"},"task_class":{"type":"string"},"risk_class":{"type":"string"},"selection_features":{"type":"array","minItems":1,"items":{"type":"string"}},"exact_model_id":{"type":"string"},"provider":{"type":"string"},"configuration_digest":{"$ref":"#/$defs/digest"},"order":{"type":"integer","minimum":1}}}},
+    "fallback_triggers":{"type":"array","minItems":1,"items":{"type":"string"}},"escalation_triggers":{"type":"array","minItems":1,"items":{"type":"string"}},"abort_triggers":{"type":"array","minItems":1,"items":{"type":"string"}},
+    "budgets":{"type":"object","additionalProperties":false,"required":["retry_max","quota_max","latency_ms_max","cost_max"],"properties":{"retry_max":{"type":"integer","minimum":0},"quota_max":{"type":"number","minimum":0},"latency_ms_max":{"type":"integer","minimum":1},"cost_max":{"type":"number","minimum":0}}},
+    "reference_route_id":{"type":"string"},"paired_comparison_unit":{"const":"task"},
+    "statistical_plan":{"type":"object","additionalProperties":false,"required":["id","paired_task_min","deterministic_repetitions","stochastic_repetitions","confidence_level","alpha","quality_noninferiority_margin","minimum_cost_improvement","max_ci_width","multiple_comparison_family","multiple_comparison_method","bootstrap_resamples"],"properties":{"id":{"type":"string"},"paired_task_min":{"type":"integer","minimum":1},"deterministic_repetitions":{"type":"integer","minimum":1},"stochastic_repetitions":{"type":"integer","minimum":5},"confidence_level":{"const":0.95},"alpha":{"type":"number","exclusiveMinimum":0,"exclusiveMaximum":1},"quality_noninferiority_margin":{"type":"number","minimum":0},"minimum_cost_improvement":{"type":"number","minimum":0},"max_ci_width":{"type":"number","exclusiveMinimum":0},"multiple_comparison_family":{"type":"string"},"multiple_comparison_method":{"type":"string"},"bootstrap_resamples":{"const":10000}}}
+  },
+  "$defs":{"digest":{"type":"string","pattern":"^[a-f0-9]{64}$"}}
+}

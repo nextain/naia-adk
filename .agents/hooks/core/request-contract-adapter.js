@@ -40,7 +40,8 @@ const CLIENT_NATIVE_CAPABILITIES = Object.freeze({
 function projectRoot(cwd) {
 	const candidate = path.resolve(cwd || process.cwd());
 	try {
-		return cp.execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: candidate, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || candidate;
+		const root = cp.execFileSync("git", ["rev-parse", "--show-toplevel"], { cwd: candidate, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+		return root ? path.resolve(root) : candidate;
 	} catch {
 		return candidate;
 	}
@@ -79,7 +80,7 @@ function normalizeInput(client, input, fallbackEvent, opts = {}) {
 		toolInput: data[capability.toolInputField] || {},
 		toolResponse: data[capability.toolResponseField] || null,
 		hostProcessId: process.ppid,
-		hostProcessIdentity: core.processIdentity(process.ppid),
+		hostProcessIdentity: eventName === "SessionStart" ? core.processIdentity(process.ppid) : null,
 	};
 }
 

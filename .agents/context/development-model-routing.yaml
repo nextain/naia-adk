@@ -1,0 +1,148 @@
+version: 2
+scope: alpha-adk root collaboration process
+status: active
+
+portable_contract:
+  vendor_neutral: true
+  rule: The contract defines capabilities and evidence; tool/model names belong only in adapters.
+  roles:
+    orchestrator: interpret the approved contract and own integration
+    explorer: collect bounded evidence without mutation
+    designer: compare bounded alternatives and identify escalation triggers
+    implementer: mutate only the approved scope
+    tester: execute focused verification and record evidence
+    adversarial_reviewer: inspect an immutable snapshot independently and read-only
+    arbiter: resolve only evidence-backed disagreements without replacing a reviewer
+    translator: update changed language mirrors from hashed inputs
+  selection:
+    - deterministic validation precedes any model call
+    - select the lowest-cost adapter that satisfies the role capability and risk
+    - escalate only for declared risk triggers or unresolved evidence
+  independence:
+    self_check_is_review: false
+    prefer_distinct_model_or_provider: true
+    require_distinct_role: true
+    require_distinct_session_id: true
+    require_distinct_execution_id: true
+    require_same_snapshot_hash: true
+  adapter_requirements:
+    - map every enabled role to a supported local tool and model alias
+    - keep CLI flags and vendor model slugs outside the portable contract
+    - fail closed when a required role has no eligible independent adapter
+  platform_independence:
+    supported_host_rule: every declared supported host must install, run, recover, and execute its mandatory harness natively
+    windows: WSL, Cygwin, MSYS2, Linux VMs, and Linux containers are never required Windows dependencies
+    linux: Linux-only security primitives are verified in native Linux CI and never used through WSL to claim Windows support
+    adapter_rule: platform-specific implementations must preserve the same fail-closed contract and evidence semantics
+    test_rule: platform-specific skips are explicit and do not count as a pass for the skipped capability
+
+principles:
+  - Contract and deterministic validation run before model work whenever possible.
+  - Use the lowest-cost role that can safely perform the bounded task; escalate by risk and unresolved evidence, not by habit.
+  - OpenCode and HY3 are not permitted in this workspace routing.
+  - A producer self-check is useful but never counts as adversarial review.
+
+adapter_role_map:
+  orchestrator: { adapter: codex, role: main_orchestrator }
+  explorer: { adapter: codex, role: explorer }
+  designer: { adapter: codex, role: designer }
+  implementer: { adapter: codex, role: worker }
+  tester: { adapter: codex, role: tester }
+  adversarial_reviewer: { adapter: codex, role: adversarial_reviewer }
+  arbiter: { adapter: codex, role: arbiter }
+  translator: { adapter: routing_chain, role: translation }
+
+codex_adapter:
+  main_orchestrator:
+    model: gpt-5.6-sol
+    reasoning_effort: medium
+    authority: contract interpretation, integration decisions, final synthesis, and final file changes
+  roles:
+    explorer:
+      model: gpt-5.6-terra
+      reasoning_effort: low
+      mode: read-only
+      use_for: bounded search, context mapping, evidence collection
+    worker:
+      model: gpt-5.6-terra
+      reasoning_effort: medium
+      mode: workspace-write
+      use_for: approved bounded implementation
+    designer:
+      model: gpt-5.6-terra
+      reasoning_effort: high
+      mode: read-only
+      use_for: bounded design analysis; escalate to Sol only when a declared high-risk trigger applies
+    tester:
+      model: gpt-5.6-terra
+      reasoning_effort: medium
+      mode: workspace-write
+      use_for: focused tests and evidence collection
+    translator_luna:
+      model: gpt-5.6-luna
+      reasoning_effort: low
+      mode: read-only
+      use_for: repeatable translation batches and mechanical classification when Claude Haiku is unavailable
+    adversarial_reviewer:
+      model: gpt-5.6-terra
+      reasoning_effort: high
+      mode: read-only
+      use_for: independent review of an immutable snapshot
+    arbiter:
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      mode: read-only
+      use_for: high-risk integration and unresolved independent-review findings
+
+claude_adapter:
+  policy: vendor-neutral
+  model_selection: use the currently supported Claude aliases or locally configured model names; never hard-code dated model IDs in this workspace contract
+  routing:
+    lightweight: Claude Haiku 4.5 for mechanical classification, translation batches, and bounded exploration
+    standard: normal analysis or implementation when the installed configuration selects its standard alias
+    escalation: architecture, safety-critical decisions, or unresolved review evidence only
+    translation_fallback: Claude Sonnet after Haiku 4.5 and Codex Luna are unavailable
+  restriction: Claude may not be both producer and adversarial reviewer for the same execution
+
+translation_routing:
+  order:
+    - { adapter: claude, model: haiku, family: Claude Haiku 4.5 }
+    - { adapter: codex, model: gpt-5.6-luna, reasoning_effort: low }
+    - { adapter: claude, model: sonnet, family: Claude Sonnet }
+  invocation: all adapters use the shared stdin-based invocation builder; prompts must not be command-line arguments
+  failure: continue only to the next declared adapter and preserve the diagnostic receipt
+
+independent_review:
+  required: true
+  producer_may_self_check: true
+  self_check_counts_as_adversarial_review: false
+  diversity_preference: prefer an eligible reviewer from a different model or provider when available, without relaxing identity separation or snapshot binding
+  separation:
+    - producer.session_id must differ from reviewer.session_id
+    - producer.execution_id must differ from reviewer.execution_id
+    - reviewer must inspect the immutable revision snapshot, not an earlier or unstated revision
+  clean_threshold:
+    normal: two independent clean reviews on the same unchanged snapshot
+    high_risk_or_integration: two independent clean reviews on the same unchanged snapshot; use the Sol arbiter only for unresolved findings
+  evidence_required:
+    - contract_or_req_id
+    - revision_snapshot_hash
+    - producer_session_id
+    - producer_execution_id
+    - reviewer_session_id
+    - reviewer_execution_id
+    - test_receipts
+  active_adapter_panel:
+    - codex-terra-independent
+    - claude-sonnet-independent
+  raw_evidence_rule: each local receipt must bind its reviewer session and execution digest to one preserved raw CLI envelope under .agents/progress/review-evidence; invented caller strings are rejected
+
+enforcement_boundary:
+  local_hooks: deterministic guardrail for the local tool paths Codex exposes to hooks; ambiguous shell mutation is denied unless the approved contract declares an exact pattern
+  governed_security: signed isolated review execution is the authenticity boundary; local progress JSON and ordinary hook files do not claim cryptographic authenticity
+  platform_boundary: Windows native harness verification and Linux native bwrap isolation verification are separate; neither host may silently depend on a compatibility subsystem for the other
+
+cost_controls:
+  deterministic_first: schema, hash, mirror, index, and receipt checks must not call an LLM
+  batch_lightweight_work: translation and mechanical classification must process only changed inputs with cached hashes
+  escalation: Sol high is reserved for arbitration or genuinely high-risk work

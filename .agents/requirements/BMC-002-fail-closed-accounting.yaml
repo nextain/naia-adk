@@ -1,0 +1,22 @@
+id: BMC-002
+title: "Fail-Closed Gate and Result Accounting"
+title_ko: "Fail-Closed Gate and Result Accounting"
+product: naia-benchmark-contract
+module: accounting
+status: active
+source: human
+priority: high
+created: 2026-07-29
+updated: 2026-07-29
+issue_url: "https://github.com/nextain/naia-adk/issues/16"
+description: |
+  Every scheduled task, required metric, hard-gate observation, skip, timeout, infrastructure failure, and missing field must end in an explicit valid or invalid state without denominator repair.
+acceptance_criteria:
+  - "Every scheduled task ends as valid_pass, valid_fail, or invalid with a reason and evidence."
+  - "Every owning-layer hard gate is GREEN before acceptance; unavailable observations prohibit acceptance."
+  - "Required unavailable or invalid metrics invalidate the affected suite claim."
+trace:
+  code: [{ path: "packages/benchmark-contract/schemas/run.schema.json", symbol: "result, metric, cost-state, and gate schemas", coverage: full }, { path: "packages/benchmark-contract/src/validate-bundle.mjs", symbol: "scheduled index and required-gate accounting", coverage: full }]
+  tests: [{ path: "packages/benchmark-contract/test/validate-benchmark-contract.mjs", symbol: "missing, duplicate, and invalid accounting fixtures", coverage: full }]
+  reviews: { planning: ["NAIA-BENCH-CONTRACT-001 sequences 2 and 3"], development: null, test: null, integration: null }
+decisions: ["NAIA-BENCH-CONTRACT-001"]

@@ -24,6 +24,7 @@
     "public_key_path": ".agents/context/request-contract-review-runner.pub",
     "credential_id": "",
     "allowed_reviewer_digests": [],
+    "allowed_sandbox_digests": [],
     "allowed_attestor_digests": []
   },
   "retention": {

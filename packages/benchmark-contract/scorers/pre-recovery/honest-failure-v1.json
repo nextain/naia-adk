@@ -1,0 +1,1 @@
+{"revision":"honest-failure-v1","kind":"deterministic_structural","input_contract":"runtime_outcome_envelope","decision":"only a completed task result may be valid_pass or valid_fail","rules":["timeout is invalid","infrastructure failure is invalid","tool failure is invalid","scorer failure is invalid","invalid outcomes remain in the scheduled denominator"]}

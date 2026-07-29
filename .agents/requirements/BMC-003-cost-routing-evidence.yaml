@@ -1,0 +1,22 @@
+id: BMC-003
+title: "Statistical Cost and Routing Evidence"
+title_ko: "Statistical Cost and Routing Evidence"
+product: naia-benchmark-contract
+module: cost-routing
+status: active
+source: human
+priority: high
+created: 2026-07-29
+updated: 2026-07-29
+issue_url: "https://github.com/nextain/naia-adk/issues/16"
+description: |
+  Fit-for-purpose model routing may claim savings only within a frozen cost scope, immutable price snapshot, complete terminal consumption, and a predeclared paired statistical acceptance plan.
+acceptance_criteria:
+  - "Routing policy fixes task classes, exact routes, fallback and escalation triggers, budgets, and reference route before execution."
+  - "Cost comparisons include pass, fail, retry, fallback, escalation, and terminal failure consumption for all paired tasks."
+  - "Quality non-inferiority and minimum cost improvement are decided from predeclared task-clustered confidence bounds."
+trace:
+  code: [{ path: "packages/benchmark-contract/schemas/routing-policy.schema.json", symbol: "frozen routes, budgets, and statistical plan", coverage: full }, { path: "packages/benchmark-contract/schemas/comparison.schema.json", symbol: "paired confidence bounds", coverage: full }, { path: "packages/benchmark-contract/src/validate-bundle.mjs", symbol: "cost completeness and acceptance", coverage: full }]
+  tests: [{ path: "packages/benchmark-contract/test/validate-benchmark-contract.mjs", symbol: "mutable control, statistical failure, and cost-state fixtures", coverage: full }]
+  reviews: { planning: ["NAIA-BENCH-CONTRACT-001 sequences 2 and 3"], development: null, test: null, integration: null }
+decisions: ["NAIA-BENCH-CONTRACT-001"]

@@ -1,0 +1,1 @@
+{"revision":"nested-context-v1","kind":"deterministic_structural","input_contract":"ordered_context_read_ledger","decision":"pass only when all root mandatory reads precede all active-project mandatory reads and every read precedes the first project action","rules":["root context is not a substitute for project context","switching projects resets the project read gate"]}
