@@ -20,6 +20,7 @@
   },
   "discord": {
     "credentialRef": "discord-bot-token",
+    "botUserId": "000000000000000000",
     "operatorUserIds": ["000000000000000000"],
     "bindings": [
       {
@@ -28,19 +29,42 @@
         "channelId": "000000000000000000",
         "respondWhen": "mentioned",
         "allowedUserIds": ["000000000000000000"],
-        "canStartConversation": false
+        "canStartConversation": false,
+        "operatorActions": false
+      },
+      {
+        "kind": "thread",
+        "guildId": "000000000000000000",
+        "channelId": "000000000000000000",
+        "threadId": "000000000000000000",
+        "respondWhen": "mentioned",
+        "allowedUserIds": ["000000000000000000"],
+        "canStartConversation": false,
+        "operatorActions": false
+      },
+      {
+        "kind": "dm",
+        "userId": "000000000000000000",
+        "respondWhen": "always",
+        "allowedUserIds": ["000000000000000000"],
+        "canStartConversation": false,
+        "operatorActions": false
       }
     ]
   },
   "runtime": {
-    "idleRotationMinutes": 30,
     "softSilenceSeconds": 120,
     "heartbeatSeconds": 10,
-    "staleAfterSeconds": 30,
     "maxConcurrentJobs": 1
   },
   "observability": {
-    "discordStatusProjection": false,
-    "jobThreads": false
+    "discordStatusProjection": true
+  },
+  "service": {
+    "autoStart": true,
+    "startAt": "login"
+  },
+  "recovery": {
+    "autoRetry": true
   }
 }

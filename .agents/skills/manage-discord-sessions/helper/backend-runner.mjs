@@ -232,6 +232,7 @@ export async function runBackendAttempt({
 	const ownedStartIdentity = readProcessStartIdentity(child.pid);
 	let lineNumber = 0;
 	let backendOutcome = null;
+	let transientResult = null;
 	let processError = false;
 	let terminationReason = null;
 	let forceTimer = null;
@@ -240,6 +241,7 @@ export async function runBackendAttempt({
 		const inspected = inspectBackendLine({ backendId, line, attemptId, lineNumber });
 		if (inspected.outcome === "failure") backendOutcome = "failure";
 		else if (inspected.outcome === "success" && backendOutcome !== "failure") backendOutcome = "success";
+		if (inspected.transientResult !== null) transientResult = inspected.transientResult;
 		for (const event of inspected.events) {
 			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: backendId, ...event });
 		}
@@ -277,7 +279,7 @@ export async function runBackendAttempt({
 	};
 	const timeout = setTimeout(() => terminate("timeout"), timeoutMs);
 	timeout.unref?.();
-	const abort = () => terminate("cancelled");
+	const abort = () => terminate(signal?.reason === "recovery" ? "recovery" : "cancelled");
 	if (signal?.aborted) abort();
 	else signal?.addEventListener("abort", abort, { once: true });
 	child.stdin.on("error", () => terminate("internal_error"));
@@ -301,6 +303,8 @@ export async function runBackendAttempt({
 		}
 		if (terminationReason === "cancelled") {
 			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "cancelled", safePayload: {} });
+		} else if (terminationReason === "recovery") {
+			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "recovery", kind: "recovered", safePayload: { recoveryAction: "safe_retry" } });
 		} else if (terminationReason === "timeout") {
 			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: "timeout" } });
 		} else if (terminationReason === "internal_error" || normalizeFailed || processError) {
@@ -310,7 +314,7 @@ export async function runBackendAttempt({
 		} else {
 			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: result.exitCode === 0 ? "internal_error" : "process_exit" } });
 		}
-		return { attemptId, exitCode: result.exitCode, signal: result.signal, terminationReason, backendOutcome, backendVersion: supportedVersion };
+		return { attemptId, exitCode: result.exitCode, signal: result.signal, terminationReason, backendOutcome, backendVersion: supportedVersion, transientResult: backendOutcome === "success" ? transientResult : null };
 	} finally {
 		if (existsSync(childHome)) cleanupChildEnvironment(childHome);
 	}

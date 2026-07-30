@@ -19,6 +19,16 @@ export function sanitizeSummary(value) {
 	return sanitized;
 }
 
+export function sanitizeFinalResponse(value) {
+	if (typeof value !== "string") throw new TypeError("final response must be a string");
+	let sanitized = value.replace(/<@!?\d{17,20}>|<@&\d{17,20}>|@everyone|@here/gi, "[MENTION]");
+	for (const pattern of SECRET_PATTERNS) sanitized = sanitized.replace(pattern, "[REDACTED]");
+	sanitized = sanitized.replace(LOCAL_PATH_PATTERN, "[LOCAL_PATH]").trim();
+	if (sanitized.length === 0) throw new Error("final response is empty after sanitization");
+	if (sanitized.length > 1_900) throw new Error("final response exceeds 1900 characters");
+	return sanitized;
+}
+
 export function validateSafeMetrics(metrics = {}) {
 	if (metrics === null || typeof metrics !== "object" || Array.isArray(metrics)) {
 		throw new TypeError("metrics must be an object");
@@ -103,6 +113,7 @@ const PAYLOAD_BUILDERS = {
 	delivery_confirmed: () => "Delivery confirmed",
 	delivery_unknown: () => "Delivery result requires review",
 	recovered: (payload) => `Recovered job: ${enumValue(payload.recoveryAction, "recoveryAction")}`,
+	recovery_review_required: () => "Recovered job requires a fresh request",
 	cancel_requested: () => "Cancellation requested",
 	cancelled: () => "Job cancelled",
 	completed: () => "Job completed",
@@ -128,6 +139,7 @@ const PAYLOAD_KEYS = new Map([
 	["delivery_confirmed", new Set()],
 	["delivery_unknown", new Set()],
 	["recovered", new Set(["recoveryAction"])],
+	["recovery_review_required", new Set()],
 	["cancel_requested", new Set()],
 	["cancelled", new Set()],
 	["completed", new Set()],

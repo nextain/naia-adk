@@ -17,10 +17,12 @@ acceptance_criteria:
   - "After reboot, the persisted timeline remains queryable before any AI backend is launched."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbol: "status/jobs/job/watch", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "skill-local entry point", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbol: "status/jobs/job/watch", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "scoped !naia status/jobs/job", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-projection.mjs", symbol: "DiscordStatusProjection", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "skill-local entry point", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-003 CLI returns versioned job detail and watch events", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-003 status on a clean ADK is read-only and reports stopped", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-003 CLI visibility tests", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-009/DSG-011 scoped and pinned projections", coverage: full }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
 decisions: []

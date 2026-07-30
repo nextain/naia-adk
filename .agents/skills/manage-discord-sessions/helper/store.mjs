@@ -45,6 +45,7 @@ const EVENT_SOURCES = new Map([
 	["delivery_confirmed", new Set(["helper", "recovery"])],
 	["delivery_unknown", new Set(["helper", "recovery"])],
 	["recovered", new Set(["recovery"])],
+	["recovery_review_required", new Set(["recovery"])],
 	["cancel_requested", new Set(["helper"])],
 	["cancelled", new Set(["helper"])],
 	["completed", new Set(["helper"])],
@@ -118,8 +119,11 @@ function transitionFor(kind, current) {
 		case "tool_started":
 		case "tool_finished":
 		case "checkpoint_saved":
-		case "recovered":
 			return "running";
+		case "recovered":
+			return "queued";
+		case "recovery_review_required":
+			return "recovery_review";
 		case "verification_recorded":
 			return current;
 		case "attempt_succeeded":
@@ -271,8 +275,51 @@ export class SessionStore {
 				metrics_json TEXT NOT NULL,
 				FOREIGN KEY(job_id, check_id) REFERENCES required_checks(job_id, check_id)
 			);
+			CREATE TABLE IF NOT EXISTS gateway_state (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				session_id TEXT,
+				resume_url TEXT,
+				sequence INTEGER,
+				heartbeat_ack_at TEXT,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS ingress_messages (
+				source_message_id TEXT PRIMARY KEY,
+				scope_key TEXT NOT NULL,
+				status TEXT NOT NULL,
+				job_id TEXT,
+				reason_code TEXT NOT NULL,
+				dispatch_sequence INTEGER,
+				received_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS delivery_attempts (
+				delivery_key TEXT PRIMARY KEY,
+				job_id TEXT NOT NULL REFERENCES jobs(job_id),
+				attempt_id TEXT NOT NULL,
+				nonce TEXT NOT NULL UNIQUE,
+				channel_id TEXT NOT NULL,
+				status TEXT NOT NULL,
+				message_id TEXT,
+				started_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS job_recovery (
+				job_id TEXT PRIMARY KEY REFERENCES jobs(job_id) ON DELETE CASCADE,
+				iv TEXT NOT NULL,
+				ciphertext TEXT NOT NULL,
+				tag TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
+			CREATE TABLE IF NOT EXISTS discord_projections (
+				scope_key TEXT PRIMARY KEY,
+				channel_id TEXT NOT NULL,
+				message_id TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
 			CREATE INDEX IF NOT EXISTS job_events_job_ordinal ON job_events(job_id, ordinal);
 			CREATE INDEX IF NOT EXISTS jobs_updated_at ON jobs(updated_at DESC);
+			CREATE UNIQUE INDEX IF NOT EXISTS delivery_attempt_job ON delivery_attempts(job_id, attempt_id);
 		`);
 		const ensureColumn = (table, column, declaration) => {
 			const columns = new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map((item) => item.name));
@@ -283,7 +330,170 @@ export class SessionStore {
 		ensureColumn("jobs", "child_pid", "INTEGER");
 		ensureColumn("jobs", "child_boot_id", "TEXT");
 		ensureColumn("jobs", "child_start_identity", "TEXT");
+		ensureColumn("jobs", "scope_key", "TEXT");
 		this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('schema_version', ?)").run(String(DB_SCHEMA_VERSION));
+	}
+
+	loadGatewayState() {
+		const row = this.db.prepare("SELECT * FROM gateway_state WHERE id = 1").get();
+		return row ? { sessionId: row.session_id, resumeUrl: row.resume_url, sequence: row.sequence, heartbeatAckAt: row.heartbeat_ack_at, updatedAt: row.updated_at } : {};
+	}
+
+	saveGatewayState(patch, now = new Date().toISOString()) {
+		canonicalTimestamp(now, "gateway state time");
+		const current = this.loadGatewayState();
+		const next = { ...current, ...patch };
+		if (next.sequence !== null && next.sequence !== undefined && (!Number.isSafeInteger(next.sequence) || next.sequence < 0)) throw new Error("gateway sequence must be a non-negative safe integer");
+		if (next.resumeUrl) {
+			const url = new URL(next.resumeUrl);
+			if (url.protocol !== "wss:" || !/(^|\.)discord\.gg$/.test(url.hostname)) throw new Error("unsafe gateway resume URL");
+		}
+		this.db.prepare(`INSERT INTO gateway_state(id, session_id, resume_url, sequence, heartbeat_ack_at, updated_at)
+			VALUES(1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET session_id=excluded.session_id,
+			resume_url=excluded.resume_url, sequence=excluded.sequence, heartbeat_ack_at=excluded.heartbeat_ack_at, updated_at=excluded.updated_at`)
+			.run(next.sessionId ?? null, next.resumeUrl ?? null, next.sequence ?? null, next.heartbeatAckAt ?? null, now);
+	}
+
+	clearGatewayResume(now = new Date().toISOString()) {
+		this.saveGatewayState({ sessionId: null, resumeUrl: null, sequence: null }, now);
+	}
+
+	loadDiscordProjection(scopeKey) {
+		safeIdentifier(scopeKey, "scopeKey");
+		const row = this.db.prepare("SELECT * FROM discord_projections WHERE scope_key = ?").get(scopeKey);
+		return row ? { scopeKey: row.scope_key, channelId: row.channel_id, messageId: row.message_id, updatedAt: row.updated_at } : null;
+	}
+
+	saveDiscordProjection({ scopeKey, channelId, messageId, now = new Date().toISOString() }) {
+		for (const [value, label] of [[scopeKey, "scopeKey"], [channelId, "channelId"], [messageId, "messageId"]]) safeIdentifier(value, label);
+		canonicalTimestamp(now, "projection time");
+		this.db.prepare(`INSERT INTO discord_projections(scope_key, channel_id, message_id, updated_at) VALUES(?, ?, ?, ?)
+			ON CONFLICT(scope_key) DO UPDATE SET channel_id=excluded.channel_id, message_id=excluded.message_id, updated_at=excluded.updated_at`).run(scopeKey, channelId, messageId, now);
+	}
+
+	reserveIngress({ sourceMessageId, scopeKey, status, jobId = null, reasonCode, dispatchSequence = null, now = new Date().toISOString() }) {
+		safeIdentifier(sourceMessageId, "sourceMessageId");
+		safeIdentifier(scopeKey, "scopeKey");
+		if (!new Set(["accepted", "rejected", "handled"]).has(status)) throw new Error("unsupported ingress status");
+		safeIdentifier(reasonCode, "reasonCode");
+		canonicalTimestamp(now, "ingress time");
+		if (dispatchSequence !== null && (!Number.isSafeInteger(dispatchSequence) || dispatchSequence < 0)) throw new Error("invalid dispatch sequence");
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const existing = this.db.prepare("SELECT * FROM ingress_messages WHERE source_message_id = ?").get(sourceMessageId);
+			if (existing) { this.db.exec("COMMIT"); return { duplicate: true, status: existing.status, jobId: existing.job_id }; }
+			this.db.prepare(`INSERT INTO ingress_messages(source_message_id, scope_key, status, job_id, reason_code, dispatch_sequence, received_at, updated_at)
+				VALUES(?, ?, ?, ?, ?, ?, ?, ?)`)
+				.run(sourceMessageId, scopeKey, status, jobId, reasonCode, dispatchSequence, now, now);
+			this.db.exec("COMMIT");
+			return { duplicate: false, status, jobId };
+		} catch (error) { this.db.exec("ROLLBACK"); throw error; }
+	}
+
+	acceptIngressAndCreateJob({ sourceMessageId, scopeKey, jobId, dispatchSequence = null, backendId, revision = "discord-v1", backendCapabilities = {}, activityDetail, jobType = "conversation", softSilenceMs = DEFAULT_SOFT_SILENCE_MS, recoveryEnvelope = null, now = new Date().toISOString() }) {
+		for (const [value, label] of [[sourceMessageId, "sourceMessageId"], [scopeKey, "scopeKey"], [jobId, "jobId"], [backendId, "backendId"], [revision, "revision"]]) safeIdentifier(value, label);
+		if (!/^\d{17,20}$/.test(sourceMessageId) || /^0+$/.test(sourceMessageId)) throw new Error("sourceMessageId must be a Discord snowflake");
+		if (dispatchSequence !== null && (!Number.isSafeInteger(dispatchSequence) || dispatchSequence < 0)) throw new Error("invalid dispatch sequence");
+		canonicalTimestamp(now, "ingress acceptance time");
+		if (!Number.isSafeInteger(softSilenceMs) || softSilenceMs < 0) throw new Error("softSilenceMs must be a non-negative safe integer");
+		if (!ACTIVITY_DETAILS.has(activityDetail)) throw new Error(`unsupported activity detail: ${activityDetail}`);
+		buildSafeEventSummary("attempt_started", { backend: backendId });
+		const safeCapabilities = validateBackendCapabilities(backendCapabilities);
+		const summary = buildSafeEventSummary("job_accepted", { jobType });
+		if (recoveryEnvelope !== null) {
+			for (const key of ["iv", "ciphertext", "tag"]) if (typeof recoveryEnvelope[key] !== "string" || !/^[A-Za-z0-9_-]+$/.test(recoveryEnvelope[key])) throw new Error("recovery envelope is invalid");
+		}
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const existing = this.db.prepare("SELECT * FROM ingress_messages WHERE source_message_id = ?").get(sourceMessageId);
+			if (existing) {
+				this.db.exec("COMMIT");
+				return { duplicate: true, status: existing.status, jobId: existing.job_id };
+			}
+			this.db.prepare(`INSERT INTO ingress_messages(source_message_id, scope_key, status, job_id, reason_code, dispatch_sequence, received_at, updated_at)
+				VALUES(?, ?, 'accepted', ?, 'authorized', ?, ?, ?)`).run(sourceMessageId, scopeKey, jobId, dispatchSequence, now, now);
+			this.db.prepare(`INSERT INTO jobs(job_id, lifecycle, backend_id, revision, backend_capabilities_json, activity_detail,
+				safe_summary, accepted_at, updated_at, soft_silence_ms, scope_key)
+				VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+				.run(jobId, backendId, revision, json(safeCapabilities), activityDetail, summary, now, now, softSilenceMs, scopeKey);
+			this.#appendEvent({ jobId, dedupeKey: `job_accepted:${jobId}`, kind: "job_accepted", occurredAt: now, source: "gateway", safeSummary: summary });
+			if (recoveryEnvelope) this.db.prepare("INSERT INTO job_recovery(job_id, iv, ciphertext, tag, updated_at) VALUES(?, ?, ?, ?, ?)").run(jobId, recoveryEnvelope.iv, recoveryEnvelope.ciphertext, recoveryEnvelope.tag, now);
+			this.db.exec("COMMIT");
+			this.#hardenSidecars();
+			return { duplicate: false, status: "accepted", jobId };
+		} catch (error) { this.db.exec("ROLLBACK"); throw error; }
+	}
+
+	reserveDelivery({ deliveryKey, jobId, attemptId, nonce, channelId, now = new Date().toISOString() }) {
+		for (const [value, label] of [[deliveryKey, "deliveryKey"], [attemptId, "attemptId"], [nonce, "nonce"], [channelId, "channelId"]]) safeIdentifier(value, label);
+		canonicalTimestamp(now, "delivery start time");
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const existing = this.db.prepare("SELECT * FROM delivery_attempts WHERE job_id = ? AND attempt_id = ?").get(jobId, attemptId);
+			if (existing) {
+				if (existing.channel_id !== channelId) throw new Error("delivery destination mismatch");
+				if (existing.status === "started") {
+					this.db.prepare("UPDATE delivery_attempts SET status = 'unknown', updated_at = ? WHERE delivery_key = ?").run(now, existing.delivery_key);
+					this.#appendEvent({ jobId, attemptId, kind: "delivery_unknown", source: "recovery", occurredAt: now, safeSummary: buildSafeEventSummary("delivery_unknown", {}) });
+					existing.status = "unknown";
+				}
+				this.db.exec("COMMIT");
+				return { existing: true, deliveryKey: existing.delivery_key, nonce: existing.nonce, channelId: existing.channel_id, status: existing.status };
+			}
+			this.db.prepare(`INSERT INTO delivery_attempts(delivery_key, job_id, attempt_id, nonce, channel_id, status, started_at, updated_at)
+				VALUES(?, ?, ?, ?, ?, 'started', ?, ?)`)
+				.run(deliveryKey, jobId, attemptId, nonce, channelId, now, now);
+			this.#appendEvent({ jobId, attemptId, kind: "delivery_started", source: "helper", occurredAt: now, safeSummary: buildSafeEventSummary("delivery_started", {}) });
+			this.db.exec("COMMIT");
+			return { existing: false, deliveryKey, nonce, channelId, status: "started" };
+		} catch (error) { this.db.exec("ROLLBACK"); throw error; }
+	}
+
+	startDelivery(input) { return this.reserveDelivery(input); }
+
+	finishDelivery({ deliveryKey, status, messageId = null, reasonCode = "internal_error", now = new Date().toISOString() }) {
+		if (!new Set(["confirmed", "unknown", "failed"]).has(status)) throw new Error("unsupported delivery status");
+		canonicalTimestamp(now, "delivery finish time");
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const delivery = this.db.prepare("SELECT * FROM delivery_attempts WHERE delivery_key = ?").get(deliveryKey);
+			if (!delivery) throw new Error("unknown delivery key");
+			if (delivery.status !== "started") throw new Error("delivery is already finalized");
+			this.db.prepare("UPDATE delivery_attempts SET status = ?, message_id = ?, updated_at = ? WHERE delivery_key = ?").run(status, messageId, now, deliveryKey);
+			const kind = status === "confirmed" ? "delivery_confirmed" : status === "unknown" ? "delivery_unknown" : "failed";
+			this.#appendEvent({ jobId: delivery.job_id, attemptId: delivery.attempt_id, kind, source: "helper", occurredAt: now,
+				safeSummary: buildSafeEventSummary(kind, status === "failed" ? { reasonCode } : {}) });
+			this.db.exec("COMMIT");
+		} catch (error) { this.db.exec("ROLLBACK"); throw error; }
+	}
+
+	recoverInterruptedWork({ now = new Date().toISOString() } = {}) {
+		canonicalTimestamp(now, "recovery time");
+		const recovered = [];
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const jobs = this.db.prepare("SELECT * FROM jobs WHERE lifecycle NOT IN ('completed', 'failed', 'cancelled', 'recovery_review') ORDER BY accepted_at").all();
+			for (const job of jobs) {
+				const started = this.db.prepare("SELECT * FROM delivery_attempts WHERE job_id = ? AND status = 'started'").all(job.job_id);
+				if (started.length > 0) {
+					for (const delivery of started) {
+						this.db.prepare("UPDATE delivery_attempts SET status = 'unknown', updated_at = ? WHERE delivery_key = ?").run(now, delivery.delivery_key);
+						this.#appendEvent({ jobId: job.job_id, attemptId: delivery.attempt_id, kind: "delivery_unknown", source: "recovery", occurredAt: now, safeSummary: buildSafeEventSummary("delivery_unknown", {}) });
+					}
+				} else {
+					const envelope = this.db.prepare("SELECT iv, ciphertext, tag FROM job_recovery WHERE job_id = ?").get(job.job_id);
+					if (envelope) {
+						this.#appendEvent({ jobId: job.job_id, attemptId: job.attempt_id, kind: "recovered", source: "recovery", occurredAt: now, safeSummary: buildSafeEventSummary("recovered", { recoveryAction: "safe_retry" }) });
+						this.db.prepare("UPDATE jobs SET attempt_id = NULL, child_alive = 0, child_pid = NULL, child_boot_id = NULL, child_start_identity = NULL, recovery_state = 'resuming' WHERE job_id = ?").run(job.job_id);
+						recovered.push({ jobId: job.job_id, backendId: job.backend_id, envelope: { iv: envelope.iv, ciphertext: envelope.ciphertext, tag: envelope.tag } });
+					} else {
+						this.#appendEvent({ jobId: job.job_id, attemptId: job.attempt_id, kind: "recovery_review_required", source: "recovery", occurredAt: now, safeSummary: buildSafeEventSummary("recovery_review_required", {}) });
+					}
+				}
+			}
+			this.db.exec("COMMIT");
+			return recovered;
+		} catch (error) { this.db.exec("ROLLBACK"); throw error; }
 	}
 
 	close() {
@@ -325,6 +535,7 @@ export class SessionStore {
 		backendCapabilities = {},
 		activityDetail = "unsupported",
 		jobType = "unknown",
+		scopeKey = null,
 		now = new Date().toISOString(),
 		softSilenceMs = DEFAULT_SOFT_SILENCE_MS,
 		hardDeadlineAt = null,
@@ -339,14 +550,15 @@ export class SessionStore {
 		if (hardDeadlineAt !== null) canonicalTimestamp(hardDeadlineAt, "hard deadline");
 		if (!ACTIVITY_DETAILS.has(activityDetail)) throw new Error(`unsupported activity detail: ${activityDetail}`);
 		const safeCapabilities = validateBackendCapabilities(backendCapabilities);
+		if (scopeKey !== null) safeIdentifier(scopeKey, "scopeKey");
 		const summary = buildSafeEventSummary("job_accepted", { jobType });
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
 			this.db.prepare(`
 				INSERT INTO jobs(job_id, lifecycle, backend_id, revision, backend_capabilities_json, activity_detail,
-					safe_summary, accepted_at, updated_at, soft_silence_ms, hard_deadline_at)
-				VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`).run(jobId, backendId, revision, json(safeCapabilities), activityDetail, summary, now, now, softSilenceMs, hardDeadlineAt);
+					safe_summary, accepted_at, updated_at, soft_silence_ms, hard_deadline_at, scope_key)
+				VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`).run(jobId, backendId, revision, json(safeCapabilities), activityDetail, summary, now, now, softSilenceMs, hardDeadlineAt, scopeKey);
 			for (const check of requiredChecks) {
 				if (!check.checkId || !check.kind) throw new Error("required check needs checkId and kind");
 				safeIdentifier(check.checkId, "checkId");
@@ -489,8 +701,8 @@ export class SessionStore {
 				safe_summary, metrics_json, redaction_level)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`).run(eventId, dedupeKey, jobId, attemptId, sequence, kind, occurredAt, source, summary, json(safeMetrics), redactionLevel);
-		const progressKinds = new Set(["attempt_started", "backend_ready", "phase_changed", "output_activity", "tool_started", "tool_finished", "checkpoint_saved", "verification_recorded", "recovered"]);
-		const childAlive = kind === "attempt_started" ? 1 : ["attempt_exited", "failed", "completed", "cancelled"].includes(kind) ? 0 : job.child_alive;
+		const progressKinds = new Set(["attempt_started", "backend_ready", "phase_changed", "output_activity", "tool_started", "tool_finished", "checkpoint_saved", "verification_recorded"]);
+		const childAlive = kind === "attempt_started" ? 1 : ["attempt_exited", "failed", "completed", "cancelled", "recovered", "recovery_review_required", "delivery_unknown"].includes(kind) ? 0 : job.child_alive;
 		const deliveryState = kind === "delivery_started" ? "sending" : kind === "delivery_confirmed" ? "delivered" : kind === "delivery_unknown" ? "unknown" : job.delivery_state;
 		this.db.prepare(`
 			UPDATE jobs SET attempt_id = COALESCE(?, attempt_id), lifecycle = ?, updated_at = ?,
@@ -498,11 +710,12 @@ export class SessionStore {
 				last_progress_at = CASE WHEN ? THEN ? ELSE last_progress_at END,
 				current_activity = CASE WHEN ? THEN ? ELSE current_activity END,
 				waiting_reason = CASE WHEN ? = 'approval_required' THEN ? ELSE waiting_reason END,
-				child_alive = ?, delivery_state = ?,
+				child_alive = ?, delivery_state = ?, recovery_state = CASE WHEN ? = 'recovered' THEN 'resuming' WHEN ? IN ('recovery_review_required', 'delivery_unknown') THEN 'review_required' ELSE recovery_state END,
 				latest_safe_error = CASE WHEN ? = 'failed' THEN ? ELSE latest_safe_error END
 			WHERE job_id = ?
 		`).run(attemptId, lifecycle, occurredAt, kind, occurredAt, progressKinds.has(kind) ? 1 : 0, occurredAt,
-			progressKinds.has(kind) ? 1 : 0, summary, kind, summary, childAlive, deliveryState, kind, summary, jobId);
+			progressKinds.has(kind) ? 1 : 0, summary, kind, summary, childAlive, deliveryState, kind, kind, kind, summary, jobId);
+		if (["delivery_confirmed", "completed", "failed", "cancelled", "recovery_review_required", "delivery_unknown"].includes(kind)) this.db.prepare("DELETE FROM job_recovery WHERE job_id = ?").run(jobId);
 		return { ordinal: Number(insertResult.lastInsertRowid), eventId, dedupeKey, jobId, attemptId, sequence, kind, occurredAt, source, safeSummary: summary, metrics: safeMetrics, redactionLevel };
 	}
 
@@ -560,9 +773,11 @@ export class SessionStore {
 		const service = this.db.prepare("SELECT * FROM service_state WHERE id = 1").get();
 		const serviceHealth = projectServiceHealth(service, nowMs, staleAfterMs);
 		const jobs = this.listJobs({ nowMs, serviceHealth });
+		const gateway = this.loadGatewayState();
 		return {
 				schemaVersion: OUTPUT_SCHEMA_VERSION,
 			service: serviceHealth,
+			gateway: { resumable: Boolean(gateway.sessionId && Number.isSafeInteger(gateway.sequence)), sequence: gateway.sequence ?? null, lastHeartbeatAckAt: gateway.heartbeatAckAt ?? null },
 			jobs: {
 				active: jobs.filter((job) => !["completed", "failed", "cancelled", "recovery_review"].includes(job.lifecycle)).length,
 				suspectedStalled: jobs.filter((job) => job.activityHealth.value === "suspected_stalled").length,
@@ -574,6 +789,12 @@ export class SessionStore {
 	listJobs({ nowMs = Date.now(), serviceHealth } = {}) {
 		const health = serviceHealth ?? projectServiceHealth(this.db.prepare("SELECT * FROM service_state WHERE id = 1").get(), nowMs);
 		return this.db.prepare("SELECT * FROM jobs ORDER BY updated_at DESC").all().map((job) => this.#projectJob(job, health, nowMs, false));
+	}
+
+	listJobsForScope(scopeKey, options = {}) {
+		safeIdentifier(scopeKey, "scopeKey");
+		const health = options.serviceHealth ?? projectServiceHealth(this.db.prepare("SELECT * FROM service_state WHERE id = 1").get(), options.nowMs ?? Date.now());
+		return this.db.prepare("SELECT * FROM jobs WHERE scope_key = ? ORDER BY updated_at DESC").all(scopeKey).map((job) => this.#projectJob(job, health, options.nowMs ?? Date.now(), false));
 	}
 
 	getJob(jobId, { nowMs = Date.now(), includeEvents = true } = {}) {
@@ -599,6 +820,7 @@ export class SessionStore {
 			lifecycle: job.lifecycle,
 			activityHealth: projectActivityHealth(healthJob, serviceHealth, nowMs),
 			backendId: job.backend_id,
+			scopeKey: job.scope_key,
 			revision: job.revision,
 			backendCapabilities: parseJson(job.backend_capabilities_json, {}),
 			activityDetail: job.activity_detail,

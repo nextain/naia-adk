@@ -1,4 +1,4 @@
-export const DB_SCHEMA_VERSION = 2;
+export const DB_SCHEMA_VERSION = 6;
 export const OUTPUT_SCHEMA_VERSION = 1;
 
 export const EVENT_KINDS = new Set([
@@ -20,6 +20,7 @@ export const EVENT_KINDS = new Set([
 	"delivery_confirmed",
 	"delivery_unknown",
 	"recovered",
+	"recovery_review_required",
 	"cancel_requested",
 	"cancelled",
 	"completed",
@@ -63,10 +64,10 @@ export const MAX_SAFE_SUMMARY_LENGTH = 512;
 
 export const ALLOWED_TRANSITIONS = new Map([
 	["queued", new Set(["queued", "running", "cancelled", "failed", "recovery_review"])],
-	["running", new Set(["running", "waiting_approval", "retry_wait", "result_ready", "delivering", "failed", "cancelled", "recovery_review"])],
-	["waiting_approval", new Set(["waiting_approval", "running", "cancelled", "failed", "recovery_review"])],
+	["running", new Set(["queued", "running", "waiting_approval", "retry_wait", "result_ready", "delivering", "failed", "cancelled", "recovery_review"])],
+	["waiting_approval", new Set(["queued", "waiting_approval", "running", "cancelled", "failed", "recovery_review"])],
 	["retry_wait", new Set(["retry_wait", "queued", "running", "cancelled", "failed", "recovery_review"])],
-	["result_ready", new Set(["result_ready", "delivering", "cancelled", "failed", "recovery_review"])],
+	["result_ready", new Set(["queued", "result_ready", "delivering", "cancelled", "failed", "recovery_review"])],
 	["delivering", new Set(["delivering", "completed", "retry_wait", "recovery_review", "failed"])],
 	["recovery_review", new Set(["recovery_review", "queued", "completed", "failed", "cancelled"])],
 	["completed", new Set(["completed"])],
