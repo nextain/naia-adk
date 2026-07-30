@@ -78,7 +78,7 @@
           {
             "type": "command",
             "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PostToolUse",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') PostToolUse\""
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { exit 0 }; node $hook PostToolUse'"
           }
         ]
       }
