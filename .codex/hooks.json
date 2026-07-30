@@ -63,13 +63,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/sync-entry-points.js\"",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.claude/hooks/sync-entry-points.js')\""
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; hook=\"$root/.claude/hooks/sync-entry-points.js\"; [ ! -f \"$hook\" ] || node \"$hook\"",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $hook=Join-Path $root.Trim() \".claude/hooks/sync-entry-points.js\"; if (-not (Test-Path -LiteralPath $hook)) { exit 0 }; node $hook'"
           },
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/context-translation-batch.cjs\"",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.claude/hooks/context-translation-batch.cjs')\""
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; hook=\"$root/.claude/hooks/context-translation-batch.cjs\"; [ ! -f \"$hook\" ] || node \"$hook\"",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $hook=Join-Path $root.Trim() \".claude/hooks/context-translation-batch.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { exit 0 }; node $hook'"
           }
         ]
       },
