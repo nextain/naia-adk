@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants as fsConstants, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { resolve } from "node:path";
+import { delimiter, isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { renderDiscordUserUnit } from "./systemd.mjs";
 import { loadMessengerConfig } from "./discord-config.mjs";
@@ -12,9 +12,24 @@ function runSystemctl(args) {
 	return result.stdout.trim();
 }
 
+export function resolveBackendExecutable(name, pathValue = process.env.PATH ?? "") {
+	if (!new Set(["codex", "claude"]).has(name)) throw new Error("unsupported backend executable");
+	for (const directory of pathValue.split(delimiter).filter(Boolean)) {
+		const candidate = resolve(directory, name);
+		try {
+			accessSync(candidate, fsConstants.X_OK);
+			const executable = realpathSync(candidate);
+			if (!isAbsolute(executable) || !statSync(executable).isFile()) continue;
+			return executable;
+		} catch {}
+	}
+	throw new Error(`${name} executable was not found in the installer PATH`);
+}
+
 export function manageService({ adkRoot, command }) {
-	const rendered = renderDiscordUserUnit({ adkRoot });
 	const config = command === "unit" ? null : loadMessengerConfig(resolve(adkRoot, "naia-settings/messenger-sessions/config.json"));
+	const backendExecutables = command === "install" ? { [config.backend.selected]: resolveBackendExecutable(config.backend.selected) } : {};
+	const rendered = renderDiscordUserUnit({ adkRoot, backendExecutables });
 	const unitDirectory = resolve(homedir(), ".config/systemd/user");
 	const unitPath = resolve(unitDirectory, rendered.unitName);
 	if (command === "install") {
