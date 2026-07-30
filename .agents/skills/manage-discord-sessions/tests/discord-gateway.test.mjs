@@ -10,6 +10,7 @@ import { DiscordGatewaySession, MemoryGatewayState, StoredGatewayState } from ".
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
 import { renderDiscordUserUnit } from "../helper/systemd.mjs";
+import { resolveBackendExecutable } from "../helper/service-manager.mjs";
 import { RecoveryCodec } from "../helper/recovery-crypto.mjs";
 import { randomBytes } from "node:crypto";
 import { DiscordStatusProjection } from "../helper/discord-projection.mjs";
@@ -198,6 +199,19 @@ test("DSG-008 renders a stable isolated user service with restart and single-own
 	assert.equal(first.content, second.content);
 	for (const required of ["flock", "--nonblock", "Restart=on-failure", "KillMode=mixed", "UMask=0077", "WantedBy=default.target"]) assert.equal(first.content.includes(required), true);
 	assert.equal(/token|prompt|result/i.test(first.content), false);
+});
+
+test("DSG-008 pins the selected backend executable independently of the systemd PATH", () => {
+	const root = mkdtempSync(join(tmpdir(), "naia-discord-systemd-backend-"));
+	roots.push(root);
+	const bin = join(root, "bin");
+	mkdirSync(bin, { mode: 0o700 });
+	const codex = join(bin, "codex");
+	writeFileSync(codex, "#!/bin/sh\n", { mode: 0o700 });
+	const resolved = resolveBackendExecutable("codex", bin);
+	const unit = renderDiscordUserUnit({ adkRoot: root, nodePath: "/usr/bin/node", backendExecutables: { codex: resolved } });
+	assert.match(unit.content, new RegExp(`Environment=\\"NAIA_CODEX_EXECUTABLE=${resolved.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\"`));
+	assert.throws(() => resolveBackendExecutable("claude", bin), /not found/);
 });
 
 test("DSG-009 participant status projection is limited to the current Discord scope", async () => {

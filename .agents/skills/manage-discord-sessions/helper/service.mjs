@@ -28,7 +28,11 @@ export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, 
 	let gateway = null;
 	let wakeReconnect = null;
 	const delivery = fetchImpl ? (input) => import("./discord-delivery.mjs").then(({ deliverJobResult }) => deliverJobResult({ ...input, fetchImpl })) : undefined;
-	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: resolve(root, "naia-settings/.sessions/messenger-sessions/runtime"), recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery });
+	const backendExecutables = {
+		...(process.env.NAIA_CODEX_EXECUTABLE ? { codex: process.env.NAIA_CODEX_EXECUTABLE } : {}),
+		...(process.env.NAIA_CLAUDE_EXECUTABLE ? { claude: process.env.NAIA_CLAUDE_EXECUTABLE } : {}),
+	};
+	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: resolve(root, "naia-settings/.sessions/messenger-sessions/runtime"), recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, backendExecutables });
 	let reconnectDelay = 1_000;
 	const heartbeat = () => store.heartbeatService({ generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
 	heartbeat();

@@ -88,6 +88,8 @@ Use `watch --job <id>` for a live local event stream, or the scoped `!naia` comm
 
 With `service.startAt=login`, recovery begins after login. With `startAt=boot`, installation enables user lingering so recovery begins at boot. Gateway and the supervisor reconnect automatically. A prompt is retained only as authenticated ciphertext protected by an owner-only local recovery key. When `recovery.autoRetry=true`, only a read-only/plan-mode job may start a new attempt under the same job ID; mutation-capable, disabled, missing, or corrupt recovery state becomes `recovery_review`. An uncertain Discord delivery also becomes `recovery_review` and is never automatically resent.
 
+`service install` resolves the selected Codex or Claude executable from the interactive installer `PATH` and pins its absolute path in the user unit. This keeps Linuxbrew and user-local installations working after reboot even when the systemd manager has a narrower `PATH`. After changing `backend.selected`, run `service install` again rather than only restarting so the new executable is pinned.
+
 ## Durable-session policy
 
 1. Keep the lightweight Discord Gateway independent from model execution.

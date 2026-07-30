@@ -78,4 +78,6 @@ naia-settings/.sessions/messenger-sessions/runtime.sqlite3
 
 `service.startAt=login`이면 로그인 뒤, `boot`이면 설치기가 사용자 linger를 활성화해 부팅 때 복구를 시작합니다. 프롬프트는 소유자 전용 로컬 복구 키로 인증 암호화한 암호문만 저장합니다. `recovery.autoRetry=true`일 때도 읽기 전용·계획 모드 작업만 같은 작업 ID의 새 실행으로 이어집니다. 쓰기 가능 작업, 자동 재시도 비활성화, 키·암호문 손상은 `recovery_review`가 됩니다. Discord 전송 여부가 불확실한 답변은 자동 재전송하지 않습니다.
 
+`service install`은 설치 터미널의 `PATH`에서 선택한 Codex 또는 Claude 실행파일을 찾아 절대 경로로 사용자 unit에 고정합니다. 그래서 systemd의 `PATH`가 더 좁아도 Linuxbrew나 사용자 전용 설치가 재부팅 뒤 동작합니다. `backend.selected`를 바꾼 뒤에는 단순 재시작이 아니라 `service install`을 다시 실행해야 새 실행 경로가 고정됩니다.
+
 검증 명령은 `pnpm test:discord-sessions`입니다. 상세 설계는 `docs/design/discord-session-observability.md`, 요구사항은 `DSO-001`~`DSO-006`이 정본입니다.

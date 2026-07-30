@@ -63,6 +63,8 @@ pnpm test:discord-sessions
 .agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh service status
 ```
 
+설치기는 현재 터미널에서 선택한 Codex 또는 Claude 실행파일의 절대 경로를 확인해 systemd unit에 고정합니다. 따라서 Linuxbrew나 사용자 전용 설치 경로가 systemd의 기본 `PATH`에 없어도 재부팅 뒤 같은 실행파일을 사용합니다. 작업자를 바꾸면 `service restart`가 아니라 `service install`을 다시 실행해 새 경로를 고정합니다.
+
 설치 명령은 워크스페이스 실제 경로의 해시로 systemd 사용자 서비스 이름을 만듭니다. 그래서 여러 ADK 워크스페이스가 서로 다른 서비스로 공존하고, 같은 워크스페이스에서는 파일 잠금으로 중복 실행을 막습니다.
 
 ## 3. Discord에서 범위 확인하기
