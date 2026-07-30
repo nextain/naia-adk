@@ -3789,11 +3789,11 @@ function clientRegistrySupports(cwd, client) {
 		const { entry, hook } = matches[0];
 		if (hook.type !== "command") return false;
 		if (client === "claude") {
-			const expectedArgs = [`${"${CLAUDE_PROJECT_DIR}"}/${adapterPath}`, eventName];
-			if (hook.command !== "node" || hook.commandWindows != null || JSON.stringify(hook.args) !== JSON.stringify(expectedArgs)) return false;
+			const expected = `node \"$CLAUDE_PROJECT_DIR/${adapterPath}\" ${eventName}`;
+			if (hook.command !== expected || hook.commandWindows != null || hook.args != null) return false;
 		} else {
-			const expected = `node \"$(git rev-parse --show-toplevel)/${adapterPath}\" ${eventName}`;
-			const expectedWindows = `powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '${adapterPath}') ${eventName}\"`;
+			const expected = `root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/${adapterPath}\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" ${eventName}`;
+			const expectedWindows = `powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}'`;
 			if (hook.command !== expected || hook.commandWindows !== expectedWindows) return false;
 		}
 		if (eventName === "PreToolUse") return entry.matcher === preToolMatcher;

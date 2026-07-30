@@ -87,11 +87,11 @@ function fixture() {
 		const adapterPath = `${directory}/hooks/${adapterFile}`;
 		const hooks = Object.fromEntries(["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"].map((eventName) => {
 			const hook = directory === ".claude"
-				? { type: "command", command: "node", args: [`${"${CLAUDE_PROJECT_DIR}"}/${adapterPath}`, eventName] }
+				? { type: "command", command: `node \"$CLAUDE_PROJECT_DIR/${adapterPath}\" ${eventName}` }
 				: {
 					type: "command",
-					command: `node \"$(git rev-parse --show-toplevel)/${adapterPath}\" ${eventName}`,
-					commandWindows: `powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '${adapterPath}') ${eventName}\"`,
+					command: `root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/${adapterPath}\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" ${eventName}`,
+					commandWindows: `powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}'`,
 				};
 			return [eventName, [{ ...(eventName === "PreToolUse" ? { matcher: "Bash|shell_command|Edit|Write|NotebookEdit|apply_patch" } : {}), hooks: [hook] }]];
 		}));
@@ -2371,7 +2371,7 @@ test("both client registries cover all governed lifecycle events", () => {
 			assert.equal(hooks.length, 1);
 			const registeredEvent = Array.isArray(hooks[0].args) ? hooks[0].args.at(-1) : hooks[0].command.split(/\s+/).at(-1);
 			assert.equal(registeredEvent, event);
-			if (Array.isArray(hooks[0].args)) assert(hooks[0].args[0].includes("$" + "{CLAUDE_PROJECT_DIR}"));
+			if (client === "claude") assert(hooks[0].command.includes("$CLAUDE_PROJECT_DIR/"));
 			else assert(hooks[0].command.includes("git rev-parse --show-toplevel"));
 		}
 	}
@@ -2753,10 +2753,10 @@ test("registered hook commands resolve their adapters from a nested directory", 
 			if (script.startsWith('"') && script.endsWith('"')) script = script.slice(1, -1);
 			args = ["-NoProfile", "-Command", script];
 		} else {
-			executable = "bash";
+			executable = process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "bash";
 			args = ["-c", hook.command];
 		}
-		const output = cp.execFileSync(executable, args, { cwd: nested, input, encoding: "utf8", env: { ...process.env, REQUEST_CONTRACT: "off" } });
+		const output = cp.execFileSync(executable, args, { cwd: nested, input, encoding: "utf8", env: { ...process.env, REQUEST_CONTRACT: "off", CLAUDE_PROJECT_DIR: root } });
 		assert.equal(output, "");
 	}
 });
@@ -3062,7 +3062,7 @@ test("both client registries reject every missing event plus wrong adapters, arg
 			{ name: `${event}:missing`, mutate: (registry) => { delete registry.hooks[event]; } },
 			{ name: `${event}:wrong-adapter`, mutate: (registry) => { const { hook } = locate(registry, event); replaceEverywhere(hook, adapterName, `wrong-${adapterName}`); } },
 			{ name: `${event}:wrong-event-argument`, mutate: (registry) => { const { hook } = locate(registry, event); const replacement = event === "Stop" ? "PostCompact" : "Stop"; replaceEverywhere(hook, new RegExp(`${event}$`), replacement); } },
-			{ name: `${event}:wrong-root`, mutate: (registry) => { const { hook } = locate(registry, event); if (client === "claude") hook.args[0] = adapterPath; else { hook.command = `node ${adapterPath} ${event}`; hook.commandWindows = `node ${adapterPath} ${event}`; } } },
+			{ name: `${event}:wrong-root`, mutate: (registry) => { const { hook } = locate(registry, event); if (client === "claude") hook.command = `node ${adapterPath} ${event}`; else { hook.command = `node ${adapterPath} ${event}`; hook.commandWindows = `node ${adapterPath} ${event}`; } } },
 			{ name: `${event}:wrong-matcher`, mutate: (registry) => { const { entry } = locate(registry, event); entry.matcher = event === "PreToolUse" ? "Bash" : "Bash|Edit"; } },
 			{ name: `${event}:duplicate`, mutate: (registry) => { const { entry, hook } = locate(registry, event); entry.hooks.push({ ...hook }); } },
 			{ name: `${event}:conflicting-registration`, mutate: (registry) => { const { hook } = locate(registry, event); registry.hooks[`Conflict${event}`] = [{ hooks: [{ ...hook }] }]; } },

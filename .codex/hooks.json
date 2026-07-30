@@ -6,8 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/session-contract-gate.cjs\"",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/session-contract-gate.cjs')\"",
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/session-contract-gate.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\"",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/session-contract-gate.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook'",
             "statusMessage": "Checking ADK session contract"
           }
         ]
@@ -17,8 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PreToolUse",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') PreToolUse\""
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/request-contract.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" PreToolUse",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook PreToolUse'"
           }
         ]
       }
@@ -28,14 +28,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/session-inject.cjs\"",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/session-inject.cjs')\"",
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/session-inject.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\"",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/session-inject.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook'",
             "statusMessage": "Loading ADK workflow state"
           },
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" SessionStart",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') SessionStart\""
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/request-contract.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" SessionStart",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook SessionStart'"
           }
         ]
       }
@@ -45,14 +45,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/session-inject.cjs\"",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/session-inject.cjs')\"",
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/session-inject.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\"",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/session-inject.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook'",
             "statusMessage": "Refreshing ADK workflow state"
           },
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" UserPromptSubmit",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') UserPromptSubmit\""
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/request-contract.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" UserPromptSubmit",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook UserPromptSubmit'"
           }
         ]
       }
@@ -77,8 +77,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PostToolUse",
-            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { exit 0 }; node $hook PostToolUse'"
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/request-contract.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" PostToolUse",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook PostToolUse'"
           }
         ]
       }
@@ -88,8 +88,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PreCompact",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') PreCompact\""
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/request-contract.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" PreCompact",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook PreCompact'"
           }
         ]
       }
@@ -99,14 +99,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/session-inject.cjs\"",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/session-inject.cjs')\"",
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; hook=\"$root/.codex/hooks/session-inject.cjs\"; [ ! -f \"$hook\" ] || node \"$hook\"",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/session-inject.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { exit 0 }; node $hook'",
             "statusMessage": "Restoring ADK workflow state"
           },
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PostCompact",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') PostCompact\""
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/request-contract.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" PostCompact",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook PostCompact'"
           }
         ]
       }
@@ -116,13 +116,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" Stop",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') Stop\""
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/request-contract.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" Stop",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook Stop'"
           },
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/context-translation-batch.cjs\" --flush",
-            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.claude/hooks/context-translation-batch.cjs') --flush\""
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; hook=\"$root/.claude/hooks/context-translation-batch.cjs\"; [ ! -f \"$hook\" ] || node \"$hook\" --flush",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $hook=Join-Path $root.Trim() \".claude/hooks/context-translation-batch.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { exit 0 }; node $hook --flush'"
           }
         ]
       }
