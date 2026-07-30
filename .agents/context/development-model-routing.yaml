@@ -18,6 +18,10 @@ portable_contract:
     - deterministic validation precedes any model call
     - select the lowest-cost adapter that satisfies the role capability and risk
     - escalate only for declared risk triggers or unresolved evidence
+  delegation_authority:
+    inherit_authorized_scope: true
+    rule: Every delegated or nested role inherits the orchestrator's authorized objective, scope, routine execution authority, and exception boundary; it must not request approval again for routine in-scope work.
+    exceptions: irreversible or destructive action including remote-ref deletion, force push, unrelated-histories integration, external messaging or payment, production-impacting mutation, material cost, credential exposure, or material scope expansion
   independence:
     self_check_is_review: false
     prefer_distinct_model_or_provider: true

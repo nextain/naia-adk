@@ -274,7 +274,7 @@
 ### permission_model
 
 - **code_files**: AI = implementer. Can read, modify, create, delete freely.
-- **design_docs**: AI = reviewer. CANNOT modify unless: (A) typo/grammar, (B) internal contradiction within the doc, (C) broken link/reference. ANY other change requires surfacing to user first.
+- **design_docs**: AI = reviewer by default. It may modify a design document without asking again when the user's current bounded request explicitly asks to create, update, or record that document and does not leave a material design choice unresolved. Otherwise only typo/grammar, internal contradiction, or broken link/reference corrections are autonomous.
 
 #### design_doc_paths
 
@@ -289,7 +289,30 @@
 - .yaml
 - .json
 - **note**: Any file matching these path prefixes + extensions is treated as a design doc. Hook enforces this at Edit|Write time.
+- **bounded_recording_exception**: An explicit request to write or update the design record is already authority for that bounded recording work; the agent may activate the temporary design-doc edit marker, perform the requested edit, and close the marker without another approval prompt.
+- **material_decision_boundary**: Ask when the edit would choose or change a product, architecture, interface, policy, destructive disposition, or scope decision not determined by the request. Never silently rewrite design to match implementation.
 - **key_distinction**: Code review clean pass = no code issues. Design doc review clean pass = no NEW findings (typos/contradictions/broken links). Never: 'design should match implementation'.
+
+### routine_execution_authority
+
+- **principle**: Once the user authorizes an objective and scope, carry out normal in-scope execution without recurring approval prompts.
+
+#### routine_steps
+
+- Read-only inspection, local investigation, and evidence collection
+- In-scope implementation, dependency installation, formatting, tests, builds, and local servers
+- Non-destructive Git fetch, pull, merge, worktree creation, stage, commit, and non-force non-deleting push
+- Delegation to subagents for bounded roles already inside the authorized objective
+- **delegation_inheritance**: Every subagent, delegated agent, and nested delegate inherits the same authorized objective, scope, routine-step authority, and exception boundary. A delegate must not ask again for a routine step merely because execution moved to another agent or session.
+
+#### ask_only_for
+
+- Irreversible deletion or destructive history rewriting, including remote-ref deletion and force push
+- Unrelated-histories or otherwise exceptional forced integration
+- External messages, publication outside the authorized repository workflow, payments, or purchases
+- Production deployment, destructive production or shared-database mutation, credentials disclosure, or material cloud cost
+- A missing user choice that would materially expand or change the authorized objective or scope
+- **clarification_rule**: Do not turn workflow checkpoints, tool permissions, session boundaries, or delegation boundaries into repeated conversational approval gates. Keep product and scope decision gates when the answer can materially change the result; otherwise proceed and report evidence.
 
 ### escalation_path
 
@@ -311,12 +334,12 @@
 
 - Read agents-rules.json first
 - When working in submodule, read its entry point file
-- For feature-level work: follow issue-driven-development.yaml gates (understand → scope → plan confirmation required before proceeding)
+- For feature-level work: follow issue-driven-development.yaml material-decision checkpoints (understand → scope → plan); an explicit bounded request proceeds without repeated confirmation, while an unresolved choice that materially changes the result must be asked
 - Apply minimal-change principles
 - For any .hwp/.hwpx/.pdf/.docx/.xlsx/.pptx file: use /read-doc skill FIRST — never claim inability to read documents
 - Design docs (docs/design/, spec/, design/) + extensions (.md/.txt/.yaml/.json): see permission_model above. Hook fires on edits — surface reason to user first.
 - Before running destructive git commands (git checkout --, git reset --hard, git clean -f): ALWAYS ask user for explicit confirmation first. State exactly what will be deleted. No exceptions.
-- Before deleting ANY code/branch/file (even temp/work files): treat it as risky, NOT harmless — understand why it is dead, back it up, get user confirmation. No AI-only deletion. (see dead_code_safety)
+- Before a material, irreversible, ambiguous, or out-of-scope deletion: understand the exact target and impact, preserve a recovery path where practical, and get user confirmation. Agent-owned temporary/work artifact cleanup and a user-requested bounded recoverable deletion may proceed without repeated approval after exact-target verification. (see dead_code_safety)
 
 ### completeness_principle
 
@@ -336,8 +359,9 @@
 #### rules
 
 - Do not casually delete OR ignore dead/unused code, branches, or files.
-- Before deletion: (1) understand WHY it is dead (intentional retention? migration leftover? not-yet-wired?) (2) back it up (3) get explicit user confirmation.
-- No AI-only deletion — even for temp/work files, follow an explicit lifecycle rule or ask the user first.
+- Before material, irreversible, ambiguous, or out-of-scope deletion: (1) understand WHY it is dead (2) resolve the exact target and impact (3) preserve a recovery path where practical (4) get explicit user confirmation.
+- Agent-owned temporary/work artifacts with an explicit lifecycle may be cleaned up after exact-target verification without another prompt.
+- A user-requested bounded recoverable deletion is already authorized; verify the exact target stays inside scope, then execute without repeated approval.
 - **rationale**: Known AI cognitive bias: underweighting the risk of dead code. Same root cause as the 'recurring-symptom misclassification' failure pattern (treating a re-appearing issue as a new, separate one).
 
 ### ask_user_question_format
@@ -413,6 +437,13 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 - **.agents/progress/archive/YYYY-MM/**: Completed reports moved here (preserved + searchable). readdirSync skips subdirs = automatically excluded from session-inject/commit-guard active set.
 - **.agents/work/**: Temporary work scripts. gitignored at root (.gitignore: .agents/work/). User-managed cleanup (no AI auto-delete).
 - **tmp/, tmp-*, tmp_***: Debug/scratch (see tmp_files above). gitignored.
+
+#### handoff_documents
+
+- **policy**: Local-only session or PC transfer artifacts. Never stage or commit them because stale handoff state can misdirect another machine or session.
+- **location**: Use .agents/work/, .agents/progress/, .agents/reviews/, tmp/, or a dedicated ignored .handoff/ or .handover/ directory. Topic-prefixed local notes such as project-handoff belong only in one of these ignored locations.
+- **naming**: A global local-only artifact basename starts with handoff or handover. Topic-prefixed formal documents remain trackable outside ignored local-artifact directories.
+- **boundary**: Durable handoff or handover guides and contracts under official docs/, spec/, design/, .agents/context/, or .agents/decisions/ directories remain trackable even when their basename starts with handoff or handover. Other durable project knowledge belongs in tracked context, requirements, decisions, or formal docs; do not disguise permanent documentation as a local handoff artifact.
 - **completion_criteria**: A work file is 'complete' when 2+ of: (a) related code committed/pushed to origin, (b) user explicitly declares done/closed, (c) cross-review GO + user acceptance, (d) superseded by next-step plan/issue. AI self-declaring 'complete' is prohibited.
 
 #### triggers
@@ -432,10 +463,11 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 
 - **maintainer_rule**: Luke is a maintainer of all Nextain repos. NEVER create PRs for Nextain repos — commit and push directly to main (or the relevant branch). PRs are for external contributors only.
 - **pr_prohibition**: DO NOT run `gh pr create` for nextain/* repos. The pr-guard hook will block this automatically.
+- **owned_repo_posting_authority**: When the user explicitly requests an issue, comment, release note, or other repository post in a Nextain or user-owned/managed repository, that request is posting authority and does not require a second approval. Unsolicited posts and third-party/community posts remain external actions requiring reviewed-content approval.
 
 ### external_repo_policy
 
-- **principle**: Information gathering first — before any action on external repos
+- **principle**: Information gathering first before action on third-party or community repositories; this policy does not add a second approval to an explicitly requested post in a Nextain or user-owned/managed repository
 
 #### steps
 
@@ -446,7 +478,7 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 - 5. Draft issue/PR content and show to user for review
 - 6. Get explicit user approval before posting anything
 - **community_context_first**: Before engaging in any external community (repo, Discord, Slack, forum, etc.), gather context first: (1) communication tone — formal/casual, terse/verbose, (2) explicit rules — CoC, PR/issue templates, labeling conventions, (3) community tendencies — what they value, what they reject, how they respond to outsiders, who the influential members are, what past interactions look like
-- **rule**: Never post issues, PRs, or comments to external repos without explicit user approval of the reviewed content
+- **rule**: Never post unsolicited content or issues, PRs, or comments to third-party/community repositories without explicit user approval of the reviewed content. An explicitly requested post to a Nextain or user-owned/managed repository is already authorized.
 - **tone_matching**: Technical issues and PRs are read by people. Write in a tone that fits the community's atmosphere — not just technically correct, but culturally appropriate. A dry RFC-style community expects concise technical prose; a friendly community expects warmth. Match the room.
 - **ai_disclosure**: When posting AI-assisted content to external repos, always include a disclosure footer: state it was written with AI assistance AND provide a contact point for the developer in case of issues (e.g. '🤖 Written with AI assistance. If anything looks off, please ping @luke-n-alpha or open a discussion.'). Transparency and accountability both required. [HOOK-ENFORCED 2026-05-16: .claude/hooks/pr-guard.js — 외부 repo content op(gh issue/pr create·comment, pr review, release create) 시 disclosure footer(🤖/AI assistance) 미포함이면 차단(OSS-access 마커 소비 전). 내부 nextain/* 면제. merge/reopen/edit 등 비-content op 면제.]
 

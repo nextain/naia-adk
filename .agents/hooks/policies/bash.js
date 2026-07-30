@@ -9,9 +9,9 @@
  *
  * Path notes: deploy DEPLOY_DIR is __dirname-dependent → its adapter must
  * pass it via opts (handled in the deploy policy when extracted). git-push
- * MARKER_PATH = path.join(".claude",…) is cwd-relative (resolved vs
- * process.cwd() at call time) → move-safe, stays here verbatim. pr/commit
- * use data.cwd + execSync (host-neutral node) → move-safe.
+ * is stateless: routine non-force, non-deleting pushes pass; force variants
+ * and remote-ref deletion block.
+ * pr/commit use data.cwd + execSync (host-neutral node) → move-safe.
  */
 const path = require("path");
 const fs = require("fs");
@@ -20,13 +20,14 @@ const core = require(path.join(__dirname, "..", "core", "harness-core.js"));
 /** destructive-git-guard */
 function destructiveGit(command) {
 	const stripped = core.stripQuotesBlank(command);
-	const destructivePatterns = [
-		{ pattern: /git\s+checkout\s+--\s/, label: "git checkout -- <file>" },
-		{ pattern: /git\s+reset\s+--hard\b/, label: "git reset --hard" },
-		{ pattern: /git\s+clean\s+.*-[fdxX]*f[fdxX]*\b/, label: "git clean -f" },
+	if (/^\s*(echo|printf)\s/.test(stripped) && !stripped.includes("|")) return null;
+	const destructiveCommands = [
+		{ args: gitCommandArgs(command, "checkout"), check: (args) => args.includes("--"), label: "git checkout -- <file>" },
+		{ args: gitCommandArgs(command, "reset"), check: (args) => args.includes("--hard"), label: "git reset --hard" },
+		{ args: gitCommandArgs(command, "clean"), check: (args) => args.some((arg) => /^-[A-Za-z]*f[A-Za-z]*$/.test(arg)), label: "git clean -f" },
 	];
-	for (const { pattern, label } of destructivePatterns) {
-		if (pattern.test(stripped)) {
+	for (const { args, check, label } of destructiveCommands) {
+		if (args && check(args)) {
 			return {
 				reason:
 					`[Harness] 파괴적 git 명령 차단: \`${label}\`\n` +
@@ -102,60 +103,55 @@ function commit(command, data) {
 	return null;
 }
 
-const MARKER_PATH = path.join(".claude", "git-push-approved.marker");
-function checkAndConsumeApproval() {
-	try {
-		if (!fs.existsSync(MARKER_PATH)) return false;
-		const raw = fs.readFileSync(MARKER_PATH, "utf8");
-		const marker = JSON.parse(raw);
-		const now = Date.now();
-		if (!marker.expiresAt || marker.expiresAt < now) {
-			try { fs.unlinkSync(MARKER_PATH); } catch {}
-			return false;
+function gitCommandArgs(command, subcommand) {
+	const normalized = core.stripQuotesUnwrap(command);
+	const optionWithValue = new Set(["-c", "-C", "--config-env", "--git-dir", "--work-tree", "--namespace"]);
+	const optionWithoutValue = new Set([
+		"-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects",
+		"--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
+	]);
+	for (const segment of normalized.split(/[;&|\r\n]+/)) {
+		const tokens = segment.trim().split(/\s+/).filter(Boolean);
+		for (let i = 0; i < tokens.length; i++) {
+			if (!/(?:^|[\\/])git(?:\.exe)?$/i.test(tokens[i])) continue;
+			let j = i + 1;
+			while (j < tokens.length) {
+				const token = tokens[j];
+				if (optionWithValue.has(token)) { j += 2; continue; }
+				if (optionWithoutValue.has(token) || /^--(?:config-env|git-dir|work-tree|namespace)=\S+$/.test(token)) { j += 1; continue; }
+				break;
+			}
+			if (tokens[j] === subcommand) return tokens.slice(j + 1);
 		}
-		const uses = typeof marker.uses === "number" ? marker.uses : 1;
-		if (uses <= 0) {
-			try { fs.unlinkSync(MARKER_PATH); } catch {}
-			return false;
-		}
-		const remaining = uses - 1;
-		if (remaining <= 0) {
-			try { fs.unlinkSync(MARKER_PATH); } catch {}
-		} else {
-			marker.uses = remaining;
-			fs.writeFileSync(MARKER_PATH, JSON.stringify(marker));
-		}
-		return true;
-	} catch {
-		return false;
 	}
+	return null;
 }
 
-/** git-push-guard — block git push (force = extra), marker bypass */
+/** git-push-guard — allow routine push; block remote deletion/history rewriting */
 function gitPush(command) {
 	const stripped = core.stripQuotesBlank(command);
 	if (/^\s*(echo|printf)\s/.test(stripped) && !stripped.includes("|")) return null;
-	if (!stripped.match(/(?:^|[;&|()$`])\s*git\s+push\b/m)) return null;
-	const isForce = /git\s+push\s+.*(?:--force|-f)\b/.test(command);
-	const pushArgs = command.match(/git\s+push\s+(.*)/);
+	const args = gitCommandArgs(command, "push");
+	if (!args) return null;
+	const pushClause = ` ${args.join(" ")}`;
+	const isRemoteRefDelete = /(?:^|\s)--delete(?:=|\s|$)/.test(pushClause)
+		|| /(?:^|\s)-d(?:\s|$)/.test(pushClause)
+		|| /(?:^|\s)--(?:mirror|prune)(?:\s|$)/.test(pushClause)
+		|| /(?:^|\s)["']?:(?:refs\/(?:heads|tags)\/)?[^\s"';&|]+/.test(pushClause);
+	const isForce = /(?:^|\s)--force(?:-with-lease|-if-includes)?(?:=\S+)?(?:\s|$)/.test(pushClause)
+		|| /(?:^|\s)-(?!-)[A-Za-z]*f[A-Za-z]*(?:\s|$)/.test(pushClause)
+		|| /(?:^|\s)\+\S+/.test(pushClause);
+	if (!isRemoteRefDelete && !isForce) return null;
 	let remote = "", branch = "";
-	if (pushArgs) {
-		const args = pushArgs[1].replace(/--[a-z-]+(=\S+)?/g, "").replace(/-[a-zA-Z]\s*/g, "").trim().split(/\s+/).filter(Boolean);
-		if (args.length >= 1) remote = args[0];
-		if (args.length >= 2) branch = args[1];
-	}
+	const positional = args.filter((arg) => !/^--?[A-Za-z]/.test(arg));
+	if (positional.length >= 1) remote = positional[0];
+	if (positional.length >= 2) branch = positional[1];
 	const remoteLabel = remote || "(default)";
 	const branchLabel = branch || "(current branch)";
-	if (checkAndConsumeApproval()) {
-		if (isForce) {
-			return { reason: `[Harness] ⚠️ FORCE PUSH는 일괄 승인 불가\n리모트: ${remoteLabel}, 브랜치: ${branchLabel}\n\nForce push는 매번 명시적 승인이 필요합니다.` };
-		}
-		return null;
+	if (isRemoteRefDelete) {
+		return { reason: `[Harness] ⚠️ REMOTE REF DELETE 차단\n리모트: ${remoteLabel}, 대상: ${branchLabel}\n\n원격 브랜치나 태그 삭제는 되돌리기 어려운 변경입니다.\n사용자에게 명시적으로 확인받으세요.` };
 	}
-	if (isForce) {
-		return { reason: `[Harness] ⚠️ FORCE PUSH 차단\n리모트: ${remoteLabel}, 브랜치: ${branchLabel}\n\nForce push는 원격 히스토리를 덮어씁니다. 되돌릴 수 없습니다.\n사용자에게 확인받으세요.` };
-	}
-	return { reason: `[Harness] git push 차단: 사용자 확인 필요\n리모트: ${remoteLabel}, 브랜치: ${branchLabel}\n명령: \`${command.trim().substring(0, 120)}\`\n\n원격 저장소에 push 전 사용자 확인이 필요합니다.\n\n사용자가 승인한 경우 다음 마커 파일 생성 후 재시도:\n  .claude/git-push-approved.marker\n  내용: { "expiresAt": <ms>, "uses": <n> }` };
+	return { reason: `[Harness] ⚠️ FORCE PUSH 차단\n리모트: ${remoteLabel}, 브랜치: ${branchLabel}\n\nForce push는 원격 히스토리를 덮어씁니다. 되돌리기 어려울 수 있습니다.\n사용자에게 명시적으로 확인받으세요.` };
 }
 
 /** email-send-guard */

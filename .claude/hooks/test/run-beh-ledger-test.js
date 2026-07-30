@@ -176,6 +176,9 @@ const base = (over) => ({
 		}),
 	);
 	assert(invs(r).has("phase_ceiling"), "#1.5 plan turns≥ceiling → phase_ceiling inject");
+	const ceilingMessage = r.injects.find((x) => x.invariant === "phase_ceiling")?.message || "";
+	assert(/내부 재검/.test(ceilingMessage) && /재승인 없이 계속/.test(ceilingMessage), "#1.5 bounded scope → internal recheck and continue");
+	assert(!/사용자 재승인/.test(ceilingMessage), "#1.5 phase time alone must not request user re-approval");
 }
 
 // 6. starvation of a ready (schedulable) item.
@@ -263,7 +266,7 @@ const base = (over) => ({
 	assert(!invs(r).has("starvation"), "#FP.10 dep_blocked idle → no starvation (exempt)");
 }
 
-// 11. phase ceiling extended by user re-approval → no inject.
+// 11. phase ceiling extended after bounded-scope internal recheck → no inject.
 {
 	const r = beh.evaluateDrift(
 		base({

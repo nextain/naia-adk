@@ -384,7 +384,7 @@ async function main() {
 			pgid = child.pid;
 			child.on("exit", () => {});
 			child.on("error", (error) => log(`child spawn error: ${error.code || error.message}`));
-			log(`degraded(detached PGID=${pgid}) 시작${o.approveDegraded ? " (승인됨)" : " — 짧은 wall 강제"}`);
+			log(`degraded(detached PGID=${pgid}) 시작${o.approveDegraded ? " (감시 확장 opt-in)" : " — 짧은 wall 강제"}`);
 		}
 	}
 
