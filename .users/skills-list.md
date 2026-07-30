@@ -9,7 +9,7 @@
 | copyright-reg | `.agents/skills/copyright-reg/SKILL.md` | 어문저작권 등록 서류 생성. 업무상저작물 확인서 PDF(넥스테인 브랜딩) + 저작권등록신청명세서 내용란 초안을 생성합니다. "저작권 등록", "업무상저작물 확인서", "copyright" 등 요청 시 사용. |
 | doc-coauthoring | `.agents/skills/doc-coauthoring/SKILL.md` | 기술 스펙, 제안서, 결정 문서, PRD 등 구조화된 문서를 3단계로 공동 작성합니다. "문서 작성", "스펙 작성", "제안서", "RFC", "설계 문서", "PRD" 등 비코드 문서 작성 요청 시 반드시 사용. /doc-coauthoring으로 호출. |
 | finetune-persona | `.agents/skills/finetune-persona/SKILL.md` | > |
-| manage-discord-sessions | `.agents/skills/manage-discord-sessions/SKILL.md` | Discord Gateway는 모델 호출 없이 대기하고, 오래 유휴 상태인 임시 대화 기록을 설정된 시간에 회전시킨다. |
+| manage-discord-sessions | `.agents/skills/manage-discord-sessions/SKILL.md` | Configure, observe, and recover Discord AI jobs from the ADK workspace with either Codex or Claude. Use for Discord setup, background-job status, live activity, |
 | manage-skills | `.agents/skills/manage-skills/SKILL.md` | 세션 변경사항을 분석해 verify-* 스킬 드리프트를 탐지하고 자동 생성/업데이트합니다. issue-driven-development Sync 단계, 새 패턴/규칙 도입 후, PR 전 검증 스킬 커버리지 확인 시 반드시 사용. /manage-skills로 호출. |
 | merge-worktree | `.agents/skills/merge-worktree/SKILL.md` | Squash-merge the current worktree branch into the main branch (or a specified target). Analyzes git history and source code to craft a comprehensive commit mess |
 | migrate-ctx | `.agents/skills/migrate-ctx/SKILL.md` | > |
@@ -22,8 +22,12 @@
 | read-doc | `.agents/skills/read-doc/SKILL.md` | 문서 파일(HWP/HWPX/PDF/DOCX/XLSX/PPTX)의 텍스트를 추출해 컨텍스트에 로드합니다. docs-business/ 폴더의 파일이나 .hwp/.hwpx/.pdf/.docx/.xlsx/.pptx 파일이 언급될 때, 또는 문서 내용을 검토/분석해야 할 때 반드시 사용. |
 | review-pass | `.agents/skills/review-pass/SKILL.md` | > |
 | secret-vault | `.agents/skills/secret-vault/SKILL.md` | age 암호화 시크릿 볼트(`key.age` + 평문 `key/`)를 열고·수정하고·다시 잠글 때 반드시 사용. data-private 등 "암호화된 키 파일을 어떻게 푸는가", "키를 추가하고 다시 암호화", "복호화가 깨져 보인다", "key.age unlock/lock" 요청 시 |
+| session-resume | `.agents/skills/session-resume/SKILL.md` | Claude Code / Codex / opencode 세션 기록을 열어 대화 흐름을 추출·요약한다. 다른 도구(또는 주간 한도 컷)에서 끊긴 작업을 현재 세션에서 이어하거나, 과거 세션이 무엇을 했는지 파악할 때 사용. "claude --resume <id>", "codex 세션 이어 |
+| sync-upstream | `.agents/skills/sync-upstream/SKILL.md` | ADK fork chain의 upstream 동기화. naia-adk(최상위) 이하 모든 fork가 주기적으로 `git merge upstream/main`로 정식 동기화하도록 한다. selective cherry-pick으로 인한 체인 부패(divergence)를 예방. "upstre |
+| verify-benchmark-contract | `.agents/skills/verify-benchmark-contract/SKILL.md` | 벤치마크 계약의 스키마·의미 검증, 공급자 영수증, 비용 집계, HMAC 저널, Windows DPAPI 어댑터와 듀얼 컨텍스트를 결정론적으로 검증한다. packages/benchmark-contract 또는 개발 모델 라우팅을 수정한 뒤, Review/Post-test Review 및 |
 | verify-contract-conformance | `.agents/skills/verify-contract-conformance/SKILL.md` | 계약(선언된 API/인터페이스)과 코드 구현 사이의 드리프트를 결정론으로 검출합니다. 시그니처 드리프트·계약만 선언(미구현)·코드만 존재(미문서)를 잡아 "게이트는 통과하는데 계약과 분기한 가짜 성공"을 차단. 기능 구현 후·PR 전·마이그레이션 시·issue-driven-develop |
 | verify-implementation | `.agents/skills/verify-implementation/SKILL.md` | 등록된 모든 verify-* 스킬을 순차 실행해 통합 검증 보고서를 생성합니다. 기능 구현 후, PR 전, 코드 리뷰 시, issue-driven-development Review/Post-test Review 단계마다 반드시 사용. /verify-implementation으로 호출. |
+| verify-request-contract | `.agents/skills/verify-request-contract/SKILL.md` | 원요청 무결성 하네스의 원문 해시체인, 완전 범위 추적, 서명 권한, 2회 Clean 결박, Claude Code/Codex 등록·동등성을 결정론으로 검증합니다. request-contract 코어·어댑터·설정·스키마·review-pass를 수정한 뒤, Review/Post-test R |
 | webapp-testing | `.agents/skills/webapp-testing/SKILL.md` | Playwright로 로컬 웹 앱을 테스트합니다. naia.nextain.io, about.nextain.io, aiedu.nextain.io 등 Next.js 앱의 E2E 테스트, UI 동작 검증, 스크린샷 캡처, 콘솔 로그 확인 시 반드시 사용. 사용자에게 수동 테스트를 시키지 말고 |
 | weekly-report | `.agents/skills/weekly-report/SKILL.md` | 주간 업무 결과를 git 커밋과 작업 로그에서 수집해 작성합니다. "주간 업무 결과", "결과 작성", "이번 주 뭐 했는지" 등 주간 보고 요청 시 사용. |
 | youtube-upload | `.agents/skills/youtube-upload/SKILL.md` | YouTube에 영상을 자막·썸네일·제목/설명/태그까지 자동 업로드할 때 반드시 사용. 밋업/발표/콘텐츠 영상을 YouTube Data API v3로 올린다. "유튜브 올려", "youtube 업로드", "영상 게시" 등 요청 시 사용. |

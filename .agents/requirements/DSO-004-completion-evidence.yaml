@@ -1,0 +1,26 @@
+id: DSO-004
+title: "Evidence-Based Completion Assessment"
+title_ko: "증거 기반 완료 판정"
+product: naia-adk-discord-sessions
+module: completion-evidence
+status: active
+source: human
+priority: high
+created: 2026-07-30
+updated: 2026-07-30
+issue_url: "https://github.com/nextain/naia-adk/issues/18"
+description: |
+  Process activity does not prove semantic correctness. Completion views must show the claim separately from test, build, review, and requirement evidence.
+acceptance_criteria:
+  - "A completed job with no verification is labeled unverified."
+  - "Passed, failed, and missing checks are counted and individually inspectable."
+  - "A failed required check prevents a verified assessment even if the backend exits successfully."
+  - "Required checks are fixed before execution and only current-revision host_verifier or human_review evidence can satisfy them; backend_claim evidence never verifies itself."
+trace:
+  code:
+    - { path: ".agents/skills/manage-discord-sessions/helper/store.mjs", symbol: "required_checks/recordEvidence", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/projector.mjs", symbol: "projectCompletionAssessment", coverage: partial }
+  tests:
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-004 trusts only predeclared host or human evidence for completion", coverage: partial }
+  reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
+decisions: []

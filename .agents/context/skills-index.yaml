@@ -96,11 +96,11 @@ skills:
     note: "표준 소비자=data-private 서브모듈. 비번은 AI를 거치지 않음(사용자 `!` 직접 실행)."
 
   manage-discord-sessions:
-    trigger: "Discord Codex session cost, idle history rotation, prompt cache expiry, or long-idle resume"
-    what: "Keep the Discord Gateway idle without model heartbeats and rotate bounded transient history after a configurable timeout"
+    trigger: "Discord 설정, Codex/Claude 백그라운드 작업 상태, 실시간 활동, 멈춤 진단, 재부팅 복구, idle history rotation"
+    what: "ADK 내부 SQLite에서 Discord AI 작업의 서비스 신선도·활동·검증 증거를 조회하고, 이후 Gateway/재부팅 복구를 같은 계약으로 관리"
     arg: null
-    scripts: []
-    note: "Production default is 30 minutes. Verify boundary behavior with an injected short timeout and fake clock."
+    scripts: [scripts/manage-discord-sessions.sh]
+    note: "현재 slice 1=status/jobs/job/watch. Gateway·systemd·실제 backend는 #18 후속 slice이며 구현 전까지 제공된다고 주장 금지."
 
   session-resume:
     trigger: "claude --resume, codex/opencode 세션 이어서, 이전 세션 뭐했지, 세션 기록 봐줘"

@@ -1,37 +1,61 @@
 ---
 name: manage-discord-sessions
-description: Manage long-idle Discord AI conversations without keeping a Codex model session alive. Use when designing, operating, or testing Discord-to-Codex session history, prompt-cache cost controls, idle rotation, compaction, or resume behavior.
+description: Codex 또는 Claude로 실행되는 Discord 백그라운드 작업의 설정·상태·실시간 활동·재부팅 복구를 ADK 워크스페이스에서 관리합니다.
 ---
 
 # Discord 세션 관리
 
-Discord Gateway 대기와 모델 실행을 분리한다. 프롬프트 캐시를 유지하려고
-모델 heartbeat를 보내지 않는다.
+Codex와 Claude가 함께 쓰는 관리 스킬입니다. 별도 제품 CLI나 `naia-agent`, `naia-shell` 없이 동일한 내부 스크립트로 로컬 상태를 읽습니다.
 
-## 정책
+## 현재 구현된 범위
 
-1. 대기 중에는 경량 Discord Gateway만 연결한다.
-2. 한 턴이 끝나면 Codex 프로세스 또는 app-server 연결을 종료한다.
-3. 유휴시간 제한 안에서만 상한이 있는 임시 대화 기록을 재사용한다.
-4. 제한 시각 이상이면 새 메시지를 전달하기 전에 임시 기록을 비운다.
-5. 장기 작업 상태는 프로젝트 파일, Git 상태, 승인된 메모리 또는 명시적
-   체크포인트로 보존한다. 살아 있는 터미널 프로세스는 체크포인트가 아니다.
-6. 운영 기본 유휴시간은 별도 측정 근거가 없다면 30분으로 둔다.
+- SQLite 기반 작업·안전 이벤트 영속 기록
+- 서비스 상태의 신선도와 작업 활동 상태 구분
+- 사전에 선언한 완료 검사와 신뢰 가능한 검증 증거
+- `status`, `jobs`, `job`, `watch` 조회
 
-## 구현 경계
+Discord Gateway, 실제 Codex·Claude 실행 어댑터, systemd 설치와 실제 재부팅 복구, Discord 상태 메시지는 이슈 #18의 다음 구현 단계입니다. 설계만 존재하는 기능을 동작한다고 보고하지 않습니다.
 
-- 공통 정책·스키마·운영 절차는 `naia-adk`에 둔다.
-- Discord 수신·시계·기록 저장·회전 실행은 runtime agent에 둔다.
-- 설정과 관측 화면은 client shell에 둔다.
-- 봇 자격증명과 사용자 메시지 원문은 추적 파일과 진단 로그에 남기지 않는다.
+## 이렇게 요청하면 됩니다
 
-## 검증
+```text
+Discord 세션 상태 보여줘
+현재 백그라운드 작업 보여줘
+job <id>가 지금 뭘 하는지 보여줘
+job <id>를 실시간으로 지켜봐
+완료를 뒷받침하는 테스트 결과 보여줘
+```
 
-실제로 기다리지 말고 짧은 제한시간과 가짜 시계를 주입한다.
+스킬은 내부적으로 다음 명령을 사용합니다.
 
-1. 제한시간 전 두 번째 메시지는 이전의 상한 있는 기록을 받는다.
-2. 제한시간과 같거나 지난 메시지는 새 사용자 메시지만 받는다.
-3. 다른 채널이나 사용자는 독립적인 기록과 시각을 유지한다.
+```bash
+scripts/manage-discord-sessions.sh status [--json]
+scripts/manage-discord-sessions.sh jobs [--active|--failed] [--json]
+scripts/manage-discord-sessions.sh job <job-id> [--events] [--json]
+scripts/manage-discord-sessions.sh watch [--job <job-id>] [--jsonl]
+```
 
-대기 중 provider 호출이 없고, 회전 로그에는 사유와 이전 메시지 수 같은
-제한된 메타데이터만 있는지도 확인한다.
+`watch`는 로컬 SQLite 기록만 읽습니다. Discord REST 수신 폴링이 아닙니다.
+
+## 상태를 읽는 방법
+
+- `progressing`: 최근 구조화된 활동 증거가 있음
+- `running_no_detail`: 소유한 프로세스는 살아 있지만 백엔드가 세부 진행을 제공하지 않음
+- `waiting`: 승인·대기열·재시도처럼 명확한 기다림
+- `suspected_stalled`: 활동 없음 제한을 넘긴 경고이며 실패 확정은 아님
+- `unresponsive`: 하드 제한이나 객관적인 프로세스 실패
+- `unknown`: 증거가 낡거나 없거나 서로 충돌함
+- `not_applicable`: 이미 끝난 작업이라 활동 상태를 적용하지 않음
+
+최근 출력이 있다고 결과가 옳은 것은 아닙니다. 요구사항·빌드·테스트·리뷰 증거와 완료 주장을 따로 보여줍니다. AI가 스스로 “테스트 통과”라고 말한 것만으로는 검증 완료가 되지 않습니다.
+
+## 설정과 복구 상태
+
+```text
+naia-settings/messenger-sessions/config.json
+naia-settings/.sessions/messenger-sessions/runtime.sqlite3
+```
+
+실제 설정과 세션 상태는 Git에 올리지 않습니다. 설정에는 비밀값이 아니라 자격 증명 참조만 둡니다.
+
+검증 명령은 `pnpm test:discord-sessions`입니다. 상세 설계는 `docs/design/discord-session-observability.md`, 요구사항은 `DSO-001`~`DSO-006`이 정본입니다.

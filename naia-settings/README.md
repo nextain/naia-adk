@@ -3,6 +3,35 @@
 Fork-root, backup-unit settings for the Naia workspace. **Canonical (정본)**
 location consumed by `naia-agent`.
 
+`naia-settings` is also the canonical workspace-relative location for the
+provider-neutral Discord session skill. That skill does not require
+`naia-agent` or `naia-shell`.
+
+## `messenger-sessions/` — Discord AI session configuration
+
+Tracked example:
+
+```text
+naia-settings/messenger-sessions/config.example.json
+```
+
+Local configuration and recovery state:
+
+```text
+naia-settings/messenger-sessions/config.json
+naia-settings/.sessions/messenger-sessions/runtime.sqlite3
+```
+
+The real config is ignored because persona instructions, Discord IDs, bindings,
+and operator IDs may be private. It stores `credentialRef` only, never a bot
+token. Durable job/event/evidence state is also ignored and remains available
+after helper or machine restart.
+
+Use the existing `manage-discord-sessions` skill from Codex or Claude. The
+current implementation exposes local `status`, `jobs`, `job`, and `watch`;
+Gateway, systemd reboot startup, and real backend adapters are issue #18 later
+slices and must not be reported as already available.
+
 ## `llm.json` — LLM role configuration (SoT)
 
 3-role object. Each role is `{ provider, baseUrl, model }` plus optional
