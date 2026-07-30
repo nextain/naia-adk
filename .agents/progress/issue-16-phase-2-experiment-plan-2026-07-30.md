@@ -31,7 +31,7 @@ Evidence never skips a level. A cheap atomic worker result cannot establish tota
 | AX-09 | bounded multi-file change | fixed small repository | tests, scope discipline, rework | Terra delegation boundary |
 | AX-10 | integration judgment | conflicting valid patches | correct synthesis and regressions | Sol integration requirement |
 
-Each experiment records ambiguity, number of touched files, context depth, validator strength, risk, model binding, exact configuration, quality, tokens, billed cost, wall time, retries, and failure class. At least one negative or boundary case is required before a role rule is accepted.
+Each experiment records ambiguity, number of touched files, context depth, validator strength, risk, model binding, exact configuration, quality, tokens, billed cost, aggregate and mean worker wall time, model attempt turns, runner retry turns, provider retry turns, fallbacks, escalations, and failure class. At least one negative or boundary case is required before a role rule is accepted.
 
 ## Theory record
 
@@ -56,7 +56,7 @@ Run the same representative issue set through:
 2. `balanced`: Sol orchestration/integration plus exact-validated Luna bounded implementation, with Terra as the bounded fallback and focused tester.
 3. `economy`: the same safety boundary plus only later evidence-qualified lightweight work.
 
-Every trial includes request interpretation, task decomposition, implementation, testing, independent adversarial review, correction, context synchronization, and integration. Account for all orchestrator, worker, handoff, retry, review, rework, translation, and integration consumption. Report completed-issue cost, final quality, first-pass rate, defects found, duplication, context loss, and wall time.
+Every trial includes request interpretation, task decomposition, implementation, testing, independent adversarial review, correction, context synchronization, and integration. Account for all orchestrator, worker, handoff, retry, review, rework, translation, and integration consumption. Report completed-issue cost, final quality, first-pass rate, defects found, duplication, context loss, aggregate and elapsed wall time, model attempt turns, runner retry turns, provider retry turns, fallbacks, and escalations.
 
 ## New-model reevaluation
 
