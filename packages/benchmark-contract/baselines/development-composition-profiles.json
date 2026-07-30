@@ -23,6 +23,12 @@
       "adapter": "codex",
       "model": "gpt-5.6-luna",
       "qualification": "bounded_exact_validated_implementation_smoke_8_of_9"
+    },
+    "implementation_worker": {
+      "adapter": "opencode",
+      "provider": "azure-foundry",
+      "model": "deepseek-v4-pro",
+      "qualification": "development_smoke_5_of_5_and_agentic_edit_test_first_pass"
     }
   },
   "profiles": [
@@ -61,6 +67,18 @@
         "tester": "terra",
         "reviewer_pool": ["terra", "sol"]
       }
+    },
+    {
+      "id": "delegated",
+      "purpose": "Optional additional-provider profile: Sol retains orchestration and integration while a replaceable qualified binding performs bounded implementation",
+      "assignments": {
+        "orchestrator": "sol",
+        "integrator": "sol",
+        "bounded_worker": "implementation_worker",
+        "mechanical_worker": "luna",
+        "tester": "terra",
+        "reviewer_pool": ["terra", "sol"]
+      }
     }
   ],
   "guards": {
@@ -88,7 +106,9 @@
     "allowed": [
       "balanced_is_available_for_opt_in_use",
       "role_and_model_binding_are_separate",
-      "unsafe_or_unqualified_tasks_fall_back"
+      "unsafe_or_unqualified_tasks_fall_back",
+      "single_solution_default_remains_available",
+      "additional_provider_profile_is_opt_in"
     ],
     "forbidden_until_phase_2": [
       "proven_total_cost_reduction",

@@ -24,16 +24,21 @@ pnpm --filter @naia-adk/benchmark-contract test
 
 ## 빠른 적용 프로파일
 
-모델 이름과 개발 역할을 분리한 세 프로파일을 제공합니다.
+모델 이름과 개발 역할을 분리한 네 프로파일을 제공합니다. Claude 또는 Codex
+하나만 있는 사용자는 추가 provider 없이 기존 프로파일을 그대로 사용할 수 있습니다.
 
 - `control`: all-Sol 기준선과 고위험 폴백
 - `balanced`: Sol이 계획·통합을 맡고, 정확한 자동 검증기가 있는 제한 구현은 Luna가 수행하며, 검증기가 없으면 Terra로 되돌아가는 opt-in 기본값
 - `economy`: `balanced`와 같은 안전 경계를 유지하면서 Luna의 저위험 기계 작업 범위를 후속 실험으로 확장하는 프로파일
+- `delegated`: 선택 설치한 외부 구현 워커에 범위가 제한된 중위험 이하 구현을 맡기고 Sol이 계획·통합을 유지하는 프로파일. 현재 스모크 자격을 얻은 파일럿 `implementation_worker` 바인딩은 OpenCode의 Azure DeepSeek V4 Pro이며 새 모델은 이 바인딩만 같은 절차로 재검증해 교체합니다.
 
 ```bash
 node packages/benchmark-contract/src/development-profiles.mjs show --profile balanced
 node packages/benchmark-contract/src/development-profiles.mjs select \
   --profile balanced --role bounded_worker --risk medium --bounded-scope --exact-validator
+node packages/benchmark-contract/src/development-profiles.mjs select \
+  --profile delegated --role bounded_worker --risk medium --bounded-scope \
+  --available-bindings sol,terra,implementation_worker
 ```
 
 범위가 제한되지 않았거나 위험도가 높으면 Sol로 되돌아갑니다. 제한 구현에서
@@ -44,4 +49,4 @@ Terra로 되돌아갑니다. 기계 작업은 여기에 `--risk low`까지 필�
 뒤 교체합니다.
 
 정본 계약과 동결 증적은 `.agents/decisions/`와 `.agents/reviews/`에 있으며,
-계약 SHA-256은 `05b49dcf22e7cc130ebee8d2b4e6c963f6f53fb69ee4119a6c2f9c4aee9fcae4`입니다.
+계약 SHA-256은 `4da7d760821c6e31f6ae58e3ce30270cee49a84e2d126cba6506bc0d5c44cb38`입니다.
