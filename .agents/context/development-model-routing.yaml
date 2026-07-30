@@ -155,11 +155,12 @@ quick_start_profiles:
   structure_rule: profiles define stable roles and guards; replaceable model bindings are evaluated separately so a new model does not require redesigning the profiles
   profiles:
     control: all roles use the Sol binding in separate executions; serves as the quality/cost reference and high-risk fallback
-    balanced: Sol owns orchestration and integration; Terra handles bounded implementation and focused testing; this is the first usable profile
-    economy: balanced plus Luna only for bounded low-risk mechanical work with an exact validator
+    balanced: Sol owns orchestration and integration; Luna handles bounded implementation with an exact validator, Terra is the bounded fallback without one, and Terra handles focused testing
+    economy: balanced safety boundaries plus later evidence-gated expansion of Luna mechanical work
   selection_guards:
     - unbounded or high-risk work falls back to Sol
-    - Luna requires bounded scope, low risk, and an exact validator; otherwise use Terra or Sol
+    - Luna implementation requires bounded scope and an exact validator; otherwise use Terra, while unbounded or high-risk work uses Sol
+    - Luna mechanical work additionally requires low risk
     - independent review requires distinct session and execution identities and prefers a binding different from the producer
   claim_boundary: phase 1 makes balanced available for opt-in use but does not claim proven total-system cost reduction
   new_model_rule: run only the affected capability experiments, update the binding qualification and evidence expiry, then compare the unchanged profiles

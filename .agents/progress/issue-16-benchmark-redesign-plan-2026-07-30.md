@@ -16,7 +16,7 @@ The four algorithm-output tasks in the first pilot are usable as a narrow model-
 
 1. Freeze stable role profiles separately from replaceable model bindings.
 2. Ship `control`, `balanced`, and `economy`; make `balanced` the explicit opt-in default and `control` the fail-safe fallback.
-3. Keep Sol responsible for orchestration and final integration. Allow Terra only for bounded engineering work. Allow Luna only for bounded, low-risk mechanical work with an exact validator.
+3. Keep Sol responsible for orchestration and final integration. Allow Luna for bounded implementation only behind an exact validator, use Terra as the bounded fallback without one and for focused testing, and retain the stricter low-risk rule for Luna mechanical work.
 4. Expose a deterministic selector that falls back instead of guessing when scope, risk, validation, or reviewer independence is insufficient.
 5. Run native Linux verification and independent cross-review of the staged phase-1 profile checkpoint. Keep the full governed request-contract CLEAN streak as a separate follow-up because it has a wider review scope.
 6. Commit and push phase 1 immediately so other naia-adk sessions can pull and use the same structure.
@@ -48,8 +48,8 @@ The phase-1 profile checkpoint was independently reviewed CLEAN by Gemini Pro an
 ## Replaceable model bindings
 
 - Sol orchestrator and final integrator, plus a distinct `worker-sol-control` session with the minimal worker prompt and no oracle access. Orchestration cost is common overhead and is not mixed into worker response scoring.
-- Terra bounded engineering worker
-- Luna translation/mechanical worker
+- Terra bounded engineering fallback and focused tester
+- Luna exact-validated bounded implementation plus translation/mechanical worker
 - Azure `DeepSeek-V4-Flash` structured text/code arm; no tool-calling claim
 - OpenRouter `tencent/hy3` composite endpoint arm with upstream routing identity pinned
 - Upstage private-beta `solar-open2` hosted API arm using `UPSTAGE_KEY`

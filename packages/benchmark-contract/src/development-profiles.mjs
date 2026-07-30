@@ -19,7 +19,7 @@ function validateCatalog(catalog){
     if(!catalog.claim_boundary.forbidden_until_phase_2.includes(claim))throw new Error(`phase-1 profile claim boundary missing ${claim}`);
   }
 	const {bounded_worker:boundedGuard,mechanical_worker:mechanicalGuard,review:reviewGuard}=catalog.guards||{};
-	if(!boundedGuard||!(boundedGuard.maximum_risk in riskRank)||!catalog.bindings[boundedGuard.fallback_binding])throw new Error("bounded worker guard invalid");
+	if(!boundedGuard||!(boundedGuard.maximum_risk in riskRank)||!catalog.bindings[boundedGuard.fallback_binding]||!catalog.bindings[boundedGuard.luna_fallback_binding])throw new Error("bounded worker guard invalid");
 	if(!mechanicalGuard||!(mechanicalGuard.luna_maximum_risk in riskRank)||!catalog.bindings[mechanicalGuard.fallback_binding])throw new Error("mechanical worker guard invalid");
 	if(!reviewGuard||reviewGuard.different_session_required!==true||reviewGuard.different_execution_required!==true||reviewGuard.fail_closed_without_independent_execution_identity!==true)throw new Error("independent review guard invalid");
   return catalog;
@@ -58,6 +58,7 @@ export function selectDevelopmentBindingFromCatalog(catalog,{profileId="balanced
 
   let fallback_reason=null;
 	if(["bounded_worker","tester"].includes(role)&&((boundedGuard.requires_bounded_scope&&!boundedScope)||riskRank[risk]>riskRank[boundedGuard.maximum_risk])){binding=boundedGuard.fallback_binding;fallback_reason="bounded engineering guard";}
+	if(role==="bounded_worker"&&binding==="luna"&&boundedGuard.luna_requires_exact_validator&&!exactValidator){binding=boundedGuard.luna_fallback_binding;fallback_reason="Luna implementation validator guard";}
 	if(role==="mechanical_worker"&&binding==="luna"&&((mechanicalGuard.luna_requires_bounded_scope&&!boundedScope)||(mechanicalGuard.luna_requires_exact_validator&&!exactValidator)||riskRank[risk]>riskRank[mechanicalGuard.luna_maximum_risk])){binding=mechanicalGuard.fallback_binding;fallback_reason="Luna exact-validation guard";}
 	if(role==="mechanical_worker"&&binding===mechanicalGuard.fallback_binding&&((boundedGuard.requires_bounded_scope&&!boundedScope)||riskRank[risk]>riskRank[boundedGuard.maximum_risk])){binding=boundedGuard.fallback_binding;fallback_reason="mechanical task boundary guard";}
   return {profile_id:profile.id,role,binding_id:binding,binding:catalog.bindings[binding],fallback_reason,profile_status:catalog.status,total_cost_reduction_proven:false};

@@ -27,20 +27,21 @@ pnpm --filter @naia-adk/benchmark-contract test
 모델 이름과 개발 역할을 분리한 세 프로파일을 제공합니다.
 
 - `control`: all-Sol 기준선과 고위험 폴백
-- `balanced`: Sol이 계획·통합을 맡고 Terra가 범위가 제한된 구현·테스트를 수행하는 1차 opt-in 기본값
-- `economy`: `balanced`에 더해 정확한 자동 검증기가 있는 저위험 기계 작업만 Luna에 위임
+- `balanced`: Sol이 계획·통합을 맡고, 정확한 자동 검증기가 있는 제한 구현은 Luna가 수행하며, 검증기가 없으면 Terra로 되돌아가는 opt-in 기본값
+- `economy`: `balanced`와 같은 안전 경계를 유지하면서 Luna의 저위험 기계 작업 범위를 후속 실험으로 확장하는 프로파일
 
 ```bash
 node packages/benchmark-contract/src/development-profiles.mjs show --profile balanced
 node packages/benchmark-contract/src/development-profiles.mjs select \
-  --profile balanced --role bounded_worker --risk medium --bounded-scope
+  --profile balanced --role bounded_worker --risk medium --bounded-scope --exact-validator
 ```
 
-범위가 제한되지 않았거나 위험도가 높으면 Sol로 되돌아갑니다. Luna는
-`--bounded-scope --exact-validator --risk low`가 모두 있어야 선택됩니다. 이 1차
+범위가 제한되지 않았거나 위험도가 높으면 Sol로 되돌아갑니다. 제한 구현에서
+Luna는 `--bounded-scope --exact-validator`가 모두 있어야 선택되고 검증기가 없으면
+Terra로 되돌아갑니다. 기계 작업은 여기에 `--risk low`까지 필요합니다. 이 1차
 프로파일은 즉시 opt-in 사용할 수 있지만 전체 개발 비용 절감을 증명했다는 뜻은
 아닙니다. 새 모델은 프로파일을 바꾸지 않고 `bindings`의 역할 자격을 다시 검증한
 뒤 교체합니다.
 
 정본 계약과 동결 증적은 `.agents/decisions/`와 `.agents/reviews/`에 있으며,
-계약 SHA-256은 `d93a78f3dd6480c5fd069e35ea8bd2b666af8f28603dc8d2591083bceded3418`입니다.
+계약 SHA-256은 `7a3cf9e2b3bedf9781fea5625e5145f412c421f357e000ea843fc46ac692e143`입니다.

@@ -53,8 +53,8 @@ Example: “When the mutation scope is bounded and an exact test oracle exists, 
 Run the same representative issue set through:
 
 1. `control`: all-Sol reference with independent executions.
-2. `balanced`: Sol orchestration/integration plus Terra bounded work.
-3. `economy`: `balanced` plus validated Luna mechanical work.
+2. `balanced`: Sol orchestration/integration plus exact-validated Luna bounded implementation, with Terra as the bounded fallback and focused tester.
+3. `economy`: the same safety boundary plus only later evidence-qualified lightweight work.
 
 Every trial includes request interpretation, task decomposition, implementation, testing, independent adversarial review, correction, context synchronization, and integration. Account for all orchestrator, worker, handoff, retry, review, rework, translation, and integration consumption. Report completed-issue cost, final quality, first-pass rate, defects found, duplication, context loss, and wall time.
 

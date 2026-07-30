@@ -17,7 +17,7 @@
     "luna": {
       "adapter": "codex",
       "model": "gpt-5.6-luna",
-      "qualification": "deterministic_mechanical_work_only"
+      "qualification": "bounded_exact_validated_implementation_smoke_8_of_9"
     }
   },
   "profiles": [
@@ -39,8 +39,8 @@
       "assignments": {
         "orchestrator": "sol",
         "integrator": "sol",
-        "bounded_worker": "terra",
-        "mechanical_worker": "terra",
+        "bounded_worker": "luna",
+        "mechanical_worker": "luna",
         "tester": "terra",
         "reviewer_pool": ["terra", "sol"]
       }
@@ -62,6 +62,8 @@
     "bounded_worker": {
       "requires_bounded_scope": true,
       "maximum_risk": "medium",
+      "luna_requires_exact_validator": true,
+      "luna_fallback_binding": "terra",
       "fallback_binding": "sol"
     },
     "mechanical_worker": {
