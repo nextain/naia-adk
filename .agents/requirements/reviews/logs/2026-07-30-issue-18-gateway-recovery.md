@@ -1,8 +1,10 @@
 # Issue #18 Gateway and recovery review
 
-Stage: development, test, integration  
-Requirements: DSO-001 through DSO-006  
-Reviewers: independent code reviewer, independent contract reviewer, Sol High final reviewer  
+Stage: development, test, integration
+
+Requirements: DSO-001 through DSO-006
+
+Reviewers: independent code reviewer, independent contract reviewer, Sol High final reviewer
 
 ## Evidence ledger
 
