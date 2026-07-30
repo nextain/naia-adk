@@ -26,6 +26,9 @@ naia-settings/config.json
 # Chat session transcripts — personal conversation data, never shared
 naia-settings/.sessions/
 
+# Discord AI session bindings, persona, and operator IDs are local/private.
+naia-settings/messenger-sessions/config.json
+
 # Local runtime state and credentials (never commit)
 /conversations/
 /naia-settings/.keys/
