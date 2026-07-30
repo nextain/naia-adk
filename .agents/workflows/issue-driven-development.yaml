@@ -63,11 +63,13 @@ principles:
       T0 (informational): Expected friction (port in use, missing deps) → auto-fix silently
       T1 (in-scope): Blocks current task, fix within plan scope → auto-fix, log to progress
       T2 (out-of-scope): Problem outside current task → report to user, do NOT fix
-      T3 (shared resource): git push, deploy, shared DB → always require user confirmation
+      T3 (external-impact exception): remote-ref deletion, force push, prod deploy, destructive shared DB, external message/payment, material cost → require user confirmation
       T4 (security): Credentials, data loss → report immediately, never auto-fix
     classification: |
-      Ask: (1) Is fix within currently approved plan scope? (2) Does it touch shared resources?
-      If YES to (2) → T3. If NO to (1) → T2. Otherwise T0 or T1.
+      Ask: (1) Is the action within the authorized objective and scope? (2) Is it irreversible,
+      destructive, production-impacting, externally communicative, costly, or a material scope decision?
+      If YES to (2) → T3/T4. If NO to (1) → T2. Otherwise T0 or T1. Routine
+      non-destructive Git fetch/pull/merge/worktree/stage/commit/non-force-push is T1, not T3.
     modes:
       supervised: "Default. T0/T1 auto-fix. T2+ report and stop."
       auto: "User grants explicitly. T0/T1/T2 auto-fix with log. T3/T4 still require confirmation."
@@ -77,6 +79,11 @@ principles:
       revoke: "User says '멈춰', gate phase entered, TTL expired, task changed"
     rapid_fix_guard: "3+ fixes in 5 minutes → pause and verify root cause"
     anti_pattern: "Immediately fixing a discovered problem without classifying it. Stacking patches on symptoms."
+
+  routine_execution_authority:
+    rule: "After objective and scope authorization, execute routine in-scope steps without repeated approval; preserve material product/scope decision gates."
+    delegation: "Subagents and nested delegates inherit the same authorization and exception boundary and do not re-ask for routine work."
+    exceptions: "Deletion including remote-ref deletion, force push, unrelated-histories integration, external messaging/payment, production-impacting mutation, material cost, credential exposure, or material scope expansion."
 
 # ─── Iteration Termination Rule ───────────────────────────────
 
@@ -101,7 +108,7 @@ phases:
 
   understand:
     description: "Confirm understanding of the issue before investigating"
-    gate: true  # must not proceed without user confirmation
+    gate: true  # internal checkpoint for bounded requests; ask only if a missing material choice changes the result
     steps:
       - "Analyze the issue and summarize understanding across 3 dimensions:"
       - "  - Goal: What changes when this is resolved? (observable outcome)"
@@ -110,23 +117,23 @@ phases:
       - "Surface unresolved assumptions in each dimension before presenting"
       - "Separate exact human directives from AI-derived interpretations; derived text may not narrow or supersede human directives"
       - "List existing product surfaces that remain unchanged; silence about removal is not approval"
-      - "Present to user: 'Is my understanding correct? Are there assumptions I'm missing?'"
-      - "User confirms or corrects"
-    output: "Confirmed issue understanding"
+      - "For an explicit bounded request, record the understanding as an internal checkpoint and continue without asking again"
+      - "Ask the user only when an unresolved assumption is a material product or scope choice that can change the result"
+    output: "Bounded or user-resolved issue understanding"
     record: "Post understanding summary as Issue comment"
 
   scope:
-    description: "Define investigation scope and depth, with user approval"
-    gate: true  # must not proceed without user confirmation
+    description: "Define investigation scope and depth within the user's authorization"
+    gate: true  # internal checkpoint for bounded requests; ask only if a missing material choice changes the result
     steps:
       - "Determine issue type (see issue_type_calibration) — choose scope starting posture"
       - "Propose scope (which files/modules/repos to examine)"
       - "Propose depth for each scope area"
       - "Freeze an immutable baseline_ref, select the project-specific preservation adapter, and have the adapter derive the exact complete baseline surface set independently of the proposed contract. Surface kinds are project-defined; mark non-applicable kinds N/A with evidence and reject contract subsets that omit, add, rename, or disconnect a discovered surface without disposition"
       - "Create top-level preservation.version/baseline_ref/intent/surfaces/vendor_sources. Each surface is preserve or extend by default; replace/remove/disable/redirect/migrate requires surface-specific authority_id and expected_diff_digest"
-      - "Present to user with rationale"
-      - "User confirms or adjusts"
-    output: "Confirmed scope and depth"
+      - "For an explicit bounded request, record scope and rationale as an internal checkpoint and continue without asking again"
+      - "Ask only for a material scope choice or a named destructive preservation disposition not already authorized"
+    output: "Bounded or user-resolved scope and depth"
     record: "Post scope definition as Issue comment"
 
     issue_type_calibration:
@@ -189,7 +196,7 @@ phases:
 
   plan:
     description: "Comprehensive plan based on ALL findings"
-    gate: true  # must not proceed without user confirmation
+    gate: true  # internal checkpoint for bounded requests; ask only if a missing material choice changes the result
     steps:
       - "Select scope_mode based on issue type (see scope_mode_selection below)"
       - "Draft plan addressing all findings (not just the first one)"
@@ -213,11 +220,11 @@ phases:
       - "  - List top-3 failure scenarios (adversarial pre-mortem) — adjust plan or document accepted risk"
       - "  - If corrections needed → update plan, continue loop"
       - "  - If TWO consecutive passes find nothing to fix → plan is stable"
-      - "Present stable plan to user for approval"
+      - "For an explicit bounded request, record the stable plan as an internal checkpoint and continue without asking again"
       - "Run '/review-pass stage=planning files=<plan+REQs+preservation contract> source_artifacts=<immutable source bundle> baseline_ref=<commit SHA> preservation_contract=<path> incident_history=<known drift/corrections or none>'"
       - "Require four planning role executions with role-specific included/withheld evidence and distinct context/process/execution; the general two-Clean floor does not replace this set"
       - "Do not enter Build unless planning review is CLEAN and all preservation/scope/authority vetoes and REQUIRED/PENDING control gaps are resolved"
-      - "User confirms or adjusts"
+      - "Ask only when the plan contains an unresolved material product/scope choice or destructive disposition"
     rules:
       - "Each phase MUST define its verification method (build check, unit test, E2E, manual, file review)"
       - "If a phase cannot be tested locally, note it explicitly and state what CAN be verified"
@@ -226,7 +233,7 @@ phases:
       - "Include error_rescue_map for each phase (see error_rescue_map_format below)"
       - "Add diagram: architecture + data flow are mandatory when 3+ components interact. State machine, error flow, deployment are conditional."
       - "A plan that changes a primary entry, discovery/binding path, exported contract, package/deployment target, or handoff artifact is destructive until the project adapter and preservation contract prove otherwise"
-    output: "Approved implementation plan with per-phase verification methods"
+    output: "Authorized bounded plan or user-resolved implementation plan with per-phase verification methods"
 
     scope_mode_selection:
       description: "Select AI ambition level based on issue type — prevents scope creep and under-delivery"
@@ -362,7 +369,7 @@ phases:
 
   sync:
     description: "Synchronize contexts, record lessons, present to user"
-    gate: true  # must not proceed without user confirmation
+    gate: true  # internal checkpoint; routine mirror/receipt sync does not require repeated approval
     steps:
       - "Run the documentation impact review defined by agents-rules.json documentation_impact_policy"
       - "Classify repository_docs, user_manual, and reusable_learning as UPDATED or N/A"
@@ -378,7 +385,7 @@ phases:
       - "  YES → add to lessons-learned"
       - "  NO → skip"
       - "Run '/manage-skills' to analyze session changes and update/create verify-* skill coverage"
-      - "Present sync summary to user for confirmation"
+      - "Record and report the sync summary; ask only if sync would introduce a new material policy or scope decision"
     rules:
       - "A missing target, PENDING status, bare 'not relevant', or evidence outside the current diff without an immutable commit URL blocks Sync completion"
       - "Check existing context files before adding — avoid scattering same content across multiple files"
@@ -391,7 +398,7 @@ phases:
       .env_files: "Secrets, API keys, env vars — never in context files"
       nowhere: "Things already in code (read the file), things in git log (use git blame), MEMORY.md (auto-managed by Claude Code, AI must not directly edit)"
       decision_rule: "If unsure: ask 'should every AI session for this project enforce this?' YES → agents-rules.json. 'Was this a mistake I should not repeat?' YES → lessons-learned. 'Does every project need this?' YES → root CLAUDE.md."
-    output: "User-confirmed context updates"
+    output: "Verified authorized context updates or user-resolved material policy update"
 
   sync_verify:
     description: "Verify context updates are accurate and complete"
@@ -442,19 +449,24 @@ phases:
         action: "Create PR against the upstream repository, linked to the originating Issue"
     output: "Checkpoint committed locally as REVIEW_ONLY, or RELEASE_ELIGIBLE commit pushed after all implemented gates"
 
-# ─── Gates (user confirmation required) ──────────────────────
+# ─── Decision checkpoints (ask only for unresolved material choices) ────────
 
 gates:
   - phase: understand
-    prompt: "Is my understanding of this issue correct?"
+    ask_when: "An unresolved assumption can materially change the result"
+    prompt: "Is my understanding of this material choice correct?"
   - phase: scope
-    prompt: "I propose investigating scope L{n} / depth {level}. Does this look right?"
+    ask_when: "The request does not determine a material scope boundary"
+    prompt: "Which material scope boundary should apply?"
   - phase: scope
+    ask_when: "A named destructive preservation disposition lacks exact authority"
     prompt: "Please approve each named replace/remove/disable/redirect/migrate preservation disposition; unmentioned surfaces remain preserve."
   - phase: plan
-    prompt: "Here is my implementation plan. Shall I proceed?"
+    ask_when: "The plan contains an unresolved material product or scope choice"
+    prompt: "Which plan choice should govern the result?"
   - phase: sync
-    prompt: "Here are the context updates from this work. Please review before I proceed."
+    ask_when: "Sync would introduce a new material policy or scope decision"
+    prompt: "Should this new material policy or scope decision be adopted?"
 
 # ─── Feedback Loop ────────────────────────────────────────────
 

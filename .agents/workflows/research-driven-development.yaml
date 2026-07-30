@@ -114,6 +114,11 @@ artifacts:
 # ─── Phases ───────────────────────────────────────────────────
 phases:
 
+  # Precedence: an authorized Charter is the active scope boundary. Hypothesis
+  # registration, experiments, decisions from the pre-registered map, and sync
+  # inside it are internal checkpoints. Ask only for a new/changed Charter,
+  # a new research direction outside it, or material scope expansion.
+
   charter:
     description: "Define the invariant research goal"
     gate: true
@@ -122,11 +127,11 @@ phases:
       - "Write charter.yaml. Present to user."
     rules:
       - "Charter changes ONLY via explicit user gate. Experiments cannot alter it."
-    output: "User-confirmed Charter"
+    output: "User-authorized Charter (existing explicit direction may satisfy this gate)"
 
   hypothesis:
     description: "State a falsifiable hypothesis tied to a Charter sub-goal"
-    gate: true
+    gate: true  # internal checkpoint inside an authorized Charter
     steps:
       - "Write hypothesis as if/then, falsifiable."
       - "Name which Charter sub-goal it advances (trace)."
@@ -194,21 +199,24 @@ phases:
 
   sync:
     description: "Update Charter status, ledgers, lessons; present to user"
-    gate: true
+    gate: true  # internal checkpoint while Charter and scope remain unchanged
     steps:
       - "Update Charter progress (sub-goals advanced/refuted)."
       - "Ensure insight-ledger captured this cycle's lesson."
-      - "Present cycle summary to user."
-    output: "User-confirmed research state"
+      - "Record and report the cycle summary; do not ask again while Charter and scope remain unchanged."
+    output: "Internally verified research state within the authorized Charter"
 
-# ─── Gates (user confirmation required) ──────────────────────
+# ─── Decision checkpoints ────────────────────────────────────
 gates:
   - phase: charter
+    ask_when: "Creating or changing the Charter when the user's direction does not already determine it"
     prompt: "Is this the invariant research goal + success definition + constraints?"
   - phase: hypothesis
-    prompt: "This hypothesis (tied to charter sub-goal X). Proceed to pre-register?"
+    ask_when: "The hypothesis introduces a new research direction or material scope outside the authorized Charter"
+    prompt: "Should this new research direction expand or change the Charter?"
   - phase: sync
-    prompt: "Here is the cycle result + ledger updates. Review before continuing."
+    ask_when: "Sync would change the Charter or materially expand research scope"
+    prompt: "Should this result change the Charter or research scope?"
 
 # ─── Iteration / termination ─────────────────────────────────
 iteration_rule:

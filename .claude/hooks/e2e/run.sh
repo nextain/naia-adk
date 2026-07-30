@@ -54,25 +54,38 @@ fire destructive-git-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"gi
 fire destructive-git-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"echo '\''git reset --hard'\''"}}')"; a_pass "dgg pass: quoted (false-pos guard)"
 fire destructive-git-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD~1"}}')";  a_block "dgg block: reset --hard"
 fire destructive-git-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"ls && git clean -fd"}}')";      a_block "dgg block: chained clean -fd (bypass attempt)"
+fire destructive-git-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git.exe reset --hard HEAD~1"}}')"; a_block "dgg block: Windows git executable reset"
+fire destructive-git-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git -c advice.detachedHead=false reset --hard HEAD~1"}}')"; a_block "dgg block: git global config reset"
+fire destructive-git-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git --no-pager clean -fd"}}')"; a_block "dgg block: git global flag clean"
 fire destructive-git-guard "$(J '{"tool_name":"Read","tool_input":{"command":"x"}}')";                        a_pass  "dgg pass: non-Bash"
 fire destructive-git-guard 'NOT JSON';                                                                        a_pass  "dgg pass: bad json (fail-open)"
 a_nostderr "dgg stderr clean"
 
-# ── git-push-guard (real marker consume) ─────────────────────────────────────
+# ── git-push-guard (routine push allowed, history rewriting blocked) ─────────
 echo "git-push-guard:"
 GP="$ROOT/gp"; mkdir -p "$GP/.claude"
 fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git status"}}')";                      a_pass  "gpg pass: git status"
 fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"echo '\''git push'\''"}}')";           a_pass  "gpg pass: quoted push"
-fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}')";            a_block "gpg block: plain push (no marker)"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}')";            a_pass  "gpg pass: routine non-force push"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push origin HEAD:feature/routine"}}')"; a_pass "gpg pass: normal destination refspec"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push origin refs/tags/v1.0.0"}}')";  a_pass  "gpg pass: normal tag push"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git -c push.default=current push origin main"}}')"; a_pass "gpg pass: git global config normal push"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git --no-pager push origin main"}}')"; a_pass "gpg pass: git global flag normal push"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git.exe push origin main"}}')";       a_pass "gpg pass: Windows git executable normal push"
 fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}')";    a_block "gpg block: force push"
-# real valid marker → normal push allowed + marker consumed (uses=1 → deleted)
-( cd "$GP" && printf '{"expiresAt":%d,"uses":1}' "$(( ($(date +%s)+3600)*1000 ))" > .claude/git-push-approved.marker )
-( cd "$GP" && printf '%s' "$(J '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}')" | node "$HOOKS/git-push-guard.js" >/dev/null 2>&1 )
-[ ! -f "$GP/.claude/git-push-approved.marker" ] && ok || bad "gpg marker consumed (uses=1 → deleted)"
-# force push still blocked even with marker
-( cd "$GP" && printf '{"expiresAt":%d,"uses":3}' "$(( ($(date +%s)+3600)*1000 ))" > .claude/git-push-approved.marker )
-OUT="$( cd "$GP" && printf '%s' "$(J '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}')" | node "$HOOKS/git-push-guard.js" 2>/dev/null )"
-printf '%s' "$OUT" | grep -q '"decision":"block"' && ok || bad "gpg force blocked even WITH marker"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push --force-with-lease origin main"}}')"; a_block "gpg block: force-with-lease"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push -fu origin main"}}')";       a_block "gpg block: combined short force"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push '\''--force'\'' origin main"}}')"; a_block "gpg block: quoted force"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git -c push.default=current push --force origin main"}}')"; a_block "gpg block: git global config force"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git --no-pager push --force origin main"}}')"; a_block "gpg block: git global flag force"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git.exe push --force origin main"}}')"; a_block "gpg block: Windows git executable force"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push origin +main"}}')";             a_block "gpg block: forced refspec"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push --delete origin obsolete"}}')"; a_block "gpg block: --delete remote branch"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git -c push.default=current push --delete origin obsolete"}}')"; a_block "gpg block: git global config delete"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push --mirror origin"}}')";         a_block "gpg block: mirror remote refs"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push --prune origin"}}')";          a_block "gpg block: prune remote refs"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push origin :refs/heads/obsolete"}}')"; a_block "gpg block: delete branch refspec"
+fire git-push-guard "$(J '{"tool_name":"Bash","tool_input":{"command":"git push origin :refs/tags/v0.9.0"}}')"; a_block "gpg block: delete tag refspec"
 
 # ── pr-guard (real git remotes, execSync) ────────────────────────────────────
 echo "pr-guard:"

@@ -76,7 +76,13 @@ try {
   r = await tc("bash", { command: "vercel --prod" });
   ok(r && r.block === true && /prod 배포/.test(r.reason || ""), "pi tool_call: deploy BLOCKED (no approval)");
   r = await tc("bash", { command: "git push origin main" });
-  ok(r && r.block === true && /git push 차단|FORCE PUSH/.test(r.reason || ""), "pi tool_call: gitPush BLOCKED");
+  ok(!r || r.block !== true, "pi tool_call: routine gitPush NOT blocked");
+  r = await tc("bash", { command: "git push --force-with-lease origin main" });
+  ok(r && r.block === true && /FORCE PUSH/.test(r.reason || ""), "pi tool_call: force gitPush BLOCKED");
+  r = await tc("bash", { command: "git push origin :refs/tags/obsolete" });
+  ok(r && r.block === true && /REMOTE REF DELETE/.test(r.reason || ""), "pi tool_call: remote tag delete BLOCKED");
+  r = await tc("bash", { command: "git push --mirror origin" });
+  ok(r && r.block === true && /REMOTE REF DELETE/.test(r.reason || ""), "pi tool_call: mirror push BLOCKED");
   r = await tc("bash", { command: "node sen" + "d.js sen" + "d" });
   ok(r && r.block === true && /외부 이메일 발송 차단/.test(r.reason || ""), "pi tool_call: emailSend BLOCKED");
   r = await tc("bash", { command: "git status" });
