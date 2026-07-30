@@ -46,6 +46,38 @@
       "actual_upstream_provider_required": false
     },
     {
+      "id": "worker-azure-gpt-5-4-nano",
+      "adapter_kind": "openai_compatible_http",
+      "provider_id": "azure-foundry",
+      "endpoint_env": "AZURE_FOUNDRY_ENDPOINT",
+      "api_key_env": "AZURE_FOUNDRY_KEY",
+      "api_version": "openai-v1",
+      "deployment_env": "AZURE_GPT_5_4_NANO_DEPLOYMENT",
+      "source_model_id": "gpt-5.4-nano",
+      "unsupported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "cache_mode": "provider_default",
+      "actual_upstream_provider_required": false
+    },
+    {
+      "id": "worker-azure-grok-4-3",
+      "adapter_kind": "openai_compatible_http",
+      "provider_id": "azure-foundry",
+      "endpoint_env": "AZURE_FOUNDRY_ENDPOINT",
+      "api_key_env": "AZURE_FOUNDRY_KEY",
+      "api_version": "openai-v1",
+      "deployment_env": "AZURE_GROK_4_3_DEPLOYMENT",
+      "source_model_id": "grok-4.3",
+      "unsupported_parameters": [
+        "tools",
+        "tool_choice"
+      ],
+      "cache_mode": "unknown",
+      "actual_upstream_provider_required": false
+    },
+    {
       "id": "worker-openrouter-hy3",
       "adapter_kind": "openai_compatible_http",
       "provider_id": "openrouter",

@@ -11,10 +11,10 @@ Use Luna by default only for bounded implementation with an exact automated vali
 
 The same nine deterministic algorithm-output tasks were run once through the existing development runner for Luna and the all-Sol control. Each output was scored by the hidden exact structural oracle.
 
-| Route | Exact passes | Recorded monetary cost | Wall time |
-|---|---:|---:|---:|
-| `worker-luna` | 8/9 (88.9%) | $0.0545216 | 74.525 s |
-| `worker-sol-control` | 8/9 (88.9%) | $0.3629880 | 53.401 s |
+| Route | Exact passes | Recorded monetary cost | Wall time | Model attempt turns | Runner retry turns |
+|---|---:|---:|---:|---:|---:|
+| `worker-luna` | 8/9 (88.9%) | $0.0545216 | 74.525 s | 9 | 0 |
+| `worker-sol-control` | 8/9 (88.9%) | $0.3629880 | 53.401 s | 9 | 0 |
 
 Within this narrow smoke, Luna matched Sol's pass count and used 84.98% less recorded monetary cost, but took 39.56% longer. Luna failed `DEV-ALG-09`; Sol failed `DEV-ALG-02`. Different failures mean this is not evidence of interchangeability.
 
@@ -22,6 +22,7 @@ Within this narrow smoke, Luna matched Sol's pass count and used 84.98% less rec
 
 - One run per task is sufficient only to reject an obvious performance shortfall before opt-in use behind exact validation.
 - This does not measure repository editing, tool use, orchestration, retries, review, rework, or total issue cost.
+- A model attempt turn is one durable `attempt_started` journal record; interruption can occur before the provider receives it. Runner retry turns are attempts after the first attempt for the same task slot. Provider-internal retry counts are unavailable for these Codex runs and must not be reported as zero. Full-composition trials must also report fallbacks and escalations because each can add cost and latency.
 - The Microsoft Foundry leaderboard supplied by the user is candidate-selection context, not evidence produced by this repository.
 - Terra remains the bounded fallback because the supplied coding-specific reference reports Terra at 0.82 and Sol at 0.81; that external result is not treated as local causal proof.
 
