@@ -33,14 +33,25 @@ argument-hint: "[선택사항: 특정 verify 스킬 이름]"
 | 1 | `verify-contract-conformance` | 계약↔코드 드리프트(시그니처/계약만/코드만) 결정론 검출 |
 | 2 | `verify-request-contract` | 원요청 source→증거·권한·2회 Clean·Claude Code/Codex 동등성 결정론 검증 |
 | 3 | `verify-benchmark-contract` | 벤치 스키마·공급자 영수증·HMAC/DPAPI 저널·분석 증거 검증 |
+| 4 | `verify-product-preservation` | 프로젝트 adapter가 선언한 제품 표면·capability·source provenance와 delivery gate 검증 |
 
-<!-- 스킬이 추가되면 위 형식으로 등록 -->>
+<!-- 스킬이 추가되면 위 형식으로 등록 -->
 
 ## 워크플로우
 
 ### Step 1: 소개
 
 위의 **실행 대상 스킬** 섹션에 나열된 스킬을 확인합니다.
+
+먼저 두 집합을 구분해 대조합니다.
+
+- **catalog 집합**: 실제 `.agents/skills/verify-*/SKILL.md` = `.agents/context/skills-index.yaml`
+  = `.users/skills-list.md` = `.claude/skills/verify-*` pointer
+- **실행 집합**: catalog에서 orchestrator인 `verify-implementation` 자신을 제외한 집합
+  = 이 목록 = `/manage-skills`의 **등록된 검증 스킬**
+
+각 집합의 누락·추가·중복은 registry drift이며 기능 작업에서는 즉시 FAIL입니다. 표의 표시
+순서는 실행 순서로만 사용하며 catalog 정렬 순서 차이 자체를 drift로 판정하지 않습니다.
 
 선택적 인수가 제공된 경우, 해당 스킬만 필터링합니다.
 
@@ -52,7 +63,8 @@ argument-hint: "[선택사항: 특정 verify 스킬 이름]"
 검증 스킬이 없습니다. `/manage-skills`를 실행하여 프로젝트에 맞는 검증 스킬을 생성하세요.
 ```
 
-이 경우 워크플로우를 종료합니다.
+경량 문서 작업이면 안내 후 종료할 수 있습니다. 기능 작업, planning/integration review,
+release 준비 중이라면 검증 공백이므로 FAIL하고 `/manage-skills`로 등록을 복구합니다.
 
 **등록된 스킬이 1개 이상인 경우:**
 
@@ -125,6 +137,8 @@ Workflow 섹션에 정의된 각 검사를 순서대로 실행합니다:
 | verify-<name2> | PASS / X개 이슈 | N | 상세... |
 
 **발견된 총 이슈: X개**
+**Review: CLEAN | NOT_CLEAN**
+**Delivery: RELEASE_ELIGIBLE | REVIEW_ONLY**
 ```
 
 **모든 검증 통과 시:**
@@ -132,12 +146,13 @@ Workflow 섹션에 정의된 각 검사를 순서대로 실행합니다:
 ```markdown
 모든 검증을 통과했습니다!
 
-구현이 프로젝트의 모든 규칙을 준수합니다:
+등록된 검증 범위가 통과했습니다:
 
 - verify-<name1>: <통과 내용 요약>
 - verify-<name2>: <통과 내용 요약>
 
-코드 리뷰 준비가 완료되었습니다.
+`verify-product-preservation`과 최신 integration review가 모두 CLEAN일 때만
+`RELEASE_ELIGIBLE`입니다. 그렇지 않으면 검증 통과 항목이 있어도 `REVIEW_ONLY`입니다.
 ```
 
 **이슈 발견 시:**
@@ -207,6 +222,10 @@ X개 수정 완료.
 모든 검증을 통과했습니다!
 ```
 
+수정 뒤에는 source, baseline, preservation contract, work revision 결박이 움직였는지
+확인합니다. 움직였다면 이전 Clean receipt를 재사용하지 말고 planning/integration review의
+Clean 연속 기록을 다시 시작합니다.
+
 **여전히 이슈가 남은 경우:**
 
 ```markdown
@@ -225,7 +244,7 @@ X개 수정 완료.
 
 다음은 **문제가 아닙니다**:
 
-1. **등록된 스킬이 없는 프로젝트** — 오류가 아닌 안내 메시지를 표시하고 종료
+1. **등록된 스킬이 없는 비기능 경량 작업** — 안내 메시지를 표시하고 종료할 수 있음. 기능·release 작업은 FAIL
 2. **스킬의 자체적 예외** — 각 verify 스킬의 Exceptions 섹션에 정의된 패턴은 이슈로 보고하지 않음
 3. **verify-implementation 자체** — 실행 대상 스킬 목록에 자기 자신을 포함하지 않음
 4. **manage-skills** — `verify-`로 시작하지 않으므로 실행 대상에 포함되지 않음
@@ -235,4 +254,5 @@ X개 수정 완료.
 | File | Purpose |
 |------|---------|
 | `.agents/skills/manage-skills/SKILL.md` | 스킬 유지보수 (이 파일의 실행 대상 스킬 목록을 관리) |
+| `.agents/skills/verify-product-preservation/SKILL.md` | 기존 제품 표면과 delivery state 검증 |
 | `CLAUDE.md` | 프로젝트 지침 |

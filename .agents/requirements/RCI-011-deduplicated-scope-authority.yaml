@@ -5,6 +5,7 @@ product: naia-adk-request-contract
 module: authority
 status: verified
 source: human
+source_provenance: legacy_unresolved
 priority: high
 created: 2026-07-14
 updated: 2026-07-14

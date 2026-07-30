@@ -14,6 +14,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
+const preservationPolicy = require("./preservation-contract.js");
 
 const VERSION = 1;
 const DIR_MODE = 0o700;
@@ -34,6 +35,8 @@ const HELD_LOCKS = new Set();
 const ID_PATTERN = /^[A-Z][A-Z0-9_-]{2,127}$/;
 const REQUIRED_CLIENT_EVENTS = ["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"];
 const CONTROL_INPUT_NAMES = Object.freeze({ contract: "contract-input.json", authority: "authority-presentation-input.json", resume: "resume-receipt-input.json" });
+const PRESERVATION_REVIEW_STAGES = Object.freeze(["planning", "integration"]);
+const PRESERVATION_REVIEW_ROLES = Object.freeze(["source_fidelity", "baseline_preservation", "implementation_test", "authority_release"]);
 
 function closedObject(value, allowed, errors, code) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -295,10 +298,12 @@ function boundedInteger(raw, key, fallback, minimum, maximum, errors) {
 
 function loadConfig(cwd) {
 	const file = path.join(cwd, ".agents", "context", "request-contract.json");
-	const raw = readJson(file, {});
+	const parsed = readJson(file, null);
+	const raw = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
 	const productRoots = [...new Set((raw.product_roots || ["."]).map(normalizeRel))].sort();
 	const exclusions = [...new Set((raw.exclusions || []).map(normalizeRel))].sort();
 	const configErrors = [];
+	if (!parsed) configErrors.push(fs.existsSync(file) ? "request_contract_config_unreadable" : "request_contract_config_missing");
 	for (const [kind, values] of [["product_root", productRoots], ["exclusion", exclusions]]) {
 		for (const value of values) {
 			if (path.isAbsolute(value) || value === ".." || value.startsWith("../") || value.includes("/../")) configErrors.push(`${kind}_escape:${value}`);
@@ -306,11 +311,22 @@ function loadConfig(cwd) {
 	}
 	const canonical = {
 		version: raw.version || VERSION,
+		installation_state: raw.installation_state || (raw.enabled_by_default === true ? "enforced" : "unprovisioned"),
 		enabled_by_default: raw.enabled_by_default === true,
 		minimum_clean_rounds: boundedInteger(raw.minimum_clean_rounds, "minimum_clean_rounds", 2, 2, 64, configErrors),
 		stop_attempt_limit: boundedInteger(raw.stop_attempt_limit, "stop_attempt_limit", 3, 3, 100, configErrors),
 		product_roots: productRoots,
 		exclusions,
+		preservation: {
+			required: Boolean(raw.preservation && raw.preservation.required),
+			protect_test_contracts: !raw.preservation || raw.preservation.protect_test_contracts !== false,
+			protect_vendor_sources: !raw.preservation || raw.preservation.protect_vendor_sources !== false,
+			allowed_adapter_digests: [...new Set((raw.preservation && raw.preservation.allowed_adapter_digests) || [])].sort(),
+		},
+		release: {
+			shell_tools: [...new Set((raw.release && raw.release.shell_tools) || ["Bash", "shell_command"])].sort(),
+			command_patterns: [...new Set((raw.release && raw.release.command_patterns) || [])].sort(),
+		},
 		supported_clients: raw.supported_clients || {},
 		authority: {
 			public_key_env: (raw.authority && raw.authority.public_key_env) || "REQUEST_CONTRACT_PUBLIC_KEY",
@@ -327,6 +343,7 @@ function loadConfig(cwd) {
 			require_repository_blind: !raw.reviewer || raw.reviewer.require_repository_blind !== false,
 				require_home_blind: !raw.reviewer || raw.reviewer.require_home_blind !== false,
 				allowed_attestor_digests: [...new Set((raw.reviewer && raw.reviewer.allowed_attestor_digests) || [])].sort(),
+				required_roles: [...new Set((raw.reviewer && raw.reviewer.required_roles) || (raw.preservation && raw.preservation.required ? PRESERVATION_REVIEW_ROLES : []))].sort(),
 			},
 			review_runner: {
 				public_key_env: (raw.review_runner && raw.review_runner.public_key_env) || "REQUEST_CONTRACT_REVIEW_RUNNER_PUBLIC_KEY",
@@ -340,6 +357,15 @@ function loadConfig(cwd) {
 				success_hours: boundedInteger(raw.retention && raw.retention.success_hours, "retention_success_hours", 24, 1, 87_600, configErrors),
 			},
 	};
+	if (!["unprovisioned", "enforced"].includes(canonical.installation_state)) configErrors.push("installation_state_invalid");
+	if (canonical.installation_state === "unprovisioned" && canonical.enabled_by_default) configErrors.push("unprovisioned_default_enable_invalid");
+	for (const tool of canonical.release.shell_tools) if (typeof tool !== "string" || !tool.trim()) configErrors.push("release_shell_tool_invalid");
+	for (const pattern of canonical.release.command_patterns) {
+		if (typeof pattern !== "string" || !pattern.trim() || pattern.length > 512) configErrors.push("release_command_pattern_invalid");
+		else try { new RegExp(pattern, "i"); } catch { configErrors.push("release_command_pattern_invalid"); }
+	}
+	for (const role of canonical.reviewer.required_roles) if (typeof role !== "string" || !/^[a-z][a-z0-9_-]{2,63}$/.test(role)) configErrors.push("reviewer_required_role_invalid");
+	for (const digest of canonical.preservation.allowed_adapter_digests) if (!/^[a-f0-9]{64}$/.test(digest)) configErrors.push("preservation_adapter_digest_invalid");
 	for (const client of ["claude", "codex"]) {
 		if (typeof canonical.supported_clients[client] !== "string" || !/^>=\d+\.\d+\.\d+$/.test(canonical.supported_clients[client])) configErrors.push(`supported_client_invalid:${client}`);
 	}
@@ -378,6 +404,14 @@ function loadReviewRunnerKey(cwd, config = loadConfig(cwd), env = process.env) {
 	return loadConfiguredKey(cwd, config.review_runner.public_key_env, config.review_runner.public_key_path, env);
 }
 
+function preservationRunnerContext(cwd, config = loadConfig(cwd), env = process.env) {
+	return {
+		public_key: loadReviewRunnerKey(cwd, config, env),
+		credential_id: config.review_runner.credential_id || null,
+		allowed_digests: config.review_runner.allowed_attestor_digests || [],
+	};
+}
+
 function harnessRoot(cwd) {
 	return path.join(cwd, ".agents", "harness");
 }
@@ -390,12 +424,22 @@ function hasStickyGovernanceState(cwd) {
 }
 
 function governed(cwd, env = process.env) {
+	const config = loadConfig(cwd);
 	const v = String(env.REQUEST_CONTRACT || "").trim().toLowerCase();
-	if (["on", "1", "true", "yes"].includes(v)) return true;
 	if (hasStickyGovernanceState(cwd)) return true;
+	// Once the hook is installed, a missing or corrupt policy file is not an
+	// opt-out mechanism. Enter governed mode so SessionStart fails closed with
+	// a concrete configuration diagnostic instead of silently allowing work.
+	if (config.errors.length) return true;
+	if (["on", "1", "true", "yes"].includes(v)) return true;
+	// Installation and enforcement are separate states. A repository may carry
+	// the complete policy before signer/reviewer/runner credentials are
+	// provisioned; that staged installation must not lock every client session.
+	// Once enforcement is declared, environment opt-out is no longer accepted.
+	if (config.installation_state === "enforced") return true;
 	if (["off", "0", "false", "no"].includes(v)) return false;
 	if (fs.existsSync(path.join(cwd, ".agents", "harness", "request-contract-on"))) return true;
-	return loadConfig(cwd).enabled_by_default;
+	return config.enabled_by_default;
 }
 
 function unitPaths(cwd, unitId, unitDirectory = null) {
@@ -488,7 +532,9 @@ function reapStaleDirectoryLock(lock, now) {
 			if (error.code === "ENOENT") return true;
 			throw error;
 		}
-		if (lockOwnerAlive(owner) || now - stat.mtimeMs <= 30_000) return false;
+		// A fresh lock is never reapable, so avoid an expensive process-identity
+		// probe on every contention retry (PowerShell startup is material on Windows).
+		if (now - stat.mtimeMs <= 30_000 || lockOwnerAlive(owner)) return false;
 		const stale = `${lock}.stale.${opaqueId()}`;
 		durableRename(lock, stale);
 		durableRemoveTree(stale);
@@ -559,16 +605,24 @@ function withDirectoryLock(lock, fn, now = Date.now(), timeoutMs = 5000, opts = 
 		return fn();
 	} finally {
 		HELD_LOCKS.delete(lock);
-		const owner = readJson(path.join(lock, "owner.json"));
-		let currentIdentity = null;
-		try { currentIdentity = directoryIdentity(lock); } catch (error) { if (error.code !== "ENOENT") throw error; }
-		if (owner && owner.nonce === ownerNonce && sameDirectoryIdentity(acquiredIdentity, currentIdentity)) {
+		const releaseDeadline = Date.now() + Math.min(timeoutMs, 10_000);
+		for (;;) {
+			const owner = readJson(path.join(lock, "owner.json"));
+			let currentIdentity = null;
+			try { currentIdentity = directoryIdentity(lock); } catch (error) { if (error.code === "ENOENT") break; throw error; }
+			if (!owner || owner.nonce !== ownerNonce || !sameDirectoryIdentity(acquiredIdentity, currentIdentity)) {
+				throw Object.assign(new Error("lifecycle lock ownership changed before release"), { code: "lifecycle_lock_ownership_lost" });
+			}
 			const released = `${lock}.released.${ownerNonce}`;
 			try {
 				durableRename(lock, released);
 				durableRemoveTree(released);
+				break;
 			} catch (error) {
-				if (error.code !== "ENOENT") throw error;
+				if (error.code === "ENOENT") break;
+				const retryable = process.platform === "win32" && ["EPERM", "EBUSY", "ENOTEMPTY"].includes(error.code);
+				if (!retryable || Date.now() >= releaseDeadline) throw error;
+				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
 			}
 		}
 	}
@@ -582,8 +636,8 @@ function withUnitLock(unit, fn, now = Date.now()) {
 	}, now, unit.lockTimeoutMs || 5000);
 }
 
-function withRepositoryLock(cwd, fn, now = Date.now()) {
-	return withDirectoryLock(path.join(harnessRoot(cwd), "locks", "repository-lifecycle"), fn, now, 10_000);
+function withRepositoryLock(cwd, fn, now = Date.now(), timeoutMs = 30_000) {
+	return withDirectoryLock(path.join(harnessRoot(cwd), "locks", "repository-lifecycle"), fn, now, timeoutMs);
 }
 
 function claimGlobalId(cwd, kind, value, owner) {
@@ -1406,8 +1460,8 @@ function directiveScopeProjection(d) {
 }
 
 function scopeProjection(contract) {
-	return {
-		sources: (contract.sources || []).map((s) => ({ id: s.id, classification: s.classification, directive_ids: s.directive_ids || [], obligation_atoms: s.obligation_atoms || [] })),
+	const projection = {
+		sources: (contract.sources || []).map((s) => ({ id: s.id, classification: s.classification, source_kind: s.source_kind, derived_from: s.derived_from, derivation_kind: s.derivation_kind, directive_ids: s.directive_ids || [], obligation_atoms: s.obligation_atoms || [] })),
 		directives: (contract.directives || []).map(directiveScopeProjection),
 		authorities: (contract.authorities || []).map((a) => ({
 			id: a.id,
@@ -1423,6 +1477,8 @@ function scopeProjection(contract) {
 		})),
 		tombstones: contract.tombstones || [],
 	};
+	if (contract.preservation) projection.preservation = contract.preservation;
+	return projection;
 }
 
 function directiveDisposedScopeIds(directive, edges = []) {
@@ -1607,7 +1663,7 @@ function validateContract(contract, sourceRecords = [], occurrences = [], opts =
 	const errors = [];
 	const workspaceConfig = opts.cwd ? opts.config || loadConfig(opts.cwd) : null;
 	if (!contract || contract.kind !== "request-contract" || contract.version !== VERSION) return { ok: false, errors: ["contract_shape_invalid"] };
-	closedObject(contract, ["kind", "version", "id", "status", "sources", "directives", "artifacts", "edges", "authorities", "tombstones", "changes"], errors, "contract");
+	closedObject(contract, ["kind", "version", "id", "status", "sources", "directives", "artifacts", "edges", "authorities", "tombstones", "changes", "preservation"], errors, "contract");
 	if (!contract.id || !Array.isArray(contract.sources) || !Array.isArray(contract.directives) || !contract.artifacts || !Array.isArray(contract.edges)) errors.push("contract_required_field_missing");
 	if (!validId(contract.id)) errors.push("contract_id_invalid");
 	if (!["draft", "active", "complete", "incomplete"].includes(contract.status)) errors.push("contract_status_invalid");
@@ -1617,7 +1673,7 @@ function validateContract(contract, sourceRecords = [], occurrences = [], opts =
 	const declaredSources = new Map();
 	const obligations = new Map();
 	for (const s of contract.sources || []) {
-		closedObject(s, ["id", "classification", "directive_ids", "obligation_atoms"], errors, "contract_source");
+		closedObject(s, ["id", "classification", "source_kind", "derived_from", "derivation_kind", "directive_ids", "obligation_atoms"], errors, "contract_source");
 		if (!s.id || declaredSources.has(s.id)) errors.push("contract_source_id_duplicate");
 		if (typeof s.id !== "string" || !/^SRC-[a-f0-9]{32}$/.test(s.id)) errors.push("contract_source_id_invalid");
 		declaredSources.set(s.id, s);
@@ -1896,12 +1952,18 @@ function validateContract(contract, sourceRecords = [], occurrences = [], opts =
 		if (evidence && evidence.subject_id !== c.implementation_id) errors.push(`contract_change_evidence_subject_mismatch:${c.id}`);
 	}
 	for (const id of occurrenceIds) if (!mapped.has(id)) errors.push(`contract_change_uncovered:${id}`);
+	const preservation = preservationPolicy.validateDeclaration(contract, {
+		config: workspaceConfig,
+		sourceRecords,
+		probeRunner: opts.cwd && workspaceConfig ? preservationRunnerContext(opts.cwd, workspaceConfig, opts.env || process.env) : opts.probeRunner,
+	});
+	if (!preservation.ok) errors.push(...preservation.errors);
 	return {
 		ok: errors.length === 0,
 		errors: [...new Set(errors)],
 		ids: {
 			sourceIds: [...sourceIds],
-				sourceMappings: [...declaredSources.values()].map((s) => canonicalJson({ source_id: s.id, classification: s.classification, directive_ids: s.directive_ids || [], obligation_atom_ids: (s.obligation_atoms || []).map((atom) => atom.id) })),
+				sourceMappings: [...declaredSources.values()].map((s) => canonicalJson({ source_id: s.id, classification: s.classification, source_kind: s.source_kind, derived_from: s.derived_from, derivation_kind: s.derivation_kind, directive_ids: s.directive_ids || [], obligation_atom_ids: (s.obligation_atoms || []).map((atom) => atom.id) })),
 			directiveIds: [...directives.keys()],
 			targetIds: [...targetIds],
 			criterionIds: [...criterionIds],
@@ -2108,6 +2170,16 @@ function bindContractUnlocked(unit, contract, opts = {}) {
 	if (priorContract && contractDigest(priorContract) !== digest) binding.binding_epoch += 1;
 	const scopePlan = planScopeVersion(unit, contract, { scope_epoch: head.scope_epoch, binding_epoch: binding.binding_epoch });
 	const nextHead = { ...head, contract_digest: digest, work_revision: head.work_revision + 1, state_digest: stateDigest(nextState) };
+	binding.planning_work_revision = nextHead.work_revision;
+	binding.planning_digest = sha256(canonicalJson({
+		source_head: nextHead.source_head,
+		contract_digest: digest,
+		config_digest: nextHead.config_digest,
+		scope_epoch: nextHead.scope_epoch,
+		binding_epoch: binding.binding_epoch,
+		baseline_digest: sha256(canonicalJson(nextState.baseline)),
+		surface_inventory_digest: contract.preservation && contract.preservation.inventory && contract.preservation.inventory.surface_inventory_digest || null,
+	}));
 	const transaction = {
 		version: VERSION,
 		kind: "bind",
@@ -2197,8 +2269,8 @@ function scopeHistoryCoverage(records) {
 function contractCoverageProjection(contract) {
 	const directives = contract.directives || [];
 	const artifacts = contract.artifacts || {};
-	return {
-		sources: (contract.sources || []).map((source) => ({ source_id: source.id, classification: source.classification, directive_ids: source.directive_ids || [], obligation_atom_ids: (source.obligation_atoms || []).map((atom) => atom.id) })),
+	const projection = {
+		sources: (contract.sources || []).map((source) => ({ source_id: source.id, classification: source.classification, source_kind: source.source_kind, derived_from: source.derived_from, derivation_kind: source.derivation_kind, directive_ids: source.directive_ids || [], obligation_atom_ids: (source.obligation_atoms || []).map((atom) => atom.id) })),
 		directives: directives.map((directive) => ({
 			directive_id: directive.id,
 			state: directive.state,
@@ -2216,6 +2288,8 @@ function contractCoverageProjection(contract) {
 		tombstones: (contract.tombstones || []).map((tombstone) => ({ tombstone_id: tombstone.id, directive_id: tombstone.directive_id, state: tombstone.state, authority_id: tombstone.authority_id, disposed_scope_ids: tombstone.disposed_scope_ids || [] })),
 		changes: (contract.changes || []).map((change) => ({ change_id: change.id, directive_id: change.directive_id, implementation_id: change.implementation_id, evidence_id: change.evidence_id })),
 	};
+	if (contract.preservation) projection.preservation = contract.preservation;
+	return projection;
 }
 
 function contractCoverageIds(contract, occurrences = []) {
@@ -2241,6 +2315,9 @@ function collectReviewMaterials(cwd, contract, state, workspace) {
 	const requested = new Set();
 	for (const directive of contract.directives || []) for (const target of directive.targets || []) if (target.path) requested.add(normalizeRel(target.path));
 	for (const evidence of ((contract.artifacts && contract.artifacts.evidence) || [])) if (evidence.locator) requested.add(normalizeRel(evidence.locator));
+	for (const surface of ((contract.preservation && contract.preservation.surfaces) || [])) {
+		for (const rel of [...(surface.baseline_paths || []), ...(surface.current_paths || [])]) requested.add(normalizeRel(rel));
+	}
 	for (const occurrence of state.occurrences || []) {
 		const rel = occurrence.detail && (occurrence.detail.path || occurrence.detail.target);
 		if (rel && !path.isAbsolute(rel)) requested.add(normalizeRel(rel));
@@ -2252,6 +2329,32 @@ function collectReviewMaterials(cwd, contract, state, workspace) {
 		if (metadata.type === "file") {
 			const bytes = fs.readFileSync(path.join(cwd, rel));
 			if (sha256(bytes) !== metadata.digest || bytes.length !== metadata.size) throw Object.assign(new Error(`review material changed while snapshotting: ${rel}`), { code: "review_bundle_workspace_race" });
+			material.content_base64 = bytes.toString("base64");
+		}
+		return material;
+	});
+}
+
+function collectBaselineReviewMaterials(cwd, contract, state, currentManifest) {
+	const baseline = state.baseline;
+	if (!baseline || !baseline.head || !baseline.files) throw Object.assign(new Error("review bundle has no pinned baseline manifest"), { code: "review_bundle_baseline_missing" });
+	const requested = new Set();
+	for (const surface of ((contract.preservation && contract.preservation.surfaces) || [])) for (const rel of surface.baseline_paths || []) requested.add(normalizeRel(rel));
+	for (const occurrence of state.occurrences || []) {
+		const rel = occurrence.detail && (occurrence.detail.path || occurrence.detail.target);
+		if (rel && !path.isAbsolute(rel)) requested.add(normalizeRel(rel));
+	}
+	const selected = Object.keys(baseline.files).filter((rel) => {
+		const requestedPath = [...requested].some((target) => rel === target || rel.startsWith(target + "/"));
+		const changed = canonicalJson(baseline.files[rel]) !== canonicalJson(currentManifest.files[rel] || null);
+		return requestedPath || changed;
+	});
+	return selected.sort().map((rel) => {
+		const metadata = baseline.files[rel];
+		const material = { path: rel, metadata };
+		if (metadata.type === "file") {
+			const bytes = gitBufferStrict(cwd, ["show", `${baseline.head}:${rel}`]);
+			if (sha256(bytes) !== metadata.digest || bytes.length !== metadata.size) throw Object.assign(new Error(`baseline review material does not match its manifest: ${rel}`), { code: "review_bundle_baseline_digest_mismatch" });
 			material.content_base64 = bytes.toString("base64");
 		}
 		return material;
@@ -2270,9 +2373,13 @@ function buildReviewBundle(unit, cwd, opts = {}) {
 	if (!sourceChain.ok) throw Object.assign(new Error(sourceChain.errors.join(", ")), { code: "source_log_corrupt", errors: sourceChain.errors });
 	if (!scopeHistory.ok) throw Object.assign(new Error(scopeHistory.errors.join(", ")), { code: "scope_history_corrupt", errors: scopeHistory.errors });
 	const materials = collectReviewMaterials(cwd, contract, state, workspace);
+	const baselineMaterials = collectBaselineReviewMaterials(cwd, contract, state, workspace.manifest);
+	const preservationSurfaceMappings = Object.entries(Object.fromEntries(((contract.preservation && contract.preservation.surfaces) || []).map((surface) =>
+		[surface.id, preservationPolicy.surfaceDiffDigest(state.baseline, workspace.manifest, surface)])))
+		.sort(([a], [b]) => a.localeCompare(b)).map(([id, digest]) => `${id}:${digest}`);
 	const confirmedWorkspace = workspaceManifest(cwd, loadConfig(cwd));
 	if (confirmedWorkspace.digest !== workspace.digest) throw Object.assign(new Error("workspace changed while building the review bundle"), { code: "review_bundle_workspace_race" });
-	const bundle = {
+	const fullBundle = {
 		version: VERSION,
 		unit_id: unit.id,
 		sources: sourceChain.records.map((r) => ({ source_id: r.source_id, seq: r.seq, origin: r.origin, prompt: r.prompt })),
@@ -2281,16 +2388,114 @@ function buildReviewBundle(unit, cwd, opts = {}) {
 		binding,
 		occurrences: state.occurrences,
 		workspace_manifest: workspace.manifest,
+		baseline_manifest: state.baseline,
 		materials,
-		review_coverage: { ...contractCoverageIds(contract, state.occurrences), ...scopeHistoryCoverage(scopeHistory.records) },
+		baseline_materials: baselineMaterials,
+		review_coverage: { ...contractCoverageIds(contract, state.occurrences), ...scopeHistoryCoverage(scopeHistory.records), preservationSurfaceMappings },
+		required_review_roles: loadConfig(cwd).reviewer.required_roles,
 		workspace_digest: workspace.digest,
 		config_digest: head.config_digest,
 		source_head: head.source_head,
 		contract_digest: head.contract_digest,
 		scope_epoch: head.scope_epoch,
 		work_revision: head.work_revision,
+		expected_delivery_state: expectedDeliveryState(loadConfig(cwd), contract),
 	};
-	return { bundle, digest: sha256(canonicalJson(bundle)), workspace };
+	const fullDigest = sha256(canonicalJson(fullBundle));
+	const bundle = opts.stage && opts.role ? buildReviewEvidenceView(fullBundle, opts.stage, opts.role, fullDigest) : fullBundle;
+	return { bundle, digest: sha256(canonicalJson(bundle)), full_digest: fullDigest, workspace };
+}
+
+function effectiveReviewRoles(config, contract = null) {
+	const configured = [...new Set((config.reviewer && config.reviewer.required_roles) || [])];
+	if (config.preservation && config.preservation.required || contract && contract.preservation) return [...new Set([...PRESERVATION_REVIEW_ROLES, ...configured])];
+	return configured;
+}
+
+/** Preservation cannot become release-eligible before the pending signed controls exist. */
+function expectedDeliveryState(config, contract = null) {
+	return config.preservation && config.preservation.required || contract && contract.preservation ? "REVIEW_ONLY" : "RELEASE_ELIGIBLE";
+}
+
+function requiredReviewSlots(config, contract = null) {
+	const roles = effectiveReviewRoles(config, contract);
+	if (!roles.length) return [{ stage: "integration", role: "general" }];
+	const stages = config.preservation && config.preservation.required || contract && contract.preservation ? PRESERVATION_REVIEW_STAGES : ["integration"];
+	return stages.flatMap((stage) => roles.map((role) => ({ stage, role })));
+}
+
+function planningSeal(unit, config, binding, head, contract = null) {
+	const roles = effectiveReviewRoles(config, contract);
+	if (!(config.preservation && config.preservation.required || contract && contract.preservation) || !roles.length) return { ok: true, digest: null, records: [] };
+	const chain = verifyReviewChain(unit.paths);
+	if (!chain.ok) return { ok: false, digest: null, records: [], errors: chain.errors };
+	const byRole = new Map();
+	for (const record of chain.records) {
+		if (record.verdict !== "CLEAN" || record.review_stage !== "planning" || !roles.includes(record.role)) continue;
+		if (record.source_head !== head.source_head || record.contract_digest !== head.contract_digest || record.config_digest !== head.config_digest || record.scope_epoch !== head.scope_epoch || record.binding_epoch !== binding.binding_epoch) continue;
+		if (record.planning_digest !== binding.planning_digest || record.work_revision !== binding.planning_work_revision) continue;
+		byRole.set(record.role, record);
+	}
+	if (roles.some((role) => !byRole.has(role))) return { ok: false, digest: null, records: [], errors: ["review_planning_stage_incomplete"] };
+	const records = roles.sort().map((role) => byRole.get(role));
+	return { ok: true, digest: sha256(canonicalJson(records.map((record) => ({ role: record.role, record_hash: record.record_hash })))), records };
+}
+
+function buildReviewEvidenceView(full, stage, role, fullDigest = sha256(canonicalJson(full))) {
+	if (!PRESERVATION_REVIEW_STAGES.includes(stage)) throw Object.assign(new Error(`unsupported review stage: ${stage}`), { code: "review_stage_invalid" });
+	const roles = new Set(["source_fidelity", "baseline_preservation", "implementation_test", "authority_release", "general"]);
+	if (!roles.has(role)) throw Object.assign(new Error(`unsupported review role: ${role}`), { code: "review_role_invalid" });
+	const contract = full.contract || {};
+	const common = {
+		version: full.version,
+		unit_id: full.unit_id,
+		review_stage: stage,
+		review_role: role,
+		first_verdict_withheld: true,
+		full_bundle_digest: fullDigest,
+		review_coverage: full.review_coverage,
+		config_digest: full.config_digest,
+		source_head: full.source_head,
+		contract_digest: full.contract_digest,
+		scope_epoch: full.scope_epoch,
+		work_revision: full.work_revision,
+		expected_delivery_state: full.expected_delivery_state,
+	};
+	let evidence;
+	if (role === "source_fidelity") evidence = {
+		sources: full.sources,
+		contract: { id: contract.id, status: contract.status, sources: contract.sources, directives: contract.directives, authorities: contract.authorities, tombstones: contract.tombstones },
+		scope_history: full.scope_history,
+		binding: full.binding,
+	};
+	else if (role === "baseline_preservation") evidence = {
+		preservation: contract.preservation,
+		baseline_manifest: full.baseline_manifest,
+		workspace_manifest: stage === "integration" ? full.workspace_manifest : undefined,
+		baseline_materials: full.baseline_materials,
+		materials: stage === "integration" ? full.materials : undefined,
+	};
+	else if (role === "implementation_test") evidence = {
+		contract: { id: contract.id, status: contract.status, directives: contract.directives, artifacts: contract.artifacts, edges: contract.edges, changes: contract.changes },
+		occurrences: stage === "integration" ? full.occurrences : [],
+		workspace_manifest: stage === "integration" ? full.workspace_manifest : undefined,
+		materials: stage === "integration" ? full.materials : undefined,
+	};
+	else if (role === "authority_release") evidence = {
+		contract: { id: contract.id, status: contract.status, authorities: contract.authorities, tombstones: contract.tombstones, preservation: contract.preservation },
+		scope_history: full.scope_history,
+		binding: full.binding,
+		workspace_manifest: stage === "integration" ? full.workspace_manifest : undefined,
+	};
+	else evidence = full;
+	const includedSections = Object.keys(evidence).filter((key) => evidence[key] !== undefined).sort();
+	const allSections = ["sources", "contract", "scope_history", "binding", "occurrences", "workspace_manifest", "baseline_manifest", "materials", "baseline_materials", "preservation"];
+	return {
+		...common,
+		included_sections: includedSections,
+		withheld_sections: allSections.filter((key) => !includedSections.includes(key)),
+		evidence,
+	};
 }
 
 function reviewSignaturePayload(review) {
@@ -2308,7 +2513,7 @@ function isolationSignaturePayload(isolation) {
 }
 
 function reviewInvocationProjection(invocation) {
-	const fields = ["version", "nonce", "review_run_id", "issued_at", "expires_at", "bundle_digest", "writer_session_id", "writer_session_ids", "writer_process_ids", "writer_process_identities", "source_head", "contract_digest", "workspace_digest", "config_digest", "scope_epoch", "work_revision", "binding_epoch", "ids"];
+	const fields = ["version", "nonce", "review_run_id", "review_stage", "required_role", "expected_delivery_state", "planning_digest", "planning_seal_digest", "issued_at", "expires_at", "bundle_digest", "full_bundle_digest", "evidence_view_digest", "writer_session_id", "writer_session_ids", "writer_process_ids", "writer_process_identities", "source_head", "contract_digest", "workspace_digest", "config_digest", "scope_epoch", "work_revision", "binding_epoch", "ids"];
 	return Object.fromEntries(fields.map((field) => [field, invocation && invocation[field]]));
 }
 
@@ -2377,7 +2582,6 @@ function issueReviewInvocation(unit, cwd, writerSessionId, now = Date.now()) {
 			if (config.digest !== head.config_digest) throw Object.assign(new Error("request-contract configuration differs from genesis pin"), { code: "request_contract_config_drift" });
 			const state = readUnitState(unit, head);
 			if (state.active_mutations && Object.keys(state.active_mutations).length) throw Object.assign(new Error("review cannot start while a governed mutation is in flight"), { code: "review_mutation_in_flight" });
-			const bundle = buildReviewBundle(unit, cwd);
 		const reviewerKey = loadReviewerKey(cwd, config);
 		const runnerKey = loadReviewRunnerKey(cwd, config);
 		if (!reviewerKey || publicKeyFingerprint(reviewerKey) !== head.reviewer_key_fingerprint) throw Object.assign(new Error("reviewer key differs from genesis pin"), { code: "reviewer_key_pin_mismatch" });
@@ -2393,14 +2597,50 @@ function issueReviewInvocation(unit, cwd, writerSessionId, now = Date.now()) {
 		if (!cv.ok) throw Object.assign(new Error(cv.errors.join(", ")), { code: "review_contract_invalid", errors: cv.errors });
 		const nonce = opaqueId("REV-");
 		const reviewRunId = opaqueId("RUN-");
+		const reviewChain = verifyReviewChain(unit.paths);
+		if (!reviewChain.ok) throw Object.assign(new Error(reviewChain.errors.join(", ")), { code: "review_log_corrupt" });
+		const currentWorkspace = workspaceManifest(cwd, config);
+		const effectiveRoles = effectiveReviewRoles(config, contract);
+		const preservationReview = Boolean(config.preservation.required || contract.preservation);
+		const slots = requiredReviewSlots(config, contract);
+		const currentRecords = reviewChain.records.filter((record) => {
+			const stable = record.source_head === head.source_head && record.contract_digest === head.contract_digest && record.config_digest === head.config_digest && record.scope_epoch === head.scope_epoch && record.binding_epoch === binding.binding_epoch;
+			if (!stable) return false;
+			return record.review_stage === "planning" || (record.workspace_digest === currentWorkspace.digest && record.work_revision === head.work_revision);
+		});
+		const coveredSlots = new Set(currentRecords.filter((record) => record.verdict === "CLEAN").map((record) => `${record.review_stage}:${record.role}`));
+		let requiredSlot = slots.find((slot) => !coveredSlots.has(`${slot.stage}:${slot.role}`));
+		if (!requiredSlot && !preservationReview && currentRecords.filter((record) => record.verdict === "CLEAN").length < config.minimum_clean_rounds) requiredSlot = slots[currentRecords.length % slots.length];
+		if (!requiredSlot) throw Object.assign(new Error("all required review slots already have current CLEAN records"), { code: "review_slots_complete" });
+		if (requiredSlot.stage === "planning") {
+			const baselineChanged = diffManifests(state.baseline, currentWorkspace.manifest).length > 0;
+			if (head.work_revision !== binding.planning_work_revision || baselineChanged) throw Object.assign(new Error("planning review must be sealed before the first implementation mutation"), { code: "review_planning_window_closed" });
+		}
+		const currentPlanningSeal = planningSeal(unit, config, binding, head, contract);
+		if (requiredSlot.stage === "integration") {
+			const planningRoles = new Set(currentRecords.filter((record) => record.review_stage === "planning" && record.verdict === "CLEAN").map((record) => record.role));
+			if (preservationReview && effectiveRoles.some((role) => !planningRoles.has(role))) throw Object.assign(new Error("integration review cannot begin before every planning role has a CLEAN first verdict"), { code: "review_planning_stage_incomplete" });
+			if (!currentPlanningSeal.ok) throw Object.assign(new Error("integration review requires the current planning seal"), { code: "review_planning_stage_incomplete" });
+		}
+		const bundle = requiredSlot.role === "general" && !effectiveRoles.length
+			? buildReviewBundle(unit, cwd)
+			: buildReviewBundle(unit, cwd, { stage: requiredSlot.stage, role: requiredSlot.role });
+		const requiredRole = requiredSlot.role;
 		const bundlePath = path.join(unit.paths.pending, `bundle-${nonce}.json`);
 			const manifest = {
 			version: VERSION,
 				nonce,
-				review_run_id: reviewRunId,
+			review_run_id: reviewRunId,
+			review_stage: requiredSlot.stage,
+			required_role: requiredRole,
+			expected_delivery_state: expectedDeliveryState(config, contract),
+			planning_digest: binding.planning_digest,
+			planning_seal_digest: requiredSlot.stage === "integration" ? currentPlanningSeal.digest : null,
 			issued_at: now,
 			expires_at: now + 10 * 60_000,
 			bundle_digest: bundle.digest,
+			full_bundle_digest: bundle.full_digest,
+			evidence_view_digest: bundle.digest,
 			writer_session_id: writerSessionId || "unknown-writer",
 			writer_session_ids: writerSessionIds,
 			writer_process_ids: writerProcessIds,
@@ -2412,7 +2652,7 @@ function issueReviewInvocation(unit, cwd, writerSessionId, now = Date.now()) {
 			scope_epoch: head.scope_epoch,
 			work_revision: head.work_revision,
 			binding_epoch: binding && binding.binding_epoch,
-			ids: { ...cv.ids, ...scopeHistoryCoverage(verifyScopeHistory(unit).records) },
+			ids: { ...cv.ids, ...scopeHistoryCoverage(verifyScopeHistory(unit).records), preservationSurfaceMappings: bundle.bundle.review_coverage.preservationSurfaceMappings },
 			consumed: false,
 				private_bundle_path: bundlePath,
 			};
@@ -2503,8 +2743,10 @@ function appendReviewUnlocked(unit, review, opts = {}) {
 	const now = opts.now || Date.now();
 	const cwd = opts.cwd || path.resolve(unit.paths.unit, "../../../..");
 	const config = loadConfig(cwd);
+	const boundContract = optionalJson(unit.paths.contract, null, "contract_state_corrupt");
+	const preservationReview = Boolean(config.preservation.required || boundContract && boundContract.preservation);
 	cleanupExpiredReviewInvocations(unit, now);
-	closedObject(review, ["verdict", "run_id", "invocation_nonce", "bundle_digest", "source_head", "contract_digest", "workspace_digest", "config_digest", "scope_epoch", "work_revision", "binding_epoch", "covered_source_ids", "covered_source_mappings", "covered_directive_ids", "covered_target_ids", "covered_criterion_ids", "covered_authority_ids", "covered_authority_mappings", "covered_tombstone_ids", "covered_tombstone_mappings", "covered_scope_version_ids", "covered_scope_version_mappings", "covered_artifact_ids", "covered_edge_ids", "covered_change_ids", "covered_change_mappings", "finding_codes", "sandbox", "executor", "isolation", "reviewed_at"], errors, "review");
+	closedObject(review, ["verdict", "review_stage", "role", "planning_digest", "planning_seal_digest", "delivery_state", "preservation_vetoes", "run_id", "invocation_nonce", "bundle_digest", "full_bundle_digest", "evidence_view_digest", "source_head", "contract_digest", "workspace_digest", "config_digest", "scope_epoch", "work_revision", "binding_epoch", "covered_source_ids", "covered_source_mappings", "covered_directive_ids", "covered_target_ids", "covered_criterion_ids", "covered_authority_ids", "covered_authority_mappings", "covered_tombstone_ids", "covered_tombstone_mappings", "covered_scope_version_ids", "covered_scope_version_mappings", "covered_artifact_ids", "covered_edge_ids", "covered_change_ids", "covered_change_mappings", "covered_preservation_surface_mappings", "finding_codes", "sandbox", "executor", "isolation", "reviewed_at"], errors, "review");
 	if (!review || !["CLEAN", "DIRTY"].includes(review.verdict)) errors.push("review_verdict_invalid");
 	if (!review || !/^RUN-[a-f0-9]{32}$/.test(review.run_id || "")) errors.push("review_run_id_invalid");
 	if (!review || !review.bundle_digest) errors.push("review_bundle_digest_missing");
@@ -2516,6 +2758,16 @@ function appendReviewUnlocked(unit, review, opts = {}) {
 	if (review && review.sandbox) closedObject(review.sandbox, ["no_network", "repository_blind", "home_blind"], errors, "review_sandbox");
 	if (!review || !Array.isArray(review.finding_codes) || review.finding_codes.some((code) => !REVIEW_FINDING_CODES.has(code))) errors.push("review_finding_codes_invalid");
 	else if ((review.verdict === "CLEAN" && review.finding_codes.length !== 0) || (review.verdict === "DIRTY" && review.finding_codes.length === 0)) errors.push("review_verdict_findings_mismatch");
+	if (!review || typeof review.role !== "string" || !/^[a-z][a-z0-9_-]{2,63}$/.test(review.role)) errors.push("review_role_invalid");
+	if (!review || !PRESERVATION_REVIEW_STAGES.includes(review.review_stage)) errors.push("review_stage_invalid");
+	if (!review || !/^[a-f0-9]{64}$/.test(review.planning_digest || "")) errors.push("review_planning_digest_invalid");
+	if (review && review.review_stage === "integration" && preservationReview && !/^[a-f0-9]{64}$/.test(review.planning_seal_digest || "")) errors.push("review_planning_seal_missing");
+	if (review && review.review_stage === "planning" && review.planning_seal_digest !== null) errors.push("review_planning_seal_premature");
+	if (!review || !/^[a-f0-9]{64}$/.test(review.full_bundle_digest || "")) errors.push("review_full_bundle_digest_invalid");
+	if (!review || review.evidence_view_digest !== review.bundle_digest) errors.push("review_evidence_view_digest_mismatch");
+	if (!review || !["RELEASE_ELIGIBLE", "REVIEW_ONLY"].includes(review.delivery_state)) errors.push("review_delivery_state_invalid");
+	if (!review || !Array.isArray(review.preservation_vetoes) || review.preservation_vetoes.some((code) => typeof code !== "string" || !code.trim())) errors.push("review_preservation_vetoes_invalid");
+	else if (review.verdict === "CLEAN" && (review.delivery_state !== expectedDeliveryState(config, boundContract) || review.preservation_vetoes.length)) errors.push("review_clean_delivery_invalid");
 	if (!review || !Number.isInteger(review.reviewed_at)) errors.push("review_reviewed_at_invalid");
 	let invocation = null;
 	if (review && review.invocation_nonce) {
@@ -2528,6 +2780,13 @@ function appendReviewUnlocked(unit, review, opts = {}) {
 			if (now > invocation.expires_at) errors.push("review_invocation_expired");
 				if (review.bundle_digest !== invocation.bundle_digest) errors.push("review_invocation_bundle_mismatch");
 				if (review.run_id !== invocation.review_run_id) errors.push("review_run_id_not_issued");
+				if (review.review_stage !== invocation.review_stage) errors.push("review_stage_not_issued");
+				if (review.role !== invocation.required_role) errors.push("review_role_not_issued");
+				if (review.delivery_state !== invocation.expected_delivery_state) errors.push("review_delivery_state_not_issued");
+				if (review.planning_digest !== invocation.planning_digest) errors.push("review_planning_digest_not_issued");
+				if (review.planning_seal_digest !== invocation.planning_seal_digest) errors.push("review_planning_seal_not_issued");
+				if (review.full_bundle_digest !== invocation.full_bundle_digest) errors.push("review_full_bundle_digest_not_issued");
+				if (review.evidence_view_digest !== invocation.evidence_view_digest) errors.push("review_evidence_view_not_issued");
 				for (const field of ["source_head", "contract_digest", "workspace_digest", "config_digest", "scope_epoch", "work_revision", "binding_epoch"]) if (review[field] !== invocation[field]) errors.push(`review_${field}_not_issued`);
 				if (Number.isInteger(review.reviewed_at) && (review.reviewed_at < invocation.issued_at || review.reviewed_at > now + 30_000)) errors.push("review_reviewed_at_invalid");
 				const expectedBundlePath = path.join(unit.paths.pending, `bundle-${review.invocation_nonce}.json`);
@@ -2575,7 +2834,7 @@ function appendReviewUnlocked(unit, review, opts = {}) {
 	}
 	if (invocation && invocation.ids) {
 		for (const [field, key] of [
-			["covered_source_ids", "sourceIds"], ["covered_source_mappings", "sourceMappings"], ["covered_directive_ids", "directiveIds"], ["covered_target_ids", "targetIds"], ["covered_criterion_ids", "criterionIds"], ["covered_authority_ids", "authorityIds"], ["covered_authority_mappings", "authorityMappings"], ["covered_tombstone_ids", "tombstoneIds"], ["covered_tombstone_mappings", "tombstoneMappings"], ["covered_scope_version_ids", "scopeVersionIds"], ["covered_scope_version_mappings", "scopeVersionMappings"], ["covered_artifact_ids", "artifactIds"], ["covered_edge_ids", "edgeIds"], ["covered_change_ids", "occurrenceIds"], ["covered_change_mappings", "changeMappings"],
+			["covered_source_ids", "sourceIds"], ["covered_source_mappings", "sourceMappings"], ["covered_directive_ids", "directiveIds"], ["covered_target_ids", "targetIds"], ["covered_criterion_ids", "criterionIds"], ["covered_authority_ids", "authorityIds"], ["covered_authority_mappings", "authorityMappings"], ["covered_tombstone_ids", "tombstoneIds"], ["covered_tombstone_mappings", "tombstoneMappings"], ["covered_scope_version_ids", "scopeVersionIds"], ["covered_scope_version_mappings", "scopeVersionMappings"], ["covered_artifact_ids", "artifactIds"], ["covered_edge_ids", "edgeIds"], ["covered_change_ids", "occurrenceIds"], ["covered_change_mappings", "changeMappings"], ["covered_preservation_surface_mappings", "preservationSurfaceMappings"],
 		]) if (!arrayExactly(review && review[field], invocation.ids[key] || [])) errors.push(`review_${field}_not_exact`);
 	}
 	const head = requiredJson(unit.paths.head, "unit_head_corrupt");
@@ -2585,9 +2844,15 @@ function appendReviewUnlocked(unit, review, opts = {}) {
 	if (invocation) {
 		try {
 			const currentBinding = requiredJson(unit.paths.binding, "binding_state_corrupt");
-			const currentBundle = buildReviewBundle(unit, cwd);
+			const currentContract = requiredJson(unit.paths.contract, "contract_state_corrupt");
+			const currentBundle = invocation.required_role === "general" && !effectiveReviewRoles(config, currentContract).length
+				? buildReviewBundle(unit, cwd)
+				: buildReviewBundle(unit, cwd, { stage: invocation.review_stage, role: invocation.required_role });
+			const currentPlanningSeal = planningSeal(unit, config, currentBinding, head, currentContract);
 			const currentBindings = {
 				bundle_digest: currentBundle.digest,
+				full_bundle_digest: currentBundle.full_digest,
+				evidence_view_digest: currentBundle.digest,
 				source_head: head.source_head,
 				contract_digest: head.contract_digest,
 				workspace_digest: currentBundle.workspace.digest,
@@ -2595,6 +2860,8 @@ function appendReviewUnlocked(unit, review, opts = {}) {
 				scope_epoch: head.scope_epoch,
 				work_revision: head.work_revision,
 				binding_epoch: currentBinding.binding_epoch,
+				planning_digest: currentBinding.planning_digest,
+				planning_seal_digest: invocation.review_stage === "integration" ? currentPlanningSeal.digest : null,
 			};
 			if (Object.entries(currentBindings).some(([field, value]) => invocation[field] !== value)) errors.push("review_post_launch_drift");
 		} catch {
@@ -2673,16 +2940,24 @@ function evaluateReviews(unit, bindings, minimum = 2) {
 	const executionIds = new Set();
 	const reviewerContexts = new Set();
 	const reviewerProcesses = new Set();
+	const requiredRoles = [...new Set(bindings.required_roles || [])];
+	const requiredStages = [...new Set(bindings.required_stages || (requiredRoles.length ? ["integration"] : []))];
+	const requiredSlots = requiredRoles.length ? requiredStages.flatMap((stage) => requiredRoles.map((role) => `${stage}:${role}`)) : ["integration:general"];
+	const target = Math.max(minimum, requiredSlots.length);
+	const coveredSlots = new Set();
+	const evidenceViews = new Set();
 	const runCounts = new Map();
 	const executionCounts = new Map();
 	for (const record of chain.records) {
 		if (record.run_id) runCounts.set(record.run_id, (runCounts.get(record.run_id) || 0) + 1);
 		if (record.isolation && record.isolation.execution_id) executionCounts.set(record.isolation.execution_id, (executionCounts.get(record.isolation.execution_id) || 0) + 1);
 	}
-	for (let i = chain.records.length - 1; i >= 0 && clean.length < minimum; i--) {
+	for (let i = chain.records.length - 1; i >= 0 && clean.length < target; i--) {
 		const r = chain.records[i];
 		if (r.verdict !== "CLEAN") break;
-		const same = ["source_head", "contract_digest", "workspace_digest", "config_digest", "scope_epoch", "work_revision", "binding_epoch"].every((k) => r[k] === bindings[k]);
+		const stableFields = ["source_head", "contract_digest", "config_digest", "scope_epoch", "binding_epoch"];
+		const integrationFields = ["workspace_digest", "work_revision"];
+		const same = stableFields.every((k) => r[k] === bindings[k]) && (r.review_stage === "planning" || integrationFields.every((k) => r[k] === bindings[k]));
 		const covered =
 			arrayExactly(r.covered_source_ids, bindings.ids.sourceIds) &&
 			arrayExactly(r.covered_source_mappings, bindings.ids.sourceMappings) &&
@@ -2698,10 +2973,17 @@ function evaluateReviews(unit, bindings, minimum = 2) {
 				arrayExactly(r.covered_artifact_ids, bindings.ids.artifactIds) &&
 				arrayExactly(r.covered_edge_ids, bindings.ids.edgeIds) &&
 				arrayExactly(r.covered_change_ids, bindings.ids.occurrenceIds) &&
-				arrayExactly(r.covered_change_mappings, bindings.ids.changeMappings);
+				arrayExactly(r.covered_change_mappings, bindings.ids.changeMappings) &&
+				arrayExactly(r.covered_preservation_surface_mappings, bindings.ids.preservationSurfaceMappings || []);
 		const isolated = r.sandbox && r.sandbox.no_network === true && r.sandbox.repository_blind === true && r.sandbox.home_blind === true;
 		const findingsValid = Array.isArray(r.finding_codes) && r.finding_codes.length === 0;
-		const sameBundle = !bindings.bundle_digest || r.bundle_digest === bindings.bundle_digest;
+		const preservationValid = Array.isArray(r.preservation_vetoes) && r.preservation_vetoes.length === 0 && r.delivery_state === (bindings.expected_delivery_state || "RELEASE_ELIGIBLE");
+		const slot = `${r.review_stage}:${r.role}`;
+		const uniqueSlotsRequired = requiredRoles.length > 0;
+		const roleValid = requiredSlots.includes(slot) && (!uniqueSlotsRequired || !coveredSlots.has(slot));
+		const viewValid = r.evidence_view_digest === r.bundle_digest && /^[a-f0-9]{64}$/.test(r.full_bundle_digest || "") && (!uniqueSlotsRequired || !evidenceViews.has(r.evidence_view_digest));
+		const planningValid = r.planning_digest === bindings.planning_digest && (r.review_stage === "planning" ? r.planning_seal_digest === null : r.planning_seal_digest === bindings.planning_seal_digest);
+		const sameBundle = requiredSlots.length > 1 || !bindings.bundle_digest || r.bundle_digest === bindings.bundle_digest;
 		const invocation = r.invocation_nonce && readJson(path.join(unit.paths.pending, `review-${r.invocation_nonce}.json`));
 		const invocationValid = invocation && reviewInvocationDigestValid(invocation) && invocation.consumed === true && invocation.review_record_hash === r.record_hash && !invocationNonces.has(r.invocation_nonce);
 		let claimsValid = true;
@@ -2740,15 +3022,20 @@ function evaluateReviews(unit, bindings, minimum = 2) {
 				isolationValid = false;
 			}
 		} else isolationValid = false;
-		if (!same || !covered || !isolated || !findingsValid || !sameBundle || !r.run_id || runCounts.get(r.run_id) !== 1 || !invocationValid || !claimsValid || !executorValid || !isolationValid) break;
+		if (!same || !covered || !isolated || !findingsValid || !preservationValid || !roleValid || !viewValid || !planningValid || !sameBundle || !r.run_id || runCounts.get(r.run_id) !== 1 || !invocationValid || !claimsValid || !executorValid || !isolationValid) break;
 		if (clean.some((x) => x.run_id === r.run_id)) break;
 		invocationNonces.add(r.invocation_nonce);
 		executionIds.add(r.isolation.execution_id);
 		reviewerContexts.add(r.executor.context_id);
 		reviewerProcesses.add(reviewerProcessIdentity);
+		coveredSlots.add(slot);
+		evidenceViews.add(r.evidence_view_digest);
 		clean.push(r);
 	}
-	return { ok: clean.length >= minimum, errors: clean.length >= minimum ? [] : ["review_clean_streak_incomplete"], clean };
+	const slotCoverage = requiredSlots.every((slot) => coveredSlots.has(slot));
+	const ok = clean.length >= target && slotCoverage;
+	const incompleteCode = slotCoverage || !requiredRoles.length ? "review_clean_streak_incomplete" : "review_required_slots_incomplete";
+	return { ok, errors: ok ? [] : [incompleteCode], clean };
 }
 
 function reconcileOpenMutationLeases(unit, cwd, client, sessionId, now = Date.now()) {
@@ -2798,25 +3085,34 @@ function completionAssessment(unit, cwd, config, now) {
 	const scopeHistory = verifyScopeHistory(unit);
 	if (!scopeHistory.ok) errors.push(...scopeHistory.errors);
 	const ws = captureWorkspaceOccurrences(unit, cwd);
+	const currentHead = requiredJson(unit.paths.head, "unit_head_corrupt");
 	if (ws.configDrift) errors.push("product_root_config_drift");
 	const binding = optionalJson(unit.paths.binding, null, "binding_state_corrupt");
 	const contract = optionalJson(unit.paths.contract, null, "contract_state_corrupt");
+	const lifecycleState = readUnitState(unit, currentHead);
 	if (!binding || !contract) errors.push("request_contract_unbound");
 	if (contract && (!scopeHistory.records.length || scopeHistory.records.at(-1).contract_digest !== contractDigest(contract))) errors.push("scope_history_current_contract_mismatch");
 	let cv = { ok: false, errors: [], ids: { sourceIds: [], sourceMappings: [], directiveIds: [], targetIds: [], criterionIds: [], authorityIds: [], authorityMappings: [], tombstoneIds: [], tombstoneMappings: [], artifactIds: [], edgeIds: [], occurrenceIds: [], changeMappings: [] }, scope_digest: "" };
+	let pv = { ok: false, errors: ["preservation_contract_unchecked"], surface_digests: {} };
 	if (contract) {
 		const digest = contractDigest(contract);
 		if (digest !== head.contract_digest) errors.push("contract_digest_mismatch");
 		cv = validateContract(contract, sources.records, ws.occurrences, { now, publicKeyPem: loadAuthorityKey(cwd, config), cwd, config });
 		if (!cv.ok) errors.push(...cv.errors);
+		pv = preservationPolicy.validateWorkspace(contract, { baseline: lifecycleState.baseline, current: ws.current.manifest, cwd, config, sourceRecords: sources.records, probeRunner: preservationRunnerContext(cwd, config) });
+		if (!pv.ok) errors.push(...pv.errors);
+		if (contract.preservation) {
+			errors.push("preservation_real_entry_attestation_pending", "preservation_incident_history_pending", "preservation_review_convergence_pending", "external_effect_gate_pending");
+			if ((contract.preservation.vendor_sources || []).length > 0) errors.push("preservation_vendor_origin_attestation_pending");
+		}
 		if (contract.status !== "complete") errors.push("contract_status_not_complete");
 		for (const directive of contract.directives || []) if (!["done", "superseded", "deferred", "abandoned"].includes(directive.state)) errors.push(`contract_directive_not_disposed:${directive.id}`);
 	}
-	const currentHead = requiredJson(unit.paths.head, "unit_head_corrupt");
 	let reviewBundle = null;
 	let reviews = { ok: false, errors: ["review_clean_streak_incomplete"], clean: [] };
 	if (binding && contract) {
 		reviewBundle = buildReviewBundle(unit, cwd);
+		const currentPlanningSeal = planningSeal(unit, config, binding, currentHead, contract);
 		reviews = evaluateReviews(
 			unit,
 			{
@@ -2831,15 +3127,20 @@ function completionAssessment(unit, cwd, config, now) {
 				cwd,
 					reviewer_public_key: loadReviewerKey(cwd, config),
 					reviewer_credential_id: config.reviewer.credential_id || null,
-					review_runner_public_key: loadReviewRunnerKey(cwd, config),
+				review_runner_public_key: loadReviewRunnerKey(cwd, config),
 					review_runner_credential_id: config.review_runner.credential_id || null,
-				ids: { ...cv.ids, ...scopeHistoryCoverage(scopeHistory.records) },
+				required_roles: effectiveReviewRoles(config, contract),
+				required_stages: config.preservation.required || contract.preservation ? PRESERVATION_REVIEW_STAGES : ["integration"],
+				expected_delivery_state: expectedDeliveryState(config, contract),
+				planning_digest: binding.planning_digest,
+				planning_seal_digest: currentPlanningSeal.digest,
+				ids: { ...cv.ids, ...scopeHistoryCoverage(scopeHistory.records), preservationSurfaceMappings: Object.entries(pv.surface_digests || {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, digest]) => `${id}:${digest}`) },
 			},
 			config.minimum_clean_rounds,
 		);
 		if (!reviews.ok) errors.push(...reviews.errors);
 	}
-	return { errors: [...new Set(errors)], head: currentHead, sources, scopeHistory, ws, binding, contract, cv, reviewBundle, reviews };
+	return { errors: [...new Set(errors)], head: currentHead, sources, scopeHistory, ws, binding, contract, cv, pv, reviewBundle, reviews };
 }
 
 function completionAssessmentDigest(assessment) {
@@ -2856,6 +3157,7 @@ function completionAssessmentDigest(assessment) {
 		review_bundle_digest: assessment.reviewBundle && assessment.reviewBundle.digest,
 		review_record_hashes: (assessment.reviews.clean || []).map((record) => record.record_hash),
 		coverage: assessment.cv.ids,
+		preservation_surface_digests: assessment.pv && assessment.pv.surface_digests,
 	}));
 }
 
@@ -2883,13 +3185,18 @@ function verifyCompletionProof(unit, cwd, config, head, state, terminal) {
 	if (!contract || proof.contract_digest !== contractDigest(contract)) errors.push("completion_proof_contract_digest_mismatch");
 	if (proof.scope_history_head !== (scopeHistory.head && scopeHistory.head.chain_head)) errors.push("completion_proof_scope_history_mismatch");
 	if (proof.review_chain_head !== (reviewChain.head && reviewChain.head.chain_head)) errors.push("completion_proof_review_chain_mismatch");
-	if (!Array.isArray(proof.review_record_hashes) || proof.review_record_hashes.length < config.minimum_clean_rounds) errors.push("completion_proof_review_records_missing");
+	if (!Array.isArray(proof.review_record_hashes) || proof.review_record_hashes.length < Math.max(config.minimum_clean_rounds, requiredReviewSlots(config, contract).length)) errors.push("completion_proof_review_records_missing");
 	let cv = { ok: false, errors: [], ids: { sourceIds: [], sourceMappings: [], directiveIds: [], targetIds: [], criterionIds: [], authorityIds: [], authorityMappings: [], tombstoneIds: [], tombstoneMappings: [], artifactIds: [], edgeIds: [], occurrenceIds: [], changeMappings: [] } };
 	if (contract && sources.ok) {
-		cv = validateContract(contract, sources.records, state.occurrences || [], { now: terminal.at, publicKeyPem: loadAuthorityKey(cwd, config) });
+		cv = validateContract(contract, sources.records, state.occurrences || [], { now: terminal.at, publicKeyPem: loadAuthorityKey(cwd, config), cwd, config });
 		if (!cv.ok) errors.push(...cv.errors);
+		const workspace = workspaceManifest(cwd, config);
+		const preservation = preservationPolicy.validateWorkspace(contract, { baseline: state.baseline, current: workspace.manifest, cwd, config, sourceRecords: sources.records, probeRunner: preservationRunnerContext(cwd, config) });
+		if (!preservation.ok) errors.push(...preservation.errors);
+		if (canonicalJson(proof.preservation_surface_digests || {}) !== canonicalJson(preservation.surface_digests || {})) errors.push("completion_proof_preservation_digest_mismatch");
 	}
 	if (binding && contract && cv.ok && scopeHistory.ok) {
+		const currentPlanningSeal = planningSeal(unit, config, binding, head, contract);
 		const reviews = evaluateReviews(unit, {
 			source_head: proof.source_head,
 			contract_digest: proof.contract_digest,
@@ -2904,7 +3211,12 @@ function verifyCompletionProof(unit, cwd, config, head, state, terminal) {
 			reviewer_credential_id: config.reviewer.credential_id || null,
 			review_runner_public_key: loadReviewRunnerKey(cwd, config),
 			review_runner_credential_id: config.review_runner.credential_id || null,
-			ids: { ...cv.ids, ...scopeHistoryCoverage(scopeHistory.records) },
+			required_roles: effectiveReviewRoles(config, contract),
+			required_stages: config.preservation.required || contract.preservation ? PRESERVATION_REVIEW_STAGES : ["integration"],
+			expected_delivery_state: expectedDeliveryState(config, contract),
+			planning_digest: binding.planning_digest,
+			planning_seal_digest: currentPlanningSeal.digest,
+			ids: { ...cv.ids, ...scopeHistoryCoverage(scopeHistory.records), preservationSurfaceMappings: Object.entries((proof.preservation_surface_digests || {})).sort(([a], [b]) => a.localeCompare(b)).map(([id, digest]) => `${id}:${digest}`) },
 		}, config.minimum_clean_rounds);
 		if (!reviews.ok) errors.push(...reviews.errors);
 		else if (canonicalJson(reviews.clean.map((record) => record.record_hash)) !== canonicalJson(proof.review_record_hashes)) errors.push("completion_proof_review_records_mismatch");
@@ -3067,6 +3379,9 @@ function evaluateCompletionUnlocked(unit, cwd, client, now = Date.now(), session
 		scope_history_head: final.scopeHistory.head.chain_head,
 		review_chain_head: reviewChain.head.chain_head,
 		review_record_hashes: final.reviews.clean.map((record) => record.record_hash),
+		review_roles: final.reviews.clean.map((record) => record.role),
+		review_stages: final.reviews.clean.map((record) => record.review_stage),
+		preservation_surface_digests: final.pv.surface_digests,
 	};
 	proof.digest = sha256(canonicalJson(proof));
 	state.terminal = { id: opaqueId("TERM-"), status: "success", at: now, completion_proof: proof };
@@ -3384,12 +3699,48 @@ function governedControlEvent(event, cwd, unit) {
 	return governedControlCommand(event, cwd, unit) || governedControlInput(event, cwd, unit);
 }
 
-function mutationFromEvent(event, cwd = null, unit = null) {
+function configuredShellTools(config = null) {
+	const configured = config && config.release && Array.isArray(config.release.shell_tools)
+		? config.release.shell_tools
+		: [];
+	return [...new Set(["Bash", "shell_command", ...configured])];
+}
+
+function isShellTool(event, config = null) {
+	return configuredShellTools(config).includes(String(event.toolName || ""));
+}
+
+function mutationFromEvent(event, cwd = null, unit = null, config = null) {
 	if (cwd && governedControlEvent(event, cwd, unit)) return false;
 	const tool = String(event.toolName || "");
 	if (["Edit", "Write", "NotebookEdit", "apply_patch"].includes(tool)) return true;
-	if (tool === "Bash") return true;
+	if (isShellTool(event, config)) return true;
 	return false;
+}
+
+function releaseCommandFromEvent(event, config = null) {
+	if (!isShellTool(event, config)) return false;
+	const command = String(event.toolInput && event.toolInput.command || "");
+	const segments = command.split(/[\r\n;&|]+/).map((part) => part.trim()).filter(Boolean);
+	const builtins = [
+		/(?:^|[\s"'])(?:(?:[A-Za-z]:\\|\/)[^\s"']*[\\/])?git(?:\.exe)?(?:\s+(?:-C|--git-dir|--work-tree)\s+\S+|\s+--[^\s=]+(?:=\S+)?)*\s+(?:push|merge)\b/i,
+		/(?:^|[\s"'])gh(?:\.exe)?\s+(?:pr\s+merge|release\s+create|issue\s+close)\b/i,
+		/(?:^|[\s"'])(?:npm|pnpm|yarn)(?:\.cmd|\.exe)?\s+(?:run\s+)?(?:publish|deploy)\b/i,
+		/(?:^|[\s"'])docker(?:\.exe)?\s+(?:push|compose\s+up)\b/i,
+		/(?:^|[\s"'])az(?:\.cmd|\.exe)?\s+(?:[^\r\n;&|]+\s+)?(?:deploy(?:ment)?|up)\b/i,
+		/(?:^|[\s"'])kubectl(?:\.exe)?\s+(?:apply|create|delete|patch|replace|rollout)\b/i,
+		/(?:^|[\s"'])helm(?:\.exe)?\s+(?:install|upgrade|uninstall)\b/i,
+		/(?:^|[\s"'])terraform(?:\.exe)?\s+(?:apply|destroy|import)\b/i,
+		/(?:^|[\s"'])gcloud(?:\.cmd|\.exe)?\s+[^\r\n;&|]*\bdeploy\b/i,
+		/(?:^|[\s"'])aws(?:\.cmd|\.exe)?\s+[^\r\n;&|]*(?:deploy|update|create|delete|put-)\b/i,
+		/(?:^|[\s"'])vercel(?:\.cmd|\.exe)?\b[^\r\n;&|]*\s--prod\b/i,
+		/(?:^|[\s"'])(?:scp|rsync)(?:\.exe)?\s+/i,
+	];
+	const custom = config && config.release ? config.release.command_patterns.map((pattern) => new RegExp(pattern, "i")) : [];
+	return segments.some((segment) => {
+		if (/^(?:echo|printf|write-output|select-string|grep|rg)\b/i.test(segment)) return false;
+		return [...builtins, ...custom].some((pattern) => pattern.test(segment));
+	});
 }
 
 function mutationLeaseId(event) {
@@ -3414,12 +3765,13 @@ function clientVersionSupported(actual, range) {
 }
 
 function clientRegistrySupports(cwd, client) {
+	const config = loadConfig(cwd);
 	const file = client === "claude" ? path.join(cwd, ".claude", "settings.json") : client === "codex" ? path.join(cwd, ".codex", "hooks.json") : null;
 	if (!file) return false;
 	const registry = readJson(file);
 	if (!registry || !registry.hooks || typeof registry.hooks !== "object") return false;
 	const adapterPath = client === "claude" ? ".claude/hooks/request-contract.js" : ".codex/hooks/request-contract.cjs";
-	const preToolMatcher = "Bash|Edit|Write|NotebookEdit|apply_patch";
+	const preToolMatcher = [...new Set([...configuredShellTools(config), "Edit", "Write", "NotebookEdit", "apply_patch"])].join("|");
 	const seen = [];
 	for (const [registeredEvent, entries] of Object.entries(registry.hooks)) {
 		if (!Array.isArray(entries)) continue;
@@ -3462,6 +3814,8 @@ function handleEvent(event, opts = {}) {
 	const client = event.client || "unknown";
 	const sessionId = event.sessionId || "no-session";
 	const now = opts.now || Date.now();
+	const config = loadConfig(cwd);
+	if (config.errors.length) return { kind: "block", code: "request_contract_config_invalid", message: "Request-contract configuration is missing or invalid.", errors: config.errors };
 	if (!governed(cwd, opts.env || process.env)) return { kind: "allow", code: "request_contract_disabled" };
 	let unit = findUnit(cwd, client, sessionId);
 	if (unit && unit.error) {
@@ -3525,7 +3879,14 @@ function handleEvent(event, opts = {}) {
 		return { kind: "block", code: "request_contract_missing_genesis", message: "Governed session has no genesis/source chain; mutations and lifecycle continuation are denied." };
 	}
 	if (event.eventName === "PreToolUse") {
-		if (!mutationFromEvent(event, cwd, unit)) return { kind: "allow", code: governedControlEvent(event, cwd, unit) ? "request_contract_control_preflight" : "request_contract_pretool_read_only" };
+		if (releaseCommandFromEvent(event, config)) {
+			return { kind: "block", code: "external_effect_gate_pending", message: "Publication is denied until the signed project external-effect adapter gate is implemented and provisioned." };
+		}
+		const pretoolContract = optionalJson(unit.paths.contract, null, "contract_state_corrupt");
+		if ((config.preservation.required || pretoolContract && pretoolContract.preservation) && isShellTool(event, config)) {
+			return { kind: "block", code: "external_effect_gate_pending", message: "Shell execution is denied for preservation work until the signed project external-effect adapter gate is implemented and provisioned." };
+		}
+		if (!mutationFromEvent(event, cwd, unit, config)) return { kind: "allow", code: governedControlEvent(event, cwd, unit) ? "request_contract_control_preflight" : "request_contract_pretool_read_only" };
 		try {
 			withUnitLock(unit, () => {
 				assertUnitMutable(unit);
@@ -3543,6 +3904,10 @@ function handleEvent(event, opts = {}) {
 				for (const source of sourceChain.records) {
 					const declaration = classified.get(source.source_id);
 					if (!declaration || !CLASSIFICATIONS.has(declaration.classification)) throw Object.assign(new Error("every source must be classified before mutation"), { code: "request_contract_source_unclassified" });
+				}
+				if (config.preservation.required || contract.preservation) {
+					const seal = planningSeal(unit, config, binding, head, contract);
+					if (!seal.ok) throw Object.assign(new Error("implementation mutation requires a current planning×4 seal"), { code: "request_contract_planning_review_required", errors: seal.errors });
 				}
 				const state = readUnitState(unit, head);
 				state.active_mutations = state.active_mutations || {};
@@ -3562,7 +3927,7 @@ function handleEvent(event, opts = {}) {
 	}
 
 	if (event.eventName === "PostToolUse") {
-		if (!mutationFromEvent(event, cwd, unit)) return { kind: "allow", code: governedControlEvent(event, cwd, unit) ? "request_contract_control_complete" : "request_contract_posttool_read_only" };
+		if (!mutationFromEvent(event, cwd, unit, config)) return { kind: "allow", code: governedControlEvent(event, cwd, unit) ? "request_contract_control_complete" : "request_contract_posttool_read_only" };
 		try {
 			return withUnitLock(unit, () => {
 				const state = readUnitState(unit);
@@ -3682,6 +4047,15 @@ module.exports = {
 	authorityPresentation,
 	issueAuthorityChallenge,
 	validateContract,
+	validatePreservationDeclaration: preservationPolicy.validateDeclaration,
+	validateWorkspacePreservation: preservationPolicy.validateWorkspace,
+	preservationSurfaceDiffDigest: preservationPolicy.surfaceDiffDigest,
+	preservationSurfaceContentDigest: preservationPolicy.surfaceContentDigest,
+	preservationSurfaceInventoryDigest: preservationPolicy.surfaceInventoryDigest,
+	preservationVendorTreeDigest: preservationPolicy.vendorTreeDigest,
+	signedProbePayload: preservationPolicy.signedProbePayload,
+	signedVendorPayload: preservationPolicy.signedVendorPayload,
+	signedInventoryPayload: preservationPolicy.signedInventoryPayload,
 	bindContract,
 	appendScopeVersion,
 	verifyScopeHistory,
@@ -3696,11 +4070,14 @@ module.exports = {
 	verifyReviewChain,
 	appendReview,
 	evaluateReviews,
+	releaseCommandFromEvent,
 	evaluateCompletion,
 	resumeIncomplete,
 	compactExpiredUnits,
 	governedControlEvent,
+	isShellTool,
 	mutationFromEvent,
+	releaseCommandFromEvent,
 	clientRegistrySupports,
 	assertSupportedClient,
 	handleEvent,

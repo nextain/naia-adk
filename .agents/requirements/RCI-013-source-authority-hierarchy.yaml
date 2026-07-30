@@ -1,0 +1,43 @@
+id: RCI-013
+title: "Source Authority Hierarchy"
+title_ko: "요청 출처 권위 계층"
+product: naia-adk-request-contract
+module: source-provenance
+status: active
+source: derived
+source_provenance: ledger_resolved
+priority: high
+created: 2026-07-30
+updated: 2026-07-30
+issue_url: "https://github.com/nextain/naia-adk/issues/17"
+source_directives: [USR-008]
+source_evidence: [USR-008]
+source_atoms: [USR-008-E01, USR-008-E02, USR-008-E03, USR-008-E04, USR-008-E05, USR-008-E11]
+source_kind: derived
+derived_from: [USR-008]
+derivation_kind: clarify
+change_effect: extend
+preserves: [native-user-source-authority, exact-obligation-atoms]
+must_not_change: [human-source-authority-by-derived-text, source-scope-without-signed-authority]
+destructive_approval: null
+description: |
+  사용자 원문, AI 파생 요구사항, 후보 요구사항의 권위를 구분한다. 파생 요구사항은
+  원문을 좁히거나 대체할 수 없고, 그런 변경에는 네이티브 사용자 출처와 서명된
+  범위 권한이 필요하다.
+acceptance_criteria:
+  - "Human sources are accepted only from native-user source-chain records."
+  - "Derived sources cite an immutable parent and derivation kind."
+  - "Narrow or replace derivations fail without destructive scope authority for their directives."
+  - "Generic labels such as 'the whole conversation' do not replace atomic source evidence."
+  - "Planning and adversarial review receive a separately identified incident-history artifact; a selected directive excerpt is not represented as the complete history."
+trace:
+  code:
+    - { path: ".agents/hooks/core/preservation-contract.js", symbol: "validateSourceAuthority", coverage: full }
+    - { path: ".agents/hooks/core/request-contract.js", symbol: "validateContract / scopeProjection", coverage: full }
+  tests:
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "the core rejects a source obligation narrowed before review", coverage: partial }
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "scope authority rejects a source without native user-event provenance", coverage: partial }
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "silent removal or reclassification without a new authority is rejected", coverage: partial }
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation collects planning and integration evidence views but remains review only while controls are pending", coverage: partial }
+  reviews: { planning: null, development: null, test: null, integration: null }
+decisions: []

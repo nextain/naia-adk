@@ -86,7 +86,7 @@ skills:
     what: "4단계 멀티 AI 상호검증 리뷰 (planning/development/test/integration)"
     arg: null
     scripts: []
-    note: "894줄 — 가장 긴 SKILL.md. input_schema, steps 등 상세 frontmatter 포함."
+    note: "planning/integration은 원요청·baseline·보존 계약을 필수 입력으로 하고 4개 역할을 분리하며, preservation/권한 CRITICAL 단독 발견도 veto로 유지."
 
   secret-vault:
     trigger: "암호화된 키 파일 풀기, key.age unlock/lock, 키 추가 후 재암호화, 복호화가 깨져 보임, data-private 시크릿"
@@ -123,6 +123,13 @@ skills:
     disable-model-invocation: true
     scripts: []
 
+  verify-contract-conformance:
+    trigger: "선언된 API/인터페이스 계약 또는 구현 심볼 수정 후, PR 전"
+    what: "계약과 구현 사이의 시그니처·선언만 존재·구현만 존재 드리프트를 결정론적으로 검출"
+    arg: null
+    disable-model-invocation: true
+    scripts: []
+
   verify-benchmark-contract:
     trigger: "packages/benchmark-contract 또는 개발 모델 라우팅 수정 후, Review/Post-test Review 및 커밋 전"
     what: "벤치 스키마·공급자 영수증·비용 집계·HMAC 저널·Windows DPAPI·듀얼 컨텍스트 결정론 검증"
@@ -133,6 +140,13 @@ skills:
   verify-request-contract:
     trigger: "request-contract 코어/어댑터/등록/스키마/review-pass 수정 후, Review/Post-test Review 및 커밋 전"
     what: "원요청 source 해시체인→REQ→UC/UC-test→FE/FE-test→구현→증거, 서명 권한, 2회 Clean, Claude Code/Codex 동등성 결정론 검증"
+    arg: null
+    disable-model-invocation: true
+    scripts: []
+
+  verify-product-preservation:
+    trigger: "기존 프로젝트의 기능 추가·통합·리팩터링 후, planning/integration 리뷰와 release 전"
+    what: "immutable baseline 대비 제품 표면·vendor provenance·파괴 변경 권한·before/after capability probe·delivery gate 검증"
     arg: null
     disable-model-invocation: true
     scripts: []

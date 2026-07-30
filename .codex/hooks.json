@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Edit|Write|NotebookEdit|apply_patch",
+        "matcher": "Bash|shell_command|Edit|Write|NotebookEdit|apply_patch",
         "hooks": [
           {
             "type": "command",
@@ -13,7 +13,7 @@
         ]
       },
       {
-        "matcher": "Bash|Edit|Write|NotebookEdit|apply_patch",
+        "matcher": "Bash|shell_command|Edit|Write|NotebookEdit|apply_patch",
         "hooks": [
           {
             "type": "command",

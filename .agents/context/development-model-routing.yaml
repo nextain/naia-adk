@@ -161,6 +161,8 @@ quick_start_profiles:
     - unbounded or high-risk work falls back to Sol
     - Luna implementation requires bounded scope and an exact validator; otherwise use Terra, while unbounded or high-risk work uses Sol
     - Luna mechanical work additionally requires low risk
+    - every selected binding must be declared available by the runtime; the default supported set is Sol and Terra, unavailable Luna falls back deterministically to Terra and then Sol, and an empty eligible set fails closed
+    - cross-platform environment configuration uses CODEX_AVAILABLE_BINDINGS=none or [] to declare an empty set because Windows does not preserve an empty environment value for child processes
     - independent review requires distinct session and execution identities and prefers a binding different from the producer
   claim_boundary: phase 1 makes balanced available for opt-in use but does not claim proven total-system cost reduction
   new_model_rule: run only the affected capability experiments, update the binding qualification and evidence expiry, then compare the unchanged profiles

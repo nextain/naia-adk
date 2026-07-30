@@ -13,8 +13,55 @@ const example = JSON.parse(fs.readFileSync(path.join(root, "examples", "request-
 const exampleAuthorityPublicKey = fs.readFileSync(path.join(root, "examples", "request-contract.example-authority.pub"), "utf8");
 const ajv = new Ajv2020({ allErrors: true, strict: true, strictRequired: false });
 const validate = ajv.compile(schema);
+const compatibilityConfig = {
+	...runtime.loadConfig(repositoryRoot),
+	preservation: { required: false, protect_test_contracts: true, protect_vendor_sources: true },
+};
 
-assert(validate(example), ajv.errorsText(validate.errors, { separator: "\n" }));
+assert(validate(example), `published legacy v1 example must remain schema-compatible:\n${ajv.errorsText(validate.errors, { separator: "\n" })}`);
+const schemaExample = JSON.parse(JSON.stringify(example));
+schemaExample.sources[0].source_kind = "human";
+const currentProbeEvidence = { ...schemaExample.artifacts.evidence[0], id: "EVD-PRESERVATION-CURRENT" };
+schemaExample.artifacts.evidence.push(currentProbeEvidence);
+schemaExample.preservation = {
+	version: 1,
+	baseline_ref: "a".repeat(40),
+	intent: "extend",
+	surfaces: [{
+		id: "SURFACE-EXAMPLE",
+		directive_id: schemaExample.directives[0].id,
+		kind: "test-contract",
+		locator: "published minimal contract",
+		disposition: "preserve",
+		baseline_paths: ["packages/artifacts-spec/examples/request-contract.minimal.json"],
+		current_paths: ["packages/artifacts-spec/examples/request-contract.minimal.json"],
+		baseline_evidence_id: schemaExample.artifacts.evidence[0].id,
+		current_evidence_id: currentProbeEvidence.id,
+	}],
+	vendor_sources: [],
+	inventory: {
+		version: 1,
+		origin: "existing",
+		adapter_id: "ADAPTER-SCHEMA-EXAMPLE",
+		adapter_digest: "b".repeat(64),
+		baseline_ref: "a".repeat(40),
+		baseline_manifest_digest: "c".repeat(64),
+		current_manifest_digest: "d".repeat(64),
+		surface_ids: ["SURFACE-EXAMPLE"],
+		surface_inventory_digest: "e".repeat(64),
+		test_roots: [],
+		vendor_roots: [],
+		release_operation_ids: [],
+		credential_id: "schema-only-runner",
+		runner_digest: "f".repeat(64),
+		executed_at: 1783960030000,
+		signature: "schema-only-not-a-trust-proof",
+	},
+};
+assert(validate(schemaExample), ajv.errorsText(validate.errors, { separator: "\n" }));
+const schemaOnlyPrompt = schemaExample.sources[0].obligation_atoms.map((atom) => atom.text).join("");
+const schemaOnlyRuntime = runtime.validateContract(schemaExample, [{ source_id: schemaExample.sources[0].id, prompt: schemaOnlyPrompt, prompt_digest: runtime.sha256(schemaOnlyPrompt), origin: "native_user" }], [], { publicKeyPem: exampleAuthorityPublicKey, cwd: repositoryRoot, config: runtime.loadConfig(repositoryRoot), now: 1783960030000 });
+assert.equal(schemaOnlyRuntime.ok, false, "schema shape alone must never be mistaken for a trusted signed preservation contract");
 const examplePrompt = example.sources[0].obligation_atoms.map((atom) => atom.text).join("");
 const exampleSource = {
 	source_id: example.sources[0].id,
@@ -25,6 +72,7 @@ const exampleSource = {
 const runtimeResult = runtime.validateContract(example, [exampleSource], [], {
 	publicKeyPem: exampleAuthorityPublicKey,
 	cwd: repositoryRoot,
+	config: compatibilityConfig,
 	now: 1783960030000,
 });
 assert(runtimeResult.ok, `published example must pass runtime validation:\n${runtimeResult.errors.join("\n")}`);
@@ -41,29 +89,43 @@ for (const mutate of [
 	mutate(drifted);
 	const prompt = drifted.sources[0].obligation_atoms.map((atom) => atom.text).join("");
 	const source = { source_id: drifted.sources[0].id, prompt, prompt_digest: runtime.sha256(prompt), origin: "native_user" };
-	assert.equal(runtime.validateContract(drifted, [source], [], { publicKeyPem: exampleAuthorityPublicKey, cwd: repositoryRoot, now: 1783960030000 }).ok, false, "runtime validator must reject drifted published example material");
+	assert.equal(runtime.validateContract(drifted, [source], [], { publicKeyPem: exampleAuthorityPublicKey, cwd: repositoryRoot, config: compatibilityConfig, now: 1783960030000 }).ok, false, "runtime validator must reject drifted published example material");
 }
 const incomplete = JSON.parse(JSON.stringify(example));
 delete incomplete.artifacts;
+incomplete.sources[0].source_kind = "human";
+incomplete.preservation = schemaExample.preservation;
 assert.equal(validate(incomplete), false, "schema must reject a contract without trace artifacts");
 const narrowed = JSON.parse(JSON.stringify(example));
+narrowed.sources[0].source_kind = "human";
+narrowed.preservation = schemaExample.preservation;
 narrowed.directives[0].targets = [];
 narrowed.directives[0].acceptance_criteria = [];
 assert.equal(validate(narrowed), false, "schema must reject a completed directive without targets and criteria");
 const openEnvelope = JSON.parse(JSON.stringify(example));
+openEnvelope.sources[0].source_kind = "human";
+openEnvelope.preservation = schemaExample.preservation;
 openEnvelope.directives[0].targets[0].unexpected = "leak";
 openEnvelope.authorities[0].receipt.path_summary = "/private/path";
 assert.equal(validate(openEnvelope), false, "schema must reject unrecognized nested fields");
 const sixEdgeChain = JSON.parse(JSON.stringify(example));
+sixEdgeChain.sources[0].source_kind = "human";
+sixEdgeChain.preservation = schemaExample.preservation;
 sixEdgeChain.edges = sixEdgeChain.edges.filter((edge) => edge.kind !== "directives_to_requirements");
 assert.equal(validate(sixEdgeChain), false, "schema must reject a contract missing any of the seven edge kinds");
 const sourceLessAuthority = JSON.parse(JSON.stringify(example));
+sourceLessAuthority.sources[0].source_kind = "human";
+sourceLessAuthority.preservation = schemaExample.preservation;
 delete sourceLessAuthority.authorities[0].source_id;
 assert.equal(validate(sourceLessAuthority), false, "schema must require the exact authorizing source");
 const digestLessAuthority = JSON.parse(JSON.stringify(example));
+digestLessAuthority.sources[0].source_kind = "human";
+digestLessAuthority.preservation = schemaExample.preservation;
 delete digestLessAuthority.authorities[0].source_digest;
 assert.equal(validate(digestLessAuthority), false, "schema must require the authorizing source digest");
 const missingAuthorityTargets = JSON.parse(JSON.stringify(example));
+missingAuthorityTargets.sources[0].source_kind = "human";
+missingAuthorityTargets.preservation = schemaExample.preservation;
 delete missingAuthorityTargets.authorities[0].target_directive_ids;
 assert.equal(validate(missingAuthorityTargets), false, "schema must require authority target arrays even when empty would be legal");
 for (const classification of ["directive", "approval", "authority"]) {

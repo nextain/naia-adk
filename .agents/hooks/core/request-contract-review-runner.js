@@ -23,7 +23,7 @@ function canonicalize(value) {
 
 function semanticReviewProjection(value) {
 	const projected = JSON.parse(JSON.stringify(value || {}));
-	for (const key of ["run_id", "reviewed_at", "executor", "sandbox", "isolation", "bundle_digest", "source_head", "contract_digest", "workspace_digest", "config_digest", "scope_epoch", "work_revision", "binding_epoch"]) delete projected[key];
+	for (const key of ["run_id", "reviewed_at", "executor", "sandbox", "isolation", "bundle_digest", "full_bundle_digest", "evidence_view_digest", "planning_digest", "planning_seal_digest", "source_head", "contract_digest", "workspace_digest", "config_digest", "scope_epoch", "work_revision", "binding_epoch"]) delete projected[key];
 	return canonicalize(projected);
 }
 
