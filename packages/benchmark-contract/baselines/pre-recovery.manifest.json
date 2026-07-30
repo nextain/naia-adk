@@ -1,0 +1,212 @@
+{
+  "id": "BASELINE-PRE-RECOVERY",
+  "contract_digest": "e9c49d676a606440029a58e9b8a83ca9eadb8cd1c386c57383f5d358910174b1",
+  "manifest_digest": "aabc44ba5ff0d0a98891c619f0ab1f52d51e7ee73c2d18dfde35bb9dcb5aff54",
+  "frozen_at": "2026-07-29T00:00:00Z",
+  "tasks": [
+    {
+      "task_id": "TASK-PRE-C-01",
+      "fixture_digest": "8233d8f7489475e1ce222c6083b5ce3ee5ed5d92bea8f7ee70b51eec0fdba759",
+      "scorer_revision": "legacy-js-function-v1",
+      "scorer_digest": "71f241e04938a65fa8dfb9ba38e5557e4ee8adaa3e5badbe21314c51149ef5aa",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": []
+    },
+    {
+      "task_id": "TASK-PRE-C-03",
+      "fixture_digest": "5c3ad0855f38c1481934b4191e49a2b760a7173b5669e47e61480f4f4d543dd8",
+      "scorer_revision": "legacy-js-function-v1",
+      "scorer_digest": "71f241e04938a65fa8dfb9ba38e5557e4ee8adaa3e5badbe21314c51149ef5aa",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": []
+    },
+    {
+      "task_id": "TASK-PRE-C-06",
+      "fixture_digest": "37b3536ae12f8f228e4db44e3de3297c2fb33a695fa1647e3781a3da1d284277",
+      "scorer_revision": "legacy-js-function-v1",
+      "scorer_digest": "71f241e04938a65fa8dfb9ba38e5557e4ee8adaa3e5badbe21314c51149ef5aa",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": []
+    },
+    {
+      "task_id": "TASK-PRE-C-08",
+      "fixture_digest": "62135e1a6ec941aa54c1e6ab34bbd15e6af7e5fc7eb3b1810d7924fbf82f495d",
+      "scorer_revision": "legacy-js-function-v1",
+      "scorer_digest": "71f241e04938a65fa8dfb9ba38e5557e4ee8adaa3e5badbe21314c51149ef5aa",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": []
+    },
+    {
+      "task_id": "TASK-PRE-HONEST-FAILURE",
+      "fixture_digest": "3e8614d713d2e9cc9cfc98b75a6dbc80a226dcfde7d9f346a9ccf47cb3b72e04",
+      "scorer_revision": "honest-failure-v1",
+      "scorer_digest": "2d61e507502370c330b281f8d5f3e2ee3926be25f6f2d0593d0bd1223b0c7037",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": [
+        "HG-HONESTY-001"
+      ]
+    },
+    {
+      "task_id": "TASK-PRE-NESTED-CONTEXT",
+      "fixture_digest": "5a73699369f29ddca657ef36f6ee9dcb2dd3584b645410b5fb8c00d29d9fc323",
+      "scorer_revision": "nested-context-v1",
+      "scorer_digest": "6ab3921080cf33a75ed9d26ec9602c58638a9ae7a26a68724b2a0dcddefce647",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": [
+        "HG-CONTEXT-001"
+      ]
+    },
+    {
+      "task_id": "TASK-PRE-COMPACTION-RESTORE",
+      "fixture_digest": "76bf4e196e7b24266859865a86774b2f902e64829597be804551e8bffeb7426a",
+      "scorer_revision": "context-restore-v1",
+      "scorer_digest": "e7aa1419bdec68bd484d04c89b515e81dd66a67b20d8d6fcfa27841f74ff24da",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": [
+        "HG-CONTEXT-002"
+      ]
+    },
+    {
+      "task_id": "TASK-PRE-STALE-MIRROR",
+      "fixture_digest": "2b39307b00bde5896b7359a8001ad09e70b1277a31a1f6311c645048fd9a9605",
+      "scorer_revision": "dual-context-stale-v1",
+      "scorer_digest": "3425b3025bc51493ea061862e6e9aa6f2fe4f7b7ee88a991e8df9d837c07ec26",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": [
+        "HG-MIRROR-001"
+      ]
+    },
+    {
+      "task_id": "TASK-PRE-NATIVE-WINDOWS",
+      "fixture_digest": "afec5c496fd82c26af096b671a022a6f4d51a2d7f7b2dd63b654c1e03c04e7aa",
+      "scorer_revision": "native-platform-v1",
+      "scorer_digest": "618fc85c513ea22d82adea782ca0cb1a3036953e298ac3f6e084c93f5a3ff337",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": [
+        "HG-WINDOWS-001"
+      ]
+    },
+    {
+      "task_id": "TASK-PRE-TRACE-COMPLETE",
+      "fixture_digest": "f6fdfd77faa8aa63a85623f71f63ca74c2c6249e155de79cdd73c9a4070997d2",
+      "scorer_revision": "trace-validator-v1",
+      "scorer_digest": "35a23d8b41bdc42551484b89a219357dc4dfbcb07eaa425484bd2dd333f8499c",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": [
+        "HG-TRACE-001"
+      ]
+    },
+    {
+      "task_id": "TASK-PRE-TRACE-ORPHAN",
+      "fixture_digest": "3d76cbec0d4142a6f55585487523720eb261ed0158adfe38ba6b815824e5b3aa",
+      "scorer_revision": "trace-validator-v1",
+      "scorer_digest": "35a23d8b41bdc42551484b89a219357dc4dfbcb07eaa425484bd2dd333f8499c",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": [
+        "HG-TRACE-001"
+      ]
+    },
+    {
+      "task_id": "TASK-PRE-REUSE-DECISION",
+      "fixture_digest": "ecc667267d93ba393623b860adf7d0ad263ff0fedd668347b9c946a534e2d7d1",
+      "scorer_revision": "reuse-reservation-v1",
+      "scorer_digest": "ada512bc7b1899dfad4a53fb32185fa15509d055b6919c63131360cd1eceb3f5",
+      "reference_route_id": "route-sol-high",
+      "candidate_route_id": "route-luna-economy",
+      "control_digest": "a93be5031222808cb1483f795744bf1f9ce2cc1fdf217337dcbe4eb6a0c60d7b",
+      "repetitions": 1,
+      "hard_gate_observation_ids": [
+        "HG-REUSE-001"
+      ]
+    }
+  ],
+  "reference_route_id": "route-sol-high",
+  "candidate_route_id": "route-luna-economy",
+  "routing_policy_digest": "b1325caacd02d2699b258a35feb1f6a0ddb52667845518bc660e0bf0d58c70be",
+  "controls": {
+    "model_config_digest": "484b6868cf347b3b21dc335df7a00851e05b65260509f82ffbb2e1d8e918f40a",
+    "prompt_digest": "c1e63c2854e5de83d26b372af4ea299138ebbb9f6b06a6b9e7127e2200485943",
+    "context_digest": "15a553ac230a172acd3ee88ebc777f04f9f88de1c9cc01ae935ce821ca2960e6",
+    "tool_digest": "c73a3366c942f257d9d547706d5ab6cdbaa49dd8144e3ca91842585207e6e557",
+    "platform_digest": "092d54f23659dc59904f627b483d4b32bef1ba7cd0ba2bef87e9a15c3b49bb55",
+    "limits_digest": "c3b94d2d36a2024298dbe58aabc0c3860bfaec04bd2486b5ffeade4d07f9e1b3"
+  },
+  "platform": {
+    "os": "windows",
+    "runtime": "node-22",
+    "native_command": "node packages/benchmark-contract/test/validate-pre-recovery-baseline.mjs",
+    "structural_oracle_digest": "092d54f23659dc59904f627b483d4b32bef1ba7cd0ba2bef87e9a15c3b49bb55",
+    "uses_wsl": false,
+    "uses_bash": false,
+    "requires_symlink": false
+  },
+  "ordering_digest": "39fd7431bcc051c17960c8707d6537173d987e173bac10a1b15e6440739dbcb9",
+  "repetitions": 1,
+  "scheduled_denominator": 12,
+  "declared_hard_gate_ids": [
+    "HG-PRIVACY-001",
+    "HG-CONTEXT-001",
+    "HG-CONTEXT-002",
+    "HG-TRACE-001",
+    "HG-TEST-001",
+    "HG-REUSE-001",
+    "HG-REVIEW-001",
+    "HG-REVIEW-002",
+    "HG-HONESTY-001",
+    "HG-MIRROR-001",
+    "HG-WINDOWS-001",
+    "HG-RECOVERY-001"
+  ],
+  "unobserved_hard_gate_ids": [
+    "HG-PRIVACY-001",
+    "HG-TEST-001",
+    "HG-REVIEW-001",
+    "HG-REVIEW-002",
+    "HG-RECOVERY-001"
+  ],
+  "claims_allowed": [
+    "measurement_pipeline_validity",
+    "mapped_gate_observations",
+    "per_task_consumption_completeness"
+  ],
+  "claims_forbidden": [
+    "global_model_superiority",
+    "proven_cost_optimization",
+    "complete_product_quality",
+    "global_green_for_unobserved_gate",
+    "sota_status"
+  ]
+}

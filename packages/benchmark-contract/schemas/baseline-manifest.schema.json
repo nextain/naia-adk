@@ -1,0 +1,16 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://naia.dev/schemas/benchmark/baseline-manifest.schema.json",
+  "title":"Frozen Baseline Manifest",
+  "type":"object","additionalProperties":false,
+  "required":["id","contract_digest","manifest_digest","frozen_at","tasks","reference_route_id","candidate_route_id","routing_policy_digest","controls","platform","ordering_digest","repetitions","scheduled_denominator","declared_hard_gate_ids","unobserved_hard_gate_ids","claims_allowed","claims_forbidden"],
+  "properties":{
+    "id":{"type":"string","pattern":"^BASELINE-[A-Z0-9_-]+$"},"contract_digest":{"$ref":"#/$defs/digest"},"manifest_digest":{"$ref":"#/$defs/digest"},"frozen_at":{"type":"string","format":"date-time"},
+    "tasks":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["task_id","fixture_digest","scorer_revision","scorer_digest","reference_route_id","candidate_route_id","control_digest","repetitions","hard_gate_observation_ids"],"properties":{"task_id":{"type":"string"},"fixture_digest":{"$ref":"#/$defs/digest"},"scorer_revision":{"type":"string"},"scorer_digest":{"$ref":"#/$defs/digest"},"reference_route_id":{"type":"string"},"candidate_route_id":{"type":"string"},"control_digest":{"$ref":"#/$defs/digest"},"repetitions":{"type":"integer","minimum":1},"hard_gate_observation_ids":{"type":"array","uniqueItems":true,"items":{"type":"string"}}}}},
+    "reference_route_id":{"type":"string","minLength":1},"candidate_route_id":{"type":"string","minLength":1},"routing_policy_digest":{"$ref":"#/$defs/digest"},
+    "controls":{"type":"object","additionalProperties":false,"required":["model_config_digest","prompt_digest","context_digest","tool_digest","platform_digest","limits_digest"],"properties":{"model_config_digest":{"$ref":"#/$defs/digest"},"prompt_digest":{"$ref":"#/$defs/digest"},"context_digest":{"$ref":"#/$defs/digest"},"tool_digest":{"$ref":"#/$defs/digest"},"platform_digest":{"$ref":"#/$defs/digest"},"limits_digest":{"$ref":"#/$defs/digest"}}},
+    "platform":{"type":"object","additionalProperties":false,"required":["os","runtime","native_command","structural_oracle_digest","uses_wsl","uses_bash","requires_symlink"],"properties":{"os":{"enum":["windows","linux","macos"]},"runtime":{"type":"string"},"native_command":{"type":"string"},"structural_oracle_digest":{"$ref":"#/$defs/digest"},"uses_wsl":{"type":"boolean"},"uses_bash":{"type":"boolean"},"requires_symlink":{"type":"boolean"}}},
+    "ordering_digest":{"$ref":"#/$defs/digest"},"repetitions":{"type":"integer","minimum":1},"scheduled_denominator":{"type":"integer","minimum":1},"declared_hard_gate_ids":{"type":"array","minItems":1,"uniqueItems":true,"items":{"type":"string"}},"unobserved_hard_gate_ids":{"type":"array","uniqueItems":true,"items":{"type":"string"}},"claims_allowed":{"type":"array","minItems":1,"uniqueItems":true,"items":{"enum":["measurement_pipeline_validity","mapped_gate_observations","per_task_consumption_completeness"]}},"claims_forbidden":{"type":"array","minItems":5,"uniqueItems":true,"items":{"enum":["global_model_superiority","proven_cost_optimization","complete_product_quality","global_green_for_unobserved_gate","sota_status"]}}
+  },
+  "$defs":{"digest":{"type":"string","pattern":"^[a-f0-9]{64}$"}}
+}

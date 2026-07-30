@@ -56,6 +56,9 @@ desktop.ini
 # ctx index (auto-rebuilt by hook, never committed)
 .agents/context/.ctx-index.json
 
+# Deterministic local hook queues and scratch receipts
+.agents/work/
+
 # BEH runtime artifacts (per-session ledger/state + opt-in/runtime markers)
 .agents/harness/ledger/
 .agents/harness/state/

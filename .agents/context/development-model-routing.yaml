@@ -1,0 +1,219 @@
+version: 2
+scope: alpha-adk root collaboration process
+status: active
+
+portable_contract:
+  vendor_neutral: true
+  rule: The contract defines capabilities and evidence; tool/model names belong only in adapters.
+  roles:
+    orchestrator: interpret the approved contract and own integration
+    explorer: collect bounded evidence without mutation
+    designer: compare bounded alternatives and identify escalation triggers
+    implementer: mutate only the approved scope
+    tester: execute focused verification and record evidence
+    adversarial_reviewer: inspect an immutable snapshot independently and read-only
+    arbiter: resolve only evidence-backed disagreements without replacing a reviewer
+    translator: update changed language mirrors from hashed inputs
+  selection:
+    - deterministic validation precedes any model call
+    - select the lowest-cost adapter that satisfies the role capability and risk
+    - escalate only for declared risk triggers or unresolved evidence
+  independence:
+    self_check_is_review: false
+    prefer_distinct_model_or_provider: true
+    require_distinct_role: true
+    require_distinct_session_id: true
+    require_distinct_execution_id: true
+    require_same_snapshot_hash: true
+  adapter_requirements:
+    - map every enabled role to a supported local tool and model alias
+    - keep CLI flags and vendor model slugs outside the portable contract
+    - fail closed when a required role has no eligible independent adapter
+  platform_independence:
+    supported_host_rule: every declared supported host must install, run, recover, and execute its mandatory harness natively
+    windows: WSL, Cygwin, MSYS2, Linux VMs, and Linux containers are never required Windows dependencies
+    linux: Linux-only security primitives are verified in native Linux CI and never used through WSL to claim Windows support
+    adapter_rule: platform-specific implementations must preserve the same fail-closed contract and evidence semantics
+    test_rule: platform-specific skips are explicit and do not count as a pass for the skipped capability
+
+principles:
+  - Contract and deterministic validation run before model work whenever possible.
+  - Use the lowest-cost role that can safely perform the bounded task; escalate by risk and unresolved evidence, not by habit.
+  - OpenCode is not permitted in this workspace routing. HY3 is prohibited in production routing and is allowed only inside the sealed benchmark until a later explicit policy change; benchmark success alone does not override this prohibition.
+  - A producer self-check is useful but never counts as adversarial review.
+
+adapter_role_map:
+  orchestrator: { adapter: codex, role: main_orchestrator }
+  explorer: { adapter: codex, role: explorer }
+  designer: { adapter: codex, role: designer }
+  implementer: { adapter: codex, role: worker }
+  tester: { adapter: codex, role: tester }
+  adversarial_reviewer: { adapter: codex, role: adversarial_reviewer }
+  arbiter: { adapter: codex, role: arbiter }
+  translator: { adapter: routing_chain, role: translation }
+
+codex_adapter:
+  main_orchestrator:
+    model: gpt-5.6-sol
+    reasoning_effort: medium
+    authority: contract interpretation, integration decisions, final synthesis, and final file changes
+  roles:
+    explorer:
+      model: gpt-5.6-terra
+      reasoning_effort: low
+      mode: read-only
+      use_for: bounded search, context mapping, evidence collection
+    worker:
+      model: gpt-5.6-terra
+      reasoning_effort: medium
+      mode: workspace-write
+      use_for: approved bounded implementation
+    designer:
+      model: gpt-5.6-terra
+      reasoning_effort: high
+      mode: read-only
+      use_for: bounded design analysis; escalate to Sol only when a declared high-risk trigger applies
+    tester:
+      model: gpt-5.6-terra
+      reasoning_effort: medium
+      mode: workspace-write
+      use_for: focused tests and evidence collection
+    translator_luna:
+      model: gpt-5.6-luna
+      reasoning_effort: low
+      mode: read-only
+      use_for: repeatable translation batches and mechanical classification when Claude Haiku is unavailable
+    adversarial_reviewer:
+      model: gpt-5.6-terra
+      reasoning_effort: high
+      mode: read-only
+      use_for: independent review of an immutable snapshot
+    arbiter:
+      model: gpt-5.6-sol
+      reasoning_effort: high
+      mode: read-only
+      use_for: high-risk integration and unresolved independent-review findings
+
+claude_adapter:
+  policy: vendor-neutral
+  model_selection: use the currently supported Claude aliases or locally configured model names; never hard-code dated model IDs in this workspace contract
+  routing:
+    lightweight: Claude Haiku 4.5 for mechanical classification, translation batches, and bounded exploration
+    standard: normal analysis or implementation when the installed configuration selects its standard alias
+    escalation: architecture, safety-critical decisions, or unresolved review evidence only
+    translation_fallback: Claude Sonnet after Haiku 4.5 and Codex Luna are unavailable
+  restriction: Claude may not be both producer and adversarial reviewer for the same execution
+
+translation_routing:
+  order:
+    - { adapter: claude, model: haiku, family: Claude Haiku 4.5 }
+    - { adapter: codex, model: gpt-5.6-luna, reasoning_effort: low }
+    - { adapter: claude, model: sonnet, family: Claude Sonnet }
+  invocation: all adapters use the shared stdin-based invocation builder; prompts must not be command-line arguments
+  failure: continue only to the next declared adapter and preserve the diagnostic receipt
+
+independent_review:
+  required: true
+  producer_may_self_check: true
+  self_check_counts_as_adversarial_review: false
+  diversity_preference: prefer an eligible reviewer from a different model or provider when available, without relaxing identity separation or snapshot binding
+  separation:
+    - producer.session_id must differ from reviewer.session_id
+    - producer.execution_id must differ from reviewer.execution_id
+    - reviewer must inspect the immutable revision snapshot, not an earlier or unstated revision
+  clean_threshold:
+    normal: two independent clean reviews on the same unchanged snapshot
+    high_risk_or_integration: two independent clean reviews on the same unchanged snapshot; use the Sol arbiter only for unresolved findings
+  evidence_required:
+    - contract_or_req_id
+    - revision_snapshot_hash
+    - producer_session_id
+    - producer_execution_id
+    - reviewer_session_id
+    - reviewer_execution_id
+    - test_receipts
+  active_adapter_panel:
+    - codex-terra-independent
+    - claude-sonnet-independent
+  raw_evidence_rule: each local receipt must bind its reviewer session and execution digest to one preserved raw CLI envelope under .agents/progress/review-evidence; invented caller strings are rejected
+
+enforcement_boundary:
+  local_hooks: deterministic guardrail for the local tool paths Codex exposes to hooks; ambiguous shell mutation is denied unless the approved contract declares an exact pattern
+  governed_security: signed isolated review execution is the authenticity boundary; local progress JSON and ordinary hook files do not claim cryptographic authenticity
+  platform_boundary: Windows native harness verification and Linux native bwrap isolation verification are separate; neither host may silently depend on a compatibility subsystem for the other
+
+cost_controls:
+  deterministic_first: schema, hash, mirror, index, and receipt checks must not call an LLM
+  batch_lightweight_work: translation and mechanical classification must process only changed inputs with cached hashes
+  escalation: Sol high is reserved for arbitration or genuinely high-risk work
+
+quick_start_profiles:
+  status: opt_in_pilot_no_total_cost_claim
+  source: packages/benchmark-contract/baselines/development-composition-profiles.json
+  default_opt_in: balanced
+  fallback: control
+  structure_rule: profiles define stable roles and guards; replaceable model bindings are evaluated separately so a new model does not require redesigning the profiles
+  profiles:
+    control: all roles use the Sol binding in separate executions; serves as the quality/cost reference and high-risk fallback
+    balanced: Sol owns orchestration and integration; Luna handles bounded implementation with an exact validator, Terra is the bounded fallback without one, and Terra handles focused testing
+    economy: balanced safety boundaries plus later evidence-gated expansion of Luna mechanical work
+  selection_guards:
+    - unbounded or high-risk work falls back to Sol
+    - Luna implementation requires bounded scope and an exact validator; otherwise use Terra, while unbounded or high-risk work uses Sol
+    - Luna mechanical work additionally requires low risk
+    - independent review requires distinct session and execution identities and prefers a binding different from the producer
+  claim_boundary: phase 1 makes balanced available for opt-in use but does not claim proven total-system cost reduction
+  new_model_rule: run only the affected capability experiments, update the binding qualification and evidence expiry, then compare the unchanged profiles
+
+benchmark_candidate_registry:
+  status: evidence_required_before_production_routing
+  fixed_constraint: Codex gpt-5.6-sol remains the main orchestrator and final integrator
+  comparison_scope: compare bounded worker-role model-provider-adapter composites; do not describe cross-provider results as model-only causality
+  hy3_exception: benchmark-only; production routing remains prohibited until a separate explicit policy decision after evidence review
+  candidates:
+    - { id: codex-terra, provider: OpenAI Codex, model: gpt-5.6-terra, intended_roles: [explorer, implementer, tester, independent_reviewer] }
+    - { id: codex-luna, provider: OpenAI Codex, model: gpt-5.6-luna, intended_roles: [translator, mechanical_classifier, bounded_explorer] }
+    - { id: azure-deepseek-v4-flash, provider: Azure Foundry, model: DeepSeek-V4-Flash, intended_roles: [analysis, code_generation, structured_output], restrictions: [no_tool_calling_claim] }
+    - { id: openrouter-hy3, provider: OpenRouter, model: tencent/hy3, intended_roles: [analysis, code_generation, tool_use_after_probe], restrictions: [pin_routing_mode_and_actual_upstream_provider] }
+    - { id: upstage-solar-open2, provider: Upstage private beta, model: solar-open2, credential_env: UPSTAGE_KEY, intended_roles: [korean_analysis, code_generation, document_work, tool_use_after_probe], restrictions: [never_commit_key, freeze_hosted_api_identity_and_price_evidence] }
+  suite_boundary:
+    model_capability: invoke candidate models on frozen task inputs and score outputs independently
+    agent_runtime: invoke the actual runtime with a fixed control model and fault-injected tools
+    governance_harness: invoke deterministic hooks and validators without asking a model to guess expected state
+    common_text_profile: no tools; identical public input and response schema for every eligible candidate
+    provider_tool_profile: separate compatibility evidence only; never aggregate with the common text profile
+  sealed_execution:
+    candidate_view: empty scratch cwd plus public-input only
+    hidden_assets: oracle, scorer, manifest, and expected outputs stay outside the candidate process permission boundary and installed package
+    access_order: bind candidate output digest before the scorer process can access hidden assets
+    isolation: new provider session/thread per attempt; no output sharing; cache mode recorded; holdout input never promoted from development fixtures
+    leak_response: invalidate the affected run, rotate the task family, and record a tombstone receipt
+  sol_control:
+    route: worker-sol-control
+    separation: distinct minimal worker session with no oracle access; orchestrator decisions and cost are recorded as common overhead and excluded from worker response scoring
+  acceptance_statistics:
+    development_pilot: 24 public task clusters per route with 3 attempts per cluster; no production claim
+    sealed_minimum: 80 hidden task clusters per qualifying route with 5 attempts per cluster, subject to a pre-run power calculation that may increase but never decrease the frozen sample
+    primary_quality: task-clustered paired bootstrap with 10000 resamples and a 95 percent interval; candidate-minus-Sol lower bound must be at least -0.05
+    primary_cost: provider-receipted paired execution cost; upper confidence bound must demonstrate at least 15 percent improvement
+    family_control: five candidate-versus-Sol comparisons in one Holm-corrected family
+    invalid_policy: invalid, timeout, infrastructure failure, retry, and fallback attempts stay in scheduled denominators and costs
+  receipt_contract:
+    required_identity: [provider_id, endpoint_id, api_version, source_model_id, deployment_or_route_model_id, actual_upstream_provider, adapter_revision, adapter_build_digest, request_configuration_digest, usage_mapping_revision, unsupported_parameters]
+    required_evidence: [redacted_request_digest, redacted_response_digest, normalized_usage_digest, monotonic_latency_ms, price_snapshot_digest]
+    secret_redaction: authorization headers, API keys, signed URLs, and credential values never enter receipts, logs, journals, or digests
+  durable_journal:
+    integrity: every record is HMAC chained and must be independently re-readable before analysis
+    windows_key_storage: use CurrentUser DPAPI through the native PowerShell helper; never store or print the plaintext HMAC key
+    portability: the core runner accepts an externally supplied key on every platform; DPAPI is a Windows adapter, not a cross-platform dependency
+    development_rule: an execution whose integrity key is not durably recoverable is calibration evidence only and cannot support routing claims
+  native_windows_gate:
+    runtime: Node 22 or later plus native PowerShell where needed
+    poison_checks: [no_wsl, no_bash, no_required_symlink, no_linux_vm_or_container_dependency]
+    rule: remote hosted-model success never substitutes for the local native-Windows harness receipt
+  promotion_gates:
+    - all applicable hard contracts remain green
+    - every scheduled attempt, retry, fallback, timeout, and terminal failure remains in quality and cost denominators
+    - paired quality non-inferiority and cost improvement satisfy the frozen statistical rule
+    - Korean dual-context fidelity and native Windows behavior pass their separate suites
+    - two independent clean adversarial reviews inspect the same immutable snapshot; producer self-check never counts

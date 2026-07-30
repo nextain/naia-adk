@@ -1,0 +1,15 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://naia.dev/schemas/benchmark/baseline-fixture.schema.json",
+  "title":"Pre-Recovery Baseline Fixture",
+  "type":"object","additionalProperties":false,
+  "required":["id","kind","source","scorer","input","oracle"],
+  "properties":{
+    "id":{"type":"string","pattern":"^FIXTURE-PRE-[A-Z0-9_-]+$"},
+    "kind":{"enum":["legacy_code","honest_failure","nested_context","compaction_restore","stale_mirror","native_windows","trace_complete","trace_orphan","reuse_decision"]},
+    "source":{"type":"object","additionalProperties":false,"required":["repository","revision","locator","decision","reason"],"properties":{"repository":{"type":"string"},"revision":{"type":"string"},"locator":{"type":"string"},"decision":{"enum":["retained","repaired","new_gap_fixture"]},"reason":{"type":"string","minLength":1}}},
+    "scorer":{"type":"object","additionalProperties":false,"required":["kind","revision"],"properties":{"kind":{"enum":["executable","deterministic_structural"]},"revision":{"type":"string","minLength":1}}},
+    "input":{"type":"object"},
+    "oracle":{"type":"object","minProperties":1}
+  }
+}

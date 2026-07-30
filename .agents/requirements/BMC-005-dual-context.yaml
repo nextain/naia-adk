@@ -1,0 +1,30 @@
+id: BMC-005
+title: "Verified Dual-Context Translation"
+title_ko: "Verified Dual-Context Translation"
+product: naia-benchmark-contract
+module: dual-context
+status: active
+source: human
+priority: high
+created: 2026-07-29
+updated: 2026-07-30
+issue_url: "https://github.com/nextain/naia-adk/issues/7"
+description: |
+  English AI source atoms and Korean human mirrors must use hash-gated low-cost translation, bounded fallback, structural and semantic verification, and byte-preserving failure behavior.
+acceptance_criteria:
+  - "Mapping and acceptance plans are frozen before translation attempts."
+  - "Each attempt records route, model revision, status, token, cost, latency, and error classification."
+  - "Failed or unverified translation never overwrites the previous mirror and leaves an explicit stale state."
+trace:
+  code:
+    - { path: "packages/benchmark-contract/schemas/governance-evidence.schema.json", symbol: "dual-context mapping, plan, attempt, and receipt contract", coverage: full }
+    - { path: "packages/benchmark-contract/src/validate-bundle.mjs", symbol: "attempt budget and byte-preserving failure validation", coverage: full }
+    - { path: "scripts/i18n/cli_invocation.py", symbol: "shared shell-free model invocation construction", coverage: partial }
+    - { path: "scripts/i18n/cli_process.py", symbol: "bounded cross-platform process-tree execution", coverage: partial }
+    - { path: "scripts/i18n/translate-ctx.py", symbol: "low-cost fallback route and hash-gated mirror writes", coverage: partial }
+    - { path: "scripts/i18n/translate-readme.py", symbol: "shared bounded CLI execution", coverage: partial }
+  tests:
+    - { path: "packages/benchmark-contract/test/validate-benchmark-contract.mjs", symbol: "unverified mirror preservation fixture", coverage: full }
+    - { path: "scripts/i18n/test-translate-ctx.py", symbol: "fallback routing and timeout descendant cleanup", coverage: partial }
+  reviews: { planning: ["NAIA-BENCH-CONTRACT-001 sequences 2 and 3"], development: null, test: null, integration: null }
+decisions: ["NAIA-BENCH-CONTRACT-001"]

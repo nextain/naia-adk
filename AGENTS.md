@@ -140,6 +140,7 @@ GitHub에서 포크한 뒤, 주기적으로 upstream을 동기화하세요: `git
 | `verify-implementation` | 모든 `verify-*` 스킬 실행, 통합 리포트 생성 | 자동 (단계 7, 9) |
 | `verify-contract-conformance` | 선언된 API/인터페이스 계약 vs 구현 검증 | 자동 |
 | `verify-request-contract` | 원요청 source→증거·권한·2회 Clean·Claude Code/Codex 동등성 검증 | 자동 |
+| `verify-benchmark-contract` | 벤치 스키마·공급자 영수증·HMAC/DPAPI 저널·분석 증거 검증 | 자동 |
 | `manage-skills` | 변경 분석, `verify-*` 스킬 생성/업데이트 | 자동 (단계 10) |
 | `merge-worktree` | 시맨틱 커밋으로 워크트리 → main 스쿼시 머지 | 수동 (단계 13) |
 | `read-doc` | HWP/PDF/DOCX/XLSX/PPTX 텍스트 추출 | 수동 |

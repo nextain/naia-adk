@@ -1,33 +1,17 @@
 #!/usr/bin/env node
+"use strict";
+
 /**
- * BEH PreToolUse gate (§3.4, §6.4) — Claude Code adapter.
- *
- * Two deterministic checks (logic in .agents/hooks/core/beh-launch-core.js):
- *   1. session-start handshake (fail-CLOSED): a BEH session must have been
- *      established by the external launcher (beh-launch.sh) with the CURRENT
- *      hook registration. Missing / stale / drifted handshake → block every
- *      tool with a recovery command. (Catches post-launch drift + sessions not
- *      launched via the launcher; the launcher itself is the external root.)
- *   2. unsupervised background → block: a Bash command that backgrounds/detaches
- *      a process (or run_in_background) must go through beh-supervise.js so it
- *      gets a wall+stall deadline (§3.3).
- *
- * Always-allowed: the launcher command itself (to establish the handshake) and
- * the supervise wrapper. Admin one-time escape: `.claude/beh-launch-bypass`.
- * Opt-in (`.claude/beh-on`); fail-safe exit 0 (never error the session).
+ * BEH PreToolUse gate. Disabled projects exit silently; once `.claude/beh-on`
+ * opts in, malformed input, missing cores, handshake drift, and unexpected
+ * runtime failures all block the tool call.
  */
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
-let beh, lc;
-try {
-	beh = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "beh-ledger.js"));
-	lc = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "beh-launch-core.js"));
-} catch {
-	process.exit(0);
-}
+const fs = require("node:fs");
+const path = require("node:path");
+const crypto = require("node:crypto");
 
 const HANDSHAKE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+const OFF_VALUES = new Set(["0", "false", "off", "disabled"]);
 
 function block(reason) {
 	process.stdout.write(JSON.stringify({ decision: "block", reason }));
@@ -38,70 +22,74 @@ async function main() {
 	let input = "";
 	try {
 		process.stdin.setEncoding("utf8");
-		for await (const c of process.stdin) input += c;
-	} catch {
-		/* no stdin */
+		for await (const chunk of process.stdin) input += chunk;
+	} catch (error) {
+		block(`[BEH] fail-CLOSED: hook input could not be read (${error.code || error.message}).`);
 	}
-	let data = {};
-	try {
-		data = JSON.parse(input || "{}");
-	} catch {
+
+	let data;
+	try { data = JSON.parse(input || "{}"); }
+	catch {
+		const defaultConfig = path.join(process.cwd(), ".claude");
+		const defaultEnabled = fs.existsSync(path.join(defaultConfig, "beh-on"))
+			&& !fs.existsSync(path.join(defaultConfig, "no-harness"))
+			&& !OFF_VALUES.has(String(process.env.BEH || "").trim().toLowerCase());
+		if (defaultEnabled) block("[BEH] fail-CLOSED: hook input is not valid JSON.");
 		process.exit(0);
 	}
-	const cwd = data.cwd || process.cwd();
+	const cwd = path.resolve(data.cwd || process.cwd());
+	const configDir = path.join(cwd, ".claude");
+	const enabled = fs.existsSync(path.join(configDir, "beh-on"))
+		&& !fs.existsSync(path.join(configDir, "no-harness"))
+		&& !OFF_VALUES.has(String(process.env.BEH || "").trim().toLowerCase());
+	if (!enabled) process.exit(0);
+
+	let beh, lc;
+	try {
+		const hostRoot = path.resolve(__dirname, "..", "..");
+		beh = require(path.join(hostRoot, ".agents", "hooks", "core", "beh-ledger.js"));
+		lc = require(path.join(hostRoot, ".agents", "hooks", "core", "beh-launch-core.js"));
+	} catch (error) {
+		block(`[BEH] fail-CLOSED: enforcement core could not be loaded (${error.code || error.message}).`);
+	}
 	if (!beh.behEnabled(cwd, process.env)) process.exit(0);
 
 	const tool = data.tool_name;
-	const ti = data.tool_input || {};
-	const cmd = tool === "Bash" ? String(ti.command || "") : "";
+	const toolInput = data.tool_input || {};
+	const command = tool === "Bash" ? String(toolInput.command || "") : "";
+	if (lc.isLauncher(command)) process.exit(0);
 
-	// launcher always allowed (must be able to run to establish handshake).
-	if (lc.isLauncher(cmd)) process.exit(0);
-
-	// admin one-time bypass.
-	const bypass = path.join(cwd, ".claude", "beh-launch-bypass");
+	const bypass = path.join(configDir, "beh-launch-bypass");
 	if (fs.existsSync(bypass)) {
-		try {
-			fs.unlinkSync(bypass);
-		} catch {
-			/* best-effort */
-		}
+		try { fs.unlinkSync(bypass); }
+		catch (error) { block(`[BEH] fail-CLOSED: one-time bypass could not be consumed (${error.code || error.message}).`); }
 		process.exit(0);
 	}
 
-	// 1. handshake fail-closed.
 	let handshake = null;
-	try {
-		handshake = JSON.parse(fs.readFileSync(path.join(cwd, ".claude", "beh-handshake"), "utf8"));
-	} catch {
-		/* none */
-	}
+	try { handshake = JSON.parse(fs.readFileSync(path.join(configDir, "beh-handshake"), "utf8")); } catch {}
 	let currentHash = null;
-	try {
-		currentHash = crypto.createHash("sha256").update(fs.readFileSync(path.join(cwd, ".claude", "settings.json"))).digest("hex");
-	} catch {
-		/* no settings */
-	}
-	const hs = lc.evaluateHandshake({ handshake, currentHash, now: Date.now(), maxAgeMs: HANDSHAKE_MAX_AGE_MS });
-	if (!hs.ok) {
+	try { currentHash = crypto.createHash("sha256").update(fs.readFileSync(path.join(configDir, "settings.json"))).digest("hex"); } catch {}
+	const result = lc.evaluateHandshake({ handshake, currentHash, now: Date.now(), maxAgeMs: HANDSHAKE_MAX_AGE_MS });
+	if (!result.ok) {
+		const launcher = process.platform === "win32"
+			? `node .claude/hooks/beh-launch.cjs "${cwd}"`
+			: `bash .claude/hooks/beh-launch.sh "${cwd}"`;
 		block(
-			`[BEH] session-start fail-CLOSED: ${hs.reason} (plan §3.4).\n` +
-				`이 세션은 외부 launcher 검증을 거치지 않았거나 훅 등록이 드리프트했습니다.\n` +
-				`복구: bash .claude/hooks/beh-launch.sh "${cwd}"  (필수 훅 등록·코어 로드 self-probe 후 handshake 기록)\n` +
-				`관리자 일시 우회: touch .claude/beh-launch-bypass (1회 소비).`,
+			`[BEH] session-start fail-CLOSED: ${result.reason}.\n`
+			+ `Recovery: ${launcher}\n`
+			+ "One-time administrator bypass: node -e \"require('fs').writeFileSync('.claude/beh-launch-bypass','')\"",
 		);
 	}
 
-	// 2. unsupervised background → block.
-	if (tool === "Bash" && (lc.isBackgrounded(cmd) || ti.run_in_background === true) && !lc.isSuperviseWrapper(cmd)) {
+	if (tool === "Bash" && (lc.isBackgrounded(command) || toolInput.run_in_background === true) && !lc.isSuperviseWrapper(command)) {
 		block(
-			"[BEH] 미감독 백그라운드 실행 차단 (plan §3.3/§3.4).\n" +
-				"백그라운드/장기 작업은 wall+stall 데드라인 감시를 받도록 supervise 래퍼를 경유해야 합니다:\n" +
-				"  node .claude/hooks/beh-supervise.js --probe-type <file_lines|file_bytes|file_mtime|path_count|log_match_count> \\\n" +
-				"    --probe-arg <경로> --max-wall <초> --max-stall <초> -- <명령>\n" +
-				"짧은 포그라운드 명령이면 & / run_in_background 없이 그대로 실행하세요.",
+			"[BEH] Unsupervised background execution is blocked. Use the bounded wrapper:\n"
+			+ "node .claude/hooks/beh-supervise.js --probe-type <type> --probe-arg <path> "
+			+ "--max-wall <seconds> --max-stall <seconds> -- <command...>",
 		);
 	}
-	process.exit(0); //  allow
+	process.exit(0);
 }
-main().catch(() => process.exit(0));
+
+main().catch((error) => block(`[BEH] fail-CLOSED: unexpected gate failure (${error.code || error.message}).`));

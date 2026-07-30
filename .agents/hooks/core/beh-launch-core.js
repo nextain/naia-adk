@@ -26,14 +26,41 @@ function isBackgrounded(command) {
 	return false;
 }
 
-/** Is this command the BEH supervise wrapper itself? (allowed to background) */
+function directCommandWords(command) {
+	const text = String(command || "");
+	const words = [];
+	let word = "", quote = null;
+	for (const char of text) {
+		if (quote) { if (char === quote) quote = null; else word += char; continue; }
+		if (char === "'" || char === '"') { quote = char; continue; }
+		if (/[&|;<>\r\n]/.test(char)) return null;
+		if (/\s/.test(char)) { if (word) { words.push(word); word = ""; } continue; }
+		word += char;
+	}
+	if (quote) return null;
+	if (word) words.push(word);
+	return words;
+}
+
+function directScript(command, executables, scripts, allowTrailingBackground = false) {
+	let text = String(command || "").trim();
+	if (allowTrailingBackground && /(^|[^&])&\s*$/.test(text)) text = text.replace(/&\s*$/, "").trim();
+	const words = directCommandWords(text);
+	if (!words || words.length < 2) return false;
+	const executable = words[0].toLowerCase();
+	const script = words[1].replace(/\\/g, "/").replace(/^\.\//, "");
+	return executables.includes(executable) && scripts.includes(script);
+}
+
+/** Is this command a direct BEH supervise invocation? (allowed to background) */
 function isSuperviseWrapper(command) {
-	return /beh-supervise\.js\b/.test(String(command || ""));
+	return directScript(command, ["node", "node.exe"], [".claude/hooks/beh-supervise.js"], true);
 }
 
 /** Is this command the external launcher? (always allowed, to establish handshake) */
 function isLauncher(command) {
-	return /beh-launch\.sh\b/.test(String(command || ""));
+	return directScript(command, ["node", "node.exe"], [".claude/hooks/beh-launch.cjs"])
+		|| directScript(command, ["bash", "bash.exe"], [".claude/hooks/beh-launch.sh"]);
 }
 
 // ── (b) session-start handshake (fail-CLOSED) ─────────────────────────────
@@ -56,14 +83,17 @@ function isLauncher(command) {
  * @returns {{ok:boolean, reason:string}}
  */
 function evaluateHandshake(p) {
-	if (!p.handshake) return { ok: false, reason: "session-start handshake 없음 — 외부 launcher 미경유" };
-	if (p.currentHash && p.handshake.settings_hash !== p.currentHash) {
+	if (!p.handshake || !Number.isFinite(p.handshake.ts) || typeof p.handshake.settings_hash !== "string") {
+		return { ok: false, reason: "session-start handshake missing or incomplete — external launcher required" };
+	}
+	if (typeof p.currentHash !== "string" || !p.currentHash) return { ok: false, reason: "current hook registration hash unavailable" };
+	if (p.handshake.settings_hash !== p.currentHash) {
 		return { ok: false, reason: "훅 등록(settings.json) 변경 — handshake 무효(드리프트)" };
 	}
-	if (p.maxAgeMs != null && p.handshake.ts != null && p.now - p.handshake.ts >= p.maxAgeMs) {
+	if (p.maxAgeMs != null && p.now - p.handshake.ts >= p.maxAgeMs) {
 		return { ok: false, reason: "handshake 만료(stale)" };
 	}
 	return { ok: true, reason: "유효" };
 }
 
-module.exports = { isBackgrounded, isSuperviseWrapper, isLauncher, evaluateHandshake };
+module.exports = { isBackgrounded, directCommandWords, isSuperviseWrapper, isLauncher, evaluateHandshake };

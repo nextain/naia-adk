@@ -45,41 +45,34 @@ node scripts/issue-review-receipt.cjs <review-id> "$(date -Iseconds)" <tool>:<mo
 
 3. Claude Code와 Codex의 생명주기 등록을 대조한다.
 
-```bash
-node - <<'NODE'
-const core=require('./.agents/hooks/core/request-contract.js');
-for (const [client, version] of [['claude','2.1.207'],['codex','0.144.1']]) {
-  if (!core.clientRegistrySupports(process.cwd(), client)) throw new Error(`${client}: lifecycle registry mismatch`);
-  core.assertSupportedClient(process.cwd(), client, version);
-}
-NODE
+```powershell
+node -e "const core=require('./.agents/hooks/core/request-contract.js'); for(const [client,version] of [['claude','2.1.207'],['codex','0.144.1']]){if(!core.clientRegistrySupports(process.cwd(),client))throw new Error(client+': lifecycle registry mismatch');core.assertSupportedClient(process.cwd(),client,version)}"
 ```
 
 4. 스키마와 예시의 JSON 문법 및 패키지 인덱스를 검사한다.
 
-```bash
+```powershell
 pnpm --filter @naia-adk/artifacts-spec test
-test "$(find packages/artifacts-spec/schemas -maxdepth 1 -name '*.schema.json' | wc -l)" -eq 16
+node -e "const fs=require('fs');if(fs.readdirSync('packages/artifacts-spec/schemas').filter(x=>x.endsWith('.schema.json')).length!==16)process.exit(1)"
 ```
 
 예시는 AJV 구조 검증뿐 아니라 고정 evidence, exact source/scope/presentation digest, 테스트 공개키 authority receipt로 런타임 validator까지 통과해야 합니다. source·evidence·signature 드리프트 음성 테스트도 모두 거부되어야 합니다.
 
 5. 등록 드리프트와 미러를 검사한다.
 
-```bash
-cmp AGENTS.md CLAUDE.md
-cmp AGENTS.md GEMINI.md
-cmp .agents/skills/verify-request-contract/SKILL.md .users/skills/verify-request-contract/SKILL.md
-test "$(cat .claude/skills/verify-request-contract)" = "../../.agents/skills/verify-request-contract"
-git check-ignore .agents/harness/units/probe .agents/harness/quarantine/probe .agents/harness/receipts-v2/probe .agents/harness/claims/probe .agents/harness/locks/probe
-git check-ignore .claude/git-push-approved.marker
+```powershell
+node .claude/hooks/sync-entry-points.js --check
+node -e "const fs=require('fs');const a=fs.readFileSync('.agents/skills/verify-request-contract/SKILL.md'),u=fs.readFileSync('.users/skills/verify-request-contract/SKILL.md');if(!a.equals(u)||fs.readFileSync('.claude/skills/verify-request-contract','utf8').trim()!=='../../.agents/skills/verify-request-contract')process.exit(1)"
+git check-ignore .agents/harness/units/probe .agents/harness/quarantine/probe .agents/harness/receipts-v2/probe .agents/harness/claims/probe .agents/harness/locks/probe .claude/git-push-approved.marker
 ```
 
 6. 기존 하네스 회귀를 실행한다.
 
-```bash
-bash .claude/hooks/e2e/run.sh
+```powershell
+pnpm run test:harness-native
 ```
+
+Linux CI는 별도로 `bash .claude/hooks/e2e/run.sh`와 `bash .claude/hooks/e2e/scenario.sh`를 실행한다. 이 Linux 증거를 Windows 통과로 재사용하지 않으며 Windows는 WSL, Cygwin, MSYS2, Linux VM·컨테이너를 요구하지 않는다.
 
 ## PASS / FAIL
 

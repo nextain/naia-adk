@@ -1,0 +1,1 @@
+{"revision":"dual-context-stale-v1","kind":"deterministic_structural","input_contract":"source_and_mirror_digest_state","decision":"a changed source with no accepted translation must remain stale, unaccepted, and byte-preserve the previous mirror","rules":["failed translation never overwrites the mirror","no live model call is allowed in this baseline fixture"]}
