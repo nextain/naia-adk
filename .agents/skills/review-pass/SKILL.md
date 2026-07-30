@@ -23,6 +23,22 @@ input_schema:
     type: string
     required: false
     description: "Exact review-bundle JSON exported by scripts/request-contract.cjs; mandatory in governed mode"
+  source_artifacts:
+    type: "string[]"
+    required: false
+    description: "Immutable original human-source artifacts; mandatory for planning and integration"
+  baseline_ref:
+    type: string
+    required: false
+    description: "Immutable commit/tree identifying the working product before the change; mandatory for planning and integration"
+  preservation_contract:
+    type: string
+    required: false
+    description: "Contract with top-level preservation.baseline_ref/intent/surfaces/vendor_sources and schema-valid surface evidence/authority fields; mandatory for planning and integration"
+  incident_history:
+    type: string
+    required: false
+    description: "Prior corrections and known drift; mandatory when any correction or failed review exists, otherwise explicit 'none'"
   context:
     type: string
     required: false
@@ -76,11 +92,13 @@ traceability for requirements-driven projects.
 
 **Core principles:**
 - **Project-agnostic**: No hardcoded paths, tools, or conventions. All configurable.
-- **Multi-AI**: Independent reviewers via CLI tools reduce single-model blind spots
+- **Independent roles**: Four evidence-separated review executions reduce shared-context blind spots; adapters and model providers are configurable
 - **Stage-aware**: Planning, development, test, and integration have different needs
 - **Convergent**: Automated loop until at least 2 consecutive clean rounds for every standard stage
 - **Traceable**: REQ-ID coverage validated at every stage (when applicable, optional)
 - **Source-complete**: In governed mode the exact source chain and full current/prior scope history are mandatory review inputs; caller-selected files cannot redefine scope
+- **Baseline-preserving**: Planning and integration compare the current product with an immutable baseline and an explicit surface-preservation contract
+- **Evidence-separated**: Source, baseline, implementation/test, and authority/release reviewers receive different evidence views to prevent shared anchoring
 - **Safe**: Auto-fix with diff preview, rollback, and safety guard
 
 ## Arguments
@@ -90,6 +108,10 @@ traceability for requirements-driven projects.
 | `stage` | **yes** | `planning` / `development` / `test` / `integration` |
 | `files` | **yes** | Comma-separated file paths to review |
 | `request_contract_bundle` | governed mode | Private bundle locator returned by `node scripts/request-contract.cjs review-challenge --unit <id> --writer-session <id>` |
+| `source_artifacts` | planning, integration | Immutable original-source files or governed bundle references; AI summaries are not substitutes |
+| `baseline_ref` | planning, integration | Immutable commit/tree for the pre-change product |
+| `preservation_contract` | planning, integration | Contract containing top-level `preservation.baseline_ref/intent/surfaces/vendor_sources`; each surface carries lowercase disposition, paths, evidence IDs, and destructive authority fields |
+| `incident_history` | planning, integration | Immutable chronology of the original directives, later corrections, drift evidence, and current state; a selected incident excerpt or AI summary alone is insufficient |
 | `context` | recommended | What was implemented/changed, issue reference |
 | `req_ids` | optional | Comma-separated REQ-IDs to validate coverage |
 | `deferred_req_ids` | optional | Comma-separated REQ-IDs intentionally deferred |
@@ -112,6 +134,8 @@ traceability for requirements-driven projects.
 > **CONTESTED findings at R=2 trigger inline user prompt, then loop resumes.**
 > **Only the final report is shown after convergence.**
 > **Governed mode forbids `--light`, caller-only file scope, unsigned deferral, and review without the exact current request-contract bundle.**
+> **Planning/integration without original source, immutable baseline, and a preservation contract is NOT CLEAN.**
+> **A solo CRITICAL preservation, scope, authority, or release finding is a veto and is never auto-dismissed.**
 
 ### Governed-mode preflight (before every stage)
 
@@ -123,7 +147,21 @@ When request-contract integrity is enabled (`REQUEST_CONTRACT=on` or the runtime
 4. A deferred/superseded/abandoned requirement counts as disposed only when the bundle carries a valid signed user-presence authority and an immutable tombstone covering its directive, target, criterion, trace-artifact, and trace-edge IDs.
 5. Launch only a configured SHA-256-allowlisted reviewer through the trusted platform runner. The Linux reference is `scripts/request-contract-review-runner.cjs`: it pins reviewer and bundle bytes, runs them through isolated `bubblewrap`, and accepts a receipt only while consuming the same-process, one-time run evidence whose semantic fields exactly equal actual reviewer stdout. There is no direct review-JSON ingestion command. It records the sandbox child kernel boot/start identity and rejects collision with every writer host identity. Reviewer and review-runner attestors are SHA-256-pinned snapshots that bind their executable digests and the exact review-payload digest. Reviewer time, stderr, and rejected fields never control public output. Never allowlist a generic blind signer.
 6. Reviewer stdout must list only the complete opaque relationship projection: source and obligation-atom IDs, directive/target/criterion, authority/tombstone, trace, change, implementation/evidence, and every current/prior scope-version mapping. It must never contain text, paths, locators, summaries, or digests. The trusted runner injects issued binding fields only after sandbox exit. The final receipt must be signed by the configured reviewer credential from a context and kernel process identity distinct from every writer session/host. The core issues the opaque `run_id`; `CLEAN` has zero closed finding codes and `DIRTY` has at least one. Invocation fields, writer sessions, and writer process identities are digest-bound, and run/context/process/execution identities are compaction-persistent global claims.
-7. Review issuance is denied while any mutation lease is active. At ingestion, recompute the complete bundle and source/contract/workspace/scope/work/config/binding values; reject the receipt instead of recording it if any post-launch drift exists. Any later revision restarts the Clean streak. Every standard stage requires two consecutive Clean receipts.
+7. Review issuance is denied while any mutation lease is active. At ingestion, recompute the complete bundle and source/contract/workspace/scope/work/config/binding values; reject the receipt instead of recording it if any post-launch drift exists. Any later revision restarts the Clean streak. The general floor is two consecutive Clean receipts. Preservation adds planning×4 and integration×4 stage-bound roles; one four-role streak without stage attestation is not equivalent.
+
+### Product-preservation preflight (planning and integration)
+
+This preflight applies to all feature work, including non-governed projects:
+
+1. Require `source_artifacts`, `baseline_ref`, `preservation_contract`, and an immutable `incident_history`. It must contain or securely resolve the original directives, later corrections, drift evidence, and current state in order; a meta-instruction to "review the whole history", selected excerpts, or AI prose summary cannot replace the history itself. Missing or mutable inputs produce `NOT_CLEAN`.
+2. Verify that `baseline_ref` resolves to an immutable commit/tree. For imported third-party source, require an attested origin repository identity, immutable commit/tree, and digest computed from that origin tree; URL/commit syntax plus a local subtree digest is insufficient.
+3. Load the project-specific preservation adapter and make it derive the exact complete baseline surface set independently of the proposed contract. Require every discovered surface to have a lowercase disposition plus `baseline_evidence_id` and `current_evidence_id`; reject missing, additional, renamed, or unreachable surfaces that lack an explicit disposition. UI routes/navigation, APIs, CLI commands, library exports, data schemas, jobs, package/deployment targets, and operations/handoff paths are examples; unsupported kinds require explicit N/A evidence rather than silent omission.
+4. Treat `preserve` and `extend` as defaults. `replace|remove|disable|redirect|migrate` is valid only when that surface carries an exact `authority_id` and `expected_diff_digest`. Silence, an AI-authored issue/comment, or a derived REQ is not authority.
+5. Reject requirements that omit source authority or immutable source references. A derived requirement may explain a human directive but may not narrow, supersede, or reverse it.
+6. Treat capability reachability loss as deletion even when files remain: broken bindings/references, shadowed entry points, disconnected discovery paths, incompatible exports/schemas, changed package/deployment targets, and misleading handoff artifacts are in scope.
+7. Require probes referenced by each surface's `baseline_evidence_id` and `current_evidence_id`. The probe must be a signed receipt emitted by an allowlisted project-adapter runner after executing the real entry, binding runner/command/exit/result/subject. Agent-authored probe JSON and shape/digest-only evidence are `NOT_CLEAN`. A new test that merely asserts an old entry is absent, redirected, or hidden is a false-green signal without valid destructive authority evidence.
+8. Runtime stage binding and role-specific first-verdict views are implemented and adversarially tested. Treat real-entry probe execution semantics, named vendor-origin attestation, comparison/convergence rounds, and project-complete external-side-effect gating as **PENDING** until code and adversarial tests demonstrate them. Procedure text must not upgrade a pending control into an implemented guarantee.
+9. If prior corrections or failed reviews exist, give reviewers the actual incident history and changed artifacts; do not provide only the orchestrator's conclusion.
 
 ---
 
@@ -132,19 +170,22 @@ When request-contract integrity is enabled (`REQUEST_CONTRACT=on` or the runtime
 Each lens includes actionable checks for headless reviewers.
 
 ### planning
-- **Reviewers**: 2 (configurable)
-- **Convergence**: 2 consecutive clean rounds (1 only in explicit non-governed `--light`)
+- **Reviewers**: 4 separated role executions (tool-independent; roles are not optional)
+- **Convergence**: the general two-Clean floor plus one Clean first verdict from each of the four planning roles; any evidence change invalidates the affected stage (`--light` forbidden)
 - **Arbiter**: none (CONTESTED → inline user prompt, loop resumes)
 - **Lenses (with REQ-IDs)**:
-  1. `req_completeness` — Check: every requirement from the issue has a REQ-ID; no orphan REQ-IDs; acceptance criteria are testable
+  1. `source_fidelity` — Check: independently extract obligations from original source before seeing derived REQs; every human directive is covered and every derived REQ is entailed
   2. `design_coherence` — Check: no internal contradictions between sections; dependencies are identified; scope is bounded
   3. `feasibility` — Check: technical approach is realistic; no assumed-but-unverified capabilities; effort estimate matches scope
-  4. `traceability_setup` — Check: each REQ-ID has acceptance criteria; each criterion is independently verifiable; test method is stated
+  4. `preservation_setup` — Check: baseline is immutable; every product surface has a disposition and probe; destructive dispositions carry exact user authority
 - **Lenses (without REQ-IDs)**:
-  1. `completeness` — Check: all stated goals have implementation steps; no missing sections; edge cases identified
+  1. `source_fidelity` — (same as above; source authority is required even without REQ-IDs)
   2. `design_coherence` — (same as above)
   3. `feasibility` — (same as above)
-  4. `clarity` — Check: unambiguous language; no undefined terms; a new team member could implement from this plan
+  4. `preservation_setup` — (same as above)
+
+These lenses are checks distributed across the four canonical roles in section 1.1; they are not
+replacement role names and must not be recorded as role coverage.
 
 ### development
 - **Reviewers**: 3 (configurable)
@@ -177,19 +218,45 @@ Each lens includes actionable checks for headless reviewers.
   3. `assertion_quality` — (same as above)
 
 ### integration
-- **Reviewers**: 3 (configurable)
-- **Convergence**: 2 consecutive clean rounds (1 in --light)
+- **Reviewers**: 4 separated role executions (tool-independent; roles are not optional)
+- **Convergence**: the general two-Clean floor plus four new integration role executions; planning receipts cannot be reused (`--light` forbidden)
 - **Arbiter**: separate tool from reviewer set (configurable, must not be in reviewer pool)
 - **Lenses (with REQ-IDs)**:
-  1. `req_trace_e2e` — Check: every REQ-ID traceable issue→plan→code→test; no orphan REQ-IDs at any stage; full chain for each
+  1. `source_to_release` — Check: original source→REQ→plan→code→test→runtime→delivery state is complete, with no AI-derived authority substitution
   2. `cross_stage_consistency` — Check: plan description matches code; code matches tests; no contradictions between any two stages
-  3. `regression_risk` — Check: existing tests still pass; no breaking API changes; config changes are backward-compatible
-  4. `drift_detection` — Check: implementation matches plan intent (not just letter); no scope creep; no missing pieces from original plan
+  3. `baseline_preservation` — Check: every `preserve|extend` evidence pair matches baseline behavior; every `replace|remove|disable|redirect|migrate` has exact `authority_id`, matching `expected_diff_digest`, and valid current paths except for `remove`
+  4. `authority_release` — Check: incident history is resolved, review evidence is current, and NOT CLEAN work is restricted to REVIEW_ONLY
 - **Lenses (without REQ-IDs)**:
-  1. `completeness_e2e` — Check: all planned changes are implemented and tested; nothing dropped silently
+  1. `source_to_release` — (same as above; source authority is required even without REQ-IDs)
   2. `cross_stage_consistency` — (same as above)
-  3. `regression_risk` — (same as above)
-  4. `drift_detection` — (same as above)
+  3. `baseline_preservation` — (same as above)
+  4. `authority_release` — (same as above)
+
+Integration issues new stage-bound receipts for the same four canonical roles. Planning role
+receipts do not count toward integration coverage.
+
+### 1.1 Separated Reviewer Roles
+
+Planning and integration use four evidence-separated roles. A role is an independently
+launched execution, not a hardcoded provider name. Different providers or models are preferred,
+but one configured adapter may run multiple roles only when every role has a distinct process,
+context, execution ID, and first verdict. If fewer than four role executions complete, the stage
+is `NOT_CLEAN` rather than gracefully degraded.
+
+| Role | Evidence shown first | Evidence withheld until first verdict | Primary question |
+|------|----------------------|--------------------------------------|------------------|
+| `source_fidelity` | Exact original-source bundle and source authority | Derived REQs, plan, implementation summary | What did the user actually authorize, constrain, and preserve? |
+| `baseline_preservation` | Baseline tree/runtime, project-adapter surface inventory, before probes | Current REQs and orchestrator conclusions | What existed and was reachable before the change? |
+| `implementation_test` | Current code, tests, test output, current runtime probes | Other reviewers' findings | What changed, and do tests exercise the real product path? |
+| `authority_release` | Source-to-REQ mapping, destructive approvals, incident history, review receipts, delivery state | Proposed completion wording | Is any derived interpretation acting as authority, and is release permitted? |
+
+After each role produces its first independent verdict, the orchestrator performs a comparison
+round using the four outputs. Never seed a role with another role's conclusion. The orchestrator
+must construct four role-specific views and attest their included/withheld fields. The governed
+runtime now binds role-specific view digests and planning/integration stages, and seals planning×4
+before implementation mutation. **PENDING:** normalized cross-role comparison and convergence
+receipts are not yet runtime-enforced, so preservation output remains `REVIEW_ONLY` until that and
+the other pending release controls are complete.
 
 ---
 
@@ -294,15 +361,20 @@ done
 
 ### 3.1 Reviewer Prompt Format
 
-Every reviewer receives a prompt containing:
+Each reviewer receives only the evidence view assigned to its role. The common envelope contains:
 
 ```
 ## Review Context
 Stage: {stage}
+Role: {source_fidelity | baseline_preservation | implementation_test | authority_release | standard}
 Files: {file_list}
 REQ-IDs: {req_ids or "N/A for this review"}
 Deferred REQ-IDs: {deferred or "none"}
 Known issues from previous rounds: {known_issues or "none"}
+Source artifacts: {role-visible immutable source references or "withheld for independence"}
+Baseline ref: {role-visible immutable ref or "withheld for independence"}
+Preservation contract: {role-visible path or "withheld for independence"}
+Incident history: {role-visible history or "withheld for independence"}
 
 ## Review Lens
 Lens: {lens_name}
@@ -311,10 +383,12 @@ Checks to perform:
 
 ## Output Format (MANDATORY)
 ### Files Read
-- path/to/file (lines X-Y)
+- `path/to/exact-file`
+
+List every required repository-relative path separately. Ranges, directory shorthand, globs, and “A through B” do not count as read evidence.
 
 ### Findings
-- `file:line [CRITICAL|HIGH|MEDIUM|LOW|INFO] REQ-ID — description`
+- `file:line [CRITICAL|HIGH|MEDIUM|LOW|INFO] [correctness|preservation|scope|authority|release] REQ-ID — description`
   (REQ-ID is optional; include only if the finding relates to a specific requirement)
 or
 NONE
@@ -325,7 +399,7 @@ NONE
 or ALL COVERED or N/A
 
 ### Verdict
-CLEAN | FOUND_ISSUES
+CLEAN | FOUND_ISSUES | VETO
 ```
 
 ### 3.2 Finding Schema
@@ -336,6 +410,8 @@ Finding {
   line: number | null    // line number (null for file-level)
   symbol: string | null  // function/class/symbol name
   severity: CRITICAL | HIGH | MEDIUM | LOW | INFO
+  finding_class: correctness | preservation | scope | authority | release
+  veto: boolean          // true for solo CRITICAL preservation/scope/authority/release
   req_id: string | null  // associated REQ-ID (null if N/A)
   description: string    // what's wrong
   reviewer: string       // which reviewer found this
@@ -376,10 +452,14 @@ supporters = count of unique reviewers in matched_group
 
 Classification thresholds (R = number of available reviewers):
 
+VETO classes (evaluate before consensus thresholds):
+  severity == CRITICAL and finding_class in [preservation, scope, authority, release]
+    → VETO even with one supporter; never AUTO-DISMISS and never count the round CLEAN
+
 CRITICAL severity:
   supporters == R → CONFIRMED (unanimous)
   supporters >= 2 → CONTESTED (needs arbiter)
-  supporters == 1 and R >= 3 → AUTO-DISMISSED
+  supporters == 1 and R >= 3 → AUTO-DISMISSED only for non-veto correctness findings
   else → CONTESTED
 
 HIGH/MEDIUM/LOW/INFO severity:
@@ -388,8 +468,10 @@ HIGH/MEDIUM/LOW/INFO severity:
   else → CONTESTED
 ```
 
-**Key rule: at any R, a single reviewer's finding is NEVER auto-confirmed.
-Minimum supporters for CONFIRMED is always >= 2, or unanimous for CRITICAL.**
+**Key rule:** consensus confirms ordinary correctness findings. It does not erase a
+specific destructive-change warning. A solo CRITICAL preservation, scope, authority,
+or release finding is a blocking veto until the evidence is corrected or the user grants
+surface-specific authority.
 
 ---
 
@@ -417,6 +499,12 @@ If the default config assigns the same tool as both reviewer and arbiter
 ### 5.2 When Arbiter Exists (development, integration)
 
 For CONTESTED findings:
+
+Veto findings do not enter ordinary arbitration. An arbiter may verify objective evidence,
+but may not invent or dismiss user authority, reinterpret an additive request as replacement,
+or approve release while required evidence is NOT CLEAN. Resolve a veto only by restoring the
+preserved surface, supplying the missing immutable evidence, or obtaining exact user approval
+for the named `replace|remove|disable|redirect|migrate` disposition.
 
 ```
 1. Compose arbitration prompt:
@@ -463,23 +551,35 @@ The loop does NOT break. It pauses for user input, then resumes.
 
 #### Lens Iteration Strategy
 
-Each round sends ALL active lenses to ALL reviewers simultaneously:
+Development and test may send all active lenses to standard reviewers. Planning and
+integration instead invoke the four separated roles from section 1.1 with role-specific
+evidence views:
 
 ```
-active_lenses = resolve_lenses(stage, req_ids_provided)
-  → uses lenses_no_req if no req_ids, otherwise lenses
-
-reviewer_prompt = build_prompt(
-  stage, files, req_ids, known_issues,
-  lenses: active_lenses  // ALL lenses in one prompt
-)
+if stage in [planning, integration]:
+    role_prompts = build_separated_prompts(
+      source_fidelity, baseline_preservation, implementation_test, authority_release
+    )
+    role_runs = assign_available_adapters(
+      role_prompts,
+      prefer_distinct_provider=true,
+      prefer_distinct_model=true,
+      require_distinct_execution=true
+    )
+    first_verdicts = parallel_invoke(role_runs)
+    require_exact_role_coverage(first_verdicts)
+    findings = compare_role_outputs(first_verdicts)
+else:
+    active_lenses = resolve_lenses(stage, req_ids_provided)
+    reviewer_prompt = build_prompt(stage, files, req_ids, known_issues, active_lenses)
 ```
 
-All reviewers receive the same prompt with all active lenses. This maximizes
-coverage per round and reduces total rounds needed. Each reviewer checks all
-lenses independently (natural isolation between reviewers).
+Do not send the same generated summary to all four roles. Shared input anchoring defeats
+reviewer independence even when models differ. Roles see one another's outputs only in the
+comparison round after their first verdicts are fixed.
 
-In --light mode: only the first lens is sent, reducing prompt size and focus.
+In `--light` mode only the first lens is sent for eligible development/test work. Planning and
+integration cannot use `--light`.
 
 #### Loop Algorithm
 
@@ -499,19 +599,24 @@ while consecutive_clean < convergence_threshold:
     if (now() - start_time) > max_total_time:
         break with warning "Time budget exceeded."
     
-    # 1) Check available reviewers
-    available = check_tools(reviewers)
-    R_actual = len(available)
-    if R_actual == 0: abort("No review tools available")
-    apply_graceful_degradation(R_actual)
+    # 1) Resolve executions. R means independent executions, not provider count.
+    available_adapters = check_adapters(stage_config)
+    if len(available_adapters) == 0: abort("No review adapter available")
+    if stage in [planning, integration]:
+        active_runs = schedule_four_roles(available_adapters)
+        validate_distinct_role_executions(active_runs)  # exact 4-role coverage or NOT_CLEAN
+    else:
+        active_runs = schedule_standard_reviewers(available_adapters)
+    R_actual = len(active_runs)
+    apply_graceful_degradation(stage, active_runs)
 
     # 2) Ensure arbiter is not in reviewer pool
-    if arbiter in available:
-        available.remove(arbiter)
-        R_actual = len(available)
+    if arbiter in active_runs:
+        active_runs.remove(arbiter)
+        R_actual = len(active_runs)
     
     # 3) Run independent reviews (Phase 1)
-    findings_per_reviewer = parallel_invoke(available, stage, pass_number, known_issues)
+    findings_per_reviewer = parallel_invoke(active_runs, stage, pass_number, known_issues)
 
     # 4) Parse findings
     all_findings = flat_map(parse, findings_per_reviewer)
@@ -520,10 +625,11 @@ while consecutive_clean < convergence_threshold:
     classified = match_and_classify(all_findings, R_actual)
     confirmed = classified.filter(c -> c.type == CONFIRMED)
     contested = classified.filter(c -> c.type == CONTESTED)
+    vetoes = classified.filter(c -> c.type == VETO)
 
-    # 6) Resolve CONTESTED (Phase 3)
+    # 6) Resolve CONTESTED (Phase 3); vetoes require restoration, evidence, or user authority
     for finding in contested:
-        if arbiter_available and arbiter not in available:
+        if arbiter_available and arbiter not in active_runs:
             decision = arbitrate(finding)
             if decision == CONFIRMED: confirmed.append(finding)
             else: known_issues.add(finding)
@@ -539,16 +645,23 @@ while consecutive_clean < convergence_threshold:
             else: known_issues.add(finding)  # DISMISS
 
     # 7) Auto-fix CONFIRMED (with safety guard, see section 6.5)
-    if confirmed.length > 0:
+    mandatory_evidence_ok = validate_required_inputs_and_preservation_probes(stage)
+    if vetoes.length > 0:
+        consecutive_clean = 0
+        review_log.append({round: pass_number, result: "NOT_CLEAN", vetoes: vetoes})
+    elif confirmed.length > 0:
         snapshot = git_stash_or_snapshot()
         for finding in confirmed: apply_fix(finding)
         diff = show_diff(snapshot)
         # Diff is logged. If rollback needed, restore from snapshot.
         consecutive_clean = 0
         review_log.append({round: pass_number, result: "FIXED", count: confirmed.length, diff: diff})
-    else:
+    elif contested.length == 0 and mandatory_evidence_ok:
         consecutive_clean += 1
         review_log.append({round: pass_number, result: "CLEAN"})
+    else:
+        consecutive_clean = 0
+        review_log.append({round: pass_number, result: "NOT_CLEAN", reason: "unresolved or missing evidence"})
 
     # 8) Invalidate stale known_issues
     invalidate_known_issues_on_code_change()
@@ -558,14 +671,18 @@ while consecutive_clean < convergence_threshold:
 # Output final report
 ```
 
+`CLEAN` requires all four conditions: mandatory inputs are valid, all preservation probes
+pass, no unresolved/contested finding remains, and no veto exists. Budget exhaustion,
+reviewer-role degradation, missing evidence, or a veto yields `NOT_CLEAN`, never partial Clean.
+
 ### 6.2 Convergence Thresholds by Stage
 
 | Stage | Standard | --light |
 |-------|----------|---------|
-| planning | 2 clean | 1 clean (non-governed only) |
+| planning | 2 clean | forbidden |
 | development | 2 clean | 1 clean |
 | test | 2 clean | 1 clean (non-governed only) |
-| integration | 2 clean | 1 clean |
+| integration | 2 clean | forbidden |
 
 ### 6.3 Budget Guard
 
@@ -618,11 +735,21 @@ All prior state (known_issues, review_log, consecutive_clean) is preserved.
 ## 7. Graceful Degradation
 
 ```
-R_configured = profile.reviewers.length
-R_available = count of tools that respond within timeout
+configured_adapters = resolve_configured_adapters()
+available_adapters = adapters_that_respond_within_timeout(configured_adapters)
 
-if R_available < R_configured:
-    warn("Degraded: {unavailable_tools} not available. R={R_available}")
+if available_adapters.length < configured_adapters.length:
+    warn("Degraded adapters: {unavailable_adapters}")
+
+if stage in [planning, integration]:
+    role_runs = schedule_four_roles(available_adapters)
+    if successful_distinct_role_runs(role_runs) < 4:
+        stop with NOT_CLEAN("Four distinct role executions are mandatory")
+    if duplicate_role(role_runs) or duplicate_execution_identity(role_runs):
+        stop with NOT_CLEAN("Role or execution identity was reused")
+else:
+    R_configured = stage_reviewer_count()
+    R_available = count_available_standard_reviewers()
 
     if R_available == R_configured - 1 and R_configured >= 3:
         disable AUTO_DISMISS (needs R>=3)
@@ -739,11 +866,12 @@ requirements:
 
 stages:
   planning:
-    reviewers: [claude, gemini]
+    reviewers: []  # empty means schedule roles from any available adapter; distinct provider/model preferred
+    roles: [source_fidelity, baseline_preservation, implementation_test, authority_release]
     arbiter: null
     convergence: 2
-    lenses: [req_completeness, design_coherence, feasibility, traceability_setup]
-    lenses_no_req: [completeness, design_coherence, feasibility, clarity]
+    lenses: [source_fidelity, design_coherence, feasibility, preservation_setup]
+    lenses_no_req: [source_fidelity, design_coherence, feasibility, preservation_setup]
   development:
     reviewers: [gemini, opencode, codex]
     arbiter: claude  # MUST NOT be in reviewers — orchestrator auto-resolves
@@ -757,11 +885,12 @@ stages:
     lenses: [test_validity, coverage, assertion_quality, req_to_test]
     lenses_no_req: [test_validity, coverage, assertion_quality]
   integration:
-    reviewers: [claude, gemini, opencode]
-    arbiter: auto  # auto-select: highest-tier tool NOT in reviewer pool
+    reviewers: []  # empty means schedule roles from any available adapter; distinct provider/model preferred
+    roles: [source_fidelity, baseline_preservation, implementation_test, authority_release]
+    arbiter: null  # all tools are independent roles; user resolves semantic vetoes
     convergence: 2
-    lenses: [req_trace_e2e, cross_stage_consistency, regression_risk, drift_detection]
-    lenses_no_req: [completeness_e2e, cross_stage_consistency, regression_risk, drift_detection]
+    lenses: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release]
+    lenses_no_req: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release]
 ```
 
 ### 10.3 Per-Project Override
@@ -824,12 +953,19 @@ Review proceeds normally without REQ-ID tracking.
 
 ### 11.3 Source Authority Rule
 
-When requirements conflict with code:
+Every requirement and acceptance criterion must identify immutable source references. A
+top-level statement such as "the whole conversation" is not enough. When sources conflict:
 
 | REQ `source` field | Resolution rule |
 |--------------------|----------------|
 | `candidate` (retrofitted from code) | Code is source of truth. REQ is descriptive. |
-| `human` (user-specified) | REQ is normative. Code must conform. |
+| `derived` (AI interpretation) | Must name `derived_from`; may clarify but never narrow, supersede, or reverse a human directive. |
+| `human` (user-specified) | Normative only when bound to an immutable exact source reference; code and derived artifacts must conform. |
+| missing or ambiguous | Blocking source-fidelity finding; the review is `NOT_CLEAN`. |
+
+An AI-authored issue, comment, summary, or REQ does not become human authority because it was
+posted through the user's account. Supersession and destructive disposition require explicit,
+surface-specific user approval.
 
 ---
 
@@ -843,13 +979,16 @@ After convergence or budget exceeded:
 **Stage**: {stage}
 **Rounds**: {total_rounds}
 **Reviewers**: {reviewer_list} (R={R_actual})
-**Result**: {CLEAN | FIXED | PARTIAL (budget exceeded)}
+**Result**: {CLEAN | NOT_CLEAN}
+**Delivery state**: {RELEASE_ELIGIBLE | REVIEW_ONLY}
 **Duration**: {elapsed_time}
 
 ### Summary
 - CONFIRMED findings: {n} (all auto-fixed with diff)
 - CONTESTED resolved: {n} ({via_arbiter} by arbiter, {via_user} by user)
 - Remaining escalations: {n}
+- Blocking vetoes: {n}
+- Preservation probes: {passed}/{total}
 
 ### REQ-ID Coverage (if applicable)
 - REQ-001: COVERED (src/file.ts:SymbolName)
@@ -896,6 +1035,8 @@ source code — it is **NOT** an escalation. Research it and fix directly.
 - Scope questions (should this be done here or separately?)
 - Requirements ambiguity (REQ says X but could mean Y)
 - Changes that affect public API or user-facing behavior
+- Any `replace|remove|disable|redirect|migrate` disposition or change to a primary entry, discovery/binding path, exported contract, package/deployment target, or handoff artifact
+- Any request to dismiss a preservation, scope, authority, or release veto
 
 ---
 
@@ -908,6 +1049,21 @@ Applied when the user explicitly specifies `--light`:
 | Convergence | per-stage default | 1 clean round |
 | Lenses | all stage lenses | first lens only |
 | Max rounds | 8 | 4 |
-| Applicable | feature work, major changes | typo fixes, config, <3 files |
+| Applicable | feature work, major changes | development/test typo fixes and non-feature config only; never planning/integration |
 
 The orchestrator must NOT choose light mode autonomously.
+
+---
+
+## 15. Delivery Gate
+
+- `CLEAN` plus current, trusted preservation evidence yields `RELEASE_ELIGIBLE` only after every REQUIRED control is implemented and verified. A generic runtime Clean does not override a PENDING preservation control.
+- Any missing input, unresolved finding, veto, failed probe, budget exhaustion, or insufficient
+  reviewer-role separation yields `NOT_CLEAN` and `REVIEW_ONLY`.
+- `REVIEW_ONLY` may be committed locally as a checkpoint. Remote review-branch push is publication
+  and is forbidden until an exact signed checkpoint-publication operation is implemented and tested.
+  It must not merge, deploy, publish a release, close the issue, or use completion language.
+- Deployment and release automation must consume the delivery state and fail closed unless it is
+  `RELEASE_ELIGIBLE`. Built-in release-command regexes are supplemental detection, not a complete
+  security boundary; each project must provide a strict adapter declaration for every external-side-
+  effect operation. A test-count summary is not a substitute for this state.

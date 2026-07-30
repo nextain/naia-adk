@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Edit|Write|NotebookEdit|apply_patch",
+        "matcher": "Bash|shell_command|Edit|Write|NotebookEdit|apply_patch",
         "hooks": [
           {
             "type": "command",
@@ -16,35 +16,35 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/pr-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/pr-guard.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/destructive-git-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/destructive-git-guard.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/commit-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/commit-guard.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/deploy-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/deploy-guard.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/git-push-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/git-push-guard.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/email-send-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/email-send-guard.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/gcs-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/gcs-guard.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/rdd-experiment-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/rdd-experiment-guard.js\""
           }
         ]
       },
@@ -53,11 +53,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/design-doc-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/design-doc-guard.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/prod-gateway-guard.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/prod-gateway-guard.js\""
           }
         ]
       },
@@ -65,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/beh-pretool.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/beh-pretool.js\""
           }
         ]
       }
@@ -75,7 +75,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/beh-session-start.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/beh-session-start.js\""
           },
           {
             "type": "command",
@@ -95,11 +95,11 @@
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/session-inject.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-inject.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/beh-tick.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/beh-tick.js\""
           }
         ]
       }
@@ -110,23 +110,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/sync-entry-points.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/sync-entry-points.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/cascade-check.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/cascade-check.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/agents-context-mirror.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/agents-context-mirror.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/context-translation-batch.cjs"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/context-translation-batch.cjs\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/ctx-index-rebuild.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/ctx-index-rebuild.js\""
           }
         ]
       },
@@ -139,7 +139,7 @@
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/beh-record.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/beh-record.js\""
           }
         ]
       }
@@ -160,7 +160,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/post-compact-context.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-compact-context.js\""
           },
           {
             "type": "command",
@@ -180,11 +180,11 @@
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/beh-stop.js"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/beh-stop.js\""
           },
           {
             "type": "command",
-            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/context-translation-batch.cjs --flush"
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/context-translation-batch.cjs\" --flush"
           }
         ]
       }

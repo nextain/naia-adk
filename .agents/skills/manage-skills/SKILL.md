@@ -34,6 +34,7 @@ argument-hint: "[선택사항: 특정 스킬 이름 또는 집중할 영역]"
 | `verify-contract-conformance` | 선언 계약↔구현 심볼 드리프트 | `scripts/conform/**`, `docs/contracts/**` |
 | `verify-request-contract` | 원요청 source→증거·권한·리뷰·양 클라이언트 동등성 | `.agents/hooks/core/{request-contract*,beh-*}`, `.agents/context/{request-contract.json,harness.yaml,project-index.yaml,skills-index.yaml}`, `.agents/requirements/{RCI-*.yaml,_index.yaml}`, `.claude/{beh-*,hooks/request-contract.js,hooks/beh-*,hooks/e2e/run.sh,hooks/test/**,settings.json,skills/verify-request-contract}`, `.codex/**`, `scripts/{*request-contract*,run-native-harness-tests.cjs}`, `packages/artifacts-spec/**`, `.agents/skills/{manage-skills,review-pass,verify-implementation,verify-request-contract}/**`, `.users/{context/{harness,request-contract}.md,skills/verify-request-contract/**}`, `{AGENTS,CLAUDE,GEMINI}.md`, `package.json`, `.gitignore`, `.gitattributes` |
 | `verify-benchmark-contract` | 벤치 스키마·공급자 영수증·HMAC/DPAPI 저널·분석 증거 | `packages/benchmark-contract/**`, `.agents/context/development-model-routing.yaml`, `.users/context/{development-model-routing.md,en/development-model-routing.md}` |
+| `verify-product-preservation` | 기존 제품 표면·원요청 권한·기준 버전·검토/배포 상태 | `.agents/workflows/issue-driven-development.yaml`, `.agents/requirements/{_template.yaml,**}`, `.agents/skills/{review-pass,verify-implementation,manage-skills,verify-product-preservation}/**`, `.agents/context/{harness.yaml,skills-index.yaml}`, `.users/{context/{harness,request-contract}.md,skills-list.md,skills/verify-product-preservation/**}`, `.claude/skills/verify-*`, `{AGENTS,CLAUDE,GEMINI}.md`, project-adapter-declared surfaces/tests/vendor/CI |
 
 ## 워크플로우
 
@@ -73,6 +74,19 @@ git diff main...HEAD --name-only 2>/dev/null
 
 위의 **등록된 검증 스킬** 섹션에 나열된 스킬을 참조하여 파일-스킬 매핑을 구축합니다.
 
+경로뿐 아니라 파일의 **역할**을 먼저 분류합니다. 다음 역할은 파일 수와 확장자에 관계없이
+검증 대상입니다.
+
+- `requirement_authority`: 원요청, REQ, 승인, tombstone, scope 결정
+- `product_surface`: route, root, navigation, entry, public/admin/ops URL, handoff URL
+- `regression_oracle`: test, fixture, snapshot, expected-output
+- `source_import`: vendor/third-party source, provenance, pristine baseline
+- `release_control`: CI/CD, deploy workflow, container, environment gate
+- `documentation_contract`: README/AGENTS/design 중 사용자 동작·배포·완료 기준을 정의하는 문서
+
+변경되지 않은 파일도 route/navigation 연결이 끊겨 도달 불가능해졌다면 영향받은 표면으로
+포함합니다. `git diff --name-only`만으로 기능 삭제를 판정하지 않습니다.
+
 #### Sub-step 2a: 등록된 스킬 확인
 
 **등록된 검증 스킬** 테이블에서 각 스킬의 이름과 커버 파일 패턴을 읽습니다.
@@ -91,6 +105,7 @@ Step 1에서 수집한 각 변경 파일에 대해, 등록된 스킬의 패턴�
 - 해당 스킬의 커버 파일 패턴과 일치
 - 해당 스킬이 참조하는 디렉토리 내에 위치
 - 해당 스킬의 탐지 명령어에 사용된 regex/문자열 패턴과 일치
+- 위 역할 중 하나를 수행하며 변경으로 의미·도달 가능성·release 결과가 달라짐
 
 #### Sub-step 2c: 매핑 표시
 
@@ -133,6 +148,8 @@ Step 1에서 수집한 각 변경 파일에 대해, 등록된 스킬의 패턴�
 
 ```
 커버되지 않은 각 파일 그룹에 대해:
+    IF requirement_authority/product_surface/regression_oracle/source_import/release_control 역할인 경우:
+        → 결정: 관련 기존 스킬 UPDATE 또는 새 verify 스킬 CREATE (1개 파일도 면제 금지)
     IF 기존 스킬의 도메인과 관련된 파일인 경우:
         → 결정: 기존 스킬 UPDATE (커버리지 확장)
     ELSE IF 3개 이상의 관련 파일이 공통 규칙/패턴을 공유하는 경우:
@@ -154,8 +171,8 @@ Step 1에서 수집한 각 변경 파일에 대해, 등록된 스킬의 패턴�
 - 새 스킬 필요 — <패턴 설명> 커버 (X개 미커버 파일)
 
 **액션 불필요:**
-- `package.json` — 설정 파일, 면제
-- `README.md` — 문서, 면제
+- `package.json` — 실행·배포·제품 표면을 바꾸지 않은 단순 메타데이터만 변경, 면제
+- `README.md` — 동작·요구·배포·완료 기준을 바꾸지 않은 비계약 카피만 변경, 면제
 ```
 
 `AskUserQuestion`을 사용하여 확인합니다:
@@ -210,7 +227,7 @@ grep -n "pattern" path/to/file.ts
 
 1. **탐색** — 관련 변경 파일을 읽어 패턴을 깊이 이해합니다
 
-2. **사용자에게 스킬 이름 확인** — `AskUserQuestion`을 사용합니다:
+2. **사용자에게 스킬 이름 확인** — 사용자가 이번 요청에서 이름을 명시하지 않았다면 `AskUserQuestion`을 사용합니다. 명시된 이름은 승인된 것으로 간주합니다:
 
    스킬이 커버할 패턴/도메인을 제시하고, 사용자에게 이름을 제공하거나 확인하도록 요청합니다.
 
@@ -270,6 +287,7 @@ ls <file-path> 2>/dev/null || echo "MISSING: <file-path>"
 
 4. 업데이트된 각 스킬에서 탐지 명령어 하나를 드라이런하여 문법 유효성 검증
 5. **등록된 검증 스킬** 테이블과 **실행 대상 스킬** 테이블이 동기화되어 있는지 확인
+6. catalog 집합(실제 `verify-*` 디렉터리, `.agents/context/skills-index.yaml`, `.users/skills-list.md`, `.claude/skills` pointer)이 동일한지 확인하고, 실행 집합은 여기서 `verify-implementation` 자신만 제외해 두 실행 테이블이 동일한지 확인. per-item `.users/skills`는 프로젝트가 명시한 필수 mirror만 별도 확인
 
 ### Step 8: 요약 보고서
 
@@ -325,11 +343,11 @@ ls <file-path> 2>/dev/null || echo "MISSING: <file-path>"
 
 다음은 **문제가 아닙니다**:
 
-1. **Lock 파일 및 생성된 파일** — `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, 자동 생성된 마이그레이션 파일, 빌드 출력물은 스킬 커버리지가 불필요
-2. **일회성 설정 변경** — `package.json`/`Cargo.toml`의 버전 범프, 린터/포매터 설정의 사소한 변경은 새 스킬이 불필요
-3. **문서 파일** — `README.md`, `CHANGELOG.md`, `LICENSE` 등은 검증이 필요한 코드 패턴이 아님
-4. **테스트 픽스처 파일** — 테스트 픽스처로 사용되는 디렉토리의 파일(예: `fixtures/`, `__fixtures__/`, `test-data/`)은 프로덕션 코드가 아님
+1. **의미 역할이 없는 Lock·생성 파일** — `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, `Cargo.lock`, 자동 생성물 중 requirement authority, product surface, regression oracle, source import, release control 역할이 없는 파일만 면제
+2. **release/product 역할이 없는 일회성 설정 변경** — `package.json`/`Cargo.toml`의 단순 버전 범프, 린터/포매터 설정 중 실행·배포·제품 표면을 바꾸지 않는 변경만 면제
+3. **비계약 문서 파일** — 동작·요구·배포·완료 기준을 정의하지 않는 단순 설명 문서만 면제. requirement/design/entry/release 문서는 면제 아님
+4. **비규범 테스트 데이터** — 동작 기대값, baseline, 승인 상태를 정의하지 않는 순수 입력 데이터만 면제. fixture/snapshot이 회귀 기준이면 면제 아님
 5. **영향받지 않은 스킬** — UNAFFECTED로 표시된 스킬은 검토 불필요; 대부분의 세션에서 대부분의 스킬이 이에 해당
-6. **CLAUDE.md 자체** — CLAUDE.md의 변경은 문서 업데이트이며, 검증이 필요한 코드 패턴이 아님
-7. **벤더/서드파티 코드** — `vendor/`, `node_modules/` 또는 복사된 라이브러리 디렉토리의 파일은 외부 규칙을 따름
-8. **CI/CD 설정** — `.github/`, `.gitlab-ci.yml`, `Dockerfile` 등은 인프라이며, 검증 스킬이 필요한 애플리케이션 패턴이 아님
+6. **비규범 진입점 문구** — `CLAUDE.md` 등의 오탈자·표현만 바꾸고 규칙·스킬 등록·권한·release 조건을 바꾸지 않은 경우만 면제
+7. **실행에 포함되지 않는 벤더 캐시** — runtime/build에 포함되지 않고 provenance·baseline 역할도 없는 캐시만 면제. 통합된 외부 소스는 면제 아님
+8. **의미 없는 CI 기계 변경** — 주석·포맷만 면제. build/deploy/release gate, 환경, artifact를 바꾸는 CI/CD는 면제 아님

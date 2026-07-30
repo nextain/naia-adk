@@ -31,6 +31,7 @@ if (!/^[A-Za-z0-9._-]+$/.test(reviewId)) {
 }
 
 fs.mkdirSync(path.join(scope.receiptsDir, "logs"), { recursive: true });
+const requiredFiles = scope.reviewedFiles();
 
 const reviewers = [];
 for (const arg of reviewerArgs) {
@@ -41,6 +42,13 @@ for (const arg of reviewerArgs) {
 	}
 	const [, tool, model, logPath] = parsed;
 	const raw = fs.readFileSync(logPath);
+	const derived = transcript.readTranscript(raw);
+	const readSet = new Set(derived.files_read);
+	const missingFiles = requiredFiles.filter((relativePath) => !readSet.has(relativePath));
+	if (missingFiles.length > 0) {
+		process.stderr.write(`${model}: Files Read attestation omits ${missingFiles.length} reviewed file(s): ${missingFiles.join(", ")}\n`);
+		process.exit(1);
+	}
 
 	/** Both halves of the reviewer identity land in a filename, so both must be sanitised — a tool named `../../etc` would escape the store. */
 	const safe = (value) => value.replace(/[^A-Za-z0-9._-]/g, "-");
@@ -53,13 +61,13 @@ for (const arg of reviewerArgs) {
 	}
 	fs.writeFileSync(preservedPath, raw);
 
-	const derived = transcript.readTranscript(raw);
 	reviewers.push({
 		tool,
 		model,
 		log: path.posix.join(".agents", "requirements", "reviews", "logs", preservedName),
 		log_sha256: `sha256:${crypto.createHash("sha256").update(raw).digest("hex")}`,
 		scope_digest: derived.scope_digest,
+		files_read: derived.files_read,
 		covers: derived.covers,
 		stages: derived.stages,
 		findings: derived.findings,
@@ -67,6 +75,7 @@ for (const arg of reviewerArgs) {
 }
 
 const currentDigest = scope.computeScopeDigest();
+const currentManifest = scope.reviewManifest();
 
 /**
  * The reviewers must have judged the tree being issued. Their transcripts carry the digest
@@ -124,6 +133,7 @@ const receipt = {
 	product: "naia-adk-request-contract",
 	reviewed_at: reviewedAt,
 	scope_digest: currentDigest,
+	scope_manifest: currentManifest,
 	covers: [...covers].sort(),
 	stages: stageResults,
 	reviewers,

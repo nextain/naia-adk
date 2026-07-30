@@ -1,0 +1,46 @@
+id: RCI-012
+title: "Product Surface Preservation Contract"
+title_ko: "기존 제품 표면 보존 계약"
+product: naia-adk-request-contract
+module: preservation
+status: active
+source: derived
+source_provenance: ledger_resolved
+priority: high
+created: 2026-07-30
+updated: 2026-07-30
+issue_url: "https://github.com/nextain/naia-adk/issues/17"
+source_directives: [USR-008]
+source_evidence: [USR-008]
+source_atoms: [USR-008-E06, USR-008-E07, USR-008-E08, USR-008-E09, USR-008-E10, USR-008-E11]
+source_kind: derived
+derived_from: [USR-008]
+derivation_kind: expand
+change_effect: extend
+preserves: [existing-product-surfaces, baseline-capabilities, vendor-pristine-tree]
+must_not_change: [existing-reachability-without-authority, baseline-test-polarity-without-authority]
+destructive_approval: null
+description: |
+  기준 커밋의 사용자 관찰 표면을 프로젝트 중립적인 capability probe로 동결한다.
+  추가·통합·확장은 기존 표면을 보존하며, 대체·삭제·비활성화·리다이렉트·
+  비호환 migration은 정확한 사용자 권한과 실제 diff digest 없이는 실패한다.
+acceptance_criteria:
+  - "Every changed or deleted baseline path is owned by a declared logical product surface."
+  - "Preserve and extend retain every baseline capability and a reachable successor surface."
+  - "Destructive dispositions bind an exact surface, directive, scope digest, authority receipt, and actual diff digest."
+  - "Surface kinds and capability identifiers remain project-defined; the core has no web or framework assumptions."
+  - "Planning discovery inventory and post-implementation signed observation are separate artifacts; planning never predicts final current-manifest bytes."
+trace:
+  code:
+    - { path: ".agents/hooks/core/preservation-contract.js", symbol: "validateDeclaration / validateWorkspace", coverage: full }
+    - { path: ".agents/hooks/core/request-contract.js", symbol: "scopeProjection / buildReviewBundle / completionAssessment", coverage: full }
+  tests:
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation additive extension keeps the baseline surface and permits a new surface", coverage: full }
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation preserve surfaces reject missing successors and capability loss but permit compatible edits and renames", coverage: full }
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation baseline test probe rejects assertion inversion", coverage: full }
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation vendor source requires its pristine tree digest", coverage: full }
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation rejects stale or wrong migration diff authority", coverage: full }
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation inventory binds the complete surface descriptor and rejects unsupported greenfield claims", coverage: full }
+    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation collects planning and integration evidence views but remains review only while controls are pending", coverage: partial }
+  reviews: { planning: null, development: null, test: null, integration: null }
+decisions: []

@@ -1,8 +1,15 @@
 {
   "version": 1,
+  "installation_state": "unprovisioned",
   "enabled_by_default": false,
   "minimum_clean_rounds": 2,
   "stop_attempt_limit": 3,
+  "preservation": {
+    "required": true,
+    "protect_test_contracts": true,
+    "protect_vendor_sources": true,
+    "allowed_adapter_digests": []
+  },
   "authority": {
     "public_key_env": "REQUEST_CONTRACT_PUBLIC_KEY",
     "public_key_path": ".agents/context/request-contract-authority.pub",

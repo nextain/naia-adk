@@ -3,6 +3,11 @@
   "status": "opt_in_pilot_no_total_cost_claim",
   "default_opt_in_profile": "balanced",
   "fallback_profile": "control",
+  "availability": {
+    "default_available_bindings": ["sol", "terra"],
+    "override": "explicit availableBindings or CODEX_AVAILABLE_BINDINGS",
+    "unavailable_policy": "deterministic fallback then fail closed"
+  },
   "bindings": {
     "sol": {
       "adapter": "codex",

@@ -4,9 +4,9 @@
 
 ## 활성화
 
-- 기본값은 `enabled_by_default: false`인 opt-in입니다.
-- 세션 단위: `REQUEST_CONTRACT=on`
-- 저장소 단위: `node scripts/request-contract.cjs enable`
+- 설치와 강제(enforcement)는 별도 단계입니다. 훅과 설정을 설치해도 provisioning readiness가 통과하기 전에는 제품 작업을 강제 모드로 시작하지 않으며 전달 상태는 `REVIEW_ONLY`입니다.
+- 세션 단위 활성화 후보는 `REQUEST_CONTRACT=on`, 저장소 단위 후보는 `node scripts/request-contract.cjs enable`이지만, 세 권한의 키·credential·실행파일 allowlist가 모두 준비되고 프로젝트별 readiness 검사가 통과한 뒤에만 사용할 수 있습니다.
+- **현재 상태 — REVIEW_ONLY:** 설치 상태는 `installation_state: unprovisioned`이며 `preservation.required`만으로 훅을 강제 활성화하지 않습니다. signer·reviewer·runner·allowlist를 provision하고 별도로 `enforced`로 전환하기 전에는 로컬 검토 정책만 제공하며 release 보장을 주장하지 않습니다.
 - 미해결 unit이나 미수용 quarantine이 생긴 뒤에는 마커 삭제, `REQUEST_CONTRACT=off`, `disable` 명령으로 중간 해제할 수 없습니다.
 - 활성화 전에 서로 다른 권한 서명자, 리뷰 실행자, 격리 실행기(review runner)의 고정 공개키와 credential ID, 허용 reviewer·reviewer attestor·runner attestor 실행파일 SHA-256 목록을 downstream 설정에 공급해야 합니다. credential ID뿐 아니라 공개키 지문도 세 역할 사이에서 모두 달라야 하며, 값이 없거나 바뀌면 governed mode는 fail-closed 합니다. 일반 입력을 그대로 서명하는 범용 signer를 허용목록에 넣어서는 안 됩니다.
 - Claude Code와 Codex는 각각 설정에 고정된 최소 버전 이상이어야 합니다. `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `PreCompact`, `PostCompact`, `Stop`은 정확한 어댑터 경로·이벤트 인자·저장소 루트 해석·matcher로 각 1회만 등록되어야 하며, 누락·중복·충돌 등록은 fail-closed 합니다. 명령행 event 인자는 라우팅용일 뿐이며 native stdin의 event 필드가 반드시 존재하고 같은 값이어야 합니다. Codex의 `SessionStart|PreCompact|PostCompact` 차단은 native dispatcher가 실제로 중단하는 `continue:false`/`stopReason` 형식을 사용하고, compact 이벤트에는 지원되지 않는 Claude 전용 `decision:block`/context 봉투를 내보내지 않습니다.
@@ -18,6 +18,16 @@
 - Git HEAD, index, 재귀 submodule 상태도 파일 내용과 별도 occurrence로 기록합니다. evidence는 실제 경로를 확인해 심볼릭 링크로 product root 밖을 읽을 수 없습니다.
 - 중첩 Git 저장소는 각 저장소의 하네스가 관찰하며, 상위 저장소에서는 gitlink commit으로 기록합니다.
 
+## 제품 보존 계약
+
+- provisioning을 마치고 `installation_state: enforced`로 명시 전환한 request-contract만 실행을 차단합니다. IDD와 `verify-product-preservation`은 비활성 저장소에서도 적용하는 개발 절차이지만 훅 수준 강제와 같지 않습니다.
+- `preservation.required: true`이면 계약 최상위에 `preservation.version`, `baseline_ref`, `intent`, `surfaces`, `vendor_sources`가 있어야 합니다. surface disposition은 `preserve|extend|replace|remove|disable|redirect|migrate`이며, 파괴적 disposition은 정확한 `authority_id`와 실제 surface diff의 `expected_diff_digest`에 결박됩니다.
+- 프로젝트 adapter는 계약 작성자가 고른 일부가 아니라 immutable baseline에서 발견한 **전체 표면 exact-set**을 먼저 산출합니다. 각 surface는 `kind`, `locator`, `baseline_paths/current_paths`, 서로 다른 `baseline_evidence_id/current_evidence_id`를 가지며 누락·추가·rename·unreachable도 disposition 대상입니다. UI URL이나 route 외에 API, CLI, library export, data/schema contract, job, package/deployment, 운영·handoff 표면도 동일하게 다룹니다.
+- 에이전트가 capability probe JSON을 직접 작성해서는 안 됩니다. **REQUIRED/PENDING:** 허용된 프로젝트 adapter runner가 실제 entry를 실행하고 runner/command/exit/result/subject를 결박한 서명 receipt를 생성해야 합니다. 현재 런타임의 JSON shape·digest·subject 검사는 실행 증명이 아니므로 이것만으로 `RELEASE_ELIGIBLE`을 선언할 수 없습니다.
+- test/spec/vendor 관례 경로 보호는 보조 탐지입니다. vendor provenance에는 origin 저장소 identity, immutable commit/tree, 그 origin tree에서 계산한 digest의 독립 attestation이 필요합니다. **PENDING:** 현재 immutable-ref 형식과 local subtree digest 검사는 named origin에서 왔음을 증명하지 않습니다.
+- 일반 계약의 바닥은 `minimum_clean_rounds: 2`입니다. 제품 보존 runtime은 planning의 네 역할과 integration의 **새 네 역할**, 서로 다른 execution/context/process와 역할별 evidence view를 요구합니다. planning 네 역할을 첫 구현 mutation 전에 봉인하고, 구현 변경 뒤에는 planning seal을 유지하면서 현재 작업에 묶인 integration 검토를 새로 요구합니다.
+- `REVIEW_ONLY`의 기본 checkpoint는 local commit까지만 허용합니다. 원격 review branch push도 publication이므로 exact signed checkpoint operation이 구현·검증되기 전에는 금지합니다. 현재 보존 런타임은 classifier가 없으므로 모든 shell/publication을 `external_effect_gate_pending`으로 차단하며, 내장 release-command regex는 진단용 보조 수단입니다.
+
 ## 권한과 리뷰
 
 - 초기 계약과 범위 변경은 challenge, presentation digest, 단조 서명 counter, 일회 nonce, 정확한 대상 지시 집합을 포함한 외부 사용자-presence 서명을 요구합니다. `authorize_contract`는 최초 계약에 정확히 한 번만 쓸 수 있습니다. 순수 추가는 `amend_scope_add`, 기존 비종료 범위 교정은 `amend_scope_replace`, 제거 상태는 `supersede|defer|abandon`으로 서로 구분됩니다. `pending→active→done` 같은 비종료 진행 상태와 파생 trace 갱신은 의미 범위를 바꾸지 않으므로 별도 사용자 승인이 필요 없습니다. 반대로 target이나 acceptance criterion을 기존 지시에서 부분 삭제할 수 없으며, 이전 지시를 정확한 tombstone과 함께 종료하고 축소된 새 지시를 추가해야 합니다. 한 번 처분된 지시는 그 뒤 계약에서 전체 canonical directive가 바뀌면 거부하며, 모든 tombstone도 일부 필드·설명·authority·실체·간선 어느 하나를 바꿀 수 없는 canonical 불변 기록입니다. 한 번 `superseded|deferred|abandoned`로 처분된 지시는 `active|done`으로 되살리거나 다른 처분으로 바꿀 수 없습니다. 코어는 고정키 서명과 서명된 presence/non-exportable 주장을 검증하지만 키가 실제 하드웨어 비반출형인지 독립 증명하지는 못하므로, 그 속성과 물리/OS 제스처는 외부 signer의 명시적 provisioning 신뢰 경계입니다.
@@ -26,7 +36,7 @@
 - `scripts/request-contract-review-runner.cjs`는 플랫폼 네이티브 launcher입니다. Linux에서는 reviewer와 bundle 바이트를 익명 descriptor로 고정하고 PID·네트워크·IPC·UTS가 분리된 `bubblewrap`에서 실행합니다. Windows에서는 저장소·사용자 홈 밖에 digest 검증 snapshot을 봉인하고 재분석 지점을 거부하며 현재 사용자와 SYSTEM만 접근하는 상속 NTFS ACL을 적용합니다. sandbox 실행파일 digest도 설정 허용목록과 일치해야 하며 snapshot 삭제 실패는 fail-closed 합니다. 그 뒤 Codex elevated sandbox의 정확한 root 정책 안에서 실행하고, Node 권한 모델로 reviewer·bundle 읽기와 scratch 쓰기만 다시 허용합니다. 네트워크·저장소·사용자 홈 접근은 차단되며 WSL·Cygwin·MSYS2·Linux VM·Linux container는 Windows 의존성이 아닙니다. review 접수는 동일 프로세스의 일회성 `runSandbox` 증거를 소비하며, 실제 reviewer stdout의 의미 필드와 접수 review가 다르면 실패합니다. 공개 실행 결과는 `verdict`와 불투명 `run_id`만 내보내며 `record_hash`와 bundle 결박값은 보호된 저장소에만 둡니다. 일반 operator CLI에는 review JSON 직접 접수 명령이 없습니다. reviewer/runner attestor는 설정에 고정된 실행파일 스냅샷만 실행하고 각 digest와 review payload digest를 서명합니다. writer host와 reviewer의 PID 및 플랫폼 네이티브 process identity도 invocation에 결박해 동일 프로세스를 독립 reviewer로 셀 수 없습니다. Windows writer identity는 SessionStart와 lock 회수에서 프로세스 시작 시각을 새로 조회하고 이후 hook은 계약에 결박된 값을 재사용합니다. 쓰기 가능한 disk cache는 사용하지 않습니다. Linux는 `/proc` boot/start identity를 사용하고 Windows reviewer는 runner가 만든 실행별 고유 identity를 사용합니다. 리뷰 시각은 runner 증거로 고정하고 reviewer stderr와 거부 필드·값은 외부 오류에 반사하지 않습니다. 다른 OS는 같은 계약의 platform runner가 필요합니다.
 - 같은 `run_id`, challenge, reviewer context/process, 격리 실행 ID는 저장소 전역 claim으로 영구 예약되어, 원 unit이 압축된 뒤에도 다시 사용할 수 없습니다. `run_id`는 코어가 발급한 불투명 ID만 허용하고 finding은 고정된 코드 집합만 허용하므로 원문이 공개 결과로 흘러나가지 않습니다.
 - review invocation의 불변 필드와 writer session·host process 집합은 전역 claim이 결박한 manifest digest로 보호됩니다. 원문과 obligation atom이 든 review bundle은 비공개 런타임 경로에만 기록됩니다. POSIX에서는 mode 0600을 강제하고 Windows에서는 비심볼릭 regular file을 검증한 뒤 격리 snapshot으로 봉인하며, stdout에는 불투명 locator만 나오며 receipt 수락 또는 challenge 만료 후 삭제됩니다.
-- 성공에는 현재 source/scope/work/config/binding과 정확히 결박되고, 현재와 모든 과거 무작위 scope-version ID 및 각 version의 source/atom/directive/target/criterion/authority/tombstone/change/artifact/edge 관계를 빠짐없이 재확인한 연속 Clean 2회가 필요합니다. exact canonical 계약은 비공개 bundle에서 검토하며, 격리 reviewer stdout에는 verdict·고정 finding code·불투명 ID 관계만 남고 원문·경로·locator·요약·digest는 남지 않습니다. trusted runner가 발급 당시 결박 필드를 sandbox 종료 뒤 주입합니다. 리뷰 접수 시에는 발급 후 현재 source·contract·workspace·scope·work·binding과 bundle digest를 다시 계산하므로 중간 드리프트가 있으면 receipt를 기록하지 않습니다. 완료 판정도 저장소·lineage lock을 함께 잡은 채 동일 검증을 한 번 더 실행하고 두 snapshot이 같을 때만 성공 proof를 기록합니다. 두 회차는 서로 다른 reviewer context와 실제 process identity를 가져야 하며 동일 실행 맥락을 재사용할 수 없습니다.
+- 일반 계약 성공의 최소 바닥은 현재 source/scope/work/config/binding에 결박된 연속 Clean 2회입니다. 제품 보존 release는 여기에 planning×4와 integration×4의 stage별·역할별 독립 receipt, trusted probe receipt, exact baseline inventory, vendor-origin attestation, comparison/convergence receipt, project external-side-effect gate가 모두 더해져야 합니다. 현재 runtime은 이 추가 조건 전체를 아직 증명하지 못하므로 보존 리뷰의 Clean 출력도 실행 상태에서 `REVIEW_ONLY`로 강등합니다.
 
 ## 보존
 

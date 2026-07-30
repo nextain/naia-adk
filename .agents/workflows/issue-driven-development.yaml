@@ -46,8 +46,16 @@ principles:
     anti_pattern: "Deciding 'this would be better' and implementing without asking"
 
   working_code_preservation:
-    rule: "Never break working code by 'improving' or 'switching modes'"
-    anti_pattern: "Refactoring a working flow into a 'better' one that crashes"
+    rule: "Never remove, replace, hide, or make unreachable a working product surface without explicit user authority"
+    anti_pattern: "Adding one feature by redirecting the existing root, disconnecting navigation, or testing that the old entry is absent"
+
+  additive_integration_default:
+    rule: |
+      "Add", "integrate", "merge", and "extend" are additive by default. Existing routes,
+      entry points, navigation, public URLs, user journeys, and operational surfaces remain
+      preserved unless the user explicitly authorizes a lowercase
+      replace|remove|disable|redirect|migrate disposition for that named surface.
+    anti_pattern: "Treating a request to integrate a feature as permission to replace the existing product"
 
   discovery_protocol:
     rule: |
@@ -88,6 +96,7 @@ phases:
     steps:
       - "Identify or create a GitHub Issue"
       - "All subsequent artifacts link back to this Issue"
+      - "Record immutable original-source references; an AI-authored issue/comment is derived context, not human authority"
     output: "GitHub Issue URL"
 
   understand:
@@ -99,6 +108,8 @@ phases:
       - "  - Constraints: What must NOT be touched or changed?"
       - "  - Criteria: How will success be verified? (concrete, checkable)"
       - "Surface unresolved assumptions in each dimension before presenting"
+      - "Separate exact human directives from AI-derived interpretations; derived text may not narrow or supersede human directives"
+      - "List existing product surfaces that remain unchanged; silence about removal is not approval"
       - "Present to user: 'Is my understanding correct? Are there assumptions I'm missing?'"
       - "User confirms or corrects"
     output: "Confirmed issue understanding"
@@ -111,6 +122,8 @@ phases:
       - "Determine issue type (see issue_type_calibration) — choose scope starting posture"
       - "Propose scope (which files/modules/repos to examine)"
       - "Propose depth for each scope area"
+      - "Freeze an immutable baseline_ref, select the project-specific preservation adapter, and have the adapter derive the exact complete baseline surface set independently of the proposed contract. Surface kinds are project-defined; mark non-applicable kinds N/A with evidence and reject contract subsets that omit, add, rename, or disconnect a discovered surface without disposition"
+      - "Create top-level preservation.version/baseline_ref/intent/surfaces/vendor_sources. Each surface is preserve or extend by default; replace/remove/disable/redirect/migrate requires surface-specific authority_id and expected_diff_digest"
       - "Present to user with rationale"
       - "User confirms or adjusts"
     output: "Confirmed scope and depth"
@@ -153,6 +166,9 @@ phases:
       - "Read lessons-learned for this issue type"
       - "loop:"
       - "  - Read ALL code in scope (not just until first finding)"
+      - "  - Run baseline probes for every adapter-discovered surface through an allowlisted trusted adapter runner before changing code; agent-authored probe JSON is forbidden"
+      - "  - For vendor imports, attest origin repository identity, immutable commit/tree, and the digest computed from that origin tree; local subtree digest plus URL syntax is not provenance"
+      - "  - Trace capability reachability through the project adapter, not only file existence: broken bindings/references, shadowed entry points, disconnected discovery paths, changed package/deployment targets, and misleading handoff artifacts count as functional deletion"
       - "  - List findings with evidence (file:line citations required)"
       - "  - Re-read scope for additional findings"
       - "  - If new findings → continue loop"
@@ -181,19 +197,26 @@ phases:
       - "REQ-ID assignment (feature-level work only, skip for lightweight cycle):"
       - "  1. Analyze Issue requirements → assign REQ-{NNN} IDs"
       - "  2. Create REQ files in .agents/requirements/ (or project requirements dir)"
-      - "  3. Each REQ gets: title, acceptance_criteria, priority"
+      - "  3. Each REQ gets: title, acceptance_criteria, priority, source authority, immutable source_refs, and derived_from when applicable"
       - "  4. Map plan phases to REQ-IDs (which phase implements which REQ)"
       - "  5. Present REQ-ID mapping to user as part of plan approval"
       - "  6. Update progress file with req_ids array"
+      - "Bind the plan to original_source artifacts, baseline_ref, and the preservation contract"
+      - "For every replace/remove/disable/redirect/migrate disposition, include exact surface baseline_paths/current_paths, baseline_evidence_id/current_evidence_id, presentation impact, authority_id, and expected_diff_digest"
       - "loop:"
       - "  - Re-read plan against findings and actual code"
       - "  - Check for missing items, inconsistencies, unverified references"
       - "  - Verify REQ-ID coverage: every Issue requirement has a REQ-ID"
+      - "  - Verify source fidelity in both directions: every human directive is covered, and every derived REQ is entailed by its source"
+      - "  - Verify all baseline surfaces have a disposition and executable before/after probe"
       - "  - List alternatives considered and why they were rejected (one line each)"
       - "  - List top-3 failure scenarios (adversarial pre-mortem) — adjust plan or document accepted risk"
       - "  - If corrections needed → update plan, continue loop"
       - "  - If TWO consecutive passes find nothing to fix → plan is stable"
       - "Present stable plan to user for approval"
+      - "Run '/review-pass stage=planning files=<plan+REQs+preservation contract> source_artifacts=<immutable source bundle> baseline_ref=<commit SHA> preservation_contract=<path> incident_history=<known drift/corrections or none>'"
+      - "Require four planning role executions with role-specific included/withheld evidence and distinct context/process/execution; the general two-Clean floor does not replace this set"
+      - "Do not enter Build unless planning review is CLEAN and all preservation/scope/authority vetoes and REQUIRED/PENDING control gaps are resolved"
       - "User confirms or adjusts"
     rules:
       - "Each phase MUST define its verification method (build check, unit test, E2E, manual, file review)"
@@ -202,6 +225,7 @@ phases:
       - "No vague terms without metrics ('fast' → 'p99 < 200ms', 'improve' → specific measurable outcome)"
       - "Include error_rescue_map for each phase (see error_rescue_map_format below)"
       - "Add diagram: architecture + data flow are mandatory when 3+ components interact. State machine, error flow, deployment are conditional."
+      - "A plan that changes a primary entry, discovery/binding path, exported contract, package/deployment target, or handoff artifact is destructive until the project adapter and preservation contract prove otherwise"
     output: "Approved implementation plan with per-phase verification methods"
 
     scope_mode_selection:
@@ -276,7 +300,8 @@ phases:
       - "plan_compliance: Does the code implement every item in the plan?"
       - "issue_resolution: Does it actually solve the original issue?"
       - "scope_discipline: Are there changes beyond what was planned?"
-      - "working_code_preserved: Does it break anything that was working?"
+      - "working_code_preserved: Does every surface in the adapter-derived baseline exact-set pass trusted-runner probes referenced by baseline_evidence_id/current_evidence_id?"
+      - "destructive_authority: Does every replace/remove/disable/redirect/migrate surface carry authority_id and an expected_diff_digest matching the actual surface diff?"
       - "upstream_pattern: Does it follow upstream conventions, not invent new ones?"
       - "side_effects: Could this change affect other parts unexpectedly?"
       - "hardcoded_strings: Are there any hardcoded UI strings that should use i18n?"
@@ -291,9 +316,11 @@ phases:
       - "Run ONLY the tests covering changed code first (targeted test)"
       - "After targeted tests pass, run the full E2E suite"
       - "Test through the real UI/Shell path as a real user would"
+      - "Re-run every preservation-contract probe through the allowlisted project-specific adapter runner; require a signed receipt binding runner/command/exit/result/subject and compare observable capabilities with baseline"
+      - "Treat tests that only assert a legacy entry is absent, redirected, or hidden as invalid unless the matching surface has a valid destructive authority_id and expected_diff_digest"
       - "Tests must pass completely clean (no partial passes)"
     rules:
-      - "MUST actually run the web server or application — never just check integration flow"
+      - "MUST actually run the adapter-declared product entry (web server, API, CLI, library test host, job, package/deployment check, or operations probe as applicable) — never just inspect an integration flow"
       - "Test data comes from .env files — if required env vars are missing, ask user before proceeding"
       - "No runtime patches to make tests pass"
       - "No manual post-processing"
@@ -326,10 +353,11 @@ phases:
     description: "Post-test review — catch issues that testing context reveals"
     steps:
       - "Run '/review-pass stage=test files=<test files> context=<test results> req_ids=<REQ-IDs>'"
-      - "Run '/review-pass stage=integration files=<all modified files> context=<full build + test summary> req_ids=<all REQ-IDs>'"
-      - "Review-pass runs convergence loop automatically"
+      - "Run '/review-pass stage=integration files=<all modified files> context=<full build + test summary> req_ids=<all REQ-IDs> source_artifacts=<immutable source bundle> baseline_ref=<commit SHA> preservation_contract=<path> incident_history=<known drift/corrections or none>'"
+      - "Require four stage-bound integration role executions that are new after planning; planning role receipts cannot be reused"
+      - "Review-pass runs the general two-Clean floor plus the preservation role convergence loop"
       - "Run '/verify-implementation' after both stages are clean"
-    clean_pass_definition: "Both test and integration stages converged"
+    clean_pass_definition: "Both test and integration stages converged, integration has four new role-specific first verdicts, and trusted probes, exact baseline inventory, vendor-origin attestations, and authority checks have zero vetoes"
     output: "Final clean code (all stages converged)"
 
   sync:
@@ -382,21 +410,26 @@ phases:
     steps:
       - "Summarize what was done, what changed, and any remaining items"
       - "Include the three-target documentation impact receipt summary and its evidence"
+      - "Report delivery state explicitly: REVIEW_ONLY when any review/control is NOT CLEAN or PENDING; RELEASE_ELIGIBLE only when planning×4, integration×4, trusted probes, exact baseline inventory, vendor-origin attestations, approvals, and project external-side-effect gate are implemented, current, and CLEAN"
+      - "Never use complete, ready, released, or deployed language for REVIEW_ONLY work"
       - "Post completion status as Issue comment (English)"
     output: "Completion report"
 
   commit:
     description: "Commit and link to Issue"
-    prerequisite: "ALL prior phases (build, review, e2e_test, post_test_review, sync, sync_verify) and the validated three-target documentation impact receipt must be complete before committing"
+    prerequisite: "Choose CHECKPOINT or RELEASE mode; RELEASE requires all prior phases and the documentation impact receipt to be CLEAN"
     steps:
-      - "If in worktree: run '/merge-worktree' (squash-merge + semantic commit)"
-      - "If not in worktree: stage relevant files only, commit with message referencing Issue number"
+      - "CHECKPOINT/REVIEW_ONLY: local commit only. Remote review-branch push is publication and remains forbidden until an exact signed checkpoint-publication operation is implemented and tested"
+      - "RELEASE: require current CLEAN planning/development/test/integration evidence, trusted preservation verification, valid authority_id/expected_diff_digest for every destructive disposition, and a strict project adapter gate covering every external side effect"
+      - "If release-eligible and in worktree: run '/merge-worktree' (squash-merge + semantic commit)"
+      - "If release-eligible and not in worktree: stage relevant files only, commit with message referencing Issue number"
       - "Pre-push verification (run BEFORE git push):"
       - "  1. git status — verify ALL files referenced in the build are git-tracked (not untracked)"
       - "  2. For Vercel web projects: pnpm build / npm run build — must pass"
       - "  3. For Vercel web projects: start local server, open modified page, confirm no console errors"
       - "  4. Only after all checks pass: git push"
-      - "Then follow repo-type branching rule (see below)"
+      - "Deployment and release workflows must fail closed when delivery state is REVIEW_ONLY or review result is NOT CLEAN. Built-in command regexes are supplemental detection, not a complete security boundary"
+      - "Only in RELEASE mode, follow the repo-type branching rule below; CHECKPOINT stops after the local commit"
     push_rules:
       - "Local build passing ≠ Vercel build passing if referenced files (images, fonts, etc.) are untracked"
       - "ENOENT on Vercel = file exists locally but not in git — always check git status first"
@@ -407,7 +440,7 @@ phases:
       external_contribution:
         when: "Contributing to an upstream/third-party repository"
         action: "Create PR against the upstream repository, linked to the originating Issue"
-    output: "Commit pushed (nextain: direct to main / external: PR opened)"
+    output: "Checkpoint committed locally as REVIEW_ONLY, or RELEASE_ELIGIBLE commit pushed after all implemented gates"
 
 # ─── Gates (user confirmation required) ──────────────────────
 
@@ -416,6 +449,8 @@ gates:
     prompt: "Is my understanding of this issue correct?"
   - phase: scope
     prompt: "I propose investigating scope L{n} / depth {level}. Does this look right?"
+  - phase: scope
+    prompt: "Please approve each named replace/remove/disable/redirect/migrate preservation disposition; unmentioned surfaces remain preserve."
   - phase: plan
     prompt: "Here is my implementation plan. Shall I proceed?"
   - phase: sync

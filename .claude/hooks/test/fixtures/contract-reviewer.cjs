@@ -6,6 +6,10 @@ const input = JSON.parse(fs.readFileSync(process.env.REQUEST_CONTRACT_BUNDLE, "u
 const coverage = input.review_coverage;
 process.stdout.write(JSON.stringify({
   verdict: "CLEAN",
+  review_stage: process.env.REQUEST_CONTRACT_REVIEW_STAGE || "integration",
+  role: process.env.REQUEST_CONTRACT_REVIEW_ROLE || "general",
+  delivery_state: process.env.REQUEST_CONTRACT_DELIVERY_STATE || "RELEASE_ELIGIBLE",
+  preservation_vetoes: [],
   invocation_nonce: process.env.REQUEST_CONTRACT_CHALLENGE,
   covered_source_ids: coverage.sourceIds,
   covered_source_mappings: coverage.sourceMappings,
@@ -22,5 +26,6 @@ process.stdout.write(JSON.stringify({
   covered_edge_ids: coverage.edgeIds,
   covered_change_ids: coverage.occurrenceIds,
   covered_change_mappings: coverage.changeMappings,
+  covered_preservation_surface_mappings: coverage.preservationSurfaceMappings || [],
   finding_codes: [],
 }));

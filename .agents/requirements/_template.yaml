@@ -5,11 +5,27 @@ product: ""
 module: ""
 status: candidate
 source: candidate
+source_provenance: pending  # ledger_resolved | legacy_unresolved | pending
 priority: medium
 created: {YYYY-MM-DD}
 updated: {YYYY-MM-DD}
 
 issue_url: ""
+
+# Immutable source/directive identifiers checked by the requirement validator. These
+# are ledger record and event ids, not free-form labels or requirement self-references.
+source_directives: ["{source-record-id}"]
+source_evidence: ["{source-id-or-directive-id}"]
+source_atoms: ["{source-record-id}-E01"]
+source_kind: candidate  # human | derived | candidate
+derived_from: []
+derivation_kind: null  # preserve | clarify | expand | narrow | replace
+
+# Product effect. Keep preserve/extend as the default unless exact destructive authority exists.
+change_effect: extend  # add | integrate | extend | modify | migrate | replace | remove
+preserves: ["{surface-or-contract-id}"]
+must_not_change: ["{protected-behavior-or-boundary}"]
+destructive_approval: null  # destructive changes require an exact authority/receipt reference
 
 description: |
   {What this requirement demands}

@@ -93,7 +93,7 @@ function fixture() {
 					command: `node \"$(git rev-parse --show-toplevel)/${adapterPath}\" ${eventName}`,
 					commandWindows: `powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '${adapterPath}') ${eventName}\"`,
 				};
-			return [eventName, [{ ...(eventName === "PreToolUse" ? { matcher: "Bash|Edit|Write|NotebookEdit|apply_patch" } : {}), hooks: [hook] }]];
+			return [eventName, [{ ...(eventName === "PreToolUse" ? { matcher: "Bash|shell_command|Edit|Write|NotebookEdit|apply_patch" } : {}), hooks: [hook] }]];
 		}));
 		fs.writeFileSync(path.join(cwd, directory, file), JSON.stringify({ hooks }));
 	}
@@ -303,13 +303,21 @@ function cleanReview(fx, unit, runId, extras = {}) {
 		expectedBundleDigest: challenge.manifest.bundle_digest,
 		reviewerPath,
 		allowedReviewerDigests: [fx.reviewerFixtureDigest],
-		env: { REQUEST_CONTRACT_CHALLENGE: challenge.manifest.nonce, REQUEST_CONTRACT_CONTEXT_ID: `reviewer-${runId}-${challenge.manifest.nonce}` },
+		env: { REQUEST_CONTRACT_CHALLENGE: challenge.manifest.nonce, REQUEST_CONTRACT_CONTEXT_ID: `reviewer-${runId}-${challenge.manifest.nonce}`, REQUEST_CONTRACT_REVIEW_STAGE: challenge.manifest.review_stage, REQUEST_CONTRACT_REVIEW_ROLE: challenge.manifest.required_role || "general", REQUEST_CONTRACT_DELIVERY_STATE: challenge.manifest.expected_delivery_state },
 	});
 	const review = {
 		...isolated.output,
+		review_stage: challenge.manifest.review_stage,
+		role: challenge.manifest.required_role || "general",
+		planning_digest: challenge.manifest.planning_digest,
+		planning_seal_digest: challenge.manifest.planning_seal_digest,
+		delivery_state: isolated.output.delivery_state,
+		preservation_vetoes: isolated.output.preservation_vetoes || [],
 		run_id: challenge.manifest.review_run_id,
 		reviewed_at: isolated.evidence.executed_at,
 		bundle_digest: challenge.manifest.bundle_digest,
+		full_bundle_digest: challenge.manifest.full_bundle_digest,
+		evidence_view_digest: challenge.manifest.evidence_view_digest,
 		source_head: challenge.manifest.source_head,
 		contract_digest: challenge.manifest.contract_digest,
 		workspace_digest: challenge.manifest.workspace_digest,
@@ -378,6 +386,7 @@ function installProductionControlSurface(fx) {
 	const root = path.resolve(__dirname, "..", "..", "..");
 	for (const relative of [
 		".agents/hooks/core/request-contract.js",
+		".agents/hooks/core/preservation-contract.js",
 		".agents/hooks/core/request-contract-adapter.js",
 		".agents/hooks/core/request-contract-review-runner.js",
 		".claude/hooks/request-contract.js",
@@ -497,6 +506,11 @@ function firstDifference(left, right, cursor = "$") {
 
 test("disabled mode is a silent allow", () => {
 	const fx = fixture();
+	const configPath = path.join(fx.cwd, ".agents", "context", "request-contract.json");
+	const config = core.readJson(configPath);
+	config.installation_state = "unprovisioned";
+	config.enabled_by_default = false;
+	fs.writeFileSync(configPath, JSON.stringify(config));
 	const result = core.handleEvent({ client: "claude", eventName: "Stop", sessionId: "D", cwd: fx.cwd }, { env: { REQUEST_CONTRACT: "off" } });
 	assert.equal(result.code, "request_contract_disabled");
 });
@@ -530,7 +544,8 @@ test("successful uncompacted units stay governed and revalidate their proof", ()
 	const unit = start(fx);
 	bind(fx, unit);
 	for (const id of ["SUCCESS-STICKY-R1", "SUCCESS-STICKY-R2"]) ingestReview(fx, unit, cleanReview(fx, unit, id));
-	assert.equal(core.evaluateCompletion(unit, fx.cwd, "claude").kind, "allow");
+	const initialCompletion = core.evaluateCompletion(unit, fx.cwd, "claude");
+	assert.equal(initialCompletion.kind, "allow", JSON.stringify(initialCompletion));
 	assert.equal(core.governed(fx.cwd, { REQUEST_CONTRACT: "off" }), true);
 	fs.writeFileSync(path.join(fx.cwd, "src", "product.txt"), "changed after successful completion\n");
 	for (const event of [
@@ -710,7 +725,7 @@ test("isolated reviewer stdout contains only opaque coverage and closed verdict 
 	const serialized = JSON.stringify(isolated.output);
 	for (const forbidden of ["prompt", "text", "statement", "description", "path", "locator", "digest", "signature", "receipt"]) assert(!serialized.includes(`\"${forbidden}\"`), `reviewer stdout leaked ${forbidden}`);
 	assert(!serialized.includes("Implement every requested target"));
-	assert.deepEqual(Object.keys(isolated.output).sort(), ["covered_artifact_ids", "covered_authority_ids", "covered_authority_mappings", "covered_change_ids", "covered_change_mappings", "covered_criterion_ids", "covered_directive_ids", "covered_edge_ids", "covered_scope_version_ids", "covered_scope_version_mappings", "covered_source_ids", "covered_source_mappings", "covered_target_ids", "covered_tombstone_ids", "covered_tombstone_mappings", "finding_codes", "invocation_nonce", "verdict"].sort());
+	assert.deepEqual(Object.keys(isolated.output).sort(), ["covered_artifact_ids", "covered_authority_ids", "covered_authority_mappings", "covered_change_ids", "covered_change_mappings", "covered_criterion_ids", "covered_directive_ids", "covered_edge_ids", "covered_preservation_surface_mappings", "covered_scope_version_ids", "covered_scope_version_mappings", "covered_source_ids", "covered_source_mappings", "covered_target_ids", "covered_tombstone_ids", "covered_tombstone_mappings", "delivery_state", "finding_codes", "invocation_nonce", "preservation_vetoes", "review_stage", "role", "verdict"].sort());
 });
 
 test("signed caller-authored review JSON has no live runner provenance", () => {
@@ -770,7 +785,8 @@ test("registered native control preflight reaches initial bind and the pinned re
 		assert.equal(runInstalledNativeAdapter("claude", fx, { ...envelope, hook_event_name: "PostToolUse" }, "PostToolUse"), null);
 	}
 	assert.equal(core.verifyReviewChain(unit.paths).records.length, 2);
-	assert.equal(core.evaluateCompletion(unit, fx.cwd, "claude").kind, "allow");
+	const completion = core.evaluateCompletion(unit, fx.cwd, "claude");
+	assert.equal(completion.kind, "allow", JSON.stringify(completion));
 });
 
 test("native Codex apply_patch can bootstrap only one exact private control input", () => {
@@ -2361,6 +2377,28 @@ test("both client registries cover all governed lifecycle events", () => {
 	}
 });
 
+test("Claude command hooks quote project roots that contain spaces", () => {
+	const root = path.resolve(__dirname, "..", "..", "..");
+	const settings = JSON.parse(fs.readFileSync(path.join(root, ".claude", "settings.json"), "utf8"));
+	const commandHooks = Object.values(settings.hooks).flatMap((entries) => entries.flatMap((entry) => entry.hooks)).filter((hook) => typeof hook.command === "string" && hook.command.includes("$CLAUDE_PROJECT_DIR/"));
+	assert(commandHooks.length > 0);
+	for (const hook of commandHooks) assert.match(hook.command, /^node "\$CLAUDE_PROJECT_DIR\/.+"(?:\s+.*)?$/);
+
+	const spacedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "request contract spaced root "));
+	try {
+		const hooksDir = path.join(spacedRoot, ".claude", "hooks");
+		fs.mkdirSync(hooksDir, { recursive: true });
+		fs.writeFileSync(path.join(hooksDir, "space-probe.js"), "process.stdout.write('space-path-ok')\n");
+		const template = commandHooks.find((hook) => hook.command.includes("pr-guard.js")).command.replace("/.claude/hooks/pr-guard.js", "/.claude/hooks/space-probe.js");
+		const command = template.replace("$CLAUDE_PROJECT_DIR", spacedRoot.replace(/\\/g, "/"));
+		const result = cp.spawnSync(command, { shell: true, encoding: "utf8" });
+		assert.equal(result.status, 0, result.stderr);
+		assert.equal(result.stdout, "space-path-ok");
+	} finally {
+		fs.rmSync(spacedRoot, { recursive: true, force: true });
+	}
+});
+
 test("governed adapter fails closed when source state is corrupted", () => {
 	const fx = fixture();
 	const unit = start(fx);
@@ -3107,6 +3145,28 @@ test("Windows lock retries preserve the underlying publication diagnostic", () =
 	);
 });
 
+test("Windows lock release retries a transient sharing violation without deleting another owner", () => {
+	if (process.platform !== "win32") return;
+	const fx = fixture();
+	const lock = path.join(fx.cwd, ".agents", "harness", "locks", "release-retry-test");
+	const originalRename = fs.renameSync;
+	let injected = false;
+	fs.renameSync = (from, to) => {
+		if (!injected && from === lock && String(to).startsWith(`${lock}.released.`)) {
+			injected = true;
+			throw Object.assign(new Error("simulated sharing violation"), { code: "EPERM" });
+		}
+		return originalRename(from, to);
+	};
+	try {
+		assert.equal(core.withDirectoryLock(lock, () => "released"), "released");
+	} finally {
+		fs.renameSync = originalRename;
+	}
+	assert.equal(injected, true);
+	assert.equal(fs.existsSync(lock), false);
+});
+
 test("an index change starts a fresh consecutive Stop episode", () => {
 	const fx = fixture();
 	const unit = start(fx);
@@ -3128,20 +3188,642 @@ test("repository locking serializes concurrent genesis and quarantine writers", 
 	const corePath = path.resolve(__dirname, "..", "..", "..", ".agents", "hooks", "core", "request-contract.js");
 	fs.writeFileSync(worker, `const core=require(${JSON.stringify(corePath)});const [mode,cwd,client,session,prompt]=process.argv.slice(2);const event=mode==="start"?{client,clientVersion:client==="claude"?"2.1.207":"0.144.1",eventName:"SessionStart",sessionId:session,cwd}:{client,eventName:"UserPromptSubmit",sessionId:session,cwd,prompt,origin:"native_user"};const result=core.handleEvent(event);if(mode==="start"&&result.kind!=="context")process.exit(2);if(mode==="prompt"&&result.code!=="request_contract_missing_genesis")process.exit(3);\n`);
 	fs.writeFileSync(coordinator, 'const cp=require("child_process");const [worker,cwd,mode]=process.argv.slice(2);const specs=mode==="start"?[["start",cwd,"claude","A"],["start",cwd,"codex","B"]]:Array.from({length:6},(_,i)=>["prompt",cwd,"codex","Q","prompt-"+(i+1)]);Promise.all(specs.map(args=>new Promise(resolve=>{const child=cp.spawn(process.execPath,[worker,...args],{stdio:["ignore","ignore","pipe"]});let stderr="";child.stderr.on("data",x=>stderr+=x);child.on("exit",code=>resolve({code,stderr}));}))).then(results=>{for(const result of results)if(result.code!==0){process.stderr.write(result.stderr);process.exit(result.code)}process.exit(0)});\n');
-	let result = cp.spawnSync(process.execPath, [coordinator, worker, fx.cwd, "start"], { encoding: "utf8", timeout: 20_000 });
+	let result = cp.spawnSync(process.execPath, [coordinator, worker, fx.cwd, "start"], { encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(core.listUnits(fx.cwd).length, 1);
 	const unit = { id: core.listUnits(fx.cwd)[0], paths: core.unitPaths(fx.cwd, core.listUnits(fx.cwd)[0]) };
 	assert.equal(core.readJson(unit.paths.head).session_bindings.length, 2);
 
 	fx = fixture();
-	result = cp.spawnSync(process.execPath, [coordinator, worker, fx.cwd, "prompt"], { encoding: "utf8", timeout: 20_000 });
+	result = cp.spawnSync(process.execPath, [coordinator, worker, fx.cwd, "prompt"], { encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
 	assert.equal(result.status, 0, result.stderr);
 	const quarantine = core.listUnconsumedQuarantine(fx.cwd);
 	assert.equal(quarantine.length, 1);
 	assert.equal(quarantine[0].head.count, 6);
 	fs.unlinkSync(worker);
 	fs.unlinkSync(coordinator);
+});
+
+function preservationFile(content) {
+	const bytes = Buffer.from(content);
+	return { type: "file", mode: 0o100644, size: bytes.length, digest: core.sha256(bytes) };
+}
+
+function preservationManifest(head, files) {
+	return {
+		version: 1,
+		config_digest: "c".repeat(64),
+		head,
+		index_digest: "d".repeat(64),
+		submodules_digest: "e".repeat(64),
+		files: Object.fromEntries(Object.entries(files).map(([rel, content]) => [rel, preservationFile(content)])),
+	};
+}
+
+function writePreservationProbe(cwd, id, suffix, capabilities, subjectDigest, runner) {
+	const relative = `evidence/${id.toLowerCase()}-${suffix}.json`;
+	const result = { reachable: true, capabilities };
+	const probe = {
+		version: 1,
+		surface_id: id,
+		phase: suffix,
+		subject_digest: subjectDigest,
+		reachable: true,
+		capabilities,
+		execution: { credential_id: runner.credentialId, runner_digest: runner.digest, executed_at: 1780000000000, command_digest: core.sha256(`probe:${id}:${suffix}`), result_digest: core.sha256(core.canonicalJson(result)) },
+	};
+	probe.execution.signature = crypto.sign(null, Buffer.from(core.canonicalJson(core.signedProbePayload(probe))), runner.privateKey).toString("base64");
+	const bytes = Buffer.from(JSON.stringify(probe));
+	fs.mkdirSync(path.dirname(path.join(cwd, relative)), { recursive: true });
+	fs.writeFileSync(path.join(cwd, relative), bytes);
+	return { evidence: { id: `EVD-${suffix.toUpperCase()}-${id}`, locator: relative, digest: core.sha256(bytes) }, bytes };
+}
+
+function attestVendor(value, vendor) {
+	const attestation = {
+		version: 1,
+		credential_id: value.runner.credentialId,
+		runner_digest: value.runner.digest,
+		executed_at: 1780000000000,
+		resolved_tree_digest: vendor.tree_digest,
+		imported_tree_digest: vendor.tree_digest,
+	};
+	vendor.attestation = attestation;
+	attestation.signature = crypto.sign(null, Buffer.from(core.canonicalJson(core.signedVendorPayload(vendor))), value.runner.privateKey).toString("base64");
+	return vendor;
+}
+
+function attestInventory(runner, baseline, current, surfaces, options = {}) {
+	const inventory = {
+		version: 1,
+		origin: options.origin || "existing",
+		adapter_id: options.adapterId || "ADAPTER-TEST",
+		adapter_digest: runner.digest,
+		baseline_ref: baseline.head,
+		baseline_manifest_digest: core.sha256(core.canonicalJson(baseline)),
+		current_manifest_digest: core.sha256(core.canonicalJson(current)),
+		surface_ids: surfaces.map((surface) => surface.id),
+		surface_inventory_digest: core.preservationSurfaceInventoryDigest(surfaces),
+		test_roots: options.testRoots || [],
+		vendor_roots: options.vendorRoots || [],
+		release_operation_ids: options.releaseOperationIds || [],
+		credential_id: runner.credentialId,
+		runner_digest: runner.digest,
+		executed_at: 1780000000000,
+	};
+	inventory.signature = crypto.sign(null, Buffer.from(core.canonicalJson(core.signedInventoryPayload(inventory))), runner.privateKey).toString("base64");
+	return inventory;
+}
+
+function preservationSurfaceCase(options = {}) {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "naia-preservation-contract-"));
+	fixtureRoots.add(cwd);
+	const head = "a".repeat(40);
+	const { publicKey: runnerPublicKey, privateKey: runnerPrivateKey } = crypto.generateKeyPairSync("ed25519");
+	const runner = {
+		publicKey: runnerPublicKey.export({ type: "spki", format: "pem" }),
+		privateKey: runnerPrivateKey,
+		credentialId: "preservation-probe-runner",
+		digest: core.sha256("preservation-probe-runner-v1"),
+	};
+	const surfaceId = options.surfaceId || "SURF-HOME";
+	const baseline = preservationManifest(head, options.baselineFiles || { "src/home.js": "home v1\n" });
+	const current = preservationManifest(head, options.currentFiles || { "src/home.js": "home v1\n" });
+	const baselinePaths = options.baselinePaths || ["src/home.js"];
+	const currentPaths = options.currentPaths || ["src/home.js"];
+	const baselineProbe = writePreservationProbe(cwd, surfaceId, "baseline", options.baselineCapabilities || ["route:/", "render:home", "enabled:home"], core.surfaceContentDigest ? core.surfaceContentDigest(baseline, baselinePaths) : core.sha256(core.canonicalJson(Object.fromEntries(Object.entries(baseline.files).filter(([rel]) => baselinePaths.some((root) => rel === root || rel.startsWith(root + "/")))))), runner);
+	const currentProbe = writePreservationProbe(cwd, surfaceId, "current", options.currentCapabilities || ["route:/", "render:home", "enabled:home"], core.surfaceContentDigest ? core.surfaceContentDigest(current, currentPaths) : core.sha256(core.canonicalJson(Object.fromEntries(Object.entries(current.files).filter(([rel]) => currentPaths.some((root) => rel === root || rel.startsWith(root + "/")))))), runner);
+	const baselineEvidence = baselineProbe.evidence;
+	const currentEvidence = currentProbe.evidence;
+	const surface = {
+		id: surfaceId,
+		directive_id: "REQ-PRESERVE",
+		kind: options.kind || "product-surface",
+		locator: options.locator || "/",
+		disposition: options.disposition || "preserve",
+		baseline_paths: baselinePaths,
+		current_paths: currentPaths,
+		baseline_evidence_id: baselineEvidence.id,
+		current_evidence_id: currentEvidence.id,
+	};
+	const authorities = [];
+	if (["replace", "remove", "disable", "redirect", "migrate"].includes(surface.disposition)) {
+		authorities.push({ id: "AUTH-MIGRATE", operation: "authorize_contract", target_directive_ids: [surface.directive_id] });
+		surface.authority_id = "AUTH-MIGRATE";
+		surface.expected_diff_digest = options.expectedDiffDigest === "exact"
+			? core.sha256(core.canonicalJson([...new Set([...surface.baseline_paths, ...surface.current_paths])].sort().flatMap((rel) => {
+				const before = baseline.files[rel] || null;
+				const after = current.files[rel] || null;
+				return core.canonicalJson(before) === core.canonicalJson(after) ? [] : [{ path: rel, before, after }];
+			})))
+			: options.expectedDiffDigest || "0".repeat(64);
+	}
+	return {
+		cwd,
+		baseline,
+		current,
+		runner,
+		baselineProbeBytes: baselineProbe.bytes,
+		contract: {
+			kind: "request-contract",
+			version: 1,
+			sources: [],
+			directives: [{ id: "REQ-PRESERVE" }],
+			artifacts: { evidence: [baselineEvidence, currentEvidence] },
+			authorities,
+			preservation: { version: 1, baseline_ref: head, intent: options.intent || "integrate", surfaces: [surface], vendor_sources: [], inventory: attestInventory(runner, baseline, current, [surface], { origin: options.origin }) },
+		},
+	};
+}
+
+function validatePreservationCase(value) {
+	assert.equal(typeof core.validatePreservationDeclaration, "function", "request-contract core must export validatePreservationDeclaration");
+	assert.equal(typeof core.validateWorkspacePreservation, "function", "request-contract core must export validateWorkspacePreservation");
+	const context = {
+		baseline: value.baseline,
+		current: value.current,
+		cwd: value.cwd,
+		config: { preservation: { required: true, protect_test_contracts: true, protect_vendor_sources: true, allowed_adapter_digests: [value.runner.digest] } },
+		sourceRecords: [],
+		readBaselineFile: () => value.baselineProbeBytes,
+		probeRunner: { public_key: value.runner.publicKey, credential_id: value.runner.credentialId, allowed_digests: [value.runner.digest] },
+	};
+	const declaration = core.validatePreservationDeclaration(value.contract, context);
+	assert.equal(declaration.ok, true, declaration.errors && declaration.errors.join(", "));
+	return core.validateWorkspacePreservation(value.contract, context);
+}
+
+function assertPreservationError(result, prefix) {
+	assert.equal(result.ok, false, `expected preservation rejection ${prefix}`);
+	assert(result.errors.some((error) => error === prefix || error.startsWith(`${prefix}:`)), result.errors.join(", "));
+}
+
+function resignLifecycleContract(fx, unit, contract) {
+	const scopeDigest = core.sha256(core.canonicalJson(core.scopeProjection(contract)));
+	const presentation = core.authorityPresentation(contract.authorities[0], null, scopeDigest, 0, 1);
+	const challenge = core.issueAuthorityChallenge(unit, fx.cwd, presentation);
+	contract.authorities[0].receipt = signedReceipt(fx, {
+		operation: "authorize_contract",
+		// scopeProjection pins the receipt nonce; retain the nonce that was
+		// present when the replacement scope digest above was calculated.
+		nonce: "initial-nonce-01",
+		resulting_scope_digest: scopeDigest,
+		resulting_scope_epoch: 0,
+		binding_epoch: 1,
+		challenge: challenge.challenge,
+		presentation_digest: challenge.presentation_digest,
+		target_directive_ids: [contract.directives[0].id],
+		replacement_ids: [contract.directives[0].id],
+		sign_count: 1,
+	});
+}
+
+function lifecyclePreservationContract(fx, unit) {
+	const contract = makeContract(fx, unit);
+	for (const source of contract.sources) source.source_kind = "human";
+	const surfaceId = "SURF-PRODUCT";
+	const baseline = core.readJson(unit.paths.state).baseline;
+	const current = core.workspaceManifest(fx.cwd, core.loadConfig(fx.cwd)).manifest;
+	const probeRunner = { privateKey: fx.runnerPrivateKey, credentialId: "test-isolation-runner", digest: fx.runnerAttestorDigest };
+	const baselineEvidence = writePreservationProbe(fx.cwd, surfaceId, "baseline", ["render:product", "enabled:product"], core.sha256(core.canonicalJson({ "src/product.txt": baseline.files["src/product.txt"] })), probeRunner).evidence;
+	const currentEvidence = writePreservationProbe(fx.cwd, surfaceId, "current", ["render:product", "enabled:product"], core.sha256(core.canonicalJson({ "src/product.txt": current.files["src/product.txt"] })), probeRunner).evidence;
+	const implementationId = contract.directives[0].trace.implementations[0];
+	const obligationAtomIds = contract.artifacts.evidence[0].obligation_atom_ids;
+	for (const [index, evidence] of [baselineEvidence, currentEvidence].entries()) {
+		contract.artifacts.evidence.push({ ...evidence, statement: `${index ? "Current" : "Baseline"} product capability probe`, kind: "preservation-probe", subject_id: implementationId, obligation_atom_ids: [...obligationAtomIds] });
+		contract.directives[0].trace.evidence.push(evidence.id);
+		contract.edges.push({ id: `EDGE-PRESERVATION-${index + 1}`, kind: "implementations_to_evidence", from: implementationId, to: evidence.id });
+	}
+	const surface = {
+		id: surfaceId,
+		directive_id: contract.directives[0].id,
+		kind: "product-surface",
+		locator: "src/product.txt",
+		disposition: "preserve",
+		baseline_paths: ["src/product.txt"],
+		current_paths: ["src/product.txt"],
+		baseline_evidence_id: baselineEvidence.id,
+		current_evidence_id: currentEvidence.id,
+	};
+	contract.preservation = {
+		version: 1,
+		baseline_ref: core.readJson(unit.paths.state).baseline.head,
+		intent: "integrate",
+		surfaces: [surface],
+		vendor_sources: [],
+		inventory: attestInventory(probeRunner, baseline, current, [surface]),
+	};
+	resignLifecycleContract(fx, unit, contract);
+	return contract;
+}
+
+function pinLifecyclePreservationProbes(fx, options = {}) {
+	const configPath = path.join(fx.cwd, ".agents", "context", "request-contract.json");
+	const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+	config.preservation = { ...(config.preservation || {}), required: options.required !== false, protect_test_contracts: true, protect_vendor_sources: true, allowed_adapter_digests: [fx.runnerAttestorDigest] };
+	if (options.requiredRoles) config.reviewer = { ...(config.reviewer || {}), required_roles: options.requiredRoles };
+	fs.writeFileSync(configPath, JSON.stringify(config));
+	const manifest = core.workspaceManifest(fx.cwd, core.loadConfig(fx.cwd)).manifest;
+	const subjectDigest = core.sha256(core.canonicalJson({ "src/product.txt": manifest.files["src/product.txt"] }));
+	const probeRunner = { privateKey: fx.runnerPrivateKey, credentialId: "test-isolation-runner", digest: fx.runnerAttestorDigest };
+	writePreservationProbe(fx.cwd, "SURF-PRODUCT", "baseline", ["render:product", "enabled:product"], subjectDigest, probeRunner);
+	writePreservationProbe(fx.cwd, "SURF-PRODUCT", "current", ["render:product", "enabled:product"], subjectDigest, probeRunner);
+	cp.execFileSync("git", ["add", ".agents/context/request-contract.json", "evidence/surf-product-baseline.json", "evidence/surf-product-current.json"], { cwd: fx.cwd });
+	cp.execFileSync("git", ["commit", "-q", "-m", "pin preservation probes"], { cwd: fx.cwd });
+}
+
+test("preservation additive extension keeps the baseline surface and permits a new surface", () => {
+	const value = preservationSurfaceCase({
+		disposition: "extend",
+		baselineFiles: { "src/home.js": "home v1\n" },
+		currentFiles: { "src/home.js": "home v2 compatible refactor\n", "src/pension.js": "pension case\n" },
+		currentPaths: ["src/home.js", "src/pension.js"],
+		currentCapabilities: ["route:/", "render:home", "enabled:home", "route:/pension"],
+	});
+	assert.equal(validatePreservationCase(value).ok, true);
+});
+
+test("preservation preserve surfaces reject missing successors and capability loss but permit compatible edits and renames", () => {
+	let value = preservationSurfaceCase({ currentFiles: {}, currentPaths: ["src/home.js"] });
+	assertPreservationError(validatePreservationCase(value), "preservation_current_path_missing");
+	value = preservationSurfaceCase({ currentFiles: { "src/home.js": "refactored\n" }, currentCapabilities: ["route:/", "enabled:home"] });
+	assertPreservationError(validatePreservationCase(value), "preservation_capability_lost");
+	value = preservationSurfaceCase({ currentFiles: { "src/home.js": "refactored without behavior loss\n" } });
+	assert.equal(validatePreservationCase(value).ok, true);
+	value = preservationSurfaceCase({ currentFiles: { "src/home-renamed.js": "home v1\n" }, currentPaths: ["src/home-renamed.js"] });
+	assert.equal(validatePreservationCase(value).ok, true);
+});
+
+test("preservation semantic probes reject redirects and disabled behavior", () => {
+	let value = preservationSurfaceCase({ currentCapabilities: ["route:/pension", "render:home", "enabled:home"] });
+	assertPreservationError(validatePreservationCase(value), "preservation_capability_lost");
+	value = preservationSurfaceCase({ currentCapabilities: ["route:/", "render:home"] });
+	assertPreservationError(validatePreservationCase(value), "preservation_capability_lost");
+});
+
+test("preservation baseline test probe rejects assertion inversion", () => {
+	const value = preservationSurfaceCase({
+		surfaceId: "SURF-BASELINE-TEST",
+		kind: "test-contract",
+		locator: "test/home.spec.js",
+		baselineFiles: { "test/home.spec.js": "assert(home renders)\n" },
+		currentFiles: { "test/home.spec.js": "assert(home does not render)\n" },
+		baselinePaths: ["test/home.spec.js"],
+		currentPaths: ["test/home.spec.js"],
+		baselineCapabilities: ["assertion:home-renders", "polarity:positive"],
+		currentCapabilities: ["assertion:home-not-render", "polarity:negative"],
+	});
+	assertPreservationError(validatePreservationCase(value), "preservation_capability_lost");
+});
+
+test("preservation vendor source requires its pristine tree digest", () => {
+	const value = preservationSurfaceCase();
+	value.contract.preservation.surfaces = [];
+	value.baseline = preservationManifest(value.baseline.head, { "vendor/professor/app.js": "pristine vendor source\n" });
+	value.current = preservationManifest(value.baseline.head, { "vendor/professor/app.js": "modified vendor source\n" });
+	value.contract.preservation.inventory = attestInventory(value.runner, value.baseline, value.current, []);
+	const pristine = value.baseline;
+	value.contract.authorities.push({ id: "AUTH-VENDOR", operation: "authorize_contract", target_directive_ids: ["REQ-PRESERVE"] });
+	value.contract.preservation.vendor_sources = [attestVendor(value, { id: "VENDOR-PROFESSOR", directive_id: "REQ-PRESERVE", authority_id: "AUTH-VENDOR", disposition: "preserve", pristine_path: "vendor/professor", source_ref: `https://github.com/professor/repo@${"a".repeat(40)}`, tree_digest: core.preservationVendorTreeDigest(pristine, "vendor/professor") })];
+	assertPreservationError(validatePreservationCase(value), "preservation_vendor_digest_mismatch");
+});
+
+test("preservation permits a pristine immutable vendor import without rewriting it", () => {
+	const value = preservationSurfaceCase({
+		disposition: "extend",
+		baselineFiles: { "src/home.js": "home v1\n" },
+		currentFiles: { "src/home.js": "home v1\n", "vendor/professor/app.js": "pristine professor source\n" },
+		currentPaths: ["src/home.js", "vendor/professor"],
+		currentCapabilities: ["route:/", "render:home", "enabled:home", "source:professor"],
+	});
+	value.contract.authorities.push({ id: "AUTH-VENDOR", operation: "amend_scope_add", target_directive_ids: ["REQ-PRESERVE"] });
+	const originTreeDigest = core.preservationVendorTreeDigest(value.current, "vendor/professor");
+	const relocated = preservationManifest(value.baseline.head, { "external/teacher/app.js": "pristine professor source\n" });
+	assert.equal(core.preservationVendorTreeDigest(relocated, "external/teacher"), originTreeDigest, "origin tree digest must not depend on the destination prefix");
+	value.contract.preservation.vendor_sources = [attestVendor(value, { id: "VENDOR-PROFESSOR", directive_id: "REQ-PRESERVE", authority_id: "AUTH-VENDOR", disposition: "import", pristine_path: "vendor/professor", source_ref: `https://github.com/professor/repo@${"b".repeat(40)}`, tree_digest: originTreeDigest })];
+	assert.equal(validatePreservationCase(value).ok, true);
+});
+
+test("preservation approved migration accepts only the exact authorized diff", () => {
+	const value = preservationSurfaceCase({
+		disposition: "migrate",
+		intent: "migrate",
+		baselineFiles: { "src/home.js": "home v1\n" },
+		currentFiles: { "src/home-v2.js": "home v2\n" },
+		currentPaths: ["src/home-v2.js"],
+		currentCapabilities: ["route:/", "render:home-v2", "enabled:home"],
+		expectedDiffDigest: "exact",
+	});
+	assert.equal(validatePreservationCase(value).ok, true);
+});
+
+test("preservation rejects stale or wrong migration diff authority", () => {
+	let value = preservationSurfaceCase({ disposition: "migrate", intent: "migrate", currentFiles: { "src/home.js": "home v2\n" }, expectedDiffDigest: "0".repeat(64) });
+	assertPreservationError(validatePreservationCase(value), "preservation_authority_diff_mismatch");
+	value = preservationSurfaceCase({ disposition: "migrate", intent: "migrate", currentFiles: { "src/home.js": "home v2\n" }, expectedDiffDigest: "exact" });
+	value.current.files["src/home.js"] = preservationFile("home v3 after authority was issued\n");
+	assertPreservationError(validatePreservationCase(value), "preservation_authority_diff_mismatch");
+});
+
+test("preservation bypass rejects net-new and empty-surface changes", () => {
+	let value = preservationSurfaceCase({
+		baselineFiles: { "src/home.js": "home v1\n" },
+		currentFiles: { "src/home.js": "home v1\n", "src/unowned.js": "silent replacement\n" },
+	});
+	assertPreservationError(validatePreservationCase(value), "preservation_change_uncovered");
+	value = preservationSurfaceCase({ baselineFiles: {}, currentFiles: { "src/new.js": "new-only app\n" } });
+	value.contract.preservation.surfaces = [];
+	const context = { baseline: value.baseline, current: value.current, cwd: value.cwd, config: { preservation: { required: true, protect_test_contracts: true, protect_vendor_sources: true } }, sourceRecords: [], readBaselineFile: () => value.baselineProbeBytes };
+	assertPreservationError(core.validateWorkspacePreservation(value.contract, context), "preservation_change_uncovered");
+});
+
+test("preservation bypass rejects forged current and non-baseline probes", () => {
+	let value = preservationSurfaceCase();
+	const currentEvidence = value.contract.artifacts.evidence.find((item) => item.id === value.contract.preservation.surfaces[0].current_evidence_id);
+	const forged = JSON.parse(fs.readFileSync(path.join(value.cwd, currentEvidence.locator), "utf8"));
+	forged.subject_digest = "f".repeat(64);
+	const bytes = Buffer.from(JSON.stringify(forged));
+	fs.writeFileSync(path.join(value.cwd, currentEvidence.locator), bytes);
+	currentEvidence.digest = core.sha256(bytes);
+	assertPreservationError(validatePreservationCase(value), "preservation_current_probe_invalid");
+	value = preservationSurfaceCase();
+	value.baselineProbeBytes = Buffer.from(JSON.stringify({ version: 1, surface_id: "SURF-HOME", phase: "baseline", subject_digest: "0".repeat(64), reachable: true, capabilities: ["route:/"], execution: { runner: "fake", executed_at: 1, command_digest: "0".repeat(64), result_digest: "0".repeat(64) } }));
+	assertPreservationError(validatePreservationCase(value), "preservation_baseline_probe_invalid");
+});
+
+test("preservation bypass rejects mutable vendor refs and unbound authority", () => {
+	const value = preservationSurfaceCase();
+	value.contract.preservation.vendor_sources = [{ id: "VENDOR-PROFESSOR", directive_id: "REQ-PRESERVE", authority_id: "AUTH-MISSING", disposition: "preserve", pristine_path: "vendor/professor", source_ref: "https://github.com/professor/repo@main", tree_digest: "0".repeat(64) }];
+	const result = core.validatePreservationDeclaration(value.contract, { config: { preservation: { required: true } }, sourceRecords: [] });
+	assertPreservationError(result, "preservation_vendor_provenance_invalid");
+	assertPreservationError(result, "preservation_vendor_authority_invalid");
+});
+
+test("preservation bypass rejects derived cycles and stale generic authority", () => {
+	const value = preservationSurfaceCase({ disposition: "replace", expectedDiffDigest: "exact" });
+	const parent = "SRC-11111111111111111111111111111111";
+	const derived = "SRC-22222222222222222222222222222222";
+	const approver = "SRC-33333333333333333333333333333333";
+	value.contract.sources = [
+		{ id: parent, source_kind: "human", directive_ids: ["REQ-PRESERVE"] },
+		{ id: derived, source_kind: "derived", derived_from: parent, derivation_kind: "replace", directive_ids: ["REQ-PRESERVE"] },
+		{ id: approver, source_kind: "human", directive_ids: ["REQ-PRESERVE"] },
+	];
+	value.contract.authorities[0] = { ...value.contract.authorities[0], source_id: approver, affected_source_ids: [derived], operation: "authorize_contract" };
+	let result = core.validatePreservationDeclaration(value.contract, { config: { preservation: { required: true } }, sourceRecords: [
+		{ source_id: parent, origin: "native_user", seq: 1 }, { source_id: derived, origin: "derived", seq: 2 }, { source_id: approver, origin: "native_user", seq: 3 },
+	] });
+	assertPreservationError(result, "preservation_derived_scope_escalation");
+	value.contract.sources[0] = { ...value.contract.sources[0], source_kind: "derived", derived_from: derived, derivation_kind: "clarify" };
+	result = core.validatePreservationDeclaration(value.contract, { config: { preservation: { required: true } }, sourceRecords: [
+		{ source_id: parent, origin: "derived", seq: 1 }, { source_id: derived, origin: "derived", seq: 2 }, { source_id: approver, origin: "native_user", seq: 3 },
+	] });
+	assertPreservationError(result, "preservation_derived_source_cycle");
+});
+
+test("preservation inventory binds the complete surface descriptor and rejects unsupported greenfield claims", () => {
+	let value = preservationSurfaceCase();
+	value.contract.preservation.surfaces[0].locator = "/silently-rewritten";
+	assertPreservationError(core.validatePreservationDeclaration(value.contract, {
+		config: { preservation: { required: true, allowed_adapter_digests: [value.runner.digest] } },
+		sourceRecords: [],
+		probeRunner: { public_key: value.runner.publicKey, credential_id: value.runner.credentialId, allowed_digests: [value.runner.digest] },
+	}), "preservation_inventory_descriptor_mismatch");
+	value = preservationSurfaceCase({ origin: "greenfield" });
+	assertPreservationError(core.validatePreservationDeclaration(value.contract, {
+		config: { preservation: { required: true, allowed_adapter_digests: [value.runner.digest] } },
+		sourceRecords: [],
+		probeRunner: { public_key: value.runner.publicKey, credential_id: value.runner.credentialId, allowed_digests: [value.runner.digest] },
+	}), "preservation_inventory_invalid");
+	value = preservationSurfaceCase();
+	value.contract.preservation.surfaces = [null];
+	value.contract.preservation.vendor_sources = [null];
+	const malformed = core.validatePreservationDeclaration(value.contract, {
+		config: { preservation: { required: true, allowed_adapter_digests: [value.runner.digest] } },
+		sourceRecords: [],
+		probeRunner: { public_key: value.runner.publicKey, credential_id: value.runner.credentialId, allowed_digests: [value.runner.digest] },
+	});
+	assertPreservationError(malformed, "preservation_surface_shape_invalid");
+	assertPreservationError(malformed, "preservation_vendor_shape_invalid");
+	value = preservationSurfaceCase();
+	value.contract.preservation.inventory = attestInventory(value.runner, value.baseline, value.current, value.contract.preservation.surfaces, { testRoots: ["../escape"] });
+	assertPreservationError(core.validatePreservationDeclaration(value.contract, {
+		config: { preservation: { required: true, allowed_adapter_digests: [value.runner.digest] } },
+		sourceRecords: [],
+		probeRunner: { public_key: value.runner.publicKey, credential_id: value.runner.credentialId, allowed_digests: [value.runner.digest] },
+	}), "preservation_inventory_invalid");
+});
+
+test("derived source authority cannot bypass validation when preservation is absent", () => {
+	const contract = {
+		sources: [{ id: "SRC-DERIVED", source_kind: "derived", derived_from: "SRC-MISSING", derivation_kind: "narrow", directive_ids: ["REQ-DERIVED"] }],
+		directives: [{ id: "REQ-DERIVED" }],
+		authorities: [],
+	};
+	const result = core.validatePreservationDeclaration(contract, { config: { preservation: { required: false } }, sourceRecords: [] });
+	assertPreservationError(result, "preservation_derived_source_parent_invalid");
+});
+
+test("release bypass detection covers wrappers, newlines, both shells, merge and deploy", () => {
+	const config = { release: { shell_tools: ["Bash", "shell_command"], command_patterns: [] } };
+	for (const [toolName, command] of [
+		["Bash", "git -C . push origin main"],
+		["Bash", "echo preparing\ngit push"],
+		["shell_command", "gh pr merge 42 --squash"],
+		["Bash", "npm publish"],
+		["shell_command", "az webapp deploy --name aipol"],
+		["shell_command", "powershell -Command \"git push origin main\""],
+		["shell_command", "cmd /c git push origin main"],
+		["Bash", "bash -lc \"git push origin main\""],
+		["Bash", "/usr/bin/git push origin main"],
+		["shell_command", "gh release create v1"],
+		["shell_command", "gh issue close 17"],
+		["shell_command", "az webapp up --name aipol"],
+		["shell_command", "kubectl apply -f deploy.yaml"],
+		["shell_command", "helm upgrade aipol ./chart"],
+		["shell_command", "terraform apply -auto-approve"],
+		["shell_command", "gcloud run deploy aipol"],
+		["shell_command", "vercel --prod"],
+	]) assert.equal(core.releaseCommandFromEvent({ toolName, toolInput: { command } }, config), true, command);
+	assert.equal(core.releaseCommandFromEvent({ toolName: "Bash", toolInput: { command: 'echo "git push"' } }, config), false);
+});
+
+test("config bypass fails closed for missing and corrupt fresh repository config", () => {
+	for (const corrupt of [false, true]) {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "naia-config-fail-closed-"));
+		fixtureRoots.add(cwd);
+		if (corrupt) {
+			fs.mkdirSync(path.join(cwd, ".agents", "context"), { recursive: true });
+			fs.writeFileSync(path.join(cwd, ".agents", "context", "request-contract.json"), "{");
+		}
+		const result = core.handleEvent({ client: "claude", clientVersion: CLIENT_VERSIONS.claude, eventName: "SessionStart", sessionId: "FRESH", cwd }, { env: {} });
+		assert.equal(result.kind, "block");
+		assert.equal(result.code, "request_contract_config_invalid");
+	}
+});
+
+test("preservation shell and release remain blocked while the external-effect gate is pending", () => {
+	for (const [client, toolName, command] of [["claude", "Bash", "git -C . push origin main"], ["codex", "shell_command", "az webapp deploy --name aipol"]]) {
+		const fx = fixture();
+		pinLifecyclePreservationProbes(fx);
+		const sessionId = `RELEASE-${client.toUpperCase()}`;
+		const unit = start(fx, client, sessionId);
+		bind(fx, unit, lifecyclePreservationContract(fx, unit));
+		const publication = core.handleEvent({ client, eventName: "PreToolUse", sessionId, cwd: fx.cwd, toolName, toolUseId: `release-${client}`, toolInput: { command } });
+		assert.equal(publication.kind, "block");
+		assert.equal(publication.code, "external_effect_gate_pending");
+		const result = core.handleEvent({ client, eventName: "Stop", sessionId, cwd: fx.cwd });
+		assert.equal(result.kind, "block");
+		assert.notEqual(core.readJson(unit.paths.state).terminal && core.readJson(unit.paths.state).terminal.status, "success");
+	}
+});
+
+test("preservation collects planning and integration evidence views but remains review only while controls are pending", () => {
+	const fx = fixture();
+	const configPath = path.join(fx.cwd, ".agents", "context", "request-contract.json");
+	const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+	config.preservation = { required: true, protect_test_contracts: true, protect_vendor_sources: true, allowed_adapter_digests: [fx.runnerAttestorDigest] };
+	fs.writeFileSync(configPath, JSON.stringify(config));
+	cp.execFileSync("git", ["add", ".agents/context/request-contract.json"], { cwd: fx.cwd });
+	pinLifecyclePreservationProbes(fx);
+	const unit = start(fx);
+	bind(fx, unit, lifecyclePreservationContract(fx, unit));
+	const expectedSections = {
+		source_fidelity: ["binding", "contract", "scope_history", "sources"],
+		baseline_preservation: ["baseline_manifest", "baseline_materials", "preservation"],
+		implementation_test: ["contract", "occurrences"],
+		authority_release: ["binding", "contract", "scope_history"],
+	};
+	for (const role of Object.keys(expectedSections)) {
+		const planningView = core.buildReviewBundle(unit, fx.cwd, { stage: "planning", role }).bundle;
+		assert.deepEqual(planningView.included_sections, expectedSections[role], `${role} planning included sections`);
+		assert.deepEqual(Object.keys(planningView.evidence).filter((key) => planningView.evidence[key] !== undefined).sort(), expectedSections[role], `${role} planning evidence bytes`);
+		assert.equal(new Set([...planningView.included_sections, ...planningView.withheld_sections]).size, 10, `${role} declares the complete section partition`);
+		const integrationView = core.buildReviewBundle(unit, fx.cwd, { stage: "integration", role }).bundle;
+		if (["baseline_preservation", "implementation_test", "authority_release"].includes(role)) assert(integrationView.included_sections.includes("workspace_manifest"), `${role} integration receives current workspace`);
+		if (["baseline_preservation", "implementation_test"].includes(role)) assert(integrationView.included_sections.includes("materials"), `${role} integration receives current materials`);
+	}
+	const reviews = [];
+	for (let index = 0; index < 7; index++) {
+		const review = cleanReview(fx, unit, `SLOT-${index + 1}`);
+		reviews.push(review);
+		ingestReview(fx, unit, review);
+	}
+	let result = core.handleEvent({ client: "claude", eventName: "Stop", sessionId: "S1", cwd: fx.cwd });
+	assert.equal(result.kind, "block");
+	assert(result.message.includes("review_required_slots_incomplete"), result.message);
+	const finalReview = cleanReview(fx, unit, "SLOT-8");
+	reviews.push(finalReview);
+	ingestReview(fx, unit, finalReview);
+	assert.equal(new Set(reviews.map((review) => review.evidence_view_digest)).size, 8);
+	result = core.handleEvent({ client: "claude", eventName: "Stop", sessionId: "S1", cwd: fx.cwd });
+	assert.equal(result.kind, "block");
+	assert(result.errors.includes("external_effect_gate_pending"), result.errors.join(","));
+	assert(result.errors.includes("preservation_incident_history_pending"), result.errors.join(","));
+	const chain = core.verifyReviewChain(unit.paths);
+	assert.deepEqual(new Set(chain.records.map((review) => review.role)), new Set(["source_fidelity", "baseline_preservation", "implementation_test", "authority_release"]));
+	assert.deepEqual(new Set(chain.records.map((review) => review.review_stage)), new Set(["planning", "integration"]));
+	assert.notEqual(core.readJson(unit.paths.state).terminal && core.readJson(unit.paths.state).terminal.status, "success");
+	const publication = core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Bash", toolUseId: "release-after-clean", toolInput: { command: "git push origin main" } });
+	assert.equal(publication.kind, "block");
+	assert.equal(publication.code, "external_effect_gate_pending");
+});
+
+test("preservation blocks shell indirection and release-regex false positives until classification exists", () => {
+	const fx = fixture();
+	const configPath = path.join(fx.cwd, ".agents", "context", "request-contract.json");
+	const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+	config.release = config.release || { shell_tools: ["Bash", "shell_command"], command_patterns: [] };
+	config.release.shell_tools.push("PowerShell");
+	fs.writeFileSync(configPath, JSON.stringify(config));
+	const settingsPath = path.join(fx.cwd, ".claude", "settings.json");
+	const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+	settings.hooks.PreToolUse[0].matcher = "Bash|shell_command|PowerShell|Edit|Write|NotebookEdit|apply_patch";
+	fs.writeFileSync(settingsPath, JSON.stringify(settings));
+	cp.execFileSync("git", ["add", ".agents/context/request-contract.json", ".claude/settings.json"], { cwd: fx.cwd });
+	pinLifecyclePreservationProbes(fx);
+	const unit = start(fx);
+	bind(fx, unit, lifecyclePreservationContract(fx, unit));
+	for (const command of [
+		"git p$(printf ush) origin main",
+		"verb=push; git $verb origin main",
+		"$verb = 'push'; git $verb origin main",
+		"Write-Output 'git push'",
+		"node --test",
+	]) {
+		const result = core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Bash", toolUseId: `shell-${core.sha256(command).slice(0, 12)}`, toolInput: { command } });
+		assert.equal(result.kind, "block", command);
+		assert.equal(result.code, "external_effect_gate_pending", command);
+	}
+	const configuredShell = core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "PowerShell", toolUseId: "configured-shell", toolInput: { command: "Get-ChildItem" } });
+	assert.equal(configuredShell.kind, "block");
+	assert.equal(configuredShell.code, "external_effect_gate_pending");
+	assert.equal(core.isShellTool({ toolName: "PowerShell" }, core.loadConfig(fx.cwd)), true);
+	assert.equal(core.isShellTool({ toolName: "Bash" }, { release: { shell_tools: [] } }), true);
+	assert.equal(core.isShellTool({ toolName: "shell_command" }, { release: { shell_tools: [] } }), true);
+});
+
+test("preservation blocks implementation until planning is sealed and closes stale planning windows", () => {
+	let fx = fixture();
+	let configPath = path.join(fx.cwd, ".agents", "context", "request-contract.json");
+	let config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+	config.preservation = { required: true, protect_test_contracts: true, protect_vendor_sources: true, allowed_adapter_digests: [fx.runnerAttestorDigest] };
+	fs.writeFileSync(configPath, JSON.stringify(config));
+	cp.execFileSync("git", ["add", ".agents/context/request-contract.json"], { cwd: fx.cwd });
+	pinLifecyclePreservationProbes(fx);
+	let unit = start(fx);
+	bind(fx, unit, lifecyclePreservationContract(fx, unit));
+	let mutation = core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Edit", toolUseId: "before-plan", toolInput: { file_path: "src/product.txt" } });
+	assert.equal(mutation.kind, "block");
+	assert.equal(mutation.code, "request_contract_planning_review_required");
+	for (let index = 0; index < 4; index++) ingestReview(fx, unit, cleanReview(fx, unit, `PLAN-${index + 1}`));
+	mutation = core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Edit", toolUseId: "after-plan", toolInput: { file_path: "src/product.txt" } });
+	assert.equal(mutation.kind, "allow");
+
+	fx = fixture();
+	configPath = path.join(fx.cwd, ".agents", "context", "request-contract.json");
+	config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+	config.preservation = { required: true, protect_test_contracts: true, protect_vendor_sources: true, allowed_adapter_digests: [fx.runnerAttestorDigest] };
+	fs.writeFileSync(configPath, JSON.stringify(config));
+	cp.execFileSync("git", ["add", ".agents/context/request-contract.json"], { cwd: fx.cwd });
+	pinLifecyclePreservationProbes(fx);
+	unit = start(fx);
+	bind(fx, unit, lifecyclePreservationContract(fx, unit));
+	fs.writeFileSync(path.join(fx.cwd, "src", "product.txt"), "unreviewed external drift\n");
+	assert.throws(() => core.issueReviewInvocation(unit, fx.cwd, "S1"), (error) => error.code === "review_planning_window_closed");
+});
+
+test("a declared preservation contract cannot shrink the fixed review roles through optional configuration", () => {
+	const fx = fixture();
+	pinLifecyclePreservationProbes(fx, { required: false, requiredRoles: ["general"] });
+	const unit = start(fx);
+	bind(fx, unit, lifecyclePreservationContract(fx, unit));
+	const issuedRoles = [];
+	for (let index = 0; index < 3; index++) {
+		const review = cleanReview(fx, unit, `OPTIONAL-PRESERVATION-${index + 1}`);
+		issuedRoles.push(review.role);
+		ingestReview(fx, unit, review);
+	}
+	assert.deepEqual(issuedRoles, ["source_fidelity", "baseline_preservation", "implementation_test"]);
+	const mutation = core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Edit", toolUseId: "optional-role-bypass", toolInput: { file_path: "src/product.txt" } });
+	assert.equal(mutation.kind, "block");
+	assert.equal(mutation.code, "request_contract_planning_review_required");
+});
+
+test("preservation lifecycle policy is equivalent across Claude Code and Codex", () => {
+	const outputs = [];
+	for (const client of ["claude", "codex"]) {
+		const fx = fixture();
+		pinLifecyclePreservationProbes(fx);
+		const sessionId = `PRESERVATION-${client.toUpperCase()}`;
+		const unit = start(fx, client, sessionId);
+		bind(fx, unit, lifecyclePreservationContract(fx, unit));
+		const output = nativePolicyOutput(runNativeAdapter(client, fx, nativeEnvelope(client, fx, "Stop", sessionId), "Stop"));
+		assert.equal(output.kind, "block");
+		assert(output.message.includes("review_required_slots_incomplete"), output.message);
+		outputs.push(core.canonicalParityProjection(output));
+	}
+	assert.equal(firstDifference(outputs[0], outputs[1]), null);
 });
 
 test("full persisted lifecycle is policy-equivalent across Claude Code and Codex", () => {

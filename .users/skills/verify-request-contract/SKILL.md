@@ -41,7 +41,7 @@ orchestrator는 시작 전에 RCI-001~RCI-011 파일과 인덱스의 ID·상태�
 node scripts/issue-review-receipt.cjs <review-id> "$(date -Iseconds)" <tool>:<model>=<log> ...
 ```
 
-리뷰어에게는 `node scripts/request-contract-review-scope.cjs` 결과를 프롬프트에 주고 전사의 `### Scope Digest` 절에 그대로 적게 한다. 리뷰 후 리뷰 대상 코드를 고치면 digest 가 움직여 receipt 가 무효가 된다 — review-pass 의 "이후 수정은 Clean 연속 기록을 리셋한다"가 기계적으로 강제된다.
+리뷰어에게는 `node scripts/request-contract-review-scope.cjs` 결과와 `--list`의 전체 경로를 프롬프트에 준다. 전사의 `### Scope Digest`에는 digest를, `### Files Read`에는 `--list` 경로와 모든 RCI 요구사항 경로를 축약 없이 하나씩 적게 한다. 누락 경로가 있으면 issuer가 receipt를 거부한다. issuer는 검토에 제공된 각 작업 트리 객체의 경로·유형·크기·SHA-256 목록도 receipt에 결박하며 심볼릭 링크는 링크 경로와 저장소 안 대상 바이트를 함께 해시하고 외부 대상은 거부한다. `Files Read`는 리뷰어의 열람 진술이며 실제 인지 과정을 기계적으로 증명하지는 않는다. opt-in 런타임에서는 이 진술에 서명할 수 있지만 일반 Git receipt는 작성자가 위조할 수 있다. 현재 작업 트리나 신규 출처 장부를 고치면 digest가 움직여 Clean 연속 기록이 리셋된다.
 
 3. Claude Code와 Codex의 생명주기 등록을 대조한다.
 
@@ -112,8 +112,8 @@ FAIL이면 실패한 불변식과 파일을 수정하고 1번부터 전부 다�
 | `.claude/hooks/test/run-request-contract-test.js` | 결정론 fault-injection |
 | `scripts/run-request-contract-tests.cjs` | broad suite와 메모리 격리 parity suite 순차 실행 |
 | `scripts/validate-request-contract-requirements.cjs` | RCI 요구사항·인덱스·실재 trace 검사 + 4단계 리뷰 증거를 receipt 에 결박 |
-| `scripts/request-contract-review-scope.cjs` | 리뷰 대상 파일 집합(git ls-files + RCI trace 선언 경로)과 `scope_digest` |
-| `scripts/request-contract-review-transcript.cjs` | 리뷰어 전사 파서 (발급기·검사기 공용). 절단·모순·프롬프트 템플릿 상속을 Clean 으로 읽지 않음 |
+| `scripts/request-contract-review-scope.cjs` | 현재 변경 전체(staged/unstaged/신규), 기능 경로, RCI trace, source ledger와 `scope_digest` |
+| `scripts/request-contract-review-transcript.cjs` | 리뷰어 전사 파서. 절단·모순·Files Read 열람 진술 누락·프롬프트 템플릿 상속을 Clean으로 읽지 않음. 열람 진술은 책임 있는 서명 주장이지 인지 과정의 기계적 증명은 아님 |
 | `scripts/issue-review-receipt.cjs` | 전사에서 receipt 발급. 아무것도 지어내지 않음 |
 | `.agents/requirements/reviews/` | receipt + 리뷰어 원문 전사(`logs/`). 커밋 대상 |
 | `.gitignore` | private runtime unit·bundle·claim·lock 커밋 방지 |

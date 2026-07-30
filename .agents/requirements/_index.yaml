@@ -1,16 +1,34 @@
 # Requirements Index — on-demand load only (NOT session-injected)
 # Read this file when entering Plan or Review phases
 version: 1
-updated: 2026-07-29
-total: 69
+updated: 2026-07-30
+total: 72
 
 # Status counts
 by_status:
   candidate: 0
-  active: 58
+  active: 61
   implemented: 0
   verified: 11
   withdrawn: 0
+
+# Immutable source ledger. The validator resolves requirement source references through
+# these records and verifies the tracked bytes before accepting provenance claims.
+source_ledger:
+  version: 1
+  records:
+    - { id: USR-008, path: ".agents/requirements/sources/USR-008-aipol-preservation-incident.json", sha256: "sha256:d787c9c238f3550e8a3ec7f1b6806f6fdd91958684e4a4a4c31aed3f4720e81d", source_kind: human, origin: native_user_message, locator: "conversation://private/aipol-preservation-incident" }
+  # These identifiers predate the immutable ledger. Their native messages were not found in
+  # local Claude/Codex session archives, so they must remain explicit gaps rather than being
+  # reconstructed from AI-authored requirement prose.
+  legacy_unresolved:
+    - { id: USR-001, introduced_in: "2570a1aa9d8089efd539c7f122701bdafd1145eb", reason: "native source record was not preserved" }
+    - { id: USR-002, introduced_in: "2570a1aa9d8089efd539c7f122701bdafd1145eb", reason: "native source record was not preserved" }
+    - { id: USR-003, introduced_in: "2570a1aa9d8089efd539c7f122701bdafd1145eb", reason: "native source record was not preserved" }
+    - { id: USR-004, introduced_in: "2570a1aa9d8089efd539c7f122701bdafd1145eb", reason: "native source record was not preserved" }
+    - { id: USR-005, introduced_in: "2570a1aa9d8089efd539c7f122701bdafd1145eb", reason: "native source record was not preserved" }
+    - { id: USR-006, introduced_in: "2570a1aa9d8089efd539c7f122701bdafd1145eb", reason: "native source record was not preserved" }
+    - { id: USR-007, introduced_in: "2570a1aa9d8089efd539c7f122701bdafd1145eb", reason: "native source record was not preserved" }
 
 # Per-product summary
 products:
@@ -32,10 +50,10 @@ products:
 
   - product: naia-adk-request-contract
     title: "Original Request Contract Integrity"
-    req_count: 11
-    priority_high: 11
+    req_count: 14
+    priority_high: 14
     priority_medium: 0
-    modules: [source-provenance, review, workspace-scope, traceability, completion, adapters, registration, privacy, compatibility, distribution, authority]
+    modules: [source-provenance, review, workspace-scope, traceability, completion, adapters, registration, privacy, compatibility, distribution, authority, preservation]
     requirements:
       - { id: RCI-001, title: "Source Provenance and Continuity", status: verified }
       - { id: RCI-002, title: "Complete Scope-History Review", status: verified }
@@ -48,6 +66,9 @@ products:
       - { id: RCI-009, title: "Backward-Compatible Defense in Depth", status: verified }
       - { id: RCI-010, title: "Project-Neutral Distribution", status: verified }
       - { id: RCI-011, title: "Deduplicated Scope Authority", status: verified }
+      - { id: RCI-012, title: "Product Surface Preservation Contract", status: active }
+      - { id: RCI-013, title: "Source Authority Hierarchy", status: active }
+      - { id: RCI-014, title: "Release-Bound Preservation Proof", status: active }
 
   - product: naia-os
     title: "Naia OS Desktop App"

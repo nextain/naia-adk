@@ -80,7 +80,38 @@ function scopeDigest(text) {
 	return match ? match[0] : null;
 }
 
+/** Exact repository-relative paths the reviewer states it opened. */
+function filesRead(text) {
+	const body = section(text, "Files Read");
+	if (body === null) return [];
+	const files = new Set();
+	for (const line of body.split(/\r?\n/)) {
+		if (!/^\s*[-*]\s+/.test(line)) continue;
+		const codePaths = [...line.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+		for (const candidate of codePaths) {
+			const normalized = candidate.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+			if (!normalized || normalized.includes(" through ") || normalized.includes("{") || normalized.includes("*")) continue;
+			if (/^(?:git |https?:|sha256:)/i.test(normalized)) continue;
+			files.add(normalized);
+		}
+	}
+	return [...files].sort();
+}
+
 /** Requirements the reviewer states it actually covered. Never assumed. */
+function balancedParenthetical(value) {
+	if (!value.startsWith("(") || !value.endsWith(")")) return false;
+	let depth = 0;
+	for (const character of value) {
+		if (character === "(") depth += 1;
+		else if (character === ")") {
+			depth -= 1;
+			if (depth < 0) return false;
+		}
+	}
+	return depth === 0;
+}
+
 function coverage(text) {
 	const body = section(text, "RCI Coverage");
 	if (body === null) return [];
@@ -96,8 +127,9 @@ function coverage(text) {
 		 * "COVERED: not really tested" would then read as coverage. "NOT COVERED",
 		 * "PARTIALLY COVERED", and "COVERED conditional on X" all fail to match.
 		 */
-		if (!/^\W*COVERED(?:\s*\.|\s*\([^)]*\)|\s*[\-—]\s+.+)?\s*$/i.test(claim)) continue;
-		const suffix = claim.replace(/^\W*COVERED/i, "");
+		if (!/^\W*COVERED\b/i.test(claim)) continue;
+		const suffix = claim.replace(/^\W*COVERED/i, "").trim();
+		if (suffix !== "" && suffix !== "." && !balancedParenthetical(suffix) && !/^[\-—]\s+.+$/s.test(suffix)) continue;
 		if (/\b(?:not|partial(?:ly)?|except|conditional|unverified|missing)\b/i.test(suffix)) continue;
 		covered.add(match[1]);
 	}
@@ -116,7 +148,7 @@ function stageResult(text, stage) {
 /** Everything a receipt may say about one reviewer, derived only from its bytes. */
 function readTranscript(raw) {
 	const text = plain(raw.toString("utf8"));
-	const result = { scope_digest: scopeDigest(text), covers: coverage(text), stages: {}, findings: {} };
+	const result = { scope_digest: scopeDigest(text), files_read: filesRead(text), covers: coverage(text), stages: {}, findings: {} };
 	for (const stage of stages) {
 		const { verdict, findings } = stageResult(text, stage);
 		result.stages[stage] = verdict;
@@ -138,6 +170,8 @@ function selfTest(report = (message) => process.stderr.write(`${message}\n`)) {
 	};
 
 	const clean = "### Development Findings\n\nNONE\n\n### Development Verdict\n\nCLEAN\n";
+	check("files read are exact paths", filesRead("### Files Read\n- `a.js`\n- `.agents/requirements/RCI-001-a.yaml`\n- `a.js`\n"), [".agents/requirements/RCI-001-a.yaml", "a.js"]);
+	check("missing Files Read is empty", filesRead(clean), []);
 	check("clean verdict", stageVerdict(clean, "development"), "clean");
 	check("clean findings", stageFindings(clean, "development"), 0);
 	check("clean result", stageResult(clean, "development"), { verdict: "clean", findings: 0 });
@@ -179,6 +213,8 @@ function selfTest(report = (message) => process.stderr.write(`${message}\n`)) {
 		"NONE",
 	].join("\n");
 	check("coverage counts only unqualified COVERED", coverage(coverageText), ["RCI-001", "RCI-004", "RCI-008", "RCI-010"]);
+	check("coverage accepts balanced nested evidence", coverage("### RCI Coverage\n- RCI-010: COVERED (read `path.resolve(__dirname, '..')`)\n"), ["RCI-010"]);
+	check("coverage still rejects a nested hedge", coverage("### RCI Coverage\n- RCI-010: COVERED (read `path.resolve()` except one branch)\n"), []);
 	check("coverage of an empty transcript", coverage("nothing here"), []);
 
 	const digestText = `### Scope Digest\n\nsha256:${"a".repeat(64)}\n\n### Planning Findings\nNONE\n`;
@@ -259,7 +295,7 @@ function selfTest(report = (message) => process.stderr.write(`${message}\n`)) {
 	return failures.length === 0;
 }
 
-module.exports = { stages, plain, section, scopeDigest, stageVerdict, stageFindings, coverage, stageResult, readTranscript, selfTest };
+module.exports = { stages, plain, section, scopeDigest, filesRead, stageVerdict, stageFindings, coverage, stageResult, readTranscript, selfTest };
 
 if (require.main === module) {
 	if (!selfTest()) process.exit(1);
