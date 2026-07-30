@@ -1,13 +1,13 @@
 # Requirements Index — on-demand load only (NOT session-injected)
 # Read this file when entering Plan or Review phases
 version: 1
-updated: 2026-07-30
-total: 72
+updated: 2026-07-31
+total: 78
 
 # Status counts
 by_status:
   candidate: 0
-  active: 61
+  active: 67
   implemented: 0
   verified: 11
   withdrawn: 0
@@ -32,6 +32,20 @@ source_ledger:
 
 # Per-product summary
 products:
+  - product: naia-adk-discord-sessions
+    title: "Observable Discord AI Sessions"
+    req_count: 6
+    priority_high: 6
+    priority_medium: 0
+    modules: [observability-ledger, health-projection, operator-interface, completion-evidence, privacy, recovery]
+    requirements:
+      - { id: DSO-001, title: "Durable Background Job Activity Ledger", status: active }
+      - { id: DSO-002, title: "Truthful Freshness and Activity Health", status: active }
+      - { id: DSO-003, title: "Operator Job Visibility", status: active }
+      - { id: DSO-004, title: "Evidence-Based Completion Assessment", status: active }
+      - { id: DSO-005, title: "Private and Authorized Observability Projections", status: active }
+      - { id: DSO-006, title: "ADK-Only Reboot Recovery and Backend Parity", status: active }
+
   - product: naia-benchmark-contract
     title: "Permanent Benchmark and Harness Recovery Contract"
     req_count: 8

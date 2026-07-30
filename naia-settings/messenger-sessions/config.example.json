@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "enabled": false,
+  "workspaceId": "replace-with-local-workspace-id",
+  "persona": {
+    "name": "Development assistant",
+    "instructions": "Help with the configured workspace role without expanding permissions."
+  },
+  "role": {
+    "name": "issue-support",
+    "allowedActions": ["read", "reply"],
+    "requiresApproval": ["write", "execute", "cancel", "retry"]
+  },
+  "backend": {
+    "selected": "codex",
+    "profiles": {
+      "codex": { "enabled": true },
+      "claude": { "enabled": true }
+    }
+  },
+  "discord": {
+    "credentialRef": "discord-bot-token",
+    "botUserId": "000000000000000000",
+    "operatorUserIds": ["000000000000000000"],
+    "bindings": [
+      {
+        "kind": "guild_channel",
+        "guildId": "000000000000000000",
+        "channelId": "000000000000000000",
+        "respondWhen": "mentioned",
+        "allowedUserIds": ["000000000000000000"],
+        "canStartConversation": false,
+        "operatorActions": false
+      },
+      {
+        "kind": "thread",
+        "guildId": "000000000000000000",
+        "channelId": "000000000000000000",
+        "threadId": "000000000000000000",
+        "respondWhen": "mentioned",
+        "allowedUserIds": ["000000000000000000"],
+        "canStartConversation": false,
+        "operatorActions": false
+      },
+      {
+        "kind": "dm",
+        "userId": "000000000000000000",
+        "respondWhen": "always",
+        "allowedUserIds": ["000000000000000000"],
+        "canStartConversation": false,
+        "operatorActions": false
+      }
+    ]
+  },
+  "runtime": {
+    "softSilenceSeconds": 120,
+    "heartbeatSeconds": 10,
+    "maxConcurrentJobs": 1
+  },
+  "observability": {
+    "discordStatusProjection": true
+  },
+  "service": {
+    "autoStart": true,
+    "startAt": "login"
+  },
+  "recovery": {
+    "autoRetry": true
+  }
+}

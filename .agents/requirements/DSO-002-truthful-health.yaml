@@ -1,0 +1,26 @@
+id: DSO-002
+title: "Truthful Freshness and Activity Health"
+title_ko: "신선도와 활동 상태의 정직한 판정"
+product: naia-adk-discord-sessions
+module: health-projection
+status: active
+source: human
+priority: high
+created: 2026-07-30
+updated: 2026-07-30
+issue_url: "https://github.com/nextain/naia-adk/issues/18"
+description: |
+  Service liveness, job lifecycle, observed activity, and result correctness are separate signals. Missing evidence must never be presented as healthy progress.
+acceptance_criteria:
+  - "Status cross-checks persisted heartbeat age and process liveness; a stale snapshot is never reported as running."
+  - "waiting_approval, retry_wait, progressing, running_no_detail, suspected_stalled, unresponsive, unknown, and not_applicable remain distinguishable."
+  - "Every activity-health value includes a reasonCode, observedAt, and evidence timestamp."
+  - "Unsupported backend detail is reported as unsupported rather than inferred."
+  - "A fake clock proves the 10-second heartbeat, 30-second stale threshold, 120-second default soft-silence threshold, clock rollback handling, and ownership-conflict precedence."
+trace:
+  code:
+    - { path: ".agents/skills/manage-discord-sessions/helper/projector.mjs", symbol: "projectServiceHealth/projectActivityHealth", coverage: full }
+  tests:
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-002 separates fresh progress, unsupported detail, waiting, stall, deadline, and stale service", coverage: full }
+  reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
+decisions: []
