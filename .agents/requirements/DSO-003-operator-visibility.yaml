@@ -1,0 +1,26 @@
+id: DSO-003
+title: "Operator Job Visibility"
+title_ko: "운영자의 작업 가시성"
+product: naia-adk-discord-sessions
+module: operator-interface
+status: active
+source: human
+priority: high
+created: 2026-07-30
+updated: 2026-07-30
+issue_url: "https://github.com/nextain/naia-adk/issues/18"
+description: |
+  Codex, Claude, and a human operator use the same deterministic skill-local interface to list, inspect, and watch jobs without naia-agent or naia-shell.
+acceptance_criteria:
+  - "The first slice exposes status, jobs, job <id>, and watch through one script; redacted logs remain disabled until a bounded encrypted artifact contract exists."
+  - "A fake job event appears in job detail and watch output within two seconds."
+  - "After reboot, the persisted timeline remains queryable before any AI backend is launched."
+trace:
+  code:
+    - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbol: "status/jobs/job/watch", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "skill-local entry point", coverage: partial }
+  tests:
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-003 CLI returns versioned job detail and watch events", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-003 status on a clean ADK is read-only and reports stopped", coverage: partial }
+  reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
+decisions: []

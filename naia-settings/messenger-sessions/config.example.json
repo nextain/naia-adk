@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "enabled": false,
+  "workspaceId": "replace-with-local-workspace-id",
+  "persona": {
+    "name": "Development assistant",
+    "instructions": "Help with the configured workspace role without expanding permissions."
+  },
+  "role": {
+    "name": "issue-support",
+    "allowedActions": ["read", "reply"],
+    "requiresApproval": ["write", "execute", "cancel", "retry"]
+  },
+  "backend": {
+    "selected": "codex",
+    "profiles": {
+      "codex": { "enabled": true },
+      "claude": { "enabled": true }
+    }
+  },
+  "discord": {
+    "credentialRef": "discord-bot-token",
+    "operatorUserIds": ["000000000000000000"],
+    "bindings": [
+      {
+        "kind": "guild_channel",
+        "guildId": "000000000000000000",
+        "channelId": "000000000000000000",
+        "respondWhen": "mentioned",
+        "allowedUserIds": ["000000000000000000"],
+        "canStartConversation": false
+      }
+    ]
+  },
+  "runtime": {
+    "idleRotationMinutes": 30,
+    "softSilenceSeconds": 120,
+    "heartbeatSeconds": 10,
+    "staleAfterSeconds": 30,
+    "maxConcurrentJobs": 1
+  },
+  "observability": {
+    "discordStatusProjection": false,
+    "jobThreads": false
+  }
+}

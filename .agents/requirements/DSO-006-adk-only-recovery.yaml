@@ -1,0 +1,27 @@
+id: DSO-006
+title: "ADK-Only Reboot Recovery and Backend Parity"
+title_ko: "ADK 단독 재부팅 복구와 백엔드 동등성"
+product: naia-adk-discord-sessions
+module: recovery
+status: active
+source: human
+priority: high
+created: 2026-07-30
+updated: 2026-07-30
+issue_url: "https://github.com/nextain/naia-adk/issues/18"
+description: |
+  The core service, settings, recovery state, and observability work from naia-adk alone. Codex and Claude are independent optional execution backends.
+acceptance_criteria:
+  - "All canonical configuration and recovery state live under naia-settings, except secret values held by an OS security facility and referenced by name."
+  - "The skill derives a canonical ADK root, creates config as mode 0600 and the session directory as mode 0700 at the documented workspace-relative paths, and rejects Agent/Shell core references."
+  - "Agent and Shell are absent from the core dependency graph."
+  - "Removing Codex leaves Claude visibility and recovery working; removing Claude leaves Codex visibility and recovery working."
+  - "delivery_unknown is visible after restart and is never automatically resent."
+  - "An actual reboot starts exactly one helper owner, resumes or explicitly reconnects Gateway, keeps the same jobId with a new attemptId and recovered event, and posts at most one recovery notice per boot generation."
+trace:
+  code:
+    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "ADK-root-local entry", coverage: partial }
+    - { path: "naia-settings/messenger-sessions/config.example.json", symbol: "workspace-local configuration example", coverage: partial }
+  tests: []
+  reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
+decisions: []
