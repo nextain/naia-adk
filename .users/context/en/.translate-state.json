@@ -43,7 +43,7 @@
       "attempts": [
         {
           "adapter": "claude:haiku",
-          "diagnostic": "Command '['claude.cmd', '--model', 'haiku', '-p', '--input-format', 'text', '--output-format', 'text', '--no-session-persistence', '--setting-sources', 'user', '--tools', '', '--disable-slash-commands']' timed out after 60 seconds",
+          "diagnostic": "Command '['claude', '--model', 'haiku', '-p', '--input-format', 'text', '--output-format', 'text', '--no-session-persistence', '--setting-sources', 'user', '--tools', '', '--disable-slash-commands']' timed out after 60 seconds",
           "status": "failed"
         },
         {
@@ -52,10 +52,10 @@
         }
       ],
       "backend": "cli:codex:gpt-5.6-luna",
-      "output_sha256": "b0e016709b18451b57fcfada1938d49a11b1c949a3c24161261aabf5eb246bd8",
+      "output_sha256": "0d4488d6297d4ee8c490bcc2460ec91b5b5cb14739e8edfcf2b40f73f3075b07",
       "source_path": ".users/context/development-model-routing.md",
-      "source_sha256": "5cb76b28aef02a1cc513e4d0532d12a430c0f8fa5ba96f220b8f8c92a7868b36",
-      "translated_at": "2026-07-29T18:28:45+00:00"
+      "source_sha256": "2dc3e0f023372dfa9caa3a063ea7cfc9ae71fc96a71f82653b4b61731dc4ee09",
+      "translated_at": "2026-07-30T02:35:34+00:00"
     },
     "harness": {
       "attempts": [
