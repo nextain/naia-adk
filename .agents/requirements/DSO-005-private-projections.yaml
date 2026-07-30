@@ -1,0 +1,30 @@
+id: DSO-005
+title: "Private and Authorized Observability Projections"
+title_ko: "비밀정보 제거와 권한별 상태 공개"
+product: naia-adk-discord-sessions
+module: privacy
+status: active
+source: human
+priority: high
+created: 2026-07-30
+updated: 2026-07-30
+issue_url: "https://github.com/nextain/naia-adk/issues/18"
+description: |
+  Local operator detail and Discord-visible status are separate allowlisted projections. Service credentials and arbitrary backend output never reach AI children or remote status messages.
+acceptance_criteria:
+  - "Fixture tokens, prompt secrets, service credential paths, raw commands, and full local paths appear zero times in status, JSON, Discord projection, and safe event output."
+  - "A Discord participant can inspect only that conversation; configured operators receive redacted cross-job metadata."
+  - "AI child processes receive an allowlisted environment that excludes Discord and service-only credentials."
+  - "Unknown event payload or metric keys, summaries above 512 characters, and more than one output-activity event per attempt per second are rejected or coalesced before persistence."
+  - "Typed event payloads are at most 2 KiB, event fields use documented closed enums, identifiers use the documented 64-character grammar plus secret-pattern rejection, and metrics are closed to the documented non-negative scalar keys."
+trace:
+  code:
+    - { path: ".agents/skills/manage-discord-sessions/helper/sanitize.mjs", symbol: "buildSafeEventSummary/validateSafeMetrics/sanitizeFinalResponse", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "prepareChildEnvironment", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-scope.mjs", symbol: "authorizeDiscordMessage", coverage: full }
+  tests:
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-005 rejects unsafe event shapes and coalesces high-rate activity", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "DSO-005 isolated child environment tests", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-001/DSG-003/DSG-009/DSG-012 authorization and privacy", coverage: full }
+  reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md", ".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], integration: null }
+decisions: []
