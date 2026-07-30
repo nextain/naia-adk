@@ -2,8 +2,8 @@
 /**
  * Git Push Guard — PreToolUse on Bash — Claude adapter.
  * Envelope: ./_claude-bash-guard.js. Policy: shared tool-agnostic
- * .agents/hooks/policies/bash.js → gitPush (MARKER_PATH is cwd-relative,
- * move-safe). Behavior byte-identical (G-OC01 part2, pure refactor).
+ * .agents/hooks/policies/bash.js → gitPush (stateless routine non-force,
+ * non-deleting push allowance with force and remote-ref-delete blocking).
  */
 const path = require("path");
 let H, P;

@@ -15,7 +15,8 @@
  *   - monotonic probe: only a STRICT increase counts as progress; a decrease
  *     (non-monotonic / probe insanity) does NOT reset the stall clock.
  *   - degraded (no cgroup/systemd): UNSUPERVISED-DEGRADED + shorter forced wall
- *     unless user-approved (status display alone can't catch sincere drift).
+ *     unless explicitly accepted by the operator (an execution-safety opt-in,
+ *     not a conversational or per-turn approval gate).
  *
  * Threat model (plan §0): sincere drift (a build/migration that silently hangs
  * forever because the agent thinks "it's still going"). NOT probe forgery.
@@ -108,11 +109,11 @@ function evaluateSupervisor(state) {
 		return { status: STATUS.FAIL, action: "kill", reason: `probe-type 미허용(free-form 금지): ${c.probeType}` };
 	}
 
-	// degraded (no scope): shorter forced wall unless user-approved.
+	// degraded (no scope): shorter forced wall unless execution-safety opt-in is set.
 	if (c.degraded && !c.approvedDegraded) {
 		const dwall = c.degradedMaxWallMs != null ? c.degradedMaxWallMs : Math.min(c.maxWallMs, 10 * FIVE_MIN_MS);
 		if (elapsed >= dwall) {
-			return { status: STATUS.DEGRADED, action: "kill", reason: `degraded 강제 wall 초과(${dwall}ms) — 사용자 미승인` };
+			return { status: STATUS.DEGRADED, action: "kill", reason: `degraded 강제 wall 초과(${dwall}ms) — 감시 확장 opt-in 미설정` };
 		}
 		// still report DEGRADED so the LLM can't treat it as fully supervised.
 		return { status: STATUS.DEGRADED, action: "none", reason: "cgroup/systemd 미사용 — degraded 감시(짧은 wall)" };

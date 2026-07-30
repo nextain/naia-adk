@@ -123,6 +123,44 @@ skills/business/press-release/_review_plan.md
 # 내부 세션 아티팩트(개인경로·내부URL·키 흔적) + 제3자 PII 비추적(OSS readiness 게이트)
 .agents/progress/
 .agents/reviews/
+
+# Local handoff/handover artifacts — session/PC transfer notes are never source.
+# Only basenames that START with handoff/handover are global. Topic-prefixed
+# local notes belong under already-ignored .agents/work|progress|reviews or dirs below.
+**/.handoff/
+**/.handover/
+**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*.[Mm][Dd]
+**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*.[Tt][Xx][Tt]
+**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*.[Jj][Ss][Oo][Nn]
+**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*.[Yy][Aa][Mm][Ll]
+**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*.[Yy][Mm][Ll]
+**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*.[Mm][Dd]
+**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*.[Tt][Xx][Tt]
+**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*.[Jj][Ss][Oo][Nn]
+**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*.[Yy][Aa][Mm][Ll]
+**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*.[Yy][Mm][Ll]
+# Formal handoff/handover guides and contracts are durable project knowledge.
+# Re-include them only in official documentation/decision directories.
+!docs/**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*[Gg][Uu][Ii][Dd][Ee]*.*
+!docs/**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*[Cc][Oo][Nn][Tt][Rr][Aa][Cc][Tt]*.*
+!docs/**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*[Gg][Uu][Ii][Dd][Ee]*.*
+!docs/**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*[Cc][Oo][Nn][Tt][Rr][Aa][Cc][Tt]*.*
+!spec/**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*[Gg][Uu][Ii][Dd][Ee]*.*
+!spec/**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*[Cc][Oo][Nn][Tt][Rr][Aa][Cc][Tt]*.*
+!spec/**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*[Gg][Uu][Ii][Dd][Ee]*.*
+!spec/**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*[Cc][Oo][Nn][Tt][Rr][Aa][Cc][Tt]*.*
+!design/**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*[Gg][Uu][Ii][Dd][Ee]*.*
+!design/**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*[Cc][Oo][Nn][Tt][Rr][Aa][Cc][Tt]*.*
+!design/**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*[Gg][Uu][Ii][Dd][Ee]*.*
+!design/**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*[Cc][Oo][Nn][Tt][Rr][Aa][Cc][Tt]*.*
+!.agents/context/**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*[Gg][Uu][Ii][Dd][Ee]*.*
+!.agents/context/**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*[Cc][Oo][Nn][Tt][Rr][Aa][Cc][Tt]*.*
+!.agents/context/**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*[Gg][Uu][Ii][Dd][Ee]*.*
+!.agents/context/**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*[Cc][Oo][Nn][Tt][Rr][Aa][Cc][Tt]*.*
+!.agents/decisions/**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*[Gg][Uu][Ii][Dd][Ee]*.*
+!.agents/decisions/**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*[Cc][Oo][Nn][Tt][Rr][Aa][Cc][Tt]*.*
+!.agents/decisions/**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*[Gg][Uu][Ii][Dd][Ee]*.*
+!.agents/decisions/**/[Hh][Aa][Nn][Dd][Oo][Vv][Ee][Rr]*[Cc][Oo][Nn][Tt][Rr][Aa][Cc][Tt]*.*
 skills/business/press-release/contacts.json
 skills/business/press-release/results.json
 

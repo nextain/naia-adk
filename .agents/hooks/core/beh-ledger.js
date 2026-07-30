@@ -226,7 +226,7 @@ function deriveProgressMarks(ledger, items) {
  *       autonomous?:bool,           // true = no user-directed task bound
  *       termination_requested?:bool,// agent wants to stop / Stop event fired
  *       phase_usage: {<phase>:{turns,firstTs,lastTs}},  // cumulative
- *       phase_ceiling_extended: {<phase>:bool},         // user re-approval
+ *       phase_ceiling_extended: {<phase>:bool},         // bounded-scope internal recheck completed
  *       scope_items: [ {
  *          id, phase, state, deps:[id], disposition?,
  *          started_turn?, started_ts?,    // when it entered RUNNING
@@ -350,7 +350,9 @@ function evaluateDrift(state) {
 				invariant: INVARIANTS.PHASE_CEILING,
 				message:
 					`[BEH] 페이즈 "${phase}" 누적 체류 한도 도달(turns=${usage.turns}). ` +
-					`다음 페이즈로 전이하거나, 정당한 대규모 작업이면 사용자 재승인으로 연장하세요 ` +
+					`현재 목표·scope_items·예외 경계가 그대로인지 내부 재검하세요. 동일한 bounded scope이면 ` +
+					`phase_ceiling_extended.${phase}=true를 기록하고 재승인 없이 계속하며, 실제 scope expansion이나 ` +
+					`비가역·외부영향 예외가 발견된 경우에만 사용자에게 물으세요 ` +
 					`(자동 reset 없음; 누적 유지 — plan §3.1).`,
 			});
 		}

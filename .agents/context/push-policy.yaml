@@ -2,12 +2,14 @@ _copyright: "Copyright 2026 Nextain Inc. All rights reserved."
 
 # Push Policy — research / development / service 분리 표준
 # 사용자 directive 2026-05-29: research/development 단계는 push marker 불필요.
-# service 단계 (prod 배포 영향) 만 strict marker 게이트.
+# source push and production deployment are separate actions.
 
 policy:
   principle: |
-    push marker 게이트는 service 단계 (운영 배포 / prod 사용자 영향) 에만 적용.
-    research / development 단계는 marker 불필요 — 자유롭게 push 가능.
+    Normal non-force, non-deleting git push is a routine repository step after the authorized checks
+    and does not require a marker or repeated approval in research, development, or service repositories.
+    A source push is not itself a production deployment. Force push and actual production-impacting
+    deployment and remote branch/tag deletion remain explicit-approval exceptions.
 
   why: |
     1. 연구개발 작업의 push 빈도 높음. strict marker 가 작업 흐름 끊음.
@@ -45,16 +47,16 @@ three_tier_classification:
       - "naia-os (desktop / kiosk 배포)"
       - "naia-model-infra (RunPod / 가동 backend)"
       - "naia-agent (gateway 배포)"
-    push_policy: strict marker
+    push_policy: non-force non-deleting push autonomous; remote-ref deletion and production deploy strict approval
     detail: |
       - 사용자 prompt sentinel (`마커발급 <uses> <duration> [reason]`)
       - cf [[project_marker_issue_sentinel_hook]]
 
 gates:
   decision_test: |
-    "이 push 가 prod 사용자에게 직접 영향을 주는가?"
-    - YES → service → strict marker
-    - NO  → research / development → 자율 (marker 불요)
+    "Is this a normal non-force source push, or an actual production-impacting action?"
+    - non-force non-deleting source push → autonomous after required verification
+    - remote branch/tag deletion, force push, or production-impacting action → explicit approval
 
   edge_cases:
     deploy_script_in_research_repo: |
@@ -64,51 +66,25 @@ gates:
       운영 config (port, credential) 변경은 service.
       research config (학습 hyperparam 등) 은 development.
 
-implementation_paths:
-  current_state: |
-    현재 marker hook 은 모든 repo 에 일률 적용. 정책 분리 미구현.
-  paths:
-    - id: A
-      name: per-repo no-harness file
-      action: |
-        각 research / development repo 의 `.claude/no-harness` 파일 생성.
-        cwd 에 no-harness 있으면 hook 비활성.
-      pros: 단순, 즉시 가능
-      cons: 명시적 정책 표현 부족 (파일 하나만)
-    - id: B
-      name: settings.json git push permission
-      action: |
-        global / per-cwd 설정. settings.json 의 hook 비활성.
-      pros: global 적용
-      cons: granular 제어 어려움
-    - id: C
-      name: marker-issue-from-prompt.js cwd 별 정책
-      action: |
-        hook 자체 patch. cwd 가 research/development/service 어느 카테고리인지
-        판단 (예: 본 push-policy.yaml 의 examples 매칭) → marker 적용 여부 결정.
-      pros: 가장 정확, ADK 표준
-      cons: 작업 큼 (별 cycle)
-  recommended: A (즉시) + C (ADK 표준, 별 cycle)
+active_implementation:
+  state: |
+    The shared git-push guard allows non-force non-deleting push and blocks remote-ref deletion and
+    force variants. Production deploy guards remain separate and fail closed without approval evidence.
+  deprecated_bypasses: |
+    Per-repo no-harness files, ad-hoc approval marker creation, and settings-based guard removal are
+    historical proposals and MUST NOT be recommended or used. The active shared policy is the only path.
 
 ai_classifier_note: |
-  AI 가 자율적으로 no-harness 파일 생성 / marker 직접 작성 등 = classifier 가
-  "Auto-Mode Bypass" 로 차단. 정상 동작. 정책 변경 = 사용자 직접 결정.
-
-  → AI 는 push 게이트 만나면:
-  1. 본 push-policy 분류에 따라 service 여부 판단
-  2. service 면 사용자 marker 요청
-  3. research / development 면 사용자에게 path A/B/C 안내
-  4. 작업 자체는 자율 가능 부분 진행
+  Do not fabricate marker files or bypass a production deployment guard. Routine non-force source
+  push needs no marker. Remote-ref deletion, force push, and production-impacting actions require exact approval.
 
 cross_references:
   related_memories:
     - "feedback_push_marker_only_for_service (사용자 directive SoT)"
-    - "project_marker_issue_sentinel_hook (현재 marker hook 동작)"
-  related_files:
-    - ".claude/hooks/marker-issue-from-prompt.js (root)"
-    - ".claude/no-harness (root 비활성 표시)"
 
 revision_history:
+  - date: "2026-07-30"
+    note: "Separated routine non-force non-deleting source push from remote-ref deletion, force push, and production deployment; removed recurring marker approval for normal pushes."
   - date: "2026-05-29"
     note: |
       사용자 directive (Phase 3 cycle 1 push 게이트 작업 중) 로 정책 분리 표준 신규 작성.
