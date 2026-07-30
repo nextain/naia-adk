@@ -232,7 +232,7 @@ function main() {
       "해제 방법 (하나):\n" +
       `  1) 바인딩: .agents/progress/ 아래 progress 파일에 "session_id": "${sessionId}" 를 기록\n` +
       "     (.json 의 top-level 필드 또는 .md 의 frontmatter). 그 즉시 bound → 작업 허용.\n" +
-      "  2) IDD 외 자유작업: env CLAUDE_HARNESS=off  또는  touch .claude/no-harness\n" +
+      "  2) IDD 외 자유작업: env CODEX_HARNESS=off  또는  touch .codex/no-harness\n" +
       "\nprogress 파일 쓰기 자체는 허용되어 있으니 먼저 계약을 박으세요.",
   );
 }
