@@ -22,6 +22,9 @@ trace:
   code:
     - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "ADK-root-local entry", coverage: partial }
     - { path: "naia-settings/messenger-sessions/config.example.json", symbol: "workspace-local configuration example", coverage: partial }
-  tests: []
-  reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
+    - { path: ".agents/skills/manage-discord-sessions/helper/adapters.mjs", symbol: "getBackendAdapter/inspectBackendLine", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "runBackendAttempt", coverage: partial }
+  tests:
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "Codex/Claude independent execution and timeout tests", coverage: partial }
+  reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md", ".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], integration: null }
 decisions: []

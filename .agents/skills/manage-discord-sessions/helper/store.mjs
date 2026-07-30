@@ -28,6 +28,7 @@ const EVENT_INPUT_KEYS = new Set([
 
 const EVENT_SOURCES = new Map([
 	["job_accepted", new Set(["gateway"])],
+	["attempt_reserved", new Set(["helper"])],
 	["attempt_started", new Set(["helper"])],
 	["backend_ready", new Set(["codex", "claude", "fake_backend"])],
 	["phase_changed", new Set(["codex", "claude", "fake_backend"])],
@@ -38,6 +39,7 @@ const EVENT_SOURCES = new Map([
 	["checkpoint_saved", new Set(["helper", "codex", "claude", "fake_backend"])],
 	["verification_recorded", new Set(["host_verifier", "backend_claim", "human_review"])],
 	["attempt_exited", new Set(["helper"])],
+	["attempt_succeeded", new Set(["helper"])],
 	["retry_scheduled", new Set(["helper", "recovery"])],
 	["delivery_started", new Set(["helper"])],
 	["delivery_confirmed", new Set(["helper", "recovery"])],
@@ -107,6 +109,8 @@ function preparePrivateDatabasePath(databasePath) {
 
 function transitionFor(kind, current) {
 	switch (kind) {
+		case "attempt_reserved":
+			return current;
 		case "attempt_started":
 		case "backend_ready":
 		case "phase_changed":
@@ -118,6 +122,8 @@ function transitionFor(kind, current) {
 			return "running";
 		case "verification_recorded":
 			return current;
+		case "attempt_succeeded":
+			return "result_ready";
 		case "approval_required":
 			return "waiting_approval";
 		case "retry_scheduled":
@@ -361,7 +367,27 @@ export class SessionStore {
 		}
 	}
 
-	startAttempt(jobId, { attemptId = randomUUID(), now = new Date().toISOString(), childPid = process.pid } = {}) {
+	reserveAttempt(jobId, { attemptId = randomUUID(), now = new Date().toISOString(), backendId = null, replaceCurrent = false } = {}) {
+		safeIdentifier(attemptId, "attemptId");
+		canonicalTimestamp(now, "attempt reservation time");
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const job = this.db.prepare("SELECT backend_id, attempt_id, child_alive FROM jobs WHERE job_id = ?").get(jobId);
+			if (!job) throw new Error(`unknown job: ${jobId}`);
+			if (backendId !== null && backendId !== job.backend_id) throw new Error(`job backend mismatch: expected ${job.backend_id}`);
+			if ((job.attempt_id || job.child_alive) && !replaceCurrent) throw new Error("job already has an active attempt or reservation");
+			if (replaceCurrent) this.db.prepare("UPDATE jobs SET child_alive = 0, child_pid = NULL, child_boot_id = NULL, child_start_identity = NULL WHERE job_id = ?").run(jobId);
+			this.#appendEvent({ jobId, attemptId, dedupeKey: `attempt_reserved:${attemptId}`, kind: "attempt_reserved", occurredAt: now, source: "helper", safeSummary: buildSafeEventSummary("attempt_reserved", { backend: job.backend_id }) });
+			this.db.exec("COMMIT");
+			this.#hardenSidecars();
+			return attemptId;
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+	attachAttempt(jobId, { attemptId, now = new Date().toISOString(), childPid = process.pid, backendId = null } = {}) {
 		const childBootId = this.readBootId();
 		const childStartIdentity = this.readProcessStartIdentity(childPid);
 		safeIdentifier(attemptId, "attemptId");
@@ -369,11 +395,27 @@ export class SessionStore {
 		if (!Number.isSafeInteger(childPid) || childPid <= 0) throw new Error("childPid must be a positive safe integer");
 		if (childBootId !== null) safeIdentifier(childBootId, "childBootId");
 		if (childStartIdentity !== null) safeIdentifier(childStartIdentity, "childStartIdentity");
-		const job = this.db.prepare("SELECT backend_id FROM jobs WHERE job_id = ?").get(jobId);
-		if (!job) throw new Error(`unknown job: ${jobId}`);
-		this.recordEvent({ jobId, attemptId, dedupeKey: `attempt_started:${attemptId}`, kind: "attempt_started", occurredAt: now, source: "helper", safePayload: { backend: job.backend_id } });
-		this.db.prepare("UPDATE jobs SET child_pid = ?, child_boot_id = ?, child_start_identity = ? WHERE job_id = ?").run(childPid, childBootId, childStartIdentity, jobId);
-		return attemptId;
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const job = this.db.prepare("SELECT backend_id, attempt_id, child_alive FROM jobs WHERE job_id = ?").get(jobId);
+			if (!job) throw new Error(`unknown job: ${jobId}`);
+			if (backendId !== null && backendId !== job.backend_id) throw new Error(`job backend mismatch: expected ${job.backend_id}`);
+			if (job.attempt_id !== attemptId) throw new Error("attempt reservation ownership mismatch");
+			if (job.child_alive) throw new Error("job already has an active attempt");
+			this.#appendEvent({ jobId, attemptId, dedupeKey: `attempt_started:${attemptId}`, kind: "attempt_started", occurredAt: now, source: "helper", safeSummary: buildSafeEventSummary("attempt_started", { backend: job.backend_id }) });
+			this.db.prepare("UPDATE jobs SET child_pid = ?, child_boot_id = ?, child_start_identity = ? WHERE job_id = ?").run(childPid, childBootId, childStartIdentity, jobId);
+			this.db.exec("COMMIT");
+			this.#hardenSidecars();
+			return attemptId;
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+	startAttempt(jobId, { attemptId = randomUUID(), now = new Date().toISOString(), childPid = process.pid, backendId = null, replaceCurrent = false } = {}) {
+		this.reserveAttempt(jobId, { attemptId, now, backendId, replaceCurrent });
+		return this.attachAttempt(jobId, { attemptId, now, childPid, backendId });
 	}
 
 	recordEvent(input) {
@@ -430,7 +472,7 @@ export class SessionStore {
 			}
 			return this.#mapEvent(duplicate);
 		}
-		if (attemptId && kind !== "attempt_started" && job.attempt_id && attemptId !== job.attempt_id) throw new Error(`stale attempt event rejected: ${attemptId}`);
+		if (attemptId && !new Set(["attempt_reserved", "attempt_started"]).has(kind) && job.attempt_id && attemptId !== job.attempt_id) throw new Error(`stale attempt event rejected: ${attemptId}`);
 		if (!new Set(["metadata_only", "local_safe"]).has(redactionLevel)) throw new Error(`unsupported redaction level: ${redactionLevel}`);
 		if (!new Set(["gateway", "helper", "codex", "claude", "fake_backend", "host_verifier", "backend_claim", "human_review", "recovery"]).has(source)) {
 			throw new Error(`unsupported event source: ${source}`);

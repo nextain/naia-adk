@@ -20,7 +20,9 @@ acceptance_criteria:
 trace:
   code:
     - { path: ".agents/skills/manage-discord-sessions/helper/sanitize.mjs", symbol: "buildSafeEventSummary/validateSafeMetrics", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "prepareChildEnvironment", coverage: partial }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-005 rejects unsafe event shapes and coalesces high-rate activity", coverage: partial }
-  reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "DSO-005 creates a private minimal child environment and copies only provider auth", coverage: partial }
+  reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md", ".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], integration: null }
 decisions: []

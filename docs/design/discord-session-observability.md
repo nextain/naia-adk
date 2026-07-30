@@ -55,9 +55,10 @@ The Gateway accepts an event only after its durable transaction commits. Backend
 | From | Allowed next states |
 |---|---|
 | `queued` | `running`, `cancelled`, `failed`, `recovery_review` |
-| `running` | `waiting_approval`, `retry_wait`, `delivering`, `failed`, `cancelled`, `recovery_review` |
+| `running` | `waiting_approval`, `retry_wait`, `result_ready`, `delivering`, `failed`, `cancelled`, `recovery_review` |
 | `waiting_approval` | `running`, `cancelled`, `failed`, `recovery_review` |
 | `retry_wait` | `queued`, `running`, `cancelled`, `failed`, `recovery_review` |
+| `result_ready` | `delivering`, `cancelled`, `failed`, `recovery_review` |
 | `delivering` | `completed`, `retry_wait`, `recovery_review`, `failed` |
 | `recovery_review` | `queued`, `completed`, `failed`, `cancelled` after an explicit operator or read-only reconciliation decision |
 | terminal states | no further transition; retry creates a new job linked to the terminal predecessor |
@@ -92,10 +93,10 @@ source, safeSummary, metrics, redactionLevel
 Initial event kinds:
 
 ```text
-job_accepted, attempt_started, backend_ready,
+job_accepted, attempt_reserved, attempt_started, backend_ready,
 phase_changed, output_activity, tool_started, tool_finished,
 approval_required, checkpoint_saved, verification_recorded,
-attempt_exited, retry_scheduled, delivery_started,
+attempt_exited, attempt_succeeded, retry_scheduled, delivery_started,
 delivery_confirmed, delivery_unknown, recovered,
 cancel_requested, cancelled, completed, failed
 ```
@@ -109,6 +110,7 @@ Closed payload contract:
 | Event kind | Producer | Allowed source fields |
 |---|---|
 | `job_accepted` | core | `jobType`: `conversation`, `issue_work`, `review`, `maintenance`, or `unknown` |
+| `attempt_reserved` | core | `backend`: `codex`, `claude`, or `fake`; atomically binds the job before a process is spawned |
 | `attempt_started` | core | `backend`: `codex`, `claude`, or `fake` |
 | `backend_ready` | adapter | `backend`: `codex`, `claude`, or `fake` |
 | `phase_changed` | adapter | `phase`: `setup`, `planning`, `reading`, `editing`, `testing`, `reviewing`, `delivering`, or `recovering` |
@@ -118,7 +120,8 @@ Closed payload contract:
 | `approval_required` | adapter | `approvalType`: `read`, `write`, `execute`, `cancel`, or `retry` |
 | `checkpoint_saved` | adapter or core | `checkpointType`: `job_state` |
 | `verification_recorded` | core verifier | `checkId`: safe identifier |
-| `attempt_exited` | core process observer | either `{ terminationKind: exited, exitCode }` or `{ terminationKind: signaled, signal }`; signal is `SIGTERM`, `SIGKILL`, `SIGINT`, or `SIGHUP` |
+| `attempt_exited` | core process observer | either `{ terminationKind: exited, exitCode }` or `{ terminationKind: signaled, signal }`; signal is a platform-reported Node.js OS signal name |
+| `attempt_succeeded` | core | empty payload; structured provider success plus exit code 0 was observed, and the result is ready for delivery |
 | `retry_scheduled` | core | non-negative integer `delayMs` |
 | `delivery_started` | core | empty payload |
 | `delivery_confirmed` | core | empty payload |
@@ -222,7 +225,7 @@ Assessment values are `unverified`, `partial`, `failed`, and `verified`. No requ
 - Safe summaries are event-kind-specific allowlisted data, not arbitrary output with best-effort regex masking. Unknown payload and metric keys are rejected.
 - Job metadata is also closed: backend is `codex`, `claude`, or `fake`; revision and IDs use the safe-identifier contract; capabilities are booleans limited to `structuredProgress`, `textActivity`, `cancellation`, and `checkpointResume`.
 - Local operator and Discord projections are separate functions and authorization paths.
-- AI children receive only `PATH`, locale/terminal values, the validated workspace path, and adapter-declared provider variables. `HOME` points to a new mode-`0700` child directory, never the user's actual home. An adapter may expose only its minimum authentication files there through a read-only copy or bind; if a client cannot authenticate under that restriction, the backend is `not_ready`. Discord credentials, `CREDENTIALS_DIRECTORY`, systemd credential paths, and service-only file descriptors are removed.
+- AI children receive only `PATH`, locale/terminal values, isolated XDG/TMP paths, the validated workspace path, and the one adapter-declared provider credential when needed. `HOME` points to a new mode-`0700` attempt directory under the user runtime directory, never the user's actual home or `naia-settings`. The source and destination authentication files are owner-only real files; the destination is created with no-follow/exclusive semantics and removed when the attempt ends. If a client cannot authenticate under that restriction, the backend is `not_ready`. Discord credentials, `CREDENTIALS_DIRECTORY`, systemd credential paths, and service-only file descriptors are removed.
 - Unauthorized messages retain only deduplication metadata and rejection reason.
 - State directories are `0700`; the database, WAL, and shared-memory sidecars are `0600`; symbolic-link and owner checks precede writes. SQLite opens under a restrictive creation mask and sidecar permissions are rechecked after transactions.
 - `safeSummary` is 512 characters; an encoded typed payload is at most 2 KiB; metrics use the closed list above; `output_activity` is coalesced to one safe event per UTC second bucket per attempt. Oversized or unknown input is rejected before SQLite. Retention and encrypted raw artifacts must be fixed before Slice 2 stores resumable message payloads.
@@ -250,6 +253,8 @@ Verification: deterministic Node tests for fresh/stale service, lifecycle/health
 ### Slice 2 — backend adapters
 
 Codex, Claude, and fake adapters map capabilities and process outcomes into the same event contract. Child environment isolation is tested.
+
+The supported floor is Codex CLI `0.146.0` and Claude Code `2.1.220`; an older or unparseable version is `not_ready`. Codex runs with `--ephemeral`; Claude runs with `--no-session-persistence`. Slice 2 raw retention is `none`: prompt and raw stdout/stderr/tool payloads are neither stored nor encrypted. Reboot recovery therefore keeps the durable `jobId` but starts a new `attemptId` or requires manual review; it does not silently resume a provider-native transcript. A structured provider success marker plus process exit 0 produces `attempt_succeeded` and lifecycle `result_ready`. Only the Gateway may then record real delivery events; the runner never fabricates `delivery_confirmed`.
 
 Verification: each real adapter contract, each-backend-removal test, cancellation/timeout/process-kill matrix.
 

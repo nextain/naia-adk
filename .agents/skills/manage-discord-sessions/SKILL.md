@@ -9,14 +9,16 @@ Use this skill as the shared Codex and Claude operator surface. Do not create a 
 
 ## Current implementation status
 
-The first implementation slice provides the local observability core:
+The first two implementation slices provide the local observability core and backend execution contract:
 
 - append-only SQLite job and safe-event history;
 - service freshness and job activity-health projection;
 - predeclared completion checks and trusted evidence;
 - `status`, `jobs`, `job`, and `watch` commands.
+- independent Codex `exec --json` and Claude `-p --output-format stream-json` adapters;
+- isolated per-attempt child homes, minimum authentication copies, safe event normalization, timeout, cancellation, and signal-aware exit handling.
 
-Discord Gateway, real Codex/Claude adapters, systemd installation, reboot execution, remote Discord projections, and legacy-poller migration remain later issue #18 slices. Never report those later slices as available merely because their contract is documented.
+Discord Gateway, systemd installation, reboot execution, remote Discord projections, and legacy-poller migration remain later issue #18 slices. The backend runner is currently an internal module for the upcoming Gateway; do not claim that Discord can launch it yet.
 
 ## Natural-language operations
 

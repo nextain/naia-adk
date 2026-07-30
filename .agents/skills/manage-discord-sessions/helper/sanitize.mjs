@@ -1,4 +1,5 @@
 import { MAX_SAFE_SUMMARY_LENGTH, SAFE_METRIC_KEYS } from "./constants.mjs";
+import { constants as osConstants } from "node:os";
 
 const SECRET_PATTERNS = [
 	/\b(?:sk|sk-or-v1|xox[baprs])-[-A-Za-z0-9_]{8,}\b/gi,
@@ -62,7 +63,7 @@ const ENUMS = {
 	recoveryAction: new Set(["resume", "safe_retry", "manual_review"]),
 	reasonCode: new Set(["timeout", "process_exit", "authorization", "delivery_unknown", "internal_error"]),
 	terminationKind: new Set(["exited", "signaled"]),
-	signal: new Set(["SIGTERM", "SIGKILL", "SIGINT", "SIGHUP"]),
+	signal: new Set(Object.keys(osConstants.signals ?? {})),
 };
 
 function enumValue(value, label) {
@@ -77,6 +78,7 @@ function count(value, label) {
 
 const PAYLOAD_BUILDERS = {
 	job_accepted: (payload) => `Accepted job: ${enumValue(payload.jobType, "jobType")}`,
+	attempt_reserved: (payload) => `Backend attempt reserved: ${enumValue(payload.backend, "backend")}`,
 	attempt_started: (payload) => `Backend attempt started: ${enumValue(payload.backend, "backend")}`,
 	backend_ready: (payload) => `Backend ready: ${enumValue(payload.backend, "backend")}`,
 	phase_changed: (payload) => `Phase changed: ${enumValue(payload.phase, "phase")}`,
@@ -95,6 +97,7 @@ const PAYLOAD_BUILDERS = {
 		if (payload.exitCode !== undefined) throw new Error("signaled termination cannot carry exitCode");
 		return `Backend attempt signaled: ${enumValue(payload.signal, "signal")}`;
 	},
+	attempt_succeeded: () => "Backend result ready for delivery",
 	retry_scheduled: (payload) => `Retry scheduled: ${count(payload.delayMs, "delayMs")} ms`,
 	delivery_started: () => "Delivery started",
 	delivery_confirmed: () => "Delivery confirmed",
@@ -108,6 +111,7 @@ const PAYLOAD_BUILDERS = {
 
 const PAYLOAD_KEYS = new Map([
 	["job_accepted", new Set(["jobType"])],
+	["attempt_reserved", new Set(["backend"])],
 	["attempt_started", new Set(["backend"])],
 	["backend_ready", new Set(["backend"])],
 	["phase_changed", new Set(["phase"])],
@@ -118,6 +122,7 @@ const PAYLOAD_KEYS = new Map([
 	["checkpoint_saved", new Set(["checkpointType"])],
 	["verification_recorded", new Set(["checkId"])],
 	["attempt_exited", new Set(["terminationKind", "exitCode", "signal"])],
+	["attempt_succeeded", new Set()],
 	["retry_scheduled", new Set(["delayMs"])],
 	["delivery_started", new Set()],
 	["delivery_confirmed", new Set()],
