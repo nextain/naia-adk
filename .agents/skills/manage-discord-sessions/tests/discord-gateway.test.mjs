@@ -209,8 +209,10 @@ test("DSG-008 pins the selected backend executable independently of the systemd 
 	const codex = join(bin, "codex");
 	writeFileSync(codex, "#!/bin/sh\n", { mode: 0o700 });
 	const resolved = resolveBackendExecutable("codex", bin);
-	const unit = renderDiscordUserUnit({ adkRoot: root, nodePath: "/usr/bin/node", backendExecutables: { codex: resolved } });
+	const unit = renderDiscordUserUnit({ adkRoot: root, nodePath: "/opt/node/bin/node", backendExecutables: { codex: resolved } });
 	assert.match(unit.content, new RegExp(`Environment=\\"NAIA_CODEX_EXECUTABLE=${resolved.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\"`));
+	assert.match(unit.content, /Environment="PATH=\/opt\/node\/bin:/);
+	assert.match(unit.content, new RegExp(`PATH=[^\\n]*${bin.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}`));
 	assert.throws(() => resolveBackendExecutable("claude", bin), /not found/);
 });
 
