@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Benchmark Contract"
+  short_description: "Validate benchmark contracts and durable evidence"
+  default_prompt: "Use $verify-benchmark-contract to validate the benchmark contract and its durable evidence."

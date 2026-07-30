@@ -27,6 +27,12 @@ importers:
         specifier: ^8.18.0
         version: 8.18.0
 
+  packages/benchmark-contract:
+    devDependencies:
+      ajv:
+        specifier: ^8.18.0
+        version: 8.18.0
+
   packages/core:
     dependencies:
       fast-glob:

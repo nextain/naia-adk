@@ -96,7 +96,9 @@ function coverage(text) {
 		 * "COVERED: not really tested" would then read as coverage. "NOT COVERED",
 		 * "PARTIALLY COVERED", and "COVERED conditional on X" all fail to match.
 		 */
-		if (!/^\W*COVERED\s*(?:$|[.(\-—])/i.test(claim)) continue;
+		if (!/^\W*COVERED(?:\s*\.|\s*\([^)]*\)|\s*[\-—]\s+.+)?\s*$/i.test(claim)) continue;
+		const suffix = claim.replace(/^\W*COVERED/i, "");
+		if (/\b(?:not|partial(?:ly)?|except|conditional|unverified|missing)\b/i.test(suffix)) continue;
 		covered.add(match[1]);
 	}
 	return [...covered].sort();
@@ -171,6 +173,7 @@ function selfTest(report = (message) => process.stderr.write(`${message}\n`)) {
 		"- RCI-008: COVERED",
 		"- RCI-009: COVERED: not really tested",
 		"- RCI-010: COVERED.",
+		"- RCI-011: COVERED (except Windows isolation)",
 		"",
 		"### Planning Findings",
 		"NONE",

@@ -1,0 +1,76 @@
+{
+  "schema_revision": "development-provider-routes-v1",
+  "status": "development_only_no_production_claim",
+  "routes": [
+    {
+      "id": "worker-sol-control",
+      "adapter_kind": "codex_cli",
+      "provider_id": "openai-codex",
+      "deployment_or_route_model_id": "gpt-5.6-sol",
+      "source_model_id": "gpt-5.6-sol",
+      "model_reasoning_effort": "high",
+      "unsupported_parameters": ["tools"],
+      "cache_mode": "provider_default"
+    },
+    {
+      "id": "worker-terra",
+      "adapter_kind": "codex_cli",
+      "provider_id": "openai-codex",
+      "deployment_or_route_model_id": "gpt-5.6-terra",
+      "source_model_id": "gpt-5.6-terra",
+      "model_reasoning_effort": "medium",
+      "unsupported_parameters": ["tools"],
+      "cache_mode": "provider_default"
+    },
+    {
+      "id": "worker-luna",
+      "adapter_kind": "codex_cli",
+      "provider_id": "openai-codex",
+      "deployment_or_route_model_id": "gpt-5.6-luna",
+      "source_model_id": "gpt-5.6-luna",
+      "model_reasoning_effort": "low",
+      "unsupported_parameters": ["tools"],
+      "cache_mode": "provider_default"
+    },
+    {
+      "id": "worker-azure-deepseek-v4-flash",
+      "adapter_kind": "openai_compatible_http",
+      "provider_id": "azure-foundry",
+      "endpoint_env": "AZURE_DEEPSEEK_ENDPOINT",
+      "api_key_env": "AZURE_DEEPSEEK_KEY",
+      "api_version_env": "AZURE_DEEPSEEK_API_VERSION",
+      "deployment_env": "AZURE_DEEPSEEK_DEPLOYMENT",
+      "source_model_id": "DeepSeek-V4-Flash",
+      "unsupported_parameters": ["tools", "tool_choice"],
+      "cache_mode": "unknown",
+      "actual_upstream_provider_required": false
+    },
+    {
+      "id": "worker-openrouter-hy3",
+      "adapter_kind": "openai_compatible_http",
+      "provider_id": "openrouter",
+      "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "api_version": "v1",
+      "deployment_or_route_model_id": "tencent/hy3",
+      "source_model_id": "tencent/hy3",
+      "unsupported_parameters": [],
+      "cache_mode": "provider_default",
+      "actual_upstream_provider_required": true,
+      "production_routing_prohibited": true
+    },
+    {
+      "id": "worker-upstage-solar-open2",
+      "adapter_kind": "openai_compatible_http",
+      "provider_id": "upstage-private-beta",
+      "endpoint": "https://api.upstage.ai/v1/solar/chat/completions",
+      "api_key_env": "UPSTAGE_KEY",
+      "api_version": "private-beta-2026-07",
+      "deployment_or_route_model_id": "solar-open2",
+      "source_model_id": "solar-open2",
+      "unsupported_parameters": [],
+      "cache_mode": "unknown",
+      "actual_upstream_provider_required": false
+    }
+  ]
+}

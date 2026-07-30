@@ -1,0 +1,40 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import http from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import Ajv2020 from "ajv/dist/2020.js";
+import {createProviderNeutralChatAdapter,normalizeOpenAICompatibleUsage,resolveDevelopmentRoute} from "../src/provider-neutral-adapter.mjs";
+
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
+const schema=JSON.parse(fs.readFileSync(path.join(root,"schemas","provider-receipt.schema.json"),"utf8"));
+const ajv=new Ajv2020({allErrors:true,strict:true,strictRequired:false});
+ajv.addFormat("date-time",/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u);
+const validate=ajv.compile(schema);
+const secret="upstage-test-secret-never-record";
+const server=http.createServer((request,response)=>{let input="";request.setEncoding("utf8");request.on("data",chunk=>input+=chunk);request.on("end",()=>{assert.equal(request.headers.authorization,`Bearer ${secret}`);const body=JSON.parse(input);assert.equal(body.model,"solar-open2");response.writeHead(200,{"content-type":"application/json","x-provider":"upstage-hosted-beta"});response.end(JSON.stringify({id:"chat-test",choices:[{message:{role:"assistant",content:'{"ok":true}'}}],usage:{prompt_tokens:12,completion_tokens:5,prompt_tokens_details:{cached_tokens:0},completion_tokens_details:{reasoning_tokens:2}}}));});});
+await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));
+try{
+  const endpoint=`http://127.0.0.1:${server.address().port}/chat/completions`;
+  const route={id:"worker-upstage-solar-open2",provider_id:"upstage-private-beta",endpoint,api_key_env:"UPSTAGE_KEY",api_version:"private-beta-test",deployment_or_route_model_id:"solar-open2",source_model_id:"solar-open2",unsupported_parameters:[],cache_mode:"unknown",actual_upstream_provider_required:false};
+  const adapter=createProviderNeutralChatAdapter({route,env:{UPSTAGE_KEY:secret},timeoutMs:5000});
+  assert.equal(adapter.descriptor.apiKey,undefined);
+  const result=await adapter.invokeText({prompt:"Return JSON"});
+  assert.equal(result.text,'{"ok":true}');
+  assert(validate(result.receipt),ajv.errorsText(validate.errors));
+  assert.equal(result.receipt.usage.input_tokens.value,12);
+  assert.equal(result.receipt.usage.cached_input_tokens.state,"provider_proven_zero");
+  assert.equal(result.receipt.actual_upstream_provider.value,"upstage-hosted-beta");
+  assert.equal(result.receipt.request_configuration_digest.length,64);
+  assert(!JSON.stringify(result).includes(secret));
+  assert.throws(()=>resolveDevelopmentRoute({...route,endpoint:"https://example.test/path?token=secret"},{UPSTAGE_KEY:secret}),/query-free/);
+  assert.throws(()=>resolveDevelopmentRoute({...route,endpoint:"https://example.test/path?api_key=secret"},{UPSTAGE_KEY:secret}),/query-free/);
+  assert.throws(()=>resolveDevelopmentRoute({...route,endpoint:"https://example.test/path#api_key=secret"},{UPSTAGE_KEY:secret}),/query-free/);
+  assert.throws(()=>resolveDevelopmentRoute({...route,endpoint:"https://user:password@example.test/path"},{UPSTAGE_KEY:secret}),/credential-free/);
+  assert.throws(()=>resolveDevelopmentRoute(route,{}),/credential UPSTAGE_KEY/);
+  assert.throws(()=>normalizeOpenAICompatibleUsage({prompt_tokens:1,completion_tokens:1,prompt_tokens_details:{cached_tokens:2}}),/exceed/);
+  const incomplete=normalizeOpenAICompatibleUsage({prompt_tokens:3,completion_tokens:1});
+  assert.equal(incomplete.cached_input_tokens.state,"unavailable");
+  assert.equal(incomplete.reasoning_tokens.state,"unavailable");
+}finally{await new Promise(resolve=>server.close(resolve));}
+console.log("provider-neutral adapter: PASS (native HTTP, route identity, usage mapping, secret redaction, fail-closed upstream fields)");

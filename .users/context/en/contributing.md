@@ -1,25 +1,25 @@
 <!-- Copyright 2026 Nextain Inc. All rights reserved. -->
 
-# Naia ADK Contributing Guide
+# Naia ADK Contribution Guide
 
-Human-readable guide for `.agents/context/contributing.yaml`.
+A human-readable guide to `.agents/context/contributing.yaml`.
 
 ## Purpose
 
-How AI agents (and humans using AI tools) should contribute to the Naia ADK project.
+Explains how AI agents (and people using AI tools) should contribute correctly to the Naia OS project.
 
 ---
 
 ## Getting Started: Context Reading Order
 
-New contributors (including AI agents) must read these files in order:
+New contributors (including AI agents) must read the following files in order:
 
-1. `.agents/context/agents-rules.json` — Project rules (SoT)
-2. `.agents/context/ai-work-index.yaml` — Work type index
-3. `.agents/context/project-index.yaml` — Submodule entry points
+1. `.agents/context/agents-rules.json` — Core project rules (SoT)
+2. `.agents/context/ai-work-index.yaml` — Workflow index by task type
+3. `.agents/context/project-index.yaml` — Entry point index by submodule
 4. `.agents/context/philosophy.yaml` — Core philosophy
 
-**Submodule rule**: When working in a submodule, read its `rulesEntrypoint` first.
+**Submodule rule**: When working in a submodule, read that submodule's `rulesEntrypoint` first.
 
 ---
 
@@ -33,15 +33,15 @@ PLAN → CHECK → BUILD (TDD) → VERIFY → CLEAN → COMMIT
 
 Details: `.agents/workflows/development-cycle.yaml`
 
-### Key Rules
+### Core Rules
 
 | Rule | Description |
-|------|-------------|
-| TDD | Write test first (RED) → minimal code (GREEN) → refactor |
-| VERIFY | Actually run the app — type-check alone is insufficient |
-| Logger | No `console.log/warn/error` — use structured Logger only |
+|-----|------|
+| TDD | Tests first (RED) → minimal implementation (GREEN) → refactor |
+| VERIFY | Run the actual app to verify — type-checking alone is insufficient |
+| Logger | `console.log/warn/error` prohibited — use only the structured Logger |
 | Biome | Follow Biome for linting and formatting |
-| Minimal change | Only modify what's needed — no over-engineering |
+| Minimal changes | Modify only what is necessary — no excessive refactoring |
 
 ---
 
@@ -51,50 +51,51 @@ Details: `.agents/workflows/development-cycle.yaml`
 
 AI context files are licensed under **CC-BY-SA 4.0**.
 
-### SPDX Headers Required
+### SPDX Header Required
 
-| File Type | Header Format |
-|-----------|---------------|
+| File type | Header format |
+|----------|----------|
 | YAML (.yaml) | `# SPDX-License-Identifier: CC-BY-SA-4.0` |
 | JSON (.json) | `"_license": "CC-BY-SA-4.0 \| Copyright 2026 Nextain"` |
 | Markdown (.md) | `<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->` |
 
-### Mirroring Principle
+### Mirroring Principles
 
-- **SoT** (Source of Truth) lives in `.agents/`
-- `.users/` is the human-readable mirror
-- Korean mirror: `.users/context/{file}.md`
-- English mirror: `.users/context/en/{file}.md`
-- When modifying, **always** update mirrors too
+- **SoT** (Source of Truth) is in `.agents/`
+- `.users/` is a human-readable mirror
+- Korean mirror: `.users/context/{파일}.md`
+- English mirror: `.users/context/en/{파일}.md`
+- When changes are made, the mirror must also be updated
 
-### Cascade Rules
+### Propagation Rules
 
-Propagation order when modifying context: self → parent → siblings → children → mirror
-
----
-
-## Philosophy Compliance
-
-Principles that must be preserved in contributions:
-
-- **AI Sovereignty** — no vendor lock-in
-- **Privacy First** — local execution by default
-- **Transparency** — open source, no hidden behavior
-
-Extensions are welcome:
-- Add new principles that don't conflict with existing ones
-- Add new skills, workflows, and integrations
+When context changes, propagate in this order: self → parent → siblings → children → mirror
 
 ---
 
-## Skill Contribution
+## Compliance with the Philosophy
+
+The following principles must be preserved when contributing:
+
+- **AI sovereignty** — No vendor lock-in
+- **Privacy-first** — Local execution by default
+- **Transparency** — Open source, with no hidden behavior
+
+Extensions are allowed:
+
+- Adding new principles that do not conflict with existing principles
+- Adding new skills, workflows, and integrations
+
+---
+
+## Skill Contributions
 
 - **Format**: Claude Code skill format (`SKILL.md` with YAML frontmatter)
-- **Location**: `.agents/skills/{skill-name}/SKILL.md`
-- **Mirror**: `.users/skills/{skill-name}/SKILL.md` (symlink or copy)
-- **Naming**: kebab-case, no prefix (e.g. `review-pass`, `merge-worktree`)
-- **Registration**: After adding a skill, run `/manage-skills` to register it in CLAUDE.md
-- **Testing**: Invoke the skill via `/skill-name` in a real session to verify
+- **Location**: `.agents/skills/{스킬명}/SKILL.md`
+- **Mirror**: `.users/skills/{스킬명}/SKILL.md` (symlink or copy)
+- **Naming**: kebab-case, without a prefix (for example, `review-pass`, `merge-worktree`)
+- **Registration**: Run `/manage-skills` after adding a skill to register it in `CLAUDE.md`
+- **Testing**: Invoke it directly with `/스킬명` in an actual session to verify it
 
 ---
 
@@ -111,17 +112,17 @@ type(scope): description
 ### Checklist
 
 - [ ] Tests pass (`npm test` / `pytest`)
-- [ ] VERIFY step completed (app actually runs)
-- [ ] Context files updated if architecture changed
-- [ ] No `console.log/warn/error` left in code
-- [ ] Work log entry if significant change
+- [ ] VERIFY stage completed (the app actually ran)
+- [ ] Context files updated when the architecture changes
+- [ ] No remaining `console.log/warn/error`
+- [ ] Work log recorded for significant changes
 
 ---
 
 ## Language Rules
 
 | Target | Language |
-|--------|----------|
+|-----|------|
 | Code and context | English |
 | AI responses and logs | Korean |
 | Commit messages | English |
@@ -131,4 +132,4 @@ type(scope): description
 ## Related Files
 
 - **SoT**: `.agents/context/contributing.yaml`
-- **Korean mirror**: `.users/context/contributing.md`
+- **English mirror**: `.users/context/en/contributing.md`

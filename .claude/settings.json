@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/request-contract.js\" PreToolUse"
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/request-contract.js", "PreToolUse"]
           }
         ]
       },
@@ -78,7 +79,8 @@
           },
           {
             "type": "command",
-              "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/request-contract.js\" SessionStart"
+              "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/request-contract.js", "SessionStart"]
           }
         ]
       }
@@ -88,7 +90,8 @@
         "hooks": [
           {
             "type": "command",
-              "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/request-contract.js\" UserPromptSubmit"
+              "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/request-contract.js", "UserPromptSubmit"]
           },
           {
             "type": "command",
@@ -119,6 +122,10 @@
           },
           {
             "type": "command",
+            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/context-translation-batch.cjs"
+          },
+          {
+            "type": "command",
             "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/ctx-index-rebuild.js"
           }
         ]
@@ -127,7 +134,8 @@
         "hooks": [
           {
             "type": "command",
-              "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/request-contract.js\" PostToolUse"
+              "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/request-contract.js", "PostToolUse"]
           },
           {
             "type": "command",
@@ -141,7 +149,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/request-contract.js\" PreCompact"
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/request-contract.js", "PreCompact"]
           }
         ]
       }
@@ -155,7 +164,8 @@
           },
           {
             "type": "command",
-              "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/request-contract.js\" PostCompact"
+              "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/request-contract.js", "PostCompact"]
           }
         ]
       }
@@ -165,11 +175,16 @@
         "hooks": [
           {
             "type": "command",
-              "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/request-contract.js\" Stop"
+              "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/request-contract.js", "Stop"]
           },
           {
             "type": "command",
             "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/beh-stop.js"
+          },
+          {
+            "type": "command",
+            "command": "node $CLAUDE_PROJECT_DIR/.claude/hooks/context-translation-batch.cjs --flush"
           }
         ]
       }

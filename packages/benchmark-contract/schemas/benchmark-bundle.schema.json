@@ -1,0 +1,18 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://naia.dev/schemas/benchmark/benchmark-bundle.schema.json",
+  "title":"Benchmark Evidence Bundle",
+  "type":"object","additionalProperties":false,
+  "required":["version","tasks","runs","routing_policy","comparisons","assets","governance","review_freeze","baseline"],
+  "properties":{
+    "version":{"const":1},
+    "tasks":{"type":"array","minItems":1,"items":{"$ref":"task.schema.json"}},
+    "runs":{"type":"array","minItems":1,"items":{"$ref":"run.schema.json"}},
+    "routing_policy":{"$ref":"routing-policy.schema.json"},
+    "comparisons":{"type":"array","minItems":1,"items":{"$ref":"comparison.schema.json"}},
+    "assets":{"type":"array","minItems":1,"items":{"$ref":"asset-manifest.schema.json"}},
+    "governance":{"$ref":"governance-evidence.schema.json"},
+    "review_freeze":{"$ref":"review-freeze.schema.json"},
+    "baseline":{"$ref":"baseline-manifest.schema.json"}
+  }
+}

@@ -19,7 +19,12 @@
     "serve": "tsx packages/server/src/cli.ts serve",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "test:request-contract": "node scripts/run-request-contract-tests.cjs"
+    "test:request-contract": "node scripts/run-request-contract-tests.cjs",
+    "test:harness-native": "node scripts/run-native-harness-tests.cjs",
+    "test:entry-points": "node .claude/hooks/test/run-sync-entry-points-test.cjs && node .claude/hooks/test/run-agents-context-mirror-test.cjs && node .codex/hooks/test-session-contract-gate.cjs",
+    "check:entry-points": "node .claude/hooks/sync-entry-points.js --check",
+    "test:context-translation": "python scripts/i18n/test-translate-ctx.py && node .claude/hooks/test/run-context-translation-batch-test.cjs",
+    "check:context-translation": "python scripts/i18n/translate-ctx.py --check"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.1",

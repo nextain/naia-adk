@@ -1,0 +1,524 @@
+{
+  "version": 1,
+  "contract_digest": "e9c49d676a606440029a58e9b8a83ca9eadb8cd1c386c57383f5d358910174b1",
+  "tasks": [
+    {
+      "id": "TASK-PRE-C-01",
+      "contract_version": "2026-07-29",
+      "layer": "A_model_capability",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "low",
+      "execution_kind": "deterministic",
+      "purpose": "Execute the retained sumArray coding oracle without self-reported scoring.",
+      "asset_id": "FIXTURE-PRE-C-01",
+      "fixture_digest": "8233d8f7489475e1ce222c6083b5ce3ee5ed5d92bea8f7ee70b51eec0fdba759",
+      "source_revision": "naia-agent@09950f7",
+      "platform_scope": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "tool_schema_revision": "native-node-v1",
+      "scorer": {
+        "kind": "executable",
+        "revision": "legacy-js-function-v1",
+        "artifact_locator": "scorers/pre-recovery/legacy-js-function-v1.json",
+        "digest": "71f241e04938a65fa8dfb9ba38e5557e4ee8adaa3e5badbe21314c51149ef5aa"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    },
+    {
+      "id": "TASK-PRE-C-03",
+      "contract_version": "2026-07-29",
+      "layer": "A_model_capability",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "low",
+      "execution_kind": "deterministic",
+      "purpose": "Execute the retained isPrime coding oracle without self-reported scoring.",
+      "asset_id": "FIXTURE-PRE-C-03",
+      "fixture_digest": "5c3ad0855f38c1481934b4191e49a2b760a7173b5669e47e61480f4f4d543dd8",
+      "source_revision": "naia-agent@09950f7",
+      "platform_scope": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "tool_schema_revision": "native-node-v1",
+      "scorer": {
+        "kind": "executable",
+        "revision": "legacy-js-function-v1",
+        "artifact_locator": "scorers/pre-recovery/legacy-js-function-v1.json",
+        "digest": "71f241e04938a65fa8dfb9ba38e5557e4ee8adaa3e5badbe21314c51149ef5aa"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    },
+    {
+      "id": "TASK-PRE-C-06",
+      "contract_version": "2026-07-29",
+      "layer": "A_model_capability",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "medium",
+      "execution_kind": "deterministic",
+      "purpose": "Execute the retained maxSubarraySum coding oracle without self-reported scoring.",
+      "asset_id": "FIXTURE-PRE-C-06",
+      "fixture_digest": "37b3536ae12f8f228e4db44e3de3297c2fb33a695fa1647e3781a3da1d284277",
+      "source_revision": "naia-agent@09950f7",
+      "platform_scope": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "tool_schema_revision": "native-node-v1",
+      "scorer": {
+        "kind": "executable",
+        "revision": "legacy-js-function-v1",
+        "artifact_locator": "scorers/pre-recovery/legacy-js-function-v1.json",
+        "digest": "71f241e04938a65fa8dfb9ba38e5557e4ee8adaa3e5badbe21314c51149ef5aa"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    },
+    {
+      "id": "TASK-PRE-C-08",
+      "contract_version": "2026-07-29",
+      "layer": "A_model_capability",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "medium",
+      "execution_kind": "deterministic",
+      "purpose": "Execute the retained mergeIntervals coding oracle without self-reported scoring.",
+      "asset_id": "FIXTURE-PRE-C-08",
+      "fixture_digest": "62135e1a6ec941aa54c1e6ab34bbd15e6af7e5fc7eb3b1810d7924fbf82f495d",
+      "source_revision": "naia-agent@09950f7",
+      "platform_scope": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "tool_schema_revision": "native-node-v1",
+      "scorer": {
+        "kind": "executable",
+        "revision": "legacy-js-function-v1",
+        "artifact_locator": "scorers/pre-recovery/legacy-js-function-v1.json",
+        "digest": "71f241e04938a65fa8dfb9ba38e5557e4ee8adaa3e5badbe21314c51149ef5aa"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    },
+    {
+      "id": "TASK-PRE-HONEST-FAILURE",
+      "contract_version": "2026-07-29",
+      "layer": "B_agent_runtime",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "high",
+      "execution_kind": "deterministic",
+      "purpose": "Require timeout, tool, infrastructure, and scorer failures to remain invalid rather than be counted as task failures.",
+      "asset_id": "FIXTURE-PRE-HONEST-FAILURE",
+      "fixture_digest": "3e8614d713d2e9cc9cfc98b75a6dbc80a226dcfde7d9f346a9ccf47cb3b72e04",
+      "source_revision": "benchmark-contract@pre-recovery",
+      "platform_scope": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "tool_schema_revision": "runtime-outcome-v1",
+      "scorer": {
+        "kind": "deterministic_structural",
+        "revision": "honest-failure-v1",
+        "artifact_locator": "scorers/pre-recovery/honest-failure-v1.json",
+        "digest": "2d61e507502370c330b281f8d5f3e2ee3926be25f6f2d0593d0bd1223b0c7037"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [
+        "HG-HONESTY-001"
+      ],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    },
+    {
+      "id": "TASK-PRE-NESTED-CONTEXT",
+      "contract_version": "2026-07-29",
+      "layer": "C_governance_harness",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "high",
+      "execution_kind": "deterministic",
+      "purpose": "Verify root and active subproject mandatory context are both loaded before project action.",
+      "asset_id": "FIXTURE-PRE-NESTED-CONTEXT",
+      "fixture_digest": "5a73699369f29ddca657ef36f6ee9dcb2dd3584b645410b5fb8c00d29d9fc323",
+      "source_revision": "benchmark-contract@pre-recovery",
+      "platform_scope": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "tool_schema_revision": "context-ledger-v1",
+      "scorer": {
+        "kind": "deterministic_structural",
+        "revision": "nested-context-v1",
+        "artifact_locator": "scorers/pre-recovery/nested-context-v1.json",
+        "digest": "6ab3921080cf33a75ed9d26ec9602c58638a9ae7a26a68724b2a0dcddefce647"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [
+        "HG-CONTEXT-001"
+      ],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    },
+    {
+      "id": "TASK-PRE-COMPACTION-RESTORE",
+      "contract_version": "2026-07-29",
+      "layer": "C_governance_harness",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "high",
+      "execution_kind": "deterministic",
+      "purpose": "Verify compaction restores root and active project context before work resumes.",
+      "asset_id": "FIXTURE-PRE-COMPACTION-RESTORE",
+      "fixture_digest": "76bf4e196e7b24266859865a86774b2f902e64829597be804551e8bffeb7426a",
+      "source_revision": "benchmark-contract@pre-recovery",
+      "platform_scope": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "tool_schema_revision": "context-ledger-v1",
+      "scorer": {
+        "kind": "deterministic_structural",
+        "revision": "context-restore-v1",
+        "artifact_locator": "scorers/pre-recovery/context-restore-v1.json",
+        "digest": "e7aa1419bdec68bd484d04c89b515e81dd66a67b20d8d6fcfa27841f74ff24da"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [
+        "HG-CONTEXT-002"
+      ],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    },
+    {
+      "id": "TASK-PRE-STALE-MIRROR",
+      "contract_version": "2026-07-29",
+      "layer": "C_governance_harness",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "high",
+      "execution_kind": "deterministic",
+      "purpose": "Verify dual-context translation fails closed and preserves the previous mirror on route exhaustion.",
+      "asset_id": "FIXTURE-PRE-STALE-MIRROR",
+      "fixture_digest": "2b39307b00bde5896b7359a8001ad09e70b1277a31a1f6311c645048fd9a9605",
+      "source_revision": "benchmark-contract@pre-recovery",
+      "platform_scope": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "tool_schema_revision": "dual-context-v1",
+      "scorer": {
+        "kind": "deterministic_structural",
+        "revision": "dual-context-stale-v1",
+        "artifact_locator": "scorers/pre-recovery/dual-context-stale-v1.json",
+        "digest": "3425b3025bc51493ea061862e6e9aa6f2fe4f7b7ee88a991e8df9d837c07ec26"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [
+        "HG-MIRROR-001"
+      ],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    },
+    {
+      "id": "TASK-PRE-NATIVE-WINDOWS",
+      "contract_version": "2026-07-29",
+      "layer": "C_governance_harness",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "high",
+      "execution_kind": "deterministic",
+      "purpose": "Verify Windows operation has no WSL, Bash, or symlink dependency.",
+      "asset_id": "FIXTURE-PRE-NATIVE-WINDOWS",
+      "fixture_digest": "afec5c496fd82c26af096b671a022a6f4d51a2d7f7b2dd63b654c1e03c04e7aa",
+      "source_revision": "benchmark-contract@pre-recovery",
+      "platform_scope": [
+        "windows"
+      ],
+      "tool_schema_revision": "native-node-v1",
+      "scorer": {
+        "kind": "deterministic_structural",
+        "revision": "native-platform-v1",
+        "artifact_locator": "scorers/pre-recovery/native-platform-v1.json",
+        "digest": "618fc85c513ea22d82adea782ca0cb1a3036953e298ac3f6e084c93f5a3ff337"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [
+        "HG-WINDOWS-001"
+      ],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    },
+    {
+      "id": "TASK-PRE-TRACE-COMPLETE",
+      "contract_version": "2026-07-29",
+      "layer": "C_governance_harness",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "high",
+      "execution_kind": "deterministic",
+      "purpose": "Accept a complete digest-bound directive-to-evidence trace.",
+      "asset_id": "FIXTURE-PRE-TRACE-COMPLETE",
+      "fixture_digest": "f6fdfd77faa8aa63a85623f71f63ca74c2c6249e155de79cdd73c9a4070997d2",
+      "source_revision": "benchmark-contract@pre-recovery",
+      "platform_scope": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "tool_schema_revision": "trace-v1",
+      "scorer": {
+        "kind": "deterministic_structural",
+        "revision": "trace-validator-v1",
+        "artifact_locator": "scorers/pre-recovery/trace-validator-v1.json",
+        "digest": "35a23d8b41bdc42551484b89a219357dc4dfbcb07eaa425484bd2dd333f8499c"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [
+        "HG-TRACE-001"
+      ],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    },
+    {
+      "id": "TASK-PRE-TRACE-ORPHAN",
+      "contract_version": "2026-07-29",
+      "layer": "C_governance_harness",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "high",
+      "execution_kind": "deterministic",
+      "purpose": "Reject an orphan trace node instead of silently declaring coverage.",
+      "asset_id": "FIXTURE-PRE-TRACE-ORPHAN",
+      "fixture_digest": "3d76cbec0d4142a6f55585487523720eb261ed0158adfe38ba6b815824e5b3aa",
+      "source_revision": "benchmark-contract@pre-recovery",
+      "platform_scope": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "tool_schema_revision": "trace-v1",
+      "scorer": {
+        "kind": "deterministic_structural",
+        "revision": "trace-validator-v1",
+        "artifact_locator": "scorers/pre-recovery/trace-validator-v1.json",
+        "digest": "35a23d8b41bdc42551484b89a219357dc4dfbcb07eaa425484bd2dd333f8499c"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [
+        "HG-TRACE-001"
+      ],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    },
+    {
+      "id": "TASK-PRE-REUSE-DECISION",
+      "contract_version": "2026-07-29",
+      "layer": "C_governance_harness",
+      "suite": "pre-recovery",
+      "task_class": "baseline_recovery",
+      "risk_class": "high",
+      "execution_kind": "deterministic",
+      "purpose": "Verify reuse search and an exclusive reservation precede implementation.",
+      "asset_id": "FIXTURE-PRE-REUSE-DECISION",
+      "fixture_digest": "ecc667267d93ba393623b860adf7d0ad263ff0fedd668347b9c946a534e2d7d1",
+      "source_revision": "benchmark-contract@pre-recovery",
+      "platform_scope": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "tool_schema_revision": "reuse-v1",
+      "scorer": {
+        "kind": "deterministic_structural",
+        "revision": "reuse-reservation-v1",
+        "artifact_locator": "scorers/pre-recovery/reuse-reservation-v1.json",
+        "digest": "ada512bc7b1899dfad4a53fb32185fa15509d055b6919c63131360cd1eceb3f5"
+      },
+      "required_metrics": [
+        {
+          "id": "METRIC-PRE-TASK-PASS",
+          "calculation_kind": "task_pass_rate",
+          "formula_revision": "scheduled-denominator-v1",
+          "unit": "ratio",
+          "numerator_definition": "valid_pass task results",
+          "denominator_definition": "all scheduled task results including invalid outcomes",
+          "required_for_acceptance": true
+        }
+      ],
+      "hard_gate_ids": [
+        "HG-REUSE-001"
+      ],
+      "scheduled_runs": 1,
+      "max_steps": 20,
+      "time_limit_ms": 120000,
+      "data_classification": "public",
+      "holdout_class": "development"
+    }
+  ]
+}

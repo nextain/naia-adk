@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Launch a reviewer in a real bubblewrap sandbox and ingest two-party attestations. */
+/** Launch a reviewer in the native platform sandbox and ingest two-party attestations. */
 
 const path = require("path");
 const core = require("../.agents/hooks/core/request-contract.js");
@@ -30,6 +30,7 @@ function main() {
 		expectedBundleDigest: issued.manifest.bundle_digest,
 		reviewerPath: path.resolve(input.reviewer),
 		allowedReviewerDigests: config.review_runner.allowed_reviewer_digests,
+		allowedSandboxDigests: config.review_runner.allowed_sandbox_digests,
 		env: { REQUEST_CONTRACT_CHALLENGE: issued.manifest.nonce, REQUEST_CONTRACT_CONTEXT_ID: contextId },
 	});
 	const review = {

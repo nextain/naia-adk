@@ -6,7 +6,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PreToolUse"
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/session-contract-gate.cjs\"",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/session-contract-gate.cjs')\"",
+            "statusMessage": "Checking ADK session contract"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Edit|Write|NotebookEdit|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PreToolUse",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') PreToolUse\""
           }
         ]
       }
@@ -16,7 +28,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" SessionStart"
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/session-inject.cjs\"",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/session-inject.cjs')\"",
+            "statusMessage": "Loading ADK workflow state"
+          },
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" SessionStart",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') SessionStart\""
           }
         ]
       }
@@ -26,17 +45,40 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" UserPromptSubmit"
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/session-inject.cjs\"",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/session-inject.cjs')\"",
+            "statusMessage": "Refreshing ADK workflow state"
+          },
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" UserPromptSubmit",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') UserPromptSubmit\""
           }
         ]
       }
     ],
     "PostToolUse": [
       {
+        "matcher": "Edit|Write|apply_patch",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PostToolUse"
+            "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/sync-entry-points.js\"",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.claude/hooks/sync-entry-points.js')\""
+          },
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/context-translation-batch.cjs\"",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.claude/hooks/context-translation-batch.cjs')\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PostToolUse",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') PostToolUse\""
           }
         ]
       }
@@ -46,7 +88,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PreCompact"
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PreCompact",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') PreCompact\""
           }
         ]
       }
@@ -56,7 +99,14 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PostCompact"
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/session-inject.cjs\"",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/session-inject.cjs')\"",
+            "statusMessage": "Restoring ADK workflow state"
+          },
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" PostCompact",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') PostCompact\""
           }
         ]
       }
@@ -66,7 +116,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" Stop"
+            "command": "node \"$(git rev-parse --show-toplevel)/.codex/hooks/request-contract.cjs\" Stop",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.codex/hooks/request-contract.cjs') Stop\""
+          },
+          {
+            "type": "command",
+            "command": "node \"$(git rev-parse --show-toplevel)/.claude/hooks/context-translation-batch.cjs\" --flush",
+            "commandWindows": "powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '.claude/hooks/context-translation-batch.cjs') --flush\""
           }
         ]
       }

@@ -17,6 +17,7 @@ const cp = require("child_process");
 
 const VERSION = 1;
 const DIR_MODE = 0o700;
+const WINDOWS_CURRENT_PROCESS_IDENTITY = { value: null };
 const FILE_MODE = 0o600;
 const ZERO_HASH = "0".repeat(64);
 const TERMINAL = new Set(["done", "superseded", "deferred", "abandoned"]);
@@ -332,6 +333,7 @@ function loadConfig(cwd) {
 				public_key_path: normalizeRel((raw.review_runner && raw.review_runner.public_key_path) || ".agents/context/request-contract-review-runner.pub"),
 				credential_id: (raw.review_runner && raw.review_runner.credential_id) || "",
 				allowed_reviewer_digests: [...new Set((raw.review_runner && raw.review_runner.allowed_reviewer_digests) || [])].sort(),
+				allowed_sandbox_digests: [...new Set((raw.review_runner && raw.review_runner.allowed_sandbox_digests) || [])].sort(),
 				allowed_attestor_digests: [...new Set((raw.review_runner && raw.review_runner.allowed_attestor_digests) || [])].sort(),
 			},
 			retention: {
@@ -423,6 +425,21 @@ function controlInputPath(unit, kind) {
 
 function processIdentity(pid) {
 	try {
+		if (!Number.isInteger(pid) || pid <= 0) return null;
+		if (process.platform === "win32") {
+			if (pid === process.pid && WINDOWS_CURRENT_PROCESS_IDENTITY.value) return WINDOWS_CURRENT_PROCESS_IDENTITY.value;
+			const script = "$p = Get-Process -Id __PID__ -ErrorAction Stop; [Console]::Out.Write($p.StartTime.ToUniversalTime().Ticks)"
+				.replace("__PID__", String(pid));
+			const ticks = cp.execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+				timeout: 15000,
+			}).trim();
+			if (!/^\d+$/.test(ticks)) return null;
+			const identity = "win32:" + pid + ":" + ticks;
+			if (pid === process.pid) WINDOWS_CURRENT_PROCESS_IDENTITY.value = identity;
+			return identity;
+		}
 		const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
 		const close = stat.lastIndexOf(")");
 		const fields = stat.slice(close + 2).split(" ");
@@ -487,6 +504,7 @@ function withDirectoryLock(lock, fn, now = Date.now(), timeoutMs = 5000, opts = 
 	const deadline = Date.now() + timeoutMs;
 	let ownerNonce = null;
 	let acquiredIdentity = null;
+	let lastPublicationCollision = null;
 	for (;;) {
 		const candidateNonce = opaqueId("LOCK-");
 		const candidate = `${lock}.candidate.${candidateNonce}`;
@@ -502,14 +520,35 @@ function withDirectoryLock(lock, fn, now = Date.now(), timeoutMs = 5000, opts = 
 			if (opts.afterLockPublished) opts.afterLockPublished({ lock, nonce: ownerNonce, identity: acquiredIdentity });
 			break;
 		} catch (error) {
+			// Windows reports rename-to-existing-directory as EPERM. The winning
+			// owner may release the destination before this catch block observes
+			// it, so destination existence cannot be required. Preserve the raw
+			// publication diagnostic because EPERM can also mean a permission fault;
+			// the fail-closed retry remains intentionally conservative.
+			const windowsCollision = process.platform === "win32" && error.code === "EPERM" && fs.existsSync(candidate);
+			if (windowsCollision || ["EEXIST", "ENOTEMPTY"].includes(error.code)) {
+				lastPublicationCollision = {
+					code: error.code,
+					message: error.message,
+					destination_observed: fs.existsSync(lock),
+				};
+			}
 			try { durableRemoveTree(candidate); } catch (cleanupError) { if (cleanupError.code !== "ENOENT") throw cleanupError; }
-			if (!["EEXIST", "ENOTEMPTY"].includes(error.code)) throw error;
+			if (!windowsCollision && !["EEXIST", "ENOTEMPTY"].includes(error.code)) throw error;
 			try {
-				if (reapStaleDirectoryLock(lock, Date.now())) continue;
+				if (reapStaleDirectoryLock(lock, Date.now()) && Date.now() < deadline) continue;
 			} catch {
 				/* retry until the owner record is stable or the timeout expires */
 			}
-			if (Date.now() >= deadline) throw Object.assign(new Error("lifecycle lock busy"), { code: "lifecycle_lock_busy" });
+			if (Date.now() >= deadline) {
+				const detail = lastPublicationCollision
+					? `; last publication error ${lastPublicationCollision.code}; destination observed=${lastPublicationCollision.destination_observed}`
+					: "";
+				throw Object.assign(new Error(`lifecycle lock busy${detail}`), {
+					code: "lifecycle_lock_busy",
+					publication_error: lastPublicationCollision,
+				});
+			}
 			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
 		}
 	}
@@ -825,7 +864,7 @@ function setManifestEntry(out, rel, value) {
 	out[rel] = value;
 }
 
-function walkEntry(abs, rel, exclusions, out, gitlinks = new Set(), cwd = "") {
+function walkEntry(abs, rel, exclusions, out, gitlinks = new Set(), cwd = "", gitModes = new Map()) {
 	if (pathExcluded(rel, exclusions)) return;
 	if (rel && gitlinks.has(rel)) {
 		const submodule = path.join(cwd, rel);
@@ -843,11 +882,11 @@ function walkEntry(abs, rel, exclusions, out, gitlinks = new Set(), cwd = "") {
 		throw Object.assign(new Error("workspace entry cannot be inspected"), { code: "workspace_manifest_unreadable", operation: "lstat", path: rel || ".", cause: error });
 	}
 	if (st.isSymbolicLink()) {
-		setManifestEntry(out, rel, { type: "symlink", mode: st.mode & 0o777, link: fs.readlinkSync(abs) });
+		setManifestEntry(out, rel, { type: "symlink", mode: process.platform === "win32" ? 0o777 : st.mode & 0o777, link: fs.readlinkSync(abs) });
 		return;
 	}
 	if (st.isFile()) {
-		setManifestEntry(out, rel, { type: "file", mode: st.mode & 0o777, size: st.size, digest: sha256(fs.readFileSync(abs)) });
+		setManifestEntry(out, rel, { type: "file", mode: process.platform === "win32" ? (gitModes.get(rel) || 0o644) : st.mode & 0o777, size: st.size, digest: sha256(fs.readFileSync(abs)) });
 		return;
 	}
 	if (!st.isDirectory()) throw Object.assign(new Error("workspace entry type is unsupported"), { code: "workspace_manifest_unsupported_type", path: rel || "." });
@@ -860,7 +899,7 @@ function walkEntry(abs, rel, exclusions, out, gitlinks = new Set(), cwd = "") {
 	for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
 		if (e.name === ".git") continue;
 		const childRel = normalizeRel(path.posix.join(rel, e.name));
-		walkEntry(path.join(abs, e.name), childRel, exclusions, out, gitlinks, cwd);
+		walkEntry(path.join(abs, e.name), childRel, exclusions, out, gitlinks, cwd, gitModes);
 	}
 }
 
@@ -911,17 +950,19 @@ function parseGitTree(raw) {
 	return parsed;
 }
 
-function gitlinkPaths(repo) {
+function gitIndexMetadata(repo) {
 	const links = new Set();
+	const modes = new Map();
 	const raw = gitBufferStrict(repo, ["ls-files", "-s", "-z"]);
 	for (const entry of raw.toString("utf8").split("\0").filter(Boolean)) {
 		const match = entry.match(/^(\d+) ([a-f0-9]+) (\d+)\t([\s\S]+)$/);
 		if (!match) throw Object.assign(new Error("Git index output is malformed"), { code: "workspace_manifest_git_parse_error" });
-		if (match[1] === "160000") links.add(normalizeRel(match[4]));
+		const rel = normalizeRel(match[4]);
+		if (match[1] === "160000") links.add(rel);
+		else modes.set(rel, match[1] === "100755" ? 0o755 : match[1] === "120000" ? 0o777 : 0o644);
 	}
-	return links;
+	return { links, modes };
 }
-
 function referenceRepositoryDigest(repo, commit, exclusions) {
 	const files = {};
 	const raw = gitBufferStrict(repo, ["ls-tree", "-rz", "--full-tree", "-r", commit]);
@@ -942,8 +983,8 @@ function referenceRepositoryDigest(repo, commit, exclusions) {
 function workspaceRepositoryDigest(repo, exclusions) {
 	if (!fs.existsSync(repo)) return sha256(canonicalJson({ missing: true }));
 	const files = {};
-	const gitlinks = gitlinkPaths(repo);
-	walkEntry(repo, "", exclusions, files, gitlinks, repo);
+	const { links: gitlinks, modes: gitModes } = gitIndexMetadata(repo);
+	walkEntry(repo, "", exclusions, files, gitlinks, repo, gitModes);
 	return sha256(canonicalJson({
 		head: gitStrict(repo, ["rev-parse", "HEAD"]),
 		index_digest: sha256(gitBufferStrict(repo, ["diff", "--cached", "--binary", "--no-ext-diff"])),
@@ -980,15 +1021,15 @@ function referenceManifest(cwd, config = loadConfig(cwd)) {
 function workspaceManifest(cwd, config = loadConfig(cwd)) {
 	if (config.errors && config.errors.length) throw Object.assign(new Error(config.errors.join(", ")), { code: "request_contract_config_invalid", errors: config.errors });
 	const files = {};
-	const gitlinks = gitlinkPaths(cwd);
+	const { links: gitlinks, modes: gitModes } = gitIndexMetadata(cwd);
 	for (const root of config.product_roots) {
 		if (!root || root === ".") {
-			walkEntry(cwd, "", config.exclusions, files, gitlinks, cwd);
+			walkEntry(cwd, "", config.exclusions, files, gitlinks, cwd, gitModes);
 			continue;
 		}
 		const rootPath = path.join(cwd, root);
 		if (!fs.existsSync(rootPath)) setManifestEntry(files, root, { type: "missing" });
-		else walkEntry(rootPath, root, config.exclusions, files, gitlinks, cwd);
+		else walkEntry(rootPath, root, config.exclusions, files, gitlinks, cwd, gitModes);
 	}
 	const manifest = {
 		version: VERSION,
@@ -1201,7 +1242,7 @@ function createGenesisUnlocked(cwd, client, sessionId, now = Date.now(), opts = 
 	const reviewRunnerKey = loadReviewRunnerKey(cwd, config);
 	const credentialIds = [config.authority.credential_id, config.reviewer.credential_id, config.review_runner.credential_id];
 	const keyFingerprints = [authorityKey, reviewerKey, reviewRunnerKey].filter(Boolean).map(publicKeyFingerprint);
-	const pinnedExecutables = [config.reviewer.allowed_attestor_digests, config.review_runner.allowed_reviewer_digests, config.review_runner.allowed_attestor_digests];
+	const pinnedExecutables = [config.reviewer.allowed_attestor_digests, config.review_runner.allowed_reviewer_digests, config.review_runner.allowed_sandbox_digests, config.review_runner.allowed_attestor_digests];
 	if (!authorityKey || !reviewerKey || !reviewRunnerKey || credentialIds.some((id) => !id) || new Set(credentialIds).size !== credentialIds.length || new Set(keyFingerprints).size !== 3 || pinnedExecutables.some((digests) => !digests.length || digests.some((digest) => !/^[a-f0-9]{64}$/.test(digest)))) {
 		throw Object.assign(new Error("governed mode requires three distinct pinned authority, reviewer, and review-runner credentials"), { code: "request_contract_credentials_unprovisioned" });
 	}
@@ -2507,7 +2548,7 @@ function appendReviewUnlocked(unit, review, opts = {}) {
 		if (executor && invocation && (invocation.writer_process_identities || []).includes(executor.process_identity)) errors.push("review_process_not_independent");
 	if (opts.reviewerCredentialId && executor && executor.credential_id !== opts.reviewerCredentialId) errors.push("review_executor_credential_mismatch");
 	const isolation = review && review.isolation;
-	if (isolation) closedObject(isolation, ["credential_id", "execution_id", "challenge", "bundle_digest", "reviewer_context_id", "reviewer_process_id", "reviewer_process_identity", "launcher_process_id", "sandbox_engine", "sandbox_profile_digest", "reviewer_executable_digest", "attestor_executable_digest", "review_payload_digest", "no_network", "repository_blind", "home_blind", "started_at", "executed_at", "signature"], errors, "review_isolation");
+	if (isolation) closedObject(isolation, ["credential_id", "execution_id", "challenge", "bundle_digest", "reviewer_context_id", "reviewer_process_id", "reviewer_process_identity", "launcher_process_id", "sandbox_engine", "sandbox_profile_digest", "sandbox_executable_digest", "reviewer_executable_digest", "attestor_executable_digest", "review_payload_digest", "no_network", "repository_blind", "home_blind", "started_at", "executed_at", "signature"], errors, "review_isolation");
 	if (!isolation || !isolation.credential_id || !isolation.execution_id || !isolation.signature) errors.push("review_isolation_attestation_missing");
 	if (isolation && invocation) {
 		if (isolation.challenge !== invocation.nonce) errors.push("review_isolation_challenge_mismatch");
@@ -2516,7 +2557,8 @@ function appendReviewUnlocked(unit, review, opts = {}) {
 		if (review.reviewed_at !== isolation.executed_at) errors.push("review_reviewed_at_invalid");
 	}
 	if (isolation && (isolation.no_network !== true || isolation.repository_blind !== true || isolation.home_blind !== true)) errors.push("review_isolation_controls_missing");
-	if (isolation && (!isolation.launcher_process_id || isolation.sandbox_engine !== "bubblewrap" || !/^[a-f0-9]{64}$/.test(isolation.sandbox_profile_digest || "") || !/^[a-f0-9]{64}$/.test(isolation.reviewer_executable_digest || ""))) errors.push("review_isolation_execution_evidence_missing");
+	if (isolation && (!isolation.launcher_process_id || !["bubblewrap", "codex-windows-elevated"].includes(isolation.sandbox_engine) || !/^[a-f0-9]{64}$/.test(isolation.sandbox_profile_digest || "") || !/^[a-f0-9]{64}$/.test(isolation.sandbox_executable_digest || "") || !/^[a-f0-9]{64}$/.test(isolation.reviewer_executable_digest || ""))) errors.push("review_isolation_execution_evidence_missing");
+	if (isolation && !config.review_runner.allowed_sandbox_digests.includes(isolation.sandbox_executable_digest)) errors.push("review_sandbox_executable_not_allowed");
 	if (isolation && !config.review_runner.allowed_reviewer_digests.includes(isolation.reviewer_executable_digest)) errors.push("reviewer_executable_not_allowed");
 	if (isolation && (!/^[a-f0-9]{64}$/.test(isolation.attestor_executable_digest || "") || !config.review_runner.allowed_attestor_digests.includes(isolation.attestor_executable_digest))) errors.push("review_isolation_attestor_not_allowed");
 	if (isolation && isolation.review_payload_digest !== sha256(canonicalJson(reviewSignaturePayload(review)))) errors.push("review_isolation_payload_mismatch");
@@ -3246,8 +3288,18 @@ function trustedNodeWord(word, cwd) {
 		if (path.isAbsolute(word)) return fs.realpathSync(word) === expected;
 		if (word.includes("/")) return fs.realpathSync(path.resolve(cwd, word)) === expected;
 		if (word !== "node") return false;
-		const resolved = cp.execFileSync("which", [word], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-		return Boolean(resolved) && fs.realpathSync(resolved) === expected;
+		const searchPath = process.env.PATH || process.env.Path || "";
+		const extensions = process.platform === "win32"
+			? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+			: [""];
+		for (const directory of searchPath.split(path.delimiter).filter(Boolean)) {
+			for (const extension of extensions) {
+				const candidate = path.join(directory.replace(/^"|"$/g, ""), `${word}${extension.toLowerCase()}`);
+				if (!fs.existsSync(candidate)) continue;
+				return fs.realpathSync(candidate) === expected;
+			}
+		}
+		return false;
 	} catch {
 		return false;
 	}
@@ -3372,7 +3424,9 @@ function clientRegistrySupports(cwd, client) {
 	for (const [registeredEvent, entries] of Object.entries(registry.hooks)) {
 		if (!Array.isArray(entries)) continue;
 		for (const entry of entries) for (const hook of Array.isArray(entry.hooks) ? entry.hooks : []) {
-			if (typeof hook.command !== "string" || !hook.command.includes("request-contract")) continue;
+			const registrationText = [hook.command, hook.commandWindows, ...(Array.isArray(hook.args) ? hook.args : [])]
+				.filter((value) => typeof value === "string");
+			if (!registrationText.some((value) => value.includes(adapterPath))) continue;
 			seen.push({ registeredEvent, entry, hook });
 		}
 	}
@@ -3381,8 +3435,15 @@ function clientRegistrySupports(cwd, client) {
 		const matches = seen.filter((candidate) => candidate.registeredEvent === eventName);
 		if (matches.length !== 1) return false;
 		const { entry, hook } = matches[0];
-		const expected = `node \"$(git rev-parse --show-toplevel)/${adapterPath}\" ${eventName}`;
-		if (hook.type !== "command" || hook.command !== expected) return false;
+		if (hook.type !== "command") return false;
+		if (client === "claude") {
+			const expectedArgs = [`${"${CLAUDE_PROJECT_DIR}"}/${adapterPath}`, eventName];
+			if (hook.command !== "node" || hook.commandWindows != null || JSON.stringify(hook.args) !== JSON.stringify(expectedArgs)) return false;
+		} else {
+			const expected = `node \"$(git rev-parse --show-toplevel)/${adapterPath}\" ${eventName}`;
+			const expectedWindows = `powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '${adapterPath}') ${eventName}\"`;
+			if (hook.command !== expected || hook.commandWindows !== expectedWindows) return false;
+		}
 		if (eventName === "PreToolUse") return entry.matcher === preToolMatcher;
 		return entry.matcher == null || entry.matcher === "";
 	});

@@ -1,0 +1,1 @@
+{"revision":"context-restore-v1","kind":"deterministic_structural","input_contract":"compaction_event_plus_ordered_context_read_ledger","decision":"pass only when required root and active-project context is re-read after compaction and before resumed project action","rules":["pre-compaction reads cannot satisfy the restore gate","missing restore evidence fails closed"]}

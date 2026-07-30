@@ -1,0 +1,39 @@
+{
+  "model_config": {
+    "transport": "codex_exec_jsonl_v2",
+    "sandbox": "read-only",
+    "ephemeral": true,
+    "web_search": "disabled",
+    "apps": false,
+    "reasoning_effort_policy": "route-specific and explicitly passed on every invocation",
+    "unsupported_sampling_controls": "unavailable rather than fabricated"
+  },
+  "prompt": {
+    "revision": "pre-recovery-prompt-v1",
+    "template": "Execute only the supplied fixture. Return evidence and an explicit outcome class; never repair the denominator."
+  },
+  "context": {
+    "revision": "nested-context-loader-v1",
+    "mandatory_root_reads": true,
+    "mandatory_project_reads": true,
+    "compaction_restore_required": true
+  },
+  "tools": {
+    "revision": "native-node-tools-v1",
+    "network": "disabled_for_deterministic_fixtures",
+    "filesystem": "fixture_scoped_read_only"
+  },
+  "platform": {
+    "os": "windows",
+    "runtime": "node-22",
+    "uses_wsl": false,
+    "uses_bash": false,
+    "requires_symlink": false
+  },
+  "limits": {
+    "max_steps": 20,
+    "time_limit_ms": 120000,
+    "retry_max": 1,
+    "fallback_max": 1
+  }
+}

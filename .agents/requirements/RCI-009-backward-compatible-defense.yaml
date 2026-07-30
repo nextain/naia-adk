@@ -7,7 +7,7 @@ status: verified
 source: human
 priority: high
 created: 2026-07-14
-updated: 2026-07-14
+updated: 2026-07-30
 issue_url: ""
 source_directives: [USR-002, USR-004]
 description: |
@@ -15,12 +15,34 @@ description: |
 acceptance_criteria:
   - "Existing BEH and full hook E2E suites remain green with request-contract disabled by default."
   - "Documentation states host trust, coordinated local rewriting, between-hook reversion, signer trust, and external-side-effect limits."
+  - "Windows runs the native harness without WSL, Cygwin, MSYS2, a Linux VM, or a container; supervised descendants are bound to a kill-on-close Job Object before execution and confirmed empty after termination."
+  - "The Windows Job helper resolves CPython to an absolute native PE executable, verifies its win32 runtime identity, and rejects PATH command wrappers or WSL/Cygwin/MSYS redirection."
+  - "Enabled BEH gates fail closed on malformed input, missing cores, and unexpected runtime errors; wrapper and launcher exceptions require exact trusted relative entry points rather than matching basenames."
+  - "Handshake validation requires a finite timestamp, recorded settings hash, and readable current settings hash; launcher registration accepts only exact relative Node hook paths with no trailing arguments."
+  - "Supervised commands preserve argv boundaries without shell reconstruction on Linux or Windows, and lease publication is serialized with dead-owner recovery."
+  - "Stale lease recovery quarantines the observed lock by unique rename and releases only a nonce-matching owner, preventing concurrent reclaimers from deleting a replacement lock."
+  - "Windows lock publication failures retain diagnostics and terminate within the bounded deadline; request-contract evidence and review scope files are normalized to LF for stable cross-platform digests."
 trace:
   code:
     - { path: ".agents/hooks/core/request-contract.js", symbol: "governed / handleEvent", coverage: full }
     - { path: ".agents/context/harness.yaml", symbol: "request_contract_integrity.honest_limits", coverage: full }
+    - { path: ".agents/hooks/core/beh-ledger.js", symbol: "platform-neutral target canonicalization", coverage: full }
+    - { path: ".agents/hooks/core/beh-launch-core.js", symbol: "Linux and Windows launcher recognition", coverage: full }
+    - { path: ".agents/hooks/core/beh-supervise-core.js", symbol: "platform-neutral supervision state machine", coverage: full }
+    - { path: ".claude/hooks/beh-launch.cjs", symbol: "native Windows registration handshake", coverage: full }
+    - { path: ".claude/hooks/beh-launch.sh", symbol: "POSIX entry point delegating to the shared structural registration validator", coverage: full }
+    - { path: ".claude/hooks/beh-pretool.js", symbol: "fail-closed handshake and direct wrapper enforcement", coverage: full }
+    - { path: ".claude/hooks/beh-supervise.js", symbol: "platform-native supervised process execution and targeted termination", coverage: full }
+    - { path: ".claude/hooks/beh-windows-job.py", symbol: "suspended creation, Job Object assignment, owner death cleanup, and active-process confirmation", coverage: full }
+    - { path: "scripts/run-native-harness-tests.cjs", symbol: "native Node aggregate and WSL/Bash/MSYS poison environment", coverage: full }
+    - { path: "package.json", symbol: "test:harness-native entry point", coverage: full }
+    - { path: ".gitattributes", symbol: "cross-platform LF normalization for request-contract evidence", coverage: full }
   tests:
-    - { path: ".claude/hooks/e2e/run.sh", symbol: "BEH and request-contract native integration", coverage: full }
+    - { path: ".claude/hooks/e2e/run.sh", symbol: "native Linux BEH and request-contract integration", coverage: full }
+    - { path: ".claude/hooks/test/run-beh-ledger-test.js", symbol: "platform-neutral canonical target", coverage: full }
+    - { path: ".claude/hooks/test/run-beh-pretool-test.js", symbol: "native Windows launcher handshake", coverage: full }
+    - { path: ".claude/hooks/test/run-beh-supervise-wrapper-test.js", symbol: "native Windows process-tree termination and sibling survival", coverage: full }
+    - { path: ".claude/hooks/test/run-beh-supervise-test.js", symbol: "supervision decision fault injection", coverage: full }
     - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "disabled mode is a silent allow", coverage: full }
   reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

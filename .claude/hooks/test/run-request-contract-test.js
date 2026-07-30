@@ -14,7 +14,20 @@ const reviewRunner = require("../../../.agents/hooks/core/request-contract-revie
 let passed = 0;
 const runnerEvidenceByReview = new WeakMap();
 const fixtureRoots = new Set();
+const REVIEWER_EXTENSION = process.platform === "win32" ? ".cjs" : ".sh";
+const EXPECTED_SANDBOX_ENGINE = process.platform === "win32" ? "codex-windows-elevated" : "bubblewrap";
+const reviewerFixturePath = (name) => path.join(__dirname, "fixtures", name + REVIEWER_EXTENSION);
 const CLIENT_VERSIONS = { claude: "2.1.207", codex: "0.144.1" };
+const SANDBOX_EXECUTABLE = process.platform === "win32" ? reviewRunner.resolveCodexExecutable() : "/usr/bin/bwrap";
+const SANDBOX_EXECUTABLE_DIGEST = core.sha256(fs.readFileSync(SANDBOX_EXECUTABLE));
+function runSandbox(options) {
+	return reviewRunner.runSandbox({ ...options, allowedSandboxDigests: options.allowedSandboxDigests || [SANDBOX_EXECUTABLE_DIGEST] });
+}
+function writeReviewer(cwd, name, posixSource, windowsSource) {
+	const file = path.join(cwd, name + REVIEWER_EXTENSION);
+	fs.writeFileSync(file, process.platform === "win32" ? windowsSource : posixSource, { mode: 0o700 });
+	return file;
+}
 function test(name, fn) {
 	if (process.env.TEST_FILTER && !name.includes(process.env.TEST_FILTER)) return;
 	try {
@@ -24,6 +37,22 @@ function test(name, fn) {
 	} catch (error) {
 		process.stderr.write(`not ok - ${name}: ${error.stack || error}\n`);
 		process.exitCode = 1;
+	}
+}
+
+function withDeniedReaddir(target, fn) {
+	const original = fs.readdirSync;
+	fs.readdirSync = function deniedReaddir(candidate, ...args) {
+		if (path.resolve(candidate) === path.resolve(target)) {
+			const error = Object.assign(new Error("simulated access denial"), { code: "EACCES" });
+			throw error;
+		}
+		return original.call(fs, candidate, ...args);
+	};
+	try {
+		return fn();
+	} finally {
+		fs.readdirSync = original;
 	}
 }
 
@@ -38,13 +67,14 @@ function fixture() {
 	fs.writeFileSync(path.join(cwd, "src", "product.txt"), "baseline\n");
 	fs.writeFileSync(path.join(cwd, "evidence", "test-report.txt"), "verified evidence\n");
 	cp.execFileSync("git", ["init", "-q"], { cwd });
+	cp.execFileSync("git", ["config", "core.autocrlf", "false"], { cwd });
 	const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
 	const { publicKey: reviewerPublicKey, privateKey: reviewerPrivateKey } = crypto.generateKeyPairSync("ed25519");
 	const { publicKey: runnerPublicKey, privateKey: runnerPrivateKey } = crypto.generateKeyPairSync("ed25519");
 	const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
 	const reviewerPublicKeyPem = reviewerPublicKey.export({ type: "spki", format: "pem" });
 	const runnerPublicKeyPem = runnerPublicKey.export({ type: "spki", format: "pem" });
-	const reviewerFixtureDigest = core.sha256(fs.readFileSync(path.join(__dirname, "fixtures", "contract-reviewer.sh")));
+	const reviewerFixtureDigest = core.sha256(fs.readFileSync(reviewerFixturePath("contract-reviewer")));
 	const reviewerAttestor = makeAttestor({ cwd }, reviewerPrivateKey, "default-reviewer");
 	const runnerAttestor = makeAttestor({ cwd }, runnerPrivateKey, "default-runner");
 	const reviewerAttestorDigest = core.sha256(fs.readFileSync(reviewerAttestor));
@@ -54,7 +84,17 @@ function fixture() {
 	fs.writeFileSync(path.join(cwd, ".agents", "context", "runner.pub"), runnerPublicKeyPem, { mode: 0o600 });
 	for (const [directory, file] of [[".claude", "settings.json"], [".codex", "hooks.json"]]) {
 		const adapterFile = directory === ".claude" ? "request-contract.js" : "request-contract.cjs";
-		const hooks = Object.fromEntries(["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"].map((eventName) => [eventName, [{ ...(eventName === "PreToolUse" ? { matcher: "Bash|Edit|Write|NotebookEdit|apply_patch" } : {}), hooks: [{ type: "command", command: `node \"$(git rev-parse --show-toplevel)/${directory}/hooks/${adapterFile}\" ${eventName}` }] }]]));
+		const adapterPath = `${directory}/hooks/${adapterFile}`;
+		const hooks = Object.fromEntries(["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"].map((eventName) => {
+			const hook = directory === ".claude"
+				? { type: "command", command: "node", args: [`${"${CLAUDE_PROJECT_DIR}"}/${adapterPath}`, eventName] }
+				: {
+					type: "command",
+					command: `node \"$(git rev-parse --show-toplevel)/${adapterPath}\" ${eventName}`,
+					commandWindows: `powershell -NoProfile -Command \"$root = git rev-parse --show-toplevel; node (Join-Path $root '${adapterPath}') ${eventName}\"`,
+				};
+			return [eventName, [{ ...(eventName === "PreToolUse" ? { matcher: "Bash|Edit|Write|NotebookEdit|apply_patch" } : {}), hooks: [hook] }]];
+		}));
 		fs.writeFileSync(path.join(cwd, directory, file), JSON.stringify({ hooks }));
 	}
 	fs.writeFileSync(
@@ -69,7 +109,7 @@ function fixture() {
 				exclusions: [".agents/harness", ".agents/context/authority.pub", ".agents/context/reviewer.pub", ".agents/context/runner.pub", "default-reviewer.key", "default-reviewer-attestor.cjs", "default-runner.key", "default-runner-attestor.cjs", "node_modules"],
 				authority: { public_key_path: ".agents/context/authority.pub", credential_id: "test-platform-credential", require_user_presence: true, require_non_exportable: true },
 				reviewer: { public_key_path: ".agents/context/reviewer.pub", credential_id: "test-review-executor", require_no_network: true, require_repository_blind: true, require_home_blind: true, allowed_attestor_digests: [reviewerAttestorDigest] },
-				review_runner: { public_key_path: ".agents/context/runner.pub", credential_id: "test-isolation-runner", allowed_reviewer_digests: [reviewerFixtureDigest], allowed_attestor_digests: [runnerAttestorDigest] },
+				review_runner: { public_key_path: ".agents/context/runner.pub", credential_id: "test-isolation-runner", allowed_reviewer_digests: [reviewerFixtureDigest], allowed_sandbox_digests: [SANDBOX_EXECUTABLE_DIGEST], allowed_attestor_digests: [runnerAttestorDigest] },
 				retention: { success_hours: 24 },
 		}),
 	);
@@ -225,6 +265,12 @@ function makeContract(fx, unit, options = {}) {
 	return contract;
 }
 
+function coverOccurrences(contract, unit) {
+	for (const occurrence of core.readJson(unit.paths.state, { occurrences: [] }).occurrences || []) {
+		if (!contract.changes.some((change) => change.id === occurrence.id)) contract.changes.push({ id: occurrence.id, directive_id: contract.directives[0].id, implementation_id: contract.directives[0].trace.implementations[0], evidence_id: contract.directives[0].trace.evidence[0] });
+	}
+	return contract;
+}
 function bind(fx, unit, contract = makeContract(fx, unit)) {
 	for (const occurrence of core.readJson(unit.paths.state, { occurrences: [] }).occurrences || []) {
 		if (!contract.changes.some((change) => change.id === occurrence.id)) contract.changes.push({ id: occurrence.id, directive_id: contract.directives[0].id, implementation_id: contract.directives[0].trace.implementations[0], evidence_id: contract.directives[0].trace.evidence[0] });
@@ -232,10 +278,27 @@ function bind(fx, unit, contract = makeContract(fx, unit)) {
 	return core.bindContract(unit, contract, { publicKeyPem: fx.publicKeyPem, cwd: fx.cwd });
 }
 
+function runSyntheticReviewSandbox(options) {
+	if (process.platform !== "win32") return runSandbox(options);
+	const originalSpawnSync = cp.spawnSync;
+	cp.spawnSync = function interceptNativeSandbox(executable, args, spawnOptions) {
+		if (path.basename(String(executable)).toLowerCase() !== "codex.exe" || !Array.isArray(args) || args[0] !== "sandbox") return originalSpawnSync.call(this, executable, args, spawnOptions);
+		const separator = args.indexOf("--");
+		const cwdIndex = args.indexOf("-C");
+		assert(separator >= 0 && cwdIndex >= 0);
+		return originalSpawnSync.call(this, args[separator + 1], args.slice(separator + 2), { ...spawnOptions, cwd: args[cwdIndex + 1] });
+	};
+	try {
+		return runSandbox(options);
+	} finally {
+		cp.spawnSync = originalSpawnSync;
+	}
+}
+
 function cleanReview(fx, unit, runId, extras = {}) {
 	const challenge = core.issueReviewInvocation(unit, fx.cwd, core.readJson(unit.paths.head).session_id);
-	const reviewerPath = path.join(__dirname, "fixtures", "contract-reviewer.sh");
-	const isolated = reviewRunner.runSandbox({
+	const reviewerPath = reviewerFixturePath("contract-reviewer");
+	const isolated = runSyntheticReviewSandbox({
 		bundlePath: path.resolve(fx.cwd, challenge.manifest.bundle_locator),
 		expectedBundleDigest: challenge.manifest.bundle_digest,
 		reviewerPath,
@@ -356,7 +419,7 @@ function makeAttestor(fx, key, name) {
 	const scriptPath = path.join(fx.cwd, `${name}-attestor.cjs`);
 	const role = name.includes("runner") ? "runner" : "reviewer";
 	fs.writeFileSync(keyPath, key.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
-	fs.writeFileSync(scriptPath, `#!${process.execPath}\nconst crypto=require("crypto"),fs=require("fs");let input="";process.stdin.setEncoding("utf8");process.stdin.on("data",x=>input+=x);process.stdin.on("end",()=>{let p;try{p=JSON.parse(input)}catch{process.exit(2)};const ok=${JSON.stringify(role)}==="runner"?p.sandbox_engine==="bubblewrap"&&p.no_network===true&&p.repository_blind===true&&p.home_blind===true&&/^[a-f0-9]{64}$/.test(p.reviewer_executable_digest||"")&&/^[a-f0-9]{64}$/.test(p.review_payload_digest||"")&&Number.isInteger(p.executed_at):p.sandbox&&p.sandbox.no_network===true&&p.sandbox.repository_blind===true&&p.sandbox.home_blind===true&&p.executor&&/^[a-f0-9]{64}$/.test(p.executor.attestor_executable_digest||"")&&Number.isInteger(p.reviewed_at);if(!ok)process.exit(3);process.stdout.write(crypto.sign(null,Buffer.from(input),fs.readFileSync(${JSON.stringify(keyPath)})).toString("base64"))});\n`, { mode: 0o700 });
+	fs.writeFileSync(scriptPath, `#!${process.execPath}\nconst crypto=require("crypto"),fs=require("fs");let input="";process.stdin.setEncoding("utf8");process.stdin.on("data",x=>input+=x);process.stdin.on("end",()=>{let p;try{p=JSON.parse(input)}catch{process.exit(2)};const ok=${JSON.stringify(role)}==="runner"?p.sandbox_engine===${JSON.stringify(EXPECTED_SANDBOX_ENGINE)}&&p.no_network===true&&p.repository_blind===true&&p.home_blind===true&&/^[a-f0-9]{64}$/.test(p.reviewer_executable_digest||"")&&/^[a-f0-9]{64}$/.test(p.review_payload_digest||"")&&Number.isInteger(p.executed_at):p.sandbox&&p.sandbox.no_network===true&&p.sandbox.repository_blind===true&&p.sandbox.home_blind===true&&p.executor&&/^[a-f0-9]{64}$/.test(p.executor.attestor_executable_digest||"")&&Number.isInteger(p.reviewed_at);if(!ok)process.exit(3);process.stdout.write(crypto.sign(null,Buffer.from(input),fs.readFileSync(${JSON.stringify(keyPath)})).toString("base64"))});\n`, { mode: 0o700 });
 	return scriptPath;
 }
 
@@ -510,13 +573,14 @@ test("review runner enforces a real network, repository, home, and environment s
 	const fx = fixture();
 	const bundlePath = path.join(fx.cwd, "review-input.json");
 	fs.writeFileSync(bundlePath, JSON.stringify({ exact: "private source" }), { mode: 0o600 });
-	const reviewerPath = path.join(__dirname, "fixtures", "isolated-reviewer.sh");
+	const reviewerPath = reviewerFixturePath("isolated-reviewer");
 	const priorSecret = process.env.LEAK_SECRET;
 	process.env.LEAK_SECRET = "must-not-cross";
 	try {
-		const result = reviewRunner.runSandbox({ bundlePath, expectedBundleDigest: core.sha256(fs.readFileSync(bundlePath)), reviewerPath, allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))] });
-		assert.deepEqual(result.output, { secret_absent: true, home_blind: true, home_read_only: true, review_read_only: true, network_blocked: true, scratch_writable: true, bundle_readable: true, cwd: "/scratch" });
-		assert.equal(result.evidence.sandbox_engine, "bubblewrap");
+		const result = runSandbox({ bundlePath, expectedBundleDigest: core.sha256(fs.readFileSync(bundlePath)), reviewerPath, allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))] });
+		assert.equal(path.basename(result.output.cwd), "scratch");
+		assert.deepEqual({ ...result.output, cwd: "<scratch>" }, { secret_absent: true, home_blind: true, repository_blind: true, home_read_only: true, review_read_only: true, network_blocked: true, scratch_writable: true, bundle_readable: true, cwd: "<scratch>" });
+		assert.equal(result.evidence.sandbox_engine, EXPECTED_SANDBOX_ENGINE);
 		assert(Number.isInteger(result.evidence.launcher_process_id));
 	} finally {
 		if (priorSecret === undefined) delete process.env.LEAK_SECRET;
@@ -529,14 +593,17 @@ test("review runner snapshots exact digest-verified bundle bytes before executio
 	const bundlePath = path.join(fx.cwd, "review-snapshot.json");
 	const original = JSON.stringify({ value: "original" });
 	fs.writeFileSync(bundlePath, original, { mode: 0o600 });
-	const reviewerPath = path.join(fx.cwd, "delayed-reviewer.sh");
-	fs.writeFileSync(reviewerPath, "#!/usr/bin/bash\nset -eu\nsleep 0.2\njq -c . \"$REQUEST_CONTRACT_BUNDLE\"\n", { mode: 0o700 });
-	const mutator = cp.spawn("bash", ["-c", "sleep 0.05; printf '%s' '{\"value\":\"replaced\"}' > \"$1\"", "_", bundlePath], { stdio: "ignore" });
-	const result = reviewRunner.runSandbox({ bundlePath, expectedBundleDigest: core.sha256(original), reviewerPath, allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))] });
+	const reviewerPath = writeReviewer(fx.cwd, "delayed-reviewer",
+		"#!/usr/bin/bash\nset -eu\nsleep 0.2\njq -c . \"$REQUEST_CONTRACT_BUNDLE\"\n",
+		'#!/usr/bin/env node\nconst fs=require("fs");Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,200);process.stdout.write(fs.readFileSync(process.env.REQUEST_CONTRACT_BUNDLE,"utf8"));\n');
+	const mutator = process.platform === "win32"
+		? cp.spawn(process.execPath, ["-e", 'setTimeout(()=>require("fs").writeFileSync(process.argv[1],JSON.stringify({value:"replaced"})),50)', bundlePath], { stdio: "ignore" })
+		: cp.spawn("bash", ["-c", "sleep 0.05; printf '%s' '{\"value\":\"replaced\"}' > \"$1\"", "_", bundlePath], { stdio: "ignore" });
+	const result = runSandbox({ bundlePath, expectedBundleDigest: core.sha256(original), reviewerPath, allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))] });
 	assert.deepEqual(result.output, { value: "original" });
 	assert.equal(result.evidence.bundle_digest, core.sha256(original));
 	mutator.kill();
-	assert.throws(() => reviewRunner.runSandbox({ bundlePath, expectedBundleDigest: core.sha256(original), reviewerPath, allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))] }), (error) => error.code === "review_bundle_digest_mismatch");
+	assert.throws(() => runSandbox({ bundlePath, expectedBundleDigest: core.sha256(original), reviewerPath, allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))] }), (error) => error.code === "review_bundle_digest_mismatch");
 });
 
 test("review runner executes anonymous sealed snapshots even if former paths are replaced", () => {
@@ -544,15 +611,16 @@ test("review runner executes anonymous sealed snapshots even if former paths are
 	const bundlePath = path.join(fx.cwd, "review-sealed.json");
 	const original = JSON.stringify({ value: "sealed-original" });
 	fs.writeFileSync(bundlePath, original, { mode: 0o600 });
-	const reviewerPath = path.join(fx.cwd, "sealed-reviewer.sh");
-	fs.writeFileSync(reviewerPath, "#!/usr/bin/bash\nset -eu\njq -c . \"$REQUEST_CONTRACT_BUNDLE\"\n", { mode: 0o700 });
-	const result = reviewRunner.runSandbox({
+	const reviewerPath = writeReviewer(fx.cwd, "sealed-reviewer",
+		"#!/usr/bin/bash\nset -eu\njq -c . \"$REQUEST_CONTRACT_BUNDLE\"\n",
+		'#!/usr/bin/env node\nprocess.stdout.write(require("fs").readFileSync(process.env.REQUEST_CONTRACT_BUNDLE,"utf8"));\n');
+	const result = runSandbox({
 		bundlePath,
 		expectedBundleDigest: core.sha256(original),
 		reviewerPath,
 		allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))],
 		afterSnapshotSealed: () => {
-			fs.writeFileSync(reviewerPath, "#!/usr/bin/bash\nprintf '%s' '{\"value\":\"substituted-reviewer\"}'\n", { mode: 0o700 });
+			fs.writeFileSync(reviewerPath, process.platform === "win32" ? 'process.stdout.write(JSON.stringify({value:"substituted-reviewer"}));\n' : "#!/usr/bin/bash\nprintf '%s' '{\"value\":\"substituted-reviewer\"}'\n", { mode: 0o700 });
 			fs.writeFileSync(bundlePath, JSON.stringify({ value: "substituted-bundle" }));
 		},
 	});
@@ -563,20 +631,37 @@ test("review runner destroys a private snapshot when setup fails before spawn", 
 	const fx = fixture();
 	const bundlePath = path.join(fx.cwd, "review-cleanup.json");
 	fs.writeFileSync(bundlePath, JSON.stringify({ exact: "private setup failure" }), { mode: 0o600 });
-	const reviewerPath = path.join(__dirname, "fixtures", "isolated-reviewer.sh");
-	const before = fs.readdirSync("/proc/self/fd").sort();
-	const originalOpen = fs.openSync;
-	let anonymousOpens = 0;
-	fs.openSync = function injectedOpen(file, ...args) {
-		if (file === os.tmpdir() && ++anonymousOpens === 2) throw Object.assign(new Error("injected snapshot setup failure"), { code: "INJECTED" });
-		return originalOpen.call(this, file, ...args);
-	};
-	try {
-		assert.throws(() => reviewRunner.runSandbox({ bundlePath, expectedBundleDigest: core.sha256(fs.readFileSync(bundlePath)), reviewerPath, allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))] }), (error) => error.code === "review_runner_snapshot_unavailable");
-	} finally {
-		fs.openSync = originalOpen;
+	const reviewerPath = reviewerFixturePath("isolated-reviewer");
+	if (process.platform === "win32") {
+		const staging = path.join(path.parse(process.cwd()).root, "tmp", "naia-request-contract-review");
+		const before = fs.existsSync(staging) ? fs.readdirSync(staging).sort() : [];
+		const originalWrite = fs.writeFileSync;
+		let snapshotWrites = 0;
+		fs.writeFileSync = function injectedWrite(file, ...args) {
+			if (String(file).includes("naia-request-contract-review") && ++snapshotWrites === 2) throw Object.assign(new Error("injected snapshot setup failure"), { code: "INJECTED" });
+			return originalWrite.call(this, file, ...args);
+		};
+		try {
+			assert.throws(() => runSandbox({ bundlePath, expectedBundleDigest: core.sha256(fs.readFileSync(bundlePath)), reviewerPath, allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))] }), (error) => error.code === "review_runner_snapshot_unavailable");
+		} finally {
+			fs.writeFileSync = originalWrite;
+		}
+		assert.deepEqual(fs.existsSync(staging) ? fs.readdirSync(staging).sort() : [], before);
+	} else {
+		const before = fs.readdirSync("/proc/self/fd").sort();
+		const originalOpen = fs.openSync;
+		let anonymousOpens = 0;
+		fs.openSync = function injectedOpen(file, ...args) {
+			if (file === os.tmpdir() && ++anonymousOpens === 2) throw Object.assign(new Error("injected snapshot setup failure"), { code: "INJECTED" });
+			return originalOpen.call(this, file, ...args);
+		};
+		try {
+			assert.throws(() => runSandbox({ bundlePath, expectedBundleDigest: core.sha256(fs.readFileSync(bundlePath)), reviewerPath, allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))] }), (error) => error.code === "review_runner_snapshot_unavailable");
+		} finally {
+			fs.openSync = originalOpen;
+		}
+		assert.deepEqual(fs.readdirSync("/proc/self/fd").sort(), before);
 	}
-	assert.deepEqual(fs.readdirSync("/proc/self/fd").sort(), before);
 });
 
 test("trusted review runner launches, independently signs, and ingests an isolated protocol review", () => {
@@ -591,7 +676,7 @@ test("trusted review runner launches, independently signs, and ingests an isolat
 		"--cwd", fx.cwd,
 		"--unit", unit.id,
 		"--writer-session", "S1",
-		"--reviewer", path.join(__dirname, "fixtures", "contract-reviewer.sh"),
+		"--reviewer", reviewerFixturePath("contract-reviewer"),
 		"--reviewer-attestor", reviewerAttestor,
 		"--runner-attestor", runnerAttestor,
 	], { encoding: "utf8", cwd: root });
@@ -600,7 +685,7 @@ test("trusted review runner launches, independently signs, and ingests an isolat
 	assert.deepEqual(Object.keys(publicResult).sort(), ["run_id", "verdict"]);
 	assert.equal(publicResult.record_hash, undefined);
 	const record = core.verifyReviewChain(unit.paths).records[0];
-	assert.equal(record.isolation.sandbox_engine, "bubblewrap");
+	assert.equal(record.isolation.sandbox_engine, EXPECTED_SANDBOX_ENGINE);
 	assert.equal(record.isolation.reviewer_executable_digest, core.loadConfig(fx.cwd).review_runner.allowed_reviewer_digests[0]);
 	assert.equal(record.executor.attestor_executable_digest, fx.reviewerAttestorDigest);
 	assert.equal(record.isolation.attestor_executable_digest, fx.runnerAttestorDigest);
@@ -614,8 +699,8 @@ test("isolated reviewer stdout contains only opaque coverage and closed verdict 
 	const unit = start(fx);
 	bind(fx, unit);
 	const challenge = core.issueReviewInvocation(unit, fx.cwd, "S1");
-	const reviewerPath = path.join(__dirname, "fixtures", "contract-reviewer.sh");
-	const isolated = reviewRunner.runSandbox({
+	const reviewerPath = reviewerFixturePath("contract-reviewer");
+	const isolated = runSandbox({
 		bundlePath: path.resolve(fx.cwd, challenge.manifest.bundle_locator),
 		expectedBundleDigest: challenge.manifest.bundle_digest,
 		reviewerPath,
@@ -660,8 +745,10 @@ test("registered native control preflight reaches initial bind and the pinned re
 	core.secureJson(contractInput, contract);
 	envelope = { ...envelope, hook_event_name: "PostToolUse" };
 	assert.equal(runInstalledNativeAdapter("claude", fx, envelope, "PostToolUse"), null);
+	coverOccurrences(contract, unit);
+	core.secureJson(contractInput, contract);
 	const operatorScript = path.join(fx.cwd, "scripts", "request-contract.cjs");
-	const bindWords = [process.execPath, operatorScript, "bind", "--unit", unit.id, "--file", contractInput];
+	const bindWords = ["node", operatorScript, "bind", "--unit", unit.id, "--file", contractInput];
 	const injected = runInstalledNativeAdapter("claude", { ...fx }, { hook_event_name: "PreToolUse", session_id: "S1", cwd: fx.cwd, tool_name: "Bash", tool_use_id: "control-injected", tool_input: { command: `${shellCommand(bindWords)}; touch escaped` } }, "PreToolUse");
 	assert.equal(injected.decision, "block");
 	assert(injected.reason.includes("request_contract_unbound"));
@@ -673,7 +760,7 @@ test("registered native control preflight reaches initial bind and the pinned re
 	assert.equal(runInstalledNativeAdapter("claude", fx, { ...envelope, hook_event_name: "PostToolUse" }, "PostToolUse"), null);
 	assert.equal(core.readJson(unit.paths.binding).state, "active");
 	const reviewScript = path.join(fx.cwd, "scripts", "request-contract-review-runner.cjs");
-	const reviewer = path.join(__dirname, "fixtures", "contract-reviewer.sh");
+	const reviewer = reviewerFixturePath("contract-reviewer");
 	const reviewWords = [process.execPath, reviewScript, "--cwd", fx.cwd, "--unit", unit.id, "--writer-session", "S1", "--reviewer", reviewer, "--reviewer-attestor", fx.reviewerAttestor, "--runner-attestor", fx.runnerAttestor];
 	for (const toolId of ["control-review-one", "control-review-two"]) {
 		envelope = { hook_event_name: "PreToolUse", session_id: "S1", cwd: fx.cwd, tool_name: "Bash", tool_use_id: toolId, tool_input: { command: shellCommand(reviewWords) } };
@@ -699,6 +786,8 @@ test("native Codex apply_patch can bootstrap only one exact private control inpu
 	assert.deepEqual(core.readJson(unit.paths.state).active_mutations || {}, {});
 	core.secureJson(contractInput, contract);
 	assert.equal(runInstalledNativeAdapter("codex", fx, { ...envelope, hook_event_name: "PostToolUse", tool_response: { ok: true } }, "PostToolUse"), null);
+	coverOccurrences(contract, unit);
+	core.secureJson(contractInput, contract);
 	for (const invalidPatch of [
 		`*** Begin Patch\n*** Delete File: ${relative}\n*** End Patch`,
 		`*** Begin Patch\n*** Update File: ${relative}\n@@\n-{}\n+{}\n*** Add File: src/escape.txt\n+escape\n*** End Patch`,
@@ -709,7 +798,7 @@ test("native Codex apply_patch can bootstrap only one exact private control inpu
 		assert(blocked.reason.includes("request_contract_unbound"));
 	}
 	const operatorScript = path.join(fx.cwd, "scripts", "request-contract.cjs");
-	const bindWords = [process.execPath, operatorScript, "bind", "--unit", unit.id, "--file", contractInput];
+	const bindWords = ["node", operatorScript, "bind", "--unit", unit.id, "--file", contractInput];
 	envelope = nativeEnvelope("codex", fx, "PreToolUse", "CX-CONTROL", { tool_name: "Bash", tool_use_id: "codex-control-bind", tool_input: { command: shellCommand(bindWords) } });
 	assert.equal(runInstalledNativeAdapter("codex", fx, envelope, "PreToolUse"), null);
 	cp.execFileSync(bindWords[0], bindWords.slice(1), { cwd: fx.cwd, encoding: "utf8" });
@@ -1385,7 +1474,8 @@ test("review challenge stdout exposes only a manifest and opaque bundle locator"
 	assert(!path.isAbsolute(locator));
 	const out = path.join(fx.cwd, locator);
 	assert(fs.readFileSync(out, "utf8").includes(exactPrompt));
-	assert.equal(fs.statSync(out).mode & 0o777, 0o600);
+	if (process.platform === "win32") assert(fs.lstatSync(out).isFile() && !fs.lstatSync(out).isSymbolicLink());
+	else assert.equal(fs.statSync(out).mode & 0o777, 0o600);
 });
 
 test("review ingestion requires the pinned runner to attest all isolation controls", () => {
@@ -1828,15 +1918,25 @@ test("workspace manifests fail closed on unreadable directories and unsupported 
 	const unreadable = path.join(fx.cwd, "src", "unreadable");
 	fs.mkdirSync(unreadable);
 	fs.writeFileSync(path.join(unreadable, "hidden.txt"), "must not disappear from the manifest\n");
-	fs.chmodSync(unreadable, 0o000);
-	try {
-		assert.throws(() => core.workspaceManifest(fx.cwd), (error) => error.code === "workspace_manifest_unreadable");
-	} finally {
-		fs.chmodSync(unreadable, 0o700);
+	withDeniedReaddir(unreadable, () => assert.throws(() => core.workspaceManifest(fx.cwd), (error) => error.code === "workspace_manifest_unreadable"));
+	if (process.platform === "win32") {
+		const unsupported = path.join(fx.cwd, "src", "unsupported.entry");
+		fs.writeFileSync(unsupported, "simulated unsupported type\n");
+		const original = fs.lstatSync;
+		fs.lstatSync = function unsupportedLstat(candidate, ...args) {
+			if (path.resolve(candidate) === path.resolve(unsupported)) return { isSymbolicLink: () => false, isFile: () => false, isDirectory: () => false };
+			return original.call(fs, candidate, ...args);
+		};
+		try {
+			assert.throws(() => core.workspaceManifest(fx.cwd), (error) => error.code === "workspace_manifest_unsupported_type");
+		} finally {
+			fs.lstatSync = original;
+		}
+	} else {
+		const fifo = path.join(fx.cwd, "src", "unsupported.fifo");
+		cp.execFileSync("mkfifo", [fifo]);
+		assert.throws(() => core.workspaceManifest(fx.cwd), (error) => error.code === "workspace_manifest_unsupported_type");
 	}
-	const fifo = path.join(fx.cwd, "src", "unsupported.fifo");
-	cp.execFileSync("mkfifo", [fifo]);
-	assert.throws(() => core.workspaceManifest(fx.cwd), (error) => error.code === "workspace_manifest_unsupported_type");
 });
 
 test("POSIX backslashes remain distinct workspace path bytes", () => {
@@ -1876,21 +1976,17 @@ test("unreadable unit and quarantine storage can never disengage sticky governan
 	let fx = fixture();
 	start(fx);
 	const units = path.join(core.harnessRoot(fx.cwd), "units");
-	fs.chmodSync(units, 0o000);
-	try {
+	withDeniedReaddir(units, () => {
 		assert.throws(() => core.hasStickyGovernanceState(fx.cwd), (error) => error.code === "unit_storage_unreadable");
-	} finally {
-		fs.chmodSync(units, 0o700);
-	}
+		const processed = adapter.processEnvelope("claude", { hook_event_name: "UserPromptSubmit", session_id: "S1", cwd: fx.cwd, prompt: "preserve during unreadable unit storage" });
+		assert.equal(processed.output.decision, "block");
+	});
+	const preserved = core.listUnconsumedQuarantine(fx.cwd);
+	assert.equal(core.readJsonl(path.join(preserved[0].dir, "sources.jsonl"))[0].prompt, "preserve during unreadable unit storage");
 	fx = fixture();
 	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "Q", cwd: fx.cwd, prompt: "preserve me", origin: "native_user" });
 	const quarantine = path.join(core.harnessRoot(fx.cwd), "quarantine");
-	fs.chmodSync(quarantine, 0o000);
-	try {
-		assert.throws(() => core.hasStickyGovernanceState(fx.cwd), (error) => error.code === "quarantine_storage_unreadable");
-	} finally {
-		fs.chmodSync(quarantine, 0o700);
-	}
+	withDeniedReaddir(quarantine, () => assert.throws(() => core.hasStickyGovernanceState(fx.cwd), (error) => error.code === "quarantine_storage_unreadable"));
 });
 
 test("Git index and object failures abort manifests instead of hashing empty output", () => {
@@ -2255,10 +2351,12 @@ test("both client registries cover all governed lifecycle events", () => {
 	for (const event of ["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"]) {
 		for (const registry of [claude, codex]) {
 			assert(registry.hooks[event]);
-			const hooks = registry.hooks[event].flatMap((entry) => entry.hooks).filter((hook) => hook.command.includes("request-contract"));
+			const hooks = registry.hooks[event].flatMap((entry) => entry.hooks).filter((hook) => hook.command.includes("request-contract") || (hook.args || []).some((arg) => arg.includes("request-contract")));
 			assert.equal(hooks.length, 1);
-			assert.equal(hooks[0].command.split(/\s+/).at(-1), event);
-			assert(hooks[0].command.includes("git rev-parse --show-toplevel"));
+			const registeredEvent = Array.isArray(hooks[0].args) ? hooks[0].args.at(-1) : hooks[0].command.split(/\s+/).at(-1);
+			assert.equal(registeredEvent, event);
+			if (Array.isArray(hooks[0].args)) assert(hooks[0].args[0].includes("$" + "{CLAUDE_PROJECT_DIR}"));
+			else assert(hooks[0].command.includes("git rev-parse --show-toplevel"));
 		}
 	}
 });
@@ -2604,8 +2702,23 @@ test("registered hook commands resolve their adapters from a nested directory", 
 	for (const [client, registryPath] of [["claude", path.join(root, ".claude", "settings.json")], ["codex", path.join(root, ".codex", "hooks.json")]]) {
 		const nested = path.join(root, "packages", "artifacts-spec");
 		const registry = JSON.parse(fs.readFileSync(registryPath, "utf8"));
-		const command = registry.hooks.SessionStart.flatMap((entry) => entry.hooks).find((hook) => hook.command.includes("request-contract")).command;
-		const output = cp.execFileSync("bash", ["-c", command], { cwd: nested, input: JSON.stringify({ hook_event_name: "SessionStart", session_id: `NESTED-${client}`, cwd: nested }), encoding: "utf8", env: { ...process.env, REQUEST_CONTRACT: "off" } });
+		const hook = registry.hooks.SessionStart.flatMap((entry) => entry.hooks).find((candidate) => candidate.command.includes("request-contract") || (candidate.args || []).some((arg) => arg.includes("request-contract")));
+		const input = JSON.stringify({ hook_event_name: "SessionStart", session_id: "NESTED-" + client, cwd: nested });
+		let executable;
+		let args;
+		if (Array.isArray(hook.args)) {
+			executable = hook.command;
+			args = hook.args.map((arg) => arg.replace("$" + "{CLAUDE_PROJECT_DIR}", root));
+		} else if (process.platform === "win32" && hook.commandWindows) {
+			executable = "powershell.exe";
+			let script = hook.commandWindows.replace(/^powershell(?:\.exe)?\s+-NoProfile\s+-Command\s+/, "");
+			if (script.startsWith('"') && script.endsWith('"')) script = script.slice(1, -1);
+			args = ["-NoProfile", "-Command", script];
+		} else {
+			executable = "bash";
+			args = ["-c", hook.command];
+		}
+		const output = cp.execFileSync(executable, args, { cwd: nested, input, encoding: "utf8", env: { ...process.env, REQUEST_CONTRACT: "off" } });
 		assert.equal(output, "");
 	}
 });
@@ -2709,11 +2822,26 @@ test("reviewer allowlisting happens before any executable receives the bundle", 
 	const fx = fixture();
 	const bundlePath = path.join(fx.cwd, "private-review.json");
 	const marker = path.join(fx.cwd, "should-not-exist");
-	const reviewer = path.join(fx.cwd, "untrusted-reviewer.sh");
+	const reviewer = writeReviewer(fx.cwd, "untrusted-reviewer",
+		`#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`,
+		`require("fs").writeFileSync(${JSON.stringify(marker)},"ran");\n`);
 	fs.writeFileSync(bundlePath, "secret");
-	fs.writeFileSync(reviewer, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\n`, { mode: 0o700 });
-	assert.throws(() => reviewRunner.runSandbox({ bundlePath, reviewerPath: reviewer, allowedReviewerDigests: ["0".repeat(64)] }), /not pinned/);
+	assert.throws(() => runSandbox({ bundlePath, reviewerPath: reviewer, allowedReviewerDigests: ["0".repeat(64)] }), /not pinned/);
 	assert(!fs.existsSync(marker));
+});
+
+test("sandbox executable allowlisting happens before the reviewer starts", () => {
+	const fx = fixture();
+	const bundlePath = path.join(fx.cwd, "sandbox-pin-review.json");
+	const bytes = Buffer.from("sandbox pin secret");
+	fs.writeFileSync(bundlePath, bytes);
+	assert.throws(() => reviewRunner.runSandbox({
+		bundlePath,
+		expectedBundleDigest: core.sha256(bytes),
+		reviewerPath: reviewerFixturePath("contract-reviewer"),
+		allowedReviewerDigests: [fx.reviewerFixtureDigest],
+		allowedSandboxDigests: ["0".repeat(64)],
+	}), (error) => error.code === "sandbox_executable_not_allowed");
 });
 
 test("an argv-supplied attestor cannot sign unless its exact bytes are pinned", () => {
@@ -2729,20 +2857,22 @@ test("an argv-supplied attestor cannot sign unless its exact bytes are pinned", 
 test("review runner never reflects reviewer stderr", () => {
 	const fx = fixture();
 	const bundlePath = path.join(fx.cwd, "private-review.json");
-	const reviewer = path.join(fx.cwd, "failing-reviewer.sh");
+	const reviewer = writeReviewer(fx.cwd, "failing-reviewer",
+		"#!/bin/sh\necho RAW_PRIVATE_PROMPT >&2\nexit 7\n",
+		'process.stderr.write("RAW_PRIVATE_PROMPT");process.exit(7);\n');
 	fs.writeFileSync(bundlePath, "secret");
-	fs.writeFileSync(reviewer, "#!/bin/sh\necho RAW_PRIVATE_PROMPT >&2\nexit 7\n", { mode: 0o700 });
 	const digest = core.sha256(fs.readFileSync(reviewer));
 	let error;
-	try { reviewRunner.runSandbox({ bundlePath, reviewerPath: reviewer, allowedReviewerDigests: [digest] }); } catch (caught) { error = caught; }
+	try { runSandbox({ bundlePath, reviewerPath: reviewer, allowedReviewerDigests: [digest] }); } catch (caught) { error = caught; }
 	assert(error);
 	assert(!error.message.includes("RAW_PRIVATE_PROMPT"));
 });
 
 test("review runner stderr never reflects rejected reviewer JSON fields", () => {
 	const fx = fixture();
-	const reviewer = path.join(fx.cwd, "malicious-reviewer.sh");
-	fs.writeFileSync(reviewer, "#!/bin/sh\nprintf '%s' '{\"PRIVATE_PROMPT_FIELD_NAME\":true}'\n", { mode: 0o700 });
+	const reviewer = writeReviewer(fx.cwd, "malicious-reviewer",
+		"#!/bin/sh\nprintf '%s' '{\"PRIVATE_PROMPT_FIELD_NAME\":true}'\n",
+		'process.stdout.write(JSON.stringify({PRIVATE_PROMPT_FIELD_NAME:true}));\n');
 	const configPath = path.join(fx.cwd, ".agents", "context", "request-contract.json");
 	const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 	config.review_runner.allowed_reviewer_digests.push(core.sha256(fs.readFileSync(reviewer)));
@@ -2784,6 +2914,7 @@ test("prepared contract binding recovers atomically after interruption", () => {
 	const fx = fixture();
 	const unit = start(fx);
 	const contract = makeContract(fx, unit);
+	coverOccurrences(contract, unit);
 	assert.throws(() => core.bindContract(unit, contract, { publicKeyPem: fx.publicKeyPem, cwd: fx.cwd, afterTransactionPrepared: () => { throw new Error("simulated bind crash"); } }), /simulated bind crash/);
 	assert(fs.existsSync(path.join(unit.paths.transactions, "bind.json")));
 	core.withUnitLock(unit, () => null);
@@ -2865,7 +2996,13 @@ test("unsupported client versions fail closed", () => {
 	assert.equal(result.code, "request_contract_client_version_unsupported");
 });
 
-test("both client registries reject every missing event plus wrong adapters, arguments, roots, matchers, duplicates, and conflicts", () => {
+test("checked-in client registries satisfy the exact native lifecycle contract", () => {
+	const root = path.resolve(__dirname, "..", "..", "..");
+	assert.equal(core.clientRegistrySupports(root, "claude"), true);
+	assert.equal(core.clientRegistrySupports(root, "codex"), true);
+});
+
+test("both client registries reject every missing event plus wrong adapters, arguments, roots, native Windows commands, matchers, duplicates, and conflicts", () => {
 	const requiredEvents = ["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"];
 	for (const client of ["claude", "codex"]) {
 		const relativeRegistry = client === "claude" ? [".claude", "settings.json"] : [".codex", "hooks.json"];
@@ -2873,19 +3010,26 @@ test("both client registries reject every missing event plus wrong adapters, arg
 		const adapterPath = client === "claude" ? ".claude/hooks/request-contract.js" : ".codex/hooks/request-contract.cjs";
 		const locate = (registry, event) => {
 			for (const entry of registry.hooks[event] || []) {
-				const hook = (entry.hooks || []).find((candidate) => typeof candidate.command === "string" && candidate.command.includes("request-contract"));
+				const hook = (entry.hooks || []).find((candidate) => [candidate.command, candidate.commandWindows, ...(candidate.args || [])].some((value) => typeof value === "string" && value.includes(adapterPath)));
 				if (hook) return { entry, hook };
 			}
 			throw new Error(`missing request-contract fixture hook for ${client}:${event}`);
 		};
+		const replaceEverywhere = (hook, pattern, replacement) => {
+			if (typeof hook.command === "string") hook.command = hook.command.replace(pattern, replacement);
+			if (typeof hook.commandWindows === "string") hook.commandWindows = hook.commandWindows.replace(pattern, replacement);
+			if (Array.isArray(hook.args)) hook.args = hook.args.map((arg) => arg.replace(pattern, replacement));
+		};
 		const mutations = requiredEvents.flatMap((event) => [
 			{ name: `${event}:missing`, mutate: (registry) => { delete registry.hooks[event]; } },
-			{ name: `${event}:wrong-adapter`, mutate: (registry) => { const { hook } = locate(registry, event); hook.command = hook.command.replace(adapterName, `wrong-${adapterName}`); } },
-			{ name: `${event}:wrong-event-argument`, mutate: (registry) => { const { hook } = locate(registry, event); const replacement = event === "Stop" ? "PostCompact" : "Stop"; hook.command = hook.command.replace(new RegExp(` ${event}$`), ` ${replacement}`); } },
-			{ name: `${event}:wrong-root`, mutate: (registry) => { const { hook } = locate(registry, event); hook.command = `node ${adapterPath} ${event}`; } },
+			{ name: `${event}:wrong-adapter`, mutate: (registry) => { const { hook } = locate(registry, event); replaceEverywhere(hook, adapterName, `wrong-${adapterName}`); } },
+			{ name: `${event}:wrong-event-argument`, mutate: (registry) => { const { hook } = locate(registry, event); const replacement = event === "Stop" ? "PostCompact" : "Stop"; replaceEverywhere(hook, new RegExp(`${event}$`), replacement); } },
+			{ name: `${event}:wrong-root`, mutate: (registry) => { const { hook } = locate(registry, event); if (client === "claude") hook.args[0] = adapterPath; else { hook.command = `node ${adapterPath} ${event}`; hook.commandWindows = `node ${adapterPath} ${event}`; } } },
 			{ name: `${event}:wrong-matcher`, mutate: (registry) => { const { entry } = locate(registry, event); entry.matcher = event === "PreToolUse" ? "Bash" : "Bash|Edit"; } },
 			{ name: `${event}:duplicate`, mutate: (registry) => { const { entry, hook } = locate(registry, event); entry.hooks.push({ ...hook }); } },
 			{ name: `${event}:conflicting-registration`, mutate: (registry) => { const { hook } = locate(registry, event); registry.hooks[`Conflict${event}`] = [{ hooks: [{ ...hook }] }]; } },
+			...(client === "claude" ? [{ name: `${event}:unexpected-commandWindows`, mutate: (registry) => { locate(registry, event).hook.commandWindows = `node wrong-${adapterName} ${event}`; } }] : []),
+			...(client === "codex" ? [{ name: `${event}:missing-commandWindows`, mutate: (registry) => { delete locate(registry, event).hook.commandWindows; } }] : []),
 		]);
 		for (const { name, mutate } of mutations) {
 			const fx = fixture();
@@ -2949,6 +3093,20 @@ test("a lock owner is complete before publication and cannot enter through a rep
 	assert(!fs.existsSync(lock));
 });
 
+test("Windows lock retries preserve the underlying publication diagnostic", () => {
+	if (process.platform !== "win32") return;
+	const fx = fixture();
+	const lock = path.join(fx.cwd, ".agents", "harness", "locks", "diagnostic-test");
+	assert.throws(
+		() => core.withDirectoryLock(lock, () => "never", Date.now(), 30, {
+			afterCandidatePrepared: () => { throw Object.assign(new Error("simulated access denial"), { code: "EPERM" }); },
+		}),
+		(error) => error.code === "lifecycle_lock_busy"
+			&& error.publication_error?.code === "EPERM"
+			&& /last publication error EPERM/.test(error.message),
+	);
+});
+
 test("an index change starts a fresh consecutive Stop episode", () => {
 	const fx = fixture();
 	const unit = start(fx);
@@ -2966,21 +3124,24 @@ test("an index change starts a fresh consecutive Stop episode", () => {
 test("repository locking serializes concurrent genesis and quarantine writers", () => {
 	let fx = fixture();
 	const worker = path.join(os.tmpdir(), `request-contract-worker-${crypto.randomBytes(8).toString("hex")}.cjs`);
+	const coordinator = path.join(os.tmpdir(), `request-contract-coordinator-${crypto.randomBytes(8).toString("hex")}.cjs`);
 	const corePath = path.resolve(__dirname, "..", "..", "..", ".agents", "hooks", "core", "request-contract.js");
 	fs.writeFileSync(worker, `const core=require(${JSON.stringify(corePath)});const [mode,cwd,client,session,prompt]=process.argv.slice(2);const event=mode==="start"?{client,clientVersion:client==="claude"?"2.1.207":"0.144.1",eventName:"SessionStart",sessionId:session,cwd}:{client,eventName:"UserPromptSubmit",sessionId:session,cwd,prompt,origin:"native_user"};const result=core.handleEvent(event);if(mode==="start"&&result.kind!=="context")process.exit(2);if(mode==="prompt"&&result.code!=="request_contract_missing_genesis")process.exit(3);\n`);
-	let result = cp.spawnSync("bash", ["-c", '"$1" "$2" start "$3" claude A & "$1" "$2" start "$3" codex B & wait', "_", process.execPath, worker, fx.cwd], { encoding: "utf8", timeout: 20_000 });
+	fs.writeFileSync(coordinator, 'const cp=require("child_process");const [worker,cwd,mode]=process.argv.slice(2);const specs=mode==="start"?[["start",cwd,"claude","A"],["start",cwd,"codex","B"]]:Array.from({length:6},(_,i)=>["prompt",cwd,"codex","Q","prompt-"+(i+1)]);Promise.all(specs.map(args=>new Promise(resolve=>{const child=cp.spawn(process.execPath,[worker,...args],{stdio:["ignore","ignore","pipe"]});let stderr="";child.stderr.on("data",x=>stderr+=x);child.on("exit",code=>resolve({code,stderr}));}))).then(results=>{for(const result of results)if(result.code!==0){process.stderr.write(result.stderr);process.exit(result.code)}process.exit(0)});\n');
+	let result = cp.spawnSync(process.execPath, [coordinator, worker, fx.cwd, "start"], { encoding: "utf8", timeout: 20_000 });
 	assert.equal(result.status, 0, result.stderr);
 	assert.equal(core.listUnits(fx.cwd).length, 1);
 	const unit = { id: core.listUnits(fx.cwd)[0], paths: core.unitPaths(fx.cwd, core.listUnits(fx.cwd)[0]) };
 	assert.equal(core.readJson(unit.paths.head).session_bindings.length, 2);
 
 	fx = fixture();
-	result = cp.spawnSync("bash", ["-c", 'for n in 1 2 3 4 5 6; do "$1" "$2" prompt "$3" codex Q "prompt-$n" & done; wait', "_", process.execPath, worker, fx.cwd], { encoding: "utf8", timeout: 20_000 });
+	result = cp.spawnSync(process.execPath, [coordinator, worker, fx.cwd, "prompt"], { encoding: "utf8", timeout: 20_000 });
 	assert.equal(result.status, 0, result.stderr);
 	const quarantine = core.listUnconsumedQuarantine(fx.cwd);
 	assert.equal(quarantine.length, 1);
 	assert.equal(quarantine[0].head.count, 6);
 	fs.unlinkSync(worker);
+	fs.unlinkSync(coordinator);
 });
 
 test("full persisted lifecycle is policy-equivalent across Claude Code and Codex", () => {

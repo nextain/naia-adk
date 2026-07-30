@@ -1,0 +1,1 @@
+{"revision":"reuse-reservation-v1","kind":"deterministic_structural","input_contract":"reuse_query_decision_and_reservation_ledger","decision":"pass only when reuse search and an exclusive unexpired clear reservation precede first implementation","rules":["post-implementation decisions fail","conflict events fail","released or expired reservations fail"]}

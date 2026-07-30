@@ -1,0 +1,1 @@
+{"revision":"trace-validator-v1","kind":"deterministic_structural","input_contract":"digest_bound_trace_graph","decision":"accept only a connected active directive-to-evidence path with valid adjacent edge kinds and bidirectional references","rules":["orphan active nodes fail","stale revision or content digest bindings fail","repository-escaping locators fail"]}

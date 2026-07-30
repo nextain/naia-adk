@@ -8,8 +8,11 @@
  *
  * Usage: node run-beh-supervise-test.js
  */
+const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const S = require(path.join(__dirname, "..", "..", "..", ".agents", "hooks", "core", "beh-supervise-core.js"));
+const wrapper = require(path.join(__dirname, "..", "beh-supervise.js"));
 
 let PASS = 0,
 	FAIL = 0;
@@ -108,6 +111,36 @@ const cfg = (over) => ({ maxWallMs: 600_000, maxStallMs: 20_000, graceMs: 10_000
 {
 	const lp = S.lastProgressTs([{ ts: 10, value: 1 }, { ts: 20, value: 5 }, { ts: 30, value: 5 }, { ts: 40, value: 2 }], 0);
 	assert(lp === 20, "13. lastProgressTs = last strict increase", `got ${lp}`);
+}
+
+// 14. lease publication is serialized and a dead publication owner is recoverable.
+{
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "beh-lease-"));
+	const lease = path.join(cwd, "build.json");
+	fs.mkdirSync(`${lease}.lock`);
+	fs.writeFileSync(path.join(`${lease}.lock`, "owner.json"), JSON.stringify({ pid: process.pid }));
+	let busy = false;
+	try { wrapper.withLeaseLock(lease, () => {}); } catch (error) { busy = error.code === "lease_lock_busy"; }
+	assert(busy, "14. live lease publication owner blocks a concurrent writer");
+	fs.writeFileSync(path.join(`${lease}.lock`, "owner.json"), JSON.stringify({ pid: 99999999 }));
+	const recovered = wrapper.withLeaseLock(lease, () => "recovered");
+	assert(recovered === "recovered" && !fs.existsSync(`${lease}.lock`), "14. dead lease publication owner is recovered atomically");
+	wrapper.withLeaseLock(lease, () => {
+		fs.rmSync(`${lease}.lock`, { recursive: true, force: true });
+		fs.mkdirSync(`${lease}.lock`);
+		fs.writeFileSync(path.join(`${lease}.lock`, "owner.json"), JSON.stringify({ pid: process.pid, nonce: "replacement-owner" }));
+	});
+	assert(fs.existsSync(`${lease}.lock`), "14. release never deletes an ABA replacement lock");
+	fs.rmSync(`${lease}.lock`, { recursive: true, force: true });
+	fs.mkdirSync(`${lease}.lock`);
+	const old = new Date(Date.now() - 60000);
+	fs.utimesSync(`${lease}.lock`, old, old);
+	const ownerlessRecovered = wrapper.withLeaseLock(lease, () => "ownerless-recovered");
+	assert(ownerlessRecovered === "ownerless-recovered", "14. aged ownerless crash window is recoverable");
+	fs.writeFileSync(lease, JSON.stringify({ owner: "replacement-owner", ts: Date.now() }));
+	assert(wrapper.cleanupOwnedLease(lease, "old-owner") === false && fs.existsSync(lease), "14. old supervisor cannot delete a replacement lease");
+	assert(wrapper.cleanupOwnedLease(lease, "replacement-owner") === true && !fs.existsSync(lease), "14. matching supervisor removes only its own lease");
+	fs.rmSync(cwd, { recursive: true, force: true });
 }
 
 console.log(`\nBEH supervise fault-injection: ${PASS} passed, ${FAIL} failed`);

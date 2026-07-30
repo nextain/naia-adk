@@ -1,0 +1,30 @@
+{
+  "schema_revision": "development-capability-oracle-v1",
+  "development_only": true,
+  "oracles": {
+    "DEV-ALG-01":{"outputs":[6,4,0,100]},
+    "DEV-ALG-02":{"outputs":["world hello","blue is sky the","world hello","a"]},
+    "DEV-ALG-03":{"outputs":[true,true,false,true,false,false,true,false]},
+    "DEV-ALG-04":{"outputs":[[0,1],[1,2],[0,1]]},
+    "DEV-ALG-05":{"outputs":[true,true,false,false,true,true,false]},
+    "DEV-ALG-06":{"outputs":[6,1,23,-1]},
+    "DEV-ALG-07":{"outputs":["fl","","inter","a"," "]},
+    "DEV-ALG-08":{"outputs":[[[1,6],[8,10],[15,18]],[[1,5]],[[1,4]],[[1,2]]]},
+    "DEV-ALG-09":{"outputs":[1,2,3,8,89]},
+    "DEV-REV-01":{"findings":["left-progress"]},
+    "DEV-REV-02":{"findings":["swallowed-error"]},
+    "DEV-REV-03":{"findings":["missing-await"]},
+    "DEV-REV-04":{"findings":["sql-injection"]},
+    "DEV-REV-05":{"findings":["review-not-independent"]},
+    "DEV-CTX-01":{"selected":"project"},
+    "DEV-CTX-02":{"decision":"reject"},
+    "DEV-CTX-03":{"mirror_action":"preserve"},
+    "DEV-CTX-04":{"decision":"reuse"},
+    "DEV-CTX-05":{"status":"invalid"},
+    "DEV-STR-01":{"ids":["REQ-7","UC-2","FE-9"]},
+    "DEV-STR-02":{"classification":"local_private"},
+    "DEV-STR-03":{"route":"luna"},
+    "DEV-STR-04":{"first_missing":"feature_test"},
+    "DEV-STR-05":{"implementation_state":"blocked"}
+  }
+}
