@@ -292,7 +292,7 @@ function buildSessionInject(opts) {
 	const nextPhase = phaseKeys[currentIdx + 1];
 	if (nextPhase && GATE_PHASES.has(nextPhase)) {
 		lines.push(
-			`⚠ Next gate: ${PHASE_LABELS[nextPhase]} — user confirmation required before proceeding`,
+			`⚠ Next checkpoint: ${PHASE_LABELS[nextPhase]} — internal checkpoint; ask only if an unresolved material choice remains`,
 		);
 	}
 
@@ -347,7 +347,7 @@ function buildSessionInject(opts) {
 	lines.push(
 		"── [HARNESS: METHODOLOGY] ────────────────────────────────",
 		"Workflow: Issue-Driven Development (13 phases)",
-		"Gates (user confirmation required): understand → scope → plan → sync",
+		"Decision checkpoints: understand → scope → plan → sync — bounded requests proceed internally; ask only if an unresolved material choice remains",
 		"Anti-compact: write ALL findings/decisions to files or GitHub Issue immediately",
 		"Iterative review: repeat read→fix until 2 consecutive clean passes",
 		"══════════════════════════════════════════════════════════",

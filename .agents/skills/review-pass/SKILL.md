@@ -131,7 +131,7 @@ traceability for requirements-driven projects.
 
 > **The orchestrator AI does NOT report intermediate results to the user.**
 > **CONFIRMED findings are auto-fixed with diff preview (see section 6.6).**
-> **CONTESTED findings at R=2 trigger inline user prompt, then loop resumes.**
+> **CONTESTED findings first receive independent arbitration and source-evidence verification. Ask the user only for a remaining material decision.**
 > **Only the final report is shown after convergence.**
 > **Governed mode forbids `--light`, caller-only file scope, unsigned deferral, and review without the exact current request-contract bundle.**
 > **Planning/integration without original source, immutable baseline, and a preservation contract is NOT CLEAN.**
@@ -492,8 +492,8 @@ If the default config assigns the same tool as both reviewer and arbiter
 1. List all configured tools not in the current reviewer pool
 2. Rank by capability tier: claude > gemini > opencode > codex (configurable)
 3. Select highest-ranked available tool
-4. If none available outside reviewer pool → fall back to user escalation
-   (no inline arbiter possible at this stage)
+4. If none is available outside the reviewer pool → run deterministic/source-evidence
+   verification and retry an independent arbiter; ask only if a material decision remains
 ```
 
 ### 5.2 When Arbiter Exists (development, integration)
@@ -522,26 +522,13 @@ for the named `replace|remove|disable|redirect|migrate` disposition.
    DISMISSED → add to known_issues with suppress_hash
 ```
 
-### 5.3 When No Arbiter (planning, test — typically R=2)
+### 5.3 When No Arbiter Is Immediately Available
 
-CONTESTED findings trigger an **inline user prompt, then loop resumes**:
-
-```
-"Round {N}: Reviewer A found [{severity}] {finding_description}
- Reviewer B did not flag this.
- 
- Please judge:
- [F] Fix it (treat as CONFIRMED)
- [D] Dismiss it (add to known_issues)
- [A] Retry with arbiter (spawn arbiter for this finding)"
-```
-
-After user responds:
-- Fix → add to confirmed, auto-fix, continue loop
-- Dismiss → add to known_issues, continue loop
-- Retry → invoke arbiter per section 5.2, then continue loop
-
-The loop does NOT break. It pauses for user input, then resumes.
+Do not turn CONTESTED into an automatic user prompt. Re-check the immutable source,
+requirements, code, and test evidence; then retry with an independent arbiter outside the
+reviewer pool. Evidence-confirmed in-scope defects are auto-fixed and re-reviewed. Ask the
+user only when evidence cannot resolve a material design, business, product, scope, authority,
+or irreversible/external-impact decision.
 
 ---
 
@@ -726,8 +713,9 @@ fixes using its own edit tools). After all fixes in a round:
 
 ### 6.6 No Re-entry Problem
 
-The loop does NOT break on escalation. It uses inline user prompts that
-pause execution, get a response, and continue the same loop iteration.
+The loop does not pause merely because a finding is CONTESTED. It preserves state while
+independent arbitration and source-evidence verification run. Only a remaining material
+decision pauses for user input, after which the same loop iteration resumes.
 All prior state (known_issues, review_log, consecutive_clean) is preserved.
 
 ---

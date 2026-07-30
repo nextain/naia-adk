@@ -8,6 +8,8 @@ The canonical rules define the capabilities and evidence of the `coordinator·ex
 
 Before invoking a model, perform deterministic checks first and select the least expensive adapter that satisfies the required capabilities and risk level. If no adapter can provide a required independent role, block the process instead of replacing it with a self-check.
 
+Every delegated or nested role inherits the coordinator's authorized objective, scope, routine execution authority, and exception boundary. It must not request approval again for ordinary in-scope reading, implementation, testing, building, or non-destructive Git work. Approval remains required for irreversible or destructive action including remote-ref deletion, force push, unrelated-history integration, external messaging or payment, production-impacting mutation, material cost, credential exposure, or material scope expansion.
+
 General roles are explicitly mapped in adapters. The implementer is connected to Codex's worker, and translation uses the low-cost fallback chain Claude Haiku 4.5 → Codex GPT-5.6 Luna(low) → Claude Sonnet. All CLI calls use a shared stdin-based invocation function, so long prompts are not passed as command-line arguments.
 
 ## Codex Adapter

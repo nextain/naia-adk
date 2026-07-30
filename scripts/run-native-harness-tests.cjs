@@ -10,6 +10,7 @@ const poisonEnv={...process.env,WSL_INTEROP:"NAIA_NATIVE_WINDOWS_POISON",BASH_EN
 const runs=[
   ["entry-point sync",[".claude/hooks/test/run-sync-entry-points-test.cjs"]],
   ["agents context mirror",[".claude/hooks/test/run-agents-context-mirror-test.cjs"]],
+  ["routine approval policy",[".claude/hooks/test/run-routine-approval-policy-test.cjs"]],
   ["BEH ledger",[".claude/hooks/test/run-beh-ledger-test.js"]],
   ["BEH receipts",[".claude/hooks/test/run-beh-receipts-test.js"]],
   ["BEH supervise",[".claude/hooks/test/run-beh-supervise-test.js"]],
