@@ -26,6 +26,11 @@ export function resolveBackendExecutable(name, pathValue = process.env.PATH ?? "
 	throw new Error(`${name} executable was not found in the installer PATH`);
 }
 
+export function installServiceCommands(unitName) {
+	if (typeof unitName !== "string" || !/^naia-discord-sessions-[a-f0-9]{12}\.service$/.test(unitName)) throw new Error("invalid Discord service unit name");
+	return [["enable", unitName], ["restart", unitName]];
+}
+
 export function manageService({ adkRoot, command }) {
 	const config = command === "unit" ? null : loadMessengerConfig(resolve(adkRoot, "naia-settings/messenger-sessions/config.json"));
 	const backendExecutables = command === "install" ? { [config.backend.selected]: resolveBackendExecutable(config.backend.selected) } : {};
@@ -42,7 +47,7 @@ export function manageService({ adkRoot, command }) {
 			const linger = spawnSync("loginctl", ["enable-linger", userInfo().username], { encoding: "utf8" });
 			if (linger.status !== 0) throw new Error((linger.stderr || linger.stdout || "could not enable user lingering").trim());
 		}
-		if (config.service?.autoStart !== false) runSystemctl(["enable", "--now", rendered.unitName]);
+		if (config.service?.autoStart !== false) for (const args of installServiceCommands(rendered.unitName)) runSystemctl(args);
 		return `installed ${rendered.unitName}`;
 	}
 	if (command === "status") return runSystemctl(["status", "--no-pager", rendered.unitName]);

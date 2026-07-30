@@ -10,7 +10,7 @@ import { DiscordGatewaySession, MemoryGatewayState, StoredGatewayState } from ".
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
 import { renderDiscordUserUnit } from "../helper/systemd.mjs";
-import { resolveBackendExecutable } from "../helper/service-manager.mjs";
+import { installServiceCommands, resolveBackendExecutable } from "../helper/service-manager.mjs";
 import { RecoveryCodec } from "../helper/recovery-crypto.mjs";
 import { randomBytes } from "node:crypto";
 import { DiscordStatusProjection } from "../helper/discord-projection.mjs";
@@ -214,6 +214,8 @@ test("DSG-008 pins the selected backend executable independently of the systemd 
 	assert.match(unit.content, /Environment="PATH=\/opt\/node\/bin:/);
 	assert.match(unit.content, new RegExp(`PATH=[^\\n]*${bin.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}`));
 	assert.throws(() => resolveBackendExecutable("claude", bin), /not found/);
+	assert.deepEqual(installServiceCommands(unit.unitName), [["enable", unit.unitName], ["restart", unit.unitName]]);
+	assert.throws(() => installServiceCommands("other.service"), /invalid/);
 });
 
 test("DSG-009 participant status projection is limited to the current Discord scope", async () => {
