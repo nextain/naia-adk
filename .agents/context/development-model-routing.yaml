@@ -147,6 +147,23 @@ cost_controls:
   batch_lightweight_work: translation and mechanical classification must process only changed inputs with cached hashes
   escalation: Sol high is reserved for arbitration or genuinely high-risk work
 
+quick_start_profiles:
+  status: opt_in_pilot_no_total_cost_claim
+  source: packages/benchmark-contract/baselines/development-composition-profiles.json
+  default_opt_in: balanced
+  fallback: control
+  structure_rule: profiles define stable roles and guards; replaceable model bindings are evaluated separately so a new model does not require redesigning the profiles
+  profiles:
+    control: all roles use the Sol binding in separate executions; serves as the quality/cost reference and high-risk fallback
+    balanced: Sol owns orchestration and integration; Terra handles bounded implementation and focused testing; this is the first usable profile
+    economy: balanced plus Luna only for bounded low-risk mechanical work with an exact validator
+  selection_guards:
+    - unbounded or high-risk work falls back to Sol
+    - Luna requires bounded scope, low risk, and an exact validator; otherwise use Terra or Sol
+    - independent review requires distinct session and execution identities and prefers a binding different from the producer
+  claim_boundary: phase 1 makes balanced available for opt-in use but does not claim proven total-system cost reduction
+  new_model_rule: run only the affected capability experiments, update the binding qualification and evidence expiry, then compare the unchanged profiles
+
 benchmark_candidate_registry:
   status: evidence_required_before_production_routing
   fixed_constraint: Codex gpt-5.6-sol remains the main orchestrator and final integrator

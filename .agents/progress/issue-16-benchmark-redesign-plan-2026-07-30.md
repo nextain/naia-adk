@@ -1,6 +1,6 @@
 # Issue #16 benchmark redesign plan
 
-Status: implementation in progress after checkpoint `1644a80`.
+Status: phase-1 usable profile implementation; phase-2 evidence plan follows.
 
 ## Fixed outcome
 
@@ -10,7 +10,31 @@ Codex 5.6 Sol remains the main orchestrator and final integrator. The benchmark 
 
 The four algorithm-output tasks in the first pilot are usable as a narrow model-capability smoke test. The B/C tasks are not valid runtime or harness measurements because the old adapter asked the model to emit expected JSON. Preserve those results as historical structural smoke only and exclude them from routing conclusions.
 
-## Work packages
+## Delivery order
+
+### Phase 1 — usable structure and immediate opt-in
+
+1. Freeze stable role profiles separately from replaceable model bindings.
+2. Ship `control`, `balanced`, and `economy`; make `balanced` the explicit opt-in default and `control` the fail-safe fallback.
+3. Keep Sol responsible for orchestration and final integration. Allow Terra only for bounded engineering work. Allow Luna only for bounded, low-risk mechanical work with an exact validator.
+4. Expose a deterministic selector that falls back instead of guessing when scope, risk, validation, or reviewer independence is insufficient.
+5. Run native Linux verification and independent cross-review of the staged phase-1 profile checkpoint. Keep the full governed request-contract CLEAN streak as a separate follow-up because it has a wider review scope.
+6. Commit and push phase 1 immediately so other naia-adk sessions can pull and use the same structure.
+
+Phase 1 explicitly does not claim proven total-system cost reduction. It makes an opt-in route available that assigns qualified bounded roles to non-Sol bindings and falls back conservatively.
+
+The phase-1 profile checkpoint was independently reviewed CLEAN by Gemini Pro and Grok after their findings were corrected. This is profile-scope evidence, not a replacement for the request-contract receipt quorum.
+
+### Phase 2 — small experiments and composition evidence
+
+1. Run small, pre-registered capability experiments before end-to-end combinations.
+2. Convert observations into conditional role rules with explicit forbidden conditions.
+3. Compare the unchanged `control`, `balanced`, and `economy` profiles on the same full development tasks.
+4. Include orchestration, handoff, retry, review, rework, translation, synchronization, and integration cost.
+5. Requalify only affected bindings when a new model, price, provider route, or model version appears; do not redesign stable profiles.
+6. Add external candidates only after connectivity, identity, usage, and price evidence pass.
+
+## Benchmark work packages
 
 1. Split the runner into model-capability, real agent-runtime, and deterministic governance-harness execution owners.
 2. Use a 24-cluster public development pilot with three attempts per route. After pre-run power analysis, freeze a sealed acceptance set of at least 80 hidden task clusters with five attempts per qualifying route; the frozen sample may increase but never decrease after results are observed.
@@ -19,9 +43,9 @@ The four algorithm-output tasks in the first pilot are usable as a narrow model-
 5. Freeze provider/deployment/model/configuration identity, raw receipt digest, usage, latency, retry/fallback/failure cost, and price evidence. Unknown price forbids a savings claim.
 6. Replace B/C model prompts with actual runtime fault injection and actual hook/validator invocations.
 7. Run the public development pilot, perform power estimation, freeze the acceptance sample size, and then run the sealed comparison. Use task-clustered paired bootstrap with 10,000 resamples, a -5 percentage-point non-inferiority margin, a 15 percent minimum cost improvement, and Holm correction across the five candidate-versus-Sol comparisons.
-8. Require two independent clean adversarial reviews on the same immutable snapshot, refresh request-contract receipts, and update GitHub issue #16.
+8. Require two independent clean adversarial reviews on the same immutable snapshot, refresh request-contract receipts where their reviewed scope changed, and update GitHub issue #16.
 
-## Candidate profiles
+## Replaceable model bindings
 
 - Sol orchestrator and final integrator, plus a distinct `worker-sol-control` session with the minimal worker prompt and no oracle access. Orchestration cost is common overhead and is not mixed into worker response scoring.
 - Terra bounded engineering worker
@@ -31,6 +55,8 @@ The four algorithm-output tasks in the first pilot are usable as a narrow model-
 - Upstage private-beta `solar-open2` hosted API arm using `UPSTAGE_KEY`
 
 HY3 is benchmark-only. Production routing remains prohibited even after a passing run until a separate explicit policy decision changes that rule.
+
+The names above are current bindings, not permanent profile definitions. A successor model enters through a bounded capability experiment, evidence expiry check, and binding update. Profile semantics remain stable.
 
 ## Sealed execution boundary
 

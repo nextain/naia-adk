@@ -1,0 +1,92 @@
+{
+  "schema_revision": "development-composition-profiles-v1",
+  "status": "opt_in_pilot_no_total_cost_claim",
+  "default_opt_in_profile": "balanced",
+  "fallback_profile": "control",
+  "bindings": {
+    "sol": {
+      "adapter": "codex",
+      "model": "gpt-5.6-sol",
+      "qualification": "orchestration_and_integration_baseline"
+    },
+    "terra": {
+      "adapter": "codex",
+      "model": "gpt-5.6-terra",
+      "qualification": "bounded_worker_development_calibration"
+    },
+    "luna": {
+      "adapter": "codex",
+      "model": "gpt-5.6-luna",
+      "qualification": "deterministic_mechanical_work_only"
+    }
+  },
+  "profiles": [
+    {
+      "id": "control",
+      "purpose": "Quality and total-cost reference plus high-risk fallback",
+      "assignments": {
+        "orchestrator": "sol",
+        "integrator": "sol",
+        "bounded_worker": "sol",
+        "mechanical_worker": "sol",
+        "tester": "sol",
+        "reviewer_pool": ["sol"]
+      }
+    },
+    {
+      "id": "balanced",
+      "purpose": "Immediately usable opt-in profile that delegates bounded engineering work while Sol retains decisions and integration",
+      "assignments": {
+        "orchestrator": "sol",
+        "integrator": "sol",
+        "bounded_worker": "terra",
+        "mechanical_worker": "terra",
+        "tester": "terra",
+        "reviewer_pool": ["terra", "sol"]
+      }
+    },
+    {
+      "id": "economy",
+      "purpose": "Experimental extension of balanced using Luna only behind exact validation",
+      "assignments": {
+        "orchestrator": "sol",
+        "integrator": "sol",
+        "bounded_worker": "terra",
+        "mechanical_worker": "luna",
+        "tester": "terra",
+        "reviewer_pool": ["terra", "sol"]
+      }
+    }
+  ],
+  "guards": {
+    "bounded_worker": {
+      "requires_bounded_scope": true,
+      "maximum_risk": "medium",
+      "fallback_binding": "sol"
+    },
+    "mechanical_worker": {
+      "luna_requires_exact_validator": true,
+      "luna_requires_bounded_scope": true,
+      "luna_maximum_risk": "low",
+      "fallback_binding": "terra"
+    },
+    "review": {
+      "different_session_required": true,
+      "different_execution_required": true,
+      "prefer_different_binding_from_producer": true,
+      "fail_closed_without_independent_execution_identity": true
+    }
+  },
+  "claim_boundary": {
+    "allowed": [
+      "balanced_is_available_for_opt_in_use",
+      "role_and_model_binding_are_separate",
+      "unsafe_or_unqualified_tasks_fall_back"
+    ],
+    "forbidden_until_phase_2": [
+      "proven_total_cost_reduction",
+      "production_optimal_profile",
+      "global_model_superiority"
+    ]
+  }
+}
