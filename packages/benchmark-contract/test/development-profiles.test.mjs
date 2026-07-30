@@ -11,7 +11,10 @@ assert(fs.readFileSync(path.join(packageRoot,"README.md"),"utf8").includes(`ê³„ì
 assert.equal(catalog.default_opt_in_profile,"balanced");
 assert.equal(resolveDevelopmentProfile().profile.id,"balanced");
 assert.equal(selectDevelopmentBinding({role:"orchestrator"}).binding_id,"sol");
-assert.equal(selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,risk:"medium"}).binding_id,"terra");
+assert.equal(selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,exactValidator:true,risk:"medium"}).binding_id,"luna");
+const unvalidatedWorker=selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,exactValidator:false,risk:"medium"});
+assert.equal(unvalidatedWorker.binding_id,"terra");
+assert.equal(unvalidatedWorker.fallback_reason,"Luna implementation validator guard");
 const unboundedWorker=selectDevelopmentBinding({role:"bounded_worker",boundedScope:false,risk:"low"});
 assert.equal(unboundedWorker.binding_id,"sol");
 assert.equal(unboundedWorker.fallback_reason,"bounded engineering guard");
@@ -35,7 +38,7 @@ assert.throws(()=>selectDevelopmentBinding({role:"adversarial_reviewer",producer
 const changedGuards=structuredClone(catalog);
 changedGuards.guards.bounded_worker.maximum_risk="low";
 changedGuards.guards.bounded_worker.fallback_binding="terra";
-assert.equal(selectDevelopmentBindingFromCatalog(changedGuards,{role:"bounded_worker",boundedScope:true,risk:"medium"}).binding_id,"terra");
+assert.equal(selectDevelopmentBindingFromCatalog(changedGuards,{role:"bounded_worker",boundedScope:true,exactValidator:true,risk:"medium"}).binding_id,"terra");
 changedGuards.guards.review.prefer_different_binding_from_producer=false;
 assert.equal(selectDevelopmentBindingFromCatalog(changedGuards,{role:"adversarial_reviewer",producerBinding:"terra",...independentReview}).binding_id,"terra");
 assert.throws(()=>resolveDevelopmentProfile("future-model-name"),/unknown development composition profile/);
