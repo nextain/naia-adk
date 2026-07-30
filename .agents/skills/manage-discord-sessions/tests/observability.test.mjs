@@ -383,7 +383,7 @@ test("DSO-001 rejects a newer database schema without mutating it", () => {
 	const { databasePath, store } = fixture();
 	store.close();
 	const db = new DatabaseSync(databasePath);
-	db.prepare("UPDATE metadata SET value = '3' WHERE key = 'schema_version'").run();
+	db.prepare("UPDATE metadata SET value = '999' WHERE key = 'schema_version'").run();
 	db.close();
 	const before = readFileSync(databasePath);
 	assert.throws(() => new SessionStore(databasePath), /schema is newer/);

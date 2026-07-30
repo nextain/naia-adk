@@ -19,8 +19,8 @@ acceptance_criteria:
   - "A fake clock proves the 10-second heartbeat, 30-second stale threshold, 120-second default soft-silence threshold, clock rollback handling, and ownership-conflict precedence."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/projector.mjs", symbol: "projectServiceHealth/projectActivityHealth", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/projector.mjs", symbol: "projectServiceHealth/projectActivityHealth", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-002 separates fresh progress, unsupported detail, waiting, stall, deadline, and stale service", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-002 separates fresh progress, unsupported detail, waiting, stall, deadline, and stale service", coverage: full }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
 decisions: []

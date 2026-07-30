@@ -20,11 +20,15 @@ acceptance_criteria:
   - "An actual reboot starts exactly one helper owner, resumes or explicitly reconnects Gateway, keeps the same jobId with a new attemptId and recovered event, and posts at most one recovery notice per boot generation."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "ADK-root-local entry", coverage: partial }
-    - { path: "naia-settings/messenger-sessions/config.example.json", symbol: "workspace-local configuration example", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/helper/adapters.mjs", symbol: "getBackendAdapter/inspectBackendLine", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "runBackendAttempt", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "ADK-root-local service and visibility entry", coverage: full }
+    - { path: "naia-settings/messenger-sessions/config.example.json", symbol: "workspace-local configuration example", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/adapters.mjs", symbol: "getBackendAdapter/inspectBackendLine", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "runBackendAttempt", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service.mjs", symbol: "runDiscordService", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/recovery-crypto.mjs", symbol: "RecoveryCodec", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/systemd.mjs", symbol: "renderDiscordUserUnit", coverage: partial }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "Codex/Claude independent execution and timeout tests", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "Codex/Claude parity and recovery interruption tests", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-004/DSG-007/DSG-008 simulated Gateway and reboot recovery; actual host reboot receipt pending local setup", coverage: partial }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md", ".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], integration: null }
 decisions: []

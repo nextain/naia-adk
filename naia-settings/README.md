@@ -27,10 +27,26 @@ and operator IDs may be private. It stores `credentialRef` only, never a bot
 token. Durable job/event/evidence state is also ignored and remains available
 after helper or machine restart.
 
-Use the existing `manage-discord-sessions` skill from Codex or Claude. The
-current implementation exposes local `status`, `jobs`, `job`, and `watch`;
-Gateway, systemd reboot startup, and real backend adapters are issue #18 later
-slices and must not be reported as already available.
+Use the existing `manage-discord-sessions` skill from Codex or Claude. It works
+without `naia-agent` or `naia-shell`: Discord Gateway receives events, the
+selected Codex or Claude CLI runs in an isolated child environment, and a user
+systemd unit restores the service after login (`startAt=login`) or at boot with
+user lingering (`startAt=boot`).
+
+```bash
+.agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh service install
+.agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh status
+.agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh jobs --active
+.agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh job <id> --events
+.agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh watch --job <id>
+```
+
+The service intentionally does not open a terminal. Its durable safe-event
+ledger is the visibility surface. A prompt is stored only as authenticated
+ciphertext protected by an owner-only local recovery key. After reboot, valid
+recovery material starts a new attempt under the same job ID; missing or corrupt
+material becomes `recovery_review`. An uncertain Discord delivery is never
+auto-resubmitted.
 
 ## `llm.json` — LLM role configuration (SoT)
 

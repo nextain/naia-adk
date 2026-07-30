@@ -19,10 +19,12 @@ acceptance_criteria:
   - "Typed event payloads are at most 2 KiB, event fields use documented closed enums, identifiers use the documented 64-character grammar plus secret-pattern rejection, and metrics are closed to the documented non-negative scalar keys."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/sanitize.mjs", symbol: "buildSafeEventSummary/validateSafeMetrics", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "prepareChildEnvironment", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/sanitize.mjs", symbol: "buildSafeEventSummary/validateSafeMetrics/sanitizeFinalResponse", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "prepareChildEnvironment", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-scope.mjs", symbol: "authorizeDiscordMessage", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-005 rejects unsafe event shapes and coalesces high-rate activity", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "DSO-005 creates a private minimal child environment and copies only provider auth", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-005 rejects unsafe event shapes and coalesces high-rate activity", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "DSO-005 isolated child environment tests", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-001/DSG-003/DSG-009/DSG-012 authorization and privacy", coverage: full }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md", ".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], integration: null }
 decisions: []

@@ -73,6 +73,7 @@ if (!existsSync(databasePath) && command === "status") {
 	const empty = {
 		schemaVersion: 1,
 		service: { state: "stopped", reasonCode: "service_state_missing", observedAt: new Date().toISOString(), heartbeatAt: null, processAlive: null },
+		gateway: { resumable: false, sequence: null, lastHeartbeatAckAt: null },
 		jobs: { active: 0, suspectedStalled: 0, needsReview: 0 },
 	};
 	if (options.json) console.log(JSON.stringify(empty, null, 2));
@@ -96,7 +97,7 @@ try {
 	if (command === "status") {
 		const status = store.status();
 		if (options.json) output(status, true);
-		else output(`service=${status.service.state} reason=${status.service.reasonCode} active=${status.jobs.active} stalled=${status.jobs.suspectedStalled} review=${status.jobs.needsReview}`, false);
+		else output(`service=${status.service.state} reason=${status.service.reasonCode} gateway=${status.gateway.resumable ? "resumable" : "fresh_connect"} active=${status.jobs.active} stalled=${status.jobs.suspectedStalled} review=${status.jobs.needsReview}`, false);
 	} else if (command === "jobs") {
 		let jobs = store.listJobs();
 		if (options.active) jobs = jobs.filter((job) => !["completed", "failed", "cancelled", "recovery_review"].includes(job.lifecycle));

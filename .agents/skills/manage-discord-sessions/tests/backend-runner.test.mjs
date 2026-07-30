@@ -163,6 +163,17 @@ test("DSO-006 pre-abort cancels the owned process and removes runtime credential
 	store.close();
 });
 
+test("DSO-006 service interruption preserves a job for reboot recovery", async () => {
+	const { store, jobId, root, runtimeRoot, executable } = fixture("codex");
+	const controller = new AbortController();
+	controller.abort("recovery");
+	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: "recover me", cwd: root, runtimeRoot, executable, signal: controller.signal, backendVersion: "0.146.0", requireAuthentication: false });
+	assert.equal(result.terminationReason, "recovery");
+	assert.equal(store.getJob(jobId).lifecycle, "queued");
+	assert.equal(store.getJob(jobId).events.at(-1).kind, "recovered");
+	store.close();
+});
+
 test("DSO-006 spawn failure leaves no attempt credential directory", async () => {
 	const { root, store, jobId } = fixture("codex");
 	const runtimeRoot = join(root, "runtime");

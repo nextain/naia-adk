@@ -124,7 +124,7 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 	try {
 		message = JSON.parse(line);
 	} catch {
-		return { outcome: null, events: activity(Buffer.byteLength(line, "utf8")).map((event, eventIndex) => ({
+		return { outcome: null, transientResult: null, events: activity(Buffer.byteLength(line, "utf8")).map((event, eventIndex) => ({
 			...event,
 			dedupeKey: eventKey(backendId, attemptId, lineNumber, eventIndex, event.kind),
 		})) };
@@ -133,7 +133,10 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 	const outcome = backendId === "codex"
 		? message.type === "turn.completed" ? "success" : new Set(["turn.failed", "error"]).has(message.type) ? "failure" : null
 		: message.type === "result" ? (message.is_error === true || message.subtype === "error" ? "failure" : "success") : null;
-	return { outcome, events: getBackendAdapter(backendId).parse(message, rawBytes).map((event, eventIndex) => ({
+	let transientResult = null;
+	if (backendId === "codex" && message.type === "item.completed" && message.item?.type === "agent_message" && typeof message.item.text === "string") transientResult = message.item.text;
+	if (backendId === "claude" && message.type === "result" && outcome === "success" && typeof message.result === "string") transientResult = message.result;
+	return { outcome, transientResult, events: getBackendAdapter(backendId).parse(message, rawBytes).map((event, eventIndex) => ({
 		...event,
 		dedupeKey: eventKey(backendId, attemptId, lineNumber, eventIndex, event.kind),
 	})) };
