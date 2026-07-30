@@ -10,7 +10,7 @@ const riskRank={low:0,medium:1,high:2};
 function validateCatalog(catalog){
   if(catalog?.schema_revision!=="development-composition-profiles-v1"||catalog?.status!=="opt_in_pilot_no_total_cost_claim")throw new Error("development composition profile identity invalid");
   const profiles=catalog.profiles||[],ids=profiles.map(item=>item.id);
-  if(ids.length!==3||new Set(ids).size!==3||!["control","balanced","economy"].every(id=>ids.includes(id)))throw new Error("development composition profiles must be control, balanced, and economy");
+  if(ids.length!==4||new Set(ids).size!==4||!["control","balanced","economy","delegated"].every(id=>ids.includes(id)))throw new Error("development composition profiles must be control, balanced, economy, and delegated");
   if(catalog.default_opt_in_profile!=="balanced"||catalog.fallback_profile!=="control")throw new Error("development composition default or fallback drift");
   if(!Array.isArray(catalog.availability?.default_available_bindings)||catalog.availability.default_available_bindings.length===0||catalog.availability.default_available_bindings.some(binding=>!catalog.bindings?.[binding]))throw new Error("development composition availability defaults invalid");
   for(const profile of profiles){

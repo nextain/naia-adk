@@ -31,6 +31,12 @@ assert.equal(selectDevelopmentBinding({profileId:"economy",role:"mechanical_work
 assert.equal(selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:true,exactValidator:false,risk:"low"}).binding_id,"terra");
 assert.equal(selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:true,exactValidator:true,risk:"medium"}).binding_id,"terra");
 assert.equal(selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:false,exactValidator:false,risk:"high"}).binding_id,"sol");
+assert.equal(selectDevelopmentBinding({profileId:"delegated",role:"orchestrator"}).binding_id,"sol");
+assert.equal(selectDevelopmentBinding({profileId:"delegated",role:"integrator"}).binding_id,"sol");
+assert.throws(()=>selectDevelopmentBinding({profileId:"delegated",role:"bounded_worker",boundedScope:true,risk:"medium"}),/no available development binding/);
+assert.equal(selectDevelopmentBinding({profileId:"delegated",role:"bounded_worker",boundedScope:true,risk:"medium",availableBindings:["sol","terra","implementation_worker"]}).binding_id,"implementation_worker");
+assert.equal(selectDevelopmentBinding({profileId:"delegated",role:"bounded_worker",boundedScope:false,risk:"low"}).binding_id,"sol");
+assert.equal(selectDevelopmentBinding({profileId:"delegated",role:"bounded_worker",boundedScope:true,risk:"high"}).binding_id,"sol");
 const independentReview={producerSessionId:"writer-session",reviewerSessionId:"review-session",producerExecutionId:"writer-execution",reviewerExecutionId:"review-execution"};
 assert.equal(selectDevelopmentBinding({role:"adversarial_reviewer",producerBinding:"terra",...independentReview}).binding_id,"sol");
 assert.equal(selectDevelopmentBinding({role:"adversarial_reviewer",producerBinding:"sol",...independentReview}).binding_id,"terra");
@@ -62,4 +68,4 @@ assert.match(emptyEnvironment.stderr,/no available development binding/);
 const emptyFlag=cp.spawnSync(process.execPath,[...selectorArgs,"--available-bindings"],{encoding:"utf8",env:process.env});
 assert.equal(emptyFlag.status,1);
 assert.match(emptyFlag.stderr,/no available development binding/);
-console.log("development profiles: PASS (3 role profiles, guarded fallback, independent review selection, model-binding separation)");
+console.log("development profiles: PASS (4 role profiles, single-solution default, optional delegated worker, guarded fallback)");

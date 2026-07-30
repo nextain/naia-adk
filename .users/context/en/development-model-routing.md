@@ -1,6 +1,6 @@
 # Development Model Assignment
 
-This document defines the model assignment criteria for the Alpha ADK root collaboration process. Where possible, perform contract checks and deterministic checks first, and use the least expensive role that can safely handle work with a defined scope. Escalate to a higher role only when there is elevated risk or unresolved lack of evidence. OpenCode is not used. HY3 may be evaluated only in an isolated benchmark and is not used for operational routing. Passing the benchmark alone does not automatically lift this prohibition; a separate policy decision is required.
+This document defines the model assignment criteria for the Alpha ADK root collaboration process. Where possible, perform contract checks and deterministic checks first, and use the least expensive role that can safely handle work with a defined scope. Escalate to a higher role only when there is elevated risk or unresolved lack of evidence. Claude or Codex alone remains a complete default environment. OpenCode is used only when an additional provider is configured and the `delegated` profile is selected explicitly. HY3 remains evaluation-only and is not used for production routing.
 
 ## General Contract Layer
 
@@ -10,7 +10,7 @@ Before invoking a model, perform deterministic checks first and select the least
 
 Every delegated or nested role inherits the coordinator's authorized objective, scope, routine execution authority, and exception boundary. It must not request approval again for ordinary in-scope reading, implementation, testing, building, or non-destructive Git work. Approval remains required for irreversible or destructive action including remote-ref deletion, force push, unrelated-history integration, external messaging or payment, production-impacting mutation, material cost, credential exposure, or material scope expansion.
 
-General roles are explicitly mapped in adapters. The implementer is connected to Codex's worker, and translation uses the low-cost fallback chain Claude Haiku 4.5 → Codex GPT-5.6 Luna(low) → Claude Sonnet. All CLI calls use a shared stdin-based invocation function, so long prompts are not passed as command-line arguments.
+General roles are explicitly mapped in adapters. Profile selection connects the implementer to the default Codex worker or to an explicitly configured `delegated` implementation worker. Translation uses the low-cost fallback chain Claude Haiku 4.5 → Codex GPT-5.6 Luna(low) → Claude Sonnet. All CLI calls use a shared stdin-based invocation function, so long prompts are not passed as command-line arguments.
 
 ## Codex Adapter
 
@@ -34,6 +34,10 @@ Claude does not pin an old model ID with a specific date to this contract. Use t
 - Higher-level role: Use only for design, safety-critical decisions, or unresolved review evidence.
 
 Claude likewise cannot serve as both the implementer and adversarial reviewer of the same execution.
+
+## Optional OpenCode Adapter
+
+OpenCode is not a default installation requirement. Only a personal environment with an additional provider configured selects `delegated` explicitly. Azure Foundry `deepseek-v4-pro` may then perform bounded, medium-or-lower-risk implementation while Sol retains planning, decomposition, and integration. Credentials stay only in the OpenCode user credential store. Selection for unbounded or high-risk work falls back to Sol.
 
 ## Independent Adversarial Review
 
@@ -59,8 +63,9 @@ The canonical source for the primary structure is `packages/benchmark-contract/b
 - `control`: Uses Sol for all roles in separate executions. It is the quality and cost baseline and the high-risk fallback.
 - `balanced`: Sol handles planning and integration, while Luna performs limited implementations with a precise automatic verifier. When no verifier exists, Terra handles the limited implementation and performs focused testing. This is the opt-in default profile currently available.
 - `economy`: Gradually expands only Luna mechanical tasks for which subsequent evidence has been established, while maintaining the safety boundaries of `balanced`.
+- `delegated`: Optional additional-provider environment. Sol retains planning and integration while a replaceable `implementation_worker` binding performs bounded, medium-or-lower-risk implementation.
 
-Luna implementation is permitted only when the scope is limited and a precise verifier exists. Without a verifier or when Luna is not exposed by the current runtime, fall back to Terra; when the scope is not limited or the risk is high, fall back to Sol. Sol and Terra are the default available bindings, and only bindings explicitly exposed by the runtime may be selected. Selection fails closed when no eligible binding is available. Because Windows child processes do not preserve an empty environment value, declare an empty set as `CODEX_AVAILABLE_BINDINGS=none` or `[]`. Independent reviews must use author and session/execution IDs that differ, and should use a different model binding where possible. Initial availability of `balanced` means that it can be used; it does not mean that cost savings for the full development composition have been demonstrated.
+Luna implementation is permitted only when the scope is limited and a precise verifier exists. Without a verifier or when Luna is not exposed by the current runtime, fall back to Terra; when the scope is not limited or the risk is high, fall back to Sol. Sol and Terra are the default available bindings, and only bindings explicitly exposed by the runtime may be selected. Selection fails closed when no eligible binding is available. Because Windows child processes do not preserve an empty environment value, declare an empty set as `CODEX_AVAILABLE_BINDINGS=none` or `[]`. Independent reviews must use author and session/execution IDs that differ, and should use a different model binding where possible. Initial availability means that `balanced`, and `delegated` after its setup is complete, may be selected as opt-in profiles; it does not mean that cost savings for the full development composition have been demonstrated.
 
 ## Benchmark Candidates and Promotion Conditions
 
@@ -68,8 +73,9 @@ Codex `gpt-5.6-sol` is fixed as the primary coordinator and final integrator. Th
 
 - Codex Terra: Candidate for exploration, implementation, testing, and independent review
 - Codex Luna: Candidate for translation, mechanical classification, and limited exploration
-- Azure `DeepSeek-V4-Flash`: Candidate for analysis, code generation, and structured output. Tool-calling capability is not claimed.
-- OpenRouter `tencent/hy3`: Candidate for analysis and code generation. Tool use is evaluated only after passing capability exploration, with the actual upstream provider and routing method fixed.
+- Azure `DeepSeek-V4-Flash`: Disabled after the latency smoke.
+- Azure `DeepSeek-V4-Pro`: The `delegated` implementation worker after a 5/5 algorithm smoke and first-pass OpenCode edit-and-test completion. Sol integration and the medium-or-lower-risk boundary remain mandatory.
+- OpenRouter `tencent/hy3`: Scored 22/24 on the mixed capability smoke, but its first coding attempt omitted the required test and needed one user retry. It remains a low-cost candidate behind a completion gate, not a main or production model.
 - Upstage private beta `solar-open2`: Candidate for Korean analysis, code generation, and document work. The key is injected only through `UPSTAGE_KEY` and is not placed in the repository.
 
 Model capability benchmarks run fixed tasks on models and evaluate them with an external grader. Agent execution benchmarks run the actual runtime and fault-injection tools with a fixed model. Harness benchmarks deterministically run the actual hooks and verifiers without asking the model to guess the correct state. All retries, fallbacks, timeouts, and final failures are included in the quality and cost denominators. Korean dual context and Windows-native behavior are verified separately, and promotion to operational routing requires two clean independent adversarial reviews of the same revision.
