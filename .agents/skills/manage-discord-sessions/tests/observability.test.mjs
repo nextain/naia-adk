@@ -97,12 +97,12 @@ test("DSO-001 persists ordered events and deduplicates an external retry", () =>
 		source: "codex",
 		safePayload: { toolCategory: "test" },
 	}), /dedupe key conflict/);
-	assert.equal(store.eventsAfter({ jobId }).length, 3);
+	assert.equal(store.eventsAfter({ jobId }).length, 4);
 	store.close();
 
 	const reopened = new SessionStore(databasePath);
 	const events = reopened.eventsAfter({ jobId });
-	assert.deepEqual(events.map((event) => event.sequence), [1, 2, 3]);
+	assert.deepEqual(events.map((event) => event.sequence), [1, 2, 3, 4]);
 	assert.ok(events.every((event, index) => index === 0 || event.ordinal > events[index - 1].ordinal));
 	reopened.close();
 });
@@ -262,7 +262,7 @@ test("DSO-004 trusts only predeclared host or human evidence for completion", ()
 	assert.equal(store.getJob(jobId).completionAssessment.assessment, "verified");
 	store.recordEvidence({ jobId, checkId: "tests", attemptId, revision: "rev-1", producer: "host_verifier", verifier: "node-test-v1", result: "failed", observedAt: iso(3_000), metrics: { failed: 1 } });
 	assert.equal(store.getJob(jobId).completionAssessment.assessment, "failed");
-	store.startAttempt(jobId, { attemptId: "job-1-attempt-2", now: iso(4_000) });
+	store.startAttempt(jobId, { attemptId: "job-1-attempt-2", now: iso(4_000), replaceCurrent: true });
 	assert.equal(store.getJob(jobId).completionAssessment.assessment, "partial");
 	store.close();
 });
@@ -290,7 +290,7 @@ test("DSO-001 rejects stale-attempt events and implicit recovery", () => {
 	const { store } = fixture();
 	const { jobId, attemptId } = createRunningJob(store);
 	const retriedOldEvent = store.recordEvent({ jobId, attemptId, dedupeKey: "old-retry", kind: "phase_changed", occurredAt: iso(500), source: "codex", safePayload: { phase: "testing" } });
-	const secondAttempt = store.startAttempt(jobId, { attemptId: "job-1-attempt-2", now: iso(1_000) });
+	const secondAttempt = store.startAttempt(jobId, { attemptId: "job-1-attempt-2", now: iso(1_000), replaceCurrent: true });
 	const exactRetry = store.recordEvent({ jobId, attemptId, dedupeKey: "old-retry", kind: "phase_changed", occurredAt: iso(500), source: "codex", safePayload: { phase: "testing" } });
 	assert.equal(exactRetry.eventId, retriedOldEvent.eventId);
 	assert.throws(() => store.recordEvent({ jobId, attemptId, dedupeKey: "late-old-attempt", kind: "phase_changed", occurredAt: iso(2_000), source: "codex", safePayload: { phase: "testing" } }), /stale attempt event/);

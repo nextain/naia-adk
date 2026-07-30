@@ -13,8 +13,10 @@ Codex와 Claude가 함께 쓰는 관리 스킬입니다. 별도 제품 CLI나 `n
 - 서비스 상태의 신선도와 작업 활동 상태 구분
 - 사전에 선언한 완료 검사와 신뢰 가능한 검증 증거
 - `status`, `jobs`, `job`, `watch` 조회
+- 서로 독립적인 Codex `exec --json` 및 Claude `-p --output-format stream-json` 실행 어댑터
+- 실행별 격리 홈, 최소 인증 파일 복사, 안전 이벤트 변환, 시간 제한·취소·시그널 종료 처리
 
-Discord Gateway, 실제 Codex·Claude 실행 어댑터, systemd 설치와 실제 재부팅 복구, Discord 상태 메시지는 이슈 #18의 다음 구현 단계입니다. 설계만 존재하는 기능을 동작한다고 보고하지 않습니다.
+Discord Gateway, systemd 설치와 실제 재부팅 복구, Discord 상태 메시지는 이슈 #18의 다음 구현 단계입니다. 현재 실행기는 다음 Gateway가 호출할 내부 모듈이며, Discord에서 아직 작업을 시작할 수 있다고 보고하면 안 됩니다.
 
 ## 이렇게 요청하면 됩니다
 

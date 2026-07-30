@@ -106,6 +106,9 @@ export function projectActivityHealth(job, serviceHealth, nowMs) {
 	if (serviceHealth.state !== "running") {
 		return { value: "unknown", reasonCode: `service_${serviceHealth.state}`, observedAt, evidenceAt: serviceHealth.heartbeatAt };
 	}
+	if (job.lifecycle === "result_ready" || job.lifecycle === "delivering") {
+		return { value: "waiting", reasonCode: `lifecycle_${job.lifecycle}`, observedAt, evidenceAt: job.updated_at };
+	}
 	if (job.lifecycle !== "queued" && job.child_observation?.state === "missing") {
 		return { value: "unresponsive", reasonCode: "owned_child_missing", observedAt, evidenceAt: job.updated_at };
 	}
