@@ -1,6 +1,6 @@
 ---
 name: verify-request-contract
-description: 원요청 무결성 하네스의 원문 해시체인, 완전 범위 추적, 서명 권한, 2회 Clean 결박, Claude Code/Codex 등록·동등성을 결정론으로 검증합니다. request-contract 코어·어댑터·설정·스키마·review-pass를 수정한 뒤, Review/Post-test Review 및 커밋 전에 반드시 사용합니다.
+description: 원요청 무결성과 세션 바인딩 하네스의 원문 해시체인, 완전 범위 추적, 서명 권한, 2회 Clean 결박, Claude Code/Codex 등록·동등성을 결정론으로 검증합니다. request-contract·session-inject 코어/어댑터·설정·스키마·review-pass를 수정한 뒤, Review/Post-test Review 및 커밋 전에 반드시 사용합니다.
 ---
 
 # 원요청 무결성 검증
@@ -15,8 +15,12 @@ description: 원요청 무결성 하네스의 원문 해시체인, 완전 범위
 node -c .agents/hooks/core/request-contract.js
 node -c .agents/hooks/core/request-contract-adapter.js
 node -c .agents/hooks/core/request-contract-review-runner.js
+node -c .agents/hooks/core/harness-core.js
 node -c .claude/hooks/request-contract.js
+node -c .claude/hooks/session-inject.js
 node -c .codex/hooks/request-contract.cjs
+node -c .codex/hooks/session-inject.cjs
+node -c .codex/hooks/session-contract-gate.cjs
 node -c scripts/request-contract.cjs
 node -c scripts/request-contract-review-runner.cjs
 node -c scripts/validate-request-contract-requirements.cjs
@@ -69,6 +73,9 @@ git check-ignore .agents/harness/units/probe .agents/harness/quarantine/probe .a
 6. 기존 하네스 회귀를 실행한다.
 
 ```powershell
+node .agents/hooks/core/harness-session-inject.test.js
+node .codex/hooks/test-session-contract-gate.cjs
+node .codex/hooks/test-hook-registration.cjs
 pnpm run test:harness-native
 ```
 
@@ -97,8 +104,13 @@ FAIL이면 실패한 불변식과 파일을 수정하고 1번부터 전부 다�
 | `.agents/hooks/core/request-contract.js` | 도구 비종속 정책·상태 코어 |
 | `.agents/hooks/core/request-contract-adapter.js` | 공통 envelope 변환 |
 | `.agents/hooks/core/request-contract-review-runner.js` | 실제 격리 실행·프로세스 증거 수집 |
+| `.agents/hooks/core/harness-core.js` | 도구 비종속 세션 바인딩·상태 주입 코어 |
+| `.agents/hooks/core/harness-session-inject.test.js` | 미바인딩 무출력·바인딩 상태 주입·변경 게이트 분리 회귀 |
 | `.claude/hooks/request-contract.js` | Claude Code 어댑터 |
+| `.claude/hooks/session-inject.js` | Claude Code 세션 상태 주입 어댑터 |
 | `.codex/hooks/request-contract.cjs` | Codex 어댑터 |
+| `.codex/hooks/session-inject.cjs` | Codex 세션 상태 주입 어댑터 |
+| `.codex/hooks/session-contract-gate.cjs` | 미바인딩 변경 차단·읽기/바인딩 허용 게이트 |
 | `scripts/request-contract-review-runner.cjs` | 허용 reviewer + 별도 attestor 실행기 |
 | `.claude/settings.json` | Claude Code 등록 |
 | `.codex/hooks.json` | Codex 등록 |
