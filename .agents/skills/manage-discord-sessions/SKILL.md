@@ -19,6 +19,7 @@ The implementation is usable with `naia-adk` alone from either Codex or Claude:
 - isolated per-attempt child homes, minimum authentication copies, safe event normalization, timeout, cancellation, and signal-aware exit handling.
 - fresh permission-profile checks that replace stale child settings, force no-prompt child execution, and reject an approval UI instead of waiting unattended;
 - a bounded no-progress watchdog plus a Discord channel-response deadline that creates an explicit operator handoff;
+- a confirmed-acknowledgement gate that does not start model work until Discord confirms the acceptance message;
 - Discord Gateway receive with durable sequence/resume state; no REST message polling;
 - exact DM, guild-channel, and thread bindings with default-deny users and operator actions;
 - user-systemd startup, reconnect with bounded backoff, and single-service locking;
@@ -105,6 +106,14 @@ The real config and all session state are local and ignored by Git. Only `config
 Put the referenced Discord token in `naia-settings/.keys/messenger-sessions/<credentialRef>` with mode `0600`. The config itself must also be mode `0600`. Choose `backend.selected` as `codex` or `claude`; no Naia Agent or Naia Shell installation is required.
 
 Set `runtime.approvalPolicy` to `never` for unattended Discord work and change `runtime.permissionProfileEpoch` whenever the parent execution profile changes. The helper compares this profile before recovery or queued launch, discards stale command options, and creates a new child only from the current profile. A changed no-prompt profile may replace a prior guarded mutation attempt; an unchanged mutation recovery still requires review. `noProgressInterventionSeconds` bounds one owned-child abort after silence, while `operatorResponseSeconds` bounds the safe acknowledgement or an explicit `recovery_review` handoff. The child workspace must be an absolute real directory and is passed as both process cwd and Codex `--cd`; relative or ambient caller workdirs are rejected.
+
+Guild and thread bindings default to `respondWhen: "mentioned"`. A binding may
+use `respondWhen: "always"` only with `discord.messageContentIntent: true` and a
+Discord application that has the Message Content privileged intent. Automated
+senders and webhooks remain rejected. An accepted job does not start its model
+child until the acknowledgement POST returns a confirmed Discord receipt; an
+unknown or failed receipt is retried once by the response watchdog and then
+fails closed instead of running silently.
 
 ## Reboot and actual-work visibility
 

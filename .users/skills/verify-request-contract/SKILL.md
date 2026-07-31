@@ -122,6 +122,7 @@ FAIL이면 실패한 불변식과 파일을 수정하고 1번부터 전부 다�
 | `.agents/skills/review-pass/SKILL.md` | 완전 bundle 기반 적대 리뷰 규약 |
 | `packages/artifacts-spec/schemas/request-contract.schema.json` | 공유 계약 스키마 |
 | `.claude/hooks/test/run-request-contract-test.js` | 결정론 fault-injection |
+| `.claude/hooks/e2e/{run.sh,scenario.sh}` | Linux 실제 조건·전체 시나리오 회귀 |
 | `scripts/run-request-contract-tests.cjs` | broad suite와 메모리 격리 parity suite 순차 실행 |
 | `scripts/validate-request-contract-requirements.cjs` | RCI 요구사항·인덱스·실재 trace 검사 + 4단계 리뷰 증거를 receipt 에 결박 |
 | `scripts/request-contract-review-scope.cjs` | 현재 변경 전체(staged/unstaged/신규), 기능 경로, RCI trace, source ledger와 `scope_digest` |
