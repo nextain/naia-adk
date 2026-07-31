@@ -37,7 +37,7 @@ export function loadMessengerConfig(path) {
 		[config.role, ["name", "allowedActions", "requiresApproval"], "role"],
 		[config.backend, ["selected", "profiles"], "backend"],
 		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings"], "discord"],
-		[config.runtime ?? {}, ["softSilenceSeconds", "heartbeatSeconds", "maxConcurrentJobs"], "runtime"],
+		[config.runtime ?? {}, ["softSilenceSeconds", "heartbeatSeconds", "maxConcurrentJobs", "approvalPolicy", "permissionProfileEpoch", "noProgressInterventionSeconds", "operatorResponseSeconds"], "runtime"],
 		[config.observability ?? {}, ["discordStatusProjection"], "observability"],
 		[config.service ?? {}, ["autoStart", "startAt"], "service"],
 		[config.recovery ?? {}, ["autoRetry"], "recovery"],
@@ -69,6 +69,12 @@ export function loadMessengerConfig(path) {
 	const softSilenceSeconds = config.runtime?.softSilenceSeconds ?? 120;
 	if (!Number.isSafeInteger(heartbeatSeconds) || heartbeatSeconds < 1 || heartbeatSeconds > 60) throw new Error("heartbeatSeconds must be between 1 and 60");
 	if (!Number.isSafeInteger(softSilenceSeconds) || softSilenceSeconds < 1 || softSilenceSeconds > 3_600) throw new Error("softSilenceSeconds must be between 1 and 3600");
+	if (config.runtime?.approvalPolicy !== undefined && !new Set(["managed", "never"]).has(config.runtime.approvalPolicy)) throw new Error("approvalPolicy must be managed or never");
+	if (config.runtime?.permissionProfileEpoch !== undefined) safeIdentifier(config.runtime.permissionProfileEpoch, "permissionProfileEpoch");
+	const noProgressInterventionSeconds = config.runtime?.noProgressInterventionSeconds ?? softSilenceSeconds;
+	const operatorResponseSeconds = config.runtime?.operatorResponseSeconds ?? 30;
+	if (!Number.isSafeInteger(noProgressInterventionSeconds) || noProgressInterventionSeconds < softSilenceSeconds || noProgressInterventionSeconds > 3_600) throw new Error("noProgressInterventionSeconds must be between softSilenceSeconds and 3600");
+	if (!Number.isSafeInteger(operatorResponseSeconds) || operatorResponseSeconds < 1 || operatorResponseSeconds > 3_600) throw new Error("operatorResponseSeconds must be between 1 and 3600");
 	if (config.recovery?.autoRetry !== undefined && typeof config.recovery.autoRetry !== "boolean") throw new Error("recovery autoRetry must be boolean");
 	if (!new Set(["login", "boot"]).has(config.service?.startAt ?? "login")) throw new Error("service startAt must be login or boot");
 	if (config.service?.autoStart !== undefined && typeof config.service.autoStart !== "boolean") throw new Error("service autoStart must be boolean");

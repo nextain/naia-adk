@@ -17,6 +17,8 @@ The implementation is usable with `naia-adk` alone from either Codex or Claude:
 - `status`, `jobs`, `job`, and `watch` commands.
 - independent Codex `exec --json` and Claude `-p --output-format stream-json` adapters;
 - isolated per-attempt child homes, minimum authentication copies, safe event normalization, timeout, cancellation, and signal-aware exit handling.
+- fresh permission-profile checks that replace stale child settings, force no-prompt child execution, and reject an approval UI instead of waiting unattended;
+- a bounded no-progress watchdog plus a Discord channel-response deadline that creates an explicit operator handoff;
 - Discord Gateway receive with durable sequence/resume state; no REST message polling;
 - exact DM, guild-channel, and thread bindings with default-deny users and operator actions;
 - user-systemd startup, reconnect with bounded backoff, and single-service locking;
@@ -56,7 +58,7 @@ Report lifecycle and observed activity separately:
 - `progressing`: a recent structured safe event exists;
 - `running_no_detail`: the owned backend process is alive but exposes no detail;
 - `waiting`: an explicit approval, queue, or retry wait exists;
-- `suspected_stalled`: the soft silence threshold passed; this is a warning, not proof of failure;
+- `suspected_stalled`: the soft silence threshold passed; it is a warning, and the configured watchdog makes one bounded intervention rather than silently preserving a running label;
 - `unresponsive`: a hard deadline or objective process failure was observed;
 - `unknown`: evidence is stale, missing, contradictory, or the clock moved backward;
 - `not_applicable`: the job is terminal.
@@ -75,6 +77,8 @@ naia-settings/.sessions/messenger-sessions/runtime.sqlite3
 The real config and all session state are local and ignored by Git. Only `config.example.json` is tracked. Secret values never belong in config, events, status, or logs; config stores credential references only.
 
 Put the referenced Discord token in `naia-settings/.keys/messenger-sessions/<credentialRef>` with mode `0600`. The config itself must also be mode `0600`. Choose `backend.selected` as `codex` or `claude`; no Naia Agent or Naia Shell installation is required.
+
+Set `runtime.approvalPolicy` to `never` for unattended Discord work and change `runtime.permissionProfileEpoch` whenever the parent execution profile changes. The helper compares this profile before recovery or queued launch, discards stale command options, and creates a new child only from the current profile. A changed no-prompt profile may replace a prior guarded mutation attempt; an unchanged mutation recovery still requires review. `noProgressInterventionSeconds` bounds one owned-child abort after silence, while `operatorResponseSeconds` bounds the safe acknowledgement or an explicit `recovery_review` handoff. The child workspace must be an absolute real directory and is passed as both process cwd and Codex `--cd`; relative or ambient caller workdirs are rejected.
 
 ## Reboot and actual-work visibility
 
@@ -115,6 +119,6 @@ Run:
 pnpm test:discord-sessions
 ```
 
-The deterministic suite covers persisted ordering and dedupe, Gateway commit ordering and resume state, DM/channel/thread authorization, permission projection, delivery nonce and unknown outcomes, reboot recovery, systemd unit isolation, activity health, safe-event rejection, trusted completion evidence, and CLI visibility.
+The deterministic suite covers persisted ordering and dedupe, Gateway commit ordering and resume state, DM/channel/thread authorization, stale-profile replacement, no-prompt approval rejection, no-progress intervention, operator-channel response SLA, explicit workspace binding, delivery nonce and unknown outcomes, reboot recovery, systemd unit isolation, activity health, safe-event rejection, trusted completion evidence, and CLI visibility.
 
-Design authority: `docs/design/discord-session-observability.md`. Requirements: `DSO-001` through `DSO-006`.
+Design authority: `docs/design/discord-session-observability.md`. Requirements: `DSO-001` through `DSO-007`.

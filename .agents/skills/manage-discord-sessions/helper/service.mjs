@@ -8,6 +8,7 @@ import { SessionStore } from "./store.mjs";
 import { loadOrCreateRecoveryKey, RecoveryCodec } from "./recovery-crypto.mjs";
 import { DiscordStatusProjection } from "./discord-projection.mjs";
 import { discordScopeKey } from "./discord-scope.mjs";
+import { postDiscordMessage } from "./discord-delivery.mjs";
 
 function parseRoot(argv) {
 	const index = argv.indexOf("--adk-root");
@@ -32,7 +33,7 @@ export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, 
 		...(process.env.NAIA_CODEX_EXECUTABLE ? { codex: process.env.NAIA_CODEX_EXECUTABLE } : {}),
 		...(process.env.NAIA_CLAUDE_EXECUTABLE ? { claude: process.env.NAIA_CLAUDE_EXECUTABLE } : {}),
 	};
-	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: resolve(root, "naia-settings/.sessions/messenger-sessions/runtime"), recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, backendExecutables });
+	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: resolve(root, "naia-settings/.sessions/messenger-sessions/runtime"), recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send: postDiscordMessage, backendExecutables });
 	let reconnectDelay = 1_000;
 	const heartbeat = () => store.heartbeatService({ generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
 	heartbeat();
@@ -48,6 +49,9 @@ export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, 
 	}
 	const heartbeatTimer = setInterval(heartbeat, (config.runtime?.heartbeatSeconds ?? 10) * 1_000);
 	heartbeatTimer.unref?.();
+	const watchdogIntervalSeconds = Math.max(1, Math.min(config.runtime?.heartbeatSeconds ?? 10, config.runtime?.noProgressInterventionSeconds ?? config.runtime?.softSilenceSeconds ?? 120, config.runtime?.operatorResponseSeconds ?? 30));
+	const watchdogTimer = setInterval(() => { void router.watchdog().catch(() => {}); }, watchdogIntervalSeconds * 1_000);
+	watchdogTimer.unref?.();
 	const stop = () => { stopping = true; gateway?.close(1_000); wakeReconnect?.(); };
 	signalSource.once?.("SIGTERM", stop);
 	signalSource.once?.("SIGINT", stop);
@@ -72,6 +76,7 @@ export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, 
 		}
 	} finally {
 		clearInterval(heartbeatTimer);
+		clearInterval(watchdogTimer);
 		await router.shutdown();
 		stopping = true;
 		heartbeat();

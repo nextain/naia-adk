@@ -7,7 +7,7 @@ status: active
 source: human
 priority: high
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31
 issue_url: "https://github.com/nextain/naia-adk/issues/18"
 description: |
   Service liveness, job lifecycle, observed activity, and result correctness are separate signals. Missing evidence must never be presented as healthy progress.
@@ -17,6 +17,7 @@ acceptance_criteria:
   - "Every activity-health value includes a reasonCode, observedAt, and evidence timestamp."
   - "Unsupported backend detail is reported as unsupported rather than inferred."
   - "A fake clock proves the 10-second heartbeat, 30-second stale threshold, 120-second default soft-silence threshold, clock rollback handling, and ownership-conflict precedence."
+  - "A health projection that reaches suspected_stalled or unresponsive is consumed by a bounded watchdog action instead of being left as a passive running label."
 trace:
   code:
     - { path: ".agents/skills/manage-discord-sessions/helper/projector.mjs", symbol: "projectServiceHealth/projectActivityHealth", coverage: full }

@@ -7,7 +7,7 @@ status: active
 source: human
 priority: high
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31
 issue_url: "https://github.com/nextain/naia-adk/issues/18"
 description: |
   Codex, Claude, and a human operator use the same deterministic skill-local interface to list, inspect, and watch jobs without naia-agent or naia-shell.
@@ -15,6 +15,7 @@ acceptance_criteria:
   - "The first slice exposes status, jobs, job <id>, and watch through one script; redacted logs remain disabled until a bounded encrypted artifact contract exists."
   - "A fake job event appears in job detail and watch output within two seconds."
   - "After reboot, the persisted timeline remains queryable before any AI backend is launched."
+  - "A conversation receives a safe acknowledgement within the configured response window, or one watchdog handoff records the missed operator-channel response."
 trace:
   code:
     - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbol: "status/jobs/job/watch", coverage: full }

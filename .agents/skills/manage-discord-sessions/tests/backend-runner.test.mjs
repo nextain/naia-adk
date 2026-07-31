@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { assertSupportedBackendVersion, getBackendAdapter, parseBackendLine } from "../helper/adapters.mjs";
-import { prepareChildEnvironment, runBackendAttempt } from "../helper/backend-runner.mjs";
+import { prepareChildEnvironment, resolveExecutionCwd, runBackendAttempt } from "../helper/backend-runner.mjs";
+import { commandOptionsForProfile } from "../helper/execution-profile.mjs";
 import { SessionStore } from "../helper/store.mjs";
 
 const roots = [];
@@ -44,16 +45,20 @@ test("DSO-006 exposes independent Codex and Claude command contracts", () => {
 	const probe = spawnSync(process.execPath, [fakeBackendPath, "exec"], { input: "probe", encoding: "utf8" });
 	assert.equal(probe.status, 0, probe.stderr);
 	assert.match(probe.stdout, /thread\.started/);
-	const codex = getBackendAdapter("codex").command({ cwd: "/workspace" });
+	const codex = getBackendAdapter("codex").command({ cwd: "/workspace", approvalPolicy: "never" });
 	const claude = getBackendAdapter("claude").command({ cwd: "/workspace" });
 	assert.deepEqual(codex.args.slice(0, 3), ["exec", "--json", "--ephemeral"]);
 	assert.ok(codex.args.includes("--ignore-user-config"));
+	assert.equal(codex.args[codex.args.indexOf("--config") + 1], 'approval_policy="never"');
+	assert.equal(codex.args[codex.args.indexOf("--cd") + 1], "/workspace");
 	assert.ok(claude.args.includes("stream-json"));
 	assert.ok(claude.args.includes("dontAsk"));
 	assert.equal(assertSupportedBackendVersion("codex", "codex-cli 0.146.0"), "0.146.0");
 	assert.equal(assertSupportedBackendVersion("claude", "2.1.220 (Claude Code)"), "2.1.220");
 	assert.throws(() => assertSupportedBackendVersion("codex", "codex-cli 0.145.0"), /not supported/);
 	assert.throws(() => getBackendAdapter("missing"), /unsupported backend/);
+	assert.throws(() => commandOptionsForProfile({ backendId: "codex", permissionProfileEpoch: "managed-1", authorizationMode: "managed", access: "workspace-write" }), /invalid execution profile/);
+	assert.throws(() => resolveExecutionCwd("relative-workspace"), /must be absolute/);
 });
 
 test("DSO-006 normalizes provider streams without retaining model content", () => {
@@ -135,6 +140,53 @@ test("DSO-006 times out, escalates termination, and records failure", async () =
 	store.close();
 });
 
+test("DSO-007 no-progress intervention terminates an active child without an approval wait", async () => {
+	const { root, store, jobId } = fixture("codex");
+	const controller = new AbortController();
+	const pending = runBackendAttempt({ store, jobId, backendId: "codex", prompt: "__fake_hang__", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: "0.146.0", requireAuthentication: false, signal: controller.signal, timeoutMs: 5_000, killGraceMs: 20, parentEnv: { PATH: process.env.PATH } });
+	for (let attempt = 0; attempt < 50 && !store.getJob(jobId, { includeEvents: false })?.attemptId; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+	assert.ok(store.getJob(jobId, { includeEvents: false })?.attemptId, "child did not start in time");
+	controller.abort("no_progress");
+	const result = await pending;
+	const job = store.getJob(jobId);
+	assert.equal(result.terminationReason, "no_progress");
+	assert.equal(job.lifecycle, "failed");
+	assert.equal(job.latestSafeError, "Job failed: no_progress_timeout");
+	assert.equal(job.events.some((event) => event.kind === "approval_required"), false);
+	store.close();
+});
+
+test("DSO-006 rejects an approval UI instead of waiting for a child prompt", async () => {
+	const { root, store, jobId } = fixture("codex");
+	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: "__fake_approval_ui__", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { sandbox: "workspace-write", approvalPolicy: "never" }, backendVersion: "0.146.0", requireAuthentication: false, timeoutMs: 1_000, killGraceMs: 20, parentEnv: { PATH: process.env.PATH } });
+	assert.equal(result.terminationReason, "approval_ui");
+	const job = store.getJob(jobId);
+	assert.equal(job.lifecycle, "failed");
+	assert.equal(job.events.some((event) => event.kind === "approval_required"), false);
+	assert.equal(job.latestSafeError, "Job failed: approval_ui_detected");
+	store.close();
+});
+
+for (const prompt of ["__fake_stderr_approval_ui__", "__fake_nested_approval_ui__"]) {
+	test(`DSO-007 rejects ${prompt} without waiting for a newline or a hidden approval field`, async () => {
+		const { root, store, jobId } = fixture("codex");
+		const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt, cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { sandbox: "workspace-write", approvalPolicy: "never" }, backendVersion: "0.146.0", requireAuthentication: false, timeoutMs: 1_000, killGraceMs: 20, parentEnv: { PATH: process.env.PATH } });
+		assert.equal(result.terminationReason, "approval_ui");
+		assert.equal(store.getJob(jobId).latestSafeError, "Job failed: approval_ui_detected");
+		store.close();
+	});
+}
+
+test("DSO-006 binds each child to the requested absolute workspace despite parent cwd", async () => {
+	const { root, store, jobId } = fixture("codex");
+	const workspace = join(root, "explicit-workspace");
+	mkdirSync(workspace, { mode: 0o700 });
+	const marker = join(root, "child-cwd");
+	await runBackendAttempt({ store, jobId, backendId: "codex", prompt: `__fake_cwd_marker__:${marker}`, cwd: workspace, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } });
+	assert.equal(readFileSync(marker, "utf8"), resolve(workspace));
+	store.close();
+});
+
 test("DSO-006 treats structured failure plus exit zero as failed", async () => {
 	const { root, store, jobId } = fixture("claude");
 	const result = await runBackendAttempt({ store, jobId, backendId: "claude", prompt: "__fake_structured_failure__", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: "2.1.220", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } });
@@ -203,6 +255,7 @@ test("DSO-005 rejects command options that weaken fixed safety boundaries", asyn
 	const { root, store, jobId } = fixture("codex");
 	await assert.rejects(runBackendAttempt({ store, jobId, backendId: "codex", prompt: "unsafe", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { sandbox: "danger-full-access" }, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } }), /unsafe Codex sandbox/);
 	await assert.rejects(runBackendAttempt({ store, jobId, backendId: "codex", prompt: "unsafe", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { executableArgs: ["--dangerously-bypass-approvals-and-sandbox"] }, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } }), /unsupported codex command option/);
+	await assert.rejects(runBackendAttempt({ store, jobId, backendId: "codex", prompt: "unsafe", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { approvalPolicy: "managed" }, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } }), /child approval policy must be never/);
 	store.close();
 });
 

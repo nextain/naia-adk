@@ -102,7 +102,8 @@ Workflow 섹션에 정의된 각 검사를 순서대로 실행합니다:
 1. 검사에 명시된 도구(Grep, Glob, Read, Bash)를 사용하여 패턴 탐지
 2. 탐지된 결과를 해당 스킬의 PASS/FAIL 기준에 대조
 3. Exceptions 섹션에 해당하는 패턴은 면제 처리
-4. FAIL인 경우 이슈를 기록:
+4. Discord session orchestration paths are covered by `verify-product-preservation`; run `pnpm test:discord-sessions` when that skill selects them.
+5. FAIL인 경우 이슈를 기록:
    - 파일 경로 및 라인 번호
    - 문제 설명
    - 수정 권장 사항 (코드 예시 포함)
