@@ -1,13 +1,29 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, constants as fsConstants, chmodSync, existsSync, lstatSync, mkdirSync, openSync, readSync, rmSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, parse, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { delimiter, dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
 import { approvalRequestedText, assertSupportedBackendVersion, getBackendAdapter, inspectBackendLine } from "./adapters.mjs";
-import { readProcessStartIdentity } from "./projector.mjs";
+import { readBootId, readProcessStartIdentity } from "./projector.mjs";
+import { assertOwnerOnly, protectOwnerOnly, trustedWindowsSystemExecutable } from "./platform-security.mjs";
 
-const SAFE_ENV_KEYS = new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR"]);
+const SAFE_ENV_KEYS = new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "SystemRoot", "WINDIR", "PATHEXT", "COMSPEC", "TEMP", "TMP"]);
 const API_KEY_BY_BACKEND = { codex: "CODEX_API_KEY", claude: "ANTHROPIC_API_KEY" };
+
+function processIsAlive(pid) {
+	try { process.kill(pid, 0); return true; } catch (error) { return error?.code === "EPERM"; }
+}
+
+export function terminateUnidentifiedChild(child, { platform = process.platform, runTaskkill = (pid) => spawnSync(trustedWindowsSystemExecutable("taskkill.exe"), ["/PID", String(pid), "/T", "/F"], { encoding: "utf8", windowsHide: true }), isAlive = processIsAlive } = {}) {
+	try {
+		if (isAlive(child.pid) === false) return true;
+		if (platform === "win32") {
+			const killed = runTaskkill(child.pid);
+			return killed.status === 0 && isAlive(child.pid) === false;
+		}
+		return child.kill("SIGKILL") === true && isAlive(child.pid) === false;
+	} catch { return false; }
+}
 
 function safeCommandOptions(backendId, options) {
 	const allowed = backendId === "codex" ? new Set(["sandbox", "approvalPolicy"]) : new Set(["permissionMode", "settingSources", "approvalPolicy"]);
@@ -47,12 +63,13 @@ function privateDirectory(path) {
 	if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`private path must be a real directory: ${resolvedPath}`);
 	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`private path owner mismatch: ${resolvedPath}`);
 	chmodSync(resolvedPath, 0o700);
+	protectOwnerOnly(resolvedPath, "directory", "private directory");
 }
 
 function copyCredential(source, target, label) {
 	if (!existsSync(source)) return false;
 	assertRealFile(source, label);
-	if ((lstatSync(source).mode & 0o077) !== 0) throw new Error(`${label} permissions must not grant group or other access`);
+	assertOwnerOnly(source, "file", label);
 	privateDirectory(dirname(target));
 	const sourceFd = openSync(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
 	let targetFd;
@@ -70,6 +87,7 @@ function copyCredential(source, target, label) {
 		if (targetFd !== undefined) closeSync(targetFd);
 	}
 	chmodSync(target, 0o600);
+	protectOwnerOnly(target, "file", label);
 	return true;
 }
 
@@ -80,7 +98,7 @@ function defaultRuntimeRoot(parentEnv) {
 	return join(base, "messenger-sessions");
 }
 
-export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv = process.env, authRoot = homedir(), workspacePath = null }) {
+export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv = process.env, authRoot = homedir(), workspacePath = null, prepareAuthentication = true }) {
 	const childHome = resolve(runtimeRoot ?? defaultRuntimeRoot(parentEnv), "children", attemptId);
 	privateDirectory(childHome);
 	try {
@@ -91,7 +109,9 @@ export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, par
 		env.PATH = env.PATH.split(delimiter).filter((entry) => {
 			if (!entry || !isAbsolute(entry) || entry.split(/[\\/]+/).includes("node_modules")) return false;
 			const resolvedEntry = resolve(entry);
-			return !workspace || (resolvedEntry !== workspace && !resolvedEntry.startsWith(`${workspace}/`));
+			if (!workspace) return true;
+			const child = relative(workspace, resolvedEntry);
+			return child !== "" && (child.startsWith("..") || isAbsolute(child));
 		}).join(delimiter);
 	}
 	env.HOME = childHome;
@@ -101,16 +121,16 @@ export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, par
 		privateDirectory(env[key]);
 	}
 	const apiKeyName = API_KEY_BY_BACKEND[backendId];
-	if (apiKeyName && parentEnv[apiKeyName]) env[apiKeyName] = parentEnv[apiKeyName];
-	let authenticationPrepared = Boolean(apiKeyName && parentEnv[apiKeyName]);
+	if (prepareAuthentication && apiKeyName && parentEnv[apiKeyName]) env[apiKeyName] = parentEnv[apiKeyName];
+	let authenticationPrepared = Boolean(prepareAuthentication && apiKeyName && parentEnv[apiKeyName]);
 	if (backendId === "codex") {
 		const codexHome = join(childHome, ".codex");
 		privateDirectory(codexHome);
 		env.CODEX_HOME = codexHome;
-		authenticationPrepared ||= copyCredential(join(authRoot, ".codex", "auth.json"), join(codexHome, "auth.json"), "Codex authentication");
+		if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".codex", "auth.json"), join(codexHome, "auth.json"), "Codex authentication");
 	} else if (backendId === "claude") {
 		privateDirectory(join(childHome, ".claude"));
-		authenticationPrepared ||= copyCredential(join(authRoot, ".claude", ".credentials.json"), join(childHome, ".claude", ".credentials.json"), "Claude authentication");
+		if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".claude", ".credentials.json"), join(childHome, ".claude", ".credentials.json"), "Claude authentication");
 	} else {
 		throw new Error(`unsupported backend environment: ${backendId}`);
 	}
@@ -131,8 +151,19 @@ function writePrompt(child, prompt) {
 	child.stdin.end(prompt, "utf8");
 }
 
+function backendCommand(executable, fallback) {
+	if (executable === undefined || executable === null) return { command: fallback, prefixArgs: [] };
+	if (typeof executable === "string" && executable.length > 0) return { command: executable, prefixArgs: [] };
+	if (typeof executable === "object" && typeof executable.command === "string" && executable.command.length > 0
+		&& Array.isArray(executable.prefixArgs) && executable.prefixArgs.every((item) => typeof item === "string" && item.length > 0)) {
+		return { command: executable.command, prefixArgs: [...executable.prefixArgs] };
+	}
+	throw new Error("backend executable contract is invalid");
+}
+
 async function probeBackendVersion(backendId, executable, parentEnv) {
-	const child = spawn(executable, ["--version"], { env: { PATH: parentEnv.PATH ?? "" }, stdio: ["ignore", "pipe", "pipe"] });
+	const spec = backendCommand(executable, backendId);
+	const child = spawn(spec.command, [...spec.prefixArgs, "--version"], { env: { PATH: parentEnv.PATH ?? "" }, stdio: ["ignore", "pipe", "pipe"] });
 	let output = "";
 	for (const stream of [child.stdout, child.stderr]) {
 		stream.setEncoding("utf8");
@@ -218,22 +249,39 @@ export async function runBackendAttempt({
 	if (typeof prompt !== "string" || prompt.length === 0) throw new Error("prompt must be a non-empty string");
 	if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive safe integer");
 	if (!Number.isSafeInteger(killGraceMs) || killGraceMs < 0) throw new Error("killGraceMs must be a non-negative safe integer");
+	const abortedResult = () => {
+		const terminationReason = signal.reason === "recovery" ? "recovery" : "cancelled";
+		if (terminationReason === "recovery") store.recordEvent({ jobId, source: "recovery", kind: "recovered", safePayload: { recoveryAction: "safe_retry" } });
+		else store.recordEvent({ jobId, source: "helper", kind: "cancelled", safePayload: {} });
+		return { attemptId: null, exitCode: null, signal: null, terminationReason, backendOutcome: null, backendVersion: backendVersion ?? null, transientResult: null };
+	};
+	if (signal?.aborted) return abortedResult();
 	const executionCwd = resolveExecutionCwd(cwd);
 	const adapter = getBackendAdapter(backendId);
 	const supportedVersion = backendVersion
 		? assertSupportedBackendVersion(backendId, backendVersion)
-		: await probeBackendVersion(backendId, executable ?? backendId, parentEnv);
+		: await probeBackendVersion(backendId, executable, parentEnv);
 	const attemptId = randomUUID();
-	const { childHome, env, authenticationPrepared } = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: executionCwd });
+	const { childHome, env, authenticationPrepared } = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: executionCwd, prepareAuthentication: requireAuthentication });
 	if (requireAuthentication && !authenticationPrepared) {
 		cleanupChildEnvironment(childHome);
 		throw new Error(`${backendId} authentication is not ready`);
 	}
 	let child;
 	try {
-		const invocation = adapter.command({ ...safeCommandOptions(backendId, commandOptions), executable, cwd: executionCwd });
+		const spec = backendCommand(executable, backendId);
+		const invocation = adapter.command({ ...safeCommandOptions(backendId, commandOptions), executable: spec.command, cwd: executionCwd });
+		const windowsScript = process.platform === "win32" && /\.(?:[cm]?js)$/i.test(invocation.command);
+		const spawnCommand = windowsScript ? process.execPath : invocation.command;
+		const spawnArgs = windowsScript
+			? [invocation.command, ...spec.prefixArgs, ...invocation.args]
+			: [...spec.prefixArgs, ...invocation.args];
+	if (signal?.aborted) {
+		cleanupChildEnvironment(childHome);
+		return abortedResult();
+	}
 	store.reserveAttempt(jobId, { attemptId, backendId, now: now() });
-	child = spawn(invocation.command, invocation.args, {
+	child = spawn(spawnCommand, spawnArgs, {
 			cwd: executionCwd,
 		env,
 		stdio: ["pipe", "pipe", "pipe"],
@@ -246,12 +294,36 @@ export async function runBackendAttempt({
 		});
 	} catch (error) {
 		try {
-			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: "internal_error" } });
+			store.failReservedAttempt(jobId, { attemptId, now: now(), reasonCode: "internal_error" });
 		} catch {}
 		throw error;
 	}
-	store.attachAttempt(jobId, { attemptId, childPid: child.pid, backendId, now: now() });
+	const ownedBootId = readBootId();
 	const ownedStartIdentity = readProcessStartIdentity(child.pid);
+	if (!ownedBootId || !ownedStartIdentity) {
+		const terminated = terminateUnidentifiedChild(child);
+		if (terminated) {
+			try { store.failReservedAttempt(jobId, { attemptId, now: now(), reasonCode: "internal_error" }); } catch {}
+		}
+		throw new Error("child process ownership identity is unavailable");
+	}
+	try {
+		store.attachAttempt(jobId, { attemptId, childPid: child.pid, childBootId: ownedBootId, childStartIdentity: ownedStartIdentity, backendId, now: now() });
+	} catch (error) {
+		let terminated = processIsAlive(child.pid) === false;
+		try {
+			if (!terminated && process.platform === "win32" && child.exitCode === null && child.signalCode === null) {
+				const killed = spawnSync(trustedWindowsSystemExecutable("taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { encoding: "utf8", windowsHide: true });
+				terminated = killed.status === 0 && readProcessStartIdentity(child.pid) !== ownedStartIdentity;
+			} else if (!terminated) {
+				terminated = child.kill("SIGKILL") === true && processIsAlive(child.pid) === false;
+			}
+		} catch {}
+		if (terminated) {
+			try { store.failAttempt(jobId, { attemptId, now: now(), reasonCode: "internal_error" }); } catch {}
+		}
+		throw error;
+	}
 	let lineNumber = 0;
 	let backendOutcome = null;
 	let transientResult = null;
@@ -260,10 +332,19 @@ export async function runBackendAttempt({
 	let forceTimer = null;
 	const signalProcessTree = (signalName) => {
 		const currentIdentity = readProcessStartIdentity(child.pid);
-		if (ownedStartIdentity && currentIdentity && currentIdentity !== ownedStartIdentity) return;
+		if (!currentIdentity || currentIdentity !== ownedStartIdentity) {
+			try { child.kill(signalName); } catch {}
+			return;
+		}
 		try {
 			if (process.platform === "win32") {
-				if (child.exitCode === null && child.signalCode === null) child.kill(signalName);
+				if (child.exitCode === null && child.signalCode === null) {
+					const taskkill = trustedWindowsSystemExecutable("taskkill.exe");
+					const args = ["/PID", String(child.pid), "/T"];
+					if (signalName === "SIGKILL") args.push("/F");
+					const killed = spawnSync(taskkill, args, { encoding: "utf8", windowsHide: true });
+					if (killed.status !== 0 && child.exitCode === null && child.signalCode === null) child.kill(signalName);
+				}
 			}
 			else process.kill(-child.pid, signalName);
 		} catch (error) {

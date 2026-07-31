@@ -1,0 +1,69 @@
+{
+  "issue": 20,
+  "slug": "discord-windows-history",
+  "status": "sync",
+  "branch": "fix/discord-windows-history",
+  "baseline": "3d9d8e0",
+  "upstreamIntegrated": "0947f8e",
+  "updatedAt": "2026-07-31T21:38:16+09:00",
+  "completed": [
+    "merged named messenger instance isolation and confirmed-acknowledgement gate from main",
+    "implemented Windows ACL, native backend pinning, history, attachment and reply",
+    "implemented Task Scheduler with owner-only Startup fallback and cooperative generation-bound stop",
+    "made provider unknown outcomes fail closed and preserved attempt ownership until child termination is confirmed",
+    "made recovered work wait for a newly confirmed Discord acknowledgement and closed shutdown races",
+    "made Windows operator service commands and Bash top-level commands consistent",
+    "made existing recovery keys and directories fail closed before any permission mutation",
+    "confirmed Discord operator reply receipt 1532721626116919296",
+    "passed the full Discord deterministic suite with 92 tests: 88 pass, 0 fail, 4 platform skips",
+    "completed two consecutive adversarial CLEAN reviews on the frozen diff",
+    "passed benchmark-contract and entry-point regression suites"
+  ],
+  "remaining": [
+    "commit and squash-merge the worktree into main",
+    "reinstall and exercise the Windows service from main",
+    "push main and update the TalkingKiosk human operations handoff"
+  ],
+  "verification": {
+    "discordSessions": "PASS: 88 passed, 0 failed, 4 platform skips",
+    "adversarialReview": "PASS: two consecutive CLEAN rounds",
+    "benchmarkContract": "PASS",
+    "entryPoints": "PASS",
+    "contractConformancePython": "NOT RUN: no real Python interpreter installed on this PC",
+    "contextTranslationPython": "NOT RUN: no real Python interpreter installed on this PC",
+    "requestContract": "BASELINE FAIL: unchanged origin/main files fail on Windows (including client is not defined and symlink privilege); Discord diff does not modify those files",
+    "delivery": "REVIEW_ONLY until baseline request-contract failures are fixed upstream"
+  },
+  "documentationImpact": {
+    "repository_docs": {
+      "status": "UPDATED",
+      "evidence": [
+        ".agents/skills/manage-discord-sessions/SKILL.md",
+        "docs/design/discord-session-observability.md",
+        "naia-settings/README.md"
+      ]
+    },
+    "user_manual": {
+      "status": "UPDATED",
+      "evidence": [
+        ".users/skills/manage-discord-sessions/SKILL.md"
+      ]
+    },
+    "reusable_learning": {
+      "status": "UPDATED",
+      "evidence": [
+        ".agents/requirements/DSO-003-operator-visibility.yaml",
+        ".agents/requirements/DSO-005-private-projections.yaml",
+        ".agents/requirements/DSO-006-adk-only-recovery.yaml"
+      ]
+    }
+  },
+  "runtimeEvidence": {
+    "service": "running",
+    "gateway": "resumable",
+    "windowsRegistration": "startup_folder",
+    "taskSchedulerCreate": "access_denied",
+    "liveProcessCount": 1,
+    "discordReplyMessageId": "1532721626116919296"
+  }
+}
