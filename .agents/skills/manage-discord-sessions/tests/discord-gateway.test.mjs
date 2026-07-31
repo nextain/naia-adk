@@ -13,8 +13,10 @@ import { renderDiscordUserUnit } from "../helper/systemd.mjs";
 import { installServiceCommands, resolveBackendExecutable } from "../helper/service-manager.mjs";
 import { RecoveryCodec } from "../helper/recovery-crypto.mjs";
 import { randomBytes } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { DiscordStatusProjection } from "../helper/discord-projection.mjs";
 import { FileCredentialResolver, loadMessengerConfig } from "../helper/discord-config.mjs";
+import { runDiscordService } from "../helper/service.mjs";
 
 const roots = [];
 const BOT = "111111111111111111";
@@ -48,6 +50,7 @@ test("DSG-001 authorizes DM, guild channel, and exact thread bindings with struc
 	assert.equal(authorizeDiscordMessage({ message: { ...common, guild_id: GUILD, channel_id: THREAD }, bindings, botUserId: BOT, threadParents: threads }).scope.kind, "thread");
 	assert.equal(authorizeDiscordMessage({ message: { ...common, mentions: [], content: `<@${BOT}>`, guild_id: GUILD, channel_id: CHANNEL }, bindings, botUserId: BOT }).reasonCode, "mention_required");
 	assert.equal(authorizeDiscordMessage({ message: { ...common, author: { id: "888888888888888888" }, guild_id: GUILD, channel_id: CHANNEL }, bindings, operatorUserIds: ["888888888888888888"], botUserId: BOT }).reasonCode, "user_not_allowed");
+	assert.throws(() => validateDiscordBindings([{ ...binding(), respondWhen: "always" }]), /require mentioned/);
 });
 
 test("DSG-002 accepts ingress and job atomically and deduplicates Gateway replay", () => {
@@ -94,6 +97,70 @@ class FakeSocket {
 	emit(type, value) { this.listeners.get(type)?.(value); }
 }
 
+test("DSG-008 service shutdown does not wait for a stuck native WebSocket close", async () => {
+	const { root } = fixture();
+	const settings = join(root, "naia-settings");
+	const configDirectory = join(settings, "messenger-sessions");
+	const credentialDirectory = join(settings, ".keys/messenger-sessions");
+	mkdirSync(configDirectory, { recursive: true, mode: 0o700 });
+	mkdirSync(credentialDirectory, { recursive: true, mode: 0o700 });
+	const config = {
+		schemaVersion: 1,
+		enabled: true,
+		workspaceId: "shutdown-test",
+		persona: { name: "Reviewer", instructions: "Review safely." },
+		role: { name: "read-only", allowedActions: ["read", "reply"], requiresApproval: [] },
+		backend: { selected: "codex", profiles: { codex: { enabled: true }, claude: { enabled: true } } },
+		discord: {
+			credentialRef: "discord-token",
+			botUserId: BOT,
+			operatorUserIds: [USER],
+			bindings: [binding()],
+		},
+		runtime: { heartbeatSeconds: 10, softSilenceSeconds: 120, maxConcurrentJobs: 1 },
+		observability: { discordStatusProjection: false },
+		service: { autoStart: false, startAt: "login" },
+		recovery: { autoRetry: false },
+	};
+	writeFileSync(join(configDirectory, "config.json"), JSON.stringify(config), { mode: 0o600 });
+	writeFileSync(join(credentialDirectory, "discord-token"), "token-value-long-enough\n", { mode: 0o600 });
+	const socket = new FakeSocket();
+	socket.close = (code) => { socket.closed.push(code); };
+	const signals = new EventEmitter();
+	let releasePost;
+	let markPostStarted;
+	const postStarted = new Promise((resolve) => { markPostStarted = resolve; });
+	const fetchImpl = async (_url, init) => {
+		const request = JSON.parse(init.body);
+		markPostStarted();
+		await new Promise((resolve) => { releasePost = resolve; });
+		return {
+			ok: true,
+			status: 200,
+			json: async () => ({ id: "999999999999999999", channel_id: CHANNEL, author: { id: BOT }, nonce: request.nonce }),
+		};
+	};
+	const running = runDiscordService({ adkRoot: root, webSocketFactory: () => socket, fetchImpl, signalSource: signals });
+	await new Promise((resolve) => setImmediate(resolve));
+	socket.emit("message", { data: JSON.stringify({ op: 0, s: 7, t: "MESSAGE_CREATE", d: { id: "666666666666666666", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> !naia status` } }) });
+	await postStarted;
+	signals.emit("SIGTERM");
+	let settled = false;
+	void running.then(() => { settled = true; });
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(settled, false);
+	releasePost();
+	await Promise.race([
+		running,
+		new Promise((_, reject) => setTimeout(() => reject(new Error("service shutdown timed out")), 500)),
+	]);
+	assert.deepEqual(socket.closed, [1_000]);
+	const stopped = new SessionStore(join(settings, ".sessions/messenger-sessions/runtime.sqlite3"));
+	assert.equal(stopped.status().service.state, "stopped");
+	assert.equal(stopped.loadGatewayState().sequence, 7);
+	stopped.close();
+});
+
 test("DSG-004 persists sequence only after durable dispatch and resumes through the store adapter", async () => {
 	const { store } = fixture();
 	const socket = new FakeSocket();
@@ -111,6 +178,7 @@ test("DSG-004 persists sequence only after durable dispatch and resumes through 
 	socket.emit("message", { data: JSON.stringify({ op: 10, d: { heartbeat_interval: 10_000 } }) });
 	await session.dispatchChain;
 	assert.equal(socket.sent.some((item) => item.op === 2), true);
+	assert.equal(socket.sent.find((item) => item.op === 2).d.intents, 1 | 512 | 4_096);
 	socket.emit("message", { data: JSON.stringify({ op: 0, s: 7, t: "MESSAGE_CREATE", d: {} }) });
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(store.loadGatewayState().sequence ?? null, null);
