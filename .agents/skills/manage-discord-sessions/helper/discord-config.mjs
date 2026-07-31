@@ -1,13 +1,13 @@
 import { constants as fsConstants, lstatSync, openSync, readFileSync, closeSync } from "node:fs";
-import { parse, resolve } from "node:path";
+import { isAbsolute, parse, relative, resolve } from "node:path";
 import { assertOnlyKeys, safeIdentifier } from "./sanitize.mjs";
 import { validateDiscordBindings } from "./discord-scope.mjs";
+import { assertOwnerOnly } from "./platform-security.mjs";
 
 function privateFile(path, label) {
 	const stat = lstatSync(path);
 	if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${label} must be a real file`);
-	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`${label} owner mismatch`);
-	if ((stat.mode & 0o077) !== 0) throw new Error(`${label} must be owner-only`);
+	assertOwnerOnly(path, "file", label);
 }
 
 function privateDirectory(path, label) {
@@ -21,8 +21,7 @@ function privateDirectory(path, label) {
 	}
 	const stat = lstatSync(resolved);
 	if (!stat.isDirectory()) throw new Error(`${label} must be a directory`);
-	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`${label} owner mismatch`);
-	if ((stat.mode & 0o077) !== 0) throw new Error(`${label} must be owner-only`);
+	assertOwnerOnly(resolved, "directory", label);
 }
 
 export function loadMessengerConfig(path) {
@@ -89,7 +88,8 @@ export class FileCredentialResolver {
 		safeIdentifier(reference, "credentialRef");
 		privateDirectory(this.credentialsDirectory, "credentials directory");
 		const path = resolve(this.credentialsDirectory, reference);
-		if (!path.startsWith(`${this.credentialsDirectory}/`)) throw new Error("credential path escaped its directory");
+		const relativePath = relative(this.credentialsDirectory, path);
+		if (relativePath === "" || relativePath.startsWith("..") || isAbsolute(relativePath)) throw new Error("credential path escaped its directory");
 		privateFile(path, "Discord credential");
 		const fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
 		try {

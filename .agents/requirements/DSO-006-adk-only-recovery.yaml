@@ -8,7 +8,7 @@ source: human
 priority: high
 created: 2026-07-30
 updated: 2026-07-31
-issue_url: "https://github.com/nextain/naia-adk/issues/18"
+issue_url: "https://github.com/nextain/naia-adk/issues/20"
 description: |
   The core service, settings, recovery state, and observability work from naia-adk alone. Codex and Claude are independent optional execution backends.
 acceptance_criteria:
@@ -19,6 +19,7 @@ acceptance_criteria:
   - "delivery_unknown is visible after restart and is never automatically resent."
   - "An actual reboot starts exactly one helper owner, resumes or explicitly reconnects Gateway, keeps the same jobId with a new attemptId and recovered event, and posts at most one recovery notice per boot generation."
   - "Recovery never launches a child with encrypted historical command options: it compares a safe permission-profile epoch and builds a fresh no-prompt invocation."
+  - "Windows uses native ACL validation, process creation identity, an owner-only launcher, and one limited ONLOGON Task Scheduler service without Bash or systemd."
 trace:
   code:
     - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "ADK-root-local service and visibility entry", coverage: full }
@@ -28,6 +29,7 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/service.mjs", symbol: "runDiscordService", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/recovery-crypto.mjs", symbol: "RecoveryCodec", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/systemd.mjs", symbol: "renderDiscordUserUnit", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-manager.mjs", symbol: "Windows Task Scheduler and operator launcher", coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "Codex/Claude parity and recovery interruption tests", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-004/DSG-007/DSG-008 simulated Gateway and reboot recovery; actual host reboot receipt pending local setup", coverage: partial }

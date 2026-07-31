@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { SessionStore } from "../helper/store.mjs";
 import { readBootId, readProcessStartIdentity } from "../helper/projector.mjs";
+import { assertOwnerOnly, protectOwnerOnly } from "../helper/platform-security.mjs";
 
 const roots = [];
 const cliPath = fileURLToPath(new URL("../helper/cli.mjs", import.meta.url));
@@ -19,6 +20,11 @@ afterEach(() => {
 function fixture(ownershipReader = {}) {
 	const root = mkdtempSync(join(tmpdir(), "naia-discord-observability-"));
 	roots.push(root);
+	const configDir = join(root, "naia-settings/messenger-sessions");
+	mkdirSync(configDir, { recursive: true });
+	const configPath = join(configDir, "config.json");
+	writeFileSync(configPath, JSON.stringify({ schemaVersion: 1, enabled: true, workspaceId: "test", persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"], requiresApproval: ["write"] }, backend: { selected: "codex", profiles: { codex: { enabled: true }, claude: { enabled: false } } }, discord: { credentialRef: "discord-token", botUserId: "111111111111111111", operatorUserIds: [], bindings: [{ kind: "guild_channel", guildId: "333333333333333333", channelId: "444444444444444444", respondWhen: "mentioned", allowedUserIds: ["222222222222222222"], canStartConversation: false, operatorActions: true }] }, runtime: { heartbeatSeconds: 10, softSilenceSeconds: 120, noProgressInterventionSeconds: 120, operatorResponseSeconds: 30, approvalPolicy: "never", permissionProfileEpoch: "profile-1", maxConcurrentJobs: 1 }, observability: { discordStatusProjection: true }, service: { autoStart: true, startAt: "login" }, recovery: { autoRetry: true } }));
+	protectOwnerOnly(configPath, "file", "test messenger config");
 	const stateDir = join(root, "naia-settings/.sessions/messenger-sessions");
 	mkdirSync(stateDir, { recursive: true });
 	const databasePath = join(stateDir, "runtime.sqlite3");
@@ -141,7 +147,10 @@ test("DSO-002 separates fresh progress, unsupported detail, waiting, stall, dead
 	assert.equal(stale.store.getJob(staleJob.jobId, { nowMs: Date.parse(iso(31_000)) }).activityHealth.reasonCode, "service_stale");
 	stale.store.close();
 
-	const missingProcess = fixture();
+	const missingProcess = fixture({
+		readBootId: () => "11111111-1111-1111-1111-111111111111",
+		readProcessStartIdentity: () => "1",
+	});
 	const missingProcessJob = createRunningJob(missingProcess.store, { servicePid: 2_147_483_647 });
 	assert.equal(missingProcess.store.getJob(missingProcessJob.jobId, { nowMs: Date.parse(iso(130_000)) }).activityHealth.reasonCode, "service_stopped");
 	missingProcess.store.close();
@@ -157,7 +166,10 @@ test("DSO-002 separates fresh progress, unsupported detail, waiting, stall, dead
 	assert.equal(ownershipConflict.store.getJob(ownershipJob.jobId, { nowMs: Date.parse(iso(1_000)) }).activityHealth.reasonCode, "service_degraded");
 	ownershipConflict.store.close();
 
-	const childMissing = fixture();
+	const childMissing = fixture({
+		readBootId: () => readBootId(),
+		readProcessStartIdentity: (pid) => pid === process.pid ? readProcessStartIdentity(pid) : "1",
+	});
 	const childMissingJob = createRunningJob(childMissing.store, { childPid: 2_147_483_647 });
 	assert.equal(childMissing.store.getJob(childMissingJob.jobId, { nowMs: Date.parse(iso(1_000)) }).activityHealth.value, "unresponsive");
 	childMissing.store.heartbeatService({ generation: "generation-1", pid: process.pid, now: iso(130_000) });
@@ -351,7 +363,18 @@ test("DSO-003 status on a clean ADK is read-only and reports stopped", () => {
 	const status = spawnSync(process.execPath, [cliPath, "--adk-root", root, "status", "--json"], { encoding: "utf8" });
 	assert.equal(status.status, 0, status.stderr);
 	assert.equal(JSON.parse(status.stdout).service.state, "stopped");
-	assert.equal(spawnSync("test", ["-e", join(root, "naia-settings")]).status, 1);
+	assert.equal(existsSync(join(root, "naia-settings")), false);
+});
+
+test("DSO-003 named or persisted state without its config fails closed", () => {
+	const root = mkdtempSync(join(tmpdir(), "naia-discord-missing-config-"));
+	roots.push(root);
+	const named = spawnSync(process.execPath, [cliPath, "--adk-root", root, "--instance", "alpha", "status", "--json"], { encoding: "utf8" });
+	assert.equal(named.status, 3);
+	const databasePath = join(root, "naia-settings/.sessions/messenger-sessions/runtime.sqlite3");
+	new SessionStore(databasePath).close();
+	const persisted = spawnSync(process.execPath, [cliPath, "--adk-root", root, "status", "--json"], { encoding: "utf8" });
+	assert.equal(persisted.status, 3);
 });
 
 test("DSO-002 rejects a second live service generation", () => {
@@ -371,8 +394,7 @@ test("DSO-002 lets the current service generation record a clean stop", () => {
 
 test("DSO-002 rejects a clean-stop claim without owner identity evidence", () => {
 	const { store } = fixture({ readBootId: () => null, readProcessStartIdentity: () => null });
-	store.heartbeatService({ generation: "generation-1", pid: process.pid, now: iso() });
-	assert.throws(() => store.heartbeatService({ generation: "generation-1", status: "stopped", pid: null, now: iso(1_000) }), /ownership conflict within generation/);
+	assert.throws(() => store.heartbeatService({ generation: "generation-1", pid: process.pid, now: iso() }), /ownership evidence is required/);
 	store.close();
 });
 
@@ -419,7 +441,7 @@ test("DSO-003 rejects ambiguous CLI arguments", () => {
 	}
 });
 
-test("DSO-005 refuses a symlinked session database", () => {
+test("DSO-005 refuses a symlinked session database", (context) => {
 	const root = mkdtempSync(join(tmpdir(), "naia-discord-symlink-"));
 	roots.push(root);
 	const stateDir = join(root, "state");
@@ -427,11 +449,12 @@ test("DSO-005 refuses a symlinked session database", () => {
 	const external = join(root, "external.sqlite3");
 	writeFileSync(external, "not a database", { mode: 0o600 });
 	const linked = join(stateDir, "runtime.sqlite3");
-	symlinkSync(external, linked);
+	try { symlinkSync(external, linked); }
+	catch (error) { if (process.platform === "win32" && error.code === "EPERM") return context.skip("Windows symlink privilege is unavailable"); throw error; }
 	assert.throws(() => new SessionStore(linked), /real file|symbolic link/);
 });
 
-test("DSO-005 refuses symlinked SQLite sidecars before open", () => {
+test("DSO-005 refuses symlinked SQLite sidecars before open", (context) => {
 	const root = mkdtempSync(join(tmpdir(), "naia-discord-sidecar-symlink-"));
 	roots.push(root);
 	const stateDir = join(root, "state");
@@ -440,7 +463,8 @@ test("DSO-005 refuses symlinked SQLite sidecars before open", () => {
 	writeFileSync(databasePath, "", { mode: 0o600 });
 	const external = join(root, "external-wal");
 	writeFileSync(external, "unchanged", { mode: 0o600 });
-	symlinkSync(external, `${databasePath}-wal`);
+	try { symlinkSync(external, `${databasePath}-wal`); }
+	catch (error) { if (process.platform === "win32" && error.code === "EPERM") return context.skip("Windows symlink privilege is unavailable"); throw error; }
 	const before = readFileSync(external, "utf8");
 	assert.throws(() => new SessionStore(databasePath), /sidecar must be a real file/);
 	assert.equal(readFileSync(external, "utf8"), before);
@@ -451,7 +475,9 @@ test("DSO-005 keeps SQLite database and sidecars private", () => {
 	createRunningJob(store);
 	for (const suffix of ["", "-wal", "-shm"]) {
 		const path = `${databasePath}${suffix}`;
-		if (existsSync(path)) assert.equal(statSync(path).mode & 0o777, 0o600, path);
+		if (!existsSync(path)) continue;
+		if (process.platform === "win32") assert.doesNotThrow(() => assertOwnerOnly(path, "file", "SQLite state"));
+		else assert.equal(statSync(path).mode & 0o777, 0o600, path);
 	}
 	store.close();
 });

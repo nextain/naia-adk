@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { assertSupportedBackendVersion, getBackendAdapter, parseBackendLine } from "../helper/adapters.mjs";
+import { assertSupportedBackendVersion, getBackendAdapter, inspectBackendLine, parseBackendLine } from "../helper/adapters.mjs";
 import { prepareChildEnvironment, resolveExecutionCwd, runBackendAttempt } from "../helper/backend-runner.mjs";
 import { commandOptionsForProfile } from "../helper/execution-profile.mjs";
 import { SessionStore } from "../helper/store.mjs";
+import { assertOwnerOnly, protectOwnerOnly } from "../helper/platform-security.mjs";
 
 const roots = [];
 const fakeBackendPath = fileURLToPath(new URL("./fixtures/fake-backend.mjs", import.meta.url));
@@ -70,6 +71,14 @@ test("DSO-006 normalizes provider streams without retaining model content", () =
 	assert.ok(!JSON.stringify({ codex, claude }).includes(secret));
 });
 
+test("DSO-006 never promotes an unknown provider result to success", () => {
+	const codex = inspectBackendLine({ backendId: "codex", attemptId: "attempt-unknown-codex", lineNumber: 1, line: JSON.stringify({ type: "turn.completed", status: "unknown" }) });
+	const claude = inspectBackendLine({ backendId: "claude", attemptId: "attempt-unknown-claude", lineNumber: 1, line: JSON.stringify({ type: "result", subtype: "unknown", result: "must-not-deliver" }) });
+	assert.equal(codex.outcome, null);
+	assert.equal(claude.outcome, null);
+	assert.equal(claude.transientResult, null);
+});
+
 test("DSO-005 creates a private minimal child environment and copies only provider auth", () => {
 	const root = mkdtempSync(join(tmpdir(), "naia-child-env-"));
 	roots.push(root);
@@ -80,7 +89,9 @@ test("DSO-005 creates a private minimal child environment and copies only provid
 	writeFileSync(join(authRoot, ".codex", "config.toml"), "must-not-copy", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".claude", ".credentials.json"), "claude-auth", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".claude", "settings.json"), "must-not-copy", { mode: 0o600 });
-	const parentEnv = { PATH: `${process.env.PATH}:${join(root, "workspace/node_modules/.bin")}:.`, LANG: "C.UTF-8", DISCORD_TOKEN: "discord-secret", CODEX_API_KEY: "codex-key", OPENAI_API_KEY: "wrong-key" };
+	for (const directory of [authRoot, join(authRoot, ".codex"), join(authRoot, ".claude")]) protectOwnerOnly(directory, "directory", "test auth directory");
+	for (const file of [join(authRoot, ".codex", "auth.json"), join(authRoot, ".claude", ".credentials.json")]) protectOwnerOnly(file, "file", "test auth file");
+	const parentEnv = { PATH: `${process.env.PATH}${delimiter}${join(root, "workspace/node_modules/.bin")}${delimiter}.`, LANG: "C.UTF-8", DISCORD_TOKEN: "discord-secret", CODEX_API_KEY: "codex-key", OPENAI_API_KEY: "wrong-key" };
 	const codex = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot });
 	const codexOauth = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-oauth-attempt", runtimeRoot: join(root, "runtime"), parentEnv: { PATH: process.env.PATH }, authRoot });
 	const claude = prepareChildEnvironment({ backendId: "claude", attemptId: "claude-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot });
@@ -88,8 +99,9 @@ test("DSO-005 creates a private minimal child environment and copies only provid
 	assert.equal(codex.env.OPENAI_API_KEY, undefined);
 	assert.equal(codex.env.CODEX_API_KEY, "codex-key");
 	assert.ok(!codex.env.PATH.includes("node_modules"));
-	assert.ok(!codex.env.PATH.split(":").includes("."));
-	assert.equal(statSync(codex.childHome).mode & 0o777, 0o700);
+	assert.ok(!codex.env.PATH.split(delimiter).includes("."));
+	if (process.platform === "win32") assert.doesNotThrow(() => assertOwnerOnly(codex.childHome, "directory", "child home"));
+	else assert.equal(statSync(codex.childHome).mode & 0o777, 0o700);
 	assert.deepEqual(readdirSync(join(codex.childHome, ".codex")).sort(), []);
 	assert.deepEqual(readdirSync(join(codexOauth.childHome, ".codex")).sort(), ["auth.json"]);
 	assert.equal(readFileSync(join(codexOauth.childHome, ".codex", "auth.json"), "utf8"), "codex-auth");
@@ -103,7 +115,7 @@ test("DSO-005 rejects insecure auth permissions and cleans the partial child hom
 	mkdirSync(join(authRoot, ".codex"), { recursive: true });
 	writeFileSync(join(authRoot, ".codex", "auth.json"), "unsafe", { mode: 0o644 });
 	const runtimeRoot = join(root, "runtime");
-	assert.throws(() => prepareChildEnvironment({ backendId: "codex", attemptId: "bad-auth", runtimeRoot, parentEnv: { PATH: process.env.PATH }, authRoot }), /permissions/);
+	assert.throws(() => prepareChildEnvironment({ backendId: "codex", attemptId: "bad-auth", runtimeRoot, parentEnv: { PATH: process.env.PATH }, authRoot }), /owner-only|permissions/);
 	assert.deepEqual(readdirSync(join(runtimeRoot, "children")), []);
 });
 
@@ -129,6 +141,25 @@ for (const backendId of ["codex", "claude"]) {
 	});
 }
 
+test("DSO-006 runs a Windows npm-shim backend through a pinned node command and script prefix", async () => {
+	const { root, store, jobId } = fixture("codex");
+	const result = await runBackendAttempt({
+		store,
+		jobId,
+		backendId: "codex",
+		prompt: "prefix command",
+		cwd: root,
+		runtimeRoot: join(root, "runtime"),
+		executable: { command: process.execPath, prefixArgs: [fakeBackendPath] },
+		backendVersion: "0.146.0",
+		requireAuthentication: false,
+		parentEnv: { PATH: process.env.PATH },
+	});
+	assert.equal(result.exitCode, 0);
+	assert.equal(store.getJob(jobId).lifecycle, "result_ready");
+	store.close();
+});
+
 test("DSO-006 times out, escalates termination, and records failure", async () => {
 	const { root, stateRoot, store, jobId } = fixture("codex");
 	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: "__fake_hang__", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: "0.146.0", requireAuthentication: false, timeoutMs: 150, killGraceMs: 20, parentEnv: { PATH: process.env.PATH } });
@@ -136,7 +167,7 @@ test("DSO-006 times out, escalates termination, and records failure", async () =
 	const job = store.getJob(jobId);
 	assert.equal(job.lifecycle, "failed");
 	assert.ok(job.events.some((event) => event.kind === "cancel_requested"));
-	assert.ok(job.events.some((event) => event.kind === "attempt_exited" && event.safeSummary.includes("SIGKILL")));
+	assert.ok(job.events.some((event) => event.kind === "attempt_exited" && (process.platform === "win32" || event.safeSummary.includes("SIGKILL"))));
 	store.close();
 });
 
@@ -211,15 +242,33 @@ test("DSO-006 pre-abort cancels the owned process and removes runtime credential
 	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: "__fake_hang__", cwd: root, runtimeRoot, executable: fakeBackendPath, backendVersion: "0.146.0", requireAuthentication: false, signal: controller.signal, parentEnv: { PATH: process.env.PATH } });
 	assert.equal(result.terminationReason, "cancelled");
 	assert.equal(store.getJob(jobId).lifecycle, "cancelled");
-	assert.deepEqual(readdirSync(join(runtimeRoot, "children")), []);
+	const children = join(runtimeRoot, "children");
+	assert.deepEqual(existsSync(children) ? readdirSync(children) : [], []);
 	store.close();
 });
 
 test("DSO-006 service interruption preserves a job for reboot recovery", async () => {
-	const { store, jobId, root, runtimeRoot, executable } = fixture("codex");
+	const { store, jobId, root } = fixture("codex");
 	const controller = new AbortController();
 	controller.abort("recovery");
-	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: "recover me", cwd: root, runtimeRoot, executable, signal: controller.signal, backendVersion: "0.146.0", requireAuthentication: false });
+	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: "recover me", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, signal: controller.signal, backendVersion: "0.146.0", requireAuthentication: false });
+	assert.equal(result.terminationReason, "recovery");
+	assert.equal(store.getJob(jobId).lifecycle, "queued");
+	assert.equal(store.getJob(jobId).events.at(-1).kind, "recovered");
+	store.close();
+});
+
+test("DSO-006 service interruption during version probing preserves recovery semantics", async () => {
+	const { store, jobId, root } = fixture("codex");
+	const controller = new AbortController();
+	const running = runBackendAttempt({
+		store, jobId, backendId: "codex", prompt: "recover during probe",
+		cwd: root, runtimeRoot: join(root, "runtime"),
+		executable: { command: process.execPath, prefixArgs: ["-e", "setTimeout(() => console.log('codex-cli 0.146.0'), 100)", "--"] },
+		requireAuthentication: false, signal: controller.signal,
+	});
+	setTimeout(() => controller.abort("recovery"), 10);
+	const result = await running;
 	assert.equal(result.terminationReason, "recovery");
 	assert.equal(store.getJob(jobId).lifecycle, "queued");
 	assert.equal(store.getJob(jobId).events.at(-1).kind, "recovered");
@@ -233,6 +282,43 @@ test("DSO-006 spawn failure leaves no attempt credential directory", async () =>
 	assert.deepEqual(readdirSync(join(runtimeRoot, "children")), []);
 	store.close();
 });
+
+test("DSO-006 immediate child exit fails and releases its reservation", async () => {
+	const { root, store, jobId } = fixture("codex");
+	await assert.rejects(runBackendAttempt({
+		store, jobId, backendId: "codex", prompt: "instant",
+		cwd: root, runtimeRoot: join(root, "runtime"),
+		executable: { command: process.execPath, prefixArgs: ["-e", "process.exit(0)", "--"] },
+		backendVersion: "0.146.0", requireAuthentication: false,
+		parentEnv: { PATH: process.env.PATH },
+	}), /ownership identity is unavailable/);
+	const job = store.getJob(jobId);
+	assert.equal(job.lifecycle, "failed");
+	assert.equal(job.attemptId, null);
+	store.close();
+});
+
+for (const phase of ["before_commit", "after_commit"]) {
+	test(`DSO-006 attach failure ${phase} terminates the child and closes the attempt`, async () => {
+		const { root, store, jobId } = fixture("codex");
+		const originalAttach = store.attachAttempt.bind(store);
+		store.attachAttempt = (...args) => {
+			if (phase === "after_commit") originalAttach(...args);
+			throw new Error(`injected attach failure ${phase}`);
+		};
+		await assert.rejects(runBackendAttempt({
+			store, jobId, backendId: "codex", prompt: "attach",
+			cwd: root, runtimeRoot: join(root, "runtime"),
+			executable: fakeBackendPath, backendVersion: "0.146.0",
+			requireAuthentication: false, parentEnv: { PATH: process.env.PATH },
+		}), new RegExp(`injected attach failure ${phase}`));
+		const job = store.getJob(jobId);
+		assert.equal(job.lifecycle, "failed");
+		assert.equal(job.attemptId, null);
+		assert.equal(job.childState.state, "not_expected");
+		store.close();
+	});
+}
 
 test("DSO-006 rejects backend mismatch and a second active attempt", async () => {
 	const mismatch = fixture("codex");

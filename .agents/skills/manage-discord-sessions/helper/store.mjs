@@ -13,6 +13,7 @@ import {
 } from "./constants.mjs";
 import { observeOwnedProcess, projectActivityHealth, projectCompletionAssessment, projectServiceHealth, readBootId, readProcessStartIdentity } from "./projector.mjs";
 import { assertOnlyKeys, buildSafeEventSummary, canonicalTimestamp, safeIdentifier, sanitizeSummary, validateBackendCapabilities, validateSafeMetrics } from "./sanitize.mjs";
+import { protectOwnerOnlyBatch } from "./platform-security.mjs";
 
 const EVENT_INPUT_KEYS = new Set([
 	"jobId",
@@ -101,6 +102,10 @@ function preparePrivateDatabasePath(databasePath) {
 	if (!databaseStat.isFile() || databaseStat.isSymbolicLink()) throw new Error("session database must be a real file");
 	if (typeof process.getuid === "function" && databaseStat.uid !== process.getuid()) throw new Error("session database owner mismatch");
 	chmodSync(resolvedPath, 0o600);
+	const privateItems = [
+		{ path: directory, kind: "directory", label: "session state directory" },
+		{ path: resolvedPath, kind: "file", label: "session database" },
+	];
 	for (const suffix of ["-wal", "-shm"]) {
 		const sidecar = `${resolvedPath}${suffix}`;
 		const sidecarStat = lstatOrNull(sidecar);
@@ -108,7 +113,9 @@ function preparePrivateDatabasePath(databasePath) {
 		if (!sidecarStat.isFile() || sidecarStat.isSymbolicLink()) throw new Error(`SQLite sidecar must be a real file: ${sidecar}`);
 		if (typeof process.getuid === "function" && sidecarStat.uid !== process.getuid()) throw new Error(`SQLite sidecar owner mismatch: ${sidecar}`);
 		chmodSync(sidecar, 0o600);
+		privateItems.push({ path: sidecar, kind: "file", label: "SQLite sidecar" });
 	}
+	protectOwnerOnlyBatch(privateItems);
 	return resolvedPath;
 }
 
@@ -192,6 +199,7 @@ export class SessionStore {
 	}
 
 	#hardenSidecars() {
+		const privateItems = [];
 		for (const suffix of ["", "-wal", "-shm"]) {
 			const path = `${this.databasePath}${suffix}`;
 			const stat = lstatOrNull(path);
@@ -199,7 +207,9 @@ export class SessionStore {
 			if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`unsafe SQLite state file: ${path}`);
 			if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`SQLite state owner mismatch: ${path}`);
 			chmodSync(path, 0o600);
+			privateItems.push({ path, kind: "file", label: "SQLite state file" });
 		}
+		protectOwnerOnlyBatch(privateItems);
 	}
 
 	#migrate() {
@@ -398,7 +408,7 @@ export class SessionStore {
 				.run(sourceMessageId, scopeKey, status, jobId, reasonCode, dispatchSequence, now, now);
 			this.db.exec("COMMIT");
 			return { duplicate: false, status, jobId };
-		} catch (error) { this.db.exec("ROLLBACK"); throw error; }
+		} catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
 	}
 
 	acceptIngressAndCreateJob({ sourceMessageId, scopeKey, jobId, dispatchSequence = null, backendId, revision = "discord-v1", backendCapabilities = {}, activityDetail, jobType = "conversation", softSilenceMs = DEFAULT_SOFT_SILENCE_MS, recoveryEnvelope = null, now = new Date().toISOString() }) {
@@ -432,7 +442,7 @@ export class SessionStore {
 			this.db.exec("COMMIT");
 			this.#hardenSidecars();
 			return { duplicate: false, status: "accepted", jobId };
-		} catch (error) { this.db.exec("ROLLBACK"); throw error; }
+		} catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
 	}
 
 	reserveDelivery({ deliveryKey, jobId, attemptId, nonce, channelId, now = new Date().toISOString() }) {
@@ -457,7 +467,7 @@ export class SessionStore {
 			this.#appendEvent({ jobId, attemptId, kind: "delivery_started", source: "helper", occurredAt: now, safeSummary: buildSafeEventSummary("delivery_started", {}) });
 			this.db.exec("COMMIT");
 			return { existing: false, deliveryKey, nonce, channelId, status: "started" };
-		} catch (error) { this.db.exec("ROLLBACK"); throw error; }
+		} catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
 	}
 
 	startDelivery(input) { return this.reserveDelivery(input); }
@@ -475,7 +485,7 @@ export class SessionStore {
 			this.#appendEvent({ jobId: delivery.job_id, attemptId: delivery.attempt_id, kind, source: "helper", occurredAt: now,
 				safeSummary: buildSafeEventSummary(kind, status === "failed" ? { reasonCode } : {}) });
 			this.db.exec("COMMIT");
-		} catch (error) { this.db.exec("ROLLBACK"); throw error; }
+		} catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
 	}
 
 	recoverInterruptedWork({ now = new Date().toISOString() } = {}) {
@@ -504,7 +514,7 @@ export class SessionStore {
 			}
 			this.db.exec("COMMIT");
 			return recovered;
-		} catch (error) { this.db.exec("ROLLBACK"); throw error; }
+		} catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
 	}
 
 	close() {
@@ -518,6 +528,7 @@ export class SessionStore {
 		if (!new Set(["running", "stopped"]).has(status)) throw new Error("service status is not allowed");
 		if (pid !== null && (!Number.isSafeInteger(pid) || pid <= 0)) throw new Error("service pid must be a positive safe integer or null");
 		canonicalTimestamp(now, "heartbeat time");
+		if (status === "running" && (pid === null || bootId === null || processStartIdentity === null)) throw new Error("running service ownership evidence is required");
 		if (bootId !== null) safeIdentifier(bootId, "bootId");
 		if (processStartIdentity !== null) safeIdentifier(processStartIdentity, "processStartIdentity");
 		this.db.exec("BEGIN IMMEDIATE");
@@ -552,7 +563,7 @@ export class SessionStore {
 			this.db.exec("COMMIT");
 			return generation;
 		} catch (error) {
-			this.db.exec("ROLLBACK");
+			try { this.db.exec("ROLLBACK"); } catch {}
 			throw error;
 		}
 	}
@@ -603,7 +614,7 @@ export class SessionStore {
 			this.#hardenSidecars();
 			return jobId;
 		} catch (error) {
-			this.db.exec("ROLLBACK");
+			try { this.db.exec("ROLLBACK"); } catch {}
 			throw error;
 		}
 	}
@@ -623,17 +634,23 @@ export class SessionStore {
 			this.#hardenSidecars();
 			return attemptId;
 		} catch (error) {
-			this.db.exec("ROLLBACK");
+			try { this.db.exec("ROLLBACK"); } catch {}
 			throw error;
 		}
 	}
 
-	attachAttempt(jobId, { attemptId, now = new Date().toISOString(), childPid = process.pid, backendId = null } = {}) {
-		const childBootId = this.readBootId();
-		const childStartIdentity = this.readProcessStartIdentity(childPid);
+	attachAttempt(jobId, {
+		attemptId,
+		now = new Date().toISOString(),
+		childPid = process.pid,
+		childBootId = this.readBootId(),
+		childStartIdentity = this.readProcessStartIdentity(childPid),
+		backendId = null,
+	} = {}) {
 		safeIdentifier(attemptId, "attemptId");
 		canonicalTimestamp(now, "attempt start time");
 		if (!Number.isSafeInteger(childPid) || childPid <= 0) throw new Error("childPid must be a positive safe integer");
+		if (childBootId === null || childStartIdentity === null) throw new Error("child ownership evidence is required");
 		if (childBootId !== null) safeIdentifier(childBootId, "childBootId");
 		if (childStartIdentity !== null) safeIdentifier(childStartIdentity, "childStartIdentity");
 		this.db.exec("BEGIN IMMEDIATE");
@@ -649,7 +666,7 @@ export class SessionStore {
 			this.#hardenSidecars();
 			return attemptId;
 		} catch (error) {
-			this.db.exec("ROLLBACK");
+			try { this.db.exec("ROLLBACK"); } catch {}
 			throw error;
 		}
 	}
@@ -657,6 +674,27 @@ export class SessionStore {
 	startAttempt(jobId, { attemptId = randomUUID(), now = new Date().toISOString(), childPid = process.pid, backendId = null, replaceCurrent = false } = {}) {
 		this.reserveAttempt(jobId, { attemptId, now, backendId, replaceCurrent });
 		return this.attachAttempt(jobId, { attemptId, now, childPid, backendId });
+	}
+
+	failReservedAttempt(jobId, { attemptId, reasonCode = "internal_error", now = new Date().toISOString() } = {}) {
+		return this.failAttempt(jobId, { attemptId, reasonCode, now, requireUnattached: true });
+	}
+
+	failAttempt(jobId, { attemptId, reasonCode = "internal_error", now = new Date().toISOString(), requireUnattached = false } = {}) {
+		safeIdentifier(attemptId, "attemptId");
+		canonicalTimestamp(now, "attempt failure time");
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const job = this.db.prepare("SELECT attempt_id, child_alive FROM jobs WHERE job_id = ?").get(jobId);
+			if (!job || job.attempt_id !== attemptId || (requireUnattached && job.child_alive)) throw new Error("attempt reservation ownership mismatch");
+			this.#appendEvent({ jobId, attemptId, kind: "failed", source: "helper", occurredAt: now, safeSummary: buildSafeEventSummary("failed", { reasonCode }) });
+			this.db.prepare("UPDATE jobs SET attempt_id = NULL, child_alive = 0, child_pid = NULL, child_boot_id = NULL, child_start_identity = NULL WHERE job_id = ?").run(jobId);
+			this.db.exec("COMMIT");
+			this.#hardenSidecars();
+		} catch (error) {
+			try { this.db.exec("ROLLBACK"); } catch {}
+			throw error;
+		}
 	}
 
 	recordEvent(input) {
@@ -676,7 +714,7 @@ export class SessionStore {
 			this.#hardenSidecars();
 			return event;
 		} catch (error) {
-			this.db.exec("ROLLBACK");
+			try { this.db.exec("ROLLBACK"); } catch {}
 			throw error;
 		}
 	}
@@ -793,7 +831,7 @@ export class SessionStore {
 			this.#hardenSidecars();
 			return evidenceId;
 		} catch (error) {
-			this.db.exec("ROLLBACK");
+			try { this.db.exec("ROLLBACK"); } catch {}
 			throw error;
 		}
 	}
@@ -813,6 +851,12 @@ export class SessionStore {
 				needsReview: jobs.filter((job) => job.lifecycle === "recovery_review").length,
 			},
 		};
+	}
+
+	getServiceOwner() {
+		const service = this.db.prepare("SELECT generation, pid, boot_id, process_start_identity FROM service_state WHERE id = 1").get();
+		if (!service?.pid) return null;
+		return { generation: service.generation, pid: service.pid, bootId: service.boot_id, processStartIdentity: service.process_start_identity };
 	}
 
 	listJobs({ nowMs = Date.now(), serviceHealth } = {}) {

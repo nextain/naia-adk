@@ -18,6 +18,7 @@ function commandText(message, botUserId) {
 
 export class DiscordMessageRouter {
 	constructor({ config, store, token, botUserId, cwd, runtimeRoot, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, send = null, backendExecutables = {}, now = () => Date.now() }) {
+		if (typeof send !== "function") throw new Error("confirmed Discord sender is required");
 		this.config = config;
 		this.store = store;
 		this.token = token;
@@ -148,7 +149,6 @@ export class DiscordMessageRouter {
 	}
 
 	#scheduleOperatorResponse(item) {
-		if (!this.send) return Promise.resolve(true);
 		let resolveWaiter;
 		const ready = new Promise((resolve) => { resolveWaiter = resolve; });
 		this.operatorResponseWaiters.set(item.jobId, resolveWaiter);
@@ -182,7 +182,11 @@ export class DiscordMessageRouter {
 		this.controllers.set(item.jobId, controller);
 		try {
 			const operatorReady = item.operatorReady ? await item.operatorReady : true;
-			if (!operatorReady) throw new Error("operator response was not confirmed");
+			if (!operatorReady) {
+				if (controller.signal.reason === "recovery") return;
+				throw new Error("operator response was not confirmed");
+			}
+			if (controller.signal.aborted) return;
 			const currentProfile = this.#executionProfile(item.backendId);
 			if (!sameExecutionProfile(item.executionProfile ?? currentProfile, currentProfile)) {
 				this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "profile_replaced", safePayload: {} });
@@ -245,9 +249,9 @@ export class DiscordMessageRouter {
 		for (const item of this.queue.splice(0)) {
 			try { this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "recovered", safePayload: { recoveryAction: "safe_retry" } }); } catch {}
 		}
-		await this.waitForIdle();
 		this.operatorResponses.clear();
 		for (const jobId of [...this.operatorResponseWaiters.keys()]) this.#resolveOperatorResponse(jobId, false);
+		await this.waitForIdle();
 	}
 
 	resumeRecovered(items, { autoRetry = false } = {}) {
@@ -263,7 +267,9 @@ export class DiscordMessageRouter {
 				if (profileChanged) {
 					this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "profile_replaced", safePayload: {} });
 				}
-				this.queue.push({ jobId: item.jobId, backendId: item.backendId, prompt: payload.prompt, channelId: payload.channelId, commandOptions: commandOptionsForProfile(executionProfile), executionProfile });
+				const recovered = { jobId: item.jobId, backendId: item.backendId, prompt: payload.prompt, channelId: payload.channelId, commandOptions: commandOptionsForProfile(executionProfile), executionProfile };
+				recovered.operatorReady = this.#scheduleOperatorResponse(recovered);
+				this.queue.push(recovered);
 			} catch {
 				this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "recovery_review_required", safePayload: {} });
 			}

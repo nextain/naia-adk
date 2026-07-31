@@ -26,7 +26,7 @@ export async function postDiscordMessage({ token, channelId, content, nonce, bot
 		});
 		if (response.ok) {
 			const body = await response.json();
-			if (body.channel_id !== channelId || (botUserId && body.author?.id !== botUserId) || (body.nonce !== undefined && String(body.nonce) !== nonce)) return { state: "unknown", reasonCode: "receipt_identity_mismatch", status: response.status };
+			if (body.channel_id !== channelId || (botUserId && body.author?.id !== botUserId) || String(body.nonce ?? "") !== nonce) return { state: "unknown", reasonCode: "receipt_identity_mismatch", status: response.status };
 			return { state: "confirmed", messageId: snowflake(body.id, "messageId"), status: response.status };
 		}
 		if (response.status >= 400 && response.status < 500) return { state: "failed", reasonCode: response.status === 401 || response.status === 403 ? "authorization" : "request_rejected", status: response.status };
