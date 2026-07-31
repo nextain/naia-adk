@@ -205,21 +205,34 @@ function stopOwnedWindowsService(paths) {
 	try {
 		const owner = store.getServiceOwner();
 		if (!owner) return false;
-		const observed = observeOwnedProcess(owner);
-		if (observed.state === "missing") return false;
-		if (observed.state !== "owned") throw new Error("Windows Discord service ownership is not verifiable");
+		const observed = sampleWindowsStopObservation({ owner, getCurrentOwner: () => store.getServiceOwner() });
+		if (observed === "stopped") return false;
+		if (observed !== "owned") throw new Error("Windows Discord service ownership is not verifiable");
 		writeFileSync(paths.stopRequestPath, JSON.stringify({ schemaVersion: 1, generation: owner.generation }), "utf8");
 		protectOwnerOnly(paths.stopRequestPath, "file", "Discord stop request");
 		for (let attempt = 0; attempt < 50; attempt += 1) {
 			waitMilliseconds(100);
-			const currentOwner = store.getServiceOwner();
-			if (!currentOwner) return true;
-			if (currentOwner.generation !== owner.generation) throw new Error("Windows Discord service generation changed while stopping");
-			const current = observeOwnedProcess(owner);
-			if (current.state !== "owned" && current.state !== "missing") throw new Error("Windows Discord service ownership changed while stopping");
+			const current = sampleWindowsStopObservation({ owner, getCurrentOwner: () => store.getServiceOwner() });
+			if (current === "stopped") return true;
 		}
 		throw new Error("Windows Discord service did not stop within the bounded wait");
 	} finally { store.close(); }
+}
+
+export function sampleWindowsStopObservation({ owner, getCurrentOwner, observe = observeOwnedProcess }) {
+	const observation = observe(owner);
+	const currentOwner = getCurrentOwner();
+	const decision = classifyWindowsStopObservation({ owner, currentOwner, observation });
+	return decision === "wait" ? observation.state : decision;
+}
+
+export function classifyWindowsStopObservation({ owner, currentOwner, observation }) {
+	if (!currentOwner) return "stopped";
+	if (currentOwner.generation !== owner.generation) throw new Error("Windows Discord service generation changed while stopping");
+	if (observation.state === "missing") return "stopped";
+	if (observation.state === "conflict") throw new Error("Windows Discord service ownership changed while stopping");
+	if (observation.state === "owned" || observation.state === "unknown") return "wait";
+	throw new Error("Windows Discord service returned an unsupported ownership state");
 }
 
 export function quoteWindowsTaskAction(path) {

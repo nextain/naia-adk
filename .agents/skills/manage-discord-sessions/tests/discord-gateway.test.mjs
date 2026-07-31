@@ -10,7 +10,7 @@ import { DiscordGatewaySession, MemoryGatewayState, StoredGatewayState } from ".
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
 import { discordUnitIdentity, renderDiscordUserUnit } from "../helper/systemd.mjs";
-import { installServiceCommands, quoteWindowsTaskAction, renderOperatorLauncher, renderWindowsStartupLauncher, resolveBackendExecutable, resolveWindowsBackendCommand, restartWindowsTask, verifyWindowsTaskAction } from "../helper/service-manager.mjs";
+import { classifyWindowsStopObservation, installServiceCommands, quoteWindowsTaskAction, renderOperatorLauncher, renderWindowsStartupLauncher, resolveBackendExecutable, resolveWindowsBackendCommand, restartWindowsTask, sampleWindowsStopObservation, verifyWindowsTaskAction } from "../helper/service-manager.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "../helper/instance-paths.mjs";
 import { loadOrCreateRecoveryKey, RecoveryCodec } from "../helper/recovery-crypto.mjs";
 import { randomBytes } from "node:crypto";
@@ -643,6 +643,25 @@ test("DSG-008 retries Windows Task Scheduler restart within a fixed bound", () =
 		wait: () => {},
 		run: () => ({ status: 1, output: "" }),
 	}), /bounded retry window/);
+});
+
+test("DSG-008 tolerates transient Windows ownership gaps while stopping", () => {
+	const owner = { generation: "generation-a" };
+	assert.equal(classifyWindowsStopObservation({ owner, currentOwner: owner, observation: { state: "unknown" } }), "wait");
+	assert.equal(classifyWindowsStopObservation({ owner, currentOwner: owner, observation: { state: "owned" } }), "wait");
+	assert.equal(classifyWindowsStopObservation({ owner, currentOwner: owner, observation: { state: "missing" } }), "stopped");
+	assert.equal(classifyWindowsStopObservation({ owner, currentOwner: null, observation: { state: "unknown" } }), "stopped");
+	assert.throws(() => classifyWindowsStopObservation({ owner, currentOwner: { generation: "generation-b" }, observation: { state: "owned" } }), /generation changed/);
+	assert.throws(() => classifyWindowsStopObservation({ owner, currentOwner: { generation: "generation-b" }, observation: { state: "missing" } }), /generation changed/);
+	assert.throws(() => classifyWindowsStopObservation({ owner, currentOwner: owner, observation: { state: "conflict" } }), /ownership changed/);
+	const calls = [];
+	let currentOwner = owner;
+	assert.throws(() => sampleWindowsStopObservation({
+		owner,
+		observe: () => { calls.push("observe"); currentOwner = { generation: "generation-b" }; return { state: "missing" }; },
+		getCurrentOwner: () => { calls.push("owner"); return currentOwner; },
+	}), /generation changed/);
+	assert.deepEqual(calls, ["observe", "owner"]);
 });
 
 test("DSG-009 participant status projection is limited to the current Discord scope", async () => {
