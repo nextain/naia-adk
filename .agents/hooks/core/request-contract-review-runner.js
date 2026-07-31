@@ -96,7 +96,12 @@ function runBubblewrapSandbox(options) {
 		reviewerFd = anonymousSnapshot(reviewerBytes, 0o500);
 		bundleFd = anonymousSnapshot(bundleBytes, 0o400);
 		if (options.afterSnapshotSealed) options.afterSnapshotSealed();
-		profile = bubblewrapProfile(options.env || {});
+		profile = bubblewrapProfile({
+			...(options.env || {}),
+			// The caller may add test inputs, but it must not redirect the trusted
+			// repository-blindness probe away from the repository under review.
+			REQUEST_CONTRACT_REPOSITORY_PROBE: path.join(process.cwd(), "package.json"),
+		});
 		startedAt = Date.now();
 		result = cp.spawnSync(bwrap, profile.args, {
 			encoding: "utf8",
@@ -293,12 +298,14 @@ function runWindowsSandbox(options) {
 			APPDATA: process.env.APPDATA,
 			LOCALAPPDATA: process.env.LOCALAPPDATA,
 			USERPROFILE: process.env.USERPROFILE,
+			...Object.fromEntries(Object.entries(options.env || {}).filter(([key]) => key.startsWith("REQUEST_CONTRACT_")).map(([key, value]) => [key, String(value)])),
+			// Trusted probes are assigned last so an untrusted caller cannot replace
+			// their targets while retaining a repository_blind=true receipt.
 			REQUEST_CONTRACT_HOME_PROBE: path.join(os.homedir(), ".codex", "config.toml"),
 			REQUEST_CONTRACT_REPOSITORY_PROBE: path.join(process.cwd(), "package.json"),
 			REQUEST_CONTRACT_HOME_WRITE_PROBE: path.join(os.homedir(), `.request-contract-probe-${crypto.randomUUID()}`),
 			REQUEST_CONTRACT_REVIEW_WRITE_PROBE: path.join(stage, `review-probe-${crypto.randomUUID()}`),
 			REQUEST_CONTRACT_SCRATCH_PROBE: path.join(scratch, `scratch-probe-${crypto.randomUUID()}`),
-			...Object.fromEntries(Object.entries(options.env || {}).filter(([key]) => key.startsWith("REQUEST_CONTRACT_")).map(([key, value]) => [key, String(value)])),
 		};
 		startedAt = Date.now();
 		result = cp.spawnSync(sandboxExecutable, [...profile.args, process.execPath, hostSnapshot, reviewerSnapshot, scratch, bundleSnapshot], {

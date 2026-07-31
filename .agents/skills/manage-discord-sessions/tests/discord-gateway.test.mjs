@@ -51,7 +51,8 @@ test("DSG-001 authorizes DM, guild channel, and exact thread bindings with struc
 	assert.equal(authorizeDiscordMessage({ message: { ...common, guild_id: GUILD, channel_id: THREAD }, bindings, botUserId: BOT, threadParents: threads }).scope.kind, "thread");
 	assert.equal(authorizeDiscordMessage({ message: { ...common, mentions: [], content: `<@${BOT}>`, guild_id: GUILD, channel_id: CHANNEL }, bindings, botUserId: BOT }).reasonCode, "mention_required");
 	assert.equal(authorizeDiscordMessage({ message: { ...common, author: { id: "888888888888888888" }, guild_id: GUILD, channel_id: CHANNEL }, bindings, operatorUserIds: ["888888888888888888"], botUserId: BOT }).reasonCode, "user_not_allowed");
-	assert.throws(() => validateDiscordBindings([{ ...binding(), respondWhen: "always" }]), /require mentioned/);
+	assert.throws(() => validateDiscordBindings([{ ...binding(), respondWhen: "always" }]), /require messageContentIntent/);
+	assert.doesNotThrow(() => validateDiscordBindings([{ ...binding(), respondWhen: "always" }], { messageContentIntent: true }));
 });
 
 test("DSG-002 accepts ingress and job atomically and deduplicates Gateway replay", () => {
@@ -180,6 +181,13 @@ test("DSG-004 persists sequence only after durable dispatch and resumes through 
 	await session.dispatchChain;
 	assert.equal(socket.sent.some((item) => item.op === 2), true);
 	assert.equal(socket.sent.find((item) => item.op === 2).d.intents, 1 | 512 | 4_096);
+	const messageContentSocket = new FakeSocket();
+	const messageContent = new DiscordGatewaySession({ token: "token-value-long-enough", stateRepository: new MemoryGatewayState(), onDispatch: async () => {}, messageContentIntent: true, webSocketFactory: () => messageContentSocket, setIntervalImpl: () => ({ unref() {} }), clearIntervalImpl: () => {} });
+	messageContent.connect();
+	messageContentSocket.emit("message", { data: JSON.stringify({ op: 10, d: { heartbeat_interval: 10_000 } }) });
+	await messageContent.dispatchChain;
+	assert.equal(messageContentSocket.sent.find((item) => item.op === 2).d.intents, 1 | 512 | 4_096 | 32_768);
+	messageContent.close();
 	socket.emit("message", { data: JSON.stringify({ op: 0, s: 7, t: "MESSAGE_CREATE", d: {} }) });
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(store.loadGatewayState().sequence ?? null, null);
@@ -202,6 +210,36 @@ test("DSG-005 closes on a missed heartbeat ACK and rejects unsafe resume hosts",
 	assert.equal(callbacks.length, 1);
 	const unsafe = new DiscordGatewaySession({ token: "token-value-long-enough", stateRepository: new MemoryGatewayState({ resumeUrl: "wss://evil.example" }), onDispatch: async () => {}, webSocketFactory: () => new FakeSocket() });
 	assert.throws(() => unsafe.connect(), /unsafe Discord Gateway URL/);
+});
+
+test("DSG-005 reconnects when a stuck native WebSocket never emits close", async () => {
+	const socket = new FakeSocket();
+	socket.close = (code) => { socket.closed.push(code); };
+	const callbacks = [];
+	const timers = [];
+	let heartbeatTick;
+	const session = new DiscordGatewaySession({
+		token: "token-value-long-enough",
+		stateRepository: new MemoryGatewayState(),
+		onDispatch: async () => {},
+		onDisconnect: (event) => callbacks.push(event),
+		webSocketFactory: () => socket,
+		setTimeoutImpl: (fn) => { timers.push(fn); return { unref() {} }; },
+		clearTimeoutImpl: () => {},
+		setIntervalImpl: (fn) => { heartbeatTick = fn; return { unref() {} }; },
+		clearIntervalImpl: () => {},
+		random: () => 0,
+	});
+	session.connect();
+	socket.emit("message", { data: JSON.stringify({ op: 10, d: { heartbeat_interval: 10_000 } }) });
+	await session.dispatchChain;
+	timers.shift()();
+	heartbeatTick();
+	assert.deepEqual(socket.closed, [4_000]);
+	timers.shift()();
+	assert.deepEqual(callbacks, [{ code: 4_000, resumable: true }]);
+	socket.emit("close", { code: 4_000 });
+	assert.equal(callbacks.length, 1);
 });
 
 test("DSG-006 enforces configured read-only role in the actual backend invocation", async () => {
@@ -312,23 +350,22 @@ test("DSG-014 watchdog aborts a no-progress owned child instead of leaving it ru
 test("DSG-015 operator-channel response SLA creates a review handoff instead of silent execution", async () => {
 	const { store, root } = fixture();
 	let nowMs = 0;
-	let runnerStarted;
-	const started = new Promise((resolveStarted) => { runnerStarted = resolveStarted; });
+	let runnerStarted = false;
 	let abortReason = null;
 	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, softSilenceSeconds: 60, noProgressInterventionSeconds: 60, operatorResponseSeconds: 1 } };
 	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), now: () => nowMs, send: async () => { throw new Error("channel unavailable"); }, runner: async ({ jobId, signal }) => {
+		runnerStarted = true;
 		store.startAttempt(jobId, { attemptId: "operator-response-attempt", childPid: process.pid, now: new Date(0).toISOString() });
-		runnerStarted();
 		return new Promise((resolveRunner) => signal.addEventListener("abort", () => { abortReason = signal.reason; resolveRunner({ backendOutcome: "failure", transientResult: null }); }, { once: true }));
 	} });
 	await router.onDispatch("MESSAGE_CREATE", { id: "161616161616161616", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> inspect this` }, 14);
-	await started;
 	store.heartbeatService({ generation: "operator-service", pid: process.pid, now: new Date(1_000).toISOString() });
 	nowMs = 1_001;
 	const outcome = await router.watchdog({ nowMs });
 	await router.waitForIdle();
 	assert.equal(outcome.operatorResponse, 1);
-	assert.equal(abortReason, "operator_response_timeout");
+	assert.equal(runnerStarted, false);
+	assert.equal(abortReason, null);
 	const job = store.getJob(store.listJobs()[0].jobId, { nowMs });
 	assert.equal(job.lifecycle, "recovery_review");
 	assert.equal(job.events.some((event) => event.kind === "operator_response_missed"), true);

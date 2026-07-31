@@ -10,8 +10,8 @@
 # PostToolUse are additive), against a real git-init'd naia-adk-rooted
 # temp workspace with real progress/context files.
 #
-# Verifies the WIRING (settings.json), multi-hook dispatch order, the
-# dangling sync-entry-points.js behavior, and end-to-end enforcement
+# Verifies the WIRING (settings.json), multi-hook dispatch order, entry-point
+# synchronization behavior, and end-to-end enforcement
 # across a coherent task flow — the layer the per-hook suite omits.
 # Hermetic (mktemp). Committed gate. Exit non-zero on any divergence.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -41,34 +41,41 @@ printf '# design\nDecision: X\n' > "$WS/docs/design/spec.md"
 # NAME (re.search). UserPromptSubmit groups have no matcher → all run.
 dispatch() {
   local event="$1" tool="$2" json="$3"
-  mapfile -t CMDS < <(python3 - "$SET" "$event" "$tool" <<'PY'
-import json,sys,re
-cfg=json.load(open(sys.argv[1]));ev,tool=sys.argv[2],sys.argv[3]
-for grp in cfg.get("hooks",{}).get(ev,[]):
-    m=grp.get("matcher")
-    if ev in ("PreToolUse","PostToolUse"):
-        if m is None: continue
-        if not re.search(m, tool or ""): continue
-    for h in grp.get("hooks",[]):
-        if h.get("type")=="command": print(h["command"])
+  local result
+  result="$(python3 - "$SET" "$event" "$tool" "$NAK" "$WS" "$json" <<'PY'
+import json,re,shlex,subprocess,sys
+settings,event,tool,root,cwd,stdin_text=sys.argv[1:]
+cfg=json.load(open(settings,encoding="utf-8"))
+decision=""; context=""; errors=0
+for group in cfg.get("hooks",{}).get(event,[]):
+    matcher=group.get("matcher")
+    if event in ("PreToolUse","PostToolUse") and matcher is not None and not re.search(matcher,tool or ""):
+        continue
+    for hook in group.get("hooks",[]):
+        if hook.get("type")!="command": continue
+        argv=shlex.split(hook["command"])+list(hook.get("args",[]))
+        argv=[part.replace("${CLAUDE_PROJECT_DIR}",root) for part in argv]
+        if len(argv)>1 and argv[0]=="node" and argv[1].startswith((".claude/",".codex/",".agents/")):
+            argv[1]=root+"/"+argv[1]
+        run=subprocess.run(argv,cwd=cwd,input=stdin_text,text=True,capture_output=True)
+        if run.returncode or run.stderr: errors+=1
+        try: envelope=json.loads(run.stdout) if run.stdout else {}
+        except json.JSONDecodeError: envelope={}
+        if event=="PreToolUse":
+            current=envelope.get("decision") or envelope.get("hookSpecificOutput",{}).get("permissionDecision","")
+            if current=="block": decision="block"; break
+            if current=="allow": decision="allow"
+        else:
+            context+=envelope.get("additionalContext","")
+            context+=envelope.get("hookSpecificOutput",{}).get("additionalContext","")
+            if not envelope and run.stdout: context+=run.stdout
+    if decision=="block": break
+print(json.dumps({"decision":decision,"context":context,"errors":errors}))
 PY
-)
-  DEC=""; CTX=""; ERRN=0
-  for cmd in "${CMDS[@]}"; do
-    [ -z "$cmd" ] && continue
-    local rel; rel="${cmd#node }"                       # ".claude/hooks/x.js"
-    local out err rc
-    err="$(mktemp)"
-    out="$(printf '%s' "$json" | (cd "$WS" && node "$NAK/$rel") 2>"$err")"; rc=$?
-    [ -s "$err" ] && ERRN=$((ERRN+1))
-    rm -f "$err"
-    if [ "$event" = "PreToolUse" ]; then
-      if printf '%s' "$out" | grep -q '"decision":"block"'; then DEC="block"; break; fi
-      if printf '%s' "$out" | grep -q '"decision":"allow"'; then DEC="allow"; fi
-    else
-      CTX="$CTX$out"
-    fi
-  done
+)"
+  DEC="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["decision"])' "$result")"
+  CTX="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["context"],end="")' "$result")"
+  ERRN="$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["errors"])' "$result")"
 }
 PJSON(){ python3 -c 'import json,sys;print(json.dumps(json.loads(sys.argv[1])))' "$1"; }
 
@@ -105,8 +112,8 @@ dispatch PreToolUse "Bash" "$(PJSON "{\"tool_name\":\"Bash\",\"tool_input\":{\"c
 echo "── Step 7: edit agents-rules.json → PostToolUse cascade + mirror ──"
 dispatch PostToolUse "Edit" "$(PJSON "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WS/.agents/context/agents-rules.json\"},\"cwd\":\"$WS\"}")"
 printf '%s' "$CTX" | grep -q 'agents-rules.json is the SoT' && ok "cascade-check fires SoT mirror reminder" || no "cascade reminder" "${CTX:0:120}"
-echo "    (dangling sync-entry-points.js registered → $ERRN hook(s) errored; dispatch continued — Claude-faithful)"
-[ "$ERRN" -ge 1 ] && ok "dangling sync-entry-points.js errors but does NOT abort dispatch" || no "dangling tolerance" "ERRN=$ERRN (expected ≥1)"
+echo "    (registered PostToolUse hooks reported $ERRN error(s))"
+[ "$ERRN" -eq 0 ] && ok "entry-point synchronization hook completes without error" || no "entry-point synchronization" "ERRN=$ERRN (expected 0)"
 dispatch PostToolUse "Edit" "$(PJSON "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WS/.agents/context/agents-rules.json\"},\"cwd\":\"$WS\"}")"
 [ -f "$WS/.users/context/agents-rules.md" ] && grep -q 'AUTO-GENERATED' "$WS/.users/context/agents-rules.md" && ok "agents-context-mirror regenerated .users mirror" || no "mirror write" "no .users/context/agents-rules.md"
 

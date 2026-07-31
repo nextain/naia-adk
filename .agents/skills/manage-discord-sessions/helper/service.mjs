@@ -73,6 +73,7 @@ export async function runDiscordService({ adkRoot, instance = "default", webSock
 				token,
 				stateRepository: new StoredGatewayState(store),
 				webSocketFactory,
+				messageContentIntent: config.discord.messageContentIntent === true,
 				onDisconnect: disconnected,
 				onDispatch: (type, data, sequence) => { if (type === "READY" || type === "RESUMED") reconnectDelay = 1_000; return router.onDispatch(type, data, sequence); },
 			});

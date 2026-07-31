@@ -41,6 +41,7 @@ export class DiscordMessageRouter {
 		this.accepting = true;
 		this.controllers = new Map();
 		this.operatorResponses = new Map();
+		this.operatorResponseWaiters = new Map();
 	}
 
 	async onDispatch(type, data, sequence) {
@@ -83,8 +84,8 @@ export class DiscordMessageRouter {
 			softSilenceMs: (this.config.runtime?.softSilenceSeconds ?? 120) * 1_000, recoveryEnvelope, now: this.#nowIso() });
 		if (ingress.duplicate) return { state: "duplicate", jobId: ingress.jobId };
 		const item = { jobId, backendId, prompt, channelId, commandOptions, executionProfile };
+		item.operatorReady = this.#scheduleOperatorResponse(item);
 		this.queue.push(item);
-		this.#scheduleOperatorResponse(item);
 		this.#drain();
 		void this.projectStatus?.({ scopeKey: authorization.scopeKey, channelId }).catch(() => {});
 		return { state: "accepted", jobId };
@@ -147,18 +148,29 @@ export class DiscordMessageRouter {
 	}
 
 	#scheduleOperatorResponse(item) {
-		if (!this.send) return;
+		if (!this.send) return Promise.resolve(true);
+		let resolveWaiter;
+		const ready = new Promise((resolve) => { resolveWaiter = resolve; });
+		this.operatorResponseWaiters.set(item.jobId, resolveWaiter);
 		this.operatorResponses.set(item.jobId, { ...item, deadlineMs: this.now() + (this.config.runtime?.operatorResponseSeconds ?? 30) * 1_000, interventions: 0 });
 		void this.#sendOperatorResponse(item.jobId);
+		return ready;
+	}
+
+	#resolveOperatorResponse(jobId, value) {
+		this.operatorResponseWaiters.get(jobId)?.(value);
+		this.operatorResponseWaiters.delete(jobId);
 	}
 
 	async #sendOperatorResponse(jobId, { watchdog = false } = {}) {
 		const state = this.operatorResponses.get(jobId);
 		if (!state || !this.send) return false;
 		try {
-			await this.send({ token: this.token, channelId: state.channelId, botUserId: this.botUserId, content: watchdog ? "Execution needs operator attention; a safe status will follow." : "Accepted. Execution is being monitored.", nonce: randomUUID().replaceAll("-", "").slice(0, 24) });
+			const receipt = await this.send({ token: this.token, channelId: state.channelId, botUserId: this.botUserId, content: watchdog ? "[자동대응 재시도] 접수 보고가 지연되어 다시 알립니다. 안전 상태를 확인한 뒤 작업을 시작합니다." : "[자동대응 접수] 요청을 받았습니다. 이 접수 보고가 확인된 뒤 작업을 시작하며 진행·실패·완료를 이어서 보고합니다.", nonce: randomUUID().replaceAll("-", "").slice(0, 24) });
+			if (receipt?.state !== "confirmed") return false;
 			this.store.recordEvent({ jobId, source: "helper", kind: "operator_response_sent", safePayload: {} });
 			this.operatorResponses.delete(jobId);
+			this.#resolveOperatorResponse(jobId, true);
 			return true;
 		} catch {
 			return false;
@@ -169,6 +181,8 @@ export class DiscordMessageRouter {
 		const controller = new AbortController();
 		this.controllers.set(item.jobId, controller);
 		try {
+			const operatorReady = item.operatorReady ? await item.operatorReady : true;
+			if (!operatorReady) throw new Error("operator response was not confirmed");
 			const currentProfile = this.#executionProfile(item.backendId);
 			if (!sameExecutionProfile(item.executionProfile ?? currentProfile, currentProfile)) {
 				this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "profile_replaced", safePayload: {} });
@@ -207,6 +221,7 @@ export class DiscordMessageRouter {
 				try { this.store.recordEvent({ jobId: state.jobId, attemptId: job.attemptId ?? undefined, source: "helper", kind: "operator_response_missed", safePayload: {} }); } catch {}
 			}
 			this.controllers.get(state.jobId)?.abort("operator_response_timeout");
+			this.#resolveOperatorResponse(state.jobId, false);
 			this.operatorResponses.delete(state.jobId);
 			outcome.operatorResponse += 1;
 		}
@@ -232,6 +247,7 @@ export class DiscordMessageRouter {
 		}
 		await this.waitForIdle();
 		this.operatorResponses.clear();
+		for (const jobId of [...this.operatorResponseWaiters.keys()]) this.#resolveOperatorResponse(jobId, false);
 	}
 
 	resumeRecovered(items, { autoRetry = false } = {}) {

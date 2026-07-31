@@ -9,6 +9,7 @@
 *.sh text eol=lf
 *.md text eol=lf
 *.txt text eol=lf
+*.log text eol=lf
 *.pub text eol=lf
 *.log -text
 .claude/skills/* text eol=lf

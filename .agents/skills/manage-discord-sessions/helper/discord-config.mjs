@@ -36,7 +36,7 @@ export function loadMessengerConfig(path) {
 		[config.persona, ["name", "instructions"], "persona"],
 		[config.role, ["name", "allowedActions", "requiresApproval"], "role"],
 		[config.backend, ["selected", "profiles"], "backend"],
-		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings"], "discord"],
+		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent"], "discord"],
 		[config.runtime ?? {}, ["softSilenceSeconds", "heartbeatSeconds", "maxConcurrentJobs", "approvalPolicy", "permissionProfileEpoch", "noProgressInterventionSeconds", "operatorResponseSeconds"], "runtime"],
 		[config.observability ?? {}, ["discordStatusProjection"], "observability"],
 		[config.service ?? {}, ["autoStart", "startAt"], "service"],
@@ -62,7 +62,8 @@ export function loadMessengerConfig(path) {
 	config.discord.operatorUserIds?.forEach((value) => {
 		if (!/^\d{17,20}$/.test(value) || /^0+$/.test(value)) throw new Error("invalid operator Discord ID");
 	});
-	config.discord.bindings = validateDiscordBindings(config.discord.bindings);
+	if (config.discord.messageContentIntent !== undefined && typeof config.discord.messageContentIntent !== "boolean") throw new Error("messageContentIntent must be boolean");
+	config.discord.bindings = validateDiscordBindings(config.discord.bindings, { messageContentIntent: config.discord.messageContentIntent === true });
 	const maxConcurrent = config.runtime?.maxConcurrentJobs ?? 1;
 	if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw new Error("maxConcurrentJobs must be between 1 and 8");
 	const heartbeatSeconds = config.runtime?.heartbeatSeconds ?? 10;

@@ -592,7 +592,15 @@ test("review runner enforces a real network, repository, home, and environment s
 	const priorSecret = process.env.LEAK_SECRET;
 	process.env.LEAK_SECRET = "must-not-cross";
 	try {
-		const result = runSandbox({ bundlePath, expectedBundleDigest: core.sha256(fs.readFileSync(bundlePath)), reviewerPath, allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))] });
+		const result = runSandbox({
+			bundlePath,
+			expectedBundleDigest: core.sha256(fs.readFileSync(bundlePath)),
+			reviewerPath,
+			allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))],
+			// A caller-supplied missing path would make a porous sandbox look blind if
+			// it could replace the trusted repository probe.
+			env: { REQUEST_CONTRACT_REPOSITORY_PROBE: path.join(fx.cwd, "caller-selected-missing-probe") },
+		});
 		assert.equal(path.basename(result.output.cwd), "scratch");
 		assert.deepEqual({ ...result.output, cwd: "<scratch>" }, { secret_absent: true, home_blind: true, repository_blind: true, home_read_only: true, review_read_only: true, network_blocked: true, scratch_writable: true, bundle_readable: true, cwd: "<scratch>" });
 		assert.equal(result.evidence.sandbox_engine, EXPECTED_SANDBOX_ENGINE);
