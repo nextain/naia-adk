@@ -10,13 +10,19 @@ process.stdin.resume();
 
 function run() {
 const codex = process.argv.includes("exec");
-const structuredFailure = prompt.startsWith("__fake_structured_failure__") || prompt.startsWith("__fake_failure_then_success__");
-const failureThenSuccess = prompt.startsWith("__fake_failure_then_success__");
-if (codex) {
+	const structuredFailure = prompt.startsWith("__fake_structured_failure__") || prompt.startsWith("__fake_failure_then_success__");
+	const failureThenSuccess = prompt.startsWith("__fake_failure_then_success__");
+	const approvalUi = prompt.startsWith("__fake_approval_ui__");
+	const stderrApprovalUi = prompt.startsWith("__fake_stderr_approval_ui__");
+	const nestedApprovalUi = prompt.startsWith("__fake_nested_approval_ui__");
+	const anyApprovalUi = approvalUi || stderrApprovalUi || nestedApprovalUi;
+	if (codex) {
 	console.log(JSON.stringify({ type: "thread.started", thread_id: "thread-secret-not-persisted" }));
-	console.log(JSON.stringify({ type: "turn.started" }));
-	console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "fake-model-content" } }));
-	console.log(JSON.stringify(structuredFailure ? { type: "turn.failed" } : { type: "turn.completed", usage: { input_tokens: 1 } }));
+		console.log(JSON.stringify({ type: "turn.started" }));
+		if (approvalUi) console.log(JSON.stringify({ type: "approval_required" }));
+		if (nestedApprovalUi) process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "permission request" } }));
+		console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "fake-model-content" } }));
+		console.log(JSON.stringify(structuredFailure || anyApprovalUi ? { type: "turn.failed" } : { type: "turn.completed", usage: { input_tokens: 1 } }));
 	if (failureThenSuccess) console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1 } }));
 } else {
 	console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "session-secret-not-persisted" }));
@@ -32,10 +38,13 @@ if (prompt.startsWith("__fake_grandchild__:") || prompt.startsWith("__fake_orpha
 }
 
 if (prompt.startsWith("__fake_marker__:")) writeFileSync(prompt.slice(prompt.indexOf(":") + 1), "started");
+if (prompt.startsWith("__fake_cwd_marker__:")) writeFileSync(prompt.slice(prompt.indexOf(":") + 1), process.cwd());
 
 if (prompt.startsWith("__fake_oversized_line__")) process.stdout.write("x".repeat(300 * 1024));
 
-if (prompt.startsWith("__fake_hang__") || prompt.startsWith("__fake_grandchild__:") || prompt.startsWith("__fake_oversized_line__")) {
+	if (stderrApprovalUi) process.stderr.write("permission request");
+
+	if (prompt.startsWith("__fake_hang__") || anyApprovalUi || prompt.startsWith("__fake_grandchild__:") || prompt.startsWith("__fake_oversized_line__")) {
 	process.on("SIGTERM", () => {});
 	setInterval(() => {}, 1_000);
 } else {

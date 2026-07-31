@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { getBackendAdapter } from "./adapters.mjs";
 import { authorizeDiscordMessage } from "./discord-scope.mjs";
-import { deliverJobResult, formatOperatorStatus, postDiscordMessage } from "./discord-delivery.mjs";
+import { deliverJobResult, formatOperatorStatus } from "./discord-delivery.mjs";
 import { runBackendAttempt } from "./backend-runner.mjs";
+import { commandOptionsForProfile, currentExecutionProfile, sameExecutionProfile } from "./execution-profile.mjs";
 
 function transientPrompt(message, botUserId, config) {
 	if (typeof message.content !== "string" || message.content.length > 4_000) throw new Error("Discord content is missing or too large");
@@ -16,7 +17,7 @@ function commandText(message, botUserId) {
 }
 
 export class DiscordMessageRouter {
-	constructor({ config, store, token, botUserId, cwd, runtimeRoot, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, send = postDiscordMessage, backendExecutables = {} }) {
+	constructor({ config, store, token, botUserId, cwd, runtimeRoot, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, send = null, backendExecutables = {}, now = () => Date.now() }) {
 		this.config = config;
 		this.store = store;
 		this.token = token;
@@ -29,6 +30,7 @@ export class DiscordMessageRouter {
 		this.backendExecutables = backendExecutables;
 		this.recoveryCodec = recoveryCodec;
 		this.projectStatus = projectStatus;
+		this.now = now;
 		this.threadParents = new Map();
 		for (const binding of config.discord.bindings) {
 			if (binding.kind === "thread") this.threadParents.set(binding.threadId, { parentChannelId: binding.channelId, guildId: binding.guildId });
@@ -38,6 +40,7 @@ export class DiscordMessageRouter {
 		this.maxConcurrent = config.runtime?.maxConcurrentJobs ?? 1;
 		this.accepting = true;
 		this.controllers = new Map();
+		this.operatorResponses = new Map();
 	}
 
 	async onDispatch(type, data, sequence) {
@@ -73,12 +76,15 @@ export class DiscordMessageRouter {
 		const backendId = this.config.backend.selected;
 		const adapter = getBackendAdapter(backendId);
 		const channelId = authorization.scope.threadId ?? authorization.scope.channelId;
-		const commandOptions = this.#commandOptions(backendId);
-		const recoveryEnvelope = this.recoveryCodec?.seal(JSON.stringify({ prompt, channelId, commandOptions })) ?? null;
+		const executionProfile = this.#executionProfile(backendId);
+		const commandOptions = commandOptionsForProfile(executionProfile);
+		const recoveryEnvelope = this.recoveryCodec?.seal(JSON.stringify({ prompt, channelId, executionProfile })) ?? null;
 		const ingress = this.store.acceptIngressAndCreateJob({ sourceMessageId, scopeKey: authorization.scopeKey, jobId, dispatchSequence: sequence, backendId, revision: "discord-v1", backendCapabilities: adapter.capabilities, activityDetail: adapter.activityDetail, jobType: "conversation",
-			softSilenceMs: (this.config.runtime?.softSilenceSeconds ?? 120) * 1_000, recoveryEnvelope });
+			softSilenceMs: (this.config.runtime?.softSilenceSeconds ?? 120) * 1_000, recoveryEnvelope, now: this.#nowIso() });
 		if (ingress.duplicate) return { state: "duplicate", jobId: ingress.jobId };
-		this.queue.push({ jobId, backendId, prompt, channelId, commandOptions });
+		const item = { jobId, backendId, prompt, channelId, commandOptions, executionProfile };
+		this.queue.push(item);
+		this.#scheduleOperatorResponse(item);
 		this.#drain();
 		void this.projectStatus?.({ scopeKey: authorization.scopeKey, channelId }).catch(() => {});
 		return { state: "accepted", jobId };
@@ -118,17 +124,57 @@ export class DiscordMessageRouter {
 	}
 
 	#commandOptions(backendId) {
-		const requestedMutation = this.config.role.allowedActions.includes("write") || this.config.role.allowedActions.includes("execute");
-		const mutationNeedsApproval = this.config.role.requiresApproval?.includes("write") || this.config.role.requiresApproval?.includes("execute");
-		const mayMutate = requestedMutation && !mutationNeedsApproval;
-		return backendId === "codex" ? { sandbox: mayMutate ? "workspace-write" : "read-only" } : { permissionMode: mayMutate ? "dontAsk" : "plan", settingSources: "project" };
+		return commandOptionsForProfile(this.#executionProfile(backendId));
+	}
+
+	#executionProfile(backendId) {
+		return currentExecutionProfile(this.config, backendId);
+	}
+
+	#nowIso() {
+		return new Date(this.now()).toISOString();
+	}
+
+	#noProgressInterventionMs() {
+		return (this.config.runtime?.noProgressInterventionSeconds ?? this.config.runtime?.softSilenceSeconds ?? 120) * 1_000;
+	}
+
+	#noProgressIsDue(job, nowMs) {
+		if (job.activityHealth.value === "unresponsive") return true;
+		if (job.activityHealth.value !== "suspected_stalled") return false;
+		const lastProgressMs = Date.parse(job.lastProgressAt ?? job.updatedAt);
+		return Number.isFinite(lastProgressMs) && nowMs - lastProgressMs >= this.#noProgressInterventionMs();
+	}
+
+	#scheduleOperatorResponse(item) {
+		if (!this.send) return;
+		this.operatorResponses.set(item.jobId, { ...item, deadlineMs: this.now() + (this.config.runtime?.operatorResponseSeconds ?? 30) * 1_000, interventions: 0 });
+		void this.#sendOperatorResponse(item.jobId);
+	}
+
+	async #sendOperatorResponse(jobId, { watchdog = false } = {}) {
+		const state = this.operatorResponses.get(jobId);
+		if (!state || !this.send) return false;
+		try {
+			await this.send({ token: this.token, channelId: state.channelId, botUserId: this.botUserId, content: watchdog ? "Execution needs operator attention; a safe status will follow." : "Accepted. Execution is being monitored.", nonce: randomUUID().replaceAll("-", "").slice(0, 24) });
+			this.store.recordEvent({ jobId, source: "helper", kind: "operator_response_sent", safePayload: {} });
+			this.operatorResponses.delete(jobId);
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
 	async #run(item) {
 		const controller = new AbortController();
 		this.controllers.set(item.jobId, controller);
 		try {
-			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt: item.prompt, cwd: this.cwd, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId), signal: controller.signal });
+			const currentProfile = this.#executionProfile(item.backendId);
+			if (!sameExecutionProfile(item.executionProfile ?? currentProfile, currentProfile)) {
+				this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "profile_replaced", safePayload: {} });
+				item = { ...item, executionProfile: currentProfile, commandOptions: commandOptionsForProfile(currentProfile) };
+			}
+			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt: item.prompt, cwd: this.cwd, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId), executionProfile: item.executionProfile, signal: controller.signal });
 			if (result.backendOutcome !== "success") return;
 			if (!result.transientResult) throw new Error("backend returned no deliverable final result");
 			await this.deliver({ store: this.store, jobId: item.jobId, attemptId: result.attemptId, token: this.token, botUserId: this.botUserId, channelId: item.channelId, content: result.transientResult, signal: controller.signal });
@@ -148,6 +194,36 @@ export class DiscordMessageRouter {
 		while (this.running > 0 || this.queue.length > 0) await new Promise((resolve) => setTimeout(resolve, 5));
 	}
 
+	async watchdog({ nowMs = this.now() } = {}) {
+		if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("watchdog time must be a non-negative safe integer");
+		const outcome = { noProgress: 0, operatorResponse: 0 };
+		for (const state of [...this.operatorResponses.values()]) {
+			if (state.deadlineMs > nowMs || state.interventions >= 1) continue;
+			state.interventions += 1;
+			if (await this.#sendOperatorResponse(state.jobId, { watchdog: true })) continue;
+			const job = this.store.getJob(state.jobId, { nowMs, includeEvents: false });
+			if (job) {
+				try { this.store.recordEvent({ jobId: state.jobId, attemptId: job.attemptId ?? undefined, source: "helper", kind: "watchdog_intervened", safePayload: { watchdogReason: "operator_response" } }); } catch {}
+				try { this.store.recordEvent({ jobId: state.jobId, attemptId: job.attemptId ?? undefined, source: "helper", kind: "operator_response_missed", safePayload: {} }); } catch {}
+			}
+			this.controllers.get(state.jobId)?.abort("operator_response_timeout");
+			this.operatorResponses.delete(state.jobId);
+			outcome.operatorResponse += 1;
+		}
+		for (const job of this.store.listJobs({ nowMs })) {
+			if (!this.#noProgressIsDue(job, nowMs)) continue;
+			const controller = this.controllers.get(job.jobId);
+			if (controller?.signal.aborted) continue;
+			try { this.store.recordEvent({ jobId: job.jobId, attemptId: job.attemptId ?? undefined, source: "helper", kind: "watchdog_intervened", safePayload: { watchdogReason: "no_progress" } }); } catch { continue; }
+			if (controller) controller.abort("no_progress");
+			else {
+				try { this.store.recordEvent({ jobId: job.jobId, attemptId: job.attemptId ?? undefined, source: "helper", kind: "failed", safePayload: { reasonCode: "no_progress_timeout" } }); } catch {}
+			}
+			outcome.noProgress += 1;
+		}
+		return outcome;
+	}
+
 	async shutdown() {
 		this.accepting = false;
 		for (const controller of this.controllers.values()) controller.abort("recovery");
@@ -155,6 +231,7 @@ export class DiscordMessageRouter {
 			try { this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "recovered", safePayload: { recoveryAction: "safe_retry" } }); } catch {}
 		}
 		await this.waitForIdle();
+		this.operatorResponses.clear();
 	}
 
 	resumeRecovered(items, { autoRetry = false } = {}) {
@@ -163,9 +240,14 @@ export class DiscordMessageRouter {
 			try {
 				const payload = JSON.parse(this.recoveryCodec.open(item.envelope));
 				if (typeof payload.prompt !== "string" || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
-				const readOnly = payload.commandOptions?.sandbox === "read-only" || payload.commandOptions?.permissionMode === "plan";
-				if (!autoRetry || !readOnly) throw new Error("automatic recovery is not allowed for this job");
-				this.queue.push({ jobId: item.jobId, backendId: item.backendId, prompt: payload.prompt, channelId: payload.channelId, commandOptions: payload.commandOptions });
+				const executionProfile = this.#executionProfile(item.backendId);
+				const profileChanged = !sameExecutionProfile(payload.executionProfile, executionProfile);
+				const freshNoPromptReplacement = profileChanged && executionProfile.authorizationMode === "never";
+				if (!autoRetry || (executionProfile.access !== "read-only" && !freshNoPromptReplacement)) throw new Error("automatic recovery is not allowed for this job");
+				if (profileChanged) {
+					this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "profile_replaced", safePayload: {} });
+				}
+				this.queue.push({ jobId: item.jobId, backendId: item.backendId, prompt: payload.prompt, channelId: payload.channelId, commandOptions: commandOptionsForProfile(executionProfile), executionProfile });
 			} catch {
 				this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "recovery_review_required", safePayload: {} });
 			}

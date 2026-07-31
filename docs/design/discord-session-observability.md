@@ -2,7 +2,7 @@
 
 Status: observability sub-design for [issue #18](https://github.com/nextain/naia-adk/issues/18), not the complete issue design
 Scope mode: EXPANSION
-Requirements: DSO-001 through DSO-006
+Requirements: DSO-001 through DSO-007
 
 ## 1. User outcome and boundaries
 
@@ -21,7 +21,7 @@ Core constraints:
 
 The parent issue additionally owns persona/role setup and preview, Discord Gateway resume, DM/channel/thread authorization, bounded REST reconciliation, exactly-one service ownership, and legacy polling migration. Those gates remain in the issue plan and later slices; DSO requirements cover only their shared observability and recovery evidence.
 
-`<ADK_ROOT>` is the canonical real path of the workspace containing both `.agents/` and `naia-settings/`. The skill-local script derives and validates that root before any write. The setup operation creates `<ADK_ROOT>/naia-settings/messenger-sessions/config.json` from the tracked example with mode `0600`; the helper creates `<ADK_ROOT>/naia-settings/.sessions/messenger-sessions/` with mode `0700` and its files with mode `0600`. Config schema v1 requires `workspaceId`, persona, role/approval policy, selected backend, credential reference, operator IDs, explicit DM/channel/thread bindings, and timing limits. `naia-agent` and `naia-shell` paths or imports are invalid in this core configuration.
+`<ADK_ROOT>` is the canonical real path of the workspace containing both `.agents/` and `naia-settings/`. The skill-local script derives and validates that root before any write. The setup operation creates `<ADK_ROOT>/naia-settings/messenger-sessions/config.json` from the tracked example with mode `0600`; the helper creates `<ADK_ROOT>/naia-settings/.sessions/messenger-sessions/` with mode `0700` and its files with mode `0600`. Config schema v1 requires `workspaceId`, persona, role/approval policy, selected backend, credential reference, operator IDs, explicit DM/channel/thread bindings, timing limits, and a permission-profile epoch. `naia-agent` and `naia-shell` paths or imports are invalid in this core configuration.
 
 ## 2. Architecture and data flow
 
@@ -79,7 +79,7 @@ Lifecycle says what transition is allowed. Activity health says what was recentl
 | `unknown` | Available evidence is missing, stale, or contradictory | missing/stale reason |
 | `not_applicable` | Activity health does not apply because lifecycle is terminal | terminal event |
 
-`suspected_stalled` is a warning, not an automatic failure. A backend that does not support structured progress must show `activityDetail: unsupported`; the helper must not invent phases from arbitrary prose.
+`suspected_stalled` is a warning, not proof of a semantic failure. The owning helper nevertheless performs one bounded watchdog intervention after the configured no-progress deadline: it records the intervention, aborts the owned child, and records a safe failure. A child that the helper cannot own is never silently retained as running. A backend that does not support structured progress must show `activityDetail: unsupported`; the helper must not invent phases from arbitrary prose.
 
 ### 3.3 Append-only event
 
@@ -97,7 +97,8 @@ job_accepted, attempt_reserved, attempt_started, backend_ready,
 phase_changed, output_activity, tool_started, tool_finished,
 approval_required, checkpoint_saved, verification_recorded,
 attempt_exited, attempt_succeeded, retry_scheduled, delivery_started,
-delivery_confirmed, delivery_unknown, recovered,
+delivery_confirmed, delivery_unknown, recovered, profile_replaced,
+watchdog_intervened, operator_response_sent, operator_response_missed,
 cancel_requested, cancelled, completed, failed
 ```
 
@@ -127,10 +128,14 @@ Closed payload contract:
 | `delivery_confirmed` | core | empty payload |
 | `delivery_unknown` | core | empty payload |
 | `recovered` | core | `recoveryAction`: `resume`, `safe_retry`, or `manual_review` |
+| `profile_replaced` | core | empty; historical child settings were rejected before launch |
 | `cancel_requested` | core | empty payload |
+| `watchdog_intervened` | core | `watchdogReason`: `no_progress` or `operator_response` |
+| `operator_response_sent` | core | empty; safe Discord acknowledgement was delivered |
+| `operator_response_missed` | core | empty; one fallback attempt failed and ownership moved to review |
 | `cancelled` | core | empty payload |
 | `completed` | core | empty payload |
-| `failed` | core | `reasonCode`: `timeout`, `process_exit`, `authorization`, `delivery_unknown`, or `internal_error` |
+| `failed` | core | `reasonCode`: `timeout`, `process_exit`, `authorization`, `delivery_unknown`, `no_progress_timeout`, `approval_ui_detected`, or `internal_error` |
 
 Unknown keys are rejected. Enum fields accept only the values listed above. `checkId` and verifier IDs use `[A-Za-z0-9_.:-]{1,64}` and additionally reject secret-like patterns. Persisted metrics allow only `bytes`, `count`, `durationMs`, `exitCode`, `passed`, `failed`, `missing`, `total`, and `queuePosition`; values are booleans or non-negative safe integers. An optional artifact digest is local-only and must be `sha256:` followed by exactly 64 lowercase hexadecimal characters. An encoded payload above 2 KiB is rejected before formatting.
 
@@ -140,7 +145,9 @@ Attempt ownership is also enforced. Once a new attempt becomes current, delayed 
 
 ### 3.4 Snapshot and freshness
 
-Default timing is a 10-second helper heartbeat, stale after 30 seconds, and a 120-second soft-silence warning. A job-specific hard deadline is fixed at acceptance. In-process durations use a monotonic clock; persisted UTC timestamps support restart continuity. Wall-clock rollback or contradictory time evidence produces `unknown/clock_evidence_invalid`.
+Default timing is a 10-second helper heartbeat, stale after 30 seconds, and a 120-second soft-silence warning. `noProgressInterventionSeconds` is at least the soft-silence threshold and bounds one owned-child abort; `operatorResponseSeconds` bounds the first safe Discord acknowledgement. A job-specific hard deadline is fixed at acceptance. In-process durations use a monotonic clock; persisted UTC timestamps support restart continuity. Wall-clock rollback or contradictory time evidence produces `unknown/clock_evidence_invalid`.
+
+Every launch derives an execution profile from `permissionProfileEpoch`, authorization mode, backend, and access level. The child receives `approvalPolicy=never`: Codex receives an explicit `approval_policy="never"` override and Claude receives its noninteractive mode. A recovery envelope carries the prior profile only for comparison. It never supplies command options to a new child. A mismatch records `profile_replaced`, then a fresh child is created from the current profile; an explicitly changed `never` mutation profile may replace a prior guarded attempt, while unchanged mutation recovery stays in review. Approval requests are detected from bounded stdout and stderr chunks as well as structured events, then terminated as `approval_ui_detected`; they are never held in a hidden UI.
 
 `activityHealth` is `{ value, reasonCode, observedAt, evidenceAt }`. `activityDetail` is exactly `structured`, `text_activity`, or `unsupported`.
 
@@ -203,6 +210,8 @@ Discord provides two allowlisted projections. Before Slice 3, `config.json` must
 
 It does not post periodic “still alive” spam. After reboot it posts one recovery summary. A conversation participant may see only that conversation. Configured operators may see redacted cross-job metadata, never raw user content or full local paths.
 
+For each accepted conversation, the helper posts one safe acknowledgement and records `operator_response_sent`. If the channel transport cannot respond by `operatorResponseSeconds`, it makes one fallback attempt, records `operator_response_missed`, aborts any owned child, and moves the job to `recovery_review`. This is an operator handoff, not an automatic retry loop.
+
 ## 5. Completion evidence
 
 Activity and correctness are separate:
@@ -225,7 +234,7 @@ Assessment values are `unverified`, `partial`, `failed`, and `verified`. No requ
 - Safe summaries are event-kind-specific allowlisted data, not arbitrary output with best-effort regex masking. Unknown payload and metric keys are rejected.
 - Job metadata is also closed: backend is `codex`, `claude`, or `fake`; revision and IDs use the safe-identifier contract; capabilities are booleans limited to `structuredProgress`, `textActivity`, `cancellation`, and `checkpointResume`.
 - Local operator and Discord projections are separate functions and authorization paths.
-- AI children receive only `PATH`, locale/terminal values, isolated XDG/TMP paths, the validated workspace path, and the one adapter-declared provider credential when needed. `HOME` points to a new mode-`0700` attempt directory under the user runtime directory, never the user's actual home or `naia-settings`. The source and destination authentication files are owner-only real files; the destination is created with no-follow/exclusive semantics and removed when the attempt ends. If a client cannot authenticate under that restriction, the backend is `not_ready`. Discord credentials, `CREDENTIALS_DIRECTORY`, systemd credential paths, and service-only file descriptors are removed.
+- AI children receive only `PATH`, locale/terminal values, isolated XDG/TMP paths, the validated absolute workspace path, and the one adapter-declared provider credential when needed. Relative paths are rejected. The helper binds that exact path as both process `cwd` and Codex `--cd`, so an outer tool's ambient workdir cannot redirect the child. `HOME` points to a new mode-`0700` attempt directory under the user runtime directory, never the user's actual home or `naia-settings`. The source and destination authentication files are owner-only real files; the destination is created with no-follow/exclusive semantics and removed when the attempt ends. If a client cannot authenticate under that restriction, the backend is `not_ready`. Discord credentials, `CREDENTIALS_DIRECTORY`, systemd credential paths, and service-only file descriptors are removed.
 - Unauthorized messages retain only deduplication metadata and rejection reason.
 - State directories are `0700`; the database, WAL, and shared-memory sidecars are `0600`; symbolic-link and owner checks precede writes. SQLite opens under a restrictive creation mask and sidecar permissions are rechecked after transactions.
 - `safeSummary` is 512 characters; an encoded typed payload is at most 2 KiB; metrics use the closed list above; `output_activity` is coalesced to one safe event per UTC second bucket per attempt. Oversized or unknown input is rejected before SQLite. Retention and encrypted raw artifacts must be fixed before Slice 2 stores resumable message payloads.
@@ -256,7 +265,7 @@ Codex, Claude, and fake adapters map capabilities and process outcomes into the 
 
 The supported floor is Codex CLI `0.146.0` and Claude Code `2.1.220`; an older or unparseable version is `not_ready`. Codex runs with `--ephemeral`; Claude runs with `--no-session-persistence`. Slice 2 raw retention is `none`: prompt and raw stdout/stderr/tool payloads are neither stored nor encrypted. Reboot recovery therefore keeps the durable `jobId` but starts a new `attemptId` or requires manual review; it does not silently resume a provider-native transcript. A structured provider success marker plus process exit 0 produces `attempt_succeeded` and lifecycle `result_ready`. Only the Gateway may then record real delivery events; the runner never fabricates `delivery_confirmed`.
 
-Verification: each real adapter contract, each-backend-removal test, cancellation/timeout/process-kill matrix.
+Verification: each real adapter contract, each-backend-removal test, no-prompt approval rejection from structured, stderr, and no-newline streams, explicit absolute workspace binding, cancellation/timeout/process-kill matrix.
 
 ### Slice 3 — Discord Gateway and projections
 

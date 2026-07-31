@@ -141,6 +141,35 @@ signed checkpoint-publication operation이 구현·검증될 때까지 금지합
 release, issue close, 완료 표현은 실패입니다. 내장 release-command regex는 보조 탐지이며
 프로젝트 adapter가 모든 external side effect를 엄격히 선언·차단해야 합니다.
 
+### 7. Discord session orchestration regression
+
+When the changed paths include `.agents/skills/manage-discord-sessions/**`,
+`naia-settings/messenger-sessions/config.example.json`, or
+`docs/design/discord-session-observability.md`, run:
+
+```bash
+pnpm test:discord-sessions
+rg -n 'approvalPolicy|permissionProfileEpoch|noProgressInterventionSeconds|operatorResponseSeconds' \
+  naia-settings/messenger-sessions/config.example.json \
+  .agents/skills/manage-discord-sessions/helper/{discord-config,discord-router,backend-runner,service}.mjs
+```
+
+PASS:
+
+- The deterministic suite proves stale permission-profile replacement,
+  no-prompt approval rejection, no-progress intervention, operator-channel
+  response handoff, and explicit child workspace binding.
+- Config, helper, requirements, design, and the user skill name the same
+  execution-profile and watchdog contract.
+
+FAIL:
+
+- Historical child command options are launched after a profile change.
+- `suspected_stalled` remains only a displayed value with no bounded owner
+  action, or a Discord job can execute without a channel response handoff.
+- A helper trusts an ambient workdir instead of binding the requested child
+  workspace explicitly.
+
 ## 출력
 
 ```markdown
@@ -181,3 +210,6 @@ Delivery: RELEASE_ELIGIBLE | REVIEW_ONLY
 | `.agents/requirements/_template.yaml` | source authority와 preservation trace 기본값 |
 | `.agents/skills/verify-implementation/SKILL.md` | 통합 검증 등록 |
 | `.agents/skills/manage-skills/SKILL.md` | 역할 기반 검증 커버리지 등록 |
+| `.agents/skills/manage-discord-sessions/` | Discord execution profile, watchdog, and deterministic regressions |
+| `naia-settings/messenger-sessions/config.example.json` | Operator-visible execution and watchdog defaults |
+| `docs/design/discord-session-observability.md` | Discord session design contract |

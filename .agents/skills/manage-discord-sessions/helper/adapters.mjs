@@ -5,8 +5,9 @@ const ADAPTERS = new Map([
 		backendId: "codex",
 		activityDetail: "structured",
 		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
-		command({ executable = "codex", cwd, sandbox = "workspace-write" }) {
-			return { command: executable, args: ["exec", "--json", "--ephemeral", "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config"] };
+		command({ executable = "codex", cwd, sandbox = "workspace-write", approvalPolicy = "never" }) {
+			if (approvalPolicy !== "never") throw new Error("Codex child approval policy must be never");
+			return { command: executable, args: ["exec", "--json", "--ephemeral", "--config", 'approval_policy="never"', "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config"] };
 		},
 		parse: parseCodex,
 	}],
@@ -14,7 +15,8 @@ const ADAPTERS = new Map([
 		backendId: "claude",
 		activityDetail: "structured",
 		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
-		command({ executable = "claude", permissionMode = "dontAsk", settingSources = "project" }) {
+		command({ executable = "claude", permissionMode = "dontAsk", settingSources = "project", approvalPolicy = "never" }) {
+			if (approvalPolicy !== "never") throw new Error("Claude child approval policy must be never");
 			return {
 				command: executable,
 				args: ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-session-persistence", "--setting-sources", settingSources, "--permission-mode", permissionMode],
@@ -25,6 +27,11 @@ const ADAPTERS = new Map([
 ]);
 
 const MINIMUM_VERSIONS = new Map([["codex", [0, 146, 0]], ["claude", [2, 1, 220]]]);
+const APPROVAL_REQUEST_PATTERN = /\b(?:approval|permission)[ _-]?(?:required|request)\b/i;
+
+export function approvalRequestedText(value) {
+	return APPROVAL_REQUEST_PATTERN.test(String(value));
+}
 
 export function getBackendAdapter(backendId) {
 	const adapter = ADAPTERS.get(backendId);
@@ -124,19 +131,20 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 	try {
 		message = JSON.parse(line);
 	} catch {
-		return { outcome: null, transientResult: null, events: activity(Buffer.byteLength(line, "utf8")).map((event, eventIndex) => ({
+		return { outcome: null, transientResult: null, approvalRequested: approvalRequestedText(line), events: activity(Buffer.byteLength(line, "utf8")).map((event, eventIndex) => ({
 			...event,
 			dedupeKey: eventKey(backendId, attemptId, lineNumber, eventIndex, event.kind),
 		})) };
 	}
 	const rawBytes = Buffer.byteLength(line, "utf8");
+	const approvalRequested = approvalRequestedText(line);
 	const outcome = backendId === "codex"
 		? message.type === "turn.completed" ? "success" : new Set(["turn.failed", "error"]).has(message.type) ? "failure" : null
 		: message.type === "result" ? (message.is_error === true || message.subtype === "error" ? "failure" : "success") : null;
 	let transientResult = null;
 	if (backendId === "codex" && message.type === "item.completed" && message.item?.type === "agent_message" && typeof message.item.text === "string") transientResult = message.item.text;
 	if (backendId === "claude" && message.type === "result" && outcome === "success" && typeof message.result === "string") transientResult = message.result;
-	return { outcome, transientResult, events: getBackendAdapter(backendId).parse(message, rawBytes).map((event, eventIndex) => ({
+	return { outcome, transientResult, approvalRequested, events: getBackendAdapter(backendId).parse(message, rawBytes).map((event, eventIndex) => ({
 		...event,
 		dedupeKey: eventKey(backendId, attemptId, lineNumber, eventIndex, event.kind),
 	})) };

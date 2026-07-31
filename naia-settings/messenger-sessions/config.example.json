@@ -54,7 +54,11 @@
   },
   "runtime": {
     "softSilenceSeconds": 120,
+    "noProgressInterventionSeconds": 120,
+    "operatorResponseSeconds": 30,
     "heartbeatSeconds": 10,
+    "approvalPolicy": "never",
+    "permissionProfileEpoch": "replace-on-policy-change",
     "maxConcurrentJobs": 1
   },
   "observability": {

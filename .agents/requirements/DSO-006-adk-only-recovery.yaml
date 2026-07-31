@@ -7,7 +7,7 @@ status: active
 source: human
 priority: high
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31
 issue_url: "https://github.com/nextain/naia-adk/issues/18"
 description: |
   The core service, settings, recovery state, and observability work from naia-adk alone. Codex and Claude are independent optional execution backends.
@@ -18,6 +18,7 @@ acceptance_criteria:
   - "Removing Codex leaves Claude visibility and recovery working; removing Claude leaves Codex visibility and recovery working."
   - "delivery_unknown is visible after restart and is never automatically resent."
   - "An actual reboot starts exactly one helper owner, resumes or explicitly reconnects Gateway, keeps the same jobId with a new attemptId and recovered event, and posts at most one recovery notice per boot generation."
+  - "Recovery never launches a child with encrypted historical command options: it compares a safe permission-profile epoch and builds a fresh no-prompt invocation."
 trace:
   code:
     - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "ADK-root-local service and visibility entry", coverage: full }

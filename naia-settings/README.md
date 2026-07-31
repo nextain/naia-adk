@@ -48,6 +48,18 @@ recovery material starts a new attempt under the same job ID; missing or corrupt
 material becomes `recovery_review`. An uncertain Discord delivery is never
 auto-resubmitted.
 
+For unattended Discord work, set `runtime.approvalPolicy` to `never` and
+advance `runtime.permissionProfileEpoch` whenever the parent execution policy
+changes. Recovery compares that profile before it launches a child, discards
+historical command options, and uses the current no-prompt profile only.
+`noProgressInterventionSeconds` bounds one owned-child abort;
+`operatorResponseSeconds` bounds the safe channel acknowledgement before an
+explicit `recovery_review` handoff. A changed no-prompt profile can replace a
+previous guarded mutation attempt, but unchanged mutation recovery remains a
+review handoff. The helper rejects relative workspaces and binds every child
+to the requested absolute workspace rather than an ambient caller working
+directory.
+
 ## `llm.json` — LLM role configuration (SoT)
 
 3-role object. Each role is `{ provider, baseUrl, model }` plus optional

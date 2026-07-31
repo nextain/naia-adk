@@ -45,7 +45,11 @@ const EVENT_SOURCES = new Map([
 	["delivery_confirmed", new Set(["helper", "recovery"])],
 	["delivery_unknown", new Set(["helper", "recovery"])],
 	["recovered", new Set(["recovery"])],
+	["profile_replaced", new Set(["recovery", "helper"])],
 	["recovery_review_required", new Set(["recovery"])],
+	["watchdog_intervened", new Set(["helper"])],
+	["operator_response_sent", new Set(["helper"])],
+	["operator_response_missed", new Set(["helper"])],
 	["cancel_requested", new Set(["helper"])],
 	["cancelled", new Set(["helper"])],
 	["completed", new Set(["helper"])],
@@ -122,8 +126,15 @@ function transitionFor(kind, current) {
 			return "running";
 		case "recovered":
 			return "queued";
+		case "profile_replaced":
+			return "queued";
 		case "recovery_review_required":
 			return "recovery_review";
+		case "watchdog_intervened":
+		case "operator_response_sent":
+			return current;
+		case "operator_response_missed":
+			return ["completed", "failed", "cancelled", "recovery_review"].includes(current) ? current : "recovery_review";
 		case "verification_recorded":
 			return current;
 		case "attempt_succeeded":
@@ -702,7 +713,7 @@ export class SessionStore {
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`).run(eventId, dedupeKey, jobId, attemptId, sequence, kind, occurredAt, source, summary, json(safeMetrics), redactionLevel);
 		const progressKinds = new Set(["attempt_started", "backend_ready", "phase_changed", "output_activity", "tool_started", "tool_finished", "checkpoint_saved", "verification_recorded"]);
-		const childAlive = kind === "attempt_started" ? 1 : ["attempt_exited", "failed", "completed", "cancelled", "recovered", "recovery_review_required", "delivery_unknown"].includes(kind) ? 0 : job.child_alive;
+			const childAlive = kind === "attempt_started" ? 1 : ["attempt_exited", "failed", "completed", "cancelled", "recovered", "recovery_review_required", "operator_response_missed", "delivery_unknown"].includes(kind) ? 0 : job.child_alive;
 		const deliveryState = kind === "delivery_started" ? "sending" : kind === "delivery_confirmed" ? "delivered" : kind === "delivery_unknown" ? "unknown" : job.delivery_state;
 		this.db.prepare(`
 			UPDATE jobs SET attempt_id = COALESCE(?, attempt_id), lifecycle = ?, updated_at = ?,
@@ -715,7 +726,7 @@ export class SessionStore {
 			WHERE job_id = ?
 		`).run(attemptId, lifecycle, occurredAt, kind, occurredAt, progressKinds.has(kind) ? 1 : 0, occurredAt,
 			progressKinds.has(kind) ? 1 : 0, summary, kind, summary, childAlive, deliveryState, kind, kind, kind, summary, jobId);
-		if (["delivery_confirmed", "completed", "failed", "cancelled", "recovery_review_required", "delivery_unknown"].includes(kind)) this.db.prepare("DELETE FROM job_recovery WHERE job_id = ?").run(jobId);
+			if (["delivery_confirmed", "completed", "failed", "cancelled", "recovery_review_required", "operator_response_missed", "delivery_unknown"].includes(kind)) this.db.prepare("DELETE FROM job_recovery WHERE job_id = ?").run(jobId);
 		return { ordinal: Number(insertResult.lastInsertRowid), eventId, dedupeKey, jobId, attemptId, sequence, kind, occurredAt, source, safeSummary: summary, metrics: safeMetrics, redactionLevel };
 	}
 

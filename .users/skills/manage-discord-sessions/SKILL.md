@@ -15,6 +15,8 @@ Codex와 Claude가 함께 쓰는 관리 스킬입니다. 별도 제품 CLI나 `n
 - `status`, `jobs`, `job`, `watch` 조회
 - 서로 독립적인 Codex `exec --json` 및 Claude `-p --output-format stream-json` 실행 어댑터
 - 실행별 격리 홈, 최소 인증 파일 복사, 안전 이벤트 변환, 시간 제한·취소·시그널 종료 처리
+- 이전 권한 프로필 재사용 차단, 무승인 실행 강제, 승인 UI 감지 시 대기 대신 안전 실패 처리
+- 무진행 감시의 1회 개입과 Discord 채널 첫 응답 기한 감시
 - Discord REST 수신 폴링을 대신하는 Gateway 연결과 시퀀스·재개 상태 저장
 - DM·서버 채널·스레드의 정확한 바인딩과 기본 거부 권한
 - 사용자 systemd 자동 시작, 단일 실행 잠금, 끊김 후 제한된 지수 백오프 재연결
@@ -50,7 +52,7 @@ scripts/manage-discord-sessions.sh service restart
 - `progressing`: 최근 구조화된 활동 증거가 있음
 - `running_no_detail`: 소유한 프로세스는 살아 있지만 백엔드가 세부 진행을 제공하지 않음
 - `waiting`: 승인·대기열·재시도처럼 명확한 기다림
-- `suspected_stalled`: 활동 없음 제한을 넘긴 경고이며 실패 확정은 아님
+- `suspected_stalled`: 활동 없음 제한을 넘긴 경고이며, 설정된 감시기가 한 번 개입해 `running` 표기만 남지 않게 함
 - `unresponsive`: 하드 제한이나 객관적인 프로세스 실패
 - `unknown`: 증거가 낡거나 없거나 서로 충돌함
 - `not_applicable`: 이미 끝난 작업이라 활동 상태를 적용하지 않음
@@ -66,6 +68,8 @@ naia-settings/.sessions/messenger-sessions/runtime.sqlite3
 
 실제 설정과 세션 상태는 Git에 올리지 않습니다. 설정에는 비밀값이 아니라 자격 증명 참조만 둡니다. Discord 토큰은 `naia-settings/.keys/messenger-sessions/<credentialRef>`에 권한 `0600`으로 두며, 설정 파일도 `0600`이어야 합니다. `backend.selected`를 `codex` 또는 `claude`로 선택하면 되고 `naia-agent`나 `naia-shell`은 필요하지 않습니다.
 
+사람의 권한 설정이 바뀌면 `runtime.permissionProfileEpoch`도 바꾸고, Discord에서 사람이 없이 처리할 작업은 `runtime.approvalPolicy`를 `never`로 둡니다. 복구나 대기열 실행 때 이전 자식의 명령 옵션을 재사용하지 않고 현재 프로필로 새 자식을 만듭니다. 바뀐 무승인 프로필은 이전의 보호된 수정 작업도 새 자식으로 교체할 수 있지만, 바뀌지 않은 수정 작업 복구는 계속 검토가 필요합니다. `noProgressInterventionSeconds`는 소유한 자식이 무진행일 때 한 번 중단시키는 한계이고, `operatorResponseSeconds`는 Discord 채널에 안전한 접수 응답을 보내거나 `recovery_review`로 넘기는 기한입니다. 자식의 작업 위치는 반드시 절대 실제 디렉터리여야 하고 cwd와 Codex의 `--cd`로 함께 전달되므로 상대 경로나 상위 도구의 작업 위치 설정은 거부합니다.
+
 ## 가시성과 재부팅 복구
 
 서비스는 재부팅 뒤 터미널이나 과거 AI 세션 화면을 자동으로 열지 않습니다. 화면이 떠 있다는 사실은 실제 작업 상태의 증거가 아니기 때문입니다. 대신 다음 정보가 SQLite 안전 이벤트 기록에 남습니다.
@@ -80,4 +84,4 @@ naia-settings/.sessions/messenger-sessions/runtime.sqlite3
 
 `service install`은 설치 터미널의 `PATH`에서 선택한 Codex 또는 Claude 실행파일을 찾아 절대 경로와 현재 Node 실행 디렉터리를 사용자 unit에 고정합니다. 그래서 systemd의 `PATH`가 더 좁아도 `/usr/bin/env node`를 쓰는 Codex를 포함한 Linuxbrew나 사용자 전용 설치가 재부팅 뒤 동작합니다. `backend.selected`를 바꾼 뒤에는 단순 재시작이 아니라 `service install`을 다시 실행해야 새 실행 경로가 고정됩니다.
 
-검증 명령은 `pnpm test:discord-sessions`입니다. 상세 설계는 `docs/design/discord-session-observability.md`, 요구사항은 `DSO-001`~`DSO-006`이 정본입니다.
+검증 명령은 `pnpm test:discord-sessions`입니다. 상세 설계는 `docs/design/discord-session-observability.md`, 요구사항은 `DSO-001`~`DSO-007`이 정본입니다.

@@ -3,19 +3,29 @@ import { closeSync, constants as fsConstants, chmodSync, existsSync, lstatSync, 
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, parse, resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { assertSupportedBackendVersion, getBackendAdapter, inspectBackendLine } from "./adapters.mjs";
+import { approvalRequestedText, assertSupportedBackendVersion, getBackendAdapter, inspectBackendLine } from "./adapters.mjs";
 import { readProcessStartIdentity } from "./projector.mjs";
 
 const SAFE_ENV_KEYS = new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR"]);
 const API_KEY_BY_BACKEND = { codex: "CODEX_API_KEY", claude: "ANTHROPIC_API_KEY" };
 
 function safeCommandOptions(backendId, options) {
-	const allowed = backendId === "codex" ? new Set(["sandbox"]) : new Set(["permissionMode", "settingSources"]);
+	const allowed = backendId === "codex" ? new Set(["sandbox", "approvalPolicy"]) : new Set(["permissionMode", "settingSources", "approvalPolicy"]);
 	for (const key of Object.keys(options)) if (!allowed.has(key)) throw new Error(`unsupported ${backendId} command option: ${key}`);
 	if (backendId === "codex" && options.sandbox && !new Set(["read-only", "workspace-write"]).has(options.sandbox)) throw new Error("unsafe Codex sandbox option");
 	if (backendId === "claude" && options.permissionMode && !new Set(["dontAsk", "plan"]).has(options.permissionMode)) throw new Error("unsafe Claude permission mode");
 	if (backendId === "claude" && options.settingSources && options.settingSources !== "project") throw new Error("Claude setting sources must remain project-only");
-	return { ...options };
+	if (options.approvalPolicy !== undefined && options.approvalPolicy !== "never") throw new Error("child approval policy must be never");
+	return { ...options, approvalPolicy: "never" };
+}
+
+export function resolveExecutionCwd(cwd) {
+	if (typeof cwd !== "string" || cwd.length === 0) throw new Error("execution cwd is required");
+	if (!isAbsolute(cwd)) throw new Error("execution cwd must be absolute");
+	const resolvedCwd = resolve(cwd);
+	const stat = lstatSync(resolvedCwd);
+	if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("execution cwd must be a real directory");
+	return resolvedCwd;
 }
 
 function assertRealFile(path, label) {
@@ -138,7 +148,7 @@ async function probeBackendVersion(backendId, executable, parentEnv) {
 
 const MAX_STREAM_LINE_BYTES = 256 * 1024;
 
-function lineReader(stream, onLine, onFailure) {
+function lineReader(stream, onLine, onFailure, onChunk = null) {
 	let buffered = "";
 	stream.setEncoding("utf8");
 	const completed = new Promise((resolve) => {
@@ -150,6 +160,17 @@ function lineReader(stream, onLine, onFailure) {
 		});
 	});
 	stream.on("data", (chunk) => {
+		try {
+			if (onChunk?.(chunk)) {
+				buffered = "";
+				stream.destroy();
+				return;
+			}
+		} catch {
+			onFailure(new Error("backend stream inspection failed"));
+			stream.destroy();
+			return;
+		}
 		buffered += chunk;
 		if (Buffer.byteLength(buffered, "utf8") > MAX_STREAM_LINE_BYTES) {
 			buffered = "";
@@ -197,22 +218,23 @@ export async function runBackendAttempt({
 	if (typeof prompt !== "string" || prompt.length === 0) throw new Error("prompt must be a non-empty string");
 	if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive safe integer");
 	if (!Number.isSafeInteger(killGraceMs) || killGraceMs < 0) throw new Error("killGraceMs must be a non-negative safe integer");
+	const executionCwd = resolveExecutionCwd(cwd);
 	const adapter = getBackendAdapter(backendId);
 	const supportedVersion = backendVersion
 		? assertSupportedBackendVersion(backendId, backendVersion)
 		: await probeBackendVersion(backendId, executable ?? backendId, parentEnv);
 	const attemptId = randomUUID();
-	const { childHome, env, authenticationPrepared } = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: cwd });
+	const { childHome, env, authenticationPrepared } = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: executionCwd });
 	if (requireAuthentication && !authenticationPrepared) {
 		cleanupChildEnvironment(childHome);
 		throw new Error(`${backendId} authentication is not ready`);
 	}
 	let child;
 	try {
-	const invocation = adapter.command({ ...safeCommandOptions(backendId, commandOptions), executable, cwd: resolve(cwd) });
+		const invocation = adapter.command({ ...safeCommandOptions(backendId, commandOptions), executable, cwd: executionCwd });
 	store.reserveAttempt(jobId, { attemptId, backendId, now: now() });
 	child = spawn(invocation.command, invocation.args, {
-		cwd: resolve(cwd),
+			cwd: executionCwd,
 		env,
 		stdio: ["pipe", "pipe", "pipe"],
 		detached: process.platform !== "win32",
@@ -236,27 +258,6 @@ export async function runBackendAttempt({
 	let processError = false;
 	let terminationReason = null;
 	let forceTimer = null;
-	const recordLine = (line) => {
-		lineNumber += 1;
-		const inspected = inspectBackendLine({ backendId, line, attemptId, lineNumber });
-		if (inspected.outcome === "failure") backendOutcome = "failure";
-		else if (inspected.outcome === "success" && backendOutcome !== "failure") backendOutcome = "success";
-		if (inspected.transientResult !== null) transientResult = inspected.transientResult;
-		for (const event of inspected.events) {
-			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: backendId, ...event });
-		}
-	};
-	let normalizeFailed = false;
-	const streamFailure = () => {
-		normalizeFailed = true;
-		terminate("internal_error");
-	};
-	const stdoutCompleted = lineReader(child.stdout, recordLine, streamFailure);
-	const stderrCompleted = lineReader(child.stderr, (line) => {
-		lineNumber += 1;
-		const bytes = Buffer.byteLength(line, "utf8");
-		store.recordEvent({ jobId, attemptId, occurredAt: now(), source: backendId, dedupeKey: `${backendId}:stderr:${lineNumber}`, kind: "output_activity", safePayload: { bytes }, metrics: { bytes } });
-	}, streamFailure);
 	const signalProcessTree = (signalName) => {
 		const currentIdentity = readProcessStartIdentity(child.pid);
 		if (ownedStartIdentity && currentIdentity && currentIdentity !== ownedStartIdentity) return;
@@ -277,9 +278,50 @@ export async function runBackendAttempt({
 		forceTimer = setTimeout(() => signalProcessTree("SIGKILL"), killGraceMs);
 		forceTimer.unref?.();
 	};
+	const approvalChunkDetector = () => {
+		let tail = "";
+		return (chunk) => {
+			tail = `${tail}${chunk}`.slice(-256);
+			if (!approvalRequestedText(tail)) return false;
+			terminate("approval_ui");
+			return true;
+		};
+	};
+	const recordLine = (line) => {
+		lineNumber += 1;
+		const inspected = inspectBackendLine({ backendId, line, attemptId, lineNumber });
+		if (inspected.approvalRequested) {
+			terminate("approval_ui");
+			return;
+		}
+		if (inspected.outcome === "failure") backendOutcome = "failure";
+		else if (inspected.outcome === "success" && backendOutcome !== "failure") backendOutcome = "success";
+		if (inspected.transientResult !== null) transientResult = inspected.transientResult;
+		for (const event of inspected.events) {
+			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: backendId, ...event });
+		}
+	};
+	let normalizeFailed = false;
+	const streamFailure = () => {
+		normalizeFailed = true;
+		terminate("internal_error");
+	};
+	const stdoutCompleted = lineReader(child.stdout, recordLine, streamFailure, approvalChunkDetector());
+	const stderrCompleted = lineReader(child.stderr, (line) => {
+		lineNumber += 1;
+		if (inspectBackendLine({ backendId, line, attemptId, lineNumber }).approvalRequested) {
+			terminate("approval_ui");
+			return;
+		}
+		const bytes = Buffer.byteLength(line, "utf8");
+		store.recordEvent({ jobId, attemptId, occurredAt: now(), source: backendId, dedupeKey: `${backendId}:stderr:${lineNumber}`, kind: "output_activity", safePayload: { bytes }, metrics: { bytes } });
+	}, streamFailure, approvalChunkDetector());
 	const timeout = setTimeout(() => terminate("timeout"), timeoutMs);
 	timeout.unref?.();
-	const abort = () => terminate(signal?.reason === "recovery" ? "recovery" : "cancelled");
+	const abort = () => {
+		const reason = signal?.reason;
+		terminate(reason === "recovery" ? "recovery" : reason === "no_progress" ? "no_progress" : reason === "operator_response_timeout" ? "operator_response_timeout" : "cancelled");
+	};
 	if (signal?.aborted) abort();
 	else signal?.addEventListener("abort", abort, { once: true });
 	child.stdin.on("error", () => terminate("internal_error"));
@@ -305,8 +347,16 @@ export async function runBackendAttempt({
 			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "cancelled", safePayload: {} });
 		} else if (terminationReason === "recovery") {
 			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "recovery", kind: "recovered", safePayload: { recoveryAction: "safe_retry" } });
-		} else if (terminationReason === "timeout") {
-			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: "timeout" } });
+			} else if (terminationReason === "timeout") {
+				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: "timeout" } });
+			} else if (terminationReason === "no_progress") {
+				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: "no_progress_timeout" } });
+			} else if (terminationReason === "approval_ui") {
+				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: "approval_ui_detected" } });
+			} else if (terminationReason === "operator_response_timeout") {
+				if (store.getJob(jobId, { includeEvents: false })?.lifecycle !== "recovery_review") {
+					store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: "internal_error" } });
+				}
 		} else if (terminationReason === "internal_error" || normalizeFailed || processError) {
 			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: "internal_error" } });
 		} else if (result.exitCode === 0 && backendOutcome === "success") {

@@ -150,7 +150,7 @@ test("DSG-006 enforces configured read-only role in the actual backend invocatio
 	assert.equal(accepted.state, "accepted");
 	await router.waitForIdle();
 	assert.equal(calls.length, 1);
-	assert.deepEqual(calls[0].commandOptions, { sandbox: "read-only" });
+	assert.deepEqual(calls[0].commandOptions, { sandbox: "read-only", approvalPolicy: "never" });
 	assert.equal(JSON.stringify(store.listJobs()).includes("inspect this"), false);
 	store.close();
 });
@@ -174,7 +174,7 @@ test("DSG-007 resumes an encrypted prompt as a new attempt without plaintext per
 	const { store, databasePath, root } = fixture();
 	const codec = new RecoveryCodec(randomBytes(32));
 	const prompt = "private-reboot-canary-request";
-	store.acceptIngressAndCreateJob({ sourceMessageId: "131313131313131313", scopeKey: "scope-1", jobId: "recoverable-job", dispatchSequence: 11, backendId: "codex", backendCapabilities: { structuredProgress: true }, activityDetail: "structured", recoveryEnvelope: codec.seal(JSON.stringify({ prompt, channelId: CHANNEL, commandOptions: { sandbox: "read-only" } })) });
+	store.acceptIngressAndCreateJob({ sourceMessageId: "131313131313131313", scopeKey: "scope-1", jobId: "recoverable-job", dispatchSequence: 11, backendId: "codex", backendCapabilities: { structuredProgress: true }, activityDetail: "structured", recoveryEnvelope: codec.seal(JSON.stringify({ prompt, channelId: CHANNEL, executionProfile: { backendId: "codex", permissionProfileEpoch: "default", authorizationMode: "never", access: "read-only" } })) });
 	store.startAttempt("recoverable-job", { attemptId: "old-attempt" });
 	const recovered = store.recoverInterruptedWork();
 	assert.equal(recovered.length, 1);
@@ -189,6 +189,81 @@ test("DSG-007 resumes an encrypted prompt as a new attempt without plaintext per
 	assert.equal(calls[0].prompt, prompt);
 	store.close();
 	assert.equal(readFileSync(databasePath).includes(Buffer.from(prompt)), false);
+});
+
+test("DSG-013 replaces a stale managed child profile with a fresh no-prompt child", async () => {
+	const { store, root } = fixture();
+	const codec = new RecoveryCodec(randomBytes(32));
+	const prompt = "private-stale-profile-request";
+	store.acceptIngressAndCreateJob({ sourceMessageId: "141414141414141414", scopeKey: "scope-1", jobId: "stale-profile-job", dispatchSequence: 12, backendId: "codex", backendCapabilities: { structuredProgress: true }, activityDetail: "structured", recoveryEnvelope: codec.seal(JSON.stringify({ prompt, channelId: CHANNEL, executionProfile: { backendId: "codex", permissionProfileEpoch: "managed-1", authorizationMode: "managed", access: "read-only" } })) });
+	store.startAttempt("stale-profile-job", { attemptId: "old-managed-attempt" });
+	const recovered = store.recoverInterruptedWork();
+	const calls = [];
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "writer", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: ["write", "execute"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, approvalPolicy: "never", permissionProfileEpoch: "never-2" } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: codec, runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
+	router.resumeRecovered(recovered, { autoRetry: true });
+	await router.waitForIdle();
+	assert.equal(calls.length, 1);
+	assert.deepEqual(calls[0].commandOptions, { sandbox: "workspace-write", approvalPolicy: "never" });
+	assert.deepEqual(calls[0].executionProfile, { backendId: "codex", permissionProfileEpoch: "never-2", authorizationMode: "never", access: "workspace-write" });
+	assert.equal(store.getJob("stale-profile-job").events.some((event) => event.kind === "profile_replaced"), true);
+	assert.equal(JSON.stringify(store.getJob("stale-profile-job")).includes(prompt), false);
+	store.close();
+});
+
+test("DSG-014 watchdog aborts a no-progress owned child instead of leaving it running", async () => {
+	const { store, root } = fixture();
+	let nowMs = 0;
+	let runnerStarted;
+	const started = new Promise((resolveStarted) => { runnerStarted = resolveStarted; });
+	let abortReason = null;
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, softSilenceSeconds: 1, noProgressInterventionSeconds: 2, operatorResponseSeconds: 30 } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), now: () => nowMs, send: async () => ({ state: "confirmed" }), runner: async ({ jobId, signal }) => {
+		store.startAttempt(jobId, { attemptId: "no-progress-attempt", childPid: process.pid, now: new Date(0).toISOString() });
+		runnerStarted();
+	return new Promise((resolveRunner) => signal.addEventListener("abort", () => { abortReason = signal.reason; store.recordEvent({ jobId, attemptId: "no-progress-attempt", source: "helper", kind: "failed", safePayload: { reasonCode: "no_progress_timeout" } }); resolveRunner({ backendOutcome: "failure", transientResult: null }); }, { once: true }));
+	} });
+	await router.onDispatch("MESSAGE_CREATE", { id: "151515151515151515", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> inspect this` }, 13);
+	await started;
+	store.heartbeatService({ generation: "watchdog-service", pid: process.pid, now: new Date(1_000).toISOString() });
+	nowMs = 1_001;
+	assert.deepEqual(await router.watchdog({ nowMs }), { noProgress: 0, operatorResponse: 0 });
+	nowMs = 2_001;
+	const outcome = await router.watchdog({ nowMs });
+	await router.waitForIdle();
+	assert.equal(outcome.noProgress, 1);
+	assert.equal(abortReason, "no_progress");
+	const job = store.getJob(store.listJobs()[0].jobId, { nowMs });
+	assert.equal(job.events.some((event) => event.kind === "watchdog_intervened" && event.safeSummary.includes("no_progress")), true);
+	assert.equal(job.lifecycle, "failed");
+	assert.equal(job.latestSafeError, "Job failed: no_progress_timeout");
+	store.close();
+});
+
+test("DSG-015 operator-channel response SLA creates a review handoff instead of silent execution", async () => {
+	const { store, root } = fixture();
+	let nowMs = 0;
+	let runnerStarted;
+	const started = new Promise((resolveStarted) => { runnerStarted = resolveStarted; });
+	let abortReason = null;
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, softSilenceSeconds: 60, noProgressInterventionSeconds: 60, operatorResponseSeconds: 1 } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), now: () => nowMs, send: async () => { throw new Error("channel unavailable"); }, runner: async ({ jobId, signal }) => {
+		store.startAttempt(jobId, { attemptId: "operator-response-attempt", childPid: process.pid, now: new Date(0).toISOString() });
+		runnerStarted();
+		return new Promise((resolveRunner) => signal.addEventListener("abort", () => { abortReason = signal.reason; resolveRunner({ backendOutcome: "failure", transientResult: null }); }, { once: true }));
+	} });
+	await router.onDispatch("MESSAGE_CREATE", { id: "161616161616161616", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> inspect this` }, 14);
+	await started;
+	store.heartbeatService({ generation: "operator-service", pid: process.pid, now: new Date(1_000).toISOString() });
+	nowMs = 1_001;
+	const outcome = await router.watchdog({ nowMs });
+	await router.waitForIdle();
+	assert.equal(outcome.operatorResponse, 1);
+	assert.equal(abortReason, "operator_response_timeout");
+	const job = store.getJob(store.listJobs()[0].jobId, { nowMs });
+	assert.equal(job.lifecycle, "recovery_review");
+	assert.equal(job.events.some((event) => event.kind === "operator_response_missed"), true);
+	store.close();
 });
 
 test("DSG-008 renders a stable isolated user service with restart and single-owner controls", () => {
@@ -240,7 +315,7 @@ test("DSG-010 approval-required mutation remains read-only until an explicit ele
 	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
 	await router.onDispatch("MESSAGE_CREATE", { id: "121212121212121212", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> change a file` }, 10);
 	await router.waitForIdle();
-	assert.deepEqual(calls[0].commandOptions, { permissionMode: "plan", settingSources: "project" });
+	assert.deepEqual(calls[0].commandOptions, { permissionMode: "plan", settingSources: "project", approvalPolicy: "never" });
 	store.close();
 });
 
@@ -268,7 +343,7 @@ test("DSG-012 loads only private closed settings and resolves an owner-only cred
 	const { root, store } = fixture();
 	store.close();
 	const configPath = join(root, "config.json");
-	const config = { schemaVersion: 1, enabled: true, workspaceId: "test", persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"], requiresApproval: ["write"] }, backend: { selected: "codex", profiles: { codex: { enabled: true }, claude: { enabled: false } } }, discord: { credentialRef: "discord-token", botUserId: BOT, operatorUserIds: [], bindings: [binding()] }, runtime: { heartbeatSeconds: 10, softSilenceSeconds: 120, maxConcurrentJobs: 1 }, observability: { discordStatusProjection: true }, service: { autoStart: true, startAt: "login" }, recovery: { autoRetry: true } };
+	const config = { schemaVersion: 1, enabled: true, workspaceId: "test", persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"], requiresApproval: ["write"] }, backend: { selected: "codex", profiles: { codex: { enabled: true }, claude: { enabled: false } } }, discord: { credentialRef: "discord-token", botUserId: BOT, operatorUserIds: [], bindings: [binding()] }, runtime: { heartbeatSeconds: 10, softSilenceSeconds: 120, noProgressInterventionSeconds: 120, operatorResponseSeconds: 30, approvalPolicy: "never", permissionProfileEpoch: "profile-1", maxConcurrentJobs: 1 }, observability: { discordStatusProjection: true }, service: { autoStart: true, startAt: "login" }, recovery: { autoRetry: true } };
 	writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
 	assert.equal(loadMessengerConfig(configPath).backend.selected, "codex");
 	writeFileSync(configPath, JSON.stringify({ ...config, unexpected: true }), { mode: 0o600 });
