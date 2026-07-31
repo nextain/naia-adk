@@ -85,7 +85,7 @@ function compactReminderMessage(opts) {
  *          hostConfigDir?:string}} opts
  *   optOutEnvVar  default "CLAUDE_HARNESS" (host-neutral override)
  *   hostConfigDir default ".claude" (opt-out marker + unlock msg dir)
- * @returns {{text:string}|null}  null = suppress (opt-out / no progress).
+ * @returns {{text:string}|null}  null = suppress (opt-out / no progress / unbound).
  */
 function buildSessionInject(opts) {
 	const cwd = opts.cwd;
@@ -188,26 +188,6 @@ function buildSessionInject(opts) {
 		}
 	}
 
-	// Build candidate list for selection prompt (no auto-bind)
-	const now = Date.now();
-	const activeCandidates = []; // { filePath, mtime, progress }
-	if (!latestFile) {
-		for (const filePath of allProgressFiles) {
-			let stat;
-			try {
-				stat = fs.statSync(filePath);
-			} catch {
-				continue;
-			}
-			if (now - stat.mtimeMs > ACTIVE_WINDOW_MS) continue;
-			const progress = readProgress(filePath);
-			if (!progress) continue;
-			if (progress.current_phase === "close") continue;
-			activeCandidates.push({ filePath, mtime: stat.mtimeMs, progress });
-		}
-		activeCandidates.sort((a, b) => b.mtime - a.mtime);
-	}
-
 	if (sessionMapDirty) {
 		try {
 			atomicWriteJson(sessionMapPath, sessionMap);
@@ -216,43 +196,10 @@ function buildSessionInject(opts) {
 		}
 	}
 
-	// No bind — emit a selection prompt
-	if (!latestFile) {
-		const lines = [
-			"══ [HARNESS: SESSION UNBOUND] ════════════════════════════",
-			"이 세션은 작업(progress 파일)에 바인딩되지 않았습니다.",
-			"AI는 사용자가 명시적으로 작업을 지정하기 전까지",
-			"어떤 진행 중 이슈로도 컨텍스트를 가정하지 마세요.",
-			"",
-		];
-		if (activeCandidates.length > 0) {
-			lines.push("활성 후보 (mtime 24h 이내, phase != close):");
-			for (const c of activeCandidates.slice(0, 10)) {
-				const rel = path.relative(cwd, c.filePath);
-				const issue = c.progress.issue || "(no issue)";
-				const phase = c.progress.current_phase || "(no phase)";
-				const task = c.progress.current_task ? ` — ${c.progress.current_task}` : "";
-				lines.push(`  • ${issue} [${phase}] ${rel}${task}`);
-			}
-			if (activeCandidates.length > 10) {
-				lines.push(`  • ... (+${activeCandidates.length - 10}개 더)`);
-			}
-			lines.push("");
-		} else {
-			lines.push("활성 후보 없음 (24h 이내 갱신된 비-close progress 파일이 없습니다).", "");
-		}
-		lines.push(
-			"바인딩 방법: 사용자가 작업을 지정하면 AI는 즉시 해당 progress 파일에",
-			`"session_id": "${sessionId || "<현재 세션 ID>"}" 필드를 기록하세요. 다음 턴부터 P0로 안정 바인딩됩니다.`,
-			"",
-			"이 세션이 IDD 워크플로우 외 자유 작업이라면 HARNESS를 끌 수 있습니다:",
-			`  • env: ${optOutEnvVar}=off`,
-			`  • file: <cwd>/${hostConfigDir}/no-harness (touch)`,
-			"위 둘 중 하나가 있으면 hook은 매 턴 조용히 종료합니다.",
-			"══════════════════════════════════════════════════════════",
-		);
-		return { text: lines.join("\n") };
-	}
+	// Unbound is normal before the user selects work. Keep UserPromptSubmit
+	// silent: binding is internal AI state, not a user-facing notification.
+	// Mutation safety remains enforced by session-contract-gate at PreToolUse.
+	if (!latestFile) return null;
 
 	const progress = readProgress(latestFile);
 	if (!progress) return null;

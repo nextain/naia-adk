@@ -161,18 +161,22 @@ AI의 역할(구현자 vs 리뷰어)이 파일 유형별로 명확히 정의되�
 - `commit-guard.js`: PostToolUse → PreToolUse 전환 (2026-03-22). regex `(?:^|[;&|])\s*git\s+commit\b`. echo 인자 안 텍스트 false positive 방지. T1-T5 5/5 PASS.
 - `cascade-check.js` H2 INFO: PostToolUse 알림이 차단이 아님 — 미러 업데이트는 AI 책임, 자동화 아님. 허용된 설계.
 - `session-inject.js` H4: design-doc-unlock 파일 활성화 시 경고 출력 기능 추가 (2026-03-22).
-- `session-inject.js` 동작 모델 재설계 (2026-04-26): 자동 바인딩 제거, opt-out 메커니즘 추가, `/harness` 슬래시 명령어 도입. 아래 섹션 참조.
+- `session-inject.js` 동작 모델 재설계 (2026-04-26, 2026-07-31 보정): 자동 바인딩 제거, opt-out 메커니즘 추가, `/harness` 슬래시 명령어 도입. 미바인딩 상태는 사용자 프롬프트마다 노출하지 않고 조용히 종료하며, 변경 작업의 안전은 `session-contract-gate`가 실제 도구 실행 시점에 보장합니다. 아래 섹션 참조.
 
 ---
 
-## session_inject 동작 모델 (2026-04-26 개정)
+## session_inject 동작 모델 (2026-04-26 개정, 2026-07-31 출력 보정)
 
 **해결 우선순위 (auto-bind 없음):**
 1. **P0** — progress 파일 안의 `session_id` 필드가 현재 세션 ID와 일치하는 파일 (가장 권위적, session-map 손상에도 견고)
 2. **P1** — `.session-map.json[session_id]`가 가리키는 파일
-3. **둘 다 없으면 SELECTION PROMPT만 inject** — 절대 추측해서 자동 바인딩하지 않음
+3. **둘 다 없으면 조용히 종료** — 절대 추측해서 자동 바인딩하지 않고, 내부 미바인딩 상태를 사용자에게 반복 노출하지 않음
 
-**활성 후보 정의:** `mtime ≤ 24h` AND `current_phase != "close"` — 안내문에 후보 목록으로 표시됨.
+**활성 후보 정의:** `mtime ≤ 24h` AND `current_phase != "close"` — 매 프롬프트가 아니라 사용자가 명시적으로 `/harness status`를 실행할 때만 표시됩니다.
+
+**안전 경계:** 미바인딩 상태에서도 읽기 전용 조사는 허용합니다. 실제 변경 명령을 실행하려 할 때는 `session-contract-gate`가 차단하고, progress 파일에 현재 `session_id`를 기록하는 바인딩 작업은 항상 허용합니다. 따라서 사용자 화면의 반복 안내를 없애도 계약 없는 변경은 허용되지 않습니다.
+
+**승인창의 두 종류:** 디스코드 자동 실행 자식은 Codex의 `approval_policy=never` 또는 Claude의 `dontAsk`/읽기 전용 모드로 실행하고, 예전 관리형 권한 프로필은 재사용하지 않습니다. 반면 Codex 호스트가 샌드박스 밖 명령을 허용할지 묻는 플랫폼 승인창은 저장소 코드로 끌 수 없습니다. 운영 세션은 샌드박스 안 명령과 이미 제한적으로 허용된 명령을 우선하고, 피할 수 없는 호스트 권한 상승은 마지막 검증 단계에 한 번으로 묶어야 합니다. 자식 실행의 무승인 설정으로 플랫폼 승인창까지 해결했다고 보고하면 안 됩니다.
 
 **Opt-out (HARNESS 끔):**
 - `CLAUDE_HARNESS=off` (또는 `0`/`false`/`no`) 환경변수

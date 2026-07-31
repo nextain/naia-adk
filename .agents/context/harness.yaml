@@ -221,16 +221,16 @@ existing_hooks:
   session_inject:
     file: ".claude/hooks/session-inject.js"
     type: UserPromptSubmit
-    H1: "PASS — no-op if progress directory missing or empty. False positives impossible (only injects, never blocks)."
+    H1: "PASS — no-op if progress directory is missing, empty, or has no binding for the current session. Unbound state is internal and never exposed on every user prompt."
     H2: "PASS — anti-compact mechanism: injects session state on every prompt so context compression cannot erase active issue/phase."
     H3: "PASS — UserPromptSubmit is the correct event (fires before AI processes the prompt)."
-    H4: "PASS — output is advisory context, not a constraint. Warns if design-doc-unlock file is active. Nudges P0 anchor when bound via P1."
-    verified_date: "2026-04-26"
+    H4: "PASS — bound-session output is advisory context, not a constraint. Unbound mutation safety is enforced separately at PreToolUse by session-contract-gate, which allows progress binding writes and read-only inspection."
+    verified_date: "2026-07-31"
     resolution_order:
       - "P0: progress file with `session_id` field == current session_id (most authoritative — survives session-map corruption)"
       - "P1: .session-map.json[session_id] → progress file path"
-      - "(no auto-bind: if neither matches, emit SELECTION PROMPT — never guess)"
-    active_definition: "mtime within 24h AND current_phase != 'close'"
+      - "(no auto-bind: if neither matches, exit silently — never guess and never expose internal state to the user)"
+    active_definition: "mtime within 24h AND current_phase != 'close' (used only by explicit /harness status, not injected on UserPromptSubmit)"
     opt_out:
       env: "CLAUDE_HARNESS in {off, 0, false, no}"
       file: "<cwd>/.claude/no-harness (presence = opt-out, any content)"
@@ -239,6 +239,14 @@ existing_hooks:
       - "2026-04-26: P2-singleton auto-binding REMOVED. In multi-session workflows, the previous behavior silently bound new sessions to whatever single active progress file existed, causing cross-session context drift."
       - "2026-04-26: session-map writes are now atomic (tmp + rename) to prevent race-condition corruption when multiple sessions update concurrently."
       - "2026-04-26: AI receives an explicit nudge to write `session_id` into the progress file when bound via P1, strengthening the P0 anchor for resilience."
+      - "2026-07-31: unbound UserPromptSubmit exits silently. Binding guidance is available through explicit /harness status, while session-contract-gate preserves mutation safety at the action boundary."
+
+  host_permission_boundary:
+    rule: "Repository hooks and messenger child profiles must use no-prompt execution (`approval_policy=never` for Codex, `dontAsk`/plan for Claude). A host Codex sandbox escalation prompt is a separate platform control and cannot be disabled by repository code."
+    operator_behavior: "Prefer in-sandbox commands, reuse narrowly approved command prefixes, and batch any unavoidable host escalation into one explicit final verification step. Never describe a host approval prompt as fixed by a child approval profile."
+    regression_evidence:
+      - ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs — stale managed profiles are replaced by current no-prompt profiles"
+      - ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs — child command construction pins approval_policy=never and rejects approval UI output"
 
   deploy_guard:
     file: ".claude/hooks/deploy-guard.js"

@@ -138,8 +138,8 @@ skills:
     scripts: []
 
   verify-request-contract:
-    trigger: "request-contract 코어/어댑터/등록/스키마/review-pass 수정 후, Review/Post-test Review 및 커밋 전"
-    what: "원요청 source 해시체인→REQ→UC/UC-test→FE/FE-test→구현→증거, 서명 권한, 2회 Clean, Claude Code/Codex 동등성 결정론 검증"
+    trigger: "request-contract·session-inject 코어/어댑터/등록/스키마/review-pass 수정 후, Review/Post-test Review 및 커밋 전"
+    what: "원요청 source 해시체인→REQ→UC/UC-test→FE/FE-test→구현→증거, 세션 바인딩, 서명 권한, 2회 Clean, Claude Code/Codex 동등성 결정론 검증"
     arg: null
     disable-model-invocation: true
     scripts: []
