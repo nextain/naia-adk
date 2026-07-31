@@ -15,7 +15,8 @@
     "made Windows operator service commands and Bash top-level commands consistent",
     "made existing recovery keys and directories fail closed before any permission mutation",
     "confirmed Discord operator reply receipt 1532721626116919296",
-    "passed the full Discord deterministic suite with 92 tests: 88 pass, 0 fail, 4 platform skips",
+    "passed the full Discord deterministic suite with 93 tests: 89 pass, 0 fail, 4 platform skips",
+    "passed native Windows naia service start, restart, status, single-process, and main-path checks",
     "completed two consecutive adversarial CLEAN reviews on the frozen diff",
     "passed benchmark-contract and entry-point regression suites"
   ],
@@ -25,7 +26,7 @@
     "push main and update the TalkingKiosk human operations handoff"
   ],
   "verification": {
-    "discordSessions": "PASS: 88 passed, 0 failed, 4 platform skips",
+    "discordSessions": "PASS: 89 passed, 0 failed, 4 platform skips",
     "adversarialReview": "PASS: two consecutive CLEAN rounds",
     "benchmarkContract": "PASS",
     "entryPoints": "PASS",
@@ -64,6 +65,7 @@
     "windowsRegistration": "startup_folder",
     "taskSchedulerCreate": "access_denied",
     "liveProcessCount": 1,
+    "serviceRestart": "PASS: generation e9661ce0-cbc1-4883-94aa-7988196d9081",
     "discordReplyMessageId": "1532721626116919296"
   }
 }
