@@ -54,6 +54,23 @@ interactive user `PATH` as `naia`, for example `naia status`, `naia jobs
 --active`, and `naia job <job-id> --events`. This is a generated launcher for
 the skill script, not a separate runtime or product CLI.
 
+Run more than one bot or persona from the same ADK with a named instance. The
+default instance keeps the commands and paths above; a named instance is placed
+between `naia` and the command:
+
+```bash
+naia alpha status
+naia alpha jobs --active
+naia alpha job <job-id> --events
+naia alpha watch --job <job-id>
+naia alpha service install
+naia alpha service restart
+```
+
+Each instance has an independent config, SQLite ledger, Gateway resume state,
+recovery key, runtime directory, lock, and systemd unit. Credentials remain in
+the shared owner-only credential directory and are selected by `credentialRef`.
+
 `watch` polls only the local SQLite event ledger. It is not Discord REST receive polling. Stop an interactive watch with `Ctrl-C`.
 
 ## Interpreting visibility
@@ -77,6 +94,10 @@ The ADK workspace is the canonical location:
 ```text
 naia-settings/messenger-sessions/config.json
 naia-settings/.sessions/messenger-sessions/runtime.sqlite3
+
+# named instance, for example "alpha"
+naia-settings/messenger-sessions/instances/alpha/config.json
+naia-settings/.sessions/messenger-sessions/instances/alpha/runtime.sqlite3
 ```
 
 The real config and all session state are local and ignored by Git. Only `config.example.json` is tracked. Secret values never belong in config, events, status, or logs; config stores credential references only.

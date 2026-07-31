@@ -5,6 +5,7 @@ import { delimiter, isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { renderDiscordUserUnit } from "./systemd.mjs";
 import { loadMessengerConfig } from "./discord-config.mjs";
+import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
 
 function runSystemctl(args) {
 	const result = spawnSync("systemctl", ["--user", ...args], { encoding: "utf8" });
@@ -57,15 +58,17 @@ function installOperatorLauncher(adkRoot) {
 	return path;
 }
 
-export function manageService({ adkRoot, command }) {
-	const config = command === "unit" ? null : loadMessengerConfig(resolve(adkRoot, "naia-settings/messenger-sessions/config.json"));
+export function manageService({ adkRoot, command, instance = "default" }) {
+	const normalizedInstance = normalizeMessengerInstance(instance);
+	const paths = messengerInstancePaths(adkRoot, normalizedInstance);
+	const config = command === "unit" ? null : loadMessengerConfig(paths.configPath);
 	const backendExecutables = command === "install" ? { [config.backend.selected]: resolveBackendExecutable(config.backend.selected) } : {};
-	const rendered = renderDiscordUserUnit({ adkRoot, backendExecutables });
+	const rendered = renderDiscordUserUnit({ adkRoot, instance: normalizedInstance, backendExecutables });
 	const unitDirectory = resolve(homedir(), ".config/systemd/user");
 	const unitPath = resolve(unitDirectory, rendered.unitName);
 	if (command === "install") {
-		mkdirSync(resolve(adkRoot, "naia-settings/.sessions/messenger-sessions"), { recursive: true, mode: 0o700 });
-		chmodSync(resolve(adkRoot, "naia-settings/.sessions/messenger-sessions"), 0o700);
+		mkdirSync(paths.stateDirectory, { recursive: true, mode: 0o700 });
+		chmodSync(paths.stateDirectory, 0o700);
 		mkdirSync(unitDirectory, { recursive: true, mode: 0o700 });
 		writeFileSync(unitPath, rendered.content, { mode: 0o600 });
 		const launcherPath = installOperatorLauncher(adkRoot);
@@ -89,9 +92,12 @@ export function manageService({ adkRoot, command }) {
 if (import.meta.url === `file://${process.argv[1]}`) {
 	const args = process.argv.slice(2);
 	const rootIndex = args.indexOf("--adk-root");
+	const instanceIndex = args.indexOf("--instance");
 	try {
 		if (rootIndex < 0 || !args[rootIndex + 1]) throw new Error("--adk-root is required");
-		const command = args.find((value, index) => index !== rootIndex && index !== rootIndex + 1 && !value.startsWith("--"));
-		console.log(manageService({ adkRoot: resolve(args[rootIndex + 1]), command }));
+		if (instanceIndex < 0 || !args[instanceIndex + 1]) throw new Error("--instance is required");
+		const excluded = new Set([rootIndex, rootIndex + 1, instanceIndex, instanceIndex + 1]);
+		const command = args.find((value, index) => !excluded.has(index) && !value.startsWith("--"));
+		console.log(manageService({ adkRoot: resolve(args[rootIndex + 1]), instance: args[instanceIndex + 1], command }));
 	} catch (error) { console.error(error.message); process.exitCode = 1; }
 }
