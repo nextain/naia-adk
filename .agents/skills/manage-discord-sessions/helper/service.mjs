@@ -28,12 +28,15 @@ export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, 
 	let stopping = false;
 	let gateway = null;
 	let wakeReconnect = null;
+	let wakeStop = null;
+	const stopRequested = new Promise((resolveStop) => { wakeStop = resolveStop; });
 	const delivery = fetchImpl ? (input) => import("./discord-delivery.mjs").then(({ deliverJobResult }) => deliverJobResult({ ...input, fetchImpl })) : undefined;
 	const backendExecutables = {
 		...(process.env.NAIA_CODEX_EXECUTABLE ? { codex: process.env.NAIA_CODEX_EXECUTABLE } : {}),
 		...(process.env.NAIA_CLAUDE_EXECUTABLE ? { claude: process.env.NAIA_CLAUDE_EXECUTABLE } : {}),
 	};
-	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: resolve(root, "naia-settings/.sessions/messenger-sessions/runtime"), recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send: postDiscordMessage, backendExecutables });
+	const send = fetchImpl ? (input) => postDiscordMessage({ ...input, fetchImpl }) : postDiscordMessage;
+	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: resolve(root, "naia-settings/.sessions/messenger-sessions/runtime"), recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, backendExecutables });
 	let reconnectDelay = 1_000;
 	const heartbeat = () => store.heartbeatService({ generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
 	heartbeat();
@@ -52,7 +55,7 @@ export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, 
 	const watchdogIntervalSeconds = Math.max(1, Math.min(config.runtime?.heartbeatSeconds ?? 10, config.runtime?.noProgressInterventionSeconds ?? config.runtime?.softSilenceSeconds ?? 120, config.runtime?.operatorResponseSeconds ?? 30));
 	const watchdogTimer = setInterval(() => { void router.watchdog().catch(() => {}); }, watchdogIntervalSeconds * 1_000);
 	watchdogTimer.unref?.();
-	const stop = () => { stopping = true; gateway?.close(1_000); wakeReconnect?.(); };
+	const stop = () => { stopping = true; gateway?.close(1_000); wakeReconnect?.(); wakeStop?.({ resumable: false }); };
 	signalSource.once?.("SIGTERM", stop);
 	signalSource.once?.("SIGINT", stop);
 	try {
@@ -67,7 +70,7 @@ export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, 
 				onDispatch: (type, data, sequence) => { if (type === "READY" || type === "RESUMED") reconnectDelay = 1_000; return router.onDispatch(type, data, sequence); },
 			});
 			gateway.connect();
-			const event = await closed;
+			const event = await Promise.race([closed, stopRequested]);
 			if (stopping) break;
 			if (event.resumable === false) { stopping = true; break; }
 			await Promise.race([sleep(reconnectDelay), new Promise((resolveWake) => { wakeReconnect = resolveWake; })]);
@@ -77,6 +80,7 @@ export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, 
 	} finally {
 		clearInterval(heartbeatTimer);
 		clearInterval(watchdogTimer);
+		await gateway?.drain();
 		await router.shutdown();
 		stopping = true;
 		heartbeat();
@@ -85,6 +89,16 @@ export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, 
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-	try { await runDiscordService({ adkRoot: parseRoot(process.argv.slice(2)) }); }
-	catch { console.error("naia-discord-service: startup_or_runtime_failure"); process.exitCode = 1; }
+	let exitCode = 0;
+	try {
+		await runDiscordService({ adkRoot: parseRoot(process.argv.slice(2)) });
+	}
+	catch {
+		console.error("naia-discord-service: startup_or_runtime_failure");
+		exitCode = 1;
+	}
+	// Native WebSocket implementations can retain a closing socket handle
+	// after shutdown succeeds or fails. The service process owns no reusable
+	// in-memory state, so terminate after the durable cleanup attempt returns.
+	process.exit(exitCode);
 }

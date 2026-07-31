@@ -1,5 +1,8 @@
 const DEFAULT_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
-const DISCORD_INTENTS = 1 | 512 | 4_096 | 32_768;
+// Message content is still delivered for DMs and messages that mention the bot.
+// Those are the only accepted scopes, so a privileged MESSAGE_CONTENT intent is
+// unnecessary and would make a fresh bot fail with Gateway close code 4014.
+const DISCORD_INTENTS = 1 | 512 | 4_096;
 
 function safeGatewayUrl(value) {
 	const url = new URL(value ?? DEFAULT_GATEWAY_URL);
@@ -49,6 +52,10 @@ export class DiscordGatewaySession {
 	close(code = 1_000) {
 		this.#stopHeartbeat();
 		this.socket?.close(code);
+	}
+
+	drain() {
+		return this.dispatchChain;
 	}
 
 	#send(payload) {

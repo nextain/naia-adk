@@ -55,6 +55,7 @@ export function validateDiscordBindings(bindings) {
 		if (!Array.isArray(binding.allowedUserIds) || binding.allowedUserIds.length === 0) throw new Error("binding allowedUserIds is required");
 		binding.allowedUserIds.forEach((value) => snowflake(value, "allowedUserId"));
 		if (!new Set(["mentioned", "always"]).has(binding.respondWhen ?? "mentioned")) throw new Error("unsupported respondWhen policy");
+		if (binding.kind !== "dm" && binding.respondWhen === "always") throw new Error("guild and thread bindings require mentioned responses");
 		if (binding.canStartConversation !== true && binding.canStartConversation !== false) throw new Error("canStartConversation must be boolean");
 		if (binding.operatorActions !== undefined && typeof binding.operatorActions !== "boolean") throw new Error("operatorActions must be boolean");
 		if (binding.kind === "dm" && !binding.userId && !binding.channelId) throw new Error("DM binding requires userId or channelId");

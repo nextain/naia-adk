@@ -361,6 +361,21 @@ test("DSO-002 rejects a second live service generation", () => {
 	store.close();
 });
 
+test("DSO-002 lets the current service generation record a clean stop", () => {
+	const { store } = fixture();
+	store.heartbeatService({ generation: "generation-1", pid: process.pid, now: iso() });
+	assert.doesNotThrow(() => store.heartbeatService({ generation: "generation-1", status: "stopped", pid: null, now: iso(1_000) }));
+	assert.equal(store.status({ nowMs: Date.parse(iso(1_000)) }).service.state, "stopped");
+	store.close();
+});
+
+test("DSO-002 rejects a clean-stop claim without owner identity evidence", () => {
+	const { store } = fixture({ readBootId: () => null, readProcessStartIdentity: () => null });
+	store.heartbeatService({ generation: "generation-1", pid: process.pid, now: iso() });
+	assert.throws(() => store.heartbeatService({ generation: "generation-1", status: "stopped", pid: null, now: iso(1_000) }), /ownership conflict within generation/);
+	store.close();
+});
+
 test("DSO-006 permits a new service generation across a boot boundary", () => {
 	let bootId = "11111111-1111-1111-1111-111111111111";
 	const { store } = fixture({ readBootId: () => bootId, readProcessStartIdentity: () => "1" });

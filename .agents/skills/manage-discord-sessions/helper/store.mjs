@@ -520,23 +520,41 @@ export class SessionStore {
 		canonicalTimestamp(now, "heartbeat time");
 		if (bootId !== null) safeIdentifier(bootId, "bootId");
 		if (processStartIdentity !== null) safeIdentifier(processStartIdentity, "processStartIdentity");
-		const existing = this.db.prepare("SELECT * FROM service_state WHERE id = 1").get();
-		if (existing) {
-			const sameOwnerTuple = existing.pid === pid && existing.boot_id === bootId && existing.process_start_identity === processStartIdentity;
-			if (existing.generation === generation && !sameOwnerTuple) throw new Error(`service ownership conflict within generation ${generation}`);
-			if (existing.generation !== generation && existing.boot_id === bootId) {
-				const existingHealth = projectServiceHealth(existing, Date.parse(now));
-				if (!new Set(["stopped", "stale"]).has(existingHealth.state)) throw new Error(`service ownership conflict with generation ${existing.generation}`);
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const existing = this.db.prepare("SELECT * FROM service_state WHERE id = 1").get();
+			if (existing) {
+				const sameOwnerTuple = existing.pid === pid && existing.boot_id === bootId && existing.process_start_identity === processStartIdentity;
+				const currentOwnerStartIdentity = this.readProcessStartIdentity(process.pid);
+				const stoppingCurrentOwner = existing.generation === generation
+					&& status === "stopped"
+					&& pid === null
+					&& existing.pid === process.pid
+					&& bootId !== null
+					&& existing.boot_id !== null
+					&& existing.boot_id === bootId
+					&& currentOwnerStartIdentity !== null
+					&& existing.process_start_identity !== null
+					&& existing.process_start_identity === currentOwnerStartIdentity;
+				if (existing.generation === generation && !sameOwnerTuple && !stoppingCurrentOwner) throw new Error(`service ownership conflict within generation ${generation}`);
+				if (existing.generation !== generation && existing.boot_id === bootId) {
+					const existingHealth = projectServiceHealth(existing, Date.parse(now));
+					if (!new Set(["stopped", "stale"]).has(existingHealth.state)) throw new Error(`service ownership conflict with generation ${existing.generation}`);
+				}
 			}
+			this.db.prepare(`
+				INSERT INTO service_state(id, generation, status, pid, started_at, heartbeat_at, boot_id, process_start_identity)
+				VALUES(1, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(id) DO UPDATE SET generation = excluded.generation, status = excluded.status,
+					pid = excluded.pid, heartbeat_at = excluded.heartbeat_at, boot_id = excluded.boot_id,
+					process_start_identity = excluded.process_start_identity
+			`).run(generation, status, pid, now, now, bootId, processStartIdentity);
+			this.db.exec("COMMIT");
+			return generation;
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
 		}
-		this.db.prepare(`
-			INSERT INTO service_state(id, generation, status, pid, started_at, heartbeat_at, boot_id, process_start_identity)
-			VALUES(1, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(id) DO UPDATE SET generation = excluded.generation, status = excluded.status,
-				pid = excluded.pid, heartbeat_at = excluded.heartbeat_at, boot_id = excluded.boot_id,
-				process_start_identity = excluded.process_start_identity
-		`).run(generation, status, pid, now, now, bootId, processStartIdentity);
-		return generation;
 	}
 
 	createJob({
