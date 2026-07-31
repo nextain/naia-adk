@@ -9,20 +9,27 @@ import { loadOrCreateRecoveryKey, RecoveryCodec } from "./recovery-crypto.mjs";
 import { DiscordStatusProjection } from "./discord-projection.mjs";
 import { discordScopeKey } from "./discord-scope.mjs";
 import { postDiscordMessage } from "./discord-delivery.mjs";
+import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
 
-function parseRoot(argv) {
-	const index = argv.indexOf("--adk-root");
-	if (index < 0 || !argv[index + 1] || argv[index + 1].startsWith("--")) throw new Error("--adk-root is required");
-	if (argv.length !== 2) throw new Error("unsupported service arguments");
-	return resolve(argv[index + 1]);
+function parseServiceArguments(argv) {
+	const rootIndex = argv.indexOf("--adk-root");
+	const instanceIndex = argv.indexOf("--instance");
+	if (rootIndex < 0 || !argv[rootIndex + 1] || argv[rootIndex + 1].startsWith("--")) throw new Error("--adk-root is required");
+	if (instanceIndex >= 0 && (!argv[instanceIndex + 1] || argv[instanceIndex + 1].startsWith("--"))) throw new Error("--instance requires a value");
+	if (argv.length !== (instanceIndex >= 0 ? 4 : 2)) throw new Error("unsupported service arguments");
+	return {
+		adkRoot: resolve(argv[rootIndex + 1]),
+		instance: normalizeMessengerInstance(instanceIndex >= 0 ? argv[instanceIndex + 1] : "default"),
+	};
 }
 
-export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)), signalSource = process } = {}) {
+export async function runDiscordService({ adkRoot, instance = "default", webSocketFactory, fetchImpl, sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)), signalSource = process } = {}) {
 	const root = resolve(adkRoot);
-	const config = loadMessengerConfig(resolve(root, "naia-settings/messenger-sessions/config.json"));
-	const token = new FileCredentialResolver(resolve(root, "naia-settings/.keys/messenger-sessions")).resolve(config.discord.credentialRef);
-	const store = new SessionStore(resolve(root, "naia-settings/.sessions/messenger-sessions/runtime.sqlite3"));
-	const recoveryCodec = new RecoveryCodec(loadOrCreateRecoveryKey(resolve(root, "naia-settings/.keys/messenger-sessions/session-recovery-key")));
+	const paths = messengerInstancePaths(root, instance);
+	const config = loadMessengerConfig(paths.configPath);
+	const token = new FileCredentialResolver(paths.credentialsDirectory).resolve(config.discord.credentialRef);
+	const store = new SessionStore(paths.databasePath);
+	const recoveryCodec = new RecoveryCodec(loadOrCreateRecoveryKey(paths.recoveryKeyPath));
 	const projection = config.observability?.discordStatusProjection === true ? new DiscordStatusProjection({ store, token, botUserId: config.discord.botUserId, fetchImpl }) : null;
 	const generation = randomUUID();
 	let stopping = false;
@@ -36,7 +43,7 @@ export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, 
 		...(process.env.NAIA_CLAUDE_EXECUTABLE ? { claude: process.env.NAIA_CLAUDE_EXECUTABLE } : {}),
 	};
 	const send = fetchImpl ? (input) => postDiscordMessage({ ...input, fetchImpl }) : postDiscordMessage;
-	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: resolve(root, "naia-settings/.sessions/messenger-sessions/runtime"), recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, backendExecutables });
+	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: paths.runtimeRoot, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, backendExecutables });
 	let reconnectDelay = 1_000;
 	const heartbeat = () => store.heartbeatService({ generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
 	heartbeat();
@@ -91,7 +98,7 @@ export async function runDiscordService({ adkRoot, webSocketFactory, fetchImpl, 
 if (import.meta.url === `file://${process.argv[1]}`) {
 	let exitCode = 0;
 	try {
-		await runDiscordService({ adkRoot: parseRoot(process.argv.slice(2)) });
+		await runDiscordService(parseServiceArguments(process.argv.slice(2)));
 	}
 	catch {
 		console.error("naia-discord-service: startup_or_runtime_failure");

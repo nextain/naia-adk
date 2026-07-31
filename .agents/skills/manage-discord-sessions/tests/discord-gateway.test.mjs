@@ -9,8 +9,9 @@ import { deliverJobResult } from "../helper/discord-delivery.mjs";
 import { DiscordGatewaySession, MemoryGatewayState, StoredGatewayState } from "../helper/discord-gateway.mjs";
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
-import { renderDiscordUserUnit } from "../helper/systemd.mjs";
+import { discordUnitIdentity, renderDiscordUserUnit } from "../helper/systemd.mjs";
 import { installServiceCommands, renderOperatorLauncher, resolveBackendExecutable } from "../helper/service-manager.mjs";
+import { messengerInstancePaths, normalizeMessengerInstance } from "../helper/instance-paths.mjs";
 import { RecoveryCodec } from "../helper/recovery-crypto.mjs";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -342,6 +343,27 @@ test("DSG-008 renders a stable isolated user service with restart and single-own
 	assert.equal(first.content, second.content);
 	for (const required of ["flock", "--nonblock", "Restart=on-failure", "KillMode=mixed", "UMask=0077", "WantedBy=default.target"]) assert.equal(first.content.includes(required), true);
 	assert.equal(/token|prompt|result/i.test(first.content), false);
+});
+
+test("DSG-008 isolates named bot instances while preserving the default instance contract", () => {
+	const { root } = fixture();
+	const defaultPaths = messengerInstancePaths(root);
+	const alphaPaths = messengerInstancePaths(root, "alpha");
+	assert.equal(defaultPaths.configPath, join(root, "naia-settings/messenger-sessions/config.json"));
+	assert.equal(defaultPaths.databasePath, join(root, "naia-settings/.sessions/messenger-sessions/runtime.sqlite3"));
+	assert.equal(alphaPaths.configPath, join(root, "naia-settings/messenger-sessions/instances/alpha/config.json"));
+	assert.equal(alphaPaths.databasePath, join(root, "naia-settings/.sessions/messenger-sessions/instances/alpha/runtime.sqlite3"));
+	assert.notEqual(alphaPaths.lockPath, defaultPaths.lockPath);
+	assert.notEqual(alphaPaths.recoveryKeyPath, defaultPaths.recoveryKeyPath);
+	const defaultUnit = discordUnitIdentity(root);
+	const alphaUnit = discordUnitIdentity(root, "alpha");
+	assert.notEqual(alphaUnit.unitName, defaultUnit.unitName);
+	const alpha = renderDiscordUserUnit({ adkRoot: root, instance: "alpha", nodePath: "/usr/bin/node" });
+	assert.equal(alpha.instance, "alpha");
+	assert.match(alpha.content, /--instance" "alpha"/);
+	assert.match(alpha.content, /Description=Naia ADK Discord sessions \(alpha\)/);
+	assert.throws(() => normalizeMessengerInstance("../alpha"), /lowercase identifier/);
+	assert.throws(() => normalizeMessengerInstance("Alpha"), /lowercase identifier/);
 });
 
 test("DSG-008 pins the selected backend executable independently of the systemd PATH", () => {

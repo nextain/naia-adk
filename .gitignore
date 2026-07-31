@@ -112,6 +112,11 @@ review-*.txt
 rerun-*.txt
 
 nul
+# Local messenger credentials, configuration, and durable runtime state
+/naia-settings/.keys/
+/naia-settings/.sessions/
+/naia-settings/messenger-sessions/config.json
+/naia-settings/messenger-sessions/instances/
 .claude/beh-sign-key
 
 # 보안(보안 리뷰 HIGH): 머신로컬·런타임상태·prod토큰·제3자 PII 비추적

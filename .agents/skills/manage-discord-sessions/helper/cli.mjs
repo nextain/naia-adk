@@ -2,6 +2,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { SessionStore } from "./store.mjs";
+import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
 
 class UsageError extends Error {}
 
@@ -16,10 +17,10 @@ function parseArgs(argv) {
 		else if (value === "--once") options.once = true;
 		else if (value === "--active") options.active = true;
 		else if (value === "--failed") options.failed = true;
-		else if (value === "--adk-root" || value === "--job") {
+		else if (value === "--adk-root" || value === "--job" || value === "--instance") {
 			const next = argv[index + 1];
 			if (!next || next.startsWith("--")) throw new UsageError(`${value} requires a value`);
-			options[value === "--adk-root" ? "adkRoot" : "jobId"] = next;
+			options[value === "--adk-root" ? "adkRoot" : value === "--instance" ? "instance" : "jobId"] = next;
 			index += 1;
 		} else if (value.startsWith("--")) throw new UsageError(`unknown option: ${value}`);
 		else positional.push(value);
@@ -40,7 +41,7 @@ function validateInvocation(positional, options) {
 	if (positional.length !== expectedPositionals) throw new UsageError(`invalid arguments for ${command}`);
 	if (command === "jobs" && options.active && options.failed) throw new UsageError("--active and --failed are mutually exclusive");
 	for (const [key, value] of Object.entries(options)) {
-		if (key === "adkRoot" || value === false || value === undefined) continue;
+		if (key === "adkRoot" || key === "instance" || value === false || value === undefined) continue;
 		if (!allowed[command].has(key)) throw new UsageError(`option --${key} is not valid for ${command}`);
 	}
 	return command;
@@ -67,7 +68,8 @@ try {
 	process.exit(error instanceof UsageError ? 2 : 1);
 }
 const adkRoot = resolve(options.adkRoot ?? process.env.NAIA_ADK_PATH ?? process.cwd());
-const databasePath = resolve(adkRoot, "naia-settings/.sessions/messenger-sessions/runtime.sqlite3");
+const instance = normalizeMessengerInstance(options.instance ?? process.env.NAIA_MESSENGER_INSTANCE ?? "default");
+const databasePath = messengerInstancePaths(adkRoot, instance).databasePath;
 
 if (!existsSync(databasePath) && command === "status") {
 	const empty = {
