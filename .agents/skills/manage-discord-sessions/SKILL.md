@@ -49,6 +49,11 @@ scripts/manage-discord-sessions.sh service status
 scripts/manage-discord-sessions.sh service restart
 ```
 
+After `service install`, the same deterministic script is available on the
+interactive user `PATH` as `naia`, for example `naia status`, `naia jobs
+--active`, and `naia job <job-id> --events`. This is a generated launcher for
+the skill script, not a separate runtime or product CLI.
+
 `watch` polls only the local SQLite event ledger. It is not Discord REST receive polling. Stop an interactive watch with `Ctrl-C`.
 
 ## Interpreting visibility

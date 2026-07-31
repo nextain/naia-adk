@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { accessSync, chmodSync, constants as fsConstants, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
 import { delimiter, isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -31,6 +31,32 @@ export function installServiceCommands(unitName) {
 	return [["enable", unitName], ["restart", unitName]];
 }
 
+const OPERATOR_LAUNCHER_MARKER = "# managed by naia-adk manage-discord-sessions";
+
+function shellQuote(value) {
+	return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
+}
+
+export function renderOperatorLauncher(adkRoot) {
+	const script = resolve(realpathSync(adkRoot), ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh");
+	return `#!/usr/bin/env bash\n${OPERATOR_LAUNCHER_MARKER}\nset -euo pipefail\nexec ${shellQuote(script)} "$@"\n`;
+}
+
+function installOperatorLauncher(adkRoot) {
+	const directory = resolve(homedir(), ".local/bin");
+	const path = resolve(directory, "naia");
+	const content = renderOperatorLauncher(adkRoot);
+	mkdirSync(directory, { recursive: true, mode: 0o755 });
+	if (existsSync(path)) {
+		const stat = lstatSync(path);
+		if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("existing naia command is not a replaceable managed file");
+		if (!readFileSync(path, "utf8").includes(OPERATOR_LAUNCHER_MARKER)) throw new Error("existing naia command is not managed by this installer");
+	}
+	writeFileSync(path, content, { mode: 0o755 });
+	chmodSync(path, 0o755);
+	return path;
+}
+
 export function manageService({ adkRoot, command }) {
 	const config = command === "unit" ? null : loadMessengerConfig(resolve(adkRoot, "naia-settings/messenger-sessions/config.json"));
 	const backendExecutables = command === "install" ? { [config.backend.selected]: resolveBackendExecutable(config.backend.selected) } : {};
@@ -42,13 +68,14 @@ export function manageService({ adkRoot, command }) {
 		chmodSync(resolve(adkRoot, "naia-settings/.sessions/messenger-sessions"), 0o700);
 		mkdirSync(unitDirectory, { recursive: true, mode: 0o700 });
 		writeFileSync(unitPath, rendered.content, { mode: 0o600 });
+		const launcherPath = installOperatorLauncher(adkRoot);
 		runSystemctl(["daemon-reload"]);
 		if (config.service?.startAt === "boot") {
 			const linger = spawnSync("loginctl", ["enable-linger", userInfo().username], { encoding: "utf8" });
 			if (linger.status !== 0) throw new Error((linger.stderr || linger.stdout || "could not enable user lingering").trim());
 		}
 		if (config.service?.autoStart !== false) for (const args of installServiceCommands(rendered.unitName)) runSystemctl(args);
-		return `installed ${rendered.unitName}`;
+		return `installed ${rendered.unitName} and ${launcherPath}`;
 	}
 	if (command === "status") return runSystemctl(["status", "--no-pager", rendered.unitName]);
 	if (new Set(["start", "stop", "restart", "enable", "disable"]).has(command)) {
