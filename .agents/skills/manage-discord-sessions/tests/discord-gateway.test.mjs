@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { authorizeDiscordMessage, validateDiscordBindings } from "../helper/discord-scope.mjs";
-import { deliverJobResult } from "../helper/discord-delivery.mjs";
+import { deliverJobResult, postDiscordDirectMessage } from "../helper/discord-delivery.mjs";
 import { DiscordGatewaySession, MemoryGatewayState, StoredGatewayState } from "../helper/discord-gateway.mjs";
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
@@ -100,6 +100,18 @@ test("DSG-003 records a delivery before POST and never automatically resends an 
 	store.close();
 	const bytes = readFileSync(databasePath);
 	assert.equal(bytes.includes(Buffer.from("done /var/home/luke/private")), false);
+});
+
+test("DSG-003 opens an operator DM and confirms the sent message identity", async () => {
+	const calls = [];
+	const receipt = await postDiscordDirectMessage({ token: "token-value-long-enough", userId: USER, content: "operator handoff", nonce: "dm-nonce", botUserId: BOT, fetchImpl: async (url, init) => {
+		calls.push({ url, body: JSON.parse(init.body) });
+		if (calls.length === 1) return { ok: true, status: 200, json: async () => ({ id: CHANNEL }) };
+		return { ok: true, status: 200, json: async () => ({ id: "666666666666666666", channel_id: CHANNEL, author: { id: BOT }, nonce: "dm-nonce" }) };
+	} });
+	assert.equal(receipt.state, "confirmed");
+	assert.deepEqual(calls[0].body, { recipient_id: USER });
+	assert.equal(calls[1].url.endsWith(`/channels/${CHANNEL}/messages`), true);
 });
 
 class FakeSocket {
@@ -374,6 +386,20 @@ test("DSG-019 reports a terminal backend failure to the originating Discord scop
 	assert.equal(sent.length, 2);
 	assert.match(sent[1], /일정 시간 동안 진행이 없어/);
 	assert.match(sent[1], new RegExp(accepted.jobId));
+	store.close();
+});
+
+test("DSG-020 delegates an explicit DM request to the parent Discord service", async () => {
+	const { store, root } = fixture();
+	let dmInput = null;
+	let deliveredContent = null;
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding(), { ...binding("dm"), operatorActions: true }], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), send: async () => ({ state: "confirmed" }), directMessage: async (input) => { dmInput = input; return { state: "confirmed", messageId: "777777777777777777" }; }, deliver: async (input) => { deliveredContent = input.content; return { state: "confirmed" }; }, runner: async () => ({ backendOutcome: "success", attemptId: "dm-attempt", transientResult: JSON.stringify({ discordDm: { content: "restart command", successReply: "DM을 보냈습니다.", failureReply: "DM 발송에 실패했습니다." } }) }) });
+	await router.onDispatch("MESSAGE_CREATE", { id: "181818181818181818", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> DM으로 보내줘` }, 16);
+	await router.waitForIdle();
+	assert.equal(dmInput.userId, USER);
+	assert.equal(dmInput.content, "restart command");
+	assert.equal(deliveredContent, "DM을 보냈습니다.");
 	store.close();
 });
 

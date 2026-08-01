@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getBackendAdapter } from "./adapters.mjs";
 import { authorizeDiscordMessage } from "./discord-scope.mjs";
-import { deliverJobResult, formatOperatorStatus } from "./discord-delivery.mjs";
+import { deliverJobResult, formatOperatorStatus, postDiscordDirectMessage } from "./discord-delivery.mjs";
 import { runBackendAttempt } from "./backend-runner.mjs";
 import { commandOptionsForProfile, currentExecutionProfile, sameExecutionProfile } from "./execution-profile.mjs";
 import { promptWithDiscordConversation } from "./discord-conversation.mjs";
@@ -27,7 +27,20 @@ function transientPrompt(message, botUserId, config) {
 	if (typeof message.content !== "string" || message.content.length > 4_000) throw new Error("Discord content is missing or too large");
 	const userText = message.content.replaceAll(`<@${botUserId}>`, "").replaceAll(`<@!${botUserId}>`, "").trim();
 	if (!userText) throw new Error("Discord prompt is empty after mention removal");
-	return [`Persona: ${config.persona.name}`, config.persona.instructions, `Role: ${config.role.name}`, `Allowed actions: ${config.role.allowedActions.join(", ")}`, "Communication: Reply in the language used by the user. Before tool work, provide a brief analysis and action plan as an intermediate update. During long work, report meaningful findings or phase changes before the final verified result. Do not repeat generic status text.", "User request:", userText].join("\n");
+	return [`Persona: ${config.persona.name}`, config.persona.instructions, `Role: ${config.role.name}`, `Allowed actions: ${config.role.allowedActions.join(", ")}`, "Communication: Reply in the language used by the user. Before tool work, provide a brief analysis and action plan as an intermediate update. During long work, report meaningful findings or phase changes before the final verified result. Do not repeat generic status text.", "Discord DM delegation: Never access Discord directly. Only when the user explicitly requests a DM, return exactly one JSON object and no other final text: {\"discordDm\":{\"content\":\"message to send\",\"successReply\":\"confirmation in the user's language\",\"failureReply\":\"failure notice in the user's language\"}}.", "User request:", userText].join("\n");
+}
+
+function parseDiscordDmRequest(value) {
+	try {
+		const parsed = JSON.parse(value);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Object.keys(parsed).length !== 1) return null;
+		const request = parsed.discordDm;
+		if (!request || typeof request !== "object" || Array.isArray(request)) return null;
+		if (typeof request.content !== "string" || request.content.length < 1 || request.content.length > 2_000) return null;
+		if (typeof request.successReply !== "string" || request.successReply.length < 1 || request.successReply.length > 2_000) return null;
+		if (typeof request.failureReply !== "string" || request.failureReply.length < 1 || request.failureReply.length > 2_000) return null;
+		return request;
+	} catch { return null; }
 }
 
 function commandText(message, botUserId) {
@@ -35,7 +48,7 @@ function commandText(message, botUserId) {
 }
 
 export class DiscordMessageRouter {
-	constructor({ config, store, token, botUserId, cwd, runtimeRoot, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, send = null, loadHistory = null, backendExecutables = {}, now = () => Date.now() }) {
+	constructor({ config, store, token, botUserId, cwd, runtimeRoot, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, directMessage = postDiscordDirectMessage, send = null, loadHistory = null, backendExecutables = {}, now = () => Date.now() }) {
 		if (typeof send !== "function") throw new Error("confirmed Discord sender is required");
 		this.config = config;
 		this.store = store;
@@ -45,6 +58,7 @@ export class DiscordMessageRouter {
 		this.runtimeRoot = runtimeRoot;
 		this.runner = runner;
 		this.deliver = deliver;
+		this.directMessage = directMessage;
 		this.send = send;
 		this.loadHistory = loadHistory;
 		this.backendExecutables = backendExecutables;
@@ -245,7 +259,15 @@ export class DiscordMessageRouter {
 				return;
 			}
 			if (!result.transientResult) throw new Error("backend returned no deliverable final result");
-			await this.deliver({ store: this.store, jobId: item.jobId, attemptId: result.attemptId, token: this.token, botUserId: this.botUserId, channelId: item.channelId, content: result.transientResult, signal: controller.signal });
+			let finalContent = result.transientResult;
+			const dmRequest = parseDiscordDmRequest(finalContent);
+			if (dmRequest) {
+				const bindings = this.config.discord.bindings.filter((binding) => binding.kind === "dm" && binding.operatorActions === true && typeof binding.userId === "string");
+				let receipt = { state: "failed", reasonCode: "dm_binding_ambiguous" };
+				if (this.config.role.allowedActions.includes("reply") && bindings.length === 1) receipt = await this.directMessage({ token: this.token, userId: bindings[0].userId, content: dmRequest.content, nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal: controller.signal });
+				finalContent = receipt.state === "confirmed" ? dmRequest.successReply : dmRequest.failureReply;
+			}
+			await this.deliver({ store: this.store, jobId: item.jobId, attemptId: result.attemptId, token: this.token, botUserId: this.botUserId, channelId: item.channelId, content: finalContent, signal: controller.signal });
 		} catch {
 			const job = this.store.getJob(item.jobId);
 			if (job && !["failed", "cancelled", "completed", "recovery_review"].includes(job.lifecycle)) {

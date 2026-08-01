@@ -36,6 +36,25 @@ export async function postDiscordMessage({ token, channelId, content, nonce, bot
 	} finally { clearTimeout(timeout); signal?.removeEventListener("abort", abort); }
 }
 
+export async function postDiscordDirectMessage({ token, userId, content, nonce, botUserId, fetchImpl = fetch, signal, timeoutMs = 15_000 }) {
+	snowflake(userId, "userId");
+	if (typeof token !== "string" || token.length < 16) throw new Error("Discord credential is not ready");
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true });
+	const timeout = setTimeout(abort, timeoutMs);
+	timeout.unref?.();
+	try {
+		const response = await fetchImpl(`${DISCORD_API}/users/@me/channels`, { method: "POST", headers: { authorization: `Bot ${token}`, "content-type": "application/json" }, body: JSON.stringify({ recipient_id: userId }), signal: controller.signal });
+		if (!response.ok) return response.status >= 400 && response.status < 500 ? { state: "failed", reasonCode: response.status === 401 || response.status === 403 ? "authorization" : "request_rejected", status: response.status } : { state: "unknown", reasonCode: "server_response_unknown", status: response.status };
+		const body = await response.json();
+		const channelId = snowflake(body.id, "channelId");
+		return postDiscordMessage({ token, channelId, content, nonce, botUserId, fetchImpl, signal, timeoutMs });
+	} catch {
+		return { state: "unknown", reasonCode: "network_result_unknown", status: null };
+	} finally { clearTimeout(timeout); signal?.removeEventListener("abort", abort); }
+}
+
 export async function deliverJobResult({ store, jobId, attemptId, token, channelId, botUserId, content, fetchImpl = fetch, signal, now = () => new Date().toISOString() }) {
 	const safeContent = sanitizeFinalResponse(content);
 	const candidateNonce = randomUUID().replaceAll("-", "").slice(0, 24);
