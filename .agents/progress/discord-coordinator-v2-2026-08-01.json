@@ -1,0 +1,44 @@
+{
+  "issue": "nextain/naia-adk#18 — Discord conversation coordinator recovery",
+  "issue_url": "https://github.com/nextain/naia-adk/issues/18",
+  "title": "Replace per-message direct Discord jobs with local per-scope coordinators and delegated workers",
+  "current_phase": "integration",
+  "gates_cleared": ["understand", "scope", "investigate", "plan_review", "implementation", "development_review", "test"],
+  "req_ids": ["DSO-007", "DSO-008"],
+  "scope_mode": "SELECTIVE_EXPANSION",
+  "constraints": [
+    "Do not access or mutate OnMam, GCP, church sites, databases, or migration jobs",
+    "Preserve the proven Gateway, authorization, private SQLite ledger, child isolation, and systemd ownership",
+    "Do not automatically replay historical recovery_review jobs",
+    "A Discord receipt or status projection must never gate model work",
+    "One failed worker or delivery must not block later messages in the same scope"
+  ],
+  "key_decisions": [
+    "Replace only the conversation and work-dispatch layer; do not rewrite the transport or security core",
+    "Maintain one provider-neutral local coordinator record per Discord DM/channel/thread scope",
+    "Coordinator turns are serialized per scope and remain responsive while delegated workers run independently",
+    "Codex/Claude workers remain isolated subprocesses without Discord credentials",
+    "Acknowledgements and progress reports are best-effort outputs, not execution preconditions"
+  ],
+  "plan": [
+    {"step": 1, "task": "Freeze the v2 coordinator and non-blocking delivery contracts", "status": "completed", "verification": "two-agent planning review plus contract tests"},
+    {"step": 2, "task": "Add provider-neutral per-scope state, policy revision, and bounded continuity", "status": "completed", "verification": "policy rotation and encrypted recovery coverage"},
+    {"step": 3, "task": "Replace per-message direct execution with coordinator reply-or-delegate routing", "status": "completed", "verification": "active-worker status and coordinator synthesis tests"},
+    {"step": 4, "task": "Decouple acknowledgement, progress, final delivery, and historical review state", "status": "completed", "verification": "receipt failure and delivery-unknown lifecycle tests"},
+    {"step": 5, "task": "Replace false-green status and preservation gates with user-outcome metrics", "status": "completed", "verification": "current work, historical unresolved, and delivery issue separation"},
+    {"step": 6, "task": "Run full deterministic, build, adversarial, and isolated live Discord tests", "status": "in_progress", "verification": "focused suite passes; full build blocked by absent worktree dependencies; isolated live rollout pending"},
+    {"step": 7, "task": "Deploy one instance at a time with rollback and no historical auto-replay", "status": "pending", "verification": "service/Gateway/coordinator round-trip after each instance"}
+  ],
+  "alternatives": [
+    {"option": "Continue patching the current router", "decision": "rejected", "reason": "The acknowledgement gate and ephemeral-session model are the root architecture, not isolated bugs"},
+    {"option": "Rewrite the entire Discord stack", "decision": "rejected", "reason": "Gateway, authorization, state privacy, process isolation, and service ownership are independently useful and tested"},
+    {"option": "Replace only conversation/work orchestration", "decision": "selected", "reason": "Smallest change that restores the user-approved coordinator/subagent model"}
+  ],
+  "premortem": [
+    "A coordinator resume failure strands a scope: reseed a fresh coordinator from bounded Discord history and durable open-work summaries",
+    "A long worker blocks conversation: coordinator and worker lanes are separate; only coordinator turns serialize",
+    "REST send failure recreates head-of-line blocking: delivery never participates in queue admission or worker launch"
+  ],
+  "blockers": [],
+  "updated_at": "2026-08-01T14:30:00Z"
+}

@@ -45,6 +45,7 @@ const EVENT_SOURCES = new Map([
 	["delivery_started", new Set(["helper"])],
 	["delivery_confirmed", new Set(["helper", "recovery"])],
 	["delivery_unknown", new Set(["helper", "recovery"])],
+	["delivery_failed", new Set(["helper", "recovery"])],
 	["recovered", new Set(["recovery"])],
 	["profile_replaced", new Set(["recovery", "helper"])],
 	["recovery_review_required", new Set(["recovery"])],
@@ -141,7 +142,7 @@ function transitionFor(kind, current) {
 		case "operator_response_sent":
 			return current;
 		case "operator_response_missed":
-			return ["completed", "failed", "cancelled", "recovery_review"].includes(current) ? current : "recovery_review";
+			return current;
 		case "verification_recorded":
 			return current;
 		case "attempt_succeeded":
@@ -153,7 +154,8 @@ function transitionFor(kind, current) {
 		case "delivery_started":
 			return "delivering";
 		case "delivery_unknown":
-			return "recovery_review";
+		case "delivery_failed":
+			return "completed";
 		case "delivery_confirmed":
 		case "completed":
 			return "completed";
@@ -338,6 +340,13 @@ export class SessionStore {
 				message_id TEXT NOT NULL,
 				updated_at TEXT NOT NULL
 			);
+			CREATE TABLE IF NOT EXISTS coordinator_scopes (
+				scope_key TEXT PRIMARY KEY,
+				policy_revision TEXT NOT NULL,
+				last_ingress_id TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			);
 			CREATE INDEX IF NOT EXISTS job_events_job_ordinal ON job_events(job_id, ordinal);
 			CREATE INDEX IF NOT EXISTS jobs_updated_at ON jobs(updated_at DESC);
 			CREATE UNIQUE INDEX IF NOT EXISTS delivery_attempt_job ON delivery_attempts(job_id, attempt_id);
@@ -353,6 +362,31 @@ export class SessionStore {
 		ensureColumn("jobs", "child_start_identity", "TEXT");
 		ensureColumn("jobs", "scope_key", "TEXT");
 		this.db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('schema_version', ?)").run(String(DB_SCHEMA_VERSION));
+	}
+
+	upsertCoordinatorScope({ scopeKey, policyRevision, sourceMessageId, now = new Date().toISOString() }) {
+		for (const [value, label] of [[scopeKey, "scopeKey"], [policyRevision, "policyRevision"], [sourceMessageId, "sourceMessageId"]]) safeIdentifier(value, label);
+		canonicalTimestamp(now, "coordinator scope time");
+		const existing = this.db.prepare("SELECT * FROM coordinator_scopes WHERE scope_key = ?").get(scopeKey);
+		const rotated = Boolean(existing && existing.policy_revision !== policyRevision);
+		this.db.prepare(`INSERT INTO coordinator_scopes(scope_key, policy_revision, last_ingress_id, created_at, updated_at)
+			VALUES(?, ?, ?, ?, ?)
+			ON CONFLICT(scope_key) DO UPDATE SET policy_revision=excluded.policy_revision,
+				last_ingress_id=excluded.last_ingress_id, updated_at=excluded.updated_at`)
+			.run(scopeKey, policyRevision, sourceMessageId, now, now);
+		return { scopeKey, policyRevision, rotated, lastIngressId: sourceMessageId, updatedAt: now };
+	}
+
+	getCoordinatorScope(scopeKey) {
+		safeIdentifier(scopeKey, "scopeKey");
+		const row = this.db.prepare("SELECT * FROM coordinator_scopes WHERE scope_key = ?").get(scopeKey);
+		return row ? { scopeKey: row.scope_key, policyRevision: row.policy_revision, lastIngressId: row.last_ingress_id, createdAt: row.created_at, updatedAt: row.updated_at } : null;
+	}
+
+	loadJobRecovery(jobId) {
+		safeIdentifier(jobId, "jobId");
+		const row = this.db.prepare("SELECT iv, ciphertext, tag FROM job_recovery WHERE job_id = ?").get(jobId);
+		return row ? { iv: row.iv, ciphertext: row.ciphertext, tag: row.tag } : null;
 	}
 
 	loadGatewayState() {
@@ -481,7 +515,7 @@ export class SessionStore {
 			if (!delivery) throw new Error("unknown delivery key");
 			if (delivery.status !== "started") throw new Error("delivery is already finalized");
 			this.db.prepare("UPDATE delivery_attempts SET status = ?, message_id = ?, updated_at = ? WHERE delivery_key = ?").run(status, messageId, now, deliveryKey);
-			const kind = status === "confirmed" ? "delivery_confirmed" : status === "unknown" ? "delivery_unknown" : "failed";
+			const kind = status === "confirmed" ? "delivery_confirmed" : status === "unknown" ? "delivery_unknown" : "delivery_failed";
 			this.#appendEvent({ jobId: delivery.job_id, attemptId: delivery.attempt_id, kind, source: "helper", occurredAt: now,
 				safeSummary: buildSafeEventSummary(kind, status === "failed" ? { reasonCode } : {}) });
 			this.db.exec("COMMIT");
@@ -580,6 +614,7 @@ export class SessionStore {
 		softSilenceMs = DEFAULT_SOFT_SILENCE_MS,
 		hardDeadlineAt = null,
 		requiredChecks = [],
+		recoveryEnvelope = null,
 	}) {
 		if (!backendId) throw new Error("backendId is required");
 		safeIdentifier(jobId, "jobId");
@@ -610,6 +645,7 @@ export class SessionStore {
 				`).run(check.checkId, jobId, check.kind, checkLabel, check.required === false ? 0 : 1, revision, check.allowReuse ? 1 : 0);
 			}
 			this.#appendEvent({ jobId, dedupeKey: `job_accepted:${jobId}`, kind: "job_accepted", occurredAt: now, source: "gateway", safeSummary: summary });
+			if (recoveryEnvelope) this.db.prepare("INSERT INTO job_recovery(job_id, iv, ciphertext, tag, updated_at) VALUES(?, ?, ?, ?, ?)").run(jobId, recoveryEnvelope.iv, recoveryEnvelope.ciphertext, recoveryEnvelope.tag, now);
 			this.db.exec("COMMIT");
 			this.#hardenSidecars();
 			return jobId;
@@ -769,20 +805,20 @@ export class SessionStore {
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`).run(eventId, dedupeKey, jobId, attemptId, sequence, kind, occurredAt, source, summary, json(safeMetrics), redactionLevel);
 		const progressKinds = new Set(["attempt_started", "backend_ready", "phase_changed", "output_activity", "tool_started", "tool_finished", "checkpoint_saved", "verification_recorded"]);
-			const childAlive = kind === "attempt_started" ? 1 : ["attempt_exited", "failed", "completed", "cancelled", "recovered", "recovery_review_required", "operator_response_missed", "delivery_unknown"].includes(kind) ? 0 : job.child_alive;
-		const deliveryState = kind === "delivery_started" ? "sending" : kind === "delivery_confirmed" ? "delivered" : kind === "delivery_unknown" ? "unknown" : job.delivery_state;
+		const childAlive = kind === "attempt_started" ? 1 : ["attempt_exited", "failed", "completed", "cancelled", "recovered", "recovery_review_required", "delivery_unknown", "delivery_failed"].includes(kind) ? 0 : job.child_alive;
+		const deliveryState = kind === "delivery_started" ? "sending" : kind === "delivery_confirmed" ? "delivered" : kind === "delivery_unknown" ? "unknown" : kind === "delivery_failed" ? "failed" : job.delivery_state;
 		this.db.prepare(`
 			UPDATE jobs SET attempt_id = COALESCE(?, attempt_id), lifecycle = ?, updated_at = ?,
 				started_at = CASE WHEN ? = 'attempt_started' THEN COALESCE(started_at, ?) ELSE started_at END,
 				last_progress_at = CASE WHEN ? THEN ? ELSE last_progress_at END,
 				current_activity = CASE WHEN ? THEN ? ELSE current_activity END,
 				waiting_reason = CASE WHEN ? = 'approval_required' THEN ? ELSE waiting_reason END,
-				child_alive = ?, delivery_state = ?, recovery_state = CASE WHEN ? = 'recovered' THEN 'resuming' WHEN ? IN ('recovery_review_required', 'delivery_unknown') THEN 'review_required' ELSE recovery_state END,
+				child_alive = ?, delivery_state = ?, recovery_state = CASE WHEN ? = 'recovered' THEN 'resuming' WHEN ? = 'recovery_review_required' THEN 'review_required' ELSE recovery_state END,
 				latest_safe_error = CASE WHEN ? = 'failed' THEN ? ELSE latest_safe_error END
 			WHERE job_id = ?
 		`).run(attemptId, lifecycle, occurredAt, kind, occurredAt, progressKinds.has(kind) ? 1 : 0, occurredAt,
 			progressKinds.has(kind) ? 1 : 0, summary, kind, summary, childAlive, deliveryState, kind, kind, kind, summary, jobId);
-			if (["delivery_confirmed", "completed", "failed", "cancelled", "recovery_review_required", "operator_response_missed", "delivery_unknown"].includes(kind)) this.db.prepare("DELETE FROM job_recovery WHERE job_id = ?").run(jobId);
+		if (["delivery_confirmed", "completed", "failed", "cancelled", "recovery_review_required"].includes(kind)) this.db.prepare("DELETE FROM job_recovery WHERE job_id = ?").run(jobId);
 		return { ordinal: Number(insertResult.lastInsertRowid), eventId, dedupeKey, jobId, attemptId, sequence, kind, occurredAt, source, safeSummary: summary, metrics: safeMetrics, redactionLevel };
 	}
 

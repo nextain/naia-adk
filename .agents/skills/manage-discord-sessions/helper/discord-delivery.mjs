@@ -81,7 +81,12 @@ export function formatOperatorStatus(status, jobs) {
 	const active = jobs.filter((job) => !["completed", "failed", "cancelled", "recovery_review"].includes(job.lifecycle));
 	const stalled = jobs.filter((job) => job.activityHealth.value === "suspected_stalled").length;
 	const review = jobs.filter((job) => job.lifecycle === "recovery_review").length;
-	const lines = [`Naia Discord: ${service.state} (${service.reasonCode})`, `Active ${active.length} · stalled ${stalled} · review ${review}`];
+	const deliveryIssues = jobs.filter((job) => new Set(["unknown", "failed"]).has(job.deliveryState)).length;
+	const lines = [
+		`Naia Discord service: ${service.state} (${service.reasonCode})`,
+		`Current work ${active.length} · stalled ${stalled} · delivery issues ${deliveryIssues}`,
+	];
+	if (review > 0) lines.push(`Historical unresolved ${review} (not queued)`);
 	for (const job of active.slice(0, 8)) lines.push(`${job.jobId}: ${job.lifecycle} / ${job.activityHealth.value} / ${job.currentActivity ?? job.safeSummary}`);
 	return lines.join("\n").slice(0, 2_000);
 }

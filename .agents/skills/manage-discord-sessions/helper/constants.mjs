@@ -1,3 +1,5 @@
+// coordinator_scopes is an additive, backward-compatible table so a service
+// rollback can still open the database during the staged rollout.
 export const DB_SCHEMA_VERSION = 6;
 export const OUTPUT_SCHEMA_VERSION = 1;
 
@@ -19,6 +21,7 @@ export const EVENT_KINDS = new Set([
 	"delivery_started",
 	"delivery_confirmed",
 	"delivery_unknown",
+	"delivery_failed",
 	"recovered",
 	"profile_replaced",
 	"recovery_review_required",
@@ -71,7 +74,7 @@ export const ALLOWED_TRANSITIONS = new Map([
 	["running", new Set(["queued", "running", "waiting_approval", "retry_wait", "result_ready", "delivering", "failed", "cancelled", "recovery_review"])],
 	["waiting_approval", new Set(["queued", "waiting_approval", "running", "cancelled", "failed", "recovery_review"])],
 	["retry_wait", new Set(["retry_wait", "queued", "running", "cancelled", "failed", "recovery_review"])],
-	["result_ready", new Set(["queued", "result_ready", "delivering", "cancelled", "failed", "recovery_review"])],
+	["result_ready", new Set(["queued", "result_ready", "delivering", "completed", "cancelled", "failed", "recovery_review"])],
 	["delivering", new Set(["delivering", "completed", "retry_wait", "recovery_review", "failed"])],
 	["recovery_review", new Set(["recovery_review", "queued", "completed", "failed", "cancelled"])],
 	["completed", new Set(["completed"])],
