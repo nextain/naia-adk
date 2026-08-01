@@ -346,11 +346,11 @@ test("DSG-018 injects recent context and reports safe typed progress", async () 
 	await router.onDispatch("MESSAGE_CREATE", { id: "232323232323232323", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> 이어서 고쳐줘` }, 23);
 	await router.waitForIdle();
 	assert.match(calls[0].prompt, /user: 앞 요청/);
+	assert.match(calls[0].prompt, /Reply in the language used by the user/);
 	assert.match(calls[0].prompt, /User request:\n이어서 고쳐줘$/);
-	assert.deepEqual(sent.slice(0, 3), [
+	assert.deepEqual(sent.slice(0, 2), [
 		"[메시지 받음]",
-		"진행 중: 관련 코드와 현재 상태를 확인하고 있습니다.",
-		"진행 중: 확인한 원인을 바탕으로 수정하고 있습니다.",
+		"[진행 중]",
 	]);
 	store.close();
 	assert.equal(readFileSync(databasePath).includes(Buffer.from("앞 요청")), false);
