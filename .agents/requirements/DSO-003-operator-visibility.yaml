@@ -8,7 +8,7 @@ source: human
 priority: high
 created: 2026-07-30
 updated: 2026-07-31
-issue_url: "https://github.com/nextain/naia-adk/issues/18"
+issue_url: "https://github.com/nextain/naia-adk/issues/20"
 description: |
   Codex, Claude, and a human operator use the same deterministic skill-local interface to list, inspect, and watch jobs without naia-agent or naia-shell.
 acceptance_criteria:
@@ -16,14 +16,18 @@ acceptance_criteria:
   - "A fake job event appears in job detail and watch output within two seconds."
   - "After reboot, the persisted timeline remains queryable before any AI backend is launched."
   - "A conversation receives a safe acknowledgement within the configured response window, or one watchdog handoff records the missed operator-channel response."
+  - "An operator can explicitly read history or the latest authorized author response for one exact binding, and can recover one exact attachment with size and optional SHA-256 verification."
+  - "An operator with the reply role can send one sanitized owner-only content file to one exact operator binding and receives a confirmed, failed, or unknown receipt without automatic retry."
 trace:
   code:
     - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbol: "status/jobs/job/watch", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-history.mjs", symbol: "fetchDiscordHistory/downloadDiscordAttachment/sendDiscordReply", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "scoped !naia status/jobs/job", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-projection.mjs", symbol: "DiscordStatusProjection", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "skill-local entry point", coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-003 CLI visibility tests", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-009/DSG-011 scoped and pinned projections", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-003 explicit history, attachment recovery, and reply", coverage: full }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
 decisions: []

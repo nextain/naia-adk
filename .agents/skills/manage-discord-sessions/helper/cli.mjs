@@ -2,7 +2,10 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { SessionStore } from "./store.mjs";
+import { loadMessengerConfig, FileCredentialResolver } from "./discord-config.mjs";
+import { downloadDiscordAttachment, fetchDiscordHistory, sendDiscordReply } from "./discord-history.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
+import { manageService } from "./service-manager.mjs";
 
 class UsageError extends Error {}
 
@@ -17,10 +20,11 @@ function parseArgs(argv) {
 		else if (value === "--once") options.once = true;
 		else if (value === "--active") options.active = true;
 		else if (value === "--failed") options.failed = true;
-		else if (value === "--adk-root" || value === "--job" || value === "--instance") {
+		else if (value === "--adk-root" || value === "--job" || value === "--instance" || value === "--channel" || value === "--author" || value === "--limit" || value === "--message" || value === "--attachment" || value === "--output" || value === "--expected-sha256" || value === "--content-file") {
 			const next = argv[index + 1];
 			if (!next || next.startsWith("--")) throw new UsageError(`${value} requires a value`);
-			options[value === "--adk-root" ? "adkRoot" : value === "--instance" ? "instance" : "jobId"] = next;
+			const key = { "--adk-root": "adkRoot", "--job": "jobId", "--instance": "instance", "--channel": "channelId", "--author": "authorId", "--limit": "limit", "--message": "messageId", "--attachment": "attachmentId", "--output": "outputPath", "--expected-sha256": "expectedSha256", "--content-file": "contentPath" }[value];
+			options[key] = value === "--limit" ? Number(next) : next;
 			index += 1;
 		} else if (value.startsWith("--")) throw new UsageError(`unknown option: ${value}`);
 		else positional.push(value);
@@ -35,9 +39,14 @@ function validateInvocation(positional, options) {
 		jobs: new Set(["json", "active", "failed"]),
 		job: new Set(["json", "events"]),
 		watch: new Set(["jsonl", "once", "jobId"]),
+		history: new Set(["json", "channelId", "authorId", "limit"]),
+		latest: new Set(["json", "channelId", "authorId", "limit"]),
+		attachment: new Set(["json", "channelId", "messageId", "attachmentId", "outputPath", "expectedSha256"]),
+		reply: new Set(["json", "channelId", "contentPath"]),
+		service: new Set(["json"]),
 	};
 	if (!allowed[command]) throw new UsageError(`unsupported command: ${command}`);
-	const expectedPositionals = positional.length === 0 ? 0 : command === "job" ? 2 : 1;
+	const expectedPositionals = positional.length === 0 ? 0 : new Set(["job", "service"]).has(command) ? 2 : 1;
 	if (positional.length !== expectedPositionals) throw new UsageError(`invalid arguments for ${command}`);
 	if (command === "jobs" && options.active && options.failed) throw new UsageError("--active and --failed are mutually exclusive");
 	for (const [key, value] of Object.entries(options)) {
@@ -62,6 +71,11 @@ let options;
 let command;
 try {
 	({ positional, options } = parseArgs(process.argv.slice(2)));
+	const knownCommands = new Set(["status", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service"]);
+	if (positional[0] && !knownCommands.has(positional[0])) {
+		if (options.instance) throw new UsageError("instance was specified more than once");
+		options.instance = normalizeMessengerInstance(positional.shift());
+	}
 	command = validateInvocation(positional, options);
 } catch (error) {
 	console.error(error.message);
@@ -69,7 +83,58 @@ try {
 }
 const adkRoot = resolve(options.adkRoot ?? process.env.NAIA_ADK_PATH ?? process.cwd());
 const instance = normalizeMessengerInstance(options.instance ?? process.env.NAIA_MESSENGER_INSTANCE ?? "default");
-const databasePath = messengerInstancePaths(adkRoot, instance).databasePath;
+const instancePaths = messengerInstancePaths(adkRoot, instance);
+const databasePath = instancePaths.databasePath;
+
+if (command === "service") {
+	try {
+		const result = manageService({ adkRoot, instance, command: positional[1] });
+		if (options.json) console.log(JSON.stringify({ schemaVersion: 1, command, result }, null, 2));
+		else console.log(result);
+		process.exit(0);
+	} catch (error) {
+		console.error(error.message);
+		process.exit(1);
+	}
+}
+
+if (command === "status" && (existsSync(databasePath) || instance !== "default" || existsSync(instancePaths.configPath))) {
+	try { loadMessengerConfig(instancePaths.configPath); }
+	catch (error) {
+		console.error(`Discord messenger configuration unavailable: ${error.message}`);
+		process.exit(3);
+	}
+}
+
+if (command === "history" || command === "latest" || command === "attachment" || command === "reply") {
+	try {
+		if (!options.channelId) throw new UsageError(`--channel is required for ${command}`);
+		const paths = messengerInstancePaths(adkRoot, instance);
+		const config = loadMessengerConfig(paths.configPath);
+		const token = new FileCredentialResolver(paths.credentialsDirectory).resolve(config.discord.credentialRef);
+		if (command === "attachment") {
+			for (const [key, flag] of [["messageId", "--message"], ["attachmentId", "--attachment"], ["outputPath", "--output"]]) if (!options[key]) throw new UsageError(`${flag} is required for attachment`);
+			const result = await downloadDiscordAttachment({ config, token, channelId: options.channelId, messageId: options.messageId, attachmentId: options.attachmentId, outputPath: options.outputPath, expectedSha256: options.expectedSha256 });
+			if (options.json) console.log(JSON.stringify({ schemaVersion: 1, command, result }, null, 2));
+			else console.log(`${result.state} ${result.bytes} bytes sha256=${result.sha256}`);
+		} else if (command === "reply") {
+			if (!options.contentPath) throw new UsageError("--content-file is required for reply");
+			const result = await sendDiscordReply({ config, token, channelId: options.channelId, contentPath: options.contentPath });
+			if (options.json) console.log(JSON.stringify({ schemaVersion: 1, command, result }, null, 2));
+			else console.log(result.state === "confirmed" ? `confirmed messageId=${result.messageId}` : `${result.state} reason=${result.reasonCode}`);
+			if (result.state !== "confirmed") process.exitCode = result.state === "failed" ? 4 : 5;
+		} else {
+			const messages = await fetchDiscordHistory({ config, token, channelId: options.channelId, authorId: options.authorId, limit: options.limit ?? 20, mode: command });
+			if (options.json) console.log(JSON.stringify({ schemaVersion: 1, command, messages }, null, 2));
+			else if (messages.length === 0) console.log("No authorized Discord messages found.");
+			else messages.forEach((message) => console.log(`${message.createdAt ?? "unknown"} ${message.author} (${message.authorId}): ${message.content}`));
+		}
+		process.exit(process.exitCode ?? 0);
+	} catch (error) {
+		console.error(error.message);
+		process.exit(error instanceof UsageError ? 2 : 1);
+	}
+}
 
 if (!existsSync(databasePath) && command === "status") {
 	const empty = {

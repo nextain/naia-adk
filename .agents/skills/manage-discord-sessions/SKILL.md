@@ -14,13 +14,16 @@ The implementation is usable with `naia-adk` alone from either Codex or Claude:
 - append-only SQLite job and safe-event history;
 - service freshness and job activity-health projection;
 - predeclared completion checks and trusted evidence;
-- `status`, `jobs`, `job`, and `watch` commands.
+- `status`, `jobs`, `job`, `watch`, `history`, `latest`, verified
+  `attachment` recovery, and explicit `reply` commands.
 - independent Codex `exec --json` and Claude `-p --output-format stream-json` adapters;
 - isolated per-attempt child homes, minimum authentication copies, safe event normalization, timeout, cancellation, and signal-aware exit handling.
 - fresh permission-profile checks that replace stale child settings, force no-prompt child execution, and reject an approval UI instead of waiting unattended;
 - a bounded no-progress watchdog plus a Discord channel-response deadline that creates an explicit operator handoff;
 - a confirmed-acknowledgement gate that does not start model work until Discord confirms the acceptance message;
 - Discord Gateway receive with durable sequence/resume state; no REST message polling;
+- explicit, read-only Discord REST history lookup for one uniquely authorized
+  binding, plus exact-message attachment recovery with size and SHA-256 checks;
 - exact DM, guild-channel, and thread bindings with default-deny users and operator actions;
 - user-systemd startup, reconnect with bounded backoff, and single-service locking;
 - reboot recovery that preserves job IDs and marks interrupted work `recovery_review` without replaying private prompts or uncertain deliveries;
@@ -45,6 +48,10 @@ scripts/manage-discord-sessions.sh status [--json]
 scripts/manage-discord-sessions.sh jobs [--active|--failed] [--json]
 scripts/manage-discord-sessions.sh job <job-id> [--events] [--json]
 scripts/manage-discord-sessions.sh watch [--job <job-id>] [--jsonl]
+scripts/manage-discord-sessions.sh history --channel <channel-id> [--author <user-id>] [--limit 20] [--json]
+scripts/manage-discord-sessions.sh latest --channel <channel-id> [--author <user-id>] [--json]
+scripts/manage-discord-sessions.sh attachment --channel <channel-id> --message <message-id> --attachment <attachment-id> --output <absolute-path> [--expected-sha256 <hex>]
+scripts/manage-discord-sessions.sh reply --channel <channel-id> --content-file <owner-only-absolute-path> [--json]
 scripts/manage-discord-sessions.sh service install
 scripts/manage-discord-sessions.sh service status
 scripts/manage-discord-sessions.sh service restart
@@ -73,6 +80,15 @@ recovery key, runtime directory, lock, and systemd unit. Credentials remain in
 the shared owner-only credential directory and are selected by `credentialRef`.
 
 `watch` polls only the local SQLite event ledger. It is not Discord REST receive polling. Stop an interactive watch with `Ctrl-C`.
+`history` and `latest` are explicit operator reads, never a receive loop: they
+require exactly one `operatorActions` binding, the `read` role, and an optional
+author already allowed by that binding. `attachment` first re-reads the exact
+authorized message, accepts Discord CDN hosts only, enforces the advertised
+size, and can require an expected SHA-256 before creating an owner-only file.
+`reply` requires the `reply` role and exactly one operator binding. It reads an
+owner-only local content file, suppresses mentions, and returns a confirmed,
+failed, or unknown delivery receipt. Never automatically retry an unknown
+receipt.
 
 ## Interpreting visibility
 
@@ -127,7 +143,18 @@ Use `watch --job <id>` for a live local event stream, or the scoped `!naia` comm
 
 With `service.startAt=login`, recovery begins after login. With `startAt=boot`, installation enables user lingering so recovery begins at boot. Gateway and the supervisor reconnect automatically. A prompt is retained only as authenticated ciphertext protected by an owner-only local recovery key. When `recovery.autoRetry=true`, only a read-only/plan-mode job may start a new attempt under the same job ID; mutation-capable, disabled, missing, or corrupt recovery state becomes `recovery_review`. An uncertain Discord delivery also becomes `recovery_review` and is never automatically resent.
 
-`service install` resolves the selected Codex or Claude executable from the interactive installer `PATH` and pins its absolute path plus the current Node executable directory in the user unit. This keeps Linuxbrew and user-local installations working after reboot even when the systemd manager has a narrower `PATH`, including a Codex launcher that uses `/usr/bin/env node`. After changing `backend.selected`, run `service install` again rather than only restarting so the new executable is pinned.
+`service install` resolves the selected Codex or Claude executable from the
+interactive installer `PATH`. Linux pins it in a user systemd unit. Windows
+pins the native executable and Node paths in an owner-only launcher registered
+as one limited ONLOGON Task Scheduler task. If local policy denies task
+creation, it installs an owner-only hidden per-user Startup launcher instead;
+`service status`, `start`, `stop`, `restart`, `enable`, and `disable` operate on
+the verified registration actually installed. It also installs `naia.cmd` in
+the interactive user path. After changing `backend.selected`, run `service
+install` again rather than only restarting so the new executable is pinned.
+
+Backend completion is fail-closed. Provider records with an absent or
+`unknown` result are not promoted to success and are not delivered to Discord.
 
 ## Durable-session policy
 

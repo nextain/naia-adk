@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -10,15 +10,18 @@ import { DiscordGatewaySession, MemoryGatewayState, StoredGatewayState } from ".
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
 import { discordUnitIdentity, renderDiscordUserUnit } from "../helper/systemd.mjs";
-import { installServiceCommands, renderOperatorLauncher, resolveBackendExecutable } from "../helper/service-manager.mjs";
+import { classifyWindowsStopObservation, installServiceCommands, quoteWindowsTaskAction, renderOperatorLauncher, renderWindowsStartupLauncher, resolveBackendExecutable, resolveWindowsBackendCommand, restartWindowsTask, sampleWindowsStopObservation, verifyWindowsTaskAction } from "../helper/service-manager.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "../helper/instance-paths.mjs";
-import { RecoveryCodec } from "../helper/recovery-crypto.mjs";
+import { loadOrCreateRecoveryKey, RecoveryCodec } from "../helper/recovery-crypto.mjs";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { DiscordStatusProjection } from "../helper/discord-projection.mjs";
 import { FileCredentialResolver, loadMessengerConfig } from "../helper/discord-config.mjs";
 import { runDiscordService } from "../helper/service.mjs";
-import { fetchDiscordHistory, promptWithDiscordHistory, renderDiscordHistory } from "../helper/discord-history.mjs";
+import { protectOwnerOnly, trustedWindowsSystemExecutable } from "../helper/platform-security.mjs";
+import { spawnSync } from "node:child_process";
+import { terminateUnidentifiedChild } from "../helper/backend-runner.mjs";
+import { fetchDiscordConversation, promptWithDiscordConversation, renderDiscordConversation } from "../helper/discord-conversation.mjs";
 
 const roots = [];
 const BOT = "111111111111111111";
@@ -35,6 +38,13 @@ function fixture() {
 	const directory = join(root, "state");
 	mkdirSync(directory, { recursive: true, mode: 0o700 });
 	return { root, databasePath: join(directory, "runtime.sqlite3"), store: new SessionStore(join(directory, "runtime.sqlite3")) };
+}
+
+function widenTestAcl(path) {
+	if (process.platform !== "win32") { chmodSync(path, 0o644); return; }
+	const executable = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
+	const result = spawnSync(executable, [path, "/grant", "*S-1-1-0:(R)"], { windowsHide: true });
+	assert.equal(result.status, 0);
 }
 
 function binding(kind = "guild_channel") {
@@ -101,7 +111,8 @@ class FakeSocket {
 }
 
 test("DSG-008 service shutdown does not wait for a stuck native WebSocket close", async () => {
-	const { root } = fixture();
+	const { root, store: fixtureStore } = fixture();
+	fixtureStore.close();
 	const settings = join(root, "naia-settings");
 	const configDirectory = join(settings, "messenger-sessions");
 	const credentialDirectory = join(settings, ".keys/messenger-sessions");
@@ -127,6 +138,10 @@ test("DSG-008 service shutdown does not wait for a stuck native WebSocket close"
 	};
 	writeFileSync(join(configDirectory, "config.json"), JSON.stringify(config), { mode: 0o600 });
 	writeFileSync(join(credentialDirectory, "discord-token"), "token-value-long-enough\n", { mode: 0o600 });
+	protectOwnerOnly(configDirectory, "directory", "test config directory");
+	protectOwnerOnly(join(configDirectory, "config.json"), "file", "test config");
+	protectOwnerOnly(credentialDirectory, "directory", "test credential directory");
+	protectOwnerOnly(join(credentialDirectory, "discord-token"), "file", "test credential");
 	const socket = new FakeSocket();
 	socket.close = (code) => { socket.closed.push(code); };
 	const signals = new EventEmitter();
@@ -253,7 +268,7 @@ test("DSG-006 enforces configured read-only role in the actual backend invocatio
 		discord: { bindings: [binding()], operatorUserIds: [] },
 		runtime: { maxConcurrentJobs: 1 },
 	};
-	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), send: async () => ({ state: "confirmed" }), runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
 	const accepted = await router.onDispatch("MESSAGE_CREATE", { id: "666666666666666666", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> inspect this` }, 8);
 	assert.equal(accepted.state, "accepted");
 	await router.waitForIdle();
@@ -263,23 +278,30 @@ test("DSG-006 enforces configured read-only role in the actual backend invocatio
 	store.close();
 });
 
-test("DSG-016 loads bounded Discord context without retaining bot receipts or unrelated authors", async () => {
+test("DSG-006 refuses to construct a router without a confirmed Discord sender", () => {
+	const { store, root } = fixture();
+	const config = { persona: { name: "Reviewer", instructions: "Review safely." }, role: { name: "read-only", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
+	assert.throws(() => new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime") }), /confirmed Discord sender is required/);
+	store.close();
+});
+
+test("DSG-016 loads bounded conversation context without retaining bot receipts or unrelated authors", async () => {
 	const messages = [
 		{ author: { id: BOT, bot: true }, content: "진행 중: 관련 코드와 현재 상태를 확인하고 있습니다." },
 		{ author: { id: "888888888888888888" }, content: "unrelated-secret" },
 		{ author: { id: BOT, bot: true }, content: "이전 작업의 실제 답변" },
 		{ author: { id: USER }, content: `<@${BOT}> 위 작업 이어서 해줘` },
 	];
-	assert.equal(renderDiscordHistory(messages, { botUserId: BOT, allowedUserIds: [USER] }), "user: 위 작업 이어서 해줘\nassistant: 이전 작업의 실제 답변");
+	assert.equal(renderDiscordConversation(messages, { botUserId: BOT, allowedUserIds: [USER] }), "user: 위 작업 이어서 해줘\nassistant: 이전 작업의 실제 답변");
 	const requests = [];
-	const loaded = await fetchDiscordHistory({
+	const loaded = await fetchDiscordConversation({
 		token: "token-value-long-enough", channelId: CHANNEL, beforeMessageId: "666666666666666666", botUserId: BOT, allowedUserIds: [USER],
 		fetchImpl: async (url, init) => { requests.push({ url, init }); return { ok: true, json: async () => messages }; },
 	});
 	assert.equal(loaded.state, "loaded");
 	assert.match(requests[0].url, /before=666666666666666666&limit=100$/);
 	assert.equal(requests[0].init.method, "GET");
-	const prompt = promptWithDiscordHistory("User request:\n현재 요청", loaded.history);
+	const prompt = promptWithDiscordConversation("User request:\n현재 요청", loaded.history);
 	assert.equal(prompt.includes("unrelated-secret"), false);
 	assert.match(prompt, /현재 요청$/);
 });
@@ -290,13 +312,13 @@ test("DSG-017 serializes jobs in one Discord scope even when global concurrency 
 	const firstBlocked = new Promise((resolve) => { releaseFirst = resolve; });
 	const started = [];
 	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 2 } };
-	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), runner: async ({ prompt }) => {
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), send: async () => ({ state: "confirmed" }), runner: async ({ prompt }) => {
 		started.push(prompt);
 		if (started.length === 1) await firstBlocked;
 		return { backendOutcome: "failure", transientResult: null };
 	} });
-	await router.onDispatch("MESSAGE_CREATE", { id: "171717171717171717", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> first` }, 15);
-	await router.onDispatch("MESSAGE_CREATE", { id: "181818181818181818", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> second` }, 16);
+	await router.onDispatch("MESSAGE_CREATE", { id: "212121212121212121", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> first` }, 21);
+	await router.onDispatch("MESSAGE_CREATE", { id: "222222222222222223", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> second` }, 22);
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(started.length, 1);
 	releaseFirst();
@@ -321,11 +343,11 @@ test("DSG-018 injects recent context and reports safe typed progress", async () 
 			return { backendOutcome: "failure", transientResult: null };
 		},
 	});
-	await router.onDispatch("MESSAGE_CREATE", { id: "191919191919191919", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> 이어서 고쳐줘` }, 17);
+	await router.onDispatch("MESSAGE_CREATE", { id: "232323232323232323", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> 이어서 고쳐줘` }, 23);
 	await router.waitForIdle();
 	assert.match(calls[0].prompt, /user: 앞 요청/);
 	assert.match(calls[0].prompt, /User request:\n이어서 고쳐줘$/);
-	assert.deepEqual(sent, [
+	assert.deepEqual(sent.slice(0, 3), [
 		"요청을 확인했습니다. 최근 대화를 함께 확인하고 순서대로 처리합니다.",
 		"진행 중: 관련 코드와 현재 상태를 확인하고 있습니다.",
 		"진행 중: 확인한 원인을 바탕으로 수정하고 있습니다.",
@@ -347,12 +369,23 @@ test("DSG-019 reports a terminal backend failure to the originating Discord scop
 			return { backendOutcome: "failure", transientResult: null };
 		},
 	});
-	const accepted = await router.onDispatch("MESSAGE_CREATE", { id: "202020202020202020", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> diagnose` }, 18);
+	const accepted = await router.onDispatch("MESSAGE_CREATE", { id: "242424242424242424", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> diagnose` }, 24);
 	await router.waitForIdle();
 	assert.equal(sent.length, 2);
 	assert.match(sent[1], /일정 시간 동안 진행이 없어/);
 	assert.match(sent[1], new RegExp(accepted.jobId));
 	store.close();
+});
+
+test("DSG-006 preserves an unidentified Windows child reservation unless tree termination is confirmed", () => {
+	const child = { pid: 43210, kill() { throw new Error("root-only kill must not be used on Windows"); } };
+	assert.equal(terminateUnidentifiedChild(child, { platform: "win32", runTaskkill: () => ({ status: 1 }), isAlive: () => false }), true);
+	assert.equal(terminateUnidentifiedChild(child, { platform: "win32", runTaskkill: () => ({ status: 1 }), isAlive: () => true }), false);
+	assert.equal(terminateUnidentifiedChild(child, { platform: "win32", runTaskkill: () => ({ status: 0 }), isAlive: () => true }), false);
+	assert.equal(terminateUnidentifiedChild(child, { platform: "win32", runTaskkill: () => ({ status: 0 }), isAlive: () => false }), true);
+	assert.equal(terminateUnidentifiedChild({ pid: 43211, kill: () => false }, { platform: "linux", isAlive: () => true }), false);
+	assert.equal(terminateUnidentifiedChild({ pid: 43212, kill: () => true }, { platform: "linux", isAlive: () => true }), false);
+	assert.equal(terminateUnidentifiedChild({ pid: 43213, kill: () => true }, { platform: "linux", isAlive: () => false }), true);
 });
 
 test("DSG-007 reboot recovery preserves job identity and requires review without retry or resend", () => {
@@ -370,6 +403,29 @@ test("DSG-007 reboot recovery preserves job identity and requires review without
 	reopened.close();
 });
 
+test("DSG-007 refuses an existing recovery key that was exposed on POSIX", { skip: process.platform === "win32" ? "POSIX permission semantics" : false }, () => {
+	const root = mkdtempSync(join(tmpdir(), "naia-exposed-recovery-key-"));
+	roots.push(root);
+	const keyPath = join(root, "keys", "recovery-key");
+	mkdirSync(join(root, "keys"), { recursive: true, mode: 0o700 });
+	writeFileSync(keyPath, randomBytes(32), { mode: 0o600 });
+	chmodSync(keyPath, 0o644);
+	assert.throws(() => loadOrCreateRecoveryKey(keyPath), /owner-only|permissions/);
+	assert.notEqual(lstatSync(keyPath).mode & 0o077, 0);
+});
+
+test("DSG-007 refuses an exposed existing recovery directory before mutating it on POSIX", { skip: process.platform === "win32" ? "POSIX permission semantics" : false }, () => {
+	const root = mkdtempSync(join(tmpdir(), "naia-exposed-recovery-directory-"));
+	roots.push(root);
+	const keyDirectory = join(root, "keys");
+	const keyPath = join(keyDirectory, "recovery-key");
+	mkdirSync(keyDirectory, { mode: 0o700 });
+	writeFileSync(keyPath, randomBytes(32), { mode: 0o600 });
+	chmodSync(keyDirectory, 0o755);
+	assert.throws(() => loadOrCreateRecoveryKey(keyPath), /owner-only|permissions/);
+	assert.notEqual(lstatSync(keyDirectory).mode & 0o077, 0);
+});
+
 test("DSG-007 resumes an encrypted prompt as a new attempt without plaintext persistence", async () => {
 	const { store, databasePath, root } = fixture();
 	const codec = new RecoveryCodec(randomBytes(32));
@@ -382,13 +438,70 @@ test("DSG-007 resumes an encrypted prompt as a new attempt without plaintext per
 	assert.equal(store.getJob("recoverable-job").attemptId, null);
 	const calls = [];
 	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
-	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: codec, runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: codec, send: async () => ({ state: "confirmed" }), runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
 	router.resumeRecovered(recovered, { autoRetry: true });
 	await router.waitForIdle();
 	assert.equal(calls[0].jobId, "recoverable-job");
 	assert.equal(calls[0].prompt, prompt);
 	store.close();
 	assert.equal(readFileSync(databasePath).includes(Buffer.from(prompt)), false);
+});
+
+test("DSG-007 recovered work waits for a newly confirmed acknowledgement", async () => {
+	const { store, root } = fixture();
+	const codec = new RecoveryCodec(randomBytes(32));
+	const prompt = "private-recovered-ack-request";
+	store.acceptIngressAndCreateJob({ sourceMessageId: "171717171717171717", scopeKey: "scope-1", jobId: "recovered-ack-job", dispatchSequence: 15, backendId: "codex", backendCapabilities: { structuredProgress: true }, activityDetail: "structured", recoveryEnvelope: codec.seal(JSON.stringify({ prompt, channelId: CHANNEL, executionProfile: { backendId: "codex", permissionProfileEpoch: "default", authorizationMode: "never", access: "read-only" } })) });
+	store.startAttempt("recovered-ack-job", { attemptId: "old-attempt" });
+	const recovered = store.recoverInterruptedWork();
+	let confirm;
+	const acknowledgement = new Promise((resolve) => { confirm = resolve; });
+	const calls = [];
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: codec, send: async () => acknowledgement, runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
+	router.resumeRecovered(recovered, { autoRetry: true });
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(calls.length, 0);
+	confirm({ state: "confirmed" });
+	await router.waitForIdle();
+	assert.equal(calls.length, 1);
+	store.close();
+});
+
+test("DSG-007 shutdown releases an unconfirmed recovered acknowledgement without execution", async () => {
+	const { store, root } = fixture();
+	const codec = new RecoveryCodec(randomBytes(32));
+	store.acceptIngressAndCreateJob({ sourceMessageId: "181818181818181818", scopeKey: "scope-1", jobId: "recovered-shutdown-job", dispatchSequence: 16, backendId: "codex", backendCapabilities: { structuredProgress: true }, activityDetail: "structured", recoveryEnvelope: codec.seal(JSON.stringify({ prompt: "private-shutdown-request", channelId: CHANNEL, executionProfile: { backendId: "codex", permissionProfileEpoch: "default", authorizationMode: "never", access: "read-only" } })) });
+	store.startAttempt("recovered-shutdown-job", { attemptId: "old-attempt" });
+	const recovered = store.recoverInterruptedWork();
+	let calls = 0;
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: codec, send: async () => ({ state: "unknown" }), runner: async () => { calls += 1; return { backendOutcome: "failure", transientResult: null }; } });
+	router.resumeRecovered(recovered, { autoRetry: true });
+	await new Promise((resolve) => setImmediate(resolve));
+	await Promise.race([router.shutdown(), new Promise((_, reject) => setTimeout(() => reject(new Error("router shutdown timed out")), 500))]);
+	assert.equal(calls, 0);
+	assert.equal(store.getJob("recovered-shutdown-job").lifecycle, "queued");
+	store.close();
+});
+
+test("DSG-007 shutdown wins a race with recovered acknowledgement confirmation", async () => {
+	const { store, root } = fixture();
+	const codec = new RecoveryCodec(randomBytes(32));
+	store.acceptIngressAndCreateJob({ sourceMessageId: "191919191919191919", scopeKey: "scope-1", jobId: "recovered-race-job", dispatchSequence: 17, backendId: "codex", backendCapabilities: { structuredProgress: true }, activityDetail: "structured", recoveryEnvelope: codec.seal(JSON.stringify({ prompt: "private-race-request", channelId: CHANNEL, executionProfile: { backendId: "codex", permissionProfileEpoch: "default", authorizationMode: "never", access: "read-only" } })) });
+	store.startAttempt("recovered-race-job", { attemptId: "old-attempt" });
+	const recovered = store.recoverInterruptedWork();
+	let confirm;
+	const acknowledgement = new Promise((resolve) => { confirm = resolve; });
+	let calls = 0;
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: codec, send: async () => acknowledgement, runner: async () => { calls += 1; return { backendOutcome: "failure", transientResult: null }; } });
+	router.resumeRecovered(recovered, { autoRetry: true });
+	await new Promise((resolve) => setImmediate(resolve));
+	confirm({ state: "confirmed" });
+	await router.shutdown();
+	assert.equal(calls, 0);
+	store.close();
 });
 
 test("DSG-013 replaces a stale managed child profile with a fresh no-prompt child", async () => {
@@ -400,7 +513,7 @@ test("DSG-013 replaces a stale managed child profile with a fresh no-prompt chil
 	const recovered = store.recoverInterruptedWork();
 	const calls = [];
 	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "writer", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: ["write", "execute"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, approvalPolicy: "never", permissionProfileEpoch: "never-2" } };
-	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: codec, runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: codec, send: async () => ({ state: "confirmed" }), runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
 	router.resumeRecovered(recovered, { autoRetry: true });
 	await router.waitForIdle();
 	assert.equal(calls.length, 1);
@@ -466,17 +579,18 @@ test("DSG-015 operator-channel response SLA creates a review handoff instead of 
 });
 
 test("DSG-008 renders a stable isolated user service with restart and single-owner controls", () => {
-	const { root } = fixture();
+	const { root, store } = fixture();
 	const first = renderDiscordUserUnit({ adkRoot: root, nodePath: "/usr/bin/node" });
 	const second = renderDiscordUserUnit({ adkRoot: root, nodePath: "/usr/bin/node" });
 	assert.equal(first.unitName, second.unitName);
 	assert.equal(first.content, second.content);
 	for (const required of ["flock", "--nonblock", "Restart=on-failure", "KillMode=mixed", "UMask=0077", "WantedBy=default.target"]) assert.equal(first.content.includes(required), true);
 	assert.equal(/token|prompt|result/i.test(first.content), false);
+	store.close();
 });
 
 test("DSG-008 isolates named bot instances while preserving the default instance contract", () => {
-	const { root } = fixture();
+	const { root, store } = fixture();
 	const defaultPaths = messengerInstancePaths(root);
 	const alphaPaths = messengerInstancePaths(root, "alpha");
 	assert.equal(defaultPaths.configPath, join(root, "naia-settings/messenger-sessions/config.json"));
@@ -484,6 +598,7 @@ test("DSG-008 isolates named bot instances while preserving the default instance
 	assert.equal(alphaPaths.configPath, join(root, "naia-settings/messenger-sessions/instances/alpha/config.json"));
 	assert.equal(alphaPaths.databasePath, join(root, "naia-settings/.sessions/messenger-sessions/instances/alpha/runtime.sqlite3"));
 	assert.notEqual(alphaPaths.lockPath, defaultPaths.lockPath);
+	assert.notEqual(alphaPaths.stopRequestPath, defaultPaths.stopRequestPath);
 	assert.notEqual(alphaPaths.recoveryKeyPath, defaultPaths.recoveryKeyPath);
 	const defaultUnit = discordUnitIdentity(root);
 	const alphaUnit = discordUnitIdentity(root, "alpha");
@@ -494,6 +609,8 @@ test("DSG-008 isolates named bot instances while preserving the default instance
 	assert.match(alpha.content, /Description=Naia ADK Discord sessions \(alpha\)/);
 	assert.throws(() => normalizeMessengerInstance("../alpha"), /lowercase identifier/);
 	assert.throws(() => normalizeMessengerInstance("Alpha"), /lowercase identifier/);
+	assert.throws(() => normalizeMessengerInstance("service"), /command name/);
+	store.close();
 });
 
 test("DSG-008 pins the selected backend executable independently of the systemd PATH", () => {
@@ -504,6 +621,17 @@ test("DSG-008 pins the selected backend executable independently of the systemd 
 	const codex = join(bin, "codex");
 	writeFileSync(codex, "#!/bin/sh\n", { mode: 0o700 });
 	const resolved = resolveBackendExecutable("codex", bin);
+	if (process.platform === "win32") {
+		const launcher = renderOperatorLauncher(root);
+		assert.match(launcher, /@echo off/);
+		assert.match(launcher, /managed by naia-adk manage-discord-sessions/);
+		assert.match(launcher, /cli\.mjs/);
+		const cli = join(import.meta.dirname, "../helper/cli.mjs");
+		const service = spawnSync(process.execPath, [cli, "--adk-root", root, "service", "unit"], { encoding: "utf8", windowsHide: true });
+		assert.equal(service.status, 0, service.stderr);
+		assert.match(service.stdout, /Windows Task Scheduler: NaiaDiscordSessions-/);
+		return;
+	}
 	const unit = renderDiscordUserUnit({ adkRoot: root, nodePath: "/opt/node/bin/node", backendExecutables: { codex: resolved } });
 	assert.match(unit.content, new RegExp(`Environment=\\"NAIA_CODEX_EXECUTABLE=${resolved.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\"`));
 	assert.match(unit.content, /Environment="PATH=\/opt\/node\/bin:/);
@@ -514,6 +642,119 @@ test("DSG-008 pins the selected backend executable independently of the systemd 
 	const launcher = renderOperatorLauncher(root);
 	assert.match(launcher, /managed by naia-adk manage-discord-sessions/);
 	assert.match(launcher, /manage-discord-sessions\.sh' "\$@"/);
+});
+
+test("DSG-008 Bash entrypoint preserves every top-level CLI command", () => {
+	const script = readFileSync(join(import.meta.dirname, "../scripts/manage-discord-sessions.sh"), "utf8");
+	for (const command of ["status", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service"]) {
+		assert.match(script, new RegExp(`\\b${command}\\b`));
+	}
+});
+
+test("DSG-008 quotes and verifies the exact Windows Task Scheduler action", () => {
+	const action = "C:\\Program Files\\Naia Workspace\\service-launch.cmd";
+	assert.equal(quoteWindowsTaskAction(action), action);
+	assert.equal(verifyWindowsTaskAction(
+		`<?xml version="1.0"?><Task><Principals><Principal><UserId>S-1-5-21-1</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Triggers><LogonTrigger /></Triggers><Actions><Exec><Command>C:\\Program Files\\Naia Workspace\\service-launch.cmd</Command></Exec></Actions></Task>`,
+		action, "S-1-5-21-1",
+	), true);
+	assert.equal(verifyWindowsTaskAction(
+		`<?xml version="1.0"?><Task><Principals><Principal><UserId>S-1-5-21-1</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers><Actions><Exec><Command>C:\\Program Files\\Naia Workspace\\service-launch.cmd</Command></Exec></Actions></Task>`,
+		action, "S-1-5-21-1",
+	), true);
+	assert.throws(
+		() => verifyWindowsTaskAction("<Task><Principals><Principal><UserId>S-1-5-21-1</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Triggers><LogonTrigger /></Triggers><Actions><Exec><Command>C:\\Other\\launch.cmd</Command></Exec></Actions></Task>", action, "S-1-5-21-1"),
+		/does not match/,
+	);
+	assert.throws(() => verifyWindowsTaskAction(
+		"<Task><Principals><Principal><UserId>S-1-5-21-1</UserId><LogonType>Password</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals><Triggers><BootTrigger /><LogonTrigger /></Triggers><Actions><Exec><Command>C:\\Program Files\\Naia Workspace\\service-launch.cmd</Command></Exec><ComHandler /></Actions></Task>",
+		action, "S-1-5-21-1",
+	), /one executable action|only one logon trigger|limited interactive principal/);
+	assert.throws(() => verifyWindowsTaskAction(
+		"<Task><Principals><Principal><UserId>S-1-5-21-1</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal><Principal><UserId>S-1-5-21-1</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals><Triggers><LogonTrigger /></Triggers><Actions><Exec><Command>C:\\Program Files\\Naia Workspace\\service-launch.cmd</Command><Arguments>unsafe</Arguments></Exec><SendEmail /></Actions></Task>",
+		action, "S-1-5-21-1",
+	), /one executable action|only the launcher command|principal is not uniquely defined/);
+	assert.throws(() => verifyWindowsTaskAction(
+		"<Task><Principals><Principal><UserId>S-1-5-21-1</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel><ProcessTokenSidType>Unrestricted</ProcessTokenSidType><RequiredPrivileges><Privilege>SeDebugPrivilege</Privilege></RequiredPrivileges></Principal></Principals><Triggers><LogonTrigger /></Triggers><Actions><Exec><Command>C:\\Program Files\\Naia Workspace\\service-launch.cmd</Command></Exec></Actions></Task>",
+		action, "S-1-5-21-1",
+	), /unsupported privileges/);
+	assert.throws(() => quoteWindowsTaskAction("relative\\launch.cmd"), /absolute/);
+});
+
+test("DSG-008 renders a hidden per-user Startup fallback without embedding credentials", () => {
+	const content = renderWindowsStartupLauncher("C:\\Naia Workspace\\service-launch.cmd");
+	assert.match(content, /WScript\.Shell/);
+	assert.match(content, /service-launch\.cmd/);
+	assert.match(content, /, 0, False/);
+	assert.equal(/token|credential|secret/i.test(content), false);
+});
+
+test("DSG-008 resolves the installed Windows npm shim to pinned node and script paths", { skip: process.platform !== "win32" }, () => {
+	const command = resolveWindowsBackendCommand("codex");
+	assert.equal(typeof command, "object");
+	assert.match(command.command, /node\.exe$/i);
+	assert.equal(command.prefixArgs.length, 1);
+	assert.match(command.prefixArgs[0], /[\\/]codex\.js$/i);
+});
+
+test("DSG-008 rejects caller-controlled Windows system roots", { skip: process.platform !== "win32" }, () => {
+	const originalRoot = process.env.SystemRoot;
+	const originalWinDir = process.env.WINDIR;
+	const fakeRoot = mkdtempSync(join(tmpdir(), "naia-fake-system-root-"));
+	roots.push(fakeRoot);
+	try {
+		process.env.SystemRoot = fakeRoot;
+		process.env.WINDIR = fakeRoot;
+		assert.throws(() => trustedWindowsSystemExecutable("taskkill.exe"), /identity mismatch/);
+	} finally {
+		process.env.SystemRoot = originalRoot;
+		process.env.WINDIR = originalWinDir;
+	}
+});
+
+test("DSG-008 retries Windows Task Scheduler restart within a fixed bound", () => {
+	const calls = [];
+	const waits = [];
+	let starts = 0;
+	const attempts = restartWindowsTask("NaiaDiscordSessions-123456789abc", {
+		maxAttempts: 4,
+		retryDelayMs: 10,
+		wait: (milliseconds) => waits.push(milliseconds),
+		run: (args, options = {}) => {
+			calls.push({ args, options });
+			if (args[0] === "/End") return { status: 0, output: "" };
+			starts += 1;
+			return { status: starts < 3 ? 1 : 0, output: "" };
+		},
+	});
+	assert.equal(attempts, 3);
+	assert.deepEqual(calls.map((call) => call.args[0]), ["/End", "/Run", "/Run", "/Run"]);
+	assert.deepEqual(waits, [10, 10]);
+	assert.throws(() => restartWindowsTask("NaiaDiscordSessions-123456789abc", {
+		maxAttempts: 2,
+		retryDelayMs: 0,
+		wait: () => {},
+		run: () => ({ status: 1, output: "" }),
+	}), /bounded retry window/);
+});
+
+test("DSG-008 tolerates transient Windows ownership gaps while stopping", () => {
+	const owner = { generation: "generation-a" };
+	assert.equal(classifyWindowsStopObservation({ owner, currentOwner: owner, observation: { state: "unknown" } }), "wait");
+	assert.equal(classifyWindowsStopObservation({ owner, currentOwner: owner, observation: { state: "owned" } }), "wait");
+	assert.equal(classifyWindowsStopObservation({ owner, currentOwner: owner, observation: { state: "missing" } }), "stopped");
+	assert.equal(classifyWindowsStopObservation({ owner, currentOwner: null, observation: { state: "unknown" } }), "stopped");
+	assert.throws(() => classifyWindowsStopObservation({ owner, currentOwner: { generation: "generation-b" }, observation: { state: "owned" } }), /generation changed/);
+	assert.throws(() => classifyWindowsStopObservation({ owner, currentOwner: { generation: "generation-b" }, observation: { state: "missing" } }), /generation changed/);
+	assert.throws(() => classifyWindowsStopObservation({ owner, currentOwner: owner, observation: { state: "conflict" } }), /ownership changed/);
+	const calls = [];
+	let currentOwner = owner;
+	assert.throws(() => sampleWindowsStopObservation({
+		owner,
+		observe: () => { calls.push("observe"); currentOwner = { generation: "generation-b" }; return { state: "missing" }; },
+		getCurrentOwner: () => { calls.push("owner"); return currentOwner; },
+	}), /generation changed/);
+	assert.deepEqual(calls, ["observe", "owner"]);
 });
 
 test("DSG-009 participant status projection is limited to the current Discord scope", async () => {
@@ -535,7 +776,7 @@ test("DSG-010 approval-required mutation remains read-only until an explicit ele
 	const { store, root } = fixture();
 	const calls = [];
 	const config = { persona: { name: "Builder", instructions: "Work safely." }, role: { name: "guarded", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: ["write", "execute"] }, backend: { selected: "claude" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
-	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), send: async () => ({ state: "confirmed" }), runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
 	await router.onDispatch("MESSAGE_CREATE", { id: "121212121212121212", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> change a file` }, 10);
 	await router.waitForIdle();
 	assert.deepEqual(calls[0].commandOptions, { permissionMode: "plan", settingSources: "project", approvalPolicy: "never" });
@@ -568,17 +809,20 @@ test("DSG-012 loads only private closed settings and resolves an owner-only cred
 	const configPath = join(root, "config.json");
 	const config = { schemaVersion: 1, enabled: true, workspaceId: "test", persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"], requiresApproval: ["write"] }, backend: { selected: "codex", profiles: { codex: { enabled: true }, claude: { enabled: false } } }, discord: { credentialRef: "discord-token", botUserId: BOT, operatorUserIds: [], bindings: [binding()] }, runtime: { heartbeatSeconds: 10, softSilenceSeconds: 120, noProgressInterventionSeconds: 120, operatorResponseSeconds: 30, approvalPolicy: "never", permissionProfileEpoch: "profile-1", maxConcurrentJobs: 1 }, observability: { discordStatusProjection: true }, service: { autoStart: true, startAt: "login" }, recovery: { autoRetry: true } };
 	writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+	protectOwnerOnly(configPath, "file", "test config");
 	assert.equal(loadMessengerConfig(configPath).backend.selected, "codex");
 	writeFileSync(configPath, JSON.stringify({ ...config, unexpected: true }), { mode: 0o600 });
 	assert.throws(() => loadMessengerConfig(configPath), /unsupported field/);
 	writeFileSync(configPath, JSON.stringify(config), { mode: 0o644 });
-	chmodSync(configPath, 0o644);
+	widenTestAcl(configPath);
 	assert.throws(() => loadMessengerConfig(configPath), /owner-only/);
 	const keyDirectory = join(root, "keys");
 	mkdirSync(keyDirectory, { mode: 0o700 });
 	const keyPath = join(keyDirectory, "discord-token");
 	writeFileSync(keyPath, "credential-value-long-enough", { mode: 0o600 });
+	protectOwnerOnly(keyDirectory, "directory", "test credential directory");
+	protectOwnerOnly(keyPath, "file", "test credential");
 	assert.equal(new FileCredentialResolver(keyDirectory).resolve("discord-token"), "credential-value-long-enough");
-	chmodSync(keyPath, 0o644);
+	widenTestAcl(keyPath);
 	assert.throws(() => new FileCredentialResolver(keyDirectory).resolve("discord-token"), /owner-only/);
 });

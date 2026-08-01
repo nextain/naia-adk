@@ -195,6 +195,10 @@ manage-discord-sessions.sh status [--json]
 manage-discord-sessions.sh jobs [--active|--failed] [--json]
 manage-discord-sessions.sh job <job-id> [--events] [--json]
 manage-discord-sessions.sh watch [--job <job-id>] [--jsonl]
+manage-discord-sessions.sh history --channel <channel-id> [--author <user-id>] [--limit 20] [--json]
+manage-discord-sessions.sh latest --channel <channel-id> [--author <user-id>] [--json]
+manage-discord-sessions.sh attachment --channel <channel-id> --message <message-id> --attachment <attachment-id> --output <absolute-path> [--expected-sha256 <hex>]
+manage-discord-sessions.sh reply --channel <channel-id> --content-file <owner-only-absolute-path> [--json]
 manage-discord-sessions.sh cancel <job-id>
 manage-discord-sessions.sh retry <job-id> [--confirm-delivery-risk]
 ```
@@ -202,6 +206,23 @@ manage-discord-sessions.sh retry <job-id> [--confirm-delivery-risk]
 The first implementation slice provides `status`, `jobs`, `job`, and `watch` over a local fake backend. `logs` is deferred until a bounded encrypted artifact contract exists. Control commands arrive only with the service state machine because a file-only command that cannot reach a running child would imply false control.
 
 JSON output has an independent contract version (`schemaVersion: 1`); it does not inherit the internal SQLite migration version. Success exits 0, invalid arguments or unknown jobs exit 2, unavailable/corrupt/newer state exits 3, and internal failures exit 1. Empty `jobs` is a successful empty array. `watch` emits existing events once from ordinal 0, then resumes strictly after the last emitted ordinal at a 500 ms local interval; each ordinal appears at most once per process.
+
+`history` and `latest` are explicit operator reads, not a receive loop. They
+require the `read` role and exactly one operator-enabled binding for the target,
+filter to its allowlisted non-bot authors, sanitize the bounded response, and
+persist none of the message content. Attachment recovery first authorizes and
+re-reads the exact message, accepts only Discord CDN hosts, verifies metadata
+size and an optional expected SHA-256, and creates an owner-only local file.
+Explicit reply requires the `reply` role and one exact operator binding. It
+reads an owner-only content file, disables mentions, and never retries an
+unknown delivery receipt automatically.
+Windows owner-only state uses native ACL verification; its service launcher is
+registered as one limited ONLOGON Task Scheduler task rather than systemd. If
+machine policy denies task creation, installation uses one owner-only hidden
+per-user Startup launcher. Service control first validates the installed task
+XML or exact Startup launcher bytes and process ownership; both registrations
+must never coexist. An `unknown` provider completion marker is not success and
+cannot produce a Discord result delivery.
 
 Discord provides two allowlisted projections. Before Slice 3, `config.json` must name operator Discord user IDs and conversation bindings. Default is deny: a participant can query only a matching DM/channel/thread binding, and only an operator can cancel, retry, or inspect cross-job metadata.
 

@@ -12,7 +12,7 @@ Codex와 Claude가 함께 쓰는 관리 스킬입니다. 별도 제품 CLI나 `n
 - SQLite 기반 작업·안전 이벤트 영속 기록
 - 서비스 상태의 신선도와 작업 활동 상태 구분
 - 사전에 선언한 완료 검사와 신뢰 가능한 검증 증거
-- `status`, `jobs`, `job`, `watch` 조회
+- `status`, `jobs`, `job`, `watch`, `history`, `latest` 조회, 해시 검증 첨부 복구, 명시적 `reply`
 - 서로 독립적인 Codex `exec --json` 및 Claude `-p --output-format stream-json` 실행 어댑터
 - 실행별 격리 홈, 최소 인증 파일 복사, 안전 이벤트 변환, 시간 제한·취소·시그널 종료 처리
 - 이전 권한 프로필 재사용 차단, 무승인 실행 강제, 승인 UI 감지 시 대기 대신 안전 실패 처리
@@ -40,12 +40,17 @@ scripts/manage-discord-sessions.sh status [--json]
 scripts/manage-discord-sessions.sh jobs [--active|--failed] [--json]
 scripts/manage-discord-sessions.sh job <job-id> [--events] [--json]
 scripts/manage-discord-sessions.sh watch [--job <job-id>] [--jsonl]
+scripts/manage-discord-sessions.sh history --channel <channel-id> [--author <user-id>] [--limit 20] [--json]
+scripts/manage-discord-sessions.sh latest --channel <channel-id> [--author <user-id>] [--json]
+scripts/manage-discord-sessions.sh attachment --channel <channel-id> --message <message-id> --attachment <attachment-id> --output <absolute-path> [--expected-sha256 <hex>]
+scripts/manage-discord-sessions.sh reply --channel <channel-id> --content-file <소유자 전용 절대 경로> [--json]
 scripts/manage-discord-sessions.sh service install
 scripts/manage-discord-sessions.sh service status
 scripts/manage-discord-sessions.sh service restart
 ```
 
 `watch`는 로컬 SQLite 기록만 읽습니다. Discord REST 수신 폴링이 아닙니다.
+`history`와 `latest`는 운영자가 명시적으로 한 번 실행하는 읽기 전용 조회입니다. `read` 역할과 유일한 운영 바인딩이 있어야 하며 수신 폴링으로 사용하지 않습니다. `attachment`는 정확한 메시지와 Discord CDN, 크기, 선택한 SHA-256을 검증한 뒤 소유자 전용 파일만 만듭니다. `reply`는 `reply` 역할과 유일한 운영 바인딩을 확인하고, 소유자 전용 파일의 내용을 멘션 없이 한 번 전송합니다. 결과가 `unknown`이면 자동 재전송하지 않습니다.
 
 ## 상태를 읽는 방법
 
@@ -82,6 +87,8 @@ naia-settings/.sessions/messenger-sessions/runtime.sqlite3
 
 `service.startAt=login`이면 로그인 뒤, `boot`이면 설치기가 사용자 linger를 활성화해 부팅 때 복구를 시작합니다. 프롬프트는 소유자 전용 로컬 복구 키로 인증 암호화한 암호문만 저장합니다. `recovery.autoRetry=true`일 때도 읽기 전용·계획 모드 작업만 같은 작업 ID의 새 실행으로 이어집니다. 쓰기 가능 작업, 자동 재시도 비활성화, 키·암호문 손상은 `recovery_review`가 됩니다. Discord 전송 여부가 불확실한 답변은 자동 재전송하지 않습니다.
 
-`service install`은 설치 터미널의 `PATH`에서 선택한 Codex 또는 Claude 실행파일을 찾아 절대 경로와 현재 Node 실행 디렉터리를 사용자 unit에 고정합니다. 그래서 systemd의 `PATH`가 더 좁아도 `/usr/bin/env node`를 쓰는 Codex를 포함한 Linuxbrew나 사용자 전용 설치가 재부팅 뒤 동작합니다. `backend.selected`를 바꾼 뒤에는 단순 재시작이 아니라 `service install`을 다시 실행해야 새 실행 경로가 고정됩니다.
+`service install`은 설치 터미널의 `PATH`에서 선택한 Codex 또는 Claude 실행파일을 찾습니다. Linux는 사용자 systemd unit에 고정합니다. Windows는 소유자 전용 실행 파일과 제한된 ONLOGON 예약 작업을 설치하며, 로컬 정책이 예약 작업 생성을 거부하면 소유자 전용 숨김 시작프로그램으로 자동 대체합니다. `service status`, `start`, `stop`, `restart`, `enable`, `disable`은 실제 설치된 등록 방식을 검증한 뒤 제어합니다. `naia.cmd`도 함께 설치됩니다. `backend.selected`를 바꾼 뒤에는 단순 재시작이 아니라 `service install`을 다시 실행해야 새 실행 경로가 고정됩니다.
+
+백엔드 완료 판정은 닫힌 방식입니다. 공급자가 결과를 `unknown`으로 표시하거나 명시적 성공 근거가 없으면 성공으로 올리지 않고 Discord에도 전달하지 않습니다.
 
 검증 명령은 `pnpm test:discord-sessions`입니다. 상세 설계는 `docs/design/discord-session-observability.md`, 요구사항은 `DSO-001`~`DSO-007`이 정본입니다.

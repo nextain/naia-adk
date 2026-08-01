@@ -100,7 +100,7 @@ skills:
     what: "ADK 내부 SQLite에서 Discord AI 작업의 서비스 신선도·활동·검증 증거를 조회하고, 이후 Gateway/재부팅 복구를 같은 계약으로 관리"
     arg: null
     scripts: [scripts/manage-discord-sessions.sh]
-    note: "Gateway 실시간 수신, Codex/Claude 독립 실행, systemd 자동 시작, 재부팅 복구, stale permission-profile 교체, 무진행/채널응답 watchdog까지 구현됨. 결과 정확성은 활동 상태와 분리해 completionAssessment 근거로 판단."
+    note: "Gateway 실시간 수신, Codex/Claude 독립 실행, Linux systemd/Windows Task Scheduler 자동 시작, 재부팅 복구, stale permission-profile 교체, 무진행/채널응답 watchdog, 권한 바인딩된 명시적 history/latest/reply와 해시 검증 첨부 복구까지 구현됨. 결과 정확성은 활동 상태와 분리해 completionAssessment 근거로 판단."
 
   session-resume:
     trigger: "claude --resume, codex/opencode 세션 이어서, 이전 세션 뭐했지, 세션 기록 봐줘"
