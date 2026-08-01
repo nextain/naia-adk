@@ -186,7 +186,7 @@ export class DiscordMessageRouter {
 		let resolveWaiter;
 		const ready = new Promise((resolve) => { resolveWaiter = resolve; });
 		this.operatorResponseWaiters.set(item.jobId, resolveWaiter);
-		this.operatorResponses.set(item.jobId, { ...item, nonce: randomUUID().replaceAll("-", "").slice(0, 24), deadlineMs: this.now() + (this.config.runtime?.operatorResponseSeconds ?? 30) * 1_000, interventions: 0 });
+		this.operatorResponses.set(item.jobId, { ...item, nonce: randomUUID().replaceAll("-", "").slice(0, 24), deadlineMs: this.now() + (this.config.runtime?.operatorResponseSeconds ?? 30) * 1_000, interventions: 0, intervening: false, sendPromise: null });
 		void this.#sendOperatorResponse(item.jobId);
 		return ready;
 	}
@@ -199,16 +199,22 @@ export class DiscordMessageRouter {
 	async #sendOperatorResponse(jobId) {
 		const state = this.operatorResponses.get(jobId);
 		if (!state || !this.send) return false;
-		try {
-			const receipt = await this.send({ token: this.token, channelId: state.channelId, botUserId: this.botUserId, content: "요청을 확인했습니다. 최근 대화를 함께 확인하고 순서대로 처리합니다.", nonce: state.nonce });
-			if (receipt?.state !== "confirmed") return false;
-			this.store.recordEvent({ jobId, source: "helper", kind: "operator_response_sent", safePayload: {} });
-			this.operatorResponses.delete(jobId);
-			this.#resolveOperatorResponse(jobId, true);
-			return true;
-		} catch {
-			return false;
-		}
+		if (state.sendPromise) return state.sendPromise;
+		const sendPromise = (async () => {
+			try {
+				const receipt = await this.send({ token: this.token, channelId: state.channelId, botUserId: this.botUserId, content: "[메시지 받음]", nonce: state.nonce });
+				if (receipt?.state !== "confirmed") return false;
+				this.store.recordEvent({ jobId, source: "helper", kind: "operator_response_sent", safePayload: {} });
+				this.operatorResponses.delete(jobId);
+				this.#resolveOperatorResponse(jobId, true);
+				return true;
+			} catch {
+				return false;
+			}
+		})();
+		state.sendPromise = sendPromise;
+		try { return await sendPromise; }
+		finally { if (state.sendPromise === sendPromise) state.sendPromise = null; }
 	}
 
 	async #run(item) {
@@ -282,22 +288,27 @@ export class DiscordMessageRouter {
 		if (!Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("watchdog time must be a non-negative safe integer");
 		const outcome = { noProgress: 0, operatorResponse: 0 };
 		for (const state of [...this.operatorResponses.values()]) {
-			if (state.deadlineMs > nowMs) continue;
-			state.interventions += 1;
-			if (await this.#sendOperatorResponse(state.jobId)) continue;
-			const job = this.store.getJob(state.jobId, { nowMs, includeEvents: false });
-			if (job) {
-				try { this.store.recordEvent({ jobId: state.jobId, attemptId: job.attemptId ?? undefined, source: "helper", kind: "watchdog_intervened", safePayload: { watchdogReason: "operator_response" } }); } catch {}
+			if (state.deadlineMs > nowMs || state.intervening) continue;
+			state.intervening = true;
+			try {
+				state.interventions += 1;
+				if (await this.#sendOperatorResponse(state.jobId)) continue;
+				const job = this.store.getJob(state.jobId, { nowMs, includeEvents: false });
+				if (job) {
+					try { this.store.recordEvent({ jobId: state.jobId, attemptId: job.attemptId ?? undefined, source: "helper", kind: "watchdog_intervened", safePayload: { watchdogReason: "operator_response" } }); } catch {}
+				}
+				outcome.operatorResponse += 1;
+				if (state.interventions < MAX_OPERATOR_RESPONSE_INTERVENTIONS) {
+					state.deadlineMs = this.now() + (this.config.runtime?.operatorResponseSeconds ?? 30) * 1_000;
+					continue;
+				}
+				if (job) try { this.store.recordEvent({ jobId: state.jobId, attemptId: job.attemptId ?? undefined, source: "helper", kind: "operator_response_missed", safePayload: {} }); } catch {}
+				this.controllers.get(state.jobId)?.abort("operator_response_timeout");
+				this.#resolveOperatorResponse(state.jobId, false);
+				this.operatorResponses.delete(state.jobId);
+			} finally {
+				state.intervening = false;
 			}
-			outcome.operatorResponse += 1;
-			if (state.interventions < MAX_OPERATOR_RESPONSE_INTERVENTIONS) {
-				state.deadlineMs = nowMs + (this.config.runtime?.operatorResponseSeconds ?? 30) * 1_000;
-				continue;
-			}
-			if (job) try { this.store.recordEvent({ jobId: state.jobId, attemptId: job.attemptId ?? undefined, source: "helper", kind: "operator_response_missed", safePayload: {} }); } catch {}
-			this.controllers.get(state.jobId)?.abort("operator_response_timeout");
-			this.#resolveOperatorResponse(state.jobId, false);
-			this.operatorResponses.delete(state.jobId);
 		}
 		for (const job of this.store.listJobs({ nowMs })) {
 			if (!this.#noProgressIsDue(job, nowMs)) continue;

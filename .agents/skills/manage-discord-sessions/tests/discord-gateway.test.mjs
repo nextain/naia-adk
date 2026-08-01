@@ -348,7 +348,7 @@ test("DSG-018 injects recent context and reports safe typed progress", async () 
 	assert.match(calls[0].prompt, /user: 앞 요청/);
 	assert.match(calls[0].prompt, /User request:\n이어서 고쳐줘$/);
 	assert.deepEqual(sent.slice(0, 3), [
-		"요청을 확인했습니다. 최근 대화를 함께 확인하고 순서대로 처리합니다.",
+		"[메시지 받음]",
 		"진행 중: 관련 코드와 현재 상태를 확인하고 있습니다.",
 		"진행 중: 확인한 원인을 바탕으로 수정하고 있습니다.",
 	]);
@@ -560,7 +560,7 @@ test("DSG-015 operator-channel response SLA creates a review handoff instead of 
 	let abortReason = null;
 	const nonces = [];
 	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, softSilenceSeconds: 60, noProgressInterventionSeconds: 60, operatorResponseSeconds: 1 } };
-	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), now: () => nowMs, send: async ({ content, nonce }) => { if (content.startsWith("요청을 확인했습니다.")) nonces.push(nonce); throw new Error("channel unavailable"); }, runner: async ({ jobId, signal }) => {
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), now: () => nowMs, send: async ({ content, nonce }) => { if (content === "[메시지 받음]") nonces.push(nonce); throw new Error("channel unavailable"); }, runner: async ({ jobId, signal }) => {
 		runnerStarted = true;
 		store.startAttempt(jobId, { attemptId: "operator-response-attempt", childPid: process.pid, now: new Date(0).toISOString() });
 		return new Promise((resolveRunner) => signal.addEventListener("abort", () => { abortReason = signal.reason; resolveRunner({ backendOutcome: "failure", transientResult: null }); }, { once: true }));
@@ -590,13 +590,39 @@ test("DSG-015 operator-channel response SLA creates a review handoff instead of 
 	store.close();
 });
 
+test("DSG-015 coalesces overlapping acknowledgement checks without cancelling confirmed work", async () => {
+	const { store, root } = fixture();
+	let nowMs = 0;
+	let releaseReceipt;
+	let sendCalls = 0;
+	let runnerStarted = false;
+	const pendingReceipt = new Promise((resolve) => { releaseReceipt = resolve; });
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, softSilenceSeconds: 60, noProgressInterventionSeconds: 60, operatorResponseSeconds: 1 } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), now: () => nowMs, send: async () => { sendCalls += 1; return pendingReceipt; }, deliver: async () => {}, runner: async () => { runnerStarted = true; return { backendOutcome: "success", transientResult: "done", attemptId: "single-flight-attempt" }; } });
+	await router.onDispatch("MESSAGE_CREATE", { id: "171717171717171717", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> inspect this` }, 15);
+	await new Promise((resolve) => setImmediate(resolve));
+	nowMs = 1_001;
+	const firstWatchdog = router.watchdog({ nowMs });
+	const overlappingWatchdog = router.watchdog({ nowMs });
+	releaseReceipt({ state: "confirmed" });
+	assert.deepEqual(await firstWatchdog, { noProgress: 0, operatorResponse: 0 });
+	assert.deepEqual(await overlappingWatchdog, { noProgress: 0, operatorResponse: 0 });
+	await router.waitForIdle();
+	assert.equal(sendCalls, 1);
+	assert.equal(runnerStarted, true);
+	const job = store.getJob(store.listJobs()[0].jobId, { nowMs, includeEvents: true });
+	assert.equal(job.events.filter((event) => event.kind === "operator_response_sent").length, 1);
+	assert.equal(job.events.some((event) => event.kind === "operator_response_missed"), false);
+	store.close();
+});
+
 test("DSG-008 renders a stable isolated user service with restart and single-owner controls", () => {
 	const { root, store } = fixture();
 	const first = renderDiscordUserUnit({ adkRoot: root, nodePath: "/usr/bin/node" });
 	const second = renderDiscordUserUnit({ adkRoot: root, nodePath: "/usr/bin/node" });
 	assert.equal(first.unitName, second.unitName);
 	assert.equal(first.content, second.content);
-	for (const required of ["flock", "--nonblock", "Restart=on-failure", "KillMode=mixed", "UMask=0077", "WantedBy=default.target"]) assert.equal(first.content.includes(required), true);
+	for (const required of ["flock", "--nonblock", "Restart=always", "KillMode=mixed", "UMask=0077", "WantedBy=default.target"]) assert.equal(first.content.includes(required), true);
 	assert.equal(/token|prompt|result/i.test(first.content), false);
 	store.close();
 });
