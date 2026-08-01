@@ -143,7 +143,10 @@ test("DSO-002 separates fresh progress, unsupported detail, waiting, stall, dead
 
 	const missingProcess = fixture();
 	const missingProcessJob = createRunningJob(missingProcess.store, { servicePid: 2_147_483_647 });
-	assert.equal(missingProcess.store.getJob(missingProcessJob.jobId, { nowMs: Date.parse(iso(130_000)) }).activityHealth.reasonCode, "service_stopped");
+	missingProcess.store.heartbeatService({ generation: "generation-1", pid: 2_147_483_647, now: iso(130_000) });
+	assert.equal(missingProcess.store.status({ nowMs: Date.parse(iso(130_001)) }).service.reasonCode, "heartbeat_fresh_process_unobservable");
+	assert.equal(missingProcess.store.getJob(missingProcessJob.jobId, { nowMs: Date.parse(iso(130_001)) }).activityHealth.reasonCode, "soft_silence_exceeded");
+	assert.equal(missingProcess.store.status({ nowMs: Date.parse(iso(161_001)) }).service.reasonCode, "service_process_missing");
 	missingProcess.store.close();
 
 	const futureClock = fixture();

@@ -214,6 +214,7 @@ export async function runBackendAttempt({
 	backendVersion,
 	requireAuthentication = true,
 	now = () => new Date().toISOString(),
+	onSafeEvent = null,
 }) {
 	if (typeof prompt !== "string" || prompt.length === 0) throw new Error("prompt must be a non-empty string");
 	if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive safe integer");
@@ -299,6 +300,7 @@ export async function runBackendAttempt({
 		if (inspected.transientResult !== null) transientResult = inspected.transientResult;
 		for (const event of inspected.events) {
 			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: backendId, ...event });
+			try { onSafeEvent?.(event); } catch {}
 		}
 	};
 	let normalizeFailed = false;

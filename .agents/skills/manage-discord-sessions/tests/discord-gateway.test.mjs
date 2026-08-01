@@ -18,6 +18,7 @@ import { EventEmitter } from "node:events";
 import { DiscordStatusProjection } from "../helper/discord-projection.mjs";
 import { FileCredentialResolver, loadMessengerConfig } from "../helper/discord-config.mjs";
 import { runDiscordService } from "../helper/service.mjs";
+import { fetchDiscordHistory, promptWithDiscordHistory, renderDiscordHistory } from "../helper/discord-history.mjs";
 
 const roots = [];
 const BOT = "111111111111111111";
@@ -259,6 +260,98 @@ test("DSG-006 enforces configured read-only role in the actual backend invocatio
 	assert.equal(calls.length, 1);
 	assert.deepEqual(calls[0].commandOptions, { sandbox: "read-only", approvalPolicy: "never" });
 	assert.equal(JSON.stringify(store.listJobs()).includes("inspect this"), false);
+	store.close();
+});
+
+test("DSG-016 loads bounded Discord context without retaining bot receipts or unrelated authors", async () => {
+	const messages = [
+		{ author: { id: BOT, bot: true }, content: "진행 중: 관련 코드와 현재 상태를 확인하고 있습니다." },
+		{ author: { id: "888888888888888888" }, content: "unrelated-secret" },
+		{ author: { id: BOT, bot: true }, content: "이전 작업의 실제 답변" },
+		{ author: { id: USER }, content: `<@${BOT}> 위 작업 이어서 해줘` },
+	];
+	assert.equal(renderDiscordHistory(messages, { botUserId: BOT, allowedUserIds: [USER] }), "user: 위 작업 이어서 해줘\nassistant: 이전 작업의 실제 답변");
+	const requests = [];
+	const loaded = await fetchDiscordHistory({
+		token: "token-value-long-enough", channelId: CHANNEL, beforeMessageId: "666666666666666666", botUserId: BOT, allowedUserIds: [USER],
+		fetchImpl: async (url, init) => { requests.push({ url, init }); return { ok: true, json: async () => messages }; },
+	});
+	assert.equal(loaded.state, "loaded");
+	assert.match(requests[0].url, /before=666666666666666666&limit=100$/);
+	assert.equal(requests[0].init.method, "GET");
+	const prompt = promptWithDiscordHistory("User request:\n현재 요청", loaded.history);
+	assert.equal(prompt.includes("unrelated-secret"), false);
+	assert.match(prompt, /현재 요청$/);
+});
+
+test("DSG-017 serializes jobs in one Discord scope even when global concurrency is larger", async () => {
+	const { store, root } = fixture();
+	let releaseFirst;
+	const firstBlocked = new Promise((resolve) => { releaseFirst = resolve; });
+	const started = [];
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 2 } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), runner: async ({ prompt }) => {
+		started.push(prompt);
+		if (started.length === 1) await firstBlocked;
+		return { backendOutcome: "failure", transientResult: null };
+	} });
+	await router.onDispatch("MESSAGE_CREATE", { id: "171717171717171717", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> first` }, 15);
+	await router.onDispatch("MESSAGE_CREATE", { id: "181818181818181818", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> second` }, 16);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(started.length, 1);
+	releaseFirst();
+	await router.waitForIdle();
+	assert.equal(started.length, 2);
+	store.close();
+});
+
+test("DSG-018 injects recent context and reports safe typed progress", async () => {
+	const { store, root, databasePath } = fixture();
+	const sent = [];
+	const calls = [];
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
+	const router = new DiscordMessageRouter({
+		config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"),
+		loadHistory: async () => ({ state: "loaded", history: "user: 앞 요청\nassistant: 앞 답변", messageCount: 2 }),
+		send: async (input) => { sent.push(input.content); return { state: "confirmed" }; },
+		runner: async (input) => {
+			calls.push(input);
+			input.onSafeEvent({ kind: "tool_started", safePayload: { toolCategory: "file_read" } });
+			input.onSafeEvent({ kind: "tool_started", safePayload: { toolCategory: "file_edit" } });
+			return { backendOutcome: "failure", transientResult: null };
+		},
+	});
+	await router.onDispatch("MESSAGE_CREATE", { id: "191919191919191919", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> 이어서 고쳐줘` }, 17);
+	await router.waitForIdle();
+	assert.match(calls[0].prompt, /user: 앞 요청/);
+	assert.match(calls[0].prompt, /User request:\n이어서 고쳐줘$/);
+	assert.deepEqual(sent, [
+		"요청을 확인했습니다. 최근 대화를 함께 확인하고 순서대로 처리합니다.",
+		"진행 중: 관련 코드와 현재 상태를 확인하고 있습니다.",
+		"진행 중: 확인한 원인을 바탕으로 수정하고 있습니다.",
+	]);
+	store.close();
+	assert.equal(readFileSync(databasePath).includes(Buffer.from("앞 요청")), false);
+});
+
+test("DSG-019 reports a terminal backend failure to the originating Discord scope", async () => {
+	const { store, root } = fixture();
+	const sent = [];
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
+	const router = new DiscordMessageRouter({
+		config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"),
+		send: async (input) => { sent.push(input.content); return { state: "confirmed" }; },
+		runner: async ({ jobId }) => {
+			const attemptId = store.startAttempt(jobId, { attemptId: "failed-attempt" });
+			store.recordEvent({ jobId, attemptId, source: "helper", kind: "failed", safePayload: { reasonCode: "no_progress_timeout" } });
+			return { backendOutcome: "failure", transientResult: null };
+		},
+	});
+	const accepted = await router.onDispatch("MESSAGE_CREATE", { id: "202020202020202020", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> diagnose` }, 18);
+	await router.waitForIdle();
+	assert.equal(sent.length, 2);
+	assert.match(sent[1], /일정 시간 동안 진행이 없어/);
+	assert.match(sent[1], new RegExp(accepted.jobId));
 	store.close();
 });
 
