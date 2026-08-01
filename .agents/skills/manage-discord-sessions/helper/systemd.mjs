@@ -28,5 +28,5 @@ export function renderDiscordUserUnit({ adkRoot, instance = "default", nodePath 
 	});
 	const executablePath = [...new Set([dirname(resolve(nodePath)), ...Object.values(backendExecutables).map((executable) => dirname(resolve(executable))), "/usr/local/bin", "/usr/bin", "/bin"])].join(delimiter);
 	const environment = [...backendEnvironment, `Environment=${unitQuote(`PATH=${executablePath}`)}`].join("\n");
-	return { unitName, instance: identity.instance, content: `[Unit]\nDescription=Naia ADK Discord sessions (${identity.instance})\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=${exec}\n${environment ? `${environment}\n` : ""}Restart=on-failure\nRestartSec=5\nKillMode=mixed\nTimeoutStopSec=20\nUMask=0077\nNoNewPrivileges=yes\nPrivateTmp=yes\n\n[Install]\nWantedBy=default.target\n` };
+	return { unitName, instance: identity.instance, content: `[Unit]\nDescription=Naia ADK Discord sessions (${identity.instance})\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=${exec}\n${environment ? `${environment}\n` : ""}Restart=always\nRestartSec=5\nKillMode=mixed\nTimeoutStopSec=20\nUMask=0077\nNoNewPrivileges=yes\nPrivateTmp=yes\n\n[Install]\nWantedBy=default.target\n` };
 }
