@@ -6,14 +6,7 @@ import { runBackendAttempt } from "./backend-runner.mjs";
 import { commandOptionsForProfile, currentExecutionProfile, sameExecutionProfile } from "./execution-profile.mjs";
 import { promptWithDiscordConversation } from "./discord-conversation.mjs";
 
-const PROGRESS_TEXT = {
-	file_read: "진행 중: 관련 코드와 현재 상태를 확인하고 있습니다.",
-	file_edit: "진행 중: 확인한 원인을 바탕으로 수정하고 있습니다.",
-	command: "진행 중: 진단 명령으로 원인과 실행 상태를 확인하고 있습니다.",
-	test: "진행 중: 수정 결과를 테스트하고 있습니다.",
-	build: "진행 중: 빌드와 정적 검사를 확인하고 있습니다.",
-	network: "진행 중: 외부 서비스 연결 상태를 확인하고 있습니다.",
-};
+const PROGRESS_TEXT = "[진행 중]";
 
 const FAILURE_TEXT = {
 	no_progress_timeout: "일정 시간 동안 진행이 없어 작업을 중단했습니다.",
@@ -34,7 +27,7 @@ function transientPrompt(message, botUserId, config) {
 	if (typeof message.content !== "string" || message.content.length > 4_000) throw new Error("Discord content is missing or too large");
 	const userText = message.content.replaceAll(`<@${botUserId}>`, "").replaceAll(`<@!${botUserId}>`, "").trim();
 	if (!userText) throw new Error("Discord prompt is empty after mention removal");
-	return [`Persona: ${config.persona.name}`, config.persona.instructions, `Role: ${config.role.name}`, `Allowed actions: ${config.role.allowedActions.join(", ")}`, "User request:", userText].join("\n");
+	return [`Persona: ${config.persona.name}`, config.persona.instructions, `Role: ${config.role.name}`, `Allowed actions: ${config.role.allowedActions.join(", ")}`, "Communication: Reply in the language used by the user. Before tool work, provide a brief analysis and action plan as an intermediate update. During long work, report meaningful findings or phase changes before the final verified result. Do not repeat generic status text.", "User request:", userText].join("\n");
 }
 
 function commandText(message, botUserId) {
@@ -241,11 +234,9 @@ export class DiscordMessageRouter {
 			let progressChain = Promise.resolve();
 			const onSafeEvent = (event) => {
 				if (event?.kind !== "tool_started") return;
-				const category = event.safePayload?.toolCategory;
-				const content = PROGRESS_TEXT[category];
-				if (!content || reported.has(category) || reported.size >= 3) return;
-				reported.add(category);
-				progressChain = progressChain.then(() => this.send({ token: this.token, channelId: item.channelId, botUserId: this.botUserId, content, nonce: randomUUID().replaceAll("-", "").slice(0, 24) })).catch(() => {});
+				if (reported.size > 0 || !event.safePayload?.toolCategory) return;
+				reported.add("progress");
+				progressChain = progressChain.then(() => this.send({ token: this.token, channelId: item.channelId, botUserId: this.botUserId, content: PROGRESS_TEXT, nonce: randomUUID().replaceAll("-", "").slice(0, 24) })).catch(() => {});
 			};
 			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt, cwd: this.cwd, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId), executionProfile: item.executionProfile, signal: controller.signal, onSafeEvent });
 			await progressChain;
