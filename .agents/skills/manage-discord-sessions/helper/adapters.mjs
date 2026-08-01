@@ -33,6 +33,13 @@ export function approvalRequestedText(value) {
 	return APPROVAL_REQUEST_PATTERN.test(String(value));
 }
 
+function structuredApprovalRequested(message) {
+	const eventType = String(message?.type ?? "");
+	const itemType = String(message?.item?.type ?? "");
+	return /(?:approval|permission)[_.-]?(?:required|request)/i.test(eventType)
+		|| /(?:approval|permission)[_.-]?(?:required|request)/i.test(itemType);
+}
+
 export function getBackendAdapter(backendId) {
 	const adapter = ADAPTERS.get(backendId);
 	if (!adapter) throw new Error(`unsupported backend adapter: ${backendId}`);
@@ -137,7 +144,7 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 		})) };
 	}
 	const rawBytes = Buffer.byteLength(line, "utf8");
-	const approvalRequested = approvalRequestedText(line);
+	const approvalRequested = structuredApprovalRequested(message);
 	const codexCompletion = message.type === "turn.completed"
 		&& (message.status === undefined || new Set(["completed", "success"]).has(message.status));
 	const outcome = backendId === "codex"

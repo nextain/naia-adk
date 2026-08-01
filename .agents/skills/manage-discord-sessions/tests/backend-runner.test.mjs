@@ -198,7 +198,7 @@ test("DSO-006 rejects an approval UI instead of waiting for a child prompt", asy
 	store.close();
 });
 
-for (const prompt of ["__fake_stderr_approval_ui__", "__fake_nested_approval_ui__"]) {
+for (const prompt of ["__fake_stderr_approval_ui__"]) {
 	test(`DSO-007 rejects ${prompt} without waiting for a newline or a hidden approval field`, async () => {
 		const { root, store, jobId } = fixture("codex");
 		const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt, cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { sandbox: "workspace-write", approvalPolicy: "never" }, backendVersion: "0.146.0", requireAuthentication: false, timeoutMs: 1_000, killGraceMs: 20, parentEnv: { PATH: process.env.PATH } });
@@ -207,6 +207,16 @@ for (const prompt of ["__fake_stderr_approval_ui__", "__fake_nested_approval_ui_
 		store.close();
 	});
 }
+
+test("DSO-007 does not mistake approval words in a structured final result for an interactive prompt", async () => {
+	const { root, store, jobId } = fixture("codex");
+	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: "__fake_approval_text_in_result__", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { sandbox: "workspace-write", approvalPolicy: "never" }, backendVersion: "0.146.0", requireAuthentication: false, timeoutMs: 1_000, killGraceMs: 20, parentEnv: { PATH: process.env.PATH } });
+	assert.equal(result.terminationReason, null);
+	assert.equal(result.backendOutcome, "success");
+	assert.match(result.transientResult, /approval request/);
+	assert.equal(store.getJob(jobId).lifecycle, "result_ready");
+	store.close();
+});
 
 test("DSO-006 binds each child to the requested absolute workspace despite parent cwd", async () => {
 	const { root, store, jobId } = fixture("codex");

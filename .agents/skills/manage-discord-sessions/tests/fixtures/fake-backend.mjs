@@ -14,14 +14,13 @@ const codex = process.argv.includes("exec");
 	const failureThenSuccess = prompt.startsWith("__fake_failure_then_success__");
 	const approvalUi = prompt.startsWith("__fake_approval_ui__");
 	const stderrApprovalUi = prompt.startsWith("__fake_stderr_approval_ui__");
-	const nestedApprovalUi = prompt.startsWith("__fake_nested_approval_ui__");
-	const anyApprovalUi = approvalUi || stderrApprovalUi || nestedApprovalUi;
+	const approvalTextInResult = prompt.startsWith("__fake_approval_text_in_result__");
+	const anyApprovalUi = approvalUi || stderrApprovalUi;
 	if (codex) {
 	console.log(JSON.stringify({ type: "thread.started", thread_id: "thread-secret-not-persisted" }));
 		console.log(JSON.stringify({ type: "turn.started" }));
 		if (approvalUi) console.log(JSON.stringify({ type: "approval_required" }));
-		if (nestedApprovalUi) process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "permission request" } }));
-		console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "fake-model-content" } }));
+		console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: approvalTextInResult ? "The approval request text is diagnostic output, not an interactive prompt." : "fake-model-content" } }));
 		console.log(JSON.stringify(structuredFailure || anyApprovalUi ? { type: "turn.failed" } : { type: "turn.completed", usage: { input_tokens: 1 } }));
 	if (failureThenSuccess) console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1 } }));
 } else {
