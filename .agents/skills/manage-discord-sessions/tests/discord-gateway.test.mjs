@@ -558,15 +558,25 @@ test("DSG-015 operator-channel response SLA creates a review handoff instead of 
 	let nowMs = 0;
 	let runnerStarted = false;
 	let abortReason = null;
+	const nonces = [];
 	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, softSilenceSeconds: 60, noProgressInterventionSeconds: 60, operatorResponseSeconds: 1 } };
-	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), now: () => nowMs, send: async () => { throw new Error("channel unavailable"); }, runner: async ({ jobId, signal }) => {
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), now: () => nowMs, send: async ({ content, nonce }) => { if (content.startsWith("요청을 확인했습니다.")) nonces.push(nonce); throw new Error("channel unavailable"); }, runner: async ({ jobId, signal }) => {
 		runnerStarted = true;
 		store.startAttempt(jobId, { attemptId: "operator-response-attempt", childPid: process.pid, now: new Date(0).toISOString() });
 		return new Promise((resolveRunner) => signal.addEventListener("abort", () => { abortReason = signal.reason; resolveRunner({ backendOutcome: "failure", transientResult: null }); }, { once: true }));
 	} });
 	await router.onDispatch("MESSAGE_CREATE", { id: "161616161616161616", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> inspect this` }, 14);
+	await new Promise((resolve) => setImmediate(resolve));
 	store.heartbeatService({ generation: "operator-service", pid: process.pid, now: new Date(1_000).toISOString() });
-	nowMs = 1_001;
+	for (const retryAt of [1_001, 2_002, 3_003]) {
+		nowMs = retryAt;
+		assert.deepEqual(await router.watchdog({ nowMs }), { noProgress: 0, operatorResponse: 1 });
+		const waitingJob = store.getJob(store.listJobs()[0].jobId, { nowMs });
+		assert.notEqual(waitingJob.lifecycle, "recovery_review");
+		assert.equal(waitingJob.events.some((event) => event.kind === "operator_response_missed"), false);
+		assert.equal(runnerStarted, false);
+	}
+	nowMs = 4_004;
 	const outcome = await router.watchdog({ nowMs });
 	await router.waitForIdle();
 	assert.equal(outcome.operatorResponse, 1);
@@ -575,6 +585,8 @@ test("DSG-015 operator-channel response SLA creates a review handoff instead of 
 	const job = store.getJob(store.listJobs()[0].jobId, { nowMs });
 	assert.equal(job.lifecycle, "recovery_review");
 	assert.equal(job.events.some((event) => event.kind === "operator_response_missed"), true);
+	assert.equal(nonces.length, 5);
+	assert.equal(new Set(nonces).size, 1);
 	store.close();
 });
 

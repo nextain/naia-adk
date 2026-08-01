@@ -128,8 +128,10 @@ use `respondWhen: "always"` only with `discord.messageContentIntent: true` and a
 Discord application that has the Message Content privileged intent. Automated
 senders and webhooks remain rejected. An accepted job does not start its model
 child until the acknowledgement POST returns a confirmed Discord receipt; an
-unknown or failed receipt is retried once by the response watchdog and then
-fails closed instead of running silently.
+unknown or failed receipt is retried with the same Discord nonce up to four
+times by the response watchdog and then fails closed instead of running
+silently. Reusing the nonce prevents duplicate acknowledgement messages when a
+successful POST response was lost in transit.
 
 ## Reboot and actual-work visibility
 
