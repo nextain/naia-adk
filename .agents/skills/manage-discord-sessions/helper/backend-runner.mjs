@@ -389,7 +389,11 @@ export async function runBackendAttempt({
 		normalizeFailed = true;
 		terminate("internal_error");
 	};
-	const stdoutCompleted = lineReader(child.stdout, recordLine, streamFailure, approvalChunkDetector());
+	// Codex stdout is structured JSON. Do not scan raw tool output or agent text
+	// for approval words: ordinary diagnostics can legitimately contain phrases
+	// such as "approval request". Explicit structured events are checked by the
+	// adapter, while an actual interactive prompt on stderr is still rejected.
+	const stdoutCompleted = lineReader(child.stdout, recordLine, streamFailure);
 	const stderrCompleted = lineReader(child.stderr, (line) => {
 		lineNumber += 1;
 		if (inspectBackendLine({ backendId, line, attemptId, lineNumber }).approvalRequested) {
