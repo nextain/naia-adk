@@ -4,7 +4,7 @@ import { authorizeDiscordMessage } from "./discord-scope.mjs";
 import { deliverJobResult, formatOperatorStatus } from "./discord-delivery.mjs";
 import { runBackendAttempt } from "./backend-runner.mjs";
 import { commandOptionsForProfile, currentExecutionProfile, sameExecutionProfile } from "./execution-profile.mjs";
-import { promptWithDiscordHistory } from "./discord-history.mjs";
+import { promptWithDiscordConversation } from "./discord-conversation.mjs";
 
 const PROGRESS_TEXT = {
 	file_read: "진행 중: 관련 코드와 현재 상태를 확인하고 있습니다.",
@@ -41,6 +41,7 @@ function commandText(message, botUserId) {
 
 export class DiscordMessageRouter {
 	constructor({ config, store, token, botUserId, cwd, runtimeRoot, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, send = null, loadHistory = null, backendExecutables = {}, now = () => Date.now() }) {
+		if (typeof send !== "function") throw new Error("confirmed Discord sender is required");
 		this.config = config;
 		this.store = store;
 		this.token = token;
@@ -180,7 +181,6 @@ export class DiscordMessageRouter {
 	}
 
 	#scheduleOperatorResponse(item) {
-		if (!this.send) return Promise.resolve(true);
 		let resolveWaiter;
 		const ready = new Promise((resolve) => { resolveWaiter = resolve; });
 		this.operatorResponseWaiters.set(item.jobId, resolveWaiter);
@@ -214,7 +214,11 @@ export class DiscordMessageRouter {
 		this.controllers.set(item.jobId, controller);
 		try {
 			const operatorReady = item.operatorReady ? await item.operatorReady : true;
-			if (!operatorReady) throw new Error("operator response was not confirmed");
+			if (!operatorReady) {
+				if (controller.signal.reason === "recovery") return;
+				throw new Error("operator response was not confirmed");
+			}
+			if (controller.signal.aborted) return;
 			const currentProfile = this.#executionProfile(item.backendId);
 			if (!sameExecutionProfile(item.executionProfile ?? currentProfile, currentProfile)) {
 				this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "profile_replaced", safePayload: {} });
@@ -223,12 +227,12 @@ export class DiscordMessageRouter {
 			let prompt = item.prompt;
 			if (this.loadHistory && item.sourceMessageId) {
 				const loaded = await this.loadHistory({ token: this.token, channelId: item.channelId, beforeMessageId: item.sourceMessageId, botUserId: this.botUserId, allowedUserIds: item.allowedUserIds, signal: controller.signal });
-				if (loaded?.state === "loaded") prompt = promptWithDiscordHistory(prompt, loaded.history);
+				if (loaded?.state === "loaded") prompt = promptWithDiscordConversation(prompt, loaded.history);
 			}
 			const reported = new Set();
 			let progressChain = Promise.resolve();
 			const onSafeEvent = (event) => {
-				if (!this.send || event?.kind !== "tool_started") return;
+				if (event?.kind !== "tool_started") return;
 				const category = event.safePayload?.toolCategory;
 				const content = PROGRESS_TEXT[category];
 				if (!content || reported.has(category) || reported.size >= 3) return;
@@ -257,7 +261,6 @@ export class DiscordMessageRouter {
 	}
 
 	async #reportFailure(item) {
-		if (!this.send) return;
 		const job = this.store.getJob(item.jobId, { includeEvents: false });
 		if (!job || !["failed", "recovery_review"].includes(job.lifecycle)) return;
 		const reasonCode = failureReason(job);
@@ -310,9 +313,9 @@ export class DiscordMessageRouter {
 		for (const item of this.queue.splice(0)) {
 			try { this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "recovered", safePayload: { recoveryAction: "safe_retry" } }); } catch {}
 		}
-		await this.waitForIdle();
 		this.operatorResponses.clear();
 		for (const jobId of [...this.operatorResponseWaiters.keys()]) this.#resolveOperatorResponse(jobId, false);
+		await this.waitForIdle();
 	}
 
 	resumeRecovered(items, { autoRetry = false } = {}) {
@@ -328,7 +331,9 @@ export class DiscordMessageRouter {
 				if (profileChanged) {
 					this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "profile_replaced", safePayload: {} });
 				}
-				this.queue.push({ jobId: item.jobId, backendId: item.backendId, prompt: payload.prompt, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, commandOptions: commandOptionsForProfile(executionProfile), executionProfile });
+				const recovered = { jobId: item.jobId, backendId: item.backendId, prompt: payload.prompt, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, commandOptions: commandOptionsForProfile(executionProfile), executionProfile };
+				recovered.operatorReady = this.#scheduleOperatorResponse(recovered);
+				this.queue.push(recovered);
 			} catch {
 				this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "recovery_review_required", safePayload: {} });
 			}

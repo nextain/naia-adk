@@ -1,5 +1,22 @@
 import { DEFAULT_SERVICE_STALE_MS, TERMINAL_LIFECYCLES } from "./constants.mjs";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { trustedWindowsSystemExecutable } from "./platform-security.mjs";
+
+let cachedWindowsBootId;
+
+function windowsPowerShell(script, extraEnv = {}) {
+	const result = spawnSync(trustedWindowsSystemExecutable("WindowsPowerShell", "v1.0", "powershell.exe"), [
+		"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+		"-Command", script,
+	], {
+		encoding: "utf8",
+		windowsHide: true,
+		env: { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, ...extraEnv },
+	});
+	if (result.status !== 0) return null;
+	return result.stdout.trim() || null;
+}
 
 function parseTime(value) {
 	const timestamp = value ? Date.parse(value) : Number.NaN;
@@ -17,6 +34,13 @@ function processAlive(pid) {
 }
 
 export function readBootId() {
+	if (process.platform === "win32") {
+		if (cachedWindowsBootId !== undefined) return cachedWindowsBootId;
+		cachedWindowsBootId = windowsPowerShell(
+			"(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks",
+		);
+		return cachedWindowsBootId;
+	}
 	try {
 		return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || null;
 	} catch {
@@ -26,6 +50,12 @@ export function readBootId() {
 
 export function readProcessStartIdentity(pid) {
 	if (!Number.isInteger(pid) || pid <= 0) return null;
+	if (process.platform === "win32") {
+		return windowsPowerShell(
+			"$processId=[int]$env:NAIA_PROCESS_ID; $item=Get-CimInstance Win32_Process -Filter \"ProcessId = $processId\"; if ($null -ne $item) { $item.CreationDate.ToUniversalTime().Ticks }",
+			{ NAIA_PROCESS_ID: String(pid) },
+		);
+	}
 	try {
 		const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
 		return stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/)[19] ?? null;

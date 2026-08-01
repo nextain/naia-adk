@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadMessengerConfig, FileCredentialResolver } from "./discord-config.mjs";
 import { DiscordGatewaySession, StoredGatewayState } from "./discord-gateway.mjs";
 import { DiscordMessageRouter } from "./discord-router.mjs";
@@ -10,7 +12,22 @@ import { DiscordStatusProjection } from "./discord-projection.mjs";
 import { discordScopeKey } from "./discord-scope.mjs";
 import { postDiscordMessage } from "./discord-delivery.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
-import { fetchDiscordHistory } from "./discord-history.mjs";
+import { assertOwnerOnly } from "./platform-security.mjs";
+import { fetchDiscordConversation } from "./discord-conversation.mjs";
+
+function configuredBackendCommand(name) {
+	const executable = process.env[`NAIA_${name.toUpperCase()}_EXECUTABLE`];
+	if (!executable) return null;
+	const encoded = process.env[`NAIA_${name.toUpperCase()}_PREFIX_ARGS`];
+	if (!encoded) return executable;
+	let prefixArgs;
+	try { prefixArgs = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")); }
+	catch { throw new Error(`${name} backend prefix arguments are invalid`); }
+	if (!Array.isArray(prefixArgs) || prefixArgs.length !== 1 || prefixArgs.some((item) => typeof item !== "string" || item.length === 0)) {
+		throw new Error(`${name} backend prefix arguments are invalid`);
+	}
+	return { command: executable, prefixArgs };
+}
 
 function parseServiceArguments(argv) {
 	const rootIndex = argv.indexOf("--adk-root");
@@ -40,11 +57,11 @@ export async function runDiscordService({ adkRoot, instance = "default", webSock
 	const stopRequested = new Promise((resolveStop) => { wakeStop = resolveStop; });
 	const delivery = fetchImpl ? (input) => import("./discord-delivery.mjs").then(({ deliverJobResult }) => deliverJobResult({ ...input, fetchImpl })) : undefined;
 	const backendExecutables = {
-		...(process.env.NAIA_CODEX_EXECUTABLE ? { codex: process.env.NAIA_CODEX_EXECUTABLE } : {}),
-		...(process.env.NAIA_CLAUDE_EXECUTABLE ? { claude: process.env.NAIA_CLAUDE_EXECUTABLE } : {}),
+		...(configuredBackendCommand("codex") ? { codex: configuredBackendCommand("codex") } : {}),
+		...(configuredBackendCommand("claude") ? { claude: configuredBackendCommand("claude") } : {}),
 	};
 	const send = fetchImpl ? (input) => postDiscordMessage({ ...input, fetchImpl }) : postDiscordMessage;
-	const loadHistory = (input) => fetchDiscordHistory({ ...input, fetchImpl: fetchImpl ?? fetch });
+	const loadHistory = (input) => fetchDiscordConversation({ ...input, fetchImpl: fetchImpl ?? fetch });
 	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: paths.runtimeRoot, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, loadHistory, backendExecutables });
 	let reconnectDelay = 1_000;
 	const heartbeat = () => store.heartbeatService({ generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
@@ -60,11 +77,21 @@ export async function runDiscordService({ adkRoot, instance = "default", webSock
 		}
 	}
 	const heartbeatTimer = setInterval(heartbeat, (config.runtime?.heartbeatSeconds ?? 10) * 1_000);
-	heartbeatTimer.unref?.();
 	const watchdogIntervalSeconds = Math.max(1, Math.min(config.runtime?.heartbeatSeconds ?? 10, config.runtime?.noProgressInterventionSeconds ?? config.runtime?.softSilenceSeconds ?? 120, config.runtime?.operatorResponseSeconds ?? 30));
 	const watchdogTimer = setInterval(() => { void router.watchdog().catch(() => {}); }, watchdogIntervalSeconds * 1_000);
 	watchdogTimer.unref?.();
 	const stop = () => { stopping = true; gateway?.close(1_000); wakeReconnect?.(); wakeStop?.({ resumable: false }); };
+	const controlTimer = setInterval(() => {
+		if (!existsSync(paths.stopRequestPath)) return;
+		try {
+			assertOwnerOnly(paths.stopRequestPath, "file", "Discord stop request");
+			const request = JSON.parse(readFileSync(paths.stopRequestPath, "utf8"));
+			if (request?.schemaVersion === 1 && request.generation === generation) {
+				unlinkSync(paths.stopRequestPath);
+				stop();
+			}
+		} catch {}
+	}, 250);
 	signalSource.once?.("SIGTERM", stop);
 	signalSource.once?.("SIGINT", stop);
 	try {
@@ -90,6 +117,7 @@ export async function runDiscordService({ adkRoot, instance = "default", webSock
 	} finally {
 		clearInterval(heartbeatTimer);
 		clearInterval(watchdogTimer);
+		clearInterval(controlTimer);
 		await gateway?.drain();
 		await router.shutdown();
 		stopping = true;
@@ -98,7 +126,7 @@ export async function runDiscordService({ adkRoot, instance = "default", webSock
 	}
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
 	let exitCode = 0;
 	try {
 		await runDiscordService(parseServiceArguments(process.argv.slice(2)));

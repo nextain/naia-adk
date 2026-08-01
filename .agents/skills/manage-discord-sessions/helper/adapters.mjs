@@ -138,9 +138,11 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 	}
 	const rawBytes = Buffer.byteLength(line, "utf8");
 	const approvalRequested = approvalRequestedText(line);
+	const codexCompletion = message.type === "turn.completed"
+		&& (message.status === undefined || new Set(["completed", "success"]).has(message.status));
 	const outcome = backendId === "codex"
-		? message.type === "turn.completed" ? "success" : new Set(["turn.failed", "error"]).has(message.type) ? "failure" : null
-		: message.type === "result" ? (message.is_error === true || message.subtype === "error" ? "failure" : "success") : null;
+		? codexCompletion ? "success" : new Set(["turn.failed", "error"]).has(message.type) ? "failure" : null
+		: message.type === "result" ? (message.is_error === true || message.subtype === "error" ? "failure" : message.subtype === "success" && message.is_error !== true ? "success" : null) : null;
 	let transientResult = null;
 	if (backendId === "codex" && message.type === "item.completed" && message.item?.type === "agent_message" && typeof message.item.text === "string") transientResult = message.item.text;
 	if (backendId === "claude" && message.type === "result" && outcome === "success" && typeof message.result === "string") transientResult = message.result;

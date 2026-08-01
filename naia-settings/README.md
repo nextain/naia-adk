@@ -29,17 +29,35 @@ after helper or machine restart.
 
 Use the existing `manage-discord-sessions` skill from Codex or Claude. It works
 without `naia-agent` or `naia-shell`: Discord Gateway receives events, the
-selected Codex or Claude CLI runs in an isolated child environment, and a user
-systemd unit restores the service after login (`startAt=login`) or at boot with
-user lingering (`startAt=boot`).
+selected Codex or Claude CLI runs in an isolated child environment. Linux uses
+a user systemd unit. Windows prefers one limited ONLOGON Task Scheduler task;
+when local policy denies task creation it uses a verified owner-only hidden
+per-user Startup launcher. Both paths pin an owner-only native launcher.
 
 ```bash
 .agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh service install
+.agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh service status
+.agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh service restart
 .agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh status
 .agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh jobs --active
 .agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh job <id> --events
 .agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh watch --job <id>
+.agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh latest --channel <channel-id> --author <user-id>
+.agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh attachment --channel <channel-id> --message <message-id> --attachment <attachment-id> --output <absolute-path> --expected-sha256 <hex>
+.agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh reply --channel <channel-id> --content-file <owner-only-absolute-path>
 ```
+
+After `service install`, use the generated `naia` command on Linux or
+`naia.cmd` on Windows. `history`/`latest` perform one explicit REST read for a
+uniquely authorized binding; they are not a polling receive path. Attachment
+recovery is bound to the exact authorized message, Discord CDN host, advertised
+size, and optional expected SHA-256.
+`reply` requires the reply role and one exact operator binding, reads an
+owner-only content file, suppresses mentions, and does not retry an unknown
+receipt.
+
+Provider result records marked `unknown`, or lacking an explicit supported
+success marker, remain unsuccessful and are never sent as completed answers.
 
 The service intentionally does not open a terminal. Its durable safe-event
 ledger is the visibility surface. A prompt is stored only as authenticated
