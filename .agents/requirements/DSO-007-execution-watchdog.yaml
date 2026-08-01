@@ -7,15 +7,19 @@ status: active
 source: human
 priority: high
 created: 2026-07-31
-updated: 2026-07-31
+updated: 2026-08-01
 issue_url: "https://github.com/nextain/naia-adk/issues/18"
 description: |
-  A parent permission change, a silent child, or a missing Discord response must not leave an AI job displayed as running without a bounded owner action. Reused work always receives the current no-prompt execution profile, and the service owns the intervention record.
+  A parent permission change or a silent owned child must not leave an AI job
+  displayed as running without a bounded owner action. Discord acknowledgement
+  and progress delivery are observable but never authorize, cancel, or gate work.
+  Reused work always receives the current no-prompt execution profile, and the
+  service owns the intervention record.
 acceptance_criteria:
   - "Every launched Codex or Claude child uses a no-prompt approval policy; an approval UI signal is terminated and recorded as a safe failure rather than a waiting state."
   - "Recovery compares the encrypted prior execution profile with the current permission-profile epoch and access level. A mismatch records profile_replaced and starts only a fresh current no-prompt attempt, including an explicitly changed never-policy mutation profile; stored command options are never reused."
   - "The watchdog acts at most once per no-progress child: it records watchdog_intervened, aborts its owned process, and records no_progress_timeout. An unowned stalled job is failed rather than silently retained as running."
-  - "A Discord conversation receives a safe acknowledgement. If the configured channel-response deadline is missed, one fallback attempt is made and the job becomes recovery_review with an operator-response event."
+  - "A Discord conversation attempts one safe acknowledgement. Missing or uncertain acknowledgement delivery is recorded separately and never blocks coordinator admission, worker launch, or later messages."
   - "Each child receives a required absolute workspace through both process cwd and the Codex --cd contract; relative or ambient caller workdirs are rejected."
 trace:
   code:
@@ -26,5 +30,5 @@ trace:
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-013/DSG-014/DSG-015", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "approval UI stream variants and explicit workspace tests", coverage: full }
-  reviews: { planning: null, development: null, test: null, integration: null }
+  reviews: { planning: "two-agent adversarial review 2026-08-01", development: "two-agent adversarial review 2026-08-01", test: "focused deterministic suite 2026-08-01", integration: null }
 decisions: []

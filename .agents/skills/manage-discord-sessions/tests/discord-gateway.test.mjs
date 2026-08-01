@@ -96,7 +96,8 @@ test("DSG-003 records a delivery before POST and never automatically resends an 
 	const second = await deliverJobResult({ store, jobId: "job-1", attemptId, token: "token-value-long-enough", channelId: CHANNEL, botUserId: BOT, content: "done", fetchImpl });
 	assert.equal(second.state, "unknown");
 	assert.equal(posts, 1);
-	assert.equal(store.getJob("job-1").lifecycle, "recovery_review");
+	assert.equal(store.getJob("job-1").lifecycle, "completed");
+	assert.equal(store.getJob("job-1").deliveryState, "unknown");
 	store.close();
 	const bytes = readFileSync(databasePath);
 	assert.equal(bytes.includes(Buffer.from("done /var/home/luke/private")), false);
@@ -112,6 +113,19 @@ test("DSG-003 opens an operator DM and confirms the sent message identity", asyn
 	assert.equal(receipt.state, "confirmed");
 	assert.deepEqual(calls[0].body, { recipient_id: USER });
 	assert.equal(calls[1].url.endsWith(`/channels/${CHANNEL}/messages`), true);
+});
+
+test("DSG-003 delivery rejection is separate from completed worker execution", async () => {
+	const { store } = fixture();
+	store.createJob({ jobId: "delivery-failed-job", backendId: "codex", activityDetail: "structured", jobType: "conversation" });
+	const attemptId = store.startAttempt("delivery-failed-job", { attemptId: "delivery-failed-attempt" });
+	store.recordEvent({ jobId: "delivery-failed-job", attemptId, kind: "attempt_exited", source: "helper", safePayload: { terminationKind: "exited", exitCode: 0 } });
+	store.recordEvent({ jobId: "delivery-failed-job", attemptId, kind: "attempt_succeeded", source: "helper", safePayload: {} });
+	const result = await deliverJobResult({ store, jobId: "delivery-failed-job", attemptId, token: "token-value-long-enough", channelId: CHANNEL, botUserId: BOT, content: "done", fetchImpl: async () => ({ ok: false, status: 403 }) });
+	assert.equal(result.state, "failed");
+	assert.equal(store.getJob("delivery-failed-job").lifecycle, "completed");
+	assert.equal(store.getJob("delivery-failed-job").deliveryState, "failed");
+	store.close();
 });
 
 class FakeSocket {
@@ -339,19 +353,17 @@ test("DSG-017 serializes jobs in one Discord scope even when global concurrency 
 	store.close();
 });
 
-test("DSG-018 injects recent context and reports safe typed progress", async () => {
+test("DSG-018 injects recent context without generic progress spam", async () => {
 	const { store, root, databasePath } = fixture();
 	const sent = [];
 	const calls = [];
 	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
 	const router = new DiscordMessageRouter({
-		config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"),
+		config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: new RecoveryCodec(randomBytes(32)),
 		loadHistory: async () => ({ state: "loaded", history: "user: 앞 요청\nassistant: 앞 답변", messageCount: 2 }),
 		send: async (input) => { sent.push(input.content); return { state: "confirmed" }; },
 		runner: async (input) => {
 			calls.push(input);
-			input.onSafeEvent({ kind: "tool_started", safePayload: { toolCategory: "file_read" } });
-			input.onSafeEvent({ kind: "tool_started", safePayload: { toolCategory: "file_edit" } });
 			return { backendOutcome: "failure", transientResult: null };
 		},
 	});
@@ -360,10 +372,7 @@ test("DSG-018 injects recent context and reports safe typed progress", async () 
 	assert.match(calls[0].prompt, /user: 앞 요청/);
 	assert.match(calls[0].prompt, /Reply in the language used by the user/);
 	assert.match(calls[0].prompt, /User request:\n이어서 고쳐줘$/);
-	assert.deepEqual(sent.slice(0, 2), [
-		"[메시지 받음]",
-		"[진행 중]",
-	]);
+	assert.deepEqual(sent, ["[메시지 받음]"]);
 	store.close();
 	assert.equal(readFileSync(databasePath).includes(Buffer.from("앞 요청")), false);
 });
@@ -473,7 +482,7 @@ test("DSG-007 resumes an encrypted prompt as a new attempt without plaintext per
 	assert.equal(readFileSync(databasePath).includes(Buffer.from(prompt)), false);
 });
 
-test("DSG-007 recovered work waits for a newly confirmed acknowledgement", async () => {
+test("DSG-007 recovered work does not wait for acknowledgement confirmation", async () => {
 	const { store, root } = fixture();
 	const codec = new RecoveryCodec(randomBytes(32));
 	const prompt = "private-recovered-ack-request";
@@ -487,14 +496,14 @@ test("DSG-007 recovered work waits for a newly confirmed acknowledgement", async
 	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: codec, send: async () => acknowledgement, runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
 	router.resumeRecovered(recovered, { autoRetry: true });
 	await new Promise((resolve) => setImmediate(resolve));
-	assert.equal(calls.length, 0);
+	assert.equal(calls.length, 1);
 	confirm({ state: "confirmed" });
 	await router.waitForIdle();
 	assert.equal(calls.length, 1);
 	store.close();
 });
 
-test("DSG-007 shutdown releases an unconfirmed recovered acknowledgement without execution", async () => {
+test("DSG-007 shutdown is independent of an unconfirmed recovered acknowledgement", async () => {
 	const { store, root } = fixture();
 	const codec = new RecoveryCodec(randomBytes(32));
 	store.acceptIngressAndCreateJob({ sourceMessageId: "181818181818181818", scopeKey: "scope-1", jobId: "recovered-shutdown-job", dispatchSequence: 16, backendId: "codex", backendCapabilities: { structuredProgress: true }, activityDetail: "structured", recoveryEnvelope: codec.seal(JSON.stringify({ prompt: "private-shutdown-request", channelId: CHANNEL, executionProfile: { backendId: "codex", permissionProfileEpoch: "default", authorizationMode: "never", access: "read-only" } })) });
@@ -506,12 +515,12 @@ test("DSG-007 shutdown releases an unconfirmed recovered acknowledgement without
 	router.resumeRecovered(recovered, { autoRetry: true });
 	await new Promise((resolve) => setImmediate(resolve));
 	await Promise.race([router.shutdown(), new Promise((_, reject) => setTimeout(() => reject(new Error("router shutdown timed out")), 500))]);
-	assert.equal(calls, 0);
-	assert.equal(store.getJob("recovered-shutdown-job").lifecycle, "queued");
+	assert.equal(calls, 1);
+	assert.notEqual(store.getJob("recovered-shutdown-job").lifecycle, "recovery_review");
 	store.close();
 });
 
-test("DSG-007 shutdown wins a race with recovered acknowledgement confirmation", async () => {
+test("DSG-007 acknowledgement confirmation cannot race worker admission", async () => {
 	const { store, root } = fixture();
 	const codec = new RecoveryCodec(randomBytes(32));
 	store.acceptIngressAndCreateJob({ sourceMessageId: "191919191919191919", scopeKey: "scope-1", jobId: "recovered-race-job", dispatchSequence: 17, backendId: "codex", backendCapabilities: { structuredProgress: true }, activityDetail: "structured", recoveryEnvelope: codec.seal(JSON.stringify({ prompt: "private-race-request", channelId: CHANNEL, executionProfile: { backendId: "codex", permissionProfileEpoch: "default", authorizationMode: "never", access: "read-only" } })) });
@@ -526,7 +535,7 @@ test("DSG-007 shutdown wins a race with recovered acknowledgement confirmation",
 	await new Promise((resolve) => setImmediate(resolve));
 	confirm({ state: "confirmed" });
 	await router.shutdown();
-	assert.equal(calls, 0);
+	assert.equal(calls, 1);
 	store.close();
 });
 
@@ -579,40 +588,30 @@ test("DSG-014 watchdog aborts a no-progress owned child instead of leaving it ru
 	store.close();
 });
 
-test("DSG-015 operator-channel response SLA creates a review handoff instead of silent execution", async () => {
+test("DSG-015 acknowledgement failure never gates work or a later same-scope message", async () => {
 	const { store, root } = fixture();
 	let nowMs = 0;
-	let runnerStarted = false;
-	let abortReason = null;
+	let runnerStarted = 0;
 	const nonces = [];
 	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, softSilenceSeconds: 60, noProgressInterventionSeconds: 60, operatorResponseSeconds: 1 } };
 	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), now: () => nowMs, send: async ({ content, nonce }) => { if (content === "[메시지 받음]") nonces.push(nonce); throw new Error("channel unavailable"); }, runner: async ({ jobId, signal }) => {
-		runnerStarted = true;
-		store.startAttempt(jobId, { attemptId: "operator-response-attempt", childPid: process.pid, now: new Date(0).toISOString() });
-		return new Promise((resolveRunner) => signal.addEventListener("abort", () => { abortReason = signal.reason; resolveRunner({ backendOutcome: "failure", transientResult: null }); }, { once: true }));
+		runnerStarted += 1;
+		const attemptId = `operator-response-attempt-${runnerStarted}`;
+		store.startAttempt(jobId, { attemptId, childPid: process.pid, now: new Date(0).toISOString() });
+		store.recordEvent({ jobId, attemptId, source: "helper", kind: "failed", safePayload: { reasonCode: "internal_error" } });
+		return { backendOutcome: "failure", transientResult: null, attemptId };
 	} });
 	await router.onDispatch("MESSAGE_CREATE", { id: "161616161616161616", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> inspect this` }, 14);
-	await new Promise((resolve) => setImmediate(resolve));
-	store.heartbeatService({ generation: "operator-service", pid: process.pid, now: new Date(1_000).toISOString() });
-	for (const retryAt of [1_001, 2_002, 3_003]) {
-		nowMs = retryAt;
-		assert.deepEqual(await router.watchdog({ nowMs }), { noProgress: 0, operatorResponse: 1 });
-		const waitingJob = store.getJob(store.listJobs()[0].jobId, { nowMs });
-		assert.notEqual(waitingJob.lifecycle, "recovery_review");
-		assert.equal(waitingJob.events.some((event) => event.kind === "operator_response_missed"), false);
-		assert.equal(runnerStarted, false);
-	}
-	nowMs = 4_004;
-	const outcome = await router.watchdog({ nowMs });
+	await router.onDispatch("MESSAGE_CREATE", { id: "161616161616161617", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> second request` }, 15);
 	await router.waitForIdle();
-	assert.equal(outcome.operatorResponse, 1);
-	assert.equal(runnerStarted, false);
-	assert.equal(abortReason, null);
-	const job = store.getJob(store.listJobs()[0].jobId, { nowMs });
-	assert.equal(job.lifecycle, "recovery_review");
-	assert.equal(job.events.some((event) => event.kind === "operator_response_missed"), true);
-	assert.equal(nonces.length, 5);
-	assert.equal(new Set(nonces).size, 1);
+	assert.equal(runnerStarted, 2);
+	assert.deepEqual(await router.watchdog({ nowMs }), { noProgress: 0, operatorResponse: 0 });
+	for (const item of store.listJobs()) {
+		const job = store.getJob(item.jobId);
+		assert.equal(job.lifecycle, "failed");
+		assert.equal(job.events.some((event) => event.kind === "operator_response_missed"), false);
+	}
+	assert.equal(nonces.length, 2);
 	store.close();
 });
 
@@ -639,6 +638,74 @@ test("DSG-015 coalesces overlapping acknowledgement checks without cancelling co
 	const job = store.getJob(store.listJobs()[0].jobId, { nowMs, includeEvents: true });
 	assert.equal(job.events.filter((event) => event.kind === "operator_response_sent").length, 1);
 	assert.equal(job.events.some((event) => event.kind === "operator_response_missed"), false);
+	store.close();
+});
+
+test("DSO-008 local coordinator stays responsive while a delegated worker is active", async () => {
+	const { store, root, databasePath } = fixture();
+	const delivered = [];
+	const calls = [];
+	let releaseWorker;
+	const workerDone = new Promise((resolve) => { releaseWorker = resolve; });
+	const config = { persona: { name: "Reviewer", instructions: "Coordinate." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, conversationCoordinator: true, permissionProfileEpoch: "coord-v1" } };
+	const successful = (jobId, attemptId, transientResult) => {
+		store.startAttempt(jobId, { attemptId, childPid: process.pid });
+		store.recordEvent({ jobId, attemptId, source: "helper", kind: "attempt_exited", safePayload: { terminationKind: "exited", exitCode: 0 } });
+		store.recordEvent({ jobId, attemptId, source: "helper", kind: "attempt_succeeded", safePayload: {} });
+		return { backendOutcome: "success", attemptId, transientResult };
+	};
+	const router = new DiscordMessageRouter({
+		config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: new RecoveryCodec(randomBytes(32)),
+		loadHistory: async () => ({ state: "loaded", history: "user: 앞 요청\nassistant: 앞 답변", messageCount: 2 }),
+		send: async () => ({ state: "confirmed" }),
+		deliver: async (input) => { delivered.push(input.content); return { state: "confirmed" }; },
+		runner: async ({ jobId, prompt, commandOptions }) => {
+			calls.push({ jobId, prompt, commandOptions });
+			if (prompt.includes("Return JSON only")) {
+				const coordinatorCount = calls.filter((item) => item.prompt.includes("Return JSON only")).length;
+				const response = prompt.includes("A delegated worker for this conversation returned")
+					? '{"message":"검증된 작업 결과입니다.","delegate":null}'
+					: coordinatorCount === 1
+						? '{"message":"분석을 시작했습니다.","delegate":{"task":"Inspect the bounded issue."}}'
+						: '{"message":"작업자는 실행 중입니다.","delegate":null}';
+				return successful(jobId, `coordinator-attempt-${coordinatorCount}`, response);
+			}
+			await workerDone;
+			return successful(jobId, "worker-attempt-1", "검증된 작업 결과입니다.");
+		},
+	});
+	await router.onDispatch("MESSAGE_CREATE", { id: "262626262626262626", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> 문제를 조사해` }, 26);
+	for (let index = 0; index < 20 && !calls.some((item) => !item.prompt.includes("Return JSON only")); index += 1) await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(calls.some((item) => !item.prompt.includes("Return JSON only")), true);
+	const auditDb = new DatabaseSync(databasePath, { readOnly: true });
+	const durableWorkerIntents = auditDb.prepare("SELECT COUNT(*) AS count FROM job_recovery r JOIN jobs j ON j.job_id = r.job_id WHERE j.revision = 'discord-worker-v2'").get().count;
+	auditDb.close();
+	assert.ok(durableWorkerIntents >= 1);
+	await router.onDispatch("MESSAGE_CREATE", { id: "272727272727272727", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> 지금 상태는?` }, 27);
+	for (let index = 0; index < 20 && calls.filter((item) => item.prompt.includes("Return JSON only")).length < 2; index += 1) await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(calls.filter((item) => item.prompt.includes("Return JSON only")).length, 2);
+	assert.deepEqual(calls.filter((item) => item.prompt.includes("Return JSON only")).slice(0, 2).map((item) => item.commandOptions.sandbox), ["read-only", "read-only"]);
+	releaseWorker();
+	await router.waitForIdle();
+	assert.deepEqual(delivered.sort(), ["검증된 작업 결과입니다.", "분석을 시작했습니다.", "작업자는 실행 중입니다."].sort());
+	assert.equal(store.getCoordinatorScope(store.listJobs()[0].scopeKey).policyRevision.length, 64);
+	store.close();
+});
+
+test("DSO-008 coordinator admission has deterministic per-scope backpressure", async () => {
+	const { store, root } = fixture();
+	let release;
+	const blocked = new Promise((resolve) => { release = resolve; });
+	const config = { persona: { name: "Reviewer", instructions: "Coordinate." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, conversationCoordinator: true, permissionProfileEpoch: "coord-v1" } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: new RecoveryCodec(randomBytes(32)), loadHistory: async () => ({ state: "unavailable", history: "", messageCount: 0 }), send: async () => ({ state: "confirmed" }), runner: async () => { await blocked; return { backendOutcome: "failure", transientResult: null }; } });
+	const results = [];
+	for (let index = 0; index < 10; index += 1) {
+		results.push(await router.onDispatch("MESSAGE_CREATE", { id: String(280000000000000000n + BigInt(index)), guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> request ${index}` }, 30 + index));
+	}
+	assert.equal(results.filter((item) => item.state === "accepted").length, 9);
+	assert.deepEqual(results[9], { state: "rejected", reasonCode: "coordinator_overloaded" });
+	release();
+	await router.waitForIdle();
 	store.close();
 });
 

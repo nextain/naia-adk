@@ -34,10 +34,10 @@ source_ledger:
 products:
   - product: naia-adk-discord-sessions
     title: "Observable Discord AI Sessions"
-    req_count: 7
-    priority_high: 7
+    req_count: 8
+    priority_high: 8
     priority_medium: 0
-    modules: [observability-ledger, health-projection, operator-interface, completion-evidence, privacy, recovery, execution-watchdog]
+    modules: [observability-ledger, health-projection, operator-interface, completion-evidence, privacy, recovery, execution-watchdog, conversation-coordinator]
     requirements:
       - { id: DSO-001, title: "Durable Background Job Activity Ledger", status: active }
       - { id: DSO-002, title: "Truthful Freshness and Activity Health", status: active }
@@ -46,6 +46,7 @@ products:
       - { id: DSO-005, title: "Private and Authorized Observability Projections", status: active }
       - { id: DSO-006, title: "ADK-Only Reboot Recovery and Backend Parity", status: active }
       - { id: DSO-007, title: "Fresh Execution Profiles and Bounded Operator Intervention", status: active }
+      - { id: DSO-008, title: "Durable Discord Conversation Coordinator", status: active }
 
   - product: naia-benchmark-contract
     title: "Permanent Benchmark and Harness Recovery Contract"

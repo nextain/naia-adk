@@ -97,7 +97,7 @@ job_accepted, attempt_reserved, attempt_started, backend_ready,
 phase_changed, output_activity, tool_started, tool_finished,
 approval_required, checkpoint_saved, verification_recorded,
 attempt_exited, attempt_succeeded, retry_scheduled, delivery_started,
-delivery_confirmed, delivery_unknown, recovered, profile_replaced,
+delivery_confirmed, delivery_unknown, delivery_failed, recovered, profile_replaced,
 watchdog_intervened, operator_response_sent, operator_response_missed,
 cancel_requested, cancelled, completed, failed
 ```
@@ -127,21 +127,22 @@ Closed payload contract:
 | `delivery_started` | core | empty payload |
 | `delivery_confirmed` | core | empty payload |
 | `delivery_unknown` | core | empty payload |
+| `delivery_failed` | core | `reasonCode`; terminal only for delivery, not for work |
 | `recovered` | core | `recoveryAction`: `resume`, `safe_retry`, or `manual_review` |
 | `profile_replaced` | core | empty; historical child settings were rejected before launch |
 | `cancel_requested` | core | empty payload |
-| `watchdog_intervened` | core | `watchdogReason`: `no_progress` or `operator_response` |
+| `watchdog_intervened` | core | `watchdogReason`: `no_progress`; Discord delivery never owns worker lifecycle |
 | `operator_response_sent` | core | empty; safe Discord acknowledgement was delivered |
-| `operator_response_missed` | core | empty; one fallback attempt failed and ownership moved to review |
+| `operator_response_missed` | legacy | deprecated receipt telemetry; it never changes conversation or worker lifecycle |
 | `cancelled` | core | empty payload |
 | `completed` | core | empty payload |
-| `failed` | core | `reasonCode`: `timeout`, `process_exit`, `authorization`, `delivery_unknown`, `no_progress_timeout`, `approval_ui_detected`, or `internal_error` |
+| `failed` | core | `reasonCode`: `timeout`, `process_exit`, `authorization`, `no_progress_timeout`, `approval_ui_detected`, or `internal_error`; delivery has an independent state |
 
 Unknown keys are rejected. Enum fields accept only the values listed above. `checkId` and verifier IDs use `[A-Za-z0-9_.:-]{1,64}` and additionally reject secret-like patterns. Persisted metrics allow only `bytes`, `count`, `durationMs`, `exitCode`, `passed`, `failed`, `missing`, `total`, and `queuePosition`; values are booleans or non-negative safe integers. An optional artifact digest is local-only and must be `sha256:` followed by exactly 64 lowercase hexadecimal characters. An encoded payload above 2 KiB is rejected before formatting.
 
 The producer column is enforced, not descriptive. In particular, a backend cannot append lifecycle-authoritative `completed`, `failed`, or delivery events. Its success statement is stored only as `backend_claim` evidence; the helper owns lifecycle transitions after observing process and verification evidence.
 
-Attempt ownership is also enforced. Once a new attempt becomes current, delayed events or evidence from an older attempt are rejected and cannot overwrite the job snapshot. A `delivery_unknown` job cannot return to `running` from a later adapter event; only a separate authorized operator or reconciliation decision may leave `recovery_review`.
+Attempt ownership is also enforced. Once a new attempt becomes current, delayed events or evidence from an older attempt are rejected and cannot overwrite the job snapshot. A `delivery_unknown` record affects only the delivery projection and never changes a conversation or worker lifecycle. Ambiguous content is not automatically resent.
 
 ### 3.4 Snapshot and freshness
 
@@ -231,7 +232,11 @@ Discord provides two allowlisted projections. Before Slice 3, `config.json` must
 
 It does not post periodic “still alive” spam. After reboot it posts one recovery summary. A conversation participant may see only that conversation. Configured operators may see redacted cross-job metadata, never raw user content or full local paths.
 
-For each accepted conversation, the helper posts one safe acknowledgement and records `operator_response_sent`. If the channel transport cannot respond by `operatorResponseSeconds`, it makes one fallback attempt, records `operator_response_missed`, aborts any owned child, and moves the job to `recovery_review`. This is an operator handoff, not an automatic retry loop.
+For each accepted conversation, the helper makes one best-effort safe
+acknowledgement attempt and records its delivery state independently. A missing
+or uncertain acknowledgement never gates coordinator admission, worker launch,
+or later messages. Transport failure cannot abort model work. The durable
+per-scope coordinator contract is defined by DSO-008.
 
 ## 5. Completion evidence
 
@@ -284,7 +289,17 @@ Verification: deterministic Node tests for fresh/stale service, lifecycle/health
 
 Codex, Claude, and fake adapters map capabilities and process outcomes into the same event contract. Child environment isolation is tested.
 
-The supported floor is Codex CLI `0.146.0` and Claude Code `2.1.220`; an older or unparseable version is `not_ready`. Codex runs with `--ephemeral`; Claude runs with `--no-session-persistence`. Slice 2 raw retention is `none`: prompt and raw stdout/stderr/tool payloads are neither stored nor encrypted. Reboot recovery therefore keeps the durable `jobId` but starts a new `attemptId` or requires manual review; it does not silently resume a provider-native transcript. A structured provider success marker plus process exit 0 produces `attempt_succeeded` and lifecycle `result_ready`. Only the Gateway may then record real delivery events; the runner never fabricates `delivery_confirmed`.
+The supported floor is Codex CLI `0.146.0` and Claude Code `2.1.220`; an older
+or unparseable version is `not_ready`. A per-scope coordinator is a
+provider-neutral local record bound to a policy revision. Each short model turn
+is isolated; Codex and Claude session identities are not continuity sources.
+Bounded authorized conversation and open-work context may be retained only in
+an owner-only encrypted envelope with an explicit size and retention limit.
+Raw worker stdout/stderr/tool payload retention remains `none`. Reboot recovery
+may reconstruct coordinator context but never silently resumes mutation work.
+A structured worker success marker plus process exit 0 produces
+`attempt_succeeded` and lifecycle `result_ready`. Only the Gateway may then
+record real delivery events; a worker never fabricates `delivery_confirmed`.
 
 Verification: each real adapter contract, each-backend-removal test, no-prompt approval rejection from structured, stderr, and no-newline streams, explicit absolute workspace binding, cancellation/timeout/process-kill matrix.
 
@@ -325,6 +340,7 @@ Verification: shadow comparison, single sender cutover, rollback without deletin
 ## 10. Decisions required before their owning slice
 
 - Minimum supported Codex and Claude versions and their structured-output capability matrix
-- Before Slice 2: local payload encryption and default message retention period
+- Before coordinator continuity: local payload encryption, bounded size,
+  policy-revision binding, and default message retention period
 - Before Slice 3: exact Discord command registration and operator authorization bootstrap
 - Whether direct read-only terminal attachment is worth the additional PTY proxy surface
