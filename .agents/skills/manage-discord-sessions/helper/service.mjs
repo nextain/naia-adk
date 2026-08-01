@@ -10,6 +10,7 @@ import { DiscordStatusProjection } from "./discord-projection.mjs";
 import { discordScopeKey } from "./discord-scope.mjs";
 import { postDiscordMessage } from "./discord-delivery.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
+import { fetchDiscordHistory } from "./discord-history.mjs";
 
 function parseServiceArguments(argv) {
 	const rootIndex = argv.indexOf("--adk-root");
@@ -43,7 +44,8 @@ export async function runDiscordService({ adkRoot, instance = "default", webSock
 		...(process.env.NAIA_CLAUDE_EXECUTABLE ? { claude: process.env.NAIA_CLAUDE_EXECUTABLE } : {}),
 	};
 	const send = fetchImpl ? (input) => postDiscordMessage({ ...input, fetchImpl }) : postDiscordMessage;
-	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: paths.runtimeRoot, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, backendExecutables });
+	const loadHistory = (input) => fetchDiscordHistory({ ...input, fetchImpl: fetchImpl ?? fetch });
+	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: paths.runtimeRoot, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, loadHistory, backendExecutables });
 	let reconnectDelay = 1_000;
 	const heartbeat = () => store.heartbeatService({ generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
 	heartbeat();

@@ -4,6 +4,29 @@ import { authorizeDiscordMessage } from "./discord-scope.mjs";
 import { deliverJobResult, formatOperatorStatus } from "./discord-delivery.mjs";
 import { runBackendAttempt } from "./backend-runner.mjs";
 import { commandOptionsForProfile, currentExecutionProfile, sameExecutionProfile } from "./execution-profile.mjs";
+import { promptWithDiscordHistory } from "./discord-history.mjs";
+
+const PROGRESS_TEXT = {
+	file_read: "진행 중: 관련 코드와 현재 상태를 확인하고 있습니다.",
+	file_edit: "진행 중: 확인한 원인을 바탕으로 수정하고 있습니다.",
+	command: "진행 중: 진단 명령으로 원인과 실행 상태를 확인하고 있습니다.",
+	test: "진행 중: 수정 결과를 테스트하고 있습니다.",
+	build: "진행 중: 빌드와 정적 검사를 확인하고 있습니다.",
+	network: "진행 중: 외부 서비스 연결 상태를 확인하고 있습니다.",
+};
+
+const FAILURE_TEXT = {
+	no_progress_timeout: "일정 시간 동안 진행이 없어 작업을 중단했습니다.",
+	timeout: "작업 제한 시간을 초과해 중단했습니다.",
+	process_exit: "작업 프로세스가 비정상 종료됐습니다.",
+	approval_ui_detected: "승인 입력을 요구하는 실행이 감지되어 안전하게 중단했습니다.",
+	internal_error: "작업 중 내부 오류가 발생했습니다.",
+};
+
+function failureReason(job) {
+	const match = String(job?.latestSafeError ?? "").match(/^Job failed: ([a-z0-9_]+)$/);
+	return match?.[1] ?? "internal_error";
+}
 
 function transientPrompt(message, botUserId, config) {
 	if (typeof message.content !== "string" || message.content.length > 4_000) throw new Error("Discord content is missing or too large");
@@ -17,7 +40,7 @@ function commandText(message, botUserId) {
 }
 
 export class DiscordMessageRouter {
-	constructor({ config, store, token, botUserId, cwd, runtimeRoot, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, send = null, backendExecutables = {}, now = () => Date.now() }) {
+	constructor({ config, store, token, botUserId, cwd, runtimeRoot, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, send = null, loadHistory = null, backendExecutables = {}, now = () => Date.now() }) {
 		this.config = config;
 		this.store = store;
 		this.token = token;
@@ -27,6 +50,7 @@ export class DiscordMessageRouter {
 		this.runner = runner;
 		this.deliver = deliver;
 		this.send = send;
+		this.loadHistory = loadHistory;
 		this.backendExecutables = backendExecutables;
 		this.recoveryCodec = recoveryCodec;
 		this.projectStatus = projectStatus;
@@ -37,6 +61,7 @@ export class DiscordMessageRouter {
 		}
 		this.queue = [];
 		this.running = 0;
+		this.runningScopes = new Set();
 		this.maxConcurrent = config.runtime?.maxConcurrentJobs ?? 1;
 		this.accepting = true;
 		this.controllers = new Map();
@@ -79,11 +104,11 @@ export class DiscordMessageRouter {
 		const channelId = authorization.scope.threadId ?? authorization.scope.channelId;
 		const executionProfile = this.#executionProfile(backendId);
 		const commandOptions = commandOptionsForProfile(executionProfile);
-		const recoveryEnvelope = this.recoveryCodec?.seal(JSON.stringify({ prompt, channelId, executionProfile })) ?? null;
+		const recoveryEnvelope = this.recoveryCodec?.seal(JSON.stringify({ prompt, channelId, scopeKey: authorization.scopeKey, executionProfile })) ?? null;
 		const ingress = this.store.acceptIngressAndCreateJob({ sourceMessageId, scopeKey: authorization.scopeKey, jobId, dispatchSequence: sequence, backendId, revision: "discord-v1", backendCapabilities: adapter.capabilities, activityDetail: adapter.activityDetail, jobType: "conversation",
 			softSilenceMs: (this.config.runtime?.softSilenceSeconds ?? 120) * 1_000, recoveryEnvelope, now: this.#nowIso() });
 		if (ingress.duplicate) return { state: "duplicate", jobId: ingress.jobId };
-		const item = { jobId, backendId, prompt, channelId, commandOptions, executionProfile };
+		const item = { jobId, backendId, prompt, channelId, scopeKey: authorization.scopeKey, sourceMessageId, allowedUserIds: authorization.binding.allowedUserIds, commandOptions, executionProfile };
 		item.operatorReady = this.#scheduleOperatorResponse(item);
 		this.queue.push(item);
 		this.#drain();
@@ -118,9 +143,16 @@ export class DiscordMessageRouter {
 
 	#drain() {
 		while (this.running < this.maxConcurrent && this.queue.length) {
-			const item = this.queue.shift();
+			const index = this.queue.findIndex((candidate) => !candidate.scopeKey || !this.runningScopes.has(candidate.scopeKey));
+			if (index < 0) break;
+			const [item] = this.queue.splice(index, 1);
 			this.running += 1;
-			void this.#run(item).finally(() => { this.running -= 1; this.#drain(); });
+			if (item.scopeKey) this.runningScopes.add(item.scopeKey);
+			void this.#run(item).finally(() => {
+				this.running -= 1;
+				if (item.scopeKey) this.runningScopes.delete(item.scopeKey);
+				this.#drain();
+			});
 		}
 	}
 
@@ -166,7 +198,7 @@ export class DiscordMessageRouter {
 		const state = this.operatorResponses.get(jobId);
 		if (!state || !this.send) return false;
 		try {
-			const receipt = await this.send({ token: this.token, channelId: state.channelId, botUserId: this.botUserId, content: watchdog ? "[자동대응 재시도] 접수 보고가 지연되어 다시 알립니다. 안전 상태를 확인한 뒤 작업을 시작합니다." : "[자동대응 접수] 요청을 받았습니다. 이 접수 보고가 확인된 뒤 작업을 시작하며 진행·실패·완료를 이어서 보고합니다.", nonce: randomUUID().replaceAll("-", "").slice(0, 24) });
+			const receipt = await this.send({ token: this.token, channelId: state.channelId, botUserId: this.botUserId, content: watchdog ? "응답 확인이 지연되고 있습니다. 전달 상태를 다시 확인한 뒤 안전하게 작업을 시작하겠습니다." : "요청을 확인했습니다. 최근 대화를 함께 확인하고 순서대로 처리합니다.", nonce: randomUUID().replaceAll("-", "").slice(0, 24) });
 			if (receipt?.state !== "confirmed") return false;
 			this.store.recordEvent({ jobId, source: "helper", kind: "operator_response_sent", safePayload: {} });
 			this.operatorResponses.delete(jobId);
@@ -188,8 +220,27 @@ export class DiscordMessageRouter {
 				this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "profile_replaced", safePayload: {} });
 				item = { ...item, executionProfile: currentProfile, commandOptions: commandOptionsForProfile(currentProfile) };
 			}
-			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt: item.prompt, cwd: this.cwd, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId), executionProfile: item.executionProfile, signal: controller.signal });
-			if (result.backendOutcome !== "success") return;
+			let prompt = item.prompt;
+			if (this.loadHistory && item.sourceMessageId) {
+				const loaded = await this.loadHistory({ token: this.token, channelId: item.channelId, beforeMessageId: item.sourceMessageId, botUserId: this.botUserId, allowedUserIds: item.allowedUserIds, signal: controller.signal });
+				if (loaded?.state === "loaded") prompt = promptWithDiscordHistory(prompt, loaded.history);
+			}
+			const reported = new Set();
+			let progressChain = Promise.resolve();
+			const onSafeEvent = (event) => {
+				if (!this.send || event?.kind !== "tool_started") return;
+				const category = event.safePayload?.toolCategory;
+				const content = PROGRESS_TEXT[category];
+				if (!content || reported.has(category) || reported.size >= 3) return;
+				reported.add(category);
+				progressChain = progressChain.then(() => this.send({ token: this.token, channelId: item.channelId, botUserId: this.botUserId, content, nonce: randomUUID().replaceAll("-", "").slice(0, 24) })).catch(() => {});
+			};
+			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt, cwd: this.cwd, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId), executionProfile: item.executionProfile, signal: controller.signal, onSafeEvent });
+			await progressChain;
+			if (result.backendOutcome !== "success") {
+				await this.#reportFailure(item);
+				return;
+			}
 			if (!result.transientResult) throw new Error("backend returned no deliverable final result");
 			await this.deliver({ store: this.store, jobId: item.jobId, attemptId: result.attemptId, token: this.token, botUserId: this.botUserId, channelId: item.channelId, content: result.transientResult, signal: controller.signal });
 		} catch {
@@ -197,11 +248,25 @@ export class DiscordMessageRouter {
 			if (job && !["failed", "cancelled", "completed", "recovery_review"].includes(job.lifecycle)) {
 				try { this.store.recordEvent({ jobId: item.jobId, attemptId: job.attemptId, source: "helper", kind: "failed", safePayload: { reasonCode: "internal_error" } }); } catch {}
 			}
+			await this.#reportFailure(item);
 		} finally {
 			this.controllers.delete(item.jobId);
 			const job = this.store.getJob(item.jobId, { includeEvents: false });
 			if (job?.scopeKey) void this.projectStatus?.({ scopeKey: job.scopeKey, channelId: item.channelId }).catch(() => {});
 		}
+	}
+
+	async #reportFailure(item) {
+		if (!this.send) return;
+		const job = this.store.getJob(item.jobId, { includeEvents: false });
+		if (!job || !["failed", "recovery_review"].includes(job.lifecycle)) return;
+		const reasonCode = failureReason(job);
+		const detail = job.lifecycle === "recovery_review"
+			? "전달 또는 복구 상태가 불확실해 자동 재실행하지 않고 검토 대상으로 보존했습니다."
+			: FAILURE_TEXT[reasonCode] ?? FAILURE_TEXT.internal_error;
+		try {
+			await this.send({ token: this.token, channelId: item.channelId, botUserId: this.botUserId, content: `작업을 완료하지 못했습니다. ${detail}\n작업 ID: ${item.jobId}`, nonce: randomUUID().replaceAll("-", "").slice(0, 24) });
+		} catch {}
 	}
 
 	async waitForIdle() {
@@ -263,7 +328,7 @@ export class DiscordMessageRouter {
 				if (profileChanged) {
 					this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "profile_replaced", safePayload: {} });
 				}
-				this.queue.push({ jobId: item.jobId, backendId: item.backendId, prompt: payload.prompt, channelId: payload.channelId, commandOptions: commandOptionsForProfile(executionProfile), executionProfile });
+				this.queue.push({ jobId: item.jobId, backendId: item.backendId, prompt: payload.prompt, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, commandOptions: commandOptionsForProfile(executionProfile), executionProfile });
 			} catch {
 				this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "recovery_review_required", safePayload: {} });
 			}
