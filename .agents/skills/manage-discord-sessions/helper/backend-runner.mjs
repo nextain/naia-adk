@@ -152,6 +152,10 @@ function writePrompt(child, prompt) {
 	child.stdin.end(prompt, "utf8");
 }
 
+export function isBenignBackendStdinError(error) {
+	return new Set(["EPIPE", "ERR_STREAM_DESTROYED"]).has(error?.code);
+}
+
 function backendCommand(executable, fallback) {
 	if (executable === undefined || executable === null) return { command: fallback, prefixArgs: [] };
 	if (typeof executable === "string" && executable.length > 0) return { command: executable, prefixArgs: [] };
@@ -180,11 +184,23 @@ async function probeBackendVersion(backendId, executable, parentEnv) {
 
 const MAX_STREAM_LINE_BYTES = 256 * 1024;
 
-function lineReader(stream, onLine, onFailure, onChunk = null) {
+function lineReader(stream, onLine, onFailure, onChunk = null, onOversizedLine = onFailure) {
 	let buffered = "";
+	let discardingOversizedLine = false;
 	stream.setEncoding("utf8");
 	const completed = new Promise((resolve) => {
-		stream.once("end", resolve);
+		stream.once("end", () => {
+			if (!discardingOversizedLine) {
+				const line = buffered.trim();
+				if (line) {
+					try {
+						if (Buffer.byteLength(line, "utf8") > MAX_STREAM_LINE_BYTES) onOversizedLine(new Error("backend stream line exceeded the safe limit"));
+						else onLine(line);
+					} catch { onFailure(new Error("backend stream normalization failed")); }
+				}
+			}
+			resolve();
+		});
 		stream.once("close", resolve);
 		stream.once("error", () => {
 			onFailure(new Error("backend stream failed"));
@@ -203,27 +219,32 @@ function lineReader(stream, onLine, onFailure, onChunk = null) {
 			stream.destroy();
 			return;
 		}
-		buffered += chunk;
-		if (Buffer.byteLength(buffered, "utf8") > MAX_STREAM_LINE_BYTES) {
-			buffered = "";
-			onFailure(new Error("backend stream line exceeded the safe limit"));
-			stream.destroy();
-			return;
+		let remaining = chunk;
+		if (discardingOversizedLine) {
+			const newline = remaining.indexOf("\n");
+			if (newline < 0) return;
+			remaining = remaining.slice(newline + 1);
+			discardingOversizedLine = false;
 		}
+		buffered += remaining;
 		for (;;) {
 			const newline = buffered.indexOf("\n");
-			if (newline < 0) break;
+			if (newline < 0) {
+				if (Buffer.byteLength(buffered, "utf8") > MAX_STREAM_LINE_BYTES) {
+					buffered = "";
+					discardingOversizedLine = true;
+					try { onOversizedLine(new Error("backend stream line exceeded the safe limit")); } catch { onFailure(new Error("backend stream normalization failed")); }
+				}
+				break;
+			}
 			const line = buffered.slice(0, newline).trimEnd();
 			buffered = buffered.slice(newline + 1);
 			if (line) {
-				try { onLine(line); } catch { onFailure(new Error("backend stream normalization failed")); }
+				try {
+					if (Buffer.byteLength(line, "utf8") > MAX_STREAM_LINE_BYTES) onOversizedLine(new Error("backend stream line exceeded the safe limit"));
+					else onLine(line);
+				} catch { onFailure(new Error("backend stream normalization failed")); }
 			}
-		}
-	});
-	stream.on("end", () => {
-		const line = buffered.trim();
-		if (line) {
-			try { onLine(line); } catch { onFailure(new Error("backend stream normalization failed")); }
 		}
 	});
 	return completed;
@@ -394,7 +415,12 @@ export async function runBackendAttempt({
 	// for approval words: ordinary diagnostics can legitimately contain phrases
 	// such as "approval request". Explicit structured events are checked by the
 	// adapter, while an actual interactive prompt on stderr is still rejected.
-	const stdoutCompleted = lineReader(child.stdout, recordLine, streamFailure);
+	const oversizedStdoutLine = () => {
+		lineNumber += 1;
+		const bytes = MAX_STREAM_LINE_BYTES + 1;
+		store.recordEvent({ jobId, attemptId, occurredAt: now(), source: backendId, dedupeKey: `${backendId}:stdout-oversized:${lineNumber}`, kind: "output_activity", safePayload: { bytes }, metrics: { bytes } });
+	};
+	const stdoutCompleted = lineReader(child.stdout, recordLine, streamFailure, null, oversizedStdoutLine);
 	const stderrCompleted = lineReader(child.stderr, (line) => {
 		lineNumber += 1;
 		if (inspectBackendLine({ backendId, line, attemptId, lineNumber }).approvalRequested) {
@@ -412,7 +438,14 @@ export async function runBackendAttempt({
 	};
 	if (signal?.aborted) abort();
 	else signal?.addEventListener("abort", abort, { once: true });
-	child.stdin.on("error", () => terminate("internal_error"));
+	// A backend can close its stdin after consuming the one-shot prompt while it
+	// is still flushing the final structured result. Node may surface that normal
+	// pipe close as EPIPE/ERR_STREAM_DESTROYED. The exit code and structured
+	// completion marker remain authoritative; cancelling here discards a valid
+	// final response during an otherwise clean exit.
+	child.stdin.on("error", (error) => {
+		if (!isBenignBackendStdinError(error)) terminate("internal_error");
+	});
 	writePrompt(child, prompt);
 	const result = await new Promise((resolveExit, rejectExit) => {
 		child.once("error", () => {
