@@ -166,6 +166,16 @@ Backend completion is fail-closed. Provider records with an absent or
 5. Treat DM, guild channel, and thread bindings as separate authorization and conversation scopes.
 6. Never automatically resend `delivery_unknown` after restart.
 
+## Continuous curation contract
+
+When the user explicitly assigns periodic or continuous Discord monitoring:
+
+1. Register the assignment as an active goal with the available goal mechanism, including the user's release or completion condition.
+2. Do not send a final response while that goal remains active; keep curating until the user releases it or the stated completion condition is verified.
+3. Read the channel's original messages and durable ledger directly. Never infer channel health from bot replies alone.
+4. Delegate bounded development or incident work while the curator continues intake, prioritization, progress reporting, and response verification.
+5. After context compaction, re-read the active goal before continuing.
+
 ## Safety boundaries
 
 - Safe events accept typed allowlisted payloads, not raw prompts, stdout, commands, paths, environments, or tool results.

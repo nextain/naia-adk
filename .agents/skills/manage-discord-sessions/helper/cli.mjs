@@ -155,7 +155,7 @@ if (!existsSync(databasePath)) {
 
 let store;
 try {
-	store = new SessionStore(databasePath);
+	store = SessionStore.openReadOnly(databasePath);
 } catch (error) {
 	console.error(`Discord session state unavailable: ${error.message}`);
 	process.exit(3);

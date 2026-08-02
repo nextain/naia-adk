@@ -41,6 +41,21 @@ function parseServiceArguments(argv) {
 	};
 }
 
+export function isSqliteBusyError(error) {
+	return error?.errcode === 5 || error?.code === "SQLITE_BUSY" || (error?.code === "ERR_SQLITE_ERROR" && /database (?:is )?locked/i.test(error?.message ?? ""));
+}
+
+export function heartbeatServiceSafely(store, input, { onBusy = () => console.error("naia-discord-service: heartbeat_sqlite_busy_skipped") } = {}) {
+	try {
+		store.heartbeatService(input);
+		return true;
+	} catch (error) {
+		if (!isSqliteBusyError(error)) throw error;
+		onBusy();
+		return false;
+	}
+}
+
 export async function runDiscordService({ adkRoot, instance = "default", webSocketFactory, fetchImpl, sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)), signalSource = process } = {}) {
 	const root = resolve(adkRoot);
 	const paths = messengerInstancePaths(root, instance);
@@ -64,7 +79,7 @@ export async function runDiscordService({ adkRoot, instance = "default", webSock
 	const loadHistory = (input) => fetchDiscordConversation({ ...input, fetchImpl: fetchImpl ?? fetch });
 	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: paths.runtimeRoot, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, loadHistory, backendExecutables });
 	let reconnectDelay = 1_000;
-	const heartbeat = () => store.heartbeatService({ generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
+	const heartbeat = () => heartbeatServiceSafely(store, { generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
 	heartbeat();
 	const recoveredJobs = store.recoverInterruptedWork();
 	router.resumeRecovered(recoveredJobs, { autoRetry: config.recovery?.autoRetry === true });
