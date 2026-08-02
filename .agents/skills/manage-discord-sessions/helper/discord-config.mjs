@@ -53,8 +53,9 @@ export function loadMessengerConfig(path) {
 	if (config.backend.profiles?.[config.backend.selected]?.enabled !== true) throw new Error("selected backend profile is disabled");
 	for (const [name, profile] of Object.entries(config.backend.profiles ?? {})) {
 		if (!new Set(["codex", "claude"]).has(name)) throw new Error("unsupported backend profile");
-		assertOnlyKeys(profile, new Set(["enabled"]), "backend profile");
+		assertOnlyKeys(profile, new Set(["enabled", "model"]), "backend profile");
 		if (typeof profile.enabled !== "boolean") throw new Error("backend profile enabled must be boolean");
+		if (profile.model !== undefined && (typeof profile.model !== "string" || !/^[A-Za-z0-9._:-]{1,80}$/.test(profile.model))) throw new Error("backend profile model is invalid");
 	}
 	safeIdentifier(config.discord?.credentialRef, "credentialRef");
 	if (!/^\d{17,20}$/.test(config.discord?.botUserId ?? "") || /^0+$/.test(config.discord.botUserId)) throw new Error("invalid Discord bot user ID");

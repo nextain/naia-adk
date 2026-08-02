@@ -5,9 +5,11 @@ const ADAPTERS = new Map([
 		backendId: "codex",
 		activityDetail: "structured",
 		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
-		command({ executable = "codex", cwd, sandbox = "workspace-write", approvalPolicy = "never" }) {
+		command({ executable = "codex", cwd, sandbox = "workspace-write", approvalPolicy = "never", model = null }) {
 			if (approvalPolicy !== "never") throw new Error("Codex child approval policy must be never");
-			return { command: executable, args: ["exec", "--json", "--ephemeral", "--config", 'approval_policy="never"', "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config"] };
+			const args = ["exec", "--json", "--ephemeral", "--config", 'approval_policy="never"', "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config"];
+			if (model) args.push("--model", model);
+			return { command: executable, args };
 		},
 		parse: parseCodex,
 	}],
