@@ -26,9 +26,10 @@ export function terminateUnidentifiedChild(child, { platform = process.platform,
 }
 
 function safeCommandOptions(backendId, options) {
-	const allowed = backendId === "codex" ? new Set(["sandbox", "approvalPolicy"]) : new Set(["permissionMode", "settingSources", "approvalPolicy"]);
+	const allowed = backendId === "codex" ? new Set(["sandbox", "approvalPolicy", "model"]) : new Set(["permissionMode", "settingSources", "approvalPolicy"]);
 	for (const key of Object.keys(options)) if (!allowed.has(key)) throw new Error(`unsupported ${backendId} command option: ${key}`);
 	if (backendId === "codex" && options.sandbox && !new Set(["read-only", "workspace-write"]).has(options.sandbox)) throw new Error("unsafe Codex sandbox option");
+	if (backendId === "codex" && options.model !== undefined && (typeof options.model !== "string" || !/^[A-Za-z0-9._:-]{1,80}$/.test(options.model))) throw new Error("unsafe Codex model option");
 	if (backendId === "claude" && options.permissionMode && !new Set(["dontAsk", "plan"]).has(options.permissionMode)) throw new Error("unsafe Claude permission mode");
 	if (backendId === "claude" && options.settingSources && options.settingSources !== "project") throw new Error("Claude setting sources must remain project-only");
 	if (options.approvalPolicy !== undefined && options.approvalPolicy !== "never") throw new Error("child approval policy must be never");

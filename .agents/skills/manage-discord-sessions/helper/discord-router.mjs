@@ -128,7 +128,7 @@ export class DiscordMessageRouter {
 		const adapter = getBackendAdapter(backendId);
 		const channelId = authorization.scope.threadId ?? authorization.scope.channelId;
 		const executionProfile = this.#executionProfile(backendId);
-		const commandOptions = commandOptionsForProfile(executionProfile);
+		const commandOptions = this.#withBackendOptions(backendId, commandOptionsForProfile(executionProfile));
 		const coordinatorEnabled = this.config.runtime?.conversationCoordinator === true;
 		if (coordinatorEnabled && currentRequest.length > 1_900) {
 			this.store.reserveIngress({ sourceMessageId, scopeKey: authorization.scopeKey, status: "rejected", reasonCode: "prompt_invalid", dispatchSequence: sequence });
@@ -203,7 +203,12 @@ export class DiscordMessageRouter {
 	}
 
 	#commandOptions(backendId) {
-		return commandOptionsForProfile(this.#executionProfile(backendId));
+		return this.#withBackendOptions(backendId, commandOptionsForProfile(this.#executionProfile(backendId)));
+	}
+
+	#withBackendOptions(backendId, options) {
+		const model = this.config.backend.profiles?.[backendId]?.model;
+		return backendId === "codex" && model ? { ...options, model } : options;
 	}
 
 	#executionProfile(backendId) {
@@ -283,7 +288,7 @@ export class DiscordMessageRouter {
 		].join("\n");
 		const recoveryEnvelope = this.recoveryCodec?.seal(JSON.stringify({ prompt, channelId: item.channelId, scopeKey: item.scopeKey, executionProfile })) ?? null;
 		this.store.createJob({ jobId: workerJobId, backendId: item.backendId, revision: "discord-worker-v2", backendCapabilities: adapter.capabilities, activityDetail: adapter.activityDetail, jobType: "conversation", scopeKey: item.scopeKey, softSilenceMs: (this.config.runtime?.softSilenceSeconds ?? 120) * 1_000, recoveryEnvelope });
-		this.workerQueue.push({ ...item, jobId: workerJobId, prompt, sourceMessageId: null, mode: "worker", commandOptions: commandOptionsForProfile(executionProfile), executionProfile });
+		this.workerQueue.push({ ...item, jobId: workerJobId, prompt, sourceMessageId: null, mode: "worker", commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile });
 		this.#drainWorkers();
 		return workerJobId;
 	}
@@ -327,7 +332,7 @@ export class DiscordMessageRouter {
 			runtime: this.config.runtime ?? {},
 		});
 		const executionProfile = this.#coordinatorExecutionProfile(item.backendId);
-		const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt, cwd: this.cwd, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: commandOptionsForProfile(executionProfile), executionProfile, timeoutMs: 90_000, signal: controller.signal });
+		const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt, cwd: this.cwd, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile, timeoutMs: 90_000, signal: controller.signal });
 		if (result.backendOutcome !== "success" || !result.transientResult) {
 			await this.#reportFailure(item);
 			return;
@@ -352,7 +357,7 @@ export class DiscordMessageRouter {
 			const currentProfile = this.#executionProfile(item.backendId);
 			if (!sameExecutionProfile(item.executionProfile ?? currentProfile, currentProfile)) {
 				this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "profile_replaced", safePayload: {} });
-				item = { ...item, executionProfile: currentProfile, commandOptions: commandOptionsForProfile(currentProfile) };
+				item = { ...item, executionProfile: currentProfile, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(currentProfile)) };
 			}
 			let prompt = item.prompt;
 			if (this.loadHistory && item.sourceMessageId) {
@@ -457,7 +462,7 @@ export class DiscordMessageRouter {
 					const policyRevision = coordinatorPolicyRevision({ persona: this.config.persona, role: this.config.role, binding: payload.binding, runtime: this.config.runtime ?? {} });
 					if (payload.policyRevision !== policyRevision) throw new Error("coordinator policy changed");
 					const executionProfile = this.#coordinatorExecutionProfile(item.backendId);
-					const recovered = { jobId: item.jobId, backendId: item.backendId, currentRequest: payload.currentRequest, channelId: payload.channelId, scopeKey: payload.scopeKey, sourceMessageId: payload.sourceMessageId ?? null, allowedUserIds: payload.allowedUserIds, binding: payload.binding, mode: "coordinator", allowDelegate: payload.mode !== "coordinator_result", commandOptions: commandOptionsForProfile(executionProfile), executionProfile };
+					const recovered = { jobId: item.jobId, backendId: item.backendId, currentRequest: payload.currentRequest, channelId: payload.channelId, scopeKey: payload.scopeKey, sourceMessageId: payload.sourceMessageId ?? null, allowedUserIds: payload.allowedUserIds, binding: payload.binding, mode: "coordinator", allowDelegate: payload.mode !== "coordinator_result", commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile };
 					if (recovered.sourceMessageId && this.loadHistory) recovered.historyPromise = this.loadHistory({ token: this.token, channelId: recovered.channelId, beforeMessageId: recovered.sourceMessageId, botUserId: this.botUserId, allowedUserIds: recovered.allowedUserIds }).catch(() => ({ state: "unavailable", history: "", messageCount: 0 }));
 					if (payload.mode === "coordinator") this.#sendOperatorResponse(recovered);
 					this.queue.push(recovered);
@@ -471,7 +476,7 @@ export class DiscordMessageRouter {
 				if (profileChanged) {
 					this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "profile_replaced", safePayload: {} });
 				}
-				const recovered = { jobId: item.jobId, backendId: item.backendId, prompt: payload.prompt, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, commandOptions: commandOptionsForProfile(executionProfile), executionProfile };
+				const recovered = { jobId: item.jobId, backendId: item.backendId, prompt: payload.prompt, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile };
 				this.#sendOperatorResponse(recovered);
 				this.queue.push(recovered);
 			} catch {
