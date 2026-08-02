@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { SessionStore } from "../helper/store.mjs";
 import { readBootId, readProcessStartIdentity } from "../helper/projector.mjs";
 import { assertOwnerOnly, protectOwnerOnly } from "../helper/platform-security.mjs";
+import { heartbeatServiceSafely } from "../helper/service.mjs";
 
 const roots = [];
 const cliPath = fileURLToPath(new URL("../helper/cli.mjs", import.meta.url));
@@ -377,6 +378,44 @@ test("DSO-003 named or persisted state without its config fails closed", () => {
 	new SessionStore(databasePath).close();
 	const persisted = spawnSync(process.execPath, [cliPath, "--adk-root", root, "status", "--json"], { encoding: "utf8" });
 	assert.equal(persisted.status, 3);
+});
+
+test("DSO-003 status reads an existing ledger while another process owns the write lock", () => {
+	const { root, databasePath, store } = fixture();
+	store.heartbeatService({ generation: "generation-1", pid: process.pid, now: iso() });
+	store.close();
+	const writer = new DatabaseSync(databasePath);
+	writer.exec("BEGIN IMMEDIATE");
+	try {
+		const status = spawnSync(process.execPath, [cliPath, "--adk-root", root, "status", "--json"], { encoding: "utf8", timeout: 2_000 });
+		assert.equal(status.status, 0, status.stderr);
+		assert.equal(JSON.parse(status.stdout).service.reasonCode, "heartbeat_stale");
+	} finally {
+		writer.exec("ROLLBACK");
+		writer.close();
+	}
+});
+
+test("DSO-002 bounds SQLite contention and skips only a busy heartbeat", () => {
+	const { databasePath, store } = fixture();
+	store.heartbeatService({ generation: "generation-1", pid: process.pid, now: iso() });
+	store.close();
+	const heartbeatStore = new SessionStore(databasePath, {}, { busyTimeoutMs: 25 });
+	const writer = new DatabaseSync(databasePath);
+	writer.exec("BEGIN IMMEDIATE");
+	let busyCount = 0;
+	try {
+		assert.equal(heartbeatServiceSafely(heartbeatStore, { generation: "generation-1", pid: process.pid, now: iso(1_000) }, { onBusy: () => { busyCount += 1; } }), false);
+		assert.equal(busyCount, 1);
+	} finally {
+		writer.exec("ROLLBACK");
+		writer.close();
+	}
+	assert.equal(heartbeatServiceSafely(heartbeatStore, { generation: "generation-1", pid: process.pid, now: iso(2_000) }, { onBusy: () => { busyCount += 1; } }), true);
+	assert.equal(busyCount, 1);
+	heartbeatStore.close();
+	assert.throws(() => heartbeatServiceSafely({ heartbeatService: () => { throw new Error("unexpected corruption"); } }, {}), /unexpected corruption/);
+	assert.throws(() => heartbeatServiceSafely({ heartbeatService: () => { throw new Error("database is locked"); } }, {}), /database is locked/);
 });
 
 test("DSO-002 rejects a second live service generation", () => {

@@ -59,6 +59,7 @@ const EVENT_SOURCES = new Map([
 ]);
 
 const EXTERNAL_EVENT_SOURCES = new Set(["codex", "claude", "fake_backend"]);
+const DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 
 function json(value) {
 	return JSON.stringify(value ?? {});
@@ -120,6 +121,33 @@ function preparePrivateDatabasePath(databasePath) {
 	return resolvedPath;
 }
 
+function inspectPrivateDatabasePath(databasePath) {
+	const resolvedPath = resolve(databasePath);
+	const directory = dirname(resolvedPath);
+	const root = parse(directory).root;
+	let cursor = root;
+	for (const part of directory.slice(root.length).split(/[\\/]+/).filter(Boolean)) {
+		cursor = resolve(cursor, part);
+		if (existsSync(cursor) && lstatSync(cursor).isSymbolicLink()) throw new Error(`state path contains a symbolic link: ${cursor}`);
+	}
+	if (!existsSync(directory)) throw new Error("session state directory does not exist");
+	const directoryStat = lstatSync(directory);
+	if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) throw new Error("session state directory must be a real directory");
+	if (typeof process.getuid === "function" && directoryStat.uid !== process.getuid()) throw new Error("session state directory owner mismatch");
+	if (!existsSync(resolvedPath)) throw new Error("session database does not exist");
+	const databaseStat = lstatSync(resolvedPath);
+	if (!databaseStat.isFile() || databaseStat.isSymbolicLink()) throw new Error("session database must be a real file");
+	if (typeof process.getuid === "function" && databaseStat.uid !== process.getuid()) throw new Error("session database owner mismatch");
+	for (const suffix of ["-wal", "-shm"]) {
+		const sidecar = `${resolvedPath}${suffix}`;
+		const sidecarStat = lstatOrNull(sidecar);
+		if (!sidecarStat) continue;
+		if (!sidecarStat.isFile() || sidecarStat.isSymbolicLink()) throw new Error(`SQLite sidecar must be a real file: ${sidecar}`);
+		if (typeof process.getuid === "function" && sidecarStat.uid !== process.getuid()) throw new Error(`SQLite sidecar owner mismatch: ${sidecar}`);
+	}
+	return resolvedPath;
+}
+
 function transitionFor(kind, current) {
 	switch (kind) {
 		case "attempt_reserved":
@@ -171,23 +199,31 @@ function transitionFor(kind, current) {
 }
 
 export class SessionStore {
-	constructor(databasePath, ownershipReader = {}) {
+	constructor(databasePath, ownershipReader = {}, { readOnly = false, busyTimeoutMs = DEFAULT_SQLITE_BUSY_TIMEOUT_MS } = {}) {
+		if (!Number.isSafeInteger(busyTimeoutMs) || busyTimeoutMs < 0 || busyTimeoutMs > 60_000) throw new Error("SQLite busy timeout must be between 0 and 60000 milliseconds");
 		this.readBootId = ownershipReader.readBootId ?? readBootId;
 		this.readProcessStartIdentity = ownershipReader.readProcessStartIdentity ?? readProcessStartIdentity;
-		this.databasePath = preparePrivateDatabasePath(databasePath);
+		this.databasePath = readOnly ? inspectPrivateDatabasePath(databasePath) : preparePrivateDatabasePath(databasePath);
 		const previousUmask = process.umask(0o077);
 		try {
-			this.db = new DatabaseSync(this.databasePath);
+			this.db = new DatabaseSync(this.databasePath, { readOnly, timeout: busyTimeoutMs });
+			this.db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA foreign_keys = ON;`);
 			this.#assertSupportedSchema();
-			this.db.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
+			if (!readOnly) this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
 		} catch (error) {
 			this.db?.close();
 			throw error;
 		} finally {
 			process.umask(previousUmask);
 		}
-		this.#hardenSidecars();
-		this.#migrate();
+		if (!readOnly) {
+			this.#hardenSidecars();
+			this.#migrate();
+		}
+	}
+
+	static openReadOnly(databasePath, ownershipReader = {}, options = {}) {
+		return new SessionStore(databasePath, ownershipReader, { ...options, readOnly: true });
 	}
 
 	#assertSupportedSchema() {
