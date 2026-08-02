@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { authorizeDiscordMessage, validateDiscordBindings } from "../helper/discord-scope.mjs";
-import { deliverJobResult, postDiscordDirectMessage } from "../helper/discord-delivery.mjs";
+import { deliverJobResult, postDiscordDirectMessage, postDiscordMessage } from "../helper/discord-delivery.mjs";
 import { DiscordGatewaySession, MemoryGatewayState, StoredGatewayState } from "../helper/discord-gateway.mjs";
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
@@ -76,7 +76,7 @@ test("DSG-002 accepts ingress and job atomically and deduplicates Gateway replay
 	store.close();
 });
 
-test("DSG-003 records a delivery before POST and never automatically resends an uncertain attempt", async () => {
+test("DSG-003 records delivery before bounded same-nonce retries and never starts a second delivery", async () => {
 	const { store, databasePath } = fixture();
 	store.createJob({ jobId: "job-1", backendId: "codex", activityDetail: "structured", jobType: "conversation" });
 	const attemptId = store.startAttempt("job-1", { attemptId: "attempt-1" });
@@ -95,12 +95,27 @@ test("DSG-003 records a delivery before POST and never automatically resends an 
 	assert.equal(first.state, "unknown");
 	const second = await deliverJobResult({ store, jobId: "job-1", attemptId, token: "token-value-long-enough", channelId: CHANNEL, botUserId: BOT, content: "done", fetchImpl });
 	assert.equal(second.state, "unknown");
-	assert.equal(posts, 1);
+	assert.equal(posts, 3);
 	assert.equal(store.getJob("job-1").lifecycle, "completed");
 	assert.equal(store.getJob("job-1").deliveryState, "unknown");
 	store.close();
 	const bytes = readFileSync(databasePath);
 	assert.equal(bytes.includes(Buffer.from("done /var/home/luke/private")), false);
+});
+
+test("DSG-003 retries an uncertain Discord POST with the same deduplicating nonce", async () => {
+	const nonces = [];
+	const receipt = await postDiscordMessage({
+		token: "token-value-long-enough", channelId: CHANNEL, content: "receipt", nonce: "stable-retry-nonce", botUserId: BOT, retryDelayMs: 0,
+		fetchImpl: async (_url, init) => {
+			const body = JSON.parse(init.body);
+			nonces.push(body.nonce);
+			if (nonces.length === 1) throw new Error("transient connection failure");
+			return { ok: true, status: 200, json: async () => ({ id: "666666666666666666", channel_id: CHANNEL, author: { id: BOT }, nonce: body.nonce }) };
+		},
+	});
+	assert.equal(receipt.state, "confirmed");
+	assert.deepEqual(nonces, ["stable-retry-nonce", "stable-retry-nonce"]);
 });
 
 test("DSG-003 opens an operator DM and confirms the sent message identity", async () => {
