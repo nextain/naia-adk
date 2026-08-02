@@ -8,32 +8,51 @@ function snowflake(value, label) {
 	return value;
 }
 
-export async function postDiscordMessage({ token, channelId, content, nonce, botUserId, fetchImpl = fetch, signal, timeoutMs = 15_000 }) {
+function retryPause(delayMs, signal) {
+	if (signal?.aborted) return Promise.resolve(false);
+	return new Promise((resolve) => {
+		const abort = () => { clearTimeout(timer); resolve(false); };
+		const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(true); }, delayMs);
+		signal?.addEventListener("abort", abort, { once: true });
+	});
+}
+
+export async function postDiscordMessage({ token, channelId, content, nonce, botUserId, fetchImpl = fetch, signal, timeoutMs = 5_000, maxAttempts = 3, retryDelayMs = 250 }) {
 	snowflake(channelId, "channelId");
 	if (typeof token !== "string" || token.length < 16) throw new Error("Discord credential is not ready");
 	if (typeof content !== "string" || content.length === 0 || content.length > 2_000) throw new Error("Discord message length is invalid");
 	if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000) throw new Error("Discord request timeout is invalid");
-	const controller = new AbortController();
-	const abort = () => controller.abort();
-	if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true });
-	const timeout = setTimeout(abort, timeoutMs);
-	timeout.unref?.();
-	try {
-		const response = await fetchImpl(`${DISCORD_API}/channels/${channelId}/messages`, {
-			method: "POST",
-			headers: { authorization: `Bot ${token}`, "content-type": "application/json" },
-			body: JSON.stringify({ content, allowed_mentions: { parse: [] }, nonce, enforce_nonce: true }), signal: controller.signal,
-		});
-		if (response.ok) {
-			const body = await response.json();
-			if (body.channel_id !== channelId || (botUserId && body.author?.id !== botUserId) || String(body.nonce ?? "") !== nonce) return { state: "unknown", reasonCode: "receipt_identity_mismatch", status: response.status };
-			return { state: "confirmed", messageId: snowflake(body.id, "messageId"), status: response.status };
+	if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 3) throw new Error("Discord retry count is invalid");
+	if (!Number.isSafeInteger(retryDelayMs) || retryDelayMs < 0 || retryDelayMs > 5_000) throw new Error("Discord retry delay is invalid");
+	let last = { state: "unknown", reasonCode: "network_result_unknown", status: null };
+	for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+		const controller = new AbortController();
+		const abort = () => controller.abort();
+		if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true });
+		const timeout = setTimeout(abort, timeoutMs);
+		timeout.unref?.();
+		try {
+			const response = await fetchImpl(`${DISCORD_API}/channels/${channelId}/messages`, {
+				method: "POST",
+				headers: { authorization: `Bot ${token}`, "content-type": "application/json" },
+				body: JSON.stringify({ content, allowed_mentions: { parse: [] }, nonce, enforce_nonce: true }), signal: controller.signal,
+			});
+			if (response.ok) {
+				const body = await response.json();
+				if (body.channel_id !== channelId || (botUserId && body.author?.id !== botUserId) || String(body.nonce ?? "") !== nonce) return { state: "unknown", reasonCode: "receipt_identity_mismatch", status: response.status };
+				return { state: "confirmed", messageId: snowflake(body.id, "messageId"), status: response.status };
+			}
+			if (response.status >= 400 && response.status < 500) return { state: "failed", reasonCode: response.status === 401 || response.status === 403 ? "authorization" : "request_rejected", status: response.status };
+			last = { state: "unknown", reasonCode: "server_response_unknown", status: response.status };
+		} catch {
+			last = { state: "unknown", reasonCode: "network_result_unknown", status: null };
+		} finally {
+			clearTimeout(timeout);
+			signal?.removeEventListener("abort", abort);
 		}
-		if (response.status >= 400 && response.status < 500) return { state: "failed", reasonCode: response.status === 401 || response.status === 403 ? "authorization" : "request_rejected", status: response.status };
-		return { state: "unknown", reasonCode: "server_response_unknown", status: response.status };
-	} catch {
-		return { state: "unknown", reasonCode: "network_result_unknown", status: null };
-	} finally { clearTimeout(timeout); signal?.removeEventListener("abort", abort); }
+		if (signal?.aborted || attempt === maxAttempts || !(await retryPause(retryDelayMs, signal))) break;
+	}
+	return last;
 }
 
 export async function postDiscordDirectMessage({ token, userId, content, nonce, botUserId, fetchImpl = fetch, signal, timeoutMs = 15_000 }) {
