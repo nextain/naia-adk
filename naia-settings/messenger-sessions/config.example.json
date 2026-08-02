@@ -60,7 +60,7 @@
     "heartbeatSeconds": 10,
     "approvalPolicy": "never",
     "permissionProfileEpoch": "replace-on-policy-change",
-    "conversationCoordinator": true,
+    "conversationCoordinator": false,
     "maxConcurrentJobs": 1
   },
   "observability": {
