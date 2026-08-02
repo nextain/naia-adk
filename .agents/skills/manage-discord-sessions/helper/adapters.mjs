@@ -7,7 +7,7 @@ const ADAPTERS = new Map([
 		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
 		command({ executable = "codex", cwd, sandbox = "workspace-write", approvalPolicy = "never", model = null }) {
 			if (approvalPolicy !== "never") throw new Error("Codex child approval policy must be never");
-			const args = ["exec", "--json", "--ephemeral", "--config", 'approval_policy="never"', "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config"];
+			const args = ["exec", "--json", "--ephemeral", "--config", 'approval_policy="never"', "--config", 'model_reasoning_effort="low"', "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config"];
 			if (model) args.push("--model", model);
 			return { command: executable, args };
 		},

@@ -6,13 +6,19 @@ import { spawnSync } from "node:child_process";
 import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { assertSupportedBackendVersion, getBackendAdapter, inspectBackendLine, parseBackendLine } from "../helper/adapters.mjs";
-import { prepareChildEnvironment, resolveExecutionCwd, runBackendAttempt } from "../helper/backend-runner.mjs";
+import { isBenignBackendStdinError, prepareChildEnvironment, resolveExecutionCwd, runBackendAttempt } from "../helper/backend-runner.mjs";
 import { commandOptionsForProfile } from "../helper/execution-profile.mjs";
 import { SessionStore } from "../helper/store.mjs";
 import { assertOwnerOnly, protectOwnerOnly } from "../helper/platform-security.mjs";
 
 const roots = [];
 const fakeBackendPath = fileURLToPath(new URL("./fixtures/fake-backend.mjs", import.meta.url));
+
+test("DSO-006 treats normal one-shot stdin pipe closure as non-fatal", () => {
+	assert.equal(isBenignBackendStdinError({ code: "EPIPE" }), true);
+	assert.equal(isBenignBackendStdinError({ code: "ERR_STREAM_DESTROYED" }), true);
+	assert.equal(isBenignBackendStdinError({ code: "EACCES" }), false);
+});
 
 async function waitForStoppedProcess(pid) {
 	for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -52,8 +58,9 @@ test("DSO-006 exposes independent Codex and Claude command contracts", () => {
 	assert.ok(codex.args.includes("--ignore-user-config"));
 	assert.equal(codex.args[codex.args.indexOf("--config") + 1], 'approval_policy="never"');
 	assert.equal(codex.args[codex.args.indexOf("--cd") + 1], "/workspace");
-	const pinnedCodex = getBackendAdapter("codex").command({ cwd: "/workspace", approvalPolicy: "never", model: "gpt-5.5" });
-	assert.equal(pinnedCodex.args[pinnedCodex.args.indexOf("--model") + 1], "gpt-5.5");
+	const pinnedCodex = getBackendAdapter("codex").command({ cwd: "/workspace", approvalPolicy: "never", model: "gpt-5.4" });
+	assert.equal(pinnedCodex.args[pinnedCodex.args.indexOf("--model") + 1], "gpt-5.4");
+	assert.equal(pinnedCodex.args.includes('model_reasoning_effort="low"'), true);
 	assert.ok(claude.args.includes("stream-json"));
 	assert.ok(claude.args.includes("dontAsk"));
 	assert.equal(assertSupportedBackendVersion("codex", "codex-cli 0.146.0"), "0.146.0");
@@ -386,10 +393,20 @@ test("DSO-006 kills an orphaned process group after the leader exits", async () 
 	store.close();
 });
 
-test("DSO-005 oversized backend lines fail safely without raw persistence", async () => {
+test("DSO-005 unbounded backend lines time out safely without raw persistence", async () => {
 	const { root, stateRoot, store, jobId } = fixture("codex");
 	await runBackendAttempt({ store, jobId, backendId: "codex", prompt: "__fake_oversized_line__", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: "0.146.0", requireAuthentication: false, timeoutMs: 1_000, killGraceMs: 20, parentEnv: { PATH: process.env.PATH } });
-	assert.equal(store.getJob(jobId).latestSafeError, "Job failed: internal_error");
+	assert.equal(store.getJob(jobId).latestSafeError, "Job failed: timeout");
 	store.close();
 	assert.ok(!readFileSync(join(stateRoot, "runtime.sqlite3")).includes(Buffer.from("x".repeat(1_024))));
+});
+
+test("DSO-006 skips an oversized structured tool result and still accepts the final response", async () => {
+	const { root, store, jobId } = fixture("codex");
+	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: "__fake_oversized_tool_then_success__", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } });
+	assert.equal(result.backendOutcome, "success");
+	assert.equal(result.transientResult, "fake-model-content");
+	assert.equal(store.getJob(jobId).lifecycle, "result_ready");
+	assert.equal(store.getJob(jobId).events.some((event) => event.kind === "cancel_requested"), false);
+	store.close();
 });

@@ -2,6 +2,8 @@ import { sanitizeFinalResponse } from "./sanitize.mjs";
 import { randomUUID } from "node:crypto";
 
 const DISCORD_API = "https://discord.com/api/v10";
+const MAX_DELIVERY_CHUNK_CHARS = 900;
+const MAX_DELIVERY_CHUNK_BYTES = 1_500;
 
 function snowflake(value, label) {
 	if (typeof value !== "string" || !/^\d{17,20}$/.test(value)) throw new Error(`${label} must be a Discord snowflake`);
@@ -17,7 +19,7 @@ function retryPause(delayMs, signal) {
 	});
 }
 
-export async function postDiscordMessage({ token, channelId, content, nonce, botUserId, fetchImpl = fetch, signal, timeoutMs = 5_000, maxAttempts = 3, retryDelayMs = 250 }) {
+export async function postDiscordMessage({ token, channelId, content, nonce, botUserId, fetchImpl = fetch, signal, timeoutMs = 15_000, maxAttempts = 3, retryDelayMs = 250 }) {
 	snowflake(channelId, "channelId");
 	if (typeof token !== "string" || token.length < 16) throw new Error("Discord credential is not ready");
 	if (typeof content !== "string" || content.length === 0 || content.length > 2_000) throw new Error("Discord message length is invalid");
@@ -74,20 +76,44 @@ export async function postDiscordDirectMessage({ token, userId, content, nonce, 
 	} finally { clearTimeout(timeout); signal?.removeEventListener("abort", abort); }
 }
 
+export function splitDiscordContent(content) {
+	const chunks = [];
+	let current = "";
+	for (const character of content) {
+		const candidate = current + character;
+		if (current && (candidate.length > MAX_DELIVERY_CHUNK_CHARS || Buffer.byteLength(candidate, "utf8") > MAX_DELIVERY_CHUNK_BYTES)) {
+			chunks.push(current);
+			current = character;
+		} else current = candidate;
+	}
+	if (current) chunks.push(current);
+	if (chunks.length <= 1) return chunks;
+	return chunks.map((chunk, index) => `(${index + 1}/${chunks.length})\n${chunk}`);
+}
+
+function chunkNonce(nonce, index) {
+	if (index === 0) return nonce;
+	return `${nonce.slice(0, 19)}${String(index + 1).padStart(5, "0")}`;
+}
+
 export async function deliverJobResult({ store, jobId, attemptId, token, channelId, botUserId, content, fetchImpl = fetch, signal, now = () => new Date().toISOString() }) {
 	const safeContent = sanitizeFinalResponse(content);
+	const chunks = splitDiscordContent(safeContent);
 	const candidateNonce = randomUUID().replaceAll("-", "").slice(0, 24);
 	const reserved = store.reserveDelivery({ deliveryKey: `delivery:${candidateNonce}`, jobId, attemptId, nonce: candidateNonce, channelId, now: now() });
 	if (reserved.status !== "started" || reserved.existing) return { state: reserved.status === "confirmed" ? "confirmed" : "unknown", receipts: [] };
 	const { deliveryKey, nonce } = reserved;
-	const receipt = await postDiscordMessage({ token, channelId, content: safeContent, nonce, botUserId, fetchImpl, signal });
-	const receipts = [receipt];
-	if (receipt.state !== "confirmed") {
-		store.finishDelivery({ deliveryKey, status: receipt.state, reasonCode: receipt.reasonCode === "authorization" ? "authorization" : "internal_error", now: now() });
-		return { state: receipt.state, receipts };
+	const receipts = [];
+	for (let index = 0; index < chunks.length; index += 1) {
+		const receipt = await postDiscordMessage({ token, channelId, content: chunks[index], nonce: chunkNonce(nonce, index), botUserId, fetchImpl, signal });
+		receipts.push(receipt);
+		if (receipt.state !== "confirmed") {
+			store.finishDelivery({ deliveryKey, status: receipt.state, reasonCode: receipt.reasonCode === "authorization" ? "authorization" : "internal_error", now: now() });
+			return { state: receipt.state, receipts };
+		}
 	}
 	try {
-		store.finishDelivery({ deliveryKey, status: "confirmed", messageId: receipt.messageId, now: now() });
+		store.finishDelivery({ deliveryKey, status: "confirmed", messageId: receipts.at(-1).messageId, now: now() });
 	} catch {
 		try { store.finishDelivery({ deliveryKey, status: "unknown", now: now() }); } catch {}
 		return { state: "unknown", receipts };

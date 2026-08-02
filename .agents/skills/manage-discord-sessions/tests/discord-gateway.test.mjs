@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { authorizeDiscordMessage, validateDiscordBindings } from "../helper/discord-scope.mjs";
-import { deliverJobResult, postDiscordDirectMessage, postDiscordMessage } from "../helper/discord-delivery.mjs";
+import { deliverJobResult, postDiscordDirectMessage, postDiscordMessage, splitDiscordContent } from "../helper/discord-delivery.mjs";
 import { DiscordGatewaySession, MemoryGatewayState, StoredGatewayState } from "../helper/discord-gateway.mjs";
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
@@ -116,6 +116,29 @@ test("DSG-003 retries an uncertain Discord POST with the same deduplicating nonc
 	});
 	assert.equal(receipt.state, "confirmed");
 	assert.deepEqual(nonces, ["stable-retry-nonce", "stable-retry-nonce"]);
+});
+
+test("DSG-003 splits a long multibyte final response into bounded confirmed deliveries", async () => {
+	const content = "분석결과 ".repeat(260);
+	const chunks = splitDiscordContent(content);
+	assert.equal(chunks.length > 1, true);
+	assert.equal(chunks.every((chunk) => chunk.length <= 920 && Buffer.byteLength(chunk, "utf8") <= 1_520), true);
+	const { store } = fixture();
+	store.createJob({ jobId: "chunked-delivery-job", backendId: "codex", activityDetail: "structured", jobType: "conversation" });
+	const attemptId = store.startAttempt("chunked-delivery-job", { attemptId: "chunked-delivery-attempt" });
+	store.recordEvent({ jobId: "chunked-delivery-job", attemptId, kind: "attempt_exited", source: "helper", safePayload: { terminationKind: "exited", exitCode: 0 } });
+	store.recordEvent({ jobId: "chunked-delivery-job", attemptId, kind: "attempt_succeeded", source: "helper", safePayload: {} });
+	const posts = [];
+	const result = await deliverJobResult({ store, jobId: "chunked-delivery-job", attemptId, token: "token-value-long-enough", channelId: CHANNEL, botUserId: BOT, content, fetchImpl: async (_url, init) => {
+		const body = JSON.parse(init.body);
+		posts.push(body);
+		return { ok: true, status: 200, json: async () => ({ id: String(666666666666666666n + BigInt(posts.length)), channel_id: CHANNEL, author: { id: BOT }, nonce: body.nonce }) };
+	} });
+	assert.equal(result.state, "confirmed");
+	assert.equal(posts.length, chunks.length);
+	assert.equal(new Set(posts.map((post) => post.nonce)).size, posts.length);
+	assert.equal(store.getJob("chunked-delivery-job").deliveryState, "delivered");
+	store.close();
 });
 
 test("DSG-003 opens an operator DM and confirms the sent message identity", async () => {
