@@ -8,7 +8,7 @@ instance="${NAIA_MESSENGER_INSTANCE:-default}"
 if [[ "${1:-}" == "--instance" ]]; then
 	instance="${2:?--instance requires a value}"
 	shift 2
-elif [[ -n "${1:-}" && "${1:-}" != --* && ! "${1:-}" =~ ^(status|jobs|job|watch|history|latest|attachment|reply|service)$ ]]; then
+elif [[ -n "${1:-}" && "${1:-}" != --* && ! "${1:-}" =~ ^(status|health-check|jobs|job|watch|history|latest|attachment|reply|service)$ ]]; then
 	instance="$1"
 	shift
 fi

@@ -842,7 +842,7 @@ test("DSG-008 pins the selected backend executable independently of the systemd 
 
 test("DSG-008 Bash entrypoint preserves every top-level CLI command", () => {
 	const script = readFileSync(join(import.meta.dirname, "../scripts/manage-discord-sessions.sh"), "utf8");
-	for (const command of ["status", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service"]) {
+	for (const command of ["status", "health-check", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service"]) {
 		assert.match(script, new RegExp(`\\b${command}\\b`));
 	}
 });
