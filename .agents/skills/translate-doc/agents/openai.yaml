@@ -1,0 +1,4 @@
+interface:
+  display_name: "Translate Documents"
+  short_description: "Translate large documents with a configured Naia model"
+  default_prompt: "Translate this document with my configured Naia account, preserve structure, and produce validated output."

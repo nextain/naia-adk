@@ -209,12 +209,12 @@ Object.assign(developerComment.directives[0].targets[0], {
 	content_source_atom_ids: [developerAtom.id],
 });
 const developerResult = runtime.validateContract(developerComment, v2Records, [], { publicKeyPem: exampleAuthorityPublicKey, cwd: repositoryRoot, config: compatibilityConfig, now: 1783960030000 });
-assert(!developerResult.errors.some((error) => error.includes("workflow_context_leak") || error.includes("developer_comment_scope_invalid")), "explicit developer comments may derive workflow context within their audience");
+assert(developerResult.ok, `explicit developer comments may derive workflow context within their audience:\n${developerResult.errors.join("\n")}`);
 
 const legitimateReference = JSON.parse(JSON.stringify(v2));
 const referenceId = `SRC-${"1".repeat(32)}`;
 const referenceAtom = { id: "OBL-REFERENCE", text: "Summarize this cited reference", directive_ids: [], subject: "artifact_content", effect: "presentation", render_policy: "derive" };
-legitimateReference.sources.push({ id: referenceId, classification: "reference", source_kind: "human", directive_ids: [], obligation_atoms: [referenceAtom] });
+legitimateReference.sources.push({ id: referenceId, classification: "reference", directive_ids: [], obligation_atoms: [referenceAtom] });
 Object.assign(legitimateReference.directives[0].targets[0], {
 	kind: "document_paragraph",
 	audience: "public",
@@ -224,6 +224,6 @@ Object.assign(legitimateReference.directives[0].targets[0], {
 assert(validate(legitimateReference), `explicit reference derivation must remain schema-valid:\n${ajv.errorsText(validate.errors, { separator: "\n" })}`);
 const referenceRecords = v2Records.concat([{ source_id: referenceId, prompt: referenceAtom.text, prompt_digest: runtime.sha256(referenceAtom.text), origin: "native_user" }]);
 const referenceResult = runtime.validateContract(legitimateReference, referenceRecords, [], { publicKeyPem: exampleAuthorityPublicKey, cwd: repositoryRoot, config: compatibilityConfig, now: 1783960030000 });
-assert(!referenceResult.errors.some((error) => error.includes("content_render_denied") || error.includes("workflow_context_leak") || error.includes("nonactionable")), "derive authority may render a reference without creating directive authority");
+assert(referenceResult.ok, `derive authority may render a reference without creating directive authority:\n${referenceResult.errors.join("\n")}`);
 
 process.stdout.write("request-contract schema+runtime: PASS\n");

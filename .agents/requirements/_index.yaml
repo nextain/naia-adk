@@ -34,6 +34,15 @@ source_ledger:
 
 # Per-product summary
 products:
+  - product: naia-adk
+    title: "Naia Account Document Translation"
+    req_count: 1
+    priority_high: 1
+    priority_medium: 0
+    modules: [translate-doc]
+    requirements:
+      - { id: NDT-001, title: "Naia Account Model Discovery and Resumable Document Translation", status: active }
+
   - product: naia-adk-discord-sessions
     title: "Observable Discord AI Sessions"
     req_count: 9

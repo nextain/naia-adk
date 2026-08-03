@@ -127,6 +127,16 @@ try {
 		core.resolveSessionContract({ cwd: malformedRoot, sessionId: "M" }).reason,
 		"unsupported_target_ownership_pattern",
 	);
+	for (const [mutation, expected] of [
+		[(contract) => { contract.unexpected = true; }, "contract_additional_property"],
+		[(contract) => { contract.scope = [42]; }, "invalid_scope_item"],
+		[(contract) => { contract.allowed_paths = ["src/*.js"]; }, "unsupported_allowed_path_pattern"],
+		[(contract) => { contract.allowed_shell_commands = ["bad\ncommand"]; }, "invalid_allowed_shell_commands"],
+	]) {
+		const candidate = JSON.parse(JSON.stringify(malformed.contract));
+		mutation(candidate);
+		assert.equal(core.validateContractShape(candidate), expected);
+	}
 
 	const parent = workspace("session-parent-"); roots.push(parent);
 	const parentContract = finishBinding(parent, "PARENT", "parent-contract");

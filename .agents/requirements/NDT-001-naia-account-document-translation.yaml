@@ -1,0 +1,34 @@
+id: NDT-001
+title: "Naia Account Model Discovery and Resumable Document Translation"
+product: naia-adk
+module: translate-doc
+status: active
+source: human
+priority: high
+created: 2026-08-03
+updated: 2026-08-03
+issue_url: "https://github.com/nextain/naia-adk/issues/21"
+description: |
+  A freshly cloned ADK can use a user's Naia API key and existing model settings
+  to discover the live catalog and charged prices, estimate a large document job,
+  translate it resumably, and emit privately stored verified outputs and receipts.
+acceptance_criteria:
+  - "NAIA_KEY is canonical; NAIA_API_KEY and NAIA_ANYLLM_API_KEY remain compatibility aliases, and no secret value is persisted or logged."
+  - "naia-settings stores only apiKeyRef and non-secret model configuration; a private fork may back up the actual key only through its encrypted data-private/key vault."
+  - "Public model and pricing discovery use /v1/models and /v1/pricing; key validation uses the non-inference balance endpoint."
+  - "Large translations are cost-estimated, chunked, retryable, resumable, input-bound, and blocked when pricing is unknown unless explicitly accepted."
+  - "Markdown, HTML, and PDF outputs have ordered non-empty chunks, digests, model/token receipts, and deterministic verification."
+  - "Purchased or confidential input and translated text remain outside tracked repository content."
+trace:
+  code:
+    - { path: ".agents/skills/translate-doc/scripts/naia_translate.py", symbol: "main/run_translate/verify", coverage: full }
+    - { path: "packages/naia-anyllm/src/index.ts", symbol: "DEFAULT_CONFIG/loadLLMConfig/getApiKey", coverage: full }
+  tests:
+    - { path: "packages/naia-anyllm/src/index.test.ts", symbol: "Naia account defaults", coverage: partial }
+  docs:
+    - { path: ".agents/skills/translate-doc/SKILL.md", coverage: full }
+  reviews: { planning: [], development: [], test: [], integration: null }
+decisions:
+  - "Catalog model keys are client-facing; a unique provider-qualified pricing suffix may supply their charge row."
+  - "Copyrighted source and translations are runtime artifacts, never repository documentation."
+  - "NAIA_PROD_KEY and NAIA_DEV_KEY are private-fork developer names, not public naia-adk credential contracts."

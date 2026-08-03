@@ -74,11 +74,17 @@ ADK는 `read`, `write`, `execute`, `publish`를 서로 다른 관심사로 나�
 ### LLM 어댑터 (naia-anyllm)
 
 LLM에 연결해야 하는 기능을 위해 `naia-anyllm` 어댑터를 내장합니다. [any-llm](https://github.com/nextain/any-llm)
-게이트웨이를 거치거나, OpenAI·Anthropic·Google 같은 프로바이더에 직접 붙습니다. 기본 프로바이더
-설정은 들어 있지만, 실제로 호출하려면 해당 프로바이더의 API 키를 환경 변수로 넣어야 합니다.
-키가 없으면 어댑터가 곧바로 오류를 냅니다. 프로바이더나 모델을 바꾸고 싶으면
+게이트웨이를 거치거나, OpenAI·Anthropic·Google 같은 프로바이더에 직접 붙습니다. 기본값은
+Naia 계정이며, [naia.nextain.io](https://naia.nextain.io)에서 발급한 키를
+`NAIA_KEY` 환경 변수에 넣으면 계정 크레딧으로 바로 사용할 수 있습니다. 키가 없으면
+유료 호출 전에 오류를 냅니다. 프로바이더나 모델을 바꾸고 싶으면
 [`.agents/context/llm-config.yaml.example`](.agents/context/llm-config.yaml.example)을 복사해 쓰고,
-API 키는 설정 파일이 아니라 환경 변수에 둡니다([`.env.example`](.env.example) 참고).
+API 키는 설정 파일이 아니라 환경 변수나 운영체제 키 저장소에 둡니다. `naia-settings/llm.json`에는
+키 값 대신 `apiKeyRef: "NAIA_KEY"`만 기록합니다. 개인 포크에서 장기 백업이 필요하면
+`data-private/key/`의 age 암호화 볼트를 사용합니다([`.env.example`](.env.example) 참고).
+
+지원 모델과 현재 가격 조회, 긴 PDF 번역은 `translate-doc` 스킬을 사용합니다. 모델·가격 조회는
+키 없이 가능하고, 번역은 예상 비용을 먼저 제시한 뒤 중단 지점부터 재개할 수 있습니다.
 
 ## 왜 이렇게 만들었나
 
@@ -182,7 +188,8 @@ Nextain의 실제 체인은 `naia-adk → naia-business-adk → nextain-adk → 
 3. upstream을 추가합니다: `git remote add upstream https://github.com/nextain/naia-adk.git`
 4. 데이터 디렉터리를 만듭니다: `mkdir -p data-private projects`
 5. 프로젝트를 추가하고 `.agents/`를 설정한 뒤 작업을 시작합니다.
-6. 주기적으로 동기화합니다: `git fetch upstream && git merge upstream/main`
+6. Naia 계정 자원을 쓸 경우 `NAIA_KEY`를 환경 변수로 설정합니다.
+7. 주기적으로 동기화합니다: `git fetch upstream && git merge upstream/main`
 
 ### 기업용
 

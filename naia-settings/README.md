@@ -123,6 +123,11 @@ directory.
 `llm.json` is a git-tracked backup unit. It **must never contain a raw
 API key**. Keyed providers reference a secret by name only:
 
+- The canonical public reference for a user-issued Naia account key is
+  `NAIA_KEY`. `NAIA_API_KEY` and `NAIA_ANYLLM_API_KEY` are migration aliases;
+  `NAIA_PROD_KEY` and `NAIA_DEV_KEY` are private-fork developer names and are
+  not part of the public workspace contract.
+
 - `apiKeyRef` = an environment variable name **(Slice A, now)** or an OS
   keychain entry name **(Slice B, device-key encrypted — in progress)**.
   The actual secret lives in the process env or the OS keychain — **never
