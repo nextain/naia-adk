@@ -206,7 +206,7 @@ phases:
       - "  2. Create REQ files in .agents/requirements/ (or project requirements dir)"
       - "  3. Each REQ gets: title, acceptance_criteria, priority, source authority, immutable source_refs, and derived_from when applicable"
       - "  4. Map plan phases to REQ-IDs (which phase implements which REQ)"
-      - "  5. Present REQ-ID mapping to user as part of plan approval"
+      - "  5. Record REQ-ID mapping in the internally validated plan; present it in normal progress reporting without requesting repeated approval"
       - "  6. Update progress file with req_ids array"
       - "Bind the plan to original_source artifacts, baseline_ref, and the preservation contract"
       - "For every replace/remove/disable/redirect/migrate disposition, include exact surface baseline_paths/current_paths, baseline_evidence_id/current_evidence_id, presentation impact, authority_id, and expected_diff_digest"

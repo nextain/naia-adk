@@ -1,8 +1,8 @@
 # Requirements Index — on-demand load only (NOT session-injected)
 # Read this file when entering Plan or Review phases
 version: 1
-updated: 2026-07-31
-total: 79
+updated: 2026-08-03
+total: 80
 
 # Status counts
 by_status:
@@ -10,7 +10,7 @@ by_status:
   active: 68
   implemented: 0
   verified: 11
-  withdrawn: 0
+  withdrawn: 1
 
 # Immutable source ledger. The validator resolves requirement source references through
 # these records and verifies the tracked bytes before accepting provenance claims.
@@ -18,6 +18,7 @@ source_ledger:
   version: 1
   records:
     - { id: USR-008, path: ".agents/requirements/sources/USR-008-aipol-preservation-incident.json", sha256: "sha256:d787c9c238f3550e8a3ec7f1b6806f6fdd91958684e4a4a4c31aed3f4720e81d", source_kind: human, origin: native_user_message, locator: "conversation://private/aipol-preservation-incident" }
+    - { id: USR-009, path: ".agents/requirements/sources/USR-009-discord-unattended-supervision.json", sha256: "sha256:174b855353f94e6d06643929f63256ad85ef9665b73ab61786a49efd61d099a1", source_kind: human, origin: native_user_message, locator: "conversation://private/discord-unattended-supervision" }
   # These identifiers predate the immutable ledger. Their native messages were not found in
   # local Claude/Codex session archives, so they must remain explicit gaps rather than being
   # reconstructed from AI-authored requirement prose.
@@ -34,10 +35,10 @@ source_ledger:
 products:
   - product: naia-adk-discord-sessions
     title: "Observable Discord AI Sessions"
-    req_count: 8
-    priority_high: 8
+    req_count: 9
+    priority_high: 9
     priority_medium: 0
-    modules: [observability-ledger, health-projection, operator-interface, completion-evidence, privacy, recovery, execution-watchdog, conversation-coordinator]
+    modules: [observability-ledger, health-projection, operator-interface, completion-evidence, privacy, recovery, execution-watchdog, conversation-coordinator, unattended-supervision-recovery]
     requirements:
       - { id: DSO-001, title: "Durable Background Job Activity Ledger", status: active }
       - { id: DSO-002, title: "Truthful Freshness and Activity Health", status: active }
@@ -46,7 +47,8 @@ products:
       - { id: DSO-005, title: "Private and Authorized Observability Projections", status: active }
       - { id: DSO-006, title: "ADK-Only Reboot Recovery and Backend Parity", status: active }
       - { id: DSO-007, title: "Fresh Execution Profiles and Bounded Operator Intervention", status: active }
-      - { id: DSO-008, title: "Durable Discord Conversation Coordinator", status: active }
+      - { id: DSO-008, title: "Durable Discord Conversation Coordinator", status: withdrawn }
+      - { id: DSO-009, title: "Unattended Discord Supervision and Recovery", status: active }
 
   - product: naia-benchmark-contract
     title: "Permanent Benchmark and Harness Recovery Contract"

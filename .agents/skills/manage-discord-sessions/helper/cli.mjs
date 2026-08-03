@@ -6,6 +6,7 @@ import { loadMessengerConfig, FileCredentialResolver } from "./discord-config.mj
 import { downloadDiscordAttachment, fetchDiscordHistory, sendDiscordReply } from "./discord-history.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
 import { manageService } from "./service-manager.mjs";
+import { gatewayEvidenceBoundSeconds, projectUnattendedHealth } from "./unattended-health.mjs";
 
 class UsageError extends Error {}
 
@@ -36,6 +37,7 @@ function validateInvocation(positional, options) {
 	const command = positional[0] ?? "status";
 	const allowed = {
 		status: new Set(["json"]),
+		"health-check": new Set(["json"]),
 		jobs: new Set(["json", "active", "failed"]),
 		job: new Set(["json", "events"]),
 		watch: new Set(["jsonl", "once", "jobId"]),
@@ -71,7 +73,7 @@ let options;
 let command;
 try {
 	({ positional, options } = parseArgs(process.argv.slice(2)));
-	const knownCommands = new Set(["status", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service"]);
+	const knownCommands = new Set(["status", "health-check", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service"]);
 	if (positional[0] && !knownCommands.has(positional[0])) {
 		if (options.instance) throw new UsageError("instance was specified more than once");
 		options.instance = normalizeMessengerInstance(positional.shift());
@@ -98,8 +100,17 @@ if (command === "service") {
 	}
 }
 
-if (command === "status" && (existsSync(databasePath) || instance !== "default" || existsSync(instancePaths.configPath))) {
+let messengerConfig;
+if (new Set(["status", "health-check"]).has(command) && (existsSync(databasePath) || instance !== "default" || existsSync(instancePaths.configPath))) {
 	try { loadMessengerConfig(instancePaths.configPath); }
+	catch (error) {
+		console.error(`Discord messenger configuration unavailable: ${error.message}`);
+		process.exit(3);
+	}
+}
+
+if (command === "health-check") {
+	try { messengerConfig = loadMessengerConfig(instancePaths.configPath); }
 	catch (error) {
 		console.error(`Discord messenger configuration unavailable: ${error.message}`);
 		process.exit(3);
@@ -136,13 +147,20 @@ if (command === "history" || command === "latest" || command === "attachment" ||
 	}
 }
 
-if (!existsSync(databasePath) && command === "status") {
+if (!existsSync(databasePath) && new Set(["status", "health-check"]).has(command)) {
 	const empty = {
 		schemaVersion: 1,
 		service: { state: "stopped", reasonCode: "service_state_missing", observedAt: new Date().toISOString(), heartbeatAt: null, processAlive: null },
 		gateway: { resumable: false, sequence: null, lastHeartbeatAckAt: null },
 		jobs: { active: 0, suspectedStalled: 0, needsReview: 0 },
+		foreignAgentSupervision: "unsupported",
 	};
+	if (command === "health-check") {
+		const health = projectUnattendedHealth({ status: empty, jobs: [], noProgressInterventionSeconds: messengerConfig.runtime.noProgressInterventionSeconds ?? messengerConfig.runtime.softSilenceSeconds ?? 120, gatewayEvidenceStaleSeconds: gatewayEvidenceBoundSeconds(messengerConfig.runtime.heartbeatSeconds ?? 10) });
+		if (options.json) console.log(JSON.stringify(health, null, 2));
+		else console.log(`health=${health.state} reason=service_state_missing foreignAgents=unsupported`);
+		process.exit(4);
+	}
 	if (options.json) console.log(JSON.stringify(empty, null, 2));
 	else console.log("service=stopped reason=service_state_missing active=0 stalled=0 review=0");
 	process.exit(0);
@@ -162,9 +180,14 @@ try {
 }
 try {
 	if (command === "status") {
-		const status = store.status();
+		const status = { ...store.status(), foreignAgentSupervision: "unsupported" };
 		if (options.json) output(status, true);
-		else output(`service=${status.service.state} reason=${status.service.reasonCode} gateway=${status.gateway.resumable ? "resumable" : "fresh_connect"} active=${status.jobs.active} stalled=${status.jobs.suspectedStalled} review=${status.jobs.needsReview}`, false);
+		else output(`service=${status.service.state} reason=${status.service.reasonCode} gateway=${status.gateway.resumable ? "resumable" : "fresh_connect"} active=${status.jobs.active} stalled=${status.jobs.suspectedStalled} review=${status.jobs.needsReview} foreignAgents=unsupported`, false);
+	} else if (command === "health-check") {
+		const health = projectUnattendedHealth({ status: store.status(), jobs: store.listJobs(), noProgressInterventionSeconds: messengerConfig.runtime.noProgressInterventionSeconds ?? messengerConfig.runtime.softSilenceSeconds ?? 120, gatewayEvidenceStaleSeconds: gatewayEvidenceBoundSeconds(messengerConfig.runtime.heartbeatSeconds ?? 10) });
+		if (options.json) output(health, true);
+		else output(`health=${health.state} unhealthy=${health.unhealthy.length} attention=${health.attention.length} foreignAgents=${health.foreignAgentSupervision}`, false);
+		if (health.state === "unhealthy") process.exitCode = 4;
 	} else if (command === "jobs") {
 		let jobs = store.listJobs();
 		if (options.active) jobs = jobs.filter((job) => !["completed", "failed", "cancelled", "recovery_review"].includes(job.lifecycle));

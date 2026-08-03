@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { authorizeDiscordMessage, validateDiscordBindings } from "../helper/discord-scope.mjs";
-import { deliverJobResult, postDiscordDirectMessage, postDiscordMessage, splitDiscordContent } from "../helper/discord-delivery.mjs";
+import { deliverJobResult, formatOperatorStatus, postDiscordDirectMessage, postDiscordMessage, splitDiscordContent } from "../helper/discord-delivery.mjs";
 import { DiscordGatewaySession, MemoryGatewayState, StoredGatewayState } from "../helper/discord-gateway.mjs";
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
@@ -195,7 +195,7 @@ test("DSG-008 service shutdown does not wait for a stuck native WebSocket close"
 			operatorUserIds: [USER],
 			bindings: [binding()],
 		},
-		runtime: { heartbeatSeconds: 10, softSilenceSeconds: 120, maxConcurrentJobs: 1 },
+		runtime: { heartbeatSeconds: 10, softSilenceSeconds: 120, maxConcurrentJobs: 1, approvalPolicy: "never" },
 		observability: { discordStatusProjection: false },
 		service: { autoStart: false, startAt: "login" },
 		recovery: { autoRetry: false },
@@ -338,6 +338,9 @@ test("DSG-006 enforces configured read-only role in the actual backend invocatio
 	await router.waitForIdle();
 	assert.equal(calls.length, 1);
 	assert.deepEqual(calls[0].commandOptions, { sandbox: "read-only", approvalPolicy: "never" });
+	assert.match(calls[0].prompt, /Routine authority: A bounded user request authorizes its normal in-scope execution path/);
+	assert.match(calls[0].prompt, /No approval click is available/);
+	assert.match(calls[0].prompt, /Ask only when a material unresolved choice would change the requested scope/);
 	assert.equal(JSON.stringify(store.listJobs()).includes("inspect this"), false);
 	store.close();
 });
@@ -476,6 +479,26 @@ test("DSG-007 reboot recovery preserves job identity and requires review without
 	reopened.close();
 });
 
+test("DSO-009 quarantines pre-withdrawal coordinator envelopes during reboot recovery", async () => {
+	const { store, root } = fixture();
+	const codec = new RecoveryCodec(randomBytes(32));
+	store.createJob({ jobId: "old-coordinator", backendId: "codex", activityDetail: "structured", jobType: "conversation", recoveryEnvelope: codec.seal(JSON.stringify({ mode: "coordinator", currentRequest: "old request", channelId: CHANNEL, binding: binding(), allowedUserIds: [USER] })) });
+	const recovered = store.recoverInterruptedWork();
+	let calls = 0;
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, approvalPolicy: "never", conversationCoordinator: false } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: codec, send: async () => ({ state: "confirmed" }), runner: async () => { calls += 1; return { backendOutcome: "failure", transientResult: null }; } });
+	router.resumeRecovered(recovered, { autoRetry: true });
+	await router.waitForIdle();
+	assert.equal(calls, 0);
+	assert.equal(store.getJob("old-coordinator").lifecycle, "recovery_review");
+	store.close();
+});
+
+test("DSO-009 Discord operator status discloses that foreign collaboration agents are unsupported", () => {
+	const content = formatOperatorStatus({ service: { state: "running", reasonCode: "heartbeat_fresh" } }, []);
+	assert.match(content, /Foreign collaboration agent supervision: unsupported/);
+});
+
 test("DSG-007 refuses an existing recovery key that was exposed on POSIX", { skip: process.platform === "win32" ? "POSIX permission semantics" : false }, () => {
 	const root = mkdtempSync(join(tmpdir(), "naia-exposed-recovery-key-"));
 	roots.push(root);
@@ -585,7 +608,7 @@ test("DSG-013 replaces a stale managed child profile with a fresh no-prompt chil
 	store.startAttempt("stale-profile-job", { attemptId: "old-managed-attempt" });
 	const recovered = store.recoverInterruptedWork();
 	const calls = [];
-	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "writer", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: ["write", "execute"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, approvalPolicy: "never", permissionProfileEpoch: "never-2" } };
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "writer", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: [] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, approvalPolicy: "never", permissionProfileEpoch: "never-2" } };
 	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: codec, send: async () => ({ state: "confirmed" }), runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
 	router.resumeRecovered(recovered, { autoRetry: true });
 	await router.waitForIdle();
@@ -715,6 +738,10 @@ test("DSO-008 local coordinator stays responsive while a delegated worker is act
 	await router.onDispatch("MESSAGE_CREATE", { id: "262626262626262626", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> 문제를 조사해` }, 26);
 	for (let index = 0; index < 20 && !calls.some((item) => !item.prompt.includes("Return JSON only")); index += 1) await new Promise((resolve) => setImmediate(resolve));
 	assert.equal(calls.some((item) => !item.prompt.includes("Return JSON only")), true);
+	const workerPrompt = calls.find((item) => !item.prompt.includes("Return JSON only")).prompt;
+	assert.match(workerPrompt, /Routine authority: A bounded user request authorizes its normal in-scope execution path/);
+	assert.match(workerPrompt, /No approval click is available/);
+	assert.match(workerPrompt, /Ask only when a material unresolved choice would change the requested scope/);
 	const auditDb = new DatabaseSync(databasePath, { readOnly: true });
 	const durableWorkerIntents = auditDb.prepare("SELECT COUNT(*) AS count FROM job_recovery r JOIN jobs j ON j.job_id = r.job_id WHERE j.revision = 'discord-worker-v2'").get().count;
 	auditDb.close();
@@ -941,14 +968,16 @@ test("DSG-009 participant status projection is limited to the current Discord sc
 	store.close();
 });
 
-test("DSG-010 approval-required mutation remains read-only until an explicit elevation contract exists", async () => {
+test("DSG-010 approval-required actions are removed from unattended access and prompts", async () => {
 	const { store, root } = fixture();
 	const calls = [];
-	const config = { persona: { name: "Builder", instructions: "Work safely." }, role: { name: "guarded", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: ["write", "execute"] }, backend: { selected: "claude" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
+	const config = { persona: { name: "Builder", instructions: "Work safely." }, role: { name: "guarded", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: ["write", "execute"] }, backend: { selected: "claude" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1, approvalPolicy: "never" } };
 	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), send: async () => ({ state: "confirmed" }), runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
 	await router.onDispatch("MESSAGE_CREATE", { id: "121212121212121212", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> change a file` }, 10);
 	await router.waitForIdle();
 	assert.deepEqual(calls[0].commandOptions, { permissionMode: "plan", settingSources: "project", approvalPolicy: "never" });
+	assert.match(calls[0].prompt, /Allowed actions: read, reply/);
+	assert.equal(calls[0].prompt.includes("Allowed actions: read, reply, write"), false);
 	store.close();
 });
 
@@ -980,6 +1009,12 @@ test("DSG-012 loads only private closed settings and resolves an owner-only cred
 	writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
 	protectOwnerOnly(configPath, "file", "test config");
 	assert.equal(loadMessengerConfig(configPath).backend.selected, "codex");
+	writeFileSync(configPath, JSON.stringify({ ...config, runtime: { ...config.runtime, approvalPolicy: "managed" } }), { mode: 0o600 });
+	assert.throws(() => loadMessengerConfig(configPath), /explicitly set to never/);
+	writeFileSync(configPath, JSON.stringify({ ...config, runtime: { ...config.runtime, approvalPolicy: undefined } }), { mode: 0o600 });
+	assert.throws(() => loadMessengerConfig(configPath), /explicitly set to never/);
+	writeFileSync(configPath, JSON.stringify({ ...config, runtime: { ...config.runtime, conversationCoordinator: true } }), { mode: 0o600 });
+	assert.throws(() => loadMessengerConfig(configPath), /conversationCoordinator has been withdrawn/);
 	writeFileSync(configPath, JSON.stringify({ ...config, unexpected: true }), { mode: 0o600 });
 	assert.throws(() => loadMessengerConfig(configPath), /unsupported field/);
 	writeFileSync(configPath, JSON.stringify(config), { mode: 0o644 });
