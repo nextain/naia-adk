@@ -782,6 +782,12 @@ test("registered native control preflight reaches initial bind and the pinned re
 	cp.execFileSync(bindWords[0], bindWords.slice(1), { cwd: fx.cwd, encoding: "utf8" });
 	assert.equal(runInstalledNativeAdapter("claude", fx, { ...envelope, hook_event_name: "PostToolUse" }, "PostToolUse"), null);
 	assert.equal(core.readJson(unit.paths.binding).state, "active");
+	const joinWords = ["node", operatorScript, "join-session", "--unit", unit.id, "--client", "codex", "--session", "JOINED-CODEX", "--client-version", CLIENT_VERSIONS.codex];
+	envelope = { hook_event_name: "PreToolUse", session_id: "S1", cwd: fx.cwd, tool_name: "Bash", tool_use_id: "control-join", tool_input: { command: shellCommand(joinWords) } };
+	assert.equal(runInstalledNativeAdapter("claude", fx, envelope, "PreToolUse"), null);
+	cp.execFileSync(joinWords[0], joinWords.slice(1), { cwd: fx.cwd, encoding: "utf8" });
+	assert.equal(runInstalledNativeAdapter("claude", fx, { ...envelope, hook_event_name: "PostToolUse" }, "PostToolUse"), null);
+	assert.equal(core.findUnit(fx.cwd, "codex", "JOINED-CODEX").id, unit.id);
 	const reviewScript = path.join(fx.cwd, "scripts", "request-contract-review-runner.cjs");
 	const reviewer = reviewerFixturePath("contract-reviewer");
 	const reviewWords = [process.execPath, reviewScript, "--cwd", fx.cwd, "--unit", unit.id, "--writer-session", "S1", "--reviewer", reviewer, "--reviewer-attestor", fx.reviewerAttestor, "--runner-attestor", fx.runnerAttestor];
@@ -891,15 +897,19 @@ test("duplicate runtime bindings fail closed without losing a valid prompt envel
 	assert.deepEqual(records.map((record) => record.prompt), ["exact prompt during duplicate binding"]);
 });
 
-test("next genesis adopts every unconsumed quarantine chain", () => {
+test("a new lineage adopts only quarantine chains from its explicitly bound session", () => {
 	const fx = fixture();
-	core.handleEvent({ client: "codex", eventName: "UserPromptSubmit", sessionId: "OLD", cwd: fx.cwd, prompt: "orphan one", origin: "native_user" });
+	core.handleEvent({ client: "codex", eventName: "UserPromptSubmit", sessionId: "NEW", cwd: fx.cwd, prompt: "owned prompt", origin: "native_user" });
 	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "OLD2", cwd: fx.cwd, prompt: "orphan two", origin: "native_user" });
 	core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "NEW", cwd: fx.cwd });
 	const unit = core.findUnit(fx.cwd, "codex", "NEW");
 	const records = core.verifySourceChain(unit.paths, core.readJson(unit.paths.head)).records;
-	assert.deepEqual(records.map((r) => r.prompt).sort(), ["orphan one", "orphan two"]);
-	assert.equal(core.listUnconsumedQuarantine(fx.cwd).length, 0);
+	assert.deepEqual(records.map((r) => r.prompt), ["owned prompt"]);
+	const remaining = core.listUnconsumedQuarantine(fx.cwd);
+	assert.equal(remaining.length, 1);
+	assert.equal(remaining[0].head.client, "claude");
+	assert.equal(remaining[0].head.session_id, "OLD2");
+	assert.deepEqual(core.readJsonl(path.join(remaining[0].dir, "sources.jsonl")).map((record) => record.prompt), ["orphan two"]);
 });
 
 test("a mutable quarantine consumed flag cannot hide an unadopted prompt", () => {
@@ -921,7 +931,7 @@ test("a mutable quarantine consumed flag cannot hide an unadopted prompt", () =>
 
 test("consumed quarantine is cross-bound to the exact destination head", () => {
 	const fx = fixture();
-	core.handleEvent({ client: "codex", eventName: "UserPromptSubmit", sessionId: "OLD", cwd: fx.cwd, prompt: "cross-bound source", origin: "native_user" });
+	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "NEW", cwd: fx.cwd, prompt: "cross-bound source", origin: "native_user" });
 	core.handleEvent({ client: "claude", clientVersion: CLIENT_VERSIONS.claude, eventName: "SessionStart", sessionId: "NEW", cwd: fx.cwd });
 	const unit = core.findUnit(fx.cwd, "claude", "NEW");
 	const head = core.readJson(unit.paths.head);
@@ -933,14 +943,14 @@ test("consumed quarantine is cross-bound to the exact destination head", () => {
 	assert.equal(unresolved[0].corrupt, "quarantine_consumption_unbound");
 });
 
-test("a new client session reuses the one unresolved global lineage", () => {
+test("a new client session starts a distinct lineage instead of implicitly joining", () => {
 	const fx = fixture();
 	const first = start(fx, "claude", "OLD");
 	const result = core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "NEW", cwd: fx.cwd });
 	assert.equal(result.kind, "context");
-	const rebound = core.findUnit(fx.cwd, "codex", "NEW");
-	assert.equal(rebound.id, first.id);
-	assert.equal(core.listUnits(fx.cwd).length, 1);
+	const separate = core.findUnit(fx.cwd, "codex", "NEW");
+	assert.notEqual(separate.id, first.id);
+	assert.equal(core.listUnits(fx.cwd).length, 2);
 });
 
 test("recursive Git reference does not invent baseline additions in a clean repository", () => {
@@ -1661,11 +1671,26 @@ test("adding a client session advances binding and work revisions and stales pri
 	ingestReview(fx, unit, cleanReview(fx, unit, "BEFORE-SESSION-TWO"));
 	const beforeBinding = core.readJson(unit.paths.binding).binding_epoch;
 	const beforeRevision = core.readJson(unit.paths.head).work_revision;
-	const result = core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "SECOND-CLIENT", cwd: fx.cwd });
-	assert.equal(result.kind, "context");
+	core.addSessionBinding(unit, "codex", "SECOND-CLIENT", CLIENT_VERSIONS.codex, process.pid, core.processIdentity(process.pid));
+	assert.equal(core.findUnit(fx.cwd, "codex", "SECOND-CLIENT").id, unit.id);
 	assert.equal(core.readJson(unit.paths.binding).binding_epoch, beforeBinding + 1);
 	assert.equal(core.readJson(unit.paths.head).work_revision, beforeRevision + 1);
 	assert(core.evaluateCompletion(unit, fx.cwd, "codex").errors.includes("review_clean_streak_incomplete"));
+});
+
+test("joining a session already owned by another active lineage fails atomically", () => {
+	const fx = fixture();
+	const first = start(fx, "claude", "FIRST");
+	const second = start(fx, "codex", "SECOND");
+	const firstBefore = fs.readFileSync(first.paths.head, "utf8");
+	const secondBefore = fs.readFileSync(second.paths.head, "utf8");
+	assert.throws(
+		() => core.addSessionBinding(first, "codex", "SECOND", CLIENT_VERSIONS.codex, process.pid, core.processIdentity(process.pid)),
+		(error) => error.code === "session_already_bound",
+	);
+	assert.equal(fs.readFileSync(first.paths.head, "utf8"), firstBefore);
+	assert.equal(fs.readFileSync(second.paths.head, "utf8"), secondBefore);
+	assert.equal(core.findUnit(fx.cwd, "codex", "SECOND").id, second.id);
 });
 
 test("mutation leases prevent completion between PreToolUse and matching PostToolUse", () => {
@@ -1691,7 +1716,7 @@ test("only the owning session can close a mutation lease and reviews wait for al
 	const fx = fixture();
 	const unit = start(fx, "claude", "S1");
 	bind(fx, unit);
-	assert.equal(core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "S2", cwd: fx.cwd }).kind, "context");
+	core.addSessionBinding(unit, "codex", "S2", CLIENT_VERSIONS.codex, process.pid, core.processIdentity(process.pid));
 	assert.equal(core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Bash", toolUseId: "owned-by-s1" }).kind, "allow");
 	assert.throws(() => core.issueReviewInvocation(unit, fx.cwd, "S2"), (error) => error.code === "review_mutation_in_flight");
 	const foreignStop = core.handleEvent({ client: "codex", eventName: "Stop", sessionId: "S2", cwd: fx.cwd });
@@ -1853,7 +1878,7 @@ test("historical coverage commits exact opaque atom, artifact, and trace-edge ma
 	const unit = start(fx);
 	bind(fx, unit);
 	for (const [label, mutate] of [
-		["ATOM", (contract) => { contract.sources[0].obligation_atom_ids[0] = "OBL-forged"; }],
+		["ATOM", (contract) => { contract.sources[0].obligation_atoms[0].id = "OBL-forged"; }],
 		["ARTIFACT", (contract) => { contract.artifacts[0].subject_id = "REQ-forged"; }],
 		["EDGE", (contract) => { contract.edges[0].to = contract.edges[1].to; }],
 	]) {
@@ -2129,12 +2154,13 @@ test("a changed failure fingerprint starts a fresh consecutive Stop episode", ()
 	assert.equal(core.readJson(unit.paths.state).terminal, undefined);
 });
 
-test("incomplete lineage requires a fresh signed resume and rejects replay", () => {
+test("incomplete lineage remains immutable until signed resume while new sessions stay distinct", () => {
 	const fx = fixture();
 	const unit = start(fx);
 	bind(fx, unit);
 	for (let i = 0; i < 3; i++) core.evaluateCompletion(unit, fx.cwd, "claude");
-	assert.equal(core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "S2", cwd: fx.cwd }).code, "incomplete_lineage_requires_resume");
+	assert.equal(core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "S2", cwd: fx.cwd }).kind, "context");
+	assert.notEqual(core.findUnit(fx.cwd, "codex", "S2").id, unit.id);
 	const head = core.readJson(unit.paths.head);
 	const binding = core.readJson(unit.paths.binding);
 	const scope = core.sha256(core.canonicalJson(core.scopeProjection(core.readJson(unit.paths.contract))));
@@ -2153,7 +2179,8 @@ test("incomplete lineage requires a fresh signed resume and rejects replay", () 
 		sign_count: 2,
 	});
 	core.resumeIncomplete(unit, receipt, fx.cwd);
-	assert.equal(core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "S2", cwd: fx.cwd }).kind, "context");
+	core.addSessionBinding(unit, "codex", "S3", CLIENT_VERSIONS.codex, process.pid, core.processIdentity(process.pid));
+	assert.equal(core.findUnit(fx.cwd, "codex", "S3").id, unit.id);
 	for (let i = 0; i < 3; i++) core.evaluateCompletion(unit, fx.cwd, "claude");
 	assert.throws(() => core.resumeIncomplete(unit, receipt, fx.cwd), /authority_/);
 });
@@ -2239,10 +2266,13 @@ test("native Claude Code and Codex processes discover the same nested project ro
 	}
 	const claudeUnit = core.findUnit(fx.cwd, "claude", "NATIVE-C");
 	const codexUnit = core.findUnit(fx.cwd, "codex", "NATIVE-X");
-	assert.equal(claudeUnit.id, codexUnit.id);
-	for (const binding of claudeUnit.head.session_bindings) {
-		assert(binding.host_process_ids.includes(process.pid));
-		assert(binding.host_process_identities.includes(core.processIdentity(process.pid)));
+	assert.notEqual(claudeUnit.id, codexUnit.id);
+	for (const unit of [claudeUnit, codexUnit]) {
+		assert.equal(unit.head.session_bindings.length, 1);
+		for (const binding of unit.head.session_bindings) {
+			assert(binding.host_process_ids.includes(process.pid));
+			assert(binding.host_process_identities.includes(core.processIdentity(process.pid)));
+		}
 	}
 	for (const [client, sessionId] of [["claude", "NATIVE-C"], ["codex", "NATIVE-X"]]) {
 		const output = runNativeAdapter(client, fx, { hook_event_name: "Stop", session_id: sessionId, cwd: nested }, "Stop");
@@ -2373,7 +2403,7 @@ test("both client registries cover all governed lifecycle events", () => {
 	const claude = JSON.parse(fs.readFileSync(path.join(root, ".claude", "settings.json"), "utf8"));
 	const codex = JSON.parse(fs.readFileSync(path.join(root, ".codex", "hooks.json"), "utf8"));
 	for (const event of ["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"]) {
-		for (const registry of [claude, codex]) {
+		for (const [client, registry] of [["claude", claude], ["codex", codex]]) {
 			assert(registry.hooks[event]);
 			const hooks = registry.hooks[event].flatMap((entry) => entry.hooks).filter((hook) => hook.command.includes("request-contract") || (hook.args || []).some((arg) => arg.includes("request-contract")));
 			assert.equal(hooks.length, 1);
@@ -2468,7 +2498,7 @@ test("baseline manifest is independently self-digested inside protected lifecycl
 
 test("successful units compact to non-sensitive receipts after retention", () => {
 	const fx = fixture();
-	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "PRE", cwd: fx.cwd, prompt: "quarantined private source", origin: "native_user" });
+	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "S1", cwd: fx.cwd, prompt: "quarantined private source", origin: "native_user" });
 	core.handleEvent({ client: "claude", clientVersion: CLIENT_VERSIONS.claude, eventName: "SessionStart", sessionId: "S1", cwd: fx.cwd });
 	const unit = core.findUnit(fx.cwd, "claude", "S1");
 	const consumedQuarantineDir = path.join(core.harnessRoot(fx.cwd), "quarantine");
@@ -2540,7 +2570,7 @@ test("retention compaction revalidates immediately before removing a successful 
 
 test("failed final compaction validation preserves consumed quarantine evidence", () => {
 	const fx = fixture();
-	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "PRE", cwd: fx.cwd, prompt: "quarantined source evidence", origin: "native_user" });
+	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "S1", cwd: fx.cwd, prompt: "quarantined source evidence", origin: "native_user" });
 	core.handleEvent({ client: "claude", clientVersion: CLIENT_VERSIONS.claude, eventName: "SessionStart", sessionId: "S1", cwd: fx.cwd });
 	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "S1", cwd: fx.cwd, prompt: "complete the adopted request", origin: "native_user" });
 	const unit = core.findUnit(fx.cwd, "claude", "S1");
