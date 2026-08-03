@@ -145,11 +145,12 @@ release, issue close, 완료 표현은 실패입니다. 내장 release-command r
 
 When the changed paths include `.agents/skills/manage-discord-sessions/**`,
 `naia-settings/messenger-sessions/config.example.json`, or
-`docs/design/discord-session-observability.md`, run:
+`docs/design/discord-session-observability.md`, or
+`docs/design/discord-unattended-supervision-plan.md`, run:
 
 ```bash
 pnpm test:discord-sessions
-rg -n 'approvalPolicy|permissionProfileEpoch|noProgressInterventionSeconds|operatorResponseSeconds' \
+rg -n 'approvalPolicy|permissionProfileEpoch|noProgressInterventionSeconds|operatorResponseSeconds|foreignAgentSupervision|conversationCoordinator' \
   naia-settings/messenger-sessions/config.example.json \
   .agents/skills/manage-discord-sessions/helper/{discord-config,discord-router,backend-runner,service}.mjs
 ```
@@ -161,6 +162,11 @@ PASS:
   response handoff, and explicit child workspace binding.
 - Config, helper, requirements, design, and the user skill name the same
   execution-profile and watchdog contract.
+- The external supervisor is a separate OS-scheduled one-shot, never an
+  interactive model loop; coordinator activation and legacy recovery fail
+  closed; stale Gateway or child evidence cannot be called healthy.
+- Entry-point mirrors and the workflow contain internal checkpoints rather
+  than unconditional user-approval gates.
 
 FAIL:
 
@@ -169,6 +175,8 @@ FAIL:
   action, or a Discord job can execute without a channel response handoff.
 - A helper trusts an ambient workdir instead of binding the requested child
   workspace explicitly.
+- A Windows supervisor silently falls back to an unsupervised polling loop, or
+  status claims foreign collaboration-agent lifecycle supervision.
 
 ## 출력
 
@@ -213,3 +221,4 @@ Delivery: RELEASE_ELIGIBLE | REVIEW_ONLY
 | `.agents/skills/manage-discord-sessions/` | Discord execution profile, watchdog, and deterministic regressions |
 | `naia-settings/messenger-sessions/config.example.json` | Operator-visible execution and watchdog defaults |
 | `docs/design/discord-session-observability.md` | Discord session design contract |
+| `docs/design/discord-unattended-supervision-plan.md` | Unattended supervision, no-prompt, and complexity contract |

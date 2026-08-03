@@ -141,6 +141,10 @@ signed checkpoint-publication operation이 구현·검증될 때까지 금지합
 release, issue close, 완료 표현은 실패입니다. 내장 release-command regex는 보조 탐지이며
 프로젝트 adapter가 모든 external side effect를 엄격히 선언·차단해야 합니다.
 
+### 7. Discord 무인 감시 회귀
+
+Discord 세션 스킬이나 설정·설계가 바뀌면 `pnpm test:discord-sessions`를 실행합니다. 외부 supervisor가 AI 턴 및 Discord 서비스와 분리된 OS 예약 one-shot인지, SQLite를 쓰지 않는지, coordinator 활성화와 과거 coordinator 복구가 닫히는지, stale Gateway 및 불명확한 child 근거를 healthy로 부르지 않는지 검증합니다. `approvalPolicy=never`가 명시되고 `requiresApproval` 작업이 실제 허용 작업에서 빠지는지, 진입점과 workflow가 사용자 재승인 대신 내부 체크포인트를 사용하는지도 결정론적으로 검사합니다. Windows에서 Task Scheduler 등록 실패를 숨은 폴링 loop로 대체하거나 외부 협업 서브에이전트의 생명주기를 감시한다고 표시하면 FAIL입니다.
+
 ## 출력
 
 ```markdown

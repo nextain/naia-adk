@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "id": "USR-009",
+  "source_kind": "human",
+  "origin": "native_user_message",
+  "actor": "user",
+  "platform": "openai-chat",
+  "locator": "conversation://private/discord-unattended-supervision",
+  "locator_access": "restricted",
+  "capture_kind": "public_safe_verbatim_excerpt",
+  "coverage": "selected_incident_directives_not_complete_history",
+  "ordering": "relative_chronological_order_of_selected_messages",
+  "digest_algorithm": "sha256-canonical-event-v1",
+  "capture_note": "개인정보와 비공개 대화 식별자는 제외하고, 범용 Discord 감시·승인·적대 검증 요구를 입증하는 사용자 원문만 발췌했다.",
+  "events": [
+    {
+      "sequence": 1,
+      "event_id": "USR-009-E01",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-unattended-supervision#selected-user-message-01",
+      "exact_text": "내가 요구한건 범용 discord 스킬의 문제야. 제대로 안되서 폴링하라 했는데 그것 역시 드리프트를 일으켜서 문제였고",
+      "obligations": [
+        "generic-discord-harness",
+        "no-interactive-polling"
+      ],
+      "text_sha256": "sha256:884b1188e67121e7f9dc4c3aa3650ceb617795ca3f12ac1bb2d04d477b87a00d",
+      "event_sha256": "sha256:b5c41544d97821f3a78ff48f2535e4a64551c7b0aa0300cb900209d6af9eaad9"
+    },
+    {
+      "sequence": 2,
+      "event_id": "USR-009-E02",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-unattended-supervision#selected-user-message-02",
+      "exact_text": "활성화시킨 서브에이전트의 중지도 눈치 채지 못했고",
+      "obligations": [
+        "truthful-subagent-lifecycle"
+      ],
+      "text_sha256": "sha256:07d09d7870d473829f99a1027922dadf19c7393e4c07a6ca743bdc4f14fb3d28",
+      "event_sha256": "sha256:85af6de4eda0fdad6f93eeb0655f661cb2d3f900133eab7de6763dc9131576cf"
+    },
+    {
+      "sequence": 3,
+      "event_id": "USR-009-E03",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-unattended-supervision#selected-user-message-03",
+      "exact_text": "aipol 에이전트가 무얼 잘못했는지를 따지라는게 아니라, discord 스킬, 하네스의 문제점을 그 대화세션의 상태를 보고 개선점을 찾으라는거야\n하네스가 문제라서 폴링을 시켰는데 폴링 조차도 문제를 일으켰어",
+      "obligations": [
+        "generic-discord-harness",
+        "no-interactive-polling"
+      ],
+      "text_sha256": "sha256:3f478cc2f0be4f970a4f563a5790e8b30b62717d2406e08a09b9f2398fb18ef0",
+      "event_sha256": "sha256:0232a75b9868d927cd086e8cfe22908d75e1f8de461648a16a7c9173bd36523b"
+    },
+    {
+      "sequence": 4,
+      "event_id": "USR-009-E04",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-unattended-supervision#selected-user-message-04",
+      "exact_text": "이에 대한 대응 방법을 분석하고, 수정 계획을 세우고, 현상 및 코드, 계획을 전달해서 적대리뷰 통해 진짜 문제점을 찾아 계획검증, 개발 검증 등을 진행해서, discord하네스를 개선해줘.",
+      "obligations": [
+        "adversarial-plan-development-validation"
+      ],
+      "text_sha256": "sha256:cd06ed946f1da8d745b06a9056a63793bcd410854332acd61633f0e8f3bd153b",
+      "event_sha256": "sha256:72c8bf96e497d72bea9738df48e0b4e64f61731b51a1c38ebb28adc174a618d4"
+    },
+    {
+      "sequence": 5,
+      "event_id": "USR-009-E05",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-unattended-supervision#selected-user-message-05",
+      "exact_text": "지적했듯이 너무 복잡한 구조 자체의 문제가 아닌가 걱정되긴해. 이로인해 버그의 가능성이 높아지니까. 오히려 문제가 발생했을때 원복할 수 있는 수단이나 감시자를 늘리는 방법은 어떨까 란 생각도 들고",
+      "obligations": [
+        "complexity-evaluation",
+        "rollback-watcher-alternatives"
+      ],
+      "text_sha256": "sha256:aa378aa422826bf768dd3517ddb537aaeaae82ef45863cf447f8d43991bc552a",
+      "event_sha256": "sha256:55630658b0b303afa75e41975935ad4e7605d420c9320e77dbe4f719cf1911c9"
+    },
+    {
+      "sequence": 6,
+      "event_id": "USR-009-E06",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-unattended-supervision#selected-user-message-06",
+      "exact_text": "내 생각, 의견을 참고하여 분석을 진행해. 내 의견이 절대적이지는 않아.",
+      "obligations": [
+        "evaluate-not-blindly-adopt"
+      ],
+      "text_sha256": "sha256:f48b63acc9e2966dece8fd7eb8c738f8330e87771b85999a87d6ba75b0f135bb",
+      "event_sha256": "sha256:e2a7ae7c40163930ebaf2e94119ffa952e763c6dd3943b93466b19e66903d9ec"
+    },
+    {
+      "sequence": 7,
+      "event_id": "USR-009-E07",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-unattended-supervision#selected-user-message-07",
+      "exact_text": "그리고 그 분석결과는 적대리뷰통해 충분히 검증 협의된상태에서 개발 진행하여 검증해줘\n밥먹고올테니 작업 진행해\n승인요청은 별도로 하지마. 내가 따로 못누르니까. 서브에이전트 포함해서\n잘 진행해줘",
+      "obligations": [
+        "adversarial-plan-development-validation",
+        "no-approval-prompts"
+      ],
+      "text_sha256": "sha256:f15dd2a57ce0f0df7d6640eac9840fe615b357341d3642215a770e3bd2714f59",
+      "event_sha256": "sha256:e46a92542192f9b18b1b83936186381027d82ccf0619b23a401a79fb8933b3f3"
+    },
+    {
+      "sequence": 8,
+      "event_id": "USR-009-E08",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-unattended-supervision#selected-user-message-08",
+      "exact_text": "아.. 그리고 대체 왜 자꾸 승인요청을 다른 세션도 그렇고 계속 올릴까",
+      "obligations": [
+        "no-approval-prompts",
+        "approval-root-cause"
+      ],
+      "text_sha256": "sha256:7417554d721c40e76027f6592bc756813d4296bcceef21669505c4498abaf90a",
+      "event_sha256": "sha256:9ddec365b90ac1e230406575a87a364d9f4cc66335c80d1c5773f459b0ef8291"
+    },
+    {
+      "sequence": 9,
+      "event_id": "USR-009-E09",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-unattended-supervision#selected-user-message-09",
+      "exact_text": "alpha-adk, naia-adk 를 승인요청 올리지 말라하는데 계속 올리니",
+      "obligations": [
+        "no-approval-prompts",
+        "approval-root-cause",
+        "alpha-naia-scope"
+      ],
+      "text_sha256": "sha256:b1f6abf63a4ce8ff28eade347de930cc91795cbb93ec4b2744d677da2e40136e",
+      "event_sha256": "sha256:8a9328d61cd3c6e20075c7b0c7d428b6cc9a782522f2a8eb6520866e77cd6660"
+    }
+  ]
+}

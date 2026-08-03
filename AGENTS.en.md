@@ -86,19 +86,23 @@ After forking, create a `FORK.md` in the fork root with:
 For feature-level work (new features, broad bug fixes). **14 phases:**
 
 1. **Issue** — Create or receive GitHub Issue (English)
-2. **Understand** — Summarize understanding, get user confirmation (gate)
-3. **Scope** — Define investigation scope/depth, user approval (gate)
+2. **Understand** — Summarize understanding and confirm it internally (gate)
+3. **Scope** — Define investigation scope/depth and validate it internally (gate)
 4. **Investigate** — Code-centric investigation within confirmed scope
-5. **Plan** — Comprehensive plan based on ALL findings, user approval (gate)
+5. **Plan** — Comprehensive plan based on ALL findings, internal validation (gate)
 6. **Build** — Implement according to approved plan
 7. **Review** — Iterative review (repeat until TWO consecutive clean passes) → run `/verify-implementation`
 8. **E2E Test** — Run actual app/server, targeted tests first then full suite
 9. **Post-test Review** — Re-review after tests pass (repeat until TWO consecutive clean passes) → run `/verify-implementation`
-10. **Sync** — Update `.agents/` + `.users/` context → run `/manage-skills` → user confirmation (gate)
+10. **Sync** — Update `.agents/` + `.users/` context → run `/manage-skills` → internal confirmation (gate)
 11. **Sync Verify** — Verify context accuracy (repeat until TWO consecutive clean passes)
 12. **Report** — Summarize results to user
 13. **Commit** — If in worktree: use `/merge-worktree`. Otherwise: commit referencing Issue number, create PR
-14. **Close** — Phase-by-phase completion report to issue comments + user confirmation (gate)
+14. **Close** — Phase-by-phase completion report to issue comments + internal confirmation (gate)
+
+**Gate authority rule:** For a bounded user request, Understand, Scope, Plan, Sync, and Close are internal execution checkpoints. Do not ask the user to reconfirm or click an approval merely because one of these phases begins. Ask only when a material unresolved choice would change the requested scope or when separate authority is required for an exception such as destructive work, cost, or external communication.
+
+**Routine action authority:** A bounded request authorizes its normal path: read-only inspection; in-scope development, documentation, tests, and builds; non-destructive fetch, pull, merge, rebase, and commit; and non-force push. Preserve this authority in subagent and resumed-session handoffs and do not ask again for the same work. Separate authority is required only for material deletion or irrecoverable loss, force push or history rewrite, forced unrelated-history merge, unsolicited external communication, material cost, production-destructive mutation, or material scope expansion. A tool-runtime permission prompt is a platform control, not a reason to request conversational approval again.
 
 **Iterative review applies at 5 points:** After Plan, after each Build phase, after all Build phases, after E2E Test, after Sync.
 
