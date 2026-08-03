@@ -81,6 +81,13 @@ skills:
     scripts: [extract_doc.py]
     note: "Windows에서 PYTHONIOENCODING=utf-8 필요. 사이드카 .txt 있으면 우선 사용."
 
+  translate-doc:
+    trigger: "문서 번역, PDF 번역, Naia 키로 번역, 지원 모델/가격 조회"
+    what: "Naia 계정 크레딧으로 대용량 문서를 재개 가능하게 번역하고 Markdown/HTML/PDF와 비용 영수증을 검증"
+    arg: "<input> [--model MODEL] [--output-dir DIR]"
+    scripts: [scripts/naia_translate.py]
+    note: "정식 키 환경변수는 NAIA_KEY. 실제 값은 환경변수/운영체제 키 저장소/개인 포크의 data-private 암호화 볼트에 두고, 모델·가격은 운영 API에서 조회하며 구매 문서는 gitignored 경로에만 둔다."
+
   review-pass:
     trigger: "코드 리뷰, 교차 검증, stage-gated review"
     what: "4단계 멀티 AI 상호검증 리뷰 (planning/development/test/integration)"
