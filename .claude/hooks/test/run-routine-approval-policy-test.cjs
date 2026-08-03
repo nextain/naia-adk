@@ -10,6 +10,7 @@ const cp = require("node:child_process");
 const root = path.resolve(__dirname, "..", "..", "..");
 const policy = require(path.join(root, ".agents", "hooks", "policies", "bash.js"));
 const harnessCore = require(path.join(root, ".agents", "hooks", "core", "harness-core.js"));
+const sessionContract = require(path.join(root, ".agents", "hooks", "core", "session-contract.js"));
 
 const rules = JSON.parse(fs.readFileSync(path.join(root, ".agents", "context", "agents-rules.json"), "utf8"));
 const authority = rules.ai_workflow.routine_execution_authority;
@@ -167,11 +168,47 @@ for (const fixture of [
 
 const injectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "naia-routine-gate-"));
 fs.mkdirSync(path.join(injectRoot, ".agents", "progress"), { recursive: true });
-fs.writeFileSync(path.join(injectRoot, ".agents", "progress", "bounded.json"), JSON.stringify({
+fs.mkdirSync(path.join(injectRoot, ".agents", "session-contracts"), { recursive: true });
+fs.mkdirSync(path.join(injectRoot, ".agents", "context"), { recursive: true });
+fs.writeFileSync(path.join(injectRoot, ".agents", "context", "agents-rules.json"), "{}\n");
+const boundedProgress = {
   issue: "bounded-routine",
   current_phase: "issue",
   current_task: "execute the already bounded request",
   session_id: "S-BOUNDED",
+  contract_id: "bounded-routine-contract",
+};
+const boundedContract = {
+  schema_version: "1.0",
+  id: boundedProgress.contract_id,
+  status: "active",
+  project_root: ".",
+  goal: boundedProgress.current_task,
+  scope: ["src/**"],
+  non_goals: [],
+  success_criteria: ["bounded request proceeds without redundant approval"],
+  allowed_paths: ["src/**"],
+  target_ownership: ["src/**"],
+  audiences: ["developer"],
+  source_refs: ["USR-ROUTINE:E01"],
+  session_bindings: [{ session_id: "S-BOUNDED" }],
+  progress_file: ".agents/progress/bounded.json",
+};
+const boundedDigest = sessionContract.contractDigest(boundedContract);
+boundedContract.contract_digest = boundedDigest;
+boundedContract.session_bindings[0].contract_digest = boundedDigest;
+boundedProgress.contract_digest = boundedDigest;
+fs.writeFileSync(path.join(injectRoot, ".agents", "progress", "bounded.json"), JSON.stringify(boundedProgress));
+fs.writeFileSync(path.join(injectRoot, ".agents", "session-contracts", "bounded-routine-contract.json"), JSON.stringify(boundedContract));
+fs.writeFileSync(path.join(injectRoot, ".agents", "session-contracts", ".session-map.json"), JSON.stringify({
+  schema_version: "1.0",
+  bindings: {
+    "S-BOUNDED": {
+      contract_id: boundedContract.id,
+      contract_path: ".agents/session-contracts/bounded-routine-contract.json",
+      contract_digest: boundedDigest,
+    },
+  },
 }));
 const injection = harnessCore.buildSessionInject({
   cwd: injectRoot,

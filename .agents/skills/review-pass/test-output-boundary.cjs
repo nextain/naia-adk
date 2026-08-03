@@ -24,6 +24,11 @@ assert(reviewOutputBoundary({
 	baseline_surface_ids: [], source_atoms: sourceAtoms,
 	current_surfaces: [{ id: "unknown-authority", kind: "ui_string", audience: "end_user", exposure: "product_ui", objective_atom_ids: ["MISSING"], content_source_atom_ids: ["REFERENCE"] }],
 }).some((finding) => finding.code === "FINDING-UNJUSTIFIED-PRODUCT-SURFACE"));
+assert(reviewOutputBoundary({
+	baseline_surface_ids: [],
+	source_atoms: sourceAtoms.concat({ id: "INVALID-RENDER", subject: "artifact_content", effect: "presentation" }),
+	current_surfaces: [{ id: "invalid-render", kind: "document_paragraph", audience: "public", exposure: "external", objective_atom_ids: ["OBJECTIVE"], content_source_atom_ids: ["INVALID-RENDER"] }],
+}).some((finding) => finding.code === "FINDING-UNJUSTIFIED-PRODUCT-SURFACE"));
 
 for (const kind of ["code_symbol", "ui_string", "document_paragraph"]) {
 	const findings = reviewOutputBoundary({

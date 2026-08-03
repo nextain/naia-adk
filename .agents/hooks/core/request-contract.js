@@ -857,34 +857,41 @@ function validateSuccessfulHandoffsBeforeGenesis(cwd) {
 }
 
 function addSessionBinding(unit, client, sessionId, clientVersion = null, hostProcessId = null, hostProcessIdentity = null) {
-	return withUnitLock(unit, () => {
-		assertUnitMutable(unit);
-		const head = JSON.parse(JSON.stringify(requiredJson(unit.paths.head, "unit_head_corrupt")));
-		head.session_bindings = head.session_bindings || [{ client: head.client, session_id: head.session_id }];
-		const previousSessionBinding = (unit.head.session_bindings || []).find((b) => b.client === client && b.session_id === sessionId) || {};
-		let sessionBinding = head.session_bindings.find((b) => b.client === client && b.session_id === sessionId);
-		const added = !sessionBinding;
-		if (!sessionBinding) {
-			sessionBinding = { client, session_id: sessionId };
-			head.session_bindings.push(sessionBinding);
+	const cwd = path.dirname(path.dirname(path.dirname(path.dirname(unit.paths.unit))));
+	return withRepositoryLock(cwd, () => {
+		const existing = findUnit(cwd, client, sessionId);
+		if (existing && (existing.error || existing.id !== unit.id)) {
+			throw Object.assign(new Error("runtime session is already bound to another active lineage"), { code: "session_already_bound" });
 		}
-		sessionBinding.host_process_ids = [...new Set([...(sessionBinding.host_process_ids || []), hostProcessId].filter((value) => Number.isInteger(value) && value > 0))];
-		sessionBinding.host_process_identities = [...new Set([...(sessionBinding.host_process_identities || []), hostProcessIdentity].filter(Boolean))];
-		head.client_versions = head.client_versions || {};
-		const clientVersionChanged = Boolean(clientVersion && head.client_versions[client] && head.client_versions[client] !== clientVersion);
-		if (clientVersion) head.client_versions[client] = clientVersion;
-		let binding = optionalJson(unit.paths.binding, null, "binding_state_corrupt");
-		const hostProcessChanged = (hostProcessId && !(previousSessionBinding.host_process_ids || []).includes(hostProcessId))
-			|| (hostProcessIdentity && !(previousSessionBinding.host_process_identities || []).includes(hostProcessIdentity));
-		if (added || clientVersionChanged || hostProcessChanged) {
-			head.work_revision += 1;
-			if (binding) binding = { ...binding, binding_epoch: binding.binding_epoch + 1 };
-		}
-		const transaction = { version: VERSION, kind: "session", created_at: Date.now(), head, binding };
-		secureJson(transactionPath(unit, "session"), transaction, { exclusive: true });
-		applySessionTransaction(unit, transaction);
-		unit.head = head;
-		return unit;
+		return withUnitLock(unit, () => {
+			assertUnitMutable(unit);
+			const head = JSON.parse(JSON.stringify(requiredJson(unit.paths.head, "unit_head_corrupt")));
+			head.session_bindings = head.session_bindings || [{ client: head.client, session_id: head.session_id }];
+			const previousSessionBinding = head.session_bindings.find((b) => b.client === client && b.session_id === sessionId) || {};
+			let sessionBinding = head.session_bindings.find((b) => b.client === client && b.session_id === sessionId);
+			const added = !sessionBinding;
+			if (!sessionBinding) {
+				sessionBinding = { client, session_id: sessionId };
+				head.session_bindings.push(sessionBinding);
+			}
+			sessionBinding.host_process_ids = [...new Set([...(sessionBinding.host_process_ids || []), hostProcessId].filter((value) => Number.isInteger(value) && value > 0))];
+			sessionBinding.host_process_identities = [...new Set([...(sessionBinding.host_process_identities || []), hostProcessIdentity].filter(Boolean))];
+			head.client_versions = head.client_versions || {};
+			const clientVersionChanged = Boolean(clientVersion && head.client_versions[client] && head.client_versions[client] !== clientVersion);
+			if (clientVersion) head.client_versions[client] = clientVersion;
+			let binding = optionalJson(unit.paths.binding, null, "binding_state_corrupt");
+			const hostProcessChanged = (hostProcessId && !(previousSessionBinding.host_process_ids || []).includes(hostProcessId))
+				|| (hostProcessIdentity && !(previousSessionBinding.host_process_identities || []).includes(hostProcessIdentity));
+			if (added || clientVersionChanged || hostProcessChanged) {
+				head.work_revision += 1;
+				if (binding) binding = { ...binding, binding_epoch: binding.binding_epoch + 1 };
+			}
+			const transaction = { version: VERSION, kind: "session", created_at: Date.now(), head, binding };
+			secureJson(transactionPath(unit, "session"), transaction, { exclusive: true });
+			applySessionTransaction(unit, transaction);
+			unit.head = head;
+			return unit;
+		});
 	});
 }
 
@@ -1293,7 +1300,9 @@ function createGenesisUnlocked(cwd, client, sessionId, now = Date.now(), opts = 
 	const existing = findUnit(cwd, client, sessionId);
 	if (existing) return existing;
 	const unresolved = unresolvedUnits(cwd);
-	if (unresolved.length) throw Object.assign(new Error("an unresolved request lineage already exists"), { code: "active_request_lineage_exists" });
+	if (unresolved.some((candidate) => candidate.corrupt)) {
+		throw Object.assign(new Error("corrupt unresolved request lineage"), { code: "corrupt_unresolved_unit" });
+	}
 	validateSuccessfulHandoffsBeforeGenesis(cwd);
 	const config = loadConfig(cwd);
 	if (config.errors.length) throw Object.assign(new Error(config.errors.join(", ")), { code: "request_contract_config_invalid", errors: config.errors });
@@ -1348,11 +1357,15 @@ function adoptQuarantine(unit, cwd, now = Date.now()) {
 }
 
 function adoptQuarantineUnlocked(unit, cwd, now = Date.now()) {
+	const bindingHead = requiredJson(unit.paths.head, "unit_head_corrupt");
+	const boundSessions = new Set((bindingHead.session_bindings || [{ client: bindingHead.client, session_id: bindingHead.session_id }])
+		.map((binding) => `${binding.client}\u0000${binding.session_id}`));
 	for (const q of listUnconsumedQuarantine(cwd).sort((a, b) => a.id.localeCompare(b.id))) {
 		recoverQuarantineHead(q);
 		const verified = verifyQuarantineChain(q);
 		if (!verified.ok) throw Object.assign(new Error(verified.errors.join(", ")), { code: "quarantine_chain_corrupt", errors: verified.errors });
 		if (q.corrupt) throw Object.assign(new Error(q.corrupt), { code: q.corrupt });
+		if (!boundSessions.has(`${q.head.client}\u0000${q.head.session_id}`)) continue;
 		const destinationHead = requiredJson(unit.paths.head, "unit_head_corrupt");
 		const destinationChain = verifySourceChain(unit.paths, destinationHead);
 		if (!destinationChain.ok) throw Object.assign(new Error(destinationChain.errors.join(", ")), { code: "source_log_corrupt", errors: destinationChain.errors });
@@ -3673,6 +3686,13 @@ function governedControlCommand(event, cwd, unit) {
 		const only = (...names) => flags.size === names.length && names.every((name) => flags.has(name));
 		if (command === "status") return flags.size === 0 || (only("--unit") && flags.get("--unit") === unit.id);
 		if (command === "compact") return flags.size === 0;
+		if (command === "join-session") {
+			const required = ["--unit", "--client", "--session"];
+			const optional = "--client-version";
+			if (![required.length, required.length + 1].includes(flags.size) || required.some((name) => !flags.has(name))) return false;
+			if (flags.size === required.length + 1 && !flags.has(optional)) return false;
+			return flags.get("--unit") === unit.id && ["claude", "codex"].includes(flags.get("--client")) && Boolean(flags.get("--session"));
+		}
 		if (command === "authority-challenge") return only("--unit", "--file") && flags.get("--unit") === unit.id && path.resolve(cwd, flags.get("--file")) === controlInputPath(unit, "authority");
 		if (command === "bind") return only("--unit", "--file") && flags.get("--unit") === unit.id && path.resolve(cwd, flags.get("--file")) === controlInputPath(unit, "contract");
 		if (command === "resume") return only("--unit", "--file") && flags.get("--unit") === unit.id && path.resolve(cwd, flags.get("--file")) === controlInputPath(unit, "resume");

@@ -172,9 +172,16 @@ assert(validate(v2), `v2 source/output metadata must validate:\n${ajv.errorsText
 const v2MissingMetadata = JSON.parse(JSON.stringify(v2));
 delete v2MissingMetadata.sources[0].obligation_atoms[0].render_policy;
 assert.equal(validate(v2MissingMetadata), false, "v2 must require source render metadata");
-const v2MappedContext = JSON.parse(JSON.stringify(v2));
-v2MappedContext.sources[0].classification = "context";
-assert.equal(validate(v2MappedContext), false, "v2 context cannot acquire directive authority");
+for (const classification of ["context", "reference", "example", "conversation", "question", "internal"]) {
+	const mappedNonActionable = JSON.parse(JSON.stringify(v2));
+	mappedNonActionable.sources[0].classification = classification;
+	assert.equal(validate(mappedNonActionable), false, `v2 ${classification} source and atoms cannot acquire directive authority`);
+	const mappedPrompt = mappedNonActionable.sources[0].obligation_atoms.map((atom) => atom.text).join("");
+	const mappedRecords = [{ source_id: mappedNonActionable.sources[0].id, prompt: mappedPrompt, prompt_digest: runtime.sha256(mappedPrompt), origin: "native_user" }];
+	const mappedResult = runtime.validateContract(mappedNonActionable, mappedRecords, [], { publicKeyPem: exampleAuthorityPublicKey, cwd: repositoryRoot, config: compatibilityConfig, now: 1783960030000 });
+	assert(mappedResult.errors.some((error) => error.startsWith("contract_nonactionable_source_mapped:")), `runtime must reject mapped v2 ${classification} source authority`);
+	assert(mappedResult.errors.some((error) => error.startsWith("contract_nonactionable_atom_mapped:")), `runtime must reject mapped v2 ${classification} atom authority`);
+}
 
 const v2Prompt = v2.sources[0].obligation_atoms.map((atom) => atom.text).join("");
 const v2Records = [{ source_id: v2.sources[0].id, prompt: v2Prompt, prompt_digest: runtime.sha256(v2Prompt), origin: "native_user" }];
@@ -225,5 +232,11 @@ assert(validate(legitimateReference), `explicit reference derivation must remain
 const referenceRecords = v2Records.concat([{ source_id: referenceId, prompt: referenceAtom.text, prompt_digest: runtime.sha256(referenceAtom.text), origin: "native_user" }]);
 const referenceResult = runtime.validateContract(legitimateReference, referenceRecords, [], { publicKeyPem: exampleAuthorityPublicKey, cwd: repositoryRoot, config: compatibilityConfig, now: 1783960030000 });
 assert(referenceResult.ok, `derive authority may render a reference without creating directive authority:\n${referenceResult.errors.join("\n")}`);
+
+const quotedReference = JSON.parse(JSON.stringify(legitimateReference));
+quotedReference.sources[1].obligation_atoms[0].render_policy = "quote";
+assert(validate(quotedReference), `explicit reference quotation must remain schema-valid:\n${ajv.errorsText(validate.errors, { separator: "\n" })}`);
+const quotedResult = runtime.validateContract(quotedReference, referenceRecords, [], { publicKeyPem: exampleAuthorityPublicKey, cwd: repositoryRoot, config: compatibilityConfig, now: 1783960030000 });
+assert(quotedResult.ok, `quote authority may render a reference without creating directive authority:\n${quotedResult.errors.join("\n")}`);
 
 process.stdout.write("request-contract schema+runtime: PASS\n");

@@ -11,7 +11,7 @@ function reviewOutputBoundary(bundle) {
 		const objectives = (surface.objective_atom_ids || []).map((id) => sources.get(id));
 		const contentSources = (surface.content_source_atom_ids || []).map((id) => sources.get(id));
 		const objectiveAuthorized = objectives.length > 0 && objectives.every((atom) => atom && (atom.directive_ids || []).length > 0);
-		const contentAuthorized = contentSources.length > 0 && contentSources.every((atom) => atom && atom.render_policy !== "deny");
+		const contentAuthorized = contentSources.length > 0 && contentSources.every((atom) => atom && ["derive", "quote", "require"].includes(atom.render_policy));
 		if (isNew && ["product_ui", "external"].includes(surface.exposure) &&
 			(!objectiveAuthorized || !contentAuthorized)) {
 			findings.push({ code: "FINDING-UNJUSTIFIED-PRODUCT-SURFACE", surface_id: surface.id });
