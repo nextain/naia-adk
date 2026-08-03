@@ -8,8 +8,12 @@ function reviewOutputBoundary(bundle) {
 	const sources = new Map((bundle?.source_atoms || []).map((atom) => [atom.id, atom]));
 	for (const surface of bundle?.current_surfaces || []) {
 		const isNew = !baseline.has(surface.id);
+		const objectives = (surface.objective_atom_ids || []).map((id) => sources.get(id));
+		const contentSources = (surface.content_source_atom_ids || []).map((id) => sources.get(id));
+		const objectiveAuthorized = objectives.length > 0 && objectives.every((atom) => atom && (atom.directive_ids || []).length > 0);
+		const contentAuthorized = contentSources.length > 0 && contentSources.every((atom) => atom && atom.render_policy !== "deny");
 		if (isNew && ["product_ui", "external"].includes(surface.exposure) &&
-			(!(surface.objective_atom_ids || []).length || !(surface.content_source_atom_ids || []).length)) {
+			(!objectiveAuthorized || !contentAuthorized)) {
 			findings.push({ code: "FINDING-UNJUSTIFIED-PRODUCT-SURFACE", surface_id: surface.id });
 		}
 		if (surface.exposure === "product_ui" && surface.audience !== "end_user") {
@@ -20,8 +24,10 @@ function reviewOutputBoundary(bundle) {
 		}
 		for (const atomId of surface.content_source_atom_ids || []) {
 			const atom = sources.get(atomId);
-			if (!atom || atom.render_policy === "deny" ||
-				(atom.subject === "agent_workflow" && ["background", "precondition"].includes(atom.effect) && surface.kind !== "developer_comment")) {
+			const workflowContext = atom?.subject === "agent_workflow" && ["background", "precondition"].includes(atom?.effect);
+			const invalidDeveloperComment = workflowContext && surface.kind === "developer_comment" &&
+				(!["developer", "reviewer"].includes(surface.audience) || !["derive", "quote"].includes(atom.render_policy));
+			if (!atom || atom.render_policy === "deny" || (workflowContext && surface.kind !== "developer_comment") || invalidDeveloperComment) {
 				findings.push({ code: "FINDING-CONTEXT-OUTPUT-SEPARATION", surface_id: surface.id, atom_id: atomId });
 			}
 		}

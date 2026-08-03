@@ -198,8 +198,31 @@ try {
 			`${client} cannot add or alter another session registry entry`,
 		);
 	}
+	const sharedContractPath = path.join(fixture, ".agents", "session-contracts", "gate-contract.json");
+	const sharedContract = JSON.parse(fs.readFileSync(sharedContractPath, "utf8"));
+	sharedContract.session_bindings.push({ session_id: "PEER" });
+	sharedContract.contract_digest = contractCore.contractDigest(sharedContract);
+	for (const binding of sharedContract.session_bindings) binding.contract_digest = sharedContract.contract_digest;
+	writeJson(sharedContractPath, sharedContract);
+	const sharedProgressPath = path.join(fixture, ".agents", "progress", "gate.json");
+	const sharedProgress = JSON.parse(fs.readFileSync(sharedProgressPath, "utf8"));
+	sharedProgress.contract_digest = sharedContract.contract_digest;
+	writeJson(sharedProgressPath, sharedProgress);
+	const sharedRegistryPath = path.join(fixture, ".agents", "session-contracts", ".session-map.json");
+	const sharedRegistry = JSON.parse(fs.readFileSync(sharedRegistryPath, "utf8"));
+	sharedRegistry.bindings["SESSION-1"].contract_digest = sharedContract.contract_digest;
+	writeJson(sharedRegistryPath, sharedRegistry);
+	const changedShared = JSON.parse(JSON.stringify(sharedContract));
+	changedShared.goal = "one session cannot rewrite a shared contract";
+	changedShared.contract_digest = contractCore.contractDigest(changedShared);
+	for (const binding of changedShared.session_bindings) binding.contract_digest = changedShared.contract_digest;
+	assert.equal(
+		gate.bootstrapWriteAllowed("Write", { file_path: ".agents/session-contracts/gate-contract.json", content: JSON.stringify(changedShared) }, fixture, "SESSION-1"),
+		false,
+		"shared multi-session contracts require coordinated external replacement",
+	);
 
-	const registryPath = path.join(fixture, ".agents", "session-contracts", ".session-map.json");
+	const registryPath = sharedRegistryPath;
 	const registry = JSON.parse(fs.readFileSync(registryPath, "utf8"));
 	registry.bindings["SESSION-1"].contract_digest = "0".repeat(64);
 	writeJson(registryPath, registry);
