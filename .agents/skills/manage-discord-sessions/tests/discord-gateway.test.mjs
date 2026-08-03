@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants as fsConstants, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -10,7 +10,7 @@ import { DiscordGatewaySession, MemoryGatewayState, StoredGatewayState } from ".
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
 import { discordUnitIdentity, renderDiscordUserUnit } from "../helper/systemd.mjs";
-import { classifyWindowsStopObservation, installServiceCommands, quoteWindowsTaskAction, renderOperatorLauncher, renderWindowsStartupLauncher, resolveBackendExecutable, resolveWindowsBackendCommand, restartWindowsTask, sampleWindowsStopObservation, verifyWindowsTaskAction } from "../helper/service-manager.mjs";
+import { classifyWindowsStopObservation, installOperatorLauncher, installServiceCommands, quoteWindowsTaskAction, renderOperatorLauncher, renderWindowsStartupLauncher, resolveBackendExecutable, resolveWindowsBackendCommand, restartWindowsTask, sampleWindowsStopObservation, verifyWindowsTaskAction, windowsOperatorProbeArguments } from "../helper/service-manager.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "../helper/instance-paths.mjs";
 import { loadOrCreateRecoveryKey, RecoveryCodec } from "../helper/recovery-crypto.mjs";
 import { randomBytes } from "node:crypto";
@@ -845,6 +845,38 @@ test("DSG-008 Bash entrypoint preserves every top-level CLI command", () => {
 	for (const command of ["status", "health-check", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service"]) {
 		assert.match(script, new RegExp(`\\b${command}\\b`));
 	}
+});
+
+test("DSG-008 POSIX operator launcher remains owner-executable after hardening", { skip: process.platform === "win32" }, () => {
+	const root = mkdtempSync(join(tmpdir(), "naia-discord-launcher-root-"));
+	const bin = mkdtempSync(join(tmpdir(), "naia-discord-launcher-bin-"));
+	roots.push(root, bin);
+	const scripts = join(root, ".agents/skills/manage-discord-sessions/scripts");
+	mkdirSync(scripts, { recursive: true });
+	writeFileSync(join(scripts, "manage-discord-sessions.sh"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o700 });
+	const existing = join(bin, "naia");
+	writeFileSync(existing, "#!/usr/bin/env bash\n# managed by naia-adk manage-discord-sessions\nexit 1\n", { mode: 0o600 });
+	const launcher = installOperatorLauncher(root, { directory: bin });
+	assert.equal(statSync(launcher).mode & 0o777, 0o700);
+	assert.doesNotThrow(() => accessSync(launcher, fsConstants.X_OK));
+	assert.equal(spawnSync(launcher, ["service", "unit"]).status, 0);
+});
+
+test("DSG-008 Windows operator probe preserves a quoted executable boundary", () => {
+	assert.deepEqual(windowsOperatorProbeArguments("C:\\Program Files\\Naia Workspace\\naia.cmd"), [
+		"/d", "/s", "/c", '""C:\\Program Files\\Naia Workspace\\naia.cmd" service unit"',
+	]);
+});
+
+test("DSG-008 Windows operator launcher passes its native execution probe", { skip: process.platform !== "win32" }, () => {
+	const root = mkdtempSync(join(tmpdir(), "naia-discord-win-launcher-root-"));
+	const bin = mkdtempSync(join(tmpdir(), "naia-discord-win-launcher-bin-"));
+	roots.push(root, bin);
+	const helper = join(root, ".agents/skills/manage-discord-sessions/helper");
+	mkdirSync(helper, { recursive: true });
+	writeFileSync(join(helper, "cli.mjs"), "process.exit(process.argv.slice(-2).join(' ') === 'service unit' ? 0 : 1);\n", { mode: 0o600 });
+	const launcher = installOperatorLauncher(root, { directory: bin });
+	assert.equal(spawnSync(launcher, ["service", "unit"], { shell: true, windowsHide: true }).status, 0);
 });
 
 test("DSG-008 quotes and verifies the exact Windows Task Scheduler action", () => {
