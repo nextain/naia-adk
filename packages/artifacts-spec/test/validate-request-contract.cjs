@@ -145,4 +145,85 @@ for (const mutate of [
 	assert.equal(validate(missingAtomTrace), false, "schema must carry obligation atoms through scope and trace artifacts");
 }
 
+function asV2(contract) {
+	const value = JSON.parse(JSON.stringify(contract));
+	value.version = 2;
+	for (const source of value.sources) {
+		for (const atom of source.obligation_atoms) {
+			atom.subject = "artifact_content";
+			atom.effect = "outcome";
+			atom.render_policy = "require";
+		}
+	}
+	for (const directive of value.directives) {
+		for (const target of directive.targets) {
+			target.kind = "code_symbol";
+			target.audience = "developer";
+			target.exposure = "repository";
+			target.objective_atom_ids = [...target.obligation_atom_ids];
+			target.content_source_atom_ids = [];
+		}
+	}
+	return value;
+}
+
+const v2 = asV2(example);
+assert(validate(v2), `v2 source/output metadata must validate:\n${ajv.errorsText(validate.errors, { separator: "\n" })}`);
+const v2MissingMetadata = JSON.parse(JSON.stringify(v2));
+delete v2MissingMetadata.sources[0].obligation_atoms[0].render_policy;
+assert.equal(validate(v2MissingMetadata), false, "v2 must require source render metadata");
+const v2MappedContext = JSON.parse(JSON.stringify(v2));
+v2MappedContext.sources[0].classification = "context";
+assert.equal(validate(v2MappedContext), false, "v2 context cannot acquire directive authority");
+
+const v2Prompt = v2.sources[0].obligation_atoms.map((atom) => atom.text).join("");
+const v2Records = [{ source_id: v2.sources[0].id, prompt: v2Prompt, prompt_digest: runtime.sha256(v2Prompt), origin: "native_user" }];
+for (const [kind, audience, exposure] of [
+	["code_symbol", "developer", "repository"],
+	["ui_string", "end_user", "product_ui"],
+	["document_paragraph", "public", "external"],
+]) {
+	const leaked = JSON.parse(JSON.stringify(v2));
+	const atom = leaked.sources[0].obligation_atoms[0];
+	atom.subject = "agent_workflow";
+	atom.effect = "precondition";
+	atom.render_policy = "derive";
+	const target = leaked.directives[0].targets[0];
+	target.kind = kind;
+	target.audience = audience;
+	target.exposure = exposure;
+	target.content_source_atom_ids = [atom.id];
+	const result = runtime.validateContract(leaked, v2Records, [], { publicKeyPem: exampleAuthorityPublicKey, cwd: repositoryRoot, config: compatibilityConfig, now: 1783960030000 });
+	assert(result.errors.some((error) => error.startsWith("contract_target_workflow_context_leak:")), `${kind} must reject workflow context as artifact content`);
+}
+
+const developerComment = JSON.parse(JSON.stringify(v2));
+const developerAtom = developerComment.sources[0].obligation_atoms[0];
+developerAtom.subject = "agent_workflow";
+developerAtom.effect = "precondition";
+developerAtom.render_policy = "derive";
+Object.assign(developerComment.directives[0].targets[0], {
+	kind: "developer_comment",
+	audience: "developer",
+	exposure: "repository",
+	content_source_atom_ids: [developerAtom.id],
+});
+const developerResult = runtime.validateContract(developerComment, v2Records, [], { publicKeyPem: exampleAuthorityPublicKey, cwd: repositoryRoot, config: compatibilityConfig, now: 1783960030000 });
+assert(!developerResult.errors.some((error) => error.includes("workflow_context_leak") || error.includes("developer_comment_scope_invalid")), "explicit developer comments may derive workflow context within their audience");
+
+const legitimateReference = JSON.parse(JSON.stringify(v2));
+const referenceId = `SRC-${"1".repeat(32)}`;
+const referenceAtom = { id: "OBL-REFERENCE", text: "Summarize this cited reference", directive_ids: [], subject: "artifact_content", effect: "presentation", render_policy: "derive" };
+legitimateReference.sources.push({ id: referenceId, classification: "reference", source_kind: "human", directive_ids: [], obligation_atoms: [referenceAtom] });
+Object.assign(legitimateReference.directives[0].targets[0], {
+	kind: "document_paragraph",
+	audience: "public",
+	exposure: "external",
+	content_source_atom_ids: [referenceAtom.id],
+});
+assert(validate(legitimateReference), `explicit reference derivation must remain schema-valid:\n${ajv.errorsText(validate.errors, { separator: "\n" })}`);
+const referenceRecords = v2Records.concat([{ source_id: referenceId, prompt: referenceAtom.text, prompt_digest: runtime.sha256(referenceAtom.text), origin: "native_user" }]);
+const referenceResult = runtime.validateContract(legitimateReference, referenceRecords, [], { publicKeyPem: exampleAuthorityPublicKey, cwd: repositoryRoot, config: compatibilityConfig, now: 1783960030000 });
+assert(!referenceResult.errors.some((error) => error.includes("content_render_denied") || error.includes("workflow_context_leak") || error.includes("nonactionable")), "derive authority may render a reference without creating directive authority");
+
 process.stdout.write("request-contract schema+runtime: PASS\n");

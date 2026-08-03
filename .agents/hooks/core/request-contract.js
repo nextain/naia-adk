@@ -27,9 +27,15 @@ const TRACE_EDGES = [{ from: "directives", to: "requirements", kind: "directives
 	TRACE_KEYS.slice(0, -1).map((from, index) => ({ from, to: TRACE_KEYS[index + 1], kind: `${from}_to_${TRACE_KEYS[index + 1]}` })),
 );
 const SCOPE_STATES = new Set(["pending", "active", "done", "superseded", "deferred", "abandoned"]);
-const CLASSIFICATIONS = new Set(["directive", "context", "conversation", "approval", "question", "internal", "authority"]);
+const CLASSIFICATIONS = new Set(["directive", "context", "reference", "example", "conversation", "approval", "question", "internal", "authority"]);
+const SOURCE_SUBJECTS = new Set(["agent_workflow", "artifact_runtime", "artifact_content", "end_user_flow"]);
+const SOURCE_EFFECTS = new Set(["background", "precondition", "outcome", "constraint", "presentation", "verification", "audience"]);
+const RENDER_POLICIES = new Set(["deny", "derive", "quote", "require"]);
+const OUTPUT_KINDS = new Set(["code_symbol", "code_hunk", "ui_string", "document_heading", "document_paragraph", "developer_comment"]);
+const OUTPUT_AUDIENCES = new Set(["developer", "reviewer", "internal", "end_user", "partner", "public"]);
+const OUTPUT_EXPOSURES = new Set(["internal", "repository", "product_ui", "external"]);
 const AUTH_OPS = new Set(["authorize_contract", "amend_scope_add", "amend_scope_replace", "supersede", "defer", "abandon", "resume"]);
-const REVIEW_FINDING_CODES = new Set(["FINDING-SEMANTIC-SCOPE-OMISSION", "FINDING-SOURCE-MAPPING", "FINDING-TRACE-GAP", "FINDING-AUTHORITY-MISMATCH", "FINDING-EVIDENCE-GAP", "FINDING-OTHER"]);
+const REVIEW_FINDING_CODES = new Set(["FINDING-SEMANTIC-SCOPE-OMISSION", "FINDING-SOURCE-MAPPING", "FINDING-TRACE-GAP", "FINDING-AUTHORITY-MISMATCH", "FINDING-EVIDENCE-GAP", "FINDING-CONTEXT-OUTPUT-SEPARATION", "FINDING-AUDIENCE-SURFACE-FIT", "FINDING-UNJUSTIFIED-PRODUCT-SURFACE", "FINDING-OTHER"]);
 const TERMINAL_AUTHORITY_OP = { superseded: "supersede", deferred: "defer", abandoned: "abandon" };
 const HELD_LOCKS = new Set();
 const ID_PATTERN = /^[A-Z][A-Z0-9_-]{2,127}$/;
@@ -1662,7 +1668,8 @@ function consumeAuthorityReceipt(unit, authority, presentation, cwd, state, now 
 function validateContract(contract, sourceRecords = [], occurrences = [], opts = {}) {
 	const errors = [];
 	const workspaceConfig = opts.cwd ? opts.config || loadConfig(opts.cwd) : null;
-	if (!contract || contract.kind !== "request-contract" || contract.version !== VERSION) return { ok: false, errors: ["contract_shape_invalid"] };
+	if (!contract || contract.kind !== "request-contract" || ![1, 2].includes(contract.version)) return { ok: false, errors: ["contract_shape_invalid"] };
+	const contextOutputV2 = contract.version === 2;
 	closedObject(contract, ["kind", "version", "id", "status", "sources", "directives", "artifacts", "edges", "authorities", "tombstones", "changes", "preservation"], errors, "contract");
 	if (!contract.id || !Array.isArray(contract.sources) || !Array.isArray(contract.directives) || !contract.artifacts || !Array.isArray(contract.edges)) errors.push("contract_required_field_missing");
 	if (!validId(contract.id)) errors.push("contract_id_invalid");
@@ -1683,15 +1690,20 @@ function validateContract(contract, sourceRecords = [], occurrences = [], opts =
 		if (!Array.isArray(s.obligation_atoms) || s.obligation_atoms.length === 0) errors.push(`contract_source_obligations_missing:${s.id}`);
 		else {
 			for (const atom of s.obligation_atoms) {
-				closedObject(atom, ["id", "text", "directive_ids"], errors, "contract_source_obligation");
+				closedObject(atom, ["id", "text", "directive_ids", "subject", "effect", "render_policy"], errors, "contract_source_obligation");
 				if (!atom || !validId(atom.id) || obligations.has(atom.id)) errors.push(`contract_source_obligation_id_invalid:${s.id}`);
 				if (atom && atom.id && !obligations.has(atom.id)) obligations.set(atom.id, { source: s, atom });
 				if (!atom || typeof atom.text !== "string" || atom.text.length === 0 || !Array.isArray(atom.directive_ids) || new Set(atom.directive_ids).size !== atom.directive_ids.length || atom.directive_ids.some((id) => !validId(id))) errors.push(`contract_source_obligation_invalid:${s.id}:${atom && atom.id}`);
+				if (contextOutputV2 && (!SOURCE_SUBJECTS.has(atom.subject) || !SOURCE_EFFECTS.has(atom.effect) || !RENDER_POLICIES.has(atom.render_policy))) errors.push(`contract_source_render_metadata_invalid:${s.id}:${atom && atom.id}`);
 			}
 			const sourceRecord = sourceRecordMap.get(s.id);
 			if (sourceRecord && s.obligation_atoms.map((atom) => atom.text || "").join("") !== sourceRecord.prompt) errors.push(`contract_source_obligation_coverage_mismatch:${s.id}`);
 		}
 		if (["directive", "approval", "authority"].includes(s.classification) && (!Array.isArray(s.directive_ids) || s.directive_ids.length === 0)) errors.push(`contract_actionable_source_unmapped:${s.id}`);
+		if (contextOutputV2 && !["directive", "approval", "authority"].includes(s.classification)) {
+			if ((s.directive_ids || []).length !== 0) errors.push(`contract_nonactionable_source_mapped:${s.id}`);
+			for (const atom of s.obligation_atoms || []) if ((atom.directive_ids || []).length !== 0) errors.push(`contract_nonactionable_atom_mapped:${s.id}:${atom.id}`);
+		}
 	}
 	for (const id of sourceIds) if (!declaredSources.has(id)) errors.push(`contract_source_uncovered:${id}`);
 	for (const id of declaredSources.keys()) if (!sourceIds.has(id)) errors.push(`contract_source_unknown:${id}`);
@@ -1775,7 +1787,7 @@ function validateContract(contract, sourceRecords = [], occurrences = [], opts =
 		if (!Array.isArray(d.targets) || !Array.isArray(d.acceptance_criteria)) errors.push(`contract_directive_collections_invalid:${d.id}`);
 		for (const sid of d.source_ids || []) if (!sourceIds.has(sid)) errors.push(`contract_directive_source_unknown:${d.id}:${sid}`);
 		for (const t of d.targets || []) {
-			closedObject(t, ["id", "path", "description", "obligation_atom_ids"], errors, "contract_target");
+			closedObject(t, ["id", "path", "description", "obligation_atom_ids", "kind", "audience", "exposure", "objective_atom_ids", "content_source_atom_ids"], errors, "contract_target");
 			if (!t.id || targetIds.has(t.id)) errors.push("contract_target_id_duplicate");
 			if (!validId(t.id) || typeof t.path !== "string" || !t.path.trim()) errors.push(`contract_target_definition_missing:${d.id}`);
 			if (t.description != null && typeof t.description !== "string") errors.push(`contract_target_description_invalid:${d.id}:${t.id}`);
@@ -1783,6 +1795,27 @@ function validateContract(contract, sourceRecords = [], occurrences = [], opts =
 			for (const atomId of t.obligation_atom_ids || []) {
 				const obligation = obligations.get(atomId);
 				if (obligation && !(obligation.atom.directive_ids || []).includes(d.id)) errors.push(`contract_target_obligation_directive_mismatch:${d.id}:${t.id}:${atomId}`);
+			}
+			if (contextOutputV2) {
+				if (!OUTPUT_KINDS.has(t.kind) || !OUTPUT_AUDIENCES.has(t.audience) || !OUTPUT_EXPOSURES.has(t.exposure)) errors.push(`contract_target_output_metadata_invalid:${d.id}:${t.id}`);
+				for (const [field, refs] of [["objective", t.objective_atom_ids], ["content_source", t.content_source_atom_ids]]) {
+					if (!Array.isArray(refs) || new Set(refs || []).size !== (refs || []).length || (refs || []).some((id) => !obligations.has(id))) errors.push(`contract_target_${field}_refs_invalid:${d.id}:${t.id}`);
+				}
+				for (const atomId of t.objective_atom_ids || []) {
+					const obligation = obligations.get(atomId);
+					if (obligation && !(obligation.atom.directive_ids || []).includes(d.id)) errors.push(`contract_target_objective_not_authorized:${d.id}:${t.id}:${atomId}`);
+				}
+				for (const atomId of t.content_source_atom_ids || []) {
+					const obligation = obligations.get(atomId);
+					if (!obligation) continue;
+					const atom = obligation.atom;
+					if (atom.render_policy === "deny") errors.push(`contract_target_content_render_denied:${d.id}:${t.id}:${atomId}`);
+					const workflowContext = atom.subject === "agent_workflow" && ["background", "precondition"].includes(atom.effect);
+					if (workflowContext && t.kind !== "developer_comment") errors.push(`contract_target_workflow_context_leak:${d.id}:${t.id}:${atomId}`);
+					if (workflowContext && t.kind === "developer_comment" && (!["developer", "reviewer"].includes(t.audience) || !["derive", "quote"].includes(atom.render_policy))) errors.push(`contract_target_developer_comment_scope_invalid:${d.id}:${t.id}:${atomId}`);
+				}
+				if (t.exposure === "product_ui" && t.audience !== "end_user") errors.push(`contract_target_audience_surface_mismatch:${d.id}:${t.id}`);
+				if (t.exposure === "external" && !["end_user", "partner", "public"].includes(t.audience)) errors.push(`contract_target_audience_surface_mismatch:${d.id}:${t.id}`);
 			}
 			targetIds.add(t.id);
 			if (workspaceConfig && t.path) {
@@ -1963,7 +1996,7 @@ function validateContract(contract, sourceRecords = [], occurrences = [], opts =
 		errors: [...new Set(errors)],
 		ids: {
 			sourceIds: [...sourceIds],
-				sourceMappings: [...declaredSources.values()].map((s) => canonicalJson({ source_id: s.id, classification: s.classification, source_kind: s.source_kind, derived_from: s.derived_from, derivation_kind: s.derivation_kind, directive_ids: s.directive_ids || [], obligation_atom_ids: (s.obligation_atoms || []).map((atom) => atom.id) })),
+				sourceMappings: [...declaredSources.values()].map((s) => canonicalJson({ source_id: s.id, classification: s.classification, source_kind: s.source_kind, derived_from: s.derived_from, derivation_kind: s.derivation_kind, directive_ids: s.directive_ids || [], obligation_atoms: (s.obligation_atoms || []).map((atom) => ({ id: atom.id, subject: atom.subject, effect: atom.effect, render_policy: atom.render_policy, directive_ids: atom.directive_ids || [] })) })),
 			directiveIds: [...directives.keys()],
 			targetIds: [...targetIds],
 			criterionIds: [...criterionIds],
@@ -2270,7 +2303,7 @@ function contractCoverageProjection(contract) {
 	const directives = contract.directives || [];
 	const artifacts = contract.artifacts || {};
 	const projection = {
-		sources: (contract.sources || []).map((source) => ({ source_id: source.id, classification: source.classification, source_kind: source.source_kind, derived_from: source.derived_from, derivation_kind: source.derivation_kind, directive_ids: source.directive_ids || [], obligation_atom_ids: (source.obligation_atoms || []).map((atom) => atom.id) })),
+		sources: (contract.sources || []).map((source) => ({ source_id: source.id, classification: source.classification, source_kind: source.source_kind, derived_from: source.derived_from, derivation_kind: source.derivation_kind, directive_ids: source.directive_ids || [], obligation_atoms: (source.obligation_atoms || []).map((atom) => ({ id: atom.id, subject: atom.subject, effect: atom.effect, render_policy: atom.render_policy, directive_ids: atom.directive_ids || [] })) })),
 		directives: directives.map((directive) => ({
 			directive_id: directive.id,
 			state: directive.state,
@@ -2280,7 +2313,7 @@ function contractCoverageProjection(contract) {
 			criterion_ids: (directive.acceptance_criteria || []).map((criterion) => criterion.id),
 			trace: Object.fromEntries(TRACE_KEYS.map((key) => [key, (directive.trace && directive.trace[key]) || []])),
 		})),
-		targets: directives.flatMap((directive) => (directive.targets || []).map((target) => ({ target_id: target.id, directive_id: directive.id, obligation_atom_ids: target.obligation_atom_ids || [] }))),
+		targets: directives.flatMap((directive) => (directive.targets || []).map((target) => ({ target_id: target.id, directive_id: directive.id, obligation_atom_ids: target.obligation_atom_ids || [], kind: target.kind, audience: target.audience, exposure: target.exposure, objective_atom_ids: target.objective_atom_ids || [], content_source_atom_ids: target.content_source_atom_ids || [] }))),
 		criteria: directives.flatMap((directive) => (directive.acceptance_criteria || []).map((criterion) => ({ criterion_id: criterion.id, directive_id: directive.id, obligation_atom_ids: criterion.obligation_atom_ids || [] }))),
 		artifacts: TRACE_KEYS.flatMap((kind) => (artifacts[kind] || []).map((artifact) => ({ kind, artifact_id: artifact.id, subject_id: artifact.subject_id, obligation_atom_ids: artifact.obligation_atom_ids || [] }))),
 		edges: (contract.edges || []).map((edge) => ({ edge_id: edge.id, kind: edge.kind, from: edge.from, to: edge.to, obligation_atom_ids: edge.obligation_atom_ids || [] })),
@@ -3826,32 +3859,26 @@ function handleEvent(event, opts = {}) {
 		return { kind: "block", code: unit.error, message: "Multiple runtime units claim this session." };
 	}
 
-		if (event.eventName === "SessionStart") {
-			try {
-				assertSupportedClient(cwd, client, event.clientVersion);
-				if (unit) {
-					const terminal = readUnitState(unit).terminal;
-					if (terminal && terminal.status === "success") {
-						const current = evaluateCompletion(unit, cwd, client, now, sessionId);
-						if (current.kind !== "allow") return current;
-						return { kind: "context", code: "request_contract_complete", message: "This request lineage is already complete; start a new session for a new request." };
-					}
+	if (event.eventName === "SessionStart") {
+		try {
+			assertSupportedClient(cwd, client, event.clientVersion);
+			if (unit) {
+				const terminal = readUnitState(unit).terminal;
+				if (terminal && terminal.status === "success") {
+					const current = evaluateCompletion(unit, cwd, client, now, sessionId);
+					if (current.kind !== "allow") return current;
+					return { kind: "context", code: "request_contract_complete", message: "This request lineage is already complete; start a new session for a new request." };
+				}
 			}
 			return withRepositoryLock(cwd, () => {
 				unit = findUnit(cwd, client, sessionId);
 				if (unit && unit.error) throw Object.assign(new Error("duplicate runtime binding"), { code: unit.error });
 				if (!unit) {
-					const unresolved = unresolvedUnits(cwd);
-					if (unresolved.some((candidate) => candidate.corrupt)) throw Object.assign(new Error("corrupt unresolved request lineage"), { code: "corrupt_unresolved_unit" });
-					if (unresolved.length > 1) throw Object.assign(new Error("multiple unresolved request lineages"), { code: "multiple_unresolved_units" });
-					if (unresolved.length === 1) {
-						const terminal = unresolved[0].state.terminal;
-						if (terminal && terminal.status === "incomplete") throw Object.assign(new Error("incomplete lineage requires signed resume"), { code: "incomplete_lineage_requires_resume" });
-					unit = addSessionBinding(unresolved[0], client, sessionId, event.clientVersion, event.hostProcessId || process.pid, event.hostProcessIdentity || processIdentity(event.hostProcessId || process.pid));
-						adoptQuarantine(unit, cwd, now);
-				} else unit = createGenesisUnlocked(cwd, client, sessionId, now, { adoptQuarantine: true, clientVersion: event.clientVersion, hostProcessId: event.hostProcessId || process.pid, hostProcessIdentity: event.hostProcessIdentity || processIdentity(event.hostProcessId || process.pid) });
-			} else {
-				unit = addSessionBinding(unit, client, sessionId, event.clientVersion, event.hostProcessId || process.pid, event.hostProcessIdentity || processIdentity(event.hostProcessId || process.pid));
+					// A new session always starts a distinct lineage. Joining an existing
+					// unit is an explicit operator action through addSessionBinding/CLI.
+					unit = createGenesisUnlocked(cwd, client, sessionId, now, { adoptQuarantine: true, clientVersion: event.clientVersion, hostProcessId: event.hostProcessId || process.pid, hostProcessIdentity: event.hostProcessIdentity || processIdentity(event.hostProcessId || process.pid) });
+				} else {
+					unit = addSessionBinding(unit, client, sessionId, event.clientVersion, event.hostProcessId || process.pid, event.hostProcessIdentity || processIdentity(event.hostProcessId || process.pid));
 					adoptQuarantine(unit, cwd, now);
 				}
 				return { kind: "context", code: "request_contract_genesis", message: `Governed request-contract session active (unit ${unit.id}). Every prompt and change must remain traceable.` };

@@ -1,6 +1,6 @@
 ---
 name: review-pass
-version: "3.0"
+version: "3.1"
 description: >
   Stage-gated multi-AI cross-validation review with optional REQ-ID traceability.
   4 stages (planning, development, test, integration) with configurable reviewers,
@@ -168,6 +168,13 @@ This preflight applies to all feature work, including non-governed projects:
 ## 1. Stage Profiles (defaults, overridable via config)
 
 Each lens includes actionable checks for headless reviewers.
+
+The following lenses are mandatory at **every** stage and cannot be removed by
+project overrides or `--light`:
+
+1. `context_output_separation` (`FINDING-CONTEXT-OUTPUT-SEPARATION`) — Check every new code, UI, and document content unit against its source atoms. Background/reference/example/internal text needs explicit `derive`, `quote`, or `require` render authority; agent-workflow background/preconditions are never shipping content edges.
+2. `audience_surface_fit` (`FINDING-AUDIENCE-SURFACE-FIT`) — Check that each output unit's kind, audience, and exposure match the actual consumer and surface. Correct text on the wrong audience surface is a finding.
+3. `unjustified_product_surface` (`FINDING-UNJUSTIFIED-PRODUCT-SURFACE`) — Compare the baseline and current surface inventory. Do not flag unchanged baseline text, but flag each newly introduced public/product surface that lacks objective and content-source authority.
 
 ### planning
 - **Reviewers**: 4 separated role executions (tool-independent; roles are not optional)
@@ -858,27 +865,27 @@ stages:
     roles: [source_fidelity, baseline_preservation, implementation_test, authority_release]
     arbiter: null
     convergence: 2
-    lenses: [source_fidelity, design_coherence, feasibility, preservation_setup]
-    lenses_no_req: [source_fidelity, design_coherence, feasibility, preservation_setup]
+    lenses: [source_fidelity, design_coherence, feasibility, preservation_setup, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses_no_req: [source_fidelity, design_coherence, feasibility, preservation_setup, context_output_separation, audience_surface_fit, unjustified_product_surface]
   development:
     reviewers: [gemini, opencode, codex]
     arbiter: claude  # MUST NOT be in reviewers — orchestrator auto-resolves
     convergence: 2
-    lenses: [correctness, completeness, consistency, pattern_compliance, req_to_code]
-    lenses_no_req: [correctness, completeness, consistency, pattern_compliance]
+    lenses: [correctness, completeness, consistency, pattern_compliance, req_to_code, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses_no_req: [correctness, completeness, consistency, pattern_compliance, context_output_separation, audience_surface_fit, unjustified_product_surface]
   test:
     reviewers: [gemini, opencode]
     arbiter: null
     convergence: 2
-    lenses: [test_validity, coverage, assertion_quality, req_to_test]
-    lenses_no_req: [test_validity, coverage, assertion_quality]
+    lenses: [test_validity, coverage, assertion_quality, req_to_test, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses_no_req: [test_validity, coverage, assertion_quality, context_output_separation, audience_surface_fit, unjustified_product_surface]
   integration:
     reviewers: []  # empty means schedule roles from any available adapter; distinct provider/model preferred
     roles: [source_fidelity, baseline_preservation, implementation_test, authority_release]
     arbiter: null  # all tools are independent roles; user resolves semantic vetoes
     convergence: 2
-    lenses: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release]
-    lenses_no_req: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release]
+    lenses: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses_no_req: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release, context_output_separation, audience_surface_fit, unjustified_product_surface]
 ```
 
 ### 10.3 Per-Project Override

@@ -22,9 +22,9 @@ const stages = ["planning", "development", "test", "integration"];
 /** Legacy verified RCI-001..011 receipt quorum. Four evidence roles are tracked separately by review-pass/governed review. */
 const stageMinimumReviewers = { planning: 2, development: 3, test: 2, integration: 3 };
 const requiredCleanRounds = 2;
-const expectedIds = Array.from({ length: 14 }, (_, index) => `RCI-${String(index + 1).padStart(3, "0")}`);
+const expectedIds = Array.from({ length: 16 }, (_, index) => `RCI-${String(index + 1).padStart(3, "0")}`);
 const expectedDirectives = Array.from({ length: 8 }, (_, index) => `USR-${String(index + 1).padStart(3, "0")}`);
-const pendingIds = new Set(["RCI-012", "RCI-013", "RCI-014"]);
+const pendingIds = new Set(["RCI-012", "RCI-013", "RCI-014", "RCI-015", "RCI-016"]);
 const sourceKinds = new Set(["human", "derived", "candidate"]);
 const sourceOrigins = new Set(["native_user_message", "derived_artifact", "external_document", "candidate"]);
 /**
@@ -505,6 +505,7 @@ const readLogFromDisk = (relativePath) => fs.readFileSync(path.join(root, relati
 function validateData(files, indexText, receipts, scopeDigest, exists = (relativePath) => fs.existsSync(path.join(root, relativePath)), readLog = readLogFromDisk, sourceLedger = new Map(), scopeManifest = scope.reviewManifest()) {
 	const ids = [...files.keys()].sort();
 	const legacyGaps = new Set(legacySourceGapIds(indexText));
+	const allowedDirectives = new Set([...expectedDirectives, ...sourceLedger.keys()]);
 	if (ids.join(",") !== expectedIds.join(",")) fail(`expected ${expectedIds.join(",")}; got ${ids.join(",")}`);
 	if (!sourceLedger.has("USR-008")) fail("USR-008 does not resolve to an immutable source ledger record");
 	for (const [receiptId, receipt] of receipts) auditReceiptIntrinsic(receipt, receiptId, readLog);
@@ -540,7 +541,7 @@ function validateData(files, indexText, receipts, scopeDigest, exists = (relativ
 		const directiveInline = scalarOf(blocks, "source_directives", id).match(/^\[(.*)\]$/s);
 		if (!directiveInline) fail(`${id}: source_directives missing or malformed`);
 		const directives = directiveInline[1].split(",").map((item) => unquote(item)).filter((item) => item !== "");
-		if (directives.length === 0 || directives.some((item) => !expectedDirectives.includes(item))) fail(`${id}: invalid source_directives`);
+		if (directives.length === 0 || directives.some((item) => !allowedDirectives.has(item))) fail(`${id}: invalid source_directives`);
 		for (const directive of directives) directiveUnion.add(directive);
 		if (pendingIds.has(id)) validateRequirementContract(blocks, id, directives, sourceLedger);
 		else for (const directive of directives) if (!legacyGaps.has(directive) && !sourceLedger.has(directive)) fail(`${id}: legacy directive ${directive} is neither ledger-resolved nor explicitly unresolved`);
@@ -595,7 +596,7 @@ function validateData(files, indexText, receipts, scopeDigest, exists = (relativ
 		if (indexMatches[0][1] !== title || indexMatches[0][2] !== expectedStatus) fail(`${id}: index title/status drift`);
 	}
 
-	if ([...directiveUnion].sort().join(",") !== expectedDirectives.join(",")) fail("USR-001 through USR-008 are not all traced");
+	if (expectedDirectives.some((directive) => !directiveUnion.has(directive))) fail("legacy request-contract source directives are not all traced");
 	if (!/product:\s*naia-adk-request-contract[\s\S]*?req_count:\s*14\b/.test(indexText)) fail("request-contract index count is not 14");
 
 	/**
