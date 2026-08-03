@@ -131,6 +131,13 @@ export function protectOwnerOnly(path, kind, label = kind) {
 	assertOwnerOnly(path, kind, label);
 }
 
+export function protectOwnerExecutable(path, label = "executable") {
+	protectOwnerOnly(path, "file", label);
+	if (process.platform === "win32") return;
+	chmodSync(path, 0o700);
+	assertOwnerOnly(path, "file", label);
+}
+
 export function protectOwnerOnlyBatch(items) {
 	if (!Array.isArray(items) || items.length === 0) return;
 	if (process.platform === "win32") {

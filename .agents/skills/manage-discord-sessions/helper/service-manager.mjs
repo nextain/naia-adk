@@ -2,12 +2,12 @@
 import { accessSync, chmodSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir, userInfo } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { renderDiscordSupervisorUnits, renderDiscordUserUnit } from "./systemd.mjs";
 import { loadMessengerConfig } from "./discord-config.mjs";
-import { assertOwnerOnly, protectOwnerOnly, trustedWindowsSystemExecutable } from "./platform-security.mjs";
+import { assertOwnerOnly, protectOwnerExecutable, protectOwnerOnly, trustedWindowsSystemExecutable } from "./platform-security.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
 import { observeOwnedProcess } from "./projector.mjs";
 import { SessionStore } from "./store.mjs";
@@ -87,8 +87,13 @@ function shellQuote(value) {
 }
 
 function windowsBatchPath(value, label) {
-	if (typeof value !== "string" || !isAbsolute(value) || /[%!"\r\n]/.test(value)) throw new Error(`${label} is not safe for a Windows launcher`);
+	if (typeof value !== "string" || !win32.isAbsolute(value) || /[%!"\r\n]/.test(value)) throw new Error(`${label} is not safe for a Windows launcher`);
 	return value;
+}
+
+export function windowsOperatorProbeArguments(path) {
+	const launcher = windowsBatchPath(path, "operator launcher");
+	return ["/d", "/s", "/c", `""${launcher}" service unit"`];
 }
 
 export function renderOperatorLauncher(adkRoot, { platform = process.platform, nodePath = process.execPath } = {}) {
@@ -103,10 +108,10 @@ export function renderOperatorLauncher(adkRoot, { platform = process.platform, n
 	return `#!/usr/bin/env bash\n# ${OPERATOR_LAUNCHER_MARKER}\nset -euo pipefail\nexec ${shellQuote(script)} "$@"\n`;
 }
 
-function installOperatorLauncher(adkRoot) {
-	const directory = process.platform === "win32"
+export function installOperatorLauncher(adkRoot, { directory: targetDirectory } = {}) {
+	const directory = targetDirectory ?? (process.platform === "win32"
 		? resolve(process.env.LOCALAPPDATA ?? resolve(homedir(), "AppData/Local"), "Microsoft/WindowsApps")
-		: resolve(homedir(), ".local/bin");
+		: resolve(homedir(), ".local/bin"));
 	const path = resolve(directory, process.platform === "win32" ? "naia.cmd" : "naia");
 	const content = renderOperatorLauncher(adkRoot);
 	mkdirSync(directory, { recursive: true, mode: 0o755 });
@@ -115,9 +120,17 @@ function installOperatorLauncher(adkRoot) {
 		if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("existing naia command is not a replaceable managed file");
 		if (!readFileSync(path, "utf8").includes(OPERATOR_LAUNCHER_MARKER)) throw new Error("existing naia command is not managed by this installer");
 	}
-	writeFileSync(path, content, { mode: 0o755 });
-	chmodSync(path, 0o755);
-	protectOwnerOnly(path, "file", "operator launcher");
+	writeFileSync(path, content, { mode: 0o600 });
+	protectOwnerExecutable(path, "operator launcher");
+	if (process.platform !== "win32") {
+		accessSync(path, fsConstants.X_OK);
+		const probe = spawnSync(path, ["service", "unit"], { encoding: "utf8", timeout: 5_000 });
+		if (probe.error || probe.status !== 0) throw new Error("operator launcher execution probe failed");
+	} else {
+		const command = trustedWindowsSystemExecutable("cmd.exe");
+		const probe = spawnSync(command, windowsOperatorProbeArguments(path), { encoding: "utf8", windowsHide: true, timeout: 5_000 });
+		if (probe.error || probe.status !== 0) throw new Error("operator launcher execution probe failed");
+	}
 	return path;
 }
 
@@ -306,7 +319,7 @@ export function classifyWindowsStopObservation({ owner, currentOwner, observatio
 }
 
 export function quoteWindowsTaskAction(path) {
-	if (typeof path !== "string" || !isAbsolute(path) || path.includes("\"") || /[\r\n]/.test(path)) {
+	if (typeof path !== "string" || !win32.isAbsolute(path) || path.includes("\"") || /[\r\n]/.test(path)) {
 		throw new Error("Windows task action must be an absolute quote-safe path");
 	}
 	return path;
@@ -438,13 +451,13 @@ export function manageService({ adkRoot, command, instance = "default" }) {
 	if (process.platform === "win32") {
 		const taskName = windowsTaskName(adkRoot, normalizedInstance);
 		if (command === "install") {
+			const launcherPath = installOperatorLauncher(adkRoot);
 			const pair = installSupervisedPair({
 				installSupervisor: () => installWindowsSupervisor(adkRoot, normalizedInstance, paths),
 				installService: (supervisor) => installWindowsService(adkRoot, normalizedInstance, paths, config, backendExecutables, supervisor),
 				quarantineService: () => quarantineWindowsService(adkRoot, normalizedInstance, paths),
 			});
 			const installed = pair.service;
-			const launcherPath = installOperatorLauncher(adkRoot);
 			return `installed ${installed.registration} ${installed.startupLauncher ?? installed.taskName}, supervisor ${installed.supervisor.registration}, and ${launcherPath}`;
 		}
 		if (command === "status") {
