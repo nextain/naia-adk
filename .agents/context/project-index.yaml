@@ -236,6 +236,10 @@ namingConventions:
 
 # 컨텍스트 파일 인덱스
 contextFiles:
+  session_contracts:
+    path: .agents/session-contracts/
+    description: "Local per-session mutation contracts; schema.json is shared, runtime contracts and registry are ignored"
+    progress_boundary: ".agents/progress/ records execution evidence and never grants mutation authority"
   philosophy:
     path: .agents/context/philosophy.yaml
     description: "Core project philosophy (the 'why')"
@@ -322,6 +326,8 @@ on_demand_loading:
 
 # 진입점 우선순위
 entrypointPriority:
-  - CLAUDE.md    # = AGENTS.md = GEMINI.md (always identical, pick any)
+  - AGENTS.md    # canonical index; CLAUDE.md and GEMINI.md are byte-identical mirrors
   - .agents/context/agents-rules.json
+  - .agents/context/ai-work-index.yaml
+  - .agents/context/project-index.yaml
   - README.md

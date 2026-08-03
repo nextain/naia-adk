@@ -1,0 +1,48 @@
+id: RCI-016
+title: "Context and Output Content Separation"
+title_ko: "사전정보와 산출물 콘텐츠 분리"
+product: naia-adk-request-contract
+module: source-provenance
+status: active
+source: derived
+source_provenance: ledger_resolved
+priority: high
+created: 2026-08-03
+updated: 2026-08-03
+issue_url: "https://github.com/nextain/naia-adk/issues/17"
+source_directives: [USR-010]
+source_evidence: [USR-010]
+source_atoms: [USR-010-E01, USR-010-E02]
+source_kind: derived
+derived_from: [USR-010]
+derivation_kind: expand
+change_effect: extend
+preserves: [exact-source-partition, explicit-user-content-authority, legitimate-reference-summary-and-quotation]
+must_not_change: [workflow-background-into-product-copy, internal-classification-into-public-surface, blacklist-only-enforcement]
+destructive_approval: null
+description: |
+  Each source atom declares what it governs, how it affects the work, and whether its
+  wording may appear in an artifact. Each requested output target identifies its audience,
+  exposure, objective atoms, and content-source atoms so review can reject unauthorized
+  context text even when the text is factually correct.
+acceptance_criteria:
+  - "Every source atom carries subject, effect, and render_policy metadata validated by schema and runtime."
+  - "Context, reference, example, conversation, and internal sources always have exactly empty directive_ids; derive or quote grants rendering authority only and never objective authority."
+  - "Every verifiable output unit declares kind, audience, exposure, objective_atom_ids, and content_source_atom_ids at symbol/hunk, UI string, or document heading/paragraph granularity."
+  - "Agent-workflow background and precondition atoms cannot be content-source edges for product code, UI, or external documentation, even when combined with another atom."
+  - "Review-pass checks context/output separation, audience fit, and unjustified product surfaces at every stage."
+  - "Explicit user requests to summarize or quote a reference remain valid within the declared audience and derive/quote policy."
+  - "Schema v2 is explicit; v1 contracts remain readable in compatibility mode but cannot claim v2 context/output enforcement until migrated."
+trace:
+  code:
+    - { path: "packages/artifacts-spec/schemas/request-contract.schema.json", symbol: "source atoms and output contract", coverage: partial }
+    - { path: ".agents/hooks/core/request-contract.js", symbol: "validateContract", coverage: partial }
+    - { path: ".agents/skills/review-pass/SKILL.md", symbol: "mandatory context/output lenses", coverage: partial }
+    - { path: "skills/review-pass/SKILL.md", symbol: "distributed mandatory context/output lenses", coverage: partial }
+  tests:
+    - { path: "packages/artifacts-spec/test/validate-request-contract.cjs", symbol: "v1 compatibility and v2 directive mapping/output metadata fixtures", coverage: partial }
+    - { path: ".agents/skills/review-pass/test-output-boundary.cjs", symbol: "code UI document leaks, legitimate reference derive, and baseline versus new surface fixtures", coverage: partial }
+    - { path: ".agents/skills/review-pass/test-context-output-lenses.cjs", symbol: "all-stage mandatory lens coverage", coverage: partial }
+  reviews: { planning: null, development: null, test: null, integration: null }
+decisions:
+  - "Planning review 2026-08-03: rendering authority stays separate from directive/objective authority; workflow context cannot become a shipping content edge."

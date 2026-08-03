@@ -125,15 +125,20 @@ mirror_patterns:
 # ─── Multi-tool Harness ──────────────────────────────────────────────────────
 
 harness:
-  description: "Entry-point files for AI tools must be identical in content"
+  description: "Entry-point files are stable repository indexes and must be identical in content"
   canonical: AGENTS.md
   mirrors:
     - CLAUDE.md    # Claude Code
     - GEMINI.md    # Gemini CLI
     - OPENCODE.md  # opencode
     - CODEX.md     # Codex
-  sync_mechanism: "scripts/sync-harness-mirrors.sh or pre-commit hook"
-  rule: "Edit AGENTS.md only; sync script overwrites all mirrors"
+  allowed_content: "repository identity, mandatory index paths, context routing, session-contract/handoff locations, permanent safety boundaries"
+  forbidden_content: "current goals/issues/phases, requirements, implementation plans, completion state, product copy, session-specific lessons"
+  session_contracts: ".agents/session-contracts/ — schema tracked; runtime contracts and .session-map.json local/ignored"
+  progress_boundary: ".agents/progress/ is execution evidence and handoff state, never mutation authority"
+  context_output_boundary: "background context is not artifact content without explicit atom-level derive/quote/require authority for the declared output audience"
+  sync_mechanism: ".claude/hooks/sync-entry-points.js validates AGENTS.md before copying mirrors"
+  rule: "Validate the canonical candidate first; never let a tool-specific mirror overwrite AGENTS.md"
   minimum: "AGENTS.md + CLAUDE.md + GEMINI.md acceptable for early-stage repos"
 
 # ─── SDLC Artifact Lifecycle ─────────────────────────────────────────────────

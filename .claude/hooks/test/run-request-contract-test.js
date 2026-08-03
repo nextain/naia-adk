@@ -3198,9 +3198,11 @@ test("repository locking serializes concurrent genesis and quarantine writers", 
 	fs.writeFileSync(coordinator, 'const cp=require("child_process");const [worker,cwd,mode]=process.argv.slice(2);const specs=mode==="start"?[["start",cwd,"claude","A"],["start",cwd,"codex","B"]]:Array.from({length:6},(_,i)=>["prompt",cwd,"codex","Q","prompt-"+(i+1)]);Promise.all(specs.map(args=>new Promise(resolve=>{const child=cp.spawn(process.execPath,[worker,...args],{stdio:["ignore","ignore","pipe"]});let stderr="";child.stderr.on("data",x=>stderr+=x);child.on("exit",code=>resolve({code,stderr}));}))).then(results=>{for(const result of results)if(result.code!==0){process.stderr.write(result.stderr);process.exit(result.code)}process.exit(0)});\n');
 	let result = cp.spawnSync(process.execPath, [coordinator, worker, fx.cwd, "start"], { encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
 	assert.equal(result.status, 0, result.stderr);
-	assert.equal(core.listUnits(fx.cwd).length, 1);
-	const unit = { id: core.listUnits(fx.cwd)[0], paths: core.unitPaths(fx.cwd, core.listUnits(fx.cwd)[0]) };
-	assert.equal(core.readJson(unit.paths.head).session_bindings.length, 2);
+	assert.equal(core.listUnits(fx.cwd).length, 2, "new sessions must never auto-join the only unresolved unit");
+	for (const id of core.listUnits(fx.cwd)) {
+		const unit = { id, paths: core.unitPaths(fx.cwd, id) };
+		assert.equal(core.readJson(unit.paths.head).session_bindings.length, 1);
+	}
 
 	fx = fixture();
 	result = cp.spawnSync(process.execPath, [coordinator, worker, fx.cwd, "prompt"], { encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
