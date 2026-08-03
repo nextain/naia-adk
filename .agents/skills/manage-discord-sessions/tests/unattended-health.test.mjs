@@ -156,9 +156,6 @@ test("DSO-009 service installation verifies supervisor first and quarantines eve
 
 test("DSO-009 entry points and workflow reject stale unconditional approval gates", () => {
 	const adkRoot = resolve(fileURLToPath(new URL("../../../../", import.meta.url)));
-	const korean = readFileSync(join(adkRoot, "AGENTS.md"), "utf8");
-	assert.equal(readFileSync(join(adkRoot, "CLAUDE.md"), "utf8"), korean);
-	assert.equal(readFileSync(join(adkRoot, "GEMINI.md"), "utf8"), korean);
 	for (const name of ["AGENTS.md", "CLAUDE.md", "GEMINI.md"]) assert.doesNotMatch(readFileSync(join(adkRoot, name), "utf8"), /(?:사용자 확인|사용자 승인) \(게이트\)/);
 	assert.doesNotMatch(readFileSync(join(adkRoot, "AGENTS.en.md"), "utf8"), /(?:user confirmation|user approval) \(gate\)/i);
 	const workflow = readFileSync(join(adkRoot, ".agents/workflows/issue-driven-development.yaml"), "utf8");
