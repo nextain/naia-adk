@@ -1,0 +1,25 @@
+id: discord-unattended-supervision-charter-2026-08-03
+goal: >
+  Make unattended Discord operation truthful and recoverable without expanding
+  the failed conversation-orchestration architecture.
+success_definition:
+  - "An interactive AI turn can no longer be represented as a continuous monitor."
+  - "One independent deterministic check detects a stopped/stale service and overdue durable work without sending, replaying, or mutating the ledger."
+  - "Unattended Codex and Claude paths never enter a tool-approval UI or waiting state, and direct or worker prompts carry the already-bounded routine authority without claiming semantic control over every possible final sentence."
+  - "Foreign collaboration agents are never reported as supervised without a harness-owned receipt."
+  - "The root entry-point summaries, project rules, and local Codex default agree that bounded routine work proceeds without repeated approval."
+  - "The independent observer persists only its own atomic health snapshot and never mutates or replays the Discord ledger."
+hard_constraints:
+  - "Preserve Gateway ingress, authorization, encrypted recovery, SQLite ledger, delivery nonce, and instance isolation."
+  - "Do not enable or extend the conversation coordinator."
+  - "Do not add model-based watchers, a new queue, or a new lifecycle state machine."
+  - "Do not automatically resend delivery_unknown or replay mutation work."
+  - "No tool approval UI or workflow checkpoint may re-request routine authority already granted within scope."
+  - "Reviewers are read-only leaf reviewers; their findings are hypotheses validated against primary evidence."
+non_goals:
+  - "Fix or judge AIPOL product implementation."
+  - "Observe arbitrary Codex collaboration internals without an explicit receipt interface."
+  - "Guarantee semantic correctness from heartbeat or activity alone."
+  - "Claim code rollback while services execute helper files from a mutable checkout; immutable release bundles require a separate design."
+review_binding:
+  fail_closed: true

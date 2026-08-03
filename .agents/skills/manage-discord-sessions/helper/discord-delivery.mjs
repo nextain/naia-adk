@@ -130,6 +130,7 @@ export function formatOperatorStatus(status, jobs) {
 	const lines = [
 		`Naia Discord service: ${service.state} (${service.reasonCode})`,
 		`Current work ${active.length} · stalled ${stalled} · delivery issues ${deliveryIssues}`,
+		"Foreign collaboration agent supervision: unsupported",
 	];
 	if (review > 0) lines.push(`Historical unresolved ${review} (not queued)`);
 	for (const job of active.slice(0, 8)) lines.push(`${job.jobId}: ${job.lifecycle} / ${job.activityHealth.value} / ${job.currentActivity ?? job.safeSummary}`);

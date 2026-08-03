@@ -37,6 +37,7 @@ job <id>를 실시간으로 지켜봐
 
 ```bash
 scripts/manage-discord-sessions.sh status [--json]
+scripts/manage-discord-sessions.sh health-check [--json]
 scripts/manage-discord-sessions.sh jobs [--active|--failed] [--json]
 scripts/manage-discord-sessions.sh job <job-id> [--events] [--json]
 scripts/manage-discord-sessions.sh watch [--job <job-id>] [--jsonl]
@@ -73,7 +74,7 @@ naia-settings/.sessions/messenger-sessions/runtime.sqlite3
 
 실제 설정과 세션 상태는 Git에 올리지 않습니다. 설정에는 비밀값이 아니라 자격 증명 참조만 둡니다. Discord 토큰은 `naia-settings/.keys/messenger-sessions/<credentialRef>`에 권한 `0600`으로 두며, 설정 파일도 `0600`이어야 합니다. `backend.selected`를 `codex` 또는 `claude`로 선택하면 되고 `naia-agent`나 `naia-shell`은 필요하지 않습니다.
 
-사람의 권한 설정이 바뀌면 `runtime.permissionProfileEpoch`도 바꾸고, Discord에서 사람이 없이 처리할 작업은 `runtime.approvalPolicy`를 `never`로 둡니다. 복구나 대기열 실행 때 이전 자식의 명령 옵션을 재사용하지 않고 현재 프로필로 새 자식을 만듭니다. 바뀐 무승인 프로필은 이전의 보호된 수정 작업도 새 자식으로 교체할 수 있지만, 바뀌지 않은 수정 작업 복구는 계속 검토가 필요합니다. `noProgressInterventionSeconds`는 소유한 자식이 무진행일 때 한 번 중단시키는 한계이고, `operatorResponseSeconds`는 Discord 채널에 안전한 접수 응답을 보내거나 `recovery_review`로 넘기는 기한입니다. 자식의 작업 위치는 반드시 절대 실제 디렉터리여야 하고 cwd와 Codex의 `--cd`로 함께 전달되므로 상대 경로나 상위 도구의 작업 위치 설정은 거부합니다.
+사람의 권한 설정이 바뀌면 `runtime.permissionProfileEpoch`도 바꿉니다. 무인 Discord 설정은 `runtime.approvalPolicy`를 명시적으로 `never`로 둬야 하며 `managed`와 누락 값은 안전하게 거부합니다. `role.requiresApproval`에 든 작업은 실제 무인 허용 작업에서 제외되므로 권한이 묵시적으로 확대되지 않습니다. 복구나 대기열 실행 때 이전 자식의 명령 옵션을 재사용하지 않고 현재 프로필로 새 자식을 만듭니다. 바뀐 무승인 프로필은 이전의 보호된 수정 작업도 새 자식으로 교체할 수 있지만, 바뀌지 않은 수정 작업 복구는 계속 검토가 필요합니다. `noProgressInterventionSeconds`는 소유한 자식이 무진행일 때 한 번 중단시키는 한계이고, `operatorResponseSeconds`는 Discord 채널에 안전한 접수 응답을 보내거나 `recovery_review`로 넘기는 기한입니다. 자식의 작업 위치는 반드시 절대 실제 디렉터리여야 하고 cwd와 Codex의 `--cd`로 함께 전달되므로 상대 경로나 상위 도구의 작업 위치 설정은 거부합니다. 실험적 conversation coordinator는 철회되어 `runtime.conversationCoordinator=true` 설정을 거부합니다.
 
 ## 가시성과 재부팅 복구
 
@@ -89,6 +90,12 @@ naia-settings/.sessions/messenger-sessions/runtime.sqlite3
 
 `service install`은 설치 터미널의 `PATH`에서 선택한 Codex 또는 Claude 실행파일을 찾습니다. Linux는 사용자 systemd unit에 고정합니다. Windows는 소유자 전용 실행 파일과 제한된 ONLOGON 예약 작업을 설치하며, 로컬 정책이 예약 작업 생성을 거부하면 소유자 전용 숨김 시작프로그램으로 자동 대체합니다. `service status`, `start`, `stop`, `restart`, `enable`, `disable`은 실제 설치된 등록 방식을 검증한 뒤 제어합니다. `naia.cmd`도 함께 설치됩니다. `backend.selected`를 바꾼 뒤에는 단순 재시작이 아니라 `service install`을 다시 실행해야 새 실행 경로가 고정됩니다.
 
+독립 supervisor는 더 엄격합니다. Linux에서는 별도 timer, Windows에서는 검증된 최소 권한 1분 Task Scheduler 작업이 필수입니다. supervisor 등록을 본 서비스보다 먼저 검증하며 실패하면 감시되지 않는 서비스가 남지 않도록 본 서비스 등록을 격리합니다. `service status`는 두 등록을 모두 검증합니다.
+
 백엔드 완료 판정은 닫힌 방식입니다. 공급자가 결과를 `unknown`으로 표시하거나 명시적 성공 근거가 없으면 성공으로 올리지 않고 Discord에도 전달하지 않습니다.
 
-검증 명령은 `pnpm test:discord-sessions`입니다. 상세 설계는 `docs/design/discord-session-observability.md`, 요구사항은 `DSO-001`~`DSO-007`이 정본입니다.
+## 지속 감시 계약
+
+대화형 AI 턴 안의 폴링은 턴·컨텍스트·위임 에이전트가 끝나면 함께 멈추므로 지속 감시라고 표현하지 않습니다. `service install`은 Discord 서비스와 별도로 60초마다 실행되는 결정론적 supervisor를 설치합니다. supervisor는 SQLite를 읽기 전용으로 열고 그 밖의 `supervisor-status.json`만 원자적으로 갱신하며 메시지 전송, 재실행, 재시작, ledger 변경을 하지 않습니다. `health-check --json`으로 서비스 중단·stale, 기한을 넘긴 활성 작업, 과거 주의 기록, Gateway 근거 불명을 구분합니다. 협업 서브에이전트는 이 하네스의 관리 대상이 아니므로 상태에 `foreignAgentSupervision=unsupported`를 표시하고, 실제 생명주기를 별도로 확인하기 전에는 active라고 말하거나 결과에 의존하지 않습니다.
+
+검증 명령은 `pnpm test:discord-sessions`입니다. 상세 설계는 `docs/design/discord-session-observability.md`와 `docs/design/discord-unattended-supervision-plan.md`, 요구사항은 `DSO-001`~`DSO-009`가 정본입니다.

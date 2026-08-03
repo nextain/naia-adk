@@ -3,7 +3,7 @@ import { getBackendAdapter } from "./adapters.mjs";
 import { authorizeDiscordMessage } from "./discord-scope.mjs";
 import { deliverJobResult, formatOperatorStatus, postDiscordDirectMessage } from "./discord-delivery.mjs";
 import { runBackendAttempt } from "./backend-runner.mjs";
-import { commandOptionsForProfile, currentExecutionProfile, sameExecutionProfile } from "./execution-profile.mjs";
+import { commandOptionsForProfile, currentExecutionProfile, effectiveAllowedActions, sameExecutionProfile } from "./execution-profile.mjs";
 import { promptWithDiscordConversation } from "./discord-conversation.mjs";
 import { buildCoordinatorPrompt, coordinatorPolicyRevision, parseCoordinatorDecision } from "./coordinator-core.mjs";
 import { sanitizeFinalResponse } from "./sanitize.mjs";
@@ -29,7 +29,7 @@ function transientPrompt(message, botUserId, config) {
 	if (typeof message.content !== "string" || message.content.length > 4_000) throw new Error("Discord content is missing or too large");
 	const userText = message.content.replaceAll(`<@${botUserId}>`, "").replaceAll(`<@!${botUserId}>`, "").trim();
 	if (!userText) throw new Error("Discord prompt is empty after mention removal");
-	return [`Persona: ${config.persona.name}`, config.persona.instructions, `Role: ${config.role.name}`, `Allowed actions: ${config.role.allowedActions.join(", ")}`, "Communication: Reply in the language used by the user. Before tool work, provide a brief analysis and action plan as an intermediate update. During long work, report meaningful findings or phase changes before the final verified result. Do not repeat generic status text.", "Discord DM delegation: Never access Discord directly. Only when the user explicitly requests a DM, return exactly one JSON object and no other final text: {\"discordDm\":{\"content\":\"message to send\",\"successReply\":\"confirmation in the user's language\",\"failureReply\":\"failure notice in the user's language\"}}.", "User request:", userText].join("\n");
+	return [`Persona: ${config.persona.name}`, config.persona.instructions, `Role: ${config.role.name}`, `Allowed actions: ${effectiveAllowedActions(config).join(", ")}`, "Routine authority: A bounded user request authorizes its normal in-scope execution path. Treat workflow phase gates, including Understand, Scope, Plan, Sync, and Close, as internal checkpoints; do not ask the user to approve them.", "No approval click is available in this unattended session. Never request or wait for interactive approval.", "Authority limit: Ask only when a material unresolved choice would change the requested scope. If an action is outside the granted actions, stop safely and report the limitation without expanding authority or claiming completion.", "Communication: Reply in the language used by the user. Before tool work, provide a brief analysis and action plan as an intermediate update. During long work, report meaningful findings or phase changes before the final verified result. Do not repeat generic status text.", "Discord DM delegation: Never access Discord directly. Only when the user explicitly requests a DM, return exactly one JSON object and no other final text: {\"discordDm\":{\"content\":\"message to send\",\"successReply\":\"confirmation in the user's language\",\"failureReply\":\"failure notice in the user's language\"}}.", "User request:", userText].join("\n");
 }
 
 function parseDiscordDmRequest(value) {
@@ -280,7 +280,10 @@ export class DiscordMessageRouter {
 			`Persona: ${this.config.persona.name}`,
 			this.config.persona.instructions,
 			`Role: ${this.config.role.name}`,
-			`Allowed actions: ${this.config.role.allowedActions.join(", ")}`,
+			`Allowed actions: ${effectiveAllowedActions(this.config).join(", ")}`,
+			"Routine authority: A bounded user request authorizes its normal in-scope execution path. Treat workflow phase gates, including Understand, Scope, Plan, Sync, and Close, as internal checkpoints; do not ask the user to approve them.",
+			"No approval click is available in this unattended session. Never request or wait for interactive approval.",
+			"Authority limit: Ask only when a material unresolved choice would change the requested scope. If an action is outside the granted actions, stop safely and report the limitation without expanding authority or claiming completion.",
 			"This is one bounded task delegated by the local Discord coordinator. Do the task, report meaningful findings during execution, and return a verified final result in the user's language. Do not access Discord directly.",
 			'Discord DM delegation: only when the task explicitly requests a DM, return exactly one JSON object and no other final text: {"discordDm":{"content":"message to send","successReply":"confirmation in the user\'s language","failureReply":"failure notice in the user\'s language"}}.',
 			"Delegated task:",
@@ -327,7 +330,7 @@ export class DiscordMessageRouter {
 			authorizedHistory,
 			openWorkSummaries: this.#openWork(item.scopeKey, item.jobId),
 			persona: this.config.persona,
-			role: this.config.role,
+			role: { ...this.config.role, allowedActions: effectiveAllowedActions(this.config), requiresApproval: [] },
 			binding: item.binding,
 			runtime: this.config.runtime ?? {},
 		});
@@ -377,7 +380,7 @@ export class DiscordMessageRouter {
 				if (dmRequest) {
 					const bindings = this.config.discord.bindings.filter((binding) => binding.kind === "dm" && binding.operatorActions === true && typeof binding.userId === "string");
 					let receipt = { state: "failed", reasonCode: "dm_binding_ambiguous" };
-					if (this.config.role.allowedActions.includes("reply") && bindings.length === 1) receipt = await this.directMessage({ token: this.token, userId: bindings[0].userId, content: dmRequest.content, nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal: controller.signal });
+					if (effectiveAllowedActions(this.config).includes("reply") && bindings.length === 1) receipt = await this.directMessage({ token: this.token, userId: bindings[0].userId, content: dmRequest.content, nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal: controller.signal });
 					workerContent = receipt.state === "confirmed" ? dmRequest.successReply : dmRequest.failureReply;
 				}
 				this.#enqueueCoordinatorOutcome(item, workerContent);
@@ -389,7 +392,7 @@ export class DiscordMessageRouter {
 			if (dmRequest) {
 				const bindings = this.config.discord.bindings.filter((binding) => binding.kind === "dm" && binding.operatorActions === true && typeof binding.userId === "string");
 				let receipt = { state: "failed", reasonCode: "dm_binding_ambiguous" };
-				if (this.config.role.allowedActions.includes("reply") && bindings.length === 1) receipt = await this.directMessage({ token: this.token, userId: bindings[0].userId, content: dmRequest.content, nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal: controller.signal });
+				if (effectiveAllowedActions(this.config).includes("reply") && bindings.length === 1) receipt = await this.directMessage({ token: this.token, userId: bindings[0].userId, content: dmRequest.content, nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal: controller.signal });
 				finalContent = receipt.state === "confirmed" ? dmRequest.successReply : dmRequest.failureReply;
 			}
 			await this.deliver({ store: this.store, jobId: item.jobId, attemptId: result.attemptId, token: this.token, botUserId: this.botUserId, channelId: item.channelId, content: finalContent, signal: controller.signal });
@@ -458,15 +461,7 @@ export class DiscordMessageRouter {
 			try {
 				const payload = JSON.parse(this.recoveryCodec.open(item.envelope));
 				if (payload.mode === "coordinator" || payload.mode === "coordinator_result") {
-					if (!autoRetry || typeof payload.currentRequest !== "string" || payload.currentRequest.length > 1_900 || !/^\d{17,20}$/.test(payload.channelId) || !payload.binding || !Array.isArray(payload.allowedUserIds)) throw new Error("coordinator recovery payload is invalid");
-					const policyRevision = coordinatorPolicyRevision({ persona: this.config.persona, role: this.config.role, binding: payload.binding, runtime: this.config.runtime ?? {} });
-					if (payload.policyRevision !== policyRevision) throw new Error("coordinator policy changed");
-					const executionProfile = this.#coordinatorExecutionProfile(item.backendId);
-					const recovered = { jobId: item.jobId, backendId: item.backendId, currentRequest: payload.currentRequest, channelId: payload.channelId, scopeKey: payload.scopeKey, sourceMessageId: payload.sourceMessageId ?? null, allowedUserIds: payload.allowedUserIds, binding: payload.binding, mode: "coordinator", allowDelegate: payload.mode !== "coordinator_result", commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile };
-					if (recovered.sourceMessageId && this.loadHistory) recovered.historyPromise = this.loadHistory({ token: this.token, channelId: recovered.channelId, beforeMessageId: recovered.sourceMessageId, botUserId: this.botUserId, allowedUserIds: recovered.allowedUserIds }).catch(() => ({ state: "unavailable", history: "", messageCount: 0 }));
-					if (payload.mode === "coordinator") this.#sendOperatorResponse(recovered);
-					this.queue.push(recovered);
-					continue;
+					throw new Error("coordinator recovery is withdrawn");
 				}
 				if (typeof payload.prompt !== "string" || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
 				const executionProfile = this.#executionProfile(item.backendId);

@@ -5,7 +5,7 @@ import { homedir, userInfo } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { renderDiscordUserUnit } from "./systemd.mjs";
+import { renderDiscordSupervisorUnits, renderDiscordUserUnit } from "./systemd.mjs";
 import { loadMessengerConfig } from "./discord-config.mjs";
 import { assertOwnerOnly, protectOwnerOnly, trustedWindowsSystemExecutable } from "./platform-security.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
@@ -16,6 +16,18 @@ function runSystemctl(args) {
 	const result = spawnSync("systemctl", ["--user", ...args], { encoding: "utf8" });
 	if (result.status !== 0) throw new Error((result.stderr || result.stdout || "systemctl failed").trim());
 	return result.stdout.trim();
+}
+
+export function installSupervisedPair({ installSupervisor, installService, quarantineService }) {
+	if (![installSupervisor, installService, quarantineService].every((value) => typeof value === "function")) throw new Error("supervised installation callbacks are required");
+	try {
+		const supervisor = installSupervisor();
+		return { supervisor, service: installService(supervisor) };
+	} catch (error) {
+		try { quarantineService(); }
+		catch (quarantineError) { throw new Error(`${error.message}; service quarantine failed: ${quarantineError.message}`); }
+		throw error;
+	}
 }
 
 export function resolveBackendExecutable(name, pathValue = process.env.PATH ?? "") {
@@ -114,6 +126,10 @@ function windowsTaskName(adkRoot, instance = "default") {
 	return `NaiaDiscordSessions-${createHash("sha256").update(identity).digest("hex").slice(0, 12)}`;
 }
 
+export function windowsSupervisorTaskName(adkRoot, instance = "default") {
+	return `${windowsTaskName(adkRoot, instance)}-Supervisor`;
+}
+
 function trustedWindowsCommand(name) {
 	const systemRoot = realpathSync("C:\\Windows");
 	if (process.env.SystemRoot && realpathSync(process.env.SystemRoot).toLowerCase() !== systemRoot.toLowerCase()) throw new Error("Windows system directory identity mismatch");
@@ -166,6 +182,60 @@ function installWindowsStartup(adkRoot, instance, serviceLauncher, autoStart) {
 	protectOwnerOnly(path, "file", "Windows Startup launcher");
 	if (autoStart) startWindowsStartupLauncher(path);
 	return path;
+}
+
+function installWindowsSupervisor(adkRoot, instance, paths) {
+	const stateDirectory = paths.stateDirectory;
+	const root = windowsBatchPath(realpathSync(adkRoot), "ADK root");
+	const node = windowsBatchPath(process.execPath, "Node executable");
+	const supervisor = windowsBatchPath(resolve(adkRoot, ".agents/skills/manage-discord-sessions/helper/supervisor.mjs"), "supervisor entry");
+	const onceLauncher = resolve(stateDirectory, "supervisor-once.cmd");
+	writeFileSync(onceLauncher, `@echo off\r\n"${node}" "${supervisor}" --adk-root "${root}" --instance "${instance}"\r\n`, "utf8");
+	protectOwnerOnly(onceLauncher, "file", "Windows Discord supervisor launcher");
+	const taskName = windowsSupervisorTaskName(adkRoot, instance);
+	const created = runSchtasks(["/Create", "/TN", taskName, "/TR", quoteWindowsTaskAction(onceLauncher), "/SC", "MINUTE", "/MO", "1", "/RL", "LIMITED", "/F"], { allowMissing: true });
+	if (created.status === 0) {
+		const registered = runSchtasks(["/Query", "/TN", taskName, "/XML"]);
+		verifyWindowsTaskAction(registered.output, onceLauncher, currentWindowsSid(), { schedule: "minute" });
+		runSchtasks(["/Run", "/TN", taskName]);
+		return { registration: "task_scheduler", taskName };
+	}
+	const existing = runSchtasks(["/Query", "/TN", taskName, "/XML"], { allowMissing: true });
+	if (existing.status === 0) {
+		verifyWindowsTaskAction(existing.output, onceLauncher, currentWindowsSid(), { schedule: "minute" });
+		runSchtasks(["/Run", "/TN", taskName]);
+		return { registration: "task_scheduler", taskName };
+	}
+	throw new Error("Windows Discord supervisor requires a verified one-minute Task Scheduler registration");
+}
+
+function inspectWindowsSupervisorRegistration(adkRoot, instance, paths) {
+	const taskName = windowsSupervisorTaskName(adkRoot, instance);
+	const launcher = resolve(paths.stateDirectory, "supervisor-once.cmd");
+	const task = runSchtasks(["/Query", "/TN", taskName, "/XML"], { allowMissing: true });
+	if (task.status !== 0) throw new Error("Windows Discord supervisor is not installed");
+	verifyWindowsTaskAction(task.output, launcher, currentWindowsSid(), { schedule: "minute" });
+	return { registration: "task_scheduler", taskName, launcher };
+}
+
+function quarantineWindowsService(adkRoot, instance, paths) {
+	const taskName = windowsTaskName(adkRoot, instance);
+	const existingTask = runSchtasks(["/Query", "/TN", taskName, "/XML"], { allowMissing: true });
+	if (existingTask.status === 0) {
+		runSchtasks(["/End", "/TN", taskName], { allowMissing: true });
+		const disabled = runSchtasks(["/Change", "/TN", taskName, "/DISABLE"], { allowMissing: true });
+		if (disabled.status !== 0) throw new Error("Windows Discord task could not be disabled during quarantine");
+		const verified = runSchtasks(["/Query", "/TN", taskName, "/XML"]);
+		verifyWindowsTaskDisabled(verified.output);
+	}
+	const startup = windowsStartupPath(adkRoot, instance);
+	if (existsSync(startup)) {
+		const serviceLauncher = resolve(paths.stateDirectory, "service-launch.cmd");
+		assertOwnerOnly(startup, "file", "Windows Startup launcher");
+		if (readFileSync(startup, "utf8") !== renderWindowsStartupLauncher(serviceLauncher)) throw new Error("Windows Startup launcher integrity mismatch during quarantine");
+		renameSync(startup, `${startup}.disabled`);
+	}
+	stopOwnedWindowsService(paths);
 }
 
 function removeManagedStartup(path, serviceLauncher) {
@@ -251,7 +321,12 @@ function decodeXmlText(value) {
 		.replaceAll("&amp;", "&");
 }
 
-export function verifyWindowsTaskAction(xml, expectedPath, expectedUserId = null) {
+export function verifyWindowsTaskDisabled(xml) {
+	if (typeof xml !== "string" || !/<Settings(?:\s[^>]*)?>[\s\S]*?<Enabled>\s*false\s*<\/Enabled>[\s\S]*?<\/Settings>/i.test(xml)) throw new Error("Windows task quarantine did not persist disabled state");
+	return true;
+}
+
+export function verifyWindowsTaskAction(xml, expectedPath, expectedUserId = null, { schedule = "logon" } = {}) {
 	if (typeof xml !== "string" || xml.length > 1024 * 1024) throw new Error("Windows task definition is invalid");
 	const commands = [...xml.matchAll(/<Command>([\s\S]*?)<\/Command>/gi)].map((match) => decodeXmlText(match[1].trim()));
 	if (commands.length !== 1) throw new Error("Windows task action is not uniquely defined");
@@ -270,14 +345,18 @@ export function verifyWindowsTaskAction(xml, expectedPath, expectedUserId = null
 		.replace(/<RunLevel>[\s\S]*?<\/RunLevel>/i, "")
 		.trim();
 	if (principalRemainder !== "") throw new Error("Windows task principal contains unsupported privileges");
-	const logonTriggers = [...xml.matchAll(/<LogonTrigger(?:\s[^>]*)?\s*\/>|<LogonTrigger(?:\s[^>]*)?>([\s\S]*?)<\/LogonTrigger>/gi)];
-	if (logonTriggers.length !== 1 || /<(BootTrigger|CalendarTrigger|TimeTrigger|EventTrigger|IdleTrigger|RegistrationTrigger|SessionStateChangeTrigger)(?:\s|\/?>)/i.test(xml)) {
-		throw new Error("Windows task must contain only one logon trigger");
-	}
-	const logonBody = (logonTriggers[0][1] ?? "").replace(/<Enabled>\s*true\s*<\/Enabled>/i, "").trim();
-	if (logonBody !== "") throw new Error("Windows logon trigger contains unsupported conditions");
 	const triggers = [...xml.matchAll(/<Triggers(?:\s[^>]*)?>([\s\S]*?)<\/Triggers>/gi)];
-	if (triggers.length !== 1 || triggers[0][1].replace(logonTriggers[0][0], "").trim() !== "") throw new Error("Windows task must contain only one logon trigger");
+	if (triggers.length !== 1) throw new Error("Windows task must contain one trigger collection");
+	if (schedule === "logon") {
+		const logonTriggers = [...xml.matchAll(/<LogonTrigger(?:\s[^>]*)?\s*\/>|<LogonTrigger(?:\s[^>]*)?>([\s\S]*?)<\/LogonTrigger>/gi)];
+		if (logonTriggers.length !== 1 || /<(BootTrigger|CalendarTrigger|TimeTrigger|EventTrigger|IdleTrigger|RegistrationTrigger|SessionStateChangeTrigger)(?:\s|\/?>)/i.test(xml)) throw new Error("Windows task must contain only one logon trigger");
+		const logonBody = (logonTriggers[0][1] ?? "").replace(/<Enabled>\s*true\s*<\/Enabled>/i, "").trim();
+		if (logonBody !== "" || triggers[0][1].replace(logonTriggers[0][0], "").trim() !== "") throw new Error("Windows logon trigger contains unsupported conditions");
+	} else if (schedule === "minute") {
+		const calendar = [...xml.matchAll(/<CalendarTrigger(?:\s[^>]*)?>([\s\S]*?)<\/CalendarTrigger>/gi)];
+		if (calendar.length !== 1 || !/<Interval>\s*PT1M\s*<\/Interval>/i.test(calendar[0][1]) || triggers[0][1].replace(calendar[0][0], "").trim() !== "") throw new Error("Windows supervisor task must contain only one minute trigger");
+		if (/<Enabled>\s*false\s*<\/Enabled>/i.test(xml) || !/<Settings(?:\s[^>]*)?>[\s\S]*?<Enabled>\s*true\s*<\/Enabled>[\s\S]*?<\/Settings>/i.test(xml)) throw new Error("Windows supervisor task must be enabled");
+	} else throw new Error("unsupported Windows task schedule");
 	if (!/<RunLevel>\s*LeastPrivilege\s*<\/RunLevel>/i.test(xml) || !/<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(xml)) {
 		throw new Error("Windows task must use a limited interactive principal");
 	}
@@ -310,7 +389,7 @@ export function restartWindowsTask(taskName, {
 	throw new Error("Windows Discord service did not restart within the bounded retry window");
 }
 
-function installWindowsService(adkRoot, instance, paths, config, backendExecutables) {
+function installWindowsService(adkRoot, instance, paths, config, backendExecutables, supervisor) {
 	const stateDirectory = paths.stateDirectory;
 	mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
 	protectOwnerOnly(stateDirectory, "directory", "Discord service state");
@@ -335,7 +414,7 @@ function installWindowsService(adkRoot, instance, paths, config, backendExecutab
 		removeManagedStartup(windowsStartupPath(adkRoot, instance), serviceLauncher);
 		removeManagedStartup(`${windowsStartupPath(adkRoot, instance)}.disabled`, serviceLauncher);
 		if (config.service?.autoStart !== false) runSchtasks(["/Run", "/TN", taskName]);
-		return { taskName, serviceLauncher, registration: "task_scheduler" };
+		return { taskName, serviceLauncher, registration: "task_scheduler", supervisor };
 	}
 	const existingTask = runSchtasks(["/Query", "/TN", taskName, "/XML"], { allowMissing: true });
 	if (existingTask.status === 0) {
@@ -343,10 +422,10 @@ function installWindowsService(adkRoot, instance, paths, config, backendExecutab
 		removeManagedStartup(windowsStartupPath(adkRoot, instance), serviceLauncher);
 		removeManagedStartup(`${windowsStartupPath(adkRoot, instance)}.disabled`, serviceLauncher);
 		if (config.service?.autoStart !== false) runSchtasks(["/Run", "/TN", taskName]);
-		return { taskName, serviceLauncher, registration: "task_scheduler" };
+		return { taskName, serviceLauncher, registration: "task_scheduler", supervisor };
 	}
 	const startupLauncher = installWindowsStartup(adkRoot, instance, serviceLauncher, config.service?.autoStart !== false);
-	return { taskName, serviceLauncher, startupLauncher, registration: "startup_folder" };
+	return { taskName, serviceLauncher, startupLauncher, registration: "startup_folder", supervisor };
 }
 
 export function manageService({ adkRoot, command, instance = "default" }) {
@@ -359,18 +438,25 @@ export function manageService({ adkRoot, command, instance = "default" }) {
 	if (process.platform === "win32") {
 		const taskName = windowsTaskName(adkRoot, normalizedInstance);
 		if (command === "install") {
-			const installed = installWindowsService(adkRoot, normalizedInstance, paths, config, backendExecutables);
+			const pair = installSupervisedPair({
+				installSupervisor: () => installWindowsSupervisor(adkRoot, normalizedInstance, paths),
+				installService: (supervisor) => installWindowsService(adkRoot, normalizedInstance, paths, config, backendExecutables, supervisor),
+				quarantineService: () => quarantineWindowsService(adkRoot, normalizedInstance, paths),
+			});
+			const installed = pair.service;
 			const launcherPath = installOperatorLauncher(adkRoot);
-			return `installed ${installed.registration} ${installed.startupLauncher ?? installed.taskName} and ${launcherPath}`;
+			return `installed ${installed.registration} ${installed.startupLauncher ?? installed.taskName}, supervisor ${installed.supervisor.registration}, and ${launcherPath}`;
 		}
 		if (command === "status") {
 			const registration = inspectWindowsRegistration(adkRoot, normalizedInstance, paths);
-			if (registration) return `installed ${registration.kind} ${registration.startupLauncher ?? registration.taskName}`;
+			const supervisor = inspectWindowsSupervisorRegistration(adkRoot, normalizedInstance, paths);
+			if (registration) return `installed ${registration.kind} ${registration.startupLauncher ?? registration.taskName}; supervisor ${supervisor.taskName}`;
 			throw new Error("Windows Discord service is not installed");
 		}
 		if (new Set(["start", "stop", "restart", "enable", "disable"]).has(command)) {
 			const registration = inspectWindowsRegistration(adkRoot, normalizedInstance, paths);
 			if (!registration) throw new Error("Windows Discord service is not installed");
+			if (new Set(["start", "restart", "enable"]).has(command)) inspectWindowsSupervisorRegistration(adkRoot, normalizedInstance, paths);
 			if (registration.kind === "task_scheduler") {
 				if (command === "start") { runSchtasks(["/Run", "/TN", taskName]); return `started ${taskName}`; }
 				if (command === "stop") { runSchtasks(["/End", "/TN", taskName]); return `stopped ${taskName}`; }
@@ -390,6 +476,7 @@ export function manageService({ adkRoot, command, instance = "default" }) {
 		throw new Error(`unsupported service command: ${command}`);
 	}
 	const rendered = renderDiscordUserUnit({ adkRoot, instance: normalizedInstance, backendExecutables });
+	const supervisor = renderDiscordSupervisorUnits({ adkRoot, instance: normalizedInstance });
 	const unitDirectory = resolve(homedir(), ".config/systemd/user");
 	const unitPath = resolve(unitDirectory, rendered.unitName);
 	if (command === "install") {
@@ -397,17 +484,27 @@ export function manageService({ adkRoot, command, instance = "default" }) {
 		chmodSync(paths.stateDirectory, 0o700);
 		mkdirSync(unitDirectory, { recursive: true, mode: 0o700 });
 		writeFileSync(unitPath, rendered.content, { mode: 0o600 });
+		writeFileSync(resolve(unitDirectory, supervisor.serviceName), supervisor.serviceContent, { mode: 0o600 });
+		writeFileSync(resolve(unitDirectory, supervisor.timerName), supervisor.timerContent, { mode: 0o600 });
 		const launcherPath = installOperatorLauncher(adkRoot);
 		runSystemctl(["daemon-reload"]);
 		if (config.service?.startAt === "boot") {
 			const linger = spawnSync("loginctl", ["enable-linger", userInfo().username], { encoding: "utf8" });
 			if (linger.status !== 0) throw new Error((linger.stderr || linger.stdout || "could not enable user lingering").trim());
 		}
-		if (config.service?.autoStart !== false) for (const args of installServiceCommands(rendered.unitName)) runSystemctl(args);
-		return `installed ${rendered.unitName} and ${launcherPath}`;
+		installSupervisedPair({
+			installSupervisor: () => { runSystemctl(["enable", "--now", supervisor.timerName]); return supervisor.timerName; },
+			installService: () => {
+				if (config.service?.autoStart !== false) for (const args of installServiceCommands(rendered.unitName)) runSystemctl(args);
+				return rendered.unitName;
+			},
+			quarantineService: () => { runSystemctl(["disable", "--now", rendered.unitName]); },
+		});
+		return `installed ${rendered.unitName}, ${supervisor.timerName}, and ${launcherPath}`;
 	}
-	if (command === "status") return runSystemctl(["status", "--no-pager", rendered.unitName]);
+	if (command === "status") return `${runSystemctl(["status", "--no-pager", rendered.unitName])}\n${runSystemctl(["status", "--no-pager", supervisor.timerName])}`;
 	if (new Set(["start", "stop", "restart", "enable", "disable"]).has(command)) {
+		if (new Set(["start", "restart", "enable"]).has(command)) runSystemctl(["status", "--no-pager", supervisor.timerName]);
 		runSystemctl([command, rendered.unitName]);
 		return `${command} ${rendered.unitName}`;
 	}

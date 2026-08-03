@@ -66,7 +66,10 @@ recovery material starts a new attempt under the same job ID; missing or corrupt
 material becomes `recovery_review`. An uncertain Discord delivery is never
 auto-resubmitted.
 
-For unattended Discord work, set `runtime.approvalPolicy` to `never` and
+For unattended Discord work, set `runtime.approvalPolicy` explicitly to `never`; managed or omitted policies fail closed. Actions in `role.requiresApproval` are removed from the effective unattended action set. Run `naia health-check --json` for the read-only health projection. `service install` also installs an independent 60-second supervisor which writes only its own atomic snapshot outside SQLite. Interactive AI polling is not continuous monitoring, and collaboration subagents remain outside this harness (`foreignAgentSupervision=unsupported`).
+The supervisor registration is verified before the main service starts. A failed timer/task registration quarantines the main registration, and `service status` checks both identities.
+
+Also
 advance `runtime.permissionProfileEpoch` whenever the parent execution policy
 changes. Recovery compares that profile before it launches a child, discards
 historical command options, and uses the current no-prompt profile only.

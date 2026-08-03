@@ -30,3 +30,18 @@ export function renderDiscordUserUnit({ adkRoot, instance = "default", nodePath 
 	const environment = [...backendEnvironment, `Environment=${unitQuote(`PATH=${executablePath}`)}`].join("\n");
 	return { unitName, instance: identity.instance, content: `[Unit]\nDescription=Naia ADK Discord sessions (${identity.instance})\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=${exec}\n${environment ? `${environment}\n` : ""}Restart=always\nRestartSec=5\nKillMode=mixed\nTimeoutStopSec=20\nUMask=0077\nNoNewPrivileges=yes\nPrivateTmp=yes\n\n[Install]\nWantedBy=default.target\n` };
 }
+
+export function renderDiscordSupervisorUnits({ adkRoot, instance = "default", nodePath = process.execPath }) {
+	const identity = discordUnitIdentity(adkRoot, instance);
+	const supervisorPath = resolve(identity.root, ".agents/skills/manage-discord-sessions/helper/supervisor.mjs");
+	const base = identity.unitName.slice(0, -".service".length);
+	const serviceName = `${base}-supervisor.service`;
+	const timerName = `${base}-supervisor.timer`;
+	const exec = [nodePath, supervisorPath, "--adk-root", identity.root, "--instance", identity.instance].map(unitQuote).join(" ");
+	return {
+		serviceName,
+		timerName,
+		serviceContent: `[Unit]\nDescription=Naia ADK Discord independent health observer (${identity.instance})\n\n[Service]\nType=oneshot\nExecStart=${exec}\nUMask=0077\nNoNewPrivileges=yes\nPrivateTmp=yes\n`,
+		timerContent: `[Unit]\nDescription=Naia ADK Discord health observer timer (${identity.instance})\n\n[Timer]\nOnBootSec=30s\nOnUnitActiveSec=60s\nAccuracySec=1s\nPersistent=true\nUnit=${serviceName}\n\n[Install]\nWantedBy=timers.target\n`,
+	};
+}

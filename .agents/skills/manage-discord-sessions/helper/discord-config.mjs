@@ -48,6 +48,7 @@ export function loadMessengerConfig(path) {
 	if (!config.role?.name || !Array.isArray(config.role.allowedActions)) throw new Error("role and allowedActions are required");
 	const actions = new Set(["read", "reply", "write", "execute", "cancel", "retry"]);
 	if (config.role.allowedActions.length === 0 || config.role.allowedActions.some((value) => !actions.has(value))) throw new Error("role contains an unsupported allowed action");
+	if (config.role.requiresApproval !== undefined && !Array.isArray(config.role.requiresApproval)) throw new Error("requiresApproval must be an array");
 	if (config.role.requiresApproval?.some((value) => !actions.has(value))) throw new Error("role contains an unsupported approval action");
 	if (!new Set(["codex", "claude"]).has(config.backend?.selected)) throw new Error("selected backend is not supported");
 	if (config.backend.profiles?.[config.backend.selected]?.enabled !== true) throw new Error("selected backend profile is disabled");
@@ -70,13 +71,14 @@ export function loadMessengerConfig(path) {
 	const softSilenceSeconds = config.runtime?.softSilenceSeconds ?? 120;
 	if (!Number.isSafeInteger(heartbeatSeconds) || heartbeatSeconds < 1 || heartbeatSeconds > 60) throw new Error("heartbeatSeconds must be between 1 and 60");
 	if (!Number.isSafeInteger(softSilenceSeconds) || softSilenceSeconds < 1 || softSilenceSeconds > 3_600) throw new Error("softSilenceSeconds must be between 1 and 3600");
-	if (config.runtime?.approvalPolicy !== undefined && !new Set(["managed", "never"]).has(config.runtime.approvalPolicy)) throw new Error("approvalPolicy must be managed or never");
+	if (config.runtime?.approvalPolicy !== "never") throw new Error("runtime.approvalPolicy must be explicitly set to never for unattended messenger work");
 	if (config.runtime?.permissionProfileEpoch !== undefined) safeIdentifier(config.runtime.permissionProfileEpoch, "permissionProfileEpoch");
 	const noProgressInterventionSeconds = config.runtime?.noProgressInterventionSeconds ?? softSilenceSeconds;
 	const operatorResponseSeconds = config.runtime?.operatorResponseSeconds ?? 30;
 	if (!Number.isSafeInteger(noProgressInterventionSeconds) || noProgressInterventionSeconds < softSilenceSeconds || noProgressInterventionSeconds > 3_600) throw new Error("noProgressInterventionSeconds must be between softSilenceSeconds and 3600");
 	if (!Number.isSafeInteger(operatorResponseSeconds) || operatorResponseSeconds < 1 || operatorResponseSeconds > 3_600) throw new Error("operatorResponseSeconds must be between 1 and 3600");
 	if (config.runtime?.conversationCoordinator !== undefined && typeof config.runtime.conversationCoordinator !== "boolean") throw new Error("conversationCoordinator must be boolean");
+	if (config.runtime?.conversationCoordinator === true) throw new Error("conversationCoordinator has been withdrawn and cannot be enabled");
 	if (config.recovery?.autoRetry !== undefined && typeof config.recovery.autoRetry !== "boolean") throw new Error("recovery autoRetry must be boolean");
 	if (!new Set(["login", "boot"]).has(config.service?.startAt ?? "login")) throw new Error("service startAt must be login or boot");
 	if (config.service?.autoStart !== undefined && typeof config.service.autoStart !== "boolean") throw new Error("service autoStart must be boolean");

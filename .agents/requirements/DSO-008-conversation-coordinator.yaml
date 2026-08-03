@@ -3,11 +3,11 @@ title: "Durable Discord Conversation Coordinator"
 title_ko: "지속되는 Discord 대화 관리 세션"
 product: naia-adk-discord-sessions
 module: conversation-coordinator
-status: active
+status: withdrawn
 source: human
 priority: critical
 created: 2026-08-01
-updated: 2026-08-01
+updated: 2026-08-03
 issue_url: "https://github.com/nextain/naia-adk/issues/18"
 description: |
   Each authorized Discord DM, guild channel, or thread has one provider-neutral
@@ -38,3 +38,4 @@ trace:
 decisions:
   - "Provider-native sessions are not continuity sources; Discord history and local durable metadata are provider-neutral."
   - "Acknowledgement and final delivery are independent from coordinator and worker lifecycle."
+  - "Withdrawn after live operation showed that coordinator, worker, and result-synthesis turns multiplied failure surfaces and lost responses on timeout. New configurations reject activation; dormant code removal is separate."

@@ -1,0 +1,31 @@
+charter_sha256: 7b42fe48ec8f52332c1ab92819a3de50844f5dc9e8324fb7089b1ebf49087635
+planning:
+  reviewers: [plan_final_a, plan_final_b]
+  verdict: CLEAN
+  convergence: "Two independent reviewers accepted the revised minimal plan after coordinator activation, false rollback, foreign-agent inference, and deadline ambiguity were removed."
+development:
+  reviewers: [dev_review_a, dev_review_b]
+  verdict: CLEAN
+  convergence_rounds: 4
+  validated_fixes:
+    - "Quarantine legacy coordinator recovery envelopes."
+    - "Remove the hidden Windows polling loop and require an OS scheduler."
+    - "Separate Gateway freshness, job lifecycle deadlines, child ownership, and historical attention."
+    - "Install and verify the supervisor before the service; quarantine partial failures and verify both identities."
+    - "Propagate Linux quarantine failure and verify Windows persisted disabled state."
+    - "Replace stale approval gates and expose unsupported foreign-agent supervision."
+integration:
+  reviewers: [dev_review_a, dev_review_b]
+  verdict: CLEAN
+  convergence: "Both independent reviewers accepted the latest provenance-bound tree after change-effect, real-symbol trace, partial Windows coverage, and latest-tree validation evidence were corrected."
+validation:
+  targeted_dso_009: "12 passed, 0 failed"
+  routine_approval_policy: PASS
+  entry_points_and_context: PASS
+  build: PASS
+  discord_full: "120 passed, 5 unchanged baseline failures, 2 platform skips"
+  request_contract: "Latest-tree source ledger integrity passed, then release validation stopped at the pre-existing stale RCI-001 review-scope receipt (2026-07-14-round-1); no 183-check claim is made for this tree"
+delivery: REVIEW_ONLY
+residual_limits:
+  - "Native Windows Task Scheduler reboot evidence is unavailable on this Linux host; DSO-009 remains active, not verified."
+  - "Immutable last-known-good code rollback remains a separate design because current launchers execute a mutable checkout."

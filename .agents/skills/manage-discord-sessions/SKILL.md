@@ -45,6 +45,7 @@ Run from the skill directory or use the absolute skill path:
 
 ```bash
 scripts/manage-discord-sessions.sh status [--json]
+scripts/manage-discord-sessions.sh health-check [--json]
 scripts/manage-discord-sessions.sh jobs [--active|--failed] [--json]
 scripts/manage-discord-sessions.sh job <job-id> [--events] [--json]
 scripts/manage-discord-sessions.sh watch [--job <job-id>] [--jsonl]
@@ -121,7 +122,7 @@ The real config and all session state are local and ignored by Git. Only `config
 
 Put the referenced Discord token in `naia-settings/.keys/messenger-sessions/<credentialRef>` with mode `0600`. The config itself must also be mode `0600`. Choose `backend.selected` as `codex` or `claude`; no Naia Agent or Naia Shell installation is required.
 
-Set `runtime.approvalPolicy` to `never` for unattended Discord work and change `runtime.permissionProfileEpoch` whenever the parent execution profile changes. The helper compares this profile before recovery or queued launch, discards stale command options, and creates a new child only from the current profile. A changed no-prompt profile may replace a prior guarded mutation attempt; an unchanged mutation recovery still requires review. `noProgressInterventionSeconds` bounds one owned-child abort after silence. A Discord acknowledgement is best-effort telemetry and never gates work. Set `runtime.conversationCoordinator` to `true` to use the provider-neutral local scope coordinator: it runs short read-only decision turns and delegates bounded work to an independent worker lane. The child workspace must be an absolute real directory and is passed as both process cwd and Codex `--cd`; relative or ambient caller workdirs are rejected.
+The real config must set `runtime.approvalPolicy` explicitly to `never`; `managed`, omission, and every other value are rejected because nobody is available to click an unattended approval prompt. Change `runtime.permissionProfileEpoch` whenever the parent execution profile changes. Actions listed in `role.requiresApproval` are removed from the effective unattended action set, so `allowedActions` cannot silently grant mutation access that still requires approval. The helper compares the execution profile before recovery or queued launch, discards stale command options, and creates a new child only from the current profile. A changed no-prompt profile may replace a prior guarded mutation attempt; an unchanged mutation recovery still requires review. `noProgressInterventionSeconds` bounds one owned-child abort after silence. A Discord acknowledgement is best-effort telemetry and never gates work. The experimental conversation coordinator is withdrawn: configs with `runtime.conversationCoordinator: true` are rejected, and direct bounded execution remains the supported path. The child workspace must be an absolute real directory and is passed as both process cwd and Codex `--cd`; relative or ambient caller workdirs are rejected.
 
 Guild and thread bindings default to `respondWhen: "mentioned"`. A binding may
 use `respondWhen: "always"` only with `discord.messageContentIntent: true` and a
@@ -153,6 +154,11 @@ creation, it installs an owner-only hidden per-user Startup launcher instead;
 the verified registration actually installed. It also installs `naia.cmd` in
 the interactive user path. After changing `backend.selected`, run `service
 install` again rather than only restarting so the new executable is pinned.
+The independent supervisor is stricter: Linux requires its separate timer and
+Windows requires a verified least-privilege one-minute Task Scheduler task.
+Supervisor registration is verified before the main service starts; failure
+quarantines the main registration rather than leaving an unsupervised service.
+`service status` verifies both identities.
 
 Backend completion is fail-closed. Provider records with an absent or
 `unknown` result are not promoted to success and are not delivered to Discord.
@@ -166,15 +172,15 @@ Backend completion is fail-closed. Provider records with an absent or
 5. Treat DM, guild channel, and thread bindings as separate authorization and conversation scopes.
 6. Never automatically resend `delivery_unknown` after restart.
 
-## Continuous curation contract
+## Continuous monitoring contract
 
 When the user explicitly assigns periodic or continuous Discord monitoring:
 
-1. Register the assignment as an active goal with the available goal mechanism, including the user's release or completion condition.
-2. Do not send a final response while that goal remains active; keep curating until the user releases it or the stated completion condition is verified.
-3. Read the channel's original messages and durable ledger directly. Never infer channel health from bot replies alone.
-4. Delegate bounded development or incident work while the curator continues intake, prioritization, progress reporting, and response verification.
-5. After context compaction, re-read the active goal before continuing.
+1. Never represent polling performed inside an interactive AI turn as durable monitoring. A turn, context window, or delegated agent can end without notice to Discord.
+2. Install the Discord service and its independent deterministic supervisor. The supervisor runs every 60 seconds outside both the model turn and Discord process, reads SQLite without writing it, and atomically updates only `supervisor-status.json`.
+3. Use `health-check --json` or the supervisor snapshot to distinguish stopped/stale service, overdue active work, historical attention, and unknown Gateway evidence. A fresh process heartbeat alone is not proof that accepted work is healthy.
+4. The supervisor never sends, replays, restarts, mutates the ledger, or claims continuous curation. Recovery remains an explicit operator action except for the service manager's existing process restart policy.
+5. Collaboration subagents are outside this harness and have no receipt interface. Status reports `foreignAgentSupervision=unsupported`; reconcile their actual lifecycle directly before describing them as active or relying on their output.
 
 ## Safety boundaries
 

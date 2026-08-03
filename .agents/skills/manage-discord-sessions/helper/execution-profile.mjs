@@ -2,12 +2,14 @@ import { safeIdentifier } from "./sanitize.mjs";
 
 const AUTHORIZATION_MODES = new Set(["managed", "never"]);
 
-function requestedMutation(config) {
-	return config.role.allowedActions.includes("write") || config.role.allowedActions.includes("execute");
+export function effectiveAllowedActions(config) {
+	const requiresApproval = new Set(config.role.requiresApproval ?? []);
+	return config.role.allowedActions.filter((action) => !requiresApproval.has(action));
 }
 
-function roleRequiresApproval(config) {
-	return config.role.requiresApproval?.includes("write") || config.role.requiresApproval?.includes("execute");
+function requestedMutation(config) {
+	const actions = effectiveAllowedActions(config);
+	return actions.includes("write") || actions.includes("execute");
 }
 
 function validExecutionProfile(profile) {
@@ -22,7 +24,7 @@ function validExecutionProfile(profile) {
 
 export function currentExecutionProfile(config, backendId) {
 	if (!new Set(["codex", "claude"]).has(backendId)) throw new Error("unsupported execution backend");
-	const authorizationMode = config.runtime?.approvalPolicy ?? (roleRequiresApproval(config) ? "managed" : "never");
+	const authorizationMode = config.runtime?.approvalPolicy ?? "never";
 	if (!AUTHORIZATION_MODES.has(authorizationMode)) throw new Error("unsupported execution approval policy");
 	const permissionProfileEpoch = config.runtime?.permissionProfileEpoch ?? "default";
 	safeIdentifier(permissionProfileEpoch, "permissionProfileEpoch");
