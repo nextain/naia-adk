@@ -7,7 +7,6 @@ import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-p
 import { assertOwnerOnly, protectOwnerOnly, trustedWindowsSystemExecutable } from "./platform-security.mjs";
 import { observeOwnedProcess } from "./projector.mjs";
 import { SessionStore } from "./store.mjs";
-import { acquireDiscordArtifactOperationLock } from "./cutover-bundle.mjs";
 import { installOperatorLauncher, windowsBatchPath } from "./service-manager-launcher.mjs";
 import { installSupervisedPair, resolveBackendExecutable } from "./service-manager-shared.mjs";
 
@@ -70,7 +69,7 @@ function runSchtasks(args, { allowMissing = false } = {}) {
 }
 
 const WINDOWS_TASK_ABSENT_STATUS = 3;
-const WINDOWS_TASK_QUERY_SCRIPT = "$ErrorActionPreference='Stop';try{$service=New-Object -ComObject 'Schedule.Service';$service.Connect();$folder=$service.GetFolder('\\');$task=$folder.GetTask($args[0]);[Console]::Out.Write($task.Xml);exit 0}catch [System.Runtime.InteropServices.COMException]{if($_.Exception.HResult -eq -2147024894){exit 3};exit 4}catch{exit 4}";
+const WINDOWS_TASK_QUERY_SCRIPT = "$ErrorActionPreference='Stop';try{$service=New-Object -ComObject 'Schedule.Service';$service.Connect();$folder=$service.GetFolder('\\');$task=$folder.GetTask($env:NAIA_DISCORD_TASK_QUERY_NAME);[Console]::Out.Write($task.Xml);exit 0}catch{if($_.Exception.HResult -eq -2147024894){exit 3};exit 4}";
 
 export function classifyWindowsTaskQuery({ status, output = "" } = {}) {
 	if (status === WINDOWS_TASK_ABSENT_STATUS) return { state: "absent", output: "" };
@@ -81,7 +80,11 @@ export function classifyWindowsTaskQuery({ status, output = "" } = {}) {
 function queryWindowsTask(taskName) {
 	if (typeof taskName !== "string" || !/^NaiaDiscordSessions-[a-f0-9]{12}(?:-Supervisor)?$/.test(taskName)) throw new Error("Windows Discord task name is invalid");
 	const powershell = trustedWindowsSystemExecutable("WindowsPowerShell", "v1.0", "powershell.exe");
-	const result = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_TASK_QUERY_SCRIPT, taskName], { encoding: "utf8", windowsHide: true });
+	const result = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_TASK_QUERY_SCRIPT], {
+		encoding: "utf8",
+		env: { ...process.env, NAIA_DISCORD_TASK_QUERY_NAME: taskName },
+		windowsHide: true,
+	});
 	return classifyWindowsTaskQuery({ status: result.status, output: result.stdout || "" });
 }
 
@@ -125,7 +128,7 @@ function installWindowsSupervisor(adkRoot, instance, paths) {
 	const node = windowsBatchPath(process.execPath, "Node executable");
 	const supervisor = windowsBatchPath(resolve(adkRoot, ".agents/skills/manage-discord-sessions/helper/supervisor.mjs"), "supervisor entry");
 	const onceLauncher = resolve(stateDirectory, "supervisor-once.cmd");
-	writeFileSync(onceLauncher, `@echo off\r\n"${node}" "${supervisor}" --adk-root "${root}" --instance "${instance}"\r\n`, "utf8");
+	writeFileSync(onceLauncher, `@echo off\r\nset "NAIA_DISCORD_LAUNCH_MODE=direct"\r\n"${node}" "${supervisor}" --adk-root "${root}" --instance "${instance}"\r\n`, "utf8");
 	protectOwnerOnly(onceLauncher, "file", "Windows Discord supervisor launcher");
 	const taskName = windowsSupervisorTaskName(adkRoot, instance);
 	const created = runSchtasks(["/Create", "/TN", taskName, "/TR", quoteWindowsTaskAction(onceLauncher), "/SC", "MINUTE", "/MO", "1", "/RL", "LIMITED"], { allowMissing: true });
@@ -375,21 +378,21 @@ export function manageWindowsService({ adkRoot, command, instance = "default" })
 	const config = command === "install" ? loadMessengerConfig(paths.configPath) : null;
 	const backendExecutables = command === "install" ? { [config.backend.selected]: resolveWindowsBackendCommand(config.backend.selected) } : {};
 	const taskName = windowsTaskName(adkRoot, normalizedInstance);
-	const artifactOperation = command === "install" ? acquireDiscordArtifactOperationLock({ adkRoot, instance: normalizedInstance }) : null;
 	if (command === "install") {
-		try {
-			const existingMainRegistration = inspectWindowsRegistration(adkRoot, normalizedInstance, paths);
-			const existingSupervisorRegistration = windowsSupervisorRegistrationExists(adkRoot, normalizedInstance);
-			if (existingMainRegistration !== null || existingSupervisorRegistration) throw new Error("existing Windows Discord service or supervisor registration requires a versioned cutover, which is not supported");
-			const launcherPath = installOperatorLauncher(adkRoot);
-			const pair = installSupervisedPair({
-				installSupervisor: () => installWindowsSupervisor(adkRoot, normalizedInstance, paths),
-				installService: (supervisor) => installWindowsService(adkRoot, normalizedInstance, paths, config, backendExecutables, supervisor),
-				quarantinePair: () => quarantineWindowsService(adkRoot, normalizedInstance, paths),
-			});
-			const installed = pair.service;
-			return `installed ${installed.registration} ${installed.startupLauncher ?? installed.taskName}, supervisor ${installed.supervisor.registration}, and ${launcherPath}`;
-		} finally { artifactOperation.release(); }
+		// Versioned runtime artifacts and their kernel-flock operation lock are
+		// Linux-only. Windows rejects upgrades when a registration already
+		// exists, so a first install must not enter the Linux cutover lock path.
+		const existingMainRegistration = inspectWindowsRegistration(adkRoot, normalizedInstance, paths);
+		const existingSupervisorRegistration = windowsSupervisorRegistrationExists(adkRoot, normalizedInstance);
+		if (existingMainRegistration !== null || existingSupervisorRegistration) throw new Error("existing Windows Discord service or supervisor registration requires a versioned cutover, which is not supported");
+		const launcherPath = installOperatorLauncher(adkRoot);
+		const pair = installSupervisedPair({
+			installSupervisor: () => installWindowsSupervisor(adkRoot, normalizedInstance, paths),
+			installService: (supervisor) => installWindowsService(adkRoot, normalizedInstance, paths, config, backendExecutables, supervisor),
+			quarantinePair: () => quarantineWindowsService(adkRoot, normalizedInstance, paths),
+		});
+		const installed = pair.service;
+		return `installed ${installed.registration} ${installed.startupLauncher ?? installed.taskName}, supervisor ${installed.supervisor.registration}, and ${launcherPath}`;
 	}
 	if (command === "status") {
 		const registration = inspectWindowsRegistration(adkRoot, normalizedInstance, paths);

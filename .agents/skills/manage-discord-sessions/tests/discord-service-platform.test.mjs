@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { discordUnitIdentity, renderDiscordUserUnit } from "../helper/systemd.mjs";
-import { classifyWindowsStopObservation, cutoverRegistrationRestoreCommands, inspectCutoverRuntimeTree, installOperatorLauncher, installServiceCommands, normalizeCutoverRegistrationState, quoteWindowsTaskAction, readCutoverSourceConfig, readCutoverSourceSnapshot, renderOperatorLauncher, renderWindowsStartupLauncher, resolveBackendExecutable, resolveCutoverBackendExecutables, resolveWindowsBackendCommand, restartWindowsTask, sampleWindowsStopObservation, verifyCutoverSourceIdentity, verifyCutoverSourceSnapshot, verifyWindowsTaskAction, windowsOperatorProbeArguments } from "../helper/service-manager.mjs";
+import { classifyWindowsStopObservation, cutoverRegistrationRestoreCommands, inspectCutoverRuntimeTree, installOperatorLauncher, installServiceCommands, normalizeCutoverRegistrationState, quoteWindowsTaskAction, readCutoverSourceConfig, readCutoverSourceSnapshot, renderOperatorLauncher, renderWindowsStartupLauncher, resolveBackendExecutable, resolveCutoverBackendExecutables, resolveWindowsBackendCommand, restartWindowsTask, sampleWindowsStopObservation, verifyCutoverSourceIdentity, verifyCutoverSourceSnapshot, verifyWindowsTaskAction } from "../helper/service-manager.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "../helper/instance-paths.mjs";
 import { classifyDiscordServiceFailure, writeDiscordServiceFailure } from "../helper/service.mjs";
 import { observeOnce } from "../helper/supervisor.mjs";
@@ -248,12 +248,6 @@ test("DSG-008 POSIX operator launcher remains owner-executable after hardening",
 	assert.equal(statSync(launcher).mode & 0o777, 0o700);
 	assert.doesNotThrow(() => accessSync(launcher, fsConstants.X_OK));
 	assert.equal(spawnSync(launcher, ["service", "unit"]).status, 0);
-});
-
-test("DSG-008 Windows operator probe preserves a quoted executable boundary", () => {
-	assert.deepEqual(windowsOperatorProbeArguments("C:\\Program Files\\Naia Workspace\\naia.cmd"), [
-		"/d", "/s", "/c", '""C:\\Program Files\\Naia Workspace\\naia.cmd" service unit"',
-	]);
 });
 
 test("DSG-008 Windows operator launcher passes its native execution probe", { skip: process.platform !== "win32" }, () => {

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { acquireDiscordArtifactOperationLock, createManagedRuntimeArtifact, listManagedDiscordArtifacts, pruneManagedDiscordArtifacts, validateConfigWithRuntime, verifyLinuxLegacyRegistration, verifyLinuxLegacyRegistrationBinding, verifyLinuxManagedRegistration } from "../helper/cutover-bundle.mjs";
-import { verifyManagedServiceRuntimeEnvironment } from "../helper/service.mjs";
+import { runtimeLaunchForEntrypoint, verifyManagedServiceRuntimeEnvironment } from "../helper/service.mjs";
 import { SessionStore } from "../helper/store.mjs";
 import { authorizeManagedServiceInstall, classifyWindowsTaskQuery, removeUnreferencedManagedRuntimeArtifact, verifyLinuxInstallOutcome } from "../helper/service-manager.mjs";
 import { messengerInstancePaths } from "../helper/instance-paths.mjs";
@@ -99,6 +99,16 @@ test("managed install runtime stays immutable and mutable checkout B cannot impe
 
 	writeFileSync(join(artifact.runtimePath, "helper/service.mjs"), "\n// artifact tamper\n", { flag: "a" });
 	assert.throws(() => verifyManagedServiceRuntimeEnvironment({ environment, runtimePath: artifact.runtimePath }), /startup_or_runtime_failure/);
+});
+
+test("Windows generated launchers may enter the explicit direct runtime boundary", () => {
+	assert.equal(runtimeLaunchForEntrypoint({ NAIA_DISCORD_LAUNCH_MODE: "direct" }, "win32"), "direct");
+	assert.equal(runtimeLaunchForEntrypoint({}, "win32"), "environment");
+	assert.equal(runtimeLaunchForEntrypoint({ NAIA_DISCORD_LAUNCH_MODE: "direct" }, "linux"), "environment");
+	const windowsSource = readFileSync(join(SKILL_ROOT, "helper/service-manager-windows.mjs"), "utf8");
+	const supervisorSource = readFileSync(join(SKILL_ROOT, "helper/supervisor.mjs"), "utf8");
+	assert.match(windowsSource, /supervisor-once\.cmd[\s\S]*NAIA_DISCORD_LAUNCH_MODE=direct/);
+	assert.match(supervisorSource, /process\.platform === "win32"[\s\S]*NAIA_DISCORD_LAUNCH_MODE === "direct"/);
 });
 
 test("managed preflight rejects a tampered imported helper before its top-level code can execute", () => {
@@ -247,6 +257,7 @@ test("Windows autoStart false first install creates only a disabled Startup fall
 	const launcherInstall = installBranch.indexOf("installOperatorLauncher");
 	assert.ok(mainInspection >= 0 && supervisorInspection > mainInspection && launcherInstall > supervisorInspection);
 	assert.match(installBranch, /existing Windows Discord service or supervisor registration requires a versioned cutover/);
+	assert.doesNotMatch(source, /acquireDiscordArtifactOperationLock/);
 	assert.doesNotMatch(source, /"\/F"/);
 	assert.match(manage, /containWindowsTask\(\{ taskName, disable: true/);
 });
@@ -258,6 +269,7 @@ test("Windows task queries distinguish confirmed absence from every other failur
 	assert.throws(() => classifyWindowsTaskQuery({ status: 0, output: "" }), /query failed/);
 	const source = readFileSync(fileURLToPath(new URL("../helper/service-manager-windows.mjs", import.meta.url)), "utf8");
 	assert.match(source, /HResult -eq -2147024894/);
+	assert.match(source, /NAIA_DISCORD_TASK_QUERY_NAME/);
 	assert.match(source, /queryWindowsTask\(taskName\)/);
 });
 

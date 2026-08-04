@@ -5,7 +5,7 @@ import { manageLinuxService } from "./service-manager-linux.mjs";
 import { manageWindowsService } from "./service-manager-windows.mjs";
 
 export { installSupervisedPair, resolveBackendExecutable } from "./service-manager-shared.mjs";
-export { installOperatorLauncher, renderOperatorLauncher, windowsOperatorProbeArguments } from "./service-manager-launcher.mjs";
+export { installOperatorLauncher, renderOperatorLauncher } from "./service-manager-launcher.mjs";
 export {
 	classifyWindowsStopObservation,
 	classifyWindowsTaskQuery,
