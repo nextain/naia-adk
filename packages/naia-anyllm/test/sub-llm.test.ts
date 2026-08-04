@@ -23,7 +23,7 @@ describe("loadSubLlmConfig — shared config 해석", () => {
 		expect(loadSubLlmConfig("/ws", { fs: fakeFs({}) })).toBeNull()
 	})
 
-	it("naia provider = 게이트웨이 baseUrl + NAIA_ANYLLM_API_KEY", () => {
+	it("naia provider = 게이트웨이 baseUrl + canonical NAIA_KEY", () => {
 		const fs = fakeFs({
 			"/ws/naia-settings/config.json": JSON.stringify({
 				memoryLlmProvider: "naia",
@@ -31,13 +31,24 @@ describe("loadSubLlmConfig — shared config 해석", () => {
 				naiaGatewayUrl: "https://gw.example/v1",
 			}),
 		})
-		const cfg = loadSubLlmConfig("/ws", { fs, env: { NAIA_ANYLLM_API_KEY: "nk" } as NodeJS.ProcessEnv })
+		const cfg = loadSubLlmConfig("/ws", {
+			fs,
+			env: { NAIA_KEY: "nk", NAIA_API_KEY: "alias", NAIA_ANYLLM_API_KEY: "legacy" } as NodeJS.ProcessEnv,
+		})
 		expect(cfg).toEqual({
 			provider: "naia",
 			baseUrl: "https://gw.example/v1",
 			model: "gemini-3.1-flash-lite",
 			apiKey: "nk",
 		})
+	})
+
+	it("naia provider accepts compatibility key aliases", () => {
+		const fs = fakeFs({
+			"/ws/naia-settings/config.json": JSON.stringify({ memoryLlmProvider: "naia", memoryLlmModel: "m" }),
+		})
+		expect(loadSubLlmConfig("/ws", { fs, env: { NAIA_API_KEY: "api-alias" } as NodeJS.ProcessEnv })?.apiKey).toBe("api-alias")
+		expect(loadSubLlmConfig("/ws", { fs, env: { NAIA_ANYLLM_API_KEY: "legacy" } as NodeJS.ProcessEnv })?.apiKey).toBe("legacy")
 	})
 
 	it("ollama provider = memoryLlmBaseUrl + NAIA_MEMORY_LLM_API_KEY(빈 값 허용)", () => {

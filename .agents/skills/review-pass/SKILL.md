@@ -1,6 +1,6 @@
 ---
 name: review-pass
-version: "3.0"
+version: "3.1"
 description: >
   Stage-gated multi-AI cross-validation review with optional REQ-ID traceability.
   4 stages (planning, development, test, integration) with configurable reviewers,

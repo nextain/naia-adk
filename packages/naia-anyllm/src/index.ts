@@ -4,6 +4,11 @@ import YAML from "yaml"
 import OpenAI from "openai"
 import type { LLMConfig, LLMProvider, LLMMessage, LLMResponse } from "./types.js"
 
+function naiaEndpoint(): string {
+  const base = (process.env.NAIA_BASE_URL || "https://api.nextain.io").replace(/\/$/, "")
+  return base.endsWith("/v1") ? base : base + "/v1"
+}
+
 // Phase 5: sub-LLM 배치 소비 경로(§5.1) 재노출.
 export {
 	loadSubLlmConfig,
@@ -15,9 +20,18 @@ export {
 } from "./sub-llm.js"
 
 const DEFAULT_CONFIG: LLMConfig = {
-  defaultProvider: "any-llm",
-  defaultModel: "claude-sonnet-4-20250514",
+  defaultProvider: "naia",
+  defaultModel: process.env.NAIA_MODEL || "deepseek-v4-flash",
   providers: {
+    naia: {
+      id: "naia",
+      name: "Naia Account",
+      type: "gateway",
+      endpoint: naiaEndpoint(),
+      apiKeyEnv: "NAIA_KEY",
+      models: ["deepseek-v4-flash", "deepseek-v4-pro", "gpt-5.6-luna", "gpt-5.6-sol", "grok-4.3"],
+      defaultModel: process.env.NAIA_MODEL || "deepseek-v4-flash",
+    },
     "any-llm": {
       id: "any-llm",
       name: "Any-LLM Gateway",
@@ -60,7 +74,20 @@ export function loadLLMConfig(root: string): LLMConfig {
   const configPath = path.join(root, ".agents", "context", "llm-config.yaml")
   if (fs.existsSync(configPath)) {
     const raw = fs.readFileSync(configPath, "utf-8")
-    return { ...DEFAULT_CONFIG, ...YAML.parse(raw) }
+    const override = YAML.parse(raw) || {}
+    const providerOverrides = override.providers || {}
+    const providers = { ...DEFAULT_CONFIG.providers }
+    for (const [id, providerOverride] of Object.entries(providerOverrides)) {
+      providers[id] = {
+        ...(DEFAULT_CONFIG.providers[id] || {}),
+        ...(providerOverride as Partial<LLMProvider>),
+      } as LLMProvider
+    }
+    return {
+      ...DEFAULT_CONFIG,
+      ...override,
+      providers,
+    }
   }
   return DEFAULT_CONFIG
 }
@@ -71,6 +98,9 @@ export function getProvider(config: LLMConfig, providerId?: string): LLMProvider
 }
 
 export function getApiKey(provider: LLMProvider): string | undefined {
+  if (provider.id === "naia") {
+    return process.env.NAIA_KEY || process.env.NAIA_API_KEY || process.env.NAIA_ANYLLM_API_KEY
+  }
   return process.env[provider.apiKeyEnv]
 }
 

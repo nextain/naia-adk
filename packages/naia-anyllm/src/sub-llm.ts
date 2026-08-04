@@ -49,12 +49,12 @@ export function loadSubLlmConfig(adkPath: string, deps: SubLlmLoadDeps): SubLlmR
 	if (!provider) return null // "none"/미지정/불명 = 배치 비활성
 	const model = str("memoryLlmModel")?.trim()
 	if (!model) return null // 모델 누락 = 미구성
-	// naia=게이트웨이(baseUrl=naiaGatewayUrl/NAIA_ANYLLM_BASE_URL/기본, key=NAIA_ANYLLM_API_KEY). 그 외=memoryLlmBaseUrl+NAIA_MEMORY_LLM_API_KEY.
+	// naia=게이트웨이(baseUrl=naiaGatewayUrl/NAIA_ANYLLM_BASE_URL/기본, key=NAIA_KEY; legacy aliases accepted). 그 외=memoryLlmBaseUrl+NAIA_MEMORY_LLM_API_KEY.
 	let baseUrl: string | undefined
 	let apiKey: string | undefined
 	if (provider === "naia") {
 		baseUrl = str("naiaGatewayUrl") ?? str("NAIA_ANYLLM_BASE_URL") ?? "https://api.nextain.io"
-		apiKey = env.NAIA_ANYLLM_API_KEY ?? env.NAIA_KEY
+		apiKey = env.NAIA_KEY ?? env.NAIA_API_KEY ?? env.NAIA_ANYLLM_API_KEY
 	} else {
 		baseUrl = str("memoryLlmBaseUrl")
 		apiKey = env.NAIA_MEMORY_LLM_API_KEY

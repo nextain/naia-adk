@@ -1,274 +1,64 @@
-[한국어](AGENTS.md) | [English](AGENTS.en.md)
-
 # Naia ADK
 
-AI Development Kit — 1인 개발자를 위한 개인용 AI 개발 인프라.
-포크하고, 설정하고, 본인의 AI 도구에 연결하세요. [`nextain/naia-adk`](https://github.com/nextain/naia-adk)
+AI development infrastructure for a solo developer. This repository is the
+public base of the fork chain `naia-adk → {org}-adk → {user}-adk`.
 
-**범위(Scope)**: `naia-adk` = 개인 / 1인. 팀 협업 → [`naia-business-adk`](https://nextain.io/adk).
+## Repository Index
 
-## 포크 체인 (Fork Chain)
+- Repository structure, fork rules, and RBAC: `.agents/context/repo-structure-standard.yaml`
+- Work type to workflow routing: `.agents/context/ai-work-index.yaml`
+- Context and subproject index: `.agents/context/project-index.yaml`
+- AI skill index: `.agents/context/skills-index.yaml`
+- Product requirement index: `.agents/requirements/_index.yaml`
+- Fork-specific additions belong in `FORK.md`, not this shared entrypoint.
 
-```
-naia-adk                  ← Base (public, Apache 2.0)
-  └── {org}-adk           ← Organization fork: company data + business submodules
-        └── {user}-adk    ← Personal fork: personal data + project submodules
-```
+## Mandatory Reads
 
-GitHub에서 포크한 뒤, 주기적으로 upstream을 동기화하세요: `git fetch upstream && git merge upstream/main`
+Read these before acting in this repository:
 
-## 필수 읽기 (Mandatory Reads)
+1. `.agents/context/agents-rules.json`
+2. `.agents/context/ai-work-index.yaml`
+3. `.agents/context/project-index.yaml`
+4. `.agents/context/terminology.yaml`
 
-**모든 세션 시작 시 다음 파일들을 읽으세요:**
+When planning or reviewing feature-level work, also read
+`.agents/requirements/_index.yaml` and `.agents/context/skills-index.yaml`.
 
-1. `.agents/context/agents-rules.json` — 프로젝트 규칙 (SoT)
-2. `.agents/context/ai-work-index.yaml` — 작업 유형 → 워크플로우 색인
-3. `.agents/context/project-index.yaml` — 컨텍스트 색인 + 진입점
-4. `.agents/context/terminology.yaml` — 용어 및 소통 정책 (신조어 금지, 기본 평이한 한국어, 학술어/약어는 괄호 병기)
+## Context Routing
 
-**필요 시(Plan 또는 Review 단계 진입 시 읽기):**
+Load only the on-demand context sections selected by
+`.agents/context/project-index.yaml`. Before any action inside a nested
+project, read that project's own entrypoint and mandatory context. A parent
+workspace does not substitute for a nested project's rules.
 
-4. `.agents/requirements/_index.yaml` — 제품 요구사항 색인
-5. `.agents/context/skills-index.yaml` — 스킬 트리거/요약 색인
+Durable repository rules belong in `.agents/context/`. Per-work execution
+evidence and handoff state belong in `.agents/progress/`.
 
-**ctx 온디맨드 섹션 (필요한 것만 로드 — 절대 파일 전체를 로드하지 말 것):**
+## Session Boundaries
 
-`project-index.yaml` → `on_demand_loading`이 사용 가능한 섹션 ID 목록을 제공합니다. 주제별로 로드하세요:
+These shared entrypoints are repository indexes. They do not contain a work
+goal, issue state, implementation sequence, completion claim, or artifact
+wording.
 
-| 필요 | 로드 |
-|------|------|
-| repo 구조 / SDLC / RBAC / 포크 커스터마이징 | `.agents/context/repo-structure-standard.yaml` |
-| 워크플로우 / IDD / 리뷰 교훈 | `.agents/context/lessons-workflow.yaml` |
-| upstream / 포크 / 기여 교훈 | `.agents/context/lessons-upstream.yaml` |
-| 플랫폼 / CI / vLLM / Bazzite 교훈 | `.agents/context/lessons-platform.yaml` |
-| React / IndexedDB / GitHub API 교훈 | `.agents/context/lessons-frontend.yaml` |
-| 문서 추출 (HWP/DOCX/PPTX) | `.agents/context/lessons-documents.yaml` |
-| gstack 비교 (섹션 1-8) | `.agents/context/gstack-comparison.md` |
-| gstack 훅 발견사항 (A-E, F1-F10) | `.agents/context/gstack-hooks.md` |
-| gstack 우선순위 목록 (P0-P3) | `.agents/context/gstack-priority.md` |
-| push 게이팅 (research/dev/service) | `.agents/context/push-policy.yaml` |
+Mutation authority comes from one explicit local contract in
+`.agents/session-contracts/`. The registry pointer, contract digest,
+`session_bindings`, and referenced progress record must agree. Progress
+records do not grant authority, and parent or child projects are never searched
+for an implicit binding. Read-only investigation remains available while
+unbound.
 
-검색용 색인: `.agents/context/.ctx-index.json` (훅이 자동 재생성, gitignore 대상)
+Background context constrains agent work; it is not artifact content unless an
+explicit source atom grants `derive`, `quote`, or `require` authority for
+the declared output audience.
 
-## 프로젝트 구조 (Project Structure)
+## Safety Boundaries
 
-### 워크스페이스 디렉터리
+Follow `.agents/context/agents-rules.json` for authorization, destructive
+actions, external communication, secrets, validation, and lifecycle rules.
+Concurrent contracts must declare non-overlapping `target_ownership` paths.
 
-| 디렉터리 | 계층(Tier) | 용도 |
-|-----------|------|---------|
-| `data-company/` | T2 | 회사 일반 데이터 (gitignore, 포크별) |
-| `data-teams/` | T2 | 팀별 데이터 — 전략, 회계 (gitignore, 포크별) |
-| `data-private/` | T3 | 개인 데이터, env 파일 (gitignore, 포크별) |
-| `projects/` | T2 | 프로젝트 레포 (gitignore, 포크별) |
-| `ref-*/` | T2 | 레퍼런스 레포 — 워크스페이스 루트에 `ref-cline`, `ref-opencode` 등으로 둠 (gitignore, 포크별. `project-index.yaml` 참조) |
-| `skills/` | T1 | 운영/런타임 스킬 (대시보드 API로 제공) |
-| `packages/` | T1 | 런타임 패키지 (pnpm workspace — 10개 활성) |
-| `scripts/` | T1 | 유틸리티 스크립트, 도구 |
-| `templates/` | T1 | 문서 템플릿 |
-| `docs/` | T1 | 아키텍처, 스펙 |
+## Mirrors
 
-**`packages/` (10개):** `core`·`server`·`dashboard`·`skill-spec`·`skills-builtin`·`openclaw-compat`·`persona`·`process`·`naia-anyllm`·`artifacts-spec` (권한(RBAC)·개발 수명주기(SDLC) 산출물 표준 스키마 — 15종 산출물을 JSON Schema로 정의).
-
-### 포크 커스터마이징 (Fork Customization)
-
-포크한 뒤, 포크 루트에 다음 내용을 담은 `FORK.md`를 생성하세요:
-
-- 조직/사용자 정보
-- 프로젝트 목록 (`projects/`의 서브모듈)
-- 데이터 서브모듈 (`data-company/`, `data-teams/`)
-- `.users/` 미러의 기본 언어
-- 포크별 컨벤션
-
-## 개발 프로세스 (Development Process)
-
-### 기능 개발 (기본) — 이슈 기반 개발 (Issue-Driven Development)
-
-기능 단위 작업(신규 기능, 광범위한 버그 수정)용. **14단계:**
-
-1. **Issue** — GitHub 이슈 생성 또는 수령 (영어)
-2. **Understand** — 이해 내용 요약 및 내부 확인 (게이트)
-3. **Scope** — 조사 범위/깊이 정의 및 내부 검증 (게이트)
-4. **Investigate** — 확정된 범위 내 코드 중심 조사
-5. **Plan** — 모든 발견사항 기반 종합 계획 및 내부 검증 (게이트)
-6. **Build** — 승인된 계획에 따라 구현
-7. **Review** — 반복 리뷰 (연속 2회 무결 통과까지 반복) → `/verify-implementation` 실행
-8. **E2E Test** — 실제 앱/서버 실행, 타깃 테스트 먼저 후 전체 스위트
-9. **Post-test Review** — 테스트 통과 후 재리뷰 (연속 2회 무결 통과까지 반복) → `/verify-implementation` 실행
-10. **Sync** — 저장소 문서·사용자 사용법·재사용 학습 자료 영향을 각각 `UPDATED` 또는 근거 있는 `N/A`로 판정해 이슈별 증적에 기록 → `.agents/` + `.users/` 컨텍스트 업데이트 → `/manage-skills` 실행 → 내부 확인 (게이트)
-11. **Sync Verify** — 문서 영향 증적과 컨텍스트 정확성 검증 (연속 2회 무결 통과까지 반복)
-12. **Report** — 결과를 사용자에게 요약
-13. **Commit** — 워크트리 작업 시: `/merge-worktree` 사용. 그 외: 이슈 번호를 참조한 커밋, PR 생성
-14. **Close** — 단계별 완료 보고를 이슈 코멘트로 + 내부 확인 (게이트)
-
-**게이트 권한 규칙:** 범위가 정해진 사용자 요청에서는 Understand, Scope, Plan, Sync, Close가 실행 중 내부 체크포인트다. 이 단계 진입만을 이유로 사용자에게 재확인이나 승인 클릭을 요구하지 않는다. 원래 요청의 범위를 실질적으로 바꾸는 미해결 선택, 파괴적 작업, 비용 발생, 외부 발송처럼 별도 권한이 필요한 예외가 있을 때만 질문한다.
-
-**일상 작업 권한:** 범위가 정해진 요청은 읽기 전용 조사, 범위 내 개발·문서화·테스트·빌드, 비파괴적 fetch/pull/merge/rebase/commit 및 non-force push까지 정상 실행 경로를 승인한 것으로 본다. 이 권한은 서브에이전트와 재개 세션에도 그대로 전달하며 같은 작업을 다시 승인받지 않는다. 자료 삭제·복구 불가능한 변경, force push·이력 재작성, 무관한 이력 강제 병합, 요청하지 않은 외부 연락, 비용 발생, 운영 파괴 변경, 실질적 범위 확장만 별도 권한이 필요한 예외다. 도구 자체의 권한 창은 플랫폼 제어일 뿐 사용자에게 대화형 승인을 다시 요구할 이유가 아니다.
-
-**반복 리뷰는 5개 지점에 적용됩니다:** Plan 이후, 각 Build 단계 이후, 모든 Build 단계 이후, E2E Test 이후, Sync 이후.
-
-**원칙:** upstream 코드를 먼저 읽기. 최소한의 수정. 동작하는 코드를 절대 깨뜨리지 말 것. 개선은 제안하되, 단독으로 결정하지 말 것.
-
-**진행 파일 (필수):** 모든 단계 전환 시점에 `.agents/progress/{issue-slug}.json`을 작성/갱신하세요.
-
-**문서 영향 증적 (필수):** 프로덕션 변경은 세 독자층(`repository_docs`, `user_manual`, `reusable_learning`)을 빠짐없이 판정합니다. `UPDATED`는 이번 변경 파일 또는 변경 불가능한 외부 커밋 URL을, `N/A`는 구체적인 비적용 근거를 남깁니다. 새 프로젝트와 템플릿으로 마이그레이션한 프로젝트는 로컬 훅과 CI가 불완전한 이슈별 JSON 증적을 차단합니다. 기존 프로젝트는 저장소별 source glob·receipt 경로·훅·테스트를 이식하기 전까지 workflow 정책으로 검사하며, 자동 강제라고 주장하지 않습니다.
-
-### 모든 세션 종료 시 (필수)
-
-세션을 종료하기 전에 항상:
-1. 새 지식으로 컨텍스트 파일 업데이트 (.agents/ ↔ .users/ ↔ 진입점 파일)
-2. 정정이나 실수가 있었다면 교훈(lessons-learned) 기록
-3. 모든 변경사항 커밋 및 푸시
-
-이로써 당신의 학습이 다음 AI 세션으로 전달됩니다.
-
-### 간단한 변경 (경량 사이클)
-
-기능이 아닌 변경: 오타, 설정값, 단순 지시.
-
-## 스킬 (Skills)
-
-디스크에는 **두 개의 스킬 트리**가 있으며, 각기 다른 SoT와 소비자를 가집니다:
-
-| 트리 | SoT 대상 | 소비 주체 | 색인 |
-|------|---------|-------------|-------|
-| `.agents/skills/` | AI 보조 / 워크플로우 스킬 | Claude Code (`.claude/skills/` 포인터 경유) | `.agents/context/skills-index.yaml` |
-| `skills/` | 운영 / 런타임 스킬 | 대시보드 API (`core.discoverSkills()`가 `skills/**/SKILL.md` 스캔) | `/api/skills`로 제공 |
-
-`skills-index.yaml`은 `.agents/skills/` 트리에 대한 사람/AI 요약 색인입니다.
-
-### `.agents/skills/` (Claude Code SoT — `.claude/skills/`의 포인터가 여기를 가리킴)
-
-| 스킬 | 설명 | 관리 |
-|-------|-------------|------------|
-| `review-pass` | 멀티 에이전트 상호검증 리뷰 (4단계) | 자동 (단계 7, 9) |
-| `verify-implementation` | 모든 `verify-*` 스킬 실행, 통합 리포트 생성 | 자동 (단계 7, 9) |
-| `verify-contract-conformance` | 선언된 API/인터페이스 계약 vs 구현 검증 | 자동 |
-| `verify-request-contract` | 원요청 source→증거·권한·2회 Clean·Claude Code/Codex 동등성 검증 | 자동 |
-| `verify-product-preservation` | 기준 버전 대비 제품 표면·vendor provenance·파괴 변경 권한·release gate 검증 | 자동 |
-| `verify-benchmark-contract` | 벤치 스키마·공급자 영수증·HMAC/DPAPI 저널·분석 증거 검증 | 자동 |
-| `manage-skills` | 변경 분석, `verify-*` 스킬 생성/업데이트 | 자동 (단계 10) |
-| `merge-worktree` | 시맨틱 커밋으로 워크트리 → main 스쿼시 머지 | 수동 (단계 13) |
-| `read-doc` | HWP/PDF/DOCX/XLSX/PPTX 텍스트 추출 | 수동 |
-| `webapp-testing` | 로컬 웹 앱 Playwright E2E 테스트 | 수동 |
-| `doc-coauthoring` | 구조화 문서 공동작성 (3단계) | 수동 |
-| `project-create` | 템플릿으로부터 신규 프로젝트 레포 scaffold | 수동 |
-| `project-migration` | 디렉터리를 자체 레포로 분리 / 하네스 강화 | 수동 |
-| `migrate-ctx` | 컨텍스트 파일을 현재 표준으로 마이그레이션 | 수동 |
-| `payroll` | 급여명세서 PDF + 이메일 발송 | 수동 |
-| `press-release` | 보도자료 작성, 아웃리치, 배포 | 수동 |
-| `patent-draft` | KIPO 양식 특허 명세서 초안 작성 | 수동 |
-| `patent-pipeline` | AI 특허 발굴, 평가, 출원 | 수동 |
-| `copyright-reg` | 저작권 등록 서류 생성 | 수동 |
-| `weekly-report` | git 커밋 기반 주간 업무 보고 | 수동 |
-| `finetune-persona` | 페르소나 fine-tune 자산 준비 | 수동 |
-| `secret-vault` | age 암호화 시크릿 볼트 열기/수정/재잠금 | 수동 |
-| `youtube-upload` | YouTube Data API v3로 영상 업로드 (자막·썸네일 포함) | 수동 |
-
-### `skills/` (운영 트리 — 대시보드 API가 스캔)
-
-| 스킬 | 설명 |
-|-------|-------------|
-| `email` | SMTP 어댑터 기반 이메일 발송 (템플릿 지원) |
-| `sms` | 게이트웨이 어댑터 기반 SMS / 알림톡 발송 |
-| `notify` | 채널 비종속 알림 발송 |
-| `channel-management` | Discord/Slack 채널 관리 — 생성, 보관, 알림, 요약 |
-| `service-management` | 배포 서비스 모니터링 — 가동시간, 비용, 장애 대응 |
-| `web-monitoring` | 웹 프레즌스 모니터링 — SEO, 가동시간, 애널리틱스 |
-| `document-generation` | 브랜드 PDF 생성 (계약서, 결의서, 급여명세서) |
-| `read-doc` | HWP/HWPX/PDF/DOCX/XLSX/PPTX 텍스트 추출 |
-| `doc-coauthoring` | 구조화 문서 공동작성 (3단계) |
-| `review-pass` | 멀티 에이전트 상호검증 리뷰 (4단계) |
-| `verify-request-contract` | 원요청 무결성 하네스 결정론 검증 |
-| `config` | 설정값 읽기 또는 업데이트 |
-| `cron` | 반복 / 1회성 스킬 호출 스케줄링 |
-| `diagnostics` | 시스템 진단 — 헬스, 리소스, 네트워크 |
-| `system-status` | 상위 수준 OS / 런타임 상태 |
-| `sessions` | 과거 대화 세션 조회/요약 (읽기 전용) |
-| `memo` | 장기 기억에 메모 작성 |
-| `skill-manager` | 스킬 카탈로그 관리 — 목록, 신뢰 레포에서 설치 |
-| `time` | 임의 타임존의 현재 시각 조회 |
-| `weather` | 특정 위치의 현재 날씨 또는 예보 조회 |
-
-> `read-doc`, `doc-coauthoring`, `review-pass`는 **양쪽** 트리에 모두 존재합니다. 대시보드
-> API는 `skills/` 쪽 사본만 인식합니다(그 glob은 `.agents/` 안으로 내려가지 않음).
-
-비즈니스/조직 레이어(`naia-business-adk`)는 이들을 팀 소유권, 위임 승인,
-조직별 추가 스킬로 확장합니다 — 다만 위에 나열된 스킬들은 본 베이스 레포에 포함되어
-제공됩니다.
-
-## 레포지토리 구조 표준 (Repository Structure Standard)
-
-레포별 문서화, SDLC 산출물 라이프사이클, RBAC 계층, 멀티 프로젝트 관리, 포크 커스터마이징 규칙.
-
-**SoT**: `.agents/context/repo-structure-standard.yaml`
-**사람용 미러 (한국어)**: `.users/context/repo-structure-standard.md`
-
-다루는 범위: 레포 유형(`workspace_adk` / `runtime_library` / `app_os`) · 미러 패턴(dual/triple/split) · 하네스 동기화 · `.agents/progress/` 라이프사이클 · T0~T3 RBAC 계층 + `naia-business-adk` 확장 지점 · 멀티 프로젝트 블로킹 규칙 · 포크 오버라이드 메커니즘.
-
-**포크 커스터마이징**: 포크 루트에 `overrides:` 섹션을 담은 `FORK.md`를 생성. 우선순위: naia-adk 기본값 → naia-business-adk 추가 → {org}-adk FORK.md → {user}-adk FORK.md (최우선).
-
----
-
-## 디렉터리 구조 (이중 디렉터리 아키텍처)
-
-```
-.agents/                    # AI-optimized (English, token-efficient)
-├── context/
-│   ├── agents-rules.json   # Main rules (SoT) ← mandatory read
-│   └── ai-work-index.yaml  # Work index ← mandatory read
-├── workflows/              # Development workflows
-├── skills/                 # Skill definitions (SoT)
-├── hooks/                  # AI session hooks
-└── requirements/           # Product requirements
-
-.users/                     # Human-readable mirror
-├── context/                # .agents/ mirror in Markdown
-├── workflows/
-└── skills/                 # .agents/skills/ mirror
-
-.claude/                    # Claude Code configuration
-├── settings.json           # Hooks registration
-├── hooks/                  # lifecycle hooks (Pre/PostToolUse 포함)
-└── skills/                 # Pointers → .agents/skills/
-```
-
-## 핵심 원칙 (Core Principles)
-
-1. **부분 미러링**: `.users/`는 사람이 읽어야 할 핵심 문서를 `.agents/`에서 미러합니다(전체 복제가 아니며, 스킬 등 일부는 `.agents/` 쪽만 있습니다)
-2. **SoT**: `.agents/context/agents-rules.json`이 단일 진실 공급원입니다
-3. **응답 언어**: 기여자가 선호하는 언어
-
-## 캐스케이드 규칙 (컨텍스트 전파)
-
-컨텍스트가 변경되면 관련 모듈로 전파하세요.
-
-| 트리거 | 전파 대상 |
-|---------|-------------|
-| 규칙 파일 변경 | `.users/` 미러 |
-| 진입점 파일 변경 | `AGENTS.md` ↔ `CLAUDE.md` ↔ `GEMINI.md` (동일하게 유지) |
-
-**순서**: self → parent → siblings → children → mirror
-
-## 컨벤션 (Conventions)
-
-- **개발**: 이슈 기반 개발 (기본). 적용 가능한 곳에서는 TDD.
-- **언어**: Git/공유(커밋, 이슈, PR) → 영어. 개인 메모 → 어떤 언어든.
-- **라이선스**: Apache 2.0
-
-## 라이선스 (License)
-
-```
-Copyright 2026 Nextain Inc.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-```
+`AGENTS.md` is canonical. `CLAUDE.md` and `GEMINI.md` must be
+byte-identical mirrors. Validate the candidate before synchronization with
+`node .claude/hooks/sync-entry-points.js --check`.

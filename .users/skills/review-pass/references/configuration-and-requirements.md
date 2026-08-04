@@ -58,27 +58,27 @@ stages:
     roles: [source_fidelity, baseline_preservation, implementation_test, authority_release]
     arbiter: null
     convergence: 2
-    lenses: [source_fidelity, design_coherence, feasibility, preservation_setup]
-    lenses_no_req: [source_fidelity, design_coherence, feasibility, preservation_setup]
+    lenses: [source_fidelity, design_coherence, feasibility, preservation_setup, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses_no_req: [source_fidelity, design_coherence, feasibility, preservation_setup, context_output_separation, audience_surface_fit, unjustified_product_surface]
   development:
     reviewers: [gemini, opencode, codex]
     arbiter: claude  # MUST NOT be in reviewers — orchestrator auto-resolves
     convergence: 2
-    lenses: [correctness, completeness, consistency, pattern_compliance, req_to_code, structural_complexity]
-    lenses_no_req: [correctness, completeness, consistency, pattern_compliance, structural_complexity]
+    lenses: [correctness, completeness, consistency, pattern_compliance, req_to_code, structural_complexity, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses_no_req: [correctness, completeness, consistency, pattern_compliance, structural_complexity, context_output_separation, audience_surface_fit, unjustified_product_surface]
   test:
     reviewers: [gemini, opencode]
     arbiter: null
     convergence: 2
-    lenses: [test_validity, coverage, assertion_quality, req_to_test, test_structure]
-    lenses_no_req: [test_validity, coverage, assertion_quality, test_structure]
+    lenses: [test_validity, coverage, assertion_quality, req_to_test, test_structure, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses_no_req: [test_validity, coverage, assertion_quality, test_structure, context_output_separation, audience_surface_fit, unjustified_product_surface]
   integration:
     reviewers: []  # empty means schedule roles from any available adapter; distinct provider/model preferred
     roles: [source_fidelity, baseline_preservation, implementation_test, authority_release]
     arbiter: null  # all tools are independent roles; user resolves semantic vetoes
     convergence: 2
-    lenses: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release, complexity_release]
-    lenses_no_req: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release, complexity_release]
+    lenses: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release, complexity_release, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses_no_req: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release, complexity_release, context_output_separation, audience_surface_fit, unjustified_product_surface]
 ```
 
 ### 10.3 Per-Project Override

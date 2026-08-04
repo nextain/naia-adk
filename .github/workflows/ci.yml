@@ -34,3 +34,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile=false
       - run: pnpm test
+      - name: Native harness, session isolation, and request-contract gates
+        run: pnpm test:harness-native
+      - name: Naia account document translation adapter
+        run: python .agents/skills/translate-doc/tests/test_naia_translate.py

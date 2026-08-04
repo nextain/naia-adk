@@ -79,15 +79,19 @@ test("duplicate runtime bindings fail closed without losing a valid prompt envel
 	assert.deepEqual(records.map((record) => record.prompt), ["exact prompt during duplicate binding"]);
 });
 
-test("next genesis adopts every unconsumed quarantine chain", () => {
+test("a new lineage adopts only quarantine chains from its explicitly bound session", () => {
 	const fx = fixture();
-	core.handleEvent({ client: "codex", eventName: "UserPromptSubmit", sessionId: "OLD", cwd: fx.cwd, prompt: "orphan one", origin: "native_user" });
+	core.handleEvent({ client: "codex", eventName: "UserPromptSubmit", sessionId: "NEW", cwd: fx.cwd, prompt: "owned prompt", origin: "native_user" });
 	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "OLD2", cwd: fx.cwd, prompt: "orphan two", origin: "native_user" });
 	core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "NEW", cwd: fx.cwd });
 	const unit = core.findUnit(fx.cwd, "codex", "NEW");
 	const records = core.verifySourceChain(unit.paths, core.readJson(unit.paths.head)).records;
-	assert.deepEqual(records.map((r) => r.prompt).sort(), ["orphan one", "orphan two"]);
-	assert.equal(core.listUnconsumedQuarantine(fx.cwd).length, 0);
+	assert.deepEqual(records.map((r) => r.prompt), ["owned prompt"]);
+	const remaining = core.listUnconsumedQuarantine(fx.cwd);
+	assert.equal(remaining.length, 1);
+	assert.equal(remaining[0].head.client, "claude");
+	assert.equal(remaining[0].head.session_id, "OLD2");
+	assert.deepEqual(core.readJsonl(path.join(remaining[0].dir, "sources.jsonl")).map((record) => record.prompt), ["orphan two"]);
 });
 
 test("a mutable quarantine consumed flag cannot hide an unadopted prompt", () => {
@@ -109,7 +113,7 @@ test("a mutable quarantine consumed flag cannot hide an unadopted prompt", () =>
 
 test("consumed quarantine is cross-bound to the exact destination head", () => {
 	const fx = fixture();
-	core.handleEvent({ client: "codex", eventName: "UserPromptSubmit", sessionId: "OLD", cwd: fx.cwd, prompt: "cross-bound source", origin: "native_user" });
+	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "NEW", cwd: fx.cwd, prompt: "cross-bound source", origin: "native_user" });
 	core.handleEvent({ client: "claude", clientVersion: CLIENT_VERSIONS.claude, eventName: "SessionStart", sessionId: "NEW", cwd: fx.cwd });
 	const unit = core.findUnit(fx.cwd, "claude", "NEW");
 	const head = core.readJson(unit.paths.head);
@@ -121,14 +125,14 @@ test("consumed quarantine is cross-bound to the exact destination head", () => {
 	assert.equal(unresolved[0].corrupt, "quarantine_consumption_unbound");
 });
 
-test("a new client session reuses the one unresolved global lineage", () => {
+test("a new client session starts a distinct lineage instead of implicitly joining", () => {
 	const fx = fixture();
 	const first = start(fx, "claude", "OLD");
 	const result = core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "NEW", cwd: fx.cwd });
 	assert.equal(result.kind, "context");
-	const rebound = core.findUnit(fx.cwd, "codex", "NEW");
-	assert.equal(rebound.id, first.id);
-	assert.equal(core.listUnits(fx.cwd).length, 1);
+	const separate = core.findUnit(fx.cwd, "codex", "NEW");
+	assert.notEqual(separate.id, first.id);
+	assert.equal(core.listUnits(fx.cwd).length, 2);
 });
 
 test("recursive Git reference does not invent baseline additions in a clean repository", () => {

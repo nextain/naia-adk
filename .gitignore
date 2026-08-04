@@ -131,6 +131,9 @@ skills/business/press-release/_review_plan.md
 # 내부 세션 아티팩트(개인경로·내부URL·키 흔적) + 제3자 PII 비추적(OSS readiness 게이트)
 .agents/progress/
 .agents/reviews/
+.agents/session-contracts/*
+!.agents/session-contracts/README.md
+!.agents/session-contracts/schema.json
 
 # Local handoff/handover artifacts — session/PC transfer notes are never source.
 # Only basenames that START with handoff/handover are global. Topic-prefixed

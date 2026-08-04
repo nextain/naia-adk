@@ -9,11 +9,11 @@ source_provenance: ledger_resolved
 priority: critical
 created: 2026-08-03
 updated: 2026-08-04
-source_directives: [USR-009, USR-010]
-source_evidence: [USR-009, USR-010]
-source_atoms: [USR-009-E05, USR-009-E06, USR-010-E01]
+source_directives: [USR-009, USR-011]
+source_evidence: [USR-009, USR-011]
+source_atoms: [USR-009-E05, USR-009-E06, USR-011-E01]
 source_kind: derived
-derived_from: [USR-009, USR-010]
+derived_from: [USR-009, USR-011]
 derivation_kind: expand
 change_effect: extend
 preserves: [local-session-database, named-instance-identity, independent-supervisor]
@@ -43,7 +43,7 @@ acceptance_criteria:
   - "Managed Linux service ownership is keyed by a SHA-256 fingerprint of the loaded Discord token rather than configured bot ID. The service re-derives and verifies that fingerprint, acquires the same owner record as direct and Windows launches, reclaims only an objectively missing same-boot owner PID, and rejects a Gateway READY identity that differs from configured bot ID."
   - "Startup failures expose only bounded reason codes in journald and the independent supervisor snapshot."
   - "Windows versioned rollback is explicitly unsupported rather than partially emulated."
-  - "Generic named-instance support does not complete USR-010's separate OnMam agent obligation. That live migration is deferred and remains incomplete until a separately controlled OnMam rollout records its schema-v2 instance config, unique service and Gateway identity, strict read-only canary with confirmed acknowledgement and final delivery, and verified rollback receipt."
+  - "Generic named-instance support does not complete USR-011's separate OnMam agent obligation. That live migration is deferred and remains incomplete until a separately controlled OnMam rollout records its schema-v2 instance config, unique service and Gateway identity, strict read-only canary with confirmed acknowledgement and final delivery, and verified rollback receipt."
 non_goals:
   - "Automatically roll back without an operator command."
   - "Copy or rewrite the durable Discord job database during rollback."
@@ -56,7 +56,7 @@ decisions:
 trace:
   operational_delivery:
     onmam:
-      source_atom: USR-010-E01
+      source_atom: USR-011-E01
       status: deferred_incomplete
       evidence: null
       progress: ".agents/progress/discord-agent-context-2026-08-03.json#source_obligations"
