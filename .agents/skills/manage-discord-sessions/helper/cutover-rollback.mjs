@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { messengerInstancePaths } from "./instance-paths.mjs";
@@ -49,6 +49,34 @@ export const CANARY_STOP_CRITERIA = Object.freeze([
 ]);
 
 const CONFIG_PROBE_SOURCE = "import { pathToFileURL } from 'node:url'; const [loader, config] = process.argv.slice(1); const module = await import(pathToFileURL(loader)); module.loadMessengerConfig(config);";
+
+function unitQuote(value) {
+	if (typeof value !== "string" || /[\r\n\0]/.test(value)) throw new Error("rollback systemd value is unsafe");
+	return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+export function renderLegacyRollbackUnits({ paths, runtimePath, names, tokenFingerprint, nodePath = process.execPath, backendExecutables = {} }) {
+	if (!/^[a-f0-9]{64}$/.test(tokenFingerprint ?? "")) throw new Error("rollback token fingerprint is invalid");
+	if (typeof nodePath !== "string" || !isAbsolute(nodePath)) throw new Error("rollback Node executable is invalid");
+	const servicePath = join(runtimePath, "helper/service.mjs");
+	const supervisorPath = join(runtimePath, "helper/supervisor.mjs");
+	for (const path of [servicePath, supervisorPath]) if (!existsSync(path)) throw new Error("legacy rollback runtime entrypoint is unavailable");
+	const tokenLockPath = `%t/naia-discord-token-${tokenFingerprint}.lock`;
+	const exec = ["/usr/bin/flock", "--no-fork", "--nonblock", "--conflict-exit-code", "78", tokenLockPath,
+		"/usr/bin/flock", "--no-fork", "--nonblock", "--conflict-exit-code", "78", paths.lockPath,
+		nodePath, servicePath, "--adk-root", paths.root, "--instance", paths.instance].map(unitQuote).join(" ");
+	const backendEnvironment = Object.entries(backendExecutables).map(([backend, executable]) => {
+		if (!new Set(["codex", "claude"]).has(backend) || typeof executable !== "string" || !isAbsolute(executable)) throw new Error("rollback backend executable is invalid");
+		return `Environment=${unitQuote(`NAIA_${backend.toUpperCase()}_EXECUTABLE=${resolve(executable)}`)}`;
+	});
+	const executablePath = [...new Set([dirname(resolve(nodePath)), ...Object.values(backendExecutables).map((executable) => dirname(resolve(executable))), "/usr/local/bin", "/usr/bin", "/bin"])].join(delimiter);
+	const environment = [...backendEnvironment, `Environment=${unitQuote(`PATH=${executablePath}`)}`].join("\n");
+	return Object.freeze({
+		service: `[Unit]\nDescription=Naia ADK Discord sessions (${paths.instance})\nWants=network-online.target\nAfter=network-online.target\nStartLimitIntervalSec=60\nStartLimitBurst=3\n\n[Service]\nType=simple\nExecStart=${exec}\n${environment}\nRestart=always\nRestartPreventExitStatus=78\nRestartSec=5\nKillMode=mixed\nTimeoutStopSec=20\nUMask=0077\nNoNewPrivileges=yes\nPrivateTmp=yes\n\n[Install]\nWantedBy=default.target\n`,
+		supervisorService: `[Unit]\nDescription=Naia ADK Discord independent health observer (${paths.instance})\n\n[Service]\nType=oneshot\nExecStart=${[nodePath, supervisorPath, "--adk-root", paths.root, "--instance", paths.instance].map(unitQuote).join(" ")}\nUMask=0077\nNoNewPrivileges=yes\nPrivateTmp=yes\n`,
+		supervisorTimer: `[Unit]\nDescription=Naia ADK Discord health observer timer (${paths.instance})\n\n[Timer]\nOnBootSec=30s\nOnUnitActiveSec=60s\nAccuracySec=1s\nPersistent=true\nUnit=${names.supervisorTimerName.replace("-supervisor.timer", "-supervisor.service")}\n\n[Install]\nWantedBy=timers.target\n`,
+	});
+}
 
 function supportedDatabaseVersion(skillRoot) {
 	const source = readFileSync(join(skillRoot, "helper/constants.mjs"), "utf8");
@@ -158,7 +186,8 @@ export function verifyCutoverRollbackBundle(bundleDirectory) {
 	if (hashTree(runtimePath) !== manifest.artifacts.runtimeSha256) throw new Error("rollback runtime digest mismatch");
 	for (const [key, path] of Object.entries(units)) {
 		const digest = sha256(readFileSync(path));
-		if (digest !== manifest.artifacts.unitSha256[key] || digest !== runtimeArtifact.manifest.units.sha256[key]) throw new Error("rollback unit digest mismatch");
+		if (digest !== manifest.artifacts.unitSha256[key]
+			|| (manifest.sourceRegistration.kind === "managed_artifact" && digest !== runtimeArtifact.manifest.units.sha256[key])) throw new Error("rollback unit digest mismatch");
 	}
 	return Object.freeze({ manifest, bundleDirectory: root, configPath, runtimePath, units });
 }
@@ -204,8 +233,12 @@ export function createCutoverRollbackBundle({ adkRoot, instance = "default", bac
 		if (databaseVersion !== null && databaseVersion > rollbackDatabaseVersion) throw new Error("rollback runtime cannot open the current Discord database schema");
 		const service = runtimeArtifact.service;
 		const supervisor = runtimeArtifact.supervisor;
-			const unitContent = { service: service.content, supervisorService: supervisor.serviceContent, supervisorTimer: supervisor.timerContent };
-			const boundSourceRegistration = sourceRegistrationBinding(sourceRegistration ?? registrationBinding("managed_artifact", unitContent));
+			const managedUnitContent = { service: service.content, supervisorService: supervisor.serviceContent, supervisorTimer: supervisor.timerContent };
+			const boundSourceRegistration = sourceRegistrationBinding(sourceRegistration ?? registrationBinding("managed_artifact", managedUnitContent));
+			const names = { serviceName: service.unitName, supervisorServiceName: supervisor.serviceName, supervisorTimerName: supervisor.timerName };
+			const unitContent = boundSourceRegistration.kind === "legacy_mutable"
+				? renderLegacyRollbackUnits({ paths, runtimePath, names, tokenFingerprint, nodePath, backendExecutables })
+				: managedUnitContent;
 			atomicPrivateWrite(join(bundleDirectory, "units/service.unit"), unitContent.service, "Discord rollback service unit");
 		atomicPrivateWrite(join(bundleDirectory, "units/supervisor.service"), unitContent.supervisorService, "Discord rollback supervisor unit");
 		atomicPrivateWrite(join(bundleDirectory, "units/supervisor.timer"), unitContent.supervisorTimer, "Discord rollback supervisor timer");
@@ -221,7 +254,7 @@ export function createCutoverRollbackBundle({ adkRoot, instance = "default", bac
 			configSchemaVersion: config.schemaVersion ?? null,
 			configValidation,
 			database: { observedSchemaVersion: databaseVersion, rollbackRuntimeMaxSchemaVersion: rollbackDatabaseVersion, policy: "preserve" },
-				units: { serviceName: service.unitName, supervisorServiceName: supervisor.serviceName, supervisorTimerName: supervisor.timerName },
+				units: names,
 				registrationState: priorRegistrationState,
 				sourceRegistration: boundSourceRegistration,
 			artifacts: {
