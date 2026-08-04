@@ -1,15 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { assertSupportedBackendVersion, getBackendAdapter, inspectBackendLine, parseBackendLine } from "../helper/adapters.mjs";
-import { isBenignBackendStdinError, prepareChildEnvironment, resolveExecutionCwd, runBackendAttempt } from "../helper/backend-runner.mjs";
-import { commandOptionsForProfile } from "../helper/execution-profile.mjs";
+import { isBenignBackendStdinError, runBackendAttempt } from "../helper/backend-runner.mjs";
 import { SessionStore } from "../helper/store.mjs";
-import { assertOwnerOnly, protectOwnerOnly } from "../helper/platform-security.mjs";
 
 const roots = [];
 const fakeBackendPath = fileURLToPath(new URL("./fixtures/fake-backend.mjs", import.meta.url));
@@ -48,84 +44,53 @@ function fixture(backendId) {
 	return { root, stateRoot, store, jobId: `${backendId}-job` };
 }
 
-test("DSO-006 exposes independent Codex and Claude command contracts", () => {
-	const probe = spawnSync(process.execPath, [fakeBackendPath, "exec"], { input: "probe", encoding: "utf8" });
-	assert.equal(probe.status, 0, probe.stderr);
-	assert.match(probe.stdout, /thread\.started/);
-	const codex = getBackendAdapter("codex").command({ cwd: "/workspace", approvalPolicy: "never" });
-	const claude = getBackendAdapter("claude").command({ cwd: "/workspace" });
-	assert.deepEqual(codex.args.slice(0, 3), ["exec", "--json", "--ephemeral"]);
-	assert.ok(codex.args.includes("--ignore-user-config"));
-	assert.equal(codex.args[codex.args.indexOf("--config") + 1], 'approval_policy="never"');
-	assert.equal(codex.args[codex.args.indexOf("--cd") + 1], "/workspace");
-	const pinnedCodex = getBackendAdapter("codex").command({ cwd: "/workspace", approvalPolicy: "never", model: "gpt-5.4" });
-	assert.equal(pinnedCodex.args[pinnedCodex.args.indexOf("--model") + 1], "gpt-5.4");
-	assert.equal(pinnedCodex.args.includes('model_reasoning_effort="low"'), true);
-	assert.ok(claude.args.includes("stream-json"));
-	assert.ok(claude.args.includes("dontAsk"));
-	assert.equal(assertSupportedBackendVersion("codex", "codex-cli 0.146.0"), "0.146.0");
-	assert.equal(assertSupportedBackendVersion("claude", "2.1.220 (Claude Code)"), "2.1.220");
-	assert.throws(() => assertSupportedBackendVersion("codex", "codex-cli 0.145.0"), /not supported/);
-	assert.throws(() => getBackendAdapter("missing"), /unsupported backend/);
-	assert.throws(() => commandOptionsForProfile({ backendId: "codex", permissionProfileEpoch: "managed-1", authorizationMode: "managed", access: "workspace-write" }), /invalid execution profile/);
-	assert.throws(() => resolveExecutionCwd("relative-workspace"), /must be absolute/);
+test("DSO-011 re-verifies deterministic context immediately before reserving or spawning an attempt", async () => {
+	const { root, store, jobId } = fixture("codex");
+	let checks = 0;
+	await assert.rejects(runBackendAttempt({
+		store,
+		jobId,
+		backendId: "codex",
+		prompt: "must not execute",
+		cwd: root,
+		runtimeRoot: join(root, "runtime"),
+		executable: fakeBackendPath,
+		backendVersion: "0.146.0",
+		requireAuthentication: false,
+		parentEnv: { PATH: process.env.PATH },
+		preSpawnCheck: () => { checks += 1; throw Object.assign(new Error("changed"), { code: "context_changed_restart_required" }); },
+	}), (error) => error.code === "context_changed_restart_required");
+	assert.equal(checks, 1);
+	assert.equal(store.getJob(jobId, { includeEvents: false }).attemptId, null);
+	assert.equal(readdirSync(join(root, "runtime", "children")).length, 0);
+	store.close();
 });
 
-test("DSO-006 normalizes provider streams without retaining model content", () => {
-	const secret = "do-not-persist-this-prompt";
-	const codex = parseBackendLine({ backendId: "codex", attemptId: "attempt-1", lineNumber: 1, line: JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: secret } }) });
-	const claude = parseBackendLine({ backendId: "claude", attemptId: "attempt-2", lineNumber: 1, line: JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: secret }] } }) });
-	assert.deepEqual(codex.map((event) => event.kind), ["output_activity"]);
-	assert.deepEqual(claude.map((event) => event.kind), ["output_activity"]);
-	assert.ok(!JSON.stringify({ codex, claude }).includes(secret));
-});
-
-test("DSO-006 never promotes an unknown provider result to success", () => {
-	const codex = inspectBackendLine({ backendId: "codex", attemptId: "attempt-unknown-codex", lineNumber: 1, line: JSON.stringify({ type: "turn.completed", status: "unknown" }) });
-	const claude = inspectBackendLine({ backendId: "claude", attemptId: "attempt-unknown-claude", lineNumber: 1, line: JSON.stringify({ type: "result", subtype: "unknown", result: "must-not-deliver" }) });
-	assert.equal(codex.outcome, null);
-	assert.equal(claude.outcome, null);
-	assert.equal(claude.transientResult, null);
-});
-
-test("DSO-005 creates a private minimal child environment and copies only provider auth", () => {
-	const root = mkdtempSync(join(tmpdir(), "naia-child-env-"));
-	roots.push(root);
-	const authRoot = join(root, "auth-source");
-	mkdirSync(join(authRoot, ".codex"), { recursive: true });
-	mkdirSync(join(authRoot, ".claude"), { recursive: true });
-	writeFileSync(join(authRoot, ".codex", "auth.json"), "codex-auth", { mode: 0o600 });
-	writeFileSync(join(authRoot, ".codex", "config.toml"), "must-not-copy", { mode: 0o600 });
-	writeFileSync(join(authRoot, ".claude", ".credentials.json"), "claude-auth", { mode: 0o600 });
-	writeFileSync(join(authRoot, ".claude", "settings.json"), "must-not-copy", { mode: 0o600 });
-	for (const directory of [authRoot, join(authRoot, ".codex"), join(authRoot, ".claude")]) protectOwnerOnly(directory, "directory", "test auth directory");
-	for (const file of [join(authRoot, ".codex", "auth.json"), join(authRoot, ".claude", ".credentials.json")]) protectOwnerOnly(file, "file", "test auth file");
-	const parentEnv = { PATH: `${process.env.PATH}${delimiter}${join(root, "workspace/node_modules/.bin")}${delimiter}.`, LANG: "C.UTF-8", DISCORD_TOKEN: "discord-secret", CODEX_API_KEY: "codex-key", OPENAI_API_KEY: "wrong-key" };
-	const codex = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot });
-	const codexOauth = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-oauth-attempt", runtimeRoot: join(root, "runtime"), parentEnv: { PATH: process.env.PATH }, authRoot });
-	const claude = prepareChildEnvironment({ backendId: "claude", attemptId: "claude-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot });
-	assert.equal(codex.env.DISCORD_TOKEN, undefined);
-	assert.equal(codex.env.OPENAI_API_KEY, undefined);
-	assert.equal(codex.env.CODEX_API_KEY, "codex-key");
-	assert.ok(!codex.env.PATH.includes("node_modules"));
-	assert.ok(!codex.env.PATH.split(delimiter).includes("."));
-	if (process.platform === "win32") assert.doesNotThrow(() => assertOwnerOnly(codex.childHome, "directory", "child home"));
-	else assert.equal(statSync(codex.childHome).mode & 0o777, 0o700);
-	assert.deepEqual(readdirSync(join(codex.childHome, ".codex")).sort(), []);
-	assert.deepEqual(readdirSync(join(codexOauth.childHome, ".codex")).sort(), ["auth.json"]);
-	assert.equal(readFileSync(join(codexOauth.childHome, ".codex", "auth.json"), "utf8"), "codex-auth");
-	assert.deepEqual(readdirSync(join(claude.childHome, ".claude")).sort(), [".credentials.json"]);
-});
-
-test("DSO-005 rejects insecure auth permissions and cleans the partial child home", () => {
-	const root = mkdtempSync(join(tmpdir(), "naia-insecure-auth-"));
-	roots.push(root);
-	const authRoot = join(root, "auth-source");
-	mkdirSync(join(authRoot, ".codex"), { recursive: true });
-	writeFileSync(join(authRoot, ".codex", "auth.json"), "unsafe", { mode: 0o644 });
-	const runtimeRoot = join(root, "runtime");
-	assert.throws(() => prepareChildEnvironment({ backendId: "codex", attemptId: "bad-auth", runtimeRoot, parentEnv: { PATH: process.env.PATH }, authRoot }), /owner-only|permissions/);
-	assert.deepEqual(readdirSync(join(runtimeRoot, "children")), []);
+test("DSO-011 quarantines a context race after reservation without spawning the provider", async () => {
+	const { root, store, jobId } = fixture("codex");
+	let checks = 0;
+	await assert.rejects(runBackendAttempt({
+		store,
+		jobId,
+		backendId: "codex",
+		prompt: "must not execute after race",
+		cwd: root,
+		runtimeRoot: join(root, "runtime"),
+		executable: fakeBackendPath,
+		backendVersion: "0.146.0",
+		requireAuthentication: false,
+		parentEnv: { PATH: process.env.PATH },
+		preSpawnCheck: () => {
+			checks += 1;
+			if (checks === 2) throw Object.assign(new Error("changed"), { code: "context_changed_restart_required" });
+		},
+	}), (error) => error.code === "context_changed_restart_required");
+	assert.equal(checks, 2);
+	const job = store.getJob(jobId, { includeEvents: false });
+	assert.equal(job.attemptId, null);
+	assert.equal(job.lifecycle, "failed");
+	assert.equal(job.latestSafeError, "Job failed: context_changed_restart_required");
+	store.close();
 });
 
 for (const backendId of ["codex", "claude"]) {
@@ -294,6 +259,39 @@ test("DSO-006 service interruption during version probing preserves recovery sem
 	store.close();
 });
 
+test("DSO-006 bounds and terminates a stuck backend version probe", async () => {
+	const { root, store, jobId } = fixture("codex");
+	const startedAt = Date.now();
+	await assert.rejects(runBackendAttempt({
+		store, jobId, backendId: "codex", prompt: "probe timeout", cwd: root,
+		runtimeRoot: join(root, "runtime"),
+		executable: { command: process.execPath, prefixArgs: ["-e", "setInterval(() => {}, 1000)", "--"] },
+		requireAuthentication: false, parentEnv: { PATH: process.env.PATH }, versionProbeTimeoutMs: 50,
+	}), /version probe timed out/);
+	assert.ok(Date.now() - startedAt < 2_000);
+	assert.equal(store.getJob(jobId).lifecycle, "queued");
+	store.close();
+});
+
+test("DSO-006 captures immutable ownership before signaling a version-probe process group", () => {
+	const source = readFileSync(fileURLToPath(new URL("../helper/backend-owned-process.mjs", import.meta.url)), "utf8");
+	const terminationStart = source.indexOf("export async function killAndWaitForChild");
+	const terminationEnd = source.indexOf("export function backendCommand", terminationStart);
+	const termination = source.slice(terminationStart, terminationEnd);
+	const probeStart = source.indexOf("export async function probeBackendVersion");
+	const probeEnd = source.indexOf("export function captureChildOwnership", probeStart);
+	const probe = source.slice(probeStart, probeEnd);
+	const capture = probe.indexOf("readProcessStartIdentity(child.pid)");
+	const terminate = probe.indexOf("killAndWaitForChild(child, ownedStartIdentity)");
+	assert.ok(capture >= 0 && terminate > capture);
+	assert.doesNotMatch(probe, /process\.kill\(-child\.pid/);
+	const identityRead = termination.indexOf("const currentIdentity = readProcessStartIdentity(child.pid)");
+	const exactGuard = termination.indexOf("if (currentIdentity !== ownedStartIdentity)", identityRead);
+	const groupKill = termination.indexOf('process.kill(-child.pid, "SIGKILL")', exactGuard);
+	assert.ok(identityRead >= 0 && exactGuard > identityRead && groupKill > exactGuard);
+	assert.match(termination.slice(exactGuard, groupKill), /currentIdentity === null[\s\S]+child\.kill\("SIGKILL"\)[\s\S]+return waitForChildExit\(child, 2_000, false\)/);
+});
+
 test("DSO-006 spawn failure leaves no attempt credential directory", async () => {
 	const { root, store, jobId } = fixture("codex");
 	const runtimeRoot = join(root, "runtime");
@@ -304,37 +302,49 @@ test("DSO-006 spawn failure leaves no attempt credential directory", async () =>
 
 test("DSO-006 immediate child exit fails and releases its reservation", async () => {
 	const { root, store, jobId } = fixture("codex");
-	await assert.rejects(runBackendAttempt({
+	const result = await runBackendAttempt({
 		store, jobId, backendId: "codex", prompt: "instant",
 		cwd: root, runtimeRoot: join(root, "runtime"),
 		executable: { command: process.execPath, prefixArgs: ["-e", "process.exit(0)", "--"] },
 		backendVersion: "0.146.0", requireAuthentication: false,
 		parentEnv: { PATH: process.env.PATH },
-	}), /ownership identity is unavailable/);
+	});
+	assert.equal(result.backendOutcome, null);
+	assert.equal(result.transientResult, null);
 	const job = store.getJob(jobId);
 	assert.equal(job.lifecycle, "failed");
-	assert.equal(job.attemptId, null);
+	assert.notEqual(job.childState.state, "owned");
 	store.close();
 });
 
 for (const phase of ["before_commit", "after_commit"]) {
-	test(`DSO-006 attach failure ${phase} terminates the child and closes the attempt`, async () => {
-		const { root, store, jobId } = fixture("codex");
-		const originalAttach = store.attachAttempt.bind(store);
-		store.attachAttempt = (...args) => {
-			if (phase === "after_commit") originalAttach(...args);
-			throw new Error(`injected attach failure ${phase}`);
-		};
-		await assert.rejects(runBackendAttempt({
-			store, jobId, backendId: "codex", prompt: "attach",
+		test(`DSO-006 attach failure ${phase} terminates the child and closes the attempt`, async () => {
+			const { root, store, jobId } = fixture("codex");
+			const pidFile = join(root, `attach-${phase}-grandchild.pid`);
+			const attachExecutable = {
+				command: process.execPath,
+				prefixArgs: ["-e", `const {spawn}=require("node:child_process");const {writeFileSync}=require("node:fs");const child=spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"});writeFileSync(${JSON.stringify(pidFile)},String(child.pid));setInterval(()=>{},1000);`, "--"],
+			};
+			const originalAttach = store.attachAttempt.bind(store);
+			store.attachAttempt = (...args) => {
+				const deadline = Date.now() + 1_000;
+				while (!existsSync(pidFile) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+				assert.equal(existsSync(pidFile), true, "fake backend must create its grandchild before attach fails");
+				if (phase === "after_commit") originalAttach(...args);
+				throw new Error(`injected attach failure ${phase}`);
+			};
+			await assert.rejects(runBackendAttempt({
+				store, jobId, backendId: "codex", prompt: `__fake_grandchild__:${pidFile}`,
 			cwd: root, runtimeRoot: join(root, "runtime"),
-			executable: fakeBackendPath, backendVersion: "0.146.0",
+				executable: attachExecutable, backendVersion: "0.146.0",
 			requireAuthentication: false, parentEnv: { PATH: process.env.PATH },
 		}), new RegExp(`injected attach failure ${phase}`));
 		const job = store.getJob(jobId);
 		assert.equal(job.lifecycle, "failed");
-		assert.equal(job.attemptId, null);
-		assert.equal(job.childState.state, "not_expected");
+			assert.equal(job.attemptId, null);
+			assert.equal(job.childState.state, "not_expected");
+			const grandchildPid = Number(readFileSync(pidFile, "utf8"));
+			assert.throws(() => process.kill(grandchildPid, 0), /ESRCH/);
 		store.close();
 	});
 }
@@ -382,15 +392,65 @@ test("DSO-006 kills the owned process group including a grandchild", async () =>
 	store.close();
 });
 
-test("DSO-006 kills an orphaned process group after the leader exits", async () => {
+test("DSO-006 does not signal an orphaned group after immutable leader identity disappears", async () => {
 	const { root, store, jobId } = fixture("codex");
 	const pidFile = join(root, "orphan.pid");
 	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: `__fake_orphan__:${pidFile}`, cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } });
 	assert.equal(result.exitCode, 0);
 	const orphanPid = Number(readFileSync(pidFile, "utf8"));
-	const state = await waitForStoppedProcess(orphanPid);
-	assert.ok(state === null || state === "Z", `orphan process remained live with state ${state}`);
+	assert.equal(await waitForStoppedProcess(orphanPid), "live");
+	process.kill(orphanPid, "SIGKILL");
+	assert.ok([null, "Z"].includes(await waitForStoppedProcess(orphanPid)));
 	store.close();
+});
+
+test("DSO-006 bounds inherited stream drain without signalling an unowned group after the POSIX leader exits", { skip: process.platform === "win32" ? "POSIX process groups" : false }, async () => {
+	const { root, store, jobId } = fixture("codex");
+	const pidFile = join(root, "inherited-stream-descendant.pid");
+	const script = `
+		const { spawn } = require("node:child_process");
+		const { writeFileSync } = require("node:fs");
+		process.stdin.resume();
+		process.stdin.on("end", () => {
+			const descendant = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], { stdio: ["ignore", "inherit", "inherit"] });
+			writeFileSync(${JSON.stringify(pidFile)}, String(descendant.pid));
+			process.stdout.write([
+				JSON.stringify({ type: "thread.started", thread_id: "inherited-stream-test" }),
+				JSON.stringify({ type: "turn.started" }),
+				JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "done" } }),
+				JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1 } }),
+			].join("\\n") + "\\n", () => process.exit(0));
+		});
+	`;
+	const startedAt = Date.now();
+	const result = await runBackendAttempt({
+		store, jobId, backendId: "codex", prompt: "inherit streams", cwd: root,
+		runtimeRoot: join(root, "runtime"), executable: { command: process.execPath, prefixArgs: ["-e", script, "--"] },
+		backendVersion: "0.146.0", requireAuthentication: false, timeoutMs: 10_000, killGraceMs: 20,
+		parentEnv: { PATH: process.env.PATH },
+	});
+	assert.ok(Date.now() - startedAt < 2_500, "inherited stream cleanup exceeded its bound");
+	assert.equal(result.exitCode, 0);
+	assert.equal(result.terminationReason, "internal_error");
+	const descendantPid = Number(readFileSync(pidFile, "utf8"));
+	// The leader identity has disappeared, so the harness must not authorize a
+	// negative-PID group signal. The service manager/cgroup remains the recovery
+	// boundary; clean up this deliberately orphaned fixture explicitly.
+	assert.equal(await waitForStoppedProcess(descendantPid), "live");
+	process.kill(descendantPid, "SIGKILL");
+	assert.ok([null, "Z"].includes(await waitForStoppedProcess(descendantPid)));
+	store.close();
+});
+
+test("DSO-007 every negative-PID termination requires an exact current leader identity", () => {
+	const source = readFileSync(fileURLToPath(new URL("../helper/backend-owned-process.mjs", import.meta.url)), "utf8");
+	const start = source.indexOf("export function createOwnedProcessTreeSignaler");
+	const signaler = source.slice(start);
+	const identityRead = signaler.indexOf("const currentIdentity = readProcessStartIdentity(child.pid)");
+	const exactGuard = signaler.indexOf("if (currentIdentity !== ownedStartIdentity) return", identityRead);
+	const groupKill = signaler.indexOf("process.kill(-child.pid, signalName)", exactGuard);
+	assert.ok(identityRead >= 0 && exactGuard > identityRead && groupKill > exactGuard);
+	assert.doesNotMatch(signaler.slice(identityRead, groupKill), /leaderExited|processGroupIsAlive/);
 });
 
 test("DSO-005 unbounded backend lines time out safely without raw persistence", async () => {

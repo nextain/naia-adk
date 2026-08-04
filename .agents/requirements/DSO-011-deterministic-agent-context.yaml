@@ -1,0 +1,65 @@
+id: DSO-011
+title: "Deterministic Agent Context and Cache Evidence"
+title_ko: "결정론적 에이전트 컨텍스트와 캐시 증거"
+product: naia-adk-discord-sessions
+module: deterministic-agent-context
+status: active
+source: derived
+source_provenance: ledger_resolved
+priority: critical
+created: 2026-08-03
+updated: 2026-08-04
+source_directives: [USR-011]
+source_evidence: [USR-011]
+source_atoms: [USR-011-E01]
+source_kind: derived
+derived_from: [USR-011]
+derivation_kind: expand
+change_effect: extend
+preserves: [ephemeral-provider-session, isolated-child-home, explicit-project-instructions, no-model-heartbeat]
+must_not_change: [no-cache-claim-without-provider-receipt, no-context-drift-spawn, no-workspace-escape]
+destructive_approval: null
+description: |
+  A named Discord agent starts with a bounded deterministic snapshot of its own
+  project identity and mandatory context. The exact prefix is stable across
+  requests, while changed context stops execution until service restart. Provider
+  caching is reported only when the provider emits a measurable receipt.
+acceptance_criteria:
+  - "Schema v2 binds one safe agentId, one workspace path relative to the ADK root, one entrypoint, and a bounded ordered context file allowlist."
+  - "Workspace and context resolution reject absolute config paths, traversal, escape, symlink components, duplicate resolved files, invalid UTF-8, and count/file/total size overflow."
+  - "One read of exact bytes produces the manifest, SHA-256, and stable prefix; context files are sorted and the configured entrypoint remains first."
+  - "Prompt order is deterministic context prefix, trusted participant policy, clearly delimited untrusted history, and current request last."
+  - "Immediately before reserving and again immediately before backend spawn, the same allowlist is re-read and compared to the startup context hash; mismatch fails with context_changed_restart_required. This is a bounded pre-spawn check, not an immutable workspace snapshot."
+  - "The child cwd and Codex --cd are the same canonical configured workspace; provider session persistence remains disabled and every attempt keeps an isolated child home."
+  - "Provider-native entrypoint-document discovery is disabled so unhashed AGENTS.md/CLAUDE.md content cannot supplement the explicit prefix; capability skill/tool descriptions remain outside the context hash and cannot expand configured action authority."
+  - "On Linux systemd, every same-token service under one OS user contends on a shared kernel flock in the user-manager runtime namespace even with PrivateTmp enabled, and the kernel releases it with the service process. The shared owner record atomically reclaims only a complete same-host, same-boot record whose PID is objectively absent; incomplete metadata, identity conflict, permission denial, another host or boot, and PID reuse remain fail-closed. Errors/status disclose no token, fingerprint, credential path, or lock path."
+  - "When XDG_RUNTIME_DIR is unavailable on Unix, the default owner-record namespace includes a digest of the current boot ID so a prior boot's /tmp record cannot permanently block the new boot. Explicitly configured shared directories retain strict cross-boot fail-closed semantics."
+  - "A schema-v2 recovery envelope stores only the bounded current request and binding digests, never the assembled project-context prompt. Automatic read-only recovery requires the exact managed runtime revision and reconstructs the prompt from the current verified context snapshot; missing or changed runtime identity becomes recovery_review."
+  - "Linux service installation materializes an owner-only Git runtime artifact and pins both service and supervisor units to it. Service startup verifies its revision, Git runtime-tree ID, complete artifact digest, and actual executable root before acquiring token ownership; a mutable checkout cannot impersonate the installed revision after restart."
+  - "Provider-reported complete integer cache usage creates prompt_cache_observed with independent raw input, cache-read, Claude cache-created, and output counters; missing fields create no receipt and cache benefit remains not proven."
+non_goals:
+  - "Keep provider sessions alive or send model heartbeats for caching."
+  - "Load an unbounded project tree into every prompt."
+  - "Freeze every provider tool description or explicitly invoked capability skill into the project-context hash."
+decisions:
+  - "Prefer a small deterministic prefix and per-attempt drift check over a long-lived conversational model session."
+  - "Treat context hash as reproducibility evidence, not proof that the model understood the files or received a cache hit."
+trace:
+  code:
+    - { path: ".agents/skills/manage-discord-sessions/helper/agent-context.mjs", symbols: ["buildAgentContextSnapshot", "verifyAgentContextBeforeAttempt"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbols: ["configuredAgentContext", "createRuntimeInputVerifier", "runDiscordService"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbols: ["preSpawnCheck", "runBackendAttempt"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["boundRequestPrompt", "verifyAgentContextBeforeAttempt"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/token-owner-lock.mjs", symbols: ["acquireDiscordTokenOwnerLock"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/adapters.mjs", symbols: ["command", "cacheReceipt"], coverage: full }
+  tests:
+    - { path: ".agents/skills/manage-discord-sessions/tests/agent-context.test.mjs", symbol: "agent context snapshot is deterministic, sorted, bounded, and free of runtime identifiers", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/token-owner-lock.test.mjs", symbol: "DSO-009 atomically owns one Discord token across processes without exposing lock identity", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-adapter-environment.test.mjs", symbol: "DSO-011 records cache evidence only when the provider reports complete integer usage", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 launches v2 work in its bound workspace with a stable prefix and fails closed after context drift", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-runtime-input-guard.test.mjs", symbol: "DSO-010 queued work revalidates authority before runner and immediately before spawn", coverage: partial }
+  reviews:
+    planning: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.planning"
+    development: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.development"
+    test: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.test"
+    integration: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.integration"

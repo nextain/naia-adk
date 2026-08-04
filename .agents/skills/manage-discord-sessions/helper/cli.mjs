@@ -5,7 +5,8 @@ import { SessionStore } from "./store.mjs";
 import { loadMessengerConfig, FileCredentialResolver } from "./discord-config.mjs";
 import { downloadDiscordAttachment, fetchDiscordHistory, sendDiscordReply } from "./discord-history.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
-import { manageService } from "./service-manager.mjs";
+import { evaluateManagedDiscordCanary, manageService, prepareManagedDiscordCutover, restoreManagedDiscordCutover, verifyManagedDiscordCutover } from "./service-manager.mjs";
+import { listManagedDiscordArtifacts, pruneManagedDiscordArtifacts } from "./cutover-bundle.mjs";
 import { gatewayEvidenceBoundSeconds, projectUnattendedHealth } from "./unattended-health.mjs";
 
 class UsageError extends Error {}
@@ -38,7 +39,7 @@ function validateInvocation(positional, options) {
 	const allowed = {
 		status: new Set(["json"]),
 		"health-check": new Set(["json"]),
-		jobs: new Set(["json", "active", "failed"]),
+		jobs: new Set(["json", "active", "failed", "limit"]),
 		job: new Set(["json", "events"]),
 		watch: new Set(["jsonl", "once", "jobId"]),
 		history: new Set(["json", "channelId", "authorId", "limit"]),
@@ -46,11 +47,14 @@ function validateInvocation(positional, options) {
 		attachment: new Set(["json", "channelId", "messageId", "attachmentId", "outputPath", "expectedSha256"]),
 		reply: new Set(["json", "channelId", "contentPath"]),
 		service: new Set(["json"]),
+		cutover: new Set(["json", "jobId"]),
+		artifacts: new Set(["json"]),
 	};
 	if (!allowed[command]) throw new UsageError(`unsupported command: ${command}`);
-	const expectedPositionals = positional.length === 0 ? 0 : new Set(["job", "service"]).has(command) ? 2 : 1;
+	const expectedPositionals = positional.length === 0 ? 0 : new Set(["job", "service", "cutover", "artifacts"]).has(command) ? 2 : 1;
 	if (positional.length !== expectedPositionals) throw new UsageError(`invalid arguments for ${command}`);
 	if (command === "jobs" && options.active && options.failed) throw new UsageError("--active and --failed are mutually exclusive");
+	if (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 1_000)) throw new UsageError("--limit must be an integer between 1 and 1000");
 	for (const [key, value] of Object.entries(options)) {
 		if (key === "adkRoot" || key === "instance" || value === false || value === undefined) continue;
 		if (!allowed[command].has(key)) throw new UsageError(`option --${key} is not valid for ${command}`);
@@ -73,7 +77,7 @@ let options;
 let command;
 try {
 	({ positional, options } = parseArgs(process.argv.slice(2)));
-	const knownCommands = new Set(["status", "health-check", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service"]);
+	const knownCommands = new Set(["status", "health-check", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service", "cutover", "artifacts"]);
 	if (positional[0] && !knownCommands.has(positional[0])) {
 		if (options.instance) throw new UsageError("instance was specified more than once");
 		options.instance = normalizeMessengerInstance(positional.shift());
@@ -97,6 +101,46 @@ if (command === "service") {
 	} catch (error) {
 		console.error(error.message);
 		process.exit(1);
+	}
+}
+
+if (command === "cutover") {
+	try {
+		const action = positional[1];
+		if (!new Set(["prepare", "verify", "canary", "rollback"]).has(action)) throw new UsageError("cutover requires prepare, verify, canary, or rollback");
+		if (action === "canary" && !options.jobId) throw new UsageError("cutover canary requires --job");
+		const result = action === "prepare"
+			? prepareManagedDiscordCutover({ adkRoot, instance })
+			: action === "verify"
+				? verifyManagedDiscordCutover({ adkRoot, instance })
+				: action === "canary"
+					? evaluateManagedDiscordCanary({ adkRoot, instance, jobId: options.jobId })
+					: restoreManagedDiscordCutover({ adkRoot, instance });
+		const manifest = result.manifest ?? result;
+		if (options.json) console.log(JSON.stringify({ schemaVersion: 1, command, action, result: manifest }, null, 2));
+		else if (action === "canary") console.log(`canary=${result.verdict} job=${result.jobId} reasons=${result.reasons.join(",") || "none"}`);
+		else console.log(`${action} rollback-bundle=${manifest.bundleId} revision=${manifest.sourceRevision}`);
+		process.exit(action === "canary" && result.verdict === "stop" ? 4 : 0);
+	} catch (error) {
+		console.error(error.message);
+		process.exit(error instanceof UsageError ? 2 : 1);
+	}
+}
+
+if (command === "artifacts") {
+	try {
+		const action = positional[1];
+		if (!new Set(["list", "prune"]).has(action)) throw new UsageError("artifacts requires list or prune");
+		const result = action === "list"
+			? listManagedDiscordArtifacts({ adkRoot, instance })
+			: pruneManagedDiscordArtifacts({ adkRoot, instance });
+		if (options.json) console.log(JSON.stringify({ schemaVersion: 1, command, action, result }, null, 2));
+		else if (action === "list") for (const item of result.items) console.log(`${item.state} ${item.kind} ${item.id}`);
+		else for (const item of result.removed) console.log(`removed ${item.kind} ${item.id}`);
+		process.exit(0);
+	} catch (error) {
+		console.error(error.message);
+		process.exit(error instanceof UsageError ? 2 : 1);
 	}
 }
 
@@ -184,14 +228,15 @@ try {
 		if (options.json) output(status, true);
 		else output(`service=${status.service.state} reason=${status.service.reasonCode} gateway=${status.gateway.resumable ? "resumable" : "fresh_connect"} active=${status.jobs.active} stalled=${status.jobs.suspectedStalled} review=${status.jobs.needsReview} foreignAgents=unsupported`, false);
 	} else if (command === "health-check") {
-		const health = projectUnattendedHealth({ status: store.status(), jobs: store.listJobs(), noProgressInterventionSeconds: messengerConfig.runtime.noProgressInterventionSeconds ?? messengerConfig.runtime.softSilenceSeconds ?? 120, gatewayEvidenceStaleSeconds: gatewayEvidenceBoundSeconds(messengerConfig.runtime.heartbeatSeconds ?? 10) });
+		const health = projectUnattendedHealth({ status: store.status(), jobs: store.listOperationalJobs(), historicalAttention: store.historicalAttentionCounts(), noProgressInterventionSeconds: messengerConfig.runtime.noProgressInterventionSeconds ?? messengerConfig.runtime.softSilenceSeconds ?? 120, gatewayEvidenceStaleSeconds: gatewayEvidenceBoundSeconds(messengerConfig.runtime.heartbeatSeconds ?? 10) });
 		if (options.json) output(health, true);
 		else output(`health=${health.state} unhealthy=${health.unhealthy.length} attention=${health.attention.length} foreignAgents=${health.foreignAgentSupervision}`, false);
 		if (health.state === "unhealthy") process.exitCode = 4;
 	} else if (command === "jobs") {
-		let jobs = store.listJobs();
-		if (options.active) jobs = jobs.filter((job) => !["completed", "failed", "cancelled", "recovery_review"].includes(job.lifecycle));
-		if (options.failed) jobs = jobs.filter((job) => job.lifecycle === "failed" || job.lifecycle === "recovery_review");
+		const limit = options.limit ?? 100;
+		const jobs = options.active
+			? store.listOperationalJobs({ limit })
+			: store.listJobs({ limit, lifecycles: options.failed ? ["failed", "recovery_review"] : null });
 		output(options.json ? { schemaVersion: 1, jobs } : jobs, options.json);
 	} else if (command === "job") {
 		const jobId = positional[1];

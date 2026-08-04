@@ -35,9 +35,9 @@ trace:
     - { path: ".agents/hooks/core/preservation-contract.js", symbol: "validateSourceAuthority", coverage: full }
     - { path: ".agents/hooks/core/request-contract.js", symbol: "validateContract / scopeProjection", coverage: full }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "the core rejects a source obligation narrowed before review", coverage: partial }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "scope authority rejects a source without native user-event provenance", coverage: partial }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "silent removal or reclassification without a new authority is rejected", coverage: partial }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation collects planning and integration evidence views but remains review only while controls are pending", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-source-trace-suite.js", symbol: "the core rejects a source obligation narrowed before review", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-native-compaction-suite.js", symbol: "scope authority rejects a source without native user-event provenance", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-authority-scope-suite.js", symbol: "silent removal or reclassification without a new authority is rejected", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation collects planning and integration evidence views but remains review only while controls are pending", coverage: partial }
   reviews: { planning: null, development: null, test: null, integration: null }
 decisions: []

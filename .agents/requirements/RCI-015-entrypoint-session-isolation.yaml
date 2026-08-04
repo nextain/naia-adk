@@ -50,7 +50,7 @@ trace:
     - { path: ".agents/hooks/core/harness-session-inject.test.js", symbol: "session resolver fixtures", coverage: partial }
     - { path: ".codex/hooks/test-session-contract-gate.cjs", symbol: "gate parity fixtures", coverage: partial }
     - { path: ".claude/hooks/test/run-sync-entry-points-test.cjs", symbol: "entrypoint boundary fixtures", coverage: partial }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "explicit multi-session request-contract binding", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-review-completion-suite.js", symbol: "joining a session already owned by another active lineage fails atomically", coverage: partial }
   reviews: { planning: null, development: null, test: null, integration: null }
 decisions:
   - "Planning review 2026-08-03: ownership conflict, semantic entry validation, concrete schema/resolver trace, and lossless template migration are blocking acceptance criteria."

@@ -22,6 +22,8 @@ trace:
     - { path: ".agents/hooks/core/request-contract-review-runner.js", symbol: "runSandbox / consumeRunEvidence / pinnedExecutableDigest", coverage: full }
     - { path: "scripts/request-contract-review-runner.cjs", symbol: "trusted reviewer launch and ingestion", coverage: full }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "sandbox, snapshot, privacy, signature, and output-closure fault cases", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-governance-suite.js", symbol: "review runner enforces a real network, repository, home, and environment sandbox", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-governance-suite.js", symbol: "trusted review runner launches, independently signs, and ingests an isolated protocol review", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-review-completion-suite.js", symbol: "Clean review records require the pinned external signer and one-time invocation", coverage: partial }
   reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

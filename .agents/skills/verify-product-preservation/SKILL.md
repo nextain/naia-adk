@@ -152,7 +152,7 @@ When the changed paths include `.agents/skills/manage-discord-sessions/**`,
 pnpm test:discord-sessions
 rg -n 'approvalPolicy|permissionProfileEpoch|noProgressInterventionSeconds|operatorResponseSeconds|foreignAgentSupervision|conversationCoordinator' \
   naia-settings/messenger-sessions/config.example.json \
-  .agents/skills/manage-discord-sessions/helper/{discord-config,discord-router,backend-runner,service}.mjs
+  .agents/skills/manage-discord-sessions/helper/{discord-config,discord-router,backend-runner,backend-child-environment,backend-owned-process,service,systemd,cutover-bundle,cutover-artifact-lock,cutover-artifacts,cutover-canary,cutover-managed-runtime,cutover-rollback,artifact-operation-lock-holder,service-manager,service-manager-shared,service-manager-launcher,service-manager-linux,service-manager-windows,service-cutover-controller,store,store-database,store-reader,store-conversation-writer,store-job-writer,store-event-writer,token-owner-lock}.mjs
 ```
 
 PASS:
@@ -165,6 +165,30 @@ PASS:
 - The external supervisor is a separate OS-scheduled one-shot, never an
   interactive model loop; coordinator activation and legacy recovery fail
   closed; stale Gateway or child evidence cannot be called healthy.
+- The Linux managed service binds bot-token ownership to a kernel `flock`
+  outside any per-unit `RuntimeDirectory`; process death releases ownership.
+- Watchdog and supervisor hot paths project at most 256 nonterminal jobs oldest
+  first, use aggregate counts for the full active set, and fail unattended
+  health closed with `operational_jobs_truncated` when work exceeds the bound.
+- Managed systemd service and supervisor launches require explicit mode and
+  complete immutable-artifact markers before config reads, token ownership, or
+  observation. Missing markers cannot silently select direct mode.
+- A first install remains possible, but replacing an existing registration
+  requires an active rollback bundle that verifies the installed source,
+  deployed candidate, and separate clean candidate controller.
+- Until Windows versioned cutover exists, first install rejects either a main
+  service or supervisor registration before creating launchers.
+- The one-time legacy adoption path accepts only the exact prior generated unit
+  bytes and binds them before replacement; malformed config cannot disable
+  status/stop/disable, and explicit artifact pruning retains the installed
+  runtime plus active rollback bundle.
+- Rollback materializes the prior Git revision, preserves prior registration
+  state, validates the preserved config with that source runtime's actual
+  loader, and checks idle/schema both before and after stop. Canary continuation
+  requires exact candidate/target runtime, completed delivery, one confirmed
+  acknowledgement, fresh healthy supervisor evidence, exact service generations,
+  and host-recomputed schema-v2 instance, agent/workspace, context,
+  participant-authority, config, and read-only access evidence.
 - Entry-point mirrors and the workflow contain internal checkpoints rather
   than unconditional user-approval gates.
 
@@ -177,6 +201,14 @@ FAIL:
   workspace explicitly.
 - A Windows supervisor silently falls back to an unsupervised polling loop, or
   status claims foreign collaboration-agent lifecycle supervision.
+- A canary can continue with missing/stale supervisor evidence, a nonterminal
+  job, an unconfirmed delivery, a mismatched runtime, fabricated execution
+  binding, or an acknowledgement miss.
+- Historical-only attention permanently vetoes a new healthy canary, or a
+  minute observer scans and projects all terminal job rows.
+- A minute path scans an unbounded active set or silently omits active overflow,
+  or Windows first install mutates launchers while a supervisor-only residue
+  exists.
 
 ## 출력
 
