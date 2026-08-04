@@ -103,9 +103,25 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 	assert.equal(readFileSync(join(bundle.runtimePath, "runtime-version.txt"), "utf8"), "prior-runtime\n");
 	assert.equal(verifyCutoverRollbackBundle(bundle.bundleDirectory).manifest.bundleId, bundle.manifest.bundleId);
 	assert.equal(verifyCutoverController(bundle, candidateRoot).manifest.bundleId, bundle.manifest.bundleId);
+	const legacyServicePath = join(targetSkill, "helper/service.mjs");
+	const managedServiceSource = readFileSync(legacyServicePath, "utf8");
+	assert.match(managedServiceSource, /--managed-preflight/);
+	writeFileSync(join(targetSkill, "runtime-version.txt"), "prior-runtime\n", "utf8");
+	writeFileSync(legacyServicePath, managedServiceSource.replaceAll("--managed-preflight", "--legacy-preflight-unavailable"), "utf8");
+	for (const args of [
+		["add", ".agents/skills/manage-discord-sessions/helper/service.mjs"],
+		["-c", "user.name=Naia Test", "-c", "user.email=naia@example.invalid", "commit", "-qm", "legacy rollback source"],
+	]) {
+		const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+		assert.equal(result.status, 0, result.stderr);
+	}
+	const legacySourceRevision = spawnSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
+	const legacySourceRuntimeTreeId = inspectCutoverRuntimeTree(root, legacySourceRevision);
 	const legacyBundle = createCutoverRollbackBundle({
 		...bundleInput,
 		now: new Date("2026-08-03T00:00:30.000Z"),
+		sourceRevision: legacySourceRevision,
+		sourceRuntimeTreeId: legacySourceRuntimeTreeId,
 		sourceRegistration: {
 			kind: "legacy_mutable",
 			unitSha256: { service: "a".repeat(64), supervisorService: "b".repeat(64), supervisorTimer: "c".repeat(64) },
@@ -117,6 +133,7 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 	assert.match(legacySupervisorUnit, /rollback-bundles.*runtime\/manage-discord-sessions\/helper\/supervisor\.mjs/);
 	assert.doesNotMatch(legacyServiceUnit, /--managed-preflight|NAIA_DISCORD_RUNTIME_ARTIFACT|NAIA_DISCORD_LAUNCH_MODE/);
 	assert.match(legacyServiceUnit, /naia-discord-token-/);
+	assert.equal(legacyBundle.manifest.units.mode, "legacy_compat");
 	assert.equal(verifyCutoverRollbackBundle(legacyBundle.bundleDirectory).manifest.sourceRegistration.kind, "legacy_mutable");
 	const legacyRestoreCalls = [];
 	restoreCutoverRollbackBundle({
