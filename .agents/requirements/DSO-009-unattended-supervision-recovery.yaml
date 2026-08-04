@@ -56,13 +56,13 @@ decisions:
   - "Keep this requirement active rather than verified until native Windows Task Scheduler install/reboot evidence exists; Linux-only rendering and separate-process tests are not relabeled as Windows proof."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/unattended-health.mjs", symbol: "projectUnattendedHealth/gatewayEvidenceBoundSeconds", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/supervisor.mjs", symbol: "observeOnce", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/service-manager.mjs", symbol: "installSupervisedPair/manageService/verifyWindowsTaskDisabled", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-config.mjs", symbol: "loadMessengerConfig", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbol: "effectiveAllowedActions", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "transientPrompt/DiscordMessageRouter.onDispatch/DiscordMessageRouter.resumeRecovered", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/helper/store.mjs", symbol: "listOperationalJobs/historicalAttentionCounts", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/unattended-health.mjs", symbols: ["projectUnattendedHealth", "gatewayEvidenceBoundSeconds"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/supervisor.mjs", symbols: ["observeOnce"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-manager.mjs", symbols: ["installSupervisedPair", "manageService", "verifyWindowsTaskDisabled"], coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-config.mjs", symbols: ["loadMessengerConfig"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbols: ["effectiveAllowedActions"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["transientPrompt", "DiscordMessageRouter", "onDispatch", "resumeRecovered"], coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/store.mjs", symbols: ["listOperationalJobs", "historicalAttentionCounts"], coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/unattended-health.test.mjs", symbol: "DSO-009 health distinguishes current progress, queue silence, child loss, clock uncertainty, and history attention", coverage: partial }
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-010 approval-required actions are removed from unattended access and prompts", coverage: full }

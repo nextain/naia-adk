@@ -22,7 +22,7 @@ acceptance_criteria:
   - "Every pre-withdrawal coordinator recovery envelope is quarantined as recovery_review and is never replayed or upgraded."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "legacy coordinator envelope quarantine only", coverage: legacy_compatibility }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["resumeRecovered", "coordinator recovery is withdrawn"], coverage: legacy_compatibility }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", symbol: "DSO-009 reopening a legacy store preserves withdrawn coordinator rows without exposing them", coverage: legacy_compatibility }
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSO-009 quarantines pre-withdrawal coordinator envelopes during reboot recovery", coverage: legacy_compatibility }

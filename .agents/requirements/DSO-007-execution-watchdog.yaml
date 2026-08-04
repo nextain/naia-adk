@@ -39,10 +39,10 @@ acceptance_criteria:
   - "Each child receives a required absolute workspace through both process cwd and the Codex --cd contract; relative or ambient caller workdirs are rejected."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbol: "currentExecutionProfile/commandOptionsForProfile", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "resumeRecovered/watchdog/operator response", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "resolveExecutionCwd/runBackendAttempt", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbol: "watchdogIntervalSeconds", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbols: ["currentExecutionProfile", "commandOptionsForProfile"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["resumeRecovered", "watchdog", "operatorResponseSeconds"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbols: ["resolveExecutionCwd", "runBackendAttempt"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbols: ["watchdogIntervalSeconds"], coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSG-014 watchdog aborts a no-progress owned child instead of leaving it running", coverage: partial }
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSG-015 acknowledgement failure never gates work or a later same-scope message", coverage: partial }
