@@ -44,6 +44,6 @@ trace:
     - { path: ".claude/hooks/test/run-beh-pretool-test.js", symbol: "native Windows launcher handshake", coverage: full }
     - { path: ".claude/hooks/test/run-beh-supervise-wrapper-test.js", symbol: "native Windows process-tree termination and sibling survival", coverage: full }
     - { path: ".claude/hooks/test/run-beh-supervise-test.js", symbol: "supervision decision fault injection", coverage: full }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "disabled mode is a silent allow", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-governance-suite.js", symbol: "disabled mode is a silent allow", coverage: full }
   reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

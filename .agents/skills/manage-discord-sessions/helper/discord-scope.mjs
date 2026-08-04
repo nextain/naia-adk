@@ -33,7 +33,14 @@ function mentioned(message, botUserId) {
 	return Array.isArray(message.mentions) && message.mentions.some((item) => item?.id === botUserId);
 }
 
-export function authorizeDiscordMessage({ message, bindings, operatorUserIds = [], botUserId, threadParents = new Map() }) {
+export function participantProfileForUser(participantProfiles, userId) {
+	if (!participantProfiles) return null;
+	const profile = participantProfiles[userId];
+	if (!profile) return null;
+	return { label: profile.label, relationship: profile.relationship, allowedActions: [...profile.allowedActions] };
+}
+
+export function authorizeDiscordMessage({ message, bindings, operatorUserIds = [], participantProfiles = null, botUserId, threadParents = new Map() }) {
 	if (message.author?.bot || message.webhook_id) return { allowed: false, reasonCode: "automated_sender" };
 	const scope = classifyDiscordConversation(message, threadParents);
 	const scopeKey = discordScopeKey(scope);
@@ -41,13 +48,15 @@ export function authorizeDiscordMessage({ message, bindings, operatorUserIds = [
 	if (!binding) return { allowed: false, reasonCode: "binding_missing", scope, scopeKey };
 	if (!binding.allowedUserIds?.includes(scope.authorId)) return { allowed: false, reasonCode: "user_not_allowed", scope, scopeKey };
 	if ((binding.respondWhen ?? "mentioned") === "mentioned" && !mentioned(message, botUserId)) return { allowed: false, reasonCode: "mention_required", scope, scopeKey };
-	return { allowed: true, reasonCode: "authorized", scope, scopeKey, isOperator: operatorUserIds.includes(scope.authorId) && binding.operatorActions === true, binding };
+	const participantProfile = participantProfileForUser(participantProfiles, scope.authorId);
+	if (participantProfiles && !participantProfile) return { allowed: false, reasonCode: "participant_profile_missing", scope, scopeKey };
+	return { allowed: true, reasonCode: "authorized", scope, scopeKey, isOperator: operatorUserIds.includes(scope.authorId) && binding.operatorActions === true, participantProfile, binding };
 }
 
-export function validateDiscordBindings(bindings, { messageContentIntent = false } = {}) {
+export function validateDiscordBindings(bindings, { messageContentIntent = false, schemaVersion = 1 } = {}) {
 	if (!Array.isArray(bindings) || bindings.length === 0) throw new Error("at least one Discord binding is required");
 	return bindings.map((binding) => {
-		assertOnlyKeys(binding, new Set(["kind", "guildId", "channelId", "threadId", "userId", "respondWhen", "allowedUserIds", "canStartConversation", "operatorActions"]), "Discord binding");
+		assertOnlyKeys(binding, new Set(["kind", "guildId", "channelId", "threadId", "userId", "respondWhen", "allowedUserIds", "canStartConversation", "operatorActions", "historyVisibility"]), "Discord binding");
 		if (!new Set(["dm", "guild_channel", "thread"]).has(binding.kind)) throw new Error("unsupported Discord binding kind");
 		for (const [key, value] of Object.entries(binding)) {
 			if (new Set(["guildId", "channelId", "threadId", "userId"]).has(key) && value !== undefined) snowflake(value, key);
@@ -58,10 +67,12 @@ export function validateDiscordBindings(bindings, { messageContentIntent = false
 		if (binding.kind !== "dm" && binding.respondWhen === "always" && !messageContentIntent) throw new Error("guild and thread always responses require messageContentIntent");
 		if (binding.canStartConversation !== true && binding.canStartConversation !== false) throw new Error("canStartConversation must be boolean");
 		if (binding.operatorActions !== undefined && typeof binding.operatorActions !== "boolean") throw new Error("operatorActions must be boolean");
+		if (schemaVersion === 2 && !new Set(["none", "requester_only", "shared"]).has(binding.historyVisibility)) throw new Error("schema v2 binding historyVisibility must be explicit");
+		if (schemaVersion === 1 && binding.historyVisibility !== undefined && !new Set(["none", "requester_only", "shared"]).has(binding.historyVisibility)) throw new Error("unsupported historyVisibility policy");
 		if (binding.kind === "dm" && !binding.userId && !binding.channelId) throw new Error("DM binding requires userId or channelId");
 		if (binding.kind === "guild_channel" && (!binding.guildId || !binding.channelId)) throw new Error("guild channel binding requires guildId and channelId");
 		if (binding.kind === "thread" && (!binding.guildId || !binding.channelId || !binding.threadId)) throw new Error("thread binding requires guildId, parent channelId, and threadId");
 		if (binding.kind !== "thread" && binding.threadId) throw new Error("threadId is only valid for a thread binding");
-		return { ...binding };
+		return { historyVisibility: binding.historyVisibility ?? "shared", ...binding };
 	});
 }

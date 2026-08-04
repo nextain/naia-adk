@@ -22,16 +22,20 @@ acceptance_criteria:
   - "Windows uses native ACL validation, process creation identity, an owner-only launcher, and one limited ONLOGON Task Scheduler service without Bash or systemd."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "ADK-root-local service and visibility entry", coverage: full }
-    - { path: "naia-settings/messenger-sessions/config.example.json", symbol: "workspace-local configuration example", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/adapters.mjs", symbol: "getBackendAdapter/inspectBackendLine", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "runBackendAttempt", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/service.mjs", symbol: "runDiscordService", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/recovery-crypto.mjs", symbol: "RecoveryCodec", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/systemd.mjs", symbol: "renderDiscordUserUnit", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/helper/service-manager.mjs", symbol: "Windows Task Scheduler and operator launcher", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbols: ["script_dir", "adk_root", "instance"], coverage: full }
+    - { path: "naia-settings/messenger-sessions/config.example.json", symbols: ["workspaceId"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/adapters.mjs", symbols: ["getBackendAdapter", "inspectBackendLine"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbols: ["runBackendAttempt"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service.mjs", symbols: ["runDiscordService"], coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbols: ["runDiscordService"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/recovery-crypto.mjs", symbols: ["RecoveryCodec"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/systemd.mjs", symbols: ["renderDiscordUserUnit"], coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-manager.mjs", symbols: ["manageService", "renderOperatorLauncher", "verifyWindowsTaskAction"], coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "Codex/Claude parity and recovery interruption tests", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-004/DSG-007/DSG-008 simulated Gateway and reboot recovery; actual host reboot receipt pending local setup", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-adapter-environment.test.mjs", symbol: "DSO-006 exposes independent Codex and Claude command contracts", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "DSO-006 service interruption preserves a job for reboot recovery", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway-session.test.mjs", symbol: "DSG-004 persists sequence only after durable dispatch and resumes through the store adapter", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSG-007 reboot recovery preserves job identity and requires review without retry or resend", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-service-platform.test.mjs", symbol: "DSG-008 renders a stable isolated user service with restart and single-owner controls", coverage: partial }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md", ".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], integration: null }
 decisions: []

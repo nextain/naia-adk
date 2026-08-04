@@ -16,6 +16,8 @@ const runs=[
   ["Codex hook registration",[".codex/hooks/test-hook-registration.cjs"]],
   ["context/output review lenses",[".agents/skills/review-pass/test-context-output-lenses.cjs"]],
   ["output boundary review",[".agents/skills/review-pass/test-output-boundary.cjs"]],
+  ["review-pass distribution parity",[".agents/skills/review-pass/test-distribution-parity.cjs"]],
+  ["Discord requirement traces",[".agents/skills/manage-discord-sessions/tests/requirements-trace.test.mjs"]],
   ["routine approval policy",[".claude/hooks/test/run-routine-approval-policy-test.cjs"]],
   ["BEH ledger",[".claude/hooks/test/run-beh-ledger-test.js"]],
   ["BEH receipts",[".claude/hooks/test/run-beh-receipts-test.js"]],
