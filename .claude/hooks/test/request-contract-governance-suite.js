@@ -308,6 +308,12 @@ test("registered native control preflight reaches initial bind and the pinned re
 	cp.execFileSync(bindWords[0], bindWords.slice(1), { cwd: fx.cwd, encoding: "utf8" });
 	assert.equal(runInstalledNativeAdapter("claude", fx, { ...envelope, hook_event_name: "PostToolUse" }, "PostToolUse"), null);
 	assert.equal(core.readJson(unit.paths.binding).state, "active");
+	const joinWords = ["node", operatorScript, "join-session", "--unit", unit.id, "--client", "codex", "--session", "JOINED-CODEX", "--client-version", CLIENT_VERSIONS.codex];
+	envelope = { hook_event_name: "PreToolUse", session_id: "S1", cwd: fx.cwd, tool_name: "Bash", tool_use_id: "control-join", tool_input: { command: shellCommand(joinWords) } };
+	assert.equal(runInstalledNativeAdapter("claude", fx, envelope, "PreToolUse"), null);
+	cp.execFileSync(joinWords[0], joinWords.slice(1), { cwd: fx.cwd, encoding: "utf8" });
+	assert.equal(runInstalledNativeAdapter("claude", fx, { ...envelope, hook_event_name: "PostToolUse" }, "PostToolUse"), null);
+	assert.equal(core.findUnit(fx.cwd, "codex", "JOINED-CODEX").id, unit.id);
 	const reviewScript = path.join(fx.cwd, "scripts", "request-contract-review-runner.cjs");
 	const reviewer = reviewerFixturePath("contract-reviewer");
 	const reviewWords = [process.execPath, reviewScript, "--cwd", fx.cwd, "--unit", unit.id, "--writer-session", "S1", "--reviewer", reviewer, "--reviewer-attestor", fx.reviewerAttestor, "--runner-attestor", fx.runnerAttestor];

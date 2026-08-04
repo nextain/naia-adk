@@ -12,6 +12,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { STATES, resolveSessionContract } = require("./session-contract.js");
 
 const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
 const HARNESS_OFF_VALUES = new Set(["off", "0", "false", "no"]);
@@ -102,107 +103,12 @@ function buildSessionInject(opts) {
 	if (HARNESS_OFF_VALUES.has(envFlag)) return null;
 	if (fs.existsSync(path.join(cwd, hostConfigDir, "no-harness"))) return null;
 
-	// Collect progress directories: cwd + immediate submodule children
-	const progressDirs = [];
-	const rootProgressDir = path.join(cwd, ".agents", "progress");
-	if (fs.existsSync(rootProgressDir)) progressDirs.push(rootProgressDir);
-	try {
-		const entries = fs.readdirSync(cwd, { withFileTypes: true });
-		for (const entry of entries) {
-			if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-			const subDir = path.join(cwd, entry.name, ".agents", "progress");
-			if (fs.existsSync(subDir)) progressDirs.push(subDir);
-		}
-	} catch {
-		// ignore readdir errors
-	}
-	if (progressDirs.length === 0) return null;
-
-	const sessionMapDir = fs.existsSync(rootProgressDir) ? rootProgressDir : progressDirs[0];
-	const sessionMapPath = path.join(sessionMapDir, ".session-map.json");
-	let sessionMap = {};
-	let sessionMapDirty = false;
-	try {
-		if (fs.existsSync(sessionMapPath)) {
-			sessionMap = JSON.parse(fs.readFileSync(sessionMapPath, "utf8"));
-			for (const [sid, filePath] of Object.entries(sessionMap)) {
-				const resolved = path.isAbsolute(filePath)
-					? filePath
-					: path.join(sessionMapDir, filePath);
-				if (!fs.existsSync(resolved)) {
-					delete sessionMap[sid];
-					sessionMapDirty = true;
-				}
-			}
-		}
-	} catch {
-		// corrupt map — treat as empty
-		sessionMap = {};
-	}
-
-	// Collect all progress files
-	const allProgressFiles = [];
-	for (const dir of progressDirs) {
-		try {
-			const files = fs
-				.readdirSync(dir)
-				.filter((f) => f.endsWith(".json") && !f.startsWith("."));
-			for (const file of files) {
-				allProgressFiles.push(path.join(dir, file));
-			}
-		} catch {
-			continue;
-		}
-	}
-
-	let latestFile = null;
-	let bindReason = null; // "p0" | "p1"
-
-	// P0: progress file with embedded session_id
-	if (sessionId) {
-		for (const filePath of allProgressFiles) {
-			const content = readProgress(filePath);
-			if (content && content.session_id === sessionId) {
-				latestFile = filePath;
-				bindReason = "p0";
-				break;
-			}
-		}
-	}
-
-	// P1: session-map lookup
-	if (!latestFile && sessionId && sessionMap[sessionId]) {
-		const claimed = sessionMap[sessionId];
-		if (path.isAbsolute(claimed) && fs.existsSync(claimed)) {
-			latestFile = claimed;
-			bindReason = "p1";
-		} else {
-			for (const dir of progressDirs) {
-				const candidate = path.join(dir, claimed);
-				if (fs.existsSync(candidate)) {
-					latestFile = candidate;
-					bindReason = "p1";
-					break;
-				}
-			}
-		}
-	}
-
-	if (sessionMapDirty) {
-		try {
-			atomicWriteJson(sessionMapPath, sessionMap);
-		} catch {
-			// best-effort
-		}
-	}
-
-	// Unbound is normal before the user selects work. Keep UserPromptSubmit
-	// silent: binding is internal AI state, not a user-facing notification.
-	// Mutation safety remains enforced by session-contract-gate at PreToolUse.
-	if (!latestFile) return null;
-
-	const progress = readProgress(latestFile);
-	if (!progress) return null;
+	const resolution = resolveSessionContract({ cwd, sessionId });
+	// Unbound and invalid bindings are deliberately silent in prompt injection.
+	// The mutation gate uses the same result and reports the actionable reason.
+	if (resolution.status !== STATES.BOUND) return null;
+	const progress = resolution.progress;
+	const contract = resolution.contract;
 
 	const currentPhase = progress.current_phase || "unknown";
 	const phaseLabel = PHASE_LABELS[currentPhase] || currentPhase;
@@ -213,7 +119,8 @@ function buildSessionInject(opts) {
 		`Issue : ${progress.issue || "unknown"}${progress.issue_url ? " — " + progress.issue_url : ""}`,
 		`Phase : ${phaseLabel}`,
 		`Gates : cleared=[${gatesCleared}]`,
-		...(sessionId ? [`Session: ${sessionId} (bind: ${bindReason})`] : []),
+		`Contract: ${contract.id} (${contract.contract_digest.slice(0, 12)})`,
+		...(sessionId ? [`Session: ${sessionId} (bind: explicit)`] : []),
 	];
 
 	if (progress.current_task) {
@@ -223,15 +130,6 @@ function buildSessionInject(opts) {
 	const decisions = progress.key_decisions || [];
 	if (decisions.length > 0) {
 		lines.push(`Decisions: ${decisions.join(" | ")}`);
-	}
-
-	// If bound via P1/P2 but file lacks session_id, nudge AI to anchor it
-	if (sessionId && bindReason !== "p0" && progress.session_id !== sessionId) {
-		lines.push(
-			`⚠ [HARNESS] progress 파일에 session_id가 비어있거나 불일치합니다. ` +
-				`다음 편집 시 "session_id": "${sessionId}" 필드를 ${path.basename(latestFile)} 에 기록하세요 ` +
-				`(P0 anchor → session-map 손상에도 견고).`,
-		);
 	}
 
 	const phaseKeys = Object.keys(PHASE_LABELS);

@@ -7,6 +7,14 @@
     "org": "nextain",
     "repo": "nextain/naia-adk"
   },
+  "context_boundaries": {
+    "shared_entrypoints_are_indexes": "AGENTS.md is the canonical repository index and CLAUDE.md/GEMINI.md are byte-identical mirrors. Shared entrypoints may contain identity, mandatory index paths, context routing, session-contract locations, and permanent safety boundaries only; never current goals, issue state, implementation plans, completion claims, or artifact wording.",
+    "session_contract_authority": "Mutation requires resolveSessionContract() = BOUND in the nearest project: local registry pointer, active contract digest, explicit session_bindings entry, and progress contract reference must all agree. Progress or Markdown session_id fields never grant authority.",
+    "project_isolation": "Never infer a session binding from a parent workspace, child project, or the repository's only unfinished work unit. Concurrent contracts must declare non-overlapping target_ownership paths.",
+    "context_is_not_output": "Background, reference, example, conversation, and internal context constrain reasoning but are not code, UI, or external-document content. Rendering requires explicit atom-level derive, quote, or require authority for a declared output unit and audience.",
+    "source_atom_contract": "Every v2 source atom declares subject, effect, and render_policy. Non-directive source classifications keep directive_ids exactly empty; rendering authority never becomes objective authority.",
+    "output_unit_contract": "Every verifiable v2 output unit declares kind, audience, exposure, objective_atom_ids, and content_source_atom_ids. Agent-workflow background/precondition atoms cannot be shipping content edges."
+  },
   "local_projects": {
     "naia-os": {
       "purpose": "Naia OS desktop app (Tauri 2 + React + Three.js + Node.js agent)",

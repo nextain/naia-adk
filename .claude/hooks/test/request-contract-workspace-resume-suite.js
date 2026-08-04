@@ -245,12 +245,13 @@ test("a changed failure fingerprint starts a fresh consecutive Stop episode", ()
 	assert.equal(core.readJson(unit.paths.state).terminal, undefined);
 });
 
-test("incomplete lineage requires a fresh signed resume and rejects replay", () => {
+test("incomplete lineage remains immutable until signed resume while new sessions stay distinct", () => {
 	const fx = fixture();
 	const unit = start(fx);
 	bind(fx, unit);
 	for (let i = 0; i < 3; i++) core.evaluateCompletion(unit, fx.cwd, "claude");
-	assert.equal(core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "S2", cwd: fx.cwd }).code, "incomplete_lineage_requires_resume");
+	assert.equal(core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "S2", cwd: fx.cwd }).kind, "context");
+	assert.notEqual(core.findUnit(fx.cwd, "codex", "S2").id, unit.id);
 	const head = core.readJson(unit.paths.head);
 	const binding = core.readJson(unit.paths.binding);
 	const scope = core.sha256(core.canonicalJson(core.scopeProjection(core.readJson(unit.paths.contract))));
@@ -269,7 +270,8 @@ test("incomplete lineage requires a fresh signed resume and rejects replay", () 
 		sign_count: 2,
 	});
 	core.resumeIncomplete(unit, receipt, fx.cwd);
-	assert.equal(core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "S2", cwd: fx.cwd }).kind, "context");
+	core.addSessionBinding(unit, "codex", "S3", CLIENT_VERSIONS.codex, process.pid, core.processIdentity(process.pid));
+	assert.equal(core.findUnit(fx.cwd, "codex", "S3").id, unit.id);
 	for (let i = 0; i < 3; i++) core.evaluateCompletion(unit, fx.cwd, "claude");
 	assert.throws(() => core.resumeIncomplete(unit, receipt, fx.cwd), /authority_/);
 });

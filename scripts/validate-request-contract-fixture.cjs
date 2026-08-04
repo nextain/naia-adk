@@ -154,7 +154,7 @@ function buildFixture() {
 		...expectedDirectives.slice(0, 7).map((id) => `    - { id: ${id}, introduced_in: "${"a".repeat(40)}", reason: "native source record was not preserved" }`),
 		"products:",
 		"  - product: naia-adk-request-contract",
-		"    req_count: 14",
+		"    req_count: 16",
 		"    requirements:",
 		...expectedIds.map((id) => `      - { id: ${id}, title: "Fixture ${id}", status: ${pendingIds.has(id) ? "active" : "verified"} }`),
 		"",

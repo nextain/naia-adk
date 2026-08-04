@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "id": "USR-010",
+  "id": "USR-011",
   "source_kind": "human",
   "origin": "native_user_message",
   "actor": "user",
@@ -15,7 +15,7 @@
   "events": [
     {
       "sequence": 1,
-      "event_id": "USR-010-E01",
+      "event_id": "USR-011-E01",
       "source_kind": "human",
       "origin": "native_user_message",
       "locator": "conversation://private/discord-participant-context#selected-user-message-01",

@@ -215,11 +215,26 @@ test("adding a client session advances binding and work revisions and stales pri
 	ingestReview(fx, unit, cleanReview(fx, unit, "BEFORE-SESSION-TWO"));
 	const beforeBinding = core.readJson(unit.paths.binding).binding_epoch;
 	const beforeRevision = core.readJson(unit.paths.head).work_revision;
-	const result = core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "SECOND-CLIENT", cwd: fx.cwd });
-	assert.equal(result.kind, "context");
+	core.addSessionBinding(unit, "codex", "SECOND-CLIENT", CLIENT_VERSIONS.codex, process.pid, core.processIdentity(process.pid));
+	assert.equal(core.findUnit(fx.cwd, "codex", "SECOND-CLIENT").id, unit.id);
 	assert.equal(core.readJson(unit.paths.binding).binding_epoch, beforeBinding + 1);
 	assert.equal(core.readJson(unit.paths.head).work_revision, beforeRevision + 1);
 	assert(core.evaluateCompletion(unit, fx.cwd, "codex").errors.includes("review_clean_streak_incomplete"));
+});
+
+test("joining a session already owned by another active lineage fails atomically", () => {
+	const fx = fixture();
+	const first = start(fx, "claude", "FIRST");
+	const second = start(fx, "codex", "SECOND");
+	const firstBefore = fs.readFileSync(first.paths.head, "utf8");
+	const secondBefore = fs.readFileSync(second.paths.head, "utf8");
+	assert.throws(
+		() => core.addSessionBinding(first, "codex", "SECOND", CLIENT_VERSIONS.codex, process.pid, core.processIdentity(process.pid)),
+		(error) => error.code === "session_already_bound",
+	);
+	assert.equal(fs.readFileSync(first.paths.head, "utf8"), firstBefore);
+	assert.equal(fs.readFileSync(second.paths.head, "utf8"), secondBefore);
+	assert.equal(core.findUnit(fx.cwd, "codex", "SECOND").id, second.id);
 });
 
 test("mutation leases prevent completion between PreToolUse and matching PostToolUse", () => {
@@ -245,7 +260,7 @@ test("only the owning session can close a mutation lease and reviews wait for al
 	const fx = fixture();
 	const unit = start(fx, "claude", "S1");
 	bind(fx, unit);
-	assert.equal(core.handleEvent({ client: "codex", clientVersion: CLIENT_VERSIONS.codex, eventName: "SessionStart", sessionId: "S2", cwd: fx.cwd }).kind, "context");
+	core.addSessionBinding(unit, "codex", "S2", CLIENT_VERSIONS.codex, process.pid, core.processIdentity(process.pid));
 	assert.equal(core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Bash", toolUseId: "owned-by-s1" }).kind, "allow");
 	assert.throws(() => core.issueReviewInvocation(unit, fx.cwd, "S2"), (error) => error.code === "review_mutation_in_flight");
 	const foreignStop = core.handleEvent({ client: "codex", eventName: "Stop", sessionId: "S2", cwd: fx.cwd });
@@ -407,7 +422,7 @@ test("historical coverage commits exact opaque atom, artifact, and trace-edge ma
 	const unit = start(fx);
 	bind(fx, unit);
 	for (const [label, mutate] of [
-		["ATOM", (contract) => { contract.sources[0].obligation_atom_ids[0] = "OBL-forged"; }],
+		["ATOM", (contract) => { contract.sources[0].obligation_atoms[0].id = "OBL-forged"; }],
 		["ARTIFACT", (contract) => { contract.artifacts[0].subject_id = "REQ-forged"; }],
 		["EDGE", (contract) => { contract.edges[0].to = contract.edges[1].to; }],
 	]) {

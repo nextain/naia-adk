@@ -2,12 +2,12 @@
 # Read this file when entering Plan or Review phases
 version: 1
 updated: 2026-08-03
-total: 82
+total: 85
 
 # Status counts
 by_status:
   candidate: 0
-  active: 70
+  active: 73
   implemented: 0
   verified: 11
   withdrawn: 1
@@ -19,7 +19,9 @@ source_ledger:
   records:
     - { id: USR-008, path: ".agents/requirements/sources/USR-008-aipol-preservation-incident.json", sha256: "sha256:d787c9c238f3550e8a3ec7f1b6806f6fdd91958684e4a4a4c31aed3f4720e81d", source_kind: human, origin: native_user_message, locator: "conversation://private/aipol-preservation-incident" }
     - { id: USR-009, path: ".agents/requirements/sources/USR-009-discord-unattended-supervision.json", sha256: "sha256:174b855353f94e6d06643929f63256ad85ef9665b73ab61786a49efd61d099a1", source_kind: human, origin: native_user_message, locator: "conversation://private/discord-unattended-supervision" }
-    - { id: USR-010, path: ".agents/requirements/sources/USR-010-discord-participant-context.json", sha256: "sha256:55cb80e01527663fb00a07818b1cd54e8b3ae4c249f4539bc3403d5664649767", source_kind: human, origin: native_user_message, locator: "conversation://private/discord-participant-context" }
+    - { id: USR-010, path: ".agents/requirements/sources/USR-010-entrypoint-session-contract.json", sha256: "sha256:c59fb8d9d76f846510e2cb37918bbdf34dc709b3c098e34aa34a1236f5161b71", source_kind: human, origin: native_user_message, locator: "conversation://private/adk-entrypoint-session-contract" }
+    - { id: USR-011, path: ".agents/requirements/sources/USR-011-discord-participant-context.json", sha256: "sha256:848f72368333e6de00bcf6f7d2a081285ccefbc6a32d0a02c8018507e7e00b64", source_kind: human, origin: native_user_message, locator: "conversation://private/discord-participant-context" }
+    - { id: USR-012, path: ".agents/requirements/sources/USR-012-code-complexity-gate.json", sha256: "sha256:bb3d683a0daff1b8ddbf3d4d4f80a5b60402b9b6d80eb2210d4ba86e9538cdfc", source_kind: human, origin: native_user_message, locator: "conversation://private/code-complexity-gate" }
   # These identifiers predate the immutable ledger. Their native messages were not found in
   # local Claude/Codex session archives, so they must remain explicit gaps rather than being
   # reconstructed from AI-authored requirement prose.
@@ -34,6 +36,15 @@ source_ledger:
 
 # Per-product summary
 products:
+  - product: naia-adk
+    title: "Naia Account Document Translation"
+    req_count: 1
+    priority_high: 1
+    priority_medium: 0
+    modules: [translate-doc]
+    requirements:
+      - { id: NDT-001, title: "Naia Account Model Discovery and Resumable Document Translation", status: active }
+
   - product: naia-adk-discord-sessions
     title: "Observable Discord AI Sessions"
     req_count: 12
@@ -72,8 +83,8 @@ products:
 
   - product: naia-adk-request-contract
     title: "Original Request Contract Integrity"
-    req_count: 14
-    priority_high: 14
+    req_count: 16
+    priority_high: 16
     priority_medium: 0
     modules: [source-provenance, review, workspace-scope, traceability, completion, adapters, registration, privacy, compatibility, distribution, authority, preservation]
     requirements:
@@ -91,6 +102,8 @@ products:
       - { id: RCI-012, title: "Product Surface Preservation Contract", status: active }
       - { id: RCI-013, title: "Source Authority Hierarchy", status: active }
       - { id: RCI-014, title: "Release-Bound Preservation Proof", status: active }
+      - { id: RCI-015, title: "Entrypoint Index and Session Contract Isolation", status: active }
+      - { id: RCI-016, title: "Context and Output Content Separation", status: active }
 
   - product: naia-os
     title: "Naia OS Desktop App"

@@ -102,10 +102,13 @@ test("native Claude Code and Codex processes discover the same nested project ro
 	}
 	const claudeUnit = core.findUnit(fx.cwd, "claude", "NATIVE-C");
 	const codexUnit = core.findUnit(fx.cwd, "codex", "NATIVE-X");
-	assert.equal(claudeUnit.id, codexUnit.id);
-	for (const binding of claudeUnit.head.session_bindings) {
-		assert(binding.host_process_ids.includes(process.pid));
-		assert(binding.host_process_identities.includes(core.processIdentity(process.pid)));
+	assert.notEqual(claudeUnit.id, codexUnit.id);
+	for (const unit of [claudeUnit, codexUnit]) {
+		assert.equal(unit.head.session_bindings.length, 1);
+		for (const binding of unit.head.session_bindings) {
+			assert(binding.host_process_ids.includes(process.pid));
+			assert(binding.host_process_identities.includes(core.processIdentity(process.pid)));
+		}
 	}
 	for (const [client, sessionId] of [["claude", "NATIVE-C"], ["codex", "NATIVE-X"]]) {
 		const output = runNativeAdapter(client, fx, { hook_event_name: "Stop", session_id: sessionId, cwd: nested }, "Stop");
@@ -331,7 +334,7 @@ test("baseline manifest is independently self-digested inside protected lifecycl
 
 test("successful units compact to non-sensitive receipts after retention", () => {
 	const fx = fixture();
-	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "PRE", cwd: fx.cwd, prompt: "quarantined private source", origin: "native_user" });
+	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "S1", cwd: fx.cwd, prompt: "quarantined private source", origin: "native_user" });
 	core.handleEvent({ client: "claude", clientVersion: CLIENT_VERSIONS.claude, eventName: "SessionStart", sessionId: "S1", cwd: fx.cwd });
 	const unit = core.findUnit(fx.cwd, "claude", "S1");
 	const consumedQuarantineDir = path.join(core.harnessRoot(fx.cwd), "quarantine");
@@ -403,7 +406,7 @@ test("retention compaction revalidates immediately before removing a successful 
 
 test("failed final compaction validation preserves consumed quarantine evidence", () => {
 	const fx = fixture();
-	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "PRE", cwd: fx.cwd, prompt: "quarantined source evidence", origin: "native_user" });
+	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "S1", cwd: fx.cwd, prompt: "quarantined source evidence", origin: "native_user" });
 	core.handleEvent({ client: "claude", clientVersion: CLIENT_VERSIONS.claude, eventName: "SessionStart", sessionId: "S1", cwd: fx.cwd });
 	core.handleEvent({ client: "claude", eventName: "UserPromptSubmit", sessionId: "S1", cwd: fx.cwd, prompt: "complete the adopted request", origin: "native_user" });
 	const unit = core.findUnit(fx.cwd, "claude", "S1");

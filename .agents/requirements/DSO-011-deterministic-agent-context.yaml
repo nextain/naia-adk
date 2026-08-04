@@ -9,11 +9,11 @@ source_provenance: ledger_resolved
 priority: critical
 created: 2026-08-03
 updated: 2026-08-04
-source_directives: [USR-010]
-source_evidence: [USR-010]
-source_atoms: [USR-010-E01]
+source_directives: [USR-011]
+source_evidence: [USR-011]
+source_atoms: [USR-011-E01]
 source_kind: derived
-derived_from: [USR-010]
+derived_from: [USR-011]
 derivation_kind: expand
 change_effect: extend
 preserves: [ephemeral-provider-session, isolated-child-home, explicit-project-instructions, no-model-heartbeat]

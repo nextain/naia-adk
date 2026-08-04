@@ -13,6 +13,13 @@
 
 Each lens includes actionable checks for headless reviewers.
 
+The following lenses are mandatory at **every** stage and cannot be removed by
+project overrides or `--light`:
+
+1. `context_output_separation` (`FINDING-CONTEXT-OUTPUT-SEPARATION`) — Check every new code, UI, and document content unit against its source atoms. Background/reference/example/internal text needs explicit `derive`, `quote`, or `require` render authority; agent-workflow background/preconditions are never shipping content edges.
+2. `audience_surface_fit` (`FINDING-AUDIENCE-SURFACE-FIT`) — Check that each output unit's kind, audience, and exposure match the actual consumer and surface. Correct text on the wrong audience surface is a finding.
+3. `unjustified_product_surface` (`FINDING-UNJUSTIFIED-PRODUCT-SURFACE`) — Compare the baseline and current surface inventory. Do not flag unchanged baseline text, but flag each newly introduced public/product surface that lacks objective and content-source authority.
+
 ### planning
 - **Reviewers**: 4 separated role executions (tool-independent; roles are not optional)
 - **Convergence**: the general two-Clean floor plus one Clean first verdict from each of the four planning roles; any evidence change invalidates the affected stage (`--light` forbidden)

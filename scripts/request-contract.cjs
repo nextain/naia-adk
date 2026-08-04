@@ -9,6 +9,7 @@ function usage(code = 0) {
 	process.stderr.write(`Usage:
   node scripts/request-contract.cjs enable|disable|status|compact
   node scripts/request-contract.cjs status --unit <opaque-id>
+  node scripts/request-contract.cjs join-session --unit <opaque-id> --client <claude|codex> --session <id> [--client-version <version>]
   node scripts/request-contract.cjs bind --unit <opaque-id> --file <contract.json>
   node scripts/request-contract.cjs authority-challenge --unit <opaque-id> --file <canonical-presentation.json>
   node scripts/request-contract.cjs review-challenge --unit <opaque-id> --writer-session <id>
@@ -93,7 +94,10 @@ function main() {
 		output = { compacted: core.compactExpiredUnits(cwd) };
 	} else {
 		const unit = locate(cwd, parsed.unit);
-		if (command === "bind") {
+		if (command === "join-session") {
+			if (!parsed.client || !parsed.session) throw Object.assign(new Error("--client and --session are required"), { code: "session_binding_arguments_missing" });
+			output = core.addSessionBinding(unit, parsed.client, parsed.session, parsed["client-version"] || null, process.pid, core.processIdentity(process.pid));
+		} else if (command === "bind") {
 			core.captureWorkspaceOccurrences(unit, cwd);
 			const contract = controlJsonFile(cwd, unit, "contract", parsed.file);
 			output = core.bindContract(unit, contract, { publicKeyPem: core.loadAuthorityKey(cwd), cwd, now: Date.now() });

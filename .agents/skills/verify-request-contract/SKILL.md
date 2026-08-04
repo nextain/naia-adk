@@ -16,8 +16,10 @@ node -c .agents/hooks/core/request-contract.js
 node -c .agents/hooks/core/request-contract-adapter.js
 node -c .agents/hooks/core/request-contract-review-runner.js
 node -c .agents/hooks/core/harness-core.js
+node -c .agents/hooks/core/session-contract.js
 node -c .claude/hooks/request-contract.js
 node -c .claude/hooks/session-inject.js
+node -c .claude/hooks/session-contract-gate.js
 node -c .codex/hooks/request-contract.cjs
 node -c .codex/hooks/session-inject.cjs
 node -c .codex/hooks/session-contract-gate.cjs
@@ -90,6 +92,7 @@ node -e "const core=require('./.agents/hooks/core/request-contract.js'); for(con
 
 ```powershell
 pnpm --filter @naia-adk/artifacts-spec test
+node packages/artifacts-spec/test/validate-request-contract.cjs
 node -e "const fs=require('fs');if(fs.readdirSync('packages/artifacts-spec/schemas').filter(x=>x.endsWith('.schema.json')).length!==16)process.exit(1)"
 ```
 
@@ -99,6 +102,7 @@ node -e "const fs=require('fs');if(fs.readdirSync('packages/artifacts-spec/schem
 
 ```powershell
 node .claude/hooks/sync-entry-points.js --check
+node .claude/hooks/test/run-sync-entry-points-test.cjs
 node -e "const fs=require('fs');const a=fs.readFileSync('.agents/skills/verify-request-contract/SKILL.md'),u=fs.readFileSync('.users/skills/verify-request-contract/SKILL.md');if(!a.equals(u)||fs.readFileSync('.claude/skills/verify-request-contract','utf8').trim()!=='../../.agents/skills/verify-request-contract')process.exit(1)"
 git check-ignore .agents/harness/units/probe .agents/harness/quarantine/probe .agents/harness/receipts-v2/probe .agents/harness/claims/probe .agents/harness/locks/probe .claude/git-push-approved.marker
 ```
@@ -107,7 +111,10 @@ git check-ignore .agents/harness/units/probe .agents/harness/quarantine/probe .a
 
 ```powershell
 node .agents/hooks/core/harness-session-inject.test.js
+node .agents/hooks/core/session-contract.test.js
 node .codex/hooks/test-session-contract-gate.cjs
+node .agents/skills/review-pass/test-context-output-lenses.cjs
+node .agents/skills/review-pass/test-output-boundary.cjs
 node .codex/hooks/test-hook-registration.cjs
 pnpm run test:harness-native
 ```
@@ -148,12 +155,15 @@ FAIL이면 실패한 불변식과 파일을 수정하고 1번부터 전부 다�
 | `.agents/hooks/core/request-contract-adapter.js` | 공통 envelope 변환 |
 | `.agents/hooks/core/request-contract-review-runner.js` | 실제 격리 실행·프로세스 증거 수집 |
 | `.agents/hooks/core/harness-core.js` | 도구 비종속 세션 바인딩·상태 주입 코어 |
+| `.agents/hooks/core/session-contract.js` | 경량 계약 shape·digest·registry·ownership·프로젝트 경계 resolver |
+| `.agents/hooks/core/session-contract.test.js` | 동시 A/B·중복·stale·소유권 충돌·부모/자식 격리 회귀 |
 | `.agents/hooks/core/harness-session-inject.test.js` | 미바인딩 무출력·바인딩 상태 주입·변경 게이트 분리 회귀 |
 | `.claude/hooks/request-contract.js` | Claude Code 어댑터 |
 | `.claude/hooks/session-inject.js` | Claude Code 세션 상태 주입 어댑터 |
 | `.codex/hooks/request-contract.cjs` | Codex 어댑터 |
 | `.codex/hooks/session-inject.cjs` | Codex 세션 상태 주입 어댑터 |
 | `.codex/hooks/session-contract-gate.cjs` | 미바인딩 변경 차단·읽기/바인딩 허용 게이트 |
+| `.claude/hooks/session-contract-gate.js` | 동일 게이트의 Claude Code host adapter |
 | `scripts/request-contract-review-runner.cjs` | 허용 reviewer + 별도 attestor 실행기 |
 | `.claude/settings.json` | Claude Code 등록 |
 | `.codex/hooks.json` | Codex 등록 |
