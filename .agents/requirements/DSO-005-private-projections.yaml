@@ -25,9 +25,10 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-scope.mjs", symbol: "authorizeDiscordMessage", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/platform-security.mjs", symbol: "owner-only POSIX mode or Windows ACL enforcement", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-005 rejects unsafe event shapes and coalesces high-rate activity", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability-lifecycle.test.mjs", symbol: "DSO-005 rejects unsafe event shapes and coalesces high-rate activity", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "DSO-005 isolated child environment tests", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-001/DSG-003/DSG-009/DSG-012 authorization and privacy", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs", symbol: "DSG-001 authorization and DSG-003 bounded delivery cases", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-009 scoped projection and DSG-012 private settings cases", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-005 binding, author, sanitization, and CDN fail-closed tests", coverage: full }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md", ".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], integration: null }
 decisions: []

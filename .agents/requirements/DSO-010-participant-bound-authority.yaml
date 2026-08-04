@@ -50,7 +50,9 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-conversation.mjs", symbol: "renderParticipantConversation/trustedParticipantPolicy", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "transientPrompt/recovery authority", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-021 participant authority/history/recovery cases", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-021 validates schema v2 workspace exact participant coverage and safe labels", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 participant history authority and exact-v2 recovery cases", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs", symbol: "DSG-021 participant identity privacy and scope cases", coverage: full }
   reviews:
     planning: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.planning"
     development: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.development"

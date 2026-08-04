@@ -70,7 +70,8 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/systemd.mjs", symbol: "permanent startup failure restart suppression", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbol: "cutover prepare/verify/canary/rollback and artifacts list/prune", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-021 rollback bundle and startup reason cases", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-cutover-rollback.test.mjs", symbol: "DSG-021 creates and restores a verified code config unit and database-compatible rollback bundle", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-service-platform.test.mjs", symbol: "DSG-021 candidate target identity config drift and startup reason cases", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/service-cutover-hardening.test.mjs", symbol: "managed marker fail-closed, immutable runtime, exact legacy adoption, install upgrade and quarantine boundary, Windows disabled-start policy, serialized artifact retention/prune, exact registration, schema-v2 execution binding, and generation binding", coverage: full }
   reviews:
     planning: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.planning"

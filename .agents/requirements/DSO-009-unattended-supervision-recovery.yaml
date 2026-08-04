@@ -65,7 +65,8 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/store.mjs", symbol: "listOperationalJobs/historicalAttentionCounts", coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/unattended-health.test.mjs", symbol: "DSO-009 deterministic health and rendered scheduler fault matrix", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSO-009 approval/coordinator/install contract", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-010 approval-required actions are removed from unattended access and prompts", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", symbol: "DSO-009 fresh stores do not recreate the withdrawn coordinator API or table", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/operational-query.test.mjs", symbol: "bounded hot-path and paged operator history", coverage: full }
   reviews:
     planning: ".agents/research/discord-unattended-supervision/review-summary.yaml#planning"

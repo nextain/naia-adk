@@ -32,6 +32,8 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/service-manager.mjs", symbol: "Windows Task Scheduler and operator launcher", coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "Codex/Claude parity and recovery interruption tests", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-004/DSG-007/DSG-008 simulated Gateway and reboot recovery; actual host reboot receipt pending local setup", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway-session.test.mjs", symbol: "DSG-004 persists sequence only after durable dispatch and resumes through the store adapter", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSG-007 reboot recovery preserves job identity and requires review without retry or resend", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-service-platform.test.mjs", symbol: "DSG-008 service manager and launcher cases; actual host reboot receipt pending local setup", coverage: partial }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md", ".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], integration: null }
 decisions: []
