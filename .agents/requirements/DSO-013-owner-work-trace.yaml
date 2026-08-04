@@ -1,0 +1,74 @@
+id: DSO-013
+title: "Owner-Visible Work Trace and Concise Profile Labels"
+title_ko: "소유자 작업 추적과 짧은 프로파일 표시"
+product: naia-adk-discord-sessions
+module: owner-work-trace
+status: active
+source: derived
+source_provenance: ledger_resolved
+priority: high
+created: 2026-08-04
+updated: 2026-08-04
+issue_url: "https://github.com/nextain/naia-adk/issues/26"
+source_directives: [USR-013]
+source_evidence: [USR-013]
+source_atoms: [USR-013-E01, USR-013-E02, USR-013-E03, USR-013-E04, USR-013-E05, USR-013-E06, USR-013-E07, USR-013-E08, USR-013-E09, USR-013-E10]
+source_kind: derived
+derived_from: [USR-013]
+derivation_kind: clarify
+change_effect: extend
+preserves: [default-watch-stream, stable-instance-identity, safe-event-ledger, discord-receive-path, service-recovery]
+must_not_change: [no-private-chain-of-thought, no-raw-prompt-or-stdout, no-secret-command-result-or-absolute-path, no-discord-rest-receive-polling]
+destructive_approval: null
+description: |
+  A local owner can opt into a detailed work trace that explains the observable
+  execution phase and safe tool activity under a concise configured profile
+  label. Private chain-of-thought remains unavailable and is never persisted.
+acceptance_criteria:
+  - "`watch --verbose` reads only the local SQLite event ledger and never polls Discord REST for receive activity."
+  - "Verbose watch uses the existing owner-only OS-account, config, and SQLite permission boundary and adds no Discord authorization path or second watcher process."
+  - "Human verbose output begins with an optional persona.shortName of at most 24 Unicode characters and falls back to the concise instance name, never the long persona name, UUID, or service hash as its primary label."
+  - "Codex and Claude normalize provider-exposed reasoning presence into a bounded planning phase and normalize safe tool categories without persisting reasoning text, assistant text, prompts, commands, tool results, environment values, secrets, or absolute paths."
+  - "Verbose output distinguishes backend readiness, planning, reading, editing, executing, testing, tool start/finish, result readiness, delivery, failure, known blockers, verification events, elapsed ledger time, and unsupported detail when evidence exists; it never invents a decision summary or next step that the provider did not expose as an allowlisted enum."
+  - "Provider free-form decision summaries, blockers, or next-step text remain unsupported because they cannot be proven free of prompt, reasoning, command, result, path, or secret content; the operator view states this limitation rather than persisting or synthesizing them."
+  - "Verbose output uses an actionable short job reference accepted by `job <reference>` and fails ambiguous references closed, while JSONL preserves the complete event object and job identity and adds explicit stable instance plus bounded profile metadata."
+  - "The existing non-verbose watch stream, job lifecycle, service recovery, Discord status projection, and schema-v1/v2 configs without persona.shortName remain compatible; changing only shortName does not change execution authority/configuration revisions or recovery eligibility."
+  - "Invalid, control-bearing, bidirectional, secret-like, path-like, bracketed, blank, or oversized profile labels fail configuration validation."
+  - "Automated tests cover Codex, Claude, missing-detail fallback, named instances, invalid labels, raw-content non-retention, JSONL compatibility, CLI argument conflicts, owner-only state, restart/recovery compatibility, and rollback snapshots before and after shortName."
+  - "Skill and design documentation distinguish safe phase metadata from unavailable private chain-of-thought; deterministic complexity preflight, full Discord tests, managed rollback preparation, four-instance idle checks, and canary evidence gate deployment."
+non_goals:
+  - "Expose, decrypt, reconstruct, or infer private chain-of-thought."
+  - "Add a second watcher process, provider session persistence, or a raw log archive."
+  - "Send progress messages to Discord or change participant authorization."
+decisions:
+  - "Use the existing append-only safe event ledger and CLI instead of adding an IPC stream or encrypted raw-provider log."
+  - "Treat provider-exposed reasoning presence as phase evidence only; absence remains explicit and no free-form reasoning summary is synthesized."
+  - "Keep persona.shortName outside execution-profile and recovery authority digests because it is an operator-only presentation label."
+trace:
+  code:
+    - { path: ".agents/skills/manage-discord-sessions/helper/adapters.mjs", symbols: ["parseCodex", "parseClaude"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/operator-trace.mjs", symbols: ["operatorProfile", "formatVerboseEvent"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbols: ["watch"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-config.mjs", symbols: ["loadMessengerConfig", "validateOperatorProfileLabel"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbols: ["configurationRevision"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/store-reader.mjs", symbols: ["resolveJobReference", "JOB_REFERENCE_PREFIX_QUERY"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/store.mjs", symbols: ["resolveJobReference"], coverage: full }
+  tests:
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-adapter-environment.test.mjs", symbol: "DSO-013 normalizes reasoning presence and tool phases without content", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/operator-trace.test.mjs", symbol: "DSO-013 verbose events expose bounded state and unavailable detail", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", symbol: "DSO-013 verbose watch uses concise profile labels and stable JSONL identities", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", symbol: "DSO-013 verbose watch fails closed when its private profile config is unavailable", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", symbol: "DSO-013 short job references resolve exactly once and reject collisions", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSO-013 validates concise Unicode persona labels", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSO-013 preserves recovery authority when only the operator label changes", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/lifecycle-hardening.test.mjs", symbol: "DSG-015 exact-v2 recovery sends an operator acknowledgement only before a durable result", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-cutover-rollback.test.mjs", symbol: "DSG-021 creates and restores a verified code, config, unit, and database-compatible rollback bundle", coverage: full }
+  reviews:
+    planning: [".agents/requirements/reviews/logs/2026-08-04-issue-26-planning.md"]
+    development: [".agents/requirements/reviews/logs/2026-08-04-issue-26-development.md"]
+    test: [".agents/requirements/reviews/logs/2026-08-04-issue-26-test.md"]
+    integration: [".agents/requirements/reviews/logs/2026-08-04-issue-26-integration.md"]
+delivery_evidence:
+  docs: [".agents/skills/manage-discord-sessions/SKILL.md", "docs/design/discord-session-observability.md"]
+  deployment: "managed rollback bundles + four-instance idle checks + confirmed canary"
+  deployment_authority: [USR-013-E01, USR-013-E02, USR-013-E03, USR-013-E04, USR-013-E05]

@@ -340,7 +340,10 @@ test("install, prepare, restore, and prune share one instance artifact-operation
 	const controller = readFileSync(fileURLToPath(new URL("../helper/service-cutover-controller.mjs", import.meta.url)), "utf8");
 	const artifacts = readFileSync(fileURLToPath(new URL("../helper/cutover-artifacts.mjs", import.meta.url)), "utf8");
 	assert.match(linux, /command === "install" \? acquireDiscordArtifactOperationLock/);
-	assert.match(windows, /command === "install" \? acquireDiscordArtifactOperationLock/);
+	// Commit 209cda3 made versioned runtime artifacts Linux-only. Windows
+	// rejects upgrades and allows only a first install, so it must not enter the
+	// Linux artifact-operation lock path.
+	assert.doesNotMatch(windows, /acquireDiscordArtifactOperationLock/);
 	assert.equal((controller.match(/acquireDiscordArtifactOperationLock/g) ?? []).length >= 3, true);
 	assert.match(artifacts, /acquireOperation = acquireDiscordArtifactOperationLock/);
 });

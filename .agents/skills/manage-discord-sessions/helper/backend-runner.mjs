@@ -204,6 +204,7 @@ export async function runBackendAttempt({
 			throw error;
 		}
 		let lineNumber = 0;
+		const adapterState = {};
 		let backendOutcome = null;
 		let transientResult = null;
 		let processError = false;
@@ -230,7 +231,7 @@ export async function runBackendAttempt({
 		};
 		const recordLine = (line) => {
 			lineNumber += 1;
-			const inspected = inspectBackendLine({ backendId, line, attemptId, lineNumber });
+			const inspected = inspectBackendLine({ backendId, line, attemptId, lineNumber, adapterState });
 			if (inspected.approvalRequested) {
 				terminate("approval_ui");
 				return;
@@ -260,7 +261,7 @@ export async function runBackendAttempt({
 		const stdoutCompleted = lineReader(child.stdout, recordLine, streamFailure, null, oversizedStdoutLine);
 		const stderrCompleted = lineReader(child.stderr, (line) => {
 			lineNumber += 1;
-			if (inspectBackendLine({ backendId, line, attemptId, lineNumber }).approvalRequested) {
+			if (inspectBackendLine({ backendId, line, attemptId, lineNumber, adapterState }).approvalRequested) {
 				terminate("approval_ui");
 				return;
 			}

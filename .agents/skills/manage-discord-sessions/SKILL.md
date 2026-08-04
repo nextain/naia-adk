@@ -12,6 +12,7 @@ Use this skill as the shared Codex and Claude operator surface. Do not create a 
 The implementation is usable with `naia-adk` alone from either Codex or Claude:
 
 - append-only SQLite job and safe-event history;
+- owner-only verbose work traces with concise profile labels and bounded phase/tool metadata;
 - service freshness and job activity-health projection;
 - predeclared completion checks and trusted evidence;
 - `status`, `jobs`, `job`, `watch`, `history`, `latest`, verified
@@ -50,7 +51,7 @@ scripts/manage-discord-sessions.sh status [--json]
 scripts/manage-discord-sessions.sh health-check [--json]
 scripts/manage-discord-sessions.sh jobs [--active|--failed] [--json]
 scripts/manage-discord-sessions.sh job <job-id> [--events] [--json]
-scripts/manage-discord-sessions.sh watch [--job <job-id>] [--jsonl]
+scripts/manage-discord-sessions.sh watch [--job <job-id>] [--verbose|--jsonl]
 scripts/manage-discord-sessions.sh history --channel <channel-id> [--author <user-id>] [--limit 20] [--json]
 scripts/manage-discord-sessions.sh latest --channel <channel-id> [--author <user-id>] [--json]
 scripts/manage-discord-sessions.sh attachment --channel <channel-id> --message <message-id> --attachment <attachment-id> --output <absolute-path> [--expected-sha256 <hex>]
@@ -74,6 +75,7 @@ naia alpha status
 naia alpha jobs --active
 naia alpha job <job-id> --events
 naia alpha watch --job <job-id>
+naia alpha watch --verbose
 naia alpha service install
 naia alpha service restart
 ```
@@ -95,7 +97,9 @@ from a completed boot cannot permanently obstruct the next boot. Explicitly
 configured shared directories and same-directory records from another boot or
 host remain fail-closed.
 
-`watch` polls only the local SQLite event ledger. It is not Discord REST receive polling. Stop an interactive watch with `Ctrl-C`.
+`watch` polls only the local SQLite event ledger. It is not Discord REST receive polling. Stop an interactive watch with `Ctrl-C`. `watch --verbose` keeps the same owner-only OS-account and file-permission boundary and replaces long human identifiers with `persona.shortName` (or the concise instance fallback). It shows only allowlisted phases, tool categories, lifecycle, blocker, verification, and ledger-time evidence. Provider free-form reasoning, decision summaries, commands, results, prompts, and paths are unavailable rather than reconstructed. `--jsonl` preserves the complete event and job identity and adds the stable instance plus bounded profile metadata; it cannot be combined with `--verbose`.
+The verbose `job:앞8~뒤4` reference is accepted by `job <reference>`; a
+collision fails closed instead of selecting a job heuristically.
 `history` and `latest` are explicit operator reads, never a receive loop: they
 require exactly one `operatorActions` binding, the `read` role, and an optional
 author already allowed by that binding. `attachment` first re-reads the exact
@@ -137,7 +141,10 @@ The real config and all session state are local and ignored by Git. Only `config
 
 Put the referenced Discord token in `naia-settings/.keys/messenger-sessions/<credentialRef>` with mode `0600`. The config itself must also be mode `0600`. Choose `backend.selected` as `codex` or `claude`; no Naia Agent or Naia Shell installation is required. Make that selection before the first `service install` for an unregistered instance. For an existing registration, changing `backend.selected` is a managed runtime change and must use the verified candidate cutover procedure below; do not overwrite it with an ordinary `service install` or restart.
 
-The real config must set `runtime.approvalPolicy` explicitly to `never`;
+Set the optional `persona.shortName` to a safe operator label of at most 24
+Unicode characters, for example `온맘`, `알파`, `아이폴`, or `나이아`. It is a
+presentation label only: changing it does not change execution authority or
+recovery eligibility. The real config must set `runtime.approvalPolicy` explicitly to `never`;
 `managed`, omission, and every other value are rejected because nobody is
 available to click an unattended approval prompt. Change
 `runtime.permissionProfileEpoch` whenever the parent execution profile changes.
@@ -216,7 +223,14 @@ The service does not open a terminal automatically after login or reboot. A term
 2. `jobs` and `job <id> --events` show lifecycle, last safe activity, child-process ownership, delivery state, and why work is waiting or suspected stalled.
 3. `completionAssessment` separately shows requirement/build/test/review evidence. Recent activity means only that the process is active; it does not prove the work is correct.
 
-Use `watch --job <id>` for a live local event stream, or the scoped `!naia` commands in Discord. The local watch polls SQLite, not Discord. Journald contains service reason codes only; raw prompts, model stdout, final answers, secrets, commands, and local paths are not stored.
+Use `watch --job <id>` for the stable legacy event stream and `watch --verbose`
+for the owner-friendly profile-labelled work trace, or use the scoped `!naia`
+commands in Discord. This is not a private chain-of-thought viewer: planning
+means only that the provider exposed the presence of a reasoning phase, and
+missing safe detail is printed as unavailable. The local watch polls SQLite,
+not Discord. Journald contains service reason codes only; raw prompts, model
+stdout, final answers, secrets, commands, tool results, and local paths are not
+stored.
 
 With `service.startAt=login`, recovery begins after login. With `startAt=boot`, installation enables user lingering so recovery begins at boot. Gateway and the supervisor reconnect automatically. Only the bounded current request and binding digests are retained as authenticated ciphertext protected by an owner-only local recovery key; the assembled context prompt is reconstructed from current verified files. Legacy envelopes always become `recovery_review`. When schema-v2 `recovery.autoRetry=true`, only a read-only job with an exact participant, binding, configuration, context, and managed runtime-revision match may start a new attempt under the same job ID; mutation-capable, disabled, changed, missing, or corrupt recovery state becomes `recovery_review`. An uncertain Discord delivery also becomes `recovery_review` and is never automatically resent.
 
@@ -376,4 +390,4 @@ pnpm test:discord-sessions
 
 The deterministic suite covers persisted ordering and dedupe, Gateway commit ordering and resume state, DM/channel/thread authorization, participant-bound action intersection, isolated history modes, deterministic context drift, provider-native instruction disabling, token-owner races and fail-closed abnormal owners, cache receipts, legacy-profile quarantine, no-prompt approval rejection, no-progress intervention, operator-channel response telemetry, explicit workspace binding, delivery nonce and unknown outcomes, reboot recovery, systemd unit isolation, activity health, safe-event rejection, trusted completion evidence, rollback failure paths, and CLI visibility.
 
-Design authority: `docs/design/discord-session-observability.md`. Requirements: `DSO-001` through `DSO-012`.
+Design authority: `docs/design/discord-session-observability.md`. Requirements: `DSO-001` through `DSO-013`.

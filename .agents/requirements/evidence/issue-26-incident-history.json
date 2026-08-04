@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "issue": 26,
+  "baselineRef": "dd20504f57548dd27cb0e7971905495091077d74",
+  "issueSource": {
+    "path": ".agents/requirements/evidence/issue-26-source.json",
+    "bodySha256": "sha256:d397a968966714fbb7d2336879859fa0549af734ffeb4c7e7624b2ba530e44a8"
+  },
+  "chronology": [
+    {
+      "order": 1,
+      "source": ".agents/requirements/DSO-006-adk-only-recovery.yaml",
+      "state": "existing",
+      "effect": "Established Codex/Claude structured-stream parity and raw model-content non-retention."
+    },
+    {
+      "order": 2,
+      "source": ".agents/requirements/sources/USR-009-discord-unattended-supervision.json",
+      "state": "existing",
+      "effect": "Established truthful local supervision, no interactive Discord polling, no approval prompts, rollback, and complexity constraints."
+    },
+    {
+      "order": 3,
+      "source": ".agents/requirements/DSO-003-operator-visibility.yaml",
+      "state": "existing",
+      "effect": "Established status, jobs, job detail, and watch over the durable safe ledger."
+    },
+    {
+      "order": 4,
+      "source": ".agents/requirements/DSO-009-unattended-supervision-recovery.yaml",
+      "state": "existing",
+      "effect": "Established independent supervision and explicit recovery evidence."
+    },
+    {
+      "order": 5,
+      "source": ".agents/requirements/DSO-012-reversible-discord-agent-cutover.yaml",
+      "state": "existing",
+      "effect": "Established separate clean candidates, rollback bundles, revision binding, and canary gates."
+    },
+    {
+      "order": 6,
+      "source": ".agents/requirements/sources/USR-013-discord-owner-work-trace.json",
+      "state": "current",
+      "effect": "Records canonical application, four-bot deployment authority, owner-visible work process, and concise profile-label requirements without authorizing private chain-of-thought exposure."
+    },
+    {
+      "order": 7,
+      "source": ".agents/requirements/evidence/issue-26-source.json",
+      "state": "current",
+      "effect": "Immutably captures the focused GitHub implementation issue and its acceptance criteria."
+    }
+  ],
+  "knownDrift": [
+    "Current watch output reports byte activity but does not explain observable work stages.",
+    "Current configuration has only a potentially long persona.name and no concise operator label."
+  ],
+  "superseded": [],
+  "unresolvedAuthority": []
+}

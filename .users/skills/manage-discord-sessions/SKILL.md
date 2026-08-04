@@ -10,6 +10,7 @@ Codex와 Claude가 함께 쓰는 관리 스킬입니다. 별도 제품 CLI나 `n
 ## 현재 구현된 범위
 
 - SQLite 기반 작업·안전 이벤트 영속 기록
+- 소유자 전용 상세 작업 추적, 짧은 프로파일 표시, 제한된 단계·도구 메타데이터
 - 서비스 상태의 신선도와 작업 활동 상태 구분
 - 사전에 선언한 완료 검사와 신뢰 가능한 검증 증거
 - `status`, `jobs`, `job`, `watch`, `history`, `latest` 조회, 해시 검증 첨부 복구, 명시적 `reply`
@@ -42,7 +43,7 @@ scripts/manage-discord-sessions.sh status [--json]
 scripts/manage-discord-sessions.sh health-check [--json]
 scripts/manage-discord-sessions.sh jobs [--active|--failed] [--json]
 scripts/manage-discord-sessions.sh job <job-id> [--events] [--json]
-scripts/manage-discord-sessions.sh watch [--job <job-id>] [--jsonl]
+scripts/manage-discord-sessions.sh watch [--job <job-id>] [--verbose|--jsonl]
 scripts/manage-discord-sessions.sh history --channel <channel-id> [--author <user-id>] [--limit 20] [--json]
 scripts/manage-discord-sessions.sh latest --channel <channel-id> [--author <user-id>] [--json]
 scripts/manage-discord-sessions.sh attachment --channel <channel-id> --message <message-id> --attachment <attachment-id> --output <absolute-path> [--expected-sha256 <hex>]
@@ -66,6 +67,7 @@ naia <instance> status
 naia <instance> jobs --active
 naia <instance> job <job-id> --events
 naia <instance> watch --job <job-id>
+naia <instance> watch --verbose
 naia <instance> service install
 naia <instance> service restart
 ```
@@ -76,6 +78,14 @@ naia <instance> service restart
 선택합니다.
 
 `watch`는 로컬 SQLite 기록만 읽습니다. Discord REST 수신 폴링이 아닙니다.
+`watch --verbose`는 기존 소유자 OS 계정·파일 권한 경계를 그대로 쓰며,
+긴 식별자 대신 `persona.shortName` 또는 짧은 인스턴스 이름을 표시합니다.
+허용 목록에 든 단계·도구 종류·생명주기·장애·검증·기록 시간만 보여주고,
+자유 형식 추론·판단·명령·결과·프롬프트·경로는 재구성하지 않고 제공 불가로
+표시합니다. `--jsonl`은 전체 작업 이벤트와 안정적인 인스턴스 식별자를
+유지하면서 제한된 프로파일 메타데이터를 추가하며 `--verbose`와 함께 쓸 수 없습니다.
+상세 출력의 `job:앞8~뒤4`는 `job <참조>`에 그대로 쓸 수 있고, 충돌하면
+임의 작업을 고르지 않고 안전하게 실패합니다.
 `history`와 `latest`는 운영자가 명시적으로 한 번 실행하는 읽기 전용 조회입니다. `read` 역할과 유일한 운영 바인딩이 있어야 하며 수신 폴링으로 사용하지 않습니다. `attachment`는 정확한 메시지와 Discord CDN, 크기, 선택한 SHA-256을 검증한 뒤 소유자 전용 파일만 만듭니다. `reply`는 `reply` 역할과 유일한 운영 바인딩을 확인하고, 소유자 전용 파일의 내용을 멘션 없이 한 번 전송합니다. 결과가 `unknown`이면 자동 재전송하지 않습니다.
 
 ## 상태를 읽는 방법
@@ -103,7 +113,10 @@ naia-settings/.sessions/messenger-sessions/instances/<instance>/runtime.sqlite3
 
 실제 설정과 세션 상태는 Git에 올리지 않습니다. 설정에는 비밀값이 아니라 자격 증명 참조만 둡니다. Discord 토큰은 `naia-settings/.keys/messenger-sessions/<credentialRef>`에 권한 `0600`으로 두며, 설정 파일도 `0600`이어야 합니다. `backend.selected`를 `codex` 또는 `claude`로 선택하면 되고 `naia-agent`나 `naia-shell`은 필요하지 않습니다. 아직 등록하지 않은 인스턴스는 첫 `service install` 전에 이 값을 선택합니다. 기존 등록의 `backend.selected` 변경은 관리 런타임 전환이므로, 일반 `service install`이나 restart로 덮어쓰지 말고 아래의 검증된 후보 cutover 절차를 사용합니다.
 
-사람의 권한 설정이 바뀌면 `runtime.permissionProfileEpoch`도 바꿉니다. 무인 Discord 설정은 `runtime.approvalPolicy`를 명시적으로 `never`로 둬야 하며 `managed`와 누락 값은 안전하게 거부합니다. 스키마 v2의 모든 참여자는 `operatorUserIds`에도 있어야 합니다. 참여자 프로필은 역할 설명과 작업 제한일 뿐 파일 읽기 격리 수단이 아니며, 현재 Codex 읽기 전용·Claude 계획 모드는 같은 OS 사용자가 읽을 수 있는 파일을 프로젝트별로 격리하지 못하기 때문입니다. 따라서 현재는 호스트 운영자와 같은 수준으로 신뢰할 수 없는 사용자를 허용하지 않습니다.
+선택 항목 `persona.shortName`에는 `온맘`, `알파`, `아이폴`, `나이아`처럼
+24자 이하의 안전한 표시 이름을 둡니다. 이 값은 표시 전용이라 변경해도 실행
+권한이나 복구 자격 해시는 바뀌지 않습니다. 사람의 권한 설정이 바뀌면
+`runtime.permissionProfileEpoch`도 바꿉니다. 무인 Discord 설정은 `runtime.approvalPolicy`를 명시적으로 `never`로 둬야 하며 `managed`와 누락 값은 안전하게 거부합니다. 스키마 v2의 모든 참여자는 `operatorUserIds`에도 있어야 합니다. 참여자 프로필은 역할 설명과 작업 제한일 뿐 파일 읽기 격리 수단이 아니며, 현재 Codex 읽기 전용·Claude 계획 모드는 같은 OS 사용자가 읽을 수 있는 파일을 프로젝트별로 격리하지 못하기 때문입니다. 따라서 현재는 호스트 운영자와 같은 수준으로 신뢰할 수 없는 사용자를 허용하지 않습니다.
 
 대화 권한은 `read`와 `reply`를 함께 부여합니다. 변경 권한은 일부만 지원하는 척하지 않고 `write`+`execute` 묶음으로만 허용하며, `operatorUserIds`와 `binding.operatorActions=true`가 모두 필요합니다. Claude는 실제 무승인 변경 canary가 검증될 때까지 읽기·응답 전용입니다. `role.requiresApproval`에 든 작업은 실제 무인 허용 작업에서 제외되므로 권한이 묵시적으로 확대되지 않습니다.
 
@@ -123,7 +136,13 @@ production conversation-coordinator 런타임·활성화 분기·새 DB 테이�
 2. `jobs`, `job <id> --events`: 작업 단계, 최근 안전 활동, 자식 프로세스 소유권, 전송 상태, 대기·멈춤 의심 이유
 3. `completionAssessment`: 요구사항·빌드·테스트·리뷰 증거. 활동 중이라는 것과 결과가 올바르다는 것을 분리해 보여줍니다.
 
-실시간 확인은 `watch --job <id>` 또는 Discord의 `!naia` 명령을 사용합니다. `watch`는 로컬 SQLite만 읽으며 Discord 수신 폴링이 아닙니다. systemd journal에는 안전한 서비스 사유 코드만 남고 프롬프트, 모델 원문 출력, 최종 답변, 토큰, 명령, 로컬 경로는 저장하지 않습니다.
+기존 형식의 실시간 확인은 `watch --job <id>`, 프로파일명이 붙은 작업 단계
+확인은 `watch --verbose`, Discord 안에서는 `!naia` 명령을 사용합니다. 이는
+사적 사고과정 보기 기능이 아닙니다. `planning`은 공급자가 추론 단계의 존재만
+노출했다는 뜻이며 안전한 세부 내용이 없으면 제공 불가로 표시합니다. `watch`는
+로컬 SQLite만 읽으며 Discord 수신 폴링이 아닙니다. systemd journal에는 안전한
+서비스 사유 코드만 남고 프롬프트, 모델 원문 출력, 최종 답변, 토큰, 명령,
+도구 결과, 로컬 경로는 저장하지 않습니다.
 
 `service.startAt=login`이면 로그인 뒤, `boot`이면 설치기가 사용자 linger를 활성화해 부팅 때 복구를 시작합니다. 제한된 현재 요청과 결박 해시만 소유자 전용 로컬 복구 키로 인증 암호화해 저장하며, 조립된 컨텍스트 프롬프트는 현재 검증된 파일에서 다시 만듭니다. 구형 복구 작업은 항상 검토 대상으로 남깁니다. 스키마 v2에서 `recovery.autoRetry=true`여도 참여자·바인딩·설정·컨텍스트·관리 런타임 리비전이 정확히 같고 읽기 전용인 작업만 같은 작업 ID의 새 실행으로 이어집니다. 쓰기 가능 작업, 자동 재시도 비활성화, 키·암호문 손상은 `recovery_review`가 됩니다. Discord 전송 여부가 불확실한 답변은 자동 재전송하지 않습니다.
 

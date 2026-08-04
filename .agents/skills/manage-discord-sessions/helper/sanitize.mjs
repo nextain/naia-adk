@@ -66,7 +66,7 @@ export function validateBackendCapabilities(value = {}) {
 const ENUMS = {
 	backend: new Set(["codex", "claude", "fake"]),
 	jobType: new Set(["conversation", "issue_work", "review", "maintenance", "unknown"]),
-	phase: new Set(["setup", "planning", "reading", "editing", "testing", "reviewing", "delivering", "recovering"]),
+	phase: new Set(["setup", "planning", "reading", "editing", "executing", "testing", "reviewing", "delivering", "recovering"]),
 	toolCategory: new Set(["file_read", "file_edit", "command", "test", "build", "network", "other"]),
 	approvalType: new Set(["read", "write", "execute", "cancel", "retry"]),
 	checkpointType: new Set(["job_state"]),

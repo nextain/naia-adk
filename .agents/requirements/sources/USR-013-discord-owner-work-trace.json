@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "id": "USR-013",
+  "source_kind": "human",
+  "origin": "native_user_message",
+  "actor": "user",
+  "platform": "openai-chat",
+  "locator": "conversation://private/discord-owner-work-trace",
+  "locator_access": "restricted",
+  "capture_kind": "public_safe_verbatim_excerpt",
+  "coverage": "selected_feature_and_deployment_directives_not_complete_history",
+  "ordering": "relative_chronological_order_of_selected_messages",
+  "digest_algorithm": "sha256-canonical-event-v1",
+  "capture_note": "Discord 정본 적용·4개 로컬 봇 배포·작업 감독·짧은 프로파일 표시 요구를 입증하는 사용자 원문만 발췌했다.",
+  "events": [
+    {
+      "sequence": 1,
+      "event_id": "USR-013-E01",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-owner-work-trace#selected-user-message-01",
+      "exact_text": "정본을 수정하고 적용해줘",
+      "obligations": ["canonical-source-and-apply"],
+      "text_sha256": "sha256:74863ce5cbac6e4e345d4ddb690a3a2047a5b41cb24756131476c88ac9878265",
+      "event_sha256": "sha256:63999c4bcac9c86e0e19cdd37d680b57ce548f24bc1b918761fbd97825004623"
+    },
+    {
+      "sequence": 2,
+      "event_id": "USR-013-E02",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-owner-work-trace#selected-user-message-02",
+      "exact_text": "배포해줘",
+      "obligations": ["production-deployment-authority"],
+      "text_sha256": "sha256:972178227f7c8da9e4dc2908a64181dce4570f0e6a4799c26ef527d5c762c9c2",
+      "event_sha256": "sha256:3a9ed058409fcf9383fdf300112cbb6619e9e8e9699bacb8ff717c36c1655ae0"
+    },
+    {
+      "sequence": 3,
+      "event_id": "USR-013-E03",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-owner-work-trace#selected-user-message-03",
+      "exact_text": "온맘닷컴 디스코드 게이트웨이 실행해줘. 그리고 해당 게이트웨이 모니터링하는 명령어 알려줘. 터미널 띄워두게",
+      "obligations": ["onmam-service-run", "operator-monitoring"],
+      "text_sha256": "sha256:1bdcd4b90a1c5a7bd005ddf7148725f27642f42f89ed74ef82e5e8b9d9eb4cdc",
+      "event_sha256": "sha256:0403ce2ceeca345fd0aaf6a4ccf34feb5b65b235d04d84aef6ef9ff82e9f1912"
+    },
+    {
+      "sequence": 4,
+      "event_id": "USR-013-E04",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-owner-work-trace#selected-user-message-04",
+      "exact_text": "알파, 아이폴, 나이아도",
+      "obligations": ["alpha-aipol-naia-service-run"],
+      "text_sha256": "sha256:2c8e9e754fb8e5a8dbd6dc166df1e901f94e0628065333d838b74e635594330d",
+      "event_sha256": "sha256:3805bb6efa666e4e3ab60de76e52dd639db0be8361dfc8ac067570f207959871"
+    },
+    {
+      "sequence": 5,
+      "event_id": "USR-013-E05",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-owner-work-trace#selected-user-message-05",
+      "exact_text": "이 pc에는 4개의 봇을 돌릴게",
+      "obligations": ["four-local-bot-target"],
+      "text_sha256": "sha256:e7a863ad209cfaaa03c241c6fe5de2bc9552790dc82e43cec1af6685b00d8e6c",
+      "event_sha256": "sha256:519869b182cdedaea3982c9a0036da6bdf1947d597d688246fbd2abc63370b3f"
+    },
+    {
+      "sequence": 6,
+      "event_id": "USR-013-E06",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-owner-work-trace#selected-user-message-06",
+      "exact_text": "ai가 뭐하는지는 못봐 ?",
+      "obligations": ["owner-visible-ai-activity"],
+      "text_sha256": "sha256:372633fe9c97f13aad82aa01f7c40975ea3a73fe90d0b87e96180ddd79258b6d",
+      "event_sha256": "sha256:132b4beeafff86220f8a7ca9a3c6a5ff562b83863dab1a34af356fe3849fc509"
+    },
+    {
+      "sequence": 7,
+      "event_id": "USR-013-E07",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-owner-work-trace#selected-user-message-07",
+      "exact_text": "추론과 작업과정을 보고 싶은데 ?",
+      "obligations": ["owner-visible-reasoning-boundary", "owner-visible-work-process"],
+      "text_sha256": "sha256:9fd65538395008acfe57c685b4ce90a0a06d897198601e3ef58fdbe6f8af6327",
+      "event_sha256": "sha256:9cf6e30d8e37ec94a5737f4a0cfe0443b67c25f9adfc2a57b1368ca70585a48f"
+    },
+    {
+      "sequence": 8,
+      "event_id": "USR-013-E08",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-owner-work-trace#selected-user-message-08",
+      "exact_text": "그리고 프로파일 명으로 나오게 하면 좋을것 같아",
+      "obligations": ["profile-name-first-output"],
+      "text_sha256": "sha256:7e6a06e8eb7b8c9c6b334f2580f3c977d28031a2c53832e0b659bb6237cb3d9f",
+      "event_sha256": "sha256:5240a293ed7f880a61639009e2155c966018b20a3aa05c87ba335aaca58712f1"
+    },
+    {
+      "sequence": 9,
+      "event_id": "USR-013-E09",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-owner-work-trace#selected-user-message-09",
+      "exact_text": "세션명은 너무 길어",
+      "obligations": ["concise-profile-label"],
+      "text_sha256": "sha256:074d52093e9c6faf714e39fb92b3d31ec5b1bdc13aa6566b1107cdffdd089e90",
+      "event_sha256": "sha256:fc0df0c845423876cddb6b305f1e6e64ec67435b135e1eb096f304c00441f223"
+    },
+    {
+      "sequence": 10,
+      "event_id": "USR-013-E10",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-owner-work-trace#selected-user-message-10",
+      "exact_text": "이슈 올리고 작업해줘",
+      "obligations": ["issue-driven-implementation"],
+      "text_sha256": "sha256:0d175875b26c0a1936e1e42002b2730d20d10b99f2f75035e81c33cdd8ea0718",
+      "event_sha256": "sha256:80ecba3c593287a154390292fe4dce59bc97e2c271ac1d8f21bf05273f17822d"
+    }
+  ]
+}

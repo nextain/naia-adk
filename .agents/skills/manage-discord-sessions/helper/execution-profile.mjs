@@ -26,7 +26,7 @@ export function configurationRevision(config) {
 	return digest({
 		backend: config.backend.selected,
 		model: config.backend.profiles?.[config.backend.selected]?.model ?? null,
-		persona: config.persona,
+		persona: { name: config.persona.name, instructions: config.persona.instructions },
 		roleName: config.role.name,
 		approvalPolicy: config.runtime?.approvalPolicy ?? null,
 		autoRetry: config.recovery?.autoRetry === true,

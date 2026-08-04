@@ -127,16 +127,26 @@ test("DSG-015 exact-v2 recovery sends an operator acknowledgement only before a 
 	await firstRouter.waitForIdle();
 	let recoveryAcknowledgements = 0;
 	let recoveryRuns = 0;
+	let recoveredJobId = null;
+	let recoveredAuthorityRevision = null;
+	const recoveredConfig = { ...config, persona: { ...config.persona, shortName: "복구" } };
 	const recoveredRouter = new DiscordMessageRouter({
-		config, store, token: "token-value-long-enough", botUserId: BOT, cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime-recovered"),
+		config: recoveredConfig, store, token: "token-value-long-enough", botUserId: BOT, cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime-recovered"),
 		agentContextSnapshot: snapshot, runtimeRevision: RUNTIME_REVISION, recoveryCodec: codec,
 		send: async () => { recoveryAcknowledgements += 1; return { state: "confirmed" }; },
-		runner: async () => { recoveryRuns += 1; return { backendOutcome: "failure", transientResult: null }; },
+		runner: async ({ jobId, executionProfile }) => {
+			recoveryRuns += 1;
+			recoveredJobId = jobId;
+			recoveredAuthorityRevision = executionProfile.authorityRevision;
+			return { backendOutcome: "failure", transientResult: null };
+		},
 	});
 	recoveredRouter.resumeRecovered(recovered, { autoRetry: true });
 	await recoveredRouter.waitForIdle();
 	assert.equal(recoveryRuns, 1);
 	assert.equal(recoveryAcknowledgements, 0);
+	assert.equal(recoveredJobId, accepted.jobId);
+	assert.match(recoveredAuthorityRevision, /^[a-f0-9]{64}$/);
 	const resultEvents = store.getJob(accepted.jobId).events.filter((event) => event.kind === "operator_response_sent" || event.kind === "operator_response_missed");
 	assert.equal(resultEvents.length, 1);
 	assert.equal(resultEvents[0].kind, "operator_response_sent");

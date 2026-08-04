@@ -1,11 +1,24 @@
 import { constants as fsConstants, lstatSync, openSync, readFileSync, closeSync } from "node:fs";
 import { isAbsolute, parse, relative, resolve } from "node:path";
-import { assertOnlyKeys, safeIdentifier } from "./sanitize.mjs";
+import { assertOnlyKeys, safeIdentifier, sanitizeSummary } from "./sanitize.mjs";
 import { validateDiscordBindings } from "./discord-scope.mjs";
 import { assertOwnerOnly } from "./platform-security.mjs";
 
 const ACTIONS = new Set(["read", "reply", "write", "execute", "cancel", "retry"]);
 const RESERVED_PARTICIPANT_LABELS = new Set(["assistant", "developer", "system", "tool", "user"]);
+
+export function validateOperatorProfileLabel(value) {
+	if (value === undefined) return undefined;
+	if (typeof value !== "string" || value !== value.trim() || [...value].length < 1 || [...value].length > 24) throw new Error("persona.shortName must contain between 1 and 24 Unicode characters");
+	if ([...value].some((character) => {
+		const codePoint = character.codePointAt(0);
+		return codePoint >= 0xD800 && codePoint <= 0xDFFF;
+	})) throw new Error("persona.shortName must contain valid Unicode scalar values");
+	if (value === "." || value === ".." || /^[A-Za-z]:/.test(value)) throw new Error("persona.shortName must not resemble a path");
+	if (/[\p{Cc}\p{Cf}]/u.test(value) || /[\[\]{}()<>/\\]/.test(value) || value.includes("://")) throw new Error("persona.shortName contains unsafe profile label characters");
+	if (sanitizeSummary(value) !== value) throw new Error("persona.shortName resembles sensitive or unsafe profile label content");
+	return value;
+}
 
 function assertConversationActionContract(actions, label) {
 	if (!actions.includes("read") || !actions.includes("reply")) throw new Error(`${label} must grant both read and reply`);
@@ -86,7 +99,7 @@ export function loadMessengerConfig(path) {
 	try { config = JSON.parse(readFileSync(fd, "utf8")); } finally { closeSync(fd); }
 	assertOnlyKeys(config, new Set(["schemaVersion", "enabled", "workspaceId", "workspace", "persona", "role", "backend", "discord", "runtime", "observability", "service", "recovery"]), "messenger config");
 	for (const [value, keys, label] of [
-		[config.persona, ["name", "instructions"], "persona"],
+		[config.persona, ["name", "instructions", "shortName"], "persona"],
 		[config.role, ["name", "allowedActions", "requiresApproval"], "role"],
 		[config.backend, ["selected", "profiles"], "backend"],
 		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent", "participantProfiles"], "discord"],
@@ -101,6 +114,7 @@ export function loadMessengerConfig(path) {
 	if (config.enabled !== true) throw new Error("messenger service is disabled");
 	if (!config.persona?.name || !config.persona?.instructions) throw new Error("persona name and instructions are required");
 	if (config.persona.name.length > 80 || config.persona.instructions.length > 4_000) throw new Error("persona fields are too long");
+	validateOperatorProfileLabel(config.persona.shortName);
 	if (!config.role?.name || !Array.isArray(config.role.allowedActions)) throw new Error("role and allowedActions are required");
 	if (config.role.allowedActions.length === 0 || config.role.allowedActions.some((value) => !ACTIONS.has(value))) throw new Error("role contains an unsupported allowed action");
 	if (config.role.requiresApproval !== undefined && !Array.isArray(config.role.requiresApproval)) throw new Error("requiresApproval must be an array");

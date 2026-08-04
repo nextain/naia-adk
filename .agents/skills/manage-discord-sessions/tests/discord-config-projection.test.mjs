@@ -6,6 +6,7 @@ import { authorizeDiscordMessage } from "../helper/discord-scope.mjs";
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { DiscordStatusProjection } from "../helper/discord-projection.mjs";
 import { FileCredentialResolver, loadMessengerConfig } from "../helper/discord-config.mjs";
+import { configurationRevision } from "../helper/execution-profile.mjs";
 import { protectOwnerOnly } from "../helper/platform-security.mjs";
 import { BOT, CHANNEL, GUILD, OTHER_USER, USER, binding, cleanupDiscordFixtureRoots, fixture, widenTestAcl } from "./fixtures/discord-fixture.mjs";
 
@@ -87,6 +88,33 @@ test("DSG-012 loads only private closed settings and resolves an owner-only cred
 	assert.equal(new FileCredentialResolver(keyDirectory).resolve("discord-token"), "credential-value-long-enough");
 	widenTestAcl(keyPath);
 	assert.throws(() => new FileCredentialResolver(keyDirectory).resolve("discord-token"), /owner-only/);
+});
+
+test("DSO-013 validates concise Unicode persona labels", () => {
+	const { root, store } = fixture();
+	store.close();
+	const configPath = join(root, "operator-label-config.json");
+	const base = {
+		schemaVersion: 1, enabled: true, workspaceId: "test",
+		persona: { name: "Long development assistant name", instructions: "Review.", shortName: "온맘" },
+		role: { name: "reader", allowedActions: ["read", "reply"], requiresApproval: [] },
+		backend: { selected: "codex", profiles: { codex: { enabled: true } } },
+		discord: { credentialRef: "discord-token", botUserId: BOT, operatorUserIds: [], bindings: [binding()] },
+		runtime: { approvalPolicy: "never", permissionProfileEpoch: "profile-1", maxConcurrentJobs: 1 },
+	};
+	const load = (config) => {
+		writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+		protectOwnerOnly(configPath, "file", "test config");
+		return loadMessengerConfig(configPath);
+	};
+	const loaded = load(base);
+	assert.equal(loaded.persona.shortName, "온맘");
+	const withoutLabel = load({ ...base, persona: { name: base.persona.name, instructions: base.persona.instructions } });
+	assert.equal(withoutLabel.persona.shortName, undefined);
+	assert.equal(configurationRevision(base), configurationRevision({ ...base, persona: { ...base.persona, shortName: "다른표시" } }));
+	for (const shortName of ["", " ", "a".repeat(25), "bad\nlabel", "[spoof]", ".", "..", "../secret", "C:secret", "\uD800", "token=super-secret-value", "safe\u202Eevil"]) {
+		assert.throws(() => load({ ...base, persona: { ...base.persona, shortName } }), /shortName|profile label/);
+	}
 });
 
 test("DSG-021 validates schema v2 workspace, exact participant coverage, and safe labels", () => {

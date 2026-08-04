@@ -90,15 +90,38 @@ function toolCategory(value = "") {
 	const name = String(value).toLowerCase();
 	if (/test/.test(name)) return "test";
 	if (/build|compile/.test(name)) return "build";
+	if (/web|http|fetch|browser/.test(name)) return "network";
 	if (/read|search|list|glob|grep/.test(name)) return "file_read";
 	if (/edit|write|patch|create/.test(name)) return "file_edit";
-	if (/web|http|fetch|browser/.test(name)) return "network";
 	if (/command|exec|shell|bash|terminal/.test(name)) return "command";
 	return "other";
 }
 
 function codexItemCategory(item = {}) {
-	return toolCategory(item.type ?? item.name ?? "");
+	const categoryByItemType = new Map([
+		["command_execution", "command"],
+		["file_change", "file_edit"],
+		["file_read", "file_read"],
+		["mcp_tool_call", "other"],
+		["web_search", "network"],
+	]);
+	return categoryByItemType.get(item.type) ?? toolCategory(item.name ?? item.type ?? "");
+}
+
+function phaseForToolCategory(category) {
+	if (category === "file_read" || category === "network") return "reading";
+	if (category === "file_edit") return "editing";
+	if (category === "test" || category === "build") return "testing";
+	if (category === "command") return "executing";
+	return null;
+}
+
+function toolStarted(category) {
+	const events = [];
+	const phase = phaseForToolCategory(category);
+	if (phase) events.push({ kind: "phase_changed", safePayload: { phase } });
+	events.push({ kind: "tool_started", safePayload: { toolCategory: category } });
+	return events;
 }
 
 function parseCodex(message, rawBytes) {
@@ -110,9 +133,8 @@ function parseCodex(message, rawBytes) {
 		case "turn.started":
 			break;
 		case "item.started":
-			if (message.item?.type && !new Set(["reasoning", "agent_message"]).has(message.item.type)) {
-				events.push({ kind: "tool_started", safePayload: { toolCategory: codexItemCategory(message.item) } });
-			}
+			if (message.item?.type === "reasoning") events.push({ kind: "phase_changed", safePayload: { phase: "planning" } });
+			else if (message.item?.type && message.item.type !== "agent_message") events.push(...toolStarted(codexItemCategory(message.item)));
 			break;
 		case "item.completed":
 			if (message.item?.type && !new Set(["reasoning", "agent_message"]).has(message.item.type)) {
@@ -134,23 +156,44 @@ function claudeBlocks(message) {
 	return Array.isArray(message?.message?.content) ? message.message.content : Array.isArray(message?.content) ? message.content : [];
 }
 
-function parseClaude(message, rawBytes) {
+function claudeToolState(adapterState) {
+	if (!(adapterState.toolCategories instanceof Map)) adapterState.toolCategories = new Map();
+	return adapterState.toolCategories;
+}
+
+function parseClaude(message, rawBytes, adapterState = {}) {
 	const events = [];
 	if (message.type === "system" && message.subtype === "init") {
 		events.push({ kind: "backend_ready", safePayload: { backend: "claude" } });
 		return events;
 	}
 	if (message.type === "assistant") {
-		for (const block of claudeBlocks(message)) {
-			if (block.type === "tool_use") events.push({ kind: "tool_started", safePayload: { toolCategory: toolCategory(block.name) } });
+		const blocks = claudeBlocks(message);
+		if (blocks.some((block) => block.type === "thinking")) events.push({ kind: "phase_changed", safePayload: { phase: "planning" } });
+		for (const block of blocks) {
+			if (block.type !== "tool_use") continue;
+			const category = toolCategory(block.name);
+			events.push(...toolStarted(category));
+			if (typeof block.id === "string") claudeToolState(adapterState).set(block.id, category);
 		}
 		events.push(...activity(rawBytes));
 		return events;
 	}
 	if (message.type === "user") {
+		for (const block of claudeBlocks(message)) {
+			if (block.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
+			const tools = claudeToolState(adapterState);
+			const category = tools.get(block.tool_use_id) ?? "other";
+			tools.delete(block.tool_use_id);
+			events.push({ kind: "tool_finished", safePayload: { toolCategory: category } });
+		}
 		return events;
 	}
-	if (message.type === "stream_event") return activity(rawBytes);
+	if (message.type === "stream_event") {
+		if (message.event?.type === "content_block_start" && message.event?.content_block?.type === "thinking") events.push({ kind: "phase_changed", safePayload: { phase: "planning" } });
+		events.push(...activity(rawBytes));
+		return events;
+	}
 	if (message.type === "result") {
 		events.push(...cacheReceipt(message.usage, "claude"));
 		return events;
@@ -158,7 +201,7 @@ function parseClaude(message, rawBytes) {
 	return events;
 }
 
-export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
+export function inspectBackendLine({ backendId, line, attemptId, lineNumber, adapterState = {} }) {
 	let message;
 	try {
 		message = JSON.parse(line);
@@ -178,7 +221,7 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 	let transientResult = null;
 	if (backendId === "codex" && message.type === "item.completed" && message.item?.type === "agent_message" && typeof message.item.text === "string") transientResult = message.item.text;
 	if (backendId === "claude" && message.type === "result" && outcome === "success" && typeof message.result === "string") transientResult = message.result;
-	return { outcome, transientResult, approvalRequested, events: getBackendAdapter(backendId).parse(message, rawBytes).map((event, eventIndex) => ({
+	return { outcome, transientResult, approvalRequested, events: getBackendAdapter(backendId).parse(message, rawBytes, adapterState).map((event, eventIndex) => ({
 		...event,
 		dedupeKey: eventKey(backendId, attemptId, lineNumber, eventIndex, event.kind),
 	})) };

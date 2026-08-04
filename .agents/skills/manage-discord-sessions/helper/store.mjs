@@ -78,4 +78,5 @@ export class SessionStore {
 	listJobsForScope(scopeKey, options = {}) { return this.#reader.listJobsForScope(scopeKey, options); }
 	hasAcceptedIngressForJob(jobId) { return this.#reader.hasAcceptedIngressForJob(jobId); }
 	getJob(jobId, options = {}) { return this.#reader.getJob(jobId, options); }
+	resolveJobReference(reference) { return this.#reader.resolveJobReference(reference); }
 }
