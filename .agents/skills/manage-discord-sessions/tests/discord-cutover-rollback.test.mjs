@@ -103,6 +103,37 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 	assert.equal(readFileSync(join(bundle.runtimePath, "runtime-version.txt"), "utf8"), "prior-runtime\n");
 	assert.equal(verifyCutoverRollbackBundle(bundle.bundleDirectory).manifest.bundleId, bundle.manifest.bundleId);
 	assert.equal(verifyCutoverController(bundle, candidateRoot).manifest.bundleId, bundle.manifest.bundleId);
+	const legacyBundle = createCutoverRollbackBundle({
+		...bundleInput,
+		now: new Date("2026-08-03T00:00:30.000Z"),
+		sourceRegistration: {
+			kind: "legacy_mutable",
+			unitSha256: { service: "a".repeat(64), supervisorService: "b".repeat(64), supervisorTimer: "c".repeat(64) },
+		},
+	});
+	const legacyServiceUnit = readFileSync(legacyBundle.units.service, "utf8");
+	const legacySupervisorUnit = readFileSync(legacyBundle.units.supervisorService, "utf8");
+	assert.match(legacyServiceUnit, /rollback-bundles.*runtime\/manage-discord-sessions\/helper\/service\.mjs/);
+	assert.match(legacySupervisorUnit, /rollback-bundles.*runtime\/manage-discord-sessions\/helper\/supervisor\.mjs/);
+	assert.doesNotMatch(legacyServiceUnit, /--managed-preflight|NAIA_DISCORD_RUNTIME_ARTIFACT|NAIA_DISCORD_LAUNCH_MODE/);
+	assert.match(legacyServiceUnit, /naia-discord-token-/);
+	assert.equal(verifyCutoverRollbackBundle(legacyBundle.bundleDirectory).manifest.sourceRegistration.kind, "legacy_mutable");
+	const legacyRestoreCalls = [];
+	restoreCutoverRollbackBundle({
+		adkRoot: root,
+		stopService: () => legacyRestoreCalls.push("stop"),
+		installUnits: ({ content }) => {
+			legacyRestoreCalls.push("install");
+			assert.equal(content.service, legacyServiceUnit);
+			assert.equal(content.supervisorService, legacySupervisorUnit);
+		},
+		startService: (_names, restoredRegistrationState) => {
+			legacyRestoreCalls.push("start");
+			assert.deepEqual(restoredRegistrationState, registrationState);
+		},
+	});
+	assert.deepEqual(legacyRestoreCalls, ["stop", "install", "start"]);
+	writeFileSync(paths.activeRollbackPath, `${JSON.stringify({ schemaVersion: 1, bundleId: bundle.manifest.bundleId })}\n`, { mode: 0o600 });
 	if (process.platform !== "win32") {
 		chmodSync(paths.activeRollbackPath, 0o644);
 		assert.throws(() => restoreCutoverRollbackBundle({ adkRoot: root, stopService: () => assert.fail("stop must not run"), installUnits: () => assert.fail("install must not run"), startService: () => assert.fail("start must not run") }), /owner-only/);
