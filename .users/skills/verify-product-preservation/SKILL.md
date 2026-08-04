@@ -107,6 +107,26 @@ receipt는 runner executable digest, 실제 command, exit code, result digest, s
 route/navigation/완료 상태/console error/desktop-mobile을 비교하고, API·CLI·library·schema·
 job·operations 표면이면 각각의 실제 호출·import·validation·job entry로 관찰 결과를 검증합니다.
 
+보호 실행 영수증 코드가 바뀌면 다음 결정론 검사를 추가로 실행합니다.
+
+```bash
+node .agents/hooks/core/preservation-execution-runner.test.js
+NODE_ENV=test node .agents/hooks/core/preservation-receipt-evidence.test.js
+node scripts/preservation-attestor-service.test.cjs
+node scripts/preservation-attestor-e2e.test.cjs
+! rg -n 'PRESERVATION_EXECUTION_PUBLIC_KEY|preservation-execution\.pub' \
+  .agents/hooks/core/request-contract.js .agents/context/request-contract.json
+! rg -n -- '--test|tests/' .agents/skills/manage-discord-sessions/preservation-adapter.cjs
+```
+
+PASS는 고정 root 공개키와 verifier manifest만 신뢰하고, root policy에 사전 등록된
+binding과 보호 SQLite의 terminal challenge에서 service-side decision을 만들며, seal
+직전·직후 current snapshot을 다시 검증하는 경우입니다. Installed worker·execution
+core·snapshot core는 각각 소유권·digest로 pin하고, adapter는 수정 가능한 테스트명이
+아니라 실제 CLI/모듈을 challenge-bound nonce로 호출해야 합니다. 저장소 JSONL,
+first-use registration, caller env/key/allowlist, stale current receipt만으로 성공을 만들 수
+있으면 CRITICAL FAIL입니다.
+
 PASS:
 
 - `preserve`: 관찰 가능한 기존 동작이 동일합니다.
@@ -174,10 +194,11 @@ Delivery: RELEASE_ELIGIBLE | REVIEW_ONLY
 ## 현재 구현 경계
 
 - runtime은 stage와 role별 evidence-view digest를 기록하고 planning×4를 첫 mutation 전에 봉인하며, 구현 변경 뒤 현재 work revision에 대한 integration×4를 새로 요구합니다.
-- **PENDING:** probe JSON shape/digest 검사는 trusted execution receipt가 아닙니다.
+- **IMPLEMENTED, NOT PROVISIONED:** Linux 보호 attestor는 고정 root 공개키·verifier manifest, root-policy 사전 등록, 보호 SQLite, 실제 제품 진입점 baseline/current 실행, seal 시 current snapshot 재검증, service-side evidence-set 결정을 구현했습니다. 전용 OS 계정·키·root-owned TCB가 설치되기 전에는 계속 `REVIEW_ONLY`입니다. 저장소 `receipts.jsonl`은 감사용이며 증명 정본이 아닙니다.
 - **PENDING:** vendor `source_ref` 형식과 local tree digest는 named origin tree attestation이 아닙니다.
 - **PENDING:** built-in release regex는 모든 external side effect를 열거하지 않습니다.
-- **PENDING:** planning inventory와 구현 후 signed completion inventory가 아직 분리되지 않아 실제 변경 수명주기를 release 증명으로 사용할 수 없습니다.
+- **IMPLEMENTED, NOT PROVISIONED:** planning revision baseline과 current work revision은 별도 receipt로 보호 원장에 결박되고 짧은 수명 completion decision으로 봉인됩니다. 보호 서비스 미설치 환경에서는 이를 release 증명으로 사용할 수 없습니다.
+- **PENDING:** publication/deployment의 protected external-effect broker는 아직 이 결정을 소비하지 않습니다. 저장소 소유 hook 자체는 same-user 보안 경계가 아니므로 외부 효과는 계속 차단합니다.
 - **PENDING:** 선택된 incident directive는 전체 초기 지시·수정 이력을 대신하지 않습니다. 별도 incident-history artifact와 comparison/convergence receipt가 필요합니다.
 
 따라서 현재 보존 review가 CLEAN이어도 runtime은 `REVIEW_ONLY`로만 기록하고, Stop 성공 proof와 모든 shell/publication을 차단합니다.
@@ -193,3 +214,6 @@ Delivery: RELEASE_ELIGIBLE | REVIEW_ONLY
 | `.agents/requirements/_template.yaml` | source authority와 preservation trace 기본값 |
 | `.agents/skills/verify-implementation/SKILL.md` | 통합 검증 등록 |
 | `.agents/skills/manage-skills/SKILL.md` | 역할 기반 검증 커버리지 등록 |
+| `.agents/hooks/core/preservation-{execution-runner,receipt-evidence,snapshot}.js` | Sealed execution, protected decision verification, immutable snapshot |
+| `scripts/preservation-{attestor-service,execution-runner}.cjs` | Protected attestor and identifier-only client |
+| `deploy/preservation-attestor/` | Dedicated-identity policy and systemd protection boundary |

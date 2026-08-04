@@ -56,6 +56,11 @@ if (process.argv.includes("--self-test-release-status")) {
 const gates = [
 	{ label: "review-transcript-parser", argv: [path.join(root, "scripts", "request-contract-review-transcript.cjs")] },
 	{ label: "requirements-trace-self-test", argv: [path.join(root, "scripts", "validate-request-contract-requirements.cjs")], env: { ...process.env, RCI_SELF_TEST_ONLY: "1" } },
+	{ label: "preservation-snapshot", argv: [path.join(root, ".agents", "hooks", "core", "preservation-snapshot.test.js")] },
+	{ label: "preservation-execution-runner", argv: [path.join(root, ".agents", "hooks", "core", "preservation-execution-runner.test.js")] },
+	{ label: "preservation-receipt-evidence", argv: [path.join(root, ".agents", "hooks", "core", "preservation-receipt-evidence.test.js")] },
+	{ label: "preservation-attestor-service", argv: [path.join(root, "scripts", "preservation-attestor-service.test.cjs")] },
+	{ label: "preservation-attestor-e2e", argv: [path.join(root, "scripts", "preservation-attestor-e2e.test.cjs")] },
 ];
 let failed = false;
 for (const gate of gates) {

@@ -14,7 +14,7 @@ function processIsRunning(pid) {
 	} catch { return false; }
 }
 
-function waitForFileOrExit(path, child, timeoutMs = 3_000) {
+function waitForFileOrExit(path, child, timeoutMs = 10_000) {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		if (existsSync(path)) return true;

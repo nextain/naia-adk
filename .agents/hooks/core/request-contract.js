@@ -15,6 +15,7 @@ const fs = require("fs");
 const path = require("path");
 const cp = require("child_process");
 const preservationPolicy = require("./preservation-contract.js");
+const preservationReceipts = require("./preservation-receipt-evidence.js");
 
 const VERSION = 1;
 const DIR_MODE = 0o700;
@@ -2475,15 +2476,19 @@ function planningSeal(unit, config, binding, head, contract = null) {
 	if (!(config.preservation && config.preservation.required || contract && contract.preservation) || !roles.length) return { ok: true, digest: null, records: [] };
 	const chain = verifyReviewChain(unit.paths);
 	if (!chain.ok) return { ok: false, digest: null, records: [], errors: chain.errors };
-	const byRole = new Map();
+	const relevant = [];
 	for (const record of chain.records) {
-		if (record.verdict !== "CLEAN" || record.review_stage !== "planning" || !roles.includes(record.role)) continue;
+		if (record.review_stage !== "planning" || !roles.includes(record.role)) continue;
 		if (record.source_head !== head.source_head || record.contract_digest !== head.contract_digest || record.config_digest !== head.config_digest || record.scope_epoch !== head.scope_epoch || record.binding_epoch !== binding.binding_epoch) continue;
 		if (record.planning_digest !== binding.planning_digest || record.work_revision !== binding.planning_work_revision) continue;
-		byRole.set(record.role, record);
+		relevant.push(record);
 	}
-	if (roles.some((role) => !byRole.has(role))) return { ok: false, digest: null, records: [], errors: ["review_planning_stage_incomplete"] };
-	const records = roles.sort().map((role) => byRole.get(role));
+	const minimum = config.minimum_clean_rounds;
+	const expectedRoles = Array.from({ length: minimum }, () => roles).flat();
+	const records = relevant.slice(-expectedRoles.length);
+	if (records.length !== expectedRoles.length || records.some((record, index) => record.verdict !== "CLEAN" || record.role !== expectedRoles[index])) {
+		return { ok: false, digest: null, records: [], errors: ["review_planning_stage_incomplete"] };
+	}
 	return { ok: true, digest: sha256(canonicalJson(records.map((record) => ({ role: record.role, record_hash: record.record_hash })))), records };
 }
 
@@ -2654,9 +2659,26 @@ function issueReviewInvocation(unit, cwd, writerSessionId, now = Date.now()) {
 			if (!stable) return false;
 			return record.review_stage === "planning" || (record.workspace_digest === currentWorkspace.digest && record.work_revision === head.work_revision);
 		});
-		const coveredSlots = new Set(currentRecords.filter((record) => record.verdict === "CLEAN").map((record) => `${record.review_stage}:${record.role}`));
-		let requiredSlot = slots.find((slot) => !coveredSlots.has(`${slot.stage}:${slot.role}`));
-		if (!requiredSlot && !preservationReview && currentRecords.filter((record) => record.verdict === "CLEAN").length < config.minimum_clean_rounds) requiredSlot = slots[currentRecords.length % slots.length];
+		const currentCleanRecords = [];
+		for (const stage of [...new Set(slots.map((slot) => slot.stage))]) {
+			const records = currentRecords.filter((record) => record.review_stage === stage);
+			let lastNonClean = -1;
+			for (let index = 0; index < records.length; index++) if (records[index].verdict !== "CLEAN") lastNonClean = index;
+			currentCleanRecords.push(...records.slice(lastNonClean + 1).filter((record) => record.verdict === "CLEAN"));
+		}
+		const coveredSlots = new Map();
+		for (const record of currentCleanRecords) {
+			const key = `${record.review_stage}:${record.role}`;
+			coveredSlots.set(key, (coveredSlots.get(key) || 0) + 1);
+		}
+		let requiredSlot = null;
+		for (const stage of [...new Set(slots.map((slot) => slot.stage))]) {
+			for (let round = 0; round < config.minimum_clean_rounds && !requiredSlot; round++) {
+				requiredSlot = slots.find((slot) => slot.stage === stage && (coveredSlots.get(`${slot.stage}:${slot.role}`) || 0) <= round);
+			}
+			if (requiredSlot) break;
+		}
+		if (!requiredSlot && !preservationReview && currentCleanRecords.length < config.minimum_clean_rounds) requiredSlot = slots[currentCleanRecords.length % slots.length];
 		if (!requiredSlot) throw Object.assign(new Error("all required review slots already have current CLEAN records"), { code: "review_slots_complete" });
 		if (requiredSlot.stage === "planning") {
 			const baselineChanged = diffManifests(state.baseline, currentWorkspace.manifest).length > 0;
@@ -2664,7 +2686,7 @@ function issueReviewInvocation(unit, cwd, writerSessionId, now = Date.now()) {
 		}
 		const currentPlanningSeal = planningSeal(unit, config, binding, head, contract);
 		if (requiredSlot.stage === "integration") {
-			const planningRoles = new Set(currentRecords.filter((record) => record.review_stage === "planning" && record.verdict === "CLEAN").map((record) => record.role));
+			const planningRoles = new Set(currentCleanRecords.filter((record) => record.review_stage === "planning").map((record) => record.role));
 			if (preservationReview && effectiveRoles.some((role) => !planningRoles.has(role))) throw Object.assign(new Error("integration review cannot begin before every planning role has a CLEAN first verdict"), { code: "review_planning_stage_incomplete" });
 			if (!currentPlanningSeal.ok) throw Object.assign(new Error("integration review requires the current planning seal"), { code: "review_planning_stage_incomplete" });
 		}
@@ -2989,9 +3011,10 @@ function evaluateReviews(unit, bindings, minimum = 2) {
 	const requiredRoles = [...new Set(bindings.required_roles || [])];
 	const requiredStages = [...new Set(bindings.required_stages || (requiredRoles.length ? ["integration"] : []))];
 	const requiredSlots = requiredRoles.length ? requiredStages.flatMap((stage) => requiredRoles.map((role) => `${stage}:${role}`)) : ["integration:general"];
-	const target = Math.max(minimum, requiredSlots.length);
-	const coveredSlots = new Set();
-	const evidenceViews = new Set();
+	const slotStages = new Set(requiredSlots.map((slot) => slot.split(":", 1)[0]));
+	const target = requiredRoles.length ? requiredSlots.length * minimum : Math.max(minimum, requiredSlots.length);
+	const coveredSlots = new Map();
+	const blockedStages = new Set();
 	const runCounts = new Map();
 	const executionCounts = new Map();
 	for (const record of chain.records) {
@@ -3000,7 +3023,11 @@ function evaluateReviews(unit, bindings, minimum = 2) {
 	}
 	for (let i = chain.records.length - 1; i >= 0 && clean.length < target; i--) {
 		const r = chain.records[i];
-		if (r.verdict !== "CLEAN") break;
+		if (!slotStages.has(r.review_stage) || blockedStages.has(r.review_stage)) continue;
+		// A DIRTY or malformed record invalidates only the older suffix for its
+		// own stage. Planning evidence remains reusable when integration is
+		// remediated, matching the stage-local issuance scheduler.
+		if (r.verdict !== "CLEAN") { blockedStages.add(r.review_stage); continue; }
 		const stableFields = ["source_head", "contract_digest", "config_digest", "scope_epoch", "binding_epoch"];
 		const integrationFields = ["workspace_digest", "work_revision"];
 		const same = stableFields.every((k) => r[k] === bindings[k]) && (r.review_stage === "planning" || integrationFields.every((k) => r[k] === bindings[k]));
@@ -3026,8 +3053,8 @@ function evaluateReviews(unit, bindings, minimum = 2) {
 		const preservationValid = Array.isArray(r.preservation_vetoes) && r.preservation_vetoes.length === 0 && r.delivery_state === (bindings.expected_delivery_state || "RELEASE_ELIGIBLE");
 		const slot = `${r.review_stage}:${r.role}`;
 		const uniqueSlotsRequired = requiredRoles.length > 0;
-		const roleValid = requiredSlots.includes(slot) && (!uniqueSlotsRequired || !coveredSlots.has(slot));
-		const viewValid = r.evidence_view_digest === r.bundle_digest && /^[a-f0-9]{64}$/.test(r.full_bundle_digest || "") && (!uniqueSlotsRequired || !evidenceViews.has(r.evidence_view_digest));
+		const roleValid = requiredSlots.includes(slot) && (!uniqueSlotsRequired || (coveredSlots.get(slot) || 0) < minimum);
+		const viewValid = r.evidence_view_digest === r.bundle_digest && /^[a-f0-9]{64}$/.test(r.full_bundle_digest || "");
 		const planningValid = r.planning_digest === bindings.planning_digest && (r.review_stage === "planning" ? r.planning_seal_digest === null : r.planning_seal_digest === bindings.planning_seal_digest);
 		const sameBundle = requiredSlots.length > 1 || !bindings.bundle_digest || r.bundle_digest === bindings.bundle_digest;
 		const invocation = r.invocation_nonce && readJson(path.join(unit.paths.pending, `review-${r.invocation_nonce}.json`));
@@ -3068,17 +3095,16 @@ function evaluateReviews(unit, bindings, minimum = 2) {
 				isolationValid = false;
 			}
 		} else isolationValid = false;
-		if (!same || !covered || !isolated || !findingsValid || !preservationValid || !roleValid || !viewValid || !planningValid || !sameBundle || !r.run_id || runCounts.get(r.run_id) !== 1 || !invocationValid || !claimsValid || !executorValid || !isolationValid) break;
-		if (clean.some((x) => x.run_id === r.run_id)) break;
+		if (!same || !covered || !isolated || !findingsValid || !preservationValid || !roleValid || !viewValid || !planningValid || !sameBundle || !r.run_id || runCounts.get(r.run_id) !== 1 || !invocationValid || !claimsValid || !executorValid || !isolationValid) { blockedStages.add(r.review_stage); continue; }
+		if (clean.some((x) => x.run_id === r.run_id)) { blockedStages.add(r.review_stage); continue; }
 		invocationNonces.add(r.invocation_nonce);
 		executionIds.add(r.isolation.execution_id);
 		reviewerContexts.add(r.executor.context_id);
 		reviewerProcesses.add(reviewerProcessIdentity);
-		coveredSlots.add(slot);
-		evidenceViews.add(r.evidence_view_digest);
+		coveredSlots.set(slot, (coveredSlots.get(slot) || 0) + 1);
 		clean.push(r);
 	}
-	const slotCoverage = requiredSlots.every((slot) => coveredSlots.has(slot));
+	const slotCoverage = requiredSlots.every((slot) => (coveredSlots.get(slot) || 0) >= (requiredRoles.length ? minimum : 1));
 	const ok = clean.length >= target && slotCoverage;
 	const incompleteCode = slotCoverage || !requiredRoles.length ? "review_clean_streak_incomplete" : "review_required_slots_incomplete";
 	return { ok, errors: ok ? [] : [incompleteCode], clean };
@@ -3148,7 +3174,9 @@ function completionAssessment(unit, cwd, config, now) {
 		pv = preservationPolicy.validateWorkspace(contract, { baseline: lifecycleState.baseline, current: ws.current.manifest, cwd, config, sourceRecords: sources.records, probeRunner: preservationRunnerContext(cwd, config) });
 		if (!pv.ok) errors.push(...pv.errors);
 		if (contract.preservation) {
-			errors.push("preservation_real_entry_attestation_pending", "preservation_incident_history_pending", "preservation_review_convergence_pending", "external_effect_gate_pending");
+			const receiptEvidence = preservationReceipts.evaluate({ cwd, unitId: unit.id, file: path.join(unit.paths.unit, "preservation", "decision.json"), contract, binding, head: currentHead, now });
+			if (!receiptEvidence.ok) errors.push(...receiptEvidence.errors);
+				errors.push("preservation_incident_history_pending", "external_effect_gate_pending");
 			if ((contract.preservation.vendor_sources || []).length > 0) errors.push("preservation_vendor_origin_attestation_pending");
 		}
 		if (contract.status !== "complete") errors.push("contract_status_not_complete");
@@ -3231,7 +3259,8 @@ function verifyCompletionProof(unit, cwd, config, head, state, terminal) {
 	if (!contract || proof.contract_digest !== contractDigest(contract)) errors.push("completion_proof_contract_digest_mismatch");
 	if (proof.scope_history_head !== (scopeHistory.head && scopeHistory.head.chain_head)) errors.push("completion_proof_scope_history_mismatch");
 	if (proof.review_chain_head !== (reviewChain.head && reviewChain.head.chain_head)) errors.push("completion_proof_review_chain_mismatch");
-	if (!Array.isArray(proof.review_record_hashes) || proof.review_record_hashes.length < Math.max(config.minimum_clean_rounds, requiredReviewSlots(config, contract).length)) errors.push("completion_proof_review_records_missing");
+	const requiredReviewCount = effectiveReviewRoles(config, contract).length ? requiredReviewSlots(config, contract).length * config.minimum_clean_rounds : config.minimum_clean_rounds;
+	if (!Array.isArray(proof.review_record_hashes) || proof.review_record_hashes.length < requiredReviewCount) errors.push("completion_proof_review_records_missing");
 	let cv = { ok: false, errors: [], ids: { sourceIds: [], sourceMappings: [], directiveIds: [], targetIds: [], criterionIds: [], authorityIds: [], authorityMappings: [], tombstoneIds: [], tombstoneMappings: [], artifactIds: [], edgeIds: [], occurrenceIds: [], changeMappings: [] } };
 	if (contract && sources.ok) {
 		cv = validateContract(contract, sources.records, state.occurrences || [], { now: terminal.at, publicKeyPem: loadAuthorityKey(cwd, config), cwd, config });

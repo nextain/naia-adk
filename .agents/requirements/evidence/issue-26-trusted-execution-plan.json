@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "issue": 26,
+  "requirement": "RCI-014",
+  "source": "USR-014",
+  "baselineRef": "dd20504f57548dd27cb0e7971905495091077d74",
+  "scopeMode": "EXPANSION",
+  "objective": "Replace the preservation runtime's synthetic signed JSON boundary with execution-derived receipts issued by a protected attestor, while keeping all external effects denied.",
+  "invariants": [
+    "The attestor never signs caller-authored probe semantics; only a live runner result can be consumed.",
+    "Every receipt binds one pre-execution challenge, unit, contract, scope and binding epoch, work revision, lifecycle stage, repository subject, runner, adapter, executable argv, exit outcome, raw-output digests, allowlisted result IDs, expiry, and credential epoch.",
+    "Baseline execution uses a sealed immutable Git tree and completion execution uses a sealed current workspace snapshot with pre/post identity checks.",
+    "Planning evidence cannot satisfy completion, and every four-role stage requires two consecutive clean executions per role.",
+    "Execution is read-only and without network; filesystem writes are limited to attestor-owned scratch, and sockets, service-manager calls, messages, publication, and every other external effect remain denied rather than brokered by this change.",
+    "Linux uses a protected OS identity, immutable installed worker, service-owned key and store, and a pinned bubblewrap sandbox; an unsupported, unavailable, or unprovisioned platform remains REVIEW_ONLY.",
+    "Repository receipt JSONL remains audit-only; request-contract accepts only a short-lived evidence-set decision signed after the attestor verifies its protected SQLite ledger and a root-owned verifier manifest.",
+    "A dedicated preservation credential, key epoch, runner allowlist, adapter allowlist, installed execution core, and snapshot core are pinned in root-owned policy and never reused from the review runner.",
+    "The attestor API accepts identifiers only; it requires a root-policy preregistration instead of trusting first use, creates each challenge, executes actual product modules or CLI, persists terminal state, rematerializes the current subject at seal, and seals the complete baseline/current set itself."
+  ],
+  "modules": [
+    {
+      "phase": 1,
+      "files": [
+        ".agents/hooks/core/preservation-execution-runner.js",
+        "scripts/preservation-execution-runner.cjs",
+        "scripts/preservation-attestor-service.cjs",
+        "deploy/preservation-attestor/naia-preservation-attestor.service",
+        ".agents/context/request-contract.json"
+      ],
+      "result": "Sealed real-entry execution and signed receipt issuance under a dedicated OS identity, service-owned credential and store, and pinned build epoch",
+      "verification": "Positive Linux isolated-service run plus same-UID, forged, replayed, drifted, wrong-stage, wrong-command, timeout, signal, symlink, and result-substitution tests. Missing service isolation, key ownership, pinned worker, or sandbox fails closed."
+    },
+    {
+      "phase": 2,
+      "files": [
+        ".agents/skills/manage-discord-sessions/preservation-adapter.cjs",
+        ".agents/hooks/core/preservation-execution-runner.js"
+      ],
+      "result": "The exact ten Discord contract surfaces execute through baseline/current production modules or CLI with challenge-bound exact observations",
+      "verification": "Generic nonzero exits, guard errors, extra output, wrong challenge, unknown capability IDs, ambient config/DB use, no-op substitutions, and surface-set drift all fail."
+    },
+    {
+      "phase": 3,
+      "files": [
+        ".agents/hooks/core/request-contract.js"
+      ],
+      "result": "Request-contract reads one protected-key evidence-set decision for the active binding and keeps every external effect blocked.",
+      "verification": "Two complete four-role rounds are required in round-major order; intervening DIRTY reviews invalidate the seal; missing or stale attestor receipts keep delivery REVIEW_ONLY; shell, service, network, message and publication paths remain blocked."
+    },
+    {
+      "phase": 4,
+      "files": ["deploy/preservation-attestor/README.md"],
+      "result": "Provisioning and rollback are explicit operator steps; absence of the protected OS service is observable and never downgraded to a local signer.",
+      "verification": "A same-user key, caller-supplied public key, environment private key, repository-owned policy, unpinned installed worker/core, unsupported platform, or unavailable service deterministically returns REVIEW_ONLY."
+    }
+  ],
+  "nonGoals": [
+    "Treat a schema-valid signature as proof of execution",
+    "Allow arbitrary shell commands through regex classification",
+    "Implement or authorize external effects; they remain blocked for this change",
+    "Enable request-contract enforcement before the protected service, keys, and allowlists are provisioned",
+    "Expose private model reasoning or Discord message content"
+  ],
+  "failureScenarios": [
+    "A writer invokes a blind signer over fabricated output; prevented because the protected attestor accepts identifiers only and performs execution itself.",
+    "The worktree or adapter changes after hashing; prevented by sealed snapshots, post-run digest checks, and protected rematerialization immediately before and after seal signing.",
+    "A planning receipt or prior revision is replayed at release; prevented by root-policy preregistration, planning/current revision separation, challenge terminal state, receipt expiry, and a short-lived signed evidence-set decision."
+  ],
+  "reviewProtocol": {
+    "reviewReceiptDeliveryState": "REVIEW_ONLY",
+    "releaseDecision": "Request-contract validates the protected attestor evidence-set decision against a fixed root-owned public key and verifier manifest, and preserves REVIEW_ONLY whenever any required receipt or control is absent. Publication and deployment remain blocked until a protected external-effect broker consumes the decision.",
+    "noCircularUpgrade": true
+  }
+}

@@ -308,7 +308,7 @@ test("preservation collects planning and integration evidence views but remains 
 		if (["baseline_preservation", "implementation_test"].includes(role)) assert(integrationView.included_sections.includes("materials"), `${role} integration receives current materials`);
 	}
 	const reviews = [];
-	for (let index = 0; index < 7; index++) {
+	for (let index = 0; index < 15; index++) {
 		const review = cleanReview(fx, unit, `SLOT-${index + 1}`);
 		reviews.push(review);
 		ingestReview(fx, unit, review);
@@ -316,9 +316,10 @@ test("preservation collects planning and integration evidence views but remains 
 	let result = core.handleEvent({ client: "claude", eventName: "Stop", sessionId: "S1", cwd: fx.cwd });
 	assert.equal(result.kind, "block");
 	assert(result.message.includes("review_required_slots_incomplete"), result.message);
-	const finalReview = cleanReview(fx, unit, "SLOT-8");
+	const finalReview = cleanReview(fx, unit, "SLOT-16");
 	reviews.push(finalReview);
 	ingestReview(fx, unit, finalReview);
+	assert.equal(reviews.length, 16);
 	assert.equal(new Set(reviews.map((review) => review.evidence_view_digest)).size, 8);
 	result = core.handleEvent({ client: "claude", eventName: "Stop", sessionId: "S1", cwd: fx.cwd });
 	assert.equal(result.kind, "block");
@@ -380,7 +381,7 @@ test("preservation blocks implementation until planning is sealed and closes sta
 	let mutation = core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Edit", toolUseId: "before-plan", toolInput: { file_path: "src/product.txt" } });
 	assert.equal(mutation.kind, "block");
 	assert.equal(mutation.code, "request_contract_planning_review_required");
-	for (let index = 0; index < 4; index++) ingestReview(fx, unit, cleanReview(fx, unit, `PLAN-${index + 1}`));
+	for (let index = 0; index < 8; index++) ingestReview(fx, unit, cleanReview(fx, unit, `PLAN-${index + 1}`));
 	mutation = core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Edit", toolUseId: "after-plan", toolInput: { file_path: "src/product.txt" } });
 	assert.equal(mutation.kind, "allow");
 
@@ -397,18 +398,62 @@ test("preservation blocks implementation until planning is sealed and closes sta
 	assert.throws(() => core.issueReviewInvocation(unit, fx.cwd, "S1"), (error) => error.code === "review_planning_window_closed");
 });
 
+test("a DIRTY planning verdict resets both complete rounds before implementation", () => {
+	const fx = fixture();
+	const configPath = path.join(fx.cwd, ".agents", "context", "request-contract.json");
+	const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+	const dirtyReviewer = process.platform === "win32" ? "dirty-reviewer.cjs" : "dirty-reviewer.sh";
+	config.review_runner.allowed_reviewer_digests.push(core.sha256(fs.readFileSync(path.join(__dirname, "fixtures", dirtyReviewer))));
+	fs.writeFileSync(configPath, JSON.stringify(config));
+	cp.execFileSync("git", ["add", ".agents/context/request-contract.json"], { cwd: fx.cwd });
+	pinLifecyclePreservationProbes(fx);
+	const unit = start(fx);
+	bind(fx, unit, lifecyclePreservationContract(fx, unit));
+	for (let index = 0; index < 4; index++) ingestReview(fx, unit, cleanReview(fx, unit, `PRE-DIRTY-${index + 1}`));
+	const dirty = cleanReview(fx, unit, "DIRTY", { reviewerFixture: "dirty-reviewer" });
+	ingestReview(fx, unit, dirty);
+	let mutation = core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Edit", toolUseId: "dirty-plan", toolInput: { file_path: "src/product.txt" } });
+	assert.equal(mutation.kind, "block");
+	assert.equal(mutation.code, "request_contract_planning_review_required");
+	for (let index = 0; index < 8; index++) ingestReview(fx, unit, cleanReview(fx, unit, `POST-DIRTY-${index + 1}`));
+	mutation = core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Edit", toolUseId: "clean-after-dirty", toolInput: { file_path: "src/product.txt" } });
+	assert.equal(mutation.kind, "allow");
+});
+
+test("an integration DIRTY resets integration only and converges after two new rounds", () => {
+	const fx = fixture();
+	const configPath = path.join(fx.cwd, ".agents", "context", "request-contract.json");
+	const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+	const dirtyReviewer = process.platform === "win32" ? "dirty-reviewer.cjs" : "dirty-reviewer.sh";
+	config.review_runner.allowed_reviewer_digests.push(core.sha256(fs.readFileSync(path.join(__dirname, "fixtures", dirtyReviewer))));
+	fs.writeFileSync(configPath, JSON.stringify(config));
+	cp.execFileSync("git", ["add", ".agents/context/request-contract.json"], { cwd: fx.cwd });
+	pinLifecyclePreservationProbes(fx);
+	const unit = start(fx);
+	bind(fx, unit, lifecyclePreservationContract(fx, unit));
+	for (let index = 0; index < 8; index++) ingestReview(fx, unit, cleanReview(fx, unit, `PLAN-BEFORE-INTEGRATION-${index + 1}`));
+	for (let index = 0; index < 4; index++) ingestReview(fx, unit, cleanReview(fx, unit, `INTEGRATION-PRE-DIRTY-${index + 1}`));
+	ingestReview(fx, unit, cleanReview(fx, unit, "INTEGRATION-DIRTY", { reviewerFixture: "dirty-reviewer" }));
+	for (let index = 0; index < 8; index++) ingestReview(fx, unit, cleanReview(fx, unit, `INTEGRATION-POST-DIRTY-${index + 1}`));
+	assert.throws(() => core.issueReviewInvocation(unit, fx.cwd, "S1"), (error) => error.code === "review_slots_complete");
+	const completion = core.evaluateCompletion(unit, fx.cwd, "claude");
+	assert.equal(completion.kind, "block");
+	assert(!completion.errors.includes("review_required_slots_incomplete"), completion.errors.join(","));
+	assert(!completion.errors.includes("preservation_review_convergence_pending"), completion.errors.join(","));
+});
+
 test("a declared preservation contract cannot shrink the fixed review roles through optional configuration", () => {
 	const fx = fixture();
 	pinLifecyclePreservationProbes(fx, { required: false, requiredRoles: ["general"] });
 	const unit = start(fx);
 	bind(fx, unit, lifecyclePreservationContract(fx, unit));
 	const issuedRoles = [];
-	for (let index = 0; index < 3; index++) {
+	for (let index = 0; index < 5; index++) {
 		const review = cleanReview(fx, unit, `OPTIONAL-PRESERVATION-${index + 1}`);
 		issuedRoles.push(review.role);
 		ingestReview(fx, unit, review);
 	}
-	assert.deepEqual(issuedRoles, ["source_fidelity", "baseline_preservation", "implementation_test"]);
+	assert.deepEqual(issuedRoles, ["source_fidelity", "baseline_preservation", "implementation_test", "authority_release", "general"]);
 	const mutation = core.handleEvent({ client: "claude", eventName: "PreToolUse", sessionId: "S1", cwd: fx.cwd, toolName: "Edit", toolUseId: "optional-role-bypass", toolInput: { file_path: "src/product.txt" } });
 	assert.equal(mutation.kind, "block");
 	assert.equal(mutation.code, "request_contract_planning_review_required");

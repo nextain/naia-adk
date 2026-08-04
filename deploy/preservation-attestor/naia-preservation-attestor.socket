@@ -1,0 +1,14 @@
+[Unit]
+Description=Naia preservation attestor socket
+
+[Socket]
+ListenStream=/run/naia-preservation/attestor.sock
+SocketUser=root
+SocketGroup=naia-preservation
+SocketMode=0660
+Backlog=32
+MaxConnections=32
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target
