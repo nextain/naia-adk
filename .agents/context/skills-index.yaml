@@ -83,10 +83,10 @@ skills:
 
   review-pass:
     trigger: "코드 리뷰, 교차 검증, stage-gated review"
-    what: "4단계 멀티 AI 상호검증 리뷰 (planning/development/test/integration)"
+    what: "결정론적 복잡도 선행 게이트 + 4단계 멀티 AI 상호검증 리뷰 (planning/development/test/integration)"
     arg: null
-    scripts: []
-    note: "planning/integration은 원요청·baseline·보존 계약을 필수 입력으로 하고 4개 역할을 분리하며, preservation/권한 CRITICAL 단독 발견도 veto로 유지."
+    scripts: [scripts/review-preflight.mjs, scripts/measure-complexity.mjs]
+    note: "저장소 전체 변경을 줄·바이트·긴 줄로 모델 리뷰 전에 측정하며 부분 범위 우회를 거부한다. 해시·줄/바이트 상한·사유·책임자·권한 근거·90일 이내 만료에 묶인 예외도 자동 Clean이 아니며 검토자가 실제 코드와 대조한다. planning/integration은 원요청·baseline·보존 계약을 필수 입력으로 하고 4개 역할을 분리하며, preservation/권한 CRITICAL 단독 발견도 veto로 유지."
 
   secret-vault:
     trigger: "암호화된 키 파일 풀기, key.age unlock/lock, 키 추가 후 재암호화, 복호화가 깨져 보임, data-private 시크릿"

@@ -22,6 +22,7 @@ trace:
     - { path: ".agents/hooks/core/request-contract-adapter.js", symbol: "projectRoot", coverage: full }
     - { path: ".agents/context/request-contract.json", symbol: "product_roots / exclusions", coverage: full }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "nested root, unrelated repo, worktree, and whole-repository scope cases", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-native-compaction-suite.js", symbol: "native Claude Code and Codex processes discover the same nested project root", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-workspace-resume-suite.js", symbol: "whole-repository scope captures changes under skills and docs", coverage: partial }
   reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

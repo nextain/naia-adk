@@ -21,6 +21,7 @@ trace:
     - { path: ".agents/hooks/core/request-contract.js", symbol: "buildReviewBundle / issueReviewInvocation / appendReview", coverage: full }
     - { path: ".agents/skills/review-pass/SKILL.md", symbol: "Governed-mode preflight", coverage: full }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "review bundle and scope-history coverage fault cases", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-review-completion-suite.js", symbol: "review bundle contains every exact source and full contract", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-authority-scope-suite.js", symbol: "scope-history tampering is detected independently of current contract", coverage: partial }
   reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "requirements": ["DSO-010", "DSO-011", "DSO-012"],
+  "issue": "https://github.com/nextain/naia-adk/issues/22",
+  "revisionBinding": {
+    "baseRevision": "c06fd513ad57f650860e62f1f691a2a12db6515f",
+    "candidateState": "uncommitted-working-tree",
+    "releaseEligible": false,
+    "reason": "final adversarial convergence and a clean revision-bound receipt are still required"
+  },
+  "reviews": {
+    "planning": {
+      "status": "historical_clean_unbound",
+      "rounds": 2,
+      "reviewers": 3,
+      "note": "The planning result predates the current working-tree changes and cannot authorize release."
+    },
+    "development": {
+      "status": "in_progress",
+      "lastRound": "not_clean",
+      "resolvedContractFindings": [
+        "DSO-010, DSO-011, and DSO-012 are derived requirements with ledger-resolved provenance",
+        "DSO-012 derives from both USR-009-E05 and USR-009-E06 and treats user proposals as design inputs rather than mandates",
+        "the example context allowlist includes every root mandatory context file",
+        "the production coordinator runtime is removed while legacy state is compatibility-only and quarantined",
+        "acknowledgement uses a per-job timer independent of the 60-second supervisor and Discord polling",
+        "Linux systemd ownership is documented as process-lifetime kernel flock locking",
+        "the shared kernel lock is credential-token-derived and the service verifies both token fingerprint and Gateway READY identity",
+        "managed Linux and direct or Windows launches all acquire the same fail-closed token owner record",
+        "a complete same-host same-boot owner record is crash-reclaimed only after the recorded PID is objectively absent, while ambiguity and PID reuse remain fail-closed",
+        "a missing service PID is immediately stopped so restart ownership and supervision cannot remain falsely healthy",
+        "invalid managed runtime identity is rejected before token ownership is acquired",
+        "attach and ownership failures terminate the complete detached POSIX process group",
+        "ACK and control sends are aborted and settled before Gateway drain, including abort of the underlying timed-out ACK send",
+        "backend leader exit and inherited stream drain are bounded separately; every negative-PID signal requires an exact current leader-identity match, and unavailable post-exit identity falls back to stream teardown plus service-manager/cgroup containment",
+        "status projection PATCH and pin requests inherit shutdown cancellation and cannot perform late fallback, persistence, or pin side effects",
+        "durable sent-or-missed acknowledgement evidence prevents duplicate ACK during exact-v2 recovery",
+        "schema-v2 recovery retains only the bounded current request and binding digests, requires an exact managed runtime revision, and reconstructs context from current verified files",
+        "normal Linux installation and rollback share one immutable Git runtime-artifact builder and verifier, so mutable checkout bytes cannot impersonate an installed revision",
+        "managed service and supervisor launches require explicit mode plus complete artifact markers before config reads, token ownership, or observation; missing markers cannot fall back to direct mode",
+        "existing Linux registrations cannot be overwritten by ordinary install unless the active bundle proves the installed source, deployed candidate, and clean candidate controller",
+        "prepare, verify, canary, and rollback all use one absolute candidate CLI path",
+        "prepare refuses installed-unit or running-service runtime identity that differs from target HEAD",
+        "every cutover phase re-verifies the clean candidate controller revision and runtime tree",
+        "rollback manifest verification binds the recorded config schema version to the preserved config bytes",
+        "prepare and restore validate the preserved config with the materialized source runtime's actual loader and bind the loader/config receipt into the manifest",
+        "canary requires exact equality among job acceptance, execution, current service, and supervisor generations plus exact enabled and active Linux service/timer registrations",
+        "canary rejects revision-label lookalikes and requires host-recomputed durable schema-v2 instance, agent/workspace, context, participant authority, config, and read-only access evidence from real router admission",
+        "canary requires a durable accepted authorized Discord ingress record and historical-only attention remains visible without permanently vetoing a new healthy canary",
+        "the first managed cutover adopts only the exact verified legacy unit bytes and rechecks their manifest binding before replacement",
+        "rollback bundle verification completes before the active pointer is published, the complete Linux registration mutation is enclosed by one failure boundary, and Windows install rejects both main-service and supervisor residue before launcher creation until versioned cutover exists while first-install autoStart=false publishes only a disabled Startup fallback",
+        "service status, stop, and disable inspect the installed registration without parsing malformed candidate configuration",
+        "watchdog and supervisor use one oldest-first operational snapshot capped at 256 jobs, aggregate active and historical-attention counts, and explicit unhealthy overflow while operator job pages are bounded",
+        "failed install artifacts are removed only when unreferenced, while install, cutover preparation, rollback, and explicit prune share one per-instance kernel flock that auto-releases and cleans readiness evidence on process death while retaining installed and active rollback assets",
+        "the default non-XDG Unix token-owner namespace is boot-scoped while explicitly shared directories retain strict fail-closed semantics",
+        "backend version-probe process-group termination requires an exact immutable leader-identity match before any negative-PID signal and falls back to leader-only cleanup when identity is unavailable",
+        "the OnMam live named-instance rollout remains explicitly deferred and cannot be claimed complete from generic support alone",
+        "the Korean operator manual includes named-instance commands and per-instance config and ledger paths",
+        "canary and rollback are specified fail-closed with explicit evidence and phase ordering"
+      ],
+      "openFindings": [
+        "A final independent development review must bind to the completed candidate revision."
+      ]
+    },
+    "test": {
+      "status": "passing_pending_adversarial_review",
+      "observedAt": "2026-08-04T09:02:09+09:00",
+      "directEvidence": {
+        "discordFull": "186 total; 183 passed; 0 failed; 3 Windows-only skips",
+        "discordFailure": null,
+        "workspaceBuild": "PASS",
+        "entryPoints": "PASS",
+        "requestContractFaultSuite": "PASS",
+        "requestContractPersistedClientParity": "PASS",
+        "contractConformanceSelfTest": "PASS",
+        "benchmarkContract": "PASS",
+        "contextTranslation": "PASS with provider session-limit fallback exercised",
+        "requestContractReleaseEligibility": "BLOCKED: review_scope_stale"
+      },
+      "note": "Passing deterministic checks do not replace the missing clean adversarial review or make the candidate release-eligible."
+    },
+    "integration": {
+      "status": "pending",
+      "liveCutoverAuthorized": false,
+      "requiredBeforeCutover": [
+        "zero-failure deterministic suite",
+        "strict canary and rollback fault-matrix evidence",
+        "current revision-bound adversarial CLEAN convergence"
+      ]
+    }
+  },
+  "historicalEvidence": {
+    "DSO-009": ".agents/research/discord-unattended-supervision/review-summary.yaml",
+    "scopeNote": "The historical DSO-009 review deliberately deferred immutable rollback; DSO-012 and this evidence record supersede that limitation without rewriting the historical receipt."
+  },
+  "updatedAt": "2026-08-04T09:02:09+09:00"
+}

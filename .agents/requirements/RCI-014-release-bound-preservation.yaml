@@ -33,10 +33,10 @@ trace:
   code:
     - { path: ".agents/hooks/core/request-contract.js", symbol: "collectBaselineReviewMaterials / releaseCommandFromEvent / validateSuccessfulTerminalUnlocked", coverage: partial }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation shell and release remain blocked while the external-effect gate is pending", coverage: full }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation blocks shell indirection and release-regex false positives until classification exists", coverage: full }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation collects planning and integration evidence views but remains review only while controls are pending", coverage: partial }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation lifecycle policy is equivalent across Claude Code and Codex", coverage: full }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "completion revalidates the repository after the Clean decision and before success", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation shell and release remain blocked while the external-effect gate is pending", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation blocks shell indirection and release-regex false positives until classification exists", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation collects planning and integration evidence views but remains review only while controls are pending", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation lifecycle policy is equivalent across Claude Code and Codex", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-review-completion-suite.js", symbol: "completion revalidates the repository after the Clean decision and before success", coverage: full }
   reviews: { planning: null, development: null, test: null, integration: null }
 decisions: []

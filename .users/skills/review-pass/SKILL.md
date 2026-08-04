@@ -9,10 +9,19 @@ description: 단계별 다중 AI 교차 검토를 수행하고, 이견은 독립
 
 ## 핵심 절차
 
-1. planning, development, test, integration 단계에 맞는 검토 관점을 선택합니다.
-2. 검토자는 구현자와 다른 역할·세션·실행으로 같은 수정본을 읽습니다.
-3. 확인된 범위 내 결함은 조정자가 자동 수정하고 다시 검토합니다.
-4. 연속 Clean 기준과 원요청·보존 계약의 차단 조건을 모두 충족할 때까지 반복합니다.
+1. 모델 검토 전에 결정론적 복잡도 측정기가 변경된 실행 코드의 전체 줄 수와 추가 줄 수를 계산합니다.
+2. planning, development, test, integration 단계에 맞는 검토 관점을 선택합니다.
+3. 검토자는 구현자와 다른 역할·세션·실행으로 같은 수정본과 복잡도 보고서를 읽습니다.
+4. 확인된 범위 내 결함은 조정자가 자동 수정하고 다시 검토합니다.
+5. 연속 Clean 기준과 원요청·보존 계약·복잡도 차단 조건을 모두 충족할 때까지 반복합니다.
+
+## 복잡도 사전 게이트
+
+저장소 최상위와 기록된 기준 커밋을 강제하는 실행형 사전 게이트를 모델 리뷰 전에 돌립니다. 일반 소스뿐 아니라 AI가 직접 실행하는 `.agents/skills/*/SKILL.md`도 측정하며, 단일 파일·하위 디렉터리만 재는 우회는 거부합니다. 기본 기준은 500/800/1,200줄과 80k/160k/300k바이트, 이미 큰 파일에 250줄 이상 추가, 한 줄 1,000/5,000자 경고·차단입니다. 면제되지 않은 `REFACTOR_REQUIRED`가 있으면 모델들이 동의해도 Clean이 될 수 없습니다.
+
+분리가 불가능한 파일은 추적된 정규 파일 `.agents/context/complexity-waivers.json`에 정확한 경로·현재 SHA-256·최대 줄/바이트·20자 이상의 구체적 이유·책임자·권한 근거·90일 이내 만료일을 기록합니다. 권한 근거는 `source:USR-NNN#sha256:<digest>` 형식으로 추적된 사용자 원문 자료의 정확한 바이트에 결박하며, 변경 가능한 이슈 번호나 그럴듯한 REQ 이름만으로는 인정하지 않습니다. 글롭이나 영구 면제는 허용하지 않으며 코드가 바뀌면 면제도 자동 무효화됩니다. 유효한 면제도 `WAIVED_COMPLEXITY`와 `REVIEW_REQUIRED`로 계속 표시됩니다. 검토자는 플래그 이유를 믿지 않고 실제 코드와 대조하며, 설명과 코드가 다르면 `waiver_claim_mismatch`로 차단합니다. 이유 문구만 그럴듯하게 바꾸는 것은 수정이 아닙니다.
+
+검토자는 실행형 보고서의 `complexitySha256`를 전사에 함께 기록합니다. 코드·면제·권한 자료·HEAD가 바뀌거나 보고서 digest가 다르면 그 검토는 재사용하지 않습니다.
 
 ## CONTESTED 처리
 
@@ -35,3 +44,14 @@ description: 단계별 다중 AI 교차 검토를 수행하고, 이견은 독립
 - 단순한 검토자 불일치만으로 작업을 멈추지 않습니다.
 - 독립 중재와 원출처 검증 기록을 남깁니다.
 - 실제 중요한 사용자 결정만 별도로 보고합니다.
+
+## 상세 규범 참고자료
+
+아래 파일은 `.agents/skills/review-pass/references/`와 같은 구조·내용의 규범 mirror입니다. 실제 검토 전에는 현재 단계에 필요한 파일을 모두 읽습니다.
+
+- [사전 게이트](references/preflight.md)
+- [단계 프로필과 검토자 역할](references/stage-profiles.md)
+- [호출과 출력 계약](references/invocation-and-output.md)
+- [합의와 수렴](references/consensus-and-convergence.md)
+- [설정과 요구사항](references/configuration-and-requirements.md)
+- [보고와 전달 게이트](references/reporting-and-delivery.md)

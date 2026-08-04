@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 
 const INSTANCE_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
-const RESERVED_INSTANCES = new Set(["status", "health-check", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service"]);
+const RESERVED_INSTANCES = new Set(["status", "health-check", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service", "cutover"]);
 
 export function normalizeMessengerInstance(value = "default") {
 	const instance = String(value || "default");
@@ -25,6 +25,8 @@ export function messengerInstancePaths(adkRoot, value = "default") {
 		lockPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/service.lock`),
 		stopRequestPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/stop-request.json`),
 		supervisorStatusPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/supervisor-status.json`),
+		serviceFailurePath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/service-failure.json`),
+		activeRollbackPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/active-rollback.json`),
 		recoveryKeyPath: resolve(root, `naia-settings/.keys/messenger-sessions/session-recovery-key${keySuffix}`),
 		credentialsDirectory: resolve(root, "naia-settings/.keys/messenger-sessions"),
 	};

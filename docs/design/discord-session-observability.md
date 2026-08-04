@@ -94,11 +94,11 @@ Initial event kinds:
 
 ```text
 job_accepted, attempt_reserved, attempt_started, backend_ready,
-phase_changed, output_activity, tool_started, tool_finished,
+phase_changed, output_activity, prompt_cache_observed, tool_started, tool_finished,
 approval_required, checkpoint_saved, verification_recorded,
 attempt_exited, attempt_succeeded, retry_scheduled, delivery_started,
 delivery_confirmed, delivery_unknown, delivery_failed, recovered, profile_replaced,
-watchdog_intervened, operator_response_sent, operator_response_missed,
+recovery_review_required, watchdog_intervened, operator_response_sent, operator_response_missed,
 cancel_requested, cancelled, completed, failed
 ```
 
@@ -116,6 +116,7 @@ Closed payload contract:
 | `backend_ready` | adapter | `backend`: `codex`, `claude`, or `fake` |
 | `phase_changed` | adapter | `phase`: `setup`, `planning`, `reading`, `editing`, `testing`, `reviewing`, `delivering`, or `recovering` |
 | `output_activity` | adapter | non-negative integer `bytes` |
+| `prompt_cache_observed` | adapter | provider-native raw integer counters: `backend`, `inputTokens`, `cacheReadInputTokens`, optional `cacheCreationInputTokens`, and `outputTokens`; absence is not inferred as zero |
 | `tool_started` | adapter | `toolCategory`: `file_read`, `file_edit`, `command`, `test`, `build`, `network`, or `other`; no command/path |
 | `tool_finished` | adapter | same `toolCategory` enum |
 | `approval_required` | adapter | `approvalType`: `read`, `write`, `execute`, `cancel`, or `retry` |
@@ -130,15 +131,16 @@ Closed payload contract:
 | `delivery_failed` | core | `reasonCode`; terminal only for delivery, not for work |
 | `recovered` | core | `recoveryAction`: `resume`, `safe_retry`, or `manual_review` |
 | `profile_replaced` | core | empty; historical child settings were rejected before launch |
+| `recovery_review_required` | core | empty; recovered work needs a fresh operator request |
 | `cancel_requested` | core | empty payload |
 | `watchdog_intervened` | core | `watchdogReason`: `no_progress`; Discord delivery never owns worker lifecycle |
 | `operator_response_sent` | core | empty; safe Discord acknowledgement was delivered |
-| `operator_response_missed` | legacy | deprecated receipt telemetry; it never changes conversation or worker lifecycle |
+| `operator_response_missed` | core | empty; the accepted job's own acknowledgement timer expired before confirmation; it never changes worker lifecycle |
 | `cancelled` | core | empty payload |
 | `completed` | core | empty payload |
-| `failed` | core | `reasonCode`: `timeout`, `process_exit`, `authorization`, `no_progress_timeout`, `approval_ui_detected`, or `internal_error`; delivery has an independent state |
+| `failed` | core | `reasonCode`: `timeout`, `process_exit`, `authorization`, `delivery_unknown`, `no_progress_timeout`, `approval_ui_detected`, `context_changed_restart_required`, or `internal_error`; delivery has an independent state |
 
-Unknown keys are rejected. Enum fields accept only the values listed above. `checkId` and verifier IDs use `[A-Za-z0-9_.:-]{1,64}` and additionally reject secret-like patterns. Persisted metrics allow only `bytes`, `count`, `durationMs`, `exitCode`, `passed`, `failed`, `missing`, `total`, and `queuePosition`; values are booleans or non-negative safe integers. An optional artifact digest is local-only and must be `sha256:` followed by exactly 64 lowercase hexadecimal characters. An encoded payload above 2 KiB is rejected before formatting.
+Unknown keys are rejected. Enum fields accept only the values listed above. `checkId` and verifier IDs use `[A-Za-z0-9_.:-]{1,64}` and additionally reject secret-like patterns. Persisted metrics allow only `bytes`, `count`, `durationMs`, `exitCode`, `passed`, `failed`, `missing`, `total`, `queuePosition`, `inputTokens`, `cachedInputTokens`, `cacheReadInputTokens`, `cacheCreationInputTokens`, and `outputTokens`; values are booleans or non-negative safe integers. An optional artifact digest is local-only and must be `sha256:` followed by exactly 64 lowercase hexadecimal characters. An encoded payload above 2 KiB is rejected before formatting.
 
 The producer column is enforced, not descriptive. In particular, a backend cannot append lifecycle-authoritative `completed`, `failed`, or delivery events. Its success statement is stored only as `backend_claim` evidence; the helper owns lifecycle transitions after observing process and verification evidence.
 
@@ -146,9 +148,9 @@ Attempt ownership is also enforced. Once a new attempt becomes current, delayed 
 
 ### 3.4 Snapshot and freshness
 
-Default timing is a 10-second helper heartbeat, stale after 30 seconds, and a 120-second soft-silence warning. `noProgressInterventionSeconds` is at least the soft-silence threshold and bounds one owned-child abort; `operatorResponseSeconds` bounds the first safe Discord acknowledgement. A job-specific hard deadline is fixed at acceptance. In-process durations use a monotonic clock; persisted UTC timestamps support restart continuity. Wall-clock rollback or contradictory time evidence produces `unknown/clock_evidence_invalid`.
+Default timing is a 10-second helper heartbeat, stale after 30 seconds, and a 120-second soft-silence warning. `noProgressInterventionSeconds` is at least the soft-silence threshold and bounds one owned-child abort. Immediately after durable admission, each job arms one in-process `operatorResponseSeconds` timer and races it against its single acknowledgement attempt. This is neither Discord polling nor the 60-second external supervisor: the first outcome records exactly one `operator_response_sent` or `operator_response_missed`, and neither outcome gates worker launch. A job-specific hard deadline is fixed at acceptance. In-process durations use a monotonic clock; persisted UTC timestamps support restart continuity. Wall-clock rollback or contradictory time evidence produces `unknown/clock_evidence_invalid`.
 
-Every launch derives an execution profile from `permissionProfileEpoch`, authorization mode, backend, and access level. The child receives `approvalPolicy=never`: Codex receives an explicit `approval_policy="never"` override and Claude receives its noninteractive mode. A recovery envelope carries the prior profile only for comparison. It never supplies command options to a new child. A mismatch records `profile_replaced`, then a fresh child is created from the current profile; an explicitly changed `never` mutation profile may replace a prior guarded attempt, while unchanged mutation recovery stays in review. Approval requests are detected from bounded stdout and stderr chunks as well as structured events, then terminated as `approval_ui_detected`; they are never held in a hidden UI.
+Every launch derives an execution profile from `permissionProfileEpoch`, authorization mode, backend, and access level. The child receives `approvalPolicy=never`: Codex receives an explicit `approval_policy="never"` override and Claude receives its noninteractive mode. A queued in-process item is re-derived immediately before launch; a mismatch records `profile_replaced` and uses the current profile. A recovery envelope is evidence only and never supplies command options. Automatic recovery requires an exact schema-v2 participant, binding, configuration, context, and read-only profile match; any mismatch or mutation-capable recovery becomes `recovery_review` and needs a fresh request. Approval requests are detected from bounded stdout and stderr chunks as well as structured events, then terminated as `approval_ui_detected`; they are never held in a hidden UI.
 
 `activityHealth` is `{ value, reasonCode, observedAt, evidenceAt }`. `activityDetail` is exactly `structured`, `text_activity`, or `unsupported`.
 
@@ -225,6 +227,12 @@ XML or exact Startup launcher bytes and process ownership; both registrations
 must never coexist. An `unknown` provider completion marker is not success and
 cannot produce a Discord result delivery.
 
+Linux systemd uses nested `/usr/bin/flock --no-fork --nonblock` invocations for
+the shared bot-token identity and named-instance identity. These are kernel
+advisory locks held for the service process lifetime and released by the kernel
+on exit or crash. The token lock lives under the systemd user-manager runtime
+directory, so `PrivateTmp=yes` does not create a second ownership namespace.
+
 Discord provides two allowlisted projections. Before Slice 3, `config.json` must name operator Discord user IDs and conversation bindings. Default is deny: a participant can query only a matching DM/channel/thread binding, and only an operator can cancel, retry, or inspect cross-job metadata.
 
 - a pinned operator status message updated on meaningful transitions;
@@ -233,10 +241,12 @@ Discord provides two allowlisted projections. Before Slice 3, `config.json` must
 It does not post periodic “still alive” spam. After reboot it posts one recovery summary. A conversation participant may see only that conversation. Configured operators may see redacted cross-job metadata, never raw user content or full local paths.
 
 For each accepted conversation, the helper makes one best-effort safe
-acknowledgement attempt and records its delivery state independently. A missing
-or uncertain acknowledgement never gates coordinator admission, worker launch,
-or later messages. Transport failure cannot abort model work. The durable
-per-scope coordinator contract is defined by DSO-008.
+acknowledgement attempt under that job's own timer and records its delivery state
+independently. A missed acknowledgement never gates worker launch or later
+messages, and transport failure cannot abort model work. DSO-008 is withdrawn:
+the production coordinator runtime and activation branch are removed. Only the
+compatibility table and quarantine of pre-withdrawal recovery envelopes remain;
+new requests use the direct bounded execution path.
 
 ## 5. Completion evidence
 
@@ -290,13 +300,14 @@ Verification: deterministic Node tests for fresh/stale service, lifecycle/health
 Codex, Claude, and fake adapters map capabilities and process outcomes into the same event contract. Child environment isolation is tested.
 
 The supported floor is Codex CLI `0.146.0` and Claude Code `2.1.220`; an older
-or unparseable version is `not_ready`. A per-scope coordinator is a
-provider-neutral local record bound to a policy revision. Each short model turn
-is isolated; Codex and Claude session identities are not continuity sources.
-Bounded authorized conversation and open-work context may be retained only in
-an owner-only encrypted envelope with an explicit size and retention limit.
-Raw worker stdout/stderr/tool payload retention remains `none`. Reboot recovery
-may reconstruct coordinator context but never silently resumes mutation work.
+or unparseable version is `not_ready`. Each model turn is isolated; Codex and
+Claude session identities are not continuity sources. A schema-v2 recovery
+envelope contains only the bounded current request plus exact participant,
+binding, configuration, execution-profile, and deterministic-context evidence.
+It is owner-only authenticated ciphertext. Raw worker stdout/stderr/tool payload
+retention remains `none`. Reboot recovery starts a new read-only attempt only
+when all evidence still matches; pre-withdrawal coordinator envelopes and every
+mutation-capable or ambiguous envelope are quarantined as `recovery_review`.
 A structured worker success marker plus process exit 0 produces
 `attempt_succeeded` and lifecycle `result_ready`. Only the Gateway may then
 record real delivery events; a worker never fabricates `delivery_confirmed`.
@@ -317,11 +328,61 @@ Inbound idempotency uses `adapter + scope + sourceMessageId`. Delivery allocates
 
 Verification: actual reboot with the same job ID, new attempt ID, recovered event, exactly one helper/credential owner, Gateway resume or explicit fresh connection, one recovery notice, and zero automatic resend of `delivery_unknown`.
 
-### Slice 5 — polling migration
+### Slice 5 — polling migration and reversible cutover
 
-Legacy high-water marks become observations rather than completion receipts. Failed or unreceipted messages become review candidates.
+Legacy high-water marks become observations rather than completion receipts.
+Failed or unreceipted messages become review candidates. The 60-second
+read-only supervisor is health evidence, not a response scheduler; admission
+uses the per-job ACK timer described above.
+The watchdog and supervisor project at most 256 nonterminal jobs, oldest first,
+and use aggregate counts for the active total and historical attention. An
+active overflow is an explicit `operational_jobs_truncated` unhealthy result,
+not silent loss or an invitation to scan unbounded history.
 
-Verification: shadow comparison, single sender cutover, rollback without deleting the new ledger.
+All cutover control comes from one absolute CLI path in a separate clean
+candidate checkout, including recovery:
+
+```text
+node /absolute/candidate/.../helper/cli.mjs --adk-root /absolute/target --instance <instance> cutover prepare
+node /absolute/candidate/.../helper/cli.mjs --adk-root /absolute/target --instance <instance> cutover verify
+node /absolute/candidate/.../helper/cli.mjs --adk-root /absolute/target --instance <instance> cutover canary --job <job-id>
+node /absolute/candidate/.../helper/cli.mjs --adk-root /absolute/target --instance <instance> cutover rollback
+```
+
+Prepare requires clean, distinct candidate and target Discord runtime trees and
+creates an owner-only bundle containing the prior executable runtime, config,
+versioned service/supervisor units, source/tree identity, byte digests, and
+database compatibility plus a receipt from the copied source runtime's actual
+config loader. Managed service and supervisor launches require complete
+artifact markers before config reads or token ownership, and an existing
+registration cannot be overwritten without the verified cutover binding.
+Windows has no versioned cutover yet, so first install rejects either a main
+service or supervisor registration before creating any launcher.
+The first conversion from the skill's legacy mutable units is allowed only
+after exact unit-byte, executable, credential, registration-state, live-owner,
+and idle-ledger verification; its source hashes are rebound before install.
+Verify re-hashes every artifact. Canary is fail-closed:
+`continue` requires a verified bundle, exact installed unit bytes, enabled and
+active Linux service/timer registrations, fresh healthy supervisor/service/Gateway,
+one exact service generation across job acceptance, execution, current owner,
+and supervisor evidence, and a real router-admitted schema-v2 read-only job
+whose instance, agent/workspace, context, participant-authority, config, and
+access evidence exactly recomputes on the host before confirmed ACK and delivery;
+missing, fabricated, malformed, stale, nonterminal, recovery-review, approval-UI, or
+unconfirmed evidence is `stop`. Rollback re-verifies before mutation, stops the
+service, requires an idle ledger, revalidates the config with the copied source
+loader, restores config and versioned units, and then
+restarts. Any failed phase prevents later phases. The durable database is
+preserved and is never rewritten by rollback.
+
+Historical attention is reported but does not veto a healthy current canary.
+`service status`, `stop`, and `disable` remain available when candidate config
+is malformed. Managed copies are retained for recovery until the explicit
+`artifacts prune` command re-verifies them as unreferenced; installed and active
+rollback artifacts are always retained.
+
+Verification: shadow comparison, one sender, strict canary stop matrix, bundle
+tamper tests, rollback callback-failure ordering, and ledger preservation.
 
 ## 8. Alternatives rejected
 
@@ -340,7 +401,5 @@ Verification: shadow comparison, single sender cutover, rollback without deletin
 ## 10. Decisions required before their owning slice
 
 - Minimum supported Codex and Claude versions and their structured-output capability matrix
-- Before coordinator continuity: local payload encryption, bounded size,
-  policy-revision binding, and default message retention period
 - Before Slice 3: exact Discord command registration and operator authorization bootstrap
 - Whether direct read-only terminal attachment is worth the additional PTY proxy surface

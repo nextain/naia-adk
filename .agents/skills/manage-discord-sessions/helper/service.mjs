@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadMessengerConfig, FileCredentialResolver } from "./discord-config.mjs";
 import { DiscordGatewaySession, StoredGatewayState } from "./discord-gateway.mjs";
@@ -12,8 +12,12 @@ import { DiscordStatusProjection } from "./discord-projection.mjs";
 import { discordScopeKey } from "./discord-scope.mjs";
 import { postDiscordMessage } from "./discord-delivery.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
-import { assertOwnerOnly } from "./platform-security.mjs";
+import { assertOwnerOnly, protectOwnerOnly } from "./platform-security.mjs";
 import { fetchDiscordConversation } from "./discord-conversation.mjs";
+import { buildAgentContextSnapshot } from "./agent-context.mjs";
+import { acquireDiscordTokenOwnerLock, defaultDiscordTokenLockDirectory, discordTokenFingerprint } from "./token-owner-lock.mjs";
+import { DISCORD_SERVICE_FAILURE_REASONS } from "./constants.mjs";
+import { verifyManagedRuntimeLaunch } from "./cutover-bundle.mjs";
 
 function configuredBackendCommand(name) {
 	const executable = process.env[`NAIA_${name.toUpperCase()}_EXECUTABLE`];
@@ -56,65 +60,148 @@ export function heartbeatServiceSafely(store, input, { onBusy = () => console.er
 	}
 }
 
-export async function runDiscordService({ adkRoot, instance = "default", webSocketFactory, fetchImpl, sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)), signalSource = process } = {}) {
+export async function cleanupDiscordServiceResources({ heartbeatTimer = null, watchdogTimer = null, controlTimer = null, gateway = null, router = null, store = null, tokenOwnerLock, generation }) {
+	let firstError = null;
+	const capture = async (action) => {
+		try { await action(); }
+		catch (error) { firstError ??= error; }
+	};
+	if (heartbeatTimer) clearInterval(heartbeatTimer);
+	if (watchdogTimer) clearInterval(watchdogTimer);
+	if (controlTimer) clearInterval(controlTimer);
+	await capture(async () => router?.shutdown());
+	await capture(async () => gateway?.drain());
+	if (store) {
+		await capture(async () => heartbeatServiceSafely(store, { generation, status: "stopped", pid: null }));
+		await capture(async () => store.close());
+	}
+	await capture(async () => tokenOwnerLock?.release());
+	if (firstError) throw firstError;
+}
+
+function configuredAgentContext(root, config) {
+	if (config.schemaVersion !== 2) return { cwd: root, snapshot: null };
+	const canonicalRoot = realpathSync(root);
+	const candidate = resolve(canonicalRoot, config.workspace.path);
+	const candidateRelative = relative(canonicalRoot, candidate);
+	if (candidateRelative.startsWith("..") || isAbsolute(candidateRelative)) throw new Error("configured workspace escaped the ADK root");
+	const snapshot = buildAgentContextSnapshot({ workspace: candidate, agentId: config.workspace.agentId, entrypoint: config.workspace.entrypoint, contextFiles: config.workspace.contextFiles });
+	const resolvedRelative = relative(canonicalRoot, snapshot.workspaceRoot);
+	if (resolvedRelative.startsWith("..") || isAbsolute(resolvedRelative)) throw new Error("configured workspace escaped the ADK root");
+	return { cwd: snapshot.workspaceRoot, snapshot };
+}
+
+function startupFailure(reasonCode) {
+	const error = new Error(reasonCode);
+	error.serviceReasonCode = reasonCode;
+	return error;
+}
+
+export function classifyDiscordServiceFailure(error) {
+	if (error?.code === "DISCORD_TOKEN_ALREADY_OWNED") return "discord_token_already_owned";
+	if (error?.code === "DISCORD_TOKEN_LOCK_UNAVAILABLE") return "discord_token_lock_unavailable";
+	if (error?.code === "context_changed_restart_required") return "context_changed_restart_required";
+	if (new Set(["configuration_invalid", "context_invalid", "credential_unavailable"]).has(error?.serviceReasonCode)) return error.serviceReasonCode;
+	return "startup_or_runtime_failure";
+}
+
+export function writeDiscordServiceFailure(paths, reasonCode) {
+	if (!DISCORD_SERVICE_FAILURE_REASONS.has(reasonCode)) throw new Error("unsupported Discord service failure reason");
+	mkdirSync(paths.stateDirectory, { recursive: true, mode: 0o700 });
+	protectOwnerOnly(paths.stateDirectory, "directory", "Discord service state");
+	const temporary = `${paths.serviceFailurePath}.${process.pid}.${randomUUID()}.tmp`;
+	writeFileSync(temporary, `${JSON.stringify({ schemaVersion: 1, reasonCode, observedAt: new Date().toISOString() })}\n`, { mode: 0o600, flag: "wx" });
+	protectOwnerOnly(temporary, "file", "Discord service failure state");
+	renameSync(temporary, paths.serviceFailurePath);
+	protectOwnerOnly(paths.serviceFailurePath, "file", "Discord service failure state");
+}
+
+export function verifyManagedServiceRuntimeEnvironment({ environment = process.env, runtimePath = realpathSync(fileURLToPath(new URL("../", import.meta.url))), allowDirect = false } = {}) {
+	try { return verifyManagedRuntimeLaunch({ environment, runtimePath, allowDirect }); }
+	catch { throw startupFailure("startup_or_runtime_failure"); }
+}
+
+export async function runDiscordService({ adkRoot, instance = "default", runtimeLaunch = "direct", webSocketFactory, fetchImpl, sleep = (ms) => new Promise((resolveSleep) => setTimeout(resolveSleep, ms)), signalSource = process, tokenLockDirectory = defaultDiscordTokenLockDirectory() } = {}) {
 	const root = resolve(adkRoot);
 	const paths = messengerInstancePaths(root, instance);
-	const config = loadMessengerConfig(paths.configPath);
-	const token = new FileCredentialResolver(paths.credentialsDirectory).resolve(config.discord.credentialRef);
-	const store = new SessionStore(paths.databasePath);
-	const recoveryCodec = new RecoveryCodec(loadOrCreateRecoveryKey(paths.recoveryKeyPath));
-	const projection = config.observability?.discordStatusProjection === true ? new DiscordStatusProjection({ store, token, botUserId: config.discord.botUserId, fetchImpl }) : null;
-	const generation = randomUUID();
+	const managedRuntimeRevision = verifyManagedServiceRuntimeEnvironment({ environment: runtimeLaunch === "direct" ? { NAIA_DISCORD_LAUNCH_MODE: "direct" } : process.env, allowDirect: runtimeLaunch === "direct" });
+	let config;
+	try { config = loadMessengerConfig(paths.configPath); }
+	catch { throw startupFailure("configuration_invalid"); }
+	let agentContext;
+	try { agentContext = configuredAgentContext(root, config); }
+	catch { throw startupFailure("context_invalid"); }
+	let token;
+	try { token = new FileCredentialResolver(paths.credentialsDirectory).resolve(config.discord.credentialRef); }
+	catch { throw startupFailure("credential_unavailable"); }
+	const kernelTokenFingerprint = process.env.NAIA_DISCORD_KERNEL_TOKEN_FINGERPRINT;
+	if (kernelTokenFingerprint !== undefined && kernelTokenFingerprint !== discordTokenFingerprint(token)) throw startupFailure("discord_token_lock_unavailable");
+	// The environment marker proves only that the unit used the expected token;
+	// it never grants permission to skip shared ownership. Managed Linux adds an
+	// outer kernel flock and still acquires this cross-launch owner record.
+	const tokenOwnerLock = acquireDiscordTokenOwnerLock({ token, lockDirectory: tokenLockDirectory });
+	let store = null;
+	let router = null;
+	let projection = null;
+	let heartbeatTimer = null;
+	let watchdogTimer = null;
+	let controlTimer = null;
+	const generation = managedRuntimeRevision === null ? randomUUID() : `${managedRuntimeRevision}.${randomUUID().slice(0, 8)}`;
 	let stopping = false;
 	let gateway = null;
 	let wakeReconnect = null;
 	let wakeStop = null;
-	const stopRequested = new Promise((resolveStop) => { wakeStop = resolveStop; });
-	const delivery = fetchImpl ? (input) => import("./discord-delivery.mjs").then(({ deliverJobResult }) => deliverJobResult({ ...input, fetchImpl })) : undefined;
-	const backendExecutables = {
-		...(configuredBackendCommand("codex") ? { codex: configuredBackendCommand("codex") } : {}),
-		...(configuredBackendCommand("claude") ? { claude: configuredBackendCommand("claude") } : {}),
-	};
-	const send = fetchImpl ? (input) => postDiscordMessage({ ...input, fetchImpl }) : postDiscordMessage;
-	const loadHistory = (input) => fetchDiscordConversation({ ...input, fetchImpl: fetchImpl ?? fetch });
-	const router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: root, runtimeRoot: paths.runtimeRoot, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, loadHistory, backendExecutables });
-	let reconnectDelay = 1_000;
-	const heartbeat = () => heartbeatServiceSafely(store, { generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
-	heartbeat();
-	const recoveredJobs = store.recoverInterruptedWork();
-	router.resumeRecovered(recoveredJobs, { autoRetry: config.recovery?.autoRetry === true });
-	if (projection) {
-		for (const binding of config.discord.bindings.filter((item) => item.operatorActions === true)) {
-			const channelId = binding.threadId ?? binding.channelId;
-			if (!channelId) continue;
-			const scopeKey = discordScopeKey({ kind: binding.kind, guildId: binding.guildId, channelId: binding.channelId, threadId: binding.threadId });
-			void projection.publishScope({ scopeKey, channelId }).catch(() => {});
-		}
-	}
-	const heartbeatTimer = setInterval(heartbeat, (config.runtime?.heartbeatSeconds ?? 10) * 1_000);
-	const watchdogIntervalSeconds = Math.max(1, Math.min(config.runtime?.heartbeatSeconds ?? 10, config.runtime?.noProgressInterventionSeconds ?? config.runtime?.softSilenceSeconds ?? 120, config.runtime?.operatorResponseSeconds ?? 30));
-	const watchdogTimer = setInterval(() => { void router.watchdog().catch(() => {}); }, watchdogIntervalSeconds * 1_000);
-	watchdogTimer.unref?.();
-	const stop = () => { stopping = true; gateway?.close(1_000); wakeReconnect?.(); wakeStop?.({ resumable: false }); };
-	const controlTimer = setInterval(() => {
-		if (!existsSync(paths.stopRequestPath)) return;
-		try {
-			assertOwnerOnly(paths.stopRequestPath, "file", "Discord stop request");
-			const request = JSON.parse(readFileSync(paths.stopRequestPath, "utf8"));
-			if (request?.schemaVersion === 1 && request.generation === generation) {
-				unlinkSync(paths.stopRequestPath);
-				stop();
-			}
-		} catch {}
-	}, 250);
-	signalSource.once?.("SIGTERM", stop);
-	signalSource.once?.("SIGINT", stop);
 	try {
+		store = new SessionStore(paths.databasePath);
+		const recoveryCodec = new RecoveryCodec(loadOrCreateRecoveryKey(paths.recoveryKeyPath));
+		projection = config.observability?.discordStatusProjection === true ? new DiscordStatusProjection({ store, token, botUserId: config.discord.botUserId, fetchImpl }) : null;
+		const stopRequested = new Promise((resolveStop) => { wakeStop = resolveStop; });
+		const delivery = fetchImpl ? (input) => import("./discord-delivery.mjs").then(({ deliverJobResult }) => deliverJobResult({ ...input, fetchImpl })) : undefined;
+		const backendExecutables = {
+			...(configuredBackendCommand("codex") ? { codex: configuredBackendCommand("codex") } : {}),
+			...(configuredBackendCommand("claude") ? { claude: configuredBackendCommand("claude") } : {}),
+		};
+		const send = fetchImpl ? (input) => postDiscordMessage({ ...input, fetchImpl }) : postDiscordMessage;
+		const loadHistory = (input) => fetchDiscordConversation({ ...input, fetchImpl: fetchImpl ?? fetch });
+		router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: agentContext.cwd, runtimeRoot: paths.runtimeRoot, instance: paths.instance, agentContextSnapshot: agentContext.snapshot, runtimeRevision: managedRuntimeRevision ?? null, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, loadHistory, backendExecutables });
+		let reconnectDelay = 1_000;
+		const heartbeat = () => heartbeatServiceSafely(store, { generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
+		heartbeat();
+		try { unlinkSync(paths.serviceFailurePath); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+		const recoveredJobs = store.recoverInterruptedWork();
+		router.resumeRecovered(recoveredJobs, { autoRetry: config.recovery?.autoRetry === true });
+		if (projection) {
+			for (const binding of config.discord.bindings.filter((item) => item.operatorActions === true)) {
+				const channelId = binding.threadId ?? binding.channelId;
+				if (!channelId) continue;
+				const scopeKey = discordScopeKey({ kind: binding.kind, guildId: binding.guildId, channelId: binding.channelId, threadId: binding.threadId });
+					void router.projectScope({ scopeKey, channelId }).catch(() => {});
+			}
+		}
+		heartbeatTimer = setInterval(heartbeat, (config.runtime?.heartbeatSeconds ?? 10) * 1_000);
+		const watchdogIntervalSeconds = Math.max(1, Math.min(config.runtime?.heartbeatSeconds ?? 10, config.runtime?.noProgressInterventionSeconds ?? config.runtime?.softSilenceSeconds ?? 120));
+		watchdogTimer = setInterval(() => { void router.watchdog().catch(() => {}); }, watchdogIntervalSeconds * 1_000);
+		watchdogTimer.unref?.();
+		const stop = () => { stopping = true; gateway?.close(1_000); wakeReconnect?.(); wakeStop?.({ resumable: false }); };
+		controlTimer = setInterval(() => {
+			if (!existsSync(paths.stopRequestPath)) return;
+			try {
+				assertOwnerOnly(paths.stopRequestPath, "file", "Discord stop request");
+				const request = JSON.parse(readFileSync(paths.stopRequestPath, "utf8"));
+				if (request?.schemaVersion === 1 && request.generation === generation) {
+					unlinkSync(paths.stopRequestPath);
+					stop();
+				}
+			} catch {}
+		}, 250);
+		signalSource.once?.("SIGTERM", stop);
+		signalSource.once?.("SIGINT", stop);
 		while (!stopping) {
 			let disconnected;
 			const closed = new Promise((resolveClosed) => { disconnected = resolveClosed; });
 			gateway = new DiscordGatewaySession({
 				token,
+				expectedBotUserId: config.discord.botUserId,
 				stateRepository: new StoredGatewayState(store),
 				webSocketFactory,
 				messageContentIntent: config.discord.messageContentIntent === true,
@@ -130,25 +217,29 @@ export async function runDiscordService({ adkRoot, instance = "default", webSock
 			reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
 		}
 	} finally {
-		clearInterval(heartbeatTimer);
-		clearInterval(watchdogTimer);
-		clearInterval(controlTimer);
-		await gateway?.drain();
-		await router.shutdown();
 		stopping = true;
-		heartbeat();
-		store.close();
+		await cleanupDiscordServiceResources({ heartbeatTimer, watchdogTimer, controlTimer, gateway, router, store, tokenOwnerLock, generation });
 	}
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
 	let exitCode = 0;
+	let serviceArguments = null;
 	try {
-		await runDiscordService(parseServiceArguments(process.argv.slice(2)));
+		if (process.argv.length === 3 && process.argv[2] === "--managed-preflight") verifyManagedServiceRuntimeEnvironment();
+		else {
+			serviceArguments = parseServiceArguments(process.argv.slice(2));
+			await runDiscordService({ ...serviceArguments, runtimeLaunch: "environment" });
+		}
 	}
-	catch {
-		console.error("naia-discord-service: startup_or_runtime_failure");
-		exitCode = 1;
+	catch (error) {
+		const reasonCode = classifyDiscordServiceFailure(error);
+		console.error(`naia-discord-service: ${reasonCode}`);
+		if (serviceArguments) {
+			try { writeDiscordServiceFailure(messengerInstancePaths(serviceArguments.adkRoot, serviceArguments.instance), reasonCode); }
+			catch { console.error("naia-discord-service: failure_status_unavailable"); }
+		}
+		exitCode = reasonCode === "startup_or_runtime_failure" ? 1 : 78;
 	}
 	// Native WebSocket implementations can retain a closing socket handle
 	// after shutdown succeeds or fails. The service process owns no reusable

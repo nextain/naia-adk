@@ -4,6 +4,60 @@ import { assertOnlyKeys, safeIdentifier } from "./sanitize.mjs";
 import { validateDiscordBindings } from "./discord-scope.mjs";
 import { assertOwnerOnly } from "./platform-security.mjs";
 
+const ACTIONS = new Set(["read", "reply", "write", "execute", "cancel", "retry"]);
+const RESERVED_PARTICIPANT_LABELS = new Set(["assistant", "developer", "system", "tool", "user"]);
+
+function assertConversationActionContract(actions, label) {
+	if (!actions.includes("read") || !actions.includes("reply")) throw new Error(`${label} must grant both read and reply`);
+	if (actions.includes("write") !== actions.includes("execute")) throw new Error(`${label} must grant write and execute together`);
+}
+
+function snowflake(value, label) {
+	if (typeof value !== "string" || !/^\d{17,20}$/.test(value) || /^0+$/.test(value)) throw new Error(`${label} must be a Discord snowflake`);
+	return value;
+}
+
+function relativeConfigPath(value, label, { allowDot = false } = {}) {
+	if (typeof value !== "string" || value.length < 1 || value.length > 512 || isAbsolute(value) || value.includes("\\") || (!allowDot && value === ".") || (value !== "." && value.split("/").some((part) => !part || part === "." || part === "..")) || /[\0\r\n]/.test(value)) throw new Error(`${label} must be a safe relative path`);
+	return value;
+}
+
+function validateWorkspace(workspace) {
+	assertOnlyKeys(workspace ?? {}, new Set(["path", "agentId", "entrypoint", "contextFiles"]), "workspace");
+	relativeConfigPath(workspace?.path, "workspace.path", { allowDot: true });
+	safeIdentifier(workspace?.agentId, "workspace.agentId");
+	relativeConfigPath(workspace?.entrypoint, "workspace.entrypoint");
+	if (!Array.isArray(workspace?.contextFiles) || workspace.contextFiles.length === 0 || workspace.contextFiles.length > 15) throw new Error("workspace.contextFiles must contain between 1 and 15 entries");
+	const contextFiles = workspace.contextFiles.map((value) => relativeConfigPath(value, "workspace.contextFiles entry"));
+	if (new Set(contextFiles).size !== contextFiles.length) throw new Error("workspace.contextFiles must be unique");
+	return { ...workspace, contextFiles };
+}
+
+function validateParticipantProfiles(profiles, bindings, globalActions) {
+	if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) throw new Error("discord.participantProfiles must be an exact user ID map");
+	const expected = new Set(bindings.flatMap((binding) => binding.allowedUserIds));
+	const actual = Object.keys(profiles);
+	if (actual.length !== expected.size || actual.some((userId) => !expected.has(userId))) throw new Error("participantProfiles must exactly cover binding allowedUserIds");
+	const labels = new Set();
+	const normalized = {};
+	for (const [userId, profile] of Object.entries(profiles)) {
+		snowflake(userId, "participant profile user ID");
+		assertOnlyKeys(profile ?? {}, new Set(["label", "relationship", "allowedActions"]), "participant profile");
+		safeIdentifier(profile?.label, "participant label");
+		const label = profile.label.toLowerCase();
+		if (RESERVED_PARTICIPANT_LABELS.has(label)) throw new Error("participant label is reserved");
+		if (labels.has(label)) throw new Error("participant labels must be unique");
+		labels.add(label);
+		if (typeof profile.relationship !== "string" || profile.relationship.length < 1 || profile.relationship.length > 160 || /[\0\r\n]/.test(profile.relationship)) throw new Error("participant relationship must be a short single line");
+		if (!Array.isArray(profile.allowedActions) || profile.allowedActions.length === 0 || profile.allowedActions.some((action) => !ACTIONS.has(action))) throw new Error("participant profile contains unsupported allowed actions");
+		const allowedActions = [...new Set(profile.allowedActions)].filter((action) => globalActions.includes(action));
+		if (allowedActions.length === 0) throw new Error("participant effective actions must not be empty");
+		assertConversationActionContract(allowedActions, "participant effective actions");
+		normalized[userId] = { label: profile.label, relationship: profile.relationship, allowedActions };
+	}
+	return normalized;
+}
+
 function privateFile(path, label) {
 	const stat = lstatSync(path);
 	if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${label} must be a real file`);
@@ -30,26 +84,27 @@ export function loadMessengerConfig(path) {
 	const fd = openSync(resolved, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
 	let config;
 	try { config = JSON.parse(readFileSync(fd, "utf8")); } finally { closeSync(fd); }
-	assertOnlyKeys(config, new Set(["schemaVersion", "enabled", "workspaceId", "persona", "role", "backend", "discord", "runtime", "observability", "service", "recovery"]), "messenger config");
+	assertOnlyKeys(config, new Set(["schemaVersion", "enabled", "workspaceId", "workspace", "persona", "role", "backend", "discord", "runtime", "observability", "service", "recovery"]), "messenger config");
 	for (const [value, keys, label] of [
 		[config.persona, ["name", "instructions"], "persona"],
 		[config.role, ["name", "allowedActions", "requiresApproval"], "role"],
 		[config.backend, ["selected", "profiles"], "backend"],
-		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent"], "discord"],
-		[config.runtime ?? {}, ["softSilenceSeconds", "heartbeatSeconds", "maxConcurrentJobs", "approvalPolicy", "permissionProfileEpoch", "noProgressInterventionSeconds", "operatorResponseSeconds", "conversationCoordinator"], "runtime"],
+		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent", "participantProfiles"], "discord"],
+		[config.runtime ?? {}, ["softSilenceSeconds", "heartbeatSeconds", "maxConcurrentJobs", "approvalPolicy", "permissionProfileEpoch", "noProgressInterventionSeconds", "operatorResponseSeconds"], "runtime"],
 		[config.observability ?? {}, ["discordStatusProjection"], "observability"],
 		[config.service ?? {}, ["autoStart", "startAt"], "service"],
 		[config.recovery ?? {}, ["autoRetry"], "recovery"],
 	]) assertOnlyKeys(value ?? {}, new Set(keys), label);
-	if (config.schemaVersion !== 1) throw new Error("unsupported messenger config schema");
+	if (!new Set([1, 2]).has(config.schemaVersion)) throw new Error("unsupported messenger config schema");
+	if (config.schemaVersion === 2) config.workspace = validateWorkspace(config.workspace);
+	else if (config.workspace !== undefined || config.discord?.participantProfiles !== undefined) throw new Error("workspace and participantProfiles require messenger config schema v2");
 	if (config.enabled !== true) throw new Error("messenger service is disabled");
 	if (!config.persona?.name || !config.persona?.instructions) throw new Error("persona name and instructions are required");
 	if (config.persona.name.length > 80 || config.persona.instructions.length > 4_000) throw new Error("persona fields are too long");
 	if (!config.role?.name || !Array.isArray(config.role.allowedActions)) throw new Error("role and allowedActions are required");
-	const actions = new Set(["read", "reply", "write", "execute", "cancel", "retry"]);
-	if (config.role.allowedActions.length === 0 || config.role.allowedActions.some((value) => !actions.has(value))) throw new Error("role contains an unsupported allowed action");
+	if (config.role.allowedActions.length === 0 || config.role.allowedActions.some((value) => !ACTIONS.has(value))) throw new Error("role contains an unsupported allowed action");
 	if (config.role.requiresApproval !== undefined && !Array.isArray(config.role.requiresApproval)) throw new Error("requiresApproval must be an array");
-	if (config.role.requiresApproval?.some((value) => !actions.has(value))) throw new Error("role contains an unsupported approval action");
+	if (config.role.requiresApproval?.some((value) => !ACTIONS.has(value))) throw new Error("role contains an unsupported approval action");
 	if (!new Set(["codex", "claude"]).has(config.backend?.selected)) throw new Error("selected backend is not supported");
 	if (config.backend.profiles?.[config.backend.selected]?.enabled !== true) throw new Error("selected backend profile is disabled");
 	for (const [name, profile] of Object.entries(config.backend.profiles ?? {})) {
@@ -59,12 +114,26 @@ export function loadMessengerConfig(path) {
 		if (profile.model !== undefined && (typeof profile.model !== "string" || !/^[A-Za-z0-9._:-]{1,80}$/.test(profile.model))) throw new Error("backend profile model is invalid");
 	}
 	safeIdentifier(config.discord?.credentialRef, "credentialRef");
-	if (!/^\d{17,20}$/.test(config.discord?.botUserId ?? "") || /^0+$/.test(config.discord.botUserId)) throw new Error("invalid Discord bot user ID");
-	config.discord.operatorUserIds?.forEach((value) => {
-		if (!/^\d{17,20}$/.test(value) || /^0+$/.test(value)) throw new Error("invalid operator Discord ID");
-	});
+	snowflake(config.discord?.botUserId, "Discord bot user ID");
+	if (config.discord.operatorUserIds !== undefined && !Array.isArray(config.discord.operatorUserIds)) throw new Error("operatorUserIds must be an array");
+	config.discord.operatorUserIds = [...new Set(config.discord.operatorUserIds ?? [])];
+	config.discord.operatorUserIds.forEach((value) => snowflake(value, "operator Discord ID"));
 	if (config.discord.messageContentIntent !== undefined && typeof config.discord.messageContentIntent !== "boolean") throw new Error("messageContentIntent must be boolean");
-	config.discord.bindings = validateDiscordBindings(config.discord.bindings, { messageContentIntent: config.discord.messageContentIntent === true });
+	config.discord.bindings = validateDiscordBindings(config.discord.bindings, { messageContentIntent: config.discord.messageContentIntent === true, schemaVersion: config.schemaVersion });
+	const globalActions = config.role.allowedActions.filter((action) => !(config.role.requiresApproval ?? []).includes(action));
+	if (config.schemaVersion === 2) {
+		assertConversationActionContract(globalActions, "schema v2 role actions");
+		if (config.backend.selected === "claude" && globalActions.some((action) => action === "write" || action === "execute")) throw new Error("Claude Discord profiles are read/reply only until unattended mutation is verified");
+		config.discord.participantProfiles = validateParticipantProfiles(config.discord.participantProfiles, config.discord.bindings, globalActions);
+		const untrustedParticipant = Object.keys(config.discord.participantProfiles).find((userId) => !config.discord.operatorUserIds.includes(userId));
+		if (untrustedParticipant) throw new Error("schema v2 Discord participants must be trusted host operators");
+	} else {
+		const allowedUsers = new Set(config.discord.bindings.flatMap((binding) => binding.allowedUserIds));
+		if (allowedUsers.size > 1) config.discord.bindings = config.discord.bindings.map((binding) => ({ ...binding, historyVisibility: "none" }));
+		const mutationEnabled = globalActions.some((action) => action === "write" || action === "execute");
+		const mutationUsers = new Set(config.discord.bindings.filter((binding) => mutationEnabled && binding.canStartConversation && binding.operatorActions === true).flatMap((binding) => binding.allowedUserIds));
+		if (mutationUsers.size >= 2) throw new Error("schema v1 cannot grant mutation in a multi-user binding");
+	}
 	const maxConcurrent = config.runtime?.maxConcurrentJobs ?? 1;
 	if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw new Error("maxConcurrentJobs must be between 1 and 8");
 	const heartbeatSeconds = config.runtime?.heartbeatSeconds ?? 10;
@@ -77,8 +146,6 @@ export function loadMessengerConfig(path) {
 	const operatorResponseSeconds = config.runtime?.operatorResponseSeconds ?? 30;
 	if (!Number.isSafeInteger(noProgressInterventionSeconds) || noProgressInterventionSeconds < softSilenceSeconds || noProgressInterventionSeconds > 3_600) throw new Error("noProgressInterventionSeconds must be between softSilenceSeconds and 3600");
 	if (!Number.isSafeInteger(operatorResponseSeconds) || operatorResponseSeconds < 1 || operatorResponseSeconds > 3_600) throw new Error("operatorResponseSeconds must be between 1 and 3600");
-	if (config.runtime?.conversationCoordinator !== undefined && typeof config.runtime.conversationCoordinator !== "boolean") throw new Error("conversationCoordinator must be boolean");
-	if (config.runtime?.conversationCoordinator === true) throw new Error("conversationCoordinator has been withdrawn and cannot be enabled");
 	if (config.recovery?.autoRetry !== undefined && typeof config.recovery.autoRetry !== "boolean") throw new Error("recovery autoRetry must be boolean");
 	if (!new Set(["login", "boot"]).has(config.service?.startAt ?? "login")) throw new Error("service startAt must be login or boot");
 	if (config.service?.autoStart !== undefined && typeof config.service.autoStart !== "boolean") throw new Error("service autoStart must be boolean");

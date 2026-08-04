@@ -20,6 +20,8 @@ trace:
   code:
     - { path: ".agents/hooks/core/request-contract.js", symbol: "verifyReviewChain / evaluateReviews / evaluateCompletion / verifyCompletionProof", coverage: full }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "Clean streak, stale review, completion proof, and compaction fault cases", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-review-completion-suite.js", symbol: "two current, distinct, exact-coverage Clean reviews allow completion", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-review-completion-suite.js", symbol: "new prompt invalidates prior contract and review evidence", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-native-compaction-suite.js", symbol: "native PreCompact creates or revalidates a current completion proof", coverage: partial }
   reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

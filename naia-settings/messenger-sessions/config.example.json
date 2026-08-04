@@ -1,7 +1,18 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "enabled": false,
   "workspaceId": "replace-with-local-workspace-id",
+  "workspace": {
+    "path": ".",
+    "agentId": "development-agent",
+    "entrypoint": "AGENTS.md",
+    "contextFiles": [
+      ".agents/context/agents-rules.json",
+      ".agents/context/ai-work-index.yaml",
+      ".agents/context/project-index.yaml",
+      ".agents/context/terminology.yaml"
+    ]
+  },
   "persona": {
     "name": "Development assistant",
     "instructions": "Help with the configured workspace role without expanding permissions."
@@ -23,6 +34,13 @@
     "botUserId": "000000000000000000",
     "operatorUserIds": ["000000000000000000"],
     "messageContentIntent": false,
+    "participantProfiles": {
+      "000000000000000000": {
+        "label": "workspace-owner",
+        "relationship": "Owner of this configured workspace",
+        "allowedActions": ["read", "reply"]
+      }
+    },
     "bindings": [
       {
         "kind": "guild_channel",
@@ -30,6 +48,7 @@
         "channelId": "000000000000000000",
         "respondWhen": "mentioned",
         "allowedUserIds": ["000000000000000000"],
+        "historyVisibility": "requester_only",
         "canStartConversation": false,
         "operatorActions": false
       },
@@ -40,6 +59,7 @@
         "threadId": "000000000000000000",
         "respondWhen": "mentioned",
         "allowedUserIds": ["000000000000000000"],
+        "historyVisibility": "requester_only",
         "canStartConversation": false,
         "operatorActions": false
       },
@@ -48,6 +68,7 @@
         "userId": "000000000000000000",
         "respondWhen": "always",
         "allowedUserIds": ["000000000000000000"],
+        "historyVisibility": "requester_only",
         "canStartConversation": false,
         "operatorActions": false
       }
@@ -60,7 +81,6 @@
     "heartbeatSeconds": 10,
     "approvalPolicy": "never",
     "permissionProfileEpoch": "replace-on-policy-change",
-    "conversationCoordinator": false,
     "maxConcurrentJobs": 1
   },
   "observability": {

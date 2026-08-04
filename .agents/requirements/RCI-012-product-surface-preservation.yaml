@@ -35,12 +35,12 @@ trace:
     - { path: ".agents/hooks/core/preservation-contract.js", symbol: "validateDeclaration / validateWorkspace", coverage: full }
     - { path: ".agents/hooks/core/request-contract.js", symbol: "scopeProjection / buildReviewBundle / completionAssessment", coverage: full }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation additive extension keeps the baseline surface and permits a new surface", coverage: full }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation preserve surfaces reject missing successors and capability loss but permit compatible edits and renames", coverage: full }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation baseline test probe rejects assertion inversion", coverage: full }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation vendor source requires its pristine tree digest", coverage: full }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation rejects stale or wrong migration diff authority", coverage: full }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation inventory binds the complete surface descriptor and rejects unsupported greenfield claims", coverage: full }
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "preservation collects planning and integration evidence views but remains review only while controls are pending", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation additive extension keeps the baseline surface and permits a new surface", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation preserve surfaces reject missing successors and capability loss but permit compatible edits and renames", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation baseline test probe rejects assertion inversion", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation vendor source requires its pristine tree digest", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation rejects stale or wrong migration diff authority", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation inventory binds the complete surface descriptor and rejects unsupported greenfield claims", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-preservation-suite.js", symbol: "preservation collects planning and integration evidence views but remains review only while controls are pending", coverage: partial }
   reviews: { planning: null, development: null, test: null, integration: null }
 decisions: []

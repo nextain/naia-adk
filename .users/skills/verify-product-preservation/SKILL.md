@@ -143,7 +143,15 @@ release, issue close, 완료 표현은 실패입니다. 내장 release-command r
 
 ### 7. Discord 무인 감시 회귀
 
-Discord 세션 스킬이나 설정·설계가 바뀌면 `pnpm test:discord-sessions`를 실행합니다. 외부 supervisor가 AI 턴 및 Discord 서비스와 분리된 OS 예약 one-shot인지, SQLite를 쓰지 않는지, coordinator 활성화와 과거 coordinator 복구가 닫히는지, stale Gateway 및 불명확한 child 근거를 healthy로 부르지 않는지 검증합니다. `approvalPolicy=never`가 명시되고 `requiresApproval` 작업이 실제 허용 작업에서 빠지는지, 진입점과 workflow가 사용자 재승인 대신 내부 체크포인트를 사용하는지도 결정론적으로 검사합니다. Windows에서 Task Scheduler 등록 실패를 숨은 폴링 loop로 대체하거나 외부 협업 서브에이전트의 생명주기를 감시한다고 표시하면 FAIL입니다.
+Discord 세션 스킬이나 설정·설계가 바뀌면 `pnpm test:discord-sessions`를 실행합니다. 외부 supervisor가 AI 턴 및 Discord 서비스와 분리된 OS 예약 one-shot인지, SQLite를 쓰지 않는지, coordinator 활성화와 과거 coordinator 복구가 닫히는지, stale Gateway 및 불명확한 child 근거를 healthy로 부르지 않는지 검증합니다. `approvalPolicy=never`가 명시되고 `requiresApproval` 작업이 실제 허용 작업에서 빠지는지, 진입점과 workflow가 사용자 재승인 대신 내부 체크포인트를 사용하는지도 결정론적으로 검사합니다.
+
+Linux 관리 서비스는 unit별 `RuntimeDirectory` 밖의 kernel `flock`으로 bot-token 소유권을 결박해야 합니다. watchdog와 supervisor의 반복 경로는 오래 기다린 비종료 작업 최대 256개만 투영하고 전체 활성 수는 집계하며, 초과분은 `operational_jobs_truncated` 장애로 표시해야 합니다. 관리형 systemd 서비스와 supervisor는 설정 읽기·토큰 소유·관찰 전에 명시적 실행 모드와 완전한 불변 artifact marker를 요구하며, marker 누락을 직접 실행으로 바꾸면 FAIL입니다.
+
+최초 설치는 허용하지만 기존 등록 교체는 활성 원복 묶음이 설치된 이전 버전·배포 후보·별도 깨끗한 후보 제어기를 모두 검증해야 합니다. Windows 버전 전환을 지원하기 전 최초 설치는 실행 파일 생성 전에 본 서비스와 supervisor 잔존 등록을 모두 거부해야 합니다. 최초 구형 등록 채택은 이전에 생성된 정확한 unit 바이트만 허용하고 교체 전에 결박해야 합니다. 설정이 깨져도 status/stop/disable은 가능해야 하며, 명시적 자산 정리는 설치 런타임과 활성 원복 묶음을 보존해야 합니다.
+
+원복은 이전 Git 바이트와 등록 상태를 보존하고 그 이전 런타임의 실제 loader로 설정을 검증하며 stop 전후 idle/schema를 재검사해야 합니다. 카나리는 candidate/target 일치·완료 및 전송 확인·정확히 한 번의 수신 확인·최신 정상 supervisor·정확한 서비스 세대와 현재 호스트에서 다시 계산한 schema-v2 instance·agent/workspace·context·참여자 권한·설정·읽기 전용 access 근거가 모두 있을 때만 계속할 수 있습니다.
+
+과거 주의 이력만으로 새 정상 카나리를 영구 차단하거나 1분 감시자가 종료 이력 전체·무제한 활성 이력을 투영하거나 활성 초과분을 숨기면 FAIL입니다. Windows에서 Task Scheduler 등록 실패를 숨은 폴링 loop로 대체하거나 supervisor만 남은 상태에서 설치 파일을 변경하거나 외부 협업 서브에이전트의 생명주기를 감시한다고 표시하면 FAIL입니다.
 
 ## 출력
 

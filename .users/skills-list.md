@@ -20,7 +20,7 @@
 | project-create | `.agents/skills/project-create/SKILL.md` | > |
 | project-migration | `.agents/skills/project-migration/SKILL.md` | > |
 | read-doc | `.agents/skills/read-doc/SKILL.md` | 문서 파일(HWP/HWPX/PDF/DOCX/XLSX/PPTX)의 텍스트를 추출해 컨텍스트에 로드합니다. docs-business/ 폴더의 파일이나 .hwp/.hwpx/.pdf/.docx/.xlsx/.pptx 파일이 언급될 때, 또는 문서 내용을 검토/분석해야 할 때 반드시 사용. |
-| review-pass | `.agents/skills/review-pass/SKILL.md` | > |
+| review-pass | `.agents/skills/review-pass/SKILL.md` | 모델 리뷰 전에 변경된 소스의 줄 수와 증가량을 결정론적으로 측정하고, 사유·해시·만료에 묶인 예외를 실제 코드와 대조한 뒤 4단계 멀티 AI 상호검증을 수행합니다. |
 | secret-vault | `.agents/skills/secret-vault/SKILL.md` | age 암호화 시크릿 볼트(`key.age` + 평문 `key/`)를 열고·수정하고·다시 잠글 때 반드시 사용. data-private 등 "암호화된 키 파일을 어떻게 푸는가", "키를 추가하고 다시 암호화", "복호화가 깨져 보인다", "key.age unlock/lock" 요청 시 |
 | session-resume | `.agents/skills/session-resume/SKILL.md` | Claude Code / Codex / opencode 세션 기록을 열어 대화 흐름을 추출·요약한다. 다른 도구(또는 주간 한도 컷)에서 끊긴 작업을 현재 세션에서 이어하거나, 과거 세션이 무엇을 했는지 파악할 때 사용. "claude --resume <id>", "codex 세션 이어 |
 | sync-upstream | `.agents/skills/sync-upstream/SKILL.md` | ADK fork chain의 upstream 동기화. naia-adk(최상위) 이하 모든 fork가 주기적으로 `git merge upstream/main`로 정식 동기화하도록 한다. selective cherry-pick으로 인한 체인 부패(divergence)를 예방. "upstre |
