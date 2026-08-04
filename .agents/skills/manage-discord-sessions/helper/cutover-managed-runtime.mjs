@@ -329,7 +329,7 @@ export function createManagedRuntimeArtifact({ adkRoot, instance = "default", so
 			backendExecutables,
 			servicePath: join(runtimePath, "helper/service.mjs"),
 		});
-		const supervisor = renderDiscordSupervisorUnits({ adkRoot: paths.root, instance: paths.instance, runtimeRevision: sourceRevision, runtimeTreeId: sourceRuntimeTreeId, runtimeArtifactSha256: runtimeSha256, runtimeArtifactDirectory: root, nodePath, supervisorPath: join(runtimePath, "helper/supervisor.mjs") });
+		const supervisor = renderDiscordSupervisorUnits({ adkRoot: paths.root, instance: paths.instance, runtimeRevision: sourceRevision, runtimeTreeId: sourceRuntimeTreeId, runtimeArtifactSha256: runtimeSha256, runtimeArtifactDirectory: root, nodePath, supervisorPath: join(runtimePath, "helper/supervisor-entry.mjs") });
 		const content = { service: service.content, supervisorService: supervisor.serviceContent, supervisorTimer: supervisor.timerContent };
 		const names = { service: service.unitName, supervisorService: supervisor.serviceName, supervisorTimer: supervisor.timerName };
 		const manifest = {

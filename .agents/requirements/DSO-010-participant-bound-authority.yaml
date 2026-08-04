@@ -34,6 +34,7 @@ acceptance_criteria:
   - "Every v2 binding explicitly selects none, requester_only, or shared history; none skips REST, requester_only excludes every other participant and all prior bot replies, and shared includes configured labeled participants only."
   - "Schema v1 remains readable, but multi-user mutation fails at startup and multi-user history is forced to none."
   - "Recovery binds workspace, binding, participant profile, effective actions, approval policy, permission epoch, backend/model/persona, autoRetry, and context evidence; a missing or changed v2 invariant requires review."
+  - "The owner-only messenger config and referenced credential are re-opened before each message admission and immediately before backend spawn; any live change, including participant removal, action reduction, permission-epoch change, binding change, or credential rotation, fails closed with context_changed_restart_required until restart."
   - "Legacy recovery envelopes without complete participant authority evidence always require review and can never be upgraded to a broader fresh profile."
   - "A provider result cannot send an outbound Discord DM outside the current bound conversation."
 non_goals:
@@ -49,10 +50,16 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbol: "effectiveAllowedActions/participantAuthorityRevision", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-conversation.mjs", symbol: "renderParticipantConversation/trustedParticipantPolicy", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "transientPrompt/recovery authority", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "verifyRuntimeInputs", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbol: "createRuntimeInputVerifier", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-021 validates schema v2 workspace exact participant coverage and safe labels", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 participant history authority and exact-v2 recovery cases", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs", symbol: "DSG-021 participant identity privacy and scope cases", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-021 validates schema v2 workspace, exact participant coverage, and safe labels", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 enforces none, requester-only, and explicitly shared participant history", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 reduces mutation authority by participant and operator policy and binds revisions", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 requires exact v2 authority, configuration, and context revisions for read-only recovery", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs", symbol: "DSG-021 removes raw Discord user, role, and channel snowflakes from the provider request", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-runtime-input-guard.test.mjs", symbol: "DSO-010 live config and credential revocation fail closed without waiting for restart", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-runtime-input-guard.test.mjs", symbol: "DSO-010 queued work revalidates authority before runner and immediately before spawn", coverage: full }
   reviews:
     planning: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.planning"
     development: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.development"

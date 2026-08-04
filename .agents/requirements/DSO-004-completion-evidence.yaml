@@ -18,7 +18,8 @@ acceptance_criteria:
   - "Required checks are fixed before execution and only current-revision host_verifier or human_review evidence can satisfy them; backend_claim evidence never verifies itself."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/store.mjs", symbol: "required_checks/recordEvidence", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/store-database.mjs", symbol: "required_checks", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/store-event-writer.mjs", symbol: "recordEvidence", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/projector.mjs", symbol: "projectCompletionAssessment", coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/observability-lifecycle.test.mjs", symbol: "DSO-004 trusts only predeclared host or human evidence for completion", coverage: full }

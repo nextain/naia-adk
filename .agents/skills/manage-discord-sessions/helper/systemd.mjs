@@ -57,7 +57,7 @@ export function renderDiscordUserUnit({ adkRoot, instance = "default", tokenFing
 
 export function renderDiscordSupervisorUnits({ adkRoot, instance = "default", runtimeRevision = null, runtimeTreeId = null, runtimeArtifactSha256 = null, runtimeArtifactDirectory = null, nodePath = process.execPath, supervisorPath: supervisorPathOverride = null }) {
 	const identity = discordUnitIdentity(adkRoot, instance);
-	const supervisorPath = supervisorPathOverride === null ? resolve(identity.root, ".agents/skills/manage-discord-sessions/helper/supervisor.mjs") : resolve(supervisorPathOverride);
+	const supervisorPath = supervisorPathOverride === null ? resolve(identity.root, ".agents/skills/manage-discord-sessions/helper/supervisor-entry.mjs") : resolve(supervisorPathOverride);
 	if (!isAbsolute(supervisorPath)) throw new Error("Discord supervisor path must be absolute");
 	const base = identity.unitName.slice(0, -".service".length);
 	const serviceName = `${base}-supervisor.service`;

@@ -24,10 +24,13 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-history.mjs", symbol: "fetchDiscordHistory/downloadDiscordAttachment/sendDiscordReply", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "scoped !naia status/jobs/job", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-projection.mjs", symbol: "DiscordStatusProjection", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "skill-local entry point", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "script_dir/adk_root/instance", coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", symbol: "DSO-003 CLI returns versioned job detail and watch events", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-009 participant status projection is limited to the current Discord scope / DSG-011 creates pins and updates one scoped Discord status projection", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-003 explicit history, attachment recovery, and reply", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-009 participant status projection is limited to the current Discord scope", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-011 creates, pins, and updates one scoped Discord status projection", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-003 history reads one exact operator binding without persistence", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-003 reply sends one sanitized message to one exact operator binding", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-003 attachment recovery verifies exact authorized message and SHA-256", coverage: partial }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
 decisions: []

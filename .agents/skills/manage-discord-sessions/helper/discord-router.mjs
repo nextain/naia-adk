@@ -78,8 +78,9 @@ function normalizedDiscordText(value, botUserId) {
 }
 
 export class DiscordMessageRouter {
-	constructor({ config, store, token, botUserId, cwd, runtimeRoot, instance = "default", agentContextSnapshot = null, runtimeRevision = null, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, send = null, loadHistory = null, backendExecutables = {}, now = () => Date.now() }) {
+	constructor({ config, store, token, botUserId, cwd, runtimeRoot, instance = "default", agentContextSnapshot = null, runtimeRevision = null, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, send = null, loadHistory = null, backendExecutables = {}, verifyRuntimeInputs = null, now = () => Date.now() }) {
 		if (typeof send !== "function") throw new Error("confirmed Discord sender is required");
+		if (verifyRuntimeInputs !== null && typeof verifyRuntimeInputs !== "function") throw new Error("runtime input verifier must be a function");
 		if (config.schemaVersion === 2) {
 			if (!agentContextSnapshot || agentContextSnapshot.schemaVersion !== 1 || typeof agentContextSnapshot.contextHash !== "string" || typeof agentContextSnapshot.workspaceRoot !== "string" || typeof agentContextSnapshot.agentId !== "string") throw new Error("schema v2 requires a valid agent context snapshot");
 			if (cwd !== agentContextSnapshot.workspaceRoot || config.workspace?.agentId !== agentContextSnapshot.agentId) throw new Error("schema v2 workspace identity does not match its context snapshot");
@@ -99,6 +100,7 @@ export class DiscordMessageRouter {
 		this.send = send;
 		this.loadHistory = loadHistory;
 		this.backendExecutables = backendExecutables;
+		this.verifyRuntimeInputs = verifyRuntimeInputs;
 		this.recoveryCodec = recoveryCodec;
 		this.projectStatus = projectStatus;
 		this.now = now;
@@ -130,6 +132,7 @@ export class DiscordMessageRouter {
 			return { state: "threads_cached" };
 		}
 		if (type !== "MESSAGE_CREATE") return { state: "ignored" };
+		this.#verifyRuntimeInputs();
 		const authorization = authorizeDiscordMessage({ message: data, bindings: this.config.discord.bindings, operatorUserIds: this.config.discord.operatorUserIds, participantProfiles: this.config.discord.participantProfiles, botUserId: this.botUserId, threadParents: this.threadParents });
 		const sourceMessageId = data.id;
 		if (!authorization.allowed) {
@@ -274,6 +277,15 @@ export class DiscordMessageRouter {
 		return new Date(this.now()).toISOString();
 	}
 
+	#verifyRuntimeInputs() {
+		try { this.verifyRuntimeInputs?.(); }
+		catch {
+			const error = new Error("Discord runtime inputs changed; restart is required");
+			error.code = "context_changed_restart_required";
+			throw error;
+		}
+	}
+
 	#noProgressInterventionMs() {
 		return (this.config.runtime?.noProgressInterventionSeconds ?? this.config.runtime?.softSilenceSeconds ?? 120) * 1_000;
 	}
@@ -347,6 +359,7 @@ export class DiscordMessageRouter {
 		this.controllers.set(item.jobId, controller);
 		try {
 			if (controller.signal.aborted) return;
+			this.#verifyRuntimeInputs();
 			const currentProfile = this.#executionProfile(item.backendId, item.authority);
 			if (!sameExecutionProfile(item.executionProfile ?? currentProfile, currentProfile)) {
 				this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "profile_replaced", safePayload: {} });
@@ -358,7 +371,11 @@ export class DiscordMessageRouter {
 				if (loaded?.state === "loaded") prompt = promptWithDiscordConversation(prompt, loaded.history, item.currentRequest);
 			}
 			if (this.agentContextSnapshot) verifyAgentContextBeforeAttempt(this.agentContextSnapshot);
-			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt, cwd: this.cwd, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId, item.authority), executionProfile: item.executionProfile, signal: controller.signal, preSpawnCheck: this.agentContextSnapshot ? () => verifyAgentContextBeforeAttempt(this.agentContextSnapshot) : null });
+			const preSpawnCheck = this.verifyRuntimeInputs || this.agentContextSnapshot ? () => {
+				this.#verifyRuntimeInputs();
+				if (this.agentContextSnapshot) verifyAgentContextBeforeAttempt(this.agentContextSnapshot);
+			} : null;
+			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt, cwd: this.cwd, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId, item.authority), executionProfile: item.executionProfile, signal: controller.signal, preSpawnCheck });
 			if (result.backendOutcome !== "success") {
 				await this.#reportFailure(item);
 				return;
