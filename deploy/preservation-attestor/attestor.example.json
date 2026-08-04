@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "credential_id": "preservation-linux",
+  "credential_epoch": "epoch-1",
+  "worker_digest": "REPLACE_WITH_INSTALLED_WORKER_SHA256",
+  "execution_runner_digest": "REPLACE_WITH_INSTALLED_EXECUTION_RUNNER_SHA256",
+  "snapshot_digest": "REPLACE_WITH_INSTALLED_SNAPSHOT_SHA256",
+  "private_key_path": "@systemd-credential",
+  "public_key_path": "/etc/naia-preservation/public-key.pem",
+  "state_root": "/var/lib/naia-preservation",
+  "sandbox_path": "/usr/bin/bwrap",
+  "node_path": "/usr/bin/node",
+  "git_path": "/usr/bin/git",
+  "adapter_path": ".agents/skills/manage-discord-sessions/preservation-adapter.cjs",
+  "allowed_adapter_digests": ["REPLACE_WITH_ADAPTER_SHA256"],
+  "allowed_sandbox_digests": ["REPLACE_WITH_BWRAP_SHA256"],
+  "allowed_node_digests": ["REPLACE_WITH_NODE_SHA256"],
+  "allowed_git_digests": ["REPLACE_WITH_GIT_SHA256"],
+  "repositories": [
+    {
+      "path": "/absolute/path/to/adk",
+      "repository_id": "REPLACE_WITH_REPOSITORY_ID"
+    }
+  ],
+  "registrations": [
+    {
+      "repository_id": "REPLACE_WITH_REPOSITORY_ID",
+      "unit_id": "REPLACE_WITH_UNIT_ID",
+      "contract_digest": "REPLACE_WITH_CONTRACT_SHA256",
+      "scope_epoch": 1,
+      "binding_epoch": 1,
+      "planning_work_revision": 0,
+      "baseline_ref": "REPLACE_WITH_40_TO_64_HEX_COMMIT",
+      "inventory_digest": "REPLACE_WITH_INVENTORY_SHA256",
+      "surface_ids": ["REPLACE_WITH_SURFACE_ID"]
+    }
+  ]
+}

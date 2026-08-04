@@ -8,13 +8,13 @@ source: derived
 source_provenance: ledger_resolved
 priority: high
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-08-05
 issue_url: "https://github.com/nextain/naia-adk/issues/17"
-source_directives: [USR-008]
-source_evidence: [USR-008]
-source_atoms: [USR-008-E05, USR-008-E08, USR-008-E09, USR-008-E10, USR-008-E11]
+source_directives: [USR-008, USR-014]
+source_evidence: [USR-008, USR-014]
+source_atoms: [USR-008-E05, USR-008-E08, USR-008-E09, USR-008-E10, USR-008-E11, USR-014-E01]
 source_kind: derived
-derived_from: [USR-008]
+derived_from: [USR-008, USR-014]
 derivation_kind: expand
 change_effect: extend
 preserves: [review-only-checkpoints, current-completion-proof, client-policy-parity]
@@ -29,6 +29,9 @@ acceptance_criteria:
   - "NOT CLEAN, stale review, changed workspace, or mismatched preservation evidence blocks release."
   - "Claude Code and Codex produce the same release decision."
   - "The review bundle contains baseline content for changed and deleted protected paths."
+  - "Preservation evidence is issued only from an allowlisted runner that directly executes the real project entry and binds a one-time challenge, runner and adapter bytes, exact subject revision, command, exit, captured result, and lifecycle phase."
+  - "A caller-authored or replayed JSON receipt, planning receipt reused at completion, post-hash workspace drift, or unclassified external effect fails closed."
+  - "First-use trust is forbidden: a protected attestor accepts only a root-policy-preregistered unit and rematerializes the current subject before sealing its decision."
 trace:
   code:
     - { path: ".agents/hooks/core/request-contract.js", symbol: "collectBaselineReviewMaterials / releaseCommandFromEvent / validateSuccessfulTerminalUnlocked", coverage: partial }

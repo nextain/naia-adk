@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "credential_id": "preservation-linux",
+  "credential_epoch": "epoch-1",
+  "policy_digest": "REPLACE_WITH_ATTESTOR_POLICY_SHA256",
+  "tcb": {
+    "worker_digest": "REPLACE_WITH_INSTALLED_WORKER_SHA256",
+    "execution_runner_digest": "REPLACE_WITH_INSTALLED_EXECUTION_RUNNER_SHA256",
+    "snapshot_digest": "REPLACE_WITH_INSTALLED_SNAPSHOT_SHA256"
+  },
+  "allowed_sandbox_digests": ["REPLACE_WITH_BWRAP_SHA256"]
+}

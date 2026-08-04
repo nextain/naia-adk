@@ -1,0 +1,33 @@
+[Unit]
+Description=Naia protected preservation attestor
+Requires=naia-preservation-attestor.socket
+After=naia-preservation-attestor.socket
+
+[Service]
+Type=simple
+User=naia-attestor
+Group=naia-attestor
+ExecStart=/usr/bin/node /usr/local/lib/naia-preservation/preservation-attestor-service.cjs
+StandardOutput=journal
+StandardError=journal
+LoadCredential=signing-key.pem:/etc/naia-preservation/signing-key.pem
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/lib/naia-preservation
+MemoryMax=1G
+TasksMax=128
+CPUQuota=200%
+LimitFSIZE=1073741824
+
+[Install]
+WantedBy=multi-user.target

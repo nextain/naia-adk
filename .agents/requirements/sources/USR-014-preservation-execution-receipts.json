@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "id": "USR-014",
+  "source_kind": "human",
+  "origin": "native_user_message",
+  "actor": "user",
+  "platform": "openai-chat",
+  "locator": "conversation://private/preservation-execution-receipts",
+  "locator_access": "restricted",
+  "capture_kind": "public_safe_verbatim_excerpt",
+  "coverage": "complete_message",
+  "events": [
+    {
+      "sequence": 1,
+      "event_id": "USR-014-E01",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/preservation-execution-receipts#selected-user-message-01",
+      "exact_text": "신뢰 실해 영수증이 필요하면 구현해야 하는거 아냐 ?",
+      "obligations": ["implement-trusted-execution-receipts"],
+      "text_sha256": "sha256:573066b67e924c9d4a66a3a41b368a8dfab0f08520d702970b1e842a7b2eb186",
+      "event_sha256": "sha256:52b4c189f700a41b468ef104d7ef93dff94707888e192f09ca372230a12e61e0"
+    }
+  ],
+  "ordering": "relative_chronological_order_of_selected_messages",
+  "digest_algorithm": "sha256-canonical-event-v1"
+}

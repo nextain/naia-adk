@@ -36,6 +36,8 @@ function installProductionControlSurface(fx) {
 	for (const relative of [
 		".agents/hooks/core/request-contract.js",
 		".agents/hooks/core/preservation-contract.js",
+		".agents/hooks/core/preservation-execution-runner.js",
+		".agents/hooks/core/preservation-receipt-evidence.js",
 		".agents/hooks/core/request-contract-adapter.js",
 		".agents/hooks/core/request-contract-review-runner.js",
 		".claude/hooks/request-contract.js",

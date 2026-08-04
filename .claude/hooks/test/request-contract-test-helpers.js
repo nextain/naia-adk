@@ -307,13 +307,16 @@ function runSyntheticReviewSandbox(options) {
 }
 
 function cleanReview(fx, unit, runId, extras = {}) {
+	const reviewerFixture = extras.reviewerFixture || "contract-reviewer";
+	const reviewExtras = { ...extras };
+	delete reviewExtras.reviewerFixture;
 	const challenge = core.issueReviewInvocation(unit, fx.cwd, core.readJson(unit.paths.head).session_id);
-	const reviewerPath = reviewerFixturePath("contract-reviewer");
+	const reviewerPath = reviewerFixturePath(reviewerFixture);
 	const isolated = runSyntheticReviewSandbox({
 		bundlePath: path.resolve(fx.cwd, challenge.manifest.bundle_locator),
 		expectedBundleDigest: challenge.manifest.bundle_digest,
 		reviewerPath,
-		allowedReviewerDigests: [fx.reviewerFixtureDigest],
+		allowedReviewerDigests: [core.sha256(fs.readFileSync(reviewerPath))],
 		env: { REQUEST_CONTRACT_CHALLENGE: challenge.manifest.nonce, REQUEST_CONTRACT_CONTEXT_ID: `reviewer-${runId}-${challenge.manifest.nonce}`, REQUEST_CONTRACT_REVIEW_STAGE: challenge.manifest.review_stage, REQUEST_CONTRACT_REVIEW_ROLE: challenge.manifest.required_role || "general", REQUEST_CONTRACT_DELIVERY_STATE: challenge.manifest.expected_delivery_state },
 	});
 	const review = {
@@ -338,7 +341,7 @@ function cleanReview(fx, unit, runId, extras = {}) {
 		binding_epoch: challenge.manifest.binding_epoch,
 		sandbox: { no_network: true, repository_blind: true, home_blind: true },
 		executor: { credential_id: "test-review-executor", context_id: `reviewer-${runId}-${challenge.manifest.nonce}`, process_id: isolated.evidence.launcher_process_id, process_identity: isolated.evidence.reviewer_process_identity, started_at: isolated.evidence.started_at, attestor_executable_digest: fx.reviewerAttestorDigest, signature: "" },
-		...extras,
+		...reviewExtras,
 	};
 	review.isolation = review.isolation || {
 		credential_id: "test-isolation-runner",
