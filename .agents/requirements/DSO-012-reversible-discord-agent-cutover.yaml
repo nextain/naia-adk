@@ -61,7 +61,7 @@ trace:
       source_atom: USR-011-E01
       status: deferred_incomplete
       evidence: null
-      progress: ".agents/progress/discord-agent-context-2026-08-03.json#source_obligations"
+      progress: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.integration"
       note: "Canonical named-instance capability is not evidence of a live OnMam rollout."
   code:
     - { path: ".agents/skills/manage-discord-sessions/helper/cutover-bundle.mjs", symbols: ["acquireDiscordArtifactOperationLock", "createCutoverRollbackBundle", "verifyCutoverRollbackBundle", "restoreCutoverRollbackBundle"], coverage: full }
