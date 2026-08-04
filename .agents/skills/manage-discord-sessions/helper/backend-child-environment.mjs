@@ -1,7 +1,7 @@
 import { closeSync, constants as fsConstants, chmodSync, existsSync, lstatSync, mkdirSync, openSync, readSync, rmSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
-import { assertOwnerOnly, protectOwnerOnly } from "./platform-security.mjs";
+import { assertPrivateAuthenticationSource, protectOwnerOnly } from "./platform-security.mjs";
 
 const SAFE_ENV_KEYS = new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "SystemRoot", "WINDIR", "PATHEXT", "COMSPEC", "TEMP", "TMP"]);
 const API_KEY_BY_BACKEND = { codex: "CODEX_API_KEY", claude: "ANTHROPIC_API_KEY" };
@@ -40,7 +40,7 @@ function privateDirectory(path) {
 function copyCredential(source, target, label) {
 	if (!existsSync(source)) return false;
 	assertRealFile(source, label);
-	assertOwnerOnly(source, "file", label);
+	assertPrivateAuthenticationSource(source, label);
 	privateDirectory(dirname(target));
 	const sourceFd = openSync(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
 	let targetFd;
