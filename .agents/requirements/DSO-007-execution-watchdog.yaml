@@ -7,7 +7,7 @@ status: active
 source: human
 priority: high
 created: 2026-07-31
-updated: 2026-08-01
+updated: 2026-08-04
 issue_url: "https://github.com/nextain/naia-adk/issues/18"
 description: |
   A parent permission change or a silent owned child must not leave an AI job
@@ -19,7 +19,12 @@ acceptance_criteria:
   - "Every launched Codex or Claude child uses a no-prompt approval policy; an approval UI signal is terminated and recorded as a safe failure rather than a waiting state."
   - "Recovery compares the encrypted prior execution profile with the current permission-profile epoch and access level. A mismatch records profile_replaced and starts only a fresh current no-prompt attempt, including an explicitly changed never-policy mutation profile; stored command options are never reused."
   - "The watchdog acts at most once per no-progress child: it records watchdog_intervened, aborts its owned process, and records no_progress_timeout. An unowned stalled job is failed rather than silently retained as running."
-  - "A Discord conversation attempts one safe acknowledgement. Missing or uncertain acknowledgement delivery is recorded separately and never blocks coordinator admission, worker launch, or later messages."
+  - "A Discord conversation arms one per-job acknowledgement timer after durable admission rather than relying on watchdog or supervisor polling. The single-flight attempt records confirmed or missed exactly once at the configured deadline, and acknowledgement state never blocks admission, worker launch, or later messages."
+  - "ACK and control sends are owned abortable operations. Shutdown aborts and settles them before Gateway drain, and an ACK deadline aborts the underlying send rather than only abandoning its promise."
+  - "Status-projection create, update, and pin requests inherit the owned shutdown signal and a bounded request timeout; abort prevents fallback sends, persistence, pinning, and every other late side effect."
+  - "Recovery does not send or record a second acknowledgement when the same job already has a durable operator_response_sent or operator_response_missed event; a crash before either result permits one acknowledgement attempt."
+  - "On POSIX, backend leader exit is observed separately from stream drain. An inherited-stdio descendant cannot hold shutdown open indefinitely. A negative-PID process-group signal requires an exact current match with the leader identity captured at spawn; after leader exit or unavailable identity, the harness bounds and detaches streams without signalling the unproven group ID, leaving service-manager/cgroup containment as the recovery boundary."
+  - "The backend version probe captures the detached leader's immutable process-start identity before any timeout or abort may signal its process group; if ownership cannot be proven, cleanup signals only the ChildProcess leader."
   - "Each child receives a required absolute workspace through both process cwd and the Codex --cd contract; relative or ambient caller workdirs are rejected."
 trace:
   code:
@@ -30,5 +35,6 @@ trace:
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-013/DSG-014/DSG-015", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "approval UI stream variants and explicit workspace tests", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/lifecycle-hardening.test.mjs", symbol: "projection abort and recovery ACK idempotence", coverage: full }
   reviews: { planning: "two-agent adversarial review 2026-08-01", development: "two-agent adversarial review 2026-08-01", test: "focused deterministic suite 2026-08-01", integration: null }
 decisions: []

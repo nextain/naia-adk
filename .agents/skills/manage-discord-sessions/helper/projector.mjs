@@ -99,9 +99,6 @@ export function projectServiceHealth(service, nowMs, staleAfterMs = DEFAULT_SERV
 	if (service.status !== "running") {
 		state = "stopped";
 		reasonCode = "service_reported_stopped";
-	} else if (ownership.state === "missing" && heartbeatAgeMs !== null && heartbeatAgeMs >= 0 && heartbeatAgeMs <= staleAfterMs) {
-		state = "running";
-		reasonCode = "heartbeat_fresh_process_unobservable";
 	} else if (ownership.state === "missing") {
 		state = "stopped";
 		reasonCode = "service_process_missing";

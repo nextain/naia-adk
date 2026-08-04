@@ -22,6 +22,6 @@ trace:
     - { path: ".claude/settings.json", symbol: "hooks", coverage: full }
     - { path: ".codex/hooks.json", symbol: "hooks", coverage: full }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "client registry mutation matrix", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-registry-locking-suite.js", symbol: "both client registries reject every missing event plus wrong adapters, arguments, roots, native Windows commands, matchers, duplicates, and conflicts", coverage: full }
   reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

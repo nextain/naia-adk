@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "USR-011",
+  "source_kind": "human",
+  "origin": "native_user_message",
+  "actor": "user",
+  "platform": "openai-chat",
+  "locator": "conversation://private/code-complexity-gate",
+  "locator_access": "restricted",
+  "capture_kind": "public_safe_verbatim_excerpt",
+  "coverage": "selected_directives_not_complete_history",
+  "capture_note": "자동 코드 크기 경고, 사유가 있는 제한적 예외, 예외 주장과 실제 코드의 후속 대조를 요구한 사용자 원문이다.",
+  "events": [
+    {
+      "sequence": 1,
+      "exact_text": "리뷰어가 스스로 보게 하지말고 먼저 스크립트로 자동 경고 내게 해줘",
+      "obligations": ["deterministic-complexity-preflight"]
+    },
+    {
+      "sequence": 2,
+      "exact_text": "어쩔수 없는 코드라면 플래그 처리하는 방식으로 하네스로 만들어",
+      "obligations": ["bounded-complexity-exception"]
+    },
+    {
+      "sequence": 3,
+      "exact_text": "플래드에 이유를 적게 하는 방식도 좋을듯",
+      "obligations": ["reasoned-complexity-exception"]
+    },
+    {
+      "sequence": 4,
+      "exact_text": "다만 그것을 100% 믿지말고 이후 검토에서 코드가 그 내용과 다른 경우 그것도 수정하게",
+      "obligations": ["adversarial-waiver-claim-review"]
+    }
+  ]
+}

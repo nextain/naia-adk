@@ -21,6 +21,8 @@ trace:
   code:
     - { path: ".agents/hooks/core/request-contract.js", symbol: "createGenesis / appendSource / verifySourceChain / adoptQuarantine", coverage: full }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "source-chain, quarantine, genesis, rollback fault cases", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-source-trace-suite.js", symbol: "source-chain tampering is detected", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-source-trace-suite.js", symbol: "next genesis adopts every unconsumed quarantine chain", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-recovery-validation-suite.js", symbol: "corrupt or truncated quarantine chains can never be adopted or consumed", coverage: partial }
   reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

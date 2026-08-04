@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -11,7 +11,8 @@ import { observeOnce } from "../helper/supervisor.mjs";
 import { messengerInstancePaths } from "../helper/instance-paths.mjs";
 import { SessionStore } from "../helper/store.mjs";
 import { renderDiscordSupervisorUnits } from "../helper/systemd.mjs";
-import { installSupervisedPair, verifyWindowsTaskAction, verifyWindowsTaskDisabled } from "../helper/service-manager.mjs";
+import { containWindowsTask, installSupervisedPair, startWindowsTask, verifyWindowsTaskAction, verifyWindowsTaskDisabled, verifyWindowsTaskEnabled } from "../helper/service-manager.mjs";
+import { createManagedRuntimeArtifact } from "../helper/cutover-bundle.mjs";
 
 const roots = [];
 test.after(() => roots.forEach((root) => rmSync(root, { recursive: true, force: true })));
@@ -62,7 +63,7 @@ function fixture() {
 	roots.push(root);
 	const paths = messengerInstancePaths(root);
 	mkdirSync(join(root, "naia-settings/messenger-sessions"), { recursive: true, mode: 0o700 });
-	const config = { schemaVersion: 1, enabled: true, workspaceId: "test", persona: { name: "Observer", instructions: "Observe safely." }, role: { name: "reader", allowedActions: ["read", "reply"], requiresApproval: [] }, backend: { selected: "codex", profiles: { codex: { enabled: true }, claude: { enabled: false } } }, discord: { credentialRef: "token", botUserId: "111111111111111111", operatorUserIds: [], bindings: [{ kind: "dm", userId: "222222222222222222", respondWhen: "always", allowedUserIds: ["222222222222222222"], canStartConversation: true, operatorActions: true }] }, runtime: { heartbeatSeconds: 10, softSilenceSeconds: 2, noProgressInterventionSeconds: 2, operatorResponseSeconds: 1, approvalPolicy: "never", permissionProfileEpoch: "test", maxConcurrentJobs: 1, conversationCoordinator: false }, observability: { discordStatusProjection: false }, service: { autoStart: true, startAt: "login" }, recovery: { autoRetry: true } };
+	const config = { schemaVersion: 1, enabled: true, workspaceId: "test", persona: { name: "Observer", instructions: "Observe safely." }, role: { name: "reader", allowedActions: ["read", "reply"], requiresApproval: [] }, backend: { selected: "codex", profiles: { codex: { enabled: true }, claude: { enabled: false } } }, discord: { credentialRef: "token", botUserId: "111111111111111111", operatorUserIds: [], bindings: [{ kind: "dm", userId: "222222222222222222", respondWhen: "always", allowedUserIds: ["222222222222222222"], canStartConversation: true, operatorActions: true }] }, runtime: { heartbeatSeconds: 10, softSilenceSeconds: 2, noProgressInterventionSeconds: 2, operatorResponseSeconds: 1, approvalPolicy: "never", permissionProfileEpoch: "test", maxConcurrentJobs: 1 }, observability: { discordStatusProjection: false }, service: { autoStart: true, startAt: "login" }, recovery: { autoRetry: true } };
 	writeFileSync(paths.configPath, JSON.stringify(config), { mode: 0o600 });
 	chmodSync(paths.configPath, 0o600);
 	return { root, paths };
@@ -89,6 +90,17 @@ test("DSO-009 observer writes only its atomic snapshot and leaves the ledger byt
 	store.close();
 });
 
+test("DSO-012 observer binds the live managed service revision", () => {
+	const { root, paths } = fixture();
+	const store = new SessionStore(paths.databasePath);
+	const revision = "c".repeat(40);
+	const nowMs = Date.now();
+	store.heartbeatService({ generation: `${revision}.1234abcd`, now: iso(nowMs) });
+	const snapshot = observeOnce({ adkRoot: root, nowMs });
+	assert.equal(snapshot.serviceRuntimeRevision, revision);
+	store.close();
+});
+
 test("DSO-009 systemd observer has a separate identity and a 60 second persistent timer", () => {
 	const { root } = fixture();
 	const rendered = renderDiscordSupervisorUnits({ adkRoot: root, nodePath: "/usr/bin/node" });
@@ -109,8 +121,20 @@ test("DSO-009 CLI reports an absent service as unhealthy without an interactive 
 
 test("DSO-009 independently scheduled payload refreshes a stopped-service snapshot on separate invocations", () => {
 	const { root, paths } = fixture();
-	const supervisor = fileURLToPath(new URL("../helper/supervisor.mjs", import.meta.url));
-	const run = () => spawnSync(process.execPath, [supervisor, "--adk-root", root], { encoding: "utf8" });
+	const sourceSkill = fileURLToPath(new URL("../", import.meta.url));
+	const targetSkill = join(root, ".agents/skills/manage-discord-sessions");
+	mkdirSync(join(root, ".agents/skills"), { recursive: true });
+	cpSync(sourceSkill, targetSkill, { recursive: true });
+	for (const args of [["init", "-q"], ["add", ".agents/skills/manage-discord-sessions"], ["-c", "user.name=Naia Test", "-c", "user.email=naia@example.invalid", "commit", "-qm", "supervisor runtime"]]) {
+		const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+		assert.equal(result.status, 0, result.stderr);
+	}
+	const revision = spawnSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
+	const runtimeTreeId = spawnSync("git", ["-C", root, "rev-parse", `${revision}:.agents/skills/manage-discord-sessions`], { encoding: "utf8" }).stdout.trim();
+	const artifact = createManagedRuntimeArtifact({ adkRoot: root, sourceRevision: revision, sourceRuntimeTreeId: runtimeTreeId, tokenFingerprint: "f".repeat(64), nodePath: process.execPath });
+	const supervisor = join(artifact.runtimePath, "helper/supervisor.mjs");
+	const environment = { PATH: process.env.PATH ?? "", NAIA_DISCORD_LAUNCH_MODE: "managed-systemd", NAIA_DISCORD_RUNTIME_ARTIFACT: artifact.artifactDirectory, NAIA_DISCORD_RUNTIME_REVISION: revision, NAIA_DISCORD_RUNTIME_TREE_ID: runtimeTreeId, NAIA_DISCORD_RUNTIME_SHA256: artifact.manifest.runtimeSha256 };
+	const run = () => spawnSync(process.execPath, [supervisor, "--adk-root", root], { encoding: "utf8", env: environment });
 	assert.equal(run().status, 4);
 	const first = JSON.parse(readFileSync(paths.supervisorStatusPath, "utf8"));
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
@@ -136,21 +160,47 @@ test("DSO-009 Windows supervisor registration accepts only one limited minute tr
 	assert.throws(() => verifyWindowsTaskAction(xml.replace("PT1M", "PT5M"), launcher, "S-1-5-21-test", { schedule: "minute" }), /one minute trigger/);
 	assert.throws(() => verifyWindowsTaskAction(xml.replace("<Enabled>true", "<Enabled>false"), launcher, "S-1-5-21-test", { schedule: "minute" }), /must be enabled/);
 	assert.equal(verifyWindowsTaskDisabled(xml.replace("<Enabled>true", "<Enabled>false")), true);
+	assert.equal(verifyWindowsTaskEnabled(xml), true);
+});
+
+test("DSO-012 Windows Task Scheduler start and containment have explicit verified postconditions", () => {
+	const taskName = "NaiaDiscordSessions-123456789abc";
+	const enabledXml = "<Task><Settings><Enabled>true</Enabled></Settings></Task>";
+	const disabledXml = "<Task><Settings><Enabled>false</Enabled></Settings></Task>";
+	const enabledEvents = [];
+	const enabled = startWindowsTask(taskName, { run: (args) => {
+		enabledEvents.push(args.join(" "));
+		return { status: 0, output: args.includes("/Query") ? enabledXml : "" };
+	} });
+	assert.equal(enabled, "enabled_started");
+	assert.deepEqual(enabledEvents, [`/Change /TN ${taskName} /ENABLE`, `/Query /TN ${taskName} /XML`, `/Run /TN ${taskName}`]);
+	const containedEvents = [];
+	const contained = containWindowsTask({ taskName, disable: true, stopOwned: () => false, run: (args) => {
+		containedEvents.push(args.join(" "));
+		return { status: 0, output: args.includes("/Query") ? disabledXml : "" };
+	} });
+	assert.equal(contained, "disabled_stopped");
+	assert.deepEqual(containedEvents, [`/Change /TN ${taskName} /DISABLE`, `/Query /TN ${taskName} /XML`, `/End /TN ${taskName}`]);
+	assert.throws(() => containWindowsTask({ taskName, disable: false, stopOwned: () => false, run: () => ({ status: 1, output: "" }) }), /stopped state is unproven/);
+	assert.equal(containWindowsTask({ taskName, disable: false, stopOwned: () => true, run: () => ({ status: 1, output: "" }) }), "stopped");
 });
 
 test("DSO-009 service installation verifies supervisor first and quarantines every partial failure", () => {
 	const events = [];
-	const installed = installSupervisedPair({ installSupervisor: () => { events.push("supervisor"); return "timer"; }, installService: (supervisor) => { events.push(`service:${supervisor}`); return "main"; }, quarantineService: () => events.push("quarantine") });
+	const installed = installSupervisedPair({ installSupervisor: () => { events.push("supervisor"); return "timer"; }, installService: (supervisor) => { events.push(`service:${supervisor}`); return "main"; }, quarantinePair: () => events.push("quarantine") });
 	assert.deepEqual(installed, { supervisor: "timer", service: "main" });
 	assert.deepEqual(events, ["supervisor", "service:timer"]);
 	events.length = 0;
-	assert.throws(() => installSupervisedPair({ installSupervisor: () => { events.push("supervisor"); throw new Error("timer failed"); }, installService: () => events.push("service"), quarantineService: () => events.push("quarantine") }), /timer failed/);
+	assert.throws(() => installSupervisedPair({ installSupervisor: () => { events.push("supervisor"); throw new Error("timer failed"); }, installService: () => events.push("service"), quarantinePair: () => events.push("quarantine") }), /timer failed/);
 	assert.deepEqual(events, ["supervisor", "quarantine"]);
 	events.length = 0;
-	assert.throws(() => installSupervisedPair({ installSupervisor: () => { events.push("supervisor"); return "timer"; }, installService: () => { events.push("service"); throw new Error("main failed"); }, quarantineService: () => events.push("quarantine") }), /main failed/);
+	assert.throws(() => installSupervisedPair({ installSupervisor: () => { events.push("supervisor"); return "timer"; }, installService: () => { events.push("service"); throw new Error("main failed"); }, quarantinePair: () => events.push("quarantine") }), /main failed/);
 	assert.deepEqual(events, ["supervisor", "service", "quarantine"]);
 	events.length = 0;
-	assert.throws(() => installSupervisedPair({ installSupervisor: () => { throw new Error("timer failed"); }, installService: () => {}, quarantineService: () => { events.push("quarantine"); throw new Error("disable failed"); } }), /timer failed; service quarantine failed: disable failed/);
+	assert.throws(() => installSupervisedPair({ installSupervisor: () => { events.push("supervisor"); return "timer"; }, installService: () => { events.push("service-started"); events.push("post-install-verify"); throw new Error("owned process missing"); }, quarantinePair: () => events.push("quarantine") }), /owned process missing/);
+	assert.deepEqual(events, ["supervisor", "service-started", "post-install-verify", "quarantine"]);
+	events.length = 0;
+	assert.throws(() => installSupervisedPair({ installSupervisor: () => { throw new Error("timer failed"); }, installService: () => {}, quarantinePair: () => { events.push("quarantine"); throw new Error("disable failed"); } }), /timer failed; supervised pair quarantine failed: disable failed/);
 	assert.deepEqual(events, ["quarantine"]);
 });
 
