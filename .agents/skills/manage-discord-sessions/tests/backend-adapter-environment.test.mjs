@@ -76,6 +76,72 @@ test("DSO-006 normalizes provider streams without retaining model content", () =
 	assert.ok(!JSON.stringify({ codex, claude }).includes(secret));
 });
 
+test("DSO-013 normalizes reasoning presence and tool phases without content", () => {
+	const secret = "never-persist-provider-reasoning-or-tool-results";
+	const codexReasoning = inspectBackendLine({
+		backendId: "codex", attemptId: "attempt-trace-codex", lineNumber: 1,
+		line: JSON.stringify({ type: "item.started", item: { id: "reasoning-1", type: "reasoning", text: secret } }),
+	});
+	assert.deepEqual(codexReasoning.events.map(({ kind, safePayload }) => ({ kind, safePayload })), [
+		{ kind: "phase_changed", safePayload: { phase: "planning" } },
+	]);
+	const codexRead = inspectBackendLine({
+		backendId: "codex", attemptId: "attempt-trace-codex", lineNumber: 2,
+		line: JSON.stringify({ type: "item.started", item: { id: "tool-1", type: "file_read", path: `/tmp/${secret}` } }),
+	});
+	assert.deepEqual(codexRead.events.map(({ kind, safePayload }) => ({ kind, safePayload })), [
+		{ kind: "phase_changed", safePayload: { phase: "reading" } },
+		{ kind: "tool_started", safePayload: { toolCategory: "file_read" } },
+	]);
+	for (const [lineNumber, type, phase, toolCategory] of [
+		[3, "file_change", "editing", "file_edit"],
+		[4, "web_search", "reading", "network"],
+		[5, "command_execution", "executing", "command"],
+		[6, "mcp_tool_call", null, "other"],
+	]) {
+		const event = inspectBackendLine({
+			backendId: "codex", attemptId: "attempt-trace-codex", lineNumber,
+			line: JSON.stringify({ type: "item.started", item: { id: `tool-${lineNumber}`, type, text: secret } }),
+		});
+		const expected = phase ? [
+			{ kind: "phase_changed", safePayload: { phase } },
+			{ kind: "tool_started", safePayload: { toolCategory } },
+		] : [{ kind: "tool_started", safePayload: { toolCategory } }];
+		assert.deepEqual(event.events.map(({ kind, safePayload }) => ({ kind, safePayload })), expected);
+		assert.equal(JSON.stringify(event).includes(secret), false);
+	}
+
+	const adapterState = {};
+	const claudeStart = inspectBackendLine({
+		backendId: "claude", attemptId: "attempt-trace-claude", lineNumber: 1, adapterState,
+		line: JSON.stringify({ type: "assistant", message: { content: [
+			{ type: "thinking", thinking: secret },
+			{ type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: `/tmp/${secret}` } },
+		] } }),
+	});
+	assert.deepEqual(claudeStart.events.slice(0, 3).map(({ kind, safePayload }) => ({ kind, safePayload })), [
+		{ kind: "phase_changed", safePayload: { phase: "planning" } },
+		{ kind: "phase_changed", safePayload: { phase: "reading" } },
+		{ kind: "tool_started", safePayload: { toolCategory: "file_read" } },
+	]);
+	const claudeFinish = inspectBackendLine({
+		backendId: "claude", attemptId: "attempt-trace-claude", lineNumber: 2, adapterState,
+		line: JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_1", content: secret }] } }),
+	});
+	assert.deepEqual(claudeFinish.events.map(({ kind, safePayload }) => ({ kind, safePayload })), [
+		{ kind: "tool_finished", safePayload: { toolCategory: "file_read" } },
+	]);
+	const claudeWeb = inspectBackendLine({
+		backendId: "claude", attemptId: "attempt-trace-claude", lineNumber: 3, adapterState,
+		line: JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_2", name: "WebSearch", input: { query: secret } }] } }),
+	});
+	assert.deepEqual(claudeWeb.events.slice(0, 2).map(({ kind, safePayload }) => ({ kind, safePayload })), [
+		{ kind: "phase_changed", safePayload: { phase: "reading" } },
+		{ kind: "tool_started", safePayload: { toolCategory: "network" } },
+	]);
+	assert.equal(JSON.stringify({ codexReasoning, codexRead, claudeStart, claudeFinish, claudeWeb }).includes(secret), false);
+});
+
 test("DSO-006 never promotes an unknown provider result to success", () => {
 	const codex = inspectBackendLine({ backendId: "codex", attemptId: "attempt-unknown-codex", lineNumber: 1, line: JSON.stringify({ type: "turn.completed", status: "unknown" }) });
 	const claude = inspectBackendLine({ backendId: "claude", attemptId: "attempt-unknown-claude", lineNumber: 1, line: JSON.stringify({ type: "result", subtype: "unknown", result: "must-not-deliver" }) });
@@ -121,7 +187,24 @@ test("DSO-005 accepts the official Windows Codex sandbox read ACL while keeping 
 	mkdirSync(join(authRoot, ".codex"), { recursive: true });
 	const authPath = join(authRoot, ".codex", "auth.json");
 	writeFileSync(authPath, "codex-auth");
-	const aclScript = String.raw`$ErrorActionPreference='Stop';$path=$env:NAIA_TEST_AUTH_PATH;$identity=[Security.Principal.WindowsIdentity]::GetCurrent();$sandbox=([Security.Principal.NTAccount]::new($env:COMPUTERNAME,'CodexSandboxUsers')).Translate([Security.Principal.SecurityIdentifier]);$acl=Get-Acl -LiteralPath $path;$acl.SetOwner($identity.User);$acl.SetAccessRuleProtection($true,$false);foreach($rule in @($acl.Access)){[void]$acl.RemoveAccessRuleSpecific($rule)};function Add-Rule($sid,$rights){$rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,$rights,[Security.AccessControl.InheritanceFlags]::None,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow);[void]$acl.AddAccessRule($rule)};Add-Rule $identity.User ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule ([Security.Principal.SecurityIdentifier]'S-1-5-18') ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule ([Security.Principal.SecurityIdentifier]'S-1-5-32-544') ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule $sandbox ([Security.AccessControl.FileSystemRights]::ReadAndExecute);Set-Acl -LiteralPath $path -AclObject $acl`;
+	const aclScript = String.raw`
+$ErrorActionPreference='Stop'
+$path=$env:NAIA_TEST_AUTH_PATH
+$identity=[Security.Principal.WindowsIdentity]::GetCurrent()
+$sandbox=([Security.Principal.NTAccount]::new($env:COMPUTERNAME,'CodexSandboxUsers')).Translate([Security.Principal.SecurityIdentifier])
+$acl=Get-Acl -LiteralPath $path
+$acl.SetOwner($identity.User)
+$acl.SetAccessRuleProtection($true,$false)
+foreach($rule in @($acl.Access)){[void]$acl.RemoveAccessRuleSpecific($rule)}
+function Add-Rule($sid,$rights){
+	$rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,$rights,[Security.AccessControl.InheritanceFlags]::None,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow)
+	[void]$acl.AddAccessRule($rule)
+}
+Add-Rule $identity.User ([Security.AccessControl.FileSystemRights]::FullControl)
+Add-Rule ([Security.Principal.SecurityIdentifier]'S-1-5-18') ([Security.AccessControl.FileSystemRights]::FullControl)
+Add-Rule ([Security.Principal.SecurityIdentifier]'S-1-5-32-544') ([Security.AccessControl.FileSystemRights]::FullControl)
+Add-Rule $sandbox ([Security.AccessControl.FileSystemRights]::ReadAndExecute)
+Set-Acl -LiteralPath $path -AclObject $acl`;
 	const powershell = join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
 	const configured = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", aclScript], { encoding: "utf8", env: { ...process.env, NAIA_TEST_AUTH_PATH: authPath } });
 	if (configured.status !== 0 && /CodexSandboxUsers/i.test(configured.stderr)) return context.skip("Codex sandbox group is unavailable");

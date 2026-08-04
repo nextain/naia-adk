@@ -103,11 +103,11 @@ skills:
     note: "표준 소비자=data-private 서브모듈. 비번은 AI를 거치지 않음(사용자 `!` 직접 실행)."
 
   manage-discord-sessions:
-    trigger: "Discord 설정, Codex/Claude 백그라운드 작업 상태, 실시간 활동, 멈춤 진단, 재부팅 복구, idle history rotation"
-    what: "ADK 내부 SQLite에서 Discord AI 작업의 서비스 신선도·활동·검증 증거를 조회하고, 이후 Gateway/재부팅 복구를 같은 계약으로 관리"
+    trigger: "Discord 설정, Codex/Claude 백그라운드 작업 상태, 프로파일별 상세 작업 추적, 실시간 활동, 멈춤 진단, 재부팅 복구, idle history rotation"
+    what: "ADK 내부 SQLite에서 Discord AI 작업의 서비스 신선도·허용된 단계/도구 활동·검증 증거를 짧은 프로파일 표시로 조회하고, Gateway/재부팅 복구를 같은 계약으로 관리"
     arg: null
     scripts: [scripts/manage-discord-sessions.sh]
-    note: "Gateway 실시간 수신, Codex/Claude 독립 실행, Linux systemd/Windows Task Scheduler 자동 시작, 재부팅 복구, stale permission-profile 교체, 무진행/채널응답 watchdog, 권한 바인딩된 명시적 history/latest/reply와 해시 검증 첨부 복구까지 구현됨. 결과 정확성은 활동 상태와 분리해 completionAssessment 근거로 판단."
+    note: "Gateway 실시간 수신, Codex/Claude 독립 실행, owner-only watch --verbose, Linux systemd/Windows Task Scheduler 자동 시작, 재부팅 복구, stale permission-profile 교체, 무진행/채널응답 watchdog, 권한 바인딩된 명시적 history/latest/reply와 해시 검증 첨부 복구까지 구현됨. 사적 추론 원문은 저장·표시하지 않으며 결과 정확성은 활동 상태와 분리해 completionAssessment 근거로 판단."
 
   session-resume:
     trigger: "claude --resume, codex/opencode 세션 이어서, 이전 세션 뭐했지, 세션 기록 봐줘"

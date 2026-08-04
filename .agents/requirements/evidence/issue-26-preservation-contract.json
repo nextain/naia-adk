@@ -1,0 +1,267 @@
+{
+  "schemaVersion": 1,
+  "preservation": {
+    "version": 1,
+    "baseline_ref": "dd20504f57548dd27cb0e7971905495091077d74",
+    "intent": "extend",
+    "intent_description": "Extend owner-only local observability without replacing existing commands, machine identities, privacy boundaries, Discord ingress, or recovery.",
+    "delivery_state": "REVIEW_ONLY",
+    "delivery_blockers": ["trusted current probe runner receipts are not implemented by the preservation harness"],
+    "vendor_sources": [],
+    "evidenceRegistry": [
+      {
+        "id": "baseline:full-discord-suite",
+        "revision": "dd20504f57548dd27cb0e7971905495091077d74",
+        "command": "pnpm test:discord-sessions",
+        "expected": "all non-platform-skipped tests pass from an isolated TMPDIR"
+      },
+      {
+        "id": "baseline:watch-contract",
+        "revision": "dd20504f57548dd27cb0e7971905495091077d74",
+        "test": ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs :: DSO-003 CLI returns versioned job detail and watch events",
+        "expected": "JSONL lines remain parseable wrappers with event objects and unique event ordinals"
+      },
+      {
+        "id": "baseline:watch-exact-output",
+        "revision": "dd20504f57548dd27cb0e7971905495091077d74",
+        "source": ".agents/skills/manage-discord-sessions/helper/cli.mjs",
+        "sourceSha256": "sha256:84695ab97b7e0f6bd15e76c98c9f792727f5888ddc79a18a3465008ca9d007d7",
+        "frozenAssertions": {
+          "human": "<occurredAt> <complete-jobId> <kind> <safeSummary>",
+          "jsonl": { "topLevelRequired": ["schemaVersion", "event"], "schemaVersion": 1, "eventRequired": ["ordinal", "eventId", "jobId", "kind", "occurredAt", "safeSummary"] }
+        },
+        "currentProbe": ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs :: DSO-013 verbose watch uses concise profile labels and stable JSONL identities"
+      },
+      {
+        "id": "baseline:safe-ledger-rejection",
+        "revision": "dd20504f57548dd27cb0e7971905495091077d74",
+        "tests": [
+          ".agents/skills/manage-discord-sessions/tests/observability-lifecycle.test.mjs :: DSO-005 rejects unsafe event shapes and coalesces high-rate activity",
+          ".agents/skills/manage-discord-sessions/tests/observability-lifecycle.test.mjs :: DSO-005 closes job metadata before it reaches projections"
+        ],
+        "sourceDigests": {
+          ".agents/skills/manage-discord-sessions/helper/store-event-writer.mjs": "sha256:d9adc83bfae5a150406c068a98b498f0782229dae5c5e74cfc632b35f34d2d7d",
+          ".agents/skills/manage-discord-sessions/helper/sanitize.mjs": "sha256:33c90b78ee008b439ab91436068bde58343b934ee9ccb70e7b814beaf2a6341a"
+        },
+        "expected": "unsafe event fields, unsafe payload keys, secrets, paths, and projection metadata fail closed"
+      },
+      {
+        "id": "baseline:named-instance-contract",
+        "revision": "dd20504f57548dd27cb0e7971905495091077d74",
+        "test": ".agents/skills/manage-discord-sessions/tests/discord-service-platform.test.mjs :: DSG-008 isolates named bot instances while preserving the default instance contract",
+        "expected": "default and named config/state paths remain isolated and stable"
+      },
+      {
+        "id": "baseline:provider-privacy",
+        "revision": "dd20504f57548dd27cb0e7971905495091077d74",
+        "test": ".agents/skills/manage-discord-sessions/tests/backend-adapter-environment.test.mjs :: DSO-006 normalizes provider streams without retaining model content",
+        "expected": "Codex and Claude retain only allowlisted metadata"
+      },
+      {
+        "id": "baseline:atomic-ingress",
+        "revision": "dd20504f57548dd27cb0e7971905495091077d74",
+        "test": ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs :: DSG-002 accepts ingress and job atomically and deduplicates Gateway replay",
+        "expected": "Gateway ingress remains atomic and replay-safe"
+      },
+      {
+        "id": "baseline:reboot-recovery",
+        "revision": "dd20504f57548dd27cb0e7971905495091077d74",
+        "test": ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs :: DSG-007 reboot recovery preserves job identity and requires review without retry or resend",
+        "expected": "job identity, fail-closed recovery, and no uncertain resend remain stable"
+      },
+      {
+        "id": "baseline:managed-cutover",
+        "revision": "dd20504f57548dd27cb0e7971905495091077d74",
+        "tests": [
+          ".agents/skills/manage-discord-sessions/tests/discord-cutover-rollback.test.mjs",
+          ".agents/skills/manage-discord-sessions/tests/service-cutover-hardening.test.mjs"
+        ],
+        "expected": "rollback bundles, revision/config receipts, artifact locks, and canary gates remain valid"
+      },
+      {
+        "id": "current:issue-26-suite",
+        "revision": "working-tree",
+        "command": "pnpm test:discord-sessions",
+        "expected": "baseline probes plus DSO-013 focused tests pass from an isolated TMPDIR"
+      }
+    ],
+    "surfaces": [
+      {
+        "id": "cli-watch-default",
+        "directive_id": "USR-013-E06",
+        "kind": "cli_command",
+        "locator": "watch",
+        "disposition": "preserve",
+        "paths": [".agents/skills/manage-discord-sessions/helper/cli.mjs"],
+        "baseline_paths": [".agents/skills/manage-discord-sessions/helper/cli.mjs"],
+        "current_paths": [".agents/skills/manage-discord-sessions/helper/cli.mjs"],
+        "baseline_evidence_id": "baseline:watch-exact-output",
+        "current_evidence_id": "current:issue-26-suite",
+        "authority_id": null,
+        "expected_diff_digest": null
+      },
+      {
+        "id": "cli-watch-verbose",
+        "directive_id": "USR-013-E06",
+        "kind": "cli_command",
+        "locator": "watch --verbose",
+        "disposition": "extend",
+        "paths": [".agents/skills/manage-discord-sessions/helper/cli.mjs", ".agents/skills/manage-discord-sessions/helper/operator-trace.mjs"],
+        "baseline_paths": [".agents/skills/manage-discord-sessions/helper/cli.mjs"],
+        "current_paths": [".agents/skills/manage-discord-sessions/helper/cli.mjs", ".agents/skills/manage-discord-sessions/helper/operator-trace.mjs"],
+        "baseline_evidence_id": "baseline:watch-contract",
+        "current_evidence_id": "current:issue-26-suite",
+        "authority_id": "USR-013-E06",
+        "expected_diff_digest": null
+      },
+      {
+        "id": "stable-instance-job-identity",
+        "directive_id": "USR-013-E09",
+        "kind": "identity_contract",
+        "locator": "instance and job identity",
+        "disposition": "preserve",
+        "paths": [
+          ".agents/skills/manage-discord-sessions/helper/instance-paths.mjs",
+          ".agents/skills/manage-discord-sessions/helper/store-database.mjs",
+          ".agents/skills/manage-discord-sessions/helper/store-reader.mjs"
+        ],
+        "baseline_paths": [".agents/skills/manage-discord-sessions/helper/instance-paths.mjs", ".agents/skills/manage-discord-sessions/helper/store-database.mjs", ".agents/skills/manage-discord-sessions/helper/store-reader.mjs"],
+        "current_paths": [".agents/skills/manage-discord-sessions/helper/instance-paths.mjs", ".agents/skills/manage-discord-sessions/helper/store-database.mjs", ".agents/skills/manage-discord-sessions/helper/store-reader.mjs"],
+        "baseline_evidence_id": "baseline:named-instance-contract",
+        "current_evidence_id": "current:issue-26-suite",
+        "authority_id": null,
+        "expected_diff_digest": null
+      },
+      {
+        "id": "safe-event-ledger",
+        "directive_id": "USR-013-E07",
+        "kind": "data_schema",
+        "locator": "safe event ledger",
+        "disposition": "preserve",
+        "paths": [
+          ".agents/skills/manage-discord-sessions/helper/store-event-writer.mjs",
+          ".agents/skills/manage-discord-sessions/helper/sanitize.mjs",
+          ".agents/skills/manage-discord-sessions/helper/constants.mjs"
+        ],
+        "baseline_paths": [".agents/skills/manage-discord-sessions/helper/store-event-writer.mjs", ".agents/skills/manage-discord-sessions/helper/sanitize.mjs", ".agents/skills/manage-discord-sessions/helper/constants.mjs"],
+        "current_paths": [".agents/skills/manage-discord-sessions/helper/store-event-writer.mjs", ".agents/skills/manage-discord-sessions/helper/sanitize.mjs", ".agents/skills/manage-discord-sessions/helper/constants.mjs"],
+        "baseline_evidence_id": "baseline:safe-ledger-rejection",
+        "current_evidence_id": "current:issue-26-suite",
+        "authority_id": null,
+        "expected_diff_digest": null
+      },
+      {
+        "id": "provider-adapters",
+        "directive_id": "USR-013-E07",
+        "kind": "runtime_adapter",
+        "locator": "Codex and Claude structured events",
+        "disposition": "extend",
+        "paths": [".agents/skills/manage-discord-sessions/helper/adapters.mjs"],
+        "baseline_paths": [".agents/skills/manage-discord-sessions/helper/adapters.mjs"],
+        "current_paths": [".agents/skills/manage-discord-sessions/helper/adapters.mjs"],
+        "baseline_evidence_id": "baseline:provider-privacy",
+        "current_evidence_id": "current:issue-26-suite",
+        "authority_id": "USR-013-E07",
+        "expected_diff_digest": null
+      },
+      {
+        "id": "messenger-config-and-execution-revision",
+        "directive_id": "USR-013-E08",
+        "kind": "config_schema",
+        "locator": "persona.shortName",
+        "disposition": "extend",
+        "paths": [
+          ".agents/skills/manage-discord-sessions/helper/discord-config.mjs",
+          ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs",
+          "naia-settings/messenger-sessions/config.example.json"
+        ],
+        "baseline_paths": [".agents/skills/manage-discord-sessions/helper/discord-config.mjs", ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", "naia-settings/messenger-sessions/config.example.json"],
+        "current_paths": [".agents/skills/manage-discord-sessions/helper/discord-config.mjs", ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", "naia-settings/messenger-sessions/config.example.json"],
+        "baseline_evidence_id": "baseline:full-discord-suite",
+        "current_evidence_id": "current:issue-26-suite",
+        "authority_id": "USR-013-E08",
+        "expected_diff_digest": null
+      },
+      {
+        "id": "atomic-discord-ingress",
+        "directive_id": "USR-013-E01",
+        "kind": "runtime_path",
+        "locator": "Discord Gateway ingress",
+        "disposition": "preserve",
+        "paths": [
+          ".agents/skills/manage-discord-sessions/helper/discord-gateway.mjs",
+          ".agents/skills/manage-discord-sessions/helper/discord-scope.mjs",
+          ".agents/skills/manage-discord-sessions/helper/store-job-writer.mjs"
+        ],
+        "baseline_paths": [".agents/skills/manage-discord-sessions/helper/discord-gateway.mjs", ".agents/skills/manage-discord-sessions/helper/discord-scope.mjs", ".agents/skills/manage-discord-sessions/helper/store-job-writer.mjs"],
+        "current_paths": [".agents/skills/manage-discord-sessions/helper/discord-gateway.mjs", ".agents/skills/manage-discord-sessions/helper/discord-scope.mjs", ".agents/skills/manage-discord-sessions/helper/store-job-writer.mjs"],
+        "baseline_evidence_id": "baseline:atomic-ingress",
+        "current_evidence_id": "current:issue-26-suite",
+        "authority_id": null,
+        "expected_diff_digest": null
+      },
+      {
+        "id": "durable-job-recovery",
+        "directive_id": "USR-013-E01",
+        "kind": "runtime_path",
+        "locator": "durable Discord job recovery",
+        "disposition": "preserve",
+        "paths": [
+          ".agents/skills/manage-discord-sessions/helper/discord-router.mjs",
+          ".agents/skills/manage-discord-sessions/helper/recovery-crypto.mjs",
+          ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs"
+        ],
+        "baseline_paths": [".agents/skills/manage-discord-sessions/helper/discord-router.mjs", ".agents/skills/manage-discord-sessions/helper/recovery-crypto.mjs", ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs"],
+        "current_paths": [".agents/skills/manage-discord-sessions/helper/discord-router.mjs", ".agents/skills/manage-discord-sessions/helper/recovery-crypto.mjs", ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs"],
+        "baseline_evidence_id": "baseline:reboot-recovery",
+        "current_evidence_id": "current:issue-26-suite",
+        "authority_id": null,
+        "expected_diff_digest": null
+      },
+      {
+        "id": "discord-status-projection",
+        "directive_id": "USR-013-E06",
+        "kind": "runtime_path",
+        "locator": "Discord status projection",
+        "disposition": "preserve",
+        "paths": [".agents/skills/manage-discord-sessions/helper/discord-projection.mjs"],
+        "baseline_paths": [".agents/skills/manage-discord-sessions/helper/discord-projection.mjs"],
+        "current_paths": [".agents/skills/manage-discord-sessions/helper/discord-projection.mjs"],
+        "baseline_evidence_id": "baseline:full-discord-suite",
+        "current_evidence_id": "current:issue-26-suite",
+        "authority_id": null,
+        "expected_diff_digest": null
+      },
+      {
+        "id": "managed-service-cutover",
+        "directive_id": "USR-013-E01",
+        "kind": "deployment_target",
+        "locator": "managed Discord service cutover",
+        "disposition": "preserve",
+        "paths": [
+          ".agents/skills/manage-discord-sessions/helper/service-manager.mjs",
+          ".agents/skills/manage-discord-sessions/helper/service-cutover-controller.mjs",
+          ".agents/skills/manage-discord-sessions/helper/cutover-artifact-lock.mjs",
+          ".agents/skills/manage-discord-sessions/helper/cutover-artifacts.mjs",
+          ".agents/skills/manage-discord-sessions/helper/cutover-bundle.mjs",
+          ".agents/skills/manage-discord-sessions/helper/cutover-canary.mjs",
+          ".agents/skills/manage-discord-sessions/helper/cutover-managed-runtime.mjs",
+          ".agents/skills/manage-discord-sessions/helper/cutover-rollback.mjs",
+          ".agents/skills/manage-discord-sessions/helper/service-manager-launcher.mjs",
+          ".agents/skills/manage-discord-sessions/helper/service-manager-linux.mjs",
+          ".agents/skills/manage-discord-sessions/helper/service-manager-shared.mjs",
+          ".agents/skills/manage-discord-sessions/helper/service-manager-windows.mjs",
+          ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs",
+          ".agents/skills/manage-discord-sessions/helper/service.mjs",
+          ".agents/skills/manage-discord-sessions/helper/systemd.mjs"
+        ],
+        "baseline_paths": [".agents/skills/manage-discord-sessions/helper/service-manager.mjs", ".agents/skills/manage-discord-sessions/helper/service-cutover-controller.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-artifact-lock.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-artifacts.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-bundle.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-canary.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-managed-runtime.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-rollback.mjs", ".agents/skills/manage-discord-sessions/helper/service-manager-launcher.mjs", ".agents/skills/manage-discord-sessions/helper/service-manager-linux.mjs", ".agents/skills/manage-discord-sessions/helper/service-manager-shared.mjs", ".agents/skills/manage-discord-sessions/helper/service-manager-windows.mjs", ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", ".agents/skills/manage-discord-sessions/helper/service.mjs", ".agents/skills/manage-discord-sessions/helper/systemd.mjs"],
+        "current_paths": [".agents/skills/manage-discord-sessions/helper/service-manager.mjs", ".agents/skills/manage-discord-sessions/helper/service-cutover-controller.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-artifact-lock.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-artifacts.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-bundle.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-canary.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-managed-runtime.mjs", ".agents/skills/manage-discord-sessions/helper/cutover-rollback.mjs", ".agents/skills/manage-discord-sessions/helper/service-manager-launcher.mjs", ".agents/skills/manage-discord-sessions/helper/service-manager-linux.mjs", ".agents/skills/manage-discord-sessions/helper/service-manager-shared.mjs", ".agents/skills/manage-discord-sessions/helper/service-manager-windows.mjs", ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", ".agents/skills/manage-discord-sessions/helper/service.mjs", ".agents/skills/manage-discord-sessions/helper/systemd.mjs"],
+        "baseline_evidence_id": "baseline:managed-cutover",
+        "current_evidence_id": "current:issue-26-suite",
+        "authority_id": null,
+        "expected_diff_digest": null
+      }
+    ]
+  }
+}

@@ -15,6 +15,7 @@
   },
   "persona": {
     "name": "Development assistant",
+    "shortName": "Development",
     "instructions": "Help with the configured workspace role without expanding permissions."
   },
   "role": {

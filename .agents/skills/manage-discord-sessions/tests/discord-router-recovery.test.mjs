@@ -7,10 +7,24 @@ import { formatOperatorStatus } from "../helper/discord-delivery.mjs";
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
 import { loadOrCreateRecoveryKey, RecoveryCodec } from "../helper/recovery-crypto.mjs";
+import { configurationRevision } from "../helper/execution-profile.mjs";
 import { randomBytes } from "node:crypto";
 import { BOT, CHANNEL, GUILD, USER, binding, cleanupDiscordFixtureRoots, fixture, roots } from "./fixtures/discord-fixture.mjs";
 
 afterEach(cleanupDiscordFixtureRoots);
+
+test("DSO-013 preserves recovery authority when only the operator label changes", () => {
+	const base = {
+		persona: { name: "Recovery agent", instructions: "Stay read-only." },
+		role: { name: "reader" },
+		backend: { selected: "codex", profiles: { codex: { model: "gpt-5.4" } } },
+		runtime: { approvalPolicy: "never" }, recovery: { autoRetry: true },
+	};
+	const legacyRevision = configurationRevision(base);
+	assert.equal(configurationRevision({ ...base, persona: { ...base.persona, shortName: "온맘" } }), legacyRevision);
+	assert.equal(configurationRevision({ ...base, persona: { ...base.persona, shortName: "다른표시" } }), legacyRevision);
+	assert.notEqual(configurationRevision({ ...base, persona: { ...base.persona, name: "Changed execution persona" } }), legacyRevision);
+});
 
 test("DSG-007 reboot recovery preserves job identity and requires review without retry or resend", () => {
 	const { store, databasePath } = fixture();

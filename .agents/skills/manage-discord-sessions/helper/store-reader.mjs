@@ -7,6 +7,8 @@ const OPERATIONAL_LIFECYCLE_PREDICATE = "lifecycle IN ('queued', 'running', 'wai
 const DEFAULT_JOB_PAGE_SIZE = 100;
 const MAX_JOB_PAGE_SIZE = 1_000;
 const DEFAULT_OPERATIONAL_JOB_LIMIT = 256;
+export const JOB_REFERENCE_PREFIX_ROW_LIMIT = 257;
+export const JOB_REFERENCE_PREFIX_QUERY = "SELECT job_id FROM jobs WHERE job_id >= ? AND job_id < ? ORDER BY job_id LIMIT ?";
 
 function jobPageLimit(value) {
 	if (!Number.isSafeInteger(value) || value < 1 || value > MAX_JOB_PAGE_SIZE) throw new Error(`job page limit must be between 1 and ${MAX_JOB_PAGE_SIZE}`);
@@ -115,6 +117,19 @@ export class SessionStoreReader {
 		if (!job) return null;
 		const health = projectServiceHealth(this.db.prepare("SELECT * FROM service_state WHERE id = 1").get(), nowMs);
 		return this.#projectJob(job, health, nowMs, includeEvents);
+	}
+
+	resolveJobReference(reference) {
+		if (typeof reference !== "string" || reference.length < 1 || reference.length > 64 || !/^[A-Za-z0-9_.:~-]+$/.test(reference)) throw new Error("job reference is invalid");
+		const exact = this.db.prepare("SELECT job_id FROM jobs WHERE job_id = ?").get(reference);
+		if (exact) return exact.job_id;
+		const match = reference.match(/^([A-Za-z0-9_.:-]{8})~([A-Za-z0-9_.:-]{4})$/);
+		if (!match) return null;
+		const prefixRows = this.db.prepare(JOB_REFERENCE_PREFIX_QUERY).all(match[1], `${match[1]}\uFFFF`, JOB_REFERENCE_PREFIX_ROW_LIMIT);
+		if (prefixRows.length === JOB_REFERENCE_PREFIX_ROW_LIMIT) throw new Error(`job reference prefix is too broad: ${match[1]}`);
+		const rows = prefixRows.filter((row) => row.job_id.endsWith(match[2])).slice(0, 2);
+		if (rows.length > 1) throw new Error(`ambiguous job reference: ${reference}`);
+		return rows[0]?.job_id ?? null;
 	}
 
 	#projectJob(job, serviceHealth, nowMs, includeEvents, includeCompletion = true) {

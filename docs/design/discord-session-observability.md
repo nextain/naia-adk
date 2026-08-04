@@ -2,13 +2,20 @@
 
 Status: observability sub-design for [issue #18](https://github.com/nextain/naia-adk/issues/18), not the complete issue design
 Scope mode: EXPANSION
-Requirements: DSO-001 through DSO-007
+Requirements: DSO-001 through DSO-013
 
 ## 1. User outcome and boundaries
 
 After a reboot, a user must be able to tell whether the Discord session helper is running, which Codex or Claude job is active, what externally observable action happened most recently, whether the job is waiting or suspected stalled, and which checks support a completion claim.
 
-This is not a chain-of-thought viewer. It exposes actions, bounded output activity, tool transitions, process outcomes, approvals, delivery state, and verification evidence. It must not claim that recent activity proves semantic correctness.
+This is not a chain-of-thought viewer. It exposes actions, bounded output activity, tool transitions, process outcomes, approvals, delivery state, and verification evidence. Provider-exposed reasoning presence may become the enum phase `planning`, but reasoning text, prompts, commands, tool results, final answers, environments, and absolute paths never enter the ledger. Missing safe detail is explicit rather than reconstructed. It must not claim that recent activity proves semantic correctness.
+
+The owner-facing `watch --verbose` view uses the same owner-only OS-account,
+`0600` config/database, and `0700` state-directory boundary as the existing
+read-only ledger. It adds no Discord authorization path or observer process.
+An optional `persona.shortName` supplies a safe 24-code-point display label;
+otherwise the concise instance name is used. This presentation-only field is
+excluded from execution and recovery authority revisions.
 
 Core constraints:
 
@@ -114,7 +121,7 @@ Closed payload contract:
 | `attempt_reserved` | core | `backend`: `codex`, `claude`, or `fake`; atomically binds the job before a process is spawned |
 | `attempt_started` | core | `backend`: `codex`, `claude`, or `fake` |
 | `backend_ready` | adapter | `backend`: `codex`, `claude`, or `fake` |
-| `phase_changed` | adapter | `phase`: `setup`, `planning`, `reading`, `editing`, `testing`, `reviewing`, `delivering`, or `recovering` |
+| `phase_changed` | adapter | `phase`: `setup`, `planning`, `reading`, `editing`, `executing`, `testing`, `reviewing`, `delivering`, or `recovering` |
 | `output_activity` | adapter | non-negative integer `bytes` |
 | `prompt_cache_observed` | adapter | provider-native raw integer counters: `backend`, `inputTokens`, `cacheReadInputTokens`, optional `cacheCreationInputTokens`, and `outputTokens`; absence is not inferred as zero |
 | `tool_started` | adapter | `toolCategory`: `file_read`, `file_edit`, `command`, `test`, `build`, `network`, or `other`; no command/path |
@@ -197,7 +204,7 @@ The existing skill owns one deterministic script:
 manage-discord-sessions.sh status [--json]
 manage-discord-sessions.sh jobs [--active|--failed] [--json]
 manage-discord-sessions.sh job <job-id> [--events] [--json]
-manage-discord-sessions.sh watch [--job <job-id>] [--jsonl]
+manage-discord-sessions.sh watch [--job <job-id>] [--verbose|--jsonl]
 manage-discord-sessions.sh history --channel <channel-id> [--author <user-id>] [--limit 20] [--json]
 manage-discord-sessions.sh latest --channel <channel-id> [--author <user-id>] [--json]
 manage-discord-sessions.sh attachment --channel <channel-id> --message <message-id> --attachment <attachment-id> --output <absolute-path> [--expected-sha256 <hex>]
@@ -208,7 +215,7 @@ manage-discord-sessions.sh retry <job-id> [--confirm-delivery-risk]
 
 The first implementation slice provides `status`, `jobs`, `job`, and `watch` over a local fake backend. `logs` is deferred until a bounded encrypted artifact contract exists. Control commands arrive only with the service state machine because a file-only command that cannot reach a running child would imply false control.
 
-JSON output has an independent contract version (`schemaVersion: 1`); it does not inherit the internal SQLite migration version. Success exits 0, invalid arguments or unknown jobs exit 2, unavailable/corrupt/newer state exits 3, and internal failures exit 1. Empty `jobs` is a successful empty array. `watch` emits existing events once from ordinal 0, then resumes strictly after the last emitted ordinal at a 500 ms local interval; each ordinal appears at most once per process.
+JSON output has an independent contract version (`schemaVersion: 1`); it does not inherit the internal SQLite migration version. Success exits 0, invalid arguments or unknown jobs exit 2, unavailable/corrupt/newer state exits 3, and internal failures exit 1. Empty `jobs` is a successful empty array. `watch` emits existing events once from ordinal 0, then resumes strictly after the last emitted ordinal at a 500 ms local interval; each ordinal appears at most once per process. Default human watch output remains unchanged. JSONL preserves the complete event and job identity and adds explicit stable instance and bounded profile metadata. Verbose human output uses a short `앞8~뒤4` job reference accepted by `job <reference>` and ledger-derived elapsed time; ambiguous references fail closed. It formats only allowlisted phase, tool, lifecycle, blocker, and verification evidence. `--verbose` and `--jsonl` are mutually exclusive.
 
 `history` and `latest` are explicit operator reads, not a receive loop. They
 require the `read` role and exactly one operator-enabled binding for the target,

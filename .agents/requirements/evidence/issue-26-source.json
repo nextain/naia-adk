@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-04T23:40:00+09:00",
+  "repository": "nextain/naia-adk",
+  "number": 26,
+  "state": "OPEN",
+  "title": "feat(discord): owner-visible work trace with short profile labels",
+  "url": "https://github.com/nextain/naia-adk/issues/26",
+  "createdAt": "2026-08-04T14:17:03Z",
+  "authorLogin": "luke-n-alpha",
+  "bodySha256": "sha256:d397a968966714fbb7d2336879859fa0549af734ffeb4c7e7624b2ba530e44a8",
+  "body": "## Problem\n\nThe local `watch` command proves liveness but does not let the owner understand what the AI is doing. Current events such as `Output activity: 433 bytes` and long session/service identities are operationally opaque.\n\nThis is a focused follow-up to #18.\n\n## Required behavior\n\n- Add an owner-only detailed watch mode for live, structured work activity.\n- Show public-safe decision summaries, plan/progress stages, tool categories, completion/failure state, elapsed time, blockers, verification results, and the next declared step when the provider exposes them.\n- Do **not** store or render private chain-of-thought, raw prompts, raw model stdout, final answers, secrets, environments, full commands, tool results, or absolute local paths.\n- Prefer a short configured profile label in operator output (for example `온맘`, `알파`, `아이폴`, `나이아`); keep instance IDs and service hashes for explicit diagnostic/JSON output only.\n- Preserve the existing safe ledger, default `watch` behavior, Discord projection, service recovery, and Codex/Claude parity.\n- If a provider does not expose a safe structured detail, state that explicitly instead of inventing activity.\n\n## Acceptance criteria\n\n1. `naia <instance> watch --verbose` (or an equivalently discoverable owner-only command) streams bounded structured work events from local durable state without polling Discord.\n2. Human output begins with the short profile label and does not expose long session/service identifiers by default.\n3. JSON/JSONL output remains stable and includes machine-readable profile metadata without replacing stable instance identity.\n4. Redaction and allowlist tests prove forbidden raw fields cannot enter the ledger or operator trace.\n5. Tests cover Codex, Claude, missing-provider-detail fallback, multiple named instances, restart/recovery, and backward compatibility.\n6. Documentation clearly distinguishes public-safe decision summaries from unavailable private chain-of-thought.\n7. Deterministic complexity preflight, staged adversarial review, full Discord-session tests, and a managed canary pass before deployment."
+}

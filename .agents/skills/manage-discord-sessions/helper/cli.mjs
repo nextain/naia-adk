@@ -8,16 +8,18 @@ import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-p
 import { evaluateManagedDiscordCanary, manageService, prepareManagedDiscordCutover, restoreManagedDiscordCutover, verifyManagedDiscordCutover } from "./service-manager.mjs";
 import { listManagedDiscordArtifacts, pruneManagedDiscordArtifacts } from "./cutover-bundle.mjs";
 import { gatewayEvidenceBoundSeconds, projectUnattendedHealth } from "./unattended-health.mjs";
+import { formatVerboseEvent, operatorProfile } from "./operator-trace.mjs";
 
 class UsageError extends Error {}
 
 function parseArgs(argv) {
 	const positional = [];
-	const options = { json: false, jsonl: false, events: false, once: false, active: false, failed: false };
+	const options = { json: false, jsonl: false, verbose: false, events: false, once: false, active: false, failed: false };
 	for (let index = 0; index < argv.length; index += 1) {
 		const value = argv[index];
 		if (value === "--json") options.json = true;
 		else if (value === "--jsonl") options.jsonl = true;
+		else if (value === "--verbose") options.verbose = true;
 		else if (value === "--events") options.events = true;
 		else if (value === "--once") options.once = true;
 		else if (value === "--active") options.active = true;
@@ -41,7 +43,7 @@ function validateInvocation(positional, options) {
 		"health-check": new Set(["json"]),
 		jobs: new Set(["json", "active", "failed", "limit"]),
 		job: new Set(["json", "events"]),
-		watch: new Set(["jsonl", "once", "jobId"]),
+		watch: new Set(["jsonl", "verbose", "once", "jobId"]),
 		history: new Set(["json", "channelId", "authorId", "limit"]),
 		latest: new Set(["json", "channelId", "authorId", "limit"]),
 		attachment: new Set(["json", "channelId", "messageId", "attachmentId", "outputPath", "expectedSha256"]),
@@ -54,6 +56,7 @@ function validateInvocation(positional, options) {
 	const expectedPositionals = positional.length === 0 ? 0 : new Set(["job", "service", "cutover", "artifacts"]).has(command) ? 2 : 1;
 	if (positional.length !== expectedPositionals) throw new UsageError(`invalid arguments for ${command}`);
 	if (command === "jobs" && options.active && options.failed) throw new UsageError("--active and --failed are mutually exclusive");
+	if (command === "watch" && options.verbose && options.jsonl) throw new UsageError("--verbose and --jsonl are mutually exclusive");
 	if (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 1_000)) throw new UsageError("--limit must be an integer between 1 and 1000");
 	for (const [key, value] of Object.entries(options)) {
 		if (key === "adkRoot" || key === "instance" || value === false || value === undefined) continue;
@@ -239,11 +242,12 @@ try {
 			: store.listJobs({ limit, lifecycles: options.failed ? ["failed", "recovery_review"] : null });
 		output(options.json ? { schemaVersion: 1, jobs } : jobs, options.json);
 	} else if (command === "job") {
-		const jobId = positional[1];
-		if (!jobId) throw new Error("job id is required");
+		const jobReference = positional[1];
+		if (!jobReference) throw new Error("job id is required");
+		const jobId = store.resolveJobReference(jobReference);
 		const job = store.getJob(jobId, { includeEvents: options.events || options.json });
 		if (!job) {
-			console.error(`unknown job: ${jobId}`);
+			console.error(`unknown job: ${jobReference}`);
 			process.exitCode = 2;
 		} else if (options.json) output({ schemaVersion: 1, job }, true);
 		else {
@@ -252,11 +256,19 @@ try {
 		}
 	} else if (command === "watch") {
 		let cursor = 0;
+		let config = null;
+		try { config = loadMessengerConfig(instancePaths.configPath); }
+		catch (error) {
+			if (options.verbose) throw new Error(`Discord messenger configuration unavailable: ${error.message}`);
+		}
+		const profile = operatorProfile({ instance, config });
+		const traceState = new Map();
 		const emit = () => {
 			const events = store.eventsAfter({ jobId: options.jobId, afterOrdinal: cursor });
 			for (const event of events) {
 				cursor = Math.max(cursor, event.ordinal);
-				if (options.jsonl) console.log(JSON.stringify({ schemaVersion: 1, event }));
+				if (options.jsonl) console.log(JSON.stringify({ schemaVersion: 1, instance: profile.instance, profile: { label: profile.label, source: profile.source }, event }));
+				else if (options.verbose) console.log(formatVerboseEvent(event, profile, traceState));
 				else console.log(`${event.occurredAt} ${event.jobId} ${event.kind} ${event.safeSummary}`);
 			}
 		};

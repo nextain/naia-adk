@@ -18,6 +18,27 @@ import { BOT, CHANNEL, TOKEN_FINGERPRINT, USER, binding, cleanupDiscordFixtureRo
 
 afterEach(cleanupDiscordFixtureRoots);
 
+test("DSO-013 rollback accepts configs before and after shortName", () => {
+	const { root, store } = fixture();
+	store.close();
+	const configPath = messengerInstancePaths(root).configPath;
+	mkdirSync(join(root, "naia-settings/messenger-sessions"), { recursive: true });
+	const legacy = {
+		schemaVersion: 1, enabled: true, workspaceId: "rollback-label-test",
+		persona: { name: "Rollback reader", instructions: "Stay read-only." },
+		role: { name: "reader", allowedActions: ["read", "reply"], requiresApproval: [] },
+		backend: { selected: "codex", profiles: { codex: { enabled: true } } },
+		discord: { credentialRef: "discord-token", botUserId: BOT, operatorUserIds: [], bindings: [binding()] },
+		runtime: { approvalPolicy: "never", permissionProfileEpoch: "rollback-label", maxConcurrentJobs: 1 },
+	};
+	writeFileSync(configPath, `${JSON.stringify(legacy)}\n`, { mode: 0o600 });
+	protectOwnerOnly(configPath, "file", "rollback config");
+	assert.equal(loadMessengerConfig(configPath).persona.shortName, undefined);
+	writeFileSync(configPath, `${JSON.stringify({ ...legacy, persona: { ...legacy.persona, shortName: "온맘" } })}\n`, { mode: 0o600 });
+	protectOwnerOnly(configPath, "file", "rollback config");
+	assert.equal(loadMessengerConfig(configPath).persona.shortName, "온맘");
+});
+
 test("DSG-021 creates and restores a verified code, config, unit, and database-compatible rollback bundle", () => {
 	const { root, store } = fixture();
 	store.close();
@@ -57,7 +78,7 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 	mkdirSync(join(root, "naia-settings/messenger-sessions"), { recursive: true, mode: 0o700 });
 	const rollbackConfig = {
 		schemaVersion: 1, enabled: true, workspaceId: "rollback-test",
-		persona: { name: "Rollback reader", instructions: "Stay read-only." },
+		persona: { name: "Rollback reader", instructions: "Stay read-only.", shortName: "온맘" },
 		role: { name: "reader", allowedActions: ["read", "reply"], requiresApproval: [] },
 		backend: { selected: "codex", profiles: { codex: { enabled: true } } },
 		discord: { credentialRef: "discord-token", botUserId: BOT, operatorUserIds: [USER], bindings: [{ ...binding(), historyVisibility: "none", operatorActions: false }] },
@@ -91,6 +112,7 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 	assert.equal(existsSync(paths.activeRollbackPath), false);
 	writeFileSync(paths.configPath, sourceConfigText, { mode: 0o600 });
 	const bundle = createCutoverRollbackBundle(bundleInput);
+	assert.equal(loadMessengerConfig(bundle.configPath).persona.shortName, "온맘");
 	assert.equal(bundle.manifest.configSchemaVersion, 1);
 	assert.equal(bundle.manifest.database.policy, "preserve");
 	assert.equal(bundle.manifest.sourceRevision, sourceRevision);
@@ -179,6 +201,7 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 	assert.equal(JSON.parse(readFileSync(paths.configPath, "utf8")).schemaVersion, 2);
 	assert.throws(() => restoreCutoverRollbackBundle({ adkRoot: root, stopService: () => {}, installUnits: () => { throw new Error("install failed"); }, startService: () => assert.fail("start must not run") }), /install failed/);
 	assert.equal(JSON.parse(readFileSync(paths.configPath, "utf8")).schemaVersion, 1);
+	assert.equal(loadMessengerConfig(paths.configPath).persona.shortName, "온맘");
 	writeFileSync(paths.configPath, `${JSON.stringify({ schemaVersion: 2 })}\n`, { mode: 0o600 });
 	assert.throws(() => restoreCutoverRollbackBundle({ adkRoot: root, stopService: () => {}, installUnits: () => {}, startService: () => { throw new Error("start failed"); } }), /start failed/);
 	writeFileSync(paths.configPath, `${JSON.stringify({ schemaVersion: 2 })}\n`, { mode: 0o600 });

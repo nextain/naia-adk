@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -7,7 +7,8 @@ import { afterEach, test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { SessionStore } from "../helper/store.mjs";
-import { assertOwnerOnly } from "../helper/platform-security.mjs";
+import { JOB_REFERENCE_PREFIX_QUERY, JOB_REFERENCE_PREFIX_ROW_LIMIT } from "../helper/store-reader.mjs";
+import { assertOwnerOnly, protectOwnerOnly } from "../helper/platform-security.mjs";
 import { heartbeatServiceSafely } from "../helper/service.mjs";
 import { cleanupRoots, createRunningJob, fixture, iso, roots } from "./observability-fixture.mjs";
 
@@ -43,6 +44,95 @@ test("DSO-003 CLI returns versioned job detail and watch events", () => {
 
 	const missing = spawnSync(process.execPath, [cliPath, "--adk-root", root, "job", "missing"], { encoding: "utf8" });
 	assert.equal(missing.status, 2);
+});
+
+test("DSO-013 verbose watch uses concise profile labels and stable JSONL identities", () => {
+	const { root, store } = fixture();
+	const jobId = "123e4567-e89b-12d3-a456-426614174000";
+	const { attemptId } = createRunningJob(store, { jobId });
+	store.recordEvent({ jobId, attemptId, dedupeKey: "trace-plan", kind: "phase_changed", occurredAt: iso(1_000), source: "codex", safePayload: { phase: "planning" } });
+	store.recordEvent({ jobId, attemptId, dedupeKey: "trace-read", kind: "tool_started", occurredAt: iso(2_000), source: "codex", safePayload: { toolCategory: "file_read" } });
+	const expectedEvents = store.eventsAfter({ jobId });
+	store.close();
+
+	const configPath = join(root, "naia-settings/messenger-sessions/config.json");
+	const config = JSON.parse(readFileSync(configPath, "utf8"));
+	config.persona = { ...config.persona, name: "An intentionally long persona name that must never lead operator output", shortName: "온맘" };
+	writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+	protectOwnerOnly(configPath, "file", "test messenger config");
+
+	const plain = spawnSync(process.execPath, [cliPath, "--adk-root", root, "watch", "--job", jobId, "--once"], { encoding: "utf8" });
+	assert.equal(plain.status, 0, plain.stderr);
+	assert.equal(plain.stdout.trim().split("\n")[0], `${expectedEvents[0].occurredAt} ${expectedEvents[0].jobId} ${expectedEvents[0].kind} ${expectedEvents[0].safeSummary}`);
+
+	const verbose = spawnSync(process.execPath, [cliPath, "--adk-root", root, "watch", "--job", jobId, "--verbose", "--once"], { encoding: "utf8" });
+	assert.equal(verbose.status, 0, verbose.stderr);
+	const verboseLines = verbose.stdout.trim().split("\n");
+	assert.ok(verboseLines.length >= expectedEvents.length);
+	assert.equal(verboseLines.every((line) => line.startsWith("[온맘] ")), true);
+	assert.equal(verbose.stdout.includes(jobId), false);
+	assert.equal(verbose.stdout.includes(config.persona.name), false);
+	assert.match(verbose.stdout, /job:123e4567~4000/);
+	assert.match(verbose.stdout, /phase planning/);
+	assert.match(verbose.stdout, /tool start file_read/);
+
+	const jsonl = spawnSync(process.execPath, [cliPath, "--adk-root", root, "watch", "--job", jobId, "--jsonl", "--once"], { encoding: "utf8" });
+	assert.equal(jsonl.status, 0, jsonl.stderr);
+	const records = jsonl.stdout.trim().split("\n").map((line) => JSON.parse(line));
+	assert.equal(records.every((record) => record.schemaVersion === 1 && record.instance === "default"), true);
+	assert.equal(records.every((record) => record.profile.label === "온맘" && record.profile.source === "configured"), true);
+	assert.equal(records.every((record) => record.event.jobId === jobId), true);
+	assert.deepEqual(records.map((record) => record.event), expectedEvents);
+
+	const byReference = spawnSync(process.execPath, [cliPath, "--adk-root", root, "job", "123e4567~4000", "--json"], { encoding: "utf8" });
+	assert.equal(byReference.status, 0, byReference.stderr);
+	assert.equal(JSON.parse(byReference.stdout).job.jobId, jobId);
+
+	const conflicting = spawnSync(process.execPath, [cliPath, "--adk-root", root, "watch", "--verbose", "--jsonl", "--once"], { encoding: "utf8" });
+	assert.equal(conflicting.status, 2);
+});
+
+test("DSO-013 verbose watch fails closed when its private profile config is unavailable", { skip: process.platform === "win32" ? "POSIX permission semantics" : false }, () => {
+	const missingFixture = fixture();
+	createRunningJob(missingFixture.store);
+	missingFixture.store.close();
+	const missingConfig = join(missingFixture.root, "naia-settings/messenger-sessions/config.json");
+	rmSync(missingConfig);
+	const missing = spawnSync(process.execPath, [cliPath, "--adk-root", missingFixture.root, "watch", "--verbose", "--once"], { encoding: "utf8" });
+	assert.equal(missing.status, 1);
+	assert.match(missing.stderr, /configuration unavailable/);
+
+	const exposedFixture = fixture();
+	createRunningJob(exposedFixture.store);
+	exposedFixture.store.close();
+	const exposedConfig = join(exposedFixture.root, "naia-settings/messenger-sessions/config.json");
+	chmodSync(exposedConfig, 0o644);
+	const exposed = spawnSync(process.execPath, [cliPath, "--adk-root", exposedFixture.root, "watch", "--verbose", "--once"], { encoding: "utf8" });
+	assert.equal(exposed.status, 1);
+	assert.match(exposed.stderr, /configuration unavailable|owner-only|permissions/);
+});
+
+test("DSO-013 short job references resolve exactly once and reject collisions", () => {
+	const { store } = fixture();
+	const first = "123e4567-e89b-12d3-a456-426614174000";
+	const second = "123e4567-e89b-12d3-b456-426614174000";
+	store.createJob({ jobId: first, backendId: "codex", activityDetail: "structured", jobType: "conversation" });
+	assert.equal(store.resolveJobReference(first), first);
+	assert.equal(store.resolveJobReference("123e4567~4000"), first);
+	store.createJob({ jobId: second, backendId: "codex", activityDetail: "structured", jobType: "conversation" });
+	assert.throws(() => store.resolveJobReference("123e4567~4000"), /ambiguous job reference/);
+	store.close();
+
+	const planDatabase = new DatabaseSync(":memory:");
+	planDatabase.exec("CREATE TABLE jobs(job_id TEXT PRIMARY KEY)");
+	const insert = planDatabase.prepare("INSERT INTO jobs(job_id) VALUES (?)");
+	planDatabase.exec("BEGIN");
+	for (let index = 0; index < 300; index += 1) insert.run(`123e4567-${String(index).padStart(23, "0")}-4000`);
+	planDatabase.exec("COMMIT");
+	const plan = planDatabase.prepare(`EXPLAIN QUERY PLAN ${JOB_REFERENCE_PREFIX_QUERY}`).all("123e4567", "123e4567\uFFFF", JOB_REFERENCE_PREFIX_ROW_LIMIT);
+	assert.match(plan.map((row) => row.detail).join("\n"), /SEARCH jobs USING COVERING INDEX/);
+	assert.equal(planDatabase.prepare(JOB_REFERENCE_PREFIX_QUERY).all("123e4567", "123e4567\uFFFF", JOB_REFERENCE_PREFIX_ROW_LIMIT).length, JOB_REFERENCE_PREFIX_ROW_LIMIT);
+	planDatabase.close();
 });
 
 test("DSO-003 status on a clean ADK is read-only and reports stopped", () => {
