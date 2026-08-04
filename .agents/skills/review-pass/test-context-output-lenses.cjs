@@ -11,7 +11,11 @@ const sourceGroups = [
 		path.join(root, ".agents", "skills", "review-pass", "references", "stage-profiles.md"),
 		path.join(root, ".agents", "skills", "review-pass", "references", "configuration-and-requirements.md"),
 	],
-	[path.join(root, "skills", "review-pass", "SKILL.md")],
+	[
+		path.join(root, "skills", "review-pass", "SKILL.md"),
+		path.join(root, "skills", "review-pass", "references", "stage-profiles.md"),
+		path.join(root, "skills", "review-pass", "references", "configuration-and-requirements.md"),
+	],
 ];
 const lenses = ["context_output_separation", "audience_surface_fit", "unjustified_product_surface"];
 
