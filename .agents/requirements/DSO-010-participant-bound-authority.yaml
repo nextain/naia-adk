@@ -45,13 +45,13 @@ decisions:
   - "Keep operator identity and participant action scope as independent conditions."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-config.mjs", symbol: "loadMessengerConfig", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-scope.mjs", symbol: "authorizeDiscordMessage", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbol: "effectiveAllowedActions/participantAuthorityRevision", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-conversation.mjs", symbol: "renderParticipantConversation/trustedParticipantPolicy", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "transientPrompt/recovery authority", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "verifyRuntimeInputs", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbol: "createRuntimeInputVerifier", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-config.mjs", symbols: ["loadMessengerConfig"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-scope.mjs", symbols: ["authorizeDiscordMessage"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbols: ["effectiveAllowedActions", "participantAuthorityRevision"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-conversation.mjs", symbols: ["renderParticipantConversation", "trustedParticipantPolicy"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["transientPrompt", "recoveryAuthority"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["verifyRuntimeInputs"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbols: ["createRuntimeInputVerifier"], coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-021 validates schema v2 workspace, exact participant coverage, and safe labels", coverage: partial }
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 enforces none, requester-only, and explicitly shared participant history", coverage: partial }

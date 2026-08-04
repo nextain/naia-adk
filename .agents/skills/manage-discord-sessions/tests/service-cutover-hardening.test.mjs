@@ -125,7 +125,7 @@ test("managed supervisor verifies the runtime before importing observer helpers"
 		env: { ...process.env, ...runtimeEnvironment(artifact) },
 	});
 	assert.equal(launched.status, 1);
-	assert.match(launched.stderr, /managed_runtime_preflight_failed/);
+	assert.match(launched.stderr, /startup_or_runtime_failure/);
 	assert.equal(existsSync(sideEffectPath), false);
 });
 
@@ -158,7 +158,7 @@ test("managed supervisor entry fails before importing observer runtime without v
 	const supervisorPath = join(SKILL_ROOT, "helper/supervisor-entry.mjs");
 	const result = spawnSync(process.execPath, [supervisorPath, "--adk-root", stateRoot], { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } });
 	assert.equal(result.status, 1);
-	assert.match(result.stderr, /managed_runtime_preflight_failed/);
+	assert.match(result.stderr, /startup_or_runtime_failure/);
 	assert.equal(existsSync(join(stateRoot, "naia-settings/messenger-sessions/state")), false);
 });
 

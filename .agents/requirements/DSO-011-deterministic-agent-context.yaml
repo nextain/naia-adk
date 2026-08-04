@@ -46,12 +46,12 @@ decisions:
   - "Treat context hash as reproducibility evidence, not proof that the model understood the files or received a cache hit."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/agent-context.mjs", symbol: "buildAgentContextSnapshot/verifyAgentContextBeforeAttempt", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbol: "configuredAgentContext/createRuntimeInputVerifier/runDiscordService", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "preSpawnCheck/runBackendAttempt", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "stable prompt and attempt-time context verification", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/token-owner-lock.mjs", symbol: "acquireDiscordTokenOwnerLock", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/adapters.mjs", symbol: "command/cacheReceipt", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/agent-context.mjs", symbols: ["buildAgentContextSnapshot", "verifyAgentContextBeforeAttempt"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbols: ["configuredAgentContext", "createRuntimeInputVerifier", "runDiscordService"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbols: ["preSpawnCheck", "runBackendAttempt"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["boundRequestPrompt", "verifyAgentContextBeforeAttempt"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/token-owner-lock.mjs", symbols: ["acquireDiscordTokenOwnerLock"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/adapters.mjs", symbols: ["command", "cacheReceipt"], coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/agent-context.test.mjs", symbol: "agent context snapshot is deterministic, sorted, bounded, and free of runtime identifiers", coverage: partial }
     - { path: ".agents/skills/manage-discord-sessions/tests/token-owner-lock.test.mjs", symbol: "DSO-009 atomically owns one Discord token across processes without exposing lock identity", coverage: partial }

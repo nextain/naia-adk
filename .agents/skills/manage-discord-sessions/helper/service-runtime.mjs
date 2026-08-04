@@ -87,7 +87,13 @@ function runtimeInputsRevision({ config, token, agentContext }) {
 
 export function createRuntimeInputVerifier({ root, paths, config, token, agentContext }) {
 	const baselineRevision = runtimeInputsRevision({ config, token, agentContext });
+	let invalidated = false;
 	return () => {
+		if (invalidated) {
+			const error = new Error("Discord runtime inputs changed; restart is required");
+			error.code = "context_changed_restart_required";
+			throw error;
+		}
 		try {
 			const currentConfig = loadMessengerConfig(paths.configPath);
 			const currentAgentContext = configuredAgentContext(root, currentConfig);
@@ -95,6 +101,7 @@ export function createRuntimeInputVerifier({ root, paths, config, token, agentCo
 			if (runtimeInputsRevision({ config: currentConfig, token: currentToken, agentContext: currentAgentContext }) !== baselineRevision) throw new Error("runtime inputs changed");
 			return baselineRevision;
 		} catch {
+			invalidated = true;
 			const error = new Error("Discord runtime inputs changed; restart is required");
 			error.code = "context_changed_restart_required";
 			throw error;

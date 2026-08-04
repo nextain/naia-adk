@@ -57,8 +57,13 @@ test("DSO-010 live config and credential revocation fail closed without waiting 
 	writePrivate(paths.configPath, JSON.stringify(revoked));
 	assert.throws(verify, (error) => error?.code === "context_changed_restart_required");
 	writePrivate(paths.configPath, JSON.stringify(original));
-	writePrivate(join(paths.credentialsDirectory, "discord-token"), "runtime-input-token-rotated");
 	assert.throws(verify, (error) => error?.code === "context_changed_restart_required");
+	const restoredConfig = loadMessengerConfig(paths.configPath);
+	const restoredToken = new FileCredentialResolver(paths.credentialsDirectory).resolve(restoredConfig.discord.credentialRef);
+	const verifyCredential = createRuntimeInputVerifier({ root, paths, config: restoredConfig, token: restoredToken, agentContext: { cwd: snapshot.workspaceRoot, snapshot } });
+	assert.match(verifyCredential(), /^[a-f0-9]{64}$/);
+	writePrivate(join(paths.credentialsDirectory, "discord-token"), "runtime-input-token-rotated");
+	assert.throws(verifyCredential, (error) => error?.code === "context_changed_restart_required");
 });
 
 test("DSO-010 queued work revalidates authority before runner and immediately before spawn", async () => {

@@ -20,11 +20,11 @@ acceptance_criteria:
   - "An operator with the reply role can send one sanitized owner-only content file to one exact operator binding and receives a confirmed, failed, or unknown receipt without automatic retry."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbol: "status/jobs/job/watch", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-history.mjs", symbol: "fetchDiscordHistory/downloadDiscordAttachment/sendDiscordReply", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "scoped !naia status/jobs/job", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-projection.mjs", symbol: "DiscordStatusProjection", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbol: "script_dir/adk_root/instance", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbols: ["status", "jobs", "job", "watch"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-history.mjs", symbols: ["fetchDiscordHistory", "downloadDiscordAttachment", "sendDiscordReply"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["handleCommand", "!naia status | jobs | job <id>"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-projection.mjs", symbols: ["DiscordStatusProjection"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/scripts/manage-discord-sessions.sh", symbols: ["script_dir", "adk_root", "instance"], coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", symbol: "DSO-003 CLI returns versioned job detail and watch events", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-009 participant status projection is limited to the current Discord scope", coverage: partial }
