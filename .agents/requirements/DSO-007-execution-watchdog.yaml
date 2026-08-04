@@ -33,7 +33,7 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "resolveExecutionCwd/runBackendAttempt", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/service.mjs", symbol: "watchdog interval", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-013/DSG-014/DSG-015", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSG-014 watchdog and DSG-015 acknowledgement lifecycle cases", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "approval UI stream variants and explicit workspace tests", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/lifecycle-hardening.test.mjs", symbol: "projection abort and recovery ACK idempotence", coverage: full }
   reviews: { planning: "two-agent adversarial review 2026-08-01", development: "two-agent adversarial review 2026-08-01", test: "focused deterministic suite 2026-08-01", integration: null }

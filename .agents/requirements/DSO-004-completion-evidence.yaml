@@ -21,6 +21,6 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/store.mjs", symbol: "required_checks/recordEvidence", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/projector.mjs", symbol: "projectCompletionAssessment", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-004 completion evidence tests", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability-lifecycle.test.mjs", symbol: "DSO-004 trusts only predeclared host or human evidence for completion", coverage: full }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
 decisions: []

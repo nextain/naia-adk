@@ -56,7 +56,7 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/tests/agent-context.test.mjs", symbol: "deterministic context boundary cases", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/token-owner-lock.test.mjs", symbol: "same-token process race and fail-closed abnormal owners", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "provider cache receipt cases", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-021 stable-prefix/context-drift cases", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 launches v2 work in its bound workspace with a stable prefix and fails closed after context drift", coverage: full }
   reviews:
     planning: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.planning"
     development: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.development"
