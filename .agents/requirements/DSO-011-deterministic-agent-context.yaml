@@ -47,16 +47,17 @@ decisions:
 trace:
   code:
     - { path: ".agents/skills/manage-discord-sessions/helper/agent-context.mjs", symbol: "buildAgentContextSnapshot/verifyAgentContextBeforeAttempt", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/service.mjs", symbol: "configuredAgentContext/runDiscordService", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbol: "configuredAgentContext/createRuntimeInputVerifier/runDiscordService", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "preSpawnCheck/runBackendAttempt", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "stable prompt and attempt-time context verification", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/token-owner-lock.mjs", symbol: "acquireDiscordTokenOwnerLock", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/adapters.mjs", symbol: "command/cacheReceipt", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/agent-context.test.mjs", symbol: "deterministic context boundary cases", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/token-owner-lock.test.mjs", symbol: "same-token process race and fail-closed abnormal owners", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "provider cache receipt cases", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/agent-context.test.mjs", symbol: "agent context snapshot is deterministic, sorted, bounded, and free of runtime identifiers", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/token-owner-lock.test.mjs", symbol: "DSO-009 atomically owns one Discord token across processes without exposing lock identity", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-adapter-environment.test.mjs", symbol: "DSO-011 records cache evidence only when the provider reports complete integer usage", coverage: partial }
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 launches v2 work in its bound workspace with a stable prefix and fails closed after context drift", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-runtime-input-guard.test.mjs", symbol: "DSO-010 queued work revalidates authority before runner and immediately before spawn", coverage: partial }
   reviews:
     planning: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.planning"
     development: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.development"

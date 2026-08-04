@@ -4,11 +4,22 @@ title_ko: "새 실행 권한 프로필과 제한된 운영 개입"
 product: naia-adk-discord-sessions
 module: execution-watchdog
 status: active
-source: human
+source: derived
+source_provenance: ledger_resolved
 priority: high
 created: 2026-07-31
 updated: 2026-08-04
 issue_url: "https://github.com/nextain/naia-adk/issues/18"
+source_directives: [USR-009, USR-011]
+source_evidence: [USR-009, USR-011]
+source_atoms: [USR-009-E07, USR-011-E01]
+source_kind: derived
+derived_from: [USR-009, USR-011]
+derivation_kind: clarify
+change_effect: modify
+preserves: [no-prompt-execution, participant-bound-authority, encrypted-recovery]
+must_not_change: [no-automatic-authority-escalation, no-stored-command-option-reuse]
+destructive_approval: null
 description: |
   A parent permission change or a silent owned child must not leave an AI job
   displayed as running without a bounded owner action. Discord acknowledgement
@@ -17,7 +28,7 @@ description: |
   service owns the intervention record.
 acceptance_criteria:
   - "Every launched Codex or Claude child uses a no-prompt approval policy; an approval UI signal is terminated and recorded as a safe failure rather than a waiting state."
-  - "Recovery compares the encrypted prior execution profile with the current permission-profile epoch and access level. A mismatch records profile_replaced and starts only a fresh current no-prompt attempt, including an explicitly changed never-policy mutation profile; stored command options are never reused."
+  - "Recovery compares the encrypted prior execution profile, participant-authority revision, configuration revision, context revision, managed-runtime revision, permission-profile epoch, and access level with the current values. Any mismatch becomes recovery_review without execution; no-prompt operation never authorizes an automatic authority increase. profile_replaced is limited to a durably admitted live queue item that has not started, and stored command options are never reused."
   - "The watchdog acts at most once per no-progress child: it records watchdog_intervened, aborts its owned process, and records no_progress_timeout. An unowned stalled job is failed rather than silently retained as running."
   - "A Discord conversation arms one per-job acknowledgement timer after durable admission rather than relying on watchdog or supervisor polling. The single-flight attempt records confirmed or missed exactly once at the configured deadline, and acknowledgement state never blocks admission, worker launch, or later messages."
   - "ACK and control sends are owned abortable operations. Shutdown aborts and settles them before Gateway drain, and an ACK deadline aborts the underlying send rather than only abandoning its promise."
@@ -31,10 +42,15 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbol: "currentExecutionProfile/commandOptionsForProfile", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "resumeRecovered/watchdog/operator response", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "resolveExecutionCwd/runBackendAttempt", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/service.mjs", symbol: "watchdog interval", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbol: "watchdogIntervalSeconds", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSG-014 watchdog and DSG-015 acknowledgement lifecycle cases", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "approval UI stream variants and explicit workspace tests", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/lifecycle-hardening.test.mjs", symbol: "projection abort and recovery ACK idempotence", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSG-014 watchdog aborts a no-progress owned child instead of leaving it running", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSG-015 acknowledgement failure never gates work or a later same-scope message", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "DSO-006 rejects an approval UI instead of waiting for a child prompt", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "DSO-006 binds each child to the requested absolute workspace despite parent cwd", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/lifecycle-hardening.test.mjs", symbol: "DSG-015 exact-v2 recovery sends an operator acknowledgement only before a durable result", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSG-021 never upgrades a stale legacy read-only recovery to workspace-write", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 requires exact v2 authority, configuration, and context revisions for read-only recovery", coverage: full }
   reviews: { planning: "two-agent adversarial review 2026-08-01", development: "two-agent adversarial review 2026-08-01", test: "focused deterministic suite 2026-08-01", integration: null }
-decisions: []
+decisions:
+  - "2026-08-04 source-authority correction: the older unbound prose that proposed automatically retrying a changed profile conflicts with later immutable participant-authority and deterministic-context directives. No-prompt means no approval UI; it does not grant stronger recovery authority. Exact-v2 recovery therefore fails to review on any authority or context mismatch."

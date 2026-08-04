@@ -101,6 +101,34 @@ test("managed install runtime stays immutable and mutable checkout B cannot impe
 	assert.throws(() => verifyManagedServiceRuntimeEnvironment({ environment, runtimePath: artifact.runtimePath }), /startup_or_runtime_failure/);
 });
 
+test("managed preflight rejects a tampered imported helper before its top-level code can execute", () => {
+	const fixture = committedRuntimeFixture();
+	const artifact = createManagedRuntimeArtifact({ adkRoot: fixture.root, sourceRevision: fixture.revision, sourceRuntimeTreeId: fixture.runtimeTreeId, tokenFingerprint: TOKEN_FINGERPRINT, nodePath: process.execPath });
+	const sideEffectPath = join(temporaryDirectory("discord-preflight-side-effect-"), "executed");
+	writeFileSync(join(artifact.runtimePath, "helper/adapters.mjs"), `\nawait import("node:fs").then(({ writeFileSync }) => writeFileSync(${JSON.stringify(sideEffectPath)}, "executed"));\n`, { flag: "a" });
+	const launched = spawnSync(process.execPath, [join(artifact.runtimePath, "helper/service.mjs"), "--managed-preflight"], {
+		encoding: "utf8",
+		env: { ...process.env, ...runtimeEnvironment(artifact) },
+	});
+	assert.equal(launched.status, 1);
+	assert.match(launched.stderr, /startup_or_runtime_failure/);
+	assert.equal(existsSync(sideEffectPath), false);
+});
+
+test("managed supervisor verifies the runtime before importing observer helpers", () => {
+	const fixture = committedRuntimeFixture();
+	const artifact = createManagedRuntimeArtifact({ adkRoot: fixture.root, sourceRevision: fixture.revision, sourceRuntimeTreeId: fixture.runtimeTreeId, tokenFingerprint: TOKEN_FINGERPRINT, nodePath: process.execPath });
+	const sideEffectPath = join(temporaryDirectory("discord-supervisor-side-effect-"), "executed");
+	writeFileSync(join(artifact.runtimePath, "helper/unattended-health.mjs"), `\nawait import("node:fs").then(({ writeFileSync }) => writeFileSync(${JSON.stringify(sideEffectPath)}, "executed"));\n`, { flag: "a" });
+	const launched = spawnSync(process.execPath, [join(artifact.runtimePath, "helper/supervisor-entry.mjs"), "--adk-root", fixture.root], {
+		encoding: "utf8",
+		env: { ...process.env, ...runtimeEnvironment(artifact) },
+	});
+	assert.equal(launched.status, 1);
+	assert.match(launched.stderr, /managed_runtime_preflight_failed/);
+	assert.equal(existsSync(sideEffectPath), false);
+});
+
 test("Linux registration verification binds exact unit bytes and an enabled active independent timer", () => {
 	const fixture = committedRuntimeFixture();
 	const artifact = createManagedRuntimeArtifact({ adkRoot: fixture.root, sourceRevision: fixture.revision, sourceRuntimeTreeId: fixture.runtimeTreeId, tokenFingerprint: TOKEN_FINGERPRINT, nodePath: "/usr/bin/node" });
@@ -125,12 +153,12 @@ test("Linux registration verification binds exact unit bytes and an enabled acti
 	assert.throws(() => verifyLinuxManagedRegistration({ adkRoot: fixture.root, expectedRevision: fixture.revision, expectedRuntimeTreeId: fixture.runtimeTreeId, unitDirectory, stateReader: activeState }), /no unambiguous managed runtime artifact/);
 });
 
-test("legacy supervisor startup fails before reading mutable host configuration", () => {
+test("managed supervisor entry fails before importing observer runtime without valid markers", () => {
 	const stateRoot = temporaryDirectory("discord-legacy-supervisor-");
-	const supervisorPath = join(SKILL_ROOT, "helper/supervisor.mjs");
+	const supervisorPath = join(SKILL_ROOT, "helper/supervisor-entry.mjs");
 	const result = spawnSync(process.execPath, [supervisorPath, "--adk-root", stateRoot], { encoding: "utf8", env: { PATH: process.env.PATH ?? "" } });
 	assert.equal(result.status, 1);
-	assert.match(result.stderr, /managed Discord runtime launch markers are missing/);
+	assert.match(result.stderr, /managed_runtime_preflight_failed/);
 	assert.equal(existsSync(join(stateRoot, "naia-settings/messenger-sessions/state")), false);
 });
 

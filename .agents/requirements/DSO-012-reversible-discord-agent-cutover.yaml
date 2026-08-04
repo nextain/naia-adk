@@ -27,6 +27,7 @@ description: |
 acceptance_criteria:
   - "cutover prepare copies the previous executable skill runtime and config, renders service and supervisor units that point at that immutable copy, and records SHA-256 digests in an owner-only manifest. The units bind the same credential-derived token fingerprint and the exact source runtime revision."
   - "Normal managed Linux installation uses the same immutable runtime-artifact builder and verifier as rollback. Both service and supervisor require an explicit managed-systemd launch mode, execute the copied artifact rather than the mutable target checkout, and verify complete artifact markers before token ownership, config reads, observation, or recovery; marker absence is not interpreted as direct mode."
+  - "The managed service entrypoint imports only Node built-ins until the complete runtime tree is verified; sibling runtime modules are dynamically evaluated only after that check, so a tampered imported helper cannot execute top-level code during preflight."
   - "service install is a first-install operation unless an existing registration is still bound to the verified rollback source and an active bundle binds the deployed target to the clean candidate controller. An existing service cannot be overwritten or restarted as an upgrade without that verified cutover path."
   - "A successful install establishes the requested service state on every supported path. Linux autoStart=true enables and restarts the managed service while autoStart=false stops and disables it. Because versioned Windows cutover is unsupported, Windows install is first-install only and rejects any existing main-service or supervisor registration before creating launchers; autoStart=true creates and starts a verified Task Scheduler registration, while autoStart=false creates only a disabled Startup fallback and never publishes a runnable main task. Manual Windows stop, restart, disable, and quarantine share one fail-closed task-containment transition that verifies disabled state where requested and requires either a successful Task Scheduler End operation or durable owned-service stop evidence."
   - "The first managed cutover may adopt only the exact supported legacy mutable registration: prepare verifies its owner-only service, supervisor, and timer bytes; canonical Node and backend executables; token credential; registration state; owned live process when active; and idle ledger, then binds those unit digests in the rollback manifest. Install rechecks the same legacy bytes before replacement."
@@ -63,16 +64,20 @@ trace:
       note: "Canonical named-instance capability is not evidence of a live OnMam rollout."
   code:
     - { path: ".agents/skills/manage-discord-sessions/helper/cutover-bundle.mjs", symbol: "acquireDiscordArtifactOperationLock/createCutoverRollbackBundle/verifyCutoverRollbackBundle/restoreCutoverRollbackBundle", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/artifact-operation-lock-holder.mjs", symbol: "parent-lifetime kernel-flock holder", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/artifact-operation-lock-holder.mjs", symbol: "cleanup", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/service-manager.mjs", symbol: "prepareManagedDiscordCutover/restoreManagedDiscordCutover", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/service.mjs", symbol: "managed launch preflight/classifyDiscordServiceFailure/writeDiscordServiceFailure", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/supervisor.mjs", symbol: "managed launch preflight and closed startup failure projection", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/systemd.mjs", symbol: "permanent startup failure restart suppression", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service.mjs", symbol: "verifyManagedBootstrap/classifyDiscordServiceFailure/writeDiscordServiceFailure", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/supervisor-entry.mjs", symbol: "managed_runtime_preflight_failed", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/supervisor.mjs", symbol: "observeOnce", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/systemd.mjs", symbol: "RestartPreventExitStatus", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbol: "cutover prepare/verify/canary/rollback and artifacts list/prune", coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-cutover-rollback.test.mjs", symbol: "DSG-021 creates and restores a verified code config unit and database-compatible rollback bundle", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-service-platform.test.mjs", symbol: "DSG-021 candidate target identity config drift and startup reason cases", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/service-cutover-hardening.test.mjs", symbol: "managed marker fail-closed, immutable runtime, exact legacy adoption, install upgrade and quarantine boundary, Windows disabled-start policy, serialized artifact retention/prune, exact registration, schema-v2 execution binding, and generation binding", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-cutover-rollback.test.mjs", symbol: "DSG-021 creates and restores a verified code, config, unit, and database-compatible rollback bundle", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-service-platform.test.mjs", symbol: "DSG-021 rejects config or credential drift before publishing a rollback snapshot", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/service-cutover-hardening.test.mjs", symbol: "managed install runtime stays immutable and mutable checkout B cannot impersonate artifact A", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/service-cutover-hardening.test.mjs", symbol: "managed preflight rejects a tampered imported helper before its top-level code can execute", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/service-cutover-hardening.test.mjs", symbol: "managed supervisor verifies the runtime before importing observer helpers", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/service-cutover-hardening.test.mjs", symbol: "one-time legacy adoption binds exact mutable registration bytes before managed install", coverage: partial }
   reviews:
     planning: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.planning"
     development: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.development"

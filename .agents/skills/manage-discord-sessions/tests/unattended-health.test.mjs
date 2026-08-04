@@ -108,7 +108,7 @@ test("DSO-009 systemd observer has a separate identity and a 60 second persisten
 	assert.match(rendered.timerName, /-supervisor\.timer$/);
 	assert.match(rendered.timerContent, /OnUnitActiveSec=60s/);
 	assert.match(rendered.timerContent, /Persistent=true/);
-	assert.match(rendered.serviceContent, /supervisor\.mjs/);
+	assert.match(rendered.serviceContent, /supervisor-entry\.mjs/);
 });
 
 test("DSO-009 CLI reports an absent service as unhealthy without an interactive model", () => {
@@ -132,7 +132,7 @@ test("DSO-009 independently scheduled payload refreshes a stopped-service snapsh
 	const revision = spawnSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim();
 	const runtimeTreeId = spawnSync("git", ["-C", root, "rev-parse", `${revision}:.agents/skills/manage-discord-sessions`], { encoding: "utf8" }).stdout.trim();
 	const artifact = createManagedRuntimeArtifact({ adkRoot: root, sourceRevision: revision, sourceRuntimeTreeId: runtimeTreeId, tokenFingerprint: "f".repeat(64), nodePath: process.execPath });
-	const supervisor = join(artifact.runtimePath, "helper/supervisor.mjs");
+	const supervisor = join(artifact.runtimePath, "helper/supervisor-entry.mjs");
 	const environment = { PATH: process.env.PATH ?? "", NAIA_DISCORD_LAUNCH_MODE: "managed-systemd", NAIA_DISCORD_RUNTIME_ARTIFACT: artifact.artifactDirectory, NAIA_DISCORD_RUNTIME_REVISION: revision, NAIA_DISCORD_RUNTIME_TREE_ID: runtimeTreeId, NAIA_DISCORD_RUNTIME_SHA256: artifact.manifest.runtimeSha256 };
 	const run = () => spawnSync(process.execPath, [supervisor, "--adk-root", root], { encoding: "utf8", env: environment });
 	assert.equal(run().status, 4);

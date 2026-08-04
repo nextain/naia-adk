@@ -26,9 +26,13 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/helper/platform-security.mjs", symbol: "owner-only POSIX mode or Windows ACL enforcement", coverage: full }
   tests:
     - { path: ".agents/skills/manage-discord-sessions/tests/observability-lifecycle.test.mjs", symbol: "DSO-005 rejects unsafe event shapes and coalesces high-rate activity", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "DSO-005 isolated child environment tests", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs", symbol: "DSG-001 authorization and DSG-003 bounded delivery cases", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-009 scoped projection and DSG-012 private settings cases", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-005 binding, author, sanitization, and CDN fail-closed tests", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-adapter-environment.test.mjs", symbol: "DSO-005 creates a private minimal child environment and copies only provider auth", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-adapter-environment.test.mjs", symbol: "DSO-005 rejects insecure auth permissions and cleans the partial child home", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs", symbol: "DSG-001 authorizes DM, guild channel, and exact thread bindings with structured mentions only", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs", symbol: "DSG-003 records delivery before bounded same-nonce retries and never starts a second delivery", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-009 participant status projection is limited to the current Discord scope", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-012 loads only private closed settings and resolves an owner-only credential reference", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-005 history fails closed for role, binding, author, duplicate, and rate limit", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-005 attachment recovery stops an oversized streamed body before buffering it", coverage: partial }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md", ".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], integration: null }
 decisions: []

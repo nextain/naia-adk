@@ -32,7 +32,7 @@ test("DSG-008 renders a stable isolated user service with restart and single-own
 	store.close();
 });
 
-test("DSG-008 exposes safe startup failure reason codes in journal and supervisor state", () => {
+test("DSG-008 exposes safe startup failure reason codes in journal and supervisor state", async () => {
 	const { root, store } = fixture();
 	store.close();
 	const paths = messengerInstancePaths(root);
@@ -41,7 +41,7 @@ test("DSG-008 exposes safe startup failure reason codes in journal and superviso
 	protectOwnerOnly(paths.configPath, "file", "test config");
 	assert.equal(classifyDiscordServiceFailure({ code: "DISCORD_TOKEN_ALREADY_OWNED" }), "discord_token_already_owned");
 	assert.equal(classifyDiscordServiceFailure({ serviceReasonCode: "configuration_invalid" }), "configuration_invalid");
-	writeDiscordServiceFailure(paths, "configuration_invalid");
+	await writeDiscordServiceFailure(paths, "configuration_invalid");
 	const snapshot = observeOnce({ adkRoot: root, nowMs: Date.now() });
 	assert.equal(snapshot.startupFailureReasonCode, "configuration_invalid");
 	assert.equal(snapshot.unhealthy.some((item) => item.reasonCode === "configuration_invalid"), true);
