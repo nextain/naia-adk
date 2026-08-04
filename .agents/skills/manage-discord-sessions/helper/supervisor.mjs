@@ -72,7 +72,8 @@ export function observeOnce({ adkRoot, instance = "default", nowMs = Date.now(),
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
 	try {
 		const options = argumentsFor(process.argv.slice(2));
-		const result = observeOnce({ ...options, runtimeLaunch: "environment" });
+		const runtimeLaunch = process.platform === "win32" && process.env.NAIA_DISCORD_LAUNCH_MODE === "direct" ? "direct" : "environment";
+		const result = observeOnce({ ...options, runtimeLaunch });
 		console.log(JSON.stringify(result));
 		process.exitCode = result.state === "unhealthy" ? 4 : 0;
 	} catch (error) {

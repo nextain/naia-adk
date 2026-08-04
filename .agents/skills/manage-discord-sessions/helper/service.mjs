@@ -142,6 +142,10 @@ export async function runDiscordService({ runtimeLaunch = "direct", ...options }
 	return runtime.runDiscordService({ ...options, managedRuntimeRevision });
 }
 
+export function runtimeLaunchForEntrypoint(environment = process.env, platform = process.platform) {
+	return platform === "win32" && environment.NAIA_DISCORD_LAUNCH_MODE === "direct" ? "direct" : "environment";
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
 	let exitCode = 0;
 	let serviceArguments = null;
@@ -149,7 +153,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
 		if (process.argv.length === 3 && process.argv[2] === "--managed-preflight") verifyManagedServiceRuntimeEnvironment();
 		else {
 			serviceArguments = parseServiceArguments(process.argv.slice(2));
-			await runDiscordService({ ...serviceArguments, runtimeLaunch: "environment" });
+			await runDiscordService({ ...serviceArguments, runtimeLaunch: runtimeLaunchForEntrypoint() });
 		}
 	} catch (error) {
 		const reasonCode = classifyDiscordServiceFailure(error);

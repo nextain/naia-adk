@@ -2,7 +2,7 @@ import { accessSync, constants as fsConstants, existsSync, lstatSync, mkdirSync,
 import { homedir } from "node:os";
 import { resolve, win32 } from "node:path";
 import { spawnSync } from "node:child_process";
-import { protectOwnerExecutable, trustedWindowsSystemExecutable } from "./platform-security.mjs";
+import { protectOwnerExecutable } from "./platform-security.mjs";
 
 const OPERATOR_LAUNCHER_MARKER = "managed by naia-adk manage-discord-sessions";
 
@@ -11,13 +11,8 @@ function shellQuote(value) {
 }
 
 export function windowsBatchPath(value, label) {
-	if (typeof value !== "string" || !win32.isAbsolute(value) || /[%!"\r\n]/.test(value)) throw new Error(`${label} is not safe for a Windows launcher`);
+	if (typeof value !== "string" || !win32.isAbsolute(value) || /[%!"&|<>^\r\n]/.test(value)) throw new Error(`${label} is not safe for a Windows launcher`);
 	return value;
-}
-
-export function windowsOperatorProbeArguments(path) {
-	const launcher = windowsBatchPath(path, "operator launcher");
-	return ["/d", "/s", "/c", `""${launcher}" service unit"`];
 }
 
 export function renderOperatorLauncher(adkRoot, { platform = process.platform, nodePath = process.execPath } = {}) {
@@ -51,8 +46,7 @@ export function installOperatorLauncher(adkRoot, { directory: targetDirectory } 
 		const probe = spawnSync(path, ["service", "unit"], { encoding: "utf8", timeout: 5_000 });
 		if (probe.error || probe.status !== 0) throw new Error("operator launcher execution probe failed");
 	} else {
-		const command = trustedWindowsSystemExecutable("cmd.exe");
-		const probe = spawnSync(command, windowsOperatorProbeArguments(path), { encoding: "utf8", windowsHide: true, timeout: 5_000 });
+		const probe = spawnSync(path, ["service", "unit"], { encoding: "utf8", shell: true, windowsHide: true, timeout: 5_000 });
 		if (probe.error || probe.status !== 0) throw new Error("operator launcher execution probe failed");
 	}
 	return path;
