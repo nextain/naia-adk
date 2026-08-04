@@ -78,6 +78,13 @@ export function renderLegacyRollbackUnits({ paths, runtimePath, names, tokenFing
 	});
 }
 
+function supportsManagedRollbackRuntime(runtimePath) {
+	const servicePath = join(runtimePath, "helper/service.mjs");
+	return existsSync(join(runtimePath, "helper/service-runtime.mjs"))
+		&& existsSync(join(runtimePath, "helper/supervisor-entry.mjs"))
+		&& readFileSync(servicePath, "utf8").includes('process.argv[2] === "--managed-preflight"');
+}
+
 function supportedDatabaseVersion(skillRoot) {
 	const source = readFileSync(join(skillRoot, "helper/constants.mjs"), "utf8");
 	const match = source.match(/export const DB_SCHEMA_VERSION = (\d+);/);
@@ -132,7 +139,8 @@ function readManifest(bundleDirectory) {
 	const serviceUnitMatch = /^(naia-discord-sessions-[a-f0-9]{12})\.service$/.exec(manifest?.units?.serviceName ?? "");
 	const unitNamesValid = serviceUnitMatch !== null
 		&& manifest.units.supervisorServiceName === `${serviceUnitMatch[1]}-supervisor.service`
-		&& manifest.units.supervisorTimerName === `${serviceUnitMatch[1]}-supervisor.timer`;
+		&& manifest.units.supervisorTimerName === `${serviceUnitMatch[1]}-supervisor.timer`
+		&& (manifest.units.mode === undefined || new Set(["managed_artifact", "legacy_compat"]).has(manifest.units.mode));
 	const artifactDigestsValid = /^[a-f0-9]{64}$/.test(manifest?.artifacts?.configSha256 ?? "")
 		&& /^[a-f0-9]{64}$/.test(manifest?.artifacts?.runtimeSha256 ?? "")
 		&& Object.keys(manifest?.artifacts?.unitSha256 ?? {}).sort().join(",") === "service,supervisorService,supervisorTimer"
@@ -184,10 +192,11 @@ export function verifyCutoverRollbackBundle(bundleDirectory) {
 	if (config?.schemaVersion !== manifest.configSchemaVersion) throw new Error("rollback config schema version mismatch");
 	validateConfigWithRuntime({ runtimePath, configPath, expectedReceipt: manifest.configValidation });
 	if (hashTree(runtimePath) !== manifest.artifacts.runtimeSha256) throw new Error("rollback runtime digest mismatch");
+	const unitMode = manifest.units.mode ?? (manifest.sourceRegistration.kind === "managed_artifact" ? "managed_artifact" : "legacy_compat");
 	for (const [key, path] of Object.entries(units)) {
 		const digest = sha256(readFileSync(path));
 		if (digest !== manifest.artifacts.unitSha256[key]
-			|| (manifest.sourceRegistration.kind === "managed_artifact" && digest !== runtimeArtifact.manifest.units.sha256[key])) throw new Error("rollback unit digest mismatch");
+			|| (unitMode === "managed_artifact" && digest !== runtimeArtifact.manifest.units.sha256[key])) throw new Error("rollback unit digest mismatch");
 	}
 	return Object.freeze({ manifest, bundleDirectory: root, configPath, runtimePath, units });
 }
@@ -235,8 +244,10 @@ export function createCutoverRollbackBundle({ adkRoot, instance = "default", bac
 		const supervisor = runtimeArtifact.supervisor;
 			const managedUnitContent = { service: service.content, supervisorService: supervisor.serviceContent, supervisorTimer: supervisor.timerContent };
 			const boundSourceRegistration = sourceRegistrationBinding(sourceRegistration ?? registrationBinding("managed_artifact", managedUnitContent));
-			const names = { serviceName: service.unitName, supervisorServiceName: supervisor.serviceName, supervisorTimerName: supervisor.timerName };
-			const unitContent = boundSourceRegistration.kind === "legacy_mutable"
+			const legacyCompatibilityRequired = boundSourceRegistration.kind === "legacy_mutable" && !supportsManagedRollbackRuntime(runtimePath);
+			const names = { serviceName: service.unitName, supervisorServiceName: supervisor.serviceName, supervisorTimerName: supervisor.timerName,
+				mode: legacyCompatibilityRequired ? "legacy_compat" : "managed_artifact" };
+			const unitContent = legacyCompatibilityRequired
 				? renderLegacyRollbackUnits({ paths, runtimePath, names, tokenFingerprint, nodePath, backendExecutables })
 				: managedUnitContent;
 			atomicPrivateWrite(join(bundleDirectory, "units/service.unit"), unitContent.service, "Discord rollback service unit");
