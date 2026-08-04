@@ -113,6 +113,24 @@ test("DSO-005 creates a private minimal child environment and copies only provid
 	assert.deepEqual(readdirSync(join(claude.childHome, ".claude")).sort(), [".credentials.json"]);
 });
 
+test("DSO-005 accepts the official Windows Codex sandbox read ACL while keeping the child copy owner-only", (context) => {
+	if (process.platform !== "win32") return context.skip("Windows ACL contract");
+	const root = mkdtempSync(join(tmpdir(), "naia-windows-codex-auth-"));
+	roots.push(root);
+	const authRoot = join(root, "auth-source");
+	mkdirSync(join(authRoot, ".codex"), { recursive: true });
+	const authPath = join(authRoot, ".codex", "auth.json");
+	writeFileSync(authPath, "codex-auth");
+	const aclScript = String.raw`$ErrorActionPreference='Stop';$path=$env:NAIA_TEST_AUTH_PATH;$identity=[Security.Principal.WindowsIdentity]::GetCurrent();$sandbox=([Security.Principal.NTAccount]::new($env:COMPUTERNAME,'CodexSandboxUsers')).Translate([Security.Principal.SecurityIdentifier]);$acl=Get-Acl -LiteralPath $path;$acl.SetOwner($identity.User);$acl.SetAccessRuleProtection($true,$false);foreach($rule in @($acl.Access)){[void]$acl.RemoveAccessRuleSpecific($rule)};function Add-Rule($sid,$rights){$rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,$rights,[Security.AccessControl.InheritanceFlags]::None,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow);[void]$acl.AddAccessRule($rule)};Add-Rule $identity.User ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule ([Security.Principal.SecurityIdentifier]'S-1-5-18') ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule ([Security.Principal.SecurityIdentifier]'S-1-5-32-544') ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule $sandbox ([Security.AccessControl.FileSystemRights]::ReadAndExecute);Set-Acl -LiteralPath $path -AclObject $acl`;
+	const powershell = join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
+	const configured = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", aclScript], { encoding: "utf8", env: { ...process.env, NAIA_TEST_AUTH_PATH: authPath } });
+	if (configured.status !== 0 && /CodexSandboxUsers/i.test(configured.stderr)) return context.skip("Codex sandbox group is unavailable");
+	assert.equal(configured.status, 0, configured.stderr);
+	const prepared = prepareChildEnvironment({ backendId: "codex", attemptId: "official-windows-acl", runtimeRoot: join(root, "runtime"), parentEnv: { PATH: process.env.PATH }, authRoot });
+	assert.equal(prepared.authenticationPrepared, true);
+	assert.doesNotThrow(() => assertOwnerOnly(join(prepared.childHome, ".codex", "auth.json"), "file", "child Codex authentication"));
+});
+
 test("DSO-005 rejects insecure auth permissions and cleans the partial child home", () => {
 	const root = mkdtempSync(join(tmpdir(), "naia-insecure-auth-"));
 	roots.push(root);
@@ -120,6 +138,6 @@ test("DSO-005 rejects insecure auth permissions and cleans the partial child hom
 	mkdirSync(join(authRoot, ".codex"), { recursive: true });
 	writeFileSync(join(authRoot, ".codex", "auth.json"), "unsafe", { mode: 0o644 });
 	const runtimeRoot = join(root, "runtime");
-	assert.throws(() => prepareChildEnvironment({ backendId: "codex", attemptId: "bad-auth", runtimeRoot, parentEnv: { PATH: process.env.PATH }, authRoot }), /owner-only|permissions/);
+	assert.throws(() => prepareChildEnvironment({ backendId: "codex", attemptId: "bad-auth", runtimeRoot, parentEnv: { PATH: process.env.PATH }, authRoot }), /private|owner-only|permissions/);
 	assert.deepEqual(readdirSync(join(runtimeRoot, "children")), []);
 });
