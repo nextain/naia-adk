@@ -141,8 +141,25 @@ test("Linux registration verification binds exact unit bytes and an enabled acti
 	const activeState = (mode) => mode === "is-enabled" ? "enabled" : "active";
 	assert.equal(verifyLinuxManagedRegistration({ adkRoot: fixture.root, expectedRevision: fixture.revision, expectedRuntimeTreeId: fixture.runtimeTreeId, unitDirectory, stateReader: (mode) => mode === "is-enabled" ? "enabled" : "active", requireEnabledActive: true }).artifact.manifest.runtimeSha256, artifact.manifest.runtimeSha256);
 	const owner = { generation: `${fixture.revision}.deadbeef`, pid: 123, bootId: "boot", processStartIdentity: "start" };
-	assert.equal(verifyLinuxInstallOutcome({ adkRoot: fixture.root, runtimeArtifact: artifact, autoStart: true, unitDirectory, stateReader: activeState, ownerReader: () => owner, processObserver: () => ({ state: "owned" }) }).artifact.manifest.runtimeSha256, artifact.manifest.runtimeSha256);
-	assert.throws(() => verifyLinuxInstallOutcome({ adkRoot: fixture.root, runtimeArtifact: artifact, autoStart: true, unitDirectory, stateReader: activeState, ownerReader: () => owner, processObserver: () => ({ state: "missing" }) }), /expected owned running process/);
+	assert.equal(verifyLinuxInstallOutcome({ adkRoot: fixture.root, runtimeArtifact: artifact, autoStart: true, unitDirectory, stateReader: activeState, ownerReader: () => owner, processObserver: () => ({ state: "owned" }), readinessIntervalMs: 0 }).artifact.manifest.runtimeSha256, artifact.manifest.runtimeSha256);
+	let ownerReads = 0;
+	let waits = 0;
+	assert.equal(verifyLinuxInstallOutcome({
+		adkRoot: fixture.root,
+		runtimeArtifact: artifact,
+		autoStart: true,
+		unitDirectory,
+		stateReader: activeState,
+		ownerReader: () => (++ownerReads < 3 ? null : owner),
+		processObserver: () => ({ state: "owned" }),
+		readinessAttempts: 4,
+		readinessIntervalMs: 1,
+		wait: () => { waits += 1; },
+	}).artifact.manifest.runtimeSha256, artifact.manifest.runtimeSha256);
+	assert.equal(ownerReads, 4);
+	assert.equal(waits, 3);
+	assert.throws(() => verifyLinuxInstallOutcome({ adkRoot: fixture.root, runtimeArtifact: artifact, autoStart: true, unitDirectory, stateReader: activeState, ownerReader: () => owner, processObserver: () => ({ state: "missing" }), readinessAttempts: 1 }), /expected owned running process/);
+	assert.throws(() => verifyLinuxInstallOutcome({ adkRoot: fixture.root, runtimeArtifact: artifact, autoStart: true, unitDirectory, stateReader: activeState, ownerReader: () => ({ ...owner, generation: `0${fixture.revision.slice(1)}.old` }), processObserver: () => ({ state: "owned" }), readinessAttempts: 2, readinessIntervalMs: 0 }), /expected owned running process/);
 	const disabledState = (mode, unit) => unit === artifact.service.unitName ? (mode === "is-enabled" ? "disabled" : "inactive") : (mode === "is-enabled" ? "enabled" : "active");
 	assert.equal(verifyLinuxInstallOutcome({ adkRoot: fixture.root, runtimeArtifact: artifact, autoStart: false, unitDirectory, stateReader: disabledState }).state.service.active, false);
 	assert.throws(() => verifyLinuxInstallOutcome({ adkRoot: fixture.root, runtimeArtifact: artifact, autoStart: false, unitDirectory, stateReader: activeState }), /unexpectedly remained enabled or active/);
