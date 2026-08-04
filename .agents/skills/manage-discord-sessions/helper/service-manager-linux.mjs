@@ -65,8 +65,31 @@ export function removeUnreferencedManagedRuntimeArtifact(runtimeArtifact, servic
 	return true;
 }
 
-export function verifyLinuxInstallOutcome({ adkRoot, instance = "default", runtimeArtifact, autoStart, unitDirectory, stateReader, ownerReader, processObserver = observeOwnedProcess } = {}) {
+function waitForLinuxInstallOwner({ readOwner, processObserver, expectedGeneration, attempts, intervalMs, wait }) {
+	let previousOwnedTuple = null;
+	for (let attempt = 0; attempt < attempts; attempt += 1) {
+		const owner = readOwner();
+		const completeOwner = owner
+			&& expectedGeneration.test(String(owner.generation))
+			&& Number.isSafeInteger(owner.pid) && owner.pid > 0
+			&& typeof owner.bootId === "string" && owner.bootId.length > 0
+			&& typeof owner.processStartIdentity === "string" && owner.processStartIdentity.length > 0;
+		const ownedTuple = completeOwner
+			&& processObserver({ pid: owner.pid, bootId: owner.bootId, processStartIdentity: owner.processStartIdentity }).state === "owned"
+			? JSON.stringify([owner.generation, owner.pid, owner.bootId, owner.processStartIdentity])
+			: null;
+		if (ownedTuple !== null && ownedTuple === previousOwnedTuple) return owner;
+		previousOwnedTuple = ownedTuple;
+		if (attempt + 1 < attempts) wait(intervalMs);
+	}
+	return null;
+}
+
+export function verifyLinuxInstallOutcome({ adkRoot, instance = "default", runtimeArtifact, autoStart, unitDirectory, stateReader, ownerReader, processObserver = observeOwnedProcess, readinessAttempts = 40, readinessIntervalMs = 250, wait = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds) } = {}) {
 	if (!runtimeArtifact?.manifest || typeof autoStart !== "boolean") throw new Error("Discord Linux install verification input is invalid");
+	if (!Number.isSafeInteger(readinessAttempts) || readinessAttempts < 1 || readinessAttempts > 300
+		|| !Number.isSafeInteger(readinessIntervalMs) || readinessIntervalMs < 0 || readinessIntervalMs > 1_000
+		|| typeof wait !== "function") throw new Error("Discord Linux install readiness policy is invalid");
 	const verified = verifyLinuxManagedRegistration({
 		adkRoot,
 		instance,
@@ -87,9 +110,8 @@ export function verifyLinuxInstallOutcome({ adkRoot, instance = "default", runti
 			finally { store.close(); }
 		});
 		if (typeof readOwner !== "function" || typeof processObserver !== "function") throw new Error("Discord Linux process ownership verifier is invalid");
-		const owner = readOwner();
 		const expectedGeneration = new RegExp(`^${runtimeArtifact.manifest.sourceRevision}\\.[a-f0-9-]+$`);
-		if (!owner || !expectedGeneration.test(String(owner.generation)) || processObserver({ pid: owner.pid, bootId: owner.bootId, processStartIdentity: owner.processStartIdentity }).state !== "owned") {
+		if (!waitForLinuxInstallOwner({ readOwner, processObserver, expectedGeneration, attempts: readinessAttempts, intervalMs: readinessIntervalMs, wait })) {
 			throw new Error("Discord managed service did not establish the expected owned running process");
 		}
 	}
