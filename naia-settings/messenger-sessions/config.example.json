@@ -25,7 +25,7 @@
   "backend": {
     "selected": "codex",
     "profiles": {
-      "codex": { "enabled": true, "model": "gpt-5.4" },
+      "codex": { "enabled": true, "model": "gpt-5.4", "costProfile": "balanced" },
       "claude": { "enabled": true }
     }
   },

@@ -101,7 +101,7 @@ naia-settings/messenger-sessions/instances/<instance>/config.json
 naia-settings/.sessions/messenger-sessions/instances/<instance>/runtime.sqlite3
 ```
 
-실제 설정과 세션 상태는 Git에 올리지 않습니다. 설정에는 비밀값이 아니라 자격 증명 참조만 둡니다. Discord 토큰은 `naia-settings/.keys/messenger-sessions/<credentialRef>`에 권한 `0600`으로 두며, 설정 파일도 `0600`이어야 합니다. `backend.selected`를 `codex` 또는 `claude`로 선택하면 되고 `naia-agent`나 `naia-shell`은 필요하지 않습니다. 아직 등록하지 않은 인스턴스는 첫 `service install` 전에 이 값을 선택합니다. 기존 등록의 `backend.selected` 변경은 관리 런타임 전환이므로, 일반 `service install`이나 restart로 덮어쓰지 말고 아래의 검증된 후보 cutover 절차를 사용합니다.
+실제 설정과 세션 상태는 Git에 올리지 않습니다. 설정에는 비밀값이 아니라 자격 증명 참조만 둡니다. Discord 토큰은 `naia-settings/.keys/messenger-sessions/<credentialRef>`에 권한 `0600`으로 두며, 설정 파일도 `0600`이어야 합니다. `backend.selected`를 `codex` 또는 `claude`로 선택하면 되고 `naia-agent`나 `naia-shell`은 필요하지 않습니다. Codex의 `costProfile` 기본값은 `balanced`이며 낮은 추론 강도를 명시적으로 적용합니다. `control`은 중간 강도이고, 현재 `economy`는 같은 낮은 강도 경계를 유지합니다. Gateway 프롬프트에는 호스트가 검증한 `read-only` 또는 `workspace-write` 실행 계약을 기록하므로, 쓰기가 허용된 작업이 대화형 세션 결박이 없다는 이유만으로 읽기 전용으로 강등되지 않습니다. 아직 등록하지 않은 인스턴스는 첫 `service install` 전에 이 값을 선택합니다. 기존 등록의 `backend.selected` 변경은 관리 런타임 전환이므로, 일반 `service install`이나 restart로 덮어쓰지 말고 아래의 검증된 후보 cutover 절차를 사용합니다.
 
 사람의 권한 설정이 바뀌면 `runtime.permissionProfileEpoch`도 바꿉니다. 무인 Discord 설정은 `runtime.approvalPolicy`를 명시적으로 `never`로 둬야 하며 `managed`와 누락 값은 안전하게 거부합니다. 스키마 v2의 모든 참여자는 `operatorUserIds`에도 있어야 합니다. 참여자 프로필은 역할 설명과 작업 제한일 뿐 파일 읽기 격리 수단이 아니며, 현재 Codex 읽기 전용·Claude 계획 모드는 같은 OS 사용자가 읽을 수 있는 파일을 프로젝트별로 격리하지 못하기 때문입니다. 따라서 현재는 호스트 운영자와 같은 수준으로 신뢰할 수 없는 사용자를 허용하지 않습니다.
 

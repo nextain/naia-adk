@@ -27,7 +27,7 @@ test("DSG-006 enforces configured read-only role in the actual backend invocatio
 	assert.equal(accepted.state, "accepted");
 	await router.waitForIdle();
 	assert.equal(calls.length, 1);
-	assert.deepEqual(calls[0].commandOptions, { sandbox: "read-only", approvalPolicy: "never" });
+	assert.deepEqual(calls[0].commandOptions, { sandbox: "read-only", approvalPolicy: "never", costProfile: "balanced" });
 	assert.match(calls[0].prompt, /Routine authority: A bounded user request authorizes its normal in-scope execution path/);
 	assert.match(calls[0].prompt, /No approval click is available/);
 	assert.match(calls[0].prompt, /Ask only when a material unresolved choice would change the requested scope/);
@@ -139,11 +139,14 @@ test("DSG-021 launches v2 work in its bound workspace with a stable prefix and f
 	}
 	assert.equal(calls.length, 2);
 	assert.equal(calls.every((call) => call.cwd === snapshot.workspaceRoot && call.commandOptions.sandbox === "workspace-write"), true);
+	assert.equal(calls.every((call) => call.commandOptions.costProfile === "balanced"), true);
 	assert.equal(store.listJobs().every((job) => job.revision === `v2w:${RUNTIME_REVISION}`), true);
 	assert.equal(store.listJobs().every((job) => job.executionBinding === null), true);
 	const stablePrefix = (prompt) => prompt.slice(0, prompt.indexOf("Current requester:"));
 	assert.equal(stablePrefix(calls[0].prompt), stablePrefix(calls[1].prompt));
 	assert.match(calls[0].prompt, /Discord recent conversation[\s\S]*earlier context[\s\S]*User request:\nfirst request$/);
+	assert.match(calls[0].prompt, /Gateway execution contract: workspace-write\. Cost profile: balanced\./);
+	assert.match(calls[0].prompt, /Do not downgrade it to read-only merely because no interactive session binding exists/);
 	assert.equal(calls[0].prompt.includes(USER), false);
 	writeFileSync(join(root, ".agents/context/policy.yaml"), "authority: changed\n", "utf8");
 	assert.equal((await router.onDispatch("MESSAGE_CREATE", { id: "676767676767676763", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> third request` }, 41)).state, "accepted");
