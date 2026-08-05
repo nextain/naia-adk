@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { formatOperatorStatus } from "../helper/discord-delivery.mjs";
-import { DiscordMessageRouter } from "../helper/discord-router.mjs";
+import { DiscordMessageRouter, noProgressInterventionDue } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
 import { loadOrCreateRecoveryKey, RecoveryCodec } from "../helper/recovery-crypto.mjs";
 import { randomBytes } from "node:crypto";
@@ -196,6 +196,17 @@ test("DSG-014 watchdog aborts a no-progress owned child instead of leaving it ru
 	assert.equal(job.lifecycle, "failed");
 	assert.equal(job.latestSafeError, "Job failed: no_progress_timeout");
 	store.close();
+});
+
+test("DSG-014a watchdog gives a just-exited child a recent-progress grace window", () => {
+	const job = {
+		activityHealth: { value: "unresponsive", reasonCode: "owned_child_missing" },
+		lastProgressAt: new Date(1_000).toISOString(),
+		updatedAt: new Date(1_000).toISOString(),
+	};
+	assert.equal(noProgressInterventionDue(job, 1_001, 2_000), false);
+	assert.equal(noProgressInterventionDue(job, 3_001, 2_000), true);
+	assert.equal(noProgressInterventionDue({ ...job, activityHealth: { value: "unresponsive", reasonCode: "hard_deadline_exceeded" } }, 1_001, 2_000), true);
 });
 
 test("DSG-015 acknowledgement failure never gates work or a later same-scope message", async () => {

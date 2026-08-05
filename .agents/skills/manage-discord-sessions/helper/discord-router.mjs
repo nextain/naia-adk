@@ -24,6 +24,13 @@ function failureReason(job) {
 	return match?.[1] ?? "internal_error";
 }
 
+export function noProgressInterventionDue(job, nowMs, interventionMs) {
+	if (job.activityHealth.reasonCode === "hard_deadline_exceeded") return true;
+	if (!new Set(["unresponsive", "suspected_stalled"]).has(job.activityHealth.value)) return false;
+	const lastProgressMs = Date.parse(job.lastProgressAt ?? job.updatedAt);
+	return Number.isFinite(lastProgressMs) && nowMs - lastProgressMs >= interventionMs;
+}
+
 export function transientPrompt(message, botUserId, config, authorization = null, agentContextSnapshot = null) {
 	if (typeof message.content !== "string" || message.content.length > 4_000) throw new Error("Discord content is missing or too large");
 	const userText = normalizedDiscordText(message.content, botUserId);
@@ -291,10 +298,7 @@ export class DiscordMessageRouter {
 	}
 
 	#noProgressIsDue(job, nowMs) {
-		if (job.activityHealth.value === "unresponsive") return true;
-		if (job.activityHealth.value !== "suspected_stalled") return false;
-		const lastProgressMs = Date.parse(job.lastProgressAt ?? job.updatedAt);
-		return Number.isFinite(lastProgressMs) && nowMs - lastProgressMs >= this.#noProgressInterventionMs();
+		return noProgressInterventionDue(job, nowMs, this.#noProgressInterventionMs());
 	}
 
 	#runOutbound(operation) {
