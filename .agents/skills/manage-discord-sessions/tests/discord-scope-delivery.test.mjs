@@ -63,6 +63,24 @@ test("DSG-002 accepts ingress and job atomically and deduplicates Gateway replay
 	store.close();
 });
 
+test("DSO-001 stores one bounded local request excerpt without assembled context", () => {
+	const { store } = fixture();
+	const privateRequest = `inspect token=supersecretvalue /var/home/luke/private ${"가".repeat(700)}`;
+	const input = { sourceMessageId: "666666666666666667", scopeKey: "scope-request", jobId: "job-request", backendId: "codex", backendCapabilities: { structuredProgress: true }, activityDetail: "structured", requestExcerpt: privateRequest };
+	assert.equal(store.acceptIngressAndCreateJob(input).duplicate, false);
+	assert.equal(store.acceptIngressAndCreateJob({ ...input, jobId: "job-request-replay" }).jobId, "job-request");
+	const job = store.getJob("job-request");
+	assert.deepEqual(job.events.map((event) => event.kind), ["job_accepted", "request_recorded"]);
+	const request = job.events[1];
+	assert.equal(request.redactionLevel, "local_safe");
+	assert.equal(request.metrics.truncated, true);
+	assert.match(request.safeSummary, /\[REDACTED\]/);
+	assert.match(request.safeSummary, /\[LOCAL_PATH\]/);
+	assert.ok(request.safeSummary.length <= 512);
+	assert.equal(job.currentActivity, null);
+	store.close();
+});
+
 test("DSG-003 records delivery before bounded same-nonce retries and never starts a second delivery", async () => {
 	const { store, databasePath } = fixture();
 	store.createJob({ jobId: "job-1", backendId: "codex", activityDetail: "structured", jobType: "conversation" });

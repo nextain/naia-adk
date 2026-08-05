@@ -115,6 +115,28 @@ for (const backendId of ["codex", "claude"]) {
 	});
 }
 
+for (const backendId of ["codex", "claude"]) {
+	test(`DSO-001 persists bounded public ${backendId} progress and result without projecting their text`, async () => {
+		const { root, store, jobId } = fixture(backendId);
+		const result = await runBackendAttempt({ store, jobId, backendId, prompt: "__fake_progress__", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: backendId === "codex" ? "0.146.0" : "2.1.220", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } });
+		assert.equal(result.backendOutcome, "success");
+		const job = store.getJob(jobId);
+		const progress = job.events.filter((event) => event.kind === "progress_reported");
+		const final = job.events.filter((event) => event.kind === "result_reported");
+		assert.equal(progress.length, 1);
+		assert.equal(final.length, 1);
+		assert.match(progress[0].safeSummary, /\[REDACTED\]/);
+		assert.match(progress[0].safeSummary, /\[LOCAL_PATH\]/);
+		assert.equal(progress[0].redactionLevel, "local_safe");
+		assert.equal(final[0].safeSummary, "Result: fake-model-content");
+		assert.equal(final[0].redactionLevel, "local_safe");
+		assert.ok(progress[0].sequence < final[0].sequence);
+		assert.ok(final[0].sequence < job.events.find((event) => event.kind === "attempt_succeeded").sequence);
+		assert.equal(job.currentActivity.includes("checking"), false);
+		store.close();
+	});
+}
+
 test("DSO-006 runs a Windows npm-shim backend through a pinned node command and script prefix", async () => {
 	const { root, store, jobId } = fixture("codex");
 	const result = await runBackendAttempt({
@@ -206,7 +228,10 @@ test("DSO-006 treats structured failure plus exit zero as failed", async () => {
 	const { root, store, jobId } = fixture("claude");
 	const result = await runBackendAttempt({ store, jobId, backendId: "claude", prompt: "__fake_structured_failure__", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: "2.1.220", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } });
 	assert.equal(result.backendOutcome, "failure");
-	assert.equal(store.getJob(jobId).lifecycle, "failed");
+	const job = store.getJob(jobId);
+	assert.equal(job.lifecycle, "failed");
+	assert.equal(job.events.filter((event) => event.kind === "progress_reported").length, 1);
+	assert.equal(job.events.some((event) => event.kind === "result_reported"), false);
 	store.close();
 });
 

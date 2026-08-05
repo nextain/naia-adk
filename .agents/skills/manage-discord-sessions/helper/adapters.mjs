@@ -90,19 +90,25 @@ function cacheReceipt(usage, backendId) {
 	return [{ kind: "prompt_cache_observed", safePayload, metrics }];
 }
 
-function toolCategory(value = "") {
-	const name = String(value).toLowerCase();
-	if (/test/.test(name)) return "test";
-	if (/build|compile/.test(name)) return "build";
-	if (/read|search|list|glob|grep/.test(name)) return "file_read";
-	if (/edit|write|patch|create/.test(name)) return "file_edit";
-	if (/web|http|fetch|browser/.test(name)) return "network";
-	if (/command|exec|shell|bash|terminal/.test(name)) return "command";
-	return "other";
-}
+const CODEX_TOOL_CATEGORIES = new Map([
+	["command_execution", "command_execution"],
+	["file_change", "file_change"],
+	["web_search", "search"],
+]);
 
-function codexItemCategory(item = {}) {
-	return toolCategory(item.type ?? item.name ?? "");
+const CLAUDE_TOOL_CATEGORIES = new Map([
+	["Bash", "command_execution"],
+	["Edit", "file_change"],
+	["NotebookEdit", "file_change"],
+	["Write", "file_change"],
+	["Read", "read"],
+	["Glob", "search"],
+	["Grep", "search"],
+	["WebSearch", "search"],
+]);
+
+function optionalToolPayload(category) {
+	return category ? { toolCategory: category } : {};
 }
 
 function parseCodex(message, rawBytes) {
@@ -115,12 +121,12 @@ function parseCodex(message, rawBytes) {
 			break;
 		case "item.started":
 			if (message.item?.type && !new Set(["reasoning", "agent_message"]).has(message.item.type)) {
-				events.push({ kind: "tool_started", safePayload: { toolCategory: codexItemCategory(message.item) } });
+				events.push({ kind: "tool_started", safePayload: optionalToolPayload(CODEX_TOOL_CATEGORIES.get(message.item.type)) });
 			}
 			break;
 		case "item.completed":
 			if (message.item?.type && !new Set(["reasoning", "agent_message"]).has(message.item.type)) {
-				events.push({ kind: "tool_finished", safePayload: { toolCategory: codexItemCategory(message.item) } });
+				events.push({ kind: "tool_finished", safePayload: optionalToolPayload(CODEX_TOOL_CATEGORIES.get(message.item.type)) });
 			}
 			events.push(...activity(rawBytes));
 			break;
@@ -146,7 +152,7 @@ function parseClaude(message, rawBytes) {
 	}
 	if (message.type === "assistant") {
 		for (const block of claudeBlocks(message)) {
-			if (block.type === "tool_use") events.push({ kind: "tool_started", safePayload: { toolCategory: toolCategory(block.name) } });
+			if (block.type === "tool_use") events.push({ kind: "tool_started", safePayload: optionalToolPayload(CLAUDE_TOOL_CATEGORIES.get(block.name)) });
 		}
 		events.push(...activity(rawBytes));
 		return events;
@@ -167,7 +173,7 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 	try {
 		message = JSON.parse(line);
 	} catch {
-		return { outcome: null, transientResult: null, approvalRequested: approvalRequestedText(line), events: activity(Buffer.byteLength(line, "utf8")).map((event, eventIndex) => ({
+		return { outcome: null, transientResult: null, assistantText: null, approvalRequested: approvalRequestedText(line), events: activity(Buffer.byteLength(line, "utf8")).map((event, eventIndex) => ({
 			...event,
 			dedupeKey: eventKey(backendId, attemptId, lineNumber, eventIndex, event.kind),
 		})) };
@@ -180,9 +186,15 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 		? codexCompletion ? "success" : new Set(["turn.failed", "error"]).has(message.type) ? "failure" : null
 		: message.type === "result" ? (message.is_error === true || message.subtype === "error" ? "failure" : message.subtype === "success" && message.is_error !== true ? "success" : null) : null;
 	let transientResult = null;
+	let assistantText = null;
 	if (backendId === "codex" && message.type === "item.completed" && message.item?.type === "agent_message" && typeof message.item.text === "string") transientResult = message.item.text;
+	if (backendId === "codex" && message.type === "item.completed" && message.item?.type === "agent_message" && typeof message.item.text === "string") assistantText = message.item.text;
+	if (backendId === "claude" && message.type === "assistant") {
+		const text = claudeBlocks(message).filter((block) => block.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n");
+		if (text) assistantText = text;
+	}
 	if (backendId === "claude" && message.type === "result" && outcome === "success" && typeof message.result === "string") transientResult = message.result;
-	return { outcome, transientResult, approvalRequested, events: getBackendAdapter(backendId).parse(message, rawBytes).map((event, eventIndex) => ({
+	return { outcome, transientResult, assistantText, approvalRequested, events: getBackendAdapter(backendId).parse(message, rawBytes).map((event, eventIndex) => ({
 		...event,
 		dedupeKey: eventKey(backendId, attemptId, lineNumber, eventIndex, event.kind),
 	})) };
