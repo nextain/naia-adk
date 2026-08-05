@@ -41,8 +41,46 @@ test("DSO-003 CLI returns versioned job detail and watch events", () => {
 	assert.ok(watched.length >= 3);
 	assert.equal(new Set(watched.map((item) => item.event.ordinal)).size, watched.length);
 
+	const logs = spawnSync(process.execPath, [cliPath, "--adk-root", root, "logs", "--job", jobId, "--jsonl"], { encoding: "utf8" });
+	assert.equal(logs.status, 0, logs.stderr);
+	assert.deepEqual(logs.stdout.trim().split("\n").map((line) => JSON.parse(line).event.kind), watched.map((item) => item.event.kind));
+
+	const monitor = spawnSync(process.execPath, [cliPath, "--adk-root", root, "monitor", "--once"], { encoding: "utf8" });
+	assert.equal(monitor.status, 0, monitor.stderr);
+	assert.match(monitor.stdout, /Jobs \(active and recent terminal\):/);
+	assert.match(monitor.stdout, new RegExp(jobId));
+	assert.match(monitor.stdout, /phase_changed/);
+
 	const missing = spawnSync(process.execPath, [cliPath, "--adk-root", root, "job", "missing"], { encoding: "utf8" });
 	assert.equal(missing.status, 2);
+});
+
+test("UCT_DSO_014_001 replays durable logs and keeps recent work visible in the named monitor", () => {
+	const { root, store } = fixture();
+	const { jobId, attemptId } = createRunningJob(store, { jobId: "operator-console-job" });
+	store.recordEvent({ jobId, attemptId, source: "helper", kind: "failed", safePayload: { reasonCode: "process_exit" } });
+	store.close();
+	const logs = spawnSync(process.execPath, [cliPath, "--adk-root", root, "logs", "--job", jobId], { encoding: "utf8" });
+	assert.equal(logs.status, 0, logs.stderr);
+	assert.match(logs.stdout, /attempt_started/);
+	assert.match(logs.stdout, /failed/);
+	const monitor = spawnSync(process.execPath, [cliPath, "--adk-root", root, "monitor", "--once"], { encoding: "utf8" });
+	assert.equal(monitor.status, 0, monitor.stderr);
+	assert.match(monitor.stdout, /operator-console-job/);
+	assert.match(monitor.stdout, /failed/);
+});
+
+test("FET_DSO_014_001 monitor distinguishes service state jobs and durable timeline", () => {
+	const { root, store } = fixture();
+	const { jobId, attemptId } = createRunningJob(store, { jobId: "timeline-job" });
+	store.recordEvent({ jobId, attemptId, dedupeKey: "feature-phase", source: "codex", kind: "phase_changed", safePayload: { phase: "testing" } });
+	store.close();
+	const monitor = spawnSync(process.execPath, [cliPath, "--adk-root", root, "monitor", "--once"], { encoding: "utf8" });
+	assert.equal(monitor.status, 0, monitor.stderr);
+	assert.match(monitor.stdout, /service=/);
+	assert.match(monitor.stdout, /Jobs \(active and recent terminal\):/);
+	assert.match(monitor.stdout, /Latest timeline:/);
+	assert.match(monitor.stdout, /phase_changed/);
 });
 
 test("DSO-003 status on a clean ADK is read-only and reports stopped", () => {

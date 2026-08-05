@@ -13,6 +13,11 @@ const FAILURE_TEXT = {
 	process_exit: "작업 프로세스가 비정상 종료됐습니다.",
 	approval_ui_detected: "승인 입력을 요구하는 실행이 감지되어 안전하게 중단했습니다.",
 	context_changed_restart_required: "프로젝트 규칙이 서비스 시작 후 변경되어, 새 규칙을 다시 읽도록 작업을 중단했습니다.",
+	discord_history_load_failed: "Discord 대화 기록을 불러오는 단계에서 실패했습니다.",
+	backend_version_probe_failed: "코딩 백엔드 실행 파일 확인 단계에서 실패했습니다.",
+	backend_authentication_failed: "코딩 백엔드 인증 준비 단계에서 실패했습니다.",
+	backend_invocation_invalid: "코딩 백엔드 실행 인자 구성 단계에서 실패했습니다.",
+	backend_spawn_failed: "코딩 백엔드 프로세스 시작 단계에서 실패했습니다.",
 	internal_error: "작업 중 내부 오류가 발생했습니다.",
 };
 
@@ -128,6 +133,7 @@ export class DiscordMessageRouter {
 		this.maxConcurrent = config.runtime?.maxConcurrentJobs ?? 1;
 		this.accepting = true;
 		this.controllers = new Map();
+		this.workItems = new Map();
 		this.pendingDeliveries = new Set();
 		this.pendingAcknowledgementFinalizers = new Set();
 		this.pendingOutbound = new Set();
@@ -192,6 +198,7 @@ export class DiscordMessageRouter {
 			softSilenceMs: (this.config.runtime?.softSilenceSeconds ?? 120) * 1_000, recoveryEnvelope, executionBinding, now: this.#nowIso() });
 		if (ingress.duplicate) return { state: "duplicate", jobId: ingress.jobId };
 		const item = { jobId, backendId, prompt, currentRequest, channelId, scopeKey: authorization.scopeKey, sourceMessageId, allowedUserIds: authorization.binding.allowedUserIds, binding: authorization.binding, participantUserId: authorization.scope.authorId, authority, commandOptions, executionProfile };
+		this.workItems.set(jobId, item);
 		this.#sendOperatorResponse(item);
 		this.queue.push(item);
 		this.#drain();
@@ -379,7 +386,9 @@ export class DiscordMessageRouter {
 			}
 			let prompt = item.prompt;
 			if (this.loadHistory && item.sourceMessageId) {
-				const loaded = await this.loadHistory({ token: this.token, channelId: item.channelId, beforeMessageId: item.sourceMessageId, botUserId: this.botUserId, allowedUserIds: item.allowedUserIds, participantProfiles: this.config.discord.participantProfiles, requesterUserId: item.participantUserId, historyVisibility: item.binding?.historyVisibility ?? "shared", signal: controller.signal });
+				let loaded;
+				try { loaded = await this.loadHistory({ token: this.token, channelId: item.channelId, beforeMessageId: item.sourceMessageId, botUserId: this.botUserId, allowedUserIds: item.allowedUserIds, participantProfiles: this.config.discord.participantProfiles, requesterUserId: item.participantUserId, historyVisibility: item.binding?.historyVisibility ?? "shared", signal: controller.signal }); }
+				catch (error) { if (error && typeof error === "object") error.code = "discord_history_load_failed"; throw error; }
 				if (loaded?.state === "loaded") prompt = promptWithDiscordConversation(prompt, loaded.history, item.currentRequest);
 			}
 			if (this.agentContextSnapshot) verifyAgentContextBeforeAttempt(this.agentContextSnapshot);
@@ -400,12 +409,17 @@ export class DiscordMessageRouter {
 		} catch (error) {
 			const job = this.store.getJob(item.jobId);
 			if (job && !["failed", "cancelled", "completed", "recovery_review"].includes(job.lifecycle)) {
-				const reasonCode = error?.code === "context_changed_restart_required" ? "context_changed_restart_required" : "internal_error";
-				try { this.store.recordEvent({ jobId: item.jobId, attemptId: job.attemptId, source: "helper", kind: "failed", safePayload: { reasonCode } }); } catch {}
+				if (controller.signal.aborted && controller.signal.reason === "operator_cancel") {
+					try { this.store.recordEvent({ jobId: item.jobId, attemptId: job.attemptId, source: "helper", kind: "cancelled", safePayload: {} }); } catch {}
+				} else {
+					const reasonCode = new Set(["context_changed_restart_required", "discord_history_load_failed", "backend_version_probe_failed", "backend_authentication_failed", "backend_invocation_invalid", "backend_spawn_failed"]).has(error?.code) ? error.code : "internal_error";
+					try { this.store.recordEvent({ jobId: item.jobId, attemptId: job.attemptId, source: "helper", kind: "failed", safePayload: { reasonCode } }); } catch {}
+				}
 			}
 			await this.#reportFailure(item);
 		} finally {
 			this.controllers.delete(item.jobId);
+			this.workItems.delete(item.jobId);
 			const job = this.store.getJob(item.jobId, { includeEvents: false });
 				if (job?.scopeKey) void this.projectScope({ scopeKey: job.scopeKey, channelId: item.channelId }).catch(() => {});
 		}
@@ -425,6 +439,45 @@ export class DiscordMessageRouter {
 
 	async waitForIdle({ includeDeliveries = true } = {}) {
 		while (this.running > 0 || this.queue.length > 0 || (includeDeliveries && this.pendingDeliveries.size > 0)) await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+
+	cancelJob(jobId) {
+		const queuedIndex = this.queue.findIndex((item) => item.jobId === jobId);
+		if (queuedIndex >= 0) {
+			this.queue.splice(queuedIndex, 1);
+			this.workItems.delete(jobId);
+			this.store.recordEvent({ jobId, source: "helper", kind: "cancel_requested", safePayload: {} });
+			this.store.recordEvent({ jobId, source: "helper", kind: "cancelled", safePayload: {} });
+			return { state: "accepted", action: "cancel", jobId, target: "queued" };
+		}
+		const controller = this.controllers.get(jobId);
+		if (!controller || controller.signal.aborted) return { state: "rejected", action: "cancel", jobId, reasonCode: "job_not_active" };
+		const job = this.store.getJob(jobId, { includeEvents: false });
+		this.store.recordEvent({ jobId, attemptId: job?.attemptId ?? undefined, source: "helper", kind: "cancel_requested", safePayload: {} });
+		controller.abort("operator_cancel");
+		return { state: "accepted", action: "cancel", jobId, target: "running" };
+	}
+
+	replaceJob(jobId, { action = "restart", amendment = null } = {}) {
+		if (!new Set(["restart", "amend"]).has(action)) return { state: "rejected", action, jobId, reasonCode: "invalid_control_action" };
+		if (action === "amend" && (typeof amendment !== "string" || !amendment.trim() || amendment.length > 4_000)) return { state: "rejected", action, jobId, reasonCode: "amendment_invalid" };
+		if (!this.recoveryCodec) return { state: "rejected", action, jobId, reasonCode: "recovery_codec_unavailable" };
+		const item = this.workItems.get(jobId) ?? this.queue.find((candidate) => candidate.jobId === jobId);
+		if (!item) return { state: "rejected", action, jobId, reasonCode: "job_not_active" };
+		const sourceJob = this.store.getJob(jobId, { includeEvents: false });
+		if (!sourceJob) return { state: "rejected", action, jobId, reasonCode: "job_not_found" };
+		const currentRequest = action === "amend" ? `${item.currentRequest}\n\nOperator amendment:\n${amendment.trim()}` : item.currentRequest;
+		if (currentRequest.length > 4_000) return { state: "rejected", action, jobId, reasonCode: "amendment_too_large" };
+		const replacementJobId = randomUUID();
+		const replacementPrompt = boundRequestPrompt(currentRequest, this.config, item.authority, this.agentContextSnapshot);
+		const replacementEnvelope = this.recoveryCodec.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId: item.channelId, scopeKey: item.scopeKey, executionProfile: item.executionProfile, participantUserId: item.participantUserId, bindingIdentity: item.authority?.bindingIdentity, authorityRevision: item.authority?.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: this.agentContextSnapshot?.contextHash ?? null, runtimeRevision: this.runtimeRevision }));
+		this.store.createJob({ jobId: replacementJobId, backendId: item.backendId, revision: sourceJob.revision, backendCapabilities: sourceJob.backendCapabilities, activityDetail: sourceJob.activityDetail, jobType: "conversation", scopeKey: item.scopeKey, softSilenceMs: sourceJob.softSilenceMs, hardDeadlineAt: sourceJob.hardDeadlineAt, recoveryEnvelope: replacementEnvelope, executionBinding: sourceJob.executionBinding });
+		const replacement = { ...item, jobId: replacementJobId, prompt: replacementPrompt, currentRequest, sourceMessageId: null };
+		this.workItems.set(replacementJobId, replacement);
+		this.cancelJob(jobId);
+		this.queue.push(replacement);
+		this.#drain();
+		return { state: "accepted", action, jobId, replacementJobId, semantics: "cancel_and_queue_replacement" };
 	}
 
 	async watchdog({ nowMs = this.now() } = {}) {
@@ -476,6 +529,7 @@ export class DiscordMessageRouter {
 				} else throw new Error("legacy recovery requires review");
 					const recovered = { jobId: item.jobId, backendId: item.backendId, prompt, currentRequest: payload.currentRequest, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, participantUserId: payload.participantUserId, authority, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile };
 				if (!this.#operatorResponseFinalized(item.jobId)) this.#sendOperatorResponse(recovered);
+				this.workItems.set(item.jobId, recovered);
 				this.queue.push(recovered);
 			} catch {
 				this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "recovery_review_required", safePayload: {} });

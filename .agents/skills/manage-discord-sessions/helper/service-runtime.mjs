@@ -45,6 +45,14 @@ export function heartbeatServiceSafely(store, input, { onBusy = () => console.er
 	}
 }
 
+export function handleJobControlRequest(router, request, generation) {
+	if (request?.schemaVersion !== 1 || request.generation !== generation || !new Set(["cancel", "restart", "amend"]).has(request.action) || typeof request.requestId !== "string" || typeof request.jobId !== "string") {
+		return { schemaVersion: 1, requestId: typeof request?.requestId === "string" ? request.requestId : null, generation, state: "rejected", action: "unknown", reasonCode: "invalid_control_request" };
+	}
+	const result = request.action === "cancel" ? router.cancelJob(request.jobId) : router.replaceJob(request.jobId, { action: request.action, amendment: request.amendment });
+	return { schemaVersion: 1, requestId: request.requestId, generation, ...result };
+}
+
 export async function cleanupDiscordServiceResources({ heartbeatTimer = null, watchdogTimer = null, controlTimer = null, gateway = null, router = null, store = null, tokenOwnerLock, generation }) {
 	let firstError = null;
 	const capture = async (action) => {
@@ -198,6 +206,22 @@ export async function runDiscordService({ adkRoot, instance = "default", managed
 		watchdogTimer.unref?.();
 		const stop = () => { stopping = true; gateway?.close(1_000); wakeReconnect?.(); wakeStop?.({ resumable: false }); };
 		controlTimer = setInterval(() => {
+			if (existsSync(paths.jobControlRequestPath)) {
+				let receipt = null;
+				try {
+					assertOwnerOnly(paths.jobControlRequestPath, "file", "Discord job control request");
+					const request = JSON.parse(readFileSync(paths.jobControlRequestPath, "utf8"));
+					receipt = { ...handleJobControlRequest(router, request, generation), observedAt: new Date().toISOString() };
+				} catch { receipt = { schemaVersion: 1, state: "rejected", action: "unknown", reasonCode: "invalid_control_request", observedAt: new Date().toISOString() }; }
+				try { unlinkSync(paths.jobControlRequestPath); } catch {}
+				try {
+					const temporary = `${paths.jobControlReceiptPath}.${process.pid}.${randomUUID()}.tmp`;
+					writeFileSync(temporary, `${JSON.stringify(receipt)}\n`, { mode: 0o600, flag: "wx" });
+					protectOwnerOnly(temporary, "file", "Discord job control receipt");
+					renameSync(temporary, paths.jobControlReceiptPath);
+					protectOwnerOnly(paths.jobControlReceiptPath, "file", "Discord job control receipt");
+				} catch {}
+			}
 			if (!existsSync(paths.stopRequestPath)) return;
 			try {
 				assertOwnerOnly(paths.stopRequestPath, "file", "Discord stop request");

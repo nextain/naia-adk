@@ -26,6 +26,11 @@ export function isBenignBackendStdinError(error) {
 	return new Set(["EPIPE", "ERR_STREAM_DESTROYED"]).has(error?.code);
 }
 
+function withFailureCode(error, code) {
+	if (error && typeof error === "object") error.code = code;
+	return error;
+}
+
 const MAX_STREAM_LINE_BYTES = 256 * 1024;
 const STREAM_DRAIN_TIMEOUT_MS = 500;
 
@@ -136,19 +141,27 @@ export async function runBackendAttempt({
 			: await probeBackendVersion(backendId, executable, parentEnv, { signal, timeoutMs: versionProbeTimeoutMs });
 	} catch (error) {
 		if (signal?.aborted) return abortedResult();
-		throw error;
+		throw withFailureCode(error, "backend_version_probe_failed");
 	}
 	const attemptId = randomUUID();
-	const { childHome, env, authenticationPrepared } = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: executionCwd, prepareAuthentication: requireAuthentication });
+	let childEnvironment;
+	try {
+		childEnvironment = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: executionCwd, prepareAuthentication: requireAuthentication });
+	} catch (error) {
+		throw withFailureCode(error, "backend_authentication_failed");
+	}
+	const { childHome, env, authenticationPrepared } = childEnvironment;
 	if (requireAuthentication && !authenticationPrepared) {
 		cleanupChildEnvironment(childHome);
-		throw new Error(`${backendId} authentication is not ready`);
+		throw Object.assign(new Error(`${backendId} authentication is not ready`), { code: "backend_authentication_failed" });
 	}
 	let child;
 	let signalOwnedProcessTree = null;
 	try {
 		const spec = backendCommand(executable, backendId);
-		const invocation = adapter.command({ ...safeCommandOptions(backendId, commandOptions), executable: spec.command, cwd: executionCwd });
+		let invocation;
+		try { invocation = adapter.command({ ...safeCommandOptions(backendId, commandOptions), executable: spec.command, cwd: executionCwd }); }
+		catch (error) { throw withFailureCode(error, "backend_invocation_invalid"); }
 		const windowsScript = process.platform === "win32" && /\.(?:[cm]?js)$/i.test(invocation.command);
 		const spawnCommand = windowsScript ? process.execPath : invocation.command;
 		const spawnArgs = windowsScript
@@ -181,7 +194,7 @@ export async function runBackendAttempt({
 			try {
 				store.failReservedAttempt(jobId, { attemptId, now: now(), reasonCode: "internal_error" });
 			} catch {}
-			throw error;
+			throw withFailureCode(error, "backend_spawn_failed");
 		}
 		const ownership = captureChildOwnership(child);
 		if (!ownership) {

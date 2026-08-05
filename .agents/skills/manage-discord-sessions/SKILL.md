@@ -14,7 +14,7 @@ The implementation is usable with `naia-adk` alone from either Codex or Claude:
 - append-only SQLite job and safe-event history;
 - service freshness and job activity-health projection;
 - predeclared completion checks and trusted evidence;
-- `status`, `jobs`, `job`, `watch`, `history`, `latest`, verified
+- `status`, `jobs`, `job`, durable `logs --follow`, per-instance `monitor`, bounded job controls, `history`, `latest`, verified
   `attachment` recovery, and explicit `reply` commands.
 - independent Codex `exec --json` and Claude `-p --output-format stream-json` adapters;
 - isolated per-attempt child homes, minimum authentication copies, safe event normalization, timeout, cancellation, and signal-aware exit handling.
@@ -51,6 +51,11 @@ scripts/manage-discord-sessions.sh health-check [--json]
 scripts/manage-discord-sessions.sh jobs [--active|--failed] [--json]
 scripts/manage-discord-sessions.sh job <job-id> [--events] [--json]
 scripts/manage-discord-sessions.sh watch [--job <job-id>] [--jsonl]
+scripts/manage-discord-sessions.sh logs --follow [--job <job-id>] [--jsonl]
+scripts/manage-discord-sessions.sh monitor
+scripts/manage-discord-sessions.sh cancel --job <job-id>
+scripts/manage-discord-sessions.sh restart --job <job-id>
+scripts/manage-discord-sessions.sh amend --job <job-id> --content-file <owner-only-path>
 scripts/manage-discord-sessions.sh history --channel <channel-id> [--author <user-id>] [--limit 20] [--json]
 scripts/manage-discord-sessions.sh latest --channel <channel-id> [--author <user-id>] [--json]
 scripts/manage-discord-sessions.sh attachment --channel <channel-id> --message <message-id> --attachment <attachment-id> --output <absolute-path> [--expected-sha256 <hex>]
@@ -216,7 +221,7 @@ The service does not open a terminal automatically after login or reboot. A term
 2. `jobs` and `job <id> --events` show lifecycle, last safe activity, child-process ownership, delivery state, and why work is waiting or suspected stalled.
 3. `completionAssessment` separately shows requirement/build/test/review evidence. Recent activity means only that the process is active; it does not prove the work is correct.
 
-Use `watch --job <id>` for a live local event stream, or the scoped `!naia` commands in Discord. The local watch polls SQLite, not Discord. Journald contains service reason codes only; raw prompts, model stdout, final answers, secrets, commands, and local paths are not stored.
+Use `logs --follow --job <id>` for durable historical replay followed by a live local event stream. Use `monitor` for a continuously refreshed per-instance service/job/timeline view; terminal jobs remain visible. Both read SQLite, not Discord. `cancel` stops queued or active work. `restart` and `amend` are deliberately limited to active work whose encrypted recovery material is still held by the owning Gateway; both cancel the selected attempt and queue a replacement under the same verified authority and execution profile. `amend` is not live stdin injection into a model process. The amendment is read from an explicit file, and its control receipt reports `cancel_and_queue_replacement`. Terminal or unknown work is rejected instead of being silently replayed. Journald contains service reason codes only; hidden chain-of-thought, raw prompts, model stdout, final answers, secrets, commands, and local paths are not stored.
 
 With `service.startAt=login`, recovery begins after login. With `startAt=boot`, installation enables user lingering so recovery begins at boot. Gateway and the supervisor reconnect automatically. Only the bounded current request and binding digests are retained as authenticated ciphertext protected by an owner-only local recovery key; the assembled context prompt is reconstructed from current verified files. Legacy envelopes always become `recovery_review`. When schema-v2 `recovery.autoRetry=true`, only a read-only job with an exact participant, binding, configuration, context, and managed runtime-revision match may start a new attempt under the same job ID; mutation-capable, disabled, changed, missing, or corrupt recovery state becomes `recovery_review`. An uncertain Discord delivery also becomes `recovery_review` and is never automatically resent.
 

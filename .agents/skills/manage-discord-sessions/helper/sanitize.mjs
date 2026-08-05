@@ -1,4 +1,4 @@
-import { MAX_SAFE_SUMMARY_LENGTH, SAFE_METRIC_KEYS } from "./constants.mjs";
+import { JOB_FAILURE_REASON_CODES, MAX_SAFE_SUMMARY_LENGTH, SAFE_METRIC_KEYS } from "./constants.mjs";
 import { constants as osConstants } from "node:os";
 
 const SECRET_PATTERNS = [
@@ -86,7 +86,7 @@ const ENUMS = {
 	checkpointType: new Set(["job_state"]),
 	recoveryAction: new Set(["resume", "safe_retry", "manual_review"]),
 	watchdogReason: new Set(["no_progress"]),
-	reasonCode: new Set(["timeout", "process_exit", "authorization", "delivery_unknown", "internal_error", "no_progress_timeout", "approval_ui_detected", "context_changed_restart_required"]),
+	reasonCode: JOB_FAILURE_REASON_CODES,
 	terminationKind: new Set(["exited", "signaled"]),
 	signal: new Set(Object.keys(osConstants.signals ?? {})),
 };

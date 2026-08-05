@@ -29,6 +29,7 @@ node -c scripts/validate-request-contract-requirements.cjs
 node -c scripts/request-contract-review-scope.cjs
 node -c scripts/request-contract-review-transcript.cjs
 node -c scripts/issue-review-receipt.cjs
+node -c scripts/validate-requirement-evidence-levels.cjs
 ```
 
 2. fault-injection 전체를 실행한다.
@@ -180,6 +181,7 @@ FAIL이면 실패한 불변식과 파일을 수정하고 1번부터 전부 다�
 | `.claude/hooks/test/run-request-contract-test.js` | 결정론 fault-injection |
 | `.claude/hooks/e2e/{run.sh,scenario.sh}` | Linux 실제 조건·전체 시나리오 회귀 |
 | `scripts/run-request-contract-tests.cjs` | broad suite와 메모리 격리 parity suite 순차 실행 |
+| `scripts/validate-requirement-evidence-levels.cjs` | ledger-resolved source obligation 완전성과 installed-runtime 증거 수준 검증 |
 | `scripts/validate-request-contract-requirements.cjs` | RCI 요구사항·인덱스·실재 trace 검사 + 4단계 리뷰 증거를 receipt 에 결박 |
 | `scripts/request-contract-review-scope.cjs` | 현재 변경 전체(staged/unstaged/신규), 기능 경로, RCI trace, source ledger와 `scope_digest` |
 | `scripts/request-contract-review-transcript.cjs` | 리뷰어 전사 파서. 절단·모순·Files Read 열람 진술 누락·프롬프트 템플릿 상속을 Clean으로 읽지 않음. 열람 진술은 책임 있는 서명 주장이지 인지 과정의 기계적 증명은 아님 |

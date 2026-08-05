@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "USR-014",
+  "source_kind": "human",
+  "origin": "native_user_message",
+  "actor": "user",
+  "platform": "openai-chat",
+  "locator": "conversation://private/discord-operator-console-recovery",
+  "locator_access": "restricted",
+  "capture_kind": "public_safe_verbatim_excerpt",
+  "coverage": "complete_relevant_operator_console_directives",
+  "ordering": "relative_chronological_order_of_selected_messages",
+  "digest_algorithm": "sha256-canonical-event-v1",
+  "capture_note": "원래 모니터·제어 요구, 로그 우선순위 조정, 실제 운영 검증과 재발 방지 지시를 함께 보존한다.",
+  "events": [
+    {"sequence":1,"event_id":"USR-014-E01","source_kind":"human","origin":"native_user_message","locator":"conversation://private/discord-operator-console-recovery#selected-user-message-01","exact_text":"3레이어보다 먼저 해결할건 디스코드의 게이트웨이의 세션들의 추론과 작업과정을 볼수 있고, 혹은 개입할수 있는 모니터링 도구와 개입도구야","obligations":["operator-console","live-work-visibility"],"text_sha256":"sha256:93a6739f63d147987e5f3ae9417961ddccfdcc9322833d5606fa9bdbdee5b64a","event_sha256":"sha256:2e13f8903e9aad6b1ac62f87b307d9d74bc2b9dadffc7d663b8a7e807c6cab45"},
+    {"sequence":2,"event_id":"USR-014-E02","source_kind":"human","origin":"native_user_message","locator":"conversation://private/discord-operator-console-recovery#selected-user-message-02","exact_text":"중지, 시작, 프롬프트 주입이 가능하게","obligations":["cancel-restart-prompt-amendment"],"text_sha256":"sha256:98a2ecd096b4c8cdc1d0456adf3a612b3156a835d3ac3ed09f09c19594840573","event_sha256":"sha256:99bc6c588cb998c99c59af5a1f9a2ebcc6a34ed26ce09002c067a84b2aa7c369"},
+    {"sequence":3,"event_id":"USR-014-E03","source_kind":"human","origin":"native_user_message","locator":"conversation://private/discord-operator-console-recovery#selected-user-message-03","exact_text":"에이전트별로 모니터링 도구를 터미널에 띄워놓을 생각이거든","obligations":["per-agent-terminal"],"text_sha256":"sha256:b11260983eea2b69fcdb6f5322e7ccd466be34405e88633bf57d86048980fba3","event_sha256":"sha256:ae824d562ce407faf522fe9799f2209e8bbe4c4d1b1ac838c6e8cc038373d16f"},
+    {"sequence":4,"event_id":"USR-014-E04","source_kind":"human","origin":"native_user_message","locator":"conversation://private/discord-operator-console-recovery#selected-user-message-04","exact_text":"아니면 순차적으로 로그형 모니터링 도구를 만들고\n다시 네가 제안 한 방식의 도구를 만들까 ?\n그러면 필요시 로그를 볼 수도 있고","obligations":["durable-log-first","operator-console-after-log"],"text_sha256":"sha256:171ffad2a9dc97bc4e20c9d983ae894f1dc7f87f025ee93796204fdfeda77258","event_sha256":"sha256:48708b7ce7b558c312b3c33b3884759e600e9c2dce2ab0b438dc39bd945b36de"},
+    {"sequence":5,"event_id":"USR-014-E05","source_kind":"human","origin":"native_user_message","locator":"conversation://private/discord-operator-console-recovery#selected-user-message-05","exact_text":"uc, fe 통합테스트까지 다하고 해.","obligations":["use-case-feature-integration-test"],"text_sha256":"sha256:0e2e9e0feed51b659b0eb73ae5a853a8837234478f9aac0659e414cae84e1501","event_sha256":"sha256:61b8e0af03114fc9c61d67ac4fcb7f7bae10f361e4d69c73acb050d52db5313b"},
+    {"sequence":6,"event_id":"USR-014-E06","source_kind":"human","origin":"native_user_message","locator":"conversation://private/discord-operator-console-recovery#selected-user-message-06","exact_text":"시작하자마자 에러가 나는데 어떻게 테스트를 했다고 준거지 ?","obligations":["installed-runtime-verification"],"text_sha256":"sha256:0b27f8ae239a01315e9b8b0b25e6dd4ffb5f1555e56569088e4903159673d6e9","event_sha256":"sha256:0591bca6fef53fc87a5121f153e0b6c35ba54db0b30e93398742eba09a61302c"},
+    {"sequence":7,"event_id":"USR-014-E07","source_kind":"human","origin":"native_user_message","locator":"conversation://private/discord-operator-console-recovery#selected-user-message-07","exact_text":"왜 그랬는지 원인 파악하고 하네스가 문제면 하네스를 개선해","obligations":["root-cause-and-harness-improvement"],"text_sha256":"sha256:05ac462d26027dbf31ee33215e0273fe81f369d737d68fd2cd59e045e34783ea","event_sha256":"sha256:8bb127431d8a1b7f29fd449d5bb68f650184011e1587211cc5a893c8ad22a8ba"},
+    {"sequence":8,"event_id":"USR-014-E08","source_kind":"human","origin":"native_user_message","locator":"conversation://private/discord-operator-console-recovery#selected-user-message-08","exact_text":"이런일이 재발하지 않도록","obligations":["recurrence-prevention"],"text_sha256":"sha256:c2ee6e2709c68ce65d41150f89debdeb115280c40dc4d188054ca6be2f73a83b","event_sha256":"sha256:54abb162776156808ad8ba9273137d82713e8249b32e5f37b9ee68db4905838c"}
+  ]
+}

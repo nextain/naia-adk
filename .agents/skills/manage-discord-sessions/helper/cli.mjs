@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SessionStore } from "./store.mjs";
 import { loadMessengerConfig, FileCredentialResolver } from "./discord-config.mjs";
@@ -8,12 +9,13 @@ import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-p
 import { evaluateManagedDiscordCanary, manageService, prepareManagedDiscordCutover, restoreManagedDiscordCutover, verifyManagedDiscordCutover } from "./service-manager.mjs";
 import { listManagedDiscordArtifacts, pruneManagedDiscordArtifacts } from "./cutover-bundle.mjs";
 import { gatewayEvidenceBoundSeconds, projectUnattendedHealth } from "./unattended-health.mjs";
+import { protectOwnerOnly } from "./platform-security.mjs";
 
 class UsageError extends Error {}
 
 function parseArgs(argv) {
 	const positional = [];
-	const options = { json: false, jsonl: false, events: false, once: false, active: false, failed: false };
+	const options = { json: false, jsonl: false, events: false, once: false, active: false, failed: false, follow: false };
 	for (let index = 0; index < argv.length; index += 1) {
 		const value = argv[index];
 		if (value === "--json") options.json = true;
@@ -22,6 +24,7 @@ function parseArgs(argv) {
 		else if (value === "--once") options.once = true;
 		else if (value === "--active") options.active = true;
 		else if (value === "--failed") options.failed = true;
+		else if (value === "--follow" || value === "-f") options.follow = true;
 		else if (value === "--adk-root" || value === "--job" || value === "--instance" || value === "--channel" || value === "--author" || value === "--limit" || value === "--message" || value === "--attachment" || value === "--output" || value === "--expected-sha256" || value === "--content-file") {
 			const next = argv[index + 1];
 			if (!next || next.startsWith("--")) throw new UsageError(`${value} requires a value`);
@@ -42,6 +45,11 @@ function validateInvocation(positional, options) {
 		jobs: new Set(["json", "active", "failed", "limit"]),
 		job: new Set(["json", "events"]),
 		watch: new Set(["jsonl", "once", "jobId"]),
+		logs: new Set(["jsonl", "follow", "jobId"]),
+		monitor: new Set(["once"]),
+		cancel: new Set(["json", "jobId"]),
+		restart: new Set(["json", "jobId"]),
+		amend: new Set(["json", "jobId", "contentPath"]),
 		history: new Set(["json", "channelId", "authorId", "limit"]),
 		latest: new Set(["json", "channelId", "authorId", "limit"]),
 		attachment: new Set(["json", "channelId", "messageId", "attachmentId", "outputPath", "expectedSha256"]),
@@ -77,7 +85,7 @@ let options;
 let command;
 try {
 	({ positional, options } = parseArgs(process.argv.slice(2)));
-	const knownCommands = new Set(["status", "health-check", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service", "cutover", "artifacts"]);
+	const knownCommands = new Set(["status", "health-check", "jobs", "job", "watch", "logs", "monitor", "cancel", "restart", "amend", "history", "latest", "attachment", "reply", "service", "cutover", "artifacts"]);
 	if (positional[0] && !knownCommands.has(positional[0])) {
 		if (options.instance) throw new UsageError("instance was specified more than once");
 		options.instance = normalizeMessengerInstance(positional.shift());
@@ -91,6 +99,45 @@ const adkRoot = resolve(options.adkRoot ?? process.env.NAIA_ADK_PATH ?? process.
 const instance = normalizeMessengerInstance(options.instance ?? process.env.NAIA_MESSENGER_INSTANCE ?? "default");
 const instancePaths = messengerInstancePaths(adkRoot, instance);
 const databasePath = instancePaths.databasePath;
+
+if (new Set(["cancel", "restart", "amend"]).has(command)) {
+	try {
+		if (!options.jobId) throw new UsageError(`--job is required for ${command}`);
+		let amendment;
+		if (command === "amend") {
+			if (!options.contentPath) throw new UsageError("--content-file is required for amend");
+			amendment = readFileSync(resolve(options.contentPath), "utf8");
+			if (!amendment.trim() || amendment.length > 4_000) throw new UsageError("amendment must contain 1 to 4000 characters");
+		}
+		if (!existsSync(databasePath)) throw new Error("Discord session state is unavailable");
+		const stateStore = SessionStore.openReadOnly(databasePath);
+		const generation = stateStore.status().service.generation;
+		stateStore.close();
+		if (!generation) throw new Error("Discord service generation is unavailable");
+		if (existsSync(instancePaths.jobControlRequestPath)) throw new Error("another job control request is pending");
+		try { unlinkSync(instancePaths.jobControlReceiptPath); } catch (error) { if (error?.code !== "ENOENT") throw error; }
+		const requestId = randomUUID();
+		const temporary = `${instancePaths.jobControlRequestPath}.${process.pid}.${requestId}.tmp`;
+		writeFileSync(temporary, `${JSON.stringify({ schemaVersion: 1, requestId, generation, action: command, jobId: options.jobId, amendment, createdAt: new Date().toISOString() })}\n`, { mode: 0o600, flag: "wx" });
+		protectOwnerOnly(temporary, "file", "Discord job control request");
+		renameSync(temporary, instancePaths.jobControlRequestPath);
+		protectOwnerOnly(instancePaths.jobControlRequestPath, "file", "Discord job control request");
+		let receipt = null;
+		for (let attempt = 0; attempt < 40; attempt += 1) {
+			await new Promise((resolveWait) => setTimeout(resolveWait, 125));
+			if (!existsSync(instancePaths.jobControlReceiptPath)) continue;
+			const candidate = JSON.parse(readFileSync(instancePaths.jobControlReceiptPath, "utf8"));
+			if (candidate.requestId === requestId) { receipt = candidate; break; }
+		}
+		if (!receipt) throw new Error("job control receipt deadline exceeded");
+		if (options.json) console.log(JSON.stringify({ schemaVersion: 1, command, receipt }, null, 2));
+		else console.log(`${receipt.state} action=${receipt.action} job=${receipt.jobId ?? options.jobId} replacement=${receipt.replacementJobId ?? "none"} semantics=${receipt.semantics ?? "direct"} reason=${receipt.reasonCode ?? "none"}`);
+		process.exit(receipt.state === "accepted" ? 0 : 4);
+	} catch (error) {
+		console.error(error.message);
+		process.exit(error instanceof UsageError ? 2 : 1);
+	}
+}
 
 if (command === "service") {
 	try {
@@ -250,7 +297,7 @@ try {
 			console.log(humanJob(job));
 			if (options.events) job.events.forEach((event) => console.log(`  ${event.sequence} ${event.occurredAt} ${event.kind} ${event.safeSummary}`));
 		}
-	} else if (command === "watch") {
+	} else if (command === "watch" || command === "logs") {
 		let cursor = 0;
 		const emit = () => {
 			const events = store.eventsAfter({ jobId: options.jobId, afterOrdinal: cursor });
@@ -261,13 +308,36 @@ try {
 			}
 		};
 		emit();
-		if (!options.once) {
+		if (command === "logs" && !options.follow) {
+			// Historical log mode exits after replay. --follow keeps tailing the same durable ledger.
+		} else if (!options.once) {
 			const timer = setInterval(emit, 500);
 			process.on("SIGINT", () => {
 				clearInterval(timer);
 				store.close();
 				process.exit(0);
 			});
+			await new Promise(() => {});
+		}
+	} else if (command === "monitor") {
+		const render = () => {
+			const status = store.status();
+			const jobs = store.listJobs({ limit: 8 });
+			const selected = jobs[0] ?? null;
+			const events = selected ? store.getJob(selected.jobId)?.events.slice(-12) ?? [] : [];
+			if (process.stdout.isTTY && !options.once) process.stdout.write("\x1b[2J\x1b[H");
+			console.log(`${instance} Gateway  service=${status.service.state}  active=${status.jobs.active}  review=${status.jobs.needsReview}`);
+			console.log("Jobs (active and recent terminal):");
+			if (jobs.length === 0) console.log("  No jobs recorded.");
+			for (const job of jobs) console.log(`  ${humanJob(job)}`);
+			console.log(selected ? `Latest timeline: ${selected.jobId}` : "Latest timeline:");
+			for (const event of events) console.log(`  ${event.occurredAt} ${event.kind} ${event.safeSummary}`);
+			if (!options.once) console.log(`\nControls: ${instance} cancel --job <id> | restart --job <id> | amend --job <id> --content-file <path>\nCtrl-C: close monitor (does not stop the Gateway)`);
+		};
+		render();
+		if (!options.once) {
+			const timer = setInterval(render, 1_000);
+			process.on("SIGINT", () => { clearInterval(timer); store.close(); process.exit(0); });
 			await new Promise(() => {});
 		}
 	} else {
@@ -278,5 +348,5 @@ try {
 	console.error(error.message);
 	process.exitCode = 1;
 } finally {
-	if (command !== "watch" || options.once) store.close();
+	if (!["watch", "logs", "monitor"].includes(command) || options.once || (command === "logs" && !options.follow)) store.close();
 }

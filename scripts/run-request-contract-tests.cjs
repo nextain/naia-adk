@@ -56,6 +56,8 @@ if (process.argv.includes("--self-test-release-status")) {
 const gates = [
 	{ label: "review-transcript-parser", argv: [path.join(root, "scripts", "request-contract-review-transcript.cjs")] },
 	{ label: "requirements-trace-self-test", argv: [path.join(root, "scripts", "validate-request-contract-requirements.cjs")], env: { ...process.env, RCI_SELF_TEST_ONLY: "1" } },
+	{ label: "requirement-evidence-levels", argv: [path.join(root, "scripts", "validate-requirement-evidence-levels.cjs")] },
+	{ label: "requirement-evidence-levels-self-test", argv: [path.join(root, "scripts", "validate-requirement-evidence-levels.cjs"), "--self-test"] },
 ];
 let failed = false;
 for (const gate of gates) {

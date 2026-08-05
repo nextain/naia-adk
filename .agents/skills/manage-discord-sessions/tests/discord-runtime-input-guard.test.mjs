@@ -7,10 +7,24 @@ import { FileCredentialResolver, loadMessengerConfig } from "../helper/discord-c
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
 import { messengerInstancePaths } from "../helper/instance-paths.mjs";
 import { protectOwnerOnly } from "../helper/platform-security.mjs";
-import { createRuntimeInputVerifier } from "../helper/service-runtime.mjs";
+import { createRuntimeInputVerifier, handleJobControlRequest } from "../helper/service-runtime.mjs";
 import { BOT, CHANNEL, GUILD, RUNTIME_REVISION, USER, binding, cleanupDiscordFixtureRoots, fixture } from "./fixtures/discord-fixture.mjs";
 
 afterEach(cleanupDiscordFixtureRoots);
+
+test("FET_DSO_014_003 dispatches only generation-bound cancel restart and amend controls", () => {
+	const calls = [];
+	const router = {
+		cancelJob: (jobId) => { calls.push(["cancel", jobId]); return { state: "accepted", action: "cancel", jobId }; },
+		replaceJob: (jobId, options) => { calls.push([options.action, jobId, options.amendment]); return { state: "accepted", action: options.action, jobId, replacementJobId: "replacement" }; },
+	};
+	const base = { schemaVersion: 1, requestId: "request-1", generation: "generation-1", jobId: "job-1" };
+	assert.equal(handleJobControlRequest(router, { ...base, action: "cancel" }, "generation-1").state, "accepted");
+	assert.equal(handleJobControlRequest(router, { ...base, action: "restart" }, "generation-1").replacementJobId, "replacement");
+	assert.equal(handleJobControlRequest(router, { ...base, action: "amend", amendment: "focused follow-up" }, "generation-1").replacementJobId, "replacement");
+	assert.equal(handleJobControlRequest(router, { ...base, action: "cancel", generation: "stale" }, "generation-1").reasonCode, "invalid_control_request");
+	assert.deepEqual(calls, [["cancel", "job-1"], ["restart", "job-1", undefined], ["amend", "job-1", "focused follow-up"]]);
+});
 
 function v2Config(root) {
 	const participant = { label: "workspace-owner", relationship: "workspace owner", allowedActions: ["read", "reply", "write", "execute"] };
