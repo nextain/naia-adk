@@ -49,4 +49,4 @@ Terra로 되돌아갑니다. 기계 작업은 여기에 `--risk low`까지 필�
 뒤 교체합니다.
 
 정본 계약과 동결 증적은 `.agents/decisions/`와 `.agents/reviews/`에 있으며,
-계약 SHA-256은 `4da7d760821c6e31f6ae58e3ce30270cee49a84e2d126cba6506bc0d5c44cb38`입니다.
+계약 SHA-256은 `fc1801cfc9bf91403a4bf854d271d57ee2a91e9f4afb42ce22da8c532f7b1b43`입니다.

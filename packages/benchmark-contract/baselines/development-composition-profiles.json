@@ -1,8 +1,15 @@
 {
-  "schema_revision": "development-composition-profiles-v1",
-  "status": "opt_in_pilot_no_total_cost_claim",
-  "default_opt_in_profile": "balanced",
+  "schema_revision": "development-composition-profiles-v2",
+  "status": "active_codex_default_no_total_cost_claim",
+  "default_profile": "balanced",
   "fallback_profile": "control",
+  "activation": {
+    "codex_bound_sessions": {
+      "mode": "default_active",
+      "override_env": "CODEX_DEVELOPMENT_PROFILE",
+      "available_bindings_env": "CODEX_AVAILABLE_BINDINGS"
+    }
+  },
   "availability": {
     "default_available_bindings": ["sol", "terra"],
     "override": "explicit availableBindings or CODEX_AVAILABLE_BINDINGS",
@@ -46,7 +53,7 @@
     },
     {
       "id": "balanced",
-      "purpose": "Immediately usable opt-in profile that delegates bounded engineering work while Sol retains decisions and integration",
+      "purpose": "Default profile for bound Codex sessions that delegates bounded engineering work while Sol retains decisions and integration",
       "assignments": {
         "orchestrator": "sol",
         "integrator": "sol",
@@ -105,6 +112,7 @@
   "claim_boundary": {
     "allowed": [
       "balanced_is_available_for_opt_in_use",
+      "balanced_is_default_for_bound_codex_sessions",
       "role_and_model_binding_are_separate",
       "unsafe_or_unqualified_tasks_fall_back",
       "single_solution_default_remains_available",

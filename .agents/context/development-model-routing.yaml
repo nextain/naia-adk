@@ -164,10 +164,16 @@ cost_controls:
   escalation: Sol high is reserved for arbitration or genuinely high-risk work
 
 quick_start_profiles:
-  status: opt_in_pilot_no_total_cost_claim
+  status: active_codex_default_no_total_cost_claim
   source: packages/benchmark-contract/baselines/development-composition-profiles.json
-  default_opt_in: balanced
+  default: balanced
   fallback: control
+  activation:
+    host: codex
+    scope: explicitly_bound_sessions
+    override_env: CODEX_DEVELOPMENT_PROFILE
+    available_bindings_env: CODEX_AVAILABLE_BINDINGS
+    invalid_override: fail_closed
   structure_rule: profiles define stable roles and guards; replaceable model bindings are evaluated separately so a new model does not require redesigning the profiles
   profiles:
     control: all roles use the Sol binding in separate executions; serves as the quality/cost reference and high-risk fallback
@@ -181,7 +187,7 @@ quick_start_profiles:
     - every selected binding must be declared available by the runtime; the default supported set is Sol and Terra, unavailable Luna falls back deterministically to Terra and then Sol, and an empty eligible set fails closed
     - cross-platform environment configuration uses CODEX_AVAILABLE_BINDINGS=none or [] to declare an empty set because Windows does not preserve an empty environment value for child processes
     - independent review requires distinct session and execution identities and prefers a binding different from the producer
-  claim_boundary: phase 1 makes balanced and delegated available for opt-in use but does not claim proven total-system cost reduction
+  claim_boundary: balanced is active by default for bound Codex sessions and delegated remains explicit opt-in, but neither state claims proven total-system cost reduction
   new_model_rule: run only the affected capability experiments, update the binding qualification and evidence expiry, then compare the unchanged profiles
 
 benchmark_candidate_registry:

@@ -15,6 +15,12 @@ function workspace() {
 	fs.mkdirSync(path.join(cwd, ".agents", "progress"), { recursive: true });
 	fs.mkdirSync(path.join(cwd, ".agents", "context"), { recursive: true });
 	fs.writeFileSync(path.join(cwd, ".agents", "context", "agents-rules.json"), "{}\n");
+	const catalogDir = path.join(cwd, "packages", "benchmark-contract", "baselines");
+	fs.mkdirSync(catalogDir, { recursive: true });
+	fs.copyFileSync(
+		path.join(repoRoot, "packages", "benchmark-contract", "baselines", "development-composition-profiles.json"),
+		path.join(catalogDir, "development-composition-profiles.json"),
+	);
 	return cwd;
 }
 
@@ -134,6 +140,59 @@ function assertSilent(result, label) {
 	assert.match(result.text, /HARNESS: SESSION STATE/);
 	assert.match(result.text, /Bound work/);
 	assert.match(result.text, /Contract: inject-contract/);
+	assert.match(result.text, /Active profile: balanced \(source: catalog_default\)/);
+	assert.match(result.text, /Available bindings: sol, terra/);
+	assert.match(result.text, /Fallback: control; deterministic fallback then fail closed/);
+	assert.match(result.text, /total development cost reduction is not proven/);
+
+	const overridden = core.buildSessionInject({
+		cwd,
+		sessionId: "CURRENT",
+		hooksDir: path.join(repoRoot, ".codex", "hooks"),
+		optOutEnvVar: "CODEX_HARNESS",
+		hostConfigDir: ".codex",
+		env: {
+			CODEX_DEVELOPMENT_PROFILE: "control",
+			CODEX_AVAILABLE_BINDINGS: "sol",
+		},
+	});
+	assert.match(overridden.text, /Active profile: control \(source: environment_override\)/);
+	assert.match(overridden.text, /Available bindings: sol/);
+	assert.throws(
+		() => core.buildSessionInject({
+			cwd,
+			sessionId: "CURRENT",
+			hooksDir: path.join(repoRoot, ".codex", "hooks"),
+			optOutEnvVar: "CODEX_HARNESS",
+			hostConfigDir: ".codex",
+			env: { CODEX_DEVELOPMENT_PROFILE: "unknown" },
+		}),
+		/unknown Codex development profile/,
+	);
+	const catalogPath = path.join(cwd, "packages", "benchmark-contract", "baselines", "development-composition-profiles.json");
+	const invalidCatalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+	invalidCatalog.claim_boundary.forbidden_until_phase_2 = [];
+	fs.writeFileSync(catalogPath, JSON.stringify(invalidCatalog));
+	assert.throws(
+		() => core.buildSessionInject({
+			cwd,
+			sessionId: "CURRENT",
+			hooksDir: path.join(repoRoot, ".codex", "hooks"),
+			optOutEnvVar: "CODEX_HARNESS",
+			hostConfigDir: ".codex",
+			env: {},
+		}),
+		/Codex development profile catalog identity invalid/,
+	);
+
+	const claudeResult = core.buildSessionInject({
+		cwd,
+		sessionId: "CURRENT",
+		hooksDir: path.join(repoRoot, ".claude", "hooks"),
+		hostConfigDir: ".claude",
+		env: { CODEX_DEVELOPMENT_PROFILE: "unknown" },
+	});
+	assert.doesNotMatch(claudeResult.text, /CODEX DEVELOPMENT PROFILE/);
 }
 
 {
