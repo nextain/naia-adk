@@ -267,8 +267,12 @@ the service use bounded reason codes in journald and `supervisor-status.json`.
 
 Before changing code, config schema, or units, create and verify an owner-only
 rollback bundle from a separate, clean candidate checkout while the target is
-still on the prior revision. The installed old CLI cannot bootstrap or safely
-control a command it does not yet contain. Resolve one absolute candidate
+still on the prior revision. If the target checkout was advanced first, a
+verified immutable managed installation may recover the prior source identity
+from its bound artifact manifest, provided that exact revision and runtime tree
+remain in the clean target repository. Legacy mutable registrations do not have
+this recovery path. The installed old CLI cannot bootstrap or safely control a
+command it does not yet contain. Resolve one absolute candidate
 `cli.mjs` path and use that same file for every phase:
 
 ```bash

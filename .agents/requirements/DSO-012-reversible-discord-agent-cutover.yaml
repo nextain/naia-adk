@@ -8,7 +8,7 @@ source: derived
 source_provenance: ledger_resolved
 priority: critical
 created: 2026-08-03
-updated: 2026-08-04
+updated: 2026-08-05
 source_directives: [USR-009, USR-011]
 source_evidence: [USR-009, USR-011]
 source_atoms: [USR-009-E05, USR-009-E06, USR-011-E01]
@@ -31,7 +31,7 @@ acceptance_criteria:
   - "service install is a first-install operation unless an existing registration is still bound to the verified rollback source and an active bundle binds the deployed target to the clean candidate controller. An existing service cannot be overwritten or restarted as an upgrade without that verified cutover path."
   - "A successful install establishes the requested service state on every supported path. Linux autoStart=true enables and restarts the managed service while autoStart=false stops and disables it. Because versioned Windows cutover is unsupported, Windows install is first-install only and rejects any existing main-service or supervisor registration before creating launchers; autoStart=true creates and starts a verified Task Scheduler registration, while autoStart=false creates only a disabled Startup fallback and never publishes a runnable main task. Manual Windows stop, restart, disable, and quarantine share one fail-closed task-containment transition that verifies disabled state where requested and requires either a successful Task Scheduler End operation or durable owned-service stop evidence."
   - "The first managed cutover may adopt only the exact supported legacy mutable registration: prepare verifies its owner-only service, supervisor, and timer bytes; canonical Node and backend executables; token credential; registration state; owned live process when active; and idle ledger, then binds those unit digests in the rollback manifest. Install rechecks the same legacy bytes before replacement."
-  - "Prepare runs from a separate clean candidate revision before target upgrade, requires clean candidate and target Discord runtime trees, and binds the prior source revision plus Git runtime-tree ID to the copied runtime digest."
+  - "Prepare runs from a separate clean candidate revision, requires clean candidate and target Discord runtime trees, and binds the prior source revision plus Git runtime-tree ID to the copied runtime digest. When the mutable target checkout advanced before prepare but the registered service still executes a verified immutable managed artifact, prepare derives the prior source only from that artifact's verified manifest and requires its exact revision and runtime-tree object to remain available in the target repository; legacy mutable registrations still require the target HEAD as their source."
   - "The manifest records source revision, prior config schema, observed database schema, rollback runtime maximum database schema, a preserve-database policy, and a receipt proving the preserved config was accepted by the materialized source runtime's actual loader; prepare and restore refuse an incompatible config or database."
   - "cutover verify re-hashes config, runtime, and every unit and fails closed on any mismatch."
   - "An operator invokes prepare, verify, canary, and rollback through the same absolute CLI path in the separate clean candidate checkout. Every phase verifies that controller checkout is still at the manifest candidate revision and Git runtime-tree ID with a clean Discord runtime tree; no phase depends on executable bytes in the mutable target checkout."
@@ -66,6 +66,7 @@ trace:
   code:
     - { path: ".agents/skills/manage-discord-sessions/helper/cutover-bundle.mjs", symbols: ["acquireDiscordArtifactOperationLock", "createCutoverRollbackBundle", "verifyCutoverRollbackBundle", "restoreCutoverRollbackBundle"], coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/artifact-operation-lock-holder.mjs", symbols: ["cleanup"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-cutover-controller.mjs", symbols: ["resolveManagedCutoverSource"], coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/service-manager.mjs", symbols: ["prepareManagedDiscordCutover", "restoreManagedDiscordCutover"], coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/service.mjs", symbols: ["verifyManagedBootstrap", "classifyDiscordServiceFailure", "writeDiscordServiceFailure"], coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/supervisor-entry.mjs", symbols: ["verifyManagedServiceRuntimeEnvironment"], coverage: full }

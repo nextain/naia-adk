@@ -33,6 +33,16 @@ export function resolveCutoverBackendExecutables(name, resolver = resolveBackend
 	catch { return Object.freeze({}); }
 }
 
+export function resolveManagedCutoverSource(installed, inspectSourceRuntimeTree) {
+	const manifest = installed?.artifact?.manifest;
+	if (!/^[a-f0-9]{40}$/.test(manifest?.sourceRevision ?? "")
+		|| !/^[a-f0-9]{40}$/.test(manifest?.sourceRuntimeTreeId ?? "")
+		|| typeof inspectSourceRuntimeTree !== "function") throw new Error("installed Discord managed source identity is invalid");
+	const sourceRuntimeTreeId = inspectSourceRuntimeTree(manifest.sourceRevision);
+	if (sourceRuntimeTreeId !== manifest.sourceRuntimeTreeId) throw new Error("installed Discord managed source tree is unavailable from the target repository");
+	return Object.freeze({ sourceRevision: manifest.sourceRevision, sourceRuntimeTreeId });
+}
+
 export function prepareManagedDiscordCutover({ adkRoot, instance = "default" }) {
 	if (process.platform === "win32") throw new Error("versioned Discord rollback bundles are not yet supported on Windows");
 	const artifactOperation = acquireDiscordArtifactOperationLock({ adkRoot, instance });
@@ -41,7 +51,8 @@ export function prepareManagedDiscordCutover({ adkRoot, instance = "default" }) 
 		const candidateRoot = candidateControllerRoot();
 		const bootstrap = validateCutoverBootstrap({ candidateRoot, targetRoot: paths.root, candidateRevision: gitHeadRevision(candidateRoot), targetRevision: gitHeadRevision(paths.root) });
 		const candidateRuntimeTreeId = inspectCutoverRuntimeTree(candidateRoot, bootstrap.candidateRevision);
-		const sourceRuntimeTreeId = inspectCutoverRuntimeTree(paths.root, bootstrap.targetRevision);
+		let sourceRevision = bootstrap.targetRevision;
+		let sourceRuntimeTreeId = inspectCutoverRuntimeTree(paths.root, bootstrap.targetRevision);
 		const sourceSnapshot = readCutoverSourceSnapshot(paths.configPath);
 		const config = sourceSnapshot.config;
 		const backendExecutables = resolveCutoverBackendExecutables(config.backend.selected);
@@ -52,9 +63,14 @@ export function prepareManagedDiscordCutover({ adkRoot, instance = "default" }) 
 		};
 		let installed;
 		try {
-			installed = verifyLinuxManagedRegistration({ adkRoot, instance, expectedRevision: bootstrap.targetRevision, expectedRuntimeTreeId: sourceRuntimeTreeId, stateReader: status });
-		} catch {
-			installed = verifyLinuxLegacyRegistration({ adkRoot, instance, backend: config.backend.selected, stateReader: status });
+			installed = verifyLinuxManagedRegistration({ adkRoot, instance, stateReader: status });
+			({ sourceRevision, sourceRuntimeTreeId } = resolveManagedCutoverSource(installed, (revision) => inspectCutoverRuntimeTree(paths.root, revision)));
+		} catch (managedError) {
+			try {
+				installed = verifyLinuxLegacyRegistration({ adkRoot, instance, backend: config.backend.selected, stateReader: status });
+			} catch (legacyError) {
+				throw new Error(`Discord registration verification failed: managed: ${managedError.message}; legacy: ${legacyError.message}`);
+			}
 		}
 		const registrationState = normalizeCutoverRegistrationState({
 			serviceEnabled: status("is-enabled", installed.names.service),
@@ -69,7 +85,7 @@ export function prepareManagedDiscordCutover({ adkRoot, instance = "default" }) 
 			finally { store.close(); }
 		}
 		verifyCutoverSourceIdentity({
-			sourceRevision: bootstrap.targetRevision,
+			sourceRevision,
 			sourceRegistrationKind: installed.sourceRegistration?.kind ?? "managed_artifact",
 			registrationState,
 			serviceOwner,
@@ -92,7 +108,7 @@ export function prepareManagedDiscordCutover({ adkRoot, instance = "default" }) 
 				expectedConfigText: sourceSnapshot.text,
 				expectedTokenFingerprint: tokenFingerprint,
 			}),
-			sourceRevision: bootstrap.targetRevision,
+			sourceRevision,
 			sourceRuntimeTreeId,
 			candidateRevision: bootstrap.candidateRevision,
 			candidateRuntimeTreeId,
@@ -113,7 +129,7 @@ export function verifyCutoverSourceIdentity({ sourceRevision, sourceRegistration
 		[supervisorTimerUnit, expectedSupervisorTimerUnit, "supervisor timer"],
 	]) {
 		if (typeof expected !== "string") throw new Error(`expected Discord ${label} unit is invalid`);
-		if (actual !== null && actual !== expected) throw new Error(`installed Discord ${label} runtime does not match target HEAD`);
+		if (actual !== null && actual !== expected) throw new Error(`installed Discord ${label} runtime does not match the verified source registration`);
 	}
 	if ((registrationState.service.enabled || registrationState.service.active) && serviceUnit === null) throw new Error("registered Discord service unit is unavailable");
 	if ((registrationState.supervisorTimer.enabled || registrationState.supervisorTimer.active) && (supervisorServiceUnit === null || supervisorTimerUnit === null)) throw new Error("registered Discord supervisor units are unavailable");
