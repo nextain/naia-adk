@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { discordUnitIdentity, renderDiscordUserUnit } from "../helper/systemd.mjs";
-import { classifyWindowsStopObservation, cutoverRegistrationRestoreCommands, inspectCutoverRuntimeTree, installOperatorLauncher, installServiceCommands, normalizeCutoverRegistrationState, quoteWindowsTaskAction, readCutoverSourceConfig, readCutoverSourceSnapshot, renderOperatorLauncher, renderWindowsStartupLauncher, resolveBackendExecutable, resolveCutoverBackendExecutables, resolveWindowsBackendCommand, restartWindowsTask, sampleWindowsStopObservation, verifyCutoverSourceIdentity, verifyCutoverSourceSnapshot, verifyWindowsTaskAction } from "../helper/service-manager.mjs";
+import { classifyWindowsStopObservation, cutoverRegistrationRestoreCommands, inspectCutoverRuntimeTree, installOperatorLauncher, installServiceCommands, normalizeCutoverRegistrationState, quoteWindowsTaskAction, readCutoverSourceConfig, readCutoverSourceSnapshot, renderOperatorLauncher, renderWindowsStartupLauncher, resolveBackendExecutable, resolveCutoverBackendExecutables, resolveManagedCutoverSource, resolveWindowsBackendCommand, restartWindowsTask, sampleWindowsStopObservation, verifyCutoverSourceIdentity, verifyCutoverSourceSnapshot, verifyWindowsTaskAction } from "../helper/service-manager.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "../helper/instance-paths.mjs";
 import { classifyDiscordServiceFailure, writeDiscordServiceFailure } from "../helper/service.mjs";
 import { observeOnce } from "../helper/supervisor.mjs";
@@ -127,7 +127,19 @@ test("DSG-021 rejects config or credential drift before publishing a rollback sn
 	assert.throws(() => verifyCutoverSourceSnapshot(expectation), /credential changed during prepare/);
 });
 
-test("DSG-021 refuses a source snapshot when installed or running runtime identity diverges from target HEAD", () => {
+test("DSG-021 binds rollback to the verified installed managed source after checkout advancement", () => {
+	const sourceRevision = "a".repeat(40);
+	const sourceRuntimeTreeId = "b".repeat(40);
+	const installed = { artifact: { manifest: { sourceRevision, sourceRuntimeTreeId } } };
+	assert.deepEqual(resolveManagedCutoverSource(installed, (revision) => {
+		assert.equal(revision, sourceRevision);
+		return sourceRuntimeTreeId;
+	}), { sourceRevision, sourceRuntimeTreeId });
+	assert.throws(() => resolveManagedCutoverSource(installed, () => "c".repeat(40)), /source tree is unavailable/);
+	assert.throws(() => resolveManagedCutoverSource({ artifact: { manifest: {} } }, () => sourceRuntimeTreeId), /source identity is invalid/);
+});
+
+test("DSG-021 refuses a source snapshot when installed or running runtime identity diverges from its verified source", () => {
 	const sourceRevision = "a".repeat(40);
 	const registrationState = { service: { enabled: true, active: true }, supervisorTimer: { enabled: true, active: false } };
 	const input = {
@@ -143,7 +155,7 @@ test("DSG-021 refuses a source snapshot when installed or running runtime identi
 	};
 	assert.throws(() => verifyCutoverSourceIdentity({ ...input, serviceOwner: { ...input.serviceOwner, generation: `${"b".repeat(40)}.12345678` } }), /running Discord service runtime/);
 	assert.throws(() => verifyCutoverSourceIdentity(input), /running Discord service runtime/);
-	assert.throws(() => verifyCutoverSourceIdentity({ ...input, registrationState: { ...registrationState, service: { enabled: true, active: false } }, serviceUnit: "old-rollback-unit" }), /does not match target HEAD/);
+	assert.throws(() => verifyCutoverSourceIdentity({ ...input, registrationState: { ...registrationState, service: { enabled: true, active: false } }, serviceUnit: "old-rollback-unit" }), /does not match the verified source registration/);
 	assert.throws(() => verifyCutoverSourceIdentity({ ...input, registrationState: { ...registrationState, service: { enabled: true, active: false } }, serviceUnit: null }), /unit is unavailable/);
 });
 

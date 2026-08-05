@@ -31,6 +31,7 @@ export {
 	readCutoverSourceConfig,
 	readCutoverSourceSnapshot,
 	resolveCutoverBackendExecutables,
+	resolveManagedCutoverSource,
 	restoreManagedDiscordCutover,
 	verifyCutoverSourceIdentity,
 	verifyCutoverSourceSnapshot,
