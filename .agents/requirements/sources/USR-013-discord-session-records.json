@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "id": "USR-013",
+  "source_kind": "human",
+  "origin": "native_user_message",
+  "actor": "user",
+  "platform": "openai-chat",
+  "locator": "conversation://private/discord-session-records",
+  "locator_access": "restricted",
+  "capture_kind": "public_safe_verbatim_excerpt",
+  "coverage": "selected_session_record_and_validation_directives_not_complete_history",
+  "ordering": "relative_chronological_order_of_selected_messages",
+  "digest_algorithm": "sha256-canonical-event-v1",
+  "capture_note": "개인정보와 비공개 대화 식별자는 제외하고, 최소 세션 기록 범위와 UC/FE 통합 검증을 요구한 사용자 원문만 발췌했다.",
+  "events": [
+    {
+      "sequence": 1,
+      "event_id": "USR-013-E01",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-session-records#selected-user-message-01",
+      "exact_text": "이 이슈 올리고 스펙부터 정해줘. 있으면 좋은건 만들지 말고, 반드시 쓸것 같은것만",
+      "obligations": [
+        "minimum-required-scope",
+        "issue-backed-specification"
+      ],
+      "text_sha256": "sha256:6bbf30a088b1f30a731b138a9883e407cb21cb041f6a0a8c16bf7c85e95d33d4",
+      "event_sha256": "sha256:29415bd1cdab6942577f10277789c114f785864dd0fa4d70a1f471ba8f9b135c"
+    },
+    {
+      "sequence": 2,
+      "event_id": "USR-013-E02",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-session-records#selected-user-message-02",
+      "exact_text": "uc,fe 테스트도 다 한거야 ?",
+      "obligations": [
+        "use-case-feature-test-coverage"
+      ],
+      "text_sha256": "sha256:a7ccc7010e23caeda99ed7af2d6f41f227fc11df007876239491794eef4d8b28",
+      "event_sha256": "sha256:c3f7edd370ac0cab6fe237f1f7de405717ea0d12d7fab300cce2e28d0ca8ef6c"
+    },
+    {
+      "sequence": 3,
+      "event_id": "USR-013-E03",
+      "source_kind": "human",
+      "origin": "native_user_message",
+      "locator": "conversation://private/discord-session-records#selected-user-message-03",
+      "exact_text": "흠.. uc, fe 통합테스트까지 다하고 해.",
+      "obligations": [
+        "use-case-feature-integration-test"
+      ],
+      "text_sha256": "sha256:79d51a0e122126bef27f92fbcb26261de43277155f253fa83c93d42f7e90fa56",
+      "event_sha256": "sha256:463c62fbb3acc95c609e59a3acd833ccab50138459a31802fb64e786d3e30435"
+    }
+  ]
+}

@@ -109,3 +109,55 @@ test("DSO requirement trace structure, symbols, and evidence locators resolve", 
 		}
 	}
 });
+
+test("FET_DSO_013_002 validates the complete UC and FE trace without orphan nodes", () => {
+	const requirementFile = "DSO-013-meaningful-session-ledger.yaml";
+	const requirement = readFileSync(join(requirementsRoot, requirementFile), "utf8");
+	const section = (key) => {
+		const match = requirement.match(new RegExp(`^${key}:\\n([\\s\\S]*?)(?=^[A-Za-z_][A-Za-z0-9_]*:|\\Z)`, "m"));
+		assert.ok(match, `${requirementFile}: missing ${key}`);
+		return match[1];
+	};
+	const ids = (key) => new Set([...section(key).matchAll(/\{ id: ([A-Z0-9_]+),/g)].map((match) => match[1]));
+	const nodes = {
+		directive: new Set(["USR-013"]),
+		requirement: new Set(["DSO-013"]),
+		use_case: ids("use_cases"),
+		use_case_test: ids("use_case_tests"),
+		feature: ids("features"),
+		feature_test: ids("feature_tests"),
+		implementation: ids("implementations"),
+		evidence: ids("evidence"),
+	};
+	for (const [kind, values] of Object.entries(nodes)) assert.ok(values.size > 0, `${requirementFile}: ${kind} nodes are empty`);
+	const kindPairs = new Map([
+		["directives_to_requirements", ["directive", "requirement"]],
+		["requirements_to_use_cases", ["requirement", "use_case"]],
+		["use_cases_to_use_case_tests", ["use_case", "use_case_test"]],
+		["use_case_tests_to_features", ["use_case_test", "feature"]],
+		["features_to_feature_tests", ["feature", "feature_test"]],
+		["feature_tests_to_implementations", ["feature_test", "implementation"]],
+		["implementations_to_evidence", ["implementation", "evidence"]],
+	]);
+	const incoming = new Set();
+	const outgoing = new Set();
+	const edges = [...section("trace_edges").matchAll(/\{ kind: ([a-z_]+), from: ([A-Z0-9_-]+), to: ([A-Z0-9_-]+) \}/g)];
+	assert.ok(edges.length >= kindPairs.size, `${requirementFile}: trace edges are incomplete`);
+	for (const [, kind, from, to] of edges) {
+		const pair = kindPairs.get(kind);
+		assert.ok(pair, `${requirementFile}: unsupported trace edge ${kind}`);
+		assert.ok(nodes[pair[0]].has(from), `${requirementFile}: unknown ${kind} source ${from}`);
+		assert.ok(nodes[pair[1]].has(to), `${requirementFile}: unknown ${kind} target ${to}`);
+		outgoing.add(from);
+		incoming.add(to);
+	}
+	for (const [kind, values] of Object.entries(nodes)) {
+		for (const id of values) {
+			if (kind !== "directive") assert.ok(incoming.has(id), `${requirementFile}: orphan incoming node ${id}`);
+			if (kind !== "evidence") assert.ok(outgoing.has(id), `${requirementFile}: orphan outgoing node ${id}`);
+		}
+	}
+	const integration = readFileSync(join(root, ".agents/skills/manage-discord-sessions/tests/meaningful-session-ledger.integration.test.mjs"), "utf8");
+	for (const testId of nodes.use_case_test) assert.ok(integration.includes(`test("${testId} `), `${requirementFile}: missing use-case test ${testId}`);
+	for (const testId of ["FET_DSO_013_001"]) assert.ok(integration.includes(`test("${testId} `), `${requirementFile}: missing feature test ${testId}`);
+});

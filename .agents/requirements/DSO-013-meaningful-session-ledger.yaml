@@ -1,0 +1,74 @@
+id: DSO-013
+title: "Meaningful Local Discord Session Ledger"
+title_ko: "의미 있는 로컬 Discord 세션 기록"
+product: naia-adk-discord-sessions
+module: observability-ledger
+status: active
+source: human
+source_provenance: ledger_resolved
+priority: high
+created: 2026-08-05
+updated: 2026-08-05
+issue_url: "https://github.com/nextain/naia-adk/issues/28"
+source_directives: [USR-013]
+source_evidence: [USR-013]
+source_atoms: [USR-013-E01, USR-013-E02, USR-013-E03]
+source_kind: human
+derived_from: []
+derivation_kind: null
+change_effect: modify
+preserves: [sqlite-ledger, existing-operator-cli, discord-projection-boundary, backend-result-delivery]
+must_not_change: [no-new-export, no-new-monitor-ui, no-new-control-api, no-raw-prompt-or-tool-persistence]
+destructive_approval: null
+description: |
+  The existing SQLite job ledger records the minimum semantic context needed to
+  understand a Discord worker session later: the bounded current request, public
+  progress, an explicitly recognized native tool category, and the sanitized final
+  result. Existing job and watch commands remain the only operator read surface.
+acceptance_criteria:
+  - "A completed job can be reopened from the same SQLite ledger and its request, public progress, recognized tool category, and final result remain chronologically distinguishable."
+  - "The existing job and watch commands expose those persisted events without a new export, monitor, TUI, database, or schema version."
+  - "Assembled prompts, hidden reasoning, raw provider output, secrets, local paths, tool arguments, tool results, and unknown inferred categories are not persisted."
+  - "Semantic request, progress, and result text remains local-only and never becomes Discord status projection text."
+non_goals:
+  - "Add export, a monitor UI, a TUI, or a second event database."
+  - "Add stop, start, prompt injection, or another control API."
+  - "Add memory, KB compiler, profile, three-layer orchestration, or shell integration."
+use_cases:
+  - { id: UC_DSO_013_001, statement: "An operator reopens a completed Discord worker job after the ledger is closed and sees the meaningful chronology through the existing CLI." }
+use_case_tests:
+  - { id: UCT_DSO_013_001, use_case: UC_DSO_013_001, test: "UCT_DSO_013_001 reopens a completed session and reads meaningful chronology through existing CLI" }
+features:
+  - { id: FE_DSO_013_001, statement: "Persist bounded request, public progress, recognized native tool category, and sanitized final result as distinct local-safe events." }
+  - { id: FE_DSO_013_002, statement: "Keep semantic event text out of Discord projection and omit raw or inferred provider details." }
+feature_tests:
+  - { id: FET_DSO_013_001, feature: FE_DSO_013_001, test: "FET_DSO_013_001 preserves semantic events while excluding provider-private data" }
+  - { id: FET_DSO_013_002, feature: FE_DSO_013_002, test: "FET_DSO_013_002 validates the complete UC and FE trace without orphan nodes" }
+trace_edges:
+  - { kind: directives_to_requirements, from: USR-013, to: DSO-013 }
+  - { kind: requirements_to_use_cases, from: DSO-013, to: UC_DSO_013_001 }
+  - { kind: use_cases_to_use_case_tests, from: UC_DSO_013_001, to: UCT_DSO_013_001 }
+  - { kind: use_case_tests_to_features, from: UCT_DSO_013_001, to: FE_DSO_013_001 }
+  - { kind: use_case_tests_to_features, from: UCT_DSO_013_001, to: FE_DSO_013_002 }
+  - { kind: features_to_feature_tests, from: FE_DSO_013_001, to: FET_DSO_013_001 }
+  - { kind: features_to_feature_tests, from: FE_DSO_013_002, to: FET_DSO_013_002 }
+  - { kind: feature_tests_to_implementations, from: FET_DSO_013_001, to: IMP_DSO_013_001 }
+  - { kind: feature_tests_to_implementations, from: FET_DSO_013_002, to: IMP_DSO_013_001 }
+  - { kind: implementations_to_evidence, from: IMP_DSO_013_001, to: EVD_DSO_013_001 }
+implementations:
+  - { id: IMP_DSO_013_001, path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", statement: "Existing SQLite event writers, backend adapters and runner, sanitizer, and existing CLI." }
+evidence:
+  - { id: EVD_DSO_013_001, path: ".agents/skills/manage-discord-sessions/tests/meaningful-session-ledger.integration.test.mjs", statement: "Restart-persistent CLI and privacy integration tests." }
+trace:
+  code:
+    - { path: ".agents/skills/manage-discord-sessions/helper/store-conversation-writer.mjs", symbols: ["acceptIngressAndCreateJob"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbols: ["runBackendAttempt", "recordProgress"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/adapters.mjs", symbols: ["CODEX_TOOL_CATEGORIES", "CLAUDE_TOOL_CATEGORIES"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbols: ["job", "watch"], coverage: full }
+  tests:
+    - { path: ".agents/skills/manage-discord-sessions/tests/meaningful-session-ledger.integration.test.mjs", symbol: "UCT_DSO_013_001 reopens a completed session and reads meaningful chronology through existing CLI", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/meaningful-session-ledger.integration.test.mjs", symbol: "FET_DSO_013_001 preserves semantic events while excluding provider-private data", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/requirements-trace.test.mjs", symbol: "FET_DSO_013_002 validates the complete UC and FE trace without orphan nodes", coverage: full }
+  reviews: { planning: null, development: null, test: null, integration: null }
+decisions:
+  - "Reuse the existing append-only SQLite ledger and operator CLI; no export surface is required."

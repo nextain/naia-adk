@@ -17,6 +17,7 @@ const codex = process.argv.includes("exec");
 	const approvalTextInResult = prompt.startsWith("__fake_approval_text_in_result__");
 	const oversizedToolThenSuccess = prompt.startsWith("__fake_oversized_tool_then_success__");
 	const progressThenSuccess = prompt.startsWith("__fake_progress__");
+	const meaningfulSession = prompt.startsWith("__fake_meaningful_session__");
 	const anyApprovalUi = approvalUi || stderrApprovalUi;
 	if (codex) {
 	console.log(JSON.stringify({ type: "thread.started", thread_id: "thread-secret-not-persisted" }));
@@ -26,7 +27,11 @@ const codex = process.argv.includes("exec");
 			console.log(JSON.stringify({ type: "item.started", item: { type: "command_execution" } }));
 			console.log(JSON.stringify({ type: "item.completed", item: { type: "command_execution", aggregated_output: "x".repeat(300 * 1024) } }));
 		}
-		if (progressThenSuccess) console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "checking token=supersecretvalue /var/home/luke/private" } }));
+		if (meaningfulSession) {
+			console.log(JSON.stringify({ type: "item.started", item: { type: "command_execution", command: "private-tool-command" } }));
+			console.log(JSON.stringify({ type: "item.completed", item: { type: "command_execution", aggregated_output: "private-tool-output" } }));
+		}
+		if (progressThenSuccess || meaningfulSession) console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "checking token=supersecretvalue /var/home/luke/private" } }));
 		console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: approvalTextInResult ? "The approval request text is diagnostic output, not an interactive prompt." : "fake-model-content" } }));
 		console.log(JSON.stringify(structuredFailure || anyApprovalUi ? { type: "turn.failed" } : { type: "turn.completed", usage: { input_tokens: 1 } }));
 	if (failureThenSuccess) console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1 } }));
