@@ -90,7 +90,7 @@ implementations:
 evidence:
   - { id: EVD_DSO_014_FIXTURE, level: fixture_integration, path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", state: present }
   - { id: EVD_DSO_014_DIAGNOSTIC, level: fixture_integration, path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", state: present }
-  - { id: EVD_DSO_014_INSTALLED, level: installed_runtime, path: null, state: pending }
+  - { id: EVD_DSO_014_INSTALLED, level: installed_runtime, path: ".agents/progress/receipts/discord-alpha-installed-runtime-2026-08-06.json", state: present }
 trace:
   code:
     - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbols: ["logs", "monitor", "cancel", "restart", "amend"], coverage: full }
