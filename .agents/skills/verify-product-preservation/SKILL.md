@@ -145,6 +145,9 @@ release, issue close, 완료 표현은 실패입니다. 내장 release-command r
 
 When the changed paths include `.agents/skills/manage-discord-sessions/**`,
 `naia-settings/messenger-sessions/config.example.json`, or
+`scripts/run-discord-session-tests.cjs`, or
+`scripts/validate-requirement-evidence-levels.cjs`, or
+the `test:discord-sessions` package script, or
 `docs/design/discord-session-observability.md`, or
 `docs/design/discord-unattended-supervision-plan.md`, run:
 
@@ -160,6 +163,15 @@ PASS:
 - The deterministic suite proves stale permission-profile replacement,
   no-prompt approval rejection, no-progress intervention, operator-channel
   response handoff, and explicit child workspace binding.
+- The test runner prints the canonical absolute repository root, exact Git
+  revision, Node executable, and temporary-filesystem inode availability before
+  running; it fails before the suite when isolated fixtures cannot be created.
+- `logs --follow` replays and tails the durable SQLite ledger, `monitor` keeps
+  active and recent terminal work visible per named instance, and generation-bound
+  owner-only control receipts distinguish direct cancellation from
+  `cancel_and_queue_replacement` restart/amend semantics.
+- Fixture evidence cannot satisfy an installed-runtime claim. A pending live
+  receipt has a null path until an installed canary actually creates it.
 - Config, helper, requirements, design, and the user skill name the same
   execution-profile and watchdog contract.
 - The external supervisor is a separate OS-scheduled one-shot, never an
@@ -251,6 +263,9 @@ Delivery: RELEASE_ELIGIBLE | REVIEW_ONLY
 | `.agents/skills/verify-implementation/SKILL.md` | 통합 검증 등록 |
 | `.agents/skills/manage-skills/SKILL.md` | 역할 기반 검증 커버리지 등록 |
 | `.agents/skills/manage-discord-sessions/` | Discord execution profile, watchdog, and deterministic regressions |
+| `scripts/run-discord-session-tests.cjs` | Canonical path/revision/runtime and temporary inode preflight for the full Discord suite |
+| `scripts/validate-requirement-evidence-levels.cjs` | Source-obligation and fixture-versus-installed-runtime evidence gate |
+| `package.json` | Canonical Discord test runner entrypoint |
 | `naia-settings/messenger-sessions/config.example.json` | Operator-visible execution and watchdog defaults |
 | `docs/design/discord-session-observability.md` | Discord session design contract |
 | `docs/design/discord-unattended-supervision-plan.md` | Unattended supervision, no-prompt, and complexity contract |

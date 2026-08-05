@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 
 const INSTANCE_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
-const RESERVED_INSTANCES = new Set(["status", "health-check", "jobs", "job", "watch", "history", "latest", "attachment", "reply", "service", "cutover"]);
+const RESERVED_INSTANCES = new Set(["status", "health-check", "jobs", "job", "watch", "logs", "monitor", "cancel", "restart", "amend", "history", "latest", "attachment", "reply", "service", "cutover"]);
 
 export function normalizeMessengerInstance(value = "default") {
 	const instance = String(value || "default");
@@ -24,6 +24,8 @@ export function messengerInstancePaths(adkRoot, value = "default") {
 		runtimeRoot: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/runtime`),
 		lockPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/service.lock`),
 		stopRequestPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/stop-request.json`),
+		jobControlRequestPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/job-control-request.json`),
+		jobControlReceiptPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/job-control-receipt.json`),
 		supervisorStatusPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/supervisor-status.json`),
 		serviceFailurePath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/service-failure.json`),
 		activeRollbackPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/active-rollback.json`),

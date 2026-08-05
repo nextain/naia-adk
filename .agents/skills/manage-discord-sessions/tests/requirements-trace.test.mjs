@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import test from "node:test";
@@ -7,6 +8,18 @@ const root = resolve(import.meta.dirname, "..", "..", "..", "..");
 const requirementsRoot = join(root, ".agents", "requirements");
 const codeTraceEntry = /^    - \{ path: "([^"]+)", symbols: (\[[^\]]+\]), coverage: (full|partial|legacy_compatibility) \}$/;
 const testTraceEntry = /^    - \{ path: "([^"]+)", symbol: "([^"]+)", coverage: (full|partial|legacy_compatibility) \}$/;
+
+test("FET_DSO_014_004 rejects omitted source obligations and fixture-only installed-runtime claims", () => {
+	const result = spawnSync(process.execPath, [join(root, "scripts/validate-requirement-evidence-levels.cjs")], { cwd: root, encoding: "utf8" });
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stdout, /requirement evidence levels: PASS/);
+	const faults = spawnSync(process.execPath, [join(root, "scripts/validate-requirement-evidence-levels.cjs"), "--self-test"], { cwd: root, encoding: "utf8" });
+	assert.equal(faults.status, 0, faults.stderr);
+	assert.match(faults.stdout, /self-test: PASS/);
+	const preflight = spawnSync(process.execPath, [join(root, "scripts/run-discord-session-tests.cjs")], { cwd: root, encoding: "utf8", env: { ...process.env, DISCORD_TEST_MIN_FREE_INODES: "999999999" } });
+	assert.equal(preflight.status, 1);
+	assert.match(preflight.stderr, /discord-test-preflight: FAIL tmp_free_inodes=/);
+});
 
 function regularRepositoryFile(requirementFile, relative) {
 	assert.ok(!relative.startsWith("/") && !relative.includes("\\"), `${requirementFile}: unsafe repository path ${relative}`);

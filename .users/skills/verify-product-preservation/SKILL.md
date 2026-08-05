@@ -143,7 +143,9 @@ release, issue close, 완료 표현은 실패입니다. 내장 release-command r
 
 ### 7. Discord 무인 감시 회귀
 
-Discord 세션 스킬이나 설정·설계가 바뀌면 `pnpm test:discord-sessions`를 실행합니다. 외부 supervisor가 AI 턴 및 Discord 서비스와 분리된 OS 예약 one-shot인지, SQLite를 쓰지 않는지, coordinator 활성화와 과거 coordinator 복구가 닫히는지, stale Gateway 및 불명확한 child 근거를 healthy로 부르지 않는지 검증합니다. `approvalPolicy=never`가 명시되고 `requiresApproval` 작업이 실제 허용 작업에서 빠지는지, 진입점과 workflow가 사용자 재승인 대신 내부 체크포인트를 사용하는지도 결정론적으로 검사합니다.
+Discord 세션 스킬이나 설정·설계, `scripts/run-discord-session-tests.cjs`, `scripts/validate-requirement-evidence-levels.cjs`, 또는 `test:discord-sessions` 패키지 진입점이 바뀌면 `pnpm test:discord-sessions`를 실행합니다. 외부 supervisor가 AI 턴 및 Discord 서비스와 분리된 OS 예약 one-shot인지, SQLite를 쓰지 않는지, coordinator 활성화와 과거 coordinator 복구가 닫히는지, stale Gateway 및 불명확한 child 근거를 healthy로 부르지 않는지 검증합니다. `approvalPolicy=never`가 명시되고 `requiresApproval` 작업이 실제 허용 작업에서 빠지는지, 진입점과 workflow가 사용자 재승인 대신 내부 체크포인트를 사용하는지도 결정론적으로 검사합니다.
+
+테스트 실행기는 정본 절대 경로·Git SHA·Node 실행 파일·임시 파일시스템 inode 여유를 먼저 출력하고, 격리 fixture를 만들 수 없으면 본 테스트 전에 실패해야 합니다. `logs --follow`는 영구 SQLite 기록을 재생·추적하고 `monitor`는 이름별 인스턴스의 활성 및 최근 종료 작업을 계속 보여야 합니다. owner-only 제어 영수증은 직접 취소와 `cancel_and_queue_replacement` 재시작/프롬프트 추가 의미를 구분해야 합니다. fixture 증거는 설치 런타임 증명을 대신할 수 없고 실제 카나리 전 pending 영수증 경로는 null이어야 합니다.
 
 Linux 관리 서비스는 unit별 `RuntimeDirectory` 밖의 kernel `flock`으로 bot-token 소유권을 결박해야 합니다. watchdog와 supervisor의 반복 경로는 오래 기다린 비종료 작업 최대 256개만 투영하고 전체 활성 수는 집계하며, 초과분은 `operational_jobs_truncated` 장애로 표시해야 합니다. 관리형 systemd 서비스와 supervisor는 설정 읽기·토큰 소유·관찰 전에 명시적 실행 모드와 완전한 불변 artifact marker를 요구하며, marker 누락을 직접 실행으로 바꾸면 FAIL입니다.
 
@@ -193,3 +195,7 @@ Delivery: RELEASE_ELIGIBLE | REVIEW_ONLY
 | `.agents/requirements/_template.yaml` | source authority와 preservation trace 기본값 |
 | `.agents/skills/verify-implementation/SKILL.md` | 통합 검증 등록 |
 | `.agents/skills/manage-skills/SKILL.md` | 역할 기반 검증 커버리지 등록 |
+| `.agents/skills/manage-discord-sessions/` | Discord 실행 프로필, 모니터·제어, watchdog 결정론 회귀 |
+| `scripts/run-discord-session-tests.cjs` | 전체 Discord 스위트의 정본 경로·리비전·런타임·inode 사전 검사 |
+| `scripts/validate-requirement-evidence-levels.cjs` | source obligation과 fixture/설치 런타임 증거 수준 게이트 |
+| `package.json` | 정본 Discord 테스트 실행 진입점 |

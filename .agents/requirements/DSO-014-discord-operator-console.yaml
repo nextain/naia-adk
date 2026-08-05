@@ -1,0 +1,96 @@
+id: DSO-014
+title: "Durable Discord Operator Console and Installed Runtime Proof"
+title_ko: "영구 Discord 운영 콘솔과 설치 런타임 증명"
+product: naia-adk-discord-sessions
+module: operator-interface
+status: active
+source: human
+source_provenance: ledger_resolved
+priority: high
+created: 2026-08-05
+updated: 2026-08-05
+issue_url: "https://github.com/nextain/naia-adk/issues/29"
+source_directives: [USR-014]
+source_evidence: [USR-014]
+source_atoms: [USR-014-E01, USR-014-E02, USR-014-E03, USR-014-E04, USR-014-E05, USR-014-E06, USR-014-E07, USR-014-E08]
+source_obligations: [operator-console, live-work-visibility, cancel-restart-prompt-amendment, per-agent-terminal, durable-log-first, operator-console-after-log, use-case-feature-integration-test, installed-runtime-verification, root-cause-and-harness-improvement, recurrence-prevention]
+deferred_obligations: []
+source_kind: human
+derived_from: []
+derivation_kind: null
+change_effect: extend
+preserves: [sqlite-ledger, gateway-ownership, privacy-boundary, recovery-and-delivery]
+must_not_change: [hidden-chain-of-thought-exclusion, secret-exclusion, unattended-no-prompt-policy]
+destructive_approval: null
+description: |
+  Each named Gateway has an operator terminal that combines current state with a
+  durable live timeline. It supports bounded operator cancellation, restart, and
+  prompt amendment. Fixture evidence and installed-runtime evidence remain distinct.
+acceptance_criteria:
+  - "The operator can run monitor and logs --follow for any named instance; terminal jobs remain visible and reopenable."
+  - "Pre-attempt failures persist an exact safe stage instead of collapsing into internal_error."
+  - "Cancellation, restart, and prompt amendment have durable requests and receipts with explicit backend semantics."
+  - "A real installed alpha runtime accepts a bound DM, starts Codex, records progress, and reaches a diagnosed terminal state."
+  - "Fixture-only evidence cannot satisfy the installed-runtime acceptance criterion."
+non_goals:
+  - "Persist hidden chain-of-thought, secrets, unrestricted raw prompts, environment values, or unrestricted tool output."
+  - "Integrate naia-agent, memory, KB compiler, or the three-layer assistant in this issue."
+use_cases:
+  - { id: UC_DSO_014_001, statement: "An operator watches one named agent continuously and can reopen a failed or completed timeline." }
+  - { id: UC_DSO_014_002, statement: "An operator cancels, restarts, or amends selected work and receives a durable control receipt." }
+  - { id: UC_DSO_014_003, statement: "An installed alpha DM starts the configured backend or leaves an exact safe pre-attempt failure stage." }
+use_case_tests:
+  - { id: UCT_DSO_014_001, use_case: UC_DSO_014_001, test: "UCT_DSO_014_001 replays durable logs and keeps recent work visible in the named monitor" }
+  - { id: UCT_DSO_014_002, use_case: UC_DSO_014_002, test: "UCT_DSO_014_002 cancels active work and queues an explicit prompt-amended replacement" }
+  - { id: UCT_DSO_014_003, use_case: UC_DSO_014_003, test: "UCT_DSO_014_003 preserves an exact safe pre-attempt stage when fixture history loading fails" }
+features:
+  - { id: FE_DSO_014_001, statement: "Durable logs and per-agent monitor combine current state with recent terminal work." }
+  - { id: FE_DSO_014_002, statement: "Safe stage-specific startup diagnostics survive process restart." }
+  - { id: FE_DSO_014_003, statement: "Owner-only control requests support cancel, restart, and bounded prompt amendment." }
+  - { id: FE_DSO_014_004, statement: "Evidence levels distinguish fixture integration from installed-runtime proof." }
+feature_tests:
+  - { id: FET_DSO_014_001, feature: FE_DSO_014_001, test: "FET_DSO_014_001 monitor distinguishes service state jobs and durable timeline" }
+  - { id: FET_DSO_014_002, feature: FE_DSO_014_002, test: "FET_DSO_014_002 preserves the pre-attempt backend version probe failure stage" }
+  - { id: FET_DSO_014_003, feature: FE_DSO_014_003, test: "FET_DSO_014_003 dispatches only generation-bound cancel restart and amend controls" }
+  - { id: FET_DSO_014_004, feature: FE_DSO_014_004, test: "FET_DSO_014_004 rejects omitted source obligations and fixture-only installed-runtime claims" }
+trace_edges:
+  - { kind: directives_to_requirements, from: USR-014, to: DSO-014 }
+  - { kind: requirements_to_use_cases, from: DSO-014, to: UC_DSO_014_001 }
+  - { kind: requirements_to_use_cases, from: DSO-014, to: UC_DSO_014_002 }
+  - { kind: requirements_to_use_cases, from: DSO-014, to: UC_DSO_014_003 }
+  - { kind: use_cases_to_use_case_tests, from: UC_DSO_014_001, to: UCT_DSO_014_001 }
+  - { kind: use_cases_to_use_case_tests, from: UC_DSO_014_002, to: UCT_DSO_014_002 }
+  - { kind: use_cases_to_use_case_tests, from: UC_DSO_014_003, to: UCT_DSO_014_003 }
+  - { kind: use_case_tests_to_features, from: UCT_DSO_014_001, to: FE_DSO_014_001 }
+  - { kind: use_case_tests_to_features, from: UCT_DSO_014_002, to: FE_DSO_014_003 }
+  - { kind: use_case_tests_to_features, from: UCT_DSO_014_003, to: FE_DSO_014_002 }
+  - { kind: use_case_tests_to_features, from: UCT_DSO_014_003, to: FE_DSO_014_004 }
+  - { kind: features_to_feature_tests, from: FE_DSO_014_001, to: FET_DSO_014_001 }
+  - { kind: features_to_feature_tests, from: FE_DSO_014_002, to: FET_DSO_014_002 }
+  - { kind: features_to_feature_tests, from: FE_DSO_014_003, to: FET_DSO_014_003 }
+  - { kind: features_to_feature_tests, from: FE_DSO_014_004, to: FET_DSO_014_004 }
+  - { kind: feature_tests_to_implementations, from: FET_DSO_014_001, to: IMP_DSO_014_001 }
+  - { kind: feature_tests_to_implementations, from: FET_DSO_014_002, to: IMP_DSO_014_001 }
+  - { kind: feature_tests_to_implementations, from: FET_DSO_014_003, to: IMP_DSO_014_001 }
+  - { kind: feature_tests_to_implementations, from: FET_DSO_014_004, to: IMP_DSO_014_002 }
+  - { kind: implementations_to_evidence, from: IMP_DSO_014_001, to: EVD_DSO_014_FIXTURE }
+  - { kind: implementations_to_evidence, from: IMP_DSO_014_002, to: EVD_DSO_014_DIAGNOSTIC }
+  - { kind: implementations_to_evidence, from: IMP_DSO_014_002, to: EVD_DSO_014_INSTALLED }
+implementations:
+  - { id: IMP_DSO_014_001, path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", statement: "Durable monitor, log, and owner-only control CLI plus Gateway control dispatch." }
+  - { id: IMP_DSO_014_002, path: "scripts/validate-requirement-evidence-levels.cjs", statement: "Source-obligation completeness and installed-runtime evidence-level gate." }
+evidence:
+  - { id: EVD_DSO_014_FIXTURE, level: fixture_integration, path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", state: present }
+  - { id: EVD_DSO_014_DIAGNOSTIC, level: fixture_integration, path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", state: present }
+  - { id: EVD_DSO_014_INSTALLED, level: installed_runtime, path: null, state: pending }
+trace:
+  code:
+    - { path: ".agents/skills/manage-discord-sessions/helper/cli.mjs", symbols: ["logs", "monitor", "cancel", "restart", "amend"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["cancelJob", "replaceJob"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbols: ["withFailureCode"], coverage: full }
+  tests:
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", symbol: "UCT_DSO_014_001 replays durable logs and keeps recent work visible in the named monitor", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "UCT_DSO_014_002 cancels active work and queues an explicit prompt-amended replacement", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "UCT_DSO_014_003 preserves an exact safe pre-attempt stage when fixture history loading fails", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/requirements-trace.test.mjs", symbol: "FET_DSO_014_004 rejects omitted source obligations and fixture-only installed-runtime claims", coverage: full }
+  reviews: { planning: null, development: null, test: null, integration: null }

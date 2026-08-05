@@ -16,6 +16,30 @@ test("DSO-006 treats normal one-shot stdin pipe closure as non-fatal", () => {
 	assert.equal(isBenignBackendStdinError({ code: "EACCES" }), false);
 });
 
+test("FET_DSO_014_002 preserves the pre-attempt backend version probe failure stage", async () => {
+	const { root, store, jobId } = fixture("codex");
+	await assert.rejects(runBackendAttempt({
+		store, jobId, backendId: "codex", prompt: "probe", cwd: root,
+		runtimeRoot: join(root, "runtime"), executable: join(root, "missing-codex"),
+		requireAuthentication: false, parentEnv: { PATH: process.env.PATH },
+	}), (error) => error.code === "backend_version_probe_failed");
+	assert.equal(store.getJob(jobId, { includeEvents: false }).attemptId, null);
+	store.close();
+});
+
+test("DSO-014 preserves the pre-attempt backend authentication failure stage", async () => {
+	const { root, store, jobId } = fixture("codex");
+	const emptyAuthRoot = join(root, "empty-auth");
+	mkdirSync(emptyAuthRoot, { mode: 0o700 });
+	await assert.rejects(runBackendAttempt({
+		store, jobId, backendId: "codex", prompt: "authenticate", cwd: root,
+		runtimeRoot: join(root, "runtime"), executable: fakeBackendPath,
+		backendVersion: "0.146.0", authRoot: emptyAuthRoot, parentEnv: { PATH: process.env.PATH },
+	}), (error) => error.code === "backend_authentication_failed");
+	assert.equal(store.getJob(jobId, { includeEvents: false }).attemptId, null);
+	store.close();
+});
+
 async function waitForStoppedProcess(pid) {
 	for (let attempt = 0; attempt < 20; attempt += 1) {
 		try {

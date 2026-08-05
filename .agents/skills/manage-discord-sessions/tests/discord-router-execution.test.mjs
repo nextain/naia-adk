@@ -158,6 +158,27 @@ test("DSG-021 launches v2 work in its bound workspace with a stable prefix and f
 	store.close();
 });
 
+test("UCT_DSO_014_003 preserves an exact safe pre-attempt stage when fixture history loading fails", async () => {
+	const { store, root } = fixture();
+	mkdirSync(join(root, ".agents/context"), { recursive: true });
+	writeFileSync(join(root, "AGENTS.md"), "# Bound agent\n", "utf8");
+	writeFileSync(join(root, ".agents/context/policy.yaml"), "authority: bounded\n", "utf8");
+	const snapshot = buildAgentContextSnapshot({ workspace: root, agentId: "diagnostic-agent", entrypoint: "AGENTS.md", contextFiles: [".agents/context/policy.yaml"] });
+	const participantProfile = { label: "workspace-owner", relationship: "workspace owner", allowedActions: ["read", "reply", "write", "execute"] };
+	const v2Binding = { ...binding(), operatorActions: true, historyVisibility: "shared" };
+	const config = { schemaVersion: 2, workspace: { agentId: "diagnostic-agent" }, persona: { name: "Diagnostic", instructions: "Diagnose." }, role: { name: "operator", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: [] }, backend: { selected: "codex", profiles: { codex: { enabled: true } } }, discord: { bindings: [v2Binding], operatorUserIds: [USER], participantProfiles: { [USER]: participantProfile } }, runtime: { maxConcurrentJobs: 1, approvalPolicy: "never", permissionProfileEpoch: "diagnostic-v1" }, recovery: { autoRetry: false } };
+	let runnerCalls = 0;
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot, runtimeRevision: RUNTIME_REVISION, send: async () => ({ state: "confirmed" }), loadHistory: async () => { throw new Error("private upstream detail"); }, runner: async () => { runnerCalls += 1; return { backendOutcome: "failure" }; } });
+	const accepted = await router.onDispatch("MESSAGE_CREATE", { id: "676767676767676799", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> diagnose` }, 99);
+	await router.waitForIdle();
+	const job = store.getJob(accepted.jobId);
+	assert.equal(runnerCalls, 0);
+	assert.equal(job.attemptId, null);
+	assert.equal(job.latestSafeError, "Job failed: discord_history_load_failed");
+	assert.equal(JSON.stringify(job).includes("private upstream detail"), false);
+	store.close();
+});
+
 test("DSG-021 requires exact v2 authority, configuration, and context revisions for read-only recovery", async () => {
 	const { store, root } = fixture();
 	mkdirSync(join(root, ".agents/context"), { recursive: true });
@@ -242,6 +263,46 @@ test("DSG-017 serializes jobs in one Discord scope even when global concurrency 
 	releaseFirst();
 	await router.waitForIdle();
 	assert.equal(started.length, 2);
+	store.close();
+});
+
+test("DSO-014 cancels queued work and persists its terminal lifecycle", async () => {
+	const { store, root } = fixture();
+	let releaseFirst;
+	const firstBlocked = new Promise((resolve) => { releaseFirst = resolve; });
+	let calls = 0;
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), send: async () => ({ state: "confirmed" }), runner: async () => { calls += 1; if (calls === 1) await firstBlocked; return { backendOutcome: "failure" }; } });
+	await router.onDispatch("MESSAGE_CREATE", { id: "252525252525252521", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> first` }, 51);
+	const queued = await router.onDispatch("MESSAGE_CREATE", { id: "252525252525252522", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> second` }, 52);
+	assert.deepEqual(router.cancelJob(queued.jobId), { state: "accepted", action: "cancel", jobId: queued.jobId, target: "queued" });
+	assert.equal(store.getJob(queued.jobId).lifecycle, "cancelled");
+	releaseFirst();
+	await router.waitForIdle();
+	assert.equal(calls, 1);
+	store.close();
+});
+
+test("UCT_DSO_014_002 cancels active work and queues an explicit prompt-amended replacement", async () => {
+	const { store, root } = fixture();
+	const calls = [];
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "codex" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), recoveryCodec: new RecoveryCodec(randomBytes(32)), send: async () => ({ state: "confirmed" }), runner: async ({ jobId, prompt, signal }) => {
+		calls.push(prompt);
+		if (calls.length === 1) await new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), { code: "ABORT_ERR" })), { once: true }));
+		const attemptId = store.startAttempt(jobId, { attemptId: `replacement-${calls.length}` });
+		store.recordEvent({ jobId, attemptId, source: "helper", kind: "failed", safePayload: { reasonCode: "process_exit" } });
+		return { backendOutcome: "failure" };
+	} });
+	const accepted = await router.onDispatch("MESSAGE_CREATE", { id: "262626262626262626", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> original request` }, 53);
+	await new Promise((resolve) => setImmediate(resolve));
+	const receipt = router.replaceJob(accepted.jobId, { action: "amend", amendment: "also run the focused test" });
+	assert.equal(receipt.state, "accepted");
+	assert.equal(receipt.semantics, "cancel_and_queue_replacement");
+	await router.waitForIdle();
+	assert.equal(store.getJob(accepted.jobId).lifecycle, "cancelled");
+	assert.match(calls[1], /original request[\s\S]*Operator amendment:[\s\S]*also run the focused test/);
+	assert.equal(store.getJob(receipt.replacementJobId).lifecycle, "failed");
 	store.close();
 });
 

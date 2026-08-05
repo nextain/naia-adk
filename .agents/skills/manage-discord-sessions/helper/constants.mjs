@@ -77,6 +77,22 @@ export const DEFAULT_SOFT_SILENCE_MS = 120_000;
 export const DEFAULT_SERVICE_STALE_MS = 30_000;
 export const MAX_SAFE_SUMMARY_LENGTH = 512;
 
+export const JOB_FAILURE_REASON_CODES = new Set([
+	"timeout",
+	"process_exit",
+	"authorization",
+	"delivery_unknown",
+	"internal_error",
+	"no_progress_timeout",
+	"approval_ui_detected",
+	"context_changed_restart_required",
+	"discord_history_load_failed",
+	"backend_version_probe_failed",
+	"backend_authentication_failed",
+	"backend_invocation_invalid",
+	"backend_spawn_failed",
+]);
+
 export const DISCORD_SERVICE_FAILURE_REASONS = new Set([
 	"configuration_invalid",
 	"context_invalid",
