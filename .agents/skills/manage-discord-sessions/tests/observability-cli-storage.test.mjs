@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -230,6 +230,17 @@ test("DSO-003 rejects ambiguous CLI arguments", () => {
 		const result = spawnSync(process.execPath, [cliPath, "--adk-root", root, ...args], { encoding: "utf8" });
 		assert.equal(result.status, 2, `${args.join(" ")}: ${result.stderr}`);
 	}
+});
+
+test("FET_DSO_014_003 refuses a prompt amendment file exposed to other users", { skip: process.platform === "win32" }, () => {
+	const { root, store } = fixture();
+	store.close();
+	const amendment = join(root, "exposed-amendment.txt");
+	writeFileSync(amendment, "continue with focused tests", { mode: 0o644 });
+	chmodSync(amendment, 0o644);
+	const result = spawnSync(process.execPath, [cliPath, "--adk-root", root, "amend", "--job", "job-1", "--content-file", amendment], { encoding: "utf8" });
+	assert.equal(result.status, 1);
+	assert.match(result.stderr, /Discord job amendment must be owner-only/);
 });
 
 test("DSO-005 refuses a symlinked session database", (context) => {
