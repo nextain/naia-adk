@@ -1,6 +1,9 @@
 import importlib.util
+import http.client
 import json
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -31,7 +34,42 @@ class TranslateDocTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 MODULE.checked_concurrency(value)
 
+    def test_remote_disconnect_is_retried(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return None
+            def read(self): return b'{"ok": true}'
+
+        with patch.object(MODULE.urllib.request, "urlopen", side_effect=[http.client.RemoteDisconnected(), Response()]), \
+             patch.object(MODULE.time, "sleep"):
+            self.assertEqual(MODULE.request("https://example.test/v1", "models"), {"ok": True})
+
+    def test_translation_jobs_keep_a_bounded_window_and_persist_results(self):
+        active = 0
+        maximum = 0
+        lock = threading.Lock()
+
+        def fake_translate(_base, _key, model, text, _index, _total):
+            nonlocal active, maximum
+            with lock:
+                active += 1
+                maximum = max(maximum, active)
+            time.sleep(0.01)
+            with lock: active -= 1
+            return {"content": "ko:" + text, "model": model, "usage": {}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); chunks = root / "chunks"; chunks.mkdir(); manifest_path = root / "manifest.json"
+            parts = [f"part-{i}" for i in range(1, 9)]
+            manifest = {"chunks": [{"index": i, "status": "pending"} for i in range(1, 9)]}
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with patch.object(MODULE, "translate_chunk", side_effect=fake_translate):
+                MODULE.translate_jobs("base", "key", "model", parts, list(enumerate(parts, 1)), manifest, manifest_path, chunks, 2)
+            self.assertLessEqual(maximum, 2)
+            self.assertTrue(all(row["status"] == "complete" for row in manifest["chunks"]))
+            self.assertEqual(len(list(chunks.glob("*.ko.md"))), len(parts))
     def test_provider_qualified_price_matches_catalog_key(self):
+
         rows = [{"model_key": "azure:deepseek-v4-flash", "input_price_per_million": 0.209}]
         self.assertEqual(MODULE.model_price("deepseek-v4-flash", rows), rows[0])
 

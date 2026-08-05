@@ -124,8 +124,9 @@ assert.doesNotMatch(researchWorkflow, /User-confirmed research state|Gates \(use
 const verifySkill = fs.readFileSync(path.join(root, ".agents", "skills", "verify-implementation", "SKILL.md"), "utf8");
 assert.match(verifySkill, /범위 내 구현·테스트·문서 정합성 결함은 반복 승인 없이 자동 수정/);
 const reviewSkill = fs.readFileSync(path.join(root, ".agents", "skills", "review-pass", "SKILL.md"), "utf8");
-assert.match(reviewSkill, /Do not turn CONTESTED into an automatic user prompt/);
-assert.match(reviewSkill, /Only a remaining material\s+decision pauses for user input/);
+const reviewConsensus = fs.readFileSync(path.join(root, ".agents", "skills", "review-pass", "references", "consensus-and-convergence.md"), "utf8");
+assert.match(reviewConsensus, /Do not turn CONTESTED into an automatic user prompt/);
+assert.match(reviewConsensus, /Only a remaining material\s+decision pauses for user input/);
 const verifySkillMirror = fs.readFileSync(path.join(root, ".users", "skills", "verify-implementation", "SKILL.md"), "utf8");
 assert.match(verifySkillMirror, /범위 내 구현·테스트·문서 정합성 결함은 반복 승인 없이 자동 수정/);
 assert.match(verifySkillMirror, /AskUserQuestion.*대상이 아닙니다/s);

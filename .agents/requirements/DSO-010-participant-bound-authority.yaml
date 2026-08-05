@@ -1,0 +1,67 @@
+id: DSO-010
+title: "Participant-Bound Discord Authority"
+title_ko: "Discord 참여자 결박 권한"
+product: naia-adk-discord-sessions
+module: participant-authority
+status: active
+source: derived
+source_provenance: ledger_resolved
+priority: critical
+created: 2026-08-03
+updated: 2026-08-04
+source_directives: [USR-011]
+source_evidence: [USR-011]
+source_atoms: [USR-011-E01]
+source_kind: derived
+derived_from: [USR-011]
+derivation_kind: expand
+change_effect: extend
+preserves: [discord-binding-default-deny, no-approval-child-profile, private-ledger, exact-user-allowlist]
+must_not_change: [discord-guild-roles-never-grant-authority, no-raw-user-id-in-prompt-or-safe-event, no-implicit-shared-history]
+destructive_approval: null
+description: |
+  Every accepted Discord request is bound to one configured participant profile.
+  Provider authority is the intersection of global unattended actions and that
+  profile, with mutation requiring an independently configured operator binding.
+  Discord-supplied guild roles never expand authority.
+acceptance_criteria:
+  - "Schema v2 requires participantProfiles to exactly cover the union of every binding allowedUserIds; profiles use unique safe labels, single-line relationships, and closed action fields."
+  - "Until OS/container read confinement and credential brokering exist, every schema-v2 participant is also a trusted host operator in operatorUserIds; participant profiles are not represented as filesystem tenant isolation."
+  - "Effective actions equal global allowedActions minus requiresApproval, intersected with participant allowedActions; schema v2 requires read+reply together, mutation is a write+execute bundle, and that bundle additionally requires both operatorUserIds membership and binding.operatorActions=true."
+  - "Authorization derives requester metadata only from the exact configured user ID; Discord member.roles is ignored for authority."
+  - "Prompts contain configured label, relationship, and effective actions but normalize raw Discord user, role, and channel mention IDs before provider execution."
+  - "Claude schema-v2 instances are read/reply only until a real unattended mutation canary establishes a stronger CLI permission contract."
+  - "Every v2 binding explicitly selects none, requester_only, or shared history; none skips REST, requester_only excludes every other participant and all prior bot replies, and shared includes configured labeled participants only."
+  - "Schema v1 remains readable, but multi-user mutation fails at startup and multi-user history is forced to none."
+  - "Recovery binds workspace, binding, participant profile, effective actions, approval policy, permission epoch, backend/model/persona, autoRetry, and context evidence; a missing or changed v2 invariant requires review."
+  - "The owner-only messenger config and referenced credential are re-opened before each message admission and immediately before backend spawn; any live change, including participant removal, action reduction, permission-epoch change, binding change, or credential rotation, fails closed with context_changed_restart_required until restart."
+  - "Legacy recovery envelopes without complete participant authority evidence always require review and can never be upgraded to a broader fresh profile."
+  - "A provider result cannot send an outbound Discord DM outside the current bound conversation."
+non_goals:
+  - "Infer business authority from Discord guild role names or IDs."
+  - "Build a general identity provider or Discord RBAC synchronizer."
+decisions:
+  - "Use one closed config map and action intersection instead of a dynamic role engine."
+  - "Keep operator identity and participant action scope as independent conditions."
+trace:
+  code:
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-config.mjs", symbols: ["loadMessengerConfig"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-scope.mjs", symbols: ["authorizeDiscordMessage"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbols: ["effectiveAllowedActions", "participantAuthorityRevision"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-conversation.mjs", symbols: ["renderParticipantConversation", "trustedParticipantPolicy"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["transientPrompt", "recoveryAuthority"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["verifyRuntimeInputs"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbols: ["createRuntimeInputVerifier"], coverage: full }
+  tests:
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-021 validates schema v2 workspace, exact participant coverage, and safe labels", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 enforces none, requester-only, and explicitly shared participant history", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 reduces mutation authority by participant and operator policy and binds revisions", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 requires exact v2 authority, configuration, and context revisions for read-only recovery", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs", symbol: "DSG-021 removes raw Discord user, role, and channel snowflakes from the provider request", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-runtime-input-guard.test.mjs", symbol: "DSO-010 live config and credential revocation fail closed without waiting for restart", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-runtime-input-guard.test.mjs", symbol: "DSO-010 queued work revalidates authority before runner and immediately before spawn", coverage: full }
+  reviews:
+    planning: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.planning"
+    development: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.development"
+    test: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.test"
+    integration: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.integration"

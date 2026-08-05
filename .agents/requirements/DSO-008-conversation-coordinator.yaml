@@ -7,35 +7,25 @@ status: withdrawn
 source: human
 priority: critical
 created: 2026-08-01
-updated: 2026-08-03
+updated: 2026-08-04
 issue_url: "https://github.com/nextain/naia-adk/issues/18"
 description: |
-  Each authorized Discord DM, guild channel, or thread has one provider-neutral
-  coordinator record owned by the local harness. It uses bounded authorized Discord history for dialogue continuity,
-  answers ordinary questions, and delegates bounded work to isolated workers.
-  Coordinator turns, workers, Discord receipts, and result delivery are
-  independent lifecycles so one failure cannot stall later messages.
+  This requirement is withdrawn. Live operation showed that the coordinator,
+  worker, and result-synthesis chain multiplied failure surfaces and could lose
+  responses on timeout. The production coordinator runtime and activation path
+  are removed; only passive database compatibility and fail-closed quarantine
+  of pre-withdrawal recovery envelopes remain.
 acceptance_criteria:
-  - "A scope stores one local coordinator record bound to a policy revision; Codex and Claude remain replaceable ephemeral workers and model processes need not remain idle."
-  - "A coordinator can reply directly or delegate a bounded task. Delegated workers receive no Discord credential and no unrelated channel transcript."
-  - "Coordinator turns serialize per scope, while an active worker does not block a later status question, correction, or cancellation request from reaching the coordinator."
-  - "Acknowledgement and progress delivery are best-effort and never gate coordinator admission, worker launch, or later messages."
-  - "A restart reconstructs coordinator context from bounded authorized Discord history and durable open-work metadata without replaying mutation work; history unavailability degrades context, not admission."
-  - "Gateway dispatch durably admits a message and returns without awaiting a model turn, Discord REST delivery, or status projection."
-  - "A coordinator delegation and its unique worker intent are stored before spawn; an uncertain mutation handoff requires review without blocking later coordinator turns."
-  - "Policy, persona, binding, or permission-epoch changes rotate the coordinator revision before later history is used."
-  - "Status reports service health, coordinator health, worker health, and delivery health separately; historical unresolved records are never labeled as an active queue."
-  - "A deterministic REST-down scenario proves that a received request still reaches the coordinator and a later message remains processable."
+  - "No production config can activate a conversation coordinator; any conversationCoordinator key is unsupported and rejected before service start."
+  - "The router contains no coordinator model-turn, delegation, synthesis, or activation branch; direct bounded execution is the only production request path."
+  - "The legacy coordinator database table is passive compatibility state and cannot launch, authorize, or alter a new request."
+  - "Every pre-withdrawal coordinator recovery envelope is quarantined as recovery_review and is never replayed or upgraded."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/coordinator-core.mjs", symbol: "provider-neutral prompt, decision, and policy revision", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "coordinator and worker lanes", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/store.mjs", symbol: "coordinator scope and encrypted recovery envelopes", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["resumeRecovered", "coordinator recovery is withdrawn"], coverage: legacy_compatibility }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/coordinator-core.test.mjs", symbol: "DSO-008 coordinator contract", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSO-008 responsiveness and backpressure", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", symbol: "DSO-009 reopening a legacy store preserves withdrawn coordinator rows without exposing them", coverage: legacy_compatibility }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSO-009 quarantines pre-withdrawal coordinator envelopes during reboot recovery", coverage: legacy_compatibility }
   reviews: { planning: "two-agent adversarial review 2026-08-01", development: "two-agent adversarial review 2026-08-01", test: "focused deterministic suite 2026-08-01", integration: null }
 decisions:
-  - "Provider-native sessions are not continuity sources; Discord history and local durable metadata are provider-neutral."
-  - "Acknowledgement and final delivery are independent from coordinator and worker lifecycle."
-  - "Withdrawn after live operation showed that coordinator, worker, and result-synthesis turns multiplied failure surfaces and lost responses on timeout. New configurations reject activation; dormant code removal is separate."
+  - "Withdrawn after live operation showed that coordinator, worker, and result-synthesis turns multiplied failure surfaces and lost responses on timeout. Production branches, the config switch, and new coordinator table creation were removed; existing legacy tables are left untouched and legacy envelopes are quarantined."

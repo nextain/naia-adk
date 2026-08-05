@@ -21,6 +21,8 @@ trace:
   code:
     - { path: ".agents/hooks/core/request-contract.js", symbol: "authorityPresentation / issueAuthorityChallenge / validateAuthorityReceipt / bindContract", coverage: full }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "authority deduplication, replay, amendment, exact ownership, and autonomous derived-work cases", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-authority-scope-suite.js", symbol: "later pure additions require and accept a signed amendment epoch", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-recovery-validation-suite.js", symbol: "identical authority requests reuse one challenge and changed requests supersede it", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-recovery-validation-suite.js", symbol: "trace-only derived work revisions do not require new scope authority", coverage: partial }
   reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

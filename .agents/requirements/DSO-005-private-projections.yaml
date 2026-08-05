@@ -20,14 +20,19 @@ acceptance_criteria:
   - "Explicit history exposes only allowlisted non-bot authors from one unique operator binding, sanitizes content without persistence, and never includes the bot credential."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/sanitize.mjs", symbol: "buildSafeEventSummary/validateSafeMetrics/sanitizeFinalResponse", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbol: "prepareChildEnvironment", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-scope.mjs", symbol: "authorizeDiscordMessage", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/platform-security.mjs", symbol: "owner-only POSIX mode or Windows ACL enforcement", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/sanitize.mjs", symbols: ["buildSafeEventSummary", "validateSafeMetrics", "sanitizeFinalResponse"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbols: ["prepareChildEnvironment"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-scope.mjs", symbols: ["authorizeDiscordMessage"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/platform-security.mjs", symbols: ["assertOwnerOnly", "protectOwnerOnly", "runWindowsAcl"], coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-005 rejects unsafe event shapes and coalesces high-rate activity", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/backend-runner.test.mjs", symbol: "DSO-005 isolated child environment tests", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-001/DSG-003/DSG-009/DSG-012 authorization and privacy", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-005 binding, author, sanitization, and CDN fail-closed tests", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability-lifecycle.test.mjs", symbol: "DSO-005 rejects unsafe event shapes and coalesces high-rate activity", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-adapter-environment.test.mjs", symbol: "DSO-005 creates a private minimal child environment and copies only provider auth", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/backend-adapter-environment.test.mjs", symbol: "DSO-005 rejects insecure auth permissions and cleans the partial child home", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs", symbol: "DSG-001 authorizes DM, guild channel, and exact thread bindings with structured mentions only", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs", symbol: "DSG-003 records delivery before bounded same-nonce retries and never starts a second delivery", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-009 participant status projection is limited to the current Discord scope", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-012 loads only private closed settings and resolves an owner-only credential reference", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-005 history fails closed for role, binding, author, duplicate, and rate limit", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-history.test.mjs", symbol: "DSO-005 attachment recovery stops an oversized streamed body before buffering it", coverage: partial }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md", ".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-backend-adapters.md"], integration: null }
 decisions: []

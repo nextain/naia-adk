@@ -95,6 +95,7 @@ data-private/
 projects/
 !projects/README.md
 !projects/naia-template-project
+!projects/TalkingKiosk
 
 # Temp — all scratch/debug scripts go in tmp/ (never in root)
 tmp/

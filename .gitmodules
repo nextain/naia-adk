@@ -1,3 +1,6 @@
 [submodule "projects/naia-template-project"]
 	path = projects/naia-template-project
 	url = https://github.com/nextain/naia-template-project.git
+[submodule "projects/TalkingKiosk"]
+	path = projects/TalkingKiosk
+	url = https://github.com/visualxlab/TalkingKiosk.git

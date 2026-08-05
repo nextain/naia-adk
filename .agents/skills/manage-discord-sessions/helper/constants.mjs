@@ -1,5 +1,3 @@
-// coordinator_scopes is an additive, backward-compatible table so a service
-// rollback can still open the database during the staged rollout.
 export const DB_SCHEMA_VERSION = 6;
 export const OUTPUT_SCHEMA_VERSION = 1;
 
@@ -10,6 +8,7 @@ export const EVENT_KINDS = new Set([
 	"backend_ready",
 	"phase_changed",
 	"output_activity",
+	"prompt_cache_observed",
 	"tool_started",
 	"tool_finished",
 	"approval_required",
@@ -63,11 +62,27 @@ export const SAFE_METRIC_KEYS = new Set([
 	"missing",
 	"total",
 	"queuePosition",
+	"inputTokens",
+	"cachedInputTokens",
+	"cacheReadInputTokens",
+	"cacheCreationInputTokens",
+	"outputTokens",
 ]);
 
 export const DEFAULT_SOFT_SILENCE_MS = 120_000;
 export const DEFAULT_SERVICE_STALE_MS = 30_000;
 export const MAX_SAFE_SUMMARY_LENGTH = 512;
+
+export const DISCORD_SERVICE_FAILURE_REASONS = new Set([
+	"configuration_invalid",
+	"context_invalid",
+	"credential_unavailable",
+	"discord_token_already_owned",
+	"discord_token_lock_unavailable",
+	"context_changed_restart_required",
+	"startup_or_runtime_failure",
+	"failure_status_invalid",
+]);
 
 export const ALLOWED_TRANSITIONS = new Map([
 	["queued", new Set(["queued", "running", "cancelled", "failed", "recovery_review"])],

@@ -7,7 +7,7 @@ const ADAPTERS = new Map([
 		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
 		command({ executable = "codex", cwd, sandbox = "workspace-write", approvalPolicy = "never", model = null }) {
 			if (approvalPolicy !== "never") throw new Error("Codex child approval policy must be never");
-			const args = ["exec", "--json", "--ephemeral", "--config", 'approval_policy="never"', "--config", 'model_reasoning_effort="low"', "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config"];
+			const args = ["exec", "--json", "--ephemeral", "--strict-config", "--config", 'approval_policy="never"', "--config", 'model_reasoning_effort="low"', "--config", "project_doc_max_bytes=0", "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config", "--ignore-rules"];
 			if (model) args.push("--model", model);
 			return { command: executable, args };
 		},
@@ -17,11 +17,11 @@ const ADAPTERS = new Map([
 		backendId: "claude",
 		activityDetail: "structured",
 		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
-		command({ executable = "claude", permissionMode = "dontAsk", settingSources = "project", approvalPolicy = "never" }) {
+		command({ executable = "claude", permissionMode = "plan", approvalPolicy = "never" }) {
 			if (approvalPolicy !== "never") throw new Error("Claude child approval policy must be never");
 			return {
 				command: executable,
-				args: ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-session-persistence", "--setting-sources", settingSources, "--permission-mode", permissionMode],
+				args: ["-p", "--safe-mode", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-session-persistence", "--permission-mode", permissionMode],
 			};
 		},
 		parse: parseClaude,
@@ -65,6 +65,27 @@ function activity(bytes) {
 	return bytes > 0 ? [{ kind: "output_activity", safePayload: { bytes }, metrics: { bytes } }] : [];
 }
 
+function nonNegativeInteger(value) {
+	return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function cacheReceipt(usage, backendId) {
+	if (!usage || typeof usage !== "object" || Array.isArray(usage)) return [];
+	const inputTokens = nonNegativeInteger(usage.input_tokens);
+	const cacheReadInputTokens = nonNegativeInteger(backendId === "codex" ? usage.cached_input_tokens : usage.cache_read_input_tokens);
+	const outputTokens = nonNegativeInteger(usage.output_tokens);
+	if (inputTokens === null || cacheReadInputTokens === null || outputTokens === null) return [];
+	const safePayload = { backend: backendId, inputTokens, cacheReadInputTokens, outputTokens };
+	if (backendId === "claude") {
+		const cacheCreationInputTokens = nonNegativeInteger(usage.cache_creation_input_tokens);
+		if (cacheCreationInputTokens === null) return [];
+		safePayload.cacheCreationInputTokens = cacheCreationInputTokens;
+	}
+	const metrics = { inputTokens, cacheReadInputTokens, outputTokens };
+	if (safePayload.cacheCreationInputTokens !== undefined) metrics.cacheCreationInputTokens = safePayload.cacheCreationInputTokens;
+	return [{ kind: "prompt_cache_observed", safePayload, metrics }];
+}
+
 function toolCategory(value = "") {
 	const name = String(value).toLowerCase();
 	if (/test/.test(name)) return "test";
@@ -100,6 +121,7 @@ function parseCodex(message, rawBytes) {
 			events.push(...activity(rawBytes));
 			break;
 		case "turn.completed":
+			events.push(...cacheReceipt(message.usage, "codex"));
 			break;
 		default:
 			if (message.type === "error" || message.type === "turn.failed") break;
@@ -130,6 +152,7 @@ function parseClaude(message, rawBytes) {
 	}
 	if (message.type === "stream_event") return activity(rawBytes);
 	if (message.type === "result") {
+		events.push(...cacheReceipt(message.usage, "claude"));
 		return events;
 	}
 	return events;
