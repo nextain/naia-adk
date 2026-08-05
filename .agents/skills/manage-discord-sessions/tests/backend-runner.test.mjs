@@ -423,6 +423,19 @@ test("DSO-005 rejects command options that weaken fixed safety boundaries", asyn
 	store.close();
 });
 
+test("FET_DSO_014_005 passes the router Codex balanced profile through the real runner adapter boundary", async () => {
+	const { root, store, jobId } = fixture("codex");
+	const result = await runBackendAttempt({
+		store, jobId, backendId: "codex", prompt: "balanced profile", cwd: root,
+		runtimeRoot: join(root, "runtime"), executable: fakeBackendPath,
+		commandOptions: { sandbox: "read-only", approvalPolicy: "never", model: "gpt-5.4", costProfile: "balanced" },
+		backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH },
+	});
+	assert.equal(result.exitCode, 0);
+	assert.equal(store.getJob(jobId).lifecycle, "result_ready");
+	store.close();
+});
+
 test("DSO-006 keeps provider failure sticky when a later success marker appears", async () => {
 	const { root, store, jobId } = fixture("codex");
 	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: "__fake_failure_then_success__", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } });
