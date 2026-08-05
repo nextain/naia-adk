@@ -21,6 +21,8 @@ trace:
   code:
     - { path: ".agents/hooks/core/request-contract.js", symbol: "referenceManifest / workspaceManifest / captureWorkspaceOccurrences / evaluateCompletion", coverage: full }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "workspace manifest, occurrence, disabled mode, and Stop lineage fault cases", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-workspace-resume-suite.js", symbol: "whole-repository scope captures changes under skills and docs", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-workspace-resume-suite.js", symbol: "third unchanged failed Stop writes an honest incomplete terminal", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-governance-suite.js", symbol: "disabled mode is a silent allow", coverage: partial }
   reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

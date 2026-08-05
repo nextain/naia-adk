@@ -72,6 +72,38 @@ foreach ($item in @($items)) {
 }
 `;
 
+const WINDOWS_AUTH_SOURCE_ACL_SCRIPT = String.raw`
+$ErrorActionPreference = "Stop"
+$path = [IO.Path]::GetFullPath($env:NAIA_AUTH_SOURCE_PATH)
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$ownerSid = $identity.User
+$acl = Get-Acl -LiteralPath $path
+$actualOwnerSid = ([Security.Principal.NTAccount]$acl.Owner).Translate([Security.Principal.SecurityIdentifier])
+if ($actualOwnerSid.Value -ne $ownerSid.Value) { throw "owner mismatch" }
+$allowedSids = @{
+  $ownerSid.Value = "owner"
+  "S-1-5-18" = "system"
+  "S-1-5-32-544" = "administrators"
+}
+try {
+  $sandboxSid = ([Security.Principal.NTAccount]::new($env:COMPUTERNAME, "CodexSandboxUsers")).Translate([Security.Principal.SecurityIdentifier])
+  $allowedSids[$sandboxSid.Value] = "codex-sandbox"
+} catch {}
+$rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+if (@($rules | Where-Object { $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Deny }).Count -ne 0) { throw "deny rules are not allowed" }
+$ownerFullControl = $false
+foreach ($rule in @($rules | Where-Object { $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow })) {
+  $sid = $rule.IdentityReference.Value
+  if (-not $allowedSids.ContainsKey($sid)) { throw "authentication source has broad access" }
+  if ($sid -eq $ownerSid.Value -and $rule.FileSystemRights.ToString() -match "(^|,\s*)FullControl($|,)") { $ownerFullControl = $true }
+  if ($allowedSids[$sid] -eq "codex-sandbox") {
+    $forbidden = [Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+    if (($rule.FileSystemRights -band $forbidden) -ne 0) { throw "Codex sandbox authentication access is writable" }
+  }
+}
+if (-not $ownerFullControl) { throw "owner full control missing" }
+`;
+
 function powershellPath() {
 	return trustedWindowsSystemExecutable("WindowsPowerShell", "v1.0", "powershell.exe");
 }
@@ -116,6 +148,20 @@ export function assertOwnerOnly(path, kind, label = kind) {
 	}
 	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`${label} owner mismatch`);
 	if ((stat.mode & 0o077) !== 0) throw new Error(`${label} must be owner-only`);
+}
+
+export function assertPrivateAuthenticationSource(path, label = "authentication source") {
+	const stat = lstatSync(path);
+	if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`${label} must be a real file`);
+	if (process.platform !== "win32") return assertOwnerOnly(path, "file", label);
+	const result = spawnSync(powershellPath(), [
+		"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", WINDOWS_AUTH_SOURCE_ACL_SCRIPT,
+	], {
+		encoding: "utf8",
+		windowsHide: true,
+		env: { SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, COMPUTERNAME: process.env.COMPUTERNAME, NAIA_AUTH_SOURCE_PATH: realpathSync(path) },
+	});
+	if (result.status !== 0) throw new Error("Windows authentication source ACL is not private");
 }
 
 export function protectOwnerOnly(path, kind, label = kind) {

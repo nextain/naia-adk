@@ -8,7 +8,7 @@ source: human
 source_provenance: ledger_resolved
 priority: critical
 created: 2026-08-03
-updated: 2026-08-03
+updated: 2026-08-04
 source_directives: [USR-009]
 source_evidence: [USR-009]
 source_atoms: [USR-009-E01, USR-009-E02, USR-009-E03, USR-009-E04, USR-009-E05, USR-009-E06, USR-009-E07, USR-009-E08, USR-009-E09]
@@ -31,6 +31,7 @@ acceptance_criteria:
   - "The skill explicitly refuses to represent interactive AI polling as continuous monitoring; continuous monitoring requires the installed service plus an independent deterministic health check."
   - "Service status distinguishes process heartbeat, durable Gateway evidence, overdue queued or owned work, and result delivery; a fresh heartbeat alone cannot make every component healthy, and absent durable Gateway connection evidence is unknown rather than inferred."
   - "The independent check opens the ledger read-only, is scoped to one named instance, and exits unhealthy only for stopped or stale service or active work exceeding noProgressInterventionSeconds. Historical recovery_review and delivery_unknown records are attention, not permanent service failure."
+  - "The per-second watchdog and per-minute observer query at most 256 nonterminal jobs, oldest first, and obtain the total active count plus historical attention through aggregate queries; they never project the append-only terminal history. Any excess active work is reported as unhealthy operational_jobs_truncated rather than silently omitted. Operator job listings are explicitly paged and bounded."
   - "A deterministic observer may atomically persist only its own bounded health snapshot outside SQLite. It never sends Discord messages, replays jobs, changes job lifecycle, restarts a service, or writes the ledger."
   - "The observer is executed independently of both the Discord service and an AI turn every 60 seconds: a separate systemd timer on Linux and a separate Task Scheduler minute task on Windows. Install and reboot tests prove that stopping Discord does not stop snapshot refresh."
   - "Every enabled unattended Codex or Claude configuration explicitly uses approvalPolicy=never. Managed mode or an emitted approval UI fails closed before user-visible waiting state. requiresApproval cannot implicitly select a managed child mode."
@@ -39,7 +40,7 @@ acceptance_criteria:
   - "Direct and harness-owned worker prompts state that bounded routine authority is already granted and that unavailable authority must be reported as a limitation, without asking for an approval click. Contract tests inspect both prompt paths; they do not claim semantic classification of all model prose."
   - "Foreign collaboration subagents are not reported as supervised unless they publish a harness-owned receipt. The operator documentation states this boundary and requires explicit reconciliation before relying on their result."
   - "Status exposes foreignAgentSupervision=unsupported. Without a receipt interface no per-agent lifecycle is accepted, inferred, or tested."
-  - "conversationCoordinator=true is rejected as a suspended unsafe path; the direct one-turn path remains supported while dormant code removal is handled separately."
+  - "The production conversation-coordinator runtime, activation branch, and new table creation are removed. Any conversationCoordinator key is rejected; pre-withdrawal recovery envelopes are quarantined and existing legacy tables are left untouched."
   - "Overdue precedence is fixed: queued uses acceptedAt; owned running uses lastProgressAt then startedAt; missing or conflicting owned child evidence precedes time; terminal and historical attention records are excluded; future or missing timestamps are attention/unknown rather than inferred failure."
   - "Gateway ACK freshness uses a separate bounded threshold derived from heartbeat policy, never the configurable work no-progress deadline. waiting_approval is immediately unhealthy; retry_wait, result_ready, and delivering use updatedAt and become unhealthy after the work bound."
   - "Supervisor registration is verified before the main service starts; any partial install failure quarantines the main registration, and service status verifies both the service and supervisor identities."
@@ -51,19 +52,23 @@ non_goals:
   - "Rewrite the proven Gateway, authorization, encryption, or delivery nonce layers."
 decisions:
   - "Prefer one independent deterministic observer over additional AI watchers in the same failure domain."
-  - "Do not claim last-known-good code rollback until the mutable-checkout launcher is replaced by a separately reviewed immutable release bundle."
+  - "Use an owner-only, digest-verified rollback bundle created by a separate clean candidate checkout; the candidate's absolute CLI path owns prepare, verify, canary, and rollback so the mutable target CLI is never the recovery controller."
   - "Keep this requirement active rather than verified until native Windows Task Scheduler install/reboot evidence exists; Linux-only rendering and separate-process tests are not relabeled as Windows proof."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/unattended-health.mjs", symbol: "projectUnattendedHealth/gatewayEvidenceBoundSeconds", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/supervisor.mjs", symbol: "observeOnce", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/service-manager.mjs", symbol: "installSupervisedPair/manageService/verifyWindowsTaskDisabled", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-config.mjs", symbol: "loadMessengerConfig", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbol: "effectiveAllowedActions", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbol: "transientPrompt/DiscordMessageRouter.onDispatch/DiscordMessageRouter.resumeRecovered", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/unattended-health.mjs", symbols: ["projectUnattendedHealth", "gatewayEvidenceBoundSeconds"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/supervisor.mjs", symbols: ["observeOnce"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-manager.mjs", symbols: ["installSupervisedPair", "manageService", "verifyWindowsTaskDisabled"], coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-config.mjs", symbols: ["loadMessengerConfig"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/execution-profile.mjs", symbols: ["effectiveAllowedActions"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["transientPrompt", "DiscordMessageRouter", "onDispatch", "resumeRecovered"], coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/helper/store.mjs", symbols: ["listOperationalJobs", "historicalAttentionCounts"], coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/unattended-health.test.mjs", symbol: "DSO-009 deterministic health and rendered scheduler fault matrix", coverage: partial }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSO-009 approval/coordinator/install contract", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/unattended-health.test.mjs", symbol: "DSO-009 health distinguishes current progress, queue silence, child loss, clock uncertainty, and history attention", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-config-projection.test.mjs", symbol: "DSG-010 approval-required actions are removed from unattended access and prompts", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability-cli-storage.test.mjs", symbol: "DSO-009 fresh stores do not recreate the withdrawn coordinator API or table", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSO-009 quarantines pre-withdrawal coordinator envelopes during reboot recovery", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/operational-query.test.mjs", symbol: "DSO-009 hot-path projections read active jobs and aggregate historical attention", coverage: partial }
   reviews:
     planning: ".agents/research/discord-unattended-supervision/review-summary.yaml#planning"
     development: ".agents/research/discord-unattended-supervision/review-summary.yaml#development"

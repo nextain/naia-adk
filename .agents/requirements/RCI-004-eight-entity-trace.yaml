@@ -21,7 +21,8 @@ trace:
     - { path: ".agents/hooks/core/request-contract.js", symbol: "TRACE_KEYS / TRACE_EDGES / validateContract", coverage: full }
     - { path: "packages/artifacts-spec/schemas/request-contract.schema.json", symbol: "trace schema", coverage: full }
   tests:
-    - { path: ".claude/hooks/test/run-request-contract-test.js", symbol: "trace artifact, edge, atom, and tombstone fault cases", coverage: full }
+    - { path: ".claude/hooks/test/request-contract-source-trace-suite.js", symbol: "trace ids must resolve to concrete artifacts and a complete edge chain", coverage: partial }
+    - { path: ".claude/hooks/test/request-contract-source-trace-suite.js", symbol: "terminal tombstones cover every disposed trace entity and edge", coverage: partial }
     - { path: "packages/artifacts-spec/test/validate-request-contract.cjs", symbol: "schema and runtime example validation", coverage: full }
   reviews: { planning: ["2026-07-14-round-1", "2026-07-14-round-2"], development: ["2026-07-14-round-1", "2026-07-14-round-2"], test: ["2026-07-14-round-1", "2026-07-14-round-2"], integration: ["2026-07-14-round-1", "2026-07-14-round-2"] }
 decisions: []

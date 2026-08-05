@@ -14,6 +14,25 @@ workspace:
 
 # 서브모듈 정의
 submodules:
+  # === projects/ 표준 프로젝트 ===
+  naia-template-project:
+    path: ./projects/naia-template-project
+    type: template
+    description: "Standard executable project structure consumed by project-create and project-migration"
+    repo: nextain/naia-template-project
+    visibility: public
+    rulesEntrypoint: AGENTS.md
+    status: active
+
+  removed-project:
+    path: ./projects/removed-project
+    type: project
+    description: "Gangnam-gu digital-human kiosk operated through the naia-adk workspace"
+    repo: visualxlab/removed-project
+    visibility: private
+    rulesEntrypoint: AGENTS.md
+    status: active
+
   # === 문서 ===
   docs-work-logs:
     path: ./docs-work-logs

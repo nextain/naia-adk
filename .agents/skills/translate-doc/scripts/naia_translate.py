@@ -2,9 +2,9 @@
 """Resumable document translation through the Naia gateway."""
 from __future__ import annotations
 
-import argparse, hashlib, html, json, os, re, sys, time
+import argparse, hashlib, html, http.client, json, os, re, sys, time
 import urllib.error, urllib.request
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -61,7 +61,7 @@ def request(base: str, path: str, key: str | None = None, payload: dict[str, Any
             detail = exc.read().decode(errors="replace")[:500]
             if exc.code not in (408, 429, 500, 502, 503, 504) or attempt == 4:
                 raise RuntimeError(f"Naia API HTTP {exc.code}: {detail}") from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.RemoteDisconnected) as exc:
             if attempt == 4: raise RuntimeError(f"Naia API connection failed: {exc}") from exc
         time.sleep(min(2 ** attempt, 16))
     raise AssertionError("unreachable")
@@ -135,6 +135,54 @@ def translate_chunk(base: str, key: str, model: str, text: str, index: int, tota
     except (KeyError, IndexError, TypeError) as exc: raise RuntimeError("Completion response lacks translated content") from exc
     if not isinstance(content, str) or not content.strip(): raise RuntimeError("Naia returned an empty translation")
     return {"content": content.strip(), "model": response.get("model", model), "usage": response.get("usage", {})}
+
+def translate_jobs(base: str, key: str, model: str, parts: list[str], jobs: list[tuple[int, str]],
+                   manifest: dict[str, Any], manifest_path: Path, chunk_dir: Path, concurrency: int) -> None:
+    """Translate with a bounded in-flight window and persist every successful chunk."""
+    pending = iter(jobs)
+    failures: list[tuple[int, Exception]] = []
+    max_chunk_attempts = 3
+
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="naia-translate") as executor:
+        futures: dict[Any, tuple[int, str, int]] = {}
+
+        def submit(i: int, part: str, attempt: int) -> None:
+            action = "queued" if attempt == 1 else f"retry {attempt}/{max_chunk_attempts}"
+            print(f"[{i}/{len(parts)}] {action}", flush=True)
+            futures[executor.submit(translate_chunk, base, key, model, part, i, len(parts))] = (i, part, attempt)
+
+        def fill_window() -> None:
+            while not failures and len(futures) < concurrency:
+                try: i, part = next(pending)
+                except StopIteration: return
+                submit(i, part, 1)
+
+        fill_window()
+        while futures:
+            done, _ = wait(tuple(futures), return_when=FIRST_COMPLETED)
+            retries: list[tuple[int, str, int]] = []
+            for future in done:
+                i, part, attempt = futures.pop(future)
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    if attempt < max_chunk_attempts and not failures:
+                        retries.append((i, part, attempt + 1))
+                    else:
+                        failures.append((i, exc))
+                    continue
+                path = chunk_dir / f"{i:05d}.ko.md"; row = manifest["chunks"][i - 1]
+                path.write_text(result["content"] + "\n", encoding="utf-8")
+                row.update(status="complete", completed_at=now(), output_sha256=file_digest(path), actual_model=result["model"], usage=result["usage"])
+                manifest["updated_at"] = now(); manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+                print(f"[{i}/{len(parts)}] complete", flush=True)
+            if not failures:
+                for i, part, attempt in retries: submit(i, part, attempt)
+                fill_window()
+
+    if failures:
+        i, exc = failures[0]
+        raise RuntimeError(f"Chunk {i} failed after {max_chunk_attempts} attempts: {exc}") from exc
 
 def to_html(markdown: str, title: str) -> str:
     body = html.escape(markdown)
@@ -224,17 +272,7 @@ def run_translate(args: argparse.Namespace) -> None:
         if row.get("status") == "complete" and path.is_file() and file_digest(path) == row.get("output_sha256"):
             print(f"[{i}/{len(parts)}] reuse", flush=True); continue
         jobs.append((i, part))
-    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="naia-translate") as executor:
-        futures = {}
-        for i, part in jobs:
-            print(f"[{i}/{len(parts)}] queued", flush=True)
-            futures[executor.submit(translate_chunk, base, key, model, part, i, len(parts))] = i
-        for future in as_completed(futures):
-            i = futures[future]; result = future.result(); path = chunk_dir / f"{i:05d}.ko.md"; row = manifest["chunks"][i - 1]
-            path.write_text(result["content"] + "\n", encoding="utf-8")
-            row.update(status="complete", completed_at=now(), output_sha256=file_digest(path), actual_model=result["model"], usage=result["usage"])
-            manifest["updated_at"] = now(); manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"[{i}/{len(parts)}] complete", flush=True)
+    translate_jobs(base, key, model, parts, jobs, manifest, manifest_path, chunk_dir, concurrency)
     translated = "\n\n".join((chunk_dir / f"{i:05d}.ko.md").read_text(encoding="utf-8").strip() for i in range(1, len(parts) + 1))
     formats = {x.strip() for x in args.format.split(",") if x.strip()}
     if formats - {"markdown", "html", "pdf"}: raise SystemExit("Unknown output format")

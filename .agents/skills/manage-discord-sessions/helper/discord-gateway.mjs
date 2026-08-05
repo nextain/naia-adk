@@ -14,10 +14,12 @@ function safeGatewayUrl(value) {
 }
 
 export class DiscordGatewaySession {
-	constructor({ token, stateRepository, onDispatch, onDisconnect = () => {}, messageContentIntent = false, webSocketFactory = (url) => new WebSocket(url), setIntervalImpl = setInterval, clearIntervalImpl = clearInterval, setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout, disconnectTimeoutMs = 1_000, random = Math.random, now = () => new Date().toISOString() }) {
+	constructor({ token, expectedBotUserId = null, stateRepository, onDispatch, onDisconnect = () => {}, messageContentIntent = false, webSocketFactory = (url) => new WebSocket(url), setIntervalImpl = setInterval, clearIntervalImpl = clearInterval, setTimeoutImpl = setTimeout, clearTimeoutImpl = clearTimeout, disconnectTimeoutMs = 1_000, random = Math.random, now = () => new Date().toISOString() }) {
 		if (typeof token !== "string" || token.length < 16) throw new Error("Discord credential is not ready");
+		if (expectedBotUserId !== null && (typeof expectedBotUserId !== "string" || !/^\d{17,20}$/.test(expectedBotUserId))) throw new Error("expected Discord bot user ID is invalid");
 		if (!Number.isSafeInteger(disconnectTimeoutMs) || disconnectTimeoutMs < 1) throw new Error("disconnect timeout must be a positive integer");
 		this.token = token;
+		this.expectedBotUserId = expectedBotUserId;
 		this.stateRepository = stateRepository;
 		this.onDispatch = onDispatch;
 		this.onDisconnect = onDisconnect;
@@ -132,6 +134,10 @@ export class DiscordGatewaySession {
 	}
 
 	async #dispatch(type, data, sequence) {
+		if (type === "READY" && this.expectedBotUserId !== null && data?.user?.id !== this.expectedBotUserId) {
+			this.close(4_004);
+			return;
+		}
 		if (type === "READY") this.stateRepository.save({ sessionId: data.session_id, resumeUrl: safeGatewayUrl(data.resume_gateway_url), sequence });
 		await this.onDispatch?.(type, data, sequence);
 	}

@@ -14,7 +14,7 @@ export function gatewayEvidenceBoundSeconds(heartbeatSeconds = 10) {
 	return Math.max(120, heartbeatSeconds * 3);
 }
 
-export function projectUnattendedHealth({ status, jobs = [], nowMs = Date.now(), noProgressInterventionSeconds = 120, gatewayEvidenceStaleSeconds = 180 }) {
+export function projectUnattendedHealth({ status, jobs = [], historicalAttention = null, nowMs = Date.now(), noProgressInterventionSeconds = 120, gatewayEvidenceStaleSeconds = 180 }) {
 	if (!status || !Number.isSafeInteger(nowMs) || nowMs < 0) throw new Error("unattended health input is invalid");
 	if (!Number.isSafeInteger(noProgressInterventionSeconds) || noProgressInterventionSeconds < 1 || noProgressInterventionSeconds > 3_600) throw new Error("no-progress bound is invalid");
 	if (!Number.isSafeInteger(gatewayEvidenceStaleSeconds) || gatewayEvidenceStaleSeconds < 30 || gatewayEvidenceStaleSeconds > 300) throw new Error("Gateway evidence bound is invalid");
@@ -22,6 +22,9 @@ export function projectUnattendedHealth({ status, jobs = [], nowMs = Date.now(),
 	const attention = [];
 	const boundMs = noProgressInterventionSeconds * 1_000;
 	const serviceState = status.service?.state ?? "unknown";
+	const operationalOverflow = status.jobs?.operationalOverflow ?? 0;
+	if (!Number.isSafeInteger(operationalOverflow) || operationalOverflow < 0) throw new Error("operational job overflow is invalid");
+	if (operationalOverflow > 0) unhealthy.push(issue("operational_jobs_truncated", { omittedJobs: operationalOverflow }));
 	if (new Set(["stopped", "stale"]).has(serviceState)) unhealthy.push(issue(`service_${serviceState}`, { reasonCode: status.service?.reasonCode ?? null }));
 	else if (serviceState !== "running") attention.push(issue(`service_${serviceState}`, { reasonCode: status.service?.reasonCode ?? null }));
 
@@ -64,8 +67,11 @@ export function projectUnattendedHealth({ status, jobs = [], nowMs = Date.now(),
 		if (nowMs - basisMs > boundMs) unhealthy.push(issue("active_work_overdue", { jobId: job.jobId, lifecycle: job.lifecycle, evidenceAt: basis, silenceMs: nowMs - basisMs }));
 	}
 
-	const historicalReview = jobs.filter((job) => job.lifecycle === "recovery_review").length;
-	const historicalDelivery = jobs.filter((job) => TERMINAL.has(job.lifecycle) && new Set(["unknown", "failed"]).has(job.deliveryState)).length;
+	if (historicalAttention !== null && (typeof historicalAttention !== "object"
+		|| !Number.isSafeInteger(historicalAttention.recoveryReview) || historicalAttention.recoveryReview < 0
+		|| !Number.isSafeInteger(historicalAttention.deliveryIssues) || historicalAttention.deliveryIssues < 0)) throw new Error("historical attention counts are invalid");
+	const historicalReview = historicalAttention?.recoveryReview ?? jobs.filter((job) => job.lifecycle === "recovery_review").length;
+	const historicalDelivery = historicalAttention?.deliveryIssues ?? jobs.filter((job) => TERMINAL.has(job.lifecycle) && new Set(["unknown", "failed"]).has(job.deliveryState)).length;
 	if (historicalReview > 0 || historicalDelivery > 0) attention.push(issue("historical_attention", { recoveryReview: historicalReview, deliveryIssues: historicalDelivery }));
 	return {
 		schemaVersion: 1,

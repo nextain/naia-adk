@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "requirements": ["DSO-010", "DSO-011", "DSO-012"],
+  "issue": "https://github.com/nextain/naia-adk/issues/22",
+  "revisionBinding": {
+    "baseRevision": "79dc30c56d38007f7831d2ad9ccfd04dd66a45ca",
+    "candidateRevision": "e7efafcc1482e90925b1bdd112dcc5c593bd9ce4",
+    "candidateTree": "4ed93f55fa5beed7c42a9b322ec49d19a89ac78a",
+    "runtimeTree": "60bddc70dfd83bddd08f03def0b36da236f0d3e4",
+    "candidateState": "committed-clean-tree",
+    "discordScopeEligible": false,
+    "reason": "Round 4 closed the code findings; one final exact-revision convergence round remains before live cutover."
+  },
+  "repositoryReleaseGate": {
+    "status": "blocked_preexisting",
+    "code": "review_scope_stale",
+    "requirement": "RCI-001",
+    "receipt": "2026-07-14-round-1",
+    "baselineEvidence": "The same validator failure reproduces at origin/main 79dc30c56d38007f7831d2ad9ccfd04dd66a45ca.",
+    "scopeDecision": "Do not claim the repository-wide request-contract gate is clean; classify it separately from the Discord runtime change."
+  },
+  "reviews": {
+    "planning": {
+      "status": "historical_clean_unbound",
+      "rounds": 2,
+      "reviewers": 3,
+      "note": "Historical planning evidence informed the implementation but does not replace the current exact-revision review."
+    },
+    "development": {
+      "status": "round_4_code_clean_release_evidence_corrected",
+      "reviewedRevision": "e7efafcc1482e90925b1bdd112dcc5c593bd9ce4",
+      "architectureVerdict": "CLEAN",
+      "securityVerdict": "CLEAN",
+      "releaseVerdict": "NOT_CLEAN",
+      "releaseFindingClass": "evidence_and_preexisting_repository_gate",
+      "resolvedFindings": [
+        "runtime input drift is latched until restart even if the original bytes are restored",
+        "the supervisor verifies its managed runtime in the same process before importing observer helpers",
+        "owner-only digest verification is documented as drift detection rather than hostile same-UID isolation",
+        "code traces require every exact structured symbol and evidence locators resolve their JSON or YAML fragment",
+        "negative trace fixtures prove that partial symbols and nonexistent fragments fail",
+        "runtime authority, approval-policy, immutable-artifact, rollback, and secret-handling checks remain fail closed"
+      ],
+      "openFindings": [
+        "Run one final exact-revision adversarial convergence round after this evidence correction."
+      ]
+    },
+    "test": {
+      "status": "passing",
+      "observedAt": "2026-08-04T16:50:08+09:00",
+      "directEvidence": {
+        "discordFull": "197 total; 194 passed; 0 failed; 3 Windows-only skips",
+        "focusedRound3Fixes": "35 passed; 0 failed",
+        "nativeHarness": "PASS: 21 native Node entrypoints; 1 explicit downstream-only skip",
+        "workspaceTest": "PASS",
+        "workspaceBuild": "PASS",
+        "complexityPreflight": "PREFLIGHT_CLEAN",
+        "complexitySha256": "sha256:918663a1dbadf0cb348ec1ba1c649f272dcb33a4d4d78ad9ec10efc36752dd52",
+        "requestContractReleaseEligibility": "BLOCKED at both candidate and origin/main: review_scope_stale"
+      },
+      "note": "The deterministic Discord and workspace checks pass. The separately recorded repository-wide RCI receipt drift is not represented as clean."
+    },
+    "integration": {
+      "status": "pending_live_cutover",
+      "liveCutoverAuthorized": false,
+      "requiredBeforeCutover": [
+        "final exact-revision adversarial convergence",
+        "per-instance verified rollback bundle",
+        "schema-v2 config migration with deterministic workspace context and participant profiles",
+        "installed service and independent timer verification"
+      ]
+    }
+  },
+  "historicalEvidence": {
+    "DSO-009": ".agents/research/discord-unattended-supervision/review-summary.yaml",
+    "scopeNote": "The historical DSO-009 review deliberately deferred immutable rollback; DSO-012 and this evidence record supersede that limitation without rewriting the historical receipt."
+  },
+  "updatedAt": "2026-08-04T16:50:08+09:00"
+}

@@ -18,9 +18,10 @@ acceptance_criteria:
   - "Sequence is monotonic per job, ordinal is monotonic per database, and a stable per-job dedupe key makes an external event retry idempotent."
 trace:
   code:
-    - { path: ".agents/skills/manage-discord-sessions/helper/store.mjs", symbol: "SessionStore createJob/recordEvent/eventsAfter/recoverInterruptedWork", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/store.mjs", symbols: ["SessionStore", "createJob", "recordEvent", "eventsAfter", "recoverInterruptedWork"], coverage: full }
   tests:
-    - { path: ".agents/skills/manage-discord-sessions/tests/observability.test.mjs", symbol: "DSO-001 persists ordered events and deduplicates an external retry", coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/tests/discord-gateway.test.mjs", symbol: "DSG-002/DSG-007 durable ingress and reboot recovery", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/observability-lifecycle.test.mjs", symbol: "DSO-001 persists ordered events and deduplicates an external retry", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-scope-delivery.test.mjs", symbol: "DSG-002 accepts ingress and job atomically and deduplicates Gateway replay", coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-recovery.test.mjs", symbol: "DSG-007 reboot recovery preserves job identity and requires review without retry or resend", coverage: full }
   reviews: { planning: [".agents/requirements/reviews/logs/2026-07-30-issue-18-planning.md"], development: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], test: [".agents/requirements/reviews/logs/2026-07-30-issue-18-development.md"], integration: null }
 decisions: []
