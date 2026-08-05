@@ -40,12 +40,19 @@ export function transientPrompt(message, botUserId, config, authorization = null
 export function boundRequestPrompt(userText, config, authorization = null, agentContextSnapshot = null) {
 	if (typeof userText !== "string" || !userText || userText.length > 4_000) throw new Error("Discord prompt is empty or too large");
 	const allowedActions = effectiveAllowedActions(config, authorization);
+	const backendId = config.backend?.selected ?? "codex";
+	const executionProfile = currentExecutionProfile(config, backendId, authorization);
+	const costProfile = config.backend?.profiles?.[backendId]?.costProfile ?? (backendId === "codex" ? "balanced" : "provider-default");
 	const parts = [];
 	if (agentContextSnapshot) parts.push(agentContextSnapshot.prefix, "");
 	parts.push(`Persona: ${config.persona.name}`, config.persona.instructions, `Role: ${config.role.name}`);
 	if (config.schemaVersion === 2) parts.push(trustedParticipantPolicy({ participantProfile: authorization?.participantProfile, effectiveActions: allowedActions }));
 	parts.push(
 		`Allowed actions: ${allowedActions.join(", ")}`,
+		`Gateway execution contract: ${executionProfile.access}. Cost profile: ${costProfile}.`,
+		executionProfile.access === "workspace-write"
+			? "The host has verified the operator, Discord binding, participant action intersection, project context, and no-prompt policy for this request. This Gateway execution contract is the explicit mutation authority for the current job. Do not downgrade it to read-only merely because no interactive session binding exists. Mutate only inside the configured workspace and granted actions."
+			: "This job is read-only. Do not modify files, repository state, services, or external systems.",
 		"Routine authority: A bounded user request authorizes its normal in-scope execution path. Treat workflow phase gates, including Understand, Scope, Plan, Sync, and Close, as internal checkpoints; do not ask the user to approve them.",
 		"No approval click is available in this unattended session. Never request or wait for interactive approval.",
 		"Authority limit: Ask only when a material unresolved choice would change the requested scope. If an action is outside the granted actions, stop safely and report the limitation without expanding authority or claiming completion.",
@@ -237,8 +244,9 @@ export class DiscordMessageRouter {
 	}
 
 	#withBackendOptions(backendId, options) {
-		const model = this.config.backend.profiles?.[backendId]?.model;
-		return backendId === "codex" && model ? { ...options, model } : options;
+		const profile = this.config.backend.profiles?.[backendId];
+		const withModel = backendId === "codex" && profile?.model ? { ...options, model: profile.model } : options;
+		return backendId === "codex" ? { ...withModel, costProfile: profile?.costProfile ?? "balanced" } : withModel;
 	}
 
 	#authority(authorization) {

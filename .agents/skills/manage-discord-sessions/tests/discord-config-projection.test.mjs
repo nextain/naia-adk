@@ -107,6 +107,9 @@ test("DSG-021 validates schema v2 workspace, exact participant coverage, and saf
 	const loaded = load(base);
 	assert.deepEqual(loaded.discord.participantProfiles[USER].allowedActions, ["read", "reply", "write", "execute"]);
 	assert.equal(loaded.discord.bindings[0].historyVisibility, "requester_only");
+	assert.equal(loaded.backend.profiles.codex.costProfile, "balanced");
+	assert.equal(load({ ...base, backend: { ...base.backend, profiles: { ...base.backend.profiles, codex: { enabled: true, costProfile: "control" } } } }).backend.profiles.codex.costProfile, "control");
+	assert.throws(() => load({ ...base, backend: { ...base.backend, profiles: { ...base.backend.profiles, codex: { enabled: true, costProfile: "unknown" } } } }), /costProfile is invalid/);
 	assert.throws(() => load({ ...base, discord: { ...base.discord, participantProfiles: {} } }), /exactly cover/);
 	assert.throws(() => load({ ...base, discord: { ...base.discord, participantProfiles: { [USER]: { ...base.discord.participantProfiles[USER], label: "system" } } } }), /reserved/);
 	assert.throws(() => load({ ...base, discord: { ...base.discord, participantProfiles: { [USER]: { ...base.discord.participantProfiles[USER], relationship: "owner\ninjected" } } } }), /single line/);

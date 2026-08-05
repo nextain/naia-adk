@@ -44,6 +44,9 @@ test("DSO-006 exposes independent Codex and Claude command contracts", () => {
 	const pinnedCodex = getBackendAdapter("codex").command({ cwd: "/workspace", approvalPolicy: "never", model: "gpt-5.4" });
 	assert.equal(pinnedCodex.args[pinnedCodex.args.indexOf("--model") + 1], "gpt-5.4");
 	assert.equal(pinnedCodex.args.includes('model_reasoning_effort="low"'), true);
+	const controlCodex = getBackendAdapter("codex").command({ cwd: "/workspace", approvalPolicy: "never", costProfile: "control" });
+	assert.equal(controlCodex.args.includes('model_reasoning_effort="medium"'), true);
+	assert.throws(() => getBackendAdapter("codex").command({ cwd: "/workspace", approvalPolicy: "never", costProfile: "unknown" }), /unsupported Codex cost profile/);
 	assert.ok(claude.args.includes("stream-json"));
 	assert.ok(claude.args.includes("plan"));
 	assert.ok(claude.args.includes("--safe-mode"));

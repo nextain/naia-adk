@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
 
+const CODEX_REASONING_BY_COST_PROFILE = Object.freeze({ control: "medium", balanced: "low", economy: "low" });
+
 const ADAPTERS = new Map([
 	["codex", {
 		backendId: "codex",
 		activityDetail: "structured",
 		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
-		command({ executable = "codex", cwd, sandbox = "workspace-write", approvalPolicy = "never", model = null }) {
+		command({ executable = "codex", cwd, sandbox = "workspace-write", approvalPolicy = "never", model = null, costProfile = "balanced" }) {
 			if (approvalPolicy !== "never") throw new Error("Codex child approval policy must be never");
-			const args = ["exec", "--json", "--ephemeral", "--strict-config", "--config", 'approval_policy="never"', "--config", 'model_reasoning_effort="low"', "--config", "project_doc_max_bytes=0", "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config", "--ignore-rules"];
+			const reasoningEffort = CODEX_REASONING_BY_COST_PROFILE[costProfile];
+			if (!reasoningEffort) throw new Error("unsupported Codex cost profile");
+			const args = ["exec", "--json", "--ephemeral", "--strict-config", "--config", 'approval_policy="never"', "--config", `model_reasoning_effort="${reasoningEffort}"`, "--config", "project_doc_max_bytes=0", "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config", "--ignore-rules"];
 			if (model) args.push("--model", model);
 			return { command: executable, args };
 		},

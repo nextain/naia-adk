@@ -109,9 +109,11 @@ export function loadMessengerConfig(path) {
 	if (config.backend.profiles?.[config.backend.selected]?.enabled !== true) throw new Error("selected backend profile is disabled");
 	for (const [name, profile] of Object.entries(config.backend.profiles ?? {})) {
 		if (!new Set(["codex", "claude"]).has(name)) throw new Error("unsupported backend profile");
-		assertOnlyKeys(profile, new Set(["enabled", "model"]), "backend profile");
+		assertOnlyKeys(profile, new Set(["enabled", "model", "costProfile"]), "backend profile");
 		if (typeof profile.enabled !== "boolean") throw new Error("backend profile enabled must be boolean");
 		if (profile.model !== undefined && (typeof profile.model !== "string" || !/^[A-Za-z0-9._:-]{1,80}$/.test(profile.model))) throw new Error("backend profile model is invalid");
+		if (profile.costProfile !== undefined && (name !== "codex" || !new Set(["control", "balanced", "economy"]).has(profile.costProfile))) throw new Error("backend profile costProfile is invalid");
+		if (name === "codex" && profile.costProfile === undefined) profile.costProfile = "balanced";
 	}
 	safeIdentifier(config.discord?.credentialRef, "credentialRef");
 	snowflake(config.discord?.botUserId, "Discord bot user ID");
