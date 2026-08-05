@@ -9,10 +9,11 @@ import { boundedSafeExcerpt, sanitizeFinalResponse } from "./sanitize.mjs";
 export { cleanupChildEnvironment, prepareChildEnvironment, resolveExecutionCwd } from "./backend-child-environment.mjs";
 
 function safeCommandOptions(backendId, options) {
-	const allowed = backendId === "codex" ? new Set(["sandbox", "approvalPolicy", "model"]) : new Set(["permissionMode", "approvalPolicy"]);
+	const allowed = backendId === "codex" ? new Set(["sandbox", "approvalPolicy", "model", "costProfile"]) : new Set(["permissionMode", "approvalPolicy"]);
 	for (const key of Object.keys(options)) if (!allowed.has(key)) throw new Error(`unsupported ${backendId} command option: ${key}`);
 	if (backendId === "codex" && options.sandbox && !new Set(["read-only", "workspace-write"]).has(options.sandbox)) throw new Error("unsafe Codex sandbox option");
 	if (backendId === "codex" && options.model !== undefined && (typeof options.model !== "string" || !/^[A-Za-z0-9._:-]{1,80}$/.test(options.model))) throw new Error("unsafe Codex model option");
+	if (backendId === "codex" && options.costProfile !== undefined && !new Set(["control", "balanced", "economy"]).has(options.costProfile)) throw new Error("unsafe Codex cost profile option");
 	if (backendId === "claude" && options.permissionMode && !new Set(["dontAsk", "plan"]).has(options.permissionMode)) throw new Error("unsafe Claude permission mode");
 	if (options.approvalPolicy !== undefined && options.approvalPolicy !== "never") throw new Error("child approval policy must be never");
 	return { ...options, approvalPolicy: "never" };
