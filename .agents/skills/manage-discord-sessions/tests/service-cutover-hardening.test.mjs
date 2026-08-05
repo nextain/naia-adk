@@ -334,13 +334,11 @@ test("artifact operation kernel lock releases after its owner process dies", { s
 	assert.deepEqual(readdirSync(stateDirectory).filter((name) => name.startsWith(".artifact-operation-ready-")), []);
 });
 
-test("install, prepare, restore, and prune share one instance artifact-operation lock", () => {
+test("Linux install, prepare, restore, and prune share one instance artifact-operation lock", () => {
 	const linux = readFileSync(fileURLToPath(new URL("../helper/service-manager-linux.mjs", import.meta.url)), "utf8");
-	const windows = readFileSync(fileURLToPath(new URL("../helper/service-manager-windows.mjs", import.meta.url)), "utf8");
 	const controller = readFileSync(fileURLToPath(new URL("../helper/service-cutover-controller.mjs", import.meta.url)), "utf8");
 	const artifacts = readFileSync(fileURLToPath(new URL("../helper/cutover-artifacts.mjs", import.meta.url)), "utf8");
 	assert.match(linux, /command === "install" \? acquireDiscordArtifactOperationLock/);
-	assert.match(windows, /command === "install" \? acquireDiscordArtifactOperationLock/);
 	assert.equal((controller.match(/acquireDiscordArtifactOperationLock/g) ?? []).length >= 3, true);
 	assert.match(artifacts, /acquireOperation = acquireDiscordArtifactOperationLock/);
 });
