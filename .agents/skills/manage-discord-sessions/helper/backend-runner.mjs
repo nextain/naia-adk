@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { approvalRequestedText, assertSupportedBackendVersion, getBackendAdapter, inspectBackendLine } from "./adapters.mjs";
 import { cleanupChildEnvironment, prepareChildEnvironment, resolveExecutionCwd } from "./backend-child-environment.mjs";
 import { backendCommand, captureChildOwnership, createOwnedProcessTreeSignaler, killAndWaitForChild, probeBackendVersion } from "./backend-owned-process.mjs";
+import { boundedSafeExcerpt, sanitizeFinalResponse } from "./sanitize.mjs";
 
 export { cleanupChildEnvironment, prepareChildEnvironment, resolveExecutionCwd } from "./backend-child-environment.mjs";
 
@@ -206,6 +207,8 @@ export async function runBackendAttempt({
 		let lineNumber = 0;
 		let backendOutcome = null;
 		let transientResult = null;
+		let pendingAssistantText = null;
+		let progressSequence = 0;
 		let processError = false;
 		let terminationReason = null;
 		let forceTimer = null;
@@ -228,6 +231,12 @@ export async function runBackendAttempt({
 				return true;
 			};
 		};
+		const recordProgress = (text) => {
+			const safe = boundedSafeExcerpt(text);
+			if (!safe) return;
+			progressSequence += 1;
+			store.recordEvent({ jobId, attemptId, occurredAt: now(), source: backendId, dedupeKey: `${backendId}:progress:${attemptId}:${progressSequence}`, kind: "progress_reported", safePayload: { excerpt: safe.excerpt }, metrics: { truncated: safe.truncated }, redactionLevel: "local_safe" });
+		};
 		const recordLine = (line) => {
 			lineNumber += 1;
 			const inspected = inspectBackendLine({ backendId, line, attemptId, lineNumber });
@@ -238,6 +247,10 @@ export async function runBackendAttempt({
 			if (inspected.outcome === "failure") backendOutcome = "failure";
 			else if (inspected.outcome === "success" && backendOutcome !== "failure") backendOutcome = "success";
 			if (inspected.transientResult !== null) transientResult = inspected.transientResult;
+			if (inspected.assistantText !== null && inspected.assistantText !== pendingAssistantText) {
+				if (pendingAssistantText !== null) recordProgress(pendingAssistantText);
+				pendingAssistantText = inspected.assistantText;
+			}
 			for (const event of inspected.events) {
 				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: backendId, ...event });
 				try { onSafeEvent?.(event); } catch {}
@@ -335,6 +348,7 @@ export async function runBackendAttempt({
 			} else {
 				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "attempt_exited", safePayload: { terminationKind: "exited", exitCode: result.exitCode ?? 1 }, metrics: { exitCode: result.exitCode ?? 1 } });
 			}
+			if (!(result.exitCode === 0 && backendOutcome === "success") && pendingAssistantText !== null) recordProgress(pendingAssistantText);
 			if (terminationReason === "cancelled") {
 				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "cancelled", safePayload: {} });
 			} else if (terminationReason === "recovery") {
@@ -348,6 +362,13 @@ export async function runBackendAttempt({
 			} else if (terminationReason === "internal_error" || normalizeFailed || processError) {
 				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: "internal_error" } });
 			} else if (result.exitCode === 0 && backendOutcome === "success") {
+				if (pendingAssistantText !== null && pendingAssistantText !== transientResult) recordProgress(pendingAssistantText);
+				if (transientResult !== null) {
+					try {
+						const safeResult = boundedSafeExcerpt(sanitizeFinalResponse(transientResult));
+						if (safeResult) store.recordEvent({ jobId, attemptId, occurredAt: now(), source: backendId, dedupeKey: `${backendId}:result:${attemptId}`, kind: "result_reported", safePayload: { excerpt: safeResult.excerpt }, metrics: { truncated: safeResult.truncated }, redactionLevel: "local_safe" });
+					} catch {}
+				}
 				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "attempt_succeeded", safePayload: {} });
 			} else {
 				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: result.exitCode === 0 ? "internal_error" : "process_exit" } });

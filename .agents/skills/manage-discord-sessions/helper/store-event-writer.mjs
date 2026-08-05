@@ -16,11 +16,13 @@ const EVENT_INPUT_KEYS = new Set([
 
 const EVENT_SOURCES = new Map([
 	["job_accepted", new Set(["gateway"])],
+	["request_recorded", new Set(["gateway"])],
 	["attempt_reserved", new Set(["helper"])],
 	["attempt_started", new Set(["helper"])],
 	["backend_ready", new Set(["codex", "claude", "fake_backend"])],
 	["phase_changed", new Set(["codex", "claude", "fake_backend"])],
 	["output_activity", new Set(["codex", "claude", "fake_backend"])],
+	["progress_reported", new Set(["codex", "claude", "fake_backend"])],
 	["prompt_cache_observed", new Set(["codex", "claude", "fake_backend"])],
 	["tool_started", new Set(["codex", "claude", "fake_backend"])],
 	["tool_finished", new Set(["codex", "claude", "fake_backend"])],
@@ -29,6 +31,7 @@ const EVENT_SOURCES = new Map([
 	["verification_recorded", new Set(["host_verifier", "backend_claim", "human_review"])],
 	["attempt_exited", new Set(["helper"])],
 	["attempt_succeeded", new Set(["helper"])],
+	["result_reported", new Set(["codex", "claude", "fake_backend"])],
 	["retry_scheduled", new Set(["helper", "recovery"])],
 	["delivery_started", new Set(["helper"])],
 	["delivery_confirmed", new Set(["helper", "recovery"])],
@@ -68,6 +71,7 @@ function transitionFor(kind, current) {
 		case "backend_ready":
 		case "phase_changed":
 		case "output_activity":
+		case "progress_reported":
 		case "tool_started":
 		case "tool_finished":
 		case "checkpoint_saved":
@@ -183,7 +187,8 @@ export class SessionEventWriter {
 				safe_summary, metrics_json, redaction_level)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`).run(eventId, dedupeKey, jobId, attemptId, sequence, kind, occurredAt, source, summary, json(safeMetrics), redactionLevel);
-		const progressKinds = new Set(["attempt_started", "backend_ready", "phase_changed", "output_activity", "tool_started", "tool_finished", "checkpoint_saved", "verification_recorded"]);
+		const progressKinds = new Set(["attempt_started", "backend_ready", "phase_changed", "output_activity", "progress_reported", "tool_started", "tool_finished", "checkpoint_saved", "verification_recorded"]);
+		const projectedActivityKinds = new Set(["attempt_started", "backend_ready", "phase_changed", "output_activity", "tool_started", "tool_finished", "checkpoint_saved", "verification_recorded"]);
 		const childAlive = kind === "attempt_started" ? 1 : ["attempt_exited", "failed", "completed", "cancelled", "recovered", "recovery_review_required", "delivery_unknown", "delivery_failed"].includes(kind) ? 0 : job.child_alive;
 		const deliveryState = kind === "delivery_started" ? "sending" : kind === "delivery_confirmed" ? "delivered" : kind === "delivery_unknown" ? "unknown" : kind === "delivery_failed" ? "failed" : job.delivery_state;
 		this.db.prepare(`
@@ -196,7 +201,7 @@ export class SessionEventWriter {
 				latest_safe_error = CASE WHEN ? = 'failed' THEN ? ELSE latest_safe_error END
 			WHERE job_id = ?
 		`).run(attemptId, lifecycle, occurredAt, kind, occurredAt, progressKinds.has(kind) ? 1 : 0, occurredAt,
-			progressKinds.has(kind) ? 1 : 0, summary, kind, summary, childAlive, deliveryState, kind, kind, kind, summary, jobId);
+			projectedActivityKinds.has(kind) ? 1 : 0, summary, kind, summary, childAlive, deliveryState, kind, kind, kind, summary, jobId);
 		if (["delivery_confirmed", "completed", "failed", "cancelled", "recovery_review_required"].includes(kind)) this.db.prepare("DELETE FROM job_recovery WHERE job_id = ?").run(jobId);
 		return { ordinal: Number(insertResult.lastInsertRowid), eventId, dedupeKey, jobId, attemptId, sequence, kind, occurredAt, source, safeSummary: summary, metrics: safeMetrics, redactionLevel };
 	}

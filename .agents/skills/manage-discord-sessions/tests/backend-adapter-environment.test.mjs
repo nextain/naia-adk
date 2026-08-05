@@ -79,6 +79,26 @@ test("DSO-006 normalizes provider streams without retaining model content", () =
 	assert.ok(!JSON.stringify({ codex, claude }).includes(secret));
 });
 
+test("DSO-001 records only explicit provider tool categories and keeps unknown tools generic", () => {
+	const codexKnown = parseBackendLine({
+		backendId: "codex", attemptId: "attempt-tool-1", lineNumber: 1,
+		line: JSON.stringify({ type: "item.started", item: { type: "command_execution", command: "private" } }),
+	});
+	const codexUnknown = parseBackendLine({
+		backendId: "codex", attemptId: "attempt-tool-2", lineNumber: 1,
+		line: JSON.stringify({ type: "item.started", item: { type: "mcp_tool_call", name: "ReadPrivateFile" } }),
+	});
+	const claudeKnown = parseBackendLine({
+		backendId: "claude", attemptId: "attempt-tool-3", lineNumber: 1,
+		line: JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Read", input: { file_path: "/private" } }] } }),
+	});
+	assert.deepEqual(codexKnown[0].safePayload, { toolCategory: "command_execution" });
+	assert.deepEqual(codexUnknown[0].safePayload, {});
+	assert.deepEqual(claudeKnown[0].safePayload, { toolCategory: "read" });
+	assert.equal(JSON.stringify({ codexKnown, codexUnknown, claudeKnown }).includes("ReadPrivateFile"), false);
+	assert.equal(JSON.stringify({ codexKnown, codexUnknown, claudeKnown }).includes("/private"), false);
+});
+
 test("DSO-006 never promotes an unknown provider result to success", () => {
 	const codex = inspectBackendLine({ backendId: "codex", attemptId: "attempt-unknown-codex", lineNumber: 1, line: JSON.stringify({ type: "turn.completed", status: "unknown" }) });
 	const claude = inspectBackendLine({ backendId: "claude", attemptId: "attempt-unknown-claude", lineNumber: 1, line: JSON.stringify({ type: "result", subtype: "unknown", result: "must-not-deliver" }) });

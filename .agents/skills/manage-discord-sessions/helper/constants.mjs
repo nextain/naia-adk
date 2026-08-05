@@ -3,11 +3,13 @@ export const OUTPUT_SCHEMA_VERSION = 1;
 
 export const EVENT_KINDS = new Set([
 	"job_accepted",
+	"request_recorded",
 	"attempt_reserved",
 	"attempt_started",
 	"backend_ready",
 	"phase_changed",
 	"output_activity",
+	"progress_reported",
 	"prompt_cache_observed",
 	"tool_started",
 	"tool_finished",
@@ -16,6 +18,7 @@ export const EVENT_KINDS = new Set([
 	"verification_recorded",
 	"attempt_exited",
 	"attempt_succeeded",
+	"result_reported",
 	"retry_scheduled",
 	"delivery_started",
 	"delivery_confirmed",
@@ -67,6 +70,7 @@ export const SAFE_METRIC_KEYS = new Set([
 	"cacheReadInputTokens",
 	"cacheCreationInputTokens",
 	"outputTokens",
+	"truncated",
 ]);
 
 export const DEFAULT_SOFT_SILENCE_MS = 120_000;

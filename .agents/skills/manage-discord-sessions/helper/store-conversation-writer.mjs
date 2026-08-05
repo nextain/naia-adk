@@ -1,5 +1,5 @@
 import { ACTIVITY_DETAILS, DEFAULT_SOFT_SILENCE_MS } from "./constants.mjs";
-import { buildSafeEventSummary, canonicalTimestamp, safeIdentifier, validateBackendCapabilities } from "./sanitize.mjs";
+import { boundedSafeExcerpt, buildSafeEventSummary, canonicalTimestamp, safeIdentifier, validateBackendCapabilities } from "./sanitize.mjs";
 import { validateDurableExecutionBinding } from "./execution-profile.mjs";
 
 function json(value) {
@@ -75,7 +75,7 @@ export class SessionConversationWriter {
 		} catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
 	}
 
-	acceptIngressAndCreateJob({ sourceMessageId, scopeKey, jobId, dispatchSequence = null, backendId, revision = "discord-v1", backendCapabilities = {}, activityDetail, jobType = "conversation", softSilenceMs = DEFAULT_SOFT_SILENCE_MS, recoveryEnvelope = null, executionBinding = null, now = new Date().toISOString() }) {
+	acceptIngressAndCreateJob({ sourceMessageId, scopeKey, jobId, dispatchSequence = null, backendId, revision = "discord-v1", backendCapabilities = {}, activityDetail, jobType = "conversation", requestExcerpt = null, softSilenceMs = DEFAULT_SOFT_SILENCE_MS, recoveryEnvelope = null, executionBinding = null, now = new Date().toISOString() }) {
 		for (const [value, label] of [[sourceMessageId, "sourceMessageId"], [scopeKey, "scopeKey"], [jobId, "jobId"], [backendId, "backendId"], [revision, "revision"]]) safeIdentifier(value, label);
 		if (!/^\d{17,20}$/.test(sourceMessageId) || /^0+$/.test(sourceMessageId)) throw new Error("sourceMessageId must be a Discord snowflake");
 		if (dispatchSequence !== null && (!Number.isSafeInteger(dispatchSequence) || dispatchSequence < 0)) throw new Error("invalid dispatch sequence");
@@ -86,6 +86,7 @@ export class SessionConversationWriter {
 		const safeCapabilities = validateBackendCapabilities(backendCapabilities);
 		const safeExecutionBinding = executionBinding === null ? null : validateDurableExecutionBinding(executionBinding);
 		const summary = buildSafeEventSummary("job_accepted", { jobType });
+		const safeRequest = requestExcerpt === null ? null : boundedSafeExcerpt(requestExcerpt);
 		if (recoveryEnvelope !== null) {
 			for (const key of ["iv", "ciphertext", "tag"]) if (typeof recoveryEnvelope[key] !== "string" || !/^[A-Za-z0-9_-]+$/.test(recoveryEnvelope[key])) throw new Error("recovery envelope is invalid");
 		}
@@ -105,6 +106,7 @@ export class SessionConversationWriter {
 				VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 				.run(jobId, backendId, revision, json(safeCapabilities), activityDetail, summary, now, now, softSilenceMs, scopeKey, acceptingGeneration, safeExecutionBinding === null ? null : JSON.stringify(safeExecutionBinding));
 			this.events.appendEvent({ jobId, dedupeKey: `job_accepted:${jobId}`, kind: "job_accepted", occurredAt: now, source: "gateway", safeSummary: summary });
+			if (safeRequest) this.events.appendEvent({ jobId, dedupeKey: `request_recorded:${jobId}`, kind: "request_recorded", occurredAt: now, source: "gateway", safeSummary: buildSafeEventSummary("request_recorded", { excerpt: safeRequest.excerpt }), metrics: { truncated: safeRequest.truncated }, redactionLevel: "local_safe" });
 			if (recoveryEnvelope) this.db.prepare("INSERT INTO job_recovery(job_id, iv, ciphertext, tag, updated_at) VALUES(?, ?, ?, ?, ?)").run(jobId, recoveryEnvelope.iv, recoveryEnvelope.ciphertext, recoveryEnvelope.tag, now);
 			this.db.exec("COMMIT");
 			this.hardenSidecars();

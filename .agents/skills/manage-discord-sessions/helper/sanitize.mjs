@@ -9,14 +9,28 @@ const SECRET_PATTERNS = [
 ];
 
 const LOCAL_PATH_PATTERN = /(?:[A-Za-z]:\\|\/(?:home|Users|var\/home)\/)[^\s"']+/g;
+const MAX_EVENT_EXCERPT_LENGTH = 480;
+
+function redactText(value) {
+	let sanitized = value.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+	for (const pattern of SECRET_PATTERNS) sanitized = sanitized.replace(pattern, "[REDACTED]");
+	return sanitized.replace(LOCAL_PATH_PATTERN, "[LOCAL_PATH]");
+}
 
 export function sanitizeSummary(value) {
 	if (typeof value !== "string") throw new TypeError("safeSummary must be a string");
-	let sanitized = value.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
-	for (const pattern of SECRET_PATTERNS) sanitized = sanitized.replace(pattern, "[REDACTED]");
-	sanitized = sanitized.replace(LOCAL_PATH_PATTERN, "[LOCAL_PATH]");
+	const sanitized = redactText(value);
 	if (sanitized.length > MAX_SAFE_SUMMARY_LENGTH) throw new Error(`safeSummary exceeds ${MAX_SAFE_SUMMARY_LENGTH} characters`);
 	return sanitized;
+}
+
+export function boundedSafeExcerpt(value) {
+	if (typeof value !== "string") throw new TypeError("event excerpt must be a string");
+	const sanitized = redactText(value);
+	if (!sanitized) return null;
+	const characters = [...sanitized];
+	const truncated = characters.length > MAX_EVENT_EXCERPT_LENGTH;
+	return { excerpt: truncated ? `${characters.slice(0, MAX_EVENT_EXCERPT_LENGTH - 1).join("")}…` : sanitized, truncated };
 }
 
 export function sanitizeFinalResponse(value) {
@@ -67,7 +81,7 @@ const ENUMS = {
 	backend: new Set(["codex", "claude", "fake"]),
 	jobType: new Set(["conversation", "issue_work", "review", "maintenance", "unknown"]),
 	phase: new Set(["setup", "planning", "reading", "editing", "testing", "reviewing", "delivering", "recovering"]),
-	toolCategory: new Set(["file_read", "file_edit", "command", "test", "build", "network", "other"]),
+	toolCategory: new Set(["command_execution", "file_change", "read", "search", "file_read", "file_edit", "command", "test", "build", "network", "other"]),
 	approvalType: new Set(["read", "write", "execute", "cancel", "retry"]),
 	checkpointType: new Set(["job_state"]),
 	recoveryAction: new Set(["resume", "safe_retry", "manual_review"]),
@@ -89,19 +103,21 @@ function count(value, label) {
 
 const PAYLOAD_BUILDERS = {
 	job_accepted: (payload) => `Accepted job: ${enumValue(payload.jobType, "jobType")}`,
+	request_recorded: (payload) => `Request: ${payload.excerpt}`,
 	attempt_reserved: (payload) => `Backend attempt reserved: ${enumValue(payload.backend, "backend")}`,
 	attempt_started: (payload) => `Backend attempt started: ${enumValue(payload.backend, "backend")}`,
 	backend_ready: (payload) => `Backend ready: ${enumValue(payload.backend, "backend")}`,
 	phase_changed: (payload) => `Phase changed: ${enumValue(payload.phase, "phase")}`,
 	output_activity: (payload) => `Output activity: ${count(payload.bytes, "bytes")} bytes`,
+	progress_reported: (payload) => `Progress: ${payload.excerpt}`,
 	prompt_cache_observed: (payload) => {
 		const backend = enumValue(payload.backend, "backend");
 		const base = `Provider cache receipt (${backend} raw counters): input=${count(payload.inputTokens, "inputTokens")}, cache-read=${count(payload.cacheReadInputTokens, "cacheReadInputTokens")}`;
 		const created = payload.cacheCreationInputTokens === undefined ? "" : `, cache-created=${count(payload.cacheCreationInputTokens, "cacheCreationInputTokens")}`;
 		return `${base}${created}, output=${count(payload.outputTokens, "outputTokens")}`;
 	},
-	tool_started: (payload) => `Tool started: ${enumValue(payload.toolCategory, "toolCategory")}`,
-	tool_finished: (payload) => `Tool finished: ${enumValue(payload.toolCategory, "toolCategory")}`,
+	tool_started: (payload) => payload.toolCategory === undefined ? "Tool started" : `Tool started: ${enumValue(payload.toolCategory, "toolCategory")}`,
+	tool_finished: (payload) => payload.toolCategory === undefined ? "Tool finished" : `Tool finished: ${enumValue(payload.toolCategory, "toolCategory")}`,
 	approval_required: (payload) => `Approval required: ${enumValue(payload.approvalType, "approvalType")}`,
 	checkpoint_saved: (payload) => `Checkpoint saved: ${enumValue(payload.checkpointType, "checkpointType")}`,
 	verification_recorded: (payload) => `Verification recorded: ${safeIdentifier(payload.checkId, "checkId")}`,
@@ -115,6 +131,7 @@ const PAYLOAD_BUILDERS = {
 		return `Backend attempt signaled: ${enumValue(payload.signal, "signal")}`;
 	},
 	attempt_succeeded: () => "Backend result ready for delivery",
+	result_reported: (payload) => `Result: ${payload.excerpt}`,
 	retry_scheduled: (payload) => `Retry scheduled: ${count(payload.delayMs, "delayMs")} ms`,
 	delivery_started: () => "Delivery started",
 	delivery_confirmed: () => "Delivery confirmed",
@@ -134,11 +151,13 @@ const PAYLOAD_BUILDERS = {
 
 const PAYLOAD_KEYS = new Map([
 	["job_accepted", new Set(["jobType"])],
+	["request_recorded", new Set(["excerpt"])],
 	["attempt_reserved", new Set(["backend"])],
 	["attempt_started", new Set(["backend"])],
 	["backend_ready", new Set(["backend"])],
 	["phase_changed", new Set(["phase"])],
 	["output_activity", new Set(["bytes"])],
+	["progress_reported", new Set(["excerpt"])],
 	["prompt_cache_observed", new Set(["backend", "inputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "outputTokens"])],
 	["tool_started", new Set(["toolCategory"])],
 	["tool_finished", new Set(["toolCategory"])],
@@ -147,6 +166,7 @@ const PAYLOAD_KEYS = new Map([
 	["verification_recorded", new Set(["checkId"])],
 	["attempt_exited", new Set(["terminationKind", "exitCode", "signal"])],
 	["attempt_succeeded", new Set()],
+	["result_reported", new Set(["excerpt"])],
 	["retry_scheduled", new Set(["delayMs"])],
 	["delivery_started", new Set()],
 	["delivery_confirmed", new Set()],
