@@ -9,7 +9,7 @@ import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-p
 import { evaluateManagedDiscordCanary, manageService, prepareManagedDiscordCutover, restoreManagedDiscordCutover, verifyManagedDiscordCutover } from "./service-manager.mjs";
 import { listManagedDiscordArtifacts, pruneManagedDiscordArtifacts } from "./cutover-bundle.mjs";
 import { gatewayEvidenceBoundSeconds, projectUnattendedHealth } from "./unattended-health.mjs";
-import { protectOwnerOnly } from "./platform-security.mjs";
+import { assertOwnerOnly, protectOwnerOnly } from "./platform-security.mjs";
 
 class UsageError extends Error {}
 
@@ -106,7 +106,9 @@ if (new Set(["cancel", "restart", "amend"]).has(command)) {
 		let amendment;
 		if (command === "amend") {
 			if (!options.contentPath) throw new UsageError("--content-file is required for amend");
-			amendment = readFileSync(resolve(options.contentPath), "utf8");
+			const contentPath = resolve(options.contentPath);
+			assertOwnerOnly(contentPath, "file", "Discord job amendment");
+			amendment = readFileSync(contentPath, "utf8");
 			if (!amendment.trim() || amendment.length > 4_000) throw new UsageError("amendment must contain 1 to 4000 characters");
 		}
 		if (!existsSync(databasePath)) throw new Error("Discord session state is unavailable");
