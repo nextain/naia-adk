@@ -11,6 +11,7 @@
  */
 
 const fs = require("fs");
+const crypto = require("crypto");
 const path = require("path");
 const { STATES, resolveSessionContract } = require("./session-contract.js");
 
@@ -35,6 +36,74 @@ const PHASE_LABELS = {
 };
 
 const GATE_PHASES = new Set(["understand", "scope", "plan", "sync"]);
+
+function stableValue(value) {
+	if (Array.isArray(value)) return value.map(stableValue);
+	if (!value || typeof value !== "object") return value;
+	return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+}
+
+function codexDevelopmentProfile(projectRoot, env) {
+	const catalogPath = path.join(
+		projectRoot,
+		"packages",
+		"benchmark-contract",
+		"baselines",
+		"development-composition-profiles.json",
+	);
+	const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+	if (
+		catalog.schema_revision !== "development-composition-profiles-v2" ||
+		catalog.status !== "active_codex_default_no_total_cost_claim" ||
+		catalog.default_profile !== "balanced" ||
+		catalog.fallback_profile !== "control" ||
+		catalog.activation?.codex_bound_sessions?.mode !== "default_active" ||
+		catalog.activation.codex_bound_sessions.override_env !== "CODEX_DEVELOPMENT_PROFILE" ||
+		catalog.activation.codex_bound_sessions.available_bindings_env !== "CODEX_AVAILABLE_BINDINGS" ||
+		!Array.isArray(catalog.profiles) ||
+		!catalog.profiles.some((profile) => profile.id === catalog.default_profile) ||
+		!catalog.profiles.some((profile) => profile.id === catalog.fallback_profile) ||
+		!Array.isArray(catalog.availability?.default_available_bindings) ||
+		!catalog.claim_boundary?.forbidden_until_phase_2?.includes("proven_total_cost_reduction")
+	) {
+		throw new Error("Codex development profile catalog identity invalid");
+	}
+	if (catalog.availability.default_available_bindings.some((binding) => !catalog.bindings?.[binding])) {
+		throw new Error("Codex development profile catalog availability invalid");
+	}
+	const overrideName = catalog.activation.codex_bound_sessions.override_env;
+	const override = Object.prototype.hasOwnProperty.call(env, overrideName)
+		? String(env[overrideName]).trim()
+		: "";
+	const profileId = override || catalog.default_profile;
+	if (!catalog.profiles.some((profile) => profile.id === profileId)) {
+		throw new Error(`unknown Codex development profile ${profileId}`);
+	}
+	const availabilityName = catalog.activation.codex_bound_sessions.available_bindings_env;
+	const rawAvailability = Object.prototype.hasOwnProperty.call(env, availabilityName)
+		? String(env[availabilityName]).trim()
+		: null;
+	const availableBindings = rawAvailability === null
+		? catalog.availability.default_available_bindings
+		: rawAvailability === "" || rawAvailability === "[]" || rawAvailability.toLowerCase() === "none"
+			? []
+			: rawAvailability.split(",").map((binding) => binding.trim()).filter(Boolean);
+	if (!availableBindings.every((binding) => catalog.bindings[binding])) {
+		throw new Error("available Codex development bindings are invalid");
+	}
+	const catalogDigest = crypto
+		.createHash("sha256")
+		.update(JSON.stringify(stableValue(catalog)), "utf8")
+		.digest("hex");
+	return {
+		profileId,
+		activationSource: override ? "environment_override" : "catalog_default",
+		availableBindings: [...availableBindings].sort(),
+		fallbackProfile: catalog.fallback_profile,
+		unavailablePolicy: catalog.availability.unavailable_policy,
+		catalogDigest,
+	};
+}
 
 function atomicWriteJson(filePath, value) {
 	const dir = path.dirname(filePath);
@@ -122,6 +191,18 @@ function buildSessionInject(opts) {
 		`Contract: ${contract.id} (${contract.contract_digest.slice(0, 12)})`,
 		...(sessionId ? [`Session: ${sessionId} (bind: explicit)`] : []),
 	];
+
+	if (hostConfigDir === ".codex") {
+		const activation = codexDevelopmentProfile(resolution.projectRoot, env);
+		lines.push(
+			"── [HARNESS: CODEX DEVELOPMENT PROFILE] ────────────────",
+			`Active profile: ${activation.profileId} (source: ${activation.activationSource})`,
+			`Catalog: ${activation.catalogDigest}`,
+			`Available bindings: ${activation.availableBindings.join(", ") || "none"}`,
+			`Fallback: ${activation.fallbackProfile}; ${activation.unavailablePolicy}`,
+			"Claim boundary: total development cost reduction is not proven",
+		);
+	}
 
 	if (progress.current_task) {
 		lines.push(`Task  : ${progress.current_task}`);
