@@ -270,7 +270,9 @@ test("DSG-008 Windows operator launcher passes its native execution probe", { sk
 	mkdirSync(helper, { recursive: true });
 	writeFileSync(join(helper, "cli.mjs"), "process.exit(process.argv.slice(-2).join(' ') === 'service unit' ? 0 : 1);\n", { mode: 0o600 });
 	const launcher = installOperatorLauncher(root, { directory: bin });
-	assert.equal(spawnSync(launcher, ["service", "unit"], { shell: true, windowsHide: true }).status, 0);
+	const probe = spawnSync(launcher, ["service", "unit"], { shell: true, windowsHide: true, timeout: 5_000 });
+	assert.equal(probe.error, undefined);
+	assert.equal(probe.status, 0, probe.stderr?.toString());
 });
 
 test("DSG-008 quotes and verifies the exact Windows Task Scheduler action", () => {

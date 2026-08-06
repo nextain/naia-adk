@@ -16,9 +16,14 @@ test("FET_DSO_014_004 rejects omitted source obligations and fixture-only instal
 	const faults = spawnSync(process.execPath, [join(root, "scripts/validate-requirement-evidence-levels.cjs"), "--self-test"], { cwd: root, encoding: "utf8" });
 	assert.equal(faults.status, 0, faults.stderr);
 	assert.match(faults.stdout, /self-test: PASS/);
-	const preflight = spawnSync(process.execPath, [join(root, "scripts/run-discord-session-tests.cjs")], { cwd: root, encoding: "utf8", env: { ...process.env, DISCORD_TEST_MIN_FREE_INODES: "999999999" } });
+	const preflightEnv = process.platform === "win32"
+		? { ...process.env, DISCORD_TEST_MIN_FREE_INODES: "0" }
+		: { ...process.env, DISCORD_TEST_MIN_FREE_INODES: "999999999" };
+	const preflight = spawnSync(process.execPath, [join(root, "scripts/run-discord-session-tests.cjs")], { cwd: root, encoding: "utf8", env: preflightEnv });
 	assert.equal(preflight.status, 1);
-	assert.match(preflight.stderr, /discord-test-preflight: FAIL tmp_free_inodes=/);
+	assert.match(preflight.stderr, process.platform === "win32"
+		? /discord-test-preflight: FAIL invalid DISCORD_TEST_MIN_FREE_INODES/
+		: /discord-test-preflight: FAIL tmp_free_inodes=/);
 });
 
 function regularRepositoryFile(requirementFile, relative) {

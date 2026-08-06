@@ -454,7 +454,7 @@ test("DSO-006 kills the owned process group including a grandchild", async () =>
 	store.close();
 });
 
-test("DSO-006 does not signal an orphaned group after immutable leader identity disappears", async () => {
+test("DSO-006 does not signal an orphaned group after immutable leader identity disappears", { skip: process.platform === "win32" ? "POSIX orphaned process groups" : false }, async () => {
 	const { root, store, jobId } = fixture("codex");
 	const pidFile = join(root, "orphan.pid");
 	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: `__fake_orphan__:${pidFile}`, cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } });

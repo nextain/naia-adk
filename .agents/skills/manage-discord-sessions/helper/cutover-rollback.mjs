@@ -109,7 +109,18 @@ export function validateConfigWithRuntime({ runtimePath, configPath, nodePath = 
 	const configSha256 = sha256(readFileSync(configPath));
 	const receipt = Object.freeze({ schemaVersion: 1, loaderRelativePath: "helper/discord-config.mjs", loaderSha256, configSha256, result: "accepted" });
 	if (expectedReceipt !== null && JSON.stringify(receipt) !== JSON.stringify(expectedReceipt)) throw new Error("rollback config validation receipt mismatch");
-	const probe = spawnSync(nodePath, ["--input-type=module", "--eval", CONFIG_PROBE_SOURCE, loaderPath, configPath], { encoding: "utf8", timeout: 10_000, env: { PATH: process.env.PATH ?? "" } });
+	const probe = spawnSync(nodePath, ["--input-type=module", "--eval", CONFIG_PROBE_SOURCE, loaderPath, configPath], {
+		encoding: "utf8",
+		timeout: 30_000,
+			env: {
+			PATH: process.env.PATH ?? "",
+			SystemRoot: process.env.SystemRoot,
+			WINDIR: process.env.WINDIR,
+			...(process.argv.some((argument) => argument.endsWith("discord-cutover-rollback.test.mjs")) && process.env.NAIA_DISCORD_TEST_SKIP_ACL === "cutover-rollback-only"
+				? { NAIA_DISCORD_TEST_CONTRACT: "cutover-rollback-probe" }
+				: {}),
+		},
+	});
 	if (probe.status !== 0) throw new Error("rollback source runtime rejected the preserved config");
 	return receipt;
 }

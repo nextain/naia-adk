@@ -252,6 +252,21 @@ function materializeGitRuntime({ adkRoot, revision, expectedTreeId, runtimePath 
 	if (archive.status !== 0 || !Buffer.isBuffer(archive.stdout)) throw new Error("rollback Git runtime archive is unavailable");
 	const extracted = spawnSync("tar", ["-xf", "-", "--strip-components=3", "-C", runtimePath], { input: archive.stdout, timeout: 15_000, maxBuffer: MAX_GIT_OUTPUT_BYTES });
 	if (extracted.status !== 0) throw new Error("rollback Git runtime archive could not be materialized");
+	// Git for Windows can hand the external tar implementation text files with
+	// checkout-style line endings. Rehydrate every regular file from its blob so
+	// the managed runtime is byte-identical to the committed tree on every OS.
+	const listing = spawnSync("git", ["-C", adkRoot, "ls-tree", "-r", "-z", revision, "--", RUNTIME_GIT_PATH], { timeout: 10_000, maxBuffer: MAX_GIT_OUTPUT_BYTES });
+	if (listing.status !== 0 || !Buffer.isBuffer(listing.stdout)) throw new Error("rollback Git runtime file evidence is unavailable");
+	const prefix = `${RUNTIME_GIT_PATH}/`;
+	for (const record of listing.stdout.toString("utf8").split("\0").filter(Boolean)) {
+		const match = record.match(/^(100644|100755) blob ([a-f0-9]{40})\t(.+)$/);
+		if (!match || !match[3].startsWith(prefix)) throw new Error("rollback Git runtime contains an unsupported entry");
+		const target = join(runtimePath, match[3].slice(prefix.length));
+		mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+		const blob = spawnSync("git", ["-C", adkRoot, "cat-file", "blob", match[2]], { timeout: 5_000, maxBuffer: MAX_GIT_OUTPUT_BYTES });
+		if (blob.status !== 0 || !Buffer.isBuffer(blob.stdout)) throw new Error("rollback Git runtime blob is unavailable");
+		writeFileSync(target, blob.stdout, { mode: match[1] === "100755" ? 0o755 : 0o644 });
+	}
 	verifyGitRuntimeBytes({ adkRoot, revision, runtimePath });
 	return actualTreeId;
 }
@@ -288,7 +303,7 @@ function verifyGitRuntimeBytes({ adkRoot, revision, runtimePath }) {
 	for (const file of actual) {
 		const evidence = expected.get(file.relativePath);
 		if (!evidence || evidence.mode !== file.mode) throw new Error("rollback Git runtime materialization mode mismatch");
-		const object = spawnSync("git", ["-C", adkRoot, "hash-object", "--stdin"], { input: readFileSync(file.path), encoding: "utf8", timeout: 5_000 });
+		const object = spawnSync("git", ["-C", adkRoot, "hash-object", "--no-filters", "--stdin"], { input: readFileSync(file.path), encoding: "utf8", timeout: 5_000 });
 		if (object.status !== 0 || object.stdout.trim() !== evidence.objectId) throw new Error("rollback Git runtime materialization byte mismatch");
 	}
 }

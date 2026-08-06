@@ -65,6 +65,7 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 		service: { autoStart: true, startAt: "login" }, recovery: { autoRetry: false },
 	};
 	writeFileSync(paths.configPath, `${JSON.stringify(rollbackConfig)}\n`, { mode: 0o600 });
+	protectOwnerOnly(paths.configPath, "file", "test messenger config");
 	const sourceConfigText = readFileSync(paths.configPath, "utf8");
 	const cutoverAt = new Date("2026-08-03T00:00:00.000Z");
 	const registrationState = { service: { enabled: true, active: true }, supervisorTimer: { enabled: true, active: false } };
@@ -90,6 +91,7 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 	}), /source config changed during prepare/);
 	assert.equal(existsSync(paths.activeRollbackPath), false);
 	writeFileSync(paths.configPath, sourceConfigText, { mode: 0o600 });
+	protectOwnerOnly(paths.configPath, "file", "test messenger config");
 	const bundle = createCutoverRollbackBundle(bundleInput);
 	assert.equal(bundle.manifest.configSchemaVersion, 1);
 	assert.equal(bundle.manifest.database.policy, "preserve");
@@ -99,7 +101,10 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 	assert.equal(bundle.manifest.candidateRuntimeTreeId, candidateRuntimeTreeId);
 	assert.deepEqual(bundle.manifest.registrationState, registrationState);
 	assert.equal(bundle.manifest.canaryStopCriteria.includes("approval_ui_detected"), true);
-	assert.match(readFileSync(bundle.units.service, "utf8"), /rollback-bundles.*runtime\/manage-discord-sessions\/helper\/service\.mjs/);
+	assert.match(
+		readFileSync(bundle.units.service, "utf8").replaceAll("\\\\", "/"),
+		/rollback-bundles.*runtime\/manage-discord-sessions\/helper\/service\.mjs/,
+	);
 	assert.equal(readFileSync(join(bundle.runtimePath, "runtime-version.txt"), "utf8"), "prior-runtime\n");
 	assert.equal(verifyCutoverRollbackBundle(bundle.bundleDirectory).manifest.bundleId, bundle.manifest.bundleId);
 	assert.equal(verifyCutoverController(bundle, candidateRoot).manifest.bundleId, bundle.manifest.bundleId);
@@ -129,8 +134,8 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 	});
 	const legacyServiceUnit = readFileSync(legacyBundle.units.service, "utf8");
 	const legacySupervisorUnit = readFileSync(legacyBundle.units.supervisorService, "utf8");
-	assert.match(legacyServiceUnit, /rollback-bundles.*runtime\/manage-discord-sessions\/helper\/service\.mjs/);
-	assert.match(legacySupervisorUnit, /rollback-bundles.*runtime\/manage-discord-sessions\/helper\/supervisor\.mjs/);
+	assert.match(legacyServiceUnit.replaceAll("\\\\", "/"), /rollback-bundles.*runtime\/manage-discord-sessions\/helper\/service\.mjs/);
+	assert.match(legacySupervisorUnit.replaceAll("\\\\", "/"), /rollback-bundles.*runtime\/manage-discord-sessions\/helper\/supervisor\.mjs/);
 	assert.doesNotMatch(legacyServiceUnit, /--managed-preflight|NAIA_DISCORD_RUNTIME_ARTIFACT|NAIA_DISCORD_LAUNCH_MODE/);
 	assert.match(legacyServiceUnit, /naia-discord-token-/);
 	assert.equal(legacyBundle.manifest.units.mode, "legacy_compat");
