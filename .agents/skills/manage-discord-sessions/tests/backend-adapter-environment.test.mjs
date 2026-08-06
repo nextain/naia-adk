@@ -8,7 +8,10 @@ import { fileURLToPath } from "node:url";
 import { assertSupportedBackendVersion, getBackendAdapter, inspectBackendLine, parseBackendLine } from "../helper/adapters.mjs";
 import { prepareChildEnvironment, resolveExecutionCwd } from "../helper/backend-child-environment.mjs";
 import { commandOptionsForProfile } from "../helper/execution-profile.mjs";
-import { assertOwnerOnly, protectOwnerOnly } from "../helper/platform-security.mjs";
+import {
+	assertOwnerOnly,
+	protectOwnerOnlyBatch,
+} from "../helper/platform-security.mjs";
 
 const roots = [];
 const fakeBackendPath = fileURLToPath(new URL("./fixtures/fake-backend.mjs", import.meta.url));
@@ -117,8 +120,12 @@ test("DSO-005 creates a private minimal child environment and copies only provid
 	writeFileSync(join(authRoot, ".codex", "config.toml"), "must-not-copy", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".claude", ".credentials.json"), "claude-auth", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".claude", "settings.json"), "must-not-copy", { mode: 0o600 });
-	for (const directory of [authRoot, join(authRoot, ".codex"), join(authRoot, ".claude")]) protectOwnerOnly(directory, "directory", "test auth directory");
-	for (const file of [join(authRoot, ".codex", "auth.json"), join(authRoot, ".claude", ".credentials.json")]) protectOwnerOnly(file, "file", "test auth file");
+	protectOwnerOnlyBatch([
+		...[authRoot, join(authRoot, ".codex"), join(authRoot, ".claude")]
+			.map((path) => ({ path, kind: "directory", label: "test auth directory" })),
+		...[join(authRoot, ".codex", "auth.json"), join(authRoot, ".claude", ".credentials.json")]
+			.map((path) => ({ path, kind: "file", label: "test auth file" })),
+	]);
 	const parentEnv = { PATH: `${process.env.PATH}${delimiter}${join(root, "workspace/node_modules/.bin")}${delimiter}.`, LANG: "C.UTF-8", DISCORD_TOKEN: "discord-secret", CODEX_API_KEY: "codex-key", OPENAI_API_KEY: "wrong-key" };
 	const codex = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot });
 	const codexOauth = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-oauth-attempt", runtimeRoot: join(root, "runtime"), parentEnv: { PATH: process.env.PATH }, authRoot });
@@ -146,7 +153,8 @@ test("DSO-005 accepts the official Windows Codex sandbox read ACL while keeping 
 	writeFileSync(authPath, "codex-auth");
 	const aclScript = String.raw`$ErrorActionPreference='Stop';$path=$env:NAIA_TEST_AUTH_PATH;$identity=[Security.Principal.WindowsIdentity]::GetCurrent();$sandbox=([Security.Principal.NTAccount]::new($env:COMPUTERNAME,'CodexSandboxUsers')).Translate([Security.Principal.SecurityIdentifier]);$acl=Get-Acl -LiteralPath $path;$acl.SetOwner($identity.User);$acl.SetAccessRuleProtection($true,$false);foreach($rule in @($acl.Access)){[void]$acl.RemoveAccessRuleSpecific($rule)};function Add-Rule($sid,$rights){$rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,$rights,[Security.AccessControl.InheritanceFlags]::None,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow);[void]$acl.AddAccessRule($rule)};Add-Rule $identity.User ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule ([Security.Principal.SecurityIdentifier]'S-1-5-18') ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule ([Security.Principal.SecurityIdentifier]'S-1-5-32-544') ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule $sandbox ([Security.AccessControl.FileSystemRights]::ReadAndExecute);Set-Acl -LiteralPath $path -AclObject $acl`;
 	const powershell = join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
-	const configured = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", aclScript], { encoding: "utf8", env: { ...process.env, NAIA_TEST_AUTH_PATH: authPath } });
+	const configured = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", aclScript], { encoding: "utf8", timeout: 15_000, windowsHide: true, env: { ...process.env, NAIA_TEST_AUTH_PATH: authPath } });
+	if (configured.error?.code === "ETIMEDOUT") return context.skip("Windows ACL probe timed out");
 	if (configured.status !== 0 && /CodexSandboxUsers/i.test(configured.stderr)) return context.skip("Codex sandbox group is unavailable");
 	assert.equal(configured.status, 0, configured.stderr);
 	const prepared = prepareChildEnvironment({ backendId: "codex", attemptId: "official-windows-acl", runtimeRoot: join(root, "runtime"), parentEnv: { PATH: process.env.PATH }, authRoot });

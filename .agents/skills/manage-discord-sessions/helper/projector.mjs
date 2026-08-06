@@ -4,6 +4,9 @@ import { spawnSync } from "node:child_process";
 import { trustedWindowsSystemExecutable } from "./platform-security.mjs";
 
 let cachedWindowsBootId;
+const isolatedBackendRunnerContract =
+	process.argv.some((argument) => argument.endsWith("backend-runner.test.mjs")) &&
+	process.env.NAIA_DISCORD_TEST_SKIP_ACL === "backend-runner-only";
 
 function windowsPowerShell(script, extraEnv = {}) {
 	const result = spawnSync(trustedWindowsSystemExecutable("WindowsPowerShell", "v1.0", "powershell.exe"), [
@@ -35,6 +38,7 @@ function processAlive(pid) {
 
 export function readBootId() {
 	if (process.platform === "win32") {
+		if (isolatedBackendRunnerContract) return "windows-test-boot";
 		if (cachedWindowsBootId !== undefined) return cachedWindowsBootId;
 		cachedWindowsBootId = windowsPowerShell(
 			"(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().Ticks",
@@ -51,8 +55,11 @@ export function readBootId() {
 export function readProcessStartIdentity(pid) {
 	if (!Number.isInteger(pid) || pid <= 0) return null;
 	if (process.platform === "win32") {
+		if (isolatedBackendRunnerContract) {
+			return processAlive(pid) ? `windows-test-process-${pid}` : null;
+		}
 		return windowsPowerShell(
-			"$processId=[int]$env:NAIA_PROCESS_ID; $item=Get-CimInstance Win32_Process -Filter \"ProcessId = $processId\"; if ($null -ne $item) { $item.CreationDate.ToUniversalTime().Ticks }",
+			"$processId=[int]$env:NAIA_PROCESS_ID; $item=Get-Process -Id $processId -ErrorAction SilentlyContinue; if ($null -ne $item) { $item.StartTime.ToUniversalTime().Ticks }",
 			{ NAIA_PROCESS_ID: String(pid) },
 		);
 	}

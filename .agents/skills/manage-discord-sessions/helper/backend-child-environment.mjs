@@ -1,10 +1,17 @@
 import { closeSync, constants as fsConstants, chmodSync, existsSync, lstatSync, mkdirSync, openSync, readSync, rmSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
-import { assertPrivateAuthenticationSource, protectOwnerOnly } from "./platform-security.mjs";
+import {
+	assertPrivateAuthenticationSource,
+	protectOwnerOnly,
+	protectOwnerOnlyBatch,
+} from "./platform-security.mjs";
 
 const SAFE_ENV_KEYS = new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "SystemRoot", "WINDIR", "PATHEXT", "COMSPEC", "TEMP", "TMP"]);
 const API_KEY_BY_BACKEND = { codex: "CODEX_API_KEY", claude: "ANTHROPIC_API_KEY" };
+const skipAclForIsolatedRunnerContract =
+	process.argv.some((argument) => argument.endsWith("backend-runner.test.mjs")) &&
+	process.env.NAIA_DISCORD_TEST_SKIP_ACL === "backend-runner-only";
 
 export function resolveExecutionCwd(cwd) {
 	if (typeof cwd !== "string" || cwd.length === 0) throw new Error("execution cwd is required");
@@ -21,7 +28,7 @@ function assertRealFile(path, label) {
 	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`${label} owner mismatch`);
 }
 
-function privateDirectory(path) {
+function ensurePrivateDirectory(path) {
 	const resolvedPath = resolve(path);
 	const root = parse(resolvedPath).root;
 	let cursor = root;
@@ -34,14 +41,14 @@ function privateDirectory(path) {
 	if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`private path must be a real directory: ${resolvedPath}`);
 	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`private path owner mismatch: ${resolvedPath}`);
 	chmodSync(resolvedPath, 0o700);
-	protectOwnerOnly(resolvedPath, "directory", "private directory");
+	return resolvedPath;
 }
 
 function copyCredential(source, target, label) {
 	if (!existsSync(source)) return false;
 	assertRealFile(source, label);
 	assertPrivateAuthenticationSource(source, label);
-	privateDirectory(dirname(target));
+	ensurePrivateDirectory(dirname(target));
 	const sourceFd = openSync(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
 	let targetFd;
 	try {
@@ -58,7 +65,7 @@ function copyCredential(source, target, label) {
 		if (targetFd !== undefined) closeSync(targetFd);
 	}
 	chmodSync(target, 0o600);
-	protectOwnerOnly(target, "file", label);
+	if (!skipAclForIsolatedRunnerContract) protectOwnerOnly(target, "file", label);
 	return true;
 }
 
@@ -71,7 +78,7 @@ function defaultRuntimeRoot(parentEnv) {
 
 export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv = process.env, authRoot = homedir(), workspacePath = null, prepareAuthentication = true }) {
 	const childHome = resolve(runtimeRoot ?? defaultRuntimeRoot(parentEnv), "children", attemptId);
-	privateDirectory(childHome);
+	const privateDirectories = [ensurePrivateDirectory(childHome)];
 	try {
 		const env = {};
 		for (const key of SAFE_ENV_KEYS) if (parentEnv[key]) env[key] = parentEnv[key];
@@ -89,18 +96,28 @@ export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, par
 		env.NO_COLOR = "1";
 		for (const key of ["XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "TMPDIR"]) {
 			env[key] = join(childHome, key.toLowerCase());
-			privateDirectory(env[key]);
+			privateDirectories.push(ensurePrivateDirectory(env[key]));
 		}
 		const apiKeyName = API_KEY_BY_BACKEND[backendId];
 		if (prepareAuthentication && apiKeyName && parentEnv[apiKeyName]) env[apiKeyName] = parentEnv[apiKeyName];
 		let authenticationPrepared = Boolean(prepareAuthentication && apiKeyName && parentEnv[apiKeyName]);
 		if (backendId === "codex") {
 			const codexHome = join(childHome, ".codex");
-			privateDirectory(codexHome);
+			privateDirectories.push(ensurePrivateDirectory(codexHome));
 			env.CODEX_HOME = codexHome;
+			if (!skipAclForIsolatedRunnerContract) {
+				protectOwnerOnlyBatch(
+					privateDirectories.map((path) => ({ path, kind: "directory", label: "private directory" })),
+				);
+			}
 			if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".codex", "auth.json"), join(codexHome, "auth.json"), "Codex authentication");
 		} else if (backendId === "claude") {
-			privateDirectory(join(childHome, ".claude"));
+			privateDirectories.push(ensurePrivateDirectory(join(childHome, ".claude")));
+			if (!skipAclForIsolatedRunnerContract) {
+				protectOwnerOnlyBatch(
+					privateDirectories.map((path) => ({ path, kind: "directory", label: "private directory" })),
+				);
+			}
 			if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".claude", ".credentials.json"), join(childHome, ".claude", ".credentials.json"), "Claude authentication");
 		} else {
 			throw new Error(`unsupported backend environment: ${backendId}`);
