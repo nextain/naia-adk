@@ -113,6 +113,8 @@ test("DSG-021 validates schema v2 workspace, exact participant coverage, and saf
 	assert.throws(() => load({ ...base, runtime: { ...base.runtime, credentialProfiles: ["vercel"] } }), /require networkAccess/);
 	assert.throws(() => load({ ...base, runtime: { ...base.runtime, networkAccess: true, credentialProfiles: ["unknown"] } }), /unsupported credential profile/);
 	assert.equal(load({ ...base, backend: { ...base.backend, profiles: { ...base.backend.profiles, codex: { enabled: true, costProfile: "control" } } } }).backend.profiles.codex.costProfile, "control");
+	assert.equal(load({ ...base, backend: { selected: "opencode", profiles: { ...base.backend.profiles, opencode: { enabled: true, model: "azure-foundry/deepseek-v4-pro" } } } }).backend.profiles.opencode.model, "azure-foundry/deepseek-v4-pro");
+	assert.throws(() => load({ ...base, backend: { selected: "opencode", profiles: { ...base.backend.profiles, opencode: { enabled: true, model: "/deepseek-v4-pro" } } } }), /model is invalid/);
 	assert.throws(() => load({ ...base, backend: { ...base.backend, profiles: { ...base.backend.profiles, codex: { enabled: true, costProfile: "unknown" } } } }), /costProfile is invalid/);
 	assert.throws(() => load({ ...base, discord: { ...base.discord, participantProfiles: {} } }), /exactly cover/);
 	assert.throws(() => load({ ...base, discord: { ...base.discord, participantProfiles: { [USER]: { ...base.discord.participantProfiles[USER], label: "system" } } } }), /reserved/);
