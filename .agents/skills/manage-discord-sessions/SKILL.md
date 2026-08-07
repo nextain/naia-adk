@@ -140,7 +140,18 @@ naia-settings/.sessions/messenger-sessions/instances/alpha/runtime.sqlite3
 
 The real config and all session state are local and ignored by Git. Only `config.example.json` is tracked. Secret values never belong in config, events, status, or logs; config stores credential references only.
 
-Put the referenced Discord token in `naia-settings/.keys/messenger-sessions/<credentialRef>` with mode `0600`. The config itself must also be mode `0600`. Choose `backend.selected` as `codex` or `claude`; no Naia Agent or Naia Shell installation is required. Codex profiles default `costProfile` to `balanced`, which pins low reasoning effort; `control` pins medium and `economy` currently preserves the same low-effort command boundary. The Gateway prompt records the host-verified `read-only` or `workspace-write` execution contract so an authorized mutation job is not downgraded merely because an interactive session binding is absent. Make that selection before the first `service install` for an unregistered instance. For an existing registration, changing `backend.selected` is a managed runtime change and must use the verified candidate cutover procedure below; do not overwrite it with an ordinary `service install` or restart.
+Put the referenced Discord token in `naia-settings/.keys/messenger-sessions/<credentialRef>` with mode `0600`. The config itself must also be mode `0600`. Choose `backend.selected` as `codex`, `claude`, or `opencode`; no Naia Agent or Naia Shell installation is required. Codex profiles default `costProfile` to `balanced`, which pins low reasoning effort; `control` pins medium and `economy` currently preserves the same low-effort command boundary. The Gateway prompt records the host-verified `read-only` or `workspace-write` execution contract so an authorized mutation job is not downgraded merely because an interactive session binding is absent. Make that selection before the first `service install` for an unregistered instance. For an existing registration, changing `backend.selected` is a managed runtime change and must use the verified candidate cutover procedure below; do not overwrite it with an ordinary `service install` or restart.
+
+Additional authenticated CLI tools use the trusted registry in
+`helper/credential-profiles.mjs`. Add one profile that declares the minimum
+credential source, its `file` or `directory` kind, isolated child target,
+required environment pinning, and disposable exclusions. Add projection tests,
+then opt in from only the required instance with
+`runtime.credentialProfiles`. The executable must already be installed on the
+host `PATH`. Never accept arbitrary source paths or credential-profile
+definitions from messenger JSON. This single registry is shared by Codex,
+Claude Code, and OpenCode, so a profile must not be implemented separately per
+backend.
 
 The real config must set `runtime.approvalPolicy` explicitly to `never`;
 `managed`, omission, and every other value are rejected because nobody is
