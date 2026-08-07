@@ -14,7 +14,7 @@ function safeCommandOptions(backendId, options) {
 	const allowed = backendId === "codex" ? new Set([...common, "sandbox", "costProfile", "reasoningEffort"]) : backendId === "opencode" ? new Set([...common, "auto"]) : new Set([...common, "permissionMode"]);
 	for (const key of Object.keys(options)) if (!allowed.has(key)) throw new Error(`unsupported ${backendId} command option: ${key}`);
 	if (backendId === "codex" && options.sandbox && !new Set(["read-only", "workspace-write", "danger-full-access"]).has(options.sandbox)) throw new Error("unsafe Codex sandbox option");
-	if (options.model !== undefined && (typeof options.model !== "string" || !/^[A-Za-z0-9._:-]{1,80}$/.test(options.model))) throw new Error(`unsafe ${backendId} model option`);
+	if (options.model !== undefined && (typeof options.model !== "string" || !/^(?=.{1,80}$)[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/.test(options.model))) throw new Error(`unsafe ${backendId} model option`);
 	if (backendId === "codex" && options.costProfile !== undefined && !new Set(["control", "balanced", "economy"]).has(options.costProfile)) throw new Error("unsafe Codex cost profile option");
 	if (backendId === "codex" && options.reasoningEffort !== undefined && !new Set(["low", "medium", "high", "max"]).has(options.reasoningEffort)) throw new Error("unsafe Codex reasoning effort option");
 	if (options.networkAccess !== undefined && typeof options.networkAccess !== "boolean") throw new Error(`unsafe ${backendId} network option`);
