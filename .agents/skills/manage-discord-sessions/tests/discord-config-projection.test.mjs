@@ -33,7 +33,7 @@ test("DSG-010 approval-required actions are removed from unattended access and p
 	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"), send: async () => ({ state: "confirmed" }), runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
 	await router.onDispatch("MESSAGE_CREATE", { id: "121212121212121212", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> change a file` }, 10);
 	await router.waitForIdle();
-	assert.deepEqual(calls[0].commandOptions, { permissionMode: "plan", approvalPolicy: "never" });
+	assert.deepEqual(calls[0].commandOptions, { permissionMode: "plan", approvalPolicy: "never", networkAccess: false, credentialProfiles: [] });
 	assert.match(calls[0].prompt, /Allowed actions: read, reply/);
 	assert.equal(calls[0].prompt.includes("Allowed actions: read, reply, write"), false);
 	store.close();
@@ -108,6 +108,10 @@ test("DSG-021 validates schema v2 workspace, exact participant coverage, and saf
 	assert.deepEqual(loaded.discord.participantProfiles[USER].allowedActions, ["read", "reply", "write", "execute"]);
 	assert.equal(loaded.discord.bindings[0].historyVisibility, "requester_only");
 	assert.equal(loaded.backend.profiles.codex.costProfile, "balanced");
+	assert.equal(load({ ...base, runtime: { ...base.runtime, networkAccess: true, credentialProfiles: ["vercel"] } }).runtime.networkAccess, true);
+	assert.deepEqual(load({ ...base, runtime: { ...base.runtime, networkAccess: true, credentialProfiles: ["vercel", "gh", "gcloud", "az"] } }).runtime.credentialProfiles, ["vercel", "gh", "gcloud", "az"]);
+	assert.throws(() => load({ ...base, runtime: { ...base.runtime, credentialProfiles: ["vercel"] } }), /require networkAccess/);
+	assert.throws(() => load({ ...base, runtime: { ...base.runtime, networkAccess: true, credentialProfiles: ["unknown"] } }), /unsupported credential profile/);
 	assert.equal(load({ ...base, backend: { ...base.backend, profiles: { ...base.backend.profiles, codex: { enabled: true, costProfile: "control" } } } }).backend.profiles.codex.costProfile, "control");
 	assert.throws(() => load({ ...base, backend: { ...base.backend, profiles: { ...base.backend.profiles, codex: { enabled: true, costProfile: "unknown" } } } }), /costProfile is invalid/);
 	assert.throws(() => load({ ...base, discord: { ...base.discord, participantProfiles: {} } }), /exactly cover/);
@@ -115,8 +119,10 @@ test("DSG-021 validates schema v2 workspace, exact participant coverage, and saf
 	assert.throws(() => load({ ...base, discord: { ...base.discord, participantProfiles: { [USER]: { ...base.discord.participantProfiles[USER], relationship: "owner\ninjected" } } } }), /single line/);
 	assert.throws(() => load({ ...base, discord: { ...base.discord, bindings: [{ ...base.discord.bindings[0], allowedUserIds: [USER, OTHER_USER] }], participantProfiles: { ...base.discord.participantProfiles, [OTHER_USER]: { label: "guest", relationship: "external participant", allowedActions: ["read", "reply"] } } } }), /trusted host operators/);
 	assert.throws(() => load({ ...base, role: { ...base.role, allowedActions: ["read", "reply", "write"] } }), /write and execute together/);
-	assert.throws(() => load({ ...base, backend: { selected: "claude", profiles: { codex: { enabled: false }, claude: { enabled: true } } } }), /read\/reply only/);
+	assert.equal(load({ ...base, backend: { selected: "claude", profiles: { codex: { enabled: false }, claude: { enabled: true } } } }).backend.selected, "claude");
 	assert.throws(() => load({ ...base, discord: { ...base.discord, bindings: [{ ...binding(), operatorActions: true }] } }), /historyVisibility must be explicit/);
+	assert.deepEqual(load({ ...base, workspace: { ...base.workspace, allowedPaths: [".", "sibling-project"] } }).workspace.allowedPaths, [".", "sibling-project"]);
+	assert.throws(() => load({ ...base, workspace: { ...base.workspace, allowedPaths: ["sibling-project"] } }), /must include workspace.path/);
 });
 
 test("DSG-021 keeps schema v1 compatible while closing multi-user mutation and history", () => {

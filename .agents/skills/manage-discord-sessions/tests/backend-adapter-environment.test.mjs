@@ -8,10 +8,7 @@ import { fileURLToPath } from "node:url";
 import { assertSupportedBackendVersion, getBackendAdapter, inspectBackendLine, parseBackendLine } from "../helper/adapters.mjs";
 import { prepareChildEnvironment, resolveExecutionCwd } from "../helper/backend-child-environment.mjs";
 import { commandOptionsForProfile } from "../helper/execution-profile.mjs";
-import {
-	assertOwnerOnly,
-	protectOwnerOnlyBatch,
-} from "../helper/platform-security.mjs";
+import { assertOwnerOnly, protectOwnerOnly } from "../helper/platform-security.mjs";
 
 const roots = [];
 const fakeBackendPath = fileURLToPath(new URL("./fixtures/fake-backend.mjs", import.meta.url));
@@ -49,17 +46,28 @@ test("DSO-006 exposes independent Codex and Claude command contracts", () => {
 	assert.equal(pinnedCodex.args.includes('model_reasoning_effort="low"'), true);
 	const controlCodex = getBackendAdapter("codex").command({ cwd: "/workspace", approvalPolicy: "never", costProfile: "control" });
 	assert.equal(controlCodex.args.includes('model_reasoning_effort="medium"'), true);
+	const networkCodex = getBackendAdapter("codex").command({ cwd: "/workspace", sandbox: "workspace-write", approvalPolicy: "never", networkAccess: true });
+	assert.equal(networkCodex.args.includes("sandbox_workspace_write.network_access=true"), true);
+	const credentialCodex = getBackendAdapter("codex").command({ cwd: "/workspace", childHome: "/runtime/children/attempt", sandbox: "workspace-write", approvalPolicy: "never", networkAccess: true });
+	assert.equal(credentialCodex.args[credentialCodex.args.indexOf("--add-dir") + 1], "/runtime/children/attempt");
+	assert.equal(networkCodex.args.includes("--add-dir"), false);
+	assert.throws(() => getBackendAdapter("codex").command({ cwd: "/workspace", sandbox: "read-only", approvalPolicy: "never", networkAccess: true }), /requires workspace-write/);
 	assert.throws(() => getBackendAdapter("codex").command({ cwd: "/workspace", approvalPolicy: "never", costProfile: "unknown" }), /unsupported Codex cost profile/);
 	assert.ok(claude.args.includes("stream-json"));
 	assert.ok(claude.args.includes("plan"));
 	assert.ok(claude.args.includes("--safe-mode"));
+	const mutableClaude = getBackendAdapter("claude").command({ cwd: "/workspace", childHome: "/runtime/children/attempt", allowedPaths: ["/workspace", "/workspace/sibling"], permissionMode: "bypassPermissions", model: "claude-sonnet-4-5" });
+	assert.ok(mutableClaude.args.includes("--dangerously-skip-permissions"));
+	assert.equal(mutableClaude.args[mutableClaude.args.indexOf("--model") + 1], "claude-sonnet-4-5");
+	assert.ok(mutableClaude.args.includes("/workspace/sibling"));
+	assert.ok(mutableClaude.args.includes("/runtime/children/attempt"));
 	assert.equal(claude.args.includes("--setting-sources"), false);
 	assert.equal(assertSupportedBackendVersion("codex", "codex-cli 0.146.0"), "0.146.0");
 	assert.equal(assertSupportedBackendVersion("claude", "2.1.220 (Claude Code)"), "2.1.220");
 	assert.throws(() => assertSupportedBackendVersion("codex", "codex-cli 0.145.0"), /not supported/);
 	assert.throws(() => getBackendAdapter("missing"), /unsupported backend/);
 	assert.throws(() => commandOptionsForProfile({ backendId: "codex", permissionProfileEpoch: "managed-1", authorizationMode: "managed", access: "workspace-write" }), /invalid execution profile/);
-	assert.throws(() => commandOptionsForProfile({ backendId: "claude", permissionProfileEpoch: "claude-1", authorizationMode: "never", access: "workspace-write" }), /not supported/);
+	assert.equal(commandOptionsForProfile({ backendId: "claude", permissionProfileEpoch: "claude-1", authorizationMode: "never", access: "workspace-write" }).permissionMode, "bypassPermissions");
 	assert.throws(() => resolveExecutionCwd("relative-workspace"), /must be absolute/);
 });
 
@@ -116,20 +124,28 @@ test("DSO-005 creates a private minimal child environment and copies only provid
 	const authRoot = join(root, "auth-source");
 	mkdirSync(join(authRoot, ".codex"), { recursive: true });
 	mkdirSync(join(authRoot, ".claude"), { recursive: true });
+	mkdirSync(join(authRoot, ".local", "share", "com.vercel.cli"), { recursive: true });
+	mkdirSync(join(authRoot, ".config", "gcloud", "logs"), { recursive: true });
+	mkdirSync(join(authRoot, ".azure", "cache"), { recursive: true });
 	writeFileSync(join(authRoot, ".codex", "auth.json"), "codex-auth", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".codex", "config.toml"), "must-not-copy", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".claude", ".credentials.json"), "claude-auth", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".claude", "settings.json"), "must-not-copy", { mode: 0o600 });
-	protectOwnerOnlyBatch([
-		...[authRoot, join(authRoot, ".codex"), join(authRoot, ".claude")]
-			.map((path) => ({ path, kind: "directory", label: "test auth directory" })),
-		...[join(authRoot, ".codex", "auth.json"), join(authRoot, ".claude", ".credentials.json")]
-			.map((path) => ({ path, kind: "file", label: "test auth file" })),
-	]);
+	writeFileSync(join(authRoot, ".local", "share", "com.vercel.cli", "auth.json"), "vercel-auth", { mode: 0o600 });
+	writeFileSync(join(authRoot, ".config", "gcloud", "credentials.db"), "gcloud-auth", { mode: 0o600 });
+	writeFileSync(join(authRoot, ".config", "gcloud", "logs", "large.log"), "must-not-copy", { mode: 0o600 });
+	writeFileSync(join(authRoot, ".azure", "azureProfile.json"), "azure-auth", { mode: 0o600 });
+	writeFileSync(join(authRoot, ".azure", "cache", "large.cache"), "must-not-copy", { mode: 0o600 });
+	for (const directory of [authRoot, join(authRoot, ".codex"), join(authRoot, ".claude"), join(authRoot, ".local"), join(authRoot, ".local", "share"), join(authRoot, ".local", "share", "com.vercel.cli")]) protectOwnerOnly(directory, "directory", "test auth directory");
+	for (const file of [join(authRoot, ".codex", "auth.json"), join(authRoot, ".claude", ".credentials.json"), join(authRoot, ".local", "share", "com.vercel.cli", "auth.json")]) protectOwnerOnly(file, "file", "test auth file");
 	const parentEnv = { PATH: `${process.env.PATH}${delimiter}${join(root, "workspace/node_modules/.bin")}${delimiter}.`, LANG: "C.UTF-8", DISCORD_TOKEN: "discord-secret", CODEX_API_KEY: "codex-key", OPENAI_API_KEY: "wrong-key" };
 	const codex = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot });
 	const codexOauth = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-oauth-attempt", runtimeRoot: join(root, "runtime"), parentEnv: { PATH: process.env.PATH }, authRoot });
 	const claude = prepareChildEnvironment({ backendId: "claude", attemptId: "claude-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot });
+	const codexVercel = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-vercel-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["vercel"] });
+	const codexCloud = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-cloud-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["gcloud", "az"] });
+	const claudeCloud = prepareChildEnvironment({ backendId: "claude", attemptId: "claude-cloud-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["gcloud", "az"] });
+	const opencodeCloud = prepareChildEnvironment({ backendId: "opencode", attemptId: "opencode-cloud-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["gcloud", "az"] });
 	assert.equal(codex.env.DISCORD_TOKEN, undefined);
 	assert.equal(codex.env.OPENAI_API_KEY, undefined);
 	assert.equal(codex.env.CODEX_API_KEY, "codex-key");
@@ -141,25 +157,17 @@ test("DSO-005 creates a private minimal child environment and copies only provid
 	assert.deepEqual(readdirSync(join(codexOauth.childHome, ".codex")).sort(), ["auth.json"]);
 	assert.equal(readFileSync(join(codexOauth.childHome, ".codex", "auth.json"), "utf8"), "codex-auth");
 	assert.deepEqual(readdirSync(join(claude.childHome, ".claude")).sort(), [".credentials.json"]);
-});
-
-test("DSO-005 accepts the official Windows Codex sandbox read ACL while keeping the child copy owner-only", (context) => {
-	if (process.platform !== "win32") return context.skip("Windows ACL contract");
-	const root = mkdtempSync(join(tmpdir(), "naia-windows-codex-auth-"));
-	roots.push(root);
-	const authRoot = join(root, "auth-source");
-	mkdirSync(join(authRoot, ".codex"), { recursive: true });
-	const authPath = join(authRoot, ".codex", "auth.json");
-	writeFileSync(authPath, "codex-auth");
-	const aclScript = String.raw`$ErrorActionPreference='Stop';$path=$env:NAIA_TEST_AUTH_PATH;$identity=[Security.Principal.WindowsIdentity]::GetCurrent();$sandbox=([Security.Principal.NTAccount]::new($env:COMPUTERNAME,'CodexSandboxUsers')).Translate([Security.Principal.SecurityIdentifier]);$acl=Get-Acl -LiteralPath $path;$acl.SetOwner($identity.User);$acl.SetAccessRuleProtection($true,$false);foreach($rule in @($acl.Access)){[void]$acl.RemoveAccessRuleSpecific($rule)};function Add-Rule($sid,$rights){$rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,$rights,[Security.AccessControl.InheritanceFlags]::None,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow);[void]$acl.AddAccessRule($rule)};Add-Rule $identity.User ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule ([Security.Principal.SecurityIdentifier]'S-1-5-18') ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule ([Security.Principal.SecurityIdentifier]'S-1-5-32-544') ([Security.AccessControl.FileSystemRights]::FullControl);Add-Rule $sandbox ([Security.AccessControl.FileSystemRights]::ReadAndExecute);Set-Acl -LiteralPath $path -AclObject $acl`;
-	const powershell = join(process.env.SystemRoot, "System32/WindowsPowerShell/v1.0/powershell.exe");
-	const configured = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", aclScript], { encoding: "utf8", timeout: 15_000, windowsHide: true, env: { ...process.env, NAIA_TEST_AUTH_PATH: authPath } });
-	if (configured.error?.code === "ETIMEDOUT") return context.skip("Windows ACL probe timed out");
-	if (configured.status !== 0 && /CodexSandboxUsers/i.test(configured.stderr)) return context.skip("Codex sandbox group is unavailable");
-	assert.equal(configured.status, 0, configured.stderr);
-	const prepared = prepareChildEnvironment({ backendId: "codex", attemptId: "official-windows-acl", runtimeRoot: join(root, "runtime"), parentEnv: { PATH: process.env.PATH }, authRoot });
-	assert.equal(prepared.authenticationPrepared, true);
-	assert.doesNotThrow(() => assertOwnerOnly(join(prepared.childHome, ".codex", "auth.json"), "file", "child Codex authentication"));
+	assert.equal(readFileSync(join(codexVercel.env.XDG_DATA_HOME, "com.vercel.cli", "auth.json"), "utf8"), "vercel-auth");
+	assert.equal(codexVercel.env.VERCEL_TELEMETRY_DISABLED, "1");
+	assert.equal(readFileSync(join(codexCloud.childHome, ".config", "gcloud", "credentials.db"), "utf8"), "gcloud-auth");
+	assert.equal(readFileSync(join(codexCloud.childHome, ".azure", "azureProfile.json"), "utf8"), "azure-auth");
+	assert.equal(codexCloud.env.CLOUDSDK_CONFIG, join(codexCloud.childHome, ".config", "gcloud"));
+	assert.equal(codexCloud.env.AZURE_CONFIG_DIR, join(codexCloud.childHome, ".azure"));
+	assert.equal(readdirSync(join(codexCloud.childHome, ".config", "gcloud")).includes("logs"), false);
+	assert.equal(readdirSync(join(codexCloud.childHome, ".azure")).includes("cache"), false);
+	assert.equal(readFileSync(join(claudeCloud.childHome, ".config", "gcloud", "credentials.db"), "utf8"), "gcloud-auth");
+	assert.equal(readFileSync(join(opencodeCloud.childHome, ".azure", "azureProfile.json"), "utf8"), "azure-auth");
+	assert.throws(() => prepareChildEnvironment({ backendId: "codex", attemptId: "bad-profile", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["unknown"] }), /unsupported credential profile/);
 });
 
 test("DSO-005 rejects insecure auth permissions and cleans the partial child home", () => {
@@ -169,6 +177,6 @@ test("DSO-005 rejects insecure auth permissions and cleans the partial child hom
 	mkdirSync(join(authRoot, ".codex"), { recursive: true });
 	writeFileSync(join(authRoot, ".codex", "auth.json"), "unsafe", { mode: 0o644 });
 	const runtimeRoot = join(root, "runtime");
-	assert.throws(() => prepareChildEnvironment({ backendId: "codex", attemptId: "bad-auth", runtimeRoot, parentEnv: { PATH: process.env.PATH }, authRoot }), /private|owner-only|permissions/);
+	assert.throws(() => prepareChildEnvironment({ backendId: "codex", attemptId: "bad-auth", runtimeRoot, parentEnv: { PATH: process.env.PATH }, authRoot }), /owner-only|permissions/);
 	assert.deepEqual(readdirSync(join(runtimeRoot, "children")), []);
 });

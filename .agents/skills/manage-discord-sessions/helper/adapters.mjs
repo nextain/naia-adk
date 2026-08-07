@@ -7,11 +7,19 @@ const ADAPTERS = new Map([
 		backendId: "codex",
 		activityDetail: "structured",
 		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
-		command({ executable = "codex", cwd, sandbox = "workspace-write", approvalPolicy = "never", model = null, costProfile = "balanced" }) {
+		command({ executable = "codex", cwd, childHome = null, allowedPaths = [], sandbox = "workspace-write", approvalPolicy = "never", model = null, costProfile = "balanced", reasoningEffort = null, networkAccess = false }) {
 			if (approvalPolicy !== "never") throw new Error("Codex child approval policy must be never");
-			const reasoningEffort = CODEX_REASONING_BY_COST_PROFILE[costProfile];
-			if (!reasoningEffort) throw new Error("unsupported Codex cost profile");
-			const args = ["exec", "--json", "--ephemeral", "--strict-config", "--config", 'approval_policy="never"', "--config", `model_reasoning_effort="${reasoningEffort}"`, "--config", "project_doc_max_bytes=0", "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config", "--ignore-rules"];
+			if (!Object.hasOwn(CODEX_REASONING_BY_COST_PROFILE, costProfile)) throw new Error("unsupported Codex cost profile");
+			const selectedReasoningEffort = reasoningEffort ?? CODEX_REASONING_BY_COST_PROFILE[costProfile];
+			if (!selectedReasoningEffort || !new Set(["low", "medium", "high", "max"]).has(selectedReasoningEffort)) throw new Error("unsupported Codex reasoning effort");
+			const args = ["exec", "--json", "--ephemeral", "--strict-config", "--config", 'approval_policy="never"', "--config", `model_reasoning_effort="${selectedReasoningEffort}"`, "--config", "project_doc_max_bytes=0", "--sandbox", sandbox, "--cd", cwd, "--ignore-user-config", "--ignore-rules"];
+			// Credential stores are isolated under the child HOME. Codex's
+			// workspace-write sandbox otherwise denies gcloud/az/Vercel writes there.
+			for (const path of [...allowedPaths, childHome].filter((path) => path && path !== cwd)) args.push("--add-dir", path);
+			if (networkAccess) {
+				if (sandbox !== "workspace-write") throw new Error("Codex network access requires workspace-write");
+				args.push("--config", "sandbox_workspace_write.network_access=true");
+			}
 			if (model) args.push("--model", model);
 			return { command: executable, args };
 		},
@@ -21,18 +29,35 @@ const ADAPTERS = new Map([
 		backendId: "claude",
 		activityDetail: "structured",
 		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
-		command({ executable = "claude", permissionMode = "plan", approvalPolicy = "never" }) {
+		command({ executable = "claude", cwd, childHome = null, allowedPaths = [], permissionMode = "plan", approvalPolicy = "never", model = null }) {
 			if (approvalPolicy !== "never") throw new Error("Claude child approval policy must be never");
+			if (!new Set(["plan", "bypassPermissions"]).has(permissionMode)) throw new Error("unsupported Claude permission mode");
+			const args = ["-p", "--safe-mode", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-session-persistence", "--permission-mode", permissionMode];
+			if (permissionMode === "bypassPermissions") args.push("--dangerously-skip-permissions");
+			for (const path of [...allowedPaths, childHome].filter((path) => path && path !== cwd)) args.push("--add-dir", path);
+			if (model) args.push("--model", model);
 			return {
 				command: executable,
-				args: ["-p", "--safe-mode", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-session-persistence", "--permission-mode", permissionMode],
+				args,
 			};
 		},
 		parse: parseClaude,
 	}],
+	["opencode", {
+		backendId: "opencode",
+		activityDetail: "structured",
+		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
+		command({ executable = "opencode", cwd, auto = false, model = null }) {
+			const args = ["run", "--format", "json", "--dir", cwd, "--pure"];
+			if (model) args.push("--model", model);
+			if (auto) args.push("--auto");
+			return { command: executable, args };
+		},
+		parse: parseOpencode,
+	}],
 ]);
 
-const MINIMUM_VERSIONS = new Map([["codex", [0, 146, 0]], ["claude", [2, 1, 220]]]);
+const MINIMUM_VERSIONS = new Map([["codex", [0, 146, 0]], ["claude", [2, 1, 220]], ["opencode", [1, 18, 0]]]);
 const APPROVAL_REQUEST_PATTERN = /\b(?:approval|permission)[ _-]?(?:required|request)\b/i;
 
 export function approvalRequestedText(value) {
@@ -168,6 +193,18 @@ function parseClaude(message, rawBytes) {
 	return events;
 }
 
+function parseOpencode(message, rawBytes) {
+	const events = [];
+	if (message.type === "step_start") events.push({ kind: "phase_changed", safePayload: { phase: "planning" } });
+	if (message.type === "text") events.push(...activity(rawBytes));
+	if (message.type === "tool_use") {
+		const tool = message.part?.tool ?? "unknown";
+		const status = message.part?.state?.status ?? "running";
+		events.push({ kind: status === "completed" || status === "error" ? "tool_finished" : "tool_started", safePayload: { toolCategory: toolCategory(tool) } });
+	}
+	return events;
+}
+
 export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 	let message;
 	try {
@@ -182,8 +219,10 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 	const approvalRequested = structuredApprovalRequested(message);
 	const codexCompletion = message.type === "turn.completed"
 		&& (message.status === undefined || new Set(["completed", "success"]).has(message.status));
+	const opencodeCompletion = backendId === "opencode" && new Set(["step_finish", "session_end", "result"]).has(message.type);
 	const outcome = backendId === "codex"
 		? codexCompletion ? "success" : new Set(["turn.failed", "error"]).has(message.type) ? "failure" : null
+		: backendId === "opencode" ? opencodeCompletion && message.error ? "failure" : opencodeCompletion ? "success" : null
 		: message.type === "result" ? (message.is_error === true || message.subtype === "error" ? "failure" : message.subtype === "success" && message.is_error !== true ? "success" : null) : null;
 	let transientResult = null;
 	let assistantText = null;
@@ -194,6 +233,10 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 		if (text) assistantText = text;
 	}
 	if (backendId === "claude" && message.type === "result" && outcome === "success" && typeof message.result === "string") transientResult = message.result;
+	if (backendId === "opencode" && message.type === "text" && typeof message.part?.text === "string") {
+		transientResult = message.part.text;
+		assistantText = message.part.text;
+	}
 	return { outcome, transientResult, assistantText, approvalRequested, events: getBackendAdapter(backendId).parse(message, rawBytes).map((event, eventIndex) => ({
 		...event,
 		dedupeKey: eventKey(backendId, attemptId, lineNumber, eventIndex, event.kind),

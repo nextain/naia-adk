@@ -72,8 +72,8 @@ export async function cleanupDiscordServiceResources({ heartbeatTimer = null, wa
 	if (firstError) throw firstError;
 }
 
-function configuredAgentContext(root, config) {
-	if (config.schemaVersion !== 2) return { cwd: root, snapshot: null };
+export function configuredAgentContext(root, config) {
+	if (config.schemaVersion !== 2) return { cwd: root, allowedPaths: [realpathSync(root)], snapshot: null };
 	const canonicalRoot = realpathSync(root);
 	const candidate = resolve(canonicalRoot, config.workspace.path);
 	const candidateRelative = relative(canonicalRoot, candidate);
@@ -81,7 +81,14 @@ function configuredAgentContext(root, config) {
 	const snapshot = buildAgentContextSnapshot({ workspace: candidate, agentId: config.workspace.agentId, entrypoint: config.workspace.entrypoint, contextFiles: config.workspace.contextFiles });
 	const resolvedRelative = relative(canonicalRoot, snapshot.workspaceRoot);
 	if (resolvedRelative.startsWith("..") || isAbsolute(resolvedRelative)) throw new Error("configured workspace escaped the ADK root");
-	return { cwd: snapshot.workspaceRoot, snapshot };
+	const allowedPaths = config.workspace.allowedPaths.map((path) => {
+		const allowed = realpathSync(resolve(canonicalRoot, path));
+		const allowedRelative = relative(canonicalRoot, allowed);
+		if (allowedRelative.startsWith("..") || isAbsolute(allowedRelative)) throw new Error("configured allowed workspace escaped the ADK root");
+		return allowed;
+	});
+	if (!allowedPaths.includes(snapshot.workspaceRoot)) throw new Error("configured workspace is missing from resolved allowed paths");
+	return { cwd: snapshot.workspaceRoot, allowedPaths: [...new Set(allowedPaths)], snapshot };
 }
 
 function runtimeInputsRevision({ config, token, agentContext }) {
@@ -89,6 +96,7 @@ function runtimeInputsRevision({ config, token, agentContext }) {
 		config,
 		tokenFingerprint: discordTokenFingerprint(token),
 		workspaceRoot: agentContext.cwd,
+		allowedPaths: agentContext.allowedPaths ?? [agentContext.cwd],
 		contextHash: agentContext.snapshot?.contextHash ?? null,
 	})).digest("hex");
 }
@@ -182,10 +190,11 @@ export async function runDiscordService({ adkRoot, instance = "default", managed
 		const backendExecutables = {
 			...(configuredBackendCommand("codex") ? { codex: configuredBackendCommand("codex") } : {}),
 			...(configuredBackendCommand("claude") ? { claude: configuredBackendCommand("claude") } : {}),
+			...(configuredBackendCommand("opencode") ? { opencode: configuredBackendCommand("opencode") } : {}),
 		};
 		const send = fetchImpl ? (input) => postDiscordMessage({ ...input, fetchImpl }) : postDiscordMessage;
 		const loadHistory = (input) => fetchDiscordConversation({ ...input, fetchImpl: fetchImpl ?? fetch });
-		router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: agentContext.cwd, runtimeRoot: paths.runtimeRoot, instance: paths.instance, agentContextSnapshot: agentContext.snapshot, runtimeRevision: managedRuntimeRevision ?? null, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, loadHistory, backendExecutables, verifyRuntimeInputs });
+		router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: agentContext.cwd, allowedPaths: agentContext.allowedPaths, runtimeRoot: paths.runtimeRoot, instance: paths.instance, agentContextSnapshot: agentContext.snapshot, runtimeRevision: managedRuntimeRevision ?? null, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, loadHistory, backendExecutables, verifyRuntimeInputs });
 		let reconnectDelay = 1_000;
 		const heartbeat = () => heartbeatServiceSafely(store, { generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
 		heartbeat();
