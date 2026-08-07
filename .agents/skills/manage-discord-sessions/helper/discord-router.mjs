@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getBackendAdapter } from "./adapters.mjs";
 import { authorizeDiscordMessage } from "./discord-scope.mjs";
-import { deliverJobResult, formatOperatorStatus } from "./discord-delivery.mjs";
+import { deliverJobResult, formatOperatorStatus, postDiscordDirectMessage } from "./discord-delivery.mjs";
 import { runBackendAttempt } from "./backend-runner.mjs";
 import { commandOptionsForProfile, configurationRevision, currentExecutionProfile, discordBindingIdentity, durableExecutionBinding, effectiveAllowedActions, participantAuthorityRevision, sameExecutionProfile } from "./execution-profile.mjs";
 import { promptWithDiscordConversation, trustedParticipantPolicy } from "./discord-conversation.mjs";
@@ -23,17 +23,13 @@ const FAILURE_TEXT = {
 
 const MAX_QUEUED_TURNS = 32;
 const MAX_SCOPE_QUEUED_TURNS = 8;
+// Proactive notifications are restricted to the workspace owner.  The model
+// never supplies a recipient ID, and no other operator can be targeted.
+export const PROACTIVE_DM_RECIPIENT_USER_ID = "865850174651498506";
 
 function failureReason(job) {
 	const match = String(job?.latestSafeError ?? "").match(/^Job failed: ([a-z0-9_]+)$/);
 	return match?.[1] ?? "internal_error";
-}
-
-export function noProgressInterventionDue(job, nowMs, interventionMs) {
-	if (job.activityHealth.reasonCode === "hard_deadline_exceeded") return true;
-	if (!new Set(["unresponsive", "suspected_stalled"]).has(job.activityHealth.value)) return false;
-	const lastProgressMs = Date.parse(job.lastProgressAt ?? job.updatedAt);
-	return Number.isFinite(lastProgressMs) && nowMs - lastProgressMs >= interventionMs;
 }
 
 export function transientPrompt(message, botUserId, config, authorization = null, agentContextSnapshot = null) {
@@ -52,6 +48,7 @@ export function boundRequestPrompt(userText, config, authorization = null, agent
 	if (agentContextSnapshot) parts.push(agentContextSnapshot.prefix, "");
 	parts.push(`Persona: ${config.persona.name}`, config.persona.instructions, `Role: ${config.role.name}`);
 	if (config.schemaVersion === 2) parts.push(trustedParticipantPolicy({ participantProfile: authorization?.participantProfile, effectiveActions: allowedActions }));
+	if (config.schemaVersion === 2 && Array.isArray(config.workspace?.allowedPaths)) parts.push(`Allowed workspace paths: ${config.workspace.allowedPaths.join(", ")}. Use only these explicitly configured project paths; do not access other projects.`);
 	parts.push(
 		`Allowed actions: ${allowedActions.join(", ")}`,
 		`Gateway execution contract: ${executionProfile.access}. Cost profile: ${costProfile}.`,
@@ -61,8 +58,9 @@ export function boundRequestPrompt(userText, config, authorization = null, agent
 		"Routine authority: A bounded user request authorizes its normal in-scope execution path. Treat workflow phase gates, including Understand, Scope, Plan, Sync, and Close, as internal checkpoints; do not ask the user to approve them.",
 		"No approval click is available in this unattended session. Never request or wait for interactive approval.",
 		"Authority limit: Ask only when a material unresolved choice would change the requested scope. If an action is outside the granted actions, stop safely and report the limitation without expanding authority or claiming completion.",
+		"Current-turn truthfulness: Never promise to continue, resume, deploy, or report later after this job ends. In the current job, either perform and verify the concrete bounded work, or state the exact missing request, authority, credential, or external precondition. A prior failed or terminal job is not automatically resumed; do not imply that it is running.",
 		"Communication: Reply in the language used by the user. Before tool work, provide a brief analysis and action plan as an intermediate update. During long work, report meaningful findings or phase changes before the final verified result. Do not repeat generic status text.",
-		"Discord access: Do not access Discord or attempt to send a separate direct message. Return only the response for the current bound conversation.",
+		"Discord access: Do not access Discord directly. If the operator explicitly requests a separate DM, return exactly one discordDm JSON object; the gateway will deliver it only to the fixed workspace-owner recipient.",
 		"User request:",
 		userText,
 	);
@@ -97,7 +95,7 @@ function normalizedDiscordText(value, botUserId) {
 }
 
 export class DiscordMessageRouter {
-	constructor({ config, store, token, botUserId, cwd, runtimeRoot, instance = "default", agentContextSnapshot = null, runtimeRevision = null, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, send = null, loadHistory = null, backendExecutables = {}, verifyRuntimeInputs = null, now = () => Date.now() }) {
+	constructor({ config, store, token, botUserId, cwd, allowedPaths = [cwd], runtimeRoot, instance = "default", agentContextSnapshot = null, runtimeRevision = null, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, directMessage = postDiscordDirectMessage, send = null, loadHistory = null, backendExecutables = {}, verifyRuntimeInputs = null, now = () => Date.now() }) {
 		if (typeof send !== "function") throw new Error("confirmed Discord sender is required");
 		if (verifyRuntimeInputs !== null && typeof verifyRuntimeInputs !== "function") throw new Error("runtime input verifier must be a function");
 		if (config.schemaVersion === 2) {
@@ -109,6 +107,7 @@ export class DiscordMessageRouter {
 		this.token = token;
 		this.botUserId = botUserId;
 		this.cwd = cwd;
+		this.allowedPaths = [...allowedPaths];
 		this.runtimeRoot = runtimeRoot;
 		this.instance = instance;
 		this.agentContextSnapshot = agentContextSnapshot;
@@ -116,6 +115,8 @@ export class DiscordMessageRouter {
 		this.runtimeRevision = runtimeRevision;
 		this.runner = runner;
 		this.deliver = deliver;
+		if (typeof directMessage !== "function") throw new Error("direct message sender is required");
+		this.directMessage = directMessage;
 		this.send = send;
 		this.loadHistory = loadHistory;
 		this.backendExecutables = backendExecutables;
@@ -252,8 +253,17 @@ export class DiscordMessageRouter {
 
 	#withBackendOptions(backendId, options) {
 		const profile = this.config.backend.profiles?.[backendId];
-		const withModel = backendId === "codex" && profile?.model ? { ...options, model: profile.model } : options;
-		return backendId === "codex" ? { ...withModel, costProfile: profile?.costProfile ?? "balanced" } : withModel;
+		const withCommon = {
+			...options,
+			...(profile?.model ? { model: profile.model } : {}),
+			networkAccess: this.config.runtime?.networkAccess === true,
+			credentialProfiles: [...(this.config.runtime?.credentialProfiles ?? [])],
+		};
+		return backendId === "codex" ? {
+			...withCommon,
+			costProfile: profile?.costProfile ?? "balanced",
+			...(profile?.reasoningEffort ? { reasoningEffort: profile.reasoningEffort } : {}),
+		} : withCommon;
 	}
 
 	#authority(authorization) {
@@ -313,7 +323,10 @@ export class DiscordMessageRouter {
 	}
 
 	#noProgressIsDue(job, nowMs) {
-		return noProgressInterventionDue(job, nowMs, this.#noProgressInterventionMs());
+		if (job.activityHealth.value === "unresponsive") return true;
+		if (job.activityHealth.value !== "suspected_stalled") return false;
+		const lastProgressMs = Date.parse(job.lastProgressAt ?? job.updatedAt);
+		return Number.isFinite(lastProgressMs) && nowMs - lastProgressMs >= this.#noProgressInterventionMs();
 	}
 
 	#runOutbound(operation) {
@@ -396,7 +409,7 @@ export class DiscordMessageRouter {
 				this.#verifyRuntimeInputs();
 				if (this.agentContextSnapshot) verifyAgentContextBeforeAttempt(this.agentContextSnapshot);
 			} : null;
-			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt, cwd: this.cwd, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId, item.authority), executionProfile: item.executionProfile, signal: controller.signal, preSpawnCheck });
+			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt, cwd: this.cwd, allowedPaths: this.allowedPaths, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId, item.authority), executionProfile: item.executionProfile, signal: controller.signal, preSpawnCheck });
 			if (result.backendOutcome !== "success") {
 				await this.#reportFailure(item);
 				return;
@@ -404,7 +417,12 @@ export class DiscordMessageRouter {
 			if (!result.transientResult) throw new Error("backend returned no deliverable final result");
 			let finalContent = result.transientResult;
 			const dmRequest = parseDiscordDmRequest(finalContent);
-			if (dmRequest) finalContent = "별도 Discord DM은 보내지 않았습니다. 현재 대화 밖으로 보내는 자동 DM 기능은 비활성화되어 있습니다.";
+			if (dmRequest) {
+				const recipientAllowed = this.config.discord?.operatorUserIds?.includes(PROACTIVE_DM_RECIPIENT_USER_ID) === true;
+				let receipt = { state: "failed", reasonCode: recipientAllowed ? "dm_delivery_failed" : "fixed_recipient_not_authorized" };
+				if (recipientAllowed && effectiveAllowedActions(this.config).includes("reply")) receipt = await this.directMessage({ token: this.token, userId: PROACTIVE_DM_RECIPIENT_USER_ID, content: dmRequest.content, nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal: controller.signal });
+				finalContent = receipt.state === "confirmed" ? dmRequest.successReply : dmRequest.failureReply;
+			}
 			await this.deliver({ store: this.store, jobId: item.jobId, attemptId: result.attemptId, token: this.token, botUserId: this.botUserId, channelId: item.channelId, content: finalContent, signal: controller.signal });
 		} catch (error) {
 			const job = this.store.getJob(item.jobId);

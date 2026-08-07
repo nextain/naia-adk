@@ -1,17 +1,12 @@
-import { closeSync, constants as fsConstants, chmodSync, existsSync, lstatSync, mkdirSync, openSync, readSync, rmSync, writeSync } from "node:fs";
+import { closeSync, constants as fsConstants, chmodSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, rmSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
-import {
-	assertPrivateAuthenticationSource,
-	protectOwnerOnly,
-	protectOwnerOnlyBatch,
-} from "./platform-security.mjs";
+import { assertOwnerOnly, protectOwnerOnly } from "./platform-security.mjs";
+import { CREDENTIAL_PROFILES, validateCredentialProfiles } from "./credential-profiles.mjs";
 
 const SAFE_ENV_KEYS = new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "SystemRoot", "WINDIR", "PATHEXT", "COMSPEC", "TEMP", "TMP"]);
 const API_KEY_BY_BACKEND = { codex: "CODEX_API_KEY", claude: "ANTHROPIC_API_KEY" };
-const skipAclForIsolatedRunnerContract =
-	process.argv.some((argument) => argument.endsWith("backend-runner.test.mjs")) &&
-	process.env.NAIA_DISCORD_TEST_SKIP_ACL === "backend-runner-only";
+const DISPOSABLE_CREDENTIAL_DIRECTORIES = new Set(["logs", "cache", "surface_data"]);
 
 export function resolveExecutionCwd(cwd) {
 	if (typeof cwd !== "string" || cwd.length === 0) throw new Error("execution cwd is required");
@@ -28,7 +23,7 @@ function assertRealFile(path, label) {
 	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`${label} owner mismatch`);
 }
 
-function ensurePrivateDirectory(path) {
+function privateDirectory(path) {
 	const resolvedPath = resolve(path);
 	const root = parse(resolvedPath).root;
 	let cursor = root;
@@ -41,14 +36,14 @@ function ensurePrivateDirectory(path) {
 	if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`private path must be a real directory: ${resolvedPath}`);
 	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`private path owner mismatch: ${resolvedPath}`);
 	chmodSync(resolvedPath, 0o700);
-	return resolvedPath;
+	protectOwnerOnly(resolvedPath, "directory", "private directory");
 }
 
 function copyCredential(source, target, label) {
 	if (!existsSync(source)) return false;
 	assertRealFile(source, label);
-	assertPrivateAuthenticationSource(source, label);
-	ensurePrivateDirectory(dirname(target));
+	assertOwnerOnly(source, "file", label);
+	privateDirectory(dirname(target));
 	const sourceFd = openSync(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
 	let targetFd;
 	try {
@@ -65,8 +60,28 @@ function copyCredential(source, target, label) {
 		if (targetFd !== undefined) closeSync(targetFd);
 	}
 	chmodSync(target, 0o600);
-	if (!skipAclForIsolatedRunnerContract) protectOwnerOnly(target, "file", label);
+	protectOwnerOnly(target, "file", label);
 	return true;
+}
+
+function assertSafeCredentialTree(path, label) {
+	const stat = lstatSync(path);
+	if (stat.isSymbolicLink()) throw new Error(`${label} contains a symbolic link`);
+	if (!stat.isDirectory()) return;
+	for (const entry of readdirSync(path)) {
+		if (!DISPOSABLE_CREDENTIAL_DIRECTORIES.has(entry)) assertSafeCredentialTree(join(path, entry), label);
+	}
+}
+
+function protectCopiedCredentialTree(path) {
+	const stat = lstatSync(path);
+	if (stat.isSymbolicLink()) throw new Error("copied credential tree contains a symbolic link");
+	if (stat.isDirectory()) {
+		chmodSync(path, 0o700);
+		for (const entry of readdirSync(path)) protectCopiedCredentialTree(join(path, entry));
+	} else if (stat.isFile()) {
+		chmodSync(path, 0o600);
+	}
 }
 
 function defaultRuntimeRoot(parentEnv) {
@@ -76,9 +91,10 @@ function defaultRuntimeRoot(parentEnv) {
 	return join(base, "messenger-sessions");
 }
 
-export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv = process.env, authRoot = homedir(), workspacePath = null, prepareAuthentication = true }) {
+export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv = process.env, authRoot = homedir(), workspacePath = null, prepareAuthentication = true, credentialProfiles = [] }) {
+	const selectedCredentialProfiles = validateCredentialProfiles(credentialProfiles, "child credential profiles");
 	const childHome = resolve(runtimeRoot ?? defaultRuntimeRoot(parentEnv), "children", attemptId);
-	const privateDirectories = [ensurePrivateDirectory(childHome)];
+	privateDirectory(childHome);
 	try {
 		const env = {};
 		for (const key of SAFE_ENV_KEYS) if (parentEnv[key]) env[key] = parentEnv[key];
@@ -96,31 +112,57 @@ export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, par
 		env.NO_COLOR = "1";
 		for (const key of ["XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "TMPDIR"]) {
 			env[key] = join(childHome, key.toLowerCase());
-			privateDirectories.push(ensurePrivateDirectory(env[key]));
+			privateDirectory(env[key]);
 		}
 		const apiKeyName = API_KEY_BY_BACKEND[backendId];
 		if (prepareAuthentication && apiKeyName && parentEnv[apiKeyName]) env[apiKeyName] = parentEnv[apiKeyName];
 		let authenticationPrepared = Boolean(prepareAuthentication && apiKeyName && parentEnv[apiKeyName]);
 		if (backendId === "codex") {
 			const codexHome = join(childHome, ".codex");
-			privateDirectories.push(ensurePrivateDirectory(codexHome));
+			privateDirectory(codexHome);
 			env.CODEX_HOME = codexHome;
-			if (!skipAclForIsolatedRunnerContract) {
-				protectOwnerOnlyBatch(
-					privateDirectories.map((path) => ({ path, kind: "directory", label: "private directory" })),
-				);
-			}
 			if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".codex", "auth.json"), join(codexHome, "auth.json"), "Codex authentication");
 		} else if (backendId === "claude") {
-			privateDirectories.push(ensurePrivateDirectory(join(childHome, ".claude")));
-			if (!skipAclForIsolatedRunnerContract) {
-				protectOwnerOnlyBatch(
-					privateDirectories.map((path) => ({ path, kind: "directory", label: "private directory" })),
-				);
-			}
+			privateDirectory(join(childHome, ".claude"));
 			if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".claude", ".credentials.json"), join(childHome, ".claude", ".credentials.json"), "Claude authentication");
+		} else if (backendId === "opencode") {
+			// OpenCode resolves its provider credentials from its isolated child HOME.
+			// The harness intentionally does not copy host credentials into the child.
+			authenticationPrepared = true;
 		} else {
 			throw new Error(`unsupported backend environment: ${backendId}`);
+		}
+		for (const profileId of selectedCredentialProfiles) {
+			const profile = CREDENTIAL_PROFILES[profileId];
+			const source = join(authRoot, ...profile.source);
+			const targetBase = profile.target.base === "xdgConfig"
+				? env.XDG_CONFIG_HOME
+				: profile.target.base === "xdgData"
+					? env.XDG_DATA_HOME
+					: childHome;
+			const target = join(targetBase, ...profile.target.parts);
+			if (profile.kind === "file") {
+				const copied = copyCredential(source, target, profile.label);
+				if (!copied) throw new Error(`${profileId} authentication is unavailable`);
+			} else {
+				if (!existsSync(source)) throw new Error(`${profileId} authentication is unavailable`);
+				const stat = lstatSync(source);
+				if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`${profileId} authentication directory is unsafe`);
+				assertSafeCredentialTree(source, profile.label);
+				privateDirectory(dirname(target));
+				// Diagnostic logs and caches are disposable and can grow to gigabytes
+				// during repeated jobs. Copy only configuration and credential material.
+				cpSync(source, target, {
+					recursive: true,
+					dereference: false,
+					errorOnExist: true,
+					force: false,
+					filter: (entry) => !new Set(profile.exclude ?? []).has(entry.split(/[\\/]/).pop()),
+				});
+				protectCopiedCredentialTree(target);
+			}
+			for (const [key, value] of Object.entries(profile.env ?? {})) env[key] = value;
+			for (const [key, value] of Object.entries(profile.envPath ?? {})) if (value === "target") env[key] = target;
 		}
 		return { childHome, env, authenticationPrepared };
 	} catch (error) {

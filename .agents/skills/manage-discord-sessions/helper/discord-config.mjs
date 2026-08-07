@@ -3,6 +3,7 @@ import { isAbsolute, parse, relative, resolve } from "node:path";
 import { assertOnlyKeys, safeIdentifier } from "./sanitize.mjs";
 import { validateDiscordBindings } from "./discord-scope.mjs";
 import { assertOwnerOnly } from "./platform-security.mjs";
+import { validateCredentialProfiles } from "./credential-profiles.mjs";
 
 const ACTIONS = new Set(["read", "reply", "write", "execute", "cancel", "retry"]);
 const RESERVED_PARTICIPANT_LABELS = new Set(["assistant", "developer", "system", "tool", "user"]);
@@ -23,14 +24,18 @@ function relativeConfigPath(value, label, { allowDot = false } = {}) {
 }
 
 function validateWorkspace(workspace) {
-	assertOnlyKeys(workspace ?? {}, new Set(["path", "agentId", "entrypoint", "contextFiles"]), "workspace");
+	assertOnlyKeys(workspace ?? {}, new Set(["path", "agentId", "entrypoint", "contextFiles", "allowedPaths"]), "workspace");
 	relativeConfigPath(workspace?.path, "workspace.path", { allowDot: true });
 	safeIdentifier(workspace?.agentId, "workspace.agentId");
 	relativeConfigPath(workspace?.entrypoint, "workspace.entrypoint");
 	if (!Array.isArray(workspace?.contextFiles) || workspace.contextFiles.length === 0 || workspace.contextFiles.length > 15) throw new Error("workspace.contextFiles must contain between 1 and 15 entries");
 	const contextFiles = workspace.contextFiles.map((value) => relativeConfigPath(value, "workspace.contextFiles entry"));
 	if (new Set(contextFiles).size !== contextFiles.length) throw new Error("workspace.contextFiles must be unique");
-	return { ...workspace, contextFiles };
+	const allowedPaths = workspace.allowedPaths === undefined ? [workspace.path] : workspace.allowedPaths;
+	if (!Array.isArray(allowedPaths) || allowedPaths.length < 1 || allowedPaths.length > 16) throw new Error("workspace.allowedPaths must contain between 1 and 16 entries");
+	const normalizedAllowedPaths = [...new Set(allowedPaths.map((value) => relativeConfigPath(value, "workspace.allowedPaths entry", { allowDot: true })))];
+	if (!normalizedAllowedPaths.includes(workspace.path)) throw new Error("workspace.allowedPaths must include workspace.path");
+	return { ...workspace, contextFiles, allowedPaths: normalizedAllowedPaths };
 }
 
 function validateParticipantProfiles(profiles, bindings, globalActions) {
@@ -90,7 +95,7 @@ export function loadMessengerConfig(path) {
 		[config.role, ["name", "allowedActions", "requiresApproval"], "role"],
 		[config.backend, ["selected", "profiles"], "backend"],
 		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent", "participantProfiles"], "discord"],
-		[config.runtime ?? {}, ["softSilenceSeconds", "heartbeatSeconds", "maxConcurrentJobs", "approvalPolicy", "permissionProfileEpoch", "noProgressInterventionSeconds", "operatorResponseSeconds"], "runtime"],
+		[config.runtime ?? {}, ["softSilenceSeconds", "heartbeatSeconds", "maxConcurrentJobs", "approvalPolicy", "permissionProfileEpoch", "noProgressInterventionSeconds", "operatorResponseSeconds", "networkAccess", "credentialProfiles"], "runtime"],
 		[config.observability ?? {}, ["discordStatusProjection"], "observability"],
 		[config.service ?? {}, ["autoStart", "startAt"], "service"],
 		[config.recovery ?? {}, ["autoRetry"], "recovery"],
@@ -105,14 +110,15 @@ export function loadMessengerConfig(path) {
 	if (config.role.allowedActions.length === 0 || config.role.allowedActions.some((value) => !ACTIONS.has(value))) throw new Error("role contains an unsupported allowed action");
 	if (config.role.requiresApproval !== undefined && !Array.isArray(config.role.requiresApproval)) throw new Error("requiresApproval must be an array");
 	if (config.role.requiresApproval?.some((value) => !ACTIONS.has(value))) throw new Error("role contains an unsupported approval action");
-	if (!new Set(["codex", "claude"]).has(config.backend?.selected)) throw new Error("selected backend is not supported");
+	if (!new Set(["codex", "claude", "opencode"]).has(config.backend?.selected)) throw new Error("selected backend is not supported");
 	if (config.backend.profiles?.[config.backend.selected]?.enabled !== true) throw new Error("selected backend profile is disabled");
 	for (const [name, profile] of Object.entries(config.backend.profiles ?? {})) {
-		if (!new Set(["codex", "claude"]).has(name)) throw new Error("unsupported backend profile");
-		assertOnlyKeys(profile, new Set(["enabled", "model", "costProfile"]), "backend profile");
+		if (!new Set(["codex", "claude", "opencode"]).has(name)) throw new Error("unsupported backend profile");
+		assertOnlyKeys(profile, new Set(["enabled", "model", "costProfile", "reasoningEffort"]), "backend profile");
 		if (typeof profile.enabled !== "boolean") throw new Error("backend profile enabled must be boolean");
 		if (profile.model !== undefined && (typeof profile.model !== "string" || !/^[A-Za-z0-9._:-]{1,80}$/.test(profile.model))) throw new Error("backend profile model is invalid");
 		if (profile.costProfile !== undefined && (name !== "codex" || !new Set(["control", "balanced", "economy"]).has(profile.costProfile))) throw new Error("backend profile costProfile is invalid");
+		if (profile.reasoningEffort !== undefined && (name !== "codex" || !new Set(["low", "medium", "high", "max"]).has(profile.reasoningEffort))) throw new Error("backend profile reasoningEffort is invalid");
 		if (name === "codex" && profile.costProfile === undefined) profile.costProfile = "balanced";
 	}
 	safeIdentifier(config.discord?.credentialRef, "credentialRef");
@@ -125,7 +131,6 @@ export function loadMessengerConfig(path) {
 	const globalActions = config.role.allowedActions.filter((action) => !(config.role.requiresApproval ?? []).includes(action));
 	if (config.schemaVersion === 2) {
 		assertConversationActionContract(globalActions, "schema v2 role actions");
-		if (config.backend.selected === "claude" && globalActions.some((action) => action === "write" || action === "execute")) throw new Error("Claude Discord profiles are read/reply only until unattended mutation is verified");
 		config.discord.participantProfiles = validateParticipantProfiles(config.discord.participantProfiles, config.discord.bindings, globalActions);
 		const untrustedParticipant = Object.keys(config.discord.participantProfiles).find((userId) => !config.discord.operatorUserIds.includes(userId));
 		if (untrustedParticipant) throw new Error("schema v2 Discord participants must be trusted host operators");
@@ -144,6 +149,9 @@ export function loadMessengerConfig(path) {
 	if (!Number.isSafeInteger(softSilenceSeconds) || softSilenceSeconds < 1 || softSilenceSeconds > 3_600) throw new Error("softSilenceSeconds must be between 1 and 3600");
 	if (config.runtime?.approvalPolicy !== "never") throw new Error("runtime.approvalPolicy must be explicitly set to never for unattended messenger work");
 	if (config.runtime?.permissionProfileEpoch !== undefined) safeIdentifier(config.runtime.permissionProfileEpoch, "permissionProfileEpoch");
+	if (config.runtime?.networkAccess !== undefined && typeof config.runtime.networkAccess !== "boolean") throw new Error("runtime.networkAccess must be boolean");
+	config.runtime.credentialProfiles = validateCredentialProfiles(config.runtime?.credentialProfiles, "runtime.credentialProfiles");
+	if ((config.runtime?.credentialProfiles?.length ?? 0) > 0 && config.runtime?.networkAccess !== true) throw new Error("runtime credential profiles require networkAccess");
 	const noProgressInterventionSeconds = config.runtime?.noProgressInterventionSeconds ?? softSilenceSeconds;
 	const operatorResponseSeconds = config.runtime?.operatorResponseSeconds ?? 30;
 	if (!Number.isSafeInteger(noProgressInterventionSeconds) || noProgressInterventionSeconds < softSilenceSeconds || noProgressInterventionSeconds > 3_600) throw new Error("noProgressInterventionSeconds must be between softSilenceSeconds and 3600");

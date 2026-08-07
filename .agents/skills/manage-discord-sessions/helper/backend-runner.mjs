@@ -5,16 +5,25 @@ import { approvalRequestedText, assertSupportedBackendVersion, getBackendAdapter
 import { cleanupChildEnvironment, prepareChildEnvironment, resolveExecutionCwd } from "./backend-child-environment.mjs";
 import { backendCommand, captureChildOwnership, createOwnedProcessTreeSignaler, killAndWaitForChild, probeBackendVersion } from "./backend-owned-process.mjs";
 import { boundedSafeExcerpt, sanitizeFinalResponse } from "./sanitize.mjs";
+import { validateCredentialProfiles } from "./credential-profiles.mjs";
 
 export { cleanupChildEnvironment, prepareChildEnvironment, resolveExecutionCwd } from "./backend-child-environment.mjs";
 
 function safeCommandOptions(backendId, options) {
-	const allowed = backendId === "codex" ? new Set(["sandbox", "approvalPolicy", "model", "costProfile"]) : new Set(["permissionMode", "approvalPolicy"]);
+	const common = ["approvalPolicy", "model", "networkAccess", "credentialProfiles"];
+	const allowed = backendId === "codex" ? new Set([...common, "sandbox", "costProfile", "reasoningEffort"]) : backendId === "opencode" ? new Set([...common, "auto"]) : new Set([...common, "permissionMode"]);
 	for (const key of Object.keys(options)) if (!allowed.has(key)) throw new Error(`unsupported ${backendId} command option: ${key}`);
 	if (backendId === "codex" && options.sandbox && !new Set(["read-only", "workspace-write"]).has(options.sandbox)) throw new Error("unsafe Codex sandbox option");
-	if (backendId === "codex" && options.model !== undefined && (typeof options.model !== "string" || !/^[A-Za-z0-9._:-]{1,80}$/.test(options.model))) throw new Error("unsafe Codex model option");
+	if (options.model !== undefined && (typeof options.model !== "string" || !/^[A-Za-z0-9._:-]{1,80}$/.test(options.model))) throw new Error(`unsafe ${backendId} model option`);
 	if (backendId === "codex" && options.costProfile !== undefined && !new Set(["control", "balanced", "economy"]).has(options.costProfile)) throw new Error("unsafe Codex cost profile option");
-	if (backendId === "claude" && options.permissionMode && !new Set(["dontAsk", "plan"]).has(options.permissionMode)) throw new Error("unsafe Claude permission mode");
+	if (backendId === "codex" && options.reasoningEffort !== undefined && !new Set(["low", "medium", "high", "max"]).has(options.reasoningEffort)) throw new Error("unsafe Codex reasoning effort option");
+	if (options.networkAccess !== undefined && typeof options.networkAccess !== "boolean") throw new Error(`unsafe ${backendId} network option`);
+	if (backendId === "codex" && options.networkAccess === true && options.sandbox !== "workspace-write") throw new Error("Codex network access requires workspace-write");
+	try { options.credentialProfiles = validateCredentialProfiles(options.credentialProfiles, `${backendId} credential profiles`); }
+	catch { throw new Error(`unsafe ${backendId} credential profiles`); }
+	if (options.credentialProfiles.length > 0 && options.networkAccess !== true) throw new Error(`${backendId} credential profiles require network access`);
+	if (backendId === "claude" && options.permissionMode && !new Set(["bypassPermissions", "plan"]).has(options.permissionMode)) throw new Error("unsafe Claude permission mode");
+	if (backendId === "opencode" && options.auto !== undefined && typeof options.auto !== "boolean") throw new Error("unsafe OpenCode auto option");
 	if (options.approvalPolicy !== undefined && options.approvalPolicy !== "never") throw new Error("child approval policy must be never");
 	return { ...options, approvalPolicy: "never" };
 }
@@ -115,6 +124,7 @@ export async function runBackendAttempt({
 	killGraceMs = 5_000,
 	signal,
 	commandOptions = {},
+	allowedPaths = null,
 	backendVersion,
 	versionProbeTimeoutMs = 5_000,
 	requireAuthentication = true,
@@ -134,7 +144,16 @@ export async function runBackendAttempt({
 	};
 	if (signal?.aborted) return abortedResult();
 	const executionCwd = resolveExecutionCwd(cwd);
+	allowedPaths ??= [executionCwd];
+	if (!Array.isArray(allowedPaths) || allowedPaths.length < 1 || allowedPaths.length > 16) throw withFailureCode(new Error("allowedPaths must contain between 1 and 16 directories"), "backend_invocation_invalid");
+	let executionAllowedPaths;
+	try { executionAllowedPaths = [...new Set(allowedPaths.map(resolveExecutionCwd))]; }
+	catch (error) { throw withFailureCode(error, "backend_invocation_invalid"); }
+	if (!executionAllowedPaths.includes(executionCwd)) throw withFailureCode(new Error("allowedPaths must include cwd"), "backend_invocation_invalid");
 	const adapter = getBackendAdapter(backendId);
+	let safeOptions;
+	try { safeOptions = safeCommandOptions(backendId, commandOptions); }
+	catch (error) { throw withFailureCode(error, "backend_invocation_invalid"); }
 	let supportedVersion;
 	try {
 		supportedVersion = backendVersion
@@ -147,7 +166,7 @@ export async function runBackendAttempt({
 	const attemptId = randomUUID();
 	let childEnvironment;
 	try {
-		childEnvironment = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: executionCwd, prepareAuthentication: requireAuthentication });
+		childEnvironment = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: executionCwd, prepareAuthentication: requireAuthentication, credentialProfiles: safeOptions.credentialProfiles ?? [] });
 	} catch (error) {
 		throw withFailureCode(error, "backend_authentication_failed");
 	}
@@ -161,7 +180,7 @@ export async function runBackendAttempt({
 	try {
 		const spec = backendCommand(executable, backendId);
 		let invocation;
-		try { invocation = adapter.command({ ...safeCommandOptions(backendId, commandOptions), executable: spec.command, cwd: executionCwd }); }
+		try { invocation = adapter.command({ ...safeOptions, executable: spec.command, cwd: executionCwd, childHome, allowedPaths: executionAllowedPaths }); }
 		catch (error) { throw withFailureCode(error, "backend_invocation_invalid"); }
 		const windowsScript = process.platform === "win32" && /\.(?:[cm]?js)$/i.test(invocation.command);
 		const spawnCommand = windowsScript ? process.execPath : invocation.command;

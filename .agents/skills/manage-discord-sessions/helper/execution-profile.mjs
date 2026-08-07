@@ -27,10 +27,13 @@ export function configurationRevision(config) {
 		backend: config.backend.selected,
 		model: config.backend.profiles?.[config.backend.selected]?.model ?? null,
 		costProfile: config.backend.profiles?.[config.backend.selected]?.costProfile ?? null,
+		reasoningEffort: config.backend.profiles?.[config.backend.selected]?.reasoningEffort ?? null,
 		persona: config.persona,
 		roleName: config.role.name,
 		approvalPolicy: config.runtime?.approvalPolicy ?? null,
 		autoRetry: config.recovery?.autoRetry === true,
+		networkAccess: config.runtime?.networkAccess === true,
+		credentialProfiles: [...(config.runtime?.credentialProfiles ?? [])].sort(),
 	});
 }
 
@@ -144,7 +147,7 @@ export function participantAuthorityRevision({ workspaceIdentity, bindingIdentit
 
 function validExecutionProfile(profile) {
 	return Boolean(profile)
-		&& new Set(["codex", "claude"]).has(profile.backendId)
+		&& new Set(["codex", "claude", "opencode"]).has(profile.backendId)
 		&& AUTHORIZATION_MODES.has(profile.authorizationMode)
 		&& new Set(["read-only", "workspace-write"]).has(profile.access)
 		&& typeof profile.permissionProfileEpoch === "string"
@@ -155,15 +158,12 @@ function validExecutionProfile(profile) {
 }
 
 export function currentExecutionProfile(config, backendId, authority = null) {
-	if (!new Set(["codex", "claude"]).has(backendId)) throw new Error("unsupported execution backend");
+	if (!new Set(["codex", "claude", "opencode"]).has(backendId)) throw new Error("unsupported execution backend");
 	const authorizationMode = config.runtime?.approvalPolicy ?? "never";
 	if (!AUTHORIZATION_MODES.has(authorizationMode)) throw new Error("unsupported execution approval policy");
 	const permissionProfileEpoch = config.runtime?.permissionProfileEpoch ?? "default";
 	safeIdentifier(permissionProfileEpoch, "permissionProfileEpoch");
-	// Claude's `dontAsk` mode suppresses prompts but does not prove that mutation
-	// succeeds without separate allow rules. Keep it read-only until a real
-	// no-prompt mutation canary establishes that contract.
-	const access = backendId === "codex" && authorizationMode === "never" && requestedMutation(config, authority) ? "workspace-write" : "read-only";
+	const access = authorizationMode === "never" && requestedMutation(config, authority) ? "workspace-write" : "read-only";
 	const profile = { backendId, permissionProfileEpoch, authorizationMode, access };
 	const authorityRevision = optionalDigest(authority?.authorityRevision, "authorityRevision");
 	const contextHash = optionalDigest(authority?.contextHash, "contextHash");
@@ -175,8 +175,8 @@ export function currentExecutionProfile(config, backendId, authority = null) {
 export function commandOptionsForProfile(profile) {
 	if (!validExecutionProfile(profile)) throw new Error("invalid execution profile");
 	if (profile.backendId === "codex") return { sandbox: profile.access, approvalPolicy: "never" };
-	if (profile.access !== "read-only") throw new Error("Claude mutation is not supported by the unattended Discord harness");
-	return { permissionMode: "plan", approvalPolicy: "never" };
+	if (profile.backendId === "opencode") return { auto: profile.access === "workspace-write", approvalPolicy: "never" };
+	return { permissionMode: profile.access === "workspace-write" ? "bypassPermissions" : "plan", approvalPolicy: "never" };
 }
 
 export function sameExecutionProfile(left, right) {
