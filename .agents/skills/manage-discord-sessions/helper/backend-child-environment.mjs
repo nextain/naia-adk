@@ -39,10 +39,11 @@ function privateDirectory(path) {
 	protectOwnerOnly(resolvedPath, "directory", "private directory");
 }
 
-function copyCredential(source, target, label) {
+function copyCredential(source, target, label, { ownerOnly = true } = {}) {
 	if (!existsSync(source)) return false;
 	assertRealFile(source, label);
-	assertOwnerOnly(source, "file", label);
+	if (ownerOnly) assertOwnerOnly(source, "file", label);
+	else if ((lstatSync(source).mode & 0o022) !== 0) throw new Error(`${label} must not be group- or world-writable`);
 	privateDirectory(dirname(target));
 	const sourceFd = openSync(source, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
 	let targetFd;
@@ -126,9 +127,20 @@ export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, par
 			privateDirectory(join(childHome, ".claude"));
 			if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".claude", ".credentials.json"), join(childHome, ".claude", ".credentials.json"), "Claude authentication");
 		} else if (backendId === "opencode") {
-			// OpenCode resolves its provider credentials from its isolated child HOME.
-			// The harness intentionally does not copy host credentials into the child.
-			authenticationPrepared = true;
+			if (prepareAuthentication) {
+				const configCopied = copyCredential(
+					join(authRoot, ".config", "opencode", "opencode.jsonc"),
+					join(env.XDG_CONFIG_HOME, "opencode", "opencode.jsonc"),
+					"OpenCode provider configuration",
+					{ ownerOnly: false },
+				);
+				const authCopied = copyCredential(
+					join(authRoot, ".local", "share", "opencode", "auth.json"),
+					join(env.XDG_DATA_HOME, "opencode", "auth.json"),
+					"OpenCode authentication",
+				);
+				authenticationPrepared = configCopied && authCopied;
+			}
 		} else {
 			throw new Error(`unsupported backend environment: ${backendId}`);
 		}

@@ -128,6 +128,8 @@ test("DSO-005 creates a private minimal child environment and copies only provid
 	mkdirSync(join(authRoot, ".codex"), { recursive: true });
 	mkdirSync(join(authRoot, ".claude"), { recursive: true });
 	mkdirSync(join(authRoot, ".local", "share", "com.vercel.cli"), { recursive: true });
+	mkdirSync(join(authRoot, ".local", "share", "opencode"), { recursive: true });
+	mkdirSync(join(authRoot, ".config", "opencode"), { recursive: true });
 	mkdirSync(join(authRoot, ".ssh"), { recursive: true });
 	mkdirSync(join(authRoot, ".config", "gcloud", "logs"), { recursive: true });
 	mkdirSync(join(authRoot, ".azure", "cache"), { recursive: true });
@@ -136,13 +138,15 @@ test("DSO-005 creates a private minimal child environment and copies only provid
 	writeFileSync(join(authRoot, ".claude", ".credentials.json"), "claude-auth", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".claude", "settings.json"), "must-not-copy", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".local", "share", "com.vercel.cli", "auth.json"), "vercel-auth", { mode: 0o600 });
+	writeFileSync(join(authRoot, ".local", "share", "opencode", "auth.json"), "opencode-auth", { mode: 0o600 });
+	writeFileSync(join(authRoot, ".config", "opencode", "opencode.jsonc"), "opencode-config", { mode: 0o644 });
 	writeFileSync(join(authRoot, ".ssh", "id_ed25519"), "ssh-auth", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".config", "gcloud", "credentials.db"), "gcloud-auth", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".config", "gcloud", "logs", "large.log"), "must-not-copy", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".azure", "azureProfile.json"), "azure-auth", { mode: 0o600 });
 	writeFileSync(join(authRoot, ".azure", "cache", "large.cache"), "must-not-copy", { mode: 0o600 });
-	for (const directory of [authRoot, join(authRoot, ".codex"), join(authRoot, ".claude"), join(authRoot, ".local"), join(authRoot, ".local", "share"), join(authRoot, ".local", "share", "com.vercel.cli"), join(authRoot, ".ssh")]) protectOwnerOnly(directory, "directory", "test auth directory");
-	for (const file of [join(authRoot, ".codex", "auth.json"), join(authRoot, ".claude", ".credentials.json"), join(authRoot, ".local", "share", "com.vercel.cli", "auth.json"), join(authRoot, ".ssh", "id_ed25519")]) protectOwnerOnly(file, "file", "test auth file");
+	for (const directory of [authRoot, join(authRoot, ".codex"), join(authRoot, ".claude"), join(authRoot, ".local"), join(authRoot, ".local", "share"), join(authRoot, ".local", "share", "com.vercel.cli"), join(authRoot, ".local", "share", "opencode"), join(authRoot, ".config"), join(authRoot, ".config", "opencode"), join(authRoot, ".ssh")]) protectOwnerOnly(directory, "directory", "test auth directory");
+	for (const file of [join(authRoot, ".codex", "auth.json"), join(authRoot, ".claude", ".credentials.json"), join(authRoot, ".local", "share", "com.vercel.cli", "auth.json"), join(authRoot, ".local", "share", "opencode", "auth.json"), join(authRoot, ".ssh", "id_ed25519")]) protectOwnerOnly(file, "file", "test auth file");
 	const parentEnv = { PATH: `${process.env.PATH}${delimiter}${join(root, "workspace/node_modules/.bin")}${delimiter}.`, LANG: "C.UTF-8", DISCORD_TOKEN: "discord-secret", CODEX_API_KEY: "codex-key", OPENAI_API_KEY: "wrong-key" };
 	const codex = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot });
 	const codexOauth = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-oauth-attempt", runtimeRoot: join(root, "runtime"), parentEnv: { PATH: process.env.PATH }, authRoot });
@@ -176,6 +180,10 @@ test("DSO-005 creates a private minimal child environment and copies only provid
 	assert.equal(readdirSync(join(codexCloud.childHome, ".azure")).includes("cache"), false);
 	assert.equal(readFileSync(join(claudeCloud.childHome, ".config", "gcloud", "credentials.db"), "utf8"), "gcloud-auth");
 	assert.equal(readFileSync(join(opencodeCloud.childHome, ".azure", "azureProfile.json"), "utf8"), "azure-auth");
+	assert.equal(readFileSync(join(opencodeCloud.env.XDG_CONFIG_HOME, "opencode", "opencode.jsonc"), "utf8"), "opencode-config");
+	assert.equal(readFileSync(join(opencodeCloud.env.XDG_DATA_HOME, "opencode", "auth.json"), "utf8"), "opencode-auth");
+	assert.equal(statSync(join(opencodeCloud.env.XDG_CONFIG_HOME, "opencode", "opencode.jsonc")).mode & 0o777, 0o600);
+	assert.equal(opencodeCloud.authenticationPrepared, true);
 	assert.throws(() => prepareChildEnvironment({ backendId: "codex", attemptId: "bad-profile", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["unknown"] }), /unsupported credential profile/);
 });
 
