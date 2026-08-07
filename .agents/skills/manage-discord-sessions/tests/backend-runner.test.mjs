@@ -420,6 +420,20 @@ test("DSO-005 rejects command options that weaken fixed safety boundaries", asyn
 	await assert.rejects(runBackendAttempt({ store, jobId, backendId: "codex", prompt: "unsafe", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { sandbox: "host-root" }, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } }), /unsafe Codex sandbox/);
 	await assert.rejects(runBackendAttempt({ store, jobId, backendId: "codex", prompt: "unsafe", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { executableArgs: ["--dangerously-bypass-approvals-and-sandbox"] }, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } }), /unsupported codex command option/);
 	await assert.rejects(runBackendAttempt({ store, jobId, backendId: "codex", prompt: "unsafe", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { approvalPolicy: "managed" }, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } }), /child approval policy must be never/);
+	await assert.rejects(runBackendAttempt({ store, jobId, backendId: "codex", prompt: "unsafe", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { model: "/azure-foundry/deepseek-v4-pro" }, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } }), /unsafe codex model option/);
+	store.close();
+});
+
+test("DSO-005 accepts a provider-qualified OpenCode model identifier", async () => {
+	const { root, store, jobId } = fixture("opencode");
+	const result = await runBackendAttempt({
+		store, jobId, backendId: "opencode", prompt: "provider model", cwd: root,
+		runtimeRoot: join(root, "runtime"), executable: fakeBackendPath,
+		commandOptions: { approvalPolicy: "never", model: "azure-foundry/deepseek-v4-pro", auto: true },
+		backendVersion: "1.18.15", requireAuthentication: false, parentEnv: { PATH: process.env.PATH },
+	});
+	assert.equal(result.exitCode, 0);
+	assert.equal(store.getJob(jobId).lifecycle, "result_ready");
 	store.close();
 });
 
