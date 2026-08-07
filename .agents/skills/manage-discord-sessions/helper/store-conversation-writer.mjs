@@ -19,6 +19,13 @@ export class SessionConversationWriter {
 		return row ? { iv: row.iv, ciphertext: row.ciphertext, tag: row.tag } : null;
 	}
 
+	deleteJobRecovery(jobId) {
+		safeIdentifier(jobId, "jobId");
+		const result = this.db.prepare("DELETE FROM job_recovery WHERE job_id = ?").run(jobId);
+		this.hardenSidecars();
+		return Number(result.changes);
+	}
+
 	loadGatewayState() {
 		const row = this.db.prepare("SELECT * FROM gateway_state WHERE id = 1").get();
 		return row ? { sessionId: row.session_id, resumeUrl: row.resume_url, sequence: row.sequence, heartbeatAckAt: row.heartbeat_ack_at, updatedAt: row.updated_at } : {};

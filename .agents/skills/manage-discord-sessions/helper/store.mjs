@@ -42,6 +42,7 @@ export class SessionStore {
 	}
 
 	loadJobRecovery(jobId) { return this.#conversations.loadJobRecovery(jobId); }
+	deleteJobRecovery(jobId) { return this.#conversations.deleteJobRecovery(jobId); }
 	loadGatewayState() { return this.#conversations.loadGatewayState(); }
 	saveGatewayState(patch, now) { return this.#conversations.saveGatewayState(patch, now); }
 	clearGatewayResume(now) { return this.#conversations.clearGatewayResume(now); }

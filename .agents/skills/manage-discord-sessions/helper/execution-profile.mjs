@@ -31,6 +31,7 @@ export function configurationRevision(config) {
 		persona: config.persona,
 		roleName: config.role.name,
 		approvalPolicy: config.runtime?.approvalPolicy ?? null,
+		accessProfile: config.runtime?.accessProfile ?? "controlled",
 		autoRetry: config.recovery?.autoRetry === true,
 		networkAccess: config.runtime?.networkAccess === true,
 		credentialProfiles: [...(config.runtime?.credentialProfiles ?? [])].sort(),
@@ -149,7 +150,7 @@ function validExecutionProfile(profile) {
 	return Boolean(profile)
 		&& new Set(["codex", "claude", "opencode"]).has(profile.backendId)
 		&& AUTHORIZATION_MODES.has(profile.authorizationMode)
-		&& new Set(["read-only", "workspace-write"]).has(profile.access)
+		&& new Set(["read-only", "workspace-write", "danger-full-access"]).has(profile.access)
 		&& typeof profile.permissionProfileEpoch === "string"
 		&& /^[A-Za-z0-9_.:-]{1,64}$/.test(profile.permissionProfileEpoch)
 		&& (profile.authorityRevision === undefined || /^[a-f0-9]{64}$/.test(profile.authorityRevision))
@@ -163,7 +164,9 @@ export function currentExecutionProfile(config, backendId, authority = null) {
 	if (!AUTHORIZATION_MODES.has(authorizationMode)) throw new Error("unsupported execution approval policy");
 	const permissionProfileEpoch = config.runtime?.permissionProfileEpoch ?? "default";
 	safeIdentifier(permissionProfileEpoch, "permissionProfileEpoch");
-	const access = authorizationMode === "never" && requestedMutation(config, authority) ? "workspace-write" : "read-only";
+	const access = authorizationMode === "never" && requestedMutation(config, authority)
+		? (config.runtime?.accessProfile === "trusted-local" ? "danger-full-access" : "workspace-write")
+		: "read-only";
 	const profile = { backendId, permissionProfileEpoch, authorizationMode, access };
 	const authorityRevision = optionalDigest(authority?.authorityRevision, "authorityRevision");
 	const contextHash = optionalDigest(authority?.contextHash, "contextHash");
@@ -175,8 +178,8 @@ export function currentExecutionProfile(config, backendId, authority = null) {
 export function commandOptionsForProfile(profile) {
 	if (!validExecutionProfile(profile)) throw new Error("invalid execution profile");
 	if (profile.backendId === "codex") return { sandbox: profile.access, approvalPolicy: "never" };
-	if (profile.backendId === "opencode") return { auto: profile.access === "workspace-write", approvalPolicy: "never" };
-	return { permissionMode: profile.access === "workspace-write" ? "bypassPermissions" : "plan", approvalPolicy: "never" };
+	if (profile.backendId === "opencode") return { auto: profile.access !== "read-only", approvalPolicy: "never" };
+	return { permissionMode: profile.access !== "read-only" ? "bypassPermissions" : "plan", approvalPolicy: "never" };
 }
 
 export function sameExecutionProfile(left, right) {

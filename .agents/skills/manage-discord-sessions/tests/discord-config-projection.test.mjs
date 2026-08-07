@@ -123,6 +123,12 @@ test("DSG-021 validates schema v2 workspace, exact participant coverage, and saf
 	assert.throws(() => load({ ...base, discord: { ...base.discord, bindings: [{ ...binding(), operatorActions: true }] } }), /historyVisibility must be explicit/);
 	assert.deepEqual(load({ ...base, workspace: { ...base.workspace, allowedPaths: [".", "sibling-project"] } }).workspace.allowedPaths, [".", "sibling-project"]);
 	assert.throws(() => load({ ...base, workspace: { ...base.workspace, allowedPaths: ["sibling-project"] } }), /must include workspace.path/);
+	assert.equal(load(base).runtime.accessProfile, "controlled");
+	const trustedLocal = { ...base, runtime: { ...base.runtime, accessProfile: "trusted-local" }, discord: { ...base.discord, bindings: [{ ...binding("dm"), operatorActions: true, historyVisibility: "requester_only" }] } };
+	assert.equal(load(trustedLocal).runtime.accessProfile, "trusted-local");
+	assert.throws(() => load({ ...base, runtime: { ...base.runtime, accessProfile: "trusted-local" } }), /DM-only operator bindings/);
+	assert.throws(() => load({ ...trustedLocal, schemaVersion: 1, workspace: undefined, discord: { ...trustedLocal.discord, participantProfiles: undefined } }), /trusted-local requires messenger config schema v2/);
+	assert.throws(() => load({ ...trustedLocal, runtime: { ...trustedLocal.runtime, accessProfile: "unbounded" } }), /controlled or trusted-local/);
 });
 
 test("DSG-021 keeps schema v1 compatible while closing multi-user mutation and history", () => {

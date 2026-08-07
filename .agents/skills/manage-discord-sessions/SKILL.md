@@ -56,6 +56,7 @@ scripts/manage-discord-sessions.sh monitor
 scripts/manage-discord-sessions.sh cancel --job <job-id>
 scripts/manage-discord-sessions.sh restart --job <job-id>
 scripts/manage-discord-sessions.sh amend --job <job-id> --content-file <owner-only-path>
+scripts/manage-discord-sessions.sh submit --channel <channel-id> --author <operator-user-id> --content-file <owner-only-path>
 scripts/manage-discord-sessions.sh history --channel <channel-id> [--author <user-id>] [--limit 20] [--json]
 scripts/manage-discord-sessions.sh latest --channel <channel-id> [--author <user-id>] [--json]
 scripts/manage-discord-sessions.sh attachment --channel <channel-id> --message <message-id> --attachment <attachment-id> --output <absolute-path> [--expected-sha256 <hex>]
@@ -100,6 +101,9 @@ from a completed boot cannot permanently obstruct the next boot. Explicitly
 configured shared directories and same-directory records from another boot or
 host remain fail-closed.
 
+`submit` is a local owner-only recovery ingress. It re-admits a bounded request
+through one exact configured operator and channel binding; it cannot impersonate
+an arbitrary Discord user or bypass participant authority.
 `watch` polls only the local SQLite event ledger. It is not Discord REST receive polling. Stop an interactive watch with `Ctrl-C`.
 `history` and `latest` are explicit operator reads, never a receive loop: they
 require exactly one `operatorActions` binding, the `read` role, and an optional
@@ -140,7 +144,7 @@ naia-settings/.sessions/messenger-sessions/instances/alpha/runtime.sqlite3
 
 The real config and all session state are local and ignored by Git. Only `config.example.json` is tracked. Secret values never belong in config, events, status, or logs; config stores credential references only.
 
-Put the referenced Discord token in `naia-settings/.keys/messenger-sessions/<credentialRef>` with mode `0600`. The config itself must also be mode `0600`. Choose `backend.selected` as `codex`, `claude`, or `opencode`; no Naia Agent or Naia Shell installation is required. Codex profiles default `costProfile` to `balanced`, which pins low reasoning effort; `control` pins medium and `economy` currently preserves the same low-effort command boundary. The Gateway prompt records the host-verified `read-only` or `workspace-write` execution contract so an authorized mutation job is not downgraded merely because an interactive session binding is absent. Make that selection before the first `service install` for an unregistered instance. For an existing registration, changing `backend.selected` is a managed runtime change and must use the verified candidate cutover procedure below; do not overwrite it with an ordinary `service install` or restart.
+Put the referenced Discord token in `naia-settings/.keys/messenger-sessions/<credentialRef>` with mode `0600`. The config itself must also be mode `0600`. Choose `backend.selected` as `codex`, `claude`, or `opencode`; no Naia Agent or Naia Shell installation is required. Codex profiles default `costProfile` to `balanced`, which pins low reasoning effort; `control` pins medium and `economy` currently preserves the same low-effort command boundary. `runtime.accessProfile` defaults to `controlled`, whose prompt records the host-verified `read-only` or `workspace-write` execution contract. A separate `trusted-local` instance is explicit and fail-closed: schema v2, one exact operator participant, DM-only bindings, write plus execute authority, and `approvalPolicy=never` are all required. It maps authorized mutation to the hosting OS user's local authority (`danger-full-access`, `bypassPermissions`, or OpenCode `--auto`) without granting root or broadening the request. Give that instance its own Discord bot token; the token-owner lock prevents controlled and trusted-local Gateways from sharing one token concurrently. Make backend and access-profile selections before the first `service install` for an unregistered instance. For an existing registration, changing `backend.selected` is a managed runtime change and must use the verified candidate cutover procedure below. Changing `runtime.accessProfile` is also a managed runtime change and follows the same procedure; do not overwrite either with an ordinary `service install` or restart.
 
 Additional authenticated CLI tools use the trusted registry in
 `helper/credential-profiles.mjs`. Add one profile that declares the minimum
@@ -163,12 +167,16 @@ that still requires approval. The helper compares the execution profile before
 recovery or queued launch and creates a new child only from the current profile.
 Legacy recovery envelopes without complete participant authority evidence always
 become `recovery_review`; schema-v2 recovery requires an exact authority,
-binding, configuration, context, and managed runtime-revision match and remains
-read-only. The encrypted recovery envelope persists only the bounded current
+binding, configuration, context, managed runtime revision, and execution-profile
+match. Automatic recovery remains read-only; an explicit operator restart may
+reuse the exact admitted mutation profile. The encrypted recovery envelope persists only the bounded current
 request and binding digests, not the assembled project context prompt; an
 eligible retry reconstructs that prompt from the current verified context
-snapshot. Model-produced requests to send a separate Discord DM are rejected;
-replies stay in the current bound conversation.
+snapshot. An explicit operator request may produce one structured `discordDm`
+response. The Gateway ignores every model-supplied recipient and can send only
+to the compiled workspace-owner recipient when that recipient remains an
+authorized operator; otherwise it returns the bounded failure reply in the
+current conversation.
 
 `noProgressInterventionSeconds` bounds one owned-child abort after silence. Each
 accepted job arms its own `operatorResponseSeconds` acknowledgement timer
@@ -232,7 +240,7 @@ The service does not open a terminal automatically after login or reboot. A term
 2. `jobs` and `job <id> --events` show lifecycle, last safe activity, child-process ownership, delivery state, and why work is waiting or suspected stalled.
 3. `completionAssessment` separately shows requirement/build/test/review evidence. Recent activity means only that the process is active; it does not prove the work is correct.
 
-Use `logs --follow --job <id>` for durable historical replay followed by a live local event stream. Use `monitor` for a continuously refreshed per-instance service/job/timeline view; terminal jobs remain visible. Both read SQLite, not Discord. `cancel` stops queued or active work. `restart` and `amend` are deliberately limited to active work whose encrypted recovery material is still held by the owning Gateway; both cancel the selected attempt and queue a replacement under the same verified authority and execution profile. `amend` is not live stdin injection into a model process. The amendment is read from an explicit file, and its control receipt reports `cancel_and_queue_replacement`. Terminal or unknown work is rejected instead of being silently replayed. Journald contains service reason codes only; hidden chain-of-thought, raw prompts, model stdout, final answers, secrets, commands, and local paths are not stored.
+Use `logs --follow --job <id>` for durable historical replay followed by a live local event stream. Use `monitor` for a continuously refreshed per-instance service/job/timeline view; terminal jobs remain visible. Both read SQLite, not Discord. `cancel` stops queued or active work. For active work, `restart` and `amend` cancel the selected attempt and queue a replacement under the same verified authority and execution profile. A failed terminal job also retains its encrypted bounded request and may be explicitly restarted or amended only while its participant, binding, configuration, context, runtime revision, and execution profile still match. Consuming that terminal envelope queues a fresh job with a fresh deadline and deletes the source envelope. Completed, cancelled, delivery-confirmed, review-required, changed, corrupt, and unknown work cannot be replayed. `amend` is not live stdin injection into a model process. The amendment is read from an explicit owner-only file. Control receipts distinguish `cancel_and_queue_replacement` from `terminal_retry_from_encrypted_request`. Journald contains service reason codes only; hidden chain-of-thought, raw prompts, model stdout, final answers, secrets, commands, and local paths are not stored.
 
 With `service.startAt=login`, recovery begins after login. With `startAt=boot`, installation enables user lingering so recovery begins at boot. Gateway and the supervisor reconnect automatically. Only the bounded current request and binding digests are retained as authenticated ciphertext protected by an owner-only local recovery key; the assembled context prompt is reconstructed from current verified files. Legacy envelopes always become `recovery_review`. When schema-v2 `recovery.autoRetry=true`, only a read-only job with an exact participant, binding, configuration, context, and managed runtime-revision match may start a new attempt under the same job ID; mutation-capable, disabled, changed, missing, or corrupt recovery state becomes `recovery_review`. An uncertain Discord delivery also becomes `recovery_review` and is never automatically resent.
 

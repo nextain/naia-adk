@@ -45,11 +45,17 @@ export function heartbeatServiceSafely(store, input, { onBusy = () => console.er
 	}
 }
 
-export function handleJobControlRequest(router, request, generation) {
-	if (request?.schemaVersion !== 1 || request.generation !== generation || !new Set(["cancel", "restart", "amend"]).has(request.action) || typeof request.requestId !== "string" || typeof request.jobId !== "string") {
+export async function handleJobControlRequest(router, request, generation) {
+	const actions = new Set(["cancel", "restart", "amend", "submit"]);
+	const jobIdIsValid = request?.action === "submit" || typeof request?.jobId === "string";
+	if (request?.schemaVersion !== 1 || request.generation !== generation || !actions.has(request.action) || typeof request.requestId !== "string" || !jobIdIsValid) {
 		return { schemaVersion: 1, requestId: typeof request?.requestId === "string" ? request.requestId : null, generation, state: "rejected", action: "unknown", reasonCode: "invalid_control_request" };
 	}
-	const result = request.action === "cancel" ? router.cancelJob(request.jobId) : router.replaceJob(request.jobId, { action: request.action, amendment: request.amendment });
+	const result = request.action === "submit"
+		? await router.submitOperatorRequest({ channelId: request.channelId, authorId: request.authorId, content: request.content })
+		: request.action === "cancel"
+			? router.cancelJob(request.jobId)
+			: router.replaceJob(request.jobId, { action: request.action, amendment: request.amendment });
 	return { schemaVersion: 1, requestId: request.requestId, generation, ...result };
 }
 
@@ -176,6 +182,7 @@ export async function runDiscordService({ adkRoot, instance = "default", managed
 	let heartbeatTimer = null;
 	let watchdogTimer = null;
 	let controlTimer = null;
+	let controlBusy = false;
 	const generation = managedRuntimeRevision === null ? randomUUID() : `${managedRuntimeRevision}.${randomUUID().slice(0, 8)}`;
 	let stopping = false;
 	let gateway = null;
@@ -214,13 +221,16 @@ export async function runDiscordService({ adkRoot, instance = "default", managed
 		watchdogTimer = setInterval(() => { void router.watchdog().catch(() => {}); }, watchdogIntervalSeconds * 1_000);
 		watchdogTimer.unref?.();
 		const stop = () => { stopping = true; gateway?.close(1_000); wakeReconnect?.(); wakeStop?.({ resumable: false }); };
-		controlTimer = setInterval(() => {
+		controlTimer = setInterval(async () => {
+			if (controlBusy) return;
+			controlBusy = true;
+			try {
 			if (existsSync(paths.jobControlRequestPath)) {
 				let receipt = null;
 				try {
 					assertOwnerOnly(paths.jobControlRequestPath, "file", "Discord job control request");
 					const request = JSON.parse(readFileSync(paths.jobControlRequestPath, "utf8"));
-					receipt = { ...handleJobControlRequest(router, request, generation), observedAt: new Date().toISOString() };
+					receipt = { ...await handleJobControlRequest(router, request, generation), observedAt: new Date().toISOString() };
 				} catch { receipt = { schemaVersion: 1, state: "rejected", action: "unknown", reasonCode: "invalid_control_request", observedAt: new Date().toISOString() }; }
 				try { unlinkSync(paths.jobControlRequestPath); } catch {}
 				try {
@@ -240,6 +250,9 @@ export async function runDiscordService({ adkRoot, instance = "default", managed
 					stop();
 				}
 			} catch {}
+			} finally {
+				controlBusy = false;
+			}
 		}, 250);
 		signalSource.once?.("SIGTERM", stop);
 		signalSource.once?.("SIGINT", stop);

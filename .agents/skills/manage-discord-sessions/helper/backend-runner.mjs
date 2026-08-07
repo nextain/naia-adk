@@ -13,12 +13,12 @@ function safeCommandOptions(backendId, options) {
 	const common = ["approvalPolicy", "model", "networkAccess", "credentialProfiles"];
 	const allowed = backendId === "codex" ? new Set([...common, "sandbox", "costProfile", "reasoningEffort"]) : backendId === "opencode" ? new Set([...common, "auto"]) : new Set([...common, "permissionMode"]);
 	for (const key of Object.keys(options)) if (!allowed.has(key)) throw new Error(`unsupported ${backendId} command option: ${key}`);
-	if (backendId === "codex" && options.sandbox && !new Set(["read-only", "workspace-write"]).has(options.sandbox)) throw new Error("unsafe Codex sandbox option");
+	if (backendId === "codex" && options.sandbox && !new Set(["read-only", "workspace-write", "danger-full-access"]).has(options.sandbox)) throw new Error("unsafe Codex sandbox option");
 	if (options.model !== undefined && (typeof options.model !== "string" || !/^[A-Za-z0-9._:-]{1,80}$/.test(options.model))) throw new Error(`unsafe ${backendId} model option`);
 	if (backendId === "codex" && options.costProfile !== undefined && !new Set(["control", "balanced", "economy"]).has(options.costProfile)) throw new Error("unsafe Codex cost profile option");
 	if (backendId === "codex" && options.reasoningEffort !== undefined && !new Set(["low", "medium", "high", "max"]).has(options.reasoningEffort)) throw new Error("unsafe Codex reasoning effort option");
 	if (options.networkAccess !== undefined && typeof options.networkAccess !== "boolean") throw new Error(`unsafe ${backendId} network option`);
-	if (backendId === "codex" && options.networkAccess === true && options.sandbox !== "workspace-write") throw new Error("Codex network access requires workspace-write");
+	if (backendId === "codex" && options.networkAccess === true && options.sandbox === "read-only") throw new Error("Codex network access requires writable access");
 	try { options.credentialProfiles = validateCredentialProfiles(options.credentialProfiles, `${backendId} credential profiles`); }
 	catch { throw new Error(`unsafe ${backendId} credential profiles`); }
 	if (options.credentialProfiles.length > 0 && options.networkAccess !== true) throw new Error(`${backendId} credential profiles require network access`);
