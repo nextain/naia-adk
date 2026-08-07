@@ -15,6 +15,13 @@ export const CREDENTIAL_PROFILES = Object.freeze({
 		target: { base: "xdgConfig", parts: ["gh", "hosts.yml"] },
 		label: "GitHub CLI authentication",
 	}),
+	"ssh-onmam": Object.freeze({
+		kind: "file",
+		source: [".ssh", "id_ed25519"],
+		target: { base: "home", parts: [".ssh", "id_ed25519"] },
+		env: Object.freeze({ TMPDIR: "/tmp" }),
+		label: "OnMam development SSH authentication",
+	}),
 	gcloud: Object.freeze({
 		kind: "directory",
 		source: [".config", "gcloud"],
