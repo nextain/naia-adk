@@ -116,7 +116,7 @@ export function loadMessengerConfig(path) {
 		if (!new Set(["codex", "claude", "opencode"]).has(name)) throw new Error("unsupported backend profile");
 		assertOnlyKeys(profile, new Set(["enabled", "model", "costProfile", "reasoningEffort"]), "backend profile");
 		if (typeof profile.enabled !== "boolean") throw new Error("backend profile enabled must be boolean");
-		if (profile.model !== undefined && (typeof profile.model !== "string" || !/^[A-Za-z0-9._:-]{1,80}$/.test(profile.model))) throw new Error("backend profile model is invalid");
+		if (profile.model !== undefined && (typeof profile.model !== "string" || !/^(?=.{1,80}$)[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/.test(profile.model))) throw new Error("backend profile model is invalid");
 		if (profile.costProfile !== undefined && (name !== "codex" || !new Set(["control", "balanced", "economy"]).has(profile.costProfile))) throw new Error("backend profile costProfile is invalid");
 		if (profile.reasoningEffort !== undefined && (name !== "codex" || !new Set(["low", "medium", "high", "max"]).has(profile.reasoningEffort))) throw new Error("backend profile reasoningEffort is invalid");
 		if (name === "codex" && profile.costProfile === undefined) profile.costProfile = "balanced";
