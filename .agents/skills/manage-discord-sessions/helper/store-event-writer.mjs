@@ -202,7 +202,9 @@ export class SessionEventWriter {
 			WHERE job_id = ?
 		`).run(attemptId, lifecycle, occurredAt, kind, occurredAt, progressKinds.has(kind) ? 1 : 0, occurredAt,
 			projectedActivityKinds.has(kind) ? 1 : 0, summary, kind, summary, childAlive, deliveryState, kind, kind, kind, summary, jobId);
-		if (["delivery_confirmed", "completed", "failed", "cancelled", "recovery_review_required"].includes(kind)) this.db.prepare("DELETE FROM job_recovery WHERE job_id = ?").run(jobId);
+		// Failed jobs retain only their encrypted recovery request so an explicit
+		// operator restart can retry the bounded request after a terminal failure.
+		if (["delivery_confirmed", "completed", "cancelled", "recovery_review_required"].includes(kind)) this.db.prepare("DELETE FROM job_recovery WHERE job_id = ?").run(jobId);
 		return { ordinal: Number(insertResult.lastInsertRowid), eventId, dedupeKey, jobId, attemptId, sequence, kind, occurredAt, source, safeSummary: summary, metrics: safeMetrics, redactionLevel };
 	}
 

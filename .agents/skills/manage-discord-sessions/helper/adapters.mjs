@@ -9,6 +9,7 @@ const ADAPTERS = new Map([
 		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
 		command({ executable = "codex", cwd, childHome = null, allowedPaths = [], sandbox = "workspace-write", approvalPolicy = "never", model = null, costProfile = "balanced", reasoningEffort = null, networkAccess = false }) {
 			if (approvalPolicy !== "never") throw new Error("Codex child approval policy must be never");
+			if (!new Set(["read-only", "workspace-write", "danger-full-access"]).has(sandbox)) throw new Error("unsupported Codex sandbox");
 			if (!Object.hasOwn(CODEX_REASONING_BY_COST_PROFILE, costProfile)) throw new Error("unsupported Codex cost profile");
 			const selectedReasoningEffort = reasoningEffort ?? CODEX_REASONING_BY_COST_PROFILE[costProfile];
 			if (!selectedReasoningEffort || !new Set(["low", "medium", "high", "max"]).has(selectedReasoningEffort)) throw new Error("unsupported Codex reasoning effort");
@@ -16,10 +17,10 @@ const ADAPTERS = new Map([
 			// Credential stores are isolated under the child HOME. Codex's
 			// workspace-write sandbox otherwise denies gcloud/az/Vercel writes there.
 			for (const path of [...allowedPaths, childHome].filter((path) => path && path !== cwd)) args.push("--add-dir", path);
-			if (networkAccess) {
-				if (sandbox !== "workspace-write") throw new Error("Codex network access requires workspace-write");
+			if (networkAccess && sandbox === "workspace-write") {
 				args.push("--config", "sandbox_workspace_write.network_access=true");
 			}
+			if (networkAccess && sandbox === "read-only") throw new Error("Codex network access requires writable access");
 			if (model) args.push("--model", model);
 			return { command: executable, args };
 		},

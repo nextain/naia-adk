@@ -95,7 +95,7 @@ export function loadMessengerConfig(path) {
 		[config.role, ["name", "allowedActions", "requiresApproval"], "role"],
 		[config.backend, ["selected", "profiles"], "backend"],
 		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent", "participantProfiles"], "discord"],
-		[config.runtime ?? {}, ["softSilenceSeconds", "heartbeatSeconds", "maxConcurrentJobs", "approvalPolicy", "permissionProfileEpoch", "noProgressInterventionSeconds", "operatorResponseSeconds", "networkAccess", "credentialProfiles"], "runtime"],
+		[config.runtime ?? {}, ["softSilenceSeconds", "heartbeatSeconds", "maxConcurrentJobs", "approvalPolicy", "permissionProfileEpoch", "noProgressInterventionSeconds", "operatorResponseSeconds", "networkAccess", "credentialProfiles", "accessProfile"], "runtime"],
 		[config.observability ?? {}, ["discordStatusProjection"], "observability"],
 		[config.service ?? {}, ["autoStart", "startAt"], "service"],
 		[config.recovery ?? {}, ["autoRetry"], "recovery"],
@@ -148,6 +148,18 @@ export function loadMessengerConfig(path) {
 	if (!Number.isSafeInteger(heartbeatSeconds) || heartbeatSeconds < 1 || heartbeatSeconds > 60) throw new Error("heartbeatSeconds must be between 1 and 60");
 	if (!Number.isSafeInteger(softSilenceSeconds) || softSilenceSeconds < 1 || softSilenceSeconds > 3_600) throw new Error("softSilenceSeconds must be between 1 and 3600");
 	if (config.runtime?.approvalPolicy !== "never") throw new Error("runtime.approvalPolicy must be explicitly set to never for unattended messenger work");
+	config.runtime.accessProfile = config.runtime?.accessProfile ?? "controlled";
+	if (!new Set(["controlled", "trusted-local"]).has(config.runtime.accessProfile)) throw new Error("runtime.accessProfile must be controlled or trusted-local");
+	if (config.runtime.accessProfile === "trusted-local") {
+		if (config.schemaVersion !== 2) throw new Error("trusted-local requires messenger config schema v2");
+		if (config.discord.operatorUserIds.length !== 1 || Object.keys(config.discord.participantProfiles).length !== 1) throw new Error("trusted-local requires exactly one operator participant");
+		const [operatorUserId] = config.discord.operatorUserIds;
+		if (!config.discord.participantProfiles[operatorUserId]) throw new Error("trusted-local participant must be the exact operator");
+		if (!globalActions.includes("write") || !globalActions.includes("execute")) throw new Error("trusted-local requires write and execute role actions");
+		if (config.discord.bindings.some((binding) => binding.kind !== "dm" || binding.allowedUserIds.length !== 1 || binding.allowedUserIds[0] !== operatorUserId || binding.canStartConversation !== true || binding.operatorActions !== true)) throw new Error("trusted-local requires DM-only operator bindings");
+		const participantActions = config.discord.participantProfiles[operatorUserId].allowedActions;
+		if (!participantActions.includes("write") || !participantActions.includes("execute")) throw new Error("trusted-local operator requires write and execute participant actions");
+	}
 	if (config.runtime?.permissionProfileEpoch !== undefined) safeIdentifier(config.runtime.permissionProfileEpoch, "permissionProfileEpoch");
 	if (config.runtime?.networkAccess !== undefined && typeof config.runtime.networkAccess !== "boolean") throw new Error("runtime.networkAccess must be boolean");
 	config.runtime.credentialProfiles = validateCredentialProfiles(config.runtime?.credentialProfiles, "runtime.credentialProfiles");

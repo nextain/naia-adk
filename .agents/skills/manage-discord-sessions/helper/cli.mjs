@@ -50,6 +50,7 @@ function validateInvocation(positional, options) {
 		cancel: new Set(["json", "jobId"]),
 		restart: new Set(["json", "jobId"]),
 		amend: new Set(["json", "jobId", "contentPath"]),
+		submit: new Set(["json", "channelId", "authorId", "contentPath"]),
 		history: new Set(["json", "channelId", "authorId", "limit"]),
 		latest: new Set(["json", "channelId", "authorId", "limit"]),
 		attachment: new Set(["json", "channelId", "messageId", "attachmentId", "outputPath", "expectedSha256"]),
@@ -85,7 +86,7 @@ let options;
 let command;
 try {
 	({ positional, options } = parseArgs(process.argv.slice(2)));
-	const knownCommands = new Set(["status", "health-check", "jobs", "job", "watch", "logs", "monitor", "cancel", "restart", "amend", "history", "latest", "attachment", "reply", "service", "cutover", "artifacts"]);
+	const knownCommands = new Set(["status", "health-check", "jobs", "job", "watch", "logs", "monitor", "cancel", "restart", "amend", "submit", "history", "latest", "attachment", "reply", "service", "cutover", "artifacts"]);
 	if (positional[0] && !knownCommands.has(positional[0])) {
 		if (options.instance) throw new UsageError("instance was specified more than once");
 		options.instance = normalizeMessengerInstance(positional.shift());
@@ -100,16 +101,24 @@ const instance = normalizeMessengerInstance(options.instance ?? process.env.NAIA
 const instancePaths = messengerInstancePaths(adkRoot, instance);
 const databasePath = instancePaths.databasePath;
 
-if (new Set(["cancel", "restart", "amend"]).has(command)) {
+if (new Set(["cancel", "restart", "amend", "submit"]).has(command)) {
 	try {
-		if (!options.jobId) throw new UsageError(`--job is required for ${command}`);
+		if (command !== "submit" && !options.jobId) throw new UsageError(`--job is required for ${command}`);
 		let amendment;
+		let content;
 		if (command === "amend") {
 			if (!options.contentPath) throw new UsageError("--content-file is required for amend");
 			const contentPath = resolve(options.contentPath);
 			assertOwnerOnly(contentPath, "file", "Discord job amendment");
 			amendment = readFileSync(contentPath, "utf8");
 			if (!amendment.trim() || amendment.length > 4_000) throw new UsageError("amendment must contain 1 to 4000 characters");
+		}
+		if (command === "submit") {
+			if (!options.contentPath || !options.channelId || !options.authorId) throw new UsageError("--content-file, --channel, and --author are required for submit");
+			const contentPath = resolve(options.contentPath);
+			assertOwnerOnly(contentPath, "file", "Discord operator submission");
+			content = readFileSync(contentPath, "utf8");
+			if (!content.trim() || content.length > 4_000) throw new UsageError("submission must contain 1 to 4000 characters");
 		}
 		if (!existsSync(databasePath)) throw new Error("Discord session state is unavailable");
 		const stateStore = SessionStore.openReadOnly(databasePath);
@@ -120,7 +129,7 @@ if (new Set(["cancel", "restart", "amend"]).has(command)) {
 		try { unlinkSync(instancePaths.jobControlReceiptPath); } catch (error) { if (error?.code !== "ENOENT") throw error; }
 		const requestId = randomUUID();
 		const temporary = `${instancePaths.jobControlRequestPath}.${process.pid}.${requestId}.tmp`;
-		writeFileSync(temporary, `${JSON.stringify({ schemaVersion: 1, requestId, generation, action: command, jobId: options.jobId, amendment, createdAt: new Date().toISOString() })}\n`, { mode: 0o600, flag: "wx" });
+		writeFileSync(temporary, `${JSON.stringify({ schemaVersion: 1, requestId, generation, action: command, jobId: options.jobId, amendment, channelId: options.channelId, authorId: options.authorId, content, createdAt: new Date().toISOString() })}\n`, { mode: 0o600, flag: "wx" });
 		protectOwnerOnly(temporary, "file", "Discord job control request");
 		renameSync(temporary, instancePaths.jobControlRequestPath);
 		protectOwnerOnly(instancePaths.jobControlRequestPath, "file", "Discord job control request");
@@ -334,7 +343,7 @@ try {
 			for (const job of jobs) console.log(`  ${humanJob(job)}`);
 			console.log(selected ? `Latest timeline: ${selected.jobId}` : "Latest timeline:");
 			for (const event of events) console.log(`  ${event.occurredAt} ${event.kind} ${event.safeSummary}`);
-			if (!options.once) console.log(`\nControls: ${instance} cancel --job <id> | restart --job <id> | amend --job <id> --content-file <path>\nCtrl-C: close monitor (does not stop the Gateway)`);
+			if (!options.once) console.log(`\nControls: ${instance} cancel --job <id> | restart --job <id> | amend --job <id> --content-file <path> | submit --channel <id> --author <id> --content-file <path>\nCtrl-C: close monitor (does not stop the Gateway)`);
 		};
 		render();
 		if (!options.once) {

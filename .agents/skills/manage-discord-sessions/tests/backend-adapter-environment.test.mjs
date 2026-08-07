@@ -51,7 +51,10 @@ test("DSO-006 exposes independent Codex and Claude command contracts", () => {
 	const credentialCodex = getBackendAdapter("codex").command({ cwd: "/workspace", childHome: "/runtime/children/attempt", sandbox: "workspace-write", approvalPolicy: "never", networkAccess: true });
 	assert.equal(credentialCodex.args[credentialCodex.args.indexOf("--add-dir") + 1], "/runtime/children/attempt");
 	assert.equal(networkCodex.args.includes("--add-dir"), false);
-	assert.throws(() => getBackendAdapter("codex").command({ cwd: "/workspace", sandbox: "read-only", approvalPolicy: "never", networkAccess: true }), /requires workspace-write/);
+	assert.throws(() => getBackendAdapter("codex").command({ cwd: "/workspace", sandbox: "read-only", approvalPolicy: "never", networkAccess: true }), /requires writable access/);
+	const trustedCodex = getBackendAdapter("codex").command({ cwd: "/workspace", sandbox: "danger-full-access", approvalPolicy: "never", networkAccess: true });
+	assert.deepEqual(trustedCodex.args.slice(trustedCodex.args.indexOf("--sandbox"), trustedCodex.args.indexOf("--sandbox") + 2), ["--sandbox", "danger-full-access"]);
+	assert.equal(trustedCodex.args.includes("sandbox_workspace_write.network_access=true"), false);
 	assert.throws(() => getBackendAdapter("codex").command({ cwd: "/workspace", approvalPolicy: "never", costProfile: "unknown" }), /unsupported Codex cost profile/);
 	assert.ok(claude.args.includes("stream-json"));
 	assert.ok(claude.args.includes("plan"));

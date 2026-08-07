@@ -12,18 +12,20 @@ import { BOT, CHANNEL, GUILD, RUNTIME_REVISION, USER, binding, cleanupDiscordFix
 
 afterEach(cleanupDiscordFixtureRoots);
 
-test("FET_DSO_014_003 dispatches only generation-bound cancel restart and amend controls", () => {
+test("FET_DSO_014_003 dispatches only generation-bound job and operator submission controls", async () => {
 	const calls = [];
 	const router = {
 		cancelJob: (jobId) => { calls.push(["cancel", jobId]); return { state: "accepted", action: "cancel", jobId }; },
 		replaceJob: (jobId, options) => { calls.push([options.action, jobId, options.amendment]); return { state: "accepted", action: options.action, jobId, replacementJobId: "replacement" }; },
+		submitOperatorRequest: async (input) => { calls.push(["submit", input.channelId, input.authorId, input.content]); return { state: "accepted", action: "submit", jobId: "submitted" }; },
 	};
 	const base = { schemaVersion: 1, requestId: "request-1", generation: "generation-1", jobId: "job-1" };
-	assert.equal(handleJobControlRequest(router, { ...base, action: "cancel" }, "generation-1").state, "accepted");
-	assert.equal(handleJobControlRequest(router, { ...base, action: "restart" }, "generation-1").replacementJobId, "replacement");
-	assert.equal(handleJobControlRequest(router, { ...base, action: "amend", amendment: "focused follow-up" }, "generation-1").replacementJobId, "replacement");
-	assert.equal(handleJobControlRequest(router, { ...base, action: "cancel", generation: "stale" }, "generation-1").reasonCode, "invalid_control_request");
-	assert.deepEqual(calls, [["cancel", "job-1"], ["restart", "job-1", undefined], ["amend", "job-1", "focused follow-up"]]);
+	assert.equal((await handleJobControlRequest(router, { ...base, action: "cancel" }, "generation-1")).state, "accepted");
+	assert.equal((await handleJobControlRequest(router, { ...base, action: "restart" }, "generation-1")).replacementJobId, "replacement");
+	assert.equal((await handleJobControlRequest(router, { ...base, action: "amend", amendment: "focused follow-up" }, "generation-1")).replacementJobId, "replacement");
+	assert.equal((await handleJobControlRequest(router, { schemaVersion: 1, requestId: "request-2", generation: "generation-1", action: "submit", channelId: CHANNEL, authorId: USER, content: "resume work" }, "generation-1")).jobId, "submitted");
+	assert.equal((await handleJobControlRequest(router, { ...base, action: "cancel", generation: "stale" }, "generation-1")).reasonCode, "invalid_control_request");
+	assert.deepEqual(calls, [["cancel", "job-1"], ["restart", "job-1", undefined], ["amend", "job-1", "focused follow-up"], ["submit", CHANNEL, USER, "resume work"]]);
 });
 
 function v2Config(root) {

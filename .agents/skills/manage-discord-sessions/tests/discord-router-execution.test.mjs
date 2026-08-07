@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { fetchDiscordConversation, promptWithDiscordConversation, renderDiscordConversation, renderParticipantConversation, trustedParticipantPolicy } from "../helper/discord-conversation.mjs";
 import { commandOptionsForProfile, currentExecutionProfile, effectiveAllowedActions, participantAuthorityRevision, sameExecutionProfile } from "../helper/execution-profile.mjs";
 import { buildAgentContextSnapshot } from "../helper/agent-context.mjs";
-import { BOT, CHANNEL, GUILD, OTHER_USER, RUNTIME_REVISION, USER, binding, cleanupDiscordFixtureRoots, fixture } from "./fixtures/discord-fixture.mjs";
+import { BOT, CHANNEL, GUILD, OTHER_USER, RUNTIME_REVISION, THREAD, USER, binding, cleanupDiscordFixtureRoots, fixture } from "./fixtures/discord-fixture.mjs";
 
 afterEach(cleanupDiscordFixtureRoots);
 
@@ -27,7 +27,7 @@ test("DSG-006 enforces configured read-only role in the actual backend invocatio
 	assert.equal(accepted.state, "accepted");
 	await router.waitForIdle();
 	assert.equal(calls.length, 1);
-	assert.deepEqual(calls[0].commandOptions, { sandbox: "read-only", approvalPolicy: "never", costProfile: "balanced" });
+	assert.deepEqual(calls[0].commandOptions, { sandbox: "read-only", approvalPolicy: "never", costProfile: "balanced", networkAccess: false, credentialProfiles: [] });
 	assert.match(calls[0].prompt, /Routine authority: A bounded user request authorizes its normal in-scope execution path/);
 	assert.match(calls[0].prompt, /No approval click is available/);
 	assert.match(calls[0].prompt, /Ask only when a material unresolved choice would change the requested scope/);
@@ -102,10 +102,46 @@ test("DSG-021 reduces mutation authority by participant and operator policy and 
 	assert.deepEqual(effectiveAllowedActions(config, memberAuthority), ["read", "reply"]);
 	assert.equal(commandOptionsForProfile(currentExecutionProfile(config, "codex", ownerAuthority)).sandbox, "workspace-write");
 	assert.equal(commandOptionsForProfile(currentExecutionProfile(config, "codex", memberAuthority)).sandbox, "read-only");
+	const trustedConfig = { ...config, runtime: { ...config.runtime, accessProfile: "trusted-local" } };
+	assert.equal(commandOptionsForProfile(currentExecutionProfile(trustedConfig, "codex", ownerAuthority)).sandbox, "danger-full-access");
+	assert.equal(commandOptionsForProfile(currentExecutionProfile(trustedConfig, "claude", ownerAuthority)).permissionMode, "bypassPermissions");
+	assert.equal(commandOptionsForProfile(currentExecutionProfile(trustedConfig, "opencode", ownerAuthority)).auto, true);
+	assert.equal(commandOptionsForProfile(currentExecutionProfile(trustedConfig, "codex", memberAuthority)).sandbox, "read-only");
 	assert.throws(() => effectiveAllowedActions(config), /participant authority/);
 	const authorityRevision = participantAuthorityRevision({ workspaceIdentity: "workspace-1", bindingIdentity: "scope-1", participantUserId: USER, participantProfile, effectiveActions: ["read", "reply", "write", "execute"], permissionProfileEpoch: "participant-v1" });
 	const bound = currentExecutionProfile(config, "codex", { ...ownerAuthority, authorityRevision, contextHash: "a".repeat(64) });
 	assert.equal(sameExecutionProfile(bound, { ...bound, contextHash: "b".repeat(64) }), false);
+});
+
+test("FET_DSO_015_004 admits an owner-controlled local submission only through the exact operator binding", async () => {
+	const { store, root } = fixture();
+	mkdirSync(join(root, ".agents/context"), { recursive: true });
+	writeFileSync(join(root, "AGENTS.md"), "# Operator agent\n", "utf8");
+	writeFileSync(join(root, ".agents/context/policy.yaml"), "authority: bounded\n", "utf8");
+	const snapshot = buildAgentContextSnapshot({ workspace: root, agentId: "operator-agent", entrypoint: "AGENTS.md", contextFiles: [".agents/context/policy.yaml"] });
+	const participantProfile = { label: "workspace-owner", relationship: "workspace owner", allowedActions: ["read", "reply", "write", "execute"] };
+	const operatorBinding = { ...binding(), operatorActions: true, historyVisibility: "none" };
+	const config = {
+		schemaVersion: 2,
+		workspace: { agentId: "operator-agent" },
+		persona: { name: "Operator", instructions: "Complete bounded operator work." },
+		role: { name: "operator", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: [] },
+		backend: { selected: "codex", profiles: { codex: { enabled: true } } },
+		discord: { bindings: [operatorBinding], operatorUserIds: [USER], participantProfiles: { [USER]: participantProfile } },
+		runtime: { maxConcurrentJobs: 1, approvalPolicy: "never", permissionProfileEpoch: "operator-v1" },
+		recovery: { autoRetry: false },
+	};
+	const calls = [];
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot, runtimeRevision: RUNTIME_REVISION, send: async () => ({ state: "confirmed" }), runner: async (input) => { calls.push(input); return { backendOutcome: "failure", transientResult: null }; } });
+	assert.equal((await router.submitOperatorRequest({ channelId: CHANNEL, authorId: OTHER_USER, content: "resume work" })).reasonCode, "operator_binding_unavailable");
+	assert.equal((await router.submitOperatorRequest({ channelId: THREAD, authorId: USER, content: "resume work" })).reasonCode, "operator_binding_unavailable");
+	const accepted = await router.submitOperatorRequest({ channelId: CHANNEL, authorId: USER, content: "resume work" });
+	assert.equal(accepted.state, "accepted");
+	assert.equal(accepted.semantics, "owner_controlled_operator_submission");
+	await router.waitForIdle();
+	assert.equal(calls.length, 1);
+	assert.match(calls[0].prompt, /User request:\nresume work$/);
+	store.close();
 });
 
 test("DSG-021 launches v2 work in its bound workspace with a stable prefix and fails closed after context drift", async () => {
@@ -306,6 +342,36 @@ test("UCT_DSO_014_002 cancels active work and queues an explicit prompt-amended 
 	store.close();
 });
 
+test("UCT_DSO_015_002 restarts a failed terminal job from its encrypted recovery envelope", async () => {
+	const { store, root } = fixture();
+	mkdirSync(join(root, ".agents/context"), { recursive: true });
+	writeFileSync(join(root, "AGENTS.md"), "# Restartable agent\n", "utf8");
+	writeFileSync(join(root, ".agents/context/policy.yaml"), "authority: bounded\n", "utf8");
+	const snapshot = buildAgentContextSnapshot({ workspace: root, agentId: "restartable-agent", entrypoint: "AGENTS.md", contextFiles: [".agents/context/policy.yaml"] });
+	const participantProfile = { label: "workspace-owner", relationship: "workspace owner", allowedActions: ["read", "reply", "write", "execute"] };
+	const config = { schemaVersion: 2, workspace: { agentId: "restartable-agent" }, persona: { name: "Restartable", instructions: "Finish bounded work." }, role: { name: "operator", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: [] }, backend: { selected: "codex", profiles: { codex: { enabled: true } } }, discord: { bindings: [{ ...binding(), operatorActions: true, historyVisibility: "none" }], operatorUserIds: [USER], participantProfiles: { [USER]: participantProfile } }, runtime: { maxConcurrentJobs: 1, approvalPolicy: "never", permissionProfileEpoch: "restart-v1" }, recovery: { autoRetry: false } };
+	const calls = [];
+	const codec = new RecoveryCodec(randomBytes(32));
+	const router = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot, runtimeRevision: RUNTIME_REVISION, recoveryCodec: codec, send: async () => ({ state: "confirmed" }), runner: async ({ jobId, prompt }) => {
+		calls.push(prompt);
+		const attemptId = store.startAttempt(jobId, { attemptId: `failed-${calls.length}` });
+		store.recordEvent({ jobId, attemptId, source: "helper", kind: "failed", safePayload: { reasonCode: "no_progress_timeout" } });
+		return { backendOutcome: "failure" };
+	} });
+	const accepted = await router.onDispatch("MESSAGE_CREATE", { id: "272727272727272727", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> continue the six remaining issues` }, 54);
+	await router.waitForIdle();
+	assert.ok(store.loadJobRecovery(accepted.jobId));
+	const receipt = router.replaceJob(accepted.jobId);
+	assert.equal(receipt.state, "accepted");
+	assert.equal(receipt.semantics, "terminal_retry_from_encrypted_request");
+	assert.equal(store.loadJobRecovery(accepted.jobId), null);
+	await router.waitForIdle();
+	assert.equal(calls.length, 2);
+	assert.match(calls[1], /User request:\ncontinue the six remaining issues$/);
+	assert.equal(store.getJob(receipt.replacementJobId).lifecycle, "failed");
+	store.close();
+});
+
 test("DSG-018 injects recent context without generic progress spam", async () => {
 	const { store, root, databasePath } = fixture();
 	const sent = [];
@@ -360,6 +426,6 @@ test("DSG-021 denies model-produced cross-scope outbound DM requests", async () 
 	await router.onDispatch("MESSAGE_CREATE", { id: "181818181818181818", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> DM으로 보내줘` }, 16);
 	await router.waitForIdle();
 	assert.equal(dmInput, null);
-	assert.match(deliveredContent, /자동 DM 기능은 비활성화/);
+	assert.equal(deliveredContent, "DM 발송에 실패했습니다.");
 	store.close();
 });

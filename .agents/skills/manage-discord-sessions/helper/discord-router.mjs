@@ -27,9 +27,24 @@ const MAX_SCOPE_QUEUED_TURNS = 8;
 // never supplies a recipient ID, and no other operator can be targeted.
 export const PROACTIVE_DM_RECIPIENT_USER_ID = "865850174651498506";
 
+function localOperatorSnowflake(nowMs) {
+	const discordEpoch = 1_420_070_400_000n;
+	const timestamp = BigInt(Math.max(0, Math.trunc(nowMs))) - discordEpoch;
+	return ((timestamp << 22n) | BigInt(Math.floor(Math.random() * 4_194_304))).toString();
+}
+
 function failureReason(job) {
 	const match = String(job?.latestSafeError ?? "").match(/^Job failed: ([a-z0-9_]+)$/);
 	return match?.[1] ?? "internal_error";
+}
+
+export function noProgressInterventionDue(job, nowMs, interventionMs) {
+	const health = job?.activityHealth?.value;
+	const reasonCode = job?.activityHealth?.reasonCode;
+	if (health === "unresponsive" && reasonCode !== "owned_child_missing") return true;
+	if (health !== "suspected_stalled" && !(health === "unresponsive" && reasonCode === "owned_child_missing")) return false;
+	const lastProgressMs = Date.parse(job.lastProgressAt ?? job.updatedAt);
+	return Number.isFinite(lastProgressMs) && nowMs - lastProgressMs >= interventionMs;
 }
 
 export function transientPrompt(message, botUserId, config, authorization = null, agentContextSnapshot = null) {
@@ -52,8 +67,10 @@ export function boundRequestPrompt(userText, config, authorization = null, agent
 	parts.push(
 		`Allowed actions: ${allowedActions.join(", ")}`,
 		`Gateway execution contract: ${executionProfile.access}. Cost profile: ${costProfile}.`,
-		executionProfile.access === "workspace-write"
-			? "The host has verified the operator, Discord binding, participant action intersection, project context, and no-prompt policy for this request. This Gateway execution contract is the explicit mutation authority for the current job. Do not downgrade it to read-only merely because no interactive session binding exists. Mutate only inside the configured workspace and granted actions."
+		executionProfile.access !== "read-only"
+			? executionProfile.access === "danger-full-access"
+				? "The host has verified the sole operator, DM-only Discord binding, project context, and trusted-local no-prompt policy for this request. This Gateway execution contract grants the current OS user's local access for the current job. It does not grant root authority or broaden the user's request. Use only the configured actions and the resources needed to complete that bounded request."
+				: "The host has verified the operator, Discord binding, participant action intersection, project context, and no-prompt policy for this request. This Gateway execution contract is the explicit mutation authority for the current job. Do not downgrade it to read-only merely because no interactive session binding exists. Mutate only inside the configured workspace and granted actions."
 			: "This job is read-only. Do not modify files, repository state, services, or external systems.",
 		"Routine authority: A bounded user request authorizes its normal in-scope execution path. Treat workflow phase gates, including Understand, Scope, Plan, Sync, and Close, as internal checkpoints; do not ask the user to approve them.",
 		"No approval click is available in this unattended session. Never request or wait for interactive approval.",
@@ -207,6 +224,28 @@ export class DiscordMessageRouter {
 		return { state: "accepted", jobId };
 	}
 
+	async submitOperatorRequest({ channelId, authorId, content }) {
+		if (!/^\d{17,20}$/.test(channelId ?? "") || !/^\d{17,20}$/.test(authorId ?? "") || typeof content !== "string" || !content.trim() || content.length > 4_000) {
+			return { state: "rejected", action: "submit", reasonCode: "invalid_operator_submission" };
+		}
+		const binding = this.config.discord.bindings.find((candidate) =>
+			candidate.operatorActions === true
+			&& candidate.canStartConversation === true
+			&& candidate.allowedUserIds.includes(authorId)
+			&& (candidate.threadId ?? candidate.channelId) === channelId);
+		if (!binding || !this.config.discord.operatorUserIds.includes(authorId)) return { state: "rejected", action: "submit", reasonCode: "operator_binding_unavailable" };
+		const data = {
+			id: localOperatorSnowflake(this.now()),
+			channel_id: channelId,
+			...(binding.guildId ? { guild_id: binding.guildId } : {}),
+			author: { id: authorId, bot: false },
+			content: binding.respondWhen === "mentioned" ? `<@${this.botUserId}> ${content.trim()}` : content.trim(),
+			mentions: binding.respondWhen === "mentioned" ? [{ id: this.botUserId }] : [],
+		};
+		const result = await this.onDispatch("MESSAGE_CREATE", data, null);
+		return { ...result, action: "submit", semantics: "owner_controlled_operator_submission" };
+	}
+
 	async #handleCommand({ command, authorization, sourceMessageId, sequence }) {
 		const ingress = this.store.reserveIngress({ sourceMessageId, scopeKey: authorization.scopeKey, status: "handled", reasonCode: "status_command", dispatchSequence: sequence });
 		if (ingress.duplicate) return { state: "duplicate" };
@@ -323,10 +362,7 @@ export class DiscordMessageRouter {
 	}
 
 	#noProgressIsDue(job, nowMs) {
-		if (job.activityHealth.value === "unresponsive") return true;
-		if (job.activityHealth.value !== "suspected_stalled") return false;
-		const lastProgressMs = Date.parse(job.lastProgressAt ?? job.updatedAt);
-		return Number.isFinite(lastProgressMs) && nowMs - lastProgressMs >= this.#noProgressInterventionMs();
+		return noProgressInterventionDue(job, nowMs, this.#noProgressInterventionMs());
 	}
 
 	#runOutbound(operation) {
@@ -420,7 +456,7 @@ export class DiscordMessageRouter {
 			if (dmRequest) {
 				const recipientAllowed = this.config.discord?.operatorUserIds?.includes(PROACTIVE_DM_RECIPIENT_USER_ID) === true;
 				let receipt = { state: "failed", reasonCode: recipientAllowed ? "dm_delivery_failed" : "fixed_recipient_not_authorized" };
-				if (recipientAllowed && effectiveAllowedActions(this.config).includes("reply")) receipt = await this.directMessage({ token: this.token, userId: PROACTIVE_DM_RECIPIENT_USER_ID, content: dmRequest.content, nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal: controller.signal });
+				if (recipientAllowed && effectiveAllowedActions(this.config, item.authority).includes("reply")) receipt = await this.directMessage({ token: this.token, userId: PROACTIVE_DM_RECIPIENT_USER_ID, content: dmRequest.content, nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal: controller.signal });
 				finalContent = receipt.state === "confirmed" ? dmRequest.successReply : dmRequest.failureReply;
 			}
 			await this.deliver({ store: this.store, jobId: item.jobId, attemptId: result.attemptId, token: this.token, botUserId: this.botUserId, channelId: item.channelId, content: finalContent, signal: controller.signal });
@@ -480,22 +516,48 @@ export class DiscordMessageRouter {
 		if (!new Set(["restart", "amend"]).has(action)) return { state: "rejected", action, jobId, reasonCode: "invalid_control_action" };
 		if (action === "amend" && (typeof amendment !== "string" || !amendment.trim() || amendment.length > 4_000)) return { state: "rejected", action, jobId, reasonCode: "amendment_invalid" };
 		if (!this.recoveryCodec) return { state: "rejected", action, jobId, reasonCode: "recovery_codec_unavailable" };
-		const item = this.workItems.get(jobId) ?? this.queue.find((candidate) => candidate.jobId === jobId);
-		if (!item) return { state: "rejected", action, jobId, reasonCode: "job_not_active" };
 		const sourceJob = this.store.getJob(jobId, { includeEvents: false });
 		if (!sourceJob) return { state: "rejected", action, jobId, reasonCode: "job_not_found" };
+		const activeItem = this.workItems.get(jobId) ?? this.queue.find((candidate) => candidate.jobId === jobId);
+		let item = activeItem;
+		if (!item) {
+			if (sourceJob.lifecycle !== "failed") return { state: "rejected", action, jobId, reasonCode: "job_not_restartable" };
+			const envelope = this.store.loadJobRecovery(jobId);
+			if (!envelope) return { state: "rejected", action, jobId, reasonCode: "recovery_envelope_unavailable" };
+			try {
+				const payload = JSON.parse(this.recoveryCodec.open(envelope));
+				if (typeof payload.currentRequest !== "string" || !payload.currentRequest || payload.currentRequest.length > 4_000 || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
+				const authority = this.#recoveryAuthority(payload);
+				const executionProfile = this.#executionProfile(sourceJob.backendId, authority);
+				if (!sameExecutionProfile(payload.executionProfile, executionProfile)) throw new Error("recovery execution profile changed");
+				item = {
+					jobId,
+					backendId: sourceJob.backendId,
+					currentRequest: payload.currentRequest,
+					channelId: payload.channelId,
+					scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null,
+					participantUserId: payload.participantUserId,
+					authority,
+					commandOptions: this.#withBackendOptions(sourceJob.backendId, commandOptionsForProfile(executionProfile)),
+					executionProfile,
+				};
+			} catch {
+				return { state: "rejected", action, jobId, reasonCode: "recovery_binding_changed" };
+			}
+		}
 		const currentRequest = action === "amend" ? `${item.currentRequest}\n\nOperator amendment:\n${amendment.trim()}` : item.currentRequest;
 		if (currentRequest.length > 4_000) return { state: "rejected", action, jobId, reasonCode: "amendment_too_large" };
 		const replacementJobId = randomUUID();
 		const replacementPrompt = boundRequestPrompt(currentRequest, this.config, item.authority, this.agentContextSnapshot);
 		const replacementEnvelope = this.recoveryCodec.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId: item.channelId, scopeKey: item.scopeKey, executionProfile: item.executionProfile, participantUserId: item.participantUserId, bindingIdentity: item.authority?.bindingIdentity, authorityRevision: item.authority?.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: this.agentContextSnapshot?.contextHash ?? null, runtimeRevision: this.runtimeRevision }));
-		this.store.createJob({ jobId: replacementJobId, backendId: item.backendId, revision: sourceJob.revision, backendCapabilities: sourceJob.backendCapabilities, activityDetail: sourceJob.activityDetail, jobType: "conversation", scopeKey: item.scopeKey, softSilenceMs: sourceJob.softSilenceMs, hardDeadlineAt: sourceJob.hardDeadlineAt, recoveryEnvelope: replacementEnvelope, executionBinding: sourceJob.executionBinding });
+		this.store.createJob({ jobId: replacementJobId, backendId: item.backendId, revision: sourceJob.revision, backendCapabilities: sourceJob.backendCapabilities, activityDetail: sourceJob.activityDetail, jobType: "conversation", scopeKey: item.scopeKey, softSilenceMs: sourceJob.softSilenceMs, recoveryEnvelope: replacementEnvelope, executionBinding: sourceJob.executionBinding });
 		const replacement = { ...item, jobId: replacementJobId, prompt: replacementPrompt, currentRequest, sourceMessageId: null };
 		this.workItems.set(replacementJobId, replacement);
-		this.cancelJob(jobId);
+		if (activeItem) this.cancelJob(jobId);
+		else this.store.deleteJobRecovery(jobId);
 		this.queue.push(replacement);
 		this.#drain();
-		return { state: "accepted", action, jobId, replacementJobId, semantics: "cancel_and_queue_replacement" };
+		return { state: "accepted", action, jobId, replacementJobId, semantics: activeItem ? "cancel_and_queue_replacement" : "terminal_retry_from_encrypted_request" };
 	}
 
 	async watchdog({ nowMs = this.now() } = {}) {

@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 
 const INSTANCE_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
-const RESERVED_INSTANCES = new Set(["status", "health-check", "jobs", "job", "watch", "logs", "monitor", "cancel", "restart", "amend", "history", "latest", "attachment", "reply", "service", "cutover"]);
+const RESERVED_INSTANCES = new Set(["status", "health-check", "jobs", "job", "watch", "logs", "monitor", "cancel", "restart", "amend", "submit", "history", "latest", "attachment", "reply", "service", "cutover"]);
 
 export function normalizeMessengerInstance(value = "default") {
 	const instance = String(value || "default");
