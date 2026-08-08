@@ -1,12 +1,14 @@
-version: 2
-scope: alpha-adk root collaboration process
+version: 4
+scope: naia-adk portable collaboration process
 status: active
+updated_at: 2026-08-08
 
 portable_contract:
   vendor_neutral: true
   rule: The contract defines capabilities and evidence; tool/model names belong only in adapters.
   roles:
-    orchestrator: interpret the approved contract and own integration
+    secretary: maintain the user-facing portfolio, requirement SoT, priorities, handoff boundary, and issue dispatch
+    issue_leader: own issue analysis, design SoT, narrow task contracts, delegation, integration, and acceptance
     explorer: collect bounded evidence without mutation
     designer: compare bounded alternatives and identify escalation triggers
     implementer: mutate only the approved scope
@@ -22,6 +24,14 @@ portable_contract:
     inherit_authorized_scope: true
     rule: Every delegated or nested role inherits the orchestrator's authorized objective, scope, routine execution authority, and exception boundary; it must not request approval again for routine in-scope work.
     exceptions: irreversible or destructive action including remote-ref deletion, force push, unrelated-histories integration, external messaging or payment, production-impacting mutation, material cost, credential exposure, or material scope expansion
+  layer_contract:
+    flow: L3_secretary_to_L2_issue_leader_to_L1_worker
+    stable_identity_rule: L3, L2, and L1 are stable role definitions; model executions are disposable sessions and never accumulate identity from an inherited transcript
+    drift_detection: { L1: L2, L2: L3, L3: human_owner }
+    L3_session_lifetime: one disposable model session per bounded portfolio or handoff epoch; no successor inherits identity through a transcript
+    L3_replacement: an owner request or owner-suspected L3 drift mandates explicit handoff to a fresh session; L3 self-suspicion mandates disclosure and a handoff recommendation pending human approval; only the human owner requires or approves replacement
+    successor_binding: the fresh L3 must establish a new explicit local task contract and session binding before mutation
+    context_transfer: requirement, contract, decision, owned-path, acceptance, test, review, risk, and next-action projections only; full conversation and private reasoning are forbidden
   independence:
     self_check_is_review: false
     prefer_distinct_model_or_provider: true
@@ -43,53 +53,59 @@ portable_contract:
 principles:
   - Contract and deterministic validation run before model work whenever possible.
   - Use the lowest-cost role that can safely perform the bounded task; escalate by risk and unresolved evidence, not by habit.
-  - Claude or Codex alone remains the complete default. OpenCode is permitted only by an explicit opt-in profile with a separately configured provider; HY3 remains prohibited in production routing until a later explicit policy change.
+  - Codex is the desired primary production and development adapter. Existing OpenCode profiles remain only as reversible rollback choices until the managed Codex cutover is verified; HY3 remains prohibited in production routing until a later explicit policy change.
   - A producer self-check is useful but never counts as adversarial review.
 
 adapter_role_map:
-  orchestrator: { adapter: codex, role: main_orchestrator }
+  secretary: { adapter: codex, role: L3_secretary }
+  issue_leader: { adapter: codex, role: L2_issue_leader }
   explorer: { adapter: codex, role: explorer }
   designer: { adapter: codex, role: designer }
-  implementer: { adapter: profile_selection, role: bounded_worker }
+  implementer: { adapter: codex, role: worker }
   tester: { adapter: codex, role: tester }
   adversarial_reviewer: { adapter: codex, role: adversarial_reviewer }
   arbiter: { adapter: codex, role: arbiter }
   translator: { adapter: routing_chain, role: translation }
 
 codex_adapter:
-  main_orchestrator:
-    model: gpt-5.6-sol
-    reasoning_effort: medium
-    authority: contract interpretation, integration decisions, final synthesis, and final file changes
+  L3_secretary:
+    model: gpt-5.6-luna
+    reasoning_effort: max
+    authority: user conversation, portfolio and requirement SoT, priority, issue dispatch, evidence reporting, and explicit handoff recommendation
+  L2_issue_leader:
+    model: gpt-5.6-luna
+    reasoning_effort: max
+    authority: issue analysis and design ownership, narrow task contracts, worker delegation, integration decisions, and evidence-backed acceptance
+    mutation_boundary: integrates verified worker results but does not act as the implementing worker
   roles:
     explorer:
-      model: gpt-5.6-terra
+      model: gpt-5.6-luna
       reasoning_effort: low
       mode: read-only
       use_for: bounded search, context mapping, evidence collection
     worker:
-      model: gpt-5.6-terra
+      model: gpt-5.6-luna
       reasoning_effort: medium
       mode: workspace-write
       use_for: approved bounded implementation
     designer:
-      model: gpt-5.6-terra
-      reasoning_effort: high
+      model: gpt-5.6-sol
+      reasoning_effort: medium
       mode: read-only
-      use_for: bounded design analysis; escalate to Sol only when a declared high-risk trigger applies
+      use_for: separate-session analysis and design challenge before implementation; L2 retains design accountability
     tester:
-      model: gpt-5.6-terra
+      model: gpt-5.6-luna
       reasoning_effort: medium
       mode: workspace-write
       use_for: focused tests and evidence collection
     translator_luna:
       model: gpt-5.6-luna
       reasoning_effort: low
-      mode: read-only
-      use_for: repeatable translation batches and mechanical classification when Claude Haiku is unavailable
+      mode: narrowly-scoped-workspace-write
+      use_for: repeatable translation batches and approved changed-language mirrors only; mechanical classification remains read-only
     adversarial_reviewer:
-      model: gpt-5.6-terra
-      reasoning_effort: high
+      model: gpt-5.6-sol
+      reasoning_effort: medium
       mode: read-only
       use_for: independent review of an immutable snapshot
     arbiter:
@@ -108,22 +124,10 @@ claude_adapter:
     translation_fallback: Claude Sonnet after Haiku 4.5 and Codex Luna are unavailable
   restriction: Claude may not be both producer and adversarial reviewer for the same execution
 
-opencode_adapter:
-  availability: optional_additional_environment
-  default_required: false
-  active_profile: delegated
-  implementation_worker:
-    provider: azure-foundry
-    model: deepseek-v4-pro
-    mode: workspace-write
-    evidence: five_of_five_algorithm_smoke_and_first_pass_edit_test_completion
-  secret_rule: credentials stay in the OpenCode user credential store and never enter the repository
-  selection_rule: select this profile only after the optional provider is configured; unbounded or high-risk work returns to the Sol binding
-
 translation_routing:
   order:
-    - { adapter: claude, model: haiku, family: Claude Haiku 4.5 }
     - { adapter: codex, model: gpt-5.6-luna, reasoning_effort: low }
+    - { adapter: claude, model: haiku, family: Claude Haiku 4.5 }
     - { adapter: claude, model: sonnet, family: Claude Sonnet }
   invocation: all adapters use the shared stdin-based invocation builder; prompts must not be command-line arguments
   failure: continue only to the next declared adapter and preserve the diagnostic receipt
@@ -149,8 +153,8 @@ independent_review:
     - reviewer_execution_id
     - test_receipts
   active_adapter_panel:
-    - codex-terra-independent
-    - claude-sonnet-independent
+    - codex-sol-medium-independent-primary
+    - codex-sol-medium-independent-secondary
   raw_evidence_rule: each local receipt must bind its reviewer session and execution digest to one preserved raw CLI envelope under .agents/progress/review-evidence; invented caller strings are rejected
 
 enforcement_boundary:
@@ -161,45 +165,39 @@ enforcement_boundary:
 cost_controls:
   deterministic_first: schema, hash, mirror, index, and receipt checks must not call an LLM
   batch_lightweight_work: translation and mechanical classification must process only changed inputs with cached hashes
-  escalation: Sol high is reserved for arbitration or genuinely high-risk work
+  escalation: Sol Medium is used for separate-session analysis, design challenge, and review; Sol high is reserved for arbitration or genuinely high-risk work
 
 quick_start_profiles:
   status: active_codex_default_no_total_cost_claim
   source: packages/benchmark-contract/baselines/development-composition-profiles.json
   default: balanced
   fallback: control
-  activation:
-    host: codex
-    scope: explicitly_bound_sessions
-    override_env: CODEX_DEVELOPMENT_PROFILE
-    available_bindings_env: CODEX_AVAILABLE_BINDINGS
-    invalid_override: fail_closed
   structure_rule: profiles define stable roles and guards; replaceable model bindings are evaluated separately so a new model does not require redesigning the profiles
   profiles:
     control: all roles use the Sol binding in separate executions; serves as the quality/cost reference and high-risk fallback
-    balanced: Sol owns orchestration and integration; Luna handles bounded implementation with an exact validator, Terra is the bounded fallback without one, and Terra handles focused testing
-    economy: balanced safety boundaries plus later evidence-gated expansion of Luna mechanical work
-    delegated: optional additional-provider profile selected only after setup; Sol owns orchestration and integration, and a replaceable implementation_worker binding handles bounded medium-or-lower-risk implementation
+    balanced: Luna Max is the L3 Secretary and L2 Issue Leader default; bounded implementation, testing, and translation use Luna; separate-session analysis, design challenge, and independent review use Sol Medium
+    economy: balanced safety boundaries plus later evidence-gated use of lower-reasoning Luna variants for mechanical work
   selection_guards:
     - unbounded or high-risk work falls back to Sol
-    - Luna implementation requires bounded scope and an exact validator; otherwise use Terra, while unbounded or high-risk work uses Sol
+    - Luna implementation requires a narrow task contract and an exact validator; unbounded work returns to L2 for decomposition, while high-risk work escalates to Sol
     - Luna mechanical work additionally requires low risk
-    - every selected binding must be declared available by the runtime; the default supported set is Sol and Terra, unavailable Luna falls back deterministically to Terra and then Sol, and an empty eligible set fails closed
+    - every selected binding must be declared available by the runtime; unavailable Luna or Sol fails closed unless an explicit profile declares a tested fallback
     - cross-platform environment configuration uses CODEX_AVAILABLE_BINDINGS=none or [] to declare an empty set because Windows does not preserve an empty environment value for child processes
     - independent review requires distinct session and execution identities and prefers a binding different from the producer
-  claim_boundary: balanced is active by default for bound Codex sessions and delegated remains explicit opt-in, but neither state claims proven total-system cost reduction
+    - roleIdentities supplied to the pure selector are planning-time separation evidence, not authenticated execution receipts; completion claims require the signed isolated review boundary
+  claim_boundary: phase 1 makes balanced the default for Codex-bound development sessions but does not claim proven total-system cost reduction or complete issue orchestration
   new_model_rule: run only the affected capability experiments, update the binding qualification and evidence expiry, then compare the unchanged profiles
 
 benchmark_candidate_registry:
   status: evidence_required_before_production_routing
-  fixed_constraint: Codex gpt-5.6-sol remains the main orchestrator and final integrator
+  fixed_constraint: balanced uses Codex Luna Max for L3 and L2, Luna for bounded implementation, testing, and translation, and distinct Sol Medium sessions for analysis, design challenge, and independent review
   comparison_scope: compare bounded worker-role model-provider-adapter composites; do not describe cross-provider results as model-only causality
   hy3_exception: candidate-only; a 22-of-24 mixed capability smoke passed but the first agentic coding attempt omitted the required test and needed one user retry, so main and production routing remain prohibited
   candidates:
-    - { id: codex-terra, provider: OpenAI Codex, model: gpt-5.6-terra, intended_roles: [explorer, implementer, tester, independent_reviewer] }
-    - { id: codex-luna, provider: OpenAI Codex, model: gpt-5.6-luna, intended_roles: [translator, mechanical_classifier, bounded_explorer] }
-    - { id: azure-deepseek-v4-flash, provider: Azure Foundry, model: DeepSeek-V4-Flash, intended_roles: [], restrictions: [disabled_after_latency_smoke] }
-    - { id: azure-deepseek-v4-pro, provider: Azure Foundry, model: DeepSeek-V4-Pro, intended_roles: [bounded_implementation], restrictions: [delegated_profile_only, sol_integration_required, medium_or_lower_risk] }
+    - { id: codex-terra, provider: OpenAI Codex, model: gpt-5.6-terra, intended_roles: [explicit_fallback_candidate], restrictions: [not_in_balanced_default, fresh_qualification_required] }
+    - { id: codex-luna, provider: OpenAI Codex, model: gpt-5.6-luna, intended_roles: [L3_secretary_max, L2_issue_leader_max, translator, bounded_explorer, exact_validated_bounded_implementer, focused_tester], restrictions: [exact_validator_required_for_implementation, bounded_context_required] }
+    - { id: codex-sol, provider: OpenAI Codex, model: gpt-5.6-sol, intended_roles: [separate_analysis, separate_design_challenge, independent_review, high_risk_arbiter], restrictions: [distinct_session_from_producer, immutable_snapshot_required_for_review] }
+    - { id: azure-deepseek-v4-flash, provider: Azure Foundry, model: DeepSeek-V4-Flash, intended_roles: [future_role_agent_candidate], restrictions: [not_active, no_tool_calling_claim, fresh_benchmark_required] }
     - { id: openrouter-hy3, provider: OpenRouter, model: tencent/hy3, intended_roles: [low_cost_candidate], restrictions: [not_main, not_production, completion_gate_required, pin_routing_mode_and_actual_upstream_provider] }
     - { id: upstage-solar-open2, provider: Upstage private beta, model: solar-open2, credential_env: UPSTAGE_KEY, intended_roles: [korean_analysis, code_generation, document_work, tool_use_after_probe], restrictions: [never_commit_key, freeze_hosted_api_identity_and_price_evidence] }
   suite_boundary:

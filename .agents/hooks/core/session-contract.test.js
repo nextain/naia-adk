@@ -132,11 +132,31 @@ try {
 		[(contract) => { contract.scope = [42]; }, "invalid_scope_item"],
 		[(contract) => { contract.allowed_paths = ["src/*.js"]; }, "unsupported_allowed_path_pattern"],
 		[(contract) => { contract.allowed_shell_commands = ["bad\ncommand"]; }, "invalid_allowed_shell_commands"],
+		[(contract) => { contract.subagent_policy = { profile: "balanced" }; }, "invalid_subagent_policy_mode"],
 	]) {
 		const candidate = JSON.parse(JSON.stringify(malformed.contract));
 		mutation(candidate);
 		assert.equal(core.validateContractShape(candidate), expected);
 	}
+	const validPolicy = {
+		profile: "balanced",
+		context_mode: "isolated",
+		budget_started_at: "2026-08-09T00:00:00Z",
+		root_input_token_baseline: 0,
+		root_output_token_baseline: 0,
+		max_children: 4,
+		max_active_children: 2,
+		max_prompt_bytes: 16_384,
+		max_delegated_prompt_bytes: 65_536,
+		max_input_tokens: 256_000,
+		max_output_tokens: 32_000,
+	};
+	assert.equal(core.validateSubagentPolicy(validPolicy), null);
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, budget_started_at: "2026-02-31T00:00:00Z" }), "invalid_subagent_policy_started_at");
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, max_children: 9 }), "invalid_subagent_policy_max_children");
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, max_active_children: 5 }), "invalid_subagent_policy_concurrency");
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, max_prompt_bytes: 65_537 }), "invalid_subagent_policy_prompt_limits");
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, root_input_token_baseline: -1 }), "invalid_subagent_policy_root_input_token_baseline");
 
 	const parent = workspace("session-parent-"); roots.push(parent);
 	const parentContract = finishBinding(parent, "PARENT", "parent-contract");
