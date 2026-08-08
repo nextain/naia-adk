@@ -282,6 +282,12 @@ contextFiles:
     description: "Opt-in original-request integrity policy shared by Claude Code and Codex adapters"
     mirrors:
       korean: .users/context/request-contract.md
+  development_model_routing:
+    path: .agents/context/development-model-routing.yaml
+    description: "Portable L3/L2/L1 role, balanced Codex binding, review independence, and bounded-context SoT"
+  discord_gateway_operations:
+    path: .agents/context/discord-gateway-operations.yaml
+    description: "Provider-neutral Discord gateway capability and private deployment-overlay boundary"
 
 # opt-in localmodel backends (2026-05-15)
 # naia-adk 의 localmodel 설정에서 선택 가능한 외부 음성/모달 backend.
@@ -306,6 +312,14 @@ optInLocalmodels:
 on_demand_loading:
   index: .agents/context/.ctx-index.json
   sections:
+    - id: naia-adk:development_model_routing
+      file: .agents/context/development-model-routing.yaml
+      description: "L3 Secretary, L2 Issue Leader, L1 Worker roles and balanced Codex model routing"
+      tags: [codex, balanced, roles, delegation, context-budget]
+    - id: naia-adk:discord_gateway_operations
+      file: .agents/context/discord-gateway-operations.yaml
+      description: "Common Discord gateway behavior, context isolation, profile rollback, and deployment overlay contract"
+      tags: [discord, gateway, codex, profiles, operations]
     - id: naia-adk:lessons_workflow
       file: .agents/context/lessons-workflow.yaml
       description: "Workflow & process lessons (IDD violations, review, harness-design, destructive-action)"

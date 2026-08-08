@@ -1,0 +1,74 @@
+version: 1
+scope: naia-adk common Discord gateway capability
+status: active_contract
+updated_at: 2026-08-09
+
+ownership:
+  common_feature_repository: naia-adk
+  runtime_project: projects/naia-agent
+  private_deployment_overlay: downstream fork context
+  rule: portable gateway behavior belongs here; channel identities, credential bindings, project allowlists, host units, and private paths belong only in the private overlay
+
+gateway_contract:
+  transport_role: L3 user-facing ingress and delivery surface
+  model_boundary: the gateway process is deterministic and model-free; the selected backend launches a bounded assistant execution
+  required_behavior:
+    - durable Discord sequence and resume handling
+    - per-scope serialization and declared concurrency limits
+    - bounded project-context snapshot with hash recheck before launch
+    - isolated one-shot backend environment and owned-process cleanup
+    - fail-closed authority drift, recovery, and uncertain-delivery handling
+  orchestration_claim_boundary: one direct backend child does not prove the complete L3 Secretary to L2 Issue Leader to L1 Worker supervision tree
+
+backend_profiles:
+  default: codex
+  rollback:
+    required: true
+    rule: preserve prior provider configuration as an explicitly named inactive profile so an operator can restore it without reconstructing credentials or policy
+  codex:
+    development_profile: balanced
+    role_source: .agents/context/development-model-routing.yaml
+    default_secretary: { model: gpt-5.6-luna, reasoning_effort: max }
+  forbidden_implicit_fallback:
+    - silently selecting OpenCode when the active profile is Codex
+    - silently widening project or application authority
+    - passing the root transcript to a backend or descendant
+
+context_and_cost:
+  context_mode: isolated_bounded
+  inherit_root_context: false
+  descendant_isolation: fork_turns=none; if an adapter also emits fork_context it must be false
+  descendant_launch_cwd: start delegated Codex executions in an empty scratch directory outside every project root and pass only explicit worktree paths in the bounded brief; launching with a project root as cwd is forbidden because Codex bootstraps that root's AGENTS.md even when fork_turns is none
+  backend_input:
+    include: [selected requirement atoms, issue or task contract, owned paths, acceptance criteria, relevant SoT references, stop condition]
+    exclude: [full Discord history, full parent conversation, root context dump, private reasoning, unrelated project context, closed task history]
+  descendant_budget:
+    source: bound session contract subagent_policy
+    enforcement:
+      - exact spawn admission guard
+      - cumulative lineage token accounting after activation
+      - watchdog interruption of over-budget descendant work; overdue tool state is diagnostic only
+    root_rule: never interrupt the user-facing root solely because its own historical conversation is large; measure root orchestration separately from delegated spend
+    ambiguity_rule: malformed, unreadable, unattributable, or cyclic selected lineage evidence fails closed
+    trust_boundary: local counters and rollouts prevent accidental or racing spend but are not tamper-proof against a descendant with the same unrestricted OS identity; hostile-worker containment requires a separately privileged admission service
+
+deployment_overlay_contract:
+  each_instance_declares:
+    - stable instance id and Discord scope
+    - active backend profile and reversible rollback profile
+    - allowed project roots
+    - allowed application credentials or command capabilities
+    - concurrency, prompt-byte, delegated-token, and timeout budgets
+    - service unit and read-only health evidence
+  secrets: references only; secret values never enter repository context, prompts, logs, receipts, or review bundles
+  validation:
+    deterministic:
+      - configuration schema and profile selection
+      - session binding and contract digest
+      - project-root and capability allowlists
+      - cost-guard registration and lineage fixtures
+    live:
+      - Discord receive and reply canary
+      - declared application read/write canary within each instance authority
+      - browser access checks where the target application exposes a web control plane
+    claim_rule: repository tests prove the harness contract; production readiness additionally requires current host and live-service receipts

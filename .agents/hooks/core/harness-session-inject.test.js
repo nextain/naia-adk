@@ -141,7 +141,7 @@ function assertSilent(result, label) {
 	assert.match(result.text, /Bound work/);
 	assert.match(result.text, /Contract: inject-contract/);
 	assert.match(result.text, /Active profile: balanced \(source: catalog_default\)/);
-	assert.match(result.text, /Available bindings: sol, terra/);
+	assert.match(result.text, /Available bindings: luna, sol/);
 	assert.match(result.text, /Fallback: control; deterministic fallback then fail closed/);
 	assert.match(result.text, /total development cost reduction is not proven/);
 
