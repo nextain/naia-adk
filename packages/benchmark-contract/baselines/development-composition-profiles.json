@@ -11,7 +11,7 @@
     }
   },
   "availability": {
-    "default_available_bindings": ["sol", "terra"],
+    "default_available_bindings": ["sol", "luna"],
     "override": "explicit availableBindings or CODEX_AVAILABLE_BINDINGS",
     "unavailable_policy": "deterministic fallback then fail closed"
   },
@@ -19,6 +19,8 @@
     "sol": {
       "adapter": "codex",
       "model": "gpt-5.6-sol",
+      "default_reasoning_effort": "medium",
+      "allowed_reasoning_efforts": ["medium", "high"],
       "qualification": "orchestration_and_integration_baseline"
     },
     "terra": {
@@ -29,14 +31,42 @@
     "luna": {
       "adapter": "codex",
       "model": "gpt-5.6-luna",
+      "default_reasoning_effort": "medium",
+      "allowed_reasoning_efforts": ["low", "medium", "max"],
       "qualification": "bounded_exact_validated_implementation_smoke_8_of_9"
     },
     "implementation_worker": {
-      "adapter": "opencode",
-      "provider": "azure-foundry",
-      "model": "deepseek-v4-pro",
-      "qualification": "development_smoke_5_of_5_and_agentic_edit_test_first_pass"
+      "adapter": "optional_external_runtime",
+      "profile_identity": "deployment_local_implementation_worker",
+      "activation": "explicit_available_binding_only",
+      "qualification": "requires_separate_local_configuration_and_evidence",
+      "qualification_evidence": "signed_deployment_local_receipt_v1",
+      "receipt_algorithm": "ed25519",
+      "trust_store_relative_path": "adk-development-worker-trust.json",
+      "max_receipt_validity_ms": 2592000000,
+      "rollback_binding": "sol"
     }
+  },
+  "balanced_role_policy": {
+    "secretary": {"binding": "luna", "default_reasoning_effort": "max", "allowed_reasoning_efforts": ["max"]},
+    "issue_leader": {"binding": "luna", "default_reasoning_effort": "max", "allowed_reasoning_efforts": ["max"]},
+    "analysis": {"binding": "sol", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
+    "design": {"binding": "sol", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
+    "review": {"binding": "sol", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
+    "implementation": {"binding": "luna", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
+    "test": {"binding": "luna", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
+    "generic_worker": {"binding": "luna", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
+    "translation": {"binding": "luna", "default_reasoning_effort": "low", "allowed_reasoning_efforts": ["low", "medium"]}
+  },
+  "delegation_context": {
+    "brief_mode": "isolated_bounded",
+    "fork_turns": "none",
+    "fork_context": false,
+    "inherit_root_context": false
+  },
+  "runtime_policy_boundary": {
+    "separate_context": ".agents/context/discord-gateway-operations.yaml",
+    "excluded_from_development_profiles": ["persistent_discord_gateway", "issue_leader_luna_max"]
   },
   "profiles": [
     {
@@ -53,26 +83,26 @@
     },
     {
       "id": "balanced",
-      "purpose": "Default profile for bound Codex sessions that delegates bounded engineering work while Sol retains decisions and integration",
+      "purpose": "Default Codex profile: Luna Max leads L3/L2, Luna executes bounded work, and separate Sol Medium sessions analyze, design, and review",
       "assignments": {
-        "orchestrator": "sol",
-        "integrator": "sol",
+        "orchestrator": "luna",
+        "integrator": "luna",
         "bounded_worker": "luna",
         "mechanical_worker": "luna",
-        "tester": "terra",
-        "reviewer_pool": ["terra", "sol"]
+        "tester": "luna",
+        "reviewer_pool": ["sol"]
       }
     },
     {
       "id": "economy",
       "purpose": "Experimental extension of balanced using Luna only behind exact validation",
       "assignments": {
-        "orchestrator": "sol",
-        "integrator": "sol",
-        "bounded_worker": "terra",
+        "orchestrator": "luna",
+        "integrator": "luna",
+        "bounded_worker": "luna",
         "mechanical_worker": "luna",
-        "tester": "terra",
-        "reviewer_pool": ["terra", "sol"]
+        "tester": "luna",
+        "reviewer_pool": ["sol"]
       }
     },
     {
@@ -83,8 +113,8 @@
         "integrator": "sol",
         "bounded_worker": "implementation_worker",
         "mechanical_worker": "luna",
-        "tester": "terra",
-        "reviewer_pool": ["terra", "sol"]
+        "tester": "luna",
+        "reviewer_pool": ["sol"]
       }
     }
   ],
@@ -93,19 +123,25 @@
       "requires_bounded_scope": true,
       "maximum_risk": "medium",
       "luna_requires_exact_validator": true,
-      "luna_fallback_binding": "terra",
+      "luna_fallback_binding": "sol",
       "fallback_binding": "sol"
     },
     "mechanical_worker": {
       "luna_requires_exact_validator": true,
       "luna_requires_bounded_scope": true,
       "luna_maximum_risk": "low",
-      "fallback_binding": "terra"
+      "fallback_binding": "sol"
     },
     "review": {
       "different_session_required": true,
       "different_execution_required": true,
       "prefer_different_binding_from_producer": true,
+      "fail_closed_without_independent_execution_identity": true
+    },
+    "sol_specialist": {
+      "roles": ["analysis", "designer"],
+      "different_session_required": true,
+      "different_execution_required": true,
       "fail_closed_without_independent_execution_identity": true
     }
   },

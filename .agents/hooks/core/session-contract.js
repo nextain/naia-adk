@@ -87,8 +87,44 @@ const CONTRACT_KEYS = new Set([
 	"schema_version", "id", "status", "project_root", "goal", "scope",
 	"non_goals", "success_criteria", "allowed_paths", "target_ownership",
 	"audiences", "source_refs", "session_bindings", "progress_file",
-	"contract_digest", "allowed_shell_commands",
+	"contract_digest", "allowed_shell_commands", "subagent_policy",
 ]);
+
+const SUBAGENT_POLICY_KEYS = new Set([
+	"profile", "context_mode", "budget_started_at",
+	"root_input_token_baseline", "root_output_token_baseline",
+	"max_children", "max_active_children", "max_prompt_bytes",
+	"max_delegated_prompt_bytes", "max_input_tokens", "max_output_tokens",
+]);
+const SUBAGENT_HARD_MAX_CHILDREN = 8;
+
+function validateSubagentPolicy(policy) {
+	if (policy == null) return null;
+	if (!policy || typeof policy !== "object" || Array.isArray(policy)) return "invalid_subagent_policy";
+	if (Object.keys(policy).some((key) => !SUBAGENT_POLICY_KEYS.has(key))) return "invalid_subagent_policy_property";
+	if (policy.profile !== "balanced" || policy.context_mode !== "isolated") return "invalid_subagent_policy_mode";
+	const startedAt = typeof policy.budget_started_at === "string" ? Date.parse(policy.budget_started_at) : NaN;
+	const canonicalStartedAt = Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : null;
+	const normalizedStartedAt = typeof policy.budget_started_at === "string"
+		? policy.budget_started_at.replace(/Z$/, ".000Z")
+		: null;
+	if (
+		typeof policy.budget_started_at !== "string" ||
+		!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(policy.budget_started_at) ||
+		!Number.isFinite(startedAt) ||
+		canonicalStartedAt !== normalizedStartedAt
+	) return "invalid_subagent_policy_started_at";
+	for (const key of ["root_input_token_baseline", "root_output_token_baseline"]) {
+		if (!Number.isSafeInteger(policy[key]) || policy[key] < 0) return `invalid_subagent_policy_${key}`;
+	}
+	for (const key of ["max_children", "max_active_children", "max_prompt_bytes", "max_delegated_prompt_bytes", "max_input_tokens", "max_output_tokens"]) {
+		if (!Number.isSafeInteger(policy[key]) || policy[key] <= 0) return `invalid_subagent_policy_${key}`;
+	}
+	if (policy.max_children > SUBAGENT_HARD_MAX_CHILDREN) return "invalid_subagent_policy_max_children";
+	if (policy.max_active_children > policy.max_children) return "invalid_subagent_policy_concurrency";
+	if (policy.max_prompt_bytes > policy.max_delegated_prompt_bytes) return "invalid_subagent_policy_prompt_limits";
+	return null;
+}
 
 function supportedOwnershipPattern(value) {
 	if (typeof value !== "string" || !value || path.isAbsolute(value) || value.includes("..")) return false;
@@ -116,6 +152,8 @@ function validateContractShape(contract) {
 		!Array.isArray(contract.allowed_shell_commands) ||
 		contract.allowed_shell_commands.some((item) => typeof item !== "string" || !item.trim() || /[\r\n]/.test(item))
 	)) return "invalid_allowed_shell_commands";
+	const subagentPolicyError = validateSubagentPolicy(contract.subagent_policy);
+	if (subagentPolicyError) return subagentPolicyError;
 	for (const key of ["scope", "success_criteria", "allowed_paths", "target_ownership", "audiences", "source_refs", "session_bindings"]) {
 		if (contract[key].length === 0) return `empty_${key}`;
 	}
@@ -308,6 +346,7 @@ function resolveSessionContract({ cwd, sessionId }) {
 
 module.exports = {
 	STATES,
+	SUBAGENT_HARD_MAX_CHILDREN,
 	contractDigest,
 	findProjectRoot,
 	inside,
@@ -316,4 +355,5 @@ module.exports = {
 	stableValue,
 	supportedOwnershipPattern,
 	validateContractShape,
+	validateSubagentPolicy,
 };
