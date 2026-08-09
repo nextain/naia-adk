@@ -8,6 +8,15 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const sessionContract = require("../../.agents/hooks/core/session-contract.js");
+const {
+	executableReadCommand,
+	explicitlyScopedRead,
+	nestedModelRuntimeCommand,
+	readOnlyShell,
+	requestedWorkdirIssue,
+	trustedSessionParserCommand,
+	unsafeShellCommand,
+} = require("./session-read-policy.cjs");
 
 const HARNESS_OFF = new Set(["off", "0", "false", "no"]);
 const HARNESS_ENV_VARS = ["AI_HARNESS", "CLAUDE_HARNESS", "CODEX_HARNESS"];
@@ -229,7 +238,7 @@ function entrypointMutationOutsideHelper(toolName, toolInput, cwd) {
 	}
 	if (normalized !== "shell") return false;
 	const command = String(toolInput?.command || "").trim();
-	if (readOnlyShell(command)) return false;
+	if (readOnlyShell(command, cwd)) return false;
 	const dedicatedHelper = /^node\s+(?:"[^"]*\/\.claude\/hooks\/sync-entry-points\.js"|(?:[^\s"']*\/)?\.claude\/hooks\/sync-entry-points\.js)\s+--apply\s+(?:"[^"]+"|'[^']+'|\S+)\s*$/;
 	if (dedicatedHelper.test(command)) return false;
 	const mentionsEntry = [...ENTRY_POINTS].some((name) =>
@@ -255,9 +264,25 @@ function contractPathMatches(pattern, relativePath) {
 	return normalizedPath === normalizedPattern;
 }
 
+function targetProjectRoot(target) {
+	let probe = path.resolve(target);
+	try {
+		if (!fs.statSync(probe).isDirectory()) probe = path.dirname(probe);
+	} catch {
+		probe = path.dirname(probe);
+	}
+	return sessionContract.findProjectRoot(probe);
+}
+
+function belongsToResolutionProject(resolution, target) {
+	const targetRoot = targetProjectRoot(target);
+	return !targetRoot || path.resolve(targetRoot) === path.resolve(resolution.projectRoot);
+}
+
 function contractAllowsTarget(resolution, filePath, cwd) {
 	const target = path.resolve(cwd, String(filePath));
 	if (!sessionContract.inside(resolution.projectRoot, target)) return false;
+	if (!belongsToResolutionProject(resolution, target)) return false;
 	const relative = path.relative(resolution.projectRoot, target).replaceAll("\\", "/");
 	return [resolution.contract.allowed_paths, resolution.contract.target_ownership]
 		.every((patterns) => patterns.some((pattern) => contractPathMatches(pattern, relative)));
@@ -267,69 +292,9 @@ function fallbackAllowsTarget(resolution, access, filePath, cwd) {
 	if (!access?.active) return false;
 	const target = path.resolve(cwd, String(filePath));
 	if (!sessionContract.inside(resolution.projectRoot, target)) return false;
+	if (!belongsToResolutionProject(resolution, target)) return false;
 	const relative = path.relative(resolution.projectRoot, target).replaceAll("\\", "/");
 	return access.allowedPaths.some((pattern) => contractPathMatches(pattern, relative));
-}
-
-const SAFE_READ_COMMANDS = [
-	/^(?:get-content|gc|get-childitem|gci|dir|ls|get-item|gi|get-filehash|test-path|resolve-path)\b/i,
-	/^(?:select-string|select-object|sort-object|where-object|measure-object)\b/i,
-	/^(?:rg|grep|cat|head|tail|wc|pwd|stat|readlink)\b/i,
-	/^git\s+(?:status|diff|log|show|remote|ls-files|check-ignore|rev-parse)\b/i,
-	/^git\s+branch(?:\s+(?:--show-current|--list|-l|--all|-a|--remotes|-r|-v|-vv))*\s*$/i,
-	/^git\s+submodule\s+status\b/i,
-];
-
-// These forms must never be rescued by an exact allowed_shell_commands match.
-const NESTED_RUNTIME = /(?:^|[\s;&|()])(?:claude(?:-code)?|codex(?:-cli)?|gemini(?:-cli)?|opencode(?:-ai)?|open-code)(?=\s|$|["'])|@(?:anthropic-ai\/claude-code|google\/gemini-cli|openai\/codex(?:-cli)?|opencode-ai)(?=\s|$|["'])/i;
-const DYNAMIC_SHELL = [
-	/\$\(|`/,
-	/\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/,
-	/(?:^|[;&|]\s*)[A-Za-z_][A-Za-z0-9_]*\s*=/,
-	/\b(?:eval|xargs)\b/i,
-	/\b(?:sh|bash|zsh|dash|ksh|fish)\s+-[A-Za-z]*c\b/i,
-	/\b(?:node|nodejs|bun|deno|python(?:3)?|perl|ruby|php|pwsh|powershell)\s+(?:-[A-Za-z]*e|-[A-Za-z]*c|--eval|--execute|--command|-[A-Za-z]*Command)\b/i,
-	/\bprintf\b/i,
-	/\\(?:[0-7]{1,3}|x[0-9a-f]{2})/i,
-];
-
-function unsafeShellCommand(command) {
-	const source = String(command || "").trim();
-	return NESTED_RUNTIME.test(source) || DYNAMIC_SHELL.some((pattern) => pattern.test(source));
-}
-
-function readOnlyShell(command) {
-	const source = String(command || "").trim();
-	if (!source) return true;
-	if (
-		/[><`]/.test(source) ||
-		/\$\(/.test(source) ||
-		/&&|\|\|/.test(source) ||
-		/(?:^|\s)(?:--output(?:=|\s)|-o(?:\s|$))/i.test(source) ||
-		/\brg\b[^;|\n]*(?:^|\s)--pre(?:=|\s|$)/i.test(source) ||
-		/\b(?:set-content|add-content|out-file|tee|new-item|remove-item|move-item|copy-item|rename-item)\b/i.test(source) ||
-		/\bgit\s+branch\b[^;\n]*(?:\s-(?:d|D|m|M|c|C|f)\b|--delete\b|--move\b|--copy\b|--force\b|--set-upstream-to\b|--unset-upstream\b)/i.test(source) ||
-		/\bgit\s+remote\s+(?:add|remove|rm|rename|set-head|set-branches|set-url|prune|update)\b/i.test(source)
-	) return false;
-	const statements = source
-		.split(";")
-		.flatMap((statement) => statement.split("|"))
-		.map((statement) => statement.trim())
-		.filter(Boolean);
-	return statements.length > 0 &&
-		statements.every((statement) => SAFE_READ_COMMANDS.some((pattern) => pattern.test(statement)));
-}
-
-function nestedModelRuntimeCommand(command) {
-	const source = String(command || "").trim();
-	if (!source) return false;
-	const dequoted = source.replace(/\\(.)/gs, "$1").replace(/["']/g, "");
-	const provider = /(?:^|[\s"'=;|&\\/])(?:codex|claude|opencode|gemini)(?:\.exe)?(?=$|[\s"';|&])/iu;
-	return provider.test(source) || provider.test(dequoted);
-}
-
-function executableReadCommand(command) {
-	return /\brg\b[^;|\n]*(?:^|\s)--pre(?:=|\s|$)/i.test(String(command || ""));
 }
 
 function boundGitMutationAllowed(command, resolution, cwd) {
@@ -341,6 +306,8 @@ function boundGitMutationAllowed(command, resolution, cwd) {
 		: cwd;
 	const gitSource = scoped ? `git ${scoped[2]}` : source;
 	if (!sessionContract.inside(resolution.projectRoot, gitCwd)) return false;
+	const gitProjectRoot = sessionContract.findProjectRoot(gitCwd);
+	if (!gitProjectRoot || path.resolve(gitProjectRoot) !== path.resolve(resolution.projectRoot)) return false;
 
 	const add = gitSource.match(/^git\s+add\s+(.+)$/i);
 	if (add) {
@@ -415,6 +382,15 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 			reason: "⛔ [HARNESS] 실행 가능한 read 전처리기는 mutation 및 중첩 런타임 우회가 가능하므로 사용할 수 없습니다.",
 		};
 	}
+	const workdirIssue = requestedWorkdirIssue(toolInput, cwd);
+	if (workdirIssue && !(workdirIssue === "mismatch" && normalizedToolName(toolName) === "shell" && explicitlyScopedRead(toolInput.command, cwd))) {
+		return {
+			decision: "block",
+			reason: workdirIssue === "invalid"
+				? "⛔ [HARNESS] 요청한 workdir가 존재하는 디렉터리인지 검증할 수 없습니다."
+				: "⛔ [HARNESS] 요청한 workdir와 훅이 검증한 실행 루트가 다릅니다. 런타임이 workdir를 무시할 수 있으므로 `git -C <절대경로> ...`처럼 명령 자체에 대상을 고정하세요.",
+		};
+	}
 
 	const resolution = resolveSessionContract({ cwd, sessionId });
 	// A derived worker already has a verified, parent-owned contract. It must
@@ -425,7 +401,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 			if (normalizedToolName(toolName) === "file-mutation") {
 				return { decision: "block", reason: "⛔ [HARNESS] 이 파생 워커 계약은 read_only이며 파일 변경을 허용하지 않습니다." };
 			}
-			if (normalizedToolName(toolName) === "shell" && !readOnlyShell(toolInput.command)) {
+			if (normalizedToolName(toolName) === "shell" && !readOnlyShell(toolInput.command, cwd)) {
 				return { decision: "block", reason: "⛔ [HARNESS] 이 파생 워커 계약은 read_only이며 변경 가능 셸 명령을 허용하지 않습니다." };
 			}
 		}
@@ -454,7 +430,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 			if (unsafeShellCommand(command)) {
 				return { decision: "block", reason: "⛔ [HARNESS] nested runtime launches and dynamically constructed shell commands are forbidden." };
 			}
-			const readOnly = readOnlyShell(command);
+			const readOnly = readOnlyShell(command, cwd);
 			const gitIntegration = !readOnly && boundGitMutationAllowed(command, resolution, cwd);
 			if (!readOnly && directAccess.required && !gitIntegration) {
 				if (!directAccess.active) {
@@ -472,7 +448,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 		}
 		return null;
 	}
-	if (normalizedToolName(toolName) === "shell" && readOnlyShell(toolInput.command)) return null;
+	if (normalizedToolName(toolName) === "shell" && readOnlyShell(toolInput.command, cwd)) return null;
 
 	return {
 		decision: "block",
@@ -494,4 +470,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reconstructSingleFilePatch, stateTarget };
+module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand };

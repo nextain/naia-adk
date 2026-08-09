@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -7,6 +8,16 @@ const gate = require("./session-contract-gate.cjs");
 const contractCore = require("../../.agents/hooks/core/session-contract.js");
 
 const repositoryRoot = contractCore.findProjectRoot(__dirname);
+const trackedHostLocalState = execFileSync("git", [
+	"ls-files", "-z", "--",
+	":(glob).agents/progress/_rebind*.json",
+	".agents/session-contracts/.session-map.json",
+], { cwd: repositoryRoot, encoding: "utf8" }).split("\0").filter(Boolean);
+assert.deepEqual(
+	trackedHostLocalState,
+	[],
+	"host-local rebind and session-map state must never cross PCs through Git",
+);
 // Alpha's current cutover scope is Codex-only. Claude registration is validated
 // in naia-adk and must not be inferred from this fork's disabled Claude profile.
 assert.equal(typeof gate.main, "function", "host adapters must invoke the exported gate entrypoint");
@@ -23,26 +34,6 @@ const codexSessionGateGroup = codexSettings.hooks.PreToolUse.find((group) =>
 );
 assert.match(codexSessionGateGroup?.matcher || "", /exec_command/);
 assert.match(codexSessionGateGroup?.matcher || "", /shell_command/);
-
-for (const command of [
-	"git branch new-name",
-	"git branch -f main HEAD~1",
-	"git branch --delete topic",
-	"git checkout -b topic",
-	"git diff --output=changed.patch",
-	"git show HEAD:README.md -o copy.md",
-	"rg --pre 'sh -c touch /tmp/escaped' needle file",
-]) assert.equal(gate.readOnlyShell(command), false, command);
-
-for (const command of [
-	"git status --short",
-	"git diff --stat",
-	"git log -1",
-	"git show HEAD:README.md",
-	"git rev-parse --show-toplevel",
-	"git branch --show-current",
-	"Get-Content AGENTS.md",
-]) assert.equal(gate.readOnlyShell(command), true, command);
 
 function writeJson(filePath, value) {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -74,8 +65,8 @@ function bind(root) {
 		scope: ["product.txt"],
 		non_goals: [],
 		success_criteria: ["gate parity"],
-		allowed_paths: ["product.txt"],
-		target_ownership: ["product.txt"],
+		allowed_paths: ["product.txt", "nested/**"],
+		target_ownership: ["product.txt", "nested/**"],
 		allowed_shell_commands: ["pnpm test", "node .claude/hooks/sync-entry-points.js --apply candidate.md", "codex exec -m gpt-5.6-luna task", "bash -c 'opencode run task'", "rg --pre 'sh -c touch /tmp/escaped' needle file"],
 		audiences: ["developer"],
 		source_refs: ["USR-TEST:E01"],
@@ -107,6 +98,10 @@ const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "session-contract-gate-"))
 try {
 	writeJson(path.join(fixture, ".agents", "context", "agents-rules.json"), {});
 	writeJson(path.join(fixture, ".codex", "hooks.json"), {});
+	const nested = path.join(fixture, "nested");
+	writeJson(path.join(nested, ".agents", "context", "agents-rules.json"), {});
+	writeJson(path.join(nested, ".codex", "hooks.json"), {});
+	fs.writeFileSync(path.join(nested, "product.txt"), "nested\n");
 	fs.mkdirSync(path.join(fixture, ".agents", "progress"), { recursive: true });
 	fs.writeFileSync(path.join(fixture, ".agents", "progress", "legacy.md"), "---\nsession_id: SESSION-1\n---\n");
 	const bootstrapContract = {
@@ -147,6 +142,16 @@ try {
 
 	for (const client of ["claude", "codex"]) {
 		assert.equal(runGate(fixture, "Bash", { command: "git status --short" }), null, `${client} read-only`);
+		assert.match(
+			runGate(fixture, "Bash", { command: "git status --short", workdir: nested })?.reason,
+			/workdir/,
+			`${client} ignored workdir must not silently inspect the parent repository`,
+		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: `git -C "${nested}" status --short`, workdir: nested }),
+			null,
+			`${client} explicitly scoped cross-project diagnostics remain available while unbound`,
+		);
 		assert.equal(runGate(fixture, "apply_patch", { command: "product mutation" })?.decision, "block", `${client} legacy shell blocked`);
 		assert.equal(
 			runGate(fixture, "apply_patch", { command: "*** Begin Patch\n*** Update File: AGENTS.md\n@@\n-old\n+new\n*** End Patch\n" })?.decision,
@@ -301,6 +306,16 @@ try {
 			runGate(fixture, "Write", { file_path: "other.txt", content: "no" })?.decision,
 			"block",
 			`${client} out-of-contract path blocked`,
+		);
+		assert.match(
+			runGate(fixture, "Write", { file_path: "nested/product.txt", content: "no" })?.reason,
+			/allowed_paths\/target_ownership/,
+			`${client} a parent contract must not authorize a nested ADK project mutation`,
+		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: `git -C "${nested}" add product.txt` })?.decision,
+			"block",
+			`${client} a parent contract must not authorize nested Git mutation`,
 		);
 		assert.equal(
 			runGate(fixture, "Bash", { command: "node .claude/hooks/sync-entry-points.js --apply candidate.md" }),
