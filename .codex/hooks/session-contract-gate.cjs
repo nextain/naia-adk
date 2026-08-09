@@ -8,6 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const sessionContract = require("../../.agents/hooks/core/session-contract.js");
+const sessionRecovery = require("../../.agents/harness/session-contract-recovery.cjs");
 const {
 	executableReadCommand,
 	explicitlyScopedRead,
@@ -351,6 +352,12 @@ function readStdin() {
 	try { return fs.readFileSync(0, "utf8"); } catch { return ""; }
 }
 
+function reclaimCommandAllowed(command, sessionId) {
+	const source = String(command || "").trim();
+	const match = source.match(/^node\s+["']?(?:\.\/)?\.agents[\\/]harness[\\/]session-contract-recovery\.cjs["']?\s+reclaim\s+--contract\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})\s+--session\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})$/);
+	return Boolean(match && match[2] === sessionId);
+}
+
 function decide(data = {}, env = process.env, dependencies = {}) {
 	const resolveHookProjectRoot = dependencies.resolveHookProjectRoot || sessionContract.resolveHookProjectRoot;
 	const resolveSessionContract = dependencies.resolveSessionContract || sessionContract.resolveSessionContract;
@@ -363,13 +370,24 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	if (HARNESS_ENV_VARS.some((name) => HARNESS_OFF.has((env[name] || "").trim().toLowerCase()))) return null;
 	if (HARNESS_CONFIG_DIRS.some((dir) => fs.existsSync(path.join(cwd, dir, "no-harness")))) return null;
 	if (!sessionId) return null;
-	if (!sessionContract.findProjectRoot(cwd)) return null;
+	if (!sessionContract.findProjectRoot(cwd)) {
+		// cwd cannot be resolved to a governed project root (host-reported cwd
+		// outside the repo, stale workdir, etc). Do not blanket-allow: an unbound
+		// session's mutating command could still target a real project path.
+		// Preserve the same read-only carve-out unbound sessions already get below.
+		if (normalizedToolName(toolName) === "shell" && readOnlyShell(toolInput.command, cwd)) return null;
+		return {
+			decision: "block",
+			reason: "⛔ [HARNESS] 현재 workdir에서 프로젝트 루트를 확인할 수 없어 계약 범위를 검증할 수 없습니다. 읽기 전용 조사만 허용됩니다.",
+		};
+	}
 	if (entrypointMutationOutsideHelper(toolName, toolInput, cwd)) {
 		return {
 			decision: "block",
 			reason: "⛔ [HARNESS] 공유 진입점은 전용 validator를 거쳐야 합니다. 후보 파일을 만든 뒤 `node .claude/hooks/sync-entry-points.js --apply <candidate>`를 사용하세요.",
 		};
 	}
+	if (normalizedToolName(toolName) === "shell" && reclaimCommandAllowed(toolInput.command, sessionId)) return null;
 	if (normalizedToolName(toolName) === "shell" && nestedModelRuntimeCommand(toolInput.command)) {
 		return {
 			decision: "block",
@@ -463,11 +481,13 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 }
 
 function main() {
+	const raw = readStdin();
 	let data = {};
-	try { data = JSON.parse(readStdin() || "{}"); } catch { /* fail-open */ }
+	try { data = JSON.parse(raw || "{}"); } catch { /* fail-open */ }
+	sessionRecovery.handleEvent("PreToolUse", raw, data.cwd || process.cwd());
 	const output = decide(data);
 	if (output) process.stdout.write(JSON.stringify(output));
 }
 
 if (require.main === module) main();
-module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand };
+module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand };
