@@ -37,8 +37,10 @@ backend_profiles:
 context_and_cost:
   context_mode: isolated_bounded
   inherit_root_context: false
-  descendant_isolation: fork_turns=none; if an adapter also emits fork_context it must be false
+  descendant_isolation: fork_context=false is always explicit; fork_turns=none is required only when the selected runtime API exposes that field
   descendant_launch_cwd: start delegated Codex executions in an empty scratch directory outside every project root and pass only explicit worktree paths in the bounded brief; launching with a project root as cwd is forbidden because Codex bootstraps that root's AGENTS.md even when fork_turns is none
+  inherited_project_root: the root launcher exports the canonical absolute project path as ADK_PROJECT_ROOT; descendants inherit it unchanged so every registered hook resolves the trusted harness from scratch cwd, while a missing, relative, nonexistent, or mismatched value fails closed
+  exact_validator_binding: implementation, test, worker, and translation briefs carry the exact validator command declared verbatim in the bound parent contract; non-implementation roles use none
   backend_input:
     include: [selected requirement atoms, issue or task contract, owned paths, acceptance criteria, relevant SoT references, stop condition]
     exclude: [full Discord history, full parent conversation, root context dump, private reasoning, unrelated project context, closed task history]

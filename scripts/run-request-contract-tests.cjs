@@ -6,6 +6,8 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 const suite = path.join(root, ".claude", "hooks", "test", "run-request-contract-test.js");
+const isolatedTestEnv = { ...process.env };
+delete isolatedTestEnv.ADK_PROJECT_ROOT;
 
 function evaluateReleaseGate(gate, expectBlocked) {
 	if (gate.error) return { ok: false, kind: "invalid", reason: "spawn error" };
@@ -55,13 +57,13 @@ if (process.argv.includes("--self-test-release-status")) {
 /** The transcript parser and the requirement trace gate the rest: a misread verdict here would license everything after it. */
 const gates = [
 	{ label: "review-transcript-parser", argv: [path.join(root, "scripts", "request-contract-review-transcript.cjs")] },
-	{ label: "requirements-trace-self-test", argv: [path.join(root, "scripts", "validate-request-contract-requirements.cjs")], env: { ...process.env, RCI_SELF_TEST_ONLY: "1" } },
+	{ label: "requirements-trace-self-test", argv: [path.join(root, "scripts", "validate-request-contract-requirements.cjs")], env: { ...isolatedTestEnv, RCI_SELF_TEST_ONLY: "1" } },
 	{ label: "requirement-evidence-levels", argv: [path.join(root, "scripts", "validate-requirement-evidence-levels.cjs")] },
 	{ label: "requirement-evidence-levels-self-test", argv: [path.join(root, "scripts", "validate-requirement-evidence-levels.cjs"), "--self-test"] },
 ];
 let failed = false;
 for (const gate of gates) {
-	const result = cp.spawnSync(process.execPath, gate.argv, { cwd: root, env: gate.env || process.env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+	const result = cp.spawnSync(process.execPath, gate.argv, { cwd: root, env: gate.env || isolatedTestEnv, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
 	if (result.error || result.status !== 0) {
 		if (result.stdout) process.stderr.write(result.stdout);
 		if (result.stderr) process.stderr.write(result.stderr);
@@ -72,8 +74,8 @@ for (const gate of gates) {
 	process.stdout.write(`request-contract ${gate.label}: PASS\n`);
 }
 const runs = [
-	{ label: "fault-suite", env: { ...process.env, TEST_FILTER: "" } },
-	{ label: "persisted-client-parity", env: { ...process.env, TEST_FILTER: "full persisted lifecycle" } },
+	{ label: "fault-suite", env: { ...isolatedTestEnv, TEST_FILTER: "" } },
+	{ label: "persisted-client-parity", env: { ...isolatedTestEnv, TEST_FILTER: "full persisted lifecycle" } },
 ];
 
 for (const run of runs) {
@@ -89,7 +91,7 @@ for (const run of runs) {
 	process.stdout.write(`request-contract ${run.label}: PASS\n`);
 }
 
-const releaseGate = cp.spawnSync(process.execPath, [path.join(root, "scripts", "validate-request-contract-requirements.cjs")], { cwd: root, env: { ...process.env, RCI_RELEASE_STATUS_JSON: "1" }, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+const releaseGate = cp.spawnSync(process.execPath, [path.join(root, "scripts", "validate-request-contract-requirements.cjs")], { cwd: root, env: { ...isolatedTestEnv, RCI_RELEASE_STATUS_JSON: "1" }, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
 const expectReleaseBlocked = process.env.REQUEST_CONTRACT_EXPECT_RELEASE_BLOCKED === "1";
 const releaseEvaluation = evaluateReleaseGate(releaseGate, expectReleaseBlocked);
 if (releaseEvaluation.kind === "invalid") {
