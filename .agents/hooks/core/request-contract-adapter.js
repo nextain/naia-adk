@@ -7,6 +7,7 @@
  */
 
 const core = require("./request-contract.js");
+const contracts = require("./session-contract.js");
 const cp = require("child_process");
 const path = require("path");
 const VALID_EVENTS = new Set(["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"]);
@@ -63,6 +64,10 @@ function normalizeInput(client, input, fallbackEvent, opts = {}) {
 	if (!capability) return { client, eventName: "Unknown", declaredEvent: "", sessionId: "no-session", cwd: projectRoot(process.cwd()), prompt: "", origin: "ambiguous", toolName: "", toolUseId: "", toolInput: {}, toolResponse: null };
 	const declaredEvent = data[capability.eventField] || "";
 	const eventName = fallbackEvent || declaredEvent || "Unknown";
+	const inputCwd = data[capability.cwdField] || process.cwd();
+	const cwd = client === "codex"
+		? contracts.resolveHookProjectRoot(inputCwd, opts.env || process.env) || projectRoot(inputCwd)
+		: projectRoot(inputCwd);
 	// Provenance is derived from the registered/native lifecycle event. Never
 	// trust an origin label supplied inside the hook payload.
 	const origin = declaredEvent === "UserPromptSubmit" && eventName === "UserPromptSubmit" ? "native_user" : "ambiguous";
@@ -72,7 +77,7 @@ function normalizeInput(client, input, fallbackEvent, opts = {}) {
 		eventName,
 		declaredEvent,
 		sessionId: data[capability.sessionField] || "no-session",
-		cwd: projectRoot(data[capability.cwdField] || process.cwd()),
+		cwd,
 		prompt: data[capability.promptField] || "",
 		origin,
 		toolName: data[capability.toolNameField] || "",

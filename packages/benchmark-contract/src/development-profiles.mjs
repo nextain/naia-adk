@@ -9,21 +9,14 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
 const catalogPath=path.join(root,"baselines","development-composition-profiles.json");
 const riskRank={low:0,medium:1,high:2};
 const balancedRoleExpectation={
-	secretary:["luna","max"],issue_leader:["luna","max"],analysis:["sol","medium"],design:["sol","medium"],review:["sol","medium"],
+	secretary:["luna","max"],issue_leader:["luna","max"],explorer:["luna","low"],analysis:["sol","medium"],design:["sol","medium"],review:["sol","medium"],
 	implementation:["luna","medium"],test:["luna","medium"],generic_worker:["luna","medium"],translation:["luna","low"],
 };
-const specialistPhases=["production","analysis","design","review"];
 
 function canonicalJson(value){
 	if(Array.isArray(value))return `[${value.map(canonicalJson).join(",")}]`;
 	if(value&&typeof value==="object")return `{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
 	return JSON.stringify(value);
-}
-
-function validateSpecialistIdentities(roleIdentities){
-	const identities=specialistPhases.map(phase=>roleIdentities?.[phase]);
-	if(identities.some(identity=>!identity||typeof identity.session_id!=="string"||!identity.session_id||typeof identity.execution_id!=="string"||!identity.execution_id))throw new Error("specialist phases require complete role-bound session and execution identities");
-	if(new Set(identities.map(identity=>identity.session_id)).size!==identities.length||new Set(identities.map(identity=>identity.execution_id)).size!==identities.length)throw new Error("specialist phases require pairwise-distinct session and execution identities");
 }
 
 function verifyOptionalWorkerReceipt(definition,receipt,{now=Date.now(),catalogDigest,profileId}={}){
@@ -50,7 +43,7 @@ function validateCatalog(catalog){
   const activation=catalog.activation?.codex_bound_sessions;
   if(activation?.mode!=="default_active"||activation?.override_env!=="CODEX_DEVELOPMENT_PROFILE"||activation?.available_bindings_env!=="CODEX_AVAILABLE_BINDINGS")throw new Error("Codex development profile activation invalid");
   if(!Array.isArray(catalog.availability?.default_available_bindings)||catalog.availability.default_available_bindings.length===0||catalog.availability.default_available_bindings.some(binding=>!catalog.bindings?.[binding]))throw new Error("development composition availability defaults invalid");
-  const requiredBalancedRoles=["secretary","issue_leader","analysis","design","review","implementation","test","generic_worker","translation"];
+  const requiredBalancedRoles=["secretary","issue_leader","explorer","analysis","design","review","implementation","test","generic_worker","translation"];
   for(const role of requiredBalancedRoles){
     const policy=catalog.balanced_role_policy?.[role];
     const [expectedBinding,expectedEffort]=balancedRoleExpectation[role];
@@ -70,11 +63,11 @@ function validateCatalog(catalog){
     if(!catalog.claim_boundary.forbidden_until_phase_2.includes(claim))throw new Error(`phase-1 profile claim boundary missing ${claim}`);
   }
 	const {bounded_worker:boundedGuard,mechanical_worker:mechanicalGuard,review:reviewGuard,sol_specialist:solSpecialistGuard}=catalog.guards||{};
-	if(!boundedGuard||!(boundedGuard.maximum_risk in riskRank)||!catalog.bindings[boundedGuard.fallback_binding]||!catalog.bindings[boundedGuard.luna_fallback_binding])throw new Error("bounded worker guard invalid");
-	if(!mechanicalGuard||!(mechanicalGuard.luna_maximum_risk in riskRank)||!catalog.bindings[mechanicalGuard.fallback_binding])throw new Error("mechanical worker guard invalid");
-	if(boundedGuard.fallback_binding!=="sol"||boundedGuard.luna_fallback_binding!=="sol"||mechanicalGuard.fallback_binding!=="sol")throw new Error("Balanced guarded fallback must remain Sol");
-	if(!reviewGuard||reviewGuard.different_session_required!==true||reviewGuard.different_execution_required!==true||reviewGuard.fail_closed_without_independent_execution_identity!==true)throw new Error("independent review guard invalid");
-	if(!solSpecialistGuard||!Array.isArray(solSpecialistGuard.roles)||!solSpecialistGuard.roles.includes("analysis")||!solSpecialistGuard.roles.includes("designer")||solSpecialistGuard.different_session_required!==true||solSpecialistGuard.different_execution_required!==true||solSpecialistGuard.fail_closed_without_independent_execution_identity!==true)throw new Error("independent Sol specialist guard invalid");
+	if(!boundedGuard||!(boundedGuard.maximum_risk in riskRank)||boundedGuard.fallback_binding!==null||boundedGuard.luna_fallback_binding!==null)throw new Error("bounded worker guard must fail closed without a model fallback");
+	if(!mechanicalGuard||!(mechanicalGuard.luna_maximum_risk in riskRank)||mechanicalGuard.fallback_binding!==null)throw new Error("mechanical worker guard must fail closed without a model fallback");
+	const validatesFreshSessionGuard=guard=>guard?.different_session_required===true&&guard?.different_execution_required===true&&guard?.fail_closed_without_independent_execution_identity===true&&guard?.fresh_session_required===true&&guard?.followup_reuse_forbidden===true&&guard?.runtime_enforcer===".codex/hooks/subagent-spawn-guard.cjs";
+	if(!validatesFreshSessionGuard(reviewGuard)||reviewGuard.prefer_different_binding_from_producer!==true)throw new Error("independent review guard invalid");
+	if(!validatesFreshSessionGuard(solSpecialistGuard)||JSON.stringify(solSpecialistGuard.roles)!==JSON.stringify(["analysis","design","review"]))throw new Error("independent Sol specialist guard invalid");
   return catalog;
 }
 
@@ -99,9 +92,11 @@ export function resolveDevelopmentProfile(profileId,options={}){
   return {schema_revision:catalog.schema_revision,status:catalog.status,profile,catalog_digest,activation_source,claim_boundary:catalog.claim_boundary};
 }
 
-export function selectDevelopmentBindingFromCatalog(catalog,{profileId,role,boundedScope=false,exactValidator=false,risk="medium",availableBindings=null,bindingEvidence={},roleIdentities={},producerBinding=null,env=process.env}={}){
+export function selectDevelopmentBindingFromCatalog(catalog,{profileId,role,boundedScope=false,exactValidatorCommand=null,allowedShellCommands=[],risk="medium",availableBindings=null,bindingEvidence={},producerBinding=null,env=process.env}={}){
 	validateCatalog(catalog);
   if(!(risk in riskRank))throw new Error(`unknown development risk ${risk}`);
+	if(!Array.isArray(allowedShellCommands)||allowedShellCommands.some(command=>typeof command!=="string"))throw new Error("allowed shell commands are invalid");
+	const exactValidatorBound=typeof exactValidatorCommand==="string"&&exactValidatorCommand.length>0&&exactValidatorCommand.trim()===exactValidatorCommand&&allowedShellCommands.includes(exactValidatorCommand);
 	const availabilityName=catalog.activation.codex_bound_sessions.available_bindings_env;
 	const hasEnvironmentAvailability=Object.prototype.hasOwnProperty.call(env,availabilityName);
 	const environmentAvailability=env[availabilityName]?.trim();
@@ -110,17 +105,15 @@ export function selectDevelopmentBindingFromCatalog(catalog,{profileId,role,boun
 	const available=new Set(configuredAvailability);
 	const {profile,activation_source}=resolveProfileSelection(catalog,{profileId,env});
 	const boundedGuard=catalog.guards.bounded_worker,mechanicalGuard=catalog.guards.mechanical_worker,reviewGuard=catalog.guards.review,solSpecialistGuard=catalog.guards.sol_specialist;
-  const balancedPolicyRole={orchestrator:"secretary",integrator:"issue_leader",bounded_worker:"implementation",tester:"test",mechanical_worker:"generic_worker",adversarial_reviewer:"review",analysis:"analysis",designer:"design",translation:"translation"}[role];
+  const balancedPolicyRole={orchestrator:"secretary",integrator:"issue_leader",explorer:"explorer",bounded_worker:"implementation",tester:"test",mechanical_worker:"generic_worker",adversarial_reviewer:"review",analysis:"analysis",designer:"design",translation:"translation"}[role];
   let binding;
   if(role==="orchestrator"||role==="integrator")binding=profile.assignments[role];
   else if(role==="bounded_worker"||role==="tester")binding=profile.assignments[role];
   else if(role==="mechanical_worker")binding=profile.assignments.mechanical_worker;
-  else if(role==="analysis"||role==="designer"||role==="translation"){
-		if(["analysis","designer"].includes(role))validateSpecialistIdentities(roleIdentities);
+  else if(role==="explorer"||role==="analysis"||role==="designer"||role==="translation"){
 		binding=profile.id==="control"?"sol":catalog.balanced_role_policy[balancedPolicyRole].binding;
 	}
   else if(role==="adversarial_reviewer"){
-		validateSpecialistIdentities(roleIdentities);
 		const reviewerPool=profile.assignments.reviewer_pool.filter(item=>available.has(item));
 		binding=reviewGuard.prefer_different_binding_from_producer
 			? reviewerPool.find(item=>item!==producerBinding)??reviewerPool[0]
@@ -129,10 +122,9 @@ export function selectDevelopmentBindingFromCatalog(catalog,{profileId,role,boun
   } else throw new Error(`unknown development role ${role}`);
 
   let fallback_reason=null;
-	if(["bounded_worker","tester"].includes(role)&&((boundedGuard.requires_bounded_scope&&!boundedScope)||riskRank[risk]>riskRank[boundedGuard.maximum_risk])){binding=boundedGuard.fallback_binding;fallback_reason="bounded engineering guard";}
-	if(role==="bounded_worker"&&binding==="luna"&&boundedGuard.luna_requires_exact_validator&&!exactValidator){binding=boundedGuard.luna_fallback_binding;fallback_reason="Luna implementation validator guard";}
-	if(role==="mechanical_worker"&&binding==="luna"&&((mechanicalGuard.luna_requires_bounded_scope&&!boundedScope)||(mechanicalGuard.luna_requires_exact_validator&&!exactValidator)||riskRank[risk]>riskRank[mechanicalGuard.luna_maximum_risk])){binding=mechanicalGuard.fallback_binding;fallback_reason="Luna exact-validation guard";}
-	if(role==="mechanical_worker"&&binding===mechanicalGuard.fallback_binding&&((boundedGuard.requires_bounded_scope&&!boundedScope)||riskRank[risk]>riskRank[boundedGuard.maximum_risk])){binding=boundedGuard.fallback_binding;fallback_reason="mechanical task boundary guard";}
+	if(["bounded_worker","tester","translation"].includes(role)&&binding==="luna"&&((boundedGuard.requires_bounded_scope&&!boundedScope)||riskRank[risk]>riskRank[boundedGuard.maximum_risk]))throw new Error(`Luna ${role} requires bounded scope and risk at or below ${boundedGuard.maximum_risk}; no Sol fallback is permitted`);
+	if(["bounded_worker","tester","translation"].includes(role)&&binding==="luna"&&boundedGuard.luna_requires_exact_validator&&!exactValidatorBound)throw new Error(`Luna ${role} requires an exact allowlisted validator command; no Sol fallback is permitted`);
+	if(role==="mechanical_worker"&&binding==="luna"&&((mechanicalGuard.luna_requires_bounded_scope&&!boundedScope)||(mechanicalGuard.luna_requires_exact_validator&&!exactValidatorBound)||riskRank[risk]>riskRank[mechanicalGuard.luna_maximum_risk]))throw new Error("Luna mechanical_worker requires bounded low-risk scope and an exact allowlisted validator command; no Sol fallback is permitted");
 	const selectedDefinition=catalog.bindings[binding];
 	if(selectedDefinition?.adapter==="optional_external_runtime"){
 		const evidence=bindingEvidence?.[binding];
@@ -141,13 +133,7 @@ export function selectDevelopmentBindingFromCatalog(catalog,{profileId,role,boun
 	}
 	if(!available.has(binding)){
 		if(profile.id==="balanced")throw new Error(`Balanced requires ${binding} for ${role}; no fallback is permitted`);
-		const candidates=binding==="luna"
-			?(role==="mechanical_worker"?[mechanicalGuard.fallback_binding,boundedGuard.fallback_binding]:[boundedGuard.luna_fallback_binding,boundedGuard.fallback_binding])
-			:binding==="terra"&&["bounded_worker","tester","mechanical_worker"].includes(role)?[boundedGuard.fallback_binding]:[];
-		const fallback=candidates.find(candidate=>available.has(candidate));
-		if(!fallback)throw new Error(`no available development binding for ${role}`);
-		binding=fallback;
-		fallback_reason="selected binding unavailable";
+		throw new Error(`no available development binding for ${role}; automatic model fallback is disabled`);
 	}
   const rolePolicy=["balanced","economy"].includes(profile.id)&&balancedPolicyRole?catalog.balanced_role_policy[balancedPolicyRole]:null;
   const reasoning_effort=rolePolicy?.binding===binding?rolePolicy.default_reasoning_effort:catalog.bindings[binding].default_reasoning_effort??null;
@@ -159,15 +145,15 @@ export function selectDevelopmentBinding(options={}){
 }
 
 async function main(argv){
-  const [command,...rest]=argv,flag=name=>{const index=rest.indexOf(name);return index<0?undefined:rest[index+1];};
+  const [command,...rest]=argv,flag=name=>{const index=rest.indexOf(name);return index<0?undefined:rest[index+1];},flags=name=>rest.flatMap((item,index)=>item===name&&rest[index+1]!==undefined?[rest[index+1]]:[]);
   if(command==="list")return loadDevelopmentProfiles();
   if(command==="show")return resolveDevelopmentProfile(flag("--profile"));
 	if(command==="select"){
 		const availabilityIndex=rest.indexOf("--available-bindings");
 		const availableBindings=availabilityIndex<0?undefined:(rest[availabilityIndex+1]??"").split(",").map(item=>item.trim()).filter(Boolean);
-		return selectDevelopmentBinding({profileId:flag("--profile"),role:flag("--role"),risk:flag("--risk")||"medium",boundedScope:rest.includes("--bounded-scope"),exactValidator:rest.includes("--exact-validator"),availableBindings,producerBinding:flag("--producer-binding")});
+		return selectDevelopmentBinding({profileId:flag("--profile"),role:flag("--role"),risk:flag("--risk")||"medium",boundedScope:rest.includes("--bounded-scope"),exactValidatorCommand:flag("--validator-command"),allowedShellCommands:flags("--allowed-shell-command"),availableBindings,producerBinding:flag("--producer-binding")});
 	}
-  throw new Error("usage: development-profiles.mjs list|show|select [--profile balanced] [--role bounded_worker] [--risk medium] [--bounded-scope] [--exact-validator]");
+  throw new Error("usage: development-profiles.mjs list|show|select [--profile balanced] [--role bounded_worker] [--risk medium] [--bounded-scope] [--validator-command command] [--allowed-shell-command command]");
 }
 
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main(process.argv.slice(2)).then(value=>process.stdout.write(`${JSON.stringify(value,null,2)}\n`)).catch(error=>{process.stderr.write(`development_profiles_error: ${error.message}\n`);process.exitCode=1;});

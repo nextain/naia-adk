@@ -34,7 +34,11 @@ function nativePolicyOutput(output) {
 function installProductionControlSurface(fx) {
 	const root = path.resolve(__dirname, "..", "..", "..");
 	for (const relative of [
+		".agents/context/agents-rules.json",
 		".agents/hooks/core/request-contract.js",
+		".agents/hooks/core/delegation-contract.js",
+		".agents/hooks/core/hook-project-root.js",
+		".agents/hooks/core/session-contract.js",
 		".agents/hooks/core/preservation-contract.js",
 		".agents/hooks/core/request-contract-adapter.js",
 		".agents/hooks/core/request-contract-review-runner.js",
@@ -57,7 +61,7 @@ function runInstalledNativeAdapter(client, fx, input, eventName) {
 		cwd: fx.cwd,
 		input: JSON.stringify({ client_version: CLIENT_VERSIONS[client], ...input }),
 		encoding: "utf8",
-		env: { ...process.env, REQUEST_CONTRACT: "on" },
+		env: { ...process.env, ADK_PROJECT_ROOT: fx.cwd, REQUEST_CONTRACT: "on" },
 	});
 	return stdout ? JSON.parse(stdout) : null;
 }

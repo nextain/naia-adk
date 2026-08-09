@@ -13,7 +13,7 @@
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
-const { STATES, resolveSessionContract } = require("./session-contract.js");
+const { STATES, orchestratorFallbackAccess, resolveSessionContract } = require("./session-contract.js");
 
 const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
 const HARNESS_OFF_VALUES = new Set(["off", "0", "false", "no"]);
@@ -32,7 +32,7 @@ const PHASE_LABELS = {
 	sync_verify: "11. Sync Verify",
 	report: "12. Report",
 	commit: "13. Commit",
-	close: "14. Close ⛩ GATE",
+	close: "Closed (terminal state)",
 };
 
 const GATE_PHASES = new Set(["understand", "scope", "plan", "sync"]);
@@ -76,7 +76,8 @@ function codexDevelopmentProfile(projectRoot, env) {
 		? String(env[overrideName]).trim()
 		: "";
 	const profileId = override || catalog.default_profile;
-	if (!catalog.profiles.some((profile) => profile.id === profileId)) {
+	const selectedProfile = catalog.profiles.find((profile) => profile.id === profileId);
+	if (!selectedProfile) {
 		throw new Error(`unknown Codex development profile ${profileId}`);
 	}
 	const availabilityName = catalog.activation.codex_bound_sessions.available_bindings_env;
@@ -84,12 +85,29 @@ function codexDevelopmentProfile(projectRoot, env) {
 		? String(env[availabilityName]).trim()
 		: null;
 	const availableBindings = rawAvailability === null
-		? catalog.availability.default_available_bindings
+		? []
 		: rawAvailability === "" || rawAvailability === "[]" || rawAvailability.toLowerCase() === "none"
 			? []
 			: rawAvailability.split(",").map((binding) => binding.trim()).filter(Boolean);
 	if (!availableBindings.every((binding) => catalog.bindings[binding])) {
 		throw new Error("available Codex development bindings are invalid");
+	}
+	const assignedBindings = new Set([
+		selectedProfile.assignments.orchestrator,
+		selectedProfile.assignments.integrator,
+		selectedProfile.assignments.bounded_worker,
+		selectedProfile.assignments.mechanical_worker,
+		selectedProfile.assignments.tester,
+		...selectedProfile.assignments.reviewer_pool,
+	]);
+	if (profileId === "delegated") assignedBindings.delete("implementation_worker");
+	const unavailableBindings = [...assignedBindings]
+		.filter((binding) => !availableBindings.includes(binding))
+		.sort();
+	if (unavailableBindings.length > 0) {
+		throw new Error(
+			`Codex development profile ${profileId} is unavailable; missing bindings: ${unavailableBindings.join(", ")}`,
+		);
 	}
 	const catalogDigest = crypto
 		.createHash("sha256")
@@ -134,6 +152,12 @@ function compactReminderMessage(opts) {
 		"MANDATORY — read before any action:",
 		"  1. .agents/context/agents-rules.json",
 		"  2. .agents/context/project-index.yaml",
+		"  3. the registry-bound .agents/session-contracts contract and its progress file",
+		"  4. every contract source_ref needed to recover the parent issue intent",
+		"",
+		"Contract preservation:",
+		"  current_task is a child execution unit, never the whole parent contract.",
+		"  Do not shrink, delete, supersede, or mark parent obligations complete from worker-local context.",
 		"",
 		"If working inside a subproject (projects/<name>/):",
 		"  Read projects/<name>/AGENTS.md FIRST.",
@@ -172,12 +196,17 @@ function buildSessionInject(opts) {
 	if (HARNESS_OFF_VALUES.has(envFlag)) return null;
 	if (fs.existsSync(path.join(cwd, hostConfigDir, "no-harness"))) return null;
 
-	const resolution = resolveSessionContract({ cwd, sessionId });
+	const resolution = resolveSessionContract({
+		cwd,
+		sessionId,
+		...(opts.sessionChainLookup ? { sessionChainLookup: opts.sessionChainLookup } : {}),
+	});
 	// Unbound and invalid bindings are deliberately silent in prompt injection.
 	// The mutation gate uses the same result and reports the actionable reason.
 	if (resolution.status !== STATES.BOUND) return null;
 	const progress = resolution.progress;
 	const contract = resolution.contract;
+	const parentContract = resolution.parentContract || contract;
 
 	const currentPhase = progress.current_phase || "unknown";
 	const phaseLabel = PHASE_LABELS[currentPhase] || currentPhase;
@@ -188,12 +217,39 @@ function buildSessionInject(opts) {
 		`Issue : ${progress.issue || "unknown"}${progress.issue_url ? " — " + progress.issue_url : ""}`,
 		`Phase : ${phaseLabel}`,
 		`Gates : cleared=[${gatesCleared}]`,
-		`Contract: ${contract.id} (${contract.contract_digest.slice(0, 12)})`,
-		...(sessionId ? [`Session: ${sessionId} (bind: explicit)`] : []),
+		`Execution contract: ${contract.id} (${contract.contract_digest.slice(0, 12)})`,
+		`Parent contract: ${parentContract.id} (${parentContract.contract_digest.slice(0, 12)})`,
+		...(sessionId ? [`Session: ${sessionId} (bind: ${resolution.reason === "derived_delegation_verified" ? "derived delegation" : "explicit"})`] : []),
+		"── [HARNESS: PARENT CONTRACT — PRESERVE] ───────────────",
+		`Goal: ${parentContract.goal}`,
+		...parentContract.scope.map((item, index) => `Scope ${index + 1}: ${item}`),
+		...parentContract.success_criteria.map((item, index) => `Acceptance ${index + 1}: ${item}`),
+		...parentContract.non_goals.map((item, index) => `Non-goal ${index + 1}: ${item}`),
+		...parentContract.source_refs.map((item, index) => `Intent ref ${index + 1}: ${item}`),
+		"Invariant: current_task is a child unit; it cannot replace, shrink, delete, or complete the parent contract.",
 	];
+
+	if (resolution.reason === "derived_delegation_verified") {
+		const task = resolution.derivedTask;
+		lines.push(
+			"── [HARNESS: CURRENT CHILD CONTRACT] ─────────────────",
+			...task.scope.map((item, index) => `Child scope ${index + 1}: ${item}`),
+			...task.success_criteria.map((item, index) => `Child acceptance ${index + 1}: ${item}`),
+			...task.allowed_paths.map((item, index) => `Child path ${index + 1}: ${item}`),
+			`Stop condition: ${task.stop_condition}`,
+			`Task digest: ${task.task_digest}`,
+			`Parent intent digest: ${task.parent_intent_digest}`,
+			"Nested delegation is forbidden for a derived worker; return to the bound orchestrator instead.",
+			"Final response MUST be one raw delegation-result-v1 JSON object with exactly the required_fields; no Markdown fence or commentary.",
+			"Completion applies to child_task_only. On drift or ambiguity, return status=handoff with a non-empty handoff_reason.",
+		);
+	}
 
 	if (hostConfigDir === ".codex") {
 		const activation = codexDevelopmentProfile(resolution.projectRoot, env);
+		const fallback = resolution.reason === "derived_delegation_verified"
+			? { required: false }
+			: orchestratorFallbackAccess(contract, progress);
 		lines.push(
 			"── [HARNESS: CODEX DEVELOPMENT PROFILE] ────────────────",
 			`Active profile: ${activation.profileId} (source: ${activation.activationSource})`,
@@ -202,10 +258,30 @@ function buildSessionInject(opts) {
 			`Fallback: ${activation.fallbackProfile}; ${activation.unavailablePolicy}`,
 			"Claim boundary: total development cost reduction is not proven",
 		);
+		if (fallback.required) {
+			lines.push(
+				"── [HARNESS: ORCHESTRATOR EXECUTION] ────────────────",
+				"Root role: L3 secretary / L2 issue leader; delegate implementation, testing, and translation",
+				"Accept a worker completion only through wait_agent after its delegation-result-v1 passes the PostToolUse result guard.",
+				fallback.active
+					? `Direct fallback: ACTIVE for same task only (${fallback.taskDigest.slice(0, 12)}); cost, context, validation, and review guards remain active`
+					: `Direct fallback: BLOCKED (${fallback.reason}); use a governed worker or obtain a source-bound owner override after a confirmed technical failure`,
+			);
+		}
 	}
 
 	if (progress.current_task) {
-		lines.push(`Task  : ${progress.current_task}`);
+		lines.push(
+			"── [HARNESS: CURRENT CHILD TASK] ──────────────────────",
+			`Task  : ${progress.current_task}`,
+			"Authority: execute this child task only; parent intent and remaining obligations stay owned by the orchestrator.",
+		);
+	}
+
+	if (currentPhase === "close") {
+		lines.push(
+			"⛔ [HARNESS] Progress is marked closed, but this session contract is still active. Close or unbind the contract before treating mutation authority as ended.",
+		);
 	}
 
 	const decisions = progress.key_decisions || [];
@@ -272,7 +348,7 @@ function buildSessionInject(opts) {
 
 	lines.push(
 		"── [HARNESS: METHODOLOGY] ────────────────────────────────",
-		"Workflow: Issue-Driven Development (13 phases)",
+		"Workflow: Issue-Driven Development (13 phases + terminal close state)",
 		"Decision checkpoints: understand → scope → plan → sync — bounded requests proceed internally; ask only if an unresolved material choice remains",
 		"Anti-compact: write ALL findings/decisions to files or GitHub Issue immediately",
 		"Iterative review: repeat read→fix until 2 consecutive clean passes",

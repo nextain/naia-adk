@@ -3760,7 +3760,10 @@ function configuredShellTools(config = null) {
 }
 
 function isShellTool(event, config = null) {
-	return configuredShellTools(config).includes(String(event.toolName || ""));
+	const toolName = String(event.toolName || "");
+	return configuredShellTools(config).includes(toolName)
+		|| toolName === "exec_command"
+		|| /(?:^|[.:/])(?:exec_command|shell_command)$/u.test(toolName);
 }
 
 function mutationFromEvent(event, cwd = null, unit = null, config = null) {
@@ -3824,7 +3827,9 @@ function clientRegistrySupports(cwd, client) {
 	const registry = readJson(file);
 	if (!registry || !registry.hooks || typeof registry.hooks !== "object") return false;
 	const adapterPath = client === "claude" ? ".claude/hooks/request-contract.js" : ".codex/hooks/request-contract.cjs";
-	const preToolMatcher = [...new Set([...configuredShellTools(config), "Edit", "Write", "NotebookEdit", "apply_patch"])].join("|");
+	const shellMatchers = configuredShellTools(config);
+	if (client === "codex") shellMatchers.push("exec_command", "(?:.*[.:/]exec_command)", "(?:.*[.:/]shell_command)");
+	const preToolMatcher = [...new Set([...shellMatchers, "Edit", "Write", "NotebookEdit", "apply_patch"])].join("|");
 	const seen = [];
 	for (const [registeredEvent, entries] of Object.entries(registry.hooks)) {
 		if (!Array.isArray(entries)) continue;
@@ -3845,8 +3850,10 @@ function clientRegistrySupports(cwd, client) {
 			const expected = `node \"$CLAUDE_PROJECT_DIR/${adapterPath}\" ${eventName}`;
 			if (hook.command !== expected || hook.commandWindows != null || hook.args != null) return false;
 		} else {
-			const expected = `root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/${adapterPath}\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" ${eventName}`;
-			const expectedWindows = `powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}'`;
+			const rootResolution = 'root=${ADK_PROJECT_ROOT:-}; if [ -n "$root" ]; then case "$root" in /*) ;; *) exit 1;; esac; root=$(CDPATH= cd -- "$root" 2>/dev/null && pwd -P) || exit 1; else root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1; fi; [ -f "$root/.codex/hooks.json" ] || exit 1;';
+			const windowsRootResolution = '$root=$env:ADK_PROJECT_ROOT; if ($root) { if (-not [IO.Path]::IsPathRooted($root)) { exit 1 }; try { $root=(Resolve-Path -LiteralPath $root -ErrorAction Stop).Path } catch { exit 1 } } else { $root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 1 }; $root=$root.Trim() }; if (-not (Test-Path -LiteralPath (Join-Path $root ".codex/hooks.json"))) { exit 1 };';
+			const expected = `${rootResolution} registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/${adapterPath}\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" ${eventName}`;
+			const expectedWindows = `powershell -NoProfile -Command '${windowsRootResolution} $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}'`;
 			if (hook.command !== expected || hook.commandWindows !== expectedWindows) return false;
 		}
 		if (eventName === "PreToolUse") return entry.matcher === preToolMatcher;

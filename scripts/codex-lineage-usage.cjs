@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const os = require("node:os");
 const path = require("node:path");
 const { StringDecoder } = require("node:string_decoder");
 
 const HARD_MAX_CHILDREN = 8;
 const READ_CHUNK_BYTES = 256 * 1024;
+const SESSION_CACHE = new Map();
+let sessionCacheHits = 0;
+let sessionCacheMisses = 0;
 
 function parse(line) {
 	try { return JSON.parse(line); } catch { return null; }
@@ -72,6 +76,14 @@ function promptEvidence(meta) {
 	return { bytes: 0, valid: false };
 }
 
+function delegatedPrompt(meta) {
+	const spawn = meta?.source?.subagent?.thread_spawn;
+	for (const candidate of [spawn?.prompt, spawn?.message, meta?.spawn_prompt]) {
+		if (typeof candidate === "string") return candidate;
+	}
+	return null;
+}
+
 function promptBytes(meta) {
 	return promptEvidence(meta).bytes;
 }
@@ -112,6 +124,7 @@ function readSession(file) {
 			isSubagent,
 			agentPath: metadata.agent_path || spawn?.agent_path || null,
 			delegatedPromptBytes: delegatedEvidence.bytes,
+			delegatedPrompt: delegatedPrompt(metadata),
 			inputTokens: 0,
 			outputTokens: 0,
 			createdAt: Number.isFinite(createdAt) ? createdAt : Number.POSITIVE_INFINITY,
@@ -133,6 +146,7 @@ function readSession(file) {
 		isSubagent,
 		agentPath: metadata.agent_path || spawn?.agent_path || null,
 		delegatedPromptBytes: delegatedEvidence.bytes,
+		delegatedPrompt: delegatedPrompt(metadata),
 		inputTokens: ownInput,
 		outputTokens: ownOutput,
 		createdAt,
@@ -140,6 +154,34 @@ function readSession(file) {
 		rolloutFile: file,
 		...(delegatedEvidenceAmbiguous ? { ambiguous: true } : {}),
 	};
+}
+
+function sessionFileSignature(file) {
+	const stat = fs.statSync(file);
+	return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+}
+
+function readSessionCached(file) {
+	const signature = sessionFileSignature(file);
+	const cached = SESSION_CACHE.get(file);
+	if (cached?.signature === signature) {
+		sessionCacheHits += 1;
+		return cached.session;
+	}
+	sessionCacheMisses += 1;
+	const session = readSession(file);
+	SESSION_CACHE.set(file, { signature, session });
+	return session;
+}
+
+function clearSessionCache() {
+	SESSION_CACHE.clear();
+	sessionCacheHits = 0;
+	sessionCacheMisses = 0;
+}
+
+function sessionCacheStats() {
+	return { entries: SESSION_CACHE.size, hits: sessionCacheHits, misses: sessionCacheMisses };
 }
 
 function walk(dir, output = [], state = null) {
@@ -158,7 +200,6 @@ function walk(dir, output = [], state = null) {
 
 function collectSessions({
 	codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
-	since = null,
 	includeSessionId = null,
 	includeSessionIds = [],
 } = {}) {
@@ -166,20 +207,49 @@ function collectSessions({
 	const scanState = { ambiguous: false };
 	let ambiguous = false;
 	const requiredIds = new Set([includeSessionId, ...includeSessionIds].filter(Boolean).map(String));
-	for (const file of walk(path.join(codexHome, "sessions"), [], scanState)) {
+	const files = walk(path.join(codexHome, "sessions"), [], scanState);
+	const present = new Set(files);
+	for (const cachedFile of SESSION_CACHE.keys()) {
+		if (!present.has(cachedFile)) SESSION_CACHE.delete(cachedFile);
+	}
+	for (const file of files) {
 		const required = [...requiredIds].some((id) => path.basename(file).includes(id));
-		if (Number.isFinite(since) && !required) {
-			let modifiedAt;
-			try { modifiedAt = fs.statSync(file).mtimeMs; } catch { ambiguous = true; continue; }
-			if (modifiedAt < since) continue;
-		}
 		try {
-			const session = readSession(file);
+			const session = readSessionCached(file);
 			// A selected rollout with metadata but no token snapshots remains
 			// attributable as ambiguous, so admission fails closed.
 			if (session) sessions.push(session);
 		} catch {
-			ambiguous = true;
+			// Keep attributable damaged evidence as an ambiguous node. Unrelated
+			// damage must not disable every configured lineage on the host.
+			let metadata = null;
+			let createdAt = Number.POSITIVE_INFINITY;
+			try {
+				scanJsonLines(file, (row) => {
+					if (!Number.isFinite(createdAt) && typeof row?.timestamp === "string") createdAt = Date.parse(row.timestamp);
+					if (!metadata && row?.type === "session_meta") metadata = row.payload;
+				});
+			} catch {}
+			const id = metadata?.id || metadata?.session_id;
+			if (typeof id === "string" && id) {
+				const spawn = metadata.source?.subagent?.thread_spawn;
+				sessions.push({
+					sessionId: id,
+					parentId: metadata.parent_thread_id || spawn?.parent_thread_id || null,
+					isSubagent: metadata.thread_source === "subagent" || Boolean(metadata.source?.subagent),
+					agentPath: metadata.agent_path || spawn?.agent_path || null,
+					delegatedPromptBytes: promptBytes(metadata),
+					delegatedPrompt: delegatedPrompt(metadata),
+					inputTokens: 0,
+					outputTokens: 0,
+					createdAt,
+					finished: false,
+					rolloutFile: file,
+					ambiguous: true,
+				});
+			} else if (required) {
+				ambiguous = true;
+			}
 		}
 	}
 	ambiguous ||= scanState.ambiguous;
@@ -203,7 +273,7 @@ function collectSessionChain({
 		const matches = files.filter((file) => path.basename(file).includes(currentId));
 		if (matches.length !== 1) return { sessions, ambiguous: matches.length > 0 || sessions.length > 0 };
 		let session;
-		try { session = readSession(matches[0]); } catch { return { sessions, ambiguous: true }; }
+		try { session = readSessionCached(matches[0]); } catch { return { sessions, ambiguous: true }; }
 		if (!session || session.sessionId !== currentId) return { sessions, ambiguous: true };
 		sessions.push(session);
 		currentId = session.parentId;
@@ -233,10 +303,12 @@ function lineageRootId({ sessions, ambiguous = false } = {}, requestedId) {
 function findLineage({ sessions, ambiguous = false }, requestedId, policy) {
 	if (!requestedId || !policy) return null;
 	const byId = new Map();
+	const duplicateIds = new Set();
 	for (const session of sessions) {
-		if (byId.has(session.sessionId)) ambiguous = true;
-		byId.set(session.sessionId, session);
+		if (byId.has(session.sessionId)) duplicateIds.add(session.sessionId);
+		else byId.set(session.sessionId, session);
 	}
+	if (duplicateIds.has(requestedId)) return null;
 	const requested = byId.get(requestedId);
 	if (!requested) return null;
 	const seen = new Set();
@@ -266,22 +338,26 @@ function findLineage({ sessions, ambiguous = false }, requestedId, policy) {
 		agents: [],
 		ambiguous: ambiguous || Boolean(root.ambiguous),
 	};
-	for (const session of sessions) {
-		let current = session;
-		const chain = new Set();
-		while (current.parentId && current.sessionId !== root.sessionId) {
-			if (chain.has(current.sessionId)) { lineage.ambiguous = true; break; }
-			chain.add(current.sessionId);
-			current = byId.get(current.parentId);
-			if (!current) {
-				if (session.createdAt >= startedAt && (session.isSubagent || session.parentId)) lineage.ambiguous = true;
-				break;
+	const memberIds = new Set([root.sessionId]);
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const session of sessions) {
+			if (!memberIds.has(session.sessionId) && session.parentId && memberIds.has(session.parentId)) {
+				memberIds.add(session.sessionId);
+				changed = true;
 			}
 		}
-		if (!current || current.sessionId !== root.sessionId) continue;
+	}
+	if ([...duplicateIds].some((id) => memberIds.has(id))) lineage.ambiguous = true;
+	for (const session of sessions) {
+		if (!memberIds.has(session.sessionId)) continue;
 		lineage.members.push(session.sessionId);
 		if (session.ambiguous) lineage.ambiguous = true;
-		if (session.sessionId === root.sessionId || session.createdAt < startedAt) continue;
+		if (session.sessionId === root.sessionId) continue;
+		// Descendant ceilings are lifetime bounds for one root lineage. The
+		// activation timestamp validates policy provenance but must never erase
+		// attributable history when a policy is edited in place.
 		lineage.children += 1;
 		lineage.inputTokens += session.inputTokens;
 		lineage.outputTokens += session.outputTokens;
@@ -323,9 +399,9 @@ function reserveLineageSpawn(lineage, policy, tmpRoot, pendingPromptBytes = 0) {
 	if (!lineage || !policy || !Number.isSafeInteger(pendingPromptBytes) || pendingPromptBytes < 0) return { ok: false, kind: "counter" };
 	if (!Number.isSafeInteger(policy.max_children) || policy.max_children > HARD_MAX_CHILDREN) return { ok: false, kind: "budget" };
 	const root = String(lineage.rootId).replace(/[^\w.-]/g, "_");
-	const policyKey = String(policy.budget_started_at).replace(/[^\w.-]/g, "_");
+	const policyDigest = crypto.createHash("sha256").update(JSON.stringify(policy, Object.keys(policy).sort())).digest("hex");
 	const durableRoot = path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "adk-subagent-budget");
-	const target = path.join(tmpRoot || durableRoot, `${root}-${policyKey}.json`);
+	const target = path.join(tmpRoot || durableRoot, `${root}.json`);
 	const lock = `${target}.lock`;
 	let fd = null;
 	let temporary = null;
@@ -336,16 +412,16 @@ function reserveLineageSpawn(lineage, policy, tmpRoot, pendingPromptBytes = 0) {
 		fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 		fs.chmodSync(directory, 0o700);
 		fd = fs.openSync(lock, "wx");
-		let state = { admitted: 0, promptBytes: 0 };
+		let state = { admitted: 0, promptBytes: 0, policyDigest };
 		if (fs.existsSync(target)) state = JSON.parse(fs.readFileSync(target, "utf8"));
-		if (!Number.isSafeInteger(state.admitted) || state.admitted < 0 || !Number.isSafeInteger(state.promptBytes) || state.promptBytes < 0) throw new Error("counter");
+		if (state.policyDigest !== policyDigest || !Number.isSafeInteger(state.admitted) || state.admitted < 0 || !Number.isSafeInteger(state.promptBytes) || state.promptBytes < 0) throw new Error("counter");
 		const used = Math.max(state.admitted, lineage.children);
 		const pendingActive = Math.max(0, used - lineage.children);
 		const active = lineage.activeChildren + pendingActive;
 		const bytes = Math.max(state.promptBytes, lineage.delegatedPromptBytes) + pendingPromptBytes;
 		if (used >= policy.max_children || active >= policy.max_active_children || bytes > policy.max_delegated_prompt_bytes) return { ok: false, kind: "budget" };
 		temporary = `${target}.${process.pid}.tmp`;
-		fs.writeFileSync(temporary, JSON.stringify({ admitted: used + 1, promptBytes: bytes }), { mode: 0o600 });
+		fs.writeFileSync(temporary, JSON.stringify({ admitted: used + 1, promptBytes: bytes, policyDigest }), { mode: 0o600 });
 		temporaryFd = fs.openSync(temporary, "r");
 		fs.fsyncSync(temporaryFd);
 		fs.closeSync(temporaryFd);
@@ -381,6 +457,7 @@ if (require.main === module) process.stdout.write(`${JSON.stringify(collectSessi
 
 module.exports = {
 	HARD_MAX_CHILDREN,
+	clearSessionCache,
 	collectLineages,
 	collectSessionChain,
 	collectSessions,
@@ -390,4 +467,5 @@ module.exports = {
 	readSession,
 	reserveLineageSpawn,
 	scanJsonLines,
+	sessionCacheStats,
 };

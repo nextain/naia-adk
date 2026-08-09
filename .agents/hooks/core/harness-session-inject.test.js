@@ -15,6 +15,29 @@ function workspace() {
 	fs.mkdirSync(path.join(cwd, ".agents", "progress"), { recursive: true });
 	fs.mkdirSync(path.join(cwd, ".agents", "context"), { recursive: true });
 	fs.writeFileSync(path.join(cwd, ".agents", "context", "agents-rules.json"), "{}\n");
+	fs.mkdirSync(path.join(cwd, ".codex"), { recursive: true });
+	fs.writeFileSync(path.join(cwd, ".codex", "hooks.json"), "{}\n");
+	for (const relative of [
+		".agents/hooks/core/harness-core.js",
+		".agents/hooks/core/delegation-contract.js",
+		".agents/hooks/core/hook-project-root.js",
+		".agents/hooks/core/preservation-contract.js",
+		".agents/hooks/core/request-contract-adapter.js",
+		".agents/hooks/core/request-contract.js",
+		".agents/hooks/core/session-contract.js",
+		".codex/hooks/session-inject.cjs",
+		".claude/hooks/session-inject.js",
+	]) {
+		const target = path.join(cwd, relative);
+		fs.mkdirSync(path.dirname(target), { recursive: true });
+		fs.copyFileSync(path.join(repoRoot, relative), target);
+	}
+	const optionalCodexGuard = ".codex/hooks/context-budget-guard.cjs";
+	if (fs.existsSync(path.join(repoRoot, optionalCodexGuard))) {
+		const target = path.join(cwd, optionalCodexGuard);
+		fs.mkdirSync(path.dirname(target), { recursive: true });
+		fs.copyFileSync(path.join(repoRoot, optionalCodexGuard), target);
+	}
 	const catalogDir = path.join(cwd, "packages", "benchmark-contract", "baselines");
 	fs.mkdirSync(catalogDir, { recursive: true });
 	fs.copyFileSync(
@@ -31,7 +54,35 @@ function writeProgress(cwd, name, value) {
 	);
 }
 
-function bind(cwd, sessionId, progressName, progress) {
+function orchestratorPolicy() {
+	return {
+		profile: "balanced",
+		context_mode: "isolated",
+		budget_started_at: "2026-08-08T00:00:00Z",
+		root_input_token_baseline: 0,
+		root_output_token_baseline: 0,
+		maximum_risk: "medium",
+		max_children: 4,
+		max_active_children: 2,
+		max_prompt_bytes: 16_384,
+		max_delegated_prompt_bytes: 65_536,
+		max_input_tokens: 256_000,
+		max_output_tokens: 32_000,
+		orchestrator_execution: {
+			mode: "delegate_required",
+			owner_direct_override: true,
+			technical_failure_fallback: {
+				enabled: true,
+				minimum_failed_attempts: 1,
+				allowed_failure_kinds: ["spawn_guard_incompatible"],
+				scope: "same_task_only",
+				auto_close_on: ["delegation_success", "task_complete", "handoff"],
+			},
+		},
+	};
+}
+
+function bind(cwd, sessionId, progressName, progress, contractOverrides = {}) {
 	const contract = {
 		schema_version: "1.0",
 		id: "inject-contract",
@@ -47,6 +98,7 @@ function bind(cwd, sessionId, progressName, progress) {
 		source_refs: ["USR-TEST:E01"],
 		session_bindings: [{ session_id: sessionId }],
 		progress_file: `.agents/progress/${progressName}`,
+		...contractOverrides,
 	};
 	const digest = contractCore.contractDigest(contract);
 	contract.contract_digest = digest;
@@ -67,17 +119,20 @@ function bind(cwd, sessionId, progressName, progress) {
 			},
 		},
 	}, null, 2));
+	return { contract, digest };
 }
 
-function runNode(script, input) {
+function runNode(script, input, extraEnv = {}) {
 	return spawnSync(process.execPath, [script], {
 		input: JSON.stringify(input),
 		encoding: "utf8",
 		timeout: 3000,
 		env: {
 			...process.env,
+			ADK_PROJECT_ROOT: "",
 			CLAUDE_HARNESS: "",
 			CODEX_HARNESS: "",
+			...extraEnv,
 		},
 	});
 }
@@ -107,14 +162,14 @@ function assertSilent(result, label) {
 	assert.strictEqual(result, null, "core must be silent for an unbound session");
 
 	assertSilent(
-		runNode(path.join(repoRoot, ".codex", "hooks", "session-inject.cjs"), {
+		runNode(path.join(cwd, ".codex", "hooks", "session-inject.cjs"), {
 			cwd,
 			session_id: "CURRENT",
 		}),
 		"Codex UserPromptSubmit adapter",
 	);
 	assertSilent(
-		runNode(path.join(repoRoot, ".claude", "hooks", "session-inject.js"), {
+		runNode(path.join(cwd, ".claude", "hooks", "session-inject.js"), {
 			cwd,
 			session_id: "CURRENT",
 		}),
@@ -128,22 +183,87 @@ function assertSilent(result, label) {
 		issue: "Bound work",
 		current_phase: "build",
 		gates_cleared: ["plan"],
-	});
+	}, { subagent_policy: orchestratorPolicy() });
 	const result = core.buildSessionInject({
 		cwd,
 		sessionId: "CURRENT",
 		hooksDir: path.join(repoRoot, ".codex", "hooks"),
 		optOutEnvVar: "CODEX_HARNESS",
 		hostConfigDir: ".codex",
-		env: {},
+		env: { CODEX_AVAILABLE_BINDINGS: "luna,sol" },
 	});
 	assert.match(result.text, /HARNESS: SESSION STATE/);
 	assert.match(result.text, /Bound work/);
-	assert.match(result.text, /Contract: inject-contract/);
+	assert.match(result.text, /Execution contract: inject-contract/);
+	assert.match(result.text, /HARNESS: PARENT CONTRACT — PRESERVE/);
+	assert.match(result.text, /Goal: Bound work/);
+	assert.match(result.text, /Scope 1: src\/\*\*/);
+	assert.match(result.text, /Acceptance 1: inject correct state/);
+	assert.match(result.text, /current_task is a child unit/);
 	assert.match(result.text, /Active profile: balanced \(source: catalog_default\)/);
 	assert.match(result.text, /Available bindings: luna, sol/);
-	assert.match(result.text, /Fallback: control; deterministic fallback then fail closed/);
+	assert.match(result.text, /Fallback: control; fail closed; return the task to L2 for decomposition or explicit profile rollback/);
 	assert.match(result.text, /total development cost reduction is not proven/);
+	assert.match(result.text, /Root role: L3 secretary \/ L2 issue leader/);
+	assert.match(result.text, /Direct fallback: BLOCKED \(orchestrator_delegation_required\)/);
+	assert.throws(
+		() => core.buildSessionInject({
+			cwd,
+			sessionId: "CURRENT",
+			hooksDir: path.join(repoRoot, ".codex", "hooks"),
+			optOutEnvVar: "CODEX_HARNESS",
+			hostConfigDir: ".codex",
+			env: {},
+		}),
+		/Codex development profile balanced is unavailable; missing bindings: luna, sol/,
+	);
+
+	const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "naia-harness-scratch-"));
+	try {
+		const requestAdapter = require(path.join(cwd, ".agents", "hooks", "core", "request-contract-adapter.js"));
+		const inherited = runNode(
+			path.join(cwd, ".codex", "hooks", "session-inject.cjs"),
+			{ cwd: scratch, session_id: "CURRENT" },
+			{ ADK_PROJECT_ROOT: cwd, CODEX_AVAILABLE_BINDINGS: "luna,sol" },
+		);
+		assert.strictEqual(inherited.status, 0, inherited.stderr);
+		assert.match(inherited.stdout, /HARNESS: SESSION STATE/);
+		assert.match(inherited.stdout, /Bound work/);
+
+		const invalidInherited = runNode(
+			path.join(cwd, ".codex", "hooks", "session-inject.cjs"),
+			{ cwd: scratch, session_id: "CURRENT" },
+			{ ADK_PROJECT_ROOT: "." },
+		);
+		assert.strictEqual(invalidInherited.status, 0, invalidInherited.stderr);
+		assert.match(invalidInherited.stdout, /session injection failed/);
+
+		const codexEvent = requestAdapter.normalizeInput("codex", {
+			cwd: scratch,
+			client_version: "test",
+			hook_event_name: "SessionStart",
+			session_id: "CURRENT",
+		}, "SessionStart", { env: { ADK_PROJECT_ROOT: cwd } });
+		assert.strictEqual(codexEvent.cwd, fs.realpathSync(cwd));
+		assert.throws(
+			() => requestAdapter.normalizeInput("codex", {
+				cwd: scratch,
+				client_version: "test",
+				hook_event_name: "SessionStart",
+				session_id: "CURRENT",
+			}, "SessionStart", { env: { ADK_PROJECT_ROOT: "." } }),
+			/ADK_PROJECT_ROOT must be absolute/,
+		);
+		const claudeEvent = requestAdapter.normalizeInput("claude", {
+			cwd,
+			client_version: "test",
+			hook_event_name: "SessionStart",
+			session_id: "CURRENT",
+		}, "SessionStart", { env: { ADK_PROJECT_ROOT: "." } });
+		assert.strictEqual(claudeEvent.cwd, cwd, "Claude root discovery must remain payload-based");
+	} finally {
+		fs.rmSync(scratch, { recursive: true, force: true });
+	}
 
 	const overridden = core.buildSessionInject({
 		cwd,
@@ -158,6 +278,28 @@ function assertSilent(result, label) {
 	});
 	assert.match(overridden.text, /Active profile: control \(source: environment_override\)/);
 	assert.match(overridden.text, /Available bindings: sol/);
+	assert.throws(
+		() => core.buildSessionInject({
+			cwd,
+			sessionId: "CURRENT",
+			hooksDir: path.join(repoRoot, ".codex", "hooks"),
+			optOutEnvVar: "CODEX_HARNESS",
+			hostConfigDir: ".codex",
+			env: { CODEX_AVAILABLE_BINDINGS: "sol" },
+		}),
+		/Codex development profile balanced is unavailable; missing bindings: luna/,
+	);
+	assert.throws(
+		() => core.buildSessionInject({
+			cwd,
+			sessionId: "CURRENT",
+			hooksDir: path.join(repoRoot, ".codex", "hooks"),
+			optOutEnvVar: "CODEX_HARNESS",
+			hostConfigDir: ".codex",
+			env: { CODEX_AVAILABLE_BINDINGS: "none" },
+		}),
+		/Codex development profile balanced is unavailable; missing bindings: luna, sol/,
+	);
 	assert.throws(
 		() => core.buildSessionInject({
 			cwd,
@@ -193,6 +335,73 @@ function assertSilent(result, label) {
 		env: { CODEX_DEVELOPMENT_PROFILE: "unknown" },
 	});
 	assert.doesNotMatch(claudeResult.text, /CODEX DEVELOPMENT PROFILE/);
+}
+
+{
+	const cwd = workspace();
+	const binding = bind(cwd, "PARENT", "derived.json", {
+		issue: "Broad parent issue",
+		current_phase: "build",
+		gates_cleared: ["plan"],
+	}, {
+		goal: "Preserve the complete parent objective across worker resume.",
+		scope: ["Keep the broad parent obligation visible.", "Inspect the bounded worker hook."],
+		non_goals: ["Do not declare the parent issue complete from a child result."],
+		success_criteria: ["The parent objective remains visible.", "The child hook inspection is reported."],
+		allowed_paths: ["src/**"],
+		target_ownership: ["src/**"],
+		subagent_policy: orchestratorPolicy(),
+	});
+	const delegatedTask = {
+		schema_version: "delegation-task-v1",
+		task_id: "resume-worker-01",
+		task_digest: "",
+		parent_contract_id: binding.contract.id,
+		parent_contract_digest: binding.digest,
+		parent_intent_digest: contractCore.parentIntentDigest(binding.contract),
+		role: "review",
+		project_root: cwd,
+		worktree: cwd,
+		scope: ["Inspect the bounded worker hook."],
+		allowed_paths: ["src/worker-hook.js"],
+		success_criteria: ["The child hook inspection is reported."],
+		stop_condition: "Return the bounded result or hand off any drift.",
+		risk: "medium",
+		exact_validator: null,
+		read_only: true,
+		result_contract: {
+			schema_version: "delegation-result-v1",
+			completion_scope: "child_task_only",
+			drift_action: "handoff_to_parent",
+			required_fields: [
+				"status", "task_digest", "parent_intent_digest", "changed_paths", "validator_results",
+				"remaining_parent_obligations_preserved", "completion_scope", "handoff_reason",
+			],
+		},
+	};
+	delegatedTask.task_digest = contractCore.delegationTaskDigest(delegatedTask);
+	const result = core.buildSessionInject({
+		cwd,
+		sessionId: "CHILD",
+		hooksDir: path.join(repoRoot, ".codex", "hooks"),
+		optOutEnvVar: "CODEX_HARNESS",
+		hostConfigDir: ".codex",
+		env: { CODEX_AVAILABLE_BINDINGS: "luna,sol" },
+		sessionChainLookup: () => ({ ambiguous: false, sessions: [
+			{ sessionId: "CHILD", parentId: "PARENT", isSubagent: true, delegatedPrompt: JSON.stringify(delegatedTask) },
+			{ sessionId: "PARENT", parentId: null, isSubagent: false },
+		] }),
+	});
+	assert.match(result.text, /Execution contract: inject-contract::resume-worker-01/);
+	assert.match(result.text, /Parent contract: inject-contract/);
+	assert.match(result.text, /Goal: Preserve the complete parent objective across worker resume\./);
+	assert.match(result.text, /Scope 1: Keep the broad parent obligation visible\./);
+	assert.match(result.text, /Acceptance 1: The parent objective remains visible\./);
+	assert.match(result.text, /Child scope 1: Inspect the bounded worker hook\./);
+	assert.match(result.text, /Child acceptance 1: The child hook inspection is reported\./);
+	assert.match(result.text, /Nested delegation is forbidden/);
+	assert.doesNotMatch(result.text, /Root role: L3 secretary/);
+	fs.rmSync(cwd, { recursive: true, force: true });
 }
 
 {

@@ -35,7 +35,9 @@ pnpm --filter @naia-adk/benchmark-contract test
 ```bash
 node packages/benchmark-contract/src/development-profiles.mjs show --profile balanced
 node packages/benchmark-contract/src/development-profiles.mjs select \
-  --profile balanced --role bounded_worker --risk medium --bounded-scope --exact-validator
+  --profile balanced --role bounded_worker --risk medium --bounded-scope \
+  --validator-command 'node test/exact-validator.mjs' \
+  --allowed-shell-command 'node test/exact-validator.mjs'
 node packages/benchmark-contract/src/development-profiles.mjs select \
   --profile delegated --role bounded_worker --risk medium --bounded-scope \
   --available-bindings sol,terra,implementation_worker
@@ -43,8 +45,9 @@ node packages/benchmark-contract/src/development-profiles.mjs select \
 
 Balanced에서는 L3 비서와 L2 이슈 리더가 Luna Max이고, 별도 분석·설계·리뷰는
 Sol Medium, 구현·테스트·번역은 Luna 계열입니다. 범위가 제한되지 않았거나 위험도가
-높으면 Sol로 되돌아갑니다. 제한 구현에서 Luna는 `--bounded-scope --exact-validator`가
-모두 있어야 선택되며 조건을 충족하지 못하면 Sol로 상향합니다. Bound Codex
+높으면 Sol로 되돌아갑니다. 명령을 실행하는 Luna 역할은 `--bounded-scope`와 정확한
+`--validator-command`가 부모 계약의 `--allowed-shell-command` 항목에 바이트 단위로
+일치해야 선택되며 조건을 충족하지 못하면 Sol로 상향합니다. Bound Codex
 기본값에서 역할에 필요한 Luna 또는 Sol 바인딩이 없으면 fail closed이며, Terra는 명시적으로
 사용 가능한 경우에만 선택할 수 있습니다. 기계 작업은 여기에 `--risk low`까지 필요합니다. 이 1차
 Codex bound 세션에는 `balanced`가 기본 활성화되며 명시적 프로파일 override도 가능하지만, 전체 개발 비용 절감을 증명했다는 뜻은
@@ -65,4 +68,4 @@ Balanced의 분석·설계·리뷰 선택은 생산·분석·설계·리뷰에 �
 depth이며, 감춰진 호출을 소급해 차단하지 않는다.
 
 정본 계약과 동결 증적은 `.agents/decisions/`와 `.agents/reviews/`에 있으며,
-계약 SHA-256은 `e9f298159975b78cd215de96733bd95bf98e26cea7a3bcb3f8246797df7b6222`입니다.
+계약 SHA-256은 `c6ed07127c1da9caa85ad5cb2cd799286573449274e987a5ae41fe67dd62f339`입니다.

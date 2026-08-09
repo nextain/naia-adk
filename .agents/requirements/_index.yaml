@@ -24,7 +24,7 @@ source_ledger:
     - { id: USR-012, path: ".agents/requirements/sources/USR-012-code-complexity-gate.json", sha256: "sha256:f491ca2bd80837af34feba6a3fa1ccf48573a74974e0832c2cfb984dd60de28a", source_kind: human, origin: native_user_message, locator: "conversation://private/code-complexity-gate" }
     - { id: USR-013, path: ".agents/requirements/sources/USR-013-discord-session-records.json", sha256: "sha256:e266ec8904d5d2f110c89eeba3b320b8dafc71ad020a7e796087a91533d617c5", source_kind: human, origin: native_user_message, locator: "conversation://private/discord-session-records" }
     - { id: USR-014, path: ".agents/requirements/sources/USR-014-discord-operator-console-recovery.json", sha256: "sha256:5c62a15779c3038bd7e088fabc5478590dbfe452dcb4634fdfdcc7da3a00b883", source_kind: human, origin: native_user_message, locator: "conversation://private/discord-operator-console-recovery" }
-    - { id: USR-015, path: ".agents/requirements/sources/USR-015-trusted-local-gateway.json", sha256: "sha256:63342f649d70158519f50cceb339d3561f3d00c2e63833aa6ca0f549a4bad0d1", source_kind: human, origin: native_user_message, locator: "conversation://private/discord-trusted-local-gateway" }
+    - { id: USR-015, path: ".agents/requirements/sources/USR-015-trusted-local-gateway.json", sha256: "sha256:8a352e08410416f1d23fab599dc6dd1076d1a2ca475caa5f1a505d1fc49a1e55", source_kind: human, origin: native_user_message, locator: "conversation://private/discord-trusted-local-gateway" }
   # These identifiers predate the immutable ledger. Their native messages were not found in
   # local Claude/Codex session archives, so they must remain explicit gaps rather than being
   # reconstructed from AI-authored requirement prose.

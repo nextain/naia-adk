@@ -13,7 +13,7 @@
   "availability": {
     "default_available_bindings": ["sol", "luna"],
     "override": "explicit availableBindings or CODEX_AVAILABLE_BINDINGS",
-    "unavailable_policy": "deterministic fallback then fail closed"
+    "unavailable_policy": "fail closed; return the task to L2 for decomposition or explicit profile rollback"
   },
   "bindings": {
     "sol": {
@@ -50,13 +50,14 @@
   "balanced_role_policy": {
     "secretary": {"binding": "luna", "default_reasoning_effort": "max", "allowed_reasoning_efforts": ["max"]},
     "issue_leader": {"binding": "luna", "default_reasoning_effort": "max", "allowed_reasoning_efforts": ["max"]},
+    "explorer": {"binding": "luna", "default_reasoning_effort": "low", "allowed_reasoning_efforts": ["low"]},
     "analysis": {"binding": "sol", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
     "design": {"binding": "sol", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
     "review": {"binding": "sol", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
     "implementation": {"binding": "luna", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
     "test": {"binding": "luna", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
     "generic_worker": {"binding": "luna", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
-    "translation": {"binding": "luna", "default_reasoning_effort": "low", "allowed_reasoning_efforts": ["low", "medium"]}
+    "translation": {"binding": "luna", "default_reasoning_effort": "low", "allowed_reasoning_efforts": ["low"]}
   },
   "delegation_context": {
     "brief_mode": "isolated_bounded",
@@ -66,12 +67,14 @@
   },
   "runtime_policy_boundary": {
     "separate_context": ".agents/context/discord-gateway-operations.yaml",
-    "excluded_from_development_profiles": ["persistent_discord_gateway", "issue_leader_luna_max"]
+    "excluded_from_development_profiles": ["persistent_discord_gateway"]
   },
   "profiles": [
     {
       "id": "control",
-      "purpose": "Quality and total-cost reference plus high-risk fallback",
+      "activation": "active",
+      "reasoning_effort": "medium",
+      "purpose": "Manually selected quality/reference and reversible rollback profile; never an automatic per-task model fallback",
       "assignments": {
         "orchestrator": "sol",
         "integrator": "sol",
@@ -107,6 +110,7 @@
     },
     {
       "id": "delegated",
+      "activation": "disabled_until_runtime_issuance_and_verification",
       "purpose": "Optional additional-provider profile: Sol retains orchestration and integration while a replaceable qualified binding performs bounded implementation",
       "assignments": {
         "orchestrator": "sol",
@@ -123,26 +127,32 @@
       "requires_bounded_scope": true,
       "maximum_risk": "medium",
       "luna_requires_exact_validator": true,
-      "luna_fallback_binding": "sol",
-      "fallback_binding": "sol"
+      "luna_fallback_binding": null,
+      "fallback_binding": null
     },
     "mechanical_worker": {
       "luna_requires_exact_validator": true,
       "luna_requires_bounded_scope": true,
       "luna_maximum_risk": "low",
-      "fallback_binding": "sol"
+      "fallback_binding": null
     },
     "review": {
       "different_session_required": true,
       "different_execution_required": true,
       "prefer_different_binding_from_producer": true,
-      "fail_closed_without_independent_execution_identity": true
+      "fail_closed_without_independent_execution_identity": true,
+      "fresh_session_required": true,
+      "followup_reuse_forbidden": true,
+      "runtime_enforcer": ".codex/hooks/subagent-spawn-guard.cjs"
     },
     "sol_specialist": {
-      "roles": ["analysis", "designer"],
+      "roles": ["analysis", "design", "review"],
       "different_session_required": true,
       "different_execution_required": true,
-      "fail_closed_without_independent_execution_identity": true
+      "fail_closed_without_independent_execution_identity": true,
+      "fresh_session_required": true,
+      "followup_reuse_forbidden": true,
+      "runtime_enforcer": ".codex/hooks/subagent-spawn-guard.cjs"
     }
   },
   "claim_boundary": {
@@ -150,7 +160,7 @@
       "balanced_is_available_for_opt_in_use",
       "balanced_is_default_for_bound_codex_sessions",
       "role_and_model_binding_are_separate",
-      "unsafe_or_unqualified_tasks_fall_back",
+      "unsafe_or_unqualified_balanced_tasks_fail_closed",
       "single_solution_default_remains_available",
       "additional_provider_profile_is_opt_in"
     ],

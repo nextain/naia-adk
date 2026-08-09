@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "waivers": [
+    {
+      "path": ".agents/hooks/core/request-contract.js",
+      "sha256": "sha256:d47604555548cec0c271db2699c05ddaeb4cecbca730c2ac7cced796bed0b2b9",
+      "maxLines": 4139,
+      "maxBytes": 250314,
+      "reason": "This pre-existing security-critical trust kernel received only a bounded exact-command update for fail-closed Codex hook resolution from an external scratch cwd. Decomposition remains deferred to a dedicated reviewed change because combining that security refactor with the urgent descendant cost-containment repair would materially enlarge rollback and regression risk.",
+      "owner": "naia-adk-maintainers",
+      "authorityRef": "source:USR-012#sha256:f491ca2bd80837af34feba6a3fa1ccf48573a74974e0832c2cfb984dd60de28a",
+      "expiresOn": "2026-09-03"
+    }
+  ]
+}
