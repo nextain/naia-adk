@@ -91,6 +91,11 @@ function clientRegistrySupports(cwd, client) {
 	});
 }
 
+function hostHarnessDisabled(cwd, client) {
+	const hostConfigDir = client === "claude" ? ".claude" : client === "codex" ? ".codex" : null;
+	return hostConfigDir !== null && fs.existsSync(path.join(cwd, hostConfigDir, "no-harness"));
+}
+
 function assertSupportedClient(cwd, client, version) {
 	const config = loadConfig(cwd);
 	const range = config.supported_clients[client];
@@ -104,6 +109,7 @@ function handleEvent(event, opts = {}) {
 	const client = event.client || "unknown";
 	const sessionId = event.sessionId;
 	const now = opts.now || Date.now();
+	if (hostHarnessDisabled(cwd, client)) return { kind: "allow", code: "request_contract_host_disabled" };
 	const config = loadConfig(cwd);
 	if (config.errors.length) return { kind: "block", code: "request_contract_config_invalid", message: "Request-contract configuration is missing or invalid.", errors: config.errors };
 	if (!governed(cwd, opts.env || process.env)) return { kind: "allow", code: "request_contract_disabled" };

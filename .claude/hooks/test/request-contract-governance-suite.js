@@ -41,6 +41,17 @@ test("disabled mode is a silent allow", () => {
 	const result = core.handleEvent({ client: "claude", eventName: "Stop", sessionId: "D", cwd: fx.cwd }, { env: { REQUEST_CONTRACT: "off" } });
 	assert.equal(result.code, "request_contract_disabled");
 });
+test("a host no-harness marker silently disables every request-contract event", () => {
+	for (const client of ["claude", "codex"]) {
+		const fx = fixture();
+		fs.writeFileSync(path.join(fx.cwd, client === "claude" ? ".claude" : ".codex", "no-harness"), "");
+		for (const eventName of ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "PostCompact", "Stop"]) {
+			const result = core.handleEvent({ client, eventName, sessionId: `DISABLED-${client}`, cwd: fx.cwd, toolName: "Bash", toolUseId: "disabled-tool" }, { env: { REQUEST_CONTRACT: "on" } });
+			assert.equal(result.kind, "allow");
+			assert.equal(result.code, "request_contract_host_disabled");
+		}
+	}
+});
 test("governance remains sticky after an active marker or environment disable attempt", () => {
 	const fx = fixture();
 	const configPath = path.join(fx.cwd, ".agents", "context", "request-contract.json");
