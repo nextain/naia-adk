@@ -3801,7 +3801,7 @@ function releaseCommandFromEvent(event, config = null) {
 
 function mutationLeaseId(event) {
 	const nativeId = String(event.toolUseId || "");
-	return nativeId || `session:${event.client || "unknown"}:${event.sessionId || "no-session"}`;
+	return nativeId || `session:${event.client || "unknown"}:${event.sessionId || "unbound"}`;
 }
 
 function semanticVersion(value) {
@@ -3872,11 +3872,19 @@ function assertSupportedClient(cwd, client, version) {
 function handleEvent(event, opts = {}) {
 	const cwd = event.cwd || process.cwd();
 	const client = event.client || "unknown";
-	const sessionId = event.sessionId || "no-session";
+	const sessionId = event.sessionId;
 	const now = opts.now || Date.now();
 	const config = loadConfig(cwd);
 	if (config.errors.length) return { kind: "block", code: "request_contract_config_invalid", message: "Request-contract configuration is missing or invalid.", errors: config.errors };
 	if (!governed(cwd, opts.env || process.env)) return { kind: "allow", code: "request_contract_disabled" };
+	if (!sessionId || sessionId === "no-session") {
+		if (event.eventName === "UserPromptSubmit") {
+			const quarantineId = `unbound-${opaqueId()}`;
+			const q = appendQuarantine(cwd, client, quarantineId, event.prompt || "", now, event.origin);
+			return { kind: "block", code: "host_session_identity_unavailable", message: `Prompt preserved in isolated quarantine (${q.quarantineId}); no shared no-session authority was created.` };
+		}
+		return { kind: "block", code: "host_session_identity_unavailable", message: "A native or host-local session identity is required." };
+	}
 	let unit = findUnit(cwd, client, sessionId);
 	if (unit && unit.error) {
 		if (event.eventName === "UserPromptSubmit") {

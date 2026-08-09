@@ -379,6 +379,7 @@ try {
 		activation_kind: "owner_override",
 		task_digest: fallbackTaskDigest,
 		confirmed_by: "bound_orchestrator",
+		confirmed_by_session_id: "SESSION-1",
 		owner_authorization_ref: governedContract.source_refs[0],
 		allowed_paths: ["product.txt"],
 		exact_validators: ["pnpm test"],

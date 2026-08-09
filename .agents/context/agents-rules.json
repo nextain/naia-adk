@@ -370,6 +370,7 @@
       },
       "handoff_documents": {
         "policy": "Local-only session or PC transfer artifacts. Never stage or commit them because stale handoff state can misdirect another machine or session.",
+        "cross_machine": "Cross-machine continuation uses a remote GitHub issue plus reachable branch or commit SHAs as the only handoff boundary. Record durable scope, invariants, current state, validation, and blockers there; never transfer local session IDs, registry pointers, session maps, runtime contracts, progress/handoff files, harness units, credentials, or host-local receipts through Git.",
         "location": "Use .agents/work/, .agents/progress/, .agents/reviews/, tmp/, or a dedicated ignored .handoff/ or .handover/ directory. Topic-prefixed local notes such as project-handoff belong only in one of these ignored locations.",
         "naming": "A global local-only artifact basename starts with handoff or handover. Topic-prefixed formal documents remain trackable outside ignored local-artifact directories.",
         "boundary": "Durable handoff or handover guides and contracts under official docs/, spec/, design/, .agents/context/, or .agents/decisions/ directories remain trackable even when their basename starts with handoff or handover. Other durable project knowledge belongs in tracked context, requirements, decisions, or formal docs; do not disguise permanent documentation as a local handoff artifact."

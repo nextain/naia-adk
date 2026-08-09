@@ -8,6 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const createDelegationContract = require("./delegation-contract.js");
 const createHookProjectRoot = require("./hook-project-root.js");
+const { verifyFailureReceipts } = require("./subagent-failure-receipt.js");
 
 const STATES = Object.freeze({
 	BOUND: "BOUND",
@@ -92,6 +93,7 @@ const CONTRACT_KEYS = new Set([
 	"non_goals", "success_criteria", "allowed_paths", "target_ownership",
 	"audiences", "source_refs", "session_bindings", "progress_file",
 	"contract_digest", "allowed_shell_commands", "subagent_policy",
+	"intent_anchor", "l3_session",
 ]);
 
 const SUBAGENT_POLICY_KEYS = new Set([
@@ -194,7 +196,7 @@ function fallbackPathCovered(contract, candidate) {
 		(contract.target_ownership || []).some((pattern) => ownershipPatternCovers(pattern, candidate));
 }
 
-function validateOrchestratorFallbackEvidence(contract, progress) {
+function validateOrchestratorFallbackEvidence(contract, progress, opts = {}) {
 	const fallback = progress?.orchestrator_fallback;
 	if (fallback === undefined) return null;
 	const policy = contract?.subagent_policy?.orchestrator_execution;
@@ -202,13 +204,15 @@ function validateOrchestratorFallbackEvidence(contract, progress) {
 	if (!fallback || typeof fallback !== "object" || Array.isArray(fallback)) return "invalid_orchestrator_fallback";
 	const keys = new Set([
 		"status", "activation_kind", "task_digest", "confirmed_by", "owner_authorization_ref",
+		"confirmed_by_session_id",
 		"failure_kind", "failure_receipts", "allowed_paths", "exact_validators", "auto_close_on",
 		"task", "activated_at", "expires_at", "closed_at", "closed_reason", "delegation_succeeded_at", "task_completed_at", "handoff_at",
 	]);
 	if (Object.keys(fallback).some((key) => !keys.has(key))) return "invalid_orchestrator_fallback_property";
 	if (!new Set(["active", "closed"]).has(fallback.status)) return "invalid_orchestrator_fallback_status";
 	if (!new Set(["technical_failure", "owner_override"]).has(fallback.activation_kind)) return "invalid_orchestrator_fallback_activation";
-	if (!/^[a-f0-9]{64}$/.test(fallback.task_digest || "") || fallback.confirmed_by !== "bound_orchestrator") return "invalid_orchestrator_fallback_binding";
+	if (!/^[a-f0-9]{64}$/.test(fallback.task_digest || "") || fallback.confirmed_by !== "bound_orchestrator" ||
+		typeof fallback.confirmed_by_session_id !== "string" || !(contract.session_bindings || []).some((binding) => bindingSessionId(binding) === fallback.confirmed_by_session_id)) return "invalid_orchestrator_fallback_binding";
 	const activatedAt = canonicalTimestamp(fallback.activated_at);
 	const expiresAt = canonicalTimestamp(fallback.expires_at);
 	if (!activatedAt || !expiresAt || Date.parse(expiresAt) <= Date.parse(activatedAt) || Date.parse(expiresAt) - Date.parse(activatedAt) > ORCHESTRATOR_FALLBACK_MAX_MS) return "invalid_orchestrator_fallback_timestamp";
@@ -232,11 +236,15 @@ function validateOrchestratorFallbackEvidence(contract, progress) {
 	if (fallback.activation_kind === "technical_failure") {
 		const technical = policy.technical_failure_fallback;
 		if (!technical.enabled || !technical.allowed_failure_kinds.includes(fallback.failure_kind)) return "orchestrator_technical_fallback_disabled";
-		// Progress files are orchestrator-authored and therefore cannot prove that
-		// a runtime actually failed. Until a host-authenticated failure journal is
-		// wired, technical failure must fail closed. Owner override remains the
-		// explicit, source-bound escape hatch after a user confirms the bypass.
-		return "orchestrator_failure_receipts_not_host_authenticated";
+		if (!Array.isArray(fallback.failure_receipts) || fallback.failure_receipts.length < technical.minimum_failed_attempts) return "orchestrator_failure_receipts_insufficient";
+		const receiptError = verifyFailureReceipts(fallback.failure_receipts, {
+			session_id: fallback.confirmed_by_session_id,
+			contract_digest: contract.contract_digest,
+			task_digest: fallback.task_digest,
+			failure_kind: fallback.failure_kind,
+			activated_at: activatedAt,
+		}, opts);
+		if (receiptError) return receiptError;
 	} else {
 		if (!policy.owner_direct_override || typeof fallback.owner_authorization_ref !== "string" ||
 			!(contract.source_refs || []).includes(fallback.owner_authorization_ref)) return "invalid_owner_direct_override";
@@ -286,10 +294,35 @@ function supportedOwnershipPattern(value) {
 	return stars.length === 0 || (stars.length === 2 && value.endsWith("/**"));
 }
 
+function validateIntentAnchor(anchor) {
+	if (!anchor || typeof anchor !== "object" || Array.isArray(anchor) ||
+		JSON.stringify(Object.keys(anchor).sort()) !== JSON.stringify(["schema_version", "source_path", "source_digest", "root_issue_id", "invariant_ids"].sort())) return "invalid_intent_anchor";
+	if (anchor.schema_version !== "intent-anchor-v1" || !/^\.agents\/(?:progress|requirements)\/[^/]+\.json$/.test(anchor.source_path || "") ||
+		!/^[a-f0-9]{64}$/.test(anchor.source_digest || "") || typeof anchor.root_issue_id !== "string" || !anchor.root_issue_id.trim() ||
+		!Array.isArray(anchor.invariant_ids) || anchor.invariant_ids.length === 0 || new Set(anchor.invariant_ids).size !== anchor.invariant_ids.length ||
+		anchor.invariant_ids.some((id) => typeof id !== "string" || !id.trim())) return "invalid_intent_anchor";
+	return null;
+}
+
+function validateL3Session(value) {
+	if (!value || typeof value !== "object" || Array.isArray(value) ||
+		JSON.stringify(Object.keys(value).sort()) !== JSON.stringify(["generation", "handoff_state", "handoff_source_ref"].sort()) ||
+		!Number.isSafeInteger(value.generation) || value.generation < 1 || !new Set(["active", "required"]).has(value.handoff_state)) return "invalid_l3_session";
+	if (value.handoff_state === "active" && value.handoff_source_ref !== null) return "invalid_l3_session_handoff";
+	if (value.handoff_state === "required" && (typeof value.handoff_source_ref !== "string" || !value.handoff_source_ref)) return "invalid_l3_session_handoff";
+	return null;
+}
+
 function validateContractShape(contract) {
 	if (!contract || typeof contract !== "object" || Array.isArray(contract)) return "contract_not_object";
 	if (Object.keys(contract).some((key) => !CONTRACT_KEYS.has(key))) return "contract_additional_property";
-	if (contract.schema_version !== "1.0") return "unsupported_schema_version";
+	if (!new Set(["1.0", "1.1"]).has(contract.schema_version)) return "unsupported_schema_version";
+	if (contract.schema_version === "1.1") {
+		const anchorError = validateIntentAnchor(contract.intent_anchor);
+		if (anchorError) return anchorError;
+		const l3Error = validateL3Session(contract.l3_session);
+		if (l3Error) return l3Error;
+	} else if (contract.intent_anchor !== undefined || contract.l3_session !== undefined) return "v1_1_fields_require_schema_v1_1";
 	if (typeof contract.id !== "string" || !contract.id) return "invalid_contract_id";
 	if (!["active", "closed"].includes(contract.status)) return "invalid_contract_status";
 	if (contract.project_root !== ".") return "invalid_project_root";
@@ -448,6 +481,18 @@ function resolveExplicitSessionContract({ cwd, sessionId }) {
 			contractPath,
 			expectedDigest,
 		});
+	}
+	if (contract.schema_version === "1.1") {
+		const anchorPath = path.resolve(projectRoot, contract.intent_anchor.source_path);
+		if (!inside(projectRoot, anchorPath) || !fs.existsSync(anchorPath)) return result(STATES.STALE, projectRoot, "intent_anchor_missing", { contractPath, anchorPath });
+		const digest = crypto.createHash("sha256").update(fs.readFileSync(anchorPath)).digest("hex");
+		if (digest !== contract.intent_anchor.source_digest) return result(STATES.STALE, projectRoot, "intent_anchor_digest_mismatch", { contractPath, anchorPath });
+		const anchor = readJson(anchorPath);
+		const serialized = JSON.stringify(anchor || {});
+		if (!anchor || !serialized.includes(contract.intent_anchor.root_issue_id) || contract.intent_anchor.invariant_ids.some((id) => !serialized.includes(id))) {
+			return result(STATES.STALE, projectRoot, "intent_anchor_content_mismatch", { contractPath, anchorPath });
+		}
+		if (contract.l3_session.handoff_state === "required") return result(STATES.STALE, projectRoot, "l3_handoff_required", { contractPath, handoffSourceRef: contract.l3_session.handoff_source_ref });
 	}
 
 	const matchingBindings = (contract.session_bindings || []).filter(
