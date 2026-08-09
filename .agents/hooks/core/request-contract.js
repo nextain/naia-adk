@@ -184,7 +184,6 @@ module.exports = {
 	governedControlEvent,
 	isShellTool,
 	mutationFromEvent,
-	releaseCommandFromEvent,
 	clientRegistrySupports,
 	assertSupportedClient,
 	handleEvent,
