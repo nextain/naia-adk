@@ -3,6 +3,7 @@
 const path = require("path");
 const core = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "harness-core.js"));
 const contracts = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "session-contract.js"));
+const contextBudget = require(path.join(__dirname, "context-budget-guard.cjs"));
 
 async function readInput() {
   let raw = "";
@@ -17,6 +18,13 @@ async function readInput() {
 
 async function main() {
   const input = await readInput();
+  if (input.hook_event_name === "UserPromptSubmit") {
+    const guard = contextBudget.evaluate({ sessionId: input.session_id, eventName: input.hook_event_name });
+    if (guard) process.stdout.write(JSON.stringify(guard));
+    // SessionStart and PostCompact already supply the full, contract-bound
+    // workflow state. Re-injecting it on every prompt repeats stale context.
+    return;
+  }
   const cwd = contracts.resolveHookProjectRoot(input.cwd || process.cwd(), process.env) || input.cwd || process.cwd();
   const result = core.buildSessionInject({
     cwd,
