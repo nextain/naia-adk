@@ -36,6 +36,11 @@
             "type": "command",
             "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/request-contract.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" SessionStart",
             "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook SessionStart'"
+          },
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; hook=\"$root/.agents/harness/session-contract-recovery.cjs\"; [ ! -f \"$hook\" ] || node \"$hook\" event SessionStart; exit 0",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $hook=Join-Path $root.Trim() \".agents/harness/session-contract-recovery.cjs\"; if (Test-Path -LiteralPath $hook) { node $hook event SessionStart }; exit 0'"
           }
         ]
       }
@@ -53,6 +58,11 @@
             "type": "command",
             "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/request-contract.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" UserPromptSubmit",
             "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook UserPromptSubmit'"
+          },
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; hook=\"$root/.agents/harness/session-contract-recovery.cjs\"; [ ! -f \"$hook\" ] || node \"$hook\" event UserPromptSubmit; exit 0",
+            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $hook=Join-Path $root.Trim() \".agents/harness/session-contract-recovery.cjs\"; if (Test-Path -LiteralPath $hook) { node $hook event UserPromptSubmit }; exit 0'"
           }
         ]
       }
@@ -116,13 +126,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/.codex/hooks/request-contract.cjs\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" Stop",
-            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \".codex/hooks/request-contract.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook Stop'"
+            "command": "failure='{\"decision\":\"block\",\"reason\":\"[request-contract:stop_hook_unavailable] Stop contract check unavailable; lifecycle continues for repair.\"}'; emit(){ printf '%s' \"$failure\"; }; root=$(git rev-parse --show-toplevel 2>/dev/null) || { emit; exit 0; }; registry=\"$root/.codex/hooks.json\"; [ -f \"$registry\" ] || { emit; exit 0; }; hook=\"$root/.codex/hooks/request-contract.cjs\"; [ -f \"$hook\" ] || { emit; exit 0; }; node \"$hook\" Stop || emit; exit 0",
+            "commandWindows": "powershell -NoProfile -NonInteractive -EncodedCommand JABmAGEAaQBsAHUAcgBlAD0AQAB7AGQAZQBjAGkAcwBpAG8AbgA9ACIAYgBsAG8AYwBrACIAOwByAGUAYQBzAG8AbgA9ACIAWwByAGUAcQB1AGUAcwB0AC0AYwBvAG4AdAByAGEAYwB0ADoAcwB0AG8AcABfAGgAbwBvAGsAXwB1AG4AYQB2AGEAaQBsAGEAYgBsAGUAXQAgAFMAdABvAHAAIABjAG8AbgB0AHIAYQBjAHQAIABjAGgAZQBjAGsAIAB1AG4AYQB2AGEAaQBsAGEAYgBsAGUAOwAgAGwAaQBmAGUAYwB5AGMAbABlACAAYwBvAG4AdABpAG4AdQBlAHMAIABmAG8AcgAgAHIAZQBwAGEAaQByAC4AIgB9AHwAQwBvAG4AdgBlAHIAdABUAG8ALQBKAHMAbwBuACAALQBDAG8AbQBwAHIAZQBzAHMAOwAgACQAcgBvAG8AdAA9AGcAaQB0ACAAcgBlAHYALQBwAGEAcgBzAGUAIAAtAC0AcwBoAG8AdwAtAHQAbwBwAGwAZQB2AGUAbAAgADIAPgAkAG4AdQBsAGwAOwAgAGkAZgAgACgAJABMAEEAUwBUAEUAWABJAFQAQwBPAEQARQAgAC0AbgBlACAAMAAgAC0AbwByACAALQBuAG8AdAAgACQAcgBvAG8AdAApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJABmAGEAaQBsAHUAcgBlADsAIABlAHgAaQB0ACAAMAAgAH0AOwAgACQAcgBlAGcAaQBzAHQAcgB5AD0ASgBvAGkAbgAtAFAAYQB0AGgAIAAkAHIAbwBvAHQALgBUAHIAaQBtACgAKQAgACIALgBjAG8AZABlAHgALwBoAG8AbwBrAHMALgBqAHMAbwBuACIAOwAgAGkAZgAgACgALQBuAG8AdAAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAcgBlAGcAaQBzAHQAcgB5ACkAKQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACQAZgBhAGkAbAB1AHIAZQA7ACAAZQB4AGkAdAAgADAAIAB9ADsAIAAkAGgAbwBvAGsAPQBKAG8AaQBuAC0AUABhAHQAaAAgACQAcgBvAG8AdAAuAFQAcgBpAG0AKAApACAAIgAuAGMAbwBkAGUAeAAvAGgAbwBvAGsAcwAvAHIAZQBxAHUAZQBzAHQALQBjAG8AbgB0AHIAYQBjAHQALgBjAGoAcwAiADsAIABpAGYAIAAoAC0AbgBvAHQAIAAoAFQAZQBzAHQALQBQAGEAdABoACAALQBMAGkAdABlAHIAYQBsAFAAYQB0AGgAIAAkAGgAbwBvAGsAKQApACAAewAgAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAJABmAGEAaQBsAHUAcgBlADsAIABlAHgAaQB0ACAAMAAgAH0AOwAgAG4AbwBkAGUAIAAkAGgAbwBvAGsAIABTAHQAbwBwADsAIABpAGYAIAAoACQATABBAFMAVABFAFgASQBUAEMATwBEAEUAIAAtAG4AZQAgADAAKQAgAHsAIABXAHIAaQB0AGUALQBPAHUAdABwAHUAdAAgACQAZgBhAGkAbAB1AHIAZQAgAH0AOwAgAGUAeABpAHQAIAAwAA=="
           },
           {
             "type": "command",
-            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; hook=\"$root/.claude/hooks/context-translation-batch.cjs\"; [ ! -f \"$hook\" ] || node \"$hook\" --flush",
-            "commandWindows": "powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $hook=Join-Path $root.Trim() \".claude/hooks/context-translation-batch.cjs\"; if (-not (Test-Path -LiteralPath $hook)) { exit 0 }; node $hook --flush'"
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; hook=\"$root/.claude/hooks/context-translation-batch.cjs\"; [ ! -f \"$hook\" ] || node \"$hook\" --flush || echo \"[context-translation] Stop flush deferred for retry\" >&2; exit 0",
+            "commandWindows": "powershell -NoProfile -NonInteractive -EncodedCommand JAByAG8AbwB0AD0AZwBpAHQAIAByAGUAdgAtAHAAYQByAHMAZQAgAC0ALQBzAGgAbwB3AC0AdABvAHAAbABlAHYAZQBsACAAMgA+ACQAbgB1AGwAbAA7ACAAaQBmACAAKAAkAEwAQQBTAFQARQBYAEkAVABDAE8ARABFACAALQBuAGUAIAAwACAALQBvAHIAIAAtAG4AbwB0ACAAJAByAG8AbwB0ACkAIAB7ACAAZQB4AGkAdAAgADAAIAB9ADsAIAAkAGgAbwBvAGsAPQBKAG8AaQBuAC0AUABhAHQAaAAgACQAcgBvAG8AdAAuAFQAcgBpAG0AKAApACAAIgAuAGMAbABhAHUAZABlAC8AaABvAG8AawBzAC8AYwBvAG4AdABlAHgAdAAtAHQAcgBhAG4AcwBsAGEAdABpAG8AbgAtAGIAYQB0AGMAaAAuAGMAagBzACIAOwAgAGkAZgAgACgALQBuAG8AdAAgACgAVABlAHMAdAAtAFAAYQB0AGgAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACQAaABvAG8AawApACkAIAB7ACAAZQB4AGkAdAAgADAAIAB9ADsAIABuAG8AZABlACAAJABoAG8AbwBrACAALQAtAGYAbAB1AHMAaAA7ACAAaQBmACAAKAAkAEwAQQBTAFQARQBYAEkAVABDAE8ARABFACAALQBuAGUAIAAwACkAIAB7ACAAVwByAGkAdABlAC0AVwBhAHIAbgBpAG4AZwAgACIAWwBjAG8AbgB0AGUAeAB0AC0AdAByAGEAbgBzAGwAYQB0AGkAbwBuAF0AIABTAHQAbwBwACAAZgBsAHUAcwBoACAAZABlAGYAZQByAHIAZQBkACAAZgBvAHIAIAByAGUAdAByAHkAIgAgAH0AOwAgAGUAeABpAHQAIAAwAA=="
+          },
+          {
+            "type": "command",
+            "command": "root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; hook=\"$root/.agents/harness/session-contract-recovery.cjs\"; [ ! -f \"$hook\" ] || node \"$hook\" event Stop; exit 0",
+            "commandWindows": "powershell -NoProfile -NonInteractive -EncodedCommand JAByAG8AbwB0AD0AZwBpAHQAIAByAGUAdgAtAHAAYQByAHMAZQAgAC0ALQBzAGgAbwB3AC0AdABvAHAAbABlAHYAZQBsACAAMgA+ACQAbgB1AGwAbAA7ACAAaQBmACAAKAAkAEwAQQBTAFQARQBYAEkAVABDAE8ARABFACAALQBuAGUAIAAwACAALQBvAHIAIAAtAG4AbwB0ACAAJAByAG8AbwB0ACkAIAB7ACAAZQB4AGkAdAAgADAAIAB9ADsAIAAkAGgAbwBvAGsAPQBKAG8AaQBuAC0AUABhAHQAaAAgACQAcgBvAG8AdAAuAFQAcgBpAG0AKAApACAAIgAuAGEAZwBlAG4AdABzAC8AaABhAHIAbgBlAHMAcwAvAHMAZQBzAHMAaQBvAG4ALQBjAG8AbgB0AHIAYQBjAHQALQByAGUAYwBvAHYAZQByAHkALgBjAGoAcwAiADsAIABpAGYAIAAoAFQAZQBzAHQALQBQAGEAdABoACAALQBMAGkAdABlAHIAYQBsAFAAYQB0AGgAIAAkAGgAbwBvAGsAKQAgAHsAIABuAG8AZABlACAAJABoAG8AbwBrACAAZQB2AGUAbgB0ACAAUwB0AG8AcAAgAH0AOwAgAGUAeABpAHQAIAAwAA=="
           }
         ]
       }

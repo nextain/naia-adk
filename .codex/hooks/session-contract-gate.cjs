@@ -7,6 +7,7 @@
 const fs = require("fs");
 const path = require("path");
 const sessionContract = require("../../.agents/hooks/core/session-contract.js");
+const sessionRecovery = require("../../.agents/harness/session-contract-recovery.cjs");
 
 const HARNESS_OFF = new Set(["off", "0", "false", "no"]);
 const HARNESS_ENV_VARS = ["AI_HARNESS", "CLAUDE_HARNESS", "CODEX_HARNESS"];
@@ -221,6 +222,12 @@ function readStdin() {
 	try { return fs.readFileSync(0, "utf8"); } catch { return ""; }
 }
 
+function reclaimCommandAllowed(command, sessionId) {
+	const source = String(command || "").trim();
+	const match = source.match(/^node\s+["']?(?:\.\/)?\.agents[\\/]harness[\\/]session-contract-recovery\.cjs["']?\s+reclaim\s+--contract\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})\s+--session\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})$/);
+	return Boolean(match && match[2] === sessionId);
+}
+
 function decide(data = {}, env = process.env) {
 	const cwd = data.cwd || process.cwd();
 	const sessionId = data.session_id || null;
@@ -236,6 +243,7 @@ function decide(data = {}, env = process.env) {
 			reason: "⛔ [HARNESS] 공유 진입점은 전용 validator를 거쳐야 합니다. 후보 파일을 만든 뒤 `node .claude/hooks/sync-entry-points.js --apply <candidate>`를 사용하세요.",
 		};
 	}
+	if (normalizedToolName(toolName) === "shell" && reclaimCommandAllowed(toolInput.command, sessionId)) return null;
 
 	const resolution = sessionContract.resolveSessionContract({ cwd, sessionId });
 	if (bootstrapWriteAllowed(toolName, toolInput, cwd, sessionId)) return null;
@@ -273,11 +281,13 @@ function decide(data = {}, env = process.env) {
 }
 
 function main() {
+	const raw = readStdin();
 	let data = {};
-	try { data = JSON.parse(readStdin() || "{}"); } catch { /* fail-open */ }
+	try { data = JSON.parse(raw || "{}"); } catch { /* fail-open */ }
+	sessionRecovery.handleEvent("PreToolUse", raw, data.cwd || process.cwd());
 	const output = decide(data);
 	if (output) process.stdout.write(JSON.stringify(output));
 }
 
 if (require.main === module) main();
-module.exports = { bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, fileMutationTargets, main, normalizedToolName, patchTargets, readOnlyShell, stateTarget };
+module.exports = { bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, fileMutationTargets, main, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, stateTarget };
