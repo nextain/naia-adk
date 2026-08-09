@@ -29,35 +29,34 @@ assert.equal(environmentSelection.profile_id,"control");
 assert.equal(environmentSelection.activation_source,"environment_override");
 assert.equal(environmentSelection.binding_id,"sol");
 assert.equal(environmentSelection.reasoning_effort,"medium");
-const roleIdentities={
-  production:{session_id:"production-session",execution_id:"production-execution"},
-  analysis:{session_id:"analysis-session",execution_id:"analysis-execution"},
-  design:{session_id:"design-session",execution_id:"design-execution"},
-  review:{session_id:"review-session",execution_id:"review-execution"},
-};
+const validatorCommand="node test/exact-validator.mjs";
+const exactValidatorEvidence={exactValidatorCommand:validatorCommand,allowedShellCommands:[validatorCommand]};
 assert.deepEqual(
-  ["analysis","designer","adversarial_reviewer"].map(role=>selectDevelopmentBinding({role,roleIdentities,...(role==="adversarial_reviewer"?{producerBinding:"luna"}:{})})).map(selection=>[selection.binding_id,selection.reasoning_effort]),
+  ["analysis","designer","adversarial_reviewer"].map(role=>selectDevelopmentBinding({role,...(role==="adversarial_reviewer"?{producerBinding:"luna"}:{})})).map(selection=>[selection.binding_id,selection.reasoning_effort]),
   [["sol","medium"],["sol","medium"],["sol","medium"]],
 );
 assert.deepEqual(
-  ["bounded_worker","tester","mechanical_worker","translation"].map(role=>selectDevelopmentBinding({role,boundedScope:true,exactValidator:true,risk:"low"})).map(selection=>[selection.binding_id,selection.reasoning_effort]),
-  [["luna","medium"],["luna","medium"],["luna","medium"],["luna","low"]],
+  ["explorer","bounded_worker","tester","mechanical_worker","translation"].map(role=>selectDevelopmentBinding({role,boundedScope:true,...exactValidatorEvidence,risk:"low"})).map(selection=>[selection.binding_id,selection.reasoning_effort]),
+  [["luna","low"],["luna","medium"],["luna","medium"],["luna","medium"],["luna","low"]],
 );
-assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,exactValidator:true,risk:"medium",availableBindings:["sol","terra"]}),/Balanced requires luna for bounded_worker/);
-assert.equal(selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,exactValidator:true,risk:"medium",availableBindings:["sol","terra","luna"]}).binding_id,"luna");
-assert.equal(selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,exactValidator:false,risk:"medium"}).binding_id,"sol");
-const unboundedWorker=selectDevelopmentBinding({role:"bounded_worker",boundedScope:false,risk:"low"});
-assert.equal(unboundedWorker.binding_id,"sol");
-assert.equal(unboundedWorker.fallback_reason,"bounded engineering guard");
-assert.equal(unboundedWorker.total_cost_reduction_proven,false);
-assert.equal(selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,risk:"high"}).binding_id,"sol");
-assert.equal(selectDevelopmentBinding({role:"tester",boundedScope:true,risk:"medium"}).binding_id,"luna");
-assert.equal(selectDevelopmentBinding({role:"tester",boundedScope:false,risk:"low"}).binding_id,"sol");
-assert.equal(selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:true,exactValidator:true,risk:"low"}).binding_id,"luna");
-assert.equal(selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:true,exactValidator:true,risk:"low",availableBindings:["sol","terra","luna"]}).binding_id,"luna");
-assert.equal(selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:true,exactValidator:false,risk:"low"}).binding_id,"sol");
-assert.equal(selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:true,exactValidator:true,risk:"medium"}).binding_id,"sol");
-assert.equal(selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:false,exactValidator:false,risk:"high"}).binding_id,"sol");
+assert.deepEqual(catalog.balanced_role_policy.translation.allowed_reasoning_efforts,["low"]);
+assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,...exactValidatorEvidence,risk:"medium",availableBindings:["sol","terra"]}),/Balanced requires luna for bounded_worker/);
+assert.equal(selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,...exactValidatorEvidence,risk:"medium",availableBindings:["sol","terra","luna"]}).binding_id,"luna");
+assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,exactValidatorCommand:validatorCommand,allowedShellCommands:["node test/other.mjs"],risk:"medium"}),/exact allowlisted validator command/,"the exact validator command must appear verbatim in allowed_shell_commands");
+assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,exactValidator:true,risk:"medium"}),/exact allowlisted validator command/,"a legacy boolean must not qualify a Luna command role");
+assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:false,risk:"low"}),/requires bounded scope/);
+assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,risk:"high"}),/requires bounded scope/);
+assert.equal(selectDevelopmentBinding({role:"tester",boundedScope:true,...exactValidatorEvidence,risk:"medium"}).binding_id,"luna");
+assert.throws(()=>selectDevelopmentBinding({role:"tester",boundedScope:true,risk:"medium"}),/exact allowlisted validator command/);
+assert.throws(()=>selectDevelopmentBinding({role:"tester",boundedScope:false,risk:"low"}),/requires bounded scope/);
+assert.equal(selectDevelopmentBinding({role:"translation",boundedScope:true,...exactValidatorEvidence,risk:"low"}).binding_id,"luna");
+assert.throws(()=>selectDevelopmentBinding({role:"translation",boundedScope:true,risk:"low"}),/exact allowlisted validator command/);
+assert.throws(()=>selectDevelopmentBinding({role:"translation",boundedScope:false,...exactValidatorEvidence,risk:"low"}),/requires bounded scope/);
+assert.equal(selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:true,...exactValidatorEvidence,risk:"low"}).binding_id,"luna");
+assert.equal(selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:true,...exactValidatorEvidence,risk:"low",availableBindings:["sol","terra","luna"]}).binding_id,"luna");
+assert.throws(()=>selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:true,risk:"low"}),/bounded low-risk scope/);
+assert.throws(()=>selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:true,...exactValidatorEvidence,risk:"medium"}),/bounded low-risk scope/);
+assert.throws(()=>selectDevelopmentBinding({profileId:"economy",role:"mechanical_worker",boundedScope:false,risk:"high"}),/bounded low-risk scope/);
 assert.equal(selectDevelopmentBinding({profileId:"delegated",role:"orchestrator"}).binding_id,"sol");
 assert.equal(selectDevelopmentBinding({profileId:"delegated",role:"integrator"}).binding_id,"sol");
 assert.equal(selectDevelopmentBinding({profileId:"delegated",role:"bounded_worker",boundedScope:true,risk:"medium"}).binding_id,"sol");
@@ -85,23 +84,13 @@ if(previousCodexHome===undefined)delete process.env.CODEX_HOME;else process.env.
 fs.rmSync(trustHome,{recursive:true,force:true});
 assert.equal(selectDevelopmentBinding({profileId:"delegated",role:"bounded_worker",boundedScope:false,risk:"low"}).binding_id,"sol");
 assert.equal(selectDevelopmentBinding({profileId:"delegated",role:"bounded_worker",boundedScope:true,risk:"high"}).binding_id,"sol");
-assert.equal(selectDevelopmentBinding({role:"adversarial_reviewer",producerBinding:"terra",roleIdentities}).binding_id,"sol");
-assert.equal(selectDevelopmentBinding({role:"adversarial_reviewer",producerBinding:"sol",roleIdentities}).binding_id,"sol");
-const controlReview=selectDevelopmentBinding({profileId:"control",role:"adversarial_reviewer",producerBinding:"sol",roleIdentities});
+assert.equal(selectDevelopmentBinding({role:"adversarial_reviewer",producerBinding:"terra"}).binding_id,"sol");
+assert.equal(selectDevelopmentBinding({role:"adversarial_reviewer",producerBinding:"sol"}).binding_id,"sol");
+const controlReview=selectDevelopmentBinding({profileId:"control",role:"adversarial_reviewer",producerBinding:"sol"});
 assert.equal(controlReview.binding_id,"sol");
 assert.equal(controlReview.total_cost_reduction_proven,false);
-for(const role of ["analysis","designer","translation"]){
-  assert.equal(selectDevelopmentBinding({profileId:"control",role,...(role==="translation"?{}:{roleIdentities})}).binding_id,"sol");
-}
-assert.throws(()=>selectDevelopmentBinding({role:"adversarial_reviewer",producerBinding:"terra"}),/complete role-bound/);
-const duplicateSessionIdentities=structuredClone(roleIdentities);
-duplicateSessionIdentities.review.session_id=duplicateSessionIdentities.analysis.session_id;
-assert.throws(()=>selectDevelopmentBinding({role:"adversarial_reviewer",producerBinding:"terra",roleIdentities:duplicateSessionIdentities}),/pairwise-distinct/);
-const duplicateExecutionIdentities=structuredClone(roleIdentities);
-duplicateExecutionIdentities.design.execution_id=duplicateExecutionIdentities.review.execution_id;
-assert.throws(()=>selectDevelopmentBinding({role:"designer",roleIdentities:duplicateExecutionIdentities}),/pairwise-distinct/);
-for(const role of ["analysis","designer"]){
-  assert.throws(()=>selectDevelopmentBinding({role}),/complete role-bound/);
+for(const role of ["explorer","analysis","designer","translation"]){
+  assert.equal(selectDevelopmentBinding({profileId:"control",role}).binding_id,"sol");
 }
 const driftedRolePolicy=structuredClone(catalog);
 driftedRolePolicy.balanced_role_policy.secretary.binding="sol";
@@ -112,24 +101,27 @@ assert.throws(()=>selectDevelopmentBindingFromCatalog(driftedAssignments,{role:"
 const changedGuards=structuredClone(catalog);
 changedGuards.guards.bounded_worker.maximum_risk="low";
 changedGuards.guards.bounded_worker.fallback_binding="terra";
-assert.throws(()=>selectDevelopmentBindingFromCatalog(changedGuards,{role:"bounded_worker",boundedScope:true,exactValidator:true,risk:"medium",availableBindings:["sol","terra","luna"]}),/fallback must remain Sol/);
-changedGuards.guards.bounded_worker.fallback_binding="sol";
+assert.throws(()=>selectDevelopmentBindingFromCatalog(changedGuards,{role:"bounded_worker",boundedScope:true,...exactValidatorEvidence,risk:"medium",availableBindings:["sol","terra","luna"]}),/fail closed without a model fallback/);
+changedGuards.guards.bounded_worker.fallback_binding=null;
 changedGuards.guards.review.prefer_different_binding_from_producer=false;
-assert.equal(selectDevelopmentBindingFromCatalog(changedGuards,{role:"adversarial_reviewer",producerBinding:"terra",roleIdentities}).binding_id,"sol");
+assert.throws(()=>selectDevelopmentBindingFromCatalog(changedGuards,{role:"adversarial_reviewer",producerBinding:"terra"}),/independent review guard invalid/);
+const callerIdentityGuard=structuredClone(catalog);
+callerIdentityGuard.guards.sol_specialist.fresh_session_required=false;
+assert.throws(()=>selectDevelopmentBindingFromCatalog(callerIdentityGuard,{role:"analysis"}),/independent Sol specialist guard invalid/);
 assert.throws(()=>resolveDevelopmentProfile("future-model-name"),/unknown development composition profile/);
-assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,exactValidator:true,risk:"medium",availableBindings:[]}),/Balanced requires luna for bounded_worker/);
-assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:false,risk:"low",availableBindings:["terra"]}),/Balanced requires sol for bounded_worker/);
-assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,risk:"high",availableBindings:["terra"]}),/Balanced requires sol for bounded_worker/);
+assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,...exactValidatorEvidence,risk:"medium",availableBindings:[]}),/Balanced requires luna for bounded_worker/);
+assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:false,risk:"low",availableBindings:["terra"]}),/requires bounded scope/);
+assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,risk:"high",availableBindings:["terra"]}),/requires bounded scope/);
 const previousAvailability=process.env.CODEX_AVAILABLE_BINDINGS;
 process.env.CODEX_AVAILABLE_BINDINGS="";
-assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,exactValidator:true,risk:"medium"}),/Balanced requires luna for bounded_worker/);
+assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,...exactValidatorEvidence,risk:"medium"}),/Balanced requires luna for bounded_worker/);
 if(previousAvailability===undefined)delete process.env.CODEX_AVAILABLE_BINDINGS;else process.env.CODEX_AVAILABLE_BINDINGS=previousAvailability;
 const selectorPath=path.join(packageRoot,"src","development-profiles.mjs");
-const selectorArgs=[selectorPath,"select","--role","bounded_worker","--risk","medium","--bounded-scope","--exact-validator"];
+const selectorArgs=[selectorPath,"select","--role","bounded_worker","--risk","medium","--bounded-scope","--validator-command",validatorCommand,"--allowed-shell-command",validatorCommand];
 const emptyEnvironment=cp.spawnSync(process.execPath,selectorArgs,{encoding:"utf8",env:{...process.env,CODEX_AVAILABLE_BINDINGS:"[]"}});
 assert.equal(emptyEnvironment.status,1);
 assert.match(emptyEnvironment.stderr,/Balanced requires luna for bounded_worker/);
 const emptyFlag=cp.spawnSync(process.execPath,[...selectorArgs,"--available-bindings"],{encoding:"utf8",env:process.env});
 assert.equal(emptyFlag.status,1);
 assert.match(emptyFlag.stderr,/Balanced requires luna for bounded_worker/);
-console.log("development profiles: PASS (4 role profiles, single-solution default, optional delegated worker, guarded fallback)");
+console.log("development profiles: PASS (4 role profiles, Balanced fail-closed routing, optional delegated worker, explicit profile rollback)");

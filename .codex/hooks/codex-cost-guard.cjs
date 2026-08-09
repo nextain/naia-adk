@@ -7,20 +7,27 @@ function block(reason) {
 	return { decision: "block", reason: `[CODEX COST GUARD] ${reason}` };
 }
 
-function evaluate({ sessionId = null, cwd = process.cwd(), contractLookup = null, sessionCollection = null, sessionChainCollection = null } = {}) {
+function canonicalJson(value) {
+	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+	if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+	return JSON.stringify(value);
+}
+
+function evaluate({ sessionId = null, cwd = process.cwd(), env = process.env, contractLookup = null, sessionCollection = null, sessionChainCollection = null } = {}) {
 	const lookup = contractLookup || ((value) => contracts.resolveSessionContract(value));
+	const projectRoot = contracts.resolveHookProjectRoot(cwd, env) || cwd;
 	let boundSessionId = sessionId;
-	let resolved = lookup({ cwd, sessionId });
+	let resolved = lookup({ cwd: projectRoot, sessionId });
 	let policy = resolved?.status === contracts.STATES.BOUND ? resolved.contract?.subagent_policy : null;
-	if (resolved?.status === contracts.STATES.BOUND && !policy) return null;
 	if (!policy) {
 		const chain = (sessionChainCollection || ((value) => usage.collectSessionChain(value)))({ sessionId });
+		if (chain.ambiguous) return block("session lineage is ambiguous");
 		const current = chain.sessions?.find((item) => item.sessionId === sessionId);
-		if (!current) return chain.ambiguous ? block("session lineage is ambiguous") : null;
+		if (!current) return block("session lineage is missing or unindexed");
 		if (!current.parentId && !current.isSubagent) return null;
 		boundSessionId = usage.lineageRootId(chain, sessionId);
 		if (!boundSessionId) return block("subagent lineage root is missing or ambiguous");
-		resolved = lookup({ cwd, sessionId: boundSessionId });
+		resolved = lookup({ cwd: projectRoot, sessionId: boundSessionId });
 		if (resolved?.status !== contracts.STATES.BOUND) return block("subagent lineage root contract is not bound");
 		policy = resolved.contract?.subagent_policy;
 		if (!policy) return block("subagent lineage root policy is missing");
@@ -33,10 +40,10 @@ function evaluate({ sessionId = null, cwd = process.cwd(), contractLookup = null
 	let lineage = usage.findLineage(collected, boundSessionId, policy);
 	if (boundSessionId === sessionId && lineage?.rootId && lineage.rootId !== sessionId) {
 		boundSessionId = lineage.rootId;
-		resolved = lookup({ cwd, sessionId: boundSessionId });
+		resolved = lookup({ cwd: projectRoot, sessionId: boundSessionId });
 		if (resolved?.status !== contracts.STATES.BOUND) return block("subagent lineage root contract is not bound");
 		const rootPolicy = resolved.contract?.subagent_policy;
-		if (!rootPolicy || contracts.validateSubagentPolicy(rootPolicy) || rootPolicy.budget_started_at !== policy.budget_started_at) return block("subagent lineage root policy is missing or mismatched");
+		if (!rootPolicy || contracts.validateSubagentPolicy(rootPolicy) || canonicalJson(rootPolicy) !== canonicalJson(policy)) return block("subagent lineage root policy is missing or mismatched");
 		policy = rootPolicy;
 		lineage = usage.findLineage(collected, boundSessionId, policy);
 	}
@@ -59,6 +66,7 @@ async function main() {
 	const result = evaluate({
 		sessionId: input.session_id,
 		cwd: input.cwd || process.cwd(),
+		env: process.env,
 	});
 	if (result) process.stdout.write(JSON.stringify(result));
 }

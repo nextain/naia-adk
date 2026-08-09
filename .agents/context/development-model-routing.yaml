@@ -1,7 +1,7 @@
-version: 4
+version: 5
 scope: naia-adk portable collaboration process
 status: active
-updated_at: 2026-08-08
+updated_at: 2026-08-09
 
 portable_contract:
   vendor_neutral: true
@@ -32,6 +32,7 @@ portable_contract:
     L3_replacement: an owner request or owner-suspected L3 drift mandates explicit handoff to a fresh session; L3 self-suspicion mandates disclosure and a handoff recommendation pending human approval; only the human owner requires or approves replacement
     successor_binding: the fresh L3 must establish a new explicit local task contract and session binding before mutation
     context_transfer: requirement, contract, decision, owned-path, acceptance, test, review, risk, and next-action projections only; full conversation and private reasoning are forbidden
+    L2_admission_semantics: L2 creates one digest-bound worker task contract; the bound root session is the sole runtime spawn authority and admits that worker under the existing lineage budget, so logical L2 delegation never creates a recursive model-runtime chain
   independence:
     self_check_is_review: false
     prefer_distinct_model_or_provider: true
@@ -172,19 +173,35 @@ quick_start_profiles:
   source: packages/benchmark-contract/baselines/development-composition-profiles.json
   default: balanced
   fallback: control
+  fallback_semantics: control is an explicit owner-selected reversible profile, never an automatic per-task model substitution
   structure_rule: profiles define stable roles and guards; replaceable model bindings are evaluated separately so a new model does not require redesigning the profiles
   profiles:
-    control: all roles use the Sol binding in separate executions; serves as the quality/cost reference and high-risk fallback
+    control: all roles use the Sol binding in separate executions; serves as the manually selected quality/cost reference and reversible rollback profile
     balanced: Luna Max is the L3 Secretary and L2 Issue Leader default; bounded implementation, testing, and translation use Luna; separate-session analysis, design challenge, and independent review use Sol Medium
     economy: balanced safety boundaries plus later evidence-gated use of lower-reasoning Luna variants for mechanical work
   selection_guards:
-    - unbounded or high-risk work falls back to Sol
-    - Luna implementation requires a narrow task contract and an exact validator; unbounded work returns to L2 for decomposition, while high-risk work escalates to Sol
+    - root sessions export the installed harness's canonical absolute project root as ADK_PROJECT_ROOT; every delegated execution inherits that absolute identity, while task project_root and worktree remain the governed root and hooks resolve them only through ADK_PROJECT_ROOT; native admission does not claim an enforced scratch cwd
+    - the delegated task is an exact bounded JSON projection of requirement, contract digest, decision, owned paths, acceptance criteria, validator command, risk, and next action; fork_context is explicitly false, fork_turns is none only when the runtime API exposes that field, transcript inheritance is disabled, and unrelated root or project context is forbidden
+    - Luna implementation requires a narrow digest-bound task contract and an exact validator command present verbatim in that parent contract's allowed_shell_commands; unbounded or high-risk work fails closed and returns to L2 for decomposition or an explicit owner decision
     - Luna mechanical work additionally requires low risk
-    - every selected binding must be declared available by the runtime; unavailable Luna or Sol fails closed unless an explicit profile declares a tested fallback
-    - cross-platform environment configuration uses CODEX_AVAILABLE_BINDINGS=none or [] to declare an empty set because Windows does not preserve an empty environment value for child processes
+    - every selected binding must be declared available by the runtime; unavailable Luna or Sol fails closed, and selecting control requires an explicit profile choice rather than silent fallback
+    - gateway is the secretary alias and issue_manager is the issue_leader alias; both therefore require the Luna Max binding
+    - CODEX_AVAILABLE_BINDINGS must be explicitly present and valid; a missing, empty, none, or [] value declares no available binding and fails closed
     - independent review requires distinct session and execution identities and prefers a binding different from the producer
-    - roleIdentities supplied to the pure selector are planning-time separation evidence, not authenticated execution receipts; completion claims require the signed isolated review boundary
+    - the pure selector chooses a binding but never accepts caller-supplied identity strings as proof; fresh-session enforcement belongs to the governed spawn hook, while signed isolated review receipt completion evidence remains deferred until runtime issuance and verification are attested
+    - the persistent watchdog is a native-Linux enforcement boundary; unsupported hosts fail closed for that capability and must provide an equivalent native adapter before claiming parity
+  orchestrator_execution:
+    default: delegate_required
+    root_role: L3 Secretary and L2 Issue Leader perform triage, scope, SoT and contract management, bounded delegation, integration, acceptance, and handoff; implementation, testing, and translation are worker roles
+    intent_preservation: every session start, resume, and post-compaction injection restores the bound parent contract goal, scope, acceptance criteria, non-goals, and intent references; current_task is always labeled as a child execution unit
+    no_implicit_shrink: neither a child task nor worker-local progress may replace, delete, supersede, narrow, or complete parent obligations; only an explicit contract amendment with owner authority may change parent intent
+    responsibility_boundary: L1 reports task evidence only, L2 owns issue-wide remaining obligations, and L3 preserves the user request and portfolio-wide SoT across issue handoffs
+    dirty_worktree_rule: an existing dirty worktree requires an isolated worker worktree and is never a reason for the orchestrator to implement alone
+    technical_failure_fallback: the bound orchestrator may activate a same-task direct fallback only after validating the contract-authorized failure kind and the minimum number of timestamped failure receipts
+    owner_override: an explicit owner instruction may activate the same bounded fallback only when the contract preauthorizes owner_direct_override and cites that instruction in source_refs
+    bounded_evidence: progress records the task digest, bound-orchestrator confirmation, exact allowed paths, exact validators, activation time, and either technical receipts or owner authorization; progress never grants authority beyond the contract
+    preserved_guards: context isolation, token and concurrency budgets, contract ownership, exact validation, and independent review remain mandatory during direct fallback
+    lifecycle: delegation success, task completion, or explicit handoff closes the fallback; a closed or malformed record fails closed
   claim_boundary: phase 1 makes balanced the default for Codex-bound development sessions but does not claim proven total-system cost reduction or complete issue orchestration
   new_model_rule: run only the affected capability experiments, update the binding qualification and evidence expiry, then compare the unchanged profiles
 
@@ -207,7 +224,7 @@ benchmark_candidate_registry:
     common_text_profile: no tools; identical public input and response schema for every eligible candidate
     provider_tool_profile: separate compatibility evidence only; never aggregate with the common text profile
   sealed_execution:
-    candidate_view: empty scratch cwd plus public-input only
+    candidate_view: public-input only; native profile admission does not claim an enforced scratch cwd
     hidden_assets: oracle, scorer, manifest, and expected outputs stay outside the candidate process permission boundary and installed package
     access_order: bind candidate output digest before the scorer process can access hidden assets
     isolation: new provider session/thread per attempt; no output sharing; cache mode recorded; holdout input never promoted from development fixtures

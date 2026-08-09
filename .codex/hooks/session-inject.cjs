@@ -2,6 +2,7 @@
 
 const path = require("path");
 const core = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "harness-core.js"));
+const contracts = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "session-contract.js"));
 
 async function readInput() {
   let raw = "";
@@ -16,8 +17,9 @@ async function readInput() {
 
 async function main() {
   const input = await readInput();
+  const cwd = contracts.resolveHookProjectRoot(input.cwd || process.cwd(), process.env) || input.cwd || process.cwd();
   const result = core.buildSessionInject({
-    cwd: input.cwd || process.cwd(),
+    cwd,
     sessionId: input.session_id || null,
     hooksDir: __dirname,
     env: process.env,
