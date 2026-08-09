@@ -46,7 +46,14 @@ test("both client registries reject every missing event plus wrong adapters, arg
 		const mutations = requiredEvents.flatMap((event) => [
 			{ name: `${event}:missing`, mutate: (registry) => { delete registry.hooks[event]; } },
 			{ name: `${event}:wrong-adapter`, mutate: (registry) => { const { hook } = locate(registry, event); replaceEverywhere(hook, adapterName, `wrong-${adapterName}`); } },
-			{ name: `${event}:wrong-event-argument`, mutate: (registry) => { const { hook } = locate(registry, event); const replacement = event === "Stop" ? "PostCompact" : "Stop"; replaceEverywhere(hook, new RegExp(`${event}$`), replacement); } },
+			{ name: `${event}:wrong-event-argument`, mutate: (registry) => {
+				const { hook } = locate(registry, event);
+				const replacement = event === "Stop" ? "PostCompact" : "Stop";
+				if (client === "codex" && event === "Stop") {
+					hook.command = hook.command.replace('node "$hook" Stop', 'node "$hook" PostCompact');
+					hook.commandWindows = hook.commandWindows.replace("node $hook Stop", "node $hook PostCompact");
+				} else replaceEverywhere(hook, new RegExp(`${event}$`), replacement);
+			} },
 			{ name: `${event}:wrong-root`, mutate: (registry) => { const { hook } = locate(registry, event); if (client === "claude") hook.command = `node ${adapterPath} ${event}`; else { hook.command = `node ${adapterPath} ${event}`; hook.commandWindows = `node ${adapterPath} ${event}`; } } },
 			{ name: `${event}:wrong-matcher`, mutate: (registry) => { const { entry } = locate(registry, event); entry.matcher = event === "PreToolUse" ? "Bash" : "Bash|Edit"; } },
 			{ name: `${event}:duplicate`, mutate: (registry) => { const { entry, hook } = locate(registry, event); entry.hooks.push({ ...hook }); } },
