@@ -182,5 +182,17 @@ function main() {
   return 0;
 }
 
-if (require.main === module) process.exitCode = main();
+if (require.main === module) {
+  try {
+    const status = main();
+    if (status !== 0) {
+      console.error(`[context-translation] deferred after exit ${status}; queued context remains available for retry`);
+    }
+  } catch (error) {
+    console.error(`[context-translation] deferred after hook error; queued context remains available for retry: ${error.message}`);
+  }
+  // Translation is a derived, retryable side effect. It must never terminate
+  // the host session, including when invoked by the Stop lifecycle event.
+  process.exitCode = 0;
+}
 module.exports = { claimBatch, eventPaths, findRoot, finishBatch, flush, queueChangedFile, readQueue, withFlushLock, withQueueLock, writeQueue };

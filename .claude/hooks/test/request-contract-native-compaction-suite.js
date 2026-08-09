@@ -281,7 +281,11 @@ test("both client registries cover all governed lifecycle events", () => {
 			assert(registry.hooks[event]);
 			const hooks = registry.hooks[event].flatMap((entry) => entry.hooks).filter((hook) => hook.command.includes("request-contract") || (hook.args || []).some((arg) => arg.includes("request-contract")));
 			assert.equal(hooks.length, 1);
-			const registeredEvent = Array.isArray(hooks[0].args) ? hooks[0].args.at(-1) : hooks[0].command.split(/\s+/).at(-1);
+			const registeredEvent = Array.isArray(hooks[0].args)
+				? hooks[0].args.at(-1)
+				: client === "codex" && event === "Stop" && hooks[0].command.includes('node "$hook" Stop')
+					? "Stop"
+					: hooks[0].command.split(/\s+/).at(-1);
 			assert.equal(registeredEvent, event);
 			if (client === "claude") assert(hooks[0].command.includes("$CLAUDE_PROJECT_DIR/"));
 			else assert(hooks[0].command.includes("git rev-parse --show-toplevel"));

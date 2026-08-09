@@ -42,6 +42,15 @@ try {
   assert.deepEqual(batch.readQueue(root), ['also-new', 'retry-me']);
   cp.spawnSync = originalSpawnSync;
 
+  batch.writeQueue(root, ['cli-retry']);
+  const cli = cp.spawnSync(process.execPath, [path.resolve(__dirname, '..', 'context-translation-batch.cjs'), '--flush'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  assert.equal(cli.status, 0, 'a retryable translation failure must not fail the host Stop lifecycle');
+  assert.match(cli.stderr, /context-translation.*deferred/);
+  assert.deepEqual(batch.readQueue(root), ['cli-retry']);
+
   console.log('context translation batch tests passed');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

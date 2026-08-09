@@ -2,9 +2,11 @@
 /** Claude Code stdin/stdout adapter for the shared request-contract core. */
 
 const path = require("path");
-const adapter = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "request-contract-adapter.js"));
+
+let adapter = null;
 
 async function main() {
+	adapter = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "request-contract-adapter.js"));
 	let raw = "";
 	process.stdin.setEncoding("utf8");
 	for await (const chunk of process.stdin) raw += chunk;
@@ -20,4 +22,5 @@ async function main() {
 
 main().catch(() => {
 	process.stdout.write(JSON.stringify({ decision: "block", reason: "[request-contract:adapter_failure] Claude adapter failed closed." }));
+	process.exitCode = 0;
 });

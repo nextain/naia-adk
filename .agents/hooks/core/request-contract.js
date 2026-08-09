@@ -3854,7 +3854,20 @@ function clientRegistrySupports(cwd, client) {
 			const windowsRootResolution = '$root=$env:ADK_PROJECT_ROOT; if ($root) { if (-not [IO.Path]::IsPathRooted($root)) { exit 1 }; try { $root=(Resolve-Path -LiteralPath $root -ErrorAction Stop).Path } catch { exit 1 } } else { $root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 1 }; $root=$root.Trim() }; if (-not (Test-Path -LiteralPath (Join-Path $root ".codex/hooks.json"))) { exit 1 };';
 			const expected = `${rootResolution} registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/${adapterPath}\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" ${eventName}`;
 			const expectedWindows = `powershell -NoProfile -Command '${windowsRootResolution} $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}'`;
-			if (hook.command !== expected || hook.commandWindows !== expectedWindows) return false;
+			if (eventName === "Stop") {
+				const resilientPosix = [
+					"request-contract:stop_hook_unavailable",
+					`hook="$root/${adapterPath}"`,
+					'node "$hook" Stop || emit; exit 0',
+				].every((required) => String(hook.command).includes(required));
+				const resilientWindows = [
+					"request-contract:stop_hook_unavailable",
+					`Join-Path $root.Trim() "${adapterPath}"`,
+					"node $hook Stop",
+					"exit 0",
+				].every((required) => String(hook.commandWindows).includes(required));
+				if (!resilientPosix || !resilientWindows) return false;
+			} else if (hook.command !== expected || hook.commandWindows !== expectedWindows) return false;
 		}
 		if (eventName === "PreToolUse") return entry.matcher === preToolMatcher;
 		return entry.matcher == null || entry.matcher === "";

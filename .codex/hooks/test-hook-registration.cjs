@@ -25,12 +25,25 @@ const costHook = preToolHooks.find((hook) => hook.statusMessage === "Checking Co
 const enforcingHook = preToolHooks.find((hook) => hook.statusMessage === "Enforcing Codex descendant cost ceilings");
 const postToolHooks = registry.hooks.PostToolUse.flatMap((entry) => entry.hooks || []);
 const resultHook = postToolHooks.find((hook) => hook.statusMessage === "Checking subagent result contract");
+const stopHooks = registry.hooks.Stop.flatMap((entry) => entry.hooks || []);
+const stopContractHook = stopHooks.find((hook) => /request-contract\.cjs/.test(hook.command));
+const stopTranslationHook = stopHooks.find((hook) => /context-translation-batch\.cjs/.test(hook.command));
 const allHooks = Object.values(registry.hooks).flatMap((entries) => entries.flatMap((entry) => entry.hooks || []));
 assert.ok(spawnHook);
 assert.ok(sessionContractHook);
 assert.ok(costHook);
 assert.ok(enforcingHook);
 assert.ok(resultHook);
+assert.ok(stopContractHook);
+assert.ok(stopTranslationHook);
+assert.equal(stopHooks.length, 2, "Stop must retain the contract gate and retryable context translation flush");
+assert.match(stopContractHook.command, /stop_hook_unavailable/);
+assert.match(stopContractHook.command, /exit 0/);
+assert.match(stopContractHook.commandWindows, /stop_hook_unavailable/);
+assert.match(stopContractHook.commandWindows, /exit 0/);
+assert.match(stopTranslationHook.command, /--flush/);
+assert.match(stopTranslationHook.command, /exit 0/);
+assert.match(stopTranslationHook.commandWindows, /exit 0/);
 assert.ok(contextBudgetEntry,"retained-context budget guard must remain registered");
 assert.equal(contextBudgetEntry.matcher,undefined,"context budget applies to every pre-tool event");
 assert.equal(sessionContractEntry.matcher,"Bash|shell_command|exec_command|(?:.*[.:/]exec_command)|(?:.*[.:/]shell_command)|Edit|Write|NotebookEdit|apply_patch");
@@ -80,6 +93,63 @@ try {
   assert.notEqual(missing.status, 0, "scratch cwd without an inherited root must fail closed");
   const relative = spawnSync("sh", ["-c", spawnHook.command], { cwd: scratch, env: { ...process.env, ADK_PROJECT_ROOT: "." }, input: deniedInput, encoding: "utf8" });
   assert.notEqual(relative.status, 0, "a relative inherited root must fail closed");
+
+  const stopInput = JSON.stringify({
+    hook_event_name: "Stop",
+    session_id: "deterministic-stop-resilience",
+    cwd: scratch,
+  });
+  const stopWithoutRoot = spawnSync("sh", ["-c", stopContractHook.command], {
+    cwd: scratch,
+    env: noInheritedEnvironment,
+    input: stopInput,
+    encoding: "utf8",
+  });
+  assert.equal(stopWithoutRoot.status, 0, stopWithoutRoot.stderr);
+  assert.equal(JSON.parse(stopWithoutRoot.stdout).decision, "block", "an unavailable Stop contract gate must block structurally without failing the hook process");
+
+  const stopWithRelativeRoot = spawnSync("sh", ["-c", stopContractHook.command], {
+    cwd: scratch,
+    env: { ...process.env, ADK_PROJECT_ROOT: "." },
+    input: stopInput,
+    encoding: "utf8",
+  });
+  assert.equal(stopWithRelativeRoot.status, 0, stopWithRelativeRoot.stderr);
+  assert.equal(JSON.parse(stopWithRelativeRoot.stdout).decision, "block");
+
+  const incompleteRoot = path.join(scratch, "incomplete-installation");
+  fs.mkdirSync(path.join(incompleteRoot, ".codex"), { recursive: true });
+  fs.writeFileSync(path.join(incompleteRoot, ".codex", "hooks.json"), "{}\n");
+  const stopWithoutAdapter = spawnSync("sh", ["-c", stopContractHook.command], {
+    cwd: scratch,
+    env: { ...process.env, ADK_PROJECT_ROOT: incompleteRoot },
+    input: stopInput,
+    encoding: "utf8",
+  });
+  assert.equal(stopWithoutAdapter.status, 0, stopWithoutAdapter.stderr);
+  assert.equal(JSON.parse(stopWithoutAdapter.stdout).decision, "block");
+
+  const translationWithoutRoot = spawnSync("sh", ["-c", stopTranslationHook.command], {
+    cwd: scratch,
+    env: noInheritedEnvironment,
+    input: stopInput,
+    encoding: "utf8",
+  });
+  assert.equal(translationWithoutRoot.status, 0, translationWithoutRoot.stderr);
+
+  const isolatedCodexHook = path.join(scratch, "isolated-codex", ".codex", "hooks", "request-contract.cjs");
+  fs.mkdirSync(path.dirname(isolatedCodexHook), { recursive: true });
+  fs.copyFileSync(path.join(root, ".codex", "hooks", "request-contract.cjs"), isolatedCodexHook);
+  const missingCodexCore = spawnSync(process.execPath, [isolatedCodexHook, "Stop"], { input: stopInput, encoding: "utf8" });
+  assert.equal(missingCodexCore.status, 0, missingCodexCore.stderr);
+  assert.equal(JSON.parse(missingCodexCore.stdout).decision, "block", "Codex adapter load failures must remain machine-readable");
+
+  const isolatedClaudeHook = path.join(scratch, "isolated-claude", ".claude", "hooks", "request-contract.js");
+  fs.mkdirSync(path.dirname(isolatedClaudeHook), { recursive: true });
+  fs.copyFileSync(path.join(root, ".claude", "hooks", "request-contract.js"), isolatedClaudeHook);
+  const missingClaudeCore = spawnSync(process.execPath, [isolatedClaudeHook, "Stop"], { input: stopInput, encoding: "utf8" });
+  assert.equal(missingClaudeCore.status, 0, missingClaudeCore.stderr);
+  assert.equal(JSON.parse(missingClaudeCore.stdout).decision, "block", "Claude adapter load failures must remain machine-readable");
 } finally {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
