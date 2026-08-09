@@ -83,6 +83,10 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/request-contract.js\" SessionStart"
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-contract-recovery.js\" SessionStart"
           }
         ]
       }
@@ -101,6 +105,10 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/beh-tick.js\""
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-contract-recovery.js\" UserPromptSubmit"
           }
         ]
       }
@@ -182,6 +190,10 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/context-translation-batch.cjs\" --flush"
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-contract-recovery.js\" Stop"
           }
         ]
       }

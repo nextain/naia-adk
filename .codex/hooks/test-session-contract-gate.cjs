@@ -142,6 +142,16 @@ try {
 
 	for (const client of ["claude", "codex"]) {
 		assert.equal(runGate(fixture, "Bash", { command: "git status --short" }), null, `${client} read-only`);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "node .agents/harness/session-contract-recovery.cjs reclaim --contract orphan-job --session SESSION-1" }),
+			null,
+			`${client} exact owner-approved reclaim helper is gate-reachable`,
+		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "node .agents/harness/session-contract-recovery.cjs reclaim --contract orphan-job --session OTHER" })?.decision,
+			"block",
+			`${client} reclaim cannot target another session`,
+		);
 		assert.match(
 			runGate(fixture, "Bash", { command: "git status --short", workdir: nested })?.reason,
 			/workdir/,
@@ -171,6 +181,21 @@ try {
 			runGate(fixture, "Bash", { command: "Get-Content -LiteralPath 'D:\\alpha-adk\\.agents\\session-contracts\\.session-map.json' & Set-Content local.txt changed", workdir: nested })?.reason,
 			/workdir/,
 			`${client} appended PowerShell mutation cannot use the absolute-read exception`,
+		);
+		assert.equal(
+			runGate(os.tmpdir(), "Bash", { command: `rm -rf ${path.join(fixture, "AGENTS.md")}` }, {}, os.tmpdir())?.decision,
+			"block",
+			`${client} mutation with an unresolvable cwd fails closed even when its target is inside a real project`,
+		);
+		assert.equal(
+			runGate(os.tmpdir(), "Bash", { command: "git status --short" }, {}, os.tmpdir()),
+			null,
+			`${client} genuinely read-only shell remains available when cwd cannot be resolved to a project root`,
+		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "rm -rf C:\\Windows\\System32\\whatever" })?.decision,
+			"block",
+			`${client} unbound mutation targeting outside the resolved project stays blocked`,
 		);
 		assert.equal(runGate(fixture, "apply_patch", { command: "product mutation" })?.decision, "block", `${client} legacy shell blocked`);
 		assert.equal(

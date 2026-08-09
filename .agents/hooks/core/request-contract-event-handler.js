@@ -37,6 +37,15 @@ function clientVersionSupported(actual, range) {
 	return true;
 }
 
+const WINDOWS_ENCODED_PREFIX = "powershell -NoProfile -NonInteractive -EncodedCommand ";
+const WINDOWS_QUIET_PREFIX = "$ProgressPreference='SilentlyContinue'; ";
+
+function decodeWindowsHook(command) {
+	if (typeof command !== "string" || !command.startsWith(WINDOWS_ENCODED_PREFIX)) return null;
+	try { return Buffer.from(command.slice(WINDOWS_ENCODED_PREFIX.length), "base64").toString("utf16le"); }
+	catch { return null; }
+}
+
 function clientRegistrySupports(cwd, client) {
 	const config = loadConfig(cwd);
 	const file = client === "claude" ? path.join(cwd, ".claude", "settings.json") : client === "codex" ? path.join(cwd, ".codex", "hooks.json") : null;
@@ -51,7 +60,7 @@ function clientRegistrySupports(cwd, client) {
 	for (const [registeredEvent, entries] of Object.entries(registry.hooks)) {
 		if (!Array.isArray(entries)) continue;
 		for (const entry of entries) for (const hook of Array.isArray(entry.hooks) ? entry.hooks : []) {
-			const registrationText = [hook.command, hook.commandWindows, ...(Array.isArray(hook.args) ? hook.args : [])]
+			const registrationText = [hook.command, hook.commandWindows, decodeWindowsHook(hook.commandWindows), ...(Array.isArray(hook.args) ? hook.args : [])]
 				.filter((value) => typeof value === "string");
 			if (!registrationText.some((value) => value.includes(adapterPath))) continue;
 			seen.push({ registeredEvent, entry, hook });
@@ -70,7 +79,8 @@ function clientRegistrySupports(cwd, client) {
 			const rootResolution = 'root=${ADK_PROJECT_ROOT:-}; if [ -n "$root" ]; then case "$root" in /*) ;; *) exit 1;; esac; root=$(CDPATH= cd -- "$root" 2>/dev/null && pwd -P) || exit 1; else root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1; fi; [ -f "$root/.codex/hooks.json" ] || exit 1;';
 			const windowsRootResolution = '$root=$env:ADK_PROJECT_ROOT; if ($root) { if (-not [IO.Path]::IsPathRooted($root)) { exit 1 }; try { $root=(Resolve-Path -LiteralPath $root -ErrorAction Stop).Path } catch { exit 1 } } else { $root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 1 }; $root=$root.Trim() }; if (-not (Test-Path -LiteralPath (Join-Path $root ".codex/hooks.json"))) { exit 1 };';
 			const expected = `${rootResolution} registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/${adapterPath}\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" ${eventName}`;
-			const expectedWindows = `powershell -NoProfile -Command '${windowsRootResolution} $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}'`;
+			const expectedWindows = `${WINDOWS_QUIET_PREFIX}${windowsRootResolution} $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}`;
+			const decodedWindows = decodeWindowsHook(hook.commandWindows);
 			if (eventName === "Stop") {
 				const resilientPosix = [
 					"request-contract:stop_hook_unavailable",
@@ -82,9 +92,9 @@ function clientRegistrySupports(cwd, client) {
 					`Join-Path $root.Trim() "${adapterPath}"`,
 					"node $hook Stop",
 					"exit 0",
-				].every((required) => String(hook.commandWindows).includes(required));
+				].every((required) => String(decodedWindows).includes(required));
 				if (!resilientPosix || !resilientWindows) return false;
-			} else if (hook.command !== expected || hook.commandWindows !== expectedWindows) return false;
+			} else if (hook.command !== expected || decodedWindows !== expectedWindows) return false;
 		}
 		if (eventName === "PreToolUse") return entry.matcher === preToolMatcher;
 		return entry.matcher == null || entry.matcher === "";
