@@ -6,6 +6,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const core = require("./session-contract.js");
+const { issueFailureReceipt } = require("./subagent-failure-receipt.js");
 
 function workspace(name = "session-contract-") {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), name));
@@ -204,20 +205,25 @@ try {
 	const fallbackTaskDigest = crypto.createHash("sha256").update(JSON.stringify(core.stableValue(fallbackTask))).digest("hex");
 	const activatedAt = new Date(Date.now() - 60_000).toISOString();
 	const expiresAt = new Date(Date.now() + 20 * 60_000).toISOString();
+	const receiptRoot = workspace("failure-receipts-"); roots.push(receiptRoot);
+	const previousReceiptDir = process.env.ADK_CODEX_FAILURE_RECEIPT_DIR;
+	process.env.ADK_CODEX_FAILURE_RECEIPT_DIR = receiptRoot;
+	const failureReceipt = issueFailureReceipt({
+		session_id: "M",
+		contract_digest: governedContract.contract_digest,
+		task_digest: fallbackTaskDigest,
+		failure_kind: "spawn_guard_incompatible",
+		error_code: "pre_tool_use_block",
+		observed_at: activatedAt,
+	});
 	const technicalFallback = {
 		status: "active",
 		activation_kind: "technical_failure",
 		task_digest: fallbackTaskDigest,
 		confirmed_by: "bound_orchestrator",
+		confirmed_by_session_id: "M",
 		failure_kind: "spawn_guard_incompatible",
-		failure_receipts: [{
-			tool: "multi_agent_v1__spawn_agent",
-			observed_at: activatedAt,
-			failure_kind: "spawn_guard_incompatible",
-			error_code: "pre_tool_use_block",
-			error_digest: "2".repeat(64),
-			summary: "Installed guard rejected the current runtime API before worker start.",
-		}],
+		failure_receipts: [failureReceipt.receipt_id],
 		allowed_paths: ["src/malformed/worker.js"],
 		exact_validators: ["pnpm test"],
 		auto_close_on: ["delegation_success", "task_complete", "handoff"],
@@ -226,11 +232,14 @@ try {
 		expires_at: expiresAt,
 	};
 	const fallbackProgress = { status: "active", current_phase: "build", orchestrator_fallback: technicalFallback };
-	assert.equal(core.validateOrchestratorFallbackEvidence(governedContract, fallbackProgress), "orchestrator_failure_receipts_not_host_authenticated");
+	assert.equal(core.validateOrchestratorFallbackEvidence(governedContract, fallbackProgress), null);
 	assert.deepEqual(core.orchestratorFallbackAccess(governedContract, fallbackProgress), {
 		required: true,
-		active: false,
-		reason: "orchestrator_failure_receipts_not_host_authenticated",
+		active: true,
+		reason: null,
+		taskDigest: fallbackTaskDigest,
+		allowedPaths: ["src/malformed/worker.js"],
+		exactValidators: ["pnpm test"],
 	});
 	assert.equal(core.validateOrchestratorFallbackEvidence(governedContract, {
 		...fallbackProgress,
@@ -239,11 +248,11 @@ try {
 	assert.equal(core.validateOrchestratorFallbackEvidence(governedContract, {
 		...fallbackProgress,
 		orchestrator_fallback: { ...technicalFallback, failure_receipts: [] },
-	}), "orchestrator_failure_receipts_not_host_authenticated");
+	}), "orchestrator_failure_receipts_insufficient");
 	assert.equal(core.validateOrchestratorFallbackEvidence(governedContract, {
 		...fallbackProgress,
 		orchestrator_fallback: { ...technicalFallback, task_completed_at: activatedAt },
-	}), "orchestrator_failure_receipts_not_host_authenticated");
+	}), "orchestrator_fallback_must_close");
 	assert.equal(core.validateOrchestratorFallbackEvidence(governedContract, {
 		...fallbackProgress,
 		orchestrator_fallback: {
@@ -253,7 +262,11 @@ try {
 			closed_reason: "task_complete",
 			task_completed_at: activatedAt,
 		},
-	}), "orchestrator_failure_receipts_not_host_authenticated");
+	}), null);
+	assert.equal(core.validateOrchestratorFallbackEvidence(governedContract, {
+		...fallbackProgress,
+		orchestrator_fallback: { ...technicalFallback, failure_receipts: ["FAIL-" + "0".repeat(32)] },
+	}), "orchestrator_failure_receipt_missing");
 	const ownerFallback = {
 		...technicalFallback,
 		activation_kind: "owner_override",
@@ -265,6 +278,8 @@ try {
 		...fallbackProgress,
 		orchestrator_fallback: ownerFallback,
 	}), null);
+	if (previousReceiptDir === undefined) delete process.env.ADK_CODEX_FAILURE_RECEIPT_DIR;
+	else process.env.ADK_CODEX_FAILURE_RECEIPT_DIR = previousReceiptDir;
 
 	const parent = workspace("session-parent-"); roots.push(parent);
 	const parentContract = finishBinding(parent, "PARENT", "parent-contract");

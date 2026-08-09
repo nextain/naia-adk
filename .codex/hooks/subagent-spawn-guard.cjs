@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const contracts = require("../../.agents/hooks/core/session-contract.js");
 const usage = require("../../scripts/codex-lineage-usage.cjs");
+const { issueFailureReceipt } = require("../../.agents/hooks/core/subagent-failure-receipt.js");
 
 const SPAWN_NAMES = new Set(["spawn_agent", "collaboration.spawn_agent", "multi_agent_v1__spawn_agent"]);
 const WAIT_NAMES = new Set(["wait_agent", "collaboration.wait_agent", "multi_agent_v1__wait_agent"]);
@@ -98,6 +99,21 @@ function inputOf(input) {
 
 function block(reason) {
 	return { decision: "block", reason: `[SUBAGENT GUARD] ${reason}` };
+}
+
+function technicalBlock(reason, failureKind, errorCode, binding) {
+	try {
+		const receipt = issueFailureReceipt({
+			session_id: binding.sessionId,
+			contract_digest: binding.contract.contract_digest,
+			task_digest: binding.task.task_digest,
+			failure_kind: failureKind,
+			error_code: errorCode,
+		}, { env: binding.env });
+		return block(`${reason}; host failure receipt: ${receipt.receipt_id}`);
+	} catch {
+		return block(`${reason}; host failure receipt issuance failed closed`);
+	}
 }
 
 function taskDigest(task) {
@@ -274,9 +290,10 @@ function evaluate({
 	if (!rule || input.model !== rule[0] || !rule[1].includes(input.reasoning_effort) || Object.hasOwn(input, "reasoning")) {
 		return block("role, model, or reasoning effort is not permitted by the selected development profile");
 	}
+	const failureBinding = { sessionId, contract: resolved.contract, task, env };
 	let availability;
-	try { availability = availableBindings(env); } catch { return block("runtime binding availability is invalid"); }
-	if (!availability.has(rule[2])) return block("the selected Balanced binding is unavailable in this runtime");
+	try { availability = availableBindings(env); } catch { return technicalBlock("runtime binding availability is invalid", "runtime_binding_unavailable", "availability_catalog_invalid", failureBinding); }
+	if (!availability.has(rule[2])) return technicalBlock("the selected Balanced binding is unavailable in this runtime", "runtime_binding_unavailable", `binding_unavailable:${rule[2]}`, failureBinding);
 	const promptBytes = Buffer.byteLength(message, "utf8");
 	const collected = (sessionCollection || (() => usage.collectSessions({
 		since: Date.parse(policy.budget_started_at),

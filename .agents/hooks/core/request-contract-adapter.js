@@ -9,6 +9,7 @@
 const core = require("./request-contract.js");
 const contracts = require("./session-contract.js");
 const cp = require("child_process");
+const crypto = require("crypto");
 const path = require("path");
 const VALID_EVENTS = new Set(["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"]);
 const CLIENT_NATIVE_CAPABILITIES = Object.freeze({
@@ -58,16 +59,37 @@ function detectClientVersion(client, data, env = process.env) {
 	}
 }
 
+function hostLocalSessionId(client, cwd, nativeSessionId, opts = {}) {
+	const nativeId = typeof nativeSessionId === "string" ? nativeSessionId.trim() : "";
+	if (nativeId && nativeId !== "no-session") {
+		return { sessionId: nativeId, sessionIdSource: "native", hostProcessIdentity: null };
+	}
+	const hostProcessId = opts.hostProcessId || process.ppid;
+	const hostProcessIdentity = opts.hostProcessIdentity !== undefined
+		? opts.hostProcessIdentity
+		: core.processIdentity(hostProcessId);
+	if (!hostProcessIdentity) return { sessionId: null, sessionIdSource: "unavailable", hostProcessIdentity: null };
+	const digest = crypto.createHash("sha256")
+		.update(JSON.stringify({ schema_version: "host-local-session-v1", client, cwd, host_process_identity: hostProcessIdentity }))
+		.digest("hex");
+	return { sessionId: `host-${digest.slice(0, 40)}`, sessionIdSource: "host_process", hostProcessIdentity };
+}
+
 function normalizeInput(client, input, fallbackEvent, opts = {}) {
 	const data = input && typeof input === "object" ? input : {};
 	const capability = CLIENT_NATIVE_CAPABILITIES[client];
-	if (!capability) return { client, eventName: "Unknown", declaredEvent: "", sessionId: "no-session", cwd: projectRoot(process.cwd()), prompt: "", origin: "ambiguous", toolName: "", toolUseId: "", toolInput: {}, toolResponse: null };
+	if (!capability) return { client, eventName: "Unknown", declaredEvent: "", sessionId: null, sessionIdSource: "unavailable", cwd: projectRoot(process.cwd()), prompt: "", origin: "ambiguous", toolName: "", toolUseId: "", toolInput: {}, toolResponse: null };
 	const declaredEvent = data[capability.eventField] || "";
 	const eventName = fallbackEvent || declaredEvent || "Unknown";
 	const inputCwd = data[capability.cwdField] || process.cwd();
 	const cwd = client === "codex"
 		? contracts.resolveHookProjectRoot(inputCwd, opts.env || process.env) || projectRoot(inputCwd)
 		: projectRoot(inputCwd);
+	const hostProcessId = opts.hostProcessId || process.ppid;
+	const session = hostLocalSessionId(client, cwd, data[capability.sessionField], {
+		hostProcessId,
+		hostProcessIdentity: opts.hostProcessIdentity,
+	});
 	// Provenance is derived from the registered/native lifecycle event. Never
 	// trust an origin label supplied inside the hook payload.
 	const origin = declaredEvent === "UserPromptSubmit" && eventName === "UserPromptSubmit" ? "native_user" : "ambiguous";
@@ -76,7 +98,8 @@ function normalizeInput(client, input, fallbackEvent, opts = {}) {
 		clientVersion: detectClientVersion(client, data, opts.env || process.env),
 		eventName,
 		declaredEvent,
-		sessionId: data[capability.sessionField] || "no-session",
+		sessionId: session.sessionId,
+		sessionIdSource: session.sessionIdSource,
 		cwd,
 		prompt: data[capability.promptField] || "",
 		origin,
@@ -84,8 +107,8 @@ function normalizeInput(client, input, fallbackEvent, opts = {}) {
 		toolUseId: data[capability.toolUseIdField] || "",
 		toolInput: data[capability.toolInputField] || {},
 		toolResponse: data[capability.toolResponseField] || null,
-		hostProcessId: process.ppid,
-		hostProcessIdentity: eventName === "SessionStart" ? core.processIdentity(process.ppid) : null,
+		hostProcessId,
+		hostProcessIdentity: eventName === "SessionStart" ? session.hostProcessIdentity || core.processIdentity(hostProcessId) : null,
 	};
 }
 
@@ -97,7 +120,7 @@ function validateEnvelope(client, input, event) {
 	if (!VALID_EVENTS.has(event.eventName)) errors.push("native_event_invalid");
 	if (!event.declaredEvent) errors.push("native_event_missing");
 	else if (event.declaredEvent !== event.eventName) errors.push("native_event_mismatch");
-	if (!event.sessionId || event.sessionId === "no-session") errors.push("native_session_id_missing");
+	if (!event.sessionId || event.sessionId === "no-session") errors.push("host_session_identity_unavailable");
 	if (!event.cwd) errors.push("native_cwd_missing");
 	if (event.eventName === "UserPromptSubmit" && (!capability || !input || typeof input[capability.promptField] !== "string")) errors.push("native_prompt_missing");
 	if (["PreToolUse", "PostToolUse"].includes(event.eventName) && !event.toolName) errors.push("native_tool_name_missing");
@@ -160,7 +183,11 @@ function preserveRejectedPrompt(client, input, event, opts = {}) {
 	const prompt = capability && data[capability.promptField];
 	const claimsPromptEvent = event.eventName === "UserPromptSubmit" || event.declaredEvent === "UserPromptSubmit";
 	if (!claimsPromptEvent || typeof prompt !== "string") return null;
-	return core.appendQuarantine(event.cwd, client, event.sessionId || "no-session", prompt, opts.now || Date.now(), event.origin);
+	const now = opts.now || Date.now();
+	const quarantineSessionId = event.sessionId || `unbound-${crypto.createHash("sha256")
+		.update(JSON.stringify({ client, cwd: event.cwd, prompt, now, host_process_id: event.hostProcessId || null }))
+		.digest("hex").slice(0, 40)}`;
+	return core.appendQuarantine(event.cwd, client, quarantineSessionId, prompt, now, event.origin);
 }
 
 function processEnvelope(client, input, fallbackEvent, opts = {}) {
@@ -188,4 +215,4 @@ function processEnvelope(client, input, fallbackEvent, opts = {}) {
 	}
 }
 
-module.exports = { VALID_EVENTS, CLIENT_NATIVE_CAPABILITIES, projectRoot, detectClientVersion, normalizeInput, validateEnvelope, formatClaudeOutput, formatCodexOutput, formatOutput, failureOutput, preserveRejectedPrompt, processEnvelope };
+module.exports = { VALID_EVENTS, CLIENT_NATIVE_CAPABILITIES, projectRoot, detectClientVersion, hostLocalSessionId, normalizeInput, validateEnvelope, formatClaudeOutput, formatCodexOutput, formatOutput, failureOutput, preserveRejectedPrompt, processEnvelope };

@@ -70,6 +70,44 @@ test("client-native capability maps reject undeclared aliases and map native out
 	assert.equal(adapter.formatOutput("codex", "Stop", { kind: "allow", code: "DONE", message: "complete" }), null);
 });
 
+test("missing native session IDs use an isolated host-local identity instead of no-session", () => {
+	const fx = fixture();
+	const first = adapter.normalizeInput("codex", { hook_event_name: "SessionStart", cwd: fx.cwd }, "SessionStart", {
+		hostProcessId: process.pid,
+		hostProcessIdentity: "test-host-process-a",
+	});
+	const sameHost = adapter.normalizeInput("codex", { hook_event_name: "UserPromptSubmit", cwd: fx.cwd, prompt: "continue" }, "UserPromptSubmit", {
+		hostProcessId: process.pid,
+		hostProcessIdentity: "test-host-process-a",
+	});
+	const otherHost = adapter.normalizeInput("codex", { hook_event_name: "SessionStart", cwd: fx.cwd }, "SessionStart", {
+		hostProcessId: process.pid,
+		hostProcessIdentity: "test-host-process-b",
+	});
+	assert.match(first.sessionId, /^host-[a-f0-9]{40}$/);
+	assert.equal(first.sessionIdSource, "host_process");
+	assert.equal(sameHost.sessionId, first.sessionId);
+	assert.notEqual(otherHost.sessionId, first.sessionId);
+	assert.notEqual(first.sessionId, "no-session");
+
+	const unavailable = adapter.normalizeInput("codex", { hook_event_name: "UserPromptSubmit", cwd: fx.cwd, prompt: "preserve me" }, "UserPromptSubmit", {
+		hostProcessId: 99999999,
+		hostProcessIdentity: null,
+	});
+	assert.equal(unavailable.sessionId, null);
+	assert.deepEqual(adapter.validateEnvelope("codex", { hook_event_name: "UserPromptSubmit", cwd: fx.cwd, prompt: "preserve me" }, unavailable), ["host_session_identity_unavailable"]);
+	const rejected = adapter.processEnvelope("codex", { hook_event_name: "UserPromptSubmit", cwd: fx.cwd, prompt: "preserve me" }, "UserPromptSubmit", {
+		hostProcessId: 99999999,
+		hostProcessIdentity: null,
+		now: 12345,
+	});
+	assert.equal(rejected.result.code, "host_session_identity_unavailable");
+	const quarantines = core.listUnconsumedQuarantine(fx.cwd);
+	assert.equal(quarantines.length, 1);
+	assert.match(quarantines[0].head.session_id, /^unbound-[a-f0-9]{40}$/);
+	assert.notEqual(quarantines[0].head.session_id, "no-session");
+});
+
 test("scope authority rejects a source without native user-event provenance", () => {
 	const fx = fixture();
 	const unit = start(fx);

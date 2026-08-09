@@ -39,6 +39,7 @@ function installProductionControlSurface(fx) {
 		".agents/hooks/core/delegation-contract.js",
 		".agents/hooks/core/hook-project-root.js",
 		".agents/hooks/core/session-contract.js",
+		".agents/hooks/core/subagent-failure-receipt.js",
 		".agents/hooks/core/preservation-contract.js",
 		".agents/hooks/core/request-contract-adapter.js",
 		".agents/hooks/core/request-contract-review-runner.js",

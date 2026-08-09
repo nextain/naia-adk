@@ -32,6 +32,8 @@ module.exports = function createDelegationContract({
 			non_goals: contract?.non_goals,
 			success_criteria: contract?.success_criteria,
 			source_refs: contract?.source_refs,
+			intent_anchor: contract?.intent_anchor,
+			l3_session: contract?.l3_session,
 		}))).digest("hex");
 	}
 
@@ -131,7 +133,7 @@ module.exports = function createDelegationContract({
 		const taskError = validateDelegationTask(task, parentResolution.contract, explicit.projectRoot);
 		if (taskError) return result(STATES.STALE, explicit.projectRoot, taskError);
 		const contract = {
-			schema_version: "1.0",
+			schema_version: parentResolution.contract.schema_version,
 			id: `${parentResolution.contract.id}::${task.task_id}`,
 			status: "active",
 			project_root: ".",
@@ -147,6 +149,8 @@ module.exports = function createDelegationContract({
 			progress_file: parentResolution.contract.progress_file,
 			contract_digest: task.task_digest,
 			allowed_shell_commands: task.exact_validator === null ? [] : [task.exact_validator],
+			...(parentResolution.contract.intent_anchor ? { intent_anchor: parentResolution.contract.intent_anchor } : {}),
+			...(parentResolution.contract.l3_session ? { l3_session: parentResolution.contract.l3_session } : {}),
 		};
 		return result(STATES.BOUND, explicit.projectRoot, "derived_delegation_verified", {
 			contract,
