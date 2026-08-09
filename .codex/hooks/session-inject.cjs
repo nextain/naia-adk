@@ -19,7 +19,7 @@ async function readInput() {
 async function main() {
   const input = await readInput();
   if (input.hook_event_name === "UserPromptSubmit") {
-    const guard = contextBudget.evaluate({ sessionId: input.session_id, eventName: input.hook_event_name });
+    const guard = contextBudget.evaluate({ sessionId: input.session_id, eventName: input.hook_event_name, prompt: input.prompt });
     if (guard) process.stdout.write(JSON.stringify(guard));
     // SessionStart and PostCompact already supply the full, contract-bound
     // workflow state. Re-injecting it on every prompt repeats stale context.

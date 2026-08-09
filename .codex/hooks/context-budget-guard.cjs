@@ -30,6 +30,10 @@ function disabled(env = process.env) {
   return OFF_VALUES.has(String(env.CODEX_CONTEXT_GUARD || "").trim().toLowerCase());
 }
 
+function recoveryPrompt(prompt) {
+  return String(prompt || "").trim() === "/compact";
+}
+
 function findRollout(sessionsRoot, sessionId) {
   if (!sessionId || !fs.existsSync(sessionsRoot)) return null;
   const stack = [sessionsRoot];
@@ -76,14 +80,15 @@ function latestUsage(filePath) {
   return null;
 }
 
-function evaluate({ sessionId, eventName = "PreToolUse", codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), env = process.env } = {}) {
+function evaluate({ sessionId, eventName = "PreToolUse", prompt = "", codexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), env = process.env } = {}) {
   if (disabled(env)) return null;
+  if (eventName === "UserPromptSubmit" && recoveryPrompt(prompt)) return null;
   const rollout = findRollout(path.join(codexHome, "sessions"), sessionId);
   if (!rollout) return null;
   const usage = latestUsage(rollout);
   const limit = configuredLimit(env);
   if (!usage || usage.inputTokens < limit) return null;
-  const reason = `[COST GUARD] This session is replaying ${usage.inputTokens.toLocaleString("en-US")} input tokens per turn (limit ${limit.toLocaleString("en-US")}). Run /compact or start a new Codex session before more work. This guard prevents long-context repetition; it does not stop needed work after rotation.`;
+  const reason = `[COST GUARD] This session is replaying ${usage.inputTokens.toLocaleString("en-US")} input tokens per turn (limit ${limit.toLocaleString("en-US")}). Run /compact or start a new Codex session before more work. The exact /compact recovery prompt remains allowed. This guard prevents long-context repetition; it does not stop needed work after rotation.`;
   if (eventName === "UserPromptSubmit") return { decision: "block", reason };
   return { decision: "block", reason };
 }
@@ -93,10 +98,10 @@ async function main() {
   process.stdin.setEncoding("utf8");
   for await (const chunk of process.stdin) raw += chunk;
   const input = parseInput(raw);
-  const result = evaluate({ sessionId: input.session_id, eventName: input.hook_event_name });
+  const result = evaluate({ sessionId: input.session_id, eventName: input.hook_event_name, prompt: input.prompt });
   if (result) process.stdout.write(JSON.stringify(result));
 }
 
 if (require.main === module) main().catch(() => process.exit(0));
 
-module.exports = { configuredLimit, disabled, findRollout, latestUsage, evaluate };
+module.exports = { configuredLimit, disabled, findRollout, latestUsage, recoveryPrompt, evaluate };

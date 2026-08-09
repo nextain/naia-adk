@@ -388,7 +388,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 			decision: "block",
 			reason: workdirIssue === "invalid"
 				? "⛔ [HARNESS] 요청한 workdir가 존재하는 디렉터리인지 검증할 수 없습니다."
-				: "⛔ [HARNESS] 요청한 workdir와 훅이 검증한 실행 루트가 다릅니다. 런타임이 workdir를 무시할 수 있으므로 `git -C <절대경로> ...`처럼 명령 자체에 대상을 고정하세요.",
+				: "⛔ [HARNESS] 요청한 workdir와 훅이 검증한 실행 루트가 다릅니다. 런타임이 workdir를 무시할 수 있으므로 `git -C <절대경로> ...` 또는 PowerShell `Get-Content -LiteralPath <절대경로>`처럼 명령 자체에 대상을 고정하세요.",
 		};
 	}
 

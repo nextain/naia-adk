@@ -152,6 +152,26 @@ try {
 			null,
 			`${client} explicitly scoped cross-project diagnostics remain available while unbound`,
 		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "Get-Content -Raw -LiteralPath 'D:\\alpha-adk\\.agents\\session-contracts\\.session-map.json'", workdir: nested }),
+			null,
+			`${client} native Windows absolute PowerShell reads remain available when workdir is ignored`,
+		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "Get-ChildItem -LiteralPath 'D:\\alpha-adk\\.agents\\session-contracts' -Force | Select-Object Name,Length", workdir: nested }),
+			null,
+			`${client} native Windows absolute PowerShell read pipelines remain available when workdir is ignored`,
+		);
+		assert.match(
+			runGate(fixture, "Bash", { command: "Get-Content -LiteralPath .agents/session-contracts/.session-map.json", workdir: nested })?.reason,
+			/workdir/,
+			`${client} relative PowerShell reads stay blocked when workdir is ignored`,
+		);
+		assert.match(
+			runGate(fixture, "Bash", { command: "Get-Content -LiteralPath 'D:\\alpha-adk\\.agents\\session-contracts\\.session-map.json' & Set-Content local.txt changed", workdir: nested })?.reason,
+			/workdir/,
+			`${client} appended PowerShell mutation cannot use the absolute-read exception`,
+		);
 		assert.equal(runGate(fixture, "apply_patch", { command: "product mutation" })?.decision, "block", `${client} legacy shell blocked`);
 		assert.equal(
 			runGate(fixture, "apply_patch", { command: "*** Begin Patch\n*** Update File: AGENTS.md\n@@\n-old\n+new\n*** End Patch\n" })?.decision,

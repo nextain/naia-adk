@@ -21,6 +21,8 @@ assert.match(blocked.reason, /64,000 input tokens/);
 const promptBlocked = guard.evaluate({ sessionId: session, eventName: "UserPromptSubmit", codexHome: home });
 assert.equal(promptBlocked.decision, "block");
 assert.match(promptBlocked.reason, /64,000 input tokens/);
+assert.equal(guard.evaluate({ sessionId: session, eventName: "UserPromptSubmit", prompt: " /compact ", codexHome: home }), null);
+assert.equal(guard.evaluate({ sessionId: session, eventName: "UserPromptSubmit", prompt: "/compact now", codexHome: home })?.decision, "block");
 const adapter = spawnSync(process.execPath, [path.join(__dirname, "session-inject.cjs")], {
   input: JSON.stringify({ session_id: session, hook_event_name: "UserPromptSubmit" }),
   encoding: "utf8",
@@ -28,6 +30,13 @@ const adapter = spawnSync(process.execPath, [path.join(__dirname, "session-injec
 });
 assert.equal(adapter.status, 0, adapter.stderr);
 assert.equal(JSON.parse(adapter.stdout).decision, "block", "the trusted session-inject hook must stop oversized user prompts");
+const compact = spawnSync(process.execPath, [path.join(__dirname, "session-inject.cjs")], {
+  input: JSON.stringify({ session_id: session, hook_event_name: "UserPromptSubmit", prompt: "/compact" }),
+  encoding: "utf8",
+  env: { ...process.env, CODEX_HOME: home },
+});
+assert.equal(compact.status, 0, compact.stderr);
+assert.equal(compact.stdout, "", "the exact /compact recovery prompt must remain available over budget");
 const underBudget = spawnSync(process.execPath, [path.join(__dirname, "session-inject.cjs")], {
   input: JSON.stringify({ session_id: session, hook_event_name: "UserPromptSubmit" }),
   encoding: "utf8",
