@@ -96,6 +96,20 @@ function testHostProcessIdentityWalksPastHookProcesses() {
 	assert.equal(identity.pid, 10);
 	assert.equal(identity.start_token, "codex-start");
 	assert.equal(identity.command_line_hash.length, 64);
+	assert.equal(recovery.isHostProcess('"C:\\tools\\codex.exe" exec'), true, "quoted Windows executables must be recognized");
+}
+
+function testLaterEventsReuseSessionStartIdentity() {
+	const test = fixture();
+	try {
+		const leasePath = path.join(test.root, `.agents/session-contracts/.recovery/leases/${test.oldSession}.json`);
+		const identity = { pid: 42, start_token: "stable-start", command_line_hash: "a".repeat(64) };
+		writeJson(leasePath, { schema_version: "1.0", session_id: test.oldSession, state: "active", host_process: identity });
+		recovery.recordLease(test.root, { session_id: test.oldSession }, "Stop");
+		const lease = JSON.parse(fs.readFileSync(leasePath, "utf8"));
+		assert.deepEqual(lease.host_process, identity);
+		assert.equal(lease.event, "Stop");
+	} finally { fs.rmSync(test.root, { recursive: true, force: true }); }
 }
 
 function testRecordedHostProcessUsesPidAndStartToken() {
@@ -156,6 +170,7 @@ function testLifecycleCliNeverWritesStdout() {
 testFreshOwnerBlocks();
 testExplicitStoppedReclaim();
 testHostProcessIdentityWalksPastHookProcesses();
+testLaterEventsReuseSessionStartIdentity();
 testRecordedHostProcessUsesPidAndStartToken();
 testStopKeepsLeaseActive();
 testApprovalIsRequired();

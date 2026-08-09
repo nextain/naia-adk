@@ -10,11 +10,14 @@ const root = path.resolve(__dirname, "..", "..");
 const registry = JSON.parse(fs.readFileSync(path.join(root, ".codex", "hooks.json"), "utf8"));
 const requestContract = require(path.join(root, ".agents", "hooks", "core", "request-contract.js"));
 const lifecycleEvents = ["SessionStart", "UserPromptSubmit"];
-const windowsPrefix = "powershell -NoProfile -Command ";
 const encodedWindowsPrefix = "powershell -NoProfile -NonInteractive -EncodedCommand ";
 function decodeWindowsCommand(command) {
-  assert.ok(command.startsWith(encodedWindowsPrefix), "Windows Stop hook must use an encoded PowerShell command");
+  assert.ok(command.startsWith(encodedWindowsPrefix), "Windows hook must use an encoded PowerShell command");
   return Buffer.from(command.slice(encodedWindowsPrefix.length), "base64").toString("utf16le");
+}
+const allHooks = Object.values(registry.hooks).flatMap((entries) => entries.flatMap((entry) => entry.hooks || []));
+for (const hook of allHooks) {
+  assert.match(decodeWindowsCommand(hook.commandWindows), /^\$ProgressPreference='SilentlyContinue'; /);
 }
 const stopHooks = registry.hooks.Stop.flatMap((entry) => entry.hooks || []);
 const stopContractHook = stopHooks.find((hook) => /request-contract\.cjs/.test(hook.command));
@@ -46,26 +49,56 @@ for (const eventName of lifecycleEvents) {
     assert.match(hook.command, /registry=\"\$root\/\.codex\/hooks\.json\"/);
     assert.match(hook.command, /if \[ ! -f \"\$hook\" \]; then/);
     assert.match(hook.command, /node \"\$hook\"/);
-    assert.ok(hook.commandWindows.startsWith(windowsPrefix));
-    assert.match(hook.commandWindows, /\$LASTEXITCODE -ne 0/);
-    assert.match(hook.commandWindows, /Test-Path -LiteralPath \$hook/);
+    const windowsSource = decodeWindowsCommand(hook.commandWindows);
+    assert.match(windowsSource, /\$LASTEXITCODE -ne 0/);
+    assert.match(windowsSource, /Test-Path -LiteralPath \$hook/);
   }
   assert.match(hooks[2].command, /session-contract-recovery\.cjs/);
   assert.match(hooks[2].command, new RegExp(`event ${eventName}`));
-  assert.ok(hooks[2].commandWindows.startsWith(windowsPrefix));
+  assert.match(decodeWindowsCommand(hooks[2].commandWindows), /Test-Path -LiteralPath \$hook/);
 }
 
 const stopScratch = fs.mkdtempSync(path.join(os.tmpdir(), "codex-stop-resilience-"));
 try {
-  const stopInput = JSON.stringify({ hook_event_name: "Stop", session_id: "deterministic-stop-resilience", cwd: stopScratch });
-  const stopWithoutRoot = spawnSync("sh", ["-c", stopContractHook.command], { cwd: stopScratch, input: stopInput, encoding: "utf8" });
-  assert.equal(stopWithoutRoot.status, 0, stopWithoutRoot.stderr);
-  assert.equal(JSON.parse(stopWithoutRoot.stdout).decision, "block");
-  for (const hook of [stopTranslationHook, stopRecoveryHook]) {
-    const result = spawnSync("sh", ["-c", hook.command], { cwd: stopScratch, input: stopInput, encoding: "utf8" });
-    assert.equal(result.status, 0, result.stderr);
-    if (hook === stopRecoveryHook) assert.equal(result.stdout, "", "recovery Stop hook must not corrupt the host JSON stream");
+  const stopInput = JSON.stringify({
+    hook_event_name: "Stop",
+    session_id: "deterministic-stop-resilience",
+    cwd: stopScratch,
+  });
+  if (process.platform !== "win32") {
+    const stopWithoutRoot = spawnSync("sh", ["-c", stopContractHook.command], {
+      cwd: stopScratch,
+      input: stopInput,
+      encoding: "utf8",
+    });
+    assert.equal(stopWithoutRoot.status, 0, stopWithoutRoot.stderr);
+    assert.equal(JSON.parse(stopWithoutRoot.stdout).decision, "block", "an unavailable Stop gate must block structurally without failing the hook process");
+
+    const translationWithoutRoot = spawnSync("sh", ["-c", stopTranslationHook.command], {
+      cwd: stopScratch,
+      input: stopInput,
+      encoding: "utf8",
+    });
+    assert.equal(translationWithoutRoot.status, 0, translationWithoutRoot.stderr);
+
+    const recoveryWithoutRoot = spawnSync("sh", ["-c", stopRecoveryHook.command], {
+      cwd: stopScratch,
+      input: stopInput,
+      encoding: "utf8",
+    });
+    assert.equal(recoveryWithoutRoot.status, 0, recoveryWithoutRoot.stderr);
+    assert.equal(recoveryWithoutRoot.stdout, "", "recovery Stop hook must never corrupt the host JSON stream");
   }
+
+  const isolatedHook = path.join(stopScratch, "isolated", ".codex", "hooks", "request-contract.cjs");
+  fs.mkdirSync(path.dirname(isolatedHook), { recursive: true });
+  fs.copyFileSync(path.join(root, ".codex", "hooks", "request-contract.cjs"), isolatedHook);
+  const missingCore = spawnSync(process.execPath, [isolatedHook, "Stop"], {
+    input: stopInput,
+    encoding: "utf8",
+  });
+  assert.equal(missingCore.status, 0, missingCore.stderr);
+  assert.equal(JSON.parse(missingCore.stdout).decision, "block", "adapter load failures must remain machine-readable");
 } finally {
   fs.rmSync(stopScratch, { recursive: true, force: true });
 }
@@ -85,14 +118,13 @@ if (process.platform === "win32") {
       assert.equal(result.status, 0, `encoded Stop hook failed: ${result.stderr}`);
     }
     for (const cwd of [foreignRepo, outsideRepo]) {
-      for (const eventName of lifecycleEvents) {
-        for (const hook of registry.hooks[eventName].flatMap((entry) => entry.hooks || [])) {
-          const quotedScript = hook.commandWindows.slice(windowsPrefix.length);
-          const script = quotedScript.slice(1, -1);
-          const result = spawnSync("powershell.exe", ["-NoProfile", "-Command", script], {
+      for (const [eventName, entries] of Object.entries(registry.hooks)) {
+        for (const hook of entries.flatMap((entry) => entry.hooks || [])) {
+          const result = spawnSync(hook.commandWindows, {
             cwd,
             input: "{}",
             encoding: "utf8",
+            shell: true,
           });
           assert.equal(result.status, 0, `${eventName} failed in ${cwd}: ${result.stderr}`);
           assert.equal(result.stderr, "", `${eventName} emitted stderr in ${cwd}`);

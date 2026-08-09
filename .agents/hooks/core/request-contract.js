@@ -3859,7 +3859,7 @@ function clientRegistrySupports(cwd, client) {
 			if (hook.command !== expected || hook.commandWindows != null || hook.args != null) return false;
 		} else {
 			const expected = `root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/${adapterPath}\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" ${eventName}`;
-			const expectedWindows = `powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}'`;
+			const expectedWindowsSource = `$ProgressPreference='SilentlyContinue'; $root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}`;
 			if (eventName === "Stop") {
 				const windowsCommandSource = codexWindowsCommandSource(hook.commandWindows);
 				const resilientPosix = [
@@ -3874,7 +3874,7 @@ function clientRegistrySupports(cwd, client) {
 					"exit 0",
 				].every((required) => windowsCommandSource.includes(required));
 				if (!resilientPosix || !resilientWindows) return false;
-			} else if (hook.command !== expected || hook.commandWindows !== expectedWindows) return false;
+			} else if (hook.command !== expected || codexWindowsCommandSource(hook.commandWindows) !== expectedWindowsSource) return false;
 		}
 		if (eventName === "PreToolUse") return entry.matcher === preToolMatcher;
 		return entry.matcher == null || entry.matcher === "";

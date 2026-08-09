@@ -9,6 +9,7 @@ const contractCore = require("../hooks/core/session-contract.js");
 
 const GRANT_TTL_MS = 5 * 60 * 1000;
 const LEASE_FRESH_MS = 2 * 60 * 1000;
+const PROCESS_PROBE_TIMEOUT_MS = 10 * 1000;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 
 function readStdin() {
@@ -69,7 +70,11 @@ function processSnapshot(pid) {
 	if (!Number.isInteger(Number(pid)) || Number(pid) <= 0) return null;
 	if (process.platform === "win32") {
 		const script = `$p=Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}" -ErrorAction SilentlyContinue; if($p){@{pid=[int]$p.ProcessId;parent_pid=[int]$p.ParentProcessId;start_token=[string]$p.CreationDate;command_line=[string]$p.CommandLine}|ConvertTo-Json -Compress}`;
-		const result = cp.spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true });
+		const result = cp.spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+			encoding: "utf8",
+			timeout: PROCESS_PROBE_TIMEOUT_MS,
+			windowsHide: true,
+		});
 		if (result.error || result.status !== 0) return undefined;
 		if (!result.stdout.trim()) return null;
 		try { return JSON.parse(result.stdout); } catch { return undefined; }
@@ -92,7 +97,7 @@ function processSnapshot(pid) {
 function isHostProcess(commandLine) {
 	const source = String(commandLine || "");
 	if (/session-contract-recovery|run-hook\.cjs|\.claude[\\/]hooks/i.test(source)) return false;
-	return /(?:^|[\\/\s])(?:codex|claude|opencode)(?:\.exe)?(?:\s|$)/i.test(source) ||
+	return /(?:^|[\\/\s"'])(?:codex|claude|opencode)(?:\.exe)?(?:\s|["']|$)/i.test(source) ||
 		/@anthropic-ai[\\/]claude-code[\\/].*cli\.js/i.test(source);
 }
 
@@ -114,12 +119,20 @@ function recordLease(root, data, eventName) {
 	const sessionId = data.session_id;
 	if (!sessionId || !ID_RE.test(String(sessionId))) return;
 	const now = new Date().toISOString();
+	const previous = readJson(leasePath(root, sessionId));
+	// Host discovery is deliberately limited to SessionStart. On Windows each
+	// process query starts PowerShell/CIM, so repeating the ancestry walk for
+	// every lifecycle event can exceed Codex's hook deadline. Later events keep
+	// the immutable PID/start-token identity captured at session start.
+	const hostProcess = eventName === "SessionStart"
+		? hostProcessIdentity()
+		: previous?.host_process || null;
 	atomicJson(leasePath(root, sessionId), {
 		schema_version: "1.0",
 		session_id: sessionId,
 		state: "active",
 		pid: process.ppid || null,
-		host_process: hostProcessIdentity(),
+		host_process: hostProcess,
 		host: process.env.COMPUTERNAME || process.env.HOSTNAME || null,
 		updated_at: now,
 		event: eventName,
@@ -161,8 +174,12 @@ function handleEvent(eventName, raw = readStdin(), cwd = process.cwd()) {
 function processCommandLines() {
 	if (process.platform === "win32") {
 		const script = "Get-CimInstance Win32_Process | ForEach-Object { [string]$_.ProcessId + '\\t' + [string]$_.CommandLine }";
-		const result = cp.spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true });
-		if (result.status !== 0) return null;
+		const result = cp.spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+			encoding: "utf8",
+			timeout: PROCESS_PROBE_TIMEOUT_MS,
+			windowsHide: true,
+		});
+		if (result.error || result.status !== 0) return null;
 		return result.stdout.split(/\r?\n/).filter(Boolean);
 	}
 	try {
@@ -321,4 +338,4 @@ if (require.main === module) {
 	}
 }
 
-module.exports = { GRANT_TTL_MS, LEASE_FRESH_MS, atomicJson, buildTransaction, handleEvent, hostProcessIdentity, isHostProcess, leaseFreshAndActive, main, processSnapshot, promptText, reclaim, recordedHostProcessLive, recordGrant, recordLease, sessionProcessLive };
+module.exports = { GRANT_TTL_MS, LEASE_FRESH_MS, PROCESS_PROBE_TIMEOUT_MS, atomicJson, buildTransaction, handleEvent, hostProcessIdentity, isHostProcess, leaseFreshAndActive, main, processSnapshot, promptText, reclaim, recordedHostProcessLive, recordGrant, recordLease, sessionProcessLive };
