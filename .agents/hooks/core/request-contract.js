@@ -3817,6 +3817,19 @@ function clientVersionSupported(actual, range) {
 	return true;
 }
 
+function codexWindowsCommandSource(command) {
+	const value = String(command || "");
+	const prefix = "powershell -NoProfile -NonInteractive -EncodedCommand ";
+	if (!value.startsWith(prefix)) return value;
+	const encoded = value.slice(prefix.length).trim();
+	if (!encoded || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return "";
+	try {
+		return Buffer.from(encoded, "base64").toString("utf16le");
+	} catch {
+		return "";
+	}
+}
+
 function clientRegistrySupports(cwd, client) {
 	const config = loadConfig(cwd);
 	const file = client === "claude" ? path.join(cwd, ".claude", "settings.json") : client === "codex" ? path.join(cwd, ".codex", "hooks.json") : null;
@@ -3847,7 +3860,21 @@ function clientRegistrySupports(cwd, client) {
 		} else {
 			const expected = `root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0; registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/${adapterPath}\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" ${eventName}`;
 			const expectedWindows = `powershell -NoProfile -Command '$root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 0 }; $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}'`;
-			if (hook.command !== expected || hook.commandWindows !== expectedWindows) return false;
+			if (eventName === "Stop") {
+				const windowsCommandSource = codexWindowsCommandSource(hook.commandWindows);
+				const resilientPosix = [
+					"request-contract:stop_hook_unavailable",
+					`hook=\"$root/${adapterPath}\"`,
+					'node "$hook" Stop || emit; exit 0',
+				].every((required) => String(hook.command).includes(required));
+				const resilientWindows = [
+					"request-contract:stop_hook_unavailable",
+					`Join-Path $root.Trim() \"${adapterPath}\"`,
+					"node $hook Stop",
+					"exit 0",
+				].every((required) => windowsCommandSource.includes(required));
+				if (!resilientPosix || !resilientWindows) return false;
+			} else if (hook.command !== expected || hook.commandWindows !== expectedWindows) return false;
 		}
 		if (eventName === "PreToolUse") return entry.matcher === preToolMatcher;
 		return entry.matcher == null || entry.matcher === "";

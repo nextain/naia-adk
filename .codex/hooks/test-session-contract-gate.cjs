@@ -130,6 +130,16 @@ try {
 
 	for (const client of ["claude", "codex"]) {
 		assert.equal(runGate(fixture, "Bash", { command: "git status --short" }), null, `${client} read-only`);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "node .agents/harness/session-contract-recovery.cjs reclaim --contract orphan-job --session SESSION-1" }),
+			null,
+			`${client} exact owner-approved reclaim helper is gate-reachable`,
+		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "node .agents/harness/session-contract-recovery.cjs reclaim --contract orphan-job --session OTHER" })?.decision,
+			"block",
+			`${client} reclaim cannot target another session`,
+		);
 		assert.equal(runGate(fixture, "apply_patch", { command: "product mutation" })?.decision, "block", `${client} legacy shell blocked`);
 		assert.equal(
 			runGate(fixture, "apply_patch", { command: "*** Begin Patch\n*** Update File: AGENTS.md\n@@\n-old\n+new\n*** End Patch\n" })?.decision,
