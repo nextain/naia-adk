@@ -7,7 +7,7 @@
 # canonical form + the documented PreToolUse/PostToolUse/UserPromptSubmit
 # stdin schema) under REAL conditions: real `git init` repos with real
 # remotes (pr/commit/git-push execSync paths), real .claude markers /
-# design-doc-unlock, real progress files + session-map (P0/P1), real
+# design-doc-unlock, real contracts + progress + registry bindings, real
 # deploy config+approvals, real .agents/.users dirs.
 #
 # Assertions are EFFECTIVE-behavior, not byte-parity: a SHOULD-block case
@@ -44,6 +44,9 @@ ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
 mkrepo() { # $1=dir $2=origin-url ; real git repo
   local d="$1"; mkdir -p "$d"; ( cd "$d" && git init -q && git config user.email e@x && git config user.name x \
     && git remote add origin "$2" >/dev/null 2>&1 ); }
+bind_session_fixture() { # $1=root $2=session $3=contract $4=progress $5=issue $6=phase
+  node "$HOOKS/e2e/session-contract-fixture.cjs" "$1" "$2" "$3" "$4" "$5" "$6"
+}
 
 echo "═══ naia-adk harness E2E (real conditions) ═══"
 
@@ -205,16 +208,15 @@ ACM2="$ROOT/acm2"; mkdir -p "$ACM2/.agents/context"; printf '{"x":1}' > "$ACM2/.
 OUT="$(printf '{"tool_input":{"file_path":"%s/.agents/context/p.json"}}' "$ACM2" | node "$HOOKS/agents-context-mirror.js" 2>/dev/null)"; RC=$?
 { [ "$RC" = 0 ] && [ ! -f "$ACM2/.users/context/p.md" ]; } && ok || bad "acm skip: no .users dir → no write"
 
-# ── session-inject (UserPromptSubmit; real progress P0/P1/unbound/optout) ────
+# ── session-inject (UserPromptSubmit; real contract bindings/unbound/optout) ─
 echo "session-inject:"
-SI="$ROOT/si"; mkdir -p "$SI/.agents/progress"
-printf '{"issue":"ISS-P0","current_phase":"build","session_id":"SID0","gates_cleared":["plan"]}' > "$SI/.agents/progress/p0.json"
-fire session-inject "$(J '{"cwd":"'"$SI"'","session_id":"SID0"}')";                                           a_has  "si P0: bound state by embedded session_id" "ISS-P0"
+SI="$ROOT/si"
+bind_session_fixture "$SI" SID0 contract-p0 p0.json ISS-P0 build
+fire session-inject "$(J '{"cwd":"'"$SI"'","session_id":"SID0"}')";                                           a_has  "si P0: bound contract state" "ISS-P0"
 a_has "si P0: phase label" "6. Build"
-printf '{"issue":"ISS-P1","current_phase":"review"}' > "$SI/.agents/progress/p1.json"
-printf '{"SID1":"p1.json"}' > "$SI/.agents/progress/.session-map.json"
-fire session-inject "$(J '{"cwd":"'"$SI"'","session_id":"SID1"}')";                                           a_has  "si P1: bound via session-map" "ISS-P1"
-fire session-inject "$(J '{"cwd":"'"$SI"'","session_id":"NOPE"}')";                                           a_has  "si unbound: selection prompt" "SESSION UNBOUND"
+bind_session_fixture "$SI" SID1 contract-p1 p1.json ISS-P1 review
+fire session-inject "$(J '{"cwd":"'"$SI"'","session_id":"SID1"}')";                                           a_has  "si P1: bound via contract registry" "ISS-P1"
+fire session-inject "$(J '{"cwd":"'"$SI"'","session_id":"NOPE"}')"; { [ -z "$OUT" ]; } && ok || bad "si unbound: prompt injection stays silent"
 # opt-out: CLAUDE_HARNESS=off → hook must exit 0 silently (no inject)
 SI_OO="$(mktemp)"; CLAUDE_HARNESS=off node "$HOOKS/session-inject.js" <<<"$(J '{"cwd":"'"$SI"'","session_id":"SID0"}')" >"$SI_OO" 2>&1; { [ ! -s "$SI_OO" ]; } && ok || bad "si opt-out env CLAUDE_HARNESS=off (must be silent)"; rm -f "$SI_OO"
 # opt-out: <cwd>/.claude/no-harness marker → silent
@@ -222,7 +224,7 @@ mkdir -p "$SI/.claude"; : > "$SI/.claude/no-harness"
 fire session-inject "$(J '{"cwd":"'"$SI"'","session_id":"SID0"}')"; { [ -z "$OUT" ]; } && ok || bad "si opt-out file .claude/no-harness (must be silent)"
 rm -f "$SI/.claude/no-harness"
 # e2e_test phase ⛔ enforcement present
-printf '{"issue":"E","current_phase":"e2e_test","session_id":"SE"}' > "$SI/.agents/progress/e.json"
+bind_session_fixture "$SI" SE contract-e2e e.json E e2e_test
 fire session-inject "$(J '{"cwd":"'"$SI"'","session_id":"SE"}')";                                             a_has  "si e2e_test ⛔ enforcement" "실제 사용자 시나리오"
 
 # ── post-compact-context ────────────────────────────────────────────────────
