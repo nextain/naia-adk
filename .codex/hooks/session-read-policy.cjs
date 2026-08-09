@@ -89,7 +89,22 @@ function readOnlyShell(command, cwd = process.cwd()) {
 }
 
 function explicitlyScopedRead(command, cwd) {
-	return /^git\s+-C\s+(?:"[^"]+"|'[^']+'|\S+)\s+/i.test(String(command || "").trim()) && readOnlyShell(command, cwd);
+	const source = String(command || "").trim();
+	if (!readOnlyShell(source, cwd)) return false;
+	if (/^git\s+-C\s+(?:"[^"]+"|'[^']+'|\S+)\s+/i.test(source)) return true;
+
+	// A host may ignore the requested tool workdir. Native PowerShell reads can
+	// still be trusted when the command itself pins its source with an absolute
+	// -Path/-LiteralPath value. Keep this deliberately narrower than
+	// readOnlyShell: positional or relative paths must not rescue a mismatch.
+	if (/[;&\r\n]/.test(source)) return false;
+	const firstStatement = source.split("|", 1)[0].trim();
+	const tokens = shellTokens(firstStatement);
+	if (!/^(?:get-content|get-childitem|get-item|get-filehash|test-path|resolve-path)$/i.test(tokens[0] || "")) return false;
+	const pathFlag = tokens.findIndex((token) => /^(?:-literalpath|-path)$/i.test(token));
+	if (pathFlag < 0 || pathFlag + 1 >= tokens.length) return false;
+	const target = tokens[pathFlag + 1];
+	return path.posix.isAbsolute(target) || path.win32.isAbsolute(target);
 }
 
 function requestedWorkdirIssue(toolInput, cwd) {

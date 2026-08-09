@@ -55,6 +55,14 @@ try {
 	assert.equal(policy.requestedWorkdirIssue({ workdir: "missing" }, fixture), "invalid");
 	assert.equal(policy.explicitlyScopedRead(`git -C "${nested}" status --short`, fixture), true);
 	assert.equal(policy.explicitlyScopedRead("git status --short", fixture), false);
+	assert.equal(policy.explicitlyScopedRead("Get-Content -Raw -LiteralPath 'D:\\alpha-adk\\AGENTS.md'", fixture), true);
+	assert.equal(policy.explicitlyScopedRead("Get-ChildItem -LiteralPath 'D:\\alpha-adk\\.agents' -Force | Select-Object Name,Length", fixture), true);
+	assert.equal(policy.explicitlyScopedRead("Get-Item -Path '\\\\server\\share\\item.txt'", fixture), true);
+	assert.equal(policy.explicitlyScopedRead("Get-Content -LiteralPath AGENTS.md", fixture), false);
+	assert.equal(policy.explicitlyScopedRead("gc -LiteralPath 'D:\\alpha-adk\\AGENTS.md'", fixture), false);
+	assert.equal(policy.explicitlyScopedRead("Get-Content -LiteralPath 'D:\\alpha-adk\\AGENTS.md'; Get-Content local.txt", fixture), false);
+	assert.equal(policy.explicitlyScopedRead("Get-Content -LiteralPath 'D:\\alpha-adk\\AGENTS.md' & Set-Content local.txt changed", fixture), false);
+	assert.equal(policy.explicitlyScopedRead("Get-Content -LiteralPath 'D:\\alpha-adk\\AGENTS.md'\nSet-Content local.txt changed", fixture), false);
 } finally {
 	fs.rmSync(fixture, { recursive: true, force: true });
 }
