@@ -48,6 +48,10 @@ assert.equal(guard.evaluate({ sessionId: "root", contractLookup: () => ({ status
 assert.equal(guard.evaluate({ sessionId: "root", contractLookup: () => ({ status: contracts.STATES.UNBOUND }), sessionChainCollection: indexedRootChain }), null, "an indexed ordinary root remains outside descendant budgeting");
 
 const repositoryRoot = contracts.findProjectRoot(__dirname);
+assert.equal(guard.evaluate({
+	sessionId: "unindexed-recovery-session",
+	cwd: repositoryRoot,
+}), null, "a repository no-harness marker must bypass cost enforcement");
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "codex-cost-guard-scratch-"));
 try {
 	let lookupCwd = null;
