@@ -1,6 +1,22 @@
 const fs = require("fs");
 const path = require("path");
 
+/**
+ * A payload root is acceptable when it is the installed harness itself or a
+ * project nested inside it.
+ *
+ * The check exists to reject a payload pointing at some other harness
+ * installation, and containment still rejects that. Requiring exact equality
+ * additionally rejected every nested project — once a submodule became its own
+ * boundary, working inside one failed with installed_project_root_mismatch
+ * before the gate ever ran, which is stricter than the collapse it replaced.
+ */
+function withinInstalledRoot(candidate, installedRoot) {
+	if (candidate === installedRoot) return true;
+	const relative = path.relative(installedRoot, candidate);
+	return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
 module.exports = function createHookProjectRoot({ findProjectRoot }) {
 	return function resolveHookProjectRoot(start, env = process.env) {
 		const payloadRoot = findProjectRoot(start);
@@ -14,9 +30,11 @@ module.exports = function createHookProjectRoot({ findProjectRoot }) {
 			if (!payloadRoot) return null;
 			let canonicalPayloadRoot = payloadRoot;
 			try { canonicalPayloadRoot = fs.realpathSync(payloadRoot); } catch {}
-			if (canonicalPayloadRoot !== installedRoot) {
+			if (!withinInstalledRoot(canonicalPayloadRoot, installedRoot)) {
 				throw Object.assign(new Error("hook payload root does not match the installed ADK harness"), { code: "installed_project_root_mismatch" });
 			}
+			// Policy and runtime state stay at the installed root even when the
+			// session works inside a nested project.
 			return installedRoot;
 		}
 		if (typeof inherited !== "string" || !path.isAbsolute(inherited)) {
@@ -38,7 +56,9 @@ module.exports = function createHookProjectRoot({ findProjectRoot }) {
 		if (payloadRoot) {
 			let canonicalPayloadRoot = payloadRoot;
 			try { canonicalPayloadRoot = fs.realpathSync(payloadRoot); } catch {}
-			if (canonicalPayloadRoot !== projectRoot) {
+			// Same containment rule as the uninherited branch: a nested project is
+			// a legitimate payload root, anything outside the harness is not.
+			if (!withinInstalledRoot(canonicalPayloadRoot, projectRoot)) {
 				throw Object.assign(new Error("hook payload root does not match ADK_PROJECT_ROOT"), { code: "inherited_project_root_mismatch" });
 			}
 		}

@@ -255,20 +255,45 @@ function fileMutationTargets(toolInput) {
 	return patchTargets(toolInput);
 }
 
-function unboundNewArtifactAllowed(toolName, toolInput, cwd) {
+/**
+ * Paths whose contents decide what any session is allowed to do. An unbound
+ * session must never be able to widen its own authority, so these stay behind a
+ * contract even though ordinary project files no longer do.
+ */
+function governedTarget(target, projectRoot) {
+	const relative = path.relative(projectRoot, target).replaceAll("\\", "/");
+	if (relative.startsWith(".agents/")) return true;
+	return HARNESS_CONFIG_DIRS.some((dir) => relative === dir || relative.startsWith(`${dir}/`));
+}
+
+/**
+ * What an unbound session may change without bootstrapping a contract.
+ *
+ * The previous carve-out allowed only new files under tmp/ or deliverables/.
+ * Measured against a marker-free checkout that left ordinary work — a new
+ * document, an edit to an existing file, anything inside a subproject — blocked,
+ * which is why every session ended up running with the harness disabled
+ * entirely. A guard nobody can work under is not enforcing anything.
+ *
+ * So ordinary project files are now editable while unbound, and the contract
+ * requirement is kept for the operations that are actually dangerous or that
+ * could escalate this session's own authority: deletion, entrypoints, and the
+ * harness/governance directories.
+ */
+function unboundOrdinaryMutationAllowed(toolName, toolInput, cwd) {
 	if (normalizedToolName(toolName) !== "file-mutation") return false;
 	const raw = rawToolName(toolName);
-	if (!new Set(["write", "apply_patch"]).has(raw)) return false;
-	if (raw === "apply_patch" && !/^\*\*\* Add File:/m.test(patchSource(toolInput))) return false;
-	if (raw === "apply_patch" && /^\*\*\* (?:Update|Delete) File:/m.test(patchSource(toolInput))) return false;
+	if (!new Set(["write", "edit", "notebookedit", "apply_patch"]).has(raw)) return false;
+	// Deletion is not recoverable from the transcript; it keeps needing a contract.
+	if (raw === "apply_patch" && /^\*\*\* Delete File:/m.test(patchSource(toolInput))) return false;
 	const projectRoot = sessionContract.findProjectRoot(cwd);
 	const targets = fileMutationTargets(toolInput);
 	if (!projectRoot || targets.length === 0) return false;
 	return targets.every((filePath) => {
 		const target = path.resolve(cwd, String(filePath));
-		if (!sessionContract.inside(projectRoot, target) || fs.existsSync(target)) return false;
-		const relative = path.relative(projectRoot, target).replaceAll("\\", "/");
-		return relative.startsWith("tmp/") || relative.startsWith("deliverables/");
+		if (!sessionContract.inside(projectRoot, target)) return false;
+		if (entrypointTarget(filePath, cwd) || stateTarget(filePath, cwd)) return false;
+		return !governedTarget(target, projectRoot);
 	});
 }
 
@@ -441,7 +466,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	// A derived worker already has a verified, parent-owned contract. It must
 	// never replace that authority by bootstrapping an explicit child contract.
 	if (resolution.reason !== "derived_delegation_verified" && bootstrapMutationAllowed(toolName, toolInput, cwd, sessionId)) return null;
-	if (resolution.status !== sessionContract.STATES.BOUND && unboundNewArtifactAllowed(toolName, toolInput, cwd)) return null;
+	if (resolution.status !== sessionContract.STATES.BOUND && unboundOrdinaryMutationAllowed(toolName, toolInput, cwd)) return null;
 	if (resolution.status === sessionContract.STATES.BOUND) {
 		if (resolution.derivedTask?.read_only === true) {
 			if (normalizedToolName(toolName) === "file-mutation") {
@@ -518,4 +543,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundNewArtifactAllowed };
+module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundOrdinaryMutationAllowed };

@@ -51,10 +51,19 @@ function inside(parent, candidate) {
 
 function findProjectRoot(start) {
 	let current = path.resolve(start || process.cwd());
+	let nestedBoundary = null;
 	while (true) {
 		if (fs.existsSync(path.join(current, ".agents", "context", "agents-rules.json"))) {
-			return current;
+			// A Git worktree or submodule nested under an ADK root bounds its own
+			// project even without the policy tree. Falling through to the outer
+			// checkout collapsed 32 of 34 entries under projects/ into one root, so
+			// a single stale contract there blocked all of them at once. Policy and
+			// runtime state still live at the installed root — resolveHookProjectRoot
+			// keeps that separate. The boundary only counts below an ADK root: a
+			// stray .git elsewhere on the filesystem must not invent a project.
+			return nestedBoundary || current;
 		}
+		if (!nestedBoundary && fs.existsSync(path.join(current, ".git"))) nestedBoundary = current;
 		const parent = path.dirname(current);
 		if (parent === current) return null;
 		current = parent;

@@ -40,12 +40,14 @@ These shared entrypoints are repository indexes. They do not contain a work
 goal, issue state, implementation sequence, completion claim, or artifact
 wording.
 
-Mutation authority comes from one explicit local contract in
-`.agents/session-contracts/`. The registry pointer, contract digest,
-`session_bindings`, and referenced progress record must agree. Progress
-records do not grant authority, and parent or child projects are never searched
-for an implicit binding. Read-only investigation remains available while
-unbound.
+An unbound session may create and edit ordinary reversible files inside its
+resolved project boundary. Governance and host-policy files, these shared
+entrypoints, deletion, mutating shell commands, external effects, and changes
+that could expand the session's own authority require one explicit local
+contract in `.agents/session-contracts/`. When bound, the registry pointer,
+contract digest, `session_bindings`, and referenced progress record must agree.
+Progress records do not grant authority, and parent or child projects are never
+searched for an implicit binding.
 
 Background context constrains agent work; it is not artifact content unless an
 explicit source atom grants `derive`, `quote`, or `require` authority for

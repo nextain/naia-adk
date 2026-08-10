@@ -206,16 +206,32 @@ try {
 			`${client} unbound mutation targeting outside the resolved project stays blocked`,
 		);
 		assert.equal(runGate(fixture, "apply_patch", { command: "product mutation" })?.decision, "block", `${client} legacy shell blocked`);
+		// Ordinary project work is available while unbound. Restricting it to new
+		// files under tmp/ left a marker-free checkout unable to write a document
+		// or edit an existing file, so every session ran with the harness off
+		// instead — a guard nobody can work under enforces nothing.
 		assert.equal(
 			runGate(fixture, "Write", { file_path: "tmp/new-report.md", content: "report" }),
 			null,
-			`${client} unbound sessions may create a new low-risk artifact without contract bootstrap`,
+			`${client} unbound sessions may create a new artifact without contract bootstrap`,
 		);
 		fs.mkdirSync(path.join(fixture, "tmp"), { recursive: true });
 		fs.writeFileSync(path.join(fixture, "tmp", "existing-report.md"), "existing\n");
-		assert.equal(runGate(fixture, "Write", { file_path: "tmp/existing-report.md", content: "replace" })?.decision, "block", `${client} unbound artifact carve-out never overwrites an existing file`);
-		assert.equal(runGate(fixture, "Write", { file_path: "src/new-code.js", content: "code" })?.decision, "block", `${client} unbound artifact carve-out never creates product code`);
-		assert.equal(runGate(fixture, "Edit", { file_path: "tmp/new-report.md" })?.decision, "block", `${client} unbound artifact carve-out never permits edits`);
+		assert.equal(runGate(fixture, "Write", { file_path: "tmp/existing-report.md", content: "replace" }), null, `${client} unbound sessions may rewrite an ordinary existing file`);
+		assert.equal(runGate(fixture, "Write", { file_path: "src/new-code.js", content: "code" }), null, `${client} unbound sessions may create ordinary product code`);
+		assert.equal(runGate(fixture, "Edit", { file_path: "tmp/new-report.md" }), null, `${client} unbound sessions may edit an ordinary file`);
+		// The boundary that remains: nothing that lets this session widen its own
+		// authority, and nothing unrecoverable.
+		assert.equal(runGate(fixture, "Write", { file_path: ".agents/context/agents-rules.json", content: "{}" })?.decision, "block", `${client} unbound sessions never rewrite governance context`);
+		assert.equal(runGate(fixture, "Write", { file_path: ".codex/hooks.json", content: "{}" })?.decision, "block", `${client} unbound sessions never rewrite the hook registry`);
+		assert.equal(runGate(fixture, "Edit", { file_path: ".codex/hooks/session-contract-gate.cjs" })?.decision, "block", `${client} unbound sessions never edit the gate that governs them`);
+		assert.equal(runGate(fixture, "Write", { file_path: ".claude/settings.json", content: "{}" })?.decision, "block", `${client} unbound sessions never rewrite host settings`);
+		assert.equal(runGate(fixture, "Edit", { file_path: "AGENTS.md" })?.decision, "block", `${client} unbound sessions never edit an entrypoint`);
+		assert.equal(
+			runGate(fixture, "apply_patch", { command: "*** Begin Patch\n*** Delete File: tmp/existing-report.md\n*** End Patch\n" })?.decision,
+			"block",
+			`${client} deletion is not recoverable from the transcript and keeps needing a contract`,
+		);
 		assert.equal(
 			runGate(fixture, "apply_patch", { command: "*** Begin Patch\n*** Update File: AGENTS.md\n@@\n-old\n+new\n*** End Patch\n" })?.decision,
 			"block",
@@ -253,9 +269,16 @@ try {
 		assert.equal(
 			runGate(fixture, "apply_patch", {
 				patch: "*** Begin Patch\n*** Add File: product.txt\n+changed\n*** End Patch\n",
+			}),
+			null,
+			`${client} apply_patch may add an ordinary product file while unbound`,
+		);
+		assert.equal(
+			runGate(fixture, "apply_patch", {
+				patch: "*** Begin Patch\n*** Add File: .codex/hooks/extra.cjs\n+evil\n*** End Patch\n",
 			})?.decision,
 			"block",
-			`${client} apply_patch product mutation remains blocked`,
+			`${client} apply_patch never adds a file to a governance directory while unbound`,
 		);
 		assert.equal(
 			runGate(fixture, "Write", {
