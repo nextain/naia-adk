@@ -74,6 +74,27 @@ try {
 	fs.rmSync(scratch, { recursive: true, force: true });
 }
 
+// An operator who disables the harness must not keep hitting this guard. It
+// stayed live through the documented opt-out that the session-contract gate and
+// harness core already honor, so a session with no indexed lineage kept being
+// blocked by a harness that was supposed to be off.
+const disabled = fs.mkdtempSync(path.join(os.tmpdir(), "codex-cost-guard-off-"));
+try {
+	const unindexed = { sessionId: "never-indexed", cwd: disabled };
+	assert.equal(guard.evaluate({ ...unindexed, env: {} })?.decision, "block", "an unindexed session is blocked while the harness is on");
+	for (const name of ["AI_HARNESS", "CLAUDE_HARNESS", "CODEX_HARNESS"]) {
+		assert.equal(guard.evaluate({ ...unindexed, env: { [name]: "off" } }), null, `${name}=off must disable the cost guard`);
+	}
+	for (const dir of [".claude", ".codex"]) {
+		fs.mkdirSync(path.join(disabled, dir), { recursive: true });
+		fs.writeFileSync(path.join(disabled, dir, "no-harness"), "");
+		assert.equal(guard.evaluate({ ...unindexed, env: {} }), null, `${dir}/no-harness must disable the cost guard`);
+		fs.rmSync(path.join(disabled, dir, "no-harness"));
+	}
+} finally {
+	fs.rmSync(disabled, { recursive: true, force: true });
+}
+
 const malformedAdapter = spawnSync(process.execPath, [path.join(__dirname, "codex-cost-guard.cjs")], {
 	input: "{broken",
 	encoding: "utf8",
