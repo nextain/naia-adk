@@ -17,6 +17,7 @@ const STATES = Object.freeze({
 	STALE: "STALE",
 	CROSS_PROJECT: "CROSS_PROJECT",
 });
+const LEASE_FRESH_MS = 2 * 60 * 1000;
 
 function stableValue(value) {
 	if (Array.isArray(value)) return value.map(stableValue);
@@ -392,6 +393,16 @@ function ownershipOverlaps(left, right) {
 	return false;
 }
 
+function contractHasFreshLease(projectRoot, contract, now = Date.now()) {
+	return (contract.session_bindings || []).some((binding) => {
+		const sessionId = bindingSessionId(binding);
+		if (!sessionId || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(sessionId)) return false;
+		const lease = readJson(path.join(projectRoot, ".agents", "session-contracts", ".recovery", "leases", `${sessionId}.json`));
+		const updated = Date.parse(lease?.updated_at || "");
+		return lease?.state === "active" && Number.isFinite(updated) && now - updated >= 0 && now - updated <= LEASE_FRESH_MS;
+	});
+}
+
 /**
  * Resolve an explicit lightweight session binding in the nearest project only.
  * No ancestor workspace or child project is searched.
@@ -421,17 +432,6 @@ function resolveExplicitSessionContract({ cwd, sessionId }) {
 		});
 	}
 
-	const duplicates = activeContracts(contractsDir).filter(({ contract }) =>
-		(contract.session_bindings || []).some(
-			(binding) => bindingSessionId(binding) === sessionId,
-		),
-	);
-	if (duplicates.length > 1) {
-		return result(STATES.AMBIGUOUS, projectRoot, "duplicate_session_binding", {
-			contractPaths: duplicates.map(({ filePath }) => filePath),
-		});
-	}
-
 	const contract = readJson(contractPath);
 	if (!contract) {
 		return result(STATES.STALE, projectRoot, "contract_missing_or_invalid", {
@@ -454,7 +454,9 @@ function resolveExplicitSessionContract({ cwd, sessionId }) {
 	}
 	const ownershipConflicts = activeContracts(contractsDir).filter(
 		({ filePath, contract: candidate }) =>
-			path.resolve(filePath) !== contractPath && ownershipOverlaps(contract, candidate),
+			path.resolve(filePath) !== contractPath &&
+			!(candidate.session_bindings || []).some((binding) => bindingSessionId(binding) === sessionId) &&
+			contractHasFreshLease(projectRoot, candidate) && ownershipOverlaps(contract, candidate),
 	);
 	if (ownershipConflicts.length > 0) {
 		return result(STATES.AMBIGUOUS, projectRoot, "target_ownership_conflict", {
@@ -585,6 +587,7 @@ module.exports = {
 	parseDelegationTask,
 	parseDelegationResult,
 	ownershipOverlaps,
+	contractHasFreshLease,
 	ownershipPatternCovers,
 	resolveSessionContract,
 	resolveExplicitSessionContract,

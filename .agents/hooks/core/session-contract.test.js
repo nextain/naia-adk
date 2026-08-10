@@ -81,7 +81,7 @@ try {
 
 	const duplicate = finishBinding(root, "A", "contract-a-copy", "contract-a-copy.json");
 	assert.ok(duplicate);
-	assert.equal(core.resolveSessionContract({ cwd: root, sessionId: "A" }).status, core.STATES.AMBIGUOUS);
+	assert.equal(core.resolveSessionContract({ cwd: root, sessionId: "A" }).contract.id, "contract-a", "the registry-selected contract remains authoritative when an older same-session file remains active");
 
 	const ownershipRoot = workspace(); roots.push(ownershipRoot);
 	const ownerA = finishBinding(ownershipRoot, "OA", "owner-a");
@@ -104,7 +104,15 @@ try {
 		OA: { contract_id: "owner-a", contract_path: ownerA.contractPath, contract_digest: ownerA.digest },
 		OB: { contract_id: "owner-b", contract_path: ownerB.contractPath, contract_digest: ownerB.digest },
 	});
+	for (const sessionId of ["OA", "OB"]) {
+		writeJson(path.join(ownershipRoot, ".agents", "session-contracts", ".recovery", "leases", `${sessionId}.json`), {
+			state: "active",
+			updated_at: new Date().toISOString(),
+		});
+	}
 	assert.equal(core.resolveSessionContract({ cwd: ownershipRoot, sessionId: "OA" }).reason, "target_ownership_conflict");
+	fs.rmSync(path.join(ownershipRoot, ".agents", "session-contracts", ".recovery", "leases", "OB.json"));
+	assert.equal(core.resolveSessionContract({ cwd: ownershipRoot, sessionId: "OA" }).status, core.STATES.BOUND, "an abandoned contract without a fresh lease must not reserve paths forever");
 
 	const staleRoot = workspace(); roots.push(staleRoot);
 	const stale = finishBinding(staleRoot, "S", "stale");
