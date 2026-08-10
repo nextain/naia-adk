@@ -42,7 +42,7 @@ assert.equal(guard.evaluate({
 	contractLookup: rootLookup,
 	sessionChainCollection: () => ({ ambiguous: false, sessions: [{ sessionId: "child", parentId: "missing", isSubagent: true }] }),
 })?.decision, "block");
-assert.equal(guard.evaluate({ sessionId: "none", contractLookup: () => ({ status: contracts.STATES.UNBOUND }), sessionChainCollection: () => ({ sessions: [], ambiguous: false }) })?.decision, "block", "an unindexed hook session must fail closed");
+assert.equal(guard.evaluate({ sessionId: "none", contractLookup: () => ({ status: contracts.STATES.UNBOUND }), sessionChainCollection: () => ({ sessions: [], ambiguous: false }) }), null, "a fresh unbound root session is outside descendant cost enforcement");
 const indexedRootChain = () => ({ sessions: [{ sessionId: "root", parentId: null, isSubagent: false }], ambiguous: false });
 assert.equal(guard.evaluate({ sessionId: "root", contractLookup: () => ({ status: contracts.STATES.BOUND, contract: {} }), sessionChainCollection: indexedRootChain }), null);
 assert.equal(guard.evaluate({ sessionId: "root", contractLookup: () => ({ status: contracts.STATES.UNBOUND }), sessionChainCollection: indexedRootChain }), null, "an indexed ordinary root remains outside descendant budgeting");
@@ -81,7 +81,7 @@ try {
 const disabled = fs.mkdtempSync(path.join(os.tmpdir(), "codex-cost-guard-off-"));
 try {
 	const unindexed = { sessionId: "never-indexed", cwd: disabled };
-	assert.equal(guard.evaluate({ ...unindexed, env: {} })?.decision, "block", "an unindexed session is blocked while the harness is on");
+	assert.equal(guard.evaluate({ ...unindexed, env: {} }), null, "a fresh unbound root session is outside descendant cost enforcement");
 	for (const name of ["AI_HARNESS", "CLAUDE_HARNESS", "CODEX_HARNESS"]) {
 		assert.equal(guard.evaluate({ ...unindexed, env: { [name]: "off" } }), null, `${name}=off must disable the cost guard`);
 	}

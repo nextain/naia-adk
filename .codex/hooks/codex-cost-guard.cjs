@@ -45,6 +45,9 @@ function evaluate({ sessionId = null, cwd = process.cwd(), env = process.env, co
 		const chain = (sessionChainCollection || ((value) => usage.collectSessionChain(value)))({ sessionId });
 		if (chain.ambiguous) return block("session lineage is ambiguous");
 		const current = chain.sessions?.find((item) => item.sessionId === sessionId);
+		// Cost ceilings belong to governed descendant lineages. A fresh root
+		// session has no contract or indexed parent yet and must remain usable.
+		if (!current && resolved?.status === contracts.STATES.UNBOUND) return null;
 		if (!current) return block("session lineage is missing or unindexed");
 		if (!current.parentId && !current.isSubagent) return null;
 		boundSessionId = usage.lineageRootId(chain, sessionId);

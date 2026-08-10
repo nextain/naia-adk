@@ -392,7 +392,6 @@ try {
 	fs.mkdirSync(path.join(child, ".agents", "context"), { recursive: true });
 	fs.writeFileSync(path.join(child, ".agents", "context", "agents-rules.json"), "{}\n");
 	assert.equal(core.resolveSessionContract({ cwd: child, sessionId: "PARENT" }).status, core.STATES.UNBOUND);
-
 	const crossRoot = workspace(); roots.push(crossRoot);
 	writeRegistry(crossRoot, {
 		X: { contract_id: "external", contract_path: path.join(parent, parentContract.contractPath), contract_digest: parentContract.digest },
