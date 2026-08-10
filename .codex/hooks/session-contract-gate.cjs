@@ -426,6 +426,16 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 				: "⛔ [HARNESS] 요청한 workdir와 훅이 검증한 실행 루트가 다릅니다. 런타임이 workdir를 무시할 수 있으므로 `git -C <절대경로> ...` 또는 PowerShell `Get-Content -LiteralPath <절대경로>`처럼 명령 자체에 대상을 고정하세요.",
 		};
 	}
+	if (process.platform === "win32" && normalizedToolName(toolName) === "shell") {
+		const executionRoot = sessionContract.findProjectRoot(dependencies.processCwd || process.cwd());
+		const governedRoot = sessionContract.findProjectRoot(cwd);
+		if (executionRoot && governedRoot && path.resolve(executionRoot) !== path.resolve(governedRoot) && !explicitlyScopedRead(toolInput.command, governedRoot)) {
+			return {
+				decision: "block",
+				reason: `⛔ [HARNESS] Windows login shell root mismatch: actual=${executionRoot}, governed=${governedRoot}. Use an absolute -Path/-LiteralPath read or git -C <absolute-path>; relative shell evidence is invalid.`,
+			};
+		}
+	}
 
 	const resolution = resolveSessionContract({ cwd, sessionId });
 	// A derived worker already has a verified, parent-owned contract. It must

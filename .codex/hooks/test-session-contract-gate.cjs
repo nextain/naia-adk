@@ -44,7 +44,7 @@ function runGate(cwd, toolName, toolInput, extraEnv = {}, resolvedRoot = cwd) {
 	return gate.decide(
 		{ cwd, session_id: "SESSION-1", tool_name: toolName, tool_input: toolInput },
 		{ ...process.env, ADK_PROJECT_ROOT: "", AI_HARNESS: "", CLAUDE_HARNESS: "", CODEX_HARNESS: "", ...extraEnv },
-		{ resolveHookProjectRoot: () => resolvedRoot },
+		{ resolveHookProjectRoot: () => resolvedRoot, processCwd: cwd },
 	);
 }
 
@@ -142,6 +142,14 @@ try {
 
 	for (const client of ["claude", "codex"]) {
 		assert.equal(runGate(fixture, "Bash", { command: "git status --short" }), null, `${client} read-only`);
+		if (process.platform === "win32") {
+			const mismatch = gate.decide(
+				{ cwd: fixture, session_id: "SESSION-1", tool_name: "Bash", tool_input: { command: "git status --short" } },
+				process.env,
+				{ resolveHookProjectRoot: () => fixture, processCwd: repositoryRoot },
+			);
+			assert.match(mismatch?.reason, /login shell root mismatch/, `${client} relative shell evidence must fail closed when Windows runs in another project`);
+		}
 		assert.equal(
 			runGate(fixture, "Bash", { command: "node .agents/harness/session-contract-recovery.cjs reclaim --contract orphan-job --session SESSION-1" }),
 			null,
@@ -273,6 +281,7 @@ try {
 	const readOnlyDependencies = {
 		resolveHookProjectRoot: () => fixture,
 		resolveSessionContract: () => readOnlyResolution,
+		processCwd: fixture,
 	};
 	assert.match(gate.decide(
 		{ cwd: fixture, session_id: "CHILD", tool_name: "Write", tool_input: { file_path: "product.txt", content: "no" } },
