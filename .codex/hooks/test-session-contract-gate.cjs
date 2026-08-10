@@ -199,6 +199,16 @@ try {
 		);
 		assert.equal(runGate(fixture, "apply_patch", { command: "product mutation" })?.decision, "block", `${client} legacy shell blocked`);
 		assert.equal(
+			runGate(fixture, "Write", { file_path: "tmp/new-report.md", content: "report" }),
+			null,
+			`${client} unbound sessions may create a new low-risk artifact without contract bootstrap`,
+		);
+		fs.mkdirSync(path.join(fixture, "tmp"), { recursive: true });
+		fs.writeFileSync(path.join(fixture, "tmp", "existing-report.md"), "existing\n");
+		assert.equal(runGate(fixture, "Write", { file_path: "tmp/existing-report.md", content: "replace" })?.decision, "block", `${client} unbound artifact carve-out never overwrites an existing file`);
+		assert.equal(runGate(fixture, "Write", { file_path: "src/new-code.js", content: "code" })?.decision, "block", `${client} unbound artifact carve-out never creates product code`);
+		assert.equal(runGate(fixture, "Edit", { file_path: "tmp/new-report.md" })?.decision, "block", `${client} unbound artifact carve-out never permits edits`);
+		assert.equal(
 			runGate(fixture, "apply_patch", { command: "*** Begin Patch\n*** Update File: AGENTS.md\n@@\n-old\n+new\n*** End Patch\n" })?.decision,
 			"block",
 			`${client} direct entrypoint patch blocked`,

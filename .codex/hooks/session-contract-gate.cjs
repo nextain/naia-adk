@@ -255,6 +255,23 @@ function fileMutationTargets(toolInput) {
 	return patchTargets(toolInput);
 }
 
+function unboundNewArtifactAllowed(toolName, toolInput, cwd) {
+	if (normalizedToolName(toolName) !== "file-mutation") return false;
+	const raw = rawToolName(toolName);
+	if (!new Set(["write", "apply_patch"]).has(raw)) return false;
+	if (raw === "apply_patch" && !/^\*\*\* Add File:/m.test(patchSource(toolInput))) return false;
+	if (raw === "apply_patch" && /^\*\*\* (?:Update|Delete) File:/m.test(patchSource(toolInput))) return false;
+	const projectRoot = sessionContract.findProjectRoot(cwd);
+	const targets = fileMutationTargets(toolInput);
+	if (!projectRoot || targets.length === 0) return false;
+	return targets.every((filePath) => {
+		const target = path.resolve(cwd, String(filePath));
+		if (!sessionContract.inside(projectRoot, target) || fs.existsSync(target)) return false;
+		const relative = path.relative(projectRoot, target).replaceAll("\\", "/");
+		return relative.startsWith("tmp/") || relative.startsWith("deliverables/");
+	});
+}
+
 function contractPathMatches(pattern, relativePath) {
 	const normalizedPattern = String(pattern).replaceAll("\\", "/").replace(/^\.\//, "");
 	const normalizedPath = String(relativePath).replaceAll("\\", "/").replace(/^\.\//, "");
@@ -414,6 +431,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	// A derived worker already has a verified, parent-owned contract. It must
 	// never replace that authority by bootstrapping an explicit child contract.
 	if (resolution.reason !== "derived_delegation_verified" && bootstrapMutationAllowed(toolName, toolInput, cwd, sessionId)) return null;
+	if (resolution.status !== sessionContract.STATES.BOUND && unboundNewArtifactAllowed(toolName, toolInput, cwd)) return null;
 	if (resolution.status === sessionContract.STATES.BOUND) {
 		if (resolution.derivedTask?.read_only === true) {
 			if (normalizedToolName(toolName) === "file-mutation") {
@@ -490,4 +508,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand };
+module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundNewArtifactAllowed };
