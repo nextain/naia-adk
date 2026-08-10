@@ -344,6 +344,29 @@ assert.throws(() => loadConfiguredLineages({
   contractResolver: ({ sessionId }) => ({ status: "BOUND", contract: sessionId === "governed" ? { id: sessionId, subagent_policy: {} } : { id: sessionId } }),
 }), /subagent_policy is invalid/, "an explicitly declared malformed policy must fail closed");
 
+// Process-to-session attribution must stay O(1) in transcript size: a full parse
+// here made activeCodexThreads take seconds on a host with large rollouts, so the
+// watchdog could not publish its first heartbeat inside the startup budget.
+assert.equal(usage.readSessionId(rollout).sessionId, "child", "identity comes from the session_meta row");
+assert.equal(usage.readSessionId(rollout).malformed, false);
+const hugeRollout = path.join(root, "rollout-huge.jsonl");
+fs.writeFileSync(hugeRollout, [
+	JSON.stringify({ timestamp: "2026-01-01T00:00:00.000Z", type: "session_meta", payload: { id: "huge" } }),
+	`${JSON.stringify({ timestamp: "2026-01-01T00:00:01.000Z", type: "event_msg", payload: { type: "filler", blob: "x".repeat(512 * 1024) } })}\n`,
+].join("\n"));
+assert.equal(usage.readSessionId(hugeRollout).sessionId, "huge", "identity must not depend on reading the whole transcript");
+// A rollout being appended to always ends in a partial row; that is not corruption.
+const appendingRollout = path.join(root, "rollout-appending.jsonl");
+fs.writeFileSync(appendingRollout, `${JSON.stringify({ timestamp: "2026-01-01T00:00:00.000Z", type: "session_meta", payload: { id: "appending" } })}\n{"type":"event_ms`);
+assert.equal(usage.readSessionId(appendingRollout).sessionId, "appending", "a live trailing write must not hide a resolved identity");
+// Corrupt evidence at the head is indistinguishable from a truncated write: fail closed.
+assert.equal(usage.readSessionId(corruptRollout).malformed, false, "a valid session_meta ahead of later corruption still identifies the session");
+const headCorruptRollout = path.join(root, "rollout-head-corrupt.jsonl");
+fs.writeFileSync(headCorruptRollout, `{broken\n${JSON.stringify({ type: "session_meta", payload: { id: "unreachable" } })}\n`);
+assert.deepEqual(usage.readSessionId(headCorruptRollout), { sessionId: null, malformed: true }, "corrupt evidence before session_meta must fail closed");
+assert.deepEqual(usage.readSessionId(missingMetadataRollout), { sessionId: null, malformed: true }, "a rollout without an id must fail closed");
+assert.equal(usage.readSessionId(path.join(root, "does-not-exist.jsonl")).malformed, true, "an unreadable rollout must fail closed");
+
 assert.throws(() => runOnce({ procRoot: path.join(root, "missing-proc"), configuredLineages: [], enforce: true }), /process discovery is unavailable/);
 fs.mkdirSync(path.join(procRoot, "102", "fd"), { recursive: true });
 fs.writeFileSync(path.join(procRoot, "102", "comm"), "codex\n");
