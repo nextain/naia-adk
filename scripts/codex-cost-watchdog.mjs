@@ -86,8 +86,10 @@ function directRolloutIds(root, pid) {
 		try { target = fs.readlinkSync(path.join(root, String(pid), "fd", entry)); } catch { continue; }
 		if (!target.endsWith(".jsonl")) continue;
 		try {
-			const session = usage.readSession(path.resolve(target));
-			if (session?.sessionId) ids.add(session.sessionId);
+			// Identity only: a full parse here made process discovery scale with
+			// transcript size and blew the watchdog's startup heartbeat budget.
+			const identity = usage.readSessionId(path.resolve(target));
+			if (identity.sessionId) ids.add(identity.sessionId);
 			else malformed = true;
 		} catch { malformed = true; }
 	}

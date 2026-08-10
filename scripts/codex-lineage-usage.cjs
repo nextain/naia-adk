@@ -8,7 +8,11 @@ const { StringDecoder } = require("node:string_decoder");
 
 const HARD_MAX_CHILDREN = 8;
 const READ_CHUNK_BYTES = 256 * 1024;
+// A `session_meta` row is the first line of a rollout and is far smaller than
+// this; the bound only stops a pathological file from being read whole.
+const IDENTITY_PREFIX_BYTES = 64 * 1024;
 const SESSION_CACHE = new Map();
+const IDENTITY_CACHE = new Map();
 let sessionCacheHits = 0;
 let sessionCacheMisses = 0;
 
@@ -161,6 +165,61 @@ function sessionFileSignature(file) {
 	return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
+/**
+ * Read only the session identity from a rollout file.
+ *
+ * Process-to-session attribution needs nothing but the `session_meta` id, which
+ * rollouts write as their first row. Full-scanning instead made identity cost
+ * proportional to transcript size: on a busy host `activeCodexThreads` parsed
+ * every open rollout — including multi-hundred-megabyte ones — and took seconds,
+ * so the watchdog could not publish its first heartbeat inside the startup
+ * budget. Reading a bounded prefix keeps identity O(1) in transcript size.
+ *
+ * Corrupt evidence inside the prefix still fails closed: the caller cannot tell
+ * a truncated write from a permanently damaged file, so it must treat an
+ * unresolved identity as ambiguous. Malformed rows beyond the prefix stay the
+ * concern of `readSession`, which remains the source of truth for usage totals.
+ */
+function readSessionId(file, { maxBytes = IDENTITY_PREFIX_BYTES } = {}) {
+	let signature;
+	try { signature = sessionFileSignature(file); } catch { return { sessionId: null, malformed: true }; }
+	const cached = IDENTITY_CACHE.get(file);
+	if (cached?.signature === signature) return cached.identity;
+	let text = "";
+	const fd = fs.openSync(file, "r");
+	try {
+		const buffer = Buffer.allocUnsafe(Math.min(maxBytes, READ_CHUNK_BYTES));
+		const decoder = new StringDecoder("utf8");
+		let read = 0;
+		while (read < maxBytes) {
+			const count = fs.readSync(fd, buffer, 0, Math.min(buffer.length, maxBytes - read), null);
+			if (!count) break;
+			read += count;
+			text += decoder.write(buffer.subarray(0, count));
+			if (text.includes("\n")) break;
+		}
+		text += decoder.end();
+	} finally {
+		fs.closeSync(fd);
+	}
+	// Only complete lines are evidence; a trailing fragment may be a partial write.
+	const newline = text.lastIndexOf("\n");
+	let identity = { sessionId: null, malformed: true };
+	if (newline >= 0) {
+		for (const line of text.slice(0, newline).split("\n")) {
+			if (!line.trim()) continue;
+			const row = parse(line);
+			if (!row) break;
+			if (row.type !== "session_meta") continue;
+			const id = row.payload?.id || row.payload?.session_id;
+			if (typeof id === "string" && id) identity = { sessionId: id, malformed: false };
+			break;
+		}
+	}
+	IDENTITY_CACHE.set(file, { signature, identity });
+	return identity;
+}
+
 function readSessionCached(file) {
 	const signature = sessionFileSignature(file);
 	const cached = SESSION_CACHE.get(file);
@@ -176,6 +235,7 @@ function readSessionCached(file) {
 
 function clearSessionCache() {
 	SESSION_CACHE.clear();
+	IDENTITY_CACHE.clear();
 	sessionCacheHits = 0;
 	sessionCacheMisses = 0;
 }
@@ -465,6 +525,7 @@ module.exports = {
 	findLineage,
 	lineageRootId,
 	readSession,
+	readSessionId,
 	reserveLineageSpawn,
 	scanJsonLines,
 	sessionCacheStats,
