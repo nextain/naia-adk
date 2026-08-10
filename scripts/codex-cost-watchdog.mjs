@@ -166,8 +166,16 @@ export function activeCodexThreads({ procRoot = "/proc" } = {}) {
 }
 
 export function loadConfiguredLineages({ projectRoot = process.cwd(), codexHome, contractResolver = (value) => contracts.resolveSessionContract(value) } = {}) {
+	let registryText;
+	try { registryText = fs.readFileSync(path.join(projectRoot, ".agents", "session-contracts", ".session-map.json"), "utf8"); }
+	catch (error) {
+		// The registry is host-local and gitignored (see .agents/session-contracts/README.md), so a fresh
+		// checkout with no bound session yet has none. That is "no configured lineages", not a failure.
+		if (error?.code === "ENOENT") return [];
+		throw new Error("Configured lineage registry is unreadable");
+	}
 	let registry;
-	try { registry = JSON.parse(fs.readFileSync(path.join(projectRoot, ".agents", "session-contracts", ".session-map.json"), "utf8")); }
+	try { registry = JSON.parse(registryText); }
 	catch { throw new Error("Configured lineage registry is missing or malformed"); }
 	if (!registry || typeof registry !== "object" || Array.isArray(registry) || !registry.bindings || typeof registry.bindings !== "object" || Array.isArray(registry.bindings)) {
 		throw new Error("Configured lineage registry is invalid");

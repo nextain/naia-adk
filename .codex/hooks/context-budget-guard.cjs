@@ -10,24 +10,38 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const OFF_VALUES = new Set(["off", "0", "false", "no"]);
-// Leave headroom for one final tool result and the handoff/compaction turn.
-// The previous 80k boundary could already be exceeded by one large read.
+const ON_VALUES = new Set(["on", "1", "true", "yes"]);
+// Floor used when the model's context window is unknown and as the minimum
+// for known windows. Leaves headroom for one final tool result and the
+// handoff/compaction turn; the previous 80k boundary could already be
+// exceeded by one large read.
 const DEFAULT_LIMIT = 64_000;
+// Fraction of the model's actual context window retained before blocking.
+// A fixed absolute limit ignored the window entirely and throttled large-
+// window models (e.g. 258,400) at the same point as small-window ones.
+const WINDOW_RATIO = 0.6;
 
 function parseInput(raw) {
   try { return JSON.parse(raw || "{}"); } catch { return {}; }
 }
 
-function configuredLimit(env = process.env) {
+function configuredLimit(contextWindow, env = process.env) {
   const raw = String(env.CODEX_MAX_RETAINED_CONTEXT_TOKENS || "").trim();
-  if (!raw) return DEFAULT_LIMIT;
-  const value = Number(raw);
-  return Number.isSafeInteger(value) && value >= 16_000 ? value : DEFAULT_LIMIT;
+  if (raw) {
+    const value = Number(raw);
+    if (Number.isSafeInteger(value) && value >= 16_000) return value;
+  }
+  if (Number.isSafeInteger(contextWindow) && contextWindow > 0) {
+    return Math.max(DEFAULT_LIMIT, Math.round(contextWindow * WINDOW_RATIO));
+  }
+  return DEFAULT_LIMIT;
 }
 
 function disabled(env = process.env) {
-  return OFF_VALUES.has(String(env.CODEX_CONTEXT_GUARD || "").trim().toLowerCase());
+  // Codex performs native automatic compaction. This cost guard is an
+  // operator opt-in because blocking before the host compaction threshold
+  // leaves the agent unable to continue without a user-entered slash command.
+  return !ON_VALUES.has(String(env.CODEX_CONTEXT_GUARD || "").trim().toLowerCase());
 }
 
 function recoveryPrompt(prompt) {
@@ -86,8 +100,9 @@ function evaluate({ sessionId, eventName = "PreToolUse", prompt = "", codexHome 
   const rollout = findRollout(path.join(codexHome, "sessions"), sessionId);
   if (!rollout) return null;
   const usage = latestUsage(rollout);
-  const limit = configuredLimit(env);
-  if (!usage || usage.inputTokens < limit) return null;
+  if (!usage) return null;
+  const limit = configuredLimit(usage.contextWindow, env);
+  if (usage.inputTokens < limit) return null;
   const reason = `[COST GUARD] This session is replaying ${usage.inputTokens.toLocaleString("en-US")} input tokens per turn (limit ${limit.toLocaleString("en-US")}). Run /compact or start a new Codex session before more work. The exact /compact recovery prompt remains allowed. This guard prevents long-context repetition; it does not stop needed work after rotation.`;
   if (eventName === "UserPromptSubmit") return { decision: "block", reason };
   return { decision: "block", reason };

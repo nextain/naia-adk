@@ -309,7 +309,11 @@ assert.equal(ensureWatchdog({
 }).reason, "startup_in_progress");
 
 const missingRegistryRoot = path.join(root, "missing-registry");
-assert.throws(() => loadConfiguredLineages({ projectRoot: missingRegistryRoot, codexHome: root }), /registry is missing or malformed/);
+assert.deepEqual(
+	loadConfiguredLineages({ projectRoot: missingRegistryRoot, codexHome: root }),
+	[],
+	"a fresh checkout with no host-local registry yet has no configured lineages, not a failure",
+);
 const malformedRegistryRoot = path.join(root, "malformed-registry");
 fs.mkdirSync(path.join(malformedRegistryRoot, ".agents", "session-contracts"), { recursive: true });
 fs.writeFileSync(path.join(malformedRegistryRoot, ".agents", "session-contracts", ".session-map.json"), "{broken");
