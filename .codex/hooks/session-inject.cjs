@@ -36,6 +36,10 @@ async function main() {
   });
   if (result && result.text) {
     process.stdout.write(JSON.stringify({ systemMessage: result.text }));
+	} else if (process.platform === "win32" && input.hook_event_name === "SessionStart") {
+		process.stdout.write(JSON.stringify({
+			systemMessage: "[HARNESS] Windows login shells may ignore the requested workdir. For shell reads and validation, use absolute paths rooted at the host-reported workspace; do not use relative paths as evidence that a prior file mutation succeeded or failed.",
+		}));
   }
 }
 

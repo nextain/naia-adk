@@ -63,9 +63,23 @@ function trustedSessionParserCommand(command, cwd) {
 	return targetCount === 1 || tokens.includes("--list");
 }
 
+function trustedPowerShellReadBatch(command) {
+	const source = String(command || "").trim();
+	if (!source || /[><`]|\$\(|\b(?:set-content|add-content|out-file|tee|new-item|remove-item|move-item|copy-item|rename-item|invoke-expression)\b/i.test(source)) return false;
+	const match = source.match(/^\$([A-Za-z_][A-Za-z0-9_]*)\s*=\s*@\(([^)]*)\)\s*;\s*foreach\s*\(\s*\$([A-Za-z_][A-Za-z0-9_]*)\s+in\s+\$\1\s*\)\s*\{([\s\S]*)\}\s*$/i);
+	if (!match) return false;
+	const entries = match[2].split(",").map((value) => value.trim()).filter(Boolean);
+	if (entries.length === 0 || entries.some((value) => !/^(?:'[^']+'|"[^"]+")$/.test(value))) return false;
+	const iterator = match[3].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const body = match[4].trim();
+	const read = new RegExp(`^(?:Write-Output\\s+(?:'[^']*'|"[^"]*")\\s*;\\s*)?Get-Content\\s+(?=[^;]*-(?:LiteralPath|Path)\\s+\\$${iterator}(?:\\s|$))[^;{}]+(?:\\s*;)?$`, "i");
+	return read.test(body);
+}
+
 function readOnlyShell(command, cwd = process.cwd()) {
 	const source = String(command || "").trim();
 	if (!source) return true;
+	if (trustedPowerShellReadBatch(source)) return true;
 	if (
 		/[><`]/.test(source) ||
 		/\$\(/.test(source) ||
@@ -148,5 +162,6 @@ module.exports = {
 	requestedWorkdirIssue,
 	shellTokens,
 	trustedSessionParserCommand,
+	trustedPowerShellReadBatch,
 	unsafeShellCommand,
 };
