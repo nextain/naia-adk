@@ -30,6 +30,17 @@ for (const command of [
 ]) assert.equal(policy.readOnlyShell(command, repositoryRoot), true, command);
 
 assert.equal(
+	policy.readOnlyShell("$paths = @('.agents/context/agents-rules.json','.agents/context/project-index.yaml'); foreach ($p in $paths) { Get-Content -LiteralPath $p -Raw }", repositoryRoot),
+	true,
+	"a literal-path Get-Content batch must remain available to unbound sessions",
+);
+for (const command of [
+	"$paths = @('.agents/context/agents-rules.json'); foreach ($p in $paths) { Set-Content -LiteralPath $p changed }",
+	"$paths = @($(Get-ChildItem)); foreach ($p in $paths) { Get-Content -LiteralPath $p -Raw }",
+	"$paths = @('.agents/context/agents-rules.json'); foreach ($p in $paths) { Invoke-Expression $p }",
+]) assert.equal(policy.readOnlyShell(command, repositoryRoot), false, command);
+
+assert.equal(
 	policy.readOnlyShell("node .agents/skills/session-resume/parse-session.js --list", repositoryRoot),
 	true,
 	"the repository-owned session parser may write only its default temporary digest",
