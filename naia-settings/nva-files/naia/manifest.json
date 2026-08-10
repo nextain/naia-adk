@@ -21,7 +21,7 @@
         "외형·성격 너에게 맞춰 바뀜"
       ]
     },
-    "note": "GPU 없이 재생하는 완성 idle·발화 영상 NVA 번들.",
+    "note": "알파 채널을 포함해 배경을 자유롭게 합성하는 대기·발화·동작 NVA 예제.",
     "style_label": "기본 화풍"
   },
   "canvas": {
@@ -30,8 +30,7 @@
     "fps": 25
   },
   "background": {
-    "type": "transparent",
-    "color": "#cad8cc"
+    "type": "transparent"
   },
   "animations": {
     "idle": {
@@ -48,22 +47,28 @@
       "description": "평상시 대기 상태 (기본 루프)"
     },
     "talking": {
-      "clip": "clips/speech-ko.mp4",
+      "clip": "clips/talking-ko.webm",
       "loop": true,
       "can_talk": true,
       "label": "말하기 영상"
     },
-    "action": {
-      "clip": "clips/action.webm",
+    "crystal-heart": {
       "loop": false,
       "can_talk": false,
-      "label": "하트"
+      "label": "크리스털 하트",
+      "clip": "clips/crystal-heart.webm"
+    },
+    "curious-scan": {
+      "loop": false,
+      "can_talk": false,
+      "label": "호기심 스캔",
+      "clip": "clips/curious-scan.webm"
     }
   },
   "speech_clips": {
     "speech-ko": {
-      "clip": "clips/speech-ko.mp4",
-      "label": "한국어 발화 · Naia",
+      "clip": "clips/talking-ko.webm",
+      "label": "한국어 발화 · Naia voice profile",
       "audio": "embedded",
       "locale": "ko-KR",
       "text": "안녕하세요. 오늘은 미리 생성한 발화 자산을 자연스럽게 연결해서, 그래픽 카드가 없는 컴퓨터에서도 비디오 아바타가 긴 문장을 안정적으로 말할 수 있는지 확인하겠습니다. 모음과 자음이 빠르게 바뀌는 구간, 잠시 숨을 고르는 구간, 그리고 문장이 길게 이어지는 구간까지 차례로 살펴보겠습니다."
@@ -71,7 +76,11 @@
   },
   "expressions": {
     "neutral": "idle",
-    "speaking": "talking"
+    "speaking": "talking",
+    "idle": "idle",
+    "talking": "talking",
+    "crystal-heart": "crystal-heart",
+    "curious-scan": "curious-scan"
   },
   "scenario": {
     "nodes": {
