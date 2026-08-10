@@ -103,7 +103,12 @@ try {
   });
   const inheritedGate = spawnSync("sh", ["-c", sessionContractHook.command], { cwd: scratch, env: { ...process.env, ADK_PROJECT_ROOT: root }, input: gateInput, encoding: "utf8" });
   assert.equal(inheritedGate.status, 0, inheritedGate.stderr);
-  assert.match(inheritedGate.stdout, /HARNESS/, "the inherited root must keep the session contract gate active from scratch cwd");
+  const recoveryOptOut = [".claude", ".codex", ".pi"].some((dir) => fs.existsSync(path.join(root, dir, "no-harness")));
+  if (recoveryOptOut) {
+    assert.equal(inheritedGate.stdout, "", "the inherited root must honor repository recovery opt-out from scratch cwd");
+  } else {
+    assert.match(inheritedGate.stdout, /HARNESS/, "the inherited root must keep the session contract gate active from scratch cwd");
+  }
   const noInheritedEnvironment = { ...process.env };
   delete noInheritedEnvironment.ADK_PROJECT_ROOT;
   const missing = spawnSync("sh", ["-c", spawnHook.command], { cwd: scratch, env: noInheritedEnvironment, input: deniedInput, encoding: "utf8" });
