@@ -1,13 +1,20 @@
 #!/usr/bin/env node
 
-const contracts = require("../../.agents/hooks/core/session-contract.js");
-const usage = require("../../scripts/codex-lineage-usage.cjs");
 const fs = require("node:fs");
 const path = require("node:path");
+const contracts = require("../../.agents/hooks/core/session-contract.js");
+const usage = require("../../scripts/codex-lineage-usage.cjs");
 
+// Same opt-out the session-contract gate and harness core honor. Without it
+// this guard stayed live after an operator disabled the harness, so a session
+// with no indexed lineage (a fresh clone, a brand-new session) kept being
+// blocked by a harness that was supposed to be off.
+const HARNESS_OFF = new Set(["off", "0", "false", "no"]);
+const HARNESS_ENV_VARS = ["AI_HARNESS", "CLAUDE_HARNESS", "CODEX_HARNESS"];
 const HARNESS_CONFIG_DIRS = [".claude", ".codex", ".pi"];
 
-function harnessDisabled(...roots) {
+function harnessDisabled({ env = null, roots = [] } = {}) {
+	if (env && HARNESS_ENV_VARS.some((name) => HARNESS_OFF.has(String(env[name] || "").trim().toLowerCase()))) return true;
 	return roots.filter(Boolean).some((root) =>
 		HARNESS_CONFIG_DIRS.some((dir) => fs.existsSync(path.join(root, dir, "no-harness"))),
 	);
@@ -26,8 +33,11 @@ function canonicalJson(value) {
 function evaluate({ sessionId = null, cwd = process.cwd(), env = process.env, contractLookup = null, sessionCollection = null, sessionChainCollection = null } = {}) {
 	const lookup = contractLookup || ((value) => contracts.resolveSessionContract(value));
 	const projectRoot = contracts.resolveHookProjectRoot(cwd, env) || cwd;
+	// The marker may sit at the session cwd or at the repository root. Injected
+	// sources mean a test is driving this, so keep those deterministic and let
+	// them exercise enforcement even from a checkout that carries a marker.
 	const usesRuntimeSources = contractLookup === null && sessionCollection === null && sessionChainCollection === null;
-	if (usesRuntimeSources && harnessDisabled(cwd, projectRoot)) return null;
+	if (usesRuntimeSources && harnessDisabled({ env, roots: [cwd, projectRoot] })) return null;
 	let boundSessionId = sessionId;
 	let resolved = lookup({ cwd: projectRoot, sessionId });
 	let policy = resolved?.status === contracts.STATES.BOUND ? resolved.contract?.subagent_policy : null;
