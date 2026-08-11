@@ -380,6 +380,10 @@ try {
 			ambiguous: false,
 		}),
 	}).reason, "delegation_lineage_invalid");
+	// A child of an unbound parent falls back to its own unbound resolution
+	// rather than failing. It inherits exactly its parent's unbound authority, so
+	// delegating cannot be a way to gain authority, and delegation no longer
+	// requires authoring a contract first.
 	assert.equal(core.resolveSessionContract({
 		cwd: parent,
 		sessionId: "CHILD",
@@ -387,7 +391,7 @@ try {
 			sessions: [{ ...delegatedChain.sessions[0], parentId: "MISSING" }, { sessionId: "MISSING", parentId: null, isSubagent: false }],
 			ambiguous: false,
 		}),
-	}).reason, "delegation_parent_unbound");
+	}).status, core.STATES.UNBOUND);
 	const child = path.join(parent, "projects", "child");
 	fs.mkdirSync(path.join(child, ".agents", "context"), { recursive: true });
 	fs.writeFileSync(path.join(child, ".agents", "context", "agents-rules.json"), "{}\n");

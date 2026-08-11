@@ -71,6 +71,15 @@
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/beh-pretool.js\""
           }
         ]
+      },
+      {
+        "matcher": "Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/subagent-spawn-guard.js\""
+          }
+        ]
       }
     ],
     "SessionStart": [

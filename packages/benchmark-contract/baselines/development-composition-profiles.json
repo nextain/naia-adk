@@ -1,173 +1,257 @@
 {
-  "schema_revision": "development-composition-profiles-v2",
-  "status": "active_codex_default_no_total_cost_claim",
-  "default_profile": "balanced",
-  "fallback_profile": "control",
-  "activation": {
-    "codex_bound_sessions": {
-      "mode": "default_active",
-      "override_env": "CODEX_DEVELOPMENT_PROFILE",
-      "available_bindings_env": "CODEX_AVAILABLE_BINDINGS"
-    }
-  },
-  "availability": {
-    "default_available_bindings": ["sol", "luna"],
-    "override": "explicit availableBindings or CODEX_AVAILABLE_BINDINGS",
-    "unavailable_policy": "fail closed; return the task to L2 for decomposition or explicit profile rollback"
-  },
-  "bindings": {
-    "sol": {
-      "adapter": "codex",
-      "model": "gpt-5.6-sol",
-      "default_reasoning_effort": "medium",
-      "allowed_reasoning_efforts": ["medium", "high"],
-      "qualification": "orchestration_and_integration_baseline"
-    },
-    "terra": {
-      "adapter": "codex",
-      "model": "gpt-5.6-terra",
-      "qualification": "bounded_worker_development_calibration"
-    },
-    "luna": {
-      "adapter": "codex",
-      "model": "gpt-5.6-luna",
-      "default_reasoning_effort": "medium",
-      "allowed_reasoning_efforts": ["low", "medium", "max"],
-      "qualification": "bounded_exact_validated_implementation_smoke_8_of_9"
-    },
-    "implementation_worker": {
-      "adapter": "optional_external_runtime",
-      "profile_identity": "deployment_local_implementation_worker",
-      "activation": "explicit_available_binding_only",
-      "qualification": "requires_separate_local_configuration_and_evidence",
-      "qualification_evidence": "signed_deployment_local_receipt_v1",
-      "receipt_algorithm": "ed25519",
-      "trust_store_relative_path": "adk-development-worker-trust.json",
-      "max_receipt_validity_ms": 2592000000,
-      "rollback_binding": "sol"
-    }
-  },
-  "balanced_role_policy": {
-    "secretary": {"binding": "luna", "default_reasoning_effort": "max", "allowed_reasoning_efforts": ["max"]},
-    "issue_leader": {"binding": "luna", "default_reasoning_effort": "max", "allowed_reasoning_efforts": ["max"]},
-    "explorer": {"binding": "luna", "default_reasoning_effort": "low", "allowed_reasoning_efforts": ["low"]},
-    "analysis": {"binding": "sol", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
-    "design": {"binding": "sol", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
-    "review": {"binding": "sol", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
-    "implementation": {"binding": "luna", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
-    "test": {"binding": "luna", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
-    "generic_worker": {"binding": "luna", "default_reasoning_effort": "medium", "allowed_reasoning_efforts": ["medium"]},
-    "translation": {"binding": "luna", "default_reasoning_effort": "low", "allowed_reasoning_efforts": ["low"]}
-  },
-  "delegation_context": {
-    "brief_mode": "isolated_bounded",
-    "fork_turns": "none",
-    "fork_context": false,
-    "inherit_root_context": false
-  },
-  "runtime_policy_boundary": {
-    "separate_context": ".agents/context/discord-gateway-operations.yaml",
-    "excluded_from_development_profiles": ["persistent_discord_gateway"]
-  },
-  "profiles": [
-    {
-      "id": "control",
-      "activation": "active",
-      "reasoning_effort": "medium",
-      "purpose": "Manually selected quality/reference and reversible rollback profile; never an automatic per-task model fallback",
-      "assignments": {
-        "orchestrator": "sol",
-        "integrator": "sol",
-        "bounded_worker": "sol",
-        "mechanical_worker": "sol",
-        "tester": "sol",
-        "reviewer_pool": ["sol"]
-      }
-    },
-    {
-      "id": "balanced",
-      "purpose": "Default Codex profile: Luna Max leads L3/L2, Luna executes bounded work, and separate Sol Medium sessions analyze, design, and review",
-      "assignments": {
-        "orchestrator": "luna",
-        "integrator": "luna",
-        "bounded_worker": "luna",
-        "mechanical_worker": "luna",
-        "tester": "luna",
-        "reviewer_pool": ["sol"]
-      }
-    },
-    {
-      "id": "economy",
-      "purpose": "Experimental extension of balanced using Luna only behind exact validation",
-      "assignments": {
-        "orchestrator": "luna",
-        "integrator": "luna",
-        "bounded_worker": "luna",
-        "mechanical_worker": "luna",
-        "tester": "luna",
-        "reviewer_pool": ["sol"]
-      }
-    },
-    {
-      "id": "delegated",
-      "activation": "disabled_until_runtime_issuance_and_verification",
-      "purpose": "Optional additional-provider profile: Sol retains orchestration and integration while a replaceable qualified binding performs bounded implementation",
-      "assignments": {
-        "orchestrator": "sol",
-        "integrator": "sol",
-        "bounded_worker": "implementation_worker",
-        "mechanical_worker": "luna",
-        "tester": "luna",
-        "reviewer_pool": ["sol"]
-      }
-    }
-  ],
-  "guards": {
-    "bounded_worker": {
-      "requires_bounded_scope": true,
-      "maximum_risk": "medium",
-      "luna_requires_exact_validator": true,
-      "luna_fallback_binding": null,
-      "fallback_binding": null
-    },
-    "mechanical_worker": {
-      "luna_requires_exact_validator": true,
-      "luna_requires_bounded_scope": true,
-      "luna_maximum_risk": "low",
-      "fallback_binding": null
-    },
-    "review": {
-      "different_session_required": true,
-      "different_execution_required": true,
-      "prefer_different_binding_from_producer": true,
-      "fail_closed_without_independent_execution_identity": true,
-      "fresh_session_required": true,
-      "followup_reuse_forbidden": true,
-      "runtime_enforcer": ".codex/hooks/subagent-spawn-guard.cjs"
-    },
-    "sol_specialist": {
-      "roles": ["analysis", "design", "review"],
-      "different_session_required": true,
-      "different_execution_required": true,
-      "fail_closed_without_independent_execution_identity": true,
-      "fresh_session_required": true,
-      "followup_reuse_forbidden": true,
-      "runtime_enforcer": ".codex/hooks/subagent-spawn-guard.cjs"
-    }
-  },
-  "claim_boundary": {
-    "allowed": [
-      "balanced_is_available_for_opt_in_use",
-      "balanced_is_default_for_bound_codex_sessions",
-      "role_and_model_binding_are_separate",
-      "unsafe_or_unqualified_balanced_tasks_fail_closed",
-      "single_solution_default_remains_available",
-      "additional_provider_profile_is_opt_in"
-    ],
-    "forbidden_until_phase_2": [
-      "proven_total_cost_reduction",
-      "production_optimal_profile",
-      "global_model_superiority"
-    ]
+ "schema_revision": "development-composition-profiles-v2",
+ "status": "active_codex_default_no_total_cost_claim",
+ "default_profile": "balanced",
+ "fallback_profile": "control",
+ "activation": {
+  "codex_bound_sessions": {
+   "mode": "default_active",
+   "override_env": "CODEX_DEVELOPMENT_PROFILE",
+   "available_bindings_env": "CODEX_AVAILABLE_BINDINGS"
   }
+ },
+ "availability": {
+  "default_available_bindings": [
+   "sol",
+   "luna"
+  ],
+  "override": "explicit availableBindings or CODEX_AVAILABLE_BINDINGS",
+  "unavailable_policy": "fail closed; return the task to L2 for decomposition or explicit profile rollback"
+ },
+ "bindings": {
+  "sol": {
+   "adapter": "codex",
+   "model": "gpt-5.6-sol",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium",
+    "high"
+   ],
+   "qualification": "orchestration_and_integration_baseline"
+  },
+  "terra": {
+   "adapter": "codex",
+   "model": "gpt-5.6-terra",
+   "qualification": "bounded_worker_development_calibration"
+  },
+  "luna": {
+   "adapter": "codex",
+   "model": "gpt-5.6-luna",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "low",
+    "medium",
+    "max"
+   ],
+   "qualification": "bounded_exact_validated_implementation_smoke_8_of_9"
+  },
+  "implementation_worker": {
+   "adapter": "optional_external_runtime",
+   "profile_identity": "deployment_local_implementation_worker",
+   "activation": "explicit_available_binding_only",
+   "qualification": "requires_separate_local_configuration_and_evidence",
+   "qualification_evidence": "signed_deployment_local_receipt_v1",
+   "receipt_algorithm": "ed25519",
+   "trust_store_relative_path": "adk-development-worker-trust.json",
+   "max_receipt_validity_ms": 2592000000,
+   "rollback_binding": "sol"
+  }
+ },
+ "balanced_role_policy": {
+  "secretary": {
+   "binding": "luna",
+   "default_reasoning_effort": "max",
+   "allowed_reasoning_efforts": [
+    "max"
+   ]
+  },
+  "issue_leader": {
+   "binding": "luna",
+   "default_reasoning_effort": "max",
+   "allowed_reasoning_efforts": [
+    "max"
+   ]
+  },
+  "explorer": {
+   "binding": "luna",
+   "default_reasoning_effort": "low",
+   "allowed_reasoning_efforts": [
+    "low"
+   ]
+  },
+  "analysis": {
+   "binding": "sol",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium"
+   ]
+  },
+  "design": {
+   "binding": "sol",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium"
+   ]
+  },
+  "review": {
+   "binding": "sol",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium"
+   ]
+  },
+  "implementation": {
+   "binding": "luna",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium"
+   ]
+  },
+  "test": {
+   "binding": "luna",
+   "default_reasoning_effort": "low",
+   "allowed_reasoning_efforts": [
+    "low"
+   ]
+  },
+  "generic_worker": {
+   "binding": "luna",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium"
+   ]
+  },
+  "translation": {
+   "binding": "luna",
+   "default_reasoning_effort": "low",
+   "allowed_reasoning_efforts": [
+    "low"
+   ]
+  }
+ },
+ "delegation_context": {
+  "brief_mode": "isolated_bounded",
+  "fork_turns": "none",
+  "fork_context": false,
+  "inherit_root_context": false
+ },
+ "runtime_policy_boundary": {
+  "separate_context": ".agents/context/discord-gateway-operations.yaml",
+  "excluded_from_development_profiles": [
+   "persistent_discord_gateway"
+  ]
+ },
+ "profiles": [
+  {
+   "id": "control",
+   "activation": "active",
+   "reasoning_effort": "medium",
+   "purpose": "Manually selected quality/reference and reversible rollback profile; never an automatic per-task model fallback",
+   "assignments": {
+    "orchestrator": "sol",
+    "integrator": "sol",
+    "bounded_worker": "sol",
+    "mechanical_worker": "sol",
+    "tester": "sol",
+    "reviewer_pool": [
+     "sol"
+    ]
+   }
+  },
+  {
+   "id": "balanced",
+   "purpose": "Default Codex profile: Luna Max leads L3/L2, Luna executes bounded work, and separate Sol Medium sessions analyze, design, and review",
+   "assignments": {
+    "orchestrator": "luna",
+    "integrator": "luna",
+    "bounded_worker": "luna",
+    "mechanical_worker": "luna",
+    "tester": "luna",
+    "reviewer_pool": [
+     "sol"
+    ]
+   }
+  },
+  {
+   "id": "economy",
+   "purpose": "Experimental extension of balanced using Luna only behind exact validation",
+   "assignments": {
+    "orchestrator": "luna",
+    "integrator": "luna",
+    "bounded_worker": "luna",
+    "mechanical_worker": "luna",
+    "tester": "luna",
+    "reviewer_pool": [
+     "sol"
+    ]
+   }
+  },
+  {
+   "id": "delegated",
+   "activation": "disabled_until_runtime_issuance_and_verification",
+   "purpose": "Optional additional-provider profile: Sol retains orchestration and integration while a replaceable qualified binding performs bounded implementation",
+   "assignments": {
+    "orchestrator": "sol",
+    "integrator": "sol",
+    "bounded_worker": "implementation_worker",
+    "mechanical_worker": "luna",
+    "tester": "luna",
+    "reviewer_pool": [
+     "sol"
+    ]
+   }
+  }
+ ],
+ "guards": {
+  "bounded_worker": {
+   "requires_bounded_scope": true,
+   "maximum_risk": "medium",
+   "luna_requires_exact_validator": true,
+   "luna_fallback_binding": null,
+   "fallback_binding": null
+  },
+  "mechanical_worker": {
+   "luna_requires_exact_validator": true,
+   "luna_requires_bounded_scope": true,
+   "luna_maximum_risk": "low",
+   "fallback_binding": null
+  },
+  "review": {
+   "different_session_required": true,
+   "different_execution_required": true,
+   "prefer_different_binding_from_producer": true,
+   "fail_closed_without_independent_execution_identity": true,
+   "fresh_session_required": true,
+   "followup_reuse_forbidden": true,
+   "runtime_enforcer": ".codex/hooks/subagent-spawn-guard.cjs"
+  },
+  "sol_specialist": {
+   "roles": [
+    "analysis",
+    "design",
+    "review"
+   ],
+   "different_session_required": true,
+   "different_execution_required": true,
+   "fail_closed_without_independent_execution_identity": true,
+   "fresh_session_required": true,
+   "followup_reuse_forbidden": true,
+   "runtime_enforcer": ".codex/hooks/subagent-spawn-guard.cjs"
+  }
+ },
+ "claim_boundary": {
+  "allowed": [
+   "balanced_is_available_for_opt_in_use",
+   "balanced_is_default_for_bound_codex_sessions",
+   "role_and_model_binding_are_separate",
+   "unsafe_or_unqualified_balanced_tasks_fail_closed",
+   "single_solution_default_remains_available",
+   "additional_provider_profile_is_opt_in"
+  ],
+  "forbidden_until_phase_2": [
+   "proven_total_cost_reduction",
+   "production_optimal_profile",
+   "global_model_superiority"
+  ]
+ }
 }

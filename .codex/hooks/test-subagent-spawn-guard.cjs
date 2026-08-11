@@ -97,7 +97,24 @@ assert.match(guard.evaluate({
 	toolName: "collaboration.spawn_agent",
 	toolInput: { prompt: brief("review"), model: "gpt-5.6-sol", reasoning_effort: "medium", fork_turns: "none" },
 })?.reason, /no registered result-envelope adapter/);
-assert.equal(guard.evaluate({ ...base, contractLookup: () => ({ status: contracts.STATES.UNBOUND }) })?.decision, "block");
+// The unbound verdict depends on the opt-in marker, so it must never read the
+// real checkout's marker state — Windows caught this passing or failing based
+// on whether .claude/allow-subagents happened to exist. Both directions are
+// pinned against hermetic roots: no marker blocks, a marker admits one spawn.
+{
+	const fsh = require("node:fs");
+	const osh = require("node:os");
+	const bareRoot = fsh.mkdtempSync(path.join(osh.tmpdir(), "spawn-bare-"));
+	const markedRoot = fsh.mkdtempSync(path.join(osh.tmpdir(), "spawn-marked-"));
+	fsh.mkdirSync(path.join(markedRoot, ".claude"), { recursive: true });
+	fsh.writeFileSync(path.join(markedRoot, ".claude", "allow-subagents"), JSON.stringify({ maxSpawns: 1 }));
+	const uidh = `${process.pid}-${Date.now()}-h`;
+	const unboundLookup = () => ({ status: contracts.STATES.UNBOUND });
+	assert.equal(guard.evaluate({ ...base, cwd: bareRoot, env: {}, sessionId: `bare-${uidh}`, contractLookup: unboundLookup })?.decision, "block", "unbound without an opt-in marker stays blocked");
+	assert.equal(guard.evaluate({ ...base, cwd: markedRoot, env: {}, sessionId: `marked-${uidh}`, contractLookup: unboundLookup }), null, "unbound with an opt-in marker admits a budgeted spawn");
+	fsh.rmSync(bareRoot, { recursive: true, force: true });
+	fsh.rmSync(markedRoot, { recursive: true, force: true });
+}
 assert.equal(guard.evaluate({ ...base, contractLookup: () => ({ status: contracts.STATES.BOUND, contract: {} }) })?.decision, "block");
 for (const value of ["all", true, 3]) {
 	assert.equal(guard.evaluate({ ...base, toolInput: { ...baseInput, fork_context: value } })?.decision, "block");
@@ -114,10 +131,10 @@ for (const [role, model, effort, accepted] of [
 	["design", "gpt-5.6-sol", "medium", true],
 	["review", "gpt-5.6-sol", "medium", true],
 	["implementation", "gpt-5.6-luna", "medium", true],
-	["test", "gpt-5.6-luna", "medium", true],
+	["test", "gpt-5.6-luna", "low", true],
 	["worker", "gpt-5.6-luna", "medium", true],
 	["mechanical-implementation", "gpt-5.6-luna", "medium", true],
-	["mechanical-test", "gpt-5.6-luna", "medium", true],
+	["mechanical-test", "gpt-5.6-luna", "low", true],
 	["generic_worker", "gpt-5.6-luna", "medium", true],
 	["translation", "gpt-5.6-luna", "low", true],
 	["translation", "gpt-5.6-luna", "medium", false],
@@ -271,5 +288,66 @@ const malformedAdapter = spawnSync(process.execPath, [path.join(__dirname, "suba
 });
 assert.equal(malformedAdapter.status, 0, malformedAdapter.stderr);
 assert.equal(JSON.parse(malformedAdapter.stdout).decision, "block");
+
+// A spawn tool must get the same answer from either guard. Each one used to
+// know only its own host's names and waved the other's through, so the
+// effective fan-out cap depended on which host was running — Codex let Claude's
+// Task past, Claude let multi_agent_v1 past.
+{
+	const repoRoot = path.resolve(__dirname, "..", "..");
+	// Symmetry is asserted for the default-deny state, so the working root must
+	// be hermetic — an opt-in marker in the real checkout flipped one guard and
+	// not the other depending on leftover budget counters.
+	const fss = require("node:fs");
+	const oss = require("node:os");
+	const symRoot = fss.mkdtempSync(path.join(oss.tmpdir(), "spawn-sym-"));
+	const guards = {
+		claude: path.join(repoRoot, ".claude", "hooks", "subagent-spawn-guard.js"),
+		codex: path.join(repoRoot, ".codex", "hooks", "subagent-spawn-guard.cjs"),
+	};
+	const env = { ...process.env, ADK_PROJECT_ROOT: "", AI_HARNESS: "", CLAUDE_HARNESS: "", CODEX_HARNESS: "" };
+	for (const [toolName, toolInput] of [
+		["Task", { prompt: "w" }],
+		["Agent", { prompt: "w" }],
+		["functions.multi_agent_v1", { message: "t" }],
+		["collaborationspawn_agent", { prompt: "w" }],
+		["Read", { file_path: "a" }],
+	]) {
+		const verdicts = Object.entries(guards).map(([host, guardPath]) => {
+			const run = spawnSync(process.execPath, [guardPath], {
+				input: JSON.stringify({ session_id: "parent", cwd: symRoot, hook_event_name: "PreToolUse", tool_name: toolName, tool_input: toolInput }),
+				encoding: "utf8", cwd: symRoot, env,
+			});
+			assert.equal(run.status, 0, `${host} ${toolName}: ${run.stderr}`);
+			return [host, (run.stdout || "").trim() ? "block" : "allow"];
+		});
+		assert.equal(verdicts[0][1], verdicts[1][1], `${toolName}: ${verdicts.map(([h, v]) => `${h}=${v}`).join(" ")}`);
+	}
+	fss.rmSync(symRoot, { recursive: true, force: true });
+}
+
+// The Windows Codex host passes the flattened name collaborationspawn_agent.
+// While unbound it must reach the opt-in budget path, not "unrecognized
+// wrapper", and the context-inheritance invariant must still gate it first.
+{
+	const fsx = require("node:fs");
+	const osx = require("node:os");
+	const optRoot = fsx.mkdtempSync(path.join(osx.tmpdir(), "spawn-optin-"));
+	fsx.mkdirSync(path.join(optRoot, ".claude"), { recursive: true });
+	fsx.writeFileSync(path.join(optRoot, ".claude", "allow-subagents"), JSON.stringify({ maxSpawns: 1 }));
+	const unbound = { contractLookup: () => ({ status: contracts.STATES.UNBOUND }), cwd: optRoot, env: {} };
+	// The budget counter persists in os.tmpdir across runs; unique ids keep this hermetic.
+	const uid = `${process.pid}-${Date.now()}`;
+	assert.match(
+		guard.evaluate({ ...base, ...unbound, sessionId: `flat-a-${uid}`, toolName: "collaborationspawn_agent", toolInput: { prompt: "w" } })?.reason || "",
+		/fork_context/, "flattened collaboration spawn without explicit context flags stays blocked by the context invariant");
+	assert.equal(
+		guard.evaluate({ ...base, ...unbound, sessionId: `flat-b-${uid}`, toolName: "collaborationspawn_agent", toolInput: { prompt: "w", fork_context: false, fork_turns: "none" } }),
+		null, "flattened collaboration spawn reaches the unbound opt-in budget path");
+	assert.match(
+		guard.evaluate({ ...base, ...unbound, sessionId: `flat-b-${uid}`, toolName: "collaborationspawn_agent", toolInput: { prompt: "w", fork_context: false, fork_turns: "none" } })?.reason || "",
+		/1개를 생성/, "the second flattened spawn is stopped by the budget");
+	fsx.rmSync(optRoot, { recursive: true, force: true });
+}
 
 console.log("subagent-spawn-guard: all tests passed");
