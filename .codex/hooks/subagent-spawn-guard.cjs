@@ -6,8 +6,10 @@ const contracts = require("../../.agents/hooks/core/session-contract.js");
 const usage = require("../../scripts/codex-lineage-usage.cjs");
 const { issueFailureReceipt } = require("../../.agents/hooks/core/subagent-failure-receipt.js");
 
-const SPAWN_NAMES = new Set(["spawn_agent", "collaboration.spawn_agent", "multi_agent_v1__spawn_agent"]);
-const WAIT_NAMES = new Set(["wait_agent", "collaboration.wait_agent", "multi_agent_v1__wait_agent"]);
+// collaborationspawn_agent is the name the Windows Codex host actually passes
+// to hooks — flattened, no separator — captured from a live run.
+const SPAWN_NAMES = new Set(["spawn_agent", "collaboration.spawn_agent", "collaborationspawn_agent", "multi_agent_v1__spawn_agent"]);
+const WAIT_NAMES = new Set(["wait_agent", "collaboration.wait_agent", "collaborationwait_agent", "multi_agent_v1__wait_agent"]);
 const FOLLOWUP_NAMES = new Set(["followup_task", "followup-task", "followuptask", "resume_agent", "resume-agent"]);
 const FOLLOWUP_MESSAGE_NAMES = new Set(["send_input", "send-input", "send_message", "send-message", "sendmessage"]);
 const DELEGATION_NAMESPACES = new Set(["agent", "agents", "codex", "collaboration", "delegation", "multi_agent", "multi-agent", "subagent", "subagents"]);
@@ -52,7 +54,7 @@ function isWait(name) {
 function delegationRuntime(name) {
 	const value = normalizedToolName(name).value;
 	if (value === "multi_agent_v1__spawn_agent" || value === "multi_agent_v1__wait_agent") return "multi_agent_v1";
-	if (["spawn_agent", "wait_agent", "collaboration.spawn_agent", "collaboration.wait_agent"].includes(value)) return "collaboration";
+	if (["spawn_agent", "wait_agent", "collaboration.spawn_agent", "collaboration.wait_agent", "collaborationspawn_agent", "collaborationwait_agent"].includes(value)) return "collaboration";
 	return null;
 }
 
@@ -73,7 +75,9 @@ function isFollowup(name, rawInput = {}) {
 function isPotentialDelegation(name, rawInput) {
 	if (isSpawn(name) || isFollowup(name, rawInput)) return true;
 	const { value, leaf } = normalizedToolName(name);
-	const namedAsDelegation = /(?:^|[_-])(?:spawn|subagent|delegate|delegation|agent|worker)(?:$|[_-])/u.test(leaf) ||
+	// `task` is Claude Code's spawn tool; without it this guard waved Claude's
+	// subagents through while blocking Codex's own.
+	const namedAsDelegation = /(?:^|[_-])(?:task|spawn|subagent|delegate|delegation|agent|worker)(?:$|[_-])/u.test(leaf) ||
 		/(?:spawn|subagent|delegate|delegation|launch_agent|create_agent|agent_run|agent_task|worker_run)/u.test(value);
 	const input = inputOf(rawInput);
 	const shapedAsDelegation = typeof input.model === "string" &&
@@ -269,13 +273,24 @@ function evaluate({
 	if (!isSpawn(toolName)) return null;
 	const input = inputOf(toolInput);
 	const runtime = delegationRuntime(toolName);
+	const resolved = (contractLookup || ((value) => contracts.resolveSessionContract(value)))({ cwd: realDirectory(env?.ADK_PROJECT_ROOT) || cwd, sessionId });
+	if (resolved?.status !== contracts.STATES.BOUND) {
+		// Unbound is the ordinary working state, and requiring BOUND here meant a
+		// Codex host could never spawn while a Claude host could. Same semantics
+		// as the Claude guard, from the same implementation: an operator opt-in
+		// marker plus a per-session spawn budget, for either runtime — the
+		// result-envelope restriction below only governs the bound digest path.
+		// Context inheritance stays blocked first either way.
+		if (!contextOk(input, runtime)) return block("explicit fork_context false is required; fork_turns must be none when the runtime exposes it");
+		const budget = require("../../.claude/hooks/subagent-spawn-guard.js").evaluate({ toolName: "task", sessionId, root: cwd, env });
+		return budget ? { decision: "block", reason: budget.reason } : null;
+	}
 	// The collaboration transport has a different mailbox/result envelope. It
 	// remains recognized so wrappers cannot bypass the guard, but is denied until
 	// a captured host schema can be validated end-to-end. The active Codex host
-	// uses multi_agent_v1 and is covered below.
+	// uses multi_agent_v1 and is covered below;
+	// the unbound budget path above is runtime-agnostic.
 	if (runtime !== "multi_agent_v1") return block("this delegation runtime has no registered result-envelope adapter; use multi_agent_v1 or register captured host evidence first");
-	const resolved = (contractLookup || ((value) => contracts.resolveSessionContract(value)))({ cwd: realDirectory(env?.ADK_PROJECT_ROOT) || cwd, sessionId });
-	if (resolved?.status !== contracts.STATES.BOUND) return block("a current session-bound contract is required");
 	const policy = resolved.contract?.subagent_policy;
 	if (!Object.hasOwn(resolved.contract || {}, "subagent_policy") || contracts.validateSubagentPolicy(policy)) return block("a valid contract subagent_policy is required");
 	if (!contextOk(input, runtime)) return block("explicit fork_context false is required; fork_turns must be none when the runtime exposes it");

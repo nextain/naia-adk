@@ -73,10 +73,15 @@ for (const hook of allHooks) {
   }
 }
 
+// These cases assert only that the registered wiring reaches the guard, so the
+// denial must not depend on repository state. An opt-in marker in the checkout
+// now legitimately admits an unbound spawn, which made the old well-formed
+// input pass. Omitting the fork flags violates the context-inheritance
+// invariant, which blocks deterministically in every state.
 const deniedInput = JSON.stringify({
   tool_name: "spawn_agent",
   session_id: "deterministic-unregistered-session",
-  tool_input: { role: "review", model: "gpt-5.6-sol", reasoning_effort: "medium", fork_context: false, fork_turns: "none", message: "test" },
+  tool_input: { role: "review", model: "gpt-5.6-sol", reasoning_effort: "medium", message: "test" },
 });
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "codex-hook-scratch-"));
 const stopInput = JSON.stringify({

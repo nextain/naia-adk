@@ -82,29 +82,24 @@ module.exports = function createDelegationContract({
 	}
 
 	function validateDelegationTask(task, contract, projectRoot) {
+		// Authority and working paths only — that is what the delegation incidents
+		// were about. The twelve exact matches this replaces (digest chain, parent
+		// intent, verbatim scope, result-contract key set) prevented no recorded
+		// failure, made delegation unreachable, and cannot nest three layers.
 		if (!task || task.schema_version !== "delegation-task-v1" || typeof task.task_id !== "string" || !/^[a-z0-9][a-z0-9._-]{2,127}$/u.test(task.task_id)) return "invalid_delegation_task";
-		if (!/^[a-f0-9]{64}$/u.test(task.task_digest || "") || task.task_digest !== delegationTaskDigest(task)) return "delegation_task_digest_mismatch";
-		if (task.parent_contract_id !== contract?.id || task.parent_contract_digest !== contract?.contract_digest) return "delegation_parent_mismatch";
-		if (task.parent_intent_digest !== parentIntentDigest(contract)) return "delegation_parent_intent_mismatch";
-		for (const [key, parentKey] of [["scope", "scope"], ["success_criteria", "success_criteria"]]) {
-			if (!Array.isArray(task[key]) || task[key].length === 0 || task[key].some((item) => typeof item !== "string" || !(contract?.[parentKey] || []).includes(item))) return `invalid_delegation_${key}`;
-		}
 		if (!Array.isArray(task.allowed_paths) || task.allowed_paths.length === 0 || task.allowed_paths.some((candidate) =>
 			!(contract?.allowed_paths || []).some((pattern) => ownershipPatternCovers(pattern, candidate)) ||
 			!(contract?.target_ownership || []).some((pattern) => ownershipPatternCovers(pattern, candidate)))) return "invalid_delegation_allowed_paths";
-		if (typeof task.stop_condition !== "string" || !task.stop_condition.trim() || typeof task.read_only !== "boolean" || !new Set(["low", "medium"]).has(task.risk)) return "invalid_delegation_execution_boundary";
-		if (task.exact_validator !== null && (!(contract?.allowed_shell_commands || []).includes(task.exact_validator) || typeof task.exact_validator !== "string")) return "invalid_delegation_validator";
+		if (typeof task.read_only !== "boolean" || !new Set(["low", "medium"]).has(task.risk)) return "invalid_delegation_execution_boundary";
+		if (task.exact_validator !== null && task.exact_validator !== undefined &&
+			(typeof task.exact_validator !== "string" || !(contract?.allowed_shell_commands || []).includes(task.exact_validator))) return "invalid_delegation_validator";
 		let canonicalRoot;
 		try { canonicalRoot = fs.realpathSync(projectRoot); } catch { return "invalid_delegation_project_root"; }
 		for (const candidate of [task.project_root, task.worktree]) {
+			if (candidate === undefined) continue;
 			if (typeof candidate !== "string" || !path.isAbsolute(candidate)) return "invalid_delegation_project_root";
 			try { if (fs.realpathSync(candidate) !== canonicalRoot) return "invalid_delegation_project_root"; } catch { return "invalid_delegation_project_root"; }
 		}
-		const resultContract = task.result_contract;
-		if (!resultContract || typeof resultContract !== "object" || Array.isArray(resultContract) ||
-			JSON.stringify(Object.keys(resultContract).sort()) !== JSON.stringify(["completion_scope", "drift_action", "required_fields", "schema_version"].sort()) ||
-			resultContract.schema_version !== "delegation-result-v1" || resultContract.completion_scope !== "child_task_only" ||
-			resultContract.drift_action !== "handoff_to_parent" || JSON.stringify(resultContract.required_fields) !== JSON.stringify(DELEGATION_RESULT_FIELDS)) return "invalid_delegation_result_contract";
 		return null;
 	}
 
@@ -128,7 +123,12 @@ module.exports = function createDelegationContract({
 			return result(STATES.STALE, explicit.projectRoot, "delegation_lineage_invalid");
 		}
 		const parentResolution = resolveExplicitSessionContract({ cwd, sessionId: parent.sessionId });
-		if (parentResolution.status !== STATES.BOUND) return result(STATES.STALE, explicit.projectRoot, "delegation_parent_unbound");
+		// An unbound parent is now the ordinary working state, so requiring BOUND
+		// here made delegation unreachable without first authoring a contract. A
+		// child of an unbound parent stays unbound too: it inherits exactly the
+		// unbound authority its parent has and nothing more, so there is no
+		// derived contract to build and no way to gain authority by delegating.
+		if (parentResolution.status !== STATES.BOUND) return explicit;
 		const task = parseDelegationTask(child.delegatedPrompt);
 		const taskError = validateDelegationTask(task, parentResolution.contract, explicit.projectRoot);
 		if (taskError) return result(STATES.STALE, explicit.projectRoot, taskError);
