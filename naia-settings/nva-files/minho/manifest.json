@@ -5,7 +5,7 @@
     "tagline": "차분한 판단과 정확한 실행",
     "author": "nextain",
     "owner": "nextain",
-    "license": "CC-BY-4.0 © 2026 Nextain Inc.",
+    "license": "CC-BY-4.0 — synthetic avatar generated with Vertex AI © 2026 Nextain Inc.",
     "created": "2026-08-05",
     "description": "차가운 완벽주의자처럼 보이지만 신뢰하는 사람에게는 다정한 기획조정실장. 실제 인물을 바탕으로 하지 않은 성인 합성 캐릭터입니다.",
     "persona": {
@@ -19,7 +19,7 @@
         "차가운 외면 아래의 세심한 배려"
       ]
     },
-    "note": "GPU 없이 재생하는 완성 idle·발화 영상 NVA 번들.",
+    "note": "알파 채널을 포함해 배경을 자유롭게 합성하는 대기·발화·동작 NVA 예제.",
     "style_label": "기본 화풍"
   },
   "canvas": {
@@ -28,8 +28,7 @@
     "fps": 25
   },
   "background": {
-    "type": "transparent",
-    "color": "#f5f5f5"
+    "type": "transparent"
   },
   "animations": {
     "idle": {
@@ -46,16 +45,22 @@
       "intent": "Use while waiting or listening. A restrained continuous micro-idle loop provides subtle life without an isolated blink-only effect or pose drift."
     },
     "talking": {
-      "clip": "clips/speech-ko.mp4",
+      "clip": "clips/talking-ko.webm",
       "loop": true,
       "can_talk": true,
       "label": "말하기 영상"
+    },
+    "motion": {
+      "loop": false,
+      "can_talk": false,
+      "label": "차분한 움직임",
+      "clip": "clips/motion.webm"
     }
   },
   "speech_clips": {
     "speech-ko": {
-      "clip": "clips/speech-ko.mp4",
-      "label": "한국어 발화 · Minho",
+      "clip": "clips/talking-ko.webm",
+      "label": "한국어 발화 · Minho voice profile",
       "audio": "embedded",
       "locale": "ko-KR",
       "text": "안녕하세요. 오늘은 미리 생성한 발화 자산을 자연스럽게 연결해서, 그래픽 카드가 없는 컴퓨터에서도 비디오 아바타가 긴 문장을 안정적으로 말할 수 있는지 확인하겠습니다. 모음과 자음이 빠르게 바뀌는 구간, 잠시 숨을 고르는 구간, 그리고 문장이 길게 이어지는 구간까지 차례로 살펴보겠습니다."
@@ -63,7 +68,10 @@
   },
   "expressions": {
     "neutral": "idle",
-    "speaking": "talking"
+    "speaking": "talking",
+    "idle": "idle",
+    "talking": "talking",
+    "motion": "motion"
   },
   "scenario": {
     "nodes": {
