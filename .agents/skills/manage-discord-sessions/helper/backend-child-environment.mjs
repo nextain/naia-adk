@@ -65,6 +65,20 @@ function copyCredential(source, target, label, { ownerOnly = true } = {}) {
 	return true;
 }
 
+function writePrivateJson(target, value, label) {
+	privateDirectory(dirname(target));
+	const targetFd = openSync(target, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW, 0o600);
+	try {
+		const content = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+		let offset = 0;
+		while (offset < content.length) offset += writeSync(targetFd, content, offset, content.length - offset);
+	} finally {
+		closeSync(targetFd);
+	}
+	chmodSync(target, 0o600);
+	protectOwnerOnly(target, "file", label);
+}
+
 function assertSafeCredentialTree(path, label) {
 	const stat = lstatSync(path);
 	if (stat.isSymbolicLink()) throw new Error(`${label} contains a symbolic link`);
@@ -141,6 +155,17 @@ export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, par
 				);
 				authenticationPrepared = configCopied && authCopied;
 			}
+			const gatewayPolicyPath = join(childHome, "opencode-gateway-policy.json");
+			writePrivateJson(gatewayPolicyPath, {
+				permission: { task: "deny" },
+				agent: {
+					build: { steps: 12, permission: { task: "deny" } },
+					plan: { steps: 8, permission: { task: "deny" } },
+				},
+				compaction: { auto: true, prune: true, tail_turns: 1, preserve_recent_tokens: 12_000 },
+				tool_output: { max_lines: 400, max_bytes: 16_000 },
+			}, "OpenCode gateway policy");
+			env.OPENCODE_CONFIG = gatewayPolicyPath;
 		} else {
 			throw new Error(`unsupported backend environment: ${backendId}`);
 		}

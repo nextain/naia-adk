@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "workspace": "naia-adk",
+  "description": "Registry for concrete agents hosted by a workspace ADK. The public base intentionally declares no concrete agent.",
+  "path_contract": {
+    "registry": ".agents/context/agent-registry.json",
+    "agent_root": "agents/<agent-id>",
+    "required_files": ["AGENTS.md", "agent.json"],
+    "information_paths_are_relative_to": "workspace root",
+    "secret_values": "data-private only; never include secret values in this registry or agent prompts",
+    "runtime_state": ".agents/work/<agent-id>"
+  },
+  "agents": []
+}

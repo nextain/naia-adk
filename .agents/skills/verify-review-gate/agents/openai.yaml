@@ -1,0 +1,4 @@
+interface:
+  display_name: "Verify Review Gate"
+  short_description: "Validate adversarial review commit enforcement"
+  default_prompt: "Run the deterministic review evidence gate checks and report PASS or FAIL."

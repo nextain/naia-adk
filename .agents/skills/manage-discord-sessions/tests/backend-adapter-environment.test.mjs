@@ -183,6 +183,13 @@ test("DSO-005 creates a private minimal child environment and copies only provid
 	assert.equal(readFileSync(join(opencodeCloud.env.XDG_CONFIG_HOME, "opencode", "opencode.jsonc"), "utf8"), "opencode-config");
 	assert.equal(readFileSync(join(opencodeCloud.env.XDG_DATA_HOME, "opencode", "auth.json"), "utf8"), "opencode-auth");
 	assert.equal(statSync(join(opencodeCloud.env.XDG_CONFIG_HOME, "opencode", "opencode.jsonc")).mode & 0o777, 0o600);
+	assert.equal(opencodeCloud.env.OPENCODE_CONFIG, join(opencodeCloud.childHome, "opencode-gateway-policy.json"));
+	const opencodePolicy = JSON.parse(readFileSync(opencodeCloud.env.OPENCODE_CONFIG, "utf8"));
+	assert.equal(opencodePolicy.permission.task, "deny");
+	assert.equal(opencodePolicy.agent.build.steps, 12);
+	assert.equal(opencodePolicy.agent.build.permission.task, "deny");
+	assert.equal(opencodePolicy.compaction.prune, true);
+	assert.equal(statSync(opencodeCloud.env.OPENCODE_CONFIG).mode & 0o777, 0o600);
 	assert.equal(opencodeCloud.authenticationPrepared, true);
 	assert.throws(() => prepareChildEnvironment({ backendId: "codex", attemptId: "bad-profile", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["unknown"] }), /unsupported credential profile/);
 });
