@@ -86,7 +86,7 @@ function shellCommand(words) {
 }
 
 function nativeEnvelope(client, fx, eventName, sessionId, fields = {}) {
-	const common = { hook_event_name: eventName, session_id: sessionId, cwd: fx.cwd };
+	const common = { hook_event_name: eventName, session_id: sessionId, cwd: fx.cwd, client_version: CLIENT_VERSIONS[client] };
 	if (client === "claude") return { ...common, transcript_path: "/tmp/claude-transcript.jsonl", permission_mode: "default", source: eventName === "SessionStart" ? "startup" : undefined, ...fields };
 	return { ...common, transcript_path: null, turn_id: "019f-codex-turn", model: "gpt-5.6-sol", permission_mode: "bypassPermissions", stop_hook_active: eventName === "Stop" ? false : undefined, ...fields };
 }
