@@ -154,9 +154,14 @@ test("registered hook commands resolve their adapters from a nested directory", 
 			args = hook.args.map((arg) => arg.replace("$" + "{CLAUDE_PROJECT_DIR}", root));
 		} else if (process.platform === "win32" && hook.commandWindows) {
 			executable = "powershell.exe";
-			let script = hook.commandWindows.replace(/^powershell(?:\.exe)?\s+-NoProfile\s+-Command\s+/, "");
-			if (script.startsWith('"') && script.endsWith('"')) script = script.slice(1, -1);
-			args = ["-NoProfile", "-Command", script];
+			const encodedPrefix = "powershell -NoProfile -NonInteractive -EncodedCommand ";
+			if (hook.commandWindows.startsWith(encodedPrefix)) {
+				args = ["-NoProfile", "-NonInteractive", "-EncodedCommand", hook.commandWindows.slice(encodedPrefix.length)];
+			} else {
+				let script = hook.commandWindows.replace(/^powershell(?:\.exe)?\s+-NoProfile\s+-Command\s+/, "");
+				if (script.startsWith('"') && script.endsWith('"')) script = script.slice(1, -1);
+				args = ["-NoProfile", "-Command", script];
+			}
 		} else {
 			executable = process.platform === "win32" ? "C:\\Program Files\\Git\\bin\\bash.exe" : "bash";
 			args = ["-c", hook.command];
