@@ -24,15 +24,6 @@ submodules:
     rulesEntrypoint: AGENTS.md
     status: active
 
-  removed-project:
-    path: ./projects/removed-project
-    type: project
-    description: "Gangnam-gu digital-human kiosk operated through the naia-adk workspace"
-    repo: visualxlab/removed-project
-    visibility: private
-    rulesEntrypoint: AGENTS.md
-    status: active
-
   # === 문서 ===
   docs-work-logs:
     path: ./docs-work-logs

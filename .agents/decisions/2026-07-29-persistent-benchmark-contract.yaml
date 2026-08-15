@@ -735,6 +735,5 @@ implementation_sequence:
   - run and archive the frozen pre-recovery baseline
   - implement naia-adk shared trace, reuse, dual-context, routing, and Windows adapters
   - verify the template against the same contract
-  - pilot removed-project
   - propagate to ADK forks and remaining projects
   - resume Cafe Lua and Naia Home work on the verified base

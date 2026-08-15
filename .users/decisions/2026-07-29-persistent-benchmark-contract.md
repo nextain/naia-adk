@@ -327,4 +327,4 @@ fixture·채점기 해시, 모델·공급자·설정, 프롬프트·컨텍스트
 manifest는 시도 원장 해시와 최종 순번도 검증합니다.
 
 개발 순서는 벤치 계약·증거 스키마 → 복구 전 기준선 → `naia-adk` 공용 구현 → 템플릿
-검증 → removed-project 적용 → ADK 포크 전파 → Cafe Lua·Naia Home입니다.
+검증 → ADK 포크 전파 → Cafe Lua·Naia Home입니다.

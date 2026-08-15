@@ -22,8 +22,7 @@
   ],
   "remaining": [
     "commit and squash-merge the worktree into main",
-    "reinstall and exercise the Windows service from main",
-    "push main and update the removed-project human operations handoff"
+    "reinstall and exercise the Windows service from main"
   ],
   "verification": {
     "discordSessions": "PASS: 89 passed, 0 failed, 4 platform skips",

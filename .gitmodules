@@ -1,6 +1,3 @@
 [submodule "projects/naia-template-project"]
 	path = projects/naia-template-project
 	url = https://github.com/nextain/naia-template-project.git
-[submodule "projects/removed-project"]
-	path = projects/removed-project
-	url = https://github.com/visualxlab/removed-project.git
