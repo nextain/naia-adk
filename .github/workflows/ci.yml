@@ -27,11 +27,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile=false
+          cache: pn`m
+      - run: pn`m install --frozen-lockfile=false
       - run: pnpm test
       - name: Install Linux sandbox runtime
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apparmor bubblewrap
+          sudo tee /etc/apparmor.d/naia-bwrap >/dev/null <<'EOF'
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          /usr/bin/bwrap flags=(unconfined) {
+            userns,
+          }
+          EOF
+          sudo apparmor_parser -r /etc/apparmor.d/naia-bwrap
       - name: Native harness, session isolation, and request-contract gates
         run: pnpm test:harness-native
       - name: Naia account document translation adapter
