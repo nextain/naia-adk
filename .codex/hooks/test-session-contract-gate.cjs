@@ -95,6 +95,7 @@ function bind(root) {
 }
 
 const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "session-contract-gate-"));
+const outsideFixture = fs.mkdtempSync(path.join(os.tmpdir(), "session-contract-gate-outside-"));
 try {
 	writeJson(path.join(fixture, ".agents", "context", "agents-rules.json"), {});
 	writeJson(path.join(fixture, ".codex", "hooks.json"), {});
@@ -102,6 +103,7 @@ try {
 	writeJson(path.join(nested, ".agents", "context", "agents-rules.json"), {});
 	writeJson(path.join(nested, ".codex", "hooks.json"), {});
 	fs.writeFileSync(path.join(nested, "product.txt"), "nested\n");
+	fs.writeFileSync(path.join(fixture, "deletion-target.txt"), "keep\n");
 	fs.mkdirSync(path.join(fixture, ".agents", "progress"), { recursive: true });
 	fs.writeFileSync(path.join(fixture, ".agents", "progress", "legacy.md"), "---\nsession_id: SESSION-1\n---\n");
 	const bootstrapContract = {
@@ -135,6 +137,14 @@ try {
 	};
 	const existingRegistry = { schema_version: "1.0", bindings: { OTHER: bootstrapPointer } };
 	writeJson(path.join(fixture, ".agents", "session-contracts", ".session-map.json"), existingRegistry);
+	execFileSync("git", ["init", "-q"], { cwd: fixture });
+	execFileSync("git", ["config", "user.email", "gate@example.invalid"], { cwd: fixture });
+	execFileSync("git", ["config", "user.name", "Gate Test"], { cwd: fixture });
+	execFileSync("git", ["add", "."], { cwd: fixture });
+	execFileSync("git", ["commit", "-qm", "fixture baseline"], { cwd: fixture });
+	fs.writeFileSync(path.join(fixture, "product.txt"), "ordinary staged change\n");
+	execFileSync("git", ["add", "product.txt"], { cwd: fixture });
+	fs.symlinkSync(outsideFixture, path.join(fixture, "escape-link"), "dir");
 	const nextRegistry = {
 		schema_version: "1.0",
 		bindings: { ...existingRegistry.bindings, "SESSION-1": bootstrapPointer },
@@ -219,7 +229,30 @@ try {
 		fs.writeFileSync(path.join(fixture, "tmp", "existing-report.md"), "existing\n");
 		assert.equal(runGate(fixture, "Write", { file_path: "tmp/existing-report.md", content: "replace" }), null, `${client} unbound sessions may rewrite an ordinary existing file`);
 		assert.equal(runGate(fixture, "Write", { file_path: "src/new-code.js", content: "code" }), null, `${client} unbound sessions may create ordinary product code`);
+		assert.equal(runGate(fixture, "Write", { file_path: "escape-link/payload.txt", content: "escape" })?.decision, "block", `${client} ordinary writes cannot escape through an in-project symlink`);
+		assert.equal(runGate(fixture, "Bash", { command: "touch escape-link/payload.txt" })?.decision, "block", `${client} shell writes cannot escape through an in-project symlink`);
 		assert.equal(runGate(fixture, "Edit", { file_path: "tmp/new-report.md" }), null, `${client} unbound sessions may edit an ordinary file`);
+		assert.equal(runGate(fixture, "Bash", { command: "npm test" }), null, `${client} unbound sessions may run a project test suite`);
+		assert.equal(runGate(fixture, "Bash", { command: "mkdir -p src/new" }), null, `${client} unbound sessions may create an ordinary project directory`);
+		assert.equal(runGate(fixture, "Bash", { command: "cp product.txt tmp/copied.txt" }), null, `${client} unbound sessions may copy to an ordinary project path`);
+		assert.equal(runGate(fixture, "Bash", { command: "curl -o tmp/download.txt https://example.invalid/report" }), null, `${client} read-only HTTP downloads may target an ordinary project path`);
+		assert.equal(runGate(fixture, "Bash", { command: "npm test > /dev/null 2>&1" }), null, `${client} ordinary commands may discard output through the null device`);
+		assert.equal(runGate(fixture, "Bash", { command: `mkdir -p ${path.join(os.tmpdir(), "outside-project")}` })?.decision, "block", `${client} unbound sessions cannot create outside the resolved project`);
+		assert.equal(runGate(fixture, "Bash", { command: "git commit -m 'ordinary change'" }), null, `${client} unbound sessions may create a local commit containing only ordinary paths`);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "git commit -m 'ordinary & local | message mentioning mkdir .agents/'" }),
+			null,
+			`${client} quoted commit message text is not mistaken for shell syntax or a governance mutation`,
+		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "git commit -m 'ordinary' && touch .codex/authority-bypass" })?.decision,
+			"block",
+			`${client} an unbound local commit cannot chain a governance mutation`,
+		);
+		fs.unlinkSync(path.join(fixture, "deletion-target.txt"));
+		execFileSync("git", ["add", "deletion-target.txt"], { cwd: fixture });
+		assert.equal(runGate(fixture, "Bash", { command: "git commit -m 'staged deletion'" })?.decision, "block", `${client} unbound commits cannot smuggle a staged deletion`);
+		execFileSync("git", ["restore", "--staged", "--worktree", "deletion-target.txt"], { cwd: fixture });
 		// The boundary that remains: nothing that lets this session widen its own
 		// authority, and nothing unrecoverable.
 		assert.equal(runGate(fixture, "Write", { file_path: ".agents/context/agents-rules.json", content: "{}" })?.decision, "block", `${client} unbound sessions never rewrite governance context`);
@@ -227,6 +260,39 @@ try {
 		assert.equal(runGate(fixture, "Edit", { file_path: ".codex/hooks/session-contract-gate.cjs" })?.decision, "block", `${client} unbound sessions never edit the gate that governs them`);
 		assert.equal(runGate(fixture, "Write", { file_path: ".claude/settings.json", content: "{}" })?.decision, "block", `${client} unbound sessions never rewrite host settings`);
 		assert.equal(runGate(fixture, "Edit", { file_path: "AGENTS.md" })?.decision, "block", `${client} unbound sessions never edit an entrypoint`);
+		assert.equal(runGate(fixture, "Bash", { command: "git push --force origin main" })?.decision, "block", `${client} unbound sessions never force-push`);
+		assert.equal(runGate(fixture, "Bash", { command: "git reset --hard origin/main" })?.decision, "block", `${client} unbound sessions never rewrite local history from a remote ref`);
+		assert.equal(runGate(fixture, "Bash", { command: "curl -X POST https://example.invalid/jobs" })?.decision, "block", `${client} unbound sessions cannot create direct HTTP side effects`);
+		assert.equal(runGate(fixture, "Bash", { command: "curl --data '{\"state\":\"changed\"}' https://example.invalid/jobs" })?.decision, "block", `${client} implicit curl POSTs remain contract-bound`);
+		assert.equal(runGate(fixture, "Bash", { command: "curl -dstate=changed https://example.invalid/jobs" })?.decision, "block", `${client} attached curl data flags remain contract-bound`);
+		assert.equal(runGate(fixture, "Bash", { command: "curl --json={} https://example.invalid/jobs" })?.decision, "block", `${client} curl JSON writes remain contract-bound`);
+		assert.equal(runGate(fixture, "Bash", { command: "curl --request=POST https://example.invalid/jobs" })?.decision, "block", `${client} equals-form curl methods remain contract-bound`);
+		assert.equal(runGate(fixture, "Bash", { command: "wget --body-data=x https://example.invalid/jobs" })?.decision, "block", `${client} wget request bodies remain contract-bound`);
+		assert.equal(runGate(fixture, "Bash", { command: `install product.txt ${path.join(os.tmpdir(), "outside-install")}` })?.decision, "block", `${client} install cannot write outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: `cp product.txt ${path.join(os.tmpdir(), "outside-copy")}` })?.decision, "block", `${client} copy cannot write outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: `cp --target-directory=${os.tmpdir()} product.txt` })?.decision, "block", `${client} copy target-directory options cannot write outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: `install -t ${os.tmpdir()} product.txt` })?.decision, "block", `${client} install target-directory options cannot write outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: `rsync product.txt ${path.join(os.tmpdir(), "outside-rsync")}` })?.decision, "block", `${client} local rsync cannot write outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: "rsync --delete src/ tmp/mirror/" })?.decision, "block", `${client} deleting rsync remains contract-bound`);
+		assert.equal(runGate(fixture, "Bash", { command: `ln product.txt ${path.join(os.tmpdir(), "outside-link")}` })?.decision, "block", `${client} links cannot be created outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: `dd if=product.txt of=${path.join(os.tmpdir(), "outside-dd")}` })?.decision, "block", `${client} dd cannot write outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: `tee ${path.join(os.tmpdir(), "outside-tee")}` })?.decision, "block", `${client} tee cannot write outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: `curl --output ${path.join(os.tmpdir(), "outside-download")} https://example.invalid/report` })?.decision, "block", `${client} HTTP downloads cannot write outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: `wget -O ${path.join(os.tmpdir(), "outside-wget")} https://example.invalid/report` })?.decision, "block", `${client} wget downloads cannot write outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: `npm test >&${path.join(os.tmpdir(), "outside-combined-output")}` })?.decision, "block", `${client} combined output redirection cannot write outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: `npm test >|${path.join(os.tmpdir(), "outside-clobber-output")}` })?.decision, "block", `${client} clobber redirection cannot write outside the project`);
+		assert.equal(runGate(fixture, "Bash", { command: "ssh deploy@example.invalid restart-service" })?.decision, "block", `${client} unbound sessions cannot execute remote shell commands`);
+		assert.equal(runGate(fixture, "Bash", { command: "r\\m -f src/obsolete.js" })?.decision, "block", `${client} backslash-spliced deletion remains contract-bound`);
+		assert.equal(runGate(fixture, "Bash", { command: "c\\url -X POST https://example.invalid/jobs" })?.decision, "block", `${client} backslash-spliced HTTP writes remain contract-bound`);
+		assert.equal(runGate(fixture, "Bash", { command: "touch .co\\dex/authority-bypass" })?.decision, "block", `${client} backslash-spliced governance paths remain protected`);
+		assert.equal(runGate(fixture, "Bash", { command: "aws s3 cp report.json s3://example-bucket/report.json" })?.decision, "block", `${client} cloud CLI effects remain contract-bound`);
+		assert.equal(runGate(fixture, "Bash", { command: 'r"m" -f src/obsolete.js' })?.decision, "block", `${client} shell quote splicing cannot disguise a deletion command`);
+		assert.equal(runGate(fixture, "Bash", { command: 'c"u"rl -X POST https://example.invalid/jobs' })?.decision, "block", `${client} shell quote splicing cannot disguise a network writer`);
+		assert.equal(runGate(fixture, "Bash", { command: 'touch .cod"ex"/authority-bypass' })?.decision, "block", `${client} shell quote splicing cannot disguise a governed target`);
+		assert.equal(runGate(fixture, "Bash", { command: "touch .codex/authority-bypass" })?.decision, "block", `${client} unbound shell cannot mutate governance paths`);
+		assert.equal(runGate(fixture, "Bash", { command: "Set-Content .\\.codex\\hooks.json -Value changed" })?.decision, "block", `${client} native PowerShell paths cannot rewrite governance files`);
+		assert.equal(runGate(fixture, "Bash", { command: "rm -f src/obsolete.js" })?.decision, "block", `${client} unbound shell deletion remains contract-bound`);
+		assert.equal(runGate(fixture, "Bash", { command: "/bin/rm -f src/obsolete.js" })?.decision, "block", `${client} absolute deletion executables remain contract-bound`);
 		assert.equal(
 			runGate(fixture, "apply_patch", { command: "*** Begin Patch\n*** Delete File: tmp/existing-report.md\n*** End Patch\n" })?.decision,
 			"block",
@@ -547,4 +613,5 @@ try {
 	console.log("session contract gate parity: PASS");
 } finally {
 	fs.rmSync(fixture, { recursive: true, force: true });
+	fs.rmSync(outsideFixture, { recursive: true, force: true });
 }
