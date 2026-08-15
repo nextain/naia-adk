@@ -369,4 +369,56 @@ function deploy(command, data, opts) {
 	};
 }
 
-module.exports = { destructiveGit, commit, gitPush, emailSend, prGuard, deploy, PR_FAIL_REASON };
+/**
+ * catastrophicDelete — block a recursive force delete aimed at a root-like target.
+ *
+ * Deliberately narrow. An earlier measured attempt keyed on "target outside the
+ * workspace" and blocked a model cleaning up its own `/tmp` scratch files, which is
+ * ordinary work; a guard that fires on ordinary work gets switched off and then
+ * protects nothing. So this only fires on targets whose loss is unrecoverable:
+ * filesystem root, the home directory itself, and `--no-preserve-root`.
+ * Everything else — including `/tmp/...`, workspace paths, and relative paths — passes.
+ */
+function catastrophicDelete(command) {
+	const stripped = core.stripQuotesBlank(command);
+	if (/^\s*(echo|printf)\s/.test(stripped) && !stripped.includes("|")) return null;
+	const home = (process.env.HOME || "").replace(/\/+$/, "");
+	// Split only on statement separators. A pipe is overwhelmingly ordinary usage
+	// (`... | xargs rm`) and splitting on it produced false positives.
+	for (const segment of stripped.split(/&&|\|\||;|\n/)) {
+		const match = segment.match(/(?:^|\s)rm(\s+.*)?$/);
+		if (!match) continue;
+		const args = (match[1] || "").trim().split(/\s+/).filter(Boolean);
+		const flags = args.filter((a) => a.startsWith("-"));
+		const recursive = flags.some((f) => /^--recursive$/.test(f) || /^-[A-Za-z]*[rR][A-Za-z]*$/.test(f));
+		const forced = flags.some((f) => /^--force$/.test(f) || /^-[A-Za-z]*f[A-Za-z]*$/.test(f));
+		if (!recursive) continue;
+		if (flags.some((f) => f === "--no-preserve-root")) {
+			return { reason: rootDeleteReason("--no-preserve-root") };
+		}
+		if (!forced) continue;
+		for (const target of args.filter((a) => !a.startsWith("-"))) {
+			// Trim trailing slashes, but "/" must not collapse to an empty string.
+			const normalized = target.replace(/\/+$/, "") || (target.startsWith("/") ? "/" : target);
+			const expanded = normalized.replace(/^(~|\$HOME|\$\{HOME\})/, home || "~");
+			const rootLike =
+				normalized === "/" ||
+				normalized === "/*" ||
+				/^(~|\$HOME|\$\{HOME\})$/.test(normalized) ||
+				/^(~|\$HOME|\$\{HOME\})\/\*$/.test(normalized) ||
+				(home && (expanded === home || expanded === `${home}/*`));
+			if (rootLike) return { reason: rootDeleteReason(target) };
+		}
+	}
+	return null;
+}
+
+function rootDeleteReason(target) {
+	return (
+		`[Harness] 복구 불가능한 삭제 차단: \`rm -rf ${target}\`\n` +
+		"이 대상은 시스템 루트 또는 홈 디렉터리 자체입니다. 되돌릴 수 없습니다.\n" +
+		"지우려는 것이 특정 하위 경로라면 그 경로를 명시하세요."
+	);
+}
+
+module.exports = { destructiveGit, catastrophicDelete, commit, gitPush, emailSend, prGuard, deploy, PR_FAIL_REASON };
