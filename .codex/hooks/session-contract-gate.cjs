@@ -9,6 +9,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const sessionContract = require("../../.agents/hooks/core/session-contract.js");
 const sessionRecovery = require("../../.agents/harness/session-contract-recovery.cjs");
+const bashPolicies = require("../../.agents/hooks/policies/bash.js");
 const {
 	executableReadCommand,
 	explicitlyScopedRead,
@@ -289,12 +290,243 @@ function unboundOrdinaryMutationAllowed(toolName, toolInput, cwd) {
 	const projectRoot = sessionContract.findProjectRoot(cwd);
 	const targets = fileMutationTargets(toolInput);
 	if (!projectRoot || targets.length === 0) return false;
-	return targets.every((filePath) => {
-		const target = path.resolve(cwd, String(filePath));
-		if (!sessionContract.inside(projectRoot, target)) return false;
-		if (entrypointTarget(filePath, cwd) || stateTarget(filePath, cwd)) return false;
-		return !governedTarget(target, projectRoot);
-	});
+	return targets.every((filePath) => ordinaryUnboundTarget(filePath, cwd));
+}
+
+function ordinaryUnboundTarget(filePath, cwd) {
+	const projectRoot = sessionContract.findProjectRoot(cwd);
+	if (!projectRoot || !filePath) return false;
+	const raw = String(filePath).replace(/^(?:"|')|(?:"|')$/g, "");
+	if (path.sep !== "\\" && path.win32.isAbsolute(raw)) return false;
+	let target = path.resolve(cwd, raw);
+	let ancestor = target;
+	while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) ancestor = path.dirname(ancestor);
+	try { target = path.join(fs.realpathSync(ancestor), path.relative(ancestor, target)); } catch { return false; }
+	if (!sessionContract.inside(projectRoot, target)) return false;
+	if (entrypointTarget(target, cwd) || stateTarget(target, cwd)) return false;
+	return !governedTarget(target, projectRoot);
+}
+
+function shellWords(source) {
+	return (String(source).match(/"[^"]*"|'[^']*'|[^\s;&|<>]+/g) || [])
+		.map((word) => word.replace(/^(?:"|')|(?:"|')$/g, ""));
+}
+
+function hasUnquotedShellOperator(command) {
+	let quote = null;
+	let escaped = false;
+	for (let index = 0; index < command.length; index += 1) {
+		const character = command[index];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (character === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (character === quote) quote = null;
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			quote = character;
+			continue;
+		}
+		if (";&|><`".includes(character) || (character === "$" && command[index + 1] === "(")) return true;
+	}
+	return quote !== null || escaped;
+}
+
+function hasShellWordQuoteSplice(command) {
+	let quote = null;
+	let escaped = false;
+	for (let index = 0; index < command.length; index += 1) {
+		const character = command[index];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (character === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (character !== quote) continue;
+			quote = null;
+			const next = command[index + 1];
+			if (next && !/[\s;&|><)]/.test(next)) return true;
+			continue;
+		}
+		if (character !== "'" && character !== '"') continue;
+		const previous = command[index - 1];
+		if (previous && !/[\s=;&|><(]/.test(previous)) return true;
+		quote = character;
+	}
+	return quote !== null || escaped;
+}
+
+function shellPolicyCommand(command) {
+	const source = String(command || "");
+	// Backslash is a path separator rather than a word escape in native
+	// PowerShell. For POSIX-style shell input, remove unquoted escapes so policy
+	// checks see the command Bash will actually execute (r\\m -> rm).
+	if (/^\s*(?:powershell(?:\.exe)?|pwsh(?:\.exe)?|[a-z]+-[a-z]+)\b/i.test(source)) return source;
+	let result = "";
+	let quote = null;
+	for (let index = 0; index < source.length; index += 1) {
+		const character = source[index];
+		if (character === "'" && quote !== '"') {
+			quote = quote === "'" ? null : "'";
+			result += character;
+			continue;
+		}
+		if (character === '"' && quote !== "'") {
+			quote = quote === '"' ? null : '"';
+			result += character;
+			continue;
+		}
+		if (character === "\\" && quote !== "'" && source[index + 1]) {
+			const next = source[index + 1];
+			if (quote !== '"' || /[$`"\\\n]/.test(next)) {
+				result += next;
+				index += 1;
+				continue;
+			}
+		}
+		result += character;
+	}
+	return result;
+}
+
+function unboundGitMutationAllowed(command, cwd) {
+	const source = String(command || "").trim();
+	if (!source || hasUnquotedShellOperator(source)) return false;
+	const scoped = source.match(/^git\s+-C\s+("[^"]+"|'[^']+'|\S+)\s+(.+)$/i);
+	const gitCwd = scoped
+		? path.resolve(cwd, scoped[1].replace(/^(?:"|')|(?:"|')$/g, ""))
+		: cwd;
+	const gitSource = scoped ? `git ${scoped[2]}` : source;
+	const projectRoot = sessionContract.findProjectRoot(cwd);
+	if (!projectRoot || !sessionContract.inside(projectRoot, gitCwd)) return false;
+	if (path.resolve(sessionContract.findProjectRoot(gitCwd) || "") !== path.resolve(projectRoot)) return false;
+
+	const add = gitSource.match(/^git\s+add\s+(.+)$/i);
+	if (add) {
+		const tokens = add[1].match(/"[^"]+"|'[^']+'|\S+/g) || [];
+		const targets = tokens[0] === "--" ? tokens.slice(1) : tokens;
+		if (targets.length === 0 || targets.some((target) => target.startsWith("-"))) return false;
+		return targets.every((target) => ordinaryUnboundTarget(target, gitCwd));
+	}
+
+	if (!/^git\s+commit(?:\s+(?:-m\s+(?:"[^"]*"|'[^']*')|--message(?:=|\s+)(?:"[^"]*"|'[^']*')))+\s*$/i.test(gitSource)) return false;
+	let staged = [];
+	let stagedDeletions = [];
+	try {
+		staged = execFileSync("git", ["diff", "--cached", "--name-only", "-z"], {
+			cwd: gitCwd,
+			encoding: "utf8",
+		}).split("\0").filter(Boolean);
+		stagedDeletions = execFileSync("git", ["diff", "--cached", "--diff-filter=D", "--name-only", "-z"], {
+			cwd: gitCwd,
+			encoding: "utf8",
+		}).split("\0").filter(Boolean);
+	} catch {
+		return false;
+	}
+	return staged.length > 0 && stagedDeletions.length === 0 && staged.every((target) => ordinaryUnboundTarget(target, gitCwd));
+}
+
+/**
+ * Shell equivalent of unboundOrdinaryMutationAllowed.
+ *
+ * Do not pre-enumerate every build and test command: that made a fresh clone
+ * unusable and caused enforcement to ship disabled. Instead reject the narrow
+ * classes that are irreversible, external, or can widen this session's own
+ * authority, while leaving ordinary local project work available.
+ */
+function unboundOrdinaryShellAllowed(toolName, toolInput, cwd) {
+	if (normalizedToolName(toolName) !== "shell") return false;
+	const command = String(toolInput?.command || "").trim();
+	const projectRoot = sessionContract.findProjectRoot(cwd);
+	if (!command || !projectRoot || unsafeShellCommand(command) || hasShellWordQuoteSplice(command)) return false;
+	const policyCommand = shellPolicyCommand(command);
+	if (unsafeShellCommand(policyCommand)) return false;
+	if (/\.agents[\\/]harness[\\/]session-contract-recovery\.cjs\b/i.test(policyCommand)) return false;
+	if (bashPolicies.destructiveGit(policyCommand) || bashPolicies.catastrophicDelete(policyCommand) || bashPolicies.gitPush(policyCommand)) return false;
+	// Parse a single local Git mutation before broad keyword guards inspect commit
+	// message text. Chaining still fails inside unboundGitMutationAllowed.
+	if (/^(?:git\s|git\s+-C\s)/i.test(command)) return unboundGitMutationAllowed(command, cwd);
+
+	// Deletion remains contract-bound even when the target is inside the project.
+	if (/\b(?:rm|rmdir|unlink|shred|mv)\b|\b(?:remove-item|clear-content|move-item|rename-item)\b|\bgit\s+(?:clean|restore)\b/i.test(policyCommand)) return false;
+	// Remote effects and local authority/ownership changes are never ordinary.
+	if (/\bgit\s+push\b|\b(?:npm|pnpm|yarn|bun)\s+publish\b|\b(?:chmod|chown|chgrp|setfacl)\b|\bgh\s+(?:api|issue|pr|release)\b/i.test(policyCommand)) return false;
+	// Recognizable direct network writers and remote-control CLIs stay behind a
+	// contract. Project scripts cannot be classified perfectly here, but common
+	// direct escape hatches must not turn recovery mode into external authority.
+	if (/\b(?:ssh|scp|sftp|ftp|nc|ncat|telnet)\b|\brsync\b[^;&|\n]*(?:(?:\w+@)?[\w.-]+:|rsync:\/\/)|\bdocker\s+push\b/i.test(policyCommand)) return false;
+	if (/\bcurl\b[^;&|\n]*(?:(?:-X\s*|--request(?:=|\s+))(?:POST|PUT|PATCH|DELETE)\b|-[dFT](?:\s*|(?=\S))|--(?:data(?:-ascii|-binary|-raw|-urlencode)?|form(?:-string)?|json|upload-file)(?:=|\s+))|\bwget\b[^;&|\n]*(?:--(?:post-data|post-file|body-data|body-file)(?:=|\s+)|--method(?:=|\s+)(?:POST|PUT|PATCH|DELETE)\b)/i.test(policyCommand)) return false;
+	if (/\b(?:aws|gcloud|az|kubectl|helm|terraform|pulumi|vercel|flyctl)\b/i.test(policyCommand)) return false;
+
+	const governedMention = /(?:^|[\s'"=:/\\])\.(?:agents|claude|codex|pi)(?:[\/\\]|\s|$)/i.test(policyCommand);
+	const governedMutation = /[>]|\b(?:cp|mv|install|touch|truncate|mkdir|tee|set-content|add-content|out-file|new-item|move-item|copy-item|rename-item)\b|\b(?:sed|perl)\b[^;&|\n]*\s-i(?:\s|$)/i.test(policyCommand);
+	if (governedMention && governedMutation) return false;
+
+	// Known path-taking shell primitives must keep their destinations inside the
+	// resolved project. More complex project scripts are governed by the same
+	// ordinary-work rule, but cannot be path-inferred reliably at this boundary.
+	for (const match of policyCommand.matchAll(/(?:^|[;&|\n]\s*)(?:mkdir|touch|truncate)\s+([^;&|\n]+)/gi)) {
+		const targets = (match[1].match(/"[^"]+"|'[^']+'|\S+/g) || []).filter((token) => !token.startsWith("-"));
+		if (targets.length === 0 || targets.some((target) => !ordinaryUnboundTarget(target, cwd))) return false;
+	}
+	for (const match of policyCommand.matchAll(/(?:^|[;&|\n]\s*)(?:cp|install)\s+([^;&|\n]+)/gi)) {
+		const targetDirectory = match[1].match(/(?:^|\s)(?:-t|--target-directory)(?:=|\s+)("[^"]+"|'[^']+'|\S+)/i);
+		const targets = shellWords(match[1]).filter((token) => !token.startsWith("-"));
+		const destination = targetDirectory?.[1] || targets.at(-1);
+		if (targets.length < 2 || !destination || !ordinaryUnboundTarget(destination, cwd)) return false;
+	}
+	for (const match of policyCommand.matchAll(/(?:^|[;&|\n]\s*)rsync\s+([^;&|\n]+)/gi)) {
+		if (/(?:^|\s)--delete(?:\s|=|$)/i.test(match[1])) return false;
+		const targets = shellWords(match[1]).filter((token) => !token.startsWith("-"));
+		if (targets.length < 2 || !ordinaryUnboundTarget(targets.at(-1), cwd)) return false;
+	}
+	for (const match of policyCommand.matchAll(/(?:^|[;&|\n]\s*)(?:ln)\s+([^;&|\n]+)/gi)) {
+		const targets = shellWords(match[1]).filter((token) => !token.startsWith("-"));
+		if (targets.length < 2 || !ordinaryUnboundTarget(targets.at(-1), cwd)) return false;
+	}
+	for (const match of policyCommand.matchAll(/(?:^|[;&|\n]\s*)dd\s+([^;&|\n]+)/gi)) {
+		const output = match[1].match(/(?:^|\s)of=("[^"]+"|'[^']+'|\S+)/i);
+		if (!output || !ordinaryUnboundTarget(output[1], cwd)) return false;
+	}
+	for (const match of policyCommand.matchAll(/(?:^|[;&|\n]\s*)tee\s+([^;&|\n]+)/gi)) {
+		const targets = shellWords(match[1]).filter((token) => !token.startsWith("-"));
+		if (targets.length === 0 || targets.some((target) => !ordinaryUnboundTarget(target, cwd))) return false;
+	}
+	for (const match of policyCommand.matchAll(/\bcurl\b[^;&|\n]*?\s(?:--output-dir(?:=|\s+)|--output(?:=|\s+)|-o(?:\s+|(?=\S)))("[^"]+"|'[^']+'|[^\s;&|]+)/gi)) {
+		if (!ordinaryUnboundTarget(match[1], cwd)) return false;
+	}
+	for (const match of policyCommand.matchAll(/\bwget\b[^;&|\n]*?\s(?:--output-document(?:=|\s+)|-O(?:\s+|(?=\S)))("[^"]+"|'[^']+'|[^\s;&|]+)/gi)) {
+		if (!ordinaryUnboundTarget(match[1], cwd)) return false;
+	}
+	for (const match of policyCommand.matchAll(/\b(set-content|add-content|out-file|new-item|copy-item)\b\s+([^;&|\n]+)/gi)) {
+		const words = shellWords(match[2]);
+		const named = match[2].match(/-(?:literalpath|filepath|path|destination)(?:\s+|=)("[^"]+"|'[^']+'|\S+)/i);
+		const positional = words.filter((word, index) => !word.startsWith("-") && (index === 0 || !words[index - 1].startsWith("-")));
+		const target = named?.[1] || (match[1].toLowerCase() === "copy-item" ? positional.at(-1) : positional[0]);
+		if (!target || !ordinaryUnboundTarget(target, cwd)) return false;
+	}
+	for (const match of policyCommand.matchAll(/(?:^|[^>])>{1,2}\s*("[^"]+"|'[^']+'|[^\s;&|]+)/g)) {
+		if (!/^(?:\/dev\/null|nul)$/i.test(match[1].replace(/^(?:"|')|(?:"|')$/g, "")) && !ordinaryUnboundTarget(match[1], cwd)) return false;
+	}
+	for (const match of policyCommand.matchAll(/(?:^|\s)(?:&>>|&>|>>&|>&|>\|)\s*("[^"]+"|'[^']+'|[^\s;&|]+)/g)) {
+		if (!/^(?:\/dev\/null|nul)$/i.test(match[1].replace(/^(?:"|')|(?:"|')$/g, "")) && !ordinaryUnboundTarget(match[1], cwd)) return false;
+	}
+
+	// Other Git mutation embedded in a shell sequence stays contract-bound.
+	if (/(?:^|[;&|\n]\s*)git\s+(?!status\b|diff\b|log\b|show\b|remote\b|ls-files\b|check-ignore\b|rev-parse\b|submodule\s+status\b)/i.test(policyCommand)) return false;
+
+	return true;
 }
 
 function contractPathMatches(pattern, relativePath) {
@@ -497,6 +729,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	// never replace that authority by bootstrapping an explicit child contract.
 	if (resolution.reason !== "derived_delegation_verified" && bootstrapMutationAllowed(toolName, toolInput, cwd, sessionId)) return null;
 	if (resolution.status !== sessionContract.STATES.BOUND && unboundOrdinaryMutationAllowed(toolName, toolInput, cwd)) return null;
+	if (resolution.status !== sessionContract.STATES.BOUND && unboundOrdinaryShellAllowed(toolName, toolInput, cwd)) return null;
 	if (resolution.status === sessionContract.STATES.BOUND) {
 		if (resolution.derivedTask?.read_only === true) {
 			if (normalizedToolName(toolName) === "file-mutation") {
@@ -578,4 +811,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundOrdinaryMutationAllowed };
+module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundGitMutationAllowed, unboundOrdinaryMutationAllowed, unboundOrdinaryShellAllowed };
