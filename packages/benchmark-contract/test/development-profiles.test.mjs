@@ -37,7 +37,8 @@ assert.deepEqual(
 );
 assert.deepEqual(
   ["explorer","bounded_worker","tester","mechanical_worker","translation"].map(role=>selectDevelopmentBinding({role,boundedScope:true,...exactValidatorEvidence,risk:"low"})).map(selection=>[selection.binding_id,selection.reasoning_effort]),
-  [["luna","low"],["luna","medium"],["luna","medium"],["luna","medium"],["luna","low"]],
+  // tester runs at low effort per operator calibration (e08b176)
+  [["luna","low"],["luna","medium"],["luna","low"],["luna","medium"],["luna","low"]],
 );
 assert.deepEqual(catalog.balanced_role_policy.translation.allowed_reasoning_efforts,["low"]);
 assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,...exactValidatorEvidence,risk:"medium",availableBindings:["sol","terra"]}),/Balanced requires luna for bounded_worker/);

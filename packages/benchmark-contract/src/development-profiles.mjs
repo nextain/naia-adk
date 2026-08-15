@@ -10,7 +10,9 @@ const catalogPath=path.join(root,"baselines","development-composition-profiles.j
 const riskRank={low:0,medium:1,high:2};
 const balancedRoleExpectation={
 	secretary:["luna","max"],issue_leader:["luna","max"],explorer:["luna","low"],analysis:["sol","medium"],design:["sol","medium"],review:["sol","medium"],
-	implementation:["luna","medium"],test:["luna","medium"],generic_worker:["luna","medium"],translation:["luna","low"],
+	// `test` runs at low effort per operator calibration (e08b176). The catalog is the
+	// source of truth; this table only pins it against silent drift.
+	implementation:["luna","medium"],test:["luna","low"],generic_worker:["luna","medium"],translation:["luna","low"],
 };
 
 function canonicalJson(value){

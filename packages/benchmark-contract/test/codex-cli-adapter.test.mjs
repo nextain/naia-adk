@@ -13,7 +13,13 @@ const parsed=parseCodexJsonl(events.map(JSON.stringify).join("\n")+"\n");assert.
 assert.throws(()=>parseCodexJsonl('{"type":"turn.completed","usage":{}}\n'),/no completed agent message/);assert.throws(()=>parseCodexJsonl('{bad}\n'),/malformed Codex JSONL/);
 const cost=costFromUsage("gpt-5.6-luna",usage,25);assert.equal(cost.uncached_input_tokens.value,9474);assert.equal(cost.retries.state,"unavailable");assert.equal(cost.monetary.value,(9474+896+654)/1000000,"reasoning detail must not be billed in addition to output total");assert.equal(digestCanonical(priceSnapshot),PRICE_SNAPSHOT_DIGEST);
 const longContextCost=costFromUsage("gpt-5.6-luna",{input_tokens:272001,cached_input_tokens:0,output_tokens:1,reasoning_output_tokens:0},25);assert.equal(longContextCost.monetary.state,"unavailable");assert.equal(longContextCost.quota_units.state,"unavailable");
-assert.match(resolveCodexEntrypoint(),/codex\.js$/u);
+// resolveCodexEntrypoint() only resolves where the managed Codex package is installed.
+// Every assertion below drives a synthetic entrypoint instead, so a missing install must
+// not fail the suite for someone who just cloned the repo. Per the platform_independence
+// rule in .agents/context/harness.yaml the skip is explicit and is not reported as a pass.
+let codexEntrypointResolved=false;
+try{assert.match(resolveCodexEntrypoint(),/codex\.js$/u);codexEntrypointResolved=true;}
+catch(error){if(error?.code!=="codex_entrypoint_missing")throw error;}
 
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),"naia-codex-adapter-"));
 try{
@@ -25,4 +31,4 @@ try{
  const hang=path.join(temp,"hang.mjs");fs.writeFileSync(hang,`const rows=${JSON.stringify(events)};for(const row of rows)process.stdout.write(JSON.stringify(row)+'\\n');setInterval(()=>{},1000);`);const timeoutAdapter=createCodexCliAdapter({entrypoint:hang,cwd:temp,timeoutMs:500});await assert.rejects(()=>timeoutAdapter.invoke({plan,slot}),error=>error.code==="codex_timeout"&&error.cost?.monetary?.state==="measured");
  const badCandidate=path.join(temp,"bad-candidate.mjs");const badEvents=structuredClone(events);badEvents[1].item.text='process.exit(0)';fs.writeFileSync(badCandidate,`for(const row of ${JSON.stringify(badEvents)})process.stdout.write(JSON.stringify(row)+'\\n');`);const failed=await createCodexCliAdapter({entrypoint:badCandidate,cwd:temp}).invoke({plan,slot});assert.equal(failed.status,"valid_fail","model text must be parsed as data and never executed");
 }finally{fs.rmSync(temp,{recursive:true,force:true});}
-console.log("Codex CLI adapter: PASS (native Node, bound prices, no double billing, durable failure cost, external deterministic scorer)");
+console.log(`Codex CLI adapter: PASS (native Node, bound prices, no double billing, durable failure cost, external deterministic scorer)${codexEntrypointResolved?"":" — SKIPPED: managed Codex entrypoint resolution (package not installed; set CODEX_MANAGED_PACKAGE_ROOT to cover it)"}`);
