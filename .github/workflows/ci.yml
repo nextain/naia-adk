@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: pnm
+          cache: pnpm
       - run: pnpm install --frozen-lockfile=false
       - run: pnpm test
       - name: Install Linux sandbox runtime
