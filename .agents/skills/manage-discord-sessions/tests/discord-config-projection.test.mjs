@@ -81,10 +81,10 @@ test("DSG-012 loads only private closed settings and resolves an owner-only cred
 	const keyDirectory = join(root, "keys");
 	mkdirSync(keyDirectory, { mode: 0o700 });
 	const keyPath = join(keyDirectory, "discord-token");
-	writeFileSync(keyPath, "credential-value-long-enough", { mode: 0o600 });
+	writeFileSync(keyPath, "fake-credential-value-long-enough", { mode: 0o600 });
 	protectOwnerOnly(keyDirectory, "directory", "test credential directory");
 	protectOwnerOnly(keyPath, "file", "test credential");
-	assert.equal(new FileCredentialResolver(keyDirectory).resolve("discord-token"), "credential-value-long-enough");
+	assert.equal(new FileCredentialResolver(keyDirectory).resolve("discord-token"), "fake-credential-value-long-enough");
 	widenTestAcl(keyPath);
 	assert.throws(() => new FileCredentialResolver(keyDirectory).resolve("discord-token"), /owner-only/);
 });

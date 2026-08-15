@@ -11,8 +11,8 @@ const moduleUrl = pathToFileURL(fileURLToPath(new URL("../helper/token-owner-loc
 const roots = [];
 
 test("DSO-011 derives one stable kernel lock identity from the credential bytes", () => {
-	assert.equal(discordTokenFingerprint("same-token-value-long-enough"), discordTokenFingerprint("same-token-value-long-enough"));
-	assert.notEqual(discordTokenFingerprint("same-token-value-long-enough"), discordTokenFingerprint("other-token-value-long-enough"));
+	assert.equal(discordTokenFingerprint("fake-same-token-value-long-enough"), discordTokenFingerprint("fake-same-token-value-long-enough"));
+	assert.notEqual(discordTokenFingerprint("fake-same-token-value-long-enough"), discordTokenFingerprint("fake-other-token-value-long-enough"));
 });
 const workerSource = `
 import { acquireDiscordTokenOwnerLock } from ${JSON.stringify(moduleUrl)};

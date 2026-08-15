@@ -12,7 +12,7 @@ const cliPath = fileURLToPath(new URL("../helper/cli.mjs", import.meta.url));
 const fakeBackendPath = fileURLToPath(new URL("./fixtures/fake-backend.mjs", import.meta.url));
 const jobId = "meaningful-session-job";
 const rawRequestSecret = "request-secret-013";
-const assembledPromptSecret = "assembled-context-secret-013";
+const assembledPromptSecret = "fake-assembled-context-secret-013";
 
 afterEach(cleanupRoots);
 
@@ -25,13 +25,13 @@ async function completedSession() {
 		backendId: "codex",
 		backendCapabilities: { structuredProgress: true },
 		activityDetail: "structured",
-		requestExcerpt: `inspect token=${rawRequestSecret} /var/home/luke/request-private`,
+		requestExcerpt: `inspect token=${rawRequestSecret} /home/user/request-private`,
 	});
 	const result = await runBackendAttempt({
 		store,
 		jobId,
 		backendId: "codex",
-		prompt: `__fake_meaningful_session__ token=${assembledPromptSecret} /var/home/luke/assembled-private`,
+		prompt: `__fake_meaningful_session__ token=${assembledPromptSecret} /home/user/assembled-private`,
 		cwd: root,
 		runtimeRoot: join(root, "runtime"),
 		executable: fakeBackendPath,
@@ -81,7 +81,7 @@ test("FET_DSO_013_001 preserves semantic events while excluding provider-private
 	assert.equal(job.currentActivity.includes("fake-model-content"), false);
 
 	const bytes = readFileSync(databasePath);
-	for (const forbidden of [rawRequestSecret, assembledPromptSecret, "/var/home/luke/request-private", "/var/home/luke/assembled-private", "private-tool-command", "private-tool-output"]) {
+	for (const forbidden of [rawRequestSecret, assembledPromptSecret, "/home/user/request-private", "/home/user/assembled-private", "private-tool-command", "private-tool-output"]) {
 		assert.equal(bytes.includes(Buffer.from(forbidden)), false, `persisted forbidden provider-private data: ${forbidden}`);
 	}
 });

@@ -5,12 +5,12 @@ secret_absent=true
 test -z "${LEAK_SECRET:-}" || secret_absent=false
 home_blind=true
 for home_entry in /home/*; do
-  test "$home_entry" = /home/reviewer || home_blind=false
+  test "$home_entry" = /home/node || home_blind=false
 done
 repository_blind=true
 if test -r "${REQUEST_CONTRACT_REPOSITORY_PROBE}"; then repository_blind=false; fi
 home_read_only=true
-if printf x > /home/reviewer/probe 2>/dev/null; then home_read_only=false; fi
+if printf x > /home/node/probe 2>/dev/null; then home_read_only=false; fi
 review_read_only=true
 if printf x > /review/probe 2>/dev/null; then review_read_only=false; fi
 network_blocked=true

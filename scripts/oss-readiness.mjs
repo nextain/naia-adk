@@ -79,8 +79,14 @@ for (const f of tracked) {
   const p = join(repo, f);
   let body; try { if (statSync(p).size > 2_000_000) continue; body = readFileSync(p, "utf8"); } catch { continue; }
   if (body.indexOf(NUL) !== -1) continue; // binary (nul byte)
+  let inPublicKeyBlock = false;
   body.split("\n").forEach((line, i) => {
-    const isPubkey = /pub(lic)?[_-]?key/i.test(line); // 공개키 라인 = 시크릿 아님
+    // PEM 공개키 본문은 그 줄에 "public key"라는 말이 없어 라인 단위 판정으로는 걸러지지 않는다.
+    // 블록 경계를 추적해 본문 전체를 공개키로 본다.
+    if (/-----BEGIN (?:[A-Z ]+ )?PUBLIC KEY-----/.test(line)) inPublicKeyBlock = true;
+    else if (/-----END (?:[A-Z ]+ )?PUBLIC KEY-----/.test(line)) inPublicKeyBlock = false;
+    // 공개키 라인 = 시크릿 아님. 서명(signature) 값도 검증용으로 공개되는 값이며 비밀이 아니다.
+    const isPubkey = inPublicKeyBlock || /pub(lic)?[_-]?key/i.test(line) || /"signature"\s*:/.test(line);
     if (!isPubkey) for (const [name, re, mode] of SECRET_RULES) {
       re.lastIndex = 0; let m;
       while ((m = re.exec(line))) {
