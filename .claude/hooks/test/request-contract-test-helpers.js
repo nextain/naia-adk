@@ -28,6 +28,8 @@ let passed = 0;
 const runnerEvidenceByReview = new WeakMap();
 const fixtureRoots = new Set();
 const REVIEWER_EXTENSION = process.platform === "win32" ? ".cjs" : ".sh";
+const WINDOWS_ENCODED_PREFIX = "powershell -NoProfile -NonInteractive -EncodedCommand ";
+const WINDOWS_QUIET_PREFIX = "$ProgressPreference='SilentlyContinue'; ";
 const reviewerFixturePath = (name) => path.join(__dirname, "fixtures", name + REVIEWER_EXTENSION);
 const SANDBOX_EXECUTABLE = process.platform === "win32" ? reviewRunner.resolveCodexExecutable() : "/usr/bin/bwrap";
 const SANDBOX_EXECUTABLE_DIGEST = core.sha256(fs.readFileSync(SANDBOX_EXECUTABLE));
@@ -38,6 +40,9 @@ function writeReviewer(cwd, name, posixSource, windowsSource) {
 	const file = path.join(cwd, name + REVIEWER_EXTENSION);
 	fs.writeFileSync(file, process.platform === "win32" ? windowsSource : posixSource, { mode: 0o700 });
 	return file;
+}
+function windowsEncodedCommand(script) {
+	return WINDOWS_ENCODED_PREFIX + Buffer.from(script, "utf16le").toString("base64");
 }
 function test(name, fn) {
 	if (process.env.TEST_FILTER && !name.includes(process.env.TEST_FILTER)) return;
@@ -99,7 +104,7 @@ function fixture() {
 		const codexRootResolution = 'root=${ADK_PROJECT_ROOT:-}; if [ -n "$root" ]; then case "$root" in /*) ;; *) exit 1;; esac; root=$(CDPATH= cd -- "$root" 2>/dev/null && pwd -P) || exit 1; else root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1; fi; [ -f "$root/.codex/hooks.json" ] || exit 1;';
 		const codexWindowsRootResolution = '$root=$env:ADK_PROJECT_ROOT; if ($root) { if (-not [IO.Path]::IsPathRooted($root)) { exit 1 }; try { $root=(Resolve-Path -LiteralPath $root -ErrorAction Stop).Path } catch { exit 1 } } else { $root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { exit 1 }; $root=$root.Trim() }; if (-not (Test-Path -LiteralPath (Join-Path $root ".codex/hooks.json"))) { exit 1 };';
 		const codexStopCommand = `failure='{"decision":"block","reason":"[request-contract:stop_hook_unavailable] Stop contract check unavailable; lifecycle continues for repair."}'; emit(){ printf '%s' "$failure"; }; root=\${ADK_PROJECT_ROOT:-}; if [ -n "$root" ]; then case "$root" in /*) ;; *) emit; exit 0;; esac; root=$(CDPATH= cd -- "$root" 2>/dev/null && pwd -P) || { emit; exit 0; }; else root=$(git rev-parse --show-toplevel 2>/dev/null) || { emit; exit 0; }; fi; [ -f "$root/.codex/hooks.json" ] || { emit; exit 0; }; hook="$root/${adapterPath}"; [ -f "$hook" ] || { emit; exit 0; }; node "$hook" Stop || emit; exit 0`;
-		const codexStopCommandWindows = `powershell -NoProfile -Command '$failure=@{decision="block";reason="[request-contract:stop_hook_unavailable] Stop contract check unavailable; lifecycle continues for repair."}|ConvertTo-Json -Compress; $root=$env:ADK_PROJECT_ROOT; if ($root) { if (-not [IO.Path]::IsPathRooted($root)) { Write-Output $failure; exit 0 }; try { $root=(Resolve-Path -LiteralPath $root -ErrorAction Stop).Path } catch { Write-Output $failure; exit 0 } } else { $root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { Write-Output $failure; exit 0 }; $root=$root.Trim() }; if (-not (Test-Path -LiteralPath (Join-Path $root ".codex/hooks.json"))) { Write-Output $failure; exit 0 }; $hook=Join-Path $root.Trim() "${adapterPath}"; if (-not (Test-Path -LiteralPath $hook)) { Write-Output $failure; exit 0 }; node $hook Stop; if ($LASTEXITCODE -ne 0) { Write-Output $failure }; exit 0'`;
+		const codexStopCommandWindows = windowsEncodedCommand(`${WINDOWS_QUIET_PREFIX}$failure=@{decision="block";reason="[request-contract:stop_hook_unavailable] Stop contract check unavailable; lifecycle continues for repair."}|ConvertTo-Json -Compress; $root=$env:ADK_PROJECT_ROOT; if ($root) { if (-not [IO.Path]::IsPathRooted($root)) { Write-Output $failure; exit 0 }; try { $root=(Resolve-Path -LiteralPath $root -ErrorAction Stop).Path } catch { Write-Output $failure; exit 0 } } else { $root=git rev-parse --show-toplevel 2>$null; if ($LASTEXITCODE -ne 0 -or -not $root) { Write-Output $failure; exit 0 }; $root=$root.Trim() }; if (-not (Test-Path -LiteralPath (Join-Path $root ".codex/hooks.json"))) { Write-Output $failure; exit 0 }; $hook=Join-Path $root.Trim() "${adapterPath}"; if (-not (Test-Path -LiteralPath $hook)) { Write-Output $failure; exit 0 }; node $hook Stop; if ($LASTEXITCODE -ne 0) { Write-Output $failure }; exit 0`);
 		const hooks = Object.fromEntries(["PreToolUse", "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop"].map((eventName) => {
 			const hook = directory === ".claude"
 				? { type: "command", command: `node \"$CLAUDE_PROJECT_DIR/${adapterPath}\" ${eventName}` }
@@ -108,7 +113,7 @@ function fixture() {
 				: {
 					type: "command",
 					command: `${codexRootResolution} registry=\"$root/.codex/hooks.json\"; [ ! -f \"$registry\" ] && exit 0; hook=\"$root/${adapterPath}\"; if [ ! -f \"$hook\" ]; then echo \"Configured Codex hook is missing: $hook\" >&2; exit 1; fi; node \"$hook\" ${eventName}`,
-					commandWindows: `powershell -NoProfile -Command '${codexWindowsRootResolution} $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}'`,
+					commandWindows: windowsEncodedCommand(`${WINDOWS_QUIET_PREFIX}${codexWindowsRootResolution} $registry=Join-Path $root.Trim() \".codex/hooks.json\"; if (-not (Test-Path -LiteralPath $registry)) { exit 0 }; $hook=Join-Path $root.Trim() \"${adapterPath}\"; if (-not (Test-Path -LiteralPath $hook)) { Write-Error \"Configured Codex hook is missing: $hook\"; exit 1 }; node $hook ${eventName}`),
 				};
 			const matcher = directory === ".codex"
 				? "Bash|shell_command|exec_command|(?:.*[.:/]exec_command)|(?:.*[.:/]shell_command)|Edit|Write|NotebookEdit|apply_patch"
