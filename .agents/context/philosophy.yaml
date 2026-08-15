@@ -63,6 +63,33 @@ principles:
       - "Dual-directory architecture: AI-optimized + human-readable"
       - "CC-BY-SA licensing preserves the contribution chain"
 
+  layered_supervision:
+    title: "Layered Supervision"
+    statement: "Layers exist to put a supervisor outside the work being supervised"
+    details:
+      - "A session cannot audit its own drift — self-review is a closed loop"
+      - "Each layer is audited by the one above it: L1←L2, L2←L3, L3←human owner"
+      - "L2 is an engine that makes one issue get done, not a wall that blocks work"
+      - "L2 carries three duties: supervise drift, route work to a cost-appropriate profile, hold the development process"
+      - "Layer contract lives in .agents/context/development-model-routing.yaml"
+
+# Where the layered architecture is headed. The contract in
+# development-model-routing.yaml says what each layer is; this says which product
+# gets built out next. Lower layers are proven before higher ones are stacked.
+roadmap:
+  layered_rollout:
+    current_focus: "prove L2 — the issue engine — before building L3 on top of it"
+    build_order:
+      - product: "Discord gateway"
+        note: "First surface to grow the full three layers. Sits at L3 today but has been operating as a single layer."
+      - product: "naia-agent"
+        note: "Second surface, after the Discord gateway has the three layers working."
+      - product: "naia-shell"
+        note: "Third surface."
+    rule: |
+      This is the order in which products grow the three-layer structure, not a mapping
+      of products onto layers. Each product eventually carries L3, L2, and L1 itself.
+
 mirrors:
   korean: ".users/context/philosophy.md"
   english: ".users/context/en/philosophy.md"

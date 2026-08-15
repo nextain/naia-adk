@@ -70,6 +70,31 @@ It is the reason the project exists, separate from the architecture (what) and w
 - Dual-directory architecture: AI-optimized + human-readable versions
 - Preserve the contribution chain through the CC-BY-SA license
 
+### 8. Layered Supervision
+
+**"Layers exist to put a supervisor outside the work being supervised"**
+
+- A session cannot judge its own drift. Self-review is a closed loop
+- Each layer is audited by the one above it: L1←L2, L2←L3, L3←the human owner
+- L2 is an engine that gets one issue done, not a wall that blocks work
+- L2 carries three duties: supervise drift, route work to a cost-appropriate profile, hold the development process
+- The layer contract lives in `.agents/context/development-model-routing.yaml`
+
+---
+
+## Roadmap — the order in which the layers get built
+
+Where the contract says **what** each layer is, this says **which product** grows the
+three layers next. Lower layers are proven before higher ones are stacked on them.
+
+The current focus is proving L2, the issue engine. Building L3 on top of it comes after.
+
+The build order is the Discord gateway, then naia-agent, then naia-shell. The Discord
+gateway goes first: it sits at L3 by position but has been operating as a single layer.
+
+This is the order in which products grow the three-layer structure, not a mapping of
+products onto layers. Each product eventually carries L3, L2, and L1 of its own.
+
 ---
 
 ## Related Files
