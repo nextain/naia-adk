@@ -157,6 +157,34 @@ definitions:
       - term: "드리프트 (drift)"
         means: "소스(git)와 실제(서버·운영)가 어긋난 상태. 반복 사고의 공통 뿌리."
 
+  layer_notation:
+    _why: |
+      `L1`/`L2`/`L3` 와 "three-layer" 가 이 저장소에서 **서로 다른 세 축**으로 쓰인다.
+      축을 밝히지 않은 "L2" 는 추측을 부르고, 추측이 계약이 되면 드리프트다.
+      사고 실례 — 2026-08-15: 축을 구분하지 않아 유저 접점 게이트웨이(오케스트레이션 L3)를
+      "1레이어 제품" 으로 오기했고, 그 정의 위에서 2 주간 잘못된 층을 측정했다.
+
+    axes:
+      - axis: "오케스트레이션 층위 (orchestration layer)"
+        notation: "L1 / L2 / L3"
+        means: "누가 누구를 부르고 감시하는가. L3 비서 → L2 이슈 리더 → L1 워커."
+        source: ".agents/context/development-model-routing.yaml (layer_contract)"
+        note: "감시 방향은 L1←L2, L2←L3, L3←human_owner. 자기 감시는 성립하지 않는다."
+      - axis: "조사 깊이 (IDD scope)"
+        notation: "L1 / L2 / L3"
+        means: "어디까지 들여다볼 것인가. 조사 범위의 단계이지 호출 계층이 아니다."
+        source: ".agents/context/gstack-hooks.md"
+      - axis: "벤치마크 인과층 (causal layer)"
+        notation: "three-layer"
+        means: "무엇을 원인으로 분리해 측정하는가. 모델 능력 / naia-agent 런타임 / naia-adk 거버넌스."
+        source: ".agents/requirements/BMC-001-three-layer-benchmark.yaml"
+        note: "오케스트레이션 층위와 무관한 축이다. 합산 점수 금지."
+
+    rule: |
+      문서·이슈·커밋에서 `L2` 처럼 축 없이 쓰지 않는다. 처음 등장할 때 축을 밝힌다
+      (예: "오케스트레이션 L2", "IDD scope L2"). 축이 불분명한 표기를 만난 AI 는
+      추측하지 말고 되묻는다.
+
   project_glossary: |
     프로젝트 고유 도메인 용어(예: onmam 의 포털·홈피·lynx·채널)는 각 프로젝트의
     `.agents/context/glossary.md` 에 둔다. 이 파일은 **전 포크 공통 방법론 용어**만 담는다.

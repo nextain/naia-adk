@@ -1,1 +1,31 @@
-Harness disabled during recovery. Remove only after cross-host regression tests pass.
+HARNESS ENFORCEMENT IS DISABLED IN THIS RELEASE — this is a known, deliberate state.
+
+What this means
+  The session-contract gate (.codex/hooks/session-contract-gate.cjs) returns early and
+  enforces nothing while this file exists in .claude/, .codex/, or .pi/.
+  Independent guards are unaffected and still run: force-push, destructive-git,
+  commit, deploy, email, and GCS guards all remain active.
+
+Why it is off
+  With enforcement on, an unbound session (one with no contract in
+  .agents/session-contracts/) is blocked from every mutating shell command —
+  including `npm test`, `git commit`, and `mkdir`. A fresh clone therefore cannot
+  run its own test suite. File edits were already opened up for exactly this reason
+  (see the comment above unboundOrdinaryMutationAllowed), but the shell path was
+  never given the same treatment.
+
+  A guard nobody can work under is not enforcing anything, so it is off rather than
+  silently blocking newcomers.
+
+Known inconsistency
+  AGENTS.md / CLAUDE.md / GEMINI.md still describe the contract requirement as if it
+  were enforced. That text documents the intended design, not current runtime behavior.
+  The Session Boundaries section carries a note pointing here.
+
+Before removing this file
+  Fix the shell path so ordinary non-destructive commands run unbound, then verify on
+  a fresh clone that `npm test` and an ordinary commit succeed with enforcement on,
+  and re-run cross-host regression tests. Removing it without that fix will block
+  every new user.
+
+Tracking: https://github.com/nextain/naia-adk/issues/34
