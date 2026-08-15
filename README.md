@@ -71,6 +71,15 @@ ADK는 `read`, `write`, `execute`, `publish`를 서로 다른 관심사로 나�
 쓰는 것, `confidential`은 계약서·크리덴셜·개인정보처럼 민감한 것입니다. 크리덴셜은 보통 git
 밖에 두지만, 등급으로는 여전히 `confidential`입니다.
 
+> **이번 릴리스에서 세션 계약 강제는 꺼져 있습니다.** `.claude/no-harness` 마커가 저장소에
+> 들어 있어 세션 계약 게이트가 아무것도 막지 않습니다. 켜면 계약 없는 세션이 `npm test`를
+> 포함한 모든 변경성 셸 명령에서 막혀 새로 클론한 사람이 테스트조차 돌릴 수 없기 때문입니다.
+> 파일 편집 경로는 같은 이유로 이미 열어뒀지만 셸 경로는 아직 그대로입니다. force push,
+> 파괴적 git 명령, 배포, 외부 발송 가드는 이와 무관하게 계속 작동합니다. 진행 상황은
+> [#34](https://github.com/nextain/naia-adk/issues/34), 자세한 내용은 `.claude/no-harness`에
+> 적어 뒀습니다. `AGENTS.md`의 세션 경계 절은 의도한 설계를 서술한 것이며 현재 런타임 동작과
+> 다릅니다.
+
 ### LLM 어댑터 (naia-anyllm)
 
 LLM에 연결해야 하는 기능을 위해 `naia-anyllm` 어댑터를 내장합니다. [any-llm](https://github.com/nextain/any-llm)

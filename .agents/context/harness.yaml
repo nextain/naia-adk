@@ -296,3 +296,32 @@ design_review_questions:
     - id: SA8
       q: "How does the team audit what the agent did and why?"
   red_flag: "If answers frequently reduce to 'we can add that later', the runtime is likely not truly designed yet."
+
+# ─── Current enforcement state (2026-08-15) ───────────────────
+# Recorded here because the released state differs from what AGENTS.md describes.
+enforcement_state:
+  session_contract_gate: disabled
+  disabled_by: [".claude/no-harness", ".codex/no-harness", ".pi/no-harness"]
+  effect: "session-contract-gate.cjs returns early and enforces nothing"
+  unaffected_guards:
+    - "git-push-guard (force push)"
+    - "destructive-git-guard (reset --hard against remote refs, history rewrite)"
+    - "commit-guard, deploy-guard, email-send-guard, gcs-guard, rdd-experiment-guard"
+  why: |
+    Measured on a fresh clone with enforcement on: an unbound session is blocked from
+    every mutating shell command, including `npm test`, `git commit`, and `mkdir`.
+    Read-only shell and ordinary file edits pass. The file-mutation path was already
+    widened for this exact reason (see the comment above unboundOrdinaryMutationAllowed);
+    the shell path never received the same treatment, so pre-enumeration remains a
+    ceiling there.
+  doc_divergence: |
+    AGENTS.md / CLAUDE.md / GEMINI.md Session Boundaries still state that mutating shell
+    commands require a session contract. That text describes the intended design, not
+    current runtime behavior. The entrypoints are locked to an approved canonical digest,
+    so they were not edited without separate approval.
+  removal_conditions:
+    - "unbound `npm test` passes with enforcement on"
+    - "unbound ordinary commit passes with enforcement on"
+    - "force push, remote-ref reset --hard, and governance-file mutation still blocked"
+    - "cross-host regression tests pass"
+  tracking: "https://github.com/nextain/naia-adk/issues/34"

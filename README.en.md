@@ -83,6 +83,17 @@ stays inside the workspace; `confidential` covers sensitive material like
 contracts, credentials, and personal data. Credentials usually live outside git,
 but by level they are still `confidential`.
 
+> **Session-contract enforcement ships disabled in this release.** A
+> `.claude/no-harness` marker is committed, so the session-contract gate blocks
+> nothing. With it on, a session without a contract is blocked from every mutating
+> shell command — including `npm test` — so a fresh clone cannot even run its own
+> test suite. The file-edit path was opened up for that same reason; the shell path
+> has not been given the same treatment yet. Force-push, destructive-git, deploy, and
+> outbound-messaging guards are unaffected and still run. Progress is tracked in
+> [#34](https://github.com/nextain/naia-adk/issues/34), with details in
+> `.claude/no-harness`. The Session Boundaries section of `AGENTS.md` describes the
+> intended design, not current runtime behavior.
+
 ### LLM adapter (naia-anyllm)
 
 For features that need to reach an LLM, the `naia-anyllm` adapter is built in. It

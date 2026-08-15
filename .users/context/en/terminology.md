@@ -146,5 +146,24 @@ Replace them immediately with plain Korean or standard terminology when found.
 | **FE Test** (feature test) | Verifies that the FE (feature) operates according to its specification. | |
 | **Drift** (drift) | A state in which the source (git) and reality (server / production) are out of alignment. The common root of recurring incidents. | |
 
+### Layer Notation
+
+`L1`/`L2`/`L3` and "three-layer" are used along **three different axes** in this repository.
+An `L2` written without its axis invites guessing, and a guess that becomes a contract is drift.
+
+> Incident example — 2026-08-15: because the axes were not distinguished, a user-facing gateway
+> (orchestration L3) was written down as a "one-layer product," and two weeks of measurement ran
+> against the wrong layer on top of that definition.
+
+| Axis | Notation | Meaning | Source |
+|---|---|---|---|
+| Orchestration layer | L1 / L2 / L3 | Who calls and supervises whom. L3 secretary → L2 issue leader → L1 worker | `development-model-routing.yaml` |
+| Investigation depth (IDD scope) | L1 / L2 / L3 | How deep to look. A scope stage, not a call hierarchy | `gstack-hooks.md` |
+| Benchmark causal layer | three-layer | Which causes are isolated for measurement: model capability / naia-agent runtime / naia-adk governance | `BMC-001` |
+
+Supervision in the orchestration axis runs L1←L2, L2←L3, L3←human owner. Self-supervision does not count.
+Do not write a bare `L2` in documents, issues, or commits; name the axis on first use. An AI that meets an
+ambiguous notation must ask instead of guessing.
+
 Project-specific domain terms (for example, the portal, homepage, and lynx of onmam) belong in each project’s `.agents/context/glossary.md`.
 This document contains only methodology terms common across all forks.
