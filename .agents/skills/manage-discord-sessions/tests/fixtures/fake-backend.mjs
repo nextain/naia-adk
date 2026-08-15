@@ -20,7 +20,7 @@ const codex = process.argv.includes("exec");
 	const meaningfulSession = prompt.startsWith("__fake_meaningful_session__");
 	const anyApprovalUi = approvalUi || stderrApprovalUi;
 	if (codex) {
-	console.log(JSON.stringify({ type: "thread.started", thread_id: "thread-secret-not-persisted" }));
+	console.log(JSON.stringify({ type: "thread.started", thread_id: "fake-thread-secret-not-persisted" }));
 		console.log(JSON.stringify({ type: "turn.started" }));
 		if (approvalUi) console.log(JSON.stringify({ type: "approval_required" }));
 		if (oversizedToolThenSuccess) {
@@ -31,13 +31,13 @@ const codex = process.argv.includes("exec");
 			console.log(JSON.stringify({ type: "item.started", item: { type: "command_execution", command: "private-tool-command" } }));
 			console.log(JSON.stringify({ type: "item.completed", item: { type: "command_execution", aggregated_output: "private-tool-output" } }));
 		}
-		if (progressThenSuccess || meaningfulSession) console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "checking token=supersecretvalue /var/home/luke/private" } }));
+		if (progressThenSuccess || meaningfulSession) console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "checking token=supersecretvalue /home/user/private" } }));
 		console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: approvalTextInResult ? "The approval request text is diagnostic output, not an interactive prompt." : "fake-model-content" } }));
 		console.log(JSON.stringify(structuredFailure || anyApprovalUi ? { type: "turn.failed" } : { type: "turn.completed", usage: { input_tokens: 1 } }));
 	if (failureThenSuccess) console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 1 } }));
 } else {
-	console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "session-secret-not-persisted" }));
-	if (progressThenSuccess) console.log(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "checking token=supersecretvalue /var/home/luke/private" }] } }));
+	console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "fake-session-secret-not-persisted" }));
+	if (progressThenSuccess) console.log(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "checking token=supersecretvalue /home/user/private" }] } }));
 	console.log(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "fake-model-content" }] } }));
 	console.log(JSON.stringify(structuredFailure ? { type: "result", subtype: "error", is_error: true } : { type: "result", subtype: "success", result: "fake-model-content" }));
 	if (failureThenSuccess) console.log(JSON.stringify({ type: "result", subtype: "success", result: "late-success" }));
