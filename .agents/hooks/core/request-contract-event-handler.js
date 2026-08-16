@@ -97,6 +97,7 @@ function clientRegistrySupports(cwd, client) {
 			} else if (hook.command !== expected || decodedWindows !== expectedWindows) return false;
 		}
 		if (eventName === "PreToolUse") return entry.matcher === preToolMatcher;
+		if (client === "codex" && eventName === "PostToolUse") return entry.matcher === preToolMatcher;
 		return entry.matcher == null || entry.matcher === "";
 	});
 }

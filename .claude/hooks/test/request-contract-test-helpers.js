@@ -118,7 +118,7 @@ function fixture() {
 			const matcher = directory === ".codex"
 				? "Bash|shell_command|exec_command|(?:.*[.:/]exec_command)|(?:.*[.:/]shell_command)|Edit|Write|NotebookEdit|apply_patch"
 				: "Bash|shell_command|Edit|Write|NotebookEdit|apply_patch";
-			return [eventName, [{ ...(eventName === "PreToolUse" ? { matcher } : {}), hooks: [hook] }]];
+			return [eventName, [{ ...(eventName === "PreToolUse" || directory === ".codex" && eventName === "PostToolUse" ? { matcher } : {}), hooks: [hook] }]];
 		}));
 		fs.writeFileSync(path.join(cwd, directory, file), JSON.stringify({ hooks }));
 	}

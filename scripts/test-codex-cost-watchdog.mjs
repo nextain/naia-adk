@@ -8,6 +8,7 @@ import { activeCodexThreads, ensureWatchdog, lastOutstandingToolStart, loadConfi
 
 const require = createRequire(import.meta.url);
 const usage = require("./codex-lineage-usage.cjs");
+const sessionContracts = require("../.agents/hooks/core/session-contract.js");
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "watchdog-project-root-"));
@@ -343,6 +344,26 @@ assert.throws(() => loadConfiguredLineages({
   codexHome: root,
   contractResolver: ({ sessionId }) => ({ status: "BOUND", contract: sessionId === "governed" ? { id: sessionId, subagent_policy: {} } : { id: sessionId } }),
 }), /subagent_policy is invalid/, "an explicitly declared malformed policy must fail closed");
+
+const staleOrdinaryRoot = path.join(root, "stale-ordinary");
+fs.mkdirSync(path.join(staleOrdinaryRoot, ".agents", "session-contracts"), { recursive: true });
+const staleOrdinaryContract = {
+	schema_version: "1.0", id: "stale-ordinary", status: "active", project_root: ".",
+	goal: "test stale ordinary binding", scope: ["test"], non_goals: [], success_criteria: ["test"],
+	allowed_paths: ["fixture.txt"], target_ownership: ["fixture.txt"], audiences: ["test"], source_refs: ["test"],
+	session_bindings: [{ session_id: "stale-session", contract_digest: "0".repeat(64) }],
+	progress_file: ".agents/progress/stale-ordinary.json", contract_digest: "0".repeat(64),
+};
+const staleOrdinaryDigest = sessionContracts.contractDigest(staleOrdinaryContract);
+staleOrdinaryContract.contract_digest = staleOrdinaryDigest;
+staleOrdinaryContract.session_bindings[0].contract_digest = staleOrdinaryDigest;
+fs.writeFileSync(path.join(staleOrdinaryRoot, ".agents", "session-contracts", "stale-ordinary.json"), JSON.stringify(staleOrdinaryContract));
+const staleOrdinaryPointer = { contract_path: ".agents/session-contracts/stale-ordinary.json", contract_id: "stale-ordinary", contract_digest: staleOrdinaryDigest };
+fs.writeFileSync(path.join(staleOrdinaryRoot, ".agents", "session-contracts", ".session-map.json"), JSON.stringify({ bindings: { "stale-session": staleOrdinaryPointer } }));
+assert.deepEqual(loadConfiguredLineages({ projectRoot: staleOrdinaryRoot, codexHome: root, contractResolver: () => ({ status: "STALE" }) }), [], "a pointer-attested stale ordinary contract must not break every prompt");
+staleOrdinaryPointer.contract_digest = "f".repeat(64);
+fs.writeFileSync(path.join(staleOrdinaryRoot, ".agents", "session-contracts", ".session-map.json"), JSON.stringify({ bindings: { "stale-session": staleOrdinaryPointer } }));
+assert.throws(() => loadConfiguredLineages({ projectRoot: staleOrdinaryRoot, codexHome: root, contractResolver: () => ({ status: "STALE" }) }), /not bound for stale-session/, "a stale pointer with a tampered digest must fail closed");
 
 // Process-to-session attribution must stay O(1) in transcript size: a full parse
 // here made activeCodexThreads take seconds on a host with large rollouts, so the

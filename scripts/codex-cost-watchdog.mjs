@@ -186,6 +186,26 @@ export function loadConfiguredLineages({ projectRoot = process.cwd(), codexHome,
 	for (const sessionId of Object.keys(registry.bindings || {})) {
 		const resolved = contractResolver({ cwd: projectRoot, sessionId });
 		if (resolved?.status !== contracts.STATES.BOUND) {
+			const binding = registry.bindings[sessionId];
+			if (!binding || typeof binding !== "object" || Array.isArray(binding) ||
+				typeof binding.contract_path !== "string" || typeof binding.contract_id !== "string" ||
+				!/^\w[\w.-]*$/.test(binding.contract_id) || !/^[a-f0-9]{64}$/.test(binding.contract_digest || "")) {
+				throw new Error(`Configured lineage contract is not bound for ${sessionId}`);
+			}
+			const contractPath = path.resolve(projectRoot, binding.contract_path);
+			const contractsRoot = path.resolve(projectRoot, ".agents", "session-contracts");
+			if (!contracts.inside(contractsRoot, contractPath)) throw new Error(`Configured lineage contract is not bound for ${sessionId}`);
+			let declared;
+			try { declared = JSON.parse(fs.readFileSync(contractPath, "utf8")); }
+			catch { throw new Error(`Configured lineage contract is not bound for ${sessionId}`); }
+			const expectedDigest = contracts.contractDigest(declared);
+			const matchingBinding = Array.isArray(declared?.session_bindings) && declared.session_bindings.some((item) =>
+				item?.session_id === sessionId && item.contract_digest === expectedDigest);
+			if (contracts.validateContractShape(declared) || declared.id !== binding.contract_id ||
+				declared.contract_digest !== expectedDigest || binding.contract_digest !== expectedDigest || !matchingBinding) {
+				throw new Error(`Configured lineage contract is not bound for ${sessionId}`);
+			}
+			if (!Object.hasOwn(declared, "subagent_policy")) continue;
 			throw new Error(`Configured lineage contract is not bound for ${sessionId}`);
 		}
 		if (!Object.hasOwn(resolved.contract || {}, "subagent_policy")) continue;
