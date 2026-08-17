@@ -1,0 +1,14 @@
+[
+  {
+    "id": "ATOM-EXAMPLE-1",
+    "source_id": "SRC-EXAMPLE-1",
+    "text": "Invoke reviewers headlessly with one stdin prompt.",
+    "directive_ids": ["DIR-EXAMPLE-1"],
+    "subject": "agent_workflow",
+    "effect": "constraint",
+    "render_policy": "deny",
+    "target_ids": ["TARGET-EXAMPLE-1"],
+    "criterion_ids": ["AC-EXAMPLE-1"],
+    "evidence_ids": ["EVIDENCE-EXAMPLE-1"]
+  }
+]

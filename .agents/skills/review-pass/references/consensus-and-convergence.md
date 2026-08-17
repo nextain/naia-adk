@@ -141,7 +141,13 @@ if stage in [planning, integration]:
     findings = compare_role_outputs(first_verdicts)
 else:
     active_lenses = resolve_lenses(stage, req_ids_provided)
-    reviewer_prompt = build_prompt(stage, files, req_ids, known_issues, active_lenses)
+    reviewer_delta = build_prompt(stage, files, req_ids, known_issues, active_lenses)
+
+all_runs = compose_one_shot_dual_prompts(
+  byte_stable_base,
+  validate_complete_atom_ledger(current_and_prior_user_directives),
+  role_prompts if stage in [planning, integration] else reviewer_delta
+)
 ```
 
 Do not send the same generated summary to all four roles. Shared input anchoring defeats
@@ -272,10 +278,9 @@ reviewer-role degradation, missing evidence, or a veto yields `NOT_CLEAN`, never
 ```yaml
 budget:
   per_call_timeout:
-    planning: 60
-    development: 120
-    test: 60
-    integration: 120
+    startup: 300
+    idle: 180
+    total: 900
   max_rounds: 8
   max_total_time_min: 30
 ```
@@ -333,7 +338,9 @@ if available_adapters.length < configured_adapters.length:
 if stage in [planning, integration]:
     role_runs = schedule_four_roles(available_adapters)
     if successful_distinct_role_runs(role_runs) < 4:
-        stop with NOT_CLEAN("Four distinct role executions are mandatory")
+        record NOT_RUN("Four distinct role executions were not available")
+        continue ordinary deterministic validation without an independent-review claim
+        if governed delivery explicitly requires the four roles: keep delivery REVIEW_ONLY
     if duplicate_role(role_runs) or duplicate_execution_identity(role_runs):
         stop with NOT_CLEAN("Role or execution identity was reused")
 else:
@@ -349,7 +356,11 @@ else:
         warn("Single reviewer. Convergence increased to {convergence_threshold}")
 
     if R_available == 0:
-        abort("No review tools available. Cannot proceed.")
+        record NOT_RUN("No authenticated reviewer available")
+        continue ordinary deterministic validation
+        do not claim independent cross-validation
+        if governed delivery explicitly requires independent evidence:
+            keep delivery REVIEW_ONLY until evidence exists
 ```
 
 ---

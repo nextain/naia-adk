@@ -80,7 +80,7 @@ steps:
 failure_policy:
   retry: true
   rollback: true
-  on_failure: "abort"
+  on_failure: "Record external review as NOT_RUN and continue ordinary work; do not claim cross-validation"
 idempotency: false
 ---
 
@@ -102,6 +102,9 @@ traceability for requirements-driven projects.
 - **Baseline-preserving**: Planning and integration compare the current product with an immutable baseline and an explicit surface-preservation contract
 - **Evidence-separated**: Source, baseline, implementation/test, and authority/release reviewers receive different evidence views to prevent shared anchoring
 - **Safe**: Auto-fix with diff preview, rollback, and safety guard
+- **Account-optional**: Default Claude and Codex profiles review with their own
+  tool family. Missing CLIs, logins, or other provider accounts never block
+  ordinary work; they only remove the independent-review claim.
 
 ## Arguments
 
@@ -148,6 +151,8 @@ traceability for requirements-driven projects.
 4. Before **test**, read those same references in full; apply the governed and deterministic-complexity gates.
 5. Before **integration**, read those same references in full; apply all governed, product-preservation, and deterministic-complexity gates.
 6. Before invoking any reviewer, read [Invocation and Output Contract](references/invocation-and-output.md) and [Consensus and Convergence](references/consensus-and-convergence.md) in full.
+   Use the bundled headless runner for a single-call dual prompt: byte-stable base,
+   validated current-directive atom ledger, then reviewer-specific delta.
 7. When resolving configuration or REQ-ID traceability, read [Configuration and Requirements](references/configuration-and-requirements.md) in full.
 8. Before applying fixes, reporting a verdict, or deciding delivery eligibility, read [Reporting and Delivery](references/reporting-and-delivery.md) in full.
 9. Run the stage loop until its convergence rule succeeds or a hard stop yields `NOT_CLEAN`. Never infer omitted details from this entrypoint; the linked references are normative parts of the skill.

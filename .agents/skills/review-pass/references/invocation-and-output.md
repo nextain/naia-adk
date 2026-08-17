@@ -33,8 +33,24 @@ export LC_ALL=en_US.UTF-8
 
 ### 2.2 Prompt Delivery
 
-Write prompt to a temporary file, then pipe via stdin. Never inline large
-prompts in command arguments (encoding/length issues).
+Use dual prompting in one model call: a byte-stable, tool-neutral base prompt
+followed by a dynamic atom ledger and the reviewer-role delta. The base must not
+contain timestamps, paths, issue IDs, generated summaries, or role names; keeping
+this prefix byte-identical enables provider prompt caching. Dual prompting means
+two prompt components in one process, not two model calls.
+
+The dynamic ledger is a mechanical review projection of the request-contract
+source atoms, never a second authority model. Preserve `id`, `source_id`, exact
+`text`, `directive_ids`, `subject`, `effect`, and `render_policy`; attach the
+existing `target_ids`, `criterion_ids`, and `evidence_ids` trace sets. A trace
+set may be empty when the contract has no such edge; reject missing fields,
+empty identifier strings, duplicate identifiers, or extra projection fields
+before invocation. Supersession remains
+represented only by the contract's signed authority, directive state, and
+tombstone; a review prompt cannot invent it.
+
+Write the components to owner-only temporary files and pipe the composed prompt
+via stdin. Never inline prompts in command arguments.
 
 **PowerShell:**
 ```powershell
@@ -45,10 +61,12 @@ Get-Content $promptFile -Raw | & $toolCommand
 
 **Bash:**
 ```bash
-promptFile=$(mktemp)
-echo "$prompt" > "$promptFile"
-cat "$promptFile" | $toolCommand
+node .agents/skills/review-pass/scripts/invoke-reviewer.mjs \
+  --tool codex --repo "$PWD" --base "$baseFile" \
+  --atoms "$atomFile" --delta "$roleFile"
 ```
+
+A runnable minimal fixture is in `../examples/one-shot/`.
 
 ### 2.3 Reviewer Invocation
 
@@ -57,10 +75,9 @@ via the tools section of the profile. Standard patterns:
 
 | Tool | Headless Command | Read-Only | Notes |
 |------|-----------------|-----------|-------|
-| `claude` | `cat $f \| claude -p --output-format json --allowedTools "Read,Glob,Grep" --max-turns 5` | yes (restricted tools) | stdin pipe works |
-| `gemini` | `gemini -p "{prompt}" -m {model}` | yes (default) | use inline -p, NOT stdin pipe (broken on Windows) |
-| `opencode` | `opencode run "{prompt}" --dir "$dir" -m {model}` | yes (default) | no stdin, positional arg |
-| `codex` | `codex exec "{prompt}" --sandbox read-only --full-auto` | yes (sandbox) | inline prompt |
+| `claude` | `claude -p --input-format text --output-format json --no-session-persistence --permission-mode plan --allowedTools Read,Glob,Grep` | yes (restricted tools) | prompt on stdin |
+| `opencode` | `opencode run --dir "$dir" --format json -m {model}` | yes (explicit permissions) | set `OPENCODE_CONFIG_CONTENT` to deny `*` and allow only lowercase read/glob/grep/list/lsp keys (verified with `opencode debug config`); omit positional message; prompt on stdin |
+| `codex` | `codex exec --ephemeral --sandbox read-only --skip-git-repo-check -C "$dir" -m {model} -` | yes (sandbox) | `-` reads stdin |
 
 **Adapter interface**: Each tool adapter implements:
 
@@ -70,13 +87,19 @@ parse(raw_output: string, strategy: "json" | "text_fallback") → Finding[]
 ```
 
 **Custom tool registration**: Add entries to the `tools` section in config.
-Each entry requires: `command` (with `{prompt}` and `{repo}` placeholders),
-`stdin` (boolean), and `parse` strategy.
+Each entry requires a shell-free command, `stdin: true`, and a parse strategy.
+`{prompt}` is forbidden in command templates.
+
+The runner extracts native JSON/JSONL or a JSON fenced block and rejects
+successful-looking output unless it contains one structured coverage row for
+every input atom, with no missing, unknown, or duplicate IDs. `CLEAN` additionally
+requires all rows to be `COVERED` and an empty findings array.
 
 ### 2.4 Timeout
 
-Per-call timeout: 60s for planning/test, 120s for development/integration.
-On timeout: treat as reviewer failure → graceful degradation (R-1).
+Use three deadlines: 300s to first output, 180s idle after output, and 900s
+absolute total. Silence before the startup deadline is not failure. Report the
+exact timeout phase (`startup|idle|total`) before graceful degradation (R-1).
 
 ### 2.5 Parallel Execution
 
@@ -103,8 +126,11 @@ for reviewer in "${reviewers[@]}"; do
     invoke_tool "$reviewer" "$prompt" > "$out_file" 2>/dev/null &
     pids+=($!)
 done
+deadline=$((SECONDS + 900))
 for pid in "${pids[@]}"; do
-    timeout $per_call_timeout wait "$pid" 2>/dev/null || true
+    while kill -0 "$pid" 2>/dev/null && (( SECONDS < deadline )); do sleep 1; done
+    kill -0 "$pid" 2>/dev/null && kill -TERM "$pid"
+    wait "$pid" || true
 done
 ```
 
@@ -114,7 +140,12 @@ done
 
 ### 3.1 Reviewer Prompt Format
 
-Each reviewer receives only the evidence view assigned to its role. The common envelope contains:
+Each reviewer receives only the evidence view assigned to its role. Before the
+common envelope, include the validated atom ledger. Every non-superseded atom
+must appear in exactly one coverage row linking source → target → acceptance →
+evidence. Missing, duplicated, or summary-only coverage is `NOT_CLEAN`.
+
+The common envelope contains:
 
 ```
 ## Review Context

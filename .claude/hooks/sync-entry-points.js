@@ -9,7 +9,7 @@ const ENTRY_POINTS = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md'];
 // external effects, and authority expansion still require a contract. Verified
 // against the gate here with the harness on, and CLAUDE.md/GEMINI.md remain
 // byte-identical mirrors.
-const APPROVED_CANONICAL_SHA256 = 'f2d98aacd1d22a36072a6ef426f9e11038ec169a1f31d1c2c71b84904dc23093';
+const APPROVED_CANONICAL_SHA256 = '0f141cc632af76dccb4733e09fab35fd9ac936fe71b366874a8bb92247be5f2b';
 const ALLOWED_H2 = new Set([
   'Repository Index', '저장소 인덱스',
   'Mandatory Reads', '필수 읽기',

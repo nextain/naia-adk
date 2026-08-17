@@ -523,13 +523,14 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 
 	return {
 		decision: "block",
-		reason: `⛔ [HARNESS] SESSION ${resolution.status} — ${resolution.reason}. 변경을 막습니다.\n` +
-		"계약 없이 mutating 작업(Edit/Write/Bash) 금지.\n\n" +
+		reason: `⏸ [HARNESS] SESSION ${resolution.status} — ${resolution.reason}. 현재 governed 변경만 보류합니다.\n` +
+		"계약은 작업 중지 사유가 아니라 드리프트 방지 장치입니다. 현재 사용자 요청에 맞춰 계약을 생성·결박하거나 기존 단일-session 계약을 수정/교체·재결박한 뒤 같은 작업을 재시도하고 계속하세요.\n" +
+		"실제 권한 부족, target_ownership 충돌, 무결성 검증 실패일 때만 중지합니다.\n\n" +
 		"결박 조건:\n" +
 		`  1) .agents/session-contracts/.session-map.json에서 ${sessionId}를 정확히 한 active 계약에 결박\n` +
 		"  2) registry digest, contract_digest, session_bindings[], progress contract reference를 일치\n" +
 		"  3) 병렬 active 계약의 target_ownership 경로가 겹치지 않아야 함\n\n" +
-		"계약/registry/progress 파일만 쓰는 bootstrap 편집과 읽기 전용 조사는 허용됩니다.",
+		"계약/registry/progress 파일만 쓰는 bootstrap 갱신과 읽기 전용 조사는 허용됩니다.",
 	};
 }
 

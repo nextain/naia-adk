@@ -49,6 +49,13 @@ contract digest, `session_bindings`, and referenced progress record must agree.
 Progress records do not grant authority, and parent or child projects are never
 searched for an implicit binding.
 
+A contract in `.agents/session-contracts/` prevents drift; it does not cancel an authorized task. When a
+governed operation needs a contract, create and bind one, then retry the
+operation. When a new user directive changes the active task, revise or replace
+the single-session contract, rebind its digest and progress reference, and
+continue. Stop only when authority is genuinely missing, target ownership
+conflicts, or contract integrity cannot be established safely.
+
 Background context constrains agent work; it is not artifact content unless an
 explicit source atom grants `derive`, `quote`, or `require` authority for
 the declared output audience.

@@ -31,21 +31,27 @@ define. Partial overrides are not merged — each section is all-or-nothing.
 ```yaml
 tools:
   claude:
-    command: 'claude -p --output-format json --allowedTools "Read,Glob,Grep" --max-turns 5'
+    command: 'claude -p --input-format text --output-format json --no-session-persistence --permission-mode plan --allowedTools Read,Glob,Grep'
     stdin: true
     parse: json
-  gemini:
-    command: 'gemini -p "{prompt}" -m gemini-2.5-flash'
-    stdin: false
-    parse: text_fallback
-  opencode:
-    command: 'opencode run "{prompt}" --dir "{repo}" -m {model}'
-    stdin: false
-    parse: text_fallback
   codex:
-    command: 'codex exec "{prompt}" --sandbox read-only --full-auto'
-    stdin: false
+    command: 'codex exec --ephemeral --sandbox read-only --skip-git-repo-check -C "{repo}" -m {model} -'
+    stdin: true
     parse: text_fallback
+
+prompt:
+  mode: dual_one_shot
+  stable_base: review-base.md
+  atoms: review-atoms.json
+  role_delta: review-role.md
+timeouts: {startup_sec: 300, idle_sec: 180, total_sec: 900}
+
+profile_policy:
+  default_mode: homogeneous
+  profiles:
+    claude: {reviewers: [claude]}
+    codex: {reviewers: [codex]}
+  unavailable: not_run_continue
 
 # Requirements management (optional — skip if not applicable)
 requirements:
@@ -54,32 +60,42 @@ requirements:
 
 stages:
   planning:
-    reviewers: []  # empty means schedule roles from any available adapter; distinct provider/model preferred
+    reviewers: []  # empty means use the active profile's eligible adapter
     roles: [source_fidelity, baseline_preservation, implementation_test, authority_release]
     arbiter: null
     convergence: 2
     lenses: [source_fidelity, design_coherence, feasibility, preservation_setup, context_output_separation, audience_surface_fit, unjustified_product_surface]
     lenses_no_req: [source_fidelity, design_coherence, feasibility, preservation_setup, context_output_separation, audience_surface_fit, unjustified_product_surface]
   development:
-    reviewers: [gemini, opencode, codex]
-    arbiter: claude  # MUST NOT be in reviewers — orchestrator auto-resolves
+    reviewers: []
+    arbiter: null
     convergence: 2
     lenses: [correctness, completeness, consistency, pattern_compliance, req_to_code, structural_complexity, context_output_separation, audience_surface_fit, unjustified_product_surface]
     lenses_no_req: [correctness, completeness, consistency, pattern_compliance, structural_complexity, context_output_separation, audience_surface_fit, unjustified_product_surface]
   test:
-    reviewers: [gemini, opencode]
+    reviewers: []
     arbiter: null
     convergence: 2
     lenses: [test_validity, coverage, assertion_quality, req_to_test, test_structure, context_output_separation, audience_surface_fit, unjustified_product_surface]
     lenses_no_req: [test_validity, coverage, assertion_quality, test_structure, context_output_separation, audience_surface_fit, unjustified_product_surface]
   integration:
-    reviewers: []  # empty means schedule roles from any available adapter; distinct provider/model preferred
+    reviewers: []  # empty means use the active profile's eligible adapter
     roles: [source_fidelity, baseline_preservation, implementation_test, authority_release]
     arbiter: null  # all tools are independent roles; user resolves semantic vetoes
     convergence: 2
     lenses: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release, complexity_release, context_output_separation, audience_surface_fit, unjustified_product_surface]
     lenses_no_req: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release, complexity_release, context_output_separation, audience_surface_fit, unjustified_product_surface]
 ```
+
+The active `claude` profile schedules Claude headless review; the active `codex`
+profile schedules Codex headless review. Do not auto-add another provider merely
+because its binary is present. CLI presence does not prove authentication.
+
+If the selected adapter is missing, unauthenticated, exits, or times out, record
+the external pass as `NOT_RUN` and continue ordinary deterministic validation.
+Never ask an ADK user to install another CLI or create another provider account.
+When a governed delivery explicitly requires independent review evidence, keep
+that delivery `REVIEW_ONLY` without cancelling the underlying authorized work.
 
 ### 10.3 Per-Project Override
 
@@ -88,18 +104,21 @@ Create `./review-pass.yaml` in the project root:
 ```yaml
 tools:
   opencode:
-    command: 'opencode run "{prompt}" --dir "{repo}" -m zai-coding-plan/glm-5.1'
+    command: 'opencode run --dir "{repo}" --format json -m provider/model'
+    stdin: true
 requirements:
   dir: ".agents/requirements"
 stages:
   development:
-    reviewers: [gemini, opencode]
+    reviewers: [codex, opencode]
     convergence: 1
 ```
 
 ### 10.4 Environment Detection
 
-Auto-detect available tools at runtime:
+Auto-detect only the adapters eligible for the active profile. Detection is a
+best-effort preflight; authentication failures are handled by the same
+`NOT_RUN` degradation policy.
 
 **PowerShell:**
 ```powershell

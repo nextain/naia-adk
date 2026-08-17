@@ -1,6 +1,11 @@
 # Session Contracts
 
 This directory separates per-session mutation authority from progress reporting.
+Contracts are drift guards, not work-stoppage signals. If authorized work reaches
+a governed operation, create and bind a contract and retry. If a later user
+request changes scope, revise or replace a contract owned only by that session,
+update the binding and progress digests, and continue. Pause only for real
+authority gaps, overlapping ownership, or unverifiable/tampered state.
 Runtime contracts and `.session-map.json` are local and ignored. `schema.json` is
 the shared contract shape. A session is bound only when the registry pointer,
 contract digest, `session_bindings`, and referenced progress record all agree.

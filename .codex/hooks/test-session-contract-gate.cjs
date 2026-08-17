@@ -206,6 +206,10 @@ try {
 			`${client} unbound mutation targeting outside the resolved project stays blocked`,
 		);
 		assert.equal(runGate(fixture, "apply_patch", { command: "product mutation" })?.decision, "block", `${client} legacy shell blocked`);
+		const governedBlock = runGate(fixture, "Bash", { command: "npm test" });
+		assert.match(governedBlock?.reason, /드리프트 방지 장치/, `${client} explains contract purpose`);
+		assert.match(governedBlock?.reason, /수정\/교체·재결박.*재시도하고 계속/, `${client} directs autonomous contract update and continuation`);
+		assert.match(governedBlock?.reason, /권한 부족.*충돌.*무결성/, `${client} reserves stopping for genuine blockers`);
 		// Ordinary project work is available while unbound. Restricting it to new
 		// files under tmp/ left a marker-free checkout unable to write a document
 		// or edit an existing file, so every session ran with the harness off
