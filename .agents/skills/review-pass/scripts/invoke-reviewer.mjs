@@ -10,6 +10,7 @@ const RENDER_POLICIES = new Set(["deny", "derive", "quote", "require"]);
 const COVERAGE_STATUSES = new Set(["COVERED", "NOT_COVERED"]);
 const ATOM_KEYS = ["id", "source_id", "text", "directive_ids", "subject", "effect", "render_policy", "target_ids", "criterion_ids", "evidence_ids"];
 const OPENCODE_READ_ONLY_CONFIG = JSON.stringify({ permission: { "*": "deny", read: "allow", glob: "allow", grep: "allow", list: "allow", lsp: "allow" } });
+const MAX_REVIEW_OUTPUT_BYTES = 1024 * 1024;
 
 function parseArgs(argv) {
 	const out = {};
@@ -18,6 +19,13 @@ function parseArgs(argv) {
 		out[argv[i].slice(2)] = argv[i + 1];
 	}
 	return out;
+}
+
+function parseBoolean(value, name) {
+	if (value === undefined) return false;
+	if (value === "true") return true;
+	if (value === "false") return false;
+	throw new Error(`--${name} must be true or false`);
 }
 
 export function validateAtoms(value) {
@@ -62,6 +70,19 @@ function diagnosticExcerpt(text) {
 		.replace(/\s+/g, " ")
 		.trim()
 		.slice(-2048);
+}
+
+function safeFailureReason(tool, error) {
+	const message = String(error?.message || "").toLowerCase();
+	const timeoutPhase = message.match(/\b(startup|idle|total) timeout\b/)?.[1];
+	if (timeoutPhase) return `${tool} reviewer ${timeoutPhase} timed out`;
+	if (/timeout/.test(message)) return `${tool} reviewer timed out`;
+	if (/output (?:exceeds|has no structured|misses|duplicates|contains|has an invalid)/.test(message)) return `${tool} reviewer returned invalid output`;
+	if (/enoent|not found|cannot find/.test(message)) return `${tool} reviewer CLI is unavailable`;
+	if (/login|auth|account|credential|api.?key/.test(message)) return `${tool} reviewer authentication or account access is unavailable`;
+	if (/quota|rate.?limit|key limit|capacity|credit/.test(message)) return `${tool} reviewer provider capacity is unavailable`;
+	const exitCode = Number.isInteger(error?.exitCode) ? ` (exit ${error.exitCode})` : "";
+	return `${tool} reviewer process failed${exitCode}`;
 }
 
 function structuredErrorExcerpt(raw) {
@@ -177,9 +198,22 @@ export async function invoke({ tool, repo, model, prompt, atomIds = [], startupM
 	idleTimer = setTimeout(() => timeOut("startup"), startupMs);
 	const totalTimer = setTimeout(() => timeOut("total"), totalMs);
 	const stdout = [];
+	let stdoutBytes = 0;
+	let outputOverflow = false;
 	let stderrTail = "";
-	child.stdout.on("data", (chunk) => { stdout.push(chunk); armIdle(); });
+	let stdinError;
+	child.stdout.on("data", (chunk) => {
+		stdoutBytes += chunk.length;
+		if (stdoutBytes > MAX_REVIEW_OUTPUT_BYTES) {
+			outputOverflow = true;
+			timeOut("output-limit");
+			return;
+		}
+		stdout.push(chunk);
+		armIdle();
+	});
 	child.stderr.on("data", (chunk) => { stderrTail = `${stderrTail}${chunk}`.slice(-4096); armIdle(); });
+	child.stdin.on("error", (error) => { stdinError = error; });
 	let result;
 	const completion = new Promise((resolve, reject) => {
 		child.once("error", reject);
@@ -194,6 +228,7 @@ export async function invoke({ tool, repo, model, prompt, atomIds = [], startupM
 	if (timeoutReason) {
 		await escalationDone;
 		clearTimeout(killTimer);
+		if (outputOverflow) throw Object.assign(new Error(`${tool} review output exceeds ${MAX_REVIEW_OUTPUT_BYTES} bytes`), { exitCode: 1 });
 		throw Object.assign(new Error(`${tool} ${timeoutReason} timeout (${result.signal || "exit"})`), { exitCode: 124 });
 	}
 	const raw = Buffer.concat(stdout).toString("utf8");
@@ -202,22 +237,39 @@ export async function invoke({ tool, repo, model, prompt, atomIds = [], startupM
 		const diagnostic = structuredErrorExcerpt(raw) || diagnosticExcerpt(stderrTail);
 		throw Object.assign(new Error(`${tool} exited ${result.code}${diagnostic ? `: ${diagnostic}` : ""}`), { exitCode: result.code || 1 });
 	}
+	if (stdinError) throw Object.assign(new Error(`${tool} stdin failed: ${stdinError.code || stdinError.message}`), { exitCode: 1 });
 	const review = validateOutput ? validateReviewOutput(raw, atomIds) : undefined;
 	return { raw, review };
 }
 
-async function main() {
-	const a = parseArgs(process.argv.slice(2));
+export async function runCli(argv) {
+	const a = parseArgs(argv);
 	for (const key of ["tool", "repo", "base", "atoms", "delta"]) if (!a[key]) throw new Error(`--${key} is required`);
+	const requireReview = parseBoolean(a["require-review"], "require-review");
 	const [base, atomsText, delta] = await Promise.all([readFile(a.base, "utf8"), readFile(a.atoms, "utf8"), readFile(a.delta, "utf8")]);
 	const atoms = validateAtoms(JSON.parse(atomsText));
 	const prompt = composePrompt(base, atoms, delta);
-	const { review } = await invoke({ tool: a.tool, repo: a.repo, model: a.model, prompt,
-		atomIds: atoms.map(({ id }) => id),
+	commandFor(a.tool, a.repo, a.model);
+	const timers = {
 		startupMs: Number(a["startup-sec"] || 300) * 1000,
 		idleMs: Number(a["idle-sec"] || 180) * 1000,
-		totalMs: Number(a["total-sec"] || 900) * 1000 });
-	process.stdout.write(`${JSON.stringify(review)}\n`);
+		totalMs: Number(a["total-sec"] || 900) * 1000,
+	};
+	for (const [name, value] of Object.entries(timers)) if (!Number.isFinite(value) || value <= 0 || value > 2_147_483_647) throw new Error(`${name} must be a finite positive timer value`);
+	try {
+		const { review } = await invoke({ tool: a.tool, repo: a.repo, model: a.model, prompt,
+			atomIds: atoms.map(({ id }) => id),
+			...timers });
+		return review;
+	} catch (error) {
+		const reason = safeFailureReason(a.tool, error);
+		if (requireReview) throw Object.assign(new Error(reason), { exitCode:error.exitCode || 1 });
+		return { status:"NOT_RUN", reviewer:a.tool, blocking:false, reason };
+	}
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch((error) => { console.error(`review invocation failed: ${error.message}`); process.exit(error.exitCode || 1); });
+async function main() {
+	process.stdout.write(`${JSON.stringify(await runCli(process.argv.slice(2)))}\n`);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch((error) => { console.error(`review invocation failed: ${diagnosticExcerpt(error.message)}`); process.exit(error.exitCode || 1); });

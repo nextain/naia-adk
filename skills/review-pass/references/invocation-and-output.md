@@ -68,6 +68,14 @@ node .agents/skills/review-pass/scripts/invoke-reviewer.mjs \
 
 A runnable minimal fixture is in `../examples/one-shot/`.
 
+Ordinary invocations return a structured, non-blocking `NOT_RUN` object with a
+zero exit status when the selected external reviewer is missing, unauthenticated,
+quota-limited, malformed, or timed out. Add `--require-review true` only when the
+active delivery contract explicitly requires review evidence; that mode preserves
+the reviewer's non-zero exit status and fails closed. CLI-facing failure reasons
+use fixed diagnostic categories rather than provider output, and reviewer stdout
+is capped at 1 MiB before the process tree is terminated.
+
 ### 2.3 Reviewer Invocation
 
 Each reviewer is invoked as a headless CLI process. Commands are configurable
@@ -110,7 +118,12 @@ Run all reviewers for a round in parallel via temp-file-based output capture.
 $jobs = @()
 foreach ($reviewer in $reviewers) {
     $outFile = [System.IO.Path]::GetTempFileName()
-    $jobs += Start-Process -FilePath $tool -ArgumentList $args `
+    $args = @(
+        ".agents/skills/review-pass/scripts/invoke-reviewer.mjs",
+        "--tool", $reviewer, "--repo", $PWD,
+        "--base", $baseFile, "--atoms", $atomFile, "--delta", $deltaFile
+    )
+    $jobs += Start-Process -FilePath "node" -ArgumentList $args `
               -RedirectStandardOutput $outFile -NoNewWindow -PassThru
 }
 $allDone = Wait-Process -InputObject ($jobs.Id) -Timeout $perCallTimeout -ErrorAction SilentlyContinue
@@ -123,7 +136,10 @@ out_files=()
 for reviewer in "${reviewers[@]}"; do
     out_file=$(mktemp)
     out_files+=("$out_file")
-    invoke_tool "$reviewer" "$prompt" > "$out_file" 2>/dev/null &
+    node .agents/skills/review-pass/scripts/invoke-reviewer.mjs \
+        --tool "$reviewer" --repo "$PWD" --base "$base_file" \
+        --atoms "$atom_file" --delta "$delta_file" \
+        > "$out_file" 2>/dev/null &
     pids+=($!)
 done
 deadline=$((SECONDS + 900))

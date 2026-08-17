@@ -51,6 +51,9 @@ await assert.rejects(invoke({ tool:"opencode", repo:dir, prompt:"x", startupMs:1
 const failSecret = path.join(dir, "fail-secret.mjs");
 await writeFile(failSecret, '#!/usr/bin/env node\nconsole.error("token=sk-secretvalue123"); process.exit(8);\n', { mode: 0o700 });
 await assert.rejects(invoke({ tool:"opencode", repo:dir, prompt:"x", startupMs:1000, idleMs:1000, totalMs:2000, executable:failSecret }), (error) => error.exitCode === 8 && /token=<redacted>/.test(error.message) && !/secretvalue/.test(error.message));
+const oversized = path.join(dir, "oversized.mjs");
+await writeFile(oversized, '#!/usr/bin/env node\nprocess.stdout.write("x".repeat(1024 * 1024 + 1));\n', { mode: 0o700 });
+await assert.rejects(invoke({ tool:"codex", repo:dir, prompt:"x", startupMs:1000, idleMs:1000, totalMs:2000, executable:oversized }), (error) => error.exitCode === 1 && /output exceeds/.test(error.message));
 const envFake = path.join(dir, "env-fake.mjs");
 await writeFile(envFake, `#!/usr/bin/env node\nprocess.stdin.resume(); process.stdin.on("end", () => { const config=JSON.parse(process.env.OPENCODE_CONFIG_CONTENT); if (config.permission["*"] !== "deny") process.exit(3); console.log(${JSON.stringify(validReview)}); });\n`, { mode: 0o700 });
 const priorOpenCodeConfig = process.env.OPENCODE_CONFIG_CONTENT;
