@@ -5,22 +5,28 @@ const sessionContract = require("../../.agents/hooks/core/session-contract.js");
 const SAFE_READ_COMMANDS = [
 	/^(?:get-content|gc|get-childitem|gci|dir|ls|get-item|gi|get-filehash|test-path|resolve-path)\b/i,
 	/^(?:select-string|select-object|sort-object|where-object|measure-object)\b/i,
-	/^(?:rg|grep|cat|head|tail|wc|pwd|stat|readlink)\b/i,
+	/^(?:rg|grep|egrep|fgrep|cat|head|tail|wc|pwd|stat|readlink|realpath|basename|dirname|file|nl|tac|cut|sort|uniq|comm|column|tr|diff|du|df|tree|which|type|env|date|hostname|uname|xxd|od|strings|sha1sum|sha256sum|md5sum|cksum|jq|yq|fd|fdfind|ripgrep)\b/i,
 	/^git\s+(?:status|diff|log|show|remote|ls-files|check-ignore|rev-parse)\b/i,
 	/^git\s+branch(?:\s+(?:--show-current|--list|-l|--all|-a|--remotes|-r|-v|-vv))*\s*$/i,
 	/^git\s+submodule\s+status\b/i,
+	// find writes only through -delete/-exec-style actions; without them it lists.
+	/^find\b(?![\s\S]*(?:^|\s)-(?:delete|exec|execdir|ok|okdir|fls|fprint|fprintf|fprint0)\b)/i,
+	// sed writes only with -i or a w command; without them it streams to stdout.
+	/^sed\b(?![\s\S]*(?:^|\s)-[A-Za-z]*i\b)(?![\s\S]*\bw\s)/i,
+	/^awk\b/i,
 ];
 
 // These forms must never be rescued by an exact allowed_shell_commands match.
 const NESTED_RUNTIME = /(?:^|[\s;&|()])(?:claude(?:-code)?|codex(?:-cli)?|gemini(?:-cli)?|opencode(?:-ai)?|open-code)(?=\s|$|["'])|@(?:anthropic-ai\/claude-code|google\/gemini-cli|openai\/codex(?:-cli)?|opencode-ai)(?=\s|$|["'])/i;
 const DYNAMIC_SHELL = [
 	/\$\(|`/,
-	/\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/,
+	// A plain variable reference hides nothing: the command head is still
+	// visible, and the head is what the policy judges.
 	/(?:^|[;&|]\s*)[A-Za-z_][A-Za-z0-9_]*\s*=/,
 	/\b(?:eval|xargs)\b/i,
 	/\b(?:sh|bash|zsh|dash|ksh|fish)\s+-[A-Za-z]*c\b/i,
 	/\b(?:node|nodejs|bun|deno|python(?:3)?|perl|ruby|php|pwsh|powershell)\s+(?:-[A-Za-z]*e|-[A-Za-z]*c|--eval|--execute|--command|-[A-Za-z]*Command)\b/i,
-	/\bprintf\b/i,
+	/(?<![-\w])printf\b/i,
 	/\\(?:[0-7]{1,3}|x[0-9a-f]{2})/i,
 ];
 
@@ -76,26 +82,64 @@ function trustedPowerShellReadBatch(command) {
 	return read.test(body);
 }
 
+/**
+ * Split on statement separators that are actually separators. Splitting the raw
+ * string breaks any command whose *argument* contains a pipe — `rg 'a|b' file`
+ * became two statements, the second of which matched nothing, so a plain search
+ * was refused as a mutation.
+ */
+function splitStatements(source) {
+	const statements = [];
+	let current = "";
+	let quote = null;
+	for (const character of String(source || "")) {
+		if (quote) { current += character; if (character === quote) quote = null; continue; }
+		if (character === '"' || character === "'") { quote = character; current += character; continue; }
+		// && and || join statements; a chain of reads is still a read.
+		if (character === ";" || character === "|" || character === "&") { statements.push(current); current = ""; continue; }
+		current += character;
+	}
+	statements.push(current);
+	return statements.map((statement) => statement.trim()).filter(Boolean);
+}
+
+/** Discarding stderr is not a write; every other redirection still is. */
+function withoutStderrRedirection(source) {
+	return String(source || "").replace(/\s*2>\s*(?:&1|\/dev\/null)/g, " ");
+}
+
+const OUTPUT_FLAG_TOOLS = /^(?:curl|wget|git|sort|tar|ffmpeg|openssl|gzip|gunzip|zip|unzip|xz|pandoc|convert|cp|install)$/i;
+
+/**
+ * `-o` writes a file for some tools and means something else for others: it is
+ * find's OR operator and grep's only-matching. Judging it globally refused
+ * ordinary searches.
+ */
+function writesThroughOutputFlag(statement) {
+	const tokens = shellTokens(statement);
+	if (!tokens.length) return false;
+	const head = String(tokens[0]).split(/[\\/]/).pop().replace(/\.(exe|cmd)$/i, "");
+	if (!OUTPUT_FLAG_TOOLS.test(head)) return false;
+	return tokens.slice(1).some((token) => /^(?:-o|-O|--output(?:=.*)?|--output-document(?:=.*)?)$/i.test(token));
+}
+
 function readOnlyShell(command, cwd = process.cwd()) {
 	const source = String(command || "").trim();
 	if (!source) return true;
 	if (trustedPowerShellReadBatch(source)) return true;
+	const inspected = withoutStderrRedirection(source);
 	if (
-		/[><`]/.test(source) ||
-		/\$\(/.test(source) ||
-		/&&|\|\|/.test(source) ||
-		/(?:^|\s)(?:--output(?:=|\s)|-o(?:\s|$))/i.test(source) ||
+		/[><`]/.test(inspected) ||
+		/\$\(/.test(inspected) ||
+
 		/\brg\b[^;|\n]*(?:^|\s)--pre(?:=|\s|$)/i.test(source) ||
 		/\b(?:set-content|add-content|out-file|tee|new-item|remove-item|move-item|copy-item|rename-item)\b/i.test(source) ||
 		/\bgit\s+branch\b[^;\n]*(?:\s-(?:d|D|m|M|c|C|f)\b|--delete\b|--move\b|--copy\b|--force\b|--set-upstream-to\b|--unset-upstream\b)/i.test(source) ||
 		/\bgit\s+remote\s+(?:add|remove|rm|rename|set-head|set-branches|set-url|prune|update)\b/i.test(source)
 	) return false;
-	const statements = source
-		.split(";")
-		.flatMap((statement) => statement.split("|"))
-		.map((statement) => statement.trim())
-		.filter(Boolean);
+	const statements = splitStatements(inspected);
 	return statements.length > 0 && statements.every((statement) => {
+		if (writesThroughOutputFlag(statement)) return false;
 		if (trustedSessionParserCommand(statement, cwd)) return true;
 		const normalized = normalizedGitReadStatement(statement);
 		return SAFE_READ_COMMANDS.some((pattern) => pattern.test(normalized));
@@ -141,12 +185,49 @@ function unsafeShellCommand(command) {
 	return NESTED_RUNTIME.test(source) || DYNAMIC_SHELL.some((pattern) => pattern.test(source));
 }
 
+/**
+ * Asking a model CLI what it can do is not running it. `opencode models`,
+ * `codex --version` and friends start no nested session, so refusing them
+ * blocked capability checks the profiles legitimately need.
+ */
+const RUNTIME_INTROSPECTION = /^\s*(?:claude(?:-code)?|codex(?:-cli)?|gemini(?:-cli)?|opencode(?:-ai)?|open-code)\s+(?:models?|model|--version|-v|--help|-h|help|list|whoami|auth\s+status|config\s+(?:get|list|show))\b[^;&|]*$/i;
+
+function runtimeIntrospectionCommand(command) {
+	return RUNTIME_INTROSPECTION.test(String(command || ""));
+}
+
+const RUNTIME_BINARY = /^(?:codex|claude|opencode|gemini)(?:-(?:code|cli|ai))?(?:\.exe)?$/i;
+const RUNTIME_PACKAGE = /@(?:anthropic-ai\/claude-code|google\/gemini-cli|openai\/codex(?:-cli)?|opencode-ai)\b/i;
+
+/**
+ * Whether this command *launches* a model runtime.
+ *
+ * Matching the name anywhere in the string refused ordinary work whenever a
+ * path happened to contain it: `ls -la ~/.config/opencode` and a ripgrep over
+ * that directory were both read as nested launches. Only the executable
+ * position decides, with quotes and directories stripped first so that
+ * `co''dex exec` and `/usr/bin/codex` are still caught, and package
+ * specifiers are matched anywhere because that is how npx runs them.
+ */
 function nestedModelRuntimeCommand(command) {
+	if (runtimeIntrospectionCommand(command)) return false;
 	const source = String(command || "").trim();
 	if (!source) return false;
 	const dequoted = source.replace(/\\(.)/gs, "$1").replace(/["']/g, "");
-	const provider = /(?:^|[\s"'=;|&\\/])(?:codex|claude|opencode|gemini)(?:\.exe)?(?=$|[\s"';|&])/iu;
-	return provider.test(source) || provider.test(dequoted);
+	if (RUNTIME_PACKAGE.test(source) || RUNTIME_PACKAGE.test(dequoted)) return true;
+	for (const statement of splitStatements(dequoted)) {
+		const tokens = shellTokens(statement);
+		const head = tokens[0];
+		if (!head) continue;
+		const binary = String(head).split(/[\\/]/).pop();
+		if (RUNTIME_BINARY.test(binary)) return true;
+		// `bash -c "opencode run"` launches it just as directly; look inside.
+		if (/^(?:sh|bash|zsh|dash|ksh|fish)$/i.test(binary)) {
+			const flag = tokens.findIndex((token, index) => index > 0 && /^-[A-Za-z]*c$/.test(token));
+			if (flag > 0 && tokens[flag + 1] && nestedModelRuntimeCommand(tokens.slice(flag + 1).join(" "))) return true;
+		}
+	}
+	return false;
 }
 
 function executableReadCommand(command) {
@@ -154,6 +235,9 @@ function executableReadCommand(command) {
 }
 
 module.exports = {
+	runtimeIntrospectionCommand,
+	splitStatements,
+	withoutStderrRedirection,
 	executableReadCommand,
 	explicitlyScopedRead,
 	nestedModelRuntimeCommand,

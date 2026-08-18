@@ -22,8 +22,8 @@ const OPT_IN_FILE = "allow-subagents";
 // Both hosts' spawn tools. A name this set misses is a spawn the budget below
 // never caps, and each guard used to know only its own host's names.
 const SPAWN_TOOLS = new Set(["task", "agent", "spawn_agent", "multi_agent_v1", "multi_agent_v1__spawn_agent", "collaboration.spawn_agent", "collaborationspawn_agent"]);
-const DEFAULT_MAX_SPAWNS = 4;
-const HARD_MAX_SPAWNS = 8;
+const DEFAULT_MAX_SPAWNS = 10;
+const HARD_MAX_SPAWNS = 64;
 
 function disabled(env) {
 	return OFF_VALUES.has(
@@ -134,9 +134,10 @@ function evaluate({ toolName, sessionId = null, root = process.cwd(), env = proc
 	if (!reservation.ok && reservation.kind === "budget") {
 		return {
 			reason:
-				`[SUBAGENT GUARD] 이 세션이 이미 서브에이전트 ${reservation.used}개를 생성했다 (상한 ${limit}). ` +
-				"사람이 예산을 다시 정하기 전에는 더 생성하지 않는다. " +
-				`예산은 \`.claude/${OPT_IN_FILE}\` 의 maxSpawns 로 조정한다.`,
+				`[SUBAGENT GUARD] 이 세션이 서브에이전트 ${reservation.used}개를 생성해 상한 ${limit}에 닿았다. ` +
+				"여기서 조용히 포기하지 말고, 남은 작업에 몇 개가 더 필요한지와 그 이유를 사용자에게 보고해 증액을 요청하라. " +
+				`사용자가 승인하면 \`.claude/${OPT_IN_FILE}\` 의 maxSpawns 를 올리면 즉시 이어서 진행할 수 있다. ` +
+				"직접 도구로 처리할 수 있는 일이라면 그 편이 더 싸고 빠르다.",
 		};
 	}
 	if (!reservation.ok) {

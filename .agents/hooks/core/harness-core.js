@@ -54,8 +54,8 @@ function codexDevelopmentProfile(projectRoot, env) {
 	);
 	const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
 	if (
-		catalog.schema_revision !== "development-composition-profiles-v2" ||
-		catalog.status !== "active_codex_default_no_total_cost_claim" ||
+		catalog.schema_revision !== "development-composition-profiles-v3" ||
+		catalog.status !== "active_balanced_default_no_total_cost_claim" ||
 		catalog.default_profile !== "balanced" ||
 		catalog.fallback_profile !== "control" ||
 		catalog.activation?.codex_bound_sessions?.mode !== "default_active" ||
@@ -79,7 +79,7 @@ function codexDevelopmentProfile(projectRoot, env) {
 	const profileId = override || catalog.default_profile;
 	const selectedProfile = catalog.profiles.find((profile) => profile.id === profileId);
 	if (!selectedProfile) {
-		throw new Error(`unknown Codex development profile ${profileId}`);
+		throw new Error(`unknown development profile ${profileId}`);
 	}
 	const availabilityName = catalog.activation.codex_bound_sessions.available_bindings_env;
 	const rawAvailability = Object.prototype.hasOwnProperty.call(env, availabilityName)
@@ -107,7 +107,7 @@ function codexDevelopmentProfile(projectRoot, env) {
 		.sort();
 	if (unavailableBindings.length > 0) {
 		throw new Error(
-			`Codex development profile ${profileId} is unavailable; missing bindings: ${unavailableBindings.join(", ")}`,
+			`development profile ${profileId} is unavailable; missing bindings: ${unavailableBindings.join(", ")}`,
 		);
 	}
 	const catalogDigest = crypto

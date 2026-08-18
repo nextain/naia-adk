@@ -8,12 +8,28 @@ import { digestCanonical } from "./validate-bundle.mjs";
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),"..");
 const catalogPath=path.join(root,"baselines","development-composition-profiles.json");
 const riskRank={low:0,medium:1,high:2};
-const balancedRoleExpectation={
-	secretary:["luna","max"],issue_leader:["luna","max"],explorer:["luna","low"],analysis:["sol","medium"],design:["sol","medium"],review:["sol","medium"],
-	// `test` runs at low effort per operator calibration (e08b176). The catalog is the
-	// source of truth; this table only pins it against silent drift.
-	implementation:["luna","medium"],test:["luna","low"],generic_worker:["luna","medium"],translation:["luna","low"],
-};
+// Every profile derives its assignments from its posture's role policy and its
+// host family's tier map, so a role's binding is data and never hard-coded here.
+const requiredRoles=["secretary","issue_leader","explorer","analysis","design","review","implementation","test","generic_worker","translation"];
+const slotRole={orchestrator:"secretary",integrator:"issue_leader",bounded_worker:"implementation",mechanical_worker:"generic_worker",tester:"test"};
+// Tiers a bounded or mechanical guard applies to. The optional external worker
+// keeps its own signed-receipt qualification instead of these conditions.
+const guardedTiers=new Set(["workhorse","light"]);
+const named=record=>Object.keys(record||{}).filter(key=>!key.startsWith("_"));
+
+function tierMapFor(catalog,profile){
+	const tiers=catalog.host_families?.[profile.host_family],policy=catalog.role_policies?.[profile.posture];
+	if(!tiers||!policy)throw new Error(`${profile.id}: unknown host family or posture`);
+	return {tiers,policy};
+}
+
+function derivedBinding(catalog,profile,role){
+	const {tiers,policy}=tierMapFor(catalog,profile),rolePolicy=policy[role];
+	if(!rolePolicy)throw new Error(`${profile.id}: ${profile.posture} declares no ${role} policy`);
+	const binding=tiers[rolePolicy.tier];
+	if(!binding)throw new Error(`${profile.id}: host family ${profile.host_family} has no ${rolePolicy.tier} tier for ${role}`);
+	return binding;
+}
 
 function canonicalJson(value){
 	if(Array.isArray(value))return `[${value.map(canonicalJson).join(",")}]`;
@@ -38,38 +54,45 @@ function verifyOptionalWorkerReceipt(definition,receipt,{now=Date.now(),catalogD
 }
 
 function validateCatalog(catalog){
-  if(catalog?.schema_revision!=="development-composition-profiles-v2"||catalog?.status!=="active_codex_default_no_total_cost_claim")throw new Error("development composition profile identity invalid");
+  if(catalog?.schema_revision!=="development-composition-profiles-v3"||catalog?.status!=="active_balanced_default_no_total_cost_claim")throw new Error("development composition profile identity invalid");
   const profiles=catalog.profiles||[],ids=profiles.map(item=>item.id);
-  if(ids.length!==4||new Set(ids).size!==4||!["control","balanced","economy","delegated"].every(id=>ids.includes(id)))throw new Error("development composition profiles must be control, balanced, economy, and delegated");
-  if(catalog.default_profile!=="balanced"||catalog.fallback_profile!=="control")throw new Error("development composition default or fallback drift");
+  if(ids.length===0||new Set(ids).size!==ids.length)throw new Error("development composition profiles must be a non-empty set of unique ids");
+  if(!ids.includes(catalog.default_profile)||!ids.includes(catalog.fallback_profile))throw new Error("development composition default or fallback drift");
   const activation=catalog.activation?.codex_bound_sessions;
   if(activation?.mode!=="default_active"||activation?.override_env!=="CODEX_DEVELOPMENT_PROFILE"||activation?.available_bindings_env!=="CODEX_AVAILABLE_BINDINGS")throw new Error("Codex development profile activation invalid");
   if(!Array.isArray(catalog.availability?.default_available_bindings)||catalog.availability.default_available_bindings.length===0||catalog.availability.default_available_bindings.some(binding=>!catalog.bindings?.[binding]))throw new Error("development composition availability defaults invalid");
-  const requiredBalancedRoles=["secretary","issue_leader","explorer","analysis","design","review","implementation","test","generic_worker","translation"];
-  for(const role of requiredBalancedRoles){
-    const policy=catalog.balanced_role_policy?.[role];
-    const [expectedBinding,expectedEffort]=balancedRoleExpectation[role];
-		if(!policy||policy.binding!==expectedBinding||policy.default_reasoning_effort!==expectedEffort||!catalog.bindings[policy.binding]||!policy.allowed_reasoning_efforts?.includes(policy.default_reasoning_effort)||!catalog.bindings[policy.binding].allowed_reasoning_efforts?.includes(policy.default_reasoning_effort))throw new Error(`balanced role policy invalid for ${role}`);
-  }
+	for(const id of named(catalog.bindings))if(typeof catalog.bindings[id].provider!=="string"||!catalog.bindings[id].provider)throw new Error(`binding ${id} must declare a provider`);
+	for(const family of named(catalog.host_families))for(const tier of named(catalog.host_families[family]))if(!catalog.bindings[catalog.host_families[family][tier]])throw new Error(`host family ${family} maps ${tier} to unknown binding`);
+	for(const posture of named(catalog.role_policies))for(const role of requiredRoles){
+		const policy=catalog.role_policies[posture][role];
+		if(!policy||typeof policy.tier!=="string"||!policy.allowed_reasoning_efforts?.includes(policy.default_reasoning_effort))throw new Error(`role policy invalid for ${posture}.${role}`);
+	}
+	const eligiblePostures=catalog.delegation_policy?.eligible_postures;
+	if(!Array.isArray(eligiblePostures)||eligiblePostures.length===0||eligiblePostures.some(posture=>!catalog.role_policies?.[posture]))throw new Error("delegation eligible postures must name declared postures");
 	if(catalog.delegation_context?.brief_mode!=="isolated_bounded"||catalog.delegation_context?.fork_turns!=="none"||catalog.delegation_context?.fork_context!==false||catalog.delegation_context?.inherit_root_context!==false)throw new Error("delegation context must remain isolated and non-inheriting");
 	const optionalWorker=catalog.bindings.implementation_worker;
 	if(optionalWorker?.profile_identity!=="deployment_local_implementation_worker"||optionalWorker?.activation!=="explicit_available_binding_only"||optionalWorker?.qualification_evidence!=="signed_deployment_local_receipt_v1"||optionalWorker?.receipt_algorithm!=="ed25519"||optionalWorker?.trust_store_relative_path!=="adk-development-worker-trust.json"||optionalWorker?.max_receipt_validity_ms!==2_592_000_000||!catalog.bindings[optionalWorker?.rollback_binding])throw new Error("optional implementation worker activation or rollback identity invalid");
+	const crossProviderFamilies=new Set(catalog.guards?.cross_provider_review?.required_for_host_families||[]);
   for(const profile of profiles){
     for(const binding of [profile.assignments.orchestrator,profile.assignments.integrator,profile.assignments.bounded_worker,profile.assignments.mechanical_worker,profile.assignments.tester,...profile.assignments.reviewer_pool])if(!catalog.bindings[binding])throw new Error(`${profile.id}: unknown binding ${binding}`);
+		const {policy}=tierMapFor(catalog,profile);
+		for(const role of requiredRoles){
+			const binding=derivedBinding(catalog,profile,role);
+			if(!catalog.bindings[binding].allowed_reasoning_efforts?.includes(policy[role].default_reasoning_effort))throw new Error(`${profile.id}: ${binding} cannot serve ${role} at ${policy[role].default_reasoning_effort}`);
+		}
+		for(const slot of Object.keys(slotRole))if(profile.assignments[slot]!==derivedBinding(catalog,profile,slotRole[slot]))throw new Error(`${profile.id}: ${slot} drifts from ${profile.posture}.${slotRole[slot]}`);
+		if(JSON.stringify(profile.assignments.reviewer_pool)!==JSON.stringify([derivedBinding(catalog,profile,"review")]))throw new Error(`${profile.id}: reviewer pool drifts from ${profile.posture}.review`);
+		if(crossProviderFamilies.has(profile.host_family)&&catalog.bindings[profile.assignments.reviewer_pool[0]].provider===catalog.bindings[profile.assignments.bounded_worker].provider)throw new Error(`${profile.id}: cross-provider review is required but review shares the producer provider`);
   }
-	for(const profileId of ["balanced","economy"]){
-		const assignments=profiles.find(profile=>profile.id===profileId)?.assignments;
-		if(assignments?.orchestrator!==balancedRoleExpectation.secretary[0]||assignments?.integrator!==balancedRoleExpectation.issue_leader[0]||assignments?.bounded_worker!==balancedRoleExpectation.implementation[0]||assignments?.mechanical_worker!==balancedRoleExpectation.generic_worker[0]||assignments?.tester!==balancedRoleExpectation.test[0]||JSON.stringify(assignments?.reviewer_pool)!==JSON.stringify([balancedRoleExpectation.review[0]]))throw new Error(`${profileId}: assignments drift from exact role policy`);
-	}
   for(const claim of ["proven_total_cost_reduction","production_optimal_profile","global_model_superiority"]){
     if(!catalog.claim_boundary.forbidden_until_phase_2.includes(claim))throw new Error(`phase-1 profile claim boundary missing ${claim}`);
   }
-	const {bounded_worker:boundedGuard,mechanical_worker:mechanicalGuard,review:reviewGuard,sol_specialist:solSpecialistGuard}=catalog.guards||{};
-	if(!boundedGuard||!(boundedGuard.maximum_risk in riskRank)||boundedGuard.fallback_binding!==null||boundedGuard.luna_fallback_binding!==null)throw new Error("bounded worker guard must fail closed without a model fallback");
-	if(!mechanicalGuard||!(mechanicalGuard.luna_maximum_risk in riskRank)||mechanicalGuard.fallback_binding!==null)throw new Error("mechanical worker guard must fail closed without a model fallback");
+	const {bounded_worker:boundedGuard,mechanical_worker:mechanicalGuard,review:reviewGuard,flagship_specialist:flagshipSpecialistGuard}=catalog.guards||{};
+	if(!boundedGuard||!(boundedGuard.maximum_risk in riskRank)||boundedGuard.fallback_binding!==null||boundedGuard.tier_fallback_binding!==null)throw new Error("bounded worker guard must fail closed without a model fallback");
+	if(!mechanicalGuard||!(mechanicalGuard.maximum_risk in riskRank)||mechanicalGuard.fallback_binding!==null)throw new Error("mechanical worker guard must fail closed without a model fallback");
 	const validatesFreshSessionGuard=guard=>guard?.different_session_required===true&&guard?.different_execution_required===true&&guard?.fail_closed_without_independent_execution_identity===true&&guard?.fresh_session_required===true&&guard?.followup_reuse_forbidden===true&&guard?.runtime_enforcer===".codex/hooks/subagent-spawn-guard.cjs";
-	if(!validatesFreshSessionGuard(reviewGuard)||reviewGuard.prefer_different_binding_from_producer!==true)throw new Error("independent review guard invalid");
-	if(!validatesFreshSessionGuard(solSpecialistGuard)||JSON.stringify(solSpecialistGuard.roles)!==JSON.stringify(["analysis","design","review"]))throw new Error("independent Sol specialist guard invalid");
+	if(!validatesFreshSessionGuard(reviewGuard)||reviewGuard.prefer_different_binding_from_producer!==true||reviewGuard.prefer_different_provider_from_producer!==true)throw new Error("independent review guard invalid");
+	if(!validatesFreshSessionGuard(flagshipSpecialistGuard)||JSON.stringify(flagshipSpecialistGuard.roles)!==JSON.stringify(["analysis","design","review"]))throw new Error("independent flagship specialist guard invalid");
   return catalog;
 }
 
@@ -106,27 +129,33 @@ export function selectDevelopmentBindingFromCatalog(catalog,{profileId,role,boun
 	if(!Array.isArray(configuredAvailability)||configuredAvailability.some(binding=>!catalog.bindings[binding]))throw new Error("available development bindings are invalid");
 	const available=new Set(configuredAvailability);
 	const {profile,activation_source}=resolveProfileSelection(catalog,{profileId,env});
-	const boundedGuard=catalog.guards.bounded_worker,mechanicalGuard=catalog.guards.mechanical_worker,reviewGuard=catalog.guards.review,solSpecialistGuard=catalog.guards.sol_specialist;
-  const balancedPolicyRole={orchestrator:"secretary",integrator:"issue_leader",explorer:"explorer",bounded_worker:"implementation",tester:"test",mechanical_worker:"generic_worker",adversarial_reviewer:"review",analysis:"analysis",designer:"design",translation:"translation"}[role];
+	const boundedGuard=catalog.guards.bounded_worker,mechanicalGuard=catalog.guards.mechanical_worker,reviewGuard=catalog.guards.review,flagshipSpecialistGuard=catalog.guards.flagship_specialist;
+  const policyRole={orchestrator:"secretary",integrator:"issue_leader",explorer:"explorer",bounded_worker:"implementation",tester:"test",mechanical_worker:"generic_worker",adversarial_reviewer:"review",analysis:"analysis",designer:"design",translation:"translation"}[role];
   let binding;
   if(role==="orchestrator"||role==="integrator")binding=profile.assignments[role];
   else if(role==="bounded_worker"||role==="tester")binding=profile.assignments[role];
   else if(role==="mechanical_worker")binding=profile.assignments.mechanical_worker;
   else if(role==="explorer"||role==="analysis"||role==="designer"||role==="translation"){
-		binding=profile.id==="control"?"sol":catalog.balanced_role_policy[balancedPolicyRole].binding;
+		binding=derivedBinding(catalog,profile,policyRole);
 	}
   else if(role==="adversarial_reviewer"){
 		const reviewerPool=profile.assignments.reviewer_pool.filter(item=>available.has(item));
-		binding=reviewGuard.prefer_different_binding_from_producer
-			? reviewerPool.find(item=>item!==producerBinding)??reviewerPool[0]
-			: reviewerPool[0];
+		const producerProvider=producerBinding?catalog.bindings[producerBinding]?.provider:null;
+		binding=reviewGuard.prefer_different_provider_from_producer&&producerProvider
+			? reviewerPool.find(item=>catalog.bindings[item].provider!==producerProvider)??reviewerPool.find(item=>item!==producerBinding)??reviewerPool[0]
+			: reviewGuard.prefer_different_binding_from_producer
+				? reviewerPool.find(item=>item!==producerBinding)??reviewerPool[0]
+				: reviewerPool[0];
     if(!binding)throw new Error("no independent reviewer binding is available");
   } else throw new Error(`unknown development role ${role}`);
 
   let fallback_reason=null;
-	if(["bounded_worker","tester","translation"].includes(role)&&binding==="luna"&&((boundedGuard.requires_bounded_scope&&!boundedScope)||riskRank[risk]>riskRank[boundedGuard.maximum_risk]))throw new Error(`Luna ${role} requires bounded scope and risk at or below ${boundedGuard.maximum_risk}; no Sol fallback is permitted`);
-	if(["bounded_worker","tester","translation"].includes(role)&&binding==="luna"&&boundedGuard.luna_requires_exact_validator&&!exactValidatorBound)throw new Error(`Luna ${role} requires an exact allowlisted validator command; no Sol fallback is permitted`);
-	if(role==="mechanical_worker"&&binding==="luna"&&((mechanicalGuard.luna_requires_bounded_scope&&!boundedScope)||(mechanicalGuard.luna_requires_exact_validator&&!exactValidatorBound)||riskRank[risk]>riskRank[mechanicalGuard.luna_maximum_risk]))throw new Error("Luna mechanical_worker requires bounded low-risk scope and an exact allowlisted validator command; no Sol fallback is permitted");
+	// The bounded and mechanical guards follow the tier, not one provider's model
+	// name, so a Claude workhorse is held to the same conditions Luna is.
+	const guardedTier=guardedTiers.has(catalog.role_policies[profile.posture][policyRole]?.tier);
+	if(["bounded_worker","tester","translation"].includes(role)&&guardedTier&&((boundedGuard.requires_bounded_scope&&!boundedScope)||riskRank[risk]>riskRank[boundedGuard.maximum_risk]))throw new Error(`${binding} ${role} requires bounded scope and risk at or below ${boundedGuard.maximum_risk}; no flagship fallback is permitted`);
+	if(["bounded_worker","tester","translation"].includes(role)&&guardedTier&&boundedGuard.requires_exact_validator&&!exactValidatorBound)throw new Error(`${binding} ${role} requires an exact allowlisted validator command; no flagship fallback is permitted`);
+	if(role==="mechanical_worker"&&guardedTier&&((mechanicalGuard.requires_bounded_scope&&!boundedScope)||(mechanicalGuard.requires_exact_validator&&!exactValidatorBound)||riskRank[risk]>riskRank[mechanicalGuard.maximum_risk]))throw new Error(`${binding} mechanical_worker requires bounded low-risk scope and an exact allowlisted validator command; no flagship fallback is permitted`);
 	const selectedDefinition=catalog.bindings[binding];
 	if(selectedDefinition?.adapter==="optional_external_runtime"){
 		const evidence=bindingEvidence?.[binding];
@@ -134,12 +163,12 @@ export function selectDevelopmentBindingFromCatalog(catalog,{profileId,role,boun
 		if(!qualified){binding=selectedDefinition.rollback_binding;fallback_reason="optional worker qualification evidence missing";}
 	}
 	if(!available.has(binding)){
-		if(profile.id==="balanced")throw new Error(`Balanced requires ${binding} for ${role}; no fallback is permitted`);
+		if(profile.id===catalog.default_profile)throw new Error(`${profile.id} requires ${binding} for ${role}; no fallback is permitted`);
 		throw new Error(`no available development binding for ${role}; automatic model fallback is disabled`);
 	}
-  const rolePolicy=["balanced","economy"].includes(profile.id)&&balancedPolicyRole?catalog.balanced_role_policy[balancedPolicyRole]:null;
-  const reasoning_effort=rolePolicy?.binding===binding?rolePolicy.default_reasoning_effort:catalog.bindings[binding].default_reasoning_effort??null;
-  return {profile_id:profile.id,activation_source,role,binding_id:binding,binding:catalog.bindings[binding],reasoning_effort,available_bindings:[...available].sort(),fallback_reason,profile_status:catalog.status,catalog_digest:digestCanonical(catalog),fallback_profile:catalog.fallback_profile,total_cost_reduction_proven:false};
+  const rolePolicy=policyRole?catalog.role_policies[profile.posture][policyRole]:null;
+  const reasoning_effort=rolePolicy&&catalog.host_families[profile.host_family][rolePolicy.tier]===binding?rolePolicy.default_reasoning_effort:catalog.bindings[binding].default_reasoning_effort??null;
+  return {profile_id:profile.id,host_family:profile.host_family,posture:profile.posture,provider:catalog.bindings[binding].provider,activation_source,role,binding_id:binding,binding:catalog.bindings[binding],reasoning_effort,available_bindings:[...available].sort(),fallback_reason,profile_status:catalog.status,catalog_digest:digestCanonical(catalog),fallback_profile:catalog.fallback_profile,total_cost_reduction_proven:false};
 }
 
 export function selectDevelopmentBinding(options={}){

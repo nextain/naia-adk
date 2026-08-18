@@ -20,8 +20,9 @@ const TASK_KEYS = new Set([
 	"success_criteria", "stop_condition", "risk", "exact_validator", "read_only", "result_contract",
 ]);
 const READ_ONLY_ROLES = new Set(["explorer", "analysis", "design", "review"]);
-const EXACT_VALIDATOR_ROLES = new Set(["implementation", "test", "generic_worker", "translation"]);
-const LOW_RISK_ROLES = new Set(["implementation", "test", "translation", "generic_worker"]);
+const WORKER_ROLES = new Set(["implementation", "test", "translation", "generic_worker"]);
+const GUARDED_TIERS = new Set(["workhorse", "light"]);
+const RISK_RANK = { low: 0, medium: 1, high: 2 };
 const ROLE_POLICY_ALIASES = Object.freeze({
 	mechanical_implementation: "implementation",
 	"mechanical-implementation": "implementation",
@@ -187,22 +188,85 @@ function coveredByEveryBoundary(candidate, contract) {
 function roleRules(profileId = "balanced") {
 	const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
 	const profile = catalog?.profiles?.find((item) => item.id === profileId);
-	const policies = catalog?.balanced_role_policy;
 	const bindings = catalog?.bindings;
 	if (!profile || !bindings || String(profile.activation || "").startsWith("disabled")) throw new Error("development profile is not active");
-	const assignments = profileId === "balanced" ? Object.fromEntries(Object.entries(policies || {}).map(([role, value]) => [role, value.binding])) : {
-		secretary: profile.assignments.orchestrator, issue_leader: profile.assignments.integrator,
-		explorer: profile.assignments.bounded_worker, analysis: profile.assignments.reviewer_pool[0],
-		design: profile.assignments.reviewer_pool[0], review: profile.assignments.reviewer_pool[0],
-		implementation: profile.assignments.bounded_worker, test: profile.assignments.tester,
-		generic_worker: profile.assignments.mechanical_worker, translation: profile.assignments.mechanical_worker,
-	};
-	return Object.fromEntries(Object.keys(assignments).map((role) => {
-		const bindingId = assignments[role], binding = bindings[bindingId];
+	// Every profile resolves its roles the same way: the posture supplies the tier
+	// and effort, the host family maps that tier onto its provider's binding.
+	const policies = catalog?.role_policies?.[profile.posture];
+	const tiers = catalog?.host_families?.[profile.host_family];
+	if (!policies || !tiers) throw new Error("development profile role policy is missing");
+	return Object.fromEntries(Object.keys(policies).filter((role) => !role.startsWith("_")).map((role) => {
+		const bindingId = tiers[policies[role].tier], binding = bindings[bindingId];
 		if (!binding?.model) throw new Error(`development profile binding invalid for ${role}`);
-		const allowed = profileId === "balanced" ? policies[role].allowed_reasoning_efforts : profile.reasoning_effort ? [profile.reasoning_effort] : (binding.allowed_reasoning_efforts || [binding.default_reasoning_effort || "medium"]);
-		return [role, [binding.model, allowed, bindingId]];
+		return [role, [binding.model, policies[role].allowed_reasoning_efforts, bindingId]];
 	}));
+}
+
+// The worker conditions follow the tier the active profile assigns to the role,
+// the same way the role selector derives them. Keying them off role names held a
+// flagship control worker to conditions meant for a cheap bounded one, which
+// blocked exactly the high-risk work `control` exists to take on.
+function roleGuard(profileId, role) {
+	const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+	const profile = catalog?.profiles?.find((item) => item.id === profileId);
+	const tier = catalog?.role_policies?.[profile?.posture]?.[role]?.tier;
+	if (!tier) return null;
+	if (!GUARDED_TIERS.has(tier)) return { tier, applies: false };
+	const guard = role === "generic_worker" ? catalog?.guards?.mechanical_worker : catalog?.guards?.bounded_worker;
+	if (!guard) throw new Error(`development profile guard is missing for ${role}`);
+	return {
+		tier,
+		applies: true,
+		maximum_risk: guard.maximum_risk,
+		requires_exact_validator: guard.requires_exact_validator === true,
+		requires_bounded_scope: guard.requires_bounded_scope === true,
+	};
+}
+
+// The declared grade is the brief author's own word, so a ceiling only constrains
+// a caller that already agrees with it. This derives a floor from what can be
+// observed — whether the work is read-only, whether a validator settles it, what
+// paths it may touch — and a declaration below that floor is refused. It cannot
+// prove a grade is right; it stops one from being lower than the evidence allows.
+function riskFloor(task) {
+	const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+	const rules = catalog?.guards?.risk_floor;
+	if (!rules) throw new Error("development profile risk floor rules are missing");
+	const paths = Array.isArray(task?.allowed_paths) ? task.allowed_paths : [];
+	const reasons = [];
+	let floor = "low";
+	const raise = (grade, why) => {
+		if (RISK_RANK[grade] > RISK_RANK[floor]) floor = grade;
+		reasons.push(why);
+	};
+	const validatorPresent = typeof task?.exact_validator === "string" && task.exact_validator.trim();
+	if (task?.read_only !== true && !validatorPresent) raise(rules.missing_validator_floor, "no exact validator settles the result");
+	const overlaps = (pattern, prefix) => {
+		const left = patternPrefix(String(pattern));
+		const right = prefix.replace(/\/$/, "");
+		return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+	};
+	if (task?.read_only !== true && paths.some((pattern) => (rules.authority_paths || []).some((prefix) => overlaps(pattern, prefix)))) {
+		raise(rules.authority_path_floor, "the declared paths reach governance or host-policy files");
+	}
+	return { floor, reasons };
+}
+
+// A guard keeps unbounded work from running unattended; it is not there to stop
+// authorized work. Relaxations are declared in the bound contract or in the
+// session override so the decision stays visible instead of being worked around.
+function declaredRelaxations(contract, env = process.env) {
+	const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+	const allowed = new Set(catalog?.guards?.guard_relaxation?.allowed || []);
+	const overrideName = catalog?.guards?.guard_relaxation?.override_env;
+	const declared = [
+		...(contract?.subagent_policy?.guard_relaxations || []),
+		...(overrideName && typeof env[overrideName] === "string"
+			? env[overrideName].split(",").map((item) => item.trim()).filter(Boolean)
+			: []),
+	];
+	if (declared.some((item) => !allowed.has(item))) throw new Error("declared guard relaxation is not a recognized condition");
+	return new Set(declared);
 }
 
 function availableBindings(env = process.env) {
@@ -238,14 +302,38 @@ function validateBrief(task, { env, contract }) {
 	}
 	if (typeof task.stop_condition !== "string" || !task.stop_condition.trim()) return "delegation task stop_condition is required";
 	if (!new Set(["low", "medium"]).has(task.risk)) return "delegation task risk must be low or medium";
-	if (LOW_RISK_ROLES.has(role) && task.risk !== "low") return "Luna implementation, test, translation, and worker roles require low risk";
 	if ({ low: 0, medium: 1 }[task.risk] > { low: 0, medium: 1 }[contract?.subagent_policy?.maximum_risk]) return "delegation task risk exceeds the parent policy maximum";
 	if (typeof task.read_only !== "boolean") return "delegation task read_only must be boolean";
-	if (EXACT_VALIDATOR_ROLES.has(role)) {
-		if (typeof task.exact_validator !== "string" || !task.exact_validator.trim()) return "this Luna role requires an exact validator command";
-		if (!(contract?.allowed_shell_commands || []).includes(task.exact_validator)) return "the exact validator command must be declared by the parent contract";
+	// The reverse direction was unchecked, and read_only suppresses the
+	// missing-validator floor raise. A flagship worker could therefore declare
+	// itself read-only, keep the low grade, and still be delegated work whose
+	// whole purpose is to change files. The declaration contradicts the role.
+	if (WORKER_ROLES.has(role) && task.read_only === true) return "a worker role cannot declare read_only; delegating implementation, test, translation, or generic work means the worker changes files";
+	const guard = roleGuard(contract?.subagent_policy?.profile || "balanced", role);
+	let relaxed;
+	try { relaxed = declaredRelaxations(contract, env); } catch (error) { return error.message; }
+	if (!relaxed.has("risk_floor")) {
+		const { floor, reasons } = riskFloor(task);
+		if (RISK_RANK[task.risk] < RISK_RANK[floor]) {
+			const ceiling = guard?.applies && !relaxed.has("risk_ceiling") ? guard.maximum_risk : null;
+			const blocked = ceiling && RISK_RANK[floor] > RISK_RANK[ceiling]
+				? ` Raising the grade alone will not pass because this role's ${guard.tier} tier is capped at ${ceiling}; narrow the brief or relax risk_ceiling as well.`
+				: "";
+			return `this delegation is declared ${task.risk} but its own brief puts the floor at ${floor}: ${reasons.join("; ")}. Declare the higher grade, narrow the brief, or relax risk_floor explicitly.${blocked}`;
+		}
+	}
+	if (WORKER_ROLES.has(role)) {
+		if (guard?.applies && !relaxed.has("risk_ceiling") && RISK_RANK[task.risk] > RISK_RANK[guard.maximum_risk]) {
+			return `a ${guard.tier} tier ${role} delegation is limited to ${guard.maximum_risk} risk; relax risk_ceiling explicitly to exceed it`;
+		}
+		if (guard?.applies && guard.requires_exact_validator && !relaxed.has("exact_validator")) {
+			if (typeof task.exact_validator !== "string" || !task.exact_validator.trim()) return `a ${guard.tier} tier ${role} delegation requires an exact validator command; relax exact_validator explicitly to omit it`;
+		}
+		if (typeof task.exact_validator === "string" && task.exact_validator.trim() && !(contract?.allowed_shell_commands || []).includes(task.exact_validator)) {
+			return "the exact validator command must be declared by the parent contract";
+		}
 	} else if (task.exact_validator !== null) {
-		return "non-implementation roles must declare exact_validator as null";
+		return "non-worker roles must declare exact_validator as null";
 	}
 	if (READ_ONLY_ROLES.has(role) && task.read_only !== true) return "this analysis role must be read-only";
 	const projectRoot = realDirectory(task.project_root);
@@ -283,6 +371,20 @@ function evaluate({
 		// result-envelope restriction below only governs the bound digest path.
 		// Context inheritance stays blocked first either way.
 		if (!contextOk(input, runtime)) return block("explicit fork_context false is required; fork_turns must be none when the runtime exposes it");
+		// Brief validation needs a parent contract to bind against and there is
+		// none here, but the risk floor reads only the brief's own fields. If a
+		// grade is declared on this path it must still not sit below what the
+		// brief itself shows, or the operator marker would silently be a way
+		// around the floor rather than a named relaxation.
+		const unboundTask = parseBrief(briefText(input, runtime));
+		let unboundRelaxed;
+		try { unboundRelaxed = declaredRelaxations(null, env); } catch (error) { return block(error.message); }
+		if (unboundTask && Object.hasOwn(RISK_RANK, unboundTask.risk) && !unboundRelaxed.has("risk_floor")) {
+			const { floor, reasons } = riskFloor(unboundTask);
+			if (RISK_RANK[unboundTask.risk] < RISK_RANK[floor]) {
+				return block(`this delegation is declared ${unboundTask.risk} but its own brief puts the floor at ${floor}: ${reasons.join("; ")}. Declare the higher grade, narrow the brief, or relax risk_floor explicitly`);
+			}
+		}
 		const budget = require("../../.claude/hooks/subagent-spawn-guard.js").evaluate({ toolName: "task", sessionId, root: cwd, env });
 		return budget ? { decision: "block", reason: budget.reason } : null;
 	}
@@ -416,7 +518,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-	EXACT_VALIDATOR_ROLES,
+	WORKER_ROLES,
 	READ_ONLY_ROLES,
 	availableBindings,
 	contextOk,

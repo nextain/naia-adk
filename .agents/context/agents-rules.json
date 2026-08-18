@@ -1,510 +1,751 @@
 {
-  "_copyright": "Copyright 2026 Nextain Inc. All rights reserved.",
-  "project_identity": {
-    "name": "Naia ADK",
-    "nature": "Workspace scaffold + governance baseline for AI-assisted work (public, Apache 2.0)",
-    "philosophy": "Tool-agnostic workspace format; interfaces over runtime coupling; minimum solo governance baseline",
-    "org": "nextain",
-    "repo": "nextain/naia-adk"
-  },
-  "context_boundaries": {
-    "shared_entrypoints_are_indexes": "AGENTS.md is the canonical repository index and CLAUDE.md/GEMINI.md are byte-identical mirrors. Shared entrypoints may contain identity, mandatory index paths, context routing, session-contract locations, and permanent safety boundaries only; never current goals, issue state, implementation plans, completion claims, or artifact wording.",
-    "recovery_mode": "If .codex/no-harness, .claude/no-harness, or .pi/no-harness exists at the repository root, the harness and session-contract mutation requirements are disabled. Work normally under host permissions and repository safety rules; do not create or bind a session contract.",
-    "session_contract_authority": "Outside recovery mode, an UNBOUND session may perform ordinary reversible file creation and editing inside its resolved project boundary. A BOUND contract is required for governance or host-policy files, shared entrypoints, deletion, mutating shell commands, external effects, and any operation that can expand the session's own authority. When bound, the local registry pointer, active contract digest, explicit session_bindings entry, and progress contract reference must all agree. Progress or Markdown session_id fields never grant authority.",
-    "project_isolation": "Never infer a session binding from a parent workspace, child project, or the repository's only unfinished work unit. Concurrent contracts must declare non-overlapping target_ownership paths.",
-    "context_is_not_output": "Background, reference, example, conversation, and internal context constrain reasoning but are not code, UI, or external-document content. Rendering requires explicit atom-level derive, quote, or require authority for a declared output unit and audience.",
-    "source_atom_contract": "Every v2 source atom declares subject, effect, and render_policy. Non-directive source classifications keep directive_ids exactly empty; rendering authority never becomes objective authority.",
-    "output_unit_contract": "Every verifiable v2 output unit declares kind, audience, exposure, objective_atom_ids, and content_source_atom_ids. Agent-workflow background/precondition atoms cannot be shipping content edges."
-  },
-  "local_projects": {
-    "naia-os": {
-      "purpose": "Naia OS desktop app (Tauri 2 + React + Three.js + Node.js agent)",
-      "repo": "nextain/naia-os",
-      "visibility": "public",
-      "entry_point": "naia-os/AGENTS.md"
-    },
-    "issue-desk": {
-      "purpose": "IssueDesk — standalone Vite+React panel for naia-os. GitHub issue/PR triage, community assistant, notification triage.",
-      "repo": "nextain/issue-desk",
-      "visibility": "private",
-      "entry_point": "issue-desk/panel.json",
-      "notes": "Standalone git repo, not a submodule. Design doc: naia-os/docs/design/issue-desk.ko.md"
-    },
-    "about.nextain.io": {
-      "purpose": "Nextain corporate website (Next.js 14 + next-intl)",
-      "repo": "nextain/about.nextain.io",
-      "visibility": "public",
-      "entry_point": "about.nextain.io/README.md"
-    },
-    "naia.nextain.io": {
-      "purpose": "Naia web app / Lab portal (Next.js + BFF for gateway)",
-      "repo": "nextain/naia.nextain.io",
-      "visibility": "private",
-      "entry_point": "naia.nextain.io/AGENTS.md"
-    },
-    "aiedu.nextain.io": {
-      "purpose": "AI education platform — curriculum-driven AI teacher (Next.js + Monaco + Pyodide + any-llm)",
-      "repo": "nextain/aiedu.nextain.io",
-      "visibility": "private",
-      "entry_point": "aiedu.nextain.io/AGENTS.md",
-      "notes": "B2B commercial product. Dual-mirror context. Curriculum as plugin. Depends on any-llm B2B extension."
-    },
-    "admin.nextain.io": {
-      "purpose": "Nextain B2B admin control plane (license key mgmt, token tracking, client mgmt)",
-      "repo": "nextain/admin.nextain.io",
-      "visibility": "private",
-      "entry_point": "admin.nextain.io/AGENTS.md",
-      "notes": "Internal tool. Manages aiedu.nextain.io and future B2B products."
-    }
-  },
-  "infrastructure": {
-    "gateway": {
-      "prod": {
-        "url_env": "GATEWAY_URL — prod gateway base URL, injected per-fork; never committed",
-        "key_env": "GATEWAY_MASTER_KEY",
-        "db": "any-llm gateway DB (Cloud SQL PostgreSQL, region per-fork)"
-      },
-      "dev": {
-        "url_env": "DEV_GATEWAY_URL — dev gateway base URL, injected via .env.local; never committed",
-        "key": "<DEV_GATEWAY_KEY — .env.local 에서 주입, 레포 커밋 금지>",
-        "db": "any-llm gateway dev DB (same instance, separate DB)",
-        "min_instances": 0
-      },
-      "env_rule": ".env.local → dev gateway. .env.production.local → prod gateway. NEVER write prod credentials to .env.local.",
-      "guard_hook": ".claude/hooks/prod-gateway-guard.js — blocks prod credentials in .env.local at Edit|Write time",
-      "sync_script": "project-any-llm/scripts/sync-prod-to-dev.sh — manual only, requires 'yes' confirmation, OVERWRITES all dev data"
-    },
-    "ci_runners": {
-      "self_hosted": {
-        "name": "luke-bazzite",
-        "host": "this Bazzite PC (/opt/actions-runner)",
-        "scope": "nextain org — private repos only (public repos use free GitHub-hosted runners)",
-        "labels": [
-          "self-hosted",
-          "linux",
-          "x64",
-          "bazzite"
-        ],
-        "service": "actions.runner.nextain.luke-bazzite.service",
-        "note": "DO NOT attach self-hosted runners to public repos — fork PR security risk",
-        "install_note": "/var/home causes SELinux exec block; always install under /opt/"
-      },
-      "workflow_usage": "runs-on: [self-hosted, linux, x64]"
-    }
-  },
-  "submodules": {
-    "docs-work-logs": {
-      "purpose": "Developer work logs (per-person folders)",
-      "repo": "nextain/docs-work-logs",
-      "visibility": "private",
-      "entry_point": "docs-work-logs/AGENTS.md"
-    },
-    "docs-nextain": {
-      "purpose": "Internal docs (onboarding, meetings, design)",
-      "repo": "nextain/docs-nextain",
-      "visibility": "private",
-      "entry_point": "docs-nextain/AGENTS.md"
-    },
-    "docs-business": {
-      "purpose": "Business docs (proposals, strategy, IR)",
-      "repo": "nextain/docs-business",
-      "visibility": "private",
-      "entry_point": "docs-business/README.md"
-    },
-    "example.com": {
-      "purpose": "Cafelua personal website",
-      "repo": "luke-n-alpha/example-project-private",
-      "visibility": "private",
-      "entry_point": "example.com/README.md"
-    },
-    "project-any-llm": {
-      "purpose": "Any-LLM SDK + FastAPI gateway (LLM proxy, credits, auth, usage tracking)",
-      "repo": "nextain/any-llm",
-      "visibility": "public",
-      "entry_point": "project-any-llm/README.md"
-    }
-  },
-  "reference_submodules": {
-    "_description": "Reference repos for upstream tracking (read-only, periodic sync)",
-    "ref-cline": {
-      "purpose": "Cline upstream reference (VS Code AI extension)",
-      "source": "https://github.com/cline/cline",
-      "usage": "Architecture/pattern reference"
-    },
-    "ref-opencode": {
-      "purpose": "OpenCode reference (TUI-based AI coding agent)",
-      "source": "https://github.com/anomalyco/opencode",
-      "usage": "Architecture/pattern reference for CLI features"
-    },
-    "ref-nanoclaw": {
-      "purpose": "NanoClaw reference (lightweight AI agent framework)",
-      "source": "https://github.com/qwibitai/nanoclaw",
-      "usage": "Agent framework reference"
-    },
-    "ref-moltbot": {
-      "purpose": "Moltbot reference",
-      "source": "https://github.com/moltbot/moltbot",
-      "usage": "Bot framework reference"
-    },
-    "ref-project-airi": {
-      "purpose": "AIRI reference (AI character project)",
-      "source": "https://github.com/moeru-ai/airi",
-      "usage": "AI character/avatar reference"
-    },
-    "ref-jikime-adk": {
-      "purpose": "Jikime ADK reference (Agent Development Kit)",
-      "source": "https://github.com/jikime/jikime-adk",
-      "usage": "Agent development reference"
-    },
-    "ref-jikime-mem": {
-      "purpose": "Jikime Memory reference",
-      "source": "https://github.com/jikime/jikime-mem",
-      "usage": "Memory/RAG reference"
-    }
-  },
-  "architecture_rules": {
-    "modification_levels": {
-      "L1_independent": "docs-work-logs (personal folders)",
-      "L2_conditional": "docs-nextain, docs-business, example.com, project-any-llm"
-    }
-  },
-  "skills": {
-    "read-doc": {
-      "trigger": "MANDATORY — any time a file with extension .hwp, .hwpx, .pdf, .docx, .xlsx, .pptx needs to be read or analyzed",
-      "command": "/read-doc <file-path>",
-      "rule": "NEVER say 'I cannot read this file type'. Always use /read-doc first. The skill handles all extraction automatically.",
-      "sidecar_note": "docs-business HWP/HWPX files have pre-extracted .txt sidecars — /read-doc checks these first automatically",
-      "use_cases": [
-        "docs-business 제안서/사업계획서 분석",
-        "발표 자료(PPTX) 내용 파악",
-        "이력서(DOCX) 검토",
-        "정부과제 제출서류 검토"
-      ]
-    },
-    "webapp-testing": {
-      "trigger": "MANDATORY — any E2E test, UI behavior verification, screenshot capture, or console log check for local web apps (naia.nextain.io, about.nextain.io, aiedu.nextain.io, etc.)",
-      "command": "/webapp-testing",
-      "rule": "NEVER ask the user to manually test. Always use this skill to verify directly. Uses Playwright Python scripts.",
-      "use_cases": [
-        "Next.js 앱 E2E 테스트",
-        "UI 동작 검증 (버튼 클릭, 폼 제출 등)",
-        "스크린샷 캡처",
-        "콘솔 로그/에러 확인"
-      ]
-    },
-    "doc-coauthoring": {
-      "trigger": "MANDATORY — any request to write a structured document: tech spec, proposal, RFC, design doc, PRD, decision record",
-      "command": "/doc-coauthoring",
-      "rule": "Invoke before writing the document. 3-stage workflow: context collection → structured writing → reader test.",
-      "use_cases": [
-        "기술 스펙 작성",
-        "제안서/IR 문서",
-        "RFC / 설계 결정 기록",
-        "GitHub Issue 기반 기능 설계 스펙"
-      ]
-    }
-  },
-  "ai_workflow": {
-    "knowledge_principle": "AI knowledge = Developer knowledge (1:1 parity)",
-    "default_workflow": "issue-driven-development.yaml (feature-level work)",
-    "lightweight_workflow": "development-cycle.yaml (non-feature changes: typos, config values, simple directives)",
-    "documentation_impact_policy": {
-      "purpose": "A production change is not complete until its impact on all three documentation audiences is decided and evidenced.",
-      "targets": {
-        "repository_docs": "Repository-facing behavior, contracts, architecture, verification, and contributor guidance.",
-        "user_manual": "User-facing setup, operation, discovery, privacy, and known limitations.",
-        "reusable_learning": "Evidence-backed principles or case studies reusable beyond the changed product."
-      },
-      "allowed_statuses": [
-        "UPDATED",
-        "N/A"
-      ],
-      "updated_evidence": "List changed local files or immutable external commit URLs.",
-      "na_evidence": "Give a concrete applicability rationale; bare 'not relevant' is invalid.",
-      "applicability": {
-        "full_review": "User behavior, public API or wire contract, permissions, privacy, safety, availability, or cross-repository schema changes.",
-        "existing_contract_fix": "A regression fix may mark new scenario/requirement documents N/A only when it links the existing IDs and adds regression evidence.",
-        "behavior_preserving": "Refactor, test-only, generated, formatting, comment, or lockfile-only changes may use N/A with a concrete reason.",
-        "reusable_learning_threshold": "Update only when the lesson is reusable, non-duplicative, backed by an immutable source, and states its validation limits."
-      },
-      "receipt": "Use one tracked, per-issue JSON receipt. New or migrated template-based projects define its path and enforce it in local hooks and CI; existing projects require an explicit project migration before claiming machine enforcement.",
-      "completion_rule": "The receipt is finalized during Sync, checked again during Sync Verify, included in Report, and required before Commit."
-    },
-    "permission_model": {
-      "code_files": "AI = implementer. Can read, modify, create, delete freely.",
-      "design_docs": "AI = reviewer by default. It may modify a design document without asking again when the user's current bounded request explicitly asks to create, update, or record that document and does not leave a material design choice unresolved. Otherwise only typo/grammar, internal contradiction, or broken link/reference corrections are autonomous.",
-      "design_doc_paths": [
-        "docs/design/",
-        "design/",
-        "spec/"
-      ],
-      "design_doc_extensions": [
-        ".md",
-        ".txt",
-        ".yaml",
-        ".json"
-      ],
-      "note": "Any file matching these path prefixes + extensions is treated as a design doc. Hook enforces this at Edit|Write time.",
-      "bounded_recording_exception": "An explicit request to write or update the design record is already authority for that bounded recording work; the agent may activate the temporary design-doc edit marker, perform the requested edit, and close the marker without another approval prompt.",
-      "material_decision_boundary": "Ask when the edit would choose or change a product, architecture, interface, policy, destructive disposition, or scope decision not determined by the request. Never silently rewrite design to match implementation.",
-      "key_distinction": "Code review clean pass = no code issues. Design doc review clean pass = no NEW findings (typos/contradictions/broken links). Never: 'design should match implementation'."
-    },
-    "routine_execution_authority": {
-      "principle": "Once the user authorizes an objective and scope, carry out normal in-scope execution without recurring approval prompts.",
-      "routine_steps": [
-        "Read-only inspection, local investigation, and evidence collection",
-        "In-scope implementation, dependency installation, formatting, tests, builds, and local servers",
-        "Non-destructive Git fetch, pull, merge, worktree creation, stage, commit, and non-force non-deleting push",
-        "Delegation to subagents for bounded roles already inside the authorized objective"
-      ],
-      "delegation_inheritance": "Every subagent, delegated agent, and nested delegate inherits the same authorized objective, scope, routine-step authority, and exception boundary. A delegate must not ask again for a routine step merely because execution moved to another agent or session.",
-      "ask_only_for": [
-        "Irreversible deletion or destructive history rewriting, including remote-ref deletion and force push",
-        "Unrelated-histories or otherwise exceptional forced integration",
-        "External messages, publication outside the authorized repository workflow, payments, or purchases",
-        "Production deployment, destructive production or shared-database mutation, credentials disclosure, or material cloud cost",
-        "A missing user choice that would materially expand or change the authorized objective or scope"
-      ],
-      "clarification_rule": "Do not turn workflow checkpoints, tool permissions, session boundaries, or delegation boundaries into repeated conversational approval gates. Keep product and scope decision gates when the answer can materially change the result; otherwise proceed and report evidence."
-    },
-    "escalation_path": {
-      "design_gap_found_during_build": [
-        "1. Do NOT modify the design doc to match implementation",
-        "2. Do NOT silently adapt implementation to paper over the gap",
-        "3. Surface to user: state the gap (design says X, implementation does Y), present options (A: update design, B: fix implementation, C: accept as intentional deviation)",
-        "4. Wait for user decision before proceeding"
-      ],
-      "design_flaw_found_during_review": [
-        "1. Report to user: 'Found potential design issue at [file:line]: [description]'",
-        "2. Propose: 'Options: A) fix typo/grammar (allowed), B) this is a design decision I should not change — your call'",
-        "3. Do not make the change until user confirms it's (A)"
-      ]
-    },
-    "mandatory_pre_checks": [
-      "Read agents-rules.json first",
-      "When working in submodule, read its entry point file",
-      "For feature-level work: follow issue-driven-development.yaml material-decision checkpoints (understand → scope → plan); an explicit bounded request proceeds without repeated confirmation, while an unresolved choice that materially changes the result must be asked",
-      "Apply minimal-change principles",
-      "For any .hwp/.hwpx/.pdf/.docx/.xlsx/.pptx file: use /read-doc skill FIRST — never claim inability to read documents",
-      "Design docs (docs/design/, spec/, design/) + extensions (.md/.txt/.yaml/.json): see permission_model above. Hook fires on edits — surface reason to user first.",
-      "Before running destructive git commands (git checkout --, git reset --hard, git clean -f): ALWAYS ask user for explicit confirmation first. State exactly what will be deleted. No exceptions.",
-      "Before a material, irreversible, ambiguous, or out-of-scope deletion: understand the exact target and impact, preserve a recovery path where practical, and get user confirmation. Agent-owned temporary/work artifact cleanup and a user-requested bounded recoverable deletion may proceed without repeated approval after exact-target verification. (see dead_code_safety)"
-    ],
-    "completeness_principle": {
-      "statement": "AI marginal cost ≈ 0 — when approved to build something, build it completely (all edge cases, error handling, tests included).",
-      "three_principles_distinction": {
-        "no_autonomous_development": "WHAT to build = user decides. Never add features or scope without asking.",
-        "minimal_modification": "HOW FAR to deviate from upstream = minimize. For fork-based work: overlay custom changes with minimal delta from upstream.",
-        "completeness": "QUALITY of approved work = complete. If user approves X, implement X fully. Option A (complete) vs Option B (partial) → always recommend A unless user explicitly asks for partial."
-      },
-      "boilable_lake_rule": "A bounded, scoped module is 'boilable'. If scope is finite, implement it completely. Never deliver partial when complete costs AI nothing extra."
-    },
-    "dead_code_safety": {
-      "statement": "Dead/unused code, branches, files, and artifacts are NOT harmless. The AI's assumption that 'this seems unused, so removing/ignoring it is safe' is frequently wrong: deletion is irreversible, and orphaned dead code misleads the next session into treating it as normal. Default to RISK-assumption, not harmlessness.",
-      "rules": [
-        "Do not casually delete OR ignore dead/unused code, branches, or files.",
-        "Before material, irreversible, ambiguous, or out-of-scope deletion: (1) understand WHY it is dead (2) resolve the exact target and impact (3) preserve a recovery path where practical (4) get explicit user confirmation.",
-        "Agent-owned temporary/work artifacts with an explicit lifecycle may be cleaned up after exact-target verification without another prompt.",
-        "A user-requested bounded recoverable deletion is already authorized; verify the exact target stays inside scope, then execute without repeated approval."
-      ],
-      "rationale": "Known AI cognitive bias: underweighting the risk of dead code. Same root cause as the 'recurring-symptom misclassification' failure pattern (treating a re-appearing issue as a new, separate one)."
-    },
-    "ask_user_question_format": {
-      "description": "Standard structure for user-facing decision questions (gates, options, scope choices). Makes trade-offs explicit.",
-      "structure": [
-        "1. Re-ground (1-2 sentences): state the project, current phase, and specific question in plain terms",
-        "2. Simplify: ask without jargon — as if explaining to a non-engineer",
-        "3. Recommend: explicit recommendation with completeness score (1-10) + AI time + human review time",
-        "4. Options: lettered A/B/C, each with effort estimate + completeness score + one-sentence trade-off"
-      ],
-      "example": "RECOMMENDATION: A (completeness 9/10 | AI: ~30min | review: ~10min)\nA) Full implementation — all edge cases covered [completeness 9/10]\nB) Minimal — ships faster, revisit later [completeness 5/10]"
-    },
-    "review_skill": "Use '/review-pass stage=planning|development|test|integration files=...' for stage-specific multi-AI cross-validation review. REQ-IDs required for feature-level work. Simple changes (lightweight cycle: <3 files, single module) skip REQ-ID creation. Read .agents/requirements/_index.yaml when entering Plan or Review phases.",
-    "requirements_management": {
-      "storage": ".agents/requirements/",
-      "index": ".agents/requirements/_index.yaml",
-      "load_timing": "on-demand when entering Plan or Review phases (NOT session-injected)",
-      "req_id_threshold": "Feature-level work only. Lightweight cycle changes (typos, config, <3 files, single module) skip REQ-ID creation.",
-      "source_authority": {
-        "candidate": "Code is source of truth. Requirements are descriptive (derived from existing code).",
-        "human": "Requirements are normative. Code must conform.",
-        "default": "When requirements conflict with code: candidate→code wins, human→REQ wins."
-      },
-      "retrofitted_requirements": "Always status: candidate. Require explicit human promotion to active/verified.",
-      "dual_mirror": "Requirements live in .agents/requirements/ ONLY (no .users/ mirror). Use title_ko field for Korean title.",
-      "trace_format": "Use file + symbol references. Never hardcode line numbers (they rot immediately)."
-    },
-    "submodule_rule": "Each submodule has own rules. Read entry_point before modifications."
-  },
-  "financial_integrity": {
-      "cost_estimation_first": "Before performing any large-scale cloud operations, the agent MUST estimate the potential cost and obtain explicit user approval.",
-      "expensive_operations_blacklist": [
-        "GCS: Data movement > 10GB or API ops > 1,000 via mount points (e.g., rsync via gcsfuse)",
-        "GCE: Provisioning high-tier GPU instances (A100, H100, etc.)",
-        "Vertex AI/LLM: Massive batch inference or fine-tuning jobs",
-        "Cloud SQL: Massive data migrations or large-scale index rebuilds"
-      ],
-      "resource_awareness": "Always monitor Class A/B API operation counts for GCS and egress traffic costs for GCE/Cloud Run."
-    },
-    "language_harness": {
-      "no_korean_in_agents": "Strictly prohibit Korean characters in .agents/ directory to optimize token usage. All context files here must be in concise English.",
-      "concise_session_output": "AI responses should be extremely brief (less than 3 lines) to minimize history weight. Avoid long Korean preambles."
-    },
-    "conventions": {
-    "response_language": "Korean (한국어로 응답)",
-    "development_approach": "Issue-driven development (default). TDD where applicable.",
-    "test_code_review": "After writing tests, never trust results blindly. Review test logic itself with iterative review (2 consecutive clean passes) before trusting outcomes. Signs of invalid tests: assertions that always pass, mocked internals that diverge from real behavior, missing negative cases.",
-    "tmp_files": {
-      "rule": "All temporary/debug/scratch scripts MUST be created inside tmp/ at the root of the active working directory. NEVER create tmp-* or tmp_* files in the repo root or subproject roots.",
-      "gitignore": "tmp/, tmp-*, tmp_* are gitignored at root. Files placed there are never tracked.",
-      "naming": "Use descriptive names inside tmp/ (e.g. tmp/check-db.php, tmp/debug-redis.sh) — no tmp- prefix needed since the directory provides the namespace."
-    },
-    "work_logs": "Don't modify unless explicitly requested",
-    "workfile_lifecycle": {
-      "principle": "All work files (progress reports, scratch scripts, temp data) MUST follow explicit lifecycle. No accumulation without policy.",
-      "directories": {
-        ".agents/context/": "Permanent context (on_demand loaded). Long-lived. In-place corrections only. Never delete.",
-        ".agents/progress/": "Active work reports + completed reports. JSON files = harness 1st-class (session-inject reads). MD reports = lifecycle-tracked.",
-        ".agents/progress/archive/YYYY-MM/": "Completed reports moved here (preserved + searchable). readdirSync skips subdirs = automatically excluded from session-inject/commit-guard active set.",
-        ".agents/work/": "Temporary work scripts. gitignored at root (.gitignore: .agents/work/). User-managed cleanup (no AI auto-delete).",
-        "tmp/, tmp-*, tmp_*": "Debug/scratch (see tmp_files above). gitignored."
-      },
-      "handoff_documents": {
-        "policy": "Local-only session or PC transfer artifacts. Never stage or commit them because stale handoff state can misdirect another machine or session.",
-        "cross_machine": "Cross-machine continuation uses a remote GitHub issue plus reachable branch or commit SHAs as the only handoff boundary. Record durable scope, invariants, current state, validation, and blockers there; never transfer local session IDs, registry pointers, session maps, runtime contracts, progress/handoff files, harness units, credentials, or host-local receipts through Git.",
-        "location": "Use .agents/work/, .agents/progress/, .agents/reviews/, tmp/, or a dedicated ignored .handoff/ or .handover/ directory. Topic-prefixed local notes such as project-handoff belong only in one of these ignored locations.",
-        "naming": "A global local-only artifact basename starts with handoff or handover. Topic-prefixed formal documents remain trackable outside ignored local-artifact directories.",
-        "boundary": "Durable handoff or handover guides and contracts under official docs/, spec/, design/, .agents/context/, or .agents/decisions/ directories remain trackable even when their basename starts with handoff or handover. Other durable project knowledge belongs in tracked context, requirements, decisions, or formal docs; do not disguise permanent documentation as a local handoff artifact."
-      },
-      "completion_criteria": "A work file is 'complete' when 2+ of: (a) related code committed/pushed to origin, (b) user explicitly declares done/closed, (c) cross-review GO + user acceptance, (d) superseded by next-step plan/issue. AI self-declaring 'complete' is prohibited.",
-      "triggers": {
-        "work_start": "Create or update one progress file (1 per work, not 1 per session).",
-        "session_end_or_milestone": "Add status line ('✅ done' / '⏳ in-progress' / '🔴 blocked').",
-        "after_commit_push": "Move that work's progress to .agents/progress/archive/YYYY-MM/ (selective — mention in commit message).",
-        "monthly_cleanup": "Review 30+ day progress files; archive completed or inline-resolve.",
-        "work_30d": ".agents/work/ 30+ day = user-decided deletion (volatile by design)."
-      },
-      "naming": "Existing convention: <topic>-YYYY-MM-DD.md OR <issue-slug>.json (naia-adk progress pattern). On archive: move only (no rename) to preserve cross-references.",
-      "archive_unit": "Archive MD/JSON pair together (same base name). If JSON has current_phase != close, set to close OR unbind before move — otherwise session-inject still treats it active.",
-      "inbound_references": "Default: allow link breakage on archive (archived = historical). On case-by-case need: leave 1-line stub at original path. No automatic archive index — over-engineering.",
-      "harness_scope_asymmetry": "session-inject collects cwd + IMMEDIATE child subdirs only. 2nd-level subs not scanned. commit-guard scans cwd only. Policy applies repo-wide as convention but ENFORCEMENT range is root + direct children. 2nd-level subs need own hooks for enforcement.",
-      "session_map_cleanup": "On archive: .agents/progress/.session-map.json entries pointing to archived files become stale. session-inject auto-prunes on next run, but explicit cleanup is cleaner."
-    },
-    "git_workflow": {
-      "maintainer_rule": "Luke is a maintainer of all Nextain repos. NEVER create PRs for Nextain repos — commit and push directly to main (or the relevant branch). PRs are for external contributors only.",
-      "pr_prohibition": "DO NOT run `gh pr create` for nextain/* repos. The pr-guard hook will block this automatically.",
-      "owned_repo_posting_authority": "When the user explicitly requests an issue, comment, release note, or other repository post in a Nextain or user-owned/managed repository, that request is posting authority and does not require a second approval. Unsolicited posts and third-party/community posts remain external actions requiring reviewed-content approval."
-    },
-    "external_repo_policy": {
-      "principle": "Information gathering first before action on third-party or community repositories; this policy does not add a second approval to an explicitly requested post in a Nextain or user-owned/managed repository",
-      "steps": [
-        "1. Read CONTRIBUTING.md / contributing guide of the external repo",
-        "2. Search existing issues and PRs to avoid duplicates",
-        "3. Study code patterns and conventions used in the repo",
-        "4. Prototype and validate internally before reaching out",
-        "5. Draft issue/PR content and show to user for review",
-        "6. Get explicit user approval before posting anything"
-      ],
-      "community_context_first": "Before engaging in any external community (repo, Discord, Slack, forum, etc.), gather context first: (1) communication tone — formal/casual, terse/verbose, (2) explicit rules — CoC, PR/issue templates, labeling conventions, (3) community tendencies — what they value, what they reject, how they respond to outsiders, who the influential members are, what past interactions look like",
-      "rule": "Never post unsolicited content or issues, PRs, or comments to third-party/community repositories without explicit user approval of the reviewed content. An explicitly requested post to a Nextain or user-owned/managed repository is already authorized.",
-      "tone_matching": "Technical issues and PRs are read by people. Write in a tone that fits the community's atmosphere — not just technically correct, but culturally appropriate. A dry RFC-style community expects concise technical prose; a friendly community expects warmth. Match the room.",
-      "ai_disclosure": "When posting AI-assisted content to external repos, always include a disclosure footer: state it was written with AI assistance AND provide a contact point for the developer in case of issues (e.g. '🤖 Written with AI assistance. If anything looks off, please ping @luke-n-alpha or open a discussion.'). Transparency and accountability both required. [HOOK-ENFORCED 2026-05-16: .claude/hooks/pr-guard.js — 외부 repo content op(gh issue/pr create·comment, pr review, release create) 시 disclosure footer(🤖/AI assistance) 미포함이면 차단(OSS-access 마커 소비 전). 내부 nextain/* 면제. merge/reopen/edit 등 비-content op 면제.]"
-    },
-    "contribution_fork_policy": {
-      "account": "Use nextain org (e.g. nextain/vllm) — this is an official Nextain-backed contribution, not a personal side project",
-      "naming": "Same name as upstream repo — no prefix",
-      "readme_required": "Every contribution fork MUST have a README clearly stating: (1) this is a contribution fork, not a hard fork, (2) upstream repo link, (3) what feature/fix is being contributed, (4) current status (in progress / PR submitted / merged), (5) contact: @luke-n-alpha",
-      "repo_description": "Set GitHub repo description to: 'Contribution fork — [feature] upstream PR in progress. See [upstream url]'",
-      "branch_strategy": {
-        "main": "fork main = upstream main + AGENTS.md (AI context, version controlled here)",
-        "feature": "feature branch = based on upstream main, code changes only — NEVER add AGENTS.md here",
-        "pr": "PR = feature branch → upstream. AGENTS.md is on main only, so it is automatically excluded from the PR diff"
-      },
-      "main_sync": "Keep main branch in sync with upstream at all times (rebase or merge upstream main regularly)",
-      "work_branch": "All work on feature branches only (e.g. feat/minicpm-audio-output)",
-      "lifecycle": "Archive or delete after upstream PR is merged"
-    }
-  },
-  "cascadeRules": {
-    "_description": "When context changes, propagate to related modules.",
-    "onSubmoduleAdd": {
-      "trigger": "New submodule added",
-      "propagateTo": [
-        "parent"
-      ],
-      "actions": [
-        "Add entry to parent/.gitmodules",
-        "Add entry to parent/.agents/context/agents-rules.json submodules",
-        "Update parent/CLAUDE.md submodule table",
-        "Add category to parent/.agents/context/ai-work-index.yaml (if needed)"
-      ]
-    },
-    "onSubmoduleRemove": {
-      "trigger": "Submodule removed",
-      "propagateTo": [
-        "parent"
-      ],
-      "actions": [
-        "Remove from parent/.gitmodules",
-        "Remove from parent/.agents/context/agents-rules.json submodules",
-        "Remove from parent/CLAUDE.md submodule table"
-      ]
-    },
-    "onRulesChange": {
-      "trigger": ".agents/context/agents-rules.json changed",
-      "propagateTo": [
-        "mirror"
-      ],
-      "actions": [
-        "Sync update .users/context/agents-rules.md (1:1 mirroring)"
-      ]
-    },
-    "onEntryPointChange": {
-      "trigger": "CLAUDE.md or AGENTS.md or GEMINI.md changed",
-      "propagateTo": [
-        "self"
-      ],
-      "actions": [
-        "Treat AGENTS.md as the canonical source. When AGENTS.md changes, copy it to CLAUDE.md and GEMINI.md. When a mirror changes, restore that mirror from AGENTS.md; a tool-specific mirror must never overwrite the canonical contract."
-      ]
-    },
-    "propagationOrder": {
-      "_description": "Propagation order (dependency order)",
-      "order": [
-        "1. self — complete own changes",
-        "2. parent — update parent context",
-        "3. siblings — update referencing sibling modules",
-        "4. children — update referencing child modules",
-        "5. mirror — sync .users/"
-      ]
-    }
-  },
-  "workflows": {
-    "instruction": "Read workflows on demand. Do not load all at once.",
-    "selection_guide": {
-      "reference": ".agents/context/ai-work-index.yaml",
-      "steps": [
-        "Extract keywords from the user request",
-        "Match the category in ai-work-index.yaml",
-        "Read the matching root quick reference first",
-        "Load the workflow document only if the task still needs details"
-      ]
-    },
-    "index": {
-      "submodule_init": "git submodule update --init --recursive",
-      "development_cycle": ".agents/workflows/development-cycle.yaml",
-      "issue_driven_development": ".agents/workflows/issue-driven-development.yaml"
-    }
-  },
-  "context_governance": {
-    "_source": "harness-books Book1 Appendix A.4 (L47-60), absorbed 2026-06-18",
-    "_brief": ".agents/progress/harness-books-integration-findings-2026-06-18.md (section A, gap 2)",
-    "_layer_note": "Runtime context budgeting ONLY. This is the session-window token axis, NOT the naia-memory product axis (long-term / real memory). Do not conflate them: naia-memory decides what to remember across sessions; this decides what to keep live in the current window.",
-    "token_budget_policy": {
-      "on_demand_loading": "Beyond the mandatory session-start reads, load only the project-index.yaml on_demand_loading section needed for the task; never bulk-load a full body context file (matches A.4: separate entrypoint vs body files to prevent index bloat).",
-      "reserve_for_compact": "Reserve compact output space before the window is full — never wait for overflow then handle it as an emergency.",
-      "restore_after_compact": "After compact, reconstruct work semantics: active plan, loaded skills, key files, tool state (post-compact-context.js hook).",
-      "layered_lifetimes": "Keep long-lived rules, persistent memory, session continuity, and temporary dialogue as distinct layers with different entry costs."
-    }
-  }
+	"_copyright": "Copyright 2026 Nextain Inc. All rights reserved.",
+	"project_identity": {
+		"name": "Naia ADK",
+		"nature": "Workspace scaffold + governance baseline for AI-assisted work (public, Apache 2.0)",
+		"philosophy": "Tool-agnostic workspace format; interfaces over runtime coupling; minimum solo governance baseline",
+		"org": "nextain",
+		"repo": "nextain/naia-adk"
+	},
+	"context_boundaries": {
+		"shared_entrypoints_are_indexes": "AGENTS.md is the canonical repository index and CLAUDE.md/GEMINI.md are byte-identical mirrors. Shared entrypoints may contain identity, mandatory index paths, context routing, session-contract locations, and permanent safety boundaries only; never current goals, issue state, implementation plans, completion claims, or artifact wording.",
+		"recovery_mode": "If .codex/no-harness, .claude/no-harness, or .pi/no-harness exists at the repository root, the harness and session-contract mutation requirements are disabled. Work normally under host permissions and repository safety rules; do not create or bind a session contract.",
+		"session_contract_authority": "Outside recovery mode, an UNBOUND session may perform ordinary reversible file creation and editing inside its resolved project boundary. A BOUND contract is required for governance or host-policy files, shared entrypoints, deletion, mutating shell commands, external effects, and any operation that can expand the session's own authority. When bound, the local registry pointer, active contract digest, explicit session_bindings entry, and progress contract reference must all agree. Progress or Markdown session_id fields never grant authority.",
+		"project_isolation": "Never infer a session binding from a parent workspace, child project, or the repository's only unfinished work unit. Concurrent contracts must declare non-overlapping target_ownership paths.",
+		"context_is_not_output": "Background, reference, example, conversation, and internal context constrain reasoning but are not code, UI, or external-document content. Rendering requires explicit atom-level derive, quote, or require authority for a declared output unit and audience.",
+		"source_atom_contract": "Every v2 source atom declares subject, effect, and render_policy. Non-directive source classifications keep directive_ids exactly empty; rendering authority never becomes objective authority.",
+		"output_unit_contract": "Every verifiable v2 output unit declares kind, audience, exposure, objective_atom_ids, and content_source_atom_ids. Agent-workflow background/precondition atoms cannot be shipping content edges."
+	},
+	"local_projects": {
+		"naia-os": {
+			"purpose": "Naia OS desktop app (Tauri 2 + React + Three.js + Node.js agent)",
+			"repo": "nextain/naia-os",
+			"visibility": "public",
+			"entry_point": "naia-os/AGENTS.md"
+		},
+		"issue-desk": {
+			"purpose": "IssueDesk — standalone Vite+React panel for naia-os. GitHub issue/PR triage, community assistant, notification triage.",
+			"repo": "nextain/issue-desk",
+			"visibility": "private",
+			"entry_point": "issue-desk/panel.json",
+			"notes": "Standalone git repo, not a submodule. Design doc: naia-os/docs/design/issue-desk.ko.md"
+		},
+		"about.nextain.io": {
+			"purpose": "Nextain corporate website (Next.js 14 + next-intl)",
+			"repo": "nextain/about.nextain.io",
+			"visibility": "public",
+			"entry_point": "about.nextain.io/README.md"
+		},
+		"naia.nextain.io": {
+			"purpose": "Naia web app / Lab portal (Next.js + BFF for gateway)",
+			"repo": "nextain/naia.nextain.io",
+			"visibility": "private",
+			"entry_point": "naia.nextain.io/AGENTS.md"
+		},
+		"aiedu.nextain.io": {
+			"purpose": "AI education platform — curriculum-driven AI teacher (Next.js + Monaco + Pyodide + any-llm)",
+			"repo": "nextain/aiedu.nextain.io",
+			"visibility": "private",
+			"entry_point": "aiedu.nextain.io/AGENTS.md",
+			"notes": "B2B commercial product. Dual-mirror context. Curriculum as plugin. Depends on any-llm B2B extension."
+		},
+		"admin.nextain.io": {
+			"purpose": "Nextain B2B admin control plane (license key mgmt, token tracking, client mgmt)",
+			"repo": "nextain/admin.nextain.io",
+			"visibility": "private",
+			"entry_point": "admin.nextain.io/AGENTS.md",
+			"notes": "Internal tool. Manages aiedu.nextain.io and future B2B products."
+		}
+	},
+	"infrastructure": {
+		"gateway": {
+			"prod": {
+				"url_env": "GATEWAY_URL — prod gateway base URL, injected per-fork; never committed",
+				"key_env": "GATEWAY_MASTER_KEY",
+				"db": "any-llm gateway DB (Cloud SQL PostgreSQL, region per-fork)"
+			},
+			"dev": {
+				"url_env": "DEV_GATEWAY_URL — dev gateway base URL, injected via .env.local; never committed",
+				"key": "<DEV_GATEWAY_KEY — .env.local 에서 주입, 레포 커밋 금지>",
+				"db": "any-llm gateway dev DB (same instance, separate DB)",
+				"min_instances": 0
+			},
+			"env_rule": ".env.local → dev gateway. .env.production.local → prod gateway. NEVER write prod credentials to .env.local.",
+			"guard_hook": ".claude/hooks/prod-gateway-guard.js — blocks prod credentials in .env.local at Edit|Write time",
+			"sync_script": "project-any-llm/scripts/sync-prod-to-dev.sh — manual only, requires 'yes' confirmation, OVERWRITES all dev data"
+		},
+		"ci_runners": {
+			"self_hosted": {
+				"name": "luke-bazzite",
+				"host": "this Bazzite PC (/opt/actions-runner)",
+				"scope": "nextain org — private repos only (public repos use free GitHub-hosted runners)",
+				"labels": [
+					"self-hosted",
+					"linux",
+					"x64",
+					"bazzite"
+				],
+				"service": "actions.runner.nextain.luke-bazzite.service",
+				"note": "DO NOT attach self-hosted runners to public repos — fork PR security risk",
+				"install_note": "/var/home causes SELinux exec block; always install under /opt/"
+			},
+			"workflow_usage": "runs-on: [self-hosted, linux, x64]"
+		}
+	},
+	"submodules": {
+		"docs-work-logs": {
+			"purpose": "Developer work logs (per-person folders)",
+			"repo": "nextain/docs-work-logs",
+			"visibility": "private",
+			"entry_point": "docs-work-logs/AGENTS.md"
+		},
+		"docs-nextain": {
+			"purpose": "Internal docs (onboarding, meetings, design)",
+			"repo": "nextain/docs-nextain",
+			"visibility": "private",
+			"entry_point": "docs-nextain/AGENTS.md"
+		},
+		"docs-business": {
+			"purpose": "Business docs (proposals, strategy, IR)",
+			"repo": "nextain/docs-business",
+			"visibility": "private",
+			"entry_point": "docs-business/README.md"
+		},
+		"example.com": {
+			"purpose": "Cafelua personal website",
+			"repo": "luke-n-alpha/example-project-private",
+			"visibility": "private",
+			"entry_point": "example.com/README.md"
+		},
+		"project-any-llm": {
+			"purpose": "Any-LLM SDK + FastAPI gateway (LLM proxy, credits, auth, usage tracking)",
+			"repo": "nextain/any-llm",
+			"visibility": "public",
+			"entry_point": "project-any-llm/README.md"
+		}
+	},
+	"reference_submodules": {
+		"_description": "Reference repos for upstream tracking (read-only, periodic sync)",
+		"ref-cline": {
+			"purpose": "Cline upstream reference (VS Code AI extension)",
+			"source": "https://github.com/cline/cline",
+			"usage": "Architecture/pattern reference"
+		},
+		"ref-opencode": {
+			"purpose": "OpenCode reference (TUI-based AI coding agent)",
+			"source": "https://github.com/anomalyco/opencode",
+			"usage": "Architecture/pattern reference for CLI features"
+		},
+		"ref-nanoclaw": {
+			"purpose": "NanoClaw reference (lightweight AI agent framework)",
+			"source": "https://github.com/qwibitai/nanoclaw",
+			"usage": "Agent framework reference"
+		},
+		"ref-moltbot": {
+			"purpose": "Moltbot reference",
+			"source": "https://github.com/moltbot/moltbot",
+			"usage": "Bot framework reference"
+		},
+		"ref-project-airi": {
+			"purpose": "AIRI reference (AI character project)",
+			"source": "https://github.com/moeru-ai/airi",
+			"usage": "AI character/avatar reference"
+		},
+		"ref-jikime-adk": {
+			"purpose": "Jikime ADK reference (Agent Development Kit)",
+			"source": "https://github.com/jikime/jikime-adk",
+			"usage": "Agent development reference"
+		},
+		"ref-jikime-mem": {
+			"purpose": "Jikime Memory reference",
+			"source": "https://github.com/jikime/jikime-mem",
+			"usage": "Memory/RAG reference"
+		}
+	},
+	"architecture_rules": {
+		"modification_levels": {
+			"L1_independent": "docs-work-logs (personal folders)",
+			"L2_conditional": "docs-nextain, docs-business, example.com, project-any-llm"
+		}
+	},
+	"skills": {
+		"read-doc": {
+			"trigger": "MANDATORY — any time a file with extension .hwp, .hwpx, .pdf, .docx, .xlsx, .pptx needs to be read or analyzed",
+			"command": "/read-doc <file-path>",
+			"rule": "NEVER say 'I cannot read this file type'. Always use /read-doc first. The skill handles all extraction automatically.",
+			"sidecar_note": "docs-business HWP/HWPX files have pre-extracted .txt sidecars — /read-doc checks these first automatically",
+			"use_cases": [
+				"docs-business 제안서/사업계획서 분석",
+				"발표 자료(PPTX) 내용 파악",
+				"이력서(DOCX) 검토",
+				"정부과제 제출서류 검토"
+			]
+		},
+		"webapp-testing": {
+			"trigger": "MANDATORY — any E2E test, UI behavior verification, screenshot capture, or console log check for local web apps (naia.nextain.io, about.nextain.io, aiedu.nextain.io, etc.)",
+			"command": "/webapp-testing",
+			"rule": "NEVER ask the user to manually test. Always use this skill to verify directly. Uses Playwright Python scripts.",
+			"use_cases": [
+				"Next.js 앱 E2E 테스트",
+				"UI 동작 검증 (버튼 클릭, 폼 제출 등)",
+				"스크린샷 캡처",
+				"콘솔 로그/에러 확인"
+			]
+		},
+		"doc-coauthoring": {
+			"trigger": "MANDATORY — any request to write a structured document: tech spec, proposal, RFC, design doc, PRD, decision record",
+			"command": "/doc-coauthoring",
+			"rule": "Invoke before writing the document. 3-stage workflow: context collection → structured writing → reader test.",
+			"use_cases": [
+				"기술 스펙 작성",
+				"제안서/IR 문서",
+				"RFC / 설계 결정 기록",
+				"GitHub Issue 기반 기능 설계 스펙"
+			]
+		}
+	},
+	"ai_workflow": {
+		"knowledge_principle": "AI knowledge = Developer knowledge (1:1 parity)",
+		"default_workflow": "issue-driven-development.yaml (feature-level work)",
+		"lightweight_workflow": "development-cycle.yaml (non-feature changes: typos, config values, simple directives)",
+		"documentation_impact_policy": {
+			"purpose": "A production change is not complete until its impact on all three documentation audiences is decided and evidenced.",
+			"targets": {
+				"repository_docs": "Repository-facing behavior, contracts, architecture, verification, and contributor guidance.",
+				"user_manual": "User-facing setup, operation, discovery, privacy, and known limitations.",
+				"reusable_learning": "Evidence-backed principles or case studies reusable beyond the changed product."
+			},
+			"allowed_statuses": [
+				"UPDATED",
+				"N/A"
+			],
+			"updated_evidence": "List changed local files or immutable external commit URLs.",
+			"na_evidence": "Give a concrete applicability rationale; bare 'not relevant' is invalid.",
+			"applicability": {
+				"full_review": "User behavior, public API or wire contract, permissions, privacy, safety, availability, or cross-repository schema changes.",
+				"existing_contract_fix": "A regression fix may mark new scenario/requirement documents N/A only when it links the existing IDs and adds regression evidence.",
+				"behavior_preserving": "Refactor, test-only, generated, formatting, comment, or lockfile-only changes may use N/A with a concrete reason.",
+				"reusable_learning_threshold": "Update only when the lesson is reusable, non-duplicative, backed by an immutable source, and states its validation limits."
+			},
+			"receipt": "Use one tracked, per-issue JSON receipt. New or migrated template-based projects define its path and enforce it in local hooks and CI; existing projects require an explicit project migration before claiming machine enforcement.",
+			"completion_rule": "The receipt is finalized during Sync, checked again during Sync Verify, included in Report, and required before Commit."
+		},
+		"permission_model": {
+			"code_files": "AI = implementer. Can read, modify, create, delete freely.",
+			"design_docs": "AI = reviewer by default. It may modify a design document without asking again when the user's current bounded request explicitly asks to create, update, or record that document and does not leave a material design choice unresolved. Otherwise only typo/grammar, internal contradiction, or broken link/reference corrections are autonomous.",
+			"design_doc_paths": [
+				"docs/design/",
+				"design/",
+				"spec/"
+			],
+			"design_doc_extensions": [
+				".md",
+				".txt",
+				".yaml",
+				".json"
+			],
+			"note": "Any file matching these path prefixes + extensions is treated as a design doc. Hook enforces this at Edit|Write time.",
+			"bounded_recording_exception": "An explicit request to write or update the design record is already authority for that bounded recording work; the agent may activate the temporary design-doc edit marker, perform the requested edit, and close the marker without another approval prompt.",
+			"material_decision_boundary": "Ask when the edit would choose or change a product, architecture, interface, policy, destructive disposition, or scope decision not determined by the request. Never silently rewrite design to match implementation.",
+			"key_distinction": "Code review clean pass = no code issues. Design doc review clean pass = no NEW findings (typos/contradictions/broken links). Never: 'design should match implementation'."
+		},
+		"routine_execution_authority": {
+			"principle": "Once the user authorizes an objective and scope, carry out normal in-scope execution without recurring approval prompts.",
+			"routine_steps": [
+				"Read-only inspection, local investigation, and evidence collection",
+				"In-scope implementation, dependency installation, formatting, tests, builds, and local servers",
+				"Non-destructive Git fetch, pull, merge, worktree creation, stage, commit, and non-force non-deleting push",
+				"Delegation to subagents for bounded roles already inside the authorized objective"
+			],
+			"delegation_inheritance": "Every subagent, delegated agent, and nested delegate inherits the same authorized objective, scope, routine-step authority, and exception boundary. A delegate must not ask again for a routine step merely because execution moved to another agent or session.",
+			"ask_only_for": [
+				"Irreversible deletion or destructive history rewriting, including remote-ref deletion and force push",
+				"Unrelated-histories or otherwise exceptional forced integration",
+				"External messages, publication outside the authorized repository workflow, payments, or purchases",
+				"Production deployment, destructive production or shared-database mutation, credentials disclosure, or material cloud cost",
+				"A missing user choice that would materially expand or change the authorized objective or scope"
+			],
+			"clarification_rule": "Do not turn workflow checkpoints, tool permissions, session boundaries, or delegation boundaries into repeated conversational approval gates. Keep product and scope decision gates when the answer can materially change the result; otherwise proceed and report evidence."
+		},
+		"escalation_path": {
+			"design_gap_found_during_build": [
+				"1. Do NOT modify the design doc to match implementation",
+				"2. Do NOT silently adapt implementation to paper over the gap",
+				"3. Surface to user: state the gap (design says X, implementation does Y), present options (A: update design, B: fix implementation, C: accept as intentional deviation)",
+				"4. Wait for user decision before proceeding"
+			],
+			"design_flaw_found_during_review": [
+				"1. Report to user: 'Found potential design issue at [file:line]: [description]'",
+				"2. Propose: 'Options: A) fix typo/grammar (allowed), B) this is a design decision I should not change — your call'",
+				"3. Do not make the change until user confirms it's (A)"
+			]
+		},
+		"mandatory_pre_checks": [
+			"Read agents-rules.json first",
+			"When working in submodule, read its entry point file",
+			"For feature-level work: follow issue-driven-development.yaml material-decision checkpoints (understand → scope → plan); an explicit bounded request proceeds without repeated confirmation, while an unresolved choice that materially changes the result must be asked",
+			"Apply minimal-change principles",
+			"For any .hwp/.hwpx/.pdf/.docx/.xlsx/.pptx file: use /read-doc skill FIRST — never claim inability to read documents",
+			"Design docs (docs/design/, spec/, design/) + extensions (.md/.txt/.yaml/.json): see permission_model above. Hook fires on edits — surface reason to user first.",
+			"Before running destructive git commands (git checkout --, git reset --hard, git clean -f): ALWAYS ask user for explicit confirmation first. State exactly what will be deleted. No exceptions.",
+			"Before a material, irreversible, ambiguous, or out-of-scope deletion: understand the exact target and impact, preserve a recovery path where practical, and get user confirmation. Agent-owned temporary/work artifact cleanup and a user-requested bounded recoverable deletion may proceed without repeated approval after exact-target verification. (see dead_code_safety)"
+		],
+		"completeness_principle": {
+			"statement": "AI marginal cost ≈ 0 — when approved to build something, build it completely (all edge cases, error handling, tests included).",
+			"three_principles_distinction": {
+				"no_autonomous_development": "WHAT to build = user decides. Never add features or scope without asking.",
+				"minimal_modification": "HOW FAR to deviate from upstream = minimize. For fork-based work: overlay custom changes with minimal delta from upstream.",
+				"completeness": "QUALITY of approved work = complete. If user approves X, implement X fully. Option A (complete) vs Option B (partial) → always recommend A unless user explicitly asks for partial."
+			},
+			"boilable_lake_rule": "A bounded, scoped module is 'boilable'. If scope is finite, implement it completely. Never deliver partial when complete costs AI nothing extra."
+		},
+		"dead_code_safety": {
+			"statement": "Dead/unused code, branches, files, and artifacts are NOT harmless. The AI's assumption that 'this seems unused, so removing/ignoring it is safe' is frequently wrong: deletion is irreversible, and orphaned dead code misleads the next session into treating it as normal. Default to RISK-assumption, not harmlessness.",
+			"rules": [
+				"Do not casually delete OR ignore dead/unused code, branches, or files.",
+				"Before material, irreversible, ambiguous, or out-of-scope deletion: (1) understand WHY it is dead (2) resolve the exact target and impact (3) preserve a recovery path where practical (4) get explicit user confirmation.",
+				"Agent-owned temporary/work artifacts with an explicit lifecycle may be cleaned up after exact-target verification without another prompt.",
+				"A user-requested bounded recoverable deletion is already authorized; verify the exact target stays inside scope, then execute without repeated approval."
+			],
+			"rationale": "Known AI cognitive bias: underweighting the risk of dead code. Same root cause as the 'recurring-symptom misclassification' failure pattern (treating a re-appearing issue as a new, separate one)."
+		},
+		"ask_user_question_format": {
+			"description": "Standard structure for user-facing decision questions (gates, options, scope choices). Makes trade-offs explicit.",
+			"structure": [
+				"1. Re-ground (1-2 sentences): state the project, current phase, and specific question in plain terms",
+				"2. Simplify: ask without jargon — as if explaining to a non-engineer",
+				"3. Recommend: explicit recommendation with completeness score (1-10) + AI time + human review time",
+				"4. Options: lettered A/B/C, each with effort estimate + completeness score + one-sentence trade-off"
+			],
+			"example": "RECOMMENDATION: A (completeness 9/10 | AI: ~30min | review: ~10min)\nA) Full implementation — all edge cases covered [completeness 9/10]\nB) Minimal — ships faster, revisit later [completeness 5/10]"
+		},
+		"review_skill": "Use '/review-pass stage=planning|development|test|integration files=...' for stage-specific multi-AI cross-validation review. REQ-IDs required for feature-level work. Simple changes (lightweight cycle: <3 files, single module) skip REQ-ID creation. Read .agents/requirements/_index.yaml when entering Plan or Review phases.",
+		"requirements_management": {
+			"storage": ".agents/requirements/",
+			"index": ".agents/requirements/_index.yaml",
+			"load_timing": "on-demand when entering Plan or Review phases (NOT session-injected)",
+			"req_id_threshold": "Feature-level work only. Lightweight cycle changes (typos, config, <3 files, single module) skip REQ-ID creation.",
+			"source_authority": {
+				"candidate": "Code is source of truth. Requirements are descriptive (derived from existing code).",
+				"human": "Requirements are normative. Code must conform.",
+				"default": "When requirements conflict with code: candidate→code wins, human→REQ wins."
+			},
+			"retrofitted_requirements": "Always status: candidate. Require explicit human promotion to active/verified.",
+			"dual_mirror": "Requirements live in .agents/requirements/ ONLY (no .users/ mirror). Use title_ko field for Korean title.",
+			"trace_format": "Use file + symbol references. Never hardcode line numbers (they rot immediately)."
+		},
+		"submodule_rule": "Each submodule has own rules. Read entry_point before modifications.",
+		"routine_action_authorization": {
+			"unbound_routine_commands": {
+				"_doc": "기본은 허용이다. 계약은 되돌리기 어려운 일에만 요구한다. push 와 이슈·PR 생성은 배포와 협업의 일상이므로 허용하고, 히스토리 재작성·강제 갱신·삭제·권한 상승처럼 되돌릴 수 없는 형태만 계약을 요구한다. 판정은 명령을 문장 단위로 나눠 각 조각에 적용하며, 하나라도 걸리면 그 호출은 계약을 요구한다.",
+				"default": "allow",
+				"contract_required_heads": {
+					"_doc": "명령 자체가 되돌리기 어렵다.",
+					"destructive_filesystem": [
+						"rm",
+						"rmdir",
+						"shred",
+						"truncate",
+						"dd",
+						"mkfs",
+						"mkswap",
+						"fdisk",
+						"parted",
+						"wipefs"
+					],
+					"privilege_and_system": [
+						"sudo",
+						"su",
+						"doas",
+						"systemctl",
+						"service",
+						"mount",
+						"umount",
+						"chown",
+						"chmod",
+						"chgrp",
+						"setcap",
+						"modprobe",
+						"insmod",
+						"rmmod",
+						"reboot",
+						"shutdown",
+						"poweroff",
+						"halt",
+						"kill",
+						"pkill",
+						"killall"
+					],
+					"remote_transfer": [
+						"ssh",
+						"scp",
+						"sftp",
+						"rsync",
+						"nc",
+						"ncat",
+						"telnet"
+					],
+					"package_publication": [
+						"twine"
+					]
+				},
+				"contract_required_subcommands": {
+					"_doc": "도구는 일상적이지만 특정 하위명령이 되돌리기 어렵다.",
+					"git": [
+						"reset",
+						"clean",
+						"filter-branch",
+						"filter-repo",
+						"gc",
+						"prune",
+						"reflog"
+					],
+					"gh": [
+						"delete",
+						"transfer",
+						"archive",
+						"unarchive",
+						"rename"
+					],
+					"glab": [
+						"delete"
+					],
+					"npm": [
+						"publish",
+						"unpublish",
+						"deprecate",
+						"owner",
+						"access",
+						"token"
+					],
+					"pnpm": [
+						"publish",
+						"unpublish"
+					],
+					"yarn": [
+						"publish",
+						"npm"
+					],
+					"cargo": [
+						"publish",
+						"yank",
+						"owner",
+						"login"
+					],
+					"go": [
+						"install",
+						"clean"
+					],
+					"pip": [
+						"install",
+						"uninstall"
+					],
+					"pip3": [
+						"install",
+						"uninstall"
+					],
+					"uv": [
+						"publish"
+					],
+					"poetry": [
+						"publish"
+					],
+					"docker": [
+						"push",
+						"rmi",
+						"system",
+						"volume",
+						"network"
+					],
+					"podman": [
+						"push",
+						"rmi",
+						"system",
+						"volume",
+						"network"
+					],
+					"kubectl": [
+						"apply",
+						"delete",
+						"create",
+						"patch",
+						"replace",
+						"scale",
+						"drain",
+						"cordon",
+						"rollout"
+					],
+					"helm": [
+						"install",
+						"upgrade",
+						"uninstall",
+						"rollback"
+					],
+					"terraform": [
+						"apply",
+						"destroy",
+						"import",
+						"taint"
+					],
+					"gcloud": [
+						"deploy",
+						"delete",
+						"create",
+						"update",
+						"remove",
+						"set",
+						"add",
+						"import",
+						"enable",
+						"disable"
+					],
+					"aws": [
+						"rm",
+						"mv",
+						"sync",
+						"cp",
+						"delete",
+						"terminate",
+						"put",
+						"create",
+						"modify",
+						"update"
+					],
+					"az": [
+						"create",
+						"delete",
+						"update",
+						"set",
+						"start",
+						"stop",
+						"restart",
+						"deploy"
+					],
+					"vercel": [
+						"deploy",
+						"promote",
+						"rollback",
+						"alias",
+						"env",
+						"domains",
+						"certs"
+					],
+					"flyctl": [
+						"deploy",
+						"destroy",
+						"scale",
+						"secrets"
+					],
+					"fly": [
+						"deploy",
+						"destroy",
+						"scale",
+						"secrets"
+					],
+					"systemd": [
+						"start",
+						"stop",
+						"restart",
+						"enable",
+						"disable"
+					]
+				},
+				"contract_required_patterns": {
+					"_doc": "형태로만 구분되는 것들. 정규식 문자열이며 대소문자를 구분하지 않는다.",
+					"patterns": [
+						"(?:^|\\s)curl\\b[^\\n]*(?:\\s-X\\s*(?:POST|PUT|PATCH|DELETE)|\\s--request\\s|\\s-d\\b|\\s--data|\\s-T\\b|\\s--upload-file|\\s-F\\b|\\s--form|\\s-o\\b|\\s-O\\b|\\s--output\\b|\\s--remote-name\\b)",
+						"(?:^|\\s)wget\\b[^\\n]*(?:--post-data|--post-file|--method\\s*=?\\s*(?:POST|PUT|DELETE)|\\s-O\\b|\\s--output-document)",
+						"(?:^|\\s)gh\\s+api\\b[^\\n]*(?:-X\\s*(?:POST|PUT|PATCH|DELETE)|--method\\s*(?:POST|PUT|PATCH|DELETE)|\\s-f\\s|--field)",
+						"(?:^|\\s)git\\s[^\\n]*(?:--force\\b|--force-with-lease\\b)",
+						"(?:^|\\s)git\\s+branch\\b[^\\n]*\\s-D\\b",
+						"(?:^|\\s)(?:npm|pnpm|yarn)\\s+(?:install|add)\\b[^\\n]*(?:\\s-g\\b|--global)",
+						"(?:^|\\s)mv\\s+[^\\n]*\\s/(?:etc|usr|bin|sbin|var|boot|dev|proc|sys)\\b",
+						"(?:^|\\s)(?:tee|dd)\\s+[^\\n]*/(?:etc|usr|bin|sbin|boot)\\b"
+					]
+				},
+				"unsafe_forms_still_refused": {
+					"_doc": "명령 치환이나 인터프리터 경유는 위 판정을 숨긴다. 위험해서가 아니라 판정을 무의미하게 만들기 때문에 계약을 요구한다. 단순 변수 참조는 허용한다.",
+					"forms": [
+						"command_substitution",
+						"eval",
+						"xargs",
+						"shell_dash_c",
+						"nested_model_runtime"
+					]
+				},
+				"still_requires_contract": "governance 및 host-policy 파일 변경, 공유 진입점 변경, 세션 계약과 registry 변경은 명령과 무관하게 계약을 요구한다."
+			}
+		}
+	},
+	"financial_integrity": {
+		"cost_estimation_first": "Before performing any large-scale cloud operations, the agent MUST estimate the potential cost and obtain explicit user approval.",
+		"expensive_operations_blacklist": [
+			"GCS: Data movement > 10GB or API ops > 1,000 via mount points (e.g., rsync via gcsfuse)",
+			"GCE: Provisioning high-tier GPU instances (A100, H100, etc.)",
+			"Vertex AI/LLM: Massive batch inference or fine-tuning jobs",
+			"Cloud SQL: Massive data migrations or large-scale index rebuilds"
+		],
+		"resource_awareness": "Always monitor Class A/B API operation counts for GCS and egress traffic costs for GCE/Cloud Run."
+	},
+	"language_harness": {
+		"no_korean_in_agents": "Strictly prohibit Korean characters in .agents/ directory to optimize token usage. All context files here must be in concise English.",
+		"concise_session_output": "AI responses should be extremely brief (less than 3 lines) to minimize history weight. Avoid long Korean preambles."
+	},
+	"conventions": {
+		"response_language": "Korean (한국어로 응답)",
+		"development_approach": "Issue-driven development (default). TDD where applicable.",
+		"test_code_review": "After writing tests, never trust results blindly. Review test logic itself with iterative review (2 consecutive clean passes) before trusting outcomes. Signs of invalid tests: assertions that always pass, mocked internals that diverge from real behavior, missing negative cases.",
+		"tmp_files": {
+			"rule": "All temporary/debug/scratch scripts MUST be created inside tmp/ at the root of the active working directory. NEVER create tmp-* or tmp_* files in the repo root or subproject roots.",
+			"gitignore": "tmp/, tmp-*, tmp_* are gitignored at root. Files placed there are never tracked.",
+			"naming": "Use descriptive names inside tmp/ (e.g. tmp/check-db.php, tmp/debug-redis.sh) — no tmp- prefix needed since the directory provides the namespace."
+		},
+		"work_logs": "Don't modify unless explicitly requested",
+		"workfile_lifecycle": {
+			"principle": "All work files (progress reports, scratch scripts, temp data) MUST follow explicit lifecycle. No accumulation without policy.",
+			"directories": {
+				".agents/context/": "Permanent context (on_demand loaded). Long-lived. In-place corrections only. Never delete.",
+				".agents/progress/": "Active work reports + completed reports. JSON files = harness 1st-class (session-inject reads). MD reports = lifecycle-tracked.",
+				".agents/progress/archive/YYYY-MM/": "Completed reports moved here (preserved + searchable). readdirSync skips subdirs = automatically excluded from session-inject/commit-guard active set.",
+				".agents/work/": "Temporary work scripts. gitignored at root (.gitignore: .agents/work/). User-managed cleanup (no AI auto-delete).",
+				"tmp/, tmp-*, tmp_*": "Debug/scratch (see tmp_files above). gitignored."
+			},
+			"handoff_documents": {
+				"policy": "Local-only session or PC transfer artifacts. Never stage or commit them because stale handoff state can misdirect another machine or session.",
+				"cross_machine": "Cross-machine continuation uses a remote GitHub issue plus reachable branch or commit SHAs as the only handoff boundary. Record durable scope, invariants, current state, validation, and blockers there; never transfer local session IDs, registry pointers, session maps, runtime contracts, progress/handoff files, harness units, credentials, or host-local receipts through Git.",
+				"location": "Use .agents/work/, .agents/progress/, .agents/reviews/, tmp/, or a dedicated ignored .handoff/ or .handover/ directory. Topic-prefixed local notes such as project-handoff belong only in one of these ignored locations.",
+				"naming": "A global local-only artifact basename starts with handoff or handover. Topic-prefixed formal documents remain trackable outside ignored local-artifact directories.",
+				"boundary": "Durable handoff or handover guides and contracts under official docs/, spec/, design/, .agents/context/, or .agents/decisions/ directories remain trackable even when their basename starts with handoff or handover. Other durable project knowledge belongs in tracked context, requirements, decisions, or formal docs; do not disguise permanent documentation as a local handoff artifact."
+			},
+			"completion_criteria": "A work file is 'complete' when 2+ of: (a) related code committed/pushed to origin, (b) user explicitly declares done/closed, (c) cross-review GO + user acceptance, (d) superseded by next-step plan/issue. AI self-declaring 'complete' is prohibited.",
+			"triggers": {
+				"work_start": "Create or update one progress file (1 per work, not 1 per session).",
+				"session_end_or_milestone": "Add status line ('✅ done' / '⏳ in-progress' / '🔴 blocked').",
+				"after_commit_push": "Move that work's progress to .agents/progress/archive/YYYY-MM/ (selective — mention in commit message).",
+				"monthly_cleanup": "Review 30+ day progress files; archive completed or inline-resolve.",
+				"work_30d": ".agents/work/ 30+ day = user-decided deletion (volatile by design)."
+			},
+			"naming": "Existing convention: <topic>-YYYY-MM-DD.md OR <issue-slug>.json (naia-adk progress pattern). On archive: move only (no rename) to preserve cross-references.",
+			"archive_unit": "Archive MD/JSON pair together (same base name). If JSON has current_phase != close, set to close OR unbind before move — otherwise session-inject still treats it active.",
+			"inbound_references": "Default: allow link breakage on archive (archived = historical). On case-by-case need: leave 1-line stub at original path. No automatic archive index — over-engineering.",
+			"harness_scope_asymmetry": "session-inject collects cwd + IMMEDIATE child subdirs only. 2nd-level subs not scanned. commit-guard scans cwd only. Policy applies repo-wide as convention but ENFORCEMENT range is root + direct children. 2nd-level subs need own hooks for enforcement.",
+			"session_map_cleanup": "On archive: .agents/progress/.session-map.json entries pointing to archived files become stale. session-inject auto-prunes on next run, but explicit cleanup is cleaner."
+		},
+		"git_workflow": {
+			"maintainer_rule": "Luke is a maintainer of all Nextain repos. NEVER create PRs for Nextain repos — commit and push directly to main (or the relevant branch). PRs are for external contributors only.",
+			"pr_prohibition": "DO NOT run `gh pr create` for nextain/* repos. The pr-guard hook will block this automatically.",
+			"owned_repo_posting_authority": "When the user explicitly requests an issue, comment, release note, or other repository post in a Nextain or user-owned/managed repository, that request is posting authority and does not require a second approval. Unsolicited posts and third-party/community posts remain external actions requiring reviewed-content approval."
+		},
+		"external_repo_policy": {
+			"principle": "Information gathering first before action on third-party or community repositories; this policy does not add a second approval to an explicitly requested post in a Nextain or user-owned/managed repository",
+			"steps": [
+				"1. Read CONTRIBUTING.md / contributing guide of the external repo",
+				"2. Search existing issues and PRs to avoid duplicates",
+				"3. Study code patterns and conventions used in the repo",
+				"4. Prototype and validate internally before reaching out",
+				"5. Draft issue/PR content and show to user for review",
+				"6. Get explicit user approval before posting anything"
+			],
+			"community_context_first": "Before engaging in any external community (repo, Discord, Slack, forum, etc.), gather context first: (1) communication tone — formal/casual, terse/verbose, (2) explicit rules — CoC, PR/issue templates, labeling conventions, (3) community tendencies — what they value, what they reject, how they respond to outsiders, who the influential members are, what past interactions look like",
+			"rule": "Never post unsolicited content or issues, PRs, or comments to third-party/community repositories without explicit user approval of the reviewed content. An explicitly requested post to a Nextain or user-owned/managed repository is already authorized.",
+			"tone_matching": "Technical issues and PRs are read by people. Write in a tone that fits the community's atmosphere — not just technically correct, but culturally appropriate. A dry RFC-style community expects concise technical prose; a friendly community expects warmth. Match the room.",
+			"ai_disclosure": "When posting AI-assisted content to external repos, always include a disclosure footer: state it was written with AI assistance AND provide a contact point for the developer in case of issues (e.g. '🤖 Written with AI assistance. If anything looks off, please ping @luke-n-alpha or open a discussion.'). Transparency and accountability both required. [HOOK-ENFORCED 2026-05-16: .claude/hooks/pr-guard.js — 외부 repo content op(gh issue/pr create·comment, pr review, release create) 시 disclosure footer(🤖/AI assistance) 미포함이면 차단(OSS-access 마커 소비 전). 내부 nextain/* 면제. merge/reopen/edit 등 비-content op 면제.]"
+		},
+		"contribution_fork_policy": {
+			"account": "Use nextain org (e.g. nextain/vllm) — this is an official Nextain-backed contribution, not a personal side project",
+			"naming": "Same name as upstream repo — no prefix",
+			"readme_required": "Every contribution fork MUST have a README clearly stating: (1) this is a contribution fork, not a hard fork, (2) upstream repo link, (3) what feature/fix is being contributed, (4) current status (in progress / PR submitted / merged), (5) contact: @luke-n-alpha",
+			"repo_description": "Set GitHub repo description to: 'Contribution fork — [feature] upstream PR in progress. See [upstream url]'",
+			"branch_strategy": {
+				"main": "fork main = upstream main + AGENTS.md (AI context, version controlled here)",
+				"feature": "feature branch = based on upstream main, code changes only — NEVER add AGENTS.md here",
+				"pr": "PR = feature branch → upstream. AGENTS.md is on main only, so it is automatically excluded from the PR diff"
+			},
+			"main_sync": "Keep main branch in sync with upstream at all times (rebase or merge upstream main regularly)",
+			"work_branch": "All work on feature branches only (e.g. feat/minicpm-audio-output)",
+			"lifecycle": "Archive or delete after upstream PR is merged"
+		}
+	},
+	"cascadeRules": {
+		"_description": "When context changes, propagate to related modules.",
+		"onSubmoduleAdd": {
+			"trigger": "New submodule added",
+			"propagateTo": [
+				"parent"
+			],
+			"actions": [
+				"Add entry to parent/.gitmodules",
+				"Add entry to parent/.agents/context/agents-rules.json submodules",
+				"Update parent/CLAUDE.md submodule table",
+				"Add category to parent/.agents/context/ai-work-index.yaml (if needed)"
+			]
+		},
+		"onSubmoduleRemove": {
+			"trigger": "Submodule removed",
+			"propagateTo": [
+				"parent"
+			],
+			"actions": [
+				"Remove from parent/.gitmodules",
+				"Remove from parent/.agents/context/agents-rules.json submodules",
+				"Remove from parent/CLAUDE.md submodule table"
+			]
+		},
+		"onRulesChange": {
+			"trigger": ".agents/context/agents-rules.json changed",
+			"propagateTo": [
+				"mirror"
+			],
+			"actions": [
+				"Sync update .users/context/agents-rules.md (1:1 mirroring)"
+			]
+		},
+		"onEntryPointChange": {
+			"trigger": "CLAUDE.md or AGENTS.md or GEMINI.md changed",
+			"propagateTo": [
+				"self"
+			],
+			"actions": [
+				"Treat AGENTS.md as the canonical source. When AGENTS.md changes, copy it to CLAUDE.md and GEMINI.md. When a mirror changes, restore that mirror from AGENTS.md; a tool-specific mirror must never overwrite the canonical contract."
+			]
+		},
+		"propagationOrder": {
+			"_description": "Propagation order (dependency order)",
+			"order": [
+				"1. self — complete own changes",
+				"2. parent — update parent context",
+				"3. siblings — update referencing sibling modules",
+				"4. children — update referencing child modules",
+				"5. mirror — sync .users/"
+			]
+		}
+	},
+	"workflows": {
+		"instruction": "Read workflows on demand. Do not load all at once.",
+		"selection_guide": {
+			"reference": ".agents/context/ai-work-index.yaml",
+			"steps": [
+				"Extract keywords from the user request",
+				"Match the category in ai-work-index.yaml",
+				"Read the matching root quick reference first",
+				"Load the workflow document only if the task still needs details"
+			]
+		},
+		"index": {
+			"submodule_init": "git submodule update --init --recursive",
+			"development_cycle": ".agents/workflows/development-cycle.yaml",
+			"issue_driven_development": ".agents/workflows/issue-driven-development.yaml"
+		}
+	},
+	"context_governance": {
+		"_source": "harness-books Book1 Appendix A.4 (L47-60), absorbed 2026-06-18",
+		"_brief": ".agents/progress/harness-books-integration-findings-2026-06-18.md (section A, gap 2)",
+		"_layer_note": "Runtime context budgeting ONLY. This is the session-window token axis, NOT the naia-memory product axis (long-term / real memory). Do not conflate them: naia-memory decides what to remember across sessions; this decides what to keep live in the current window.",
+		"token_budget_policy": {
+			"on_demand_loading": "Beyond the mandatory session-start reads, load only the project-index.yaml on_demand_loading section needed for the task; never bulk-load a full body context file (matches A.4: separate entrypoint vs body files to prevent index bloat).",
+			"reserve_for_compact": "Reserve compact output space before the window is full — never wait for overflow then handle it as an emergency.",
+			"restore_after_compact": "After compact, reconstruct work semantics: active plan, loaded skills, key files, tool state (post-compact-context.js hook).",
+			"layered_lifetimes": "Keep long-lived rules, persistent memory, session continuity, and temporary dialogue as distinct layers with different entry costs."
+		}
+	}
 }

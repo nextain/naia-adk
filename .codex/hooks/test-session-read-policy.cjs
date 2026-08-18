@@ -79,3 +79,58 @@ try {
 }
 
 console.log("session read policy: PASS");
+
+// Investigation commands that enforcement refused in practice on 2026-08-18,
+// each for a different reason: a pipe inside a quoted pattern was treated as a
+// statement separator, jq/sed/find were absent from the read vocabulary, and
+// discarding stderr counted as a redirection.
+for (const command of [
+	"rg -n 'record_id|midi_pitch' manifest.json",
+	"jq '.records[] | {record_id}' manifest.json",
+	"sed -n '1,220p' contract.json",
+	"find projects -type f -iname '*.wav' 2>/dev/null | tail -30",
+	"find . -name '*.json' -printf '%p\\n'",
+	"sort names.txt | uniq -c | head",
+	"du -sh data 2>/dev/null",
+	"sha256sum audio.wav",
+]) assert.equal(policy.readOnlyShell(command, repositoryRoot), true, command);
+
+// The widened vocabulary must not rescue the writing forms of the same tools.
+for (const command of [
+	"sed -i 's/a/b/' file.json",
+	"find . -name '*.tmp' -delete",
+	"find . -exec rm {} ;",
+	"jq . in.json > out.json",
+	"sort names.txt -o names.txt",
+	"cat template > rendered.md",
+]) assert.equal(policy.readOnlyShell(command, repositoryRoot), false, command);
+
+// Quote-aware splitting must still see real separators outside quotes.
+assert.deepEqual(policy.splitStatements("rg 'a|b' f | head -3"), ["rg 'a|b' f", "head -3"]);
+assert.deepEqual(policy.splitStatements("cat a; rm b"), ["cat a", "rm b"]);
+assert.equal(policy.readOnlyShell("rg 'a|b' f | rm -rf x", repositoryRoot), false);
+
+
+// The runtime check used to match the name anywhere in the string, so any path
+// containing it was read as a launch: inspecting ~/.config/opencode, or grepping
+// that directory, was refused as a nested runtime.
+for (const command of [
+	"ls -la /var/home/luke/.config/opencode",
+	"rg -l 'deepseek' /var/home/luke/.config/opencode | head -80",
+	"cat ~/.codex/config.toml",
+	"find . -path '*/claude/*' -name '*.json'",
+]) assert.equal(policy.nestedModelRuntimeCommand(command), false, `path mention is not a launch: ${command}`);
+
+// The executable position, however it is spelled, still is.
+for (const command of [
+	"opencode run task", "codex exec task", "claude -p hi", "/usr/bin/codex exec task",
+	"opencode-ai run", "echo hi | codex exec x", "bash -c 'opencode run task'",
+	"npx @anthropic-ai/claude-code --help", "npx @openai/codex-cli",
+]) assert.equal(policy.nestedModelRuntimeCommand(command), true, `launch stays refused: ${command}`);
+
+// Asking what a runtime can do starts no session.
+for (const command of ["opencode models azure", "codex --version", "claude --help", "opencode auth status"]) {
+	assert.equal(policy.nestedModelRuntimeCommand(command), false, `introspection allowed: ${command}`);
+}
+assert.equal(policy.nestedModelRuntimeCommand("opencode models && codex exec x"), true,
+	"introspection does not carry a launch joined onto it");
