@@ -194,3 +194,6 @@ scripts/triage/
 # 워크스페이스 UUID(개인 식별자) 비추적
 .naia/
 .agents/research/**/.align-audit-stamp.json
+
+# 하네스가 무엇을 거부했는지의 기록 (진단용, 기계마다 다름)
+.agents/harness-blocks.jsonl

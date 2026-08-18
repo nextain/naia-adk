@@ -14,6 +14,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 const { STATES, orchestratorFallbackAccess, resolveSessionContract } = require("./session-contract.js");
+const harnessSwitch = require("./harness-switch.js");
 
 const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
 const HARNESS_OFF_VALUES = new Set(["off", "0", "false", "no"]);
@@ -194,7 +195,9 @@ function buildSessionInject(opts) {
 	// Opt-out: env var or marker file
 	const envFlag = (env[optOutEnvVar] || "").trim().toLowerCase();
 	if (HARNESS_OFF_VALUES.has(envFlag)) return null;
-	if (fs.existsSync(path.join(cwd, hostConfigDir, "no-harness"))) return null;
+	// Walks upward: a marker at the repository root also disables enforcement
+	// for a session whose cwd is a sub-project.
+	if (harnessSwitch.findHarnessMarker({ cwd, configDirs: [hostConfigDir] })) return null;
 
 	const resolution = resolveSessionContract({
 		cwd,

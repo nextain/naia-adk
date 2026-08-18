@@ -8,6 +8,8 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const sessionContract = require("../../.agents/hooks/core/session-contract.js");
+const harnessSwitch = require("../../.agents/hooks/core/harness-switch.js");
+const blockLog = require("../../.agents/hooks/core/harness-block-log.js");
 const sessionRecovery = require("../../.agents/harness/session-contract-recovery.cjs");
 const {
 	executableReadCommand,
@@ -410,7 +412,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	const toolName = data.tool_name || "";
 	const toolInput = data.tool_input || {};
 	if (HARNESS_ENV_VARS.some((name) => HARNESS_OFF.has((env[name] || "").trim().toLowerCase()))) return null;
-	if (HARNESS_CONFIG_DIRS.some((dir) => fs.existsSync(path.join(cwd, dir, "no-harness")))) return null;
+	if (harnessSwitch.findHarnessMarker({ cwd, configDirs: HARNESS_CONFIG_DIRS })) return null;
 	if (!sessionId) return null;
 	if (!sessionContract.findProjectRoot(cwd)) {
 		// cwd cannot be resolved to a governed project root (host-reported cwd
@@ -539,7 +541,15 @@ function main() {
 	try { data = JSON.parse(raw || "{}"); } catch { /* fail-open */ }
 	sessionRecovery.handleEvent("PreToolUse", raw, data.cwd || process.cwd());
 	const output = decide(data);
-	if (output) process.stdout.write(JSON.stringify(output));
+	if (output) {
+		// One line on disk per refusal, so "the harness blocked my session" is
+		// answerable from the repository instead of from the operator's screen.
+		blockLog.record({
+			hook: "session-contract-gate", tool: data.tool_name, cwd: data.cwd,
+			sessionId: data.session_id, toolInput: data.tool_input, reason: output.reason,
+		});
+		process.stdout.write(JSON.stringify(output));
+	}
 }
 
 if (require.main === module) main();

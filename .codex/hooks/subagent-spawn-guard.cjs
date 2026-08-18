@@ -5,6 +5,7 @@ const path = require("node:path");
 const contracts = require("../../.agents/hooks/core/session-contract.js");
 const usage = require("../../scripts/codex-lineage-usage.cjs");
 const { issueFailureReceipt } = require("../../.agents/hooks/core/subagent-failure-receipt.js");
+const blockLog = require("../../.agents/hooks/core/harness-block-log.js");
 
 // collaborationspawn_agent is the name the Windows Codex host actually passes
 // to hooks — flattened, no separator — captured from a live run.
@@ -396,10 +397,23 @@ async function main() {
 	const result = input.hook_event_name === "PostToolUse"
 		? evaluateResult({ ...args, toolResponse: input.tool_response })
 		: evaluate(args);
-	if (result) process.stdout.write(JSON.stringify(result));
+	if (result) {
+		blockLog.record({
+			hook: "subagent-spawn-guard", tool: input.tool_name, cwd: input.cwd,
+			sessionId: input.session_id, toolInput: input.tool_input, reason: result.reason,
+		});
+		process.stdout.write(JSON.stringify(result));
+	}
 }
 
-if (require.main === module) main().catch(() => process.stdout.write(JSON.stringify(block("guard error; denied"))));
+if (require.main === module) {
+	main().catch((error) => {
+		// The refusal text alone ("guard error") says nothing about what threw.
+		// Keep the stack so the next occurrence is diagnosable from the repository.
+		blockLog.record({ hook: "subagent-spawn-guard", tool: null, cwd: process.cwd(), reason: `guard error: ${(error && error.stack) || error}` });
+		process.stdout.write(JSON.stringify(block("guard error; denied")));
+	});
+}
 
 module.exports = {
 	EXACT_VALIDATOR_ROLES,

@@ -3,7 +3,9 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const contracts = require("../../.agents/hooks/core/session-contract.js");
+const harnessSwitch = require("../../.agents/hooks/core/harness-switch.js");
 const usage = require("../../scripts/codex-lineage-usage.cjs");
+const blockLog = require("../../.agents/hooks/core/harness-block-log.js");
 
 // Same opt-out the session-contract gate and harness core honor. Without it
 // this guard stayed live after an operator disabled the harness, so a session
@@ -14,10 +16,7 @@ const HARNESS_ENV_VARS = ["AI_HARNESS", "CLAUDE_HARNESS", "CODEX_HARNESS"];
 const HARNESS_CONFIG_DIRS = [".claude", ".codex", ".pi"];
 
 function harnessDisabled({ env = null, roots = [] } = {}) {
-	if (env && HARNESS_ENV_VARS.some((name) => HARNESS_OFF.has(String(env[name] || "").trim().toLowerCase()))) return true;
-	return roots.filter(Boolean).some((root) =>
-		HARNESS_CONFIG_DIRS.some((dir) => fs.existsSync(path.join(root, dir, "no-harness"))),
-	);
+	return harnessSwitch.harnessDisabled({ roots, env, envVars: HARNESS_ENV_VARS, configDirs: HARNESS_CONFIG_DIRS });
 }
 
 function block(reason) {
@@ -93,9 +92,22 @@ async function main() {
 		cwd: input.cwd || process.cwd(),
 		env: process.env,
 	});
-	if (result) process.stdout.write(JSON.stringify(result));
+	if (result) {
+		blockLog.record({
+			hook: "codex-cost-guard", tool: input.tool_name, cwd: input.cwd,
+			sessionId: input.session_id, toolInput: input.tool_input, reason: result.reason,
+		});
+		process.stdout.write(JSON.stringify(result));
+	}
 }
 
-if (require.main === module) main().catch(() => process.stdout.write(JSON.stringify(block("guard error; denied"))));
+if (require.main === module) {
+	main().catch((error) => {
+		// The refusal text alone ("guard error") says nothing about what threw.
+		// Keep the stack so the next occurrence is diagnosable from the repository.
+		blockLog.record({ hook: "codex-cost-guard", tool: null, cwd: process.cwd(), reason: `guard error: ${(error && error.stack) || error}` });
+		process.stdout.write(JSON.stringify(block("guard error; denied")));
+	});
+}
 
 module.exports = { block, evaluate, harnessDisabled };

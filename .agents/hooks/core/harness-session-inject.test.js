@@ -39,6 +39,7 @@ function workspace() {
 		".agents/hooks/core/request-contract-events.js",
 		".agents/hooks/core/request-contract-event-handler.js",
 		".agents/hooks/core/session-contract.js",
+		".agents/hooks/core/harness-switch.js",
 		".agents/hooks/core/subagent-failure-receipt.js",
 		".codex/hooks/session-inject.cjs",
 		".claude/hooks/session-inject.js",

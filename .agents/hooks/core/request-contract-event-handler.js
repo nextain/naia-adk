@@ -1,4 +1,7 @@
 "use strict";
+// Injected api carries no marker lookup; required directly so the repository-root
+// no-harness marker also applies to sub-project working directories.
+const harnessSwitch = require("./harness-switch.js");
 module.exports = function createRequestContractModule(api) {
 const {
 	fs, path, CLASSIFICATIONS, REQUIRED_CLIENT_EVENTS, CONTROL_INPUT_NAMES, sha256, opaqueId, canonicalJson,
@@ -103,7 +106,7 @@ function clientRegistrySupports(cwd, client) {
 
 function hostHarnessDisabled(cwd, client) {
 	const hostConfigDir = client === "claude" ? ".claude" : client === "codex" ? ".codex" : null;
-	return hostConfigDir !== null && fs.existsSync(path.join(cwd, hostConfigDir, "no-harness"));
+	return hostConfigDir !== null && harnessSwitch.findHarnessMarker({ cwd, configDirs: [hostConfigDir] }) !== null;
 }
 
 function assertSupportedClient(cwd, client, version) {
