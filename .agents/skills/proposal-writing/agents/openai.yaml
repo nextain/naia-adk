@@ -1,0 +1,4 @@
+interface:
+  display_name: "제안서 작성"
+  short_description: "양식 분석부터 근거 보강·적대 검토·HWPX 납품까지"
+  default_prompt: "Use $proposal-writing to analyze the official form and produce an evidence-based proposal without inventing missing facts."

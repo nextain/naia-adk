@@ -76,9 +76,10 @@ carries one line per skill saying what it does and when to reach for it. The
 list below is that index's table of contents.
 
 **Documents and outward work** — things a person will read.
-`doc-coauthoring` (specs, proposals, design documents), `read-doc`,
-`translate-doc`, `press-release`, `weekly-report`, `copyright-reg`,
-`patent-draft` and `patent-pipeline`, `youtube-upload` (video and subtitles).
+`doc-coauthoring` (specs and design documents), `proposal-writing`, `read-doc`,
+`translate-doc`, `press-release`, `weekly-report`, `document-generation` (branded
+PDFs and digital signatures), `copyright-reg`, `patent-draft` and
+`patent-pipeline`, `youtube-upload` (video and subtitles).
 
 **Running the workspace** — the hands that touch the repository itself.
 `project-create`, `project-migration`, `merge-worktree`, `migrate-ctx`,
@@ -88,12 +89,16 @@ encrypted secret vault.
 **Verification gates** — the places that ask for evidence instead of a claim.
 `verify-implementation`, `verify-contract-conformance`,
 `verify-request-contract`, `verify-product-preservation`,
-`verify-benchmark-contract`, `verify-review-gate`, `webapp-testing`, and
-`review-pass` for adversarial review.
+`verify-benchmark-contract`, `verify-review-gate`, `verify-build` (does it
+actually build), `verify-conflict-markers`, `verify-i18n` and
+`verify-hardcoded-strings` (are the strings where they belong), `webapp-testing`,
+and `review-pass` for adversarial review.
 
 **Operations and experiments** — work that reaches outside or handles models.
-`manage-discord-sessions` for the Discord gateway, `payroll`, and
-`finetune-persona` for character LoRA training.
+`manage-discord-sessions` for the Discord gateway, `channel-management`,
+`service-management` (uptime, cost, incidents), `web-monitoring`, `email`, `sms`,
+`upstream-pr-review` (a floor before anything goes to an OSS maintainer),
+`payroll`, and `finetune-persona` for character LoRA training.
 
 Start a new skill from `SKILL_TEMPLATE.md`, and add its line to the index once
 it exists. When the index drifts from the tree, the next session rebuilds a
