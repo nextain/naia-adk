@@ -6,10 +6,6 @@ export const CREDENTIAL_PROFILES = Object.freeze({
 		kind: "file",
 		source: [".local", "share", "com.vercel.cli", "auth.json"],
 		target: { base: "xdgData", parts: ["com.vercel.cli", "auth.json"] },
-		executableDirectories: Object.freeze([
-			Object.freeze({ base: "absolute", path: "/home/linuxbrew/.linuxbrew/bin" }),
-			Object.freeze({ base: "absolute", path: "/var/home/linuxbrew/.linuxbrew/bin" }),
-		]),
 		env: Object.freeze({ VERCEL_TELEMETRY_DISABLED: "1" }),
 		label: "Vercel authentication",
 	}),
@@ -17,10 +13,6 @@ export const CREDENTIAL_PROFILES = Object.freeze({
 		kind: "file",
 		source: [".config", "gh", "hosts.yml"],
 		target: { base: "xdgConfig", parts: ["gh", "hosts.yml"] },
-		executableDirectories: Object.freeze([
-			Object.freeze({ base: "absolute", path: "/home/linuxbrew/.linuxbrew/bin" }),
-			Object.freeze({ base: "absolute", path: "/var/home/linuxbrew/.linuxbrew/bin" }),
-		]),
 		label: "GitHub CLI authentication",
 	}),
 	"ssh-onmam": Object.freeze({
@@ -47,10 +39,6 @@ export const CREDENTIAL_PROFILES = Object.freeze({
 		source: [".azure"],
 		target: { base: "home", parts: [".azure"] },
 		exclude: Object.freeze(["logs", "cache", "surface_data"]),
-		executableDirectories: Object.freeze([
-			Object.freeze({ base: "absolute", path: "/home/linuxbrew/.linuxbrew/bin" }),
-			Object.freeze({ base: "absolute", path: "/var/home/linuxbrew/.linuxbrew/bin" }),
-		]),
 		envPath: Object.freeze({ AZURE_CONFIG_DIR: "target" }),
 		label: "Azure CLI authentication",
 	}),
@@ -67,7 +55,23 @@ export function validateCredentialProfiles(value, label = "credential profiles")
 	return [...value];
 }
 
-export function credentialProfileExecutableDirectories(value, { homeDirectory } = {}) {
+/**
+ * Toolchain bin directories that belong to the host, not to this registry.
+ *
+ * Where a package manager installs its binaries differs per machine, so the
+ * registry cannot name those paths without pinning one person's layout — and
+ * committing an absolute home path to a public repository leaks it. The host
+ * declares them instead, colon-separated, and anything that is not an absolute
+ * path is ignored.
+ */
+export function hostExecutableDirectories(env = process.env) {
+	return String(env.NAIA_DISCORD_EXECUTABLE_DIRS ?? "")
+		.split(":")
+		.map((value) => value.trim())
+		.filter((value) => value.startsWith("/"));
+}
+
+export function credentialProfileExecutableDirectories(value, { homeDirectory, env = process.env } = {}) {
 	const profiles = validateCredentialProfiles(value, "executable credential profiles");
 	if (typeof homeDirectory !== "string" || !homeDirectory.startsWith("/")) throw new Error("credential executable home directory must be absolute");
 	const directories = [];
@@ -78,5 +82,5 @@ export function credentialProfileExecutableDirectories(value, { homeDirectory } 
 			else throw new Error("credential executable directory descriptor is invalid");
 		}
 	}
-	return [...new Set(directories)];
+	return [...new Set([...directories, ...hostExecutableDirectories(env)])];
 }
