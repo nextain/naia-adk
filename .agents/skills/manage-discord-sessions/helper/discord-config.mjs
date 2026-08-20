@@ -94,7 +94,7 @@ export function loadMessengerConfig(path) {
 		[config.persona, ["name", "instructions"], "persona"],
 		[config.role, ["name", "allowedActions", "requiresApproval"], "role"],
 		[config.backend, ["selected", "profiles"], "backend"],
-		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent", "participantProfiles"], "discord"],
+		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent", "participantProfiles", "proactiveDmRecipientUserId"], "discord"],
 		[config.runtime ?? {}, ["softSilenceSeconds", "heartbeatSeconds", "maxConcurrentJobs", "approvalPolicy", "permissionProfileEpoch", "noProgressInterventionSeconds", "operatorResponseSeconds", "networkAccess", "credentialProfiles", "accessProfile"], "runtime"],
 		[config.observability ?? {}, ["discordStatusProjection"], "observability"],
 		[config.service ?? {}, ["autoStart", "startAt"], "service"],
@@ -127,6 +127,15 @@ export function loadMessengerConfig(path) {
 	config.discord.operatorUserIds = [...new Set(config.discord.operatorUserIds ?? [])];
 	config.discord.operatorUserIds.forEach((value) => snowflake(value, "operator Discord ID"));
 	if (config.discord.messageContentIntent !== undefined && typeof config.discord.messageContentIntent !== "boolean") throw new Error("messageContentIntent must be boolean");
+	// 모델이 스스로 보내겠다고 한 DM 이 실제로 갈 수 있는 단 한 사람. 설정하지
+	// 않으면 그 기능은 꺼진 채로 둔다 — 기본 수신자를 코드에 박아 두면 그 저장소를
+	// 받은 모든 사람의 봇이 남의 계정으로 DM 을 보내려 든다.
+	if (config.discord.proactiveDmRecipientUserId !== undefined) {
+		snowflake(config.discord.proactiveDmRecipientUserId, "proactive DM recipient Discord ID");
+		if (!config.discord.operatorUserIds.includes(config.discord.proactiveDmRecipientUserId)) {
+			throw new Error("proactive DM recipient must be one of the configured operators");
+		}
+	}
 	config.discord.bindings = validateDiscordBindings(config.discord.bindings, { messageContentIntent: config.discord.messageContentIntent === true, schemaVersion: config.schemaVersion });
 	const globalActions = config.role.allowedActions.filter((action) => !(config.role.requiresApproval ?? []).includes(action));
 	if (config.schemaVersion === 2) {

@@ -5,7 +5,7 @@ import { discordRequestText, transientPrompt } from "../helper/discord-router.mj
 import { renderParticipantConversation } from "../helper/discord-conversation.mjs";
 
 const BOT = "1534135048046116864";
-const USER = "865850174651498506";
+const USER = "100000000000000001";
 const CHANNEL = "1489634850116735176";
 const MESSAGE = "1539796771872448603";
 const ATTACHMENT = "1539796771331985429";
