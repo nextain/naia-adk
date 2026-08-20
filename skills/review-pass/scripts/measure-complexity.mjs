@@ -50,7 +50,10 @@ function decodeUtf8(bytes, label) {
 }
 
 function gitPathList(root, args) {
-	const bytes = execFileSync("git", ["-C", root, ...args], { stdio: ["ignore", "pipe", "pipe"] });
+	const bytes = execFileSync("git", ["-C", root, ...args], {
+		stdio: ["ignore", "pipe", "pipe"],
+		maxBuffer: MAX_REPOSITORY_PATCH_BYTES,
+	});
 	const records = [];
 	let start = 0;
 	for (let index = 0; index <= bytes.length; index += 1) {
@@ -151,7 +154,11 @@ export function measureComplexity({ path, content, addedLines = 0, waiver = null
 }
 
 function git(root, args) {
-	return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	return execFileSync("git", ["-C", root, ...args], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+		maxBuffer: MAX_REPOSITORY_PATCH_BYTES,
+	});
 }
 
 function assertRepositoryRoot(root, base) {

@@ -22,7 +22,9 @@ After convergence or budget exceeded:
 **Duration**: {elapsed_time}
 
 ### Summary
-- CONFIRMED findings: {n} (all auto-fixed with diff)
+- Consensus-CONFIRMED findings: {n}
+- Evidence verdicts: ACCEPTED {accepted_n}, REJECTED {rejected_n}, UNRESOLVED {unresolved_n}
+- Auto-fixed: {fixed_n} (evidence-ACCEPTED only, diff attached)
 - CONTESTED resolved: {n} ({via_arbiter} by arbiter, {via_user} by user)
 - Remaining escalations: {n}
 - Blocking vetoes: {n}
@@ -32,6 +34,11 @@ After convergence or budget exceeded:
 ### Complexity Inventory
 | File | Lines | Added | Script result | Waiver reason check | Required action |
 |------|------:|------:|---------------|---------------------|-----------------|
+
+### Finding Evidence Ledger
+| Claim | Assumptions | Evidence checked | Status | Rationale | Action |
+|-------|-------------|------------------|--------|-----------|--------|
+| ... | ... | ... | ACCEPTED / REJECTED / UNRESOLVED | ... | ... |
 
 ### REQ-ID Coverage (if applicable)
 - REQ-001: COVERED (src/file.ts:SymbolName)
@@ -65,13 +72,16 @@ After convergence or budget exceeded:
 If the conflict is answerable by reading an external spec, standard, or upstream
 source code — it is **NOT** an escalation. Research it and fix directly.
 
-**Auto-fix** (no user needed):
+**Auto-fix candidates** (no user needed only after primary-evidence validation returns `ACCEPTED`):
 - Wrong logic, off-by-one, missing null check
 - Convention violations (verifiable by reading project config)
 - Missing error handling
 - Test that doesn't actually test what it claims
 - Unused imports, dead code
 - Behavior-preserving decomposition of complexity introduced by the current change, with before/after tests and no public-contract change
+
+Consensus alone never authorizes a modification. `REJECTED` is recorded without changing files.
+`UNRESOLVED` blocks CLEAN and delivery unless the governing authority explicitly defers that exact finding.
 
 **Escalate** (user decision needed):
 - Business logic direction (A vs B approach)
@@ -102,7 +112,7 @@ The orchestrator must NOT choose light mode autonomously.
 ## 15. Delivery Gate
 
 - `CLEAN` plus current, trusted preservation evidence yields `RELEASE_ELIGIBLE` only after every REQUIRED control is implemented and verified. A generic runtime Clean does not override a PENDING preservation control.
-- Any missing input, unresolved finding, veto, failed probe, budget exhaustion, or insufficient
+- Any missing input, evidence-`UNRESOLVED` finding, veto, failed probe, budget exhaustion, or insufficient
   reviewer-role separation yields `NOT_CLEAN` and `REVIEW_ONLY`.
 - `REVIEW_ONLY` may be committed locally as a checkpoint. Remote review-branch push is publication
   and is forbidden until an exact signed checkpoint-publication operation is implemented and tested.

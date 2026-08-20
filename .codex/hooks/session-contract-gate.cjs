@@ -400,6 +400,35 @@ function reclaimCommandAllowed(command, sessionId) {
 	return Boolean(match && match[2] === sessionId);
 }
 
+/**
+ * Recording an approval must not need the authority it is about to grant.
+ *
+ * A session that is stuck asks a third party — a human, a reviewer, a
+ * supervising agent — to approve its recovery. If the shell policy blocks the
+ * command that writes that approval, the only way out of a bad binding runs
+ * through the binding itself, and an unattended runtime never gets out. The
+ * helper validates the authority, scope and expiry on its own; the gate only
+ * has to let it be called in exactly this shape.
+ */
+function approvalCommandAllowed(command) {
+	const source = String(command || "").trim();
+	return /^node\s+["']?(?:\.\/)?\.agents[\\/]harness[\\/]session-contract-recovery\.cjs["']?\s+approve\s+--contract\s+[A-Za-z0-9][A-Za-z0-9._-]{0,199}\s+--authority\s+["']?[A-Za-z0-9_]+:[A-Za-z0-9._-]{1,199}["']?\s+--scope\s+[A-Za-z0-9_]{1,64}\s+--reason\s+.{1,500}$/.test(source);
+}
+
+/**
+ * Whether a shell command is trying to rewrite this session's own binding.
+ *
+ * Used only to answer better when refusing. The gate cannot verify the contents
+ * of an arbitrary shell write, so it still refuses — but "declare it in
+ * allowed_shell_commands" is not an exit when the file being written is the
+ * contract that carries that list. The message has to name a door that opens.
+ */
+function touchesOwnBindingFiles(command) {
+	const source = String(command || "");
+	return /\.agents[\\/](?:session-contracts|progress)[\\/]/.test(source)
+		|| /\.session-map\.json/.test(source);
+}
+
 function decide(data = {}, env = process.env, dependencies = {}) {
 	const resolveHookProjectRoot = dependencies.resolveHookProjectRoot || sessionContract.resolveHookProjectRoot;
 	const resolveSessionContract = dependencies.resolveSessionContract || sessionContract.resolveSessionContract;
@@ -430,6 +459,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 		};
 	}
 	if (normalizedToolName(toolName) === "shell" && reclaimCommandAllowed(toolInput.command, sessionId)) return null;
+	if (normalizedToolName(toolName) === "shell" && approvalCommandAllowed(toolInput.command)) return null;
 	if (normalizedToolName(toolName) === "shell" && nestedModelRuntimeCommand(toolInput.command)) {
 		return {
 			decision: "block",
@@ -514,7 +544,12 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 			if (!readOnly &&
 				!(resolution.contract.allowed_shell_commands || []).includes(command) &&
 				!gitIntegration) {
-				return { decision: "block", reason: "⛔ [HARNESS] 변경 가능 셸 명령이 계약의 allowed_shell_commands에 정확히 선언되지 않았습니다." };
+				return {
+					decision: "block",
+					reason: touchesOwnBindingFiles(command)
+						? "⛔ [HARNESS] 셸로는 자기 계약·progress·registry 를 고칠 수 없습니다. 게이트가 셸 명령의 결과를 확인할 수 없기 때문입니다. 파일 쓰기 도구(write/edit/apply_patch)로 같은 변경을 하면 계약↔progress↔registry 정합성을 검사한 뒤 통과합니다. 세션이 죽은 계약을 넘겨받아야 하면 `node .agents/harness/session-contract-recovery.cjs reclaim --contract <id> --session <현재 세션 id>` 를, 제3자 승인이 필요하면 같은 헬퍼의 approve 를 쓰십시오."
+						: "⛔ [HARNESS] 변경 가능 셸 명령이 계약의 allowed_shell_commands에 정확히 선언되지 않았습니다.",
+				};
 			}
 		}
 		return null;
