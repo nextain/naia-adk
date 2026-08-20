@@ -66,9 +66,10 @@ AI 에이전트가 곧바로 일할 수 있도록, 자리가 정해진 디렉터
 아래는 그 목차입니다.
 
 **문서와 대외 산출물** — 사람이 읽을 것을 만드는 일입니다.
-`doc-coauthoring`(스펙·제안서·설계 문서), `read-doc`, `translate-doc`,
-`press-release`, `weekly-report`, `copyright-reg`(저작권 등록 서류),
-`patent-draft`와 `patent-pipeline`(특허 명세), `youtube-upload`(영상과 자막 게시).
+`doc-coauthoring`(스펙·설계 문서), `proposal-writing`(제안서), `read-doc`,
+`translate-doc`, `press-release`, `weekly-report`, `document-generation`(브랜드
+PDF와 전자서명), `copyright-reg`(저작권 등록 서류), `patent-draft`와
+`patent-pipeline`(특허 명세), `youtube-upload`(영상과 자막 게시).
 
 **워크스페이스를 굴리는 일** — 저장소 자체를 다루는 손입니다.
 `project-create`, `project-migration`, `merge-worktree`, `migrate-ctx`,
@@ -78,10 +79,14 @@ AI 에이전트가 곧바로 일할 수 있도록, 자리가 정해진 디렉터
 **검증 게이트** — 통과했다는 말 대신 증거를 요구하는 자리입니다.
 `verify-implementation`, `verify-contract-conformance`, `verify-request-contract`,
 `verify-product-preservation`, `verify-benchmark-contract`, `verify-review-gate`,
-`webapp-testing`, 그리고 적대적 검토를 붙이는 `review-pass`.
+`verify-build`(빌드가 실제로 되는가), `verify-conflict-markers`(충돌 마커가 남았는가),
+`verify-i18n`과 `verify-hardcoded-strings`(문자열이 제자리에 있는가), `webapp-testing`,
+그리고 적대적 검토를 붙이는 `review-pass`.
 
 **운영과 실험** — 바깥과 닿거나 모델을 다루는 일입니다.
-`manage-discord-sessions`(디스코드 게이트웨이 운영), `payroll`,
+`manage-discord-sessions`(디스코드 게이트웨이 운영), `channel-management`,
+`service-management`(가동과 비용, 장애 대응), `web-monitoring`, `email`, `sms`,
+`upstream-pr-review`(오픈소스에 내보내기 전 점검), `payroll`,
 `finetune-persona`(캐릭터 LoRA 학습).
 
 스킬을 새로 만들 때는 `SKILL_TEMPLATE.md`에서 시작하고, 만든 뒤에는 색인에도

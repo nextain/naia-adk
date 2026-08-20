@@ -1,0 +1,6 @@
+{
+  "name": "@naia-adk-b/skill-document-generation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Document generation skill (contract, resolution, payroll PDFs)"
+}

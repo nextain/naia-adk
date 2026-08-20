@@ -187,3 +187,76 @@ skills:
     arg: "[--video --srt --thumb --desc --privacy]"
     scripts: [scripts/youtube_auth.py, scripts/youtube_upload.py, scripts/youtube_privacy.py]
     notes: "자격증명은 홈의 .youtube/ 에 두고 절대 커밋하지 않는다. 새 PC 는 Console 을 다시 거치지 말고 data-private 볼트의 key/youtube-client-secret.json 을 받아 쓴다. 링크 공유는 unlisted — private 는 지정 계정만 열린다"
+
+  verify-build:
+    trigger: "빌드 단계 완료 후, PR 전"
+    what: "프로젝트 빌드를 실제로 돌려 컴파일·타입 오류가 없는지 확인"
+    arg: ""
+    scripts: []
+
+  verify-conflict-markers:
+    trigger: "커밋 전, 빌드 전, PR 전"
+    what: "staged·추적 파일에 남은 git 충돌 마커를 찾는다"
+    arg: ""
+    scripts: []
+
+  verify-hardcoded-strings:
+    trigger: "naia-os shell 수정 후"
+    what: "UI 컴포넌트에 박힌 문자열(비영어 텍스트·에러 메시지)을 찾는다"
+    arg: ""
+    scripts: []
+
+  verify-i18n:
+    trigger: "신규 IPC 핸들러나 사용자 메시지 추가 후"
+    what: "naia-agent IPC 메시지와 REPL 출력이 i18n 키를 제대로 쓰는지 확인"
+    arg: ""
+    scripts: []
+
+  upstream-pr-review:
+    trigger: "오픈소스 업스트림 PR 제출 전"
+    what: "유지보수자에게 닿기 전에 AI 특유의 군더더기·범위 확대·죽은 코드를 걸러낸다. 포크마다 규칙을 덧붙여 쓴다"
+    arg: ""
+    scripts: []
+
+  channel-management:
+    trigger: "채널 생성·아카이브·공지, Discord/Slack 채널 정리"
+    what: "Discord·Slack 채널을 만들고 닫고 공지하고 요약한다"
+    arg: ""
+    scripts: []
+
+  service-management:
+    trigger: "배포된 서비스 상태 점검, 비용 추적, 장애 대응"
+    what: "가동 확인·비용 추적·인시던트 대응을 한 자리에서"
+    arg: ""
+    scripts: []
+
+  web-monitoring:
+    trigger: "SEO·가동·분석·경쟁사 확인"
+    what: "웹 노출 상태를 관찰한다"
+    arg: ""
+    scripts: []
+
+  email:
+    trigger: "메일 보내, 첨부해서 발송, SMTP"
+    what: "SMTP 어댑터로 메일을 보낸다. 템플릿·첨부(PDF/이미지)·HTML 본문 지원"
+    arg: ""
+    scripts: []
+
+  sms:
+    trigger: "문자 보내, 알림톡, SMS"
+    what: "게이트웨이 어댑터로 문자를 보낸다"
+    arg: ""
+    scripts: []
+
+  document-generation:
+    trigger: "계약서·의사록·급여명세 PDF 생성, 전자서명 문서"
+    what: "브랜드가 입혀진 업무 문서를 PDF 로 만든다. 필요하면 PAdES 전자서명까지"
+    arg: ""
+    scripts: []
+
+  proposal-writing:
+    trigger: "제안서 작성, 사업계획서 작성, 지원서 양식 채우기, 공고 기반 신청서, 심사자 관점 보강"
+    what: "공식 양식 역분해 → 근거 수집 → 흐름 작성 → 데이터 보강 → 적대 검토·재조사 반복 → 원본 양식 기반 HWPX 납품"
+    arg: "[공고·양식 경로] [회사·프로젝트 범위]"
+    scripts: [convert_hwp_to_hwpx.ps1]
+    note: "근거 없는 내용은 작성 금지. 미확인 값은 질문으로 남김. 공고가 HWP 원본을 강제하면 HWPX는 검토·이식용으로만 사용."

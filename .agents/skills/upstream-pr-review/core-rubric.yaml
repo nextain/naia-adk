@@ -1,0 +1,144 @@
+# Generic OSS upstream PR review rubric — 15 items.
+# Project-specific items live in <fork>/.claude/skills/upstream-pr-review-<project>/project-rubric.yaml
+#
+# ID stability: IDs are immutable once published. Deprecation only via `status: deprecated`. Never reuse / renumber.
+# Severity → action mapping:
+#   blocker FAIL = 발송 차단
+#   major FAIL = 경고 (사용자 결정)
+#   minor FAIL = info
+#   UNKNOWN = warn (not block)
+
+version: "1.0"
+items:
+
+  # ════════ SCOPE (3) ════════
+
+  - id: SCOPE-1
+    title: "All changed files within stated PR purpose"
+    evidence: "git diff --name-only $TARGET..$HEAD"
+    pass: "no files outside stated scope"
+    fail_signals:
+      - "files maintainer flagged 'irrelevant' in feedback-archive"
+      - "fork-internal noise paths (configurable per fork)"
+    severity: blocker
+    fix_template: "Move out-of-scope changes to a separate PR or revert."
+
+  - id: SCOPE-2
+    title: "PR size reasonable (no scope-creep mega-PR)"
+    evidence: "git diff --stat $TARGET..$HEAD | tail -1"
+    pass: "< 2000 LOC OR explicit 'large model addition' purpose"
+    fail_signals: ["> 5000 LOC without 'add new model' in purpose"]
+    severity: major
+    fix_template: "Consider splitting into multiple sequential PRs."
+
+  - id: SCOPE-3
+    title: "No fork-internal artifacts in PR"
+    evidence: "list of changed files vs fork-noise-paths.yaml"
+    pass: "no .agents/, .users/, MEMORY.md, internal docs"
+    fail_signals:
+      - ".agents/, .users/, MEMORY.md, CLAUDE.md modified"
+      - "fork-only README variants (README.ko.md, README.upstream.md)"
+      - "internal tooling not part of project (e.g., diagnose_*.py)"
+    severity: blocker
+    fix_template: "Branch off upstream/main and exclude fork-internal paths via cherry-pick."
+
+  # ════════ AISLOP (3) ════════
+
+  - id: AISLOP-1
+    title: "Commit history shows single-purpose intent (or one squash)"
+    evidence: "git log --oneline $TARGET..$HEAD"
+    pass: "<= 3 commits OR squashed-by-purpose"
+    fail_signals:
+      - "review-iteration commit messages ('Pass N', 'fix v2', 'cleanup', '재시도')"
+      - "internal terminology leaked"
+      - "10+ commits all touching same area"
+    severity: major
+    fix_template: "git rebase -i $TARGET to squash review iterations into purpose-driven commits."
+
+  - id: AISLOP-2
+    title: "No AI-tooling identifier leakage in commits"
+    evidence: "git log --all --format=%B $TARGET..$HEAD | grep -ic 'co-authored-by:.*claude\\|co-authored-by:.*gpt\\|co-authored-by:.*copilot'"
+    pass: "AI co-author tag at most on 1 squash-merge commit"
+    fail_signals: ["Co-Authored-By: <AI> on >50% of commits"]
+    severity: major
+    fix_template: "Remove AI co-authoring from individual commits; keep only on merge commit if at all."
+
+  - id: AISLOP-3
+    title: "No skill/rubric output text in PR-facing surfaces (self-test)"
+    evidence: "search PR description draft, recent commit messages, review reply text for rubric ID patterns"
+    pass: "no rubric IDs, no skill terminology, no AI iteration phrasing in any PR-facing text"
+    fail_signals:
+      - "'SCOPE-1', 'AISLOP-', 'Pass N', 'review iteration' in commit messages or PR description"
+      - "phrases like '13 rounds of adversarial review' visible to upstream"
+    severity: major
+    fix_template: "Rewrite affected text as natural prose. Audit is internal."
+
+  # ════════ MECH (3) ════════
+
+  - id: MECH-1
+    title: "PR description follows project's PR template"
+    evidence: "PULL_REQUEST_TEMPLATE.md checklist items vs PR description draft"
+    pass: "Purpose / Test Plan / Test Result sections filled"
+    fail_signals: ["empty section", "missing checklist item"]
+    severity: major
+
+  - id: MECH-2
+    title: "No basic merge conflicts vs target branch"
+    evidence: "git fetch upstream && git merge-base --is-ancestor upstream/main HEAD || git rebase --dry-run"
+    pass: "clean rebase against upstream/main"
+    severity: blocker
+    fix_template: "git fetch upstream && git rebase upstream/main; resolve conflicts."
+
+  - id: MECH-3
+    title: "Commit messages follow project convention (tag/category prefix)"
+    evidence: "git log --oneline $TARGET..$HEAD vs project's recent merged PR titles"
+    pass: "tag prefix matches project (e.g., [Model], [Bugfix], [Refactor])"
+    fail_signals: ["conventional-commits style on a project that uses [TAG] style", "no prefix at all"]
+    severity: minor
+
+  # ════════ DUPL (1) ════════
+
+  - id: DUPL-1
+    title: "New helpers not duplicating sibling implementations"
+    evidence: "manual: each new helper compared to sibling models in the project"
+    pass: "model-specific OR shared utility extracted to common module"
+    fail_signals:
+      - "commit message mentions 'mirrors helper from <sibling>' without extracting"
+      - "private copy of a public utility"
+    severity: major
+    fix_template: "Extract to common utils OR justify model-specific divergence in code comment."
+
+  # ════════ QUALITY (2) ════════
+
+  - id: QUALITY-1
+    title: "No obvious dead code (unused imports, orphan helpers, commented-out blocks)"
+    evidence: "ruff/eslint/equivalent on changed files; manual scan for orphan helpers"
+    pass: "linter-clean on PR diff; no unreachable functions"
+    severity: major
+
+  - id: QUALITY-2
+    title: "Defensive over-coding limited (no schema-redundant runtime checks)"
+    evidence: "manual review of try/except blocks, hasattr guards, isinstance fences"
+    pass: "schema-guaranteed values not re-checked at runtime"
+    fail_signals: ["try/except around code that cannot fail in observed paths"]
+    severity: minor
+
+  # ════════ DOC (3) ════════
+
+  - id: DOC-1
+    title: "Public API additions documented (docstrings on new public surface)"
+    evidence: "grep for new `def `/`class ` in public namespaces; check docstring presence"
+    pass: "docstring exists and matches signature/behavior"
+    severity: major
+
+  - id: DOC-2
+    title: "No misleading / stale comments"
+    evidence: "manual review of changed comments"
+    pass: "comments match current code; no internal terminology ('Pass N', 'Phase Xd')"
+    severity: minor
+
+  - id: DOC-3
+    title: "Tests / examples for new public surface"
+    evidence: "tests/ or examples/ touched if new public function/class added"
+    pass: "at least one test or example per new public surface"
+    severity: major
