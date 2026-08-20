@@ -54,6 +54,10 @@ specific destructive-change warning. A solo CRITICAL preservation, scope, author
 or release finding is a blocking veto until the evidence is corrected or the user grants
 surface-specific authority.
 
+`CONFIRMED` is deliberately only a consensus label. Consensus, severity, repetition,
+unanimity, model reputation, and arbiter output do not authorize a code change and do not
+substitute for independent primary-evidence validation.
+
 ---
 
 ## 5. Arbitration Protocol
@@ -101,8 +105,8 @@ for the named `replace|remove|disable|redirect|migrate` disposition.
    Parse output for: CONFIRMED or DISMISSED + rationale
 
 3. Apply decision:
-   CONFIRMED → add to confirmed list for auto-fix
-   DISMISSED → add to known_issues with suppress_hash
+   CONFIRMED → add to the evidence-validation queue
+   DISMISSED → record the arbitration result, then validate its premise before suppression
 ```
 
 ### 5.3 When No Arbiter Is Immediately Available
@@ -112,6 +116,26 @@ requirements, code, and test evidence; then retry with an independent arbiter ou
 reviewer pool. Evidence-confirmed in-scope defects are auto-fixed and re-reviewed. Ask the
 user only when evidence cannot resolve a material design, business, product, scope, authority,
 or irreversible/external-impact decision.
+
+### 5.4 Independent Primary-Evidence Gate
+
+Every finding selected by consensus, arbitration, or deterministic checking is still an
+untrusted hypothesis. Before modification, the orchestrator must:
+
+1. Record the claim and all assumptions on which it depends.
+2. Identify the applicable authority order from explicit user intent, normative requirements,
+   current runtime/data, current code, and descriptive plans.
+3. Inspect primary evidence independently; reviewer or arbiter prose is not evidence.
+4. Assign exactly one final status:
+   - `ACCEPTED`: reproduced or directly supported by authoritative evidence.
+   - `REJECTED`: contradicted, out of scope, or based on a false premise.
+   - `UNRESOLVED`: evidence is insufficient or governing authorities conflict.
+5. Record the checked evidence, rationale, status, and action in the review log.
+
+Only `ACCEPTED` enters auto-fix. `REJECTED` is recorded without modification.
+`UNRESOLVED` blocks CLEAN and release eligibility unless the governing authority explicitly
+defers that exact finding. Agreement among multiple reviewers never promotes unsupported
+evidence to `ACCEPTED`.
 
 ---
 
@@ -141,7 +165,13 @@ if stage in [planning, integration]:
     findings = compare_role_outputs(first_verdicts)
 else:
     active_lenses = resolve_lenses(stage, req_ids_provided)
-    reviewer_prompt = build_prompt(stage, files, req_ids, known_issues, active_lenses)
+    reviewer_delta = build_prompt(stage, files, req_ids, known_issues, active_lenses)
+
+all_runs = compose_one_shot_dual_prompts(
+  byte_stable_base,
+  validate_complete_atom_ledger(current_and_prior_user_directives),
+  role_prompts if stage in [planning, integration] else reviewer_delta
+)
 ```
 
 Do not send the same generated summary to all four roles. Shared input anchoring defeats
@@ -226,21 +256,29 @@ while consecutive_clean < convergence_threshold:
             else:
                 known_issues.add(finding)
 
-    # 8) Auto-fix CONFIRMED (with safety guard, see section 6.5)
+    # 8) Independently validate consensus candidates, then auto-fix ACCEPTED only
+    validated = confirmed.map(validate_against_primary_evidence)
+    accepted = validated.filter(f -> f.evidence_status == ACCEPTED)
+    rejected = validated.filter(f -> f.evidence_status == REJECTED)
+    unresolved = validated.filter(f -> f.evidence_status == UNRESOLVED)
+    known_issues.add_with_evidence(rejected)
     mandatory_evidence_ok = validate_required_inputs_and_preservation_probes(stage)
     if vetoes.length > 0:
         consecutive_clean = 0
         review_log.append({round: pass_number, result: "NOT_CLEAN", vetoes: vetoes})
-    elif confirmed.length > 0:
+    elif unresolved.length > 0:
+        consecutive_clean = 0
+        review_log.append({round: pass_number, result: "UNRESOLVED", evidence: unresolved})
+    elif accepted.length > 0:
         snapshot = create_isolated_snapshot(complete_changed_set)
-        for finding in confirmed: apply_fix(finding)
+        for finding in accepted: apply_fix(finding)
         diff = show_diff(snapshot)
         # Diff is logged. If rollback needed, restore from snapshot.
         consecutive_clean = 0
-        review_log.append({round: pass_number, result: "FIXED", count: confirmed.length, diff: diff})
+        review_log.append({round: pass_number, result: "FIXED", count: accepted.length, diff: diff, evidence: validated})
     elif contested.length == 0 and mandatory_evidence_ok and complexity_review_is_current_and_verified(preflight, all_findings):
         consecutive_clean += 1
-        review_log.append({round: pass_number, result: "CLEAN"})
+        review_log.append({round: pass_number, result: "CLEAN", evidence: validated})
     else:
         consecutive_clean = 0
         review_log.append({round: pass_number, result: "NOT_CLEAN", reason: "unresolved or missing evidence"})
@@ -272,10 +310,9 @@ reviewer-role degradation, missing evidence, or a veto yields `NOT_CLEAN`, never
 ```yaml
 budget:
   per_call_timeout:
-    planning: 60
-    development: 120
-    test: 60
-    integration: 120
+    startup: 300
+    idle: 180
+    total: 900
   max_rounds: 8
   max_total_time_min: 30
 ```
@@ -333,7 +370,9 @@ if available_adapters.length < configured_adapters.length:
 if stage in [planning, integration]:
     role_runs = schedule_four_roles(available_adapters)
     if successful_distinct_role_runs(role_runs) < 4:
-        stop with NOT_CLEAN("Four distinct role executions are mandatory")
+        record NOT_RUN("Four distinct role executions were not available")
+        continue ordinary deterministic validation without an independent-review claim
+        if governed delivery explicitly requires the four roles: keep delivery REVIEW_ONLY
     if duplicate_role(role_runs) or duplicate_execution_identity(role_runs):
         stop with NOT_CLEAN("Role or execution identity was reused")
 else:
@@ -349,7 +388,11 @@ else:
         warn("Single reviewer. Convergence increased to {convergence_threshold}")
 
     if R_available == 0:
-        abort("No review tools available. Cannot proceed.")
+        record NOT_RUN("No authenticated reviewer available")
+        continue ordinary deterministic validation
+        do not claim independent cross-validation
+        if governed delivery explicitly requires independent evidence:
+            keep delivery REVIEW_ONLY until evidence exists
 ```
 
 ---
