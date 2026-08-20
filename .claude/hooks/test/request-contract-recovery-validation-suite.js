@@ -27,6 +27,7 @@ const {
 	makeAttestor,
 	makeResumeReceipt,
 } = require("./request-contract-test-helpers.js");
+const fixtureGuard = require("./fixture-git.js");
 
 test("changes already present before genesis receive traceable occurrence ids", () => {
 	const fx = fixture();
@@ -46,7 +47,7 @@ test("index-only staging after Clean review invalidates completion", () => {
 	bind(fx, unit);
 	ingestReview(fx, unit, cleanReview(fx, unit, "INDEX-R1"));
 	ingestReview(fx, unit, cleanReview(fx, unit, "INDEX-R2"));
-	cp.execFileSync("git", ["add", "src/product.txt"], { cwd: fx.cwd });
+	fixtureGuard.fixtureGit(fx.cwd, ["add", "src/product.txt"]);
 	assert.equal(core.evaluateCompletion(unit, fx.cwd, "claude").kind, "block");
 });
 
@@ -197,7 +198,7 @@ test("manifest metadata changes create traceable occurrences", () => {
 	const fx = fixture();
 	const unit = start(fx);
 	fs.writeFileSync(path.join(fx.cwd, "src", "product.txt"), "staged-only\n");
-	cp.execFileSync("git", ["add", "src/product.txt"], { cwd: fx.cwd });
+	fixtureGuard.fixtureGit(fx.cwd, ["add", "src/product.txt"]);
 	core.captureWorkspaceOccurrences(unit, fx.cwd);
 	const paths = core.readJson(unit.paths.state).occurrences.map((occurrence) => occurrence.detail.path);
 	assert(paths.includes("@workspace/index_digest"));

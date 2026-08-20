@@ -19,6 +19,7 @@ const {
 	bind,
 	cleanReview,
 } = require("./request-contract-test-helpers.js");
+const fixtureGuard = require("./fixture-git.js");
 
 test("checked-in client registries satisfy the exact native lifecycle contract", () => {
 	const root = path.resolve(__dirname, "..", "..", "..");
@@ -166,7 +167,7 @@ test("an index change starts a fresh consecutive Stop episode", () => {
 	const firstStop = core.readJson(unit.paths.state).stop;
 	assert.equal(firstStop.attempt, 1);
 	fs.writeFileSync(path.join(fx.cwd, "src", "product.txt"), "staged mutation\n");
-	cp.execFileSync("git", ["add", "src/product.txt"], { cwd: fx.cwd });
+	fixtureGuard.fixtureGit(fx.cwd, ["add", "src/product.txt"]);
 	core.evaluateCompletion(unit, fx.cwd, "claude");
 	const secondStop = core.readJson(unit.paths.state).stop;
 	assert.equal(secondStop.attempt, 1);

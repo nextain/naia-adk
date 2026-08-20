@@ -24,6 +24,7 @@ const {
 	projectedUnitSnapshot,
 	firstDifference,
 } = require("./request-contract-test-helpers.js");
+const fixtureGuard = require("./fixture-git.js");
 
 const {
 	preservationFile,
@@ -288,7 +289,7 @@ test("preservation collects planning and integration evidence views but remains 
 	const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 	config.preservation = { required: true, protect_test_contracts: true, protect_vendor_sources: true, allowed_adapter_digests: [fx.runnerAttestorDigest] };
 	fs.writeFileSync(configPath, JSON.stringify(config));
-	cp.execFileSync("git", ["add", ".agents/context/request-contract.json"], { cwd: fx.cwd });
+	fixtureGuard.fixtureGit(fx.cwd, ["add", ".agents/context/request-contract.json"]);
 	pinLifecyclePreservationProbes(fx);
 	const unit = start(fx);
 	bind(fx, unit, lifecyclePreservationContract(fx, unit));
@@ -344,7 +345,7 @@ test("preservation blocks shell indirection and release-regex false positives un
 	const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
 	settings.hooks.PreToolUse[0].matcher = "Bash|shell_command|PowerShell|Edit|Write|NotebookEdit|apply_patch";
 	fs.writeFileSync(settingsPath, JSON.stringify(settings));
-	cp.execFileSync("git", ["add", ".agents/context/request-contract.json", ".claude/settings.json"], { cwd: fx.cwd });
+	fixtureGuard.fixtureGit(fx.cwd, ["add", ".agents/context/request-contract.json", ".claude/settings.json"]);
 	pinLifecyclePreservationProbes(fx);
 	const unit = start(fx);
 	bind(fx, unit, lifecyclePreservationContract(fx, unit));
@@ -373,7 +374,7 @@ test("preservation blocks implementation until planning is sealed and closes sta
 	let config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 	config.preservation = { required: true, protect_test_contracts: true, protect_vendor_sources: true, allowed_adapter_digests: [fx.runnerAttestorDigest] };
 	fs.writeFileSync(configPath, JSON.stringify(config));
-	cp.execFileSync("git", ["add", ".agents/context/request-contract.json"], { cwd: fx.cwd });
+	fixtureGuard.fixtureGit(fx.cwd, ["add", ".agents/context/request-contract.json"]);
 	pinLifecyclePreservationProbes(fx);
 	let unit = start(fx);
 	bind(fx, unit, lifecyclePreservationContract(fx, unit));
@@ -389,7 +390,7 @@ test("preservation blocks implementation until planning is sealed and closes sta
 	config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 	config.preservation = { required: true, protect_test_contracts: true, protect_vendor_sources: true, allowed_adapter_digests: [fx.runnerAttestorDigest] };
 	fs.writeFileSync(configPath, JSON.stringify(config));
-	cp.execFileSync("git", ["add", ".agents/context/request-contract.json"], { cwd: fx.cwd });
+	fixtureGuard.fixtureGit(fx.cwd, ["add", ".agents/context/request-contract.json"]);
 	pinLifecyclePreservationProbes(fx);
 	unit = start(fx);
 	bind(fx, unit, lifecyclePreservationContract(fx, unit));

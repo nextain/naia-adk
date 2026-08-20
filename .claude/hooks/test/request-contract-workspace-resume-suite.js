@@ -19,6 +19,7 @@ const {
 	cleanReview,
 	ingestReview,
 } = require("./request-contract-test-helpers.js");
+const fixtureGuard = require("./fixture-git.js");
 
 test("product-root configuration drift invalidates completion", () => {
 	const fx = fixture();
@@ -139,7 +140,7 @@ test("Git index and object failures abort manifests instead of hashing empty out
 	} finally {
 		fs.writeFileSync(index, savedIndex);
 	}
-	const oid = cp.execFileSync("git", ["rev-parse", "HEAD:src/product.txt"], { cwd: fx.cwd, encoding: "utf8" }).trim();
+	const oid = fixtureGuard.fixtureGit(fx.cwd, ["rev-parse", "HEAD:src/product.txt"]);
 	const object = path.join(fx.cwd, ".git", "objects", oid.slice(0, 2), oid.slice(2));
 	const hidden = `${object}.missing`;
 	fs.renameSync(object, hidden);
@@ -201,12 +202,12 @@ test("dirty tracked content inside a gitlink is captured", () => {
 	fs.writeFileSync(configFile, JSON.stringify(config));
 	const sub = path.join(fx.cwd, "vendor", "child");
 	fs.mkdirSync(sub, { recursive: true });
-	cp.execFileSync("git", ["init", "-q"], { cwd: sub });
+	fixtureGuard.initFixtureRepository(sub);
 	fs.writeFileSync(path.join(sub, "tracked.txt"), "clean\n");
-	cp.execFileSync("git", ["add", "tracked.txt"], { cwd: sub });
-	cp.execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial"], { cwd: sub });
-	const commit = cp.execFileSync("git", ["rev-parse", "HEAD"], { cwd: sub, encoding: "utf8" }).trim();
-	cp.execFileSync("git", ["update-index", "--add", "--cacheinfo", `160000,${commit},vendor/child`], { cwd: fx.cwd });
+	fixtureGuard.fixtureGit(sub, ["add", "tracked.txt"]);
+	fixtureGuard.fixtureGit(sub, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "initial"]);
+	const commit = fixtureGuard.fixtureGit(sub, ["rev-parse", "HEAD"]);
+	fixtureGuard.fixtureGit(fx.cwd, ["update-index", "--add", "--cacheinfo", `160000,${commit},vendor/child`]);
 	const unit = start(fx);
 	fs.writeFileSync(path.join(sub, "tracked.txt"), "dirty\n");
 	const captured = core.captureWorkspaceOccurrences(unit, fx.cwd);

@@ -5,6 +5,7 @@ const path = require("node:path");
 const contracts = require("../../.agents/hooks/core/session-contract.js");
 const usage = require("../../scripts/codex-lineage-usage.cjs");
 const { issueFailureReceipt } = require("../../.agents/hooks/core/subagent-failure-receipt.js");
+const harnessSwitch = require("../../.agents/hooks/core/harness-switch.js");
 
 // collaborationspawn_agent is the name the Windows Codex host actually passes
 // to hooks — flattened, no separator — captured from a live run.
@@ -266,6 +267,14 @@ function evaluate({
 	sessionCollection = null,
 	lineageReserve = null,
 } = {}) {
+	// 운영자가 하네스를 껐으면 이 가드도 꺼진다.
+	//
+	// 이 파일만 스위치를 보지 않아서, 2026-08-20 에 하네스가 꺼진 작업 공간에서
+	// 하위 에이전트 호출이 전부 거부되고 여러 세션이 멈췄다. 끈다고 말해 놓고 한
+	// 자리만 계속 막으면 그 스위치는 거짓말이 된다. 막을지 말지는 여기서 정하지
+	// 않는다 — 운영자가 이미 정했다.
+	if (contractLookup === null && sessionCollection === null
+		&& harnessSwitch.harnessDisabled({ cwd, roots: [cwd], env })) return null;
 	if (isFollowup(toolName, toolInput)) return block("follow-up or resumed delegation is disabled; create a new digest-bound task from the root session");
 	if (!isSpawn(toolName) && isPotentialDelegation(toolName, toolInput)) {
 		return block("unrecognized delegation-capable wrapper is disabled; use the governed spawn tool with a digest-bound task");
@@ -281,7 +290,7 @@ function evaluate({
 		// marker plus a per-session spawn budget, for either runtime — the
 		// result-envelope restriction below only governs the bound digest path.
 		// Context inheritance stays blocked first either way.
-		if (!contextOk(input, runtime)) return block("explicit fork_context false is required; fork_turns must be none when the runtime exposes it");
+		if (!contextOk(input, runtime)) return block("explicit fork_context false is required. Add fork_context: false to the spawn arguments, and fork_turns: 'none' only if the runtime exposes that field. Inheriting context is what this refuses; fork_turns none measured 92-95% lower input per child.");
 		const budget = require("../../.claude/hooks/subagent-spawn-guard.js").evaluate({ toolName: "task", sessionId, root: cwd, env });
 		return budget ? { decision: "block", reason: budget.reason } : null;
 	}
@@ -293,7 +302,7 @@ function evaluate({
 	if (runtime !== "multi_agent_v1") return block("this delegation runtime has no registered result-envelope adapter; use multi_agent_v1 or register captured host evidence first");
 	const policy = resolved.contract?.subagent_policy;
 	if (!Object.hasOwn(resolved.contract || {}, "subagent_policy") || contracts.validateSubagentPolicy(policy)) return block("a valid contract subagent_policy is required");
-	if (!contextOk(input, runtime)) return block("explicit fork_context false is required; fork_turns must be none when the runtime exposes it");
+	if (!contextOk(input, runtime)) return block("explicit fork_context false is required. Add fork_context: false to the spawn arguments, and fork_turns: 'none' only if the runtime exposes that field. Inheriting context is what this refuses; fork_turns none measured 92-95% lower input per child.");
 	const message = briefText(input, runtime);
 	if (!message) return block("one digest-bound delegation task is required");
 	const task = parseBrief(message);
