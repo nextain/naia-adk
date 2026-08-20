@@ -76,6 +76,21 @@ function trustedPowerShellReadBatch(command) {
 	return read.test(body);
 }
 
+function splitStatements(source) {
+	const statements = [];
+	let current = "";
+	let quote = null;
+	for (const character of String(source || "")) {
+		if (quote) { current += character; if (character === quote) quote = null; continue; }
+		if (character === '"' || character === "'") { quote = character; current += character; continue; }
+		// && and || join statements; a chain of reads is still a read.
+		if (character === ";" || character === "|" || character === "&") { statements.push(current); current = ""; continue; }
+		current += character;
+	}
+	statements.push(current);
+	return statements.map((statement) => statement.trim()).filter(Boolean);
+}
+
 function readOnlyShell(command, cwd = process.cwd()) {
 	const source = String(command || "").trim();
 	if (!source) return true;
@@ -104,6 +119,31 @@ function readOnlyShell(command, cwd = process.cwd()) {
 
 function explicitlyScopedRead(command, cwd) {
 	const source = String(command || "").trim();
+
+	// 선행 cd 갈래는 readOnlyShell 관문보다 먼저 본다. `cd` 자체는 읽기 명령으로
+	// 분류되지 않아서, 합쳐 놓은 문장 전체를 먼저 재면 이 형태가 늘 탈락한다.
+	const statements = splitStatements(source).map((value) => value.trim()).filter(Boolean);
+	if (statements.length > 1) {
+		const [first, ...rest] = statements;
+		const enter = first.match(/^cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))$/i);
+		const target = enter ? (enter[1] || enter[2] || enter[3]) : null;
+		if (target && (path.posix.isAbsolute(target) || path.win32.isAbsolute(target))) {
+			// 같은 위치를 셸이 여러 표기로 부른다. Git Bash 의 `/d/alpha-adk`,
+			// PowerShell 의 `D:\alpha-adk`, 그리고 posix 경로가 모두 같은 곳이다.
+			// 표기를 하나로 눕힌 뒤 비교한다.
+			const flatten = (value) => String(value)
+				.replace(/\\/g, "/")
+				.replace(/^\/([a-zA-Z])\//, (match, drive) => `${drive.toLowerCase()}:/`)
+				.replace(/^([a-zA-Z]):\//, (match, drive) => `${drive.toLowerCase()}:/`)
+				.replace(/\/+$/, "")
+				.toLowerCase();
+			const governed = flatten(cwd || ".");
+			const entered = flatten(target);
+			const inside = entered === governed || entered.startsWith(`${governed}/`) || governed.startsWith(`${entered}/`);
+			if (inside && rest.every((statement) => readOnlyShell(statement, cwd))) return true;
+		}
+	}
+
 	if (!readOnlyShell(source, cwd)) return false;
 	if (/^git\s+-C\s+(?:"[^"]+"|'[^']+'|\S+)\s+/i.test(source)) return true;
 

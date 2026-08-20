@@ -3,6 +3,7 @@
 /** Shared runtime, fixtures, and helpers for the request-contract suites. */
 
 const assert = require("assert");
+const fixtureGuard = require("./fixture-git.js");
 const cp = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -82,8 +83,8 @@ function fixture() {
 	fs.mkdirSync(path.join(cwd, "evidence"), { recursive: true });
 	fs.writeFileSync(path.join(cwd, "src", "product.txt"), "baseline\n");
 	fs.writeFileSync(path.join(cwd, "evidence", "test-report.txt"), "verified evidence\n");
-	cp.execFileSync("git", ["init", "-q"], { cwd });
-	cp.execFileSync("git", ["config", "core.autocrlf", "false"], { cwd });
+	fixtureGuard.initFixtureRepository(cwd);
+	fixtureGuard.fixtureGit(cwd, ["config", "core.autocrlf", "false"]);
 	const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
 	const { publicKey: reviewerPublicKey, privateKey: reviewerPrivateKey } = crypto.generateKeyPairSync("ed25519");
 	const { publicKey: runnerPublicKey, privateKey: runnerPrivateKey } = crypto.generateKeyPairSync("ed25519");
@@ -138,10 +139,10 @@ function fixture() {
 				retention: { success_hours: 24 },
 		}),
 	);
-	cp.execFileSync("git", ["config", "user.email", "request-contract@example.invalid"], { cwd });
-	cp.execFileSync("git", ["config", "user.name", "Request Contract Fixture"], { cwd });
-	cp.execFileSync("git", ["add", "."], { cwd });
-	cp.execFileSync("git", ["commit", "-q", "-m", "fixture baseline"], { cwd });
+	fixtureGuard.fixtureGit(cwd, ["config", "user.email", "request-contract@example.invalid"]);
+	fixtureGuard.fixtureGit(cwd, ["config", "user.name", "Request Contract Fixture"]);
+	fixtureGuard.fixtureGit(cwd, ["add", "."]);
+	fixtureGuard.fixtureGit(cwd, ["commit", "-q", "-m", "fixture baseline"]);
 	return { cwd, privateKey, publicKeyPem, reviewerPrivateKey, reviewerPublicKeyPem, runnerPrivateKey, runnerPublicKeyPem, reviewerFixtureDigest, reviewerAttestor, runnerAttestor, reviewerAttestorDigest, runnerAttestorDigest };
 }
 

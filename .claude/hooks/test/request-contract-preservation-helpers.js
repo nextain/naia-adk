@@ -14,6 +14,7 @@ const {
 	signedReceipt,
 	makeContract,
 } = require("./request-contract-test-helpers.js");
+const fixtureGuard = require("./fixture-git.js");
 
 function preservationFile(content) {
 	const bytes = Buffer.from(content);
@@ -239,8 +240,8 @@ function pinLifecyclePreservationProbes(fx, options = {}) {
 	const probeRunner = { privateKey: fx.runnerPrivateKey, credentialId: "test-isolation-runner", digest: fx.runnerAttestorDigest };
 	writePreservationProbe(fx.cwd, "SURF-PRODUCT", "baseline", ["render:product", "enabled:product"], subjectDigest, probeRunner);
 	writePreservationProbe(fx.cwd, "SURF-PRODUCT", "current", ["render:product", "enabled:product"], subjectDigest, probeRunner);
-	cp.execFileSync("git", ["add", ".agents/context/request-contract.json", "evidence/surf-product-baseline.json", "evidence/surf-product-current.json"], { cwd: fx.cwd });
-	cp.execFileSync("git", ["commit", "-q", "-m", "pin preservation probes"], { cwd: fx.cwd });
+	fixtureGuard.fixtureGit(fx.cwd, ["add", ".agents/context/request-contract.json", "evidence/surf-product-baseline.json", "evidence/surf-product-current.json"]);
+	fixtureGuard.fixtureGit(fx.cwd, ["commit", "-q", "-m", "pin preservation probes"]);
 }
 
 module.exports = {

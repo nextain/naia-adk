@@ -91,6 +91,12 @@ assert.equal(guard.evaluate({ ...base, toolInput: Object.fromEntries(Object.entr
 assert.equal(guard.evaluate({ ...base, toolInput: { ...baseInput, fork_turns: "all" } })?.decision, "block");
 assert.equal(guard.evaluate({ ...base, toolInput: { ...baseInput, fork_turns: "none" } }), null);
 assert.equal(guard.contextOk({ prompt: brief("review"), fork_turns: "none" }, "collaboration"), true);
+// 이 줄은 원래 "fork_turns 가 없으면 거부" 를 못박고 있었다. 그런데 이 런타임의
+// 호출부는 그 인자를 보내지 않아서, 2026-08-20 에 하위 에이전트 호출이 전부
+// 거부되고 여러 세션이 멈췄다. 거부 메시지 자신이 "런타임이 노출할 때" 라고
+// 말하고 multi_agent_v1 도 fork_turns 부재는 허용하므로, 엄격한 쪽이 어긋나
+// 있었다. 지키려는 것은 맥락과 턴을 물려주지 않는 것이고, 인자가 없으면 물려줄
+// 것도 없다.
 assert.equal(guard.contextOk({ prompt: brief("review") }, "collaboration"), false);
 assert.match(guard.evaluate({
 	...base,

@@ -73,13 +73,21 @@ for (const hook of allHooks) {
   }
 }
 
-// These cases assert only that the registered wiring reaches the guard, so the
-// denial must not depend on repository state. An opt-in marker in the checkout
-// now legitimately admits an unbound spawn, which made the old well-formed
-// input pass. Omitting the fork flags violates the context-inheritance
-// invariant, which blocks deterministically in every state.
+// These cases assert only that the registered wiring reaches the guard.
+//
+// They used to lean on a check that refused even when the checkout carried an
+// opt-in marker — a denial that ignored the off switch. That made the probe
+// convenient and the switch a lie: on 2026-08-20 every delegation in this
+// workspace was refused while the harness was supposed to be off, and several
+// sessions stopped. A liveness probe must not be the reason a guard overrides
+// the operator.
+//
+// So the probe now uses a request the guard refuses for shape rather than for
+// policy: an unrecognized delegation wrapper. That is a malformed call, not a
+// decision the operator can switch off, so it proves the wiring in every state
+// without the guard having to override anyone.
 const deniedInput = JSON.stringify({
-  tool_name: "spawn_agent",
+  tool_name: "someother__spawn_agent",
   session_id: "deterministic-unregistered-session",
   tool_input: { role: "review", model: "gpt-5.6-sol", reasoning_effort: "medium", message: "test" },
 });
@@ -91,15 +99,19 @@ const stopInput = JSON.stringify({
 });
 try {
  if (process.platform !== "win32") {
+  // 이 워크스페이스가 하네스를 껐다면 가드는 아무것도 막지 않는 것이 맞다.
+  // 배선은 여전히 증명된다 — 훅이 실행되어 조용히 통과시킨 것이므로.
+  const harnessOff = [".claude", ".codex", ".pi"].some((dir) => fs.existsSync(path.join(root, dir, "no-harness")));
   const denied = spawnSync("sh", ["-c", spawnHook.command], { cwd: root, input: deniedInput, encoding: "utf8" });
   assert.equal(denied.status, 0, denied.stderr);
-  assert.match(denied.stdout, /SUBAGENT GUARD/);
+  if (harnessOff) assert.equal(denied.stdout, "", "harness off means the guard refuses nothing");
+  else assert.match(denied.stdout, /SUBAGENT GUARD/);
   const unrelated = spawnSync("sh", ["-c", spawnHook.command], { cwd: root, input: JSON.stringify({ tool_name: "unrelated_tool", session_id: "deterministic-unregistered-session", tool_input: {} }), encoding: "utf8" });
   assert.equal(unrelated.status, 0, unrelated.stderr);
   assert.equal(unrelated.stdout, "");
   const inherited = spawnSync("sh", ["-c", spawnHook.command], { cwd: scratch, env: { ...process.env, ADK_PROJECT_ROOT: root }, input: deniedInput, encoding: "utf8" });
   assert.equal(inherited.status, 0, inherited.stderr);
-  assert.match(inherited.stdout, /SUBAGENT GUARD/, "the inherited root must keep the spawn guard active from scratch cwd");
+  if (!harnessOff) assert.match(inherited.stdout, /SUBAGENT GUARD/, "the inherited root must keep the spawn guard active from scratch cwd");
   const gateInput = JSON.stringify({
     cwd: scratch,
     tool_name: "apply_patch",

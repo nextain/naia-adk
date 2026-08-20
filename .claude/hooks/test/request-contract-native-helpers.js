@@ -3,6 +3,7 @@
 /** Native adapter, execution-control, and parity helpers. */
 
 const assert = require("assert");
+const fixtureGuard = require("./fixture-git.js");
 const cp = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -66,8 +67,8 @@ function installProductionControlSurface(fx) {
 		fs.mkdirSync(path.dirname(destination), { recursive: true });
 		fs.copyFileSync(path.join(root, relative), destination);
 	}
-	cp.execFileSync("git", ["add", ".agents/hooks/core", ".claude/hooks", ".codex/hooks", "scripts"], { cwd: fx.cwd });
-	cp.execFileSync("git", ["commit", "-q", "-m", "install production control surface"], { cwd: fx.cwd });
+	fixtureGuard.fixtureGit(fx.cwd, ["add", ".agents/hooks/core", ".claude/hooks", ".codex/hooks", "scripts"]);
+	fixtureGuard.fixtureGit(fx.cwd, ["commit", "-q", "-m", "install production control surface"]);
 }
 
 function runInstalledNativeAdapter(client, fx, input, eventName) {
