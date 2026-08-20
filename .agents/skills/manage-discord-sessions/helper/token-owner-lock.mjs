@@ -7,6 +7,7 @@ import {
 	readFileSync,
 	renameSync,
 	rmSync,
+	rmdirSync,
 	writeFileSync,
 } from "node:fs";
 import { hostname, tmpdir } from "node:os";
@@ -98,6 +99,24 @@ function createOwnedLock(lockPath) {
 	}
 }
 
+function acquireStaleReclaimGuard(lockPath) {
+	const guardPath = `${lockPath}.reclaim`;
+	try {
+		mkdirSync(guardPath, { mode: 0o700 });
+		protectOwnerOnly(guardPath, "directory", "Discord token stale reclaim guard");
+	} catch (error) {
+		if (error?.code === "EEXIST") throw new DiscordTokenAlreadyOwnedError();
+		throw unavailable();
+	}
+	let released = false;
+	return () => {
+		if (released) return;
+		try { rmdirSync(guardPath); }
+		catch { throw unavailable(); }
+		released = true;
+	};
+}
+
 export function defaultDiscordTokenLockDirectory(environment = process.env, runtime = {}) {
 	const configured = environment.NAIA_DISCORD_TOKEN_LOCK_DIRECTORY;
 	if (configured !== undefined) {
@@ -135,29 +154,34 @@ export function acquireDiscordTokenOwnerLock({ token, lockDirectory }) {
 		nonce = createOwnedLock(lockPath);
 	} catch (error) {
 		if (error?.code !== "EEXIST") throw unavailable();
-		let existing;
-		try { existing = inspectExistingLock(lockPath); }
-		catch (inspectionError) {
-			if (inspectionError?.code === "ENOENT") throw unavailable();
-			throw inspectionError;
-		}
-		if (existing.state !== "stale") throw new DiscordTokenAlreadyOwnedError();
-		const stalePath = `${lockPath}.stale-${randomUUID()}`;
-		try { renameSync(lockPath, stalePath); }
-		catch (renameError) {
-			if (renameError?.code === "ENOENT") throw new DiscordTokenAlreadyOwnedError();
-			throw unavailable();
-		}
+		const releaseReclaimGuard = acquireStaleReclaimGuard(lockPath);
 		try {
-			nonce = createOwnedLock(lockPath);
-			rmSync(stalePath, { recursive: true });
-		} catch (reclaimError) {
-			if (reclaimError?.code === "EEXIST") {
-				rmSync(stalePath, { recursive: true, force: true });
-				throw new DiscordTokenAlreadyOwnedError();
+			let existing;
+			try { existing = inspectExistingLock(lockPath); }
+			catch (inspectionError) {
+				if (inspectionError?.code === "ENOENT") throw unavailable();
+				throw inspectionError;
 			}
-			try { renameSync(stalePath, lockPath); } catch {}
-			throw unavailable();
+			if (existing.state !== "stale") throw new DiscordTokenAlreadyOwnedError();
+			const stalePath = `${lockPath}.stale-${randomUUID()}`;
+			try { renameSync(lockPath, stalePath); }
+			catch (renameError) {
+				if (renameError?.code === "ENOENT") throw new DiscordTokenAlreadyOwnedError();
+				throw unavailable();
+			}
+			try {
+				nonce = createOwnedLock(lockPath);
+				rmSync(stalePath, { recursive: true });
+			} catch (reclaimError) {
+				if (reclaimError?.code === "EEXIST") {
+					rmSync(stalePath, { recursive: true, force: true });
+					throw new DiscordTokenAlreadyOwnedError();
+				}
+				try { renameSync(stalePath, lockPath); } catch {}
+				throw unavailable();
+			}
+		} finally {
+			releaseReclaimGuard();
 		}
 	}
 

@@ -4,6 +4,7 @@ import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, 
 import { dirname, isAbsolute, parse, resolve } from "node:path";
 import { assertOwnerOnly, protectOwnerOnly } from "./platform-security.mjs";
 import { postDiscordMessage } from "./discord-delivery.mjs";
+import { describeDiscordAttachments } from "./discord-attachments.mjs";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const SNOWFLAKE = /^\d{17,20}$/;
@@ -113,6 +114,8 @@ function safeHistoryMessage(message, allowedAuthors) {
 			? new Date(message.timestamp).toISOString()
 			: null,
 		content,
+		// 첨부 ID 를 여기서 내보내지 않으면 `attachment` 명령을 부를 방법이 없다.
+		attachments: describeDiscordAttachments(message).attachments,
 	};
 }
 

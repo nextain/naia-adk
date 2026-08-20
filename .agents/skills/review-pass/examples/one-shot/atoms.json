@@ -1,0 +1,38 @@
+[
+  {
+    "id": "ATOM-EXAMPLE-1",
+    "source_id": "SRC-EXAMPLE-1",
+    "text": "Invoke reviewers headlessly with one stdin prompt.",
+    "directive_ids": ["DIR-EXAMPLE-1"],
+    "subject": "agent_workflow",
+    "effect": "constraint",
+    "render_policy": "deny",
+    "target_ids": ["TARGET-EXAMPLE-1"],
+    "criterion_ids": ["AC-EXAMPLE-1"],
+    "evidence_ids": ["EVIDENCE-EXAMPLE-1"]
+  },
+  {
+    "id": "ATOM-EXAMPLE-2",
+    "source_id": "SRC-EXAMPLE-2",
+    "text": "An unavailable optional reviewer returns a redacted non-blocking NOT_RUN result so missing accounts, CLIs, quotas, timeouts, or malformed output do not stop ordinary work.",
+    "directive_ids": ["DIR-EXAMPLE-2"],
+    "subject": "agent_workflow",
+    "effect": "constraint",
+    "render_policy": "deny",
+    "target_ids": ["TARGET-EXAMPLE-2"],
+    "criterion_ids": ["AC-EXAMPLE-2"],
+    "evidence_ids": ["EVIDENCE-EXAMPLE-2"]
+  },
+  {
+    "id": "ATOM-EXAMPLE-3",
+    "source_id": "SRC-EXAMPLE-3",
+    "text": "Only an explicitly required review fails closed and preserves the reviewer process exit status.",
+    "directive_ids": ["DIR-EXAMPLE-3"],
+    "subject": "agent_workflow",
+    "effect": "verification",
+    "render_policy": "deny",
+    "target_ids": ["TARGET-EXAMPLE-3"],
+    "criterion_ids": ["AC-EXAMPLE-3"],
+    "evidence_ids": ["EVIDENCE-EXAMPLE-3"]
+  }
+]

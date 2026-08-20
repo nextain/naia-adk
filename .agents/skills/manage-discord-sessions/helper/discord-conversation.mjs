@@ -1,3 +1,5 @@
+import { attachmentSummaryText } from "./discord-attachments.mjs";
+
 const DISCORD_API = "https://discord.com/api/v10";
 const DEFAULT_MESSAGE_LIMIT = 24;
 const DEFAULT_CHARACTER_LIMIT = 12_000;
@@ -53,7 +55,11 @@ export function renderParticipantConversation(messages, { botUserId, allowedUser
 		if (historyVisibility === "requester_only" && authorId !== requesterUserId) continue;
 		if (authorId !== botUserId && !allowed.has(authorId)) continue;
 		if (message.webhook_id || (message.author?.bot && authorId !== botUserId)) continue;
-		const content = normalizeContent(message.content, botUserId);
+		const text = normalizeContent(message.content, botUserId);
+		// 파일만 보낸 메시지는 본문이 비어 있다. 첨부 표기가 없으면 그 메시지는
+		// 이력에서 통째로 사라져, 뒤이은 "아까 그 파일" 이 가리킬 대상이 없어진다.
+		const attached = attachmentSummaryText(message);
+		const content = [text, attached].filter(Boolean).join(" ");
 		if (!content || (authorId === botUserId && !isUsefulBotContext(content))) continue;
 		const profile = participantProfiles?.[authorId];
 		if (authorId !== botUserId && participantProfiles && !profile) throw new Error("configured participant history profile is missing");

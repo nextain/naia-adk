@@ -11,8 +11,8 @@ const moduleUrl = pathToFileURL(fileURLToPath(new URL("../helper/token-owner-loc
 const roots = [];
 
 test("DSO-011 derives one stable kernel lock identity from the credential bytes", () => {
-	assert.equal(discordTokenFingerprint("fake-same-token-value-long-enough"), discordTokenFingerprint("fake-same-token-value-long-enough"));
-	assert.notEqual(discordTokenFingerprint("fake-same-token-value-long-enough"), discordTokenFingerprint("fake-other-token-value-long-enough"));
+	assert.equal(discordTokenFingerprint("same-token-value-long-enough"), discordTokenFingerprint("same-token-value-long-enough"));
+	assert.notEqual(discordTokenFingerprint("same-token-value-long-enough"), discordTokenFingerprint("other-token-value-long-enough"));
 });
 const workerSource = `
 import { acquireDiscordTokenOwnerLock } from ${JSON.stringify(moduleUrl)};
@@ -119,6 +119,7 @@ test("DSO-009 atomically owns one Discord token across processes without exposin
 	const crashLosers = await Promise.all(crashContenders.filter((candidate) => candidate !== crashWinner).map((candidate) => candidate.exit));
 	assert.equal(crashLosers.every((result) => result.code === 2 && result.stderr === "Discord token is already owned by another process"), true, JSON.stringify(crashLosers));
 	assert.equal(readdirSync(root).some((entry) => entry.includes(".stale-")), false);
+	assert.equal(readdirSync(root).some((entry) => entry.endsWith(".reclaim")), false);
 
 	const racers = Array.from({ length: 8 }, () => collect(worker(root, tokenB)));
 	const raceResults = await Promise.all(racers.map((candidate) => candidate.acquired));

@@ -58,7 +58,7 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 	const rollbackConfig = {
 		schemaVersion: 1, enabled: true, workspaceId: "rollback-test",
 		persona: { name: "Rollback reader", instructions: "Stay read-only." },
-		role: { name: "reader", allowedActions: ["read", "reply"], requiresApproval: [] },
+		role: { name: "operator", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: [] },
 		backend: { selected: "codex", profiles: { codex: { enabled: true } } },
 		discord: { credentialRef: "discord-token", botUserId: BOT, operatorUserIds: [USER], bindings: [{ ...binding(), historyVisibility: "none", operatorActions: false }] },
 		runtime: { softSilenceSeconds: 120, noProgressInterventionSeconds: 120, approvalPolicy: "never", permissionProfileEpoch: "rollback-v1", maxConcurrentJobs: 1 },
@@ -216,7 +216,7 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 		persona: { name: "Canary reader", instructions: "Stay read-only." },
 		role: { name: "reader", allowedActions: ["read", "reply"], requiresApproval: [] },
 		backend: { selected: "codex", profiles: { codex: { enabled: true } } },
-		discord: { credentialRef: "discord-token", botUserId: BOT, operatorUserIds: [USER], participantProfiles: { [USER]: { label: "workspace-owner", relationship: "workspace owner", allowedActions: ["read", "reply"] } }, bindings: [{ ...binding(), historyVisibility: "none", operatorActions: false }] },
+		discord: { credentialRef: "discord-token", botUserId: BOT, operatorUserIds: [USER], participantProfiles: { [USER]: { label: "workspace-owner", relationship: "workspace owner", allowedActions: ["read", "reply", "write", "execute"] } }, bindings: [{ ...binding(), historyVisibility: "none", operatorActions: true }] },
 		runtime: { softSilenceSeconds: 120, noProgressInterventionSeconds: 120, approvalPolicy: "never", permissionProfileEpoch: "canary-v1", maxConcurrentJobs: 1 },
 		service: { autoStart: true, startAt: "login" }, recovery: { autoRetry: false },
 	};
@@ -225,9 +225,9 @@ test("DSG-021 creates and restores a verified code, config, unit, and database-c
 	const canarySnapshot = buildAgentContextSnapshot({ workspace: root, agentId: canaryConfig.workspace.agentId, entrypoint: canaryConfig.workspace.entrypoint, contextFiles: canaryConfig.workspace.contextFiles });
 	const canaryBinding = canaryConfig.discord.bindings[0];
 	const canaryParticipantProfile = canaryConfig.discord.participantProfiles[USER];
-	const canaryEffectiveActions = effectiveAllowedActions(canaryConfig, { binding: canaryBinding, participantProfile: canaryParticipantProfile, isOperator: false });
+	const canaryEffectiveActions = effectiveAllowedActions(canaryConfig, { binding: canaryBinding, participantProfile: canaryParticipantProfile, isOperator: true });
 	const canaryAuthorityRevision = participantAuthorityRevision({ workspaceIdentity: `${canarySnapshot.agentId}\0${canarySnapshot.workspaceRoot}`, bindingIdentity: discordBindingIdentity(canaryBinding), participantUserId: USER, participantProfile: canaryParticipantProfile, effectiveActions: canaryEffectiveActions, permissionProfileEpoch: canaryConfig.runtime.permissionProfileEpoch });
-	const canaryExecutionProfile = currentExecutionProfile(canaryConfig, "codex", { binding: canaryBinding, participantProfile: canaryParticipantProfile, isOperator: false, authorityRevision: canaryAuthorityRevision, contextHash: canarySnapshot.contextHash });
+	const canaryExecutionProfile = currentExecutionProfile(canaryConfig, "codex", { binding: canaryBinding, participantProfile: canaryParticipantProfile, isOperator: true, authorityRevision: canaryAuthorityRevision, contextHash: canarySnapshot.contextHash }, { accessCeiling: "read-only" });
 	const canaryExecutionBinding = durableExecutionBinding({ config: canaryConfig, instance: paths.instance, agentContextSnapshot: canarySnapshot, participantUserId: USER, binding: canaryBinding, executionProfile: canaryExecutionProfile });
 	const canaryServiceGeneration = `${candidateRevision}.cafebabe`;
 	const healthySupervisor = (observedAt = "2026-08-03T00:00:10.000Z", serviceGeneration = canaryServiceGeneration) => ({

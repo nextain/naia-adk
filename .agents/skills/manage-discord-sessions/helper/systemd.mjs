@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, resolve } from "node:path";
+import { credentialProfileExecutableDirectories } from "./credential-profiles.mjs";
 import { messengerInstancePaths, normalizeMessengerInstance } from "./instance-paths.mjs";
 
 function unitQuote(value) {
@@ -16,7 +18,7 @@ export function discordUnitIdentity(adkRoot, instanceValue = "default") {
 	return { root, instance, unitName: `naia-discord-sessions-${suffix}.service` };
 }
 
-export function renderDiscordUserUnit({ adkRoot, instance = "default", tokenFingerprint, runtimeRevision, runtimeTreeId = null, runtimeArtifactSha256 = null, runtimeArtifactDirectory = null, nodePath = process.execPath, backendExecutables = {}, servicePath: servicePathOverride = null }) {
+export function renderDiscordUserUnit({ adkRoot, instance = "default", tokenFingerprint, runtimeRevision, runtimeTreeId = null, runtimeArtifactSha256 = null, runtimeArtifactDirectory = null, nodePath = process.execPath, backendExecutables = {}, credentialProfiles = [], homeDirectory = homedir(), servicePath: servicePathOverride = null }) {
 	const identity = discordUnitIdentity(adkRoot, instance);
 	const { root, unitName } = identity;
 	const paths = messengerInstancePaths(root, identity.instance);
@@ -32,10 +34,19 @@ export function renderDiscordUserUnit({ adkRoot, instance = "default", tokenFing
 	const tokenLockPath = `%t/naia-discord-token-${tokenFingerprint}.lock`;
 	const exec = ["/usr/bin/flock", "--no-fork", "--nonblock", "--conflict-exit-code", "78", tokenLockPath, "/usr/bin/flock", "--no-fork", "--nonblock", "--conflict-exit-code", "78", paths.lockPath, nodePath, servicePath, "--adk-root", root, "--instance", identity.instance].map(unitQuote).join(" ");
 	const backendEnvironment = Object.entries(backendExecutables).map(([backend, executable]) => {
-		if (!new Set(["codex", "claude"]).has(backend) || !resolve(executable).startsWith("/")) throw new Error("backend executable must be an absolute supported path");
+		if (!new Set(["codex", "claude", "opencode"]).has(backend) || !resolve(executable).startsWith("/")) throw new Error("backend executable must be an absolute supported path");
 		return `Environment=${unitQuote(`NAIA_${backend.toUpperCase()}_EXECUTABLE=${resolve(executable)}`)}`;
 	});
-	const executablePath = [...new Set([dirname(resolve(nodePath)), ...Object.values(backendExecutables).map((executable) => dirname(resolve(executable))), "/usr/local/bin", "/usr/bin", "/bin"])].join(delimiter);
+	const credentialExecutableDirectories = credentialProfileExecutableDirectories(credentialProfiles, { homeDirectory });
+	const executablePath = [...new Set([
+		dirname(resolve(nodePath)),
+		...Object.values(backendExecutables).map((executable) => dirname(resolve(executable))),
+		resolve(homeDirectory, ".local/bin"),
+		...credentialExecutableDirectories,
+		"/usr/local/bin",
+		"/usr/bin",
+		"/bin",
+	])].join(delimiter);
 	// %t itself outlives each individual unit. Do not put the cross-unit lock in
 	// RuntimeDirectory: one sibling stopping could unlink the pathname while a
 	// different inode remains locked by another sibling.

@@ -15,7 +15,7 @@ class UsageError extends Error {}
 
 function parseArgs(argv) {
 	const positional = [];
-	const options = { json: false, jsonl: false, events: false, once: false, active: false, failed: false, follow: false };
+	const options = { json: false, jsonl: false, events: false, once: false, active: false, failed: false, follow: false, readOnly: false };
 	for (let index = 0; index < argv.length; index += 1) {
 		const value = argv[index];
 		if (value === "--json") options.json = true;
@@ -25,6 +25,7 @@ function parseArgs(argv) {
 		else if (value === "--active") options.active = true;
 		else if (value === "--failed") options.failed = true;
 		else if (value === "--follow" || value === "-f") options.follow = true;
+		else if (value === "--read-only") options.readOnly = true;
 		else if (value === "--adk-root" || value === "--job" || value === "--instance" || value === "--channel" || value === "--author" || value === "--limit" || value === "--message" || value === "--attachment" || value === "--output" || value === "--expected-sha256" || value === "--content-file") {
 			const next = argv[index + 1];
 			if (!next || next.startsWith("--")) throw new UsageError(`${value} requires a value`);
@@ -50,7 +51,7 @@ function validateInvocation(positional, options) {
 		cancel: new Set(["json", "jobId"]),
 		restart: new Set(["json", "jobId"]),
 		amend: new Set(["json", "jobId", "contentPath"]),
-		submit: new Set(["json", "channelId", "authorId", "contentPath"]),
+		submit: new Set(["json", "channelId", "authorId", "contentPath", "readOnly"]),
 		history: new Set(["json", "channelId", "authorId", "limit"]),
 		latest: new Set(["json", "channelId", "authorId", "limit"]),
 		attachment: new Set(["json", "channelId", "messageId", "attachmentId", "outputPath", "expectedSha256"]),
@@ -129,7 +130,7 @@ if (new Set(["cancel", "restart", "amend", "submit"]).has(command)) {
 		try { unlinkSync(instancePaths.jobControlReceiptPath); } catch (error) { if (error?.code !== "ENOENT") throw error; }
 		const requestId = randomUUID();
 		const temporary = `${instancePaths.jobControlRequestPath}.${process.pid}.${requestId}.tmp`;
-		writeFileSync(temporary, `${JSON.stringify({ schemaVersion: 1, requestId, generation, action: command, jobId: options.jobId, amendment, channelId: options.channelId, authorId: options.authorId, content, createdAt: new Date().toISOString() })}\n`, { mode: 0o600, flag: "wx" });
+		writeFileSync(temporary, `${JSON.stringify({ schemaVersion: 1, requestId, generation, action: command, jobId: options.jobId, amendment, channelId: options.channelId, authorId: options.authorId, content, access: command === "submit" && options.readOnly ? "read-only" : null, createdAt: new Date().toISOString() })}\n`, { mode: 0o600, flag: "wx" });
 		protectOwnerOnly(temporary, "file", "Discord job control request");
 		renameSync(temporary, instancePaths.jobControlRequestPath);
 		protectOwnerOnly(instancePaths.jobControlRequestPath, "file", "Discord job control request");

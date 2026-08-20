@@ -125,6 +125,8 @@ export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, par
 			if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".codex", "auth.json"), join(codexHome, "auth.json"), "Codex authentication");
 		} else if (backendId === "claude") {
 			privateDirectory(join(childHome, ".claude"));
+			env.CLAUDE_CODE_RETRY_WATCHDOG = "1";
+			env.CLAUDE_CODE_MAX_RETRIES = "15";
 			if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".claude", ".credentials.json"), join(childHome, ".claude", ".credentials.json"), "Claude authentication");
 		} else if (backendId === "opencode") {
 			if (prepareAuthentication) {

@@ -113,7 +113,7 @@ test("DSO-011 managed marker never bypasses the shared direct-launch token owner
 	const lockDirectory = join(root, "shared-token-locks");
 	mkdirSync(configDirectory, { recursive: true, mode: 0o700 });
 	mkdirSync(credentialDirectory, { recursive: true, mode: 0o700 });
-	const token = "fake-shared-managed-direct-token-value";
+	const token = "shared-managed-direct-token-value";
 	const config = {
 		schemaVersion: 1, enabled: true, workspaceId: "lock-test",
 		persona: { name: "Reviewer", instructions: "Review safely." },

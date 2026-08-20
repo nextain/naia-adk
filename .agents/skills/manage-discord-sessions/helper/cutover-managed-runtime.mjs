@@ -173,7 +173,7 @@ function legacySupervisorUnits({ root, instance, nodePath, serviceName }) {
 }
 
 export function verifyLinuxLegacyRegistration({ adkRoot, instance = "default", backend, unitDirectory = resolve(homedir(), ".config/systemd/user"), stateReader = systemctlState } = {}) {
-	if (!new Set(["codex", "claude"]).has(backend) || typeof stateReader !== "function") throw new Error("legacy Discord registration input is invalid");
+	if (!new Set(["codex", "claude", "opencode"]).has(backend) || typeof stateReader !== "function") throw new Error("legacy Discord registration input is invalid");
 	const registration = linuxRegistrationFiles(adkRoot, instance, unitDirectory);
 	if (registration.content.service.includes("NAIA_DISCORD_RUNTIME_ARTIFACT=")) throw new Error("Discord registration is not a legacy mutable registration");
 	const root = registration.identity.root;
@@ -308,7 +308,7 @@ function verifyGitRuntimeBytes({ adkRoot, revision, runtimePath }) {
 	}
 }
 
-export function createManagedRuntimeArtifact({ adkRoot, instance = "default", sourceRevision, sourceRuntimeTreeId, tokenFingerprint, nodePath = process.execPath, backendExecutables = {}, artifactDirectory = null }) {
+export function createManagedRuntimeArtifact({ adkRoot, instance = "default", sourceRevision, sourceRuntimeTreeId, tokenFingerprint, nodePath = process.execPath, backendExecutables = {}, credentialProfiles = [], homeDirectory = homedir(), artifactDirectory = null }) {
 	const paths = messengerInstancePaths(realpathSync(resolve(adkRoot)), instance);
 	gitObjectId(sourceRevision, "managed runtime source revision");
 	gitObjectId(sourceRuntimeTreeId, "managed runtime source tree ID");
@@ -342,6 +342,8 @@ export function createManagedRuntimeArtifact({ adkRoot, instance = "default", so
 			runtimeArtifactDirectory: root,
 			nodePath,
 			backendExecutables,
+			credentialProfiles,
+			homeDirectory,
 			servicePath: join(runtimePath, "helper/service.mjs"),
 		});
 		const supervisor = renderDiscordSupervisorUnits({ adkRoot: paths.root, instance: paths.instance, runtimeRevision: sourceRevision, runtimeTreeId: sourceRuntimeTreeId, runtimeArtifactSha256: runtimeSha256, runtimeArtifactDirectory: root, nodePath, supervisorPath: join(runtimePath, "helper/supervisor-entry.mjs") });

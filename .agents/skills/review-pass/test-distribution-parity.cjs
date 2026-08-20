@@ -38,4 +38,19 @@ for (const relative of mirrored) {
 	);
 }
 
+const consensusContract = fs.readFileSync(path.join(canonical, "references", "consensus-and-convergence.md"), "utf8");
+const invocationContract = fs.readFileSync(path.join(canonical, "references", "invocation-and-output.md"), "utf8");
+const deliveryContract = fs.readFileSync(path.join(canonical, "references", "reporting-and-delivery.md"), "utf8");
+const humanSummary = fs.readFileSync(path.join(root, ".users", "skills", "review-pass", "SKILL.md"), "utf8");
+
+assert.match(consensusContract, /Only `ACCEPTED` enters auto-fix/);
+assert.match(consensusContract, /`REJECTED` is recorded without modification/);
+assert.match(consensusContract, /`UNRESOLVED` blocks CLEAN and release eligibility/);
+assert.match(invocationContract, /evidence_status: ACCEPTED \| REJECTED \| UNRESOLVED \| null/);
+assert.match(invocationContract, /evidence_checked: string\[\]/);
+assert.match(deliveryContract, /Consensus alone never authorizes a modification/);
+assert.match(deliveryContract, /evidence-`UNRESOLVED` finding/);
+assert.match(humanSummary, /`ACCEPTED`인 결함만 자동 수정/);
+assert.match(humanSummary, /`UNRESOLVED`는 Clean을 차단/);
+
 console.log("review-pass distribution parity: PASS");

@@ -142,7 +142,7 @@ test("DSO-005 rejects unsafe event shapes and coalesces high-rate activity", () 
 	assert.throws(() => store.createJob({
 		jobId: "unsafe-job",
 		backendId: "codex",
-		jobType: "sk-fake123456789",
+		jobType: "sk-secretvalue123456789",
 		revision: "rev-1",
 		now: iso(),
 	}), /jobType is not an allowed value/);
@@ -170,7 +170,7 @@ test("DSO-005 rejects unsafe event shapes and coalesces high-rate activity", () 
 		dedupeKey: "unsafe-shape-3",
 		kind: "phase_changed",
 		source: "codex",
-		safePayload: { phase: "/home/user/private" },
+		safePayload: { phase: "/home/luke/private" },
 	}), /not an allowed value/);
 	assert.throws(() => store.recordEvent({
 		jobId,
@@ -234,13 +234,13 @@ test("DSO-004 rejects evidence before an owned attempt exists", () => {
 
 test("DSO-005 closes job metadata before it reaches projections", () => {
 	const { store } = fixture();
-	assert.throws(() => store.createJob({ jobId: "job-secret", backendId: "sk-fake123456789", revision: "rev-1" }), /backend is not an allowed value/);
-	assert.throws(() => store.createJob({ jobId: "job-path", backendId: "codex", revision: "/home/user/private" }), /revision must be a safe identifier/);
+	assert.throws(() => store.createJob({ jobId: "job-secret", backendId: "sk-secretvalue123456789", revision: "rev-1" }), /backend is not an allowed value/);
+	assert.throws(() => store.createJob({ jobId: "job-path", backendId: "codex", revision: "/home/luke/private" }), /revision must be a safe identifier/);
 	assert.throws(() => store.createJob({ jobId: "job-capability", backendId: "codex", revision: "rev-1", backendCapabilities: { token: true } }), /unsupported field/);
 	assert.throws(() => store.createJob({ jobId: "job-capability-value", backendId: "codex", revision: "rev-1", backendCapabilities: { cancellation: "yes" } }), /must be boolean/);
 	const { jobId, attemptId } = createRunningJob(store, { jobId: "metadata-job" });
-	assert.throws(() => store.recordEvent({ jobId, attemptId: "sk-fake123456789", dedupeKey: "bad-attempt", kind: "phase_changed", source: "codex", safePayload: { phase: "testing" } }), /attemptId resembles sensitive data/);
-	assert.throws(() => store.recordEvent({ jobId, attemptId, dedupeKey: "bad-time", kind: "phase_changed", occurredAt: "/home/user/private", source: "codex", safePayload: { phase: "testing" } }), /canonical ISO timestamp/);
+	assert.throws(() => store.recordEvent({ jobId, attemptId: "sk-secretvalue123456789", dedupeKey: "bad-attempt", kind: "phase_changed", source: "codex", safePayload: { phase: "testing" } }), /attemptId resembles sensitive data/);
+	assert.throws(() => store.recordEvent({ jobId, attemptId, dedupeKey: "bad-time", kind: "phase_changed", occurredAt: "/home/luke/private", source: "codex", safePayload: { phase: "testing" } }), /canonical ISO timestamp/);
 	store.close();
 });
 
@@ -253,7 +253,7 @@ test("DSO-001 rejects stale-attempt events and implicit recovery", () => {
 	assert.equal(exactRetry.eventId, retriedOldEvent.eventId);
 	assert.throws(() => store.recordEvent({ jobId, attemptId, dedupeKey: "late-old-attempt", kind: "phase_changed", occurredAt: iso(2_000), source: "codex", safePayload: { phase: "testing" } }), /stale attempt event/);
 	store.recordEvent({ jobId, attemptId: secondAttempt, kind: "delivery_started", occurredAt: iso(3_000), source: "helper", safePayload: {} });
-	store.recordEvent({ jobId, attemptId: secondAttempt, kind: "delivery_unknown", occurredAt: iso(4_000), source: "helper", safePayload: {} });
+	store.recordEvent({ jobId, attemptId: secondAttempt, kind: "delivery_unknown", occurredAt: iso(4_000), source: "helper", safePayload: { reasonCode: "network_result_unknown" } });
 	assert.throws(() => store.recordEvent({ jobId, attemptId: secondAttempt, dedupeKey: "implicit-recovery", kind: "phase_changed", occurredAt: iso(5_000), source: "codex", safePayload: { phase: "recovering" } }), /invalid lifecycle transition/);
 	store.close();
 });

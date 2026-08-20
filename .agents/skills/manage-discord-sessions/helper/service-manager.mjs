@@ -21,7 +21,7 @@ export {
 	verifyWindowsTaskEnabled,
 	windowsSupervisorTaskName,
 } from "./service-manager-windows.mjs";
-export { authorizeManagedServiceInstall, installServiceCommands, removeUnreferencedManagedRuntimeArtifact, verifyLinuxInstallOutcome } from "./service-manager-linux.mjs";
+export { authorizeManagedServiceInstall, installServiceCommands, installSupervisorTimerCommands, removeUnreferencedManagedRuntimeArtifact, verifyLinuxInstallOutcome } from "./service-manager-linux.mjs";
 export {
 	cutoverRegistrationRestoreCommands,
 	evaluateManagedDiscordCanary,
