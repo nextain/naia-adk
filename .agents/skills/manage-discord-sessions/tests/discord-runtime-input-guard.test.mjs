@@ -62,7 +62,7 @@ test("DSO-010 live config and credential revocation fail closed without waiting 
 	writeFileSync(join(root, ".agents/context/policy.yaml"), "authority: current\n", "utf8");
 	const original = v2Config(root);
 	writePrivate(paths.configPath, JSON.stringify(original));
-	writePrivate(join(paths.credentialsDirectory, "discord-token"), "runtime-input-token-original");
+	writePrivate(join(paths.credentialsDirectory, "discord-token"), "fake-runtime-input-token-original");
 	const config = loadMessengerConfig(paths.configPath);
 	const token = new FileCredentialResolver(paths.credentialsDirectory).resolve(config.discord.credentialRef);
 	const snapshot = buildAgentContextSnapshot({ workspace: root, agentId: config.workspace.agentId, entrypoint: config.workspace.entrypoint, contextFiles: config.workspace.contextFiles });
@@ -78,7 +78,7 @@ test("DSO-010 live config and credential revocation fail closed without waiting 
 	const restoredToken = new FileCredentialResolver(paths.credentialsDirectory).resolve(restoredConfig.discord.credentialRef);
 	const verifyCredential = createRuntimeInputVerifier({ root, paths, config: restoredConfig, token: restoredToken, agentContext: { cwd: snapshot.workspaceRoot, snapshot } });
 	assert.match(verifyCredential(), /^[a-f0-9]{64}$/);
-	writePrivate(join(paths.credentialsDirectory, "discord-token"), "runtime-input-token-rotated");
+	writePrivate(join(paths.credentialsDirectory, "discord-token"), "fake-runtime-input-token-rotated");
 	assert.throws(verifyCredential, (error) => error?.code === "context_changed_restart_required");
 });
 
@@ -94,7 +94,7 @@ test("DSO-010 queued work revalidates authority before runner and immediately be
 	const firstBlocked = new Promise((resolve) => { releaseFirst = resolve; });
 	let calls = 0;
 	const router = new DiscordMessageRouter({
-		config, store, token: "runtime-input-token-original", botUserId: BOT, cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot, runtimeRevision: RUNTIME_REVISION,
+		config, store, token: "fake-runtime-input-token-original", botUserId: BOT, cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot, runtimeRevision: RUNTIME_REVISION,
 		verifyRuntimeInputs: () => { if (!current) throw new Error("revoked"); },
 		send: async () => ({ state: "confirmed" }),
 		runner: async ({ preSpawnCheck }) => {

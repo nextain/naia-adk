@@ -65,7 +65,7 @@ test("DSG-002 accepts ingress and job atomically and deduplicates Gateway replay
 
 test("DSO-001 stores one bounded local request excerpt without assembled context", () => {
 	const { store } = fixture();
-	const privateRequest = `inspect token=supersecretvalue /var/home/luke/private ${"가".repeat(700)}`;
+	const privateRequest = `inspect token=supersecretvalue /home/user/private ${"가".repeat(700)}`;
 	const input = { sourceMessageId: "666666666666666667", scopeKey: "scope-request", jobId: "job-request", backendId: "codex", backendCapabilities: { structuredProgress: true }, activityDetail: "structured", requestExcerpt: privateRequest };
 	assert.equal(store.acceptIngressAndCreateJob(input).duplicate, false);
 	assert.equal(store.acceptIngressAndCreateJob({ ...input, jobId: "job-request-replay" }).jobId, "job-request");
@@ -93,10 +93,10 @@ test("DSG-003 records delivery before bounded same-nonce retries and never start
 		const body = JSON.parse(init.body);
 		assert.deepEqual(body.allowed_mentions, { parse: [] });
 		assert.equal(body.enforce_nonce, true);
-		assert.equal(body.content.includes("/var/home/luke"), false);
+		assert.equal(body.content.includes("/home/user"), false);
 		throw new Error("connection lost after send");
 	};
-	const first = await deliverJobResult({ store, jobId: "job-1", attemptId, token: "token-value-long-enough", channelId: CHANNEL, botUserId: BOT, content: "done /var/home/luke/private @everyone", fetchImpl });
+	const first = await deliverJobResult({ store, jobId: "job-1", attemptId, token: "token-value-long-enough", channelId: CHANNEL, botUserId: BOT, content: "done /home/user/private @everyone", fetchImpl });
 	assert.equal(first.state, "unknown");
 	const second = await deliverJobResult({ store, jobId: "job-1", attemptId, token: "token-value-long-enough", channelId: CHANNEL, botUserId: BOT, content: "done", fetchImpl });
 	assert.equal(second.state, "unknown");
@@ -106,7 +106,7 @@ test("DSG-003 records delivery before bounded same-nonce retries and never start
 	assert.match(store.getJob("job-1").events.at(-1).safeSummary, /network_result_unknown/);
 	store.close();
 	const bytes = readFileSync(databasePath);
-	assert.equal(bytes.includes(Buffer.from("done /var/home/luke/private")), false);
+	assert.equal(bytes.includes(Buffer.from("done /home/user/private")), false);
 });
 
 test("DSG-003 retries an uncertain Discord POST with the same deduplicating nonce", async () => {
