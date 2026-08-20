@@ -59,6 +59,35 @@ AI 에이전트가 곧바로 일할 수 있도록, 자리가 정해진 디렉터
 운영자가 그 자리에서 고치도록 만든 것입니다. 잘못된 목록을 모르고 서비스하는 사고를 막기 위한
 선택입니다.
 
+### 지금 들어 있는 스킬
+
+스킬은 네 갈래로 나뉩니다. 어떤 스킬이 있는지 전체를 다시 읽지 않아도 되도록
+`.agents/context/skills-index.yaml`에 무엇을 언제 쓰는지 한 줄씩 정리해 두었고,
+아래는 그 목차입니다.
+
+**문서와 대외 산출물** — 사람이 읽을 것을 만드는 일입니다.
+`doc-coauthoring`(스펙·제안서·설계 문서), `read-doc`, `translate-doc`,
+`press-release`, `weekly-report`, `copyright-reg`(저작권 등록 서류),
+`patent-draft`와 `patent-pipeline`(특허 명세), `youtube-upload`(영상과 자막 게시).
+
+**워크스페이스를 굴리는 일** — 저장소 자체를 다루는 손입니다.
+`project-create`, `project-migration`, `merge-worktree`, `migrate-ctx`,
+`session-resume`, `sync-upstream`(업스트림 동기화), `manage-skills`,
+`secret-vault`(암호화 시크릿 볼트).
+
+**검증 게이트** — 통과했다는 말 대신 증거를 요구하는 자리입니다.
+`verify-implementation`, `verify-contract-conformance`, `verify-request-contract`,
+`verify-product-preservation`, `verify-benchmark-contract`, `verify-review-gate`,
+`webapp-testing`, 그리고 적대적 검토를 붙이는 `review-pass`.
+
+**운영과 실험** — 바깥과 닿거나 모델을 다루는 일입니다.
+`manage-discord-sessions`(디스코드 게이트웨이 운영), `payroll`,
+`finetune-persona`(캐릭터 LoRA 학습).
+
+스킬을 새로 만들 때는 `SKILL_TEMPLATE.md`에서 시작하고, 만든 뒤에는 색인에도
+한 줄을 남깁니다. 색인이 실제와 어긋나면 다음 세션이 있는 줄도 모르는 스킬을
+다시 만들게 됩니다.
+
 ### 규칙 묶음과 최소 거버넌스
 
 혼자 쓰는 워크스페이스라도, AI와 자동화가 손을 대는 순간 최소한의 규칙이 필요합니다. Naia

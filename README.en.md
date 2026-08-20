@@ -68,6 +68,37 @@ than silently dropping the broken skill and serving the rest, the operator is ma
 to fix it on the spot. It's a deliberate choice to prevent shipping an
 incomplete catalog by accident.
 
+### What is in the skill tree today
+
+The skills fall into four groups. So that a session does not have to reread
+every `SKILL.md` to find out what exists, `.agents/context/skills-index.yaml`
+carries one line per skill saying what it does and when to reach for it. The
+list below is that index's table of contents.
+
+**Documents and outward work** — things a person will read.
+`doc-coauthoring` (specs, proposals, design documents), `read-doc`,
+`translate-doc`, `press-release`, `weekly-report`, `copyright-reg`,
+`patent-draft` and `patent-pipeline`, `youtube-upload` (video and subtitles).
+
+**Running the workspace** — the hands that touch the repository itself.
+`project-create`, `project-migration`, `merge-worktree`, `migrate-ctx`,
+`session-resume`, `sync-upstream`, `manage-skills`, and `secret-vault` for the
+encrypted secret vault.
+
+**Verification gates** — the places that ask for evidence instead of a claim.
+`verify-implementation`, `verify-contract-conformance`,
+`verify-request-contract`, `verify-product-preservation`,
+`verify-benchmark-contract`, `verify-review-gate`, `webapp-testing`, and
+`review-pass` for adversarial review.
+
+**Operations and experiments** — work that reaches outside or handles models.
+`manage-discord-sessions` for the Discord gateway, `payroll`, and
+`finetune-persona` for character LoRA training.
+
+Start a new skill from `SKILL_TEMPLATE.md`, and add its line to the index once
+it exists. When the index drifts from the tree, the next session rebuilds a
+skill it already had.
+
 ### Rules and minimum governance
 
 Even a workspace you use alone needs some minimal rules the moment AI and
