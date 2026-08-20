@@ -109,6 +109,41 @@ ADK는 `read`, `write`, `execute`, `publish`를 서로 다른 관심사로 나�
 > 적어 뒀습니다. `AGENTS.md`의 세션 경계 절은 의도한 설계를 서술한 것이며 현재 런타임 동작과
 > 다릅니다.
 
+### 시크릿은 어디에 두나
+
+API 키나 인증서를 git에 그냥 올릴 수는 없습니다. 그렇다고 각자 노트북에만 두면
+기계를 바꿀 때마다 사라지고, 누가 무엇을 갖고 있는지도 알 수 없게 됩니다. Naia
+ADK는 그 사이를 이렇게 지납니다. 시크릿을 담은 폴더 하나를 통째로 묶어 암호화한
+**파일 하나만** git에 올리고, 푼 내용은 git이 아예 보지 않게 합니다.
+
+구체적으로는 `key/` 폴더를 tar로 묶고 [age](https://github.com/FiloSottile/age)로
+암호화해 `key.age` 하나를 만듭니다. `key/`는 `.gitignore`에 있어 실수로도 올라가지
+않습니다. 커밋되는 것은 언제나 `key.age` 하나뿐입니다.
+
+비밀번호는 사람이 직접 입력합니다. AI가 대신 받지도, 대신 넣지도 않습니다. 그래서
+여는 일과 잠그는 일은 사용자가 자기 터미널에서 하고, 비밀번호가 필요 없는 점검과
+백업은 AI가 대신할 수 있습니다. 이 경계가 스킬 안에 명령 단위로 나뉘어 있습니다.
+
+```bash
+bash .agents/skills/secret-vault/scripts/vault.sh init     # 새 repo에 볼트 만들기
+bash .agents/skills/secret-vault/scripts/vault.sh unlock   # 열기 (비밀번호 필요)
+bash .agents/skills/secret-vault/scripts/vault.sh lock     # 다시 잠그기 (비밀번호 필요)
+bash .agents/skills/secret-vault/scripts/vault.sh status   # 백업이 최신인지 점검
+bash .agents/skills/secret-vault/scripts/vault.sh sync     # key.age만 커밋하고 push
+```
+
+`status`가 있는 이유는 실수의 모양이 정해져 있기 때문입니다. 키를 추가하고 다시
+잠그는 것을 잊거나, 잠갔는데 push를 잊거나, 임시 파일이 남는 일이 반복됩니다.
+`status`는 그 셋을 한 번에 봅니다. "키가 다 백업돼 있나?"라는 질문에는 기억이
+아니라 이 명령으로 답합니다.
+
+`lock`은 새 암호문을 만든 뒤 **다시 풀어 보고** 성공했을 때만 기존 파일을 바꿉니다.
+중간에 실패해서 볼트가 깨진 채 남는 일을 막기 위해서입니다.
+
+이 패턴은 `data-private` 같은 개인 저장소를 표준 소비자로 삼지만, `key.age` 하나와
+gitignore된 `key/`를 두는 어떤 저장소에도 그대로 쓸 수 있습니다. 이름을 바꾸고
+싶으면 `VAULT`와 `PLAIN_DIR` 환경 변수로 덮어씁니다.
+
 ### LLM 어댑터 (naia-anyllm)
 
 LLM에 연결해야 하는 기능을 위해 `naia-anyllm` 어댑터를 내장합니다. [any-llm](https://github.com/nextain/any-llm)

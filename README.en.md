@@ -125,6 +125,44 @@ but by level they are still `confidential`.
 > `.claude/no-harness`. The Session Boundaries section of `AGENTS.md` describes the
 > intended design, not current runtime behavior.
 
+### Where secrets live
+
+You cannot commit API keys and certificates to git. But keeping them only on
+each laptop means they vanish when the machine changes, and nobody can say who
+holds what. Naia ADK threads that needle by committing **exactly one file**: the
+folder of secrets, archived and encrypted. The decrypted contents are never seen
+by git at all.
+
+Concretely, the `key/` folder is tarred and encrypted with
+[age](https://github.com/FiloSottile/age) into a single `key.age`. `key/` is in
+`.gitignore`, so it cannot be committed by accident. The only thing that ever
+lands in a commit is `key.age`.
+
+A person types the passphrase. The AI neither receives it nor enters it on
+anyone's behalf. So opening and sealing the vault happen in the user's own
+terminal, while the checks and the backup — which need no passphrase — can be
+delegated. That boundary is drawn command by command inside the skill.
+
+```bash
+bash .agents/skills/secret-vault/scripts/vault.sh init     # create a vault in a new repo
+bash .agents/skills/secret-vault/scripts/vault.sh unlock   # open it (passphrase)
+bash .agents/skills/secret-vault/scripts/vault.sh lock     # seal it again (passphrase)
+bash .agents/skills/secret-vault/scripts/vault.sh status   # is the backup current?
+bash .agents/skills/secret-vault/scripts/vault.sh sync     # commit key.age and push
+```
+
+`status` exists because the mistakes have a fixed shape. You add a key and
+forget to seal it, or you seal it and forget to push, or a temporary file is
+left behind. `status` looks for all three at once. When someone asks whether the
+keys are backed up, answer with that command rather than from memory.
+
+`lock` writes the new ciphertext, **decrypts it again to check**, and only then
+replaces the old file — so a half-finished seal never leaves a broken vault.
+
+The pattern's standard consumer is a private repository such as `data-private`,
+but any repository with a `key.age` and a gitignored `key/` can use it. Override
+`VAULT` and `PLAIN_DIR` to rename either side.
+
 ### LLM adapter (naia-anyllm)
 
 For features that need to reach an LLM, the `naia-anyllm` adapter is built in. It

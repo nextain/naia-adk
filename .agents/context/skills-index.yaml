@@ -97,10 +97,10 @@ skills:
 
   secret-vault:
     trigger: "암호화된 키 파일 풀기, key.age unlock/lock, 키 추가 후 재암호화, 복호화가 깨져 보임, data-private 시크릿"
-    what: "age passphrase 볼트(key.age = tar+age 암호문 / 평문 key/) 열기·수정·재암호화. 평문 비커밋·비번은 사람이 직접 입력 계약"
+    what: "age passphrase 볼트(key.age = tar+age 암호문 / 평문 key/) 만들기·열기·수정·재암호화·백업. 커밋되는 것은 key.age 하나뿐이고, 비번은 사람이 직접 입력한다"
     arg: null
     scripts: [scripts/vault.sh]
-    note: "표준 소비자=data-private 서브모듈. 비번은 AI를 거치지 않음(사용자 `!` 직접 실행)."
+    note: "명령은 init/unlock/list/verify/lock/status/sync. 비번이 필요한 unlock·verify·lock 은 사용자가 자기 터미널에서 직접 실행하고, 비번이 필요 없는 status·sync 는 AI 가 대신한다. '키 다 백업돼 있나' 는 기억이 아니라 status 로 답한다. 표준 소비자=data-private 서브모듈."
 
   manage-discord-sessions:
     trigger: "Discord 설정, Codex/Claude 백그라운드 작업 상태, 실시간 활동, 멈춤 진단, 재부팅 복구, idle history rotation"
