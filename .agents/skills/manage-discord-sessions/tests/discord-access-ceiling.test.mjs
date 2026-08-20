@@ -11,7 +11,7 @@ import { currentExecutionProfile } from "../helper/execution-profile.mjs";
  * 그래서 여기서는 인자를 넘겼다는 사실이 아니라 결과가 실제로 낮아지는지를 본다.
  */
 
-const USER = "865850174651498506";
+const USER = "100000000000000001";
 
 function config() {
 	return {

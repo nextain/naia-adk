@@ -24,9 +24,18 @@ const FAILURE_TEXT = {
 
 const MAX_QUEUED_TURNS = 32;
 const MAX_SCOPE_QUEUED_TURNS = 8;
-// Proactive notifications are restricted to the workspace owner.  The model
+// Proactive notifications are restricted to one configured recipient. The model
 // never supplies a recipient ID, and no other operator can be targeted.
-export const PROACTIVE_DM_RECIPIENT_USER_ID = "865850174651498506";
+//
+// The recipient comes from the instance config, not from this file. A default
+// baked in here would mean every workspace that clones this skill tries to DM
+// a stranger, and it would publish that person's account ID in a public
+// repository. When the field is unset the feature stays off.
+export function proactiveDmRecipient(config) {
+	const recipient = config?.discord?.proactiveDmRecipientUserId;
+	if (typeof recipient !== "string" || !/^\d{17,20}$/.test(recipient)) return null;
+	return config?.discord?.operatorUserIds?.includes(recipient) === true ? recipient : null;
+}
 
 function localOperatorSnowflake(nowMs) {
 	const discordEpoch = 1_420_070_400_000n;
@@ -483,9 +492,9 @@ export class DiscordMessageRouter {
 			let finalContent = result.transientResult;
 			const dmRequest = parseDiscordDmRequest(finalContent);
 			if (dmRequest) {
-				const recipientAllowed = this.config.discord?.operatorUserIds?.includes(PROACTIVE_DM_RECIPIENT_USER_ID) === true;
-				let receipt = { state: "failed", reasonCode: recipientAllowed ? "dm_delivery_failed" : "fixed_recipient_not_authorized" };
-				if (recipientAllowed && effectiveAllowedActions(this.config, item.authority).includes("reply")) receipt = await this.directMessage({ token: this.token, userId: PROACTIVE_DM_RECIPIENT_USER_ID, content: dmRequest.content, nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal: controller.signal });
+				const recipient = proactiveDmRecipient(this.config);
+				let receipt = { state: "failed", reasonCode: recipient ? "dm_delivery_failed" : "fixed_recipient_not_authorized" };
+				if (recipient && effectiveAllowedActions(this.config, item.authority).includes("reply")) receipt = await this.directMessage({ token: this.token, userId: recipient, content: dmRequest.content, nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal: controller.signal });
 				finalContent = receipt.state === "confirmed" ? dmRequest.successReply : dmRequest.failureReply;
 			}
 			await this.deliver({ store: this.store, jobId: item.jobId, attemptId: result.attemptId, token: this.token, botUserId: this.botUserId, channelId: item.channelId, content: finalContent, signal: controller.signal });
