@@ -27,7 +27,7 @@ export function renderOperatorLauncher(adkRoot, { platform = process.platform, n
 	return `#!/usr/bin/env bash\n# ${OPERATOR_LAUNCHER_MARKER}\nset -euo pipefail\nexec ${shellQuote(script)} "$@"\n`;
 }
 
-export function installOperatorLauncher(adkRoot, { directory: targetDirectory } = {}) {
+export function installOperatorLauncher(adkRoot, { directory: targetDirectory, probeInstance = null } = {}) {
 	const directory = targetDirectory ?? (process.platform === "win32"
 		? resolve(process.env.LOCALAPPDATA ?? resolve(homedir(), "AppData/Local"), "Microsoft/WindowsApps")
 		: resolve(homedir(), ".local/bin"));
@@ -41,12 +41,15 @@ export function installOperatorLauncher(adkRoot, { directory: targetDirectory } 
 	}
 	writeFileSync(path, content, { mode: 0o600 });
 	protectOwnerExecutable(path, "operator launcher");
+	// 프로브는 설치 중인 인스턴스로 물어야 한다. 인스턴스를 빼면 `default` 를
+	// 찾는데, 워크스페이스에 그 이름의 설정이 없으면 설치가 통째로 막힌다.
+	const probeArgs = probeInstance === null ? ["service", "unit"] : ["--instance", probeInstance, "service", "unit"];
 	if (process.platform !== "win32") {
 		accessSync(path, fsConstants.X_OK);
-		const probe = spawnSync(path, ["service", "unit"], { encoding: "utf8", timeout: 5_000 });
+		const probe = spawnSync(path, probeArgs, { encoding: "utf8", timeout: 5_000 });
 		if (probe.error || probe.status !== 0) throw new Error("operator launcher execution probe failed");
 	} else {
-		const probe = spawnSync(path, ["service", "unit"], { encoding: "utf8", shell: true, windowsHide: true, timeout: 5_000 });
+		const probe = spawnSync(path, probeArgs, { encoding: "utf8", shell: true, windowsHide: true, timeout: 5_000 });
 		if (probe.error || probe.status !== 0) throw new Error("operator launcher execution probe failed");
 	}
 	return path;

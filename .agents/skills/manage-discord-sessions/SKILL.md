@@ -305,6 +305,15 @@ node /absolute/candidate/.agents/skills/manage-discord-sessions/helper/cli.mjs \
   --adk-root /absolute/target --instance <instance> cutover rollback
 ```
 
+The order matters and is not obvious from the command names. `prepare` and
+`verify` run from the candidate while the target workspace is still at its
+current revision — they only build and check a rollback bundle, and they do not
+replace anything. The replacement happens in `service install`, which requires
+the target workspace to already be checked out at the bundle's candidate
+revision. So the sequence is: prepare, verify, move the target workspace to the
+candidate commit, then install. Running `prepare` when both trees are at the
+same commit fails, and so does `install` before the target has been moved.
+
 The first managed cutover may adopt the exact legacy mutable registration
 created by this skill. Prepare verifies its three unit files, canonical Node and
 backend executables, credential-derived token, registration state, owned live
@@ -385,6 +394,30 @@ When the user explicitly assigns periodic or continuous Discord monitoring:
 3. Use `health-check --json` or the supervisor snapshot to distinguish stopped/stale service, overdue active work, historical attention, and unknown Gateway evidence. A fresh process heartbeat alone is not proof that accepted work is healthy.
 4. The supervisor never sends, replays, restarts, mutates the ledger, or claims continuous curation. Recovery remains an explicit operator action except for the service manager's existing process restart policy.
 5. Collaboration subagents are outside this harness and have no receipt interface. Status reports `foreignAgentSupervision=unsupported`; reconcile their actual lifecycle directly before describing them as active or relying on their output.
+
+## Attachments
+
+A Discord message carries its files separately from its text. The Gateway puts
+both into the request, so an attached file is visible to the agent as a named
+item with its `attachmentId`, and a message that carries only a file is still a
+real request rather than an empty one.
+
+Seeing a file is not reading it. The agent must download it first:
+
+```bash
+node .agents/skills/manage-discord-sessions/helper/cli.mjs attachment \
+  --instance <instance> --channel <channel-id> --message <message-id> \
+  --attachment <attachment-id> --output /absolute/path
+```
+
+The download verifies the CDN host, bounds the size against the metadata Discord
+reported, and returns a SHA-256 you can pin with `--expected-sha256`. Filenames
+are stripped of path separators before they reach the agent, because the agent
+uses them to build output paths.
+
+Conversation history keeps a short `[attached: name]` marker so a later "that
+file I sent" still has something to point at. A message the Gateway cannot turn
+into a request now says so in the channel instead of disappearing.
 
 ## Safety boundaries
 

@@ -6,6 +6,10 @@ export const CREDENTIAL_PROFILES = Object.freeze({
 		kind: "file",
 		source: [".local", "share", "com.vercel.cli", "auth.json"],
 		target: { base: "xdgData", parts: ["com.vercel.cli", "auth.json"] },
+		executableDirectories: Object.freeze([
+			Object.freeze({ base: "absolute", path: "/home/linuxbrew/.linuxbrew/bin" }),
+			Object.freeze({ base: "absolute", path: "/var/home/linuxbrew/.linuxbrew/bin" }),
+		]),
 		env: Object.freeze({ VERCEL_TELEMETRY_DISABLED: "1" }),
 		label: "Vercel authentication",
 	}),
@@ -13,6 +17,10 @@ export const CREDENTIAL_PROFILES = Object.freeze({
 		kind: "file",
 		source: [".config", "gh", "hosts.yml"],
 		target: { base: "xdgConfig", parts: ["gh", "hosts.yml"] },
+		executableDirectories: Object.freeze([
+			Object.freeze({ base: "absolute", path: "/home/linuxbrew/.linuxbrew/bin" }),
+			Object.freeze({ base: "absolute", path: "/var/home/linuxbrew/.linuxbrew/bin" }),
+		]),
 		label: "GitHub CLI authentication",
 	}),
 	"ssh-onmam": Object.freeze({
@@ -27,6 +35,9 @@ export const CREDENTIAL_PROFILES = Object.freeze({
 		source: [".config", "gcloud"],
 		target: { base: "home", parts: [".config", "gcloud"] },
 		exclude: Object.freeze(["logs", "cache", "surface_data"]),
+		executableDirectories: Object.freeze([
+			Object.freeze({ base: "home", parts: ["google-cloud-sdk", "bin"] }),
+		]),
 		envPath: Object.freeze({ CLOUDSDK_CONFIG: "target" }),
 		env: Object.freeze({ CLOUDSDK_CORE_DISABLE_PROMPTS: "1" }),
 		label: "gcloud authentication",
@@ -36,6 +47,10 @@ export const CREDENTIAL_PROFILES = Object.freeze({
 		source: [".azure"],
 		target: { base: "home", parts: [".azure"] },
 		exclude: Object.freeze(["logs", "cache", "surface_data"]),
+		executableDirectories: Object.freeze([
+			Object.freeze({ base: "absolute", path: "/home/linuxbrew/.linuxbrew/bin" }),
+			Object.freeze({ base: "absolute", path: "/var/home/linuxbrew/.linuxbrew/bin" }),
+		]),
 		envPath: Object.freeze({ AZURE_CONFIG_DIR: "target" }),
 		label: "Azure CLI authentication",
 	}),
@@ -50,4 +65,18 @@ export function validateCredentialProfiles(value, label = "credential profiles")
 		throw new Error(`${label} contains an unsupported credential profile`);
 	}
 	return [...value];
+}
+
+export function credentialProfileExecutableDirectories(value, { homeDirectory } = {}) {
+	const profiles = validateCredentialProfiles(value, "executable credential profiles");
+	if (typeof homeDirectory !== "string" || !homeDirectory.startsWith("/")) throw new Error("credential executable home directory must be absolute");
+	const directories = [];
+	for (const profileId of profiles) {
+		for (const descriptor of CREDENTIAL_PROFILES[profileId].executableDirectories ?? []) {
+			if (descriptor.base === "absolute" && typeof descriptor.path === "string" && descriptor.path.startsWith("/")) directories.push(descriptor.path);
+			else if (descriptor.base === "home" && Array.isArray(descriptor.parts) && descriptor.parts.every((part) => typeof part === "string" && part && part !== "." && part !== ".." && !part.includes("/"))) directories.push([homeDirectory, ...descriptor.parts].join("/"));
+			else throw new Error("credential executable directory descriptor is invalid");
+		}
+	}
+	return [...new Set(directories)];
 }

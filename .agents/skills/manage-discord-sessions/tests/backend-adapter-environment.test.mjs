@@ -85,7 +85,7 @@ test("DSO-011 disables provider-native project instruction discovery", () => {
 });
 
 test("DSO-006 normalizes provider streams without retaining model content", () => {
-	const secret = "fake-do-not-persist-this-prompt";
+	const secret = "do-not-persist-this-prompt";
 	const codex = parseBackendLine({ backendId: "codex", attemptId: "attempt-1", lineNumber: 1, line: JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: secret } }) });
 	const claude = parseBackendLine({ backendId: "claude", attemptId: "attempt-2", lineNumber: 1, line: JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: secret }] } }) });
 	assert.deepEqual(codex.map((event) => event.kind), ["output_activity"]);

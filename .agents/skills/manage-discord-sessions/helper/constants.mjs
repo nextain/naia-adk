@@ -93,6 +93,14 @@ export const JOB_FAILURE_REASON_CODES = new Set([
 	"backend_spawn_failed",
 ]);
 
+export const DELIVERY_UNKNOWN_REASON_CODES = new Set([
+	"network_result_unknown",
+	"server_response_unknown",
+	"receipt_identity_mismatch",
+	"delivery_commit_unknown",
+	"recovery_interrupted",
+]);
+
 export const DISCORD_SERVICE_FAILURE_REASONS = new Set([
 	"configuration_invalid",
 	"context_invalid",

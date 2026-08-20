@@ -5,6 +5,7 @@ import { deliverJobResult, formatOperatorStatus, postDiscordDirectMessage } from
 import { runBackendAttempt } from "./backend-runner.mjs";
 import { commandOptionsForProfile, configurationRevision, currentExecutionProfile, discordBindingIdentity, durableExecutionBinding, effectiveAllowedActions, participantAuthorityRevision, sameExecutionProfile } from "./execution-profile.mjs";
 import { promptWithDiscordConversation, trustedParticipantPolicy } from "./discord-conversation.mjs";
+import { attachmentPromptSection } from "./discord-attachments.mjs";
 import { verifyAgentContextBeforeAttempt } from "./agent-context.mjs";
 
 const FAILURE_TEXT = {
@@ -47,17 +48,41 @@ export function noProgressInterventionDue(job, nowMs, interventionMs) {
 	return Number.isFinite(lastProgressMs) && nowMs - lastProgressMs >= interventionMs;
 }
 
-export function transientPrompt(message, botUserId, config, authorization = null, agentContextSnapshot = null) {
+/**
+ * 한 Discord 메시지가 담은 요청 전체. 본문 글과 첨부 서술을 합친다.
+ *
+ * 첨부를 여기서 합치는 이유는 두 가지다. 프롬프트와 복구 봉투가 같은 문자열을
+ * 쓰게 되어 재시도해도 파일 정보가 사라지지 않고, 파일만 보낸 메시지가 "빈 요청"
+ * 으로 판정되어 조용히 버려지지 않는다.
+ */
+export function discordRequestText(message, botUserId, { authorization = null, instance = null } = {}) {
 	if (typeof message.content !== "string" || message.content.length > 4_000) throw new Error("Discord content is missing or too large");
 	const userText = normalizedDiscordText(message.content, botUserId);
-	return boundRequestPrompt(userText, config, authorization, agentContextSnapshot);
+	const attachmentSection = attachmentPromptSection(message, {
+		channelId: authorization?.scope?.threadId ?? authorization?.scope?.channelId ?? null,
+		instance,
+	});
+	return [userText, attachmentSection].filter(Boolean).join("\n\n");
 }
 
-export function boundRequestPrompt(userText, config, authorization = null, agentContextSnapshot = null) {
-	if (typeof userText !== "string" || !userText || userText.length > 4_000) throw new Error("Discord prompt is empty or too large");
-	const allowedActions = effectiveAllowedActions(config, authorization);
+export function transientPrompt(message, botUserId, config, authorization = null, agentContextSnapshot = null, { instance = null, accessCeiling = null } = {}) {
+	return boundRequestPrompt(discordRequestText(message, botUserId, { authorization, instance }), config, authorization, agentContextSnapshot, accessCeiling);
+}
+
+// 사용자 본문 4,000자에 우리가 만든 첨부 블록이 더해질 수 있다. 그 블록은 파일
+// 10개까지, 이름은 각 120자로 묶여 있어 1.5KB 를 넘지 않는다.
+const MAX_REQUEST_TEXT_LENGTH = 6_000;
+
+export function boundRequestPrompt(userText, config, authorization = null, agentContextSnapshot = null, accessCeiling = null) {
+	if (typeof userText !== "string" || !userText || userText.length > MAX_REQUEST_TEXT_LENGTH) throw new Error("Discord prompt is empty or too large");
+	const authorityActions = effectiveAllowedActions(config, authorization);
+	// 상한이 걸린 제출은 프롬프트에 적히는 행동 목록부터 낮춘다. 실행 프로필만
+	// 낮추고 목록을 그대로 두면 모델이 허용된다고 읽는다.
+	const allowedActions = accessCeiling === "read-only"
+		? authorityActions.filter((action) => action !== "write" && action !== "execute")
+		: authorityActions;
 	const backendId = config.backend?.selected ?? "codex";
-	const executionProfile = currentExecutionProfile(config, backendId, authorization);
+	const executionProfile = currentExecutionProfile(config, backendId, authorization, { accessCeiling });
 	const costProfile = config.backend?.profiles?.[backendId]?.costProfile ?? (backendId === "codex" ? "balanced" : "provider-default");
 	const parts = [];
 	if (agentContextSnapshot) parts.push(agentContextSnapshot.prefix, "");
@@ -159,7 +184,7 @@ export class DiscordMessageRouter {
 		this.outboundClosed = false;
 	}
 
-	async onDispatch(type, data, sequence) {
+	async onDispatch(type, data, sequence, { accessCeiling = null } = {}) {
 		if (!this.accepting) return { state: "stopping" };
 		if (type === "THREAD_CREATE" || type === "THREAD_UPDATE") {
 			if (data?.id && data?.parent_id) this.threadParents.set(data.id, { parentChannelId: data.parent_id, guildId: data.guild_id });
@@ -192,12 +217,14 @@ export class DiscordMessageRouter {
 		let prompt;
 		let currentRequest;
 		try {
-			currentRequest = commandText(data, this.botUserId);
-			if (!currentRequest || currentRequest.length > 4_000) throw new Error("Discord prompt is empty or too large");
-			prompt = transientPrompt(data, this.botUserId, this.config, authorization, this.agentContextSnapshot);
+			currentRequest = discordRequestText(data, this.botUserId, { authorization, instance: this.instance });
+			if (!currentRequest || currentRequest.length > MAX_REQUEST_TEXT_LENGTH) throw new Error("Discord prompt is empty or too large");
+			prompt = boundRequestPrompt(currentRequest, this.config, authorization, this.agentContextSnapshot, accessCeiling);
 		}
 		catch {
 			this.store.reserveIngress({ sourceMessageId, scopeKey: authorization.scopeKey, status: "rejected", reasonCode: "prompt_invalid", dispatchSequence: sequence });
+			// 조용히 버리면 보낸 사람은 봇이 죽은 줄 안다. 큐가 찼을 때처럼 이유를 남긴다.
+			void this.#sendControl({ token: this.token, channelId: authorization.scope.threadId ?? authorization.scope.channelId, botUserId: this.botUserId, content: "이 메시지에서 처리할 요청을 찾지 못했습니다. 요청할 내용을 글로 적어 주세요. / No actionable request was found in that message; please describe what you need in text.", nonce: randomUUID().replaceAll("-", "").slice(0, 24) }).promise.catch(() => {});
 			return { state: "rejected", reasonCode: "prompt_invalid" };
 		}
 		const jobId = randomUUID();
@@ -205,9 +232,9 @@ export class DiscordMessageRouter {
 		const adapter = getBackendAdapter(backendId);
 		const channelId = authorization.scope.threadId ?? authorization.scope.channelId;
 		const authority = this.#authority(authorization);
-		const executionProfile = this.#executionProfile(backendId, authority);
+		const executionProfile = this.#executionProfile(backendId, authority, accessCeiling);
 		const commandOptions = this.#withBackendOptions(backendId, commandOptionsForProfile(executionProfile));
-		const recoveryEnvelope = this.recoveryCodec?.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId, scopeKey: authorization.scopeKey, executionProfile, participantUserId: authorization.scope.authorId, bindingIdentity: authority.bindingIdentity, authorityRevision: authority.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: this.agentContextSnapshot?.contextHash ?? null, runtimeRevision: this.runtimeRevision })) ?? null;
+		const recoveryEnvelope = this.recoveryCodec?.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId, scopeKey: authorization.scopeKey, executionProfile, accessCeiling, participantUserId: authorization.scope.authorId, bindingIdentity: authority.bindingIdentity, authorityRevision: authority.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: this.agentContextSnapshot?.contextHash ?? null, runtimeRevision: this.runtimeRevision })) ?? null;
 		const revisionBase = this.config.schemaVersion === 2 ? `discord-v2-${executionProfile.access}` : "discord-v1";
 		const managedRevisionBase = executionProfile.access === "read-only" ? "v2r" : "v2w";
 		const jobRevision = this.runtimeRevision === null ? revisionBase : this.config.schemaVersion === 2 ? `${managedRevisionBase}:${this.runtimeRevision}` : `${revisionBase}:${this.runtimeRevision}`;
@@ -215,7 +242,7 @@ export class DiscordMessageRouter {
 		const ingress = this.store.acceptIngressAndCreateJob({ sourceMessageId, scopeKey: authorization.scopeKey, jobId, dispatchSequence: sequence, backendId, revision: jobRevision, backendCapabilities: adapter.capabilities, activityDetail: adapter.activityDetail, jobType: "conversation", requestExcerpt: currentRequest,
 			softSilenceMs: (this.config.runtime?.softSilenceSeconds ?? 120) * 1_000, recoveryEnvelope, executionBinding, now: this.#nowIso() });
 		if (ingress.duplicate) return { state: "duplicate", jobId: ingress.jobId };
-		const item = { jobId, backendId, prompt, currentRequest, channelId, scopeKey: authorization.scopeKey, sourceMessageId, allowedUserIds: authorization.binding.allowedUserIds, binding: authorization.binding, participantUserId: authorization.scope.authorId, authority, commandOptions, executionProfile };
+		const item = { jobId, backendId, prompt, currentRequest, channelId, scopeKey: authorization.scopeKey, sourceMessageId, allowedUserIds: authorization.binding.allowedUserIds, binding: authorization.binding, participantUserId: authorization.scope.authorId, authority, commandOptions, executionProfile, accessCeiling };
 		this.workItems.set(jobId, item);
 		this.#sendOperatorResponse(item);
 		this.queue.push(item);
@@ -224,7 +251,7 @@ export class DiscordMessageRouter {
 		return { state: "accepted", jobId };
 	}
 
-	async submitOperatorRequest({ channelId, authorId, content }) {
+	async submitOperatorRequest({ channelId, authorId, content, access = null }) {
 		if (!/^\d{17,20}$/.test(channelId ?? "") || !/^\d{17,20}$/.test(authorId ?? "") || typeof content !== "string" || !content.trim() || content.length > 4_000) {
 			return { state: "rejected", action: "submit", reasonCode: "invalid_operator_submission" };
 		}
@@ -242,8 +269,10 @@ export class DiscordMessageRouter {
 			content: binding.respondWhen === "mentioned" ? `<@${this.botUserId}> ${content.trim()}` : content.trim(),
 			mentions: binding.respondWhen === "mentioned" ? [{ id: this.botUserId }] : [],
 		};
-		const result = await this.onDispatch("MESSAGE_CREATE", data, null);
-		return { ...result, action: "submit", semantics: "owner_controlled_operator_submission" };
+		// 상한은 낮추는 방향으로만 받는다. 다른 값이 오면 권한을 넓히려는 시도로 본다.
+		if (access !== null && access !== "read-only") return { state: "rejected", action: "submit", reasonCode: "invalid_access_attenuation" };
+		const result = await this.onDispatch("MESSAGE_CREATE", data, null, { accessCeiling: access });
+		return { ...result, action: "submit", semantics: access === "read-only" ? "owner_controlled_read_only_submission" : "owner_controlled_operator_submission" };
 	}
 
 	async #handleCommand({ command, authorization, sourceMessageId, sequence }) {
@@ -340,8 +369,8 @@ export class DiscordMessageRouter {
 		return authority;
 	}
 
-	#executionProfile(backendId, authority = null) {
-		return currentExecutionProfile(this.config, backendId, authority);
+	#executionProfile(backendId, authority = null, accessCeiling = null) {
+		return currentExecutionProfile(this.config, backendId, authority, { accessCeiling });
 	}
 
 	#nowIso() {
@@ -428,7 +457,7 @@ export class DiscordMessageRouter {
 		try {
 			if (controller.signal.aborted) return;
 			this.#verifyRuntimeInputs();
-			const currentProfile = this.#executionProfile(item.backendId, item.authority);
+			const currentProfile = this.#executionProfile(item.backendId, item.authority, item.accessCeiling ?? null);
 			if (!sameExecutionProfile(item.executionProfile ?? currentProfile, currentProfile)) {
 				this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "profile_replaced", safePayload: {} });
 				item = { ...item, executionProfile: currentProfile, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(currentProfile)) };
@@ -526,9 +555,10 @@ export class DiscordMessageRouter {
 			if (!envelope) return { state: "rejected", action, jobId, reasonCode: "recovery_envelope_unavailable" };
 			try {
 				const payload = JSON.parse(this.recoveryCodec.open(envelope));
-				if (typeof payload.currentRequest !== "string" || !payload.currentRequest || payload.currentRequest.length > 4_000 || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
+				const accessCeiling = payload.accessCeiling ?? null;
+				if (typeof payload.currentRequest !== "string" || !payload.currentRequest || payload.currentRequest.length > MAX_REQUEST_TEXT_LENGTH || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
 				const authority = this.#recoveryAuthority(payload);
-				const executionProfile = this.#executionProfile(sourceJob.backendId, authority);
+				const executionProfile = this.#executionProfile(sourceJob.backendId, authority, accessCeiling);
 				if (!sameExecutionProfile(payload.executionProfile, executionProfile)) throw new Error("recovery execution profile changed");
 				item = {
 					jobId,
@@ -546,10 +576,10 @@ export class DiscordMessageRouter {
 			}
 		}
 		const currentRequest = action === "amend" ? `${item.currentRequest}\n\nOperator amendment:\n${amendment.trim()}` : item.currentRequest;
-		if (currentRequest.length > 4_000) return { state: "rejected", action, jobId, reasonCode: "amendment_too_large" };
+		if (currentRequest.length > MAX_REQUEST_TEXT_LENGTH) return { state: "rejected", action, jobId, reasonCode: "amendment_too_large" };
 		const replacementJobId = randomUUID();
-		const replacementPrompt = boundRequestPrompt(currentRequest, this.config, item.authority, this.agentContextSnapshot);
-		const replacementEnvelope = this.recoveryCodec.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId: item.channelId, scopeKey: item.scopeKey, executionProfile: item.executionProfile, participantUserId: item.participantUserId, bindingIdentity: item.authority?.bindingIdentity, authorityRevision: item.authority?.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: this.agentContextSnapshot?.contextHash ?? null, runtimeRevision: this.runtimeRevision }));
+		const replacementPrompt = boundRequestPrompt(currentRequest, this.config, item.authority, this.agentContextSnapshot, item.accessCeiling ?? null);
+		const replacementEnvelope = this.recoveryCodec.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId: item.channelId, scopeKey: item.scopeKey, executionProfile: item.executionProfile, accessCeiling: item.accessCeiling ?? null, participantUserId: item.participantUserId, bindingIdentity: item.authority?.bindingIdentity, authorityRevision: item.authority?.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: this.agentContextSnapshot?.contextHash ?? null, runtimeRevision: this.runtimeRevision }));
 		this.store.createJob({ jobId: replacementJobId, backendId: item.backendId, revision: sourceJob.revision, backendCapabilities: sourceJob.backendCapabilities, activityDetail: sourceJob.activityDetail, jobType: "conversation", scopeKey: item.scopeKey, softSilenceMs: sourceJob.softSilenceMs, recoveryEnvelope: replacementEnvelope, executionBinding: sourceJob.executionBinding });
 		const replacement = { ...item, jobId: replacementJobId, prompt: replacementPrompt, currentRequest, sourceMessageId: null };
 		this.workItems.set(replacementJobId, replacement);
@@ -596,13 +626,14 @@ export class DiscordMessageRouter {
 		for (const item of items) {
 			try {
 				const payload = JSON.parse(this.recoveryCodec.open(item.envelope));
+				const accessCeiling = payload.accessCeiling ?? null;
 				if (payload.mode === "coordinator" || payload.mode === "coordinator_result") {
 					throw new Error("coordinator recovery is withdrawn");
 				}
-					if (typeof payload.currentRequest !== "string" || !payload.currentRequest || payload.currentRequest.length > 4_000 || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
+					if (typeof payload.currentRequest !== "string" || !payload.currentRequest || payload.currentRequest.length > MAX_REQUEST_TEXT_LENGTH || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
 					const authority = this.#recoveryAuthority(payload);
-					const prompt = boundRequestPrompt(payload.currentRequest, this.config, authority, this.agentContextSnapshot);
-				const executionProfile = this.#executionProfile(item.backendId, authority);
+					const prompt = boundRequestPrompt(payload.currentRequest, this.config, authority, this.agentContextSnapshot, accessCeiling);
+				const executionProfile = this.#executionProfile(item.backendId, authority, accessCeiling);
 				const profileChanged = !sameExecutionProfile(payload.executionProfile, executionProfile);
 				if (this.config.schemaVersion === 2) {
 					if (!autoRetry || profileChanged || executionProfile.access !== "read-only") throw new Error("automatic recovery is not allowed for this job");

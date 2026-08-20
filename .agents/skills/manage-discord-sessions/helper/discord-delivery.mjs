@@ -19,7 +19,7 @@ function retryPause(delayMs, signal) {
 	});
 }
 
-export async function postDiscordMessage({ token, channelId, content, nonce, botUserId, fetchImpl = fetch, signal, timeoutMs = 15_000, maxAttempts = 3, retryDelayMs = 250 }) {
+export async function postDiscordMessage({ token, channelId, content, nonce, botUserId, fetchImpl = fetch, signal, timeoutMs = 15_000, maxAttempts = 3, retryDelayMs = 1_000 }) {
 	snowflake(channelId, "channelId");
 	if (typeof token !== "string" || token.length < 16) throw new Error("Discord credential is not ready");
 	if (typeof content !== "string" || content.length === 0 || content.length > 2_000) throw new Error("Discord message length is invalid");
@@ -41,7 +41,11 @@ export async function postDiscordMessage({ token, channelId, content, nonce, bot
 			});
 			if (response.ok) {
 				const body = await response.json();
-				if (body.channel_id !== channelId || (botUserId && body.author?.id !== botUserId) || String(body.nonce ?? "") !== nonce) return { state: "unknown", reasonCode: "receipt_identity_mismatch", status: response.status };
+				// Discord may omit the nonce from a successful create-message response
+				// even when enforce_nonce was accepted. The returned message remains an
+				// authoritative receipt when its channel and bot author match; when a
+				// nonce is present, it must still match exactly.
+				if (body.channel_id !== channelId || (botUserId && body.author?.id !== botUserId) || (body.nonce !== undefined && String(body.nonce) !== nonce)) return { state: "unknown", reasonCode: "receipt_identity_mismatch", status: response.status };
 				return { state: "confirmed", messageId: snowflake(body.id, "messageId"), status: response.status };
 			}
 			if (response.status >= 400 && response.status < 500) return { state: "failed", reasonCode: response.status === 401 || response.status === 403 ? "authorization" : "request_rejected", status: response.status };
@@ -52,7 +56,7 @@ export async function postDiscordMessage({ token, channelId, content, nonce, bot
 			clearTimeout(timeout);
 			signal?.removeEventListener("abort", abort);
 		}
-		if (signal?.aborted || attempt === maxAttempts || !(await retryPause(retryDelayMs, signal))) break;
+		if (signal?.aborted || attempt === maxAttempts || !(await retryPause(retryDelayMs * attempt, signal))) break;
 	}
 	return last;
 }
@@ -108,14 +112,21 @@ export async function deliverJobResult({ store, jobId, attemptId, token, channel
 		const receipt = await postDiscordMessage({ token, channelId, content: chunks[index], nonce: chunkNonce(nonce, index), botUserId, fetchImpl, signal });
 		receipts.push(receipt);
 		if (receipt.state !== "confirmed") {
-			store.finishDelivery({ deliveryKey, status: receipt.state, reasonCode: receipt.reasonCode === "authorization" ? "authorization" : "internal_error", now: now() });
+			store.finishDelivery({
+				deliveryKey,
+				status: receipt.state,
+				reasonCode: receipt.state === "unknown"
+					? receipt.reasonCode
+					: receipt.reasonCode === "authorization" ? "authorization" : "internal_error",
+				now: now(),
+			});
 			return { state: receipt.state, receipts };
 		}
 	}
 	try {
 		store.finishDelivery({ deliveryKey, status: "confirmed", messageId: receipts.at(-1).messageId, now: now() });
 	} catch {
-		try { store.finishDelivery({ deliveryKey, status: "unknown", now: now() }); } catch {}
+		try { store.finishDelivery({ deliveryKey, status: "unknown", reasonCode: "delivery_commit_unknown", now: now() }); } catch {}
 		return { state: "unknown", receipts };
 	}
 	return { state: "confirmed", receipts };

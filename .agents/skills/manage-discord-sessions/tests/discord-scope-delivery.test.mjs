@@ -65,7 +65,7 @@ test("DSG-002 accepts ingress and job atomically and deduplicates Gateway replay
 
 test("DSO-001 stores one bounded local request excerpt without assembled context", () => {
 	const { store } = fixture();
-	const privateRequest = `inspect token=supersecretvalue /home/user/private ${"가".repeat(700)}`;
+	const privateRequest = `inspect token=supersecretvalue /var/home/luke/private ${"가".repeat(700)}`;
 	const input = { sourceMessageId: "666666666666666667", scopeKey: "scope-request", jobId: "job-request", backendId: "codex", backendCapabilities: { structuredProgress: true }, activityDetail: "structured", requestExcerpt: privateRequest };
 	assert.equal(store.acceptIngressAndCreateJob(input).duplicate, false);
 	assert.equal(store.acceptIngressAndCreateJob({ ...input, jobId: "job-request-replay" }).jobId, "job-request");
@@ -93,19 +93,20 @@ test("DSG-003 records delivery before bounded same-nonce retries and never start
 		const body = JSON.parse(init.body);
 		assert.deepEqual(body.allowed_mentions, { parse: [] });
 		assert.equal(body.enforce_nonce, true);
-		assert.equal(body.content.includes("/home/user"), false);
+		assert.equal(body.content.includes("/var/home/luke"), false);
 		throw new Error("connection lost after send");
 	};
-	const first = await deliverJobResult({ store, jobId: "job-1", attemptId, token: "token-value-long-enough", channelId: CHANNEL, botUserId: BOT, content: "done /home/user/private @everyone", fetchImpl });
+	const first = await deliverJobResult({ store, jobId: "job-1", attemptId, token: "token-value-long-enough", channelId: CHANNEL, botUserId: BOT, content: "done /var/home/luke/private @everyone", fetchImpl });
 	assert.equal(first.state, "unknown");
 	const second = await deliverJobResult({ store, jobId: "job-1", attemptId, token: "token-value-long-enough", channelId: CHANNEL, botUserId: BOT, content: "done", fetchImpl });
 	assert.equal(second.state, "unknown");
 	assert.equal(posts, 3);
 	assert.equal(store.getJob("job-1").lifecycle, "completed");
 	assert.equal(store.getJob("job-1").deliveryState, "unknown");
+	assert.match(store.getJob("job-1").events.at(-1).safeSummary, /network_result_unknown/);
 	store.close();
 	const bytes = readFileSync(databasePath);
-	assert.equal(bytes.includes(Buffer.from("done /home/user/private")), false);
+	assert.equal(bytes.includes(Buffer.from("done /var/home/luke/private")), false);
 });
 
 test("DSG-003 retries an uncertain Discord POST with the same deduplicating nonce", async () => {
@@ -121,6 +122,48 @@ test("DSG-003 retries an uncertain Discord POST with the same deduplicating nonc
 	});
 	assert.equal(receipt.state, "confirmed");
 	assert.deepEqual(nonces, ["stable-retry-nonce", "stable-retry-nonce"]);
+});
+
+test("DSG-003 retries transient Discord server failures before recording a confirmed receipt", async () => {
+	const nonces = [];
+	const receipt = await postDiscordMessage({
+		token: "token-value-long-enough", channelId: CHANNEL, content: "receipt", nonce: "stable-server-retry", botUserId: BOT, retryDelayMs: 0,
+		fetchImpl: async (_url, init) => {
+			const body = JSON.parse(init.body);
+			nonces.push(body.nonce);
+			if (nonces.length < 3) return { ok: false, status: 503 };
+			return { ok: true, status: 200, json: async () => ({ id: "666666666666666666", channel_id: CHANNEL, author: { id: BOT }, nonce: body.nonce }) };
+		},
+	});
+	assert.equal(receipt.state, "confirmed");
+	assert.deepEqual(nonces, ["stable-server-retry", "stable-server-retry", "stable-server-retry"]);
+});
+
+test("FET_DSO_014_006 retries transient Discord failures and persists a bounded unknown-delivery reason", async () => {
+	const { store } = fixture();
+	store.createJob({ jobId: "delivery-unknown-job", backendId: "codex", activityDetail: "structured", jobType: "conversation" });
+	const attemptId = store.startAttempt("delivery-unknown-job", { attemptId: "delivery-unknown-attempt" });
+	store.recordEvent({ jobId: "delivery-unknown-job", attemptId, kind: "attempt_exited", source: "helper", safePayload: { terminationKind: "exited", exitCode: 0 } });
+	store.recordEvent({ jobId: "delivery-unknown-job", attemptId, kind: "attempt_succeeded", source: "helper", safePayload: {} });
+	let posts = 0;
+	const result = await deliverJobResult({
+		store, jobId: "delivery-unknown-job", attemptId, token: "token-value-long-enough", channelId: CHANNEL, botUserId: BOT, content: "done",
+		fetchImpl: async () => { posts += 1; return { ok: false, status: 503 }; },
+	});
+	assert.equal(result.state, "unknown");
+	assert.equal(posts, 3);
+	const deliveryEvent = store.getJob("delivery-unknown-job").events.find((event) => event.kind === "delivery_unknown");
+	assert.equal(deliveryEvent.safeSummary, "Delivery result requires review: server_response_unknown");
+	store.close();
+});
+
+test("DSG-003 confirms a matching Discord receipt when the API omits the echoed nonce", async () => {
+	const receipt = await postDiscordMessage({
+		token: "token-value-long-enough", channelId: CHANNEL, content: "receipt", nonce: "accepted-request-nonce", botUserId: BOT,
+		fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ id: "666666666666666666", channel_id: CHANNEL, author: { id: BOT } }) }),
+	});
+	assert.equal(receipt.state, "confirmed");
+	assert.equal(receipt.messageId, "666666666666666666");
 });
 
 test("DSG-003 splits a long multibyte final response into bounded confirmed deliveries", async () => {

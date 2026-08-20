@@ -12,7 +12,7 @@ const USER = "222222222222222222";
 const OTHER = "333333333333333333";
 const GUILD = "444444444444444444";
 const CHANNEL = "555555555555555555";
-const TOKEN = "fake-discord-token-value-long-enough";
+const TOKEN = "discord-token-value-long-enough";
 
 function config(overrides = {}) {
 	return {
@@ -53,7 +53,7 @@ test("DSO-003 history reads one exact operator binding without persistence", asy
 		fetchImpl: async (url, init) => {
 			requests.push({ url, init });
 			return response([
-				{ id: "666666666666666666", channel_id: CHANNEL, timestamp: "2026-07-31T00:00:00.000Z", author: { id: USER, username: "Reviewer" }, content: "received sk-fake123456789 C:\\Users\\Public\\private" },
+				{ id: "666666666666666666", channel_id: CHANNEL, timestamp: "2026-07-31T00:00:00.000Z", author: { id: USER, username: "Reviewer" }, content: "received sk-secretvalue123456789 C:\\Users\\Admin\\private" },
 				{ id: "777777777777777777", channel_id: CHANNEL, timestamp: "2026-07-30T00:00:00.000Z", author: { id: OTHER, username: "Other" }, content: "must stay hidden" },
 				{ id: "888888888888888888", channel_id: OTHER, timestamp: "2026-07-29T00:00:00.000Z", author: { id: USER, username: "Reviewer" }, content: "wrong channel" },
 			]);
@@ -115,7 +115,7 @@ test("DSO-003 reply sends one sanitized message to one exact operator binding", 
 	const contentPath = join(root, "report.txt");
 	try {
 		protectOwnerOnly(root, "directory");
-		writeFileSync(contentPath, "handoff C:\\Users\\Public\\private", { mode: 0o600 });
+		writeFileSync(contentPath, "handoff C:\\Users\\Admin\\private", { mode: 0o600 });
 		protectOwnerOnly(contentPath, "file");
 		let body;
 		const result = await sendDiscordReply({
@@ -149,7 +149,7 @@ test("DSO-005 reply is default-deny for role and ambiguous binding", () => {
 	assert.throws(() => authorizeReplyRequest({ config: duplicate, channelId: CHANNEL }), /uniquely authorized/);
 });
 
-test("DSO-005 reply treats a success response without the exact nonce as unknown", async () => {
+test("DSO-005 reply treats a success response with a mismatched nonce as unknown", async () => {
 	const root = mkdtempSync(join(tmpdir(), "naia-discord-reply-nonce-"));
 	const contentPath = join(root, "report.txt");
 	try {
@@ -159,7 +159,7 @@ test("DSO-005 reply treats a success response without the exact nonce as unknown
 		const result = await sendDiscordReply({
 			config: config(), token: TOKEN, channelId: CHANNEL, contentPath,
 			fetchImpl: async () => new Response(JSON.stringify({
-				id: "666666666666666666", channel_id: CHANNEL, author: { id: BOT, bot: true },
+				id: "666666666666666666", channel_id: CHANNEL, author: { id: BOT, bot: true }, nonce: "different-request-nonce",
 			}), { status: 200, headers: { "content-type": "application/json" } }),
 		});
 		assert.equal(result.state, "unknown");

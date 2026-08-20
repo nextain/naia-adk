@@ -96,7 +96,7 @@ export function recomputeDurableExecutionBinding({ config, instance = "default",
 		permissionProfileEpoch: config.runtime?.permissionProfileEpoch ?? "default",
 	});
 	const authority = { binding, participantProfile, isOperator: config.discord.operatorUserIds.includes(expected.participantUserId) && binding.operatorActions === true, authorityRevision, contextHash: agentContextSnapshot.contextHash };
-	const executionProfile = currentExecutionProfile(config, config.backend.selected, authority);
+	const executionProfile = currentExecutionProfile(config, config.backend.selected, authority, { accessCeiling: "read-only" });
 	return durableExecutionBinding({ config, instance, agentContextSnapshot, participantUserId: expected.participantUserId, binding, executionProfile });
 }
 
@@ -158,13 +158,16 @@ function validExecutionProfile(profile) {
 		&& !(profile.authorizationMode === "managed" && profile.access !== "read-only");
 }
 
-export function currentExecutionProfile(config, backendId, authority = null) {
+// 소유자가 제출한 요청을 읽기 전용으로 낮춰 실행하기 위한 상한. 권한을 넓히는
+// 방향으로는 쓰지 않는다 — 낮추기만 한다.
+export function currentExecutionProfile(config, backendId, authority = null, { accessCeiling = null } = {}) {
 	if (!new Set(["codex", "claude", "opencode"]).has(backendId)) throw new Error("unsupported execution backend");
 	const authorizationMode = config.runtime?.approvalPolicy ?? "never";
 	if (!AUTHORIZATION_MODES.has(authorizationMode)) throw new Error("unsupported execution approval policy");
 	const permissionProfileEpoch = config.runtime?.permissionProfileEpoch ?? "default";
 	safeIdentifier(permissionProfileEpoch, "permissionProfileEpoch");
-	const access = authorizationMode === "never" && requestedMutation(config, authority)
+	if (accessCeiling !== null && accessCeiling !== "read-only") throw new Error("unsupported execution access ceiling");
+	const access = accessCeiling === "read-only" ? "read-only" : authorizationMode === "never" && requestedMutation(config, authority)
 		? (config.runtime?.accessProfile === "trusted-local" ? "danger-full-access" : "workspace-write")
 		: "read-only";
 	const profile = { backendId, permissionProfileEpoch, authorizationMode, access };

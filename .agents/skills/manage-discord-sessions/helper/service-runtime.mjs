@@ -52,7 +52,7 @@ export async function handleJobControlRequest(router, request, generation) {
 		return { schemaVersion: 1, requestId: typeof request?.requestId === "string" ? request.requestId : null, generation, state: "rejected", action: "unknown", reasonCode: "invalid_control_request" };
 	}
 	const result = request.action === "submit"
-		? await router.submitOperatorRequest({ channelId: request.channelId, authorId: request.authorId, content: request.content })
+		? await router.submitOperatorRequest({ channelId: request.channelId, authorId: request.authorId, content: request.content, access: request.access ?? null })
 		: request.action === "cancel"
 			? router.cancelJob(request.jobId)
 			: router.replaceJob(request.jobId, { action: request.action, amendment: request.amendment });

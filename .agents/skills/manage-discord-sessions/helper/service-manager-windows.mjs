@@ -385,7 +385,7 @@ export function manageWindowsService({ adkRoot, command, instance = "default" })
 		const existingMainRegistration = inspectWindowsRegistration(adkRoot, normalizedInstance, paths);
 		const existingSupervisorRegistration = windowsSupervisorRegistrationExists(adkRoot, normalizedInstance);
 		if (existingMainRegistration !== null || existingSupervisorRegistration) throw new Error("existing Windows Discord service or supervisor registration requires a versioned cutover, which is not supported");
-		const launcherPath = installOperatorLauncher(adkRoot);
+		const launcherPath = installOperatorLauncher(adkRoot, { probeInstance: normalizedInstance });
 		const pair = installSupervisedPair({
 			installSupervisor: () => installWindowsSupervisor(adkRoot, normalizedInstance, paths),
 			installService: (supervisor) => installWindowsService(adkRoot, normalizedInstance, paths, config, backendExecutables, supervisor),

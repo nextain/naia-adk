@@ -33,6 +33,11 @@ export function installServiceCommands(unitName, autoStart = true) {
 	return autoStart ? [["enable", unitName], ["restart", unitName]] : [["disable", "--now", unitName]];
 }
 
+export function installSupervisorTimerCommands(timerName) {
+	if (typeof timerName !== "string" || !/^naia-discord-sessions-[a-f0-9]{12}-supervisor\.timer$/.test(timerName)) throw new Error("invalid Discord supervisor timer name");
+	return [["enable", timerName], ["restart", timerName]];
+}
+
 export function authorizeManagedServiceInstall({ hasExistingRegistration, verifyCutoverUpgrade }) {
 	if (typeof hasExistingRegistration !== "boolean") throw new Error("managed service installation state is invalid");
 	if (!hasExistingRegistration) return "first_install";
@@ -157,12 +162,12 @@ export function manageLinuxService({ adkRoot, command, instance = "default" }) {
 		const runtimeArtifact = command === "install" ? (() => {
 			const runtimeRevision = gitHeadRevision(adkRoot);
 			const runtimeTreeId = inspectCutoverRuntimeTree(adkRoot, runtimeRevision);
-			return createManagedRuntimeArtifact({ adkRoot, instance: normalizedInstance, sourceRevision: runtimeRevision, sourceRuntimeTreeId: runtimeTreeId, tokenFingerprint: discordTokenFingerprint(new FileCredentialResolver(paths.credentialsDirectory).resolve(config.discord.credentialRef)), backendExecutables });
+			return createManagedRuntimeArtifact({ adkRoot, instance: normalizedInstance, sourceRevision: runtimeRevision, sourceRuntimeTreeId: runtimeTreeId, tokenFingerprint: discordTokenFingerprint(new FileCredentialResolver(paths.credentialsDirectory).resolve(config.discord.credentialRef)), backendExecutables, credentialProfiles: config.runtime?.credentialProfiles ?? [], homeDirectory: homedir() });
 		})() : null;
 		const rendered = runtimeArtifact?.service ?? (command === "unit" ? (() => {
 			const runtimeRevision = gitHeadRevision(adkRoot);
 			inspectCutoverRuntimeTree(adkRoot, runtimeRevision);
-			return renderDiscordUserUnit({ adkRoot, instance: normalizedInstance, tokenFingerprint: discordTokenFingerprint(new FileCredentialResolver(paths.credentialsDirectory).resolve(config.discord.credentialRef)), runtimeRevision, backendExecutables });
+			return renderDiscordUserUnit({ adkRoot, instance: normalizedInstance, tokenFingerprint: discordTokenFingerprint(new FileCredentialResolver(paths.credentialsDirectory).resolve(config.discord.credentialRef)), runtimeRevision, backendExecutables, credentialProfiles: config.runtime?.credentialProfiles ?? [], homeDirectory: homedir() });
 		})() : { unitName: discordUnitIdentity(adkRoot, normalizedInstance).unitName });
 		const supervisor = runtimeArtifact?.supervisor ?? renderDiscordSupervisorUnits({ adkRoot, instance: normalizedInstance });
 		const unitPath = resolve(unitDirectory, rendered.unitName);
@@ -177,13 +182,13 @@ export function manageLinuxService({ adkRoot, command, instance = "default" }) {
 						writeFileSync(unitPath, rendered.content, { mode: 0o600 });
 						writeFileSync(resolve(unitDirectory, supervisor.serviceName), supervisor.serviceContent, { mode: 0o600 });
 						writeFileSync(resolve(unitDirectory, supervisor.timerName), supervisor.timerContent, { mode: 0o600 });
-						launcherPath = installOperatorLauncher(adkRoot);
+						launcherPath = installOperatorLauncher(adkRoot, { probeInstance: normalizedInstance });
 						runSystemctl(["daemon-reload"]);
 						if (config.service?.startAt === "boot") {
 							const linger = spawnSync("loginctl", ["enable-linger", userInfo().username], { encoding: "utf8" });
 							if (linger.status !== 0) throw new Error((linger.stderr || linger.stdout || "could not enable user lingering").trim());
 						}
-						runSystemctl(["enable", "--now", supervisor.timerName]);
+						for (const args of installSupervisorTimerCommands(supervisor.timerName)) runSystemctl(args);
 						return supervisor.timerName;
 					},
 					installService: () => {

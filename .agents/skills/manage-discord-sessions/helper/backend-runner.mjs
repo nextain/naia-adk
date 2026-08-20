@@ -120,7 +120,11 @@ export async function runBackendAttempt({
 	executable,
 	authRoot,
 	parentEnv = process.env,
-	timeoutMs = 30 * 60 * 1000,
+	// 실제 이슈 하나를 조사·구현·검증하고 배포 승인까지 받으려면 30분으로는
+	// 끝나지 않는다. 30분에 잘리면 그때까지의 결과가 통째로 버려지고 채널에는
+	// 아무것도 남지 않았다. 정체 감지는 softSilence 가 따로 하므로 이 값은
+	// 상한 역할만 한다.
+	timeoutMs = 90 * 60 * 1000,
 	killGraceMs = 5_000,
 	signal,
 	commandOptions = {},

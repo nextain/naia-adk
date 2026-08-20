@@ -1,4 +1,4 @@
-import { JOB_FAILURE_REASON_CODES, MAX_SAFE_SUMMARY_LENGTH, SAFE_METRIC_KEYS } from "./constants.mjs";
+import { DELIVERY_UNKNOWN_REASON_CODES, JOB_FAILURE_REASON_CODES, MAX_SAFE_SUMMARY_LENGTH, SAFE_METRIC_KEYS } from "./constants.mjs";
 import { constants as osConstants } from "node:os";
 
 const SECRET_PATTERNS = [
@@ -87,6 +87,7 @@ const ENUMS = {
 	recoveryAction: new Set(["resume", "safe_retry", "manual_review"]),
 	watchdogReason: new Set(["no_progress"]),
 	reasonCode: JOB_FAILURE_REASON_CODES,
+	deliveryUnknownReason: DELIVERY_UNKNOWN_REASON_CODES,
 	terminationKind: new Set(["exited", "signaled"]),
 	signal: new Set(Object.keys(osConstants.signals ?? {})),
 };
@@ -135,7 +136,7 @@ const PAYLOAD_BUILDERS = {
 	retry_scheduled: (payload) => `Retry scheduled: ${count(payload.delayMs, "delayMs")} ms`,
 	delivery_started: () => "Delivery started",
 	delivery_confirmed: () => "Delivery confirmed",
-	delivery_unknown: () => "Delivery result requires review",
+	delivery_unknown: (payload) => `Delivery result requires review: ${enumValue(payload.reasonCode, "deliveryUnknownReason")}`,
 	delivery_failed: (payload) => `Delivery failed: ${enumValue(payload.reasonCode, "reasonCode")}`,
 	recovered: (payload) => `Recovered job: ${enumValue(payload.recoveryAction, "recoveryAction")}`,
 	profile_replaced: () => "Stale execution profile replaced before launch",
@@ -170,7 +171,7 @@ const PAYLOAD_KEYS = new Map([
 	["retry_scheduled", new Set(["delayMs"])],
 	["delivery_started", new Set()],
 	["delivery_confirmed", new Set()],
-	["delivery_unknown", new Set()],
+	["delivery_unknown", new Set(["reasonCode"])],
 	["delivery_failed", new Set(["reasonCode"])],
 	["recovered", new Set(["recoveryAction"])],
 	["profile_replaced", new Set()],

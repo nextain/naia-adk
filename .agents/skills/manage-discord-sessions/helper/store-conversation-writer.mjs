@@ -131,7 +131,7 @@ export class SessionConversationWriter {
 				if (existing.channel_id !== channelId) throw new Error("delivery destination mismatch");
 				if (existing.status === "started") {
 					this.db.prepare("UPDATE delivery_attempts SET status = 'unknown', updated_at = ? WHERE delivery_key = ?").run(now, existing.delivery_key);
-					this.events.appendEvent({ jobId, attemptId, kind: "delivery_unknown", source: "recovery", occurredAt: now, safeSummary: buildSafeEventSummary("delivery_unknown", {}) });
+					this.events.appendEvent({ jobId, attemptId, kind: "delivery_unknown", source: "recovery", occurredAt: now, safeSummary: buildSafeEventSummary("delivery_unknown", { reasonCode: "recovery_interrupted" }) });
 					existing.status = "unknown";
 				}
 				this.db.exec("COMMIT");
@@ -159,7 +159,7 @@ export class SessionConversationWriter {
 			this.db.prepare("UPDATE delivery_attempts SET status = ?, message_id = ?, updated_at = ? WHERE delivery_key = ?").run(status, messageId, now, deliveryKey);
 			const kind = status === "confirmed" ? "delivery_confirmed" : status === "unknown" ? "delivery_unknown" : "delivery_failed";
 			this.events.appendEvent({ jobId: delivery.job_id, attemptId: delivery.attempt_id, kind, source: "helper", occurredAt: now,
-				safeSummary: buildSafeEventSummary(kind, status === "failed" ? { reasonCode } : {}) });
+				safeSummary: buildSafeEventSummary(kind, status === "confirmed" ? {} : { reasonCode }) });
 			this.db.exec("COMMIT");
 		} catch (error) { try { this.db.exec("ROLLBACK"); } catch {} throw error; }
 	}
@@ -175,7 +175,7 @@ export class SessionConversationWriter {
 				if (started.length > 0) {
 					for (const delivery of started) {
 						this.db.prepare("UPDATE delivery_attempts SET status = 'unknown', updated_at = ? WHERE delivery_key = ?").run(now, delivery.delivery_key);
-						this.events.appendEvent({ jobId: job.job_id, attemptId: delivery.attempt_id, kind: "delivery_unknown", source: "recovery", occurredAt: now, safeSummary: buildSafeEventSummary("delivery_unknown", {}) });
+						this.events.appendEvent({ jobId: job.job_id, attemptId: delivery.attempt_id, kind: "delivery_unknown", source: "recovery", occurredAt: now, safeSummary: buildSafeEventSummary("delivery_unknown", { reasonCode: "recovery_interrupted" }) });
 					}
 				} else {
 					const envelope = this.db.prepare("SELECT iv, ciphertext, tag FROM job_recovery WHERE job_id = ?").get(job.job_id);

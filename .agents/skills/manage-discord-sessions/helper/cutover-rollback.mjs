@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
@@ -66,7 +67,7 @@ export function renderLegacyRollbackUnits({ paths, runtimePath, names, tokenFing
 		"/usr/bin/flock", "--no-fork", "--nonblock", "--conflict-exit-code", "78", paths.lockPath,
 		nodePath, servicePath, "--adk-root", paths.root, "--instance", paths.instance].map(unitQuote).join(" ");
 	const backendEnvironment = Object.entries(backendExecutables).map(([backend, executable]) => {
-		if (!new Set(["codex", "claude"]).has(backend) || typeof executable !== "string" || !isAbsolute(executable)) throw new Error("rollback backend executable is invalid");
+		if (!new Set(["codex", "claude", "opencode"]).has(backend) || typeof executable !== "string" || !isAbsolute(executable)) throw new Error("rollback backend executable is invalid");
 		return `Environment=${unitQuote(`NAIA_${backend.toUpperCase()}_EXECUTABLE=${resolve(executable)}`)}`;
 	});
 	const executablePath = [...new Set([dirname(resolve(nodePath)), ...Object.values(backendExecutables).map((executable) => dirname(resolve(executable))), "/usr/local/bin", "/usr/bin", "/bin"])].join(delimiter);
@@ -243,7 +244,7 @@ export function createCutoverRollbackBundle({ adkRoot, instance = "default", bac
 	protectOwnerOnly(bundleDirectory, "directory", "Discord rollback bundle");
 	try {
 		mkdirSync(join(bundleDirectory, "units"), { mode: 0o700 });
-		const runtimeArtifact = createManagedRuntimeArtifact({ adkRoot: paths.root, instance: paths.instance, sourceRevision, sourceRuntimeTreeId, tokenFingerprint, nodePath, backendExecutables, artifactDirectory: bundleDirectory });
+		const runtimeArtifact = createManagedRuntimeArtifact({ adkRoot: paths.root, instance: paths.instance, sourceRevision, sourceRuntimeTreeId, tokenFingerprint, nodePath, backendExecutables, credentialProfiles: config.runtime?.credentialProfiles ?? [], homeDirectory: homedir(), artifactDirectory: bundleDirectory });
 		const runtimePath = runtimeArtifact.runtimePath;
 		const rollbackDatabaseVersion = supportedDatabaseVersion(runtimePath);
 		const rollbackConfigPath = join(bundleDirectory, "config.rollback.json");
