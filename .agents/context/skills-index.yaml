@@ -169,3 +169,21 @@ skills:
     what: "git 커밋 + 작업 로그에서 주간 업무 결과 마크다운 생성"
     arg: "[YYYYMMDD-YYYYMMDD | 이번주 | 지난주]"
     scripts: []
+  migrate-ctx:
+    trigger: "컨텍스트 파일 분할, ctx 마이그레이션, lessons-learned 분할, context 구조화"
+    what: "기존 .agents/context/*.yaml 을 ctx 섹션 포맷(stable ID + tags + metadata)으로 옮긴다. content 는 기계적 복사 — AI 가 다시 쓰면 원문이 유실된다"
+    arg: "[대상 파일 또는 디렉터리]"
+    scripts: []
+
+  verify-review-gate:
+    trigger: "커밋 가드·리뷰 워크플로·progress 스키마를 바꾼 뒤, 통합이나 커밋 전"
+    what: "개발 리뷰와 통합 후 적대 리뷰가 저장소에 묶인 JSON progress 에 연속 2회 깨끗하게 기록되지 않으면 커밋이 fail-closed 로 막히는지 검증"
+    arg: ""
+    scripts: []
+
+  youtube-upload:
+    trigger: "유튜브 올려, youtube 업로드, 영상 게시, 공개범위 전환"
+    what: "YouTube Data API v3 로 영상+자막(srt)+썸네일+메타를 한 번에 올린다. 한국어 자막이 유튜브 다국어 자동 번역의 소스가 된다. 올린 뒤 공개범위 전환도 포함"
+    arg: "[--video --srt --thumb --desc --privacy]"
+    scripts: [scripts/youtube_auth.py, scripts/youtube_upload.py, scripts/youtube_privacy.py]
+    notes: "자격증명은 홈의 .youtube/ 에 두고 절대 커밋하지 않는다. 새 PC 는 Console 을 다시 거치지 말고 data-private 볼트의 key/youtube-client-secret.json 을 받아 쓴다. 링크 공유는 unlisted — private 는 지정 계정만 열린다"
