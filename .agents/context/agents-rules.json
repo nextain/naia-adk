@@ -496,6 +496,20 @@
       "issue_driven_development": ".agents/workflows/issue-driven-development.yaml"
     }
   },
+  "public_repository_release_gate": {
+    "policy": "FAIL CLOSED: Before creating a public repository, changing a repository to public, publishing or updating a public template, or pushing content copied from a private workspace into a public repository, complete and record a public-safety review. A private destination does not make source material safe when its template or upstream is public.",
+    "required_scope": [
+      "Review the complete candidate tree, including hidden files, generated assets, examples, fixtures, logs, progress records, requirements, agent context, and documentation.",
+      "Review reachable Git history, tags, branches intended for push, and inherited template history; deleting a file in a later commit is not sufficient removal.",
+      "Scan for secrets and credential material, personal data, private repository names and paths, internal hostnames, IP addresses, account identifiers, customer or employee data, operational topology, and non-public commercial or product information.",
+      "Classify every inherited requirement, progress record, conversation artifact, and example as intentionally public or remove it from both the candidate tree and publishable history.",
+      "Confirm license, third-party asset rights, submodule URLs, workflow permissions, GitHub Actions runners, issue templates, and release artifacts are suitable for untrusted public forks and pull requests.",
+      "Inspect the actual remote visibility immediately before the public action; never rely only on a local index or remembered state."
+    ],
+    "evidence": "Record the reviewed commit SHA, remote visibility, scanners or deterministic checks run, findings and dispositions, history review result, and human approval in an issue or review artifact that contains no secret values.",
+    "approval": "The repository owner must explicitly approve the reviewed immutable candidate before the first public push, visibility change, or public-template publication. Any candidate change after approval invalidates the approval and requires re-review.",
+    "incident_response": "If potentially sensitive material is found in a public repository or public template, stop propagation, do not repeat the value in logs or reports, identify affected refs and forks, revoke or rotate credentials first, then perform repository-history remediation under explicit owner authority. A cleanup commit alone never closes the incident."
+  },
   "context_governance": {
     "_source": "harness-books Book1 Appendix A.4 (L47-60), absorbed 2026-06-18",
     "_brief": ".agents/progress/harness-books-integration-findings-2026-06-18.md (section A, gap 2)",
