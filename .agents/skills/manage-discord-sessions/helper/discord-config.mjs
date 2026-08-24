@@ -23,9 +23,15 @@ function relativeConfigPath(value, label, { allowDot = false } = {}) {
 	return value;
 }
 
+function workspaceConfigPath(value, label, { allowDot = false } = {}) {
+	if (typeof value !== "string" || value.length < 1 || value.length > 512 || value.includes("\\") || /[\0\r\n]/.test(value)) throw new Error(`${label} must be a safe path`);
+	if (isAbsolute(value)) return value;
+	return relativeConfigPath(value, label, { allowDot });
+}
+
 function validateWorkspace(workspace) {
 	assertOnlyKeys(workspace ?? {}, new Set(["path", "agentId", "entrypoint", "contextFiles", "allowedPaths"]), "workspace");
-	relativeConfigPath(workspace?.path, "workspace.path", { allowDot: true });
+	workspaceConfigPath(workspace?.path, "workspace.path", { allowDot: true });
 	safeIdentifier(workspace?.agentId, "workspace.agentId");
 	relativeConfigPath(workspace?.entrypoint, "workspace.entrypoint");
 	if (!Array.isArray(workspace?.contextFiles) || workspace.contextFiles.length === 0 || workspace.contextFiles.length > 15) throw new Error("workspace.contextFiles must contain between 1 and 15 entries");
@@ -33,9 +39,23 @@ function validateWorkspace(workspace) {
 	if (new Set(contextFiles).size !== contextFiles.length) throw new Error("workspace.contextFiles must be unique");
 	const allowedPaths = workspace.allowedPaths === undefined ? [workspace.path] : workspace.allowedPaths;
 	if (!Array.isArray(allowedPaths) || allowedPaths.length < 1 || allowedPaths.length > 16) throw new Error("workspace.allowedPaths must contain between 1 and 16 entries");
-	const normalizedAllowedPaths = [...new Set(allowedPaths.map((value) => relativeConfigPath(value, "workspace.allowedPaths entry", { allowDot: true })))];
+	const normalizedAllowedPaths = [...new Set(allowedPaths.map((value) => workspaceConfigPath(value, "workspace.allowedPaths entry", { allowDot: true })))];
 	if (!normalizedAllowedPaths.includes(workspace.path)) throw new Error("workspace.allowedPaths must include workspace.path");
 	return { ...workspace, contextFiles, allowedPaths: normalizedAllowedPaths };
+}
+
+function validateAgentProfiles(profiles) {
+	if (!profiles || typeof profiles !== "object" || Array.isArray(profiles) || Object.keys(profiles).length < 1 || Object.keys(profiles).length > 16) throw new Error("agentProfiles must be a non-empty profile map");
+	const normalized = {};
+	for (const [id, profile] of Object.entries(profiles)) {
+		safeIdentifier(id, "agent profile ID");
+		assertOnlyKeys(profile ?? {}, new Set(["workspace", "persona"]), "agent profile");
+		assertOnlyKeys(profile?.persona ?? {}, new Set(["name", "instructions"]), "agent profile persona");
+		if (typeof profile?.persona?.name !== "string" || !profile.persona.name || profile.persona.name.length > 80) throw new Error("agent profile persona name is invalid");
+		if (typeof profile.persona.instructions !== "string" || !profile.persona.instructions || profile.persona.instructions.length > 4_000) throw new Error("agent profile persona instructions are invalid");
+		normalized[id] = { workspace: validateWorkspace(profile.workspace), persona: { ...profile.persona } };
+	}
+	return normalized;
 }
 
 function validateParticipantProfiles(profiles, bindings, globalActions) {
@@ -89,7 +109,7 @@ export function loadMessengerConfig(path) {
 	const fd = openSync(resolved, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
 	let config;
 	try { config = JSON.parse(readFileSync(fd, "utf8")); } finally { closeSync(fd); }
-	assertOnlyKeys(config, new Set(["schemaVersion", "enabled", "workspaceId", "workspace", "persona", "role", "backend", "discord", "runtime", "observability", "service", "recovery"]), "messenger config");
+	assertOnlyKeys(config, new Set(["schemaVersion", "enabled", "workspaceId", "workspace", "agentProfiles", "persona", "role", "backend", "discord", "runtime", "observability", "service", "recovery"]), "messenger config");
 	for (const [value, keys, label] of [
 		[config.persona, ["name", "instructions"], "persona"],
 		[config.role, ["name", "allowedActions", "requiresApproval"], "role"],
@@ -101,7 +121,12 @@ export function loadMessengerConfig(path) {
 		[config.recovery ?? {}, ["autoRetry"], "recovery"],
 	]) assertOnlyKeys(value ?? {}, new Set(keys), label);
 	if (!new Set([1, 2]).has(config.schemaVersion)) throw new Error("unsupported messenger config schema");
-	if (config.schemaVersion === 2) config.workspace = validateWorkspace(config.workspace);
+	if (config.schemaVersion === 2) {
+		if (config.agentProfiles !== undefined) {
+			config.agentProfiles = validateAgentProfiles(config.agentProfiles);
+			if (config.workspace !== undefined) throw new Error("workspace and agentProfiles are mutually exclusive");
+		} else config.workspace = validateWorkspace(config.workspace);
+	}
 	else if (config.workspace !== undefined || config.discord?.participantProfiles !== undefined) throw new Error("workspace and participantProfiles require messenger config schema v2");
 	if (config.enabled !== true) throw new Error("messenger service is disabled");
 	if (!config.persona?.name || !config.persona?.instructions) throw new Error("persona name and instructions are required");
@@ -137,6 +162,9 @@ export function loadMessengerConfig(path) {
 		}
 	}
 	config.discord.bindings = validateDiscordBindings(config.discord.bindings, { messageContentIntent: config.discord.messageContentIntent === true, schemaVersion: config.schemaVersion });
+	if (config.agentProfiles) {
+		for (const binding of config.discord.bindings) if (!config.agentProfiles[binding.agentProfileId]) throw new Error("Discord binding references an unknown agent profile");
+	} else if (config.discord.bindings.some((binding) => binding.agentProfileId !== undefined)) throw new Error("binding agentProfileId requires agentProfiles");
 	const globalActions = config.role.allowedActions.filter((action) => !(config.role.requiresApproval ?? []).includes(action));
 	if (config.schemaVersion === 2) {
 		assertConversationActionContract(globalActions, "schema v2 role actions");

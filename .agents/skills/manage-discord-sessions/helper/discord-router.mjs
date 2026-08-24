@@ -146,12 +146,12 @@ function normalizedDiscordText(value, botUserId) {
 }
 
 export class DiscordMessageRouter {
-	constructor({ config, store, token, botUserId, cwd, allowedPaths = [cwd], runtimeRoot, instance = "default", agentContextSnapshot = null, runtimeRevision = null, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, directMessage = postDiscordDirectMessage, send = null, loadHistory = null, backendExecutables = {}, verifyRuntimeInputs = null, now = () => Date.now() }) {
+	constructor({ config, store, token, botUserId, cwd, allowedPaths = [cwd], agentContexts = null, runtimeRoot, instance = "default", agentContextSnapshot = null, runtimeRevision = null, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, directMessage = postDiscordDirectMessage, send = null, loadHistory = null, backendExecutables = {}, verifyRuntimeInputs = null, now = () => Date.now() }) {
 		if (typeof send !== "function") throw new Error("confirmed Discord sender is required");
 		if (verifyRuntimeInputs !== null && typeof verifyRuntimeInputs !== "function") throw new Error("runtime input verifier must be a function");
 		if (config.schemaVersion === 2) {
 			if (!agentContextSnapshot || agentContextSnapshot.schemaVersion !== 1 || typeof agentContextSnapshot.contextHash !== "string" || typeof agentContextSnapshot.workspaceRoot !== "string" || typeof agentContextSnapshot.agentId !== "string") throw new Error("schema v2 requires a valid agent context snapshot");
-			if (cwd !== agentContextSnapshot.workspaceRoot || config.workspace?.agentId !== agentContextSnapshot.agentId) throw new Error("schema v2 workspace identity does not match its context snapshot");
+			if (!config.agentProfiles && (cwd !== agentContextSnapshot.workspaceRoot || config.workspace?.agentId !== agentContextSnapshot.agentId)) throw new Error("schema v2 workspace identity does not match its context snapshot");
 		}
 		this.config = config;
 		this.store = store;
@@ -162,6 +162,7 @@ export class DiscordMessageRouter {
 		this.runtimeRoot = runtimeRoot;
 		this.instance = instance;
 		this.agentContextSnapshot = agentContextSnapshot;
+		this.agentContexts = agentContexts ?? { default: { cwd, allowedPaths: [...allowedPaths], snapshot: agentContextSnapshot } };
 		if (runtimeRevision !== null && !/^[a-f0-9]{40}$/.test(runtimeRevision)) throw new Error("managed runtime revision is invalid");
 		this.runtimeRevision = runtimeRevision;
 		this.runner = runner;
@@ -228,7 +229,8 @@ export class DiscordMessageRouter {
 		try {
 			currentRequest = discordRequestText(data, this.botUserId, { authorization, instance: this.instance });
 			if (!currentRequest || currentRequest.length > MAX_REQUEST_TEXT_LENGTH) throw new Error("Discord prompt is empty or too large");
-			prompt = boundRequestPrompt(currentRequest, this.config, authorization, this.agentContextSnapshot, accessCeiling);
+			const selected = this.#agentContext(authorization.binding);
+			prompt = boundRequestPrompt(currentRequest, this.#profileConfig(authorization.binding), authorization, selected.snapshot, accessCeiling);
 		}
 		catch {
 			this.store.reserveIngress({ sourceMessageId, scopeKey: authorization.scopeKey, status: "rejected", reasonCode: "prompt_invalid", dispatchSequence: sequence });
@@ -240,18 +242,19 @@ export class DiscordMessageRouter {
 		const backendId = this.config.backend.selected;
 		const adapter = getBackendAdapter(backendId);
 		const channelId = authorization.scope.threadId ?? authorization.scope.channelId;
-		const authority = this.#authority(authorization);
+		const selected = this.#agentContext(authorization.binding);
+		const authority = this.#authority(authorization, selected.snapshot);
 		const executionProfile = this.#executionProfile(backendId, authority, accessCeiling);
 		const commandOptions = this.#withBackendOptions(backendId, commandOptionsForProfile(executionProfile));
-		const recoveryEnvelope = this.recoveryCodec?.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId, scopeKey: authorization.scopeKey, executionProfile, accessCeiling, participantUserId: authorization.scope.authorId, bindingIdentity: authority.bindingIdentity, authorityRevision: authority.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: this.agentContextSnapshot?.contextHash ?? null, runtimeRevision: this.runtimeRevision })) ?? null;
+		const recoveryEnvelope = this.recoveryCodec?.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId, scopeKey: authorization.scopeKey, executionProfile, accessCeiling, participantUserId: authorization.scope.authorId, bindingIdentity: authority.bindingIdentity, authorityRevision: authority.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: selected.snapshot?.contextHash ?? null, agentProfileId: authorization.binding.agentProfileId ?? "default", runtimeRevision: this.runtimeRevision })) ?? null;
 		const revisionBase = this.config.schemaVersion === 2 ? `discord-v2-${executionProfile.access}` : "discord-v1";
 		const managedRevisionBase = executionProfile.access === "read-only" ? "v2r" : "v2w";
 		const jobRevision = this.runtimeRevision === null ? revisionBase : this.config.schemaVersion === 2 ? `${managedRevisionBase}:${this.runtimeRevision}` : `${revisionBase}:${this.runtimeRevision}`;
-		const executionBinding = this.config.schemaVersion === 2 && executionProfile.access === "read-only" ? durableExecutionBinding({ config: this.config, instance: this.instance, agentContextSnapshot: this.agentContextSnapshot, participantUserId: authorization.scope.authorId, binding: authorization.binding, executionProfile }) : null;
+		const executionBinding = this.config.schemaVersion === 2 && executionProfile.access === "read-only" ? durableExecutionBinding({ config: this.config, instance: this.instance, agentContextSnapshot: selected.snapshot, participantUserId: authorization.scope.authorId, binding: authorization.binding, executionProfile }) : null;
 		const ingress = this.store.acceptIngressAndCreateJob({ sourceMessageId, scopeKey: authorization.scopeKey, jobId, dispatchSequence: sequence, backendId, revision: jobRevision, backendCapabilities: adapter.capabilities, activityDetail: adapter.activityDetail, jobType: "conversation", requestExcerpt: currentRequest,
 			softSilenceMs: (this.config.runtime?.softSilenceSeconds ?? 120) * 1_000, recoveryEnvelope, executionBinding, now: this.#nowIso() });
 		if (ingress.duplicate) return { state: "duplicate", jobId: ingress.jobId };
-		const item = { jobId, backendId, prompt, currentRequest, channelId, scopeKey: authorization.scopeKey, sourceMessageId, allowedUserIds: authorization.binding.allowedUserIds, binding: authorization.binding, participantUserId: authorization.scope.authorId, authority, commandOptions, executionProfile, accessCeiling };
+		const item = { jobId, backendId, prompt, currentRequest, channelId, scopeKey: authorization.scopeKey, sourceMessageId, allowedUserIds: authorization.binding.allowedUserIds, binding: authorization.binding, participantUserId: authorization.scope.authorId, authority, commandOptions, executionProfile, accessCeiling, agentContext: selected };
 		this.workItems.set(jobId, item);
 		this.#sendOperatorResponse(item);
 		this.queue.push(item);
@@ -343,29 +346,42 @@ export class DiscordMessageRouter {
 		} : withCommon;
 	}
 
-	#authority(authorization) {
+	#profileConfig(binding) {
+		const profile = binding?.agentProfileId ? this.config.agentProfiles?.[binding.agentProfileId] : null;
+		return profile ? { ...this.config, workspace: profile.workspace, persona: profile.persona } : this.config;
+	}
+
+	#agentContext(binding) {
+		const id = binding?.agentProfileId ?? "default";
+		const context = this.agentContexts[id];
+		if (!context) throw new Error("binding agent context is unavailable");
+		return context;
+	}
+
+	#authority(authorization, snapshot = this.agentContextSnapshot) {
 		if (this.config.schemaVersion !== 2) return authorization;
 		const identity = discordBindingIdentity(authorization.binding);
 		const actions = effectiveAllowedActions(this.config, authorization);
 		const authorityRevision = participantAuthorityRevision({
-			workspaceIdentity: `${this.agentContextSnapshot?.agentId}\0${this.agentContextSnapshot?.workspaceRoot}`,
+			workspaceIdentity: `${snapshot?.agentId}\0${snapshot?.workspaceRoot}`,
 			bindingIdentity: identity,
 			participantUserId: authorization.scope.authorId,
 			participantProfile: authorization.participantProfile,
 			effectiveActions: actions,
 			permissionProfileEpoch: this.config.runtime?.permissionProfileEpoch ?? "default",
 		});
-		return { ...authorization, bindingIdentity: identity, authorityRevision, contextHash: this.agentContextSnapshot?.contextHash };
+		return { ...authorization, bindingIdentity: identity, authorityRevision, contextHash: snapshot?.contextHash };
 	}
 
 	#recoveryAuthority(payload) {
 		if (this.config.schemaVersion !== 2) throw new Error("legacy recovery requires review");
 		if (payload?.schemaVersion !== 2 || typeof payload.participantUserId !== "string" || typeof payload.bindingIdentity !== "string") throw new Error("recovery authority is missing");
 		if (!/^[a-f0-9]{40}$/.test(payload.runtimeRevision ?? "") || payload.runtimeRevision !== this.runtimeRevision) throw new Error("recovery runtime changed");
-		if (payload.contextHash !== this.agentContextSnapshot?.contextHash || payload.configRevision !== configurationRevision(this.config)) throw new Error("recovery configuration changed");
 		const binding = this.config.discord.bindings.find((candidate) => discordBindingIdentity(candidate) === payload.bindingIdentity && candidate.allowedUserIds.includes(payload.participantUserId));
 		const participantProfile = this.config.discord.participantProfiles?.[payload.participantUserId];
 		if (!binding || !participantProfile) throw new Error("recovery participant authority changed");
+		const selected = this.#agentContext(binding);
+		if ((payload.agentProfileId ?? "default") !== (binding.agentProfileId ?? "default") || payload.contextHash !== selected.snapshot?.contextHash || payload.configRevision !== configurationRevision(this.config)) throw new Error("recovery configuration changed");
 		const authorization = {
 			allowed: true,
 			binding,
@@ -373,7 +389,7 @@ export class DiscordMessageRouter {
 			isOperator: this.config.discord.operatorUserIds.includes(payload.participantUserId) && binding.operatorActions === true,
 			scope: { authorId: payload.participantUserId },
 		};
-		const authority = this.#authority(authorization);
+		const authority = this.#authority(authorization, selected.snapshot);
 		if (payload.authorityRevision !== authority.authorityRevision) throw new Error("recovery participant authority changed");
 		return authority;
 	}
@@ -478,12 +494,13 @@ export class DiscordMessageRouter {
 				catch (error) { if (error && typeof error === "object") error.code = "discord_history_load_failed"; throw error; }
 				if (loaded?.state === "loaded") prompt = promptWithDiscordConversation(prompt, loaded.history, item.currentRequest);
 			}
-			if (this.agentContextSnapshot) verifyAgentContextBeforeAttempt(this.agentContextSnapshot);
-			const preSpawnCheck = this.verifyRuntimeInputs || this.agentContextSnapshot ? () => {
+			const selected = item.agentContext ?? this.#agentContext(item.binding);
+			if (selected.snapshot) verifyAgentContextBeforeAttempt(selected.snapshot);
+			const preSpawnCheck = this.verifyRuntimeInputs || selected.snapshot ? () => {
 				this.#verifyRuntimeInputs();
-				if (this.agentContextSnapshot) verifyAgentContextBeforeAttempt(this.agentContextSnapshot);
+				if (selected.snapshot) verifyAgentContextBeforeAttempt(selected.snapshot);
 			} : null;
-			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt, cwd: this.cwd, allowedPaths: this.allowedPaths, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId, item.authority), executionProfile: item.executionProfile, signal: controller.signal, preSpawnCheck });
+			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt, cwd: selected.cwd, allowedPaths: selected.allowedPaths, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId, item.authority), executionProfile: item.executionProfile, signal: controller.signal, preSpawnCheck });
 			if (result.backendOutcome !== "success") {
 				await this.#reportFailure(item);
 				return;
@@ -567,6 +584,8 @@ export class DiscordMessageRouter {
 				const accessCeiling = payload.accessCeiling ?? null;
 				if (typeof payload.currentRequest !== "string" || !payload.currentRequest || payload.currentRequest.length > MAX_REQUEST_TEXT_LENGTH || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
 				const authority = this.#recoveryAuthority(payload);
+				const binding = authority.binding;
+				const agentContext = this.#agentContext(binding);
 				const executionProfile = this.#executionProfile(sourceJob.backendId, authority, accessCeiling);
 				if (!sameExecutionProfile(payload.executionProfile, executionProfile)) throw new Error("recovery execution profile changed");
 				item = {
@@ -579,6 +598,8 @@ export class DiscordMessageRouter {
 					authority,
 					commandOptions: this.#withBackendOptions(sourceJob.backendId, commandOptionsForProfile(executionProfile)),
 					executionProfile,
+					binding,
+					agentContext,
 				};
 			} catch {
 				return { state: "rejected", action, jobId, reasonCode: "recovery_binding_changed" };
@@ -587,8 +608,9 @@ export class DiscordMessageRouter {
 		const currentRequest = action === "amend" ? `${item.currentRequest}\n\nOperator amendment:\n${amendment.trim()}` : item.currentRequest;
 		if (currentRequest.length > MAX_REQUEST_TEXT_LENGTH) return { state: "rejected", action, jobId, reasonCode: "amendment_too_large" };
 		const replacementJobId = randomUUID();
-		const replacementPrompt = boundRequestPrompt(currentRequest, this.config, item.authority, this.agentContextSnapshot, item.accessCeiling ?? null);
-		const replacementEnvelope = this.recoveryCodec.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId: item.channelId, scopeKey: item.scopeKey, executionProfile: item.executionProfile, accessCeiling: item.accessCeiling ?? null, participantUserId: item.participantUserId, bindingIdentity: item.authority?.bindingIdentity, authorityRevision: item.authority?.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: this.agentContextSnapshot?.contextHash ?? null, runtimeRevision: this.runtimeRevision }));
+		const selected = item.agentContext ?? this.#agentContext(item.binding);
+		const replacementPrompt = boundRequestPrompt(currentRequest, this.#profileConfig(item.binding), item.authority, selected.snapshot, item.accessCeiling ?? null);
+		const replacementEnvelope = this.recoveryCodec.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId: item.channelId, scopeKey: item.scopeKey, executionProfile: item.executionProfile, accessCeiling: item.accessCeiling ?? null, participantUserId: item.participantUserId, bindingIdentity: item.authority?.bindingIdentity, authorityRevision: item.authority?.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: selected.snapshot?.contextHash ?? null, agentProfileId: item.binding?.agentProfileId ?? "default", runtimeRevision: this.runtimeRevision }));
 		this.store.createJob({ jobId: replacementJobId, backendId: item.backendId, revision: sourceJob.revision, backendCapabilities: sourceJob.backendCapabilities, activityDetail: sourceJob.activityDetail, jobType: "conversation", scopeKey: item.scopeKey, softSilenceMs: sourceJob.softSilenceMs, recoveryEnvelope: replacementEnvelope, executionBinding: sourceJob.executionBinding });
 		const replacement = { ...item, jobId: replacementJobId, prompt: replacementPrompt, currentRequest, sourceMessageId: null };
 		this.workItems.set(replacementJobId, replacement);
@@ -641,13 +663,15 @@ export class DiscordMessageRouter {
 				}
 					if (typeof payload.currentRequest !== "string" || !payload.currentRequest || payload.currentRequest.length > MAX_REQUEST_TEXT_LENGTH || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
 					const authority = this.#recoveryAuthority(payload);
-					const prompt = boundRequestPrompt(payload.currentRequest, this.config, authority, this.agentContextSnapshot, accessCeiling);
+					const binding = authority.binding;
+					const agentContext = this.#agentContext(binding);
+					const prompt = boundRequestPrompt(payload.currentRequest, this.#profileConfig(binding), authority, agentContext.snapshot, accessCeiling);
 				const executionProfile = this.#executionProfile(item.backendId, authority, accessCeiling);
 				const profileChanged = !sameExecutionProfile(payload.executionProfile, executionProfile);
 				if (this.config.schemaVersion === 2) {
 					if (!autoRetry || profileChanged || executionProfile.access !== "read-only") throw new Error("automatic recovery is not allowed for this job");
 				} else throw new Error("legacy recovery requires review");
-					const recovered = { jobId: item.jobId, backendId: item.backendId, prompt, currentRequest: payload.currentRequest, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, participantUserId: payload.participantUserId, authority, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile };
+					const recovered = { jobId: item.jobId, backendId: item.backendId, prompt, currentRequest: payload.currentRequest, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, participantUserId: payload.participantUserId, authority, binding, agentContext, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile };
 				if (!this.#operatorResponseFinalized(item.jobId)) this.#sendOperatorResponse(recovered);
 				this.workItems.set(item.jobId, recovered);
 				this.queue.push(recovered);

@@ -81,34 +81,31 @@ export async function cleanupDiscordServiceResources({ heartbeatTimer = null, wa
 export function configuredAgentContext(root, config) {
 	if (config.schemaVersion !== 2) return { cwd: root, allowedPaths: [realpathSync(root)], snapshot: null };
 	const canonicalRoot = realpathSync(root);
-	const candidate = resolve(canonicalRoot, config.workspace.path);
-	const candidateRelative = relative(canonicalRoot, candidate);
-	if (candidateRelative.startsWith("..") || isAbsolute(candidateRelative)) throw new Error("configured workspace escaped the ADK root");
+	const candidate = isAbsolute(config.workspace.path) ? config.workspace.path : resolve(canonicalRoot, config.workspace.path);
 	const snapshot = buildAgentContextSnapshot({ workspace: candidate, agentId: config.workspace.agentId, entrypoint: config.workspace.entrypoint, contextFiles: config.workspace.contextFiles });
-	const resolvedRelative = relative(canonicalRoot, snapshot.workspaceRoot);
-	if (resolvedRelative.startsWith("..") || isAbsolute(resolvedRelative)) throw new Error("configured workspace escaped the ADK root");
 	const allowedPaths = config.workspace.allowedPaths.map((path) => {
-		const allowed = realpathSync(resolve(canonicalRoot, path));
-		const allowedRelative = relative(canonicalRoot, allowed);
-		if (allowedRelative.startsWith("..") || isAbsolute(allowedRelative)) throw new Error("configured allowed workspace escaped the ADK root");
-		return allowed;
+		return realpathSync(isAbsolute(path) ? path : resolve(canonicalRoot, path));
 	});
 	if (!allowedPaths.includes(snapshot.workspaceRoot)) throw new Error("configured workspace is missing from resolved allowed paths");
 	return { cwd: snapshot.workspaceRoot, allowedPaths: [...new Set(allowedPaths)], snapshot };
 }
 
-function runtimeInputsRevision({ config, token, agentContext }) {
+export function configuredAgentContexts(root, config) {
+	if (!config.agentProfiles) return { default: configuredAgentContext(root, config) };
+	return Object.fromEntries(Object.entries(config.agentProfiles).map(([id, profile]) => [id, configuredAgentContext(root, { ...config, agentProfiles: undefined, workspace: profile.workspace })]));
+}
+
+function runtimeInputsRevision({ config, token, agentContexts }) {
 	return createHash("sha256").update(JSON.stringify({
 		config,
 		tokenFingerprint: discordTokenFingerprint(token),
-		workspaceRoot: agentContext.cwd,
-		allowedPaths: agentContext.allowedPaths ?? [agentContext.cwd],
-		contextHash: agentContext.snapshot?.contextHash ?? null,
+		agentContexts: Object.fromEntries(Object.entries(agentContexts).map(([id, context]) => [id, { workspaceRoot: context.cwd, allowedPaths: context.allowedPaths ?? [context.cwd], contextHash: context.snapshot?.contextHash ?? null }])),
 	})).digest("hex");
 }
 
-export function createRuntimeInputVerifier({ root, paths, config, token, agentContext }) {
-	const baselineRevision = runtimeInputsRevision({ config, token, agentContext });
+export function createRuntimeInputVerifier({ root, paths, config, token, agentContexts, agentContext }) {
+	agentContexts ??= { default: agentContext };
+	const baselineRevision = runtimeInputsRevision({ config, token, agentContexts });
 	let invalidated = false;
 	return () => {
 		if (invalidated) {
@@ -118,9 +115,9 @@ export function createRuntimeInputVerifier({ root, paths, config, token, agentCo
 		}
 		try {
 			const currentConfig = loadMessengerConfig(paths.configPath);
-			const currentAgentContext = configuredAgentContext(root, currentConfig);
+			const currentAgentContexts = configuredAgentContexts(root, currentConfig);
 			const currentToken = new FileCredentialResolver(paths.credentialsDirectory).resolve(currentConfig.discord.credentialRef);
-			if (runtimeInputsRevision({ config: currentConfig, token: currentToken, agentContext: currentAgentContext }) !== baselineRevision) throw new Error("runtime inputs changed");
+			if (runtimeInputsRevision({ config: currentConfig, token: currentToken, agentContexts: currentAgentContexts }) !== baselineRevision) throw new Error("runtime inputs changed");
 			return baselineRevision;
 		} catch {
 			invalidated = true;
@@ -163,13 +160,13 @@ export async function runDiscordService({ adkRoot, instance = "default", managed
 	let config;
 	try { config = loadMessengerConfig(paths.configPath); }
 	catch { throw startupFailure("configuration_invalid"); }
-	let agentContext;
-	try { agentContext = configuredAgentContext(root, config); }
+	let agentContexts;
+	try { agentContexts = configuredAgentContexts(root, config); }
 	catch { throw startupFailure("context_invalid"); }
 	let token;
 	try { token = new FileCredentialResolver(paths.credentialsDirectory).resolve(config.discord.credentialRef); }
 	catch { throw startupFailure("credential_unavailable"); }
-	const verifyRuntimeInputs = createRuntimeInputVerifier({ root, paths, config, token, agentContext });
+	const verifyRuntimeInputs = createRuntimeInputVerifier({ root, paths, config, token, agentContexts });
 	const kernelTokenFingerprint = process.env.NAIA_DISCORD_KERNEL_TOKEN_FINGERPRINT;
 	if (kernelTokenFingerprint !== undefined && kernelTokenFingerprint !== discordTokenFingerprint(token)) throw startupFailure("discord_token_lock_unavailable");
 	// The environment marker proves only that the unit used the expected token;
@@ -201,7 +198,8 @@ export async function runDiscordService({ adkRoot, instance = "default", managed
 		};
 		const send = fetchImpl ? (input) => postDiscordMessage({ ...input, fetchImpl }) : postDiscordMessage;
 		const loadHistory = (input) => fetchDiscordConversation({ ...input, fetchImpl: fetchImpl ?? fetch });
-		router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: agentContext.cwd, allowedPaths: agentContext.allowedPaths, runtimeRoot: paths.runtimeRoot, instance: paths.instance, agentContextSnapshot: agentContext.snapshot, runtimeRevision: managedRuntimeRevision ?? null, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, loadHistory, backendExecutables, verifyRuntimeInputs });
+		const defaultContext = agentContexts.default ?? Object.values(agentContexts)[0];
+		router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: defaultContext.cwd, allowedPaths: defaultContext.allowedPaths, agentContexts, runtimeRoot: paths.runtimeRoot, instance: paths.instance, agentContextSnapshot: defaultContext.snapshot, runtimeRevision: managedRuntimeRevision ?? null, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, loadHistory, backendExecutables, verifyRuntimeInputs });
 		let reconnectDelay = 1_000;
 		const heartbeat = () => heartbeatServiceSafely(store, { generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
 		heartbeat();

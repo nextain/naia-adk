@@ -19,6 +19,7 @@ export function discordBindingIdentity(binding) {
 		canStartConversation: binding.canStartConversation === true,
 		operatorActions: binding.operatorActions === true,
 		historyVisibility: binding.historyVisibility ?? "shared",
+		agentProfileId: binding.agentProfileId ?? "default",
 	});
 }
 

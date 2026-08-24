@@ -25,7 +25,7 @@ The implementation is usable with `naia-adk` alone from either Codex or Claude:
 - explicit, read-only Discord REST history lookup for one uniquely authorized
   binding, plus exact-message attachment recovery with size and SHA-256 checks;
 - exact DM, guild-channel, and thread bindings with default-deny users, configured participant profiles, and operator actions;
-- schema-v2 project binding that snapshots a bounded mandatory context prefix at service start, verifies it again before every backend spawn, and runs the child in that exact project directory;
+- schema-v2 binding profiles that snapshot each bounded mandatory context prefix at service start, verify the selected profile again before every backend spawn, and run the child in the exact project directory selected by the admitted Discord binding;
 - one process-lifetime token-owner lock shared by named instances under the same OS user on one host, preventing two local Gateways from using the same bot token;
 - user-systemd startup, reconnect with bounded backoff, and single-service locking;
 - reboot recovery that preserves job IDs and marks interrupted work `recovery_review` without replaying private prompts or uncertain deliveries;
@@ -193,14 +193,19 @@ activation branch, and new-database table creation are removed. Any
 envelopes are only quarantined, existing legacy database tables are left
 untouched, and direct bounded execution is the supported path.
 
-Use schema v2 for every new or migrated instance. `workspace.path` is relative to
-the ADK root and names the child working directory; `workspace.entrypoint` plus
+Use schema v2 for every new or migrated instance. A single-project instance uses
+`workspace`; an instance serving several logical agents uses `agentProfiles`, and
+every Discord binding names one `agentProfileId`. Each profile contains its own
+`workspace` and `persona`. `workspace.path` may be relative to the ADK root or an
+absolute path declared in the owner-only deployment config; it names the child working directory. `workspace.entrypoint` plus
 `workspace.contextFiles` are bounded, non-symlink project files read once into a
 deterministic stable prompt prefix. The same files are hashed again immediately
 before every child spawn. A change requires a service restart and the job fails
 closed. Codex project-document loading and Claude customization loading are
 disabled for child runs, so unhashed `AGENTS.md`/`CLAUDE.md` discovery cannot
-bypass the explicit prefix. Provider tool descriptions and explicitly invoked
+bypass the explicit prefix. A binding-selected profile ID is included in authority
+and recovery evidence, so queued or recovered work cannot move to another profile.
+Provider tool descriptions and explicitly invoked
 capability skills are not part of this context hash and cannot expand the
 configured action profile. The workspace is passed as both process cwd and
 Codex `--cd`.
