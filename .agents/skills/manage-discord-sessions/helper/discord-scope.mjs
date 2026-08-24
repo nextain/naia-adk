@@ -56,7 +56,8 @@ export function authorizeDiscordMessage({ message, bindings, operatorUserIds = [
 export function validateDiscordBindings(bindings, { messageContentIntent = false, schemaVersion = 1 } = {}) {
 	if (!Array.isArray(bindings) || bindings.length === 0) throw new Error("at least one Discord binding is required");
 	return bindings.map((binding) => {
-		assertOnlyKeys(binding, new Set(["kind", "guildId", "channelId", "threadId", "userId", "respondWhen", "allowedUserIds", "canStartConversation", "operatorActions", "historyVisibility"]), "Discord binding");
+		assertOnlyKeys(binding, new Set(["kind", "guildId", "channelId", "threadId", "userId", "respondWhen", "allowedUserIds", "canStartConversation", "operatorActions", "historyVisibility", "agentProfileId"]), "Discord binding");
+		if (binding.agentProfileId !== undefined && (typeof binding.agentProfileId !== "string" || !/^[A-Za-z0-9_.:-]{1,64}$/.test(binding.agentProfileId))) throw new Error("agentProfileId must be a safe identifier");
 		if (!new Set(["dm", "guild_channel", "thread"]).has(binding.kind)) throw new Error("unsupported Discord binding kind");
 		for (const [key, value] of Object.entries(binding)) {
 			if (new Set(["guildId", "channelId", "threadId", "userId"]).has(key) && value !== undefined) snowflake(value, key);

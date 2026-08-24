@@ -8,7 +8,7 @@ source: derived
 source_provenance: ledger_resolved
 priority: critical
 created: 2026-08-03
-updated: 2026-08-04
+updated: 2026-08-24
 source_directives: [USR-011]
 source_evidence: [USR-011]
 source_atoms: [USR-011-E01]
@@ -25,12 +25,12 @@ description: |
   requests, while changed context stops execution until service restart. Provider
   caching is reported only when the provider emits a measurable receipt.
 acceptance_criteria:
-  - "Schema v2 binds one safe agentId, one workspace path relative to the ADK root, one entrypoint, and a bounded ordered context file allowlist."
-  - "Workspace and context resolution reject absolute config paths, traversal, escape, symlink components, duplicate resolved files, invalid UTF-8, and count/file/total size overflow."
+  - "Schema v2 binds each configured agent profile to one safe agentId, one owner-configured workspace path, one persona, one entrypoint, and a bounded ordered context file allowlist; every Discord binding selects exactly one existing profile."
+  - "Workspace paths may be relative to the ADK root or absolute for a private deployment overlay. Resolution canonicalizes both forms and rejects traversal segments, symlink components, duplicate resolved files, invalid UTF-8, and count/file/total size overflow."
   - "One read of exact bytes produces the manifest, SHA-256, and stable prefix; context files are sorted and the configured entrypoint remains first."
   - "Prompt order is deterministic context prefix, trusted participant policy, clearly delimited untrusted history, and current request last."
   - "Immediately before reserving and again immediately before backend spawn, the same allowlist is re-read and compared to the startup context hash; mismatch fails with context_changed_restart_required. This is a bounded pre-spawn check, not an immutable workspace snapshot."
-  - "The child cwd and Codex --cd are the same canonical configured workspace; provider session persistence remains disabled and every attempt keeps an isolated child home."
+  - "The exact admitted Discord binding selects the context, persona, child cwd, allowed paths, and Codex --cd. Profile identity is included in authority and recovery evidence so a queued or recovered request cannot switch workspaces; provider session persistence remains disabled and every attempt keeps an isolated child home."
   - "Provider-native entrypoint-document discovery is disabled so unhashed AGENTS.md/CLAUDE.md content cannot supplement the explicit prefix; capability skill/tool descriptions remain outside the context hash and cannot expand configured action authority."
   - "On Linux systemd, every same-token service under one OS user contends on a shared kernel flock in the user-manager runtime namespace even with PrivateTmp enabled, and the kernel releases it with the service process. The shared owner record atomically reclaims only a complete same-host, same-boot record whose PID is objectively absent; incomplete metadata, identity conflict, permission denial, another host or boot, and PID reuse remain fail-closed. Errors/status disclose no token, fingerprint, credential path, or lock path."
   - "When XDG_RUNTIME_DIR is unavailable on Unix, the default owner-record namespace includes a digest of the current boot ID so a prior boot's /tmp record cannot permanently block the new boot. Explicitly configured shared directories retain strict cross-boot fail-closed semantics."
@@ -47,7 +47,7 @@ decisions:
 trace:
   code:
     - { path: ".agents/skills/manage-discord-sessions/helper/agent-context.mjs", symbols: ["buildAgentContextSnapshot", "verifyAgentContextBeforeAttempt"], coverage: full }
-    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbols: ["configuredAgentContext", "createRuntimeInputVerifier", "runDiscordService"], coverage: full }
+    - { path: ".agents/skills/manage-discord-sessions/helper/service-runtime.mjs", symbols: ["configuredAgentContext", "configuredAgentContexts", "createRuntimeInputVerifier", "runDiscordService"], coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/backend-runner.mjs", symbols: ["preSpawnCheck", "runBackendAttempt"], coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/discord-router.mjs", symbols: ["boundRequestPrompt", "verifyAgentContextBeforeAttempt"], coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/helper/token-owner-lock.mjs", symbols: ["acquireDiscordTokenOwnerLock"], coverage: full }
@@ -58,6 +58,7 @@ trace:
     - { path: ".agents/skills/manage-discord-sessions/tests/backend-adapter-environment.test.mjs", symbol: "DSO-011 records cache evidence only when the provider reports complete integer usage", coverage: partial }
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-router-execution.test.mjs", symbol: "DSG-021 launches v2 work in its bound workspace with a stable prefix and fails closed after context drift", coverage: full }
     - { path: ".agents/skills/manage-discord-sessions/tests/discord-runtime-input-guard.test.mjs", symbol: "DSO-010 queued work revalidates authority before runner and immediately before spawn", coverage: partial }
+    - { path: ".agents/skills/manage-discord-sessions/tests/discord-binding-workspace.test.mjs", symbol: "FET_DSO_016_001 routes exact Discord bindings to isolated workspace and persona profiles", coverage: full }
   reviews:
     planning: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.planning"
     development: ".agents/requirements/evidence/DSO-010-012-review.json#reviews.development"
