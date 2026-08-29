@@ -398,6 +398,18 @@ if (process.env.RCI_SELF_TEST_ONLY === "1") {
 	process.exit(0);
 }
 
+// 이 저장소는 새 워크스페이스의 바탕이라 요구사항을 하나도 담지 않는다.
+// 아래 검사는 전부 RCI 요구사항 집합을 전제하므로 대상이 없으면 성립하지 않는다.
+if (scope.requirementFilenames().length === 0) {
+	// 호출자마다 기대하는 출력 계약이 다르다. 조기 통과도 그 계약을 지킨다.
+	if (process.env.RCI_RELEASE_STATUS_JSON === "1") {
+		process.stdout.write(`${JSON.stringify({ status: "eligible", blocker: null })}\n`);
+		process.exit(0);
+	}
+	process.stdout.write("request-contract requirement trace: PASS (fresh workspace — no requirements to trace)\n");
+	process.exit(0);
+}
+
 const files = loadRequirementFiles();
 const indexText = fs.readFileSync(path.join(requirementsDir, "_index.yaml"), "utf8");
 const sourceLedger = loadSourceLedger(indexText);

@@ -329,7 +329,9 @@ function selfTest(report = (message) => process.stderr.write(`${message}\n`)) {
 	const traced = defaultScope.tracedFiles();
 	const scoped = new Set(defaultScope.scopeFiles());
 	for (const relativePath of traced) if (!scoped.has(relativePath)) failures.push(`a traced path is outside the review scope: ${relativePath}`);
-	if (traced.size === 0) failures.push("no requirement traces any path");
+	// 요구사항이 하나도 없는 새 워크스페이스에서는 추적할 대상 자체가 없다.
+	// 요구사항이 하나라도 있으면 여전히 최소 한 경로를 추적해야 한다.
+	if (defaultScope.requirementFilenames().length > 0 && traced.size === 0) failures.push("no requirement traces any path");
 
 	for (const failure of failures) report(`review-scope self-test failed: ${failure}`);
 	return failures.length === 0;

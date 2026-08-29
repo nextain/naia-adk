@@ -35,7 +35,9 @@ for(const [label,args] of runs){
   if(!/\.(?:c?js|mjs)$/.test(args[0]))throw new Error(`${label}: aggregate entrypoint must be native Node, got ${args[0]}`);
   const resolved=path.join(root,args[0]);
   if(!fs.existsSync(resolved))throw new Error(`${label}: missing native test entrypoint ${args[0]}`);
-	const env=label==="request contract"?{...poisonEnv,REQUEST_CONTRACT_EXPECT_RELEASE_BLOCKED:"1"}:poisonEnv;
+	// 릴리스가 막혀 있어야 한다는 기대는 요구사항을 담고 있을 때만 참이다.
+	const hasRequirements=require("./request-contract-review-scope.cjs").requirementFilenames().length>0;
+	const env=label==="request contract"?{...poisonEnv,...(hasRequirements?{REQUEST_CONTRACT_EXPECT_RELEASE_BLOCKED:"1"}:{})}:poisonEnv;
 	const timeout=label==="request contract"?900000:180000;
 	const result=cp.spawnSync(process.execPath,[resolved,...args.slice(1)],{cwd:root,env,encoding:"utf8",shell:false,maxBuffer:32*1024*1024,timeout});
   if(result.error||result.status!==0){process.stderr.write(`${label}: FAIL\n${result.stderr||result.stdout||result.error?.message||"no diagnostic"}\n`);process.exit(1);}
