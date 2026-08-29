@@ -1,23 +1,25 @@
-# Nextain Brand Guide
-# Source: naia.nextain.io (globals.css) — Light theme for documents
+# 브랜드 가이드 (템플릿)
+# 문서를 만들 때 쓰는 조직 신원·색·서체 정의다. 아래 company 와 logo 는
+# 자리표시자이므로 자기 조직 값으로 바꾼다. palette·fonts·document 는
+# 그대로 써도 되는 중립 기본값이다.
 
 company:
-  name_ko: 주식회사 넥스테인
-  name_en: Nextain Inc.
-  slogan: Next AI Networks
-  tagline: The AI-Native Development Platform
-  website: https://naia.nextain.io
-  email: luke.yang@nextain.io
-  address: 경기도 화성시 효행구 매송면 매송고색로 422번길 77, 나동 107호
+  name_ko: "{{조직명}}"
+  name_en: "{{Organization}}"
+  slogan: "{{한 줄 슬로건}}"
+  tagline: "{{한 줄 소개}}"
+  website: "{{https://example.org}}"
+  email: "{{contact@example.org}}"
+  address: "{{주소}}"
 
 palette:
   # Brand Gradient: Blue → Cyan → Emerald
-  gradient_from: "#2563EB"   # blue-600 / Nextain Blue
+  gradient_from: "#2563EB"   # blue-600
   gradient_via: "#06B6D4"    # cyan-500 / Flow Cyan
   gradient_to: "#10B981"     # emerald-500
 
   # Light theme (document default)
-  primary: "#2563EB"         # hsl(221 83% 53%) / Nextain Blue
+  primary: "#2563EB"         # hsl(221 83% 53%)
   primary_light: "#3B82F6"   # blue-500
   primary_dark: "#1D4ED8"    # blue-700
   secondary: "#DBEAFE"       # hsl(214 32% 91%)
@@ -26,7 +28,7 @@ palette:
   card: "#FFFFFF"
   muted: "#F1F5F9"           # hsl(210 40% 96%) / Slate-100
   muted_foreground: "#64748B" # hsl(215 16% 47%) / Slate-500
-  accent: "#06B6D4"          # Flow Cyan
+  accent: "#06B6D4"          # cyan-500
   border: "#E2E8F0"          # Slate-200
 
   # Document-specific

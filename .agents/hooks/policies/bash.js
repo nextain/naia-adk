@@ -180,7 +180,7 @@ function emailSend(command) {
 					`[Harness] 외부 이메일 발송 차단: \`${p.label}\`\n\n` +
 					"외부 수신자에게 이메일을 발송하려면 사용자의 명시적 승인이 필요합니다.\n\n" +
 					"허용된 명령:\n" +
-					"  - node send.js test (luke.yang@nextain.io로 테스트)\n" +
+					"  - node send.js test (TEST_RECIPIENT 로 테스트 — 미지정 시 발신 계정)\n" +
 					"  - node send.js preview (수신자 목록 확인)\n" +
 					"  - gcloud run jobs execute press-release-test (클라우드 테스트)\n\n" +
 					"실제 발송은 사용자가 직접 터미널에서 실행하거나,\n" +
