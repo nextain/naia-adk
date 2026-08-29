@@ -9,9 +9,9 @@ localize the "keep verbatim" entries.
 ## Keep verbatim (do NOT translate or expand)
 
 Product / repo / org names:
-`Naia`, `NAIA`, `Nextain`, `Starnion`, `OnMam`, `onmam`, `www.onmam.com`,
+`Naia`, `NAIA`, `Nextain`, `Starnion`, `OnMam`, `naia-corp`, `www.naia-corp.com`,
 `alpha-adk`, `nextain-adk`, `naia-os`, `naia-adk`, `naia-agent`,
-`naia-memory`, `naia-business-adk`, `onmam-adk`, `naia-sing`,
+`naia-memory`, `naia-business-adk`, `naia-corp-adk`, `naia-sing`,
 `naia-model-infra`, `naia-ko-serve`, `minicpm-o-4_5-ko-flow`.
 
 Fixed acronyms / coined terms:

@@ -3,7 +3,7 @@
 version: 1
 
 id: T-B-prod-investigation
-bound_project: projects/onmam-dev
+bound_project: projects/naia-corp-dev
 
 persona:
   base: coder
@@ -19,12 +19,12 @@ llm:
   cost_budget_ref: budget-personal-2026-05
 
 ephemeral_paths:
-  - ".agents/progress/onmam-prod-pulldown-2026-05-20.md"
-  - ".agents/progress/onmam-night-mutation.lock"
+  - ".agents/progress/naia-corp-prod-pulldown-2026-05-20.md"
+  - ".agents/progress/naia-corp-night-mutation.lock"
 
 started_at: "2026-05-20T00:30:00Z"
 
 notes: |
-  24시간 onmam 야간 실험의 T-B 세션. dev-side 가 worktree/origin 오너,
+  24시간 naia-corp 야간 실험의 T-B 세션. dev-side 가 worktree/origin 오너,
   Track A 가 service-ops 프레임 lane, T-B 가 prod read-only 조사 + spec 공급 lane.
   본 manifest 는 그 lane assignment 를 artifact 화한 예제.

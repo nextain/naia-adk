@@ -4,7 +4,7 @@
  *
  * 정책/버킷은 gcs-guard.config.json 에서 로드. 엔진은 fork 간 공통(수정 금지).
  *   - naia-adk(public): config는 example만 (실버킷명 X)
- *   - onmam-adk/alpha-adk(private): 실제 버킷명 + marker(gcs-guard.required)
+ *   - naia-corp-adk/alpha-adk(private): 실제 버킷명 + marker(gcs-guard.required)
  *
  * fail 정책 (codex 리뷰 반영):
  *   - marker(gcs-guard.required) 없음 = 비대상 repo → config 정상이면 enforce, 아니면 noop (fail-open 허용)

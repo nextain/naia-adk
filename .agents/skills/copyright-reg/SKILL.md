@@ -1,6 +1,6 @@
 ---
 name: copyright-reg
-description: 어문저작권 등록 서류 생성. 업무상저작물 확인서 PDF(넥스테인 브랜딩) + 저작권등록신청명세서 내용란 초안을 생성합니다. "저작권 등록", "업무상저작물 확인서", "copyright" 등 요청 시 사용.
+description: 어문저작권 등록 서류 생성. 업무상저작물 확인서 PDF(naia-corp 브랜딩) + 저작권등록신청명세서 내용란 초안을 생성합니다. "저작권 등록", "업무상저작물 확인서", "copyright" 등 요청 시 사용.
 argument-hint: "[저작물 제호 | 저작물 PDF 경로]"
 ---
 
@@ -15,7 +15,7 @@ argument-hint: "[저작물 제호 | 저작물 PDF 경로]"
 - `md-to-pdf` 글로벌 설치 (`npm i -g md-to-pdf`)
 - 회사 정보: `docs-business/01. 회사 정보/base-info.md`, `team.md`
 - 인감/서명: `docs-business/07.증명서/nextain-인감.png`, `<YOUR_CEO_NAME>-서명.png`
-- 로고: `about.nextain.io/public/assets/logos/nextain-light-logo.png`
+- 로고: `www.naia-corp.example/public/assets/logos/nextain-light-logo.png`
 
 ## 워크플로우
 
@@ -26,7 +26,7 @@ argument-hint: "[저작물 제호 | 저작물 PDF 경로]"
 ```
 제호: (저작물 제목)
 종류: 어문저작물 / 음악저작물 / 미술저작물 / 영상저작물 등
-저작자: (주)넥스테인 (업무상저작물인 경우)
+저작자: naia-corp (업무상저작물인 경우)
 확인자: (실제 창작에 참여한 직원)
 창작연월일: YYYY-MM-DD
 ```
@@ -49,7 +49,7 @@ cd naia-adk && npx md-to-pdf "docs-business/08.저작권/{출력파일}.md"
 - nextain 로고 (상단)
 - 저작물 정보 테이블 (제호, 종류, 저작자)
 - 확인 문구 + 발급일
-- 법인인감 + "(주)넥스테인 대표이사 <YOUR_CEO_NAME>"
+- 법인인감 + "naia-corp 대표이사 <YOUR_CEO_NAME>"
 - 확인자 정보 테이블 (성명, 직함, 서명, 전화번호, 주민등록번호, 주소)
 - 안내문 (한국저작권위원회 공식 양식)
 - 회사 정보 푸터
@@ -79,7 +79,7 @@ GAI 활용 저작물인 경우 3구분 작성 (1000자 이내, 3000바이트):
 
 ```
 docs-business/08.저작권/
-├── 확인서.css                          # 넥스테인 브랜딩 CSS (공용)
+├── 확인서.css                          # naia-corp 브랜딩 CSS (공용)
 ├── 업무상저작물확인서_{제호약칭}.md     # 확인서 소스
 ├── 업무상저작물확인서_{제호약칭}.pdf    # 확인서 PDF (제출용)
 └── 생성형 인공지능 활용 저작물의 저작권 등록 안내서.pdf  # 참고

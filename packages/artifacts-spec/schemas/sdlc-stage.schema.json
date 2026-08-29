@@ -9,7 +9,7 @@
     "version": { "type": "integer", "minimum": 1 },
     "feature_id": {
       "type": "string",
-      "description": "feature 식별자 (예: 'multi-session-supervisor', 'onmam-#218')."
+      "description": "feature 식별자 (예: 'multi-session-supervisor', 'naia-corp-#218')."
     },
     "title": { "type": "string" },
     "current_stage": {

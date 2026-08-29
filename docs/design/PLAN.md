@@ -655,7 +655,7 @@ MCP server manifest (`skill.json`) can specify arbitrary `mcp.command` to spawn.
 git-crypt init
 echo "data-private/envs/** filter=git-crypt diff=git-crypt" >> .gitattributes
 echo "data-business/accounting/** filter=git-crypt diff=git-crypt" >> .gitattributes
-git-crypt add-gpg-user luke@nextain.io
+git-crypt add-gpg-user contact@naia-corp.example
 ```
 
 For 1-person company: separate private repos provide sufficient access control. git-crypt adds complexity without real benefit. Add when team grows.
@@ -823,7 +823,7 @@ Input:
     - Google AI Pro (5TB): ₩29,000 × 3 months
     - Claude Max: ₩375,000 + ₩187,500
   total: ₩649,500
-  payer: 개인카드 (양병석)
+  payer: 개인카드 (홍길동)
   reimburse_to: 토스뱅크 1000-3504-2010
 
 Output:
@@ -1000,9 +1000,9 @@ All observations resolved.
 |----------|----------|-------|
 | Payroll PDF script | `skills/business/payroll/scripts/send_payroll.py` | Base PDF pattern |
 | Company info | `data-business/docs-business/01. 회사 정보/base-info.md` | context source |
-| Logo | `projects/about.nextain.io/public/assets/logos/` | PDF branding |
+| Logo | `projects/www.naia-corp.example/public/assets/logos/` | PDF branding |
 | Seal | `data-business/docs-business/07.증명서/` | PDF seal (separate from digital sig) |
-| Existing accounting | OneDrive `넥스테인 회계/04.비용관리/` | Historical data source |
+| Existing accounting | OneDrive `naia-corp 회계/04.비용관리/` | Historical data source |
 | Expense 2026-001 | `data-business/docs-business/06. 발급문서/지출결의서/` | Migration source |
 
 ## Appendix B: Glossary

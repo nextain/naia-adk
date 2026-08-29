@@ -152,7 +152,7 @@ test("DSO-005 creates a private minimal child environment and copies only provid
 	const codexOauth = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-oauth-attempt", runtimeRoot: join(root, "runtime"), parentEnv: { PATH: process.env.PATH }, authRoot });
 	const claude = prepareChildEnvironment({ backendId: "claude", attemptId: "claude-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot });
 	const codexVercel = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-vercel-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["vercel"] });
-	const codexSsh = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-ssh-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["ssh-onmam"] });
+	const codexSsh = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-ssh-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["ssh-naia-corp"] });
 	const codexCloud = prepareChildEnvironment({ backendId: "codex", attemptId: "codex-cloud-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["gcloud", "az"] });
 	const claudeCloud = prepareChildEnvironment({ backendId: "claude", attemptId: "claude-cloud-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["gcloud", "az"] });
 	const opencodeCloud = prepareChildEnvironment({ backendId: "opencode", attemptId: "opencode-cloud-attempt", runtimeRoot: join(root, "runtime"), parentEnv, authRoot, credentialProfiles: ["gcloud", "az"] });

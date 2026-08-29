@@ -13,7 +13,7 @@ identity_sources:
     weight: 60
     fail_mode: warn-and-continue
   - kind: roles-adapter
-    path: projects/onmam-dev/.agents/context/agents-rules.json
+    path: projects/naia-corp-dev/.agents/context/agents-rules.json
     weight: 10
     fail_mode: warn-and-continue
 

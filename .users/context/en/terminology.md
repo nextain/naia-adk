@@ -165,5 +165,5 @@ Supervision in the orchestration axis runs L1←L2, L2←L3, L3←human owner. S
 Do not write a bare `L2` in documents, issues, or commits; name the axis on first use. An AI that meets an
 ambiguous notation must ask instead of guessing.
 
-Project-specific domain terms (for example, the portal, homepage, and lynx of onmam) belong in each project’s `.agents/context/glossary.md`.
+Project-specific domain terms (for example, the portal, homepage, and lynx of naia-corp) belong in each project’s `.agents/context/glossary.md`.
 This document contains only methodology terms common across all forks.

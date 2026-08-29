@@ -34,7 +34,7 @@ three_tier_classification:
       - "naia-adk (workspace base)"
       - "alpha-adk (luke fork)"
       - "naia-business-adk"
-      - "onmam-adk (개발 도구, prod 배포 X)"
+      - "naia-corp-adk (개발 도구, prod 배포 X)"
       - "data-company / data-teams (자료)"
     push_policy: 자율 (marker 불요)
 
@@ -42,8 +42,8 @@ three_tier_classification:
     description: |
       운영 배포. prod 사용자 영향.
     examples:
-      - "onmam (alpha/staging/prod deploy)"
-      - "naia.nextain.io (web vertical)"
+      - "naia-corp (alpha/staging/prod deploy)"
+      - "app.naia-corp.example (web vertical)"
       - "naia-os (desktop / kiosk 배포)"
       - "naia-model-infra (RunPod / 가동 backend)"
       - "naia-agent (gateway 배포)"

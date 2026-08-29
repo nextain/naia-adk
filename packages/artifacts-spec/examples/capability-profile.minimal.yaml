@@ -16,7 +16,7 @@ file_access:
     - "**/.env"
     - "**/secrets/**"
     - "**/.git/config"
-    - "projects/onmam-dev/www.onmam.com-branches/**"
+    - "projects/naia-corp-dev/www.naia-corp.com-branches/**"
 
 tools:
   allow:

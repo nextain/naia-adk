@@ -68,8 +68,8 @@ MD(Man-Day)는 커밋 수와 복잡도를 기준으로 추정합니다.
 
 | 분류 | 해당 프로젝트 |
 |------|-------------|
-| [제품 개발] | naia-os, naia.nextain.io, aiedu.nextain.io, admin.nextain.io |
-| [오픈소스] | project-any-llm, about.nextain.io |
+| [제품 개발] | naia-os, app.naia-corp.example, edu.naia-corp.example, admin.naia-corp.example |
+| [오픈소스] | project-any-llm, www.naia-corp.example |
 | [인프라] | CI/CD, titanoboa, ISO 빌드, 서버 설정 |
 | [리서치] | R&D, 참조 프로젝트 분석 |
 | [사업/문서] | docs-business, docs-nextain |

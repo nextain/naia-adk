@@ -16,51 +16,15 @@
 
 ## local_projects
 
+이 워크스페이스 안에 체크아웃된 프로젝트. 포크가 자기 것으로 바꾼다.
+아래는 형태를 보이는 예시다.
 
-### naia-os
+### naia-corp-web
 
-- **purpose**: Naia OS desktop app (Tauri 2 + React + Three.js + Node.js agent)
-- **repo**: nextain/naia-os
+- **purpose**: 예시 — 조직 웹사이트
+- **repo**: naia-corp/web
 - **visibility**: public
-- **entry_point**: naia-os/AGENTS.md
-
-### issue-desk
-
-- **purpose**: IssueDesk — standalone Vite+React panel for naia-os. GitHub issue/PR triage, community assistant, notification triage.
-- **repo**: nextain/issue-desk
-- **visibility**: private
-- **entry_point**: issue-desk/panel.json
-- **notes**: Standalone git repo, not a submodule. Design doc: naia-os/docs/design/issue-desk.ko.md
-
-### about.nextain.io
-
-- **purpose**: Nextain corporate website (Next.js 14 + next-intl)
-- **repo**: nextain/about.nextain.io
-- **visibility**: public
-- **entry_point**: about.nextain.io/README.md
-
-### naia.nextain.io
-
-- **purpose**: Naia web app / Lab portal (Next.js + BFF for gateway)
-- **repo**: nextain/naia.nextain.io
-- **visibility**: private
-- **entry_point**: naia.nextain.io/AGENTS.md
-
-### aiedu.nextain.io
-
-- **purpose**: AI education platform — curriculum-driven AI teacher (Next.js + Monaco + Pyodide + any-llm)
-- **repo**: nextain/aiedu.nextain.io
-- **visibility**: private
-- **entry_point**: aiedu.nextain.io/AGENTS.md
-- **notes**: B2B commercial product. Dual-mirror context. Curriculum as plugin. Depends on any-llm B2B extension.
-
-### admin.nextain.io
-
-- **purpose**: Nextain B2B admin control plane (license key mgmt, token tracking, client mgmt)
-- **repo**: nextain/admin.nextain.io
-- **visibility**: private
-- **entry_point**: admin.nextain.io/AGENTS.md
-- **notes**: Internal tool. Manages aiedu.nextain.io and future B2B products.
+- **entry_point**: naia-corp-web/AGENTS.md
 
 ## infrastructure
 
@@ -106,41 +70,15 @@
 
 ## submodules
 
+서브모듈로 붙인 저장소. 포크가 자기 것으로 바꾼다.
+아래는 형태를 보이는 예시다.
 
-### docs-work-logs
+### docs-internal
 
-- **purpose**: Developer work logs (per-person folders)
-- **repo**: nextain/docs-work-logs
+- **purpose**: 예시 — 조직 내부 문서
+- **repo**: naia-corp/docs-internal
 - **visibility**: private
-- **entry_point**: docs-work-logs/AGENTS.md
-
-### docs-nextain
-
-- **purpose**: Internal docs (onboarding, meetings, design)
-- **repo**: nextain/docs-nextain
-- **visibility**: private
-- **entry_point**: docs-nextain/AGENTS.md
-
-### docs-business
-
-- **purpose**: Business docs (proposals, strategy, IR)
-- **repo**: nextain/docs-business
-- **visibility**: private
-- **entry_point**: docs-business/README.md
-
-### example.com
-
-- **purpose**: Cafelua personal website
-- **repo**: luke-n-alpha/example-project-private
-- **visibility**: private
-- **entry_point**: example.com/README.md
-
-### project-any-llm
-
-- **purpose**: Any-LLM SDK + FastAPI gateway (LLM proxy, credits, auth, usage tracking)
-- **repo**: nextain/any-llm
-- **visibility**: public
-- **entry_point**: project-any-llm/README.md
+- **entry_point**: docs-internal/README.md
 
 ## reference_submodules
 
@@ -215,7 +153,7 @@
 
 ### webapp-testing
 
-- **trigger**: MANDATORY — any E2E test, UI behavior verification, screenshot capture, or console log check for local web apps (naia.nextain.io, about.nextain.io, aiedu.nextain.io, etc.)
+- **trigger**: MANDATORY — any E2E test, UI behavior verification, screenshot capture, or console log check for local web apps (app.naia-corp.example, www.naia-corp.example, edu.naia-corp.example, etc.)
 - **command**: /webapp-testing
 - **rule**: NEVER ask the user to manually test. Always use this skill to verify directly. Uses Playwright Python scripts.
 

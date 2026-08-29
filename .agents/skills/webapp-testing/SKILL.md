@@ -1,6 +1,6 @@
 ---
 name: webapp-testing
-description: Playwright로 로컬 웹 앱을 테스트합니다. naia.nextain.io, about.nextain.io, aiedu.nextain.io 등 Next.js 앱의 E2E 테스트, UI 동작 검증, 스크린샷 캡처, 콘솔 로그 확인 시 반드시 사용. 사용자에게 수동 테스트를 시키지 말고 이 스킬로 AI가 직접 검증할 것.
+description: Playwright로 로컬 웹 앱을 테스트합니다. app.naia-corp.example, www.naia-corp.example, edu.naia-corp.example 등 Next.js 앱의 E2E 테스트, UI 동작 검증, 스크린샷 캡처, 콘솔 로그 확인 시 반드시 사용. 사용자에게 수동 테스트를 시키지 말고 이 스킬로 AI가 직접 검증할 것.
 ---
 
 # 웹 앱 테스트
@@ -90,9 +90,9 @@ with sync_playwright() as p:
 
 | 프로젝트 | 명령어 | 포트 | timeout |
 |---------|--------|------|---------|
-| naia.nextain.io | `npm run dev` | 3000 | 90s |
-| about.nextain.io | `npm run dev` | 3000 | 60s |
-| aiedu.nextain.io | `npm run dev` | 3000 | 60s |
+| app.naia-corp.example | `npm run dev` | 3000 | 90s |
+| www.naia-corp.example | `npm run dev` | 3000 | 60s |
+| edu.naia-corp.example | `npm run dev` | 3000 | 60s |
 | naia-os (Tauri) | tauri-driver 필요 — Tauri 공식 문서 참고 | - | - |
 
 **naia-os Tauri 테스트**: 일반 Playwright headless 불가. `tauri-driver`로 WebDriver 서버를 실행하고 Playwright가 해당 포트에 연결하는 방식. 포트/설정은 [Tauri testing 문서](https://tauri.app/ko/develop/tests/webdriver/) 참고.
@@ -101,5 +101,5 @@ with sync_playwright() as p:
 
 - `networkidle` 없이 동적 앱 DOM 읽으면 빈 결과 나옴
 - Next.js cold start는 90초 이상 걸릴 수 있음 — `--timeout 90` 이상 권장
-- naia.nextain.io는 DB(Prisma + PostgreSQL)와 `.env` 필요 — 없으면 사용자에게 요청
+- app.naia-corp.example는 DB(Prisma + PostgreSQL)와 `.env` 필요 — 없으면 사용자에게 요청
 - 스크린샷은 `/tmp/`에 저장

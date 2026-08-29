@@ -16,10 +16,10 @@ ADK fork chain의 위생을 유지한다. selective cherry-pick 대신 **정식 
 ```
 naia-adk            ← 범용/개인 base (최상위, upstream_repo: null)
   └─ naia-business-adk   ← 회사 layer
-       └─ nextain-adk     ← 넥스테인 org
-            └─ alpha-adk   ← 루크 (넥스테인 직원)
+       └─ nextain-adk     ← naia-corp org
+            └─ alpha-adk   ← 루크 (naia-corp 직원)
 ```
-`onmam-adk`는 `naia-business-adk`에서 분기. **각 fork는 바로 위 단계에서만 동기화**한다
+`naia-corp-adk`는 `naia-business-adk`에서 분기. **각 fork는 바로 위 단계에서만 동기화**한다
 (skip-hop 금지 — nextain-adk가 naia-adk를 직접 받지 않고 business-adk를 받는 식).
 
 ## 버전 / 동기화 SoT

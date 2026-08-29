@@ -1,5 +1,5 @@
 # ownership-table.yaml — 최소 예제
-# 24h onmam 야간실험을 ownership-table 로 환산한 형태 (T-A + T-B + dev-side 세션 협업).
+# 24h naia-corp 야간실험을 ownership-table 로 환산한 형태 (T-A + T-B + dev-side 세션 협업).
 
 version: 1
 
@@ -32,7 +32,7 @@ resources:
       luke: [read, write]
     notes: "Track A 프레임 전용 영역"
 
-  - pattern: "projects/onmam-dev/scripts/dev-targets.conf"
+  - pattern: "projects/naia-corp-dev/scripts/dev-targets.conf"
     owner: T-A-service-ops
     capabilities:
       T-B-prod-investigation: [read]
@@ -40,7 +40,7 @@ resources:
       luke: [read, write]
     sync_gate: "구조 변경은 Track A 경유, adapter 값은 dev-side 가 자체 conf 에서 조정"
 
-  - pattern: "www.onmam.com-branches/{luke,dev,main}"
+  - pattern: "www.naia-corp.com-branches/{luke,dev,main}"
     owner: dev-side-session
     capabilities:
       T-B-prod-investigation: [read]
@@ -48,7 +48,7 @@ resources:
       luke: [read, write, execute]
     sync_gate: "단일 직렬 오너 mutate (다중세션 병렬 git mutate 금지)"
 
-  - pattern: ".agents/progress/onmam-sot.md"
+  - pattern: ".agents/progress/naia-corp-sot.md"
     owner: shared
     capabilities:
       T-A-service-ops: [read, write]

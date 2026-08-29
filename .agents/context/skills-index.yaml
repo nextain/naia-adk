@@ -159,7 +159,7 @@ skills:
     scripts: []
 
   webapp-testing:
-    trigger: "naia.nextain.io, about.nextain.io, aiedu.nextain.io E2E 테스트"
+    trigger: "app.naia-corp.example, www.naia-corp.example, edu.naia-corp.example E2E 테스트"
     what: "Playwright로 로컬 웹 앱 E2E 테스트, 스크린샷, 콘솔 로그 캡처"
     arg: null
     scripts: [with_server.py]

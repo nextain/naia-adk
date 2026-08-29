@@ -268,15 +268,15 @@ command.match(/\bgh\s+pr\s+create\b/)  // ^ 제거, \b로 word boundary만 체�
 
 ## 15차 분석 추가 발견 (2026-03-22)
 
-### 발견 F10: agents-rules.md의 naia.nextain.io visibility 오류 (P2)
+### 발견 F10: agents-rules.md의 app.naia-corp.example visibility 오류 (P2)
 
 **현황**: `.users/context/agents-rules.md` 로컬 프로젝트 테이블 Line 31:
 ```
-| `naia.nextain.io` | ... | `nextain/naia.nextain.io` | public |
+| `app.naia-corp.example` | ... | `naia-corp/app` | public |
 ```
 
 **불일치**:
-- CLAUDE.md: `naia.nextain.io` → `no` (공개 여부 = 아님)
+- CLAUDE.md: `app.naia-corp.example` → `no` (공개 여부 = 아님)
 - project-index.yaml: `visibility: private`
 - agents-rules.md: `public` → **오류**
 

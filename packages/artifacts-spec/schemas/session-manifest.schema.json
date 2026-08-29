@@ -12,7 +12,7 @@
     },
     "id": {
       "type": "string",
-      "description": "세션 식별자 (사람이 읽을 수 있는 슬러그). 예: 'coder-onmam', 'docs-naia-os', 'reviewer-pr-42'."
+      "description": "세션 식별자 (사람이 읽을 수 있는 슬러그). 예: 'coder-naia-corp', 'docs-naia-os', 'reviewer-pr-42'."
     },
     "bound_project": {
       "type": "string",

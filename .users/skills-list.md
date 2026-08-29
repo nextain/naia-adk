@@ -6,7 +6,7 @@
 
 | 이름 | 파일 | 설명 |
 |------|------|------|
-| copyright-reg | `.agents/skills/copyright-reg/SKILL.md` | 어문저작권 등록 서류 생성. 업무상저작물 확인서 PDF(넥스테인 브랜딩) + 저작권등록신청명세서 내용란 초안을 생성합니다. "저작권 등록", "업무상저작물 확인서", "copyright" 등 요청 시 사용. |
+| copyright-reg | `.agents/skills/copyright-reg/SKILL.md` | 어문저작권 등록 서류 생성. 업무상저작물 확인서 PDF(naia-corp 브랜딩) + 저작권등록신청명세서 내용란 초안을 생성합니다. "저작권 등록", "업무상저작물 확인서", "copyright" 등 요청 시 사용. |
 | doc-coauthoring | `.agents/skills/doc-coauthoring/SKILL.md` | 기술 스펙, 제안서, 결정 문서, PRD 등 구조화된 문서를 3단계로 공동 작성합니다. "문서 작성", "스펙 작성", "제안서", "RFC", "설계 문서", "PRD" 등 비코드 문서 작성 요청 시 반드시 사용. /doc-coauthoring으로 호출. |
 | finetune-persona | `.agents/skills/finetune-persona/SKILL.md` | > |
 | manage-discord-sessions | `.agents/skills/manage-discord-sessions/SKILL.md` | Configure, observe, and recover Discord AI jobs from the ADK workspace with either Codex or Claude. Use for Discord setup, background-job status, live activity, |
@@ -29,6 +29,6 @@
 | verify-implementation | `.agents/skills/verify-implementation/SKILL.md` | 등록된 모든 verify-* 스킬을 순차 실행해 통합 검증 보고서를 생성합니다. 기능 구현 후, PR 전, 코드 리뷰 시, issue-driven-development Review/Post-test Review 단계마다 반드시 사용. /verify-implementation으로 호출. |
 | verify-product-preservation | `.agents/skills/verify-product-preservation/SKILL.md` | 기존 제품의 경로·진입점·내비게이션·사용자 여정·운영 표면이 기능 추가 뒤에도 유지되는지 기준 버전과 보존 계약으로 검증합니다. 기존 프로젝트의 기능 추가·통합·리팩터링 후, planning/integration 리뷰와 release 전에 반드시 사용합니다. |
 | verify-request-contract | `.agents/skills/verify-request-contract/SKILL.md` | 원요청 무결성과 세션 바인딩 하네스의 원문 해시체인, 완전 범위 추적, 서명 권한, 2회 Clean 결박, Claude Code/Codex 등록·동등성을 결정론으로 검증합니다. request-contract·session-inject 코어/어댑터·설정·스키마·review-pass를 수정 |
-| webapp-testing | `.agents/skills/webapp-testing/SKILL.md` | Playwright로 로컬 웹 앱을 테스트합니다. naia.nextain.io, about.nextain.io, aiedu.nextain.io 등 Next.js 앱의 E2E 테스트, UI 동작 검증, 스크린샷 캡처, 콘솔 로그 확인 시 반드시 사용. 사용자에게 수동 테스트를 시키지 말고 |
+| webapp-testing | `.agents/skills/webapp-testing/SKILL.md` | Playwright로 로컬 웹 앱을 테스트합니다. app.naia-corp.example, www.naia-corp.example, edu.naia-corp.example 등 Next.js 앱의 E2E 테스트, UI 동작 검증, 스크린샷 캡처, 콘솔 로그 확인 시 반드시 사용. 사용자에게 수동 테스트를 시키지 말고 |
 | weekly-report | `.agents/skills/weekly-report/SKILL.md` | 주간 업무 결과를 git 커밋과 작업 로그에서 수집해 작성합니다. "주간 업무 결과", "결과 작성", "이번 주 뭐 했는지" 등 주간 보고 요청 시 사용. |
 | youtube-upload | `.agents/skills/youtube-upload/SKILL.md` | YouTube에 영상을 자막·썸네일·제목/설명/태그까지 자동 업로드할 때 반드시 사용. 밋업/발표/콘텐츠 영상을 YouTube Data API v3로 올린다. "유튜브 올려", "youtube 업로드", "영상 게시" 등 요청 시 사용. |

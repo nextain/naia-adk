@@ -15,7 +15,7 @@ export const CREDENTIAL_PROFILES = Object.freeze({
 		target: { base: "xdgConfig", parts: ["gh", "hosts.yml"] },
 		label: "GitHub CLI authentication",
 	}),
-	"ssh-onmam": Object.freeze({
+	"ssh-naia-corp": Object.freeze({
 		kind: "file",
 		source: [".ssh", "id_ed25519"],
 		target: { base: "home", parts: [".ssh", "id_ed25519"] },

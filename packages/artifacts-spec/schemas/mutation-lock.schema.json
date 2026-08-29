@@ -22,7 +22,7 @@
     },
     "scope": {
       "type": "string",
-      "description": "락이 직렬화하는 자원 범위 (예: 'worktree:luke·dev·main + origin', 'onmam-dev:opt/onmam/legacy')."
+      "description": "락이 직렬화하는 자원 범위 (예: 'worktree:luke·dev·main + origin', 'naia-corp-dev:opt/naia-corp/legacy')."
     },
     "protocol": {
       "type": "string",

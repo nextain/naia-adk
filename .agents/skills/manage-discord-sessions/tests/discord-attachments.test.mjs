@@ -23,18 +23,18 @@ const authorization = { scope: { channelId: CHANNEL, threadId: null, authorId: U
 
 test("파일만 보낸 메시지도 요청으로 성립한다", () => {
 	const message = { id: MESSAGE, content: "", attachments: [{ id: ATTACHMENT, filename: "report.pdf", size: 1234, content_type: "application/pdf" }] };
-	const request = discordRequestText(message, BOT, { authorization, instance: "onmam" });
+	const request = discordRequestText(message, BOT, { authorization, instance: "naia-corp" });
 	assert.ok(request.length > 0, "본문이 비어도 요청 문자열이 만들어져야 한다");
 	assert.match(request, /report\.pdf/);
 	assert.match(request, new RegExp(`attachmentId=${ATTACHMENT}`));
 	assert.match(request, new RegExp(`--message ${MESSAGE}`));
 	assert.match(request, new RegExp(`--channel ${CHANNEL}`));
-	assert.match(request, /--instance onmam/);
+	assert.match(request, /--instance naia-corp/);
 });
 
 test("글과 파일이 함께 오면 둘 다 프롬프트에 들어간다", () => {
 	const message = { id: MESSAGE, content: "이 문서 검토해줘", attachments: [{ id: ATTACHMENT, filename: "plan.hwp", size: 9, content_type: null }] };
-	const prompt = transientPrompt(message, BOT, config(), authorization, null, { instance: "onmam" });
+	const prompt = transientPrompt(message, BOT, config(), authorization, null, { instance: "naia-corp" });
 	assert.match(prompt, /이 문서 검토해줘/);
 	assert.match(prompt, /plan\.hwp/);
 });

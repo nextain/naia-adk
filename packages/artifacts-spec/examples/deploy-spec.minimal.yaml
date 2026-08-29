@@ -1,14 +1,14 @@
-# deploy-spec.yaml — 최소 예제 (24h onmam 배포파이프라인 환산)
+# deploy-spec.yaml — 최소 예제 (24h naia-corp 배포파이프라인 환산)
 
 version: 1
 
 envs:
   dev:
-    target: onmam-dev
+    target: naia-corp-dev
     branch: dev
     method: git-archive
     verify:
-      url: https://www.onmampick.org
+      url: https://www.naia-corp-pick.org
       expect_status: [200, 301, 302]
     snapshot:
       kind: tar
@@ -20,11 +20,11 @@ envs:
     human_required: false
 
   staging:
-    target: onmam-dev
+    target: naia-corp-dev
     branch: main
     method: git-pull
     verify:
-      url: https://www.onmam.net
+      url: https://www.naia-corp.net
       expect_status: [200]
     snapshot:
       kind: tar
@@ -36,11 +36,11 @@ envs:
     human_required: true
 
   prod:
-    target: onmam-web
+    target: naia-corp-web
     branch: main
     method: git-pull
     verify:
-      url: https://www.onmam.com
+      url: https://www.naia-corp.com
       expect_status: [200]
     snapshot:
       kind: gcp-disk

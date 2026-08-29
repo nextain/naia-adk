@@ -8,7 +8,7 @@ Small-model KO→EN translation for the **hand-curated** root context docs.
 
 Two different doc-mirror conventions live in this workspace:
 
-- **ADK series** (`naia-adk`, `naia-business-adk`, `onmam-adk`):
+- **ADK series** (`naia-adk`, `naia-business-adk`, `naia-corp-adk`):
   `.users/context/*.md` is a *mechanical* JSON→MD render of
   `.agents/context/*.json`, kept in sync by the wired
   `agents-context-mirror.js` PostToolUse hook. Same language, no translation.

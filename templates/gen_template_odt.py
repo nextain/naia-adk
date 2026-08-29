@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Nextain Standard ODT Template Generator
 
-Generates a branded ODT document template based on naia.nextain.io design system.
+Generates a branded ODT document template based on app.naia-corp.example design system.
 Includes: cover page (no header/footer), body pages (header + footer with page number).
 
 Usage:
@@ -271,8 +271,8 @@ def add_sample(doc):
 
     doc.text.addElement(P(
         stylename="NxBody",
-        text="본 문서는 주식회사 넥스테인(Nextain Inc.)의 표준 문서 템플릿입니다. "
-             "naia.nextain.io 디자인 시스템을 기반으로 한 일관된 브랜딩이 적용되어 있습니다. "
+        text="본 문서는 naia-corp의 표준 문서 템플릿입니다. "
+             "app.naia-corp.example 디자인 시스템을 기반으로 한 일관된 브랜딩이 적용되어 있습니다. "
              "모든 공식 문서는 본 템플릿을 기준으로 작성합니다.",
     ))
     doc.text.addElement(P(
@@ -333,7 +333,7 @@ def add_sample(doc):
 
     doc.text.addElement(P(
         stylename="NxSmall",
-        text="본 문서는 비밀문서이므로 외부 유출을 금지합니다. — 주식회사 넥스테인",
+        text="본 문서는 비밀문서이므로 외부 유출을 금지합니다. — naia-corp",
     ))
 
 

@@ -18,7 +18,7 @@ fork_chain:
   - naia-business-adk        # company layer
   - nextain-adk              # Nextain org
   - alpha-adk                # Luke (Nextain employee)
-# onmam-adk branches off naia-business-adk (not in the linear chain).
+# naia-corp-adk branches off naia-business-adk (not in the linear chain).
 
 # Conflict resolution during merge.
 conflict_policy: upstream-structure-first

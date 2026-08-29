@@ -16,7 +16,7 @@
         "properties": {
           "target": {
             "type": "string",
-            "description": "배포 대상 식별자 (예: 'onmam-dev', 'onmam-web', 'replica-comixv')."
+            "description": "배포 대상 식별자 (예: 'naia-corp-dev', 'naia-corp-web', 'replica-comixv')."
           },
           "branch": { "type": "string", "description": "git 브랜치 (예: 'main', 'dev', 'luke')." },
           "method": {

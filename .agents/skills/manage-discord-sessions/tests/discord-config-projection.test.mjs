@@ -109,7 +109,7 @@ test("DSG-021 validates schema v2 workspace, exact participant coverage, and saf
 	assert.equal(loaded.discord.bindings[0].historyVisibility, "requester_only");
 	assert.equal(loaded.backend.profiles.codex.costProfile, "balanced");
 	assert.equal(load({ ...base, runtime: { ...base.runtime, networkAccess: true, credentialProfiles: ["vercel"] } }).runtime.networkAccess, true);
-	assert.deepEqual(load({ ...base, runtime: { ...base.runtime, networkAccess: true, credentialProfiles: ["vercel", "gh", "gcloud", "az", "ssh-onmam"] } }).runtime.credentialProfiles, ["vercel", "gh", "gcloud", "az", "ssh-onmam"]);
+	assert.deepEqual(load({ ...base, runtime: { ...base.runtime, networkAccess: true, credentialProfiles: ["vercel", "gh", "gcloud", "az", "ssh-naia-corp"] } }).runtime.credentialProfiles, ["vercel", "gh", "gcloud", "az", "ssh-naia-corp"]);
 	assert.throws(() => load({ ...base, runtime: { ...base.runtime, credentialProfiles: ["vercel"] } }), /require networkAccess/);
 	assert.throws(() => load({ ...base, runtime: { ...base.runtime, networkAccess: true, credentialProfiles: ["unknown"] } }), /unsupported credential profile/);
 	assert.equal(load({ ...base, backend: { ...base.backend, profiles: { ...base.backend.profiles, codex: { enabled: true, costProfile: "control" } } } }).backend.profiles.codex.costProfile, "control");

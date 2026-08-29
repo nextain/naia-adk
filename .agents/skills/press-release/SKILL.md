@@ -80,7 +80,7 @@ gcloud logging read "resource.type=cloud_run_job AND resource.labels.job_name=pr
 - 게재된 기사 링크 수집 → `scripts/press-release/results.json`에 기록:
 ```json
 {
-  "campaign": "2026-04-13-onmam-mou",
+  "campaign": "2026-04-13-naia-corp-mou",
   "sent": 17, "bounced": 2, "articles": [
     { "outlet": "매체명", "url": "기사URL", "date": "2026-04-14", "journalist": "기자명" }
   ]

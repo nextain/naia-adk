@@ -27,7 +27,7 @@
                            │ instantiate
               ┌────────────┼────────────┐
               ▼            ▼            ▼
-        nextain-adk   onmam-adk    {company}-adk
+        nextain-adk   naia-corp-adk    {company}-adk
         (company)     (company)    (company)
         .agents/      .agents/      .agents/
         data-company/ data-company/ data-company/
@@ -208,18 +208,18 @@ nextain-adk/                     ← company workspace root
 ├── .users/                       ← Korean mirror
 ├── .claude/                      ← Claude Code settings
 ├── data-company/
-│   ├── docs-nextain/             ← submodule: nextain/docs-nextain
-│   ├── docs-work-logs/           ← submodule: nextain/docs-work-logs
+│   ├── docs-nextain/             ← submodule: naia-corp/docs-internal
+│   ├── docs-work-logs/           ← submodule: naia-corp/docs-work-logs
 │   └── caretive/                 ← Reference data
 ├── data-business/
-│   ├── docs-business/            ← submodule: nextain/docs-business
+│   ├── docs-business/            ← submodule: naia-corp/docs-business
 │   ├── accounting/               ← submodule: nextain/nextain-accounting
 │   └── documents/                ← submodule: nextain/nextain-documents
 ├── data-private/                 ← submodule: nextain/luke-private
 ├── projects/
 │   ├── naia-os/                  ← submodule: nextain/naia-os
-│   ├── about.nextain.io/         ← submodule
-│   ├── naia.nextain.io/          ← submodule
+│   ├── www.naia-corp.example/         ← submodule
+│   ├── app.naia-corp.example/          ← submodule
 │   ├── 9router/                  ← submodule
 │   └── refs/                     ← read-only upstream tracking
 ├── skills/                       ← base + business skills
@@ -233,16 +233,16 @@ nextain-adk/                     ← company workspace root
 
 `alpha-adk` is not a generic personal fork. It is a member instance that inherits company context while preserving local working memory and experiments.
 
-### onmam-adk (= company instance)
+### naia-corp-adk (= company instance)
 
 ```
-onmam-adk/
+naia-corp-adk/
 ├── .agents/
 │   └── context/                  ← Onmam company info
 ├── data-company/
-│   └── docs-onmam/               ← Onmam docs
+│   └── docs-naia-corp/               ← Onmam docs
 ├── data-business/
 │   └── documents/                ← Onmam documents
 └── projects/
-    └── home.onmam.com/           ← Onmam project
+    └── home.naia-corp.com/           ← Onmam project
 ```

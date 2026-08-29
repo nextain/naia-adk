@@ -186,7 +186,7 @@ definitions:
       추측하지 말고 되묻는다.
 
   project_glossary: |
-    프로젝트 고유 도메인 용어(예: onmam 의 포털·홈피·lynx·채널)는 각 프로젝트의
+    프로젝트 고유 도메인 용어(예: naia-corp 의 포털·홈피·lynx·채널)는 각 프로젝트의
     `.agents/context/glossary.md` 에 둔다. 이 파일은 **전 포크 공통 방법론 용어**만 담는다.
 
 cross_references:
