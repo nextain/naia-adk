@@ -34,9 +34,11 @@ const SMTP_HOST = process.env.SMTP_HOST || "smtp.gmail.com";
 const SMTP_PORT = Number(process.env.SMTP_PORT) || 587;
 const SMTP_USER = process.env.SMTP_USER;
 const SMTP_PASS = process.env.SMTP_PASS;
-const SENDER_NAME = process.env.SENDER_NAME || "Nextain";
+const SENDER_NAME = process.env.SENDER_NAME || "Press Office";
 const SENDER_EMAIL = process.env.SENDER_EMAIL || SMTP_USER;
 const TEST_RECIPIENT = process.env.TEST_RECIPIENT || SMTP_USER;
+// 본문 인사말에 넣을 회신처. 없으면 인사말에서 그 문구 자체가 빠진다.
+const CONTACT_EMAIL = process.env.CONTACT_EMAIL || SENDER_EMAIL || "";
 
 // ── Load contacts & template ─────────────────────────────────────────────
 const contacts = JSON.parse(
@@ -52,7 +54,7 @@ const templateHtml = fs.readFileSync(templatePath, "utf8");
 const subjectPath = path.join(__dirname, "subject.txt");
 const subject = fs.existsSync(subjectPath)
 	? fs.readFileSync(subjectPath, "utf8").trim()
-	: "[보도자료] 넥스테인, AI 에이전트 특허 7건 출원 — SWDLC 전 주기 IP 확보";
+	: "[보도자료] 제목을 subject.txt 에 작성하세요";
 
 // ── Transporter ──────────────────────────────────────────────────────────
 function createTransporter() {
@@ -67,9 +69,12 @@ function createTransporter() {
 // ── Personalize template ─────────────────────────────────────────────────
 function personalize(html, contact) {
 	const isEditor = contact.name === "편집부" || contact.name === "보도자료";
+	// 발신 주체와 회신처는 배포하는 쪽마다 다르다. 코드에 박아 두면 이 스킬을
+	// 받은 사람이 남의 회사 명의로 메일을 보내게 된다. 설정에서 읽는다.
+	const contactLine = CONTACT_EMAIL ? ` (${CONTACT_EMAIL})` : "";
 	const greeting = isEditor
-		? `보도자료를 보내드립니다. 관련하여 궁금하신 점이 있으시면 언제든 편하게 연락 주시기 바랍니다. (luke.yang@nextain.io)`
-		: `${contact.note || "AI 관련"} 취재하고 계신 것으로 파악되어 넥스테인의 AI 에이전트가 개인화하여 보내드리는 보도자료입니다. 관련하여 궁금하신 점이 있으시면 언제든 편하게 연락 주시기 바랍니다. (luke.yang@nextain.io)`;
+		? `보도자료를 보내드립니다. 관련하여 궁금하신 점이 있으시면 언제든 편하게 연락 주시기 바랍니다.${contactLine}`
+		: `${contact.note || "관련 분야"} 취재하고 계신 것으로 파악되어 ${SENDER_NAME}에서 개인화하여 보내드리는 보도자료입니다. 관련하여 궁금하신 점이 있으시면 언제든 편하게 연락 주시기 바랍니다.${contactLine}`;
 	const nameLabel = isEditor ? `${contact.outlet} 담당자` : `${contact.name} 기자`;
 	return html
 		.replace("{{name}} 기자님께,", `${nameLabel}님께,`)
@@ -94,7 +99,7 @@ function htmlToPlain(html) {
 		.trim();
 }
 
-// Images are now referenced via URL (about.nextain.io), no CID attachments needed.
+// Images are referenced by absolute URL in template.html, not CID attachments.
 
 // ── Send one email ───────────────────────────────────────────────────────
 async function sendOne(transporter, to, contact) {
@@ -171,7 +176,7 @@ async function main() {
 	if (cmd === "test") {
 		console.log(`\n📧 Sending test email to ${TEST_RECIPIENT}...`);
 		const t = createTransporter();
-		const testContact = { name: "양병석", outlet: "Nextain (테스트)", email: TEST_RECIPIENT };
+		const testContact = { name: "테스트", outlet: "테스트 발송", email: TEST_RECIPIENT };
 		const msgId = await sendOne(t, TEST_RECIPIENT, testContact);
 		console.log(`✅ Test sent! MessageId: ${msgId}`);
 		return;

@@ -13,7 +13,7 @@ description: 보도자료 작성·기자 조사·개인화 발송·결과 수집
 
 ### Phase 1: 준비 (Prepare)
 
-1. **보도자료 확인**: `about.nextain.io/src/content/press/ko/` 에서 원문 확인
+1. **보도자료 확인**: 조직의 보도자료 원문 보관 위치에서 원문 확인 (경로는 조직마다 다르다)
 2. **이메일 템플릿 생성/수정**: `scripts/press-release/template.html`
 3. **제목 설정**: `scripts/press-release/subject.txt`
 
@@ -31,7 +31,7 @@ description: 보도자료 작성·기자 조사·개인화 발송·결과 수집
 
 1. `node send.js preview` — 전체 수신자 + 개인화 인사 미리보기
 2. 개인화 규칙:
-   - 기자: `{이름} 기자님께, {note} 취재하고 계신 것으로 파악되어 넥스테인의 AI 에이전트가 개인화하여 보내드리는 보도자료입니다.`
+   - 기자: `{이름} 기자님께, {note} 취재하고 계신 것으로 파악되어 {SENDER_NAME}에서 개인화하여 보내드리는 보도자료입니다.`
    - 편집부: `{매체} 담당자님께, 보도자료를 보내드립니다.`
    - 연락처 안내 포함
 3. **AI 피어 리뷰** (3종 병렬):
@@ -42,7 +42,7 @@ description: 보도자료 작성·기자 조사·개인화 발송·결과 수집
 
 ### Phase 4: 테스트 발송 (Test)
 
-1. `node send.js test` — luke.yang@nextain.io로 테스트
+1. `node send.js test` — `TEST_RECIPIENT`(미지정 시 `SMTP_USER`)로 테스트
 2. 확인 항목:
    - [ ] 이미지 표시 (로고, 본문 사진)
    - [ ] 개인화 치환 정상
@@ -71,12 +71,12 @@ gcloud logging read "resource.type=cloud_run_job AND resource.labels.job_name=pr
 - 반송(bounce) 이메일 주소 → contacts.json에서 제거 또는 수정
 
 #### 6-2. 반송 메일 확인
-- luke.yang@nextain.io 받은편지함에서 "배달되지 않음" 메일 수집
+- 발신 계정 받은편지함에서 "배달되지 않음" 메일 수집
 - 반송 원인 분류: 주소 없음 / 메일함 가득 / 스팸 차단
 - contacts.json 업데이트 (잘못된 주소 제거, 대체 주소 조사)
 
 #### 6-3. 기사 게재 확인
-- WebSearch: `"넥스테인" OR "nextain" site:매체도메인` (발송 후 24h~7일)
+- WebSearch: `"{조직명}" site:매체도메인` (발송 후 24h~7일)
 - 게재된 기사 링크 수집 → `scripts/press-release/results.json`에 기록:
 ```json
 {
@@ -107,6 +107,25 @@ gcloud logging read "resource.type=cloud_run_job AND resource.labels.job_name=pr
 - 반송된 주소 → 제거 또는 재조사
 - 무반응 매체 대표 메일 → 개별 기자 이메일 조사
 
+## 설정
+
+이 스킬은 조직 고유 값을 코드에 담지 않는다. `.env`(gitignore) 또는 환경변수로 준다.
+
+| 변수 | 쓰임 | 미지정 시 |
+|------|------|-----------|
+| `SMTP_HOST` / `SMTP_PORT` | 발송 서버 | `smtp.gmail.com` / `587` |
+| `SMTP_USER` / `SMTP_PASS` | 발송 계정 | 없으면 발송 불가 |
+| `SENDER_NAME` | From 표시 이름. 인사말에도 쓰인다 | `Press Office` |
+| `SENDER_EMAIL` | From 주소 | `SMTP_USER` |
+| `CONTACT_EMAIL` | 본문 인사말의 회신처 | `SENDER_EMAIL`. 둘 다 없으면 회신처 문구가 빠진다 |
+| `TEST_RECIPIENT` | `send.js test` 수신자 | `SMTP_USER` |
+| `CLOUD_URL` | 클라우드 발송 엔드포인트 | 없으면 클라우드 발송을 거부하고 이유를 알린다 |
+| `PRESS_SECRET` | 그 엔드포인트 인증값 | 빈 값 |
+
+`template.html` 과 `subject.txt` 는 자리표시자로 배포된다. 발송 전에 자기 내용으로
+바꾼다. `template.html` 의 `{{name}} 기자님께,` 와 `{{greeting}}` 두 토큰은 `send.js`
+가 치환하므로 지우지 않는다.
+
 ## Key Files
 
 | 파일 | 용도 |
@@ -121,8 +140,8 @@ gcloud logging read "resource.type=cloud_run_job AND resource.labels.job_name=pr
 | `scripts/press-release/sent-log.json` | 중복 발송 방지 lock (자동 생성) |
 | `scripts/press-release/.env` | SMTP/IMAP 인증 (gitignore) |
 | `.claude/hooks/email-send-guard.js` | 외부 이메일 발송 차단 하네스 |
-| `about.nextain.io/src/content/press/ko/` | 보도자료 원문 |
-| `admin.nextain.io/app/api/press-release/send/route.ts` | Cloud Run API 엔드포인트 |
+| 조직의 보도자료 보관 위치 | 보도자료 원문 |
+| `CLOUD_URL` 이 가리키는 엔드포인트 | Cloud Run API 엔드포인트 |
 
 ## Cloud Infrastructure
 
@@ -139,19 +158,18 @@ gcloud logging read "resource.type=cloud_run_job AND resource.labels.job_name=pr
 - **중복 발송 금지**: 발송 후 Scheduler 즉시 pause
 - **새벽 발송 지양**: 08:30~09:30 KST 권장 (기자 이메일 확인 시간)
 - **이메일 주소 검증**: 기자명과 이메일 ID 불일치 시 발송 전 확인
-- **정크 메일 대응**: 첫 발송 시 도메인 평판 부족으로 정크 분류 가능. about.nextain.io 링크 포함으로 도메인 신뢰도 구축
+- **정크 메일 대응**: 첫 발송 시 도메인 평판 부족으로 정크 분류 가능. 자기 도메인 링크 포함으로 도메인 신뢰도 구축
 - **수신거부**: 템플릿 하단에 수신거부 링크 필수 (정보통신망법)
-- **기독교 매체**: 온맘닷컴 보도자료의 경우 의도적 제외 (luke 결정, 2026-04-13)
+- **매체 선별**: 주제와 무관하거나 관계상 제외할 매체는 배포 전에 명시적으로 정한다
 
-## 레슨 런 (2026-04-13 첫 캠페인)
+## 운영 시 주의 — 실제 캠페인에서 나온 것들
 
 | 항목 | 내용 |
 |------|------|
-| 발송 시간 | 새벽 2시 발송됨 (Scheduler 권한 부여 후 즉시 실행). 08:55 예약이었으나 미달 |
-| 반송 2건 | jinwook@g-enews.com, parkhoon@enetnews.co.kr — AI 검색으로 수집한 이메일의 정확도 한계 |
-| 정크 분류 | luke 메일함에서 정크 분류됨. 신규 도메인 + 새벽 발송 + HTML 메일 조합 |
-| CID 이미지 | Cloud Run에서는 CID 첨부 불가 → URL 참조로 전환 필요 (about.nextain.io CDN) |
-| Scheduler 주의 | 권한 부여 후 즉시 재시도됨 → Job 생성과 Scheduler 생성을 분리하고, Scheduler는 최종 확인 후 enable |
-| 중복 발송 3회 | Scheduler 2회 + dedup 테스트를 실 데이터로 실행하여 1회 추가. 전원 3통 수신 |
-| 하네스 추가 | email-send-guard.js로 외부 발송 명령 차단. `--test-only` 플래그로 테스트 시 전원 luke로 리다이렉트 |
-| 테스트 원칙 | **절대 실 데이터(기자 리스트)로 테스트 금지.** `test` 명령 또는 `--test-only` 플래그만 사용 |
+| 예약 발송 | Scheduler 는 권한을 부여한 순간 즉시 재시도한다. Job 생성과 Scheduler 생성을 분리하고, Scheduler 는 최종 확인 뒤에 enable 한다. 그러지 않으면 예약 시각과 무관하게 새벽에 나갈 수 있다 |
+| 중복 발송 | 위 재시도 + dedup 을 실 데이터로 시험하면 같은 수신자에게 여러 통이 간다. `sent-log.json` 의 캠페인 id 만으로는 늦다 |
+| **테스트 원칙** | **실 데이터(기자 리스트)로 절대 테스트하지 않는다.** `test` 명령 또는 `--test-only` 플래그만 쓴다. 이 원칙을 어겨 실제 기자에게 중복 발송된 사고가 있었다 |
+| 이메일 정확도 | 검색으로 수집한 기자 이메일은 반송이 난다. 발송 전 기자명과 이메일 ID 일치를 확인하고, 반송은 정상 범위로 계획한다 |
+| 정크 분류 | 신규 도메인 + 심야 발송 + HTML 메일 조합은 정크로 분류되기 쉽다. SPF/DKIM 을 먼저 맞추고 업무 시간에 보낸다 |
+| CID 이미지 | Cloud Run 에서는 CID 첨부가 불가하다. 이미지는 절대 URL 로 참조한다 |
+| 발송 차단 하네스 | 외부 발송 명령을 가로채는 가드를 두고, 테스트 시 수신자를 자기 주소로 리다이렉트한다 |

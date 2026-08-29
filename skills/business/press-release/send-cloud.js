@@ -25,7 +25,8 @@ if (fs.existsSync(envPath)) {
 	}
 }
 
-const CLOUD_URL = process.env.CLOUD_URL || "https://admin.nextain.io/api/press-release/send";
+// 배포처는 조직마다 다르다. CLOUD_URL 로 지정한다.
+const CLOUD_URL = process.env.CLOUD_URL || "";
 const PRESS_SECRET = process.env.PRESS_SECRET || "";
 
 const contacts = JSON.parse(fs.readFileSync(path.join(__dirname, "contacts.json"), "utf8"));
@@ -75,6 +76,11 @@ async function main() {
 	if (scheduleAt) console.log(`⏰ Scheduled: ${scheduleAt}`);
 	console.log(`📧 Recipients: ${cmd === "test" ? "1 (test)" : payload.contacts.length}`);
 
+	// 배포처를 지정하지 않았으면 fetch 가 알 수 없는 오류로 죽는다. 먼저 말해 준다.
+	if (!CLOUD_URL) {
+		console.error("❌ CLOUD_URL is not set. Point it at your own press-release endpoint.");
+		process.exit(1);
+	}
 	const res = await fetch(CLOUD_URL, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
