@@ -41,7 +41,8 @@ FONT_DIR = "/tmp/nanum-fonts"
 FONT_REGULAR = os.path.join(FONT_DIR, "NanumGothic-Regular.ttf")
 FONT_BOLD = os.path.join(FONT_DIR, "NanumGothic-Bold.ttf")
 FONT_DOWNLOAD_BASE = "https://github.com/google/fonts/raw/main/ofl/nanumgothic"
-DEFAULT_LOGO = "about.nextain.io/public/assets/logos/nextain-light-logo.png"
+# 조직 로고. --logo 로 직접 주거나 워크스페이스 기준 상대경로를 여기 둔다.
+DEFAULT_LOGO = os.environ.get("PAYROLL_LOGO", "")
 
 
 def ensure_fonts():
@@ -348,9 +349,9 @@ def generate_payroll_pdf(data: dict, emp: dict, output_path: str,
 # ── Email ──────────────────────────────────────────────────
 
 def send_email(to: str, subject: str, body_html: str, attachment_path: str,
-               smtp_user: str, smtp_pass: str):
+               smtp_user: str, smtp_pass: str, from_name: str = "급여"):
     msg = MIMEMultipart()
-    msg["From"] = f'"넥스테인 급여" <{smtp_user}>'
+    msg["From"] = f'"{from_name}" <{smtp_user}>'
     msg["To"] = to
     msg["Subject"] = subject
 
@@ -366,7 +367,9 @@ def send_email(to: str, subject: str, body_html: str, attachment_path: str,
         part.add_header("Content-Disposition", "attachment", filename=("utf-8", "", filename))
         msg.attach(part)
 
-    with smtplib.SMTP("smtp.office365.com", 587) as server:
+    # 발송 서버는 조직마다 다르다. 기존 동작을 기본값으로 두고 열어 둔다.
+    with smtplib.SMTP(os.environ.get("SMTP_HOST", "smtp.office365.com"),
+                      int(os.environ.get("SMTP_PORT", "587"))) as server:
         server.starttls()
         server.login(smtp_user, smtp_pass)
         server.sendmail(smtp_user, to, msg.as_string())
@@ -379,7 +382,7 @@ def send_email(to: str, subject: str, body_html: str, attachment_path: str,
 def main():
     parser = argparse.ArgumentParser(description="급여명세서 PDF 생성 + 이메일 발송")
     parser.add_argument("--data", required=True, help="JSON data string")
-    parser.add_argument("--smtp-user", default=os.environ.get("SMTP_USER", "noreply@nextain.io"))
+    parser.add_argument("--smtp-user", default=os.environ.get("SMTP_USER", ""))
     parser.add_argument("--smtp-pass", default=os.environ.get("SMTP_PASS", ""))
     parser.add_argument("--dry-run", action="store_true", help="PDF만 생성, 이메일 미발송")
     parser.add_argument("--output-dir", default=".", help="PDF 출력 디렉토리")
@@ -398,16 +401,29 @@ def main():
     workspace_root = script_dir.parent.parent.parent.parent
 
     logo_path = args.logo
-    if logo_path is None:
+    # 빈 경로를 그대로 붙이면 워크스페이스 디렉터리 자체를 가리켜
+    # exists() 가 참이 된다. 값이 있을 때만 후보로 삼는다.
+    if logo_path is None and DEFAULT_LOGO:
         candidate = workspace_root / DEFAULT_LOGO
-        if candidate.exists():
+        if candidate.is_file():
             logo_path = str(candidate)
 
     seal_path = args.seal
-    if seal_path is None:
-        candidate = workspace_root / "docs-business/07.증명서/nextain-인감.png"
-        if candidate.exists():
+    # 직인 이미지. --seal 로 주거나 PAYROLL_SEAL 에 워크스페이스 기준 상대경로를 둔다.
+    seal_rel = os.environ.get("PAYROLL_SEAL", "")
+    if seal_path is None and seal_rel:
+        candidate = workspace_root / seal_rel
+        if candidate.is_file():
             seal_path = str(candidate)
+
+    # 메일 문면에 쓸 조직 값. PDF 와 같은 출처(data["company"])에서 읽는다.
+    company = data.get("company", {})
+    company_name = company.get("name", "")
+    company_eng = company.get("eng_name", "")
+    company_footer = " | ".join(x for x in (company_name, company_eng) if x)
+    contact_email = company.get("contact_email") or args.smtp_user
+    contact_line = (f'<p style="color:#475569;font-size:12px;margin-top:24px;">문의: {contact_email}</p>'
+                    if contact_email else "")
 
     results = []
     for emp in data["employees"]:
@@ -418,11 +434,11 @@ def main():
         generate_payroll_pdf(data, emp, output_path, logo_path, seal_path)
 
         if not args.dry_run and args.smtp_pass:
-            subject = f"[넥스테인] {year}년 {month:02d}월 급여명세서"
+            subject = f"[{company_name}] {year}년 {month:02d}월 급여명세서"
             body = f"""
             <div style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;max-width:520px;margin:0 auto;padding:32px;background:#0F172A;color:#e2e8f0;border-radius:12px;">
                 <div style="margin-bottom:20px;">
-                    <span style="color:#2563EB;font-size:13px;font-weight:bold;">nextain Inc.</span>
+                    <span style="color:#2563EB;font-size:13px;font-weight:bold;">{company_eng or company_name}</span>
                 </div>
                 <h2 style="color:#F8FAFC;margin-bottom:8px;font-size:20px;">{year}년 {month:02d}월 급여명세서</h2>
                 <p style="color:#94a3b8;margin-bottom:24px;">안녕하세요, {emp['name']}님.<br>{year}년 {month:02d}월분 급여명세서를 첨부드립니다.</p>
@@ -430,12 +446,12 @@ def main():
                     <p style="color:#94a3b8;font-size:12px;margin:0 0 8px;">실수령액</p>
                     <p style="color:#60A5FA;font-size:28px;font-weight:bold;margin:0;">{fmt_money(emp.get('net_pay', 0))}원</p>
                 </div>
-                <p style="color:#475569;font-size:12px;margin-top:24px;">문의: accounting@nextain.io</p>
-                <p style="color:#334155;font-size:11px;margin-top:8px;">(주)넥스테인 | nextain Inc.</p>
+                {contact_line}
+                <p style="color:#334155;font-size:11px;margin-top:8px;">{company_footer}</p>
             </div>
             """
             send_email(emp["email"], subject, body, output_path,
-                       args.smtp_user, args.smtp_pass)
+                       args.smtp_user, args.smtp_pass, f"{company_name} 급여")
             results.append({"name": emp["name"], "email": emp["email"], "pdf": output_path, "sent": True})
         else:
             if args.dry_run:

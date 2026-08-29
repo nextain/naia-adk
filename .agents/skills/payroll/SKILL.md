@@ -27,17 +27,17 @@ pip install reportlab
   "year": 2026,
   "month": 3,
   "company": {
-    "name": "(주)넥스테인",
-    "eng_name": "nextain Inc.",
+    "name": "<YOUR_COMPANY_NAME>",
+    "eng_name": "<YOUR_COMPANY_NAME_EN>",
     "biz_no": "<YOUR_BIZ_NO>",
     "ceo": "<YOUR_CEO_NAME>",
-    "address": "경기도 화성시 효행구 매송면 매송고색로 422번길 77, 나동 107호"
+    "address": "<YOUR_ADDRESS>"
   },
   "employees": [
     {
       "code": 1,
       "name": "사원명",
-      "email": "email@nextain.io",
+      "email": "<EMPLOYEE_EMAIL>",
       "hire_date": "2026-03-11",
       "items": {
         "기본급": 3000000,
@@ -85,7 +85,7 @@ python .agents/skills/payroll/scripts/send_payroll.py \
 ```
 
 SMTP 인증:
-- `SMTP_USER` 환경변수 (기본: noreply@nextain.io)
+- `SMTP_USER` 환경변수 (미지정 시 발송하지 않음)
 - `SMTP_PASS` 환경변수 (필수)
 
 없으면 사용자에게 안내: "SMTP_PASS 환경변수를 설정해주세요."
