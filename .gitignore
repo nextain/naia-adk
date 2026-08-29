@@ -92,9 +92,16 @@ data-private/
 !data-private/README.md
 
 # Project repositories (cloned per fork)
-projects/
+# `projects/` 로 적으면 디렉터리 자체가 제외돼 아래 부정 규칙이 먹지 않는다.
+# `projects/*` 로 적어야 직계 자식에 대한 부정이 실제로 적용된다.
+projects/*
 !projects/README.md
 !projects/naia-template-project
+
+# 호스트별 AI 작업 캐시·기억. 예전에는 위의 `projects/` 규칙이 깊이 무관하게
+# 이것까지 걸렀는데, 루트로 앵커되면서 빠졌다. 명시적으로 막는다.
+# (여기로 다른 PC 의 Claude 기억 파일이 공개 저장소에 실린 적이 있다.)
+.claude/projects/
 
 # Temp — all scratch/debug scripts go in tmp/ (never in root)
 tmp/

@@ -129,7 +129,17 @@ const checklist = [
   ["clone URL = remote 일치", !cloneUrl || (remoteSlug && cloneUrl.replace(/\.git$/, "").includes(remoteSlug))],
 ];
 
+// 저장소가 스스로 "무시하라"고 적어 둔 경로인데도 여전히 추적되는 파일.
+// .gitignore 에 규칙만 넣고 `git rm --cached` 를 잊으면 파일은 계속 클론에 딸려간다.
+// 실제로 개발 작업 기록 10건과 다른 PC 에서 온 AI 기억 파일 1건이 이 경로로 공개됐다.
+// 오탐이 구조적으로 없다 — 판정 기준이 저장소 자신의 규칙이다.
+const trackedButIgnored = sh("git ls-files -z | git check-ignore --stdin -z --no-index")
+  .split("\0")
+  .filter(Boolean)
+  .map((file) => ({ file, line: 0, rule: "tracked-but-ignored", val: "git rm --cached 로 추적에서 빼라" }));
+
 const hard = {
+  "tracked-but-ignored(무시 규칙 위반)": trackedButIgnored,
   "secret(키/토큰)": findings.secrets,
   "personal-path(개인 절대경로)": findings.paths,
   "3rd-party-PII(이메일 명단)": piiFiles.map(([f, e]) => ({ file: f, line: 0, rule: e.length + " emails", val: e.slice(0, 2).join(",") })),
