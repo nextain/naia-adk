@@ -254,9 +254,10 @@ test("DSG-008 POSIX operator launcher remains owner-executable after hardening",
 	const scripts = join(root, ".agents/skills/manage-discord-sessions/scripts");
 	mkdirSync(scripts, { recursive: true });
 	writeFileSync(join(scripts, "manage-discord-sessions.sh"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o700 });
-	const existing = join(bin, "naia");
+	const existing = join(bin, "naia-dcg");
 	writeFileSync(existing, "#!/usr/bin/env bash\n# managed by naia-adk manage-discord-sessions\nexit 1\n", { mode: 0o600 });
 	const launcher = installOperatorLauncher(root, { directory: bin });
+	assert.ok(launcher.endsWith("naia-dcg"), launcher);
 	assert.equal(statSync(launcher).mode & 0o777, 0o700);
 	assert.doesNotThrow(() => accessSync(launcher, fsConstants.X_OK));
 	assert.equal(spawnSync(launcher, ["service", "unit"]).status, 0);
@@ -270,6 +271,7 @@ test("DSG-008 Windows operator launcher passes its native execution probe", { sk
 	mkdirSync(helper, { recursive: true });
 	writeFileSync(join(helper, "cli.mjs"), "process.exit(process.argv.slice(-2).join(' ') === 'service unit' ? 0 : 1);\n", { mode: 0o600 });
 	const launcher = installOperatorLauncher(root, { directory: bin });
+	assert.ok(launcher.endsWith("naia-dcg.cmd"), launcher);
 	const probe = spawnSync(launcher, ["service", "unit"], { shell: true, windowsHide: true, timeout: 5_000 });
 	assert.equal(probe.error, undefined);
 	assert.equal(probe.status, 0, probe.stderr?.toString());

@@ -52,22 +52,23 @@ scripts/manage-discord-sessions.sh service status
 scripts/manage-discord-sessions.sh service restart
 ```
 
-`service install` 뒤에는 같은 스크립트의 생성 실행기인 `naia`를 대화형
-사용자 `PATH`에서 사용할 수 있습니다. 예를 들어 `naia status`, `naia jobs
---active`, `naia job <job-id> --events`를 실행합니다. 별도 런타임이나 제품
-CLI가 아닙니다.
+`service install` 뒤에는 같은 스크립트의 생성 실행기인 `naia-dcg`를 대화형
+사용자 `PATH`에서 사용할 수 있습니다. 예를 들어 `naia-dcg status`, `naia-dcg jobs
+--active`, `naia-dcg job <job-id> --events`를 실행합니다. 별도 런타임이나 제품
+CLI가 아니며, Discord 안에서 처리되는 채팅 명령 `!naia`와는 별개의 로컬 운영
+진입점입니다.
 
 한 ADK에서 여러 봇이나 역할을 운영할 때는 이름 있는 인스턴스를 사용합니다.
-기본 인스턴스는 위 명령 형식을 그대로 쓰고, 이름 있는 인스턴스는 `naia`와
+기본 인스턴스는 위 명령 형식을 그대로 쓰고, 이름 있는 인스턴스는 `naia-dcg`와
 명령 사이에 인스턴스 이름을 둡니다.
 
 ```bash
-naia <instance> status
-naia <instance> jobs --active
-naia <instance> job <job-id> --events
-naia <instance> watch --job <job-id>
-naia <instance> service install
-naia <instance> service restart
+naia-dcg <instance> status
+naia-dcg <instance> jobs --active
+naia-dcg <instance> job <job-id> --events
+naia-dcg <instance> watch --job <job-id>
+naia-dcg <instance> service install
+naia-dcg <instance> service restart
 ```
 
 각 인스턴스는 설정, SQLite 기록, Gateway 재개 상태, 복구 키, 런타임
@@ -127,7 +128,7 @@ production conversation-coordinator 런타임·활성화 분기·새 DB 테이�
 
 `service.startAt=login`이면 로그인 뒤, `boot`이면 설치기가 사용자 linger를 활성화해 부팅 때 복구를 시작합니다. 제한된 현재 요청과 결박 해시만 소유자 전용 로컬 복구 키로 인증 암호화해 저장하며, 조립된 컨텍스트 프롬프트는 현재 검증된 파일에서 다시 만듭니다. 구형 복구 작업은 항상 검토 대상으로 남깁니다. 스키마 v2에서 `recovery.autoRetry=true`여도 참여자·바인딩·설정·컨텍스트·관리 런타임 리비전이 정확히 같고 읽기 전용인 작업만 같은 작업 ID의 새 실행으로 이어집니다. 쓰기 가능 작업, 자동 재시도 비활성화, 키·암호문 손상은 `recovery_review`가 됩니다. Discord 전송 여부가 불확실한 답변은 자동 재전송하지 않습니다.
 
-`service install`은 설치 터미널의 `PATH`에서 선택한 Codex 또는 Claude 실행파일을 찾습니다. Linux는 소유자 전용 Git runtime artifact를 만들고 리비전·runtime-tree ID·전체 digest·unit 바이트를 검증한 뒤 서비스와 supervisor를 그 복사본에 고정합니다. systemd 실행에는 완전한 managed marker가 필수이고 서비스와 supervisor 모두 설정 읽기·토큰 소유·감시 전에 검증하므로, marker 누락을 직접 실행으로 해석하지 않습니다. 대상 checkout이 나중에 바뀌어도 이전 리비전 이름으로 새 코드를 실행하지 않습니다. Windows는 소유자 전용 실행 파일과 제한된 ONLOGON 예약 작업을 설치하며, 로컬 정책이 예약 작업 생성을 거부하면 소유자 전용 숨김 시작프로그램으로 자동 대체합니다. `service status`, `start`, `stop`, `restart`, `enable`, `disable`은 실제 설치된 등록 방식을 검증한 뒤 제어합니다. `naia.cmd`도 함께 설치됩니다. 기존 Linux 등록이 있으면 `service install`만으로 덮어쓸 수 없고, 검증된 원복 묶음·이전 설치·배포 후보·별도 후보 제어기가 모두 결박된 cutover 경로를 사용해야 합니다. `backend.selected` 변경도 같은 cutover 절차를 따르며, 일반 `service install`이나 restart는 업그레이드 경로가 아닙니다.
+`service install`은 설치 터미널의 `PATH`에서 선택한 Codex 또는 Claude 실행파일을 찾습니다. Linux는 소유자 전용 Git runtime artifact를 만들고 리비전·runtime-tree ID·전체 digest·unit 바이트를 검증한 뒤 서비스와 supervisor를 그 복사본에 고정합니다. systemd 실행에는 완전한 managed marker가 필수이고 서비스와 supervisor 모두 설정 읽기·토큰 소유·감시 전에 검증하므로, marker 누락을 직접 실행으로 해석하지 않습니다. 대상 checkout이 나중에 바뀌어도 이전 리비전 이름으로 새 코드를 실행하지 않습니다. Windows는 소유자 전용 실행 파일과 제한된 ONLOGON 예약 작업을 설치하며, 로컬 정책이 예약 작업 생성을 거부하면 소유자 전용 숨김 시작프로그램으로 자동 대체합니다. `service status`, `start`, `stop`, `restart`, `enable`, `disable`은 실제 설치된 등록 방식을 검증한 뒤 제어합니다. `naia-dcg.cmd`도 함께 설치됩니다. 기존 Linux 등록이 있으면 `service install`만으로 덮어쓸 수 없고, 검증된 원복 묶음·이전 설치·배포 후보·별도 후보 제어기가 모두 결박된 cutover 경로를 사용해야 합니다. `backend.selected` 변경도 같은 cutover 절차를 따르며, 일반 `service install`이나 restart는 업그레이드 경로가 아닙니다.
 
 watchdog와 독립 supervisor의 반복 경로는 끝나지 않은 작업만 읽고, 과거 검토·전송 주의 건수는 두 개의 부분 인덱스 집계로 얻습니다. `jobs`는 기본 100건이며 `jobs --limit <1-1000>`으로 명시적인 제한 범위를 정합니다. 누적된 durable history 전체를 매초 읽지 않습니다.
 
@@ -146,7 +147,7 @@ node /absolute/candidate/.agents/skills/manage-discord-sessions/helper/cli.mjs -
 
 후보와 대상의 Discord 스킬 트리는 모두 깨끗하고 서로 다른 커밋이어야 합니다. 원복 묶음은 이전 커밋과 Git 트리 ID, 실제 복사 코드 해시, 설정, 그 설정이 복사된 이전 런타임의 실제 loader에서 수락됐다는 영수증, 서비스·감시 unit, 데이터베이스 호환 증거를 함께 결박합니다. canary의 `continue`는 묶음 재검증, 설치된 서비스·supervisor·timer unit 바이트 일치, Linux 서비스와 timer의 enabled·active, 신선하고 정상인 독립 supervisor·서비스·Gateway, 작업 접수·실행·현재 서비스·supervisor 세대의 정확한 일치, 그리고 실제 router가 저장한 schema-v2 읽기 전용 작업의 instance·agent·workspace·context·참여자 권한·설정·access 증거를 현재 호스트에서 다시 계산한 값과 정확히 일치시키고 완료·ACK 확인·최종 전송 확인까지 해야만 가능합니다. 근거 누락·위조·stale·형식 오류·세대 불일치·미완료·`recovery_review`·승인 UI·미확인 ACK/전송은 모두 `stop`입니다. 중단 판정이면 같은 후보 CLI로 원복합니다. 원복은 변경 전에 loader 영수증을 포함한 묶음을 다시 검증하고 서비스를 중지하며, 끝나지 않은 작업이 하나라도 있으면 이전 런타임에 데이터베이스를 넘기지 않습니다. 이전 설정과 versioned 서비스·supervisor unit을 복구한 뒤에만 재시작하고, 한 단계가 실패하면 뒤 단계는 실행하지 않습니다. 검증 실패 시 전환하지 않습니다. Windows의 versioned rollback은 지원하지 않습니다.
 
-관리 런타임 복사본과 원복 묶음은 수동 복구를 위해 보존합니다. `naia <instance> artifacts list`로 확인하고, 현재 등록과 활성 원복 포인터를 검증한 뒤 `naia <instance> artifacts prune`으로 다시 검증된 미참조 복사본만 제거합니다. 설치·전환 준비·원복·정리는 인스턴스별 Linux 커널 잠금으로 직렬화하므로 활성화 중인 자산과 정리가 경합하지 않으며 프로세스 종료 시 잠금과 준비 표식이 자동 해제됩니다. 설치 중인 런타임, 활성 원복 묶음, 손상된 자산, 구형·불명확 등록은 제거하지 않습니다. 설치 실패 자산도 어떤 unit도 참조하지 않을 때만 제거됩니다. 버전 고정 Windows 전환을 지원하기 전까지 Windows 설치는 최초 설치만 허용하고, 실행 파일을 만들기 전에 기존 본 서비스 또는 supervisor 등록을 거부합니다. `autoStart=false`는 실행 가능한 본 서비스 Task를 만들지 않고 비활성 Startup 파일만 설치하며, Windows stop·disable·restart·격리는 하나의 검증된 fail-closed 전이를 사용합니다. 과거의 검토·전송 주의 기록은 계속 보이지만 그것만으로 새 정상 canary를 영구 차단하지 않습니다.
+관리 런타임 복사본과 원복 묶음은 수동 복구를 위해 보존합니다. `naia-dcg <instance> artifacts list`로 확인하고, 현재 등록과 활성 원복 포인터를 검증한 뒤 `naia-dcg <instance> artifacts prune`으로 다시 검증된 미참조 복사본만 제거합니다. 설치·전환 준비·원복·정리는 인스턴스별 Linux 커널 잠금으로 직렬화하므로 활성화 중인 자산과 정리가 경합하지 않으며 프로세스 종료 시 잠금과 준비 표식이 자동 해제됩니다. 설치 중인 런타임, 활성 원복 묶음, 손상된 자산, 구형·불명확 등록은 제거하지 않습니다. 설치 실패 자산도 어떤 unit도 참조하지 않을 때만 제거됩니다. 버전 고정 Windows 전환을 지원하기 전까지 Windows 설치는 최초 설치만 허용하고, 실행 파일을 만들기 전에 기존 본 서비스 또는 supervisor 등록을 거부합니다. `autoStart=false`는 실행 가능한 본 서비스 Task를 만들지 않고 비활성 Startup 파일만 설치하며, Windows stop·disable·restart·격리는 하나의 검증된 fail-closed 전이를 사용합니다. 과거의 검토·전송 주의 기록은 계속 보이지만 그것만으로 새 정상 canary를 영구 차단하지 않습니다.
 
 캐시 증거는 공급자가 준 원시 정수만 기록합니다. 일반 입력, cache-read, Claude cache-created는 서로 독립된 값이며 전체나 부분집합으로 추론하지 않습니다. 완전한 영수증이 없으면 캐시 효과는 입증되지 않은 것으로 봅니다.
 

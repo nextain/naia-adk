@@ -67,21 +67,23 @@ scripts/manage-discord-sessions.sh service restart
 ```
 
 After `service install`, the same deterministic script is available on the
-interactive user `PATH` as `naia`, for example `naia status`, `naia jobs
---active`, and `naia job <job-id> --events`. This is a generated launcher for
-the skill script, not a separate runtime or product CLI.
+interactive user `PATH` as `naia-dcg`, for example `naia-dcg status`, `naia-dcg jobs
+--active`, and `naia-dcg job <job-id> --events`. This is a generated launcher for
+the skill script, not a separate runtime or product CLI. The `naia-dcg` launcher
+name is the local operator entry point and is distinct from the `!naia` Discord
+chat command handled inside Discord itself.
 
 Run more than one bot or persona from the same ADK with a named instance. The
 default instance keeps the commands and paths above; a named instance is placed
-between `naia` and the command:
+between `naia-dcg` and the command:
 
 ```bash
-naia alpha status
-naia alpha jobs --active
-naia alpha job <job-id> --events
-naia alpha watch --job <job-id>
-naia alpha service install
-naia alpha service restart
+naia-dcg alpha status
+naia-dcg alpha jobs --active
+naia-dcg alpha job <job-id> --events
+naia-dcg alpha watch --job <job-id>
+naia-dcg alpha service install
+naia-dcg alpha service restart
 ```
 
 Each instance has an independent config, SQLite ledger, Gateway resume state,
@@ -258,7 +260,7 @@ pins the native executable and Node paths in an owner-only launcher registered
 as one limited ONLOGON Task Scheduler task. If local policy denies task
 creation, it installs an owner-only hidden per-user Startup launcher instead;
 `service status`, `start`, `stop`, `restart`, `enable`, and `disable` operate on
-the verified registration actually installed. It also installs `naia.cmd` in
+the verified registration actually installed. It also installs `naia-dcg.cmd` in
 the interactive user path. For an existing registration, a
 `backend.selected` change must go through the verified candidate cutover path
 below; an ordinary `service install` or restart is not an upgrade path.
@@ -351,9 +353,9 @@ phase aborts all later phases. Do not cut over if any verification fails.
 Windows versioned rollback is not supported.
 
 Managed runtime copies and rollback bundles are retained for manual recovery.
-Inspect them with `naia <instance> artifacts list`; after confirming the active
+Inspect them with `naia-dcg <instance> artifacts list`; after confirming the active
 registration and rollback pointer, remove only re-verified unreferenced copies
-with `naia <instance> artifacts prune`. The installed runtime, active rollback
+with `naia-dcg <instance> artifacts prune`. The installed runtime, active rollback
 bundle, invalid artifacts, and legacy or ambiguous registrations are never
 pruned. Install, cutover prepare, rollback, and prune share one per-instance
 Linux kernel lock that releases with its helper process, so prune cannot race an

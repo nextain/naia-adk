@@ -31,13 +31,13 @@ export function installOperatorLauncher(adkRoot, { directory: targetDirectory, p
 	const directory = targetDirectory ?? (process.platform === "win32"
 		? resolve(process.env.LOCALAPPDATA ?? resolve(homedir(), "AppData/Local"), "Microsoft/WindowsApps")
 		: resolve(homedir(), ".local/bin"));
-	const path = resolve(directory, process.platform === "win32" ? "naia.cmd" : "naia");
+	const path = resolve(directory, process.platform === "win32" ? "naia-dcg.cmd" : "naia-dcg");
 	const content = renderOperatorLauncher(adkRoot);
 	mkdirSync(directory, { recursive: true, mode: 0o755 });
 	if (existsSync(path)) {
 		const stat = lstatSync(path);
-		if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("existing naia command is not a replaceable managed file");
-		if (!readFileSync(path, "utf8").includes(OPERATOR_LAUNCHER_MARKER)) throw new Error("existing naia command is not managed by this installer");
+		if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("existing naia-dcg command is not a replaceable managed file");
+		if (!readFileSync(path, "utf8").includes(OPERATOR_LAUNCHER_MARKER)) throw new Error("existing naia-dcg command is not managed by this installer");
 	}
 	writeFileSync(path, content, { mode: 0o600 });
 	protectOwnerExecutable(path, "operator launcher");
