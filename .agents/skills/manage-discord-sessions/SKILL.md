@@ -117,6 +117,13 @@ owner-only local content file, suppresses mentions, and returns a confirmed,
 failed, or unknown delivery receipt. Never automatically retry an unknown
 receipt.
 
+When a message asks someone to check or do something, name that person. A
+channel has several participants, and an unaddressed "please confirm" is picked
+up by nobody, so finished work stalls waiting on a confirmation nobody owns.
+Say who, what, where exactly, and where to report back, and say why you could
+not check it yourself. Because `reply` suppresses mentions, write the person's
+name in plain text as well; a bare `<@id>` renders but does not notify.
+
 ## Interpreting visibility
 
 Report lifecycle and observed activity separately:
