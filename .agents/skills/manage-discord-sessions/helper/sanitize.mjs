@@ -35,7 +35,9 @@ export function boundedSafeExcerpt(value) {
 
 export function sanitizeFinalResponse(value) {
 	if (typeof value !== "string") throw new TypeError("final response must be a string");
-	let sanitized = value.replace(/<@!?\d{17,20}>|<@&\d{17,20}>|@everyone|@here/gi, "[MENTION]");
+	// 사람을 부르지 못하면 승인 요청이 아무에게도 닿지 않는다. 개인 멘션은 그대로
+	// 내보내고, 한 번에 다수를 깨우는 역할·everyone·here 만 계속 막는다.
+	let sanitized = value.replace(/<@&\d{17,20}>|@everyone|@here/gi, "[MENTION]");
 	for (const pattern of SECRET_PATTERNS) sanitized = sanitized.replace(pattern, "[REDACTED]");
 	sanitized = sanitized.replace(LOCAL_PATH_PATTERN, "[LOCAL_PATH]").trim();
 	if (sanitized.length === 0) throw new Error("final response is empty after sanitization");

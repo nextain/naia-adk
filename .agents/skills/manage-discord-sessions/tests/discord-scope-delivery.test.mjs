@@ -91,7 +91,10 @@ test("DSG-003 records delivery before bounded same-nonce retries and never start
 	const fetchImpl = async (_url, init) => {
 		posts += 1;
 		const body = JSON.parse(init.body);
-		assert.deepEqual(body.allowed_mentions, { parse: [] });
+		// 개인 멘션은 알림이 가야 승인 요청이 사람에게 닿는다. everyone 과 역할은 계속 막는다.
+		assert.deepEqual(body.allowed_mentions, { parse: ["users"] });
+		assert.equal(body.allowed_mentions.parse.includes("everyone"), false);
+		assert.equal(body.allowed_mentions.parse.includes("roles"), false);
 		assert.equal(body.enforce_nonce, true);
 		assert.equal(body.content.includes("/home/user"), false);
 		throw new Error("connection lost after send");

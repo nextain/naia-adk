@@ -48,7 +48,7 @@ export class DiscordStatusProjection {
 		const existing = this.store.loadDiscordProjection(scopeKey);
 		if (existing?.channelId === channelId) {
 			try {
-				const response = await boundedFetch(this.fetchImpl, `${DISCORD_API}/channels/${channelId}/messages/${existing.messageId}`, { method: "PATCH", headers: { authorization: `Bot ${this.token}`, "content-type": "application/json" }, body: JSON.stringify({ content, allowed_mentions: { parse: [] } }) }, { signal, timeoutMs: this.requestTimeoutMs });
+				const response = await boundedFetch(this.fetchImpl, `${DISCORD_API}/channels/${channelId}/messages/${existing.messageId}`, { method: "PATCH", headers: { authorization: `Bot ${this.token}`, "content-type": "application/json" }, body: JSON.stringify({ content, allowed_mentions: { parse: ["users"] } }) }, { signal, timeoutMs: this.requestTimeoutMs });
 				if (response.ok && !signal?.aborted) return { state: "updated", messageId: existing.messageId };
 			} catch (error) {
 				if (signal?.aborted || new Set(["request_aborted", "request_timeout"]).has(error?.code)) return { state: "unknown", reasonCode: error.code ?? "request_aborted" };

@@ -37,7 +37,7 @@ export async function postDiscordMessage({ token, channelId, content, nonce, bot
 			const response = await fetchImpl(`${DISCORD_API}/channels/${channelId}/messages`, {
 				method: "POST",
 				headers: { authorization: `Bot ${token}`, "content-type": "application/json" },
-				body: JSON.stringify({ content, allowed_mentions: { parse: [] }, nonce, enforce_nonce: true }), signal: controller.signal,
+				body: JSON.stringify({ content, allowed_mentions: { parse: ["users"] }, nonce, enforce_nonce: true }), signal: controller.signal,
 			});
 			if (response.ok) {
 				const body = await response.json();

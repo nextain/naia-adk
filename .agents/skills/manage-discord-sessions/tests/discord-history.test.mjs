@@ -134,7 +134,8 @@ test("DSO-003 reply sends one sanitized message to one exact operator binding", 
 			},
 		});
 		assert.equal(result.state, "confirmed");
-		assert.equal(body.allowed_mentions.parse.length, 0);
+		assert.deepEqual(body.allowed_mentions, { parse: ["users"] });
+		assert.equal(body.allowed_mentions.parse.includes("everyone"), false);
 		assert.equal(body.content.includes("C:\\Users"), false);
 		assert.equal(JSON.stringify(body).includes(TOKEN), false);
 	} finally {
