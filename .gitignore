@@ -36,6 +36,11 @@ naia-settings/messenger-sessions/config.json
 /naia-settings/processing.json
 /naia-settings/slots-manifest.json
 /naia-settings/ui-config.json
+# Agent-owned local memory and compiled knowledge. These may contain personal
+# facts, source paths, and workspace identity and must never enter the ADK repo.
+/naia-settings/memory/
+/naia-settings/knowledge/
+/naia-settings/knowledge.json
 
 # Per-machine LLM routing (points at whatever pod this machine happens to run)
 .agents/context/llm-config.yaml
