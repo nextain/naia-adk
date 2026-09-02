@@ -80,26 +80,6 @@ function readJson(filePath) {
 	}
 }
 
-/**
- * Read a registry whose JSON is broken in a way that carries no meaning.
- *
- * A truncated write leaves a dangling comma where an entry used to be. The file
- * then fails to parse, every session resolves to UNBOUND, and all work in the
- * repository stops until someone edits the file by hand. Dropping a trailing
- * comma cannot change what the registry says, so read through it rather than
- * halting. The file is left as it is: this restores service, not the file.
- */
-function readRepairedRegistry(filePath) {
-	let text;
-	try { text = fs.readFileSync(filePath, "utf8"); } catch { return null; }
-	const repaired = text.replace(/,(\s*[}\]])/g, "$1");
-	if (repaired === text) return null;
-	try {
-		const value = JSON.parse(repaired);
-		return value && typeof value === "object" && !Array.isArray(value) ? value : null;
-	} catch { return null; }
-}
-
 function result(status, projectRoot, reason, extra = {}) {
 	return { status, projectRoot, reason, ...extra };
 }
@@ -132,7 +112,7 @@ const SUBAGENT_POLICY_KEYS = new Set([
 	"maximum_risk",
 	"max_children", "max_active_children", "max_prompt_bytes",
 	"max_delegated_prompt_bytes", "max_input_tokens", "max_output_tokens",
-	"orchestrator_execution", "guard_relaxations",
+	"orchestrator_execution",
 ]);
 const SUBAGENT_HARD_MAX_CHILDREN = 8;
 const ORCHESTRATOR_FAILURE_KINDS = new Set([
@@ -175,56 +155,12 @@ function validateOrchestratorExecutionPolicy(policy) {
 	return null;
 }
 
-// Which profiles a contract may declare is the catalog's to state, by posture. A
-// second list here is what let a Claude profile satisfy the catalog, the
-// selector, and the guard's role rules and still be refused the moment a real
-// spawn was evaluated. Experimental and disabled profiles stay ineligible.
-const DEVELOPMENT_PROFILE_CATALOG = path.resolve(__dirname, "..", "..", "..", "packages", "benchmark-contract", "baselines", "development-composition-profiles.json");
-let cachedDelegationEligibleProfiles = null;
-function delegationEligibleProfiles(catalogPath = DEVELOPMENT_PROFILE_CATALOG) {
-	const cacheable = catalogPath === DEVELOPMENT_PROFILE_CATALOG;
-	if (cacheable && cachedDelegationEligibleProfiles) return cachedDelegationEligibleProfiles;
-	let catalog;
-	try {
-		catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
-	} catch {
-		// Falling back to a hard-coded set would let eligibility contradict the
-		// policy it claims to derive from, so an unreadable catalog refuses
-		// delegation instead. A read failure is not cached.
-		return new Set();
-	}
-	const eligiblePostures = new Set(catalog.delegation_policy?.eligible_postures || []);
-	const eligible = new Set((catalog.profiles || [])
-		.filter((profile) => eligiblePostures.has(profile.posture) && !String(profile.activation || "").startsWith("disabled"))
-		.map((profile) => profile.id)
-		.filter((id) => typeof id === "string" && id));
-	if (cacheable) cachedDelegationEligibleProfiles = eligible;
-	return eligible;
-}
-
-function allowedGuardRelaxations(catalogPath = DEVELOPMENT_PROFILE_CATALOG) {
-	try {
-		const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
-		return new Set(catalog?.guards?.guard_relaxation?.allowed || []);
-	} catch {
-		return new Set();
-	}
-}
-
 function validateSubagentPolicy(policy) {
 	if (policy === undefined) return null;
 	if (!policy || typeof policy !== "object" || Array.isArray(policy)) return "invalid_subagent_policy";
 	if (Object.keys(policy).some((key) => !SUBAGENT_POLICY_KEYS.has(key))) return "invalid_subagent_policy_property";
-	if (!delegationEligibleProfiles().has(policy.profile) || policy.context_mode !== "isolated") return "invalid_subagent_policy_mode";
+	if (!new Set(["balanced", "control"]).has(policy.profile) || policy.context_mode !== "isolated") return "invalid_subagent_policy_mode";
 	if (!new Set(["low", "medium"]).has(policy.maximum_risk)) return "invalid_subagent_policy_maximum_risk";
-	if (policy.guard_relaxations !== undefined) {
-		const recognized = allowedGuardRelaxations();
-		if (!Array.isArray(policy.guard_relaxations) ||
-			new Set(policy.guard_relaxations).size !== policy.guard_relaxations.length ||
-			policy.guard_relaxations.some((item) => typeof item !== "string" || !recognized.has(item))) {
-			return "invalid_subagent_policy_guard_relaxations";
-		}
-	}
 	const startedAt = typeof policy.budget_started_at === "string" ? Date.parse(policy.budget_started_at) : NaN;
 	const canonicalStartedAt = Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : null;
 	const normalizedStartedAt = typeof policy.budget_started_at === "string"
@@ -364,11 +300,6 @@ function orchestratorFallbackAccess(contract, progress) {
 
 function supportedOwnershipPattern(value) {
 	if (typeof value !== "string" || !value || path.isAbsolute(value) || value.includes("..")) return false;
-	// Patterns must be canonical. "./.agents/context/**" and ".agents/context/**"
-	// name the same files, but only the second matches a prefix comparison, so a
-	// noncanonical spelling passed ownership while evading the authority-path
-	// floor in the spawn gate.
-	if (value.startsWith("/") || value.includes("//") || value.split("/").includes(".")) return false;
 	const stars = value.match(/\*/g) || [];
 	return stars.length === 0 || (stars.length === 2 && value.endsWith("/**"));
 }
@@ -460,28 +391,9 @@ function ownershipPrefix(pattern) {
 	return String(pattern).replace(/\/\*\*.*$/, "").replace(/\/$/, "");
 }
 
-/**
- * Paths every session must write to, so no contract may claim them exclusively.
- *
- * target_ownership exists to stop two sessions from editing the same files. The
- * registry is not that kind of file: binding a contract *requires* writing it,
- * and every session does. Treating it as exclusive meant any two live contracts
- * declared a conflict with each other, and both fell to AMBIGUOUS — a session
- * could not bind because it owned the thing binding needs. Concurrency here is
- * already governed by the write rule (a session may only touch its own entry),
- * not by ownership.
- */
-const SHARED_OWNERSHIP_PATHS = new Set([
-	".agents/session-contracts/.session-map.json",
-]);
-
-function exclusiveOwnershipPatterns(contract) {
-	return ownershipPatterns(contract).filter((pattern) => !SHARED_OWNERSHIP_PATHS.has(ownershipPrefix(pattern)));
-}
-
 function ownershipOverlaps(left, right) {
-	for (const a of exclusiveOwnershipPatterns(left)) {
-		for (const b of exclusiveOwnershipPatterns(right)) {
+	for (const a of ownershipPatterns(left)) {
+		for (const b of ownershipPatterns(right)) {
 			const ap = ownershipPrefix(a);
 			const bp = ownershipPrefix(b);
 			if (ap === bp || ap.startsWith(`${bp}/`) || bp.startsWith(`${ap}/`)) return true;
@@ -512,7 +424,7 @@ function resolveExplicitSessionContract({ cwd, sessionId }) {
 
 	const contractsDir = path.join(projectRoot, ".agents", "session-contracts");
 	const registryPath = path.join(contractsDir, ".session-map.json");
-	const registry = readJson(registryPath) || readRepairedRegistry(registryPath);
+	const registry = readJson(registryPath);
 	if (!registry) return result(STATES.UNBOUND, projectRoot, "registry_missing");
 
 	const pointer = registry.bindings?.[sessionId];
@@ -673,14 +585,9 @@ function resolveSessionContract({ cwd, sessionId, sessionChainLookup = null }) {
 }
 
 module.exports = {
-	SHARED_OWNERSHIP_PATHS,
-	exclusiveOwnershipPatterns,
-	readRepairedRegistry,
 	STATES,
 	SUBAGENT_HARD_MAX_CHILDREN,
-	allowedGuardRelaxations,
 	contractDigest,
-	delegationEligibleProfiles,
 	delegationTaskDigest,
 	findProjectRoot,
 	inside,

@@ -8,8 +8,6 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const sessionContract = require("../../.agents/hooks/core/session-contract.js");
-const harnessSwitch = require("../../.agents/hooks/core/harness-switch.js");
-const blockLog = require("../../.agents/hooks/core/harness-block-log.js");
 const sessionRecovery = require("../../.agents/harness/session-contract-recovery.cjs");
 const {
 	executableReadCommand,
@@ -17,14 +15,13 @@ const {
 	nestedModelRuntimeCommand,
 	readOnlyShell,
 	requestedWorkdirIssue,
-	shellTokens,
 	trustedSessionParserCommand,
 	unsafeShellCommand,
 } = require("./session-read-policy.cjs");
 
 const HARNESS_OFF = new Set(["off", "0", "false", "no"]);
 const HARNESS_ENV_VARS = ["AI_HARNESS", "CLAUDE_HARNESS", "CODEX_HARNESS"];
-const HARNESS_CONFIG_DIRS = [".claude", ".codex", ".pi"];
+const HARNESS_CONFIG_DIRS = [".claude", ".codex"];
 const ENTRY_POINTS = new Set(["AGENTS.md", "CLAUDE.md", "GEMINI.md"]);
 
 function normalizedToolName(name) {
@@ -139,37 +136,6 @@ function stateTarget(filePath, cwd) {
 	return null;
 }
 
-const REVIEW_INVOKER = /(?:^|\/)(?:\.agents\/)?skills\/review-pass\/scripts\/invoke-reviewer\.mjs$/;
-
-function reviewInvokerCommand(command, cwd) {
-	const text = String(command || "");
-	if (/[;&|]|\$\(|`/.test(text)) return false;
-	const tokens = shellTokens(text);
-	if (tokens.length < 2) return false;
-	const head = path.basename(String(tokens[0])).replace(/\.(exe|cmd)$/i, "");
-	if (head !== "node" && head !== "nodejs") return false;
-	const script = tokens.slice(1).find((token) => !token.startsWith("-"));
-	if (!script || !REVIEW_INVOKER.test(String(script).replace(/\\/g, "/"))) return false;
-	const projectRoot = sessionContract.findProjectRoot(cwd);
-	const resolved = path.resolve(cwd, String(script));
-	return Boolean(projectRoot) && sessionContract.inside(projectRoot, resolved) && fs.existsSync(resolved);
-}
-
-/**
- * Whether a contract file *names* this session, without requiring the file to
- * still be internally consistent.
- *
- * Used only to identify the owner of an existing file. A contract whose stored
- * digest no longer matches its content is exactly the case a session has to be
- * able to repair: judging ownership with the strict check meant a single bad
- * write locked the owner out of its own contract forever, and only a human
- * editing the file by hand could release it.
- */
-function contractNamesSession(contract, sessionId) {
-	return Boolean(contract) && Array.isArray(contract.session_bindings) &&
-		contract.session_bindings.some((binding) => binding?.session_id === sessionId);
-}
-
 function contractBindsSession(contract, sessionId) {
 	return sessionContract.validateContractShape(contract) === null &&
 		contract.contract_digest === sessionContract.contractDigest(contract) &&
@@ -198,8 +164,7 @@ function bootstrapWriteAllowed(toolName, toolInput, cwd, sessionId) {
 	if (targetInfo.kind === "contract") {
 		if (!contractBindsSession(next, sessionId)) return false;
 		if (existing) {
-			// Ownership only; the replacement itself is still checked strictly above.
-			if (!contractNamesSession(existing, sessionId) || existing.id !== next.id) return false;
+			if (!contractBindsSession(existing, sessionId) || existing.id !== next.id) return false;
 			const existingPeers = existing.session_bindings.map((binding) => binding.session_id).filter((id) => id !== sessionId).sort();
 			const nextPeers = next.session_bindings.map((binding) => binding.session_id).filter((id) => id !== sessionId).sort();
 			if (!sameJson(existingPeers, nextPeers)) return false;
@@ -229,27 +194,7 @@ function bootstrapWriteAllowed(toolName, toolInput, cwd, sessionId) {
 		if (!contract || contract.id !== pointer.contract_id || contract.contract_digest !== pointer.contract_digest || !contractBindsSession(contract, sessionId)) return false;
 		const progress = readJsonFile(path.resolve(targetInfo.projectRoot, contract.progress_file));
 		if (!progress || progress.contract_id !== contract.id || progress.contract_digest !== contract.contract_digest) return false;
-		if (!existing && Object.keys(next.bindings).some((boundSession) => boundSession !== sessionId)) {
-			// The registry is unreadable but the file is there: a truncated write
-			// left broken JSON. Every session then resolves to UNBOUND, and the
-			// rule above — a fresh registry may hold only your own binding —
-			// forbids restoring the peers, so nobody can repair it and a human has
-			// to hand-edit the file. Allow the repair, but only when every peer
-			// entry still matches its own contract on disk, so the writer cannot
-			// invent or alter someone else's binding while restoring.
-			let damaged = false;
-			try { damaged = fs.statSync(targetInfo.target).isFile(); } catch { damaged = false; }
-			if (!damaged) return false;
-			for (const [peer, entry] of Object.entries(next.bindings)) {
-				if (peer === sessionId) continue;
-				if (!entry || typeof entry.contract_path !== "string" || typeof entry.contract_id !== "string" || !/^[a-f0-9]{64}$/.test(entry.contract_digest || "")) return false;
-				const peerPath = path.resolve(targetInfo.projectRoot, entry.contract_path);
-				if (!sessionContract.inside(targetInfo.contractsDir, peerPath) || path.dirname(peerPath) !== targetInfo.contractsDir) return false;
-				const peerContract = readJsonFile(peerPath);
-				if (!peerContract || peerContract.id !== entry.contract_id || peerContract.contract_digest !== entry.contract_digest) return false;
-				if (!contractNamesSession(peerContract, peer)) return false;
-			}
-		}
+		if (!existing && Object.keys(next.bindings).some((boundSession) => boundSession !== sessionId)) return false;
 		if (existing?.bindings) {
 			for (const boundSession of Object.keys(next.bindings)) {
 				if (boundSession !== sessionId && !Object.hasOwn(existing.bindings, boundSession)) return false;
@@ -258,18 +203,8 @@ function bootstrapWriteAllowed(toolName, toolInput, cwd, sessionId) {
 				if (boundSession !== sessionId && !sameJson(next.bindings[boundSession], oldPointer)) return false;
 			}
 			if (existing.bindings[sessionId]) {
-				// The old pointer proves this session already owned the binding it is
-				// replacing — not that the old digest still matches. Demanding the
-				// latter made the prescribed order impossible: once the contract and
-				// its progress carry a new digest, the registry still names the old
-				// one, so the session is STALE exactly when it needs to write the
-				// registry, and the write that would fix it is the one refused.
-				// The replacement pointer is already checked in full above against
-				// the contract and progress on disk, so hijacking stays blocked.
 				const old = existing.bindings[sessionId];
-				const previous = readJsonFile(path.resolve(targetInfo.projectRoot, String(old.contract_path || "")));
-				const previousOwned = Boolean(previous) && previous.id === old.contract_id && contractNamesSession(previous, sessionId);
-				if (!previousOwned && !contractByIdentity(targetInfo.contractsDir, old.contract_id, old.contract_digest, sessionId)) return false;
+				if (!contractByIdentity(targetInfo.contractsDir, old.contract_id, old.contract_digest, sessionId)) return false;
 			}
 		}
 		return true;
@@ -279,22 +214,6 @@ function bootstrapWriteAllowed(toolName, toolInput, cwd, sessionId) {
 
 function bootstrapMutationAllowed(toolName, toolInput, cwd, sessionId) {
 	if (rawToolName(toolName) === "write") return bootstrapWriteAllowed(toolName, toolInput, cwd, sessionId);
-	if (rawToolName(toolName) === "edit") {
-		const filePath = toolInput?.file_path;
-		const targetInfo = stateTarget(filePath, cwd);
-		const oldString = toolInput?.old_string;
-		const newString = toolInput?.new_string;
-		if (!targetInfo || typeof oldString !== "string" || !oldString || typeof newString !== "string") return false;
-		let current;
-		try { current = fs.readFileSync(targetInfo.target, "utf8"); } catch { return false; }
-		const occurrences = current.split(oldString).length - 1;
-		if (occurrences === 0) return false;
-		if (occurrences > 1 && toolInput?.replace_all !== true) return false;
-		const next = toolInput?.replace_all === true
-			? current.split(oldString).join(newString)
-			: current.replace(oldString, newString);
-		return bootstrapWriteAllowed("Write", { file_path: filePath, content: next }, cwd, sessionId);
-	}
 	if (rawToolName(toolName) !== "apply_patch") return false;
 	const reconstructed = reconstructSingleFilePatch(toolInput, cwd);
 	if (!reconstructed) return false;
@@ -361,245 +280,6 @@ function governedTarget(target, projectRoot) {
  * could escalate this session's own authority: deletion, entrypoints, and the
  * harness/governance directories.
  */
-// The rules file already authorizes local test, lint, typecheck and build runs
-// and non-destructive git as part of a bounded task, but the gate refused every
-// mutating command without a bound contract — including the very commands that
-// verify the edits an unbound session is allowed to make. That gap is why
-// enforcement had to be switched off repository-wide. These commands verify or
-// record work rather than expand authority; the allowance is read from the rules
-// file so the policy stays the single source. It applies whether or not a
-// contract is bound, because binding one to touch a governed file must not cost
-// the ability to run the tests that verify the change. A derived delegation is
-// excluded: its contract narrows the shell to its one validator deliberately.
-// Unsafe forms are rejected before this runs, and anything unlisted still needs
-// a contract.
-/**
- * Routine-command allowance for a project root, falling back to the enclosing
- * repository's rules.
- *
- * Sub-projects are submodules carrying their own agents-rules.json. Without the
- * fallback, a policy widened at the workspace root reached only sessions whose
- * working directory was the root: a Python submodule still could not run
- * pytest. Nearer rules win for permissions so a submodule can stay narrower;
- * refusals are unioned so it can never become broader by omission.
- */
-function routineAllowance(projectRoot) {
-	const merged = {};
-	const refusals = new Set();
-	let found = false;
-	for (const directory of harnessSwitch.ancestorDirectories(projectRoot)) {
-		let allowance;
-		try {
-			const rules = JSON.parse(fs.readFileSync(path.join(directory, ".agents", "context", "agents-rules.json"), "utf8"));
-			allowance = rules?.ai_workflow?.routine_action_authorization?.unbound_routine_commands;
-		} catch { continue; }
-		if (!allowance) continue;
-		found = true;
-		for (const [key, value] of Object.entries(allowance)) {
-			if (key === "git_refused_subcommands") { for (const item of value || []) refusals.add(item); continue; }
-			if (!Object.hasOwn(merged, key)) merged[key] = value;
-		}
-	}
-	if (!found) return null;
-	merged.git_refused_subcommands = [...refusals];
-	return merged;
-}
-
-/**
- * Whether an unbound session may run this command.
- *
- * This used to be an allow-list, which made enforcement tight for a reason
- * unrelated to risk: any tool nobody had thought to enumerate was refused, so
- * a Python or Rust project could not run its own tests and ordinary
- * investigation commands were treated as mutations. The policy is now the other
- * way round — everything is routine unless it is hard to undo. Publishing,
- * deleting, deploying, escalating privilege and reaching other machines still
- * need a contract; reading, testing, building and local editing do not.
- */
-/**
- * Whether a mutating shell command targets a governance path.
- *
- * The file tools refuse edits to .agents/context, the session contracts, the
- * host config directories and the shared entry points, but the shell reached
- * the same files unchecked: `touch .claude/x` and `sed -i .agents/context/y`
- * both went through. A session could rewrite the hooks that govern it, which
- * makes the path boundary decorative. Reads stay open — inspecting governance
- * is how a session learns its own rules — and progress records stay writable,
- * since they carry an account of work rather than authority.
- */
-function governanceWriteCommand(command, cwd, projectRoot) {
-	if (readOnlyShell(command, cwd)) return false;
-	for (const token of shellTokens(command)) {
-		if (!token || token.startsWith("-")) continue;
-		if (!/[\/.]/.test(token)) continue;
-		let resolved;
-		try { resolved = path.resolve(cwd, token); } catch { continue; }
-		if (!sessionContract.inside(projectRoot, resolved)) continue;
-		const state = stateTarget(resolved, cwd);
-		if (state?.kind === "progress") continue;
-		if (state) return true;
-		if (governedTarget(resolved, projectRoot)) return true;
-		if (ENTRY_POINTS.has(path.basename(resolved)) && path.dirname(resolved) === projectRoot) return true;
-	}
-	return false;
-}
-
-function routineCommandAllowed(toolName, toolInput, cwd) {
-	if (normalizedToolName(toolName) !== "shell") return false;
-	const command = String(toolInput?.command || "").trim();
-	if (!command) return false;
-	const projectRoot = sessionContract.findProjectRoot(cwd);
-	if (!projectRoot) return false;
-	const allowance = routineAllowance(projectRoot);
-	if (!allowance || allowance.default !== "allow") return false;
-	if (reviewInvokerCommand(command, cwd)) return true;
-	// Command substitution, eval and interpreter -c hide the head of the command
-	// from every check below, so they keep needing a contract. Plain variable
-	// references do not hide anything and stay routine.
-	if (/\$\(|`|(?:^|[\s;&|])(?:eval|xargs)\b|\b(?:sh|bash|zsh|dash|ksh|fish)\s+-[A-Za-z]*c\b/i.test(command)) return false;
-	if (nestedModelRuntimeCommand(command)) return false;
-	if (governanceWriteCommand(command, cwd, projectRoot)) return false;
-
-	for (const pattern of allowance.contract_required_patterns?.patterns || []) {
-		let expression;
-		try { expression = new RegExp(pattern, "i"); } catch { continue; }
-		if (expression.test(command)) return false;
-	}
-
-	const refusedHeads = new Set(
-		Object.entries(allowance.contract_required_heads || {})
-			.filter(([key]) => key !== "_doc")
-			.flatMap(([, value]) => (Array.isArray(value) ? value : [])),
-	);
-	const refusedSubcommands = allowance.contract_required_subcommands || {};
-
-	for (const statement of splitShellStatements(command)) {
-		const tokens = shellTokens(statement);
-		if (!tokens.length) continue;
-		const head = path.basename(String(tokens[0])).replace(/\.(exe|cmd)$/i, "");
-		if (refusedHeads.has(head)) return false;
-		const subcommands = refusedSubcommands[head];
-		if (Array.isArray(subcommands)) {
-			// -C and its value are position flags, not the subcommand.
-			const rest = tokens.slice(1).filter((token, index, all) =>
-				token !== "-C" && all[index - 1] !== "-C" && !token.startsWith("-"));
-			if (rest.some((token) => subcommands.includes(token))) return false;
-		}
-	}
-	return true;
-}
-
-/** Statement split that respects quoting; a pipe inside an argument is data. */
-function splitShellStatements(source) {
-	const statements = [];
-	let current = "";
-	let quote = null;
-	for (const character of String(source || "")) {
-		if (quote) { current += character; if (character === quote) quote = null; continue; }
-		if (character === '"' || character === "'") { quote = character; current += character; continue; }
-		if (character === ";" || character === "|" || character === "&") { statements.push(current); current = ""; continue; }
-		current += character;
-	}
-	statements.push(current);
-	return statements.map((statement) => statement.trim()).filter(Boolean);
-}
-
-/**
- * Whether an active contract belonging to someone else claims this path.
- *
- * target_ownership exists to stop two sessions from editing the same files, not
- * to shrink what one session may touch. Reading it as a whitelist made a bound
- * session narrower than an unbound one: with no contract a session could create
- * any ordinary file in the project, and the moment it bound one it could not.
- */
-const heldSessionCache = new Map();
-
-/**
- * Whether a foreign contract is still held by a session that is actually there.
- *
- * `status: "active"` records intent, not presence. A session that is killed —
- * a closed terminal, a crashed host, a machine that slept — leaves its contract
- * active forever, and every path it declared stays locked to everyone else.
- * Nothing expires it, so the only way out is a human editing JSON by hand.
- *
- * On 2026-08-21 four consecutive sessions died on the same file for this
- * reason. Each one did what the refusal told it to do — reclaim, rebind, retry
- * — and each one was refused again, because the thing holding the path was not
- * a rival session but the ghost of one. The gate exists to keep two live
- * sessions from colliding. It was never meant to let a dead one hold ground.
- *
- * "Abandoned" here means exactly what the recovery helper means by it: no fresh
- * lease and no live process. Both are asked because either alone is wrong — a
- * session idle while a human types has a stale lease but a live process, and a
- * lease can outlive the process that wrote it. If liveness cannot be
- * determined at all, the lock stays: a gate that guesses is worse than one that
- * waits.
- */
-function contractStillHeld(contract, projectRoot, now = Date.now()) {
-	const sessions = (contract.session_bindings || [])
-		.map((binding) => binding && binding.session_id)
-		.filter((id) => typeof id === "string" && id.length > 0);
-	if (sessions.length === 0) return false;
-	for (const id of sessions) {
-		try { if (sessionRecovery.leaseFreshAndActive(projectRoot, id, now)) return true; }
-		catch { return true; }
-	}
-	for (const id of sessions) {
-		if (heldSessionCache.has(id)) {
-			if (heldSessionCache.get(id)) return true;
-			continue;
-		}
-		let live;
-		try {
-			// Prefer the lease's recorded host_process (a targeted single-PID probe)
-			// over the full command-line scan, which times out under load and then
-			// fails closed — pinning long-dead orphans as "held" and locking their
-			// paths to every live session. Fall back to the scan only when a lease
-			// carries no recorded host process.
-			const recorded = sessionRecovery.sessionRecordedHostLive(projectRoot, id);
-			live = recorded === null ? sessionRecovery.sessionProcessLive(id) : recorded;
-		}
-		catch { return true; }
-		heldSessionCache.set(id, live);
-		if (live) return true;
-	}
-	return false;
-}
-
-function foreignOwnedTarget(target, projectRoot, contractsDir, sessionId) {
-	let names = [];
-	try { names = fs.readdirSync(contractsDir); } catch { return false; }
-	const relative = path.relative(projectRoot, target).replaceAll("\\", "/");
-	for (const name of names) {
-		if (!name.endsWith(".json") || name.startsWith(".") || name === "schema.json") continue;
-		const contract = readJsonFile(path.join(contractsDir, name));
-		if (!contract || contract.status !== "active") continue;
-		if (contractNamesSession(contract, sessionId)) continue;
-		if (!(contract.target_ownership || []).some((pattern) => contractPathMatches(pattern, relative))) continue;
-		if (contractStillHeld(contract, projectRoot)) return true;
-	}
-	return false;
-}
-
-/**
- * An ordinary file outside the contract's declared paths: allowed on the same
- * terms an unbound session gets, minus anything another contract owns.
- */
-function ordinaryTargetOutsideContract(filePath, cwd, sessionId) {
-	const projectRoot = sessionContract.findProjectRoot(cwd);
-	if (!projectRoot) return false;
-	const target = path.resolve(cwd, String(filePath));
-	if (!sessionContract.inside(projectRoot, target)) return false;
-	if (entrypointTarget(filePath, cwd)) return false;
-	const state = stateTarget(filePath, cwd);
-	if (state) return false;
-	if (governedTarget(target, projectRoot)) return false;
-	// A nested ADK project governs itself; a parent contract does not reach into it.
-	const nestedRoot = targetProjectRoot(target);
-	if (nestedRoot && path.resolve(nestedRoot) !== path.resolve(projectRoot)) return false;
-	return !foreignOwnedTarget(target, projectRoot, path.join(projectRoot, ".agents", "session-contracts"), sessionId);
-}
-
 function unboundOrdinaryMutationAllowed(toolName, toolInput, cwd) {
 	if (normalizedToolName(toolName) !== "file-mutation") return false;
 	const raw = rawToolName(toolName);
@@ -612,13 +292,7 @@ function unboundOrdinaryMutationAllowed(toolName, toolInput, cwd) {
 	return targets.every((filePath) => {
 		const target = path.resolve(cwd, String(filePath));
 		if (!sessionContract.inside(projectRoot, target)) return false;
-		if (entrypointTarget(filePath, cwd)) return false;
-		const state = stateTarget(filePath, cwd);
-		// A progress record is the session's account of its own work. Refusing it
-		// while the refusal text promised it was allowed left sessions unable to
-		// record what they did; contracts and the registry still carry authority
-		// and still need one.
-		if (state) return state.kind === "progress";
+		if (entrypointTarget(filePath, cwd) || stateTarget(filePath, cwd)) return false;
 		return !governedTarget(target, projectRoot);
 	});
 }
@@ -653,13 +327,6 @@ function contractAllowsTarget(resolution, filePath, cwd) {
 	if (!sessionContract.inside(resolution.projectRoot, target)) return false;
 	if (!belongsToResolutionProject(resolution, target)) return false;
 	const relative = path.relative(resolution.projectRoot, target).replaceAll("\\", "/");
-	// The registry is shared, so a contract cannot buy write access to it by
-	// listing it. Otherwise a session that named the registry in its own
-	// target_ownership could rewrite its own binding to any digest, which is the
-	// one thing the binding is supposed to prove. Writes there go through the
-	// bootstrap rule instead, which checks the entry against the contract and
-	// progress on disk.
-	if (sessionContract.SHARED_OWNERSHIP_PATHS.has(relative)) return false;
 	return [resolution.contract.allowed_paths, resolution.contract.target_ownership]
 		.every((patterns) => patterns.some((pattern) => contractPathMatches(pattern, relative)));
 }
@@ -673,59 +340,7 @@ function fallbackAllowsTarget(resolution, access, filePath, cwd) {
 	return access.allowedPaths.some((pattern) => contractPathMatches(pattern, relative));
 }
 
-function registryConflictAddAllowed(tokens, resolution, gitCwd, sessionId) {
-	if (tokens.length !== 1) return false;
-	const registryPath = path.join(resolution.projectRoot, ".agents", "session-contracts", ".session-map.json");
-	const target = path.resolve(gitCwd, tokens[0].replace(/^(?:"|')|(?:"|')$/g, ""));
-	if (target !== registryPath) return false;
-
-	let unmerged;
-	try {
-		unmerged = execFileSync("git", ["ls-files", "-u", "-z", "--", ".agents/session-contracts/.session-map.json"], {
-			cwd: resolution.projectRoot,
-			encoding: "utf8",
-		});
-	} catch {
-		return false;
-	}
-	const stages = new Set();
-	for (const entry of unmerged.split("\0").filter(Boolean)) {
-		const match = entry.match(/^\d+ [0-9a-f]+ ([123])\t(.+)$/);
-		if (!match || match[2].replaceAll("\\", "/") !== ".agents/session-contracts/.session-map.json") return false;
-		stages.add(match[1]);
-	}
-	if (!stages.has("2") || !stages.has("3")) return false;
-
-	let registry;
-	try { registry = JSON.parse(fs.readFileSync(registryPath, "utf8")); } catch { return false; }
-	if (registry?.schema_version !== "1.0" || !registry.bindings || typeof registry.bindings !== "object" || Array.isArray(registry.bindings)) return false;
-	let parents;
-	try {
-		parents = [2, 3].map((stage) => JSON.parse(execFileSync("git", ["show", `:${stage}:.agents/session-contracts/.session-map.json`], {
-			cwd: resolution.projectRoot,
-			encoding: "utf8",
-		})));
-	} catch {
-		return false;
-	}
-	for (const parent of parents) {
-		if (parent?.schema_version !== "1.0" || !parent.bindings || typeof parent.bindings !== "object" || Array.isArray(parent.bindings)) return false;
-		for (const [boundSession, pointer] of Object.entries(parent.bindings)) {
-			if (boundSession === sessionId) continue;
-			if (!Object.hasOwn(registry.bindings, boundSession) || !sameJson(registry.bindings[boundSession], pointer)) return false;
-		}
-	}
-	for (const [boundSession, pointer] of Object.entries(registry.bindings)) {
-		if (boundSession === sessionId) continue;
-		if (!parents.some((parent) => Object.hasOwn(parent.bindings, boundSession) && sameJson(parent.bindings[boundSession], pointer))) return false;
-	}
-	return bootstrapWriteAllowed("Write", {
-		file_path: registryPath,
-		content: JSON.stringify(registry, null, 2),
-	}, resolution.projectRoot, sessionId);
-}
-
-function boundGitMutationAllowed(command, resolution, cwd, sessionId) {
+function boundGitMutationAllowed(command, resolution, cwd) {
 	const source = String(command || "").trim();
 	if (!source || /[;&|><`]/.test(source) || /\$\(/.test(source)) return false;
 	const scoped = source.match(/^git\s+-C\s+("[^"]+"|'[^']+'|\S+)\s+(.+)$/i);
@@ -742,7 +357,6 @@ function boundGitMutationAllowed(command, resolution, cwd, sessionId) {
 		const tokens = add[1].match(/"[^"]+"|'[^']+'|\S+/g) || [];
 		const targets = tokens[0] === "-u" ? tokens.slice(1) : tokens;
 		if (targets.length === 0 || targets.some((target) => target.startsWith("-"))) return false;
-		if (registryConflictAddAllowed(targets, resolution, gitCwd, sessionId)) return true;
 		return targets.every((target) =>
 			contractAllowsTarget(resolution, target.replace(/^(?:"|')|(?:"|')$/g, ""), gitCwd),
 		);
@@ -780,47 +394,11 @@ function readStdin() {
 	try { return fs.readFileSync(0, "utf8"); } catch { return ""; }
 }
 
-/**
- * The path token that names the recovery helper, in any shape a shell accepts.
- *
- * The exemption used to insist on a repo-relative `.agents/harness/...` path.
- * On Windows the stuck session typed the absolute path it was given —
- * `D:\alpha-adk\.agents\harness\session-contract-recovery.cjs` — and the
- * exemption did not recognise it. The gate then blocked the one command its own
- * refusal message tells you to run, and the session had no way out from the
- * inside. A door that only opens for one spelling of its own address is closed.
- *
- * Absolute paths are accepted only when they resolve inside the governed
- * project. Otherwise an absolute path could name a lookalike helper in some
- * other directory, and the exemption would be a way to run arbitrary code.
- */
-const RECOVERY_HELPER_RELATIVE = path.join(".agents", "harness", "session-contract-recovery.cjs");
-
-function recoveryHelperToken(token, cwd) {
-	const cleaned = String(token || "").replace(/^["']/, "").replace(/["']$/, "").trim();
-	if (!cleaned) return false;
-	const normalized = cleaned.replace(/\\/g, "/");
-	if (!/(?:^|\/)\.agents\/harness\/session-contract-recovery\.cjs$/.test(normalized)) return false;
-	if (/^(?:\.\/)?\.agents\//.test(normalized)) return true;
-	let root;
-	try { root = sessionContract.findProjectRoot(cwd); } catch { root = null; }
-	if (!root) return false;
-	const expected = path.resolve(root, RECOVERY_HELPER_RELATIVE);
-	const actual = path.resolve(cwd || ".", cleaned);
-	return process.platform === "win32"
-		? actual.toLowerCase() === expected.toLowerCase()
-		: actual === expected;
-}
-
-function recoveryCommandAllowed(command, sessionId, cwd) {
+function reclaimCommandAllowed(command, sessionId) {
 	const source = String(command || "").trim();
-	const reclaim = source.match(/^node\s+(\S+|"[^"]+"|'[^']+')\s+reclaim\s+--contract\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})\s+--session\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})$/);
-	if (reclaim) return Boolean(reclaim[3] === sessionId && recoveryHelperToken(reclaim[1], cwd));
-	const switchMatch = source.match(/^node\s+(\S+|"[^"]+"|'[^']+')\s+switch\s+--from\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})\s+--to\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})\s+--session\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})$/);
-	return Boolean(switchMatch && switchMatch[4] === sessionId && recoveryHelperToken(switchMatch[1], cwd));
+	const match = source.match(/^node\s+["']?(?:\.\/)?\.agents[\\/]harness[\\/]session-contract-recovery\.cjs["']?\s+reclaim\s+--contract\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})\s+--session\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})$/);
+	return Boolean(match && match[2] === sessionId);
 }
-
-const reclaimCommandAllowed = recoveryCommandAllowed;
 
 /**
  * Recording an approval must not need the authority it is about to grant.
@@ -832,10 +410,9 @@ const reclaimCommandAllowed = recoveryCommandAllowed;
  * helper validates the authority, scope and expiry on its own; the gate only
  * has to let it be called in exactly this shape.
  */
-function approvalCommandAllowed(command, cwd) {
+function approvalCommandAllowed(command) {
 	const source = String(command || "").trim();
-	const match = source.match(/^node\s+(\S+|"[^"]+"|'[^']+')\s+approve\s+--contract\s+[A-Za-z0-9][A-Za-z0-9._-]{0,199}\s+--authority\s+["']?[A-Za-z0-9_]+:[A-Za-z0-9._-]{1,199}["']?\s+--scope\s+[A-Za-z0-9_]{1,64}\s+--reason\s+.{1,500}$/);
-	return Boolean(match && recoveryHelperToken(match[1], cwd));
+	return /^node\s+["']?(?:\.\/)?\.agents[\\/]harness[\\/]session-contract-recovery\.cjs["']?\s+approve\s+--contract\s+[A-Za-z0-9][A-Za-z0-9._-]{0,199}\s+--authority\s+["']?[A-Za-z0-9_]+:[A-Za-z0-9._-]{1,199}["']?\s+--scope\s+[A-Za-z0-9_]{1,64}\s+--reason\s+.{1,500}$/.test(source);
 }
 
 /**
@@ -862,7 +439,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	const toolName = data.tool_name || "";
 	const toolInput = data.tool_input || {};
 	if (HARNESS_ENV_VARS.some((name) => HARNESS_OFF.has((env[name] || "").trim().toLowerCase()))) return null;
-	if (harnessSwitch.findHarnessMarker({ cwd, configDirs: HARNESS_CONFIG_DIRS })) return null;
+	if (HARNESS_CONFIG_DIRS.some((dir) => fs.existsSync(path.join(cwd, dir, "no-harness")))) return null;
 	if (!sessionId) return null;
 	if (!sessionContract.findProjectRoot(cwd)) {
 		// cwd cannot be resolved to a governed project root (host-reported cwd
@@ -881,9 +458,9 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 			reason: "⛔ [HARNESS] 공유 진입점은 전용 validator를 거쳐야 합니다. 후보 파일을 만든 뒤 `node .claude/hooks/sync-entry-points.js --apply <candidate>`를 사용하세요.",
 		};
 	}
-	if (normalizedToolName(toolName) === "shell" && recoveryCommandAllowed(toolInput.command, sessionId, cwd)) return null;
-	if (normalizedToolName(toolName) === "shell" && approvalCommandAllowed(toolInput.command, cwd)) return null;
-	if (normalizedToolName(toolName) === "shell" && nestedModelRuntimeCommand(toolInput.command) && !reviewInvokerCommand(toolInput.command, cwd)) {
+	if (normalizedToolName(toolName) === "shell" && reclaimCommandAllowed(toolInput.command, sessionId)) return null;
+	if (normalizedToolName(toolName) === "shell" && approvalCommandAllowed(toolInput.command)) return null;
+	if (normalizedToolName(toolName) === "shell" && nestedModelRuntimeCommand(toolInput.command)) {
 		return {
 			decision: "block",
 			reason: "⛔ [HARNESS] 셸에서 Codex/Claude/OpenCode/Gemini 런타임을 중첩 실행할 수 없습니다. digest-bound governed spawn 도구를 사용하세요.",
@@ -920,7 +497,6 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	// never replace that authority by bootstrapping an explicit child contract.
 	if (resolution.reason !== "derived_delegation_verified" && bootstrapMutationAllowed(toolName, toolInput, cwd, sessionId)) return null;
 	if (resolution.status !== sessionContract.STATES.BOUND && unboundOrdinaryMutationAllowed(toolName, toolInput, cwd)) return null;
-	if (resolution.reason !== "derived_delegation_verified" && routineCommandAllowed(toolName, toolInput, cwd)) return null;
 	if (resolution.status === sessionContract.STATES.BOUND) {
 		if (resolution.derivedTask?.read_only === true) {
 			if (normalizedToolName(toolName) === "file-mutation") {
@@ -936,9 +512,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 			if (targets.length === 0) {
 				return { decision: "block", reason: "⛔ [HARNESS] 파일 변경 대상을 결정할 수 없어 계약 경로 권한을 검증할 수 없습니다." };
 			}
-			const denied = targets.filter((target) =>
-				!contractAllowsTarget(resolution, target, cwd) &&
-				!ordinaryTargetOutsideContract(target, cwd, sessionId));
+			const denied = targets.filter((target) => !contractAllowsTarget(resolution, target, cwd));
 			if (denied.length > 0) {
 				return { decision: "block", reason: `⛔ [HARNESS] 계약의 allowed_paths/target_ownership 밖 파일 변경: ${denied.join(", ")}` };
 			}
@@ -958,7 +532,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 				return { decision: "block", reason: "⛔ [HARNESS] nested runtime launches and dynamically constructed shell commands are forbidden." };
 			}
 			const readOnly = readOnlyShell(command, cwd);
-			const gitIntegration = !readOnly && boundGitMutationAllowed(command, resolution, cwd, sessionId);
+			const gitIntegration = !readOnly && boundGitMutationAllowed(command, resolution, cwd);
 			if (!readOnly && directAccess.required && !gitIntegration) {
 				if (!directAccess.active) {
 					return { decision: "block", reason: `⛔ [HARNESS] 오케스트레이터 직접 실행은 차단됩니다 (${directAccess.reason}). 테스트·구현은 governed worker에 위임하세요.` };
@@ -967,21 +541,13 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 					return { decision: "block", reason: "⛔ [HARNESS] 셸 명령이 현재 task 직접 우회의 exact_validators에 없습니다." };
 				}
 			}
-			// A bound session must not be more restricted than an unbound one.
-			// Requiring every command to be declared verbatim meant a contract
-			// blocked its own routine work — running tests, inspecting a file.
-			// A delegated worker stays narrowed to the validators its brief declared;
-			// widening there would dissolve the delegation boundary itself.
-			const routine = resolution.reason !== "derived_delegation_verified"
-				&& !resolution.derivedTask
-				&& routineCommandAllowed(toolName, toolInput, cwd);
-			if (!readOnly && !routine &&
+			if (!readOnly &&
 				!(resolution.contract.allowed_shell_commands || []).includes(command) &&
 				!gitIntegration) {
 				return {
 					decision: "block",
 					reason: touchesOwnBindingFiles(command)
-						? "⛔ [HARNESS] 셸로는 자기 계약·progress·registry 를 고칠 수 없습니다. 게이트가 셸 명령의 결과를 확인할 수 없기 때문입니다. 파일 쓰기 도구(write/edit/apply_patch)로 같은 변경을 하면 계약↔progress↔registry 정합성을 검사한 뒤 통과합니다. 미결박 세션이 죽은 계약을 넘겨받으면 recovery helper의 reclaim을, 이미 결박된 세션이 옮겨가면 switch를 쓰십시오. 제3자 승인이 필요하면 같은 헬퍼의 approve를 쓰십시오."
+						? "⛔ [HARNESS] 셸로는 자기 계약·progress·registry 를 고칠 수 없습니다. 게이트가 셸 명령의 결과를 확인할 수 없기 때문입니다. 파일 쓰기 도구(write/edit/apply_patch)로 같은 변경을 하면 계약↔progress↔registry 정합성을 검사한 뒤 통과합니다. 세션이 죽은 계약을 넘겨받아야 하면 `node .agents/harness/session-contract-recovery.cjs reclaim --contract <id> --session <현재 세션 id>` 를, 제3자 승인이 필요하면 같은 헬퍼의 approve 를 쓰십시오."
 						: "⛔ [HARNESS] 변경 가능 셸 명령이 계약의 allowed_shell_commands에 정확히 선언되지 않았습니다.",
 				};
 			}
@@ -992,9 +558,13 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 
 	return {
 		decision: "block",
-		reason: `⏸ [HARNESS] SESSION ${resolution.status} — ${resolution.reason}. governed 변경만 보류합니다.\n` +
-		`계약은 작업 중지 사유가 아니라 드리프트 방지 장치입니다. 계약을 생성·결박하거나 기존 단일-session 계약을 수정/교체·재결박한 뒤 같은 작업을 재시도하고 계속하세요. 쓰는 순서는 계약 → progress → registry 이며, contract_digest 는 contract_digest 를 뺀 계약의 SHA-256 입니다(순서나 서명이 어긋나면 각 단계가 거부됩니다). ${sessionId} 를 .agents/session-contracts/.session-map.json 의 active 계약 하나에 결박하며, 조건은 .agents/session-contracts/README.md 에 있습니다.\n` +
-		"실제 권한 부족, target_ownership 충돌, 무결성 검증 실패일 때만 중지합니다. 계약·registry·progress 쓰기와 읽기 전용 조사는 허용됩니다.",
+		reason: `⛔ [HARNESS] SESSION ${resolution.status} — ${resolution.reason}. 변경을 막습니다.\n` +
+		"계약 없이 mutating 작업(Edit/Write/Bash) 금지.\n\n" +
+		"결박 조건:\n" +
+		`  1) .agents/session-contracts/.session-map.json에서 ${sessionId}를 정확히 한 active 계약에 결박\n` +
+		"  2) registry digest, contract_digest, session_bindings[], progress contract reference를 일치\n" +
+		"  3) 병렬 active 계약의 target_ownership 경로가 겹치지 않아야 함\n\n" +
+		"계약/registry/progress 파일만 쓰는 bootstrap 편집과 읽기 전용 조사는 허용됩니다.",
 	};
 }
 
@@ -1004,16 +574,8 @@ function main() {
 	try { data = JSON.parse(raw || "{}"); } catch { /* fail-open */ }
 	sessionRecovery.handleEvent("PreToolUse", raw, data.cwd || process.cwd());
 	const output = decide(data);
-	if (output) {
-		// One line on disk per refusal, so "the harness blocked my session" is
-		// answerable from the repository instead of from the operator's screen.
-		blockLog.record({
-			hook: "session-contract-gate", tool: data.tool_name, cwd: data.cwd,
-			sessionId: data.session_id, toolInput: data.tool_input, reason: output.reason,
-		});
-		process.stdout.write(JSON.stringify(output));
-	}
+	if (output) process.stdout.write(JSON.stringify(output));
 }
 
 if (require.main === module) main();
-module.exports = { routineAllowance, ordinaryTargetOutsideContract, foreignOwnedTarget, contractStillHeld, contractNamesSession, governanceWriteCommand, splitShellStatements, bootstrapMutationAllowed, reviewInvokerCommand, routineCommandAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, recoveryCommandAllowed, approvalCommandAllowed, recoveryHelperToken, reconstructSingleFilePatch, registryConflictAddAllowed, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundOrdinaryMutationAllowed };
+module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundOrdinaryMutationAllowed };
