@@ -160,6 +160,47 @@ try {
 			"block",
 			`${client} reclaim cannot target another session`,
 		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "node .agents/harness/session-contract-recovery.cjs switch --from current-job --to orphan-job --session SESSION-1" }),
+			null,
+			`${client} exact owner-approved switch helper is gate-reachable`,
+		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "node .agents/harness/session-contract-recovery.cjs switch --from current-job --to orphan-job --session OTHER" })?.decision,
+			"block",
+			`${client} switch cannot target another session`,
+		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: "node .agents/harness/session-contract-recovery.cjs switch --to orphan-job --from current-job --session SESSION-1" })?.decision,
+			"block",
+			`${client} switch exemption accepts only the documented exact shape`,
+		);
+		// 2026-08-21: a Windows session was handed the absolute path to the helper
+		// and the exemption did not recognise it, so the gate blocked the very
+		// command its refusal message prescribes. The door must open for the
+		// address the caller was actually given.
+		assert.equal(
+			runGate(fixture, "Bash", { command: `node ${path.join(fixture, ".agents", "harness", "session-contract-recovery.cjs")} reclaim --contract orphan-job --session SESSION-1` }),
+			null,
+			`${client} absolute recovery helper path is gate-reachable`,
+		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: `node "${path.join(fixture, ".agents", "harness", "session-contract-recovery.cjs")}" reclaim --contract orphan-job --session SESSION-1` }),
+			null,
+			`${client} quoted absolute recovery helper path is gate-reachable`,
+		);
+		// The absolute form must not become a way to run a lookalike helper that
+		// lives outside the governed project.
+		assert.equal(
+			runGate(fixture, "Bash", { command: `node ${path.join(repositoryRoot, "..", "elsewhere", ".agents", "harness", "session-contract-recovery.cjs")} reclaim --contract orphan-job --session SESSION-1` })?.decision,
+			"block",
+			`${client} recovery helper outside the project stays blocked`,
+		);
+		assert.equal(
+			runGate(fixture, "Bash", { command: `node ${path.join(fixture, ".agents", "harness", "session-contract-recovery.cjs")} reclaim --contract orphan-job --session OTHER` })?.decision,
+			"block",
+			`${client} absolute path still cannot target another session`,
+		);
 		assert.match(
 			runGate(fixture, "Bash", { command: "git status --short", workdir: nested })?.reason,
 			/workdir/,
@@ -190,6 +231,10 @@ try {
 			/workdir/,
 			`${client} appended PowerShell mutation cannot use the absolute-read exception`,
 		);
+		// Cross-platform fail-open gap (found jointly by win-claude/linux-codex,
+		// 2026-08-09): an unbound session whose reported cwd cannot be resolved to
+		// any governed project root must not blanket-allow. Read-only investigation
+		// stays available; everything else fails closed.
 		assert.equal(
 			runGate(os.tmpdir(), "Bash", { command: `rm -rf ${path.join(fixture, "AGENTS.md")}` }, {}, os.tmpdir())?.decision,
 			"block",
@@ -203,9 +248,13 @@ try {
 		assert.equal(
 			runGate(fixture, "Bash", { command: "rm -rf C:\\Windows\\System32\\whatever" })?.decision,
 			"block",
-			`${client} unbound mutation targeting outside the resolved project stays blocked`,
+			`${client} unbound mutation targeting outside the resolved project stays blocked by the existing unbound catch-all`,
 		);
 		assert.equal(runGate(fixture, "apply_patch", { command: "product mutation" })?.decision, "block", `${client} legacy shell blocked`);
+		const governedBlock = runGate(fixture, "Bash", { command: "npm test" });
+		assert.match(governedBlock?.reason, /드리프트 방지 장치/, `${client} explains contract purpose`);
+		assert.match(governedBlock?.reason, /수정\/교체·재결박.*재시도하고 계속/, `${client} directs autonomous contract update and continuation`);
+		assert.match(governedBlock?.reason, /권한 부족.*충돌.*무결성/, `${client} reserves stopping for genuine blockers`);
 		// Ordinary project work is available while unbound. Restricting it to new
 		// files under tmp/ left a marker-free checkout unable to write a document
 		// or edit an existing file, so every session ran with the harness off
@@ -389,10 +438,14 @@ try {
 		assert.equal(runGate(fixture, "Bash", { command: "rg --pre 'codex exec task' needle file" })?.decision, "block", `${client} rg preprocessor model runtime remains blocked`);
 		assert.match(runGate(fixture, "Bash", { command: "rg --pre 'sh -c touch /tmp/escaped' needle file" })?.reason, /전처리기/, `${client} allowlisted rg preprocessor mutation remains blocked`);
 		assert.equal(runGate(fixture, "Bash", { command: "echo changed > product.txt" })?.decision, "block", `${client} undeclared mutating shell blocked`);
+		// An ordinary file outside the declared paths is fine — target_ownership
+		// separates sessions, it does not shrink one. Governed paths still are not.
+		assert.equal(runGate(fixture, "Write", { file_path: "other.txt", content: "ok" }), null,
+			`${client} ordinary out-of-contract file allowed`);
 		assert.equal(
-			runGate(fixture, "Write", { file_path: "other.txt", content: "no" })?.decision,
+			runGate(fixture, "Write", { file_path: ".agents/context/other.yaml", content: "no" })?.decision,
 			"block",
-			`${client} out-of-contract path blocked`,
+			`${client} governed out-of-contract path blocked`,
 		);
 		assert.match(
 			runGate(fixture, "Write", { file_path: "nested/product.txt", content: "no" })?.reason,
@@ -544,7 +597,497 @@ try {
 	writeJson(registryPath, registry);
 	assert.equal(runGate(fixture, "apply_patch", { command: "product mutation" })?.decision, "block", "stale digest blocked");
 
-	console.log("session contract gate parity: PASS");
+	// Enforcement was switched off repository-wide because an unbound session could
+// not run its tests, its build, or a commit — the same actions the rules file
+// authorizes as routine. These pin the carve-out and, just as importantly, that
+// it did not become a way around the checks that stop destruction.
+{
+	const fsu = require("node:fs");
+	const osu = require("node:os");
+	const fixture = fsu.mkdtempSync(path.join(osu.tmpdir(), "unbound-routine-"));
+	fsu.mkdirSync(path.join(fixture, ".agents", "context"), { recursive: true });
+	fsu.copyFileSync(path.join(repositoryRoot, ".agents", "context", "agents-rules.json"), path.join(fixture, ".agents", "context", "agents-rules.json"));
+	fsu.mkdirSync(path.join(fixture, "scripts"), { recursive: true });
+	fsu.writeFileSync(path.join(fixture, "scripts", "run-tests.cjs"), "// test entrypoint\n");
+	fsu.writeFileSync(path.join(fixture, "x.test.mjs"), "// test\n");
+	const admits = (command) => runGate(fixture, "Bash", { command }) === null;
+	for (const command of [
+		"npm test","npm run build","pnpm test","yarn lint","node --test x.test.mjs","node scripts/run-tests.cjs",
+		"git add -A","git commit -m x","git fetch origin","git merge upstream/main","git stash","git switch -c topic",
+		// Languages the allow-list never enumerated, which is why it was the wrong shape.
+		"pytest -q","cargo test","go test ./...","make build","ruff check .","mypy src","uv run pytest",
+		// Ordinary investigation and local work.
+		"gh issue view 332","gh pr list","curl -s https://example.com","aws s3 ls","docker compose up -d",
+		"jq '.a | .b' data.json","rg -n 'x|y' file","sed -n '1,20p' file","find . -name '*.json' 2>/dev/null | head",
+		"node -e \"process.exit(0)\"","ls $HOME","ffmpeg -i a.wav b.wav","tar -czf out.tgz dir","mkdir -p build",
+		// Deployment is delegated to this workspace, so publishing work upward is
+		// routine; only the forms that cannot be undone stay behind a contract.
+		"git push origin main","git tag v1.2.0","gh pr create --title x","gh issue comment 3 -b done",
+	]) {
+		assert.equal(admits(command), true, `an unbound session must be able to run: ${command}`);
+	}
+	for (const command of [
+		"git push --force origin main","git push --force-with-lease","git reset --hard HEAD~1","git clean -fd",
+		"git branch -D old","rm -rf packages","curl https://example.com -o x",
+		"ssh host deploy.sh","rsync -a data host:/backup","sudo systemctl restart nginx",
+		"npm publish","cargo publish","pip install requests","gh repo delete foo",
+		"docker push registry/img","kubectl apply -f x.yaml","terraform apply","gcloud run deploy svc",
+		"curl -X POST https://x -d y",
+		// A refused command must not be smuggled in behind an allowed one.
+		"npm test && rm -rf x","npm test; rm -rf x","pytest | rm -rf x",
+		// Substitution and interpreter -c hide the head the policy judges by.
+		"eval \"$(cat cmd)\"","bash -c \"rm -rf /\"","claude -p hi",
+	]) {
+		assert.equal(admits(command), false, `an unbound session must still be refused: ${command}`);
+	}
+	// Binding a contract must not cost the ability to verify the work. Before this,
+	// writing a contract in order to touch a governed file made npm test fail
+	// again because it was not in allowed_shell_commands.
+	const boundContract = {
+		id: "gate-probe", contract_digest: "a".repeat(64), goal: "g", scope: ["s"], non_goals: ["n"],
+		success_criteria: ["c"], allowed_paths: [".agents/context/**"], target_ownership: [".agents/context/**"],
+		audiences: ["a"], source_refs: ["r"], session_bindings: [{ session_id: "SESSION-1", contract_digest: "a".repeat(64) }],
+		progress_file: "p.json", allowed_shell_commands: ["node validator.mjs"],
+	};
+	const withContract = (reason) => (command) => gate.decide(
+		{ cwd: fixture, session_id: "SESSION-1", tool_name: "Bash", tool_input: { command } },
+		{ ...process.env, ADK_PROJECT_ROOT: "", AI_HARNESS: "", CLAUDE_HARNESS: "", CODEX_HARNESS: "" },
+		{ resolveHookProjectRoot: () => fixture, processCwd: fixture, resolveSessionContract: () => ({ status: contractCore.STATES.BOUND, projectRoot: fixture, reason, contract: boundContract }) },
+	) === null;
+	const boundAdmits = withContract("explicit");
+	for (const command of ["npm test", "git commit -m x", "node scripts/run-tests.cjs"]) {
+		assert.equal(boundAdmits(command), true, `a bound session must still be able to run: ${command}`);
+	}
+	for (const command of ["rm -rf packages", "curl https://example.com -o x"]) {
+		assert.equal(boundAdmits(command), false, `a bound session must still be refused: ${command}`);
+	}
+	// A delegated worker is the exception: its contract narrows the shell to its
+	// one validator on purpose, so the routine allowance must not reopen it.
+	const workerAdmits = withContract("derived_delegation_verified");
+	assert.equal(workerAdmits("npm test"), false, "a derived worker stays narrowed to its declared validator");
+	assert.equal(workerAdmits("node validator.mjs"), true, "the declared validator still runs");
+	fsu.rmSync(fixture, { recursive: true, force: true });
+}
+
+// This workspace requires independent adversarial review, and the reviewer is
+// invoked through skills/review-pass/scripts/invoke-reviewer.mjs. The nested
+// runtime check read the reviewer name out of --tool and refused the invoker, so
+// the required review could not run at all under enforcement.
+{
+	const fsr = require("node:fs");
+	const osr = require("node:os");
+	const fixture = fsr.mkdtempSync(path.join(osr.tmpdir(), "review-invoker-"));
+	fsr.mkdirSync(path.join(fixture, ".agents", "context"), { recursive: true });
+	fsr.copyFileSync(path.join(repositoryRoot, ".agents", "context", "agents-rules.json"), path.join(fixture, ".agents", "context", "agents-rules.json"));
+	const invoker = path.join(fixture, ".agents", "skills", "review-pass", "scripts");
+	fsr.mkdirSync(invoker, { recursive: true });
+	fsr.writeFileSync(path.join(invoker, "invoke-reviewer.mjs"), "// invoker\n");
+	const admits = (command) => runGate(fixture, "Bash", { command }) === null;
+	assert.equal(admits("node .agents/skills/review-pass/scripts/invoke-reviewer.mjs --tool codex --repo ."), true,
+		"the declared review invoker runs even though a reviewer name appears in its arguments");
+	assert.equal(admits("node .agents/skills/review-pass/scripts/invoke-reviewer.mjs --tool opencode --repo ."), true);
+	assert.equal(admits("node .agents/skills/review-pass/scripts/invoke-reviewer.mjs --tool codex && codex exec x"), false,
+		"a second command joined onto the invoker is not carried by the exemption");
+	assert.equal(admits("codex exec -m gpt-5.6-luna task"), false, "launching a runtime directly stays refused");
+	assert.equal(admits("bash -c 'opencode run task'"), false, "wrapping a runtime stays refused");
+	// The exemption itself must not be claimable by a script outside the project.
+	// (Whether such a command passes on ordinary grounds is a separate question:
+	// running a script is routine, and only the exemption is path-checked here.)
+	assert.equal(gate.reviewInvokerCommand("node /etc/passwd --tool codex", fixture), false,
+		"a script outside the project cannot claim the exemption");
+	assert.equal(gate.reviewInvokerCommand("node .agents/skills/review-pass/scripts/invoke-reviewer.mjs --tool codex", fixture), true);
+	fsr.rmSync(fixture, { recursive: true, force: true });
+}
+
+// The refusal tells the session to create and bind a contract, but only Write and
+// apply_patch reached the bootstrap path, so editing a contract the ordinary way
+// was refused by the same message that asked for it.
+{
+	const fse = require("node:fs");
+	const contractsDir = path.join(repositoryRoot, ".agents", "session-contracts");
+	const probePath = path.join(contractsDir, "gate-edit-probe.json");
+	const sid = "GATE-EDIT-PROBE";
+	const contract = {
+		schema_version: "1.0", id: "gate-edit-probe", status: "active", project_root: ".", goal: "probe",
+		scope: ["s"], non_goals: ["n"], success_criteria: ["c"], allowed_paths: ["packages/**"],
+		target_ownership: ["packages/**"], audiences: ["agent"], source_refs: ["USR:1"],
+		session_bindings: [{ session_id: sid, contract_digest: "" }],
+		progress_file: ".agents/progress/gate-edit-probe.json", contract_digest: "",
+	};
+	const seal = (value) => {
+		const copy = JSON.parse(JSON.stringify(value));
+		copy.contract_digest = ""; copy.session_bindings[0].contract_digest = "";
+		const digest = contractCore.contractDigest(copy);
+		copy.contract_digest = digest; copy.session_bindings[0].contract_digest = digest;
+		return copy;
+	};
+	const sealed = seal(contract);
+	fse.writeFileSync(probePath, JSON.stringify(sealed, null, 2));
+	try {
+		assert.equal(gate.bootstrapMutationAllowed("Write", { file_path: probePath, content: JSON.stringify(sealed) }, repositoryRoot, sid), true,
+			"writing a sealed contract that binds this session is admitted");
+		const updated = seal({ ...sealed, goal: "probe updated" });
+		const current = fse.readFileSync(probePath, "utf8");
+		assert.equal(gate.bootstrapMutationAllowed("Edit", { file_path: probePath, old_string: current, new_string: JSON.stringify(updated, null, 2) }, repositoryRoot, sid), true,
+			"editing that contract is admitted on the same terms as writing it");
+		assert.equal(gate.bootstrapMutationAllowed("Edit", { file_path: probePath, old_string: current, new_string: "{}" }, repositoryRoot, sid), false,
+			"an edit whose result is not a contract binding this session is refused");
+		assert.equal(gate.bootstrapMutationAllowed("Edit", { file_path: probePath, old_string: "absent", new_string: "x" }, repositoryRoot, sid), false);
+	} finally { fse.rmSync(probePath, { force: true }); }
+}
+
+// A project verifying its own work must not depend on which language it is
+// written in, nor on whether the session's working directory is the workspace
+// root or a submodule inside it.
+{
+	const submodule = path.join(repositoryRoot, "projects", "naia-agent");
+	const routine = (command, cwd) => gate.routineCommandAllowed("Bash", { command }, cwd);
+	for (const command of ["pytest -q", "cargo test", "go test ./...", "make test", "ruff check .", "npm test"]) {
+		assert.equal(routine(command, repositoryRoot), true, `root: ${command}`);
+		if (fs.existsSync(submodule)) assert.equal(routine(command, submodule), true, `submodule: ${command}`);
+	}
+	// Widening must not reach commands that install, publish or push.
+	for (const command of ["cargo publish", "go install ./...", "pip install requests", "git push --force origin main"]) {
+		assert.equal(routine(command, repositoryRoot), false, `root refuses: ${command}`);
+		if (fs.existsSync(submodule)) assert.equal(routine(command, submodule), false, `submodule refuses: ${command}`);
+	}
+	// The path boundary must hold through the shell too. Refusing an Edit to a
+	// hook while letting `touch` and `sed -i` reach the same file made it
+	// decorative: a session could rewrite the rules that govern it.
+	for (const command of [
+		"touch .claude/allow-outbound",
+		"sed -i s/a/b/ .agents/context/terminology.yaml",
+		"cp x .codex/hooks/gate.cjs",
+		"echo hi > CLAUDE.md",
+		"node scripts/gen.js --out .claude/settings.json",
+	]) assert.equal(routine(command, repositoryRoot), false, `governance write via shell: ${command}`);
+	// Reading governance is how a session learns its own rules, and a progress
+	// record is an account of work rather than authority.
+	for (const command of [
+		"cat .claude/settings.json",
+		"grep -rn foo .agents/context",
+		"node scripts/x.js .agents/progress/rec.json",
+	]) assert.equal(routine(command, repositoryRoot), true, `governance read stays open: ${command}`);
+
+	// The policy is deny-by-exception: routine unless a command is hard to undo.
+	const allowance = gate.routineAllowance(repositoryRoot);
+	assert.equal(allowance.default, "allow");
+	assert.ok(allowance.contract_required_subcommands.git.includes("reset"));
+	assert.ok(!allowance.contract_required_subcommands.git.includes("push"), "push is routine; only unrecoverable git forms are gated");
+	assert.ok(Object.values(allowance.contract_required_heads).flat().includes("rm"));
+}
+
+// Investigation chained with && was judged a mutation, and find's -o operator
+// was read as an output flag. Both refused ordinary inspection, and inspection
+// of governance paths then hit the path guard on top of that.
+{
+	const routine = (command) => gate.routineCommandAllowed("Bash", { command }, repositoryRoot);
+	for (const command of [
+		"pwd && sed -n '1,240p' .agents/context/agents-rules.json",
+		"wc -l .agents/context/agents-rules.json .agents/context/terminology.yaml",
+		"rg -n foo .agents/context/project-index.yaml && find projects -maxdepth 2 -name 'AGENTS.md' -o -name 'CLAUDE.md'",
+		"grep -o pattern file",
+	]) assert.equal(routine(command), true, `chained investigation must run: ${command}`);
+	for (const command of ["cat a && rm -rf b", "ls && sed -i s/a/b/ .agents/context/x.yaml", "curl https://x -o f"]) {
+		assert.equal(routine(command), false, `chaining must not smuggle a mutation: ${command}`);
+	}
+}
+
+// A contract whose stored digest stopped matching its content locked its owner
+// out: the session could neither repair the contract nor rebind the registry,
+// so only a human editing files by hand could release it.
+{
+	const owner = "SESSION-STALE-OWNER";
+	const broken = { schema_version: "1.0", id: "broken", status: "active", project_root: ".", goal: "g",
+		scope: ["s"], non_goals: ["n"], success_criteria: ["c"], allowed_paths: ["tmp/**"], target_ownership: ["tmp/**"],
+		audiences: ["a"], source_refs: ["r"], progress_file: "p.json",
+		session_bindings: [{ session_id: owner, contract_digest: "b".repeat(64) }], contract_digest: "b".repeat(64) };
+	assert.equal(gate.contractNamesSession(broken, owner), true, "ownership survives a broken digest");
+	assert.equal(gate.contractNamesSession(broken, "SOMEONE-ELSE"), false, "ownership is not granted to another session");
+	assert.equal(gate.contractNamesSession(null, owner), false);
+	assert.equal(gate.contractNamesSession({ session_bindings: "not-an-array" }, owner), false);
+}
+
+// A truncated write leaves the registry as broken JSON, every session resolves
+// to UNBOUND, and the fresh-registry rule then forbids restoring the peers — so
+// nobody can repair it and a human has to hand-edit the file. This happened
+// three times on 2026-08-18.
+{
+	const fsr = require("node:fs");
+	const osr = require("node:os");
+	const root = fsr.mkdtempSync(path.join(osr.tmpdir(), "registry-repair-"));
+	for (const dir of [[".agents", "session-contracts"], [".agents", "progress"], [".agents", "context"], [".git"]]) {
+		fsr.mkdirSync(path.join(root, ...dir), { recursive: true });
+	}
+	fsr.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+	fsr.copyFileSync(path.join(repositoryRoot, ".agents", "context", "agents-rules.json"), path.join(root, ".agents", "context", "agents-rules.json"));
+	const make = (id, session) => {
+		const base = { schema_version: "1.0", id, status: "active", project_root: ".", goal: "g", scope: ["s"],
+			non_goals: ["n"], success_criteria: ["c"], allowed_paths: ["tmp/**"], target_ownership: ["tmp/**"],
+			audiences: ["a"], source_refs: ["r"], session_bindings: [{ session_id: session }], progress_file: `.agents/progress/${id}.json` };
+		const digest = contractCore.contractDigest(base);
+		fsr.writeFileSync(path.join(root, ".agents", "session-contracts", `${id}.json`),
+			JSON.stringify({ ...base, contract_digest: digest, session_bindings: [{ session_id: session, contract_digest: digest }] }, null, 2));
+		fsr.writeFileSync(path.join(root, ".agents", "progress", `${id}.json`), JSON.stringify({ contract_id: id, contract_digest: digest }, null, 2));
+		return { contract_id: id, contract_path: `.agents/session-contracts/${id}.json`, contract_digest: digest };
+	};
+	const mine = make("mine", "ME");
+	const theirs = make("theirs", "PEER");
+	const registryPath = path.join(root, ".agents", "session-contracts", ".session-map.json");
+	const intact = { schema_version: "1.0", bindings: { ME: mine, PEER: theirs } };
+	const admits = (value) => gate.bootstrapWriteAllowed("Write", { file_path: registryPath, content: JSON.stringify(value, null, 2) }, root, "ME");
+
+	fsr.writeFileSync(registryPath, '{"schema_version":"1.0","bindings":{ truncated');
+	assert.equal(admits(intact), true, "a session must be able to repair a damaged registry");
+	const tampered = JSON.parse(JSON.stringify(intact));
+	tampered.bindings.PEER.contract_digest = "f".repeat(64);
+	assert.equal(admits(tampered), false, "repair must not rewrite another session's binding");
+	const invented = JSON.parse(JSON.stringify(intact));
+	invented.bindings.GHOST = { contract_id: "ghost", contract_path: ".agents/session-contracts/ghost.json", contract_digest: "a".repeat(64) };
+	assert.equal(admits(invented), false, "repair must not invent a binding");
+
+	// With no file at all this is a first write, not a repair: only your own binding.
+	fsr.unlinkSync(registryPath);
+	assert.equal(admits({ schema_version: "1.0", bindings: { ME: mine } }), true);
+	assert.equal(admits(intact), false, "a fresh registry may not be seeded with other sessions");
+	fsr.rmSync(root, { recursive: true, force: true });
+}
+
+// target_ownership exists so two sessions do not edit the same files, not to
+// shrink what one session may touch. Read as a whitelist it made a bound session
+// narrower than an unbound one — binding a contract cost the ability to create
+// an ordinary file the session could have created a moment earlier.
+{
+	const outside = (p) => gate.ordinaryTargetOutsideContract(p, repositoryRoot, "NOT-A-BOUND-SESSION");
+	for (const target of ["scratchpad/tmp.txt", "docs/note.md", "packages/benchmark-contract/src/new.mjs"]) {
+		assert.equal(outside(target), true, `ordinary file outside the contract: ${target}`);
+	}
+	for (const target of [".agents/context/terminology.yaml", ".claude/settings.json", "CLAUDE.md",
+		".agents/session-contracts/x.json", ".agents/progress/x.json", "/tmp/outside.md"]) {
+		assert.equal(outside(target), false, `still governed or out of project: ${target}`);
+	}
+	// A nested ADK project governs itself; work there happens inside it.
+	const nested = fs.readdirSync(path.join(repositoryRoot, "projects"), { withFileTypes: true })
+		.filter((entry) => entry.isDirectory() && fs.existsSync(path.join(repositoryRoot, "projects", entry.name, ".agents")))
+		.map((entry) => entry.name)[0];
+	if (nested) assert.equal(outside(`projects/${nested}/src/new.ts`), false, "a parent contract does not reach into a nested project");
+
+	// Whatever another active contract claims stays off limits.
+	const contractsDir = path.join(repositoryRoot, ".agents", "session-contracts");
+	const owned = fs.readdirSync(contractsDir)
+		.filter((name) => name.endsWith(".json") && !name.startsWith(".") && name !== "schema.json")
+		.map((name) => { try { return JSON.parse(fs.readFileSync(path.join(contractsDir, name), "utf8")); } catch { return null; } })
+		.find((contract) => contract?.status === "active" && (contract.target_ownership || []).length > 0);
+	if (owned) {
+		const claimed = String(owned.target_ownership[0]).replace(/\*\*$/, "probe.txt").replace(/\/$/, "");
+		assert.equal(outside(claimed), false, "another contract's ownership is respected");
+	}
+}
+
+{
+	// 일이 바뀌어 계약을 다시 쓰는 흐름 전체가 실제로 통과해야 한다.
+	//
+	// 계약과 progress 를 새 digest 로 바꾸면 그 순간 registry 는 아직 옛 digest 를
+	// 가리키므로 세션이 STALE 이 된다. registry 쓰기가 그때 막히면 그것을 고칠
+	// 유일한 쓰기가 거부되어 세션이 영원히 나오지 못한다.
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "session-contract-rebind-"));
+	try {
+		writeJson(path.join(root, ".agents", "context", "agents-rules.json"), {});
+		writeJson(path.join(root, ".codex", "hooks.json"), {});
+		bind(root);
+		const contractPath = path.join(root, ".agents", "session-contracts", "gate-contract.json");
+		const next = JSON.parse(fs.readFileSync(contractPath, "utf8"));
+		next.goal = "scope changed by a new user directive";
+		next.scope = [...next.scope, "extra.txt"];
+		next.allowed_paths = [...next.allowed_paths, "extra.txt"];
+		next.target_ownership = [...next.target_ownership, "extra.txt"];
+		delete next.contract_digest;
+		for (const binding of next.session_bindings) delete binding.contract_digest;
+		const digest = contractCore.contractDigest(next);
+		next.contract_digest = digest;
+		for (const binding of next.session_bindings) binding.contract_digest = digest;
+
+		const steps = [
+			[contractPath, next],
+			[path.join(root, ".agents", "progress", "gate.json"), { contract_id: next.id, contract_digest: digest, current_phase: "build" }],
+			[path.join(root, ".agents", "session-contracts", ".session-map.json"), { schema_version: "1.0", bindings: { "SESSION-1": { contract_id: next.id, contract_path: ".agents/session-contracts/gate-contract.json", contract_digest: digest } } }],
+		];
+		for (const [filePath, value] of steps) {
+			const content = JSON.stringify(value, null, 2);
+			assert.equal(
+				runGate(root, "Write", { file_path: filePath, content }, {}, root),
+				null,
+				`rebinding must stay open at ${path.basename(filePath)}`,
+			);
+			fs.writeFileSync(filePath, content);
+		}
+
+		// 그러면서도 남의 바인딩은 여전히 건드릴 수 없어야 한다.
+		const peer = { schema_version: "1.0", bindings: {
+			"SESSION-1": { contract_id: next.id, contract_path: ".agents/session-contracts/gate-contract.json", contract_digest: digest },
+			"SESSION-2": { contract_id: next.id, contract_path: ".agents/session-contracts/gate-contract.json", contract_digest: digest },
+		} };
+		assert.notEqual(
+			runGate(root, "Write", { file_path: path.join(root, ".agents", "session-contracts", ".session-map.json"), content: JSON.stringify(peer, null, 2) }, {}, root),
+			null,
+			"a session must not write another session's binding while rebinding its own",
+		);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+}
+
+// A resolved shared-registry conflict used to be impossible to stage: the file
+// write validator accepted the semantic union, but generic git-add protection
+// then blocked the index transition that marks the conflict resolved.
+{
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "registry-conflict-add-"));
+	try {
+		writeJson(path.join(root, ".agents", "context", "agents-rules.json"), {});
+		writeJson(path.join(root, ".codex", "hooks.json"), {});
+		bind(root);
+		const makePeer = (id, session) => {
+			const contract = { schema_version: "1.0", id, status: "active", project_root: ".", goal: "g",
+				scope: ["s"], non_goals: ["n"], success_criteria: ["c"], allowed_paths: ["tmp/**"],
+				target_ownership: ["tmp/**"], audiences: ["a"], source_refs: ["r"],
+				session_bindings: [{ session_id: session }], progress_file: `.agents/progress/${id}.json` };
+			const digest = contractCore.contractDigest(contract);
+			contract.contract_digest = digest;
+			contract.session_bindings[0].contract_digest = digest;
+			writeJson(path.join(root, ".agents", "session-contracts", `${id}.json`), contract);
+			writeJson(path.join(root, ".agents", "progress", `${id}.json`), { contract_id: id, contract_digest: digest });
+			return { contract_id: id, contract_path: `.agents/session-contracts/${id}.json`, contract_digest: digest };
+		};
+		const peer = makePeer("peer", "PEER");
+		const other = makePeer("other", "OTHER");
+		const stalePeerPath = path.join(root, ".agents", "session-contracts", "peer.json");
+		const stalePeer = JSON.parse(fs.readFileSync(stalePeerPath, "utf8"));
+		stalePeer.goal = "legacy contract drift must not prevent preserving its unchanged pointer";
+		writeJson(stalePeerPath, stalePeer);
+		const registryPath = path.join(root, ".agents", "session-contracts", ".session-map.json");
+		const base = JSON.parse(fs.readFileSync(registryPath, "utf8"));
+		const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe" });
+		git("init", "-b", "main");
+		git("config", "user.email", "gate-test@example.invalid");
+		git("config", "user.name", "Gate Test");
+		git("add", ".");
+		git("commit", "-m", "base");
+		git("switch", "-c", "peer");
+		writeJson(registryPath, { schema_version: "1.0", bindings: { ...base.bindings, PEER: peer } });
+		git("add", ".agents/session-contracts/.session-map.json");
+		git("commit", "-m", "peer");
+		git("switch", "main");
+		writeJson(registryPath, { schema_version: "1.0", bindings: { ...base.bindings, OTHER: other } });
+		git("add", ".agents/session-contracts/.session-map.json");
+		git("commit", "-m", "other");
+		try { git("merge", "peer"); } catch { /* expected content conflict */ }
+
+		const union = { schema_version: "1.0", bindings: { ...base.bindings, OTHER: other, PEER: peer } };
+		writeJson(registryPath, union);
+		assert.equal(
+			runGate(root, "Bash", { command: "git add .agents/session-contracts/.session-map.json" }, {}, root),
+			null,
+			"a valid semantic union may resolve the exact unmerged registry",
+		);
+		assert.equal(
+			runGate(root, "Bash", { command: "git add .agents/session-contracts/.session-map.json product.txt" }, {}, root)?.decision,
+			"block",
+			"the conflict exception must not stage extra targets",
+		);
+		const dropped = JSON.parse(JSON.stringify(union));
+		delete dropped.bindings.PEER;
+		writeJson(registryPath, dropped);
+		assert.equal(
+			runGate(root, "Bash", { command: "git add .agents/session-contracts/.session-map.json" }, {}, root)?.decision,
+			"block",
+			"the conflict exception must preserve bindings from both index parents",
+		);
+		const tampered = JSON.parse(JSON.stringify(union));
+		tampered.bindings.PEER.contract_digest = "f".repeat(64);
+		writeJson(registryPath, tampered);
+		assert.equal(
+			runGate(root, "Bash", { command: "git add .agents/session-contracts/.session-map.json" }, {}, root)?.decision,
+			"block",
+			"the conflict exception must reject a tampered peer binding",
+		);
+		writeJson(registryPath, union);
+		git("add", ".agents/session-contracts/.session-map.json");
+		assert.equal(
+			runGate(root, "Bash", { command: "git add .agents/session-contracts/.session-map.json" }, {}, root)?.decision,
+			"block",
+			"the shared registry must remain blocked when it is not unmerged",
+		);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+}
+
+console.log("session contract gate parity: PASS");
 } finally {
 	fs.rmSync(fixture, { recursive: true, force: true });
+}
+
+// 2026-08-21: `status: "active"` 는 의도의 기록이지 존재의 증거가 아니다.
+// 죽은 세션이 남긴 계약이 선언한 경로를 영원히 잠가서, 네 세션이 연달아 같은
+// 파일에서 죽었다. 각 세션은 거부 문구가 시키는 대로 인계하고 재결박하고 다시
+// 시도했고, 매번 다시 거부당했다. 잡고 있던 것은 경쟁 세션이 아니라 그 유령이었다.
+{
+	const os = require("node:os");
+	const crypto = require("node:crypto");
+	const gate = require("./session-contract-gate.cjs");
+
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-ghost-"));
+	fs.mkdirSync(path.join(root, ".agents", "context"), { recursive: true });
+	fs.writeFileSync(path.join(root, ".agents", "context", "agents-rules.json"), "{}");
+	const contractsDir = path.join(root, ".agents", "session-contracts");
+	fs.mkdirSync(path.join(contractsDir, ".recovery", "leases"), { recursive: true });
+
+	const owned = "packages/shell/src/components/AdkSetupScreen.tsx";
+	const target = path.join(root, owned);
+	// 세션 id 는 실행 시에 만든다. 상수로 적으면 그 문자열이 이 테스트를 띄운
+	// 셸의 명령줄에 남아, 생존 탐침이 자기 자신에 매칭돼 통과가 거짓이 된다.
+	const mine = crypto.randomUUID();
+	const writeOwner = (sessionId) => fs.writeFileSync(
+		path.join(contractsDir, "ghost.json"),
+		JSON.stringify({ id: "ghost", status: "active", session_bindings: [{ session_id: sessionId }], target_ownership: [owned] }),
+	);
+
+	writeOwner(crypto.randomUUID());
+	assert.equal(
+		gate.foreignOwnedTarget(target, root, contractsDir, mine),
+		false,
+		"버려진 계약은 경로를 잠그지 못한다",
+	);
+
+	const live = crypto.randomUUID();
+	writeOwner(live);
+	fs.writeFileSync(
+		path.join(contractsDir, ".recovery", "leases", `${live}.json`),
+		JSON.stringify({ state: "active", updated_at: new Date().toISOString() }),
+	);
+	assert.equal(
+		gate.foreignOwnedTarget(target, root, contractsDir, mine),
+		true,
+		"살아 있는 세션의 소유는 그대로 지켜진다",
+	);
+
+	// A stale lease that still carries a recorded host_process (SessionStart always
+	// records one) must not hold ground once that PID is gone. Before the fix the
+	// gate fell to a full Win32_Process command-line scan that times out under load
+	// and fails closed, so this orphan stayed "held" every day. The targeted PID
+	// probe settles it: a dead recorded PID reads as gone, and the path is free.
+	const staleRecorded = crypto.randomUUID();
+	writeOwner(staleRecorded);
+	fs.writeFileSync(
+		path.join(contractsDir, ".recovery", "leases", `${staleRecorded}.json`),
+		JSON.stringify({ state: "active", updated_at: new Date(0).toISOString(), host_process: { pid: 2147483646, start_token: "dead" } }),
+	);
+	assert.equal(
+		gate.foreignOwnedTarget(target, root, contractsDir, mine),
+		false,
+		"기록된 host_process 의 PID 가 죽었으면 오래된 lease 는 경로를 잠그지 못한다",
+	);
+
+	fs.rmSync(root, { recursive: true, force: true });
+	console.log("abandoned contract does not hold ground: PASS");
 }
