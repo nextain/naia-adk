@@ -14,6 +14,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 const { STATES, orchestratorFallbackAccess, resolveSessionContract } = require("./session-contract.js");
+const harnessSwitch = require("./harness-switch.js");
 
 const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
 const HARNESS_OFF_VALUES = new Set(["off", "0", "false", "no"]);
@@ -53,8 +54,8 @@ function codexDevelopmentProfile(projectRoot, env) {
 	);
 	const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
 	if (
-		catalog.schema_revision !== "development-composition-profiles-v2" ||
-		catalog.status !== "active_codex_default_no_total_cost_claim" ||
+		catalog.schema_revision !== "development-composition-profiles-v3" ||
+		catalog.status !== "active_balanced_default_no_total_cost_claim" ||
 		catalog.default_profile !== "balanced" ||
 		catalog.fallback_profile !== "control" ||
 		catalog.activation?.codex_bound_sessions?.mode !== "default_active" ||
@@ -78,7 +79,7 @@ function codexDevelopmentProfile(projectRoot, env) {
 	const profileId = override || catalog.default_profile;
 	const selectedProfile = catalog.profiles.find((profile) => profile.id === profileId);
 	if (!selectedProfile) {
-		throw new Error(`unknown Codex development profile ${profileId}`);
+		throw new Error(`unknown development profile ${profileId}`);
 	}
 	const availabilityName = catalog.activation.codex_bound_sessions.available_bindings_env;
 	const rawAvailability = Object.prototype.hasOwnProperty.call(env, availabilityName)
@@ -106,7 +107,7 @@ function codexDevelopmentProfile(projectRoot, env) {
 		.sort();
 	if (unavailableBindings.length > 0) {
 		throw new Error(
-			`Codex development profile ${profileId} is unavailable; missing bindings: ${unavailableBindings.join(", ")}`,
+			`development profile ${profileId} is unavailable; missing bindings: ${unavailableBindings.join(", ")}`,
 		);
 	}
 	const catalogDigest = crypto
@@ -194,7 +195,9 @@ function buildSessionInject(opts) {
 	// Opt-out: env var or marker file
 	const envFlag = (env[optOutEnvVar] || "").trim().toLowerCase();
 	if (HARNESS_OFF_VALUES.has(envFlag)) return null;
-	if (fs.existsSync(path.join(cwd, hostConfigDir, "no-harness"))) return null;
+	// Walks upward: a marker at the repository root also disables enforcement
+	// for a session whose cwd is a sub-project.
+	if (harnessSwitch.findHarnessMarker({ cwd, configDirs: [hostConfigDir] })) return null;
 
 	const resolution = resolveSessionContract({
 		cwd,

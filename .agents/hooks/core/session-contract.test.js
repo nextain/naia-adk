@@ -166,6 +166,31 @@ try {
 	assert.equal(core.validateSubagentPolicy(validPolicy), null);
 	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "control" }), null);
 	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "economy" }), "invalid_subagent_policy_mode");
+	// Eligibility follows the catalog's declared postures, so a Claude or
+	// cross-provider counterpart of an eligible posture is accepted while the
+	// experimental and disabled ones stay out.
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "claude-balanced" }), null);
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "claude-control" }), null);
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "mixed-balanced" }), null);
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "claude-economy" }), "invalid_subagent_policy_mode");
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "mixed-economy" }), "invalid_subagent_policy_mode");
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "delegated" }), "invalid_subagent_policy_mode");
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "nonexistent-profile" }), "invalid_subagent_policy_mode");
+	// An unreadable catalog must refuse delegation rather than fall back to a set
+	// that could contradict the policy it claims to derive from.
+	assert.deepEqual([...core.delegationEligibleProfiles(path.join(os.tmpdir(), "no-such-development-profile-catalog.json"))], []);
+	assert.ok(core.delegationEligibleProfiles().has("balanced"), "a readable catalog still yields its declared eligible profiles");
+	// A guard exists to keep unbounded work from running unattended, so a contract
+	// may relax a named condition. The names come from the catalog, which is what
+	// keeps a typo from silently reading as no relaxation at all.
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, guard_relaxations: ["exact_validator"] }), null);
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, guard_relaxations: ["exact_validator", "risk_ceiling"] }), null);
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, guard_relaxations: [] }), null);
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, guard_relaxations: ["make_it_work"] }), "invalid_subagent_policy_guard_relaxations");
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, guard_relaxations: ["exact_validator", "exact_validator"] }), "invalid_subagent_policy_guard_relaxations");
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, guard_relaxations: "exact_validator" }), "invalid_subagent_policy_guard_relaxations");
+	assert.ok(core.allowedGuardRelaxations().has("exact_validator"));
+	assert.deepEqual([...core.allowedGuardRelaxations(path.join(os.tmpdir(), "no-such-development-profile-catalog.json"))], []);
 	assert.equal(core.validateSubagentPolicy(undefined), null);
 	assert.equal(core.validateSubagentPolicy(null), "invalid_subagent_policy");
 	assert.equal(core.validateSubagentPolicy({ ...validPolicy, maximum_risk: "high" }), "invalid_subagent_policy_maximum_risk");
@@ -401,6 +426,26 @@ try {
 		X: { contract_id: "external", contract_path: path.join(parent, parentContract.contractPath), contract_digest: parentContract.digest },
 	});
 	assert.equal(core.resolveSessionContract({ cwd: crossRoot, sessionId: "X" }).status, core.STATES.CROSS_PROJECT);
+
+	// A truncated write leaves a dangling comma where an entry used to be. The
+	// registry then fails to parse, every session falls to UNBOUND, and work in
+	// the repository stops until a human edits the file. Dropping a comma cannot
+	// change what the registry says, so reading must survive it.
+	{
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "registry-lenient-"));
+		const file = path.join(dir, "map.json");
+		fs.writeFileSync(file, '{\n "schema_version":"1.0",\n "bindings":{\n  "A":{"contract_id":"x"},\n  \n }\n}');
+		const repaired = core.readRepairedRegistry(file);
+		assert.ok(repaired && repaired.bindings && repaired.bindings.A, "a dangling comma must not hide the registry");
+		assert.equal(repaired.schema_version, "1.0");
+		// The file itself is untouched: this restores service, not the file.
+		assert.throws(() => JSON.parse(fs.readFileSync(file, "utf8")));
+		fs.writeFileSync(file, '{"a":1}');
+		assert.equal(core.readRepairedRegistry(file), null, "valid JSON needs no repair path");
+		fs.writeFileSync(file, "{ not json at all");
+		assert.equal(core.readRepairedRegistry(file), null, "real damage still reads as missing");
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 
 	console.log("session contract resolver: PASS");
 } finally {

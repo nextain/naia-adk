@@ -1,6 +1,6 @@
 {
- "schema_revision": "development-composition-profiles-v2",
- "status": "active_codex_default_no_total_cost_claim",
+ "schema_revision": "development-composition-profiles-v3",
+ "status": "active_balanced_default_no_total_cost_claim",
  "default_profile": "balanced",
  "fallback_profile": "control",
  "activation": {
@@ -21,6 +21,7 @@
  "bindings": {
   "sol": {
    "adapter": "codex",
+   "provider": "codex",
    "model": "gpt-5.6-sol",
    "default_reasoning_effort": "medium",
    "allowed_reasoning_efforts": [
@@ -31,11 +32,13 @@
   },
   "terra": {
    "adapter": "codex",
+   "provider": "codex",
    "model": "gpt-5.6-terra",
    "qualification": "bounded_worker_development_calibration"
   },
   "luna": {
    "adapter": "codex",
+   "provider": "codex",
    "model": "gpt-5.6-luna",
    "default_reasoning_effort": "medium",
    "allowed_reasoning_efforts": [
@@ -45,10 +48,51 @@
    ],
    "qualification": "bounded_exact_validated_implementation_smoke_8_of_9"
   },
+  "claude_flagship": {
+   "adapter": "claude_cli",
+   "provider": "claude",
+   "model": "opus",
+   "model_selection": "resolved alias; never a dated model id",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium",
+    "high"
+   ],
+   "qualification": "subscription_covered_cli_analysis_design_review"
+  },
+  "claude_workhorse": {
+   "adapter": "claude_cli",
+   "provider": "claude",
+   "model": "sonnet",
+   "model_selection": "resolved alias; never a dated model id",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "low",
+    "medium",
+    "max"
+   ],
+   "qualification": "subscription_covered_cli_bounded_implementation"
+  },
+  "claude_light": {
+   "adapter": "claude_cli",
+   "provider": "claude",
+   "model": "haiku",
+   "model_selection": "resolved alias; never a dated model id",
+   "default_reasoning_effort": "low",
+   "allowed_reasoning_efforts": [
+    "low"
+   ],
+   "qualification": "subscription_covered_cli_mechanical_and_translation"
+  },
   "implementation_worker": {
    "adapter": "optional_external_runtime",
+   "provider": "deployment_local",
    "profile_identity": "deployment_local_implementation_worker",
    "activation": "explicit_available_binding_only",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium"
+   ],
    "qualification": "requires_separate_local_configuration_and_evidence",
    "qualification_evidence": "signed_deployment_local_receipt_v1",
    "receipt_algorithm": "ed25519",
@@ -57,77 +101,334 @@
    "rollback_binding": "sol"
   }
  },
- "balanced_role_policy": {
-  "secretary": {
-   "binding": "luna",
-   "default_reasoning_effort": "max",
-   "allowed_reasoning_efforts": [
-    "max"
-   ]
+ "host_families": {
+  "_doc": "Which subscription base a profile runs on. Tiers map to that base's bindings; every tier a posture references must exist here.",
+  "codex": {
+   "flagship": "sol",
+   "workhorse": "luna",
+   "light": "luna",
+   "optional_worker": "implementation_worker"
   },
-  "issue_leader": {
-   "binding": "luna",
-   "default_reasoning_effort": "max",
-   "allowed_reasoning_efforts": [
-    "max"
-   ]
+  "claude": {
+   "flagship": "claude_flagship",
+   "workhorse": "claude_workhorse",
+   "light": "claude_light"
   },
-  "explorer": {
-   "binding": "luna",
-   "default_reasoning_effort": "low",
-   "allowed_reasoning_efforts": [
-    "low"
-   ]
-  },
-  "analysis": {
-   "binding": "sol",
-   "default_reasoning_effort": "medium",
-   "allowed_reasoning_efforts": [
-    "medium"
-   ]
-  },
-  "design": {
-   "binding": "sol",
-   "default_reasoning_effort": "medium",
-   "allowed_reasoning_efforts": [
-    "medium"
-   ]
-  },
-  "review": {
-   "binding": "sol",
-   "default_reasoning_effort": "medium",
-   "allowed_reasoning_efforts": [
-    "medium"
-   ]
-  },
-  "implementation": {
-   "binding": "luna",
-   "default_reasoning_effort": "medium",
-   "allowed_reasoning_efforts": [
-    "medium"
-   ]
-  },
-  "test": {
-   "binding": "luna",
-   "default_reasoning_effort": "low",
-   "allowed_reasoning_efforts": [
-    "low"
-   ]
-  },
-  "generic_worker": {
-   "binding": "luna",
-   "default_reasoning_effort": "medium",
-   "allowed_reasoning_efforts": [
-    "medium"
-   ]
-  },
-  "translation": {
-   "binding": "luna",
-   "default_reasoning_effort": "low",
-   "allowed_reasoning_efforts": [
-    "low"
-   ]
+  "mixed": {
+   "_doc": "Production runs on one provider and adversarial review on another, so review does not inherit the producer's correlated blind spots.",
+   "flagship": "claude_flagship",
+   "workhorse": "luna",
+   "light": "luna"
   }
+ },
+ "role_policies": {
+  "_doc": "Role to tier and reasoning effort, independent of provider. A profile's assignments are derived from its posture entry here plus its host family tier map.",
+  "control": {
+   "secretary": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "issue_leader": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "explorer": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "analysis": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "design": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "review": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "implementation": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "test": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "generic_worker": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "translation": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   }
+  },
+  "balanced": {
+   "secretary": {
+    "tier": "workhorse",
+    "default_reasoning_effort": "max",
+    "allowed_reasoning_efforts": [
+     "max"
+    ]
+   },
+   "issue_leader": {
+    "tier": "workhorse",
+    "default_reasoning_effort": "max",
+    "allowed_reasoning_efforts": [
+     "max"
+    ]
+   },
+   "explorer": {
+    "tier": "light",
+    "default_reasoning_effort": "low",
+    "allowed_reasoning_efforts": [
+     "low"
+    ]
+   },
+   "analysis": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "design": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "review": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "implementation": {
+    "tier": "workhorse",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "test": {
+    "tier": "light",
+    "default_reasoning_effort": "low",
+    "allowed_reasoning_efforts": [
+     "low"
+    ]
+   },
+   "generic_worker": {
+    "tier": "workhorse",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "translation": {
+    "tier": "light",
+    "default_reasoning_effort": "low",
+    "allowed_reasoning_efforts": [
+     "low"
+    ]
+   }
+  },
+  "economy": {
+   "secretary": {
+    "tier": "workhorse",
+    "default_reasoning_effort": "max",
+    "allowed_reasoning_efforts": [
+     "max"
+    ]
+   },
+   "issue_leader": {
+    "tier": "workhorse",
+    "default_reasoning_effort": "max",
+    "allowed_reasoning_efforts": [
+     "max"
+    ]
+   },
+   "explorer": {
+    "tier": "light",
+    "default_reasoning_effort": "low",
+    "allowed_reasoning_efforts": [
+     "low"
+    ]
+   },
+   "analysis": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "design": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "review": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "implementation": {
+    "tier": "workhorse",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "test": {
+    "tier": "light",
+    "default_reasoning_effort": "low",
+    "allowed_reasoning_efforts": [
+     "low"
+    ]
+   },
+   "generic_worker": {
+    "tier": "workhorse",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "translation": {
+    "tier": "light",
+    "default_reasoning_effort": "low",
+    "allowed_reasoning_efforts": [
+     "low"
+    ]
+   }
+  },
+  "delegated": {
+   "secretary": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium",
+     "high"
+    ]
+   },
+   "issue_leader": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium",
+     "high"
+    ]
+   },
+   "explorer": {
+    "tier": "optional_worker",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "analysis": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium",
+     "high"
+    ]
+   },
+   "design": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium",
+     "high"
+    ]
+   },
+   "review": {
+    "tier": "flagship",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium",
+     "high"
+    ]
+   },
+   "implementation": {
+    "tier": "optional_worker",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "medium"
+    ]
+   },
+   "test": {
+    "tier": "light",
+    "default_reasoning_effort": "low",
+    "allowed_reasoning_efforts": [
+     "low",
+     "medium",
+     "max"
+    ]
+   },
+   "generic_worker": {
+    "tier": "light",
+    "default_reasoning_effort": "medium",
+    "allowed_reasoning_efforts": [
+     "low",
+     "medium",
+     "max"
+    ]
+   },
+   "translation": {
+    "tier": "light",
+    "default_reasoning_effort": "low",
+    "allowed_reasoning_efforts": [
+     "low",
+     "medium",
+     "max"
+    ]
+   }
+  }
+ },
+ "delegation_policy": {
+  "_doc": "Which postures a session contract may declare for delegated subagent work. Experimental postures stay out until their evidence gate clears, and a disabled profile is never eligible regardless of posture.",
+  "eligible_postures": [
+   "control",
+   "balanced"
+  ]
  },
  "delegation_context": {
   "brief_mode": "isolated_bounded",
@@ -144,6 +445,8 @@
  "profiles": [
   {
    "id": "control",
+   "host_family": "codex",
+   "posture": "control",
    "activation": "active",
    "reasoning_effort": "medium",
    "purpose": "Manually selected quality/reference and reversible rollback profile; never an automatic per-task model fallback",
@@ -160,6 +463,8 @@
   },
   {
    "id": "balanced",
+   "host_family": "codex",
+   "posture": "balanced",
    "purpose": "Default Codex profile: Luna Max leads L3/L2, Luna executes bounded work, and separate Sol Medium sessions analyze, design, and review",
    "assignments": {
     "orchestrator": "luna",
@@ -174,6 +479,8 @@
   },
   {
    "id": "economy",
+   "host_family": "codex",
+   "posture": "economy",
    "purpose": "Experimental extension of balanced using Luna only behind exact validation",
    "assignments": {
     "orchestrator": "luna",
@@ -188,6 +495,8 @@
   },
   {
    "id": "delegated",
+   "host_family": "codex",
+   "posture": "delegated",
    "activation": "disabled_until_runtime_issuance_and_verification",
    "purpose": "Optional additional-provider profile: Sol retains orchestration and integration while a replaceable qualified binding performs bounded implementation",
    "assignments": {
@@ -200,32 +509,142 @@
      "sol"
     ]
    }
+  },
+  {
+   "id": "claude-control",
+   "host_family": "claude",
+   "posture": "control",
+   "activation": "active",
+   "reasoning_effort": "medium",
+   "purpose": "Claude-only quality/reference and rollback profile for sessions whose subscription base is Claude",
+   "assignments": {
+    "orchestrator": "claude_flagship",
+    "integrator": "claude_flagship",
+    "bounded_worker": "claude_flagship",
+    "mechanical_worker": "claude_flagship",
+    "tester": "claude_flagship",
+    "reviewer_pool": [
+     "claude_flagship"
+    ]
+   }
+  },
+  {
+   "id": "claude-balanced",
+   "host_family": "claude",
+   "posture": "balanced",
+   "purpose": "Claude-only default: the workhorse model leads L3/L2 and executes bounded work while separate flagship sessions analyze, design, and review",
+   "assignments": {
+    "orchestrator": "claude_workhorse",
+    "integrator": "claude_workhorse",
+    "bounded_worker": "claude_workhorse",
+    "mechanical_worker": "claude_workhorse",
+    "tester": "claude_light",
+    "reviewer_pool": [
+     "claude_flagship"
+    ]
+   }
+  },
+  {
+   "id": "claude-economy",
+   "host_family": "claude",
+   "posture": "economy",
+   "purpose": "Claude-only experimental extension of the balanced posture behind exact validation",
+   "assignments": {
+    "orchestrator": "claude_workhorse",
+    "integrator": "claude_workhorse",
+    "bounded_worker": "claude_workhorse",
+    "mechanical_worker": "claude_workhorse",
+    "tester": "claude_light",
+    "reviewer_pool": [
+     "claude_flagship"
+    ]
+   }
+  },
+  {
+   "id": "mixed-balanced",
+   "host_family": "mixed",
+   "posture": "balanced",
+   "purpose": "Both subscriptions present: Codex Luna produces while a separate Claude flagship session reviews, so adversarial review does not share the producer's provider",
+   "assignments": {
+    "orchestrator": "luna",
+    "integrator": "luna",
+    "bounded_worker": "luna",
+    "mechanical_worker": "luna",
+    "tester": "luna",
+    "reviewer_pool": [
+     "claude_flagship"
+    ]
+   }
+  },
+  {
+   "id": "mixed-economy",
+   "host_family": "mixed",
+   "posture": "economy",
+   "purpose": "Cross-provider extension of the economy posture behind exact validation",
+   "assignments": {
+    "orchestrator": "luna",
+    "integrator": "luna",
+    "bounded_worker": "luna",
+    "mechanical_worker": "luna",
+    "tester": "luna",
+    "reviewer_pool": [
+     "claude_flagship"
+    ]
+   }
   }
  ],
  "guards": {
+  "_doc": "Risk grades are defined in .agents/context/terminology.yaml under definitions.delegation: the grade measures the cost of undoing the task, not its difficulty, and a brief accepts low and medium only. These conditions apply by tier in both layers: the role selector and the delegation spawn gate in .codex/hooks/subagent-spawn-guard.cjs derive them from the selected profile's tier for that role. A flagship binding is exempt, and the optional external worker keeps its signed-receipt qualification instead. Bounded roles map to bounded_worker and generic_worker maps to mechanical_worker.",
+  "risk_floor": {
+   "_doc": "The declared grade is the brief author's own word, so the ceilings above only constrain a caller that already agrees with them. These rules derive a floor from what can be observed in the brief and the parent contract, and a declaration below its floor is refused. They cannot prove a grade is right; they stop it from being lower than the evidence allows. A path leaving the project root is not among them because the ownership pattern check rejects absolute paths and parent references before this runs, and a rule that cannot be reached is worse than no rule. The floor also applies on the unbound operator opt-in path, so that marker is not an unnamed way around it.",
+   "missing_validator_floor": "medium",
+   "authority_path_floor": "medium",
+   "authority_paths": [
+    ".agents/context/",
+    ".agents/hooks/",
+    ".agents/session-contracts/",
+    ".claude/hooks/",
+    ".codex/hooks/",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md"
+   ]
+  },
+  "guard_relaxation": {
+   "_doc": "A guard exists to keep unbounded work from running unattended, not to stop authorized work. When a condition blocks a task the owner judges safe, it can be relaxed explicitly and visibly rather than worked around: name the conditions in the bound contract's subagent_policy.guard_relaxations, or for one session in the override environment variable. Silent bypass is never a path; an unrecognized name is rejected.",
+   "allowed": [
+    "exact_validator",
+    "risk_ceiling",
+    "bounded_scope",
+    "risk_floor"
+   ],
+   "contract_field": "guard_relaxations",
+   "override_env": "CODEX_DEVELOPMENT_GUARD_RELAXATIONS"
+  },
   "bounded_worker": {
    "requires_bounded_scope": true,
    "maximum_risk": "medium",
-   "luna_requires_exact_validator": true,
-   "luna_fallback_binding": null,
+   "requires_exact_validator": true,
+   "tier_fallback_binding": null,
    "fallback_binding": null
   },
   "mechanical_worker": {
-   "luna_requires_exact_validator": true,
-   "luna_requires_bounded_scope": true,
-   "luna_maximum_risk": "low",
+   "requires_exact_validator": true,
+   "requires_bounded_scope": true,
+   "maximum_risk": "low",
    "fallback_binding": null
   },
   "review": {
    "different_session_required": true,
    "different_execution_required": true,
    "prefer_different_binding_from_producer": true,
+   "prefer_different_provider_from_producer": true,
    "fail_closed_without_independent_execution_identity": true,
    "fresh_session_required": true,
    "followup_reuse_forbidden": true,
    "runtime_enforcer": ".codex/hooks/subagent-spawn-guard.cjs"
   },
-  "sol_specialist": {
+  "flagship_specialist": {
    "roles": [
     "analysis",
     "design",
@@ -237,6 +656,12 @@
    "fresh_session_required": true,
    "followup_reuse_forbidden": true,
    "runtime_enforcer": ".codex/hooks/subagent-spawn-guard.cjs"
+  },
+  "cross_provider_review": {
+   "_doc": "Host families whose review tier must resolve to a provider other than the bounded worker's provider.",
+   "required_for_host_families": [
+    "mixed"
+   ]
   }
  },
  "claim_boundary": {
@@ -246,12 +671,15 @@
    "role_and_model_binding_are_separate",
    "unsafe_or_unqualified_balanced_tasks_fail_closed",
    "single_solution_default_remains_available",
-   "additional_provider_profile_is_opt_in"
+   "additional_provider_profile_is_opt_in",
+   "host_family_selection_follows_the_session_subscription_base",
+   "cross_provider_review_improves_review_independence"
   ],
   "forbidden_until_phase_2": [
    "proven_total_cost_reduction",
    "production_optimal_profile",
-   "global_model_superiority"
+   "global_model_superiority",
+   "proven_cross_provider_defect_detection_gain"
   ]
  }
 }

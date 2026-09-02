@@ -39,6 +39,7 @@ function workspace() {
 		".agents/hooks/core/request-contract-events.js",
 		".agents/hooks/core/request-contract-event-handler.js",
 		".agents/hooks/core/session-contract.js",
+		".agents/hooks/core/harness-switch.js",
 		".agents/hooks/core/subagent-failure-receipt.js",
 		".codex/hooks/session-inject.cjs",
 		".claude/hooks/session-inject.js",
@@ -230,7 +231,7 @@ function assertSilent(result, label) {
 			hostConfigDir: ".codex",
 			env: {},
 		}),
-		/Codex development profile balanced is unavailable; missing bindings: luna, sol/,
+		/development profile balanced is unavailable; missing bindings: luna, sol/,
 	);
 
 	const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "naia-harness-scratch-"));
@@ -302,7 +303,7 @@ function assertSilent(result, label) {
 			hostConfigDir: ".codex",
 			env: { CODEX_AVAILABLE_BINDINGS: "sol" },
 		}),
-		/Codex development profile balanced is unavailable; missing bindings: luna/,
+		/development profile balanced is unavailable; missing bindings: luna/,
 	);
 	assert.throws(
 		() => core.buildSessionInject({
@@ -313,7 +314,40 @@ function assertSilent(result, label) {
 			hostConfigDir: ".codex",
 			env: { CODEX_AVAILABLE_BINDINGS: "none" },
 		}),
-		/Codex development profile balanced is unavailable; missing bindings: luna, sol/,
+		/development profile balanced is unavailable; missing bindings: luna, sol/,
+	);
+	// A session whose subscription base is Claude has to reach an active profile
+	// through this injection path too. The pure selector returning the right
+	// binding is not evidence that a real session activates it.
+	const injectWith = (env) => core.buildSessionInject({
+		cwd,
+		sessionId: "CURRENT",
+		hooksDir: path.join(repoRoot, ".codex", "hooks"),
+		optOutEnvVar: "CODEX_HARNESS",
+		hostConfigDir: ".codex",
+		env,
+	});
+	const claudeOnly = injectWith({
+		CODEX_DEVELOPMENT_PROFILE: "claude-balanced",
+		CODEX_AVAILABLE_BINDINGS: "claude_flagship,claude_workhorse,claude_light",
+	});
+	assert.match(claudeOnly.text, /Active profile: claude-balanced \(source: environment_override\)/);
+	assert.match(claudeOnly.text, /Available bindings: claude_flagship, claude_light, claude_workhorse/);
+	assert.throws(
+		() => injectWith({ CODEX_DEVELOPMENT_PROFILE: "claude-balanced", CODEX_AVAILABLE_BINDINGS: "sol,luna" }),
+		/development profile claude-balanced is unavailable; missing bindings: claude_flagship, claude_light, claude_workhorse/,
+		"declaring only Codex bindings must fail closed on a Claude profile instead of substituting a Codex model",
+	);
+	const bothProviders = injectWith({
+		CODEX_DEVELOPMENT_PROFILE: "mixed-balanced",
+		CODEX_AVAILABLE_BINDINGS: "luna,claude_flagship",
+	});
+	assert.match(bothProviders.text, /Active profile: mixed-balanced \(source: environment_override\)/);
+	assert.match(bothProviders.text, /Available bindings: claude_flagship, luna/);
+	assert.throws(
+		() => injectWith({ CODEX_DEVELOPMENT_PROFILE: "mixed-balanced", CODEX_AVAILABLE_BINDINGS: "luna" }),
+		/development profile mixed-balanced is unavailable; missing bindings: claude_flagship/,
+		"a cross-provider profile requires the reviewing provider to be declared, not quietly dropped",
 	);
 	assert.throws(
 		() => core.buildSessionInject({
@@ -324,7 +358,7 @@ function assertSilent(result, label) {
 			hostConfigDir: ".codex",
 			env: { CODEX_DEVELOPMENT_PROFILE: "unknown" },
 		}),
-		/unknown Codex development profile/,
+		/unknown development profile/,
 	);
 	const catalogPath = path.join(cwd, "packages", "benchmark-contract", "baselines", "development-composition-profiles.json");
 	const invalidCatalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
