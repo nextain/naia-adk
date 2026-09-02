@@ -103,8 +103,11 @@ const CONTRACT_KEYS = new Set([
 	"non_goals", "success_criteria", "allowed_paths", "target_ownership",
 	"audiences", "source_refs", "session_bindings", "progress_file",
 	"contract_digest", "allowed_shell_commands", "subagent_policy",
-	"intent_anchor", "l3_session",
+	"intent_anchor", "l3_session", "baseline",
 ]);
+
+const BASELINE_KEYS = new Set(["schema_version", "intent", "flow", "required_reads", "reack_after_mutations"]);
+const BASELINE_FLOW_KEYS = new Set(["current", "next", "done_when"]);
 
 const SUBAGENT_POLICY_KEYS = new Set([
 	"profile", "context_mode", "budget_started_at",
@@ -323,10 +326,50 @@ function validateL3Session(value) {
 	return null;
 }
 
+/**
+ * `baseline` makes the contract carry its own re-grounding contract: the
+ * single current intent, the flow position, and the exact files a session
+ * must re-read after compaction or session start before mutating. The gate
+ * and the session-baseline helper both consume this shape; an invalid shape
+ * fails the whole contract closed rather than silently disabling the gate.
+ */
+function validateBaseline(baseline) {
+	if (baseline === undefined) return null;
+	if (!baseline || typeof baseline !== "object" || Array.isArray(baseline)) return "invalid_baseline";
+	if (Object.keys(baseline).some((key) => !BASELINE_KEYS.has(key))) return "baseline_additional_property";
+	if (baseline.schema_version !== "session-baseline-v1") return "invalid_baseline_schema_version";
+	if (typeof baseline.intent !== "string" || !baseline.intent.trim()) return "invalid_baseline_intent";
+	if (baseline.flow !== undefined) {
+		const flow = baseline.flow;
+		if (!flow || typeof flow !== "object" || Array.isArray(flow)) return "invalid_baseline_flow";
+		if (Object.keys(flow).some((key) => !BASELINE_FLOW_KEYS.has(key))) return "baseline_flow_additional_property";
+		for (const key of Object.keys(flow)) {
+			if (typeof flow[key] !== "string" || !flow[key].trim()) return "invalid_baseline_flow_value";
+		}
+	}
+	if (!Array.isArray(baseline.required_reads) || baseline.required_reads.length === 0) return "invalid_baseline_required_reads";
+	for (const entry of baseline.required_reads) {
+		if (typeof entry !== "string" || !entry.trim()) return "invalid_baseline_required_read";
+		const normalized = entry.replace(/\\/g, "/");
+		if (normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) return "baseline_required_read_not_relative";
+		if (/(^|\/)\.\.(\/|$)/.test(normalized)) return "baseline_required_read_escapes_root";
+		if (normalized.includes("*")) return "baseline_required_read_no_wildcards";
+	}
+	if (baseline.reack_after_mutations !== undefined &&
+		(!Number.isInteger(baseline.reack_after_mutations) || baseline.reack_after_mutations < 0 || baseline.reack_after_mutations > 500)) {
+		return "invalid_baseline_reack_after_mutations";
+	}
+	return null;
+}
+
 function validateContractShape(contract) {
 	if (!contract || typeof contract !== "object" || Array.isArray(contract)) return "contract_not_object";
 	if (Object.keys(contract).some((key) => !CONTRACT_KEYS.has(key))) return "contract_additional_property";
 	if (!new Set(["1.0", "1.1"]).has(contract.schema_version)) return "unsupported_schema_version";
+	{
+		const baselineError = validateBaseline(contract.baseline);
+		if (baselineError) return baselineError;
+	}
 	if (contract.schema_version === "1.1") {
 		const anchorError = validateIntentAnchor(contract.intent_anchor);
 		if (anchorError) return anchorError;
@@ -603,6 +646,7 @@ module.exports = {
 	resolveHookProjectRoot,
 	stableValue,
 	supportedOwnershipPattern,
+	validateBaseline,
 	validateContractShape,
 	validateDelegationTask,
 	validateDelegationResult,

@@ -8,6 +8,11 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const sessionContract = require("../../.agents/hooks/core/session-contract.js");
+// Baseline gate helper. A broken helper must not silently disable the gate:
+// when a contract declares a baseline and this module is missing, the gate
+// fails closed with an explicit message instead of pretending nothing is due.
+let sessionBaseline = null;
+try { sessionBaseline = require("../../.agents/harness/session-baseline.cjs"); } catch { sessionBaseline = null; }
 const sessionRecovery = require("../../.agents/harness/session-contract-recovery.cjs");
 const {
 	executableReadCommand,
@@ -394,6 +399,17 @@ function readStdin() {
 	try { return fs.readFileSync(0, "utf8"); } catch { return ""; }
 }
 
+/**
+ * The baseline ack/status commands are the door every baseline refusal
+ * points at; like the reclaim command they must not need declaring in the
+ * very contract whose gate is currently refusing.
+ */
+function baselineCommandAllowed(command, sessionId) {
+	const source = String(command || "").trim();
+	const match = source.match(/^node\s+["']?(?:\.\/)?\.agents[\\/]harness[\\/]session-baseline\.cjs["']?\s+(ack|status)\s+--session\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})$/);
+	return Boolean(match && match[2] === sessionId);
+}
+
 function reclaimCommandAllowed(command, sessionId) {
 	const source = String(command || "").trim();
 	const match = source.match(/^node\s+["']?(?:\.\/)?\.agents[\\/]harness[\\/]session-contract-recovery\.cjs["']?\s+reclaim\s+--contract\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})\s+--session\s+([A-Za-z0-9][A-Za-z0-9._-]{0,199})$/);
@@ -459,6 +475,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 		};
 	}
 	if (normalizedToolName(toolName) === "shell" && reclaimCommandAllowed(toolInput.command, sessionId)) return null;
+	if (normalizedToolName(toolName) === "shell" && baselineCommandAllowed(toolInput.command, sessionId)) return null;
 	if (normalizedToolName(toolName) === "shell" && approvalCommandAllowed(toolInput.command)) return null;
 	if (normalizedToolName(toolName) === "shell" && nestedModelRuntimeCommand(toolInput.command)) {
 		return {
@@ -504,6 +521,37 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 			}
 			if (normalizedToolName(toolName) === "shell" && !readOnlyShell(toolInput.command, cwd)) {
 				return { decision: "block", reason: "⛔ [HARNESS] 이 파생 워커 계약은 read_only이며 변경 가능 셸 명령을 허용하지 않습니다." };
+			}
+		}
+		// Baseline gate: after compaction or session start (and, when the
+		// contract sets reack_after_mutations, every N allowed mutations) a
+		// bound session must re-read its declared baseline before mutating.
+		// Read-only investigation and the ack command itself always pass —
+		// the refusal names exactly one recoverable door.
+		if (resolution.reason !== "derived_delegation_verified") {
+			const baselineShell = normalizedToolName(toolName) === "shell" ? String(toolInput.command || "").trim() : null;
+			const baselineExempt = baselineShell !== null &&
+				(readOnlyShell(baselineShell, cwd) || baselineCommandAllowed(baselineShell, sessionId));
+			if (!baselineExempt) {
+				const declared = resolution.contract.baseline &&
+					Array.isArray(resolution.contract.baseline.required_reads) &&
+					resolution.contract.baseline.required_reads.length > 0;
+				if (declared && !sessionBaseline) {
+					return { decision: "block", reason: "⛔ [HARNESS: BASELINE] 계약이 baseline 을 선언했지만 .agents/harness/session-baseline.cjs 헬퍼를 불러올 수 없습니다. 헬퍼를 복구한 뒤 재시도하세요." };
+				}
+				if (declared) {
+					let gate = { required: true, acked: false, ackCommand: null };
+					try { gate = sessionBaseline.gateStatus(resolution.projectRoot, sessionId, resolution.contract); } catch { /* unacked, fail-closed */ }
+					if (gate.required && !gate.acked) {
+						return {
+							decision: "block",
+							reason: "⛔ [HARNESS: BASELINE] 컨텍스트 epoch " + (gate.epoch || "?") + " 미확인 — compaction/세션 시작 후 계약 baseline 재확인 전에는 변경 작업이 차단됩니다. 정확히 실행: " + (gate.ackCommand || ("node .agents/harness/session-baseline.cjs ack --session " + sessionId)) + " (읽기 전용 조사는 허용됩니다)",
+						};
+					}
+					if (gate.required && gate.acked) {
+						try { sessionBaseline.noteMutation(resolution.projectRoot, sessionId, resolution.contract); } catch { /* best-effort counter */ }
+					}
+				}
 			}
 		}
 		const directAccess = sessionContract.orchestratorFallbackAccess(resolution.contract, resolution.progress);
@@ -578,4 +626,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundOrdinaryMutationAllowed };
+module.exports = { baselineCommandAllowed, bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundOrdinaryMutationAllowed };

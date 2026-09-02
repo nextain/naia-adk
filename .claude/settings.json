@@ -185,6 +185,10 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/request-contract.js\" PostCompact"
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-baseline.js\" PostCompact"
           }
         ]
       }

@@ -548,3 +548,101 @@ try {
 } finally {
 	fs.rmSync(fixture, { recursive: true, force: true });
 }
+
+{
+	// Baseline gate: a bound session whose contract declares `baseline` must
+	// re-read that baseline (via the ack command) after session start or
+	// compaction — and, with reack_after_mutations set, periodically — before
+	// the gate lets governed mutations through. Read-only work and the ack
+	// command itself always pass, so re-grounding is always reachable.
+	const fs = require("node:fs");
+	const path = require("node:path");
+	const os = require("node:os");
+	const gate = require("./session-contract-gate.cjs");
+	const contractCore = require("../../.agents/hooks/core/session-contract.js");
+	const sessionBaseline = require("../../.agents/harness/session-baseline.cjs");
+
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-baseline-"));
+	const write = (relative, value) => {
+		const target = path.join(root, relative);
+		fs.mkdirSync(path.dirname(target), { recursive: true });
+		fs.writeFileSync(target, typeof value === "string" ? value : JSON.stringify(value, null, 2));
+	};
+	write(".agents/context/agents-rules.json", "{}");
+	write(".codex/hooks.json", "{}");
+	write("docs/intent.md", "the single durable intent\n");
+	const contract = {
+		schema_version: "1.0",
+		id: "baseline-contract",
+		status: "active",
+		project_root: ".",
+		goal: "baseline gate parity",
+		scope: ["product.txt"],
+		non_goals: [],
+		success_criteria: ["deterministic re-ground"],
+		allowed_paths: ["product.txt"],
+		target_ownership: ["product.txt"],
+		audiences: ["developer"],
+		source_refs: ["USR-TEST:BASELINE"],
+		session_bindings: [{ session_id: "SESSION-1" }],
+		progress_file: ".agents/progress/baseline.json",
+		baseline: {
+			schema_version: "session-baseline-v1",
+			intent: "keep the session on its original goal across compaction",
+			flow: { current: "build", next: "verify", done_when: "gate blocks unacked mutations" },
+			required_reads: ["docs/intent.md"],
+			reack_after_mutations: 2,
+		},
+	};
+	const digest = contractCore.contractDigest(contract);
+	contract.contract_digest = digest;
+	contract.session_bindings[0].contract_digest = digest;
+	write(".agents/session-contracts/baseline-contract.json", contract);
+	write(".agents/progress/baseline.json", { contract_id: contract.id, contract_digest: digest, current_phase: "build" });
+	write(".agents/session-contracts/.session-map.json", {
+		schema_version: "1.0",
+		bindings: { "SESSION-1": { contract_id: contract.id, contract_path: ".agents/session-contracts/baseline-contract.json", contract_digest: digest } },
+	});
+
+	const run = (toolName, toolInput) => gate.decide(
+		{ cwd: root, session_id: "SESSION-1", tool_name: toolName, tool_input: toolInput },
+		{ ...process.env, ADK_PROJECT_ROOT: "", AI_HARNESS: "", CLAUDE_HARNESS: "", CODEX_HARNESS: "" },
+		{ resolveHookProjectRoot: () => root, processCwd: root },
+	);
+
+	const unacked = run("Write", { file_path: path.join(root, "product.txt"), content: "x" });
+	assert.equal(unacked?.decision, "block", "unacked session must not mutate governed files");
+	assert.match(unacked?.reason || "", /BASELINE/, "refusal names the baseline gate");
+	assert.match(unacked?.reason || "", /session-baseline\.cjs ack --session SESSION-1/, "refusal names the exact ack door");
+
+	assert.equal(run("Bash", { command: "git status --short" }), null, "read-only investigation passes while unacked");
+	assert.equal(
+		run("Bash", { command: "node .agents/harness/session-baseline.cjs ack --session SESSION-1" }),
+		null,
+		"the ack command itself passes while unacked",
+	);
+	assert.notEqual(
+		run("Bash", { command: "node .agents/harness/session-baseline.cjs ack --session SESSION-2" }),
+		null,
+		"another session's ack command stays blocked",
+	);
+
+	const ackOutput = sessionBaseline.ack(root, "SESSION-1", contractCore);
+	assert.match(ackOutput, /keep the session on its original goal/, "ack prints the intent");
+	assert.match(ackOutput, /the single durable intent/, "ack prints the required file content into context");
+
+	assert.equal(run("Write", { file_path: path.join(root, "product.txt"), content: "x" }), null, "acked session mutates freely (mutation 1)");
+	assert.equal(run("Write", { file_path: path.join(root, "product.txt"), content: "y" }), null, "mutation 2 reaches the reack threshold");
+	const rearmed = run("Write", { file_path: path.join(root, "product.txt"), content: "z" });
+	assert.equal(rearmed?.decision, "block", "reack_after_mutations re-arms the gate without any host compaction event");
+
+	sessionBaseline.ack(root, "SESSION-1", contractCore);
+	assert.equal(run("Write", { file_path: path.join(root, "product.txt"), content: "w" }), null, "re-ack unlocks again");
+
+	sessionBaseline.bumpEpoch(root, "SESSION-1", "post_compact");
+	const afterCompact = run("Write", { file_path: path.join(root, "product.txt"), content: "v" });
+	assert.equal(afterCompact?.decision, "block", "a host compaction bump forces a fresh ack");
+
+	fs.rmSync(root, { recursive: true, force: true });
+	console.log("baseline gate: PASS");
+}
