@@ -232,6 +232,11 @@ try {
 		assert.equal(runGate(fixture, "Write", { file_path: "escape-link/payload.txt", content: "escape" })?.decision, "block", `${client} ordinary writes cannot escape through an in-project symlink`);
 		assert.equal(runGate(fixture, "Bash", { command: "touch escape-link/payload.txt" })?.decision, "block", `${client} shell writes cannot escape through an in-project symlink`);
 		assert.equal(runGate(fixture, "Edit", { file_path: "tmp/new-report.md" }), null, `${client} unbound sessions may edit an ordinary file`);
+		assert.equal(runGate(fixture, "Edit", { file_path: path.join(fixture, "tmp", "new-report.md") }), null, `${client} unbound sessions may edit an ordinary file by the absolute path Claude and opencode file tools send`);
+		assert.equal(runGate(fixture, "Write", { file_path: path.join(fixture, "src", "abs-code.js"), content: "code" }), null, `${client} unbound sessions may create ordinary product code by absolute path`);
+		if (path.sep !== "\\") {
+			assert.equal(runGate(fixture, "Write", { file_path: "C:\\repo\\payload.txt", content: "x" })?.decision, "block", `${client} a Windows-style absolute path on a POSIX host stays blocked`);
+		}
 		assert.equal(runGate(fixture, "Bash", { command: "npm test" }), null, `${client} unbound sessions may run a project test suite`);
 		assert.equal(runGate(fixture, "Bash", { command: "mkdir -p src/new" }), null, `${client} unbound sessions may create an ordinary project directory`);
 		assert.equal(runGate(fixture, "Bash", { command: "cp product.txt tmp/copied.txt" }), null, `${client} unbound sessions may copy to an ordinary project path`);
@@ -671,8 +676,8 @@ try {
 		bindings: { "SESSION-1": { contract_id: contract.id, contract_path: ".agents/session-contracts/baseline-contract.json", contract_digest: digest } },
 	});
 
-	const run = (toolName, toolInput) => gate.decide(
-		{ cwd: root, session_id: "SESSION-1", tool_name: toolName, tool_input: toolInput },
+	const run = (toolName, toolInput, extra = {}) => gate.decide(
+		{ cwd: root, session_id: "SESSION-1", tool_name: toolName, tool_input: toolInput, ...extra },
 		{ ...process.env, ADK_PROJECT_ROOT: "", AI_HARNESS: "", CLAUDE_HARNESS: "", CODEX_HARNESS: "" },
 		{ resolveHookProjectRoot: () => root, processCwd: root },
 	);
@@ -709,6 +714,36 @@ try {
 	sessionBaseline.bumpEpoch(root, "SESSION-1", "post_compact");
 	const afterCompact = run("Write", { file_path: path.join(root, "product.txt"), content: "v" });
 	assert.equal(afterCompact?.decision, "block", "a host compaction bump forces a fresh ack");
+
+	// Grok Build reads the Claude hook registry and sends Claude-compatible
+	// payloads under its own tool names; a mirrored registry may deliver the
+	// same call twice, distinguished only by its tool-use id.
+	sessionBaseline.ack(root, "SESSION-1", contractCore);
+	assert.equal(run("run_terminal_command", { command: "git status --short" }), null, "grok read-only shell passes");
+	const grokEdit = { file_path: path.join(root, "product.txt"), old_string: "a", new_string: "b" };
+	assert.equal(run("search_replace", grokEdit, { tool_use_id: "grok-call-1" }), null, "grok search_replace is a governed file mutation (mutation 1)");
+	assert.equal(run("search_replace", grokEdit, { tool_use_id: "grok-call-1" }), null, "a redelivered tool-use id is not counted twice");
+	assert.equal(run("search_replace", grokEdit, { tool_use_id: "grok-call-2" }), null, "mutation 2 reaches the threshold");
+	assert.equal(run("search_replace", grokEdit, { tool_use_id: "grok-call-3" })?.decision, "block", "re-armed after two distinct tool-use ids, not after three deliveries");
+
+	// The ack is bound to the contract digest: editing the contract re-arms.
+	sessionBaseline.ack(root, "SESSION-1", contractCore);
+	const revised = { ...contract, goal: "baseline gate parity — revised", session_bindings: [{ session_id: "SESSION-1" }] };
+	delete revised.contract_digest;
+	const revisedDigest = contractCore.contractDigest(revised);
+	revised.contract_digest = revisedDigest;
+	revised.session_bindings[0].contract_digest = revisedDigest;
+	write(".agents/session-contracts/baseline-contract.json", revised);
+	write(".agents/progress/baseline.json", { contract_id: contract.id, contract_digest: revisedDigest, current_phase: "build" });
+	write(".agents/session-contracts/.session-map.json", {
+		schema_version: "1.0",
+		bindings: { "SESSION-1": { contract_id: contract.id, contract_path: ".agents/session-contracts/baseline-contract.json", contract_digest: revisedDigest } },
+	});
+	const afterEdit = run("Write", { file_path: path.join(root, "product.txt"), content: "u" });
+	assert.equal(afterEdit?.decision, "block", "a contract edited after the ack re-arms the gate");
+	assert.match(afterEdit?.reason || "", /contract_digest/, "refusal says the contract changed");
+	sessionBaseline.ack(root, "SESSION-1", contractCore);
+	assert.equal(run("Write", { file_path: path.join(root, "product.txt"), content: "t" }), null, "re-ack against the edited contract unlocks");
 
 	fs.rmSync(root, { recursive: true, force: true });
 	console.log("baseline gate: PASS");

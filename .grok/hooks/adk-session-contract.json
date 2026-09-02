@@ -1,0 +1,26 @@
+{
+  "$comment": "Grok Build adapter for the ADK session contract gate. Grok reads <project>/.claude/settings.json hooks natively (compat.claude.hooks, folder trust required: /hooks-trust). This file repeats the two gate commands byte-identically so enforcement survives compat.claude.hooks=false; identical handlers are deduplicated by Grok. Grok sends Claude-compatible snake_case fields (session_id, cwd, tool_name, tool_input, tool_use_id) and CLAUDE_PROJECT_DIR, under its own tool names (run_terminal_command, search_replace) which the gate maps.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|shell_command|Edit|Write|NotebookEdit|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-contract-gate.js\""
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-baseline.js\" PostCompact"
+          }
+        ]
+      }
+    ]
+  }
+}

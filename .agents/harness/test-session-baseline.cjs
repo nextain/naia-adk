@@ -131,6 +131,32 @@ try {
 	assert.equal(gate.acked, false, "unreadable state is unacked, never silently open");
 	sessionBaseline.ack(root, "S1", contractCore);
 	assert.equal(sessionBaseline.gateStatus(root, "S1", contract).acked, true, "ack recovers from corrupted state");
+
+	// tool-use id dedup: a host that delivers the same call twice counts once
+	sessionBaseline.noteMutation(root, "S1", contract, "call-1");
+	sessionBaseline.noteMutation(root, "S1", contract, "call-1");
+	assert.equal(sessionBaseline.readState(root, "S1").mutations_since_ack, 1, "a redelivered tool-use id is counted once");
+	sessionBaseline.noteMutation(root, "S1", contract, "call-2");
+	assert.equal(sessionBaseline.readState(root, "S1").mutations_since_ack, 2, "a new tool-use id counts");
+
+	// the ack is bound to the contract digest: editing the contract re-arms
+	sessionBaseline.ack(root, "S1", contractCore);
+	const edited = { ...contract, goal: "baseline unit — scope revised", session_bindings: [{ session_id: "S1" }] };
+	delete edited.contract_digest;
+	const editedDigest = contractCore.contractDigest(edited);
+	edited.contract_digest = editedDigest;
+	edited.session_bindings[0].contract_digest = editedDigest;
+	write(".agents/session-contracts/bl.json", edited);
+	write(".agents/progress/bl.json", { contract_id: "bl", contract_digest: editedDigest });
+	write(".agents/session-contracts/.session-map.json", {
+		schema_version: "1.0",
+		bindings: { S1: { contract_id: "bl", contract_path: ".agents/session-contracts/bl.json", contract_digest: editedDigest } },
+	});
+	gate = sessionBaseline.gateStatus(root, "S1", edited);
+	assert.equal(gate.acked, false, "a contract edited after the ack is unacked again");
+	assert.equal(gate.reason, "contract_changed");
+	assert.match(sessionBaseline.ack(root, "S1", contractCore), /unit intent/, "re-ack reads the edited contract");
+	assert.equal(sessionBaseline.gateStatus(root, "S1", edited).acked, true, "re-ack binds to the new digest");
 } finally {
 	fs.rmSync(root, { recursive: true, force: true });
 }

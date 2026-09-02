@@ -32,8 +32,9 @@ const ENTRY_POINTS = new Set(["AGENTS.md", "CLAUDE.md", "GEMINI.md"]);
 
 function normalizedToolName(name) {
 	const leaf = String(name || "").split(/[.:/]/).pop().toLowerCase();
-	if (["bash", "shell_command", "exec_command"].includes(leaf)) return "shell";
-	if (["write", "edit", "notebookedit", "apply_patch"].includes(leaf)) return "file-mutation";
+	// `run_terminal_command` and `search_replace` are Grok Build's names for Bash and Edit/Write.
+	if (["bash", "shell_command", "exec_command", "run_terminal_command"].includes(leaf)) return "shell";
+	if (["write", "edit", "notebookedit", "apply_patch", "search_replace"].includes(leaf)) return "file-mutation";
 	return leaf;
 }
 
@@ -289,7 +290,7 @@ function governedTarget(target, projectRoot) {
 function unboundOrdinaryMutationAllowed(toolName, toolInput, cwd) {
 	if (normalizedToolName(toolName) !== "file-mutation") return false;
 	const raw = rawToolName(toolName);
-	if (!new Set(["write", "edit", "notebookedit", "apply_patch"]).has(raw)) return false;
+	if (!new Set(["write", "edit", "notebookedit", "apply_patch", "search_replace"]).has(raw)) return false;
 	// Deletion is not recoverable from the transcript; it keeps needing a contract.
 	if (raw === "apply_patch" && /^\*\*\* Delete File:/m.test(patchSource(toolInput))) return false;
 	const projectRoot = sessionContract.findProjectRoot(cwd);
@@ -302,7 +303,12 @@ function ordinaryUnboundTarget(filePath, cwd) {
 	const projectRoot = sessionContract.findProjectRoot(cwd);
 	if (!projectRoot || !filePath) return false;
 	const raw = String(filePath).replace(/^(?:"|')|(?:"|')$/g, "");
-	if (path.sep !== "\\" && path.win32.isAbsolute(raw)) return false;
+	// A Windows-style absolute path on a POSIX host would be resolved as a
+	// relative name inside the project, so it is refused outright. A POSIX
+	// absolute path is the ordinary shape every Claude/opencode file tool sends
+	// and is judged below by where it resolves — `path.win32.isAbsolute` used to
+	// reject it too, which locked every unbound Linux session out of Edit/Write.
+	if (path.sep !== "\\" && /^(?:[A-Za-z]:[\\/]|\\\\)/.test(raw)) return false;
 	let target = path.resolve(cwd, raw);
 	let ancestor = target;
 	while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) ancestor = path.dirname(ancestor);
@@ -778,11 +784,13 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 					if (gate.required && !gate.acked) {
 						return {
 							decision: "block",
-							reason: "⛔ [HARNESS: BASELINE] 컨텍스트 epoch " + (gate.epoch || "?") + " 미확인 — compaction/세션 시작 후 계약 baseline 재확인 전에는 변경 작업이 차단됩니다. 정확히 실행: " + (gate.ackCommand || ("node .agents/harness/session-baseline.cjs ack --session " + sessionId)) + " (읽기 전용 조사는 허용됩니다)",
+							reason: (gate.reason === "contract_changed"
+								? "⛔ [HARNESS: BASELINE] 계약이 마지막 ack 이후 바뀌었습니다(contract_digest 불일치) — 바뀐 계약의 baseline 을 다시 읽기 전에는 변경 작업이 차단됩니다. 정확히 실행: "
+								: "⛔ [HARNESS: BASELINE] 컨텍스트 epoch " + (gate.epoch || "?") + " 미확인 — compaction/세션 시작 후 계약 baseline 재확인 전에는 변경 작업이 차단됩니다. 정확히 실행: ") + (gate.ackCommand || ("node .agents/harness/session-baseline.cjs ack --session " + sessionId)) + " (읽기 전용 조사는 허용됩니다)",
 						};
 					}
 					if (gate.required && gate.acked) {
-						try { sessionBaseline.noteMutation(resolution.projectRoot, sessionId, resolution.contract); } catch { /* best-effort counter */ }
+						try { sessionBaseline.noteMutation(resolution.projectRoot, sessionId, resolution.contract, data.tool_use_id || data.toolUseId || null); } catch { /* best-effort counter */ }
 					}
 				}
 			}

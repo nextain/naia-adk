@@ -14,9 +14,14 @@
  *     reack_after_mutations }.
  *   - Each session keeps an epoch state file. A new session starts UNACKED.
  *     A host that knows compaction happened bumps the epoch (Claude Code
- *     PostCompact adapter). Hosts without such an event (codex, opencode,
- *     grok build) rely on `reack_after_mutations`: every N allowed mutations
- *     the epoch bumps itself, forcing a periodic re-ground.
+ *     PostCompact adapter; the opencode plugin does the same after its own
+ *     compaction; Grok Build reads the Claude registry and fires PostCompact
+ *     too). Hosts without such an event (codex) rely on
+ *     `reack_after_mutations`: every N allowed mutations the epoch bumps
+ *     itself, forcing a periodic re-ground.
+ *   - The ack records the contract digest it read. Editing or switching the
+ *     contract afterwards re-arms the gate: a changed contract may carry a
+ *     changed intent, and the old ack no longer proves it was read.
  *   - While UNACKED the mutation gate blocks governed work and names exactly
  *     one door: `node .agents/harness/session-baseline.cjs ack --session <id>`.
  *   - `ack` PRINTS the intent, flow, and full required files to stdout — the
@@ -91,9 +96,16 @@ function gateStatus(root, sessionId, contract) {
 	const baseline = baselineOf(contract);
 	if (!baseline) return { required: false, acked: true, epoch: 0, ackCommand: null };
 	const state = readState(root, sessionId) || defaultState();
+	const epochAcked = state.acked_epoch >= state.epoch;
+	// The ack is bound to the contract it read. A contract edited after the ack
+	// (a new Scope line, a switched contract) may carry a different intent, so
+	// the old ack no longer proves the session read the current baseline.
+	const contractChanged = Boolean(state.acked_contract_digest) && Boolean(contract.contract_digest) &&
+		state.acked_contract_digest !== contract.contract_digest;
 	return {
 		required: true,
-		acked: state.acked_epoch >= state.epoch,
+		acked: epochAcked && !contractChanged,
+		reason: !epochAcked ? "epoch_unacked" : (contractChanged ? "contract_changed" : "acked"),
 		epoch: state.epoch,
 		ackedEpoch: state.acked_epoch,
 		mutationsSinceAck: state.mutations_since_ack || 0,
@@ -116,12 +128,18 @@ function bumpEpoch(root, sessionId, reason) {
  * client-agnostic stand-in for a compaction signal. Best-effort by design:
  * a failed counter write must not block the mutation it was counting.
  */
-function noteMutation(root, sessionId, contract) {
+function noteMutation(root, sessionId, contract, toolUseId = null) {
 	const baseline = baselineOf(contract);
 	if (!baseline) return null;
 	const threshold = Number.isInteger(baseline.reack_after_mutations) ? baseline.reack_after_mutations : 0;
 	const state = readState(root, sessionId) || defaultState();
 	if (state.acked_epoch < state.epoch) return state; // already unacked; nothing to count
+	// A host that mirrors another host's hook registry (Grok Build reads both
+	// the Claude and the Codex registries) delivers one tool call to the gate
+	// twice. Count each tool-use id once so the threshold means N calls.
+	const useId = toolUseId ? String(toolUseId) : null;
+	if (useId && state.last_counted_tool_use_id === useId) return state;
+	if (useId) state.last_counted_tool_use_id = useId;
 	state.mutations_since_ack = (state.mutations_since_ack || 0) + 1;
 	if (threshold > 0 && state.mutations_since_ack >= threshold) {
 		state.epoch = state.epoch + 1;
@@ -181,6 +199,7 @@ function ack(root, sessionId, resolver) {
 	const state = readState(root, sessionId) || defaultState();
 	state.acked_epoch = state.epoch;
 	state.mutations_since_ack = 0;
+	state.acked_contract_digest = contract.contract_digest || null;
 	state.read_digests = Object.fromEntries(reads.map((read) => [read.relative, read.digest]));
 	writeState(root, sessionId, state);
 	lines.push("", `Baseline acked: epoch ${state.epoch}. Mutating work is unlocked; stay on the intent above.`);
@@ -211,7 +230,7 @@ function main(argv = process.argv.slice(2)) {
 		}
 		if (command === "status") {
 			const state = readState(root, sessionId) || defaultState();
-			process.stdout.write(`${JSON.stringify({ epoch: state.epoch, acked_epoch: state.acked_epoch, acked: state.acked_epoch >= state.epoch, mutations_since_ack: state.mutations_since_ack || 0 }, null, 2)}\n`);
+			process.stdout.write(`${JSON.stringify({ epoch: state.epoch, acked_epoch: state.acked_epoch, acked: state.acked_epoch >= state.epoch, mutations_since_ack: state.mutations_since_ack || 0, acked_contract_digest: state.acked_contract_digest || null }, null, 2)}\n`);
 			process.exit(0);
 		}
 		process.stderr.write("session-baseline: usage — ack|status --session <id>\n");

@@ -14,6 +14,7 @@ const runs=[
   ["harness session injection",[".agents/hooks/core/harness-session-inject.test.js"]],
   ["session contract gate parity",[".codex/hooks/test-session-contract-gate.cjs"]],
   ["session baseline",[".agents/harness/test-session-baseline.cjs"]],
+  ["opencode session contract plugin",[".opencode/plugins/test-session-contract-gate.js"]],
   ["Codex hook registration",[".codex/hooks/test-hook-registration.cjs"]],
   ["context/output review lenses",[".agents/skills/review-pass/test-context-output-lenses.cjs"]],
   ["output boundary review",[".agents/skills/review-pass/test-output-boundary.cjs"]],
