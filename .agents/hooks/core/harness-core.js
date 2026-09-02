@@ -14,6 +14,9 @@ const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
 const { STATES, orchestratorFallbackAccess, resolveSessionContract } = require("./session-contract.js");
+// Baseline gate state (optional): inject stays fail-safe when absent.
+let sessionBaseline = null;
+try { sessionBaseline = require("../../harness/session-baseline.cjs"); } catch { sessionBaseline = null; }
 
 const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
 const HARNESS_OFF_VALUES = new Set(["off", "0", "false", "no"]);
@@ -212,7 +215,33 @@ function buildSessionInject(opts) {
 	const phaseLabel = PHASE_LABELS[currentPhase] || currentPhase;
 	const gatesCleared = (progress.gates_cleared || []).join(", ") || "none yet";
 
-	const lines = [
+	const lines = [];
+
+	// Baseline block FIRST. The lesson behind it: the recap of a compacted
+	// transcript wins the model's attention over a wall of session state, so
+	// the durable intent must be the most recent, most imperative thing in
+	// the injected context — and its ack status must be visible every turn.
+	const baseline = contract.baseline;
+	if (baseline && typeof baseline.intent === "string" && baseline.intent.trim()) {
+		lines.push(
+			"══ [HARNESS: BASELINE — 이 세션의 기준] ═══════════════════",
+			"Intent: " + baseline.intent,
+		);
+		if (baseline.flow && typeof baseline.flow === "object") {
+			lines.push("Flow: " + (baseline.flow.current || "?") + " → next: " + (baseline.flow.next || "?") + " — done when: " + (baseline.flow.done_when || "?"));
+		}
+		if (sessionBaseline && sessionId && Array.isArray(baseline.required_reads) && baseline.required_reads.length > 0) {
+			let gate = null;
+			try { gate = sessionBaseline.gateStatus(resolution.projectRoot, sessionId, contract); } catch { gate = null; }
+			if (gate && gate.required) {
+				lines.push(gate.acked
+					? "Baseline: epoch " + gate.epoch + " ACKED"
+					: "⛔ Baseline UNACKED (epoch " + gate.epoch + ") — 변경 작업 전에 정확히 실행: " + gate.ackCommand);
+			}
+		}
+	}
+
+	lines.push(
 		"══ [HARNESS: SESSION STATE] ══════════════════════════════",
 		`Issue : ${progress.issue || "unknown"}${progress.issue_url ? " — " + progress.issue_url : ""}`,
 		`Phase : ${phaseLabel}`,
@@ -227,7 +256,7 @@ function buildSessionInject(opts) {
 		...parentContract.non_goals.map((item, index) => `Non-goal ${index + 1}: ${item}`),
 		...parentContract.source_refs.map((item, index) => `Intent ref ${index + 1}: ${item}`),
 		"Invariant: current_task is a child unit; it cannot replace, shrink, delete, or complete the parent contract.",
-	];
+	);
 
 	if (resolution.reason === "derived_delegation_verified") {
 		const task = resolution.derivedTask;
