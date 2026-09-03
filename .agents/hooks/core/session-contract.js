@@ -162,7 +162,7 @@ function validateSubagentPolicy(policy) {
 	if (policy === undefined) return null;
 	if (!policy || typeof policy !== "object" || Array.isArray(policy)) return "invalid_subagent_policy";
 	if (Object.keys(policy).some((key) => !SUBAGENT_POLICY_KEYS.has(key))) return "invalid_subagent_policy_property";
-	if (!new Set(["balanced", "control"]).has(policy.profile) || policy.context_mode !== "isolated") return "invalid_subagent_policy_mode";
+	if (!new Set(["balanced", "control", "grok-balanced"]).has(policy.profile) || policy.context_mode !== "isolated") return "invalid_subagent_policy_mode";
 	if (!new Set(["low", "medium"]).has(policy.maximum_risk)) return "invalid_subagent_policy_maximum_risk";
 	const startedAt = typeof policy.budget_started_at === "string" ? Date.parse(policy.budget_started_at) : NaN;
 	const canonicalStartedAt = Number.isFinite(startedAt) ? new Date(startedAt).toISOString() : null;

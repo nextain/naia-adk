@@ -3,9 +3,10 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { assertOwnerOnly, protectOwnerOnly } from "./platform-security.mjs";
 import { CREDENTIAL_PROFILES, validateCredentialProfiles } from "./credential-profiles.mjs";
+import { GROK_AVAILABLE_BINDINGS, grokDiscordCost } from "./grok-cost-profile.mjs";
 
 const SAFE_ENV_KEYS = new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "SystemRoot", "WINDIR", "PATHEXT", "COMSPEC", "TEMP", "TMP"]);
-const API_KEY_BY_BACKEND = { codex: "CODEX_API_KEY", claude: "ANTHROPIC_API_KEY" };
+const API_KEY_BY_BACKEND = { codex: "CODEX_API_KEY", claude: "ANTHROPIC_API_KEY", grok: "XAI_API_KEY" };
 const DISPOSABLE_CREDENTIAL_DIRECTORIES = new Set(["logs", "cache", "surface_data"]);
 
 export function resolveExecutionCwd(cwd) {
@@ -92,7 +93,7 @@ function defaultRuntimeRoot(parentEnv) {
 	return join(base, "messenger-sessions");
 }
 
-export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv = process.env, authRoot = homedir(), workspacePath = null, prepareAuthentication = true, credentialProfiles = [] }) {
+export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv = process.env, authRoot = homedir(), workspacePath = null, prepareAuthentication = true, credentialProfiles = [], costProfile = null }) {
 	const selectedCredentialProfiles = validateCredentialProfiles(credentialProfiles, "child credential profiles");
 	const childHome = resolve(runtimeRoot ?? defaultRuntimeRoot(parentEnv), "children", attemptId);
 	privateDirectory(childHome);
@@ -143,6 +144,14 @@ export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, par
 				);
 				authenticationPrepared = configCopied && authCopied;
 			}
+		} else if (backendId === "grok") {
+			const grokHome = join(childHome, ".grok");
+			privateDirectory(grokHome);
+			env.GROK_HOME = grokHome;
+			const grokCost = grokDiscordCost(costProfile ?? "balanced");
+			env.CODEX_DEVELOPMENT_PROFILE = grokCost.developmentProfile;
+			env.CODEX_AVAILABLE_BINDINGS = GROK_AVAILABLE_BINDINGS;
+			if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".grok", "auth.json"), join(grokHome, "auth.json"), "Grok authentication");
 		} else {
 			throw new Error(`unsupported backend environment: ${backendId}`);
 		}

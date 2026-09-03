@@ -11,7 +11,7 @@ export { cleanupChildEnvironment, prepareChildEnvironment, resolveExecutionCwd }
 
 function safeCommandOptions(backendId, options) {
 	const common = ["approvalPolicy", "model", "networkAccess", "credentialProfiles"];
-	const allowed = backendId === "codex" ? new Set([...common, "sandbox", "costProfile", "reasoningEffort"]) : backendId === "opencode" ? new Set([...common, "auto"]) : new Set([...common, "permissionMode"]);
+	const allowed = backendId === "codex" ? new Set([...common, "sandbox", "costProfile", "reasoningEffort"]) : backendId === "opencode" ? new Set([...common, "auto"]) : backendId === "grok" ? new Set([...common, "permissionMode", "costProfile", "reasoningEffort"]) : new Set([...common, "permissionMode"]);
 	for (const key of Object.keys(options)) if (!allowed.has(key)) throw new Error(`unsupported ${backendId} command option: ${key}`);
 	if (backendId === "codex" && options.sandbox && !new Set(["read-only", "workspace-write", "danger-full-access"]).has(options.sandbox)) throw new Error("unsafe Codex sandbox option");
 	if (options.model !== undefined && (typeof options.model !== "string" || !/^(?=.{1,80}$)[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/.test(options.model))) throw new Error(`unsafe ${backendId} model option`);
@@ -23,6 +23,9 @@ function safeCommandOptions(backendId, options) {
 	catch { throw new Error(`unsafe ${backendId} credential profiles`); }
 	if (options.credentialProfiles.length > 0 && options.networkAccess !== true) throw new Error(`${backendId} credential profiles require network access`);
 	if (backendId === "claude" && options.permissionMode && !new Set(["bypassPermissions", "plan"]).has(options.permissionMode)) throw new Error("unsafe Claude permission mode");
+	if (backendId === "grok" && options.permissionMode && !new Set(["bypassPermissions", "plan"]).has(options.permissionMode)) throw new Error("unsafe Grok permission mode");
+	if (backendId === "grok" && options.costProfile !== undefined && !new Set(["control", "balanced", "economy"]).has(options.costProfile)) throw new Error("unsafe Grok cost profile option");
+	if (backendId === "grok" && options.reasoningEffort !== undefined && !new Set(["low", "medium", "high", "max"]).has(options.reasoningEffort)) throw new Error("unsafe Grok reasoning effort option");
 	if (backendId === "opencode" && options.auto !== undefined && typeof options.auto !== "boolean") throw new Error("unsafe OpenCode auto option");
 	if (options.approvalPolicy !== undefined && options.approvalPolicy !== "never") throw new Error("child approval policy must be never");
 	return { ...options, approvalPolicy: "never" };
@@ -170,7 +173,7 @@ export async function runBackendAttempt({
 	const attemptId = randomUUID();
 	let childEnvironment;
 	try {
-		childEnvironment = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: executionCwd, prepareAuthentication: requireAuthentication, credentialProfiles: safeOptions.credentialProfiles ?? [] });
+		childEnvironment = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: executionCwd, prepareAuthentication: requireAuthentication, credentialProfiles: safeOptions.credentialProfiles ?? [], costProfile: safeOptions.costProfile ?? null });
 	} catch (error) {
 		throw withFailureCode(error, "backend_authentication_failed");
 	}

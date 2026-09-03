@@ -16,7 +16,7 @@ export function installSupervisedPair({ installSupervisor, installService, quara
 }
 
 export function resolveBackendExecutable(name, pathValue = process.env.PATH ?? "") {
-	if (!new Set(["codex", "claude", "opencode"]).has(name)) throw new Error("unsupported backend executable");
+	if (!new Set(["codex", "claude", "opencode", "grok"]).has(name)) throw new Error("unsupported backend executable");
 	const extensions = process.platform === "win32"
 		? ["", ...(process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((value) => value.toLowerCase())]
 		: [""];

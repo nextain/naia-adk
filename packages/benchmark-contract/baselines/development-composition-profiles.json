@@ -45,6 +45,35 @@
    ],
    "qualification": "bounded_exact_validated_implementation_smoke_8_of_9"
   },
+  "grok_flagship": {
+   "adapter": "grok",
+   "model": "grok-4.6",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium",
+    "high"
+   ],
+   "qualification": "subscription_covered_cli_analysis_design_review"
+  },
+  "grok_workhorse": {
+   "adapter": "grok",
+   "model": "grok-4.6",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium",
+    "max"
+   ],
+   "qualification": "subscription_covered_cli_bounded_implementation"
+  },
+  "grok_light": {
+   "adapter": "grok",
+   "model": "grok-4.6",
+   "default_reasoning_effort": "low",
+   "allowed_reasoning_efforts": [
+    "low"
+   ],
+   "qualification": "subscription_covered_cli_mechanical_and_translation"
+  },
   "implementation_worker": {
    "adapter": "optional_external_runtime",
    "profile_identity": "deployment_local_implementation_worker",
@@ -129,6 +158,78 @@
    ]
   }
  },
+ "grok_balanced_role_policy": {
+  "secretary": {
+   "binding": "grok_workhorse",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium"
+   ]
+  },
+  "issue_leader": {
+   "binding": "grok_workhorse",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium"
+   ]
+  },
+  "explorer": {
+   "binding": "grok_light",
+   "default_reasoning_effort": "low",
+   "allowed_reasoning_efforts": [
+    "low"
+   ]
+  },
+  "analysis": {
+   "binding": "grok_flagship",
+   "default_reasoning_effort": "high",
+   "allowed_reasoning_efforts": [
+    "high"
+   ]
+  },
+  "design": {
+   "binding": "grok_flagship",
+   "default_reasoning_effort": "high",
+   "allowed_reasoning_efforts": [
+    "high"
+   ]
+  },
+  "review": {
+   "binding": "grok_flagship",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium"
+   ]
+  },
+  "implementation": {
+   "binding": "grok_workhorse",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium"
+   ]
+  },
+  "test": {
+   "binding": "grok_light",
+   "default_reasoning_effort": "low",
+   "allowed_reasoning_efforts": [
+    "low"
+   ]
+  },
+  "generic_worker": {
+   "binding": "grok_workhorse",
+   "default_reasoning_effort": "medium",
+   "allowed_reasoning_efforts": [
+    "medium"
+   ]
+  },
+  "translation": {
+   "binding": "grok_light",
+   "default_reasoning_effort": "low",
+   "allowed_reasoning_efforts": [
+    "low"
+   ]
+  }
+ },
  "delegation_context": {
   "brief_mode": "isolated_bounded",
   "fork_turns": "none",
@@ -198,6 +299,20 @@
     "tester": "luna",
     "reviewer_pool": [
      "sol"
+    ]
+   }
+  },
+  {
+   "id": "grok-balanced",
+   "purpose": "Grok-only balanced default: Grok 4.6 medium leads L3/L2 and bounded implementation, 4.6 high analyzes and designs, and light 4.6 low handles translation and verification",
+   "assignments": {
+    "orchestrator": "grok_workhorse",
+    "integrator": "grok_workhorse",
+    "bounded_worker": "grok_workhorse",
+    "mechanical_worker": "grok_workhorse",
+    "tester": "grok_light",
+    "reviewer_pool": [
+     "grok_flagship"
     ]
    }
   }

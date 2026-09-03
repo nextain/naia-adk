@@ -34,7 +34,7 @@ export function renderDiscordUserUnit({ adkRoot, instance = "default", tokenFing
 	const tokenLockPath = `%t/naia-discord-token-${tokenFingerprint}.lock`;
 	const exec = ["/usr/bin/flock", "--no-fork", "--nonblock", "--conflict-exit-code", "78", tokenLockPath, "/usr/bin/flock", "--no-fork", "--nonblock", "--conflict-exit-code", "78", paths.lockPath, nodePath, servicePath, "--adk-root", root, "--instance", identity.instance].map(unitQuote).join(" ");
 	const backendEnvironment = Object.entries(backendExecutables).map(([backend, executable]) => {
-		if (!new Set(["codex", "claude", "opencode"]).has(backend) || !resolve(executable).startsWith("/")) throw new Error("backend executable must be an absolute supported path");
+		if (!new Set(["codex", "claude", "opencode", "grok"]).has(backend) || !resolve(executable).startsWith("/")) throw new Error("backend executable must be an absolute supported path");
 		return `Environment=${unitQuote(`NAIA_${backend.toUpperCase()}_EXECUTABLE=${resolve(executable)}`)}`;
 	});
 	const credentialExecutableDirectories = credentialProfileExecutableDirectories(credentialProfiles, { homeDirectory });

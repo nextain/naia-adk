@@ -7,6 +7,7 @@ import { commandOptionsForProfile, configurationRevision, currentExecutionProfil
 import { promptWithDiscordConversation, trustedParticipantPolicy } from "./discord-conversation.mjs";
 import { attachmentPromptSection } from "./discord-attachments.mjs";
 import { verifyAgentContextBeforeAttempt } from "./agent-context.mjs";
+import { grokDiscordCost } from "./grok-cost-profile.mjs";
 
 const FAILURE_TEXT = {
 	no_progress_timeout: "일정 시간 동안 진행이 없어 작업을 중단했습니다.",
@@ -92,7 +93,8 @@ export function boundRequestPrompt(userText, config, authorization = null, agent
 		: authorityActions;
 	const backendId = config.backend?.selected ?? "codex";
 	const executionProfile = currentExecutionProfile(config, backendId, authorization, { accessCeiling });
-	const costProfile = config.backend?.profiles?.[backendId]?.costProfile ?? (backendId === "codex" ? "balanced" : "provider-default");
+	const costProfile = config.backend?.profiles?.[backendId]?.costProfile ?? (backendId === "codex" || backendId === "grok" ? "balanced" : "provider-default");
+	const grokCost = backendId === "grok" ? grokDiscordCost(costProfile) : null;
 	const parts = [];
 	if (agentContextSnapshot) parts.push(agentContextSnapshot.prefix, "");
 	parts.push(`Persona: ${config.persona.name}`, config.persona.instructions, `Role: ${config.role.name}`);
@@ -100,7 +102,9 @@ export function boundRequestPrompt(userText, config, authorization = null, agent
 	if (config.schemaVersion === 2 && Array.isArray(config.workspace?.allowedPaths)) parts.push(`Allowed workspace paths: ${config.workspace.allowedPaths.join(", ")}. Use only these explicitly configured project paths; do not access other projects.`);
 	parts.push(
 		`Allowed actions: ${allowedActions.join(", ")}`,
-		`Gateway execution contract: ${executionProfile.access}. Cost profile: ${costProfile}.`,
+		grokCost
+			? `Gateway execution contract: ${executionProfile.access}. Cost profile: ${costProfile} (development ${grokCost.developmentProfile}, grok-4.6 ${grokCost.reasoningEffort}).`
+			: `Gateway execution contract: ${executionProfile.access}. Cost profile: ${costProfile}.`,
 		executionProfile.access !== "read-only"
 			? executionProfile.access === "danger-full-access"
 				? "The host has verified the sole operator, DM-only Discord binding, project context, and trusted-local no-prompt policy for this request. This Gateway execution contract grants the current OS user's local access for the current job. It does not grant root authority or broaden the user's request. Use only the configured actions and the resources needed to complete that bounded request."
@@ -339,7 +343,7 @@ export class DiscordMessageRouter {
 			networkAccess: this.config.runtime?.networkAccess === true,
 			credentialProfiles: [...(this.config.runtime?.credentialProfiles ?? [])],
 		};
-		return backendId === "codex" ? {
+		return backendId === "codex" || backendId === "grok" ? {
 			...withCommon,
 			costProfile: profile?.costProfile ?? "balanced",
 			...(profile?.reasoningEffort ? { reasoningEffort: profile.reasoningEffort } : {}),

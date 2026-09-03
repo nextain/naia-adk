@@ -356,4 +356,10 @@ assert.equal(JSON.parse(malformedAdapter.stdout).decision, "block");
 	fsx.rmSync(optRoot, { recursive: true, force: true });
 }
 
+assert.deepEqual(guard.roleRules("grok-balanced").secretary, ["grok-4.6", ["medium"], "grok_workhorse"]);
+assert.deepEqual(guard.roleRules("grok-balanced").analysis, ["grok-4.6", ["high"], "grok_flagship"]);
+assert.deepEqual(guard.roleRules("grok-balanced").test, ["grok-4.6", ["low"], "grok_light"]);
+assert.deepEqual(guard.roleRules("grok-balanced").translation, ["grok-4.6", ["low"], "grok_light"]);
+assert.deepEqual(guard.roleRules("balanced").secretary, ["gpt-5.6-luna", ["max"], "luna"]);
+
 console.log("subagent-spawn-guard: all tests passed");

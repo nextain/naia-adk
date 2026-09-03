@@ -4,6 +4,7 @@ import { assertOnlyKeys, safeIdentifier } from "./sanitize.mjs";
 import { validateDiscordBindings } from "./discord-scope.mjs";
 import { assertOwnerOnly } from "./platform-security.mjs";
 import { validateCredentialProfiles } from "./credential-profiles.mjs";
+import { grokDiscordCost } from "./grok-cost-profile.mjs";
 
 const ACTIONS = new Set(["read", "reply", "write", "execute", "cancel", "retry"]);
 const RESERVED_PARTICIPANT_LABELS = new Set(["assistant", "developer", "system", "tool", "user"]);
@@ -135,16 +136,19 @@ export function loadMessengerConfig(path) {
 	if (config.role.allowedActions.length === 0 || config.role.allowedActions.some((value) => !ACTIONS.has(value))) throw new Error("role contains an unsupported allowed action");
 	if (config.role.requiresApproval !== undefined && !Array.isArray(config.role.requiresApproval)) throw new Error("requiresApproval must be an array");
 	if (config.role.requiresApproval?.some((value) => !ACTIONS.has(value))) throw new Error("role contains an unsupported approval action");
-	if (!new Set(["codex", "claude", "opencode"]).has(config.backend?.selected)) throw new Error("selected backend is not supported");
+	if (!new Set(["codex", "claude", "opencode", "grok"]).has(config.backend?.selected)) throw new Error("selected backend is not supported");
 	if (config.backend.profiles?.[config.backend.selected]?.enabled !== true) throw new Error("selected backend profile is disabled");
 	for (const [name, profile] of Object.entries(config.backend.profiles ?? {})) {
-		if (!new Set(["codex", "claude", "opencode"]).has(name)) throw new Error("unsupported backend profile");
+		if (!new Set(["codex", "claude", "opencode", "grok"]).has(name)) throw new Error("unsupported backend profile");
 		assertOnlyKeys(profile, new Set(["enabled", "model", "costProfile", "reasoningEffort"]), "backend profile");
 		if (typeof profile.enabled !== "boolean") throw new Error("backend profile enabled must be boolean");
 		if (profile.model !== undefined && (typeof profile.model !== "string" || !/^(?=.{1,80}$)[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/.test(profile.model))) throw new Error("backend profile model is invalid");
-		if (profile.costProfile !== undefined && (name !== "codex" || !new Set(["control", "balanced", "economy"]).has(profile.costProfile))) throw new Error("backend profile costProfile is invalid");
-		if (profile.reasoningEffort !== undefined && (name !== "codex" || !new Set(["low", "medium", "high", "max"]).has(profile.reasoningEffort))) throw new Error("backend profile reasoningEffort is invalid");
+		if (profile.costProfile !== undefined && ((name !== "codex" && name !== "grok") || !new Set(["control", "balanced", "economy"]).has(profile.costProfile))) throw new Error("backend profile costProfile is invalid");
+		if (profile.reasoningEffort !== undefined && ((name !== "codex" && name !== "grok") || !new Set(["low", "medium", "high", "max"]).has(profile.reasoningEffort))) throw new Error("backend profile reasoningEffort is invalid");
 		if (name === "codex" && profile.costProfile === undefined) profile.costProfile = "balanced";
+		if (name === "grok" && profile.costProfile === undefined) profile.costProfile = "balanced";
+		if (name === "grok" && profile.model === undefined) profile.model = "grok-4.6";
+		if (name === "grok" && profile.reasoningEffort === undefined) profile.reasoningEffort = grokDiscordCost(profile.costProfile).reasoningEffort;
 	}
 	safeIdentifier(config.discord?.credentialRef, "credentialRef");
 	snowflake(config.discord?.botUserId, "Discord bot user ID");

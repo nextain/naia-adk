@@ -30,7 +30,8 @@ pnpm --filter @naia-adk/benchmark-contract test
 - `control`: all-Sol 기준선과 고위험 폴백
 - `balanced`: Luna Max가 비서·이슈 리더를 맡고, Sol Medium의 별도 분석·설계·리뷰를 거쳐 제한 구현과 테스트는 Luna가 수행하는 bound Codex 기본값
 - `economy`: `balanced`와 같은 안전 경계를 유지하면서 Luna의 저위험 기계 작업 범위를 후속 실험으로 확장하는 프로파일
-- `delegated`: 선택 설치한 외부 구현 워커에 범위가 제한된 중위험 이하 구현을 맡기고 Sol이 계획·통합을 유지하는 프로파일. 공개 정본은 공급자 중립 바인딩만 유지하며 실제 공급자·모델과 자격 증거는 배포별 비공개 오버레이에서 관리합니다.
+- `delegated`: 선택 설치한 외부 구현 워커에 범위가 제한된 중위험 이하 구현을 맡기고 Sol이 계획·통합을 유지하는 프로파일. 공개 정본은 공급자 중립 바인딩만 유지하며 실제 공급자·모델과 자격 증거는 배포별 비공개 오버레이에서 관리합니다
+- `grok-balanced`: Grok 전용 다섯 번째 프로파일. Grok 4.6 medium이 L3/L2와 제한 구현을 맡고, 분석·설계는 4.6 high, 번역·검증은 4.6 low. 기본 Codex `balanced`를 바꾸지 않습니다.
 
 ```bash
 node packages/benchmark-contract/src/development-profiles.mjs show --profile balanced
@@ -68,4 +69,4 @@ Balanced의 분석·설계·리뷰 선택은 생산·분석·설계·리뷰에 �
 depth이며, 감춰진 호출을 소급해 차단하지 않는다.
 
 정본 계약과 동결 증적은 `.agents/decisions/`와 `.agents/reviews/`에 있으며,
-계약 SHA-256은 `4414020422e6254b71a54bb737b05b0e8d6418b3f7a83ab3ac48e578ed1306b9`입니다.
+계약 SHA-256은 `cd9552a5344d7e82e2650190a3f9d1aa24268388b19babc748d7ab08f2f2f644`입니다.

@@ -41,6 +41,17 @@ assert.deepEqual(
   [["luna","low"],["luna","medium"],["luna","low"],["luna","medium"],["luna","low"]],
 );
 assert.deepEqual(catalog.balanced_role_policy.translation.allowed_reasoning_efforts,["low"]);
+const grokAvailability=["grok_flagship","grok_workhorse","grok_light"];
+const grokRoles=["orchestrator","integrator","bounded_worker","tester","mechanical_worker","explorer","analysis","designer","translation","adversarial_reviewer"];
+const grokBalanced=grokRoles.map(role=>selectDevelopmentBinding({profileId:"grok-balanced",role,availableBindings:grokAvailability,boundedScope:true,...exactValidatorEvidence,risk:"low",...(role==="adversarial_reviewer"?{producerBinding:"grok_workhorse"}:{})}));
+assert.ok(grokBalanced.every(selection=>selection.binding.adapter==="grok"),"a Grok profile must never resolve a Codex binding");
+assert.deepEqual(
+	["orchestrator","bounded_worker","tester","analysis","designer","adversarial_reviewer","translation"].map(role=>{const selection=grokBalanced[grokRoles.indexOf(role)];return [selection.binding_id,selection.reasoning_effort];}),
+	[["grok_workhorse","medium"],["grok_workhorse","medium"],["grok_light","low"],["grok_flagship","high"],["grok_flagship","high"],["grok_flagship","medium"],["grok_light","low"]],
+);
+assert.throws(()=>selectDevelopmentBinding({profileId:"grok-balanced",role:"bounded_worker",availableBindings:grokAvailability,boundedScope:false,risk:"low"}),/requires bounded scope/,"a Grok workhorse is held to the same bounded conditions Luna is");
+assert.throws(()=>selectDevelopmentBinding({role:"orchestrator",availableBindings:grokAvailability}),/Balanced requires luna for orchestrator/,"declaring only Grok bindings must fail closed on a Codex profile rather than substituting a Grok model");
+assert.throws(()=>selectDevelopmentBinding({profileId:"grok-balanced",role:"orchestrator",availableBindings:["sol","luna"]}),/no available development binding for orchestrator/,"declaring only Codex bindings must fail closed on a Grok profile");
 assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,...exactValidatorEvidence,risk:"medium",availableBindings:["sol","terra"]}),/Balanced requires luna for bounded_worker/);
 assert.equal(selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,...exactValidatorEvidence,risk:"medium",availableBindings:["sol","terra","luna"]}).binding_id,"luna");
 assert.throws(()=>selectDevelopmentBinding({role:"bounded_worker",boundedScope:true,exactValidatorCommand:validatorCommand,allowedShellCommands:["node test/other.mjs"],risk:"medium"}),/exact allowlisted validator command/,"the exact validator command must appear verbatim in allowed_shell_commands");

@@ -165,6 +165,7 @@ try {
 	};
 	assert.equal(core.validateSubagentPolicy(validPolicy), null);
 	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "control" }), null);
+	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "grok-balanced" }), null);
 	assert.equal(core.validateSubagentPolicy({ ...validPolicy, profile: "economy" }), "invalid_subagent_policy_mode");
 	assert.equal(core.validateSubagentPolicy(undefined), null);
 	assert.equal(core.validateSubagentPolicy(null), "invalid_subagent_policy");

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { grokDiscordCost } from "./grok-cost-profile.mjs";
 
 const CODEX_REASONING_BY_COST_PROFILE = Object.freeze({ control: "medium", balanced: "low", economy: "low" });
 
@@ -56,9 +57,24 @@ const ADAPTERS = new Map([
 		},
 		parse: parseOpencode,
 	}],
+	["grok", {
+		backendId: "grok",
+		activityDetail: "structured",
+		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
+		command({ executable = "grok", cwd, permissionMode = "plan", approvalPolicy = "never", model = "grok-4.6", costProfile = "balanced", reasoningEffort = null }) {
+			if (approvalPolicy !== "never") throw new Error("Grok child approval policy must be never");
+			if (!new Set(["plan", "bypassPermissions"]).has(permissionMode)) throw new Error("unsupported Grok permission mode");
+			const selectedReasoningEffort = reasoningEffort ?? grokDiscordCost(costProfile).reasoningEffort;
+			if (!selectedReasoningEffort || !new Set(["low", "medium", "high", "max"]).has(selectedReasoningEffort)) throw new Error("unsupported Grok reasoning effort");
+			const args = ["--output-format", "streaming-messages-json", "--permission-mode", permissionMode, "--cwd", cwd, "--prompt-file", "-", "--reasoning-effort", selectedReasoningEffort];
+			if (model) args.push("--model", model);
+			return { command: executable, args };
+		},
+		parse: parseGrok,
+	}],
 ]);
 
-const MINIMUM_VERSIONS = new Map([["codex", [0, 146, 0]], ["claude", [2, 1, 220]], ["opencode", [1, 18, 0]]]);
+const MINIMUM_VERSIONS = new Map([["codex", [0, 146, 0]], ["claude", [2, 1, 220]], ["opencode", [1, 18, 0]], ["grok", [1, 0, 0]]]);
 const APPROVAL_REQUEST_PATTERN = /\b(?:approval|permission)[ _-]?(?:required|request)\b/i;
 
 export function approvalRequestedText(value) {
@@ -194,6 +210,40 @@ function parseClaude(message, rawBytes) {
 	return events;
 }
 
+const GROK_TOOL_CATEGORIES = new Map([
+	["run_terminal_command", "command_execution"],
+	["search_replace", "file_change"],
+	["write", "file_change"],
+	["read_file", "read"],
+	["grep", "search"],
+	["web_search", "search"],
+]);
+
+function parseGrok(message, rawBytes) {
+	const events = [];
+	if (message.type === "system" && message.subtype === "init") {
+		events.push({ kind: "backend_ready", safePayload: { backend: "grok" } });
+		return events;
+	}
+	if (message.type === "assistant") {
+		for (const block of claudeBlocks(message)) {
+			if (block.type === "tool_use") events.push({ kind: "tool_started", safePayload: optionalToolPayload(GROK_TOOL_CATEGORIES.get(block.name)) });
+		}
+		events.push(...activity(rawBytes));
+		return events;
+	}
+	if (message.type === "result") {
+		events.push(...cacheReceipt(message.usage, "grok"));
+		return events;
+	}
+	if (message.sessionUpdate || message.type === "session_update") {
+		events.push({ kind: "backend_ready", safePayload: { backend: "grok" } });
+		events.push(...activity(rawBytes));
+		return events;
+	}
+	return activity(rawBytes);
+}
+
 function parseOpencode(message, rawBytes) {
 	const events = [];
 	if (message.type === "step_start") events.push({ kind: "phase_changed", safePayload: { phase: "planning" } });
@@ -234,6 +284,11 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 		if (text) assistantText = text;
 	}
 	if (backendId === "claude" && message.type === "result" && outcome === "success" && typeof message.result === "string") transientResult = message.result;
+	if (backendId === "grok" && message.type === "assistant") {
+		const text = claudeBlocks(message).filter((block) => block.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n");
+		if (text) assistantText = text;
+	}
+	if (backendId === "grok" && message.type === "result" && outcome === "success" && typeof message.result === "string") transientResult = message.result;
 	if (backendId === "opencode" && message.type === "text" && typeof message.part?.text === "string") {
 		transientResult = message.part.text;
 		assistantText = message.part.text;

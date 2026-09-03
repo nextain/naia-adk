@@ -80,7 +80,7 @@ export function validateBackendCapabilities(value = {}) {
 }
 
 const ENUMS = {
-	backend: new Set(["codex", "claude", "opencode", "fake"]),
+	backend: new Set(["codex", "claude", "opencode", "grok", "fake"]),
 	jobType: new Set(["conversation", "issue_work", "review", "maintenance", "unknown"]),
 	phase: new Set(["setup", "planning", "reading", "editing", "testing", "reviewing", "delivering", "recovering"]),
 	toolCategory: new Set(["command_execution", "file_change", "read", "search", "file_read", "file_edit", "command", "test", "build", "network", "other"]),

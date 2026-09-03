@@ -67,7 +67,7 @@ export function renderLegacyRollbackUnits({ paths, runtimePath, names, tokenFing
 		"/usr/bin/flock", "--no-fork", "--nonblock", "--conflict-exit-code", "78", paths.lockPath,
 		nodePath, servicePath, "--adk-root", paths.root, "--instance", paths.instance].map(unitQuote).join(" ");
 	const backendEnvironment = Object.entries(backendExecutables).map(([backend, executable]) => {
-		if (!new Set(["codex", "claude", "opencode"]).has(backend) || typeof executable !== "string" || !isAbsolute(executable)) throw new Error("rollback backend executable is invalid");
+		if (!new Set(["codex", "claude", "opencode", "grok"]).has(backend) || typeof executable !== "string" || !isAbsolute(executable)) throw new Error("rollback backend executable is invalid");
 		return `Environment=${unitQuote(`NAIA_${backend.toUpperCase()}_EXECUTABLE=${resolve(executable)}`)}`;
 	});
 	const executablePath = [...new Set([dirname(resolve(nodePath)), ...Object.values(backendExecutables).map((executable) => dirname(resolve(executable))), "/usr/local/bin", "/usr/bin", "/bin"])].join(delimiter);

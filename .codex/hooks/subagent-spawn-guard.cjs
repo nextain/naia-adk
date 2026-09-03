@@ -187,10 +187,11 @@ function coveredByEveryBoundary(candidate, contract) {
 function roleRules(profileId = "balanced") {
 	const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
 	const profile = catalog?.profiles?.find((item) => item.id === profileId);
-	const policies = catalog?.balanced_role_policy;
+	const policies = profileId === "grok-balanced" ? catalog?.grok_balanced_role_policy : catalog?.balanced_role_policy;
 	const bindings = catalog?.bindings;
 	if (!profile || !bindings || String(profile.activation || "").startsWith("disabled")) throw new Error("development profile is not active");
-	const assignments = profileId === "balanced" ? Object.fromEntries(Object.entries(policies || {}).map(([role, value]) => [role, value.binding])) : {
+	const usesRolePolicy = profileId === "balanced" || profileId === "grok-balanced";
+	const assignments = usesRolePolicy ? Object.fromEntries(Object.entries(policies || {}).map(([role, value]) => [role, value.binding])) : {
 		secretary: profile.assignments.orchestrator, issue_leader: profile.assignments.integrator,
 		explorer: profile.assignments.bounded_worker, analysis: profile.assignments.reviewer_pool[0],
 		design: profile.assignments.reviewer_pool[0], review: profile.assignments.reviewer_pool[0],
@@ -200,7 +201,7 @@ function roleRules(profileId = "balanced") {
 	return Object.fromEntries(Object.keys(assignments).map((role) => {
 		const bindingId = assignments[role], binding = bindings[bindingId];
 		if (!binding?.model) throw new Error(`development profile binding invalid for ${role}`);
-		const allowed = profileId === "balanced" ? policies[role].allowed_reasoning_efforts : profile.reasoning_effort ? [profile.reasoning_effort] : (binding.allowed_reasoning_efforts || [binding.default_reasoning_effort || "medium"]);
+		const allowed = usesRolePolicy ? policies[role].allowed_reasoning_efforts : profile.reasoning_effort ? [profile.reasoning_effort] : (binding.allowed_reasoning_efforts || [binding.default_reasoning_effort || "medium"]);
 		return [role, [binding.model, allowed, bindingId]];
 	}));
 }

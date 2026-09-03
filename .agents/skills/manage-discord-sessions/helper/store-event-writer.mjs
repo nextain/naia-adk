@@ -19,19 +19,19 @@ const EVENT_SOURCES = new Map([
 	["request_recorded", new Set(["gateway"])],
 	["attempt_reserved", new Set(["helper"])],
 	["attempt_started", new Set(["helper"])],
-	["backend_ready", new Set(["codex", "claude", "fake_backend"])],
-	["phase_changed", new Set(["codex", "claude", "fake_backend"])],
-	["output_activity", new Set(["codex", "claude", "fake_backend"])],
-	["progress_reported", new Set(["codex", "claude", "fake_backend"])],
-	["prompt_cache_observed", new Set(["codex", "claude", "fake_backend"])],
-	["tool_started", new Set(["codex", "claude", "fake_backend"])],
-	["tool_finished", new Set(["codex", "claude", "fake_backend"])],
-	["approval_required", new Set(["codex", "claude", "fake_backend"])],
-	["checkpoint_saved", new Set(["helper", "codex", "claude", "fake_backend"])],
+	["backend_ready", new Set(["codex", "claude", "grok", "fake_backend"])],
+	["phase_changed", new Set(["codex", "claude", "grok", "fake_backend"])],
+	["output_activity", new Set(["codex", "claude", "grok", "fake_backend"])],
+	["progress_reported", new Set(["codex", "claude", "grok", "fake_backend"])],
+	["prompt_cache_observed", new Set(["codex", "claude", "grok", "fake_backend"])],
+	["tool_started", new Set(["codex", "claude", "grok", "fake_backend"])],
+	["tool_finished", new Set(["codex", "claude", "grok", "fake_backend"])],
+	["approval_required", new Set(["codex", "claude", "grok", "fake_backend"])],
+	["checkpoint_saved", new Set(["helper", "codex", "claude", "grok", "fake_backend"])],
 	["verification_recorded", new Set(["host_verifier", "backend_claim", "human_review"])],
 	["attempt_exited", new Set(["helper"])],
 	["attempt_succeeded", new Set(["helper"])],
-	["result_reported", new Set(["codex", "claude", "fake_backend"])],
+	["result_reported", new Set(["codex", "claude", "grok", "fake_backend"])],
 	["retry_scheduled", new Set(["helper", "recovery"])],
 	["delivery_started", new Set(["helper"])],
 	["delivery_confirmed", new Set(["helper", "recovery"])],
@@ -49,7 +49,7 @@ const EVENT_SOURCES = new Map([
 	["failed", new Set(["helper", "recovery"])],
 ]);
 
-const EXTERNAL_EVENT_SOURCES = new Set(["codex", "claude", "fake_backend"]);
+const EXTERNAL_EVENT_SOURCES = new Set(["codex", "claude", "grok", "fake_backend"]);
 
 function json(value) {
 	return JSON.stringify(value ?? {});
@@ -172,7 +172,7 @@ export class SessionEventWriter {
 		}
 		if (attemptId && !new Set(["attempt_reserved", "attempt_started"]).has(kind) && job.attempt_id && attemptId !== job.attempt_id) throw new Error(`stale attempt event rejected: ${attemptId}`);
 		if (!new Set(["metadata_only", "local_safe"]).has(redactionLevel)) throw new Error(`unsupported redaction level: ${redactionLevel}`);
-		if (!new Set(["gateway", "helper", "codex", "claude", "fake_backend", "host_verifier", "backend_claim", "human_review", "recovery"]).has(source)) {
+		if (!new Set(["gateway", "helper", "codex", "claude", "grok", "fake_backend", "host_verifier", "backend_claim", "human_review", "recovery"]).has(source)) {
 			throw new Error(`unsupported event source: ${source}`);
 		}
 		const sequence = this.db.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next FROM job_events WHERE job_id = ?").get(jobId).next;

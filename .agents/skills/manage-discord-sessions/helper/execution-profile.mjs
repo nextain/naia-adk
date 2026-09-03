@@ -149,7 +149,7 @@ export function participantAuthorityRevision({ workspaceIdentity, bindingIdentit
 
 function validExecutionProfile(profile) {
 	return Boolean(profile)
-		&& new Set(["codex", "claude", "opencode"]).has(profile.backendId)
+		&& new Set(["codex", "claude", "opencode", "grok"]).has(profile.backendId)
 		&& AUTHORIZATION_MODES.has(profile.authorizationMode)
 		&& new Set(["read-only", "workspace-write", "danger-full-access"]).has(profile.access)
 		&& typeof profile.permissionProfileEpoch === "string"
@@ -162,7 +162,7 @@ function validExecutionProfile(profile) {
 // 소유자가 제출한 요청을 읽기 전용으로 낮춰 실행하기 위한 상한. 권한을 넓히는
 // 방향으로는 쓰지 않는다 — 낮추기만 한다.
 export function currentExecutionProfile(config, backendId, authority = null, { accessCeiling = null } = {}) {
-	if (!new Set(["codex", "claude", "opencode"]).has(backendId)) throw new Error("unsupported execution backend");
+	if (!new Set(["codex", "claude", "opencode", "grok"]).has(backendId)) throw new Error("unsupported execution backend");
 	const authorizationMode = config.runtime?.approvalPolicy ?? "never";
 	if (!AUTHORIZATION_MODES.has(authorizationMode)) throw new Error("unsupported execution approval policy");
 	const permissionProfileEpoch = config.runtime?.permissionProfileEpoch ?? "default";

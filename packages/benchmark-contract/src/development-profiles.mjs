@@ -40,7 +40,7 @@ function verifyOptionalWorkerReceipt(definition,receipt,{now=Date.now(),catalogD
 function validateCatalog(catalog){
   if(catalog?.schema_revision!=="development-composition-profiles-v2"||catalog?.status!=="active_codex_default_no_total_cost_claim")throw new Error("development composition profile identity invalid");
   const profiles=catalog.profiles||[],ids=profiles.map(item=>item.id);
-  if(ids.length!==4||new Set(ids).size!==4||!["control","balanced","economy","delegated"].every(id=>ids.includes(id)))throw new Error("development composition profiles must be control, balanced, economy, and delegated");
+  if(ids.length!==5||new Set(ids).size!==5||!["control","balanced","economy","delegated","grok-balanced"].every(id=>ids.includes(id)))throw new Error("development composition profiles must be control, balanced, economy, delegated, and grok-balanced");
   if(catalog.default_profile!=="balanced"||catalog.fallback_profile!=="control")throw new Error("development composition default or fallback drift");
   const activation=catalog.activation?.codex_bound_sessions;
   if(activation?.mode!=="default_active"||activation?.override_env!=="CODEX_DEVELOPMENT_PROFILE"||activation?.available_bindings_env!=="CODEX_AVAILABLE_BINDINGS")throw new Error("Codex development profile activation invalid");
@@ -60,6 +60,13 @@ function validateCatalog(catalog){
 	for(const profileId of ["balanced","economy"]){
 		const assignments=profiles.find(profile=>profile.id===profileId)?.assignments;
 		if(assignments?.orchestrator!==balancedRoleExpectation.secretary[0]||assignments?.integrator!==balancedRoleExpectation.issue_leader[0]||assignments?.bounded_worker!==balancedRoleExpectation.implementation[0]||assignments?.mechanical_worker!==balancedRoleExpectation.generic_worker[0]||assignments?.tester!==balancedRoleExpectation.test[0]||JSON.stringify(assignments?.reviewer_pool)!==JSON.stringify([balancedRoleExpectation.review[0]]))throw new Error(`${profileId}: assignments drift from exact role policy`);
+	}
+	const grokPolicy=catalog.grok_balanced_role_policy;
+	const grokAssignments=profiles.find(profile=>profile.id==="grok-balanced")?.assignments;
+	if(!grokPolicy||grokAssignments?.orchestrator!==grokPolicy.secretary?.binding||grokAssignments?.integrator!==grokPolicy.issue_leader?.binding||grokAssignments?.bounded_worker!==grokPolicy.implementation?.binding||grokAssignments?.mechanical_worker!==grokPolicy.generic_worker?.binding||grokAssignments?.tester!==grokPolicy.test?.binding||JSON.stringify(grokAssignments?.reviewer_pool)!==JSON.stringify([grokPolicy.review?.binding]))throw new Error("grok-balanced: assignments drift from grok_balanced_role_policy");
+	for(const role of requiredBalancedRoles){
+		const policy=grokPolicy[role];
+		if(!policy||!catalog.bindings[policy.binding]||!policy.allowed_reasoning_efforts?.includes(policy.default_reasoning_effort)||!catalog.bindings[policy.binding].allowed_reasoning_efforts?.includes(policy.default_reasoning_effort))throw new Error(`grok balanced role policy invalid for ${role}`);
 	}
   for(const claim of ["proven_total_cost_reduction","production_optimal_profile","global_model_superiority"]){
     if(!catalog.claim_boundary.forbidden_until_phase_2.includes(claim))throw new Error(`phase-1 profile claim boundary missing ${claim}`);
@@ -113,7 +120,7 @@ export function selectDevelopmentBindingFromCatalog(catalog,{profileId,role,boun
   else if(role==="bounded_worker"||role==="tester")binding=profile.assignments[role];
   else if(role==="mechanical_worker")binding=profile.assignments.mechanical_worker;
   else if(role==="explorer"||role==="analysis"||role==="designer"||role==="translation"){
-		binding=profile.id==="control"?"sol":catalog.balanced_role_policy[balancedPolicyRole].binding;
+		binding=profile.id==="control"?"sol":profile.id==="grok-balanced"?catalog.grok_balanced_role_policy[balancedPolicyRole].binding:catalog.balanced_role_policy[balancedPolicyRole].binding;
 	}
   else if(role==="adversarial_reviewer"){
 		const reviewerPool=profile.assignments.reviewer_pool.filter(item=>available.has(item));
@@ -124,9 +131,10 @@ export function selectDevelopmentBindingFromCatalog(catalog,{profileId,role,boun
   } else throw new Error(`unknown development role ${role}`);
 
   let fallback_reason=null;
-	if(["bounded_worker","tester","translation"].includes(role)&&binding==="luna"&&((boundedGuard.requires_bounded_scope&&!boundedScope)||riskRank[risk]>riskRank[boundedGuard.maximum_risk]))throw new Error(`Luna ${role} requires bounded scope and risk at or below ${boundedGuard.maximum_risk}; no Sol fallback is permitted`);
-	if(["bounded_worker","tester","translation"].includes(role)&&binding==="luna"&&boundedGuard.luna_requires_exact_validator&&!exactValidatorBound)throw new Error(`Luna ${role} requires an exact allowlisted validator command; no Sol fallback is permitted`);
-	if(role==="mechanical_worker"&&binding==="luna"&&((mechanicalGuard.luna_requires_bounded_scope&&!boundedScope)||(mechanicalGuard.luna_requires_exact_validator&&!exactValidatorBound)||riskRank[risk]>riskRank[mechanicalGuard.luna_maximum_risk]))throw new Error("Luna mechanical_worker requires bounded low-risk scope and an exact allowlisted validator command; no Sol fallback is permitted");
+	const workhorseGuarded=binding==="luna"||binding==="grok_workhorse"||binding==="grok_light";
+	if(["bounded_worker","tester","translation"].includes(role)&&workhorseGuarded&&((boundedGuard.requires_bounded_scope&&!boundedScope)||riskRank[risk]>riskRank[boundedGuard.maximum_risk]))throw new Error(`${binding} ${role} requires bounded scope and risk at or below ${boundedGuard.maximum_risk}; no fallback is permitted`);
+	if(["bounded_worker","tester","translation"].includes(role)&&workhorseGuarded&&boundedGuard.luna_requires_exact_validator&&!exactValidatorBound)throw new Error(`${binding} ${role} requires an exact allowlisted validator command; no fallback is permitted`);
+	if(role==="mechanical_worker"&&workhorseGuarded&&((mechanicalGuard.luna_requires_bounded_scope&&!boundedScope)||(mechanicalGuard.luna_requires_exact_validator&&!exactValidatorBound)||riskRank[risk]>riskRank[mechanicalGuard.luna_maximum_risk]))throw new Error(`${binding} mechanical_worker requires bounded low-risk scope and an exact allowlisted validator command; no fallback is permitted`);
 	const selectedDefinition=catalog.bindings[binding];
 	if(selectedDefinition?.adapter==="optional_external_runtime"){
 		const evidence=bindingEvidence?.[binding];
@@ -137,7 +145,7 @@ export function selectDevelopmentBindingFromCatalog(catalog,{profileId,role,boun
 		if(profile.id==="balanced")throw new Error(`Balanced requires ${binding} for ${role}; no fallback is permitted`);
 		throw new Error(`no available development binding for ${role}; automatic model fallback is disabled`);
 	}
-  const rolePolicy=["balanced","economy"].includes(profile.id)&&balancedPolicyRole?catalog.balanced_role_policy[balancedPolicyRole]:null;
+  const rolePolicy=profile.id==="grok-balanced"&&balancedPolicyRole?catalog.grok_balanced_role_policy[balancedPolicyRole]:["balanced","economy"].includes(profile.id)&&balancedPolicyRole?catalog.balanced_role_policy[balancedPolicyRole]:null;
   const reasoning_effort=rolePolicy?.binding===binding?rolePolicy.default_reasoning_effort:catalog.bindings[binding].default_reasoning_effort??null;
   return {profile_id:profile.id,activation_source,role,binding_id:binding,binding:catalog.bindings[binding],reasoning_effort,available_bindings:[...available].sort(),fallback_reason,profile_status:catalog.status,catalog_digest:digestCanonical(catalog),fallback_profile:catalog.fallback_profile,total_cost_reduction_proven:false};
 }

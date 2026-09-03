@@ -195,6 +195,7 @@ export async function runDiscordService({ adkRoot, instance = "default", managed
 			...(configuredBackendCommand("codex") ? { codex: configuredBackendCommand("codex") } : {}),
 			...(configuredBackendCommand("claude") ? { claude: configuredBackendCommand("claude") } : {}),
 			...(configuredBackendCommand("opencode") ? { opencode: configuredBackendCommand("opencode") } : {}),
+			...(configuredBackendCommand("grok") ? { grok: configuredBackendCommand("grok") } : {}),
 		};
 		const send = fetchImpl ? (input) => postDiscordMessage({ ...input, fetchImpl }) : postDiscordMessage;
 		const loadHistory = (input) => fetchDiscordConversation({ ...input, fetchImpl: fetchImpl ?? fetch });
