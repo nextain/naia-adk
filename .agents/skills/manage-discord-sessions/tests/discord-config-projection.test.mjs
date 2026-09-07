@@ -116,6 +116,17 @@ test("DSG-021 validates schema v2 workspace, exact participant coverage, and saf
 	assert.equal(load({ ...base, backend: { selected: "opencode", profiles: { ...base.backend.profiles, opencode: { enabled: true, model: "azure-foundry/deepseek-v4-pro" } } } }).backend.profiles.opencode.model, "azure-foundry/deepseek-v4-pro");
 	assert.throws(() => load({ ...base, backend: { selected: "opencode", profiles: { ...base.backend.profiles, opencode: { enabled: true, model: "/deepseek-v4-pro" } } } }), /model is invalid/);
 	assert.throws(() => load({ ...base, backend: { ...base.backend, profiles: { ...base.backend.profiles, codex: { enabled: true, costProfile: "unknown" } } } }), /costProfile is invalid/);
+	// Grok reuses the shared cost-profile vocabulary with its own effort table,
+	// and leaves the model unset so no personal default is baked into config.
+	const grokLoaded = load({ ...base, backend: { selected: "grok", profiles: { ...base.backend.profiles, grok: { enabled: true } } } });
+	assert.equal(grokLoaded.backend.selected, "grok");
+	assert.equal(grokLoaded.backend.profiles.grok.model, undefined);
+	assert.equal(grokLoaded.backend.profiles.grok.costProfile, "balanced");
+	assert.equal(grokLoaded.backend.profiles.grok.reasoningEffort, "medium");
+	assert.equal(load({ ...base, backend: { selected: "grok", profiles: { ...base.backend.profiles, grok: { enabled: true, costProfile: "control" } } } }).backend.profiles.grok.reasoningEffort, "high");
+	assert.equal(load({ ...base, backend: { selected: "grok", profiles: { ...base.backend.profiles, grok: { enabled: true, costProfile: "economy", reasoningEffort: "max" } } } }).backend.profiles.grok.reasoningEffort, "max");
+	assert.equal(load({ ...base, backend: { selected: "grok", profiles: { ...base.backend.profiles, grok: { enabled: true, model: "grok-4.6" } } } }).backend.profiles.grok.model, "grok-4.6");
+	assert.throws(() => load({ ...base, backend: { selected: "grok", profiles: { ...base.backend.profiles, grok: { enabled: true, costProfile: "unknown" } } } }), /costProfile is invalid/);
 	assert.throws(() => load({ ...base, discord: { ...base.discord, participantProfiles: {} } }), /exactly cover/);
 	assert.throws(() => load({ ...base, discord: { ...base.discord, participantProfiles: { [USER]: { ...base.discord.participantProfiles[USER], label: "system" } } } }), /reserved/);
 	assert.throws(() => load({ ...base, discord: { ...base.discord, participantProfiles: { [USER]: { ...base.discord.participantProfiles[USER], relationship: "owner\ninjected" } } } }), /single line/);

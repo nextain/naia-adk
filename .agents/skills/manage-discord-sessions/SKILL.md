@@ -1,22 +1,22 @@
 ---
 name: manage-discord-sessions
-description: Configure, observe, and recover Discord AI jobs from the ADK workspace with either Codex or Claude. Use for Discord setup, background-job status, live activity, stalled-job diagnosis, reboot recovery, idle rotation, or session history.
+description: Configure, observe, and recover Discord AI jobs from the ADK workspace with Codex, Claude, OpenCode, or Grok. Use for Discord setup, background-job status, live activity, stalled-job diagnosis, reboot recovery, idle rotation, or session history.
 ---
 
 # Manage Discord Sessions
 
-Use this skill as the shared Codex and Claude operator surface. Do not create a separate product CLI. The deterministic script below reads durable state without launching another AI or requiring `naia-agent` or `naia-shell`.
+Use this skill as the shared Codex, Claude, OpenCode, and Grok operator surface. Do not create a separate product CLI. The deterministic script below reads durable state without launching another AI or requiring `naia-agent` or `naia-shell`.
 
 ## What this provides
 
-The implementation is usable with `naia-adk` alone from either Codex or Claude:
+The implementation is usable with `naia-adk` alone from Codex, Claude, OpenCode, or Grok:
 
 - append-only SQLite job and safe-event history;
 - service freshness and job activity-health projection;
 - predeclared completion checks and trusted evidence;
 - `status`, `jobs`, `job`, durable `logs --follow`, per-instance `monitor`, bounded job controls, `history`, `latest`, verified
   `attachment` recovery, and explicit `reply` commands.
-- independent Codex `exec --json` and Claude `-p --output-format stream-json` adapters;
+- independent Codex `exec --json`, Claude `-p --output-format stream-json`, OpenCode `run --format json`, and Grok `--output-format streaming-messages-json` adapters; Grok children keep subagents enabled;
 - isolated per-attempt child homes, minimum authentication copies, safe event normalization, timeout, cancellation, and signal-aware exit handling.
 - fresh permission-profile checks that replace stale child settings, force no-prompt child execution, and reject an approval UI instead of waiting unattended;
 - a bounded no-progress watchdog plus a Discord channel-response deadline that creates an explicit operator handoff;
@@ -146,7 +146,7 @@ naia-settings/.sessions/messenger-sessions/instances/alpha/runtime.sqlite3
 
 The real config and all session state are local and ignored by Git. Only `config.example.json` is tracked. Secret values never belong in config, events, status, or logs; config stores credential references only.
 
-Put the referenced Discord token in `naia-settings/.keys/messenger-sessions/<credentialRef>` with mode `0600`. The config itself must also be mode `0600`. Choose `backend.selected` as `codex`, `claude`, or `opencode`; no Naia Agent or Naia Shell installation is required. Codex profiles default `costProfile` to `balanced`, which pins low reasoning effort; `control` pins medium and `economy` currently preserves the same low-effort command boundary. `runtime.accessProfile` defaults to `controlled`, whose prompt records the host-verified `read-only` or `workspace-write` execution contract. A separate `trusted-local` instance is explicit and fail-closed: schema v2, one exact operator participant, DM-only bindings, write plus execute authority, and `approvalPolicy=never` are all required. It maps authorized mutation to the hosting OS user's local authority (`danger-full-access`, `bypassPermissions`, or OpenCode `--auto`) without granting root or broadening the request. Give that instance its own Discord bot token; the token-owner lock prevents controlled and trusted-local Gateways from sharing one token concurrently. Make backend and access-profile selections before the first `service install` for an unregistered instance. For an existing registration, changing `backend.selected` is a managed runtime change and must use the verified candidate cutover procedure below. Changing `runtime.accessProfile` is also a managed runtime change and follows the same procedure; do not overwrite either with an ordinary `service install` or restart.
+Put the referenced Discord token in `naia-settings/.keys/messenger-sessions/<credentialRef>` with mode `0600`. The config itself must also be mode `0600`. Choose `backend.selected` as `codex`, `claude`, `opencode`, or `grok`; no Naia Agent or Naia Shell installation is required. Codex profiles default `costProfile` to `balanced`, which pins low reasoning effort; `control` pins medium and `economy` currently preserves the same low-effort command boundary. Grok uses the same `costProfile` names so a backend switch does not rewrite the config shape, but its own effort table: `balanced` pins medium, `control` high, `economy` low. Set `backend.profiles.grok.reasoningEffort` to override, and `backend.profiles.grok.model` to pin a model; with no model configured the Grok CLI keeps its own default. Do not pass `--no-subagents` to Grok. `runtime.accessProfile` defaults to `controlled`. The helper records the requested `read-only` or `workspace-write` profile as a runtime execution contract; that record is not a host OS sandbox for every backend. A separate `trusted-local` instance is explicit and fail-closed: schema v2, one exact operator participant, DM-only bindings, write plus execute authority, and `approvalPolicy=never` are all required. It maps authorized mutation to the hosting OS user's local authority (`danger-full-access`, `bypassPermissions`, or OpenCode `--auto`) without granting root or broadening the request. Give that instance its own Discord bot token; the token-owner lock prevents controlled and trusted-local Gateways from sharing one token concurrently. Make backend and access-profile selections before the first `service install` for an unregistered instance. For an existing registration, changing `backend.selected` is a managed runtime change and must use the verified candidate cutover procedure below. Changing `runtime.accessProfile` is also a managed runtime change and follows the same procedure; do not overwrite either with an ordinary `service install` or restart.
 
 Additional authenticated CLI tools use the trusted registry in
 `helper/credential-profiles.mjs`. Add one profile that declares the minimum
@@ -158,6 +158,40 @@ host `PATH`. Never accept arbitrary source paths or credential-profile
 definitions from messenger JSON. This single registry is shared by Codex,
 Claude Code, and OpenCode, so a profile must not be implemented separately per
 backend.
+
+A read-only execution profile never carries network access or credential
+profiles into the child, whatever `runtime.networkAccess` and
+`runtime.credentialProfiles` say. That configuration is for authorized mutation
+work; a read-only child has no use for it, and Codex refuses read-only plus
+network access outright, which used to turn every mutation-window downgrade,
+explicit read-only submission, automatic recovery and cutover canary on such an
+instance into `backend_invocation_invalid`.
+
+OpenCode read-only is enforced by configuration, not by prompt text: the child
+gets an owner-only overlay in its own home through `OPENCODE_CONFIG` that denies
+`edit`, `bash` and `webfetch`, plus `OPENCODE_DISABLE_PROJECT_CONFIG=1`. Both are
+required. Verified on opencode 1.18.26 with `opencode debug config`: the overlay
+alone loses to an `opencode.json` in the workspace being worked on, and the
+disable flag alone loses to the operator's own global config. `opencode run`
+exposes no permission flag; `--auto` only widens. This binds OpenCode's own
+permission engine, not the host OS.
+
+Grok takes its single-turn prompt from an owner-only staged file and the helper
+passes that path with `--verbatim` and `--prompt-file`. A read-only Grok run
+passes both `--permission-mode plan` and `--sandbox read-only`; an authorized
+writable run passes `--permission-mode bypassPermissions` and
+`--sandbox workspace`. The provider contract requires the matching pair, so
+`plan` alone is not treated as a read-only claim. The adapter emits
+`streaming-messages-json` and parses only the documented system/init,
+assistant/message.content, user/tool_result, and terminal result envelopes.
+The fixture test is pinned to the headless documentation revision
+`72a61251fcffb464bcc687aeb5a998e5a98ec0c9`, path
+`crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md`, and its
+recorded SHA-256; it uses synthetic lines and does not claim live inference.
+These provider flags are not a complete host OS isolation boundary: the native
+implementation may leave `~/.grok/temp` writable, managed requirements can be
+overridden by CLI arguments, and the macOS child-network restriction is a
+no-op. Do not advertise stronger isolation than the provider documents.
 
 The real config must set `runtime.approvalPolicy` explicitly to `never`;
 `managed`, omission, and every other value are rejected because nobody is
@@ -229,6 +263,32 @@ unattended mutation canary proves a stronger CLI contract. Every schema-v2 bindi
 history excludes other people and all earlier bot replies; shared history is an
 explicit opt-in and labels only configured participants.
 
+An individual participant may optionally define a `mutationWindow` in schema v2
+when write/execute work should be limited to working hours. This field belongs
+to `discord.participantProfiles.<discordUserId>` and does not change the
+binding's selected `agentProfileId`:
+
+```json
+{
+  "mutationWindow": {
+    "timezone": "Asia/Seoul",
+    "days": [1, 2, 3, 4, 5],
+    "start": "09:00",
+    "end": "18:00"
+  }
+}
+```
+
+`days` uses ISO weekday numbers (Monday `1` through Sunday `7`), and `start` is
+inclusive while `end` is exclusive. The timezone must be a named IANA timezone;
+fixed offsets and overnight windows are rejected. The field is optional, so an
+omitted window keeps the existing behavior. While the window is closed, the
+participant keeps read, reply, and cancel behavior but write/execute actions are
+removed from the request. The helper checks the window at admission, queue
+execution, immediately before provider spawn, and after an attempt is reserved;
+retries and recovery re-evaluate it. A window controls whether a mutation may
+start and does not terminate one that is already running.
+
 Guild and thread bindings default to `respondWhen: "mentioned"`. A binding may
 use `respondWhen: "always"` only with `discord.messageContentIntent: true` and a
 Discord application that has the Message Content privileged intent. Automated
@@ -251,7 +311,14 @@ Use `logs --follow --job <id>` for durable historical replay followed by a live 
 
 With `service.startAt=login`, recovery begins after login. With `startAt=boot`, installation enables user lingering so recovery begins at boot. Gateway and the supervisor reconnect automatically. Only the bounded current request and binding digests are retained as authenticated ciphertext protected by an owner-only local recovery key; the assembled context prompt is reconstructed from current verified files. Legacy envelopes always become `recovery_review`. When schema-v2 `recovery.autoRetry=true`, only a read-only job with an exact participant, binding, configuration, context, and managed runtime-revision match may start a new attempt under the same job ID; mutation-capable, disabled, changed, missing, or corrupt recovery state becomes `recovery_review`. An uncertain Discord delivery also becomes `recovery_review` and is never automatically resent.
 
-`service install` resolves the selected Codex or Claude executable from the
+Whenever a job is parked for review, the channel that submitted it receives
+exactly one notice carrying the job ID and asking for a resend, so the requester
+is not left waiting behind `[메시지 받음]` forever. The notice goes only to the
+channel recorded in the sealed recovery envelope, and only once the current
+binding and participant authority still validate; it carries no part of the
+original request and triggers no replay.
+
+`service install` resolves the selected Codex, Claude, OpenCode, or Grok executable from the
 interactive installer `PATH`. Linux materializes an owner-only Git runtime
 artifact, verifies its revision, runtime-tree ID, digest, and unit bytes, and
 pins both service and supervisor to that copy; restart never executes a changed
@@ -377,7 +444,7 @@ Backend completion is fail-closed. Provider records with an absent or
 ## Durable-session policy
 
 1. Keep the lightweight Discord Gateway independent from model execution.
-2. End the Codex or Claude child process after a completed turn.
+2. End the Codex, Claude, OpenCode, or Grok child process after a completed turn.
 3. Do not send model heartbeats merely to preserve a prompt cache.
 4. Preserve jobs and recovery evidence in durable ADK state, not in a live terminal process.
 5. Treat DM, guild channel, and thread bindings as separate authorization and conversation scopes.

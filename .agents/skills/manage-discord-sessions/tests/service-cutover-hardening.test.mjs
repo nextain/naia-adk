@@ -387,10 +387,14 @@ test("service generations are durable across acceptance and execution while sche
 	database.close();
 
 	const oldCheckout = temporaryDirectory("discord-old-runtime-");
-	const repositoryRoot = resolve(SKILL_ROOT, "../../..");
-	const clone = spawnSync("git", ["clone", "-q", "--no-hardlinks", repositoryRoot, oldCheckout], { encoding: "utf8" });
-	assert.equal(clone.status, 0, clone.stderr);
-	const oldStoreUrl = `${pathToFileURL(join(oldCheckout, ".agents/skills/manage-discord-sessions/helper/store.mjs")).href}?compat=${Date.now()}`;
+	const oldRuntimeRoot = join(oldCheckout, ".agents/skills/manage-discord-sessions");
+	mkdirSync(dirname(oldRuntimeRoot), { recursive: true });
+	cpSync(SKILL_ROOT, oldRuntimeRoot, { recursive: true });
+	// Keep the compatibility entrypoint as an exact fixture from c1443cc. The
+	// test must work in shallow, squashed, and source-only checkouts.
+	const legacyStoreFixture = join(dirname(fileURLToPath(import.meta.url)), "fixtures/legacy-runtime/helper/store.mjs");
+	cpSync(legacyStoreFixture, join(oldRuntimeRoot, "helper/store.mjs"));
+	const oldStoreUrl = `${pathToFileURL(join(oldRuntimeRoot, "helper/store.mjs")).href}?compat=${Date.now()}`;
 	const { SessionStore: OldSessionStore } = await import(oldStoreUrl);
 	const oldStore = OldSessionStore.openReadOnly(databasePath);
 	assert.equal(oldStore.getJob("generation-job", { includeEvents: false }).jobId, "generation-job");

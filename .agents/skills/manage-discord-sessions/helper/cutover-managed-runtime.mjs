@@ -173,7 +173,7 @@ function legacySupervisorUnits({ root, instance, nodePath, serviceName }) {
 }
 
 export function verifyLinuxLegacyRegistration({ adkRoot, instance = "default", backend, unitDirectory = resolve(homedir(), ".config/systemd/user"), stateReader = systemctlState } = {}) {
-	if (!new Set(["codex", "claude", "opencode"]).has(backend) || typeof stateReader !== "function") throw new Error("legacy Discord registration input is invalid");
+	if (!new Set(["codex", "claude", "opencode", "grok"]).has(backend) || typeof stateReader !== "function") throw new Error("legacy Discord registration input is invalid");
 	const registration = linuxRegistrationFiles(adkRoot, instance, unitDirectory);
 	if (registration.content.service.includes("NAIA_DISCORD_RUNTIME_ARTIFACT=")) throw new Error("Discord registration is not a legacy mutable registration");
 	const root = registration.identity.root;

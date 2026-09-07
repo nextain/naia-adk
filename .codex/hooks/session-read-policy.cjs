@@ -5,7 +5,7 @@ const sessionContract = require("../../.agents/hooks/core/session-contract.js");
 const SAFE_READ_COMMANDS = [
 	/^(?:get-content|gc|get-childitem|gci|dir|ls|get-item|gi|get-filehash|test-path|resolve-path)\b/i,
 	/^(?:select-string|select-object|sort-object|where-object|measure-object)\b/i,
-	/^(?:rg|grep|cat|head|tail|wc|pwd|stat|readlink)\b/i,
+	/^(?:rg|grep|cat|head|tail|wc|pwd|stat|readlink|env)\b/i,
 	/^git\s+(?:status|diff|log|show|remote|ls-files|check-ignore|rev-parse)\b/i,
 	/^git\s+branch(?:\s+(?:--show-current|--list|-l|--all|-a|--remotes|-r|-v|-vv))*\s*$/i,
 	/^git\s+submodule\s+status\b/i,
@@ -20,13 +20,38 @@ const DYNAMIC_SHELL = [
 	/\b(?:eval|xargs)\b/i,
 	/\b(?:sh|bash|zsh|dash|ksh|fish)\s+-[A-Za-z]*c\b/i,
 	/\b(?:node|nodejs|bun|deno|python(?:3)?|perl|ruby|php|pwsh|powershell)\s+(?:-[A-Za-z]*e|-[A-Za-z]*c|--eval|--execute|--command|-[A-Za-z]*Command)\b/i,
-	/\bprintf\b/i,
 	/\\(?:[0-7]{1,3}|x[0-9a-f]{2})/i,
 ];
+const SHELL_INTERPRETERS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "ash"]);
 
 function shellTokens(source) {
 	const tokens = String(source || "").match(/"[^"]*"|'[^']*'|\S+/g) || [];
 	return tokens.map((token) => token.replace(/^(?:"|')|(?:"|')$/g, ""));
+}
+
+/**
+ * Identify an interpreter's inline program option without trying to parse the
+ * inline shell language. Long options and quoted executable paths must not
+ * turn a destructive shell program into an ordinary routine command.
+ */
+function inlineShellExecution(command) {
+	const tokens = shellTokens(command);
+	if (tokens.length === 0) return false;
+	let index = 0;
+	let head = path.basename(String(tokens[index] || "")).replace(/\.(exe|cmd)$/i, "").toLowerCase();
+	if (head === "env") {
+		index += 1;
+		while (index < tokens.length && (tokens[index].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[index]))) index += 1;
+		head = path.basename(String(tokens[index] || "")).replace(/\.(exe|cmd)$/i, "").toLowerCase();
+	}
+	if (!SHELL_INTERPRETERS.has(head)) return false;
+	for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
+		const option = String(tokens[cursor] || "").toLowerCase();
+		if (option === "--") break;
+		if (option === "--command" || option === "--execute" || option.startsWith("--command=") || option.startsWith("--execute=")) return true;
+		if (/^-[^-]*c(?:$|=)/.test(option)) return true;
+	}
+	return false;
 }
 
 function normalizedGitReadStatement(statement) {
@@ -91,6 +116,14 @@ function splitStatements(source) {
 	return statements.map((statement) => statement.trim()).filter(Boolean);
 }
 
+function wrappedEnvironmentCommand(statement) {
+	const tokens = shellTokens(statement);
+	if (!/^env(?:\.exe|\.cmd)?$/i.test(tokens[0] || "")) return false;
+	return tokens.slice(1).some((token) =>
+		!token.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(token),
+	);
+}
+
 function readOnlyShell(command, cwd = process.cwd()) {
 	const source = String(command || "").trim();
 	if (!source) return true;
@@ -105,13 +138,10 @@ function readOnlyShell(command, cwd = process.cwd()) {
 		/\bgit\s+branch\b[^;\n]*(?:\s-(?:d|D|m|M|c|C|f)\b|--delete\b|--move\b|--copy\b|--force\b|--set-upstream-to\b|--unset-upstream\b)/i.test(source) ||
 		/\bgit\s+remote\s+(?:add|remove|rm|rename|set-head|set-branches|set-url|prune|update)\b/i.test(source)
 	) return false;
-	const statements = source
-		.split(";")
-		.flatMap((statement) => statement.split("|"))
-		.map((statement) => statement.trim())
-		.filter(Boolean);
+	const statements = splitStatements(source);
 	return statements.length > 0 && statements.every((statement) => {
 		if (trustedSessionParserCommand(statement, cwd)) return true;
+		if (wrappedEnvironmentCommand(statement)) return false;
 		const normalized = normalizedGitReadStatement(statement);
 		return SAFE_READ_COMMANDS.some((pattern) => pattern.test(normalized));
 	});
@@ -178,7 +208,7 @@ function requestedWorkdirIssue(toolInput, cwd) {
 
 function unsafeShellCommand(command) {
 	const source = String(command || "").trim();
-	return NESTED_RUNTIME.test(source) || DYNAMIC_SHELL.some((pattern) => pattern.test(source));
+	return inlineShellExecution(source) || NESTED_RUNTIME.test(source) || DYNAMIC_SHELL.some((pattern) => pattern.test(source));
 }
 
 function nestedModelRuntimeCommand(command) {
@@ -201,7 +231,9 @@ module.exports = {
 	readOnlyShell,
 	requestedWorkdirIssue,
 	shellTokens,
+	wrappedEnvironmentCommand,
 	trustedSessionParserCommand,
+	inlineShellExecution,
 	trustedPowerShellReadBatch,
 	unsafeShellCommand,
 };

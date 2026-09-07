@@ -1,29 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { getBackendAdapter } from "./adapters.mjs";
+import { getBackendAdapter, readOnlyBackendOptions } from "./adapters.mjs";
 import { authorizeDiscordMessage } from "./discord-scope.mjs";
 import { deliverJobResult, formatOperatorStatus, postDiscordDirectMessage } from "./discord-delivery.mjs";
 import { runBackendAttempt } from "./backend-runner.mjs";
 import { commandOptionsForProfile, configurationRevision, currentExecutionProfile, discordBindingIdentity, durableExecutionBinding, effectiveAllowedActions, participantAuthorityRevision, sameExecutionProfile } from "./execution-profile.mjs";
-import { promptWithDiscordConversation, trustedParticipantPolicy } from "./discord-conversation.mjs";
-import { attachmentPromptSection } from "./discord-attachments.mjs";
+import { promptWithDiscordConversation } from "./discord-conversation.mjs";
+import { MAX_REQUEST_TEXT_LENGTH, boundRequestPrompt, commandText, discordRequestText, parseDiscordDmRequest } from "./discord-prompt.mjs";
 import { verifyAgentContextBeforeAttempt } from "./agent-context.mjs";
-
-const FAILURE_TEXT = {
-	no_progress_timeout: "일정 시간 동안 진행이 없어 작업을 중단했습니다.",
-	timeout: "작업 제한 시간을 초과해 중단했습니다.",
-	process_exit: "작업 프로세스가 비정상 종료됐습니다.",
-	approval_ui_detected: "승인 입력을 요구하는 실행이 감지되어 안전하게 중단했습니다.",
-	context_changed_restart_required: "프로젝트 규칙이 서비스 시작 후 변경되어, 새 규칙을 다시 읽도록 작업을 중단했습니다.",
-	discord_history_load_failed: "Discord 대화 기록을 불러오는 단계에서 실패했습니다.",
-	backend_version_probe_failed: "코딩 백엔드 실행 파일 확인 단계에서 실패했습니다.",
-	backend_authentication_failed: "코딩 백엔드 인증 준비 단계에서 실패했습니다.",
-	backend_invocation_invalid: "코딩 백엔드 실행 인자 구성 단계에서 실패했습니다.",
-	backend_spawn_failed: "코딩 백엔드 프로세스 시작 단계에서 실패했습니다.",
-	internal_error: "작업 중 내부 오류가 발생했습니다.",
-};
+import { mutationWindowStatus } from "./mutation-window.mjs";
+import { reportDiscordJobFailure } from "./discord-failure.mjs";
+import { jobRevisionForExecutionProfile, sameExecutionProfileExceptAccess } from "./discord-routing.mjs";
+import { AUTHORITY_UNAVAILABLE_NOTICE, PROMPT_INVALID_NOTICE, RUNTIME_INPUT_CHANGED_NOTICE, rejectDiscordAdmission, rejectRuntimeInputChange } from "./discord-admission.mjs";
 
 const MAX_QUEUED_TURNS = 32;
 const MAX_SCOPE_QUEUED_TURNS = 8;
+const RECOVERY_REVIEW_PARKED_NOTICE = "이전 요청이 서비스 중단으로 끊겨 자동으로 이어서 실행하지 않았습니다. 필요하면 같은 요청을 다시 보내 주세요. / A previous request was interrupted and was not resumed automatically; send the same request again if you still need it.";
 // Proactive notifications are restricted to one configured recipient. The model
 // never supplies a recipient ID, and no other operator can be targeted.
 //
@@ -43,11 +34,6 @@ function localOperatorSnowflake(nowMs) {
 	return ((timestamp << 22n) | BigInt(Math.floor(Math.random() * 4_194_304))).toString();
 }
 
-function failureReason(job) {
-	const match = String(job?.latestSafeError ?? "").match(/^Job failed: ([a-z0-9_]+)$/);
-	return match?.[1] ?? "internal_error";
-}
-
 export function noProgressInterventionDue(job, nowMs, interventionMs) {
 	const health = job?.activityHealth?.value;
 	const reasonCode = job?.activityHealth?.reasonCode;
@@ -57,93 +43,7 @@ export function noProgressInterventionDue(job, nowMs, interventionMs) {
 	return Number.isFinite(lastProgressMs) && nowMs - lastProgressMs >= interventionMs;
 }
 
-/**
- * 한 Discord 메시지가 담은 요청 전체. 본문 글과 첨부 서술을 합친다.
- *
- * 첨부를 여기서 합치는 이유는 두 가지다. 프롬프트와 복구 봉투가 같은 문자열을
- * 쓰게 되어 재시도해도 파일 정보가 사라지지 않고, 파일만 보낸 메시지가 "빈 요청"
- * 으로 판정되어 조용히 버려지지 않는다.
- */
-export function discordRequestText(message, botUserId, { authorization = null, instance = null } = {}) {
-	if (typeof message.content !== "string" || message.content.length > 4_000) throw new Error("Discord content is missing or too large");
-	const userText = normalizedDiscordText(message.content, botUserId);
-	const attachmentSection = attachmentPromptSection(message, {
-		channelId: authorization?.scope?.threadId ?? authorization?.scope?.channelId ?? null,
-		instance,
-	});
-	return [userText, attachmentSection].filter(Boolean).join("\n\n");
-}
-
-export function transientPrompt(message, botUserId, config, authorization = null, agentContextSnapshot = null, { instance = null, accessCeiling = null } = {}) {
-	return boundRequestPrompt(discordRequestText(message, botUserId, { authorization, instance }), config, authorization, agentContextSnapshot, accessCeiling);
-}
-
-// 사용자 본문 4,000자에 우리가 만든 첨부 블록이 더해질 수 있다. 그 블록은 파일
-// 10개까지, 이름은 각 120자로 묶여 있어 1.5KB 를 넘지 않는다.
-const MAX_REQUEST_TEXT_LENGTH = 6_000;
-
-export function boundRequestPrompt(userText, config, authorization = null, agentContextSnapshot = null, accessCeiling = null) {
-	if (typeof userText !== "string" || !userText || userText.length > MAX_REQUEST_TEXT_LENGTH) throw new Error("Discord prompt is empty or too large");
-	const authorityActions = effectiveAllowedActions(config, authorization);
-	// 상한이 걸린 제출은 프롬프트에 적히는 행동 목록부터 낮춘다. 실행 프로필만
-	// 낮추고 목록을 그대로 두면 모델이 허용된다고 읽는다.
-	const allowedActions = accessCeiling === "read-only"
-		? authorityActions.filter((action) => action !== "write" && action !== "execute")
-		: authorityActions;
-	const backendId = config.backend?.selected ?? "codex";
-	const executionProfile = currentExecutionProfile(config, backendId, authorization, { accessCeiling });
-	const costProfile = config.backend?.profiles?.[backendId]?.costProfile ?? (backendId === "codex" ? "balanced" : "provider-default");
-	const parts = [];
-	if (agentContextSnapshot) parts.push(agentContextSnapshot.prefix, "");
-	parts.push(`Persona: ${config.persona.name}`, config.persona.instructions, `Role: ${config.role.name}`);
-	if (config.schemaVersion === 2) parts.push(trustedParticipantPolicy({ participantProfile: authorization?.participantProfile, effectiveActions: allowedActions }));
-	if (config.schemaVersion === 2 && Array.isArray(config.workspace?.allowedPaths)) parts.push(`Allowed workspace paths: ${config.workspace.allowedPaths.join(", ")}. Use only these explicitly configured project paths; do not access other projects.`);
-	parts.push(
-		`Allowed actions: ${allowedActions.join(", ")}`,
-		`Gateway execution contract: ${executionProfile.access}. Cost profile: ${costProfile}.`,
-		executionProfile.access !== "read-only"
-			? executionProfile.access === "danger-full-access"
-				? "The host has verified the sole operator, DM-only Discord binding, project context, and trusted-local no-prompt policy for this request. This Gateway execution contract grants the current OS user's local access for the current job. It does not grant root authority or broaden the user's request. Use only the configured actions and the resources needed to complete that bounded request."
-				: "The host has verified the operator, Discord binding, participant action intersection, project context, and no-prompt policy for this request. This Gateway execution contract is the explicit mutation authority for the current job. Do not downgrade it to read-only merely because no interactive session binding exists. Mutate only inside the configured workspace and granted actions."
-			: "This job is read-only. Do not modify files, repository state, services, or external systems.",
-		"Routine authority: A bounded user request authorizes its normal in-scope execution path. Treat workflow phase gates, including Understand, Scope, Plan, Sync, and Close, as internal checkpoints; do not ask the user to approve them.",
-		"No approval click is available in this unattended session. Never request or wait for interactive approval.",
-		"Authority limit: Ask only when a material unresolved choice would change the requested scope. If an action is outside the granted actions, stop safely and report the limitation without expanding authority or claiming completion.",
-		"Current-turn truthfulness: Never promise to continue, resume, deploy, or report later after this job ends. In the current job, either perform and verify the concrete bounded work, or state the exact missing request, authority, credential, or external precondition. A prior failed or terminal job is not automatically resumed; do not imply that it is running.",
-		"Communication: Reply in the language used by the user. Before tool work, provide a brief analysis and action plan as an intermediate update. During long work, report meaningful findings or phase changes before the final verified result. Do not repeat generic status text.",
-		"Discord access: Do not access Discord directly. If the operator explicitly requests a separate DM, return exactly one discordDm JSON object; the gateway will deliver it only to the fixed workspace-owner recipient.",
-		"User request:",
-		userText,
-	);
-	return parts.join("\n");
-}
-
-function parseDiscordDmRequest(value) {
-	try {
-		const parsed = JSON.parse(value);
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Object.keys(parsed).length !== 1) return null;
-		const request = parsed.discordDm;
-		if (!request || typeof request !== "object" || Array.isArray(request)) return null;
-		if (typeof request.content !== "string" || request.content.length < 1 || request.content.length > 2_000) return null;
-		if (typeof request.successReply !== "string" || request.successReply.length < 1 || request.successReply.length > 2_000) return null;
-		if (typeof request.failureReply !== "string" || request.failureReply.length < 1 || request.failureReply.length > 2_000) return null;
-		return request;
-	} catch { return null; }
-}
-
-function commandText(message, botUserId) {
-	return normalizedDiscordText(String(message.content ?? ""), botUserId);
-}
-
-function normalizedDiscordText(value, botUserId) {
-	return String(value)
-		.replaceAll(`<@${botUserId}>`, "")
-		.replaceAll(`<@!${botUserId}>`, "")
-		.replace(/<@!?\d{17,20}>/g, "[Discord user mention]")
-		.replace(/<@&\d{17,20}>/g, "[Discord role mention]")
-		.replace(/<#\d{17,20}>/g, "[Discord channel mention]")
-		.trim();
-}
+export { boundRequestPrompt, discordRequestText, transientPrompt } from "./discord-prompt.mjs";
 
 export class DiscordMessageRouter {
 	constructor({ config, store, token, botUserId, cwd, allowedPaths = [cwd], agentContexts = null, runtimeRoot, instance = "default", agentContextSnapshot = null, runtimeRevision = null, recoveryCodec = null, projectStatus = null, runner = runBackendAttempt, deliver = deliverJobResult, directMessage = postDiscordDirectMessage, send = null, loadHistory = null, backendExecutables = {}, verifyRuntimeInputs = null, now = () => Date.now() }) {
@@ -205,12 +105,17 @@ export class DiscordMessageRouter {
 			return { state: "threads_cached" };
 		}
 		if (type !== "MESSAGE_CREATE") return { state: "ignored" };
-		this.#verifyRuntimeInputs();
 		const authorization = authorizeDiscordMessage({ message: data, bindings: this.config.discord.bindings, operatorUserIds: this.config.discord.operatorUserIds, participantProfiles: this.config.discord.participantProfiles, botUserId: this.botUserId, threadParents: this.threadParents });
 		const sourceMessageId = data.id;
 		if (!authorization.allowed) {
 			if (authorization.scope && sourceMessageId) this.store.reserveIngress({ sourceMessageId, scopeKey: authorization.scopeKey, status: "rejected", reasonCode: authorization.reasonCode, dispatchSequence: sequence });
 			return { state: "rejected", reasonCode: authorization.reasonCode };
+		}
+		try {
+			this.#verifyRuntimeInputs({ agentContextId: authorization.binding?.agentProfileId ?? "default" });
+		} catch (error) {
+			if (error?.code !== "context_changed_restart_required") throw error;
+			return rejectRuntimeInputChange({ store: this.store, sendControl: (input) => this.#sendControl(input), token: this.token, botUserId: this.botUserId, authorization, sourceMessageId, sequence });
 		}
 		const command = commandText(data, this.botUserId);
 		if (/^!naia(?:\s|$)/i.test(command)) return this.#handleCommand({ command, authorization, sourceMessageId, sequence });
@@ -220,42 +125,59 @@ export class DiscordMessageRouter {
 		}
 		const queuedInScope = this.queue.filter((item) => item.scopeKey === authorization.scopeKey).length;
 		if (this.queue.length >= MAX_QUEUED_TURNS || queuedInScope >= MAX_SCOPE_QUEUED_TURNS) {
-			this.store.reserveIngress({ sourceMessageId, scopeKey: authorization.scopeKey, status: "rejected", reasonCode: "request_queue_full", dispatchSequence: sequence });
+			// Gateway RESUME 이 이미 판정한 메시지를 재생할 수 있다. 예약이 중복이면
+			// 같은 거절 알림을 다시 보내지 않는다.
+			const ingress = this.store.reserveIngress({ sourceMessageId, scopeKey: authorization.scopeKey, status: "rejected", reasonCode: "request_queue_full", dispatchSequence: sequence });
+			if (ingress.duplicate) return { state: "duplicate", reasonCode: "request_queue_full", jobId: ingress.jobId };
 				void this.#sendControl({ token: this.token, channelId: authorization.scope.threadId ?? authorization.scope.channelId, botUserId: this.botUserId, content: "요청이 많아 이번 메시지를 처리하지 못했습니다. 잠시 뒤 다시 보내 주세요. / The request queue is full; please retry shortly.", nonce: randomUUID().replaceAll("-", "").slice(0, 24) }).promise.catch(() => {});
 			return { state: "rejected", reasonCode: "request_queue_full" };
 		}
 		let prompt;
 		let currentRequest;
+		let selected;
+		let authority;
+		let effectiveAccessCeiling;
+		let windowClosed;
 		try {
 			currentRequest = discordRequestText(data, this.botUserId, { authorization, instance: this.instance });
 			if (!currentRequest || currentRequest.length > MAX_REQUEST_TEXT_LENGTH) throw new Error("Discord prompt is empty or too large");
-			const selected = this.#agentContext(authorization.binding);
-			prompt = boundRequestPrompt(currentRequest, this.#profileConfig(authorization.binding), authorization, selected.snapshot, accessCeiling);
+		} catch {
+			return rejectDiscordAdmission({ store: this.store, sendControl: (input) => this.#sendControl(input), token: this.token, botUserId: this.botUserId, authorization, sourceMessageId, sequence, reasonCode: "prompt_invalid", content: PROMPT_INVALID_NOTICE });
 		}
-		catch {
-			this.store.reserveIngress({ sourceMessageId, scopeKey: authorization.scopeKey, status: "rejected", reasonCode: "prompt_invalid", dispatchSequence: sequence });
-			// 조용히 버리면 보낸 사람은 봇이 죽은 줄 안다. 큐가 찼을 때처럼 이유를 남긴다.
-			void this.#sendControl({ token: this.token, channelId: authorization.scope.threadId ?? authorization.scope.channelId, botUserId: this.botUserId, content: "이 메시지에서 처리할 요청을 찾지 못했습니다. 요청할 내용을 글로 적어 주세요. / No actionable request was found in that message; please describe what you need in text.", nonce: randomUUID().replaceAll("-", "").slice(0, 24) }).promise.catch(() => {});
-			return { state: "rejected", reasonCode: "prompt_invalid" };
+		let profileConfig;
+		try {
+			selected = this.#agentContext(authorization.binding);
+			authority = this.#authority(authorization, selected.snapshot);
+			({ accessCeiling: effectiveAccessCeiling, windowClosed } = this.#effectiveAccessCeiling(this.config.backend.selected, authority, accessCeiling));
+			profileConfig = this.#profileConfig(authorization.binding);
+		} catch {
+			return rejectDiscordAdmission({ store: this.store, sendControl: (input) => this.#sendControl(input), token: this.token, botUserId: this.botUserId, authorization, sourceMessageId, sequence, reasonCode: "authority_unavailable", content: AUTHORITY_UNAVAILABLE_NOTICE });
+		}
+		try {
+			prompt = boundRequestPrompt(currentRequest, profileConfig, authority, selected.snapshot, effectiveAccessCeiling, { windowClosed });
+		} catch {
+			return rejectDiscordAdmission({ store: this.store, sendControl: (input) => this.#sendControl(input), token: this.token, botUserId: this.botUserId, authorization, sourceMessageId, sequence, reasonCode: "prompt_invalid", content: PROMPT_INVALID_NOTICE });
 		}
 		const jobId = randomUUID();
 		const backendId = this.config.backend.selected;
 		const adapter = getBackendAdapter(backendId);
 		const channelId = authorization.scope.threadId ?? authorization.scope.channelId;
-		const selected = this.#agentContext(authorization.binding);
-		const authority = this.#authority(authorization, selected.snapshot);
-		const executionProfile = this.#executionProfile(backendId, authority, accessCeiling);
+		const executionProfile = this.#executionProfile(backendId, authority, effectiveAccessCeiling);
 		const commandOptions = this.#withBackendOptions(backendId, commandOptionsForProfile(executionProfile));
-		const recoveryEnvelope = this.recoveryCodec?.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId, scopeKey: authorization.scopeKey, executionProfile, accessCeiling, participantUserId: authorization.scope.authorId, bindingIdentity: authority.bindingIdentity, authorityRevision: authority.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: selected.snapshot?.contextHash ?? null, agentProfileId: authorization.binding.agentProfileId ?? "default", runtimeRevision: this.runtimeRevision })) ?? null;
-		const revisionBase = this.config.schemaVersion === 2 ? `discord-v2-${executionProfile.access}` : "discord-v1";
-		const managedRevisionBase = executionProfile.access === "read-only" ? "v2r" : "v2w";
-		const jobRevision = this.runtimeRevision === null ? revisionBase : this.config.schemaVersion === 2 ? `${managedRevisionBase}:${this.runtimeRevision}` : `${revisionBase}:${this.runtimeRevision}`;
+		const recoveryPayload = { schemaVersion: 2, currentRequest, channelId, scopeKey: authorization.scopeKey, executionProfile, accessCeiling: effectiveAccessCeiling, participantUserId: authorization.scope.authorId, bindingIdentity: authority.bindingIdentity, authorityRevision: authority.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: selected.snapshot?.contextHash ?? null, agentProfileId: authorization.binding.agentProfileId ?? "default", runtimeRevision: this.runtimeRevision };
+		if (this.config.schemaVersion === 2) recoveryPayload.originalAccessCeiling = accessCeiling;
+		const recoveryEnvelope = this.recoveryCodec?.seal(JSON.stringify(recoveryPayload)) ?? null;
+		const jobRevision = jobRevisionForExecutionProfile(this.config, this.runtimeRevision, executionProfile);
 		const executionBinding = this.config.schemaVersion === 2 && executionProfile.access === "read-only" ? durableExecutionBinding({ config: this.config, instance: this.instance, agentContextSnapshot: selected.snapshot, participantUserId: authorization.scope.authorId, binding: authorization.binding, executionProfile }) : null;
 		const ingress = this.store.acceptIngressAndCreateJob({ sourceMessageId, scopeKey: authorization.scopeKey, jobId, dispatchSequence: sequence, backendId, revision: jobRevision, backendCapabilities: adapter.capabilities, activityDetail: adapter.activityDetail, jobType: "conversation", requestExcerpt: currentRequest,
 			softSilenceMs: (this.config.runtime?.softSilenceSeconds ?? 120) * 1_000, recoveryEnvelope, executionBinding, now: this.#nowIso() });
 		if (ingress.duplicate) return { state: "duplicate", jobId: ingress.jobId };
-		const item = { jobId, backendId, prompt, currentRequest, channelId, scopeKey: authorization.scopeKey, sourceMessageId, allowedUserIds: authorization.binding.allowedUserIds, binding: authorization.binding, participantUserId: authorization.scope.authorId, authority, commandOptions, executionProfile, accessCeiling, agentContext: selected };
+		const item = { jobId, backendId, prompt, currentRequest, channelId, scopeKey: authorization.scopeKey, sourceMessageId, allowedUserIds: authorization.binding.allowedUserIds, binding: authorization.binding, participantUserId: authorization.scope.authorId, authority, commandOptions, executionProfile, accessCeiling: effectiveAccessCeiling, ...(this.config.schemaVersion === 2 ? { originalAccessCeiling: accessCeiling, windowClosed } : {}), agentContext: selected };
 		this.workItems.set(jobId, item);
+		if (windowClosed) {
+			try { this.store.recordEvent({ jobId, source: "helper", kind: "profile_replaced", safePayload: { reasonCode: "mutation_window_closed" } }); }
+			catch {}
+		}
 		this.#sendOperatorResponse(item);
 		this.queue.push(item);
 		this.#drain();
@@ -333,13 +255,18 @@ export class DiscordMessageRouter {
 
 	#withBackendOptions(backendId, options) {
 		const profile = this.config.backend.profiles?.[backendId];
+		// 읽기 전용 자식에게는 네트워크와 자격 증명을 주지 않는다. 의미상으로도
+		// 맞고, 이걸 빼지 않으면 codex read-only + networkAccess 조합이 실행 인자
+		// 검증에서 바로 거절되어 시간창 강등·읽기 전용 제출·자동 복구·컷오버
+		// canary 가 통째로 실패한다.
+		const readOnly = readOnlyBackendOptions(backendId, options);
 		const withCommon = {
 			...options,
 			...(profile?.model ? { model: profile.model } : {}),
-			networkAccess: this.config.runtime?.networkAccess === true,
-			credentialProfiles: [...(this.config.runtime?.credentialProfiles ?? [])],
+			networkAccess: readOnly ? false : this.config.runtime?.networkAccess === true,
+			credentialProfiles: readOnly ? [] : [...(this.config.runtime?.credentialProfiles ?? [])],
 		};
-		return backendId === "codex" ? {
+		return backendId === "codex" || backendId === "grok" ? {
 			...withCommon,
 			costProfile: profile?.costProfile ?? "balanced",
 			...(profile?.reasoningEffort ? { reasoningEffort: profile.reasoningEffort } : {}),
@@ -373,6 +300,67 @@ export class DiscordMessageRouter {
 		return { ...authorization, bindingIdentity: identity, authorityRevision, contextHash: snapshot?.contextHash };
 	}
 
+	#effectiveAccessCeiling(backendId, authority, originalAccessCeiling) {
+		const requestedProfile = this.#executionProfile(backendId, authority, originalAccessCeiling);
+		const status = mutationWindowStatus(authority?.participantProfile?.mutationWindow, this.now());
+		const windowClosed = requestedProfile.access !== "read-only" && status.configured && !status.allowed;
+		return { accessCeiling: windowClosed ? "read-only" : originalAccessCeiling, windowClosed };
+	}
+
+	#mutationWindow(item) {
+		return item?.authority?.participantProfile?.mutationWindow;
+	}
+
+	#ensureMutationWindowOpen(item) {
+		// A queued job that was admitted while the window was closed has already
+		// been downgraded to read-only and is safe to run. This check protects a
+		// writable job from a close between queue admission and child spawn.
+		if (item.executionProfile?.access === "read-only") return;
+		const status = mutationWindowStatus(this.#mutationWindow(item), this.now());
+		if (status.configured && !status.allowed) throw Object.assign(new Error("mutation window is closed"), { code: "mutation_window_closed" });
+	}
+
+	#reconcileMutationWindow(item) {
+		// Envelopes created before this field existed retain their legacy behavior.
+		if (!Object.hasOwn(item, "originalAccessCeiling")) return item;
+		// A job admitted while the mutation window was closed is durably read-only
+		// until an explicit retry. Opening the clock must not silently widen queued
+		// or automatically recovered work.
+		if (item.originalAccessCeiling === null && item.accessCeiling === "read-only" && item.executionProfile?.access === "read-only") return item;
+		const { accessCeiling, windowClosed } = this.#effectiveAccessCeiling(item.backendId, item.authority, item.originalAccessCeiling);
+		if (item.accessCeiling === accessCeiling && item.windowClosed === windowClosed) return item;
+		const selected = item.agentContext ?? this.#agentContext(item.binding);
+		const executionProfile = this.#executionProfile(item.backendId, item.authority, accessCeiling);
+		const commandOptions = this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile));
+		const prompt = boundRequestPrompt(item.currentRequest, this.#profileConfig(item.binding), item.authority, selected.snapshot, accessCeiling, { windowClosed });
+		try {
+			this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "profile_replaced", safePayload: windowClosed ? { reasonCode: "mutation_window_closed" } : {} });
+		} catch {}
+		return { ...item, accessCeiling, windowClosed, prompt, executionProfile, commandOptions, agentContext: selected };
+	}
+
+	#currentAuthority(item) {
+		const participantUserId = item.participantUserId;
+		const expectedBindingIdentity = item.authority?.bindingIdentity ?? (item.binding ? discordBindingIdentity(item.binding) : null);
+		const binding = this.config.discord.bindings.find((candidate) => discordBindingIdentity(candidate) === expectedBindingIdentity && candidate.allowedUserIds.includes(participantUserId));
+		const participantProfile = this.config.discord.participantProfiles?.[participantUserId];
+		if (!binding || !participantProfile) throw new Error("current participant binding is unavailable");
+		const selected = this.#agentContext(binding);
+		const authorization = {
+			allowed: true,
+			binding,
+			participantProfile,
+			isOperator: this.config.discord.operatorUserIds.includes(participantUserId) && binding.operatorActions === true,
+			scope: { ...(item.authority?.scope ?? {}), authorId: participantUserId },
+		};
+		return { authority: this.#authority(authorization, selected.snapshot), binding, selected };
+	}
+
+	#executionBinding(item, selected) {
+		if (this.config.schemaVersion !== 2 || item.executionProfile?.access !== "read-only") return null;
+		return durableExecutionBinding({ config: this.config, instance: this.instance, agentContextSnapshot: selected.snapshot, participantUserId: item.participantUserId, binding: item.binding, executionProfile: item.executionProfile });
+	}
+
 	#recoveryAuthority(payload) {
 		if (this.config.schemaVersion !== 2) throw new Error("legacy recovery requires review");
 		if (payload?.schemaVersion !== 2 || typeof payload.participantUserId !== "string" || typeof payload.bindingIdentity !== "string") throw new Error("recovery authority is missing");
@@ -394,6 +382,16 @@ export class DiscordMessageRouter {
 		return authority;
 	}
 
+	#recoveryNoticeChannelForPayload(payload) {
+		const participantUserId = payload?.participantUserId;
+		const bindingIdentity = payload?.bindingIdentity;
+		if (typeof participantUserId !== "string" || typeof bindingIdentity !== "string") return null;
+		const binding = this.config.discord.bindings.find((candidate) => discordBindingIdentity(candidate) === bindingIdentity && candidate.allowedUserIds.includes(participantUserId));
+		const participantProfile = this.config.discord.participantProfiles?.[participantUserId];
+		if (!binding || !participantProfile) return null;
+		return this.#recoveryNoticeChannel(binding, payload.channelId);
+	}
+
 	#executionProfile(backendId, authority = null, accessCeiling = null) {
 		return currentExecutionProfile(this.config, backendId, authority, { accessCeiling });
 	}
@@ -402,14 +400,18 @@ export class DiscordMessageRouter {
 		return new Date(this.now()).toISOString();
 	}
 
-	#verifyRuntimeInputs() {
-		try { this.verifyRuntimeInputs?.(); }
-		catch {
-			const error = new Error("Discord runtime inputs changed; restart is required");
-			error.code = "context_changed_restart_required";
-			throw error;
+	#verifyRuntimeInputs(input = {}) {
+		try {
+			return this.verifyRuntimeInputs?.(input);
+		} catch (error) {
+			if (error && typeof error === "object" && typeof error.code === "string") throw error;
+			const normalized = new Error(error?.message ?? "runtime input verification failed");
+			normalized.code = "context_changed_restart_required";
+			normalized.cause = error;
+			throw normalized;
 		}
 	}
+
 
 	#noProgressInterventionMs() {
 		return (this.config.runtime?.noProgressInterventionSeconds ?? this.config.runtime?.softSilenceSeconds ?? 120) * 1_000;
@@ -481,12 +483,16 @@ export class DiscordMessageRouter {
 		this.controllers.set(item.jobId, controller);
 		try {
 			if (controller.signal.aborted) return;
-			this.#verifyRuntimeInputs();
+			const selectedAtStart = item.agentContext ?? this.#agentContext(item.binding);
+			this.#verifyRuntimeInputs({ agentContextId: item.binding?.agentProfileId ?? "default", agentContext: selectedAtStart });
+			item = this.#reconcileMutationWindow(item);
 			const currentProfile = this.#executionProfile(item.backendId, item.authority, item.accessCeiling ?? null);
 			if (!sameExecutionProfile(item.executionProfile ?? currentProfile, currentProfile)) {
 				this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "profile_replaced", safePayload: {} });
 				item = { ...item, executionProfile: currentProfile, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(currentProfile)) };
 			}
+			this.workItems.set(item.jobId, item);
+			this.#ensureMutationWindowOpen(item);
 			let prompt = item.prompt;
 			if (this.loadHistory && item.sourceMessageId) {
 				let loaded;
@@ -496,9 +502,10 @@ export class DiscordMessageRouter {
 			}
 			const selected = item.agentContext ?? this.#agentContext(item.binding);
 			if (selected.snapshot) verifyAgentContextBeforeAttempt(selected.snapshot);
-			const preSpawnCheck = this.verifyRuntimeInputs || selected.snapshot ? () => {
-				this.#verifyRuntimeInputs();
+			const preSpawnCheck = this.verifyRuntimeInputs || selected.snapshot || item.originalAccessCeiling !== undefined ? () => {
+				this.#verifyRuntimeInputs({ agentContextId: item.binding?.agentProfileId ?? "default", agentContext: selected });
 				if (selected.snapshot) verifyAgentContextBeforeAttempt(selected.snapshot);
+				this.#ensureMutationWindowOpen(item);
 			} : null;
 			const result = await this.runner({ store: this.store, jobId: item.jobId, backendId: item.backendId, prompt, cwd: selected.cwd, allowedPaths: selected.allowedPaths, runtimeRoot: this.runtimeRoot, executable: this.backendExecutables[item.backendId], commandOptions: item.commandOptions ?? this.#commandOptions(item.backendId, item.authority), executionProfile: item.executionProfile, signal: controller.signal, preSpawnCheck });
 			if (result.backendOutcome !== "success") {
@@ -521,7 +528,7 @@ export class DiscordMessageRouter {
 				if (controller.signal.aborted && controller.signal.reason === "operator_cancel") {
 					try { this.store.recordEvent({ jobId: item.jobId, attemptId: job.attemptId, source: "helper", kind: "cancelled", safePayload: {} }); } catch {}
 				} else {
-					const reasonCode = new Set(["context_changed_restart_required", "discord_history_load_failed", "backend_version_probe_failed", "backend_authentication_failed", "backend_invocation_invalid", "backend_spawn_failed"]).has(error?.code) ? error.code : "internal_error";
+					const reasonCode = new Set(["context_changed_restart_required", "discord_history_load_failed", "backend_version_probe_failed", "backend_authentication_failed", "backend_invocation_invalid", "backend_spawn_failed", "mutation_window_closed"]).has(error?.code) ? error.code : "internal_error";
 					try { this.store.recordEvent({ jobId: item.jobId, attemptId: job.attemptId, source: "helper", kind: "failed", safePayload: { reasonCode } }); } catch {}
 				}
 			}
@@ -535,15 +542,7 @@ export class DiscordMessageRouter {
 	}
 
 	async #reportFailure(item) {
-		const job = this.store.getJob(item.jobId, { includeEvents: false });
-		if (!job || !["failed", "recovery_review"].includes(job.lifecycle)) return;
-		const reasonCode = failureReason(job);
-		const detail = job.lifecycle === "recovery_review"
-			? "전달 또는 복구 상태가 불확실해 자동 재실행하지 않고 검토 대상으로 보존했습니다."
-			: FAILURE_TEXT[reasonCode] ?? FAILURE_TEXT.internal_error;
-		try {
-				await this.#sendControl({ token: this.token, channelId: item.channelId, botUserId: this.botUserId, content: `작업을 완료하지 못했습니다. ${detail}\n작업 ID: ${item.jobId}`, nonce: randomUUID().replaceAll("-", "").slice(0, 24) }).promise;
-		} catch {}
+		await reportDiscordJobFailure({ item, store: this.store, token: this.token, botUserId: this.botUserId, sendControl: (input) => this.#sendControl(input) });
 	}
 
 	async waitForIdle({ includeDeliveries = true } = {}) {
@@ -575,19 +574,47 @@ export class DiscordMessageRouter {
 		if (!sourceJob) return { state: "rejected", action, jobId, reasonCode: "job_not_found" };
 		const activeItem = this.workItems.get(jobId) ?? this.queue.find((candidate) => candidate.jobId === jobId);
 		let item = activeItem;
+		if (activeItem && Object.hasOwn(activeItem, "originalAccessCeiling")) {
+			try {
+				const { authority, binding, selected } = this.#currentAuthority(activeItem);
+				const { accessCeiling, windowClosed } = this.#effectiveAccessCeiling(activeItem.backendId, authority, activeItem.originalAccessCeiling);
+				const executionProfile = this.#executionProfile(activeItem.backendId, authority, accessCeiling);
+				item = {
+					...activeItem,
+					authority,
+					binding,
+					agentContext: selected,
+					accessCeiling,
+					windowClosed,
+					executionProfile,
+					commandOptions: this.#withBackendOptions(activeItem.backendId, commandOptionsForProfile(executionProfile)),
+				};
+			} catch {
+				return { state: "rejected", action, jobId, reasonCode: "recovery_binding_changed" };
+			}
+		}
 		if (!item) {
 			if (sourceJob.lifecycle !== "failed") return { state: "rejected", action, jobId, reasonCode: "job_not_restartable" };
 			const envelope = this.store.loadJobRecovery(jobId);
 			if (!envelope) return { state: "rejected", action, jobId, reasonCode: "recovery_envelope_unavailable" };
 			try {
 				const payload = JSON.parse(this.recoveryCodec.open(envelope));
-				const accessCeiling = payload.accessCeiling ?? null;
+				const hasOriginalAccessCeiling = Object.hasOwn(payload, "originalAccessCeiling");
+				const storedAccessCeiling = payload.accessCeiling ?? null;
+				const originalAccessCeiling = hasOriginalAccessCeiling ? payload.originalAccessCeiling : storedAccessCeiling;
+				if (originalAccessCeiling !== null && originalAccessCeiling !== "read-only") throw new Error("recovery access ceiling is invalid");
 				if (typeof payload.currentRequest !== "string" || !payload.currentRequest || payload.currentRequest.length > MAX_REQUEST_TEXT_LENGTH || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
 				const authority = this.#recoveryAuthority(payload);
 				const binding = authority.binding;
 				const agentContext = this.#agentContext(binding);
+				const { accessCeiling, windowClosed } = hasOriginalAccessCeiling
+					? this.#effectiveAccessCeiling(sourceJob.backendId, authority, originalAccessCeiling)
+					: { accessCeiling: storedAccessCeiling, windowClosed: false };
 				const executionProfile = this.#executionProfile(sourceJob.backendId, authority, accessCeiling);
-				if (!sameExecutionProfile(payload.executionProfile, executionProfile)) throw new Error("recovery execution profile changed");
+				const profileMatches = hasOriginalAccessCeiling
+					? sameExecutionProfileExceptAccess(payload.executionProfile, executionProfile)
+					: sameExecutionProfile(payload.executionProfile, executionProfile);
+				if (!profileMatches) throw new Error("recovery execution profile changed");
 				item = {
 					jobId,
 					backendId: sourceJob.backendId,
@@ -596,6 +623,10 @@ export class DiscordMessageRouter {
 					scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null,
 					participantUserId: payload.participantUserId,
 					authority,
+					allowedUserIds: binding.allowedUserIds,
+					accessCeiling,
+					...(hasOriginalAccessCeiling ? { originalAccessCeiling } : {}),
+					windowClosed,
 					commandOptions: this.#withBackendOptions(sourceJob.backendId, commandOptionsForProfile(executionProfile)),
 					executionProfile,
 					binding,
@@ -609,10 +640,28 @@ export class DiscordMessageRouter {
 		if (currentRequest.length > MAX_REQUEST_TEXT_LENGTH) return { state: "rejected", action, jobId, reasonCode: "amendment_too_large" };
 		const replacementJobId = randomUUID();
 		const selected = item.agentContext ?? this.#agentContext(item.binding);
-		const replacementPrompt = boundRequestPrompt(currentRequest, this.#profileConfig(item.binding), item.authority, selected.snapshot, item.accessCeiling ?? null);
-		const replacementEnvelope = this.recoveryCodec.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId: item.channelId, scopeKey: item.scopeKey, executionProfile: item.executionProfile, accessCeiling: item.accessCeiling ?? null, participantUserId: item.participantUserId, bindingIdentity: item.authority?.bindingIdentity, authorityRevision: item.authority?.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: selected.snapshot?.contextHash ?? null, agentProfileId: item.binding?.agentProfileId ?? "default", runtimeRevision: this.runtimeRevision }));
-		this.store.createJob({ jobId: replacementJobId, backendId: item.backendId, revision: sourceJob.revision, backendCapabilities: sourceJob.backendCapabilities, activityDetail: sourceJob.activityDetail, jobType: "conversation", scopeKey: item.scopeKey, softSilenceMs: sourceJob.softSilenceMs, recoveryEnvelope: replacementEnvelope, executionBinding: sourceJob.executionBinding });
-		const replacement = { ...item, jobId: replacementJobId, prompt: replacementPrompt, currentRequest, sourceMessageId: null };
+		const executionProfile = this.#executionProfile(item.backendId, item.authority, item.accessCeiling ?? null);
+		const replacementPrompt = boundRequestPrompt(currentRequest, this.#profileConfig(item.binding), item.authority, selected.snapshot, item.accessCeiling ?? null, { windowClosed: item.windowClosed === true });
+		const envelopePayload = {
+			schemaVersion: 2,
+			currentRequest,
+			channelId: item.channelId,
+			scopeKey: item.scopeKey,
+			executionProfile,
+			accessCeiling: item.accessCeiling ?? null,
+			participantUserId: item.participantUserId,
+			bindingIdentity: item.authority?.bindingIdentity,
+			authorityRevision: item.authority?.authorityRevision ?? null,
+			configRevision: configurationRevision(this.config),
+			contextHash: selected.snapshot?.contextHash ?? null,
+			agentProfileId: item.binding?.agentProfileId ?? "default",
+			runtimeRevision: this.runtimeRevision,
+		};
+		if (Object.hasOwn(item, "originalAccessCeiling")) envelopePayload.originalAccessCeiling = item.originalAccessCeiling;
+		const replacementEnvelope = this.recoveryCodec.seal(JSON.stringify(envelopePayload));
+		const executionBinding = this.#executionBinding({ ...item, executionProfile }, selected);
+		this.store.createJob({ jobId: replacementJobId, backendId: item.backendId, revision: jobRevisionForExecutionProfile(this.config, this.runtimeRevision, executionProfile), backendCapabilities: sourceJob.backendCapabilities, activityDetail: sourceJob.activityDetail, jobType: "conversation", scopeKey: item.scopeKey, softSilenceMs: sourceJob.softSilenceMs, recoveryEnvelope: replacementEnvelope, executionBinding });
+		const replacement = { ...item, jobId: replacementJobId, prompt: replacementPrompt, currentRequest, executionProfile, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), sourceMessageId: null };
 		this.workItems.set(replacementJobId, replacement);
 		if (activeItem) this.cancelJob(jobId);
 		else this.store.deleteJobRecovery(jobId);
@@ -652,31 +701,60 @@ export class DiscordMessageRouter {
 		await Promise.allSettled([...this.pendingOutbound]);
 	}
 
+	// 파킹 알림은 봉인된 복구 봉투에 적힌 채널로만 보낸다. 그 값은 원래 요청이
+	// 승인될 때 호스트가 직접 기록했고, #recoveryAuthority 가 같은 바인딩과
+	// 참가자 권한이 아직 유효하다고 확인한 뒤에만 쓴다. 바인딩이 채널을 못박아
+	// 두었다면 그 값과도 일치해야 한다.
+	#recoveryNoticeChannel(binding, channelId) {
+		if (!/^\d{17,20}$/.test(channelId ?? "") || /^0+$/.test(channelId)) return null;
+		const bound = binding?.threadId ?? binding?.channelId ?? null;
+		return bound === null || bound === channelId ? channelId : null;
+	}
+
 	resumeRecovered(items, { autoRetry = false } = {}) {
 		if (items.length > 0 && !this.recoveryCodec) throw new Error("recovery codec is unavailable");
 		for (const item of items) {
+			let noticeChannelId = null;
 			try {
 				const payload = JSON.parse(this.recoveryCodec.open(item.envelope));
-				const accessCeiling = payload.accessCeiling ?? null;
+				const hasOriginalAccessCeiling = Object.hasOwn(payload, "originalAccessCeiling");
+				const storedAccessCeiling = payload.accessCeiling ?? null;
+				const originalAccessCeiling = hasOriginalAccessCeiling ? payload.originalAccessCeiling : storedAccessCeiling;
+				if (originalAccessCeiling !== null && originalAccessCeiling !== "read-only") throw new Error("recovery access ceiling is invalid");
 				if (payload.mode === "coordinator" || payload.mode === "coordinator_result") {
 					throw new Error("coordinator recovery is withdrawn");
 				}
-					if (typeof payload.currentRequest !== "string" || !payload.currentRequest || payload.currentRequest.length > MAX_REQUEST_TEXT_LENGTH || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
-					const authority = this.#recoveryAuthority(payload);
-					const binding = authority.binding;
-					const agentContext = this.#agentContext(binding);
-					const prompt = boundRequestPrompt(payload.currentRequest, this.#profileConfig(binding), authority, agentContext.snapshot, accessCeiling);
+				if (typeof payload.currentRequest !== "string" || !payload.currentRequest || payload.currentRequest.length > MAX_REQUEST_TEXT_LENGTH || !/^\d{17,20}$/.test(payload.channelId)) throw new Error("recovery payload is invalid");
+				noticeChannelId = this.#recoveryNoticeChannelForPayload(payload);
+				const authority = this.#recoveryAuthority(payload);
+				const binding = authority.binding;
+				const agentContext = this.#agentContext(binding);
+				const requestedProfile = this.#executionProfile(item.backendId, authority, originalAccessCeiling);
+				const currentWindow = mutationWindowStatus(authority?.participantProfile?.mutationWindow, this.now());
+				const accessCeiling = storedAccessCeiling;
+				const windowClosed = hasOriginalAccessCeiling
+					&& originalAccessCeiling !== "read-only"
+					&& requestedProfile.access !== "read-only"
+					&& currentWindow.configured
+					&& !currentWindow.allowed;
 				const executionProfile = this.#executionProfile(item.backendId, authority, accessCeiling);
-				const profileChanged = !sameExecutionProfile(payload.executionProfile, executionProfile);
+				const profileChanged = hasOriginalAccessCeiling
+					? !sameExecutionProfileExceptAccess(payload.executionProfile, executionProfile)
+					: !sameExecutionProfile(payload.executionProfile, executionProfile);
 				if (this.config.schemaVersion === 2) {
 					if (!autoRetry || profileChanged || executionProfile.access !== "read-only") throw new Error("automatic recovery is not allowed for this job");
 				} else throw new Error("legacy recovery requires review");
-					const recovered = { jobId: item.jobId, backendId: item.backendId, prompt, currentRequest: payload.currentRequest, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, participantUserId: payload.participantUserId, authority, binding, agentContext, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile };
+				const prompt = boundRequestPrompt(payload.currentRequest, this.#profileConfig(binding), authority, agentContext.snapshot, accessCeiling, { windowClosed });
+				const recovered = { jobId: item.jobId, backendId: item.backendId, prompt, currentRequest: payload.currentRequest, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, participantUserId: payload.participantUserId, allowedUserIds: binding.allowedUserIds, authority, binding, agentContext, accessCeiling, ...(hasOriginalAccessCeiling ? { originalAccessCeiling } : {}), windowClosed, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile };
 				if (!this.#operatorResponseFinalized(item.jobId)) this.#sendOperatorResponse(recovered);
 				this.workItems.set(item.jobId, recovered);
 				this.queue.push(recovered);
 			} catch {
 				this.store.recordEvent({ jobId: item.jobId, source: "recovery", kind: "recovery_review_required", safePayload: {} });
+				// 파킹된 작업이 조용히 사라지면 요청자는 "[메시지 받음]" 뒤로 영원히
+				// 기다린다. 작업 ID 와 재전송 안내만 한 번 보낸다. 원문은 싣지 않고,
+				// 자동 재실행이나 상태 변경도 하지 않는다.
+				if (noticeChannelId) void this.#sendControl({ token: this.token, channelId: noticeChannelId, botUserId: this.botUserId, content: `${RECOVERY_REVIEW_PARKED_NOTICE}\n작업 ID: ${item.jobId}`, nonce: randomUUID().replaceAll("-", "").slice(0, 24) }).promise.catch(() => {});
 			}
 		}
 		this.#drain();

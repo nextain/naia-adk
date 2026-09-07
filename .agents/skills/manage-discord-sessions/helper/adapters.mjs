@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { grokDiscordCost } from "./grok-cost-profile.mjs";
 
 const CODEX_REASONING_BY_COST_PROFILE = Object.freeze({ control: "medium", balanced: "low", economy: "low" });
 
@@ -34,7 +35,14 @@ const ADAPTERS = new Map([
 			if (approvalPolicy !== "never") throw new Error("Claude child approval policy must be never");
 			if (!new Set(["plan", "bypassPermissions"]).has(permissionMode)) throw new Error("unsupported Claude permission mode");
 			const args = ["-p", "--safe-mode", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--no-session-persistence", "--permission-mode", permissionMode];
-			if (permissionMode === "bypassPermissions") args.push("--dangerously-skip-permissions");
+			if (permissionMode === "plan") {
+				// Keep the plan route's provider surface explicit. This controls
+				// Claude's built-in tools and MCP configuration; it is not an OS
+				// or workspace filesystem boundary.
+				args.push("--tools", "Read,Glob,Grep", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}');
+			} else {
+				args.push("--dangerously-skip-permissions");
+			}
 			for (const path of [...allowedPaths, childHome].filter((path) => path && path !== cwd)) args.push("--add-dir", path);
 			if (model) args.push("--model", model);
 			return {
@@ -56,10 +64,51 @@ const ADAPTERS = new Map([
 		},
 		parse: parseOpencode,
 	}],
+	["grok", {
+		backendId: "grok",
+		activityDetail: "structured",
+		// The Grok CLI takes a single-turn prompt from a real file path.
+		// `--prompt-file -` is not stdin: it opens a file literally named `-`
+		// and exits before reading anything, so the runner stages the prompt in
+		// the child home for this backend.
+		promptDelivery: "file",
+		capabilities: { structuredProgress: true, textActivity: true, cancellation: true, checkpointResume: false },
+		command({ executable = "grok", cwd, promptPath = null, permissionMode = "plan", sandbox = null, approvalPolicy = "never", model = null, costProfile = "balanced", reasoningEffort = null }) {
+			if (approvalPolicy !== "never") throw new Error("Grok child approval policy must be never");
+			if (!new Set(["plan", "bypassPermissions"]).has(permissionMode)) throw new Error("unsupported Grok permission mode");
+			const selectedSandbox = sandbox ?? (permissionMode === "plan" ? "read-only" : "workspace");
+			if (!new Set(["read-only", "workspace"]).has(selectedSandbox)) throw new Error("unsupported Grok sandbox");
+			if (permissionMode === "plan" && selectedSandbox !== "read-only") throw new Error("Grok plan mode requires read-only sandbox");
+			if (permissionMode === "bypassPermissions" && selectedSandbox !== "workspace") throw new Error("Grok writable mode requires workspace sandbox");
+			if (typeof promptPath !== "string" || !promptPath) throw new Error("Grok requires a staged prompt file");
+			const selectedReasoningEffort = reasoningEffort ?? grokDiscordCost(costProfile);
+			if (!selectedReasoningEffort || !new Set(["low", "medium", "high", "max"]).has(selectedReasoningEffort)) throw new Error("unsupported Grok reasoning effort");
+			// --verbatim keeps the host-authored contract prompt from being
+			// reinterpreted as CLI syntax; the request text inside it comes from
+			// a Discord participant.
+			const args = ["--output-format", "streaming-messages-json", "--permission-mode", permissionMode, "--sandbox", selectedSandbox, "--cwd", cwd, "--verbatim", "--prompt-file", promptPath, "--reasoning-effort", selectedReasoningEffort];
+			if (model) args.push("--model", model);
+			return { command: executable, args };
+		},
+		parse: parseGrok,
+	}],
 ]);
 
-const MINIMUM_VERSIONS = new Map([["codex", [0, 146, 0]], ["claude", [2, 1, 220]], ["opencode", [1, 18, 0]]]);
+const MINIMUM_VERSIONS = new Map([["codex", [0, 146, 0]], ["claude", [2, 1, 220]], ["opencode", [1, 18, 0]], ["grok", [1, 0, 0]]]);
 const APPROVAL_REQUEST_PATTERN = /\b(?:approval|permission)[ _-]?(?:required|request)\b/i;
+export const PROVIDER_QUOTA_FAILURE_REASON = "provider_quota_exhausted";
+const PROVIDER_QUOTA_CODES = new Set([
+	"insufficient_quota",
+	"quota_exceeded",
+	"usage_limit_exceeded",
+	"usage_limit_reached",
+	"billing_hard_limit_reached",
+	"insufficient_balance",
+	"usage_balance_exhausted",
+	"payment_required",
+]);
+const RAW_QUOTA_STATUS_PATTERN = /["'](?:http_status|httpStatus|status_code|statusCode)["']\s*:\s*["']?402\b/i;
+const RAW_QUOTA_CODE_PATTERN = new RegExp(`["'](?:code|error_code|errorCode|reason)["']\\s*:\\s*["']?(?:${[...PROVIDER_QUOTA_CODES].join("|")})["']?\\b`, "i");
 
 export function approvalRequestedText(value) {
 	return APPROVAL_REQUEST_PATTERN.test(String(value));
@@ -78,6 +127,19 @@ export function getBackendAdapter(backendId) {
 	return adapter;
 }
 
+// commandOptionsForProfile() 이 만든 옵션을 되읽어 읽기 전용 실행인지 판정한다.
+// 프로필 객체를 넘겨받지 못한 호출부(자식 환경 준비 등)도 같은 답을 얻어야
+// 읽기 전용 작업에 네트워크·자격 증명이 새로 들어가지 않는다. Codex는
+// sandbox를 생략하면 workspace-write를 사용하므로, 명시적인 read-only만
+// 읽기 전용으로 판정한다.
+export function readOnlyBackendOptions(backendId, options = {}) {
+	getBackendAdapter(backendId);
+	if (backendId === "codex") return options.sandbox === "read-only";
+	if (backendId === "opencode") return options.auto !== true;
+	if (backendId === "grok") return options.permissionMode === "plan" && options.sandbox === "read-only";
+	return options.permissionMode !== "bypassPermissions";
+}
+
 export function assertSupportedBackendVersion(backendId, versionOutput) {
 	getBackendAdapter(backendId);
 	const match = String(versionOutput).match(/\b(\d+)\.(\d+)\.(\d+)\b/);
@@ -89,6 +151,62 @@ export function assertSupportedBackendVersion(backendId, versionOutput) {
 		if (actual[index] < minimum[index]) throw new Error(`${backendId} version is not supported`);
 	}
 	return actual.join(".");
+}
+
+function normalizedProviderQuotaCode(value) {
+	if (typeof value !== "string" || value.length > 80) return null;
+	const normalized = value.trim().toLowerCase().replace(/[ -]+/g, "_");
+	return PROVIDER_QUOTA_CODES.has(normalized) ? normalized : null;
+}
+
+function isFailureEnvelope(value) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const type = String(value.type ?? "").toLowerCase();
+	return type === "error"
+		|| type === "turn.failed"
+		|| type === "turn_failed"
+		|| (type === "result" && (value.is_error === true || String(value.subtype ?? "").toLowerCase() === "error"))
+		|| value.is_error === true
+		|| (value.error && typeof value.error === "object" && !Array.isArray(value.error));
+}
+
+function providerQuotaReasonFromStructuredFailure(value) {
+	if (!isFailureEnvelope(value)) return null;
+	const candidates = [
+		value,
+		value.error,
+		value.message,
+		value.details,
+		value.details?.error,
+	].filter((candidate) => candidate && typeof candidate === "object" && !Array.isArray(candidate));
+	for (const candidate of candidates) {
+		for (const key of ["http_status", "httpStatus", "status_code", "statusCode", "status"]) {
+			if (candidate[key] === 402 || String(candidate[key] ?? "") === "402") return PROVIDER_QUOTA_FAILURE_REASON;
+		}
+		for (const key of ["code", "error_code", "errorCode", "reason"]) {
+			if (normalizedProviderQuotaCode(candidate[key])) return PROVIDER_QUOTA_FAILURE_REASON;
+		}
+	}
+	return null;
+}
+
+// Provider output is intentionally reduced to one allowlisted reason. The raw
+// stderr line is never returned or stored; an unparseable line only produces a
+// pending reason, which the runner may use after a failed process exit. This
+// prevents a successful response that merely prints an illustrative envelope
+// from becoming a provider failure.
+export function classifyBackendFailure({ message = null, line = null } = {}) {
+	const structuredReason = providerQuotaReasonFromStructuredFailure(message);
+	if (structuredReason) return structuredReason;
+	if (message !== null && message !== undefined) return null;
+	if (typeof line !== "string") return null;
+	try {
+		const parsed = JSON.parse(line);
+		return providerQuotaReasonFromStructuredFailure(parsed);
+	} catch {}
+	return RAW_QUOTA_STATUS_PATTERN.test(line) || RAW_QUOTA_CODE_PATTERN.test(line)
+		? PROVIDER_QUOTA_FAILURE_REASON
+		: null;
 }
 
 function activity(bytes) {
@@ -194,6 +312,58 @@ function parseClaude(message, rawBytes) {
 	return events;
 }
 
+const GROK_TOOL_CATEGORIES = new Map([
+	["run_terminal_command", "command_execution"],
+	["search_replace", "file_change"],
+	["write", "file_change"],
+	["read_file", "read"],
+	["grep", "search"],
+	["web_search", "search"],
+]);
+
+function parseGrok(message, rawBytes) {
+	const events = [];
+	if (message.type === "system" && message.subtype === "init") {
+		events.push({ kind: "backend_ready", safePayload: { backend: "grok" } });
+		return events;
+	}
+	if (message.type === "assistant") {
+		for (const block of claudeBlocks(message)) {
+			if (block.type === "tool_use") events.push({ kind: "tool_started", safePayload: optionalToolPayload(GROK_TOOL_CATEGORIES.get(block.name)) });
+		}
+		events.push(...activity(rawBytes));
+		return events;
+	}
+	if (message.type === "result") {
+		events.push(...cacheReceipt(message.usage, "grok"));
+		return events;
+	}
+	if (message.sessionUpdate || message.type === "session_update") {
+		events.push({ kind: "backend_ready", safePayload: { backend: "grok" } });
+		events.push(...activity(rawBytes));
+		return events;
+	}
+	return activity(rawBytes);
+}
+
+// OpenCode names its tools differently from Codex and Claude. Only the tools
+// whose category is unambiguous are mapped; anything else stays generic, the
+// same way an unknown Codex or Claude tool does. This map existed only as a
+// call to an undefined `toolCategory`, so the first tool line of any real
+// OpenCode job threw a ReferenceError inside the stream reader and terminated
+// the attempt as internal_error.
+const OPENCODE_TOOL_CATEGORIES = new Map([
+	["bash", "command_execution"],
+	["edit", "file_change"],
+	["patch", "file_change"],
+	["write", "file_change"],
+	["read", "read"],
+	["glob", "search"],
+	["grep", "search"],
+	["list", "search"],
+	["webfetch", "network"],
+]);
+
 function parseOpencode(message, rawBytes) {
 	const events = [];
 	if (message.type === "step_start") events.push({ kind: "phase_changed", safePayload: { phase: "planning" } });
@@ -201,7 +371,7 @@ function parseOpencode(message, rawBytes) {
 	if (message.type === "tool_use") {
 		const tool = message.part?.tool ?? "unknown";
 		const status = message.part?.state?.status ?? "running";
-		events.push({ kind: status === "completed" || status === "error" ? "tool_finished" : "tool_started", safePayload: { toolCategory: toolCategory(tool) } });
+		events.push({ kind: status === "completed" || status === "error" ? "tool_finished" : "tool_started", safePayload: optionalToolPayload(OPENCODE_TOOL_CATEGORIES.get(tool)) });
 	}
 	return events;
 }
@@ -211,20 +381,23 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 	try {
 		message = JSON.parse(line);
 	} catch {
-		return { outcome: null, transientResult: null, assistantText: null, approvalRequested: approvalRequestedText(line), events: activity(Buffer.byteLength(line, "utf8")).map((event, eventIndex) => ({
+		const pendingFailureReasonCode = classifyBackendFailure({ backendId, line });
+		return { outcome: null, failureReasonCode: null, pendingFailureReasonCode, transientResult: null, assistantText: null, approvalRequested: approvalRequestedText(line), events: activity(Buffer.byteLength(line, "utf8")).map((event, eventIndex) => ({
 			...event,
 			dedupeKey: eventKey(backendId, attemptId, lineNumber, eventIndex, event.kind),
 		})) };
 	}
 	const rawBytes = Buffer.byteLength(line, "utf8");
 	const approvalRequested = structuredApprovalRequested(message);
+	const failureReasonCode = classifyBackendFailure({ backendId, message });
 	const codexCompletion = message.type === "turn.completed"
 		&& (message.status === undefined || new Set(["completed", "success"]).has(message.status));
 	const opencodeCompletion = backendId === "opencode" && new Set(["step_finish", "session_end", "result"]).has(message.type);
-	const outcome = backendId === "codex"
+	const observedOutcome = backendId === "codex"
 		? codexCompletion ? "success" : new Set(["turn.failed", "error"]).has(message.type) ? "failure" : null
 		: backendId === "opencode" ? opencodeCompletion && message.error ? "failure" : opencodeCompletion ? "success" : null
 		: message.type === "result" ? (message.is_error === true || message.subtype === "error" ? "failure" : message.subtype === "success" && message.is_error !== true ? "success" : null) : null;
+	const outcome = failureReasonCode ? "failure" : observedOutcome;
 	let transientResult = null;
 	let assistantText = null;
 	if (backendId === "codex" && message.type === "item.completed" && message.item?.type === "agent_message" && typeof message.item.text === "string") transientResult = message.item.text;
@@ -234,11 +407,16 @@ export function inspectBackendLine({ backendId, line, attemptId, lineNumber }) {
 		if (text) assistantText = text;
 	}
 	if (backendId === "claude" && message.type === "result" && outcome === "success" && typeof message.result === "string") transientResult = message.result;
+	if (backendId === "grok" && message.type === "assistant") {
+		const text = claudeBlocks(message).filter((block) => block.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n");
+		if (text) assistantText = text;
+	}
+	if (backendId === "grok" && message.type === "result" && outcome === "success" && typeof message.result === "string") transientResult = message.result;
 	if (backendId === "opencode" && message.type === "text" && typeof message.part?.text === "string") {
 		transientResult = message.part.text;
 		assistantText = message.part.text;
 	}
-	return { outcome, transientResult, assistantText, approvalRequested, events: getBackendAdapter(backendId).parse(message, rawBytes).map((event, eventIndex) => ({
+	return { outcome, failureReasonCode, pendingFailureReasonCode: null, transientResult, assistantText, approvalRequested, events: getBackendAdapter(backendId).parse(message, rawBytes).map((event, eventIndex) => ({
 		...event,
 		dedupeKey: eventKey(backendId, attemptId, lineNumber, eventIndex, event.kind),
 	})) };

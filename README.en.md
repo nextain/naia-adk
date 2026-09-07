@@ -44,7 +44,8 @@ just one of them, use `pnpm dev:server` (→ 3141) or `pnpm dev:dashboard`
 
 It gives an AI agent a set of directories with fixed places for everything, so it
 can start working immediately. AI-facing context lives in `.agents/` (English,
-JSON/YAML), and a human-readable mirror lives in `.users/` (Korean, Markdown).
+JSON/YAML). Human-readable guides live in `.users/context/` (Korean) and
+`.users/context/en/` (English).
 That mirror is partial, not a full copy — it holds the documents a human needs
 to read (for example, skills are canonical under `.agents/skills/`, and only some
 are mirrored into `.users/skills/`). Skills, data, and projects all have
@@ -119,16 +120,19 @@ stays inside the workspace; `confidential` covers sensitive material like
 contracts, credentials, and personal data. Credentials usually live outside git,
 but by level they are still `confidential`.
 
-> **Session-contract enforcement ships disabled in this release.** A
-> `.claude/no-harness` marker is committed, so the session-contract gate blocks
-> nothing. With it on, a session without a contract is blocked from every mutating
-> shell command — including `npm test` — so a fresh clone cannot even run its own
-> test suite. The file-edit path was opened up for that same reason; the shell path
-> has not been given the same treatment yet. Force-push, destructive-git, deploy, and
-> outbound-messaging guards are unaffected and still run. Progress is tracked in
-> [#34](https://github.com/nextain/naia-adk/issues/34), with details in
-> `.claude/no-harness`. The Session Boundaries section of `AGENTS.md` describes the
-> intended design, not current runtime behavior.
+> **The session-contract gate is active in a marker-free checkout.** An unbound
+> session may perform policy-approved routine local work such as inspection,
+> `npm test`, builds, `mkdir`, and ordinary non-destructive Git stage/commit.
+> Governance and host-policy files, shared entrypoints, session contracts and
+> registry authority, deletion, destructive or remote commands, outbound effects,
+> and production changes still require a contract. This is a repository-hook
+> governance check; it is not an operating-system sandbox and does not guarantee
+> commands launched outside the hooks. See `.agents/context/agents-rules.json` and
+> `.agents/context/harness.yaml` for the policy. A `.codex/no-harness`,
+> `.claude/no-harness`, or `.pi/no-harness` marker at the project root or any
+> ancestor is inherited by descendant checkouts. This candidate connects the
+> session-contract hook to Codex and Claude; it does not claim a Pi session-contract
+> adapter.
 
 ### Where secrets live
 
@@ -207,20 +211,31 @@ When you need team collaboration and shared knowledge, extend to
 into asset, process, and permission governance, and adds team ownership and
 delegated approvals.
 
-### The fork chain
+### Fork lineages
 
-Naia ADK is meant to be forked into your own. Individuals fork `naia-adk`
-directly; organizations go through `naia-business-adk` to instantiate company and
-member workspaces.
+Naia ADK is meant to be forked into your own workspace. Individuals may fork
+`naia-adk` directly. An organization may choose a separate organization-family
+lineage such as `naia-business-adk` for company and member workspaces. A single
+fixed chain is not required for every user.
 
 ```
-naia-adk                  ← personal base (public, Apache 2.0)
-  └── {org}-adk           ← org fork: company data + business submodules
-        └── {user}-adk    ← personal fork: personal data + project submodules
+naia-adk                  ← public personal base (Apache 2.0)
+  └── {user}-adk          ← direct personal fork
+
+naia-business-adk         ← optional organization lineage
+  └── {org}-adk            ← org fork: company data + business submodules
+        └── {member}-adk    ← member workspace derived from the organization
 ```
 
-Nextain's actual chain runs
-`naia-adk → naia-business-adk → nextain-adk → alpha-adk`.
+Nextain's internal lineage is a separate operating example. A public user may
+keep a direct personal fork and name it `{user}-adk` with the account name.
+
+For an independent project/team baseline, use [naia-pj-adk](https://github.com/nextain/naia-pj-adk).
+PJ is an adapter baseline for multi-project context drift, call-cost and Discord operations.
+Personal tailoring and team roles/hours are separate concerns. This structure is intended to
+organize and trace that work; it does not claim measured savings or shorter work time. PJ is not
+the parent repository of a personal fork, and `naia-business-adk` remains an optional organization
+extension.
 
 ## Structure
 
@@ -231,7 +246,8 @@ directories each fork fills in.
 | Directory | Purpose |
 |-----------|---------|
 | `.agents/` | AI-facing context (English, JSON/YAML) — single source of truth for rules |
-| `.users/` | Human-readable mirror (Korean, Markdown) |
+| `.users/context/` | Human-readable guides (Korean, Markdown) |
+| `.users/context/en/` | English human-readable mirror (Markdown) |
 | `.claude/` | Claude Code config, hooks, skill symlinks |
 | `skills/` | Operational/runtime skills (served by the dashboard API) |
 | `scripts/` | Utility scripts |
@@ -285,8 +301,8 @@ Skills live in two places, consumed by different parties.
   document generation; `skills/business/` holds org skills such as
   `press-release`.
 
-The most accurate list is the skill catalog in the dashboard. A text table is
-also kept in [AGENTS.en.md](AGENTS.en.md#skills).
+The most accurate list is the skill catalog in the dashboard. The source index is
+`.agents/context/skills-index.yaml`.
 
 ## Getting started
 
@@ -319,7 +335,8 @@ Write issues, PRs, and discussions in whatever language you're comfortable with;
 AI mediates the communication. Just keep the git record (commits, context, shared
 artifacts) in English. For the full process and rules, see
 [CONTRIBUTING.md](CONTRIBUTING.md). Development defaults to issue-driven
-development; the detailed flow lives in [AGENTS.en.md](AGENTS.en.md) and
+development; the detailed flow lives in [AGENTS.md](AGENTS.md),
+`.agents/context/ai-work-index.yaml`, `.agents/context/skills-index.yaml`, and
 [`.agents/workflows/`](.agents/workflows/).
 
 ## Roadmap

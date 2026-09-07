@@ -12,7 +12,7 @@ import { installSupervisedPair, resolveBackendExecutable } from "./service-manag
 
 export function resolveWindowsBackendCommand(name, pathValue = process.env.PATH ?? "") {
 	if (process.platform !== "win32") return resolveBackendExecutable(name, pathValue);
-	if (!new Set(["codex", "claude"]).has(name)) throw new Error("unsupported backend executable");
+	if (!new Set(["codex", "claude", "grok"]).has(name)) throw new Error("unsupported backend executable");
 	for (const directory of pathValue.split(";").filter(Boolean)) {
 		for (const extension of [".exe", ".com"]) {
 			const candidate = resolve(directory, `${name}${extension}`);

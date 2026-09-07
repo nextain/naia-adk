@@ -1,26 +1,29 @@
 # 레포 구조 표준 (Repo Structure Standard)
 
-> **언어**: [English](en/repo-structure-standard.md) · 한국어 (이 파일)
+> **언어**: 한국어 (이 파일) · [English](en/repo-structure-standard.md)
 > **AI SoT**: `.agents/context/repo-structure-standard.yaml`
 > **버전**: 1.0 (2026-05-27)
-> **상속**: naia-adk → naia-business-adk → {org}-adk → {user}-adk
+> **적용 계보**: naia-adk 직접 개인 포크 또는 선택적 조직 계보(naia-business-adk → {org}-adk → {user}-adk)
 
 ---
 
 ## 언어 기본 / 오버라이드
 
-기본: 공개 OSS 레포는 영어-primary로 문서화(국제 접근성), 메인테이너/사용자 포크는 한국어-primary(메인테이너 언어).
+기본: 공개 OSS 레포는 영어-primary로 문서화하고, 메인테이너·사용자 포크는 메인테이너 언어를 기본으로 사용합니다.
 
-**메인테이너 오버라이드 (2026-06-22)**: 아래 공개 OSS 레포는 메인테이너 결정(한국어 우선 팀)으로 **진입문서 한국어-primary** — `README.md`와 `AGENTS.md == CLAUDE.md == GEMINI.md`가 한국어, 영어는 `*.en.md`로 보존, `.users/` base = 한국어(`en/` 서브디렉터리 = 영어 미러):
-- `naia-adk`
-- `naia-memory`
+**`naia-adk` 공개 기준선의 실제 파일 규칙 (2026-06-22)**:
+- `README.md`는 한국어, `README.en.md`는 영어입니다.
+- `AGENTS.md`는 영어 canonical 인덱스이고 `CLAUDE.md`와 `GEMINI.md`는 byte-identical 미러입니다.
+- `.users/context/`는 한국어 human guide, `.users/context/en/`은 영어 human guide입니다.
+
+`naia-memory`는 자체 저장소 규칙을 따르며 이 표준의 override 대상이 아닙니다.
 
 ---
 
 ## 개요
 
 naia-adk 생태계 전체 레포의 **문서 구조 · SDLC 산출물 · RBAC** 표준.
-이 파일은 `agents-rules.yaml` SoT의 한국어 mirror입니다.
+이 파일은 `.agents/context/repo-structure-standard.yaml` SoT의 한국어 mirror입니다.
 
 fork 커스터마이즈: 포크 루트에 `FORK.md` 생성 → `overrides:` 섹션으로 덮어쓰기.
 
@@ -30,7 +33,7 @@ fork 커스터마이즈: 포크 루트에 `FORK.md` 생성 → `overrides:` 섹�
 
 | 타입 | 대표 레포 | 설명 |
 |------|----------|------|
-| `workspace_adk` | naia-adk, alpha-adk, {org}-adk | 개발자가 작업하는 최상위 워크스페이스 |
+| `workspace_adk` | naia-adk, naia-business-adk, {org}-adk, {user}-adk | 개발자가 작업하는 최상위 워크스페이스 |
 | `runtime_library` | naia-agent, naia-memory | 호스트가 사용하는 런타임/라이브러리 패키지 |
 | `app_os` | naia-os | 커뮤니티 기여자가 있는 사용자 향 전체 앱/OS |
 
@@ -38,7 +41,8 @@ fork 커스터마이즈: 포크 루트에 `FORK.md` 생성 → `overrides:` 섹�
 
 ```
 .agents/context/       ← AI SoT (agents-rules.json + project-index.yaml 필수)
-.users/context/        ← 한국어 human mirror (기본값)
+.users/context/        ← 한국어 human guide
+.users/context/en/      ← 영어 human guide
 ```
 
 ### runtime_library 필수 디렉토리
@@ -64,7 +68,8 @@ docs/                  ← 영어 SoT (human 1차 문서)
 | 패턴 | 적용 대상 | 레이어 |
 |------|----------|--------|
 | **dual** | workspace_adk (private fork) | `.agents/context/` (AI) ↔ `.users/context/` (human) |
-| **triple** | app_os, public 베이스 (naia-adk 자체) | `.agents/` ↔ `.users/context/` (영어) ↔ `.users/context/ko/` (한국어) |
+| **triple** | app_os | `.agents/` ↔ `.users/context/` (영어) ↔ `.users/context/ko/` (한국어) |
+| **public_workspace_adk** | 공개 workspace_adk 기준선(naia-adk) | `.agents/context/` (영어 기계 원본) ↔ `.users/context/` (한국어) ↔ `.users/context/en/` (영어) |
 | **split** | runtime_library (naia-agent 패턴) | `.agents/` ↔ `docs/` (영어 SoT) ↔ `.users/docs/ko/` (한국어) |
 
 **규칙 (split 패턴)**: 항상 영어 원본(`docs/`) 먼저 수정 후 한국어 mirror 동기화.
@@ -73,9 +78,11 @@ docs/                  ← 영어 SoT (human 1차 문서)
 
 ## 3. Multi-tool Harness
 
-`AGENTS.md`(canonical) = `CLAUDE.md` = `GEMINI.md` = `OPENCODE.md` = `CODEX.md`
+`AGENTS.md`가 canonical이고 `CLAUDE.md`와 `GEMINI.md`가 byte-identical mirror입니다.
 
-- `AGENTS.md`만 편집. `scripts/sync-harness-mirrors.sh` 또는 pre-commit hook이 나머지 동기화.
+- `AGENTS.md`만 편집합니다.
+- 검사: `node .claude/hooks/sync-entry-points.js --check`
+- 동기화: `node .claude/hooks/sync-entry-points.js` (지원되는 미러만)
 - 초기 레포: 3개(AGENTS/CLAUDE/GEMINI)만 있어도 허용.
 
 ---
@@ -153,6 +160,8 @@ overrides:
     T2:
       dirs: [data-teams/, data-finance/]  # 추가 디렉토리
 ```
+
+직접 개인 포크는 조직 계보를 거치지 않고 `naia-adk` 기본값을 사용합니다. 조직 계보를 선택한 경우에만 조직 레이어가 추가됩니다.
 
 **우선순위** (높을수록 우선):
 

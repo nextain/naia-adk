@@ -4,6 +4,8 @@ import { assertOnlyKeys, safeIdentifier } from "./sanitize.mjs";
 import { validateDiscordBindings } from "./discord-scope.mjs";
 import { assertOwnerOnly } from "./platform-security.mjs";
 import { validateCredentialProfiles } from "./credential-profiles.mjs";
+import { grokDiscordCost } from "./grok-cost-profile.mjs";
+import { normalizeMutationWindow } from "./mutation-window.mjs";
 
 const ACTIONS = new Set(["read", "reply", "write", "execute", "cancel", "retry"]);
 const RESERVED_PARTICIPANT_LABELS = new Set(["assistant", "developer", "system", "tool", "user"]);
@@ -67,7 +69,7 @@ function validateParticipantProfiles(profiles, bindings, globalActions) {
 	const normalized = {};
 	for (const [userId, profile] of Object.entries(profiles)) {
 		snowflake(userId, "participant profile user ID");
-		assertOnlyKeys(profile ?? {}, new Set(["label", "relationship", "allowedActions"]), "participant profile");
+		assertOnlyKeys(profile ?? {}, new Set(["label", "relationship", "allowedActions", "mutationWindow"]), "participant profile");
 		safeIdentifier(profile?.label, "participant label");
 		const label = profile.label.toLowerCase();
 		if (RESERVED_PARTICIPANT_LABELS.has(label)) throw new Error("participant label is reserved");
@@ -78,7 +80,8 @@ function validateParticipantProfiles(profiles, bindings, globalActions) {
 		const allowedActions = [...new Set(profile.allowedActions)].filter((action) => globalActions.includes(action));
 		if (allowedActions.length === 0) throw new Error("participant effective actions must not be empty");
 		assertConversationActionContract(allowedActions, "participant effective actions");
-		normalized[userId] = { label: profile.label, relationship: profile.relationship, allowedActions };
+		const mutationWindow = normalizeMutationWindow(profile.mutationWindow);
+		normalized[userId] = { label: profile.label, relationship: profile.relationship, allowedActions, ...(mutationWindow ? { mutationWindow } : {}) };
 	}
 	return normalized;
 }
@@ -135,16 +138,21 @@ export function loadMessengerConfig(path) {
 	if (config.role.allowedActions.length === 0 || config.role.allowedActions.some((value) => !ACTIONS.has(value))) throw new Error("role contains an unsupported allowed action");
 	if (config.role.requiresApproval !== undefined && !Array.isArray(config.role.requiresApproval)) throw new Error("requiresApproval must be an array");
 	if (config.role.requiresApproval?.some((value) => !ACTIONS.has(value))) throw new Error("role contains an unsupported approval action");
-	if (!new Set(["codex", "claude", "opencode"]).has(config.backend?.selected)) throw new Error("selected backend is not supported");
+	if (!new Set(["codex", "claude", "opencode", "grok"]).has(config.backend?.selected)) throw new Error("selected backend is not supported");
 	if (config.backend.profiles?.[config.backend.selected]?.enabled !== true) throw new Error("selected backend profile is disabled");
 	for (const [name, profile] of Object.entries(config.backend.profiles ?? {})) {
-		if (!new Set(["codex", "claude", "opencode"]).has(name)) throw new Error("unsupported backend profile");
+		if (!new Set(["codex", "claude", "opencode", "grok"]).has(name)) throw new Error("unsupported backend profile");
 		assertOnlyKeys(profile, new Set(["enabled", "model", "costProfile", "reasoningEffort"]), "backend profile");
 		if (typeof profile.enabled !== "boolean") throw new Error("backend profile enabled must be boolean");
 		if (profile.model !== undefined && (typeof profile.model !== "string" || !/^(?=.{1,80}$)[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/.test(profile.model))) throw new Error("backend profile model is invalid");
-		if (profile.costProfile !== undefined && (name !== "codex" || !new Set(["control", "balanced", "economy"]).has(profile.costProfile))) throw new Error("backend profile costProfile is invalid");
-		if (profile.reasoningEffort !== undefined && (name !== "codex" || !new Set(["low", "medium", "high", "max"]).has(profile.reasoningEffort))) throw new Error("backend profile reasoningEffort is invalid");
+		if (profile.costProfile !== undefined && ((name !== "codex" && name !== "grok") || !new Set(["control", "balanced", "economy"]).has(profile.costProfile))) throw new Error("backend profile costProfile is invalid");
+		if (profile.reasoningEffort !== undefined && ((name !== "codex" && name !== "grok") || !new Set(["low", "medium", "high", "max"]).has(profile.reasoningEffort))) throw new Error("backend profile reasoningEffort is invalid");
 		if (name === "codex" && profile.costProfile === undefined) profile.costProfile = "balanced";
+		// Grok keeps the same cost-profile vocabulary but its own effort table.
+		// The model itself stays unset unless the config names one, so no model
+		// default is baked into the runtime.
+		if (name === "grok" && profile.costProfile === undefined) profile.costProfile = "balanced";
+		if (name === "grok" && profile.reasoningEffort === undefined) profile.reasoningEffort = grokDiscordCost(profile.costProfile);
 	}
 	safeIdentifier(config.discord?.credentialRef, "credentialRef");
 	snowflake(config.discord?.botUserId, "Discord bot user ID");

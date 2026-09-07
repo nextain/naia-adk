@@ -54,7 +54,7 @@ input_schema:
   reviewers:
     type: "string[]"
     required: false
-    description: "Override default reviewers (e.g. gemini,opencode,codex,claude)"
+    description: "Override default reviewers (e.g. claude,opencode,codex,grok)"
   "--light":
     type: boolean
     required: false
@@ -80,7 +80,7 @@ steps:
 failure_policy:
   retry: true
   rollback: true
-  on_failure: "Record external review as NOT_RUN and continue ordinary work; do not claim cross-validation"
+  on_failure: "Fail closed when a configured reviewer is unavailable; only an explicit --require-review false opt-out may record NOT_RUN for ordinary local work, and it cannot satisfy review evidence"
 idempotency: false
 ---
 
@@ -102,9 +102,10 @@ traceability for requirements-driven projects.
 - **Baseline-preserving**: Planning and integration compare the current product with an immutable baseline and an explicit surface-preservation contract
 - **Evidence-separated**: Source, baseline, implementation/test, and authority/release reviewers receive different evidence views to prevent shared anchoring
 - **Safe**: Auto-fix with diff preview, rollback, and safety guard
-- **Account-optional**: Default Claude and Codex profiles review with their own
-  tool family. Missing CLIs, logins, or other provider accounts never block
-  ordinary work; they only remove the independent-review claim.
+- **Fail-closed reviewer availability**: A configured reviewer that is missing,
+  unauthenticated, or unavailable fails the review pass by default. An explicit
+  `--require-review false` opt-out may record `NOT_RUN` for ordinary local work,
+  but that result cannot satisfy a review or release gate.
 
 ## Arguments
 

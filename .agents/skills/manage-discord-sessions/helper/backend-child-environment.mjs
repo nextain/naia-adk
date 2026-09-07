@@ -1,11 +1,11 @@
-import { closeSync, constants as fsConstants, chmodSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readSync, readdirSync, rmSync, writeSync } from "node:fs";
+import { closeSync, constants as fsConstants, chmodSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { assertOwnerOnly, protectOwnerOnly } from "./platform-security.mjs";
 import { CREDENTIAL_PROFILES, validateCredentialProfiles } from "./credential-profiles.mjs";
 
 const SAFE_ENV_KEYS = new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ", "SSL_CERT_FILE", "SSL_CERT_DIR", "SystemRoot", "WINDIR", "PATHEXT", "COMSPEC", "TEMP", "TMP"]);
-const API_KEY_BY_BACKEND = { codex: "CODEX_API_KEY", claude: "ANTHROPIC_API_KEY" };
+const API_KEY_BY_BACKEND = { codex: "CODEX_API_KEY", claude: "ANTHROPIC_API_KEY", grok: "XAI_API_KEY" };
 const DISPOSABLE_CREDENTIAL_DIRECTORIES = new Set(["logs", "cache", "surface_data"]);
 
 export function resolveExecutionCwd(cwd) {
@@ -85,14 +85,160 @@ function protectCopiedCredentialTree(path) {
 	}
 }
 
-function defaultRuntimeRoot(parentEnv) {
+// OpenCode resolves the user config, the project config, and the selected
+// agent independently. A top-level permission overlay therefore does not
+// contain a hostile `agent.build` rule from the user's provider config. Keep
+// only provider/model resolution fields in the copied provider file and make
+// the selected agent deny by default. Unknown and custom tools consequently
+// stay denied even when a host config contains task, MCP, or plugin entries.
+const OPENCODE_READ_ONLY_PERMISSION = Object.freeze({ "*": "deny", read: "allow", glob: "allow", grep: "allow", list: "allow" });
+const OPENCODE_PROVIDER_CONFIG_KEYS = new Set(["$schema", "provider", "model", "small_model"]);
+const OPENCODE_CONFIG_MAX_BYTES = 4 * 1024 * 1024;
+
+function invalidOpenCodeProviderConfig() {
+	return new Error("OpenCode provider configuration is invalid");
+}
+
+function stripJsoncComments(source) {
+	let output = "";
+	let inString = false;
+	let escaped = false;
+	let comment = null;
+	for (let index = 0; index < source.length; index += 1) {
+		const character = source[index];
+		const next = source[index + 1];
+		if (comment === "line") {
+			if (character === "\n" || character === "\r") {
+				output += character;
+				comment = null;
+			} else output += " ";
+			continue;
+		}
+		if (comment === "block") {
+			if (character === "*" && next === "/") {
+				output += "  ";
+				index += 1;
+				comment = null;
+			} else if (character === "\n" || character === "\r") output += character;
+			else output += " ";
+			continue;
+		}
+		if (inString) {
+			output += character;
+			if (escaped) escaped = false;
+			else if (character === "\\") escaped = true;
+			else if (character === '"') inString = false;
+			continue;
+		}
+		if (character === '"') {
+			inString = true;
+			output += character;
+		} else if (character === "/" && next === "/") {
+			output += "  ";
+			index += 1;
+			comment = "line";
+		} else if (character === "/" && next === "*") {
+			output += "  ";
+			index += 1;
+			comment = "block";
+		} else output += character;
+	}
+	if (comment === "block" || inString) throw invalidOpenCodeProviderConfig();
+	return output;
+}
+
+function removeJsoncTrailingCommas(source) {
+	let output = "";
+	let inString = false;
+	let escaped = false;
+	for (let index = 0; index < source.length; index += 1) {
+		const character = source[index];
+		if (inString) {
+			output += character;
+			if (escaped) escaped = false;
+			else if (character === "\\") escaped = true;
+			else if (character === '"') inString = false;
+			continue;
+		}
+		if (character === '"') {
+			inString = true;
+			output += character;
+			continue;
+		}
+		if (character === ",") {
+			let next = index + 1;
+			while (next < source.length && /\s/.test(source[next])) next += 1;
+			if (source[next] === "}" || source[next] === "]") continue;
+		}
+		output += character;
+	}
+	if (inString) throw invalidOpenCodeProviderConfig();
+	return output;
+}
+
+function parseOpenCodeJsonc(source) {
+	if (typeof source !== "string" || Buffer.byteLength(source, "utf8") > OPENCODE_CONFIG_MAX_BYTES) throw invalidOpenCodeProviderConfig();
+	let parsed;
+	try { parsed = JSON.parse(removeJsoncTrailingCommas(stripJsoncComments(source))); }
+	catch { throw invalidOpenCodeProviderConfig(); }
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw invalidOpenCodeProviderConfig();
+	return parsed;
+}
+
+function sanitizeOpenCodeProviderConfig(source) {
+	const parsed = parseOpenCodeJsonc(source);
+	const sanitized = {};
+	for (const key of OPENCODE_PROVIDER_CONFIG_KEYS) {
+		if (!Object.hasOwn(parsed, key)) continue;
+		if (key === "$schema" || key === "model" || key === "small_model") {
+			if (typeof parsed[key] !== "string" || parsed[key].length === 0) throw invalidOpenCodeProviderConfig();
+			sanitized[key] = parsed[key];
+		} else {
+			if (!parsed[key] || typeof parsed[key] !== "object" || Array.isArray(parsed[key])) throw invalidOpenCodeProviderConfig();
+			sanitized[key] = parsed[key];
+		}
+	}
+	return JSON.stringify(sanitized);
+}
+
+function writeOwnerOnlyFile(target, content, label) {
+	privateDirectory(dirname(target));
+	const fd = openSync(target, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW, 0o600);
+	try {
+		const buffer = Buffer.from(content, "utf8");
+		let offset = 0;
+		while (offset < buffer.length) offset += writeSync(fd, buffer, offset, buffer.length - offset);
+	} finally { closeSync(fd); }
+	chmodSync(target, 0o600);
+	protectOwnerOnly(target, "file", label);
+	return target;
+}
+
+function writeOpencodeReadOnlyConfig(childHome) {
+	const target = join(childHome, "opencode-read-only.json");
+	return writeOwnerOnlyFile(target, JSON.stringify({
+		permission: { ...OPENCODE_READ_ONLY_PERMISSION },
+		agent: { build: { mode: "primary", permission: { ...OPENCODE_READ_ONLY_PERMISSION } } },
+		plugin: [],
+	}), "OpenCode read-only permission configuration");
+}
+
+function copyOpenCodeProviderConfig(source, target, { readOnly }) {
+	if (!existsSync(source)) return false;
+	if (!readOnly) return copyCredential(source, target, "OpenCode provider configuration", { ownerOnly: false });
+	assertRealFile(source, "OpenCode provider configuration");
+	if ((lstatSync(source).mode & 0o022) !== 0) throw new Error("OpenCode provider configuration must not be group- or world-writable");
+	return Boolean(writeOwnerOnlyFile(target, sanitizeOpenCodeProviderConfig(readFileSync(source, "utf8")), "OpenCode sanitized provider configuration"));
+}
+
+export function defaultRuntimeRoot(parentEnv, systemTempDirectory = tmpdir()) {
 	const base = parentEnv.XDG_RUNTIME_DIR && resolve(parentEnv.XDG_RUNTIME_DIR) === parentEnv.XDG_RUNTIME_DIR
 		? parentEnv.XDG_RUNTIME_DIR
-		: join(tmpdir(), `naia-adk-${typeof process.getuid === "function" ? process.getuid() : "user"}`);
+		: join(realpathSync(systemTempDirectory), `naia-adk-${typeof process.getuid === "function" ? process.getuid() : "user"}`);
 	return join(base, "messenger-sessions");
 }
 
-export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv = process.env, authRoot = homedir(), workspacePath = null, prepareAuthentication = true, credentialProfiles = [] }) {
+export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv = process.env, authRoot = homedir(), workspacePath = null, prepareAuthentication = true, credentialProfiles = [], readOnly = true }) {
 	const selectedCredentialProfiles = validateCredentialProfiles(credentialProfiles, "child credential profiles");
 	const childHome = resolve(runtimeRoot ?? defaultRuntimeRoot(parentEnv), "children", attemptId);
 	privateDirectory(childHome);
@@ -129,12 +275,17 @@ export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, par
 			env.CLAUDE_CODE_MAX_RETRIES = "15";
 			if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".claude", ".credentials.json"), join(childHome, ".claude", ".credentials.json"), "Claude authentication");
 		} else if (backendId === "opencode") {
+			// opencode run 에는 권한 플래그가 없다(--auto 는 넓히기만 한다). 실제
+			// 거부는 설정으로만 만들 수 있고, 두 가지를 함께 줘야 한다: 자식 홈의
+			// 소유자 전용 deny 오버레이와 프로젝트 설정 비활성화. 오버레이만 주면
+			// 작업 대상 워크스페이스의 opencode.json 이 이를 다시 열어 버린다.
+			if (readOnly) env.OPENCODE_CONFIG = writeOpencodeReadOnlyConfig(childHome);
+			if (readOnly) env.OPENCODE_DISABLE_PROJECT_CONFIG = "1";
 			if (prepareAuthentication) {
-				const configCopied = copyCredential(
+				const configCopied = copyOpenCodeProviderConfig(
 					join(authRoot, ".config", "opencode", "opencode.jsonc"),
 					join(env.XDG_CONFIG_HOME, "opencode", "opencode.jsonc"),
-					"OpenCode provider configuration",
-					{ ownerOnly: false },
+					{ readOnly },
 				);
 				const authCopied = copyCredential(
 					join(authRoot, ".local", "share", "opencode", "auth.json"),
@@ -143,6 +294,13 @@ export function prepareChildEnvironment({ backendId, attemptId, runtimeRoot, par
 				);
 				authenticationPrepared = configCopied && authCopied;
 			}
+		} else if (backendId === "grok") {
+			// GROK_HOME and ~/.grok/auth.json are the CLI's own locations, so a
+			// child is isolated the same way Codex and Claude children are.
+			const grokHome = join(childHome, ".grok");
+			privateDirectory(grokHome);
+			env.GROK_HOME = grokHome;
+			if (prepareAuthentication) authenticationPrepared ||= copyCredential(join(authRoot, ".grok", "auth.json"), join(grokHome, "auth.json"), "Grok authentication");
 		} else {
 			throw new Error(`unsupported backend environment: ${backendId}`);
 		}

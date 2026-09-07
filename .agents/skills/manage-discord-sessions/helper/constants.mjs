@@ -80,6 +80,7 @@ export const MAX_SAFE_SUMMARY_LENGTH = 512;
 export const JOB_FAILURE_REASON_CODES = new Set([
 	"timeout",
 	"process_exit",
+	"provider_quota_exhausted",
 	"authorization",
 	"delivery_unknown",
 	"internal_error",
@@ -91,6 +92,7 @@ export const JOB_FAILURE_REASON_CODES = new Set([
 	"backend_authentication_failed",
 	"backend_invocation_invalid",
 	"backend_spawn_failed",
+	"mutation_window_closed",
 ]);
 
 export const DELIVERY_UNKNOWN_REASON_CODES = new Set([

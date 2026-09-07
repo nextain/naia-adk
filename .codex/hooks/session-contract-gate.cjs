@@ -8,6 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const sessionContract = require("../../.agents/hooks/core/session-contract.js");
+const harnessSwitch = require("../../.agents/hooks/core/harness-switch.js");
 // Baseline gate helper. A broken helper must not silently disable the gate:
 // when a contract declares a baseline and this module is missing, the gate
 // fails closed with an explicit message instead of pretending nothing is due.
@@ -17,22 +18,25 @@ const sessionRecovery = require("../../.agents/harness/session-contract-recovery
 const {
 	executableReadCommand,
 	explicitlyScopedRead,
+	inlineShellExecution,
 	nestedModelRuntimeCommand,
 	readOnlyShell,
 	requestedWorkdirIssue,
+	shellTokens,
 	trustedSessionParserCommand,
 	unsafeShellCommand,
 } = require("./session-read-policy.cjs");
+const { routineAllowance, routineRefusedSubcommands, routineMutationRefused } = require("./routine-policy.cjs");
 
 const HARNESS_OFF = new Set(["off", "0", "false", "no"]);
 const HARNESS_ENV_VARS = ["AI_HARNESS", "CLAUDE_HARNESS", "CODEX_HARNESS"];
-const HARNESS_CONFIG_DIRS = [".claude", ".codex"];
+const HARNESS_CONFIG_DIRS = [".claude", ".codex", ".pi"];
 const ENTRY_POINTS = new Set(["AGENTS.md", "CLAUDE.md", "GEMINI.md"]);
 
 function normalizedToolName(name) {
 	const leaf = String(name || "").split(/[.:/]/).pop().toLowerCase();
-	if (["bash", "shell_command", "exec_command"].includes(leaf)) return "shell";
-	if (["write", "edit", "notebookedit", "apply_patch"].includes(leaf)) return "file-mutation";
+	if (["bash", "shell_command", "exec_command", "run_terminal_command"].includes(leaf)) return "shell";
+	if (["write", "edit", "notebookedit", "apply_patch", "search_replace"].includes(leaf)) return "file-mutation";
 	return leaf;
 }
 
@@ -267,8 +271,321 @@ function fileMutationTargets(toolInput) {
  */
 function governedTarget(target, projectRoot) {
 	const relative = path.relative(projectRoot, target).replaceAll("\\", "/");
-	if (relative.startsWith(".agents/")) return true;
-	return HARNESS_CONFIG_DIRS.some((dir) => relative === dir || relative.startsWith(`${dir}/`));
+	if (relative === ".agents" || relative.startsWith(".agents/")) return true;
+	return HARNESS_CONFIG_DIRS.some((dir) => relative === dir || relative.startsWith(dir + "/"));
+}
+
+const REVIEW_INVOKER = /(?:^|\/)(?:\.agents\/)?skills\/review-pass\/scripts\/invoke-reviewer\.mjs$/;
+
+function reviewInvokerCommand(command, cwd) {
+	const text = String(command || "");
+	if (/[\r\n;&|<>\x60]|\$\(/.test(text)) return false;
+	const tokens = shellTokens(text);
+	if (tokens.length < 2) return false;
+	const head = path.basename(String(tokens[0])).replace(/\.(exe|cmd)$/i, "");
+	if (head !== "node" && head !== "nodejs") return false;
+	const script = tokens[1];
+	if (!script || !REVIEW_INVOKER.test(String(script).replace(/\\/g, "/"))) return false;
+	const projectRoot = sessionContract.findProjectRoot(cwd);
+	const resolved = path.resolve(cwd, String(script));
+	return Boolean(projectRoot) && sessionContract.inside(projectRoot, resolved) && fs.existsSync(resolved);
+}
+
+/**
+ * Shell grammar that is deliberately too ambiguous for the structural
+ * routine policy. A contract can authorize an exact command, but the routine
+ * carve-out must not grow into a shell parser for wrappers and control flow.
+ */
+function ambiguousShellWrapper(command) {
+	const source = shellTextOutsideQuotes(command);
+	if (/[(){}]/.test(source)) return true;
+	if (/(?:^|[\s;&|])(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|time|exec|!)(?=\s|$)/i.test(source)) return true;
+	return /(?:^|[\s;&|])\\[A-Za-z_./-]+(?:\s|$)/.test(source);
+}
+
+/** Remove quoted data before checking shell control grammar. A search pattern
+ * such as `handleRequest\\(` is an argument, not shell grouping syntax. */
+function shellTextOutsideQuotes(command) {
+	let quote = null;
+	let escaped = false;
+	let result = "";
+	for (const character of String(command || "")) {
+		if (quote) {
+			if (quote === '"' && escaped) {
+				escaped = false;
+				result += " ";
+				continue;
+			}
+			if (quote === '"' && character === "\\") {
+				escaped = true;
+				result += " ";
+				continue;
+			}
+			if (character === quote) quote = null;
+			result += " ";
+			continue;
+		}
+		if (character === '"' || character === "'") {
+			quote = character;
+			result += " ";
+			continue;
+		}
+		result += character;
+	}
+	return result;
+}
+
+/**
+ * Refuse routine shell commands that write governance, host-policy, or shared
+ * entrypoint files. Progress records remain ordinary work records; contract,
+ * registry, context, and harness paths remain authority-bearing.
+ */
+function governanceWriteCommand(command, cwd, projectRoot) {
+	if (readOnlyShell(command, cwd)) return false;
+	// Keep the legacy all-argument scan alongside destination extraction. Some
+	// mutating commands take a governed source or option path that is not their
+	// final destination (for example cp --target-directory and multi-target sed).
+	const targets = [
+		...commandMutationTargets(command),
+		...splitShellStatements(command).flatMap(legacyGovernanceScanTargets),
+	];
+	for (const target of new Set(targets)) {
+		if (!target) continue;
+		let resolved;
+		try { resolved = path.resolve(cwd, target); } catch { continue; }
+		// A mutating command may cross into a sibling project or the parent
+		// workspace. The routine allowance covers local work only, so any
+		// destination outside the resolved project is contract-required.
+		if (!sessionContract.inside(projectRoot, resolved)) return true;
+		const state = stateTarget(resolved, cwd);
+		if (state?.kind === "progress") continue;
+		if (state || governedTarget(resolved, projectRoot)) return true;
+		if (ENTRY_POINTS.has(path.basename(resolved)) && path.dirname(resolved) === projectRoot) return true;
+	}
+	return false;
+}
+
+const SCRIPT_INTERPRETERS = new Set(["node", "nodejs", "bun", "deno", "python", "python3", "perl", "ruby", "php", "pwsh", "powershell"]);
+const MUTATING_HEADS = new Set(["cp", "copy", "mv", "move", "install", "sed", "touch", "mkdir", "rmdir", "rm", "truncate", "tee"]);
+
+/**
+ * Preserve the old command-family scan over every argument while the newer
+ * destination parser handles project-boundary details. This catches governed
+ * source paths and option values that can still be written by a mutation.
+ */
+function legacyGovernanceScanTargets(statement) {
+	const tokens = shellTokens(statement);
+	if (tokens.length === 0) return [];
+	const head = path.basename(String(tokens[0])).replace(/\.(exe|cmd)$/i, "").toLowerCase();
+	const targets = shellRedirectionTargets(statement);
+	if (!MUTATING_HEADS.has(head)) {
+		if (head !== "git" || commandMutationTargets(statement).length === 0) return targets;
+	}
+	targets.push(...tokens.slice(1));
+	for (const token of tokens.slice(1)) {
+		const targetDirectory = String(token).match(/^--target-directory=(.+)$/);
+		if (targetDirectory) targets.push(targetDirectory[1]);
+	}
+	return targets;
+}
+
+/**
+ * Extract output-redirection paths without treating `>` inside quoted command
+ * arguments as shell syntax. Keep this parser shared by both governance scans
+ * so adjacent, spaced, quoted, and repeated redirects receive the same path
+ * boundary check.
+ */
+function shellRedirectionTargets(statement) {
+	const source = String(statement || "");
+	const targets = [];
+	const readWord = (start) => {
+		let cursor = start;
+		let value = "";
+		while (cursor < source.length) {
+			const character = source[cursor];
+			if (/\s/.test(character) || ";|&<>".includes(character)) break;
+			if (character === "'" || character === '"') {
+				const quote = character;
+				cursor += 1;
+				while (cursor < source.length) {
+					const quoted = source[cursor];
+					if (quote === '"' && quoted === "\\" && cursor + 1 < source.length) {
+						value += source[cursor + 1];
+						cursor += 2;
+						continue;
+					}
+					if (quoted === quote) {
+						cursor += 1;
+						break;
+					}
+					value += quoted;
+					cursor += 1;
+				}
+				continue;
+			}
+			if (character === "\\" && cursor + 1 < source.length) {
+				value += source[cursor + 1];
+				cursor += 2;
+				continue;
+			}
+			value += character;
+			cursor += 1;
+		}
+		return { value, end: cursor };
+	};
+
+	let quote = null;
+	let escaped = false;
+	for (let index = 0; index < source.length; index += 1) {
+		const character = source[index];
+		if (quote) {
+			if (quote === '"' && escaped) {
+				escaped = false;
+				continue;
+			}
+			if (quote === '"' && character === "\\") {
+				escaped = true;
+				continue;
+			}
+			if (character === quote) quote = null;
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			quote = character;
+			continue;
+		}
+		if (character === "\\") {
+			index += 1;
+			continue;
+		}
+		if (character !== ">") continue;
+		let cursor = index + 1;
+		if (source[cursor] === ">") cursor += 1;
+		if (source[cursor] === "|") cursor += 1;
+		let duplicateFd = false;
+		if (source[cursor] === "&") {
+			duplicateFd = true;
+			cursor += 1;
+		}
+		while (/\s/.test(source[cursor] || "")) cursor += 1;
+		const word = readWord(cursor);
+		if (word.value && !(duplicateFd && /^\d+$/.test(word.value))) targets.push(word.value);
+		if (word.end > index + 1) index = word.end - 1;
+	}
+	return targets;
+}
+
+function positionalArguments(tokens) {
+	return tokens.slice(1).filter((token) => token && token !== "--" && !token.startsWith("-"));
+}
+
+function commandMutationTargets(statement) {
+	const targets = shellRedirectionTargets(statement);
+	const tokens = shellTokens(statement);
+	if (tokens.length === 0) return targets;
+	const head = path.basename(String(tokens[0])).replace(/\.(exe|cmd)$/i, "").toLowerCase();
+	if (SCRIPT_INTERPRETERS.has(head)) return targets;
+	if (MUTATING_HEADS.has(head)) {
+		const positional = positionalArguments(tokens);
+		if (["cp", "copy", "mv", "move", "install", "sed"].includes(head)) return targets.concat(positional.slice(-1));
+		return targets.concat(positional);
+	}
+	if (head === "git") {
+		let index = 1;
+		const optionsWithValues = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix"]);
+		while (index < tokens.length) {
+			const token = String(tokens[index]);
+			if (optionsWithValues.has(token)) { index += 2; continue; }
+			if (/^-C.+$/.test(token) || /^-c.+$/.test(token) || /^(?:--git-dir|--work-tree|--namespace|--exec-path|--super-prefix)=/.test(token)) { index += 1; continue; }
+			if (token.startsWith("-")) { index += 1; continue; }
+			break;
+		}
+		const subcommand = String(tokens[index] || "").toLowerCase();
+		if (subcommand === "add") return targets.concat(tokens.slice(index + 1).filter((token) => token && token !== "--" && !token.startsWith("-")));
+	}
+	return targets;
+}
+
+/** Split shell statements while preserving separators inside quoted data. */
+function splitShellStatements(source) {
+	const statements = [];
+	let current = "";
+	let quote = null;
+	for (const character of String(source || "")) {
+		if (quote) {
+			current += character;
+			if (character === quote) quote = null;
+			continue;
+		}
+		if (character === '"' || character === "'") {
+			quote = character;
+			current += character;
+			continue;
+		}
+		if (character === ";" || character === "|" || character === "&" || character === "\n") {
+			statements.push(current);
+			current = "";
+			continue;
+		}
+		current += character;
+	}
+	statements.push(current);
+	return statements.map((statement) => statement.trim()).filter(Boolean);
+}
+
+/**
+ * Decide whether a shell call is an ordinary local operation under the
+ * repository policy. Dynamic shell construction, nested model runtimes,
+ * governance writes, destructive heads/subcommands, and contract-required
+ * patterns remain refused. The policy is deliberately structural rather than
+ * an unbounded exact-command allow-list, so project tests and builds work.
+ */
+function routineCommandAllowed(toolName, toolInput, cwd) {
+	if (normalizedToolName(toolName) !== "shell") return false;
+	const command = String(toolInput?.command || "").trim();
+	if (!command) return false;
+	const projectRoot = sessionContract.findProjectRoot(cwd);
+	if (!projectRoot) return false;
+	const allowance = routineAllowance(projectRoot);
+	if (!allowance || allowance.default !== "allow") return false;
+	const trustedReview = reviewInvokerCommand(command, cwd);
+	if (ambiguousShellWrapper(command)) return false;
+	if (routineMutationRefused(command)) return false;
+	if (trustedReview) return true;
+	if (unsafeShellCommand(command) || inlineShellExecution(command)) return false;
+	if (nestedModelRuntimeCommand(command)) return false;
+	if (governanceWriteCommand(command, cwd, projectRoot)) return false;
+
+	for (const pattern of allowance.contract_required_patterns?.patterns || []) {
+		let expression;
+		try { expression = new RegExp(pattern, "i"); } catch { continue; }
+		if (expression.test(command)) return false;
+	}
+
+	const refusedHeads = new Set(
+		Object.entries(allowance.contract_required_heads || {})
+			.filter(([key]) => key !== "_doc")
+			.flatMap(([, value]) => (Array.isArray(value) ? value : [])),
+	);
+	const refusedSubcommands = routineRefusedSubcommands(allowance);
+	const ambiguousWrappers = new Set(["command", "env", "chrt", "nice", "nohup", "stdbuf", "timeout"]);
+	for (const statement of splitShellStatements(command)) {
+		const tokens = shellTokens(statement);
+		if (!tokens.length) continue;
+		const head = path.basename(String(tokens[0])).replace(/\.(exe|cmd)$/i, "");
+		// Wrappers can move the effective command past flags or assignments. Refuse
+		// the statement rather than guessing which policy applies.
+		if (ambiguousWrappers.has(head.toLowerCase()) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(String(tokens[0]))) return false;
+		if (refusedHeads.has(head)) return false;
+		const subcommands = refusedSubcommands[head];
+		if (Array.isArray(subcommands)) {
+			const rest = tokens.slice(1).filter((token, index, all) =>
+				token !== "-C" && all[index - 1] !== "-C" && !token.startsWith("-"),
+			);
+			if (rest.some((token) => subcommands.includes(token))) return false;
+		}
+	}
+	return true;
 }
 
 /**
@@ -288,7 +605,7 @@ function governedTarget(target, projectRoot) {
 function unboundOrdinaryMutationAllowed(toolName, toolInput, cwd) {
 	if (normalizedToolName(toolName) !== "file-mutation") return false;
 	const raw = rawToolName(toolName);
-	if (!new Set(["write", "edit", "notebookedit", "apply_patch"]).has(raw)) return false;
+	if (!new Set(["write", "edit", "notebookedit", "apply_patch", "search_replace"]).has(raw)) return false;
 	// Deletion is not recoverable from the transcript; it keeps needing a contract.
 	if (raw === "apply_patch" && /^\*\*\* Delete File:/m.test(patchSource(toolInput))) return false;
 	const projectRoot = sessionContract.findProjectRoot(cwd);
@@ -455,7 +772,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	const toolName = data.tool_name || "";
 	const toolInput = data.tool_input || {};
 	if (HARNESS_ENV_VARS.some((name) => HARNESS_OFF.has((env[name] || "").trim().toLowerCase()))) return null;
-	if (HARNESS_CONFIG_DIRS.some((dir) => fs.existsSync(path.join(cwd, dir, "no-harness")))) return null;
+	if (harnessSwitch.findHarnessMarker({ cwd, configDirs: HARNESS_CONFIG_DIRS })) return null;
 	if (!sessionId) return null;
 	if (!sessionContract.findProjectRoot(cwd)) {
 		// cwd cannot be resolved to a governed project root (host-reported cwd
@@ -477,7 +794,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	if (normalizedToolName(toolName) === "shell" && reclaimCommandAllowed(toolInput.command, sessionId)) return null;
 	if (normalizedToolName(toolName) === "shell" && baselineCommandAllowed(toolInput.command, sessionId)) return null;
 	if (normalizedToolName(toolName) === "shell" && approvalCommandAllowed(toolInput.command)) return null;
-	if (normalizedToolName(toolName) === "shell" && nestedModelRuntimeCommand(toolInput.command)) {
+	if (normalizedToolName(toolName) === "shell" && nestedModelRuntimeCommand(toolInput.command) && !reviewInvokerCommand(toolInput.command, cwd)) {
 		return {
 			decision: "block",
 			reason: "⛔ [HARNESS] 셸에서 Codex/Claude/OpenCode/Gemini 런타임을 중첩 실행할 수 없습니다. digest-bound governed spawn 도구를 사용하세요.",
@@ -514,6 +831,9 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	// never replace that authority by bootstrapping an explicit child contract.
 	if (resolution.reason !== "derived_delegation_verified" && bootstrapMutationAllowed(toolName, toolInput, cwd, sessionId)) return null;
 	if (resolution.status !== sessionContract.STATES.BOUND && unboundOrdinaryMutationAllowed(toolName, toolInput, cwd)) return null;
+	if (resolution.status !== sessionContract.STATES.BOUND &&
+		resolution.reason !== "derived_delegation_verified" &&
+		routineCommandAllowed(toolName, toolInput, cwd)) return null;
 	if (resolution.status === sessionContract.STATES.BOUND) {
 		if (resolution.derivedTask?.read_only === true) {
 			if (normalizedToolName(toolName) === "file-mutation") {
@@ -576,11 +896,15 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 		}
 		if (normalizedToolName(toolName) === "shell") {
 			const command = String(toolInput.command || "").trim();
-			if (unsafeShellCommand(command)) {
+			const trustedReview = reviewInvokerCommand(command, cwd);
+			if ((unsafeShellCommand(command) || ambiguousShellWrapper(command)) && !trustedReview) {
 				return { decision: "block", reason: "⛔ [HARNESS] nested runtime launches and dynamically constructed shell commands are forbidden." };
 			}
 			const readOnly = readOnlyShell(command, cwd);
 			const gitIntegration = !readOnly && boundGitMutationAllowed(command, resolution, cwd);
+			if (!readOnly && !trustedReview && governanceWriteCommand(command, cwd, resolution.projectRoot)) {
+				return { decision: "block", reason: "⛔ [HARNESS] 셸 변경 대상이 현재 프로젝트의 계약 경계 밖이거나 거버넌스 경로입니다." };
+			}
 			if (!readOnly && directAccess.required && !gitIntegration) {
 				if (!directAccess.active) {
 					return { decision: "block", reason: `⛔ [HARNESS] 오케스트레이터 직접 실행은 차단됩니다 (${directAccess.reason}). 테스트·구현은 governed worker에 위임하세요.` };
@@ -603,16 +927,21 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 		return null;
 	}
 	if (normalizedToolName(toolName) === "shell" && readOnlyShell(toolInput.command, cwd)) return null;
+	const routinePolicy = routineAllowance(resolution.projectRoot);
+	const routineMessage = routinePolicy?.default === "allow"
+		? "현재 정책이 허용한 일상 로컬 작업은 계약 없이 수행할 수 있습니다."
+		: "현재 정책은 일상 로컬 셸 작업에도 계약을 요구합니다.";
 
 	return {
 		decision: "block",
 		reason: `⛔ [HARNESS] SESSION ${resolution.status} — ${resolution.reason}. 변경을 막습니다.\n` +
-		"계약 없이 mutating 작업(Edit/Write/Bash) 금지.\n\n" +
+		"계약 없이 거버넌스·호스트 정책·공유 진입점·삭제·파괴적/원격·외부 작업은 허용되지 않습니다.\n" +
+		routineMessage + "\n\n" +
 		"결박 조건:\n" +
 		`  1) .agents/session-contracts/.session-map.json에서 ${sessionId}를 정확히 한 active 계약에 결박\n` +
 		"  2) registry digest, contract_digest, session_bindings[], progress contract reference를 일치\n" +
 		"  3) 병렬 active 계약의 target_ownership 경로가 겹치지 않아야 함\n\n" +
-		"계약/registry/progress 파일만 쓰는 bootstrap 편집과 읽기 전용 조사는 허용됩니다.",
+		"계약/registry/progress 파일을 갱신하는 bootstrap 편집과 읽기 전용 조사는 허용됩니다.",
 	};
 }
 
@@ -626,4 +955,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { baselineCommandAllowed, bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundOrdinaryMutationAllowed };
+module.exports = { routineAllowance, routineRefusedSubcommands, routineMutationRefused, governanceWriteCommand, shellRedirectionTargets, splitShellStatements, ambiguousShellWrapper, reviewInvokerCommand, routineCommandAllowed, baselineCommandAllowed, bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundOrdinaryMutationAllowed };

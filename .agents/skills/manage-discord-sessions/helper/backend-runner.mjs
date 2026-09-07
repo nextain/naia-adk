@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { closeSync, constants as fsConstants, existsSync, openSync, writeSync } from "node:fs";
+import { join } from "node:path";
 import { spawn } from "node:child_process";
-import { approvalRequestedText, assertSupportedBackendVersion, getBackendAdapter, inspectBackendLine } from "./adapters.mjs";
+import { approvalRequestedText, assertSupportedBackendVersion, getBackendAdapter, inspectBackendLine, readOnlyBackendOptions } from "./adapters.mjs";
 import { cleanupChildEnvironment, prepareChildEnvironment, resolveExecutionCwd } from "./backend-child-environment.mjs";
 import { backendCommand, captureChildOwnership, createOwnedProcessTreeSignaler, killAndWaitForChild, probeBackendVersion } from "./backend-owned-process.mjs";
 import { boundedSafeExcerpt, sanitizeFinalResponse } from "./sanitize.mjs";
@@ -11,7 +12,7 @@ export { cleanupChildEnvironment, prepareChildEnvironment, resolveExecutionCwd }
 
 function safeCommandOptions(backendId, options) {
 	const common = ["approvalPolicy", "model", "networkAccess", "credentialProfiles"];
-	const allowed = backendId === "codex" ? new Set([...common, "sandbox", "costProfile", "reasoningEffort"]) : backendId === "opencode" ? new Set([...common, "auto"]) : new Set([...common, "permissionMode"]);
+	const allowed = backendId === "codex" ? new Set([...common, "sandbox", "costProfile", "reasoningEffort"]) : backendId === "opencode" ? new Set([...common, "auto"]) : backendId === "grok" ? new Set([...common, "permissionMode", "sandbox", "costProfile", "reasoningEffort"]) : new Set([...common, "permissionMode"]);
 	for (const key of Object.keys(options)) if (!allowed.has(key)) throw new Error(`unsupported ${backendId} command option: ${key}`);
 	if (backendId === "codex" && options.sandbox && !new Set(["read-only", "workspace-write", "danger-full-access"]).has(options.sandbox)) throw new Error("unsafe Codex sandbox option");
 	if (options.model !== undefined && (typeof options.model !== "string" || !/^(?=.{1,80}$)[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/.test(options.model))) throw new Error(`unsafe ${backendId} model option`);
@@ -23,6 +24,17 @@ function safeCommandOptions(backendId, options) {
 	catch { throw new Error(`unsafe ${backendId} credential profiles`); }
 	if (options.credentialProfiles.length > 0 && options.networkAccess !== true) throw new Error(`${backendId} credential profiles require network access`);
 	if (backendId === "claude" && options.permissionMode && !new Set(["bypassPermissions", "plan"]).has(options.permissionMode)) throw new Error("unsafe Claude permission mode");
+	if (backendId === "grok" && options.permissionMode && !new Set(["bypassPermissions", "plan"]).has(options.permissionMode)) throw new Error("unsafe Grok permission mode");
+	if (backendId === "grok" && options.sandbox !== undefined && !new Set(["read-only", "workspace"]).has(options.sandbox)) throw new Error("unsafe Grok sandbox option");
+	if (backendId === "grok") {
+		const permissionMode = options.permissionMode ?? "plan";
+		const sandbox = options.sandbox ?? (permissionMode === "plan" ? "read-only" : "workspace");
+		if (permissionMode === "plan" && sandbox !== "read-only") throw new Error("Grok plan mode requires read-only sandbox");
+		if (permissionMode === "bypassPermissions" && sandbox !== "workspace") throw new Error("Grok writable mode requires workspace sandbox");
+		options = { ...options, sandbox };
+	}
+	if (backendId === "grok" && options.costProfile !== undefined && !new Set(["control", "balanced", "economy"]).has(options.costProfile)) throw new Error("unsafe Grok cost profile option");
+	if (backendId === "grok" && options.reasoningEffort !== undefined && !new Set(["low", "medium", "high", "max"]).has(options.reasoningEffort)) throw new Error("unsafe Grok reasoning effort option");
 	if (backendId === "opencode" && options.auto !== undefined && typeof options.auto !== "boolean") throw new Error("unsafe OpenCode auto option");
 	if (options.approvalPolicy !== undefined && options.approvalPolicy !== "never") throw new Error("child approval policy must be never");
 	return { ...options, approvalPolicy: "never" };
@@ -30,6 +42,21 @@ function safeCommandOptions(backendId, options) {
 
 function writePrompt(child, prompt) {
 	child.stdin.end(prompt, "utf8");
+}
+
+// Backends that take a single-turn prompt from a file get it staged in their
+// own child home, owner-only, and removed with the rest of that directory. The
+// workspace is never used for this: a staged prompt there would be visible to
+// the model as project content and would survive a crash.
+function stagePromptFile(childHome, prompt) {
+	const target = join(childHome, "prompt.txt");
+	const fd = openSync(target, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW, 0o600);
+	try {
+		const buffer = Buffer.from(prompt, "utf8");
+		let offset = 0;
+		while (offset < buffer.length) offset += writeSync(fd, buffer, offset, buffer.length - offset);
+	} finally { closeSync(fd); }
+	return target;
 }
 
 export function isBenignBackendStdinError(error) {
@@ -170,7 +197,7 @@ export async function runBackendAttempt({
 	const attemptId = randomUUID();
 	let childEnvironment;
 	try {
-		childEnvironment = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: executionCwd, prepareAuthentication: requireAuthentication, credentialProfiles: safeOptions.credentialProfiles ?? [] });
+		childEnvironment = prepareChildEnvironment({ backendId, attemptId, runtimeRoot, parentEnv, authRoot, workspacePath: executionCwd, prepareAuthentication: requireAuthentication, credentialProfiles: safeOptions.credentialProfiles ?? [], readOnly: readOnlyBackendOptions(backendId, safeOptions) });
 	} catch (error) {
 		throw withFailureCode(error, "backend_authentication_failed");
 	}
@@ -184,7 +211,8 @@ export async function runBackendAttempt({
 	try {
 		const spec = backendCommand(executable, backendId);
 		let invocation;
-		try { invocation = adapter.command({ ...safeOptions, executable: spec.command, cwd: executionCwd, childHome, allowedPaths: executionAllowedPaths }); }
+		const promptPath = adapter.promptDelivery === "file" ? stagePromptFile(childHome, prompt) : null;
+		try { invocation = adapter.command({ ...safeOptions, executable: spec.command, cwd: executionCwd, childHome, allowedPaths: executionAllowedPaths, ...(promptPath ? { promptPath } : {}) }); }
 		catch (error) { throw withFailureCode(error, "backend_invocation_invalid"); }
 		const windowsScript = process.platform === "win32" && /\.(?:[cm]?js)$/i.test(invocation.command);
 		const spawnCommand = windowsScript ? process.execPath : invocation.command;
@@ -200,7 +228,7 @@ export async function runBackendAttempt({
 		store.reserveAttempt(jobId, { attemptId, backendId, now: now() });
 		try { preSpawnCheck?.(); }
 		catch (error) {
-			try { store.failReservedAttempt(jobId, { attemptId, now: now(), reasonCode: error?.code === "context_changed_restart_required" ? "context_changed_restart_required" : "internal_error" }); } catch {}
+			try { store.failReservedAttempt(jobId, { attemptId, now: now(), reasonCode: new Set(["context_changed_restart_required", "mutation_window_closed"]).has(error?.code) ? error.code : "internal_error" }); } catch {}
 			throw error;
 		}
 		child = spawn(spawnCommand, spawnArgs, {
@@ -243,6 +271,8 @@ export async function runBackendAttempt({
 		}
 		let lineNumber = 0;
 		let backendOutcome = null;
+		let failureReasonCode = null;
+		let pendingFailureReasonCode = null;
 		let transientResult = null;
 		let pendingAssistantText = null;
 		let progressSequence = 0;
@@ -277,6 +307,8 @@ export async function runBackendAttempt({
 		const recordLine = (line) => {
 			lineNumber += 1;
 			const inspected = inspectBackendLine({ backendId, line, attemptId, lineNumber });
+			failureReasonCode ??= inspected.failureReasonCode;
+			pendingFailureReasonCode ??= inspected.pendingFailureReasonCode;
 			if (inspected.approvalRequested) {
 				terminate("approval_ui");
 				return;
@@ -310,7 +342,12 @@ export async function runBackendAttempt({
 		const stdoutCompleted = lineReader(child.stdout, recordLine, streamFailure, null, oversizedStdoutLine);
 		const stderrCompleted = lineReader(child.stderr, (line) => {
 			lineNumber += 1;
-			if (inspectBackendLine({ backendId, line, attemptId, lineNumber }).approvalRequested) {
+			const inspected = inspectBackendLine({ backendId, line, attemptId, lineNumber });
+			// Provider diagnostics on stderr are only provisional. A structured
+			// success on stdout with exit 0 remains authoritative; promote the
+			// diagnostic to a failure only in the exit-status reconciliation below.
+			pendingFailureReasonCode ??= inspected.failureReasonCode ?? inspected.pendingFailureReasonCode;
+			if (inspected.approvalRequested) {
 				terminate("approval_ui");
 				return;
 			}
@@ -333,7 +370,10 @@ export async function runBackendAttempt({
 		child.stdin.on("error", (error) => {
 			if (!isBenignBackendStdinError(error)) terminate("internal_error");
 		});
-		writePrompt(child, prompt);
+		// A file-delivered prompt still needs stdin closed, or the child waits
+		// on a stream that will never carry anything.
+		if (promptPath) child.stdin.end();
+		else writePrompt(child, prompt);
 		const result = await new Promise((resolveExit) => {
 			let settled = false;
 			const finish = (exitCode, exitSignal) => {
@@ -379,6 +419,11 @@ export async function runBackendAttempt({
 		clearTimeout(timeout);
 		if (forceTimer) clearTimeout(forceTimer);
 		signal?.removeEventListener("abort", abort);
+		const processFailed = result.signal !== null || (result.exitCode !== null && result.exitCode !== 0);
+		if (failureReasonCode === null && processFailed && pendingFailureReasonCode !== null) {
+			failureReasonCode = pendingFailureReasonCode;
+			backendOutcome = "failure";
+		}
 		try {
 			if (result.signal) {
 				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "attempt_exited", safePayload: { terminationKind: "signaled", signal: result.signal } });
@@ -408,9 +453,9 @@ export async function runBackendAttempt({
 				}
 				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "attempt_succeeded", safePayload: {} });
 			} else {
-				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: result.exitCode === 0 ? "internal_error" : "process_exit" } });
+				store.recordEvent({ jobId, attemptId, occurredAt: now(), source: "helper", kind: "failed", safePayload: { reasonCode: failureReasonCode ?? (result.exitCode === 0 ? "internal_error" : "process_exit") } });
 			}
-			return { attemptId, exitCode: result.exitCode, signal: result.signal, terminationReason, backendOutcome, backendVersion: supportedVersion, transientResult: backendOutcome === "success" ? transientResult : null };
+			return { attemptId, exitCode: result.exitCode, signal: result.signal, terminationReason, backendOutcome, failureReasonCode, backendVersion: supportedVersion, transientResult: backendOutcome === "success" ? transientResult : null };
 		} finally {
 			if (existsSync(childHome)) cleanupChildEnvironment(childHome);
 		}

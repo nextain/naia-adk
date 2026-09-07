@@ -95,7 +95,7 @@ test("DSO-010 queued work revalidates authority before runner and immediately be
 	let calls = 0;
 	const router = new DiscordMessageRouter({
 		config, store, token: "fake-runtime-input-token-original", botUserId: BOT, cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot, runtimeRevision: RUNTIME_REVISION,
-		verifyRuntimeInputs: () => { if (!current) throw new Error("revoked"); },
+		verifyRuntimeInputs: () => { if (!current) throw Object.assign(new Error("revoked"), { code: "context_changed_restart_required" }); },
 		send: async () => ({ state: "confirmed" }),
 		runner: async ({ preSpawnCheck }) => {
 			preSpawnCheck();
@@ -105,15 +105,25 @@ test("DSO-010 queued work revalidates authority before runner and immediately be
 		},
 	});
 	const message = (id, content) => ({ id, guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> ${content}` });
-	assert.equal((await router.onDispatch("MESSAGE_CREATE", message("717171717171717171", "first"), 1)).state, "accepted");
+	const first = await router.onDispatch("MESSAGE_CREATE", message("717171717171717171", "first"), 1);
+	assert.equal(first.state, "accepted");
 	await new Promise((resolve) => setImmediate(resolve));
-	assert.equal((await router.onDispatch("MESSAGE_CREATE", message("727272727272727272", "second"), 2)).state, "accepted");
+	const second = await router.onDispatch("MESSAGE_CREATE", message("727272727272727272", "second"), 2);
+	assert.equal(second.state, "accepted");
 	current = false;
 	releaseFirst();
 	await router.waitForIdle();
 	assert.equal(calls, 1);
-	await assert.rejects(router.onDispatch("MESSAGE_CREATE", message("737373737373737373", "third"), 3), (error) => error?.code === "context_changed_restart_required");
-	assert.equal(store.listJobs().length, 2);
-	assert.equal(store.listJobs().some((job) => job.latestSafeError?.includes("context_changed_restart_required")), true);
+	const rejected = await router.onDispatch("MESSAGE_CREATE", message("737373737373737373", "third"), 3);
+	assert.deepEqual(rejected, { state: "rejected", reasonCode: "context_changed_restart_required" });
+	const jobs = store.listJobs();
+	assert.equal(jobs.length, 2);
+	const queuedJob = store.getJob(second.jobId, { includeEvents: false });
+	const firstJob = store.getJob(first.jobId, { includeEvents: false });
+	assert.equal(queuedJob?.lifecycle, "failed");
+	assert.equal(queuedJob?.attemptId, null);
+	assert.equal(queuedJob?.latestSafeError, "Job failed: context_changed_restart_required");
+	assert.equal(firstJob?.attemptId, null);
+	assert.equal(calls, 1);
 	store.close();
 });

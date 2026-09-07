@@ -2,29 +2,14 @@
 
 # User Context
 
-Human-readable project context that mirrors `.agents/context/`.
+These directories provide human-readable guides for `.agents/context/`.
 
-## Purpose
+- `.agents/context/`: machine-facing JSON/YAML source, English by default
+- `.users/context/`: Korean human guides
+- `.users/context/en/`: English human guides
+- `.users/context/agents-rules.md`: generated from
+  `.agents/context/agents-rules.json` by `node .claude/hooks/agents-context-mirror.js`;
+  edit the JSON first, then regenerate.
 
-Provide detailed explanations of the rules in `.agents/context/` for human developers.
-While `.agents/context/` contains token-optimized rules for AI, this directory contains
-comprehensive guides in your team's native language.
-
-## Mirroring Pattern
-
-| .agents/context/ (AI) | .users/context/ (Human) |
-|----------------------|--------------------------|
-| `agents-rules.json` | `agents-rules.md` (detailed) |
-| `testing.yaml` | `testing.md` (guide) |
-| `architecture.yaml` | `architecture.md` (guide) |
-
-## Guidelines
-
-- **Language**: Your team's native language (Korean, Japanese, etc.)
-- **Format**: Detailed Markdown with examples
-- **Content**: Background, rationale, examples, diagrams
-- **NOT token-optimized**: Write as much detail as needed
-
-## Files
-
-- `project-context.md.template` - Template for project context (rename to `.md` and fill in)
+`README.md` is Korean and `README.en.md` is English. `AGENTS.md` is the shared English canonical
+index; `CLAUDE.md` and `GEMINI.md` are byte-identical mirrors.

@@ -31,13 +31,17 @@ define. Partial overrides are not merged — each section is all-or-nothing.
 ```yaml
 tools:
   claude:
-    command: 'claude -p --input-format text --output-format json --no-session-persistence --permission-mode plan --allowedTools Read,Glob,Grep'
+    command: "claude -p --input-format text --output-format json --no-session-persistence --permission-mode plan --tools Read,Glob,Grep --strict-mcp-config --mcp-config '{\"mcpServers\":{}}'"
     stdin: true
     parse: json
   codex:
-    command: 'codex exec --ephemeral --sandbox read-only --skip-git-repo-check -C "{repo}" -m {model} -'
+    command: 'codex exec --ephemeral --sandbox read-only --skip-git-repo-check -C "{repo}" --model {model} -'
     stdin: true
     parse: text_fallback
+  grok:
+    command: 'grok --output-format json --permission-mode plan --verbatim --prompt-file {prompt_file}'
+    stdin: false
+    parse: json
 
 prompt:
   mode: dual_one_shot
@@ -51,7 +55,8 @@ profile_policy:
   profiles:
     claude: {reviewers: [claude]}
     codex: {reviewers: [codex]}
-  unavailable: not_run_continue
+    grok: {reviewers: [grok]}
+  unavailable: fail_closed
 
 # Requirements management (optional — skip if not applicable)
 requirements:
@@ -91,8 +96,29 @@ The active `claude` profile schedules Claude headless review; the active `codex`
 profile schedules Codex headless review. Do not auto-add another provider merely
 because its binary is present. CLI presence does not prove authentication.
 
-If the selected adapter is missing, unauthenticated, exits, or times out, record
-the external pass as `NOT_RUN` and continue ordinary deterministic validation.
+The Grok adapter substitutes `{prompt_file}` with a freshly-created owner-only
+(`0600`) temporary file, closes stdin, and removes the file after the process
+exits. A prompt must never be passed as an argument or through a world-readable
+temporary file.
+
+The OpenCode adapter uses the shared Alpha
+`manage-discord-sessions/helper/backend-child-environment.mjs` boundary for
+each invocation. That helper gives the child a fresh owner-only (`0700`) HOME
+and XDG config/cache/state/data roots, strips inherited OpenCode environment
+overrides, disables project configuration, and copies only the sanitized
+provider/model fields and authentication file that the adapter needs. Its
+owner-only (`0600`) overlay denies `*` and allows only `read`, `glob`, `grep`,
+and `list`; the adapter applies that same helper policy to the selected review
+agent and pins both `model` and `small_model` to the explicit reviewer model.
+The child environment, provider copy, and overlay are removed after exit,
+including failed invocations, so host HOME/XDG plugins and permissions cannot
+be merged into a review.
+
+If the selected adapter is missing, unauthenticated, exits, or times out, the
+invocation fails closed and the review pass stops. Continuing with deterministic
+validation alone is a choice someone has to make on purpose, by passing
+`--require-review false`; the resulting `NOT_RUN` object declares itself unusable
+as evidence so a later reader cannot count it as a review that happened.
 Never ask an ADK user to install another CLI or create another provider account.
 When a governed delivery explicitly requires independent review evidence, keep
 that delivery `REVIEW_ONLY` without cancelling the underlying authorized work.
@@ -104,7 +130,7 @@ Create `./review-pass.yaml` in the project root:
 ```yaml
 tools:
   opencode:
-    command: 'opencode run --dir "{repo}" --format json -m provider/model'
+    command: 'opencode run --pure --agent adk-adversarial-review --title adk-adversarial-review --dir "{repo}" --format json --model {model}'
     stdin: true
 requirements:
   dir: ".agents/requirements"
@@ -114,11 +140,21 @@ stages:
     convergence: 1
 ```
 
+The YAML `tools` entries document profile defaults. The bundled
+`invoke-reviewer.mjs` selects one of the fixed adapters in `commandFor`; it
+does not read `tools.*.command`, `stdin`, or `parse` to construct arbitrary
+processes. A project file can select supported reviewers, requirements, and
+stages, but custom tool registration is not implemented. For OpenCode, the
+documented command includes `--pure --agent adk-adversarial-review`; the
+runner supplies the explicit model and managed child-environment boundary,
+pins `model` and `small_model`, and disables project configuration.
+
 ### 10.4 Environment Detection
 
 Auto-detect only the adapters eligible for the active profile. Detection is a
-best-effort preflight; authentication failures are handled by the same
-`NOT_RUN` degradation policy.
+best-effort preflight; a configured reviewer that is missing or unauthenticated
+fails closed by default. An explicit `--require-review false` opt-out may record
+`NOT_RUN` for ordinary local work, but that result cannot satisfy review evidence.
 
 **PowerShell:**
 ```powershell

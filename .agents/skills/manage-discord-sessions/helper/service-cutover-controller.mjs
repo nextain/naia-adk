@@ -28,7 +28,7 @@ function runSystemctl(args) {
 }
 
 export function resolveCutoverBackendExecutables(name, resolver = resolveBackendExecutable) {
-	if (!new Set(["codex", "claude", "opencode"]).has(name) || typeof resolver !== "function") throw new Error("cutover backend resolver input is invalid");
+	if (!new Set(["codex", "claude", "opencode", "grok"]).has(name) || typeof resolver !== "function") throw new Error("cutover backend resolver input is invalid");
 	try { return Object.freeze({ [name]: resolver(name) }); }
 	catch { return Object.freeze({}); }
 }
@@ -163,7 +163,7 @@ export function readCutoverSourceSnapshot(configPath) {
 	if (!Buffer.from(text).equals(bytes)) throw new Error("Discord rollback source config must be valid UTF-8");
 	const config = JSON.parse(text);
 	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("Discord rollback source config is invalid");
-	if (!new Set(["codex", "claude", "opencode"]).has(config.backend?.selected)) throw new Error("Discord rollback source backend is invalid");
+	if (!new Set(["codex", "claude", "opencode", "grok"]).has(config.backend?.selected)) throw new Error("Discord rollback source backend is invalid");
 	if (typeof config.discord?.botUserId !== "string" || !/^\d{17,20}$/.test(config.discord.botUserId) || /^0+$/.test(config.discord.botUserId)) throw new Error("Discord rollback source bot user ID is invalid");
 	if (typeof config.discord?.credentialRef !== "string" || !/^[A-Za-z0-9_.-]{1,64}$/.test(config.discord.credentialRef)) throw new Error("Discord rollback source credential reference is invalid");
 	return Object.freeze({

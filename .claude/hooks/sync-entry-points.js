@@ -3,13 +3,14 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const ENTRY_POINTS = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md'];
-// Re-approved 2026-08-10 for the Session Boundaries rewrite ported from
-// alpha-adk b9e04c0: an unbound session may create and edit ordinary reversible
-// files, while governance files, entrypoints, deletion, mutating shell,
-// external effects, and authority expansion still require a contract. Verified
-// against the gate here with the harness on, and CLAUDE.md/GEMINI.md remain
-// byte-identical mirrors.
-const APPROVED_CANONICAL_SHA256 = 'f2d98aacd1d22a36072a6ef426f9e11038ec169a1f31d1c2c71b84904dc23093';
+// Re-approved 2026-09-06 for the marker-free routine-work boundary: an
+// unbound session may create and edit ordinary reversible files and run
+// policy-approved local inspection, tests, builds, and non-destructive Git
+// work, while governance files, entrypoints, deletion, destructive or remote
+// operations, external effects, and authority expansion still require a
+// contract. Verified against the gate in the marker-free fixture; CLAUDE.md
+// and GEMINI.md remain byte-identical mirrors.
+const APPROVED_CANONICAL_SHA256 = 'c520020c6f27cacf5f5857739923285b997629920c5cfa1e42fca58bd3670935';
 const ALLOWED_H2 = new Set([
   'Repository Index', '저장소 인덱스',
   'Mandatory Reads', '필수 읽기',

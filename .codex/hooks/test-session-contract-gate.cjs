@@ -18,8 +18,8 @@ assert.deepEqual(
 	[],
 	"host-local rebind and session-map state must never cross PCs through Git",
 );
-// Alpha's current cutover scope is Codex-only. Claude registration is validated
-// in naia-adk and must not be inferred from this fork's disabled Claude profile.
+// Host adapters are registered independently; this parity suite only asserts the
+// Codex hook wiring defined in this public candidate.
 assert.equal(typeof gate.main, "function", "host adapters must invoke the exported gate entrypoint");
 const codexSettings = JSON.parse(fs.readFileSync(path.join(repositoryRoot, ".codex/hooks.json"), "utf8"));
 const codexPreToolCommands = codexSettings.hooks.PreToolUse.flatMap((group) =>
@@ -67,7 +67,7 @@ function bind(root) {
 		success_criteria: ["gate parity"],
 		allowed_paths: ["product.txt", "nested/**"],
 		target_ownership: ["product.txt", "nested/**"],
-		allowed_shell_commands: ["pnpm test", "node .claude/hooks/sync-entry-points.js --apply candidate.md", "codex exec -m gpt-5.6-luna task", "bash -c 'opencode run task'", "rg --pre 'sh -c touch /tmp/escaped' needle file"],
+		allowed_shell_commands: ["pnpm test", "npm run test", "node .agents/skills/review-pass/scripts/invoke-reviewer.mjs --tool codex", "node .claude/hooks/sync-entry-points.js --apply candidate.md", "codex exec -m gpt-5.6-luna task", "bash -c 'opencode run task'", "rg --pre 'sh -c touch /tmp/escaped' needle file"],
 		audiences: ["developer"],
 		source_refs: ["USR-TEST:E01"],
 		session_bindings: [{ session_id: "SESSION-1" }],
@@ -98,6 +98,9 @@ const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "session-contract-gate-"))
 try {
 	writeJson(path.join(fixture, ".agents", "context", "agents-rules.json"), {});
 	writeJson(path.join(fixture, ".codex", "hooks.json"), {});
+	for (const marker of [".codex/no-harness", ".claude/no-harness", ".pi/no-harness"]) {
+		assert.equal(fs.existsSync(path.join(fixture, marker)), false, `marker-free fixture: ${marker}`);
+	}
 	const nested = path.join(fixture, "nested");
 	writeJson(path.join(nested, ".agents", "context", "agents-rules.json"), {});
 	writeJson(path.join(nested, ".codex", "hooks.json"), {});
@@ -292,7 +295,35 @@ try {
 	fs.unlinkSync(path.join(fixture, ".agents", "session-contracts", "bootstrap-contract.json"));
 	fs.unlinkSync(path.join(fixture, ".agents", "progress", "bootstrap.json"));
 
+	writeJson(path.join(fixture, ".agents", "context", "agents-rules.json"), {
+		ai_workflow: { routine_action_authorization: { unbound_routine_commands: { default: "allow" } } },
+	});
 	bind(fixture);
+	fs.writeFileSync(path.join(fixture, "other.txt"), "outside\n");
+	fs.mkdirSync(path.join(fixture, ".agents", "skills", "review-pass", "scripts"), { recursive: true });
+	fs.writeFileSync(path.join(fixture, ".agents", "skills", "review-pass", "scripts", "invoke-reviewer.mjs"), "#!/usr/bin/env node\n");
+	const trustedReview = "node .agents/skills/review-pass/scripts/invoke-reviewer.mjs --tool codex";
+	assert.equal(gate.reviewInvokerCommand(trustedReview, fixture), true, "bound fixture recognizes the exact reviewer invocation");
+	assert.equal(runGate(fixture, "Bash", { command: trustedReview }), null, "bound fixture permits the trusted reviewer invocation");
+	assert.equal(runGate(fixture, "Bash", { command: "npm run test" }), null, "bound fixture permits an exact declared routine command");
+	assert.equal(runGate(fixture, "Bash", { command: "npm run build" })?.decision, "block", "bound fixture blocks an undeclared npm routine command");
+	assert.equal(runGate(fixture, "Bash", { command: "touch OUTSIDE" })?.decision, "block", "bound fixture blocks an extensionless out-of-contract target");
+	for (const command of [
+		"git add other.txt",
+		"git commit -m outside",
+		"sed -i 's/outside/changed/' other.txt",
+		"cp policy.json .agents",
+		"echo changed > other.txt",
+		`${trustedReview} > review.json`,
+		`${trustedReview}\nrm -rf other.txt`,
+	]) {
+		assert.equal(
+			runGate(fixture, "Bash", { command })?.decision,
+			"block",
+			`bound routine command must stay within its contract: ${command}`,
+		);
+	}
+	assert.equal(runGate(fixture, "Bash", { command: "git add product.txt" }), null, "bound Git add keeps target ownership");
 	const readOnlyResolution = {
 		status: contractCore.STATES.BOUND,
 		contract: {
@@ -643,6 +674,9 @@ try {
 	const afterCompact = run("Write", { file_path: path.join(root, "product.txt"), content: "v" });
 	assert.equal(afterCompact?.decision, "block", "a host compaction bump forces a fresh ack");
 
-	fs.rmSync(root, { recursive: true, force: true });
-	console.log("baseline gate: PASS");
+fs.rmSync(root, { recursive: true, force: true });
+console.log("baseline gate: PASS");
 }
+
+
+require("./test-session-contract-routine-policy.cjs").runRoutinePolicyTests();

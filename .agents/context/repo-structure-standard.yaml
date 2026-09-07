@@ -1,9 +1,12 @@
 # Naia ADK — Repository Structure Standard
 # SoT for per-repo documentation, SDLC artifact, and RBAC structure.
 #
-# Inherited by: naia-business-adk → {org}-adk → {user}-adk (e.g., alpha-adk)
+# Applies to direct personal forks and to the optional organization-family
+# lineage. A personal fork may use this standard without an organization fork.
 # Fork customization: create FORK.md with an `overrides:` section.
-# Human mirror: .users/context/repo-structure-standard.md (Korean)
+# Human mirrors:
+# .users/context/repo-structure-standard.md (Korean)
+# .users/context/en/repo-structure-standard.md (English)
 
 version: "1.0"
 spec_date: "2026-05-27"
@@ -11,13 +14,14 @@ spec_date: "2026-05-27"
 # ─── Language Defaults / Overrides ───────────────────────────────────────────
 # Default: public OSS repos are documented English-primary (international reach);
 # maintainer/user forks Korean-primary (maintainer language).
-# Maintainer override (2026-06-22): the following public OSS repos use Korean-
-# primary entry docs by maintainer decision (Korean-first team) — README.md and
-# AGENTS.md == CLAUDE.md == GEMINI.md in Korean, English preserved as *.en.md;
-# .users/ base = Korean (en/ subdir = English mirror).
+# Maintainer override (2026-06-22): the public naia-adk entry docs use Korean-first
+# user documentation: README.md is Korean and README.en.md is English. The shared
+# agent index is English: AGENTS.md is canonical and CLAUDE.md/GEMINI.md are
+# byte-identical mirrors. .users/context/ is Korean and .users/context/en/ is
+# the English human mirror.
 language_primary_overrides:
   - naia-adk
-  - naia-memory
+# naia-memory follows its own repository rules and is not classified by this workspace standard.
 
 # ─── Repo Types ──────────────────────────────────────────────────────────────
 # Classify each repo by purpose to determine mirror pattern and required dirs.
@@ -25,11 +29,11 @@ language_primary_overrides:
 repo_types:
   workspace_adk:
     description: "ADK workspace repos — the top-level shell a developer works inside"
-    examples: [naia-adk, naia-business-adk, alpha-adk, "{org}-adk", "{user}-adk"]
+    examples: [naia-adk, naia-business-adk, "{org}-adk", "{user}-adk"]
     visibility_default: "public base; forks are typically private"
     required_dirs:
       - .agents/context/     # AI SoT — agents-rules.json + project-index.yaml mandatory
-      - .users/context/      # Human mirror (default lang per FORK.md)
+      - .users/context/      # Korean human guide; .users/context/en/ is the English mirror
     optional_dirs:
       - .agents/workflows/
       - .agents/skills/
@@ -89,7 +93,7 @@ mirror_patterns:
     rule: "Changes in .agents/ must propagate to .users/ before commit"
 
   triple:
-    applies_to: "app_os, public workspace_adk base (naia-adk itself)"
+    applies_to: "app_os"
     layers:
       - path: .agents/context/
         format: "JSON/YAML"
@@ -104,6 +108,23 @@ mirror_patterns:
         lang: Korean
         role: Korean mirror
     additional_langs: ".users/context/{lang}/ — community-contributed, opt-in"
+
+  public_workspace_adk:
+    applies_to: "public workspace_adk base (naia-adk)"
+    layers:
+      - path: .agents/context/
+        format: "JSON/YAML"
+        lang: English
+        role: AI SoT
+      - path: .users/context/
+        format: Markdown
+        lang: Korean
+        role: Korean human mirror (primary)
+      - path: .users/context/en/
+        format: Markdown
+        lang: English
+        role: English human mirror
+    rule: "Update the machine source first, then keep both human language paths aligned."
 
   split:
     applies_to: "runtime_library using docs/ as primary (naia-agent pattern)"
@@ -130,14 +151,12 @@ harness:
   mirrors:
     - CLAUDE.md    # Claude Code
     - GEMINI.md    # Gemini CLI
-    - OPENCODE.md  # opencode
-    - CODEX.md     # Codex
   allowed_content: "repository identity, mandatory index paths, context routing, session-contract/handoff locations, permanent safety boundaries"
   forbidden_content: "current goals/issues/phases, requirements, implementation plans, completion state, product copy, session-specific lessons"
   session_contracts: ".agents/session-contracts/ — schema tracked; runtime contracts and .session-map.json local/ignored"
   progress_boundary: ".agents/progress/ is execution evidence and handoff state, never mutation authority"
   context_output_boundary: "background context is not artifact content without explicit atom-level derive/quote/require authority for the declared output audience"
-  sync_mechanism: ".claude/hooks/sync-entry-points.js validates AGENTS.md before copying mirrors"
+  sync_mechanism: ".claude/hooks/sync-entry-points.js --check validates AGENTS.md; node .claude/hooks/sync-entry-points.js synchronizes supported mirrors"
   rule: "Validate the canonical candidate first; never let a tool-specific mirror overwrite AGENTS.md"
   minimum: "AGENTS.md + CLAUDE.md + GEMINI.md acceptable for early-stage repos"
 
@@ -240,7 +259,7 @@ fork_customization:
     - overrides        # override any section of this standard
   override_precedence:
     "1": "naia-adk defaults (this file)"
-    "2": "naia-business-adk additions (if fork chain includes business-adk)"
-    "3": "{org}-adk FORK.md overrides"
-    "4": "{user}-adk FORK.md overrides — highest priority"
+    "2": "naia-business-adk additions (only when that lineage is selected)"
+    "3": "{org}-adk FORK.md overrides (when present)"
+    "4": "{user}-adk FORK.md overrides — highest priority for that fork"
   rule: "More specific fork takes precedence. Overrides are additive unless explicitly replacing."

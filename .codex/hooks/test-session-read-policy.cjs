@@ -15,6 +15,8 @@ for (const command of [
 	"git diff --output=changed.patch",
 	"git show HEAD:README.md -o copy.md",
 	"rg --pre 'sh -c touch /tmp/escaped' needle file",
+	"env rm -rf ordinary-fixture",
+	"env FOO=bar cat secret.txt",
 ]) assert.equal(policy.readOnlyShell(command, repositoryRoot), false, command);
 
 for (const command of [
@@ -27,7 +29,21 @@ for (const command of [
 	"git rev-parse --show-toplevel",
 	"git branch --show-current",
 	"Get-Content AGENTS.md",
+	"env",
+	"env FOO=bar",
+	"rg \"handleRequest\\(\" src",
+	"grep -E \"a{2,}\" file",
 ]) assert.equal(policy.readOnlyShell(command, repositoryRoot), true, command);
+
+for (const command of [
+	"bash --login -c 'rm -rf tmp/x'",
+	"\"sh\" -c \"rm -rf tmp/x\"",
+	"\"/bin/sh\" --command \"rm -rf tmp/x\"",
+	"env FOO=bar bash --execute='rm -rf tmp/x'",
+]) {
+	assert.equal(policy.inlineShellExecution(command), true, command);
+	assert.equal(policy.unsafeShellCommand(command), true, `inline shell execution must be unsafe: ${command}`);
+}
 
 assert.equal(
 	policy.readOnlyShell("$paths = @('.agents/context/agents-rules.json','.agents/context/project-index.yaml'); foreach ($p in $paths) { Get-Content -LiteralPath $p -Raw }", repositoryRoot),

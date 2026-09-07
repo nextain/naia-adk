@@ -38,8 +38,8 @@ pnpm dev        # API 서버(:3141) + 대시보드(:3142) 동시 실행
 ### 워크스페이스 스캐폴드
 
 AI 에이전트가 곧바로 일할 수 있도록, 자리가 정해진 디렉터리 묶음을 제공합니다. AI가 읽을
-컨텍스트는 `.agents/`(영어, JSON/YAML)에 두고, 사람이 읽을 미러는 `.users/`(한국어, Markdown)에
-둡니다. 이 미러는 전체를 그대로 복제한 것이 아니라 사람이 읽어야 할 핵심 문서 위주로 두는
+컨텍스트는 `.agents/`(영어, JSON/YAML)에 두고, 사람이 읽을 문서는 `.users/context/`(한국어)와
+`.users/context/en/`(영어)에 둡니다. 이 미러는 전체를 그대로 복제한 것이 아니라 사람이 읽어야 할 핵심 문서 위주로 두는
 부분 미러입니다(예컨대 스킬은 `.agents/skills/` 쪽이 원본이고 `.users/skills/`에는 일부만
 있습니다). 스킬, 데이터, 프로젝트는 모두 정해진 위치가 있어서, 어떤 도구로 열어도 같은
 모양으로 보입니다.
@@ -105,14 +105,15 @@ ADK는 `read`, `write`, `execute`, `publish`를 서로 다른 관심사로 나�
 쓰는 것, `confidential`은 계약서·크리덴셜·개인정보처럼 민감한 것입니다. 크리덴셜은 보통 git
 밖에 두지만, 등급으로는 여전히 `confidential`입니다.
 
-> **이번 릴리스에서 세션 계약 강제는 꺼져 있습니다.** `.claude/no-harness` 마커가 저장소에
-> 들어 있어 세션 계약 게이트가 아무것도 막지 않습니다. 켜면 계약 없는 세션이 `npm test`를
-> 포함한 모든 변경성 셸 명령에서 막혀 새로 클론한 사람이 테스트조차 돌릴 수 없기 때문입니다.
-> 파일 편집 경로는 같은 이유로 이미 열어뒀지만 셸 경로는 아직 그대로입니다. force push,
-> 파괴적 git 명령, 배포, 외부 발송 가드는 이와 무관하게 계속 작동합니다. 진행 상황은
-> [#34](https://github.com/nextain/naia-adk/issues/34), 자세한 내용은 `.claude/no-harness`에
-> 적어 뒀습니다. `AGENTS.md`의 세션 경계 절은 의도한 설계를 서술한 것이며 현재 런타임 동작과
-> 다릅니다.
+> **세션 계약 게이트는 marker-free 체크아웃에서 활성입니다.** 계약이 없는 세션도 정책에
+> 맞는 로컬 점검, `npm test`, 빌드, `mkdir`, 일반적인 비파괴 Git stage/commit 같은 일상 작업을
+> 수행할 수 있습니다. 거버넌스·호스트 정책 파일, 공유 진입점, 세션 계약·레지스트리 권한,
+> 삭제, 파괴적·원격 명령, 외부 발송과 운영 변경은 계속 계약이 필요합니다. 이 게이트는
+> 저장소 훅의 로컬 거버넌스 검사이며 운영체제 샌드박스나 훅 밖에서 실행되는 명령까지 보장하지
+> 않습니다. 자세한 정책은 `.agents/context/agents-rules.json`과 `.agents/context/harness.yaml`을
+> 참고하세요. `.codex/no-harness`, `.claude/no-harness`, `.pi/no-harness`가 프로젝트 루트나
+> 조상 디렉터리에 있으면 그 아래 체크아웃에도 복구 모드가 상속됩니다. 이 후보의 세션 계약
+> 훅 연결 범위는 Codex와 Claude이며, Pi 세션 계약 어댑터를 제공한다고 주장하지 않습니다.
 
 ### 시크릿은 어디에 두나
 
@@ -186,18 +187,31 @@ Naia ADK는 어디까지나 1인, 개인용입니다. 회사 조직도나 테넌
 팀 협업과 공유 지식이 필요해지면 [Naia Business ADK](https://nextain.io/adk)로 확장합니다.
 이 확장은 베이스라인을 자산·프로세스·권한 거버넌스로 넓히고, 팀 소유권과 위임 승인을 더합니다.
 
-### 포크 체인
+### 포크 계보
 
-Naia ADK는 포크해서 자기 것으로 만드는 것을 전제로 합니다. 개인은 `naia-adk`를 직접 포크하고,
-조직은 `naia-business-adk`를 거쳐 회사·멤버 워크스페이스를 만듭니다.
+Naia ADK는 포크해서 자기 것으로 만드는 것을 전제로 합니다. 개인은 `naia-adk`를 직접 포크할
+수 있습니다. 조직은 `naia-business-adk` 같은 별도 조직 계보를 선택해 회사·멤버 워크스페이스를
+만들 수 있습니다. 모든 사용자가 하나의 고정된 포크 체인을 따라야 하는 것은 아닙니다.
 
 ```
-naia-adk                  ← 개인용 베이스 (공개, Apache 2.0)
-  └── {org}-adk           ← 조직 포크: 회사 데이터 + 비즈니스 서브모듈
-        └── {user}-adk    ← 개인 포크: 개인 데이터 + 프로젝트 서브모듈
+naia-adk                  ← 공개 개인용 베이스 (Apache 2.0)
+  └── {user}-adk          ← 직접 포크한 개인 워크스페이스
+
+naia-business-adk         ← 선택 가능한 조직 계보
+  └── {org}-adk            ← 조직 포크: 회사 데이터 + 비즈니스 서브모듈
+        └── {member}-adk    ← 조직에서 파생한 구성원 워크스페이스
 ```
 
-Nextain의 실제 체인은 `naia-adk → naia-business-adk → nextain-adk → alpha-adk`처럼 이어집니다.
+Nextain의 내부 계보는 위 선택지와 별개인 운영 예시입니다. 공개 기반의 사용자는 직접
+개인 포크를 유지할 수 있습니다. 개인 포크는 `{user}-adk`처럼 자기 계정 이름을 넣어
+부릅니다.
+
+프로젝트·팀 기준선이 필요하면 [naia-pj-adk](https://github.com/nextain/naia-pj-adk)를
+별도 기준선으로 선택할 수 있습니다. PJ는 여러 프로젝트의 컨텍스트 드리프트, 호출 비용,
+Discord 운영 경계를 다루는 어댑터 기준선입니다. 개인 포크의 맞춤화와 팀용 역할·업무시간
+규칙은 별도 문제이며, 이 구조가 정리와 추적을 돕는 것은 구현 목표이지 비용 절감이나 작업
+시간 단축을 측정해 보장하는 주장은 아닙니다. PJ 기준선은 개인 포크의 상위 저장소가 아닙니다.
+조직 협업이 필요할 때의 `naia-business-adk`는 선택 사항입니다.
 
 ## 구조
 
@@ -207,7 +221,8 @@ Nextain의 실제 체인은 `naia-adk → naia-business-adk → nextain-adk → 
 | 디렉터리 | 용도 |
 |-----------|---------|
 | `.agents/` | AI용 컨텍스트 (영어, JSON/YAML) — 규칙의 단일 진실 공급원 |
-| `.users/` | 사람이 읽는 미러 (한국어, Markdown) |
+| `.users/context/` | 사람이 읽는 문서 (한국어, Markdown) |
+| `.users/context/en/` | 사람이 읽는 영어 미러 (Markdown) |
 | `.claude/` | Claude Code 설정, 훅, 스킬 심링크 |
 | `skills/` | 운영/런타임 스킬 (대시보드 API가 제공) |
 | `scripts/` | 유틸리티 스크립트 |
@@ -255,7 +270,7 @@ Nextain의 실제 체인은 `naia-adk → naia-business-adk → nextain-adk → 
   `skills/business/`에는 조직용 스킬(예: `press-release`)이 담깁니다.
 
 전체 목록은 대시보드의 스킬 카탈로그에서 확인하는 것이 가장 정확합니다. 텍스트로 정리된 표는
-[AGENTS.md](AGENTS.md#스킬-skills)에 있습니다.
+[스킬 인덱스](.agents/context/skills-index.yaml)에 있습니다.
 
 ## 시작하기
 
@@ -287,7 +302,8 @@ ADK 디렉터리로 지정하세요. 스킬과 데이터가 API로 제공됩니�
 
 이슈, PR, 토론은 편한 언어로 써도 됩니다. AI가 소통을 중개합니다. 다만 git 기록(커밋, 컨텍스트,
 공유 산출물)은 영어로 남깁니다. 자세한 절차와 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를
-참고하세요. 개발 프로세스는 이슈 기반 개발을 기본으로 하며, 상세 흐름은 [AGENTS.md](AGENTS.md)와
+참고하세요. 개발 프로세스는 이슈 기반 개발을 기본으로 하며, 상세 흐름은 [AGENTS.md](AGENTS.md),
+[업무 인덱스](.agents/context/ai-work-index.yaml), [스킬 인덱스](.agents/context/skills-index.yaml)와
 [`.agents/workflows/`](.agents/workflows/)에 정리돼 있습니다.
 
 ## 로드맵

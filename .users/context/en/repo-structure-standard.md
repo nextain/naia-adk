@@ -1,27 +1,31 @@
 # Repo Structure Standard
 
-> **Language**: [English](en/repo-structure-standard.md) · Korean (this file)
+> **Language**: English (this file) · [한국어](../repo-structure-standard.md)
 > **AI SoT**: `.agents/context/repo-structure-standard.yaml`
 > **Version**: 1.0 (2026-05-27)
-> **Inheritance**: naia-adk → naia-business-adk → {org}-adk → {user}-adk
+> **Lineages**: direct personal fork from naia-adk, or the optional organization lineage (naia-business-adk → {org}-adk → {user}-adk)
 
 ---
 
 ## Language Defaults / Overrides
 
-Default: Public OSS repositories are documented with English as the primary language (for international accessibility), while maintainers/user forks use Korean as the primary language (the maintainer's language).
+Default: Public OSS repositories use English as the primary documentation language. A maintainer or
+user fork may choose its maintainer's language for human-facing guides.
 
-**Maintainer override (2026-06-22)**: The following public OSS repositories use **Korean-primary entry documents** by maintainer decision (Korean-first team) — `README.md` and `AGENTS.md == CLAUDE.md == GEMINI.md` are in Korean, English is preserved as `*.en.md`, and `.users/` base = Korean (`en/` subdirectory = English mirror):
+**Public `naia-adk` baseline (2026-06-22)**:
 
-- `naia-adk`
-- `naia-memory`
+- `README.md` is Korean and `README.en.md` is English.
+- `AGENTS.md` is the English canonical index; `CLAUDE.md` and `GEMINI.md` are byte-identical mirrors.
+- `.users/context/` contains Korean human guides; `.users/context/en/` contains English human guides.
+
+`naia-memory` follows its own repository rules and is outside this standard's override.
 
 ---
 
 ## Overview
 
 The standard for **document structure · SDLC deliverables · RBAC** across all repositories in the naia-adk ecosystem.
-This file is the Korean mirror of the `agents-rules.yaml` SoT.
+This file is the English mirror of the `.agents/context/repo-structure-standard.yaml` SoT.
 
 Fork customization: Create `FORK.md` at the fork root → override through the `overrides:` section.
 
@@ -31,7 +35,7 @@ Fork customization: Create `FORK.md` at the fork root → override through the `
 
 | Type | Representative repositories | Description |
 |------|-----------------------------|-------------|
-| `workspace_adk` | naia-adk, alpha-adk, {org}-adk | Top-level workspace where developers work |
+| `workspace_adk` | naia-adk, naia-business-adk, {org}-adk, {user}-adk | Top-level workspace where developers work |
 | `runtime_library` | naia-agent, naia-memory | Runtime/library packages used by hosts |
 | `app_os` | naia-os | User-facing full app/OS with community contributors |
 
@@ -39,7 +43,8 @@ Fork customization: Create `FORK.md` at the fork root → override through the `
 
 ```
 .agents/context/       ← AI SoT (agents-rules.json + project-index.yaml required)
-.users/context/        ← Korean human mirror (default)
+.users/context/        ← Korean human guide
+.users/context/en/     ← English human guide
 ```
 
 ### Required directories for runtime_library
@@ -65,7 +70,8 @@ docs/                  ← English SoT (primary human documentation)
 | Pattern | Applies to | Layers |
 |---------|------------|--------|
 | **dual** | workspace_adk (private fork) | `.agents/context/` (AI) ↔ `.users/context/` (human) |
-| **triple** | app_os, public base (naia-adk itself) | `.agents/` ↔ `.users/context/` (English) ↔ `.users/context/ko/` (Korean) |
+| **triple** | app_os | `.agents/` ↔ `.users/context/` (English) ↔ `.users/context/ko/` (Korean) |
+| **public_workspace_adk** | public workspace_adk baseline (naia-adk) | `.agents/context/` (English machine source) ↔ `.users/context/` (Korean) ↔ `.users/context/en/` (English) |
 | **split** | runtime_library (naia-agent pattern) | `.agents/` ↔ `docs/` (English SoT) ↔ `.users/docs/ko/` (Korean) |
 
 **Rule (split pattern)**: Always modify the English source (`docs/`) first, then synchronize the Korean mirror.
@@ -74,10 +80,11 @@ docs/                  ← English SoT (primary human documentation)
 
 ## 3. Multi-tool Harness
 
-`AGENTS.md`(canonical) = `CLAUDE.md` = `GEMINI.md` = `OPENCODE.md` = `CODEX.md`
+`AGENTS.md` (canonical) = `CLAUDE.md` = `GEMINI.md`
 
 - Edit only `AGENTS.md`. The rest are synchronized by `scripts/sync-harness-mirrors.sh` or the pre-commit hook.
-- For initial repositories, having only the three files (AGENTS/CLAUDE/GEMINI) is also permitted.
+- Check with `node .claude/hooks/sync-entry-points.js --check`.
+- Synchronize supported mirrors with `node .claude/hooks/sync-entry-points.js`.
 
 ---
 
@@ -154,6 +161,8 @@ overrides:
     T2:
       dirs: [data-teams/, data-finance/]  # Additional directories
 ```
+
+Direct personal forks use the `naia-adk` defaults without an organization layer. The organization layers are added only when that lineage is selected.
 
 **Priority** (higher takes precedence):
 

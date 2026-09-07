@@ -118,7 +118,7 @@ skills:
 
   sync-upstream:
     trigger: "upstream sync, fork 동기화, naia-adk에서 받아와, sync-upstream"
-    what: "ADK fork chain 정식 동기화(git merge upstream/main) — drift 감지→fetch→merge→버전 스탬프. selective cherry-pick 체인 부패 예방"
+    what: "ADK fork lineage 정식 동기화(git merge upstream/main) — drift 감지→fetch→merge→버전 스탬프. 직접 개인 포크 또는 선택적 조직 계보를 명시해 selective cherry-pick 체인 부패 예방"
     arg: "[--merge] [--remote URL]"
     scripts: [sync-upstream.js]
     note: "VERSION + .agents/upstream-sync.yaml로 drift 감지. 충돌 정책 = upstream-structure-first. 최상위(naia-adk)는 no-op."

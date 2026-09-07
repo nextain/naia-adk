@@ -11,10 +11,8 @@ registry pointer, runtime contract, progress handoff, or harness state from Git.
 `target_ownership` accepts exact repository-relative paths or directory-prefix
 patterns ending in `/**`; active contracts with overlapping prefixes are
 ambiguous and cannot authorize mutation.
-Non-read-only shell execution is allowed only when its trimmed command exactly
-matches an `allowed_shell_commands` entry covered by the contract digest.
-That entry authorizes the whole command; the lightweight gate is not a process
-sandbox, so post-run review must verify actual side effects against ownership.
+An UNBOUND session may perform policy-approved routine local shell work (inspection, tests, builds, and non-destructive Git) inside its resolved project boundary. This allowance does not cover governance/host-policy files, deletion, destructive or remote operations, external effects, or authority expansion.
+When a session is BOUND, every non-read-only shell command must exactly match an `allowed_shell_commands` entry covered by the contract digest; routine status does not exempt it. The entry authorizes the whole command. This lightweight classifier is a repository hook, not an OS sandbox; post-run review must verify actual side effects against ownership.
 
 Legacy progress or Markdown `session_id` fields are read-only migration evidence;
 they never authorize mutation.

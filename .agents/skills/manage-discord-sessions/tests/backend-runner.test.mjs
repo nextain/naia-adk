@@ -263,7 +263,86 @@ test("DSO-006 records nonzero exit without accepting backend success", async () 
 	const { root, store, jobId } = fixture("codex");
 	const result = await runBackendAttempt({ store, jobId, backendId: "codex", prompt: "__fake_nonzero__", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } });
 	assert.equal(result.exitCode, 7);
+	assert.equal(result.failureReasonCode, null);
 	assert.equal(store.getJob(jobId).lifecycle, "failed");
+	assert.equal(store.getJob(jobId).latestSafeError, "Job failed: process_exit");
+	store.close();
+});
+
+test("DSO-006 classifies the observed provider quota envelope without leaking stderr", async () => {
+	const { root, store, jobId } = fixture("grok");
+	const result = await runBackendAttempt({
+		store, jobId, backendId: "grok", prompt: "__fake_quota_failure__", cwd: root,
+		runtimeRoot: join(root, "runtime"), executable: fakeBackendPath,
+		commandOptions: { permissionMode: "plan", approvalPolicy: "never", costProfile: "balanced" },
+		backendVersion: "1.0.13", requireAuthentication: false, parentEnv: { PATH: process.env.PATH },
+	});
+	const job = store.getJob(jobId);
+	assert.equal(result.backendOutcome, "failure");
+	assert.equal(result.failureReasonCode, "provider_quota_exhausted");
+	assert.equal(result.transientResult, null);
+	assert.equal(job.lifecycle, "failed");
+	assert.equal(job.latestSafeError, "Job failed: provider_quota_exhausted");
+	assert.equal(job.events.some((event) => event.kind === "result_reported"), false);
+	assert.equal(job.events.some((event) => event.kind === "retry_scheduled"), false);
+	assert.equal(JSON.stringify(job).includes("quota-account-secret-sentinel"), false);
+	store.close();
+});
+
+test("DSO-006 keeps quota words in a successful provider response as a result", async () => {
+	const { root, store, jobId } = fixture("grok");
+	const result = await runBackendAttempt({
+		store, jobId, backendId: "grok", prompt: "__fake_success_quota_words__", cwd: root,
+		runtimeRoot: join(root, "runtime"), executable: fakeBackendPath,
+		commandOptions: { permissionMode: "plan", approvalPolicy: "never", costProfile: "balanced" },
+		backendVersion: "1.0.13", requireAuthentication: false, parentEnv: { PATH: process.env.PATH },
+	});
+	const job = store.getJob(jobId);
+	assert.equal(result.backendOutcome, "success");
+	assert.equal(result.failureReasonCode, null);
+	assert.match(result.transientResult, /quota usage balance/);
+	assert.equal(job.lifecycle, "result_ready");
+	assert.equal(job.events.some((event) => event.kind === "failed"), false);
+	assert.equal(job.events.some((event) => event.kind === "result_reported"), true);
+	store.close();
+});
+
+test("DSO-006 keeps illustrative quota envelopes in a successful response as a result", async () => {
+	const { root, store, jobId } = fixture("grok");
+	const result = await runBackendAttempt({
+		store, jobId, backendId: "grok", prompt: "__fake_success_quota_envelope_example__", cwd: root,
+		runtimeRoot: join(root, "runtime"), executable: fakeBackendPath,
+		commandOptions: { permissionMode: "plan", approvalPolicy: "never", costProfile: "balanced" },
+		backendVersion: "1.0.13", requireAuthentication: false, parentEnv: { PATH: process.env.PATH },
+	});
+	const job = store.getJob(jobId);
+	assert.equal(result.exitCode, 0);
+	assert.equal(result.backendOutcome, "success");
+	assert.equal(result.failureReasonCode, null);
+	assert.match(result.transientResult, /quota envelope example/);
+	assert.equal(job.lifecycle, "result_ready");
+	assert.equal(job.events.some((event) => event.kind === "failed"), false);
+	assert.equal(job.events.some((event) => event.kind === "result_reported"), true);
+	store.close();
+});
+
+test("DSO-006 treats a stderr quota envelope as pending when stdout succeeds", async () => {
+	const { root, store, jobId } = fixture("grok");
+	const result = await runBackendAttempt({
+		store, jobId, backendId: "grok", prompt: "__fake_success_stderr_quota__", cwd: root,
+		runtimeRoot: join(root, "runtime"), executable: fakeBackendPath,
+		commandOptions: { permissionMode: "plan", approvalPolicy: "never", costProfile: "balanced" },
+		backendVersion: "1.0.13", requireAuthentication: false, parentEnv: { PATH: process.env.PATH },
+	});
+	const job = store.getJob(jobId);
+	assert.equal(result.exitCode, 0);
+	assert.equal(result.backendOutcome, "success");
+	assert.equal(result.failureReasonCode, null);
+	assert.match(result.transientResult, /fake-model-content/);
+	assert.equal(job.lifecycle, "result_ready");
+	assert.equal(job.events.some((event) => event.kind === "failed"), false);
+	assert.equal(job.events.some((event) => event.kind === "result_reported"), true);
+	assert.equal(JSON.stringify(job).includes("quota-account-secret-sentinel"), false);
 	store.close();
 });
 
@@ -421,6 +500,19 @@ test("DSO-005 rejects command options that weaken fixed safety boundaries", asyn
 	await assert.rejects(runBackendAttempt({ store, jobId, backendId: "codex", prompt: "unsafe", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { executableArgs: ["--dangerously-bypass-approvals-and-sandbox"] }, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } }), /unsupported codex command option/);
 	await assert.rejects(runBackendAttempt({ store, jobId, backendId: "codex", prompt: "unsafe", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { approvalPolicy: "managed" }, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } }), /child approval policy must be never/);
 	await assert.rejects(runBackendAttempt({ store, jobId, backendId: "codex", prompt: "unsafe", cwd: root, runtimeRoot: join(root, "runtime"), executable: fakeBackendPath, commandOptions: { model: "/azure-foundry/deepseek-v4-pro" }, backendVersion: "0.146.0", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } }), /unsafe codex model option/);
+	store.close();
+});
+
+test("DSO-005 accepts a Grok permission and cost profile without disabling subagents", async () => {
+	const { root, store, jobId } = fixture("grok");
+	const result = await runBackendAttempt({
+		store, jobId, backendId: "grok", prompt: "grok profile", cwd: root,
+		runtimeRoot: join(root, "runtime"), executable: fakeBackendPath,
+		commandOptions: { permissionMode: "plan", approvalPolicy: "never", model: "grok-4.6", costProfile: "balanced" },
+		backendVersion: "1.0.13", requireAuthentication: false, parentEnv: { PATH: process.env.PATH },
+	});
+	assert.equal(result.exitCode, 0);
+	assert.equal(store.getJob(jobId).lifecycle, "result_ready");
 	store.close();
 });
 

@@ -1,7 +1,9 @@
 # Naia ADK
 
-AI development infrastructure for a solo developer. This repository is the
-public base of the fork chain `naia-adk → {org}-adk → {user}-adk`.
+AI development infrastructure for a solo developer. This repository is a
+public, forkable governance baseline. Individuals may fork it directly; an
+organization may maintain a separate organization-family fork and its own
+descendant workspaces. Those are two possible lineages, not one required chain.
 
 ## Repository Index
 
@@ -41,10 +43,12 @@ goal, issue state, implementation sequence, completion claim, or artifact
 wording.
 
 An unbound session may create and edit ordinary reversible files inside its
-resolved project boundary. Governance and host-policy files, these shared
-entrypoints, deletion, mutating shell commands, external effects, and changes
-that could expand the session's own authority require one explicit local
-contract in `.agents/session-contracts/`. When bound, the registry pointer,
+resolved project boundary and may run policy-approved routine local commands
+such as inspection, tests, builds, and non-destructive Git work. Governance and
+host-policy files, these shared entrypoints, deletion, destructive or remote
+commands, external effects, and changes that could expand the session's own
+authority require one explicit local contract in `.agents/session-contracts/`.
+When bound, the registry pointer,
 contract digest, `session_bindings`, and referenced progress record must agree.
 Progress records do not grant authority, and parent or child projects are never
 searched for an implicit binding.

@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, test } from "node:test";
 import { DiscordMessageRouter } from "../helper/discord-router.mjs";
+import { runBackendAttempt } from "../helper/backend-runner.mjs";
 import { RecoveryCodec } from "../helper/recovery-crypto.mjs";
 import { randomBytes } from "node:crypto";
 import { fetchDiscordConversation, promptWithDiscordConversation, renderDiscordConversation, renderParticipantConversation, trustedParticipantPolicy } from "../helper/discord-conversation.mjs";
 import { commandOptionsForProfile, currentExecutionProfile, effectiveAllowedActions, participantAuthorityRevision, sameExecutionProfile } from "../helper/execution-profile.mjs";
 import { buildAgentContextSnapshot } from "../helper/agent-context.mjs";
 import { BOT, CHANNEL, GUILD, OTHER_USER, RUNTIME_REVISION, THREAD, USER, binding, cleanupDiscordFixtureRoots, fixture } from "./fixtures/discord-fixture.mjs";
+
+const fakeBackendPath = fileURLToPath(new URL("./fixtures/fake-backend.mjs", import.meta.url));
 
 afterEach(cleanupDiscordFixtureRoots);
 
@@ -34,6 +38,35 @@ test("DSG-006 enforces configured read-only role in the actual backend invocatio
 	assert.equal(JSON.stringify(store.listJobs()).includes("inspect this"), false);
 	assert.equal(store.getJob(accepted.jobId, { includeEvents: false }).revision, `discord-v1:${RUNTIME_REVISION}`);
 	assert.equal(store.getJob(accepted.jobId, { includeEvents: false }).executionBinding, null);
+	store.close();
+});
+
+test("DSG-020 keeps prompt failures separate from unavailable authority and deduplicates both notices", async () => {
+	const { store, root } = fixture();
+	const sent = [];
+	const config = {
+		persona: { name: "Reviewer", instructions: "Review safely." },
+		role: { name: "read-only", allowedActions: ["read", "reply"] },
+		backend: { selected: "codex" },
+		discord: { bindings: [binding()], operatorUserIds: [] },
+		runtime: { maxConcurrentJobs: 1 },
+	};
+	const router = new DiscordMessageRouter({
+		config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"),
+		send: async (input) => { sent.push(input.content); return { state: "confirmed" }; },
+	});
+	const authorityMessage = { id: "676767676767676701", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> inspect this` };
+	router.agentContexts = {};
+	assert.deepEqual(await router.onDispatch("MESSAGE_CREATE", authorityMessage, 8), { state: "rejected", reasonCode: "authority_unavailable" });
+	assert.equal((await router.onDispatch("MESSAGE_CREATE", authorityMessage, 9)).state, "duplicate");
+	const promptMessage = { id: "676767676767676702", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}>` };
+	router.agentContexts = { default: { cwd: root, allowedPaths: [root], snapshot: null } };
+	assert.deepEqual(await router.onDispatch("MESSAGE_CREATE", promptMessage, 10), { state: "rejected", reasonCode: "prompt_invalid" });
+	assert.equal((await router.onDispatch("MESSAGE_CREATE", promptMessage, 11)).state, "duplicate");
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(sent.length, 2);
+	assert.match(sent[0], /권한|authority/);
+	assert.match(sent[1], /처리할 요청|actionable request/);
 	store.close();
 });
 
@@ -264,6 +297,16 @@ test("DSG-021 requires exact v2 authority, configuration, and context revisions 
 	await mismatchRouter.waitForIdle();
 	assert.equal(mismatchCalls, 0);
 	assert.equal(store.getJob("v2-recovery-mismatch", { includeEvents: false }).lifecycle, "recovery_review");
+	const runtimeMismatch = makeRecovered("v2-recovery-runtime-mismatch", originalEnvelope);
+	const runtimeMismatchNotices = [];
+	const runtimeMismatchRouter = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime-runtime-mismatch"), agentContextSnapshot: snapshot, runtimeRevision: "c".repeat(40), recoveryCodec: codec, send: async (input) => { runtimeMismatchNotices.push(input); return { state: "confirmed" }; }, runner: async () => ({ backendOutcome: "failure", transientResult: null }) });
+	runtimeMismatchRouter.resumeRecovered([runtimeMismatch], { autoRetry: true });
+	await runtimeMismatchRouter.waitForIdle();
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(store.getJob("v2-recovery-runtime-mismatch", { includeEvents: false }).lifecycle, "recovery_review");
+	assert.equal(runtimeMismatchNotices.length, 1);
+	assert.equal(runtimeMismatchNotices[0].channelId, CHANNEL);
+	assert.match(runtimeMismatchNotices[0].content, /previous request was interrupted/i);
 	const disabledStart = makeRecovered("v2-recovery-binding-disabled", originalEnvelope);
 	let disabledStartCalls = 0;
 	const disabledStartConfig = { ...config, discord: { ...config.discord, bindings: [{ ...v2Binding, canStartConversation: false }] } };
@@ -272,6 +315,15 @@ test("DSG-021 requires exact v2 authority, configuration, and context revisions 
 	await disabledStartRouter.waitForIdle();
 	assert.equal(disabledStartCalls, 0);
 	assert.equal(store.getJob("v2-recovery-binding-disabled", { includeEvents: false }).lifecycle, "recovery_review");
+	const revoked = makeRecovered("v2-recovery-revoked", originalEnvelope);
+	const revokedNotices = [];
+	const revokedConfig = { ...config, discord: { ...config.discord, bindings: [{ ...v2Binding, allowedUserIds: [] }] } };
+	const revokedRouter = new DiscordMessageRouter({ config: revokedConfig, store, token: "token-value-long-enough", botUserId: BOT, cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime-revoked"), agentContextSnapshot: snapshot, runtimeRevision: RUNTIME_REVISION, recoveryCodec: codec, send: async (input) => { revokedNotices.push(input); return { state: "confirmed" }; }, runner: async () => ({ backendOutcome: "failure", transientResult: null }) });
+	revokedRouter.resumeRecovered([revoked], { autoRetry: true });
+	await revokedRouter.waitForIdle();
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(store.getJob("v2-recovery-revoked", { includeEvents: false }).lifecycle, "recovery_review");
+	assert.equal(revokedNotices.length, 0, "revoked authority must not receive a recovery notice");
 	const exact = makeRecovered("v2-recovery-exact", originalEnvelope);
 	let exactCalls = 0;
 	const exactRouter = new DiscordMessageRouter({ config, store, token: "token-value-long-enough", botUserId: BOT, cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime-exact"), agentContextSnapshot: snapshot, runtimeRevision: RUNTIME_REVISION, recoveryCodec: codec, send: async () => ({ state: "confirmed" }), runner: async (input) => { exactCalls += 1; assert.match(input.prompt, /User request:\ninspect recovery$/); return { backendOutcome: "failure", transientResult: null }; } });
@@ -414,6 +466,36 @@ test("DSG-019 reports a terminal backend failure to the originating Discord scop
 	assert.equal(sent.length, 2);
 	assert.match(sent[1], /일정 시간 동안 진행이 없어/);
 	assert.match(sent[1], new RegExp(accepted.jobId));
+	store.close();
+});
+
+test("DSG-019 routes a provider quota envelope through the real runner", async () => {
+	const { store, root } = fixture();
+	const sent = [];
+	let calls = 0;
+	const config = { persona: { name: "Reviewer", instructions: "Review." }, role: { name: "reader", allowedActions: ["read", "reply"] }, backend: { selected: "grok" }, discord: { bindings: [binding()], operatorUserIds: [] }, runtime: { maxConcurrentJobs: 1 } };
+	const router = new DiscordMessageRouter({
+		config, store, token: "token-value-long-enough", botUserId: BOT, cwd: root, runtimeRoot: join(root, "runtime"),
+		backendExecutables: { grok: fakeBackendPath },
+		send: async (input) => { sent.push(input.content); return { state: "confirmed" }; },
+		runner: async (input) => {
+			calls += 1;
+			return runBackendAttempt({ ...input, executable: fakeBackendPath, backendVersion: "1.0.13", requireAuthentication: false, parentEnv: { PATH: process.env.PATH } });
+		},
+	});
+	const accepted = await router.onDispatch("MESSAGE_CREATE", { id: "242424242424242425", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> __fake_quota_failure__` }, 24);
+	await router.waitForIdle();
+	const job = store.getJob(accepted.jobId);
+	assert.equal(calls, 1);
+	assert.equal(sent.length, 2);
+	assert.match(sent[1], /사용량 한도 또는 잔액이 소진되어/);
+	assert.match(sent[1], new RegExp(accepted.jobId));
+	assert.equal(sent[1].includes("quota-account-secret-sentinel"), false);
+	assert.equal(job.lifecycle, "failed");
+	assert.equal(job.latestSafeError, "Job failed: provider_quota_exhausted");
+	assert.equal(job.events.some((event) => event.kind === "result_reported"), false);
+	assert.equal(job.events.some((event) => event.kind === "retry_scheduled"), false);
+	assert.equal(JSON.stringify(job).includes("quota-account-secret-sentinel"), false);
 	store.close();
 });
 

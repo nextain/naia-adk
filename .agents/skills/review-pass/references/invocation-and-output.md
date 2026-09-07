@@ -50,7 +50,12 @@ represented only by the contract's signed authority, directive state, and
 tombstone; a review prompt cannot invent it.
 
 Write the components to owner-only temporary files and pipe the composed prompt
-via stdin. Never inline prompts in command arguments.
+via stdin. Never inline prompts in command arguments. The Grok adapter instead
+writes the composed prompt to a freshly-created owner-only (`0600`) file and
+passes that path with `--prompt-file`; it closes stdin without sending a second
+copy of the prompt.
+
+Set skill_dir/$skillDir to the directory containing the installed SKILL.md ('.agents/skills/review-pass' in this checkout) before using the examples below.
 
 **PowerShell:**
 ```powershell
@@ -61,31 +66,69 @@ Get-Content $promptFile -Raw | & $toolCommand
 
 **Bash:**
 ```bash
-node .agents/skills/review-pass/scripts/invoke-reviewer.mjs \
+node "$skill_dir/scripts/invoke-reviewer.mjs" \
   --tool codex --repo "$PWD" --base "$baseFile" \
   --atoms "$atomFile" --delta "$roleFile"
 ```
 
+Pass `--request <file>` with the original ask, verbatim. Without it the reviewer
+can only compare the change against the author's own summary of what was wanted,
+and the prompt says so in place of the request.
+
 A runnable minimal fixture is in `../examples/one-shot/`.
 
-Ordinary invocations return a structured, non-blocking `NOT_RUN` object with a
-zero exit status when the selected external reviewer is missing, unauthenticated,
-quota-limited, malformed, or timed out. Add `--require-review true` only when the
-active delivery contract explicitly requires review evidence; that mode preserves
-the reviewer's non-zero exit status and fails closed. CLI-facing failure reasons
+### 2.2a Reviewing the frame, not only the contents
+
+The atom ledger is written by the author of the change. A reviewer confined to
+it can answer "is this right within the stated scope" and can never answer "is
+the stated scope right", which is where large reviews fail. Every invocation
+therefore carries three obligations, and the output contract enforces them.
+
+A finding outside the ledger is reported with `"atom_id": null` and
+`"scope": "outside_declared_atoms"`. Previously such a finding was rejected as an
+unknown atom, so a reviewer that saw something the author had not thought of had
+no way to say it.
+
+`frame_assessment` is required: `{ scope_is_sufficient, missing_concerns }`. An
+insufficient scope must name what is missing, and `CLEAN` is unavailable while
+the scope is insufficient. A scope objection alone is enough for `NOT_CLEAN`,
+with no in-frame finding.
+
+`runtime_observed` is required. Reading files is not observing behaviour, and
+declaring which one happened keeps a text review from being quoted later as a
+runtime result.
+
+Invocations fail closed by default. When the selected external reviewer is
+missing, unauthenticated, quota-limited, malformed, or timed out, the invocation
+exits non-zero and produces no review object.
+
+This is deliberate. A reviewer that could not run and a reviewer that ran and
+found nothing are different outcomes, and they used to be indistinguishable to
+the caller: both exited zero. An orchestrating agent reads a zero exit, records
+that the review step completed, and reports cross-validation that never
+happened. Quota limits and startup timeouts make that the *common* path, not the
+rare one.
+
+Pass `--require-review false` to accept a missing reviewer. That returns the
+structured `NOT_RUN` object with a zero exit status, and the object carries
+`cross_validation: false` and `usable_as_evidence: false` so a downstream reader
+cannot mistake it for a completed review. CLI-facing failure reasons
 use fixed diagnostic categories rather than provider output, and reviewer stdout
 is capped at 1 MiB before the process tree is terminated.
 
 ### 2.3 Reviewer Invocation
 
-Each reviewer is invoked as a headless CLI process. Commands are configurable
-via the tools section of the profile. Standard patterns:
+Each reviewer is invoked as a headless CLI process. The bundled runner supports
+the fixed adapter commands shown below; it does not read `tools.*.command`,
+`stdin`, or `parse` to register arbitrary processes from config. Standard
+patterns:
 
 | Tool | Headless Command | Read-Only | Notes |
 |------|-----------------|-----------|-------|
-| `claude` | `claude -p --input-format text --output-format json --no-session-persistence --permission-mode plan --allowedTools Read,Glob,Grep` | yes (restricted tools) | prompt on stdin |
-| `opencode` | `opencode run --dir "$dir" --format json -m {model}` | yes (explicit permissions) | set `OPENCODE_CONFIG_CONTENT` to deny `*` and allow only lowercase read/glob/grep/list/lsp keys (verified with `opencode debug config`); omit positional message; prompt on stdin |
-| `codex` | `codex exec --ephemeral --sandbox read-only --skip-git-repo-check -C "$dir" -m {model} -` | yes (sandbox) | `-` reads stdin |
+| `claude` | `claude -p --input-format text --output-format json --no-session-persistence --permission-mode plan --tools Read,Glob,Grep --strict-mcp-config --mcp-config '{"mcpServers":{}}'` | yes (restricted tools) | prompt on stdin |
+| `opencode` | `opencode run --pure --agent adk-adversarial-review --title adk-adversarial-review --dir "$dir" --format json --model {model}` | yes (shared child-environment boundary) | use the shared Alpha child-environment helper for private HOME/XDG roots and sanitized provider/auth config; pin `model` and `small_model` to `{model}`, apply the helper's read-only policy to the selected agent, disable project config and inherited overrides, omit positional message, and pipe the prompt on stdin |
+| `grok` | `grok --output-format json --permission-mode plan --verbatim --prompt-file {0600-prompt-file}` | yes (plan mode) | pass a temporary owner-only prompt path, close stdin, and remove the file after exit; do not pass `--no-subagents` so Grok can spawn subagents |
+| `codex` | `codex exec --ephemeral --sandbox read-only --skip-git-repo-check -C "$dir" --model {model} -` | yes (sandbox) | `-` reads stdin |
 
 **Adapter interface**: Each tool adapter implements:
 
@@ -94,14 +137,27 @@ invoke(prompt: string, config: ToolConfig) → raw_output: string
 parse(raw_output: string, strategy: "json" | "text_fallback") → Finding[]
 ```
 
-**Custom tool registration**: Add entries to the `tools` section in config.
-Each entry requires a shell-free command, `stdin: true`, and a parse strategy.
-`{prompt}` is forbidden in command templates.
+**Custom tool registration** is not implemented by the bundled runner. Adding a
+`tools.*` entry does not make it executable; a new adapter must be added to
+`commandFor` with tests before it can be documented as supported. The OpenCode
+row is the required invocation: `--pure` and `--agent adk-adversarial-review`
+select the managed read-only path, while the runner supplies the explicit
+model, pins `model` and `small_model` to it, and pipes the prompt through the
+child environment.
 
 The runner extracts native JSON/JSONL or a JSON fenced block and rejects
 successful-looking output unless it contains one structured coverage row for
 every input atom, with no missing, unknown, or duplicate IDs. `CLEAN` additionally
-requires all rows to be `COVERED` and an empty findings array.
+requires all rows to be `COVERED` and an empty findings array. Structured stream
+events with failure metadata in the event or its native `part` envelope are
+rejected before review parsing. This includes `error`, `failure`, `incomplete`,
+`aborted`, `cancelled`, `truncated`, and length/max-token finishes, even if a
+valid review object is also present. A structured stream must also end with a
+recognized successful terminal (normally `step_finish` with
+`part.reason: "stop"`); a missing or unknown terminal is rejected. Direct raw
+review JSON and provider result envelopes without stream markers remain
+supported. Arbitrary text inside a message is not inspected as stream metadata,
+so an illustrative quota or status-code example remains text.
 
 ### 2.4 Timeout
 
@@ -119,7 +175,7 @@ $jobs = @()
 foreach ($reviewer in $reviewers) {
     $outFile = [System.IO.Path]::GetTempFileName()
     $args = @(
-        ".agents/skills/review-pass/scripts/invoke-reviewer.mjs",
+        "$skillDir/scripts/invoke-reviewer.mjs",
         "--tool", $reviewer, "--repo", $PWD,
         "--base", $baseFile, "--atoms", $atomFile, "--delta", $deltaFile
     )
@@ -136,7 +192,7 @@ out_files=()
 for reviewer in "${reviewers[@]}"; do
     out_file=$(mktemp)
     out_files+=("$out_file")
-    node .agents/skills/review-pass/scripts/invoke-reviewer.mjs \
+    node "$skill_dir/scripts/invoke-reviewer.mjs" \
         --tool "$reviewer" --repo "$PWD" --base "$base_file" \
         --atoms "$atom_file" --delta "$delta_file" \
         > "$out_file" 2>/dev/null &

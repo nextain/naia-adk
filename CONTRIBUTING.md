@@ -35,7 +35,8 @@ Naia ADK에 기여하는 방법을 안내합니다. AI 에이전트와, AI 도�
 이슈 → 계획 → 구현(테스트 먼저) → 검증 → 정리 → 커밋
 ```
 
-전체 14단계와 승인 게이트는 [AGENTS.md](AGENTS.md#개발-프로세스-development-process)와
+전체 흐름과 승인 게이트는 [AGENTS.md](AGENTS.md),
+[업무 인덱스](.agents/context/ai-work-index.yaml), [스킬 인덱스](.agents/context/skills-index.yaml)와
 [`.agents/workflows/`](.agents/workflows/)에 정리돼 있습니다. 핵심 규칙은 이렇습니다.
 
 - **테스트 먼저** — 실패하는 테스트(RED)부터 쓰고, 최소 구현(GREEN) 뒤 리팩터합니다.

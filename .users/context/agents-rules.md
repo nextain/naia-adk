@@ -14,10 +14,19 @@
 - **org**: nextain
 - **repo**: nextain/naia-adk
 
+## context_boundaries
+
+- **shared_entrypoints_are_indexes**: AGENTS.md is the canonical repository index and CLAUDE.md/GEMINI.md are byte-identical mirrors. Shared entrypoints may contain identity, mandatory index paths, context routing, session-contract locations, and permanent safety boundaries only; never current goals, issue state, implementation plans, completion claims, or artifact wording.
+- **recovery_mode**: A root .codex/no-harness, .claude/no-harness, or .pi/no-harness marker is an explicit local recovery escape hatch: repository session-contract mutation checks are bypassed for that checkout, and no contract is created or bound. This marker does not claim to change host or operating-system permissions. A marker-free checkout uses the gate's normal policy path.
+- **session_contract_authority**: Outside recovery mode, an UNBOUND session may perform ordinary reversible file creation and editing inside its resolved project boundary, plus policy-approved routine local shell work such as inspection, tests, builds, and non-destructive Git operations. A BOUND contract is required for governance or host-policy files, shared entrypoints, deletion, destructive or remote operations, external effects, and any operation that can expand the session's own authority. When bound, the local registry pointer, active contract digest, explicit session_bindings entry, and progress contract reference must all agree. Progress or Markdown session_id fields never grant authority.
+- **project_isolation**: Never infer a session binding from a parent workspace, child project, or the repository's only unfinished work unit. Concurrent contracts must declare non-overlapping target_ownership paths.
+- **context_is_not_output**: Background, reference, example, conversation, and internal context constrain reasoning but are not code, UI, or external-document content. Rendering requires explicit atom-level derive, quote, or require authority for a declared output unit and audience.
+- **source_atom_contract**: Every v2 source atom declares subject, effect, and render_policy. Non-directive source classifications keep directive_ids exactly empty; rendering authority never becomes objective authority.
+- **output_unit_contract**: Every verifiable v2 output unit declares kind, audience, exposure, objective_atom_ids, and content_source_atom_ids. Agent-workflow background/precondition atoms cannot be shipping content edges.
+
 ## local_projects
 
-이 워크스페이스 안에 체크아웃된 프로젝트. 포크가 자기 것으로 바꾼다.
-아래는 형태를 보이는 예시다.
+- **_description**: 이 워크스페이스 안에 체크아웃된 프로젝트. 포크가 자기 것으로 바꾼다. 아래는 형태를 보이는 예시다.
 
 ### naia-corp-web
 
@@ -53,25 +62,23 @@
 
 #### self_hosted
 
-- **name**: luke-bazzite
-- **host**: this Bazzite PC (/opt/actions-runner)
-- **scope**: nextain org — private repos only (public repos use free GitHub-hosted runners)
+- **name**: organization-private-runner
+- **host**: organization-managed runner host (installation path is host-specific)
+- **scope**: organization private repositories only (public repositories use GitHub-hosted runners)
 
 ##### labels
 
 - self-hosted
 - linux
 - x64
-- bazzite
-- **service**: actions.runner.nextain.luke-bazzite.service
+- **service**: organization-managed runner service
 - **note**: DO NOT attach self-hosted runners to public repos — fork PR security risk
-- **install_note**: /var/home causes SELinux exec block; always install under /opt/
+- **install_note**: Runner installation paths are host-specific and must not be committed
 - **workflow_usage**: runs-on: [self-hosted, linux, x64]
 
 ## submodules
 
-서브모듈로 붙인 저장소. 포크가 자기 것으로 바꾼다.
-아래는 형태를 보이는 예시다.
+- **_description**: 서브모듈로 붙인 저장소. 포크가 자기 것으로 바꾼다. 아래는 형태를 보이는 예시다.
 
 ### docs-internal
 
@@ -252,6 +259,237 @@
 - A missing user choice that would materially expand or change the authorized objective or scope
 - **clarification_rule**: Do not turn workflow checkpoints, tool permissions, session boundaries, or delegation boundaries into repeated conversational approval gates. Keep product and scope decision gates when the answer can materially change the result; otherwise proceed and report evidence.
 
+### routine_action_authorization
+
+- **default**: allow
+
+#### included_actions
+
+- read-only inspection, local research, and context discovery
+- in-scope code, test, configuration, harness, and documentation changes that record already requested behavior without introducing a new product or scope decision
+- local test, lint, typecheck, build, and non-production smoke verification
+- non-destructive git fetch, pull, merge, rebase, commit, and non-force push to an already authorized repository and branch
+- bounded delegation and subagent coordination needed to complete the task
+- **delegation_inheritance**: A delegated session inherits the authorized objective, scope, routine-step authority, and exception boundary; delegation does not require repeated approval.
+
+#### approval_exceptions
+
+- material deletion or another action likely to cause unrecoverable data loss
+- force push, history rewrite, or forced unrelated-histories merge
+- external message, email, issue, comment, publication, or other communication not explicitly requested
+- payment, purchase, paid resource provisioning, or materially costly cloud operation
+- production-destructive mutation, production data write, or irreversible deployment action
+- material scope expansion or a missing user choice that changes the requested outcome
+- **precedence**: This command policy does not grant authority for governance or host-policy files, shared entrypoints, session contracts, registry/progress authority changes, credentials, external effects, or production operations.
+
+#### unbound_routine_commands
+
+- **_doc**: Default allow applies to routine local work. Contract-required operations remain explicit below. Commands are split into statements and every statement is checked; one refusal makes the whole call contract-required.
+- **default**: allow
+
+##### contract_required_heads
+
+- **_doc**: Heads whose normal use can affect the host, credentials, remote systems, or irreversible state.
+
+###### destructive_filesystem
+
+- rm
+- rmdir
+- shred
+- truncate
+- dd
+- mkfs
+- mkswap
+- fdisk
+- parted
+- wipefs
+
+###### privilege_and_system
+
+- sudo
+- su
+- doas
+- systemctl
+- service
+- mount
+- umount
+- chown
+- chmod
+- chgrp
+- setcap
+- modprobe
+- insmod
+- rmmod
+- reboot
+- shutdown
+- poweroff
+- halt
+- kill
+- pkill
+- killall
+
+###### remote_transfer
+
+- ssh
+- scp
+- sftp
+- rsync
+- nc
+- ncat
+- telnet
+
+###### package_publication
+
+- twine
+
+##### contract_required_subcommands
+
+- **_doc**: Only the named subcommands are refused; harmless local subcommands remain routine.
+
+###### git
+
+- reset
+- clean
+- filter-branch
+- filter-repo
+- gc
+- prune
+- reflog
+
+###### gh
+
+- create
+- delete
+- transfer
+- archive
+- unarchive
+- rename
+
+###### glab
+
+- delete
+
+###### npm
+
+- publish
+- unpublish
+- deprecate
+- owner
+- access
+- token
+
+###### pnpm
+
+- publish
+- unpublish
+- owner
+- access
+- token
+
+###### yarn
+
+- publish
+- owner
+- tag
+
+###### systemctl
+
+- enable
+- disable
+- start
+- stop
+- restart
+- reload
+- mask
+- unmask
+
+###### docker
+
+- push
+- rm
+- rmi
+- system
+- prune
+
+###### kubectl
+
+- apply
+- delete
+- patch
+- replace
+- scale
+- rollout
+
+###### az
+
+- deployment
+- webapp
+- functionapp
+- containerapp
+
+###### gcloud
+
+- deploy
+- delete
+- update
+- replace
+- run
+
+###### vercel
+
+- deploy
+- remove
+- alias
+- env
+
+###### terraform
+
+- apply
+- destroy
+- import
+- state
+
+###### cargo
+
+- publish
+- yank
+
+###### go
+
+- install
+
+##### git_refused_subcommands
+
+- push
+
+##### contract_required_patterns
+
+- **_doc**: Patterns catch mutating forms where a safe command head has a dangerous option.
+
+###### patterns
+
+- (?:^|\s)curl\b[^\n]*(?:\s-X\s*(?:POST|PUT|PATCH|DELETE)|\s--request\s|\s-d\b|\s--data|\s-T\b|\s--upload-file|\s-F\b|\s--form|\s-o\b|\s-O\b|\s--output\b|\s--remote-name\b)
+- (?:^|\s)wget\b[^\n]*(?:--post-data|--post-file|--method\s*=?\s*(?:POST|PUT|DELETE)|\s-O\b|\s--output-document)
+- (?:^|\s)gh\s+api\b[^\n]*(?:-X\s*(?:POST|PUT|PATCH|DELETE)|--method\s*(?:POST|PUT|PATCH|DELETE)|\s-f\s|--field)
+- (?:^|\s)git\s[^\n]*(?:--force\b|--force-with-lease\b)
+- (?:^|\s)git\s+branch\b[^\n]*\s-D\b
+- (?:^|\s)(?:npm|pnpm|yarn)\s+(?:install|add)\b[^\n]*(?:\s-g\b|--global)
+- (?:^|\s)mv\s+[^\n]*\s/(?:etc|usr|bin|sbin|var|boot|dev|proc|sys)\b
+- (?:^|\s)(?:tee|dd)\s+[^\n]*/(?:etc|usr|bin|sbin|boot)\b
+
+##### unsafe_forms_still_refused
+
+- **_doc**: These forms hide the effective command and always require a contract.
+
+###### forms
+
+- command_substitution
+- eval
+- xargs
+- shell_dash_c
+- nested_model_runtime
+- **still_requires_contract**: Governance and host-policy files, shared entrypoints, session contracts and registry changes remain contract-required regardless of command.
+
 ### escalation_path
 
 
@@ -379,6 +617,7 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 #### handoff_documents
 
 - **policy**: Local-only session or PC transfer artifacts. Never stage or commit them because stale handoff state can misdirect another machine or session.
+- **cross_machine**: Cross-machine continuation uses a remote GitHub issue plus reachable branch or commit SHAs as the only handoff boundary. Record durable scope, invariants, current state, validation, and blockers there; never transfer local session IDs, registry pointers, session maps, runtime contracts, progress/handoff files, harness units, credentials, or host-local receipts through Git.
 - **location**: Use .agents/work/, .agents/progress/, .agents/reviews/, tmp/, or a dedicated ignored .handoff/ or .handover/ directory. Topic-prefixed local notes such as project-handoff belong only in one of these ignored locations.
 - **naming**: A global local-only artifact basename starts with handoff or handover. Topic-prefixed formal documents remain trackable outside ignored local-artifact directories.
 - **boundary**: Durable handoff or handover guides and contracts under official docs/, spec/, design/, .agents/context/, or .agents/decisions/ directories remain trackable even when their basename starts with handoff or handover. Other durable project knowledge belongs in tracked context, requirements, decisions, or formal docs; do not disguise permanent documentation as a local handoff artifact.
@@ -399,7 +638,7 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 
 ### git_workflow
 
-- **maintainer_rule**: Luke is a maintainer of all Nextain repos. NEVER create PRs for Nextain repos — commit and push directly to main (or the relevant branch). PRs are for external contributors only.
+- **maintainer_rule**: Authorized maintainers follow each repository contribution policy; direct pushes are limited to explicitly maintained repositories, while external contributions use pull requests.
 - **pr_prohibition**: DO NOT run `gh pr create` for nextain/* repos. The pr-guard hook will block this automatically.
 - **owned_repo_posting_authority**: When the user explicitly requests an issue, comment, release note, or other repository post in a Nextain or user-owned/managed repository, that request is posting authority and does not require a second approval. Unsolicited posts and third-party/community posts remain external actions requiring reviewed-content approval.
 
@@ -418,13 +657,13 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 - **community_context_first**: Before engaging in any external community (repo, Discord, Slack, forum, etc.), gather context first: (1) communication tone — formal/casual, terse/verbose, (2) explicit rules — CoC, PR/issue templates, labeling conventions, (3) community tendencies — what they value, what they reject, how they respond to outsiders, who the influential members are, what past interactions look like
 - **rule**: Never post unsolicited content or issues, PRs, or comments to third-party/community repositories without explicit user approval of the reviewed content. An explicitly requested post to a Nextain or user-owned/managed repository is already authorized.
 - **tone_matching**: Technical issues and PRs are read by people. Write in a tone that fits the community's atmosphere — not just technically correct, but culturally appropriate. A dry RFC-style community expects concise technical prose; a friendly community expects warmth. Match the room.
-- **ai_disclosure**: When posting AI-assisted content to external repos, always include a disclosure footer: state it was written with AI assistance AND provide a contact point for the developer in case of issues (e.g. '🤖 Written with AI assistance. If anything looks off, please ping @luke-n-alpha or open a discussion.'). Transparency and accountability both required. [HOOK-ENFORCED 2026-05-16: .claude/hooks/pr-guard.js — 외부 repo content op(gh issue/pr create·comment, pr review, release create) 시 disclosure footer(🤖/AI assistance) 미포함이면 차단(OSS-access 마커 소비 전). 내부 nextain/* 면제. merge/reopen/edit 등 비-content op 면제.]
+- **ai_disclosure**: When posting AI-assisted content to external repos, always include a disclosure footer: state it was written with AI assistance AND provide a contact point for the repository's public maintainer or issue tracker (e.g. '🤖 Written with AI assistance. If anything looks off, please open an issue or discussion.'). Transparency and accountability both required. [HOOK-ENFORCED 2026-05-16: .claude/hooks/pr-guard.js — 외부 repo content op(gh issue/pr create·comment, pr review, release create) 시 disclosure footer(🤖/AI assistance) 미포함이면 차단(OSS-access 마커 소비 전). 내부 nextain/* 면제. merge/reopen/edit 등 비-content op 면제.]
 
 ### contribution_fork_policy
 
 - **account**: Use nextain org (e.g. nextain/vllm) — this is an official Nextain-backed contribution, not a personal side project
 - **naming**: Same name as upstream repo — no prefix
-- **readme_required**: Every contribution fork MUST have a README clearly stating: (1) this is a contribution fork, not a hard fork, (2) upstream repo link, (3) what feature/fix is being contributed, (4) current status (in progress / PR submitted / merged), (5) contact: @luke-n-alpha
+- **readme_required**: Every contribution fork MUST have a README clearly stating: (1) this is a contribution fork, not a hard fork, (2) upstream repo link, (3) what feature/fix is being contributed, (4) current status (in progress / PR submitted / merged), (5) contact: the repository's public maintainer or issue tracker
 - **repo_description**: Set GitHub repo description to: 'Contribution fork — [feature] upstream PR in progress. See [upstream url]'
 
 #### branch_strategy
@@ -525,6 +764,22 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 - **submodule_init**: git submodule update --init --recursive
 - **development_cycle**: .agents/workflows/development-cycle.yaml
 - **issue_driven_development**: .agents/workflows/issue-driven-development.yaml
+
+## public_repository_release_gate
+
+- **policy**: FAIL CLOSED: Before creating a public repository, changing a repository to public, publishing or updating a public template, or pushing content copied from a private workspace into a public repository, complete and record a public-safety review. A private destination does not make source material safe when its template or upstream is public.
+
+### required_scope
+
+- Review the complete candidate tree, including hidden files, generated assets, examples, fixtures, logs, progress records, requirements, agent context, and documentation.
+- Review reachable Git history, tags, branches intended for push, and inherited template history; deleting a file in a later commit is not sufficient removal.
+- Scan for secrets and credential material, personal data, private repository names and paths, internal hostnames, IP addresses, account identifiers, customer or employee data, operational topology, and non-public commercial or product information.
+- Classify every inherited requirement, progress record, conversation artifact, and example as intentionally public or remove it from both the candidate tree and publishable history.
+- Confirm license, third-party asset rights, submodule URLs, workflow permissions, GitHub Actions runners, issue templates, and release artifacts are suitable for untrusted public forks and pull requests.
+- Inspect the actual remote visibility immediately before the public action; never rely only on a local index or remembered state.
+- **evidence**: Record the reviewed commit SHA, remote visibility, scanners or deterministic checks run, findings and dispositions, history review result, and human approval in an issue or review artifact that contains no secret values.
+- **approval**: The repository owner must explicitly approve the reviewed immutable candidate before the first public push, visibility change, or public-template publication. Any candidate change after approval invalidates the approval and requires re-review.
+- **incident_response**: If potentially sensitive material is found in a public repository or public template, stop propagation, do not repeat the value in logs or reports, identify affected refs and forks, revoke or rotate credentials first, then perform repository-history remediation under explicit owner authority. A cleanup commit alone never closes the incident.
 
 ## context_governance
 

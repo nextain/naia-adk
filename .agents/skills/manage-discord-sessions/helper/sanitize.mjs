@@ -78,7 +78,7 @@ export function validateBackendCapabilities(value = {}) {
 }
 
 const ENUMS = {
-	backend: new Set(["codex", "claude", "opencode", "fake"]),
+	backend: new Set(["codex", "claude", "opencode", "grok", "fake"]),
 	jobType: new Set(["conversation", "issue_work", "review", "maintenance", "unknown"]),
 	phase: new Set(["setup", "planning", "reading", "editing", "testing", "reviewing", "delivering", "recovering"]),
 	toolCategory: new Set(["command_execution", "file_change", "read", "search", "file_read", "file_edit", "command", "test", "build", "network", "other"]),
@@ -139,7 +139,9 @@ const PAYLOAD_BUILDERS = {
 	delivery_unknown: (payload) => `Delivery result requires review: ${enumValue(payload.reasonCode, "deliveryUnknownReason")}`,
 	delivery_failed: (payload) => `Delivery failed: ${enumValue(payload.reasonCode, "reasonCode")}`,
 	recovered: (payload) => `Recovered job: ${enumValue(payload.recoveryAction, "recoveryAction")}`,
-	profile_replaced: () => "Stale execution profile replaced before launch",
+	profile_replaced: (payload) => payload.reasonCode === undefined
+		? "Stale execution profile replaced before launch"
+		: `Execution profile replaced: ${enumValue(payload.reasonCode, "reasonCode")}`,
 	recovery_review_required: () => "Recovered job requires a fresh request",
 	watchdog_intervened: (payload) => `Watchdog intervention: ${enumValue(payload.watchdogReason, "watchdogReason")}`,
 	operator_response_sent: () => "Operator channel response sent",
@@ -174,7 +176,7 @@ const PAYLOAD_KEYS = new Map([
 	["delivery_unknown", new Set(["reasonCode"])],
 	["delivery_failed", new Set(["reasonCode"])],
 	["recovered", new Set(["recoveryAction"])],
-	["profile_replaced", new Set()],
+	["profile_replaced", new Set(["reasonCode"])],
 	["recovery_review_required", new Set()],
 	["watchdog_intervened", new Set(["watchdogReason"])],
 	["operator_response_sent", new Set()],

@@ -233,7 +233,7 @@ existing_hooks:
     active_definition: "mtime within 24h AND current_phase != 'close' (used only by explicit /harness status, not injected on UserPromptSubmit)"
     opt_out:
       env: "CLAUDE_HARNESS in {off, 0, false, no}"
-      file: "<cwd>/.claude/no-harness (presence = opt-out, any content)"
+      file: "<resolved project root or any ancestor>/.codex/no-harness, .claude/no-harness, or .pi/no-harness (presence = opt-out, any content; inherited by descendants)"
     explicit_control: ".claude/commands/harness.md → /harness <status|off|on|bind|unbind>"
     notes:
       - "2026-04-26: P2-singleton auto-binding REMOVED. In multi-session workflows, the previous behavior silently bound new sessions to whatever single active progress file existed, causing cross-session context drift."
@@ -262,9 +262,9 @@ existing_hooks:
     file: ".claude/hooks/git-push-guard.js"
     type: PreToolUse
     H1: "PENDING"
-    H2: "PASS — root cause: AI pushed broken code without confirmation"
+    H2: "PASS — blocks force pushes and remote-ref deletion; ordinary non-force, non-deleting pushes are allowed by this guard."
     H3: "PASS — PreToolUse, fires before git push"
-    H4: "PASS — paired with: ask user with remote/branch info"
+    H4: "PASS — destructive remote-ref operations are blocked before execution; session-contract policy still governs remote effects."
     verified_date: "2026-04-05"
 
 # ─── Design / Proposal Review Questions (G-AB01) ──────────────
@@ -297,31 +297,17 @@ design_review_questions:
       q: "How does the team audit what the agent did and why?"
   red_flag: "If answers frequently reduce to 'we can add that later', the runtime is likely not truly designed yet."
 
-# ─── Current enforcement state (2026-08-15) ───────────────────
-# Recorded here because the released state differs from what AGENTS.md describes.
+# ─── Current enforcement state (2026-09-06) ───────────────────
+# Verified in a marker-free candidate checkout; this describes local hook behavior.
 enforcement_state:
-  session_contract_gate: disabled
-  disabled_by: [".claude/no-harness", ".codex/no-harness", ".pi/no-harness"]
-  effect: "session-contract-gate.cjs returns early and enforces nothing"
-  unaffected_guards:
-    - "git-push-guard (force push)"
-    - "destructive-git-guard (reset --hard against remote refs, history rewrite)"
-    - "commit-guard, deploy-guard, email-send-guard, gcs-guard, rdd-experiment-guard"
-  why: |
-    Measured on a fresh clone with enforcement on: an unbound session is blocked from
-    every mutating shell command, including `npm test`, `git commit`, and `mkdir`.
-    Read-only shell and ordinary file edits pass. The file-mutation path was already
-    widened for this exact reason (see the comment above unboundOrdinaryMutationAllowed);
-    the shell path never received the same treatment, so pre-enumeration remains a
-    ceiling there.
-  doc_divergence: |
-    AGENTS.md / CLAUDE.md / GEMINI.md Session Boundaries still state that mutating shell
-    commands require a session contract. That text describes the intended design, not
-    current runtime behavior. The entrypoints are locked to an approved canonical digest,
-    so they were not edited without separate approval.
-  removal_conditions:
-    - "unbound `npm test` passes with enforcement on"
-    - "unbound ordinary commit passes with enforcement on"
-    - "force push, remote-ref reset --hard, and governance-file mutation still blocked"
-    - "cross-host regression tests pass"
-  tracking: "https://github.com/nextain/naia-adk/issues/34"
+  session_contract_gate: active
+  session_contract_gate_hosts: "This candidate connects the shared session-contract gate to Codex (.codex/hooks.json) and Claude (.claude/settings.json → .claude/hooks/session-contract-gate.js). Pi marker recognition remains shared policy context; this candidate does not claim a Pi session-contract adapter."
+  disabled_by: []
+  effect: "The gate evaluates every mutating tool call in the resolved project root."
+  routine_unbound_shell: "Policy-approved local inspection, tests, builds, and non-destructive Git work are allowed without a session contract."
+  bound_shell_commands: "When a session is bound, every non-read-only shell command must exactly match a digest-covered allowed_shell_commands entry; routine status does not exempt it."
+  remote_authorization: "An authorized non-force, non-deleting push needs no second conversational approval; an unbound session must still bind a local contract before remote effects."
+  contract_required: "Governance and host-policy files, shared entrypoints, session contracts, registry authority, deletion, destructive or remote operations, external effects, and production changes."
+  scope_limit: "This is repository-hook enforcement; it is not an operating-system sandbox or a guarantee about commands launched outside the hooks."
+  marker_free_verification: "From a fresh checkout without .codex/no-harness, run node scripts/run-native-harness-tests.cjs."
+  review: "Re-run the focused gate fixture and cross-host hook tests when the policy or hook changes."

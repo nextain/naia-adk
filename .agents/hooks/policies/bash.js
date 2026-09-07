@@ -193,7 +193,7 @@ function emailSend(command) {
 
 const PR_FAIL_REASON =
 	"[Guard] pr-guard 내부 오류 — 안전을 위해 GitHub 쓰기 차단.\n" +
-	"명령을 직접 실행하거나 Luke에게 확인 요청하세요.";
+	"명령을 직접 실행하거나 저장소 메인테이너에게 확인 요청하세요.";
 
 function findExternalUpstream(cwd) {
 	try {
@@ -228,7 +228,7 @@ function prGuard(command, data) {
 		return {
 			reason:
 				`[Guard] 외부 repo 쓰기 차단: --repo ${repo}\n` +
-				"nextain/* 외의 repo 대상 쓰기 작업은 Luke의 명시적 승인이 필요합니다.\n" +
+				"nextain/* 외의 repo 대상 쓰기 작업은 저장소 메인테이너의 명시적 승인이 필요합니다.\n" +
 				"승인 후 직접 실행하거나 이 세션에서 명시적으로 승인을 요청하세요.",
 		};
 	}
@@ -238,14 +238,14 @@ function prGuard(command, data) {
 			reason:
 				`[Guard] GitHub 쓰기 차단 — --repo 미지정 + 외부 upstream 감지\n` +
 				`CWD(${cwd})에 외부 remote가 있습니다: ${externalRemote}\n` +
-				"--repo nextain/<repo> 를 명시하거나 Luke의 승인 후 직접 실행하세요.",
+				"--repo nextain/<repo> 를 명시하거나 저장소 메인테이너의 승인 후 직접 실행하세요.",
 		};
 	}
 	return {
 		reason:
 			"[Guard] GitHub 쓰기 차단 (--repo 미지정)\n" +
 			"대상 repo를 확인할 수 없습니다. --repo nextain/<repo> 를 명시하거나 " +
-			"Luke의 승인 후 직접 실행하세요.",
+			"저장소 메인테이너의 승인 후 직접 실행하세요.",
 	};
 }
 

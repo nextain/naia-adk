@@ -16,7 +16,7 @@ import { buildAgentContextSnapshot } from "./agent-context.mjs";
 import { acquireDiscordTokenOwnerLock, defaultDiscordTokenLockDirectory, discordTokenFingerprint } from "./token-owner-lock.mjs";
 import { DISCORD_SERVICE_FAILURE_REASONS } from "./constants.mjs";
 
-function configuredBackendCommand(name) {
+export function configuredBackendCommand(name) {
 	const executable = process.env[`NAIA_${name.toUpperCase()}_EXECUTABLE`];
 	if (!executable) return null;
 	const encoded = process.env[`NAIA_${name.toUpperCase()}_PREFIX_ARGS`];
@@ -90,41 +90,106 @@ export function configuredAgentContext(root, config) {
 	return { cwd: snapshot.workspaceRoot, allowedPaths: [...new Set(allowedPaths)], snapshot };
 }
 
+function configuredAgentContextForId(root, config, id = "default") {
+	if (!config.agentProfiles) {
+		if (id !== "default") throw new Error("unknown agent profile");
+		return configuredAgentContext(root, config);
+	}
+	const profile = config.agentProfiles[id];
+	if (!profile) throw new Error("unknown agent profile");
+	return configuredAgentContext(root, { ...config, agentProfiles: undefined, workspace: profile.workspace });
+}
+
 export function configuredAgentContexts(root, config) {
 	if (!config.agentProfiles) return { default: configuredAgentContext(root, config) };
-	return Object.fromEntries(Object.entries(config.agentProfiles).map(([id, profile]) => [id, configuredAgentContext(root, { ...config, agentProfiles: undefined, workspace: profile.workspace })]));
+	return Object.fromEntries(Object.keys(config.agentProfiles).map((id) => [id, configuredAgentContextForId(root, config, id)]));
+}
+
+function runtimeDigest(value) {
+	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function globalConfigProjection(config) {
+	if (!config || typeof config !== "object" || Array.isArray(config)) return config;
+	const projected = { ...config };
+	delete projected.workspace;
+	if (projected.agentProfiles && typeof projected.agentProfiles === "object" && !Array.isArray(projected.agentProfiles)) {
+		projected.agentProfiles = Object.fromEntries(Object.entries(projected.agentProfiles).map(([id, profile]) => {
+			if (!profile || typeof profile !== "object" || Array.isArray(profile)) return [id, profile];
+			const profileProjection = { ...profile };
+			delete profileProjection.workspace;
+			return [id, profileProjection];
+		}));
+	}
+	return projected;
+}
+
+function globalRuntimeRevision({ config, token }) {
+	return runtimeDigest({ config: globalConfigProjection(config), tokenFingerprint: discordTokenFingerprint(token) });
+}
+
+function contextRuntimeRevision(agentContext) {
+	return runtimeDigest({
+		agentId: agentContext?.snapshot?.agentId ?? null,
+		workspaceRoot: agentContext?.cwd ?? null,
+		allowedPaths: agentContext?.allowedPaths ?? (agentContext?.cwd ? [agentContext.cwd] : []),
+		contextHash: agentContext?.snapshot?.contextHash ?? null,
+	});
 }
 
 function runtimeInputsRevision({ config, token, agentContexts }) {
-	return createHash("sha256").update(JSON.stringify({
-		config,
-		tokenFingerprint: discordTokenFingerprint(token),
-		agentContexts: Object.fromEntries(Object.entries(agentContexts).map(([id, context]) => [id, { workspaceRoot: context.cwd, allowedPaths: context.allowedPaths ?? [context.cwd], contextHash: context.snapshot?.contextHash ?? null }])),
-	})).digest("hex");
+	return runtimeDigest({
+		globalRevision: globalRuntimeRevision({ config, token }),
+		agentContexts: Object.fromEntries(Object.entries(agentContexts).sort(([left], [right]) => left.localeCompare(right)).map(([id, context]) => [id, contextRuntimeRevision(context)])),
+	});
+}
+
+function runtimeInputsChangedError() {
+	const error = new Error("Discord runtime inputs changed; restart is required");
+	error.code = "context_changed_restart_required";
+	return error;
 }
 
 export function createRuntimeInputVerifier({ root, paths, config, token, agentContexts, agentContext }) {
 	agentContexts ??= { default: agentContext };
+	const baselineGlobalRevision = globalRuntimeRevision({ config, token });
+	const baselineContextRevisions = new Map(Object.entries(agentContexts).map(([id, context]) => [id, contextRuntimeRevision(context)]));
 	const baselineRevision = runtimeInputsRevision({ config, token, agentContexts });
-	let invalidated = false;
-	return () => {
-		if (invalidated) {
-			const error = new Error("Discord runtime inputs changed; restart is required");
-			error.code = "context_changed_restart_required";
-			throw error;
+	let globalInvalidated = false;
+	const invalidatedContexts = new Set();
+	return ({ agentContextId = "default", agentContext: selectedContext = null } = {}) => {
+		const id = agentContextId || "default";
+		if (globalInvalidated || invalidatedContexts.has(id)) throw runtimeInputsChangedError();
+		const baselineContextRevision = baselineContextRevisions.get(id);
+		if (!baselineContextRevision) {
+			invalidatedContexts.add(id);
+			throw runtimeInputsChangedError();
 		}
+		let currentConfig;
+		let currentToken;
 		try {
-			const currentConfig = loadMessengerConfig(paths.configPath);
-			const currentAgentContexts = configuredAgentContexts(root, currentConfig);
-			const currentToken = new FileCredentialResolver(paths.credentialsDirectory).resolve(currentConfig.discord.credentialRef);
-			if (runtimeInputsRevision({ config: currentConfig, token: currentToken, agentContexts: currentAgentContexts }) !== baselineRevision) throw new Error("runtime inputs changed");
-			return baselineRevision;
+			currentConfig = loadMessengerConfig(paths.configPath);
+			currentToken = new FileCredentialResolver(paths.credentialsDirectory).resolve(currentConfig.discord.credentialRef);
 		} catch {
-			invalidated = true;
-			const error = new Error("Discord runtime inputs changed; restart is required");
-			error.code = "context_changed_restart_required";
-			throw error;
+			globalInvalidated = true;
+			throw runtimeInputsChangedError();
 		}
+		if (globalRuntimeRevision({ config: currentConfig, token: currentToken }) !== baselineGlobalRevision) {
+			globalInvalidated = true;
+			throw runtimeInputsChangedError();
+		}
+		let currentAgentContext;
+		try {
+			currentAgentContext = configuredAgentContextForId(root, currentConfig, id);
+		} catch {
+			invalidatedContexts.add(id);
+			throw runtimeInputsChangedError();
+		}
+		if (contextRuntimeRevision(currentAgentContext) !== baselineContextRevision || (selectedContext && contextRuntimeRevision(selectedContext) !== baselineContextRevision)) {
+			invalidatedContexts.add(id);
+			throw runtimeInputsChangedError();
+		}
+		return baselineRevision;
 	};
 }
 
@@ -195,6 +260,7 @@ export async function runDiscordService({ adkRoot, instance = "default", managed
 			...(configuredBackendCommand("codex") ? { codex: configuredBackendCommand("codex") } : {}),
 			...(configuredBackendCommand("claude") ? { claude: configuredBackendCommand("claude") } : {}),
 			...(configuredBackendCommand("opencode") ? { opencode: configuredBackendCommand("opencode") } : {}),
+			...(configuredBackendCommand("grok") ? { grok: configuredBackendCommand("grok") } : {}),
 		};
 		const send = fetchImpl ? (input) => postDiscordMessage({ ...input, fetchImpl }) : postDiscordMessage;
 		const loadHistory = (input) => fetchDiscordConversation({ ...input, fetchImpl: fetchImpl ?? fetch });

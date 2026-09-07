@@ -9,6 +9,7 @@ const { spawnSync } = require("child_process");
 const root = path.resolve(__dirname, "..", "..");
 const registry = JSON.parse(fs.readFileSync(path.join(root, ".codex", "hooks.json"), "utf8"));
 const requestContract = require(path.join(root, ".agents", "hooks", "core", "request-contract.js"));
+const harnessSwitch = require(path.join(root, ".agents", "hooks", "core", "harness-switch.js"));
 const lifecycleEvents = ["SessionStart", "UserPromptSubmit"];
 const windowsPrefix = "powershell -NoProfile -NonInteractive -EncodedCommand ";
 const quietPrefix = "$ProgressPreference='SilentlyContinue'; ";
@@ -92,6 +93,12 @@ const deniedInput = JSON.stringify({
   tool_input: { role: "review", model: "gpt-5.6-sol", reasoning_effort: "medium", message: "test" },
 });
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "codex-hook-scratch-"));
+const activeDeniedInput = JSON.stringify({
+  cwd: scratch,
+  tool_name: "someother__spawn_agent",
+  session_id: "deterministic-marker-free-session",
+  tool_input: { role: "review", model: "gpt-5.6-sol", reasoning_effort: "medium", message: "test" },
+});
 const stopInput = JSON.stringify({
   hook_event_name: "Stop",
   session_id: "deterministic-stop-resilience",
@@ -99,13 +106,23 @@ const stopInput = JSON.stringify({
 });
 try {
  if (process.platform !== "win32") {
-  // 이 워크스페이스가 하네스를 껐다면 가드는 아무것도 막지 않는 것이 맞다.
-  // 배선은 여전히 증명된다 — 훅이 실행되어 조용히 통과시킨 것이므로.
-  const harnessOff = [".claude", ".codex", ".pi"].some((dir) => fs.existsSync(path.join(root, dir, "no-harness")));
+  // The root probe follows the same ancestor-aware switch as the registered guard.
+  // A marker in a parent checkout therefore makes this probe quiet by design.
+  const harnessOff = harnessSwitch.harnessDisabled({ cwd: root, roots: [root], env: process.env });
   const denied = spawnSync("sh", ["-c", spawnHook.command], { cwd: root, input: deniedInput, encoding: "utf8" });
   assert.equal(denied.status, 0, denied.stderr);
   if (harnessOff) assert.equal(denied.stdout, "", "harness off means the guard refuses nothing");
   else assert.match(denied.stdout, /SUBAGENT GUARD/);
+  const activeEnvironment = { ...process.env, ADK_PROJECT_ROOT: root };
+  for (const name of harnessSwitch.HARNESS_ENV_VARS) delete activeEnvironment[name];
+  const activeDenied = spawnSync("sh", ["-c", spawnHook.command], {
+    cwd: scratch,
+    env: activeEnvironment,
+    input: activeDeniedInput,
+    encoding: "utf8",
+  });
+  assert.equal(activeDenied.status, 0, activeDenied.stderr);
+  assert.match(activeDenied.stdout, /SUBAGENT GUARD/, "registered spawn guard must enforce in a marker-free workdir");
   const unrelated = spawnSync("sh", ["-c", spawnHook.command], { cwd: root, input: JSON.stringify({ tool_name: "unrelated_tool", session_id: "deterministic-unregistered-session", tool_input: {} }), encoding: "utf8" });
   assert.equal(unrelated.status, 0, unrelated.stderr);
   assert.equal(unrelated.stdout, "");
@@ -120,11 +137,23 @@ try {
   });
   const inheritedGate = spawnSync("sh", ["-c", sessionContractHook.command], { cwd: scratch, env: { ...process.env, ADK_PROJECT_ROOT: root }, input: gateInput, encoding: "utf8" });
   assert.equal(inheritedGate.status, 0, inheritedGate.stderr);
-  const recoveryOptOut = [".claude", ".codex", ".pi"].some((dir) => fs.existsSync(path.join(root, dir, "no-harness")));
+  const recoveryOptOut = harnessSwitch.harnessDisabled({ cwd: root, roots: [root], env: process.env });
+  assert.equal(inheritedGate.stdout, "", "ordinary project edits remain allowed for an unbound session");
+
+  const governedGateInput = JSON.stringify({
+    cwd: scratch,
+    tool_name: "apply_patch",
+    session_id: "deterministic-unregistered-session",
+    tool_input: { command: "*** Begin Patch\n*** Update File: .agents/context/agents-rules.json\n@@\n-old\n+new\n*** End Patch\n" },
+  });
+  const governedGate = spawnSync("sh", ["-c", sessionContractHook.command], { cwd: scratch, env: { ...process.env, ADK_PROJECT_ROOT: root }, input: governedGateInput, encoding: "utf8" });
+  assert.equal(governedGate.status, 0, governedGate.stderr);
   if (recoveryOptOut) {
-    assert.equal(inheritedGate.stdout, "", "the inherited root must honor repository recovery opt-out from scratch cwd");
+    assert.equal(governedGate.stdout, "", "recovery opt-out bypasses contract enforcement");
   } else {
-    assert.match(inheritedGate.stdout, /HARNESS/, "the inherited root must keep the session contract gate active from scratch cwd");
+    const governedDecision = JSON.parse(governedGate.stdout);
+    assert.equal(governedDecision.decision, "block", "governed unbound edits remain blocked");
+    assert.match(governedGate.stdout, /HARNESS/, "governed edits must retain the session contract gate");
   }
   const noInheritedEnvironment = { ...process.env };
   delete noInheritedEnvironment.ADK_PROJECT_ROOT;
