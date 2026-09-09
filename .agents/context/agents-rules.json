@@ -227,7 +227,8 @@
         "external message, email, issue, comment, publication, or other communication not explicitly requested",
         "payment, purchase, paid resource provisioning, or materially costly cloud operation",
         "production-destructive mutation, production data write, or irreversible deployment action",
-        "material scope expansion or a missing user choice that changes the requested outcome"
+        "material scope expansion or a missing user choice that changes the requested outcome",
+        "substituting a different repository, remote, branch lineage, or visibility for the one the user named or the workspace index catalogues (a repository found by search, a local export remnant, or a `-public`/`-pub` sibling is never a stand-in for the named repository; stop and ask, and state the substitution in the first line of the reply if it was already made)"
       ],
       "precedence": "This command policy does not grant authority for governance or host-policy files, shared entrypoints, session contracts, registry/progress authority changes, credentials, external effects, or production operations.",
       "unbound_routine_commands": {
@@ -528,7 +529,14 @@
     ],
     "evidence": "Record the reviewed commit SHA, remote visibility, scanners or deterministic checks run, findings and dispositions, history review result, and human approval in an issue or review artifact that contains no secret values.",
     "approval": "The repository owner must explicitly approve the reviewed immutable candidate before the first public push, visibility change, or public-template publication. Any candidate change after approval invalidates the approval and requires re-review.",
-    "incident_response": "If potentially sensitive material is found in a public repository or public template, stop propagation, do not repeat the value in logs or reports, identify affected refs and forks, revoke or rotate credentials first, then perform repository-history remediation under explicit owner authority. A cleanup commit alone never closes the incident."
+    "incident_response": "If potentially sensitive material is found in a public repository or public template, stop propagation, do not repeat the value in logs or reports, identify affected refs and forks, revoke or rotate credentials first, then perform repository-history remediation under explicit owner authority. A cleanup commit alone never closes the incident.",
+    "deterministic_gate": {
+      "hook": ".agents/hooks/core/remote-identity.js (registered as .claude/hooks/remote-identity-gate.js and .codex/hooks/remote-identity-gate.cjs)",
+      "rule_1_identity": "A checkout at a path catalogued in project-index.yaml or agents-rules.json must push to, add, or set only the catalogued owner/repo. Mismatch is blocked outright.",
+      "rule_2_visibility": "A checkout catalogued private may not push to a remote that `gh repo view` reports as PUBLIC.",
+      "rule_3_public_action": "`gh repo create --public`, `gh repo edit --visibility public`, and cloning a different repository into a catalogued path need a single-use approval record at .agents/work/public-repository-approval.json.",
+      "not_disabled_by_no_harness": true
+    }
   },
   "context_governance": {
     "_source": "harness-books Book1 Appendix A.4 (L47-60), absorbed 2026-06-18",
