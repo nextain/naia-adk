@@ -74,3 +74,43 @@ deployment_overlay_contract:
       - declared application read/write canary within each instance authority
       - browser access checks where the target application exposes a web control plane
     claim_rule: repository tests prove the harness contract; production readiness additionally requires current host and live-service receipts
+
+# Portable requirements for downstream adapters; not a live migration receipt.
+session_lifecycle:
+  status: adapter_adoption_requirements
+  identity:
+    stable_key: authenticated_binding_and_native_session_or_job_id
+    display_name: human_readable_label_only_never_an_authority_or_routing_key
+    existing_binding: cross_references_do_not_retarget_the_session
+    ambiguous_binding: refuse_and_report_without_guessing
+  independent_evidence:
+    execution: process_or_job_state
+    delivery: confirmed_send_receipt
+    completion: acceptance_evidence_for_the_requested_goal
+    external_work_item: query_the_authoritative_tracker_separately_when_configured
+    rule: terminal_execution_alone_proves_neither_delivery_nor_task_completion
+  conversation:
+    eligible_discord_message_types: [0, 19]
+    unknown_or_system_event: exclude_from_reply_obligation_and_conversation_context
+    author_check: apply_after_message_type_filter
+    synthetic_dispatch_prompt: never_use_as_a_session_title_or_new_work_item
+  state_writers:
+    database: use_the_existing_transactional_store
+    external_json_tracker: all_writers_share_one_lock_across_read_modify_write_and_atomic_replace
+    limitation: local_file_lock_does_not_coordinate_multiple_hosts
+  metadata_repair:
+    audit: read_only_and_separate_from_mutation
+    before_each_write: compare_current_metadata_and_last_message_with_the_reviewed_preimage
+    rate_limit: honor_retry_after_and_recheck_preconditions_after_waiting
+    archived_thread_rename: unarchive_then_rename_then_restore_archive
+    partial_failure: restore_only_own_applied_changes_using_step_receipts_and_drift_checks
+    message_deletion: forbidden_for_metadata_cleanup
+  project_boundary:
+    issue_thread_policy_owner: naia-pj-adk_project_adapter
+    project_issue_key: owner/repository_and_issue_number_when_issue_routing_is_enabled
+    personal_sessions: do_not_require_a_github_issue_unless_the_local_policy_does
+    private_overlay: identifiers_credentials_and_live_state_stay_out_of_shared_context
+  verification:
+    cases: [cross_reference_preserves_binding, same_number_different_repositories, system_event_is_not_a_reply, execution_done_delivery_pending, human_wait_survives_worker_completion, concurrent_writers, metadata_drift_after_rate_limit_wait, partial_failure_rollback]
+    scope: these_are_adoption_checks_not_claims_that_every_backend_already_enforces_them
+    live_readiness: requires_adapter_tests_and_current_instance_receipts
