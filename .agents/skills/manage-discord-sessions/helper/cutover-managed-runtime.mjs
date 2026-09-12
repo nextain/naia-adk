@@ -4,6 +4,7 @@ import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:pa
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { messengerInstancePaths } from "./instance-paths.mjs";
+import { materializeMessagingRuntime, messagingRuntimeTreeId, validateMessagingEngineLock } from "./messaging-engine.mjs";
 import { assertOwnerOnly, protectOwnerOnly } from "./platform-security.mjs";
 import { discordUnitIdentity, renderDiscordSupervisorUnits, renderDiscordUserUnit } from "./systemd.mjs";
 
@@ -308,11 +309,16 @@ function verifyGitRuntimeBytes({ adkRoot, revision, runtimePath }) {
 	}
 }
 
-export function createManagedRuntimeArtifact({ adkRoot, instance = "default", sourceRevision, sourceRuntimeTreeId, tokenFingerprint, nodePath = process.execPath, backendExecutables = {}, credentialProfiles = [], homeDirectory = homedir(), artifactDirectory = null }) {
+export function createManagedRuntimeArtifact({ adkRoot, instance = "default", sourceRevision, sourceRuntimeTreeId, tokenFingerprint, nodePath = process.execPath, backendExecutables = {}, credentialProfiles = [], homeDirectory = homedir(), artifactDirectory = null, messagingEngine = null }) {
 	const paths = messengerInstancePaths(realpathSync(resolve(adkRoot)), instance);
 	gitObjectId(sourceRevision, "managed runtime source revision");
 	gitObjectId(sourceRuntimeTreeId, "managed runtime source tree ID");
-	if (gitRuntimeTreeId(paths.root, sourceRevision) !== sourceRuntimeTreeId) throw new Error("managed runtime source tree ID does not match its revision");
+	if (messagingEngine) {
+		const lock = validateMessagingEngineLock(messagingEngine.lock);
+		if (lock.revision !== sourceRevision) throw new Error("managed runtime source revision does not match the messaging engine lock");
+		if (messagingRuntimeTreeId(lock) !== sourceRuntimeTreeId) throw new Error("managed runtime source tree ID does not match the messaging engine lock");
+		if (typeof messagingEngine.sourceRoot !== "string" || !isAbsolute(messagingEngine.sourceRoot)) throw new Error("messaging engine source root is invalid");
+	} else if (gitRuntimeTreeId(paths.root, sourceRevision) !== sourceRuntimeTreeId) throw new Error("managed runtime source tree ID does not match its revision");
 	let ownsArtifactDirectory = false;
 	let root;
 	if (artifactDirectory === null) {
@@ -330,7 +336,16 @@ export function createManagedRuntimeArtifact({ adkRoot, instance = "default", so
 	try {
 		const runtimePath = join(root, "runtime/manage-discord-sessions");
 		mkdirSync(join(root, "runtime"), { mode: 0o700 });
-		materializeGitRuntime({ adkRoot: paths.root, revision: sourceRevision, expectedTreeId: sourceRuntimeTreeId, runtimePath });
+		if (messagingEngine) {
+			materializeMessagingRuntime({
+				sourceRoot: messagingEngine.sourceRoot,
+				snapshotDestination: messagingEngine.snapshotDestination ?? join(root, "naia-messaging"),
+				lock: messagingEngine.lock,
+				runtimePath,
+			});
+		} else {
+			materializeGitRuntime({ adkRoot: paths.root, revision: sourceRevision, expectedTreeId: sourceRuntimeTreeId, runtimePath });
+		}
 		const runtimeSha256 = hashTree(runtimePath);
 		const service = renderDiscordUserUnit({
 			adkRoot: paths.root,

@@ -511,4 +511,13 @@ pnpm test:discord-sessions
 
 The deterministic suite covers persisted ordering and dedupe, Gateway commit ordering and resume state, DM/channel/thread authorization, participant-bound action intersection, isolated history modes, deterministic context drift, provider-native instruction disabling, token-owner races and fail-closed abnormal owners, cache receipts, legacy-profile quarantine, no-prompt approval rejection, no-progress intervention, operator-channel response telemetry, explicit workspace binding, delivery nonce and unknown outcomes, reboot recovery, systemd unit isolation, activity health, safe-event rejection, trusted completion evidence, rollback failure paths, and CLI visibility.
 
+Optional `naia-messaging` engine pin: copy `engine-lock.example.json` to
+`engine-lock.json` or `naia-settings/messenger-sessions/engine-lock.json` and
+set `NAIA_MESSAGING_ROOT` to a verified checkout of `nextain/naia-messaging`.
+Without that lock the managed runtime still materializes this skill's Git tree.
+A digest mismatch refuses the new snapshot and leaves the running receiver
+unchanged. Do not treat this skill checkout as the live engine once a lock is
+active.
+
 Design authority: `docs/design/discord-session-observability.md`. Requirements: `DSO-001` through `DSO-012`.
+Refs nextain/naia-adk#53, nextain/naia-messaging#3, nextain/naia-comm#13.
