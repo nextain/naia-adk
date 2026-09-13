@@ -1,10 +1,14 @@
 /**
- * 모든 줄 구분자. 자바스크립트의 `\n` 만 보면 부족하다.
+ * 줄을 바꿀 수 있는 문자 전체. 탭만 남기고 제어문자를 모두 본다.
  *
- * `\r` 하나, U+2028, U+2029, U+0085 도 모델이 읽는 글에서는 줄을 바꾼다. 하나라도
- * 빠뜨리면 그 문자 뒤에 호스트 절을 흉내 낸 줄을 둘 수 있다 — 6회차 적대리뷰가 짚었다.
+ * 처음에는 `\n` 만 봤고, 다음에는 `\r`·U+2028·U+2029·U+0085 를 더했다. 7회차 적대리뷰가
+ * 또 빠진 것을 찾았다 — U+000B(VT), U+000C(FF), U+001C~U+001E 도 줄 나누기 함수들이
+ * 줄 경계로 본다. 문자를 하나씩 세는 방식이 매번 하나를 빠뜨린다는 뜻이다.
+ *
+ * 그래서 목록이 아니라 **부류**로 막는다. 탭을 뺀 C0·C1 제어문자와 두 줄 구분자
+ * 전부다. 페르소나에 쓸 일이 없는 문자들이므로 넓게 막아도 잃을 것이 없다.
  */
-const LINE_SEPARATORS = /[\r\n\u2028\u2029\u0085]/;
+const LINE_SEPARATORS = /[\u0000-\u0008\u000A-\u001F\u007F-\u009F\u2028\u2029]/;
 
 // 나이아 설정에서 페르소나를 읽는다.
 //
@@ -139,7 +143,7 @@ const PERSONA_CLOSE = "--- end shared persona ---";
 
 /** 자유 글을 인용 블록으로 감싼다. 안쪽 줄은 열 0 에서 시작할 수 없다. */
 function quotedBlock(text) {
-	const body = text.split(LINE_SEPARATORS).map((line) => `> ${line}`).join("\n");
+	const body = text.split(new RegExp(LINE_SEPARATORS.source, "g")).map((line) => `> ${line}`).join("\n");
 	return [PERSONA_OPEN, body, PERSONA_CLOSE].join("\n");
 }
 
