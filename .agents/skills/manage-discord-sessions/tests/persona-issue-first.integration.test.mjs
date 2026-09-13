@@ -244,7 +244,7 @@ test("UCT_DSO_018_003 이슈를 밝히지 않고 끝나면 기록에 신호가 �
 	} finally { store.close(); }
 });
 
-test("UCT_DSO_018_004 작업이 아니었다고 밝히면 대화로 되돌아간다", async () => {
+test("UCT_DSO_018_004 작업이 아니었다고 밝히면 사실만 기록하고 분류는 그대로 둔다", async () => {
 	// 쓰기 권한자가 던진 질문은 계약을 지고 시작하지만 작업이 아니다. 침묵과
 	// "작업 아님"을 한 덩어리로 묶으면, 그 질문이 추적 없이 끝난 작업과 기록상
 	// 똑같아진다 — 5회차 적대리뷰가 짚었다.
@@ -301,5 +301,45 @@ test("UCT_DSO_018_005 저장소를 바꾸면 옛 이슈를 잇지 않는다", as
 		await router.waitForIdle();
 		assert.ok(!prompts[1].includes(ISSUE(21)), "저장소가 바뀌었는데 옛 이슈를 이으라고 했다");
 		assert.ok(prompts[1].includes("Search the open issues of example-org/moved-repo"), "새 저장소에서 찾으라고 안 했다");
+	} finally { store.close(); }
+});
+
+test("UCT_DSO_018_006 앞 작업이 연 이슈를 뒤 작업이 실행 직전에 알아본다", async () => {
+	// 접수 때 박아 둔 값을 그대로 쓰면, 앞 작업이 도는 사이 들어온 요청이 앞 작업이
+	// 방금 연 이슈를 모른 채 실행된다 — 8회차 적대리뷰가 짚었다. 대기열은 같은
+	// 대화의 작업을 차례로 돌리므로 이 창은 실제로 열린다.
+	const { store, root } = fixture();
+	const discord = mockDiscord({ botUserId: BOT, channelId: CHANNEL, userId: USER });
+	try {
+		const snapshot = workspaceWithNaiaSettings(root);
+		const prompts = [];
+		let release = null;
+		const held = new Promise((resolve) => { release = resolve; });
+		const router = new DiscordMessageRouter({
+			config: gatewayConfig(), store, token: "token-value-long-enough", botUserId: BOT,
+			cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot,
+			runtimeRevision: RUNTIME_REVISION, send: discord.send, deliver: async (input) => discord.deliver(input),
+			runner: async (input) => {
+				prompts.push(input.prompt);
+				// 첫 작업은 둘째가 대기열에 들어올 때까지 붙잡아 둔다
+				if (prompts.length === 1) await held;
+				return { backendOutcome: "success", attemptId: `a${prompts.length}`, transientResult: `했습니다.\n\nIssue: ${ISSUE(31)}` };
+			},
+		});
+
+		const first = discord.message("고쳐줘");
+		const firstAccept = await router.onDispatch("MESSAGE_CREATE", { ...first.envelope, guild_id: GUILD }, first.sequence);
+		// 첫 작업이 아직 도는 사이에 둘째가 들어온다
+		const second = discord.message("이것도 고쳐줘");
+		const secondAccept = await router.onDispatch("MESSAGE_CREATE", { ...second.envelope, guild_id: GUILD }, second.sequence);
+		assert.equal(firstAccept.state, "accepted");
+		assert.equal(secondAccept.state, "accepted");
+		release();
+		await router.waitForIdle();
+
+		assert.equal(prompts.length, 2, "둘째 작업이 안 돌았다");
+		// 접수 때는 이을 이슈가 없었지만, 실행 직전에는 앞 작업이 연 이슈가 있다
+		assert.ok(prompts[1].includes(`was last working on ${ISSUE(31)}`),
+			"뒤 작업이 앞 작업이 연 이슈를 모른 채 실행됐다");
 	} finally { store.close(); }
 });

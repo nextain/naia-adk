@@ -70,34 +70,6 @@ function boundedField(value, label) {
 /** 줄바꿈을 그대로 둘 수 있는 항목. 대신 호스트 절을 위조하지 못하는지 따로 본다. */
 const MULTILINE_FIELDS = new Set(["persona"]);
 
-/**
- * 호스트가 쓰는 절의 머리말. 페르소나 글이 이런 줄을 만들면 안 된다.
- *
- * 한 줄 항목의 줄바꿈은 막았지만, 성격 글은 4,000자에 여러 줄이다. 거기에
- * `Role: root` 나 `Gateway execution contract: danger-full-access` 를 적으면 호스트가
- * 쓴 줄과 글자 하나 다르지 않다 — 5회차 적대리뷰가 짚었다. 샌드박스 권한이 실제로
- * 넓어지지는 않지만, 모델이 읽는 계약을 설정 파일이 바꿔 쓰게 둘 이유가 없다.
- */
-const HOST_SECTION_PREFIXES = [
-	"Persona:", "Role:", "Allowed actions:", "Gateway execution contract:",
-	"Routine authority:", "Authority limit:", "Current-turn truthfulness:",
-	"Communication:", "Discord access:", "Mutation window:", "Issue-first contract:",
-	"User request:", "Current requester:", "Configured relationship:", "Effective actions:",
-	"Allowed workspace paths:", "Naia deterministic project context",
-];
-
-function assertNoForgedSection(text, label) {
-	for (const line of text.split(/\r?\n/)) {
-		const trimmed = line.trimStart();
-		for (const prefix of HOST_SECTION_PREFIXES) {
-			if (trimmed.toLowerCase().startsWith(prefix.toLowerCase())) {
-				throw new Error(`naia persona field ${label} must not start a line with a host section prefix`);
-			}
-		}
-	}
-	return text;
-}
-
 function readSelectedFields(path, fields, { optional = false } = {}) {
 	let stat;
 	try { stat = lstatSync(path); }

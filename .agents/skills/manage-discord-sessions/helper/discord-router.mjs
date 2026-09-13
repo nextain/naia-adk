@@ -528,6 +528,22 @@ export class DiscordMessageRouter {
 		return context;
 	}
 
+	/**
+	 * 실행 직전에 대화의 현재 이슈를 다시 읽는다.
+	 *
+	 * 접수 때 박아 둔 값을 그대로 쓰면, 앞 작업이 도는 사이 같은 채널에 들어온 요청이
+	 * 앞 작업이 방금 연 이슈를 모른 채 실행된다. 그 요청은 이전 이슈를 이으라는
+	 * 지시를 받거나, 이을 것이 없다고 보고 새 이슈를 또 연다.
+	 */
+	#reconcileCurrentIssue(item) {
+		if (!carriesIssueContract(this.#profileConfig(item.binding), item.authority, item.accessCeiling ?? null)) return item;
+		const current = this.#currentIssueUrl(item.scopeKey, item.binding);
+		if (current === (item.currentIssueUrl ?? null)) return item;
+		const selected = item.agentContext ?? this.#agentContext(item.binding);
+		const prompt = boundRequestPrompt(item.currentRequest, this.#profileConfig(item.binding), item.authority, selected.snapshot, item.accessCeiling ?? null, { currentIssueUrl: current });
+		return { ...item, prompt, currentIssueUrl: current, agentContext: selected };
+	}
+
 	#authority(authorization, snapshot = this.agentContextSnapshot) {
 		if (this.config.schemaVersion !== 2) return authorization;
 		const identity = discordBindingIdentity(authorization.binding);
@@ -657,6 +673,7 @@ export class DiscordMessageRouter {
 				this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "profile_replaced", safePayload: {} });
 				item = { ...item, executionProfile: currentProfile, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(currentProfile)) };
 			}
+			item = this.#reconcileCurrentIssue(item);
 			let prompt = item.prompt;
 			if (this.loadHistory && item.sourceMessageId) {
 				let loaded;
