@@ -57,6 +57,9 @@ function validatePersona(persona, label) {
 	if (persona?.source !== undefined && persona.source !== "naia-settings") throw new Error(`${label} source is not supported`);
 	const fromSettings = persona?.source === "naia-settings";
 	if (persona?.name !== undefined && (typeof persona.name !== "string" || !persona.name || persona.name.length > 80)) throw new Error(`${label} name is invalid`);
+	// 설정에서 정체성을 가져오면서 인스턴스 이름까지 따로 두면 프롬프트가 두 이름을
+	// 말한다. 한 사람이어야 한다는 것이 이 기능의 전부이므로 함께 쓰지 못하게 한다.
+	if (fromSettings && persona?.name !== undefined) throw new Error(`${label} cannot take both source and name`);
 	if (!fromSettings && typeof persona?.name !== "string") throw new Error(`${label} name is invalid`);
 	if (persona.instructions !== undefined && (typeof persona.instructions !== "string" || !persona.instructions || persona.instructions.length > 4_000)) throw new Error(`${label} instructions are invalid`);
 	const instructionsFile = persona.instructionsFile === undefined ? undefined : relativeConfigPath(persona.instructionsFile, `${label}.instructionsFile`);

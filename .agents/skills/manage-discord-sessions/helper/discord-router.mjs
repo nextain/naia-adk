@@ -482,7 +482,12 @@ export class DiscordMessageRouter {
 		// 대화에 매이고 다음 쓰기 요청이 엉뚱한 이슈를 잇는다.
 		if (!carriesIssueContract(this.#profileConfig(item.binding), item.authority, item.accessCeiling ?? null)) return null;
 		const issueUrl = harvestIssueUrl(finalContent, tracker.repo);
-		if (issueUrl === null) return null;
+		if (issueUrl === null) {
+			// 계약을 진 작업이 이슈를 밝히지 않고 끝났다. 기록만 보면 질문에 답한
+			// 것과 구별되지 않아, 바꾼 것이 어디에도 안 매인 채 묻힌다.
+			try { this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "issue_declaration_missing", safePayload: {} }); } catch {}
+			return null;
+		}
 		try { this.store.recordJobIssue({ jobId: item.jobId, scopeKey: item.scopeKey ?? null, issueUrl }); }
 		catch { return null; }
 		return issueUrl;

@@ -21,16 +21,36 @@ afterEach(cleanupDiscordFixtureRoots);
 const TRACKER = { provider: "github", repo: "example-org/example-repo" };
 const ISSUE = (n) => `https://github.com/${TRACKER.repo}/issues/${n}`;
 
-/** 나이아 설정이 있는 작업공간 하나. 업무 게이트웨이는 여기서 정체성을 가져온다. */
-function workspaceWithNaiaSettings(root, { agentName = "Example Agent", persona = "따뜻한 AI 동반자", userName = "Owner", honorific = "boss" } = {}) {
-	mkdirSync(join(root, "naia-settings"), { recursive: true });
-	writeFileSync(join(root, "AGENTS.md"), "# Entry\n", "utf8");
-	writeFileSync(join(root, "naia-settings/config.json"), JSON.stringify({
+/**
+ * 운영 모양의 작업공간.
+ *
+ * 설정은 ADK 루트에 있고 작업공간은 그 **하위 디렉터리**다. 둘을 같은 자리에 두면
+ * 운영에서 실제로 겪는 경로 관계를 한 번도 안 밟는다 — 4회차 적대리뷰가 짚었다.
+ */
+function workspaceWithNaiaSettings(adkRoot, { agentName = "Example Agent", persona = "따뜻한 AI 동반자", userName = "Owner", honorific = "boss", workspaceDir = "projects/work" } = {}) {
+	const workspace = join(adkRoot, workspaceDir);
+	mkdirSync(join(adkRoot, "naia-settings"), { recursive: true });
+	mkdirSync(workspace, { recursive: true });
+	writeFileSync(join(workspace, "AGENTS.md"), "# Entry\n", "utf8");
+	writeFileSync(join(adkRoot, "naia-settings/config.json"), JSON.stringify({
 		agentName, persona, userName, honorific, speechStyle: "formal", locale: "ko",
 		// 같은 파일에 자격값이 함께 산다. 프롬프트로 새면 안 된다.
 		NAIA_ANYLLM_API_KEY: "sk-must-not-appear",
 	}), "utf8");
-	return buildAgentContextSnapshot({ workspace: root, agentId: "work-agent", entrypoint: "AGENTS.md", contextFiles: [], personaSourceRoot: root });
+	return buildAgentContextSnapshot({ workspace, agentId: "work-agent", entrypoint: "AGENTS.md", contextFiles: [], personaSourceRoot: adkRoot });
+}
+
+/**
+ * 운영의 대화 이력 적재기를 대신한다. 실제 서비스는 언제나 이것을 넘긴다.
+ *
+ * `history` 는 이미 렌더된 글이다(`promptWithDiscordConversation` 가 그대로 끼운다).
+ * 여기서 구조체를 넘기면 실제 계약과 달라져 시험이 거짓으로 통과한다.
+ */
+function priorTurns() {
+	return async () => ({
+		state: "loaded",
+		history: "participant[workspace-owner]: 지난번 그 건 어떻게 됐어?\nagent: 확인 중입니다.",
+	});
 }
 
 function gatewayConfig({ actions = ["read", "reply", "write", "execute"], issueTracker = TRACKER } = {}) {
@@ -146,5 +166,80 @@ test("UCT_DSO_018_002 질문에는 이슈를 세우지 않고 엉뚱한 이슈�
 		assert.equal(job.issueUrl, null, "선언하지 않은 회신에서 이슈를 거뒀다");
 		assert.equal(store.currentScopeIssue(job.scopeKey), null, "대화가 언급뿐인 이슈에 매였다");
 		assert.ok(discord.lastResult().includes(ISSUE(12)), "회신 자체는 사람에게 그대로 전달되어야 한다");
+	} finally { store.close(); }
+});
+
+test("UCT_DSO_017_002 대화 이력이 실려도 정체성과 계약이 한 번씩 남는다", async () => {
+	// 운영은 언제나 대화 이력 적재기를 넘기고, 그 적재기가 프롬프트를 다시 쓴다.
+	// 이력이 붙는 과정에서 정체성이 밀리거나 두 번 실리면 사람이 겪는 것이 달라진다.
+	const { store, root } = fixture();
+	const discord = mockDiscord({ botUserId: BOT, channelId: CHANNEL, userId: USER });
+	try {
+		const snapshot = workspaceWithNaiaSettings(root, { persona: "조용하고 따뜻하게 곁에 있다." });
+		const prompts = [];
+		const router = new DiscordMessageRouter({
+			config: gatewayConfig(), store, token: "token-value-long-enough", botUserId: BOT,
+			cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot,
+			runtimeRevision: RUNTIME_REVISION, send: discord.send, deliver: async (input) => discord.deliver(input),
+			loadHistory: priorTurns(),
+			runner: async (input) => { prompts.push(input.prompt); return { backendOutcome: "success", attemptId: "a1", transientResult: `했습니다.\n\nIssue: ${ISSUE(5)}` }; },
+		});
+		const { envelope, sequence } = discord.message("이어서 고쳐줘");
+		await router.onDispatch("MESSAGE_CREATE", { ...envelope, guild_id: GUILD }, sequence);
+		await router.waitForIdle();
+		assert.equal(prompts.length, 1, "이력 적재 때문에 요청이 안 돌았다");
+		assert.equal(prompts[0].split("조용하고 따뜻하게 곁에 있다.").length - 1, 1, "정체성이 두 번 실렸다");
+		assert.ok(prompts[0].includes("Issue-first contract"), "이력이 붙으면서 이슈 계약이 사라졌다");
+		assert.ok(prompts[0].includes("지난번 그 건 어떻게 됐어?"), "대화 이력이 실리지 않았다");
+		assert.ok(!prompts[0].includes("must-not-appear"), "자격값이 샜다");
+	} finally { store.close(); }
+});
+
+test("UCT_DSO_017_003 설정이 바뀌면 도는 작업이 멈추고 재시작을 요구한다", async () => {
+	// 정체성이 중간에 바뀌면 그 작업이 누구로 시작해 누구로 끝났는지 말할 수 없다.
+	// spawn 직전 검사가 이것을 잡아야 하고, 잡으면 백엔드는 아예 안 불려야 한다.
+	const { store, root } = fixture();
+	const discord = mockDiscord({ botUserId: BOT, channelId: CHANNEL, userId: USER });
+	try {
+		const snapshot = workspaceWithNaiaSettings(root);
+		let runnerCalls = 0;
+		const router = new DiscordMessageRouter({
+			config: gatewayConfig(), store, token: "token-value-long-enough", botUserId: BOT,
+			cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot,
+			runtimeRevision: RUNTIME_REVISION, send: discord.send, deliver: async (input) => discord.deliver(input),
+			runner: async () => { runnerCalls += 1; return { backendOutcome: "success", attemptId: "a1", transientResult: "ok" }; },
+		});
+		// 사람이 셸에서 페르소나를 바꿨다
+		writeFileSync(join(root, "naia-settings/config.json"), JSON.stringify({ agentName: "Example Agent", persona: "바뀐 성격" }), "utf8");
+		const { envelope, sequence } = discord.message("고쳐줘");
+		const accepted = await router.onDispatch("MESSAGE_CREATE", { ...envelope, guild_id: GUILD }, sequence);
+		assert.equal(accepted.state, "accepted");
+		await router.waitForIdle();
+		assert.equal(runnerCalls, 0, "정체성이 바뀌었는데 백엔드를 불렀다");
+		const job = store.getJob(accepted.jobId, { includeEvents: true });
+		assert.ok(["failed", "recovery_review"].includes(job.lifecycle), `정체성 드리프트인데 ${job.lifecycle} 로 끝났다`);
+	} finally { store.close(); }
+});
+
+test("UCT_DSO_018_003 이슈를 밝히지 않고 끝나면 기록에 신호가 남는다", async () => {
+	// 계약을 진 작업이 이슈 없이 끝나면, 기록만 봐서는 질문에 답한 것과 구별되지
+	// 않는다. 바꾼 것이 어디에도 안 매인 채 조용히 묻힌다 — 4회차 적대리뷰가 짚었다.
+	const { store, root } = fixture();
+	const discord = mockDiscord({ botUserId: BOT, channelId: CHANNEL, userId: USER });
+	try {
+		const snapshot = workspaceWithNaiaSettings(root);
+		const router = new DiscordMessageRouter({
+			config: gatewayConfig(), store, token: "token-value-long-enough", botUserId: BOT,
+			cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot,
+			runtimeRevision: RUNTIME_REVISION, send: discord.send, deliver: async (input) => discord.deliver(input),
+			runner: async () => ({ backendOutcome: "success", attemptId: "a1", transientResult: "고쳤습니다. 끝." }),
+		});
+		const { envelope, sequence } = discord.message("고쳐줘");
+		const accepted = await router.onDispatch("MESSAGE_CREATE", { ...envelope, guild_id: GUILD }, sequence);
+		await router.waitForIdle();
+		const job = store.getJob(accepted.jobId, { includeEvents: true });
+		assert.equal(job.issueUrl, null, "선언이 없는데 이슈가 남았다");
+		assert.ok(job.events.some((event) => event.kind === "issue_declaration_missing"),
+			"이슈 없이 끝난 업무 작업에 신호가 없다 — 기록만 보면 질문과 구별되지 않는다");
 	} finally { store.close(); }
 });

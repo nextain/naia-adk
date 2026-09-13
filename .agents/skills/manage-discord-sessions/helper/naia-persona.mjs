@@ -17,8 +17,8 @@ import { isAbsolute, resolve } from "node:path";
 //
 // 같은 디렉터리의 `persona.json` 은 2026-05-15 이후 어떤 코드도 읽지 않는다. 한때
 // 그것을 엮는 설계안이 있었지만(2026-06-29 G1) 코드가 그 뒤에 단일 SoT 로 정리됐다.
-// 문서보다 코드가 최신이다. 캐릭터 자료는 data-private 에 있고, 거기서 사람이 뽑아
-// `config.json` 의 `persona` 한 줄로 넣는다.
+// 문서보다 코드가 최신이다. 더 긴 캐릭터 자료를 따로 두는 워크스페이스도 있지만,
+// 프롬프트에 실리는 것은 언제나 `config.json` 의 `persona` 한 줄이다.
 
 /** `config.json` 에서 읽는 항목. 이 목록 밖의 것은 읽지 않는다. */
 export const NAIA_PERSONA_FIELDS = Object.freeze(["agentName", "persona", "userName", "locale", "speechStyle", "honorific"]);
@@ -70,8 +70,12 @@ function readSelectedFields(path, fields, { optional = false } = {}) {
 	finally { closeSync(fd); }
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("naia settings must be an object");
 	const selected = {};
+	// 이름은 인스턴스 설정의 `persona.name` 과 같은 한도를 받는다. 출처가 다르다고
+	// 프롬프트에 실리는 길이가 달라질 이유가 없다.
+	const LIMITS = { agentName: 80, userName: 80, honorific: 40, locale: 32, speechStyle: 32 };
 	for (const field of fields) {
 		const value = MULTILINE_FIELDS.has(field) ? boundedField(parsed[field], field) : singleLineField(parsed[field], field);
+		if (value !== null && LIMITS[field] !== undefined && value.length > LIMITS[field]) throw new Error(`naia persona field ${field} is too long`);
 		if (value !== null) selected[field] = value;
 	}
 	return selected;

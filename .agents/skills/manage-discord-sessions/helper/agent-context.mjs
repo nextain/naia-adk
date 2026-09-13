@@ -241,6 +241,9 @@ export function buildAgentContextSnapshot(config) {
 	// 넘기면 검증 경로가 같은 글을 다시 만들 수 없어 드리프트를 못 잡는다.
 	const personaSourceRoot = config.personaSourceRoot ?? null;
 	const settings = personaSourceRoot === null ? null : readNaiaPersonaSettings(personaSourceRoot);
+	// 이름이 없으면 프롬프트를 만들 수 없다. 기동에서 멈추지 않으면 서비스는 도는
+	// 것처럼 보이면서 모든 요청을 거절한다 — 가장 진단하기 어려운 모양이다.
+	if (settings !== null && naiaPersonaName(settings) === null) throw new Error("naia settings carry no agent name");
 	const renderedPersona = settings === null ? null : renderNaiaPersona(settings);
 	const snapshot = snapshotResolvedWorkspace(resolveAgentContextWorkspace(config), configuredAgentId(config.agentId ?? "unspecified-agent"), renderedPersona);
 	return settings === null ? snapshot : Object.freeze({ ...snapshot, personaSourceRoot, personaAgentName: naiaPersonaName(settings) });

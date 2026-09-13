@@ -12,38 +12,72 @@
       ".agents/context/project-index.yaml",
       ".agents/context/terminology.yaml"
     ],
-    "issueTracker": { "provider": "github", "repo": "replace-with-owner/replace-with-repository" }
+    "issueTracker": {
+      "provider": "github",
+      "repo": "replace-with-owner/replace-with-repository"
+    }
   },
   "persona": {
-    "name": "replace-with-agent-name",
-    "instructionsFile": ".agents/context/persona/agent.md",
-    "instructions": "Replace this line with what is true only for this instance: which guild and channel it answers in, which repository it owns, and what it must not touch. The shared identity above stays in the file."
+    "source": "naia-settings",
+    "instructions": "Replace this line with what is true only for this instance: which guild and channel it answers in, which repository it owns, and what it must not touch. The identity itself comes from naia-settings/config.json, the same one the conversation agent uses."
   },
   "role": {
     "name": "issue-driven-development",
-    "allowedActions": ["read", "reply", "write", "execute"],
+    "allowedActions": [
+      "read",
+      "reply",
+      "write",
+      "execute"
+    ],
     "requiresApproval": []
   },
   "backend": {
     "selected": "opencode",
     "profiles": {
-      "codex": { "enabled": true, "model": "gpt-5.6-luna", "reasoningEffort": "max", "costProfile": "balanced" },
-      "claude": { "enabled": true },
-      "opencode": { "enabled": true, "model": "azure-foundry/deepseek-v4-pro", "small_model": "azure-foundry/deepseek-v4-pro" },
-      "grok": { "enabled": true, "model": "grok-4.6", "costProfile": "balanced", "reasoningEffort": "medium" }
+      "codex": {
+        "enabled": true,
+        "model": "gpt-5.6-luna",
+        "reasoningEffort": "max",
+        "costProfile": "balanced"
+      },
+      "claude": {
+        "enabled": true
+      },
+      "opencode": {
+        "enabled": true,
+        "model": "azure-foundry/deepseek-v4-pro",
+        "small_model": "azure-foundry/deepseek-v4-pro"
+      },
+      "grok": {
+        "enabled": true,
+        "model": "grok-4.6",
+        "costProfile": "balanced",
+        "reasoningEffort": "medium"
+      }
     },
-    "fallback": ["codex"]
+    "fallback": [
+      "codex"
+    ]
   },
   "discord": {
     "credentialRef": "discord-bot-token",
     "botUserId": "000000000000000000",
-    "operatorUserIds": ["000000000000000000"],
+    "operatorUserIds": [
+      "000000000000000000"
+    ],
     "messageContentIntent": false,
     "participantProfiles": {
       "000000000000000000": {
         "label": "workspace-owner",
         "relationship": "Owner of this configured workspace",
-        "allowedActions": ["read", "reply", "write", "execute", "cancel", "retry"]
+        "allowedActions": [
+          "read",
+          "reply",
+          "write",
+          "execute",
+          "cancel",
+          "retry"
+        ]
       }
     },
     "bindings": [
@@ -52,7 +86,9 @@
         "guildId": "000000000000000000",
         "channelId": "000000000000000000",
         "respondWhen": "mentioned",
-        "allowedUserIds": ["000000000000000000"],
+        "allowedUserIds": [
+          "000000000000000000"
+        ],
         "historyVisibility": "shared",
         "canStartConversation": true,
         "operatorActions": true
@@ -61,7 +97,9 @@
         "kind": "dm",
         "userId": "000000000000000000",
         "respondWhen": "always",
-        "allowedUserIds": ["000000000000000000"],
+        "allowedUserIds": [
+          "000000000000000000"
+        ],
         "historyVisibility": "requester_only",
         "canStartConversation": true,
         "operatorActions": true
@@ -77,7 +115,9 @@
     "permissionProfileEpoch": "replace-on-policy-change",
     "maxConcurrentJobs": 1,
     "networkAccess": true,
-    "credentialProfiles": ["gh"]
+    "credentialProfiles": [
+      "gh"
+    ]
   },
   "observability": {
     "discordStatusProjection": false

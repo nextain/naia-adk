@@ -23,6 +23,7 @@ const EVENT_SOURCES = new Map([
 	["phase_changed", new Set(["codex", "claude", "fake_backend"])],
 	["output_activity", new Set(["codex", "claude", "fake_backend"])],
 	["progress_reported", new Set(["codex", "claude", "fake_backend"])],
+	["issue_declaration_missing", new Set(["helper"])],
 	["prompt_cache_observed", new Set(["codex", "claude", "fake_backend"])],
 	["tool_started", new Set(["codex", "claude", "fake_backend"])],
 	["tool_finished", new Set(["codex", "claude", "fake_backend"])],

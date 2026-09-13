@@ -10,6 +10,7 @@ export const EVENT_KINDS = new Set([
 	"phase_changed",
 	"output_activity",
 	"progress_reported",
+	"issue_declaration_missing",
 	"prompt_cache_observed",
 	"tool_started",
 	"tool_finished",

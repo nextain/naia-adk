@@ -335,16 +335,40 @@ test("DSO-018 거둔 이슈가 작업과 대화에 남아 다음 요청으로 �
 	} finally { store.close(); }
 });
 
-test("DSO-018 이슈 기록은 더하기만 하는 이주라 스키마 번호를 올리지 않는다", () => {
-	// 번호를 올리면 이전 관리 런타임이 데이터베이스를 못 열어 되돌리기가 막힙니다.
+test("DSO-018 이슈 기록은 더하기만 하는 이주라 스키마 번호를 올리지 않는다", async () => {
+	// 번호를 올리면 이전 관리 런타임이 데이터베이스를 못 열어 되돌리기가 막힌다.
+	// 4회차 적대리뷰가 짚었다 — 예전 시험은 issueUrl 이 null 인 것만 보고 번호는
+	// 읽지도 않았다. 되돌릴 수 있다는 것을 주장만 하고 확인하지 않았다.
+	const { DatabaseSync } = await import("node:sqlite");
+	const { DB_SCHEMA_VERSION } = await import("../helper/constants.mjs");
 	const root = mkdtempSync(join(tmpdir(), "naia-issue-schema-"));
 	roots.push(root);
-	const store = new SessionStore(join(root, "runtime.sqlite3"));
+	const databasePath = join(root, "runtime.sqlite3");
+	const store = new SessionStore(databasePath);
 	try {
 		store.createJob({ jobId: "job-1", backendId: "opencode", revision: "r1", activityDetail: "structured", jobType: "conversation" });
-		assert.equal(store.getJob("job-1", { includeEvents: false }).issueUrl, null, "이슈가 없는 작업은 null 이어야 한다");
+		store.recordJobIssue({ jobId: "job-1", scopeKey: "scope-a", issueUrl: "https://github.com/example-org/example-repo/issues/9" });
+		assert.equal(store.getJob("job-1", { includeEvents: false }).issueUrl, "https://github.com/example-org/example-repo/issues/9");
 	} finally { store.close(); }
+
+	// 기록된 번호가 이 작업 이전의 값 그대로여야 한다
+	assert.equal(DB_SCHEMA_VERSION, 6, "스키마 번호가 올라갔다 — 이전 런타임이 데이터베이스를 못 연다");
+	const database = new DatabaseSync(databasePath);
+	try {
+		assert.equal(database.prepare("SELECT value FROM metadata WHERE key = 'schema_version'").get().value, "6",
+			"데이터베이스에 적힌 번호가 이전 값과 다르다");
+		// 이전 런타임이 쓰던 열만으로 읽고 쓰는 것이 여전히 되는지 본다.
+		// 새 열은 NULL 을 허용하므로 열 이름을 명시한 INSERT 가 그대로 돌아야 한다.
+		database.prepare(`INSERT INTO jobs(job_id, lifecycle, backend_id, revision, backend_capabilities_json,
+			activity_detail, safe_summary, accepted_at, updated_at, soft_silence_ms)
+			VALUES('legacy-job', 'queued', 'codex', 'r0', '{}', 'structured', 'Accepted job: conversation', '2026-09-13T00:00:00.000Z', '2026-09-13T00:00:00.000Z', 1000)`).run();
+		const legacy = database.prepare("SELECT job_id, lifecycle, issue_url, job_type FROM jobs WHERE job_id = 'legacy-job'").get();
+		assert.equal(legacy.lifecycle, "queued", "이전 런타임 모양의 쓰기가 막혔다");
+		assert.equal(legacy.issue_url, null, "새 열이 NULL 을 허용하지 않는다");
+		assert.equal(legacy.job_type, null, "새 열이 NULL 을 허용하지 않는다");
+	} finally { database.close(); }
 });
+
 
 test("DSO-018 작업 종류와 프롬프트가 같은 행동 목록에서 갈린다", () => {
 	// 2026-09-13 운영에서 갈라졌다. 읽기 전용으로 넣은 요청의 프롬프트에는 이슈
