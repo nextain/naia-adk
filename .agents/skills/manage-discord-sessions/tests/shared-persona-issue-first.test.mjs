@@ -522,3 +522,60 @@ test("DSO-018 읽기 전용 작업은 이슈 저장소 자격을 받지 않는�
 		cleanupDiscordFixtureRoots();
 	}
 });
+
+test("DSO-018 읽기 전용 상한은 실패 뒤 재시작에도 유지된다", async () => {
+	const { fixture, binding, cleanupDiscordFixtureRoots, BOT, USER, GUILD, CHANNEL, RUNTIME_REVISION } = await import("./fixtures/discord-fixture.mjs");
+	const { DiscordMessageRouter } = await import("../helper/discord-router.mjs");
+	const { RecoveryCodec } = await import("../helper/recovery-crypto.mjs");
+	const { randomBytes } = await import("node:crypto");
+	const { store, root } = fixture();
+	const calls = [];
+	try {
+		mkdirSync(join(root, "naia-settings"), { recursive: true });
+		writeFileSync(join(root, "AGENTS.md"), "# Entry\n", "utf8");
+		writeFileSync(join(root, "naia-settings/config.json"), JSON.stringify({ agentName: "Example Agent", persona: SHARED_PERSONA }), "utf8");
+		const snapshot = buildAgentContextSnapshot({ workspace: root, agentId: "naia-agent", entrypoint: "AGENTS.md", contextFiles: [], personaSourceRoot: root });
+		const router = new DiscordMessageRouter({
+			config: {
+				schemaVersion: 2,
+				workspace: { agentId: "naia-agent", issueTracker: TRACKER },
+				persona: { source: "naia-settings" },
+				role: { name: "operator", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: [] },
+				backend: { selected: "codex", profiles: { codex: { enabled: true } } },
+				discord: {
+					bindings: [{ ...binding(), operatorActions: true, historyVisibility: "none" }],
+					operatorUserIds: [USER],
+					participantProfiles: { [USER]: { label: "workspace-owner", relationship: "workspace owner", allowedActions: ["read", "reply", "write", "execute"] } },
+				},
+				runtime: { maxConcurrentJobs: 1, approvalPolicy: "never", permissionProfileEpoch: "naia-v1", networkAccess: true, credentialProfiles: ["gh"] },
+				recovery: { autoRetry: false },
+			},
+			store, token: "token-value-long-enough", botUserId: BOT,
+			cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot,
+			runtimeRevision: RUNTIME_REVISION, recoveryCodec: new RecoveryCodec(randomBytes(32)),
+			send: async () => ({ state: "confirmed" }),
+			deliver: async () => ({ state: "confirmed" }),
+			runner: async (input) => {
+				calls.push(input);
+				const attemptId = store.startAttempt(input.jobId, { attemptId: `failed-${calls.length}` });
+				store.recordEvent({ jobId: input.jobId, attemptId, source: "helper", kind: "failed", safePayload: { reasonCode: "no_progress_timeout" } });
+				return { backendOutcome: "failure" };
+			},
+		});
+		const submitted = await router.submitOperatorRequest({ channelId: CHANNEL, authorId: USER, content: "이 버그 뭐야?", access: "read-only" });
+		assert.equal(submitted.state, "accepted");
+		await router.waitForIdle();
+		assert.equal(store.getJob(submitted.jobId, { includeEvents: false }).jobType, "conversation");
+		const receipt = router.replaceJob(submitted.jobId);
+		assert.equal(receipt.state, "accepted");
+		await router.waitForIdle();
+		assert.equal(calls.length, 2);
+		assert.equal(calls[1].commandOptions.networkAccess, false, "재시작 뒤 읽기 전용 작업에 네트워크가 붙었다");
+		assert.deepEqual(calls[1].commandOptions.credentialProfiles, [], "재시작 뒤 읽기 전용 작업에 gh 자격이 붙었다");
+		assert.ok(!calls[1].prompt.includes("Issue-first contract"), "재시작 뒤 읽기 전용 작업에 이슈 계약이 실렸다");
+		assert.equal(store.getJob(receipt.replacementJobId, { includeEvents: false }).jobType, "conversation", "재시작 뒤 읽기 전용 작업이 issue_work 가 됐다");
+	} finally {
+		store.close();
+		cleanupDiscordFixtureRoots();
+	}
+});

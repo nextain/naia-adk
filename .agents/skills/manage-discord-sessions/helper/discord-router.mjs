@@ -783,6 +783,7 @@ export class DiscordMessageRouter {
 					scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null,
 					participantUserId: payload.participantUserId,
 					authority,
+					accessCeiling,
 					commandOptions: this.#withBackendOptions(sourceJob.backendId, commandOptionsForProfile(executionProfile)),
 					executionProfile,
 					binding,
@@ -858,7 +859,7 @@ export class DiscordMessageRouter {
 				if (this.config.schemaVersion === 2) {
 					if (!autoRetry || profileChanged || executionProfile.access !== "read-only") throw new Error("automatic recovery is not allowed for this job");
 				} else throw new Error("legacy recovery requires review");
-					const recovered = { jobId: item.jobId, backendId: item.backendId, prompt, currentRequest: payload.currentRequest, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, participantUserId: payload.participantUserId, authority, binding, agentContext, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile };
+					const recovered = { jobId: item.jobId, backendId: item.backendId, prompt, currentRequest: payload.currentRequest, channelId: payload.channelId, scopeKey: typeof payload.scopeKey === "string" ? payload.scopeKey : null, participantUserId: payload.participantUserId, authority, binding, agentContext, accessCeiling, commandOptions: this.#withBackendOptions(item.backendId, commandOptionsForProfile(executionProfile)), executionProfile };
 				if (!this.#operatorResponseFinalized(item.jobId)) this.#sendOperatorResponse(recovered);
 				this.workItems.set(item.jobId, recovered);
 				this.queue.push(recovered);
