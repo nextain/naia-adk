@@ -23,7 +23,7 @@ export function harvestIssueUrl(text, repo) {
 	return readIssueDeclaration(text, repo).issueUrl;
 }
 import { randomUUID } from "node:crypto";
-import { getBackendAdapter } from "./adapters.mjs";
+import { getBackendAdapter, readOnlyBackendOptions } from "./adapters.mjs";
 import { authorizeDiscordMessage } from "./discord-scope.mjs";
 import { deliverJobResult, formatOperatorStatus, postDiscordDirectMessage } from "./discord-delivery.mjs";
 import { runBackendAttempt } from "./backend-runner.mjs";
@@ -448,11 +448,16 @@ export class DiscordMessageRouter {
 
 	#withBackendOptions(backendId, options) {
 		const profile = this.config.backend.profiles?.[backendId];
+		// 읽기 전용 자식에게는 네트워크와 자격 증명을 주지 않는다. 의미상으로도
+		// 맞고, 이걸 빼지 않으면 codex read-only + networkAccess 조합이 실행 인자
+		// 검증에서 바로 거절되어 시간창 강등·읽기 전용 제출·자동 복구가 통째로
+		// 실패한다.
+		const readOnly = readOnlyBackendOptions(backendId, options);
 		const withCommon = {
 			...options,
 			...(profile?.model ? { model: profile.model } : {}),
-			networkAccess: this.config.runtime?.networkAccess === true,
-			credentialProfiles: [...(this.config.runtime?.credentialProfiles ?? [])],
+			networkAccess: readOnly ? false : this.config.runtime?.networkAccess === true,
+			credentialProfiles: readOnly ? [] : [...(this.config.runtime?.credentialProfiles ?? [])],
 		};
 		return backendId === "codex" ? {
 			...withCommon,

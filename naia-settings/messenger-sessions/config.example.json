@@ -45,19 +45,9 @@
       },
       "opencode": {
         "enabled": true,
-        "model": "azure-foundry/deepseek-v4-pro",
-        "small_model": "azure-foundry/deepseek-v4-pro"
-      },
-      "grok": {
-        "enabled": true,
-        "model": "grok-4.6",
-        "costProfile": "balanced",
-        "reasoningEffort": "medium"
+        "model": "azure-foundry/deepseek-v4-pro"
       }
-    },
-    "fallback": [
-      "codex"
-    ]
+    }
   },
   "discord": {
     "credentialRef": "discord-bot-token",

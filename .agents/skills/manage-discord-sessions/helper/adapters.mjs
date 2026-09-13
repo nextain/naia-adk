@@ -78,6 +78,17 @@ export function getBackendAdapter(backendId) {
 	return adapter;
 }
 
+// commandOptionsForProfile() 이 만든 옵션을 되읽어 읽기 전용 실행인지 판정한다.
+// 프로필 객체를 넘겨받지 못한 호출부도 같은 답을 얻어야 읽기 전용 작업에
+// 네트워크·자격 증명이 새로 들어가지 않는다. Codex는 sandbox를 생략하면
+// workspace-write를 사용하므로, 명시적인 read-only만 읽기 전용으로 판정한다.
+export function readOnlyBackendOptions(backendId, options = {}) {
+	getBackendAdapter(backendId);
+	if (backendId === "codex") return options.sandbox === "read-only";
+	if (backendId === "opencode") return options.auto !== true;
+	return options.permissionMode !== "bypassPermissions";
+}
+
 export function assertSupportedBackendVersion(backendId, versionOutput) {
 	getBackendAdapter(backendId);
 	const match = String(versionOutput).match(/\b(\d+)\.(\d+)\.(\d+)\b/);

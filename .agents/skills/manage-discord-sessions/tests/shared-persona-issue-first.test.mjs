@@ -447,3 +447,78 @@ test("DSO-018 라우터가 작업을 issue_work 로 받고 회신의 이슈를 �
 		cleanupDiscordFixtureRoots();
 	}
 });
+
+test("DSO-017 기본 예시를 채우면 검증기가 받는다", async () => {
+	const { readFileSync, chmodSync } = await import("node:fs");
+	const { loadMessengerConfig } = await import("../helper/discord-config.mjs");
+	const adkRoot = join(import.meta.dirname, "..", "..", "..", "..");
+	const dir = mkdtempSync(join(tmpdir(), "example-config-"));
+	roots.push(dir);
+	const example = JSON.parse(readFileSync(join(adkRoot, "naia-settings/messenger-sessions/config.example.json"), "utf8"));
+	const BOT_ID = "111111111111111111";
+	const USER_ID = "222222222222222222";
+	const GUILD_ID = "333333333333333333";
+	const CHANNEL_ID = "444444444444444444";
+	example.enabled = true;
+	example.workspaceId = "example-workspace";
+	example.discord.botUserId = BOT_ID;
+	example.discord.operatorUserIds = [USER_ID];
+	example.discord.participantProfiles = { [USER_ID]: example.discord.participantProfiles["000000000000000000"] };
+	example.discord.bindings = example.discord.bindings.map((binding) => ({
+		...binding,
+		...(binding.guildId ? { guildId: GUILD_ID, channelId: CHANNEL_ID } : {}),
+		...(binding.userId ? { userId: USER_ID } : {}),
+		allowedUserIds: [USER_ID],
+	}));
+	const target = join(dir, "config.json");
+	writeFileSync(target, JSON.stringify(example), "utf8");
+	chmodSync(target, 0o600);
+	const loaded = loadMessengerConfig(target);
+	assert.equal(loaded.persona.source, "naia-settings");
+	assert.equal(loaded.workspace.issueTracker.provider, "github");
+	assert.equal(loaded.backend.profiles.grok, undefined, "공개 코드가 모르는 grok 프로필이 예시에 남아 있다");
+	assert.equal(loaded.backend.fallback, undefined, "공개 코드가 모르는 fallback 이 예시에 남아 있다");
+});
+
+test("DSO-018 읽기 전용 작업은 이슈 저장소 자격을 받지 않는다", async () => {
+	const { fixture, binding, cleanupDiscordFixtureRoots, BOT, USER, GUILD, CHANNEL, RUNTIME_REVISION } = await import("./fixtures/discord-fixture.mjs");
+	const { DiscordMessageRouter } = await import("../helper/discord-router.mjs");
+	const { store, root } = fixture();
+	const calls = [];
+	try {
+		mkdirSync(join(root, "naia-settings"), { recursive: true });
+		writeFileSync(join(root, "AGENTS.md"), "# Entry\n", "utf8");
+		writeFileSync(join(root, "naia-settings/config.json"), JSON.stringify({ agentName: "Example Agent", persona: SHARED_PERSONA }), "utf8");
+		const snapshot = buildAgentContextSnapshot({ workspace: root, agentId: "naia-agent", entrypoint: "AGENTS.md", contextFiles: [], personaSourceRoot: root });
+		const router = new DiscordMessageRouter({
+			config: {
+				schemaVersion: 2,
+				workspace: { agentId: "naia-agent", issueTracker: TRACKER },
+				persona: { source: "naia-settings" },
+				role: { name: "read-only", allowedActions: ["read", "reply"], requiresApproval: [] },
+				backend: { selected: "codex", profiles: { codex: { enabled: true } } },
+				discord: {
+					bindings: [{ ...binding(), operatorActions: true, historyVisibility: "none" }],
+					operatorUserIds: [USER],
+					participantProfiles: { [USER]: { label: "workspace-owner", relationship: "workspace owner", allowedActions: ["read", "reply"] } },
+				},
+				runtime: { maxConcurrentJobs: 1, approvalPolicy: "never", permissionProfileEpoch: "naia-v1", networkAccess: true, credentialProfiles: ["gh"] },
+				recovery: { autoRetry: false },
+			},
+			store, token: "token-value-long-enough", botUserId: BOT,
+			cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot,
+			runtimeRevision: RUNTIME_REVISION, send: async () => ({ state: "confirmed" }),
+			deliver: async () => ({ state: "confirmed" }),
+			runner: async (input) => { calls.push(input); return { backendOutcome: "success", attemptId: "attempt-1", transientResult: "읽기만 했습니다.\n\nIssue: none" }; },
+		});
+		const accepted = await router.onDispatch("MESSAGE_CREATE", { id: "666666666666666671", guild_id: GUILD, channel_id: CHANNEL, author: { id: USER }, mentions: [{ id: BOT }], content: `<@${BOT}> 이 버그 뭐야?` }, 12);
+		assert.equal(accepted.state, "accepted");
+		await router.waitForIdle();
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0].commandOptions.networkAccess, false, "읽기 전용 작업에 네트워크가 남았다");
+		assert.deepEqual(calls[0].commandOptions.credentialProfiles, [], "읽기 전용 작업에 gh 자격이 남았다");
+	} finally {
+		store.close();
+		cleanupDiscordFixtureRoots();
+	}
+});
