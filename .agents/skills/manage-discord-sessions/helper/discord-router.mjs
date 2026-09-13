@@ -1,3 +1,27 @@
+/**
+ * 회신의 마지막 줄이 무엇을 말하는지 가린다.
+ *
+ * 세 경우가 다르다. 이슈를 밝혔거나(`issue`), 작업이 아니었다고 밝혔거나(`none`),
+ * 아무 말도 없다(`absent`). 앞의 둘을 한 덩어리로 묶으면 쓰기 권한자가 던진 질문이
+ * "추적 없이 끝난 작업"과 기록상 똑같아진다 — 5회차 적대리뷰가 짚었다.
+ */
+export function readIssueDeclaration(text, repo) {
+	if (typeof text !== "string" || typeof repo !== "string") return { kind: "absent", issueUrl: null };
+	const lines = text.split(/\r?\n/);
+	while (lines.length > 0 && lines.at(-1).trim() === "") lines.pop();
+	const lastLine = lines.at(-1);
+	if (lastLine === undefined) return { kind: "absent", issueUrl: null };
+	const escaped = repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const issue = new RegExp(`^[ \\t]*${ISSUE_MARKER}[ \\t]+https://github\\.com/${escaped}/issues/([1-9]\\d{0,8})/?[ \\t.]*$`, "i").exec(lastLine);
+	if (issue !== null) return { kind: "issue", issueUrl: `https://github.com/${repo}/issues/${Number(issue[1])}` };
+	if (new RegExp(`^[ \\t]*${ISSUE_MARKER}[ \\t]+${ISSUE_NONE}[ \\t.]*$`, "i").test(lastLine)) return { kind: "none", issueUrl: null };
+	return { kind: "absent", issueUrl: null };
+}
+
+/** 밝힌 이슈 주소. 없으면 null. */
+export function harvestIssueUrl(text, repo) {
+	return readIssueDeclaration(text, repo).issueUrl;
+}
 import { randomUUID } from "node:crypto";
 import { getBackendAdapter } from "./adapters.mjs";
 import { authorizeDiscordMessage } from "./discord-scope.mjs";
@@ -172,27 +196,11 @@ export function issueFirstContract({ repo, currentIssueUrl = null }) {
 /** 회신에서 이슈를 밝히는 유일한 형식. 이 표지가 붙은 줄만 거둔다. */
 export const ISSUE_MARKER = "Issue:";
 
-const ISSUE_DECLARATION = `State the issue this work belongs to on the last line of your reply, in exactly this form with nothing else on that line: ${ISSUE_MARKER} <url>. Only that exact line is read back; a URL anywhere else in the reply, including a list of related issues, is ignored. If this turned out to be a question and you did no project work, do not write that line at all. Report the work you actually did and verified above it.`;
+const ISSUE_NONE = "none";
 
-/**
- * 그 회신이 이 작업의 이슈를 밝히고 있는가.
- *
- * 주소처럼 생긴 줄을 받으면 인용과 선언을 가를 수 없다. 쓰기 권한을 가진 사람이
- * 질문을 했을 때 모델이 끝에 "관련 이슈"를 줄마다 늘어놓으면 그 마지막 것이 대화에
- * 매인다. 그래서 선언에 전용 표지를 둔다. 목록 줄도, 인용 줄도, 본문 중간의 주소도
- * 받지 않는다. 여러 줄이면 마지막 것을 쓴다.
- * 다른 저장소, 끌어오기 요청, 평문 http, 유사 호스트, 0번 이슈는 받지 않는다.
- */
-export function harvestIssueUrl(text, repo) {
-	if (typeof text !== "string" || typeof repo !== "string") return null;
-	const lines = text.split(/\r?\n/);
-	while (lines.length > 0 && lines.at(-1).trim() === "") lines.pop();
-	const lastLine = lines.at(-1);
-	if (lastLine === undefined) return null;
-	const pattern = new RegExp(`^[ \\t]*${ISSUE_MARKER}[ \\t]+https://github\\.com/${repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/issues/([1-9]\\d{0,8})/?[ \\t.]*$`, "i");
-	const found = pattern.exec(lastLine);
-	return found === null ? null : `https://github.com/${repo}/issues/${Number(found[1])}`;
-}
+const ISSUE_DECLARATION = `End your reply with exactly one declaration line, nothing else on that line: ${ISSUE_MARKER} <url> when this was project work, or ${ISSUE_MARKER} ${ISSUE_NONE} when you only answered a question and changed nothing. Only that last line is read back; a URL anywhere else in the reply, including a list of related issues, is ignored. Report the work you actually did and verified above it.`;
+
+
 
 export function boundRequestPrompt(userText, config, authorization = null, agentContextSnapshot = null, accessCeiling = null, { currentIssueUrl = null } = {}) {
 	if (typeof userText !== "string" || !userText || userText.length > MAX_REQUEST_TEXT_LENGTH) throw new Error("Discord prompt is empty or too large");
@@ -341,7 +349,7 @@ export class DiscordMessageRouter {
 			currentRequest = discordRequestText(data, this.botUserId, { authorization, instance: this.instance });
 			if (!currentRequest || currentRequest.length > MAX_REQUEST_TEXT_LENGTH) throw new Error("Discord prompt is empty or too large");
 			const selected = this.#agentContext(authorization.binding);
-			prompt = boundRequestPrompt(currentRequest, this.#profileConfig(authorization.binding), authorization, selected.snapshot, accessCeiling, { currentIssueUrl: this.#currentIssueUrl(authorization.scopeKey) });
+			prompt = boundRequestPrompt(currentRequest, this.#profileConfig(authorization.binding), authorization, selected.snapshot, accessCeiling, { currentIssueUrl: this.#currentIssueUrl(authorization.scopeKey, authorization.binding) });
 		}
 		catch {
 			this.store.reserveIngress({ sourceMessageId, scopeKey: authorization.scopeKey, status: "rejected", reasonCode: "prompt_invalid", dispatchSequence: sequence });
@@ -463,9 +471,16 @@ export class DiscordMessageRouter {
 	}
 
 	/** 이 대화가 지금 물고 있는 이슈. 읽기가 실패해도 요청을 막지는 않는다. */
-	#currentIssueUrl(scopeKey) {
+	#currentIssueUrl(scopeKey, binding = null) {
 		if (typeof scopeKey !== "string" || !scopeKey) return null;
-		try { return this.store.currentScopeIssue(scopeKey); } catch { return null; }
+		let recorded = null;
+		try { recorded = this.store.currentScopeIssue(scopeKey); } catch { return null; }
+		if (recorded === null) return null;
+		// 트래커 저장소를 바꾸면 옛 이슈가 남는다. 그것을 이으라고 하면 대화가 옛
+		// 이슈에 영구히 묶이고 매 요청마다 미선언이 쌓인다.
+		const tracker = this.#issueTracker(binding);
+		if (tracker === null || !recorded.startsWith(`https://github.com/${tracker.repo}/issues/`)) return null;
+		return recorded;
 	}
 
 	/**
@@ -481,13 +496,18 @@ export class DiscordMessageRouter {
 		// 회신에서 거두면, 읽기 전용 대화가 관련 이슈를 언급만 해도 그 이슈가
 		// 대화에 매이고 다음 쓰기 요청이 엉뚱한 이슈를 잇는다.
 		if (!carriesIssueContract(this.#profileConfig(item.binding), item.authority, item.accessCeiling ?? null)) return null;
-		const issueUrl = harvestIssueUrl(finalContent, tracker.repo);
-		if (issueUrl === null) {
-			// 계약을 진 작업이 이슈를 밝히지 않고 끝났다. 기록만 보면 질문에 답한
-			// 것과 구별되지 않아, 바꾼 것이 어디에도 안 매인 채 묻힌다.
+		const declaration = readIssueDeclaration(finalContent, tracker.repo);
+		if (declaration.kind === "none") {
+			// 권한은 있었지만 바꾼 것이 없다고 밝혔다. 침묵과 한 덩어리로 묶으면,
+			// 쓰기 권한자의 질문이 추적 없이 끝난 작업과 기록상 똑같아진다.
+			try { this.store.setJobType({ jobId: item.jobId, jobType: "conversation" }); } catch {}
+			return null;
+		}
+		if (declaration.kind === "absent") {
 			try { this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "issue_declaration_missing", safePayload: {} }); } catch {}
 			return null;
 		}
+		const issueUrl = declaration.issueUrl;
 		try { this.store.recordJobIssue({ jobId: item.jobId, scopeKey: item.scopeKey ?? null, issueUrl }); }
 		catch { return null; }
 		return issueUrl;
@@ -757,7 +777,7 @@ export class DiscordMessageRouter {
 		if (currentRequest.length > MAX_REQUEST_TEXT_LENGTH) return { state: "rejected", action, jobId, reasonCode: "amendment_too_large" };
 		const replacementJobId = randomUUID();
 		const selected = item.agentContext ?? this.#agentContext(item.binding);
-		const replacementPrompt = boundRequestPrompt(currentRequest, this.#profileConfig(item.binding), item.authority, selected.snapshot, item.accessCeiling ?? null, { currentIssueUrl: this.#currentIssueUrl(item.scopeKey) });
+		const replacementPrompt = boundRequestPrompt(currentRequest, this.#profileConfig(item.binding), item.authority, selected.snapshot, item.accessCeiling ?? null, { currentIssueUrl: this.#currentIssueUrl(item.scopeKey, item.binding) });
 		const replacementEnvelope = this.recoveryCodec.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId: item.channelId, scopeKey: item.scopeKey, executionProfile: item.executionProfile, accessCeiling: item.accessCeiling ?? null, participantUserId: item.participantUserId, bindingIdentity: item.authority?.bindingIdentity, authorityRevision: item.authority?.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: selected.snapshot?.contextHash ?? null, agentProfileId: item.binding?.agentProfileId ?? "default", runtimeRevision: this.runtimeRevision }));
 		this.store.createJob({ jobId: replacementJobId, backendId: item.backendId, revision: sourceJob.revision, backendCapabilities: sourceJob.backendCapabilities, activityDetail: sourceJob.activityDetail, jobType: carriesIssueContract(this.#profileConfig(item.binding), item.authority, item.accessCeiling ?? null) ? "issue_work" : "conversation", scopeKey: item.scopeKey, softSilenceMs: sourceJob.softSilenceMs, recoveryEnvelope: replacementEnvelope, executionBinding: sourceJob.executionBinding });
 		const replacement = { ...item, jobId: replacementJobId, prompt: replacementPrompt, currentRequest, sourceMessageId: null };
@@ -813,7 +833,7 @@ export class DiscordMessageRouter {
 					const authority = this.#recoveryAuthority(payload);
 					const binding = authority.binding;
 					const agentContext = this.#agentContext(binding);
-					const prompt = boundRequestPrompt(payload.currentRequest, this.#profileConfig(binding), authority, agentContext.snapshot, accessCeiling, { currentIssueUrl: this.#currentIssueUrl(typeof payload.scopeKey === "string" ? payload.scopeKey : null) });
+					const prompt = boundRequestPrompt(payload.currentRequest, this.#profileConfig(binding), authority, agentContext.snapshot, accessCeiling, { currentIssueUrl: this.#currentIssueUrl(typeof payload.scopeKey === "string" ? payload.scopeKey : null, binding) });
 				const executionProfile = this.#executionProfile(item.backendId, authority, accessCeiling);
 				const profileChanged = !sameExecutionProfile(payload.executionProfile, executionProfile);
 				if (this.config.schemaVersion === 2) {

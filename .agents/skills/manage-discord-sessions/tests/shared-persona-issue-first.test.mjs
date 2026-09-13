@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { buildAgentContextSnapshot } from "../helper/agent-context.mjs";
-import { boundRequestPrompt, carriesIssueContract, harvestIssueUrl, issueFirstContract, personaInstructions } from "../helper/discord-router.mjs";
+import { boundRequestPrompt, carriesIssueContract, harvestIssueUrl, readIssueDeclaration, issueFirstContract, personaInstructions } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
 
 const roots = [];
@@ -252,13 +252,20 @@ test("DSO-018 이슈는 전용 표지가 붙은 마지막 줄로만 선언된다
 	assert.equal(harvestIssueUrl(url(42), repo), null, "표지 없는 단독 줄을 거뒀다");
 	assert.equal(harvestIssueUrl(`https://evil.test/x/${url(42)}`, repo), null, "다른 URL 안에 박힌 주소를 거뒀다");
 	assert.equal(harvestIssueUrl(`Issue: ${url(0)}`, repo), null, "있을 수 없는 0번 이슈를 거뒀다");
+	// 작업이 아니었다는 선언은 "아무 말 없음"과 달라야 한다
+	assert.equal(readIssueDeclaration("답했습니다.\n\nIssue: none", repo).kind, "none", "작업 아님 선언을 못 읽었다");
+	assert.equal(readIssueDeclaration("그냥 끝.", repo).kind, "absent", "선언 없음을 못 읽었다");
+	assert.equal(readIssueDeclaration(`했습니다.\n\nIssue: ${url(3)}`, repo).kind, "issue", "이슈 선언을 못 읽었다");
 	for (const bad of [`https://evil-github.com/${repo}/issues/1`, `https://github.com.evil.test/${repo}/issues/1`, `https://github.com@evil.test/${repo}/issues/1`, `http://github.com/${repo}/issues/1`]) {
 		assert.equal(harvestIssueUrl(`Issue: ${bad}`, repo), null, `호스트 위조를 거뒀다: ${bad}`);
 	}
 	// 계약이 그 형식과 "질문이면 쓰지 말라"를 실제로 말해야 한다
 	const contract = issueFirstContract({ repo });
 	assert.ok(contract.includes("Issue: <url>"), "계약이 표지 형식을 말하지 않는다");
-	assert.ok(contract.includes("do not write that line at all"), "질문이면 선언하지 말라는 문장이 없다");
+	// 질문이었을 때도 반드시 밝혀야 한다. 침묵과 "작업 아님"이 같아지면, 쓰기 권한자의
+	// 질문이 추적 없이 끝난 작업과 기록상 구별되지 않는다.
+	assert.ok(contract.includes("Issue: none"), "작업이 아니었을 때의 선언 형식이 없다");
+	assert.ok(contract.includes("changed nothing"), "무엇이 작업 아님인지 밝히지 않는다");
 });
 
 test("DSO-018 계약을 지지 않은 작업은 이슈를 거두지 않는다", async () => {
