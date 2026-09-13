@@ -9,6 +9,13 @@ provider-neutral Discord session skill. That skill does not require
 
 ## `messenger-sessions/` — Discord AI session configuration
 
+Initialize from the ADK, not from `data-private` or `naia-shell`:
+
+```bash
+node .agents/skills/init-discord-gateway/scripts/init-discord-gateway.mjs \
+  --adk-root . --instance alpha --backend opencode
+```
+
 Tracked example:
 
 ```text

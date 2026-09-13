@@ -5,9 +5,13 @@ updated_at: 2026-08-09
 
 ownership:
   common_feature_repository: naia-adk
-  runtime_project: projects/naia-agent
-  private_deployment_overlay: downstream fork context
-  rule: portable gateway behavior belongs here; channel identities, credential bindings, project allowlists, host units, and private paths belong only in the private overlay
+  init_skill: .agents/skills/init-discord-gateway
+  operate_skill: .agents/skills/manage-discord-sessions
+  settings_root: naia-settings/messenger-sessions
+  credentials_root: naia-settings/.keys/messenger-sessions
+  runtime_state_root: naia-settings/.sessions/messenger-sessions
+  not_settings: [data-private, naia-shell]
+  rule: portable gateway behavior belongs in naia-adk skills; live instance files belong under that ADK's naia-settings. naia-shell may pass only the ADK path. data-private is not the Discord gateway config.
 
 gateway_contract:
   transport_role: L3 user-facing ingress and delivery surface

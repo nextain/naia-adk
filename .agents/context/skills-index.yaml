@@ -102,12 +102,14 @@ skills:
     scripts: [scripts/vault.sh]
     note: "명령은 init/unlock/list/verify/lock/status/sync. 비번이 필요한 unlock·verify·lock 은 사용자가 자기 터미널에서 직접 실행하고, 비번이 필요 없는 status·sync 는 AI 가 대신한다. '키 다 백업돼 있나' 는 기억이 아니라 status 로 답한다. 표준 소비자=data-private 서브모듈."
 
+  init-discord-gateway:
+    trigger: "디스코드 게이트웨이 초기화, 디스코드 봇 설정, messenger-sessions 만들어, naia-settings에 디스코드 설정"
+    what: "naia-adk의 naia-settings 아래에 Discord 게이트웨이 인스턴스 설정 파일을 만든다. 토큰은 쓰지 않는다. naia-shell·data-private를 쓰지 않는다."
+    arg: "[--instance <id>] [--backend opencode|codex|claude]"
+    scripts: [scripts/init-discord-gateway.mjs]
+    note: "설정 정본은 naia-settings/messenger-sessions/. 켜고 감시하는 일은 manage-discord-sessions."
+
   manage-discord-sessions:
-    trigger: "Discord 설정, Codex/Claude 백그라운드 작업 상태, 실시간 활동, 멈춤 진단, 재부팅 복구, idle history rotation"
-    what: "ADK 내부 SQLite에서 Discord AI 작업의 서비스 신선도·활동·검증 증거를 조회하고, 이후 Gateway/재부팅 복구를 같은 계약으로 관리"
-    arg: null
-    scripts: [scripts/manage-discord-sessions.sh]
-    note: "Gateway 실시간 수신, Codex/Claude 독립 실행, Linux systemd/Windows Task Scheduler 자동 시작, 재부팅 복구, stale permission-profile 교체, 무진행/채널응답 watchdog, 권한 바인딩된 명시적 history/latest/reply와 해시 검증 첨부 복구까지 구현됨. 결과 정확성은 활동 상태와 분리해 completionAssessment 근거로 판단."
 
   session-resume:
     trigger: "claude --resume, codex/opencode 세션 이어서, 이전 세션 뭐했지, 세션 기록 봐줘"
