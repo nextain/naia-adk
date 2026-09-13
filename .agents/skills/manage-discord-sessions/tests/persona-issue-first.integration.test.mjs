@@ -143,7 +143,7 @@ test("UCT_DSO_018_001 업무를 요청하면 이슈를 세우고 다음 요청�
 		await router.waitForIdle();
 		assert.ok(prompts[1].includes(`was last working on ${ISSUE(77)}`), "다음 요청이 앞의 이슈를 안 이었다");
 		assert.ok(prompts[1].includes("still open and actually covers this request"), "닫힌 이슈를 잇지 말라는 조건이 없다");
-		assert.ok(!prompts[1].includes("If none covers it, create one"), "이을 이슈가 있는데 새로 만들라고 적혔다");
+		assert.ok(prompts[1].includes("skip steps 3 and 4"), "이으면 검색·생성을 건너뛰라는 말이 없다");
 	} finally { store.close(); }
 });
 
@@ -241,5 +241,65 @@ test("UCT_DSO_018_003 이슈를 밝히지 않고 끝나면 기록에 신호가 �
 		assert.equal(job.issueUrl, null, "선언이 없는데 이슈가 남았다");
 		assert.ok(job.events.some((event) => event.kind === "issue_declaration_missing"),
 			"이슈 없이 끝난 업무 작업에 신호가 없다 — 기록만 보면 질문과 구별되지 않는다");
+	} finally { store.close(); }
+});
+
+test("UCT_DSO_018_004 작업이 아니었다고 밝히면 대화로 되돌아간다", async () => {
+	// 쓰기 권한자가 던진 질문은 계약을 지고 시작하지만 작업이 아니다. 침묵과
+	// "작업 아님"을 한 덩어리로 묶으면, 그 질문이 추적 없이 끝난 작업과 기록상
+	// 똑같아진다 — 5회차 적대리뷰가 짚었다.
+	const { store, root } = fixture();
+	const discord = mockDiscord({ botUserId: BOT, channelId: CHANNEL, userId: USER });
+	try {
+		const snapshot = workspaceWithNaiaSettings(root);
+		const router = new DiscordMessageRouter({
+			config: gatewayConfig(), store, token: "token-value-long-enough", botUserId: BOT,
+			cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot,
+			runtimeRevision: RUNTIME_REVISION, send: discord.send, deliver: async (input) => discord.deliver(input),
+			runner: async () => ({ backendOutcome: "success", attemptId: "a1", transientResult: "질문에 답했습니다. 바꾼 것은 없습니다.\n\nIssue: none" }),
+		});
+		const { envelope, sequence } = discord.message("이거 왜 이래?");
+		const accepted = await router.onDispatch("MESSAGE_CREATE", { ...envelope, guild_id: GUILD }, sequence);
+		await router.waitForIdle();
+		const job = store.getJob(accepted.jobId, { includeEvents: true });
+		// 작업 종류는 호스트가 정한 그대로 둔다. 검증되지 않은 모델의 한 줄이 분류를
+		// 낮추면, 실제로 파일을 바꾸고 none 이라고 쓴 작업이 대화로 위장된다.
+		assert.equal(job.jobType, "issue_work", "모델의 한 줄이 호스트의 분류를 덮었다");
+		assert.equal(job.issueUrl, null, "작업 아님인데 이슈가 기록됐다");
+		assert.ok(job.events.some((event) => event.kind === "issue_declared_none"),
+			"작업 아님 선언이 기록되지 않았다");
+		assert.ok(!job.events.some((event) => event.kind === "issue_declaration_missing"),
+			"밝혔는데 미선언 신호가 붙었다 — 침묵과 구별되지 않는다");
+	} finally { store.close(); }
+});
+
+test("UCT_DSO_018_005 저장소를 바꾸면 옛 이슈를 잇지 않는다", async () => {
+	// 트래커를 바꾸면 옛 이슈가 대화에 남는다. 그것을 이으라고 하면 모델이 남의
+	// 저장소 이슈를 선언하고, 거두기는 저장소가 달라 거절한다 — 대화가 옛 이슈에
+	// 영구히 묶이고 매 요청마다 미선언이 쌓인다.
+	const { store, root } = fixture();
+	const discord = mockDiscord({ botUserId: BOT, channelId: CHANNEL, userId: USER });
+	try {
+		const snapshot = workspaceWithNaiaSettings(root);
+		const prompts = [];
+		const make = (tracker) => new DiscordMessageRouter({
+			config: gatewayConfig({ issueTracker: tracker }), store, token: "token-value-long-enough", botUserId: BOT,
+			cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot,
+			runtimeRevision: RUNTIME_REVISION, send: discord.send, deliver: async (input) => discord.deliver(input),
+			runner: async (input) => { prompts.push(input.prompt); return { backendOutcome: "success", attemptId: `a${prompts.length}`, transientResult: `했습니다.\n\nIssue: ${ISSUE(21)}` }; },
+		});
+		const first = discord.message("고쳐줘");
+		await make(TRACKER).onDispatch("MESSAGE_CREATE", { ...first.envelope, guild_id: GUILD }, first.sequence);
+		await make(TRACKER).waitForIdle();
+		assert.equal(store.currentScopeIssue(store.getJob((store.listJobs({ limit: 1 })[0]).jobId, { includeEvents: false }).scopeKey), ISSUE(21));
+
+		// 저장소가 바뀌었다
+		const moved = { provider: "github", repo: "example-org/moved-repo" };
+		const second = discord.message("이어서 해줘");
+		const router = make(moved);
+		await router.onDispatch("MESSAGE_CREATE", { ...second.envelope, guild_id: GUILD }, second.sequence);
+		await router.waitForIdle();
+		assert.ok(!prompts[1].includes(ISSUE(21)), "저장소가 바뀌었는데 옛 이슈를 이으라고 했다");
+		assert.ok(prompts[1].includes("Search the open issues of example-org/moved-repo"), "새 저장소에서 찾으라고 안 했다");
 	} finally { store.close(); }
 });

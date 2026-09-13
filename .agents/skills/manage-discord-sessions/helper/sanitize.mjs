@@ -113,6 +113,8 @@ const PAYLOAD_BUILDERS = {
 	progress_reported: (payload) => `Progress: ${payload.excerpt}`,
 	// 이슈 계약을 진 작업이 이슈를 밝히지 않고 끝났다. 바꾼 것이 어디에도 안 매인다.
 	issue_declaration_missing: () => "Issue-first work ended without a declared issue",
+	// 권한은 있었지만 바꾼 것이 없다고 밝혔다.
+	issue_declared_none: () => "Issue-first request declared no project work",
 	prompt_cache_observed: (payload) => {
 		const backend = enumValue(payload.backend, "backend");
 		const base = `Provider cache receipt (${backend} raw counters): input=${count(payload.inputTokens, "inputTokens")}, cache-read=${count(payload.cacheReadInputTokens, "cacheReadInputTokens")}`;
@@ -162,6 +164,7 @@ const PAYLOAD_KEYS = new Map([
 	["output_activity", new Set(["bytes"])],
 	["progress_reported", new Set(["excerpt"])],
 	["issue_declaration_missing", new Set([])],
+	["issue_declared_none", new Set([])],
 	["prompt_cache_observed", new Set(["backend", "inputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "outputTokens"])],
 	["tool_started", new Set(["toolCategory"])],
 	["tool_finished", new Set(["toolCategory"])],

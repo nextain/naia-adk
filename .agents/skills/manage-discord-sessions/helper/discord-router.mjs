@@ -176,8 +176,10 @@ export function issueFirstContract({ repo, currentIssueUrl = null }) {
 	];
 	if (currentIssueUrl) {
 		lines.push(
-			`2. This conversation was last working on ${currentIssueUrl}. Check that it is still open and actually covers this request; if it does, continue it. If it is closed, or this request is different work, follow steps 3 and 4 instead and open a new one.`,
-			`3. ${ISSUE_DECLARATION}`,
+			`2. This conversation was last working on ${currentIssueUrl}. Check that it is still open and actually covers this request. If it does, continue it and skip steps 3 and 4.`,
+			`3. Otherwise search the open issues of ${repo} for this work. If one already covers it, use that one instead of opening another.`,
+			`4. If none covers it, create one in ${repo} stating the goal, the scope, and how completion is judged.`,
+			`5. ${ISSUE_DECLARATION}`,
 		);
 	} else {
 		lines.push(
@@ -228,7 +230,7 @@ export function boundRequestPrompt(userText, config, authorization = null, agent
 		"Authority limit: Ask only when a material unresolved choice would change the requested scope. If an action is outside the granted actions, stop safely and report the limitation without expanding authority or claiming completion.",
 		"Current-turn truthfulness: Never promise to continue, resume, deploy, or report later after this job ends. In the current job, either perform and verify the concrete bounded work, or state the exact missing request, authority, credential, or external precondition. A prior failed or terminal job is not automatically resumed; do not imply that it is running.",
 		"Communication: Reply in the language used by the user. Before tool work, provide a brief analysis and action plan as an intermediate update. During long work, report meaningful findings or phase changes before the final verified result. Do not repeat generic status text.",
-		"Discord access: Do not access Discord directly. If the operator explicitly requests a separate DM, return exactly one discordDm JSON object; the gateway will deliver it only to the fixed workspace-owner recipient.",
+		"Discord access: Do not access Discord directly. If the operator explicitly requests a separate DM, return exactly one discordDm JSON object and nothing else; the gateway will deliver it only to the fixed workspace-owner recipient. When an issue declaration is also required, put it on the last line inside both successReply and failureReply, never outside the JSON.",
 	);
 	if (carriesIssueContract(config, authorization, accessCeiling)) {
 		parts.push("", issueFirstContract({ repo: config.workspace.issueTracker.repo, currentIssueUrl }));
@@ -498,9 +500,10 @@ export class DiscordMessageRouter {
 		if (!carriesIssueContract(this.#profileConfig(item.binding), item.authority, item.accessCeiling ?? null)) return null;
 		const declaration = readIssueDeclaration(finalContent, tracker.repo);
 		if (declaration.kind === "none") {
-			// 권한은 있었지만 바꾼 것이 없다고 밝혔다. 침묵과 한 덩어리로 묶으면,
-			// 쓰기 권한자의 질문이 추적 없이 끝난 작업과 기록상 똑같아진다.
-			try { this.store.setJobType({ jobId: item.jobId, jobType: "conversation" }); } catch {}
+			// 사실로 기록하되 **작업 종류는 덮지 않는다.** 검증되지 않은 모델의 한 줄이
+			// 호스트의 분류를 낮추면, 실제로 파일을 바꾸고 none 이라고 쓴 작업이
+			// 대화로 위장된다.
+			try { this.store.recordEvent({ jobId: item.jobId, source: "helper", kind: "issue_declared_none", safePayload: {} }); } catch {}
 			return null;
 		}
 		if (declaration.kind === "absent") {
