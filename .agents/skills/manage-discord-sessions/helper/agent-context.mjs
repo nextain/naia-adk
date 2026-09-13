@@ -65,22 +65,15 @@ export function resolveAgentContextWorkspace(config) {
 	const entrypoint = configuredRelativePath(config.entrypoint, "entrypoint");
 	if (config.contextFiles !== undefined && !Array.isArray(config.contextFiles)) throw new Error("contextFiles must be an array");
 	const contextFiles = (config.contextFiles ?? []).map((value) => configuredRelativePath(value, "context file")).sort();
-	// 페르소나 파일은 정체성이라 프로젝트 컨텍스트와 같은 자리에 렌더링하지 않는다.
-	// 다만 무결성은 같은 장치로 지킨다 — 심링크 금지, 크기 제한, 해시 결박.
-	const personaFile = config.personaFile === undefined || config.personaFile === null
-		? null
-		: configuredRelativePath(config.personaFile, "persona file");
-	const relativePaths = [entrypoint, ...contextFiles, ...(personaFile === null ? [] : [personaFile])];
+	const relativePaths = [entrypoint, ...contextFiles];
 	if (relativePaths.length > AGENT_CONTEXT_LIMITS.maxContextFiles) throw new Error("agent context file count exceeds the limit");
-	const personaIndex = personaFile === null ? -1 : relativePaths.length - 1;
 	if (new Set(relativePaths).size !== relativePaths.length) throw new Error("agent context files must be unique");
 	const seen = new Set();
 	const files = relativePaths.map((relativePath, index) => {
 		const absolutePath = resolveContextFile(workspaceRoot, relativePath);
 		if (seen.has(absolutePath)) throw new Error("agent context files must resolve uniquely");
 		seen.add(absolutePath);
-		const kind = index === 0 ? "entrypoint" : (index === personaIndex ? "persona" : "context");
-		return Object.freeze({ kind, relativePath, absolutePath });
+		return Object.freeze({ kind: index === 0 ? "entrypoint" : "context", relativePath, absolutePath });
 	});
 	return Object.freeze({ workspaceRoot, files: Object.freeze(files) });
 }
@@ -259,11 +252,11 @@ export function verifyAgentContextBeforeAttempt(startupSnapshot) {
 		const personaFiles = startupSnapshot.manifest.files.filter((file) => file.kind === "persona").map((file) => file.path);
 		if (!entrypoint || startupSnapshot.manifest.files.filter((file) => file.kind === "entrypoint").length !== 1) throw new Error("startup agent context manifest is invalid");
 		if (personaFiles.length > 1) throw new Error("startup agent context manifest is invalid");
-		// 렌더된 페르소나는 파일이 아니므로 작업공간에서 찾지 않는다. 나이아 설정을
-		// 다시 읽어 다시 만든다 — 셸에서 페르소나를 바꾸면 여기서 해시가 어긋난다.
-		const rendered = personaFiles[0] === RENDERED_PERSONA_PATH;
-		if (rendered && typeof startupSnapshot.personaSourceRoot !== "string") throw new Error("startup agent context manifest is invalid");
-		const resolvedWorkspace = resolveAgentContextWorkspace({ workspace: startupSnapshot.workspaceRoot, entrypoint: entrypoint.path, contextFiles, personaFile: rendered ? null : personaFiles[0] ?? null });
+		// 페르소나는 파일이 아니라 설정에서 렌더된 것이다. 설정을 다시 읽어 다시
+		// 만든다 — 셸에서 페르소나를 바꾸면 여기서 해시가 어긋난다.
+		const rendered = personaFiles.length === 1;
+		if (rendered && (personaFiles[0] !== RENDERED_PERSONA_PATH || typeof startupSnapshot.personaSourceRoot !== "string")) throw new Error("startup agent context manifest is invalid");
+		const resolvedWorkspace = resolveAgentContextWorkspace({ workspace: startupSnapshot.workspaceRoot, entrypoint: entrypoint.path, contextFiles });
 		const current = snapshotResolvedWorkspace(resolvedWorkspace, configuredAgentId(startupSnapshot.agentId), rendered ? renderNaiaPersona(readNaiaPersonaSettings(startupSnapshot.personaSourceRoot)) : null);
 		if (current.contextHash !== startupSnapshot.contextHash) throw new AgentContextChangedError();
 		return Object.freeze({ contextHash: current.contextHash, verified: true });

@@ -104,17 +104,16 @@ configured shared directories and same-directory records from another boot or
 host remain fail-closed.
 
 Instances that belong to one person share that person's identity instead of each
-carrying its own copy. Point `persona.instructionsFile` at a workspace-relative
-file — `.agents/context/persona/agent.md` in this repository — and every instance
-that names it reads the same bytes. The file is resolved through the same rules as
-the deterministic context files (no absolute path, no traversal, no symlink
-component, bounded size, valid UTF-8) and its bytes join the context hash, so a
-changed identity is caught by the same pre-spawn drift check and needs a service
-restart. It is rendered once, in the persona position, and never inside the
-project-context prefix. Keep what differs between instances — which guild and
-channel, which repository, what the instance must not touch — in `persona.instructions`,
-which is appended after the shared identity. Either field may stand alone, but at
-least one is required, and the file form needs schema v2 and a single workspace.
+carrying its own copy. Set `persona.source` to `"naia-settings"` so the gateway
+reads only the named identity fields from `<ADK root>/naia-settings/config.json`,
+the same file the conversation agent uses. The rendered identity joins the
+context hash, so a changed identity is caught by the same pre-spawn drift check
+and needs a service restart. It is rendered once, in the persona position, and
+never inside the project-context prefix. Keep what differs between instances —
+which guild and channel, which repository, what the instance must not touch — in
+`persona.instructions`, which is appended after the shared identity. An
+installation without a conversation agent uses inline `instructions` and
+`persona.name` only. There is no second workspace-file identity.
 
 Set `workspace.issueTracker` to `{ "provider": "github", "repo": "owner/name" }` to
 make requests that can change the project run through an issue. Whether the contract
@@ -128,7 +127,8 @@ repository's issue-driven development workflow; a question is answered without o
 an issue. The gateway holds no repository credential and creates nothing itself — it
 reads the URL back out of the result, accepts it only when it belongs to the configured
 repository, and records it on the job and on the conversation. The next request in the
-same conversation is told to continue that issue instead of opening another. Work
+same conversation is told to continue that issue when it is still open and covers the
+request; otherwise it searches for or creates one. Work
 accepted under the contract is recorded with job type `issue_work`. An instance without
 `issueTracker` behaves exactly as before.
 

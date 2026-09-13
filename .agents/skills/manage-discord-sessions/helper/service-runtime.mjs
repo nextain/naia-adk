@@ -82,7 +82,7 @@ export function configuredAgentContext(root, config) {
 	if (config.schemaVersion !== 2) return { cwd: root, allowedPaths: [realpathSync(root)], snapshot: null };
 	const canonicalRoot = realpathSync(root);
 	const candidate = isAbsolute(config.workspace.path) ? config.workspace.path : resolve(canonicalRoot, config.workspace.path);
-	const snapshot = buildAgentContextSnapshot({ workspace: candidate, agentId: config.workspace.agentId, entrypoint: config.workspace.entrypoint, contextFiles: config.workspace.contextFiles, personaFile: config.persona?.instructionsFile ?? null, personaSourceRoot: config.persona?.source === "naia-settings" ? canonicalRoot : null });
+	const snapshot = buildAgentContextSnapshot({ workspace: candidate, agentId: config.workspace.agentId, entrypoint: config.workspace.entrypoint, contextFiles: config.workspace.contextFiles, personaSourceRoot: config.persona?.source === "naia-settings" ? canonicalRoot : null });
 	const allowedPaths = config.workspace.allowedPaths.map((path) => {
 		return realpathSync(isAbsolute(path) ? path : resolve(canonicalRoot, path));
 	});

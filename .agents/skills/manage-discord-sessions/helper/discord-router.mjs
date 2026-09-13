@@ -109,25 +109,19 @@ const MAX_REQUEST_TEXT_LENGTH = 6_000;
 /**
  * 이 인스턴스가 쓰는 페르소나 글.
  *
- * `instructionsFile` 을 적었으면 그 파일의 글이 정체성이고, `instructions` 는 이
- * 인스턴스에만 해당하는 경계다. 파일을 적었는데 스냅샷에 그 글이 없으면 조용히
- * 빼지 않고 멈춘다 — 정체성이 빠진 채로 도는 것이 잘못된 정체성보다 낫지 않다.
+ * `source: "naia-settings"` 를 적었으면 대화 에이전트가 쓰는 정체성이 오고,
+ * `instructions` 는 이 인스턴스에만 해당하는 경계다. 대화 에이전트가 없는 설치는
+ * `instructions` 하나로 선다. 정체성을 못 만들면 조용히 빼지 않고 멈춘다 —
+ * 정체성이 빠진 채로 도는 것이 잘못된 정체성보다 낫지 않다.
  */
 export function personaInstructions(config, agentContextSnapshot) {
-	// 나이아 설정에서 오는 페르소나는 스냅샷이 들고 있다. 파일과 같은 자리에 같은
-	// 방식으로 해시되어 있으므로 확인하는 방법도 같다.
 	if (config.persona.source === "naia-settings") {
 		const fromSettings = agentContextSnapshot?.personaText ?? null;
 		if (typeof fromSettings !== "string" || fromSettings.trim() === "") throw new Error("naia settings persona is missing from the agent context snapshot");
 		return [fromSettings, config.persona.instructions].filter(Boolean).join("\n");
 	}
-	const shared = config.persona.instructionsFile === undefined ? null : agentContextSnapshot?.personaText ?? null;
-	if (config.persona.instructionsFile !== undefined && (typeof shared !== "string" || agentContextSnapshot?.personaFile !== config.persona.instructionsFile)) {
-		throw new Error("configured persona file is missing from the agent context snapshot");
-	}
-	// 빈 파일은 "글자 수 0인 정체성"이 아니라 배선 실수다.
-	if (shared !== null && shared.trim() === "") throw new Error("configured persona file is empty");
-	return [shared, config.persona.instructions].filter(Boolean).join("\n");
+	if (typeof config.persona.instructions !== "string" || config.persona.instructions.trim() === "") throw new Error("persona instructions are missing");
+	return config.persona.instructions;
 }
 
 /** 프롬프트에 적히는 이름. 나이아 설정에서 오면 그 설정의 agentName 을 쓴다. */

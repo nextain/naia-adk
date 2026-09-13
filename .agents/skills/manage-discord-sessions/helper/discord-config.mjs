@@ -45,27 +45,26 @@ function validateIssueTracker(tracker) {
 /**
  * 페르소나.
  *
- * `instructions` 는 이 인스턴스에만 해당하는 경계이고, `instructionsFile` 은 작업공간
- * 안의 파일로 여러 인스턴스가 함께 쓰는 정체성이다. 파일 쪽은 에이전트 컨텍스트와
- * 같은 장치로 읽혀 심링크·크기·해시가 함께 지켜진다. 둘 중 최소 하나는 있어야 한다.
+ * `instructions` 는 이 인스턴스에만 해당하는 경계이고, `source: "naia-settings"` 는
+ * 대화 에이전트가 쓰는 정체성을 그대로 가져온다. 대화 에이전트가 없는 설치는
+ * `instructions` 하나로 선다. 둘 중 최소 하나는 있어야 한다.
  */
 function validatePersona(persona, label) {
-	assertOnlyKeys(persona ?? {}, new Set(["name", "instructions", "instructionsFile", "source"]), label);
-	// `source: "naia-settings"` 는 대화봇이 쓰는 페르소나를 그대로 가져온다. 업무
-	// 게이트웨이가 대화봇과 한 정체성이 되게 하려는 것이고, 이름도 설정의 agentName
-	// 에서 온다. 사상은 .agents/context/discord-gateway-persona-sharing.yaml 에 있다.
+	assertOnlyKeys(persona ?? {}, new Set(["name", "instructions", "source"]), label);
+	// `source: "naia-settings"` 는 나이아가 대화에서 쓰는 페르소나를 그대로 가져온다.
+	// 업무 게이트웨이가 대화봇과 한 정체성이 되게 하려는 것이고, 이름도 설정의
+	// agentName 에서 온다. 사상은 .agents/context/discord-gateway-persona-sharing.yaml 에 있다.
 	if (persona?.source !== undefined && persona.source !== "naia-settings") throw new Error(`${label} source is not supported`);
 	const fromSettings = persona?.source === "naia-settings";
 	if (persona?.name !== undefined && (typeof persona.name !== "string" || !persona.name || persona.name.length > 80)) throw new Error(`${label} name is invalid`);
 	// 설정에서 정체성을 가져오면서 인스턴스 이름까지 따로 두면 프롬프트가 두 이름을
-	// 말한다. 한 사람이어야 한다는 것이 이 기능의 전부이므로 함께 쓰지 못하게 한다.
+	// 말한다 — `Persona: <인스턴스 이름>` 뒤에 `You are <agentName>`. 한 사람이어야
+	// 한다는 것이 이 기능의 전부이므로 함께 쓰지 못하게 한다.
 	if (fromSettings && persona?.name !== undefined) throw new Error(`${label} cannot take both source and name`);
 	if (!fromSettings && typeof persona?.name !== "string") throw new Error(`${label} name is invalid`);
 	if (persona.instructions !== undefined && (typeof persona.instructions !== "string" || !persona.instructions || persona.instructions.length > 4_000)) throw new Error(`${label} instructions are invalid`);
-	const instructionsFile = persona.instructionsFile === undefined ? undefined : relativeConfigPath(persona.instructionsFile, `${label}.instructionsFile`);
-	if (fromSettings && instructionsFile !== undefined) throw new Error(`${label} cannot take both source and instructionsFile`);
-	if (!fromSettings && persona.instructions === undefined && instructionsFile === undefined) throw new Error(`${label} needs instructions, instructionsFile, or source`);
-	return { ...persona, ...(instructionsFile === undefined ? {} : { instructionsFile }) };
+	if (!fromSettings && persona.instructions === undefined) throw new Error(`${label} needs instructions or source`);
+	return { ...persona };
 }
 
 function validateWorkspace(workspace) {
@@ -148,7 +147,7 @@ export function loadMessengerConfig(path) {
 	try { config = JSON.parse(readFileSync(fd, "utf8")); } finally { closeSync(fd); }
 	assertOnlyKeys(config, new Set(["schemaVersion", "enabled", "workspaceId", "workspace", "agentProfiles", "persona", "role", "backend", "discord", "runtime", "observability", "service", "recovery"]), "messenger config");
 	for (const [value, keys, label] of [
-		[config.persona, ["name", "instructions", "instructionsFile", "source"], "persona"],
+		[config.persona, ["name", "instructions", "source"], "persona"],
 		[config.role, ["name", "allowedActions", "requiresApproval"], "role"],
 		[config.backend, ["selected", "profiles"], "backend"],
 		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent", "participantProfiles", "proactiveDmRecipientUserId"], "discord"],
@@ -167,10 +166,6 @@ export function loadMessengerConfig(path) {
 	else if (config.workspace !== undefined || config.discord?.participantProfiles !== undefined) throw new Error("workspace and participantProfiles require messenger config schema v2");
 	if (config.enabled !== true) throw new Error("messenger service is disabled");
 	config.persona = validatePersona(config.persona, "persona");
-	// 페르소나 파일은 작업공간 안에서 읽힌다. agentProfiles 를 쓰면 작업공간이
-	// 프로필마다 달라지므로, 어느 작업공간에서 읽어야 하는지가 정해지지 않는다.
-	if (config.persona.instructionsFile !== undefined && config.agentProfiles !== undefined) throw new Error("persona.instructionsFile requires a single workspace");
-	if (config.persona.instructionsFile !== undefined && config.schemaVersion !== 2) throw new Error("persona.instructionsFile requires messenger config schema v2");
 	if (config.persona.source !== undefined && config.schemaVersion !== 2) throw new Error("persona.source requires messenger config schema v2");
 	if (!config.role?.name || !Array.isArray(config.role.allowedActions)) throw new Error("role and allowedActions are required");
 	if (config.role.allowedActions.length === 0 || config.role.allowedActions.some((value) => !ACTIONS.has(value))) throw new Error("role contains an unsupported allowed action");

@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { buildAgentContextSnapshot } from "../helper/agent-context.mjs";
-import { boundRequestPrompt, carriesIssueContract, harvestIssueUrl, readIssueDeclaration, issueFirstContract, personaInstructions } from "../helper/discord-router.mjs";
+import { boundRequestPrompt, carriesIssueContract, harvestIssueUrl, issueFirstContract, personaInstructions, readIssueDeclaration } from "../helper/discord-router.mjs";
 import { SessionStore } from "../helper/store.mjs";
 
 const roots = [];
@@ -28,44 +28,50 @@ afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-const SHARED_PERSONA = "에이전트로서 요청한 사람의 언어로 답한다. 모르는 것을 꾸며내지 않는다.\n";
+const SHARED_PERSONA = "에이전트로서 요청한 사람의 언어로 답한다. 모르는 것을 꾸며내지 않는다.";
+const TRACKER = { provider: "github", repo: "example-org/example-repo" };
 
-function workspace(personaText = SHARED_PERSONA) {
-	const root = mkdtempSync(join(tmpdir(), "naia-shared-persona-"));
-	roots.push(root);
-	mkdirSync(join(root, ".agents/context/persona"), { recursive: true });
-	writeFileSync(join(root, "AGENTS.md"), "# Entry\n", "utf8");
-	writeFileSync(join(root, ".agents/context/rules.yaml"), "rule: bounded\n", "utf8");
-	writeFileSync(join(root, ".agents/context/persona/agent.md"), personaText, "utf8");
-	return root;
+/** 나이아 설정이 있는 ADK 루트. 작업공간은 그 하위 디렉터리다. */
+function workspace(personaText = SHARED_PERSONA, extra = {}) {
+	const adkRoot = mkdtempSync(join(tmpdir(), "naia-shared-persona-"));
+	roots.push(adkRoot);
+	const ws = join(adkRoot, "projects/work");
+	mkdirSync(join(adkRoot, "naia-settings"), { recursive: true });
+	mkdirSync(join(ws, ".agents/context"), { recursive: true });
+	writeFileSync(join(ws, "AGENTS.md"), "# Entry\n", "utf8");
+	writeFileSync(join(ws, ".agents/context/rules.yaml"), "rule: bounded\n", "utf8");
+	writeFileSync(join(adkRoot, "naia-settings/config.json"), JSON.stringify({
+		agentName: "Example Agent", persona: personaText, userName: "Owner", honorific: "boss",
+		speechStyle: "formal", locale: "ko", NAIA_ANYLLM_API_KEY: "sk-must-not-appear", ...extra,
+	}), "utf8");
+	return { adkRoot, workspace: ws };
 }
 
-function snapshotOf(root, personaFile = ".agents/context/persona/agent.md") {
+function snapshotOf(fixtureRoots) {
 	return buildAgentContextSnapshot({
-		workspace: root,
+		workspace: fixtureRoots.workspace,
 		agentId: "naia-agent",
 		entrypoint: "AGENTS.md",
 		contextFiles: [".agents/context/rules.yaml"],
-		personaFile,
+		personaSourceRoot: fixtureRoots.adkRoot,
 	});
 }
 
 /**
  * 이 요청의 참여자 권한. 스키마 v2 는 권한 없이는 프롬프트를 만들지 않는다.
- * 여기서 행동 목록을 바꾸면 실제 게이트웨이가 판정하는 것과 같은 축이 움직인다.
  */
 function authority(actions = ["read", "reply", "write", "execute"]) {
 	return {
-		participantProfile: { label: "owner", relationship: "workspace owner", allowedActions: actions },
+		participantProfile: { label: "owner", relationship: "Owner of this workspace", allowedActions: actions },
 		isOperator: true,
 		binding: { operatorActions: true },
 	};
 }
 
-function config({ personaFile = ".agents/context/persona/agent.md", instructions, issueTracker, actions = ["read", "reply", "write", "execute"] } = {}) {
+function config({ instructions, issueTracker, actions = ["read", "reply", "write", "execute"] } = {}) {
 	return {
 		schemaVersion: 2,
-		persona: { name: "Example Agent", ...(personaFile === null ? {} : { instructionsFile: personaFile }), ...(instructions === undefined ? {} : { instructions }) },
+		persona: { source: "naia-settings", ...(instructions === undefined ? {} : { instructions }) },
 		role: { name: "development", allowedActions: actions },
 		backend: { selected: "opencode", profiles: { opencode: { enabled: true } } },
 		workspace: { path: ".", allowedPaths: ["."], ...(issueTracker === undefined ? {} : { issueTracker }) },
@@ -74,84 +80,64 @@ function config({ personaFile = ".agents/context/persona/agent.md", instructions
 
 // ── 공유 페르소나 ────────────────────────────────────────────────
 
-test("DSO-017 두 인스턴스가 같은 페르소나 파일을 읽고 파일을 고치면 함께 바뀐다", () => {
+test("DSO-017 두 인스턴스가 같은 설정을 읽고 설정을 고치면 함께 바뀐다", () => {
 	// 공유의 뜻은 "같은 글을 두 군데 적어 두었다"가 아니라 "한 군데를 고치면 둘 다
-	// 바뀐다" 입니다. 설정 안에 붙여넣은 글로 돌아가면 이 시험이 실패합니다.
-	const root = workspace();
-	const naia = boundRequestPrompt("상태 알려줘", config(), authority(), snapshotOf(root));
-	const alpha = boundRequestPrompt("상태 알려줘", { ...config(), persona: { name: "Second Instance", instructionsFile: ".agents/context/persona/agent.md" } }, authority(), snapshotOf(root));
-	assert.ok(naia.includes(SHARED_PERSONA.trim()), "naia 프롬프트에 공유 페르소나가 없다");
-	assert.ok(alpha.includes(SHARED_PERSONA.trim()), "alpha 프롬프트에 공유 페르소나가 없다");
+	// 바뀐다" 이다. 설정이 정본이고 게이트웨이는 읽기만 한다.
+	const fixtureRoots = workspace();
+	const snapshot = snapshotOf(fixtureRoots);
+	const first = boundRequestPrompt("상태 알려줘", config(), authority(), snapshot);
+	const second = boundRequestPrompt("상태 알려줘", { ...config(), workspace: { path: ".", allowedPaths: ["."] } }, authority(), snapshot);
+	assert.ok(first.includes(`> ${SHARED_PERSONA}`), "첫 인스턴스에 공유 정체성이 없다");
+	assert.ok(second.includes(`> ${SHARED_PERSONA}`), "둘째 인스턴스에 공유 정체성이 없다");
 
-	writeFileSync(join(root, ".agents/context/persona/agent.md"), "바뀐 정체성.\n", "utf8");
-	const afterNaia = boundRequestPrompt("상태 알려줘", config(), authority(), snapshotOf(root));
-	const afterAlpha = boundRequestPrompt("상태 알려줘", { ...config(), persona: { name: "Second Instance", instructionsFile: ".agents/context/persona/agent.md" } }, authority(), snapshotOf(root));
-	assert.ok(afterNaia.includes("바뀐 정체성."), "파일을 고쳤는데 naia 프롬프트가 그대로다");
-	assert.ok(afterAlpha.includes("바뀐 정체성."), "파일을 고쳤는데 alpha 프롬프트가 그대로다");
+	writeFileSync(join(fixtureRoots.adkRoot, "naia-settings/config.json"), JSON.stringify({ agentName: "Example Agent", persona: "바뀐 정체성." }), "utf8");
+	const after = boundRequestPrompt("상태 알려줘", config(), authority(), snapshotOf(fixtureRoots));
+	assert.ok(after.includes("> 바뀐 정체성."), "설정을 고쳤는데 프롬프트가 그대로다");
 });
 
-test("DSO-017 인스턴스별 경계는 공유 페르소나 뒤에 남는다", () => {
-	const root = workspace();
-	const text = personaInstructions(config({ instructions: "이 인스턴스가 맡은 채널 밖으로 범위를 넓히지 않는다." }), snapshotOf(root));
-	assert.ok(text.startsWith(SHARED_PERSONA.trim()), "공유 정체성이 앞에 와야 한다");
+test("DSO-017 인스턴스별 경계는 공유 정체성 뒤에 남는다", () => {
+	const fixtureRoots = workspace();
+	const text = personaInstructions(config({ instructions: "이 인스턴스가 맡은 채널 밖으로 범위를 넓히지 않는다." }), snapshotOf(fixtureRoots));
+	assert.ok(text.includes(`> ${SHARED_PERSONA}`), "공유 정체성이 앞에 와야 한다");
 	assert.ok(text.includes("이 인스턴스가 맡은 채널 밖으로"), "인스턴스 경계가 사라졌다");
 });
 
-test("DSO-017 페르소나 파일이 스냅샷에 없으면 조용히 빼지 않고 멈춘다", () => {
-	// 정체성이 빠진 채로 도는 것은 잘못된 정체성보다 낫지 않습니다. 파일을 적어 두고
-	// 스냅샷에 싣지 않은 배선 실수는 여기서 터져야 합니다.
-	const root = workspace();
-	const withoutPersona = buildAgentContextSnapshot({ workspace: root, agentId: "naia-agent", entrypoint: "AGENTS.md", contextFiles: [".agents/context/rules.yaml"] });
-	assert.throws(() => personaInstructions(config(), withoutPersona), /persona file is missing/);
-	assert.throws(() => personaInstructions(config(), null), /persona file is missing/);
+test("DSO-017 정체성이 스냅샷에 없으면 조용히 빼지 않고 멈춘다", () => {
+	// 정체성이 빠진 채로 도는 것은 잘못된 정체성보다 낫지 않다.
+	const fixtureRoots = workspace();
+	const withoutPersona = buildAgentContextSnapshot({ workspace: fixtureRoots.workspace, agentId: "naia-agent", entrypoint: "AGENTS.md", contextFiles: [".agents/context/rules.yaml"] });
+	assert.throws(() => personaInstructions(config(), withoutPersona), /persona is missing/);
+	assert.throws(() => personaInstructions(config(), null), /persona is missing/);
 });
 
-test("DSO-017 페르소나는 프로젝트 컨텍스트 자리에 다시 찍히지 않는다", () => {
-	// 같은 글이 두 번 실리면 문맥만 커지고, 정체성이 프로젝트 파일처럼 읽힙니다.
-	const root = workspace();
-	const snapshot = snapshotOf(root);
-	assert.equal(snapshot.personaFile, ".agents/context/persona/agent.md");
-	assert.ok(!snapshot.prefix.includes(SHARED_PERSONA.trim()), "결정론적 컨텍스트 접두에 페르소나가 들어갔다");
+test("DSO-017 정체성은 프로젝트 컨텍스트 자리에 다시 찍히지 않는다", () => {
+	// 같은 글이 두 번 실리면 문맥만 커지고, 정체성이 프로젝트 파일처럼 읽힌다.
+	const fixtureRoots = workspace();
+	const snapshot = snapshotOf(fixtureRoots);
+	assert.ok(!snapshot.prefix.includes(SHARED_PERSONA), "결정론적 컨텍스트 접두에 정체성이 들어갔다");
 	const prompt = boundRequestPrompt("상태 알려줘", config(), authority(), snapshot);
-	assert.equal(prompt.split(SHARED_PERSONA.trim()).length - 1, 1, "페르소나가 프롬프트에 두 번 실렸다");
-});
-
-test("DSO-017 빈 페르소나 파일은 조용히 넘어가지 않는다", () => {
-	// 3회차 적대리뷰가 짚었다. 빈 파일은 "글자 수 0인 정체성"이 아니라 배선 실수다.
-	// 여기서 안 걸면 재시작 뒤 정체성 없이 조용히 서비스한다.
-	const root = workspace("   \n\n");
-	assert.throws(() => personaInstructions(config(), snapshotOf(root)), /persona file is empty/);
-});
-
-test("DSO-017 나이아 설정의 페르소나를 업무 게이트웨이가 그대로 입는다", () => {
-	// 나이아는 자기 페르소나로 대화하고, 업무는 같은 페르소나를 쓰는 별도 게이트웨이의
-	// 코딩 에이전트가 받는다. 사용자에게는 한 사람이어야 한다.
-	const root = workspace();
-	mkdirSync(join(root, "naia-settings"), { recursive: true });
-	writeFileSync(join(root, "naia-settings/config.json"), JSON.stringify({
-		agentName: "Example Agent", persona: "따뜻한 AI 동반자", userName: "Owner", honorific: "boss", speechStyle: "formal",
-		// 자격값은 같은 파일에 있어도 프롬프트에 실리면 안 된다
-		NAIA_ANYLLM_API_KEY: "sk-must-not-appear", apiKeys: { azure: "must-not-appear" },
-	}), "utf8");
-	const snapshot = buildAgentContextSnapshot({ workspace: root, agentId: "naia-agent", entrypoint: "AGENTS.md", contextFiles: [".agents/context/rules.yaml"], personaSourceRoot: root });
-	const fromSettings = { schemaVersion: 2, persona: { source: "naia-settings", instructions: "이 인스턴스는 업무 채널만 맡는다." },
-		role: { name: "development", allowedActions: ["read", "reply", "write", "execute"] },
-		backend: { selected: "opencode", profiles: { opencode: { enabled: true } } },
-		workspace: { path: ".", allowedPaths: ["."] } };
-	const prompt = boundRequestPrompt("고쳐줘", fromSettings, authority(), snapshot);
-	assert.ok(prompt.includes("Persona: Example Agent"), "설정의 agentName 이 이름으로 안 쓰였다");
-	assert.ok(prompt.includes("따뜻한 AI 동반자"), "설정의 페르소나 글이 안 실렸다");
-	assert.ok(prompt.includes("Owner"), "설정의 사용자 이름이 안 실렸다");
-	// 이름과 호칭은 다른 항목이다. 호칭이 있으면 그것으로 부르라고 적혀야 한다.
-	assert.ok(prompt.includes('Address them as \"boss\"'), "호칭이 이름과 따로 실리지 않았다");
-	assert.ok(prompt.includes("이 인스턴스는 업무 채널만 맡는다."), "인스턴스 경계가 사라졌다");
+	assert.equal(prompt.split(SHARED_PERSONA).length - 1, 1, "정체성이 프롬프트에 두 번 실렸다");
 	// 같은 파일의 자격값은 절대 실리지 않는다
-	assert.ok(!prompt.includes("must-not-appear"), "설정 파일의 자격값이 프롬프트에 샜다");
-	// 정체성이 바뀌면 컨텍스트 해시가 바뀌어 재시작을 요구한다
-	const before = snapshot.contextHash;
-	writeFileSync(join(root, "naia-settings/config.json"), JSON.stringify({ agentName: "Example Agent", persona: "바뀐 성격", speechStyle: "formal" }), "utf8");
-	const after = buildAgentContextSnapshot({ workspace: root, agentId: "naia-agent", entrypoint: "AGENTS.md", contextFiles: [".agents/context/rules.yaml"], personaSourceRoot: root });
-	assert.notEqual(after.contextHash, before, "셸에서 페르소나를 바꿨는데 컨텍스트 해시가 같다");
+	assert.ok(!prompt.includes("must-not-appear"), "설정 파일의 자격값이 프롬프트로 샜다");
+});
+
+test("DSO-017 이름 없는 설정은 기동에서 멈춘다", () => {
+	// 기동을 통과시키면 서비스는 도는 것처럼 보이면서 모든 요청을 거절한다.
+	const fixtureRoots = workspace();
+	writeFileSync(join(fixtureRoots.adkRoot, "naia-settings/config.json"), JSON.stringify({ persona: "이름이 없다" }), "utf8");
+	assert.throws(() => snapshotOf(fixtureRoots), /no agent name/);
+});
+
+test("DSO-017 빈 정체성은 조용히 넘어가지 않는다", () => {
+	// 설정에 아무 페르소나 재료가 없으면 렌더할 것이 없다. 그때 빈 글로 서비스하면
+	// 정체성 없이 도는 것이고, 그것이 잘못된 정체성보다 낫지 않다.
+	const fixtureRoots = workspace();
+	writeFileSync(join(fixtureRoots.adkRoot, "naia-settings/config.json"), JSON.stringify({}), "utf8");
+	assert.throws(() => snapshotOf(fixtureRoots), /no agent name|no persona/);
+	// 성격 글이 비어 있어도 이름만으로는 정체성이 아니다
+	writeFileSync(join(fixtureRoots.adkRoot, "naia-settings/config.json"), JSON.stringify({ agentName: "Example Agent", persona: "   " }), "utf8");
+	const onlyName = snapshotOf(fixtureRoots);
+	assert.ok(onlyName.personaText.includes("You are Example Agent"), "이름만 있는 설정도 최소 정체성은 만든다");
 });
 
 test("DSO-017 설정 값이 프롬프트의 구조를 바꾸지 못한다", async () => {
@@ -197,19 +183,6 @@ test("DSO-017 설정 값이 프롬프트의 구조를 바꾸지 못한다", asyn
 	assert.ok(tabbed.includes("Agent\tTeam"), "탭이 든 이름이 거부됐다");
 });
 
-test("DSO-017 페르소나 파일도 컨텍스트 해시에 묶인다", () => {
-	// 정체성이 바뀌었는데 실행 결박이 그대로면, 돌고 있는 작업이 어느 페르소나로
-	// 시작했는지 말할 수 없습니다.
-	const root = workspace();
-	const before = snapshotOf(root).contextHash;
-	writeFileSync(join(root, ".agents/context/persona/agent.md"), "다른 정체성.\n", "utf8");
-	assert.notEqual(snapshotOf(root).contextHash, before, "페르소나가 바뀌었는데 컨텍스트 해시가 같다");
-});
-
-// ── 이슈 선행 작업 ──────────────────────────────────────────────
-
-const TRACKER = { provider: "github", repo: "example-org/example-repo" };
-
 test("DSO-018 쓰기나 실행이 허용된 요청에만 이슈 선행 계약이 실린다", () => {
 	// 문장을 규칙으로 분류하지 않습니다. 우리가 이미 판정한 권한으로 가릅니다.
 	const root = workspace();
@@ -241,7 +214,9 @@ test("DSO-018 같은 대화의 다음 요청은 새 이슈를 열지 않고 앞�
 	const prompt = boundRequestPrompt("이어서 해줘", config({ issueTracker: TRACKER }), authority(), snapshotOf(root), null, { currentIssueUrl: "https://github.com/example-org/example-repo/issues/38" });
 	assert.ok(prompt.includes("was last working on https://github.com/example-org/example-repo/issues/38"), "앞의 이슈가 계약에 안 실렸다");
 	assert.ok(prompt.includes("still open and actually covers this request"), "닫힌 이슈를 잇지 말라는 조건이 없다");
+	// 이제 이전 이슈 분기에도 검색·생성 단계가 있다. 다만 "이어라"가 먼저다.
 	assert.ok(prompt.includes("skip steps 3 and 4"), "이으면 검색·생성을 건너뛰라는 말이 없다");
+	assert.ok(prompt.includes("create one in"), "새 작업일 때 만들 방법이 안 적혔다");
 });
 
 test("DSO-018 이슈 주소는 설정된 저장소의 것만 거둔다", () => {
@@ -290,14 +265,14 @@ test("DSO-018 계약을 지지 않은 작업은 이슈를 거두지 않는다", 
 	const { DiscordMessageRouter } = await import("../helper/discord-router.mjs");
 	const { store, root } = fixture();
 	try {
-		mkdirSync(join(root, ".agents/context/persona"), { recursive: true });
+		mkdirSync(join(root, "naia-settings"), { recursive: true });
 		writeFileSync(join(root, "AGENTS.md"), "# Entry\n", "utf8");
-		writeFileSync(join(root, ".agents/context/persona/agent.md"), SHARED_PERSONA, "utf8");
-		const snapshot = buildAgentContextSnapshot({ workspace: root, agentId: "naia-agent", entrypoint: "AGENTS.md", contextFiles: [], personaFile: ".agents/context/persona/agent.md" });
+		writeFileSync(join(root, "naia-settings/config.json"), JSON.stringify({ agentName: "Example Agent", persona: SHARED_PERSONA }), "utf8");
+		const snapshot = buildAgentContextSnapshot({ workspace: root, agentId: "naia-agent", entrypoint: "AGENTS.md", contextFiles: [], personaSourceRoot: root });
 		const routerConfig = {
 			schemaVersion: 2,
 			workspace: { agentId: "naia-agent", issueTracker: TRACKER },
-			persona: { name: "Example Agent", instructionsFile: ".agents/context/persona/agent.md" },
+			persona: { source: "naia-settings" },
 			// 읽기·회신뿐이므로 계약을 지지 않는다
 			role: { name: "read-only", allowedActions: ["read", "reply"], requiresApproval: [] },
 			backend: { selected: "codex", profiles: { codex: { enabled: true } } },
@@ -391,7 +366,6 @@ test("DSO-018 이슈 기록은 더하기만 하는 이주라 스키마 번호를
 	} finally { database.close(); }
 });
 
-
 test("DSO-018 작업 종류와 프롬프트가 같은 행동 목록에서 갈린다", () => {
 	// 2026-09-13 운영에서 갈라졌다. 읽기 전용으로 넣은 요청의 프롬프트에는 이슈
 	// 계약이 없는데 기록에는 `issue_work` 로 남아, "이슈로 한 작업"을 세면 하지도
@@ -420,14 +394,14 @@ test("DSO-018 라우터가 작업을 issue_work 로 받고 회신의 이슈를 �
 	const { DiscordMessageRouter } = await import("../helper/discord-router.mjs");
 	const { store, root } = fixture();
 	try {
-		mkdirSync(join(root, ".agents/context/persona"), { recursive: true });
+		mkdirSync(join(root, "naia-settings"), { recursive: true });
 		writeFileSync(join(root, "AGENTS.md"), "# Entry\n", "utf8");
-		writeFileSync(join(root, ".agents/context/persona/agent.md"), SHARED_PERSONA, "utf8");
-		const snapshot = buildAgentContextSnapshot({ workspace: root, agentId: "naia-agent", entrypoint: "AGENTS.md", contextFiles: [], personaFile: ".agents/context/persona/agent.md" });
+		writeFileSync(join(root, "naia-settings/config.json"), JSON.stringify({ agentName: "Example Agent", persona: SHARED_PERSONA }), "utf8");
+		const snapshot = buildAgentContextSnapshot({ workspace: root, agentId: "naia-agent", entrypoint: "AGENTS.md", contextFiles: [], personaSourceRoot: root });
 		const routerConfig = {
 			schemaVersion: 2,
 			workspace: { agentId: "naia-agent", issueTracker: TRACKER },
-			persona: { name: "Example Agent", instructionsFile: ".agents/context/persona/agent.md" },
+			persona: { source: "naia-settings" },
 			role: { name: "development", allowedActions: ["read", "reply", "write", "execute"], requiresApproval: [] },
 			backend: { selected: "codex", profiles: { codex: { enabled: true } } },
 			discord: {
