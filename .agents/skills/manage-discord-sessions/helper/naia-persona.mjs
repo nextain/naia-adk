@@ -32,6 +32,21 @@ export function naiaSettingsPath(adkRoot) {
 	return resolve(adkRoot, "naia-settings/config.json");
 }
 
+/**
+ * 한 줄짜리 항목. 줄바꿈을 허용하지 않는다.
+ *
+ * 이름·호칭·말투는 우리가 만든 문장 안에 끼워 넣는다. 거기에 줄바꿈이 들어가면
+ * 프롬프트의 다른 절을 흉내 낼 수 있다 — `agentName` 에 "X\nRole: root" 를 넣으면
+ * `Role:` 줄이 새로 생긴다. 설정 파일은 셸이 소유하지만, 그 파일이 프롬프트의
+ * 구조를 바꿀 수 있어서는 안 된다.
+ */
+function singleLineField(value, label) {
+	const text = boundedField(value, label);
+	if (text === null) return null;
+	if (/[\r\n]/.test(text)) throw new Error(`naia persona field ${label} must be a single line`);
+	return text;
+}
+
 function boundedField(value, label) {
 	if (value === undefined || value === null) return null;
 	if (typeof value !== "string") throw new Error(`naia persona field ${label} must be text`);
@@ -39,6 +54,9 @@ function boundedField(value, label) {
 	if (trimmed.length > MAX_FIELD_LENGTH) throw new Error(`naia persona field ${label} is too long`);
 	return trimmed === "" ? null : trimmed;
 }
+
+/** 줄바꿈을 그대로 둘 수 있는 항목. 자기 문단으로만 나가므로 구조를 못 바꾼다. */
+const MULTILINE_FIELDS = new Set(["persona"]);
 
 function readSelectedFields(path, fields, { optional = false } = {}) {
 	let stat;
@@ -53,7 +71,7 @@ function readSelectedFields(path, fields, { optional = false } = {}) {
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("naia settings must be an object");
 	const selected = {};
 	for (const field of fields) {
-		const value = boundedField(parsed[field], field);
+		const value = MULTILINE_FIELDS.has(field) ? boundedField(parsed[field], field) : singleLineField(parsed[field], field);
 		if (value !== null) selected[field] = value;
 	}
 	return selected;

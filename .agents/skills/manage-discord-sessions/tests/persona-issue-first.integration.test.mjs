@@ -1,0 +1,150 @@
+// 유스케이스 통합 시험(ET) — 가짜 디스코드 한 대로 요청부터 회신까지.
+//
+// 단위 시험은 조각이 옳다고 말한다. 이 파일은 **사람이 겪는 한 바퀴**를 본다.
+// 채널에 글을 쓰고, 봇이 자기 정체성으로 일하고, 이슈를 세우고, 회신이 채널에
+// 나가고, 다음 요청이 그 이슈를 잇는 것까지.
+//
+// 진짜 디스코드에 붙지 않는다. 토큰이 필요하고 남의 서버에 글을 쓰며, 실패해도
+// 원인이 우리 코드인지 네트워크인지 가릴 수 없다. 가짜 서버는
+// `fixtures/mock-discord.mjs` 에 있고 무엇을 흉내 내지 않는지도 거기 적혀 있다.
+import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, test } from "node:test";
+import { buildAgentContextSnapshot } from "../helper/agent-context.mjs";
+import { DiscordMessageRouter } from "../helper/discord-router.mjs";
+import { BOT, CHANNEL, GUILD, RUNTIME_REVISION, USER, binding, cleanupDiscordFixtureRoots, fixture } from "./fixtures/discord-fixture.mjs";
+import { mockDiscord } from "./fixtures/mock-discord.mjs";
+
+afterEach(cleanupDiscordFixtureRoots);
+
+const TRACKER = { provider: "github", repo: "example-org/example-repo" };
+const ISSUE = (n) => `https://github.com/${TRACKER.repo}/issues/${n}`;
+
+/** 나이아 설정이 있는 작업공간 하나. 업무 게이트웨이는 여기서 정체성을 가져온다. */
+function workspaceWithNaiaSettings(root, { agentName = "Example Agent", persona = "따뜻한 AI 동반자", userName = "Owner", honorific = "boss" } = {}) {
+	mkdirSync(join(root, "naia-settings"), { recursive: true });
+	writeFileSync(join(root, "AGENTS.md"), "# Entry\n", "utf8");
+	writeFileSync(join(root, "naia-settings/config.json"), JSON.stringify({
+		agentName, persona, userName, honorific, speechStyle: "formal", locale: "ko",
+		// 같은 파일에 자격값이 함께 산다. 프롬프트로 새면 안 된다.
+		NAIA_ANYLLM_API_KEY: "sk-must-not-appear",
+	}), "utf8");
+	return buildAgentContextSnapshot({ workspace: root, agentId: "work-agent", entrypoint: "AGENTS.md", contextFiles: [], personaSourceRoot: root });
+}
+
+function gatewayConfig({ actions = ["read", "reply", "write", "execute"], issueTracker = TRACKER } = {}) {
+	return {
+		schemaVersion: 2,
+		workspace: { agentId: "work-agent", ...(issueTracker === null ? {} : { issueTracker }) },
+		persona: { source: "naia-settings", instructions: "이 인스턴스는 맡은 채널의 업무만 처리한다." },
+		role: { name: "issue-driven-development", allowedActions: actions, requiresApproval: [] },
+		backend: { selected: "codex", profiles: { codex: { enabled: true } } },
+		discord: {
+			bindings: [{ ...binding(), operatorActions: true, historyVisibility: "none" }],
+			operatorUserIds: [USER],
+			participantProfiles: { [USER]: { label: "workspace-owner", relationship: "workspace owner", allowedActions: actions } },
+		},
+		runtime: { maxConcurrentJobs: 1, approvalPolicy: "never", permissionProfileEpoch: "et-v1" },
+		recovery: { autoRetry: false },
+	};
+}
+
+test("UCT_DSO_017_001 대화봇의 정체성 그대로 업무 채널에서 답한다", async () => {
+	const { store, root } = fixture();
+	const discord = mockDiscord({ botUserId: BOT, channelId: CHANNEL, userId: USER });
+	try {
+		const snapshot = workspaceWithNaiaSettings(root, { agentName: "Example Agent", persona: "조용하고 따뜻하게 곁에 있다.", userName: "Owner", honorific: "boss" });
+		const prompts = [];
+		const router = new DiscordMessageRouter({
+			config: gatewayConfig({ actions: ["read", "reply"], issueTracker: null }), store,
+			token: "token-value-long-enough", botUserId: BOT, cwd: snapshot.workspaceRoot,
+			runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot, runtimeRevision: RUNTIME_REVISION,
+			send: discord.send, deliver: async (input) => discord.deliver(input),
+			runner: async (input) => { prompts.push(input.prompt); return { backendOutcome: "success", attemptId: "a1", transientResult: "네, 확인했습니다." }; },
+		});
+		const { envelope, sequence } = discord.message("상태 알려줘");
+		const accepted = await router.onDispatch("MESSAGE_CREATE", { ...envelope, guild_id: GUILD }, sequence);
+		assert.equal(accepted.state, "accepted");
+		await router.waitForIdle();
+
+		// 정체성이 설정에서 그대로 온다
+		assert.ok(prompts[0].includes("Persona: Example Agent"), "설정의 이름이 안 쓰였다");
+		assert.ok(prompts[0].includes("조용하고 따뜻하게 곁에 있다."), "설정의 페르소나 글이 안 실렸다");
+		assert.ok(prompts[0].includes('Address them as "boss"'), "호칭이 이름과 따로 안 실렸다");
+		assert.ok(prompts[0].includes("이 인스턴스는 맡은 채널의 업무만 처리한다."), "인스턴스 경계가 사라졌다");
+		// 같은 파일의 자격값은 절대 실리지 않는다
+		assert.ok(!prompts[0].includes("must-not-appear"), "설정 파일의 자격값이 프롬프트로 샜다");
+		// 대화 요청이므로 이슈 계약은 없다
+		assert.ok(!prompts[0].includes("Issue-first contract"), "대화 요청에 이슈 계약이 실렸다");
+		// 사람이 채널에서 답을 본다
+		assert.equal(discord.lastResult(), "네, 확인했습니다.");
+	} finally { store.close(); }
+});
+
+test("UCT_DSO_018_001 업무를 요청하면 이슈를 세우고 다음 요청이 그 이슈를 잇는다", async () => {
+	const { store, root } = fixture();
+	const discord = mockDiscord({ botUserId: BOT, channelId: CHANNEL, userId: USER });
+	try {
+		const snapshot = workspaceWithNaiaSettings(root);
+		const prompts = [];
+		const router = new DiscordMessageRouter({
+			config: gatewayConfig(), store, token: "token-value-long-enough", botUserId: BOT,
+			cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot,
+			runtimeRevision: RUNTIME_REVISION, send: discord.send, deliver: async (input) => discord.deliver(input),
+			runner: async (input) => {
+				prompts.push(input.prompt);
+				// 첫 요청은 이슈를 세우고 밝힌다. 둘째는 이어받아 일한다.
+				const body = prompts.length === 1 ? `이슈를 세우고 고쳤습니다.\n\nIssue: ${ISSUE(77)}` : `이어서 마무리했습니다.\n\nIssue: ${ISSUE(77)}`;
+				return { backendOutcome: "success", attemptId: `a${prompts.length}`, transientResult: body };
+			},
+		});
+
+		const first = discord.message("로그인 버그 고쳐줘");
+		const acceptedFirst = await router.onDispatch("MESSAGE_CREATE", { ...first.envelope, guild_id: GUILD }, first.sequence);
+		assert.equal(acceptedFirst.state, "accepted");
+		await router.waitForIdle();
+
+		// 계약이 실렸고, 프로젝트를 먼저 뒤지라고 말한다
+		assert.ok(prompts[0].includes("Issue-first contract"), "업무 요청에 이슈 계약이 없다");
+		assert.ok(prompts[0].includes("search the project"), "프로젝트 탐색 단계가 없다");
+		assert.ok(prompts[0].includes(TRACKER.repo), "이슈 저장소가 계약에 없다");
+		// 작업이 이슈 작업으로 기록되고 회신의 이슈가 거두어진다
+		const firstJob = store.getJob(acceptedFirst.jobId, { includeEvents: false });
+		assert.equal(firstJob.jobType, "issue_work", "업무 요청이 issue_work 로 안 기록됐다");
+		assert.equal(firstJob.issueUrl, ISSUE(77), "회신의 이슈를 못 거뒀다");
+		assert.equal(store.currentScopeIssue(firstJob.scopeKey), ISSUE(77), "대화에 현재 이슈가 안 남았다");
+		// 사람이 채널에서 이슈 주소를 본다
+		assert.ok(discord.lastResult().includes(ISSUE(77)), "회신이 이슈를 안 밝혔다");
+
+		const second = discord.message("이어서 해줘");
+		const acceptedSecond = await router.onDispatch("MESSAGE_CREATE", { ...second.envelope, guild_id: GUILD }, second.sequence);
+		assert.equal(acceptedSecond.state, "accepted");
+		await router.waitForIdle();
+		assert.ok(prompts[1].includes(`was last working on ${ISSUE(77)}`), "다음 요청이 앞의 이슈를 안 이었다");
+		assert.ok(prompts[1].includes("still open and actually covers this request"), "닫힌 이슈를 잇지 말라는 조건이 없다");
+		assert.ok(!prompts[1].includes("If none covers it, create one"), "이을 이슈가 있는데 새로 만들라고 적혔다");
+	} finally { store.close(); }
+});
+
+test("UCT_DSO_018_002 질문에는 이슈를 세우지 않고 엉뚱한 이슈에 매이지도 않는다", async () => {
+	const { store, root } = fixture();
+	const discord = mockDiscord({ botUserId: BOT, channelId: CHANNEL, userId: USER });
+	try {
+		const snapshot = workspaceWithNaiaSettings(root);
+		const router = new DiscordMessageRouter({
+			config: gatewayConfig(), store, token: "token-value-long-enough", botUserId: BOT,
+			cwd: snapshot.workspaceRoot, runtimeRoot: join(root, "runtime"), agentContextSnapshot: snapshot,
+			runtimeRevision: RUNTIME_REVISION, send: discord.send, deliver: async (input) => discord.deliver(input),
+			// 쓰기 권한자가 질문을 했고, 모델이 관련 이슈를 늘어놓았다. 선언은 하지 않았다.
+			runner: async () => ({ backendOutcome: "success", attemptId: "a1", transientResult: `관련 이슈입니다.\n- ${ISSUE(12)}\n- ${ISSUE(13)}` }),
+		});
+		const { envelope, sequence } = discord.message("이 버그 뭐야?");
+		const accepted = await router.onDispatch("MESSAGE_CREATE", { ...envelope, guild_id: GUILD }, sequence);
+		await router.waitForIdle();
+		const job = store.getJob(accepted.jobId, { includeEvents: false });
+		assert.equal(job.issueUrl, null, "선언하지 않은 회신에서 이슈를 거뒀다");
+		assert.equal(store.currentScopeIssue(job.scopeKey), null, "대화가 언급뿐인 이슈에 매였다");
+		assert.ok(discord.lastResult().includes(ISSUE(12)), "회신 자체는 사람에게 그대로 전달되어야 한다");
+	} finally { store.close(); }
+});
