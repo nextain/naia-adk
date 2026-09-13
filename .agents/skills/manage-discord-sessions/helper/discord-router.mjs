@@ -82,20 +82,129 @@ export function transientPrompt(message, botUserId, config, authorization = null
 // 10개까지, 이름은 각 120자로 묶여 있어 1.5KB 를 넘지 않는다.
 const MAX_REQUEST_TEXT_LENGTH = 6_000;
 
-export function boundRequestPrompt(userText, config, authorization = null, agentContextSnapshot = null, accessCeiling = null) {
+/**
+ * 이 인스턴스가 쓰는 페르소나 글.
+ *
+ * `instructionsFile` 을 적었으면 그 파일의 글이 정체성이고, `instructions` 는 이
+ * 인스턴스에만 해당하는 경계다. 파일을 적었는데 스냅샷에 그 글이 없으면 조용히
+ * 빼지 않고 멈춘다 — 정체성이 빠진 채로 도는 것이 잘못된 정체성보다 낫지 않다.
+ */
+export function personaInstructions(config, agentContextSnapshot) {
+	// 나이아 설정에서 오는 페르소나는 스냅샷이 들고 있다. 파일과 같은 자리에 같은
+	// 방식으로 해시되어 있으므로 확인하는 방법도 같다.
+	if (config.persona.source === "naia-settings") {
+		const fromSettings = agentContextSnapshot?.personaText ?? null;
+		if (typeof fromSettings !== "string" || fromSettings.trim() === "") throw new Error("naia settings persona is missing from the agent context snapshot");
+		return [fromSettings, config.persona.instructions].filter(Boolean).join("\n");
+	}
+	const shared = config.persona.instructionsFile === undefined ? null : agentContextSnapshot?.personaText ?? null;
+	if (config.persona.instructionsFile !== undefined && (typeof shared !== "string" || agentContextSnapshot?.personaFile !== config.persona.instructionsFile)) {
+		throw new Error("configured persona file is missing from the agent context snapshot");
+	}
+	// 빈 파일은 "글자 수 0인 정체성"이 아니라 배선 실수다.
+	if (shared !== null && shared.trim() === "") throw new Error("configured persona file is empty");
+	return [shared, config.persona.instructions].filter(Boolean).join("\n");
+}
+
+/** 프롬프트에 적히는 이름. 나이아 설정에서 오면 그 설정의 agentName 을 쓴다. */
+export function personaName(config, agentContextSnapshot) {
+	if (typeof config.persona.name === "string" && config.persona.name) return config.persona.name;
+	const fromSettings = agentContextSnapshot?.personaAgentName ?? null;
+	if (typeof fromSettings === "string" && fromSettings) return fromSettings;
+	throw new Error("persona name is unavailable");
+}
+
+/**
+ * 이번 요청이 실제로 쓸 수 있는 행동.
+ *
+ * 접근 상한이 걸리면 권한 목록에서 쓰기와 실행이 빠진다. 프롬프트와 작업 종류가
+ * 이 값을 따로 계산하면 갈라진다 — 2026-09-13 에 실제로 갈라졌다. 읽기 전용으로
+ * 넣은 요청의 프롬프트에는 이슈 계약이 없는데 기록에는 `issue_work` 로 남아,
+ * "이슈로 한 작업"을 세면 하지도 않은 것이 섞였다. 한 곳에서 계산한다.
+ */
+export function effectiveRequestActions(config, authorization, accessCeiling = null) {
+	const actions = effectiveAllowedActions(config, authorization);
+	return accessCeiling === "read-only" ? actions.filter((action) => action !== "write" && action !== "execute") : actions;
+}
+
+/** 이 요청이 프로젝트를 바꿀 수 있어서 이슈 선행 계약을 지는가. */
+export function carriesIssueContract(config, authorization, accessCeiling = null) {
+	if (!config.workspace?.issueTracker) return false;
+	const actions = effectiveRequestActions(config, authorization, accessCeiling);
+	return actions.includes("write") || actions.includes("execute");
+}
+
+/**
+ * 작업 요청은 이슈로 시작한다.
+ *
+ * 실을지 말지는 문장을 규칙으로 분류해서 정하지 않는다. 그런 분류기는 평범한 한
+ * 문장에도 흔들린다. 대신 **이미 판정한 권한**으로 가른다. 이번 요청에 쓰기나
+ * 실행이 허용되었다면 프로젝트를 바꿀 수 있는 요청이고, 그때만 계약이 실린다.
+ * 읽기·회신뿐인 요청은 대화이므로 이슈를 만들지 않는다.
+ *
+ * 무엇이 대화이고 무엇이 작업인지의 마지막 판단은 모델이 한다. 계약이 묶는 것은
+ * "바꾸기 전에 이슈가 있어야 한다"는 순서뿐이다.
+ */
+export function issueFirstContract({ repo, currentIssueUrl = null }) {
+	const lines = [
+		`Issue-first contract: This request may change the project, so the work is tracked in ${repo} before it happens.`,
+		"1. Read the deterministic project context above, then search the project for the code and prior work this request touches.",
+	];
+	if (currentIssueUrl) {
+		lines.push(
+			`2. This conversation was last working on ${currentIssueUrl}. Check that it is still open and actually covers this request; if it does, continue it. If it is closed, or this request is different work, follow steps 3 and 4 instead and open a new one.`,
+			`3. ${ISSUE_DECLARATION}`,
+		);
+	} else {
+		lines.push(
+			`2. Search the open issues of ${repo} for this work. If one already covers it, use that one instead of opening another.`,
+			`3. If none covers it, create one in ${repo} stating the goal, the scope, and how completion is judged.`,
+			`4. ${ISSUE_DECLARATION}`,
+		);
+	}
+	lines.push(
+		"If the request turns out to be a question rather than a change, answer it and do not open an issue.",
+		"Follow the repository's issue-driven development workflow for the rest of the work; treat its phase gates as internal checkpoints.",
+	);
+	return lines.join("\n");
+}
+
+/** 회신에서 이슈를 밝히는 유일한 형식. 이 표지가 붙은 줄만 거둔다. */
+export const ISSUE_MARKER = "Issue:";
+
+const ISSUE_DECLARATION = `State the issue this work belongs to on the last line of your reply, in exactly this form with nothing else on that line: ${ISSUE_MARKER} <url>. Only that exact line is read back; a URL anywhere else in the reply, including a list of related issues, is ignored. If this turned out to be a question and you did no project work, do not write that line at all. Report the work you actually did and verified above it.`;
+
+/**
+ * 그 회신이 이 작업의 이슈를 밝히고 있는가.
+ *
+ * 주소처럼 생긴 줄을 받으면 인용과 선언을 가를 수 없다. 쓰기 권한을 가진 사람이
+ * 질문을 했을 때 모델이 끝에 "관련 이슈"를 줄마다 늘어놓으면 그 마지막 것이 대화에
+ * 매인다. 그래서 선언에 전용 표지를 둔다. 목록 줄도, 인용 줄도, 본문 중간의 주소도
+ * 받지 않는다. 여러 줄이면 마지막 것을 쓴다.
+ * 다른 저장소, 끌어오기 요청, 평문 http, 유사 호스트, 0번 이슈는 받지 않는다.
+ */
+export function harvestIssueUrl(text, repo) {
+	if (typeof text !== "string" || typeof repo !== "string") return null;
+	const lines = text.split(/\r?\n/);
+	while (lines.length > 0 && lines.at(-1).trim() === "") lines.pop();
+	const lastLine = lines.at(-1);
+	if (lastLine === undefined) return null;
+	const pattern = new RegExp(`^[ \\t]*${ISSUE_MARKER}[ \\t]+https://github\\.com/${repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/issues/([1-9]\\d{0,8})/?[ \\t.]*$`, "i");
+	const found = pattern.exec(lastLine);
+	return found === null ? null : `https://github.com/${repo}/issues/${Number(found[1])}`;
+}
+
+export function boundRequestPrompt(userText, config, authorization = null, agentContextSnapshot = null, accessCeiling = null, { currentIssueUrl = null } = {}) {
 	if (typeof userText !== "string" || !userText || userText.length > MAX_REQUEST_TEXT_LENGTH) throw new Error("Discord prompt is empty or too large");
-	const authorityActions = effectiveAllowedActions(config, authorization);
 	// 상한이 걸린 제출은 프롬프트에 적히는 행동 목록부터 낮춘다. 실행 프로필만
 	// 낮추고 목록을 그대로 두면 모델이 허용된다고 읽는다.
-	const allowedActions = accessCeiling === "read-only"
-		? authorityActions.filter((action) => action !== "write" && action !== "execute")
-		: authorityActions;
+	const allowedActions = effectiveRequestActions(config, authorization, accessCeiling);
 	const backendId = config.backend?.selected ?? "codex";
 	const executionProfile = currentExecutionProfile(config, backendId, authorization, { accessCeiling });
 	const costProfile = config.backend?.profiles?.[backendId]?.costProfile ?? (backendId === "codex" ? "balanced" : "provider-default");
 	const parts = [];
 	if (agentContextSnapshot) parts.push(agentContextSnapshot.prefix, "");
-	parts.push(`Persona: ${config.persona.name}`, config.persona.instructions, `Role: ${config.role.name}`);
+	parts.push(`Persona: ${personaName(config, agentContextSnapshot)}`, personaInstructions(config, agentContextSnapshot), `Role: ${config.role.name}`);
 	if (config.schemaVersion === 2) parts.push(trustedParticipantPolicy({ participantProfile: authorization?.participantProfile, effectiveActions: allowedActions }));
 	if (config.schemaVersion === 2 && Array.isArray(config.workspace?.allowedPaths)) parts.push(`Allowed workspace paths: ${config.workspace.allowedPaths.join(", ")}. Use only these explicitly configured project paths; do not access other projects.`);
 	parts.push(
@@ -112,9 +221,11 @@ export function boundRequestPrompt(userText, config, authorization = null, agent
 		"Current-turn truthfulness: Never promise to continue, resume, deploy, or report later after this job ends. In the current job, either perform and verify the concrete bounded work, or state the exact missing request, authority, credential, or external precondition. A prior failed or terminal job is not automatically resumed; do not imply that it is running.",
 		"Communication: Reply in the language used by the user. Before tool work, provide a brief analysis and action plan as an intermediate update. During long work, report meaningful findings or phase changes before the final verified result. Do not repeat generic status text.",
 		"Discord access: Do not access Discord directly. If the operator explicitly requests a separate DM, return exactly one discordDm JSON object; the gateway will deliver it only to the fixed workspace-owner recipient.",
-		"User request:",
-		userText,
 	);
+	if (carriesIssueContract(config, authorization, accessCeiling)) {
+		parts.push("", issueFirstContract({ repo: config.workspace.issueTracker.repo, currentIssueUrl }));
+	}
+	parts.push("User request:", userText);
 	return parts.join("\n");
 }
 
@@ -230,7 +341,7 @@ export class DiscordMessageRouter {
 			currentRequest = discordRequestText(data, this.botUserId, { authorization, instance: this.instance });
 			if (!currentRequest || currentRequest.length > MAX_REQUEST_TEXT_LENGTH) throw new Error("Discord prompt is empty or too large");
 			const selected = this.#agentContext(authorization.binding);
-			prompt = boundRequestPrompt(currentRequest, this.#profileConfig(authorization.binding), authorization, selected.snapshot, accessCeiling);
+			prompt = boundRequestPrompt(currentRequest, this.#profileConfig(authorization.binding), authorization, selected.snapshot, accessCeiling, { currentIssueUrl: this.#currentIssueUrl(authorization.scopeKey) });
 		}
 		catch {
 			this.store.reserveIngress({ sourceMessageId, scopeKey: authorization.scopeKey, status: "rejected", reasonCode: "prompt_invalid", dispatchSequence: sequence });
@@ -251,7 +362,7 @@ export class DiscordMessageRouter {
 		const managedRevisionBase = executionProfile.access === "read-only" ? "v2r" : "v2w";
 		const jobRevision = this.runtimeRevision === null ? revisionBase : this.config.schemaVersion === 2 ? `${managedRevisionBase}:${this.runtimeRevision}` : `${revisionBase}:${this.runtimeRevision}`;
 		const executionBinding = this.config.schemaVersion === 2 && executionProfile.access === "read-only" ? durableExecutionBinding({ config: this.config, instance: this.instance, agentContextSnapshot: selected.snapshot, participantUserId: authorization.scope.authorId, binding: authorization.binding, executionProfile }) : null;
-		const ingress = this.store.acceptIngressAndCreateJob({ sourceMessageId, scopeKey: authorization.scopeKey, jobId, dispatchSequence: sequence, backendId, revision: jobRevision, backendCapabilities: adapter.capabilities, activityDetail: adapter.activityDetail, jobType: "conversation", requestExcerpt: currentRequest,
+		const ingress = this.store.acceptIngressAndCreateJob({ sourceMessageId, scopeKey: authorization.scopeKey, jobId, dispatchSequence: sequence, backendId, revision: jobRevision, backendCapabilities: adapter.capabilities, activityDetail: adapter.activityDetail, jobType: carriesIssueContract(this.#profileConfig(authorization.binding), authorization, accessCeiling) ? "issue_work" : "conversation", requestExcerpt: currentRequest,
 			softSilenceMs: (this.config.runtime?.softSilenceSeconds ?? 120) * 1_000, recoveryEnvelope, executionBinding, now: this.#nowIso() });
 		if (ingress.duplicate) return { state: "duplicate", jobId: ingress.jobId };
 		const item = { jobId, backendId, prompt, currentRequest, channelId, scopeKey: authorization.scopeKey, sourceMessageId, allowedUserIds: authorization.binding.allowedUserIds, binding: authorization.binding, participantUserId: authorization.scope.authorId, authority, commandOptions, executionProfile, accessCeiling, agentContext: selected };
@@ -344,6 +455,37 @@ export class DiscordMessageRouter {
 			costProfile: profile?.costProfile ?? "balanced",
 			...(profile?.reasoningEffort ? { reasoningEffort: profile.reasoningEffort } : {}),
 		} : withCommon;
+	}
+
+	/** 이 바인딩이 쓰는 이슈 저장소. 설정에 없으면 이슈 선행 계약도 없다. */
+	#issueTracker(binding) {
+		return this.#profileConfig(binding)?.workspace?.issueTracker ?? null;
+	}
+
+	/** 이 대화가 지금 물고 있는 이슈. 읽기가 실패해도 요청을 막지는 않는다. */
+	#currentIssueUrl(scopeKey) {
+		if (typeof scopeKey !== "string" || !scopeKey) return null;
+		try { return this.store.currentScopeIssue(scopeKey); } catch { return null; }
+	}
+
+	/**
+	 * 회신이 말한 이슈 주소를 거둔다.
+	 *
+	 * 설정된 저장소의 이슈만 받는다. 모델이 남의 저장소 주소를 적어도 그것으로
+	 * 이 대화가 매이지 않는다. 거두기가 실패해도 회신 전달은 막지 않는다.
+	 */
+	#recordIssueFromResult(item, finalContent) {
+		const tracker = this.#issueTracker(item.binding);
+		if (tracker === null) return null;
+		// 계약을 지고 실행한 작업에서만 거둔다. 트래커가 설정되었다는 이유로 모든
+		// 회신에서 거두면, 읽기 전용 대화가 관련 이슈를 언급만 해도 그 이슈가
+		// 대화에 매이고 다음 쓰기 요청이 엉뚱한 이슈를 잇는다.
+		if (!carriesIssueContract(this.#profileConfig(item.binding), item.authority, item.accessCeiling ?? null)) return null;
+		const issueUrl = harvestIssueUrl(finalContent, tracker.repo);
+		if (issueUrl === null) return null;
+		try { this.store.recordJobIssue({ jobId: item.jobId, scopeKey: item.scopeKey ?? null, issueUrl }); }
+		catch { return null; }
+		return issueUrl;
 	}
 
 	#profileConfig(binding) {
@@ -514,6 +656,7 @@ export class DiscordMessageRouter {
 				if (recipient && effectiveAllowedActions(this.config, item.authority).includes("reply")) receipt = await this.directMessage({ token: this.token, userId: recipient, content: dmRequest.content, nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal: controller.signal });
 				finalContent = receipt.state === "confirmed" ? dmRequest.successReply : dmRequest.failureReply;
 			}
+			this.#recordIssueFromResult(item, finalContent);
 			await this.deliver({ store: this.store, jobId: item.jobId, attemptId: result.attemptId, token: this.token, botUserId: this.botUserId, channelId: item.channelId, content: finalContent, signal: controller.signal });
 		} catch (error) {
 			const job = this.store.getJob(item.jobId);
@@ -609,9 +752,9 @@ export class DiscordMessageRouter {
 		if (currentRequest.length > MAX_REQUEST_TEXT_LENGTH) return { state: "rejected", action, jobId, reasonCode: "amendment_too_large" };
 		const replacementJobId = randomUUID();
 		const selected = item.agentContext ?? this.#agentContext(item.binding);
-		const replacementPrompt = boundRequestPrompt(currentRequest, this.#profileConfig(item.binding), item.authority, selected.snapshot, item.accessCeiling ?? null);
+		const replacementPrompt = boundRequestPrompt(currentRequest, this.#profileConfig(item.binding), item.authority, selected.snapshot, item.accessCeiling ?? null, { currentIssueUrl: this.#currentIssueUrl(item.scopeKey) });
 		const replacementEnvelope = this.recoveryCodec.seal(JSON.stringify({ schemaVersion: 2, currentRequest, channelId: item.channelId, scopeKey: item.scopeKey, executionProfile: item.executionProfile, accessCeiling: item.accessCeiling ?? null, participantUserId: item.participantUserId, bindingIdentity: item.authority?.bindingIdentity, authorityRevision: item.authority?.authorityRevision ?? null, configRevision: configurationRevision(this.config), contextHash: selected.snapshot?.contextHash ?? null, agentProfileId: item.binding?.agentProfileId ?? "default", runtimeRevision: this.runtimeRevision }));
-		this.store.createJob({ jobId: replacementJobId, backendId: item.backendId, revision: sourceJob.revision, backendCapabilities: sourceJob.backendCapabilities, activityDetail: sourceJob.activityDetail, jobType: "conversation", scopeKey: item.scopeKey, softSilenceMs: sourceJob.softSilenceMs, recoveryEnvelope: replacementEnvelope, executionBinding: sourceJob.executionBinding });
+		this.store.createJob({ jobId: replacementJobId, backendId: item.backendId, revision: sourceJob.revision, backendCapabilities: sourceJob.backendCapabilities, activityDetail: sourceJob.activityDetail, jobType: carriesIssueContract(this.#profileConfig(item.binding), item.authority, item.accessCeiling ?? null) ? "issue_work" : "conversation", scopeKey: item.scopeKey, softSilenceMs: sourceJob.softSilenceMs, recoveryEnvelope: replacementEnvelope, executionBinding: sourceJob.executionBinding });
 		const replacement = { ...item, jobId: replacementJobId, prompt: replacementPrompt, currentRequest, sourceMessageId: null };
 		this.workItems.set(replacementJobId, replacement);
 		if (activeItem) this.cancelJob(jobId);
@@ -665,7 +808,7 @@ export class DiscordMessageRouter {
 					const authority = this.#recoveryAuthority(payload);
 					const binding = authority.binding;
 					const agentContext = this.#agentContext(binding);
-					const prompt = boundRequestPrompt(payload.currentRequest, this.#profileConfig(binding), authority, agentContext.snapshot, accessCeiling);
+					const prompt = boundRequestPrompt(payload.currentRequest, this.#profileConfig(binding), authority, agentContext.snapshot, accessCeiling, { currentIssueUrl: this.#currentIssueUrl(typeof payload.scopeKey === "string" ? payload.scopeKey : null) });
 				const executionProfile = this.#executionProfile(item.backendId, authority, accessCeiling);
 				const profileChanged = !sameExecutionProfile(payload.executionProfile, executionProfile);
 				if (this.config.schemaVersion === 2) {

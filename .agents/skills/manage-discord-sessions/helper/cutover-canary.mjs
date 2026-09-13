@@ -21,7 +21,7 @@ function verifyCurrentCanaryExecutionBinding(paths, storedBinding) {
 	const workspace = resolve(paths.root, config.workspace.path);
 	const child = relative(paths.root, workspace);
 	if (child.startsWith("..") || isAbsolute(child)) throw new Error("canary workspace escaped the ADK root");
-	const snapshot = buildAgentContextSnapshot({ workspace, agentId: config.workspace.agentId, entrypoint: config.workspace.entrypoint, contextFiles: config.workspace.contextFiles });
+	const snapshot = buildAgentContextSnapshot({ workspace, agentId: config.workspace.agentId, entrypoint: config.workspace.entrypoint, contextFiles: config.workspace.contextFiles, personaFile: config.persona?.instructionsFile ?? null });
 	const current = recomputeDurableExecutionBinding({ config, instance: paths.instance, agentContextSnapshot: snapshot, storedBinding: expected });
 	if (JSON.stringify(current) !== JSON.stringify(expected)) throw new Error("canary execution binding is no longer current");
 	return current;

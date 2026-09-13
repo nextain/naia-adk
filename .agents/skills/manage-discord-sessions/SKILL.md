@@ -103,6 +103,35 @@ from a completed boot cannot permanently obstruct the next boot. Explicitly
 configured shared directories and same-directory records from another boot or
 host remain fail-closed.
 
+Instances that belong to one person share that person's identity instead of each
+carrying its own copy. Point `persona.instructionsFile` at a workspace-relative
+file — `.agents/context/persona/agent.md` in this repository — and every instance
+that names it reads the same bytes. The file is resolved through the same rules as
+the deterministic context files (no absolute path, no traversal, no symlink
+component, bounded size, valid UTF-8) and its bytes join the context hash, so a
+changed identity is caught by the same pre-spawn drift check and needs a service
+restart. It is rendered once, in the persona position, and never inside the
+project-context prefix. Keep what differs between instances — which guild and
+channel, which repository, what the instance must not touch — in `persona.instructions`,
+which is appended after the shared identity. Either field may stand alone, but at
+least one is required, and the file form needs schema v2 and a single workspace.
+
+Set `workspace.issueTracker` to `{ "provider": "github", "repo": "owner/name" }` to
+make requests that can change the project run through an issue. Whether the contract
+applies is decided by the authority already resolved for that request: it is added
+only when the effective actions include `write` or `execute`, so read-and-reply
+conversation carries no contract and a read-only access ceiling removes it along with
+the mutation actions. The contract tells the agent to read the deterministic project
+context, search the project, search the repository's open issues, reuse a covering
+issue, create one only when none covers the work, state the URL, and then follow the
+repository's issue-driven development workflow; a question is answered without opening
+an issue. The gateway holds no repository credential and creates nothing itself — it
+reads the URL back out of the result, accepts it only when it belongs to the configured
+repository, and records it on the job and on the conversation. The next request in the
+same conversation is told to continue that issue instead of opening another. Work
+accepted under the contract is recorded with job type `issue_work`. An instance without
+`issueTracker` behaves exactly as before.
+
 `submit` is a local owner-only recovery ingress. It re-admits a bounded request
 through one exact configured operator and channel binding; it cannot impersonate
 an arbitrary Discord user or bypass participant authority.

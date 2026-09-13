@@ -64,6 +64,36 @@ export class SessionJobWriter {
 		}
 	}
 
+	/**
+	 * 이번 작업이 어느 이슈로 이루어졌는지 남긴다.
+	 *
+	 * 작업 행에 적어 두면 나중에 "그 요청이 뭘로 끝났나"를 기록에서 볼 수 있고,
+	 * 대화 행에 적어 두면 같은 채널의 다음 요청이 새 이슈를 열지 않는다.
+	 */
+	recordJobIssue({ jobId, scopeKey = null, issueUrl, now = new Date().toISOString() }) {
+		safeIdentifier(jobId, "jobId");
+		canonicalTimestamp(now, "issue record time");
+		if (typeof issueUrl !== "string" || issueUrl.length < 1 || issueUrl.length > 300 || /[\0\s]/.test(issueUrl)) throw new Error("issueUrl must be a bounded single-token URL");
+		if (scopeKey !== null) safeIdentifier(scopeKey, "scopeKey");
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const updated = this.db.prepare("UPDATE jobs SET issue_url = ? WHERE job_id = ?").run(issueUrl, jobId);
+			if (updated.changes !== 1) throw new Error("job not found");
+			if (scopeKey !== null) {
+				this.db.prepare(`
+					INSERT INTO scope_issues(scope_key, issue_url, job_id, updated_at) VALUES(?, ?, ?, ?)
+					ON CONFLICT(scope_key) DO UPDATE SET issue_url = excluded.issue_url, job_id = excluded.job_id, updated_at = excluded.updated_at
+				`).run(scopeKey, issueUrl, jobId, now);
+			}
+			this.db.exec("COMMIT");
+		} catch (error) {
+			try { this.db.exec("ROLLBACK"); } catch {}
+			throw error;
+		}
+		this.hardenSidecars();
+		return { jobId, issueUrl };
+	}
+
 	createJob({
 		jobId = randomUUID(),
 		backendId,
@@ -97,9 +127,9 @@ export class SessionJobWriter {
 			if (acceptingGeneration !== null) safeIdentifier(acceptingGeneration, "accepting service generation");
 			this.db.prepare(`
 				INSERT INTO jobs(job_id, lifecycle, backend_id, revision, backend_capabilities_json, activity_detail,
-					safe_summary, accepted_at, updated_at, soft_silence_ms, hard_deadline_at, scope_key, accepting_service_generation, execution_binding_json)
-				VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			`).run(jobId, backendId, revision, json(safeCapabilities), activityDetail, summary, now, now, softSilenceMs, hardDeadlineAt, scopeKey, acceptingGeneration, safeExecutionBinding === null ? null : JSON.stringify(safeExecutionBinding));
+					safe_summary, accepted_at, updated_at, soft_silence_ms, hard_deadline_at, scope_key, accepting_service_generation, execution_binding_json, job_type)
+				VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`).run(jobId, backendId, revision, json(safeCapabilities), activityDetail, summary, now, now, softSilenceMs, hardDeadlineAt, scopeKey, acceptingGeneration, safeExecutionBinding === null ? null : JSON.stringify(safeExecutionBinding), jobType);
 			for (const check of requiredChecks) {
 				if (!check.checkId || !check.kind) throw new Error("required check needs checkId and kind");
 				safeIdentifier(check.checkId, "checkId");

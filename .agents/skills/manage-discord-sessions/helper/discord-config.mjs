@@ -29,8 +29,44 @@ function workspaceConfigPath(value, label, { allowDot = false } = {}) {
 	return relativeConfigPath(value, label, { allowDot });
 }
 
+/**
+ * 작업 요청이 매일 이슈 저장소.
+ *
+ * 이 항목이 없으면 이슈 선행 계약은 아예 프롬프트에 실리지 않는다. 있는 것이
+ * 좋아 보이는 기능을 켜 두는 대신, 저장소를 적은 인스턴스만 그 계약을 진다.
+ */
+function validateIssueTracker(tracker) {
+	assertOnlyKeys(tracker ?? {}, new Set(["provider", "repo"]), "workspace.issueTracker");
+	if (tracker.provider !== "github") throw new Error("workspace.issueTracker.provider is not supported");
+	if (typeof tracker.repo !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(tracker.repo)) throw new Error("workspace.issueTracker.repo must be an owner/name pair");
+	return Object.freeze({ provider: tracker.provider, repo: tracker.repo });
+}
+
+/**
+ * 페르소나.
+ *
+ * `instructions` 는 이 인스턴스에만 해당하는 경계이고, `instructionsFile` 은 작업공간
+ * 안의 파일로 여러 인스턴스가 함께 쓰는 정체성이다. 파일 쪽은 에이전트 컨텍스트와
+ * 같은 장치로 읽혀 심링크·크기·해시가 함께 지켜진다. 둘 중 최소 하나는 있어야 한다.
+ */
+function validatePersona(persona, label) {
+	assertOnlyKeys(persona ?? {}, new Set(["name", "instructions", "instructionsFile", "source"]), label);
+	// `source: "naia-settings"` 는 대화봇이 쓰는 페르소나를 그대로 가져온다. 업무
+	// 게이트웨이가 대화봇과 한 정체성이 되게 하려는 것이고, 이름도 설정의 agentName
+	// 에서 온다. 사상은 .agents/context/discord-gateway-persona-sharing.yaml 에 있다.
+	if (persona?.source !== undefined && persona.source !== "naia-settings") throw new Error(`${label} source is not supported`);
+	const fromSettings = persona?.source === "naia-settings";
+	if (persona?.name !== undefined && (typeof persona.name !== "string" || !persona.name || persona.name.length > 80)) throw new Error(`${label} name is invalid`);
+	if (!fromSettings && typeof persona?.name !== "string") throw new Error(`${label} name is invalid`);
+	if (persona.instructions !== undefined && (typeof persona.instructions !== "string" || !persona.instructions || persona.instructions.length > 4_000)) throw new Error(`${label} instructions are invalid`);
+	const instructionsFile = persona.instructionsFile === undefined ? undefined : relativeConfigPath(persona.instructionsFile, `${label}.instructionsFile`);
+	if (fromSettings && instructionsFile !== undefined) throw new Error(`${label} cannot take both source and instructionsFile`);
+	if (!fromSettings && persona.instructions === undefined && instructionsFile === undefined) throw new Error(`${label} needs instructions, instructionsFile, or source`);
+	return { ...persona, ...(instructionsFile === undefined ? {} : { instructionsFile }) };
+}
+
 function validateWorkspace(workspace) {
-	assertOnlyKeys(workspace ?? {}, new Set(["path", "agentId", "entrypoint", "contextFiles", "allowedPaths"]), "workspace");
+	assertOnlyKeys(workspace ?? {}, new Set(["path", "agentId", "entrypoint", "contextFiles", "allowedPaths", "issueTracker"]), "workspace");
 	workspaceConfigPath(workspace?.path, "workspace.path", { allowDot: true });
 	safeIdentifier(workspace?.agentId, "workspace.agentId");
 	relativeConfigPath(workspace?.entrypoint, "workspace.entrypoint");
@@ -41,7 +77,8 @@ function validateWorkspace(workspace) {
 	if (!Array.isArray(allowedPaths) || allowedPaths.length < 1 || allowedPaths.length > 16) throw new Error("workspace.allowedPaths must contain between 1 and 16 entries");
 	const normalizedAllowedPaths = [...new Set(allowedPaths.map((value) => workspaceConfigPath(value, "workspace.allowedPaths entry", { allowDot: true })))];
 	if (!normalizedAllowedPaths.includes(workspace.path)) throw new Error("workspace.allowedPaths must include workspace.path");
-	return { ...workspace, contextFiles, allowedPaths: normalizedAllowedPaths };
+	const issueTracker = workspace.issueTracker === undefined ? undefined : validateIssueTracker(workspace.issueTracker);
+	return { ...workspace, contextFiles, allowedPaths: normalizedAllowedPaths, ...(issueTracker === undefined ? {} : { issueTracker }) };
 }
 
 function validateAgentProfiles(profiles) {
@@ -50,10 +87,7 @@ function validateAgentProfiles(profiles) {
 	for (const [id, profile] of Object.entries(profiles)) {
 		safeIdentifier(id, "agent profile ID");
 		assertOnlyKeys(profile ?? {}, new Set(["workspace", "persona"]), "agent profile");
-		assertOnlyKeys(profile?.persona ?? {}, new Set(["name", "instructions"]), "agent profile persona");
-		if (typeof profile?.persona?.name !== "string" || !profile.persona.name || profile.persona.name.length > 80) throw new Error("agent profile persona name is invalid");
-		if (typeof profile.persona.instructions !== "string" || !profile.persona.instructions || profile.persona.instructions.length > 4_000) throw new Error("agent profile persona instructions are invalid");
-		normalized[id] = { workspace: validateWorkspace(profile.workspace), persona: { ...profile.persona } };
+		normalized[id] = { workspace: validateWorkspace(profile.workspace), persona: validatePersona(profile?.persona, "agent profile persona") };
 	}
 	return normalized;
 }
@@ -111,7 +145,7 @@ export function loadMessengerConfig(path) {
 	try { config = JSON.parse(readFileSync(fd, "utf8")); } finally { closeSync(fd); }
 	assertOnlyKeys(config, new Set(["schemaVersion", "enabled", "workspaceId", "workspace", "agentProfiles", "persona", "role", "backend", "discord", "runtime", "observability", "service", "recovery"]), "messenger config");
 	for (const [value, keys, label] of [
-		[config.persona, ["name", "instructions"], "persona"],
+		[config.persona, ["name", "instructions", "instructionsFile", "source"], "persona"],
 		[config.role, ["name", "allowedActions", "requiresApproval"], "role"],
 		[config.backend, ["selected", "profiles"], "backend"],
 		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent", "participantProfiles", "proactiveDmRecipientUserId"], "discord"],
@@ -129,8 +163,12 @@ export function loadMessengerConfig(path) {
 	}
 	else if (config.workspace !== undefined || config.discord?.participantProfiles !== undefined) throw new Error("workspace and participantProfiles require messenger config schema v2");
 	if (config.enabled !== true) throw new Error("messenger service is disabled");
-	if (!config.persona?.name || !config.persona?.instructions) throw new Error("persona name and instructions are required");
-	if (config.persona.name.length > 80 || config.persona.instructions.length > 4_000) throw new Error("persona fields are too long");
+	config.persona = validatePersona(config.persona, "persona");
+	// 페르소나 파일은 작업공간 안에서 읽힌다. agentProfiles 를 쓰면 작업공간이
+	// 프로필마다 달라지므로, 어느 작업공간에서 읽어야 하는지가 정해지지 않는다.
+	if (config.persona.instructionsFile !== undefined && config.agentProfiles !== undefined) throw new Error("persona.instructionsFile requires a single workspace");
+	if (config.persona.instructionsFile !== undefined && config.schemaVersion !== 2) throw new Error("persona.instructionsFile requires messenger config schema v2");
+	if (config.persona.source !== undefined && config.schemaVersion !== 2) throw new Error("persona.source requires messenger config schema v2");
 	if (!config.role?.name || !Array.isArray(config.role.allowedActions)) throw new Error("role and allowedActions are required");
 	if (config.role.allowedActions.length === 0 || config.role.allowedActions.some((value) => !ACTIONS.has(value))) throw new Error("role contains an unsupported allowed action");
 	if (config.role.requiresApproval !== undefined && !Array.isArray(config.role.requiresApproval)) throw new Error("requiresApproval must be an array");
@@ -201,6 +239,16 @@ export function loadMessengerConfig(path) {
 	if (config.runtime?.networkAccess !== undefined && typeof config.runtime.networkAccess !== "boolean") throw new Error("runtime.networkAccess must be boolean");
 	config.runtime.credentialProfiles = validateCredentialProfiles(config.runtime?.credentialProfiles, "runtime.credentialProfiles");
 	if ((config.runtime?.credentialProfiles?.length ?? 0) > 0 && config.runtime?.networkAccess !== true) throw new Error("runtime credential profiles require networkAccess");
+	// 이슈 선행 계약은 에이전트가 저장소에 가서 이슈를 찾고 만들 수 있을 때만 뜻이
+	// 있다. 네트워크나 저장소 자격이 없으면 계약만 실리고 동작하지 않는 빈 구현이
+	// 된다. 켤 수 없는 계약은 켜지 못하게 한다.
+	const issueTracker = config.agentProfiles
+		? Object.values(config.agentProfiles).map((profile) => profile.workspace?.issueTracker).find(Boolean)
+		: config.workspace?.issueTracker;
+	if (issueTracker) {
+		if (config.runtime?.networkAccess !== true) throw new Error("workspace.issueTracker requires runtime.networkAccess");
+		if (!(config.runtime?.credentialProfiles ?? []).includes("gh")) throw new Error("workspace.issueTracker requires the gh credential profile");
+	}
 	const noProgressInterventionSeconds = config.runtime?.noProgressInterventionSeconds ?? softSilenceSeconds;
 	const operatorResponseSeconds = config.runtime?.operatorResponseSeconds ?? 30;
 	if (!Number.isSafeInteger(noProgressInterventionSeconds) || noProgressInterventionSeconds < softSilenceSeconds || noProgressInterventionSeconds > 3_600) throw new Error("noProgressInterventionSeconds must be between softSilenceSeconds and 3600");

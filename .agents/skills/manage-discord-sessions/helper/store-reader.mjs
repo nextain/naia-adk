@@ -91,6 +91,12 @@ export class SessionStoreReader {
 		return Object.freeze({ recoveryReview: Number(row.recovery_review ?? 0), deliveryIssues: Number(row.delivery_issues ?? 0) });
 	}
 
+	/** 이 대화가 지금 물고 있는 이슈. 없으면 null. */
+	currentScopeIssue(scopeKey) {
+		safeIdentifier(scopeKey, "scopeKey");
+		return this.db.prepare("SELECT issue_url FROM scope_issues WHERE scope_key = ?").get(scopeKey)?.issue_url ?? null;
+	}
+
 	listJobsForScope(scopeKey, options = {}) {
 		safeIdentifier(scopeKey, "scopeKey");
 		const limit = jobPageLimit(options.limit ?? 32);
@@ -137,6 +143,7 @@ export class SessionStoreReader {
 			hardDeadlineAt: job.hard_deadline_at, currentActivity: job.current_activity, waitingReason: job.waiting_reason,
 			childAlive: childObservation.state === "owned", childState: childObservation,
 			deliveryState: job.delivery_state, recoveryState: job.recovery_state, latestSafeError: job.latest_safe_error,
+			issueUrl: job.issue_url ?? null, jobType: job.job_type ?? null,
 			completionAssessment: projectCompletionAssessment(checks, evidence, job.revision, job.attempt_id),
 			requiredChecks: checks.map((check) => ({ checkId: check.check_id, kind: check.kind, safeLabel: check.safe_label, required: Boolean(check.required), revision: check.revision, allowReuse: Boolean(check.allow_reuse) })),
 			evidence,

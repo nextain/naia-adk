@@ -59,6 +59,7 @@ export class SessionStore {
 
 	heartbeatService(input) { return this.#jobs.heartbeatService(input); }
 	createJob(input) { return this.#jobs.createJob(input); }
+	recordJobIssue(input) { return this.#jobs.recordJobIssue(input); }
 	reserveAttempt(jobId, options) { return this.#jobs.reserveAttempt(jobId, options); }
 	attachAttempt(jobId, options) { return this.#jobs.attachAttempt(jobId, options); }
 	startAttempt(jobId, options) { return this.#jobs.startAttempt(jobId, options); }
@@ -77,6 +78,7 @@ export class SessionStore {
 	operationalJobCount() { return this.#reader.operationalJobCount(); }
 	historicalAttentionCounts() { return this.#reader.historicalAttentionCounts(); }
 	listJobsForScope(scopeKey, options = {}) { return this.#reader.listJobsForScope(scopeKey, options); }
+	currentScopeIssue(scopeKey) { return this.#reader.currentScopeIssue(scopeKey); }
 	hasAcceptedIngressForJob(jobId) { return this.#reader.hasAcceptedIngressForJob(jobId); }
 	getJob(jobId, options = {}) { return this.#reader.getJob(jobId, options); }
 }

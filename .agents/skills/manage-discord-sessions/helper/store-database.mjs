@@ -164,6 +164,9 @@ function migrate(db) {
 		CREATE TABLE IF NOT EXISTS discord_projections (
 			scope_key TEXT PRIMARY KEY, channel_id TEXT NOT NULL, message_id TEXT NOT NULL, updated_at TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS scope_issues (
+			scope_key TEXT PRIMARY KEY, issue_url TEXT NOT NULL, job_id TEXT NOT NULL, updated_at TEXT NOT NULL
+		);
 		CREATE INDEX IF NOT EXISTS job_events_job_ordinal ON job_events(job_id, ordinal);
 		CREATE INDEX IF NOT EXISTS jobs_updated_at ON jobs(updated_at DESC);
 		CREATE INDEX IF NOT EXISTS jobs_operational_updated_at ON jobs(updated_at DESC)
@@ -188,6 +191,13 @@ function migrate(db) {
 	ensureColumn("jobs", "accepting_service_generation", "TEXT");
 	ensureColumn("jobs", "executing_service_generation", "TEXT");
 	ensureColumn("jobs", "execution_binding_json", "TEXT");
+	// 더하기만 하는 이주라 스키마 번호를 올리지 않는다. `assertSupportedSchema` 는
+	// 번호가 더 크면 열기를 거부하므로, 번호를 올리면 이전 관리 런타임으로 되돌릴 때
+	// 데이터베이스가 안 열린다 — 되돌릴 수 있는 전환을 깨는 쪽이 더 비싸다.
+	ensureColumn("jobs", "issue_url", "TEXT");
+	// 작업 종류는 지금까지 `safe_summary` 문자열 안에만 있었다. 세려면 문자열을
+	// 다시 파싱해야 했고, 상한이 바뀌어도 고칠 자리가 없었다.
+	ensureColumn("jobs", "job_type", "TEXT");
 	db.prepare("INSERT OR REPLACE INTO metadata(key, value) VALUES ('schema_version', ?)").run(String(DB_SCHEMA_VERSION));
 }
 

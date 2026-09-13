@@ -82,7 +82,7 @@ export function configuredAgentContext(root, config) {
 	if (config.schemaVersion !== 2) return { cwd: root, allowedPaths: [realpathSync(root)], snapshot: null };
 	const canonicalRoot = realpathSync(root);
 	const candidate = isAbsolute(config.workspace.path) ? config.workspace.path : resolve(canonicalRoot, config.workspace.path);
-	const snapshot = buildAgentContextSnapshot({ workspace: candidate, agentId: config.workspace.agentId, entrypoint: config.workspace.entrypoint, contextFiles: config.workspace.contextFiles });
+	const snapshot = buildAgentContextSnapshot({ workspace: candidate, agentId: config.workspace.agentId, entrypoint: config.workspace.entrypoint, contextFiles: config.workspace.contextFiles, personaFile: config.persona?.instructionsFile ?? null, personaSourceRoot: config.persona?.source === "naia-settings" ? canonicalRoot : null });
 	const allowedPaths = config.workspace.allowedPaths.map((path) => {
 		return realpathSync(isAbsolute(path) ? path : resolve(canonicalRoot, path));
 	});
@@ -92,7 +92,7 @@ export function configuredAgentContext(root, config) {
 
 export function configuredAgentContexts(root, config) {
 	if (!config.agentProfiles) return { default: configuredAgentContext(root, config) };
-	return Object.fromEntries(Object.entries(config.agentProfiles).map(([id, profile]) => [id, configuredAgentContext(root, { ...config, agentProfiles: undefined, workspace: profile.workspace })]));
+	return Object.fromEntries(Object.entries(config.agentProfiles).map(([id, profile]) => [id, configuredAgentContext(root, { ...config, agentProfiles: undefined, workspace: profile.workspace, persona: profile.persona })]));
 }
 
 function runtimeInputsRevision({ config, token, agentContexts }) {

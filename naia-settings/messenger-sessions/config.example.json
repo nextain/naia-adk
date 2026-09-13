@@ -11,53 +11,39 @@
       ".agents/context/ai-work-index.yaml",
       ".agents/context/project-index.yaml",
       ".agents/context/terminology.yaml"
-    ]
+    ],
+    "issueTracker": { "provider": "github", "repo": "replace-with-owner/replace-with-repository" }
   },
   "persona": {
-    "name": "Development assistant",
-    "instructions": "Help with the configured workspace role without expanding permissions."
+    "name": "replace-with-agent-name",
+    "instructionsFile": ".agents/context/persona/agent.md",
+    "instructions": "Replace this line with what is true only for this instance: which guild and channel it answers in, which repository it owns, and what it must not touch. The shared identity above stays in the file."
   },
   "role": {
-    "name": "issue-support",
-    "allowedActions": [
-      "read",
-      "reply"
-    ],
-    "requiresApproval": [
-      "write",
-      "execute",
-      "cancel",
-      "retry"
-    ]
+    "name": "issue-driven-development",
+    "allowedActions": ["read", "reply", "write", "execute"],
+    "requiresApproval": []
   },
   "backend": {
-    "selected": "codex",
+    "selected": "opencode",
     "profiles": {
-      "codex": {
-        "enabled": true,
-        "model": "gpt-5.4",
-        "costProfile": "balanced"
-      },
-      "claude": {
-        "enabled": true
-      }
-    }
+      "codex": { "enabled": true, "model": "gpt-5.6-luna", "reasoningEffort": "max", "costProfile": "balanced" },
+      "claude": { "enabled": true },
+      "opencode": { "enabled": true, "model": "azure-foundry/deepseek-v4-pro", "small_model": "azure-foundry/deepseek-v4-pro" },
+      "grok": { "enabled": true, "model": "grok-4.6", "costProfile": "balanced", "reasoningEffort": "medium" }
+    },
+    "fallback": ["codex"]
   },
   "discord": {
     "credentialRef": "discord-bot-token",
     "botUserId": "000000000000000000",
-    "operatorUserIds": [
-      "000000000000000000"
-    ],
+    "operatorUserIds": ["000000000000000000"],
     "messageContentIntent": false,
     "participantProfiles": {
       "000000000000000000": {
         "label": "workspace-owner",
         "relationship": "Owner of this configured workspace",
-        "allowedActions": [
-          "read",
-          "reply"
-        ]
+        "allowedActions": ["read", "reply", "write", "execute", "cancel", "retry"]
       }
     },
     "bindings": [
@@ -66,39 +52,21 @@
         "guildId": "000000000000000000",
         "channelId": "000000000000000000",
         "respondWhen": "mentioned",
-        "allowedUserIds": [
-          "000000000000000000"
-        ],
-        "historyVisibility": "requester_only",
-        "canStartConversation": false,
-        "operatorActions": false
-      },
-      {
-        "kind": "thread",
-        "guildId": "000000000000000000",
-        "channelId": "000000000000000000",
-        "threadId": "000000000000000000",
-        "respondWhen": "mentioned",
-        "allowedUserIds": [
-          "000000000000000000"
-        ],
-        "historyVisibility": "requester_only",
-        "canStartConversation": false,
-        "operatorActions": false
+        "allowedUserIds": ["000000000000000000"],
+        "historyVisibility": "shared",
+        "canStartConversation": true,
+        "operatorActions": true
       },
       {
         "kind": "dm",
         "userId": "000000000000000000",
         "respondWhen": "always",
-        "allowedUserIds": [
-          "000000000000000000"
-        ],
+        "allowedUserIds": ["000000000000000000"],
         "historyVisibility": "requester_only",
-        "canStartConversation": false,
-        "operatorActions": false
+        "canStartConversation": true,
+        "operatorActions": true
       }
-    ],
-    "proactiveDmRecipientUserId": "000000000000000000"
+    ]
   },
   "runtime": {
     "softSilenceSeconds": 120,
@@ -107,7 +75,9 @@
     "heartbeatSeconds": 10,
     "approvalPolicy": "never",
     "permissionProfileEpoch": "replace-on-policy-change",
-    "maxConcurrentJobs": 1
+    "maxConcurrentJobs": 1,
+    "networkAccess": true,
+    "credentialProfiles": ["gh"]
   },
   "observability": {
     "discordStatusProjection": false

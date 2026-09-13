@@ -109,9 +109,9 @@ export class SessionConversationWriter {
 			const acceptingGeneration = this.db.prepare("SELECT generation FROM service_state WHERE id = 1 AND status = 'running' AND pid IS NOT NULL").get()?.generation ?? null;
 			if (acceptingGeneration !== null) safeIdentifier(acceptingGeneration, "accepting service generation");
 			this.db.prepare(`INSERT INTO jobs(job_id, lifecycle, backend_id, revision, backend_capabilities_json, activity_detail,
-				safe_summary, accepted_at, updated_at, soft_silence_ms, scope_key, accepting_service_generation, execution_binding_json)
-				VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-				.run(jobId, backendId, revision, json(safeCapabilities), activityDetail, summary, now, now, softSilenceMs, scopeKey, acceptingGeneration, safeExecutionBinding === null ? null : JSON.stringify(safeExecutionBinding));
+				safe_summary, accepted_at, updated_at, soft_silence_ms, scope_key, accepting_service_generation, execution_binding_json, job_type)
+				VALUES(?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+				.run(jobId, backendId, revision, json(safeCapabilities), activityDetail, summary, now, now, softSilenceMs, scopeKey, acceptingGeneration, safeExecutionBinding === null ? null : JSON.stringify(safeExecutionBinding), jobType);
 			this.events.appendEvent({ jobId, dedupeKey: `job_accepted:${jobId}`, kind: "job_accepted", occurredAt: now, source: "gateway", safeSummary: summary });
 			if (safeRequest) this.events.appendEvent({ jobId, dedupeKey: `request_recorded:${jobId}`, kind: "request_recorded", occurredAt: now, source: "gateway", safeSummary: buildSafeEventSummary("request_recorded", { excerpt: safeRequest.excerpt }), metrics: { truncated: safeRequest.truncated }, redactionLevel: "local_safe" });
 			if (recoveryEnvelope) this.db.prepare("INSERT INTO job_recovery(job_id, iv, ciphertext, tag, updated_at) VALUES(?, ?, ?, ?, ?)").run(jobId, recoveryEnvelope.iv, recoveryEnvelope.ciphertext, recoveryEnvelope.tag, now);
