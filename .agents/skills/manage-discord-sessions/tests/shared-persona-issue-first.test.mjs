@@ -134,7 +134,7 @@ test("DSO-017 빈 정체성은 조용히 넘어가지 않는다", () => {
 	const fixtureRoots = workspace();
 	writeFileSync(join(fixtureRoots.adkRoot, "naia-settings/config.json"), JSON.stringify({}), "utf8");
 	assert.throws(() => snapshotOf(fixtureRoots), /no agent name|no persona/);
-	// 성격 글이 비어 있어도 이름만으로는 정체성이 아니다
+	// 성격 글이 비어 있어도 이름이 있으면 최소 정체성은 만든다
 	writeFileSync(join(fixtureRoots.adkRoot, "naia-settings/config.json"), JSON.stringify({ agentName: "Example Agent", persona: "   " }), "utf8");
 	const onlyName = snapshotOf(fixtureRoots);
 	assert.ok(onlyName.personaText.includes("You are Example Agent"), "이름만 있는 설정도 최소 정체성은 만든다");
@@ -209,7 +209,7 @@ test("DSO-018 이슈 저장소를 안 적은 인스턴스는 계약을 지지 �
 	assert.ok(!prompt.includes("Issue-first contract"), "저장소가 없는데 이슈 계약이 실렸다");
 });
 
-test("DSO-018 같은 대화의 다음 요청은 새 이슈를 열지 않고 앞의 이슈를 잇는다", () => {
+test("DSO-018 같은 대화의 다음 요청은 앞 이슈가 열려 있고 이번 작업을 다룰 때만 잇는다", () => {
 	const root = workspace();
 	const prompt = boundRequestPrompt("이어서 해줘", config({ issueTracker: TRACKER }), authority(), snapshotOf(root), null, { currentIssueUrl: "https://github.com/example-org/example-repo/issues/38" });
 	assert.ok(prompt.includes("was last working on https://github.com/example-org/example-repo/issues/38"), "앞의 이슈가 계약에 안 실렸다");
