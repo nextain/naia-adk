@@ -1,0 +1,17 @@
+version: 1
+status: active
+scope: naia-adk session contract recovery across Codex adapters
+
+canonical_recovery:
+  authority: "An explicit user directive may amend an existing active contract when the work objective remains bounded."
+  command: "node .agents/session-contracts/rebind-session.cjs <existing-contract-id> <current-session-id>"
+  sequence:
+    - "Read the existing contract, progress record, registry pointer, and target ownership."
+    - "Replace the old session binding with the current session id."
+    - "Recompute contract_digest from the contract without its digest field."
+    - "Write contract, progress, and registry pointer as one recovery transaction."
+    - "Verify the resolver reports the current session as bound."
+
+adapter_contract:
+  codex: "Allow only the exact rebind-session.cjs command while the current session is unbound or stale."
+  forbidden: ["general harness disablement", "unbounded shell escape", "automatic contract takeover without an explicit user directive"]

@@ -712,6 +712,13 @@ function boundGitMutationAllowed(command, resolution, cwd) {
 		!/(?:--force|-f\b|--delete)/i.test(gitSource);
 }
 
+function rebindCommandAllowed(toolName, toolInput, sessionId) {
+	if (normalizedToolName(toolName) !== "shell") return false;
+	const command = String(toolInput?.command || "").trim();
+	return /^node\s+\.agents[\\/]session-contracts[\/]rebind-session\.cjs\s+[^\s]+\s+ses_[A-Za-z0-9._-]+$/.test(command) &&
+		command.endsWith(sessionId);
+}
+
 function readStdin() {
 	try { return fs.readFileSync(0, "utf8"); } catch { return ""; }
 }
@@ -791,6 +798,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 			reason: "⛔ [HARNESS] 공유 진입점은 전용 validator를 거쳐야 합니다. 후보 파일을 만든 뒤 `node .claude/hooks/sync-entry-points.js --apply <candidate>`를 사용하세요.",
 		};
 	}
+	if (rebindCommandAllowed(toolName, toolInput, sessionId)) return null;
 	if (normalizedToolName(toolName) === "shell" && reclaimCommandAllowed(toolInput.command, sessionId)) return null;
 	if (normalizedToolName(toolName) === "shell" && baselineCommandAllowed(toolInput.command, sessionId)) return null;
 	if (normalizedToolName(toolName) === "shell" && approvalCommandAllowed(toolInput.command)) return null;
@@ -896,12 +904,12 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 		}
 		if (normalizedToolName(toolName) === "shell") {
 			const command = String(toolInput.command || "").trim();
-			const trustedReview = reviewInvokerCommand(command, cwd);
-			if ((unsafeShellCommand(command) || ambiguousShellWrapper(command)) && !trustedReview) {
-				return { decision: "block", reason: "⛔ [HARNESS] nested runtime launches and dynamically constructed shell commands are forbidden." };
-			}
 			const readOnly = readOnlyShell(command, cwd);
 			const gitIntegration = !readOnly && boundGitMutationAllowed(command, resolution, cwd);
+			const trustedReview = reviewInvokerCommand(command, cwd);
+			if ((unsafeShellCommand(command) || ambiguousShellWrapper(command)) && !trustedReview && !gitIntegration) {
+				return { decision: "block", reason: "⛔ [HARNESS] nested runtime launches and dynamically constructed shell commands are forbidden." };
+			}
 			if (!readOnly && !trustedReview && governanceWriteCommand(command, cwd, resolution.projectRoot)) {
 				return { decision: "block", reason: "⛔ [HARNESS] 셸 변경 대상이 현재 프로젝트의 계약 경계 밖이거나 거버넌스 경로입니다." };
 			}
@@ -955,4 +963,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { routineAllowance, routineRefusedSubcommands, routineMutationRefused, governanceWriteCommand, shellRedirectionTargets, splitShellStatements, ambiguousShellWrapper, reviewInvokerCommand, routineCommandAllowed, baselineCommandAllowed, bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundOrdinaryMutationAllowed };
+module.exports = { routineAllowance, routineRefusedSubcommands, routineMutationRefused, governanceWriteCommand, shellRedirectionTargets, splitShellStatements, ambiguousShellWrapper, reviewInvokerCommand, routineCommandAllowed, baselineCommandAllowed, bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, rebindCommandAllowed, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundOrdinaryMutationAllowed };
