@@ -17,8 +17,8 @@
 ## context_boundaries
 
 - **shared_entrypoints_are_indexes**: AGENTS.md is the canonical repository index and CLAUDE.md/GEMINI.md are byte-identical mirrors. Shared entrypoints may contain identity, mandatory index paths, context routing, session-contract locations, and permanent safety boundaries only; never current goals, issue state, implementation plans, completion claims, or artifact wording.
-- **recovery_mode**: A root .codex/no-harness, .claude/no-harness, or .pi/no-harness marker is an explicit local recovery escape hatch: repository session-contract mutation checks are bypassed for that checkout, and no contract is created or bound. This marker does not claim to change host or operating-system permissions. A marker-free checkout uses the gate's normal policy path.
-- **session_contract_authority**: Outside recovery mode, an UNBOUND session may perform ordinary reversible file creation and editing inside its resolved project boundary, plus policy-approved routine local shell work such as inspection, tests, builds, and non-destructive Git operations. A BOUND contract is required for governance or host-policy files, shared entrypoints, deletion, destructive or remote operations, external effects, and any operation that can expand the session's own authority. When bound, the local registry pointer, active contract digest, explicit session_bindings entry, and progress contract reference must all agree. Progress or Markdown session_id fields never grant authority.
+- **recovery_mode**: A .codex/no-harness, .claude/no-harness, or .pi/no-harness marker at the resolved project root or any ancestor is an explicit local recovery escape hatch: the marker is inherited by descendant checkouts, repository session-contract mutation checks are bypassed for that checkout, and no contract is created or bound. This marker does not claim to change host or operating-system permissions. A marker-free checkout uses the gate's normal policy path.
+- **session_contract_authority**: Outside recovery mode, an UNBOUND session may perform ordinary reversible file creation and editing inside its resolved project boundary, plus policy-approved routine local shell work such as inspection, tests, builds, and non-destructive Git operations. A BOUND contract is required for governance or host-policy files, shared entrypoints, deletion, destructive or remote operations, external effects, and any operation that can expand the session's own authority. Once bound, every non-read-only shell command must exactly match a digest-covered allowed_shell_commands entry; routine status does not exempt it. When bound, the local registry pointer, active contract digest, explicit session_bindings entry, and progress contract reference must all agree. Progress or Markdown session_id fields never grant authority.
 - **project_isolation**: Never infer a session binding from a parent workspace, child project, or the repository's only unfinished work unit. Concurrent contracts must declare non-overlapping target_ownership paths.
 - **context_is_not_output**: Background, reference, example, conversation, and internal context constrain reasoning but are not code, UI, or external-document content. Rendering requires explicit atom-level derive, quote, or require authority for a declared output unit and audience.
 - **source_atom_contract**: Every v2 source atom declares subject, effect, and render_policy. Non-directive source classifications keep directive_ids exactly empty; rendering authority never becomes objective authority.
@@ -280,6 +280,7 @@
 - payment, purchase, paid resource provisioning, or materially costly cloud operation
 - production-destructive mutation, production data write, or irreversible deployment action
 - material scope expansion or a missing user choice that changes the requested outcome
+- substituting a different repository, remote, branch lineage, or visibility for the one the user named or the workspace index catalogues (a repository found by search, a local export remnant, or a `-public`/`-pub` sibling is never a stand-in for the named repository; stop and ask, and state the substitution in the first line of the reply if it was already made)
 - **precedence**: This command policy does not grant authority for governance or host-policy files, shared entrypoints, session contracts, registry/progress authority changes, credentials, external effects, or production operations.
 
 #### unbound_routine_commands
@@ -289,7 +290,7 @@
 
 ##### contract_required_heads
 
-- **_doc**: Heads whose normal use can affect the host, credentials, remote systems, or irreversible state.
+- **_doc**: Heads whose normal use is irreversible: destroys data, escalates privilege, alters the host, or reaches another machine. Reversible operations such as stopping a process, restarting a user service or changing a permission bit are not listed.
 
 ###### destructive_filesystem
 
@@ -309,14 +310,8 @@
 - sudo
 - su
 - doas
-- systemctl
-- service
 - mount
 - umount
-- chown
-- chmod
-- chgrp
-- setcap
 - modprobe
 - insmod
 - rmmod
@@ -324,9 +319,6 @@
 - shutdown
 - poweroff
 - halt
-- kill
-- pkill
-- killall
 
 ###### remote_transfer
 
@@ -344,7 +336,7 @@
 
 ##### contract_required_subcommands
 
-- **_doc**: Only the named subcommands are refused; harmless local subcommands remain routine.
+- **_doc**: Only the named subcommands are refused; harmless local subcommands remain routine. Installing or removing packages and pruning local images are reversible and are not listed.
 
 ###### git
 
@@ -374,17 +366,11 @@
 - publish
 - unpublish
 - deprecate
-- owner
-- access
-- token
 
 ###### pnpm
 
 - publish
 - unpublish
-- owner
-- access
-- token
 
 ###### yarn
 
@@ -392,23 +378,10 @@
 - owner
 - tag
 
-###### systemctl
-
-- enable
-- disable
-- start
-- stop
-- restart
-- reload
-- mask
-- unmask
-
 ###### docker
 
 - push
 - rm
-- rmi
-- system
 - prune
 
 ###### kubectl
@@ -454,41 +427,36 @@
 - publish
 - yank
 
-###### go
-
-- install
-
 ##### git_refused_subcommands
 
 - push
 
 ##### contract_required_patterns
 
-- **_doc**: Patterns catch mutating forms where a safe command head has a dangerous option.
+- **_doc**: Patterns catch mutating forms where a safe command head has a dangerous option. Downloads (curl -o, wget -O) and global installs are reversible and are not listed.
 
 ###### patterns
 
-- (?:^|\s)curl\b[^\n]*(?:\s-X\s*(?:POST|PUT|PATCH|DELETE)|\s--request\s|\s-d\b|\s--data|\s-T\b|\s--upload-file|\s-F\b|\s--form|\s-o\b|\s-O\b|\s--output\b|\s--remote-name\b)
-- (?:^|\s)wget\b[^\n]*(?:--post-data|--post-file|--method\s*=?\s*(?:POST|PUT|DELETE)|\s-O\b|\s--output-document)
+- (?:^|\s)curl\b[^\n]*(?:\s-X\s*(?:POST|PUT|PATCH|DELETE)|\s--request\s|\s-d\b|\s--data|\s-T\b|\s--upload-file|\s-F\b|\s--form)
+- (?:^|\s)wget\b[^\n]*(?:--post-data|--post-file|--method\s*=?\s*(?:POST|PUT|DELETE))
 - (?:^|\s)gh\s+api\b[^\n]*(?:-X\s*(?:POST|PUT|PATCH|DELETE)|--method\s*(?:POST|PUT|PATCH|DELETE)|\s-f\s|--field)
 - (?:^|\s)git\s[^\n]*(?:--force\b|--force-with-lease\b)
 - (?:^|\s)git\s+branch\b[^\n]*\s-D\b
-- (?:^|\s)(?:npm|pnpm|yarn)\s+(?:install|add)\b[^\n]*(?:\s-g\b|--global)
 - (?:^|\s)mv\s+[^\n]*\s/(?:etc|usr|bin|sbin|var|boot|dev|proc|sys)\b
 - (?:^|\s)(?:tee|dd)\s+[^\n]*/(?:etc|usr|bin|sbin|boot)\b
+- (?:^|\s)git\s+(?:restore|checkout)\b
+- (?:^|\s)git\s+(?:config\s+--global|remote\s+(?:add|remove|rm|rename|set-url|set-head|set-branches|prune|update)|stash\s+(?:drop|clear))\b
+- (?:^|\s)gh\s+(?:pr\s+(?:merge|comment|close|review|edit|reopen|lock)|issue\s+comment)\b
+- (?:^|\s)glab\s+mr\s+(?:create|merge|close|comment)\b
+- (?:^|\s)az\s+(?:group\s+delete|vm\s+(?:create|delete|start|stop|restart|update|resize|deallocate))\b
+- (?:^|\s)gcloud\s+compute\s+instances\s+(?:create|delete|update|start|stop|reset|suspend|resume)\b
+- (?:^|\s)kubectl\s+(?:create|edit|set|drain)\b
+- (?:^|\s)helm\s+(?:install|uninstall|upgrade|rollback|delete)\b
 
-##### unsafe_forms_still_refused
+##### hidden_forms_are_resolved
 
-- **_doc**: These forms hide the effective command and always require a contract.
-
-###### forms
-
-- command_substitution
-- eval
-- xargs
-- shell_dash_c
-- nested_model_runtime
-- **still_requires_contract**: Governance and host-policy files, shared entrypoints, session contracts and registry changes remain contract-required regardless of command.
+- **_doc**: Forms that hide the effective command are resolved, not refused. Environment-variable prefixes and wrappers such as env, timeout, nohup and nice are peeled so the real command is judged; an interpreter's inline -c program is judged by the same rule; when the head cannot be seen at all (command substitution, eval, xargs, shell control flow) every token on the line is checked. Launching another model runtime (claude, codex, opencode, gemini) is ordinary work. What still cannot be judged is allowed: the harness stops drift into irreversible actions; it does not out-guess a shell.
+- **still_requires_contract**: Governance and host-policy files, shared entrypoints, session contracts and registry changes remain contract-required regardless of command. All git checkout and git restore forms also require a contract; routine branch switching uses the non-destructive git switch forms.
 
 ### escalation_path
 
@@ -586,7 +554,7 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 
 ## language_harness
 
-- **no_korean_in_agents**: Strictly prohibit Korean characters in .agents/ directory to optimize token usage. All context files here must be in concise English.
+- **no_korean_in_agents**: Use concise English for machine-facing .agents/ files by default. Korean is allowed when a user explicitly requests it, when preserving a Korean user-facing trigger/example is necessary, or when localized human-facing text is part of the contract; machine JSON/YAML keys remain stable.
 - **concise_session_output**: AI responses should be extremely brief (less than 3 lines) to minimize history weight. Avoid long Korean preambles.
 
 ## conventions
@@ -639,7 +607,7 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 ### git_workflow
 
 - **maintainer_rule**: Authorized maintainers follow each repository contribution policy; direct pushes are limited to explicitly maintained repositories, while external contributions use pull requests.
-- **pr_prohibition**: DO NOT run `gh pr create` for nextain/* repos. The pr-guard hook will block this automatically.
+- **pr_prohibition**: The pr-guard permits explicit --repo nextain/<repo>; it blocks missing or non-nextain destinations. Maintainers may direct-push only where repository policy permits; external contributors should open an explicit upstream pull request after review.
 - **owned_repo_posting_authority**: When the user explicitly requests an issue, comment, release note, or other repository post in a Nextain or user-owned/managed repository, that request is posting authority and does not require a second approval. Unsolicited posts and third-party/community posts remain external actions requiring reviewed-content approval.
 
 ### external_repo_policy
@@ -691,7 +659,7 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 
 - Add entry to parent/.gitmodules
 - Add entry to parent/.agents/context/agents-rules.json submodules
-- Update parent/CLAUDE.md submodule table
+- Update parent/.agents/context/project-index.yaml; record fork-specific facts in parent/FORK.md when applicable
 - Add category to parent/.agents/context/ai-work-index.yaml (if needed)
 
 ### onSubmoduleRemove
@@ -706,7 +674,7 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 
 - Remove from parent/.gitmodules
 - Remove from parent/.agents/context/agents-rules.json submodules
-- Remove from parent/CLAUDE.md submodule table
+- Remove from parent/.agents/context/project-index.yaml; remove fork-specific facts from parent/FORK.md when applicable
 
 ### onRulesChange
 
@@ -780,6 +748,14 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 - **evidence**: Record the reviewed commit SHA, remote visibility, scanners or deterministic checks run, findings and dispositions, history review result, and human approval in an issue or review artifact that contains no secret values.
 - **approval**: The repository owner must explicitly approve the reviewed immutable candidate before the first public push, visibility change, or public-template publication. Any candidate change after approval invalidates the approval and requires re-review.
 - **incident_response**: If potentially sensitive material is found in a public repository or public template, stop propagation, do not repeat the value in logs or reports, identify affected refs and forks, revoke or rotate credentials first, then perform repository-history remediation under explicit owner authority. A cleanup commit alone never closes the incident.
+
+### deterministic_gate
+
+- **hook**: .agents/hooks/core/remote-identity.js (registered as .claude/hooks/remote-identity-gate.js and .codex/hooks/remote-identity-gate.cjs)
+- **rule_1_identity**: A checkout at a path catalogued in project-index.yaml or agents-rules.json must push to, add, or set only the catalogued owner/repo. Mismatch is blocked outright.
+- **rule_2_visibility**: A checkout catalogued private may not push to a remote that `gh repo view` reports as PUBLIC.
+- **rule_3_public_action**: `gh repo create --public`, `gh repo edit --visibility public`, and cloning a different repository into a catalogued path need a single-use approval record at .agents/work/public-repository-approval.json.
+- **not_disabled_by_no_harness**: true
 
 ## context_governance
 

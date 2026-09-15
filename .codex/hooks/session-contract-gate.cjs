@@ -18,13 +18,11 @@ const sessionRecovery = require("../../.agents/harness/session-contract-recovery
 const {
 	executableReadCommand,
 	explicitlyScopedRead,
-	inlineShellExecution,
 	nestedModelRuntimeCommand,
 	readOnlyShell,
 	requestedWorkdirIssue,
 	shellTokens,
 	trustedSessionParserCommand,
-	unsafeShellCommand,
 } = require("./session-read-policy.cjs");
 const { routineAllowance, routineRefusedSubcommands, routineMutationRefused } = require("./routine-policy.cjs");
 
@@ -495,7 +493,13 @@ function commandMutationTargets(statement) {
 		const optionsWithValues = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix"]);
 		while (index < tokens.length) {
 			const token = String(tokens[index]);
-			if (optionsWithValues.has(token)) { index += 2; continue; }
+			if (optionsWithValues.has(token)) {
+				// `git -C <path> add …` mutates the repository rooted at <path>; keep
+				// that path in the boundary check as well as the add operands.
+				if (token === "-C" && tokens[index + 1]) targets.push(tokens[index + 1]);
+				index += 2;
+				continue;
+			}
 			if (/^-C.+$/.test(token) || /^-c.+$/.test(token) || /^(?:--git-dir|--work-tree|--namespace|--exec-path|--super-prefix)=/.test(token)) { index += 1; continue; }
 			if (token.startsWith("-")) { index += 1; continue; }
 			break;
@@ -546,47 +550,122 @@ function routineCommandAllowed(toolName, toolInput, cwd) {
 	if (!command) return false;
 	const projectRoot = sessionContract.findProjectRoot(cwd);
 	if (!projectRoot) return false;
-	const allowance = routineAllowance(projectRoot);
-	if (!allowance || allowance.default !== "allow") return false;
-	const trustedReview = reviewInvokerCommand(command, cwd);
-	if (ambiguousShellWrapper(command)) return false;
-	if (routineMutationRefused(command)) return false;
-	if (trustedReview) return true;
-	if (unsafeShellCommand(command) || inlineShellExecution(command)) return false;
-	if (nestedModelRuntimeCommand(command)) return false;
+	// A rules file without a routine section means the project has not narrowed
+	// anything: the built-in policy applies. Only a malformed policy denies.
+	const allowance = routineAllowance(projectRoot) || { default: "allow" };
+	if (allowance.default !== "allow") return false;
+	if (reviewInvokerCommand(command, cwd)) return true;
 	if (governanceWriteCommand(command, cwd, projectRoot)) return false;
 
+	const patterns = [];
 	for (const pattern of allowance.contract_required_patterns?.patterns || []) {
-		let expression;
-		try { expression = new RegExp(pattern, "i"); } catch { continue; }
-		if (expression.test(command)) return false;
+		try { patterns.push(new RegExp(pattern, "i")); } catch { /* an unparsable pattern refuses nothing */ }
 	}
+	if (patterns.some((expression) => expression.test(command))) return false;
 
-	const refusedHeads = new Set(
-		Object.entries(allowance.contract_required_heads || {})
-			.filter(([key]) => key !== "_doc")
-			.flatMap(([, value]) => (Array.isArray(value) ? value : [])),
-	);
-	const refusedSubcommands = routineRefusedSubcommands(allowance);
-	const ambiguousWrappers = new Set(["command", "env", "chrt", "nice", "nohup", "stdbuf", "timeout"]);
-	for (const statement of splitShellStatements(command)) {
-		const tokens = shellTokens(statement);
-		if (!tokens.length) continue;
-		const head = path.basename(String(tokens[0])).replace(/\.(exe|cmd)$/i, "");
-		// Wrappers can move the effective command past flags or assignments. Refuse
-		// the statement rather than guessing which policy applies.
-		if (ambiguousWrappers.has(head.toLowerCase()) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(String(tokens[0]))) return false;
-		if (refusedHeads.has(head)) return false;
-		const subcommands = refusedSubcommands[head];
-		if (Array.isArray(subcommands)) {
-			const rest = tokens.slice(1).filter((token, index, all) =>
-				token !== "-C" && all[index - 1] !== "-C" && !token.startsWith("-"),
-			);
-			if (rest.some((token) => subcommands.includes(token))) return false;
+	const policy = {
+		patterns,
+		refusedHeads: new Set(
+			Object.entries(allowance.contract_required_heads || {})
+				.filter(([key]) => key !== "_doc")
+				.flatMap(([, value]) => (Array.isArray(value) ? value : []))
+				.map((value) => String(value).toLowerCase()),
+		),
+		refusedSubcommands: routineRefusedSubcommands(allowance),
+	};
+	return !splitShellStatements(command).some((statement) => refusedStatement(statement, policy));
+}
+
+/**
+ * Judge one shell statement by the command it actually runs.
+ *
+ * The policy names the commands that are hard to undo. Everything that merely
+ * moves such a command along the line — `VAR=1 cmd`, `env -i cmd`,
+ * `timeout 600 cmd`, `nohup cmd`, `bash -c "cmd"` — used to be refused as
+ * "ambiguous" or "hidden", which made ordinary work (`CUDA_VISIBLE_DEVICES=1
+ * python …`, `timeout 900 npm test`) need a contract while adding no safety:
+ * the real command is right there to read. So read it. Wrappers are peeled,
+ * an inline `-c` program is judged by the same rule, and when the head truly
+ * cannot be seen (substitution, eval, xargs, shell control flow) every token
+ * is checked instead of refusing the whole line. What cannot be judged is
+ * allowed: the harness exists to stop drift into irreversible actions, not
+ * to out-guess a shell.
+ */
+const SHELL_INTERPRETERS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "ash"]);
+const WRAPPER_HEADS = new Set(["command", "env", "chrt", "nice", "nohup", "stdbuf", "timeout", "ionice", "exec", "builtin", "time"]);
+const HIDDEN_HEAD = /\$\(|`|(?:^|[\s;&|])(?:eval|xargs)\b/i;
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+function commandHead(token) {
+	// `(rm x)`, `{ rm x; }`, `$(sudo reboot)` and `\rm` glue shell marks onto the word.
+	const bare = String(token || "").replace(/^[$(`{\\]+|[)`}]+$/g, "");
+	return path.basename(bare).replace(/\.(exe|cmd)$/i, "").toLowerCase();
+}
+
+function unwrapStatement(tokens) {
+	const rest = [...tokens];
+	for (let depth = 0; depth < 8 && rest.length; depth += 1) {
+		while (rest.length && ASSIGNMENT.test(rest[0])) rest.shift();
+		if (!rest.length) break;
+		const head = commandHead(rest[0]);
+		if (!WRAPPER_HEADS.has(head)) break;
+		rest.shift();
+		while (rest.length && (rest[0].startsWith("-") || ASSIGNMENT.test(rest[0]))) {
+			const flag = rest.shift();
+			// `-n 5`, `-u NAME`, `-s KILL`, `-o L`: the value belongs to the flag.
+			// `-i` and friends take none, so the token after them is the command.
+			if (/^-(?:n|u|S|k|s|o|e)$/.test(flag) && rest.length && !rest[0].startsWith("-")) rest.shift();
+		}
+		if ((head === "timeout" || head === "chrt" || head === "ionice") && rest.length && /^\d+(?:\.\d+)?[smhd]?$/i.test(rest[0])) rest.shift();
+	}
+	return rest;
+}
+
+function refusedSubcommandHit(head, rest, refusedSubcommands) {
+	const subcommands = refusedSubcommands[head];
+	if (!Array.isArray(subcommands)) return false;
+	// -C and its value are position flags, not the subcommand.
+	const positional = rest.filter((token, index, all) => token !== "-C" && all[index - 1] !== "-C" && !token.startsWith("-"));
+	return positional.some((token) => subcommands.includes(token));
+}
+
+function refusedStatement(statement, policy) {
+	const { refusedHeads, refusedSubcommands, patterns } = policy;
+	const tokens = unwrapStatement(shellTokens(statement));
+	if (!tokens.length) return false;
+	const unwrapped = tokens.join(" ");
+	if (patterns.some((expression) => expression.test(unwrapped))) return true;
+	if (routineMutationRefused(unwrapped)) return true;
+	const head = commandHead(tokens[0]);
+	if (refusedHeads.has(head)) return true;
+	if (refusedSubcommandHit(head, tokens.slice(1), refusedSubcommands)) return true;
+	if (SHELL_INTERPRETERS.has(head)) {
+		// `bash -c 'prog'`, `sh --command "prog"`, `bash --execute='prog'`: the
+		// program is everything after the flag, however it was quoted.
+		let program = null;
+		for (let index = 1; index < tokens.length; index += 1) {
+			const token = String(tokens[index]);
+			const attached = token.match(/^--(?:command|execute)=(.*)$/);
+			if (attached) { program = [attached[1], ...tokens.slice(index + 1)].join(" "); break; }
+			if (/^-[A-Za-z]*c$/.test(token) || token === "--command" || token === "--execute") { program = tokens.slice(index + 1).join(" "); break; }
+		}
+		if (program) {
+			const dequoted = program.replace(/\\(["'])/g, "$1").replace(/^(["'])([\s\S]*)\1$/, "$2");
+			if (splitShellStatements(dequoted).some((inner) => refusedStatement(inner, policy))) return true;
 		}
 	}
-	return true;
+	if (HIDDEN_HEAD.test(statement) || ambiguousShellWrapper(statement)) {
+		for (let index = 1; index < tokens.length; index += 1) {
+			const candidate = commandHead(tokens[index]);
+			if (refusedHeads.has(candidate)) return true;
+			if (refusedSubcommandHit(candidate, tokens.slice(index + 1), refusedSubcommands)) return true;
+			if (routineMutationRefused(tokens.slice(index).join(" "))) return true;
+		}
+	}
+	return false;
 }
+
+const SHELL_CONTRACT_REASON = "⛔ [HARNESS] 이 셸 명령은 계약 없이는 실행되지 않는 부류입니다: 되돌리기 어려운 명령(삭제·권한 상승·강제 갱신·배포·외부 전송·공개)이거나 governance·계약 파일을 셸로 고칩니다. 일상 명령(빌드·테스트·설치·commit·다른 모델 런타임 실행)은 계약 없이 통과합니다. 정말 필요하면 계약의 allowed_shell_commands 에 이 명령을 그대로 선언한 뒤 재시도하고, governance 파일은 파일 쓰기 도구로 고치세요.";
 
 /**
  * What an unbound session may change without bootstrapping a contract.
@@ -715,8 +794,16 @@ function boundGitMutationAllowed(command, resolution, cwd) {
 function rebindCommandAllowed(toolName, toolInput, sessionId) {
 	if (normalizedToolName(toolName) !== "shell") return false;
 	const command = String(toolInput?.command || "").trim();
-	return /^node\s+\.agents[\\/]session-contracts[\/]rebind-session\.cjs\s+[^\s]+\s+ses_[A-Za-z0-9._-]+$/.test(command) &&
-		command.endsWith(sessionId);
+	// Every host's session id shape is accepted (OpenCode ses_…, Claude Code
+	// UUID, Codex); the command still has to name this very session.
+	return /^node\s+\.agents[\\/]session-contracts[\\/]rebind-session\.cjs\s+[A-Za-z0-9][A-Za-z0-9._-]{0,199}\s+[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(command) &&
+		command.endsWith(` ${sessionId}`);
+}
+
+const BINDING_HELPER = /(?:^|[\s"'/\\])\.agents[\\/](?:harness[\\/]session-contract-recovery\.cjs|session-contracts[\\/]rebind-session\.cjs)(?=$|[\s"'])/;
+
+function bindingHelperInvocation(command) {
+	return BINDING_HELPER.test(String(command || ""));
 }
 
 function readStdin() {
@@ -802,12 +889,21 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	if (normalizedToolName(toolName) === "shell" && reclaimCommandAllowed(toolInput.command, sessionId)) return null;
 	if (normalizedToolName(toolName) === "shell" && baselineCommandAllowed(toolInput.command, sessionId)) return null;
 	if (normalizedToolName(toolName) === "shell" && approvalCommandAllowed(toolInput.command)) return null;
-	if (normalizedToolName(toolName) === "shell" && nestedModelRuntimeCommand(toolInput.command) && !reviewInvokerCommand(toolInput.command, cwd)) {
+	// The binding helpers rewrite contract state, so they run only in the exact
+	// shapes above and only for this session; any other spelling — another
+	// session id, reordered flags, a joined command — is refused here rather
+	// than admitted as an ordinary script run.
+	if (normalizedToolName(toolName) === "shell" && bindingHelperInvocation(toolInput.command)) {
 		return {
 			decision: "block",
-			reason: "⛔ [HARNESS] 셸에서 Codex/Claude/OpenCode/Gemini 런타임을 중첩 실행할 수 없습니다. digest-bound governed spawn 도구를 사용하세요.",
+			reason: `⛔ [HARNESS] 계약 회복 헬퍼는 현재 세션만 대상으로, 정확한 형태로만 실행됩니다: \`node .agents/harness/session-contract-recovery.cjs reclaim --contract <id> --session ${sessionId}\` · \`node .agents/session-contracts/rebind-session.cjs <id> ${sessionId}\`.`,
 		};
 	}
+	// Launching another model runtime from the shell (`claude -p`, `opencode
+	// run`, `codex exec`) is ordinary, reversible work: a runner test, a review,
+	// a delegated job. It used to be refused outright in favour of a governed
+	// spawn tool, which left unattended sessions unable to exercise their own
+	// runners. The child's own hooks govern what the child does.
 	if (normalizedToolName(toolName) === "shell" && executableReadCommand(toolInput.command)) {
 		return {
 			decision: "block",
@@ -907,9 +1003,6 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 			const readOnly = readOnlyShell(command, cwd);
 			const gitIntegration = !readOnly && boundGitMutationAllowed(command, resolution, cwd);
 			const trustedReview = reviewInvokerCommand(command, cwd);
-			if ((unsafeShellCommand(command) || ambiguousShellWrapper(command)) && !trustedReview && !gitIntegration) {
-				return { decision: "block", reason: "⛔ [HARNESS] nested runtime launches and dynamically constructed shell commands are forbidden." };
-			}
 			if (!readOnly && !trustedReview && governanceWriteCommand(command, cwd, resolution.projectRoot)) {
 				return { decision: "block", reason: "⛔ [HARNESS] 셸 변경 대상이 현재 프로젝트의 계약 경계 밖이거나 거버넌스 경로입니다." };
 			}
@@ -921,20 +1014,40 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 					return { decision: "block", reason: "⛔ [HARNESS] 셸 명령이 현재 task 직접 우회의 exact_validators에 없습니다." };
 				}
 			}
-			if (!readOnly &&
+			// A bound session is never narrower than an unbound one: whatever the
+			// routine policy admits runs without being declared, as long as what it
+			// writes stays inside the contract's paths. allowed_shell_commands only
+			// adds the contract-required forms the contract deliberately authorizes.
+			// A delegated worker stays narrowed to the validators its brief declared.
+			// Git mutations keep going through boundGitMutationAllowed, which reads
+			// the index to check what a commit actually carries.
+			const routine = resolution.reason !== "derived_delegation_verified"
+				&& !resolution.derivedTask
+				&& !/^git(?:\.exe)?\s/i.test(command)
+				&& routineCommandAllowed(toolName, toolInput, cwd)
+				&& commandMutationTargets(command).every((target) => contractAllowsTarget(resolution, target, cwd));
+			if (!readOnly && !routine && !trustedReview &&
 				!(resolution.contract.allowed_shell_commands || []).includes(command) &&
 				!gitIntegration) {
 				return {
 					decision: "block",
 					reason: touchesOwnBindingFiles(command)
 						? "⛔ [HARNESS] 셸로는 자기 계약·progress·registry 를 고칠 수 없습니다. 게이트가 셸 명령의 결과를 확인할 수 없기 때문입니다. 파일 쓰기 도구(write/edit/apply_patch)로 같은 변경을 하면 계약↔progress↔registry 정합성을 검사한 뒤 통과합니다. 세션이 죽은 계약을 넘겨받아야 하면 `node .agents/harness/session-contract-recovery.cjs reclaim --contract <id> --session <현재 세션 id>` 를, 제3자 승인이 필요하면 같은 헬퍼의 approve 를 쓰십시오."
-						: "⛔ [HARNESS] 변경 가능 셸 명령이 계약의 allowed_shell_commands에 정확히 선언되지 않았습니다.",
+						: `${SHELL_CONTRACT_REASON} 계약 밖 경로를 고치는 셸 명령도 같은 이유로 막힙니다.`,
 				};
 			}
 		}
 		return null;
 	}
 	if (normalizedToolName(toolName) === "shell" && readOnlyShell(toolInput.command, cwd)) return null;
+	if (normalizedToolName(toolName) === "shell") {
+		return {
+			decision: "block",
+			reason: touchesOwnBindingFiles(String(toolInput.command || ""))
+				? "⛔ [HARNESS] 셸로는 계약·progress·registry 를 고칠 수 없습니다. 파일 쓰기 도구(write/edit/apply_patch)로 같은 변경을 하면 정합성을 검사한 뒤 통과합니다. 죽은 계약을 넘겨받으려면 `node .agents/harness/session-contract-recovery.cjs reclaim --contract <id> --session " + sessionId + "` 을, 재시작 뒤 자기 계약을 다시 잡으려면 `node .agents/session-contracts/rebind-session.cjs <id> " + sessionId + "` 을 쓰십시오."
+				: SHELL_CONTRACT_REASON,
+		};
+	}
 	const routinePolicy = routineAllowance(resolution.projectRoot);
 	const routineMessage = routinePolicy?.default === "allow"
 		? "현재 정책이 허용한 일상 로컬 작업은 계약 없이 수행할 수 있습니다."

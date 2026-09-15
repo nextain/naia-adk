@@ -68,7 +68,14 @@ function runRoutinePolicyTests() {
 
 	    assertBlocked("touch .agents/context/blocked.txt");
 	    assertBlocked("rm -rf tmp/ordinary");
-	    assertBlocked("bash -c \\\"touch ordinary.txt\\\"");
+	    // An inline program is judged like any other command: an ordinary one
+	    // stays routine, a contract-required one is refused wherever it hides.
+	    assertAllowed("bash -c \\\"touch ordinary.txt\\\"");
+	    assertAllowed("FOO=1 timeout 60 npm test");
+	    assertAllowed("claude -p hi");
+	    assertBlocked("bash -c \\\"rm -rf tmp/ordinary\\\"");
+	    assertBlocked("FOO=1 rm -rf tmp/ordinary");
+	    assertBlocked("echo $(rm -rf tmp/ordinary)");
 	    assertBlocked("git reset --hard");
 	    assertBlocked("git push --force");
 	    assert.equal(run("search_replace", {
@@ -295,7 +302,10 @@ function runRoutinePolicyTests() {
     assert.equal(allowed(trustedReview), true, "the exact reviewer invocation remains routine");
     assert.equal(gate.reviewInvokerCommand(`${trustedReview} > review.json`, root), false, "review redirect is not trusted");
     assert.equal(gate.reviewInvokerCommand(`${trustedReview}\nrm -rf ordinary-fixture`, root), false, "review newline is not trusted");
-    assert.equal(allowed(`${trustedReview} > review.json`), false, "review redirect cannot bypass the routine gate");
+    // Without the exemption the redirect is judged on its own: an ordinary
+    // in-project write, which is routine anyway. Only the destructive tail below
+    // needs a contract.
+    assert.equal(allowed(`${trustedReview} > review.json`), true, "review redirect is an ordinary in-project write");
     assert.equal(allowed(`${trustedReview}\nrm -rf ordinary-fixture`), false, "review newline cannot bypass the routine gate");
 
     assert.equal(allowed("env rm -rf ordinary-fixture"), false, "env wrapper cannot hide destructive head");
@@ -376,8 +386,35 @@ function runRoutinePolicyTests() {
 	}
 }
 
-module.exports = { runRoutinePolicyTests };
+// The built-in policy (used when a rules file has no routine section) must
+// stay identical to the repository rules file, minus its documentation keys.
+function runBuiltinPolicyTests() {
+	const policy = require("./routine-policy.cjs");
+	const rules = JSON.parse(fs.readFileSync(path.join(repositoryRoot, ".agents", "context", "agents-rules.json"), "utf8"));
+	const declared = rules.ai_workflow.routine_action_authorization.unbound_routine_commands;
+	const strip = (value) => {
+		if (Array.isArray(value)) return value;
+		if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).filter(([key]) => key !== "_doc" && key !== "hidden_forms_are_resolved" && key !== "still_requires_contract").map(([key, inner]) => [key, strip(inner)]));
+		return value;
+	};
+	assert.deepEqual(strip(policy.BUILTIN_UNBOUND_ROUTINE_COMMANDS), strip(declared), "built-in routine policy must mirror agents-rules.json");
+	const bare = fs.mkdtempSync(path.join(os.tmpdir(), "gate-routine-builtin-"));
+	try {
+		fs.mkdirSync(path.join(bare, ".git"), { recursive: true });
+		writeJson(path.join(bare, ".codex", "hooks.json"), {});
+		writeJson(path.join(bare, ".agents", "context", "agents-rules.json"), {});
+		const allowed = (command) => gate.routineCommandAllowed("Bash", { command }, bare);
+		assert.equal(allowed("npm test"), true, "a rules file without the section allows ordinary work");
+		assert.equal(allowed("rm -rf build"), false, "…and still refuses what cannot be undone");
+	} finally {
+		fs.rmSync(bare, { recursive: true, force: true });
+	}
+	console.log("built-in routine policy: PASS");
+}
+
+module.exports = { runRoutinePolicyTests, runBuiltinPolicyTests };
 
 if (require.main === module) {
 	runRoutinePolicyTests();
+	runBuiltinPolicyTests();
 }

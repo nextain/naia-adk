@@ -115,6 +115,40 @@ function hostProcessIdentity(startPid = process.ppid, snapshot = processSnapshot
 	return null;
 }
 
+// The host identity is walked once per hook process: SessionStart records it
+// in the lease and then reuses it to continue this host's own contracts.
+let cachedHostIdentity;
+function currentHostIdentity() {
+	if (cachedHostIdentity === undefined) {
+		try { cachedHostIdentity = hostProcessIdentity(); } catch { cachedHostIdentity = null; }
+	}
+	return cachedHostIdentity;
+}
+
+/**
+ * Whether a lease was written from the very host process that is asking now.
+ *
+ * `/clear` in Claude Code (and a compaction restart in other hosts) hands the
+ * same running process a new session id. The old lease then names a host that
+ * is provably alive — because it is us. Reading that as "another live owner"
+ * locked every session out of its own contract the moment it cleared, and the
+ * only exit was a human restarting the host and typing an approval. The same
+ * PID and start token cannot belong to anyone else, so this is not a takeover;
+ * it is the owner continuing under a new name.
+ */
+function sameHostOwner(lease, identity = currentHostIdentity()) {
+	if (!identity || !lease?.host_process?.pid || !lease.host_process.start_token) return false;
+	return String(lease.host_process.pid) === String(identity.pid) &&
+		String(lease.host_process.start_token) === String(identity.start_token);
+}
+
+function ownerSessionLive(root, sessionId, lease, dependencies = {}) {
+	if (sameHostOwner(lease, dependencies.hostIdentity === undefined ? currentHostIdentity() : dependencies.hostIdentity)) return false;
+	return leaseFreshAndActive(root, sessionId) ||
+		recordedHostProcessLive(lease, dependencies.snapshot || processSnapshot) ||
+		sessionProcessLive(sessionId, dependencies.processLines);
+}
+
 function recordLease(root, data, eventName) {
 	const sessionId = data.session_id;
 	if (!sessionId || !ID_RE.test(String(sessionId))) return;
@@ -125,7 +159,7 @@ function recordLease(root, data, eventName) {
 	// every lifecycle event can exceed Codex's hook deadline. Later events keep
 	// the immutable PID/start-token identity captured at session start.
 	const hostProcess = eventName === "SessionStart"
-		? hostProcessIdentity()
+		? currentHostIdentity()
 		: previous?.host_process || null;
 	atomicJson(leasePath(root, sessionId), {
 		schema_version: "1.0",
@@ -159,7 +193,7 @@ function recordGrant(root, data) {
 	return true;
 }
 
-function handleEvent(eventName, raw = readStdin(), cwd = process.cwd()) {
+function handleEvent(eventName, raw = readStdin(), cwd = process.cwd(), dependencies = {}) {
 	const data = eventInput(raw);
 	const root = contractCore.findProjectRoot(data.cwd || cwd);
 	if (!root) return;
@@ -169,6 +203,61 @@ function handleEvent(eventName, raw = readStdin(), cwd = process.cwd()) {
 	} catch (error) {
 		process.stderr.write(`[HARNESS recovery] ${error.message}\n`);
 	}
+	if (eventName === "SessionStart") {
+		try {
+			const tx = continueSameHost(root, data.session_id, dependencies);
+			if (tx) process.stderr.write(`[HARNESS recovery] continued ${tx.contract_id}: ${tx.old_session_ids.join(",")} -> ${tx.new_session_id}\n`);
+		} catch (error) {
+			process.stderr.write(`[HARNESS recovery] ${error.message}\n`);
+		}
+	}
+}
+
+function activeContracts(root) {
+	const dir = path.join(root, ".agents", "session-contracts");
+	let names = [];
+	try { names = fs.readdirSync(dir); } catch { return []; }
+	const found = [];
+	for (const name of names) {
+		if (!name.endsWith(".json") || name.startsWith(".") || name === "schema.json") continue;
+		const contract = readJson(path.join(dir, name));
+		if (contract && contract.status === "active" && Array.isArray(contract.session_bindings)) found.push(contract);
+	}
+	return found;
+}
+
+/**
+ * Continue this host process's own contract under the new session id.
+ *
+ * Runs at SessionStart. A contract bound to a session whose lease names the
+ * same host process (same PID and start token) belongs to the process that is
+ * starting this session — `/clear`, a compaction restart — so it is rebound
+ * here without any grant. Nothing owned by a different host process is
+ * touched. When several old sessions of this host hold contracts (a session
+ * cleared twice while continuation was still blocked), the most recently
+ * active one is continued and the rest remain ordinary orphans for `reclaim`.
+ */
+function continueSameHost(root, newSessionId, dependencies = {}) {
+	if (!newSessionId || !ID_RE.test(String(newSessionId))) return null;
+	const identity = dependencies.hostIdentity === undefined ? currentHostIdentity() : dependencies.hostIdentity;
+	if (!identity) return null;
+	const current = contractCore.resolveSessionContract({ cwd: root, sessionId: newSessionId });
+	if (current.status === contractCore.STATES.BOUND) return null;
+	let best = null;
+	for (const contract of activeContracts(root)) {
+		const sessionIds = [...new Set(contract.session_bindings.map((item) => item?.session_id).filter(Boolean))];
+		if (sessionIds.length === 0 || sessionIds.includes(newSessionId)) continue;
+		for (const sessionId of sessionIds) {
+			const lease = readJson(leasePath(root, sessionId));
+			if (!sameHostOwner(lease, identity)) continue;
+			const updated = Date.parse(lease.updated_at || "") || 0;
+			if (!best || updated > best.updated) best = { contract, updated };
+		}
+	}
+	if (!best) return null;
+	const tx = reclaim(root, best.contract.id, newSessionId, { ...dependencies, hostIdentity: identity });
+	appendAudit(root, { event: "session_continued", contract_id: tx.contract_id, from_session_ids: tx.old_session_ids, to_session_id: newSessionId, host_pid: identity.pid });
+	return tx;
 }
 
 function processCommandLines() {
@@ -237,7 +326,7 @@ function registryPointer(contract, digest) {
 	};
 }
 
-function buildTransaction(root, contractId, newSessionId) {
+function buildTransaction(root, contractId, newSessionId, dependencies = {}) {
 	const found = findContract(root, contractId);
 	const contract = found.contract;
 	if (contract.status !== "active") throw new Error("contract_not_active");
@@ -256,7 +345,7 @@ function buildTransaction(root, contractId, newSessionId) {
 		const pointer = registry.bindings[oldSessionId];
 		if (!pointer || pointer.contract_id !== contract.id || pointer.contract_digest !== contract.contract_digest) throw new Error("registry_binding_inconsistent");
 		const lease = readJson(leasePath(root, oldSessionId));
-		if (leaseFreshAndActive(root, oldSessionId) || recordedHostProcessLive(lease) || sessionProcessLive(oldSessionId)) throw new Error(`owner_session_live:${oldSessionId}`);
+		if (ownerSessionLive(root, oldSessionId, lease, dependencies)) throw new Error(`owner_session_live:${oldSessionId}`);
 	}
 	const originalDigest = contract.contract_digest;
 	const nextContract = { ...contract };
@@ -280,27 +369,43 @@ function transactionPath(root, contractId, sessionId) {
 	return path.join(recoveryDir(root), "transactions", `${safeId(contractId, "contract_id")}--${safeId(sessionId, "session_id")}.json`);
 }
 
-function reclaim(root, contractId, sessionId) {
+/**
+ * A grant, when one exists, is consumed; its absence no longer stops recovery.
+ *
+ * The owner-liveness check is the safety property: a contract is only ever
+ * taken from a session whose host process is provably gone (or is this very
+ * process). Demanding a typed `/harness reclaim` on top of that turned every
+ * crash and every `/clear` into a human chore, and an unattended session has
+ * no human to type it. A recorded grant still identifies who asked, so it is
+ * honoured and audited when present; an expired or mismatched one is ignored.
+ */
+function optionalGrant(validate) {
+	try { return Boolean(validate()); } catch { return false; }
+}
+
+function reclaim(root, contractId, sessionId, dependencies = {}) {
 	const release = acquireLock(root, contractId);
 	try {
 		const txPath = transactionPath(root, contractId, sessionId);
 		let tx = readJson(txPath);
+		let granted = false;
 		if (!tx) {
 			const current = findContract(root, contractId).contract;
-			validGrant(root, sessionId, contractId, current.contract_digest);
-			tx = buildTransaction(root, contractId, sessionId);
+			granted = optionalGrant(() => validGrant(root, sessionId, contractId, current.contract_digest));
+			tx = buildTransaction(root, contractId, sessionId, dependencies);
 			atomicJson(txPath, tx);
-			appendAudit(root, { event: "reclaim_prepared", contract_id: contractId, session_id: sessionId, from_session_ids: tx.old_session_ids, previous_contract_digest: tx.original_digest, contract_digest: tx.next_digest });
+			appendAudit(root, { event: "reclaim_prepared", contract_id: contractId, session_id: sessionId, from_session_ids: tx.old_session_ids, previous_contract_digest: tx.original_digest, contract_digest: tx.next_digest, granted });
 		} else {
-			validGrant(root, sessionId, contractId, tx.original_digest);
+			granted = optionalGrant(() => validGrant(root, sessionId, contractId, tx.original_digest));
 		}
 		atomicJson(tx.contract_path, tx.next_contract);
 		atomicJson(tx.progress_path, tx.next_progress);
 		atomicJson(tx.registry_path, tx.next_registry);
 		const resolved = contractCore.resolveSessionContract({ cwd: root, sessionId });
 		if (resolved.status !== contractCore.STATES.BOUND || resolved.contract.contract_digest !== tx.next_digest) throw new Error("reclaim_postcondition_failed");
-		appendAudit(root, { event: "reclaim_completed", contract_id: contractId, session_id: sessionId, from_session_ids: tx.old_session_ids, previous_contract_digest: tx.original_digest, contract_digest: tx.next_digest });
-		fs.unlinkSync(grantPath(root, sessionId, contractId));
+		appendAudit(root, { event: "reclaim_completed", contract_id: contractId, session_id: sessionId, from_session_ids: tx.old_session_ids, previous_contract_digest: tx.original_digest, contract_digest: tx.next_digest, granted });
+		// A stale or mismatched grant is cleared too, so it cannot be replayed.
+		try { fs.unlinkSync(grantPath(root, sessionId, contractId)); } catch { /* none recorded */ }
 		fs.unlinkSync(txPath);
 		return tx;
 	} finally {
@@ -338,4 +443,4 @@ if (require.main === module) {
 	}
 }
 
-module.exports = { GRANT_TTL_MS, LEASE_FRESH_MS, PROCESS_PROBE_TIMEOUT_MS, atomicJson, buildTransaction, handleEvent, hostProcessIdentity, isHostProcess, leaseFreshAndActive, main, processSnapshot, promptText, reclaim, recordedHostProcessLive, recordGrant, recordLease, sessionProcessLive };
+module.exports = { GRANT_TTL_MS, LEASE_FRESH_MS, PROCESS_PROBE_TIMEOUT_MS, atomicJson, buildTransaction, continueSameHost, handleEvent, hostProcessIdentity, isHostProcess, leaseFreshAndActive, main, ownerSessionLive, processSnapshot, promptText, reclaim, recordedHostProcessLive, recordGrant, recordLease, sameHostOwner, sessionProcessLive };

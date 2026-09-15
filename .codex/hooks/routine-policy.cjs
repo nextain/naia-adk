@@ -104,7 +104,7 @@ function routineAllowance(projectRoot) {
 			if (!Object.hasOwn(merged, key)) merged[key] = value;
 		}
 	}
-	if (!found && !malformed) return null;
+	if (!found && !malformed) return builtinAllowance();
 	if (defaultSeen) merged.default = defaultAllowed ? "allow" : "deny";
 	if (malformed) merged.default = "deny";
 	for (const key of Object.keys(refusalFields)) {
@@ -228,4 +228,62 @@ function routineMutationRefused(command) {
 	return false;
 }
 
-module.exports = { routineAllowance, routineRefusedSubcommands, routineMutationRefused };
+/**
+ * The policy a project gets when its rules file says nothing about routine
+ * commands: everything is allowed except what cannot be undone. Before this a
+ * missing section meant "refuse every mutating shell command", so a project
+ * that had simply never written the section was locked shut, and the only
+ * way to run `npm test` there was to disable the harness. The list mirrors
+ * the workspace rules file (a test keeps the two identical) so that a project
+ * with the section and one without behave the same.
+ */
+function builtinAllowance() {
+	return JSON.parse(JSON.stringify(BUILTIN_UNBOUND_ROUTINE_COMMANDS));
+}
+
+const BUILTIN_UNBOUND_ROUTINE_COMMANDS = {
+	default: "allow",
+	contract_required_heads: {
+		destructive_filesystem: ["rm", "rmdir", "shred", "truncate", "dd", "mkfs", "mkswap", "fdisk", "parted", "wipefs"],
+		privilege_and_system: ["sudo", "su", "doas", "mount", "umount", "modprobe", "insmod", "rmmod", "reboot", "shutdown", "poweroff", "halt"],
+		remote_transfer: ["ssh", "scp", "sftp", "rsync", "nc", "ncat", "telnet"],
+		package_publication: ["twine"],
+	},
+	contract_required_subcommands: {
+		git: ["reset", "clean", "filter-branch", "filter-repo", "gc", "prune", "reflog"],
+		gh: ["create", "delete", "transfer", "archive", "unarchive", "rename"],
+		glab: ["delete"],
+		npm: ["publish", "unpublish", "deprecate"],
+		pnpm: ["publish", "unpublish"],
+		yarn: ["publish", "owner", "tag"],
+		docker: ["push", "rm", "prune"],
+		kubectl: ["apply", "delete", "patch", "replace", "scale", "rollout"],
+		az: ["deployment", "webapp", "functionapp", "containerapp"],
+		gcloud: ["deploy", "delete", "update", "replace", "run"],
+		vercel: ["deploy", "remove", "alias", "env"],
+		terraform: ["apply", "destroy", "import", "state"],
+		cargo: ["publish", "yank"],
+	},
+	git_refused_subcommands: ["push"],
+	contract_required_patterns: {
+		patterns: [
+			"(?:^|\\s)curl\\b[^\\n]*(?:\\s-X\\s*(?:POST|PUT|PATCH|DELETE)|\\s--request\\s|\\s-d\\b|\\s--data|\\s-T\\b|\\s--upload-file|\\s-F\\b|\\s--form)",
+			"(?:^|\\s)wget\\b[^\\n]*(?:--post-data|--post-file|--method\\s*=?\\s*(?:POST|PUT|DELETE))",
+			"(?:^|\\s)gh\\s+api\\b[^\\n]*(?:-X\\s*(?:POST|PUT|PATCH|DELETE)|--method\\s*(?:POST|PUT|PATCH|DELETE)|\\s-f\\s|--field)",
+			"(?:^|\\s)git\\s[^\\n]*(?:--force\\b|--force-with-lease\\b)",
+			"(?:^|\\s)git\\s+branch\\b[^\\n]*\\s-D\\b",
+			"(?:^|\\s)mv\\s+[^\\n]*\\s/(?:etc|usr|bin|sbin|var|boot|dev|proc|sys)\\b",
+			"(?:^|\\s)(?:tee|dd)\\s+[^\\n]*/(?:etc|usr|bin|sbin|boot)\\b",
+			"(?:^|\\s)git\\s+(?:restore|checkout)\\b",
+			"(?:^|\\s)git\\s+(?:config\\s+--global|remote\\s+(?:add|remove|rm|rename|set-url|set-head|set-branches|prune|update)|stash\\s+(?:drop|clear))\\b",
+			"(?:^|\\s)gh\\s+(?:pr\\s+(?:merge|comment|close|review|edit|reopen|lock)|issue\\s+comment)\\b",
+			"(?:^|\\s)glab\\s+mr\\s+(?:create|merge|close|comment)\\b",
+			"(?:^|\\s)az\\s+(?:group\\s+delete|vm\\s+(?:create|delete|start|stop|restart|update|resize|deallocate))\\b",
+			"(?:^|\\s)gcloud\\s+compute\\s+instances\\s+(?:create|delete|update|start|stop|reset|suspend|resume)\\b",
+			"(?:^|\\s)kubectl\\s+(?:create|edit|set|drain)\\b",
+			"(?:^|\\s)helm\\s+(?:install|uninstall|upgrade|rollback|delete)\\b",
+		],
+	},
+};
+
+module.exports = { BUILTIN_UNBOUND_ROUTINE_COMMANDS, builtinAllowance, routineAllowance, routineRefusedSubcommands, routineMutationRefused };

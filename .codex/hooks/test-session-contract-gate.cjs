@@ -296,7 +296,11 @@ try {
 	fs.unlinkSync(path.join(fixture, ".agents", "progress", "bootstrap.json"));
 
 	writeJson(path.join(fixture, ".agents", "context", "agents-rules.json"), {
-		ai_workflow: { routine_action_authorization: { unbound_routine_commands: { default: "allow" } } },
+		ai_workflow: { routine_action_authorization: { unbound_routine_commands: {
+			default: "allow",
+			contract_required_heads: { destructive_filesystem: ["rm"], privilege_and_system: ["sudo"] },
+			contract_required_patterns: { patterns: ["(?:^|\\s)git\\s[^\\n]*(?:--force\\b|--force-with-lease\\b)"] },
+		} } },
 	});
 	bind(fixture);
 	fs.writeFileSync(path.join(fixture, "other.txt"), "outside\n");
@@ -306,7 +310,11 @@ try {
 	assert.equal(gate.reviewInvokerCommand(trustedReview, fixture), true, "bound fixture recognizes the exact reviewer invocation");
 	assert.equal(runGate(fixture, "Bash", { command: trustedReview }), null, "bound fixture permits the trusted reviewer invocation");
 	assert.equal(runGate(fixture, "Bash", { command: "npm run test" }), null, "bound fixture permits an exact declared routine command");
-	assert.equal(runGate(fixture, "Bash", { command: "npm run build" })?.decision, "block", "bound fixture blocks an undeclared npm routine command");
+	// A bound session is never narrower than an unbound one: routine work runs
+	// without being declared, and so does launching another model runtime.
+	for (const command of ["npm run build", "claude -p hi", "opencode run task", "codex exec -m gpt-5.6-luna task", "CUDA_VISIBLE_DEVICES=1 timeout 600 npm test", "bash -c 'npm test'"]) {
+		assert.equal(runGate(fixture, "Bash", { command }), null, `bound fixture runs routine work without declaring it: ${command}`);
+	}
 	assert.equal(runGate(fixture, "Bash", { command: "touch OUTSIDE" })?.decision, "block", "bound fixture blocks an extensionless out-of-contract target");
 	for (const command of [
 		"git add other.txt",
@@ -405,21 +413,26 @@ try {
 		);
 		assert.equal(runGate(fixture, "apply_patch", { command: "product mutation" })?.decision, "block", `${client} unresolved target blocked`);
 		assert.equal(runGate(fixture, "Bash", { command: "pnpm test" }), null, `${client} declared shell command`);
+		// Launching another model runtime, shaping a command with variables,
+		// substitution or an inline interpreter program, writing an owned file
+		// through the shell: ordinary work. The policy judges the command that
+		// actually runs, not the way it is spelled.
 		for (const command of [
 			"claude --version", "npx @anthropic-ai/claude-code --help", "npx @google/gemini-cli",
 			"npx @openai/codex-cli", "opencode-ai run", "name=codex; $name", "echo $(claude)",
 			"echo `gemini`", "printf '\\141'", "eval 'claude'", "echo codex | xargs -I{} {}",
 			"sh -c 'claude'", "bash -c 'codex'", "zsh -c 'gemini'",
 			"node -e \"require('child_process').spawn('claude')\"",
-		]) assert.equal(runGate(fixture, "exec_command", { command })?.decision, "block", `${client} unsafe launch blocked: ${command}`);
-		assert.match(runGate(fixture, "Bash", { command: "codex exec -m gpt-5.6-luna task" })?.reason, /중첩 실행/, `${client} declared Codex shell launch remains blocked`);
-		assert.match(runGate(fixture, "Bash", { command: "bash -c 'opencode run task'" })?.reason, /중첩 실행/, `${client} wrapped OpenCode shell launch remains blocked`);
-		for (const command of ["c''odex exec task", 'co"de"x exec task', "c\\odex exec task"]) {
-			assert.match(runGate(fixture, "Bash", { command })?.reason, /중첩 실행/, `${client} shell-spliced model runtime remains blocked: ${command}`);
+			"codex exec -m gpt-5.6-luna task", "bash -c 'opencode run task'", "c''odex exec task",
+			"echo changed > product.txt",
+		]) assert.equal(runGate(fixture, "exec_command", { command }), null, `${client} ordinary shell work runs while bound: ${command}`);
+		// What the policy names as hard to undo still needs the contract to declare it verbatim.
+		for (const command of ["rm -rf build", "bash -c 'rm -rf build'", "env rm -rf build", "timeout 60 rm -rf build", "git push --force origin main", "sudo systemctl restart nginx", "echo $(sudo reboot)", "(rm -rf build)"]) {
+			assert.match(runGate(fixture, "exec_command", { command })?.reason, /계약 없이는 실행되지 않는 부류/, `${client} contract-required shell stays refused while bound: ${command}`);
 		}
 		assert.equal(runGate(fixture, "Bash", { command: "rg --pre 'codex exec task' needle file" })?.decision, "block", `${client} rg preprocessor model runtime remains blocked`);
 		assert.match(runGate(fixture, "Bash", { command: "rg --pre 'sh -c touch /tmp/escaped' needle file" })?.reason, /전처리기/, `${client} allowlisted rg preprocessor mutation remains blocked`);
-		assert.equal(runGate(fixture, "Bash", { command: "echo changed > product.txt" })?.decision, "block", `${client} undeclared mutating shell blocked`);
+		assert.equal(runGate(fixture, "Bash", { command: "echo changed > .agents/context/other.yaml" })?.decision, "block", `${client} governance write through the shell stays blocked`);
 		assert.equal(
 			runGate(fixture, "Write", { file_path: "other.txt", content: "no" })?.decision,
 			"block",
