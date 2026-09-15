@@ -207,6 +207,27 @@ function testDifferentLiveHostStillBlocks() {
 	} finally { fs.rmSync(test.root, { recursive: true, force: true }); }
 }
 
+// A session working inside projects/<name> (its own .git) types
+// `/harness reclaim`. The contract lives at the ADK root, so the grant and the
+// lease must be filed there, and SessionStart from the nested directory must
+// continue the root contract.
+function testNestedWorkingDirectoryFindsRootContract() {
+	const test = fixture();
+	try {
+		const nested = path.join(test.root, "projects", "voice");
+		fs.mkdirSync(path.join(nested, ".git"), { recursive: true });
+		recovery.handleEvent("UserPromptSubmit", JSON.stringify({ cwd: nested, session_id: test.newSession, prompt: "/harness reclaim orphan-job" }), nested);
+		assert.equal(fs.existsSync(path.join(test.root, `.agents/session-contracts/.recovery/grants/${test.newSession}--orphan-job.json`)), true, "the grant is filed where the contract lives");
+		assert.equal(fs.existsSync(path.join(test.root, `.agents/session-contracts/.recovery/leases/${test.newSession}.json`)), true, "the lease is filed at the ADK root too");
+		assert.equal(recovery.contractRoot(nested, "orphan-job"), path.resolve(test.root), "the reclaim CLI resolves the root holding the contract");
+		const identity = { pid: 4242, start_token: "host-start", command_line_hash: "b".repeat(64) };
+		writeJson(path.join(test.root, `.agents/session-contracts/.recovery/leases/${test.oldSession}.json`), { schema_version: "1.0", session_id: test.oldSession, state: "active", updated_at: new Date().toISOString(), host_process: identity });
+		const third = `third-${Date.now()}`;
+		recovery.handleEvent("SessionStart", JSON.stringify({ cwd: nested, session_id: third }), nested, { hostIdentity: identity, snapshot: () => null, processLines: [] });
+		assert.equal(core.resolveSessionContract({ cwd: test.root, sessionId: third }).status, core.STATES.BOUND, "continuation from a nested working directory reaches the root contract");
+	} finally { fs.rmSync(test.root, { recursive: true, force: true }); }
+}
+
 function testLifecycleCliNeverWritesStdout() {
 	const test = fixture();
 	try {
@@ -232,5 +253,6 @@ testDeadOwnerReclaimsWithoutApproval();
 testExpiredApprovalIsIgnored();
 testSameHostContinuesAfterClear();
 testDifferentLiveHostStillBlocks();
+testNestedWorkingDirectoryFindsRootContract();
 testLifecycleCliNeverWritesStdout();
 process.stdout.write("session contract reclaim tests passed\n");

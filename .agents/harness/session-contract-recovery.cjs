@@ -193,22 +193,66 @@ function recordGrant(root, data) {
 	return true;
 }
 
+/**
+ * The nested root a session works in, plus the ADK root above it.
+ *
+ * A session whose working directory is a nested repository (projects/<name>)
+ * still belongs to the workspace that installed the harness, and that is where
+ * its contracts live. Filing the lease and the `/harness reclaim` grant only
+ * under the nested root left them where no contract could find them: the grant
+ * was silently never written and continuation saw no lease.
+ */
+function recoveryRoots(root) {
+	const roots = [path.resolve(root)];
+	let current = path.dirname(path.resolve(root));
+	while (true) {
+		if (fs.existsSync(path.join(current, ".agents", "context", "agents-rules.json"))) {
+			roots.push(current);
+			break;
+		}
+		const parent = path.dirname(current);
+		if (parent === current) break;
+		current = parent;
+	}
+	return roots;
+}
+
+/** The root, among the nested root and the ADK root above it, that holds this contract. */
+function contractRoot(start, contractId) {
+	const root = contractCore.findProjectRoot(start);
+	if (!root) throw new Error("project_root_not_found");
+	for (const candidate of recoveryRoots(root)) {
+		if (fs.existsSync(path.join(candidate, ".agents", "session-contracts", `${safeId(contractId, "contract_id")}.json`))) return candidate;
+	}
+	return root;
+}
+
 function handleEvent(eventName, raw = readStdin(), cwd = process.cwd(), dependencies = {}) {
 	const data = eventInput(raw);
 	const root = contractCore.findProjectRoot(data.cwd || cwd);
 	if (!root) return;
-	try {
-		recordLease(root, data, eventName);
-		if (eventName === "UserPromptSubmit") recordGrant(root, data);
-	} catch (error) {
-		process.stderr.write(`[HARNESS recovery] ${error.message}\n`);
+	const roots = recoveryRoots(root);
+	for (const candidate of roots) {
+		try { recordLease(candidate, data, eventName); }
+		catch (error) { process.stderr.write(`[HARNESS recovery] ${error.message}\n`); }
+	}
+	if (eventName === "UserPromptSubmit") {
+		let lastError = null;
+		let recorded = false;
+		for (const candidate of roots) {
+			try { if (recordGrant(candidate, data)) { recorded = true; break; } }
+			catch (error) { lastError = error; }
+		}
+		if (!recorded && lastError) process.stderr.write(`[HARNESS recovery] ${lastError.message}\n`);
 	}
 	if (eventName === "SessionStart") {
-		try {
-			const tx = continueSameHost(root, data.session_id, dependencies);
-			if (tx) process.stderr.write(`[HARNESS recovery] continued ${tx.contract_id}: ${tx.old_session_ids.join(",")} -> ${tx.new_session_id}\n`);
-		} catch (error) {
-			process.stderr.write(`[HARNESS recovery] ${error.message}\n`);
+		for (const candidate of roots) {
+			try {
+				const tx = continueSameHost(candidate, data.session_id, dependencies);
+				if (tx) process.stderr.write(`[HARNESS recovery] continued ${tx.contract_id}: ${tx.old_session_ids.join(",")} -> ${tx.new_session_id}\n`);
+			} catch (error) {
+				process.stderr.write(`[HARNESS recovery] ${error.message}\n`);
+			}
 		}
 	}
 }
@@ -429,8 +473,7 @@ function main(argv = process.argv.slice(2)) {
 	}
 	if (argv[0] !== "reclaim") throw new Error("usage: reclaim --contract <id> --session <id>");
 	const args = parseArgs(argv.slice(1));
-	const root = contractCore.findProjectRoot(process.cwd());
-	if (!root) throw new Error("project_root_not_found");
+	const root = contractRoot(process.cwd(), safeId(args.contract, "contract_id"));
 	const tx = reclaim(root, safeId(args.contract, "contract_id"), safeId(args.session, "session_id"));
 	process.stderr.write(`[HARNESS] reclaimed ${tx.contract_id}: ${tx.old_session_ids.join(",")} -> ${tx.new_session_id}\n`);
 	return 0;
@@ -443,4 +486,4 @@ if (require.main === module) {
 	}
 }
 
-module.exports = { GRANT_TTL_MS, LEASE_FRESH_MS, PROCESS_PROBE_TIMEOUT_MS, atomicJson, buildTransaction, continueSameHost, handleEvent, hostProcessIdentity, isHostProcess, leaseFreshAndActive, main, ownerSessionLive, processSnapshot, promptText, reclaim, recordedHostProcessLive, recordGrant, recordLease, sameHostOwner, sessionProcessLive };
+module.exports = { contractRoot, recoveryRoots, GRANT_TTL_MS, LEASE_FRESH_MS, PROCESS_PROBE_TIMEOUT_MS, atomicJson, buildTransaction, continueSameHost, handleEvent, hostProcessIdentity, isHostProcess, leaseFreshAndActive, main, ownerSessionLive, processSnapshot, promptText, reclaim, recordedHostProcessLive, recordGrant, recordLease, sameHostOwner, sessionProcessLive };

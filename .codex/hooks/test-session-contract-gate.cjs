@@ -438,15 +438,18 @@ try {
 			"block",
 			`${client} out-of-contract path blocked`,
 		);
-		assert.match(
-			runGate(fixture, "Write", { file_path: "nested/product.txt", content: "no" })?.reason,
-			/allowed_paths\/target_ownership/,
-			`${client} a parent contract must not authorize a nested ADK project mutation`,
+		// A nested project belongs to the workspace. A parent contract that lists
+		// the path may edit and stage it; binding must never grant less than an
+		// unbound session already had.
+		assert.equal(
+			runGate(fixture, "Write", { file_path: "nested/product.txt", content: "yes" }),
+			null,
+			`${client} a parent contract that lists a nested path may edit it`,
 		);
 		assert.equal(
-			runGate(fixture, "Bash", { command: `git -C "${nested}" add product.txt` })?.decision,
-			"block",
-			`${client} a parent contract must not authorize nested Git mutation`,
+			runGate(fixture, "Bash", { command: `git -C "${nested}" add product.txt` }),
+			null,
+			`${client} a parent contract that lists a nested path may stage it`,
 		);
 		assert.equal(
 			runGate(fixture, "Bash", { command: "node .claude/hooks/sync-entry-points.js --apply candidate.md" }),
@@ -693,3 +696,55 @@ console.log("baseline gate: PASS");
 
 
 require("./test-session-contract-routine-policy.cjs").runRoutinePolicyTests();
+
+// bc250 (2026-09-15): a root contract bound to the session listed a file inside
+// projects/<name> (a .git-only nested repository) and was still refused, while
+// an unbound session edited the same file. Only another live session's contract
+// inside the nested repository may keep a parent contract out.
+{
+	const fsn = require("node:fs");
+	const osn = require("node:os");
+	const root = fsn.mkdtempSync(path.join(osn.tmpdir(), "nested-repo-edit-"));
+	try {
+		writeJson(path.join(root, ".agents", "context", "agents-rules.json"), {});
+		writeJson(path.join(root, ".codex", "hooks.json"), {});
+		fsn.mkdirSync(path.join(root, ".git"), { recursive: true });
+		const infra = path.join(root, "projects", "model-infra");
+		fsn.mkdirSync(path.join(infra, ".git"), { recursive: true });
+		const rel = "projects/model-infra/config/server.py";
+		fsn.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+		fsn.writeFileSync(path.join(root, rel), "x = 1\n");
+		const sid = "SESSION-NESTED";
+		const contract = { schema_version: "1.0", id: "voice-host", status: "active", project_root: ".", goal: "g", scope: ["s"],
+			non_goals: [], success_criteria: ["c"], allowed_paths: [rel], target_ownership: [rel], audiences: ["a"], source_refs: ["r"],
+			session_bindings: [{ session_id: sid }], progress_file: ".agents/progress/voice-host.json" };
+		const digest = contractCore.contractDigest(contract);
+		contract.contract_digest = digest;
+		contract.session_bindings[0].contract_digest = digest;
+		writeJson(path.join(root, ".agents", "session-contracts", "voice-host.json"), contract);
+		writeJson(path.join(root, ".agents", "progress", "voice-host.json"), { contract_id: contract.id, contract_digest: digest });
+		writeJson(path.join(root, ".agents", "session-contracts", ".session-map.json"), { schema_version: "1.0", bindings: {
+			[sid]: { contract_id: contract.id, contract_path: ".agents/session-contracts/voice-host.json", contract_digest: digest } } });
+		const run = (toolName, toolInput) => gate.decide(
+			{ cwd: root, session_id: sid, tool_name: toolName, tool_input: toolInput },
+			{ ...process.env, ADK_PROJECT_ROOT: "", AI_HARNESS: "", CLAUDE_HARNESS: "", CODEX_HARNESS: "" },
+			{ resolveHookProjectRoot: () => root, processCwd: root },
+		);
+		assert.equal(contractCore.resolveSessionContract({ cwd: root, sessionId: sid }).status, contractCore.STATES.BOUND);
+		assert.equal(run("Edit", { file_path: path.join(root, rel), old_string: "x = 1", new_string: "x = 2" }), null,
+			"a bound root contract edits a listed file inside a nested repository");
+		assert.equal(run("Write", { file_path: path.join(root, ".agents", "context", "other.yaml"), content: "no" })?.decision, "block",
+			"governance paths stay protected");
+		// Another live session's contract inside the nested repository keeps it out.
+		const peer = { schema_version: "1.0", id: "peer", status: "active", target_ownership: ["config/**"], allowed_paths: ["config/**"],
+			session_bindings: [{ session_id: "PEER-LIVE" }] };
+		writeJson(path.join(infra, ".agents", "session-contracts", "peer.json"), peer);
+		writeJson(path.join(infra, ".agents", "session-contracts", ".recovery", "leases", "PEER-LIVE.json"),
+			{ schema_version: "1.0", session_id: "PEER-LIVE", state: "active", updated_at: new Date().toISOString() });
+		assert.equal(run("Edit", { file_path: path.join(root, rel), old_string: "x = 1", new_string: "x = 3" })?.decision, "block",
+			"a live peer contract inside the nested repository still holds its path");
+	} finally {
+		fsn.rmSync(root, { recursive: true, force: true });
+	}
+	console.log("nested repository edit under a bound root contract: PASS");
+}

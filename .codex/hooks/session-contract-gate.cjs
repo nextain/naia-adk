@@ -718,9 +718,44 @@ function targetProjectRoot(target) {
 	return sessionContract.findProjectRoot(probe);
 }
 
+/**
+ * A nested project (projects/<name>, its own .git) is part of the workspace
+ * that installed the harness, not a separate authority. It was treated as one:
+ * a parent contract could not reach into it even when it listed the exact
+ * path, while an unbound session wrote the same file freely, so binding a
+ * contract took permission away. What a nested project really can have is its
+ * own active contract held by another live session; that, and only that, keeps
+ * a parent contract out. Liveness that cannot be determined counts as held.
+ */
+function nestedForeignOwned(target, projectRoot, sessionId) {
+	const nestedRoot = targetProjectRoot(target);
+	if (!nestedRoot || path.resolve(nestedRoot) === path.resolve(projectRoot)) return false;
+	const contractsDir = path.join(nestedRoot, ".agents", "session-contracts");
+	let names = [];
+	try { names = fs.readdirSync(contractsDir); } catch { return false; }
+	const relative = path.relative(nestedRoot, target).replaceAll("\\", "/");
+	for (const name of names) {
+		if (!name.endsWith(".json") || name.startsWith(".") || name === "schema.json") continue;
+		const contract = readJsonFile(path.join(contractsDir, name));
+		if (!contract || contract.status !== "active" || !Array.isArray(contract.session_bindings)) continue;
+		const holders = contract.session_bindings.map((binding) => binding?.session_id).filter(Boolean);
+		if (holders.length === 0 || holders.includes(sessionId)) continue;
+		if (!(contract.target_ownership || []).some((pattern) => contractPathMatches(pattern, relative))) continue;
+		for (const holder of holders) {
+			try {
+				const lease = readJsonFile(path.join(contractsDir, ".recovery", "leases", `${holder}.json`));
+				if (sessionRecovery.leaseFreshAndActive(nestedRoot, holder) ||
+					sessionRecovery.recordedHostProcessLive(lease) ||
+					sessionRecovery.sessionProcessLive(holder)) return true;
+			} catch { return true; }
+		}
+	}
+	return false;
+}
+
 function belongsToResolutionProject(resolution, target) {
-	const targetRoot = targetProjectRoot(target);
-	return !targetRoot || path.resolve(targetRoot) === path.resolve(resolution.projectRoot);
+	const sessionId = resolution.contract?.session_bindings?.[0]?.session_id || null;
+	return !nestedForeignOwned(target, resolution.projectRoot, sessionId);
 }
 
 function contractAllowsTarget(resolution, filePath, cwd) {
@@ -750,8 +785,11 @@ function boundGitMutationAllowed(command, resolution, cwd) {
 		: cwd;
 	const gitSource = scoped ? `git ${scoped[2]}` : source;
 	if (!sessionContract.inside(resolution.projectRoot, gitCwd)) return false;
+	// A nested repository under the contract's root is part of the same
+	// workspace; every staged or named target is still checked against the
+	// contract below, including another session's hold on the nested repo.
 	const gitProjectRoot = sessionContract.findProjectRoot(gitCwd);
-	if (!gitProjectRoot || path.resolve(gitProjectRoot) !== path.resolve(resolution.projectRoot)) return false;
+	if (!gitProjectRoot || !sessionContract.inside(resolution.projectRoot, gitProjectRoot)) return false;
 
 	const add = gitSource.match(/^git\s+add\s+(.+)$/i);
 	if (add) {
