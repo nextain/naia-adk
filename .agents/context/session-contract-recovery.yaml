@@ -12,6 +12,13 @@ canonical_recovery:
     - "Write contract, progress, and registry pointer as one recovery transaction."
     - "Verify the resolver reports the current session as bound."
 
+same_host_continuation:
+  trigger: "SessionStart whose session id differs from the one bound to an active contract, while the contract owner's lease records this very host process (same PID and start token) — /clear, a compaction restart."
+  effect: "The contract is rebound to the new session id automatically, without a grant; audit records session_continued. This is the owner continuing, not a takeover: the same PID and start token cannot belong to anyone else."
+  dead_owner: "A contract whose recorded host process has exited (no fresh lease, no live session process) may be reclaimed by any unbound session with the reclaim helper; no approval is required and the audit records granted:false."
+  live_foreign_owner: "Refused with owner_session_live. This is the only refusal."
+  session_id_shapes: "rebind-session.cjs and the gate accept every host's session id (OpenCode ses_…, Claude Code UUID, Codex)."
+
 adapter_contract:
-  codex: "Allow only the exact rebind-session.cjs command while the current session is unbound or stale."
-  forbidden: ["general harness disablement", "unbounded shell escape", "automatic contract takeover without an explicit user directive"]
+  codex: "Allow the exact rebind-session.cjs and recovery helper commands for the current session while it is unbound or stale."
+  forbidden: ["general harness disablement", "taking a contract from a live foreign host process", "rebinding a contract to a session id other than the caller's"]

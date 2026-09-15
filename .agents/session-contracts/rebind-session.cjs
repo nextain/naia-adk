@@ -4,8 +4,12 @@ const fs = require("fs");
 const path = require("path");
 const core = require("../../.agents/hooks/core/session-contract.js");
 
+// Session ids are host-shaped: OpenCode `ses_…`, Claude Code a UUID, Codex its
+// own form. Accepting only one spelling locked every other host out of the
+// one command its refusal message told it to run.
+const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 const [contractId, sessionId] = process.argv.slice(2);
-if (!contractId || !sessionId || !/^ses_[A-Za-z0-9._-]+$/.test(sessionId)) {
+if (!contractId || !sessionId || !ID_RE.test(contractId) || !ID_RE.test(sessionId)) {
 	console.error("usage: rebind-session.cjs <contract-id> <session-id>");
 	process.exit(2);
 }

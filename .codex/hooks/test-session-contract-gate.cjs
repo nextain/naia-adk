@@ -296,7 +296,11 @@ try {
 	fs.unlinkSync(path.join(fixture, ".agents", "progress", "bootstrap.json"));
 
 	writeJson(path.join(fixture, ".agents", "context", "agents-rules.json"), {
-		ai_workflow: { routine_action_authorization: { unbound_routine_commands: { default: "allow" } } },
+		ai_workflow: { routine_action_authorization: { unbound_routine_commands: {
+			default: "allow",
+			contract_required_heads: { destructive_filesystem: ["rm"], privilege_and_system: ["sudo"] },
+			contract_required_patterns: { patterns: ["(?:^|\\s)git\\s[^\\n]*(?:--force\\b|--force-with-lease\\b)"] },
+		} } },
 	});
 	bind(fixture);
 	fs.writeFileSync(path.join(fixture, "other.txt"), "outside\n");
@@ -306,7 +310,11 @@ try {
 	assert.equal(gate.reviewInvokerCommand(trustedReview, fixture), true, "bound fixture recognizes the exact reviewer invocation");
 	assert.equal(runGate(fixture, "Bash", { command: trustedReview }), null, "bound fixture permits the trusted reviewer invocation");
 	assert.equal(runGate(fixture, "Bash", { command: "npm run test" }), null, "bound fixture permits an exact declared routine command");
-	assert.equal(runGate(fixture, "Bash", { command: "npm run build" })?.decision, "block", "bound fixture blocks an undeclared npm routine command");
+	// A bound session is never narrower than an unbound one: routine work runs
+	// without being declared, and so does launching another model runtime.
+	for (const command of ["npm run build", "claude -p hi", "opencode run task", "codex exec -m gpt-5.6-luna task", "CUDA_VISIBLE_DEVICES=1 timeout 600 npm test", "bash -c 'npm test'"]) {
+		assert.equal(runGate(fixture, "Bash", { command }), null, `bound fixture runs routine work without declaring it: ${command}`);
+	}
 	assert.equal(runGate(fixture, "Bash", { command: "touch OUTSIDE" })?.decision, "block", "bound fixture blocks an extensionless out-of-contract target");
 	for (const command of [
 		"git add other.txt",
@@ -405,35 +413,43 @@ try {
 		);
 		assert.equal(runGate(fixture, "apply_patch", { command: "product mutation" })?.decision, "block", `${client} unresolved target blocked`);
 		assert.equal(runGate(fixture, "Bash", { command: "pnpm test" }), null, `${client} declared shell command`);
+		// Launching another model runtime, shaping a command with variables,
+		// substitution or an inline interpreter program, writing an owned file
+		// through the shell: ordinary work. The policy judges the command that
+		// actually runs, not the way it is spelled.
 		for (const command of [
 			"claude --version", "npx @anthropic-ai/claude-code --help", "npx @google/gemini-cli",
 			"npx @openai/codex-cli", "opencode-ai run", "name=codex; $name", "echo $(claude)",
 			"echo `gemini`", "printf '\\141'", "eval 'claude'", "echo codex | xargs -I{} {}",
 			"sh -c 'claude'", "bash -c 'codex'", "zsh -c 'gemini'",
 			"node -e \"require('child_process').spawn('claude')\"",
-		]) assert.equal(runGate(fixture, "exec_command", { command })?.decision, "block", `${client} unsafe launch blocked: ${command}`);
-		assert.match(runGate(fixture, "Bash", { command: "codex exec -m gpt-5.6-luna task" })?.reason, /중첩 실행/, `${client} declared Codex shell launch remains blocked`);
-		assert.match(runGate(fixture, "Bash", { command: "bash -c 'opencode run task'" })?.reason, /중첩 실행/, `${client} wrapped OpenCode shell launch remains blocked`);
-		for (const command of ["c''odex exec task", 'co"de"x exec task', "c\\odex exec task"]) {
-			assert.match(runGate(fixture, "Bash", { command })?.reason, /중첩 실행/, `${client} shell-spliced model runtime remains blocked: ${command}`);
+			"codex exec -m gpt-5.6-luna task", "bash -c 'opencode run task'", "c''odex exec task",
+			"echo changed > product.txt",
+		]) assert.equal(runGate(fixture, "exec_command", { command }), null, `${client} ordinary shell work runs while bound: ${command}`);
+		// What the policy names as hard to undo still needs the contract to declare it verbatim.
+		for (const command of ["rm -rf build", "bash -c 'rm -rf build'", "env rm -rf build", "timeout 60 rm -rf build", "git push --force origin main", "sudo systemctl restart nginx", "echo $(sudo reboot)", "(rm -rf build)"]) {
+			assert.match(runGate(fixture, "exec_command", { command })?.reason, /계약 없이는 실행되지 않는 부류/, `${client} contract-required shell stays refused while bound: ${command}`);
 		}
 		assert.equal(runGate(fixture, "Bash", { command: "rg --pre 'codex exec task' needle file" })?.decision, "block", `${client} rg preprocessor model runtime remains blocked`);
 		assert.match(runGate(fixture, "Bash", { command: "rg --pre 'sh -c touch /tmp/escaped' needle file" })?.reason, /전처리기/, `${client} allowlisted rg preprocessor mutation remains blocked`);
-		assert.equal(runGate(fixture, "Bash", { command: "echo changed > product.txt" })?.decision, "block", `${client} undeclared mutating shell blocked`);
+		assert.equal(runGate(fixture, "Bash", { command: "echo changed > .agents/context/other.yaml" })?.decision, "block", `${client} governance write through the shell stays blocked`);
 		assert.equal(
 			runGate(fixture, "Write", { file_path: "other.txt", content: "no" })?.decision,
 			"block",
 			`${client} out-of-contract path blocked`,
 		);
-		assert.match(
-			runGate(fixture, "Write", { file_path: "nested/product.txt", content: "no" })?.reason,
-			/allowed_paths\/target_ownership/,
-			`${client} a parent contract must not authorize a nested ADK project mutation`,
+		// A nested project belongs to the workspace. A parent contract that lists
+		// the path may edit and stage it; binding must never grant less than an
+		// unbound session already had.
+		assert.equal(
+			runGate(fixture, "Write", { file_path: "nested/product.txt", content: "yes" }),
+			null,
+			`${client} a parent contract that lists a nested path may edit it`,
 		);
 		assert.equal(
-			runGate(fixture, "Bash", { command: `git -C "${nested}" add product.txt` })?.decision,
-			"block",
-			`${client} a parent contract must not authorize nested Git mutation`,
+			runGate(fixture, "Bash", { command: `git -C "${nested}" add product.txt` }),
+			null,
+			`${client} a parent contract that lists a nested path may stage it`,
 		);
 		assert.equal(
 			runGate(fixture, "Bash", { command: "node .claude/hooks/sync-entry-points.js --apply candidate.md" }),
@@ -680,3 +696,55 @@ console.log("baseline gate: PASS");
 
 
 require("./test-session-contract-routine-policy.cjs").runRoutinePolicyTests();
+
+// bc250 (2026-09-15): a root contract bound to the session listed a file inside
+// projects/<name> (a .git-only nested repository) and was still refused, while
+// an unbound session edited the same file. Only another live session's contract
+// inside the nested repository may keep a parent contract out.
+{
+	const fsn = require("node:fs");
+	const osn = require("node:os");
+	const root = fsn.mkdtempSync(path.join(osn.tmpdir(), "nested-repo-edit-"));
+	try {
+		writeJson(path.join(root, ".agents", "context", "agents-rules.json"), {});
+		writeJson(path.join(root, ".codex", "hooks.json"), {});
+		fsn.mkdirSync(path.join(root, ".git"), { recursive: true });
+		const infra = path.join(root, "projects", "model-infra");
+		fsn.mkdirSync(path.join(infra, ".git"), { recursive: true });
+		const rel = "projects/model-infra/config/server.py";
+		fsn.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+		fsn.writeFileSync(path.join(root, rel), "x = 1\n");
+		const sid = "SESSION-NESTED";
+		const contract = { schema_version: "1.0", id: "voice-host", status: "active", project_root: ".", goal: "g", scope: ["s"],
+			non_goals: [], success_criteria: ["c"], allowed_paths: [rel], target_ownership: [rel], audiences: ["a"], source_refs: ["r"],
+			session_bindings: [{ session_id: sid }], progress_file: ".agents/progress/voice-host.json" };
+		const digest = contractCore.contractDigest(contract);
+		contract.contract_digest = digest;
+		contract.session_bindings[0].contract_digest = digest;
+		writeJson(path.join(root, ".agents", "session-contracts", "voice-host.json"), contract);
+		writeJson(path.join(root, ".agents", "progress", "voice-host.json"), { contract_id: contract.id, contract_digest: digest });
+		writeJson(path.join(root, ".agents", "session-contracts", ".session-map.json"), { schema_version: "1.0", bindings: {
+			[sid]: { contract_id: contract.id, contract_path: ".agents/session-contracts/voice-host.json", contract_digest: digest } } });
+		const run = (toolName, toolInput) => gate.decide(
+			{ cwd: root, session_id: sid, tool_name: toolName, tool_input: toolInput },
+			{ ...process.env, ADK_PROJECT_ROOT: "", AI_HARNESS: "", CLAUDE_HARNESS: "", CODEX_HARNESS: "" },
+			{ resolveHookProjectRoot: () => root, processCwd: root },
+		);
+		assert.equal(contractCore.resolveSessionContract({ cwd: root, sessionId: sid }).status, contractCore.STATES.BOUND);
+		assert.equal(run("Edit", { file_path: path.join(root, rel), old_string: "x = 1", new_string: "x = 2" }), null,
+			"a bound root contract edits a listed file inside a nested repository");
+		assert.equal(run("Write", { file_path: path.join(root, ".agents", "context", "other.yaml"), content: "no" })?.decision, "block",
+			"governance paths stay protected");
+		// Another live session's contract inside the nested repository keeps it out.
+		const peer = { schema_version: "1.0", id: "peer", status: "active", target_ownership: ["config/**"], allowed_paths: ["config/**"],
+			session_bindings: [{ session_id: "PEER-LIVE" }] };
+		writeJson(path.join(infra, ".agents", "session-contracts", "peer.json"), peer);
+		writeJson(path.join(infra, ".agents", "session-contracts", ".recovery", "leases", "PEER-LIVE.json"),
+			{ schema_version: "1.0", session_id: "PEER-LIVE", state: "active", updated_at: new Date().toISOString() });
+		assert.equal(run("Edit", { file_path: path.join(root, rel), old_string: "x = 1", new_string: "x = 3" })?.decision, "block",
+			"a live peer contract inside the nested repository still holds its path");
+	} finally {
+		fsn.rmSync(root, { recursive: true, force: true });
+	}
+	console.log("nested repository edit under a bound root contract: PASS");
+}

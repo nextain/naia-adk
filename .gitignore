@@ -141,6 +141,7 @@ skills/business/press-release/_review_plan.md
 .agents/session-contracts/*
 !.agents/session-contracts/README.md
 !.agents/session-contracts/schema.json
+!.agents/session-contracts/rebind-session.cjs
 
 # Local handoff/handover artifacts — session/PC transfer notes are never source.
 # Only basenames that START with handoff/handover are global. Topic-prefixed

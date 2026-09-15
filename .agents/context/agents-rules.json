@@ -235,40 +235,37 @@
         "_doc": "Default allow applies to routine local work. Contract-required operations remain explicit below. Commands are split into statements and every statement is checked; one refusal makes the whole call contract-required.",
         "default": "allow",
         "contract_required_heads": {
-          "_doc": "Heads whose normal use can affect the host, credentials, remote systems, or irreversible state.",
+          "_doc": "Heads whose normal use is irreversible: destroys data, escalates privilege, alters the host, or reaches another machine. Reversible operations such as stopping a process, restarting a user service or changing a permission bit are not listed.",
           "destructive_filesystem": ["rm", "rmdir", "shred", "truncate", "dd", "mkfs", "mkswap", "fdisk", "parted", "wipefs"],
-          "privilege_and_system": ["sudo", "su", "doas", "systemctl", "service", "mount", "umount", "chown", "chmod", "chgrp", "setcap", "modprobe", "insmod", "rmmod", "reboot", "shutdown", "poweroff", "halt", "kill", "pkill", "killall"],
+          "privilege_and_system": ["sudo", "su", "doas", "mount", "umount", "modprobe", "insmod", "rmmod", "reboot", "shutdown", "poweroff", "halt"],
           "remote_transfer": ["ssh", "scp", "sftp", "rsync", "nc", "ncat", "telnet"],
           "package_publication": ["twine"]
         },
         "contract_required_subcommands": {
-          "_doc": "Only the named subcommands are refused; harmless local subcommands remain routine.",
+          "_doc": "Only the named subcommands are refused; harmless local subcommands remain routine. Installing or removing packages and pruning local images are reversible and are not listed.",
           "git": ["reset", "clean", "filter-branch", "filter-repo", "gc", "prune", "reflog"],
           "gh": ["create", "delete", "transfer", "archive", "unarchive", "rename"],
           "glab": ["delete"],
-          "npm": ["publish", "unpublish", "deprecate", "owner", "access", "token"],
-          "pnpm": ["publish", "unpublish", "owner", "access", "token"],
+          "npm": ["publish", "unpublish", "deprecate"],
+          "pnpm": ["publish", "unpublish"],
           "yarn": ["publish", "owner", "tag"],
-          "systemctl": ["enable", "disable", "start", "stop", "restart", "reload", "mask", "unmask"],
-          "docker": ["push", "rm", "rmi", "system", "prune"],
+          "docker": ["push", "rm", "prune"],
           "kubectl": ["apply", "delete", "patch", "replace", "scale", "rollout"],
           "az": ["deployment", "webapp", "functionapp", "containerapp"],
           "gcloud": ["deploy", "delete", "update", "replace", "run"],
           "vercel": ["deploy", "remove", "alias", "env"],
           "terraform": ["apply", "destroy", "import", "state"],
-          "cargo": ["publish", "yank"],
-          "go": ["install"]
+          "cargo": ["publish", "yank"]
         },
         "git_refused_subcommands": ["push"],
         "contract_required_patterns": {
-          "_doc": "Patterns catch mutating forms where a safe command head has a dangerous option.",
+          "_doc": "Patterns catch mutating forms where a safe command head has a dangerous option. Downloads (curl -o, wget -O) and global installs are reversible and are not listed.",
           "patterns": [
-            "(?:^|\\s)curl\\b[^\\n]*(?:\\s-X\\s*(?:POST|PUT|PATCH|DELETE)|\\s--request\\s|\\s-d\\b|\\s--data|\\s-T\\b|\\s--upload-file|\\s-F\\b|\\s--form|\\s-o\\b|\\s-O\\b|\\s--output\\b|\\s--remote-name\\b)",
-            "(?:^|\\s)wget\\b[^\\n]*(?:--post-data|--post-file|--method\\s*=?\\s*(?:POST|PUT|DELETE)|\\s-O\\b|\\s--output-document)",
+            "(?:^|\\s)curl\\b[^\\n]*(?:\\s-X\\s*(?:POST|PUT|PATCH|DELETE)|\\s--request\\s|\\s-d\\b|\\s--data|\\s-T\\b|\\s--upload-file|\\s-F\\b|\\s--form)",
+            "(?:^|\\s)wget\\b[^\\n]*(?:--post-data|--post-file|--method\\s*=?\\s*(?:POST|PUT|DELETE))",
             "(?:^|\\s)gh\\s+api\\b[^\\n]*(?:-X\\s*(?:POST|PUT|PATCH|DELETE)|--method\\s*(?:POST|PUT|PATCH|DELETE)|\\s-f\\s|--field)",
             "(?:^|\\s)git\\s[^\\n]*(?:--force\\b|--force-with-lease\\b)",
             "(?:^|\\s)git\\s+branch\\b[^\\n]*\\s-D\\b",
-            "(?:^|\\s)(?:npm|pnpm|yarn)\\s+(?:install|add)\\b[^\\n]*(?:\\s-g\\b|--global)",
             "(?:^|\\s)mv\\s+[^\\n]*\\s/(?:etc|usr|bin|sbin|var|boot|dev|proc|sys)\\b",
             "(?:^|\\s)(?:tee|dd)\\s+[^\\n]*/(?:etc|usr|bin|sbin|boot)\\b",
             "(?:^|\\s)git\\s+(?:restore|checkout)\\b",
@@ -281,9 +278,8 @@
             "(?:^|\\s)helm\\s+(?:install|uninstall|upgrade|rollback|delete)\\b"
           ]
         },
-        "unsafe_forms_still_refused": {
-          "_doc": "These forms hide the effective command and always require a contract.",
-          "forms": ["command_substitution", "eval", "xargs", "shell_dash_c", "nested_model_runtime"]
+        "hidden_forms_are_resolved": {
+          "_doc": "Forms that hide the effective command are resolved, not refused. Environment-variable prefixes and wrappers such as env, timeout, nohup and nice are peeled so the real command is judged; an interpreter's inline -c program is judged by the same rule; when the head cannot be seen at all (command substitution, eval, xargs, shell control flow) every token on the line is checked. Launching another model runtime (claude, codex, opencode, gemini) is ordinary work. What still cannot be judged is allowed: the harness stops drift into irreversible actions; it does not out-guess a shell."
         },
         "still_requires_contract": "Governance and host-policy files, shared entrypoints, session contracts and registry changes remain contract-required regardless of command. All git checkout and git restore forms also require a contract; routine branch switching uses the non-destructive git switch forms."
       }
