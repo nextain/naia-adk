@@ -42,10 +42,38 @@ export function resolveIndexPresence(root: string, index: ProjectIndex): Project
   }
 }
 
-export function loadAgentsRules(root: string): Record<string, unknown> | null {
+type RulesRecord = Record<string, unknown>
+
+const isRulesRecord = (value: unknown): value is RulesRecord =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value)
+
+function mergeRules(base: RulesRecord, extra: RulesRecord, at = ""): RulesRecord {
+  const out: RulesRecord = { ...base }
+  for (const [key, value] of Object.entries(extra)) {
+    const where = at ? `${at}.${key}` : key
+    const current = out[key]
+    if (isRulesRecord(current) && isRulesRecord(value)) out[key] = mergeRules(current, value, where)
+    else if (Object.hasOwn(out, key)) throw new Error(`agents-rules detail collides with core at ${where}`)
+    else out[key] = value
+  }
+  return out
+}
+
+/**
+ * agents-rules.json keeps one-line rules; `detail.file` names the file with the
+ * full sections under the same key paths. Returns the merge of both.
+ */
+export function loadAgentsRules(root: string): RulesRecord | null {
   const rulesPath = path.join(root, ".agents", "context", "agents-rules.json")
   if (!fs.existsSync(rulesPath)) return null
-  return JSON.parse(fs.readFileSync(rulesPath, "utf-8"))
+  const core: unknown = JSON.parse(fs.readFileSync(rulesPath, "utf-8"))
+  if (!isRulesRecord(core)) return null
+  const detailRef = isRulesRecord(core.detail) ? core.detail.file : undefined
+  if (typeof detailRef !== "string") return core
+  const detail: unknown = JSON.parse(fs.readFileSync(path.join(root, detailRef), "utf-8"))
+  if (!isRulesRecord(detail)) throw new Error(`${detailRef} is not a JSON object`)
+  const { _about: _ignored, ...sections } = detail
+  return mergeRules(core, sections)
 }
 
 export function detectAdkRoot(startDir: string): string | null {

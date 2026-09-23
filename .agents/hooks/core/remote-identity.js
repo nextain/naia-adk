@@ -302,7 +302,7 @@ function howToApprove(operation, repo, problem) {
 		record,
 		"",
 		"It is single-use, scoped to this exact repository, and expires within 30 minutes.",
-		"Before approving, run the public-safety review in .agents/context/agents-rules.json public_repository_release_gate.",
+		"Before approving, run the public-safety review in .agents/context/agents-rules-detail.json public_repository_release_gate.",
 	].join("\n");
 }
 
@@ -333,7 +333,7 @@ function visibilityEscalation(entry, actualSlug) {
 		`Remote: ${actualSlug} visibility=PUBLIC (per gh repo view)`,
 		"",
 		"Pushing private-workspace content to a public remote is a public release. Follow",
-		"public_repository_release_gate in .agents/context/agents-rules.json and fix the index or the remote first.",
+		"public_repository_release_gate in .agents/context/agents-rules-detail.json and fix the index or the remote first.",
 	].join("\n"));
 }
 

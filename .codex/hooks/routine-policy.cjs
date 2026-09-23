@@ -3,6 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const harnessSwitch = require("../../.agents/hooks/core/harness-switch.js");
+const { readAgentsRules } = require("../../.agents/hooks/core/agents-rules-load.js");
 
 /**
  * Resolve the nearest command policy, retaining refusals from every enclosing
@@ -34,7 +35,8 @@ function routineAllowance(projectRoot) {
 		let rules;
 		let allowance;
 		try {
-			rules = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+			// Reads the named detail file too; a missing or malformed one throws and fails closed below.
+			rules = readAgentsRules(directory);
 			if (!rules || typeof rules !== "object" || Array.isArray(rules)) {
 				malformed = true;
 				continue;
