@@ -3,7 +3,7 @@
   "sets": [
     {"name": "always", "why": "root entrypoint attached to every call", "max_bytes": 12000,
      "files": ["AGENTS.md", "CLAUDE.md"]},
-    {"name": "core", "why": "AGENTS.md mandatory reads 1-4. Ceiling at the current size; #56 lowers it to 40000", "max_bytes": 66000,
+    {"name": "core", "why": "AGENTS.md mandatory reads 1-4. Full rule text lives in agents-rules-detail.json, read on demand (#56)", "max_bytes": 40000,
      "files": [".agents/context/agents-rules.json", ".agents/context/ai-work-index.yaml",
                ".agents/context/project-index.yaml", ".agents/context/terminology.yaml"]},
     {"name": "planning", "why": "extra reads for feature-level planning or review", "max_bytes": 16000,

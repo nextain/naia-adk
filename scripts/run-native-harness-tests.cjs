@@ -12,6 +12,7 @@ const runs=[
   ["entry-point pointers and size",[".claude/hooks/sync-entry-points.js","--check"]],
   ["context budget unit",["scripts/test-context-budget.mjs"]],
   ["context read-set budgets",["scripts/check-context-budget.mjs"]],
+  ["agents-rules core/detail split",[".agents/hooks/core/agents-rules-load.test.js"]],
   ["agents context mirror",[".claude/hooks/test/run-agents-context-mirror-test.cjs"]],
   ["session contract resolver",[".agents/hooks/core/session-contract.test.js"]],
   ["harness session injection",[".agents/hooks/core/harness-session-inject.test.js"]],

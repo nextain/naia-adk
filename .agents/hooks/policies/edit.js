@@ -134,9 +134,9 @@ function cascadeCheck(data) {
 				`Mirror rule: also update .agents/skills/${skillName}/SKILL.md if it exists.`,
 		);
 	}
-	if (normalized.endsWith("agents-rules.json")) {
+	if (/(?:^|\/)agents-rules(?:-detail)?\.json$/.test(normalized)) {
 		reminders.push(
-			"[Harness] agents-rules.json is the SoT. " +
+			"[Harness] agents-rules.json and agents-rules-detail.json are the SoT. " +
 				"You MUST update .users/context/agents-rules.md and .users/context/en/agents-rules.md to match.",
 		);
 	}

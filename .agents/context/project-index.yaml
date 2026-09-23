@@ -28,6 +28,10 @@ github_only_repos: {}
 on_demand_loading:
   index: .agents/context/.ctx-index.json
   sections:
+    - id: naia-adk:agents_rules_detail
+      file: .agents/context/agents-rules-detail.json
+      description: "Full text of the sections agents-rules.json summarizes in one line, under the same key paths. Read only the section a task touches (approval exceptions, command lists, work-file lifecycle, public release gate, and so on)"
+      tags: [rules, authorization, lifecycle, release-gate]
     - id: naia-adk:development_model_routing
       file: .agents/context/development-model-routing.yaml
       description: "L3 Secretary, L2 Issue Leader, L1 Worker roles and balanced Codex model routing"
@@ -78,6 +82,7 @@ entrypointPriority:
   - AGENTS.md    # canonical index; CLAUDE.md and GEMINI.md are one-line @AGENTS.md imports
   - .agents/context/context-budget.json    # byte budgets per read set
   - .agents/context/agents-rules.json
+  - .agents/context/agents-rules-detail.json    # on demand: full text of the one-line sections
   - .agents/context/ai-work-index.yaml
   - .agents/context/project-index.yaml
   - README.md

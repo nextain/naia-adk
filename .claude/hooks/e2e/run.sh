@@ -192,7 +192,7 @@ unset PROD_MASTER_KEY_SHA256
 echo "cascade-check:"
 fire cascade-check "$(J '{"tool_name":"Bash","tool_input":{"file_path":"x"}}')";                              a_pass  "ccg pass: non-Edit/Write"
 fire cascade-check "$(J '{"tool_name":"Edit","tool_input":{"file_path":"src/app.ts"}}')";                     a_pass  "ccg pass: unrelated file (no reminder)"
-fire cascade-check "$(J '{"tool_name":"Edit","tool_input":{"file_path":"x/.agents/context/agents-rules.json"}}')"; a_has "ccg ctx: agents-rules.json SoT reminder" "agents-rules.json is the SoT"
+fire cascade-check "$(J '{"tool_name":"Edit","tool_input":{"file_path":"x/.agents/context/agents-rules.json"}}')"; a_has "ccg ctx: agents-rules.json SoT reminder" "agents-rules.json and agents-rules-detail.json are the SoT"
 fire cascade-check "$(J '{"tool_name":"Write","tool_input":{"file_path":"x/.agents/context/project-index.yaml"}}')"; a_has "ccg ctx: triple-mirror reminder" "Triple-mirror rule"
 
 # ── agents-context-mirror (real .agents/.users → real md write) ─────────────

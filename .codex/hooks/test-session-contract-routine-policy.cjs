@@ -214,6 +214,26 @@ function runRoutinePolicyTests() {
 	}
 
 	{
+		// agents-rules.json names a detail file; a missing or malformed one is an
+		// incomplete policy and must fail closed, not fall back to the default.
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-routine-missing-detail-"));
+		try {
+			fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+			writeJson(path.join(root, ".agents", "context", "agents-rules.json"), {
+				detail: { file: ".agents/context/agents-rules-detail.json" },
+			});
+			writeJson(path.join(root, ".codex", "hooks.json"), {});
+			assert.equal(gate.routineAllowance(root).default, "deny", "a missing detail file must fail closed");
+			assert.equal(gate.routineCommandAllowed("Bash", { command: "npm test" }, root), false, "missing detail file must refuse routine commands");
+			fs.writeFileSync(path.join(root, ".agents", "context", "agents-rules-detail.json"), "{\"ai_workflow\":");
+			assert.equal(gate.routineAllowance(root).default, "deny", "a malformed detail file must fail closed");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+		console.log("missing or malformed detail file: PASS");
+	}
+
+	{
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-routine-malformed-patterns-"));
 		try {
 			fs.mkdirSync(path.join(root, ".git"), { recursive: true });
@@ -390,7 +410,7 @@ function runRoutinePolicyTests() {
 // stay identical to the repository rules file, minus its documentation keys.
 function runBuiltinPolicyTests() {
 	const policy = require("./routine-policy.cjs");
-	const rules = JSON.parse(fs.readFileSync(path.join(repositoryRoot, ".agents", "context", "agents-rules.json"), "utf8"));
+	const rules = require("../../.agents/hooks/core/agents-rules-load.js").readAgentsRules(repositoryRoot);
 	const declared = rules.ai_workflow.routine_action_authorization.unbound_routine_commands;
 	const strip = (value) => {
 		if (Array.isArray(value)) return value;
