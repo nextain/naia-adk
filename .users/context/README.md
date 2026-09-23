@@ -12,4 +12,4 @@
   다시 생성합니다.
 
 `README.md`는 한국어, `README.en.md`는 영어입니다. `AGENTS.md`는 shared English canonical
-index이며 `CLAUDE.md`와 `GEMINI.md`는 byte-identical mirror입니다.
+index이며 `CLAUDE.md`와 `GEMINI.md`는 `@AGENTS.md` 한 줄 포인터입니다.

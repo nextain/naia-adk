@@ -75,7 +75,8 @@ on_demand_loading:
 
 # 진입점 우선순위
 entrypointPriority:
-  - AGENTS.md    # canonical index; CLAUDE.md and GEMINI.md are byte-identical mirrors
+  - AGENTS.md    # canonical index; CLAUDE.md and GEMINI.md are one-line @AGENTS.md imports
+  - .agents/context/context-budget.json    # byte budgets per read set
   - .agents/context/agents-rules.json
   - .agents/context/ai-work-index.yaml
   - .agents/context/project-index.yaml
