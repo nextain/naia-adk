@@ -542,7 +542,12 @@
       "on_demand_loading": "Beyond the mandatory session-start reads, load only the project-index.yaml on_demand_loading section needed for the task; never bulk-load a full body context file (matches A.4: separate entrypoint vs body files to prevent index bloat).",
       "reserve_for_compact": "Reserve compact output space before the window is full — never wait for overflow then handle it as an emergency.",
       "restore_after_compact": "After compact, reconstruct work semantics: active plan, loaded skills, key files, tool state (post-compact-context.js hook).",
-      "layered_lifetimes": "Keep long-lived rules, persistent memory, session continuity, and temporary dialogue as distinct layers with different entry costs."
+      "layered_lifetimes": "Keep long-lived rules, persistent memory, session continuity, and temporary dialogue as distinct layers with different entry costs.",
+      "resend_cost": "Every model call resends the system prompt, tool definitions, entrypoints, and the whole conversation. Usage is driven by session length and always-loaded text, not by how much the task asks for. Measured 2026-09-23: one two-day Claude Code session averaged 513K input tokens per call and used 63% of a week's input; a Grok session attaching two copies of a 59KB entrypoint averaged 150K per call.",
+      "always_loaded_size": "Keep entrypoints and mandatory reads short. Move procedures, incident history, and runbooks into on-demand docs. Some tools attach both AGENTS.md and CLAUDE.md, so a large mirrored entrypoint is paid twice on every call.",
+      "large_reads": "Read files over about 20KB by line range or search. Check a diff with --stat, then read only the hunks the task needs. Truncate logs and JSON with head, tail, grep, or jq before they enter the conversation; anything read once is resent on every later call.",
+      "delegate_exploration": "Hand broad searches, reviews, and multi-file investigation to a subagent or a one-shot headless call that returns a summary, so the long-lived session keeps only the conclusion.",
+      "session_rollover": "When a session's context passes about 200K tokens, write a handoff and continue in a fresh session instead of letting it grow toward the model limit. Tool-side backstops: CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000 in .claude/settings.json; for Grok, [session] auto_compact_threshold_percent in the user-level ~/.grok/config.toml, set so compaction lands below the 200K long-context price tier (36 for a 500K window)."
     }
   }
 }
