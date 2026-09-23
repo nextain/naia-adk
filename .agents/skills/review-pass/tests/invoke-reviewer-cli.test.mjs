@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -30,6 +30,15 @@ esac
 `);
 await chmod(executable, 0o700);
 const common = [runner, "--tool", "codex", "--repo", dir, "--base", base, "--atoms", atoms, "--delta", delta, "--startup-sec", "1", "--idle-sec", "1", "--total-sec", "2"];
+const agyExecutable = path.join(dir, "agy");
+await writeFile(agyExecutable, `#!/bin/sh
+cat >/dev/null
+echo "token=sk-secretvalue123" >&2
+echo "provider login required" >&2
+exit 7
+`);
+await chmod(agyExecutable, 0o700);
+const agyCommon = [runner, "--tool", "agy", "--repo", dir, "--base", base, "--atoms", atoms, "--delta", delta, "--startup-sec", "1", "--idle-sec", "1", "--total-sec", "2"];
 const env = { ...process.env, PATH:`${dir}${path.delimiter}${process.env.PATH || ""}` };
 
 // Default fails closed. A reviewer that cannot run must not look like a
@@ -56,6 +65,20 @@ assert.deepEqual(
 	{ status:"NOT_RUN", reviewer:"codex", blocking:false, cross_validation:false, usable_as_evidence:false });
 assert.equal(notRun.reason, "codex reviewer authentication or account access is unavailable");
 assert.doesNotMatch(`${optional.stdout}${optional.stderr}`, /secretvalue/);
+
+const agyDefault = spawnSync(process.execPath, agyCommon, { encoding:"utf8", env });
+assert.equal(agyDefault.status, 7, "AGY failure must fail the invocation by default");
+assert.match(agyDefault.stderr, /review invocation failed/);
+assert.doesNotMatch(agyDefault.stderr, /secretvalue/);
+const agyOptional = spawnSync(process.execPath, [...agyCommon, "--require-review", "false"], { encoding:"utf8", env });
+assert.equal(agyOptional.status, 0, agyOptional.stderr);
+const agyNotRun = JSON.parse(agyOptional.stdout);
+assert.deepEqual(
+	{ status:agyNotRun.status, reviewer:agyNotRun.reviewer, blocking:agyNotRun.blocking,
+		cross_validation:agyNotRun.cross_validation, usable_as_evidence:agyNotRun.usable_as_evidence },
+	{ status:"NOT_RUN", reviewer:"agy", blocking:false, cross_validation:false, usable_as_evidence:false });
+assert.equal(agyNotRun.reason, "agy reviewer authentication or account access is unavailable");
+assert.doesNotMatch(`${agyOptional.stdout}${agyOptional.stderr}`, /secretvalue/);
 
 // A provider that exits successfully with empty or schema-invalid output is
 // still an invalid review result. The failure category must remain stable, and
@@ -92,5 +115,80 @@ const invalidTimer = spawnSync(process.execPath, [...common.slice(0, -6), "--sta
 assert.notEqual(invalidTimer.status, 0);
 assert.match(invalidTimer.stderr, /startupMs must be a finite positive timer value/);
 assert.doesNotMatch(invalidTimer.stdout, /NOT_RUN/);
+
+// Cost-log CLI verification tests
+const cliCostLog = path.join(dir, "cli-cost.jsonl");
+const cliNotRunArgs = [
+	...common,
+	"--require-review", "false",
+	"--cost-log", cliCostLog,
+	"--review-id", "cli-test-1",
+	"--stage", "planning",
+	"--round", "1",
+	"--reviewer-index", "0",
+];
+const notRunExec = spawnSync(process.execPath, cliNotRunArgs, { encoding: "utf8", env });
+assert.equal(notRunExec.status, 0);
+const notRunLines = (await readFile(cliCostLog, "utf8")).trim().split("\n");
+assert.equal(notRunLines.length, 1);
+const notRunEntry = JSON.parse(notRunLines[0]);
+assert.equal(notRunEntry.review_id, "cli-test-1");
+assert.equal(notRunEntry.stage, "planning");
+assert.equal(notRunEntry.round, 1);
+assert.equal(notRunEntry.reviewer_index, 0);
+assert.equal(notRunEntry.outcome, "not_run");
+assert.equal(notRunEntry.tool, "codex");
+assert.equal(notRunEntry.verdict, null);
+assert.equal(notRunEntry.findings_count, null);
+assert.match(notRunEntry.failure_reason, /authentication or account access is unavailable/);
+
+// Failed execution when require-review is true
+const cliFailArgs = [
+	...common,
+	"--cost-log", cliCostLog,
+	"--review-id", "cli-test-2",
+	"--stage", "test",
+	"--round", "2",
+	"--reviewer-index", "1",
+];
+const failExec = spawnSync(process.execPath, cliFailArgs, { encoding: "utf8", env });
+assert.notEqual(failExec.status, 0);
+const failLines = (await readFile(cliCostLog, "utf8")).trim().split("\n");
+assert.equal(failLines.length, 2);
+const failEntry = JSON.parse(failLines[1]);
+assert.equal(failEntry.review_id, "cli-test-2");
+assert.equal(failEntry.stage, "test");
+assert.equal(failEntry.round, 2);
+assert.equal(failEntry.reviewer_index, 1);
+assert.equal(failEntry.outcome, "failed");
+
+// Successful CLI execution records reviewed outcome and exactly 1 line
+const isolatedLog = path.join(dir, "cli-isolated-success.jsonl");
+const frameOk = { runtime_observed:false, frame_assessment:{ scope_is_sufficient:true, missing_concerns:[] } };
+const validCliReview = JSON.stringify({ verdict:"CLEAN", coverage:[{ atom_id:"ATOM-1", status:"COVERED" }], findings:[], ...frameOk });
+await writeFile(executable, `#!/bin/sh\ncat >/dev/null\necho '${validCliReview}'\n`, { mode: 0o700 });
+
+const cliSuccessArgs = [
+	runner,
+	"--tool", "codex",
+	"--repo", dir,
+	"--base", base,
+	"--atoms", atoms,
+	"--delta", delta,
+	"--cost-log", isolatedLog,
+	"--review-id", "cli-test-success",
+	"--stage", "development",
+	"--round", "3",
+	"--reviewer-index", "0",
+];
+const successExec = spawnSync(process.execPath, cliSuccessArgs, { encoding: "utf8", env });
+assert.equal(successExec.status, 0, successExec.stderr);
+const isoLines = (await readFile(isolatedLog, "utf8")).trim().split("\n");
+assert.equal(isoLines.length, 1, "CLI success must write exactly 1 line to cost log");
+const isoEntry = JSON.parse(isoLines[0]);
+assert.equal(isoEntry.review_id, "cli-test-success");
+assert.equal(isoEntry.outcome, "reviewed");
+assert.equal(isoEntry.verdict, "CLEAN");
+assert.equal(isoEntry.findings_count, 0);
 
 console.log("review invocation CLI tests: PASS");

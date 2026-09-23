@@ -8,8 +8,9 @@
 - [Reviewer invocation](#23-reviewer-invocation)
 - [Timeout](#24-timeout)
 - [Parallel execution](#25-parallel-execution)
+- [Invocation cost recording](#26-invocation-cost-recording)
 - [Output schema](#3-output-schema)
-- [Reviewer prompt format](#31-reviewer-prompt-format)
+- [Reviewer output schema (canonical)](#31-reviewer-output-schema-canonical)
 - [Finding schema](#32-finding-schema)
 - [Parsing strategy](#33-parsing-strategy)
 
@@ -129,6 +130,7 @@ patterns:
 | `opencode` | `opencode run --pure --agent adk-adversarial-review --title adk-adversarial-review --dir "$dir" --format json --model {model}` | yes (shared child-environment boundary) | use the shared Alpha child-environment helper for private HOME/XDG roots and sanitized provider/auth config; pin `model` and `small_model` to `{model}`, apply the helper's read-only policy to the selected agent, disable project config and inherited overrides, omit positional message, and pipe the prompt on stdin |
 | `grok` | `grok --output-format json --permission-mode plan --verbatim --prompt-file {0600-prompt-file}` | yes (plan mode) | pass a temporary owner-only prompt path, close stdin, and remove the file after exit; do not pass `--no-subagents` so Grok can spawn subagents |
 | `codex` | `codex exec --ephemeral --sandbox read-only --skip-git-repo-check -C "$dir" --model {model} -` | yes (sandbox) | `-` reads stdin |
+| `agy` | `agy --input-format stream-json --output-format stream-json --sandbox --mode plan --print-timeout 240s --model {model}` | yes (sandbox) | send one newline-terminated `event:"user"` NDJSON message with nested `message.role:"user"` and `message.content`; require a final `event:"result"` whose nested `result.status` is `"SUCCESS"` and whose response carries the review; the adapter keeps AGY's review inside the same coverage/fail-closed validation |
 
 **Adapter interface**: Each tool adapter implements:
 
@@ -136,6 +138,14 @@ patterns:
 invoke(prompt: string, config: ToolConfig) → raw_output: string
 parse(raw_output: string, strategy: "json" | "text_fallback") → Finding[]
 ```
+
+For AGY, `--print` is intentionally omitted: the installed CLI treats that
+flag as its single-prompt mode and does not consume the stream request. The
+adapter sends exactly one newline-terminated user event on stdin. Successful
+terminal evidence is the final result envelope with nested
+`result.status:"SUCCESS"`; its response still has to pass the coverage and
+frame validation below. A missing or malformed terminal, failed or truncated
+stream, timeout, or nonzero exit fails closed.
 
 **Custom tool registration** is not implemented by the bundled runner. Adding a
 `tools.*` entry does not make it executable; a new adapter must be added to
@@ -206,80 +216,188 @@ for pid in "${pids[@]}"; do
 done
 ```
 
+### 2.6 Invocation Cost Recording
+
+Every reviewer invocation records a single JSONL line upon termination (whether `reviewed`, `failed`, or `not_run`).
+
+**Orchestrator convention:**
+The orchestrator passes `--review-id --stage --round --reviewer-index` on every reviewer call.
+
+**Log file resolution hierarchy:**
+1. Explicit CLI argument: `--cost-log <path>`
+2. Environment variable: `REVIEW_COST_LOG`
+3. Default path: `<workspace-root>/.agents/progress/review-cost/<YYYY-MM-DD>.jsonl` (local date)
+
+Parent directories are created automatically if they do not exist. Any logging failure emits a warning to stderr without altering reviewer verdict, output structure, or process exit code.
+
+**CLI arguments:**
+- `--cost-log <path>`: Destination JSONL path
+- `--review-id <id>`: Identifier for the current review session
+- `--stage <stage>`: Review stage (`planning`, `development`, `test`, `integration`)
+- `--round <round>`: Round number
+- `--reviewer-index <index>`: Index of the reviewer in the round
+
+**JSONL record schema:**
+- `ts`: ISO 8601 UTC timestamp
+- `review_id`: Review identifier or `null`
+- `stage`: Review stage or `null`
+- `round`: Round number or `null`
+- `reviewer_index`: Reviewer index or `null`
+- `tool`: Reviewer CLI tool name (`claude`, `codex`, `opencode`, `grok`, `agy`)
+- `model`: Reviewer model identifier or `null`
+- `repo`: Repository path
+- `prompt_chars`: Total length of the delivered prompt string
+- `duration_ms`: Wall-clock execution duration in milliseconds
+- `outcome`: Terminal outcome category (`reviewed` | `failed` | `not_run`)
+- `failure_reason`: Diagnostic safe error reason or `null`
+- `verdict`: Final review verdict (`CLEAN` | `NOT_CLEAN`) or `null`
+- `findings_count`: Count of findings or `null`
+- `usage`: Exact token/cost metrics reported by the tool (`{ input_tokens, output_tokens, thinking_tokens, cache_read_tokens, cache_write_tokens, total_tokens, cost_usd }` with unknown fields set to `null`; never estimated or calculated) or `null`
+- `usage_source`: Source of metrics (`result.usage`, `claude_json`, `tokens`) or `null`
+
+Prompt text, review text, and credentials are never logged.
+
 ---
 
 ## 3. Output Schema
 
-### 3.1 Reviewer Prompt Format
+### 3.1 Reviewer Output Schema (Canonical)
 
-Each reviewer receives only the evidence view assigned to its role. Before the
-common envelope, include the validated atom ledger. Every non-superseded atom
-must appear in exactly one coverage row linking source → target → acceptance →
-evidence. Missing, duplicated, or summary-only coverage is `NOT_CLEAN`.
+The canonical reviewer output is the JSON format that `invoke-reviewer.mjs` appends to the prompt for every tool.
+The reviewer must output exactly one JSON object, with no Markdown formatting or extra prose.
+`validateReviewOutput` validates this structure strictly.
 
-The common envelope contains:
+#### Canonical Review JSON Schema
 
+```json
+{
+  "verdict": "CLEAN" | "NOT_CLEAN",
+  "coverage": [
+    {
+      "atom_id": "string",
+      "status": "COVERED" | "NOT_COVERED"
+    }
+  ],
+  "findings": [
+    {
+      "atom_id": "string | null",
+      "scope": "outside_declared_atoms",
+      "file_location": "string (file:line or file path)",
+      "impact": "string (concrete harm or failure description)",
+      "minimal_fix": "string (minimal patch or change)"
+    }
+  ],
+  "frame_assessment": {
+    "scope_is_sufficient": true | false,
+    "missing_concerns": ["string"]
+  },
+  "runtime_observed": true | false
+}
 ```
-## Review Context
-Stage: {stage}
-Role: {source_fidelity | baseline_preservation | implementation_test | authority_release | standard}
-Files: {file_list}
-REQ-IDs: {req_ids or "N/A for this review"}
-Deferred REQ-IDs: {deferred or "none"}
-Known issues from previous rounds: {known_issues or "none"}
-Deterministic complexity report: {complete current report; never a prose-only summary}
-Source artifacts: {role-visible immutable source references or "withheld for independence"}
-Baseline ref: {role-visible immutable ref or "withheld for independence"}
-Preservation contract: {role-visible path or "withheld for independence"}
-Incident history: {role-visible history or "withheld for independence"}
 
-## Review Lens
-Lens: {lens_name}
-Checks to perform:
-{actionable_checklist_from_stage_definition}
+#### Output Rules & Constraints
+1. **JSON Only**: output exactly one valid JSON object, with no explanatory text, greeting, or Markdown code fence (```).
+2. **coverage**: exactly one entry for every atom in the dynamic atom ledger. Duplicate, missing, or undeclared IDs fail validation (treated as `NOT_CLEAN`).
+3. **findings**: the list of defects found; an empty array `[]` when there are none.
+   - `file_location`, `impact`, and `minimal_fix` must all be non-empty strings.
+   - A defect outside the atom ledger is reported with `atom_id: null` and `scope: "outside_declared_atoms"`.
+4. **frame_assessment**: whether the atom ledger's scope is sufficient for the original request.
+   - When `scope_is_sufficient` is `false`, `missing_concerns` must name at least one missing concern.
+5. **runtime_observed**: `true` only if the reviewer actually ran or observed the system. A static review must be `false`.
+6. **verdict**:
+   - `CLEAN`: allowed only when every atom is `COVERED`, `findings` is `[]`, and `scope_is_sufficient` is `true`.
+   - `NOT_CLEAN`: required when any atom is uncovered, any finding exists, or the scope is insufficient.
 
-## Output Format (MANDATORY)
-### Files Read
-- `path/to/exact-file`
+#### Clean Review Example
 
-List every required repository-relative path separately. Ranges, directory shorthand, globs, and “A through B” do not count as read evidence.
+```json
+{
+  "verdict": "CLEAN",
+  "coverage": [
+    {
+      "atom_id": "ATOM-1",
+      "status": "COVERED"
+    }
+  ],
+  "findings": [],
+  "frame_assessment": {
+    "scope_is_sufficient": true,
+    "missing_concerns": []
+  },
+  "runtime_observed": false
+}
+```
 
-### Findings
-- `file:line [CRITICAL|HIGH|MEDIUM|LOW|INFO] [correctness|preservation|scope|authority|release|complexity] REQ-ID — description`
-  (REQ-ID is optional; include only if the finding relates to a specific requirement)
-or
-NONE
+#### Finding / Not-Clean Review Example
 
-### REQ-ID Coverage (skip if no REQ-IDs provided)
-- REQ-001: COVERED (path/to/file:symbol_name)
-- REQ-002: NOT FOUND
-or ALL COVERED or N/A
-
-### Verdict
-CLEAN | FOUND_ISSUES | VETO
+```json
+{
+  "verdict": "NOT_CLEAN",
+  "coverage": [
+    {
+      "atom_id": "ATOM-1",
+      "status": "NOT_COVERED"
+    }
+  ],
+  "findings": [
+    {
+      "atom_id": "ATOM-1",
+      "file_location": "scripts/invoke-reviewer.mjs:42",
+      "impact": "Missing null check causes crash on empty environment variable",
+      "minimal_fix": "Add optional chaining before accessing property"
+    },
+    {
+      "atom_id": null,
+      "scope": "outside_declared_atoms",
+      "file_location": "references/invocation-and-output.md:280",
+      "impact": "Documentation lacks output schema causing model hallucination",
+      "minimal_fix": "Add canonical JSON schema to documentation"
+    }
+  ],
+  "frame_assessment": {
+    "scope_is_sufficient": false,
+    "missing_concerns": ["Output contract was not covered in original atom ledger"]
+  },
+  "runtime_observed": false
+}
 ```
 
 ### 3.2 Finding Schema
 
-```
+Finding data has two parts: fields the reviewer outputs directly, and fields the orchestrator fills in after independent verification.
+
+#### 1. Reviewer Output Fields
+Fields the reviewer puts directly in the `findings` array of its JSON response:
+- `atom_id`: string | null (dynamic atom ID; null when outside the ledger)
+- `scope`: string ("outside_declared_atoms"; required when atom_id is null)
+- `file_location`: string (file path and line, e.g. `src/core.py:42`)
+- `impact`: string (the concrete harm and how it fails)
+- `minimal_fix`: string (the smallest change that fixes it)
+
+#### 2. Orchestrator Enriched Fields
+Reviewer output is treated as an untrusted hypothesis. The orchestrator validates it, checks the evidence independently, and enriches it into this model:
+
+```typescript
 Finding {
-  file: string           // file path
-  line: number | null    // line number (null for file-level)
-  symbol: string | null  // function/class/symbol name
-  severity: CRITICAL | HIGH | MEDIUM | LOW | INFO
-  finding_class: correctness | preservation | scope | authority | release | complexity
-  veto: boolean          // true for solo CRITICAL preservation/scope/authority/release
-  req_id: string | null  // associated REQ-ID (null if N/A)
-  description: string    // what's wrong
-  reviewer: string       // which reviewer found this
-  assumptions: string[]  // premises that must hold for the claim to be valid
-  evidence_status: ACCEPTED | REJECTED | UNRESOLVED | null
-  evidence_checked: string[] // primary evidence independently inspected by the orchestrator
-  rationale: string | null   // why the evidence supports the final status
+  // mapped from reviewer output fields
+  file: string           // file path parsed from file_location
+  line: number | null    // line parsed from file_location (null for file-level)
+  description: string    // detail built from impact and minimal_fix
+  req_id: string | null  // requirement ID mapped from atom_id
+
+  // orchestrator verification and classification fields
+  symbol: string | null  // function, class, or symbol name
+  severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO"
+  finding_class: "correctness" | "preservation" | "scope" | "authority" | "release" | "complexity"
+  veto: boolean          // whether this is a solo CRITICAL preservation/scope/authority/release finding
+  reviewer: string       // reporting reviewer tool and model
+  assumptions: string[]  // preconditions for the claim to hold
+  evidence_status: ACCEPTED | REJECTED | UNRESOLVED | null  // result of independent evidence check
+  evidence_checked: string[] // primary evidence the orchestrator checked itself
+  rationale: string | null   // evidence-based reason for the final decision
 }
 ```
 
-Reviewer output begins as an untrusted hypothesis, so `evidence_status` is initially `null`.
 The orchestrator, not a reviewer or arbiter, fills the evidence fields after independently
 checking the highest-authority available source, requirement, current code/runtime, and test evidence.
 

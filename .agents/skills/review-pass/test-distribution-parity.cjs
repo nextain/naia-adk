@@ -19,6 +19,8 @@ const mirrored = [
 	"scripts/check-output-boundary.cjs",
 	"scripts/invoke-reviewer.mjs",
 	"scripts/measure-complexity.mjs",
+	"scripts/review-cost-log.mjs",
+	"scripts/review-output-contract.mjs",
 	"scripts/review-preflight.mjs",
 	"scripts/validate-review-output.mjs",
 ];
@@ -56,7 +58,7 @@ for (const name of canonicalTestNames) {
 	);
 }
 
-const supportedAdapterNames = ["claude", "codex", "grok", "opencode"];
+const supportedAdapterNames = ["agy", "claude", "codex", "grok", "opencode"];
 const configTexts = [
 	fs.readFileSync(path.join(canonical, "references", "configuration-and-requirements.md"), "utf8"),
 	fs.readFileSync(path.join(root, ".users", "skills", "review-pass", "references", "configuration-and-requirements.md"), "utf8"),
