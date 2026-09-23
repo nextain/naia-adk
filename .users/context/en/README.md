@@ -12,4 +12,4 @@ These directories provide human-readable guides for `.agents/context/`.
   edit the JSON first, then regenerate.
 
 `README.md` is Korean and `README.en.md` is English. `AGENTS.md` is the shared English canonical
-index; `CLAUDE.md` and `GEMINI.md` are byte-identical mirrors.
+index; `CLAUDE.md` and `GEMINI.md` are one-line `@AGENTS.md` imports.

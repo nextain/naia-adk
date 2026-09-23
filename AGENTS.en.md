@@ -3,7 +3,7 @@
 # AGENTS.md (English index)
 
 `AGENTS.md` is the canonical shared repository index and is written in English.
-The tool entrypoints `CLAUDE.md` and `GEMINI.md` are byte-identical mirrors.
+The tool entrypoints `CLAUDE.md` and `GEMINI.md` are one-line `@AGENTS.md` imports.
 
 Read [AGENTS.md](AGENTS.md) first. It points to the mandatory context and
 project-local entrypoints; this file keeps the English link explicit for tools

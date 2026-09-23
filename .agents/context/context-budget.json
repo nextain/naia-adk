@@ -1,0 +1,12 @@
+{
+  "_doc": "Byte budgets per read set. Agents resend every file they read on each later model call. When a set is over budget, split content into docs/ or docs/archive/; do not raise the budget. Enforced by scripts/check-context-budget.mjs in CI.",
+  "sets": [
+    {"name": "always", "why": "root entrypoint attached to every call", "max_bytes": 12000,
+     "files": ["AGENTS.md", "CLAUDE.md"]},
+    {"name": "core", "why": "AGENTS.md mandatory reads 1-4. Ceiling at the current size; #56 lowers it to 40000", "max_bytes": 66000,
+     "files": [".agents/context/agents-rules.json", ".agents/context/ai-work-index.yaml",
+               ".agents/context/project-index.yaml", ".agents/context/terminology.yaml"]},
+    {"name": "planning", "why": "extra reads for feature-level planning or review", "max_bytes": 16000,
+     "files": [".agents/requirements/_index.yaml", ".agents/context/skills-index.yaml"]}
+  ]
+}

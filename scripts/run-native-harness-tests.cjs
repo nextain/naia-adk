@@ -9,6 +9,9 @@ const root=path.resolve(__dirname,"..");
 const poisonEnv={...process.env,WSL_INTEROP:"NAIA_NATIVE_WINDOWS_POISON",BASH_ENV:"NAIA_NATIVE_WINDOWS_POISON",MSYSTEM:"NAIA_NATIVE_WINDOWS_POISON"};
 const runs=[
   ["entry-point sync",[".claude/hooks/test/run-sync-entry-points-test.cjs"]],
+  ["entry-point pointers and size",[".claude/hooks/sync-entry-points.js","--check"]],
+  ["context budget unit",["scripts/test-context-budget.mjs"]],
+  ["context read-set budgets",["scripts/check-context-budget.mjs"]],
   ["agents context mirror",[".claude/hooks/test/run-agents-context-mirror-test.cjs"]],
   ["session contract resolver",[".agents/hooks/core/session-contract.test.js"]],
   ["harness session injection",[".agents/hooks/core/harness-session-inject.test.js"]],
@@ -49,6 +52,6 @@ const privateGcsFixture=path.join(root,".claude","hooks","test","gcs-guard.fixtu
 if(fs.existsSync(privateGcsFixture))throw new Error("public naia-adk must not contain a private GCS bucket fixture");
 process.stdout.write("GCS guard: NOT_APPLICABLE (public base has no private bucket config or fixture; downstream must add its own native gate)\n");
 
-const entrypoints=["AGENTS.md","CLAUDE.md","GEMINI.md"].map(file=>fs.readFileSync(path.join(root,file)));
-if(!entrypoints.slice(1).every(bytes=>bytes.equals(entrypoints[0])))throw new Error("native entry-point byte equality failed");
+const entrypointPointers=["CLAUDE.md","GEMINI.md"].map(file=>fs.readFileSync(path.join(root,file),"utf8"));
+if(!entrypointPointers.every(text=>text==="@AGENTS.md\n"))throw new Error("native entry-point pointer check failed: CLAUDE.md and GEMINI.md must be the one-line import @AGENTS.md");
 process.stdout.write(`native harness: PASS (${runs.length} native Node entrypoints, 1 explicit downstream-only skip; Node ${process.version}; platform ${process.platform}; direct entrypoints are shell-free; the Windows BEH test separately pins native CPython and rejects command-wrapper redirection; this is not an OS-wide process audit)\n`);

@@ -25,6 +25,8 @@
     "test:routine-approval-policy": "node .claude/hooks/test/run-routine-approval-policy-test.cjs",
     "test:discord-sessions": "node scripts/run-discord-session-tests.cjs",
     "check:entry-points": "node .claude/hooks/sync-entry-points.js --check",
+    "check:context-budget": "node scripts/check-context-budget.mjs",
+    "test:context-budget": "node scripts/test-context-budget.mjs",
     "test:context-translation": "python scripts/i18n/test-translate-ctx.py && node .claude/hooks/test/run-context-translation-batch-test.cjs",
     "check:context-translation": "python scripts/i18n/translate-ctx.py --check"
   },

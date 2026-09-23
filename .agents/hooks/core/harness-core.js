@@ -143,12 +143,12 @@ function readProgress(filePath) {
 
 /**
  * Canonical post-compact / session-start re-read reminder.
- * @param {{entryPoint?:string}} [opts]  entryPoint default "CLAUDE.md"
+ * @param {{entryPoint?:string}} [opts]  entryPoint default "AGENTS.md"
  *   (host-neutral override; a pi adapter passes e.g. "AGENTS.md").
  * @returns {string}
  */
 function compactReminderMessage(opts) {
-	const entryPoint = (opts && opts.entryPoint) || "CLAUDE.md";
+	const entryPoint = (opts && opts.entryPoint) || "AGENTS.md";
 	return [
 		"⚠️ Context compacted or new session started.",
 		"",

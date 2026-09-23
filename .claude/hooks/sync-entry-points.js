@@ -3,14 +3,15 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const ENTRY_POINTS = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md'];
-// Re-approved 2026-09-06 for the marker-free routine-work boundary: an
-// unbound session may create and edit ordinary reversible files and run
-// policy-approved local inspection, tests, builds, and non-destructive Git
-// work, while governance files, entrypoints, deletion, destructive or remote
-// operations, external effects, and authority expansion still require a
-// contract. Verified against the gate in the marker-free fixture; CLAUDE.md
-// and GEMINI.md remain byte-identical mirrors.
-const APPROVED_CANONICAL_SHA256 = 'c520020c6f27cacf5f5857739923285b997629920c5cfa1e42fca58bd3670935';
+// CLAUDE.md and GEMINI.md are one-line `@AGENTS.md` imports, not copies: some
+// CLIs attach both AGENTS.md and CLAUDE.md, so a byte mirror is paid twice on
+// every model call. AGENTS.md is capped at MAX_CANONICAL_BYTES; long procedures
+// belong in on-demand docs (.agents/context/context-budget.json).
+// Re-approved 2026-09-23 by the owner for the context-budget change: pointer
+// mirrors, the size cap, and the where-to-write rule in Context Routing.
+const POINTER = '@AGENTS.md\n';
+const MAX_CANONICAL_BYTES = 12000;
+const APPROVED_CANONICAL_SHA256 = '41ac3cb475e0a7683ba766e1b2aa0903e1d9093f204c7b9dcb20d8192fd97597';
 const ALLOWED_H2 = new Set([
   'Repository Index', '저장소 인덱스',
   'Mandatory Reads', '필수 읽기',
@@ -71,12 +72,6 @@ function eventFilePath(event) {
     event?.tool_input?.file_path || event?.tool_input?.path || String();
 }
 
-function atomicCopy(source, destination) {
-  const temp = `${destination}.sync-${process.pid}.tmp`;
-  fs.copyFileSync(source, temp);
-  fs.renameSync(temp, destination);
-}
-
 function atomicWrite(destination, content) {
   const temp = `${destination}.sync-${process.pid}.tmp`;
   fs.writeFileSync(temp, content);
@@ -100,6 +95,8 @@ function entrypointViolations(content) {
 	}
 	violations.push(...paragraphViolations(lines));
   if (lines.length > 120) violations.push(`entrypoint exceeds index budget: ${lines.length} lines`);
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (bytes > MAX_CANONICAL_BYTES) violations.push(`entrypoint exceeds ${MAX_CANONICAL_BYTES} bytes: ${bytes}`);
   return [...new Set(violations)];
 }
 
@@ -120,17 +117,16 @@ function validateEntryPoint(content, root = null) {
 function syncEntryPoints(root, changed) {
   const changedName = path.basename(changed);
   if (!ENTRY_POINTS.includes(changedName) || path.dirname(path.resolve(changed)) !== path.resolve(root)) return [];
-  // AGENTS.md is the only source of truth. Editing a tool-specific mirror must
-  // never overwrite the canonical contract; restore all mirrors from AGENTS.
+  // AGENTS.md is the only source of truth. Editing a tool-specific pointer must
+  // never overwrite the canonical contract; restore every pointer instead.
   const source = path.join(root, 'AGENTS.md');
   if (!fs.existsSync(source)) return [];
-  const sourceBytes = fs.readFileSync(source);
-  validateEntryPoint(sourceBytes, root);
+  validateEntryPoint(fs.readFileSync(source), root);
   const updated = [];
   for (const name of ENTRY_POINTS.slice(1)) {
     const target = path.join(root, name);
-    if (!fs.existsSync(target) || !fs.readFileSync(target).equals(sourceBytes)) {
-      atomicCopy(source, target);
+    if (!fs.existsSync(target) || fs.readFileSync(target, 'utf8') !== POINTER) {
+      atomicWrite(target, POINTER);
       updated.push(name);
     }
   }
@@ -143,7 +139,7 @@ function checkEntryPoints(root) {
   const digestViolation = approvedDigestViolation(canonical, root);
   if (digestViolation) failures.push(`AGENTS.md: ${digestViolation}`);
   return failures.concat(ENTRY_POINTS.slice(1).filter((name) =>
-    !fs.existsSync(path.join(root, name)) || !fs.readFileSync(path.join(root, name)).equals(canonical)));
+    !fs.existsSync(path.join(root, name)) || fs.readFileSync(path.join(root, name), 'utf8') !== POINTER));
 }
 
 function readHookInput() {
@@ -160,7 +156,8 @@ function runHook() {
     if (!candidate) throw new Error('--apply requires a candidate file');
     const content = fs.readFileSync(path.resolve(candidate));
     validateEntryPoint(content, root);
-    for (const name of ENTRY_POINTS) atomicWrite(path.join(root, name), content);
+    atomicWrite(path.join(root, 'AGENTS.md'), content);
+    for (const name of ENTRY_POINTS.slice(1)) atomicWrite(path.join(root, name), POINTER);
     return 0;
   }
   const inputPath = eventFilePath(readHookInput());
@@ -172,4 +169,4 @@ function runHook() {
 }
 
 if (require.main === module) process.exitCode = runHook();
-module.exports = { APPROVED_CANONICAL_SHA256, ENTRY_POINTS, approvedDigestViolation, checkEntryPoints, entrypointViolations, eventFilePath, findRepoRoot, paragraphViolations, syncEntryPoints, validateEntryPoint };
+module.exports = { APPROVED_CANONICAL_SHA256, ENTRY_POINTS, MAX_CANONICAL_BYTES, POINTER, approvedDigestViolation, checkEntryPoints, entrypointViolations, eventFilePath, findRepoRoot, paragraphViolations, syncEntryPoints, validateEntryPoint };

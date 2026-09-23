@@ -3,7 +3,11 @@
   "purpose": "Deterministic health contract for root entry points and the curated Korean-to-English context queue.",
   "entrypoints": {
     "canonical": "AGENTS.md",
-    "mirrors": ["CLAUDE.md", "GEMINI.md"]
+    "pointers": [
+      "CLAUDE.md",
+      "GEMINI.md"
+    ],
+    "pointer_content": "@AGENTS.md"
   },
   "translation": {
     "source_dir": ".users/context",

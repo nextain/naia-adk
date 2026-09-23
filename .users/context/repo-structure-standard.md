@@ -13,7 +13,7 @@
 
 **`naia-adk` 공개 기준선의 실제 파일 규칙 (2026-06-22)**:
 - `README.md`는 한국어, `README.en.md`는 영어입니다.
-- `AGENTS.md`는 영어 canonical 인덱스이고 `CLAUDE.md`와 `GEMINI.md`는 byte-identical 미러입니다.
+- `AGENTS.md`는 영어 canonical 인덱스이고 `CLAUDE.md`와 `GEMINI.md`는 `@AGENTS.md` 한 줄 포인터입니다.
 - `.users/context/`는 한국어 human guide, `.users/context/en/`은 영어 human guide입니다.
 
 `naia-memory`는 자체 저장소 규칙을 따르며 이 표준의 override 대상이 아닙니다.
@@ -78,7 +78,7 @@ docs/                  ← 영어 SoT (human 1차 문서)
 
 ## 3. Multi-tool Harness
 
-`AGENTS.md`가 canonical이고 `CLAUDE.md`와 `GEMINI.md`가 byte-identical mirror입니다.
+`AGENTS.md`가 canonical이고 `CLAUDE.md`와 `GEMINI.md`는 `@AGENTS.md` 한 줄 포인터입니다.
 
 - `AGENTS.md`만 편집합니다.
 - 검사: `node .claude/hooks/sync-entry-points.js --check`
