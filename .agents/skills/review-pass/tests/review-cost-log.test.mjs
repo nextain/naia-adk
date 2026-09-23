@@ -157,7 +157,7 @@ const entryWithUsage = createCostLogEntry({
 	usageSource: agyUsage1.usageSource,
 });
 
-// 5. invoke() 경로별 기록 줄 수 정확히 1
+// 5. every invoke() path writes exactly one log line
 const testLogDir = await mkdtemp(path.join(os.tmpdir(), "review-cost-direct-"));
 const singleLineSuccessLog = path.join(testLogDir, "direct-success-cost.jsonl");
 await invoke({

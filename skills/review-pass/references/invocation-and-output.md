@@ -221,7 +221,7 @@ done
 Every reviewer invocation records a single JSONL line upon termination (whether `reviewed`, `failed`, or `not_run`).
 
 **Orchestrator convention:**
-오케스트레이터는 리뷰어를 부를 때 `--review-id --stage --round --reviewer-index`를 넘긴다.
+The orchestrator passes `--review-id --stage --round --reviewer-index` on every reviewer call.
 
 **Log file resolution hierarchy:**
 1. Explicit CLI argument: `--cost-log <path>`
@@ -263,9 +263,9 @@ Prompt text, review text, and credentials are never logged.
 
 ### 3.1 Reviewer Output Schema (Canonical)
 
-리뷰어 출력은 스크립트(`invoke-reviewer.mjs`)가 모든 도구에 붙이는 JSON 형식이 정본입니다.
-리뷰어는 마크다운 서식이나 추가 설명 없이 단 하나의 JSON 객체만 출력해야 합니다.
-`validateReviewOutput` 검증기는 이 JSON 구조를 엄격하게 검증합니다.
+The canonical reviewer output is the JSON format that `invoke-reviewer.mjs` appends to the prompt for every tool.
+The reviewer must output exactly one JSON object, with no Markdown formatting or extra prose.
+`validateReviewOutput` validates this structure strictly.
 
 #### Canonical Review JSON Schema
 
@@ -296,17 +296,17 @@ Prompt text, review text, and credentials are never logged.
 ```
 
 #### Output Rules & Constraints
-1. **JSON Only**: 설명 텍스트, 인사말, 마크다운 코드 펜스(```) 없이 정확히 1개의 유효한 JSON 객체만 출력합니다.
-2. **coverage**: 동적 아톰 원장의 모든 아톰에 대해 정확히 1개의 항목이 있어야 합니다. 중복, 누락, 미선언 ID는 검증 실패(`NOT_CLEAN` 처리)됩니다.
-3. **findings**: 발견된 결함 목록. 결함이 없으면 빈 배열 `[]`.
-   - `file_location`, `impact`, `minimal_fix`는 모두 비어있지 않은 문자열이어야 합니다.
-   - 아톰 원장 밖의 결함인 경우 `atom_id: null` 및 `scope: "outside_declared_atoms"`로 보고합니다.
-4. **frame_assessment**: 아톰 원장의 범위가 원래 요청을 충족하기에 충분한지 평가합니다.
-   - `scope_is_sufficient`가 `false`이면 `missing_concerns` 배열에 최소 1개 이상의 누락 우려사항이 명시되어야 합니다.
-5. **runtime_observed**: 코드를 실제 실행/관찰한 경우에만 `true`로 설정합니다. 정적 검토는 반드시 `false`여야 합니다.
+1. **JSON Only**: output exactly one valid JSON object, with no explanatory text, greeting, or Markdown code fence (```).
+2. **coverage**: exactly one entry for every atom in the dynamic atom ledger. Duplicate, missing, or undeclared IDs fail validation (treated as `NOT_CLEAN`).
+3. **findings**: the list of defects found; an empty array `[]` when there are none.
+   - `file_location`, `impact`, and `minimal_fix` must all be non-empty strings.
+   - A defect outside the atom ledger is reported with `atom_id: null` and `scope: "outside_declared_atoms"`.
+4. **frame_assessment**: whether the atom ledger's scope is sufficient for the original request.
+   - When `scope_is_sufficient` is `false`, `missing_concerns` must name at least one missing concern.
+5. **runtime_observed**: `true` only if the reviewer actually ran or observed the system. A static review must be `false`.
 6. **verdict**:
-   - `CLEAN`: 모든 아톰이 `COVERED`이고, `findings`가 `[]`이며, `scope_is_sufficient`가 `true`일 때만 허용됩니다.
-   - `NOT_CLEAN`: 미커버 아톰 존재, 결함 존재, 또는 범위 불충분 시 필수입니다.
+   - `CLEAN`: allowed only when every atom is `COVERED`, `findings` is `[]`, and `scope_is_sufficient` is `true`.
+   - `NOT_CLEAN`: required when any atom is uncovered, any finding exists, or the scope is insufficient.
 
 #### Clean Review Example
 
@@ -364,37 +364,37 @@ Prompt text, review text, and credentials are never logged.
 
 ### 3.2 Finding Schema
 
-Finding 데이터는 리뷰어가 직접 출력하는 필드와 오케스트레이터가 독립 검증 후 채우는 필드로 구분됩니다.
+Finding data has two parts: fields the reviewer outputs directly, and fields the orchestrator fills in after independent verification.
 
-#### 1. Reviewer Output Fields (리뷰어 산출 필드)
-리뷰어 프로세스가 JSON 응답의 `findings` 배열에 직접 담는 필드입니다:
-- `atom_id`: string | null (동적 아톰 ID, 원장 밖이면 null)
-- `scope`: string ("outside_declared_atoms", atom_id가 null일 때 필수)
-- `file_location`: string (파일 경로 및 라인 번호, 예: `src/core.py:42`)
-- `impact`: string (구체적 장애 영향 및 실패 양상 설명)
-- `minimal_fix`: string (문제를 해결하는 최소 변경 방안)
+#### 1. Reviewer Output Fields
+Fields the reviewer puts directly in the `findings` array of its JSON response:
+- `atom_id`: string | null (dynamic atom ID; null when outside the ledger)
+- `scope`: string ("outside_declared_atoms"; required when atom_id is null)
+- `file_location`: string (file path and line, e.g. `src/core.py:42`)
+- `impact`: string (the concrete harm and how it fails)
+- `minimal_fix`: string (the smallest change that fixes it)
 
-#### 2. Orchestrator Enriched Fields (오케스트레이터 보강 필드)
-리뷰어 출력은 신뢰되지 않은 가설(untrusted hypothesis)로 취급됩니다. 오케스트레이터는 리뷰어 출력을 검증하고 증거를 독립 검사한 뒤 다음 통합 데이터 모델로 보강합니다:
+#### 2. Orchestrator Enriched Fields
+Reviewer output is treated as an untrusted hypothesis. The orchestrator validates it, checks the evidence independently, and enriches it into this model:
 
 ```typescript
 Finding {
-  // 리뷰어 산출 필드 매핑
-  file: string           // file_location에서 파싱한 파일 경로
-  line: number | null    // file_location에서 파싱한 라인 번호 (파일 레벨은 null)
-  description: string    // impact 및 minimal_fix 기반 상세 설명
-  req_id: string | null  // atom_id 기반 요구사항 ID 매핑
+  // mapped from reviewer output fields
+  file: string           // file path parsed from file_location
+  line: number | null    // line parsed from file_location (null for file-level)
+  description: string    // detail built from impact and minimal_fix
+  req_id: string | null  // requirement ID mapped from atom_id
 
-  // 오케스트레이터 검증 및 분류 필드
-  symbol: string | null  // 함수/클래스/심볼 이름
+  // orchestrator verification and classification fields
+  symbol: string | null  // function, class, or symbol name
   severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO"
   finding_class: "correctness" | "preservation" | "scope" | "authority" | "release" | "complexity"
-  veto: boolean          // solo CRITICAL preservation/scope/authority/release 여부
-  reviewer: string       // 보고한 리뷰어 도구 및 모델
-  assumptions: string[]  // 주장이 유효하기 위한 전제 조건 목록
-  evidence_status: ACCEPTED | REJECTED | UNRESOLVED | null  // 독립 증거 검증 결과
-  evidence_checked: string[] // 오케스트레이터가 독립 확인한 1차 증거 목록
-  rationale: string | null   // 증거 기반 최종 판정 근거
+  veto: boolean          // whether this is a solo CRITICAL preservation/scope/authority/release finding
+  reviewer: string       // reporting reviewer tool and model
+  assumptions: string[]  // preconditions for the claim to hold
+  evidence_status: ACCEPTED | REJECTED | UNRESOLVED | null  // result of independent evidence check
+  evidence_checked: string[] // primary evidence the orchestrator checked itself
+  rationale: string | null   // evidence-based reason for the final decision
 }
 ```
 

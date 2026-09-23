@@ -1,7 +1,7 @@
-tier: T1
 ---
 name: review-pass
 version: "3.1"
+tier: T1
 description: >
   Stage-gated multi-AI cross-validation review with optional REQ-ID traceability.
   4 stages (planning, development, test, integration) with configurable reviewers,
@@ -108,7 +108,7 @@ traceability for requirements-driven projects.
   `--require-review false` opt-out may record `NOT_RUN` for ordinary local work,
   but that result cannot satisfy a review or release gate.
 
-오케스트레이터는 리뷰어를 부를 때 `--review-id --stage --round --reviewer-index`를 넘긴다.
+The orchestrator passes `--review-id --stage --round --reviewer-index` on every reviewer call.
 
 ## Arguments
 

@@ -34,7 +34,7 @@ assert.match(promptAgy, /file viewing tools/);
 assert.match(promptAgy, /review JSON/);
 assert.ok(promptAgy.startsWith(promptNoTool.trimEnd()), "agy prompt must preserve base prefix");
 
-// 2. 고정 문단의 형식이 검증기와 일치
+// 2. the fixed prompt section matches the validator
 for (const v of VERDICTS) {
 	assert.ok(FRAME_OBLIGATIONS.includes(`"${v}"`), `FRAME_OBLIGATIONS must declare verdict ${v}`);
 }
@@ -83,7 +83,7 @@ assert.equal(parsedNotClean.verdict, "NOT_CLEAN");
 assert.equal(parsedNotClean.findings.length, 1);
 assert.equal(parsedNotClean.findings[0].scope, "outside_declared_atoms");
 
-// 3. 다른 도구 프롬프트에도 형식 문단이 들어감
+// 3. prompts for other tools also carry the format section
 const toolsToTest = ["claude", "codex", "opencode", "grok", "agy", undefined];
 for (const t of toolsToTest) {
 	const promptForTool = composePrompt("BASE", atoms, "DELTA", "REQUEST", t);
@@ -95,7 +95,7 @@ for (const t of toolsToTest) {
 	assert.ok(promptForTool.includes('"runtime_observed"'), `Prompt for tool ${t || "default"} must include runtime_observed schema`);
 }
 
-// 4. agy 정책에 웹 금지
+// 4. the agy policy forbids web access
 assert.match(AGY_TOOL_POLICY, /web search|browser/i, "AGY policy must forbid web search and browser tools");
 const promptForAgy = composePrompt("BASE", atoms, "DELTA", "REQUEST", "agy");
 assert.match(promptForAgy, /web search|browser/i, "Composed prompt for AGY must forbid web search and browser tools");
