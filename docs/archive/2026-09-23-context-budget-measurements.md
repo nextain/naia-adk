@@ -16,3 +16,8 @@ These measurements motivated `token_budget_policy` in
 - Grok 4.7 has a 500K window and compacts at 85% by default; requests above
   200K tokens are billed at the long-context rate, so the user-level
   threshold was set to 36%.
+
+Tool-side backstops set with this change: the project `.claude/settings.json`
+sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000`; Grok reads
+`[session] auto_compact_threshold_percent` only from the user-level
+`~/.grok/config.toml` (36 keeps a 500K window below 200K).

@@ -547,7 +547,7 @@
       "always_loaded_size": "Keep entrypoints and mandatory reads within .agents/context/context-budget.json; procedures, incident lessons, and history go to docs/.",
       "large_reads": "Read files over about 20KB by range or search, diffs with --stat first, and logs or JSON in slices.",
       "delegate_exploration": "A root session coordinates; broad searches, reviews, and multi-file edits run in subagents or one-shot headless calls that return a summary.",
-      "session_rollover": "Past about 200K tokens of context, write a handoff and continue in a fresh session. Backstops: CLAUDE_CODE_AUTO_COMPACT_WINDOW in .claude/settings.json and Grok's user-level [session] auto_compact_threshold_percent."
+      "session_rollover": "Past about 200K tokens of context, write a handoff and continue in a fresh session. Each tool's auto-compact limit is set in its own configuration as a backstop; see docs/archive/2026-09-23-context-budget-measurements.md."
     }
   }
 }
