@@ -8,8 +8,9 @@
 - [Reviewer invocation](#23-reviewer-invocation)
 - [Timeout](#24-timeout)
 - [Parallel execution](#25-parallel-execution)
+- [Invocation cost recording](#26-invocation-cost-recording)
 - [Output schema](#3-output-schema)
-- [Reviewer prompt format](#31-reviewer-prompt-format)
+- [Reviewer output schema (canonical)](#31-reviewer-output-schema-canonical)
 - [Finding schema](#32-finding-schema)
 - [Parsing strategy](#33-parsing-strategy)
 
@@ -129,6 +130,7 @@ patterns:
 | `opencode` | `opencode run --pure --agent adk-adversarial-review --title adk-adversarial-review --dir "$dir" --format json --model {model}` | yes (shared child-environment boundary) | use the shared Alpha child-environment helper for private HOME/XDG roots and sanitized provider/auth config; pin `model` and `small_model` to `{model}`, apply the helper's read-only policy to the selected agent, disable project config and inherited overrides, omit positional message, and pipe the prompt on stdin |
 | `grok` | `grok --output-format json --permission-mode plan --verbatim --prompt-file {0600-prompt-file}` | yes (plan mode) | pass a temporary owner-only prompt path, close stdin, and remove the file after exit; do not pass `--no-subagents` so Grok can spawn subagents |
 | `codex` | `codex exec --ephemeral --sandbox read-only --skip-git-repo-check -C "$dir" --model {model} -` | yes (sandbox) | `-` reads stdin |
+| `agy` | `agy --input-format stream-json --output-format stream-json --sandbox --mode plan --print-timeout 240s --model {model}` | yes (sandbox) | send one newline-terminated `event:"user"` NDJSON message with nested `message.role:"user"` and `message.content`; require a final `event:"result"` whose nested `result.status` is `"SUCCESS"` and whose response carries the review; the adapter keeps AGY's review inside the same coverage/fail-closed validation |
 
 **Adapter interface**: Each tool adapter implements:
 
@@ -136,6 +138,14 @@ patterns:
 invoke(prompt: string, config: ToolConfig) → raw_output: string
 parse(raw_output: string, strategy: "json" | "text_fallback") → Finding[]
 ```
+
+For AGY, `--print` is intentionally omitted: the installed CLI treats that
+flag as its single-prompt mode and does not consume the stream request. The
+adapter sends exactly one newline-terminated user event on stdin. Successful
+terminal evidence is the final result envelope with nested
+`result.status:"SUCCESS"`; its response still has to pass the coverage and
+frame validation below. A missing or malformed terminal, failed or truncated
+stream, timeout, or nonzero exit fails closed.
 
 **Custom tool registration** is not implemented by the bundled runner. Adding a
 `tools.*` entry does not make it executable; a new adapter must be added to
@@ -206,80 +216,188 @@ for pid in "${pids[@]}"; do
 done
 ```
 
+### 2.6 Invocation Cost Recording
+
+Every reviewer invocation records a single JSONL line upon termination (whether `reviewed`, `failed`, or `not_run`).
+
+**Orchestrator convention:**
+오케스트레이터는 리뷰어를 부를 때 `--review-id --stage --round --reviewer-index`를 넘긴다.
+
+**Log file resolution hierarchy:**
+1. Explicit CLI argument: `--cost-log <path>`
+2. Environment variable: `REVIEW_COST_LOG`
+3. Default path: `<workspace-root>/.agents/progress/review-cost/<YYYY-MM-DD>.jsonl` (local date)
+
+Parent directories are created automatically if they do not exist. Any logging failure emits a warning to stderr without altering reviewer verdict, output structure, or process exit code.
+
+**CLI arguments:**
+- `--cost-log <path>`: Destination JSONL path
+- `--review-id <id>`: Identifier for the current review session
+- `--stage <stage>`: Review stage (`planning`, `development`, `test`, `integration`)
+- `--round <round>`: Round number
+- `--reviewer-index <index>`: Index of the reviewer in the round
+
+**JSONL record schema:**
+- `ts`: ISO 8601 UTC timestamp
+- `review_id`: Review identifier or `null`
+- `stage`: Review stage or `null`
+- `round`: Round number or `null`
+- `reviewer_index`: Reviewer index or `null`
+- `tool`: Reviewer CLI tool name (`claude`, `codex`, `opencode`, `grok`, `agy`)
+- `model`: Reviewer model identifier or `null`
+- `repo`: Repository path
+- `prompt_chars`: Total length of the delivered prompt string
+- `duration_ms`: Wall-clock execution duration in milliseconds
+- `outcome`: Terminal outcome category (`reviewed` | `failed` | `not_run`)
+- `failure_reason`: Diagnostic safe error reason or `null`
+- `verdict`: Final review verdict (`CLEAN` | `NOT_CLEAN`) or `null`
+- `findings_count`: Count of findings or `null`
+- `usage`: Exact token/cost metrics reported by the tool (`{ input_tokens, output_tokens, thinking_tokens, cache_read_tokens, cache_write_tokens, total_tokens, cost_usd }` with unknown fields set to `null`; never estimated or calculated) or `null`
+- `usage_source`: Source of metrics (`result.usage`, `claude_json`, `tokens`) or `null`
+
+Prompt text, review text, and credentials are never logged.
+
 ---
 
 ## 3. Output Schema
 
-### 3.1 Reviewer Prompt Format
+### 3.1 Reviewer Output Schema (Canonical)
 
-Each reviewer receives only the evidence view assigned to its role. Before the
-common envelope, include the validated atom ledger. Every non-superseded atom
-must appear in exactly one coverage row linking source → target → acceptance →
-evidence. Missing, duplicated, or summary-only coverage is `NOT_CLEAN`.
+리뷰어 출력은 스크립트(`invoke-reviewer.mjs`)가 모든 도구에 붙이는 JSON 형식이 정본입니다.
+리뷰어는 마크다운 서식이나 추가 설명 없이 단 하나의 JSON 객체만 출력해야 합니다.
+`validateReviewOutput` 검증기는 이 JSON 구조를 엄격하게 검증합니다.
 
-The common envelope contains:
+#### Canonical Review JSON Schema
 
+```json
+{
+  "verdict": "CLEAN" | "NOT_CLEAN",
+  "coverage": [
+    {
+      "atom_id": "string",
+      "status": "COVERED" | "NOT_COVERED"
+    }
+  ],
+  "findings": [
+    {
+      "atom_id": "string | null",
+      "scope": "outside_declared_atoms",
+      "file_location": "string (file:line or file path)",
+      "impact": "string (concrete harm or failure description)",
+      "minimal_fix": "string (minimal patch or change)"
+    }
+  ],
+  "frame_assessment": {
+    "scope_is_sufficient": true | false,
+    "missing_concerns": ["string"]
+  },
+  "runtime_observed": true | false
+}
 ```
-## Review Context
-Stage: {stage}
-Role: {source_fidelity | baseline_preservation | implementation_test | authority_release | standard}
-Files: {file_list}
-REQ-IDs: {req_ids or "N/A for this review"}
-Deferred REQ-IDs: {deferred or "none"}
-Known issues from previous rounds: {known_issues or "none"}
-Deterministic complexity report: {complete current report; never a prose-only summary}
-Source artifacts: {role-visible immutable source references or "withheld for independence"}
-Baseline ref: {role-visible immutable ref or "withheld for independence"}
-Preservation contract: {role-visible path or "withheld for independence"}
-Incident history: {role-visible history or "withheld for independence"}
 
-## Review Lens
-Lens: {lens_name}
-Checks to perform:
-{actionable_checklist_from_stage_definition}
+#### Output Rules & Constraints
+1. **JSON Only**: 설명 텍스트, 인사말, 마크다운 코드 펜스(```) 없이 정확히 1개의 유효한 JSON 객체만 출력합니다.
+2. **coverage**: 동적 아톰 원장의 모든 아톰에 대해 정확히 1개의 항목이 있어야 합니다. 중복, 누락, 미선언 ID는 검증 실패(`NOT_CLEAN` 처리)됩니다.
+3. **findings**: 발견된 결함 목록. 결함이 없으면 빈 배열 `[]`.
+   - `file_location`, `impact`, `minimal_fix`는 모두 비어있지 않은 문자열이어야 합니다.
+   - 아톰 원장 밖의 결함인 경우 `atom_id: null` 및 `scope: "outside_declared_atoms"`로 보고합니다.
+4. **frame_assessment**: 아톰 원장의 범위가 원래 요청을 충족하기에 충분한지 평가합니다.
+   - `scope_is_sufficient`가 `false`이면 `missing_concerns` 배열에 최소 1개 이상의 누락 우려사항이 명시되어야 합니다.
+5. **runtime_observed**: 코드를 실제 실행/관찰한 경우에만 `true`로 설정합니다. 정적 검토는 반드시 `false`여야 합니다.
+6. **verdict**:
+   - `CLEAN`: 모든 아톰이 `COVERED`이고, `findings`가 `[]`이며, `scope_is_sufficient`가 `true`일 때만 허용됩니다.
+   - `NOT_CLEAN`: 미커버 아톰 존재, 결함 존재, 또는 범위 불충분 시 필수입니다.
 
-## Output Format (MANDATORY)
-### Files Read
-- `path/to/exact-file`
+#### Clean Review Example
 
-List every required repository-relative path separately. Ranges, directory shorthand, globs, and “A through B” do not count as read evidence.
+```json
+{
+  "verdict": "CLEAN",
+  "coverage": [
+    {
+      "atom_id": "ATOM-1",
+      "status": "COVERED"
+    }
+  ],
+  "findings": [],
+  "frame_assessment": {
+    "scope_is_sufficient": true,
+    "missing_concerns": []
+  },
+  "runtime_observed": false
+}
+```
 
-### Findings
-- `file:line [CRITICAL|HIGH|MEDIUM|LOW|INFO] [correctness|preservation|scope|authority|release|complexity] REQ-ID — description`
-  (REQ-ID is optional; include only if the finding relates to a specific requirement)
-or
-NONE
+#### Finding / Not-Clean Review Example
 
-### REQ-ID Coverage (skip if no REQ-IDs provided)
-- REQ-001: COVERED (path/to/file:symbol_name)
-- REQ-002: NOT FOUND
-or ALL COVERED or N/A
-
-### Verdict
-CLEAN | FOUND_ISSUES | VETO
+```json
+{
+  "verdict": "NOT_CLEAN",
+  "coverage": [
+    {
+      "atom_id": "ATOM-1",
+      "status": "NOT_COVERED"
+    }
+  ],
+  "findings": [
+    {
+      "atom_id": "ATOM-1",
+      "file_location": "scripts/invoke-reviewer.mjs:42",
+      "impact": "Missing null check causes crash on empty environment variable",
+      "minimal_fix": "Add optional chaining before accessing property"
+    },
+    {
+      "atom_id": null,
+      "scope": "outside_declared_atoms",
+      "file_location": "references/invocation-and-output.md:280",
+      "impact": "Documentation lacks output schema causing model hallucination",
+      "minimal_fix": "Add canonical JSON schema to documentation"
+    }
+  ],
+  "frame_assessment": {
+    "scope_is_sufficient": false,
+    "missing_concerns": ["Output contract was not covered in original atom ledger"]
+  },
+  "runtime_observed": false
+}
 ```
 
 ### 3.2 Finding Schema
 
-```
+Finding 데이터는 리뷰어가 직접 출력하는 필드와 오케스트레이터가 독립 검증 후 채우는 필드로 구분됩니다.
+
+#### 1. Reviewer Output Fields (리뷰어 산출 필드)
+리뷰어 프로세스가 JSON 응답의 `findings` 배열에 직접 담는 필드입니다:
+- `atom_id`: string | null (동적 아톰 ID, 원장 밖이면 null)
+- `scope`: string ("outside_declared_atoms", atom_id가 null일 때 필수)
+- `file_location`: string (파일 경로 및 라인 번호, 예: `src/core.py:42`)
+- `impact`: string (구체적 장애 영향 및 실패 양상 설명)
+- `minimal_fix`: string (문제를 해결하는 최소 변경 방안)
+
+#### 2. Orchestrator Enriched Fields (오케스트레이터 보강 필드)
+리뷰어 출력은 신뢰되지 않은 가설(untrusted hypothesis)로 취급됩니다. 오케스트레이터는 리뷰어 출력을 검증하고 증거를 독립 검사한 뒤 다음 통합 데이터 모델로 보강합니다:
+
+```typescript
 Finding {
-  file: string           // file path
-  line: number | null    // line number (null for file-level)
-  symbol: string | null  // function/class/symbol name
-  severity: CRITICAL | HIGH | MEDIUM | LOW | INFO
-  finding_class: correctness | preservation | scope | authority | release | complexity
-  veto: boolean          // true for solo CRITICAL preservation/scope/authority/release
-  req_id: string | null  // associated REQ-ID (null if N/A)
-  description: string    // what's wrong
-  reviewer: string       // which reviewer found this
-  assumptions: string[]  // premises that must hold for the claim to be valid
-  evidence_status: ACCEPTED | REJECTED | UNRESOLVED | null
-  evidence_checked: string[] // primary evidence independently inspected by the orchestrator
-  rationale: string | null   // why the evidence supports the final status
+  // 리뷰어 산출 필드 매핑
+  file: string           // file_location에서 파싱한 파일 경로
+  line: number | null    // file_location에서 파싱한 라인 번호 (파일 레벨은 null)
+  description: string    // impact 및 minimal_fix 기반 상세 설명
+  req_id: string | null  // atom_id 기반 요구사항 ID 매핑
+
+  // 오케스트레이터 검증 및 분류 필드
+  symbol: string | null  // 함수/클래스/심볼 이름
+  severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO"
+  finding_class: "correctness" | "preservation" | "scope" | "authority" | "release" | "complexity"
+  veto: boolean          // solo CRITICAL preservation/scope/authority/release 여부
+  reviewer: string       // 보고한 리뷰어 도구 및 모델
+  assumptions: string[]  // 주장이 유효하기 위한 전제 조건 목록
+  evidence_status: ACCEPTED | REJECTED | UNRESOLVED | null  // 독립 증거 검증 결과
+  evidence_checked: string[] // 오케스트레이터가 독립 확인한 1차 증거 목록
+  rationale: string | null   // 증거 기반 최종 판정 근거
 }
 ```
 
-Reviewer output begins as an untrusted hypothesis, so `evidence_status` is initially `null`.
 The orchestrator, not a reviewer or arbiter, fills the evidence fields after independently
 checking the highest-authority available source, requirement, current code/runtime, and test evidence.
 

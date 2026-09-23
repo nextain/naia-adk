@@ -38,6 +38,10 @@ tools:
     command: 'codex exec --ephemeral --sandbox read-only --skip-git-repo-check -C "{repo}" --model {model} -'
     stdin: true
     parse: text_fallback
+  agy:
+    command: 'agy --input-format stream-json --output-format stream-json --sandbox --mode plan --print-timeout 240s --model {model}'
+    stdin: true
+    parse: json
   grok:
     command: 'grok --output-format json --permission-mode plan --verbatim --prompt-file {prompt_file}'
     stdin: false
@@ -55,6 +59,7 @@ profile_policy:
   profiles:
     claude: {reviewers: [claude]}
     codex: {reviewers: [codex]}
+    agy: {reviewers: [agy]}
     grok: {reviewers: [grok]}
   unavailable: fail_closed
 

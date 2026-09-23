@@ -8,12 +8,53 @@ import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { validateReviewOutput } from "./validate-review-output.mjs";
+import {
+	SUBJECTS,
+	EFFECTS,
+	RENDER_POLICIES,
+	COVERAGE_STATUSES,
+	VERDICTS,
+	OUTSIDE_SCOPE_VALUE,
+	FINDING_REQUIRED_KEYS,
+	ATOM_KEYS,
+	FRAME_OBLIGATIONS,
+	AGY_TOOL_POLICY,
+} from "./review-output-contract.mjs";
+import {
+	resolveRepoRoot,
+	resolveCostLogPath,
+	extractUsage,
+	createCostLogEntry,
+	recordReviewCost,
+	appendCostLog,
+} from "./review-cost-log.mjs";
 
-const SUBJECTS = new Set(["agent_workflow", "artifact_runtime", "artifact_content", "end_user_flow"]);
-const EFFECTS = new Set(["background", "precondition", "outcome", "constraint", "presentation", "verification", "audience"]);
-const RENDER_POLICIES = new Set(["deny", "derive", "quote", "require"]);
 export { validateReviewOutput };
-const ATOM_KEYS = ["id", "source_id", "text", "directive_ids", "subject", "effect", "render_policy", "target_ids", "criterion_ids", "evidence_ids"];
+export {
+	COVERAGE_STATUSES,
+	VERDICTS,
+	OUTSIDE_SCOPE_VALUE,
+	FINDING_REQUIRED_KEYS,
+	FRAME_OBLIGATIONS,
+	AGY_TOOL_POLICY,
+} from "./review-output-contract.mjs";
+export {
+	resolveRepoRoot,
+	resolveCostLogPath,
+	extractUsage,
+	createCostLogEntry,
+	recordReviewCost,
+	appendCostLog,
+} from "./review-cost-log.mjs";
+
+export function stdinPayload(tool, prompt) {
+	if (tool !== "agy") return prompt;
+	return `${JSON.stringify({
+		event: "user",
+		message: { role: "user", content: prompt },
+	})}\n`;
+}
+
 const OPENCODE_REVIEW_AGENT = "adk-adversarial-review";
 const MAX_REVIEW_OUTPUT_BYTES = 1024 * 1024;
 
@@ -104,37 +145,16 @@ export function validateAtoms(value) {
 	return value;
 }
 
-// Obligations the reviewer must satisfy no matter which base prompt was used.
-//
-// The atom ledger is written by the author of the change. Reviewing only inside
-// it answers "is this right within the stated scope" and can never answer "is
-// the stated scope right", which is where large reviews actually fail. So the
-// reviewer is told, in every invocation, that it may report outside the ledger
-// and must say whether the ledger was sufficient.
-const FRAME_OBLIGATIONS = `--- REVIEWER OBLIGATIONS ---
-The atom ledger below was written by the author of the change. It is a claim
-about what matters, not a boundary on what you may examine.
-
-1. Judge the ledger itself. If the original request needs something the ledger
-   does not cover, say so. Report it as a finding with "atom_id": null and
-   "scope": "outside_declared_atoms".
-2. Answer "frame_assessment" explicitly:
-   { "scope_is_sufficient": true|false, "missing_concerns": [string] }
-   A review that never asked whether the scope was right is not finished.
-3. Answer "runtime_observed": true only if you actually observed the running
-   system. Reading files is not observing behaviour. If you reviewed text only,
-   say false and do not phrase conclusions as if you had run anything.
-4. "verdict": "CLEAN" is only available when every atom is COVERED, there are no
-   findings, and scope_is_sufficient is true.`;
-
-export function composePrompt(base, atoms, delta, request) {
+export function composePrompt(base, atoms, delta, request, tool) {
 	const ledger = atoms.map((a) => JSON.stringify(a)).join("\n");
 	// The original ask goes in ahead of the author's framing so the two can be
 	// compared instead of one standing in for the other.
 	const original = request && request.trim()
 		? `--- ORIGINAL REQUEST (verbatim, not the author's summary) ---\n${request.trim()}`
 		: `--- ORIGINAL REQUEST ---\nNot supplied. Record this in missing_concerns: without it you cannot judge whether the atom ledger covers what was actually asked.`;
-	return `${base.trimEnd()}\n\n${original}\n\n${FRAME_OBLIGATIONS}\n\n--- DYNAMIC ATOM LEDGER ---\n${ledger}\n\n--- REVIEWER DELTA ---\n${delta.trim()}\n`;
+	const toolName = typeof tool === "string" ? tool : tool?.tool;
+	const agyPolicy = toolName === "agy" ? `\n\n${AGY_TOOL_POLICY}` : "";
+	return `${base.trimEnd()}\n\n${original}\n\n${FRAME_OBLIGATIONS}\n\n--- DYNAMIC ATOM LEDGER ---\n${ledger}\n\n--- REVIEWER DELTA ---\n${delta.trim()}${agyPolicy}\n`;
 }
 
 export function commandFor(tool, repo, model, options = {}) {
@@ -142,6 +162,14 @@ export function commandFor(tool, repo, model, options = {}) {
 	if (tool === "claude") return ["claude", ["-p", "--input-format", "text", "--output-format", "json", "--no-session-persistence", "--permission-mode", "plan", "--tools", "Read,Glob,Grep", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', ...optionalModel]];
 	if (tool === "codex") return ["codex", ["exec", "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-C", repo, ...optionalModel, "-"]];
 	if (tool === "opencode") return ["opencode", ["run", "--pure", "--agent", OPENCODE_REVIEW_AGENT, "--title", OPENCODE_REVIEW_AGENT, "--dir", repo, "--format", "json", ...(model ? ["--model", model] : [])]];
+	// AGY's stream protocol is required for headless review.  In particular,
+	// text/json mode can return a plausible review without proving that the
+	// provider reached a terminal result, while stream-json exposes that result
+	// explicitly and keeps the invocation in its read-only sandbox.
+	// The installed AGY CLI accepts the headless stream protocol without
+	// --print. With --print it treats the following option as the prompt and
+	// exits before consuming the NDJSON request.
+	if (tool === "agy") return ["agy", ["--input-format", "stream-json", "--output-format", "stream-json", "--sandbox", "--mode", "plan", "--print-timeout", "240s", ...optionalModel]];
 	if (tool === "grok") {
 		if (typeof options.promptFile !== "string" || !options.promptFile) throw new Error("grok prompt file is required");
 		return ["grok", ["--output-format", "json", "--permission-mode", "plan", "--verbatim", "--prompt-file", options.promptFile, ...optionalModel]];
@@ -161,8 +189,9 @@ function diagnosticExcerpt(text) {
 }
 
 export function safeFailureReason(tool, error) {
-	if (error?.kind === "invalid_output") return `${tool} reviewer returned invalid output`;
 	const message = String(error?.message || "").toLowerCase();
+	if (/denied tool action and returned no review/.test(message)) return "agy denied tool action and returned no review";
+	if (error?.kind === "invalid_output") return `${tool} reviewer returned invalid output`;
 	const timeoutPhase = message.match(/\b(startup|idle|total) timeout\b/)?.[1];
 	if (timeoutPhase) return `${tool} reviewer ${timeoutPhase} timed out`;
 	if (/timeout/.test(message)) return `${tool} reviewer timed out`;
@@ -186,13 +215,20 @@ function structuredErrorExcerpt(raw) {
 }
 
 
-export async function invoke({ tool, repo, model, prompt, atomIds = [], startupMs, idleMs, totalMs, executable, killGraceMs = 2000, validateOutput = true }) {
+export async function invoke({ tool, repo, model, prompt, atomIds = [], startupMs, idleMs, totalMs, executable, killGraceMs = 2000, validateOutput = true, costLog, reviewId, stage, round, reviewerIndex, requireReview = true }) {
 	for (const [name, value] of Object.entries({ startupMs, idleMs, totalMs, killGraceMs })) {
 		if (!Number.isFinite(value) || value <= 0 || value > 2_147_483_647) throw new Error(`${name} must be a finite positive timer value`);
 	}
 	if (tool === "opencode" && (typeof model !== "string" || !model.trim())) throw new Error("OpenCode reviewer model is required");
+	const startTime = Date.now();
+	let rawOutput = "";
 	let temporaryDir;
 	let childEnvironment;
+	let outcome = "failed";
+	let failureReason = null;
+	let verdict = null;
+	let findingsCount = null;
+	let notRunResult = null;
 	try {
 		let promptFile;
 		if (tool === "grok" || tool === "opencode") temporaryDir = await mkdtemp(path.join(os.tmpdir(), `review-${tool}-`));
@@ -272,7 +308,7 @@ export async function invoke({ tool, repo, model, prompt, atomIds = [], startupM
 			child.once("error", reject);
 			child.once("close", (code, signal) => { closed = true; resolve({ code, signal }); });
 		});
-		if (tool === "grok") child.stdin.end(); else child.stdin.end(prompt);
+		if (tool === "grok") child.stdin.end(); else child.stdin.end(stdinPayload(tool, prompt));
 		try {
 			result = await completion;
 		} finally {
@@ -285,6 +321,7 @@ export async function invoke({ tool, repo, model, prompt, atomIds = [], startupM
 			throw Object.assign(new Error(`${tool} ${timeoutReason} timeout (${result.signal || "exit"})`), { exitCode: 124 });
 		}
 		const raw = Buffer.concat(stdout).toString("utf8");
+		rawOutput = raw;
 		if (result.signal) throw Object.assign(new Error(`${tool} terminated by ${result.signal}`), { exitCode: 1 });
 		if (result.code !== 0) {
 			const diagnostic = structuredErrorExcerpt(raw) || diagnosticExcerpt(stderrTail);
@@ -292,8 +329,47 @@ export async function invoke({ tool, repo, model, prompt, atomIds = [], startupM
 		}
 		if (stdinError) throw Object.assign(new Error(`${tool} stdin failed: ${stdinError.code || stdinError.message}`), { exitCode: 1 });
 		const review = validateOutput ? validateReviewOutput(raw, atomIds) : undefined;
+		outcome = "reviewed";
+		verdict = review?.verdict ?? null;
+		findingsCount = Array.isArray(review?.findings) ? review.findings.length : null;
 		return { raw, review };
+	} catch (error) {
+		error.raw = rawOutput;
+		failureReason = safeFailureReason(tool, error);
+		if (!requireReview) {
+			outcome = "not_run";
+			notRunResult = {
+				status: "NOT_RUN",
+				reviewer: tool,
+				blocking: false,
+				reason: failureReason,
+				cross_validation: false,
+				usable_as_evidence: false,
+			};
+			return { raw: rawOutput, review: notRunResult, notRun: notRunResult };
+		}
+		outcome = "failed";
+		throw error;
 	} finally {
+		const durationMs = Date.now() - startTime;
+		const promptChars = typeof prompt === "string" ? prompt.length : 0;
+		await recordReviewCost({
+			costLog,
+			reviewId,
+			stage,
+			round,
+			reviewerIndex,
+			tool,
+			model,
+			repo,
+			promptChars,
+			durationMs,
+			outcome,
+			failureReason,
+			verdict,
+			findingsCount,
+			rawOutput,
+		});
 		if (childEnvironment) {
 			try {
 				const helpers = await loadChildEnvironmentHelpers();
@@ -318,7 +394,7 @@ export async function runCli(argv) {
 	// The original ask, verbatim. Without it the reviewer can only compare the
 	// change against the author's summary of what was wanted.
 	const request = a.request ? await readFile(a.request, "utf8") : "";
-	const prompt = composePrompt(base, atoms, delta, request);
+	const prompt = composePrompt(base, atoms, delta, request, a.tool);
 	// Grok receives its owner-only prompt path only after the invocation temp
 	// directory exists; use a placeholder for this early supported-tool check.
 	commandFor(a.tool, a.repo, a.model, a.tool === "grok" ? { promptFile: "<temporary-prompt-file>" } : {});
@@ -328,18 +404,32 @@ export async function runCli(argv) {
 		totalMs: Number(a["total-sec"] || 900) * 1000,
 	};
 	for (const [name, value] of Object.entries(timers)) if (!Number.isFinite(value) || value <= 0 || value > 2_147_483_647) throw new Error(`${name} must be a finite positive timer value`);
+
+	const parseNumOrStr = (v) => (v === undefined || v === null ? null : (/^-?\d+$/.test(String(v).trim()) ? Number(v) : v));
+	const reviewId = a["review-id"] ?? null;
+	const stage = a.stage ?? null;
+	const round = parseNumOrStr(a.round);
+	const reviewerIndex = parseNumOrStr(a["reviewer-index"]);
+
 	try {
-		const { review } = await invoke({ tool: a.tool, repo: a.repo, model: a.model, prompt,
+		const { review } = await invoke({
+			tool: a.tool,
+			repo: a.repo,
+			model: a.model,
+			prompt,
 			atomIds: atoms.map(({ id }) => id),
-			...timers });
+			...timers,
+			costLog: a["cost-log"],
+			reviewId,
+			stage,
+			round,
+			reviewerIndex,
+			requireReview,
+		});
 		return review;
 	} catch (error) {
 		const reason = safeFailureReason(a.tool, error);
-		if (requireReview) throw Object.assign(new Error(reason), { exitCode:error.exitCode || 1 });
-		// Self-describing so a downstream reader cannot mistake this for a review
-		// that ran and stayed silent.
-		return { status:"NOT_RUN", reviewer:a.tool, blocking:false, reason,
-			cross_validation: false, usable_as_evidence: false };
+		throw Object.assign(new Error(reason), { exitCode: error.exitCode || 1 });
 	}
 }
 

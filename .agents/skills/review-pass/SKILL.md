@@ -107,6 +107,8 @@ traceability for requirements-driven projects.
   `--require-review false` opt-out may record `NOT_RUN` for ordinary local work,
   but that result cannot satisfy a review or release gate.
 
+오케스트레이터는 리뷰어를 부를 때 `--review-id --stage --round --reviewer-index`를 넘긴다.
+
 ## Arguments
 
 | Argument | Required | Description |
