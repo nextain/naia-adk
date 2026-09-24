@@ -55,8 +55,12 @@ it.
 ### Dashboard and API
 
 A Next.js dashboard manages the workspace visually, backed by a Fastify API
-server. The API exposes workspace metadata (`/api/workspace`), the skill catalog
-(`/api/skills`), file read/write (`/api/files`), and a WebSocket that streams
+server. Top navigation features **Docs** (`/docs`) and **Board** tabs to explore
+company documentation and work boards in one place. With `pnpm adk:setup -- --company <repo-url>`,
+company docs and related project repositories are cloned automatically. See the
+[Onboarding Guide](docs/guides/onboarding.ko.md) for details.
+The API exposes workspace metadata (`/api/workspace`), the skill catalog
+(`/api/skills`), portal documents and assets (`/api/portal`), file read/write (`/api/files`), and a WebSocket that streams
 file-change events (`/api/ws`). Thanks to this API, programs other than the
 dashboard can reach the workspace too.
 

@@ -13,12 +13,13 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n server,dashboard -c blue,green \"tsx packages/server/src/cli.ts serve\" \"pnpm --filter @naia-adk/dashboard dev\"",
+    "dev": "concurrently -n server,dashboard,board -c blue,green,magenta \"tsx packages/server/src/cli.ts serve\" \"pnpm --filter @naia-adk/dashboard dev\" \"node scripts/adk-board.mjs\"",
     "dev:server": "tsx packages/server/src/cli.ts serve",
     "dev:dashboard": "pnpm --filter @naia-adk/dashboard dev",
     "serve": "tsx packages/server/src/cli.ts serve",
     "build": "pnpm -r build",
-    "test": "pnpm -r test",
+    "test": "pnpm -r test && node --test scripts/adk-setup.test.mjs scripts/adk-board.test.mjs",
+    "adk:setup": "node scripts/adk-setup.mjs",
     "test:request-contract": "node scripts/run-request-contract-tests.cjs",
     "test:harness-native": "node scripts/run-native-harness-tests.cjs",
     "test:entry-points": "node .claude/hooks/test/run-sync-entry-points-test.cjs && node .claude/hooks/test/run-agents-context-mirror-test.cjs && node .codex/hooks/test-session-contract-gate.cjs",
