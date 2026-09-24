@@ -5,13 +5,16 @@
   "scripts": {
     "dev": "next dev -p 3142",
     "build": "next build",
-    "start": "next start -p 3142"
+    "start": "next start -p 3142",
+    "test": "node --test app/docs/markdown.test.ts"
   },
   "dependencies": {
     "next": "^15.3.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "lucide-react": "^0.503.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "swr": "^2.3.0"
   },
   "devDependencies": {

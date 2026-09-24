@@ -5,6 +5,7 @@ import { workspaceRoutes } from "./routes/workspace.js"
 import { skillRoutes } from "./routes/skills.js"
 import { fileRoutes } from "./routes/files.js"
 import { watchRoutes } from "./routes/watch.js"
+import { portalRoutes } from "./routes/portal.js"
 
 export interface ServerConfig {
   root: string
@@ -24,6 +25,7 @@ export async function createServer(config: ServerConfig) {
   app.register(skillRoutes, { prefix: "/api/skills" })
   app.register(fileRoutes, { prefix: "/api/files" })
   app.register(watchRoutes, { prefix: "/api/ws" })
+  app.register(portalRoutes, { prefix: "/api/portal" })
 
   app.get("/api/health", async () => ({
     status: "ok",
