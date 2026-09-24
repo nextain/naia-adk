@@ -31,7 +31,7 @@ are visible right away:
   content.
 - **Settings / monitoring** — server config, client status, data directories.
 
-The dashboard forwards `/api/*` requests to the API server on port 3141. To run
+The dashboard forwards only the docs view's `/api/portal` requests to the API server on port 3141. To run
 just one of them, use `pnpm dev:server` (→ 3141) or `pnpm dev:dashboard`
 (→ 3142). The launcher scripts `./start.sh` (Linux/macOS) and `start.bat`
 (Windows) both run `pnpm dev`. The server CLI accepts `--port`, `--host`, and
