@@ -25,6 +25,16 @@ local_projects: {}
 # 형태: <이름>: { type, description, repo, visibility, usedBy, status }
 github_only_repos: {}
 
+# 회사 문서. `pnpm adk:setup -- --company <주소>`가 받아 둔다.
+# 회사 절차·온보딩 질문은 여기부터 찾는다. docs/guides/는 작업 공간 설치 안내일 뿐이다.
+company_docs:
+  path: data-company/<이름>/
+  config: data-company/<이름>/adk-company.json    # 보여 줄 폴더(docs.include), 협업 저장소(repos), 작업보드(board)를 정한다
+  onboarding_order:
+    - "회사 문서의 온보딩 폴더(adk-company.json docs.include 안)"
+    - "docs/guides/onboarding.ko.md — ADK 작업 공간 설치용"
+  when_missing: "data-company/*/adk-company.json이 없으면 workspace-start 스킬로 회사 연결부터 한다"
+
 on_demand_loading:
   index: .agents/context/.ctx-index.json
   sections:
