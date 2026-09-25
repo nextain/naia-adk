@@ -292,10 +292,12 @@ function DocsViewer() {
         <button
           type="button"
           onClick={() => setMobileTreeOpen(!mobileTreeOpen)}
-          className="w-full py-2 px-4 rounded border border-neutral-800 bg-neutral-900 text-sm font-medium flex items-center justify-between"
+          className="w-full py-2 px-4 rounded border border-neutral-800 bg-neutral-900 text-sm font-medium flex items-center justify-between gap-3"
         >
-          <span>문서 목록 {sourceParam && pathParam ? `(${pathParam})` : ""}</span>
-          <span>{mobileTreeOpen ? "▲ 접기" : "▼ 펼치기"}</span>
+          <span className="min-w-0 truncate text-left">
+            문서 목록{pathParam ? ` · ${pathParam.split("/").pop()?.replace(/\.md$/i, "")}` : ""}
+          </span>
+          <span className="shrink-0 whitespace-nowrap text-neutral-400">{mobileTreeOpen ? "▲ 접기" : "▼ 펼치기"}</span>
         </button>
       </div>
 
