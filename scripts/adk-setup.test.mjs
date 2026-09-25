@@ -196,8 +196,27 @@ describe("adk-setup (scripts/adk-setup.mjs)", () => {
 
     // hub는 더러우므로 건너뛰어야 함
     assert.ok(
-      summary.skipped.some((s) => s.target.includes("projects/hub") && s.reason.includes("깨끗하지 않음")),
+      summary.skipped.some((s) => s.target.includes("projects/hub") && s.reason.includes("고치던 파일")),
       "더러운 hub 트리는 pull을 건너뛰어야 합니다.",
     )
+  })
+  it("--pull 요약에 같은 저장소가 두 번 나오지 않음(받음과 건너뜀에 동시에 나오지 않음)", () => {
+    const fakeAdk = path.join(tempBase, "adk-test-pull-once")
+    fs.mkdirSync(fakeAdk, { recursive: true })
+    runSetup({ company: `file://${bareCompanyPath}` }, fakeAdk)
+
+    // 회사 주소를 다시 주면서 --pull 해도 같은 결과여야 한다.
+    for (const options of [{ pull: true }, { company: `file://${bareCompanyPath}`, pull: true }]) {
+      const summary = runSetup(options, fakeAdk)
+      assert.equal(summary.errors.length, 0, JSON.stringify(summary.errors))
+      const names = [
+        ...summary.received.map((r) => r.replace(/^최신으로 받음: /, "")),
+        ...summary.skipped.map((s) => s.target),
+      ]
+      assert.deepEqual(names.filter((n, i) => names.indexOf(n) !== i), [], `두 번 나온 항목: ${names.join(", ")}`)
+      assert.ok(summary.received.includes("최신으로 받음: projects/hub"), summary.received.join(", "))
+      assert.ok(summary.received.includes("최신으로 받음: data-company/remote-company"), summary.received.join(", "))
+      assert.ok(!summary.skipped.some((s) => s.target === "projects/hub"), "깨끗한 hub는 건너뜀에 나오면 안 됩니다.")
+    }
   })
 })

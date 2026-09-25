@@ -149,7 +149,8 @@ export function runSetup(options = {}, customAdkRoot = null) {
     } else {
       const targetDir = path.join(adkRoot, "data-company", repoName)
       if (fs.existsSync(targetDir)) {
-        summary.skipped.push({ target: `data-company/${repoName}`, reason: "이미 존재하는 폴더입니다." })
+        // --pull이면 아래에서 최신으로 받고 그 결과를 따로 적으므로 여기서는 건너뜀으로 적지 않는다.
+        if (!pull) summary.skipped.push({ target: `data-company/${repoName}`, reason: "이미 받아 둔 폴더입니다." })
       } else {
         if (dryRun) {
           summary.received.push(`[dry-run] git clone ${company} data-company/${repoName}`)
@@ -181,7 +182,8 @@ export function runSetup(options = {}, customAdkRoot = null) {
       for (const repo of config.repos) {
         const repoAbsPath = path.resolve(adkRoot, repo.path)
         if (fs.existsSync(repoAbsPath)) {
-          summary.skipped.push({ target: repo.path, reason: "이미 존재하는 폴더입니다." })
+          // --pull이면 아래에서 최신으로 받고 그 결과를 따로 적는다. 같은 저장소가 두 번 나오지 않게 한다.
+          if (!pull) summary.skipped.push({ target: repo.path, reason: "이미 받아 둔 폴더입니다." })
           reposToPull.push({ path: repo.path, absPath: repoAbsPath })
         } else {
           if (dryRun) {
@@ -204,7 +206,7 @@ export function runSetup(options = {}, customAdkRoot = null) {
   // 3. --pull 처리
   if (pull) {
     const pullTargets = [
-      { name: "ADK (root)", absPath: adkRoot },
+      { name: "ADK (맨 위 폴더)", absPath: adkRoot },
     ]
 
     for (const item of companyConfigs) {
@@ -218,7 +220,12 @@ export function runSetup(options = {}, customAdkRoot = null) {
       pullTargets.push({ name: r.path, absPath: r.absPath })
     }
 
+    const seen = new Set()
     for (const target of pullTargets) {
+      // 같은 폴더를 두 번 받지 않는다.
+      const key = path.resolve(target.absPath)
+      if (seen.has(key)) continue
+      seen.add(key)
       if (!fs.existsSync(path.join(target.absPath, ".git"))) {
         continue
       }
@@ -228,21 +235,21 @@ export function runSetup(options = {}, customAdkRoot = null) {
         } else {
           try {
             execFileSync("git", ["pull", "--ff-only"], { cwd: target.absPath, stdio: "inherit" })
-            summary.received.push(`pull 성공: ${target.name}`)
+            summary.received.push(`최신으로 받음: ${target.name}`)
           } catch (err) {
             summary.errors.push(`pull 실패 (${target.name}): ${err.message}`)
           }
         }
       } else {
-        const msg = `작업 트리가 변경되어 건너뜁니다: ${target.name}`
+        const msg = `고치던 파일이 있어 건너뜁니다: ${target.name}`
         console.log(msg)
-        summary.skipped.push({ target: target.name, reason: "작업 트리가 깨끗하지 않음" })
+        summary.skipped.push({ target: target.name, reason: "고치던 파일이 있어 최신으로 받지 않음" })
       }
     }
   }
 
   // 요약 출력
-  console.log("\n================ [ADK Setup 요약] ================")
+  console.log("\n================ 작업 공간 준비 결과 ================")
   if (summary.received.length > 0) {
     console.log("받은 항목:")
     for (const r of summary.received) {
