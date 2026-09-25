@@ -250,6 +250,27 @@ try {
 			"block",
 			`${client} lookalike or chained helper bypass blocked`,
 		);
+		// 쓰기 없음 부류: 출력을 널 장치나 표준 스트림으로만 보내는 읽기 묶음은 무엇도 쓰지 않는다.
+		// 온보딩 실검증에서 이 두 명령이 막혔다.
+		for (const command of [
+			"ls -la AGENTS.md package.json 2>&1 && echo \"---adk:setup---\" && grep -A2 '\"adk:setup\"' package.json",
+			"ls -la . && cat package.json 2>/dev/null | grep -A2 '\"adk:setup\"' && ls data-company 2>/dev/null && git --version && node -v && pnpm -v",
+			"grep -n x AGENTS.md >/dev/null 2>&1",
+			"ls AGENTS.md 2>/dev/stderr",
+		]) {
+			assert.equal(runGate(fixture, "Bash", { command }), null, `${client} a read that writes nothing is not refused: ${command}`);
+		}
+		// 같은 모양이라도 파일에 쓰면 그대로 막힌다.
+		for (const command of [
+			"echo x > AGENTS.md",
+			"ls 2>/dev/null > AGENTS.md",
+			"cat notes.md 2>/dev/null >> .agents/context/agents-rules.json",
+			"ls AGENTS.md 2>/dev/null > /tmp/outside-project.txt",
+			"echo x >/dev/null/../../AGENTS.md",
+		]) {
+			assert.equal(runGate(fixture, "Bash", { command })?.decision, "block", `${client} a redirection into a file still counts as a write: ${command}`);
+		}
+		assert.deepEqual(gate.shellRedirectionTargets("a 2>&1 >/dev/null 2>/dev/stderr > out.txt"), ["out.txt"], "only file destinations are write targets");
 		assert.equal(
 			runGate(fixture, "Write", { file_path: ".agents/session-contracts/bootstrap-contract.json", content: JSON.stringify(bootstrapContract) }),
 			null,
