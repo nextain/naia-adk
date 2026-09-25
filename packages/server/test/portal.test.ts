@@ -141,6 +141,16 @@ describe("Portal Routes (/api/portal)", () => {
     expect(json.board).toEqual({ port: 8894 })
   })
 
+  it("GET /api/portal/workspace: 이 서버가 보여 주는 작업 공간의 실제 경로를 알려 줌", async () => {
+    const app = await createServer({ root: tempRoot, port: 0, host: "127.0.0.1" })
+
+    const res = await app.inject({ method: "GET", url: "/api/portal/workspace" })
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.payload)).toEqual({ root: fs.realpathSync(tempRoot) })
+
+    await app.close()
+  })
+
   it("GET /api/portal/doc: 포함 문서 200, 한글·공백·점 경로 200", async () => {
     const app = await createServer({ root: tempRoot, port: 0, host: "127.0.0.1" })
 

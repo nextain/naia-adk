@@ -8,6 +8,7 @@
       "Bash(node -v)",
       "Bash(node --version)",
       "Bash(pnpm -v)",
+      "Bash(pwd -P)",
       "Bash(pnpm --version)",
       "Bash(pnpm install)",
       "Bash(pnpm adk:setup:*)",
