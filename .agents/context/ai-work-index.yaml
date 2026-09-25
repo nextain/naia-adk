@@ -1,6 +1,12 @@
 # Copyright 2026 Nextain Inc. All rights reserved.
 version: 1
 categories:
+  - name: "workspace-start"
+    keywords: ["시작", "시작하자", "설정", "온보딩", "대시보드", "최신", "start", "setup", "onboarding", "dashboard"]
+    quick_ref: "People talk to the AI and never run setup commands. On the session's first work request, run workspace-start: company link, --pull, start dashboard, give the address."
+    skill: "workspace-start"
+    skill_trigger: "First work request of a session, or any request to set up, update, or open the dashboard — run /workspace-start FIRST."
+    workflows: []
   - name: "submodule-management"
     keywords: ["submodule", "init", "update", "sync"]
     quick_ref: "git submodule update --init --recursive"

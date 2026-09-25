@@ -297,6 +297,19 @@ export const portalRoutes: FastifyPluginCallback = (app, _opts, done) => {
     return reply.send({ sources, board })
   })
 
+  // GET /api/portal/workspace
+  // 이 대시보드가 어느 작업 공간을 보여 주는지 알려 준다. 대시보드(3142)는 /api/portal만
+  // 넘겨주므로, AI가 3142에 떠 있는 것이 자기 작업 공간의 대시보드인지 여기로 확인한다.
+  app.get("/workspace", async (_req, reply) => {
+    let resolved = path.resolve(root)
+    try {
+      resolved = fs.realpathSync(resolved)
+    } catch {
+      // 실제 경로를 못 얻으면 받은 경로를 그대로 알린다.
+    }
+    return reply.send({ root: resolved })
+  })
+
   // GET /api/portal/doc?source=<id>&path=<relative path>
   app.get("/doc", async (req, reply) => {
     const query = req.query as Record<string, string | undefined>

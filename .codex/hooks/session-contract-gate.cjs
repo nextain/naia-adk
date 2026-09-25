@@ -252,7 +252,9 @@ function entrypointMutationOutsideHelper(toolName, toolInput, cwd) {
 	const mentionsEntry = [...ENTRY_POINTS].some((name) =>
 		new RegExp(`(?:^|[\\s/\\\\'\"])+${name.replace(".", "\\.")}(?:$|[\\s'\"]+)`).test(command),
 	);
-	const mutates = /[>]|\b(?:sed|perl|python|node|cp|mv|install|touch|truncate|rm|tee|set-content|add-content|out-file|copy-item|move-item|remove-item|rename-item)\b/i.test(command);
+	// A redirection writes only when it lands in a file. `2>&1` and `2>/dev/null`
+	// write nothing, so the parser decides instead of any `>` character.
+	const mutates = shellRedirectionTargets(command).length > 0 || /\b(?:sed|perl|python|node|cp|mv|install|touch|truncate|rm|tee|set-content|add-content|out-file|copy-item|move-item|remove-item|rename-item)\b/i.test(command);
 	return mentionsEntry && mutates;
 }
 
@@ -388,6 +390,18 @@ function legacyGovernanceScanTargets(statement) {
 }
 
 /**
+ * Output destinations that are not files. Sending output to the null device or
+ * to a standard stream writes nothing a later call can read back, so a
+ * redirection into one is not a write. Judged by what the destination is, not
+ * by which commands happen to use it.
+ */
+const NON_FILE_SINK = /^(?:\/dev\/(?:null|stdout|stderr|fd\/[0-2])|nul|\$null)$/i;
+
+function nonFileSink(target) {
+	return NON_FILE_SINK.test(String(target || ""));
+}
+
+/**
  * Extract output-redirection paths without treating `>` inside quoted command
  * arguments as shell syntax. Keep this parser shared by both governance scans
  * so adjacent, spaced, quoted, and repeated redirects receive the same path
@@ -467,7 +481,7 @@ function shellRedirectionTargets(statement) {
 		}
 		while (/\s/.test(source[cursor] || "")) cursor += 1;
 		const word = readWord(cursor);
-		if (word.value && !(duplicateFd && /^\d+$/.test(word.value))) targets.push(word.value);
+		if (word.value && !(duplicateFd && /^\d+$/.test(word.value)) && !nonFileSink(word.value)) targets.push(word.value);
 		if (word.end > index + 1) index = word.end - 1;
 	}
 	return targets;

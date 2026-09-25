@@ -2,6 +2,23 @@
   "env": {
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "300000"
   },
+  "permissions": {
+    "allow": [
+      "Bash(git --version)",
+      "Bash(node -v)",
+      "Bash(node --version)",
+      "Bash(pnpm -v)",
+      "Bash(pwd -P)",
+      "Bash(pnpm --version)",
+      "Bash(pnpm install)",
+      "Bash(pnpm adk:setup:*)",
+      "Bash(./start.sh)",
+      "Bash(curl -s http://localhost:3141/api/health)",
+      "Bash(curl -s http://localhost:3142/api/portal/workspace)",
+      "Bash(curl -sI http://localhost:3142/docs)",
+      "Bash(ss -ltnpH:*)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
