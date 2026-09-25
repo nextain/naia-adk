@@ -85,3 +85,19 @@ export function resolveRelativePath(currentDocPath: string, targetHref: string):
   }
   return parts.join("/")
 }
+
+// 회사 문서를 맨 위에, 프로젝트 문서를 다음에, ADK(개발자용) 문서를 맨 아래에 둔다.
+export function orderSources<T extends { id: string }>(sources: T[]): T[] {
+  const rank = (id: string) => (id.startsWith("company:") ? 0 : id === "adk" ? 2 : 1)
+  return [...sources].sort((a, b) => rank(a.id) - rank(b.id))
+}
+
+// 트리 순서대로 처음 나오는 문서. 문서 화면에 처음 들어왔을 때 열어 줄 문서를 고른다.
+export function firstDoc(tree: DocTreeNode[]): string | null {
+  for (const node of tree) {
+    if (node.type === "file") return node.path
+    const inner = node.children ? firstDoc(node.children) : null
+    if (inner) return inner
+  }
+  return null
+}

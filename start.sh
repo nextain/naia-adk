@@ -10,7 +10,7 @@ echo ""
 echo "  Server:    http://localhost:3141"
 echo "  Dashboard: http://localhost:3142"
 echo "  Docs:      http://localhost:3142/docs"
-echo "  Board:     http://localhost:8894 (or configured board port)"
+echo "  Docs/Work: http://localhost:3142/docs  (work board: /work)"
 echo ""
 
 exec pnpm dev
