@@ -3,6 +3,8 @@ import assert from "node:assert/strict"
 import {
   WIKI_HREF_PREFIX,
   convertWikiLinks,
+  firstDoc,
+  orderSources,
   findWikiTarget,
   resolveRelativePath,
   splitFrontmatter,
@@ -54,5 +56,17 @@ describe("docs markdown helpers", () => {
     assert.equal(resolveRelativePath("01. 온보딩/README.md", "../05.%20브랜드·마케팅/README.md"), "05. 브랜드·마케팅/README.md")
     assert.equal(resolveRelativePath("a/b.md", "./c.md#절"), "a/c.md")
     assert.equal(resolveRelativePath("a/b.md", "%E0%A4%A.md"), "a/%E0%A4%A.md")
+  })
+})
+
+describe("docs source helpers", () => {
+  it("orderSources: 회사 문서 먼저, ADK 문서 맨 뒤", () => {
+    const ids = orderSources([{ id: "adk" }, { id: "naia-comm" }, { id: "company:x" }]).map((s) => s.id)
+    assert.deepEqual(ids, ["company:x", "naia-comm", "adk"])
+  })
+
+  it("firstDoc: 트리 순서대로 처음 나오는 문서", () => {
+    assert.equal(firstDoc(tree), "01. 온보딩/00.AI와 함께 일하기 시작하기.md")
+    assert.equal(firstDoc([]), null)
   })
 })

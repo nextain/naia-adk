@@ -2,81 +2,67 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import { usePathname } from "next/navigation"
 
 interface PortalData {
   board: { port: number } | null
 }
 
+const tabClass = (active: boolean) =>
+  `whitespace-nowrap px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+    active ? "bg-neutral-800 text-white" : "text-neutral-400 hover:text-white hover:bg-neutral-900"
+  }`
+
 export function Nav() {
-  const [boardPort, setBoardPort] = useState<number | null>(null)
-  const [hostname, setHostname] = useState<string>("localhost")
+  const pathname = usePathname() || "/"
+  const [hasBoard, setHasBoard] = useState<boolean | null>(null)
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      setHostname(window.location.hostname)
-    }
-
     fetch("/api/portal")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: PortalData | null) => {
-        if (data?.board?.port) {
-          setBoardPort(data.board.port)
-        }
-      })
-      .catch(() => {
-        // Portal API not reachable yet
-      })
+      .then((data: PortalData | null) => setHasBoard(Boolean(data?.board?.port)))
+      .catch(() => setHasBoard(false))
   }, [])
 
-  const handleBoardClick = (e: React.MouseEvent) => {
-    if (!boardPort) {
-      e.preventDefault()
-      alert("pnpm adk:setup으로 회사 설정을 먼저 하세요")
-    }
-  }
-
-  const boardHref = boardPort ? `http://${hostname}:${boardPort}/` : "#"
+  const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`)
 
   return (
-    <nav className="border-b border-neutral-800 px-6 py-3 flex items-center gap-8">
-      <Link href="/" className="font-bold text-lg text-white">
+    <nav className="sticky top-0 z-10 h-14 border-b border-neutral-800 bg-neutral-950 px-4 sm:px-6 flex items-center gap-3 sm:gap-6">
+      <Link href="/docs" className="font-bold text-lg text-white shrink-0 whitespace-nowrap">
         Naia ADK
       </Link>
 
-      <div className="flex items-center gap-4">
-        {boardPort ? (
-          <a
-            href={boardHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm font-medium text-neutral-300 hover:text-white"
-          >
-            작업
-          </a>
-        ) : (
-          <button
-            type="button"
-            onClick={handleBoardClick}
-            className="text-sm font-medium text-neutral-500 opacity-50 cursor-not-allowed"
-            title="pnpm adk:setup으로 회사 설정을 먼저 하세요"
-          >
-            작업
-          </button>
-        )}
-        <span className="text-neutral-700">|</span>
-        <Link href="/docs" className="text-sm font-medium text-neutral-300 hover:text-white">
+      <div className="flex items-center gap-1">
+        <Link href="/docs" className={tabClass(isActive("/docs"))}>
           문서
         </Link>
+        {hasBoard === false ? (
+          <span
+            className="px-3 py-1.5 text-sm font-medium text-neutral-600 cursor-not-allowed"
+            title="회사 설정이 없어 작업보드가 없습니다. pnpm adk:setup으로 회사 설정을 먼저 하세요."
+          >
+            작업
+          </span>
+        ) : (
+          <Link href="/work" className={tabClass(isActive("/work"))}>
+            작업
+          </Link>
+        )}
       </div>
 
-      <div className="flex items-center gap-6 ml-4">
-        <Link href="/workspace" className="text-sm text-neutral-400 hover:text-white">
+      {/* 개발자용 화면은 뒤로 뺀다. 좁은 화면에서는 숨긴다. */}
+      <div className="ml-auto hidden md:flex items-center gap-1">
+        <span className="px-2 text-xs text-neutral-600 whitespace-nowrap">개발자 도구</span>
+        <Link href="/" className={tabClass(pathname === "/")}>
+          Overview
+        </Link>
+        <Link href="/workspace" className={tabClass(isActive("/workspace"))}>
           Workspace
         </Link>
-        <Link href="/skills" className="text-sm text-neutral-400 hover:text-white">
+        <Link href="/skills" className={tabClass(isActive("/skills"))}>
           Skills
         </Link>
-        <Link href="/settings" className="text-sm text-neutral-400 hover:text-white">
+        <Link href="/settings" className={tabClass(isActive("/settings"))}>
           Settings
         </Link>
       </div>

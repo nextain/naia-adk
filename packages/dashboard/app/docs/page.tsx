@@ -9,6 +9,8 @@ import {
   WIKI_HREF_PREFIX,
   convertWikiLinks,
   findWikiTarget,
+  firstDoc,
+  orderSources,
   resolveRelativePath,
   splitFrontmatter,
   type DocTreeNode,
@@ -33,14 +35,18 @@ function TreeItem({
   currentSource,
   currentPath,
   level = 0,
+  defaultOpen = true,
 }: {
   node: TreeNode
   sourceId: string
   currentSource: string | null
   currentPath: string | null
   level?: number
+  defaultOpen?: boolean
 }) {
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(
+    defaultOpen || (currentSource === sourceId && Boolean(currentPath?.startsWith(`${node.path}/`))),
+  )
   const isSelected = currentSource === sourceId && currentPath === node.path
 
   if (node.type === "directory") {
@@ -65,6 +71,7 @@ function TreeItem({
                 currentSource={currentSource}
                 currentPath={currentPath}
                 level={level + 1}
+                defaultOpen={defaultOpen}
               />
             ))}
           </div>
@@ -85,6 +92,35 @@ function TreeItem({
     >
       {node.name.replace(/\.md$/i, "")}
     </Link>
+  )
+}
+
+// 여러 줄 명령을 한 덩어리로 보여 주고 통째로 복사할 수 있게 한다.
+function CodeBlock({ children }: { children: React.ReactNode }) {
+  const [copied, setCopied] = useState(false)
+  const copy = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const text = e.currentTarget.parentElement?.querySelector("pre")?.innerText ?? ""
+    navigator.clipboard
+      ?.writeText(text.replace(/\n$/, ""))
+      .then(() => {
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
+      })
+      .catch(() => {})
+  }
+  return (
+    <div className="relative my-4">
+      <pre className="p-4 pr-16 rounded-lg bg-neutral-900 border border-neutral-800 overflow-x-auto text-xs font-mono text-neutral-200 [&>code]:p-0 [&>code]:border-0 [&>code]:bg-transparent">
+        {children}
+      </pre>
+      <button
+        type="button"
+        onClick={copy}
+        className="absolute top-2 right-2 px-2 py-1 rounded text-xs bg-neutral-800 text-neutral-300 hover:bg-neutral-700"
+      >
+        {copied ? "복사됨" : "복사"}
+      </button>
+    </div>
   )
 }
 
@@ -140,7 +176,18 @@ function DocsViewer() {
       })
   }, [sourceParam, pathParam])
 
-  const sources = portal?.sources || []
+  const sources = orderSources(portal?.sources || [])
+
+  // 문서를 고르지 않고 들어오면 회사 문서의 첫 문서(보통 온보딩 시작하기)를 연다.
+  useEffect(() => {
+    if (sourceParam || pathParam || !portal) return
+    const company = orderSources(portal.sources).find((s) => s.id.startsWith("company:"))
+    const first = company ? firstDoc(company.tree) : null
+    if (company && first) {
+      router.replace(`/docs?source=${encodeURIComponent(company.id)}&path=${encodeURIComponent(first)}`)
+    }
+  }, [portal, sourceParam, pathParam, router])
+
   const parsedDoc = docContent ? splitFrontmatter(docContent) : null
   const docBody = parsedDoc ? convertWikiLinks(parsedDoc.body) : null
   const hasCompanySource = sources.some((s) => s.id.startsWith("company:"))
@@ -166,7 +213,14 @@ function DocsViewer() {
       }
       const tree = sources.find((s) => s.id === sourceParam)?.tree ?? []
       const found = sourceParam ? findWikiTarget(tree, target) : null
-      if (!found) return <span className="text-neutral-400">{children}</span>
+      if (!found) {
+        return (
+          <span className="text-neutral-400" title="이 문서는 문서 화면에 보이는 폴더에 없습니다">
+            {children}
+            <span className="ml-1 text-xs text-neutral-600">(문서 화면에 없음)</span>
+          </span>
+        )
+      }
       return (
         <Link
           href={`/docs?source=${encodeURIComponent(sourceParam as string)}&path=${encodeURIComponent(found)}`}
@@ -254,9 +308,9 @@ function DocsViewer() {
         >
           {sources.map((source) => (
             <div key={source.id} className="space-y-2">
-              <div className="text-xs font-bold uppercase tracking-wider text-neutral-400 px-2 flex items-center justify-between">
+              <div className="text-xs font-bold tracking-wider text-neutral-400 px-2 flex items-center justify-between">
                 <span>{source.title}</span>
-                <span className="text-[10px] text-neutral-600 font-mono">{source.id}</span>
+                {source.id === "adk" && <span className="text-[10px] font-normal text-neutral-600">개발자용</span>}
               </div>
               {source.tree.length > 0 ? (
                 <div className="space-y-0.5">
@@ -267,6 +321,7 @@ function DocsViewer() {
                       sourceId={source.id}
                       currentSource={sourceParam}
                       currentPath={pathParam}
+                      defaultOpen={source.id !== "adk"}
                     />
                   ))}
                 </div>
@@ -320,18 +375,17 @@ function DocsViewer() {
                   ),
                   th: ({ children }) => <th className="px-4 py-2 bg-neutral-900 text-left text-xs font-semibold text-neutral-300 uppercase tracking-wider">{children}</th>,
                   td: ({ children }) => <td className="px-4 py-2 text-sm text-neutral-300 border-t border-neutral-800/80">{children}</td>,
-                  code: ({ className, children }) => {
-                    const isInline = !className
-                    return isInline ? (
-                      <code className="px-1.5 py-0.5 rounded bg-neutral-900 border border-neutral-800 text-neutral-200 font-mono text-xs">
-                        {children}
-                      </code>
-                    ) : (
-                      <pre className="p-4 rounded-lg bg-neutral-900 border border-neutral-800 overflow-x-auto my-4 text-xs font-mono text-neutral-200">
-                        <code>{children}</code>
-                      </pre>
-                    )
-                  },
+                  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+                  code: ({ className, children }) => (
+                    <code
+                      className={
+                        className ??
+                        "px-1.5 py-0.5 rounded bg-neutral-900 border border-neutral-800 text-neutral-200 font-mono text-xs"
+                      }
+                    >
+                      {children}
+                    </code>
+                  ),
                 }}
               >
                 {docBody}
@@ -353,7 +407,6 @@ function DocsViewer() {
                   <div key={s.id} className="p-4 rounded-lg border border-neutral-800 bg-neutral-900/50 space-y-2">
                     <div className="flex items-center justify-between">
                       <h3 className="font-semibold text-white">{s.title}</h3>
-                      <span className="text-xs font-mono text-neutral-500">{s.id}</span>
                     </div>
                     <p className="text-xs text-neutral-400">
                       {s.tree.length > 0 ? `${s.tree.length}개 항목` : "문서 없음"}
