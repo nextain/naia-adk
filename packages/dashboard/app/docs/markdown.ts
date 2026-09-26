@@ -5,7 +5,10 @@ export interface DocTreeNode {
   name: string
   path: string
   type: "file" | "directory"
+  kind?: string
+  size?: number
   children?: DocTreeNode[]
+  truncated?: boolean
 }
 
 export const WIKI_HREF_PREFIX = "#wiki:"
@@ -42,13 +45,17 @@ function stripMd(value: string): string {
 
 // [[대상]]이 가리키는 문서를 같은 출처의 트리에서 찾는다.
 // 경로까지 적었으면 경로 끝이 맞는 문서만, 이름만 적었으면 이름이 같은 첫 문서.
+// 문서 화면: kind === "doc"만 고른다.
 export function findWikiTarget(tree: DocTreeNode[], target: string): string | null {
   const wanted = stripMd(target.replace(/\\/g, "/").replace(/^\/+/, ""))
   const files: string[] = []
   const walk = (nodes: DocTreeNode[]) => {
     for (const node of nodes) {
-      if (node.type === "file") files.push(node.path)
-      else if (node.children) walk(node.children)
+      if (node.type === "file") {
+        if (!node.kind || node.kind === "doc") files.push(node.path)
+      } else if (node.children) {
+        walk(node.children)
+      }
     }
   }
   walk(tree)
@@ -93,9 +100,12 @@ export function orderSources<T extends { id: string }>(sources: T[]): T[] {
 }
 
 // 트리 순서대로 처음 나오는 문서. 문서 화면에 처음 들어왔을 때 열어 줄 문서를 고른다.
+// 문서 화면: kind === "doc"만 고른다.
 export function firstDoc(tree: DocTreeNode[]): string | null {
   for (const node of tree) {
-    if (node.type === "file") return node.path
+    if (node.type === "file") {
+      if (!node.kind || node.kind === "doc") return node.path
+    }
     const inner = node.children ? firstDoc(node.children) : null
     if (inner) return inner
   }

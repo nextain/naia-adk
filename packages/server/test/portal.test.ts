@@ -99,6 +99,7 @@ describe("Portal Routes (/api/portal)", () => {
     const res = await app.inject({
       method: "GET",
       url: "/api/portal",
+      headers: { host: "localhost:0" },
     })
 
     expect(res.statusCode).toBe(200)
@@ -144,7 +145,11 @@ describe("Portal Routes (/api/portal)", () => {
   it("GET /api/portal/workspace: 이 서버가 보여 주는 작업 공간의 실제 경로를 알려 줌", async () => {
     const app = await createServer({ root: tempRoot, port: 0, host: "127.0.0.1" })
 
-    const res = await app.inject({ method: "GET", url: "/api/portal/workspace" })
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/portal/workspace",
+      headers: { host: "localhost:0" },
+    })
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.payload)).toEqual({ root: fs.realpathSync(tempRoot) })
 
@@ -158,6 +163,7 @@ describe("Portal Routes (/api/portal)", () => {
     const res1 = await app.inject({
       method: "GET",
       url: "/api/portal/doc?source=company:co-docs&path=01.%20%EC%98%A8%EB%B3%B4%EB%94%A9/a.md",
+      headers: { host: "localhost:0" },
     })
     expect(res1.statusCode).toBe(200)
     expect(res1.payload).toBe("# 온보딩 A 문서")
@@ -166,6 +172,7 @@ describe("Portal Routes (/api/portal)", () => {
     const res2 = await app.inject({
       method: "GET",
       url: `/api/portal/doc?source=company:co-docs&path=${encodeURIComponent("05. 브랜드·마케팅/03. 콘텐츠/세계관.md")}`,
+      headers: { host: "localhost:0" },
     })
     expect(res2.statusCode).toBe(200)
     expect(res2.payload).toBe("# 세계관 설정집")
@@ -174,6 +181,7 @@ describe("Portal Routes (/api/portal)", () => {
     const res3 = await app.inject({
       method: "GET",
       url: "/api/portal/doc?source=hub&path=docs/x.md",
+      headers: { host: "localhost:0" },
     })
     expect(res3.statusCode).toBe(200)
     expect(res3.payload).toBe("# 허브 문서 X")
@@ -186,6 +194,7 @@ describe("Portal Routes (/api/portal)", () => {
     const res1 = await app.inject({
       method: "GET",
       url: `/api/portal/doc?source=company:co-docs&path=${encodeURIComponent("10. 증빙서류/secret.md")}`,
+      headers: { host: "localhost:0" },
     })
     expect(res1.statusCode).toBe(404)
 
@@ -193,6 +202,7 @@ describe("Portal Routes (/api/portal)", () => {
     const res2 = await app.inject({
       method: "GET",
       url: `/api/portal/doc?source=company:co-docs&path=${encodeURIComponent("01. 온보딩/../10. 증빙서류/secret.md")}`,
+      headers: { host: "localhost:0" },
     })
     expect(res2.statusCode).toBe(404)
 
@@ -200,6 +210,7 @@ describe("Portal Routes (/api/portal)", () => {
     const res3 = await app.inject({
       method: "GET",
       url: `/api/portal/doc?source=company:co-docs&path=${encodeURIComponent("01. 온보딩/symlink-outside.md")}`,
+      headers: { host: "localhost:0" },
     })
     expect(res3.statusCode).toBe(404)
 
@@ -208,6 +219,7 @@ describe("Portal Routes (/api/portal)", () => {
       const res = await app.inject({
         method: "GET",
         url: `/api/portal/doc?source=company:co-docs&path=${encodeURIComponent(linked)}`,
+        headers: { host: "localhost:0" },
       })
       expect(res.statusCode).toBe(404)
     }
@@ -216,6 +228,7 @@ describe("Portal Routes (/api/portal)", () => {
     const resPct = await app.inject({
       method: "GET",
       url: `/api/portal/doc?source=company:co-docs&path=${encodeURIComponent("01. 온보딩/100% 완료.md")}`,
+      headers: { host: "localhost:0" },
     })
     expect(resPct.statusCode).toBe(200)
 
@@ -223,6 +236,7 @@ describe("Portal Routes (/api/portal)", () => {
     const res4 = await app.inject({
       method: "GET",
       url: `/api/portal/doc?source=company:co-docs&path=${encodeURIComponent("01. 온보딩/notes.txt")}`,
+      headers: { host: "localhost:0" },
     })
     expect(res4.statusCode).toBe(404)
   })
@@ -234,21 +248,24 @@ describe("Portal Routes (/api/portal)", () => {
     const res = await app.inject({
       method: "GET",
       url: `/api/portal/asset?source=company:co-docs&path=${encodeURIComponent("01. 온보딩/logo.png")}`,
+      headers: { host: "localhost:0" },
     })
     expect(res.statusCode).toBe(200)
     expect(res.headers["content-type"]).toBe("image/png")
 
-    // .txt 등 비그림 파일 404
+    // .txt 등 비그림 파일은 새 보기 보호로 믿지 않는 요청에서 403 (FE 8장 116행)
     const resTxt = await app.inject({
       method: "GET",
       url: `/api/portal/asset?source=company:co-docs&path=${encodeURIComponent("01. 온보딩/notes.txt")}`,
+      headers: { host: "localhost:0" },
     })
-    expect(resTxt.statusCode).toBe(404)
+    expect(resTxt.statusCode).toBe(403)
 
     // 제외 폴더 404
     const resSecret = await app.inject({
       method: "GET",
       url: `/api/portal/asset?source=company:co-docs&path=${encodeURIComponent("10. 증빙서류/secret.png")}`,
+      headers: { host: "localhost:0" },
     })
     expect(resSecret.statusCode).toBe(404)
   })
@@ -262,6 +279,7 @@ describe("Portal Routes (/api/portal)", () => {
     const res = await app.inject({
       method: "GET",
       url: "/api/portal",
+      headers: { host: "localhost:0" },
     })
     expect(res.statusCode).toBe(200)
     const json = JSON.parse(res.payload)

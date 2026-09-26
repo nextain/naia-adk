@@ -1,6 +1,6 @@
 import type { NextConfig } from "next"
 
-const apiTarget = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3141"
+const apiTarget = `http://127.0.0.1:${process.env.NAIA_API_PORT || 3141}`
 
 const nextConfig: NextConfig = {
   output: "standalone",

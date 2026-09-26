@@ -1,7 +1,7 @@
 // 회사가 정한 작업보드를 대시보드와 같은 주소(/board/...)로 넘겨준다.
 // 작업보드 포트는 회사 설정(adk-company.json)에서 읽으므로 사람은 대시보드 주소 하나만 기억하면 된다.
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3141"
+import { apiBase } from "../../api-base"
 const BOARD_HOST = process.env.ADK_BOARD_HOST || "127.0.0.1"
 
 // 작업보드 관리 기능이 쓰는 헤더만 넘긴다(쿠키 등 대시보드 쪽 헤더는 넘기지 않는다).
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic"
 
 async function boardPort(): Promise<number | null> {
   try {
-    const res = await fetch(`${API}/api/portal`, { cache: "no-store" })
+    const res = await fetch(`${apiBase()}/api/portal`, { cache: "no-store" })
     if (!res.ok) return null
     const data = (await res.json()) as { board?: { port?: number } | null }
     const port = data.board?.port

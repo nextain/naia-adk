@@ -1,7 +1,7 @@
 import { promises as fs } from "fs"
 import path from "path"
 
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3141";
+import { apiBase } from "../api-base"
 
 async function getConfigFiles(root: string) {
   const files: { name: string; path: string }[] = []
@@ -17,7 +17,7 @@ async function getConfigFiles(root: string) {
 
 async function getServerHealth() {
   try {
-    const res = await fetch(`${API}/api/health`, { cache: "no-store" })
+    const res = await fetch(`${apiBase()}/api/health`, { cache: "no-store" })
     if (res.ok) return await res.json()
   } catch {}
   return null
