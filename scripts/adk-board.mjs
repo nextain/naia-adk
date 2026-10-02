@@ -6,6 +6,41 @@ import process from "node:process"
 import { spawn } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
+function checkQueueRepo(adkRoot, config) {
+  const queueRepo = config.board.queueRepo
+  // 없음 세 값: undefined, null, ""
+  if (queueRepo === undefined || queueRepo === null || queueRepo === "") {
+    return { kind: "none" }
+  }
+
+  // 유효성 검사: 공백만이 아닌 문자열이어야 함
+  if (typeof queueRepo !== "string" || queueRepo.trim() === "") {
+    return { kind: "invalid", queueRepo }
+  }
+
+  // repos[]가 배열이어야 하고 일치하는 id 항목이 있어야 함
+  if (!Array.isArray(config.repos)) {
+    return { kind: "invalid", queueRepo }
+  }
+
+  const targetRepo = config.repos.find((r) => r && typeof r === "object" && r.id === queueRepo)
+  if (!targetRepo || typeof targetRepo.path !== "string" || targetRepo.path.trim() === "") {
+    return { kind: "invalid", queueRepo }
+  }
+
+  // 절대 경로가 존재하는 디렉터리여야 함 (예외는 invalid로 처리)
+  try {
+    const repoAbsPath = path.resolve(adkRoot, targetRepo.path)
+    const stat = fs.statSync(repoAbsPath)
+    if (!stat.isDirectory()) {
+      return { kind: "invalid", queueRepo }
+    }
+    return { kind: "valid", queueRepoDir: repoAbsPath, queueRepo }
+  } catch {
+    return { kind: "invalid", queueRepo }
+  }
+}
+
 export function resolveBoardConfig(adkRoot, env = process.env) {
   const dataCompanyDir = path.join(adkRoot, "data-company")
   if (!fs.existsSync(dataCompanyDir)) {
@@ -19,6 +54,10 @@ export function resolveBoardConfig(adkRoot, env = process.env) {
     return null
   }
 
+  // 1단계: data-company/*/adk-company.json을 전부 읽어,
+  // JSON으로 읽히고 board가 객체인 설정 가운데 board.queueRepo가 "없음"이 아닌 것을 모두 검사한다.
+  // 이 검사는 board.repo·board.script·board.port·작업판 스크립트 존재 같은 기존 건너뛰기 조건보다 먼저, 그 조건과 무관하게 한다.
+  // 하나라도 잘못이면 그 자리에서 console.warn으로 한 줄 알리고 resolveBoardConfig 전체가 null을 돌려준다.
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
     const configPath = path.join(dataCompanyDir, entry.name, "adk-company.json")
@@ -31,7 +70,36 @@ export function resolveBoardConfig(adkRoot, env = process.env) {
       continue
     }
 
-    if (!config || typeof config !== "object" || !config.board || typeof config.board !== "object") {
+    if (!config || typeof config !== "object" || !config.board || typeof config.board !== "object" || Array.isArray(config.board)) {
+      continue
+    }
+
+    const check = checkQueueRepo(adkRoot, config)
+    if (check.kind === "invalid") {
+      let warnMsg = `작업보드 대기열 저장소(queueRepo) 설정이 잘못되어 작업보드를 띄우지 않습니다: ${configPath}`
+      if (typeof check.queueRepo === "string") {
+        warnMsg += ` (${check.queueRepo})`
+      }
+      console.warn(warnMsg)
+      return null
+    }
+  }
+
+  // 2단계: 1단계에서 잘못된 queueRepo가 하나도 없을 때만 지금과 같은 순회·건너뛰기·첫 유효 설정 반환을 그대로 하고,
+  // 고른 설정에 유효한 queueRepo가 있으면 인자를 더한다.
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const configPath = path.join(dataCompanyDir, entry.name, "adk-company.json")
+    if (!fs.existsSync(configPath)) continue
+
+    let config
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+    } catch {
+      continue
+    }
+
+    if (!config || typeof config !== "object" || !config.board || typeof config.board !== "object" || Array.isArray(config.board)) {
       continue
     }
 
@@ -71,6 +139,13 @@ export function resolveBoardConfig(adkRoot, env = process.env) {
       docsViewerUrl,
     ]
 
+    const queueCheck = checkQueueRepo(adkRoot, config)
+    let queueRepoDir = null
+    if (queueCheck.kind === "valid") {
+      queueRepoDir = queueCheck.queueRepoDir
+      args.push("--repo-root", queueRepoDir)
+    }
+
     return {
       repoDir: repoAbsPath,
       scriptPath: scriptAbsPath,
@@ -79,6 +154,7 @@ export function resolveBoardConfig(adkRoot, env = process.env) {
       publicHost,
       docsViewerUrl,
       args,
+      queueRepoDir,
     }
   }
 

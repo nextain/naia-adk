@@ -172,4 +172,382 @@ describe("adk-board (scripts/adk-board.mjs)", () => {
     assert.ok(result.stdout.includes("board running"))
     assert.equal(fs.existsSync(marker), true)
   })
+
+  // (가) 없음 세 값(undefined, null, "")
+  it("(가) board.queueRepo 없음 세 값(undefined, null, ''): --repo-root 없이 기본 인자 유지, queueRepoDir === null", () => {
+    const noneValues = [undefined, null, ""]
+    for (const [idx, val] of noneValues.entries()) {
+      const root = path.join(tempRoot, `none-val-${idx}`)
+      const companyDir = path.join(root, "data-company", "my-company")
+      fs.mkdirSync(companyDir, { recursive: true })
+      const hubDir = path.join(root, "projects", "hub", "scripts")
+      fs.mkdirSync(hubDir, { recursive: true })
+      const scriptFile = path.join(hubDir, "board-server.mjs")
+      fs.writeFileSync(scriptFile, "console.log('board')")
+
+      const config = {
+        schemaVersion: 1,
+        repos: [{ id: "hub", path: "projects/hub" }],
+        board: {
+          repo: "hub",
+          script: "scripts/board-server.mjs",
+          port: 8894,
+          ...(val !== undefined ? { queueRepo: val } : {}),
+        },
+      }
+      fs.writeFileSync(path.join(companyDir, "adk-company.json"), JSON.stringify(config, null, 2))
+
+      const result = resolveBoardConfig(root, {})
+      assert.ok(result !== null, `val=${val} 이어도 result가 null이 아니어야 합니다.`)
+      assert.equal(result.queueRepoDir, null)
+      assert.equal(result.args.includes("--repo-root"), false)
+      assert.deepEqual(result.args, [
+        scriptFile,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8894",
+        "--docs-viewer-url",
+        "http://localhost:3142/docs",
+      ])
+    }
+  })
+
+  // (나) 유효한 queueRepo
+  it("(나) board.queueRepo 유효: --repo-root와 queueRepoDir에 큐 저장소 절대 경로 설정, repoDir는 유지", () => {
+    const root = path.join(tempRoot, "valid-queue-repo")
+    const companyDir = path.join(root, "data-company", "my-company")
+    fs.mkdirSync(companyDir, { recursive: true })
+    const hubDir = path.join(root, "projects", "hub", "scripts")
+    fs.mkdirSync(hubDir, { recursive: true })
+    const scriptFile = path.join(hubDir, "board-server.mjs")
+    fs.writeFileSync(scriptFile, "console.log('board')")
+    const queueDir = path.join(root, "projects", "queue-repo")
+    fs.mkdirSync(queueDir, { recursive: true })
+
+    const config = {
+      schemaVersion: 1,
+      repos: [
+        { id: "hub", path: "projects/hub" },
+        { id: "queue-repo", path: "projects/queue-repo" },
+      ],
+      board: {
+        repo: "hub",
+        script: "scripts/board-server.mjs",
+        port: 8894,
+        queueRepo: "queue-repo",
+      },
+    }
+    fs.writeFileSync(path.join(companyDir, "adk-company.json"), JSON.stringify(config, null, 2))
+
+    const result = resolveBoardConfig(root, {})
+    assert.ok(result !== null)
+    assert.equal(result.repoDir, path.resolve(root, "projects/hub"))
+    assert.equal(result.queueRepoDir, queueDir)
+    assert.equal(result.args[result.args.length - 2], "--repo-root")
+    assert.equal(result.args[result.args.length - 1], queueDir)
+    assert.deepEqual(result.args.slice(0, -2), [
+      scriptFile,
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8894",
+      "--docs-viewer-url",
+      "http://localhost:3142/docs",
+    ])
+  })
+
+  // (다) 잘못된 값 각각
+  it("(다) 잘못된 queueRepo 값 각각: 예외 없이 null 반환 및 console.warn 1회 호출", () => {
+    const cases = [
+      { name: "false", queueRepo: false },
+      { name: "true", queueRepo: true },
+      { name: "0", queueRepo: 0 },
+      { name: "42", queueRepo: 42 },
+      { name: "empty-object", queueRepo: {} },
+      { name: "empty-array", queueRepo: [] },
+      { name: "whitespace-only", queueRepo: "   " },
+      { name: "missing-id", queueRepo: "missing-id" },
+      { name: "repos-missing", queueRepo: "queue", omitRepos: true },
+      { name: "repos-null", queueRepo: "queue", reposValue: null },
+      { name: "repos-object", queueRepo: "queue", reposValue: {} },
+      { name: "path-missing", queueRepo: "queue", repoEntry: { id: "queue" } },
+      { name: "path-number", queueRepo: "queue", repoEntry: { id: "queue", path: 123 } },
+      { name: "path-empty-string", queueRepo: "queue", repoEntry: { id: "queue", path: "" } },
+      { name: "path-non-existent", queueRepo: "queue", repoEntry: { id: "queue", path: "projects/non-existent" } },
+      { name: "path-is-file", queueRepo: "queue", isFile: true },
+      { name: "path-symlink-loop", queueRepo: "queue", isSymlinkLoop: true },
+    ]
+
+    for (const [idx, c] of cases.entries()) {
+      const root = path.join(tempRoot, `invalid-case-${idx}`)
+      const companyDir = path.join(root, "data-company", "my-company")
+      fs.mkdirSync(companyDir, { recursive: true })
+      const hubDir = path.join(root, "projects", "hub", "scripts")
+      fs.mkdirSync(hubDir, { recursive: true })
+      const scriptFile = path.join(hubDir, "board-server.mjs")
+      fs.writeFileSync(scriptFile, "console.log('board')")
+
+      let repos = [{ id: "hub", path: "projects/hub" }]
+      if (c.repoEntry) {
+        repos.push(c.repoEntry)
+      } else if (c.isFile) {
+        const filePath = path.join(root, "projects", "a-file.txt")
+        fs.mkdirSync(path.dirname(filePath), { recursive: true })
+        fs.writeFileSync(filePath, "regular file")
+        repos.push({ id: "queue", path: "projects/a-file.txt" })
+      } else if (c.isSymlinkLoop) {
+        const loopPath = path.join(root, "projects", "loop")
+        fs.mkdirSync(path.dirname(loopPath), { recursive: true })
+        fs.symlinkSync("loop", loopPath)
+        repos.push({ id: "queue", path: "projects/loop" })
+      } else if (c.reposValue !== undefined) {
+        repos = c.reposValue
+      }
+
+      const config = {
+        schemaVersion: 1,
+        board: {
+          repo: "hub",
+          script: "scripts/board-server.mjs",
+          port: 8894,
+          queueRepo: c.queueRepo,
+        },
+      }
+      if (!c.omitRepos) {
+        config.repos = repos
+      }
+
+      const configPath = path.join(companyDir, "adk-company.json")
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
+
+      let expectedMsg = `작업보드 대기열 저장소(queueRepo) 설정이 잘못되어 작업보드를 띄우지 않습니다: ${configPath}`
+      if (typeof c.queueRepo === "string") {
+        expectedMsg += ` (${c.queueRepo})`
+      }
+
+      const warnings = []
+      const origWarn = console.warn
+      console.warn = (...args) => warnings.push(args.join(" "))
+      try {
+        const result = resolveBoardConfig(root, {})
+        assert.equal(result, null, `case ${c.name}: 결과는 null이어야 합니다.`)
+        assert.equal(warnings.length, 1, `case ${c.name}: 경고가 정확히 1회 호출되어야 합니다.`)
+        assert.equal(warnings[0], expectedMsg, `case ${c.name}: 경고 문구가 일치해야 합니다.`)
+      } finally {
+        console.warn = origWarn
+      }
+    }
+  })
+
+  // (라) 다른 설정으로 넘어가지 않음
+  it("(라) 다른 설정으로 넘어가지 않음: 잘못된 queueRepo와 유효 설정이 함께 있으면 어느 순서든 결과는 null", () => {
+    // 순서 1: a=잘못, b=유효
+    {
+      const root = path.join(tempRoot, "no-fallback-order-1")
+      const compA = path.join(root, "data-company", "a")
+      const compB = path.join(root, "data-company", "b")
+      fs.mkdirSync(compA, { recursive: true })
+      fs.mkdirSync(compB, { recursive: true })
+
+      const hubDir = path.join(root, "projects", "hub", "scripts")
+      fs.mkdirSync(hubDir, { recursive: true })
+      fs.writeFileSync(path.join(hubDir, "board-server.mjs"), "console.log('board')")
+
+      fs.writeFileSync(
+        path.join(compA, "adk-company.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          repos: [{ id: "hub", path: "projects/hub" }],
+          board: { repo: "hub", script: "scripts/board-server.mjs", port: 8894, queueRepo: "non-existent" },
+        }),
+      )
+      fs.writeFileSync(
+        path.join(compB, "adk-company.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          repos: [{ id: "hub", path: "projects/hub" }],
+          board: { repo: "hub", script: "scripts/board-server.mjs", port: 8895 },
+        }),
+      )
+
+      const origWarn = console.warn
+      console.warn = () => {}
+      try {
+        const res = resolveBoardConfig(root, {})
+        assert.equal(res, null, "a가 잘못되었을 때 b로 넘어가지 않고 null을 반환해야 합니다.")
+      } finally {
+        console.warn = origWarn
+      }
+    }
+
+    // 순서 2: a=유효, b=잘못
+    {
+      const root = path.join(tempRoot, "no-fallback-order-2")
+      const compA = path.join(root, "data-company", "a")
+      const compB = path.join(root, "data-company", "b")
+      fs.mkdirSync(compA, { recursive: true })
+      fs.mkdirSync(compB, { recursive: true })
+
+      const hubDir = path.join(root, "projects", "hub", "scripts")
+      fs.mkdirSync(hubDir, { recursive: true })
+      fs.writeFileSync(path.join(hubDir, "board-server.mjs"), "console.log('board')")
+
+      fs.writeFileSync(
+        path.join(compA, "adk-company.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          repos: [{ id: "hub", path: "projects/hub" }],
+          board: { repo: "hub", script: "scripts/board-server.mjs", port: 8894 },
+        }),
+      )
+      fs.writeFileSync(
+        path.join(compB, "adk-company.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          repos: [{ id: "hub", path: "projects/hub" }],
+          board: { repo: "hub", script: "scripts/board-server.mjs", port: 8895, queueRepo: "non-existent" },
+        }),
+      )
+
+      const origWarn = console.warn
+      console.warn = () => {}
+      try {
+        const res = resolveBoardConfig(root, {})
+        assert.equal(res, null, "b가 잘못되었을 때 a가 유효하더라도 1단계에서 null을 반환해야 합니다.")
+      } finally {
+        console.warn = origWarn
+      }
+    }
+  })
+
+  // (마) 기존 조건보다 먼저 차단
+  it("(마) 기존 조건보다 먼저 차단: board.script 없는 설정(queueRepo 잘못됨)과 유효 설정 공존 시 두 배치 모두 null 및 경고 1회", () => {
+    // 배치 1: a=script없음+queueRepo잘못, b=유효
+    {
+      const root = path.join(tempRoot, "block-before-script-1")
+      const compA = path.join(root, "data-company", "a")
+      const compB = path.join(root, "data-company", "b")
+      fs.mkdirSync(compA, { recursive: true })
+      fs.mkdirSync(compB, { recursive: true })
+
+      const hubDir = path.join(root, "projects", "hub", "scripts")
+      fs.mkdirSync(hubDir, { recursive: true })
+      fs.writeFileSync(path.join(hubDir, "board-server.mjs"), "console.log('board')")
+
+      fs.writeFileSync(
+        path.join(compA, "adk-company.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          repos: [{ id: "hub", path: "projects/hub" }],
+          board: { repo: "hub", script: "scripts/no-such-script.mjs", port: 8894, queueRepo: "invalid-id" },
+        }),
+      )
+      fs.writeFileSync(
+        path.join(compB, "adk-company.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          repos: [{ id: "hub", path: "projects/hub" }],
+          board: { repo: "hub", script: "scripts/board-server.mjs", port: 8895 },
+        }),
+      )
+
+      const warnings = []
+      const origWarn = console.warn
+      console.warn = (...args) => warnings.push(args.join(" "))
+      try {
+        const res = resolveBoardConfig(root, {})
+        assert.equal(res, null)
+        assert.equal(warnings.length, 1)
+        assert.ok(warnings[0].includes("작업보드 대기열 저장소(queueRepo) 설정이 잘못되어 작업보드를 띄우지 않습니다:"))
+      } finally {
+        console.warn = origWarn
+      }
+    }
+
+    // 배치 2: a=유효, b=script없음+queueRepo잘못
+    {
+      const root = path.join(tempRoot, "block-before-script-2")
+      const compA = path.join(root, "data-company", "a")
+      const compB = path.join(root, "data-company", "b")
+      fs.mkdirSync(compA, { recursive: true })
+      fs.mkdirSync(compB, { recursive: true })
+
+      const hubDir = path.join(root, "projects", "hub", "scripts")
+      fs.mkdirSync(hubDir, { recursive: true })
+      fs.writeFileSync(path.join(hubDir, "board-server.mjs"), "console.log('board')")
+
+      fs.writeFileSync(
+        path.join(compA, "adk-company.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          repos: [{ id: "hub", path: "projects/hub" }],
+          board: { repo: "hub", script: "scripts/board-server.mjs", port: 8894 },
+        }),
+      )
+      fs.writeFileSync(
+        path.join(compB, "adk-company.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          repos: [{ id: "hub", path: "projects/hub" }],
+          board: { repo: "hub", script: "scripts/no-such-script.mjs", port: 8895, queueRepo: "invalid-id" },
+        }),
+      )
+
+      const warnings = []
+      const origWarn = console.warn
+      console.warn = (...args) => warnings.push(args.join(" "))
+      try {
+        const res = resolveBoardConfig(root, {})
+        assert.equal(res, null)
+        assert.equal(warnings.length, 1)
+        assert.ok(warnings[0].includes("작업보드 대기열 저장소(queueRepo) 설정이 잘못되어 작업보드를 띄우지 않습니다:"))
+      } finally {
+        console.warn = origWarn
+      }
+    }
+  })
+
+  // (바) 기존 건너뛰기 회귀
+  it("(바) 기존 건너뛰기 회귀: board.script 없는 설정(queueRepo 없음)과 그 뒤의 유효 설정(queueRepo 없음)이 있으면 유효 설정 반환 및 경고 없음", () => {
+    const root = path.join(tempRoot, "regression-skip-missing-script")
+    const compA = path.join(root, "data-company", "a")
+    const compB = path.join(root, "data-company", "b")
+    fs.mkdirSync(compA, { recursive: true })
+    fs.mkdirSync(compB, { recursive: true })
+
+    const hubDir = path.join(root, "projects", "hub", "scripts")
+    fs.mkdirSync(hubDir, { recursive: true })
+    fs.writeFileSync(path.join(hubDir, "board-server.mjs"), "console.log('board')")
+
+    fs.writeFileSync(
+      path.join(compA, "adk-company.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        repos: [{ id: "hub", path: "projects/hub" }],
+        board: { repo: "hub", script: "scripts/no-such-script.mjs", port: 8894 },
+      }),
+    )
+    fs.writeFileSync(
+      path.join(compB, "adk-company.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        repos: [{ id: "hub", path: "projects/hub" }],
+        board: { repo: "hub", script: "scripts/board-server.mjs", port: 8895 },
+      }),
+    )
+
+    const warnings = []
+    const origWarn = console.warn
+    console.warn = (...args) => warnings.push(args.join(" "))
+    try {
+      const res = resolveBoardConfig(root, {})
+      assert.ok(res !== null, "유효한 b 설정이 반환되어야 합니다.")
+      assert.equal(res.port, 8895)
+      assert.equal(res.queueRepoDir, null)
+      assert.equal(warnings.length, 0, "경고가 발생하지 않아야 합니다.")
+    } finally {
+      console.warn = origWarn
+    }
+  })
 })
