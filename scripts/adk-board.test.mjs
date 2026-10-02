@@ -550,4 +550,161 @@ describe("adk-board (scripts/adk-board.mjs)", () => {
       console.warn = origWarn
     }
   })
+
+  // (사) 1단계와 2단계 사이 대기열 폴더 사라짐 (statSync가 ENOENT를 던짐): null 반환, 경고 정확히 1회, --repo-root 없는 인자 반환 차단
+  it("(사) 1단계 통과 후 2단계 전 대기열 폴더 소실: null 반환 및 경고 정확히 1회", () => {
+    const root = path.join(tempRoot, "step2-queue-dir-vanished")
+    const companyDir = path.join(root, "data-company", "my-company")
+    fs.mkdirSync(companyDir, { recursive: true })
+    const hubDir = path.join(root, "projects", "hub", "scripts")
+    fs.mkdirSync(hubDir, { recursive: true })
+    const scriptFile = path.join(hubDir, "board-server.mjs")
+    fs.writeFileSync(scriptFile, "console.log('board')")
+    const queueDir = path.join(root, "projects", "queue-repo")
+    fs.mkdirSync(queueDir, { recursive: true })
+
+    const config = {
+      schemaVersion: 1,
+      repos: [
+        { id: "hub", path: "projects/hub" },
+        { id: "queue-repo", path: "projects/queue-repo" },
+      ],
+      board: {
+        repo: "hub",
+        script: "scripts/board-server.mjs",
+        port: 8894,
+        queueRepo: "queue-repo",
+      },
+    }
+    const configPath = path.join(companyDir, "adk-company.json")
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
+
+    const origStatSync = fs.statSync
+    const origWarn = console.warn
+    const warnings = []
+    let statCount = 0
+
+    try {
+      console.warn = (...args) => warnings.push(args.join(" "))
+      fs.statSync = (targetPath, ...args) => {
+        if (targetPath === queueDir || path.resolve(targetPath) === queueDir) {
+          statCount++
+          if (statCount === 2) {
+            const err = new Error(`ENOENT: no such file or directory, stat '${targetPath}'`)
+            err.code = "ENOENT"
+            throw err
+          }
+        }
+        return origStatSync(targetPath, ...args)
+      }
+
+      const result = resolveBoardConfig(root, {})
+      assert.equal(result, null, "2단계에서 대기열 폴더가 사라지면 null을 반환해야 합니다.")
+      assert.equal(warnings.length, 1, "경고가 정확히 1회 발생해야 합니다.")
+      const expectedMsg = `작업보드 대기열 저장소(queueRepo) 설정이 잘못되어 작업보드를 띄우지 않습니다: ${configPath} (queue-repo)`
+      assert.equal(warnings[0], expectedMsg)
+    } finally {
+      fs.statSync = origStatSync
+      console.warn = origWarn
+    }
+  })
+
+  // (아) 1단계 통과 후 2단계 전 adk-company.json의 queueRepo가 없는 id로 바뀜: null 반환, 경고 정확히 1회, --repo-root 없는 인자 반환 차단
+  it("(아) 1단계 통과 후 2단계 전 queueRepo 설정이 유효하지 않은 id로 변경: null 반환 및 경고 정확히 1회", () => {
+    const root = path.join(tempRoot, "step2-queue-repo-changed")
+    const companyDir = path.join(root, "data-company", "my-company")
+    fs.mkdirSync(companyDir, { recursive: true })
+    const hubDir = path.join(root, "projects", "hub", "scripts")
+    fs.mkdirSync(hubDir, { recursive: true })
+    const scriptFile = path.join(hubDir, "board-server.mjs")
+    fs.writeFileSync(scriptFile, "console.log('board')")
+    const queueDir = path.join(root, "projects", "queue-repo")
+    fs.mkdirSync(queueDir, { recursive: true })
+
+    const validConfig = {
+      schemaVersion: 1,
+      repos: [
+        { id: "hub", path: "projects/hub" },
+        { id: "queue-repo", path: "projects/queue-repo" },
+      ],
+      board: {
+        repo: "hub",
+        script: "scripts/board-server.mjs",
+        port: 8894,
+        queueRepo: "queue-repo",
+      },
+    }
+    const configPath = path.join(companyDir, "adk-company.json")
+    fs.writeFileSync(configPath, JSON.stringify(validConfig, null, 2))
+
+    const origReadFileSync = fs.readFileSync
+    const origWarn = console.warn
+    const warnings = []
+    let readCount = 0
+
+    try {
+      console.warn = (...args) => warnings.push(args.join(" "))
+      fs.readFileSync = (targetPath, ...args) => {
+        if (targetPath === configPath) {
+          readCount++
+          if (readCount === 2) {
+            const modifiedConfig = {
+              ...validConfig,
+              board: {
+                ...validConfig.board,
+                queueRepo: "non-existent-id",
+              },
+            }
+            return JSON.stringify(modifiedConfig)
+          }
+        }
+        return origReadFileSync(targetPath, ...args)
+      }
+
+      const result = resolveBoardConfig(root, {})
+      assert.equal(result, null, "2단계에서 queueRepo id가 유효하지 않게 바뀌면 null을 반환해야 합니다.")
+      assert.equal(warnings.length, 1, "경고가 정확히 1회 발생해야 합니다.")
+      const expectedMsg = `작업보드 대기열 저장소(queueRepo) 설정이 잘못되어 작업보드를 띄우지 않습니다: ${configPath} (non-existent-id)`
+      assert.equal(warnings[0], expectedMsg)
+    } finally {
+      fs.readFileSync = origReadFileSync
+      console.warn = origWarn
+    }
+  })
+
+  // (자) repos[].path가 공백 이름(' ') 디렉터리를 가리킬 때: 실제 디렉터리면 유효 판정 및 --repo-root 인자 포함
+  it("(자) repos[].path가 공백 이름(' ') 디렉터리를 가리킬 때: 실제 디렉터리면 유효 판정 및 --repo-root 인자 포함", () => {
+    const root = path.join(tempRoot, "space-path-repo")
+    const companyDir = path.join(root, "data-company", "my-company")
+    fs.mkdirSync(companyDir, { recursive: true })
+    const hubDir = path.join(root, "projects", "hub", "scripts")
+    fs.mkdirSync(hubDir, { recursive: true })
+    const scriptFile = path.join(hubDir, "board-server.mjs")
+    fs.writeFileSync(scriptFile, "console.log('board')")
+
+    // 이름이 공백 한 칸(" ")인 실제 디렉터리 생성
+    const spaceDir = path.join(root, " ")
+    fs.mkdirSync(spaceDir, { recursive: true })
+
+    const config = {
+      schemaVersion: 1,
+      repos: [
+        { id: "hub", path: "projects/hub" },
+        { id: "space-repo", path: " " },
+      ],
+      board: {
+        repo: "hub",
+        script: "scripts/board-server.mjs",
+        port: 8894,
+        queueRepo: "space-repo",
+      },
+    }
+    fs.writeFileSync(path.join(companyDir, "adk-company.json"), JSON.stringify(config, null, 2))
+
+    const result = resolveBoardConfig(root, {})
+    assert.ok(result !== null, "이름이 공백 한 칸인 디렉터리를 가리키면 유효해야 합니다.")
+    assert.equal(result.queueRepoDir, spaceDir)
+    assert.equal(result.args[result.args.length - 2], "--repo-root")
+    assert.equal(result.args[result.args.length - 1], spaceDir)
+  })
 })

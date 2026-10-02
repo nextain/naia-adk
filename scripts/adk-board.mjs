@@ -24,7 +24,7 @@ function checkQueueRepo(adkRoot, config) {
   }
 
   const targetRepo = config.repos.find((r) => r && typeof r === "object" && r.id === queueRepo)
-  if (!targetRepo || typeof targetRepo.path !== "string" || targetRepo.path.trim() === "") {
+  if (!targetRepo || typeof targetRepo.path !== "string" || targetRepo.path === "") {
     return { kind: "invalid", queueRepo }
   }
 
@@ -39,6 +39,14 @@ function checkQueueRepo(adkRoot, config) {
   } catch {
     return { kind: "invalid", queueRepo }
   }
+}
+
+function warnInvalidQueueRepo(configPath, queueRepo) {
+  let warnMsg = `작업보드 대기열 저장소(queueRepo) 설정이 잘못되어 작업보드를 띄우지 않습니다: ${configPath}`
+  if (typeof queueRepo === "string") {
+    warnMsg += ` (${queueRepo})`
+  }
+  console.warn(warnMsg)
 }
 
 export function resolveBoardConfig(adkRoot, env = process.env) {
@@ -76,11 +84,7 @@ export function resolveBoardConfig(adkRoot, env = process.env) {
 
     const check = checkQueueRepo(adkRoot, config)
     if (check.kind === "invalid") {
-      let warnMsg = `작업보드 대기열 저장소(queueRepo) 설정이 잘못되어 작업보드를 띄우지 않습니다: ${configPath}`
-      if (typeof check.queueRepo === "string") {
-        warnMsg += ` (${check.queueRepo})`
-      }
-      console.warn(warnMsg)
+      warnInvalidQueueRepo(configPath, check.queueRepo)
       return null
     }
   }
@@ -144,6 +148,13 @@ export function resolveBoardConfig(adkRoot, env = process.env) {
     if (queueCheck.kind === "valid") {
       queueRepoDir = queueCheck.queueRepoDir
       args.push("--repo-root", queueRepoDir)
+    } else if (queueCheck.kind === "none") {
+      queueRepoDir = null
+    } else if (queueCheck.kind === "invalid") {
+      warnInvalidQueueRepo(configPath, queueCheck.queueRepo)
+      return null
+    } else {
+      return null
     }
 
     return {
