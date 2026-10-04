@@ -1,6 +1,7 @@
 import test, { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import http from "node:http"
+import net from "node:net"
 import { PassThrough } from "node:stream"
 import { execSync } from "node:child_process"
 import {
@@ -324,5 +325,124 @@ describe("Server.mjs 단위 시험", () => {
     } finally {
       await new Promise((resolve) => dummyApi.close(resolve))
     }
+  })
+
+  it("(차) createRequestHandler에 Host evil.example 요청 시 421, CSP는 FRAME_ANCESTORS_CSP, x-frame-options 없음, 가짜 nextHandler 호출 안 됨", () => {
+    let nextCalled = false
+    const fakeNext = (req, res) => {
+      nextCalled = true
+    }
+    const handler = createRequestHandler(fakeNext)
+    const headers = new Map()
+    const fakeRes = {
+      statusCode: 200,
+      setHeader(k, v) {
+        headers.set(k.toLowerCase(), v)
+      },
+      getHeader(k) {
+        return headers.get(k.toLowerCase())
+      },
+      end() {},
+    }
+    const fakeReq = {
+      method: "GET",
+      url: "/docs",
+      headers: {
+        host: "evil.example",
+      },
+    }
+
+    handler(fakeReq, fakeRes)
+
+    assert.equal(nextCalled, false)
+    assert.equal(fakeRes.statusCode, 421)
+    assert.equal(fakeRes.getHeader("content-security-policy"), FRAME_ANCESTORS_CSP)
+    assert.equal(fakeRes.getHeader("x-frame-options"), undefined)
+  })
+
+  it("(카) createRequestHandler: invalid /api/portal 경로 요청 시 400, CSP는 FRAME_ANCESTORS_CSP, x-frame-options 없음", () => {
+    const invalidUrl = "/api/portal/../x"
+    assert.equal(validatePortalPathname(invalidUrl).valid, false)
+
+    let nextCalled = false
+    const fakeNext = (req, res) => {
+      nextCalled = true
+    }
+    const handler = createRequestHandler(fakeNext)
+    const headers = new Map()
+    const fakeRes = {
+      statusCode: 200,
+      setHeader(k, v) {
+        headers.set(k.toLowerCase(), v)
+      },
+      getHeader(k) {
+        return headers.get(k.toLowerCase())
+      },
+      end() {},
+    }
+    const fakeReq = {
+      method: "GET",
+      url: invalidUrl,
+      headers: {
+        host: "localhost:3142",
+      },
+    }
+
+    handler(fakeReq, fakeRes)
+
+    assert.equal(nextCalled, false)
+    assert.equal(fakeRes.statusCode, 400)
+    assert.equal(fakeRes.getHeader("content-security-policy"), FRAME_ANCESTORS_CSP)
+    assert.equal(fakeRes.getHeader("x-frame-options"), undefined)
+  })
+
+  it("(타) proxyToApi: 미수신 포트로 연결 실패 시 502, CSP는 FRAME_ANCESTORS_CSP, x-frame-options 없음", async () => {
+    const dummyServer = net.createServer()
+    let unusedPort
+    try {
+      await new Promise((resolve, reject) => {
+        dummyServer.once("error", reject)
+        dummyServer.listen(0, "127.0.0.1", () => {
+          unusedPort = dummyServer.address().port
+          resolve()
+        })
+      })
+    } finally {
+      if (dummyServer.listening) {
+        await new Promise((resolve) => dummyServer.close(resolve))
+      }
+    }
+
+    const fakeSocket = { remoteAddress: "127.0.0.1", localAddress: "127.0.0.1" }
+    const incomingReq = {
+      method: "GET",
+      headers: { host: "127.0.0.1:3142" },
+      socket: fakeSocket,
+      pipe(dest) {
+        dest.end()
+        return dest
+      },
+    }
+
+    const headers = new Map()
+    const clientRes = new PassThrough()
+    clientRes.statusCode = 200
+    clientRes.setHeader = (k, v) => headers.set(k.toLowerCase(), v)
+    clientRes.getHeader = (k) => headers.get(k.toLowerCase())
+
+    proxyToApi(
+      incomingReq,
+      clientRes,
+      "/api/portal",
+      unusedPort,
+      "test-secret-123",
+      fakeSocket
+    )
+
+    await new Promise((resolve) => clientRes.on("finish", resolve))
+
+    assert.equal(clientRes.statusCode, 502)
+    assert.equal(clientRes.getHeader("content-security-policy"), FRAME_ANCESTORS_CSP)
+    assert.equal(clientRes.getHeader("x-frame-options"), undefined)
   })
 })

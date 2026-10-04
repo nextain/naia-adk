@@ -24,5 +24,7 @@ describe("middleware 단위 시험", () => {
     })
     const res = middleware(req)
     assert.equal(res.status, 421)
+    assert.equal(res.headers.get("content-security-policy"), FRAME_ANCESTORS_CSP)
+    assert.equal(res.headers.get("x-frame-options"), null)
   })
 })

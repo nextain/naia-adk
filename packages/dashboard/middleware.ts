@@ -17,6 +17,7 @@ export function middleware(request: NextRequest) {
       status: 421,
       headers: {
         "content-type": "text/plain; charset=utf-8",
+        "Content-Security-Policy": FRAME_ANCESTORS_CSP,
       },
     })
   }

@@ -245,6 +245,7 @@ export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket =
     if (!res.headersSent) {
       res.statusCode = 502
       res.setHeader("content-type", "application/json; charset=utf-8")
+      res.setHeader("Content-Security-Policy", FRAME_ANCESTORS_CSP)
       res.end(JSON.stringify({ error: "Bad Gateway", message: err.message }))
     }
   })
@@ -267,6 +268,7 @@ export function createRequestHandler(nextHandler) {
     if (!hostGuard(req.headers.host)) {
       res.statusCode = 421
       res.setHeader("content-type", "text/plain; charset=utf-8")
+      res.setHeader("Content-Security-Policy", FRAME_ANCESTORS_CSP)
       res.end("Misdirected Request")
       return
     }
@@ -282,6 +284,7 @@ export function createRequestHandler(nextHandler) {
       if (!valResult.valid) {
         res.statusCode = 400
         res.setHeader("content-type", "application/json; charset=utf-8")
+        res.setHeader("Content-Security-Policy", FRAME_ANCESTORS_CSP)
         res.end(JSON.stringify({ error: "Invalid path" }))
         return
       }
