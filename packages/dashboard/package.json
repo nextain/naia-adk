@@ -6,7 +6,7 @@
     "dev": "node server.mjs -p 3142",
     "build": "next build",
     "start": "node server.mjs -p 3142",
-    "test": "node --test app/docs/markdown.test.ts app/docs/tabs.test.ts app/docs/kinds.test.ts host-guard.test.mjs server.test.mjs && node --import tsx --test app/docs/doc-save.test.ts app/docs/*.render.test.tsx"
+    "test": "node --test app/docs/markdown.test.ts app/docs/tabs.test.ts app/docs/kinds.test.ts host-guard.test.mjs server.test.mjs frame-policy.test.mjs && node --import tsx --test app/docs/doc-save.test.ts app/docs/*.render.test.tsx middleware.test.ts"
   },
   "dependencies": {
     "next": "^15.3.0",

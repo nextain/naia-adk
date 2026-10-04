@@ -6,6 +6,7 @@ import process from "node:process"
 import { fileURLToPath } from "node:url"
 import next from "next"
 import { hostGuard } from "./host-guard.mjs"
+import { FRAME_ANCESTORS_CSP } from "./frame-policy.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -195,8 +196,8 @@ export function validatePortalPathname(rawPathname) {
  * - 런타임 NAIA_API_PORT의 127.0.0.1로 직접 전달
  * - 영상 스트림 끊김 방지를 위해 timeout 0
  * - API가 준 머리글은 지우거나 덮지 않음
- * - frame-ancestors 'self'는 두 번째 Content-Security-Policy 머리글로 더함
- * - X-Frame-Options는 없을 때만 SAMEORIGIN 추가
+ * - FRAME_ANCESTORS_CSP는 Content-Security-Policy 머리글로 더함(API가 준 값이 있으면 목록 끝에 추가, 없으면 단독)
+ * - API가 준 X-Frame-Options는 그대로 전달하고 없어도 새로 추가하지 않음
  */
 export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket = null) {
   const sock = socket || req.socket
@@ -231,14 +232,10 @@ export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket =
 
     if (apiCsp) {
       const list = Array.isArray(apiCsp) ? [...apiCsp] : [apiCsp]
-      list.push("frame-ancestors 'self'")
+      list.push(FRAME_ANCESTORS_CSP)
       res.setHeader("content-security-policy", list)
     } else {
-      res.setHeader("content-security-policy", "frame-ancestors 'self'")
-    }
-
-    if (!apiXfo) {
-      res.setHeader("x-frame-options", "SAMEORIGIN")
+      res.setHeader("content-security-policy", FRAME_ANCESTORS_CSP)
     }
 
     apiRes.pipe(res)
@@ -297,8 +294,7 @@ export function createRequestHandler(nextHandler) {
     }
 
     // 3. 일반 대시보드 화면 응답 헤더 추가
-    res.setHeader("Content-Security-Policy", "frame-ancestors 'self'")
-    res.setHeader("X-Frame-Options", "SAMEORIGIN")
+    res.setHeader("Content-Security-Policy", FRAME_ANCESTORS_CSP)
 
     return nextHandler(req, res)
   }

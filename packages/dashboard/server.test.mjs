@@ -1,6 +1,7 @@
 import test, { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import http from "node:http"
+import { PassThrough } from "node:stream"
 import { execSync } from "node:child_process"
 import {
   buildProxyHeaders,
@@ -10,6 +11,7 @@ import {
   parseArgs,
   normalizeIp,
 } from "./server.mjs"
+import { FRAME_ANCESTORS_CSP } from "./frame-policy.mjs"
 
 describe("Server.mjs 단위 시험", () => {
   it("server.mjs 모듈을 import했을 때 listen 소켓을 열지 않는다", async () => {
@@ -157,5 +159,170 @@ describe("Server.mjs 단위 시험", () => {
     })
     assert.equal(port, 3175)
     assert.equal(host, "127.0.0.1")
+  })
+
+  it("(라) createRequestHandler(가짜 nextHandler)로 Host localhost:3142 요청을 처리하면 CSP가 FRAME_ANCESTORS_CSP와 같고 x-frame-options가 없다", () => {
+    let nextCalled = false
+    const fakeNext = (req, res) => {
+      nextCalled = true
+    }
+    const handler = createRequestHandler(fakeNext)
+    const headers = new Map()
+    const fakeRes = {
+      statusCode: 200,
+      setHeader(k, v) {
+        headers.set(k.toLowerCase(), v)
+      },
+      getHeader(k) {
+        return headers.get(k.toLowerCase())
+      },
+      end() {},
+    }
+    const fakeReq = {
+      method: "GET",
+      url: "/",
+      headers: {
+        host: "localhost:3142",
+      },
+    }
+
+    handler(fakeReq, fakeRes)
+
+    assert.equal(nextCalled, true)
+    assert.equal(fakeRes.getHeader("content-security-policy"), FRAME_ANCESTORS_CSP)
+    assert.equal(fakeRes.getHeader("x-frame-options"), undefined)
+  })
+
+  it("(마) proxyToApi: API가 CSP·XFO를 안 주면 응답 CSP는 FRAME_ANCESTORS_CSP 하나, x-frame-options 없음", async () => {
+    const dummyApi = http.createServer((apiReq, apiRes) => {
+      apiRes.statusCode = 200
+      apiRes.end("ok")
+    })
+    await new Promise((resolve) => dummyApi.listen(0, "127.0.0.1", resolve))
+    const apiPort = dummyApi.address().port
+
+    const fakeSocket = { remoteAddress: "127.0.0.1", localAddress: "127.0.0.1" }
+    const incomingReq = {
+      method: "GET",
+      headers: { host: "127.0.0.1:3142" },
+      socket: fakeSocket,
+      pipe(dest) {
+        dest.end()
+        return dest
+      },
+    }
+
+    const headers = new Map()
+    const clientRes = new PassThrough()
+    clientRes.statusCode = 200
+    clientRes.setHeader = (k, v) => headers.set(k.toLowerCase(), v)
+    clientRes.getHeader = (k) => headers.get(k.toLowerCase())
+
+    try {
+      proxyToApi(
+        incomingReq,
+        clientRes,
+        "/api/portal",
+        apiPort,
+        "test-secret-123",
+        fakeSocket
+      )
+
+      await new Promise((resolve) => clientRes.on("finish", resolve))
+
+      assert.equal(clientRes.getHeader("content-security-policy"), FRAME_ANCESTORS_CSP)
+      assert.equal(clientRes.getHeader("x-frame-options"), undefined)
+    } finally {
+      await new Promise((resolve) => dummyApi.close(resolve))
+    }
+  })
+
+  it("(바) proxyToApi: API가 content-security-policy: default-src 'self'를 주면 응답 CSP는 두 값(API 것, FRAME_ANCESTORS_CSP)이 이 순서로 모두 있다", async () => {
+    const dummyApi = http.createServer((apiReq, apiRes) => {
+      apiRes.setHeader("content-security-policy", "default-src 'self'")
+      apiRes.statusCode = 200
+      apiRes.end("ok")
+    })
+    await new Promise((resolve) => dummyApi.listen(0, "127.0.0.1", resolve))
+    const apiPort = dummyApi.address().port
+
+    const fakeSocket = { remoteAddress: "127.0.0.1", localAddress: "127.0.0.1" }
+    const incomingReq = {
+      method: "GET",
+      headers: { host: "127.0.0.1:3142" },
+      socket: fakeSocket,
+      pipe(dest) {
+        dest.end()
+        return dest
+      },
+    }
+
+    const headers = new Map()
+    const clientRes = new PassThrough()
+    clientRes.statusCode = 200
+    clientRes.setHeader = (k, v) => headers.set(k.toLowerCase(), v)
+    clientRes.getHeader = (k) => headers.get(k.toLowerCase())
+
+    try {
+      proxyToApi(
+        incomingReq,
+        clientRes,
+        "/api/portal",
+        apiPort,
+        "test-secret-123",
+        fakeSocket
+      )
+
+      await new Promise((resolve) => clientRes.on("finish", resolve))
+
+      const csp = clientRes.getHeader("content-security-policy")
+      assert.deepEqual(csp, ["default-src 'self'", FRAME_ANCESTORS_CSP])
+    } finally {
+      await new Promise((resolve) => dummyApi.close(resolve))
+    }
+  })
+
+  it("(사) proxyToApi: API가 x-frame-options: DENY를 주면 그대로 DENY로 전달된다", async () => {
+    const dummyApi = http.createServer((apiReq, apiRes) => {
+      apiRes.setHeader("x-frame-options", "DENY")
+      apiRes.statusCode = 200
+      apiRes.end("ok")
+    })
+    await new Promise((resolve) => dummyApi.listen(0, "127.0.0.1", resolve))
+    const apiPort = dummyApi.address().port
+
+    const fakeSocket = { remoteAddress: "127.0.0.1", localAddress: "127.0.0.1" }
+    const incomingReq = {
+      method: "GET",
+      headers: { host: "127.0.0.1:3142" },
+      socket: fakeSocket,
+      pipe(dest) {
+        dest.end()
+        return dest
+      },
+    }
+
+    const headers = new Map()
+    const clientRes = new PassThrough()
+    clientRes.statusCode = 200
+    clientRes.setHeader = (k, v) => headers.set(k.toLowerCase(), v)
+    clientRes.getHeader = (k) => headers.get(k.toLowerCase())
+
+    try {
+      proxyToApi(
+        incomingReq,
+        clientRes,
+        "/api/portal",
+        apiPort,
+        "test-secret-123",
+        fakeSocket
+      )
+
+      await new Promise((resolve) => clientRes.on("finish", resolve))
+
+      assert.equal(clientRes.getHeader("x-frame-options"), "DENY")
+    } finally {
+      await new Promise((resolve) => dummyApi.close(resolve))
+    }
   })
 })

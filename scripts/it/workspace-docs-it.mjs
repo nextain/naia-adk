@@ -14,6 +14,7 @@ import net from "node:net"
 import crypto from "node:crypto"
 import { spawn, execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { FRAME_ANCESTORS_CSP } from "../../packages/dashboard/frame-policy.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -2301,22 +2302,26 @@ async function main() {
       })
     }
 
-    // FE-IT-25: frame-ancestors 'self' 및 X-Frame-Options: SAMEORIGIN
+    // FE-IT-25: frame-ancestors Naia 셸 허용 및 X-Frame-Options 없음
     {
       const resDocs = runCurl({ url: `http://127.0.0.1:${P3}/docs` })
       const resWork = runCurl({ url: `http://127.0.0.1:${P3}/work` })
       const cspDocs = String(resDocs.headers["content-security-policy"] || "")
-      const xfoDocs = String(resDocs.headers["x-frame-options"] || "")
+      const xfoDocs = resDocs.headers["x-frame-options"]
       const cspWork = String(resWork.headers["content-security-policy"] || "")
-      const xfoWork = String(resWork.headers["x-frame-options"] || "")
+      const xfoWork = resWork.headers["x-frame-options"]
 
-      const pass = cspDocs.includes("frame-ancestors 'self'") && xfoDocs.includes("SAMEORIGIN") && cspWork.includes("frame-ancestors 'self'") && xfoWork.includes("SAMEORIGIN")
+      const pass =
+        cspDocs === FRAME_ANCESTORS_CSP &&
+        xfoDocs === undefined &&
+        cspWork === FRAME_ANCESTORS_CSP &&
+        xfoWork === undefined
       addResult({
         id: "FE-IT-25-frame-ancestors-headers",
         rqAc: "FE 8장 9번",
         fe: "FE 8장",
         command: `${resDocs.command} && ${resWork.command}`,
-        expected: "frame-ancestors 'self' and X-Frame-Options: SAMEORIGIN in /docs and /work",
+        expected: `${FRAME_ANCESTORS_CSP} and no x-frame-options in /docs and /work`,
         actual: `docs: csp=${cspDocs}, xfo=${xfoDocs}; work: csp=${cspWork}, xfo=${xfoWork}`,
         pass,
       })
