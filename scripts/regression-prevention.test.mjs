@@ -2,6 +2,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
+import os from "node:os";
+import { createRequire } from "node:module";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -36,6 +39,37 @@ const CLAUSES = {
 	subtask_quotes_mission: ["carries a 'Goal:' line that quotes the requester's goal verbatim", "Coordinator summaries go only in a separate 'Coordinator interpretation' field"],
 	drift_recovery_order: ["1) pin the goal 2) map the contaminated scope 3) quarantine-delete the wrong code and documents 4) assess, analyze gaps, design, then build", "Procedure: docs/guides/drift-recovery.md"],
 };
+
+// The whole rule set is pinned: any added, removed, or reworded sentence (including an appended
+// exception such as "the coordinator may override") fails here. Change a rule deliberately by
+// updating this hash in the same reviewed commit.
+const RULES_SHA256 = "8b51e7781f1da74338ee4106f2d7e720fbecdfb1561b7241d727a17e39ace1ec";
+
+function canonical(value) {
+	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+	if (value && typeof value === "object") return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
+	return JSON.stringify(value);
+}
+
+test("the rule set matches its pinned hash", () => {
+	const r = JSON.parse(read(".agents/context/regression-prevention.json")).rules;
+	assert.equal(crypto.createHash("sha256").update(canonical(r)).digest("hex"), RULES_SHA256);
+});
+
+test("the generated context mirror equals a fresh render of the JSON", () => {
+	const require = createRequire(import.meta.url);
+	const { syncContextMirror } = require(path.join(root, ".claude/hooks/agents-context-mirror.js"));
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rp-mirror-"));
+	try {
+		fs.mkdirSync(path.join(tmp, ".agents/context"), { recursive: true });
+		fs.mkdirSync(path.join(tmp, ".users/context"), { recursive: true });
+		fs.copyFileSync(path.join(root, ".agents/context/regression-prevention.json"), path.join(tmp, ".agents/context/regression-prevention.json"));
+		syncContextMirror({ tool_input: { file_path: ".agents/context/regression-prevention.json" } }, tmp);
+		assert.equal(read(".users/context/regression-prevention.md"), fs.readFileSync(path.join(tmp, ".users/context/regression-prevention.md"), "utf8"));
+	} finally {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	}
+});
 
 test("rules keep their load-bearing clauses verbatim", () => {
 	const r = JSON.parse(read(".agents/context/regression-prevention.json")).rules;
