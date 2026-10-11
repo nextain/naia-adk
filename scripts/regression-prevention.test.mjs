@@ -26,15 +26,23 @@ test("every required rule is a non-trivial string", () => {
 // Each load-bearing clause must appear verbatim, so a negated or truncated rule fails.
 const CLAUSES = {
 	remove_needs_requester_quote: ["only with a dated requester quote that asks for it", "AI inference or coordinator judgment is not grounds for removal", "without the quote the review fails"],
-	deletion_needs_basis: ["an issue number without such a quote is not a basis", "a mock-only test is never the sole evidence"],
-	done_needs_all_entrypoints: ["only with evidence that every user entry point on the changed path was actually checked", "Never widen a partial flow or a single measurement into an overall pass"],
-	requester_quote_fail_not_overridden: ["the coordinator does not override it", "pass a re-review of the same target"],
-	repeat_review_triage: ["After 5 review FAILs on the same target (every 4 after a triage)", "the same target path is the same target even under a different issue or gate", "it is the same target only when both the issue and the gate are the same", "Changing the path together with the issue or the gate starts new work", "verbatim from that round's stored result copy", "the record confirms the finding does not rest on a requester quote", "Findings grounded in a requester quote are never dropped"],
+	coordinator_decision_not_basis: ["A decision without a requester quote, or marked unconfirmed, withdrawn, or superseded, is not a basis", "Do not turn an implementation into a decision"],
+	keep_baseline_section: ["has a 'Existing behavior to keep' section", "the baseline commit and, one per line, each user entry point that passes through the changed code path", "'does not apply' with a reason"],
+	impossible_needs_evidence: ["only together with the search result that found the previously working implementation (file:line) and a run result", "Without them the review fails"],
+	deletion_needs_basis: ["has a 'Deletion basis' section giving, per file, a requester quote or the number of an issue that contains the requester's request for it", "an issue number without such a quote is not a basis", "A deleted test is replaced by one that exercises real behavior", "a mock-only test is never the sole evidence"],
+	done_needs_all_entrypoints: ["only with evidence that every user entry point on the changed path was actually checked the same way as on the baseline", "Never widen a partial flow or a single measurement into an overall pass"],
+	requester_quote_fail_not_overridden: ["the coordinator does not override it", "Fix it and pass a re-review of the same target", "escalate to the requester only when it cannot be fixed"],
+	repeat_review_triage: ["After 5 review FAILs on the same target (every 4 after a triage)", "from a stronger model different from the implementer and reviewer, given the whole FAIL history, before the next round", "the same target path is the same target even under a different issue or gate", "it is the same target only when both the issue and the gate are the same", "Changing the path together with the issue or the gate starts new work", "Drop a finding only when the verdict is wrong instruction or over-review", "verbatim from that round's stored result copy", "the record confirms the finding does not rest on a requester quote", "Findings grounded in a requester quote are never dropped"],
+	subtask_quotes_mission: ["carries a 'Goal:' line that quotes the requester's goal verbatim", "Coordinator summaries go only in a separate 'Coordinator interpretation' field"],
+	drift_recovery_order: ["1) pin the goal 2) map the contaminated scope 3) quarantine-delete the wrong code and documents 4) assess, analyze gaps, design, then build", "Procedure: docs/guides/drift-recovery.md"],
 };
 
 test("rules keep their load-bearing clauses verbatim", () => {
 	const r = JSON.parse(read(".agents/context/regression-prevention.json")).rules;
+	assert.deepEqual(Object.keys(CLAUSES).sort(), [...REQUIRED].sort());
 	for (const [k, clauses] of Object.entries(CLAUSES)) for (const c of clauses) assert.ok(r[k].includes(c), `${k}: ${c}`);
+	// Negation guard: no rule may carry a word that flips a clause.
+	assert.doesNotMatch(Object.values(r).join(" "), /\b(?:optional(?:ly)?|unless convenient|may be skipped|not required)\b/i);
 	assert.doesNotMatch(JSON.stringify(r), /\b(?:may|can) (?:override|drop|remove) without\b/i);
 });
 
