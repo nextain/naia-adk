@@ -50,6 +50,10 @@ on_demand_loading:
       file: .agents/context/discord-gateway-operations.yaml
       description: "Common Discord gateway behavior, context isolation, profile rollback, and deployment overlay contract"
       tags: [discord, gateway, codex, profiles, operations]
+    - id: naia-adk:regression_prevention
+      file: .agents/context/regression-prevention.json
+      description: "Feature-regression prevention rules for plans, instructions, reviews, completion reports, and drift recovery (procedure: docs/guides/drift-recovery.md)"
+      tags: [review, regression, drift, completion, instruction]
     - id: naia-adk:lessons_workflow
       file: .agents/context/lessons-workflow.yaml
       description: "Workflow & process lessons (IDD violations, review, harness-design, destructive-action)"

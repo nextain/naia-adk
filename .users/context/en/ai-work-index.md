@@ -27,6 +27,13 @@ The `ai-work-index.yaml` file is an index used by AI to identify work types and 
 - **Description**: R&D where the answer is unknown. While IDD locks the **plan**, RDD locks the goal (**Charter**) and allows the plan to evolve based on results while enforcing alignment with the goal. Its purpose is to block drift (method substitution, result chasing, metric bait, and omitted recall).
 - **Enforcement (deterministic)**: The `rdd-experiment-guard` hook (fail-CLOSED) blocks execution of `exp*.py` unless preregistration and an out-of-loop audit (`scripts/rdd-audit.cjs`) have passed. EXPLORE (isolated exploration) vs CONFIRM (registration and audit, belief change).
 
+### 1-D. Drift Recovery (drift-recovery)
+
+- **Keywords**: drift, regression, restore, wrong direction, 드리프트, 회귀, 복구
+- **Quick reference**: `Pin the goal (requester quotes verbatim) → Map the scope → Quarantine-delete → Assess, gap analysis, design, build`
+- **Procedure**: `docs/guides/drift-recovery.md`
+- **Description**: When work has departed from the requester's words or a working feature has regressed. Rules: `.agents/context/regression-prevention.json`.
+
 ### 2. Submodule Management (submodule-management)
 
 - **Keywords**: submodule, init, update, sync
@@ -83,6 +90,7 @@ The `ai-work-index.yaml` file is an index used by AI to identify work types and 
 - Load workflows on demand (do not load them all at once)
 - **Feature-level work (default)**: `issue-driven-development.yaml`
 - **Simple changes (typos, configuration values, simple instructions)**: `development-cycle.yaml`
+- Plans, instructions, review requests, and completion reports follow `.agents/context/regression-prevention.json` (removing a feature needs a requester quote; completion only after every changed entry point is checked)
 - Follow the 1:1 mirroring principle
 
 ---

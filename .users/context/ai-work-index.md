@@ -27,6 +27,13 @@
 - **설명**: 답을 모르는 R&D. IDD가 **계획**을 잠그는 반면 RDD는 **목표(Charter)를 잠그고 계획은 결과 따라 진화**시키되 목표 정렬을 강제. 드리프트(방법 바꿔치기·결과추종·metric-bait·회상누락) 차단이 목적.
 - **강제(결정론)**: `rdd-experiment-guard` 훅(fail-CLOSED) — 사전등록+루프밖 감사(`scripts/rdd-audit.cjs`) 통과 없이는 `exp*.py` 실행 차단. EXPLORE(격리 탐색) vs CONFIRM(등록·감사, belief 변경).
 
+### 1-D. 드리프트 복구 (drift-recovery)
+
+- **키워드**: drift, regression, restore, wrong direction, 드리프트, 회귀, 복구
+- **빠른 참조**: `목표 고정(요청자 원문 그대로) → 범위 파악 → 격리 삭제 → 현황·갭 분석·설계·개발`
+- **절차**: `docs/guides/drift-recovery.md`
+- **설명**: 작업이 요청자의 말에서 벗어났거나 되던 기능이 회귀했을 때. 규칙은 `.agents/context/regression-prevention.json`.
+
 ### 2. 서브모듈 관리 (submodule-management)
 
 - **키워드**: submodule, init, update, sync
@@ -83,4 +90,5 @@
 - 워크플로우는 온디맨드로 로드 (한꺼번에 로드하지 않음)
 - **기능 단위 작업 (기본값)**: `issue-driven-development.yaml`
 - **단순 변경 (오타, 설정값, 간단한 지시)**: `development-cycle.yaml`
+- 계획·지시서·리뷰 요청·완료 보고는 `.agents/context/regression-prevention.json` 을 따름 (기능 삭제는 요청자 원문 인용 필요, 완료는 바뀐 모든 진입점 확인 뒤)
 - 1:1 미러링 원칙 준수

@@ -51,7 +51,13 @@ categories:
     quick_ref: "Feature-level work (default, 13 phases). ISSUE → UNDERSTAND → SCOPE → INVESTIGATE → PLAN → BUILD → REVIEW → E2E TEST → POST-TEST REVIEW → SYNC → SYNC VERIFY → REPORT → COMMIT"
     workflows:
       - ".agents/workflows/issue-driven-development.yaml"
+  - name: "drift-recovery"
+    keywords: ["drift", "regression", "restore", "wrong direction", "드리프트", "회귀", "복구"]
+    quick_ref: "Work departed from the requester's words or a working feature regressed. Pin goal (verbatim quotes) -> map scope -> quarantine-delete -> assess/gap/design/build. Rules: .agents/context/regression-prevention.json"
+    workflows:
+      - "docs/guides/drift-recovery.md"
 notes:
+  - "Plans, instructions, review requests and completion reports follow .agents/context/regression-prevention.json (feature removal needs a requester quote; completion needs every changed entry point checked)"
   - "Each submodule has its own entry point - read it before modifications"
   - "Add workflow files to .agents/workflows/ as needed"
   - "Workflows are loaded on demand, not all at once"

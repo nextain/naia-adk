@@ -18,7 +18,7 @@
     "dev:dashboard": "pnpm --filter @naia-adk/dashboard dev",
     "serve": "tsx packages/server/src/cli.ts serve",
     "build": "pnpm -r build",
-    "test": "pnpm -r test && node --test scripts/adk-setup.test.mjs scripts/adk-board.test.mjs",
+    "test": "pnpm -r test && node --test scripts/adk-setup.test.mjs scripts/adk-board.test.mjs scripts/regression-prevention.test.mjs",
     "adk:setup": "node scripts/adk-setup.mjs",
     "test:request-contract": "node scripts/run-request-contract-tests.cjs",
     "test:harness-native": "node scripts/run-native-harness-tests.cjs",
