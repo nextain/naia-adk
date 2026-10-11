@@ -35,7 +35,7 @@ const CLAUSES = {
 	deletion_needs_basis: ["has a 'Deletion basis' section giving, per file, a requester quote or the number of an issue that contains the requester's request for it", "an issue number without such a quote is not a basis", "A deleted test is replaced by one that exercises real behavior", "a mock-only test is never the sole evidence"],
 	done_needs_all_entrypoints: ["only with evidence that every user entry point on the changed path was actually checked the same way as on the baseline", "Never widen a partial flow or a single measurement into an overall pass"],
 	requester_quote_fail_not_overridden: ["the coordinator does not override it", "Fix it and pass a re-review of the same target", "escalate to the requester only when it cannot be fixed"],
-	repeat_review_triage: ["After 5 review FAILs on the same target (every 4 after a triage)", "from a stronger model different from the implementer and reviewer, given the whole FAIL history, before the next round", "the same target path is the same target even under a different issue or gate", "it is the same target only when both the issue and the gate are the same", "Changing the path together with the issue or the gate starts new work", "Drop a finding only when the verdict is wrong instruction or over-review", "verbatim from that round's stored result copy", "the record confirms the finding does not rest on a requester quote", "Findings grounded in a requester quote are never dropped"],
+	repeat_review_triage: ["After 5 review FAILs on the same target (every 4 after a triage)", "from a stronger model different from the implementer and reviewer, given the whole FAIL history, before the next round", "the same target path is the same target even under a different issue or gate", "it is the same target only when both the issue and the gate are the same", "Changing the path together with the issue or the gate starts new work", "Drop a finding only when the verdict is wrong instruction or over-review", "the path of that round's stored result copy and quotes from that copy, verbatim", "that round has no FAIL grounded in a requester quote", "Findings grounded in a requester quote are never dropped"],
 	subtask_quotes_mission: ["carries a 'Goal:' line that quotes the requester's goal verbatim", "Coordinator summaries go only in a separate 'Coordinator interpretation' field"],
 	drift_recovery_order: ["1) pin the goal 2) map the contaminated scope 3) quarantine-delete the wrong code and documents 4) assess, analyze gaps, design, then build", "Procedure: docs/guides/drift-recovery.md"],
 };
@@ -43,7 +43,7 @@ const CLAUSES = {
 // The whole rule set is pinned: any added, removed, or reworded sentence (including an appended
 // exception such as "the coordinator may override") fails here. Change a rule deliberately by
 // updating this hash in the same reviewed commit.
-const RULES_SHA256 = "8b51e7781f1da74338ee4106f2d7e720fbecdfb1561b7241d727a17e39ace1ec";
+const RULES_SHA256 = "cacfce226152be8c7aae5d23397709701d2f2f344450ab4166581bc6531116ec";
 
 function canonical(value) {
 	if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -83,7 +83,7 @@ test("rules keep their load-bearing clauses verbatim", () => {
 test("entry point covers every preflight surface kind and the preflight applies to all feature work", () => {
 	const spec = JSON.parse(read(".agents/context/regression-prevention.json"));
 	const guide = read("docs/guides/drift-recovery.md");
-	for (const kind of ["URL", "API", "CLI command", "library export", "data schema", "job", "package or deployment target", "operations or handoff path"]) {
+	for (const kind of ["UI route or navigation", "screen", "button", "URL", "API", "CLI command", "library export", "data schema", "job", "package or deployment target", "operations or handoff path"]) {
 		assert.ok(spec.terms["user entry point"].includes(kind), kind);
 		assert.ok(guide.includes(kind), kind);
 	}
@@ -107,6 +107,28 @@ test("rules point to the procedure and the procedure exists", () => {
 });
 
 test("the rule file is routed from project-index on_demand and ai-work-index", () => {
-	assert.match(live(".agents/context/project-index.yaml"), /- id: naia-adk:regression_prevention\n\s+file: \.agents\/context\/regression-prevention\.json\n/);
+	// Structural: the entry must be an item of on_demand_loading.sections, not just text somewhere.
+	const lines = read(".agents/context/project-index.yaml").split("\n");
+	const indent = (l) => l.length - l.trimStart().length;
+	const blockAfter = (from, ind) => {
+		const out = [];
+		for (let i = from + 1; i < lines.length; i++) {
+			const l = lines[i];
+			if (!l.trim() || l.trimStart().startsWith("#")) continue;
+			if (indent(l) <= ind) break;
+			out.push(i);
+		}
+		return out;
+	};
+	const top = lines.findIndex((l) => /^on_demand_loading:\s*(#.*)?$/.test(l));
+	assert.ok(top >= 0, "on_demand_loading");
+	const sec = blockAfter(top, 0).find((i) => indent(lines[i]) === 2 && /^\s*sections:\s*(#.*)?$/.test(lines[i]));
+	assert.ok(sec !== undefined, "on_demand_loading.sections");
+	const items = blockAfter(sec, 2);
+	const itemInd = indent(lines[items[0]]);
+	const start = items.find((i) => indent(lines[i]) === itemInd && /^\s*- id: naia-adk:regression_prevention\s*$/.test(lines[i]));
+	assert.ok(start !== undefined, "section item naia-adk:regression_prevention");
+	const body = blockAfter(start, itemInd).map((i) => lines[i]);
+	assert.ok(body.some((l) => /^\s*file: \.agents\/context\/regression-prevention\.json\s*$/.test(l)), "item file");
 	assert.match(live(".agents/context/ai-work-index.yaml"), /- name: "drift-recovery"[\s\S]*?- "docs\/guides\/drift-recovery\.md"/);
 });
