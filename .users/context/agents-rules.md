@@ -14,10 +14,19 @@
 - **org**: nextain
 - **repo**: nextain/naia-adk
 
+## context_boundaries
+
+- **shared_entrypoints_are_indexes**: AGENTS.md is the canonical repository index and CLAUDE.md/GEMINI.md are byte-identical mirrors. Shared entrypoints may contain identity, mandatory index paths, context routing, session-contract locations, and permanent safety boundaries only; never current goals, issue state, implementation plans, completion claims, or artifact wording.
+- **recovery_mode**: If .codex/no-harness, .claude/no-harness, or .pi/no-harness exists at the repository root, the harness and session-contract mutation requirements are disabled. Work normally under host permissions and repository safety rules; do not create or bind a session contract.
+- **session_contract_authority**: Outside recovery mode, an UNBOUND session may perform ordinary reversible file creation and editing inside its resolved project boundary. A BOUND contract is required for governance or host-policy files, shared entrypoints, deletion, mutating shell commands, external effects, and any operation that can expand the session's own authority. When bound, the local registry pointer, active contract digest, explicit session_bindings entry, and progress contract reference must all agree. Progress or Markdown session_id fields never grant authority.
+- **project_isolation**: Never infer a session binding from a parent workspace, child project, or the repository's only unfinished work unit. Concurrent contracts must declare non-overlapping target_ownership paths.
+- **context_is_not_output**: Background, reference, example, conversation, and internal context constrain reasoning but are not code, UI, or external-document content. Rendering requires explicit atom-level derive, quote, or require authority for a declared output unit and audience.
+- **source_atom_contract**: Every v2 source atom declares subject, effect, and render_policy. Non-directive source classifications keep directive_ids exactly empty; rendering authority never becomes objective authority.
+- **output_unit_contract**: Every verifiable v2 output unit declares kind, audience, exposure, objective_atom_ids, and content_source_atom_ids. Agent-workflow background/precondition atoms cannot be shipping content edges.
+
 ## local_projects
 
-이 워크스페이스 안에 체크아웃된 프로젝트. 포크가 자기 것으로 바꾼다.
-아래는 형태를 보이는 예시다.
+- **_description**: 이 워크스페이스 안에 체크아웃된 프로젝트. 포크가 자기 것으로 바꾼다. 아래는 형태를 보이는 예시다.
 
 ### naia-corp-web
 
@@ -70,8 +79,7 @@
 
 ## submodules
 
-서브모듈로 붙인 저장소. 포크가 자기 것으로 바꾼다.
-아래는 형태를 보이는 예시다.
+- **_description**: 서브모듈로 붙인 저장소. 포크가 자기 것으로 바꾼다. 아래는 형태를 보이는 예시다.
 
 ### docs-internal
 
@@ -357,6 +365,16 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 - **development_approach**: Issue-driven development (default). TDD where applicable.
 - **test_code_review**: After writing tests, never trust results blindly. Review test logic itself with iterative review (2 consecutive clean passes) before trusting outcomes. Signs of invalid tests: assertions that always pass, mocked internals that diverge from real behavior, missing negative cases.
 
+### debug_observability
+
+- **detail**: docs/guides/debug-logging.md
+- **logging**: Every service, batch job, and module emits structured logs (start, end, duration, input summary, result summary, failure) with a trace id.
+- **debug_mode**: Every service, batch job, and module has a debug mode switch; the default is ON and turning it off is an explicit choice.
+- **failure_detail**: Failure reasons are logged in full (message, stack, upstream response body); never truncate them.
+- **intermediate_artifacts**: Debug mode preserves per-stage intermediate artifacts and metadata.
+- **retention**: Every log and debug artifact location has a retention period, a size cap, and a scheduled cleanup batch that logs what it deleted.
+- **exclusions**: Never log secrets, tokens, credentials, personal data, or raw media bytes; log media as path, size, hash, and duration only.
+
 ### tmp_files
 
 - **rule**: All temporary/debug/scratch scripts MUST be created inside tmp/ at the root of the active working directory. NEVER create tmp-* or tmp_* files in the repo root or subproject roots.
@@ -379,6 +397,7 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 #### handoff_documents
 
 - **policy**: Local-only session or PC transfer artifacts. Never stage or commit them because stale handoff state can misdirect another machine or session.
+- **cross_machine**: Cross-machine continuation uses a remote GitHub issue plus reachable branch or commit SHAs as the only handoff boundary. Record durable scope, invariants, current state, validation, and blockers there; never transfer local session IDs, registry pointers, session maps, runtime contracts, progress/handoff files, harness units, credentials, or host-local receipts through Git.
 - **location**: Use .agents/work/, .agents/progress/, .agents/reviews/, tmp/, or a dedicated ignored .handoff/ or .handover/ directory. Topic-prefixed local notes such as project-handoff belong only in one of these ignored locations.
 - **naming**: A global local-only artifact basename starts with handoff or handover. Topic-prefixed formal documents remain trackable outside ignored local-artifact directories.
 - **boundary**: Durable handoff or handover guides and contracts under official docs/, spec/, design/, .agents/context/, or .agents/decisions/ directories remain trackable even when their basename starts with handoff or handover. Other durable project knowledge belongs in tracked context, requirements, decisions, or formal docs; do not disguise permanent documentation as a local handoff artifact.
@@ -525,6 +544,22 @@ B) Minimal — ships faster, revisit later [completeness 5/10]
 - **submodule_init**: git submodule update --init --recursive
 - **development_cycle**: .agents/workflows/development-cycle.yaml
 - **issue_driven_development**: .agents/workflows/issue-driven-development.yaml
+
+## public_repository_release_gate
+
+- **policy**: FAIL CLOSED: Before creating a public repository, changing a repository to public, publishing or updating a public template, or pushing content copied from a private workspace into a public repository, complete and record a public-safety review. A private destination does not make source material safe when its template or upstream is public.
+
+### required_scope
+
+- Review the complete candidate tree, including hidden files, generated assets, examples, fixtures, logs, progress records, requirements, agent context, and documentation.
+- Review reachable Git history, tags, branches intended for push, and inherited template history; deleting a file in a later commit is not sufficient removal.
+- Scan for secrets and credential material, personal data, private repository names and paths, internal hostnames, IP addresses, account identifiers, customer or employee data, operational topology, and non-public commercial or product information.
+- Classify every inherited requirement, progress record, conversation artifact, and example as intentionally public or remove it from both the candidate tree and publishable history.
+- Confirm license, third-party asset rights, submodule URLs, workflow permissions, GitHub Actions runners, issue templates, and release artifacts are suitable for untrusted public forks and pull requests.
+- Inspect the actual remote visibility immediately before the public action; never rely only on a local index or remembered state.
+- **evidence**: Record the reviewed commit SHA, remote visibility, scanners or deterministic checks run, findings and dispositions, history review result, and human approval in an issue or review artifact that contains no secret values.
+- **approval**: The repository owner must explicitly approve the reviewed immutable candidate before the first public push, visibility change, or public-template publication. Any candidate change after approval invalidates the approval and requires re-review.
+- **incident_response**: If potentially sensitive material is found in a public repository or public template, stop propagation, do not repeat the value in logs or reports, identify affected refs and forks, revoke or rotate credentials first, then perform repository-history remediation under explicit owner authority. A cleanup commit alone never closes the incident.
 
 ## context_governance
 

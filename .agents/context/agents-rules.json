@@ -299,6 +299,15 @@
     "response_language": "Korean (한국어로 응답)",
     "development_approach": "Issue-driven development (default). TDD where applicable.",
     "test_code_review": "After writing tests, never trust results blindly. Review test logic itself with iterative review (2 consecutive clean passes) before trusting outcomes. Signs of invalid tests: assertions that always pass, mocked internals that diverge from real behavior, missing negative cases.",
+    "debug_observability": {
+      "detail": "docs/guides/debug-logging.md",
+      "logging": "Every service, batch job, and module emits structured logs (start, end, duration, input summary, result summary, failure) with a trace id.",
+      "debug_mode": "Every service, batch job, and module has a debug mode switch; the default is ON and turning it off is an explicit choice.",
+      "failure_detail": "Failure reasons are logged in full (message, stack, upstream response body); never truncate them.",
+      "intermediate_artifacts": "Debug mode preserves per-stage intermediate artifacts and metadata.",
+      "retention": "Every log and debug artifact location has a retention period, a size cap, and a scheduled cleanup batch that logs what it deleted.",
+      "exclusions": "Never log secrets, tokens, credentials, personal data, or raw media bytes; log media as path, size, hash, and duration only."
+    },
     "tmp_files": {
       "rule": "All temporary/debug/scratch scripts MUST be created inside tmp/ at the root of the active working directory. NEVER create tmp-* or tmp_* files in the repo root or subproject roots.",
       "gitignore": "tmp/, tmp-*, tmp_* are gitignored at root. Files placed there are never tracked.",
