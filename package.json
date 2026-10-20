@@ -1,8 +1,8 @@
 {
   "name": "naia-adk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Naia ADK — AI Development Kit workspace with backend server and dashboard",
+  "description": "Naia ADK — Unified AI Development Kit framework (user, agent, project, org)",
   "type": "module",
   "engines": {
     "node": ">=22",
@@ -19,6 +19,10 @@
     "serve": "tsx packages/server/src/cli.ts serve",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
+    "test:adk-v020": "node --test tests/adk-v020.test.mjs",
+    "adk:validate": "node scripts/adk-link.mjs --validate .",
+    "adk:check": "node scripts/adk-link.mjs --check .",
+    "adk:scaffold-project": "node scripts/adk-scaffold-project.mjs",
     "test:request-contract": "node scripts/run-request-contract-tests.cjs",
     "test:harness-native": "node scripts/run-native-harness-tests.cjs",
     "test:entry-points": "node .claude/hooks/test/run-sync-entry-points-test.cjs && node .claude/hooks/test/run-agents-context-mirror-test.cjs && node .codex/hooks/test-session-contract-gate.cjs",

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{PROJECT_NAME}} — Playable Studio Preview</title>
+  <style>
+    :root {
+      --bg: #0b1120;
+      --card: #1e293b;
+      --border: #334155;
+      --accent: #38bdf8;
+      --gold: #facc15;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 24px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      max-width: 820px;
+      margin: 0 auto 16px;
+    }
+    h1 { font-size: 1.3rem; color: var(--accent); margin-bottom: 8px; }
+    p { color: var(--muted); font-size: 0.95rem; margin-bottom: 12px; }
+    .btn-row { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+    button {
+      background: #0f172a;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); color: var(--accent); }
+    pre {
+      background: #090d16;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 0.82rem;
+      color: #cbd5e1;
+      max-height: 280px;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🎮 {{PROJECT_NAME}} — Live Play Surface</h1>
+    <p>{{PROJECT_DESCRIPTION}} (Owner: {{OWNER}} / Responsible: {{RESPONSIBLE_HUMAN}})</p>
+    <div class="btn-row">
+      <button id="btn-ping">⚡ 전술 액션 이벤트 기록 (ENGINE)</button>
+      <button id="btn-warn">⚠️ 경고 이벤트 기록 (WARN)</button>
+      <button id="btn-snapshot">📋 window.__DEBUG__ 스냅샷 내보내기</button>
+    </div>
+    <pre id="debug-output">디버그 로거 초기화 중...</pre>
+  </div>
+
+  <script type="module">
+    import { logDebug, exportDebugSnapshot, onDebugLog } from '/src/debug-logger.mjs';
+
+    const out = document.getElementById('debug-output');
+    function render() {
+      const snap = exportDebugSnapshot({ screen: 'play-main', project: '{{PROJECT_ID}}' });
+      out.textContent = JSON.stringify(snap, null, 2);
+    }
+
+    onDebugLog(() => render());
+    logDebug('ENGINE', 'Play surface booted', { project: '{{PROJECT_ID}}' });
+
+    document.getElementById('btn-ping').onclick = () => {
+      logDebug('INPUT', 'User triggered action ping', { ts: Date.now() });
+    };
+    document.getElementById('btn-warn').onclick = () => {
+      logDebug('ENGINE', 'Simulated threshold warning', { load: 0.85 }, 'WARN');
+    };
+    document.getElementById('btn-snapshot').onclick = () => {
+      render();
+    };
+  </script>
+</body>
+</html>

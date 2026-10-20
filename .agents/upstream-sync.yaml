@@ -6,7 +6,7 @@
 # When propagating this file to a downstream, that fork edits its own values below
 # (upstream_repo, upstream_commit, last_synced_at) — the sync-upstream skill does this.
 
-adk_version: 0.1.0
+adk_version: 0.2.0
 upstream_repo: null          # null = top of chain (naia-adk). downstream = e.g. nextain/naia-adk
 upstream_commit: null        # last synced upstream commit sha (short). null at top.
 upstream_version: null       # upstream's VERSION at last sync

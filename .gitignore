@@ -6,7 +6,11 @@ dist/
 .next/
 *.tsbuildinfo
 
-# Environment & Secrets (T4)
+# Environment & Secrets (T4) + ADK v0.2.0 Key Isolation (keys/ never synced or linked)
+keys/
+**/keys/
+!**/keys/.gitkeep
+!**/keys/README.md
 .env
 .env.*
 !.env.example

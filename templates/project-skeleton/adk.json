@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "adk_version": "0.2.0",
+  "id": "{{PROJECT_ID}}",
+  "name": "{{PROJECT_NAME}}",
+  "kind": "project",
+  "owner": "{{OWNER}}",
+  "responsible_human": "{{RESPONSIBLE_HUMAN}}",
+  "base_commit": "0.2.0",
+  "paths": {
+    "rules": "rules",
+    "data": "data",
+    "keys": "keys",
+    "skills": "skills"
+  },
+  "isolation": {
+    "keys_isolated": true,
+    "keys_gitignored": true,
+    "keys_never_linked": true
+  },
+  "links": [],
+  "permissions": {
+    "allowed_roots": [
+      "docs",
+      "src",
+      "scripts",
+      "rules",
+      "data",
+      "skills"
+    ],
+    "denied_roots": [
+      "keys"
+    ],
+    "actions": [
+      "read",
+      "write",
+      "export"
+    ]
+  },
+  "project_config": {
+    "skeleton_version": "0.2.0",
+    "spec_chain": [
+      "REQ-LOG",
+      "PC",
+      "SP",
+      "UC",
+      "RQ",
+      "FE",
+      "UT",
+      "IT",
+      "E2E",
+      "QC"
+    ],
+    "participating_agents": [],
+    "dev_server": {
+      "docs_route": "/docs",
+      "play_route": "/play",
+      "port": 4173
+    },
+    "debug_logger": "src/debug-logger.mjs"
+  }
+}

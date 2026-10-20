@@ -1,0 +1,46 @@
+# 공통 채널·담당 표 예시 (channels.example.yaml)
+# 번호(Discord ID)나 기기·계정·모델 이름을 넣지 않고 역할 이름과 규칙만 적는다.
+schemaVersion: 1
+company: nextain
+roles: [minho, jina, alpha, naia]
+servers:
+  - key: internal
+    channels:
+      - key: studio
+        name: 나이아-스튜디오
+        wakeRoles: [minho, jina, alpha, naia]
+        primaryRole: minho
+        outsideCall: mention-or-name
+        description: 나이아 스튜디오 개발. 주 담당 민호. 부르지 않은 글엔 다른 역할은 읽기만 합니다.
+      - key: shell
+        name: 나이아-쉘
+        wakeRoles: [minho, jina, alpha, naia]
+        primaryRole: minho
+        outsideCall: mention-or-name
+        description: 나이아 쉘(데스크톱 앱) 개발. 주 담당 민호.
+      - key: adk
+        name: 나이아-adk
+        wakeRoles: [minho, jina, alpha, naia]
+        primaryRole: minho
+        outsideCall: mention-or-name
+        description: ADK 작업 방식과 도구. 주 담당 민호.
+      - key: infra
+        name: 나이아-인프라
+        wakeRoles: [minho]
+        primaryRole: minho
+        outsideCall: mention
+        description: 서버·기기·배포. 민호만 받습니다. 부를 때는 봇을 언급해 주세요.
+      - key: persona
+        name: 나이아-페르소나
+        wakeRoles: [alpha, minho]
+        primaryRole: alpha
+        outsideCall: mention
+        description: 나이아 성격과 학습 자료. 주 담당 알파, 민호 함께. 부를 때는 봇을 언급해 주세요.
+      - key: ax-edu
+        name: ax교육
+        wakeRoles: [minho, jina, alpha, naia]
+        primaryRole: jina
+        outsideCall: mention-or-name
+        description: 교육과 AX 영업. 주 담당 지나.
+  - key: customer
+    channels: []

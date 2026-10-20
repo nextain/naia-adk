@@ -1,0 +1,15 @@
+# ADK v0.2.0 Key Isolation (keys/ never synced or linked)
+keys/
+**/keys/
+!**/keys/.gitkeep
+!**/keys/README.md
+
+node_modules/
+tmp/
+tmp-*
+tmp_*
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db

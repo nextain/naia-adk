@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nextain.io/schemas/naia-adk/v0.2.0/channels.schema.json",
+  "title": "Naia ADK v0.2.0 Organization Channel & Role Table Schema (channels.yaml & channel-ids.json)",
+  "description": "Schema for organization channel-role tables (channels.yaml, no Discord IDs) and workspace instance ID mappings (channel-ids.json).",
+  "oneOf": [
+    { "$ref": "#/$defs/channelsTable" },
+    { "$ref": "#/$defs/channelIds" }
+  ],
+  "$defs": {
+    "channelsTable": {
+      "title": "Organization Channel & Role Table (channels.yaml)",
+      "type": "object",
+      "required": ["schemaVersion", "company", "roles", "servers"],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1,
+          "description": "Schema version of channels.yaml (must be 1)."
+        },
+        "company": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "Organization/company key (e.g. nextain, onmam)."
+        },
+        "roles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "description": "Role names belonging to this organization (no device/account/model names)."
+        },
+        "servers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["key", "channels"],
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[a-z0-9][a-z0-9_-]*$",
+                "description": "Logical server key (e.g. internal, customer) — never a Discord guild ID."
+              },
+              "channels": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/channelEntry"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "channelEntry": {
+      "type": "object",
+      "required": ["key", "name", "wakeRoles", "primaryRole"],
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "description": "Unique channel key within the company (never a raw Discord channel ID)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable channel name (e.g. 나이아-스튜디오)."
+        },
+        "wakeRoles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Non-empty, unique list of roles invited to this channel (must be a subset of table roles)."
+        },
+        "primaryRole": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Primary role responsible for answering unaddressed messages (must be in wakeRoles)."
+        },
+        "outsideCall": {
+          "type": "string",
+          "enum": ["mention", "mention-or-name"],
+          "default": "mention-or-name",
+          "description": "How roles outside wakeRoles can be called into this channel."
+        },
+        "description": {
+          "type": "string",
+          "description": "Channel topic/description text."
+        },
+        "archived": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, excluded from Layer-4 watch targets while bot bindings stay read-only."
+        }
+      }
+    },
+    "channelIds": {
+      "title": "Workspace Channel ID Mapping (channel-ids.json)",
+      "type": "object",
+      "required": ["schemaVersion", "companies", "allowedUserIds", "readerInstance"],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "type": "integer",
+          "const": 1
+        },
+        "companies": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "required": ["servers"],
+            "additionalProperties": false,
+            "properties": {
+              "servers": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {
+                  "type": "object",
+                  "required": ["guildId", "channels"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "guildId": {
+                      "type": ["string", "null"],
+                      "pattern": "^\\d{17,20}$",
+                      "description": "Discord guild snowflake ID, or null if server is not yet created."
+                    },
+                    "channels": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "pattern": "^\\d{17,20}$"
+                      },
+                      "description": "Map of channel key -> Discord channel snowflake ID."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "allowedUserIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^\\d{17,20}$"
+          },
+          "description": "Discord user snowflake IDs allowed to trigger bot bindings."
+        },
+        "readerInstance": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Messenger instance used by Layer-4 watch to read channels (e.g. minho)."
+        },
+        "teamMessengerChannelId": {
+          "type": ["string", "null"],
+          "pattern": "^\\d{17,20}$",
+          "description": "Optional team announcement channel ID (prohibited inside channels.yaml)."
+        }
+      }
+    }
+  }
+}

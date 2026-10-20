@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "companies": {
+    "nextain": {
+      "servers": {
+        "internal": {
+          "guildId": "1000000000000000001",
+          "channels": {
+            "studio": "2000000000000000001",
+            "shell": "2000000000000000002",
+            "adk": "2000000000000000003",
+            "infra": "2000000000000000004",
+            "persona": "2000000000000000005",
+            "ax-edu": "2000000000000000006"
+          }
+        },
+        "customer": {
+          "guildId": null,
+          "channels": {}
+        }
+      }
+    }
+  },
+  "allowedUserIds": [
+    "9000000000000000001"
+  ],
+  "readerInstance": "minho",
+  "teamMessengerChannelId": "3000000000000000001"
+}

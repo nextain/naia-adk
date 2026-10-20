@@ -1,0 +1,364 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nextain.io/schemas/naia-adk/v0.2.0/adk-manifest.schema.json",
+  "title": "Naia ADK v0.2.0 Unified Manifest (adk.json)",
+  "description": "Unified schema for the 4 ADK instance kinds: user, agent, project, and org.",
+  "type": "object",
+  "required": [
+    "adk_version",
+    "kind",
+    "id",
+    "owner",
+    "responsible_human",
+    "links",
+    "permissions"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "default": "1.0",
+      "description": "Manifest schema version."
+    },
+    "adk_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[A-Za-z0-9.-]+)?$",
+      "description": "Naia ADK framework version (e.g. 0.2.0)."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["user", "agent", "project", "org"],
+      "description": "The ADK instance kind: user (내 자리), agent (AI 직원), project (만드는 것), org (우리 회사/기관)."
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+      "description": "Unique identifier of this ADK instance."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable name of this ADK instance."
+    },
+    "role": {
+      "type": "string",
+      "description": "Optional role marker (e.g. framework_base, instance)."
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Owner identifier (user or organization)."
+    },
+    "responsible_human": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S+",
+      "description": "Mandatory human person responsible for this ADK. Empty value is strictly rejected."
+    },
+    "base_commit": {
+      "type": ["string", "null"],
+      "description": "Baseline commit or tag SHA of the naia-adk template."
+    },
+    "paths": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "properties": {
+        "rules": { "type": "string", "default": "rules" },
+        "data": { "type": "string", "default": "data" },
+        "keys": { "type": "string", "default": "keys" },
+        "skills": { "type": "string", "default": "skills" }
+      }
+    },
+    "isolation": {
+      "type": "object",
+      "properties": {
+        "keys_isolated": { "type": "boolean", "const": true },
+        "keys_gitignored": { "type": "boolean", "const": true },
+        "keys_never_linked": { "type": "boolean", "const": true },
+        "env_only_org_key_injection": {
+          "type": "boolean",
+          "default": true,
+          "description": "조직 키는 다른 ADK에 파일로 복사하지 않고 조직 실행 자리(agents/<이름>/) 세션 시작 시 환경변수로만 주입함."
+        }
+      }
+    },
+    "work_ledger_policy": {
+      "type": "object",
+      "description": "업무 장부(.agents/work, 진행 기록)는 에이전트 ADK에 두지 않고 업무 주체인 user/project/org ADK에만 둠 (다조직 에이전트 업무 기록 혼선 방지).",
+      "properties": {
+        "allowed_kinds": {
+          "type": "array",
+          "default": ["user", "project", "org"],
+          "items": { "type": "string", "enum": ["user", "project", "org"] }
+        },
+        "prohibited_kinds": {
+          "type": "array",
+          "default": ["agent"],
+          "items": { "type": "string", "const": "agent" }
+        }
+      }
+    },
+    "config_precedence": {
+      "type": "array",
+      "description": "겹치는 일반 설정 우선순위: 실행 인자(cli_args) > 프로젝트(project) > 에이전트(agent) > 유저(user) > 조직(org) > 틀(framework). 권한·금지 및 키 소유는 이 순서와 무관.",
+      "default": ["cli_args", "project", "agent", "user", "org", "framework"],
+      "items": {
+        "type": "string",
+        "enum": ["cli_args", "project", "agent", "user", "org", "framework"]
+      }
+    },
+    "links": {
+      "type": "array",
+      "description": "Attached ADK links visible from this ADK's perspective.",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "local_path"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["user", "agent", "project", "org"]
+          },
+          "local_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Relative path to the linked ADK on the same machine."
+          },
+          "mount_path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Relative symlink path inside this ADK (e.g. agents/jina or projects/naia-arcade)."
+          },
+          "remote_url": {
+            "type": ["string", "null"]
+          },
+          "adk_version": {
+            "type": "string"
+          },
+          "shared_folders": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["folder", "mode"],
+              "properties": {
+                "folder": { "type": "string", "minLength": 1 },
+                "mode": { "type": "string", "enum": ["read", "write"] }
+              }
+            }
+          }
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "required": ["allowed_roots", "denied_roots", "actions"],
+      "properties": {
+        "allowed_roots": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "denied_roots": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": ["read", "write", "export"]
+          }
+        },
+        "grants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["subject", "allowed_roots", "denied_roots", "actions"],
+            "properties": {
+              "subject": { "type": "string", "minLength": 1 },
+              "allowed_roots": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "denied_roots": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["read", "write", "export"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "user_config": {
+      "type": "object",
+      "description": "Additional fields for kind=user (내 자리). 나이아쉘은 유저 ADK를 읽고 붙은 에이전트 ADK들을 띄우는 그릇이다.",
+      "properties": {
+        "shell": {
+          "type": "object",
+          "properties": {
+            "workspace_root": { "type": "string" },
+            "reads_user_adk": { "type": "boolean", "default": true },
+            "set_workspace_target_kind": {
+              "type": "string",
+              "const": "agent",
+              "default": "agent",
+              "description": "뇌(naia-agent)의 SetWorkspace 루트는 유저 ADK가 아니라 에이전트 ADK 경로임."
+            },
+            "theme": { "type": "string" },
+            "voice_enabled": { "type": "boolean" },
+            "avatar_display": { "type": "boolean" }
+          }
+        },
+        "devices": {
+          "type": "array",
+          "items": { "type": ["string", "object"] }
+        },
+        "accounts": {
+          "type": "array",
+          "items": { "type": ["string", "object"] }
+        }
+      }
+    },
+    "agent_config": {
+      "type": "object",
+      "description": "Additional fields for kind=agent (AI 직원). 에이전트 세션의 SetWorkspace 루트이며 업무 장부는 두지 않는다.",
+      "properties": {
+        "agent_json_path": { "type": "string", "default": "agent.json" },
+        "is_set_workspace_root": { "type": "boolean", "default": true },
+        "work_ledger_prohibited": { "type": "boolean", "const": true, "default": true },
+        "birth": {
+          "type": "object",
+          "required": ["created_at", "created_by", "adk_version"],
+          "properties": {
+            "created_at": { "type": "string", "minLength": 1, "description": "만든 때 (ISO-8601)" },
+            "created_by": { "type": "string", "minLength": 1, "description": "만든 이 (사람 식별자)" },
+            "adk_version": { "type": "string", "minLength": 1, "description": "생성 시점의 틀 판(예: 0.2.0)" }
+          }
+        },
+        "organizations": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Organization names (strings only, never links to prevent cycles)."
+        },
+        "projects": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "persona_dir": { "type": "string", "default": "persona" },
+        "memory": {
+          "type": "object",
+          "properties": {
+            "common_dir": { "type": "string", "default": "memory/common" },
+            "groups_dir": { "type": "string", "default": "memory/groups" },
+            "org_scope_pattern": { "type": "string", "default": "memory/groups/<org>" }
+          }
+        },
+        "nva": {
+          "type": "object",
+          "properties": {
+            "dir": { "type": "string", "default": "nva" },
+            "config_file": { "type": "string" }
+          }
+        },
+        "public_room": {
+          "type": "object",
+          "properties": {
+            "dir": { "type": "string", "default": "public-room" },
+            "enabled": { "type": "boolean", "default": false }
+          }
+        }
+      }
+    },
+    "project_config": {
+      "type": "object",
+      "description": "Additional fields for kind=project (만드는 것).",
+      "properties": {
+        "skeleton_version": { "type": "string", "default": "0.2.0" },
+        "spec_chain": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "participating_agents": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "dev_server": {
+          "type": "object",
+          "properties": {
+            "docs_route": { "type": "string", "default": "/docs" },
+            "play_route": { "type": "string", "default": "/play" },
+            "port": { "type": "integer", "default": 4173 }
+          }
+        },
+        "debug_logger": { "type": "string", "default": "src/debug-logger.mjs" }
+      }
+    },
+    "org_config": {
+      "type": "object",
+      "description": "Additional fields for kind=org (우리 회사/기관).",
+      "properties": {
+        "members": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "channels_table": { "type": "string", "default": "channels.yaml" },
+        "channel_ids_file": { "type": "string", "default": "channel-ids.json" },
+        "channel_roles_generator": { "type": "string", "default": "scripts/channel-roles-gen.mjs" },
+        "agents_dir": { "type": "string", "default": "agents" },
+        "agent_slots_pattern": {
+          "type": "string",
+          "default": "agents/<name>/",
+          "description": "조직 에이전트 실행 자리(에이전트 ADK의 복제본 또는 상대 소프트링크)."
+        },
+        "key_injection_policy": {
+          "type": "object",
+          "properties": {
+            "method": { "type": "string", "const": "env_only", "default": "env_only" },
+            "never_copy_key_files": { "type": "boolean", "const": true, "default": true },
+            "server_session_only": { "type": "boolean", "const": true, "default": true }
+          }
+        },
+        "projects_dir": { "type": "string", "default": "projects" },
+        "subscription_pools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "provider"],
+            "properties": {
+              "id": { "type": "string" },
+              "provider": { "type": "string" },
+              "assigned_agents": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        },
+        "messenger_servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "kind"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "kind": { "type": "string", "enum": ["internal", "customer", "partner"] },
+              "name": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
