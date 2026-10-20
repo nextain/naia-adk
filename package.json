@@ -1,8 +1,8 @@
 {
   "name": "naia-adk",
-  "version": "0.2.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Naia ADK — Unified AI Development Kit framework (user, agent, project, org)",
+  "description": "Naia ADK — Unified AI Development Kit framework (user, group, agent, project, schedule)",
   "type": "module",
   "engines": {
     "node": ">=22",
@@ -20,6 +20,7 @@
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "test:adk-v020": "node --test tests/adk-v020.test.mjs",
+    "test:adk-v200": "node --test tests/adk-v200.test.mjs",
     "adk:validate": "node scripts/adk-link.mjs --validate .",
     "adk:check": "node scripts/adk-link.mjs --check .",
     "adk:scaffold-project": "node scripts/adk-scaffold-project.mjs",

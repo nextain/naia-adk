@@ -1,0 +1,19 @@
+{
+  "schema_note": "Naia ADK 2.0 minimal group rules (templates/group-skeleton)",
+  "status": "minimal draft",
+  "group_id": "example-group",
+  "kind": "group",
+  "mandatory_reads": [
+    ".agents/context/agents-rules.json",
+    ".agents/context/project-index.yaml",
+    "index.md"
+  ],
+  "rules": [
+    "Never commit secrets, tokens, or raw messenger IDs to the repository; keys/ is gitignored and stored in the vault only.",
+    "Keep real member names and internal records strictly inside private group ADK instances; public templates use role-word placeholders only.",
+    "Use git for source control and track tasks via work documents in docs/work/ (document ID = work ID, front matter 마일스톤: and 기한:, and ## 할 일 table).",
+    "Each agent seat is a folder agents/<id>-adk/ with index.md inside (agents/<id>-adk/index.md).",
+    "Require explicit human approval before production changes, billing/payments, or external communications.",
+    "Never mix memory, credentials, or data across different groups."
+  ]
+}

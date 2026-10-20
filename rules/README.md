@@ -6,7 +6,7 @@
 
 ## 1. 개요
 
-이 디렉토리(`projects/naia-adk/rules/`)는 개발 워크스페이스 운영 과정에서 실측·정립된 규칙, 검증 게이트, 4층 센서 루프, QA 절차, 다중 계정 관리, 그리고 에이전트 중심 4종 ADK(`user`/`agent`/`project`/`org`)와 사내 메신저 채널·담당 표(`channel-roles-gen.mjs`) 아키텍처를 특정 개인·회사의 비밀값이나 로컬 경로 없이 범용 표준으로 추상화한 정본 카탈로그다.
+이 디렉토리(`projects/naia-adk/rules/`)는 개발 워크스페이스 운영 과정에서 실측·정립된 규칙, 검증 게이트, 4층 센서 루프, QA 절차, 다중 계정 관리, 그리고 에이전트 중심 4종 ADK(`user`/`group`[구 `org` 읽기 호환 별칭]/`agent`/`project`)와 일정(`schedule`), 사내 메신저 채널·담당 표(`channel-roles-gen.mjs`) 아키텍처를 특정 개인·회사의 비밀값이나 로컬 경로 없이 범용 표준으로 추상화한 정본 카탈로그다.
 
 ---
 
@@ -41,7 +41,7 @@
 5. **[`multi-cli-account-management.md`](multi-cli-account-management.md)**
    - Claude Code 4계층 다중 계정 아키텍처(슬롯 격리·실시간 지문 미러링·무토큰 OAuth 사용량 조회·95% 임계치 양방향 자동 전환) 및 6대 CLI(`claude`, `codex`, `agy`, `muse`, `grok`, `opencode`) 역할·계정 분리 표준.
 6. **[`discord-channel-roles-and-org-adk.md`](discord-channel-roles-and-org-adk.md)**
-   - 나이아쉘(`user` ADK 읽기) ⇄ 뇌(`agent` ADK `SetWorkspace` 루트) 분리, 에이전트 ADK(`birth`, `nva/`, `public-room/`, `memory/common/`+`memory/groups/<org>/`), 조직 실행 자리(`agents/<이름>/`)와 환경변수(`env_only`) 키 주입, 업무 장부의 에이전트 ADK 배제(`user`/`project`/`org` 보유), 설정 우선순위(`실행 인자 > 프로젝트 > 에이전트 > 유저 > 조직 > 틀`), 그리고 채널·담당 표(`channels.yaml` + `channel-ids.json`) 생성기 `channel-roles-gen.mjs`의 7가지 결정론적 검사.
+   - 나이아쉘(`user` ADK 읽기) ⇄ 뇌(`agent` ADK `SetWorkspace` 루트) 분리, 에이전트 ADK(`birth`, `nva/`, `public-room/`, `memory/common/`+`memory/groups/<group>/`), 그룹(구 조직, `group` / 레거시 별칭 `org`) 실행 자리(`agents/<이름>/`)와 환경변수(`env_only`) 키 주입, 업무 장부의 에이전트 ADK 배제(`user`/`project`/`group` 보유), 설정 우선순위(`실행 인자 > 프로젝트 > 에이전트 > 유저 > 그룹 > 틀`), 그리고 채널·담당 표(`channels.yaml` + `channel-ids.json`) 생성기 `channel-roles-gen.mjs`의 7가지 결정론적 검사.
 
 ---
 

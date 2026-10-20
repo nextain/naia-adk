@@ -12,15 +12,15 @@
 2. **에이전트 ADK의 고유 슬롯 (`birth`, `nva/`, `public-room/`, `memory/`)**:
    - `agent.json`과 `adk.json`의 `agent_config`에는 `birth`(`created_at` 만든 때, `created_by` 만든 이, `adk_version` 틀 판)와 소속 조직 이름 배열(`organizations` — 순환 링크 방지를 위해 링크가 아닌 이름 문자열만 기록)을 둔다.
    - 얼굴·목소리 아바타(`nva/`), 외부 에이전트가 방문하는 공개 방(`public-room/`, 내보내기 `export` 권한으로 통제), 그리고 공통 기억(`memory/common/`)과 조직별 격리 기억(`memory/groups/<org>/`)을 에이전트 ADK 안에 둔다.
-3. **조직 실행 자리(`agents/<이름>/`)와 환경변수 키 주입 원칙**:
-   - 조직 ADK(`kind: "org"`)의 `agents/<이름>/`은 해당 에이전트 ADK의 복제본(또는 같은 기기 내 상대 경로 소프트링크)이 놓이는 **조직 실행 자리**다.
-   - **키 파일을 다른 ADK로 절대 복사하지 않는다**. 에이전트가 조직 키(회사 AI 구독, 인프라 권한 등)가 필요한 일을 할 때는 ① 회사 서버의 조직 자리(`agents/<이름>/`)에서 뜬 세션에만 ② 조직 ADK 실행기가 시작 시 **환경변수(`env_only`)로만 주입**하고 ③ 에이전트 ADK 파일이나 자식 로그에는 남기지 않는다.
+3. **그룹(조직) 실행 자리(folder `agents/<id>-adk/` with `index.md`)와 환경변수 키 주입 원칙**:
+   - 실제 운영에서 돌아가는 단위는 그룹 ADK(`kind: "group"`, 구 `"org"`는 읽기 전용 호환 별칭)이며, 각 에이전트 자리는 소속 그룹 ADK 안의 폴더 `agents/<id>-adk/`와 그 안의 입구 문서 `index.md` (`agents/<id>-adk/index.md`, `group_config.agents[].seat` 생략 시 기본값 `agents/<id>-adk`)로 둔다. 자리 폴더가 존재하는데 에이전트 `file`이 자리 폴더 밖을 가리키면 `agent doc should live in its seat`(경고)로 알리고, 자리 폴더가 아직 없으면 `seat not created`, 폴더만 있고 `adk.json`이 아직 없으면 `seat without manifest` 열린 빈칸(경고)으로 다루며, 유효한 `kind: "agent"` `adk.json`이 있으면 준비된 자리(`seats ready`)로 본다.
+   - **키 파일을 다른 ADK로 절대 복사하지 않는다**. 에이전트가 그룹 키(회사 AI 구독, 인프라 권한 등)가 필요한 일을 할 때는 ① 회사 서버의 그룹 자리(`agents/<id>-adk/`)에서 뜬 세션에만 ② 그룹 ADK 실행기가 시작 시 **환경변수(`env_only`)로만 주입**하고 ③ 에이전트 ADK 파일이나 자식 로그에는 남기지 않는다.
 4. **업무 장부(`.agents/work`, 진행 기록)의 에이전트 ADK 배제**:
-   - 실행 상태·계약·진행 기록(업무 장부)은 업무 주체를 따라 **조직 업무는 `org` ADK, 개인 업무는 `user` ADK, 제품 이슈는 `project` ADK**에 둔다.
-   - **에이전트 ADK에는 기억·성격·설정만 쌓고 업무 장부는 두지 않는다** (`work_ledger_prohibited: true`). 이로써 한 에이전트가 여러 조직에 속하더라도 조직 간 업무 기록이 섞이지 않는다.
-5. **설정 우선순위 (`실행 인자 > 프로젝트 > 에이전트 > 유저 > 조직 > 틀`)**:
-   - 먼저 항목별 소유를 나눈다(화면·기기·계정 = `user`, 말투·모델·NVA·기억 = `agent`, 제품·시험·배포 = `project`, 조직 규칙·채널 표 = `org`).
-   - 불가피하게 겹치는 일반 설정만 **`실행 인자(cli_args) > 프로젝트(project) > 에이전트(agent) > 유저(user) > 조직(org) > 틀(framework)`** 순서를 따른다. 단, **권한·금지(` 부여 ∩ 상한 − 금지`)와 비밀키(`keys/`) 소유는 이 우선순위와 무관**하게 엄격히 계산한다.
+   - 실행 상태·계약·진행 기록(업무 장부)은 업무 주체를 따라 **그룹 업무는 `group`(구 `org`) ADK, 개인 업무는 `user` ADK, 제품 이슈는 `project` ADK**에 둔다.
+   - **에이전트 ADK에는 기억·성격·설정만 쌓고 업무 장부는 두지 않는다** (`work_ledger_prohibited: true`). 이로써 한 에이전트가 여러 그룹에 속하더라도 그룹 간 업무 기록이 섞이지 않는다.
+5. **설정 우선순위 (`실행 인자 > 프로젝트 > 에이전트 > 유저 > 그룹 > 틀`)**:
+   - 먼저 항목별 소유를 나눈다(화면·기기·계정 = `user`, 말투·모델·NVA·기억 = `agent`, 제품·시험·배포 = `project`, 그룹 규칙·채널 표·일정 = `group`[구 `org`]).
+   - 불가피하게 겹치는 일반 설정만 **`실행 인자(cli_args) > 프로젝트(project) > 에이전트(agent) > 유저(user) > 그룹(group) > 틀(framework)`** 순서를 따른다. 단, **권한·금지(`부여 ∩ 상한 − 금지`)와 비밀키(`keys/`) 소유는 이 우선순위와 무관**하게 엄격히 계산한다.
 6. **사내 메신저 채널·담당 표의 3자리 구조와 결정론적 생성기 (`channel-roles-gen.mjs`)**:
    - 어느 채널에 어느 역할이 초대되었고 누가 주 담당(`primaryRole`)인지 한 곳(`channels.yaml` + `channel-ids.json`)에 적고, 생성기(`scripts/channel-roles-gen.mjs`)로 **① 역할별 봇 묶음(`discord.bindings`), ② 4층 감시 대상(`discord-watch.json`), ③ 채널 설명 및 사람용 문서(`channels-and-wake.md`)** 셋을 한 번에 만들어 어긋남을 원천 차단한다.
 
@@ -37,8 +37,8 @@ flowchart TB
     end
 
     subgraph OrgServer["회사 서버 (독립 깃 저장소)"]
-        O["조직 ADK (kind=org / 우리 회사)<br/>• 조직 규칙 · 조직 데이터 · 조직 키(keys/)<br/>• 조직 업무 장부<br/>• channels.yaml + channel-ids.json"]
-        SLOT["조직 실행 자리 (agents/&lt;role&gt;/)<br/>• 에이전트 ADK 복제본/상대 링크<br/>• 조직 키는 세션 기동 시 환경변수(env)로만 주입"]
+        O["그룹 ADK (kind: &quot;group&quot;, 구 org는 읽기 전용 호환 별칭)<br/>• 그룹 규칙 · 그룹 데이터 · 그룹 키(keys/)<br/>• 그룹 업무 장부<br/>• channels.yaml + channel-ids.json"]
+        SLOT["그룹 에이전트 자리 (agents/&lt;id&gt;-adk/)<br/>• 에이전트 ADK (kind: &quot;agent&quot;)<br/>• 그룹 키는 세션 기동 시 환경변수(env)로만 주입"]
         GEN["channel-roles-gen.mjs<br/>(7가지 결정론적 검사)"]
         O --> SLOT
         O --> GEN
@@ -62,7 +62,7 @@ flowchart TB
 | **`user`** | 내 자리 | 붙은 에이전트·프로젝트·조직 목록, 각 에이전트 상태·NVA·설정, 자기 기기·계정 | 조직 키, 구성원 권한 밖 조직 폴더, 다른 유저 | 보유 (개인 업무) |
 | **`agent`** | AI 직원 | 소유 유저 식별자, 소속 조직 이름(문자열), 참여 프로젝트, 자기 기억·규칙·키 | 다른 에이전트 기억·키, 현재 실행 자리 밖의 다른 조직 기억·데이터·키, 유저 키 | **금지** (`work_ledger_prohibited`) |
 | **`project`** | 만드는 것 | 참여 에이전트 이름들, 소유 조직/유저, 제품 명세·이슈·검증 기록, 프로젝트 자체 키 | 에이전트 기억, 다른 ADK의 키 | 보유 (제품 이슈·검증) |
-| **`org`** | 우리 회사(기관) | 조직 에이전트 묶음(`agents/<이름>/`), 조직 프로젝트, 구성원 식별자, 조직 키·규칙·채널 표 | 구성원 유저의 개인 에이전트·개인 데이터, 공유 허용 안 된 `memory/common/` 및 타 조직 기억 | 보유 (조직 업무) |
+| **`group` (구 `org`)** | 우리 그룹(팀/회사/고객) | 그룹 에이전트 자리(`agents/<이름>/`), 그룹 프로젝트, 구성원 식별자, 그룹 키·규칙·일정·채널 표 | 구성원 유저의 개인 에이전트·개인 데이터, 공유 허용 안 된 `memory/common/` 및 타 그룹 기억 | 보유 (그룹 업무) |
 
 ---
 

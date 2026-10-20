@@ -58,12 +58,13 @@ test('1. schemas/channels.schema.json, templates/org-channels/*, and codesign v0
 
   const manifestSchema = JSON.parse(fs.readFileSync(path.join(naiaAdkRoot, 'schemas', 'adk-manifest.schema.json'), 'utf8'));
   assert.deepEqual(manifestSchema.properties.config_precedence.default, [
-    'cli_args', 'project', 'agent', 'user', 'org', 'framework',
+    'cli_args', 'project', 'agent', 'user', 'group', 'framework',
   ]);
   assert.deepEqual(manifestSchema.properties.work_ledger_policy.properties.allowed_kinds.default, [
-    'user', 'project', 'org',
+    'user', 'project', 'group',
   ]);
   assert.equal(manifestSchema.properties.user_config.properties.shell.properties.set_workspace_target_kind.const, 'agent');
+  assert.equal(manifestSchema.properties.group_config.properties.key_injection_policy.properties.method.const, 'env_only');
   assert.equal(manifestSchema.properties.org_config.properties.key_injection_policy.properties.method.const, 'env_only');
 
   const ruleDoc = fs.readFileSync(path.join(naiaAdkRoot, 'rules', 'discord-channel-roles-and-org-adk.md'), 'utf8');

@@ -1,12 +1,12 @@
 {
   "schema_version": "1.0",
-  "adk_version": "0.2.0",
+  "adk_version": "2.0.0",
   "id": "{{PROJECT_ID}}",
   "name": "{{PROJECT_NAME}}",
   "kind": "project",
   "owner": "{{OWNER}}",
   "responsible_human": "{{RESPONSIBLE_HUMAN}}",
-  "base_commit": "0.2.0",
+  "base_commit": "2.0.0",
   "paths": {
     "rules": "rules",
     "data": "data",
@@ -38,7 +38,7 @@
     ]
   },
   "project_config": {
-    "skeleton_version": "0.2.0",
+    "skeleton_version": "2.0.0",
     "spec_chain": [
       "REQ-LOG",
       "PC",

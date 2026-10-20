@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Naia ADK v0.2.0 — Automated Project ADK Scaffolder
+ * Naia ADK v2.0.0 — Automated Project ADK Scaffolder
  *
  * Usage:
  *   node projects/naia-adk/scripts/adk-scaffold-project.mjs \
@@ -86,7 +86,7 @@ export function scaffoldProjectAdk({
     PROJECT_DESCRIPTION:
       description && String(description).trim()
         ? String(description).trim()
-        : `${String(name).trim()} — Naia ADK v0.2.0 Project Studio`,
+        : `${String(name).trim()} — Naia ADK v2.0.0 Project Studio`,
     OWNER: String(owner).trim(),
     RESPONSIBLE_HUMAN: String(responsibleHuman).trim(),
     DATE: date || new Date().toISOString().slice(0, 10),
@@ -143,15 +143,17 @@ export function scaffoldAdkInstance({
     fs.mkdirSync(path.join(resolvedTarget, dirName), { recursive: true });
   }
 
+  const effectiveKind = kind === 'org' ? 'group' : kind;
+
   const baseManifest = {
     schema_version: '1.0',
-    adk_version: '0.2.0',
+    adk_version: '2.0.0',
     id,
     name: name || id,
-    kind,
+    kind: effectiveKind,
     owner: String(owner).trim(),
     responsible_human: String(responsibleHuman).trim(),
-    base_commit: '0.2.0',
+    base_commit: '2.0.0',
     paths: {
       rules: 'rules',
       data: 'data',
@@ -171,18 +173,20 @@ export function scaffoldAdkInstance({
     },
   };
 
-  if (kind === 'user') {
+  if (effectiveKind === 'user') {
     baseManifest.user_config = {
       shell: { workspace_root: '.', theme: 'dark', voice_enabled: true, avatar_display: true },
       devices: ['primary-pc'],
       accounts: [owner],
+      groups: [],
     };
-  } else if (kind === 'agent') {
+  } else if (effectiveKind === 'agent') {
     const nowIso = new Date().toISOString();
     baseManifest.permissions.allowed_roots.push('persona', 'memory/common', 'nva', 'public-room');
     baseManifest.agent_config = {
       agent_json_path: 'agent.json',
-      birth: { created_at: nowIso, created_by: String(responsibleHuman).trim(), adk_version: '0.2.0' },
+      birth: { created_at: nowIso, created_by: String(responsibleHuman).trim(), adk_version: '2.0.0' },
+      groups: [],
       organizations: [],
       projects: [],
       persona_dir: 'persona',
@@ -199,6 +203,7 @@ export function scaffoldAdkInstance({
       owner: String(owner).trim(),
       responsible_human: String(responsibleHuman).trim(),
       birth: baseManifest.agent_config.birth,
+      groups: [],
       organizations: [],
       information_scope: {
         allowed_roots: baseManifest.permissions.allowed_roots,
@@ -206,14 +211,14 @@ export function scaffoldAdkInstance({
       },
     };
     fs.writeFileSync(path.join(resolvedTarget, 'agent.json'), JSON.stringify(agentJson, null, 2) + '\n', 'utf8');
-  } else if (kind === 'org') {
+  } else if (effectiveKind === 'group') {
     baseManifest.permissions.allowed_roots.push('agents', 'projects');
-    baseManifest.org_config = {
-      members: [String(responsibleHuman).trim()],
-      channels_table: 'channels.yaml',
-      channel_ids_file: 'channel-ids.json',
-      agents_dir: 'agents',
-      projects_dir: 'projects',
+    baseManifest.group_config = {
+      members: [{ user_id: String(responsibleHuman).trim(), access: 'owner' }],
+      projects: [],
+      agents: [],
+      calendar: { milestones: [] },
+      channels: 'channels.yaml',
       messenger_servers: [
         { id: 'internal-main', kind: 'internal', name: 'Internal Workspace Server' },
         { id: 'customer-support', kind: 'customer', name: 'Customer Dedicated Server' },

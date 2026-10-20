@@ -4,6 +4,57 @@
 
 ---
 
+## [2.0.0] — 2026-10-20
+
+### 1. 핵심 변경 요약 (5대 단위 재편: user · group · agent · project · schedule 및 `org` → `group` 전환)
+
+- **5대 구성 단위로 ADK 체계 재정립**:
+  - `user` (**한 사람 / 내 자리**): 개인 설정, 기기, 개인 키(`keys/`), 소속 그룹 목록(`user_config.groups[]`)을 가집니다.
+  - `group` (**함께 일하는 팀·회사·고객 / 우리 그룹**): 구성원(`members[]`)과 권한(`owner` / `admin` / `member` / `viewer` / `unset`), 그룹 규칙·데이터, 절대 링크하지 않는 그룹 키(`keys/`), 메신저 채널 표(`channels`), 프로젝트 목록(`projects[]` 및 1단계 하위 `services[]`), 에이전트 자리(`agents[]`), 그룹 일정(`calendar`)과 업무 장부를 가집니다.
+  - `agent` (**한 역할을 맡은 AI 직원** — 개발·마케팅·사업·고객지원 등): 성격(`persona/`), 기억(`memory/common/`, `memory/groups/<group>/`), 봇 키(`keys/`), 얼굴·목소리(`nva/`), 참여 그룹 식별자 배열(`agent_config.groups[]`)을 가집니다. **에이전트에는 업무 장부를 두지 않습니다.**
+  - `project` (**만드는 서비스·제품**): 제품 저장소, 명세 사슬(`PC → SP/UC → RQ → FE → [UT → IT → E2E] → QC`), 검증 기록, 배포 경로를 가집니다.
+  - `schedule` (**일정 및 작업 문서**): 마일스톤(`id`, `name`, `due`, `done_when`)과 작업 문서(`.md`)로 구성됩니다. 깃 이슈를 쓰지 않고 **작업 문서 자체가 업무 단위(문서 ID = 이슈 ID)**가 되며, 문서 머리말의 `마일스톤:`·`기한:`(`YYYY-MM-DD`)과 `## 할 일` 표(`할 일`, `담당`, `상태` 열 필수, `상태`가 `완료`인 줄을 완료로 집계)를 기준으로 일정을 확인하고 알림을 줍니다(권한은 부여하지 않음).
+- **권한 계산 및 설정 우선순위 유지**:
+  - 한 사람이 여러 그룹에 속할 수 있으며, 실제 권한은 **`그룹이 부여한 권한 ∩ 개인 상한 − 금지`**로 계산합니다.
+  - 일반 설정 우선순위는 `실행 인자(cli_args) > 프로젝트(project) > 에이전트(agent) > 유저(user) > 그룹(group) > 틀(framework)` 순서를 유지합니다.
+- **`org` → `group` 명칭 변경 및 하위 호환(`org` 읽기 전용 별칭)**:
+  - 기존 `"org"` 종류(`kind`)와 `org_config` 블록은 `"group"` 및 `group_config`로 이름이 바뀌었습니다.
+  - 기존에 만들어 둔 `kind: "org"` 및 `org_config`, `adk_version: "0.2.x"` 매니페스트는 **읽기 전용 별칭(legacy alias)으로 계속 읽히며**, 검사 시 안내 경고(warning)를 띄우고 내부에서 자동으로 `group`으로 정규화합니다. 새로 만드는 매니페스트와 스캐폴드는 모두 `"group"`을 기록합니다.
+- **그룹 골격 템플릿(`templates/group-skeleton/`) 및 CLI 요약·JSON 출력 추가**:
+  - 역할 단어(`example-group`, `group-owner`, `member-a`, `developer-agent` 등)만 사용한 공개 그룹 골격 템플릿 `templates/group-skeleton/`을 추가했습니다.
+  - **그룹 안 에이전트 자리(folder `agents/<id>-adk/` with `index.md`)**: 실제 돌아가는 운영 단위는 그룹 ADK이며, 각 에이전트 자리는 그룹 ADK 안의 `agents/<id>-adk/` 폴더와 그 안의 입구 문서 `index.md`(`agents/<id>-adk/index.md`, `group_config.agents[].seat` 생략 시 기본값 `agents/<id>-adk`)로 구성됩니다. 자리 폴더가 존재하는데 `file`이 자리 폴더 밖을 가리키면 `agent doc should live in its seat`(경고)를 띄우고, 자리 폴더가 아직 없으면 `seats not created`(경고), 폴더는 있으나 `adk.json`이 아직 없으면 `seats without manifest`(경고) 빈칸으로 집계하며, 유효한 `kind: "agent"` 매니페스트가 놓이면 준비 완료(`seats ready`)로 집계합니다.
+  - **그룹 최소 표준 입구(`AGENTS.md` 및 `.agents/context/`)**: 그룹 ADK는 AI 입구 문서 `AGENTS.md`(`CLAUDE.md`·`GEMINI.md`는 `@AGENTS.md` 한 줄)와 `.agents/context/agents-rules.json`, `.agents/context/project-index.yaml`을 최소 표준으로 갖추며, 없으면 점검 모드에서 오류가 아닌 경고(`entry AGENTS.md missing`, `missing context`) 및 `open:` 줄로 안내합니다.
+  - `adk-link.mjs --validate` 및 `--check` 실행 시 그룹 요약 한 줄(`group <id>: members ..., projects ..., agents N (bots planned ..., seats ready R/N), milestones ...`)과 아직 채우지 않은 빈칸(`open: unset access`, `open: undecided repos`, `open: planned bots`, `open: seats not created`, `open: seats without manifest`), 작업 문서 일정 검사 결과(`work docs: N checked, M errors`)를 출력하며, `--json` 플래그로 전체 결과를 JSON으로 받을 수 있습니다.
+
+### 2. 옮기는 방법 (`org`에서 `group`으로 전환 안내)
+
+1. **즉시 중단 없이 기존 `org` 그대로 읽기 가능**:
+   - 기존 `adk.json`의 `kind: "org"`와 `org_config`는 바로 삭제하거나 고치지 않아도 검증기(`adk-link.mjs`)가 경고와 함께 `group`으로 읽어들입니다.
+2. **`adk.json`을 2.0 `group` 규격으로 갱신**:
+   - `adk_version`을 `"2.0.0"`으로, `kind`를 `"group"`으로 바꿉니다 (`links[]` 안의 `"kind": "org"`도 `"group"`으로, 기본 마운트 경로는 `groups/<id>`로 맞춥니다).
+   - `org_config` 이름을 `group_config`로 바꾸고 `members[]`(`{ user_id, access }`), `projects[]`(`{ id, name, repo, repo_status }`), `agents[]`(`{ id, role, description, bot }`), `calendar`(`{ milestones, milestones_file, work_docs_dir }`)를 채웁니다. 아직 정해지지 않은 항목은 `access: "unset"`, `repo: null` + `repo_status: "undecided"`, `bot.status: "planned"`로 두면 오류가 아니라 열려 있는 빈칸(`open:`)으로 안내됩니다.
+   - 주의: `group_config` 안에는 `token`, `secret`, `password`, `api_key`, `bot_token` 같은 실제 비밀값 칸이나 `keys/` 경로를 넣지 말고, 짧은 참조 이름(`credential_ref`)만 적습니다.
+3. **작업 문서(`work_docs_dir/*.md`) 일정 머리말 점검**:
+   - 각 작업 문서 상단에 `마일스톤: <마일스톤 ID 또는 이름>`과 `기한: YYYY-MM-DD`를 적고, `## 할 일` 표 머리글에 `할 일 | 담당 | 상태` 세 열을 포함시킵니다.
+
+### 3. 확인 방법 (정상 동작 검증 명령)
+
+```bash
+# 1. 루트 ADK 매니페스트 검증
+node scripts/adk-link.mjs --validate .
+
+# 2. 그룹 골격 템플릿(templates/group-skeleton) 전체 점검 및 빈칸(open:) 요약 확인
+node scripts/adk-link.mjs --check templates/group-skeleton
+
+# 3. JSON 형식으로 점검 결과 출력
+node scripts/adk-link.mjs --check templates/group-skeleton --json
+
+# 4. 0.2.0 호환 및 2.0.0 그룹·일정 전체 자동 테스트 실행
+node --test tests/adk-v020.test.mjs tests/channel-roles-gen.test.mjs tests/adk-v200.test.mjs
+```
+
+---
+
 ## [0.2.0] — 2026-10-19
 
 ### 1. 핵심 변경 요약 (에이전트 중심 한 틀 + 네 종류 ADK 통합 및 채널·담당 표 생성기)

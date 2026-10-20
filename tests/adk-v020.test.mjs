@@ -23,20 +23,21 @@ const adkScaffoldCli = path.join(naiaAdkRoot, 'scripts', 'adk-scaffold-project.m
 
 test('1. naia-adk v0.2.0 root manifest, package.json, CHANGELOG.md, and schema integrity', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(naiaAdkRoot, 'package.json'), 'utf8'));
-  assert.equal(pkg.version, '0.2.0');
+  assert.equal(pkg.version, '2.0.0');
 
   const rootManifestCheck = checkAdkInstance(naiaAdkRoot);
   assert.equal(rootManifestCheck.ok, true, `Root adk.json check failed: ${rootManifestCheck.errors.join('; ')}`);
-  assert.equal(rootManifestCheck.manifest.adk_version, '0.2.0');
+  assert.equal(rootManifestCheck.manifest.adk_version, '2.0.0');
 
   const changelog = fs.readFileSync(path.join(naiaAdkRoot, 'CHANGELOG.md'), 'utf8');
+  assert.match(changelog, /\[2\.0\.0\]/);
   assert.match(changelog, /\[0\.2\.0\]/);
   assert.match(changelog, /\[0\.1\.0\]/);
 
   const schema = JSON.parse(
     fs.readFileSync(path.join(naiaAdkRoot, 'schemas', 'adk-manifest.schema.json'), 'utf8'),
   );
-  assert.deepEqual(schema.properties.kind.enum, ['user', 'agent', 'project', 'org']);
+  assert.deepEqual(schema.properties.kind.enum, ['user', 'agent', 'project', 'group', 'org']);
   assert.ok(schema.required.includes('owner'));
   assert.ok(schema.required.includes('responsible_human'));
   assert.ok(schema.required.includes('links'));
@@ -127,7 +128,7 @@ test('2. 4-kind ADK (user, agent, project, org) scaffolding, relative symlink li
   );
   assert.match(checkOut, /user:luke-user-adk/);
   assert.match(checkOut, /agent:naia-agent-adk/);
-  assert.match(checkOut, /org:nextain-org-adk/);
+  assert.match(checkOut, /group:nextain-org-adk/);
   assert.match(checkOut, /project:naia-arcade-project/);
 
   // 7) Run validate-spec-chain.mjs on the scaffolded project ADK

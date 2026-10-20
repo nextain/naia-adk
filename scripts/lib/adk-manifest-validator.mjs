@@ -1,32 +1,42 @@
 /**
- * Naia ADK v0.2.0 — Manifest Validator Library (user, agent, project, org)
- * Validates adk.json schema rules, owner/responsible_human presence, and keys/ isolation.
+ * Naia ADK v2.0.0 — Manifest Validator Library (user, group, agent, project)
+ * Validates adk.json schema rules, owner/responsible_human presence, keys/ isolation,
+ * group_config, user_config.groups, and legacy "org" alias compatibility.
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  isNonEmptyString,
+  isValidIdentifier,
+  isKeysSegment,
+  validateGroupManifestSection,
+  validateUserGroupsSection,
+} from './adk-group-validator.mjs';
 
-export const VALID_KINDS = ['user', 'agent', 'project', 'org'];
+export const VALID_KINDS = ['user', 'agent', 'project', 'group'];
+export const LEGACY_KIND_ALIASES = { org: 'group' };
 export const VALID_ACTIONS = ['read', 'write', 'export'];
 
-export function isNonEmptyString(val) {
-  return typeof val === 'string' && val.trim().length > 0;
+const ADK_VERSION_PATTERN = /^(?:0\.2\.\d+|2\.\d+(?:\.\d+)?)(?:-[A-Za-z0-9.-]+)?$/;
+
+export { isNonEmptyString, isValidIdentifier, isKeysSegment };
+
+export function normalizeKind(kind) {
+  if (typeof kind === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_KIND_ALIASES, kind)) {
+    return LEGACY_KIND_ALIASES[kind];
+  }
+  return kind;
 }
 
 export function defaultMountForKind(kind, id) {
+  const normalized = normalizeKind(kind);
   const folderMap = {
     agent: 'agents',
     project: 'projects',
-    org: 'orgs',
+    group: 'groups',
     user: 'users',
   };
-  return `${folderMap[kind] || 'links'}/${id}`;
-}
-
-export function isKeysSegment(relPath) {
-  if (!isNonEmptyString(relPath)) return false;
-  const normalized = relPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-  const parts = normalized.split('/');
-  return parts.includes('keys') || parts.includes('.keys');
+  return `${folderMap[normalized] || 'links'}/${id}`;
 }
 
 export function resolveAdkManifestPath(inputPath) {
@@ -45,15 +55,33 @@ export function validateAdkManifest(manifest, adkDir = null) {
     return { ok: false, errors: ['adk.json must be a JSON object'], warnings };
   }
 
-  if (!isNonEmptyString(manifest.adk_version) || !/^\d+\.\d+\.\d+/.test(manifest.adk_version)) {
-    errors.push('adk_version must be a valid semver string (e.g. "0.2.0")');
+  if (!isNonEmptyString(manifest.adk_version) || !ADK_VERSION_PATTERN.test(manifest.adk_version.trim())) {
+    errors.push('adk_version must be a valid 2.x or legacy 0.2.x version string (e.g. "2.0.0" or "0.2.0")');
+  }
+
+  const rawKind = manifest.kind;
+  if (typeof rawKind === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_KIND_ALIASES, rawKind)) {
+    const mapped = LEGACY_KIND_ALIASES[rawKind];
+    warnings.push(`kind "${rawKind}" is deprecated; normalizing to "${mapped}"`);
+    manifest.kind = mapped;
   }
 
   if (!VALID_KINDS.includes(manifest.kind)) {
-    errors.push(`kind must be one of: ${VALID_KINDS.join(', ')} (got: ${String(manifest.kind)})`);
+    errors.push(`kind must be one of: ${VALID_KINDS.join(', ')} (got: ${String(rawKind)})`);
   }
 
-  if (!isNonEmptyString(manifest.id) || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(manifest.id)) {
+  if (manifest.supported_kinds !== undefined) {
+    if (
+      !Array.isArray(manifest.supported_kinds) ||
+      manifest.supported_kinds.some((k) => !VALID_KINDS.includes(normalizeKind(k)))
+    ) {
+      errors.push(`supported_kinds must be an array of valid kinds (${VALID_KINDS.join(', ')})`);
+    } else if (manifest.supported_kinds.includes('org')) {
+      warnings.push('supported_kinds contains deprecated kind "org"; use "group" instead');
+    }
+  }
+
+  if (!isValidIdentifier(manifest.id)) {
     errors.push('id must be a non-empty alphanumeric/kebab/underscore identifier');
   }
 
@@ -74,6 +102,11 @@ export function validateAdkManifest(manifest, adkDir = null) {
       if (!link || typeof link !== 'object') {
         errors.push(`${prefix} must be an object`);
         continue;
+      }
+      if (typeof link.kind === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_KIND_ALIASES, link.kind)) {
+        const mapped = LEGACY_KIND_ALIASES[link.kind];
+        warnings.push(`${prefix}.kind "${link.kind}" is deprecated; normalizing to "${mapped}"`);
+        link.kind = mapped;
       }
       if (!isNonEmptyString(link.id)) {
         errors.push(`${prefix}.id must be a non-empty string`);
@@ -155,11 +188,22 @@ export function validateAdkManifest(manifest, adkDir = null) {
     }
   }
 
-  if (manifest.kind === 'agent') {
+  if (manifest.kind === 'user' || manifest.user_config !== undefined) {
+    validateUserGroupsSection(manifest, errors);
+  }
+
+  if (manifest.kind === 'agent' || manifest.agent_config !== undefined) {
     const ac = manifest.agent_config || {};
     if (ac.organizations !== undefined) {
       if (!Array.isArray(ac.organizations) || ac.organizations.some((o) => !isNonEmptyString(o) || o.includes('/') || o.includes('\\'))) {
         errors.push('agent_config.organizations must be an array of organization name strings (never paths/links)');
+      } else if (ac.organizations.length > 0) {
+        warnings.push('agent_config.organizations is deprecated; use agent_config.groups instead');
+      }
+    }
+    if (ac.groups !== undefined) {
+      if (!Array.isArray(ac.groups) || ac.groups.some((g) => !isValidIdentifier(g) || g.includes('/') || g.includes('\\'))) {
+        errors.push('agent_config.groups must be an array of group id strings (never paths/links)');
       }
     }
     if (adkDir) {
@@ -176,7 +220,23 @@ export function validateAdkManifest(manifest, adkDir = null) {
     }
   }
 
-  return { ok: errors.length === 0, errors, warnings };
+  let groupSummary = null;
+  let milestoneIds = [];
+  let milestoneNames = [];
+  if (manifest.kind === 'group') {
+    const groupRes = validateGroupManifestSection(manifest, adkDir, errors, warnings);
+    groupSummary = groupRes.groupSummary;
+    milestoneIds = groupRes.milestoneIds;
+    milestoneNames = groupRes.milestoneNames;
+  }
+
+  const result = { ok: errors.length === 0, errors, warnings };
+  if (groupSummary) {
+    result.groupSummary = groupSummary;
+    result.milestoneIds = milestoneIds;
+    result.milestoneNames = milestoneNames;
+  }
+  return result;
 }
 
 export function validateAdkPath(inputPath) {

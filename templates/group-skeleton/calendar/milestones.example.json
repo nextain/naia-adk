@@ -1,0 +1,14 @@
+[
+  {
+    "id": "M1",
+    "name": "Group Skeleton Initialization",
+    "due": "2026-11-15",
+    "done_when": "All member access levels, project repos, and agent bot seats are confirmed."
+  },
+  {
+    "id": "M2",
+    "name": "Initial Schedule & Work Doc Verification",
+    "due": "2026-12-01",
+    "done_when": "All group work documents pass adk-link --check with zero errors."
+  }
+]

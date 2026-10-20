@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "adk_version": "0.2.0",
+  "adk_version": "2.0.0",
   "id": "naia-adk",
   "name": "Naia ADK — Unified Framework Base",
   "role": "framework_base",
@@ -9,7 +9,7 @@
     "user",
     "agent",
     "project",
-    "org"
+    "group"
   ],
   "owner": "nextain",
   "responsible_human": "luke",

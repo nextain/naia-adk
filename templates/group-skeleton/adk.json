@@ -1,0 +1,201 @@
+{
+  "schema_version": "1.0",
+  "adk_version": "2.0.0",
+  "id": "example-group",
+  "name": "Example Group ADK Skeleton",
+  "kind": "group",
+  "owner": "example-group",
+  "responsible_human": "group-owner",
+  "base_commit": "2.0.0",
+  "paths": {
+    "rules": "rules",
+    "data": "data",
+    "keys": "keys",
+    "skills": "skills"
+  },
+  "isolation": {
+    "keys_isolated": true,
+    "keys_gitignored": true,
+    "keys_never_linked": true
+  },
+  "links": [],
+  "permissions": {
+    "allowed_roots": [
+      "index.md",
+      "members",
+      "projects",
+      "agents",
+      "calendar",
+      "rules",
+      "data",
+      "skills"
+    ],
+    "denied_roots": [
+      "keys"
+    ],
+    "actions": [
+      "read",
+      "write",
+      "export"
+    ]
+  },
+  "group_config": {
+    "members": [
+      {
+        "user_id": "group-owner",
+        "display_name": "Group Owner (Role Placeholder)",
+        "access": "unset",
+        "file": "members/README.md"
+      },
+      {
+        "user_id": "member-a",
+        "display_name": "Member A (Role Placeholder)",
+        "access": "unset",
+        "file": "members/README.md"
+      },
+      {
+        "user_id": "member-b",
+        "display_name": "Member B (Role Placeholder)",
+        "access": "unset",
+        "file": "members/README.md"
+      }
+    ],
+    "projects": [
+      {
+        "id": "project-core",
+        "name": "Core Platform Project",
+        "repo": null,
+        "repo_status": "undecided",
+        "milestones": ["M1", "M2"],
+        "file": "projects/README.md",
+        "services": [
+          {
+            "id": "service-api",
+            "name": "Core API Service",
+            "repo": null,
+            "repo_status": "undecided",
+            "milestones": ["M1"],
+            "file": "projects/README.md"
+          },
+          {
+            "id": "service-web",
+            "name": "Core Web Service",
+            "repo": null,
+            "repo_status": "undecided",
+            "milestones": ["M2"],
+            "file": "projects/README.md"
+          }
+        ]
+      },
+      {
+        "id": "project-studio",
+        "name": "Workspace Studio Project",
+        "repo": null,
+        "repo_status": "undecided",
+        "milestones": ["M1"],
+        "file": "projects/README.md",
+        "services": [
+          {
+            "id": "service-viewer",
+            "name": "Document Viewer Service",
+            "repo": null,
+            "repo_status": "undecided",
+            "milestones": ["M1"],
+            "file": "projects/README.md"
+          }
+        ]
+      },
+      {
+        "id": "project-portal",
+        "name": "Customer Portal Project",
+        "repo": null,
+        "repo_status": "undecided",
+        "milestones": ["M2"],
+        "file": "projects/README.md"
+      },
+      {
+        "id": "project-automation",
+        "name": "Workflow Automation Project",
+        "repo": null,
+        "repo_status": "undecided",
+        "milestones": ["M2"],
+        "file": "projects/README.md"
+      },
+      {
+        "id": "project-docs",
+        "name": "Documentation Hub Project",
+        "repo": null,
+        "repo_status": "undecided",
+        "milestones": ["M1"],
+        "file": "projects/README.md"
+      }
+    ],
+    "agents": [
+      {
+        "id": "developer-agent",
+        "role": "developer",
+        "description": "Developer role agent for implementation, testing, and verification.",
+        "seat": "agents/developer-agent-adk",
+        "bot": {
+          "status": "planned",
+          "name": null,
+          "credential_ref": "developer-bot-token"
+        },
+        "file": "agents/developer-agent-adk/index.md"
+      },
+      {
+        "id": "marketer-agent",
+        "role": "marketer",
+        "description": "Marketer role agent for content, release communications, and outreach.",
+        "seat": "agents/marketer-agent-adk",
+        "bot": {
+          "status": "planned",
+          "name": null,
+          "credential_ref": "marketer-bot-token"
+        },
+        "file": "agents/README.md"
+      },
+      {
+        "id": "business-agent",
+        "role": "business",
+        "description": "Business role agent for planning, schedules, and operational documents.",
+        "seat": "agents/business-agent-adk",
+        "bot": {
+          "status": "planned",
+          "name": null,
+          "credential_ref": "business-bot-token"
+        },
+        "file": "agents/README.md"
+      },
+      {
+        "id": "support-agent",
+        "role": "support",
+        "description": "Customer-support role agent for channel triage and user inquiries.",
+        "seat": "agents/support-agent-adk",
+        "bot": {
+          "status": "planned",
+          "name": null,
+          "credential_ref": "support-bot-token"
+        },
+        "file": "agents/README.md"
+      }
+    ],
+    "calendar": {
+      "milestones_file": "calendar/milestones.example.json",
+      "milestones": [
+        {
+          "id": "M1",
+          "name": "Group Skeleton Initialization",
+          "due": "2026-11-15",
+          "done_when": "All member access levels, project repos, and agent bot seats are confirmed."
+        },
+        {
+          "id": "M2",
+          "name": "Initial Schedule & Work Doc Verification",
+          "due": "2026-12-01",
+          "done_when": "All group work documents pass adk-link --check with zero errors."
+        }
+      ]
+    }
+  }
+}

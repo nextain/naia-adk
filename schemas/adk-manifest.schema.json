@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://nextain.io/schemas/naia-adk/v0.2.0/adk-manifest.schema.json",
-  "title": "Naia ADK v0.2.0 Unified Manifest (adk.json)",
-  "description": "Unified schema for the 4 ADK instance kinds: user, agent, project, and org.",
+  "$id": "https://nextain.io/schemas/naia-adk/v2.0.0/adk-manifest.schema.json",
+  "title": "Naia ADK v2.0.0 Unified Manifest (adk.json)",
+  "description": "Unified schema for the ADK instance kinds: user, group, agent, and project (with legacy org alias).",
   "type": "object",
   "required": [
     "adk_version",
@@ -22,13 +22,21 @@
     },
     "adk_version": {
       "type": "string",
-      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[A-Za-z0-9.-]+)?$",
-      "description": "Naia ADK framework version (e.g. 0.2.0)."
+      "pattern": "^(0\\.2\\.[0-9]+|2\\.[0-9]+(\\.[0-9]+)?)(-[A-Za-z0-9.-]+)?$",
+      "description": "Naia ADK framework version (e.g. 2.0.0, legacy 0.2.x accepted)."
     },
     "kind": {
       "type": "string",
-      "enum": ["user", "agent", "project", "org"],
-      "description": "The ADK instance kind: user (내 자리), agent (AI 직원), project (만드는 것), org (우리 회사/기관)."
+      "enum": ["user", "agent", "project", "group", "org"],
+      "description": "The ADK instance kind: user (내 자리), group (우리 그룹/팀/회사), agent (AI 직원), project (만드는 것). 'org' is a read-only legacy alias normalized to 'group'."
+    },
+    "supported_kinds": {
+      "type": "array",
+      "default": ["user", "agent", "project", "group"],
+      "items": {
+        "type": "string",
+        "enum": ["user", "agent", "project", "group", "org"]
+      }
     },
     "id": {
       "type": "string",
@@ -48,7 +56,7 @@
     "owner": {
       "type": "string",
       "minLength": 1,
-      "description": "Owner identifier (user or organization)."
+      "description": "Owner identifier (user or group)."
     },
     "responsible_human": {
       "type": "string",
@@ -79,18 +87,18 @@
         "env_only_org_key_injection": {
           "type": "boolean",
           "default": true,
-          "description": "조직 키는 다른 ADK에 파일로 복사하지 않고 조직 실행 자리(agents/<이름>/) 세션 시작 시 환경변수로만 주입함."
+          "description": "그룹 키는 다른 ADK에 파일로 복사하지 않고 그룹 실행 자리(agents/<이름>/) 세션 시작 시 환경변수로만 주입함."
         }
       }
     },
     "work_ledger_policy": {
       "type": "object",
-      "description": "업무 장부(.agents/work, 진행 기록)는 에이전트 ADK에 두지 않고 업무 주체인 user/project/org ADK에만 둠 (다조직 에이전트 업무 기록 혼선 방지).",
+      "description": "업무 장부(.agents/work, 진행 기록)는 에이전트 ADK에 두지 않고 업무 주체인 user/project/group ADK에만 둠.",
       "properties": {
         "allowed_kinds": {
           "type": "array",
-          "default": ["user", "project", "org"],
-          "items": { "type": "string", "enum": ["user", "project", "org"] }
+          "default": ["user", "project", "group"],
+          "items": { "type": "string", "enum": ["user", "project", "group", "org"] }
         },
         "prohibited_kinds": {
           "type": "array",
@@ -101,11 +109,11 @@
     },
     "config_precedence": {
       "type": "array",
-      "description": "겹치는 일반 설정 우선순위: 실행 인자(cli_args) > 프로젝트(project) > 에이전트(agent) > 유저(user) > 조직(org) > 틀(framework). 권한·금지 및 키 소유는 이 순서와 무관.",
-      "default": ["cli_args", "project", "agent", "user", "org", "framework"],
+      "description": "겹치는 일반 설정 우선순위: 실행 인자(cli_args) > 프로젝트(project) > 에이전트(agent) > 유저(user) > 그룹(group) > 틀(framework). 권한·금지 및 키 소유는 이 순서와 무관.",
+      "default": ["cli_args", "project", "agent", "user", "group", "framework"],
       "items": {
         "type": "string",
-        "enum": ["cli_args", "project", "agent", "user", "org", "framework"]
+        "enum": ["cli_args", "project", "agent", "user", "group", "org", "framework"]
       }
     },
     "links": {
@@ -121,7 +129,7 @@
           },
           "kind": {
             "type": "string",
-            "enum": ["user", "agent", "project", "org"]
+            "enum": ["user", "agent", "project", "group", "org"]
           },
           "local_path": {
             "type": "string",
@@ -131,7 +139,7 @@
           "mount_path": {
             "type": "string",
             "minLength": 1,
-            "description": "Relative symlink path inside this ADK (e.g. agents/jina or projects/naia-arcade)."
+            "description": "Relative symlink path inside this ADK (e.g. agents/dev-agent or groups/example-group)."
           },
           "remote_url": {
             "type": ["string", "null"]
@@ -228,6 +236,29 @@
         "accounts": {
           "type": "array",
           "items": { "type": ["string", "object"] }
+        },
+        "groups": {
+          "type": "array",
+          "description": "Groups this user belongs to.",
+          "items": {
+            "type": "object",
+            "required": ["group_id"],
+            "properties": {
+              "group_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+              },
+              "local_path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "access": {
+                "type": "string",
+                "enum": ["owner", "admin", "member", "viewer", "unset"]
+              }
+            }
+          }
         }
       }
     },
@@ -244,13 +275,23 @@
           "properties": {
             "created_at": { "type": "string", "minLength": 1, "description": "만든 때 (ISO-8601)" },
             "created_by": { "type": "string", "minLength": 1, "description": "만든 이 (사람 식별자)" },
-            "adk_version": { "type": "string", "minLength": 1, "description": "생성 시점의 틀 판(예: 0.2.0)" }
+            "adk_version": { "type": "string", "minLength": 1, "description": "생성 시점의 틀 판(예: 2.0.0)" }
           }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          },
+          "description": "Group IDs (strings only, never paths/links to prevent cycles)."
         },
         "organizations": {
           "type": "array",
+          "deprecated": true,
           "items": { "type": "string", "minLength": 1 },
-          "description": "Organization names (strings only, never links to prevent cycles)."
+          "description": "Legacy alias for groups (organization name strings only, never links)."
         },
         "projects": {
           "type": "array",
@@ -262,7 +303,7 @@
           "properties": {
             "common_dir": { "type": "string", "default": "memory/common" },
             "groups_dir": { "type": "string", "default": "memory/groups" },
-            "org_scope_pattern": { "type": "string", "default": "memory/groups/<org>" }
+            "org_scope_pattern": { "type": "string", "default": "memory/groups/<group>" }
           }
         },
         "nva": {
@@ -285,7 +326,7 @@
       "type": "object",
       "description": "Additional fields for kind=project (만드는 것).",
       "properties": {
-        "skeleton_version": { "type": "string", "default": "0.2.0" },
+        "skeleton_version": { "type": "string", "default": "2.0.0" },
         "spec_chain": {
           "type": "array",
           "items": { "type": "string" }
@@ -305,13 +346,192 @@
         "debug_logger": { "type": "string", "default": "src/debug-logger.mjs" }
       }
     },
-    "org_config": {
+    "group_config": {
       "type": "object",
-      "description": "Additional fields for kind=org (우리 회사/기관).",
+      "description": "Additional fields for kind=group (우리 그룹/팀/회사/고객).",
+      "required": ["members"],
       "properties": {
         "members": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["user_id", "access"],
+            "properties": {
+              "user_id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+              },
+              "display_name": { "type": "string" },
+              "access": {
+                "type": "string",
+                "enum": ["owner", "admin", "member", "viewer", "unset"]
+              },
+              "grant": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "deny": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "file": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "name", "repo", "repo_status"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+              },
+              "name": { "type": "string", "minLength": 1 },
+              "repo": { "type": ["string", "null"] },
+              "repo_status": {
+                "type": "string",
+                "enum": ["canonical", "undecided"]
+              },
+              "milestones": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "file": { "type": "string", "minLength": 1 },
+              "services": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "name", "repo", "repo_status"],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+                    },
+                    "name": { "type": "string", "minLength": 1 },
+                    "repo": { "type": ["string", "null"] },
+                    "repo_status": {
+                      "type": "string",
+                      "enum": ["canonical", "undecided"]
+                    },
+                    "milestones": {
+                      "type": "array",
+                      "items": { "type": "string", "minLength": 1 }
+                    },
+                    "file": { "type": "string", "minLength": 1 }
+                  },
+                  "not": {
+                    "required": ["services"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "role", "description", "bot"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+              },
+              "role": { "type": "string", "minLength": 1 },
+              "description": { "type": "string", "minLength": 1 },
+              "bot": {
+                "type": "object",
+                "required": ["status", "name"],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": ["planned", "active", "none"]
+                  },
+                  "name": { "type": ["string", "null"] },
+                  "credential_ref": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^(?!\\S{41,})[^/\\\\]+$",
+                    "description": "Short credential reference label only: must not contain '/' or '\\' paths (never a path into keys/), and spaceless strings over 40 characters are rejected as raw secrets."
+                  }
+                }
+              },
+              "seat": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^agents(/(?!(\\.\\.?|\\.?keys)(/|$))[a-zA-Z0-9._-]+)+$",
+                "description": "Relative path to the agent's seat directory inside the group ADK (default: agents/<id>-adk)."
+              },
+              "file": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "calendar": {
+          "type": "object",
+          "properties": {
+            "milestones": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id", "name", "due"],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+                  },
+                  "name": { "type": "string", "minLength": 1 },
+                  "due": { "type": ["string", "null"] },
+                  "done_when": { "type": "string" }
+                }
+              }
+            },
+            "milestones_file": { "type": "string", "minLength": 1 },
+            "work_docs_dir": { "type": "string", "minLength": 1 }
+          }
+        },
+        "channels": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Relative path to the channel table (e.g. channels.yaml)."
+        },
+        "key_injection_policy": {
+          "type": "object",
+          "properties": {
+            "method": { "type": "string", "const": "env_only", "default": "env_only" },
+            "never_copy_key_files": { "type": "boolean", "const": true, "default": true },
+            "server_session_only": { "type": "boolean", "const": true, "default": true }
+          }
+        },
+        "messenger_servers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "kind"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "kind": { "type": "string", "enum": ["internal", "customer", "partner"] },
+              "name": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "org_config": {
+      "type": "object",
+      "deprecated": true,
+      "description": "Legacy read-only alias for group_config (kind=org).",
+      "properties": {
+        "members": {
+          "type": "array",
+          "items": { "type": ["string", "object"] }
         },
         "channels_table": { "type": "string", "default": "channels.yaml" },
         "channel_ids_file": { "type": "string", "default": "channel-ids.json" },
@@ -320,7 +540,7 @@
         "agent_slots_pattern": {
           "type": "string",
           "default": "agents/<name>/",
-          "description": "조직 에이전트 실행 자리(에이전트 ADK의 복제본 또는 상대 소프트링크)."
+          "description": "그룹 에이전트 실행 자리(에이전트 ADK의 복제본 또는 상대 소프트링크)."
         },
         "key_injection_policy": {
           "type": "object",

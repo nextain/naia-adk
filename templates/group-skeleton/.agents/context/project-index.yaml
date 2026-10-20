@@ -1,0 +1,24 @@
+version: "2.0"
+
+group:
+  id: example-group
+  kind: group
+  visibility: template
+  entrypoints:
+    ai: AGENTS.md
+    human: index.md
+    manifest: adk.json
+
+paths:
+  manifest: adk.json
+  human_index: index.md
+  members: members/
+  projects: projects/
+  agent_seats:
+    root: agents/
+    seat_pattern: "agents/<id>-adk/index.md"
+    example_seat: agents/developer-agent-adk/index.md
+  calendar: calendar/
+  work_docs: docs/work/
+  channels: channels.yaml
+  keys: keys/
