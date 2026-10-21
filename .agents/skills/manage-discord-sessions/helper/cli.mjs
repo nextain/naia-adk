@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { NATIVE_COMMAND_CONTRACT } from "./native-command-contract.mjs";
 import { SessionStore } from "./store.mjs";
 import { loadMessengerConfig, FileCredentialResolver } from "./discord-config.mjs";
 import { downloadDiscordAttachment, fetchDiscordHistory, sendDiscordReply } from "./discord-history.mjs";
@@ -13,61 +14,53 @@ import { assertOwnerOnly, protectOwnerOnly } from "./platform-security.mjs";
 
 class UsageError extends Error {}
 
+const cliContract = NATIVE_COMMAND_CONTRACT.cli;
+
+function formatActionList(actions) {
+	if (actions.length <= 1) return actions.join("");
+	if (actions.length === 2) return actions.join(" or ");
+	return `${actions.slice(0, -1).join(", ")}, or ${actions.at(-1)}`;
+}
+
 function parseArgs(argv) {
 	const positional = [];
-	const options = { json: false, jsonl: false, events: false, once: false, active: false, failed: false, follow: false, readOnly: false };
+	const options = Object.fromEntries(cliContract.boolean_options.map((key) => [key, false]));
 	for (let index = 0; index < argv.length; index += 1) {
 		const value = argv[index];
-		if (value === "--json") options.json = true;
-		else if (value === "--jsonl") options.jsonl = true;
-		else if (value === "--events") options.events = true;
-		else if (value === "--once") options.once = true;
-		else if (value === "--active") options.active = true;
-		else if (value === "--failed") options.failed = true;
-		else if (value === "--follow" || value === "-f") options.follow = true;
-		else if (value === "--read-only") options.readOnly = true;
-		else if (value === "--adk-root" || value === "--job" || value === "--instance" || value === "--channel" || value === "--author" || value === "--limit" || value === "--message" || value === "--attachment" || value === "--output" || value === "--expected-sha256" || value === "--content-file") {
+		const key = Object.hasOwn(cliContract.option_flags, value) ? cliContract.option_flags[value] : undefined;
+		if (key === undefined) {
+			if (value.startsWith("--")) throw new UsageError(`unknown option: ${value}`);
+			positional.push(value);
+			continue;
+		}
+		if (cliContract.value_options.includes(key)) {
 			const next = argv[index + 1];
 			if (!next || next.startsWith("--")) throw new UsageError(`${value} requires a value`);
-			const key = { "--adk-root": "adkRoot", "--job": "jobId", "--instance": "instance", "--channel": "channelId", "--author": "authorId", "--limit": "limit", "--message": "messageId", "--attachment": "attachmentId", "--output": "outputPath", "--expected-sha256": "expectedSha256", "--content-file": "contentPath" }[value];
-			options[key] = value === "--limit" ? Number(next) : next;
+			options[key] = cliContract.numeric_options.includes(key) ? Number(next) : next;
 			index += 1;
-		} else if (value.startsWith("--")) throw new UsageError(`unknown option: ${value}`);
-		else positional.push(value);
+		} else {
+			options[key] = true;
+		}
 	}
 	return { positional, options };
 }
 
 function validateInvocation(positional, options) {
 	const command = positional[0] ?? "status";
-	const allowed = {
-		status: new Set(["json"]),
-		"health-check": new Set(["json"]),
-		jobs: new Set(["json", "active", "failed", "limit"]),
-		job: new Set(["json", "events"]),
-		watch: new Set(["jsonl", "once", "jobId"]),
-		logs: new Set(["jsonl", "follow", "jobId"]),
-		monitor: new Set(["once"]),
-		cancel: new Set(["json", "jobId"]),
-		restart: new Set(["json", "jobId"]),
-		amend: new Set(["json", "jobId", "contentPath"]),
-		submit: new Set(["json", "channelId", "authorId", "contentPath", "readOnly"]),
-		history: new Set(["json", "channelId", "authorId", "limit"]),
-		latest: new Set(["json", "channelId", "authorId", "limit"]),
-		attachment: new Set(["json", "channelId", "messageId", "attachmentId", "outputPath", "expectedSha256"]),
-		reply: new Set(["json", "channelId", "contentPath"]),
-		service: new Set(["json"]),
-		cutover: new Set(["json", "jobId"]),
-		artifacts: new Set(["json"]),
-	};
-	if (!allowed[command]) throw new UsageError(`unsupported command: ${command}`);
-	const expectedPositionals = positional.length === 0 ? 0 : new Set(["job", "service", "cutover", "artifacts"]).has(command) ? 2 : 1;
+	const allowed = Object.hasOwn(cliContract.command_options, command) ? cliContract.command_options[command] : undefined;
+	if (!allowed) throw new UsageError(`unsupported command: ${command}`);
+	const allowedOptions = new Set(allowed);
+	const expectedPositionals = positional.length === 0 ? 0 : (Object.hasOwn(cliContract.positional_arity, command) ? cliContract.positional_arity[command] : undefined) ?? 1;
 	if (positional.length !== expectedPositionals) throw new UsageError(`invalid arguments for ${command}`);
+	const actions = Object.hasOwn(cliContract.actions, command) ? cliContract.actions[command] : undefined;
+	if (actions && !actions.includes(positional[1])) {
+		throw new UsageError(`${command} requires ${formatActionList(actions)}`);
+	}
 	if (command === "jobs" && options.active && options.failed) throw new UsageError("--active and --failed are mutually exclusive");
 	if (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit < 1 || options.limit > 1_000)) throw new UsageError("--limit must be an integer between 1 and 1000");
 	for (const [key, value] of Object.entries(options)) {
 		if (key === "adkRoot" || key === "instance" || value === false || value === undefined) continue;
-		if (!allowed[command].has(key)) throw new UsageError(`option --${key} is not valid for ${command}`);
+		if (!allowedOptions.has(key)) throw new UsageError(`option --${key} is not valid for ${command}`);
 	}
 	return command;
 }
@@ -87,7 +80,7 @@ let options;
 let command;
 try {
 	({ positional, options } = parseArgs(process.argv.slice(2)));
-	const knownCommands = new Set(["status", "health-check", "jobs", "job", "watch", "logs", "monitor", "cancel", "restart", "amend", "submit", "history", "latest", "attachment", "reply", "service", "cutover", "artifacts"]);
+	const knownCommands = new Set(cliContract.known_commands);
 	if (positional[0] && !knownCommands.has(positional[0])) {
 		if (options.instance) throw new UsageError("instance was specified more than once");
 		options.instance = normalizeMessengerInstance(positional.shift());
@@ -166,7 +159,7 @@ if (command === "service") {
 if (command === "cutover") {
 	try {
 		const action = positional[1];
-		if (!new Set(["prepare", "verify", "canary", "rollback"]).has(action)) throw new UsageError("cutover requires prepare, verify, canary, or rollback");
+		if (!cliContract.actions.cutover.includes(action)) throw new UsageError(`cutover requires ${formatActionList(cliContract.actions.cutover)}`);
 		if (action === "canary" && !options.jobId) throw new UsageError("cutover canary requires --job");
 		const result = action === "prepare"
 			? prepareManagedDiscordCutover({ adkRoot, instance })
@@ -189,7 +182,7 @@ if (command === "cutover") {
 if (command === "artifacts") {
 	try {
 		const action = positional[1];
-		if (!new Set(["list", "prune"]).has(action)) throw new UsageError("artifacts requires list or prune");
+		if (!cliContract.actions.artifacts.includes(action)) throw new UsageError(`artifacts requires ${formatActionList(cliContract.actions.artifacts)}`);
 		const result = action === "list"
 			? listManagedDiscordArtifacts({ adkRoot, instance })
 			: pruneManagedDiscordArtifacts({ adkRoot, instance });

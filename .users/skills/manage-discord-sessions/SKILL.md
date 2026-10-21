@@ -1,11 +1,11 @@
 ---
 name: manage-discord-sessions
-description: Codex 또는 Claude로 실행되는 Discord 백그라운드 작업의 설정·상태·실시간 활동·재부팅 복구를 ADK 워크스페이스에서 관리합니다.
+description: Codex, Claude, OpenCode 또는 Grok로 실행되는 Discord 백그라운드 작업의 설정·상태·실시간 활동·재부팅 복구를 ADK 워크스페이스에서 관리합니다.
 ---
 
 # Discord 세션 관리
 
-Codex와 Claude가 함께 쓰는 관리 스킬입니다. 별도 제품 CLI나 `naia-agent`, `naia-shell` 없이 동일한 내부 스크립트로 로컬 상태를 읽습니다.
+Codex, Claude, OpenCode, Grok가 함께 쓰는 관리 스킬입니다. 별도 제품 CLI나 `naia-agent`, `naia-shell` 없이 동일한 내부 스크립트로 로컬 상태를 읽습니다.
 
 ## 현재 구현된 범위
 
@@ -13,7 +13,7 @@ Codex와 Claude가 함께 쓰는 관리 스킬입니다. 별도 제품 CLI나 `n
 - 서비스 상태의 신선도와 작업 활동 상태 구분
 - 사전에 선언한 완료 검사와 신뢰 가능한 검증 증거
 - `status`, `jobs`, `job`, `watch`, `history`, `latest` 조회, 해시 검증 첨부 복구, 명시적 `reply`
-- 서로 독립적인 Codex `exec --json` 및 Claude `-p --output-format stream-json` 실행 어댑터
+- 서로 독립적인 Codex `exec --json`, Claude `-p --output-format stream-json`, OpenCode `run --format json`, Grok `--output-format streaming-messages-json` 실행 어댑터 (Grok 자식은 subagents를 유지)
 - 실행별 격리 홈, 최소 인증 파일 복사, 안전 이벤트 변환, 시간 제한·취소·시그널 종료 처리
 - 이전 권한 프로필 재사용 차단, 무승인 실행 강제, 승인 UI 감지 시 대기 대신 안전 실패 처리
 - 무진행 감시의 1회 개입과 Discord 채널 첫 응답 기한 감시
@@ -102,7 +102,32 @@ naia-settings/messenger-sessions/instances/<instance>/config.json
 naia-settings/.sessions/messenger-sessions/instances/<instance>/runtime.sqlite3
 ```
 
-실제 설정과 세션 상태는 Git에 올리지 않습니다. 설정에는 비밀값이 아니라 자격 증명 참조만 둡니다. Discord 토큰은 `naia-settings/.keys/messenger-sessions/<credentialRef>`에 권한 `0600`으로 두며, 설정 파일도 `0600`이어야 합니다. `backend.selected`를 `codex` 또는 `claude`로 선택하면 되고 `naia-agent`나 `naia-shell`은 필요하지 않습니다. Codex의 `costProfile` 기본값은 `balanced`이며 낮은 추론 강도를 명시적으로 적용합니다. `control`은 중간 강도이고, 현재 `economy`는 같은 낮은 강도 경계를 유지합니다. Gateway 프롬프트에는 호스트가 검증한 `read-only` 또는 `workspace-write` 실행 계약을 기록하므로, 쓰기가 허용된 작업이 대화형 세션 결박이 없다는 이유만으로 읽기 전용으로 강등되지 않습니다. 아직 등록하지 않은 인스턴스는 첫 `service install` 전에 이 값을 선택합니다. 기존 등록의 `backend.selected` 변경은 관리 런타임 전환이므로, 일반 `service install`이나 restart로 덮어쓰지 말고 아래의 검증된 후보 cutover 절차를 사용합니다.
+실제 설정과 세션 상태는 Git에 올리지 않습니다. 설정에는 비밀값이 아니라 자격 증명 참조만 둡니다. Discord 토큰은 `naia-settings/.keys/messenger-sessions/<credentialRef>`에 권한 `0600`으로 두며, 설정 파일도 `0600`이어야 합니다. `backend.selected`를 `codex`, `claude`, `opencode` 또는 `grok`으로 선택하면 되고 `naia-agent`나 `naia-shell`은 필요하지 않습니다. Codex의 `costProfile` 기본값은 `balanced`이며 낮은 추론 강도를 명시적으로 적용합니다. `control`은 중간 강도이고, 현재 `economy`는 같은 낮은 강도 경계를 유지합니다. OpenCode는 `run --format json`을 사용하고, Grok은 `--output-format streaming-messages-json`을 사용하며 자식 subagents를 유지합니다. Gateway 프롬프트에는 호스트가 검증한 `read-only` 또는 `workspace-write` 실행 계약을 기록하므로, 쓰기가 허용된 작업이 대화형 세션 결박이 없다는 이유만으로 읽기 전용으로 강등되지 않습니다. 아직 등록하지 않은 인스턴스는 첫 `service install` 전에 이 값을 선택합니다. 기존 등록의 `backend.selected` 변경은 관리 런타임 전환이므로, 일반 `service install`이나 restart로 덮어쓰지 말고 아래의 검증된 후보 cutover 절차를 사용합니다.
+
+### 프로젝트 정책 라우트 매니페스트
+
+선택적인 `projectPolicy` 설정은 소유자 전용 native route manifest를
+활성화합니다. 매니페스트에는 소유자 전용 `bridgeScript`, 선택적인
+`timeoutMs`, 인증된 참여자·바인딩·backend로 선택되는 route가 들어갑니다.
+메시지 본문이나 모델 출력은 route나 권한을 고를 수 없습니다. Native bridge는
+`accept`, `enqueue`, `pre_spawn`, `retry`, `recovery` 각 단계에서 실행되며,
+승인된 cwd·access·allowed paths·바인딩·참여자·backend를 받고 제한된
+allow/deny 결과를 반환해야 합니다. 설정된 policy에서는 `read-only`를
+보수적으로 거부하며 access를 올리거나 임의로 낮추지 않습니다.
+
+각 단계에서 선택된 actor의 route만 읽습니다. 선택된 route 파일이 없거나
+철회·손상·사용 불가이면 그 actor만 fail-closed되고 다른 actor와
+health/status는 계속 동작합니다. 매니페스트에서 route를 비활성화하는 것은
+설정 상태이므로, 이를 포함해 매니페스트·bridge·timeout·route
+식별자/메타데이터를 바꾸면 routing configuration revision이 바뀌어
+서비스를 재시작해야 합니다. route 파일 내용과 사용 가능 여부는 actor별
+각 단계에서 확인하므로 그런 변경이 다른 actor를 전역으로 무효화하지
+않습니다. `projectPolicy`가 없으면 기존 personal runtime 동작을 유지합니다.
+
+이 검사는 단계별 접수와 spawn 제어입니다. `pre_spawn`에서 거부하면 자식이
+시작되지 않지만 OS sandbox가 아니며 이미 실행 중인 자식을 회수할 수 없습니다.
+파일시스템 tenant 격리와 실행 중 프로세스 취소는 host/runner 책임입니다.
+route manifest·bridge 출력·로그에 비밀값을 넣지 않습니다.
 
 사람의 권한 설정이 바뀌면 `runtime.permissionProfileEpoch`도 바꿉니다. 무인 Discord 설정은 `runtime.approvalPolicy`를 명시적으로 `never`로 둬야 하며 `managed`와 누락 값은 안전하게 거부합니다. 스키마 v2의 모든 참여자는 `operatorUserIds`에도 있어야 합니다. 참여자 프로필은 역할 설명과 작업 제한일 뿐 파일 읽기 격리 수단이 아니며, 현재 Codex 읽기 전용·Claude 계획 모드는 같은 OS 사용자가 읽을 수 있는 파일을 프로젝트별로 격리하지 못하기 때문입니다. 따라서 현재는 호스트 운영자와 같은 수준으로 신뢰할 수 없는 사용자를 허용하지 않습니다.
 
@@ -128,7 +153,7 @@ production conversation-coordinator 런타임·활성화 분기·새 DB 테이�
 
 `service.startAt=login`이면 로그인 뒤, `boot`이면 설치기가 사용자 linger를 활성화해 부팅 때 복구를 시작합니다. 제한된 현재 요청과 결박 해시만 소유자 전용 로컬 복구 키로 인증 암호화해 저장하며, 조립된 컨텍스트 프롬프트는 현재 검증된 파일에서 다시 만듭니다. 구형 복구 작업은 항상 검토 대상으로 남깁니다. 스키마 v2에서 `recovery.autoRetry=true`여도 참여자·바인딩·설정·컨텍스트·관리 런타임 리비전이 정확히 같고 읽기 전용인 작업만 같은 작업 ID의 새 실행으로 이어집니다. 쓰기 가능 작업, 자동 재시도 비활성화, 키·암호문 손상은 `recovery_review`가 됩니다. Discord 전송 여부가 불확실한 답변은 자동 재전송하지 않습니다.
 
-`service install`은 설치 터미널의 `PATH`에서 선택한 Codex 또는 Claude 실행파일을 찾습니다. Linux는 소유자 전용 Git runtime artifact를 만들고 리비전·runtime-tree ID·전체 digest·unit 바이트를 검증한 뒤 서비스와 supervisor를 그 복사본에 고정합니다. systemd 실행에는 완전한 managed marker가 필수이고 서비스와 supervisor 모두 설정 읽기·토큰 소유·감시 전에 검증하므로, marker 누락을 직접 실행으로 해석하지 않습니다. 대상 checkout이 나중에 바뀌어도 이전 리비전 이름으로 새 코드를 실행하지 않습니다. Windows는 소유자 전용 실행 파일과 제한된 ONLOGON 예약 작업을 설치하며, 로컬 정책이 예약 작업 생성을 거부하면 소유자 전용 숨김 시작프로그램으로 자동 대체합니다. `service status`, `start`, `stop`, `restart`, `enable`, `disable`은 실제 설치된 등록 방식을 검증한 뒤 제어합니다. `naia-dcg.cmd`도 함께 설치됩니다. 기존 Linux 등록이 있으면 `service install`만으로 덮어쓸 수 없고, 검증된 원복 묶음·이전 설치·배포 후보·별도 후보 제어기가 모두 결박된 cutover 경로를 사용해야 합니다. `backend.selected` 변경도 같은 cutover 절차를 따르며, 일반 `service install`이나 restart는 업그레이드 경로가 아닙니다.
+`service install`은 설치 터미널의 `PATH`에서 선택한 Codex, Claude, OpenCode 또는 Grok 실행파일을 찾습니다. Linux는 소유자 전용 Git runtime artifact를 만들고 리비전·runtime-tree ID·전체 digest·unit 바이트를 검증한 뒤 서비스와 supervisor를 그 복사본에 고정합니다. systemd 실행에는 완전한 managed marker가 필수이고 서비스와 supervisor 모두 설정 읽기·토큰 소유·감시 전에 검증하므로, marker 누락을 직접 실행으로 해석하지 않습니다. 대상 checkout이 나중에 바뀌어도 이전 리비전 이름으로 새 코드를 실행하지 않습니다. Windows는 소유자 전용 실행 파일과 제한된 ONLOGON 예약 작업을 설치하며, 로컬 정책이 예약 작업 생성을 거부하면 소유자 전용 숨김 시작프로그램으로 자동 대체합니다. `service status`, `start`, `stop`, `restart`, `enable`, `disable`은 실제 설치된 등록 방식을 검증한 뒤 제어합니다. `naia-dcg.cmd`도 함께 설치됩니다. 기존 Linux 등록이 있으면 `service install`만으로 덮어쓸 수 없고, 검증된 원복 묶음·이전 설치·배포 후보·별도 후보 제어기가 모두 결박된 cutover 경로를 사용해야 합니다. `backend.selected` 변경도 같은 cutover 절차를 따르며, 일반 `service install`이나 restart는 업그레이드 경로가 아닙니다.
 
 watchdog와 독립 supervisor의 반복 경로는 끝나지 않은 작업만 읽고, 과거 검토·전송 주의 건수는 두 개의 부분 인덱스 집계로 얻습니다. `jobs`는 기본 100건이며 `jobs --limit <1-1000>`으로 명시적인 제한 범위를 정합니다. 누적된 durable history 전체를 매초 읽지 않습니다.
 

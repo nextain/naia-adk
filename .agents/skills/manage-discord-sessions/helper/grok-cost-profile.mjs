@@ -1,9 +1,14 @@
-export const GROK_AVAILABLE_BINDINGS = "grok_flagship,grok_workhorse,grok_light";
-
+// Discord costProfile names stay control/balanced/economy for every backend so
+// an operator can switch `backend.selected` without rewriting the config shape.
+// The efforts are not the Codex table: Codex balanced pins low reasoning, while
+// Grok balanced pins medium, which is that CLI's ordinary working effort.
+//
+// A config may override the effort explicitly with
+// `backend.profiles.grok.reasoningEffort`; this map only supplies the default.
 export const GROK_DISCORD_COST_BY_PROFILE = Object.freeze({
-	control: Object.freeze({ developmentProfile: "grok-control", reasoningEffort: "high" }),
-	balanced: Object.freeze({ developmentProfile: "grok-balanced", reasoningEffort: "medium" }),
-	economy: Object.freeze({ developmentProfile: "grok-economy", reasoningEffort: "low" }),
+	control: "high",
+	balanced: "medium",
+	economy: "low",
 });
 
 export function grokDiscordCost(costProfile = "balanced") {

@@ -59,7 +59,7 @@ After convergence or budget exceeded:
 ### Reviewer Health Scores
 | Reviewer | Health | Notes |
 |----------|--------|-------|
-| gemini | 85 | Good specificity |
+| grok | 85 | Good specificity |
 | opencode | 45 | Low — consider different model |
 ```
 

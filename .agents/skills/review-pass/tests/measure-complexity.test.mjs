@@ -2,13 +2,22 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { measureComplexity, validateComplexityWaiver } from "../scripts/measure-complexity.mjs";
 
 const content = (lines) => `${"x\n".repeat(lines)}`;
 const sha256 = (value) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
+const repositoryRoot = () => {
+	let current = resolve(import.meta.dirname);
+	while (true) {
+		if (existsSync(join(current, ".agents/skills/review-pass/SKILL.md"))) return current;
+		const parent = dirname(current);
+		if (parent === current) throw new Error("could not locate repository root");
+		current = parent;
+	}
+};
 
 test("complexity thresholds warn and block deterministically", () => {
 	assert.equal(measureComplexity({ path: "src/small.mjs", content: content(499) }).status, "OK");
@@ -308,7 +317,7 @@ test("waiver document rejects unknown top-level fields", () => {
 });
 
 test("review pass makes deterministic complexity a pre-review Clean blocker", () => {
-	const root = resolve(import.meta.dirname, "..", "..", "..", "..");
+	const root = repositoryRoot();
 	const referenceFiles = [
 		"preflight.md",
 		"stage-profiles.md",

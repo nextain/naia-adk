@@ -10,7 +10,7 @@ const path = require("path");
 // the original main().catch). policies/bash.js exports the same string.
 const PR_FAIL_REASON =
 	"[Guard] pr-guard 내부 오류 — 안전을 위해 GitHub 쓰기 차단.\n" +
-	"명령을 직접 실행하거나 Luke에게 확인 요청하세요.";
+	"명령을 직접 실행하거나 저장소 메인테이너에게 확인 요청하세요.";
 
 let H, P;
 try {

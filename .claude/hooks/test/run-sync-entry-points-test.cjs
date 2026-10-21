@@ -16,10 +16,14 @@ try {
   assert.deepEqual(sync.checkEntryPoints(root), ['CLAUDE.md', 'GEMINI.md']);
   assert.deepEqual(sync.syncEntryPoints(root, path.join(root, 'AGENTS.md')), ['CLAUDE.md', 'GEMINI.md']);
   assert.deepEqual(sync.checkEntryPoints(root), []);
+  assert.equal(fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8'), sync.POINTER);
+  assert.equal(fs.readFileSync(path.join(root, 'GEMINI.md'), 'utf8'), sync.POINTER);
+  fs.writeFileSync(path.join(root, 'CLAUDE.md'), valid);
+  assert.deepEqual(sync.checkEntryPoints(root), ['CLAUDE.md'], 'a full copy is a duplicate, not a pointer');
   fs.writeFileSync(path.join(root, 'CLAUDE.md'), 'changed by Claude\n');
   assert.deepEqual(sync.syncEntryPoints(root, path.join(root, 'CLAUDE.md')), ['CLAUDE.md']);
   assert.equal(fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8'), valid);
-  assert.equal(fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8'), valid);
+  assert.equal(fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8'), sync.POINTER);
   fs.writeFileSync(path.join(root, 'GEMINI.md'), 'changed by Gemini\n');
   assert.deepEqual(sync.syncEntryPoints(root, path.join(root, 'GEMINI.md')), ['GEMINI.md']);
   assert.equal(fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8'), valid);
@@ -32,6 +36,7 @@ try {
 		'# Repo\n\n## Mandatory Reads\n\n### Implementation Plan\n',
 		'# Repo\n\n## Repository Index\n\nShip the six-screen product copy now.\n',
 		'# Repo\n\n## Session Boundaries\n\nThe current goal is to finish the launch copy.\n',
+		'# Repo\n\n## Mandatory Reads\n\n1. `.agents/context/agents-rules.json` ' + 'x'.repeat(12000) + '\n',
   ]) {
     assert.throws(() => sync.validateEntryPoint(invalid), /Entrypoint boundary violation/);
   }
@@ -42,6 +47,8 @@ try {
     /Entrypoint boundary violation/,
     'validation must run before mirrors are updated',
   );
+  const oversized = '# Repo\n\n## Mandatory Reads\n\n1. `.agents/context/agents-rules.json` ' + 'x'.repeat(12000) + '\n';
+  assert.deepEqual(sync.entrypointViolations(oversized), [`entrypoint exceeds 12000 bytes: ${Buffer.byteLength(oversized)}`]);
   console.log('entry point sync tests passed');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

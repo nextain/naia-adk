@@ -37,7 +37,7 @@ export function participantProfileForUser(participantProfiles, userId) {
 	if (!participantProfiles) return null;
 	const profile = participantProfiles[userId];
 	if (!profile) return null;
-	return { label: profile.label, relationship: profile.relationship, allowedActions: [...profile.allowedActions] };
+	return { label: profile.label, relationship: profile.relationship, allowedActions: [...profile.allowedActions], ...(profile.mutationWindow ? { mutationWindow: { ...profile.mutationWindow, days: [...profile.mutationWindow.days] } } : {}) };
 }
 
 export function authorizeDiscordMessage({ message, bindings, operatorUserIds = [], participantProfiles = null, botUserId, threadParents = new Map() }) {

@@ -75,8 +75,10 @@ If the default config assigns the same tool as both reviewer and arbiter
 
 ```
 1. List all configured tools not in the current reviewer pool
-2. Rank by capability tier: claude > gemini > opencode > codex (configurable)
-3. Select highest-ranked available tool
+2. Keep only adapters supported by the bundled commandFor implementation.
+   Follow the explicit order in the active configuration; do not infer a
+   provider capability tier.
+3. Select the first available tool in that configured order
 4. If none is available outside the reviewer pool → run deterministic/source-evidence
    verification and retry an independent arbiter; ask only if a material decision remains
 ```
@@ -365,14 +367,19 @@ configured_adapters = resolve_configured_adapters()
 available_adapters = adapters_that_respond_within_timeout(configured_adapters)
 
 if available_adapters.length < configured_adapters.length:
-    warn("Degraded adapters: {unavailable_adapters}")
+    if require_review != false:
+        stop with NOT_CLEAN("A configured reviewer is unavailable")
+    record NOT_RUN("Reviewer availability was explicitly made optional")
+    continue ordinary deterministic validation without review evidence
+    do not claim independent cross-validation
 
 if stage in [planning, integration]:
     role_runs = schedule_four_roles(available_adapters)
     if successful_distinct_role_runs(role_runs) < 4:
-        record NOT_RUN("Four distinct role executions were not available")
-        continue ordinary deterministic validation without an independent-review claim
-        if governed delivery explicitly requires the four roles: keep delivery REVIEW_ONLY
+        if require_review != false:
+            stop with NOT_CLEAN("Four distinct role executions were not available")
+        record NOT_RUN("Four distinct role executions were explicitly made optional")
+        continue ordinary deterministic validation without review evidence
     if duplicate_role(role_runs) or duplicate_execution_identity(role_runs):
         stop with NOT_CLEAN("Role or execution identity was reused")
 else:
@@ -388,11 +395,11 @@ else:
         warn("Single reviewer. Convergence increased to {convergence_threshold}")
 
     if R_available == 0:
-        record NOT_RUN("No authenticated reviewer available")
-        continue ordinary deterministic validation
+        if require_review != false:
+            stop with NOT_CLEAN("No authenticated reviewer available")
+        record NOT_RUN("No authenticated reviewer was available after an explicit opt-out")
+        continue ordinary deterministic validation without review evidence
         do not claim independent cross-validation
-        if governed delivery explicitly requires independent evidence:
-            keep delivery REVIEW_ONLY until evidence exists
 ```
 
 ---

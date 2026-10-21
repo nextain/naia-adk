@@ -12,7 +12,8 @@ const policy = require(path.join(root, ".agents", "hooks", "policies", "bash.js"
 const harnessCore = require(path.join(root, ".agents", "hooks", "core", "harness-core.js"));
 const sessionContract = require(path.join(root, ".agents", "hooks", "core", "session-contract.js"));
 
-const rules = JSON.parse(fs.readFileSync(path.join(root, ".agents", "context", "agents-rules.json"), "utf8"));
+const { readAgentsRules } = require(path.join(root, ".agents", "hooks", "core", "agents-rules-load.js"));
+const rules = readAgentsRules(root);
 const authority = rules.ai_workflow.routine_execution_authority;
 assert.ok(authority, "routine execution authority must be mandatory session context");
 assert.match(authority.delegation_inheritance, /Every subagent, delegated agent, and nested delegate inherits/);

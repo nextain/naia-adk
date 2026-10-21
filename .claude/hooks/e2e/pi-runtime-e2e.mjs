@@ -127,7 +127,7 @@ try {
   const trc = tr && tr.content ? tr.content.map((c) => c.text || "").join("") : "";
   // append (not replace): base "edited" content MUST survive alongside
   // the SoT reminder — catches a regression dropping ...event.content.
-  ok(/agents-rules\.json is the SoT/.test(trc) && /edited/.test(trc),
+  ok(/agents-rules\.json and agents-rules-detail\.json are the SoT/.test(trc) && /edited/.test(trc),
      "pi tool_result: cascade reminder APPENDED (base content preserved) to AGENT-visible content");
 
   // ── anti-compact: harness state + re-read reminder in systemPrompt ──

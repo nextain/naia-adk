@@ -23,7 +23,7 @@ test("FET_DSO_016_001 routes exact Discord bindings to isolated workspace and pe
 	const { root, store } = fixture();
 	const naiaCorp = context(root, "naia-corp");
 	const luke = context(root, "luke");
-	const channelBinding = { kind: "guild_channel", guildId: GUILD, channelId: CHANNEL, allowedUserIds: [USER], respondWhen: "mentioned", canStartConversation: true, operatorActions: true, historyVisibility: "none", agentProfileId: "naia-corp" };
+	const channelBinding = { kind: "guild_channel", guildId: GUILD, channelId: CHANNEL, allowedUserIds: [USER], respondWhen: "mentioned", canStartConversation: true, operatorActions: true, historyVisibility: "none", agentProfileId: "naiaCorp" };
 	const dmBinding = { kind: "dm", userId: USER, allowedUserIds: [USER], respondWhen: "always", canStartConversation: true, operatorActions: true, historyVisibility: "none", agentProfileId: "luke" };
 	const config = {
 		schemaVersion: 2,
@@ -62,7 +62,7 @@ test("FET_DSO_016_002 validates external agent profiles and rejects an unknown b
 		agentProfiles: { naiaCorp: { workspace: { path: naiaCorp.cwd, allowedPaths: [naiaCorp.cwd], agentId: "external-naia-corp-agent", entrypoint: "AGENTS.md", contextFiles: [".agents/policy.yaml"] }, persona: { name: "naia-corp 봇", instructions: "Handle the configured channel." } } },
 		persona: { name: "fallback", instructions: "unused" }, role: { name: "operator", allowedActions: ["read", "reply"], requiresApproval: [] },
 		backend: { selected: "codex", profiles: { codex: { enabled: true } } },
-		discord: { credentialRef: "test-token", botUserId: BOT, operatorUserIds: [USER], participantProfiles: { [USER]: { label: "owner", relationship: "owner", allowedActions: ["read", "reply"] } }, bindings: [{ kind: "guild_channel", guildId: GUILD, channelId: CHANNEL, allowedUserIds: [USER], respondWhen: "mentioned", canStartConversation: true, operatorActions: false, historyVisibility: "none", agentProfileId: "naia-corp" }] },
+		 discord: { credentialRef: "test-token", botUserId: BOT, operatorUserIds: [USER], participantProfiles: { [USER]: { label: "owner", relationship: "owner", allowedActions: ["read", "reply"] } }, bindings: [{ kind: "guild_channel", guildId: GUILD, channelId: CHANNEL, allowedUserIds: [USER], respondWhen: "mentioned", canStartConversation: true, operatorActions: false, historyVisibility: "none", agentProfileId: "naiaCorp" }] },
 		runtime: { approvalPolicy: "never" }, service: {}, recovery: {}, observability: {},
 	};
 	const path = join(root, "config.json");

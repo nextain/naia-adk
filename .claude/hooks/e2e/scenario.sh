@@ -125,7 +125,7 @@ dispatch PreToolUse "Bash" "$(PJSON "{\"tool_name\":\"Bash\",\"tool_input\":{\"c
 
 echo "── Step 7: edit agents-rules.json → PostToolUse cascade + mirror ──"
 dispatch PostToolUse "Edit" "$(PJSON "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WS/.agents/context/agents-rules.json\"},\"cwd\":\"$WS\"}")"
-printf '%s' "$CTX" | grep -q 'agents-rules.json is the SoT' && ok "cascade-check fires SoT mirror reminder" || no "cascade reminder" "${CTX:0:120}"
+printf '%s' "$CTX" | grep -q 'agents-rules.json and agents-rules-detail.json are the SoT' && ok "cascade-check fires SoT mirror reminder" || no "cascade reminder" "${CTX:0:120}"
 echo "    (registered PostToolUse hooks reported $ERRN error(s))"
 [ "$ERRN" -eq 0 ] && ok "entry-point synchronization hook completes without error" || no "entry-point synchronization" "ERRN=$ERRN (expected 0)"
 dispatch PostToolUse "Edit" "$(PJSON "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WS/.agents/context/agents-rules.json\"},\"cwd\":\"$WS\"}")"

@@ -1,5 +1,6 @@
 import { safeIdentifier } from "./sanitize.mjs";
 import { createHash } from "node:crypto";
+import { canonicalMutationWindow } from "./mutation-window.mjs";
 
 const AUTHORIZATION_MODES = new Set(["managed", "never"]);
 
@@ -24,6 +25,10 @@ export function discordBindingIdentity(binding) {
 }
 
 export function configurationRevision(config) {
+	const mutationWindows = Object.entries(config.discord?.participantProfiles ?? {})
+		.map(([userId, profile]) => [userId, canonicalMutationWindow(profile?.mutationWindow)])
+		.filter(([, mutationWindow]) => mutationWindow !== null)
+		.sort(([left], [right]) => left.localeCompare(right));
 	return digest({
 		backend: config.backend.selected,
 		model: config.backend.profiles?.[config.backend.selected]?.model ?? null,
@@ -36,6 +41,7 @@ export function configurationRevision(config) {
 		autoRetry: config.recovery?.autoRetry === true,
 		networkAccess: config.runtime?.networkAccess === true,
 		credentialProfiles: [...(config.runtime?.credentialProfiles ?? [])].sort(),
+		mutationWindows,
 	});
 }
 
@@ -136,11 +142,14 @@ export function participantAuthorityRevision({ workspaceIdentity, bindingIdentit
 	if (!/^\d{17,20}$/.test(participantUserId) || /^0+$/.test(participantUserId)) throw new Error("participantUserId must be a Discord snowflake");
 	if (!participantProfile || typeof participantProfile.label !== "string" || typeof participantProfile.relationship !== "string") throw new Error("participantProfile is required for participant authority revision");
 	if (!Array.isArray(participantProfile.allowedActions) || !Array.isArray(effectiveActions)) throw new Error("effectiveActions is required for participant authority revision");
+	const participantAuthority = { label: participantProfile.label, relationship: participantProfile.relationship, allowedActions: [...participantProfile.allowedActions].sort() };
+	const mutationWindow = canonicalMutationWindow(participantProfile.mutationWindow);
+	if (mutationWindow !== null) participantAuthority.mutationWindow = mutationWindow;
 	const canonical = JSON.stringify({
 		workspaceIdentity,
 		bindingIdentity,
 		participantUserId,
-		participantProfile: { label: participantProfile.label, relationship: participantProfile.relationship, allowedActions: [...participantProfile.allowedActions].sort() },
+		participantProfile: participantAuthority,
 		effectiveActions: [...effectiveActions].sort(),
 		permissionProfileEpoch,
 	});
@@ -183,6 +192,7 @@ export function commandOptionsForProfile(profile) {
 	if (!validExecutionProfile(profile)) throw new Error("invalid execution profile");
 	if (profile.backendId === "codex") return { sandbox: profile.access, approvalPolicy: "never" };
 	if (profile.backendId === "opencode") return { auto: profile.access !== "read-only", approvalPolicy: "never" };
+	if (profile.backendId === "grok") return { permissionMode: profile.access !== "read-only" ? "bypassPermissions" : "plan", sandbox: profile.access !== "read-only" ? "workspace" : "read-only", approvalPolicy: "never" };
 	return { permissionMode: profile.access !== "read-only" ? "bypassPermissions" : "plan", approvalPolicy: "never" };
 }
 

@@ -3,15 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3142",
+    "dev": "node server.mjs -p 3142",
     "build": "next build",
-    "start": "next start -p 3142"
+    "start": "node server.mjs -p 3142",
+    "test": "node --test app/docs/markdown.test.ts app/docs/tabs.test.ts app/docs/kinds.test.ts host-guard.test.mjs server.test.mjs && node --import tsx --test app/docs/doc-save.test.ts app/docs/*.render.test.tsx"
   },
   "dependencies": {
     "next": "^15.3.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "lucide-react": "^0.503.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "swr": "^2.3.0"
   },
   "devDependencies": {

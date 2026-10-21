@@ -14,7 +14,7 @@
   {
     "id": "ATOM-EXAMPLE-2",
     "source_id": "SRC-EXAMPLE-2",
-    "text": "An unavailable optional reviewer returns a redacted non-blocking NOT_RUN result so missing accounts, CLIs, quotas, timeouts, or malformed output do not stop ordinary work.",
+    "text": "An unavailable configured reviewer fails the review pass by default. An explicit --require-review false run may emit a redacted NOT_RUN result, but it cannot satisfy review evidence.",
     "directive_ids": ["DIR-EXAMPLE-2"],
     "subject": "agent_workflow",
     "effect": "constraint",
@@ -26,7 +26,7 @@
   {
     "id": "ATOM-EXAMPLE-3",
     "source_id": "SRC-EXAMPLE-3",
-    "text": "Only an explicitly required review fails closed and preserves the reviewer process exit status.",
+    "text": "Configured review is fail-closed. Only an explicit --require-review false opt-out may return NOT_RUN, and the release gate must continue to reject it as evidence.",
     "directive_ids": ["DIR-EXAMPLE-3"],
     "subject": "agent_workflow",
     "effect": "verification",

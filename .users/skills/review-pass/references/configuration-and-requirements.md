@@ -31,21 +31,32 @@ define. Partial overrides are not merged — each section is all-or-nothing.
 ```yaml
 tools:
   claude:
-    command: 'claude -p --output-format json --allowedTools "Read,Glob,Grep" --max-turns 5'
+    command: "claude -p --input-format text --output-format json --no-session-persistence --permission-mode plan --tools Read,Glob,Grep --strict-mcp-config --mcp-config '{\"mcpServers\":{}}'"
     stdin: true
     parse: json
-  gemini:
-    command: 'gemini -p "{prompt}" -m gemini-2.5-flash'
-    stdin: false
-    parse: text_fallback
-  opencode:
-    command: 'opencode run "{prompt}" --dir "{repo}" -m {model}'
-    stdin: false
-    parse: text_fallback
   codex:
-    command: 'codex exec "{prompt}" --sandbox read-only --full-auto'
-    stdin: false
+    command: 'codex exec --ephemeral --sandbox read-only --skip-git-repo-check -C "{repo}" --model {model} -'
+    stdin: true
     parse: text_fallback
+  grok:
+    command: 'grok --output-format json --permission-mode plan --verbatim --prompt-file {prompt_file}'
+    stdin: false
+    parse: json
+
+prompt:
+  mode: dual_one_shot
+  stable_base: review-base.md
+  atoms: review-atoms.json
+  role_delta: review-role.md
+timeouts: {startup_sec: 300, idle_sec: 180, total_sec: 900}
+
+profile_policy:
+  default_mode: homogeneous
+  profiles:
+    claude: {reviewers: [claude]}
+    codex: {reviewers: [codex]}
+    grok: {reviewers: [grok]}
+  unavailable: fail_closed
 
 # Requirements management (optional — skip if not applicable)
 requirements:
@@ -54,32 +65,63 @@ requirements:
 
 stages:
   planning:
-    reviewers: []  # empty means schedule roles from any available adapter; distinct provider/model preferred
+    reviewers: []  # empty means use the active profile's eligible adapter
     roles: [source_fidelity, baseline_preservation, implementation_test, authority_release]
     arbiter: null
     convergence: 2
     lenses: [source_fidelity, design_coherence, feasibility, preservation_setup, context_output_separation, audience_surface_fit, unjustified_product_surface]
     lenses_no_req: [source_fidelity, design_coherence, feasibility, preservation_setup, context_output_separation, audience_surface_fit, unjustified_product_surface]
   development:
-    reviewers: [gemini, opencode, codex]
-    arbiter: claude  # MUST NOT be in reviewers — orchestrator auto-resolves
+    reviewers: []
+    arbiter: null
     convergence: 2
     lenses: [correctness, completeness, consistency, pattern_compliance, req_to_code, structural_complexity, context_output_separation, audience_surface_fit, unjustified_product_surface]
     lenses_no_req: [correctness, completeness, consistency, pattern_compliance, structural_complexity, context_output_separation, audience_surface_fit, unjustified_product_surface]
   test:
-    reviewers: [gemini, opencode]
+    reviewers: []
     arbiter: null
     convergence: 2
     lenses: [test_validity, coverage, assertion_quality, req_to_test, test_structure, context_output_separation, audience_surface_fit, unjustified_product_surface]
     lenses_no_req: [test_validity, coverage, assertion_quality, test_structure, context_output_separation, audience_surface_fit, unjustified_product_surface]
   integration:
-    reviewers: []  # empty means schedule roles from any available adapter; distinct provider/model preferred
+    reviewers: []  # empty means use the active profile's eligible adapter
     roles: [source_fidelity, baseline_preservation, implementation_test, authority_release]
     arbiter: null  # all tools are independent roles; user resolves semantic vetoes
     convergence: 2
     lenses: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release, complexity_release, context_output_separation, audience_surface_fit, unjustified_product_surface]
     lenses_no_req: [source_to_release, cross_stage_consistency, baseline_preservation, authority_release, complexity_release, context_output_separation, audience_surface_fit, unjustified_product_surface]
 ```
+
+The active `claude` profile schedules Claude headless review; the active `codex`
+profile schedules Codex headless review. Do not auto-add another provider merely
+because its binary is present. CLI presence does not prove authentication.
+
+The Grok adapter substitutes `{prompt_file}` with a freshly-created owner-only
+(`0600`) temporary file, closes stdin, and removes the file after the process
+exits. A prompt must never be passed as an argument or through a world-readable
+temporary file.
+
+The OpenCode adapter uses the shared Alpha
+`manage-discord-sessions/helper/backend-child-environment.mjs` boundary for
+each invocation. That helper gives the child a fresh owner-only (`0700`) HOME
+and XDG config/cache/state/data roots, strips inherited OpenCode environment
+overrides, disables project configuration, and copies only the sanitized
+provider/model fields and authentication file that the adapter needs. Its
+owner-only (`0600`) overlay denies `*` and allows only `read`, `glob`, `grep`,
+and `list`; the adapter applies that same helper policy to the selected review
+agent and pins both `model` and `small_model` to the explicit reviewer model.
+The child environment, provider copy, and overlay are removed after exit,
+including failed invocations, so host HOME/XDG plugins and permissions cannot
+be merged into a review.
+
+If the selected adapter is missing, unauthenticated, exits, or times out, the
+invocation fails closed and the review pass stops. Continuing with deterministic
+validation alone is a choice someone has to make on purpose, by passing
+`--require-review false`; the resulting `NOT_RUN` object declares itself unusable
+as evidence so a later reader cannot count it as a review that happened.
+Never ask an ADK user to install another CLI or create another provider account.
+When a governed delivery explicitly requires independent review evidence, keep
+that delivery `REVIEW_ONLY` without cancelling the underlying authorized work.
 
 ### 10.3 Per-Project Override
 
@@ -88,18 +130,31 @@ Create `./review-pass.yaml` in the project root:
 ```yaml
 tools:
   opencode:
-    command: 'opencode run "{prompt}" --dir "{repo}" -m zai-coding-plan/glm-5.1'
+    command: 'opencode run --pure --agent adk-adversarial-review --title adk-adversarial-review --dir "{repo}" --format json --model {model}'
+    stdin: true
 requirements:
   dir: ".agents/requirements"
 stages:
   development:
-    reviewers: [gemini, opencode]
+    reviewers: [codex, opencode]
     convergence: 1
 ```
 
+The YAML `tools` entries document profile defaults. The bundled
+`invoke-reviewer.mjs` selects one of the fixed adapters in `commandFor`; it
+does not read `tools.*.command`, `stdin`, or `parse` to construct arbitrary
+processes. A project file can select supported reviewers, requirements, and
+stages, but custom tool registration is not implemented. For OpenCode, the
+documented command includes `--pure --agent adk-adversarial-review`; the
+runner supplies the explicit model and managed child-environment boundary,
+pins `model` and `small_model`, and disables project configuration.
+
 ### 10.4 Environment Detection
 
-Auto-detect available tools at runtime:
+Auto-detect only the adapters eligible for the active profile. Detection is a
+best-effort preflight; a configured reviewer that is missing or unauthenticated
+fails closed by default. An explicit `--require-review false` opt-out may record
+`NOT_RUN` for ordinary local work, but that result cannot satisfy review evidence.
 
 **PowerShell:**
 ```powershell

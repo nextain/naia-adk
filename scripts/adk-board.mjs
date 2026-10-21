@@ -1,0 +1,227 @@
+#!/usr/bin/env node
+import fs from "node:fs"
+import net from "node:net"
+import path from "node:path"
+import process from "node:process"
+import { spawn } from "node:child_process"
+import { fileURLToPath } from "node:url"
+
+function checkQueueRepo(adkRoot, config) {
+  const queueRepo = config.board.queueRepo
+  // 없음 세 값: undefined, null, ""
+  if (queueRepo === undefined || queueRepo === null || queueRepo === "") {
+    return { kind: "none" }
+  }
+
+  // 유효성 검사: 공백만이 아닌 문자열이어야 함
+  if (typeof queueRepo !== "string" || queueRepo.trim() === "") {
+    return { kind: "invalid", queueRepo }
+  }
+
+  // repos[]가 배열이어야 하고 일치하는 id 항목이 있어야 함
+  if (!Array.isArray(config.repos)) {
+    return { kind: "invalid", queueRepo }
+  }
+
+  const targetRepo = config.repos.find((r) => r && typeof r === "object" && r.id === queueRepo)
+  if (!targetRepo || typeof targetRepo.path !== "string" || targetRepo.path === "") {
+    return { kind: "invalid", queueRepo }
+  }
+
+  // 절대 경로가 존재하는 디렉터리여야 함 (예외는 invalid로 처리)
+  try {
+    const repoAbsPath = path.resolve(adkRoot, targetRepo.path)
+    const stat = fs.statSync(repoAbsPath)
+    if (!stat.isDirectory()) {
+      return { kind: "invalid", queueRepo }
+    }
+    return { kind: "valid", queueRepoDir: repoAbsPath, queueRepo }
+  } catch {
+    return { kind: "invalid", queueRepo }
+  }
+}
+
+function warnInvalidQueueRepo(configPath, queueRepo) {
+  let warnMsg = `작업보드 대기열 저장소(queueRepo) 설정이 잘못되어 작업보드를 띄우지 않습니다: ${configPath}`
+  if (typeof queueRepo === "string") {
+    warnMsg += ` (${queueRepo})`
+  }
+  console.warn(warnMsg)
+}
+
+export function resolveBoardConfig(adkRoot, env = process.env) {
+  const dataCompanyDir = path.join(adkRoot, "data-company")
+  if (!fs.existsSync(dataCompanyDir)) {
+    return null
+  }
+
+  let entries = []
+  try {
+    entries = fs.readdirSync(dataCompanyDir, { withFileTypes: true })
+  } catch {
+    return null
+  }
+
+  // 1단계: data-company/*/adk-company.json을 전부 읽어,
+  // JSON으로 읽히고 board가 객체인 설정 가운데 board.queueRepo가 "없음"이 아닌 것을 모두 검사한다.
+  // 이 검사는 board.repo·board.script·board.port·작업판 스크립트 존재 같은 기존 건너뛰기 조건보다 먼저, 그 조건과 무관하게 한다.
+  // 하나라도 잘못이면 그 자리에서 console.warn으로 한 줄 알리고 resolveBoardConfig 전체가 null을 돌려준다.
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const configPath = path.join(dataCompanyDir, entry.name, "adk-company.json")
+    if (!fs.existsSync(configPath)) continue
+
+    let config
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+    } catch {
+      continue
+    }
+
+    if (!config || typeof config !== "object" || !config.board || typeof config.board !== "object" || Array.isArray(config.board)) {
+      continue
+    }
+
+    const check = checkQueueRepo(adkRoot, config)
+    if (check.kind === "invalid") {
+      warnInvalidQueueRepo(configPath, check.queueRepo)
+      return null
+    }
+  }
+
+  // 2단계: 1단계에서 잘못된 queueRepo가 하나도 없을 때만 지금과 같은 순회·건너뛰기·첫 유효 설정 반환을 그대로 하고,
+  // 고른 설정에 유효한 queueRepo가 있으면 인자를 더한다.
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const configPath = path.join(dataCompanyDir, entry.name, "adk-company.json")
+    if (!fs.existsSync(configPath)) continue
+
+    let config
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+    } catch {
+      continue
+    }
+
+    if (!config || typeof config !== "object" || !config.board || typeof config.board !== "object" || Array.isArray(config.board)) {
+      continue
+    }
+
+    const { board, repos } = config
+    if (!board.repo || !board.script || !board.port) {
+      continue
+    }
+
+    if (!Array.isArray(repos)) {
+      continue
+    }
+
+    const targetRepo = repos.find((r) => r && r.id === board.repo)
+    if (!targetRepo || !targetRepo.path) {
+      continue
+    }
+
+    const repoAbsPath = path.resolve(adkRoot, targetRepo.path)
+    const scriptAbsPath = path.resolve(repoAbsPath, board.script)
+
+    if (!fs.existsSync(scriptAbsPath)) {
+      continue
+    }
+
+    const host = env.ADK_HOST || "127.0.0.1"
+    const publicHost = env.ADK_PUBLIC_HOST || "localhost"
+    const port = Number(board.port)
+    const docsViewerUrl = `http://${publicHost}:3142/docs`
+
+    const args = [
+      scriptAbsPath,
+      "--host",
+      host,
+      "--port",
+      String(port),
+      "--docs-viewer-url",
+      docsViewerUrl,
+    ]
+
+    const queueCheck = checkQueueRepo(adkRoot, config)
+    let queueRepoDir = null
+    if (queueCheck.kind === "valid") {
+      queueRepoDir = queueCheck.queueRepoDir
+      args.push("--repo-root", queueRepoDir)
+    } else if (queueCheck.kind === "none") {
+      queueRepoDir = null
+    } else if (queueCheck.kind === "invalid") {
+      warnInvalidQueueRepo(configPath, queueCheck.queueRepo)
+      return null
+    } else {
+      return null
+    }
+
+    return {
+      repoDir: repoAbsPath,
+      scriptPath: scriptAbsPath,
+      host,
+      port,
+      publicHost,
+      docsViewerUrl,
+      args,
+      queueRepoDir,
+    }
+  }
+
+  return null
+}
+
+// 작업보드가 쓸 주소에 이미 다른 프로그램이 떠 있는지 본다.
+// 직접 열어 보고 바로 닫으므로 다른 프로그램에는 손대지 않는다.
+export function portInUse(host, port) {
+  return new Promise((resolve) => {
+    const probe = net.createServer()
+    probe.once("error", (err) => resolve(err.code === "EADDRINUSE" || err.code === "EACCES"))
+    probe.once("listening", () => probe.close(() => resolve(false)))
+    probe.listen(port, host)
+  })
+}
+
+export function portBusyMessage(port) {
+  return `작업보드 포트 ${port}를 다른 프로그램이 쓰고 있습니다. 대시보드 작업 탭이 그 프로그램을 보여 줄 수 있습니다.`
+}
+
+export async function main() {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url))
+  const adkRoot = path.resolve(__dirname, "..")
+
+  const boardConfig = resolveBoardConfig(adkRoot)
+
+  if (!boardConfig) {
+    console.log("작업보드 없음: pnpm adk:setup 먼저")
+    process.exit(0)
+  }
+
+  // 포트가 겹치면 작업보드가 스택 추적을 남기고 죽는다. 띄우기 전에 한 줄로 알리고 멈춘다.
+  // 다른 프로그램은 끄지 않는다. 서버와 대시보드는 그대로 계속 돈다.
+  if (await portInUse(boardConfig.host, boardConfig.port)) {
+    console.log(portBusyMessage(boardConfig.port))
+    process.exit(0)
+  }
+
+  console.log(`작업보드 실행 중: node ${boardConfig.args.join(" ")}`)
+  const child = spawn(process.execPath, boardConfig.args, {
+    cwd: boardConfig.repoDir,
+    stdio: "inherit",
+    env: process.env,
+  })
+
+  child.on("close", (code) => {
+    process.exit(code ?? 0)
+  })
+
+  child.on("error", (err) => {
+    console.error(`작업보드 프로세스 에러: ${err.message}`)
+    process.exit(1)
+  })
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  main()
+}
