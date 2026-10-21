@@ -14,3 +14,7 @@ List each role-holding AI agent seat in `group_config.agents[]` inside `adk.json
 - `bot.status` is one of `"planned"`, `"active"`, or `"none"`. Planned bots are reported as open slots by `adk-link.mjs --check`.
 - `bot.credential_ref` is a short reference label only (never a raw token and never a path into `keys/`).
 - Group keys live only in the isolated `keys/` directory and are injected into server sessions via environment variables (`env_only`).
+
+## Running Seats as Sessions
+
+To run each seat as a live agent session on the group development server (pane naming, first role instruction, the per-seat `## 세션` record, message hand-off, and shared-folder rules), follow the Naia ADK guide `docs/guides/agent-role-sessions.md`.
