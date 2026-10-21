@@ -1,7 +1,7 @@
 {
   "name": "@naia-adk/persona",
   "version": "0.0.1",
-  "description": "Persona spec — system prompt convention for Naia instances. Default 'Naia' (neutral) + example forks (alpha for luke). Zero runtime deps.",
+  "description": "Persona spec — system prompt convention for Naia instances. Default 'Naia' (neutral) + example forks (alpha for a personal instance). Zero runtime deps.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

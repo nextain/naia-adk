@@ -6,7 +6,9 @@
 
 ## 1. 개요
 
-이 디렉토리(`projects/naia-adk/rules/`)는 개발 워크스페이스 운영 과정에서 실측·정립된 규칙, 검증 게이트, 4층 센서 루프, QA 절차, 다중 계정 관리, 그리고 에이전트 중심 4종 ADK(`user`/`group`[구 `org` 읽기 호환 별칭]/`agent`/`project`)와 일정(`schedule`), 사내 메신저 채널·담당 표(`channel-roles-gen.mjs`) 아키텍처를 특정 개인·회사의 비밀값이나 로컬 경로 없이 범용 표준으로 추상화한 정본 카탈로그다.
+> 층 번호는 아래에서 위로 센다: 1층 센서 · 2층 실행·검수 · 3층 조정 세션 · 4층 자문(2026-10-20 개편). 파일·스크립트 이름의 `layer4`·`l4` 는 옛 번호 시절 이름이다. 전체 구조는 [`docs/guides/adk-2.0-structure.md`](../docs/guides/adk-2.0-structure.md).
+
+이 디렉토리(`projects/naia-adk/rules/`)는 개발 워크스페이스 운영 과정에서 실측·정립된 규칙, 검증 게이트, 1층 센서 루프, QA 절차, 다중 계정 관리, 그리고 에이전트 중심 4종 ADK(`user`/`group`[구 `org` 읽기 호환 별칭]/`agent`/`project`)와 일정(`schedule`), 사내 메신저 채널·담당 표(`channel-roles-gen.mjs`) 아키텍처를 특정 개인·회사의 비밀값이나 로컬 경로 없이 범용 표준으로 추상화한 정본 카탈로그다.
 
 ---
 
@@ -18,10 +20,10 @@
 | **축 2** | **결정론적 코드 복잡도 게이트 (`USR-012`)** (500줄/80KB 경고, 800줄/160KB·+250줄 `REFACTOR_REQUIRED`, 1,200줄/300KB 차단) | [`refactoring-and-broad-problem-solving.md`](refactoring-and-broad-problem-solving.md) | `.agents/requirements/sources/USR-012-code-complexity-gate.json`, `.agents/skills/review-pass/scripts/measure-complexity.mjs`, `review-preflight.mjs` |
 | **축 3** | **상시 문맥 예산 게이트 (`<= 20,000B` / 총합 `<= 60,000B`)** (1줄 규칙 + `detail` 분리) | [`refactoring-and-broad-problem-solving.md`](refactoring-and-broad-problem-solving.md) | `.agents/context/context-budget.json`, `scripts/check-context-budget.mjs`, `.agents/hooks/core/agents-rules-load.js` |
 | **축 4** | **서브에이전트 무응답 방지 주기적 워치독 의무** (호출 시 타이머 동시 설정, 진도율 감시) | [`layer4-sensor-and-memo-loop.md`](layer4-sensor-and-memo-loop.md) | `.agents/context/agents-rules.json` (`delegate_exploration`, `subagent_watchdog_and_layer4_sensor`), `scripts/orchestration-watch.mjs` |
-| **축 5** | **4층(Tier-4) 교차 센서 아키텍처** (메신저 + 서브에이전트 완료/정체 + 미소비 깨움 파일 + 시간 예약 틱) | [`layer4-sensor-and-memo-loop.md`](layer4-sensor-and-memo-loop.md) | [`docs/developer/pipeline/work/P-07-layer4-watch-wake.md`](../../../docs/developer/pipeline/work/P-07-layer4-watch-wake.md), `.agents/scripts/work-watch.mjs`, `.agents/scripts/l4-schedule.mjs` |
-| **축 6** | **작업 문서 드래그 메모 (`doc-notes`) ⇄ 4층 센서 ⇄ 문서 수정·커밋 루프** | [`layer4-sensor-and-memo-loop.md`](layer4-sensor-and-memo-loop.md) | [`docs/developer/pipeline/work/P-03-doc-notes-ai-loop.md`](../../../docs/developer/pipeline/work/P-03-doc-notes-ai-loop.md), `.agents/scripts/work-watch.mjs`, `.agents/scripts/wake-target.py` |
-| **축 7** | **사용자 원문 무손실 보존 (`00-USER-REQUESTS`) & 계획 승인 게이트 (`approval-plan.mjs`)** | [`evidence-driven-process.md`](evidence-driven-process.md) | `.agents/scripts/approval-plan.mjs`, `review-run.mjs` (`--basis luke-*`), [`docs/developer/pipeline/document-driven-development.md`](../../../docs/developer/pipeline/document-driven-development.md) |
-| **축 8** | **양방향 스펙 체인 (`PC → SP/UC → RQ → FE → [UT/IT/E2E] → QC`) & 역할별 모델 분리** (`argon medium` 개발 / `muse 1.3 xhigh` 독립 리뷰) | [`evidence-driven-process.md`](evidence-driven-process.md) | `scripts/validate-spec-chain.mjs`, [`FORK.md`](../../../FORK.md), [`docs/developer/pipeline/document-driven-development.md`](../../../docs/developer/pipeline/document-driven-development.md) |
+| **축 5** | **1층(Tier-1) 교차 센서 아키텍처** (메신저 + 서브에이전트 완료/정체 + 미소비 깨움 파일 + 시간 예약 틱) | [`layer4-sensor-and-memo-loop.md`](layer4-sensor-and-memo-loop.md) | [`docs/developer/pipeline/work/P-07-layer4-watch-wake.md`](../../../docs/developer/pipeline/work/P-07-layer4-watch-wake.md), `.agents/scripts/work-watch.mjs`, `.agents/scripts/l4-schedule.mjs` |
+| **축 6** | **작업 문서 드래그 메모 (`doc-notes`) ⇄ 1층 센서 ⇄ 문서 수정·커밋 루프** | [`layer4-sensor-and-memo-loop.md`](layer4-sensor-and-memo-loop.md) | [`docs/developer/pipeline/work/P-03-doc-notes-ai-loop.md`](../../../docs/developer/pipeline/work/P-03-doc-notes-ai-loop.md), `.agents/scripts/work-watch.mjs`, `.agents/scripts/wake-target.py` |
+| **축 7** | **사용자 원문 무손실 보존 (`00-USER-REQUESTS`) & 계획 승인 게이트 (`approval-plan.mjs`)** | [`evidence-driven-process.md`](evidence-driven-process.md) | `.agents/scripts/approval-plan.mjs`, `review-run.mjs` (`--basis <소유자>-*`), [`docs/developer/pipeline/document-driven-development.md`](../../../docs/developer/pipeline/document-driven-development.md) |
+| **축 8** | **양방향 스펙 체인 (`PC → SP/UC → RQ → FE → [UT/IT/E2E] → QC`) & 역할별 모델 분리** (구현 모델 / 다른 계열의 독립 검수 모델) | [`evidence-driven-process.md`](evidence-driven-process.md) | `scripts/validate-spec-chain.mjs`, [`FORK.md`](../../../FORK.md), [`docs/developer/pipeline/document-driven-development.md`](../../../docs/developer/pipeline/document-driven-development.md) |
 | **축 9** | **실패 우선 검증 (Failure-First Validation 25개 절차) & 기본 구조화 디버그 로깅 (`D47` + 링버퍼/스냅샷)** | [`qa-and-debug-logging.md`](qa-and-debug-logging.md) | [`docs/developer/guides/failure-first-validation.md`](../../../docs/developer/guides/failure-first-validation.md), [`docs/developer/guides/debug-logging.md`](../../../docs/developer/guides/debug-logging.md) |
 | **축 10** | **Claude 4계층 다중 계정 관리 (격리·지문 미러링·무토큰 사용량·95% 자동 전환) & 멀티 CLI 프로파일 라우팅** | [`multi-cli-account-management.md`](multi-cli-account-management.md) | `scripts/claude-account.sh`, `scripts/claude-account-mirror.py`, `scripts/claude-usage.py`, `scripts/claude-auto-switch.py`, `scripts/personal-model-profile.mjs`, [`docs/developer/guides/multi-cli-account-management.md`](../../../docs/developer/guides/multi-cli-account-management.md) |
 | **축 11** | **에이전트 중심 4종 ADK(`SetWorkspace` 루트=에이전트 ADK) · 조직 자리(`agents/<이름>/`) 환경변수 키 주입 · 업무 장부 분리 · 설정 우선순위 · 채널·담당 표 생성기(`channel-roles-gen.mjs`)** | [`discord-channel-roles-and-org-adk.md`](discord-channel-roles-and-org-adk.md) | `schemas/adk-manifest.schema.json`, `schemas/channels.schema.json`, `scripts/channel-roles-gen.mjs`, `scripts/adk-link.mjs`, `templates/org-channels/` |
@@ -33,9 +35,9 @@
 1. **[`refactoring-and-broad-problem-solving.md`](refactoring-and-broad-problem-solving.md)**
    - 문제·근본 원인·목표·수용 조건 중심의 광범위 위임 원칙, 거대 파일 방지 리팩토링 권한, `USR-012` 복잡도 임계치(500 / 800 / 1,200줄) 및 면제(Waiver) 규율.
 2. **[`layer4-sensor-and-memo-loop.md`](layer4-sensor-and-memo-loop.md)**
-   - 서브에이전트 호출 시 주기적 워치독 타이머 의무, 4층 교차 센서의 5대 감지 신호(메신저·완료·무응답·미소비 깨움·`doc-notes`), 작업 문서 메모 답변 + 본문 수정 + `git commit` 폐루프.
+   - 서브에이전트 호출 시 주기적 워치독 타이머 의무, 1층 교차 센서의 5대 감지 신호(메신저·완료·무응답·미소비 깨움·`doc-notes`), 작업 문서 메모 답변 + 본문 수정 + `git commit` 폐루프.
 3. **[`evidence-driven-process.md`](evidence-driven-process.md)**
-   - 사용자 원문 추적표(`00-USER-REQUESTS-traceability.ko.md`) → 계획 승인(`approval-plan.mjs`) → `PC → SP/UC → RQ → FE → [UT/IT/E2E] → QC` 스펙 체인 검증(`validate-spec-chain.mjs`) → 구현(`argon medium`)과 독립 검수(`muse 1.3 xhigh`) 분리.
+   - 사용자 원문 추적표(`00-USER-REQUESTS-traceability.ko.md`) → 계획 승인(`approval-plan.mjs`) → `PC → SP/UC → RQ → FE → [UT/IT/E2E] → QC` 스펙 체인 검증(`validate-spec-chain.mjs`) → 구현 모델과 다른 계열의 독립 검수 모델 분리.
 4. **[`qa-and-debug-logging.md`](qa-and-debug-logging.md)**
    - 실패 우선 검증 4단계와 QA 시간·비용 낭비 방지 7대 핵심 규율(25개 절차), 기본 ON 디버그 모드·구조화 JSONL 로그·메모리 링버퍼(`ring` + `snapshot()`)·주기적 정리 배치(`D47`).
 5. **[`multi-cli-account-management.md`](multi-cli-account-management.md)**

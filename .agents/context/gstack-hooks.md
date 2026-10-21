@@ -13,7 +13,7 @@ source: gstack-analysis.md (migrated)
 
 | 훅 | 트리거 | 방식 | 역할 |
 |----|--------|------|------|
-| pr-guard.js | PreToolUse(Bash) | **BLOCK** | gh pr create 차단 (Luke = 메인테이너) |
+| pr-guard.js | PreToolUse(Bash) | **BLOCK** | gh pr create 차단 (사용자 = 메인테이너) |
 | destructive-git-guard.js | PreToolUse(Bash) | **BLOCK** | git checkout --, reset --hard, clean -f 차단 |
 | design-doc-guard.js | PreToolUse(Edit\|Write) | **BLOCK** | 설계문서 편집 차단 (unlock 파일로 bypass 가능) |
 | session-inject.js | UserPromptSubmit | inject | 매 메시지 progress 상태 주입 (anti-compact) |

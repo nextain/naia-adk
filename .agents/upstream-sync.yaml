@@ -17,7 +17,7 @@ fork_chain:
   - naia-adk                 # generic/personal base (TOP)
   - naia-business-adk        # company layer
   - nextain-adk              # Nextain org
-  - alpha-adk                # Luke (Nextain employee)
+  - <member>-adk             # member personal fork (example)
 # naia-corp-adk branches off naia-business-adk (not in the linear chain).
 
 # Conflict resolution during merge.

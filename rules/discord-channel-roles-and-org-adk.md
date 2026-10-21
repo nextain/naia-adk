@@ -22,7 +22,7 @@
    - 먼저 항목별 소유를 나눈다(화면·기기·계정 = `user`, 말투·모델·NVA·기억 = `agent`, 제품·시험·배포 = `project`, 그룹 규칙·채널 표·일정 = `group`[구 `org`]).
    - 불가피하게 겹치는 일반 설정만 **`실행 인자(cli_args) > 프로젝트(project) > 에이전트(agent) > 유저(user) > 그룹(group) > 틀(framework)`** 순서를 따른다. 단, **권한·금지(`부여 ∩ 상한 − 금지`)와 비밀키(`keys/`) 소유는 이 우선순위와 무관**하게 엄격히 계산한다.
 6. **사내 메신저 채널·담당 표의 3자리 구조와 결정론적 생성기 (`channel-roles-gen.mjs`)**:
-   - 어느 채널에 어느 역할이 초대되었고 누가 주 담당(`primaryRole`)인지 한 곳(`channels.yaml` + `channel-ids.json`)에 적고, 생성기(`scripts/channel-roles-gen.mjs`)로 **① 역할별 봇 묶음(`discord.bindings`), ② 4층 감시 대상(`discord-watch.json`), ③ 채널 설명 및 사람용 문서(`channels-and-wake.md`)** 셋을 한 번에 만들어 어긋남을 원천 차단한다.
+   - 어느 채널에 어느 역할이 초대되었고 누가 주 담당(`primaryRole`)인지 한 곳(`channels.yaml` + `channel-ids.json`)에 적고, 생성기(`scripts/channel-roles-gen.mjs`)로 **① 역할별 봇 묶음(`discord.bindings`), ② 1층 감시 대상(`discord-watch.json`), ③ 채널 설명 및 사람용 문서(`channels-and-wake.md`)** 셋을 한 번에 만들어 어긋남을 원천 차단한다.
 
 ---
 
@@ -46,7 +46,7 @@ flowchart TB
 
     subgraph Outputs["결정론적 생성 산출물 3종"]
         OUT1["1. 역할별 봇 묶음<br/>instances/&lt;role&gt;/config.json<br/>(generatedBy: channel-roles)"]
-        OUT2["2. 4층 감시 대상<br/>discord-watch.json targets<br/>(generatedBy: channel-roles)"]
+        OUT2["2. 1층 감시 대상<br/>discord-watch.json targets<br/>(generatedBy: channel-roles)"]
         OUT3["3. 채널 설명 & 사람용 표<br/>channels-and-wake.md"]
     end
 
@@ -71,7 +71,7 @@ flowchart TB
 | 자리 | 담당 ADK | 정본 파일 및 역할 | 보안·격리 원칙 |
 |---|---|---|---|
 | **1. 공통 틀** | `naia-adk` (프레임워크) | `schemas/channels.schema.json`, `scripts/channel-roles-gen.mjs`, `templates/org-channels/` | 특정 회사의 실제 채널·사용자 번호를 넣지 않고 가짜 번호 예시만 포함 |
-| **2. 조직 설정 표** | `org` ADK (회사별) | `channels.yaml` (역할 이름·규칙만, 번호 없음) + `channel-ids.json` (서버/채널 실제 번호, `allowedUserIds`, `readerInstance`) | 회사마다 별도 표(`nextain`, `onmam` 등). 한 조직이 사내 서버(`internal`)와 고객 서버(`customer`) 등 복수 서버 보유 가능 |
+| **2. 조직 설정 표** | `org` ADK (회사별) | `channels.yaml` (역할 이름·규칙만, 번호 없음) + `channel-ids.json` (서버/채널 실제 번호, `allowedUserIds`, `readerInstance`) | 회사마다 별도 표(`company-a`, `company-b` 등). 한 조직이 사내 서버(`internal`)와 고객 서버(`customer`) 등 복수 서버 보유 가능 |
 | **3. 에이전트 키** | `agent` ADK (역할별) | 각 에이전트 ADK의 `keys/` 안 봇 토큰 | 조직 표(`wakeRoles`)가 허용해도 에이전트 ADK에 토큰이 없으면 못 쓰고, 토큰이 있어도 표에 없으면 못 씀 ("자기 봇으로만 답함" 보장) |
 
 ---
@@ -103,14 +103,14 @@ node projects/naia-adk/scripts/channel-roles-gen.mjs \
 | **검사 2** | `primaryRole`은 반드시 그 채널의 `wakeRoles` 안에 포함되어야 하며, `outsideCall`은 `mention` 또는 `mention-or-name`만 허용한다. | 종료코드 `1`, 파일 미수정 |
 | **검사 3** | 채널 열쇠(`key`)는 회사 안에서 유일해야 하며, `guildId`가 `null`이 아닌 모든 서버의 채널 열쇠는 `channel-ids.json`에 실제 번호가 있어야 한다 (`guildId: null`인 미생성 서버는 건너뛰고 출력에 표시). | 종료코드 `1`, 파일 미수정 |
 | **검사 4** | 같은 실제 채널 번호(Snowflake ID)가 두 채널 열쇠나 두 회사에 중복 등장하면 거절한다. | 종료코드 `1`, 파일 미수정 |
-| **검사 5** | 사내 공지 채널(`teamMessengerChannelId`)은 채널·담당 표에 넣을 수 없다 (4층 감시 기본 규칙과 동일). | 종료코드 `1`, 파일 미수정 |
+| **검사 5** | 사내 공지 채널(`teamMessengerChannelId`)은 채널·담당 표에 넣을 수 없다 (1층 감시 기본 규칙과 동일). | 종료코드 `1`, 파일 미수정 |
 | **검사 6** | 대상 디렉토리에 각 역할의 봇 묶음 설정 파일(`instances/<role>/config.json`)이 없으면 거절한다 (단, `--init-instances` 명시 시 초기 생성 허용). | 종료코드 `1`, 파일 미수정 |
-| **검사 7** | 생성·병합된 4층 감시 대상(`targets`)이 필수 필드(`kind: "channel"`, `guildId`, `channelId`, `wakeRoles`, `primaryRole`, `outsideCall`, `includeThreads: true`, `readerInstance`, `generatedBy: "channel-roles"`) 무결성을 통과하는지 자체 검증한다. | 종료코드 `1`, 파일 미수정 |
+| **검사 7** | 생성·병합된 1층 감시 대상(`targets`)이 필수 필드(`kind: "channel"`, `guildId`, `channelId`, `wakeRoles`, `primaryRole`, `outsideCall`, `includeThreads: true`, `readerInstance`, `generatedBy: "channel-roles"`) 무결성을 통과하는지 자체 검증한다. | 종료코드 `1`, 파일 미수정 |
 
 ### 4.3 수동 항목 보존 및 서버 이전(`archived: true`) 규칙
 
 1. **수동 묶음·감시 대상 보존**:
-   - `generatedBy: "channel-roles"` 표지가 없는 기존 수동 봇 묶음(예: 사내 공지 채널, 옛 전용 채널)과 기존 4층 감시 대상(예: 온맘 통합 쓰레드, 옛 아이폴 채널)은 삭제하거나 덮어쓰지 않고 그대로 보존한다.
+   - `generatedBy: "channel-roles"` 표지가 없는 기존 수동 봇 묶음(예: 사내 공지 채널, 옛 전용 채널)과 기존 1층 감시 대상(예: 고객사 통합 쓰레드, 끝난 프로젝트 채널)은 삭제하거나 덮어쓰지 않고 그대로 보존한다.
 2. **서버 이전 및 보관 채널(`archived: true`) 처리**:
-   - 채널을 고객 서버나 새 서버로 옮긴 뒤 옛 채널의 4층 감시를 멈추려면, 옛 채널을 표에서 지우지 않고 `archived: true`를 표시한다.
-   - `archived: true` 채널은 **4층 감시 대상(`discord-watch.json` `targets`)에서는 즉시 제외**되지만, **역할별 봇 묶음(`discord.bindings`)에는 읽기 전용(`operatorActions: false`, `readOnly: true`, `archived: true`)으로 유지**되어 과거 기록 조회가 보존된다.
+   - 채널을 고객 서버나 새 서버로 옮긴 뒤 옛 채널의 1층 감시를 멈추려면, 옛 채널을 표에서 지우지 않고 `archived: true`를 표시한다.
+   - `archived: true` 채널은 **1층 감시 대상(`discord-watch.json` `targets`)에서는 즉시 제외**되지만, **역할별 봇 묶음(`discord.bindings`)에는 읽기 전용(`operatorActions: false`, `readOnly: true`, `archived: true`)으로 유지**되어 과거 기록 조회가 보존된다.

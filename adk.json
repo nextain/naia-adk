@@ -12,7 +12,7 @@
     "group"
   ],
   "owner": "nextain",
-  "responsible_human": "luke",
+  "responsible_human": "maintainer",
   "base_commit": "0.1.0",
   "paths": {
     "rules": "rules",

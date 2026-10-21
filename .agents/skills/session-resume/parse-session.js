@@ -69,7 +69,7 @@ function looksLikeRealUserText(t) {
 // ---------- finders ----------
 function claudeEncodeCwd(cwd) {
   // D:\alpha-adk -> D--alpha-adk  (colon -> '-', backslash -> '-', each single)
-  // /home/luke   -> -home-luke
+  // /home/alice  -> -home-alice
   return cwd.replace(/\\/g, "-").replace(/\//g, "-").replace(/:/g, "-");
 }
 function findClaude(idOrPath, cwd) {

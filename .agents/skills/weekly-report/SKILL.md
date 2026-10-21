@@ -41,7 +41,7 @@ git -C "$WORKSPACE" log --oneline --since="SINCE" --until="UNTIL"
 
 ### Step 3: 작업 로그 확인
 
-`docs-work-logs/luke/03.done/`에서 해당 기간 파일을 찾습니다:
+`docs-work-logs/<user>/03.done/`에서 해당 기간 파일을 찾습니다:
 
 ```bash
 find "$WORKSPACE/docs-work-logs" -name "*.md" \
@@ -80,8 +80,8 @@ MD(Man-Day)는 커밋 수와 복잡도를 기준으로 추정합니다.
 
 | 파일 | 용도 |
 |------|------|
-| `docs-work-logs/luke/03.done/` | 완료된 작업 로그 |
-| `docs-work-logs/luke/02.doing/` | 진행 중 작업 (참고용) |
+| `docs-work-logs/<user>/03.done/` | 완료된 작업 로그 |
+| `docs-work-logs/<user>/02.doing/` | 진행 중 작업 (참고용) |
 
 ## 참고
 

@@ -2,7 +2,7 @@
 
 > **Status**: Draft v3 (peer-reviewed by Gemini + Claude, see §12)
 > **Date**: 2026-04-19
-> **Author**: Luke (Nextain)
+> **Author**: Nextain maintainers
 
 ---
 
@@ -183,7 +183,7 @@ naia-adk-business-pack/
 ├── data-company/                ← T2: Company general data
 │   ├── docs-{company}/          ← Company documentation (submodule)
 │   ├── docs-work-logs/          ← Work logs (submodule)
-│   └── caretive/                ← Reference data
+│   └── reference/               ← Reference data
 ├── data-business/               ← T3: Company sensitive data
 │   ├── docs-business/           ← Business docs (submodule)
 │   ├── accounting/              ← Accounting data (submodule)

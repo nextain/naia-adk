@@ -53,7 +53,7 @@ export const NAIA_DEFAULT_PERSONA: PersonaSpec = {
 };
 
 /**
- * Example persona override — alpha (luke 인스턴스).
+ * Example persona override — alpha (개인 사용자 인스턴스 예시).
  * alpha-adk가 본 example 참고하여 자체 persona 정의.
  *
  * ⚠ **보안 경고 (Paranoid P0-3 fix)**:
@@ -67,11 +67,11 @@ export const NAIA_DEFAULT_PERSONA: PersonaSpec = {
  */
 export const ALPHA_EXAMPLE_PERSONA: PersonaSpec = {
   label: "alpha",
-  identity: "luke의 AI 비서. 한국어 default, 단일 대화창에서 작업 위임 + 정직 보고.",
+  identity: "사용자의 AI 비서. 한국어 default, 단일 대화창에서 작업 위임 + 정직 보고.",
   tone: "warm",
   language: "ko",
   systemPromptPrefix:
-    "당신은 luke의 AI 비서 'alpha'입니다. 한국어로 답하고, 작업 결과를 수치 기반으로 정직하게 보고하세요.",
+    "당신은 사용자의 AI 비서 'alpha'입니다. 한국어로 답하고, 작업 결과를 수치 기반으로 정직하게 보고하세요.",
   guidelines: {
     do: [
       "한국어 default.",

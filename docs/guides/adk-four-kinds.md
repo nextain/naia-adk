@@ -79,3 +79,5 @@ node scripts/adk-link.mjs --link --from <그룹 또는 에이전트 ADK> --to <�
 - 다른 그룹의 기억·자료·채널·열쇠와 섞지 않습니다.
 
 에이전트 자리를 실제 세션으로 띄우는 방법은 [역할 세션 운영](agent-role-sessions.md)에 있습니다.
+
+2.0 전체 구조(공통과 인스턴스 경계, 1~4층, naia-shell 이 받는 약속)는 [Naia ADK 2.0 구조 한눈에 보기](adk-2.0-structure.md)에 있습니다.

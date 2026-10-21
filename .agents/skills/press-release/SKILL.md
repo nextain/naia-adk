@@ -90,7 +90,7 @@ gcloud logging read "resource.type=cloud_run_job AND resource.labels.job_name=pr
 #### 6-4. 자동 회신 분류
 - 부재중 자동 회신 → 무시 (발송 성공으로 간주)
 - 세일/광고 자동 회신 → 매체 대표 메일의 일반 현상, 무시
-- 기자 직접 회신 → 즉시 대응 필요 (luke에게 알림)
+- 기자 직접 회신 → 즉시 대응 필요 (담당자에게 알림)
 
 ### Phase 7: 인사이트 (Insights)
 

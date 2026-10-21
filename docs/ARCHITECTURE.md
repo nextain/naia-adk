@@ -160,7 +160,7 @@ At the organizational layer, `naia-business-adk` scaffolding creates:
 ├── data-company/              ← T2: Company general data
 │   ├── docs-{company}/        ← Company docs (submodule)
 │   ├── docs-work-logs/        ← Work logs (submodule)
-│   └── caretive/              ← Reference data
+│   └── reference/             ← Reference data
 ├── data-business/             ← T3: Company sensitive data
 │   ├── docs-business/         ← Business docs (submodule)
 │   ├── accounting/            ← Accounting (submodule)
@@ -210,12 +210,12 @@ nextain-adk/                     ← company workspace root
 ├── data-company/
 │   ├── docs-nextain/             ← submodule: naia-corp/docs-internal
 │   ├── docs-work-logs/           ← submodule: naia-corp/docs-work-logs
-│   └── caretive/                 ← Reference data
+│   └── reference/                ← Reference data
 ├── data-business/
 │   ├── docs-business/            ← submodule: naia-corp/docs-business
 │   ├── accounting/               ← submodule: nextain/nextain-accounting
 │   └── documents/                ← submodule: nextain/nextain-documents
-├── data-private/                 ← submodule: nextain/luke-private
+├── data-private/                 ← submodule: nextain/<member>-private
 ├── projects/
 │   ├── naia-os/                  ← submodule: nextain/naia-os
 │   ├── www.naia-corp.example/         ← submodule
@@ -238,11 +238,11 @@ nextain-adk/                     ← company workspace root
 ```
 naia-corp-adk/
 ├── .agents/
-│   └── context/                  ← Onmam company info
+│   └── context/                  ← company info
 ├── data-company/
-│   └── docs-naia-corp/               ← Onmam docs
+│   └── docs-naia-corp/               ← company docs
 ├── data-business/
-│   └── documents/                ← Onmam documents
+│   └── documents/                ← company documents
 └── projects/
-    └── home.naia-corp.com/           ← Onmam project
+    └── home.naia-corp.com/           ← company project
 ```

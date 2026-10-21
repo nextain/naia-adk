@@ -23,7 +23,7 @@
           "type": "string",
           "minLength": 1,
           "pattern": "^[a-z0-9][a-z0-9_-]*$",
-          "description": "Organization/company key (e.g. nextain, onmam)."
+          "description": "Organization/company key (e.g. company-a, company-b)."
         },
         "roles": {
           "type": "array",
@@ -166,7 +166,7 @@
         "readerInstance": {
           "type": "string",
           "minLength": 1,
-          "description": "Messenger instance used by Layer-4 watch to read channels (e.g. minho)."
+          "description": "Messenger instance used by Layer-4 watch to read channels (e.g. dev-lead)."
         },
         "teamMessengerChannelId": {
           "type": ["string", "null"],

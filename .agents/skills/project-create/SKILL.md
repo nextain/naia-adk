@@ -33,8 +33,8 @@ argument-hint: "[프로젝트명] [한 줄 설명]"
 |------|------|--------|
 | `name` | 레포/프로젝트명 (kebab-case 권장) | (필수) |
 | `description` | 한 줄 설명 (`{{PROJECT_DESCRIPTION}}`에 들어감) | (필수) |
-| `owner` | 소유 조직 또는 유저 식별자 (`nextain`, `luke` 등) | `nextain` |
-| `responsible_human` | 책임자 사람 식별자 (**비어 있으면 실패 — 필수**) | `luke` |
+| `owner` | 소유 조직 또는 유저 식별자 (`nextain`, `alice` 등) | `nextain` |
+| `responsible_human` | 책임자 사람 식별자 (**비어 있으면 실패 — 필수**) | `alice` |
 | `visibility` | `private` \| `public` | `private` |
 | `repo_type` | `workspace_adk` \| `runtime_library` \| `app_os` | `app_os` |
 | `target` | `standalone`(독립 레포만) \| `submodule` \| `adk-link`(상대 경로 소프트링크 연결) | `adk-link` |

@@ -442,7 +442,7 @@ phases:
       - "ENOENT on Vercel = file exists locally but not in git — always check git status first"
     repo_type:
       nextain_repo:
-        when: "Working in a nextain/* repository where Luke is maintainer"
+        when: "Working in a nextain/* repository where the user is a maintainer"
         action: "Push directly to main — no PR. (pr-guard hook blocks `gh pr create`.)"
       external_contribution:
         when: "Contributing to an upstream/third-party repository"
