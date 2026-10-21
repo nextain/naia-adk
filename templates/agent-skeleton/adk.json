@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "adk_version": "2.0.0",
+  "id": "developer-agent-adk",
+  "name": "Developer Agent (Role Placeholder)",
+  "kind": "agent",
+  "role": "developer",
+  "owner": "example-group",
+  "responsible_human": "group-owner",
+  "base_commit": "2.0.0",
+  "paths": {
+    "rules": "rules",
+    "data": "data",
+    "keys": "keys",
+    "skills": "skills"
+  },
+  "isolation": {
+    "keys_isolated": true,
+    "keys_gitignored": true,
+    "keys_never_linked": true,
+    "env_only_org_key_injection": true
+  },
+  "links": [],
+  "permissions": {
+    "allowed_roots": [
+      "index.md",
+      "persona",
+      "memory",
+      "rules",
+      "data",
+      "skills",
+      "projects"
+    ],
+    "denied_roots": [
+      "keys"
+    ],
+    "actions": [
+      "read",
+      "write"
+    ]
+  },
+  "agent_config": {
+    "is_set_workspace_root": true,
+    "work_ledger_prohibited": true,
+    "birth": {
+      "created_at": "2026-01-01",
+      "created_by": "group-owner",
+      "adk_version": "2.0.0"
+    },
+    "groups": [
+      "example-group"
+    ],
+    "projects": [],
+    "persona_dir": "persona",
+    "memory": {
+      "common_dir": "memory/common",
+      "groups_dir": "memory/groups"
+    }
+  }
+}

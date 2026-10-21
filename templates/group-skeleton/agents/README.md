@@ -15,6 +15,10 @@ List each role-holding AI agent seat in `group_config.agents[]` inside `adk.json
 - `bot.credential_ref` is a short reference label only (never a raw token and never a path into `keys/`).
 - Group keys live only in the isolated `keys/` directory and are injected into server sessions via environment variables (`env_only`).
 
+## Filling a Seat
+
+Copy the agent ADK skeleton `templates/agent-skeleton/` into `agents/<id>-adk/`, then set `id`, `owner`, `responsible_human`, and `agent_config.groups` to this group's values. The seat then counts as `seats ready`. The agent records its group by id string only (no link back to the group). Attach project ADKs to a seat with `node scripts/adk-link.mjs --link --from agents/<id>-adk --to <project-adk>` (relative symlink at `projects/<project-id>`). See the Naia ADK guide `docs/guides/adk-four-kinds.md`.
+
 ## Running Seats as Sessions
 
 To run each seat as a live agent session on the group development server (pane naming, first role instruction, the per-seat `## 세션` record, message hand-off, and shared-folder rules), follow the Naia ADK guide `docs/guides/agent-role-sessions.md`.

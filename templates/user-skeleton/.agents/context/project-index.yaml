@@ -1,0 +1,22 @@
+version: "2.0"
+
+user:
+  id: member-a-adk
+  kind: user
+  visibility: template
+  entrypoints:
+    ai: AGENTS.md
+    human: index.md
+    manifest: adk.json
+
+paths:
+  manifest: adk.json
+  human_index: index.md
+  work_docs: docs/work/
+  groups: "groups/<group-id>"
+  projects: "projects/<project-id>"
+  keys: keys/
+
+links:
+  groups: "adk.json user_config.groups[] (group_id, access); optional relative symlink at groups/<group-id> via links[] kind=group"
+  projects: "adk.json links[] kind=project, relative symlink at projects/<project-id>"

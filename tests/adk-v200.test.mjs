@@ -699,3 +699,65 @@ test('12. Explicit checker list verification: VALID_KINDS includes "group", mini
 });
 
 
+
+test('13. Agent and user ADK skeletons validate, and a copied agent skeleton makes a group seat ready with project links', (t) => {
+  const agentSkeletonDir = path.join(naiaAdkRoot, 'templates', 'agent-skeleton');
+  const userSkeletonDir = path.join(naiaAdkRoot, 'templates', 'user-skeleton');
+
+  const agentCheck = checkAdkInstance(agentSkeletonDir);
+  assert.equal(agentCheck.ok, true, `agent skeleton must pass: ${agentCheck.errors.join('; ')}`);
+  assert.equal(agentCheck.manifest.kind, 'agent');
+  assert.equal(agentCheck.manifest.agent_config.work_ledger_prohibited, true);
+  assert.deepEqual(agentCheck.manifest.agent_config.groups, ['example-group']);
+  for (const rel of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md', 'index.md', '.agents/context/agents-rules.json', '.agents/context/project-index.yaml', 'memory/README.md']) {
+    assert.ok(fs.existsSync(path.join(agentSkeletonDir, rel)), `agent skeleton missing ${rel}`);
+  }
+  assert.equal(fs.readFileSync(path.join(agentSkeletonDir, 'CLAUDE.md'), 'utf8').trim(), '@AGENTS.md');
+  assert.ok(!fs.existsSync(path.join(agentSkeletonDir, 'docs', 'work')), 'agent skeleton must not hold a work ledger');
+
+  const userCheck = checkAdkInstance(userSkeletonDir);
+  assert.equal(userCheck.ok, true, `user skeleton must pass: ${userCheck.errors.join('; ')}`);
+  assert.equal(userCheck.manifest.kind, 'user');
+  assert.equal(userCheck.manifest.user_config.groups[0].group_id, 'example-group');
+  assert.equal(fs.readFileSync(path.join(userSkeletonDir, 'GEMINI.md'), 'utf8').trim(), '@AGENTS.md');
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'naia-adk-v200-four-kinds-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const groupDir = path.join(tmpDir, 'example-group');
+  fs.cpSync(groupSkeletonDir, groupDir, { recursive: true });
+  const seatDir = path.join(groupDir, 'agents', 'developer-agent-adk');
+  fs.rmSync(seatDir, { recursive: true, force: true });
+  fs.cpSync(agentSkeletonDir, seatDir, { recursive: true });
+
+  const projectDir = path.join(tmpDir, 'project-core');
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, 'adk.json'),
+    JSON.stringify({
+      adk_version: '2.0.0',
+      id: 'project-core',
+      kind: 'project',
+      owner: 'example-group',
+      responsible_human: 'group-owner',
+      links: [],
+      permissions: { allowed_roots: ['docs'], denied_roots: ['keys'], actions: ['read'] },
+    }, null, 2),
+    'utf8',
+  );
+  const userDir = path.join(tmpDir, 'member-a-adk');
+  fs.cpSync(userSkeletonDir, userDir, { recursive: true });
+
+  for (const [from, to] of [[seatDir, projectDir], [groupDir, projectDir], [userDir, groupDir]]) {
+    const run = spawnSync(process.execPath, [adkLinkCli, '--link', '--from', from, '--to', to], { encoding: 'utf8' });
+    assert.equal(run.status, 0, `link failed: ${run.stderr}`);
+  }
+  assert.equal(fs.readlinkSync(path.join(seatDir, 'projects', 'project-core')), '../../../../project-core');
+  assert.equal(fs.readlinkSync(path.join(userDir, 'groups', 'example-group')), '../../example-group');
+
+  const groupCheck = checkAdkInstance(groupDir);
+  assert.equal(groupCheck.ok, true, `group with filled seat must pass: ${groupCheck.errors.join('; ')}`);
+  assert.equal(groupCheck.groupSummary.seatsReadyCount, 1);
+  assert.deepEqual(groupCheck.groupSummary.open.seats_without_manifest, []);
+  assert.equal(checkAdkInstance(seatDir).ok, true);
+  assert.equal(checkAdkInstance(userDir).ok, true);
+});

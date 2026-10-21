@@ -1,0 +1,24 @@
+version: "2.0"
+
+agent:
+  id: developer-agent-adk
+  kind: agent
+  role: developer
+  visibility: template
+  entrypoints:
+    ai: AGENTS.md
+    human: index.md
+    manifest: adk.json
+
+paths:
+  manifest: adk.json
+  human_index: index.md
+  persona: persona/
+  memory_common: memory/common/
+  memory_groups: "memory/groups/<group>/"
+  projects: "projects/<project-id>"
+  keys: keys/
+
+links:
+  groups: "adk.json agent_config.groups (group id strings only, never links)"
+  projects: "adk.json links[] kind=project, relative symlink at projects/<project-id>"

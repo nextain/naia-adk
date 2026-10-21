@@ -21,6 +21,7 @@ This directory is the public skeleton for a Naia ADK 2.0 **group** instance (a t
    - Real running instances are group ADKs, and each agent seat is a folder `agents/<id>-adk/` with `index.md` inside (`group_config.agents[].seat`, defaulting to `agents/<id>-adk`, and `group_config.agents[].file` set to `agents/<id>-adk/index.md` when the seat folder exists).
    - Missing seat directories are reported as `seat not created` (warning), seat directories without `adk.json` (like the example `agents/developer-agent-adk/`) are reported as `seat without manifest` (warning), and seats with a valid `kind: "agent"` `adk.json` count as `seats ready`.
    - Configure each agent role seat and update `bot.status` from `"planned"` to `"active"` (or `"none"`). Keep actual bot tokens inside isolated `keys/` only and reference them by label in `bot.credential_ref`.
+   - To fill a seat, copy `templates/agent-skeleton/` into `agents/<id>-adk/`. User and project ADKs attach as described in the Naia ADK guide `docs/guides/adk-four-kinds.md`.
    - To run seats as live sessions on the group development server, see [`agents/README.md`](agents/README.md#running-seats-as-sessions) and the Naia ADK guide `docs/guides/agent-role-sessions.md`.
 
 ## Verification

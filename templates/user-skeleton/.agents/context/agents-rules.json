@@ -1,0 +1,18 @@
+{
+  "schema_note": "Naia ADK 2.0 사용자 ADK 최소 규칙 (templates/user-skeleton)",
+  "status": "minimal draft",
+  "user_id": "member-a",
+  "kind": "user",
+  "mandatory_reads": [
+    ".agents/context/agents-rules.json",
+    ".agents/context/project-index.yaml",
+    "index.md"
+  ],
+  "rules": [
+    "이 폴더는 사람 한 명의 자리다. 개인 설정·개인 작업 문서·속한 그룹 목록을 둔다.",
+    "속한 그룹은 adk.json 의 user_config.groups 에 적고, 같은 기기에 그룹 ADK 가 있으면 groups/<그룹> 상대 소프트링크로 붙인다.",
+    "개인 정보(연락처·계정·기기 주소)와 비밀값을 저장소에 넣지 않는다. 열쇠는 keys/ 에만 두고 git 에서 뺀다.",
+    "개인 작업 문서는 docs/work/ 에 두고, 그룹 일은 그룹 ADK 의 docs/work/ 에 둔다.",
+    "다른 그룹의 자료·기억·채널·열쇠와 섞지 않는다."
+  ]
+}
