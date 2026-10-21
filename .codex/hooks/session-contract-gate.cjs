@@ -338,6 +338,16 @@ function shellTextOutsideQuotes(command) {
 }
 
 /**
+ * Resolve symlinks through the nearest existing ancestor, keeping any
+ * not-yet-created tail as written.
+ */
+function physicalPath(target) {
+	let ancestor = target;
+	while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) ancestor = path.dirname(ancestor);
+	try { return path.join(fs.realpathSync(ancestor), path.relative(ancestor, target)); } catch { return target; }
+}
+
+/**
  * Refuse routine shell commands that write governance, host-policy, or shared
  * entrypoint files. Progress records remain ordinary work records; contract,
  * registry, context, and harness paths remain authority-bearing.
@@ -359,6 +369,9 @@ function governanceWriteCommand(command, cwd, projectRoot) {
 		// workspace. The routine allowance covers local work only, so any
 		// destination outside the resolved project is contract-required.
 		if (!sessionContract.inside(projectRoot, resolved)) return true;
+		// An in-project symlink can still point outside the project, so the
+		// destination is judged again where it physically lands.
+		if (!sessionContract.inside(physicalPath(projectRoot), physicalPath(resolved))) return true;
 		const state = stateTarget(resolved, cwd);
 		if (state?.kind === "progress") continue;
 		if (state || governedTarget(resolved, projectRoot)) return true;
@@ -553,6 +566,68 @@ function splitShellStatements(source) {
 	return statements.map((statement) => statement.trim()).filter(Boolean);
 }
 
+const HTTP_WRITE_COMMAND = /\bcurl\b[^;&|\n]*(?:(?:-X\s*|--request(?:=|\s+))(?:POST|PUT|PATCH|DELETE)\b|-[dFT](?:\s*|(?=\S))|--(?:data(?:-ascii|-binary|-raw|-urlencode)?|form(?:-string)?|json|upload-file)(?:=|\s+))|\bwget\b[^;&|\n]*(?:--(?:post-data|post-file|body-data|body-file)(?:=|\s+)|--method(?:=|\s+)(?:POST|PUT|PATCH|DELETE)\b)/i;
+const AWS_EFFECT_COMMAND = /(?:^|[;&|\n]\s*)aws\s+(?:s3\s+(?:cp|mv|rm|sync|mb|rb)\b|[\w-]+\s+(?:create|delete|put|update|run|terminate|start|stop|deploy|invoke|attach|detach|modify)-?)/i;
+
+/**
+ * Hard-to-undo shapes the deny lists miss: words spliced from quotes, request
+ * bodies in attached or equals form, cloud CLI effects, writes that land
+ * outside the project through ln, curl, wget or PowerShell, and a commit that
+ * carries a deletion. These need a contract even under the default-allow policy.
+ */
+function routineEscapeRefused(command, cwd) {
+	const policyCommand = shellPolicyCommand(joinQuoteSplicedWords(command));
+	if (HTTP_WRITE_COMMAND.test(policyCommand) || AWS_EFFECT_COMMAND.test(policyCommand)) return true;
+	const outside = (target) => !ordinaryUnboundTarget(path.sep === "/" ? String(target).replace(/\\/g, "/") : target, cwd);
+	for (const match of policyCommand.matchAll(/(?:^|[;&|\n]\s*)ln\s+([^;&|\n]+)/gi)) {
+		const targets = shellWords(match[1]).filter((token) => !token.startsWith("-"));
+		if (targets.length >= 2 && outside(targets.at(-1))) return true;
+	}
+	for (const match of policyCommand.matchAll(/\bcurl\b[^;&|\n]*?\s(?:--output-dir(?:=|\s+)|--output(?:=|\s+)|-o(?:\s+|(?=\S)))("[^"]+"|'[^']+'|[^\s;&|]+)/gi)) {
+		if (outside(match[1])) return true;
+	}
+	for (const match of policyCommand.matchAll(/\bwget\b[^;&|\n]*?\s(?:--output-document(?:=|\s+)|-O(?:\s+|(?=\S)))("[^"]+"|'[^']+'|[^\s;&|]+)/gi)) {
+		if (match[1] !== "-" && outside(match[1])) return true;
+	}
+	for (const match of policyCommand.matchAll(/\b(set-content|add-content|out-file|new-item|copy-item|move-item)\b\s+([^;&|\n]+)/gi)) {
+		const words = shellWords(match[2]);
+		const named = match[2].match(/-(?:literalpath|filepath|path|destination)(?:\s+|=)("[^"]+"|'[^']+'|\S+)/i);
+		const positional = words.filter((word, index) => !word.startsWith("-") && (index === 0 || !words[index - 1].startsWith("-")));
+		const target = named?.[1] || (/^(?:copy|move)-item$/i.test(match[1]) ? positional.at(-1) : positional[0]);
+		if (!target || outside(target)) return true;
+	}
+	return splitShellStatements(policyCommand).some((statement) => commitCarriesDeletion(statement, cwd));
+}
+
+/**
+ * Resolve quotes spliced into a word (`c"u"rl`, `r''m`, `.cod"ex"/x`) to the
+ * word the shell will see, so the policy judges it instead of refusing it.
+ */
+function joinQuoteSplicedWords(command) {
+	if (!hasShellWordQuoteSplice(command)) return command;
+	return String(command).replace(/(?<=[^\s;&|<>(])(["'])([^"'\s;&|<>]*)\1|(["'])([^"'\s;&|<>]*)\3(?=[^\s;&|<>)])/g, "$2$4");
+}
+
+function commitCarriesDeletion(statement, cwd) {
+	const words = shellWords(statement);
+	if (path.basename(String(words[0] || "")).replace(/\.exe$/i, "").toLowerCase() !== "git") return false;
+	let gitCwd = cwd;
+	let index = 1;
+	while (index < words.length && words[index].startsWith("-")) {
+		if (words[index] === "-C" && words[index + 1]) { gitCwd = path.resolve(gitCwd, words[index + 1]); index += 2; continue; }
+		index += 1;
+	}
+	if (words[index] !== "commit") return false;
+	const commitAll = words.slice(index + 1).some((word) => word === "--all" || /^-[A-Za-z]*a[A-Za-z]*$/.test(word));
+	try {
+		if (execFileSync("git", ["diff", "--cached", "--diff-filter=D", "--name-only", "-z"], { cwd: gitCwd, encoding: "utf8" }).length > 0) return true;
+		if (commitAll && execFileSync("git", ["ls-files", "--deleted", "-z"], { cwd: gitCwd, encoding: "utf8" }).length > 0) return true;
+	} catch {
+		return false;
+	}
+	return false;
+}
+
 /**
  * Decide whether a shell call is an ordinary local operation under the
  * repository policy. Dynamic shell construction, nested model runtimes,
@@ -571,6 +646,11 @@ function routineCommandAllowed(toolName, toolInput, cwd) {
 	const allowance = routineAllowance(projectRoot) || { default: "allow" };
 	if (allowance.default !== "allow") return false;
 	if (reviewInvokerCommand(command, cwd)) return true;
+	if (routineEscapeRefused(command, cwd)) return false;
+	// Judge the command Bash will actually run as well: `r\m`, `c"u"rl` and
+	// `.co\dex` must meet the same policy as their plain forms.
+	const policyCommand = shellPolicyCommand(joinQuoteSplicedWords(command));
+	if (policyCommand !== command && !routineCommandAllowed(toolName, { ...toolInput, command: policyCommand }, cwd)) return false;
 	if (governanceWriteCommand(command, cwd, projectRoot)) return false;
 
 	const patterns = [];
@@ -723,7 +803,11 @@ function ordinaryUnboundTarget(filePath, cwd) {
 	let ancestor = target;
 	while (!fs.existsSync(ancestor) && path.dirname(ancestor) !== ancestor) ancestor = path.dirname(ancestor);
 	try { target = path.join(fs.realpathSync(ancestor), path.relative(ancestor, target)); } catch { return false; }
-	if (!sessionContract.inside(projectRoot, target)) return false;
+	// Compare physical paths, then judge governance on the project-relative
+	// path so a symlinked checkout location (/home -> /var/home) still works.
+	const physicalRoot = physicalPath(projectRoot);
+	if (!sessionContract.inside(physicalRoot, target)) return false;
+	target = path.join(projectRoot, path.relative(physicalRoot, target));
 	if (entrypointTarget(target, cwd) || stateTarget(target, cwd)) return false;
 	return !governedTarget(target, projectRoot);
 }
