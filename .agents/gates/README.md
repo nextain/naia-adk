@@ -46,8 +46,8 @@ systemd 타이머나 cron 이 모델 CLI 를 직접 부르는 경우에는 예�
 아예 띄우지 않습니다. 모델 호출이 0 이라 절감이 가장 큽니다.
 
 ```
-ExecStart=/usr/bin/node /var/home/luke/alpha-adk/scripts/gate-run.mjs \
-    git-has-new-commits HEAD /var/home/luke/dev -- /path/to/run-triage.sh
+ExecStart=/usr/bin/node /path/to/adk/scripts/gate-run.mjs \
+    git-has-new-commits HEAD /path/to/repo -- /path/to/run-triage.sh
 ```
 
 건너뛸 때 종료 코드는 0 입니다. systemd 가 실패로 읽으면 그 유닛이 "Failed" 로 쌓여 진짜

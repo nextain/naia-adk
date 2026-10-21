@@ -184,7 +184,7 @@ export async function validateProjectSpecChain(rootDir = defaultRoot) {
 
   // Verify secret / token / raw media redaction (D47 safety requirement)
   const redactedSample = loggerMod.sanitizeDetail({
-    apiKey: 'sk-secret1234567890abcd',
+    apiKey: 'sk-' + 'secret1234567890abcd', // 시험용 가짜 값(점검 도구 오탐 피함)
     authorization: 'Bearer secret.jwt.token',
     nested: { password: 'my-password', note: 'Token Bearer abcdef123456' },
     mediaData: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA',

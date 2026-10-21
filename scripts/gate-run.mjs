@@ -13,8 +13,8 @@
  *
  * systemd 유닛에서는 ExecStart 를 이렇게 감쌉니다.
  *
- *   ExecStart=/usr/bin/node /var/home/luke/alpha-adk/scripts/gate-run.mjs \
- *       git-has-new-commits HEAD /var/home/luke/dev -- /path/to/run-triage.sh
+ *   ExecStart=/usr/bin/node /path/to/adk/scripts/gate-run.mjs \
+ *       git-has-new-commits HEAD /path/to/repo -- /path/to/run-triage.sh
  *
  * 조건 스크립트의 계약은 `.agents/gates/README.md` 와 같습니다.
  *
