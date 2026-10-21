@@ -14,7 +14,7 @@ user fork may choose its maintainer's language for human-facing guides.
 
 **Public `naia-adk` baseline (2026-06-22)**:
 
-- `README.md` is Korean and `README.en.md` is English.
+- `README.md` is English (changed 2026-10-21); `README.ko.md` (Korean), `README.ja.md` (Japanese), and `README.zh-CN.md` (Simplified Chinese) are linked from the language switcher on its first line.
 - `AGENTS.md` is the English canonical index; `CLAUDE.md` and `GEMINI.md` are one-line `@AGENTS.md` imports.
 - `.users/context/` contains Korean human guides; `.users/context/en/` contains English human guides.
 

@@ -12,7 +12,7 @@
 기본: 공개 OSS 레포는 영어-primary로 문서화하고, 메인테이너·사용자 포크는 메인테이너 언어를 기본으로 사용합니다.
 
 **`naia-adk` 공개 기준선의 실제 파일 규칙 (2026-06-22)**:
-- `README.md`는 한국어, `README.en.md`는 영어입니다.
+- `README.md`는 영어입니다(2026-10-21 변경). `README.ko.md`(한국어)·`README.ja.md`(일본어)·`README.zh-CN.md`(중국어 간체)는 첫 줄 언어 전환 링크로 이어집니다.
 - `AGENTS.md`는 영어 canonical 인덱스이고 `CLAUDE.md`와 `GEMINI.md`는 `@AGENTS.md` 한 줄 포인터입니다.
 - `.users/context/`는 한국어 human guide, `.users/context/en/`은 영어 human guide입니다.
 
