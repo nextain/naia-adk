@@ -10,6 +10,7 @@
 
 - **[📋 00. 사용자 요구사항 원문 기록 & 추적표 (REQ-LOG)](docs/specs/00-USER-REQUESTS-traceability.ko.md)**
 - **[① 01-PC 상위기획 (Product Concept)](docs/specs/01-PC-product-concept.ko.md)**
+- **[⑧ 08-AC 동작 구조·개념 설명 (Architecture Concepts) — 01-PC 다음에 읽기](docs/specs/08-AC-architecture-concepts.ko.md)**
 - **[② 02-SP 화면기획 (Screen Plan)](docs/specs/02-SP-screen-plan.ko.md)**
 - **[③ 03-UC 사용자 시나리오 (User Scenarios)](docs/specs/03-UC-user-scenarios.ko.md)**
 - **[④ 04-RQ 요구사항 및 수용기준 (Requirements)](docs/specs/04-RQ-requirements.ko.md)**

@@ -2,7 +2,7 @@
 
 > **프로젝트 식별자**: `{{PROJECT_ID}}` · **소유**: `{{OWNER}}` · **책임자(사람)**: `{{RESPONSIBLE_HUMAN}}`  
 > **추적표**: 👉 **[📋 사용자 요구사항 원문 기록 & 추적표 열기](docs/specs/00-USER-REQUESTS-traceability.ko.md)**  
-> **하위 연결**: **[② 02-SP 화면기획](docs/specs/02-SP-screen-plan.ko.md)** · **[③ 03-UC 사용자 시나리오](docs/specs/03-UC-user-scenarios.ko.md)** · **[⑦ 07-QC 적대 검증](docs/specs/07-QC-adversarial-review.ko.md)**
+> **하위 연결**: **[⑧ 08-AC 동작 구조·개념 설명](docs/specs/08-AC-architecture-concepts.ko.md)** (이 문서 다음에 읽기) · **[② 02-SP 화면기획](docs/specs/02-SP-screen-plan.ko.md)** · **[③ 03-UC 사용자 시나리오](docs/specs/03-UC-user-scenarios.ko.md)** · **[⑦ 07-QC 적대 검증](docs/specs/07-QC-adversarial-review.ko.md)**
 
 ---
 
@@ -22,6 +22,7 @@
 ```mermaid
 flowchart LR
   REQ["📋 REQ-LOG\n사용자 원문 요구사항"] --> PC["① PC 상위기획\n(왜 만드는가)"]
+  PC -. "어떻게 돌아가는가" .-> AC["⑧ AC 동작 구조·개념\n(PC 다음에 읽기)"]
   PC --> SP["② SP 화면기획\n(공간·도면)"]
   PC --> UC["③ UC 사용자 여정\n(시나리오)"]
   SP --> RQ["④ RQ 요구사항\n(수용기준)"]

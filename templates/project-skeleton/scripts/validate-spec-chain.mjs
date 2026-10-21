@@ -5,6 +5,7 @@
  * 1. Project `adk.json` manifest (`kind: "project"`, `owner`, non-empty `responsible_human`, `keys/` isolation)
  * 2. Complete spec document chain:
  *    `00-USER-REQUESTS-traceability.ko.md` + `PC → SP/UC → RQ → FE → [UT → IT → E2E] → QC`
+ *    + `08-AC-architecture-concepts.ko.md` (read right after PC: how the product works)
  * 3. Bidirectional traceability (REQ-LOG <-> PC <-> SP/UC <-> RQ <-> FE <-> UT/IT/E2E <-> QC)
  * 4. Markdown internal link integrity (all linked relative/repo files must exist)
  * 5. Structured Debug Logger (`src/debug-logger.mjs`: MAX=200 ring buffer, global error capture, `window.__DEBUG__`)
@@ -26,6 +27,7 @@ export const REQUIRED_SPEC_FILES = [
   'docs/specs/05-FE-feature-spec.ko.md',
   'docs/specs/06-UT-IT-E2E-test-plan.ko.md',
   'docs/specs/07-QC-adversarial-review.ko.md',
+  'docs/specs/08-AC-architecture-concepts.ko.md',
 ];
 
 export const REQUIRED_PROJECT_FILES = [
@@ -112,6 +114,7 @@ export async function validateProjectSpecChain(rootDir = defaultRoot) {
 
   const stageChecks = [
     { file: 'docs/specs/01-PC-product-concept.ko.md', token: 'PC-01' },
+    { file: 'docs/specs/08-AC-architecture-concepts.ko.md', token: 'AC-01' },
     { file: 'docs/specs/02-SP-screen-plan.ko.md', token: 'SP-01' },
     { file: 'docs/specs/03-UC-user-scenarios.ko.md', token: 'UC-01' },
     { file: 'docs/specs/04-RQ-requirements.ko.md', token: 'RQ-01' },

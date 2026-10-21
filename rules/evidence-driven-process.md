@@ -58,6 +58,7 @@ flowchart TD
 기능 단위 개발은 아래 8단계 사슬의 양방향 참조와 정보 장벽을 지킨다.
 
 1. **`PC` (Product Concept)**: 제품 헌장, 해결하려는 가치, 핵심 불변식.
+   - **`AC` (Architecture Concepts)**: `PC` 바로 다음에 읽는 동작 구조·개념 설명(`08-AC-architecture-concepts.ko.md`). 처음 보는 사람을 위한 한 문단 요약, 낱말 풀이, 구성 요소, 요청에서 결과까지의 흐름, 데이터 저장 위치, 바깥 연결을 적는다. 사슬 단계를 늘리지 않으며 `QC` 의 기준 문서도 아니다.
 2. **`SP` (Screen Plan) / `UC` (User Scenario)**: 화면 공간 배치(`SP`)와 사용자 해피패스/예외 여정(`UC`).
 3. **`RQ` (Requirements)**: 검증 가능한 수용 기준과 사용자 원문(`REQ-*`) 연결.
 4. **`FE` (Feature Spec)**: 모듈 책임, API/상태 계약, 디버그 로깅(`D47`) 및 복잡도(`USR-012`) 설계.

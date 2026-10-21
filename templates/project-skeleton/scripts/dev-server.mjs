@@ -43,6 +43,7 @@ export function collectDocs(rootDir = defaultRoot) {
       group: '1. 표준 명세 사슬 (PC → SP/UC → RQ → FE → UT/IT/E2E)',
       items: [
         { title: '① [PC] 상위기획 (Product Concept)', path: `${specsDir}/01-PC-product-concept.ko.md` },
+        { title: '⑧ [AC] 동작 구조·개념 설명 (Architecture Concepts)', path: `${specsDir}/08-AC-architecture-concepts.ko.md` },
         { title: '② [SP] 화면기획 (Screen Plan)', path: `${specsDir}/02-SP-screen-plan.ko.md` },
         { title: '③ [UC] 사용자 시나리오 (User Scenarios)', path: `${specsDir}/03-UC-user-scenarios.ko.md` },
         { title: '④ [RQ] 요구사항 및 수용기준 (Requirements)', path: `${specsDir}/04-RQ-requirements.ko.md` },

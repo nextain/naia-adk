@@ -16,7 +16,7 @@ argument-hint: "[프로젝트명] [한 줄 설명]"
 단일 통합 `naia-adk` v0.2.0의 **`scripts/adk-scaffold-project.mjs`**(`templates/project-skeleton/`)와 `nextain/naia-template-project`(self-trust 하네스 base)를 결합하여 **새 `project` ADK를 명령 한 줄로 표준에 맞게 자동 생성**한다.
 수동으로 명세 문서나 서버·로거를 만들지 않고 다음 핵심 구성을 결정론적으로 자동 생성한다:
 - `adk.json` (`kind: "project"`, `adk_version: "0.2.0"`, `owner`, `responsible_human` 필수, `keys/` 격리)
-- `docs/specs/00-USER-REQUESTS-traceability.ko.md` 및 `PC → SP/UC → RQ → FE → [UT → IT → E2E] → QC` 8종 표준 명세 사슬
+- `docs/specs/00-USER-REQUESTS-traceability.ko.md` 및 `PC → SP/UC → RQ → FE → [UT → IT → E2E] → QC` 표준 명세 사슬과 `PC` 다음에 읽는 동작 구조·개념 설명(`08-AC-architecture-concepts.ko.md`)까지 9종
 - `scripts/validate-spec-chain.mjs` (요구사항·명세·테스트·QC 양방향 추적 및 마크다운 내부 링크 무결성 결정론 검증기)
 - `src/debug-logger.mjs` (링버퍼 `MAX=200`, 글로벌 `error`/`unhandledrejection` 자동 포착, `window.__DEBUG__` API — D47 원칙)
 - `scripts/dev-server.mjs` + `scripts/lib/mermaid-viewer-client.mjs` (`/docs` + `/play` 통합 스튜디오 서버 및 `wirePanZoom` 마우스 휠 줌/드래그 팬, `+`/`-`/`100%`/`⛶` 툴바, `openMermaidModal` 전체화면 모달·`Esc` 닫기 지원 모듈)
@@ -45,7 +45,7 @@ argument-hint: "[프로젝트명] [한 줄 설명]"
 
 ### Step 1 — `adk-scaffold-project.mjs`로 프로젝트 ADK 뼈대 자동 생성 (필수)
 
-수동 파일 생성 대신 아래 명령 한 줄로 `adk.json`, `docs/specs/`(`00-USER-REQUESTS-traceability.ko.md` + `PC/SP/UC/RQ/FE/UT-IT-E2E/QC`), `scripts/validate-spec-chain.mjs`, `src/debug-logger.mjs`, `scripts/dev-server.mjs`, `scripts/lib/mermaid-viewer-client.mjs`를 자동 생성한다:
+수동 파일 생성 대신 아래 명령 한 줄로 `adk.json`, `docs/specs/`(`00-USER-REQUESTS-traceability.ko.md` + `PC/AC/SP/UC/RQ/FE/UT-IT-E2E/QC`), `scripts/validate-spec-chain.mjs`, `src/debug-logger.mjs`, `scripts/dev-server.mjs`, `scripts/lib/mermaid-viewer-client.mjs`를 자동 생성한다:
 
 ```bash
 node projects/naia-adk/scripts/adk-scaffold-project.mjs \

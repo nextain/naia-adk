@@ -42,6 +42,7 @@
     "spec_chain": [
       "REQ-LOG",
       "PC",
+      "AC",
       "SP",
       "UC",
       "RQ",

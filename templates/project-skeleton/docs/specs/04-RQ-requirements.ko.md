@@ -9,5 +9,5 @@
 
 | 요구사항 ID | 상위 근거 | 요구사항 설명 | 측정 가능한 수용기준 (Acceptance Criteria) |
 |---|---|---|---|
-| **`RQ-01`** | `REQ-LOG-01`<br/>`PC-01` · `SP-01` · `UC-01` | **명세 사슬 양방향 추적 및 인터랙티브 Mermaid 스튜디오 서버** | 1. `docs/specs/` 내 8개 표준 문서가 모두 존재하고 깨진 내부 마크다운 링크가 `0건`이어야 한다.<br/>2. `scripts/lib/mermaid-viewer-client.mjs`가 `wirePanZoom`, `+`/`-`/`100%`/`⛶` 툴바, `openMermaidModal` 및 `Escape` 닫기를 제공해야 한다. |
+| **`RQ-01`** | `REQ-LOG-01`<br/>`PC-01` · `SP-01` · `UC-01` | **명세 사슬 양방향 추적 및 인터랙티브 Mermaid 스튜디오 서버** | 1. `docs/specs/` 내 9개 표준 문서가 모두 존재하고 깨진 내부 마크다운 링크가 `0건`이어야 한다.<br/>2. `scripts/lib/mermaid-viewer-client.mjs`가 `wirePanZoom`, `+`/`-`/`100%`/`⛶` 툴바, `openMermaidModal` 및 `Escape` 닫기를 제공해야 한다. |
 | **`RQ-02`** | `REQ-LOG-02`<br/>`PC-02` · `SP-02` · `UC-02` | **D47 구조화 디버그 로거 및 ADK 소유·책임자·키 격리 무결성** | 1. `src/debug-logger.mjs`는 `MAX=200` 링버퍼를 유지하며 200개 초과 시 가장 오래된 항목부터 제거해야 한다.<br/>2. 글로벌 `error` 및 `unhandledrejection` 이벤트를 자동 포착하고 `window.__DEBUG__`로 노출해야 한다.<br/>3. `adk.json`의 `owner`와 `responsible_human`이 비어 있지 않고 `keys/`가 심볼릭 링크가 아님을 검증기가 확인해야 한다. |
