@@ -14,8 +14,10 @@ spec_date: "2026-05-27"
 # ─── Language Defaults / Overrides ───────────────────────────────────────────
 # Default: public OSS repos are documented English-primary (international reach);
 # maintainer/user forks Korean-primary (maintainer language).
-# Maintainer override (2026-06-22): the public naia-adk entry docs use Korean-first
-# user documentation: README.md is Korean and README.en.md is English. The shared
+# Maintainer override (2026-06-22, README layout updated 2026-10-21): the README
+# front page is English-first and multilingual: README.md is English, with
+# README.ko.md (Korean), README.ja.md (Japanese), and README.zh-CN.md (Simplified
+# Chinese) linked from a language switcher on the first line. The shared
 # agent index is English: AGENTS.md is canonical and CLAUDE.md/GEMINI.md are
 # one-line @AGENTS.md imports. .users/context/ is Korean and .users/context/en/ is
 # the English human mirror.

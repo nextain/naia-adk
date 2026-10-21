@@ -11,5 +11,5 @@ These directories provide human-readable guides for `.agents/context/`.
   `.agents/context/agents-rules.json` by `node .claude/hooks/agents-context-mirror.js`;
   edit the JSON first, then regenerate.
 
-`README.md` is Korean and `README.en.md` is English. `AGENTS.md` is the shared English canonical
+`README.md` is English; `README.ko.md` (Korean), `README.ja.md` (Japanese), and `README.zh-CN.md` (Simplified Chinese) are linked from the language switcher on its first line. `AGENTS.md` is the shared English canonical
 index; `CLAUDE.md` and `GEMINI.md` are one-line `@AGENTS.md` imports.

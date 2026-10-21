@@ -11,5 +11,5 @@
   `node .claude/hooks/agents-context-mirror.js`로 생성되는 파일입니다. JSON을 먼저 수정하고
   다시 생성합니다.
 
-`README.md`는 한국어, `README.en.md`는 영어입니다. `AGENTS.md`는 shared English canonical
+`README.md`는 영어이고, `README.ko.md`(한국어)·`README.ja.md`(일본어)·`README.zh-CN.md`(중국어 간체)는 첫 줄 언어 전환 링크로 이어집니다. `AGENTS.md`는 shared English canonical
 index이며 `CLAUDE.md`와 `GEMINI.md`는 `@AGENTS.md` 한 줄 포인터입니다.

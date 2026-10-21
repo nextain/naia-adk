@@ -1,326 +1,376 @@
-[한국어](README.md) | [English](README.en.md)
+**English** | [한국어](README.ko.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md)
 
 # Naia ADK
 
-**AI 코딩 에이전트가 일할 작업 공간을, 미리 정돈해 둔 스캐폴드.**
+**A pre-arranged workspace scaffold for AI coding agents to work in.**
 
-Claude Code나 Codex 같은 AI 코딩 도구를 쓰다 보면, 도구마다 규칙 파일 위치도 다르고
-"이 문서는 공개해도 되는지", "스킬은 어디에 두는지"가 제각각입니다. Naia ADK는 그 뼈대를
-미리 깔아 둔 워크스페이스입니다. 새 노트북에 개발 환경을 세팅하듯, AI 에이전트에게도 정돈된
-책상을 먼저 내주는 셈입니다. 여기에 워크스페이스 상태를 눈으로 확인할 수 있는 대시보드가 함께
-들어 있습니다.
+When you use AI coding tools like Claude Code or Codex, every tool keeps its rule
+files in a different place, and questions like "can this document be published?"
+or "where do skills go?" get answered ad hoc. Naia ADK lays out that skeleton in
+advance. Just as you set up a dev environment on a new laptop, it hands an AI
+agent a tidy desk to start from. It also ships a dashboard so you can see the
+workspace state at a glance.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-## 5분 만에 띄워보기
+## Up and running in 5 minutes
 
-**Node 22 이상, pnpm 9 이상**이 필요합니다.
+You need **Node 22+** and **pnpm 9+**.
 
 ```bash
-pnpm install    # 워크스페이스 의존성 설치
-pnpm dev        # API 서버(:3141) + 대시보드(:3142) 동시 실행
+pnpm install    # install workspace dependencies
+pnpm dev        # run the API server (:3141) and dashboard (:3142) together
 ```
 
-브라우저에서 `http://localhost:3142`를 열면 대시보드가 뜹니다. 여기서 세 가지를 바로 볼 수 있습니다.
+Open `http://localhost:3142` in your browser to see the dashboard. Three things
+are visible right away:
 
-- **워크스페이스** — 프로젝트와 서브모듈, 파일 트리, 그리고 각 항목의 공개 등급.
-- **스킬 카탈로그** — 이 워크스페이스에 등록된 스킬 목록과 내용.
-- **설정 / 모니터링** — 서버 설정, 클라이언트 상태, 데이터 디렉터리.
+- **Workspace** — projects and submodules, the file tree, and each item's
+  disclosure level.
+- **Skills catalog** — the list of skills registered in this workspace, and their
+  content.
+- **Settings / monitoring** — server config, client status, data directories.
 
-대시보드는 문서 화면이 쓰는 `/api/portal` 요청만 3141 포트의 API 서버로 넘겨줍니다. 서버만, 또는 대시보드만
-띄우고 싶다면 각각 `pnpm dev:server`(→ 3141), `pnpm dev:dashboard`(→ 3142)를 쓰면 됩니다.
-런처 스크립트 `./start.sh`(Linux/macOS)와 `start.bat`(Windows)도 결국 `pnpm dev`를 실행합니다.
-서버 CLI는 `--port`, `--host`, `--root` 옵션을 받습니다. 예를 들어 다른 워크스페이스를
-가리키려면 `pnpm serve -- --root /path/to/workspace`처럼 씁니다.
+The dashboard forwards only the docs view's `/api/portal` requests to the API server on port 3141. To run
+just one of them, use `pnpm dev:server` (→ 3141) or `pnpm dev:dashboard`
+(→ 3142). The launcher scripts `./start.sh` (Linux/macOS) and `start.bat`
+(Windows) both run `pnpm dev`. The server CLI accepts `--port`, `--host`, and
+`--root`; for example, point it at another workspace with
+`pnpm serve -- --root /path/to/workspace`.
 
-## 무엇이 들어있나
+## What's inside
 
-### 워크스페이스 스캐폴드
+### The workspace scaffold
 
-AI 에이전트가 곧바로 일할 수 있도록, 자리가 정해진 디렉터리 묶음을 제공합니다. AI가 읽을
-컨텍스트는 `.agents/`(영어, JSON/YAML)에 두고, 사람이 읽을 문서는 `.users/context/`(한국어)와
-`.users/context/en/`(영어)에 둡니다. 이 미러는 전체를 그대로 복제한 것이 아니라 사람이 읽어야 할 핵심 문서 위주로 두는
-부분 미러입니다(예컨대 스킬은 `.agents/skills/` 쪽이 원본이고 `.users/skills/`에는 일부만
-있습니다). 스킬, 데이터, 프로젝트는 모두 정해진 위치가 있어서, 어떤 도구로 열어도 같은
-모양으로 보입니다.
+It gives an AI agent a set of directories with fixed places for everything, so it
+can start working immediately. AI-facing context lives in `.agents/` (English,
+JSON/YAML). Human-readable guides live in `.users/context/` (Korean) and
+`.users/context/en/` (English).
+That mirror is partial, not a full copy — it holds the documents a human needs
+to read (for example, skills are canonical under `.agents/skills/`, and only some
+are mirrored into `.users/skills/`). Skills, data, and projects all have
+designated locations, so the workspace looks the same no matter which tool opens
+it.
 
-### 대시보드와 API
+### Dashboard and API
 
-워크스페이스를 눈으로 관리하는 Next.js 대시보드와, 그 뒤를 받치는 Fastify API 서버가
-포함됩니다. 상단 내비게이션의 **문서**(`/docs`)와 **작업** 탭에서 회사 공유 문서와 공동작업 보드를
-한눈에 볼 수 있으며, `pnpm adk:setup -- --company <저장소주소>` 명령으로 회사 문서와 프로젝트 저장소를
-한 번에 세팅할 수 있습니다. 자세한 설정과 사용법은 [온보딩 가이드](docs/guides/onboarding.ko.md)를 참고하세요.
-API는 워크스페이스 메타데이터(`/api/workspace`), 스킬 카탈로그(`/api/skills`), 회사 문서 포털(`/api/portal`),
-그리고 파일 변경을 실시간으로 알리는 WebSocket(`/api/ws`)을
-제공합니다. 이 API 덕분에 대시보드뿐 아니라 다른 프로그램도 워크스페이스에 접근할 수 있습니다.
+A Next.js dashboard manages the workspace visually, backed by a Fastify API
+server. The **Docs** (`/docs`) and **Work** tabs in the top navigation show shared
+company documents and the collaboration board in one place, and
+`pnpm adk:setup -- --company <repo-url>` sets up company docs and project
+repositories in one step. For setup and usage details, see the
+[Onboarding Guide (Korean)](docs/guides/onboarding.ko.md).
+The API exposes workspace metadata (`/api/workspace`), the skill catalog
+(`/api/skills`), the company docs portal (`/api/portal`), and a WebSocket that
+streams file-change events (`/api/ws`). Thanks to this API, programs other than the
+dashboard can reach the workspace too.
 
-### 스킬 시스템
+### Skill system
 
-반복 작업을 스킬로 묶어 재사용합니다. 각 스킬은 `SKILL.md` 한 파일로 정의되고, API 서버가
-`skills/` 아래를 훑어 카탈로그로 만듭니다. 이때 스킬 하나라도 규격을 어기면 카탈로그 전체가
-에러를 내도록 설계했습니다(fail-closed). 깨진 스킬을 조용히 빼고 나머지만 내보내는 대신,
-운영자가 그 자리에서 고치도록 만든 것입니다. 잘못된 목록을 모르고 서비스하는 사고를 막기 위한
-선택입니다.
+Repeated tasks are bundled into reusable skills. Each skill is defined by a single
+`SKILL.md`, and the API server scans `skills/` to build the catalog. If even one
+skill violates the format, the whole catalog throws an error (fail-closed): rather
+than silently dropping the broken skill and serving the rest, the operator is made
+to fix it on the spot. It's a deliberate choice to prevent shipping an
+incomplete catalog by accident.
 
-### 지금 들어 있는 스킬
+### What is in the skill tree today
 
-스킬은 네 갈래로 나뉩니다. 어떤 스킬이 있는지 전체를 다시 읽지 않아도 되도록
-`.agents/context/skills-index.yaml`에 무엇을 언제 쓰는지 한 줄씩 정리해 두었고,
-아래는 그 목차입니다.
+The skills fall into four groups. So that a session does not have to reread
+every `SKILL.md` to find out what exists, `.agents/context/skills-index.yaml`
+carries one line per skill saying what it does and when to reach for it. The
+list below is that index's table of contents.
 
-**문서와 대외 산출물** — 사람이 읽을 것을 만드는 일입니다.
-`doc-coauthoring`(스펙·설계 문서), `proposal-writing`(제안서), `read-doc`,
-`translate-doc`, `press-release`, `weekly-report`, `document-generation`(브랜드
-PDF와 전자서명), `copyright-reg`(저작권 등록 서류), `patent-draft`와
-`patent-pipeline`(특허 명세), `youtube-upload`(영상과 자막 게시).
+**Documents and outward work** — things a person will read.
+`doc-coauthoring` (specs and design documents), `proposal-writing`, `read-doc`,
+`translate-doc`, `press-release`, `weekly-report`, `document-generation` (branded
+PDFs and digital signatures), `copyright-reg` (copyright registration filings),
+`patent-draft` and `patent-pipeline` (patent specifications), `youtube-upload`
+(video and subtitles).
 
-**워크스페이스를 굴리는 일** — 저장소 자체를 다루는 손입니다.
+**Running the workspace** — the hands that touch the repository itself.
 `project-create`, `project-migration`, `merge-worktree`, `migrate-ctx`,
-`session-resume`, `sync-upstream`(업스트림 동기화), `manage-skills`,
-`secret-vault`(암호화 시크릿 볼트).
+`session-resume`, `sync-upstream` (upstream sync), `manage-skills`, and
+`secret-vault` for the encrypted secret vault.
 
-**검증 게이트** — 통과했다는 말 대신 증거를 요구하는 자리입니다.
-`verify-implementation`, `verify-contract-conformance`, `verify-request-contract`,
-`verify-product-preservation`, `verify-benchmark-contract`, `verify-review-gate`,
-`verify-build`(빌드가 실제로 되는가), `verify-conflict-markers`(충돌 마커가 남았는가),
-`verify-i18n`과 `verify-hardcoded-strings`(문자열이 제자리에 있는가), `webapp-testing`,
-그리고 적대적 검토를 붙이는 `review-pass`.
+**Verification gates** — the places that ask for evidence instead of a claim.
+`verify-implementation`, `verify-contract-conformance`,
+`verify-request-contract`, `verify-product-preservation`,
+`verify-benchmark-contract`, `verify-review-gate`, `verify-build` (does it
+actually build), `verify-conflict-markers` (are conflict markers left behind),
+`verify-i18n` and
+`verify-hardcoded-strings` (are the strings where they belong), `webapp-testing`,
+and `review-pass` for adversarial review.
 
-**운영과 실험** — 바깥과 닿거나 모델을 다루는 일입니다.
-`manage-discord-sessions`(디스코드 게이트웨이 운영), `channel-management`,
-`service-management`(가동과 비용, 장애 대응), `web-monitoring`, `email`, `sms`,
-`upstream-pr-review`(오픈소스에 내보내기 전 점검), `payroll`,
-`finetune-persona`(캐릭터 LoRA 학습).
+**Operations and experiments** — work that reaches outside or handles models.
+`manage-discord-sessions` for the Discord gateway, `channel-management`,
+`service-management` (uptime, cost, incidents), `web-monitoring`, `email`, `sms`,
+`upstream-pr-review` (a floor before anything goes to an OSS maintainer),
+`payroll`, and `finetune-persona` for character LoRA training.
 
-스킬을 새로 만들 때는 `SKILL_TEMPLATE.md`에서 시작하고, 만든 뒤에는 색인에도
-한 줄을 남깁니다. 색인이 실제와 어긋나면 다음 세션이 있는 줄도 모르는 스킬을
-다시 만들게 됩니다.
+Start a new skill from `SKILL_TEMPLATE.md`, and add its line to the index once
+it exists. When the index drifts from the tree, the next session rebuilds a
+skill it already had.
 
-### 규칙 묶음과 최소 거버넌스
+### Rules and minimum governance
 
-혼자 쓰는 워크스페이스라도, AI와 자동화가 손을 대는 순간 최소한의 규칙이 필요합니다. Naia
-ADK는 `read`, `write`, `execute`, `publish`를 서로 다른 관심사로 나눠 두고, 문서마다 공개
-등급을 붙입니다. 프로덕션 변경이나 시크릿 취급, 대외 공개처럼 되돌리기 어려운 작업은 일반
-로컬 편집과 분리해 승인 게이트를 거치게 합니다.
+Even a workspace you use alone needs some minimal rules the moment AI and
+automation touch it. Naia ADK separates `read`, `write`, `execute`, and `publish`
+as distinct concerns, and attaches a disclosure level to each document.
+Hard-to-undo actions — production changes, secret handling, public-facing
+claims — are split off from ordinary local edits and routed through approval
+gates.
 
-공개 등급은 네 단계입니다. `public`은 공개 웹사이트나 오픈소스 레포에 그대로 나가도 되는
-것, `controlled`은 검토를 거치면 외부에 공유할 수 있는 것, `internal`은 워크스페이스 안에서만
-쓰는 것, `confidential`은 계약서·크리덴셜·개인정보처럼 민감한 것입니다. 크리덴셜은 보통 git
-밖에 두지만, 등급으로는 여전히 `confidential`입니다.
+Disclosure has four levels. `public` is safe to ship as-is to a public site or
+open-source repo; `controlled` can be shared externally after review; `internal`
+stays inside the workspace; `confidential` covers sensitive material like
+contracts, credentials, and personal data. Credentials usually live outside git,
+but by level they are still `confidential`.
 
-> **세션 계약 게이트는 marker-free 체크아웃에서 활성입니다.** 계약이 없는 세션도 정책에
-> 맞는 로컬 점검, `npm test`, 빌드, `mkdir`, 일반적인 비파괴 Git stage/commit 같은 일상 작업을
-> 수행할 수 있습니다. 거버넌스·호스트 정책 파일, 공유 진입점, 세션 계약·레지스트리 권한,
-> 삭제, 파괴적·원격 명령, 외부 발송과 운영 변경은 계속 계약이 필요합니다. 이 게이트는
-> 저장소 훅의 로컬 거버넌스 검사이며 운영체제 샌드박스나 훅 밖에서 실행되는 명령까지 보장하지
-> 않습니다. 자세한 정책은 `.agents/context/agents-rules.json`과 `.agents/context/harness.yaml`을
-> 참고하세요. `.codex/no-harness`, `.claude/no-harness`, `.pi/no-harness`가 프로젝트 루트나
-> 조상 디렉터리에 있으면 그 아래 체크아웃에도 복구 모드가 상속됩니다. 이 후보의 세션 계약
-> 훅 연결 범위는 Codex와 Claude이며, Pi 세션 계약 어댑터를 제공한다고 주장하지 않습니다.
+> **The session-contract gate is active in a marker-free checkout.** An unbound
+> session may perform policy-approved routine local work such as inspection,
+> `npm test`, builds, `mkdir`, and ordinary non-destructive Git stage/commit.
+> Governance and host-policy files, shared entrypoints, session contracts and
+> registry authority, deletion, destructive or remote commands, outbound effects,
+> and production changes still require a contract. This is a repository-hook
+> governance check; it is not an operating-system sandbox and does not guarantee
+> commands launched outside the hooks. See `.agents/context/agents-rules.json` and
+> `.agents/context/harness.yaml` for the policy. A `.codex/no-harness`,
+> `.claude/no-harness`, or `.pi/no-harness` marker at the project root or any
+> ancestor is inherited by descendant checkouts. This candidate connects the
+> session-contract hook to Codex and Claude; it does not claim a Pi session-contract
+> adapter.
 
-### 시크릿은 어디에 두나
+### Where secrets live
 
-API 키나 인증서를 git에 그냥 올릴 수는 없습니다. 그렇다고 각자 노트북에만 두면
-기계를 바꿀 때마다 사라지고, 누가 무엇을 갖고 있는지도 알 수 없게 됩니다. Naia
-ADK는 그 사이를 이렇게 지납니다. 시크릿을 담은 폴더 하나를 통째로 묶어 암호화한
-**파일 하나만** git에 올리고, 푼 내용은 git이 아예 보지 않게 합니다.
+You cannot commit API keys and certificates to git. But keeping them only on
+each laptop means they vanish when the machine changes, and nobody can say who
+holds what. Naia ADK threads that needle by committing **exactly one file**: the
+folder of secrets, archived and encrypted. The decrypted contents are never seen
+by git at all.
 
-구체적으로는 `key/` 폴더를 tar로 묶고 [age](https://github.com/FiloSottile/age)로
-암호화해 `key.age` 하나를 만듭니다. `key/`는 `.gitignore`에 있어 실수로도 올라가지
-않습니다. 커밋되는 것은 언제나 `key.age` 하나뿐입니다.
+Concretely, the `key/` folder is tarred and encrypted with
+[age](https://github.com/FiloSottile/age) into a single `key.age`. `key/` is in
+`.gitignore`, so it cannot be committed by accident. The only thing that ever
+lands in a commit is `key.age`.
 
-비밀번호는 사람이 직접 입력합니다. AI가 대신 받지도, 대신 넣지도 않습니다. 그래서
-여는 일과 잠그는 일은 사용자가 자기 터미널에서 하고, 비밀번호가 필요 없는 점검과
-백업은 AI가 대신할 수 있습니다. 이 경계가 스킬 안에 명령 단위로 나뉘어 있습니다.
+A person types the passphrase. The AI neither receives it nor enters it on
+anyone's behalf. So opening and sealing the vault happen in the user's own
+terminal, while the checks and the backup — which need no passphrase — can be
+delegated. That boundary is drawn command by command inside the skill.
 
 ```bash
-bash .agents/skills/secret-vault/scripts/vault.sh init     # 새 repo에 볼트 만들기
-bash .agents/skills/secret-vault/scripts/vault.sh unlock   # 열기 (비밀번호 필요)
-bash .agents/skills/secret-vault/scripts/vault.sh lock     # 다시 잠그기 (비밀번호 필요)
-bash .agents/skills/secret-vault/scripts/vault.sh status   # 백업이 최신인지 점검
-bash .agents/skills/secret-vault/scripts/vault.sh sync     # key.age만 커밋하고 push
+bash .agents/skills/secret-vault/scripts/vault.sh init     # create a vault in a new repo
+bash .agents/skills/secret-vault/scripts/vault.sh unlock   # open it (passphrase)
+bash .agents/skills/secret-vault/scripts/vault.sh lock     # seal it again (passphrase)
+bash .agents/skills/secret-vault/scripts/vault.sh status   # is the backup current?
+bash .agents/skills/secret-vault/scripts/vault.sh sync     # commit key.age and push
 ```
 
-`status`가 있는 이유는 실수의 모양이 정해져 있기 때문입니다. 키를 추가하고 다시
-잠그는 것을 잊거나, 잠갔는데 push를 잊거나, 임시 파일이 남는 일이 반복됩니다.
-`status`는 그 셋을 한 번에 봅니다. "키가 다 백업돼 있나?"라는 질문에는 기억이
-아니라 이 명령으로 답합니다.
+`status` exists because the mistakes have a fixed shape. You add a key and
+forget to seal it, or you seal it and forget to push, or a temporary file is
+left behind. `status` looks for all three at once. When someone asks whether the
+keys are backed up, answer with that command rather than from memory.
 
-`lock`은 새 암호문을 만든 뒤 **다시 풀어 보고** 성공했을 때만 기존 파일을 바꿉니다.
-중간에 실패해서 볼트가 깨진 채 남는 일을 막기 위해서입니다.
+`lock` writes the new ciphertext, **decrypts it again to check**, and only then
+replaces the old file — so a half-finished seal never leaves a broken vault.
 
-이 패턴은 `data-private` 같은 개인 저장소를 표준 소비자로 삼지만, `key.age` 하나와
-gitignore된 `key/`를 두는 어떤 저장소에도 그대로 쓸 수 있습니다. 이름을 바꾸고
-싶으면 `VAULT`와 `PLAIN_DIR` 환경 변수로 덮어씁니다.
+The pattern's standard consumer is a private repository such as `data-private`,
+but any repository with a `key.age` and a gitignored `key/` can use it. Override
+`VAULT` and `PLAIN_DIR` to rename either side.
 
-### LLM 어댑터 (naia-anyllm)
+### LLM adapter (naia-anyllm)
 
-LLM에 연결해야 하는 기능을 위해 `naia-anyllm` 어댑터를 내장합니다. [any-llm](https://github.com/nextain/any-llm)
-게이트웨이를 거치거나, OpenAI·Anthropic·Google 같은 프로바이더에 직접 붙습니다. 기본값은
-Naia 계정이며, [naia.nextain.io](https://naia.nextain.io)에서 발급한 키를
-`NAIA_KEY` 환경 변수에 넣으면 계정 크레딧으로 바로 사용할 수 있습니다. 키가 없으면
-유료 호출 전에 오류를 냅니다. 프로바이더나 모델을 바꾸고 싶으면
-[`.agents/context/llm-config.yaml.example`](.agents/context/llm-config.yaml.example)을 복사해 쓰고,
-API 키는 설정 파일이 아니라 환경 변수나 운영체제 키 저장소에 둡니다. `naia-settings/llm.json`에는
-키 값 대신 `apiKeyRef: "NAIA_KEY"`만 기록합니다. 개인 포크에서 장기 백업이 필요하면
-`data-private/key/`의 age 암호화 볼트를 사용합니다([`.env.example`](.env.example) 참고).
+For features that need to reach an LLM, the `naia-anyllm` adapter is built in. It
+connects through the [any-llm](https://github.com/nextain/any-llm) gateway, or
+directly to providers such as OpenAI, Anthropic, and Google. The default is a
+Naia account: put a key issued at [naia.nextain.io](https://naia.nextain.io) in
+the `NAIA_KEY` environment variable and you can use your account credits right
+away. Without a key, it raises an error before any paid call. To switch providers
+or models, copy
+[`.agents/context/llm-config.yaml.example`](.agents/context/llm-config.yaml.example),
+and keep API keys in environment variables or the operating system's keystore,
+not in the config file. `naia-settings/llm.json` records only
+`apiKeyRef: "NAIA_KEY"`, never the key value. If a personal fork needs long-term
+backup, use the age-encrypted vault in `data-private/key/` (see
+[`.env.example`](.env.example)).
 
-지원 모델과 현재 가격 조회, 긴 PDF 번역은 `translate-doc` 스킬을 사용합니다. 모델·가격 조회는
-키 없이 가능하고, 번역은 예상 비용을 먼저 제시한 뒤 중단 지점부터 재개할 수 있습니다.
+For listing supported models and current prices, and for translating long PDFs,
+use the `translate-doc` skill. Model and price lookups work without a key;
+translation shows the estimated cost first and can resume from where it stopped.
 
-## 왜 이렇게 만들었나
+## Why it's built this way
 
-### 포맷이 곧 계약
+### The format is the contract
 
-Naia ADK의 핵심은 특정 도구가 아니라 **포맷**입니다. 디렉터리 레이아웃(`.agents/`, `.users/`,
-`skills/`, `data-*/`)과 파일 스키마(`agents-rules.json`, `SKILL.md`)가 정해진 약속이고, 이
-약속을 읽을 수 있는 도구라면 무엇이든 같은 워크스페이스를 소비할 수 있습니다. Claude Code,
-opencode, Codex, naia-agent가 서로의 코드를 내장하지 않고도 같은 워크스페이스를 각자 읽습니다.
-그래서 도구를 바꾸거나 여러 도구를 섞어 써도, 워크스페이스는 그대로 동작합니다.
+The heart of Naia ADK is not a particular tool but a **format**. The directory
+layout (`.agents/`, `.users/`, `skills/`, `data-*/`) and the file schemas
+(`agents-rules.json`, `SKILL.md`) are a fixed agreement, and any tool that can
+read that agreement can consume the same workspace. Claude Code, opencode, Codex,
+and naia-agent each read the same workspace without embedding one another's code.
+So you can swap tools or mix several, and the workspace keeps working.
 
-이 규칙 강제(enforcement) 자체도 도구에 매이지 않습니다. 호스트 중립 코어(`.agents/hooks/core/`)와
-정책(`.agents/hooks/policies/`)이 Claude Code 훅과 pi 익스텐션 양쪽을 같은 규칙으로 구동합니다.
+The rule enforcement itself is tool-agnostic too. A host-neutral core
+(`.agents/hooks/core/`) and policies (`.agents/hooks/policies/`) drive both the
+Claude Code hooks and the pi extension with the same rules.
 
-### 팀으로 커지기 전의 개인용 베이스
+### A personal base before it grows into a team
 
-Naia ADK는 어디까지나 1인, 개인용입니다. 회사 조직도나 테넌트 규칙, 위임 승인 체인 같은
-것은 상위 레이어의 몫입니다. 대신 워크스페이스가 팀이나 회사 규모로 커지기 전에, 컨텍스트를
-어떻게 다룰지에 대한 규율을 미리 한곳에 적어 둘 자리를 줍니다.
+Naia ADK is strictly single-user, for personal use. Company org charts, tenant
+rules, and delegated approval chains belong to a higher layer. What it does give
+you is a single place to write down context discipline before the workspace grows
+to team or company scale.
 
-팀 협업과 공유 지식이 필요해지면 [Naia Business ADK](https://nextain.io/adk)로 확장합니다.
-이 확장은 베이스라인을 자산·프로세스·권한 거버넌스로 넓히고, 팀 소유권과 위임 승인을 더합니다.
+When you need team collaboration and shared knowledge, extend to
+[Naia Business ADK](https://nextain.io/adk). That extension widens the baseline
+into asset, process, and permission governance, and adds team ownership and
+delegated approvals.
 
-### 포크 계보
+### Fork lineages
 
-Naia ADK는 포크해서 자기 것으로 만드는 것을 전제로 합니다. 개인은 `naia-adk`를 직접 포크할
-수 있습니다. 조직은 `naia-business-adk` 같은 별도 조직 계보를 선택해 회사·멤버 워크스페이스를
-만들 수 있습니다. 모든 사용자가 하나의 고정된 포크 체인을 따라야 하는 것은 아닙니다.
+Naia ADK is meant to be forked into your own workspace. Individuals may fork
+`naia-adk` directly. An organization may choose a separate organization-family
+lineage such as `naia-business-adk` for company and member workspaces. A single
+fixed chain is not required for every user.
 
 ```
-naia-adk                  ← 공개 개인용 베이스 (Apache 2.0)
-  └── {user}-adk          ← 직접 포크한 개인 워크스페이스
+naia-adk                  ← public personal base (Apache 2.0)
+  └── {user}-adk          ← direct personal fork
 
-naia-business-adk         ← 선택 가능한 조직 계보
-  └── {org}-adk            ← 조직 포크: 회사 데이터 + 비즈니스 서브모듈
-        └── {member}-adk    ← 조직에서 파생한 구성원 워크스페이스
+naia-business-adk         ← optional organization lineage
+  └── {org}-adk            ← org fork: company data + business submodules
+        └── {member}-adk    ← member workspace derived from the organization
 ```
 
-Nextain의 내부 계보는 위 선택지와 별개인 운영 예시입니다. 공개 기반의 사용자는 직접
-개인 포크를 유지할 수 있습니다. 개인 포크는 `{user}-adk`처럼 자기 계정 이름을 넣어
-부릅니다.
+Nextain's internal lineage is a separate operating example. A public user may
+keep a direct personal fork and name it `{user}-adk` with the account name.
 
-프로젝트·팀 기준선이 필요하면 [naia-pj-adk](https://github.com/nextain/naia-pj-adk)를
-별도 기준선으로 선택할 수 있습니다. PJ는 여러 프로젝트의 컨텍스트 드리프트, 호출 비용,
-Discord 운영 경계를 다루는 어댑터 기준선입니다. 개인 포크의 맞춤화와 팀용 역할·업무시간
-규칙은 별도 문제이며, 이 구조가 정리와 추적을 돕는 것은 구현 목표이지 비용 절감이나 작업
-시간 단축을 측정해 보장하는 주장은 아닙니다. PJ 기준선은 개인 포크의 상위 저장소가 아닙니다.
-조직 협업이 필요할 때의 `naia-business-adk`는 선택 사항입니다.
+If you need a project/team baseline, you can choose
+[naia-pj-adk](https://github.com/nextain/naia-pj-adk) as a separate baseline. PJ is
+an adapter baseline for multi-project context drift, call cost, and Discord
+operation boundaries. Personal-fork tailoring and team roles/working-hours rules
+are separate concerns. Helping organize and trace that work is a design goal of
+this structure, not a measured guarantee of cost savings or shorter work time. The
+PJ baseline is not the parent repository of a personal fork. `naia-business-adk`,
+for when you need organizational collaboration, is optional.
 
-## 구조
+## Structure
 
-저장소는 크게 런타임 코드(`packages/`), 규칙과 컨텍스트(`.agents/`, `.users/`), 스킬(`skills/`,
-`.agents/skills/`), 그리고 포크마다 채워 넣는 데이터 디렉터리로 나뉩니다.
+The repository divides into runtime code (`packages/`), rules and context
+(`.agents/`, `.users/`), skills (`skills/`, `.agents/skills/`), and the data
+directories each fork fills in.
 
-| 디렉터리 | 용도 |
+| Directory | Purpose |
 |-----------|---------|
-| `.agents/` | AI용 컨텍스트 (영어, JSON/YAML) — 규칙의 단일 진실 공급원 |
-| `.users/context/` | 사람이 읽는 문서 (한국어, Markdown) |
-| `.users/context/en/` | 사람이 읽는 영어 미러 (Markdown) |
-| `.claude/` | Claude Code 설정, 훅, 스킬 심링크 |
-| `skills/` | 운영/런타임 스킬 (대시보드 API가 제공) |
-| `scripts/` | 유틸리티 스크립트 |
-| `templates/` | 문서 템플릿 |
-| `docs/` | 아키텍처 문서, 설계 스펙 |
-| `packages/` | 런타임 패키지 (pnpm 워크스페이스) |
+| `.agents/` | AI-facing context (English, JSON/YAML) — single source of truth for rules |
+| `.users/context/` | Human-readable guides (Korean, Markdown) |
+| `.users/context/en/` | English human-readable mirror (Markdown) |
+| `.claude/` | Claude Code config, hooks, skill symlinks |
+| `skills/` | Operational/runtime skills (served by the dashboard API) |
+| `scripts/` | Utility scripts |
+| `templates/` | Document templates |
+| `docs/` | Architecture docs, design specs |
+| `packages/` | Runtime packages (pnpm workspace) |
 
-### 런타임 패키지 (packages/, 10개)
+### Runtime packages (packages/, 10 of them)
 
-세 개는 실제로 도는 프로그램이고, 나머지는 포맷과 규격을 정의하는 얇은 패키지입니다.
+Three are actual running programs; the rest are thin packages that define formats
+and specs.
 
-- `core` — 워크스페이스와 스킬을 파싱하는 엔진.
-- `server` — Fastify 기반 REST/WebSocket API.
-- `dashboard` — Next.js 대시보드 UI.
-- `skill-spec` — 도구 비종속 스킬 포맷 계약(`SkillDescriptor`, `SkillLoader`).
-- `skills-builtin` — 일반 스킬 카탈로그.
-- `openclaw-compat` — OpenClaw 스킬을 naia 포맷으로 옮기는 마이그레이션 도구.
-- `persona` — 시스템 프롬프트 컨벤션 스펙.
-- `process` — 워크플로우 패턴 스펙(리뷰 → 결정 → 실행, 이슈 기반 개발 등).
-- `naia-anyllm` — any-llm 게이트웨이 / 직접 프로바이더 LLM 어댑터.
-- `artifacts-spec` — 권한(RBAC)과 개발 수명주기(SDLC) 산출물의 표준 스키마. 15종 산출물을
-  JSON Schema로 정의하고, 각 산출물이 git으로 추적되는지 세션 한정인지까지 규정합니다.
+- `core` — the engine that parses the workspace and skills.
+- `server` — the Fastify REST/WebSocket API.
+- `dashboard` — the Next.js dashboard UI.
+- `skill-spec` — the tool-agnostic skill format contract (`SkillDescriptor`,
+  `SkillLoader`).
+- `skills-builtin` — the generic skills catalog.
+- `openclaw-compat` — a tool that migrates OpenClaw skills into the naia format.
+- `persona` — the system-prompt convention spec.
+- `process` — the workflow pattern spec (review → decide → execute, issue-driven
+  development, and so on).
+- `naia-anyllm` — the any-llm gateway / direct-provider LLM adapter.
+- `artifacts-spec` — the standard schema for permission (RBAC) and development
+  lifecycle (SDLC) artifacts. It defines 15 artifact types as JSON Schema and
+  specifies, for each, whether the instance is git-tracked or session-scoped.
 
-### 데이터 디렉터리 (gitignore, 포크마다 채움)
+### Data directories (gitignored, filled per fork)
 
-이 네 디렉터리는 저장소에 올라가지 않습니다. 포크한 사람이 자기 데이터를 넣습니다.
+These four never get committed. Whoever forks the repo fills in their own data.
 
-| 디렉터리 | 범위 | 내용 |
+| Directory | Scope | Content |
 |-----------|-------|---------|
-| `data-company/` | 회사 | 회사 전체 문서, 공유 리소스 |
-| `data-teams/` | 팀 | 팀별 문서 (전략, 회계 등) |
-| `data-private/` | 개인 | 개인 데이터, env 파일, 비공개 문서 |
-| `projects/` | 개인 | 프로젝트 레포 (서브모듈) |
+| `data-company/` | Company | Company-wide docs, shared resources |
+| `data-teams/` | Team | Team documents (strategy, accounting, etc.) |
+| `data-private/` | Personal | Personal data, env files, private docs |
+| `projects/` | Personal | Project repos (submodules) |
 
-### 스킬 트리 두 개
+### Two skill trees
 
-스킬은 두 곳에 나뉘어 있고, 소비하는 주체가 다릅니다.
+Skills live in two places, consumed by different parties.
 
-- `.agents/skills/` — AI 보조와 워크플로우 스킬. Claude Code가 `.claude/skills/` 심링크를
-  통해 사용합니다. 리뷰(`review-pass`), 검증(`verify-implementation`), 워크트리 머지
-  (`merge-worktree`), 문서 추출(`read-doc`), 특허·저작권·급여 같은 업무 스킬, 그리고
-  `finetune-persona`, `secret-vault`, `youtube-upload` 등이 들어 있습니다.
-- `skills/` — 운영/런타임 스킬. API 서버가 `skills/**/SKILL.md`를 훑어 대시보드에 제공합니다.
-  이메일·SMS·알림 발송, 채널 관리, 서비스·웹 모니터링, 문서 생성 같은 것들이 있고,
-  `skills/business/`에는 조직용 스킬(예: `press-release`)이 담깁니다.
+- `.agents/skills/` — AI-assist and workflow skills. Claude Code uses them via the
+  `.claude/skills/` symlink. Includes review (`review-pass`), verification
+  (`verify-implementation`), worktree merge (`merge-worktree`), document
+  extraction (`read-doc`), business skills like patent/copyright/payroll, and
+  others such as `finetune-persona`, `secret-vault`, and `youtube-upload`.
+- `skills/` — operational/runtime skills. The API server scans
+  `skills/**/SKILL.md` and serves them to the dashboard. These include email/SMS/
+  notification sending, channel management, service and web monitoring, and
+  document generation; `skills/business/` holds org skills such as
+  `press-release`.
 
-전체 목록은 대시보드의 스킬 카탈로그에서 확인하는 것이 가장 정확합니다. 텍스트로 정리된 표는
-[스킬 인덱스](.agents/context/skills-index.yaml)에 있습니다.
+The most accurate list is the skill catalog in the dashboard. A text table is in
+the [skill index](.agents/context/skills-index.yaml).
 
-## 시작하기
+## Getting started
 
-### 개인용
+### Personal
 
-1. `naia-adk`를 본인 계정으로 포크합니다(가능하면 비공개로).
-2. 클론합니다: `git clone https://github.com/YOUR-USER/your-adk.git && cd your-adk`
-3. upstream을 추가합니다: `git remote add upstream https://github.com/nextain/naia-adk.git`
-4. 데이터 디렉터리를 만듭니다: `mkdir -p data-private projects`
-5. 프로젝트를 추가하고 `.agents/`를 설정한 뒤 작업을 시작합니다.
-6. Naia 계정 자원을 쓸 경우 `NAIA_KEY`를 환경 변수로 설정합니다.
-7. 주기적으로 동기화합니다: `git fetch upstream && git merge upstream/main`
+1. Fork `naia-adk` into your own account (private if you can).
+2. Clone it: `git clone https://github.com/YOUR-USER/your-adk.git && cd your-adk`
+3. Add the upstream: `git remote add upstream https://github.com/nextain/naia-adk.git`
+4. Create data directories: `mkdir -p data-private projects`
+5. Add projects, configure `.agents/`, and start working.
+6. If you use Naia account resources, set `NAIA_KEY` as an environment variable.
+7. Sync periodically: `git fetch upstream && git merge upstream/main`
 
-### 기업용
+### Company
 
-1. `naia-business-adk` 접근을 위해 [문의](https://nextain.io/contact)합니다.
-2. `naia-business-adk`를 조직 계정으로 비공개 포크한 뒤 클론합니다.
-3. upstream을 추가합니다: `git remote add upstream https://github.com/nextain/naia-business-adk.git`
-4. 회사 데이터와 프로젝트 서브모듈을 채웁니다: `mkdir -p data-company projects`,
+1. [Contact us](https://nextain.io/contact) for access to `naia-business-adk`.
+2. Fork `naia-business-adk` privately into your org account, then clone it.
+3. Add the upstream: `git remote add upstream https://github.com/nextain/naia-business-adk.git`
+4. Fill in company data and project submodules: `mkdir -p data-company projects`,
    `git submodule add <repo> projects/<name>`
-5. 각 멤버는 조직 ADK를 다시 포크해 개인 워크스페이스로 씁니다.
+5. Each member forks the org ADK again as their personal workspace.
 
-### Naia OS 연동 (선택)
+### Naia OS integration (optional)
 
-[Naia OS](https://github.com/nextain/naia-os) 데스크톱 앱을 쓴다면 워크스페이스 경로를 본인의
-ADK 디렉터리로 지정하세요. 스킬과 데이터가 API로 제공됩니다.
+If you use the [Naia OS](https://github.com/nextain/naia-os) desktop app, point
+its workspace path at your ADK directory. Skills and data are served over the API.
 
-## 기여
+## Contributing
 
-이슈, PR, 토론은 편한 언어로 써도 됩니다. AI가 소통을 중개합니다. 다만 git 기록(커밋, 컨텍스트,
-공유 산출물)은 영어로 남깁니다. 자세한 절차와 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md)를
-참고하세요. 개발 프로세스는 이슈 기반 개발을 기본으로 하며, 상세 흐름은 [AGENTS.md](AGENTS.md),
-[업무 인덱스](.agents/context/ai-work-index.yaml), [스킬 인덱스](.agents/context/skills-index.yaml)와
-[`.agents/workflows/`](.agents/workflows/)에 정리돼 있습니다.
+Write issues, PRs, and discussions in whatever language you're comfortable with;
+AI mediates the communication. Just keep the git record (commits, context, shared
+artifacts) in English. For the full process and rules, see
+[CONTRIBUTING.md](CONTRIBUTING.md). Development defaults to issue-driven
+development; the detailed flow lives in [AGENTS.md](AGENTS.md), the
+[work index](.agents/context/ai-work-index.yaml), the
+[skill index](.agents/context/skills-index.yaml), and
+[`.agents/workflows/`](.agents/workflows/).
 
-## 로드맵
+## Roadmap
 
-아래는 아직 구현되지 않은 계획으로, 현재 동작하는 기능이 아닙니다.
+The following is planned, not a feature that works today.
 
-- **지식 원자(Knowledge atoms)** — 지금의 컨텍스트는 파일 단위라, 정보 한 조각을 찾으려 해도
-  파일 전체를 로드해 토큰을 낭비합니다. 이를 의미를 가진 가장 작은 지식 단위로 쪼개고 태그와
-  링크로 연결해, 필요한 조각만 정확히 꺼내 쓰는 방향을 검토 중입니다. CLI나 MCP로 접근해 도구에
-  매이지 않게 하는 것이 목표입니다.
+- **Knowledge atoms** — today's context is file-based, so finding one piece of
+  information means loading the whole file and wasting tokens. The idea is to
+  break context into the smallest meaningful units, link them with tags, and pull
+  out only the exact piece you need. Access would go through the CLI or MCP so it
+  stays tool-agnostic.
 
-## 라이선스
+## License
 
-Apache License 2.0. 자세한 내용은 [LICENSE](LICENSE)를 참고하세요.
+Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ```
 Copyright 2026 Nextain Inc.
@@ -332,7 +382,7 @@ You may obtain a copy of the License at
     http://www.apache.org/licenses/LICENSE-2.0
 ```
 
-## 링크
+## Links
 
 - **Naia OS** — [github.com/nextain/naia-os](https://github.com/nextain/naia-os)
 - **Nextain** — [nextain.io](https://nextain.io)
