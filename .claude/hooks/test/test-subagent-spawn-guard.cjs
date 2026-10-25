@@ -11,6 +11,7 @@ const suiteRoot = fs.mkdtempSync(path.join(tempBase, "subagent-model-guard-"));
 const countersRoot = path.join(suiteRoot, "counters");
 const guardPath = path.resolve(__dirname, "../subagent-spawn-guard.js");
 const fixedNow = Date.parse("2026-10-26T00:00:00.000Z");
+const validPrompt = "상위 목표: 긴급한 경우에만 상위 모델을 사용한다.\n막히면 올림: 범위 밖 변경은 중단하고 보고한다.";
 let passed = 0;
 
 function fixture(name, { policy, override, maxSpawns = 4 } = {}) {
@@ -19,6 +20,7 @@ function fixture(name, { policy, override, maxSpawns = 4 } = {}) {
 	fs.mkdirSync(claudeDir, { recursive: true });
 	fs.writeFileSync(path.join(claudeDir, "allow-subagents"), JSON.stringify({ maxSpawns }));
 	if (policy !== undefined) fs.writeFileSync(path.join(claudeDir, "subagent-model-policy.json"), policy);
+	else if (override !== undefined) fs.writeFileSync(path.join(claudeDir, "subagent-model-policy.json"), "{}");
 	if (override !== undefined) fs.writeFileSync(path.join(claudeDir, "allow-upper-subagent-until"), override);
 	return root;
 }
@@ -27,9 +29,10 @@ function evaluate(root, model, options = {}) {
 	return guard.evaluateClaudeSpawn({
 		toolName: "Task",
 		model,
+		prompt: validPrompt,
 		sessionId: options.sessionId || path.basename(root),
 		root,
-		env: options.env || {},
+		env: { HOME: path.join(suiteRoot, "test-home"), ...(options.env || {}) },
 		tmpRoot: countersRoot,
 		now: options.now ?? fixedNow,
 	});
@@ -68,12 +71,12 @@ async function main() {
 		const missing = fixture("missing-model");
 		const missingResult = evaluate(missing, undefined);
 		check(Boolean(missingResult?.reason), "missing model must block by default");
-		check(/requested model: \(missing\)/u.test(missingResult.reason) && /allowed models: haiku, sonnet/u.test(missingResult.reason), "missing-model block must report the request and default allow list");
-		check(/hint: \(none\); exception file: \.claude\/allow-upper-subagent-until/u.test(missingResult.reason), "model block must report hint and exception path");
+		check(/model이 지정되지 않았습니다/u.test(missingResult.reason) && /haiku\/sonnet/u.test(missingResult.reason), "missing-model block must report the missing model and default allow list");
+		check(/allow-upper-subagent-until/u.test(missingResult.reason), "model block must report the exception path");
 
 		const opus = fixture("opus");
 		const opusResult = evaluate(opus, "opus");
-		check(Boolean(opusResult?.reason) && /requested model: opus/u.test(opusResult.reason), "opus must block by default and name the request");
+		check(Boolean(opusResult?.reason) && /model\(opus\)/u.test(opusResult.reason), "opus must block by default and name the request");
 
 		const haiku = fixture("haiku");
 		check(evaluate(haiku, "haiku") === null, "haiku must pass and preserve the spawn budget path");
@@ -84,34 +87,33 @@ async function main() {
 		});
 		check(evaluate(custom, "opus") === null, "policy allowedModels must replace the defaults");
 		const customDenied = evaluate(custom, "haiku");
-		check(Boolean(customDenied?.reason) && /allowed models: opus/u.test(customDenied.reason), "policy allow list must be reported on denial");
-		check(/hint: instance policy/u.test(customDenied.reason), "policy hint must be reported on denial");
+		check(Boolean(customDenied?.reason) && /model을 opus 중 하나/u.test(customDenied.reason), "policy allow list must be reported on denial");
 
 		const optional = fixture("optional-model", {
 			policy: JSON.stringify({ allowedModels: ["haiku"], requireExplicitModel: false }),
 		});
 		check(evaluate(optional, undefined) === null, "an omitted model may pass when requireExplicitModel is false");
 		const invalidOptional = evaluate(optional, 42);
-		check(Boolean(invalidOptional?.reason) && /requested model: number: 42/u.test(invalidOptional.reason), "non-string models must block and be identified even when omission is optional");
+		check(Boolean(invalidOptional?.reason) && /model\(42\)/u.test(invalidOptional.reason), "non-string models must block and be identified even when omission is optional");
 
 		const future = new Date(fixedNow + 3_600_000).toISOString();
 		const overridden = fixture("future-override", { override: `${future}\n` });
 		const overrideResult = evaluate(overridden, "opus");
-		check(Boolean(overrideResult?.stderr) && /3600s remain/u.test(overrideResult.stderr), "future override must pass with remaining time on stderr");
+		check(Boolean(overrideResult?.stderr) && /3600초 남음/u.test(overrideResult.stderr), "future override must pass with remaining time on stderr");
 		check(guard.readCount(path.basename(overridden), countersRoot) === 1, "override pass must continue through the existing spawn counter");
 
 		const past = fixture("past-override", { override: `${new Date(fixedNow - 1).toISOString()}\n` });
 		const pastResult = evaluate(past, "opus");
-		check(Boolean(pastResult?.reason) && /exception file: \.claude\/allow-upper-subagent-until \(expired\)/u.test(pastResult.reason), "past override must not bypass the model block");
+		check(Boolean(pastResult?.reason) && /긴급 예외/u.test(pastResult.reason), "past override must not bypass the model block");
 
 		const malformedOverride = fixture("malformed-override", { override: "next week\n" });
 		const malformedOverrideResult = evaluate(malformedOverride, "opus");
-		check(Boolean(malformedOverrideResult?.reason) && /\(invalid\)/u.test(malformedOverrideResult.reason), "malformed override must not bypass the model block");
+		check(Boolean(malformedOverrideResult?.reason) && /긴급 예외/u.test(malformedOverrideResult.reason), "malformed override must not bypass the model block");
 
 		const malformedPolicy = fixture("malformed-policy", { policy: "{ invalid json" });
 		check(evaluate(malformedPolicy, "haiku") === null, "malformed policy must use the default allowed models");
 		const malformedPolicyDenied = evaluate(malformedPolicy, "opus");
-		check(Boolean(malformedPolicyDenied?.reason) && /allowed models: haiku, sonnet/u.test(malformedPolicyDenied.reason), "malformed policy must use the blocking default for disallowed models");
+		check(Boolean(malformedPolicyDenied?.reason) && /haiku\/sonnet/u.test(malformedPolicyDenied.reason), "malformed policy must use the blocking default for disallowed models");
 
 		const disabled = fixture("guard-disabled");
 		check(evaluate(disabled, "opus", { env: { CLAUDE_SUBAGENT_GUARD: "off" } }) === null, "existing guard off switch must bypass the model check");
@@ -120,22 +122,27 @@ async function main() {
 
 		const cliBlockRoot = fixture("cli-block");
 		const cliBlock = spawnSync(process.execPath, [guardPath], {
-			input: JSON.stringify({ tool_name: "Task", tool_input: { model: "opus" }, session_id: "cli-block", cwd: cliBlockRoot }),
+			input: JSON.stringify({ tool_name: "Task", tool_input: { model: "opus", prompt: validPrompt }, session_id: "cli-block", cwd: cliBlockRoot }),
 			encoding: "utf8",
-			env: { PATH: process.env.PATH || "", TMPDIR: tempBase, CLAUDE_SUBAGENT_GUARD: "on" },
+			env: { PATH: process.env.PATH || "", HOME: path.join(suiteRoot, "cli-home"), TMPDIR: tempBase, CLAUDE_SUBAGENT_GUARD: "on" },
 		});
 		check(cliBlock.status === 0 && cliBlock.stderr === "", "Claude PreToolUse block must exit cleanly without stderr");
 		const cliBlockOutput = JSON.parse(cliBlock.stdout);
-		check(cliBlockOutput.decision === "block" && /allowed models: haiku, sonnet/u.test(cliBlockOutput.reason), "Claude PreToolUse must use the standard block JSON envelope");
+		check(cliBlockOutput.decision === "block" && /haiku\/sonnet/u.test(cliBlockOutput.reason), "Claude PreToolUse must use the standard block JSON envelope");
 
 		const cliOverrideRoot = fixture("cli-override", { override: `${new Date(Date.now() + 60_000).toISOString()}\n` });
 		const cliOverride = spawnSync(process.execPath, [guardPath], {
-			input: JSON.stringify({ tool_name: "Task", tool_input: { model: "opus" }, session_id: "cli-override", cwd: cliOverrideRoot }),
+			input: JSON.stringify({ tool_name: "Task", tool_input: { model: "opus", prompt: validPrompt }, session_id: "cli-override", cwd: cliOverrideRoot }),
 			encoding: "utf8",
-			env: { PATH: process.env.PATH || "", TMPDIR: tempBase, CLAUDE_SUBAGENT_GUARD: "on" },
+			env: { PATH: process.env.PATH || "", HOME: path.join(suiteRoot, "cli-home"), TMPDIR: tempBase, CLAUDE_SUBAGENT_GUARD: "on" },
 		});
 		check(cliOverride.status === 0 && cliOverride.stdout === "", "active override must leave PreToolUse unblocked");
-		check(/^\[SUBAGENT GUARD\] upper-model override active; .* remain \(until .*\)\.\n$/u.test(cliOverride.stderr), "active override must emit exactly one stderr line");
+		check(/^\[SUBAGENT MODEL GUARD\] 긴급 예외 표지 활성 — .*초 남음 \(.*\)\.\n$/u.test(cliOverride.stderr), "active override must emit exactly one stderr line");
+
+		const deniedSlotRoot = fixture("denied-does-not-reserve");
+		const deniedSlot = evaluate(deniedSlotRoot, "opus", { sessionId: "denied-slot" });
+		check(Boolean(deniedSlot?.reason), "a disallowed model should be rejected before budget reservation");
+		check(guard.readCount("denied-slot", countersRoot) === 0, "model rejection must not reserve a concurrent-spawn slot");
 
 		const concurrentRoot = fixture("concurrent-budget", { maxSpawns: 3 });
 		const concurrentResults = await runConcurrentAttempts(concurrentRoot);

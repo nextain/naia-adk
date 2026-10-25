@@ -16,16 +16,10 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const modelGuard = require("./subagent-model-guard.cjs");
 
 const OFF_VALUES = new Set(["off", "0", "false", "no"]);
 const OPT_IN_FILE = "allow-subagents";
-const MODEL_POLICY_FILE = "subagent-model-policy.json";
-const DEFAULT_MODEL_POLICY = Object.freeze({
-	allowedModels: Object.freeze(["haiku", "sonnet"]),
-	requireExplicitModel: true,
-	overrideFile: ".claude/allow-upper-subagent-until",
-	hint: "",
-});
 // Both hosts' spawn tools. A name this set misses is a spawn the budget below
 // never caps, and each guard used to know only its own host's names.
 const SPAWN_TOOLS = new Set(["task", "agent", "spawn_agent", "multi_agent_v1", "multi_agent_v1__spawn_agent", "collaboration.spawn_agent", "collaborationspawn_agent"]);
@@ -60,99 +54,6 @@ function readOptIn(root) {
 	} catch {
 		return {};
 	}
-}
-
-function readModelPolicy(root) {
-	const policyPath = path.join(root, ".claude", MODEL_POLICY_FILE);
-	let parsed;
-	try {
-		parsed = JSON.parse(fs.readFileSync(policyPath, "utf8"));
-	} catch {
-		return { ...DEFAULT_MODEL_POLICY, allowedModels: [...DEFAULT_MODEL_POLICY.allowedModels] };
-	}
-	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		return { ...DEFAULT_MODEL_POLICY, allowedModels: [...DEFAULT_MODEL_POLICY.allowedModels] };
-	}
-	const allowedModels = Array.isArray(parsed.allowedModels) && parsed.allowedModels.every(
-		(model) => typeof model === "string" && model.trim().length > 0,
-	)
-		? parsed.allowedModels.map((model) => model.trim())
-		: [...DEFAULT_MODEL_POLICY.allowedModels];
-	return {
-		allowedModels,
-		requireExplicitModel: typeof parsed.requireExplicitModel === "boolean"
-			? parsed.requireExplicitModel
-			: DEFAULT_MODEL_POLICY.requireExplicitModel,
-		overrideFile: typeof parsed.overrideFile === "string" && parsed.overrideFile.trim()
-			? parsed.overrideFile.trim()
-			: DEFAULT_MODEL_POLICY.overrideFile,
-		hint: typeof parsed.hint === "string" ? parsed.hint.trim() : DEFAULT_MODEL_POLICY.hint,
-	};
-}
-
-function isoTimestamp(value) {
-	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(value)) return null;
-	const [year, month, day] = value.slice(0, 10).split("-").map(Number);
-	const date = new Date(Date.UTC(year, month - 1, day));
-	if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
-	const time = value.slice(11, 19).split(":").map(Number);
-	if (time[0] > 23 || time[1] > 59 || time[2] > 59) return null;
-	const timestamp = Date.parse(value);
-	return Number.isFinite(timestamp) ? timestamp : null;
-}
-
-function readOverride(overridePath, now) {
-	let raw;
-	try {
-		raw = fs.readFileSync(overridePath, "utf8");
-	} catch {
-		return { active: false, state: "missing" };
-	}
-	const timestampText = raw.endsWith("\r\n")
-		? raw.slice(0, -2)
-		: raw.endsWith("\n") ? raw.slice(0, -1) : raw;
-	if (!timestampText || /[\r\n]/u.test(timestampText) || timestampText.trim() !== timestampText) {
-		return { active: false, state: "invalid" };
-	}
-	const expiresAt = isoTimestamp(timestampText);
-	if (expiresAt === null) return { active: false, state: "invalid" };
-	if (expiresAt <= now) return { active: false, state: "expired", expiresAt };
-	return { active: true, state: "active", expiresAt };
-}
-
-function oneLine(value) {
-	return String(value ?? "").replace(/\s+/gu, " ").trim().slice(0, 240);
-}
-
-function checkModel(model, root, now = Date.now()) {
-	const policy = readModelPolicy(root);
-	const requested = typeof model === "string" ? model.trim() : "";
-	const normalizedAllowed = policy.allowedModels.map((item) => item.toLowerCase());
-	const isMissing = model === undefined || model === null || (typeof model === "string" && requested.length === 0);
-	const isAllowed = typeof model === "string" && normalizedAllowed.includes(requested.toLowerCase());
-	if ((isMissing && !policy.requireExplicitModel) || isAllowed) return null;
-
-	const overridePath = path.isAbsolute(policy.overrideFile)
-		? policy.overrideFile
-		: path.resolve(root, policy.overrideFile);
-	const override = readOverride(overridePath, now);
-	if (override.active) {
-		const remainingSeconds = Math.ceil((override.expiresAt - now) / 1000);
-		return {
-			stderr: `[SUBAGENT GUARD] upper-model override active; ${remainingSeconds}s remain (until ${new Date(override.expiresAt).toISOString()}).`,
-		};
-	}
-
-	const allowed = policy.allowedModels.length ? oneLine(policy.allowedModels.join(", ")) : "(none)";
-	const hint = oneLine(policy.hint) || "(none)";
-	const requestedLabel = typeof model === "string"
-		? oneLine(requested) || "(empty)"
-		: model === undefined ? "(missing)" : model === null ? "(null)" : oneLine(`${typeof model}: ${JSON.stringify(model)}`);
-	const overrideLabel = oneLine(policy.overrideFile);
-	const overrideState = override.state === "expired" ? "expired" : override.state === "invalid" ? "invalid" : "unavailable";
-	return {
-		reason: `[SUBAGENT GUARD] requested model: ${requestedLabel}; allowed models: ${allowed}; hint: ${hint}; exception file: ${overrideLabel} (${overrideState}).`,
-	};
 }
 
 function counterPath(sessionId, tmpRoot) {
@@ -251,9 +152,12 @@ function evaluate({ toolName, sessionId = null, root = process.cwd(), env = proc
 
 // Keep the shared spawn-budget evaluator model-agnostic: the Codex adapter
 // reuses it only for counting, while Claude has the model field at PreToolUse.
-function evaluateClaudeSpawn({ toolName, model, sessionId = null, root = process.cwd(), env = process.env, tmpRoot = null, now = Date.now() } = {}) {
+function evaluateClaudeSpawn({ toolName, model, prompt, subagentType, toolInput, sessionId = null, root = process.cwd(), env = process.env, tmpRoot = null, now = Date.now() } = {}) {
 	if (disabled(env) || !isSpawn(toolName)) return evaluate({ toolName, sessionId, root, env, tmpRoot });
-	const modelDecision = checkModel(model, root, now);
+	const input = toolInput && typeof toolInput === "object" && !Array.isArray(toolInput)
+		? toolInput
+		: { model, prompt, subagent_type: subagentType };
+	const modelDecision = modelGuard.evaluate({ toolName, toolInput: input, cwd: root, env, now });
 	if (modelDecision?.reason) return modelDecision;
 	const budgetDecision = evaluate({ toolName, sessionId, root, env, tmpRoot });
 	if (budgetDecision?.reason) return budgetDecision;
@@ -274,7 +178,7 @@ async function main() {
 
 	const decision = evaluateClaudeSpawn({
 		toolName: data.tool_name,
-		model: data.tool_input?.model,
+		toolInput: data.tool_input,
 		sessionId: data.session_id || null,
 		root: data.cwd || process.cwd(),
 	});
@@ -300,10 +204,6 @@ module.exports = {
 	evaluateClaudeSpawn,
 	isSpawn,
 	readOptIn,
-	readModelPolicy,
-	checkModel,
-	isoTimestamp,
-	readOverride,
 	readCount,
 	reserveSpawn,
 	disabled,
