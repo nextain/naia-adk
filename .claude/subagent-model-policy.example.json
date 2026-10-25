@@ -1,0 +1,8 @@
+{
+  "_comment": "Example model aliases only; the user-level installer writes ~/.claude/subagent-model-policy.json when absent.",
+  "allowedModels": ["haiku", "sonnet"],
+  "requireExplicitModel": true,
+  "requireBrief": true,
+  "overrideFile": "allow-upper-subagent-until",
+  "maxOverrideHours": 24
+}

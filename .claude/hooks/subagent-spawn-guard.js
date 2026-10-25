@@ -16,6 +16,7 @@
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const modelGuard = require("./subagent-model-guard.cjs");
 
 const OFF_VALUES = new Set(["off", "0", "false", "no"]);
 const OPT_IN_FILE = "allow-subagents";
@@ -149,6 +150,20 @@ function evaluate({ toolName, sessionId = null, root = process.cwd(), env = proc
 	return null;
 }
 
+// Keep the shared spawn-budget evaluator model-agnostic: the Codex adapter
+// reuses it only for counting, while Claude has the model field at PreToolUse.
+function evaluateClaudeSpawn({ toolName, model, prompt, subagentType, toolInput, sessionId = null, root = process.cwd(), env = process.env, tmpRoot = null, now = Date.now() } = {}) {
+	if (disabled(env) || !isSpawn(toolName)) return evaluate({ toolName, sessionId, root, env, tmpRoot });
+	const input = toolInput && typeof toolInput === "object" && !Array.isArray(toolInput)
+		? toolInput
+		: { model, prompt, subagent_type: subagentType };
+	const modelDecision = modelGuard.evaluate({ toolName, toolInput: input, cwd: root, env, now });
+	if (modelDecision?.reason) return modelDecision;
+	const budgetDecision = evaluate({ toolName, sessionId, root, env, tmpRoot });
+	if (budgetDecision?.reason) return budgetDecision;
+	return modelDecision?.stderr ? modelDecision : null;
+}
+
 async function main() {
 	let raw = "";
 	process.stdin.setEncoding("utf8");
@@ -161,13 +176,16 @@ async function main() {
 		process.exit(0);
 	}
 
-	const decision = evaluate({
+	const decision = evaluateClaudeSpawn({
 		toolName: data.tool_name,
+		toolInput: data.tool_input,
 		sessionId: data.session_id || null,
 		root: data.cwd || process.cwd(),
 	});
-	if (decision) {
+	if (decision?.reason) {
 		process.stdout.write(JSON.stringify({ decision: "block", reason: decision.reason }));
+	} else if (decision?.stderr) {
+		process.stderr.write(`${decision.stderr}\n`);
 	}
 	process.exit(0);
 }
@@ -183,6 +201,7 @@ if (require.main === module) {
 
 module.exports = {
 	evaluate,
+	evaluateClaudeSpawn,
 	isSpawn,
 	readOptIn,
 	readCount,
