@@ -1,0 +1,7 @@
+{
+  "_comment": "Example model aliases only; configure per-machine names in .claude/subagent-model-policy.json.",
+  "allowedModels": ["haiku", "sonnet"],
+  "requireExplicitModel": true,
+  "overrideFile": ".claude/allow-upper-subagent-until",
+  "hint": "구현·검수는 바깥 모델 대본으로"
+}
