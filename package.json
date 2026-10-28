@@ -35,7 +35,7 @@
     "test:context-budget": "node scripts/test-context-budget.mjs",
     "test:context-translation": "python scripts/i18n/test-translate-ctx.py && node .claude/hooks/test/run-context-translation-batch-test.cjs",
     "check:context-translation": "python scripts/i18n/translate-ctx.py --check",
-    "test:natural-writing": "node --test .agents/skills/natural-writing/tests/"
+    "test:natural-writing": "node --test .agents/skills/natural-writing/tests/lint-writing.test.mjs"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.74.1",
