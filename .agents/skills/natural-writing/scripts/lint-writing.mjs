@@ -2,6 +2,9 @@
 /**
  * lint-writing.mjs — Language-selectable translationese & AI-writing candidate finder.
  * Uses Node.js standard library only. Never modifies source files.
+ *
+ * Column numbering: 1-based Unicode code-point offset from the start of the line
+ * (each code point, including a tab '\t' or a non-BMP emoji, counts as 1 column).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -13,98 +16,133 @@ const SKILL_DIR = path.resolve(__dirname, "..");
 const PACKS_DIR = path.join(__dirname, "packs");
 const DEFAULT_CONFIG_PATH = path.join(SKILL_DIR, "defaults.json");
 
-// Character script ranges used only by the line-level language detector.
-// Rule packs themselves are loaded dynamically from packs/<lang>.json.
-const SCRIPT_RANGES = {
-  ko: /[\uAC00-\uD7A3\u3131-\u318E]/g,
-  en: /[A-Za-z]/g,
-  ja: /[\u3040-\u309F\u30A0-\u30FF]/g,
-  zh: /[\u4E00-\u9FFF]/g,
-};
+const UNICODE_LETTER_RE = /\p{L}/gu;
 
 function countMatches(text, regex) {
   const m = text.match(regex);
   return m ? m.length : 0;
 }
 
-/**
- * Detect the dominant language of a text segment among enabled languages.
- * Returns null if ambiguous or if no script characters are sufficient.
- */
-export function detectLanguage(text, enabledLangs) {
-  if (!enabledLangs || enabledLangs.length === 0) return null;
-  const scores = {};
-  let totalScriptChars = 0;
-
-  for (const [lang, regex] of Object.entries(SCRIPT_RANGES)) {
-    const count = countMatches(text, regex);
-    scores[lang] = count;
-    totalScriptChars += count;
+function normalizePack(raw, lang) {
+  const detect = Array.isArray(raw) ? null : raw.detect || null;
+  const rulesList = Array.isArray(raw) ? raw : raw.rules || [];
+  let scriptRe = null;
+  if (detect && typeof detect.script === "string") {
+    const flags = detect.flags && detect.flags.includes("g") ? detect.flags : (detect.flags || "u") + "g";
+    scriptRe = new RegExp(detect.script, flags);
   }
-
-  if (totalScriptChars < 2) return null;
-
-  // Korean Hangul is distinctive: if Hangul accounts for >= 15% of script chars (or >= 2 chars when Hangul >= Latin),
-  // classify as 'ko' if 'ko' is enabled; if 'ko' is disabled, do not misclassify a Korean line as 'en'.
-  const koCount = scores.ko || 0;
-  const enCount = scores.en || 0;
-  const jaCount = scores.ja || 0;
-
-  let detected = null;
-  if (jaCount >= 2 && jaCount >= koCount) {
-    detected = "ja";
-  } else if (koCount >= 2 && koCount / totalScriptChars >= 0.15) {
-    detected = "ko";
-  } else if (enCount >= 3 && enCount / totalScriptChars >= 0.6 && koCount === 0 && jaCount === 0) {
-    detected = "en";
-  } else {
-    // Fallback for any other language in SCRIPT_RANGES
-    let bestLang = null;
-    let bestScore = 0;
-    let secondScore = 0;
-    for (const [lang, score] of Object.entries(scores)) {
-      if (score > bestScore) {
-        secondScore = bestScore;
-        bestScore = score;
-        bestLang = lang;
-      } else if (score > secondScore) {
-        secondScore = score;
-      }
-    }
-    if (bestLang && bestScore >= 3 && bestScore > secondScore * 2) {
-      detected = bestLang;
-    }
-  }
-
-  if (!detected) return null;
-  return enabledLangs.includes(detected) ? detected : null;
+  const rules = rulesList.map((r) => ({
+    ...r,
+    lang,
+    isParagraphRule: r.pattern.includes("[\\s\\S]"),
+  }));
+  return { detect, scriptRe, rules };
 }
 
 /**
- * Replace protected spans with spaces (preserving newlines and character offsets)
- * so line and column numbers stay exact while protected regions are never matched.
+ * Return all enabled language codes whose pack `detect` criteria match `text`.
+ * Each pack defines `detect: { script, minChars, minRatio }`.
+ * Ratio denominator is total Unicode letters (\p{L}) in `text`.
+ */
+export function detectLanguages(text, packs, candidateLangs = Object.keys(packs || {})) {
+  if (!packs || !candidateLangs || candidateLangs.length === 0) return [];
+  const totalLetters = countMatches(text, UNICODE_LETTER_RE);
+  if (totalLetters === 0) return [];
+
+  const matched = [];
+  for (const lang of candidateLangs) {
+    const rawPack = packs[lang];
+    if (!rawPack) continue;
+    const pack = Array.isArray(rawPack) ? normalizePack(rawPack, lang) : rawPack;
+    const detect = pack.detect;
+    if (!detect || !detect.script) {
+      matched.push(lang);
+      continue;
+    }
+    const re =
+      pack.scriptRe ||
+      new RegExp(detect.script, detect.flags && detect.flags.includes("g") ? detect.flags : (detect.flags || "u") + "g");
+    const count = countMatches(text, re);
+    const minChars = typeof detect.minChars === "number" ? detect.minChars : 1;
+    const minRatio = typeof detect.minRatio === "number" ? detect.minRatio : 0;
+    if (count >= minChars && count / totalLetters >= minRatio) {
+      matched.push(lang);
+    }
+  }
+  return matched;
+}
+
+/**
+ * Detect the first matching language for `text` among `packs`.
+ */
+export function detectLanguage(text, packs, candidateLangs) {
+  const langs = detectLanguages(text, packs, candidateLangs);
+  return langs.length > 0 ? langs[0] : null;
+}
+
+/**
+ * Replace protected spans with spaces in UTF-16 code units (preserving \n and \r)
+ * so UTF-16 offsets remain 1-to-1 with the original content string.
  */
 export function maskProtectedRegions(content, protectList = ["code", "inline_code", "url", "blockquote", "quoted"]) {
   const protect = new Set(protectList);
-  const chars = Array.from(content);
+  // Split into UTF-16 code units so indices match RegExp.prototype.exec / matchAll indices exactly.
+  const units = content.split("");
 
   const blankRange = (start, end) => {
     for (let i = start; i < end; i++) {
-      if (chars[i] !== "\n" && chars[i] !== "\r") {
-        chars[i] = " ";
+      if (units[i] !== "\n" && units[i] !== "\r") {
+        units[i] = " ";
       }
     }
   };
 
-  // 1. Fenced code blocks (``` or ~~~)
+  // 1. Fenced code blocks (``` or ~~~), tracked statefully line by line.
+  //    Closing fence must use the same character (` or ~) with length >= opening length.
+  //    Unclosed fences protect through the end of the file.
   if (protect.has("code")) {
-    const fenceRe = /^[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*$/gm;
-    for (const match of content.matchAll(fenceRe)) {
-      blankRange(match.index, match.index + match[0].length);
+    let inFence = false;
+    let fenceChar = "";
+    let fenceLen = 0;
+    let lineStart = 0;
+
+    while (lineStart <= content.length) {
+      let lineEnd = content.indexOf("\n", lineStart);
+      if (lineEnd === -1) lineEnd = content.length;
+      const lineStr = content.slice(lineStart, lineEnd);
+
+      if (!inFence) {
+        const openMatch = lineStr.match(/^[ \t]*(`{3,}|~{3,})(.*)$/);
+        if (openMatch) {
+          const marker = openMatch[1];
+          const info = openMatch[2] || "";
+          // CommonMark: backtick fence info string cannot contain backticks on the same line
+          if (marker[0] !== "`" || !info.includes("`")) {
+            inFence = true;
+            fenceChar = marker[0];
+            fenceLen = marker.length;
+            blankRange(lineStart, lineEnd);
+          }
+        }
+      } else {
+        blankRange(lineStart, lineEnd);
+        const closeMatch = lineStr.match(/^[ \t]*(`{3,}|~{3,})[ \t]*\r?$/);
+        if (closeMatch) {
+          const marker = closeMatch[1];
+          if (marker[0] === fenceChar && marker.length >= fenceLen) {
+            inFence = false;
+            fenceChar = "";
+            fenceLen = 0;
+          }
+        }
+      }
+
+      if (lineEnd === content.length) break;
+      lineStart = lineEnd + 1;
     }
   }
 
-  const afterCode = chars.join("");
+  const afterCode = units.join("");
 
   // 2. Blockquote lines (> ...)
   if (protect.has("blockquote")) {
@@ -114,19 +152,19 @@ export function maskProtectedRegions(content, protectList = ["code", "inline_cod
     }
   }
 
-  const afterBq = chars.join("");
+  const afterBq = units.join("");
 
   // 3. Inline code (`...`)
   if (protect.has("inline_code")) {
-    const inlineRe = /`+[^`\n]+`+/g;
+    const inlineRe = /(`+)([^`\n]+?)\1/g;
     for (const match of afterBq.matchAll(inlineRe)) {
       blankRange(match.index, match.index + match[0].length);
     }
   }
 
-  const afterInline = chars.join("");
+  const afterInline = units.join("");
 
-  // 4. URLs (http://, https://, and markdown link targets)
+  // 4. URLs (http://, https://)
   if (protect.has("url")) {
     const urlRe = /https?:\/\/[^\s)>\]"']+/g;
     for (const match of afterInline.matchAll(urlRe)) {
@@ -134,22 +172,40 @@ export function maskProtectedRegions(content, protectList = ["code", "inline_cod
     }
   }
 
-  const afterUrl = chars.join("");
+  const afterUrl = units.join("");
 
-  // 5. Quoted text ("..." and “...”)
+  // 5. Quoted text ("..." and “...”), tracked across lines within each paragraph.
+  //    Unclosed quotes are capped at the paragraph boundary so a stray quote never masks the rest of the file.
   if (protect.has("quoted")) {
-    const curlyQuoteRe = /\u201C[^\u201D\n]*\u201D/g;
-    for (const match of afterUrl.matchAll(curlyQuoteRe)) {
-      blankRange(match.index, match.index + match[0].length);
-    }
-    const straightQuoteRe = /"[^"\n]*"/g;
-    const afterCurly = chars.join("");
-    for (const match of afterCurly.matchAll(straightQuoteRe)) {
-      blankRange(match.index, match.index + match[0].length);
+    const paraRe = /(?:^|\n[ \t]*\r?\n+)([^\n]+(?:\n(?![ \t]*\r?\n)[^\n]+)*)/g;
+    for (const pm of afterUrl.matchAll(paraRe)) {
+      const fullMatch = pm[0];
+      const paraText = pm[1];
+      const pStart = pm.index + (fullMatch.length - paraText.length);
+      const pEnd = pStart + paraText.length;
+
+      let openCloseChar = null;
+      let quoteStart = -1;
+      for (let i = pStart; i < pEnd; i++) {
+        const ch = afterUrl[i];
+        if (openCloseChar === null) {
+          if (ch === "\u201C") {
+            openCloseChar = "\u201D";
+            quoteStart = i;
+          } else if (ch === '"') {
+            openCloseChar = '"';
+            quoteStart = i;
+          }
+        } else if (ch === openCloseChar) {
+          blankRange(quoteStart, i + 1);
+          openCloseChar = null;
+          quoteStart = -1;
+        }
+      }
     }
   }
 
-  return chars.join("");
+  return units.join("");
 }
 
 function globToRegExp(glob) {
@@ -195,6 +251,7 @@ function matchesAnyGlob(relPath, globs) {
 export function loadConfig({ configPath, langFlag, cwd = process.cwd() } = {}) {
   const defaults = JSON.parse(fs.readFileSync(DEFAULT_CONFIG_PATH, "utf8"));
   let projectConfig = {};
+  let configBaseDir = cwd;
 
   if (configPath) {
     const resolved = path.resolve(cwd, configPath);
@@ -202,18 +259,27 @@ export function loadConfig({ configPath, langFlag, cwd = process.cwd() } = {}) {
       throw new Error(`Config file not found: ${configPath}`);
     }
     projectConfig = JSON.parse(fs.readFileSync(resolved, "utf8"));
+    configBaseDir = path.dirname(resolved);
   } else {
     const implicitPath = path.resolve(cwd, ".agents/context/natural-writing.json");
     if (fs.existsSync(implicitPath)) {
       projectConfig = JSON.parse(fs.readFileSync(implicitPath, "utf8"));
+      configBaseDir = path.dirname(implicitPath);
     }
   }
+
+  const packsDirs = [];
+  if (projectConfig.packsDir) {
+    packsDirs.push(path.resolve(configBaseDir, projectConfig.packsDir));
+  }
+  packsDirs.push(PACKS_DIR);
 
   const merged = {
     languages: { ...defaults.languages, ...(projectConfig.languages || {}) },
     include: projectConfig.include || defaults.include,
     exclude: projectConfig.exclude || defaults.exclude,
     protect: projectConfig.protect || defaults.protect,
+    packsDirs,
     forcedLang: null,
   };
 
@@ -228,78 +294,82 @@ export function loadConfig({ configPath, langFlag, cwd = process.cwd() } = {}) {
   return merged;
 }
 
-export function loadPacks(languagesMap, packsDir = PACKS_DIR) {
+export function loadPacks(languagesMap, packsDirs = PACKS_DIR) {
+  const searchDirs = Array.isArray(packsDirs) ? packsDirs : [packsDirs];
   const packs = {};
   for (const [lang, enabled] of Object.entries(languagesMap || {})) {
     if (!enabled) continue;
-    const packFile = path.join(packsDir, `${lang}.json`);
-    if (!fs.existsSync(packFile)) {
-      throw new Error(`Language pack not found for '${lang}': ${packFile}`);
+    let foundFile = null;
+    for (const dir of searchDirs) {
+      const candidate = path.join(dir, `${lang}.json`);
+      if (fs.existsSync(candidate)) {
+        foundFile = candidate;
+        break;
+      }
     }
-    const rules = JSON.parse(fs.readFileSync(packFile, "utf8"));
-    packs[lang] = rules.map((r) => ({
-      ...r,
-      lang,
-      isParagraphRule: r.pattern.includes("[\\s\\S]"),
-    }));
+    if (!foundFile) {
+      throw new Error(`Language pack not found for '${lang}': ${path.join(searchDirs[0], `${lang}.json`)}`);
+    }
+    const raw = JSON.parse(fs.readFileSync(foundFile, "utf8"));
+    packs[lang] = normalizePack(raw, lang);
   }
   return packs;
 }
 
-function buildLineIndex(text) {
+function codePointColumn(lineStr, utf16Offset) {
+  return Array.from(lineStr.slice(0, utf16Offset)).length + 1;
+}
+
+function buildLineIndex(origText) {
+  const lines = origText.split("\n");
   const starts = [0];
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "\n") starts.push(i + 1);
+  for (let i = 0; i < origText.length; i++) {
+    if (origText[i] === "\n") starts.push(i + 1);
   }
   return {
+    lines,
     starts,
-    offsetToLineCol(offset) {
+    offsetToLineCol(utf16Offset) {
       let lo = 0;
       let hi = starts.length - 1;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
-        if (starts[mid] <= offset) lo = mid + 1;
+        if (starts[mid] <= utf16Offset) lo = mid + 1;
         else hi = mid - 1;
       }
       const lineIdx = Math.max(0, hi);
+      const utf16Col = utf16Offset - starts[lineIdx];
       return {
         line: lineIdx + 1,
-        column: offset - starts[lineIdx] + 1,
+        column: codePointColumn(lines[lineIdx] || "", utf16Col),
       };
     },
   };
 }
 
 export function lintText(content, { filePath = "<input>", config, packs }) {
-  const enabledLangs = Object.keys(packs);
+  const enabledLangs = Object.keys(packs || {});
   if (enabledLangs.length === 0) return [];
 
   const masked = maskProtectedRegions(content, config.protect);
-  const lineIndex = buildLineIndex(masked);
-  const lines = masked.split("\n");
+  const lineIndex = buildLineIndex(content);
+  const maskedLines = masked.split("\n");
+  const origLines = lineIndex.lines;
   const findings = [];
 
-  // Determine active language per line
-  const lineLangs = lines.map((lineText) => {
-    if (config.forcedLang) {
-      // Even when --lang is forced, only run if the line actually contains characters of that language
-      const scriptRegex = SCRIPT_RANGES[config.forcedLang];
-      if (scriptRegex) {
-        const detected = detectLanguage(lineText, [config.forcedLang]);
-        return detected;
-      }
-      return config.forcedLang;
-    }
-    return detectLanguage(lineText, enabledLangs);
-  });
+  const candidateLangs = config.forcedLang ? [config.forcedLang] : enabledLangs;
 
   // 1. Line-level rules
-  let lineOffset = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const lineText = lines[i];
-    const lang = lineLangs[i];
-    if (lang && packs[lang]) {
-      for (const rule of packs[lang]) {
+  for (let i = 0; i < maskedLines.length; i++) {
+    const lineText = maskedLines[i];
+    const origLineText = origLines[i] || "";
+    const activeLangs = detectLanguages(lineText, packs, candidateLangs);
+
+    for (const lang of activeLangs) {
+      const rawPack = packs[lang];
+      if (!rawPack) continue;
+      const pack = Array.isArray(rawPack) ? normalizePack(rawPack, lang) : rawPack;
+      for (const rule of pack.rules) {
         if (rule.isParagraphRule) continue;
         const flags = rule.flags && rule.flags.includes("g") ? rule.flags : (rule.flags || "") + "g";
         const re = new RegExp(rule.pattern, flags);
@@ -307,7 +377,7 @@ export function lintText(content, { filePath = "<input>", config, packs }) {
           findings.push({
             file: filePath,
             line: i + 1,
-            column: m.index + 1,
+            column: codePointColumn(origLineText, m.index),
             id: rule.id,
             lang,
             severity: rule.severity,
@@ -318,7 +388,6 @@ export function lintText(content, { filePath = "<input>", config, packs }) {
         }
       }
     }
-    lineOffset += lineText.length + 1;
   }
 
   // 2. Paragraph-level rules (blocks separated by blank lines)
@@ -327,30 +396,32 @@ export function lintText(content, { filePath = "<input>", config, packs }) {
     const fullMatch = pm[0];
     const paraText = pm[1];
     const paraStart = pm.index + (fullMatch.length - paraText.length);
-    const lang = config.forcedLang
-      ? detectLanguage(paraText, [config.forcedLang])
-      : detectLanguage(paraText, enabledLangs);
-    if (!lang || !packs[lang]) continue;
+    const activeLangs = detectLanguages(paraText, packs, candidateLangs);
 
-    for (const rule of packs[lang]) {
-      if (!rule.isParagraphRule) continue;
-      const flags = rule.flags && rule.flags.includes("g") ? rule.flags : (rule.flags || "") + "g";
-      const re = new RegExp(rule.pattern, flags);
-      for (const m of paraText.matchAll(re)) {
-        const absOffset = paraStart + m.index;
-        const { line, column } = lineIndex.offsetToLineCol(absOffset);
-        const firstToken = m[0].split(/\s+/)[0];
-        findings.push({
-          file: filePath,
-          line,
-          column,
-          id: rule.id,
-          lang,
-          severity: rule.severity,
-          match: firstToken,
-          message: rule.message,
-          suggest: rule.suggest,
-        });
+    for (const lang of activeLangs) {
+      const rawPack = packs[lang];
+      if (!rawPack) continue;
+      const pack = Array.isArray(rawPack) ? normalizePack(rawPack, lang) : rawPack;
+      for (const rule of pack.rules) {
+        if (!rule.isParagraphRule) continue;
+        const flags = rule.flags && rule.flags.includes("g") ? rule.flags : (rule.flags || "") + "g";
+        const re = new RegExp(rule.pattern, flags);
+        for (const m of paraText.matchAll(re)) {
+          const absOffset = paraStart + m.index;
+          const { line, column } = lineIndex.offsetToLineCol(absOffset);
+          const firstToken = m[0].split(/\s+/)[0];
+          findings.push({
+            file: filePath,
+            line,
+            column,
+            id: rule.id,
+            lang,
+            severity: rule.severity,
+            match: firstToken,
+            message: rule.message,
+            suggest: rule.suggest,
+          });
+        }
       }
     }
   }
@@ -457,7 +528,7 @@ export function runCli(argv = process.argv.slice(2), { cwd = process.cwd(), stdo
   let config, packs, files;
   try {
     config = loadConfig({ configPath: opts.config, langFlag: opts.lang, cwd });
-    packs = loadPacks(config.languages);
+    packs = loadPacks(config.languages, config.packsDirs);
     files = collectFiles(opts.targets, config, cwd);
   } catch (err) {
     stderr.write(`${err.message}\n`);

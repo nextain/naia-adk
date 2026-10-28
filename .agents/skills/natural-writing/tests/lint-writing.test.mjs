@@ -22,16 +22,33 @@ function captureCli(args, cwd = SKILL_DIR) {
   return { code, stdout: out, stderr: err };
 }
 
+function makeTmpDirOrSkip(t, prefix = "nw-test-") {
+  try {
+    return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  } catch (err) {
+    t.skip(`os.tmpdir() (${os.tmpdir()}) is not writable in this environment: ${err.code || err.message}`);
+    return null;
+  }
+}
+
 describe("natural-writing rule packs (automated bad/good verification)", () => {
   const packFiles = fs.readdirSync(PACKS_DIR).filter((f) => f.endsWith(".json")).sort();
 
   for (const packFile of packFiles) {
     const lang = path.basename(packFile, ".json");
-    const rules = JSON.parse(fs.readFileSync(path.join(PACKS_DIR, packFile), "utf8"));
+    const rawPack = JSON.parse(fs.readFileSync(path.join(PACKS_DIR, packFile), "utf8"));
+    const rules = Array.isArray(rawPack) ? rawPack : rawPack.rules || [];
 
     describe(`pack: ${lang} (${rules.length} rules)`, () => {
       const config = loadConfig({ langFlag: lang });
       const packs = loadPacks(config.languages);
+
+      it(`pack [${lang}] defines detect metadata (script, minChars, minRatio)`, () => {
+        assert.ok(!Array.isArray(rawPack) && rawPack.detect, `${packFile} must have a top-level detect object`);
+        assert.equal(typeof rawPack.detect.script, "string");
+        assert.equal(typeof rawPack.detect.minChars, "number");
+        assert.equal(typeof rawPack.detect.minRatio, "number");
+      });
 
       for (const rule of rules) {
         it(`rule [${rule.id}] has valid schema, bad examples match, good examples do not match`, () => {
@@ -120,8 +137,9 @@ describe("language selection and configuration priority", () => {
     assert.equal(findings.length, 0);
   });
 
-  it("disabling languages.ko in config prevents Korean rules from running", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "nw-test-"));
+  it("disabling languages.ko in config prevents Korean rules from running", (t) => {
+    const tmpDir = makeTmpDirOrSkip(t);
+    if (!tmpDir) return;
     try {
       const cfgPath = path.join(tmpDir, "config.json");
       fs.writeFileSync(cfgPath, JSON.stringify({ languages: { ko: false, en: true } }), "utf8");
@@ -141,6 +159,212 @@ describe("language selection and configuration priority", () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it("issue 2: adding a new language pack (fr) with detect works via config and --lang without code changes", (t) => {
+    const scriptSource = fs.readFileSync(path.join(SKILL_DIR, "scripts", "lint-writing.mjs"), "utf8");
+    assert.ok(!/\b(?:koCount|enCount|jaCount|SCRIPT_RANGES)\b/.test(scriptSource), "lint-writing.mjs must not hardcode SCRIPT_RANGES or language count branches");
+    assert.ok(!/detected\s*=\s*["'](?:ko|en|ja|zh)["']/.test(scriptSource), "lint-writing.mjs must not branch on hardcoded language codes");
+
+    const testPacksDir = path.join(FIXTURES_DIR, "packs");
+    const enabledConfig = {
+      languages: { ko: true, en: true, fr: true },
+      protect: ["code", "inline_code", "url", "blockquote", "quoted"],
+      forcedLang: null,
+    };
+    const enabledPacks = loadPacks(enabledConfig.languages, [testPacksDir, PACKS_DIR]);
+
+    // Automatic detection with fr enabled catches "bonjour monde" even alongside en
+    const autoOnFindings = lintText("bonjour monde", { filePath: "fr.md", config: enabledConfig, packs: enabledPacks });
+    assert.equal(autoOnFindings.length, 1);
+    assert.equal(autoOnFindings[0].id, "fr-il-convient-de-noter");
+    assert.equal(autoOnFindings[0].lang, "fr");
+
+    // Disabling fr prevents the rule from running
+    const disabledConfig = {
+      languages: { ko: true, en: true, fr: false },
+      protect: ["code", "inline_code", "url", "blockquote", "quoted"],
+      forcedLang: null,
+    };
+    const disabledPacks = loadPacks(disabledConfig.languages, [testPacksDir, PACKS_DIR]);
+    const autoOffFindings = lintText("bonjour monde", { filePath: "fr.md", config: disabledConfig, packs: disabledPacks });
+    assert.equal(autoOffFindings.length, 0);
+
+    // Forcing --lang fr runs the fr pack on French text and skips Korean text
+    const forcedConfig = {
+      languages: { fr: true },
+      protect: ["code", "inline_code", "url", "blockquote", "quoted"],
+      forcedLang: "fr",
+    };
+    const forcedPacks = loadPacks(forcedConfig.languages, [testPacksDir, PACKS_DIR]);
+    const forcedFrFindings = lintText("bonjour monde", { filePath: "fr.md", config: forcedConfig, packs: forcedPacks });
+    assert.equal(forcedFrFindings.length, 1);
+    assert.equal(forcedFrFindings[0].id, "fr-il-convient-de-noter");
+
+    const forcedOnKoFindings = lintText("변경 사항이 오늘 적용되어졌다.", { filePath: "ko.md", config: forcedConfig, packs: forcedPacks });
+    assert.equal(forcedOnKoFindings.length, 0);
+
+    // Paragraph-level rule in fr pack works under both auto-detect and --lang fr
+    const frParaPacks = {
+      fr: {
+        detect: { script: "[A-Za-z\\u00C0-\\u00FF]", minChars: 3, minRatio: 0.6 },
+        rules: [
+          {
+            id: "fr-ensuite-repeat",
+            lang: "fr",
+            pattern: "\\bEnsuite,[\\s\\S]*?\\bEnsuite,",
+            flags: "g",
+            severity: "hint",
+            message: "Repetition de Ensuite",
+            suggest: "Varier les transitions",
+            isParagraphRule: true,
+          },
+        ],
+      },
+    };
+    const paraInput = "Ensuite, le module charge la configuration.\nEnsuite, il verifie chaque ligne.";
+    const paraAuto = lintText(paraInput, {
+      filePath: "fr-para.md",
+      config: { languages: { fr: true }, protect: [], forcedLang: null },
+      packs: frParaPacks,
+    });
+    assert.equal(paraAuto.length, 1);
+    assert.equal(paraAuto[0].id, "fr-ensuite-repeat");
+
+    const paraForced = lintText(paraInput, {
+      filePath: "fr-para.md",
+      config: { languages: { fr: true }, protect: [], forcedLang: "fr" },
+      packs: frParaPacks,
+    });
+    assert.equal(paraForced.length, 1);
+    assert.equal(paraForced[0].id, "fr-ensuite-repeat");
+  });
+
+  it("issue 2 (tmpdir CLI): temporary config in os.tmpdir() toggles fr pack and skips cleanly if read-only", (t) => {
+    const testPacksDir = path.join(FIXTURES_DIR, "packs");
+    const tmpDir = makeTmpDirOrSkip(t, "nw-fr-");
+    if (!tmpDir) return;
+    try {
+      const samplePath = path.join(tmpDir, "sample.md");
+      fs.writeFileSync(samplePath, "bonjour monde\n", "utf8");
+      const cfgOnPath = path.join(tmpDir, "cfg-on.json");
+      fs.writeFileSync(cfgOnPath, JSON.stringify({ languages: { fr: true }, packsDir: testPacksDir }), "utf8");
+      const cfgOffPath = path.join(tmpDir, "cfg-off.json");
+      fs.writeFileSync(cfgOffPath, JSON.stringify({ languages: { fr: false }, packsDir: testPacksDir }), "utf8");
+
+      const resOn = captureCli(["--config", cfgOnPath, "--json", samplePath]);
+      assert.equal(resOn.code, 0);
+      assert.equal(JSON.parse(resOn.stdout).length, 1);
+
+      const resOff = captureCli(["--config", cfgOffPath, "--json", samplePath]);
+      assert.equal(resOff.code, 0);
+      assert.equal(JSON.parse(resOff.stdout).length, 0);
+
+      const resForced = captureCli(["--config", cfgOffPath, "--lang", "fr", "--json", samplePath]);
+      assert.equal(resForced.code, 0);
+      assert.equal(JSON.parse(resForced.stdout).length, 1);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("stateful protected regions and UTF-16/code-point alignment (issues 3, 4, 5, 6, 1, 7)", () => {
+  it("issue 3: unclosed code fence, 3-opened/4-closed fence, and multiline quotes produce 0 warnings", () => {
+    const config = loadConfig({});
+    const packs = loadPacks(config.languages);
+
+    // 1. Unclosed fence
+    const unclosedFence = "```js\n적용되어졌다.";
+    const f1 = lintText(unclosedFence, { filePath: "unclosed.md", config, packs });
+    assert.equal(f1.filter((f) => f.severity === "warn").length, 0, `Expected 0 warns on unclosed fence, got ${JSON.stringify(f1)}`);
+
+    // 2. Opened with 3 backticks, closed with 4 backticks
+    const longerCloseFence = "```\n적용되어졌다.\n````\n정상 문장이다.";
+    const f2 = lintText(longerCloseFence, { filePath: "longer-close.md", config, packs });
+    assert.equal(f2.filter((f) => f.severity === "warn").length, 0, `Expected 0 warns on 3->4 fence, got ${JSON.stringify(f2)}`);
+
+    // 3. Multiline curly quotes and straight quotes within a paragraph
+    const multilineCurly = "“이 문장은\n적용되어졌다.\n라고 썼다.”";
+    const f3 = lintText(multilineCurly, { filePath: "multiline-curly.md", config, packs });
+    assert.equal(f3.filter((f) => f.severity === "warn").length, 0, `Expected 0 warns on multiline curly quote, got ${JSON.stringify(f3)}`);
+
+    const multilineStraight = "\"이 문장은\n적용되어졌다.\n라고 썼다.\"";
+    const f4 = lintText(multilineStraight, { filePath: "multiline-straight.md", config, packs });
+    assert.equal(f4.filter((f) => f.severity === "warn").length, 0, `Expected 0 warns on multiline straight quote, got ${JSON.stringify(f4)}`);
+
+    // Unmatched quote in one paragraph must not protect subsequent paragraphs
+    const unmatchedQuote = "첫 문단에 짝 없는 \"따옴표가 있다.\n\n둘째 문단에서 변경 사항이 적용되어졌다.";
+    const f5 = lintText(unmatchedQuote, { filePath: "unmatched.md", config, packs });
+    assert.equal(f5.filter((f) => f.id === "ko-double-passive").length, 1);
+  });
+
+  it("issue 4: emojis (surrogate pairs) before protected spans keep masking offsets aligned", () => {
+    const config = loadConfig({});
+    const packs = loadPacks(config.languages);
+    const emojis = "😀".repeat(10);
+
+    // 10 emojis followed by quoted "되어졌다." -> 0 findings
+    const quotedAfterEmojis = `${emojis} "되어졌다."`;
+    assert.equal(lintText(quotedAfterEmojis, { filePath: "emoji1.md", config, packs }).length, 0);
+
+    // 10 emojis line followed by blockquote "> 되어졌다." -> 0 findings
+    const bqAfterEmojis = `${emojis}\n> 되어졌다.`;
+    assert.equal(lintText(bqAfterEmojis, { filePath: "emoji2.md", config, packs }).length, 0);
+
+    // 10 emojis followed by "safe" 되어졌다. -> 1 finding
+    const unquotedAfterEmojis = `${emojis} "safe" 되어졌다.`;
+    const findings = lintText(unquotedAfterEmojis, { filePath: "emoji3.md", config, packs });
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].id, "ko-double-passive");
+  });
+
+  it("issue 5: normal location/domain sentences do not trigger warn findings", () => {
+    const config = loadConfig({});
+    const packs = loadPacks(config.languages);
+
+    const koLoc = lintText("책이 가방에 있어 바로 찾았다.", { filePath: "ko.md", config, packs });
+    assert.equal(koLoc.filter((f) => f.severity === "warn").length, 0);
+
+    const enSoil = lintText("The archaeologists delve into the soil.", { filePath: "en1.md", config, packs });
+    assert.equal(enSoil.filter((f) => f.severity === "warn").length, 0);
+
+    const enLoan = lintText("The company leveraged its assets to secure the loan.", { filePath: "en2.md", config, packs });
+    assert.equal(enLoan.filter((f) => f.severity === "warn").length, 0);
+  });
+
+  it("issue 6: column is 1-based Unicode code-point index from start of line (tab = 1 column)", () => {
+    const config = loadConfig({});
+    const packs = loadPacks(config.languages);
+
+    const emojiLine = lintText("😀 적용되어졌다.", { filePath: "col1.md", config, packs });
+    assert.equal(emojiLine.length, 1);
+    assert.equal(emojiLine[0].column, 5);
+
+    const tabLine = lintText("\t적용되어졌다.", { filePath: "col2.md", config, packs });
+    assert.equal(tabLine.length, 1);
+    assert.equal(tabLine[0].column, 4);
+  });
+
+  it("issues 1 & 7 & recommendations: SKILL.md, references, and sources.md follow contextual & governance rules", () => {
+    const skillMd = fs.readFileSync(path.join(SKILL_DIR, "SKILL.md"), "utf8");
+    const commonMd = fs.readFileSync(path.join(SKILL_DIR, "references", "common.md"), "utf8");
+    const koMd = fs.readFileSync(path.join(SKILL_DIR, "references", "ko.md"), "utf8");
+    const enMd = fs.readFileSync(path.join(SKILL_DIR, "references", "en.md"), "utf8");
+    const sourcesMd = fs.readFileSync(path.join(SKILL_DIR, "references", "sources.md"), "utf8");
+
+    // Issue 1: contextual checklist in common.md, ko.md, en.md and paragraph review in SKILL.md
+    assert.match(commonMd, /What the Linter Cannot Catch/i);
+    assert.match(koMd, /검사기가 못 잡는 것/);
+    assert.match(koMd, /빠르고, 쉽고, 안전합니다\./);
+    assert.match(enMd, /What the Linter Cannot Catch/i);
+    assert.match(skillMd, /contextual checklist/i);
+
+    // Issue 6 & 7: column definition, detect thresholds, and human final review in SKILL.md
+    assert.match(skillMd, /code.?point/i);
+    assert.match(skillMd, /minRatio/);
+    assert.match(skillMd, /minChars/);
+    assert.ok(!/김정우/.test(sourcesMd), "sources.md must not include paper author personal names");
   });
 });
 

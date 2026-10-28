@@ -1,6 +1,6 @@
 # English AI-Style Patterns and Revisions
 
-Treat the patterns below as review signals rather than automatic deletions. When revising, keep all numbers, names, conditions, and claims intact.
+Treat the patterns below as review signals and inspect the full paragraph in context. When revising, keep all numbers, names, conditions, and claims intact.
 
 ## Common AI-Style Signals
 
@@ -24,3 +24,12 @@ Treat the patterns below as review signals rather than automatic deletions. When
 
 - **External writing**: Prefer direct, affirmative sentences. State what the software or policy does rather than what it is not trying to do.
 - **Technical precision**: Replace vague adjectives (`seamless`, `robust`, `cutting-edge`) with the specific behavior, constraint, or measurement.
+
+## Contextual Checklist: What the Linter Cannot Catch
+
+Regex rules only catch fixed phrases. Check each paragraph as a whole against the items below even when the linter reports no matches:
+
+- [ ] **Mechanical rule-of-three lists**: Are adjectives or nouns grouped into formulaic triads (e.g., `"fast, easy, and secure"`) without concrete facts?
+- [ ] **Identical paragraph endings**: Do consecutive paragraphs end with the same cadence or repeat a `"definition → three bullets → summary sentence"` pattern?
+- [ ] **Ungrounded emphasis**: Are claims inflated with vague intensifiers or unnamed authorities instead of measurements or citations?
+- [ ] **Smooth generic filler**: Are there opening platitudes, heading restatements, or empty hedging clauses that add no specific information?
