@@ -1,0 +1,23 @@
+{
+  "detect": {
+    "script": "[A-Za-z\\u00C0-\\u00FF]",
+    "minChars": 3,
+    "minRatio": 0.6
+  },
+  "rules": [
+    {
+      "id": "fr-il-convient-de-noter",
+      "pattern": "\\b(?:bonjour\\s+monde|il\\s+convient\\s+de\\s+noter)\\b",
+      "flags": "gi",
+      "severity": "warn",
+      "message": "Formule figee detectee",
+      "suggest": "Ecrire le fait directement",
+      "bad": [
+        "Bonjour monde, il convient de noter ce detail."
+      ],
+      "good": [
+        "Ce detail modifie la configuration."
+      ]
+    }
+  ]
+}
