@@ -1,0 +1,21 @@
+{
+  "languages": {
+    "ko": true,
+    "en": true
+  },
+  "include": [
+    "**/*.md",
+    "**/*.txt"
+  ],
+  "exclude": [
+    "node_modules/**",
+    ".git/**"
+  ],
+  "protect": [
+    "code",
+    "inline_code",
+    "url",
+    "blockquote",
+    "quoted"
+  ]
+}

@@ -1,0 +1,184 @@
+[
+  {
+    "id": "en-delve",
+    "pattern": "\\bdelv(?:e|es|ed|ing)\\b",
+    "flags": "gi",
+    "severity": "warn",
+    "message": "Overused AI verb 'delve'",
+    "suggest": "Use 'examine', 'look at', 'explain', or state the topic directly",
+    "bad": [
+      "Let us delve into the configuration options."
+    ],
+    "good": [
+      "This section explains the configuration options."
+    ]
+  },
+  {
+    "id": "en-important-to-note",
+    "pattern": "\\bit(?:\\s+is|'s)\\s+(?:important|worth|crucial)\\s+to\\s+(?:note|remember|mention)\\s+that\\b",
+    "flags": "gi",
+    "severity": "warn",
+    "message": "Throat-clearing phrase before a statement",
+    "suggest": "Delete the preamble and state the fact directly",
+    "bad": [
+      "It's important to note that the port must be open."
+    ],
+    "good": [
+      "The port must be open before starting the server."
+    ]
+  },
+  {
+    "id": "en-in-conclusion",
+    "pattern": "\\b(?:in\\s+conclusion|to\\s+sum\\s+up|in\\s+summary),",
+    "flags": "gi",
+    "severity": "warn",
+    "message": "Formulaic summary transition",
+    "suggest": "State the final takeaway or next step without the label",
+    "bad": [
+      "In conclusion, the new parser reduces memory usage by half."
+    ],
+    "good": [
+      "The new parser reduces memory usage by half."
+    ]
+  },
+  {
+    "id": "en-not-just-but",
+    "pattern": "\\bnot\\s+(?:just|merely|simply)\\s+[^,.;!?\\n]{1,40},?\\s+but\\s+(?:also\\s+|rather\\s+)?",
+    "flags": "gi",
+    "severity": "warn",
+    "message": "Formulaic 'not just X, but Y' contrast",
+    "suggest": "Describe what the subject actually does without rhetorical contrast",
+    "bad": [
+      "This tool is not just a linter, but a complete writing companion."
+    ],
+    "good": [
+      "This linter checks prose files and reports line-level suggestions."
+    ]
+  },
+  {
+    "id": "en-fast-paced-world",
+    "pattern": "\\bin\\s+today's\\s+(?:fast-paced|ever-evolving|digital|modern)\\s+(?:world|landscape|era)\\b",
+    "flags": "gi",
+    "severity": "warn",
+    "message": "Cliche opening 'In today's fast-paced...'",
+    "suggest": "Start with the specific problem or subject",
+    "bad": [
+      "In today's fast-paced world, teams deploy code several times a day."
+    ],
+    "good": [
+      "Teams that deploy several times a day need fast checks."
+    ]
+  },
+  {
+    "id": "en-game-changer",
+    "pattern": "\\bgame[-\\s]chang(?:er|ing)\\b",
+    "flags": "gi",
+    "severity": "warn",
+    "message": "Promotional hype 'game-changer'",
+    "suggest": "Give the concrete metric, change, or capability",
+    "bad": [
+      "Caching the index is a game-changer for cold starts."
+    ],
+    "good": [
+      "Caching the index cuts cold-start time from 4s to 0.3s."
+    ]
+  },
+  {
+    "id": "en-seamless",
+    "pattern": "\\bseamless(?:ly)?\\b",
+    "flags": "gi",
+    "severity": "warn",
+    "message": "Vague promotional modifier 'seamless(ly)'",
+    "suggest": "Describe how the integration works (e.g., 'without extra config')",
+    "bad": [
+      "The script integrates seamlessly with existing CI pipelines."
+    ],
+    "good": [
+      "The script runs in CI with a single Node command and no extra packages."
+    ]
+  },
+  {
+    "id": "en-leverage-verb",
+    "pattern": "\\b(?:to\\s+leverage|leverages|leveraged|leveraging)\\b",
+    "flags": "gi",
+    "severity": "warn",
+    "message": "Corporate jargon 'leverage' used as a verb",
+    "suggest": "Use 'use', 'rely on', or 'apply'",
+    "bad": [
+      "The scanner leverages regular expressions to find matches."
+    ],
+    "good": [
+      "The scanner uses regular expressions to find matches."
+    ]
+  },
+  {
+    "id": "en-testament-to",
+    "pattern": "\\ba\\s+testament\\s+to\\b",
+    "flags": "gi",
+    "severity": "warn",
+    "message": "Inflated AI phrase 'a testament to'",
+    "suggest": "Show the evidence or state the cause and effect",
+    "bad": [
+      "The low error rate is a testament to careful testing."
+    ],
+    "good": [
+      "Careful testing kept the error rate below 0.2%."
+    ]
+  },
+  {
+    "id": "en-navigate-complexities",
+    "pattern": "\\bnavigat(?:e|es|ed|ing)\\s+the\\s+complexit(?:y|ies)\\b",
+    "flags": "gi",
+    "severity": "warn",
+    "message": "Vague metaphor 'navigate the complexities'",
+    "suggest": "Name the specific difficulty and how to handle it",
+    "bad": [
+      "This guide helps you navigate the complexities of locale settings."
+    ],
+    "good": [
+      "This guide explains how to set language rules per project."
+    ]
+  },
+  {
+    "id": "en-unprompted-denial",
+    "pattern": "\\bthis\\s+is\\s+not\\s+intended\\s+to\\b",
+    "flags": "gi",
+    "severity": "warn",
+    "message": "Unprompted defensive disclaimer (external writing should use affirmative statements)",
+    "suggest": "State what the feature or document actually does in affirmative form",
+    "bad": [
+      "This is not intended to replace human editors."
+    ],
+    "good": [
+      "This checker highlights candidate lines before human review."
+    ]
+  },
+  {
+    "id": "en-em-dash-repeat",
+    "pattern": "—[\\s\\S]*?—[\\s\\S]*?—",
+    "flags": "g",
+    "severity": "hint",
+    "message": "Three or more em dashes (—) in one paragraph",
+    "suggest": "Use commas, parentheses, or separate sentences instead of chaining em dashes",
+    "bad": [
+      "The tool—fast by default—scans files—even large ones—in one pass."
+    ],
+    "good": [
+      "The tool is fast by default and scans large files in one pass."
+    ]
+  },
+  {
+    "id": "en-furthermore-repeat",
+    "pattern": "\\b(?:Furthermore|Moreover),[\\s\\S]*?\\b(?:Furthermore|Moreover),",
+    "flags": "g",
+    "severity": "hint",
+    "message": "Repeated 'Furthermore,' or 'Moreover,' transitions in one paragraph",
+    "suggest": "Drop the transition words or use a list",
+    "bad": [
+      "Furthermore, the check runs locally. Moreover, it needs no network access."
+    ],
+    "good": [
+      "The check runs locally and needs no network access."
+    ]
+  }
+]

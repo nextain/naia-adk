@@ -47,3 +47,5 @@ jobs:
         run: pnpm test:harness-native
       - name: Naia account document translation adapter
         run: python .agents/skills/translate-doc/tests/test_naia_translate.py
+      - name: Natural writing skill linter tests
+        run: node --test .agents/skills/natural-writing/tests/
