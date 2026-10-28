@@ -64,7 +64,8 @@
     "response_language": "Korean (한국어로 응답)",
     "development_approach": "Issue-driven development (default). TDD where applicable.",
     "test_code_review": "After writing tests, never trust results blindly. Review test logic itself with iterative review (2 consecutive clean passes) before trusting outcomes. Signs of invalid tests: assertions that always pass, mocked internals that diverge from real behavior, missing negative cases.",
-    "work_logs": "Don't modify unless explicitly requested"
+    "work_logs": "Don't modify unless explicitly requested",
+    "external_writing_positive": "External-facing writing (proposals, emails, messages, presentations, social posts, books, product UI copy, AI service replies) states what we can do and have done in positive sentences. Do not add unrequested denials or disclaimers ('X is not ...', 'currently, because ...', 'we will make sure it is not ...') unless law or contract requires them. Do not raise legal, copyright, or country-specific regulatory risk unless the accountable owner asks or requests research. Never state anything false. Guide: docs/guides/external-writing.md"
   },
   "workflows": {
     "instruction": "Read workflows on demand. Do not load all at once.",
