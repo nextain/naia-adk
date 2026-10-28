@@ -73,6 +73,39 @@ export function detectLanguages(text, packs, candidateLangs = Object.keys(packs 
 }
 
 /**
+ * Pick the languages whose rules run on one line or paragraph.
+ * `--lang` runs that pack without the detect thresholds. Otherwise, when the letters of the text
+ * fall mostly in the shared range of two matched packs' `detect.script` (for example two Latin-script
+ * languages), the text is ambiguous between them and both are skipped.
+ */
+export function activeLanguages(text, packs, candidateLangs, forcedLang) {
+  if (forcedLang) return countMatches(text, UNICODE_LETTER_RE) > 0 ? [forcedLang] : [];
+  const matched = detectLanguages(text, packs, candidateLangs);
+  if (matched.length < 2) return matched;
+  const letters = Array.from(text).filter((ch) => /\p{L}/u.test(ch));
+  const scriptOf = (lang) => {
+    const d = packs[lang]?.detect;
+    return d && d.script ? new RegExp(d.script, (d.flags || "u").replace("g", "")) : null;
+  };
+  const ratioOf = (lang) => packs[lang]?.detect?.minRatio ?? 0;
+  const ambiguous = new Set();
+  for (let i = 0; i < matched.length; i++) {
+    for (let j = i + 1; j < matched.length; j++) {
+      const ra = scriptOf(matched[i]);
+      const rb = scriptOf(matched[j]);
+      if (!ra || !rb) continue;
+      const shared = letters.filter((ch) => ra.test(ch) && rb.test(ch)).length;
+      const need = Math.max(ratioOf(matched[i]), ratioOf(matched[j]), 0.5);
+      if (shared / letters.length >= need) {
+        ambiguous.add(matched[i]);
+        ambiguous.add(matched[j]);
+      }
+    }
+  }
+  return matched.filter((lang) => !ambiguous.has(lang));
+}
+
+/**
  * Detect the first matching language for `text` among `packs`.
  */
 export function detectLanguage(text, packs, candidateLangs) {
@@ -98,6 +131,7 @@ export function maskProtectedRegions(content, protectList = ["code", "inline_cod
   };
 
   // 1. Fenced code blocks (``` or ~~~), tracked statefully line by line.
+  //    A fence may be indented by at most three spaces; four or more is indented code, not a fence.
   //    Closing fence must use the same character (` or ~) with length >= opening length.
   //    Unclosed fences protect through the end of the file.
   if (protect.has("code")) {
@@ -112,7 +146,7 @@ export function maskProtectedRegions(content, protectList = ["code", "inline_cod
       const lineStr = content.slice(lineStart, lineEnd);
 
       if (!inFence) {
-        const openMatch = lineStr.match(/^[ \t]*(`{3,}|~{3,})(.*)$/);
+        const openMatch = lineStr.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
         if (openMatch) {
           const marker = openMatch[1];
           const info = openMatch[2] || "";
@@ -126,7 +160,7 @@ export function maskProtectedRegions(content, protectList = ["code", "inline_cod
         }
       } else {
         blankRange(lineStart, lineEnd);
-        const closeMatch = lineStr.match(/^[ \t]*(`{3,}|~{3,})[ \t]*\r?$/);
+        const closeMatch = lineStr.match(/^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/);
         if (closeMatch) {
           const marker = closeMatch[1];
           if (marker[0] === fenceChar && marker.length >= fenceLen) {
@@ -363,7 +397,7 @@ export function lintText(content, { filePath = "<input>", config, packs }) {
   for (let i = 0; i < maskedLines.length; i++) {
     const lineText = maskedLines[i];
     const origLineText = origLines[i] || "";
-    const activeLangs = detectLanguages(lineText, packs, candidateLangs);
+    const activeLangs = activeLanguages(lineText, packs, candidateLangs, config.forcedLang);
 
     for (const lang of activeLangs) {
       const rawPack = packs[lang];
@@ -396,7 +430,7 @@ export function lintText(content, { filePath = "<input>", config, packs }) {
     const fullMatch = pm[0];
     const paraText = pm[1];
     const paraStart = pm.index + (fullMatch.length - paraText.length);
-    const activeLangs = detectLanguages(paraText, packs, candidateLangs);
+    const activeLangs = activeLanguages(paraText, packs, candidateLangs, config.forcedLang);
 
     for (const lang of activeLangs) {
       const rawPack = packs[lang];

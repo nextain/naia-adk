@@ -174,8 +174,14 @@ describe("language selection and configuration priority", () => {
     };
     const enabledPacks = loadPacks(enabledConfig.languages, [testPacksDir, PACKS_DIR]);
 
-    // Automatic detection with fr enabled catches "bonjour monde" even alongside en
-    const autoOnFindings = lintText("bonjour monde", { filePath: "fr.md", config: enabledConfig, packs: enabledPacks });
+    // en and fr share the Latin script, so plain Latin text is ambiguous and skipped for both
+    const ambiguousFindings = lintText("bonjour monde", { filePath: "fr.md", config: enabledConfig, packs: enabledPacks });
+    assert.equal(ambiguousFindings.length, 0);
+
+    // Automatic detection catches "bonjour monde" when fr is the only Latin-script pack enabled
+    const koFrConfig = { ...enabledConfig, languages: { ko: true, fr: true } };
+    const koFrPacks = loadPacks(koFrConfig.languages, [testPacksDir, PACKS_DIR]);
+    const autoOnFindings = lintText("bonjour monde", { filePath: "fr.md", config: koFrConfig, packs: koFrPacks });
     assert.equal(autoOnFindings.length, 1);
     assert.equal(autoOnFindings[0].id, "fr-il-convient-de-noter");
     assert.equal(autoOnFindings[0].lang, "fr");
@@ -248,7 +254,7 @@ describe("language selection and configuration priority", () => {
       const samplePath = path.join(tmpDir, "sample.md");
       fs.writeFileSync(samplePath, "bonjour monde\n", "utf8");
       const cfgOnPath = path.join(tmpDir, "cfg-on.json");
-      fs.writeFileSync(cfgOnPath, JSON.stringify({ languages: { fr: true }, packsDir: testPacksDir }), "utf8");
+      fs.writeFileSync(cfgOnPath, JSON.stringify({ languages: { en: false, fr: true }, packsDir: testPacksDir }), "utf8");
       const cfgOffPath = path.join(tmpDir, "cfg-off.json");
       fs.writeFileSync(cfgOffPath, JSON.stringify({ languages: { fr: false }, packsDir: testPacksDir }), "utf8");
 
@@ -388,5 +394,36 @@ describe("exit codes and output formatting", () => {
     assert.equal(captureCli(["--lang"]).code, 2);
     assert.equal(captureCli(["--config", "/nonexistent/config.json", path.join(FIXTURES_DIR, "ko-negative.md")]).code, 2);
     assert.equal(captureCli(["/nonexistent/target.md"]).code, 2);
+  });
+});
+
+describe("review round 2 regressions", () => {
+  it("--lang ko checks Korean text even when English letters dominate the line", () => {
+    const config = { languages: { ko: true, en: true }, protect: [], forcedLang: "ko" };
+    const packs = loadPacks({ ko: true }, [PACKS_DIR]);
+    const findings = lintText("A documentation example that contains many English words and 적용되어졌다.", { filePath: "x.md", config, packs });
+    assert.ok(findings.some((f) => f.id === "ko-double-passive"));
+  });
+
+  it("a fence indented four or more spaces is indented code and does not hide later prose", () => {
+    const config = { languages: { ko: true }, protect: ["code"], forcedLang: null };
+    const packs = loadPacks(config.languages, [PACKS_DIR]);
+    const input = "    ```\n    example\n\n변경 사항이 적용되어졌다.\n";
+    const findings = lintText(input, { filePath: "x.md", config, packs });
+    assert.ok(findings.some((f) => f.id === "ko-double-passive" && f.line === 4));
+  });
+
+  it("a fence indented up to three spaces is still protected", () => {
+    const config = { languages: { ko: true }, protect: ["code"], forcedLang: null };
+    const packs = loadPacks(config.languages, [PACKS_DIR]);
+    const findings = lintText("   ```\n적용되어졌다.\n   ```\n", { filePath: "x.md", config, packs });
+    assert.equal(findings.length, 0);
+  });
+
+  it("with en and fr enabled, English rules do not run on an ambiguous Latin-script line", () => {
+    const config = { languages: { en: true, fr: true }, protect: [], forcedLang: null };
+    const packs = loadPacks(config.languages, [path.join(FIXTURES_DIR, "packs"), PACKS_DIR]);
+    const findings = lintText("Cette expression utilise not just a game, but a test dans un exemple.", { filePath: "x.md", config, packs });
+    assert.equal(findings.filter((f) => f.lang === "en").length, 0);
   });
 });

@@ -57,9 +57,9 @@ Each pack in `scripts/packs/<lang>.json` defines a top-level `detect` object alo
 - `minChars`: Minimum count of `script` characters required in a line or paragraph (`2` for `ko`, `3` for `en`).
 - `minRatio`: Minimum ratio of `script` characters to total Unicode letters (`\p{L}`) in that line or paragraph (`0.15` for `ko` so Korean sentences containing English technical terms are still checked as Korean; `0.6` for `en` so Korean lines with a few English words are not misclassified as English).
 
-When `--lang` is omitted, the linter runs every enabled language pack whose `detect` thresholds match the line or paragraph. Rules for disabled languages never run.
+When `--lang` is omitted, the linter runs every enabled language pack whose `detect` thresholds match the line or paragraph. Rules for disabled languages never run. When `--lang` is given, that pack runs on every line and paragraph that has letters, without the `detect` thresholds.
 
-- **Same-script languages (e.g., multiple Latin-script packs enabled)**: When two or more enabled languages share the same character script (such as `en` and `fr`), character script alone cannot separate them without a lexicon, so **all enabled packs whose `detect` criteria match the line or paragraph are executed**. To run only one specific language pack on a single-language document, pass `--lang <code>` or disable the other language in config.
+- **Same-script languages (e.g., `en` and `fr` both enabled)**: character script alone cannot tell them apart, so a line or paragraph whose letters fall mostly (at least the larger `minRatio` of the two, and at least half) inside the shared range of two matched packs is treated as ambiguous and skipped for both. Pass `--lang <code>` to check a single-language document in that case.
 
 ### Adding a New Language
 
