@@ -112,7 +112,7 @@ base trees above. Examples (not exhaustive, and not shipped in this base repo):
 
 ## Governance in the Organization Lineage
 
-`naia-business-adk` combines team governance and business workflow policies with additional organization skills.
+`naia-business-adk` (example) can combine team governance and business workflow policies with additional organization skills.
 
 `naia-business-adk` represents an organization-family fork with governance for:
 
@@ -179,51 +179,19 @@ Integration paths (phased):
 2. **Gateway**: naia-adk implements `GatewayAdapter` → naia-os agent calls directly
 3. **Shared SDK**: Extract `@naia/skill-sdk` from common interfaces
 
-## Real Examples
+## Example Organization Lineage
 
-### nextain-adk (= company instance)
-
-```
-nextain-adk/                     ← company workspace root
-├── .agents/                      ← AAIF (context, skills, workflows)
-├── .users/                       ← Korean mirror
-├── .claude/                      ← Claude Code settings
-├── data-company/
-│   ├── docs-nextain/             ← submodule: naia-corp/docs-internal
-│   ├── docs-work-logs/           ← submodule: naia-corp/docs-work-logs
-│   └── reference/                ← Reference data
-├── data-business/
-│   ├── docs-business/            ← submodule: naia-corp/docs-business
-│   ├── accounting/               ← submodule: nextain/nextain-accounting
-│   └── documents/                ← submodule: nextain/nextain-documents
-├── data-private/                 ← submodule: nextain/<member>-private
-├── projects/
-│   ├── naia-os/                  ← submodule: nextain/naia-os
-│   ├── www.naia-corp.example/         ← submodule
-│   ├── app.naia-corp.example/          ← submodule
-│   ├── 9router/                  ← submodule
-│   └── refs/                     ← read-only upstream tracking
-├── skills/                       ← base + business skills
-├── packages/                     ← runtime engine (future)
-├── scripts/                      ← triage, PDF, tools
-├── templates/                    ← document templates
-└── docs/                         ← architecture, specs
-```
-
-### alpha-adk (= company-linked personal instance)
-
-`alpha-adk` is not a generic personal fork. It is a member instance that inherits company context while preserving local working memory and experiments.
-
-### naia-corp-adk (= company instance)
+An organization-family fork such as `{org}-adk` can hold organization governance and connect organization data and project repositories. A member can derive a personal workspace from that fork, and projects can live in their own repositories:
 
 ```
-naia-corp-adk/
-├── .agents/
-│   └── context/                  ← company info
-├── data-company/
-│   └── docs-naia-corp/               ← company docs
-├── data-business/
-│   └── documents/                ← company documents
+{org}-adk/                         ← organization workspace
+├── data-company/                  ← organization-wide documents
+├── data-business/                 ← business records and documents
+└── projects/                      ← organization project repositories
+
+{member}-adk/                       ← personal workspace derived from {org}-adk
 └── projects/
-    └── home.naia-corp.com/           ← company project
+    └── {project}/                 ← separate project repository
 ```
+
+Organizations can choose which data areas and projects to include. Individuals can also fork `naia-adk` directly and keep their own workspace lineage.

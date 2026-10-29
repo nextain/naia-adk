@@ -68,7 +68,7 @@ flowchart TD
 
 ```bash
 # 스펙 체인 링크·고아 문서·추적성 결정론적 검증
-node scripts/validate-spec-chain.mjs
+node scripts/validate-spec-chain.mjs  # (templates/project-skeleton로 만든 프로젝트 루트에서)
 ```
 
 ### 3.4 역할별 모델 분리 및 서브에이전트 운영 표준

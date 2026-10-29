@@ -16,7 +16,7 @@
 
 | 축 번호 | 핵심 개선 축 | 정본 규칙 문서 (`rules/`) | 워크스페이스 적용·강제 스크립트 및 설정 |
 |---|---|---|---|
-| **축 1** | **광범위 문제해결 위임 & 모듈 리팩토링 권한** (파일·줄 제한 폐지, 거대 파일 방지) | [`refactoring-and-broad-problem-solving.md`](refactoring-and-broad-problem-solving.md) | [`../.agents/context/agents-rules.json`](../.agents/context/agents-rules.json) (`instruction_is_short`, `split_independent_items`); 개발 문서: 저장소 안 대상 없음 |
+| **축 1** | **광범위 문제해결 위임 & 모듈 리팩토링 권한** (파일·줄 제한 폐지, 거대 파일 방지) | [`refactoring-and-broad-problem-solving.md`](refactoring-and-broad-problem-solving.md) | [`../.agents/context/agents-rules.json`](../.agents/context/agents-rules.json) (`instruction_is_short`, `split_independent_items`); [개발 문서 작성 기준](../docs/guides/dev-docs-writing.md) |
 | **축 2** | **결정론적 코드 복잡도 게이트 (`USR-012`)** (500줄/80KB 경고, 800줄/160KB·+250줄 `REFACTOR_REQUIRED`, 1,200줄/300KB 차단) | [`refactoring-and-broad-problem-solving.md`](refactoring-and-broad-problem-solving.md) | 저장소 안 `USR-012` 요구사항 파일 대상 없음; [복잡도 측정기](../.agents/skills/review-pass/scripts/measure-complexity.mjs), [리뷰 사전 검사](../.agents/skills/review-pass/scripts/review-preflight.mjs) |
 | **축 3** | **상시 문맥 예산 게이트 (`<= 20,000B` / 총합 `<= 60,000B`)** (1줄 규칙 + `detail` 분리) | [`refactoring-and-broad-problem-solving.md`](refactoring-and-broad-problem-solving.md) | [`../.agents/context/context-budget.json`](../.agents/context/context-budget.json), [`../scripts/check-context-budget.mjs`](../scripts/check-context-budget.mjs), [`../.agents/hooks/core/agents-rules-load.js`](../.agents/hooks/core/agents-rules-load.js) |
 | **축 4** | **서브에이전트 무응답 방지 주기적 워치독 의무** (호출 시 타이머 동시 설정, 진도율 감시) | [`layer4-sensor-and-memo-loop.md`](layer4-sensor-and-memo-loop.md) | [`../.agents/context/agents-rules.json`](../.agents/context/agents-rules.json) (`delegate_exploration`, `subagent_watchdog_and_layer4_sensor`); 저장소 안 `orchestration-watch.mjs` 대상 없음 |
@@ -64,9 +64,9 @@ node .claude/hooks/sync-entry-points.js --check
 node .agents/skills/review-pass/scripts/measure-complexity.mjs --files <파일...>
 
 # 5. 채널·담당 표 생성기(channel-roles-gen.mjs) 미리보기 및 결정론적 테스트
-node projects/naia-adk/scripts/channel-roles-gen.mjs \
-  --table projects/naia-adk/templates/org-channels/channels.example.yaml \
-  --ids projects/naia-adk/templates/org-channels/channel-ids.example.json \
+node scripts/channel-roles-gen.mjs \
+  --table templates/org-channels/channels.example.yaml \
+  --ids templates/org-channels/channel-ids.example.json \
   --init-instances
-node --test projects/naia-adk/tests/*.test.mjs
+node --test tests/*.test.mjs
 ```
