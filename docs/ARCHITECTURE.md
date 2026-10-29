@@ -1,39 +1,20 @@
 # Naia Ecosystem Architecture
 
-> naia-adk is the personal base. Higher layers extend it for organizational governance and concrete company/member instances.
+> Individuals may fork `naia-adk` directly. Organizations may maintain a separate organization-family fork and derive their own workspaces from it.
 
 ## Overview
 
 ```
-            naia-adk (OSS — this repo, public)
-            ┌─────────────────────────────┐
-            │  Personal Base              │
-            │  - workspace scaffold       │
-            │  - tool-agnostic format     │
-            │  - base skills              │
-            │  - solo governance baseline │
-            └────────────┬────────────────┘
-                         │ business upstream
-                         ▼
-              naia-business-adk (private)
-              ┌─────────────────────────────┐
-              │  Organizational Extension   │
-              │  - assets / process /       │
-              │    permissions governance   │
-              │  - team ownership           │
-              │  - delegated approval       │
-              │  - business workflows       │
-              └────────────┬────────────────┘
-                           │ instantiate
-              ┌────────────┼────────────┐
-              ▼            ▼            ▼
-        nextain-adk   naia-corp-adk    {company}-adk
-        (company)     (company)    (company)
-        .agents/      .agents/      .agents/
-        data-company/ data-company/ data-company/
-        data-business/ data-business/ data-business/
-        data-private/  data-private/  data-private/
+Personal lineage (direct fork):
+naia-adk → {user}-adk
+
+Optional organization-family lineage:
+naia-business-adk (example) → {org}-adk → {member}-adk
 ```
+
+These are two possible lineages. Individuals may fork `naia-adk` directly.
+Organizations may maintain a separate organization-family fork and derive
+their own workspaces from it.
 
 ## Disclosure Levels
 
@@ -51,14 +32,14 @@ Levels also imply different expectations for AI behavior:
 - `internal`: may be read and worked on, but not publicly published by default
 - `confidential`: stronger need-to-know handling, caution for memory promotion, never treated as normal publishable context
 
-## Model: Personal Base + Organizational Extension + Instances
+## Model: Personal Base and Optional Organization Lineage
 
 | Layer | What | For Who |
 |-------|------|---------|
 | **naia-adk** | Personal base: scaffold + format + minimum solo governance | Individuals using AI-assisted workspaces |
-| **naia-business-adk** | Organizational extension: assets / process / permissions governance | Teams and companies |
-| **{company}-adk** | Company instance with real products, teams, and policy | Specific organization's AI operations |
-| **{member}-adk** | Company-linked personal instance | Members working within company context |
+| **naia-business-adk** | Example name for an optional organization-family fork | Organizations choosing a separate lineage |
+| **{org}-adk** | Organization workspace in that lineage | A specific organization's AI operations |
+| **{member}-adk** | Workspace derived within the organization's lineage | Members working within that organization |
 
 ## Solo Governance Baseline
 
@@ -116,7 +97,7 @@ and served at `/api/skills`.
 | `read-doc` · `doc-coauthoring` · `review-pass` | Also present here (dashboard-visible copies) |
 | `config` · `cron` · `diagnostics` · `system-status` · `sessions` · `memo` · `skill-manager` · `time` · `weather` | Runtime utilities |
 
-## naia-business-adk Skills (organizational extension)
+## naia-business-adk Skills (organization-family fork)
 
 `naia-business-adk` adds team-scoped governance and additional org skills on top of the
 base trees above. Examples (not exhaustive, and not shipped in this base repo):
@@ -129,11 +110,9 @@ base trees above. Examples (not exhaustive, and not shipped in this base repo):
 | `crm` | 파일 기반 경량 CRM |
 | `client-communication` | 고객 소통 관리 |
 
-## Organizational Governance Extension
+## Governance in the Organization Lineage
 
-`naia-business-adk` should not be described as a premium skill bundle only.
-
-It is the organizational extension that adds:
+`naia-business-adk` represents an organization-family fork with governance for:
 
 - team ownership
 - delegated approval
@@ -143,12 +122,12 @@ It is the organizational extension that adds:
 
 Skills are one output of that extension, not the whole product.
 
-## {company}-adk (Company Workspace)
+## {org}-adk (Organization Workspace)
 
-At the organizational layer, `naia-business-adk` scaffolding creates:
+An organization-family fork such as `naia-business-adk` can provide a workspace shaped like:
 
 ```
-{name}-adk/
+{org}-adk/
 ├── .agents/                   ← AAIF standard
 │   ├── context/               ← Company info, rules, config
 │   ├── skills/                ← Company-specific skills (if needed)
