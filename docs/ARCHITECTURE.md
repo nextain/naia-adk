@@ -112,6 +112,8 @@ base trees above. Examples (not exhaustive, and not shipped in this base repo):
 
 ## Governance in the Organization Lineage
 
+`naia-business-adk` combines team governance and business workflow policies with additional organization skills.
+
 `naia-business-adk` represents an organization-family fork with governance for:
 
 - team ownership

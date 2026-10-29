@@ -1,6 +1,6 @@
 # `naia-adk` v0.2.0 통합 추상화 규칙 카탈로그 (`rules/`)
 
-범위: 공통 (`naia-adk` 표준 규칙 카탈로그 — `alpha-adk` 등 하위 워크스페이스에서 검증·정립된 11대 핵심 개발·검수·운영·조직 채널 규칙의 범용 정본)
+범위: 공통 (`naia-adk` 표준 규칙 카탈로그 — 이 저장소를 포크한 워크스페이스에서 검증·정립된 11대 핵심 개발·검수·운영·조직 채널 규칙의 범용 정본)
 
 ---
 
@@ -8,13 +8,13 @@
 
 > 층 번호는 아래에서 위로 센다: 1층 센서 · 2층 실행·검수 · 3층 조정 세션 · 4층 자문(2026-10-20 개편). 파일·스크립트 이름의 `layer4`·`l4` 는 옛 번호 시절 이름이다. 전체 구조는 [`docs/guides/adk-2.0-structure.md`](../docs/guides/adk-2.0-structure.md).
 
-이 디렉토리(`projects/naia-adk/rules/`)는 개발 워크스페이스 운영 과정에서 실측·정립된 규칙, 검증 게이트, 1층 센서 루프, QA 절차, 다중 계정 관리, 그리고 에이전트 중심 4종 ADK(`user`/`group`[구 `org` 읽기 호환 별칭]/`agent`/`project`)와 일정(`schedule`), 사내 메신저 채널·담당 표(`channel-roles-gen.mjs`) 아키텍처를 특정 개인·회사의 비밀값이나 로컬 경로 없이 범용 표준으로 추상화한 정본 카탈로그다.
+이 디렉토리(`rules/`)는 개발 워크스페이스 운영 과정에서 실측·정립된 규칙, 검증 게이트, 1층 센서 루프, QA 절차, 다중 계정 관리, 그리고 에이전트 중심 4종 ADK(`user`/`group`[구 `org` 읽기 호환 별칭]/`agent`/`project`)와 일정(`schedule`), 사내 메신저 채널·담당 표(`channel-roles-gen.mjs`) 아키텍처를 특정 개인·회사의 비밀값이나 로컬 경로 없이 범용 표준으로 추상화한 정본 카탈로그다.
 
 ---
 
 ## 2. 핵심 개선 축과 규칙 문서 매핑
 
-| 축 번호 | 핵심 개선 축 | 정본 규칙 문서 (`projects/naia-adk/rules/`) | 워크스페이스 적용·강제 스크립트 및 설정 |
+| 축 번호 | 핵심 개선 축 | 정본 규칙 문서 (`rules/`) | 워크스페이스 적용·강제 스크립트 및 설정 |
 |---|---|---|---|
 | **축 1** | **광범위 문제해결 위임 & 모듈 리팩토링 권한** (파일·줄 제한 폐지, 거대 파일 방지) | [`refactoring-and-broad-problem-solving.md`](refactoring-and-broad-problem-solving.md) | [`../.agents/context/agents-rules.json`](../.agents/context/agents-rules.json) (`instruction_is_short`, `split_independent_items`); 개발 문서: 저장소 안 대상 없음 |
 | **축 2** | **결정론적 코드 복잡도 게이트 (`USR-012`)** (500줄/80KB 경고, 800줄/160KB·+250줄 `REFACTOR_REQUIRED`, 1,200줄/300KB 차단) | [`refactoring-and-broad-problem-solving.md`](refactoring-and-broad-problem-solving.md) | 저장소 안 `USR-012` 요구사항 파일 대상 없음; [복잡도 측정기](../.agents/skills/review-pass/scripts/measure-complexity.mjs), [리뷰 사전 검사](../.agents/skills/review-pass/scripts/review-preflight.mjs) |
@@ -23,8 +23,8 @@
 | **축 5** | **1층(Tier-1) 교차 센서 아키텍처** (메신저 + 서브에이전트 완료/정체 + 미소비 깨움 파일 + 시간 예약 틱) | [`layer4-sensor-and-memo-loop.md`](layer4-sensor-and-memo-loop.md) | 저장소 안 작업 문서와 센서 스크립트 대상 없음 |
 | **축 6** | **작업 문서 드래그 메모 (`doc-notes`) ⇄ 1층 센서 ⇄ 문서 수정·커밋 루프** | [`layer4-sensor-and-memo-loop.md`](layer4-sensor-and-memo-loop.md) | 저장소 안 작업 문서와 센서 스크립트 대상 없음 |
 | **축 7** | **사용자 원문 무손실 보존 (`00-USER-REQUESTS`) & 계획 승인 게이트 (`approval-plan.mjs`)** | [`evidence-driven-process.md`](evidence-driven-process.md) | 저장소 안 계획 승인 스크립트, 리뷰 실행기, 개발 절차 문서 대상 없음 |
-| **축 8** | **양방향 스펙 체인 (`PC → SP/UC → RQ → FE → [UT/IT/E2E] → QC`) & 역할별 모델 분리** (구현 모델 / 다른 계열의 독립 검수 모델) | [`evidence-driven-process.md`](evidence-driven-process.md) | 저장소 안 명세 체인 검사기, `FORK.md`, 개발 절차 문서 대상 없음 |
-| **축 9** | **실패 우선 검증 (Failure-First Validation 25개 절차) & 기본 구조화 디버그 로깅 (`D47` + 링버퍼/스냅샷)** | [`qa-and-debug-logging.md`](qa-and-debug-logging.md) | 저장소 안 실패 우선·디버그 로깅 가이드 대상 없음 |
+| **축 8** | **양방향 스펙 체인 (`PC → SP/UC → RQ → FE → [UT/IT/E2E] → QC`) & 역할별 모델 분리** (구현 모델 / 다른 계열의 독립 검수 모델) | [`evidence-driven-process.md`](evidence-driven-process.md) | 저장소 최상위 `scripts/`에는 검사기가 없음; 템플릿 검사기 [`templates/project-skeleton/scripts/validate-spec-chain.mjs`](../templates/project-skeleton/scripts/validate-spec-chain.mjs); `FORK.md`와 개발 절차 문서는 저장소 안 대상 없음 |
+| **축 9** | **실패 우선 검증 (Failure-First Validation 25개 절차) & 기본 구조화 디버그 로깅 (`D47` + 링버퍼/스냅샷)** | [`qa-and-debug-logging.md`](qa-and-debug-logging.md) | 저장소 안 failure-first 가이드는 없음; 디버그 로깅은 [`docs/guides/debug-logging.md`](../docs/guides/debug-logging.md) |
 | **축 10** | **Claude 4계층 다중 계정 관리 (격리·지문 미러링·무토큰 사용량·95% 자동 전환) & 멀티 CLI 프로파일 라우팅** | [`multi-cli-account-management.md`](multi-cli-account-management.md) | 해당 스크립트와 가이드의 저장소 내 대상 없음 |
 | **축 11** | **에이전트 중심 4종 ADK(`SetWorkspace` 루트=에이전트 ADK) · 조직 자리(`agents/<이름>/`) 환경변수 키 주입 · 업무 장부 분리 · 설정 우선순위 · 채널·담당 표 생성기(`channel-roles-gen.mjs`)** | [`discord-channel-roles-and-org-adk.md`](discord-channel-roles-and-org-adk.md) | [`../schemas/adk-manifest.schema.json`](../schemas/adk-manifest.schema.json), [`../schemas/channels.schema.json`](../schemas/channels.schema.json), [`../scripts/channel-roles-gen.mjs`](../scripts/channel-roles-gen.mjs), [`../scripts/adk-link.mjs`](../scripts/adk-link.mjs), [`../templates/org-channels/`](../templates/org-channels/) |
 
