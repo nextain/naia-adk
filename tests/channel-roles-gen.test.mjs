@@ -53,7 +53,7 @@ test('1. schemas/channels.schema.json, templates/org-channels/*, and codesign v0
   const parsedExample = parseChannelsYaml(exampleYaml, 'channels.example.yaml');
   assert.equal(parsedExample.schemaVersion, 1);
   assert.equal(parsedExample.company, 'nextain');
-  assert.deepEqual(parsedExample.roles, ['minho', 'jina', 'alpha', 'naia']);
+  assert.deepEqual(parsedExample.roles, ['coordinator', 'ops', 'reviewer', 'assistant']);
   assert.equal(parsedExample.servers.length, 2);
 
   const manifestSchema = JSON.parse(fs.readFileSync(path.join(naiaAdkRoot, 'schemas', 'adk-manifest.schema.json'), 'utf8'));
@@ -85,34 +85,34 @@ test('2. Multi-company (nextain + onmam), multi-server (internal + customer guil
     [
       'schemaVersion: 1',
       'company: nextain',
-      'roles: [minho, jina, alpha, naia]',
+      'roles: [coordinator, ops, reviewer, assistant]',
       'servers:',
       '  - key: internal',
       '    channels:',
       '      - key: studio',
       '        name: 나이아-스튜디오',
-      '        wakeRoles: [minho, jina, alpha, naia]',
-      '        primaryRole: minho',
+      '        wakeRoles: [coordinator, ops, reviewer, assistant]',
+      '        primaryRole: coordinator',
       '        outsideCall: mention-or-name',
-      '        description: 나이아 스튜디오 개발. 주 담당 민호.',
+      '        description: 나이아 스튜디오 개발. 주 담당 coordinator.',
       '      - key: infra',
       '        name: 나이아-인프라',
-      '        wakeRoles: [minho]',
-      '        primaryRole: minho',
+      '        wakeRoles: [coordinator]',
+      '        primaryRole: coordinator',
       '        outsideCall: mention',
       '        description: 서버·기기·배포.',
       '      - key: legacy-moved',
       '        name: 옛-고객채널',
-      '        wakeRoles: [minho, alpha]',
-      '        primaryRole: minho',
+      '        wakeRoles: [coordinator, reviewer]',
+      '        primaryRole: coordinator',
       '        outsideCall: mention',
       '        archived: true',
       '  - key: customer',
       '    channels:',
       '      - key: support',
       '        name: 고객지원',
-      '        wakeRoles: [minho, jina]',
-      '        primaryRole: jina',
+      '        wakeRoles: [coordinator, ops]',
+      '        primaryRole: ops',
       '        outsideCall: mention-or-name',
     ].join('\n') + '\n',
     'utf8',
@@ -123,14 +123,14 @@ test('2. Multi-company (nextain + onmam), multi-server (internal + customer guil
     [
       'schemaVersion: 1',
       'company: onmam',
-      'roles: [minho, alpha]',
+      'roles: [coordinator, reviewer]',
       'servers:',
       '  - key: main',
       '    channels:',
       '      - key: onmam-dev',
       '        name: 온맘-개발',
-      '        wakeRoles: [minho, alpha]',
-      '        primaryRole: minho',
+      '        wakeRoles: [coordinator, reviewer]',
+      '        primaryRole: coordinator',
       '        outsideCall: mention-or-name',
       '        description: 온맘닷컴 개발 채널.',
     ].join('\n') + '\n',
@@ -165,7 +165,7 @@ test('2. Multi-company (nextain + onmam), multi-server (internal + customer guil
         },
       },
       allowedUserIds: ['9000000000000000001'],
-      readerInstance: 'minho',
+      readerInstance: 'coordinator',
       teamMessengerChannelId: '3000000000000000001',
     }, null, 2),
     'utf8',
@@ -181,7 +181,7 @@ test('2. Multi-company (nextain + onmam), multi-server (internal + customer guil
     operatorActions: true,
     historyVisibility: 'shared',
   };
-  seedRoleInstances(tmpDir, ['minho', 'jina', 'alpha', 'naia'], manualBinding);
+  seedRoleInstances(tmpDir, ['coordinator', 'ops', 'reviewer', 'assistant'], manualBinding);
 
   const watchPath = path.join(tmpDir, 'discord-watch.json');
   fs.writeFileSync(
@@ -223,14 +223,14 @@ test('2. Multi-company (nextain + onmam), multi-server (internal + customer guil
   assert.equal(generatedTargets.length, 3);
   assert.equal(generatedTargets.some((x) => x.channelId === '2000000000000000003'), false);
 
-  const minhoCfg = JSON.parse(fs.readFileSync(path.join(tmpDir, 'instances', 'minho', 'config.json'), 'utf8'));
-  assert.equal(minhoCfg.discord.bindings.length, 5);
-  assert.equal(minhoCfg.discord.bindings[0].generatedBy, undefined);
-  const archivedBinding = minhoCfg.discord.bindings.find((b) => b.channelId === '2000000000000000003');
+  const coordinatorCfg = JSON.parse(fs.readFileSync(path.join(tmpDir, 'instances', 'coordinator', 'config.json'), 'utf8'));
+  assert.equal(coordinatorCfg.discord.bindings.length, 5);
+  assert.equal(coordinatorCfg.discord.bindings[0].generatedBy, undefined);
+  const archivedBinding = coordinatorCfg.discord.bindings.find((b) => b.channelId === '2000000000000000003');
   assert.ok(archivedBinding && archivedBinding.operatorActions === false && archivedBinding.readOnly === true && archivedBinding.archived === true);
 
-  const jinaCfg = JSON.parse(fs.readFileSync(path.join(tmpDir, 'instances', 'jina', 'config.json'), 'utf8'));
-  assert.equal(jinaCfg.discord.bindings.length, 2);
+  const opsCfg = JSON.parse(fs.readFileSync(path.join(tmpDir, 'instances', 'ops', 'config.json'), 'utf8'));
+  assert.equal(opsCfg.discord.bindings.length, 2);
 
   assert.ok(fs.readdirSync(tmpDir).some((f) => f.startsWith('discord-watch.json.bak-')));
   const mdText = fs.readFileSync(path.join(tmpDir, 'channels-and-wake.md'), 'utf8');
@@ -250,13 +250,13 @@ test('3. All 7 deterministic rejection rules exit with non-zero and write zero f
       onmam: { servers: { main: { guildId: '1000000000000000002', channels: { dev: '2000000000000000009' } } } },
     },
     allowedUserIds: ['9000000000000000001'],
-    readerInstance: 'minho',
+    readerInstance: 'coordinator',
     teamMessengerChannelId: '3000000000000000001',
   };
 
   // Rejection 1: wakeRoles contains unknown role
   const r1 = generateChannelRolesArtifacts({
-    tables: [makeTable('nextain', ['minho', 'jina'], [{ key: 'studio', name: '스튜디오', wakeRoles: ['minho', 'ghost'], primaryRole: 'minho' }])],
+    tables: [makeTable('nextain', ['coordinator', 'ops'], [{ key: 'studio', name: '스튜디오', wakeRoles: ['coordinator', 'ghost'], primaryRole: 'coordinator' }])],
     channelIds: baseIds,
   });
   assert.equal(r1.ok, false);
@@ -264,7 +264,7 @@ test('3. All 7 deterministic rejection rules exit with non-zero and write zero f
 
   // Rejection 2: primaryRole not in wakeRoles OR invalid outsideCall
   const r2 = generateChannelRolesArtifacts({
-    tables: [makeTable('nextain', ['minho', 'jina'], [{ key: 'studio', name: '스튜디오', wakeRoles: ['minho'], primaryRole: 'jina', outsideCall: 'always' }])],
+    tables: [makeTable('nextain', ['coordinator', 'ops'], [{ key: 'studio', name: '스튜디오', wakeRoles: ['coordinator'], primaryRole: 'ops', outsideCall: 'always' }])],
     channelIds: baseIds,
   });
   assert.equal(r2.ok, false);
@@ -272,10 +272,10 @@ test('3. All 7 deterministic rejection rules exit with non-zero and write zero f
 
   // Rejection 3: Duplicate channel key in company OR missing channel ID in channel-ids.json
   const r3 = generateChannelRolesArtifacts({
-    tables: [makeTable('nextain', ['minho'], [
-      { key: 'studio', name: '스튜디오', wakeRoles: ['minho'], primaryRole: 'minho' },
-      { key: 'studio', name: '스튜디오2', wakeRoles: ['minho'], primaryRole: 'minho' },
-      { key: 'unmapped', name: '미매핑', wakeRoles: ['minho'], primaryRole: 'minho' },
+    tables: [makeTable('nextain', ['coordinator'], [
+      { key: 'studio', name: '스튜디오', wakeRoles: ['coordinator'], primaryRole: 'coordinator' },
+      { key: 'studio', name: '스튜디오2', wakeRoles: ['coordinator'], primaryRole: 'coordinator' },
+      { key: 'unmapped', name: '미매핑', wakeRoles: ['coordinator'], primaryRole: 'coordinator' },
     ])],
     channelIds: baseIds,
   });
@@ -287,8 +287,8 @@ test('3. All 7 deterministic rejection rules exit with non-zero and write zero f
   dupIds.companies.onmam.servers.main.channels.dev = '2000000000000000001';
   const r4 = generateChannelRolesArtifacts({
     tables: [
-      makeTable('nextain', ['minho'], [{ key: 'studio', name: '스튜디오', wakeRoles: ['minho'], primaryRole: 'minho' }]),
-      makeTable('onmam', ['minho'], [{ key: 'dev', name: '온맘개발', wakeRoles: ['minho'], primaryRole: 'minho' }], 'main'),
+      makeTable('nextain', ['coordinator'], [{ key: 'studio', name: '스튜디오', wakeRoles: ['coordinator'], primaryRole: 'coordinator' }]),
+      makeTable('onmam', ['coordinator'], [{ key: 'dev', name: '온맘개발', wakeRoles: ['coordinator'], primaryRole: 'coordinator' }], 'main'),
     ],
     channelIds: dupIds,
   });
@@ -299,7 +299,7 @@ test('3. All 7 deterministic rejection rules exit with non-zero and write zero f
   const teamCollisionIds = structuredClone(baseIds);
   teamCollisionIds.companies.nextain.servers.internal.channels.studio = '3000000000000000001';
   const r5 = generateChannelRolesArtifacts({
-    tables: [makeTable('nextain', ['minho'], [{ key: 'studio', name: '사내공지충돌', wakeRoles: ['minho'], primaryRole: 'minho' }])],
+    tables: [makeTable('nextain', ['coordinator'], [{ key: 'studio', name: '사내공지충돌', wakeRoles: ['coordinator'], primaryRole: 'coordinator' }])],
     channelIds: teamCollisionIds,
   });
   assert.equal(r5.ok, false);
@@ -312,7 +312,7 @@ test('3. All 7 deterministic rejection rules exit with non-zero and write zero f
   const idsFilePath = path.join(emptyOutDir, 'channel-ids.json');
   fs.writeFileSync(
     tablePath,
-    'schemaVersion: 1\ncompany: nextain\nroles: [minho]\nservers:\n  - key: internal\n    channels:\n      - key: studio\n        name: 스튜디오\n        wakeRoles: [minho]\n        primaryRole: minho\n',
+    'schemaVersion: 1\ncompany: nextain\nroles: [coordinator]\nservers:\n  - key: internal\n    channels:\n      - key: studio\n        name: 스튜디오\n        wakeRoles: [coordinator]\n        primaryRole: coordinator\n',
     'utf8',
   );
   fs.writeFileSync(idsFilePath, JSON.stringify(baseIds, null, 2), 'utf8');
@@ -325,7 +325,7 @@ test('3. All 7 deterministic rejection rules exit with non-zero and write zero f
   const badWatchIds = structuredClone(baseIds);
   badWatchIds.readerInstance = '';
   const r7 = generateChannelRolesArtifacts({
-    tables: [makeTable('nextain', ['minho'], [{ key: 'studio', name: '스튜디오', wakeRoles: ['minho'], primaryRole: 'minho' }])],
+    tables: [makeTable('nextain', ['coordinator'], [{ key: 'studio', name: '스튜디오', wakeRoles: ['coordinator'], primaryRole: 'coordinator' }])],
     channelIds: badWatchIds,
   });
   assert.equal(r7.ok, false);
@@ -334,9 +334,9 @@ test('3. All 7 deterministic rejection rules exit with non-zero and write zero f
   const directErrs = validateGeneratedWatchConfig({
     targets: [{
       name: 'broken', kind: 'channel', guildId: '1000000000000000001', channelId: '2000000000000000001',
-      wakeRoles: ['minho'], primaryRole: 'minho', outsideCall: 'mention', includeThreads: false,
-      readerInstance: 'minho', generatedBy: 'channel-roles',
+      wakeRoles: ['coordinator'], primaryRole: 'coordinator', outsideCall: 'mention', includeThreads: false,
+      readerInstance: 'coordinator', generatedBy: 'channel-roles',
     }],
-  }, new Set(['minho']));
+  }, new Set(['coordinator']));
   assert.ok(directErrs.some((e) => e.includes('[검사 7]')));
 });

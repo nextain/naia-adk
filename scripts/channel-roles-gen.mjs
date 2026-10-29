@@ -3,7 +3,7 @@
  * Naia ADK v0.2.0 — Organization Channel & Role Table Generator (channel-roles-gen.mjs)
  *
  * Usage:
- *   node projects/naia-adk/scripts/channel-roles-gen.mjs \
+ *   node scripts/channel-roles-gen.mjs \
  *     --table <channels.yaml>... --ids <channel-ids.json> [--out-dir <dir>] [--write] [--init-instances]
  */
 import fs from 'node:fs';

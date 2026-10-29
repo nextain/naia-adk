@@ -60,6 +60,8 @@ company documents and the collaboration board in one place, and
 `pnpm adk:setup -- --company <repo-url>` sets up company docs and project
 repositories in one step. For setup and usage details, see the
 [Onboarding Guide (Korean)](docs/guides/onboarding.ko.md).
+See the [development documentation writing guide](docs/guides/dev-docs-writing.md)
+for documenting architecture, contracts, and implementation evidence.
 The API exposes workspace metadata (`/api/workspace`), the skill catalog
 (`/api/skills`), the company docs portal (`/api/portal`), and a WebSocket that
 streams file-change events (`/api/ws`). Thanks to this API, programs other than the
@@ -221,10 +223,10 @@ rules, and delegated approval chains belong to a higher layer. What it does give
 you is a single place to write down context discipline before the workspace grows
 to team or company scale.
 
-When you need team collaboration and shared knowledge, extend to
-[Naia Business ADK](https://nextain.io/adk). That extension widens the baseline
-into asset, process, and permission governance, and adds team ownership and
-delegated approvals.
+For team collaboration and shared knowledge, you can choose the optional
+organization-family lineage represented by
+[Naia Business ADK](https://nextain.io/adk). It adds asset, process, and
+permission governance, team ownership, and delegated approvals.
 
 ### Fork lineages
 

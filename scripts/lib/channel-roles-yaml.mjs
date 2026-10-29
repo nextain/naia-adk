@@ -3,10 +3,10 @@
  */
 
 const ROLE_DISPLAY_NAMES = {
-  minho: '민호',
-  jina: '지나',
-  alpha: '알파',
-  naia: '나이아',
+  coordinator: '조정 담당',
+  ops: '운영 담당',
+  reviewer: '검토 담당',
+  assistant: '보조 담당',
 };
 
 export function stripYamlComment(line) {

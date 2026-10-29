@@ -24,6 +24,6 @@
   "allowedUserIds": [
     "9000000000000000001"
   ],
-  "readerInstance": "minho",
+  "readerInstance": "coordinator",
   "teamMessengerChannelId": "3000000000000000001"
 }
