@@ -60,6 +60,7 @@
     "no_korean_in_agents": "Use concise English for machine-facing .agents/ files by default. Korean is allowed when a user explicitly requests it, when preserving a Korean user-facing trigger/example is necessary, or when localized human-facing text is part of the contract; machine JSON/YAML keys remain stable.",
     "concise_session_output": "AI responses should be extremely brief (less than 3 lines) to minimize history weight. Avoid long Korean preambles."
   },
+  "document_size_refactoring": "Review oversized documents and archive eligible historical sections with the configurable procedure in docs/guides/doc-size-refactor.md.",
   "conventions": {
     "response_language": "Korean (한국어로 응답)",
     "development_approach": "Issue-driven development (default). TDD where applicable.",
