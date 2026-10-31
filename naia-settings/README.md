@@ -16,6 +16,10 @@ Shell versions that select it by default.
 `bgm-musics/naia-radio-its-okay-to-turn-off-the-light-en.mp3` is “It's Okay to
 Turn Off the Light” (English version), from Naia Radio by Nextain.
 
+The default set is kept small: two VRM avatars (`vrm-files/`, one woman and one
+man), three NVA avatars (`nva-files/`: naia, jina, minho), and two music tracks
+(`bgm-musics/`: Afternoon Whispers and the Naia Radio track above).
+
 ## `messenger-sessions/` — Discord AI session configuration
 
 Tracked example:
