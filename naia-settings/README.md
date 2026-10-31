@@ -7,6 +7,15 @@ location consumed by `naia-agent`.
 provider-neutral Discord session skill. That skill does not require
 `naia-agent` or `naia-shell`.
 
+## Desktop media
+
+`background/` includes Sunrise River and Sky Garden stills, and Autumn Office,
+Starlight Lake, and Rainy Studio videos. The Dawn City still remains for older
+Shell versions that select it by default.
+
+`bgm-musics/naia-radio-its-okay-to-turn-off-the-light-en.mp3` is “It's Okay to
+Turn Off the Light” (English version), from Naia Radio by Nextain.
+
 ## `messenger-sessions/` — Discord AI session configuration
 
 Tracked example:
