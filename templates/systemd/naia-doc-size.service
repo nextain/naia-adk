@@ -1,0 +1,11 @@
+[Unit]
+Description=Refactor oversized workspace documents
+
+[Service]
+Type=oneshot
+# Replace both paths with absolute paths for this workspace and Node executable.
+Environment=DOC_SIZE_ROOT=/path/to/workspace
+Environment=TMPDIR=/path/to/writable/temp
+ExecStart=/path/to/node /path/to/workspace/scripts/doc-size-refactor.mjs
+NoNewPrivileges=yes
+PrivateTmp=yes
