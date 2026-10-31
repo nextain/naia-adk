@@ -155,3 +155,5 @@
 - **public_repository_release_gate**: Before any public push, visibility change, or public-template publication, review the whole tree and reachable history for secrets, personal data, and private names, record the evidence, and get the repository owner's explicit approval of that exact reviewed commit (any later change voids it). A leak is handled by revoking credentials first; a cleanup commit never closes it. Full scope, evidence, incident response, and the deterministic remote-identity gate are in the detail file.
 - **reference_submodules**: Read-only upstream reference repositories (ref-*) used for architecture and pattern research.
 - **skills**: Mandatory skills: /read-doc for .hwp/.hwpx/.pdf/.docx/.xlsx/.pptx (never say a file type cannot be read); /webapp-testing for local web UI verification (never ask the user to test manually); /doc-coauthoring before a spec, proposal, RFC, design doc, PRD, or decision record.
+
+- **document_size_refactoring**: 크기가 커진 문서는 `docs/guides/doc-size-refactor.md` 절차에 따라 오래된 기록을 정리한다.

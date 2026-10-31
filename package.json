@@ -18,7 +18,7 @@
     "dev:dashboard": "pnpm --filter @naia-adk/dashboard dev",
     "serve": "tsx packages/server/src/cli.ts serve",
     "build": "pnpm -r build",
-    "test": "pnpm -r test && node --test scripts/adk-setup.test.mjs scripts/adk-board.test.mjs",
+    "test": "pnpm -r test && node --test scripts/adk-setup.test.mjs scripts/adk-board.test.mjs scripts/doc-size-refactor.test.mjs",
     "adk:setup": "node scripts/adk-setup.mjs",
     "test:adk-v020": "node --test tests/adk-v020.test.mjs",
     "test:adk-v200": "node --test tests/adk-v200.test.mjs",

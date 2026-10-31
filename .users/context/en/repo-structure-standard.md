@@ -174,3 +174,5 @@ naia-adk defaults (this file)
 ```
 
 ---
+
+Oversized documents can be reviewed and archived using the configurable procedure in `docs/guides/doc-size-refactor.md`.
