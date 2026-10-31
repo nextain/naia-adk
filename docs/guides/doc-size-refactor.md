@@ -1,6 +1,6 @@
 # Refactoring oversized documents
 
-`scripts/doc-size-refactor.mjs` moves eligible historical Markdown sections into monthly archives without rewriting their lines. Inspect candidates with `node scripts/doc-size-refactor.mjs --dry-run` before enabling automation. A normal run processes up to five documents; `--limit 1` through `--limit 5` and `--path <repository-relative-path>` narrow the run. Successful changes are committed using a temporary Git index and pushed to the current branch. A failed push leaves the commit locally. The shared index is preserved and can consequently differ from the new HEAD.
+`scripts/doc-size-refactor.mjs` moves eligible historical Markdown sections into monthly archives without rewriting their lines. Inspect candidates with `node scripts/doc-size-refactor.mjs --dry-run` before enabling automation. A normal run processes up to five documents; `--limit 1` through `--limit 5` and `--path <repository-relative-path>` narrow the run. Successful changes are committed using a temporary Git index and pushed to the current branch. A failed push leaves the commit locally; the next run does not retry that push automatically, so push the branch explicitly before rerunning. The shared index is preserved and can consequently differ from the new HEAD.
 
 Configuration is through environment variables:
 
