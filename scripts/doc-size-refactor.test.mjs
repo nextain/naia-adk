@@ -8,6 +8,51 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const script = fileURLToPath(new URL('./doc-size-refactor.mjs', import.meta.url));
+test('dry-run discovers default boundaries and configured targets without mutations or model calls', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-size-discovery-'));
+  t.after(() => fs.rmSync(dir, {recursive:true, force:true}));
+  const root = path.join(dir, 'repo'); fs.mkdirSync(root);
+  const git = (...args) => {
+    const r = spawnSync('git', args, {cwd:root, encoding:'utf8', env:{...process.env, GIT_AUTHOR_NAME:'Test', GIT_AUTHOR_EMAIL:'test@example.test', GIT_COMMITTER_NAME:'Test', GIT_COMMITTER_EMAIL:'test@example.test'}});
+    assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
+  };
+  git('init', '-b', 'test');
+  const files = {
+    'docs/bytes-at.md':'x'.repeat(102400),
+    'docs/bytes-over.md':'x'.repeat(102401),
+    'docs/lines-at.md':'x\n'.repeat(2000),
+    'docs/lines-over.md':'x\n'.repeat(2001),
+    'docs/archive/large.md':'x'.repeat(102401),
+    'docs/large.txt':'x'.repeat(102401),
+    '.agents/progress/x/progress.md':'x'.repeat(102401),
+  };
+  for (const [rel, data] of Object.entries(files)) {
+    const file = path.join(root, rel); fs.mkdirSync(path.dirname(file), {recursive:true}); fs.writeFileSync(file, data);
+  }
+  fs.symlinkSync('bytes-over.md', path.join(root, 'docs/link.md'));
+  fs.symlinkSync('../.agents/progress/x', path.join(root, 'docs/linked-dir'));
+  const marker = path.join(root, 'model-called'), model = path.join(root, 'fake-model');
+  fs.writeFileSync(model, `#!/usr/bin/env node\nrequire('fs').writeFileSync(${JSON.stringify(marker)}, 'called'); process.exit(1);\n`, {mode:0o755});
+  git('add', 'docs', '.agents/progress'); git('commit', '-m', 'fixture');
+  const head = git('rev-parse', 'HEAD'), status = git('status', '--porcelain=v1');
+  const snapshots = Object.keys(files).map(rel => ({rel, data:fs.readFileSync(path.join(root,rel)), ino:fs.statSync(path.join(root,rel)).ino}));
+  const env = {...process.env, DOC_SIZE_ROOT:root, TMPDIR:dir, DOC_SIZE_CODEX:model};
+  delete env.DOC_SIZE_TARGETS; delete env.DOC_SIZE_MAX_BYTES; delete env.DOC_SIZE_MAX_LINES;
+  const run = extra => {
+    const r = spawnSync(process.execPath, [script, '--dry-run'], {cwd:root, env:{...env,...extra}, encoding:'utf8'});
+    assert.equal(r.status, 0, r.stderr); assert.equal(fs.existsSync(marker), false);
+    return r.stdout.trim().split('\n').filter(Boolean).map(line => line.split('\t')[0]);
+  };
+  assert.deepEqual(run({}), ['docs/bytes-over.md', 'docs/lines-over.md']);
+  assert.deepEqual(run({DOC_SIZE_TARGETS:JSON.stringify(['docs', '.agents/progress'])}), ['.agents/progress/x/progress.md', 'docs/bytes-over.md', 'docs/lines-over.md']);
+  for (const {rel, data, ino} of snapshots) {
+    assert.deepEqual(fs.readFileSync(path.join(root,rel)), data, rel);
+    assert.equal(fs.statSync(path.join(root,rel)).ino, ino, rel);
+  }
+  assert.equal(git('rev-parse', 'HEAD'), head);
+  assert.equal(git('status', '--porcelain=v1'), status);
+});
+
 test('candidate selection, path guard and preservation', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-size-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
