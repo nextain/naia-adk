@@ -1,5 +1,5 @@
 import { DEFAULT_SERVICE_STALE_MS, TERMINAL_LIFECYCLES } from "./constants.mjs";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { trustedWindowsSystemExecutable } from "./platform-security.mjs";
 
@@ -71,7 +71,12 @@ export function readProcessStartIdentity(pid) {
 	}
 }
 
-export function observeOwnedProcess({ pid, bootId, processStartIdentity }) {
+export function readProcessWorkingDirectory(pid) {
+	if (!Number.isInteger(pid) || pid <= 0 || process.platform !== "linux") return null;
+	try { return realpathSync(`/proc/${pid}/cwd`); } catch { return null; }
+}
+
+export function observeOwnedProcess({ pid, bootId, processStartIdentity, workingDirectory = null }) {
 	const alive = processAlive(pid);
 	if (alive === false) return { state: "missing", processAlive: false, reasonCode: "process_missing" };
 	if (alive === null) return { state: "unknown", processAlive: null, reasonCode: "process_unobservable" };
@@ -82,6 +87,11 @@ export function observeOwnedProcess({ pid, bootId, processStartIdentity }) {
 	}
 	if (bootId !== currentBootId || processStartIdentity !== currentStartIdentity) {
 		return { state: "conflict", processAlive: true, reasonCode: "ownership_conflict" };
+	}
+	if (workingDirectory !== null) {
+		const observed = readProcessWorkingDirectory(pid);
+		if (observed === null) return { state: "unknown", processAlive: true, reasonCode: "process_cwd_unobservable" };
+		if (observed !== workingDirectory) return { state: "conflict", processAlive: true, reasonCode: "process_cwd_conflict" };
 	}
 	return { state: "owned", processAlive: true, reasonCode: "owned_process_observed" };
 }
@@ -99,7 +109,7 @@ export function projectServiceHealth(service, nowMs, staleAfterMs = DEFAULT_SERV
 
 	const heartbeatMs = parseTime(service.heartbeat_at);
 	const heartbeatAgeMs = heartbeatMs === null ? null : nowMs - heartbeatMs;
-	const ownership = observeOwnedProcess({ pid: service.pid, bootId: service.boot_id, processStartIdentity: service.process_start_identity });
+	const ownership = observeOwnedProcess({ pid: service.pid, bootId: service.boot_id, processStartIdentity: service.process_start_identity, workingDirectory: service.process_cwd ?? null });
 	let state = "running";
 	let reasonCode = "heartbeat_fresh_process_alive";
 
@@ -111,7 +121,7 @@ export function projectServiceHealth(service, nowMs, staleAfterMs = DEFAULT_SERV
 		reasonCode = "service_process_missing";
 	} else if (ownership.state === "conflict") {
 		state = "degraded";
-		reasonCode = "ownership_conflict";
+		reasonCode = ownership.reasonCode;
 	} else if (ownership.state === "unknown") {
 		state = "unknown";
 		reasonCode = ownership.reasonCode;

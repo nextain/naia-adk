@@ -24,6 +24,8 @@ export function messengerInstancePaths(adkRoot, value = "default") {
 		runtimeRoot: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/runtime`),
 		lockPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/service.lock`),
 		stopRequestPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/stop-request.json`),
+		wakeDirectory: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/wake`),
+		wakeSeenPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/wake-seen.json`),
 		jobControlRequestPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/job-control-request.json`),
 		jobControlReceiptPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/job-control-receipt.json`),
 		supervisorStatusPath: resolve(root, `naia-settings/.sessions/messenger-sessions${instanceSuffix}/supervisor-status.json`),

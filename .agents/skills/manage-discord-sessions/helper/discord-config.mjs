@@ -117,7 +117,7 @@ export function loadMessengerConfig(path) {
 		[config.persona, ["name", "instructions"], "persona"],
 		[config.role, ["name", "allowedActions", "requiresApproval"], "role"],
 		[config.backend, ["selected", "profiles"], "backend"],
-		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent", "participantProfiles", "proactiveDmRecipientUserId"], "discord"],
+		[config.discord, ["credentialRef", "botUserId", "operatorUserIds", "bindings", "messageContentIntent", "participantProfiles", "proactiveDmRecipientUserId", "unansweredDigest", "teamBotUserIds"], "discord"],
 		[config.runtime ?? {}, ["softSilenceSeconds", "heartbeatSeconds", "maxConcurrentJobs", "approvalPolicy", "permissionProfileEpoch", "noProgressInterventionSeconds", "operatorResponseSeconds", "networkAccess", "credentialProfiles", "accessProfile"], "runtime"],
 		[config.observability ?? {}, ["discordStatusProjection"], "observability"],
 		[config.service ?? {}, ["autoStart", "startAt"], "service"],
@@ -169,6 +169,13 @@ export function loadMessengerConfig(path) {
 			throw new Error("proactive DM recipient must be one of the configured operators");
 		}
 	}
+	if (config.discord.unansweredDigest !== undefined && typeof config.discord.unansweredDigest !== "boolean") throw new Error("unansweredDigest must be boolean");
+	if (config.discord.teamBotUserIds !== undefined) {
+		if (!Array.isArray(config.discord.teamBotUserIds) || config.discord.teamBotUserIds.length > 100) throw new Error("teamBotUserIds must be an array of at most 100 IDs");
+		config.discord.teamBotUserIds.forEach((value) => snowflake(value, "team bot Discord ID"));
+		config.discord.teamBotUserIds = [...new Set(config.discord.teamBotUserIds)];
+	}
+	if (config.discord.unansweredDigest === true && !config.discord.proactiveDmRecipientUserId) throw new Error("unansweredDigest requires a proactive DM recipient");
 	config.discord.bindings = validateDiscordBindings(config.discord.bindings, { messageContentIntent: config.discord.messageContentIntent === true, schemaVersion: config.schemaVersion });
 	if (config.agentProfiles) {
 		for (const binding of config.discord.bindings) if (!config.agentProfiles[binding.agentProfileId]) throw new Error("Discord binding references an unknown agent profile");

@@ -508,6 +508,17 @@ into a request now says so in the channel instead of disappearing.
 - AI children must not inherit Discord or service-only credentials.
 - If service evidence is stale, say stale or unknown. Never repeat the last `running` value as current truth.
 
+## Routed wake requests
+
+The existing Gateway service also polls its instance's `wake/` inbox through
+the control timer. It persists a filename/content cursor, skips source channels
+already watched by the Gateway, and reuses operator submission authorization
+and SQLite ingress deduplication. Optional unanswered-request summaries expire
+after two hours and recognize configured team bot responses. Linux health
+projection checks the recorded process cwd with boot/start ownership evidence.
+See `docs/guides/discord-wake-wait.md` for scenarios, requirements, tests,
+the owner-only relay envelope, configuration, and platform boundaries.
+
 ## Verification
 
 Run:
