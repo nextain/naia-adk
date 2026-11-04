@@ -34,3 +34,35 @@ schedules:
       at: null
       outcome: not-run
       evidence: null
+  - id: weekly-security-review
+    role: "<security-role>"
+    task: "Review security findings and remediation status"
+    cadence: "weekly:MON"
+    time: "09:00"
+    graceMinutes: 15
+    status: 제안
+    mechanism:
+      kind: timer
+      target: "<reviewed-local-command-mapping>"
+      timer: null
+    approval: null
+    last_result:
+      at: null
+      outcome: not-run
+      evidence: null
+  - id: daily-security-advisory
+    role: "<security-role>"
+    task: "Receive security advisories and match local assets"
+    cadence: "daily"
+    time: "09:15"
+    graceMinutes: 15
+    status: 제안
+    mechanism:
+      kind: timer
+      target: "<reviewed-local-command-mapping>"
+      timer: null
+    approval: null
+    last_result:
+      at: null
+      outcome: not-run
+      evidence: null
