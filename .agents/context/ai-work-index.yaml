@@ -1,6 +1,11 @@
 # Copyright 2026 Nextain Inc. All rights reserved.
 version: 1
 categories:
+  - name: "wake-reliability"
+    keywords: ["wake", "response-watch", "session-health", "unanswered", "regular-schedule"]
+    quick_ref: "Start with docs/guides/wake-completion-contract.md and server-wake-onboarding.md; use a work document, instance configuration and evidence-based acceptance."
+    skill: "manage-discord-sessions"
+    workflows: []
   - name: "workspace-start"
     keywords: ["시작", "시작하자", "설정", "온보딩", "대시보드", "최신", "start", "setup", "onboarding", "dashboard"]
     quick_ref: "People talk to the AI and never run setup commands. On the session's first work request, run workspace-start: company link, --pull, start dashboard, give the address."

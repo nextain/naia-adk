@@ -7,6 +7,16 @@ description: Configure, observe, and recover Discord AI jobs from the ADK worksp
 
 Use this skill as the shared Codex, Claude, OpenCode, and Grok operator surface. Do not create a separate product CLI. The deterministic script below reads durable state without launching another AI or requiring `naia-agent` or `naia-shell`.
 
+## Wake completion and human-response observation
+
+Use [the common completion contract](../../../docs/guides/wake-completion-contract.md)
+and [server acceptance procedure](../../../docs/guides/server-wake-onboarding.md).
+The separate [response observer](../../../docs/guides/response-watch.md) watches
+human requests at configurable 10/30-minute thresholds above Gateway admission,
+30-second ACK and 120-second intervention. It never replaces those job controls
+or injects jobs. Keep [regular schedules](../../../docs/guides/regular-schedule-ledger.md)
+in an instance ledger; proposed rows stay off.
+
 ## What this provides
 
 The implementation is usable with `naia-adk` alone from Codex, Claude, OpenCode, or Grok:

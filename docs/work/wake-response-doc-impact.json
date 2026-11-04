@@ -1,0 +1,21 @@
+{
+  "work": "wake-response-contract",
+  "repository_docs": {
+    "status": "UPDATED",
+    "paths": ["docs/guides/wake-completion-contract.md", "docs/guides/server-wake-onboarding.md"]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "paths": ["docs/guides/response-watch.md", "docs/guides/regular-schedule-ledger.md"]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "paths": [".agents/skills/manage-discord-sessions/SKILL.md", ".agents/context/skills-index.yaml"]
+  },
+  "source_handling": "Private original retained outside this public tree; generic derived requirements only.",
+  "review": {
+    "same_family_adversarial": "performed; findings corrected and regression-tested",
+    "independent_model_family": "NOT_RUN; no cross-family review receipt is claimed",
+    "public_push_review": "NOT_RUN; publication and remote push are outside this local task"
+  }
+}

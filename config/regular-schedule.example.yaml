@@ -1,0 +1,34 @@
+# Copy to an instance-private regular-schedule.yaml. No timer is enabled by this file.
+version: 1
+timezone: UTC
+schedules:
+  - id: daily-reflection
+    role: "<role>"
+    task: "Write a daily reflection"
+    cadence: daily
+    time: "22:00"
+    status: 제안
+    mechanism:
+      kind: wake
+      target: "<binding-id>"
+      timer: null
+    approval: null
+    last_result:
+      at: null
+      outcome: not-run
+      evidence: null
+  - id: weekly-reading
+    role: "<role>"
+    task: "Review the reading list"
+    cadence: "weekly:MON"
+    time: "18:30"
+    status: 사람
+    mechanism:
+      kind: manual
+      target: "<owner>"
+      timer: null
+    approval: null
+    last_result:
+      at: null
+      outcome: not-run
+      evidence: null
