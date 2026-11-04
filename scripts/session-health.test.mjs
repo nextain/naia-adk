@@ -42,3 +42,106 @@ test('tmux no-server becomes missing; permission failure remains unknown', async
 
 test('permanent commit failure cannot suppress reliable window and task alerts', async () => { const f = await fixture(); f.c.roles[0].workspace = f.dir; await writeFile(f.snapshot, JSON.stringify({ windows: [{ name: 'agent', aiRunning: false, output: '' }] })); await f.run(); await f.run(); assert.ok(f.sent.some(s => s.content.endsWith('empty'))); assert.ok(f.sent.some(s => s.content.endsWith('stalled'))); });
 test('tmux descendant AI is detected behind shell and output is captured', async () => { const f = await fixture(); const bin = join(f.dir, 'bin'); await mkdir(bin); const { chmod } = await import('node:fs/promises'); const tmux = join(bin, 'tmux'), ps = join(bin, 'ps'); await writeFile(tmux, '#!/bin/sh\nif [ "$1" = list-panes ]; then printf "agent\\t100\\n"; else printf "output"; fi\n'); await writeFile(ps, '#!/bin/sh\nprintf "100 1 bash\\n101 100 node\\n102 101 codex\\n103 1 claude\\n"\n'); await chmod(tmux, 0o700); await chmod(ps, 0o700); const before = process.env.PATH; process.env.PATH = `${bin}:${before}`; try { const role = { ...f.c.roles[0], adapter: { kind: 'tmux' } }; assert.deepEqual(await collectWindow(role), { aiRunning: true, output: 'output' }); role.aiPrograms = ['unrelated']; assert.equal((await collectWindow(role)).aiRunning, false); } finally { process.env.PATH = before; } });
+
+async function ledgerFixture() {
+  const f = await fixture();
+  f.c.roles[0].workFiles = [];
+  f.c.workLedger = join(f.dir, 'work-ledger.yaml');
+  f.c.regularSchedule = join(f.dir, 'regular-schedule.yaml');
+  f.work = { version: 1, work: [
+    { id: 'old', role: 'role-a', task: 'Review draft', status: '진행 중', requested_at: '2029-12-30T09:00:00Z', due_at: null, evidence: 'https://example.invalid/request/1', result: null, updated_at: '2030-01-01T09:00:00Z' },
+    { id: 'other', role: 'role-b', task: 'Other assignment', status: '진행 중', requested_at: '2030-01-01T11:00:00Z', due_at: null, evidence: 'https://example.invalid/request/2', result: null, updated_at: '2030-01-01T12:00:00Z' }
+  ] };
+  f.schedule = { version: 1, timezone: 'UTC', schedules: [
+    { id: 'daily', role: 'role-a', task: 'Write report', cadence: 'daily', time: '11:00', graceMinutes: 15, status: '있음', mechanism: { kind: 'timer', target: '<target>', timer: '<timer>' }, approval: null, last_result: { at: null, outcome: 'not-run', evidence: null } }
+  ] };
+  // JSON is a YAML subset accepted by the ledger reader; exercise block YAML in ledger.test.
+  f.saveLedgers = async () => {
+    await writeFile(f.c.workLedger, JSON.stringify(f.work));
+    await writeFile(f.c.regularSchedule, JSON.stringify(f.schedule));
+  };
+  await f.saveLedgers();
+  return f;
+}
+test('ledger role assignment and stale row ignore fresh unrelated commit/reply/work row', async () => {
+  const f = await ledgerFixture();
+  f.work.work.push({ ...f.work.work[1], id: 'fresh', role: 'role-a', task: 'Fresh assignment' });
+  await f.saveLedgers();
+  f.c.responseWatchState = join(f.dir, 'reply.json');
+  await writeFile(f.c.responseWatchState, JSON.stringify({ replies: { '123': { at: now } } }));
+  const r = await f.run();
+  assert.deepEqual(r.rows[0].tasks, ['old: Review draft', 'fresh: Fresh assignment']);
+  assert.ok(r.rows[0].anomalies.includes('stalled'));
+  assert.match(r.report, /안 돎/);
+  assert.equal(f.sent.length, 0);
+});
+test('work ledger update and completed/waiting/blocked rows clear stall', async () => {
+  const f = await ledgerFixture(); await f.run();
+  f.work.work[0].updated_at = new Date(now).toISOString(); await f.saveLedgers();
+  assert.ok(!(await f.run()).rows[0].anomalies.includes('stalled'));
+  for (const status of ['대기', '막힘', '끝']) {
+    Object.assign(f.work.work[0], { status, result: status === '끝' ? 'https://example.invalid/result/1' : null });
+    await f.saveLedgers(); const r = await f.run();
+    assert.deepEqual(r.rows[0].tasks, []);
+    assert.ok(!r.rows[0].anomalies.includes('stalled'));
+  }
+});
+test('schedule baseline and both alert stages once per occurrence survive restart', async () => {
+  const f = await ledgerFixture(); f.work.work = []; await f.saveLedgers();
+  await f.run(); assert.equal(f.sent.length, 0);
+  await f.run({ now: now + 60000 });
+  const scheduled = () => f.sent.filter(s => s.content.includes('schedule-missed:'));
+  assert.equal(scheduled().length, 1);
+  await f.run({ now: now + 30 * 60000 });
+  assert.equal(scheduled().length, 2);
+  await f.run({ now: now + 60 * 60000 }); assert.equal(scheduled().length, 2);
+  await f.run({ now: now + 24 * 3600000 }); assert.equal(scheduled().length, 3);
+  await f.run({ now: now + 24 * 3600000 + 30 * 60000 }); assert.equal(scheduled().length, 4);
+});
+test('failed execution covers due run and next missed occurrence opens new episode', async () => {
+  const f = await ledgerFixture(); await f.run(); await f.run();
+  f.schedule.schedules[0].last_result = { at: '2030-01-01T11:05:00Z', outcome: 'failed', evidence: null };
+  await f.saveLedgers(); const r = await f.run();
+  assert.equal(r.rows[0].schedules[0].status, 'recorded');
+  assert.ok(!r.rows[0].anomalies.some(x => x.startsWith('schedule-missed:')));
+  await f.run({ now: now + 86400000 });
+  assert.equal(f.sent.filter(s => s.content.includes('schedule-missed:')).length, 2);
+});
+test('unreadable ledgers retain episodes and report unknown; recovered first schedule baseline is silent', async () => {
+  const f = await ledgerFixture(); await f.run();
+  await writeFile(f.c.workLedger, '{bad'); await writeFile(f.c.regularSchedule, '{bad');
+  const r = await f.run(); assert.ok(r.degraded); assert.match(r.report, /regular schedule: unknown/);
+  const state = JSON.parse(await readFile(f.c.stateFile, 'utf8'));
+  assert.ok(state.roles['role-a'].episodes.stalled);
+  assert.ok(Object.keys(state.roles['role-a'].episodes).some(x => x.startsWith('schedule-missed:')));
+  const fresh = await ledgerFixture(); await writeFile(fresh.c.regularSchedule, '{bad'); await fresh.run();
+  await fresh.saveLedgers(); await fresh.run();
+  assert.equal(fresh.sent.filter(s => s.content.includes('schedule-missed:')).length, 0);
+  await fresh.run(); assert.equal(fresh.sent.filter(s => s.content.includes('schedule-missed:')).length, 1);
+});
+test('ledger dry run preserves input/state/report and validates absolute paths', async () => {
+  const f = await ledgerFixture(); await f.run();
+  const paths = [f.c.workLedger, f.c.regularSchedule, f.c.stateFile, f.c.reportFile];
+  const before = await Promise.all(paths.map(p => readFile(p, 'utf8')));
+  await f.run({ dry: true, now: now + 60 * 60000 });
+  assert.deepEqual(await Promise.all(paths.map(p => readFile(p, 'utf8'))), before);
+  assert.equal(f.sent.length, 0);
+  f.c.workLedger = 'relative.yaml'; assert.throws(() => validateConfig(f.c), /absolute ledger/);
+});
+test('first valid work ledger gets its own silent baseline after a read failure', async () => {
+  const f = await ledgerFixture(); f.schedule.schedules = []; await f.saveLedgers();
+  await writeFile(f.c.workLedger, '{bad'); await f.run();
+  await f.saveLedgers(); await f.run();
+  assert.equal(f.sent.filter(s => s.content.endsWith('stalled')).length, 0);
+  await f.run(); assert.equal(f.sent.filter(s => s.content.endsWith('stalled')).length, 1);
+});
+test('multiple roles remain in one contiguous Markdown table with schedule details', async () => {
+  const f = await ledgerFixture();
+  f.c.roles.push({ ...f.c.roles[0], id: 'role-b', botId: '456' });
+  const { report, rows } = await f.run();
+  assert.deepEqual(rows[1].tasks, ['other: Other assignment']);
+  assert.ok(!rows[1].anomalies.includes('stalled'));
+  const lines = report.split('\n'), a = lines.findIndex(line => line.startsWith('| role-a |'));
+  assert.ok(a > 0); assert.ok(lines[a + 1].startsWith('| role-b |'));
+  assert.ok(report.indexOf('role-a regular schedule:') > report.indexOf('| role-b |'));
+});

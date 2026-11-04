@@ -11,7 +11,7 @@ const ENTRY_POINTS = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md'];
 // mirrors, the size cap, and the where-to-write rule in Context Routing.
 const POINTER = '@AGENTS.md\n';
 const MAX_CANONICAL_BYTES = 12000;
-const APPROVED_CANONICAL_SHA256 = 'd9b62cb474b7d5565e6f0e1914db97e606463ac5837fe8670c2ea6ccd997b401';
+const APPROVED_CANONICAL_SHA256 = '4262f6a5b5ac816fc2989bff61ec829503d228b40e129854689b384ec82bcc8e';
 const ALLOWED_H2 = new Set([
   'Repository Index', '저장소 인덱스',
   'Mandatory Reads', '필수 읽기',

@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { readWorkLedger, readScheduleLedger, scheduleStatus } from './lib/ledger.mjs';
 const exec = promisify(execFile);
 const hash = s => createHash('sha256').update(s).digest('hex');
 const command = async (file, args = [], cwd) => (await exec(file, args, { cwd, timeout: 15000, maxBuffer: 4 * 1024 * 1024 })).stdout;
@@ -12,7 +13,7 @@ const git = (cwd, args) => command('git', ['-C', cwd, ...args]);
 const json = async path => JSON.parse(await readFile(path, 'utf8'));
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
 const stamp = value => value == null ? 'unknown' : new Date(value).toISOString();
-const signalFor = code => code === 'drift' ? 'rules' : code === 'stalled' ? 'progress' : 'window';
+const signalFor = (code, config) => code.startsWith('schedule-missed:') ? 'schedule' : code === 'drift' ? 'rules' : code === 'stalled' ? (config.workLedger ? 'ledger' : 'progress') : 'window';
 const cell = value => String(value).replace(/[|\r\n]/g, ' ').replace(/[<>]/g, '');
 async function optionalStat(path) { try { return (await stat(path)).mtimeMs; } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
 
@@ -30,6 +31,7 @@ export function validateConfig(c) {
     if (r.adapter.kind === 'herdr' && (!Array.isArray(r.adapter.command) || !r.adapter.command.length || r.adapter.command.some(x => typeof x !== 'string'))) throw Error('herdr command argv required');
   }
   for (const [key, fallback] of [['idleMinutes', 30], ['staleHours', 2], ['escalateMinutes', 30]]) if (!(Number.isFinite(c[key] ?? fallback) && (c[key] ?? fallback) > 0)) throw Error('positive thresholds required');
+  for (const key of ['workLedger', 'regularSchedule']) if (c[key] != null && !isAbsolute(c[key])) throw Error('absolute ledger path required');
   if (c.responseWatchState && !isAbsolute(c.responseWatchState)) throw Error('absolute response state required');
   if (c.notifications) for (const id of [c.notifications.nudgeChannelId, c.notifications.escalation?.channelId, c.notifications.escalation?.userId, ...c.roles.map(r => r.botId)]) if (!/^\d+$/.test(id ?? '')) throw Error('invalid notification id');
 }
@@ -111,6 +113,21 @@ export async function observeRole(config, role, previous, now, response, windowP
     if (role.sessionLog) { try { compact = compactEvidence(await readFile(role.sessionLog, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
   } catch { errors.push('window/session evidence unavailable'); }
   const evidence = [];
+  let ledgerKnown = !config.workLedger, ledgerTasks = [], schedules = null;
+  if (config.workLedger) {
+    try {
+      ledgerTasks = (await readWorkLedger(config.workLedger, now)).filter(row => row.role === role.id && row.status === '진행 중');
+      tasks.push(...ledgerTasks.map(row => `${row.id}: ${row.task}`));
+      ledgerKnown = true;
+    } catch { errors.push('work ledger unavailable'); }
+  }
+  if (config.regularSchedule) {
+    try {
+      schedules = scheduleStatus(await readScheduleLedger(config.regularSchedule, now), role.id, now);
+      for (const row of schedules) if (row.status === 'missed') anomalies.push(`schedule-missed:${row.occurrence}`);
+    } catch { errors.push('schedule ledger unavailable'); }
+  }
+  const legacyStart = tasks.length;
   for (const path of role.workFiles ?? []) {
     try {
       const text = await readFile(path, 'utf8');
@@ -125,9 +142,14 @@ export async function observeRole(config, role, previous, now, response, windowP
   evidence.push({ source: 'confirmed reply', at: response?.replies?.[role.botId]?.at });
   progressSources = evidence.filter(e => Number.isFinite(e.at) && e.at <= now);
   progress = progressSources.length ? Math.max(...progressSources.map(e => e.at)) : null;
-  if (tasks.length && now - (progress ?? record.firstAt) >= (config.staleHours ?? 2) * 3600000) anomalies.push('stalled');
+  const staleMs = (config.staleHours ?? 2) * 3600000;
+  const ledgerProgress = ledgerTasks.map(row => ({ source: `work ${row.id}`, at: time(row.updated_at) }));
+  if (ledgerTasks.some(row => now - time(row.updated_at) >= staleMs) ||
+      (tasks.length > legacyStart && now - (progress ?? record.firstAt) >= staleMs)) anomalies.push('stalled');
+  progressSources.push(...ledgerProgress);
+  progress = progressSources.length ? Math.max(...progressSources.map(e => e.at)) : null;
   try { rules = await compareRules(config, role); if (rules.status === 'drift') anomalies.push('drift'); } catch { errors.push('rule evidence unavailable'); }
-  return { record, role: role.id, alive, compact, tasks, progress, progressSources, rules, anomalies, errors };
+  return { record, role: role.id, alive, compact, tasks, progress, progressSources, rules, anomalies, errors, ledgerKnown, schedules };
 }
 
 const atomic = async (path, text) => { await mkdir(dirname(path), { recursive: true, mode: 0o700 }); const tmp = `${path}.${process.pid}.tmp`; await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, path); };
@@ -152,14 +174,14 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
       if (responseError) result.errors.push('response evidence unavailable');
       rows.push(result); degraded ||= !!result.errors.length || !!result.anomalies.length;
       const rec = result.record; state.roles[role.id] = rec;
-      const observed = { window: result.alive !== 'unknown', progress: result.progressSources.length > 0, rules: result.rules.status !== 'unknown' };
+      const observed = { ledger: Boolean(config.workLedger) && result.ledgerKnown, window: result.alive !== 'unknown', progress: result.progressSources.length > 0 || (Boolean(config.workLedger) && result.ledgerKnown), schedule: result.schedules !== null, rules: result.rules.status !== 'unknown' };
       const baselines = { ...rec.baselines };
       for (const [signal, known] of Object.entries(observed)) if (known) rec.baselines[signal] ??= now;
       // Unknown probes cannot prove recovery; retain episodes until a complete observation.
-      for (const code of Object.keys(rec.episodes)) if (observed[signalFor(code)] && !(code === 'stalled' && result.errors.includes('work evidence unavailable')) && !result.anomalies.includes(code)) delete rec.episodes[code];
+      for (const code of Object.keys(rec.episodes)) if (observed[signalFor(code, config)] && !(code === 'stalled' && (result.errors.includes('work evidence unavailable') || !result.ledgerKnown)) && !result.anomalies.includes(code)) delete rec.episodes[code];
       for (const code of result.anomalies) {
         const episode = rec.episodes[code] ??= { at: now, sequence: ++rec.sequence, stages: {} };
-        const signal = signalFor(code);
+        const signal = signalFor(code, config);
         if (baselines[signal] == null || !config.notifications) continue;
         for (const stage of ['nudge', 'escalate']) {
           if (stage === 'escalate' && now - episode.at < (config.escalateMinutes ?? 30) * 60000) continue;
@@ -180,11 +202,14 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
       await save();
     }
     let report = `# Session health\n\nObserved: ${stamp(now)}\n\n| Role | Alive | Last activity | Assigned work | Progress | Last progress | Rules | Compact reread |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n`;
+    const details = [];
     for (const r of rows) {
-      report += `| ${r.role} | ${r.alive} | ${stamp(r.record.lastActivity)} | ${cell(r.tasks.join('; ') || 'none observed')} | ${r.anomalies.includes('stalled') ? 'stalled' : r.errors.includes('work evidence unavailable') ? 'unknown' : r.tasks.length ? 'active' : 'no active task'} | ${stamp(r.progress)} (${r.progressSources.map(e => `${e.source}: ${stamp(e.at)}`).join('; ')}) | ${r.rules.status} | ${r.compact} |\n`;
-      for (const d of r.rules.diffs) report += `\n${r.role}: ${d.path} lines ${d.lines.join(',')} (${d.allowed ? 'allowed' : 'unexpected'}); SHA256 ${d.expected} → ${d.actual}\n`;
-      if (r.errors.length) report += `\n${r.role}: ${r.errors.join('; ')}\n`;
+      report += `| ${r.role} | ${r.alive} | ${stamp(r.record.lastActivity)} | ${cell(r.tasks.join('; ') || (!r.ledgerKnown ? 'unknown (ledger unavailable)' : 'none observed'))} | ${r.anomalies.includes('stalled') ? 'stalled' : (r.errors.includes('work evidence unavailable') || !r.ledgerKnown) ? 'unknown' : r.tasks.length ? 'active' : 'no active task'} | ${stamp(r.progress)} (${r.progressSources.map(e => `${e.source}: ${stamp(e.at)}`).join('; ')}) | ${r.rules.status} | ${r.compact} |\n`;
+      if (config.regularSchedule) details.push(`\n${r.role} regular schedule: ${r.schedules === null ? 'unknown' : r.schedules.map(s => `${cell(s.id)}: ${s.status === 'missed' ? '안 돎 (missed)' : s.status} (due ${stamp(s.dueAt)})`).join('; ') || 'no installed schedule'}\n`);
+      for (const d of r.rules.diffs) details.push(`\n${r.role}: ${d.path} lines ${d.lines.join(',')} (${d.allowed ? 'allowed' : 'unexpected'}); SHA256 ${d.expected} → ${d.actual}\n`);
+      if (r.errors.length) details.push(`\n${r.role}: ${r.errors.join('; ')}\n`);
     }
+    report += details.join('');
     if (!dry) await atomic(config.reportFile, report);
     emit({ stage: 'end', result: degraded ? 'degraded' : 'complete', previews, durationMs: Date.now() - started });
     return { rows, report, degraded, previews };

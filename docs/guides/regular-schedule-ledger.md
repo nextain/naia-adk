@@ -55,3 +55,39 @@ wake alone does not mean the task produced its promised result.
 The procedure intentionally produces reviewable drafts; the ledger itself does
 not activate work. Follow [server onboarding](server-wake-onboarding.md) for
 rollout evidence and [wake completion](wake-completion-contract.md) for results.
+
+## Record each actual execution
+
+The installed timer/cron wrapper calls the recorder after the task completes,
+including on failure. The recorder does not execute task text or install timers:
+
+```sh
+node scripts/schedule-record.mjs <private-regular-schedule.yaml> <row-id> success
+node scripts/schedule-record.mjs <private-regular-schedule.yaml> <row-id> failed
+```
+
+It updates `last_result.at` to the current offset-bearing UTC timestamp and
+`last_result.outcome` to the supplied result, retaining evidence and unrelated
+rows. Record the actual artifact in `last_result.evidence`; an exit code alone
+is not proof of the promised deliverable. Run the task even when the previous
+record is missing, capture its exit status, and call the recorder for both
+success and failure paths; propagate recording failures to the timer journal.
+Writes use an exclusive lock and atomic replacement. The file must be a regular
+file; use the resolved target when a ledger is a symlink. Comments and formatting
+may normalize. Back up before migration or manual reconciliation. A stale lock
+requires verifying its owner has exited before removal.
+
+Connect the absolute path as top-level `regularSchedule` in session health.
+`있음` rows support `daily` or `weekly:MON` through `weekly:SUN`, an IANA
+`timezone`, `HH:mm` local time and nonnegative `graceMinutes` (default 15).
+During a repeated daylight-saving hour, the latest already-passed matching
+occurrence is used; a nonexistent local time skips that date. Match this policy
+to the installed timer during acceptance. Unsupported installed cadences are unknown and require an instance-specific
+calendar adapter before monitoring. At the latest due occurrence plus grace,
+no covering execution record means **안 돎** after the boundary. `not-run`
+is not an execution; failed executions count as runs and require separate repair.
+The observer reports each role's rows and uses the same internal/owner alert
+receipts, silent first successful baseline and one alert per stage per missed
+occurrence. Proposals, manual and unverified rows stay outside execution checks.
+
+Maintain the [work ledger](work-ledger.md) for one-off instructions and repairs.

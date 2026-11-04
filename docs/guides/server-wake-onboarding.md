@@ -51,6 +51,10 @@ preparing the common change.
       role/window/workspace/work-file/baseline-SHA setup; verify silent baseline,
       empty/stopped/stalled/drift alerts, DRY, restart and per-stage deduplication.
 - [ ] Site failures/recovery and observer read errors are visible.
+- [ ] Create one private [work ledger](work-ledger.md) and one regular schedule
+      ledger per server; connect `workLedger` and `regularSchedule` to session
+      health. Verify role matching, stale row detection, wrapper execution records,
+      missed-run grace, silent baseline and one notification per stage.
 - [ ] Ledger rows match inventory and real artifacts; proposals remain off.
 - [ ] Backups, rollback, daily observation and remaining work are documented.
 
