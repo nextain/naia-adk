@@ -14,7 +14,7 @@ const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const names = role => [role.id, ...(role.aliases ?? [])];
 export function validateConfig(c) {
   if (!object(c) || typeof c.stateFile !== 'string' || !c.stateFile || !Array.isArray(c.roles) || c.roles.length < 2 || !Array.isArray(c.guilds) || !c.guilds.length) throw Error('stateFile, roles and guilds required');
-  const ids = new Set(), bots = new Set(), aliases = new Set(), channels = new Set(), dirs = new Set();
+  const ids = new Set(), bots = new Set(), aliases = new Set(), guilds = new Set(), dirs = new Set();
   for (const r of c.roles) {
     if (!/^[\w-]+$/.test(r.id ?? '') || !id(r.botId) || (r.wakeDir !== undefined && (typeof r.wakeDir !== 'string' || !r.wakeDir)) || !Array.isArray(r.aliases ?? [])) throw Error('invalid role');
     if (ids.has(r.id) || bots.has(r.botId) || (r.wakeDir && dirs.has(resolve(r.wakeDir)))) throw Error('duplicate role');
@@ -22,8 +22,8 @@ export function validateConfig(c) {
     for (const name of names(r)) { if (typeof name !== 'string' || !name.trim() || /[\r\n\[\]→:]/u.test(name) || aliases.has(name)) throw Error('invalid or duplicate alias'); aliases.add(name); }
   }
   for (const g of c.guilds) {
-    if (!id(g.id) || !Array.isArray(g.channels) || !g.channels.length) throw Error('invalid guild');
-    for (const ch of g.channels) { if (!id(ch.id) || channels.has(ch.id)) throw Error('invalid or duplicate channel'); channels.add(ch.id); }
+    if (!id(g.id) || guilds.has(g.id) || Object.hasOwn(g, 'channels') || !Array.isArray(g.excludeChannels ?? []) || (g.excludeChannels ?? []).some(ch => !id(ch)) || new Set(g.excludeChannels ?? []).size !== (g.excludeChannels ?? []).length) throw Error('invalid guild; use excludeChannels, never channels');
+    guilds.add(g.id);
   }
   if (!ids.has(c.recovery?.roleId) || typeof c.sessionHealthConfig !== 'string' || !c.sessionHealthConfig) throw Error('sessionHealthConfig and recovery role required');
   const n = c.thresholds?.nudgeMinutes ?? 10, e = c.thresholds?.escalateMinutes ?? 30;
@@ -93,7 +93,7 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
     const save = () => dry ? Promise.resolve() : atomic(stateFile, `${JSON.stringify(state, null, 2)}\n`);
     const api = async (path, body) => {
       const r = await fetchImpl(`https://discord.com/api/v10${path}`, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15000) });
-      if (!r.ok) throw Error(`Discord HTTP ${r.status}`);
+      if (!r.ok) throw Object.assign(Error(`Discord HTTP ${r.status}`), { status: r.status });
       return r.json();
     };
     const notify = async (request, stage, role, guild, channel, health = '') => {
@@ -130,25 +130,36 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
       }
       return healthRows.find(r => r.role === role.id)?.alive ?? 'unknown';
     };
-    for (const guild of config.guilds) for (const channel of guild.channels) {
+    for (const guild of config.guilds) {
+      let channels;
+      try {
+        const listed = await api(`/guilds/${guild.id}/channels`);
+        const active = await api(`/guilds/${guild.id}/threads/active`);
+        if (!Array.isArray(listed) || !Array.isArray(active.threads) || [...listed, ...active.threads].some(ch => !id(ch.id) || ch.guild_id !== guild.id)) throw Error('invalid guild channel discovery');
+        const excluded = new Set(guild.excludeChannels ?? []);
+        channels = [...new Map([...listed.filter(ch => [0, 5, 15].includes(ch.type)), ...active.threads.filter(ch => [10, 11, 12].includes(ch.type))].filter(ch => !excluded.has(ch.id) && !excluded.has(ch.parent_id)).map(ch => [ch.id, ch])).values()];
+      } catch (e) {
+        degraded = true; state.errors[`guild/${guild.id}`] = { at: now, reason: e.message }; await save(); emit('guild', 'failed', { guildId: guild.id, reason: e.message }); continue;
+      }
+      delete state.errors[`guild/${guild.id}`];
+      for (const channel of channels) {
+      // Forums contain threads only; their active threads above carry the messages.
+      if (channel.type === 15) continue;
       const key = `${guild.id}/${channel.id}`;
       try {
-        const metadata = await api(`/channels/${channel.id}`);
-        if (metadata.guild_id !== guild.id) throw Error('channel guild mismatch');
-        if (!state.channels[key]) {
-          const rows = await api(`/channels/${channel.id}/messages?limit=1`);
-          if (!Array.isArray(rows) || (rows[0] && !id(rows[0].id))) throw Error('invalid baseline');
-          state.channels[key] = { cursor: rows[0]?.id ?? '0', pending: {}, baselineAt: now }; await save(); emit('baseline', 'recorded'); continue;
-        }
+        // A snowflake at the start of the two-hour window bounds the first read.
+        const initialCursor = (BigInt(Math.max(0, now - 2 * 60 * 60000 - 1420070400000)) << 22n).toString();
+        if (!state.channels[key]) { state.channels[key] = { cursor: initialCursor, pending: {}, baselineAt: now }; await save(); }
         const next = structuredClone(state.channels[key]), messages = [];
-        let before, complete = false;
+        let after = next.cursor, complete = false;
         for (let page = 0; page < (config.maxPages ?? 100); page++) {
-          const rows = await api(`/channels/${channel.id}/messages?limit=100${before ? `&before=${before}` : ''}`);
+          const rows = await api(`/channels/${channel.id}/messages?limit=100&after=${after}`);
           if (!Array.isArray(rows) || rows.some(m => !id(m.id))) throw Error('invalid message page');
-          messages.push(...rows.filter(m => compare(m.id, next.cursor) > 0));
-          if (rows.length < 100 || rows.some(m => compare(m.id, next.cursor) <= 0)) { complete = true; break; }
-          const oldest = rows.reduce((a, b) => compare(a.id, b.id) < 0 ? a : b).id;
-          if (before === oldest) throw Error('pagination did not advance'); before = oldest;
+          if (rows.some(m => compare(m.id, after) <= 0)) throw Error('pagination did not advance');
+          messages.push(...rows);
+          if (rows.length < 100) { complete = true; break; }
+          // The after window contains the closest newer messages; response order is newest first.
+          after = rows.reduce((a, b) => compare(a.id, b.id) > 0 ? a : b).id;
         }
         if (!complete) throw Error('pagination limit reached; cursor retained');
         const ownMessages = new Set(Object.values(next.pending).flatMap(r => Object.values(r.stages).map(s => s.messageId).filter(Boolean)));
@@ -185,7 +196,11 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
           const escalationAt = request.receiptId ? request.deadline + ((config.thresholds?.escalateMinutes ?? 30) - (config.thresholds?.nudgeMinutes ?? 10)) * 60000 : request.at + (config.thresholds?.escalateMinutes ?? 30) * 60000;
           if (now >= escalationAt) await notify(request, 'escalate', source, guild, channel);
         }
-      } catch (e) { degraded = true; state.errors[key] = { at: now, reason: e.message }; await save(); emit('channel', 'failed', { reason: e.message }); }
+      } catch (e) {
+        if (e.status === 403) { delete state.errors[key]; await save(); emit('channel', 'skipped', { channelId: channel.id, reason: 'Discord HTTP 403' }); continue; }
+        degraded = true; state.errors[key] = { at: now, reason: e.message }; await save(); emit('channel', 'failed', { reason: e.message });
+      }
+      }
     }
     state.lastRun = { at: now, result: degraded ? 'degraded' : 'complete' }; await save(); emit('end', state.lastRun.result, { durationMs: Date.now() - started }); return state;
   } catch (e) { emit('end', 'failed', { durationMs: Date.now() - started, reason: e.message }); throw e; }

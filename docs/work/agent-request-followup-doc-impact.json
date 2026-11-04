@@ -19,6 +19,6 @@
     "files": [
       "docs/guides/agent-request-followup.md"
     ],
-    "detail": "Deterministic addressing and receipt rules, conservative result correlation, fixed-offset deadlines and ambiguous-send reconciliation."
+    "detail": "Deterministic addressing and receipt rules, conservative result correlation, fixed-offset deadlines and ambiguous-send reconciliation. Guild-wide discovery, exclusion-only scope, permission skips and incremental two-hour bootstrap cursors."
   }
 }

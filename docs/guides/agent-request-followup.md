@@ -20,13 +20,13 @@ webhooks and self-addressing are ignored. Each addressed target gets its own
 obligation. These are addressing rules: even a greeting with a direct mention
 counts. Use unaddressed prose for commentary that needs no receipt.
 
-A receipt must come from the expected target bot in the same configured channel
+A receipt must come from the expected target bot in the same discovered channel
 or thread. It must explicitly reply to the request (or its recorded receipt),
 or mention the requesting bot. An unreferenced mention is accepted only when
 exactly one open request matches; use a referenced reply when several are open.
 A receipt is consumed before new requests are detected so it does not create a
-reverse obligation. Threads must be explicitly allowlisted; parent history does
-not include their posts.
+reverse obligation. Active threads are discovered separately each poll; parent history does not
+include their posts. Archived threads are outside discovery until active again.
 
 A receipt without a readable end time closes receipt tracking. It proves receipt,
 not completion. A receipt with one readable end time remains tracked until the
@@ -64,7 +64,13 @@ Copy [the example](../../config/agent-request-watch.example.json) to a private
 instance path and replace placeholders. Configure:
 
 - `roles`: unique `id`, `botId`, optional `aliases`, and optional `wakeDir`.
-- `guilds[].id` and `guilds[].channels[].id`: explicit allowed channels/threads.
+- `guilds[].id`: guilds to observe. Every poll fetches `GET /guilds/{id}/channels`
+  for text (0), announcement (5), and forum (15) channels, plus
+  `GET /guilds/{id}/threads/active` for active threads visible to the bot.
+  Optional `excludeChannels` is an array of channel IDs to omit; excluding a
+  parent also omits its threads. Forum parents contain threads rather than
+  messages: their active threads are read, without requesting parent message
+  history. Channel allowlists (`channels`) are rejected.
 - `stateFile`: private durable observer state, separate from other observers.
 - `sessionHealthConfig`: existing valid session-health configuration with matching
   role IDs; checks run in dry mode without writing health state or sending notices.
@@ -80,7 +86,7 @@ synthetic ID only for deduplication and the original URL for Discord replies;
 verify this adapter behavior during instance acceptance. Otherwise the observer
 posts a bot mention in the original channel. Keep the
 observer identity distinct from all executor identities, to prevent self-generated
-requests. Give it only read-history access to the allowlist and send access when
+requests. Give it only read-history access throughout the configured guilds and send access when
 Discord delivery is selected. Tokens belong in a protected environment, never JSON.
 
 ```sh
@@ -89,9 +95,13 @@ node scripts/agent-request-watch.mjs --config <private-config.json>
 ```
 
 `--dry` (or `DRY_RUN=1`) reads and previews without writing state, locks, wake files
-or messages. First real observation baselines each channel at its latest message;
-old history generates no alerts. Preserve state across upgrades. History is paged
-back to the durable cursor; incomplete scans retain that cursor and obligations.
+or messages. First observation reads only the most recent two hours in each newly discovered
+channel. Preserve state across upgrades. Each channel has a durable message ID
+cursor; subsequent pages use `after=` to fetch only newer messages. Incomplete
+scans retain the prior cursor and obligations for retry. A read HTTP 403 produces
+one skip log and leaves that channel state intact without degrading the run.
+Other API failures are recorded as degraded and retried. Newly accessible channels
+start with the same two-hour window.
 
 Each request keeps independent per-stage intent and confirmed/uncertain receipts.
 An uncertain delivery is never automatically replayed. Inspect the destination,
@@ -114,11 +124,11 @@ and acceptance are per server. This repository change installs no service.
 
 1. Select one owner per channel scope and observer state; avoid overlapping watchers
    on multiple servers. Copy the generic config to a private path on that instance.
-2. Fill its local role bot IDs, aliases, wake directories, guild/channel allowlist,
+2. Fill its local role bot IDs, aliases, wake directories, guild IDs and optional channel exclusions,
    recovery role, session-health path and fixed timezone offset. Back up any
    existing destination config and its symlink target before replacing it.
 3. Supply the observer token through an owner-only environment file. Review a dry
-   run and first-run baseline. Verify read permissions and all five role mappings.
+   run and first-run two-hour scan. Verify read permissions and all five role mappings.
 4. In an authorized test channel, exercise explicit addressing, receipt, two open
    requests, 10/30-minute follow-up, deadline result, stopped session, restart and
    duplicate execution. Confirm the actual wake consumer accepts every stage.
