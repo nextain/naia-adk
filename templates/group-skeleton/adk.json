@@ -26,6 +26,7 @@
       "projects",
       "agents",
       "calendar",
+      "operations",
       "rules",
       "data",
       "skills"
@@ -40,6 +41,9 @@
     ]
   },
   "group_config": {
+    "operations": {
+      "sensors_file": "operations/sensors.example.json"
+    },
     "members": [
       {
         "user_id": "group-owner",
