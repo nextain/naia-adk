@@ -47,6 +47,9 @@ function windowsEncodedCommand(script) {
 }
 function test(name, fn) {
 	if (process.env.TEST_FILTER && !name.includes(process.env.TEST_FILTER)) return;
+	// Git records non-executable files as 0644. Match that baseline even when
+	// the invoking shell uses a group-writable umask (for example 0002).
+	const priorUmask = process.umask(0o022);
 	try {
 		fn();
 		passed += 1;
@@ -54,6 +57,8 @@ function test(name, fn) {
 	} catch (error) {
 		process.stderr.write(`not ok - ${name}: ${error.stack || error}\n`);
 		process.exitCode = 1;
+	} finally {
+		process.umask(priorUmask);
 	}
 }
 

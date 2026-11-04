@@ -1,0 +1,7 @@
+{
+  "work": "harness-native-ci-runtime",
+  "repository_docs": {"status": "UPDATED", "paths": ["docs/work/harness-native-ci-runtime.md"]},
+  "user_manual": {"status": "N/A", "reason": "Only the CI test runtime and synchronous test fixture permissions change; shipped commands and user behavior are unchanged."},
+  "reusable_learning": {"status": "UPDATED", "paths": ["docs/work/harness-native-ci-runtime.md"]},
+  "review": {"independent_review": "Two local review passes; no blocking findings. Hosted Ubuntu 26.04 kernel-level cause remains unconfirmed.", "public_push_review": "NOT_RUN; local commit only"}
+}

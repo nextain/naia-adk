@@ -20,7 +20,9 @@ jobs:
       - run: pnpm build
 
   test:
-    runs-on: ubuntu-latest
+    # Keep the namespace/AppArmor runtime on the validated LTS image.
+    # ubuntu-latest moved to 26.04 and broke isolated reviewer launches.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -43,6 +45,29 @@ jobs:
           }
           EOF
           sudo apparmor_parser -r /etc/apparmor.d/naia-bwrap
+          /usr/bin/bwrap --version
+          node <<'NODE'
+          const cp = require('node:child_process');
+          const fs = require('node:fs');
+          const runner = require('./.agents/hooks/core/request-contract-review-runner.js');
+          // Only synthetic bytes enter this probe, so its raw diagnostics are safe.
+          const reviewer = runner.anonymousSnapshot(Buffer.from('#!/usr/bin/sh\nset -eu\ntest -r /proc/self/stat\ntest -w /dev/null\ntest -r "$REQUEST_CONTRACT_BUNDLE"\nprintf \'{"probe":true}\\n\'\n'), 0o500);
+          let bundle;
+          try {
+            bundle = runner.anonymousSnapshot(Buffer.from('{}'), 0o400);
+            const { args } = runner.bubblewrapProfile();
+            console.log(JSON.stringify({ sandbox: '/usr/bin/bwrap', args }));
+            const result = cp.spawnSync('/usr/bin/bwrap', args, {
+              env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8', timeout: 30000,
+              stdio: ['ignore', 'pipe', 'pipe', 'pipe', reviewer, bundle, 'pipe'],
+            });
+            console.log(JSON.stringify({ status: result.status, signal: result.signal, stderr: result.stderr, stdout: result.stdout, error: result.error?.code }));
+            if (result.error || result.status !== 0 || result.stdout?.trim() !== '{"probe":true}') process.exitCode = 1;
+          } finally {
+            fs.closeSync(reviewer);
+            if (bundle !== undefined) fs.closeSync(bundle);
+          }
+          NODE
       - name: Native harness, session isolation, and request-contract gates
         run: pnpm test:harness-native
       - name: Naia account document translation adapter
