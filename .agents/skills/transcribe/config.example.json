@@ -1,0 +1,13 @@
+{
+  "region": "<애저 지역, 예: koreacentral>",
+  "resource": "<AI 서비스 계정 이름>",
+  "resource_group": "<리소스 그룹>",
+  "key_env": "AZURE_SPEECH_KEY",
+  "default_locales": [
+    "ko-KR"
+  ],
+  "gateway": {
+    "base_url": "<게이트웨이 주소, 예: https://gateway.example/v1>",
+    "key_env": "TRANSCRIBE_GATEWAY_KEY"
+  }
+}

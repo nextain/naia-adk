@@ -36,6 +36,14 @@ argument-hint: "[선택사항: 특정 스킬 이름 또는 집중할 영역]"
 | `verify-benchmark-contract` | 벤치 스키마·공급자 영수증·HMAC/DPAPI 저널·분석 증거 | `packages/benchmark-contract/**`, `.agents/context/development-model-routing.yaml`, `.users/context/{development-model-routing.md,en/development-model-routing.md}` |
 | `verify-product-preservation` | 기존 제품 표면·원요청 권한·기준 버전·검토/배포 상태 | `.agents/workflows/issue-driven-development.yaml`, `.agents/requirements/{_template.yaml,**}`, `.agents/skills/{review-pass,verify-implementation,manage-skills,verify-product-preservation,manage-discord-sessions}/**`, `.agents/context/{harness.yaml,skills-index.yaml}`, `.users/{context/{harness,request-contract}.md,skills-list.md,skills/{verify-product-preservation,manage-discord-sessions}/**}`, `.claude/skills/verify-*`, `{AGENTS,CLAUDE,GEMINI}.md`, `naia-settings/{README.md,messenger-sessions/config.example.json}`, `docs/design/discord-*.md`, project-adapter-declared surfaces/tests/vendor/CI |
 
+## Transcription verification
+
+Verify the transcription module and output formats with
+`node --test .agents/skills/transcribe/scripts/transcribe.test.mjs`.
+Check its index/catalogue entries and relative Claude pointer, then run `bash .agents/skills/manage-skills/scripts/validate-skill-frontmatter.sh`
+and `node .claude/hooks/sync-entry-points.js --check` for registration changes.
+The runtime configuration `config/transcribe.json` stays instance-local.
+
 ## 워크플로우
 
 ### Step 1: 세션 변경사항 분석
