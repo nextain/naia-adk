@@ -1,0 +1,24 @@
+{
+  "work": "agent-request-followup",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/agent-request-followup.md",
+      "docs/guides/wake-completion-contract.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/agent-request-followup.md",
+      "config/agent-request-watch.example.json"
+    ]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/agent-request-followup.md"
+    ],
+    "detail": "Deterministic addressing and receipt rules, conservative result correlation, fixed-offset deadlines and ambiguous-send reconciliation."
+  }
+}
