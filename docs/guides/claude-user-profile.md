@@ -11,7 +11,7 @@
 
 | 파일 | 넣는 곳 | 내용 |
 | --- | --- | --- |
-| `settings.json` | `~/.claude/settings.json` | 압축 기준 `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000`, `CLAUDE_CODE_GOAL_CHECKIN_MINUTES=0`, `CLAUDE_CODE_RETRY_WATCHDOG=0`, 세션 시작·압축 뒤 `role-compact-brief.js` 훅(ADK 뿌리 절대 경로) |
+| `settings.json` | `~/.claude/settings.json` | 압축 기준 `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000`, `CLAUDE_CODE_GOAL_CHECKIN_MINUTES=0`, `CLAUDE_CODE_RETRY_WATCHDOG=0`, 세션 시작 `role-compact-brief.js` 훅(ADK 뿌리 절대 경로). 압축 뒤에도 세션 시작이 `source: "compact"` 로 다시 불려 같은 훅이 미션 경로를 다시 싣습니다. 압축 뒤(PostCompact) 훅 출력은 사람 화면에만 뜨고 모델에 들어가지 않아 쓰지 않습니다 |
 | `CLAUDE.md` | `~/.claude/CLAUDE.md` 의 표시 구간 | 압축할 때 남길 것(미션·원문 지시·작업 문서 표·코드 상태·돌아가는 것·남은 일·지킬 것)과 컨텍스트 절약 |
 
 압축 기준이 없으면 세션은 모델 최대 창까지 맥락을 키운 뒤에야 압축합니다. 부를 때마다 보내는 맥락이 커져 비용이 늘고 중간 내용을 놓치는 일이 커집니다.
@@ -26,7 +26,8 @@ node scripts/adk-user-profile.mjs apply --home /home/<다른 사용자>
 node scripts/adk-user-profile.mjs check              # 다르면 경로를 찍고 1로 끝남
 ```
 
-- 있던 설정은 그대로 두고 프로파일 키만 덮습니다. 같은 훅은 두 번 넣지 않습니다.
+- 있던 설정은 그대로 두고 프로파일 키만 덮습니다. 같은 훅은 두 번 넣지 않습니다. ADK 경로가 바뀌어 다시 돌리면 옛 경로의 프로파일 훅을 지우고 새 경로로 바꿉니다.
+- ADK 뿌리에 훅 파일이 없으면 `apply`·`check` 모두 오류(2)로 멈춥니다.
 - 바꾸기 전 파일은 `<파일>.bak-<시각>` 으로 남깁니다.
 - `CLAUDE.md` 는 표시 구간(`naia-adk claude-user-profile: begin/end`)만 바꿉니다.
 - 설정은 세션을 다시 켤 때부터 걸립니다.
@@ -39,7 +40,7 @@ node scripts/adk-user-profile.mjs check              # 다르면 경로를 찍�
 { "role": "dev", "read": ["/home/<사용자>/<역할>/index.md", "/home/<사용자>/<역할>/progress.md"] }
 ```
 
-절대 경로이고 실제로 있는 파일만 싣습니다. 문서 내용은 싣지 않고 경로만 냅니다(20줄 이내).
+`.naia-role.json` 은 세션을 켠 폴더(cwd) 바로 그 자리에서만 찾습니다. 하위·상위 폴더는 보지 않습니다. 절대 경로이고 실제로 있는 파일만 싣습니다. 문서 내용은 싣지 않고 경로만 냅니다(20줄 이내).
 
 ## 판 맞추기
 

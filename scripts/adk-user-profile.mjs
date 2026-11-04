@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url"
 
 const BEGIN = "<!-- naia-adk claude-user-profile: begin -->"
 const END = "<!-- naia-adk claude-user-profile: end -->"
+const HOOK = ".claude/hooks/role-compact-brief.js"
 const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 
 export function parseArgs(raw) {
@@ -30,16 +31,33 @@ export function parseArgs(raw) {
 
 export function loadProfile(adkRoot) {
   const dir = path.join(adkRoot, "templates", "claude-user-profile")
+  if (!fs.existsSync(path.join(adkRoot, HOOK))) throw new Error(`missing hook: ${path.join(adkRoot, HOOK)}`)
   const text = fs.readFileSync(path.join(dir, "settings.json"), "utf8").replaceAll("{{ADK_ROOT}}", adkRoot.replace(/\\/g, "/"))
   return { settings: JSON.parse(text), rule: fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8").trim() }
 }
 
 const commandsOf = (groups) => (groups ?? []).flatMap((g) => (g.hooks ?? []).map((h) => h.command))
+const ownHook = (command) => typeof command === "string" && command.includes(path.basename(HOOK))
+
+// Drop every earlier profile hook (old ADK path, old PostCompact entry) so a
+// re-apply replaces it instead of injecting twice.
+function withoutOwnHooks(hooks) {
+  const out = {}
+  for (const [event, groups] of Object.entries(hooks ?? {})) {
+    const kept = (groups ?? [])
+      .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !ownHook(h.command)) }))
+      .filter((g) => g.hooks.length)
+    if (kept.length) out[event] = kept
+  }
+  return out
+}
 
 export function mergeSettings(current, profile) {
   const next = structuredClone(current ?? {})
   next.env = { ...(next.env ?? {}), ...profile.env }
-  next.hooks = next.hooks ?? {}
+  const profileCommands = new Set(Object.values(profile.hooks ?? {}).flatMap(commandsOf))
+  const stale = Object.values(next.hooks ?? {}).flatMap(commandsOf).some((c) => ownHook(c) && !profileCommands.has(c))
+  next.hooks = stale ? withoutOwnHooks(next.hooks) : next.hooks ?? {}
   for (const [event, groups] of Object.entries(profile.hooks ?? {})) {
     const have = new Set(commandsOf(next.hooks[event]))
     const missing = groups.filter((g) => commandsOf([g]).some((c) => !have.has(c)))

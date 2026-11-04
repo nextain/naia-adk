@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-// SessionStart / PostCompact hook for role sessions that run outside the ADK
-// repository (e.g. /home/<user>/<role>). Project hooks never load there, so the
-// user profile (templates/claude-user-profile) registers this file by absolute path.
+// SessionStart hook for role sessions that run outside the ADK repository
+// (e.g. /home/<user>/<role>). Project hooks never load there, so the user profile
+// (templates/claude-user-profile) registers this file by absolute path.
 //
 // Reads `<session cwd>/.naia-role.json` — {"role": "<id>", "read": ["<abs path>", ...]} —
-// and re-injects the role's mission paths after compaction. Paths only, at most
+// and injects the role's mission paths. SessionStart fires again with
+// source "compact" after compaction, so one hook covers both; PostCompact output
+// is shown to the user only and never reaches the model. Paths only, at most
 // 20 lines; free text from the listed files is never copied into the prompt.
 // Silent on any error: an inject hook must never break the session.
 const fs = require("fs");
@@ -20,7 +22,7 @@ function readStdin() {
 	}
 }
 
-function brief(cwd, event) {
+function brief(cwd, source) {
 	let role;
 	try {
 		role = JSON.parse(fs.readFileSync(path.join(cwd, ".naia-role.json"), "utf8"));
@@ -29,7 +31,7 @@ function brief(cwd, event) {
 	}
 	const read = (Array.isArray(role.read) ? role.read : [])
 		.filter((p) => typeof p === "string" && path.isAbsolute(p) && fs.existsSync(p));
-	const head = event === "PostCompact"
+	const head = source === "compact"
 		? "맥락이 압축됐습니다. 다음 행동 전에 아래를 다시 읽으십시오."
 		: "세션 시작. 다음 행동 전에 아래를 읽으십시오.";
 	const lines = [
@@ -41,14 +43,10 @@ function brief(cwd, event) {
 }
 
 function main() {
-	const event = process.argv[2] === "PostCompact" ? "PostCompact" : "SessionStart";
 	const input = readStdin();
-	const text = brief(typeof input.cwd === "string" ? input.cwd : process.cwd(), event);
+	const text = brief(typeof input.cwd === "string" ? input.cwd : process.cwd(), input.source);
 	if (!text) return;
-	const out = event === "SessionStart"
-		? { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } }
-		: { additionalContext: text };
-	process.stdout.write(JSON.stringify(out));
+	process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } }));
 }
 
 if (require.main === module) {

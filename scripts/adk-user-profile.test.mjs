@@ -25,7 +25,8 @@ test("apply adds env, absolute hooks and the rule block, keeping existing settin
   assert.equal(s.env.KEEP, "1")
   assert.equal(s.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, "200000")
   assert.equal(s.hooks.PreToolUse[0].hooks[0].command, "gate")
-  assert.match(s.hooks.PostCompact[0].hooks[0].command, new RegExp(`${root}/\\.claude/hooks/role-compact-brief\\.js`))
+  assert.match(s.hooks.SessionStart[0].hooks[0].command, new RegExp(`${root}/\\.claude/hooks/role-compact-brief\\.js`))
+  assert.equal(s.hooks.PostCompact, undefined)
   const rule = fs.readFileSync(path.join(home, ".claude", "CLAUDE.md"), "utf8")
   assert.ok(rule.startsWith("# mine\n"))
   assert.match(rule, /naia-adk claude-user-profile: begin/)
@@ -64,23 +65,47 @@ test("mergeSettings does not duplicate a hook already present", () => {
   assert.equal(merged.hooks.PostCompact.length, 1)
 })
 
+test("re-apply replaces a profile hook left at an old ADK path or on PostCompact", () => {
+  const home = tmpHome()
+  fs.mkdirSync(path.join(home, ".claude"))
+  const old = 'node "/old/adk/.claude/hooks/role-compact-brief.js" SessionStart'
+  fs.writeFileSync(path.join(home, ".claude", "settings.json"), JSON.stringify({ hooks: {
+    SessionStart: [{ hooks: [{ type: "command", command: old }, { type: "command", command: "mine" }] }],
+    PostCompact: [{ hooks: [{ type: "command", command: 'node "/old/adk/.claude/hooks/role-compact-brief.js" PostCompact' }] }],
+  } }))
+  run({ mode: "apply", home, adkRoot: root })
+  const s = read(path.join(home, ".claude", "settings.json"))
+  const commands = s.hooks.SessionStart.flatMap((g) => g.hooks.map((h) => h.command))
+  assert.deepEqual(commands.filter((c) => c.includes("role-compact-brief")), [`node "${root}/.claude/hooks/role-compact-brief.js"`])
+  assert.ok(commands.includes("mine"))
+  assert.equal(s.hooks.PostCompact, undefined)
+})
+
+test("apply refuses an ADK root without the hook file", () => {
+  const fake = tmpHome()
+  fs.cpSync(path.join(root, "templates"), path.join(fake, "templates"), { recursive: true })
+  assert.throws(() => run({ mode: "check", home: tmpHome(), adkRoot: fake }), /missing hook/)
+})
+
 test("role-compact-brief lists only existing absolute paths from .naia-role.json", () => {
   const cwd = tmpHome()
   const mission = path.join(cwd, "mission.md")
   fs.writeFileSync(mission, "secret text")
   fs.writeFileSync(path.join(cwd, ".naia-role.json"), JSON.stringify({ role: "dev", read: [mission, "/no/such/file", "relative.md"] }))
-  const out = JSON.parse(execFileSync("node", [path.join(root, ".claude/hooks/role-compact-brief.js"), "PostCompact"], { input: JSON.stringify({ cwd }) }).toString())
-  assert.match(out.additionalContext, /역할: dev/)
-  assert.ok(out.additionalContext.includes(mission))
-  assert.doesNotMatch(out.additionalContext, /no\/such|relative\.md|secret text/)
-  const start = JSON.parse(execFileSync("node", [path.join(root, ".claude/hooks/role-compact-brief.js"), "SessionStart"], { input: JSON.stringify({ cwd }) }).toString())
-  assert.equal(start.hookSpecificOutput.hookEventName, "SessionStart")
+  const hook = (input) => JSON.parse(execFileSync("node", [path.join(root, ".claude/hooks/role-compact-brief.js")], { input: JSON.stringify(input) }).toString()).hookSpecificOutput
+  const compact = hook({ cwd, source: "compact" })
+  assert.equal(compact.hookEventName, "SessionStart")
+  assert.match(compact.additionalContext, /압축됐습니다/)
+  assert.match(compact.additionalContext, /역할: dev/)
+  assert.ok(compact.additionalContext.includes(mission))
+  assert.doesNotMatch(compact.additionalContext, /no\/such|relative\.md|secret text/)
+  assert.match(hook({ cwd, source: "startup" }).additionalContext, /세션 시작/)
 })
 
 test("role-compact-brief is silent without a role file", () => {
   const cwd = tmpHome()
-  const out = execFileSync("node", [path.join(root, ".claude/hooks/role-compact-brief.js"), "PostCompact"], { input: JSON.stringify({ cwd }) }).toString()
+  const out = execFileSync("node", [path.join(root, ".claude/hooks/role-compact-brief.js")], { input: JSON.stringify({ cwd, source: "compact" }) }).toString()
   assert.equal(out, "")
   const require = createRequire(import.meta.url)
-  assert.equal(require(path.join(root, ".claude/hooks/role-compact-brief.js")).brief(cwd, "PostCompact"), null)
+  assert.equal(require(path.join(root, ".claude/hooks/role-compact-brief.js")).brief(cwd, "compact"), null)
 })
