@@ -1,0 +1,6 @@
+{
+  "work": "transcribe skill",
+  "repository_docs": {"status": "UPDATED", "files": ["docs/guides/skills-catalogue.yaml", ".agents/context/skills-index.yaml"]},
+  "user_manual": {"status": "UPDATED", "files": [".agents/skills/transcribe/SKILL.md"]},
+  "reusable_learning": {"status": "UPDATED", "files": [".agents/skills/manage-skills/SKILL.md"], "reason": "Register repeatable transcription and registration checks"}
+}
