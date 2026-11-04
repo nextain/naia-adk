@@ -10,8 +10,9 @@ or a recent commit does not establish task correctness. Start with the
 - **Alive:** an adapter identifies the exact role window and AI process. Missing
   windows are `missing`; a shell without an AI descendant is `empty`. Output
   fingerprint changes and session-record mtime establish activity. No change for
-  `idleMinutes` (default 30) is `stopped`. The first output sample establishes a
-  baseline, not historical activity. Adapter/read failures are `unknown`.
+  `idleMinutes` (default 30) is `stopped`, subject to the optional work check
+  below. The first output sample establishes a baseline, not historical activity.
+  Adapter/read failures are `unknown`.
 - **Progress:** top-level `workLedger` supplies role-matched `진행 중` rows
   from the [canonical work ledger](work-ledger.md). Each row uses its own
   `updated_at`; unrelated commits, replies and other rows cannot refresh it. Any
@@ -65,8 +66,24 @@ Commands have a timeout; snapshot producers must atomically replace their file.
 {"windows":[{"name":"<window>","aiRunning":true,"output":"<captured-output>"}]}
 ```
 
+`stoppedRequiresWork` is a top-level boolean, defaulting to `false` for existing
+behavior. Set it to `true` to report a quiet running AI as `idle` when a
+successfully read `workLedger` has no `진행 중` row matching the role ID and
+response-watch has no pending human request for that role's `botId`. `idle`
+appears only in the status report and does not create a stopped notification.
+An active ledger row or pending request keeps the quiet session `stopped`.
+An omitted `workLedger`, unreadable ledger file or invalid ledger also keeps
+`stopped`; legacy `workFiles` alone cannot establish that a role has no work.
+This option leaves `missing`, `empty`, and independent progress, schedule and
+drift anomalies unchanged.
+
 `responseWatchState` reuses the observer's `replies[botId].at` confirmed explicit
 reply evidence. Missing older response-watch state has no reply evidence.
+With `stoppedRequiresWork: true`, pending requests are read from
+`channels[channelId].pending[messageId].botId` and matched to `roles[].botId`.
+An omitted `responseWatchState` contributes no pending requests. A configured
+state that cannot be read or whose pending-request evidence is invalid or
+unavailable keeps the quiet session `stopped` and exposes the read error.
 `notifications` uses the same nudgeChannelId and escalation.channelId/userId as
 response-watch; `roles[].botId` routes the internal recall. No healthy or recovery
 notifications are sent. First successful observation of each signal is silent; a failed independent

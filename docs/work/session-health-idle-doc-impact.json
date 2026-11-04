@@ -1,0 +1,17 @@
+{
+  "work": "session-health-idle-without-work",
+  "repository_docs": {
+    "status": "N/A",
+    "reason": "The change adds one optional observer setting within the existing session-health module; repository entrypoints and architecture remain unchanged."
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "paths": ["docs/guides/session-health.md", "config/session-health.example.json"]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "paths": ["docs/guides/session-health.md"],
+    "reason": "The guide records the reusable distinction between a quiet session without obligations and stopped work, including conservative handling of unavailable evidence."
+  },
+  "source_handling": "Generic derived requirements only; private incident details remain outside the public tree"
+}
