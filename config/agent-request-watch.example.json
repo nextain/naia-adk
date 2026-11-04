@@ -4,6 +4,7 @@
   "sessionHealthConfig": "/srv/example/config/session-health.json",
   "timezoneOffsetMinutes": 540,
   "maxPages": 100,
+  "requireMentionInReply": true,
   "thresholds": {
     "nudgeMinutes": 10,
     "escalateMinutes": 30

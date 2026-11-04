@@ -30,6 +30,7 @@ export function validateConfig(c) {
   if (!Number.isFinite(n) || n <= 0 || !Number.isFinite(e) || e <= n) throw Error('invalid thresholds');
   if (!Number.isInteger(c.maxPages ?? 100) || (c.maxPages ?? 100) < 1) throw Error('invalid limits');
   if (!Number.isInteger(c.timezoneOffsetMinutes ?? 0) || Math.abs(c.timezoneOffsetMinutes ?? 0) > 840) throw Error('invalid timezone offset');
+  if (c.requireMentionInReply !== undefined && typeof c.requireMentionInReply !== 'boolean') throw Error('requireMentionInReply must be boolean');
   if (c.messages && (!object(c.messages) || Object.entries(c.messages).some(([key, value]) => !['nudge', 'overdue', 'escalate', 'recovery'].includes(key) || typeof value !== 'string' || !value.trim() || [...value.matchAll(/\{([^}]+)\}/g)].some(m => !['bot', 'role', 'health', 'link'].includes(m[1]))))) throw Error('invalid messages');
   return c;
 }
@@ -46,11 +47,11 @@ export function detectRequests(message, roles) {
       new RegExp(`(?:^|\\s)${escape(name)}(?:에게|께)(?=\\s|[,:.!?]|$)|(?:^|\\n)\\s*-\\s*${escape(name)}\\s*:`, 'u').test(text))
   ));
 }
-export function isReceipt(message, request) {
+export function isReceipt(message, request, requireMentionInReply = true) {
   if (message.author?.bot !== true || message.webhook_id || ![0, 19].includes(message.type ?? 0) || message.author.id !== request.to) return false;
   const reference = message.message_reference?.message_id;
   if (reference) return reference === request.messageId || Boolean(request.receiptId && reference === request.receiptId);
-  return (message.mentions ?? []).some(m => m.id === request.from) || new RegExp(`<@!?${request.from}>`).test(message.content ?? '');
+  return !requireMentionInReply || (message.mentions ?? []).some(m => m.id === request.from) || new RegExp(`<@!?${request.from}>`).test(message.content ?? '');
 }
 export function parseDeadline(text, at, offsetMinutes = 0) {
   const matches = [...String(text).matchAll(/(?<![\d:])(?:(내일)\s+)?(\d{2}):(\d{2})(까지)?(?![\d:])/gu)].filter(m => m[1] || m[4]);
@@ -168,8 +169,8 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
           if (ownMessages.has(message.id) || ownNonce) continue;
           const at = Date.parse(message.timestamp);
           if (!Number.isFinite(at) || at > now) throw Error('invalid message timestamp');
-          const matched = Object.values(next.pending).filter(r => r.closedAt === undefined && at >= r.at && isReceipt(message, r));
-          // A mention reply with multiple outstanding requests is ambiguous; require an explicit reply.
+          const matched = Object.values(next.pending).filter(r => r.closedAt === undefined && at >= r.at && isReceipt(message, r, config.requireMentionInReply ?? true));
+          // A reply with multiple outstanding requests is ambiguous; require an explicit reply.
           const receipts = message.message_reference?.message_id ? matched : matched.length === 1 ? matched : [];
           for (const r of receipts) {
             if (!r.receiptId) { r.receiptId = message.id; delete r.health; r.deadline = parseDeadline(message.content, at, config.timezoneOffsetMinutes ?? 0); if (r.deadline === null) r.closedAt = at; }

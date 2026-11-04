@@ -37,6 +37,52 @@ test('receipt requires recipient identity and reply or caller mention', () => {
   assert.ok(!isReceipt(message('101', '3', '<@1> 받음'), req));
   assert.ok(!isReceipt(message('101', '2', '갑 받음'), req));
 });
+test('reply mention policy defaults to strict and preserves identity and reference boundaries', () => {
+  const req = { from: '1', to: '2', messageId: '100', receiptId: '101' };
+  for (const strict of [undefined, true]) {
+    assert.equal(isReceipt(message('102', '2', '받음 23:50까지'), req, strict), false);
+    assert.equal(isReceipt(message('102', '2', '<@!1> 받음'), req, strict), true);
+    assert.equal(isReceipt(message('102', '2', '받음', { mentions: [{ id: '1' }] }), req, strict), true);
+    for (const reference of ['100', '101']) assert.equal(isReceipt(message('102', '2', '받음', { message_reference: { message_id: reference } }), req, strict), true);
+  }
+  assert.equal(isReceipt(message('102', '2', '받음'), req, false), true);
+  for (const strict of [true, false]) {
+    for (const extra of [{ author: { id: '3', bot: true } }, { author: { id: '2', bot: false } }, { webhook_id: '4' }, { type: 7 }, { message_reference: { message_id: '999' } }]) {
+      assert.equal(isReceipt(message('102', '2', '<@1> 받음', extra), req, strict), false);
+    }
+  }
+});
+test('requireMentionInReply accepts only booleans when configured', () => {
+  for (const value of [true, false]) assert.doesNotThrow(() => validateConfig({ ...config('/unused'), requireMentionInReply: value }));
+  for (const value of [null, 0, 1, 'true', 'false', [], {}]) assert.throws(() => validateConfig({ ...config('/unused'), requireMentionInReply: value }), /requireMentionInReply must be boolean/);
+});
+test('unaddressed receipt retains nudge and escalation under the default and explicit strict policy', async () => {
+  for (const strict of [undefined, true]) {
+    const h = await setup(); if (strict !== undefined) h.c.requireMentionInReply = strict;
+    h.rows([message('100', '1', '<@2> 부탁'), message('101', '2', '받음 23:50까지')]);
+    let state = await h.run(at + 600000);
+    assert.equal(state.channels['10/11'].pending['100/2'].receiptId, undefined);
+    assert.equal(h.sent.length, 1); assert.match(h.sent[0].content, /<@2>.*받음 답/);
+    state = await h.run(at + 1800000);
+    assert.equal(state.channels['10/11'].pending['100/2'].receiptId, undefined);
+    assert.equal(h.sent.length, 2); assert.match(h.sent[1].content, /<@1>.*아직 답 없음/);
+    await h.run(at + 1900000); assert.equal(h.sent.length, 2);
+  }
+});
+test('disabled reply mention requirement accepts one unaddressed receipt with its deadline', async () => {
+  const h = await setup(); h.c.requireMentionInReply = false;
+  h.rows([message('100', '1', '<@2> 부탁'), message('101', '2', '받음 23:50까지')]);
+  const state = await h.run(at + 1800000), request = state.channels['10/11'].pending['100/2'];
+  assert.equal(request.receiptId, '101'); assert.equal(request.deadline, at + 50 * 60000); assert.equal(h.sent.length, 0);
+  await h.run(at + 50 * 60000); assert.equal(h.sent.length, 1); assert.match(h.sent[0].content, /끝 시각/);
+});
+test('disabled reply mention requirement still rejects ambiguous unaddressed receipts', async () => {
+  const h = await setup(); h.c.requireMentionInReply = false;
+  h.rows([message('100', '1', '<@2> 첫 부탁'), message('101', '1', '<@2> 둘째 부탁'), message('102', '2', '받음')]);
+  const state = await h.run(at + 600000);
+  for (const key of ['100/2', '101/2']) assert.equal(state.channels['10/11'].pending[key].receiptId, undefined);
+  assert.equal(h.sent.length, 2);
+});
 test('deadline only parses one supported form with explicit offset', () => {
   assert.equal(parseDeadline('23:50까지', at, 540), Date.parse('2026-11-04T14:50:00Z'));
   assert.equal(parseDeadline('내일 01:20', at, 540), Date.parse('2026-11-04T16:20:00Z'));

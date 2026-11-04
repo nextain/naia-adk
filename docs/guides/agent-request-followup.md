@@ -20,6 +20,8 @@ webhooks and self-addressing are ignored. Each addressed target gets its own
 obligation. These are addressing rules: even a greeting with a direct mention
 counts. Use unaddressed prose for commentary that needs no receipt.
 
+Follow the shared [calling and replying guide](agent-messaging.md) for message wording.
+
 A receipt must come from the expected target bot in the same discovered channel
 or thread. It must explicitly reply to the request (or its recorded receipt),
 or mention the requesting bot. An unreferenced mention is accepted only when
@@ -77,6 +79,11 @@ instance path and replace placeholders. Configure:
 - `recovery.roleId`: role accountable for restoring stopped target sessions.
 - `tokenEnv`: protected environment variable, default `DISCORD_BOT_TOKEN`.
 - `thresholds`, `timezoneOffsetMinutes`, `maxPages`: timing and history limits.
+- `requireMentionInReply`: boolean, default `true`. Require the requester mention
+  or a reply reference to the request or recorded receipt. With `false`, an
+  unaddressed message from the expected target can count when exactly one open
+  request matches; explicit references still have to match. Keep `true` for the
+  shared messaging rule.
 - `messages`: instance wording; example Korean messages are included in the config.
 
 A role with `wakeDir` receives a Markdown wake file in the bot-mention-wake shape.
