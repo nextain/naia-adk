@@ -1,0 +1,6 @@
+{
+  "work": "mention-on-call-and-reply",
+  "repository_docs": {"status": "UPDATED", "files": ["docs/guides/agent-messaging.md", "docs/guides/agent-request-followup.md"]},
+  "user_manual": {"status": "UPDATED", "files": ["docs/guides/agent-messaging.md", "config/agent-request-watch.example.json"]},
+  "reusable_learning": {"status": "UPDATED", "files": ["docs/guides/agent-messaging.md"], "detail": "Mentions trigger wake ingress; reply correlation preserves follow-up when addressing is missing, and ingress evidence remains distinct from completion."}
+}
