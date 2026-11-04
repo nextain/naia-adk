@@ -1,0 +1,21 @@
+{
+  "stateFile": "<private-state-directory>/response-watch.json",
+  "tokenEnv": "DISCORD_BOT_TOKEN",
+  "thresholds": { "nudgeMinutes": 10, "escalateMinutes": 30 },
+  "maxPages": 100,
+  "guilds": [
+    {
+      "id": "<guild-id>",
+      "defaultBotId": "<bot-user-id>",
+      "roles": [{ "id": "<role-id>", "name": "<role-name>", "botId": "<bot-user-id>" }],
+      "channels": [
+        { "id": "<watched-channel-id>", "mode": "mentions" },
+        { "id": "<assigned-channel-id>", "botId": "<channel-bot-user-id>", "mode": "all-human" }
+      ],
+      "excludeChannelIds": ["<excluded-channel-id>"],
+      "nudgeChannelId": "<internal-nudge-channel-id>",
+      "escalation": { "channelId": "<notice-channel-id>", "userId": "<responsible-user-id>" }
+    }
+  ],
+  "sites": [{ "url": "https://example.org/", "channelId": "<notice-channel-id>", "failureThreshold": 2 }]
+}

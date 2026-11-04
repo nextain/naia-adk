@@ -1,0 +1,33 @@
+id: REQ-WAKE-001
+title: "Common wake completion, human-response observation and schedule ledger"
+product: naia-adk
+module: wake-reliability
+status: candidate
+source: candidate
+source_provenance: pending
+source_kind: candidate
+created: 2026-11-04
+updated: 2026-11-04
+change_effect: extend
+preserves: [gateway-admission, ack-watchdog, permission-boundaries]
+must_not_change: [existing-job-ingress, proposed-schedules-remain-off]
+description: |
+  Public derived requirement record; the private original request is not copied.
+  Exact requirements and scenario links: docs/work/wake-response-contract.md.
+acceptance_criteria:
+  - "RQ-WAKE-1 through RQ-WAKE-7 have linked implementation or procedure evidence"
+trace:
+  code:
+    - path: scripts/response-watch.mjs
+      symbol: runWatch
+      coverage: full
+  tests:
+    - path: scripts/response-watch.test.mjs
+      symbol: fake Discord API scenarios
+      coverage: full
+  documents:
+    - docs/work/wake-response-contract.md
+    - docs/guides/wake-completion-contract.md
+    - docs/guides/response-watch.md
+    - docs/guides/regular-schedule-ledger.md
+    - docs/guides/server-wake-onboarding.md

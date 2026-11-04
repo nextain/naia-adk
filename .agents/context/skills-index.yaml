@@ -104,6 +104,7 @@ skills:
 
   manage-discord-sessions:
     trigger: "Discord 설정, Codex/Claude 백그라운드 작업 상태, 실시간 활동, 멈춤 진단, 재부팅 복구, idle history rotation"
+    # Wake/observer/schedule guides: docs/guides/wake-completion-contract.md
     what: "ADK 내부 SQLite에서 Discord AI 작업의 서비스 신선도·활동·검증 증거를 조회하고, 이후 Gateway/재부팅 복구를 같은 계약으로 관리"
     arg: null
     scripts: [scripts/manage-discord-sessions.sh]
