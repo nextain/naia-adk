@@ -1,0 +1,7 @@
+# Public skill catalogue
+skills:
+  transcribe:
+    trigger: "받아쓰기, 자막 뽑기, 대사 시각, 회의 녹음 글로, 음성 인식, STT, transcribe"
+    what: "소리·영상 → 글·srt·vtt. 기본 게이트웨이(any-llm 호환, /v1/audio/transcriptions), 서버별 크레딧; 자막·화자는 Azure AI 서비스"
+    arg: "<파일...> [--format text|srt|vtt|json] [--locale] [--diarize N] [--backend gateway|azure]"
+    scripts: [scripts/transcribe.mjs, scripts/lib.mjs]
