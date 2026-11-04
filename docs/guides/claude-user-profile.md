@@ -12,7 +12,7 @@
 | 파일 | 넣는 곳 | 내용 |
 | --- | --- | --- |
 | `settings.json` | `~/.claude/settings.json` | 압축 기준 `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000`, `CLAUDE_CODE_GOAL_CHECKIN_MINUTES=0`, `CLAUDE_CODE_RETRY_WATCHDOG=0`, 세션 시작·압축 뒤 `role-compact-brief.js` 훅(ADK 뿌리 절대 경로) |
-| `CLAUDE.md` | `~/.claude/CLAUDE.md` 의 표시 구간 | 압축할 때 남길 것(미션·원문 지시·답 안 한 질문·경로) |
+| `CLAUDE.md` | `~/.claude/CLAUDE.md` 의 표시 구간 | 압축할 때 남길 것(미션·원문 지시·작업 문서 표·코드 상태·돌아가는 것·남은 일·지킬 것)과 컨텍스트 절약 |
 
 압축 기준이 없으면 세션은 모델 최대 창까지 맥락을 키운 뒤에야 압축합니다. 부를 때마다 보내는 맥락이 커져 비용이 늘고 중간 내용을 놓치는 일이 커집니다.
 
