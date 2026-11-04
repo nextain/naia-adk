@@ -1,0 +1,6 @@
+{
+  "work": "approved-root-runner",
+  "repository_docs": {"status": "UPDATED", "files": ["docs/guides/approved-root-runner.md"]},
+  "user_manual": {"status": "UPDATED", "files": ["docs/guides/approved-root-runner.md"], "reason": "Human installation, approval-service integration, rollback and acceptance instructions."},
+  "reusable_learning": {"status": "UPDATED", "files": ["docs/guides/approved-root-runner.md"], "reason": "Threat model documents signed authorization, replay and mutable command dependencies."}
+}

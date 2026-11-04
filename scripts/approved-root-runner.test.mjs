@@ -1,0 +1,243 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { approvalBytes, sha256, validateRequest, runRequest, assertProtectedPath, readProtectedFile } from './approved-root-runner.mjs';
+
+const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+const subjectUid = process.getuid();
+const now = 1800000000000;
+function signed(payload) {
+  return { payload, signature: crypto.sign(null, approvalBytes(payload), privateKey).toString('base64') };
+}
+function request(command = 'printf approved') {
+  const planBytes = Buffer.from(JSON.stringify({ schema: 1, steps: [{ id: 'inspect', command, commandSha256: sha256(command) }] }));
+  const planSha256 = sha256(planBytes);
+  const common = { schema: 1, planSha256, reviewSha256: sha256('adversarial-review'), subjectUid, issuedAt: now - 1000, expiresAt: now + 60000 };
+  return {
+    planBase64: planBytes.toString('base64'), planSha256, stepId: 'inspect', command,
+    planApproval: signed({ ...common, kind: 'PLAN', code: `PLAN-${crypto.randomBytes(16).toString('hex')}` }),
+    stepApproval: signed({ ...common, kind: 'STEP', code: `STEP-${crypto.randomBytes(16).toString('hex')}`, stepId: 'inspect', commandSha256: sha256(command) }),
+  };
+}
+const options = { publicKey, subjectUid, now };
+function fixture(t) {
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR || os.tmpdir(), 'approved-runner-test-'));
+  fs.chmodSync(dir, 0o700);
+  fs.mkdirSync(path.join(dir, 'used'), { mode: 0o700 });
+  fs.mkdirSync(path.join(dir, 'audit'), { mode: 0o700 });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return { ...options, stateDir: dir, trustedUid: subjectUid, testBoundary: dir };
+}
+function alterApproval(req, kind, values) {
+  const key = `${kind}Approval`;
+  req[key] = signed({ ...req[key].payload, ...values });
+}
+
+test('accepts real independently signed PLAN and STEP approvals', () => {
+  const req = request();
+  assert.equal(validateRequest(req, options).step.command, req.command);
+});
+
+test('rejects commands and step IDs outside the approved plan byte for byte', () => {
+  for (const edit of [r => { r.command += ' '; }, r => { r.command = 'printf bypass'; }, r => { r.stepId = '../inspect'; }]) {
+    const req = request(); edit(req);
+    assert.throws(() => validateRequest(req, options), /Command differs/);
+  }
+});
+
+test('rejects changed plan bytes and incorrect step digest', () => {
+  const req = request();
+  req.planBase64 = Buffer.from('{}').toString('base64');
+  assert.throws(() => validateRequest(req, options), /Plan hash/);
+  const badStep = request();
+  const plan = JSON.parse(Buffer.from(badStep.planBase64, 'base64'));
+  plan.steps[0].commandSha256 = '0'.repeat(64);
+  badStep.planBase64 = Buffer.from(JSON.stringify(plan)).toString('base64');
+  badStep.planSha256 = sha256(Buffer.from(badStep.planBase64, 'base64'));
+  assert.throws(() => validateRequest(badStep, options), /Invalid plan step/);
+});
+
+test('rejects forged signatures, wrong caller, expired, future and excessive lifetime approvals', () => {
+  const forged = request();
+  forged.stepApproval.signature = Buffer.alloc(64).toString('base64');
+  assert.throws(() => validateRequest(forged, options), /signature/);
+  assert.throws(() => validateRequest(request(), { ...options, subjectUid: subjectUid + 1 }), /approval/);
+  for (const values of [{ expiresAt: now }, { issuedAt: now + 1 }, { expiresAt: now + 900001 }]) {
+    for (const kind of ['plan', 'step']) {
+      const req = request(); alterApproval(req, kind, values);
+      assert.throws(() => validateRequest(req, options), /approval/);
+    }
+  }
+});
+
+test('rejects signed approvals bound to a different step, command or plan', () => {
+  for (const values of [{ stepId: 'other' }, { commandSha256: '0'.repeat(64) }, { planSha256: '0'.repeat(64) }]) {
+    const req = request(); alterApproval(req, 'step', values);
+    assert.throws(() => validateRequest(req, options), /mismatch|approval/);
+  }
+});
+
+test('executes without inherited environment and captures output and nonzero status', t => {
+  const opts = fixture(t);
+  const req = request('printf "%s|%s|%s" "${RUNNER_POISON-unset}" "$PATH" "$PWD"; printf failure >&2; exit 7');
+  const previous = process.env.RUNNER_POISON;
+  process.env.RUNNER_POISON = 'must-not-leak';
+  t.after(() => { if (previous === undefined) delete process.env.RUNNER_POISON; else process.env.RUNNER_POISON = previous; });
+  const result = runRequest(req, opts);
+  assert.equal(result.exitCode, 7);
+  const audit = path.join(opts.stateDir, 'audit', result.auditId);
+  assert.equal(fs.readFileSync(path.join(audit, 'stdout'), 'utf8'), 'unset|/usr/sbin:/usr/bin:/sbin:/bin|/');
+  assert.equal(fs.readFileSync(path.join(audit, 'stderr'), 'utf8'), 'failure');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(audit, 'result.json'))).exitCode, 7);
+  assert.equal(sha256(fs.readFileSync(path.join(audit, 'plan.json'))), req.planSha256);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(audit, 'request.json'))), req);
+  assert.equal(fs.statSync(path.join(audit, 'result.json')).mode & 0o777, 0o600);
+  assert.throws(() => runRequest(req, opts), /EEXIST/);
+});
+
+test('consumes failed launches and preserves failure audit', t => {
+  const opts = fixture(t);
+  const req = request();
+  const result = runRequest(req, { ...opts, execute() { throw new Error('launch failed'); } });
+  assert.equal(result.exitCode, null);
+  assert.equal(result.error, 'launch failed');
+  assert.throws(() => runRequest(req, opts), /EEXIST/);
+});
+
+test('rejects symlink directories, writable state, hardlinked keys and traversal', t => {
+  const opts = fixture(t);
+  const key = path.join(opts.stateDir, 'key');
+  fs.writeFileSync(key, 'public-key', { mode: 0o600 });
+  assert.equal(readProtectedFile(key, subjectUid, opts.stateDir).toString(), 'public-key');
+  const link = path.join(opts.stateDir, 'link');
+  fs.symlinkSync(key, link);
+  assert.throws(() => readProtectedFile(link, subjectUid, opts.stateDir), /Untrusted/);
+  fs.linkSync(key, path.join(opts.stateDir, 'hardlink'));
+  assert.throws(() => readProtectedFile(key, subjectUid, opts.stateDir), /Untrusted/);
+  assert.throws(() => assertProtectedPath(`${opts.stateDir}/../${path.basename(opts.stateDir)}`, subjectUid, true, opts.stateDir), /canonical/);
+  fs.chmodSync(opts.stateDir, 0o777);
+  assert.throws(() => runRequest(request(), opts), /Untrusted/);
+  fs.chmodSync(opts.stateDir, 0o700);
+  const dirLink = path.join(opts.stateDir, 'audit-link');
+  fs.symlinkSync(path.join(opts.stateDir, 'audit'), dirLink);
+  assert.throws(() => assertProtectedPath(dirLink, subjectUid, true, opts.stateDir), /Untrusted/);
+});
+
+test('concurrent processes cannot execute the same approval twice', async t => {
+  const opts = fixture(t);
+  const req = request('printf once');
+  const moduleUrl = new URL('./approved-root-runner.mjs', import.meta.url).href;
+  const code = `import { runRequest } from ${JSON.stringify(moduleUrl)}; import crypto from 'node:crypto'; let s=''; for await (const c of process.stdin) s+=c; const {request,options,key}=JSON.parse(s); try {runRequest(request,{...options,publicKey:crypto.createPublicKey(key)});} catch {process.exitCode=2;}`;
+  const input = JSON.stringify({ request: req, options: { subjectUid, now, stateDir: opts.stateDir, trustedUid: subjectUid, testBoundary: opts.stateDir }, key: publicKey.export({ type: 'spki', format: 'pem' }) });
+  const launch = () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', code], { stdio: ['pipe', 'ignore', 'pipe'] });
+    let error = ''; child.stderr.on('data', chunk => { error += chunk; });
+    child.on('error', reject); child.on('close', code => resolve({ code, error })); child.stdin.end(input);
+  });
+  const results = await Promise.all([launch(), launch()]);
+  assert.deepEqual(results.map(x => x.code).sort(), [0, 2], JSON.stringify(results));
+  const audits = fs.readdirSync(path.join(opts.stateDir, 'audit'));
+  assert.equal(audits.length, 1);
+  assert.equal(fs.readFileSync(path.join(opts.stateDir, 'audit', audits[0], 'stdout'), 'utf8'), 'once');
+});
+
+
+test('rejects changed plans even when caller recomputes their digest', () => {
+  const req = request();
+  const plan = JSON.parse(Buffer.from(req.planBase64, 'base64'));
+  plan.steps[0].command = 'printf substituted';
+  plan.steps[0].commandSha256 = sha256(plan.steps[0].command);
+  req.command = plan.steps[0].command;
+  req.planBase64 = Buffer.from(JSON.stringify(plan)).toString('base64');
+  req.planSha256 = sha256(Buffer.from(req.planBase64, 'base64'));
+  assert.throws(() => validateRequest(req, options), /approval/);
+});
+
+test('refuses extra request fields and malformed approval envelopes', () => {
+  assert.throws(() => validateRequest({ ...request(), extra: true }, options), /Unexpected fields/);
+  const req = request(); req.stepApproval.payload.extra = true;
+  assert.throws(() => validateRequest(req, options), /Unexpected fields/);
+  const malformed = request(); malformed.planBase64 = '?';
+  assert.throws(() => validateRequest(malformed, options), /encoding/);
+});
+
+test('re-signing a used code with a new expiry cannot bypass the used-code ledger', t => {
+  for (const reused of ['plan', 'step']) {
+    const opts = fixture(t);
+    const first = request();
+    runRequest(first, opts);
+    const second = request();
+    alterApproval(second, reused, { code: first[`${reused}Approval`].payload.code, expiresAt: now + 120000 });
+    assert.throws(() => runRequest(second, opts), /EEXIST/);
+    assert.equal(fs.readdirSync(path.join(opts.stateDir, 'audit')).length, 1);
+  }
+});
+
+test('rejects a symlink replacing the used directory before command execution', t => {
+  const opts = fixture(t);
+  fs.renameSync(path.join(opts.stateDir, 'used'), path.join(opts.stateDir, 'real-used'));
+  fs.symlinkSync(path.join(opts.stateDir, 'real-used'), path.join(opts.stateDir, 'used'));
+  let executed = false;
+  assert.throws(() => runRequest(request(), { ...opts, execute() { executed = true; } }), /Untrusted/);
+  assert.equal(executed, false);
+  assert.equal(fs.readdirSync(path.join(opts.stateDir, 'audit')).length, 0);
+});
+
+
+test('privileged CLI rejects an unprivileged caller and all command-line options', () => {
+  assert.notEqual(subjectUid, 0, 'this suite must run without root');
+  const runner = fileURLToPath(new URL('./approved-root-runner.mjs', import.meta.url));
+  for (const args of [[], ['--state-dir', '/'], ['--help']]) {
+    const result = spawnSync(process.execPath, [runner, ...args], { input: '{}', encoding: 'utf8', timeout: 5000 });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Root execution without arguments required/);
+    assert.equal(result.stdout, '');
+  }
+});
+
+test('offline signer produces verifiable approvals over exact plan and review bytes', t => {
+  const opts = fixture(t);
+  const initial = request();
+  const planBytes = Buffer.from(initial.planBase64, 'base64');
+  const reviewBytes = Buffer.from('Adversarial review: command and rollback checked.\n');
+  const keyFile = path.join(opts.stateDir, 'private.pem');
+  const planFile = path.join(opts.stateDir, 'plan.json');
+  const reviewFile = path.join(opts.stateDir, 'review.txt');
+  fs.writeFileSync(keyFile, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
+  fs.writeFileSync(planFile, planBytes);
+  fs.writeFileSync(reviewFile, reviewBytes);
+  const signer = fileURLToPath(new URL('./sign-approved-runner.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [signer, keyFile, planFile, reviewFile, String(subjectUid), 'inspect'], { encoding: 'utf8', timeout: 5000 });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  const signedRequest = JSON.parse(result.stdout);
+  const validated = validateRequest(signedRequest, { publicKey, subjectUid });
+  assert.deepEqual(validated.planBytes, planBytes);
+  assert.equal(signedRequest.planApproval.payload.reviewSha256, sha256(reviewBytes));
+  assert.equal(signedRequest.stepApproval.payload.reviewSha256, sha256(reviewBytes));
+  assert.notEqual(signedRequest.planApproval.payload.code, signedRequest.stepApproval.payload.code);
+  assert.equal(signedRequest.planApproval.payload.expiresAt - signedRequest.planApproval.payload.issuedAt, 300000);
+});
+
+test('rejects separately signed approvals referring to different reviews', () => {
+  const req = request();
+  alterApproval(req, 'step', { reviewSha256: sha256('different review') });
+  assert.throws(() => validateRequest(req, options), /Review digest mismatch/);
+});
+
+test('rejects malformed UTF8 in otherwise hash-matched and signed plan bytes', () => {
+  const req = request();
+  const valid = Buffer.from(req.planBase64, 'base64');
+  const malformed = Buffer.concat([valid.subarray(0, valid.length - 1), Buffer.from(',"note":"'), Buffer.from([0xff]), Buffer.from('"}')]);
+  // JSON.parse would accept replacement-character decoding; fatal UTF8 validation must reject first.
+  assert.doesNotThrow(() => JSON.parse(malformed.toString('utf8')));
+  req.planBase64 = malformed.toString('base64'); req.planSha256 = sha256(malformed);
+  for (const kind of ['plan', 'step']) alterApproval(req, kind, { planSha256: req.planSha256 });
+  assert.throws(() => validateRequest(req, options), /encoded data|UTF-8|encoding/i);
+});
