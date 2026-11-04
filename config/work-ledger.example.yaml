@@ -1,0 +1,12 @@
+# One instance-private canonical file per server. Markdown is a human view.
+version: 1
+work:
+  - id: task-001
+    role: role-a
+    task: "Review a draft"
+    status: 진행 중
+    requested_at: "2030-01-01T09:00:00Z"
+    due_at: null
+    evidence: "https://example.invalid/request/1"
+    result: null
+    updated_at: "2030-01-01T09:00:00Z"

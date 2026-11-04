@@ -39,3 +39,9 @@ session_health_trace:
   tests: scripts/session-health.test.mjs
   guide: docs/guides/session-health.md
   scenarios: docs/work/session-health.md
+
+work_ledger_trace:
+  requirements: docs/work/work-ledger-schedule.md
+  code: [scripts/lib/ledger.mjs, scripts/schedule-record.mjs, scripts/session-health.mjs]
+  tests: [scripts/ledger.test.mjs, scripts/session-health.test.mjs]
+  guides: [docs/guides/work-ledger.md, docs/guides/regular-schedule-ledger.md]

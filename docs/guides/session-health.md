@@ -12,12 +12,21 @@ or a recent commit does not establish task correctness. Start with the
   fingerprint changes and session-record mtime establish activity. No change for
   `idleMinutes` (default 30) is `stopped`. The first output sample establishes a
   baseline, not historical activity. Adapter/read failures are `unknown`.
-- **Progress:** configured Markdown work/todo files supply lines containing
+- **Progress:** top-level `workLedger` supplies role-matched `진행 중` rows
+  from the [canonical work ledger](work-ledger.md). Each row uses its own
+  `updated_at`; unrelated commits, replies and other rows cannot refresh it. Any
+  stale active row produces `stalled`. Invalid ledgers display unknown and retain
+  existing episodes. Legacy configured Markdown work/todo files supply lines containing
   `진행 중` or `in progress` (case insensitive). Last workspace commit, work-file
   mtime and response-watch confirmed reply timestamp are separate evidence.
   Active tasks without evidence for `staleHours` (default 2) are `stalled`.
   With no progress evidence, time starts at the first observation. File edits or
   replies are only progress proxies; inspect actual deliverables separately.
+- **Regular work:** top-level `regularSchedule` reads the
+  [execution ledger](regular-schedule-ledger.md). Installed rows without a record
+  covering the latest local due occurrence after `graceMinutes` show `안 돎`.
+  Each missed occurrence has independent nudge/escalation receipts and the
+  schedule signal has its own silent baseline. Invalid schedules remain unknown.
 - **Drift:** compare SHA-256 of AGENTS.md, every tracked baseline/current
   `.agents/context/agents-rules*.json`, and the canonical JSON hooks object from
   `.claude/settings.json` against a full pinned `baselineSha` in `baselineRepo`.

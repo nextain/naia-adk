@@ -1,0 +1,21 @@
+{
+  "work": "work-ledger-schedule",
+  "repository_docs": {
+    "status": "UPDATED",
+    "paths": ["AGENTS.md", ".agents/requirements/REQ-WAKE-001.yaml", "docs/work/work-ledger-schedule.md"]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "paths": ["docs/guides/work-ledger.md", "docs/guides/regular-schedule-ledger.md", "docs/guides/session-health.md", "config/work-ledger.example.yaml", "config/regular-schedule.example.yaml", "config/session-health.example.json"]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "paths": ["docs/guides/server-wake-onboarding.md"]
+  },
+  "source_handling": "Generic derived requirements only; original request remains outside public tree",
+  "review": {
+    "independent_static_review": "Two-pass review; multi-role report rendering fixed and regression tested; fresh same-role task coverage added",
+    "formal_review_pass": "NOT_CLEAN: complete stage-separated preservation receipts not collected; local checkpoint is REVIEW_ONLY",
+    "public_push_review": "NOT_RUN; no push authorized"
+  }
+}

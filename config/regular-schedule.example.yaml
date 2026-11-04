@@ -7,6 +7,7 @@ schedules:
     task: "Write a daily reflection"
     cadence: daily
     time: "22:00"
+    graceMinutes: 15
     status: 제안
     mechanism:
       kind: wake
@@ -22,6 +23,7 @@ schedules:
     task: "Review the reading list"
     cadence: "weekly:MON"
     time: "18:30"
+    graceMinutes: 15
     status: 사람
     mechanism:
       kind: manual

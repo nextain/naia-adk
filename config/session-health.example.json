@@ -36,5 +36,7 @@
       ],
       "allowedOverrides": []
     }
-  ]
+  ],
+  "workLedger": "/<private>/work-ledger.yaml",
+  "regularSchedule": "/<private>/regular-schedule.yaml"
 }
