@@ -13,7 +13,8 @@ test('block parser round trips examples, quotes and unknown fields', async () =>
   const doc = schedule(); doc.schedules[0].task = 'A: "quoted" # task'; doc.schedules[0].extra = { note: 'keep' };
   assert.deepEqual(parseLedgerYaml(serializeLedgerYaml(doc)), doc);
   const existing = parseLedgerYaml(await readFile(new URL('../config/regular-schedule.example.yaml', import.meta.url), 'utf8'));
-  assert.equal(validateScheduleLedger(existing, now).schedules.length, 2);
+  assert.equal(validateScheduleLedger(existing, now).schedules.length, 4);
+  assert.deepEqual(existing.schedules.slice(2).map(r => [r.id, r.cadence, r.status]), [["weekly-security-review", "weekly:MON", "제안"], ["daily-security-advisory", "daily", "제안"]]);
   assert.equal(parseLedgerYaml("version: 1\nvalue: 'it''s fine'\n").value, "it's fine");
 });
 test('parser rejects duplicates, indentation and advanced YAML', () => {

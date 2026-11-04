@@ -1,0 +1,7 @@
+{
+  "work": "security-advisory-propagation",
+  "repository_docs": {"status": "UPDATED", "paths": ["docs/guides/security-advisory-propagation.md"]},
+  "user_manual": {"status": "UPDATED", "paths": ["docs/guides/security-advisory-propagation.md", "config/security-advisory.example.json", "config/regular-schedule.example.yaml"]},
+  "reusable_learning": {"status": "UPDATED", "paths": ["docs/guides/security-advisory-propagation.md"], "detail": "Immutable advisory IDs, conservative asset matching and private result receipts separate intake from remediation."},
+  "source_handling": "Generic propagation contract only; instance source code, inventories, source lists and operational values remain outside the public tree."
+}
