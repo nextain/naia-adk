@@ -11,13 +11,13 @@
     "files": [
       "docs/guides/approved-root-runner.md"
     ],
-    "reason": "Per-instance approver roles, identity-bound signing, human installation and approved role-table/key rotation flow."
+    "reason": "Offline signing with protected digest-pinned inputs, immutable artifact snapshots and unconditional installation block pending authenticated Discord issuer."
   },
   "reusable_learning": {
     "status": "UPDATED",
     "files": [
       "docs/guides/approved-root-runner.md"
     ],
-    "reason": "Threat model documents role hierarchy, exact current-table signature binding, serialized updates, protected backups and the arbitrary-root-command trust boundary."
+    "reason": "TOCTOU snapshots, key and host separation limits, dependency review boundary, and fail-closed issuer delivery gate."
   }
 }

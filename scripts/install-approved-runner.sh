@@ -1,6 +1,11 @@
 #!/bin/bash
 # Human-only one-time installation. Never run as an AI work step.
 set -euo pipefail
+# Deliberately unconditional: a config file is not an authenticated issuer.
+# Re-enable only in the issuer PR with verified identity, consent and staging tests.
+echo 'Installation refused: Discord issuer is not implemented. Issuer configuration and acceptance are required in the next PR.' >&2
+exit 1
+
 if [[ $EUID != 0 || $# != 2 ]]; then
   echo 'Usage (as root): install-approved-runner.sh ACCOUNT ROLES_FILE' >&2
   exit 1

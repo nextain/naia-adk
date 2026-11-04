@@ -33,12 +33,59 @@ export function parseRoles(bytes) {
   return { approvers, rolesSha256: sha256(bytes) };
 }
 export function approvalBytes(payload) {
-  const keys = ['schema', 'approverId', 'rolesSha256', 'kind', 'code', 'planSha256', 'subjectUid', 'issuedAt', 'expiresAt', 'reviewSha256'];
+  const keys = ['schema', 'approverId', 'rolesSha256', 'executionMachineIdSha256', 'kind', 'code', 'planSha256', 'subjectUid', 'issuedAt', 'expiresAt', 'reviewSha256'];
   if (payload.kind === 'STEP') keys.push('stepId', 'commandSha256');
   exactKeys(payload, keys);
   return Buffer.from(JSON.stringify(Object.fromEntries(keys.map(key => [key, payload[key]]))));
 }
-export function validateRequest(request, { rolesBytes, subjectUid, now = Date.now() }) {
+// No shell parses command strings. File inputs must use signed snapshot references.
+export function commandArguments(step) {
+  if (!Array.isArray(step.artifacts) || step.artifacts.length > 100) fail('Expected signed artifacts array');
+  for (const artifact of step.artifacts) {
+    exactKeys(artifact, ['path', 'sha256']);
+    if (typeof artifact.path !== 'string' || !path.isAbsolute(artifact.path) || path.normalize(artifact.path) !== artifact.path || artifact.path.includes('\0') || !digest(artifact.sha256)) fail('Invalid artifact');
+  }
+  if (!/^\/[A-Za-z0-9_./-]+(?: (?:[A-Za-z0-9_.,:+%@=/-]+|\{\{artifact:[0-9]+\}\}))*$/.test(step.command)) fail('Unsafe command syntax');
+  const [executable, ...args] = step.command.split(' ');
+  if (path.normalize(executable) !== executable) fail('Expected canonical executable');
+  if (!['/usr/bin/id', '/usr/bin/printf', '/usr/bin/true', '/usr/bin/false', '/usr/bin/cat'].includes(executable)) fail('Unsafe executable: not in fixed allowlist');
+  const references = new Set();
+  for (const arg of args) {
+    const match = /^\{\{artifact:([0-9]+)\}\}$/.exec(arg);
+    if (match) {
+      const index = Number(match[1]);
+      if (!Number.isSafeInteger(index) || index >= step.artifacts.length) fail('Invalid artifact reference');
+      references.add(index);
+    } else if (arg.includes('/') || arg === '.' || arg === '..') fail('Direct file arguments require artifact references');
+  }
+  if (references.size !== step.artifacts.length) fail('Every artifact must be referenced');
+  if (executable === '/usr/bin/cat' && (!args.length || args.some(arg => !/^\{\{artifact:[0-9]+\}\}$/.test(arg)))) fail('Cat accepts only snapshot artifacts');
+  return { executable, args };
+}
+function snapshotArtifacts(step, auditDir, trustedUid, testBoundary) {
+  const directory = path.join(auditDir, 'artifacts');
+  fs.mkdirSync(directory, { mode: 0o700 });
+  assertProtectedPath(directory, trustedUid, true, testBoundary);
+  return step.artifacts.map((artifact, index) => {
+    const fd = fs.openSync(artifact.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    let bytes;
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.nlink !== 1 || stat.size > LIMIT) fail('Invalid artifact file');
+      // Bound the read even if a hostile source grows after fstat.
+      bytes = Buffer.alloc(LIMIT + 1);
+      let length = 0, count;
+      while (length < bytes.length && (count = fs.readSync(fd, bytes, length, bytes.length - length, null))) length += count;
+      bytes = bytes.subarray(0, length);
+      if (length > LIMIT || sha256(bytes) !== artifact.sha256) fail('Artifact hash mismatch');
+    } finally { fs.closeSync(fd); }
+    const destination = path.join(directory, String(index));
+    writeNew(destination, bytes);
+    if (sha256(readProtectedFile(destination, trustedUid, testBoundary)) !== artifact.sha256) fail('Snapshot hash mismatch');
+    return destination;
+  });
+}
+export function validateRequest(request, { rolesBytes, subjectUid, executionMachineIdSha256, now = Date.now() }) {
   const policy = parseRoles(rolesBytes);
   exactKeys(request, ['planBase64', 'planSha256', 'stepId', 'command', 'planApproval', 'stepApproval']);
   if (typeof request.planBase64 !== 'string' || request.planBase64.length > LIMIT || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(request.planBase64)) fail('Invalid plan encoding');
@@ -49,6 +96,7 @@ export function validateRequest(request, { rolesBytes, subjectUid, now = Date.no
   const ids = new Set();
   for (const item of plan.steps) {
     if (!item || typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(item.id) || ids.has(item.id) || typeof item.command !== 'string' || !item.command || item.command.includes('\0') || !digest(item.commandSha256) || sha256(Buffer.from(item.command)) !== item.commandSha256) fail('Invalid plan step');
+    if (plan.schema === 1) commandArguments(item);
     ids.add(item.id);
   }
   let replacement = null;
@@ -65,7 +113,7 @@ export function validateRequest(request, { rolesBytes, subjectUid, now = Date.no
     exactKeys(approval, ['payload', 'signature']);
     const p = approval.payload;
     const bytes = approvalBytes(p);
-    if (!digest(p.reviewSha256) || p.schema !== 2 || p.rolesSha256 !== policy.rolesSha256 || p.kind !== kind || typeof p.code !== 'string' || !new RegExp(`^${kind}-[a-f0-9]{32}$`).test(p.code) || p.planSha256 !== request.planSha256 || !Number.isSafeInteger(p.subjectUid) || p.subjectUid !== subjectUid || !Number.isSafeInteger(p.issuedAt) || !Number.isSafeInteger(p.expiresAt) || p.issuedAt > now || p.expiresAt <= now || p.expiresAt <= p.issuedAt || p.expiresAt - p.issuedAt > 15 * 60 * 1000) fail('Invalid or expired approval');
+    if (!digest(executionMachineIdSha256) || p.executionMachineIdSha256 !== executionMachineIdSha256 || !digest(p.reviewSha256) || p.schema !== 2 || p.rolesSha256 !== policy.rolesSha256 || p.kind !== kind || typeof p.code !== 'string' || !new RegExp(`^${kind}-[a-f0-9]{32}$`).test(p.code) || p.planSha256 !== request.planSha256 || !Number.isSafeInteger(p.subjectUid) || p.subjectUid !== subjectUid || !Number.isSafeInteger(p.issuedAt) || !Number.isSafeInteger(p.expiresAt) || p.issuedAt > now || p.expiresAt <= now || p.expiresAt <= p.issuedAt || p.expiresAt - p.issuedAt > 15 * 60 * 1000) fail('Invalid or expired approval');
     if (kind === 'STEP' && (p.stepId !== step.id || p.commandSha256 !== step.commandSha256)) fail('Approval step mismatch');
     const approver = policy.approvers.find(entry => entry.id === p.approverId);
     if (!approver?.allowed) fail('Unauthorized approver role');
@@ -106,10 +154,10 @@ function writeNew(filename, bytes) {
   try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   syncDirectory(path.dirname(filename));
 }
-function runLockedRequest(request, { rolesBytes, rolesFile, subjectUid, stateDir, now = Date.now(), trustedUid = 0, testBoundary = null, execute = spawnSync }) {
+function runLockedRequest(request, { rolesBytes, rolesFile, subjectUid, stateDir, executionMachineIdSha256, now = Date.now(), trustedUid = 0, testBoundary = null, execute = spawnSync }) {
   assertProtectedPath(stateDir, trustedUid, true, testBoundary);
   for (const name of ['used', 'audit']) assertProtectedPath(path.join(stateDir, name), trustedUid, true, testBoundary);
-  const validated = validateRequest(request, { rolesBytes, subjectUid, now });
+  const validated = validateRequest(request, { rolesBytes, subjectUid, executionMachineIdSha256, now });
   // O_EXCL consumes the step before any command can run; crashes fail closed.
   const used = path.join(stateDir, 'used', validated.token);
   writeNew(path.join(stateDir, 'used', validated.planToken), JSON.stringify({ at: now }));
@@ -132,11 +180,17 @@ function runLockedRequest(request, { rolesBytes, rolesFile, subjectUid, stateDir
     writeNew(path.join(auditDir, 'result.json'), JSON.stringify(record));
     return record;
   }
+  if (rolesFile && !readProtectedFile(rolesFile, trustedUid, testBoundary).equals(rolesBytes)) fail('Role policy changed');
+  const invocation = commandArguments(validated.step);
+  const executable = fs.realpathSync(invocation.executable);
+  assertProtectedPath(executable);
+  const snapshots = snapshotArtifacts(validated.step, auditDir, trustedUid, testBoundary);
+  const args = invocation.args.map(arg => arg.replace(/^\{\{artifact:([0-9]+)\}\}$/, (_, index) => snapshots[Number(index)]));
   const out = fs.openSync(path.join(auditDir, 'stdout'), 'wx', 0o600);
   const err = fs.openSync(path.join(auditDir, 'stderr'), 'wx', 0o600);
   let result;
   try {
-    result = execute('/bin/bash', ['--noprofile', '--norc', '-c', validated.step.command], {
+    result = execute(executable, args, {
       cwd: '/', env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', HOME: '/root', LANG: 'C', LC_ALL: 'C' },
       stdio: ['ignore', out, err], timeout: 300000, killSignal: 'SIGKILL',
     });
@@ -169,7 +223,7 @@ async function main() {
   try {
     for await (const chunk of process.stdin) { size += chunk.length; if (size > LIMIT) fail('Request too large'); chunks.push(chunk); }
   } finally { clearTimeout(timer); }
-  const result = runRequest(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))), { rolesFile: '/etc/naia-approved-runner/roles.json', subjectUid, stateDir: '/var/lib/naia-approved-runner' });
+  const result = runRequest(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))), { rolesFile: '/etc/naia-approved-runner/roles.json', subjectUid, executionMachineIdSha256: sha256(readProtectedFile('/etc/machine-id')), stateDir: '/var/lib/naia-approved-runner' });
   process.stdout.write(`${JSON.stringify(result)}\n`);
   process.exitCode = result.exitCode === 0 ? 0 : 1;
 }

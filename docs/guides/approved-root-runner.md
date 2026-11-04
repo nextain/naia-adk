@@ -1,48 +1,54 @@
-# Approved root runner
+# Approved root runner — offline primitive, installation blocked
 
-## Purpose and trust boundary
+## Delivery status
 
-A person approves a reviewed plan on a mobile device; the AI submits the approved
-request and receives an execution receipt. The person's authority stays with the
-person. A workspace file or a short approval code alone never grants root access.
-This Linux implementation uses only Node.js standard modules and the system shell.
+This PR provides an offline signing and verification primitive. The authenticated
+Discord issuer is deferred to the next PR. **Do not install the runner before that
+issuer is implemented, tested and accepted.** The installer unconditionally exits
+before inspecting or modifying installation destinations, even if an issuer
+configuration file is supplied. A configuration file alone cannot prove that an
+issuer exists. The issuer PR must deliberately replace this gate with verified
+configuration and acceptance checks; environment flags cannot bypass it.
 
-The flow is: `.agents/progress/<work>/gates/deploy-plan.json` → adversarial review
-of the exact plan → authenticated human approval → signed PLAN and STEP records →
-AI submission → privileged verification → execution and protected audit receipt.
-The human approval service must show the exact command, plan digest, review result,
-caller UID and expiry before issuing signatures. It must enforce the authorized
-human identity and require a clean review whose report names the exact plan digest.
-The supplied offline signer is the signing primitive for that trusted service;
-it does not provide a mobile UI, identity provider, or review adjudication.
+The eventual flow is reviewed immutable plan → authenticated human consent →
+signed PLAN and STEP → AI submission → protected execution and audit receipt.
+A PLAN-/STEP- code alone grants no authority. Channel membership, channel roles
+and a CLI approver ID do not authenticate a human. The offline signer is for a
+human-controlled device; it is not a Discord bot or a mobile approval interface.
 
-At this revision `.agents/scripts/approval-plan.mjs` and
-`docs/common/production-deploy-approval.md` are absent. The existing
-`.claude/hooks/deploy-guard.js` delegates to
-`.agents/hooks/policies/bash.js`: its project/expiry/single-use JSON is a local
-workflow check. It remains unchanged. Its mutable records cannot authorize this
-runner. PLAN-/STEP- prefixes are retained, with signatures added as the authority.
-An instance with a different existing plan schema needs an explicit adapter that
-preserves its reviewed bytes; it must not silently reinterpret old approval codes.
+## Required key separation
 
-## Architecture and request format
+The private Ed25519 key must stay on a separate human-controlled device, under a
+separate UID from the AI submission account, or behind a human-side HSM/KMS.
+Never put it on the execution server, in its containers, backups, environment,
+repository, AI-readable secrets, or a colocated Discord bot. File mode 0600 does
+not isolate a key from an AI running with its owner's UID.
 
-The human installs a fixed `/usr/local/libexec/naia-approved-run` shell entrypoint
-and `/usr/local/libexec/naia-approved-runner.mjs`, both owned by root and unwritable
-by the AI account. A single sudoers rule grants only that entrypoint, with no
-arguments, `NOPASSWD` and `NOSETENV`. The wrapper clears the environment before
-starting the fixed `/usr/bin/node` interpreter. No privileged CLI option changes
-keys, state paths, ownership rules, or validation functions.
+The signer rejects a key unless it is a single-link regular non-symlink file,
+owned by the signer UID with exactly 0400 or 0600 permissions and protected
+ancestors. Plan, review and role files must be root-owned and unwritable by
+non-root users throughout their ancestor chain; workspace copies are rejected.
+Its mandatory pinned execution-host fingerprint must differ from the local
+machine fingerprint; the signer UID must differ from the target caller UID.
+Both signatures bind the execution-machine digest and the verifier compares it
+to its protected local machine-id, so a fabricated target digest cannot authorize
+execution. A human provisions the actual digest through a trusted channel.
+Machine-id is a deployment check, not hardware attestation; cloned IDs must be
+regenerated and a compromised root host can falsify them. No filesystem scan can
+prove that a secret or a duplicate key is absent from a host.
 
-The Ed25519 private key stays in a separate human-controlled approval service,
-outside the AI account and its host-accessible secrets. The runner holds only the root-owned instance role table
-`/etc/naia-approved-runner/roles.json`. Each approver has an individual Ed25519
-public key; private keys never appear in this table. Unlike a root HMAC issuer exposed
-through the same sudo rule, this verifier cannot mint approvals. Compromise of
-the signing service or its human authentication compromises this boundary.
+Staging must attest: no private key or bot token on the runner host; no shared
+UID, mounted home, backup, /proc access or container secret between AI and signer;
+correct machine identity; public key matches the registered approver; revocation
+and key rotation work. Installation stays blocked until this evidence exists.
 
-A plan is UTF-8 JSON, for example (replace the digest with the command's real
-SHA-256 before review):
+## Plans and immutable file dependencies
+
+Plans are original UTF-8 JSON bytes. The signed SHA-256 binds whitespace too.
+Every executed or read script/configuration file must be declared on the step as
+`artifacts: [{"path":"/absolute/source","sha256":"<digest>"}]`. Refer to a
+snapshot using `{{artifact:0}}`, `{{artifact:1}}`, etc.; never execute the original
+workspace path. A harmless command with no file dependencies uses an empty list:
 
 ```json
 {
@@ -50,210 +56,150 @@ SHA-256 before review):
   "steps": [{
     "id": "check",
     "command": "/usr/bin/id -u",
-    "commandSha256": "<sha256-of-UTF8-command>"
+    "commandSha256": "<sha256-of-the-exact-command>",
+    "artifacts": []
   }]
 }
 ```
 
-The signer takes
-`PRIVATE_KEY PLAN_FILE REVIEW_FILE SUBJECT_UID STEP_ID APPROVER_ID ROLES_FILE`
-and emits
-a JSON request with `planBase64`, `planSha256`, `stepId`, `command`, `planApproval`
-and `stepApproval`. `planBase64` encodes the original file bytes, including spacing
-and newlines. Each approval has `payload` and a base64 Ed25519 `signature`.
-Payload fields are `schema: 2`, `kind`, `code`, `planSha256`, `subjectUid`,
-`approverId`, `rolesSha256`,
-`issuedAt`, `expiresAt`, and `reviewSha256`; STEP adds `stepId` and
-`commandSha256`. Times are integer Unix milliseconds. `approvalBytes()` defines
-the signed field order. Codes have `PLAN-` or `STEP-` plus 32 random hex digits.
-The signer issues five-minute approvals; the verifier caps validity at 15 minutes.
+The current executable allowlist is exactly `/usr/bin/id`, `/usr/bin/printf`,
+`/usr/bin/true`, `/usr/bin/false` and `/usr/bin/cat`. To inspect a reviewed file,
+use `/usr/bin/cat {{artifact:0}}` and its path/hash artifact entry. Cat accepts
+only snapshot references. The runner copies bounded source bytes into exclusive
+files in its root-only audit directory, verifies hashes, and passes only copies
+to the child. Original mutation before copying causes rejection; mutation after
+copying cannot change the bytes consumed. Symlink/hardlink and oversized sources
+are rejected. Copies remain in the protected audit record.
 
-Each invocation consumes both codes. For another step the approval service must
-issue a fresh pair, after applying its human consent policy. Failed executions
-and interrupted attempts consume their codes too; retry requires fresh approval.
-The runner binds the signed UID to sudo's caller UID and binds both signatures
-to the same plan, review digest, approver identity and current role-table digest.
-Legacy schema-1 approval payloads must be reissued with these role bindings.
+Commands use a limited argument grammar and direct process launch. Shells,
+interpreters, package/build/download tools, relative executables, pipelines,
+redirections, backticks, `$()` and other expansion syntax are rejected. Direct
+file-path arguments are rejected. Executables are checked for protected ownership
+at runtime. These restrictions invalidate unsafe old plans; re-review and issue
+fresh approvals.
 
-The AI adapter sends the request on standard input to the installed entrypoint
-through sudo. Input is capped at 1 MiB and ten seconds. It must never send the
-private key, offer an arbitrary sudo command, or ask the person to paste a root
-command. The adapter can relay the JSON exit receipt to the mobile approval UI.
+This is deliberately more restrictive than snapshotting arbitrary shell scripts:
+a signed script can still source an unsigned workspace configuration or execute
+a changed second script. Declaring the first script's hash cannot prevent that.
+Arbitrary scripts and deployment commands therefore require a future audited
+operation handler with an explicit complete dependency contract. Scripts can be
+inspected as snapshot data but cannot be executed by this revision.
 
-## Instance roles and approved role changes
+**External state consumed by a command (including networks and system identity
+services) remains approval-review responsibility.** Snapshotting declared files
+is not a sandbox or proof of all operating-system dependencies. Approved role
+replacement retains root authority over the role table alone.
 
-The role table is per server, owned by root and protected by the same ancestor,
-symlink, hardlink and write-permission checks as other trusted files. For example:
+## Offline signing ceremony
+
+The signer arguments are:
+
+```text
+PRIVATE_KEY PLAN_FILE REVIEW_FILE SUBJECT_UID STEP_ID APPROVER_ID ROLES_FILE
+--expected-plan-sha256 SHA --expected-review-sha256 SHA
+--expected-roles-sha256 SHA --execution-machine-id-sha256 SHA
+```
+
+Machine digest means SHA-256 of the exact `/etc/machine-id` file bytes, including
+any final newline. The human obtains and checks expected plan, review and roles SHA-256
+values before invocation. The signer reads protected files once, compares all
+expected digests and signs those same in-memory bytes. Review JSON must contain
+`verdict: "clean"` and the exact `planSha256`; the signer binds the complete
+review-file digest. A matching JSON assertion is not independent review evidence:
+the human must verify the review's provenance and findings.
+
+Before emitting a request, the signer displays the command, plan/review/roles
+digests, caller UID, approver ID and issue/expiry times on stderr. Mandatory
+expected digests provide the consent binding; this CLI has no implicit approval
+of whichever bytes happen to occupy a workspace pathname.
+
+The request contains `planBase64`, `planSha256`, `stepId`, `command`, `planApproval`
+and `stepApproval`. Each approval has an Ed25519 signature and schema-2 payload:
+`approverId`, `rolesSha256`, `kind`, `code`, `planSha256`, `subjectUid`,
+`issuedAt`, `expiresAt`, `reviewSha256`, `executionMachineIdSha256`; STEP additionally binds `stepId` and
+`commandSha256`. `approvalBytes()` defines the exact serialization order.
+PLAN and STEP must have the same approver and review. Codes contain 128 random
+bits, expire in five minutes, and are consumed before execution; verifier maximum
+lifetime is fifteen minutes. Every invocation needs a fresh pair.
+
+## Role policy and replacement
+
+The execution server holds only public keys in protected root-owned
+`/etc/naia-approved-runner/roles.json`, for example:
 
 ```json
-{
-  "schema": 1,
-  "minimumRole": "dev-lead",
-  "approvers": [{
-    "id": "human-owner",
-    "role": "owner",
-    "publicKey": "-----BEGIN PUBLIC KEY-----\n<Ed25519 SPKI PEM>\n-----END PUBLIC KEY-----\n"
-  }]
-}
+{"schema":1,"minimumRole":"dev-lead","approvers":[
+  {"id":"human-owner","role":"owner","publicKey":"<Ed25519 SPKI PEM>"}
+]}
 ```
 
-Role order is `developer < dev-lead < admin < owner`; omitted `minimumRole`
-defaults to `dev-lead`; configured minimums are `dev-lead`, `admin` or `owner`.
-The table rejects duplicate IDs or keys and must retain an allowed approver.
-Both PLAN and STEP signatures must identify an approver
-in the current table whose role meets that minimum, and verify with that person's
-registered public key. A server can list only its owner. A Discord-backed issuer
-must authenticate the human, map their immutable Discord ID to `approverId`, and
-retain that identity in its issuance record; a channel role or short code alone
-does not establish runner authority.
+Order is developer < dev-lead < admin < owner. The minimum defaults to dev-lead
+and may be raised to admin/owner. Duplicate IDs/keys and a table without an
+allowed approver are rejected. Every signature binds the current table bytes.
 
-`rolesSha256` binds signatures to the exact current UTF-8 role-file bytes,
-including whitespace. The offline signer receives a trusted copy of that file;
-the runner independently reads its protected file. Replacing the request's table,
-changing an ID or using a valid key below the minimum role fails verification.
-A table change invalidates outstanding signatures while the current bytes differ.
-Restoring an identical old table can revive its unexpired, unused approvals; for
-recovery, keep the used-code ledger and wait out their validity or use fresh table
-bytes that require new signatures.
+Membership, key and minimum-role changes use only a schema-2 plan with
+`action: "replace-roles"`, `rolesBase64` containing the complete new table, and
+one step named `replace-roles` whose command is `replace-roles:<new-table-sha256>`
+and whose `commandSha256` hashes that exact string. The current authorized key
+must approve; a new key cannot approve its own addition. This branch never
+launches a child process. A protected lock serializes verification and execution.
+The runner rechecks current role bytes immediately before applying an action.
+It saves `roles-before.json` and `roles-after.json` in the action's audit folder
+before atomic replacement. Preserve the backup path in the operational receipt.
 
-Role changes use a dedicated plan rather than a shell command:
+Review must reject commands or scripts modifying runner files, roles, used-code
+ledger or audit, and role changes bypassing the dedicated action. Approved root
+code can defeat this policy; the verifier does not sandbox approved root code.
 
-```json
-{
-  "schema": 2,
-  "action": "replace-roles",
-  "rolesBase64": "<base64-of-new-role-table-bytes>",
-  "steps": [{
-    "id": "replace-roles",
-    "command": "replace-roles:<sha256-of-new-role-table-bytes>",
-    "commandSha256": "<sha256-of-the-exact-command-string>"
-  }]
-}
-```
+## Runtime and recovery
 
-The human reviews the complete replacement table and obtains fresh PLAN and STEP
-signatures from an approver allowed by the **current** table. A newly added key
-cannot approve its own addition. The runner validates the replacement, creates a
-protected backup of the current bytes, and atomically renames the new table into
-place. This action has its own runner branch and never invokes the shell. A
-protected operation lock serializes role verification, code consumption and
-execution, so a concurrent request cannot execute against a superseded table.
-A crash may leave a lock requiring human investigation before recovery; do not
-remove a lock while an approved process may still be running.
+The eventual fixed wrapper clears environment before `/usr/bin/node`, accepts no
+arguments and receives a maximum 1 MiB request on stdin within ten seconds.
+Sudo caller UID, exact plan bytes, step, command, signatures, role and expiry are
+checked. Root-owned ancestor chains, no-follow descriptor reads, regular-file,
+single-link and permission checks protect policy and state. An AI-writable plan
+pathname is never accepted by the privileged CLI.
 
-Use this signed replacement flow for membership, minimum-role changes and key
-rotation after initial installation. Preserve the recorded backup path and audit
-receipt. Existing root administrators retain the operating system's authority to
-repair the installation; the runner cannot restrict a compromised root account.
-An approved arbitrary root shell command also has that authority, so reviewers
-must reject commands that bypass the table-change flow or alter trusted runner
-files. This runner is an authorization boundary, not a sandbox against an
-already-approved root program.
+Used PLAN and STEP code hashes are exclusively and durably reserved under
+`/var/lib/naia-approved-runner/used/`. Audit records live under
+`/var/lib/naia-approved-runner/audit/<STEP-code-sha256>/` and include request,
+plan, artifact copies, stdout/stderr and result. Closed stdin, cwd `/`, fixed
+PATH/HOME/LANG/LC_ALL and a five-minute timeout apply to children. Background or
+daemonized children may outlive the receipt and must be rejected during review.
 
-## Verification, execution and records
+Crashes consume codes and can leave `request.lock` or `roles.json.pending`.
+A human first checks for a live operation and preserves those files and audit
+records before recovery. Never auto-delete a lock or overwrite a pending table.
+Never restore old ledger state while approvals are valid. Restoring identical
+old role bytes can revive unused approvals: retain the ledger and wait beyond
+all validity windows or use fresh role bytes. Replicate audit/ledger to a remote
+append-only store and monitor capacity; outputs can contain secrets.
 
-The verifier hashes the original plan bytes, validates every step digest, finds
-one unique step ID, compares the supplied command exactly and verifies both
-signatures, caller binding and expiry. It reserves the two codes using exclusive
-file creation under `/var/lib/naia-approved-runner/used/` before execution.
-Concurrent replay therefore yields at most one execution; a partial reservation
-fails closed. Used markers must survive restarts and backup/restore operations.
-Deleting them or restoring an older ledger re-enables replay until token expiry.
+Upgrades require disabling sudo access, backing up every existing destination
+(and each symlink's real target), recording backup paths and human review.
+Rollback disables sudo access first, checks running children, archives audit and
+ledger, then removes installation files. It does not undo executed commands.
 
-The runner creates a private audit directory with `plan.json`, `request.json`,
-`stdout`, `stderr` and `result.json`. It re-hashes the protected plan snapshot
-before execution. The request contains the signed approval records. Output files
-are opened before launch, and the result records timing, exit status, signal and
-launch error. A crash can leave an incomplete audit directory and consumed codes;
-operators investigate it rather than retrying the old request.
+## Discord issuer exit criteria (next PR)
 
-Execution uses `/bin/bash --noprofile --norc -c` with cwd `/`, closed stdin and an
-explicit environment containing only fixed PATH, HOME, LANG and LC_ALL. A
-five-minute timeout limits the direct shell. Approved commands must be foreground
-operations: background processes and commands that daemonize can outlive the
-shell and its receipt. Arbitrary approved root code has root authority, including
-the ability to alter this runner; approval review must account for that fact.
-Logs can contain command output secrets. Only root should read or export them;
-capacity monitoring, retention and backups are operator responsibilities. Keep
-used-code records at least until all corresponding approval windows have elapsed.
+Before installation can be enabled, implement and test authenticated immutable
+Discord user-ID → approver-ID binding; human-side signing; mobile display of full
+command, artifact hashes, plan/review/roles digests, caller UID and expiry;
+explicit consent to those exact bytes; clean review bound to the plan; issuance
+records retaining human approval message ID and approver ID in signed payloads;
+replay, spoofed identity, bot-message and channel-role-only rejection. Retain
+issuance records independently of the AI and verify revocation on staging.
 
-## Threat model
+Staging also needs actual sudoers no-argument matching; rejection of extra args,
+`sudo -E`, environment assignment and forged SUDO_UID; NODE_OPTIONS/BASH_ENV/
+LD_PRELOAD injection; protected executable ownership; reboot-persistent replay
+state; key separation and revocation. CI success alone does not satisfy staging.
 
-| Threat | Control and remaining review responsibility |
-| --- | --- |
-| Unauthorized approver or table replacement | Per-person Ed25519 keys, signed approver ID, minimum-role hierarchy and exact current-table digest; protected role file and signed replacement flow |
-| Concurrent role change | Operation lock covers current-table verification through execution; protected backup and atomic replacement |
-| AI invents a command or approval | Ed25519 signatures, UID binding, exact command equality and per-step SHA-256; private key isolated from AI |
-| Plan replacement or changed whitespace | Signature binds SHA-256 of original bytes; protected snapshot rechecked before execution |
-| Code reuse or concurrent requests | Exclusive durable used-code markers for both PLAN and STEP; consume before execution |
-| Expired or future approval | Integer timestamps, future issue rejection, strict expiry and bounded lifetime |
-| Path replacement, symlinks, hardlinks | Fixed production paths; check every protected ancestor's owner/mode; reject symlinks; no-follow open, file-descriptor checks and hardlink rejection |
-| Environment or interpreter injection | Root-owned shell wrapper clears environment before Node; fixed interpreter; NOSETENV; fixed child environment and cwd; no shell startup files |
-| Time-of-check/time-of-use (TOCTOU) | AI supplies bytes through stdin, never a plan pathname; all state ancestors protected from AI writes; exclusive creation and descriptor checks |
-| Mutable command dependencies | Review must reject workspace scripts, user-writable executables/configuration/plugins and unpinned downloaded code; command-string hashing alone cannot freeze files read by an arbitrary shell command |
-| Prompt injection in review/approval | Trusted human service enforces authenticated consent and digest-bound clean review; runner verifies the resulting attestation, not prose meaning |
-| Compromised root or signing service | Outside this verifier's security boundary; revoke sudo access and signing trust, investigate audit and restore from trusted installation |
+## Tests
 
-The runner cannot make `bash /writable/script`, package manager hooks or a command
-reading attacker-controlled configuration safe merely by signing their text.
-Use absolute executable paths and root-protected dependencies; include artifact
-hashes and verification commands in the reviewed plan where necessary. A generic
-shell runner is an authorization mechanism, not a sandbox for malicious approved
-root commands. This limitation is a mandatory approval-service review rule.
-
-## Human-only one-time installation and rollback
-
-Review the scripts from a trusted checkout first. Provision an Ed25519 key pair
-inside the human-controlled service using Node's `crypto.generateKeyPairSync`;
-export SPKI PEM public key and keep PKCS8 private key private. Configure the
-service's authorized human identity, caller UID, plan/review display and consent
-policy before enabling the runner.
-
-A human with existing sudo authority runs this installation once:
-
-```sh
-sudo /bin/bash scripts/install-approved-runner.sh ACCOUNT ROLES_FILE
-```
-
-`ROLES_FILE` is the reviewed initial role table described above. The installer
-validates it and installs it as root-owned `roles.json`.
-`ACCOUNT` is the dedicated AI submission account; the signing key and human
-identity must be independent of this account. This is installation documentation,
-not a command the AI hands to a mobile approver for a routine operation. The
-installer refuses existing destinations, including symlinks. For upgrades, first
-back up every existing destination and a symlink's actual target, record those
-backup paths, disable the sudoers rule, and have a human review replacement.
-The installer is never invoked by tests or by this implementation task.
-
-Rollback is a human root operation: remove the dedicated sudoers rule first,
-stop any still-running approved processes after checking their effects, archive
-the protected state and audit directory, then remove the entrypoint/module and
-role configuration directory. Keep the ledger archive and private key secure. Removing
-the runner does not undo commands already executed; each reviewed plan needs
-its own rollback steps. Do not re-enable an older ledger while tokens remain
-valid. Key rotation uses the signed role-table replacement flow above; approvals
-bound to the former table then fail verification.
-
-## Tests and acceptance
-
-Run the non-root suite with the execution folder's `TMPDIR`:
-
-```sh
-node --test scripts/approved-root-runner.test.mjs
-```
-
-Tests generate ephemeral signing keys and protected temporary state, call the
-real exported verification functions, and execute only harmless unprivileged
-shell probes. Production CLI paths and privilege requirements stay fixed.
-Negative cases cover changed commands/digests/signatures, expired approvals,
-reused codes, unsafe paths and links, unknown IDs, keys outside the allowed
-roles, table substitution and stale table digests. Role-change tests cover
-current-approver consent, replacement-key rejection, protected backup and
-subsequent approvals against the updated table. The suite also checks output, exit receipts
-and clean environment. `pnpm test` includes it; `pnpm build` and the repository's
-existing CI gates remain applicable.
-
-A separate human-authorized staging acceptance must verify actual sudoers
-matching, root ownership, reboot-persistent replay state, the mobile service's
-human identity policy, approval display, and revocation. Root installation and
-operational acceptance are deliberately separate from these non-root tests.
+Set TMPDIR to the task's tmp directory, then run `pnpm test` and `pnpm build`.
+The runner, signer and installer suites are included. Tests use synthetic keys
+and local temporary files, never an installed sudo entrypoint or production data.
+The installer tests check that every invocation is rejected before privileged
+work. Runtime tests cover signed mutation, replay, roles and immutable snapshots;
+signer tests cover protected inputs, digest pins and key/deployment separation.
