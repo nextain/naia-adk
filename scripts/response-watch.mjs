@@ -3,6 +3,8 @@ import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promis
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
+// Instance-configurable message text; {name} placeholders are replaced, unknown ones are left as is.
+export function fill(template, values) { return String(template).replace(/\{(\w+)\}/g, (m, k) => (k in values ? String(values[k]) : m)); }
 
 const compare = (a, b) => BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0;
 const eligible = m => [0, 19].includes(m.type ?? 0) && !!m.author?.id && !m.author.bot && !m.webhook_id;
@@ -164,8 +166,8 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         for (const [messageId, request] of Object.entries(next.pending)) {
           const age = (now - request.at) / 60000;
           const link = `https://discord.com/channels/${guild.id}/${channel.id}/${messageId}`;
-          if (age >= (config.thresholds?.nudgeMinutes ?? 10)) await send(request.stages, `${key}/${messageId}/nudge`, guild.nudgeChannelId, `<@${request.botId}> Please respond to the pending request: ${link}`, [request.botId]);
-          if (age >= (config.thresholds?.escalateMinutes ?? 30)) await send(request.stages, `${key}/${messageId}/escalate`, guild.escalation.channelId, `<@${guild.escalation.userId}> Response remains unconfirmed: ${link}`, [guild.escalation.userId]);
+          if (age >= (config.thresholds?.nudgeMinutes ?? 10)) await send(request.stages, `${key}/${messageId}/nudge`, guild.nudgeChannelId, fill(config.messages?.nudge ?? '<@{bot}> Please respond to the pending request: {link}', { bot: request.botId, link }), [request.botId]);
+          if (age >= (config.thresholds?.escalateMinutes ?? 30)) await send(request.stages, `${key}/${messageId}/escalate`, guild.escalation.channelId, fill(config.messages?.escalate ?? '<@{user}> Response remains unconfirmed: {link}', { user: guild.escalation.userId, link }), [guild.escalation.userId]);
         }
       } catch (error) {
         degraded = true;
@@ -182,7 +184,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
       try { healthy = (await fetchImpl(site.url, { redirect: 'error', signal: AbortSignal.timeout(15000) })).ok; } catch { /* Count timeout and transport failures without logging the URL. */ }
       if (healthy) {
         if (record.alerted) {
-          await send(record.stages, `site/${key}/${record.cycle}/recovery`, site.channelId, `Configured site check ${key} recovered.`, []);
+          await send(record.stages, `site/${key}/${record.cycle}/recovery`, site.channelId, fill(config.messages?.siteRecovered ?? 'Configured site check {site} recovered.', { site: key }), []);
           if (record.stages[`site/${key}/${record.cycle}/recovery`]?.status === 'confirmed') { record.alerted = false; record.cycle++; record.stages = {}; }
         }
         record.failures = 0;
@@ -190,7 +192,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         degraded = true;
         record.failures++;
         if (!baseline && record.failures >= (site.failureThreshold ?? 2)) {
-          await send(record.stages, `site/${key}/${record.cycle}/failure`, site.channelId, `Configured site check ${key} failed repeatedly.`, []);
+          await send(record.stages, `site/${key}/${record.cycle}/failure`, site.channelId, fill(config.messages?.siteFailure ?? 'Configured site check {site} failed repeatedly.', { site: key }), []);
           record.alerted = true;
         }
       }

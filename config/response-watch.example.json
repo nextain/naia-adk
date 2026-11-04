@@ -1,21 +1,54 @@
 {
   "stateFile": "<private-state-directory>/response-watch.json",
   "tokenEnv": "DISCORD_BOT_TOKEN",
-  "thresholds": { "nudgeMinutes": 10, "escalateMinutes": 30 },
+  "thresholds": {
+    "nudgeMinutes": 10,
+    "escalateMinutes": 30
+  },
   "maxPages": 100,
   "guilds": [
     {
       "id": "<guild-id>",
       "defaultBotId": "<bot-user-id>",
-      "roles": [{ "id": "<role-id>", "name": "<role-name>", "botId": "<bot-user-id>" }],
-      "channels": [
-        { "id": "<watched-channel-id>", "mode": "mentions" },
-        { "id": "<assigned-channel-id>", "botId": "<channel-bot-user-id>", "mode": "all-human" }
+      "roles": [
+        {
+          "id": "<role-id>",
+          "name": "<role-name>",
+          "botId": "<bot-user-id>"
+        }
       ],
-      "excludeChannelIds": ["<excluded-channel-id>"],
+      "channels": [
+        {
+          "id": "<watched-channel-id>",
+          "mode": "mentions"
+        },
+        {
+          "id": "<assigned-channel-id>",
+          "botId": "<channel-bot-user-id>",
+          "mode": "all-human"
+        }
+      ],
+      "excludeChannelIds": [
+        "<excluded-channel-id>"
+      ],
       "nudgeChannelId": "<internal-nudge-channel-id>",
-      "escalation": { "channelId": "<notice-channel-id>", "userId": "<responsible-user-id>" }
+      "escalation": {
+        "channelId": "<notice-channel-id>",
+        "userId": "<responsible-user-id>"
+      }
     }
   ],
-  "sites": [{ "url": "https://example.org/", "channelId": "<notice-channel-id>", "failureThreshold": 2 }]
+  "sites": [
+    {
+      "url": "https://example.org/",
+      "channelId": "<notice-channel-id>",
+      "failureThreshold": 2
+    }
+  ],
+  "messages": {
+    "nudge": "<@{bot}> Please respond to the pending request: {link}",
+    "escalate": "<@{user}> Response remains unconfirmed: {link}",
+    "siteFailure": "Configured site check {site} failed repeatedly.",
+    "siteRecovered": "Configured site check {site} recovered."
+  }
 }

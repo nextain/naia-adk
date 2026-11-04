@@ -143,3 +143,7 @@ RESPONSE_WATCH_TEST_TMP=<run-directory>/tmp node --test scripts/response-watch.t
 
 Finish the [server acceptance checklist](server-wake-onboarding.md) before
 claiming an instance is aligned.
+
+## Message text
+
+Each instance may set `messages.nudge`, `messages.escalate`, `messages.siteFailure` and `messages.siteRecovered` in its config, for example in its team language or with a prefix its wake sensor recognises. Placeholders: `{bot}`, `{user}`, `{link}`, `{site}`. Missing keys fall back to the English defaults.
