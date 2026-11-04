@@ -1,0 +1,10 @@
+{
+  "shared": { "directory": "./private-advisories" },
+  "role": "security-maintainer",
+  "workLedger": "./private-work-ledger.yaml",
+  "assets": {
+    "files": ["./private-assets.json"],
+    "lockfiles": ["../package-lock.json"],
+    "osCommands": []
+  }
+}
