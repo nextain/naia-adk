@@ -55,7 +55,10 @@ an unfinished task; assess the actual work result separately.
 ## State, failures and recovery
 
 State version 1 contains channel cursors, pending request identifiers, timestamps,
-stage receipts and site counters. It stores no message content or display names.
+stage receipts and site counters. Optional `replies[botId].at` retains the latest
+confirmed referenced-reply timestamp (milliseconds since epoch) for
+[session progress observation](session-health.md); older version-1 state remains
+compatible. Reply progress is committed only with a successful channel scan. It stores no message content or display names.
 Pending requests are not silently aged out. Review unresolved requests and state
 size during routine maintenance. Keep the directory owner-only and back it up
 before manual changes. Atomic rename protects writes. Malformed existing state

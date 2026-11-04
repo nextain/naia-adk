@@ -128,11 +128,19 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         }
         if (!complete) throw new Error('pagination limit reached; cursor retained');
         const next = structuredClone(previous);
+        const replies = structuredClone(state.replies ?? {});
         for (const message of messages.sort((a, b) => compare(a.id, b.id))) {
           if (![0, 19].includes(message.type ?? 0)) continue;
           if (message.author?.bot) {
             const request = next.pending[ref(message)];
-            if (request && message.author.id === request.botId) delete next.pending[ref(message)];
+            if (request && message.author.id === request.botId) {
+              const at = Date.parse(message.timestamp);
+              if (Number.isFinite(at) && at <= now) {
+                const old = replies[request.botId]?.at ?? 0;
+                replies[request.botId] = { at: Math.max(old, at) };
+              }
+              delete next.pending[ref(message)];
+            }
             continue;
           }
           if (!eligible(message)) continue;
@@ -152,7 +160,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         if (messages.length) next.cursor = messages.at(-1).id;
         delete next.error;
         delete state.errors[key];
-        state.channels[key] = next; await save();
+        state.channels[key] = next; state.replies = replies; await save();
         for (const [messageId, request] of Object.entries(next.pending)) {
           const age = (now - request.at) / 60000;
           const link = `https://discord.com/channels/${guild.id}/${channel.id}/${messageId}`;

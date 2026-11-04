@@ -2,7 +2,7 @@
 version: 1
 categories:
   - name: "wake-reliability"
-    keywords: ["wake", "response-watch", "unanswered", "regular-schedule"]
+    keywords: ["wake", "response-watch", "session-health", "unanswered", "regular-schedule"]
     quick_ref: "Start with docs/guides/wake-completion-contract.md and server-wake-onboarding.md; use a work document, instance configuration and evidence-based acceptance."
     skill: "manage-discord-sessions"
     workflows: []

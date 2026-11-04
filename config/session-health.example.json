@@ -1,0 +1,40 @@
+{
+  "stateFile": "/<private>/session-health-state.json",
+  "reportFile": "/<private>/session-health.md",
+  "baselineRepo": "/<upstream-checkout>",
+  "baselineSha": "<full-40-character-commit-sha>",
+  "idleMinutes": 30,
+  "staleHours": 2,
+  "escalateMinutes": 30,
+  "responseWatchState": "/<private>/response-watch-state.json",
+  "tokenEnv": "DISCORD_BOT_TOKEN",
+  "notifications": {
+    "nudgeChannelId": "<internal-channel-id>",
+    "escalation": {
+      "channelId": "<owner-channel-id>",
+      "userId": "<owner-id>"
+    }
+  },
+  "roles": [
+    {
+      "id": "role-a",
+      "botId": "<executor-bot-id>",
+      "window": "<session>:<window-index>.<pane-index>",
+      "workspace": "/<workspace>",
+      "workFiles": [
+        "/<workspace>/docs/work/<task>.md",
+        "/<workspace>/<todo>.md"
+      ],
+      "sessionLog": "/<private>/<normalized-session>.jsonl",
+      "adapter": {
+        "kind": "tmux"
+      },
+      "aiPrograms": [
+        "claude",
+        "codex",
+        "opencode"
+      ],
+      "allowedOverrides": []
+    }
+  ]
+}

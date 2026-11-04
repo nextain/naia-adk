@@ -15,6 +15,7 @@ description: |
   Public derived requirement record; the private original request is not copied.
   Exact requirements and scenario links: docs/work/wake-response-contract.md.
 acceptance_criteria:
+  - "RQ-HEALTH-1 through RQ-HEALTH-5: docs/work/session-health.md"
   - "RQ-WAKE-1 through RQ-WAKE-7 have linked implementation or procedure evidence"
 trace:
   code:
@@ -31,3 +32,10 @@ trace:
     - docs/guides/response-watch.md
     - docs/guides/regular-schedule-ledger.md
     - docs/guides/server-wake-onboarding.md
+
+# Session health extension
+session_health_trace:
+  code: scripts/session-health.mjs
+  tests: scripts/session-health.test.mjs
+  guide: docs/guides/session-health.md
+  scenarios: docs/work/session-health.md

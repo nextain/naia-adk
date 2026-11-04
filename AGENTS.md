@@ -14,6 +14,7 @@ descendant workspaces. Those are two possible lineages, not one required chain.
 - Product requirement index: `.agents/requirements/_index.yaml`
 - Wake completion and server acceptance: `docs/guides/wake-completion-contract.md`, `docs/guides/server-wake-onboarding.md`
 - Human-response observation and schedule ledger: `docs/guides/response-watch.md`, `docs/guides/regular-schedule-ledger.md`
+- Session health: `docs/guides/session-health.md`
 - Fork-specific additions belong in `FORK.md`, not this shared entrypoint.
 
 ## Mandatory Reads

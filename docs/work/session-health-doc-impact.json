@@ -1,0 +1,8 @@
+{
+  "work": "session-health",
+  "repository_docs": {"status":"UPDATED","paths":["AGENTS.md","docs/work/session-health.md",".agents/requirements/REQ-WAKE-001.yaml"]},
+  "user_manual": {"status":"UPDATED","paths":["docs/guides/session-health.md"]},
+  "reusable_learning": {"status":"UPDATED","paths":["docs/guides/server-wake-onboarding.md"]},
+  "source_handling":"Generic derived requirements only; original request remains outside public tree",
+  "review":{"independent_model_family":"NOT_RUN","public_push_review":"NOT_RUN; no push authorized"}
+}

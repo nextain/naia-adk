@@ -41,7 +41,7 @@ on_demand_loading:
     - id: naia-adk:wake_reliability
       file: docs/guides/wake-completion-contract.md
       description: "Wake stages and server acceptance"
-      tags: [discord, wake, response-watch, schedule, onboarding]
+      tags: [discord, wake, response-watch, session-health, schedule, onboarding]
     - id: naia-adk:agents_rules_detail
       file: .agents/context/agents-rules-detail.json
       description: "Full text of the sections agents-rules.json summarizes in one line, under the same key paths. Read only the section a task touches (approval exceptions, command lists, work-file lifecycle, public release gate, and so on)"

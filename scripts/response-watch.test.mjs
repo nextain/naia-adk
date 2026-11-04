@@ -152,3 +152,13 @@ test('role names require preceding boundary and scan all occurrences', async () 
   await run(); remote.messages.push(human(2, { mentions: [], content: 'mail@Helper request' })); await run(10); assert.equal(remote.posts.length, 0);
   remote.messages.push(human(3, { mentions: [], content: '@HelperExtra then @Helper request' })); await run(11); assert.equal(remote.posts.length, 1); assert.deepEqual(remote.posts[0].allowed_mentions.users, ['22']);
 });
+test('confirmed referenced replies retain progress timestamps across scans', async () => {
+  const { remote, run } = await fixture(); await run(); remote.messages.push(human(2)); await run(1);
+  remote.messages.push(human(3, { timestamp: new Date(epoch + 2 * 60000).toISOString(), author: { id: '20', bot: true }, message_reference: { message_id: '2' } }));
+  const state = await run(3); assert.equal(state.replies['20'].at, epoch + 2 * 60000); assert.equal((await run(4)).replies['20'].at, epoch + 2 * 60000);
+});
+test('failed channel batch cannot publish provisional reply progress', async () => {
+  const { remote, run } = await fixture(); await run(); remote.messages.push(human(2)); await run(1);
+  remote.messages.push(human(3, { timestamp: new Date(epoch + 2 * 60000).toISOString(), author: { id: '20', bot: true }, message_reference: { message_id: '2' } }), human(4, { timestamp: 'invalid' }));
+  const state = await run(3); assert.equal(state.replies?.['20'], undefined); assert.equal(state.channels['10/30'].cursor, '2'); assert.ok(state.channels['10/30'].pending['2']);
+});

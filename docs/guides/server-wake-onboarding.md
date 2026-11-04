@@ -47,6 +47,9 @@ preparing the common change.
 - [ ] Referenced bot reply arrives within declared N; ACK and task result differ.
 - [ ] Observer baseline is silent; DRY leaves state unchanged; 10/30-minute
       notices are each sent once and uncertain delivery is reconciled.
+- [ ] Enable [session health](session-health.md) every five minutes after private
+      role/window/workspace/work-file/baseline-SHA setup; verify silent baseline,
+      empty/stopped/stalled/drift alerts, DRY, restart and per-stage deduplication.
 - [ ] Site failures/recovery and observer read errors are visible.
 - [ ] Ledger rows match inventory and real artifacts; proposals remain off.
 - [ ] Backups, rollback, daily observation and remaining work are documented.
