@@ -49,8 +49,8 @@ Use [the example](../../config/session-health.example.json) privately. All paths
 are absolute. `roles[].workspace` must be the actual session rules root;
 `baselineRepo` is a local upstream checkout containing the pinned commit (no
 fetch occurs). Use a distinct state/report path from response-watch. Reports
-contain task lines and must remain owner-private; alerts contain only role IDs
-and anomaly codes. Keep credentials in the environment named by `tokenEnv`.
+contain task lines and must remain owner-private; default alerts contain only role IDs
+and anomaly codes. Configured messages may also include descriptions and the report path. Keep credentials in the environment named by `tokenEnv`.
 
 `adapter.kind: tmux` uses local list-panes, capture-pane and process descendant
 inspection, matching the exact `session:window.pane` target. `aiPrograms` is an
@@ -77,6 +77,33 @@ Intent is saved before sending; ambiguous delivery stays blocked until an operat
 backs up state and reconciles that exact receipt. Known HTTP 4xx rejection may
 retry. Restart preserves episodes and receipts. Probe errors remain visible and
 exit 2, without converting unknown into an anomaly claim.
+
+### Alert wording
+
+Optional top-level `messages.nudge` and `messages.escalate` customize each stage,
+including Korean or another language. Omitted stages keep the exact legacy
+`<@{user}> Session health {role}: {code}` wording. Both support:
+
+| Placeholder | Value |
+| --- | --- |
+| `{user}` | Target user ID: role bot for nudge, escalation user for escalate; use `<@{user}>` for a mention |
+| `{role}` | Role ID |
+| `{code}` | Full anomaly code, including a missed schedule occurrence |
+| `{codeText}` | Description from top-level `codeText`, falling back to the raw code |
+| `{report}` | Absolute `reportFile` path, not report contents |
+
+`codeText` maps codes to plain descriptions with the problem and the responsible
+person's next action. Exact code matches take priority; `schedule-missed` covers
+all `schedule-missed:<occurrence>` codes. Descriptions are inserted literally,
+without recursively expanding placeholders. See the example configuration for
+Korean wording. Including `{report}` discloses its path to the configured channel;
+choose wording appropriate for that channel. Discord mentions remain restricted
+to the stage's target user.
+
+`messages` must be an object containing only `nudge`/`escalate`, with non-empty
+string values and the placeholders listed above. `codeText` must be an object
+mapping non-empty codes to non-empty strings. Invalid settings fail validation
+before evidence collection or notification delivery.
 
 ```sh
 node scripts/session-health.mjs --config <private-config.json> --dry

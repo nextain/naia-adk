@@ -17,7 +17,26 @@ const signalFor = (code, config) => code.startsWith('schedule-missed:') ? 'sched
 const cell = value => String(value).replace(/[|\r\n]/g, ' ').replace(/[<>]/g, '');
 async function optionalStat(path) { try { return (await stat(path)).mtimeMs; } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
 
+const messageKeys = new Set(['user', 'role', 'code', 'codeText', 'report']);
+const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+function notificationMessage(config, stage, user, role, code) {
+  const descriptions = config.codeText ?? {};
+  const family = code.startsWith('schedule-missed:') ? 'schedule-missed' : code;
+  const codeText = Object.hasOwn(descriptions, code) ? descriptions[code] : Object.hasOwn(descriptions, family) ? descriptions[family] : code;
+  const values = { user, role, code, codeText, report: config.reportFile };
+  return (config.messages?.[stage] ?? '<@{user}> Session health {role}: {code}')
+    .replace(/\{(\w+)\}/g, (match, key) => Object.hasOwn(values, key) ? String(values[key]) : match);
+}
+
 export function validateConfig(c) {
+  if (c.messages !== undefined) {
+    if (!isObject(c.messages)) throw Error('messages must be an object');
+    for (const [stage, template] of Object.entries(c.messages)) {
+      if (!['nudge', 'escalate'].includes(stage) || typeof template !== 'string' || !template.trim()) throw Error('invalid message template');
+      for (const match of template.matchAll(/\{([^{}]*)\}/g)) if (!messageKeys.has(match[1])) throw Error('unknown message placeholder');
+    }
+  }
+  if (c.codeText !== undefined && (!isObject(c.codeText) || Object.entries(c.codeText).some(([code, text]) => !code.trim() || typeof text !== 'string' || !text.trim()))) throw Error('codeText must map codes to non-empty strings');
   for (const key of ['stateFile', 'reportFile', 'baselineRepo']) if (!isAbsolute(c[key] ?? '')) throw Error('absolute paths required');
   if (c.stateFile === c.reportFile || !/^[a-f0-9]{40}$/.test(c.baselineSha ?? '')) throw Error('distinct paths and full baseline SHA required');
   if (!Array.isArray(c.roles) || !c.roles.length) throw Error('roles required');
@@ -192,7 +211,7 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
           const n = config.notifications, user = stage === 'nudge' ? role.botId : n.escalation.userId;
           const channel = stage === 'nudge' ? n.nudgeChannelId : n.escalation.channelId;
           try {
-            const reply = await fetchImpl(`https://discord.com/api/v10/channels/${channel}/messages`, { method: 'POST', headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: `<@${user}> Session health ${role.id}: ${code}`, allowed_mentions: { parse: [], users: [user] }, nonce: hash(`${role.id}/${code}/${episode.sequence}/${stage}/${episode.at}`).slice(0, 24), enforce_nonce: true }), signal: AbortSignal.timeout(15000) });
+            const reply = await fetchImpl(`https://discord.com/api/v10/channels/${channel}/messages`, { method: 'POST', headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: notificationMessage(config, stage, user, role.id, code), allowed_mentions: { parse: [], users: [user] }, nonce: hash(`${role.id}/${code}/${episode.sequence}/${stage}/${episode.at}`).slice(0, 24), enforce_nonce: true }), signal: AbortSignal.timeout(15000) });
             if (!reply.ok) { episode.stages[stage].status = reply.status >= 400 && reply.status < 500 ? 'rejected' : 'uncertain'; degraded = true; }
             else { const data = await reply.json(); if (!data.id) throw Error('missing receipt'); episode.stages[stage] = { status: 'confirmed', at: now, id: data.id }; }
           } catch { episode.stages[stage].status = 'uncertain'; degraded = true; }
