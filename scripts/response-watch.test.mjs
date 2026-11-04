@@ -162,3 +162,9 @@ test('failed channel batch cannot publish provisional reply progress', async () 
   remote.messages.push(human(3, { timestamp: new Date(epoch + 2 * 60000).toISOString(), author: { id: '20', bot: true }, message_reference: { message_id: '2' } }), human(4, { timestamp: 'invalid' }));
   const state = await run(3); assert.equal(state.replies?.['20'], undefined); assert.equal(state.channels['10/30'].cursor, '2'); assert.ok(state.channels['10/30'].pending['2']);
 });
+
+test('instance message templates replace known placeholders and keep unknown ones', async () => {
+  const { fill } = await import('./response-watch.mjs');
+  assert.equal(fill('<@{bot}> 답해 주세요: {link}', { bot: '1', link: 'https://x/y' }), '<@1> 답해 주세요: https://x/y');
+  assert.equal(fill('{site} {unknown}', { site: 'a' }), 'a {unknown}');
+});
