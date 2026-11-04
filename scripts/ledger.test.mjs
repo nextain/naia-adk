@@ -52,7 +52,7 @@ test('schedule invalid timezone, cadence, duplicates, future result and grace fa
   for (const mutate of [d => d.timezone = 'Invalid/Zone', d => d.schedules[0].cadence = 'monthly', d => d.schedules.push({ ...d.schedules[0] }), d => d.schedules[0].last_result.at = '2030-01-02T00:00:00Z', d => d.schedules[0].graceMinutes = -1, d => d.schedules[0].time = '25:00']) { const doc = schedule(); mutate(doc); assert.throws(() => validateScheduleLedger(doc, now)); }
 });
 test('record exact row preserves other rows, evidence and extension data', async () => {
-  const doc = schedule(); doc.schedules.push({ ...structuredClone(doc.schedules[0]), id: 'other' }); doc.extra = 'preserve'; doc.empty = []; doc.metadata = {}; 
+  const doc = schedule(); doc.schedules.push({ ...structuredClone(doc.schedules[0]), id: 'other' }); doc.extra = 'preserve'; doc.empty = []; doc.metadata = {};
   const f = await fixture(doc); await recordSchedule(f.path, 'daily-a', 'failed', { now });
   const result = await readScheduleLedger(f.path, now); assert.equal(result.extra, 'preserve'); assert.deepEqual(result.schedules[1], doc.schedules[1]); assert.deepEqual(result.schedules[0].last_result, { at: new Date(now).toISOString(), outcome: 'failed', evidence: '<artifact>' });
 });
