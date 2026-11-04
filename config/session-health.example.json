@@ -38,5 +38,17 @@
     }
   ],
   "workLedger": "/<private>/work-ledger.yaml",
-  "regularSchedule": "/<private>/regular-schedule.yaml"
+  "regularSchedule": "/<private>/regular-schedule.yaml",
+  "messages": {
+    "nudge": "<@{user}> {role}: {codeText} ({code}). 확인 후 조치 결과를 알려 주세요. 보고서: {report}",
+    "escalate": "<@{user}> {role}의 문제가 계속됩니다: {codeText} ({code}). 담당자의 조치 여부를 확인해 주세요. 보고서: {report}"
+  },
+  "codeText": {
+    "missing": "세션 창을 찾지 못함 — 담당자가 창이 살아 있는지 확인",
+    "empty": "세션 창에 AI 프로세스가 없음 — 담당자가 실행 상태를 확인",
+    "stopped": "세션 출력이 오래 갱신되지 않음 — 담당자가 작업 진행 상태를 확인",
+    "stalled": "진행 중 업무의 근거가 오래 갱신되지 않음 — 담당자가 결과와 업무 기록을 확인",
+    "drift": "기준 규칙과 세션 규칙이 다름 — 담당자가 허용된 변경인지 확인",
+    "schedule-missed": "정기 업무의 실행 기록이 없음 — 담당자가 실행 여부와 기록을 확인"
+  }
 }

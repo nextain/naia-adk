@@ -145,3 +145,68 @@ test('multiple roles remain in one contiguous Markdown table with schedule detai
   assert.ok(a > 0); assert.ok(lines[a + 1].startsWith('| role-b |'));
   assert.ok(report.indexOf('role-a regular schedule:') > report.indexOf('| role-b |'));
 });
+
+test('custom stage messages expand all placeholders and restrict mentions', async () => {
+  const f = await fixture();
+  f.c.roles[0].workFiles = [];
+  f.c.idleMinutes = 120;
+  await writeFile(f.snapshot, JSON.stringify({ windows: [] }));
+  f.c.messages = {
+    nudge: '<@{user}> {role}: {codeText} ({code}) {report}; {role}',
+    escalate: '확인 요청 <@{user}> {role} {code} {codeText} {report}'
+  };
+  f.c.codeText = { missing: '창 없음 — 담당자가 확인; {role} $& @everyone <@999>' };
+  await f.run(); await f.run();
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].content, `<@123> role-a: 창 없음 — 담당자가 확인; {role} $& @everyone <@999> (missing) ${f.c.reportFile}; role-a`);
+  assert.deepEqual(f.sent[0].allowed_mentions, { parse: [], users: ['123'] });
+  await f.run({ now: now + 30 * 60000 });
+  assert.equal(f.sent.length, 2);
+  assert.equal(f.sent[1].content, `확인 요청 <@333> role-a missing 창 없음 — 담당자가 확인; {role} $& @everyone <@999> ${f.c.reportFile}`);
+  assert.deepEqual(f.sent[1].allowed_mentions, { parse: [], users: ['333'] });
+});
+
+test('omitted messages preserve exact legacy stage text even with descriptions', async () => {
+  const f = await fixture(); f.c.idleMinutes = 120;
+  f.c.codeText = { stalled: '설명' };
+  await f.run(); await f.run(); await f.run({ now: now + 30 * 60000 });
+  assert.deepEqual(f.sent.map(s => s.content), ['<@123> Session health role-a: stalled', '<@333> Session health role-a: stalled']);
+});
+
+test('partial messages preserve stage fallback and unmapped codeText is raw code', async () => {
+  const f = await fixture(); f.c.idleMinutes = 120;
+  f.c.messages = { nudge: '{codeText}' };
+  f.c.codeText = Object.create({ stalled: 'inherited description must be ignored' });
+  await f.run(); await f.run(); await f.run({ now: now + 30 * 60000 });
+  assert.deepEqual(f.sent.map(s => s.content), ['stalled', '<@333> Session health role-a: stalled']);
+});
+
+test('schedule descriptions use family mapping and exact occurrence override', async () => {
+  const f = await ledgerFixture(); f.work.work = []; await f.saveLedgers();
+  f.c.idleMinutes = 120;
+  f.c.messages = { nudge: '{codeText}', escalate: '{codeText}' };
+  f.c.codeText = { 'schedule-missed': '실행 기록 확인' };
+  const first = await f.run();
+  const code = first.rows[0].anomalies.find(code => code.startsWith('schedule-missed:'));
+  assert.ok(code);
+  await f.run(); assert.equal(f.sent[0].content, '실행 기록 확인');
+  f.c.codeText[code] = '이 실행을 확인';
+  await f.run({ now: now + 30 * 60000 });
+  assert.equal(f.sent[1].content, '이 실행을 확인');
+});
+
+test('invalid message and description settings fail before sending or writing', async () => {
+  const f = await fixture();
+  for (const messages of [null, [], 'text', { unknown: 'text' }, { nudge: 1 }, { escalate: null }, { nudge: ' ' }, { nudge: '{unknown}' }, { nudge: '{bad-name}' }]) {
+    f.c.messages = messages;
+    await assert.rejects(f.run(), /message/);
+  }
+  delete f.c.messages;
+  for (const codeText of [null, [], 'text', { missing: 1 }, { missing: null }, { missing: ' ' }, { '': 'text' }]) {
+    f.c.codeText = codeText;
+    await assert.rejects(f.run(), /codeText/);
+  }
+  assert.equal(f.sent.length, 0);
+  await assert.rejects(readFile(f.c.stateFile), { code: 'ENOENT' });
+  await assert.rejects(readFile(f.c.reportFile), { code: 'ENOENT' });
+});
