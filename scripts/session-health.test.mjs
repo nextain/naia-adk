@@ -210,3 +210,118 @@ test('invalid message and description settings fail before sending or writing', 
   await assert.rejects(readFile(f.c.stateFile), { code: 'ENOENT' });
   await assert.rejects(readFile(f.c.reportFile), { code: 'ENOENT' });
 });
+
+async function idleFixture() {
+  const f = await ledgerFixture();
+  f.c.stoppedRequiresWork = true;
+  f.work.work = f.work.work.filter(row => row.role !== 'role-a');
+  f.schedule.schedules = [];
+  await f.saveLedgers();
+  return f;
+}
+test('quiet role without assigned work is idle only in the report, without alerts or degradation', async () => {
+  const f = await idleFixture();
+  assert.equal((await f.run()).rows[0].alive, 'alive');
+  for (const minutes of [30, 60, 90]) {
+    const r = await f.run({ now: now + minutes * 60000 });
+    assert.equal(r.rows[0].alive, 'idle');
+    assert.deepEqual(r.rows[0].anomalies, []);
+    assert.equal(r.degraded, false);
+    assert.equal(r.previews, 0);
+    assert.match(r.report, /\| role-a \| idle \|/);
+  }
+  assert.equal(f.sent.length, 0);
+});
+test('quiet role with active work stops and sends both alert stages', async () => {
+  const f = await idleFixture();
+  f.work.work.push({ ...f.work.work[0], id: 'assigned', role: 'role-a' });
+  await f.saveLedgers(); await f.run();
+  const r = await f.run({ now: now + 30 * 60000 });
+  assert.equal(r.rows[0].alive, 'stopped');
+  assert.ok(r.rows[0].anomalies.includes('stopped'));
+  await f.run({ now: now + 60 * 60000 });
+  await f.run({ now: now + 90 * 60000 });
+  assert.deepEqual(f.sent.filter(s => s.content.endsWith('stopped')).map(s => s.allowed_mentions.users), [['123'], ['333']]);
+});
+test('pending response requests are matched by bot across channels and clear stopped on recovery', async () => {
+  const f = await idleFixture();
+  f.c.responseWatchState = join(f.dir, 'response.json');
+  const response = { channels: { '111': { pending: { one: { botId: '456', at: now } } }, '222': { pending: {} } } };
+  const save = () => writeFile(f.c.responseWatchState, JSON.stringify(response));
+  await save(); await f.run();
+  assert.equal((await f.run({ now: now + 30 * 60000 })).rows[0].alive, 'idle');
+  response.channels['222'].pending.two = { botId: '123', at: now };
+  await save();
+  assert.equal((await f.run({ now: now + 31 * 60000 })).rows[0].alive, 'stopped');
+  assert.equal(f.sent.length, 1);
+  delete response.channels['222'].pending.two; await save();
+  assert.equal((await f.run({ now: now + 32 * 60000 })).rows[0].alive, 'idle');
+  assert.equal(JSON.parse(await readFile(f.c.stateFile, 'utf8')).roles['role-a'].episodes.stopped, undefined);
+  response.channels['222'].pending.three = { botId: '123', at: now };
+  await save(); await f.run({ now: now + 33 * 60000 });
+  assert.equal(f.sent.length, 2);
+});
+test('missing, unreadable and invalid work ledger conservatively preserve stopped', async () => {
+  for (const source of ['unconfigured', 'missing', 'invalid']) {
+    const f = await idleFixture();
+    if (source === 'unconfigured') delete f.c.workLedger;
+    if (source === 'missing') f.c.workLedger = join(f.dir, 'missing.yaml');
+    if (source === 'invalid') await writeFile(f.c.workLedger, '{bad');
+    await f.run();
+    const r = await f.run({ now: now + 30 * 60000 });
+    assert.equal(r.rows[0].alive, 'stopped', source);
+    assert.ok(r.rows[0].anomalies.includes('stopped'), source);
+    assert.equal(f.sent.filter(s => s.content.endsWith('stopped')).length, 1, source);
+  }
+});
+test('unavailable or malformed response evidence conservatively preserves stopped', async () => {
+  for (const contents of [null, '{bad', '{}', '{"channels":{},"errors":{"111":{"reason":"unavailable"}}}', '{"channels":[]}', '{"channels":{"111":{"pending":{},"error":"unavailable"}}}', '{"channels":{"111":{"pending":{"one":{}}}}}']) {
+    const f = await idleFixture();
+    f.c.responseWatchState = join(f.dir, 'response.json');
+    if (contents !== null) await writeFile(f.c.responseWatchState, contents);
+    await f.run();
+    const r = await f.run({ now: now + 30 * 60000 });
+    assert.equal(r.rows[0].alive, 'stopped');
+    assert.ok(r.rows[0].errors.includes('response evidence unavailable'));
+    assert.equal(f.sent.filter(s => s.content.endsWith('stopped')).length, 1);
+  }
+});
+test('omitted and false stoppedRequiresWork preserve quiet stopped behavior', async () => {
+  for (const enabled of [undefined, false]) {
+    const f = await idleFixture();
+    if (enabled === undefined) delete f.c.stoppedRequiresWork;
+    else f.c.stoppedRequiresWork = enabled;
+    await f.run();
+    assert.equal((await f.run({ now: now + 30 * 60000 })).rows[0].alive, 'stopped');
+    assert.equal(f.sent.length, 1);
+  }
+});
+test('work-aware quiet detection retains missing and empty window anomalies', async () => {
+  for (const windows of [[], [{ name: 'agent', aiRunning: false, output: '' }]]) {
+    const f = await idleFixture();
+    await writeFile(f.snapshot, JSON.stringify({ windows }));
+    const r = await f.run();
+    assert.equal(r.rows[0].alive, windows.length ? 'empty' : 'missing');
+    assert.ok(r.rows[0].anomalies.includes(r.rows[0].alive));
+  }
+});
+test('stoppedRequiresWork accepts only boolean and rejects before writing state', async () => {
+  const f = await fixture();
+  for (const value of [null, 0, 1, 'true', [], {}]) {
+    f.c.stoppedRequiresWork = value;
+    await assert.rejects(f.run(), /stoppedRequiresWork must be a boolean/);
+  }
+  assert.equal(f.sent.length, 0);
+  await assert.rejects(readFile(f.c.stateFile), { code: 'ENOENT' });
+});
+
+test('waiting, blocked and completed ledger rows do not count as active assignments', async () => {
+  const f = await idleFixture();
+  await f.run();
+  for (const status of ['대기', '막힘', '끝']) {
+    f.work.work = [{ ...f.work.work[0], role: 'role-a', status, result: status === '끝' ? 'https://example.invalid/result' : null }];
+    await f.saveLedgers();
+    assert.equal((await f.run({ now: now + 30 * 60000 })).rows[0].alive, 'idle');
+  }
+  assert.equal(f.sent.length, 0);
+});

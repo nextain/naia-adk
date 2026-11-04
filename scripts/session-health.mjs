@@ -29,6 +29,7 @@ function notificationMessage(config, stage, user, role, code) {
 }
 
 export function validateConfig(c) {
+  if (c.stoppedRequiresWork !== undefined && typeof c.stoppedRequiresWork !== 'boolean') throw Error('stoppedRequiresWork must be a boolean');
   if (c.messages !== undefined) {
     if (!isObject(c.messages)) throw Error('messages must be an object');
     for (const [stage, template] of Object.entries(c.messages)) {
@@ -53,6 +54,22 @@ export function validateConfig(c) {
   for (const key of ['workLedger', 'regularSchedule']) if (c[key] != null && !isAbsolute(c[key])) throw Error('absolute ledger path required');
   if (c.responseWatchState && !isAbsolute(c.responseWatchState)) throw Error('absolute response state required');
   if (c.notifications) for (const id of [c.notifications.nudgeChannelId, c.notifications.escalation?.channelId, c.notifications.escalation?.userId, ...c.roles.map(r => r.botId)]) if (!/^\d+$/.test(id ?? '')) throw Error('invalid notification id');
+}
+
+// A configured watcher must be readable before absence of requests proves idle.
+function pendingWork(config, role, response) {
+  if (!config.responseWatchState) return false;
+  if (!isObject(response?.channels) || !/^\d+$/.test(role.botId ?? '')) return null;
+  if (response.errors !== undefined && (!isObject(response.errors) || Object.keys(response.errors).length)) return null;
+  let pending = false;
+  for (const channel of Object.values(response.channels)) {
+    if (!isObject(channel) || channel.error || !isObject(channel.pending)) return null;
+    for (const request of Object.values(channel.pending)) {
+      if (!isObject(request) || !/^\d+$/.test(request.botId ?? '')) return null;
+      if (request.botId === role.botId) pending = true;
+    }
+  }
+  return pending;
 }
 
 export async function collectWindow(role) {
@@ -128,7 +145,6 @@ export async function observeRole(config, role, previous, now, response, windowP
     if (logAt != null && logAt <= now) record.lastActivity = Math.max(record.lastActivity ?? 0, logAt);
     if (w) { const h = hash(w.output); if (h !== record.outputHash) record.lastActivity = now; record.outputHash = h; }
     alive = !w ? 'missing' : !w.aiRunning ? 'empty' : now - (record.lastActivity ?? record.firstAt) >= (config.idleMinutes ?? 30) * 60000 ? 'stopped' : 'alive';
-    if (alive !== 'alive') anomalies.push(alive);
     if (role.sessionLog) { try { compact = compactEvidence(await readFile(role.sessionLog, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
   } catch { errors.push('window/session evidence unavailable'); }
   const evidence = [];
@@ -140,6 +156,12 @@ export async function observeRole(config, role, previous, now, response, windowP
       ledgerKnown = true;
     } catch { errors.push('work ledger unavailable'); }
   }
+  if (config.stoppedRequiresWork) {
+    const pending = pendingWork(config, role, response);
+    if (pending === null) errors.push('response evidence unavailable');
+    if (alive === 'stopped' && config.workLedger && ledgerKnown && !ledgerTasks.length && pending === false) alive = 'idle';
+  }
+  if (!['alive', 'idle', 'unknown'].includes(alive)) anomalies.push(alive);
   if (config.regularSchedule) {
     try {
       schedules = scheduleStatus(await readScheduleLedger(config.regularSchedule, now), role.id, now);
@@ -184,13 +206,13 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
     let state; try { state = await json(config.stateFile); } catch (e) { if (e.code !== 'ENOENT') throw Error('state unreadable; refusing reset'); state = { version: 1, roles: {} }; }
     if (state.version !== 1 || !state.roles || typeof state.roles !== 'object' || Array.isArray(state.roles)) throw Error('invalid state');
     let response = {}; let responseError = false;
-    if (config.responseWatchState) try { response = await json(config.responseWatchState); } catch { responseError = true; }
+    if (config.responseWatchState) try { response = await json(config.responseWatchState); } catch { response = null; responseError = true; }
     const save = () => dry ? Promise.resolve() : atomic(config.stateFile, JSON.stringify(state, null, 2));
     const rows = []; let previews = 0, degraded = responseError;
     for (const role of config.roles) {
       const previous = state.roles[role.id];
       const result = await observeRole(config, role, previous, now, response, windowProbe);
-      if (responseError) result.errors.push('response evidence unavailable');
+      if (responseError && !result.errors.includes('response evidence unavailable')) result.errors.push('response evidence unavailable');
       rows.push(result); degraded ||= !!result.errors.length || !!result.anomalies.length;
       const rec = result.record; state.roles[role.id] = rec;
       const observed = { ledger: Boolean(config.workLedger) && result.ledgerKnown, window: result.alive !== 'unknown', progress: result.progressSources.length > 0 || (Boolean(config.workLedger) && result.ledgerKnown), schedule: result.schedules !== null, rules: result.rules.status !== 'unknown' };

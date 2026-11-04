@@ -4,6 +4,7 @@
   "baselineRepo": "/<upstream-checkout>",
   "baselineSha": "<full-40-character-commit-sha>",
   "idleMinutes": 30,
+  "stoppedRequiresWork": false,
   "staleHours": 2,
   "escalateMinutes": 30,
   "responseWatchState": "/<private>/response-watch-state.json",
