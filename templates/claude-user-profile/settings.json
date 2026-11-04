@@ -1,0 +1,15 @@
+{
+  "env": {
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000",
+    "CLAUDE_CODE_GOAL_CHECKIN_MINUTES": "0",
+    "CLAUDE_CODE_RETRY_WATCHDOG": "0"
+  },
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "node \"{{ADK_ROOT}}/.claude/hooks/role-compact-brief.js\" SessionStart" }] }
+    ],
+    "PostCompact": [
+      { "hooks": [{ "type": "command", "command": "node \"{{ADK_ROOT}}/.claude/hooks/role-compact-brief.js\" PostCompact" }] }
+    ]
+  }
+}

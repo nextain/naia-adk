@@ -47,6 +47,9 @@ preparing the common change.
 - [ ] Referenced bot reply arrives within declared N; ACK and task result differ.
 - [ ] Observer baseline is silent; DRY leaves state unchanged; 10/30-minute
       notices are each sent once and uncertain delivery is reconciled.
+- [ ] Apply the [Claude user profile](claude-user-profile.md) for every session
+      user (`node scripts/adk-user-profile.mjs apply`, then `check` exits 0) and
+      add `.naia-role.json` to each role folder.
 - [ ] Enable [session health](session-health.md) every five minutes after private
       role/window/workspace/work-file/baseline-SHA setup; verify silent baseline,
       empty/stopped/stalled/drift alerts, DRY, restart and per-stage deduplication.
