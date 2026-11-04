@@ -1,0 +1,10 @@
+{
+  "roles": [
+    {
+      "id": "assistant",
+      "botUserId": "100000000000000001",
+      "tokenEnv": "DISCORD_ASSISTANT_TOKEN",
+      "wakeDir": "../var/wake/assistant"
+    }
+  ]
+}

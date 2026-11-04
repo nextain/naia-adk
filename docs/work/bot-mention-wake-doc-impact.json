@@ -1,0 +1,6 @@
+{
+  "work": "bot-mention-wake",
+  "repository_docs": {"status": "UPDATED", "files": ["docs/guides/bot-mention-wake.md"]},
+  "user_manual": {"status": "UPDATED", "files": ["docs/guides/bot-mention-wake.md", "config/bot-mention-wake.example.json"]},
+  "reusable_learning": {"status": "UPDATED", "files": ["docs/guides/bot-mention-wake.md"], "detail": "Channel-list omissions, role-only content limits, shared consumer message-ID claims and ingress versus completion evidence."}
+}
