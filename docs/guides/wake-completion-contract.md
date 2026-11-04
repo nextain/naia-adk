@@ -59,3 +59,5 @@ minutes. Repeat with absent session, busy model, restart/compression, denied
 channel, uncertain send, duplicate timer and thread binding. Missing evidence
 fails that stage even if the process is running. The local fake API tests cover
 observer behavior; live adapter conformance remains an instance acceptance task.
+
+Agent-to-agent requests use the deterministic [request follow-up observer](agent-request-followup.md).

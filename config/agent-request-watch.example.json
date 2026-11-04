@@ -1,0 +1,51 @@
+{
+  "tokenEnv": "DISCORD_BOT_TOKEN",
+  "stateFile": "/srv/example/state/agent-request-watch.json",
+  "sessionHealthConfig": "/srv/example/config/session-health.json",
+  "timezoneOffsetMinutes": 540,
+  "maxPages": 100,
+  "thresholds": {
+    "nudgeMinutes": 10,
+    "escalateMinutes": 30
+  },
+  "roles": [
+    {
+      "id": "coordinator",
+      "botId": "100000000000000001",
+      "aliases": [
+        "조정"
+      ],
+      "wakeDir": "/srv/example/wake/coordinator"
+    },
+    {
+      "id": "builder",
+      "botId": "100000000000000002",
+      "aliases": [
+        "개발"
+      ],
+      "wakeDir": "/srv/example/wake/builder"
+    },
+    {
+      "id": "operator",
+      "botId": "100000000000000003",
+      "aliases": [
+        "운영"
+      ]
+    }
+  ],
+  "recovery": {
+    "roleId": "operator"
+  },
+  "guilds": [
+    {
+      "id": "100000000000000010",
+      "excludeChannels": []
+    }
+  ],
+  "messages": {
+    "nudge": "<@{bot}> 부탁의 받음 답을 확인해 주세요: {link}",
+    "overdue": "<@{bot}> 약속한 끝 시각이 지났습니다. 결과를 확인해 주세요: {link}",
+    "escalate": "<@{bot}> 아직 답 없음 — 다시 부를지·다른 역할인지 확인해 주세요: {link}",
+    "recovery": "<@{bot}> {role} 세션이 {health} 상태입니다. 복구를 확인해 주세요: {link}"
+  }
+}
