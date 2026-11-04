@@ -1,6 +1,23 @@
 {
   "work": "approved-root-runner",
-  "repository_docs": {"status": "UPDATED", "files": ["docs/guides/approved-root-runner.md"]},
-  "user_manual": {"status": "UPDATED", "files": ["docs/guides/approved-root-runner.md"], "reason": "Human installation, approval-service integration, rollback and acceptance instructions."},
-  "reusable_learning": {"status": "UPDATED", "files": ["docs/guides/approved-root-runner.md"], "reason": "Threat model documents signed authorization, replay and mutable command dependencies."}
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approved-root-runner.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approved-root-runner.md"
+    ],
+    "reason": "Per-instance approver roles, identity-bound signing, human installation and approved role-table/key rotation flow."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approved-root-runner.md"
+    ],
+    "reason": "Threat model documents role hierarchy, exact current-table signature binding, serialized updates, protected backups and the arbitrary-root-command trust boundary."
+  }
 }

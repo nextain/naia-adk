@@ -2,11 +2,11 @@
 # Human-only one-time installation. Never run as an AI work step.
 set -euo pipefail
 if [[ $EUID != 0 || $# != 2 ]]; then
-  echo 'Usage (as root): install-approved-runner.sh ACCOUNT PUBLIC_KEY_FILE' >&2
+  echo 'Usage (as root): install-approved-runner.sh ACCOUNT ROLES_FILE' >&2
   exit 1
 fi
 account=$1
-public_key=$2
+roles_file=$2
 [[ $account =~ ^[a-z_][a-z0-9_-]*\$?$ ]] || { echo 'Invalid account' >&2; exit 1; }
 /usr/bin/id "$account" >/dev/null
 # Check existing ancestors before install can follow or modify any destination.
@@ -26,10 +26,10 @@ source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 for target in /usr/local/libexec/naia-approved-run /usr/local/libexec/naia-approved-runner.mjs /etc/naia-approved-runner /var/lib/naia-approved-runner /etc/sudoers.d/naia-approved-runner; do
   [[ ! -e $target && ! -L $target ]] || { echo "Already exists: $target" >&2; exit 1; }
 done
-/usr/bin/env -i /usr/bin/node --input-type=module -e 'import fs from "node:fs";import crypto from "node:crypto";if(crypto.createPublicKey(fs.readFileSync(process.argv[1])).asymmetricKeyType!=="ed25519")process.exit(1)' "$public_key"
+/usr/bin/env -i /usr/bin/node --input-type=module -e 'import fs from "node:fs";import {pathToFileURL} from "node:url";const {parseRoles}=await import(pathToFileURL(process.argv[2]));parseRoles(fs.readFileSync(process.argv[1]))' "$roles_file" "$source_dir/approved-root-runner.mjs"
 /usr/bin/install -d -o root -g root -m 0755 /usr/local/libexec
 /usr/bin/install -d -o root -g root -m 0700 /etc/naia-approved-runner /var/lib/naia-approved-runner /var/lib/naia-approved-runner/used /var/lib/naia-approved-runner/audit
-/usr/bin/install -o root -g root -m 0600 "$public_key" /etc/naia-approved-runner/approval-public.pem
+/usr/bin/install -o root -g root -m 0600 "$roles_file" /etc/naia-approved-runner/roles.json
 /usr/bin/install -o root -g root -m 0644 "$source_dir/approved-root-runner.mjs" /usr/local/libexec/naia-approved-runner.mjs
 # The shell wrapper clears interpreter-affecting environment before Node starts.
 cat > /usr/local/libexec/naia-approved-run <<'WRAPPER'

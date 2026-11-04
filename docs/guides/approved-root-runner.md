@@ -35,8 +35,9 @@ starting the fixed `/usr/bin/node` interpreter. No privileged CLI option changes
 keys, state paths, ownership rules, or validation functions.
 
 The Ed25519 private key stays in a separate human-controlled approval service,
-outside the AI account and its host-accessible secrets. The runner holds only
-`/etc/naia-approved-runner/approval-public.pem`. Unlike a root HMAC issuer exposed
+outside the AI account and its host-accessible secrets. The runner holds only the root-owned instance role table
+`/etc/naia-approved-runner/roles.json`. Each approver has an individual Ed25519
+public key; private keys never appear in this table. Unlike a root HMAC issuer exposed
 through the same sudo rule, this verifier cannot mint approvals. Compromise of
 the signing service or its human authentication compromises this boundary.
 
@@ -54,11 +55,14 @@ SHA-256 before review):
 }
 ```
 
-The signer takes `PRIVATE_KEY PLAN_FILE REVIEW_FILE SUBJECT_UID STEP_ID` and emits
+The signer takes
+`PRIVATE_KEY PLAN_FILE REVIEW_FILE SUBJECT_UID STEP_ID APPROVER_ID ROLES_FILE`
+and emits
 a JSON request with `planBase64`, `planSha256`, `stepId`, `command`, `planApproval`
 and `stepApproval`. `planBase64` encodes the original file bytes, including spacing
 and newlines. Each approval has `payload` and a base64 Ed25519 `signature`.
-Payload fields are `schema: 1`, `kind`, `code`, `planSha256`, `subjectUid`,
+Payload fields are `schema: 2`, `kind`, `code`, `planSha256`, `subjectUid`,
+`approverId`, `rolesSha256`,
 `issuedAt`, `expiresAt`, and `reviewSha256`; STEP adds `stepId` and
 `commandSha256`. Times are integer Unix milliseconds. `approvalBytes()` defines
 the signed field order. Codes have `PLAN-` or `STEP-` plus 32 random hex digits.
@@ -68,12 +72,83 @@ Each invocation consumes both codes. For another step the approval service must
 issue a fresh pair, after applying its human consent policy. Failed executions
 and interrupted attempts consume their codes too; retry requires fresh approval.
 The runner binds the signed UID to sudo's caller UID and binds both signatures
-to the same plan and review digest.
+to the same plan, review digest, approver identity and current role-table digest.
+Legacy schema-1 approval payloads must be reissued with these role bindings.
 
 The AI adapter sends the request on standard input to the installed entrypoint
 through sudo. Input is capped at 1 MiB and ten seconds. It must never send the
 private key, offer an arbitrary sudo command, or ask the person to paste a root
 command. The adapter can relay the JSON exit receipt to the mobile approval UI.
+
+## Instance roles and approved role changes
+
+The role table is per server, owned by root and protected by the same ancestor,
+symlink, hardlink and write-permission checks as other trusted files. For example:
+
+```json
+{
+  "schema": 1,
+  "minimumRole": "dev-lead",
+  "approvers": [{
+    "id": "human-owner",
+    "role": "owner",
+    "publicKey": "-----BEGIN PUBLIC KEY-----\n<Ed25519 SPKI PEM>\n-----END PUBLIC KEY-----\n"
+  }]
+}
+```
+
+Role order is `developer < dev-lead < admin < owner`; omitted `minimumRole`
+defaults to `dev-lead`; configured minimums are `dev-lead`, `admin` or `owner`.
+The table rejects duplicate IDs or keys and must retain an allowed approver.
+Both PLAN and STEP signatures must identify an approver
+in the current table whose role meets that minimum, and verify with that person's
+registered public key. A server can list only its owner. A Discord-backed issuer
+must authenticate the human, map their immutable Discord ID to `approverId`, and
+retain that identity in its issuance record; a channel role or short code alone
+does not establish runner authority.
+
+`rolesSha256` binds signatures to the exact current UTF-8 role-file bytes,
+including whitespace. The offline signer receives a trusted copy of that file;
+the runner independently reads its protected file. Replacing the request's table,
+changing an ID or using a valid key below the minimum role fails verification.
+A table change invalidates outstanding signatures while the current bytes differ.
+Restoring an identical old table can revive its unexpired, unused approvals; for
+recovery, keep the used-code ledger and wait out their validity or use fresh table
+bytes that require new signatures.
+
+Role changes use a dedicated plan rather than a shell command:
+
+```json
+{
+  "schema": 2,
+  "action": "replace-roles",
+  "rolesBase64": "<base64-of-new-role-table-bytes>",
+  "steps": [{
+    "id": "replace-roles",
+    "command": "replace-roles:<sha256-of-new-role-table-bytes>",
+    "commandSha256": "<sha256-of-the-exact-command-string>"
+  }]
+}
+```
+
+The human reviews the complete replacement table and obtains fresh PLAN and STEP
+signatures from an approver allowed by the **current** table. A newly added key
+cannot approve its own addition. The runner validates the replacement, creates a
+protected backup of the current bytes, and atomically renames the new table into
+place. This action has its own runner branch and never invokes the shell. A
+protected operation lock serializes role verification, code consumption and
+execution, so a concurrent request cannot execute against a superseded table.
+A crash may leave a lock requiring human investigation before recovery; do not
+remove a lock while an approved process may still be running.
+
+Use this signed replacement flow for membership, minimum-role changes and key
+rotation after initial installation. Preserve the recorded backup path and audit
+receipt. Existing root administrators retain the operating system's authority to
+repair the installation; the runner cannot restrict a compromised root account.
+An approved arbitrary root shell command also has that authority, so reviewers
+must reject commands that bypass the table-change flow or alter trusted runner
+files. This runner is an authorization boundary, not a sandbox against an
+already-approved root program.
 
 ## Verification, execution and records
 
@@ -106,6 +181,8 @@ used-code records at least until all corresponding approval windows have elapsed
 
 | Threat | Control and remaining review responsibility |
 | --- | --- |
+| Unauthorized approver or table replacement | Per-person Ed25519 keys, signed approver ID, minimum-role hierarchy and exact current-table digest; protected role file and signed replacement flow |
+| Concurrent role change | Operation lock covers current-table verification through execution; protected backup and atomic replacement |
 | AI invents a command or approval | Ed25519 signatures, UID binding, exact command equality and per-step SHA-256; private key isolated from AI |
 | Plan replacement or changed whitespace | Signature binds SHA-256 of original bytes; protected snapshot rechecked before execution |
 | Code reuse or concurrent requests | Exclusive durable used-code markers for both PLAN and STEP; consume before execution |
@@ -135,9 +212,11 @@ policy before enabling the runner.
 A human with existing sudo authority runs this installation once:
 
 ```sh
-sudo /bin/bash scripts/install-approved-runner.sh ACCOUNT PUBLIC_KEY_FILE
+sudo /bin/bash scripts/install-approved-runner.sh ACCOUNT ROLES_FILE
 ```
 
+`ROLES_FILE` is the reviewed initial role table described above. The installer
+validates it and installs it as root-owned `roles.json`.
 `ACCOUNT` is the dedicated AI submission account; the signing key and human
 identity must be independent of this account. This is installation documentation,
 not a command the AI hands to a mobile approver for a routine operation. The
@@ -149,11 +228,11 @@ The installer is never invoked by tests or by this implementation task.
 Rollback is a human root operation: remove the dedicated sudoers rule first,
 stop any still-running approved processes after checking their effects, archive
 the protected state and audit directory, then remove the entrypoint/module and
-public key directory. Keep the ledger archive and private key secure. Removing
+role configuration directory. Keep the ledger archive and private key secure. Removing
 the runner does not undo commands already executed; each reviewed plan needs
 its own rollback steps. Do not re-enable an older ledger while tokens remain
-valid. Key rotation requires human replacement of the protected public key and
-new approvals; old signatures then fail verification.
+valid. Key rotation uses the signed role-table replacement flow above; approvals
+bound to the former table then fail verification.
 
 ## Tests and acceptance
 
@@ -167,7 +246,10 @@ Tests generate ephemeral signing keys and protected temporary state, call the
 real exported verification functions, and execute only harmless unprivileged
 shell probes. Production CLI paths and privilege requirements stay fixed.
 Negative cases cover changed commands/digests/signatures, expired approvals,
-reused codes, unsafe paths and links. The suite also checks output, exit receipts
+reused codes, unsafe paths and links, unknown IDs, keys outside the allowed
+roles, table substitution and stale table digests. Role-change tests cover
+current-approver consent, replacement-key rejection, protected backup and
+subsequent approvals against the updated table. The suite also checks output, exit receipts
 and clean environment. `pnpm test` includes it; `pnpm build` and the repository's
 existing CI gates remain applicable.
 
