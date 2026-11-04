@@ -35,7 +35,7 @@ function brief(cwd, event) {
 	const lines = [
 		`${head} 역할: ${typeof role.role === "string" ? role.role : path.basename(cwd)}`,
 		...read.map((p, i) => `  ${i + 1}. ${p}`),
-		"요약 규칙: ~/.claude/CLAUDE.md "Compact instructions" (미션·원문 지시·작업 문서·돌아가는 것을 남김)",
+		"요약 규칙: ~/.claude/CLAUDE.md 의 Compact instructions (미션·원문 지시·작업 문서·돌아가는 것을 남김)",
 	];
 	return lines.slice(0, MAX_LINES).join("\n");
 }
