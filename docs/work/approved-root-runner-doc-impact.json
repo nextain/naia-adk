@@ -1,0 +1,23 @@
+{
+  "work": "approved-root-runner",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approved-root-runner.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approved-root-runner.md"
+    ],
+    "reason": "Offline signing with protected digest-pinned inputs, immutable artifact snapshots and unconditional installation block pending authenticated Discord issuer."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approved-root-runner.md"
+    ],
+    "reason": "TOCTOU snapshots, key and host separation limits, dependency review boundary, and fail-closed issuer delivery gate."
+  }
+}
