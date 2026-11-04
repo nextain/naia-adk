@@ -4,8 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runHealth, compareRules, compactEvidence, collectWindow, validateConfig } from './session-health.mjs';
-const root = process.env.SESSION_HEALTH_TEST_TMP;
-if (!root) throw Error('SESSION_HEALTH_TEST_TMP required');
+const root = process.env.SESSION_HEALTH_TEST_TMP || join((await import('node:os')).tmpdir(), 'session-health-test');
 const now = Date.parse('2030-01-01T12:00:00Z');
 async function fixture() {
   await mkdir(root, { recursive: true });
