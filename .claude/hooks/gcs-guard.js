@@ -22,8 +22,11 @@ const path = require("path");
 const VALID_RISK = new Set(["archive", "prod"]);
 
 function loadPolicy() {
-	const dir = __dirname;
-	const markerRequired = fs.existsSync(path.join(dir, "gcs-guard.required"));
+	const dir = process.env.NAIA_ADK_ROOT
+		? path.resolve(process.env.NAIA_ADK_ROOT, ".claude", "hooks")
+		: __dirname;
+	const role = fs.existsSync(path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".naia-role.json"));
+	const markerRequired = role || fs.existsSync(path.join(dir, "gcs-guard.required"));
 
 	let raw = null, parseError = false, missing = false;
 	try {

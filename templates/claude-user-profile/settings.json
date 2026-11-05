@@ -1,5 +1,8 @@
 {
   "env": {
+    "NAIA_ADK_ROOT": "{{ADK_ROOT}}",
+    "NAIA_COST_GUARD_POLICY": "{{USER_HOME}}/.claude/cost-guard/policy.json",
+    "NAIA_SUBAGENT_MODEL_POLICY": "{{USER_HOME}}/.claude/subagent-model-policy.json",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000",
     "CLAUDE_CODE_GOAL_CHECKIN_MINUTES": "0",
     "CLAUDE_CODE_RETRY_WATCHDOG": "0"
@@ -10,9 +13,32 @@
         { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/destructive-git-guard.js\"" },
         { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/catastrophic-delete-guard.js\"" },
         { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/git-push-guard.js\"" },
-        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/email-send-guard.js\"" }
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/email-send-guard.js\"" },
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/commit-guard.js\"" },
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/deploy-guard.js\"" },
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/remote-identity-gate.js\"" },
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/gcs-guard.js\"" },
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/guard-runpod-create.cjs\"" }
+      ] },
+      { "matcher": "Edit|Write", "hooks": [
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/prod-gateway-guard.js\"" }
+      ] },
+      { "matcher": "Task|Agent", "hooks": [
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/subagent-spawn-guard.js\"" }
+      ] },
+      { "matcher": "Task|Agent|Workflow", "hooks": [
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/subagent-model-guard.cjs\"" }
+      ] },
+      { "hooks": [
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" PreToolUse" }
       ] }
     ],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" UserPromptSubmit" }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" PostToolUse" }] }],
+    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" PostToolUseFailure" }] }],
+    "PostToolBatch": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" PostToolBatch" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" Stop" }] }],
+    "PreCompact": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" PreCompact" }] }],
     "SessionStart": [
       { "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/role-compact-brief.js\"" }] }
     ]

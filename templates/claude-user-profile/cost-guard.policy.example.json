@@ -1,0 +1,17 @@
+{
+  "operatingMode": "review",
+  "configDir": "{{USER_HOME}}/.claude",
+  "expectedEmail": "{{ACCOUNT_EMAIL}}",
+  "extraConfigDirs": [],
+  "extraEmails": [],
+  "quotaFreshSeconds": 180,
+  "limits": {
+    "quotaUtilization": 95,
+    "rapidPercentagePoints": 3,
+    "rapidWindowSeconds": 300,
+    "processingTokensPerTenMinutes": 1000000,
+    "responsesPerHour": 40,
+    "responsesPerTurn": 8,
+    "maxContextTokens": 150000
+  }
+}
