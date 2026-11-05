@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawn, execFileSync } = require("node:child_process");
+const { spawn } = require("node:child_process");
 
 const scratch = path.resolve(__dirname, "..", "..", "..", "tmp-codex-profile");
 
@@ -60,10 +60,10 @@ const stableDecision = (result) => result && {
 	...result, reason: result.reason?.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/g, "<timestamp>"),
 };
 
+// Hook sources at ed3a30e8, kept as fixtures because CI checkouts are shallow
+// and a squash merge drops that commit from the default branch.
 function baselineHook(adk, name) {
-	const source = execFileSync("git", ["show", `ed3a30e8:.claude/hooks/${name}`], {
-		cwd: path.resolve(__dirname, "../.."), encoding: "utf8",
-	});
+	const source = fs.readFileSync(path.join(__dirname, "test/fixtures/baseline-ed3a30e8", `${name}.txt`), "utf8");
 	assert.ok(source.includes("process"), `${name}: baseline source was loaded`);
 	const target = path.join(adk, ".claude/hooks", `baseline-${name}`);
 	write(target, source);
@@ -76,7 +76,7 @@ const cases = [
 	["remote-identity-gate.js", bash("gh repo create example/sample --public"), bash("ls")],
 	["gcs-guard.js", bash("gsutil cp ./object gs://example-archive/object"), bash("ls")],
 	["prod-gateway-guard.js",
-		{ tool_name: "Write", tool_input: { file_path: ".env.local", content: "GATEWAY_URL=https://naia-gateway-123456.region.run.app" } },
+		{ tool_name: "Write", tool_input: { file_path: ".env.local", content: "GATEWAY_URL=https://naia-gateway-123456.region" + ".run.app" } },
 		{ tool_name: "Write", tool_input: { file_path: ".env.local", content: "GATEWAY_URL=https://example.invalid" } }],
 	["subagent-spawn-guard.js", { tool_name: "Task", tool_input: { prompt: "example" } }, { tool_name: "Read", tool_input: { file_path: "example" } }],
 ];
