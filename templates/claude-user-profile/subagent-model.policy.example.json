@@ -1,0 +1,7 @@
+{
+  "allowedModels": ["haiku", "sonnet"],
+  "requireExplicitModel": true,
+  "requireBrief": true,
+  "overrideFile": "allow-upper-subagent-until",
+  "maxOverrideHours": 24
+}

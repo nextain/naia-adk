@@ -115,7 +115,9 @@ function evaluate({ toolName, sessionId = null, root = process.cwd(), env = proc
 	if (disabled(env)) return null;
 	if (!isSpawn(toolName)) return null;
 
-	const optIn = readOptIn(root);
+	const projectDir = env.CLAUDE_PROJECT_DIR || root;
+	const roleState = fs.existsSync(path.join(projectDir, ".naia-role.json"));
+	const optIn = readOptIn(roleState ? projectDir : root);
 	if (!optIn) {
 		return {
 			reason:
@@ -130,7 +132,9 @@ function evaluate({ toolName, sessionId = null, root = process.cwd(), env = proc
 		? optIn.maxSpawns
 		: DEFAULT_MAX_SPAWNS;
 	const limit = Math.min(requested, HARD_MAX_SPAWNS);
-	const reservation = reserveSpawn(sessionId, limit, tmpRoot);
+	// The same session identifier may be reused by two role folders. Keep their
+	// reservations with the role, rather than sharing an OS-temporary counter.
+	const reservation = reserveSpawn(sessionId, limit, tmpRoot || (roleState ? path.join(path.resolve(projectDir), ".claude", "subagent-budget") : null));
 	if (!reservation.ok && reservation.kind === "budget") {
 		return {
 			reason:
@@ -165,6 +169,7 @@ async function main() {
 		toolName: data.tool_name,
 		sessionId: data.session_id || null,
 		root: data.cwd || process.cwd(),
+		env: { ...process.env, CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR || process.cwd() },
 	});
 	if (decision) {
 		process.stdout.write(JSON.stringify({ decision: "block", reason: decision.reason }));
