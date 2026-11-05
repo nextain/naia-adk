@@ -1,6 +1,7 @@
-import { test } from "node:test"
+import { test, after } from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { createRequire } from "node:module"
@@ -10,7 +11,10 @@ import "../.claude/hooks/profile-role-guards.test.cjs"
 import "../.claude/hooks/profile-user-guards.test.cjs"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const tmpHome = () => { const base = path.join(path.dirname(root), "tmp-codex-profile"); fs.mkdirSync(base, { recursive: true }); return fs.mkdtempSync(path.join(base, "adk-user-profile-")) }
+// Keep every fixture under the system temporary folder, never beside the checkout.
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "naia-adk-user-profile-"))
+after(() => fs.rmSync(scratch, { recursive: true, force: true }))
+const tmpHome = () => fs.mkdtempSync(path.join(scratch, "adk-user-profile-"))
 const read = (f) => JSON.parse(fs.readFileSync(f, "utf8"))
 const costFile = (home) => path.join(home, ".claude/cost-guard/policy.json")
 const modelFile = (home) => path.join(home, ".claude/subagent-model-policy.json")

@@ -2,16 +2,18 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawn } = require("node:child_process");
 
 const root = path.resolve(__dirname, "../..");
-const scratch = path.join(path.dirname(root), "tmp-codex-profile");
+// Keep every fixture under the system temporary folder, never beside the checkout.
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "naia-user-guards-"));
+test.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
 
 const hookDirectory = path.join(root, "templates/claude-user-profile/hooks");
 function fixture() {
-  fs.mkdirSync(scratch, { recursive: true });
   const home = fs.mkdtempSync(path.join(scratch, "user-guards-"));
   const config = path.join(home, ".claude");
   const role = path.join(home, "role");

@@ -1,17 +1,19 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
-const scratch = path.resolve(__dirname, "..", "..", "..", "tmp-codex-profile");
+// Keep every fixture under the system temporary folder, never beside the checkout.
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "naia-profile-guards-"));
+test.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
 
 const write = (file, value) => {
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value));
 };
 function fixture(t) {
-	fs.mkdirSync(scratch, { recursive: true });
 	const base = fs.mkdtempSync(path.join(scratch, "role-guards-"));
 	t.after(() => fs.rmSync(base, { recursive: true, force: true }));
 	const role = path.join(base, "role");
@@ -99,8 +101,8 @@ for (const [name, denied, allowed] of cases) {
 		}
 		assert.equal((await run(name, adk, denied, "", hookPath))?.decision, "block", "repository dangerous input");
 		assert.equal((await run(name, adk, allowed, "", hookPath)), null, "repository routine input");
-		assert.equal((await run(name, adk, denied, adk, roleHook))?.decision, "block", "repository remains protected with profile env");
-		assert.equal((await run(name, adk, allowed, adk, roleHook)), null, "repository routine input with profile env");
+		assert.equal((await run(name, adk, denied, adk, hookPath))?.decision, "block", "repository remains protected with profile env");
+		assert.equal((await run(name, adk, allowed, adk, hookPath)), null, "repository routine input with profile env");
 	});
 
 	test(`${name}: env alone preserves ed3a30e8 decisions with no ADK progress or policy`, async (t) => {
@@ -310,5 +312,62 @@ test("only role adapters fail closed when shared policy code is missing or broke
 			: name === "prod-gateway-guard.js" ? ".agents/hooks/policies/edit.js" : ".agents/hooks/policies/bash.js";
 		write(path.join(brokenRoot, policyFile), "this is invalid JavaScript");
 		assert.equal((await run(name, role, payload, adk, copiedHook))?.decision, "block", `${name}: broken shared code fails closed`);
+	}
+});
+
+test("without a role file NAIA_ADK_ROOT does not redirect deployment approvals", async (t) => {
+	const { base, role, adk, deploymentHook } = fixture(t);
+	const repository = path.join(base, "repository");
+	const repositoryHook = path.join(repository, ".claude/hooks/deploy-guard.js");
+	write(repositoryHook, fs.readFileSync(path.join(__dirname, "deploy-guard.js"), "utf8"));
+	fs.copyFileSync(path.join(__dirname, "_claude-bash-guard.js"), path.join(repository, ".claude/hooks/_claude-bash-guard.js"));
+	write(path.join(repository, ".agents/hooks/policies/bash.js"),
+		`module.exports = require(${JSON.stringify(path.resolve(__dirname, "../../.agents/hooks/policies/bash.js"))});\n`);
+	const config = { projects: { sample: { platform: "gcloud", dev_service: "sample-dev" } } };
+	write(path.join(repository, ".claude/deploy/config.json"), config);
+	write(path.join(adk, ".claude/deploy/config.json"), config);
+	const record = path.join(adk, ".claude/deploy/approvals.json");
+	write(record, { approvals: [{
+		project: "sample", approved_by: "example-owner", approved_at: new Date().toISOString(),
+		expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(), single_use: true,
+	}] });
+	const payload = bash("gcloud run deploy sample");
+	const expected = (await run("deploy-guard.js", repository, payload, "", repositoryHook))?.decision;
+	assert.equal(expected, "block", "repository without approval blocks");
+	assert.equal((await run("deploy-guard.js", repository, payload, adk, repositoryHook))?.decision, expected, "no role file + NAIA_ADK_ROOT = original decision");
+	assert.equal(JSON.parse(fs.readFileSync(record, "utf8")).approvals.length, 1, "central approval is not consumed");
+	assert.equal((await run("deploy-guard.js", role, payload, adk, deploymentHook)), null, "a role session still uses the central approval");
+});
+
+test("without a role file NAIA_ADK_ROOT does not redirect the GCS bucket policy", async (t) => {
+	const { base, role, adk } = fixture(t);
+	const repository = path.join(base, "repository");
+	const repositoryHook = path.join(repository, ".claude/hooks/gcs-guard.js");
+	write(repositoryHook, fs.readFileSync(path.join(__dirname, "gcs-guard.js"), "utf8"));
+	write(path.join(repository, ".claude/hooks/gcs-guard.config.json"), { buckets: { "example-cold": "archive" } });
+	write(path.join(adk, ".claude/hooks/gcs-guard.config.json"), { buckets: { "example-archive": "archive" } });
+	const payload = bash("gsutil cp gs://example-cold/object ./object");
+	const expected = (await run("gcs-guard.js", repository, payload, "", repositoryHook))?.decision;
+	assert.equal(expected, "block", "repository policy blocks reads from its archive bucket");
+	assert.equal((await run("gcs-guard.js", repository, payload, adk, repositoryHook))?.decision, expected, "no role file + NAIA_ADK_ROOT = original decision");
+	assert.equal(await run("gcs-guard.js", role, payload, adk, repositoryHook, { CLAUDE_PROJECT_DIR: role }), null, "a role session reads the central policy");
+});
+
+test("role adapters fail closed when shared policy throws at run time", async (t) => {
+	const { base, role, adk } = fixture(t);
+	for (const [name, policyFile, exported] of [
+		["deploy-guard.js", ".agents/hooks/policies/bash.js", "deploy"],
+		["prod-gateway-guard.js", ".agents/hooks/policies/edit.js", "prodGateway"],
+	]) {
+		const throwingRoot = path.join(base, `throwing-${exported}`);
+		const copiedHook = path.join(throwingRoot, ".claude/hooks", name);
+		write(copiedHook, fs.readFileSync(path.join(__dirname, name), "utf8"));
+		for (const helper of ["_claude-bash-guard.js", "_claude-edit-hook.js"]) {
+			fs.copyFileSync(path.join(__dirname, helper), path.join(throwingRoot, ".claude/hooks", helper));
+		}
+		write(path.join(throwingRoot, policyFile), `module.exports = { ${exported}() { throw new Error("policy failure"); } };\n`);
+		const payload = cases.find(([hook]) => hook === name)[1];
+		assert.equal((await run(name, role, payload, adk, copiedHook))?.decision, "block", `${name}: role fails closed`);
+		assert.equal(await run(name, adk, payload, "", copiedHook), null, `${name}: repository keeps the fail-open envelope`);
 	}
 });

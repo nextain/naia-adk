@@ -19,6 +19,9 @@
  *                            "PostToolUse",additionalContext:s}} (cascade)
  * Fail-open: a thrown error → exit0 (all three originals were
  * main().catch(()=>process.exit(0))).
+ *
+ * opts.failClosed       — on a thrown error emit a block (bash-guard parity).
+ * opts.failClosedReason — the block reason used when failClosed.
  */
 
 async function runEditHook(policy) {
@@ -62,8 +65,16 @@ async function runEditHook(policy) {
 	process.exit(0);
 }
 
-function start(policy) {
-	runEditHook(policy).catch(() => process.exit(0));
+function start(policy, opts) {
+	opts = opts || {};
+	runEditHook(policy).catch(() => {
+		if (opts.failClosed) {
+			process.stdout.write(
+				JSON.stringify({ decision: "block", reason: opts.failClosedReason }),
+			);
+		}
+		process.exit(0);
+	});
 }
 
 module.exports = { start };
