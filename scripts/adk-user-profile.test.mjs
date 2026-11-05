@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 import { mergeRule, mergeSettings, run } from "./adk-user-profile.mjs"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), "adk-user-profile-"))
+const tmpHome = () => { const base = path.join(path.dirname(root), "tmp-codex-profile"); fs.mkdirSync(base, { recursive: true }); return fs.mkdtempSync(path.join(base, "adk-user-profile-")) }
 const read = (f) => JSON.parse(fs.readFileSync(f, "utf8"))
 
 test("apply adds env, absolute hooks and the rule block, keeping existing settings", () => {
@@ -76,7 +76,7 @@ test("re-apply replaces a profile hook left at an old ADK path or on PostCompact
   run({ mode: "apply", home, adkRoot: root })
   const s = read(path.join(home, ".claude", "settings.json"))
   const commands = s.hooks.SessionStart.flatMap((g) => g.hooks.map((h) => h.command))
-  assert.deepEqual(commands.filter((c) => c.includes("role-compact-brief")), [`node "${root}/.claude/hooks/role-compact-brief.js"`])
+  assert.deepEqual(commands.filter((c) => c.includes("role-compact-brief")), [`"${process.execPath}" "${root}/.claude/hooks/role-compact-brief.js"`])
   assert.ok(commands.includes("mine"))
   assert.equal(s.hooks.PostCompact, undefined)
 })
@@ -98,14 +98,49 @@ test("role-compact-brief lists only existing absolute paths from .naia-role.json
   assert.match(compact.additionalContext, /압축됐습니다/)
   assert.match(compact.additionalContext, /역할: dev/)
   assert.ok(compact.additionalContext.includes(mission))
-  assert.doesNotMatch(compact.additionalContext, /no\/such|relative\.md|secret text/)
+  assert.match(compact.additionalContext, /없는 경로: \/no\/such\/file/)
+  assert.match(compact.additionalContext, /없는 경로: relative\.md/)
+  assert.doesNotMatch(compact.additionalContext, /secret text/)
   assert.match(hook({ cwd, source: "startup" }).additionalContext, /세션 시작/)
 })
 
-test("role-compact-brief is silent without a role file", () => {
+test("role-compact-brief warns without a role file and includes mandatory reads", () => {
   const cwd = tmpHome()
   const out = execFileSync("node", [path.join(root, ".claude/hooks/role-compact-brief.js")], { input: JSON.stringify({ cwd, source: "compact" }) }).toString()
-  assert.equal(out, "")
+  assert.match(out, /역할 미션 파일 없음/)
   const require = createRequire(import.meta.url)
-  assert.equal(require(path.join(root, ".claude/hooks/role-compact-brief.js")).brief(cwd, "compact"), null)
+  const hook = require(path.join(root, ".claude/hooks/role-compact-brief.js"))
+  const entry = fs.readFileSync(path.join(root, "AGENTS.md"), "utf8").split("## Mandatory Reads")[1].split("When planning")[0]
+  for (const item of hook.MANDATORY) { assert.ok(entry.includes(item)); assert.ok(out.includes(item)) }
+  const declared = [...entry.matchAll(/`(\.agents\/context\/[^`]+)`/g)].map((m) => m[1])
+  assert.deepEqual(hook.MANDATORY, declared)
+})
+
+test("duplicate headings and incomplete markers refuse writes and report check drift", () => {
+  const home = tmpHome()
+  fs.mkdirSync(path.join(home, ".claude"))
+  const file = path.join(home, ".claude", "CLAUDE.md")
+  for (const [content, error] of [["# Compact instructions\nmanual\n", /line 1/], ["<!-- naia-adk claude-user-profile: begin -->\nkeep", /unmatched/]]) {
+    fs.writeFileSync(file, content)
+    assert.throws(() => run({ mode: "apply", home, adkRoot: root }), error)
+    assert.match(run({ mode: "check", home, adkRoot: root }).error, error)
+    assert.equal(fs.readFileSync(file, "utf8"), content)
+  }
+})
+
+test("overridden environment keys are reported without values", () => {
+  const home = tmpHome()
+  fs.mkdirSync(path.join(home, ".claude"))
+  fs.writeFileSync(path.join(home, ".claude", "settings.json"), JSON.stringify({env: {CLAUDE_CODE_AUTO_COMPACT_WINDOW: "old"}}))
+  assert.deepEqual(run({ mode: "apply", home, adkRoot: root }).overridden, ["env.CLAUDE_CODE_AUTO_COMPACT_WINDOW"])
+})
+
+test("stateless safety hooks block dangerous input in a role directory", () => {
+  const cwd = tmpHome()
+  const cases = [["destructive-git-guard.js", "git reset --hard"], ["catastrophic-delete-guard.js", "rm -rf /"], ["git-push-guard.js", "git push --force"], ["email-send-guard.js", "node send.js send --to example"]]
+  for (const [name, command] of cases) {
+    const invoke = (cmd) => execFileSync(process.execPath, [path.join(root, ".claude/hooks", name)], { cwd, env: {...process.env, CLAUDE_PROJECT_DIR: cwd}, input: JSON.stringify({tool_name: "Bash", cwd, tool_input: {command: cmd}}) }).toString()
+    assert.match(invoke(command), /"block"/, name)
+    assert.equal(invoke("ls"), "", name)
+  }
 })

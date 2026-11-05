@@ -32,12 +32,18 @@ export function parseArgs(raw) {
 export function loadProfile(adkRoot) {
   const dir = path.join(adkRoot, "templates", "claude-user-profile")
   if (!fs.existsSync(path.join(adkRoot, HOOK))) throw new Error(`missing hook: ${path.join(adkRoot, HOOK)}`)
-  const text = fs.readFileSync(path.join(dir, "settings.json"), "utf8").replaceAll("{{ADK_ROOT}}", adkRoot.replace(/\\/g, "/"))
-  return { settings: JSON.parse(text), rule: fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8").trim() }
+  const text = fs.readFileSync(path.join(dir, "settings.json"), "utf8").replaceAll("{{ADK_ROOT}}", adkRoot.replace(/\\/g, "/")).replaceAll("{{NODE}}", process.execPath.replace(/\\/g, "/"))
+  const settings = JSON.parse(text)
+  for (const groups of Object.values(settings.hooks ?? {})) for (const command of commandsOf(groups)) {
+    const match = command.match(/"([^"]+\.js)"/)
+    if (match && !fs.existsSync(match[1])) throw new Error(`missing hook: ${match[1]}`)
+  }
+  return { settings, rule: fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8").trim() }
 }
 
 const commandsOf = (groups) => (groups ?? []).flatMap((g) => (g.hooks ?? []).map((h) => h.command))
-const ownHook = (command) => typeof command === "string" && command.includes(path.basename(HOOK))
+const PROFILE_HOOKS = ["role-compact-brief.js", "destructive-git-guard.js", "catastrophic-delete-guard.js", "git-push-guard.js", "email-send-guard.js"]
+const ownHook = (command) => typeof command === "string" && PROFILE_HOOKS.some((name) => command.includes(name))
 
 // Drop every earlier profile hook (old ADK path, old PostCompact entry) so a
 // re-apply replaces it instead of injecting twice.
@@ -71,6 +77,11 @@ export function mergeRule(current, rule) {
   const text = current ?? ""
   const start = text.indexOf(BEGIN)
   const end = text.indexOf(END)
+  if ((start === -1) !== (end === -1) || (start !== -1 && end < start)) throw new Error("unmatched profile marker")
+  const outside = start === -1 ? text : text.slice(0, start) + text.slice(start, end + END.length).replace(/[^\n]/g, "") + text.slice(end + END.length)
+  const headings = new Set(rule.split("\n").filter((line) => /^#\s+/.test(line)).map((line) => line.trim().toLowerCase()))
+  const duplicate = outside.split("\n").findIndex((line) => headings.has(line.trim().toLowerCase()))
+  if (duplicate !== -1) throw new Error(`duplicate profile heading at line ${duplicate + 1}`)
   if (start !== -1 && end > start) return text.slice(0, start) + block + text.slice(end + END.length)
   return text ? `${text.replace(/\s*$/, "")}\n\n${block}\n` : `${block}\n`
 }
@@ -93,17 +104,26 @@ export function run(args, now = new Date()) {
   const settingsFile = path.join(args.home, ".claude", "settings.json")
   const ruleFile = path.join(args.home, ".claude", "CLAUDE.md")
   const currentSettings = readOptional(settingsFile)
-  const nextSettings = `${JSON.stringify(mergeSettings(currentSettings ? JSON.parse(currentSettings) : {}, profile.settings), null, 2)}\n`
-  const nextRule = mergeRule(readOptional(ruleFile), profile.rule)
+  const current = currentSettings ? JSON.parse(currentSettings) : {}
+  const overridden = Object.keys(profile.settings.env ?? {}).filter((key) => Object.hasOwn(current.env ?? {}, key) && current.env[key] !== profile.settings.env[key]).map((key) => `env.${key}`)
+  const nextSettings = `${JSON.stringify(mergeSettings(current, profile.settings), null, 2)}\n`
+  let nextRule
+  try { nextRule = mergeRule(readOptional(ruleFile), profile.rule) } catch (e) {
+    if (args.mode === "check") return { drift: [ruleFile], error: e.message }
+    throw e
+  }
   const drift = []
   if (currentSettings === null || JSON.stringify(JSON.parse(currentSettings)) !== JSON.stringify(JSON.parse(nextSettings))) drift.push(settingsFile)
   if (readOptional(ruleFile) !== nextRule) drift.push(ruleFile)
-  if (args.mode === "check") return { drift }
+  if (args.mode === "check") {
+    if (!fs.existsSync(process.execPath)) drift.push(process.execPath)
+    return { drift }
+  }
   const stamp = now.toISOString().replace(/[-:]/g, "").slice(0, 15)
   const changed = []
   if (drift.includes(settingsFile) && writeWithBackup(settingsFile, nextSettings, stamp)) changed.push(settingsFile)
   if (drift.includes(ruleFile) && writeWithBackup(ruleFile, nextRule, stamp)) changed.push(ruleFile)
-  return { drift, changed }
+  return { drift, changed, overridden }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -111,9 +131,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const args = parseArgs(process.argv.slice(2))
     const result = run(args)
     if (args.mode === "check") {
+      if (result.error) console.log(result.error)
       for (const f of result.drift) console.log(`drift: ${f}`)
       process.exit(result.drift.length ? 1 : 0)
     }
+    for (const key of result.overridden) console.log(`overridden: ${key}`)
     for (const f of result.changed) console.log(`updated: ${f}`)
     if (!result.changed.length) console.log("already up to date")
   } catch (e) {
