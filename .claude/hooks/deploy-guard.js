@@ -20,8 +20,9 @@ try {
 	process.exit(0); // original main().catch fail-open
 }
 
-// __dirname = .claude/hooks → .claude/deploy (identical to original DEPLOY_DIR)
-const deployDir = process.env.NAIA_ADK_ROOT
+// __dirname = .claude/hooks → .claude/deploy (identical to original DEPLOY_DIR).
+// Only role sessions follow NAIA_ADK_ROOT; others keep the repo hook decision.
+const deployDir = roleMode && process.env.NAIA_ADK_ROOT
 	? path.resolve(process.env.NAIA_ADK_ROOT, ".claude", "deploy")
 	: path.resolve(__dirname, "..", "deploy");
 

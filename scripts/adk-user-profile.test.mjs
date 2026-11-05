@@ -1,16 +1,20 @@
-import { test } from "node:test"
+import { test, after } from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
-import { loadProfile, mergeRule, mergeSettings, PROFILE_HOOKS, run, validateProfileHooks } from "./adk-user-profile.mjs"
+import { loadProfile, mergeRule, mergeSettings, parseArgs, PROFILE_HOOKS, run, validateProfileHooks } from "./adk-user-profile.mjs"
 import "../.claude/hooks/profile-role-guards.test.cjs"
 import "../.claude/hooks/profile-user-guards.test.cjs"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const tmpHome = () => { const base = path.join(path.dirname(root), "tmp-codex-profile"); fs.mkdirSync(base, { recursive: true }); return fs.mkdtempSync(path.join(base, "adk-user-profile-")) }
+// Keep every fixture under the system temporary folder, never beside the checkout.
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "naia-adk-user-profile-"))
+after(() => fs.rmSync(scratch, { recursive: true, force: true }))
+const tmpHome = () => fs.mkdtempSync(path.join(scratch, "adk-user-profile-"))
 const read = (f) => JSON.parse(fs.readFileSync(f, "utf8"))
 const costFile = (home) => path.join(home, ".claude/cost-guard/policy.json")
 const modelFile = (home) => path.join(home, ".claude/subagent-model-policy.json")
@@ -66,6 +70,24 @@ test("apply adds env, absolute hooks and the rule block, keeping existing settin
   assert.ok(rule.startsWith("# mine\n"))
   assert.match(rule, /naia-adk claude-user-profile: begin/)
   assert.ok(fs.existsSync(path.join(home, ".claude", "settings.json.bak-20261105T060000")))
+})
+
+test("instance root sets NAIA_ADK_ROOT while hook commands stay on the ADK root", () => {
+  const home = readyHome()
+  const instance = path.join(home, "instance")
+  fs.mkdirSync(path.join(instance, ".claude"), { recursive: true })
+  run({ mode: "apply", home, adkRoot: root, instanceRoot: instance }, new Date("2026-11-05T06:00:00Z"))
+  const s = read(path.join(home, ".claude", "settings.json"))
+  assert.equal(s.env.NAIA_ADK_ROOT, instance)
+  assert.match(s.hooks.PreToolUse[0].hooks[0].command, new RegExp(`${root}/\\.claude/hooks/`))
+  assert.deepEqual(run({ mode: "check", home, adkRoot: root, instanceRoot: instance }).drift, [])
+  assert.deepEqual(run({ mode: "check", home, adkRoot: root }).drift, [path.join(home, ".claude", "settings.json")])
+})
+
+test("parseArgs defaults the instance root to the ADK root and refuses one without .claude", () => {
+  assert.equal(parseArgs(["check", "--adk-root", root]).instanceRoot, root)
+  const bare = tmpHome()
+  assert.throws(() => parseArgs(["check", "--adk-root", root, "--instance-root", bare]), /missing instance \.claude/)
 })
 
 test("apply twice is a no-op and check then reports no drift", () => {
