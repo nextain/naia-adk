@@ -1,6 +1,6 @@
 {
   "env": {
-    "NAIA_ADK_ROOT": "{{ADK_ROOT}}",
+    "NAIA_ADK_ROOT": "{{INSTANCE_ROOT}}",
     "NAIA_COST_GUARD_POLICY": "{{USER_HOME}}/.claude/cost-guard/policy.json",
     "NAIA_SUBAGENT_MODEL_POLICY": "{{USER_HOME}}/.claude/subagent-model-policy.json",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000",

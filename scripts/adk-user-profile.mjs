@@ -19,22 +19,26 @@ const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 const require = createRequire(import.meta.url)
 
 export function parseArgs(raw) {
-  const args = { mode: raw[0], home: os.homedir(), adkRoot: scriptRoot }
+  const args = { mode: raw[0], home: os.homedir(), adkRoot: scriptRoot, instanceRoot: null }
   for (let i = 1; i < raw.length; i++) {
     if (raw[i] === "--home") args.home = raw[++i]
     else if (raw[i] === "--adk-root") args.adkRoot = raw[++i]
+    else if (raw[i] === "--instance-root") args.instanceRoot = raw[++i]
     else throw new Error(`unknown argument: ${raw[i]}`)
   }
-  if (!["apply", "check"].includes(args.mode)) throw new Error("usage: adk-user-profile.mjs apply|check [--home <dir>] [--adk-root <dir>]")
+  if (!["apply", "check"].includes(args.mode)) throw new Error("usage: adk-user-profile.mjs apply|check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>]")
   args.home = path.resolve(args.home)
   args.adkRoot = path.resolve(args.adkRoot)
+  // Hook code runs from the ADK root; hooks read instance settings (deploy, gcs, identity) from NAIA_ADK_ROOT.
+  args.instanceRoot = path.resolve(args.instanceRoot ?? args.adkRoot)
+  if (!fs.existsSync(path.join(args.instanceRoot, ".claude"))) throw new Error(`missing instance .claude: ${args.instanceRoot}`)
   return args
 }
 
-export function loadProfile(adkRoot, home = os.homedir()) {
+export function loadProfile(adkRoot, home = os.homedir(), instanceRoot = adkRoot) {
   const dir = path.join(adkRoot, "templates", "claude-user-profile")
   if (!fs.existsSync(path.join(adkRoot, HOOK))) throw new Error(`missing hook: ${path.join(adkRoot, HOOK)}`)
-  const text = fs.readFileSync(path.join(dir, "settings.json"), "utf8").replaceAll("{{ADK_ROOT}}", adkRoot.replace(/\\/g, "/")).replaceAll("{{NODE}}", process.execPath.replace(/\\/g, "/")).replaceAll("{{USER_HOME}}", home.replace(/\\/g, "/"))
+  const text = fs.readFileSync(path.join(dir, "settings.json"), "utf8").replaceAll("{{INSTANCE_ROOT}}", instanceRoot.replace(/\\/g, "/")).replaceAll("{{ADK_ROOT}}", adkRoot.replace(/\\/g, "/")).replaceAll("{{NODE}}", process.execPath.replace(/\\/g, "/")).replaceAll("{{USER_HOME}}", home.replace(/\\/g, "/"))
   const settings = JSON.parse(text)
   validateProfileHooks(settings)
   for (const groups of Object.values(settings.hooks ?? {})) for (const command of commandsOf(groups)) {
@@ -150,7 +154,7 @@ function writeWithBackup(file, text, stamp) {
 }
 
 export function run(args, now = new Date()) {
-  const profile = loadProfile(args.adkRoot, args.home)
+  const profile = loadProfile(args.adkRoot, args.home, args.instanceRoot ?? args.adkRoot)
   const settingsFile = path.join(args.home, ".claude", "settings.json")
   const ruleFile = path.join(args.home, ".claude", "CLAUDE.md")
   const currentSettings = readOptional(settingsFile)
