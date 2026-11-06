@@ -247,6 +247,24 @@ function evaluate(input, options = {}) {
   });
   return result.status === "known" ? result.value : unverifiedAdvice(event, "turn_unknown", requestedPolicy, "observer-error:" + input.session_id, nowSeconds);
 }
+// A Read of an image carries the whole base64 body in tool_response, so tool events often exceed MAX_INPUT_BYTES.
+// The guard never reads tool bodies; keep only the top-level scalar fields that precede them.
+const TOOL_EVENTS = new Set(["PreToolUse", "PostToolUse", "PostToolUseFailure", "PostToolBatch"]);
+const ENVELOPE_FIELDS = ["hook_event_name", "session_id", "transcript_path", "source", "prompt_source"];
+function toolEnvelope(text) {
+  const body = text.search(/"(?:tool_input|tool_response|tool_calls|error)"\s*:/);
+  const head = body < 0 ? "" : text.slice(0, body);
+  const input = {};
+  for (const key of ENVELOPE_FIELDS) {
+    const match = head.match(new RegExp('"' + key + '"\\s*:\\s*("(?:[^"\\\\]|\\\\.)*")'));
+    if (match) { try { input[key] = JSON.parse(match[1]); } catch { return undefined; } }
+  }
+  return typeof input.hook_event_name === "string" && typeof input.session_id === "string" ? input : undefined;
+}
+function drainStdin() {
+  const chunk = Buffer.alloc(64 * 1024);
+  try { while (fs.readSync(0, chunk, 0, chunk.length, null)) {} } catch {}
+}
 function main() {
   const args = process.argv.slice(2); let eventName; let policyFile;
   for (let i = 0; i < args.length; i++) {
@@ -258,7 +276,8 @@ function main() {
   while (count < bytes.length) { const read = fs.readSync(0, bytes, count, bytes.length - count, null); if (!read) break; count += read; }
   let input;
   if (count <= MAX_INPUT_BYTES) { try { input = JSON.parse(bytes.toString("utf8", 0, count)); } catch {} }
-  const output = count > MAX_INPUT_BYTES ? halt(eventName, "훅 입력 크기 제한 초과") : evaluate(input, { eventName, policyFile });
+  else if (TOOL_EVENTS.has(eventName)) { drainStdin(); input = toolEnvelope(bytes.toString("utf8", 0, count)); }
+  const output = count > MAX_INPUT_BYTES && !input ? halt(eventName, "훅 입력 크기 제한 초과") : evaluate(input, { eventName, policyFile });
   if (output) process.stdout.write(JSON.stringify(output) + "\n");
 }
 module.exports = { evaluate, halt, runtimeIdentity, unsupportedEnvironment, loadPolicy, validateMeter, inspectMeter, aggregateCurrent, DEFAULT_LIMITS, MAX_INPUT_BYTES };
