@@ -10,8 +10,8 @@ Configuration is through environment variables:
 | `DOC_SIZE_TARGETS` | `["docs"]` | JSON array of repository-relative Markdown files or directories; archives are excluded |
 | `DOC_SIZE_MAX_BYTES` | `102400` | Byte threshold, exclusive |
 | `DOC_SIZE_MAX_LINES` | `2000` | Line threshold, exclusive; exceeding either threshold selects a document |
-| `DOC_SIZE_MODEL` | `gpt-6-luna` | Codex model |
-| `DOC_SIZE_EFFORT` | `low` | Model reasoning effort |
+| `DOC_SIZE_MODEL` | `gpt-6.1-terra` | Codex model |
+| `DOC_SIZE_EFFORT` | `xhigh` | Model reasoning effort |
 | `DOC_SIZE_CODEX` | `codex` | Codex executable |
 | `DOC_SIZE_CODEX_RUNTIME` | unset | Absolute path to the actual Codex runtime binary when the executable is a wrapper; permits that binary in the model sandbox |
 | `TMPDIR` | operating system temporary directory | Temporary files and advisory lock |

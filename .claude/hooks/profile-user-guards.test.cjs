@@ -101,6 +101,23 @@ test("cost guard preserves verified account blocks and permits matching fixture 
   assert.notEqual(allowed?.decision, "block");
 });
 
+test("cost guard checks an oversized tool result without halting and still halts an oversized prompt", async () => {
+  const f = fixture();
+  const policy = path.join(f.config, "cost-guard/policy.json");
+  const image = "A".repeat(200 * 1024);
+  const tool = { session_id: "large-tool", transcript_path: path.join(f.home, "empty.jsonl"), hook_event_name: "PostToolUse", tool_name: "Read", tool_input: { file_path: "/x.png" }, tool_response: { type: "image", file: { base64: image } } };
+  const missing = await invoke("cost-guard.cjs", tool, f, { NAIA_COST_GUARD_POLICY: policy }, ["PostToolUse"]);
+  assert.equal(missing.continue, false);
+  assert.doesNotMatch(missing.stopReason, /크기 제한/);
+  fs.mkdirSync(path.dirname(policy), { recursive: true });
+  fs.writeFileSync(policy, JSON.stringify({ configDir: f.config, expectedEmail: "account@example.invalid" }));
+  const checked = await invoke("cost-guard.cjs", tool, f, { NAIA_COST_GUARD_POLICY: policy }, ["PostToolUse"]);
+  assert.notEqual(checked?.continue, false);
+  const prompt = { hook_event_name: "UserPromptSubmit", session_id: "large-prompt", prompt: image };
+  const halted = await invoke("cost-guard.cjs", prompt, f, { NAIA_COST_GUARD_POLICY: policy }, ["UserPromptSubmit"]);
+  assert.match(halted.stopReason, /크기 제한/);
+});
+
 test("cost guard blocks template and nested placeholders on every registered event", async () => {
   const f = fixture();
   const policyFile = path.join(f.config, "cost-guard/policy.json");
