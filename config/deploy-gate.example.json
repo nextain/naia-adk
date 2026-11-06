@@ -1,0 +1,40 @@
+{
+  "schema": "deploy-gate/v1",
+  "approver": {
+    "discordUserId": "<승인자 디스코드 사용자 번호(17~20자리 Snowflake)>"
+  },
+  "discord": {
+    "instances": ["default"]
+  },
+  "plugin": "./config/deploy-gate-plugin.cjs",
+  "prodPatterns": [
+    {
+      "pattern": "\\bmy-custom-deploy\\b.*--prod\\b",
+      "service": "custom:service:my-app-prod",
+      "label": "커스텀 운영 배포"
+    }
+  ],
+  "sshAlwaysGated": [
+    {
+      "pattern": "(?:^|@)prod-bastion\\b",
+      "service": "vm:ssh:prod-bastion"
+    }
+  ],
+  "services": {
+    "azure:containerapp:my-app-prod": {
+      "label": "운영 웹 컨테이너 앱",
+      "requireDeployGate": true,
+      "requireUiGate": false,
+      "allowOps": true,
+      "allowRollback": true,
+      "opsCommandPattern": "\\baz\\s+containerapp\\s+(?:update\\b(?![^\\n]*--image\\b)|ingress\\b|revision\\b)",
+      "commandMustContain": ["my-app-prod"]
+    },
+    "gcp:cloudrun:my-api-prod": {
+      "label": "운영 Cloud Run API",
+      "requireDeployGate": true,
+      "allowOps": true,
+      "allowRollback": true
+    }
+  }
+}

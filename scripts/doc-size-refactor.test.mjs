@@ -219,9 +219,9 @@ test('real Codex denies reading outside its workspace', {timeout:90000}, t => {
   const filesystem={':root':'deny',':minimal':'read',':workspace_roots':'read'};
   if(process.env.DOC_SIZE_CODEX_RUNTIME) filesystem[path.resolve(process.env.DOC_SIZE_CODEX_RUNTIME)]='read';
   const config=`permissions.doc-only.filesystem={${Object.entries(filesystem).map(([k,v])=>`${JSON.stringify(k)}=${JSON.stringify(v)}`).join(',')}}`;
-  const args=['exec','--ignore-user-config','--ephemeral','-m',process.env.DOC_SIZE_MODEL || 'gpt-6-luna','-c','model_reasoning_effort="low"','-c','approval_policy="never"','-c','default_permissions="doc-only"','-c',config,'--skip-git-repo-check','-C',work,'--output-last-message',output,'-'];
+  const args=['exec','--ignore-user-config','--ephemeral','-m',process.env.DOC_SIZE_MODEL || 'gpt-6.1-terra','-c',`model_reasoning_effort=${JSON.stringify(process.env.DOC_SIZE_TEST_EFFORT || 'low')}`,'-c','approval_policy="never"','-c','default_permissions="doc-only"','-c',config,'--skip-git-repo-check','-C',work,'--output-last-message',output,'-'];
   const prompt=`Run only the shell check test -r ${JSON.stringify(outside)}. Do not open or print the file. Return exactly READ_EXIT=0 if readable or READ_EXIT=1 if not readable.`;
   const r=spawnSync(found.stdout.trim(),args,{cwd:work,input:prompt,encoding:'utf8',timeout:80000,maxBuffer:1024*1024});
-  assert.equal(r.status,0,`Codex failed: ${r.error?.message || r.stderr}`);
+  assert.equal(r.error || r.status,0,`Codex failed: ${r.error?.message || r.stderr}`);
   assert.match(fs.readFileSync(output,'utf8'),/READ_EXIT=1\b/);
 });
