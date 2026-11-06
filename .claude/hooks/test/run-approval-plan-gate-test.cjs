@@ -837,6 +837,18 @@ test("15. 2회차 지적 1 재현: 명령 앞 전역 옵션 우회 12종 + 미�
 		assert.match(hookDecision.reason, expectedService);
 	}
 
+	// docker 는 분류기 밖(옛 PROD_PATTERNS)에서 막는다: 앞 전역 옵션·image 하위 명령도 같은 판정
+	const dockerCases = [
+		"docker --context prod push gcr.io/sample/app:v1",
+		"docker --config /tmp/cfg push asia-docker.pkg.dev/sample/app:v1",
+		"docker -H tcp://x:2375 --tls push gcr.io/sample/app:v1",
+		"docker image push gcr.io/sample/app:v1",
+	];
+	for (const cmd of dockerCases) {
+		const res = await P.deploy(cmd, { cwd: root, session_id: "docker-opt-test" }, { deployDir });
+		assert.ok(res && res.reason, `docker 앞 옵션 명령(${cmd})은 P.deploy 에서 차단되어야 함`);
+	}
+
 	// 모르는 옵션이 앞에 오면 막는 쪽(승인 필요)으로 판정
 	const unknownOptCases = [
 		"gcloud --mystery-flag prod run deploy sample-svc",

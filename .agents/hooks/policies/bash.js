@@ -256,7 +256,7 @@ const PROD_PATTERNS = [
 	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+builds?\s+submit\b/, platform: "gcloud", label: "gcloud builds submit", alwaysBlock: true },
 	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+run\s+services?\s+update\s+(\S+)/, platform: "gcloud", label: "gcloud run services update", serviceGroup: 1 },
 	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+run\s+services?\s+replace\b/, platform: "gcloud", label: "gcloud run services replace", alwaysBlock: true },
-	{ pattern: /\bdocker\s+push\s+\S*(?:pkg\.dev|gcr\.io)\b/, platform: "gcloud", label: "docker push (registry)" },
+	{ pattern: /\bdocker(?:\s+(?:--?[a-zA-Z0-9-]+(?:=\S+|\s+\S+)?))*\s+(?:image\s+)?push\s+\S*(?:pkg\.dev|gcr\.io)\b/, platform: "gcloud", label: "docker push (registry)" },
 ];
 
 function findApprovalGateRoot(cwd, deployDir) {
