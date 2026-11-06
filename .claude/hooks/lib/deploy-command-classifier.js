@@ -1032,6 +1032,215 @@ function unclassifiedOpaque(entry, tool) {
 	};
 }
 
+const CLI_GLOBAL_OPTIONS = {
+	gcloud: {
+		bool: new Set([
+			"-q",
+			"--quiet",
+			"--no-user-output-enabled",
+			"--user-output-enabled",
+			"--log-http",
+			"--trace-log",
+		]),
+		value: new Set([
+			"--project",
+			"--account",
+			"--impersonate-service-account",
+			"--billing-project",
+			"--configuration",
+			"--credential-file-override",
+			"--filter",
+			"--format",
+			"--limit",
+			"--page-size",
+			"--sort-by",
+			"--uri",
+			"--verbosity",
+			"--flags-file",
+			"--trace-token",
+			"--region",
+			"--zone",
+			"--platform",
+		]),
+	},
+	kubectl: {
+		bool: new Set([
+			"--match-server-version",
+			"--insecure-skip-tls-verify",
+			"--disable-compression",
+			"--warnings-as-errors",
+		]),
+		value: new Set([
+			"-n",
+			"--namespace",
+			"--context",
+			"--kubeconfig",
+			"--cluster",
+			"--user",
+			"-s",
+			"--server",
+			"--token",
+			"--as",
+			"--as-group",
+			"--as-uid",
+			"--cache-dir",
+			"--certificate-authority",
+			"--client-certificate",
+			"--client-key",
+			"--request-timeout",
+			"--tls-server-name",
+			"-v",
+			"--v",
+			"--vmodule",
+			"--log-flush-frequency",
+			"--profile",
+			"--profile-output",
+			"--password",
+			"--username",
+		]),
+	},
+	helm: {
+		bool: new Set(["--debug", "--kube-insecure-skip-tls-verify"]),
+		value: new Set([
+			"-n",
+			"--namespace",
+			"--kube-context",
+			"--kubeconfig",
+			"--kube-apiserver",
+			"--kube-as-group",
+			"--kube-as-user",
+			"--kube-ca-file",
+			"--kube-tls-server-name",
+			"--kube-token",
+			"--registry-config",
+			"--repository-cache",
+			"--repository-config",
+			"--burst-limit",
+			"--qps",
+		]),
+	},
+	terraform: {
+		bool: new Set([]),
+		value: new Set(["-chdir", "--chdir"]),
+	},
+	fly: {
+		bool: new Set([
+			"-j",
+			"--json",
+			"--verbose",
+			"--debug",
+			"-y",
+			"--yes",
+			"--local-only",
+			"--remote-only",
+			"--now",
+			"--ha",
+		]),
+		value: new Set([
+			"-a",
+			"--app",
+			"-c",
+			"--config",
+			"-t",
+			"--access-token",
+			"-o",
+			"--org",
+			"-r",
+			"--region",
+		]),
+	},
+	wrangler: {
+		bool: new Set([
+			"--experimental-json-config",
+			"--latest",
+			"--keep-vars",
+			"--minify",
+			"--dry-run",
+			"--legacy-env",
+		]),
+		value: new Set([
+			"-e",
+			"--env",
+			"-c",
+			"--config",
+			"--cwd",
+			"--name",
+			"--compatibility-date",
+			"--compatibility-flags",
+		]),
+	},
+	railway: {
+		bool: new Set(["--json", "-y", "--yes", "--ci", "-d", "--detach"]),
+		value: new Set(["-e", "--environment", "-p", "--project", "-s", "--service"]),
+	},
+	supabase: {
+		bool: new Set(["--debug", "--experimental", "-y", "--yes", "--local", "--linked"]),
+		value: new Set([
+			"--project-ref",
+			"--workdir",
+			"--profile",
+			"--output",
+			"--env-file",
+			"--db-url",
+			"-p",
+			"--password",
+		]),
+	},
+};
+
+function scanCliSubcommandTokens(tokens, startIdx, maxPositionals, optSpec) {
+	const positionals = [];
+	const boolSet = (optSpec && optSpec.bool) || new Set();
+	const valueSet = (optSpec && optSpec.value) || new Set();
+	let i = startIdx;
+	while (i < tokens.length && positionals.length < maxPositionals) {
+		const tok = tokens[i];
+		if (tok === "--") {
+			i += 1;
+			while (i < tokens.length && positionals.length < maxPositionals) {
+				positionals.push({ token: tokens[i], index: i });
+				i += 1;
+			}
+			break;
+		}
+		if ( positionals.length === 0 && /^(?:-h|--help|-help|-v|--version|-version|help|version)$/i.test(tok) ) {
+			return { help: true, positionals: [], nextIndex: i + 1 };
+		}
+		if (tok.startsWith("-") && tok.length > 1) {
+			const eqIdx = tok.indexOf("=");
+			if (eqIdx > 0) {
+				const optName = tok.slice(0, eqIdx);
+				if (boolSet.has(optName) || valueSet.has(optName)) {
+					i += 1;
+					continue;
+				}
+				return { unknownOption: tok, positionals, nextIndex: i };
+			}
+			if (boolSet.has(tok)) {
+				i += 1;
+				continue;
+			}
+			if (valueSet.has(tok)) {
+				if (i + 1 >= tokens.length) {
+					return { unknownOption: tok, positionals, nextIndex: i };
+				}
+				i += 2;
+				continue;
+			}
+			return { unknownOption: tok, positionals, nextIndex: i };
+		}
+		positionals.push({ token: tok, index: i });
+		i += 1;
+	}
+	return { positionals, nextIndex: i };
+}
+
+function extractGcloudTarget(tokens, startIdx) {
+	const scan = scanCliSubcommandTokens(tokens, startIdx, 1, CLI_GLOBAL_OPTIONS.gcloud);
+	if (scan.unknownOption || scan.positionals.length === 0) return "default";
+	return (scan.positionals[0].token || "default").toLowerCase();
+}
+
 /** 일반 클라우드·배포 CLI 운영 명령 분류(gcloud, vercel, kubectl, helm, terraform, fly, wrangler, railway, supabase). */
 function classifyGeneralCloudCli(tokens) {
 	const bin = path.basename(tokens[0] || "").toLowerCase();
@@ -1042,25 +1251,77 @@ function classifyGeneralCloudCli(tokens) {
 		return [];
 	}
 	if (bin === "gcloud") {
-		const args = tokens.slice(1).filter((t) => !t.startsWith("-"));
-		if (args[0] === "run" && args[1] === "deploy") {
-			const target = (args[2] || "default").toLowerCase();
+		const spec = CLI_GLOBAL_OPTIONS.gcloud;
+		let scan = scanCliSubcommandTokens(tokens, 1, 1, spec);
+		if (scan.help) return [];
+		if (scan.unknownOption) {
+			return [{ service: "gcloud:unknown-option", label: `gcloud (알 수 없는 전역 옵션 ${scan.unknownOption})` }];
+		}
+		if (scan.positionals.length === 0) return [];
+		let groupTok = scan.positionals[0].token.toLowerCase();
+		let nextIdx = scan.nextIndex;
+		if (groupTok === "alpha" || groupTok === "beta" || groupTok === "preview") {
+			scan = scanCliSubcommandTokens(tokens, nextIdx, 1, spec);
+			if (scan.help) return [];
+			if (scan.unknownOption) {
+				return [{ service: "gcloud:unknown-option", label: `gcloud (알 수 없는 전역 옵션 ${scan.unknownOption})` }];
+			}
+			if (scan.positionals.length === 0) return [];
+			groupTok = scan.positionals[0].token.toLowerCase();
+			nextIdx = scan.nextIndex;
+		}
+		if (!["run", "app", "functions", "compute", "builds", "build"].includes(groupTok)) {
+			return [];
+		}
+		const subScan = scanCliSubcommandTokens(tokens, nextIdx, 1, spec);
+		if (subScan.help) return [];
+		if (subScan.unknownOption) {
+			return [{ service: "gcloud:unknown-option", label: `gcloud (알 수 없는 전역 옵션 ${subScan.unknownOption})` }];
+		}
+		if (subScan.positionals.length === 0) return [];
+		const subTok = subScan.positionals[0].token.toLowerCase();
+		nextIdx = subScan.nextIndex;
+
+		if (groupTok === "run" && subTok === "deploy") {
+			const target = extractGcloudTarget(tokens, nextIdx);
 			if (isNonProd(target)) return [];
 			return [{ service: `gcloud:run:${target}`, label: `gcloud run deploy ${target}` }];
 		}
-		if (args[0] === "app" && args[1] === "deploy") {
+		if (groupTok === "run" && (subTok === "services" || subTok === "service")) {
+			const actScan = scanCliSubcommandTokens(tokens, nextIdx, 1, spec);
+			if (actScan.help) return [];
+			if (actScan.unknownOption) {
+				return [{ service: "gcloud:unknown-option", label: `gcloud (알 수 없는 전역 옵션 ${actScan.unknownOption})` }];
+			}
+			if (actScan.positionals.length === 0) return [];
+			const actTok = actScan.positionals[0].token.toLowerCase();
+			if (actTok === "update") {
+				const target = extractGcloudTarget(tokens, actScan.nextIndex);
+				if (isNonProd(target)) return [];
+				return [{ service: `gcloud:run:${target}`, label: `gcloud run services update ${target}` }];
+			}
+			if (actTok === "replace") {
+				return [{ service: "gcloud:run:replace", label: "gcloud run services replace" }];
+			}
+			return [];
+		}
+		if (groupTok === "app" && subTok === "deploy") {
 			return [{ service: "gcloud:app:default", label: "gcloud app deploy" }];
 		}
-		if (args[0] === "functions" && args[1] === "deploy") {
-			const target = (args[2] || "default").toLowerCase();
+		if (groupTok === "functions" && subTok === "deploy") {
+			const target = extractGcloudTarget(tokens, nextIdx);
 			if (isNonProd(target)) return [];
 			return [{ service: `gcloud:functions:${target}`, label: `gcloud functions deploy ${target}` }];
 		}
-		if (args[0] === "compute" && args[1] === "scp") {
+		if ((groupTok === "builds" || groupTok === "build") && subTok === "submit") {
+			return [{ service: "gcloud:builds:submit", label: "gcloud builds submit" }];
+		}
+		if (groupTok === "compute" && subTok === "scp") {
 			return [{ service: "gcloud:compute:scp", label: "gcloud compute scp" }];
 		}
-		if (args[0] === "compute" && args[1] === "ssh") {
-			const target = (args[2] || "default").replace(/^[^@]+@/, "").toLowerCase();
+		if (groupTok === "compute" && subTok === "ssh") {
+			const rawTarget = extractGcloudTarget(tokens, nextIdx);
+			const target = rawTarget.replace(/^[^@]+@/, "").toLowerCase();
 			if (isNonProd(target)) return [];
 			const joined = tokens.join(" ");
 			if (/(?:cp\s|mv\s|rm\s|tee\s|dd\s|docker\s+(?:cp|exec|restart|stop|rm|run|compose)|systemctl\s+(?:restart|stop|start|reload)|nginx\s+-s|>)/.test(joined)) {
@@ -1070,26 +1331,97 @@ function classifyGeneralCloudCli(tokens) {
 		}
 		return [];
 	}
-	if (bin === "kubectl" && /^(?:apply|delete|rollout|set|scale|patch)$/i.test(tokens[1] || "")) {
-		return [{ service: `kubectl:${tokens[1].toLowerCase()}`, label: `kubectl ${tokens[1]}` }];
+	if (bin === "kubectl") {
+		const scan = scanCliSubcommandTokens(tokens, 1, 1, CLI_GLOBAL_OPTIONS.kubectl);
+		if (scan.help) return [];
+		if (scan.unknownOption) {
+			return [{ service: "kubectl:unknown-option", label: `kubectl (알 수 없는 전역 옵션 ${scan.unknownOption})` }];
+		}
+		const sub = scan.positionals[0] ? scan.positionals[0].token : "";
+		if (/^(?:apply|delete|rollout|set|scale|patch)$/i.test(sub)) {
+			return [{ service: `kubectl:${sub.toLowerCase()}`, label: `kubectl ${sub}` }];
+		}
+		return [];
 	}
-	if (bin === "helm" && /^(?:upgrade|install|uninstall|rollback)$/i.test(tokens[1] || "")) {
-		return [{ service: `helm:${tokens[1].toLowerCase()}`, label: `helm ${tokens[1]}` }];
+	if (bin === "helm") {
+		const scan = scanCliSubcommandTokens(tokens, 1, 1, CLI_GLOBAL_OPTIONS.helm);
+		if (scan.help) return [];
+		if (scan.unknownOption) {
+			return [{ service: "helm:unknown-option", label: `helm (알 수 없는 전역 옵션 ${scan.unknownOption})` }];
+		}
+		const sub = scan.positionals[0] ? scan.positionals[0].token : "";
+		if (/^(?:upgrade|install|uninstall|rollback)$/i.test(sub)) {
+			return [{ service: `helm:${sub.toLowerCase()}`, label: `helm ${sub}` }];
+		}
+		return [];
 	}
-	if (bin === "terraform" && /^(?:apply|destroy)$/i.test(tokens[1] || "")) {
-		return [{ service: `terraform:${tokens[1].toLowerCase()}`, label: `terraform ${tokens[1]}` }];
+	if (bin === "terraform") {
+		const scan = scanCliSubcommandTokens(tokens, 1, 1, CLI_GLOBAL_OPTIONS.terraform);
+		if (scan.help) return [];
+		if (scan.unknownOption) {
+			return [{ service: "terraform:unknown-option", label: `terraform (알 수 없는 전역 옵션 ${scan.unknownOption})` }];
+		}
+		const sub = scan.positionals[0] ? scan.positionals[0].token : "";
+		if (/^(?:apply|destroy)$/i.test(sub)) {
+			return [{ service: `terraform:${sub.toLowerCase()}`, label: `terraform ${sub}` }];
+		}
+		return [];
 	}
-	if ((bin === "flyctl" || bin === "fly") && /^deploy$/i.test(tokens[1] || "")) {
-		return [{ service: "fly:deploy", label: `${bin} deploy` }];
+	if (bin === "flyctl" || bin === "fly") {
+		const scan = scanCliSubcommandTokens(tokens, 1, 1, CLI_GLOBAL_OPTIONS.fly);
+		if (scan.help) return [];
+		if (scan.unknownOption) {
+			return [{ service: "fly:unknown-option", label: `${bin} (알 수 없는 전역 옵션 ${scan.unknownOption})` }];
+		}
+		const sub = scan.positionals[0] ? scan.positionals[0].token : "";
+		if (/^deploy$/i.test(sub)) {
+			return [{ service: "fly:deploy", label: `${bin} deploy` }];
+		}
+		return [];
 	}
-	if (bin === "wrangler" && /^(?:deploy|publish)$/i.test(tokens[1] || "")) {
-		return [{ service: "cloudflare:workers", label: `wrangler ${tokens[1]}` }];
+	if (bin === "wrangler") {
+		const scan = scanCliSubcommandTokens(tokens, 1, 1, CLI_GLOBAL_OPTIONS.wrangler);
+		if (scan.help) return [];
+		if (scan.unknownOption) {
+			return [{ service: "wrangler:unknown-option", label: `wrangler (알 수 없는 전역 옵션 ${scan.unknownOption})` }];
+		}
+		const sub = scan.positionals[0] ? scan.positionals[0].token : "";
+		if (/^(?:deploy|publish)$/i.test(sub)) {
+			return [{ service: "cloudflare:workers", label: `wrangler ${sub}` }];
+		}
+		return [];
 	}
-	if (bin === "railway" && /^up$/i.test(tokens[1] || "")) {
-		return [{ service: "railway:up", label: "railway up" }];
+	if (bin === "railway") {
+		const scan = scanCliSubcommandTokens(tokens, 1, 1, CLI_GLOBAL_OPTIONS.railway);
+		if (scan.help) return [];
+		if (scan.unknownOption) {
+			return [{ service: "railway:unknown-option", label: `railway (알 수 없는 전역 옵션 ${scan.unknownOption})` }];
+		}
+		const sub = scan.positionals[0] ? scan.positionals[0].token : "";
+		if (/^up$/i.test(sub)) {
+			return [{ service: "railway:up", label: "railway up" }];
+		}
+		return [];
 	}
-	if (bin === "supabase" && tokens[1] === "db" && tokens[2] === "push") {
-		return [{ service: "supabase:db:push", label: "supabase db push" }];
+	if (bin === "supabase") {
+		const scan1 = scanCliSubcommandTokens(tokens, 1, 1, CLI_GLOBAL_OPTIONS.supabase);
+		if (scan1.help) return [];
+		if (scan1.unknownOption) {
+			return [{ service: "supabase:unknown-option", label: `supabase (알 수 없는 전역 옵션 ${scan1.unknownOption})` }];
+		}
+		const sub1 = scan1.positionals[0] ? scan1.positionals[0].token.toLowerCase() : "";
+		if (sub1 === "db") {
+			const scan2 = scanCliSubcommandTokens(tokens, scan1.nextIndex, 1, CLI_GLOBAL_OPTIONS.supabase);
+			if (scan2.help) return [];
+			if (scan2.unknownOption) {
+				return [{ service: "supabase:unknown-option", label: `supabase (알 수 없는 전역 옵션 ${scan2.unknownOption})` }];
+			}
+			const sub2 = scan2.positionals[0] ? scan2.positionals[0].token.toLowerCase() : "";
+			if (sub2 === "push") {
+				return [{ service: "supabase:db:push", label: "supabase db push" }];
+			}
+		}
+		return [];
 	}
 	return [];
 }

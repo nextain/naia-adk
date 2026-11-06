@@ -913,14 +913,27 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 	saveState(env, state);
 	const steps = f.plan.scenario;
 	const idx = steps.indexOf(f.step);
+	const st2 = loadState(env);
 	if (f.step.branch !== "rollback") {
 		for (const prev of steps.slice(0, idx).filter((s) => s.branch !== "rollback")) {
+			const prevCmdHashes = (prev.commands || []).map((c) => commandHash(c));
+			const prevChallenges = st2.challenges.filter((c) => c.kind === "step" && c.planSha === f.sha && c.step === prev.id && c.sessionId === ctx.sessionId);
+			const executedHashes = new Set();
+			let prevStatusExecuted = false;
+			for (const c of prevChallenges) {
+				if (c.status === "executed") prevStatusExecuted = true;
+				for (const eh of c.executed || []) executedHashes.add(eh);
+			}
+			const allPrevCommandsExecuted = prevCmdHashes.length > 0 && prevCmdHashes.every((ch) => executedHashes.has(ch));
+			if (!prevStatusExecuted || !allPrevCommandsExecuted) {
+				const why = `${prev.id} 단계가 실제 실행(executed)되지 않음`;
+				return { allow: false, audit: { event: "blocked-step-order", plan: rel, step: f.step.id, why }, reason: ["[Harness] 앞 단계가 실제 실행(executed)되지 않아 다음 단계로 넘어갈 수 없습니다.", `- ${why}`, "", `앞 단계(${prev.id}) 명령을 먼저 실행하고 성공 확인(step-ok) 증거를 남기십시오.`].join("\n") };
+			}
 			const bad = stepSuccessProblem(f.gatesDir, f.sha, prev.id);
 			if (bad) return { allow: false, audit: { event: "blocked-step-order", plan: rel, step: f.step.id, why: bad }, reason: ["[Harness] 앞 단계 성공 확인 전에는 다음 단계 승인을 요청할 수 없습니다.", `- ${bad}`, "", "앞 단계의 성공 확인을 실행해 증거를 남기십시오: node .agents/scripts/approval-plan.mjs step-ok <계획서> <단계> --evidence <확인 출력 파일>. 확인이 실패했으면 계획의 실패 갈림길대로 하고 보고하십시오."].join("\n") };
 		}
 	}
 
-	const st2 = loadState(env);
 	let stepCh = st2.challenges.filter((c) => c.kind === "step" && c.planSha === f.sha && c.step === f.step.id && c.sessionId === ctx.sessionId && !c.closed).pop();
 	if (stepCh && (stepCh.executed || []).includes(h)) {
 		stepCh.closed = new Date(now).toISOString();
@@ -958,6 +971,15 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		stepCh.approvedVia = ok.via;
 	}
 	stepCh.executed = [...(stepCh.executed || []), h];
+	const stepCmdHashes = (f.step.commands || []).map((c) => commandHash(c));
+	const allExecutedForStep = new Set();
+	for (const c of st2.challenges.filter((ch) => ch.kind === "step" && ch.planSha === f.sha && ch.step === f.step.id && ch.sessionId === ctx.sessionId)) {
+		for (const eh of c.executed || []) allExecutedForStep.add(eh);
+	}
+	if (stepCmdHashes.length > 0 && stepCmdHashes.every((ch) => allExecutedForStep.has(ch))) {
+		stepCh.status = "executed";
+		stepCh.executedAt = new Date(now).toISOString();
+	}
 	saveState(env, st2);
 	return { allow: true, audit: { event: "executed", plan: rel, plan_sha256: f.sha, step: f.step.id, plan_code_sha256_12: sha256(planCh.code).slice(0, 12), step_code_sha256_12: sha256(stepCh.code).slice(0, 12), approved_by: `plan(${planOk.via})+step(${stepCh.approvedVia})` } };
 }

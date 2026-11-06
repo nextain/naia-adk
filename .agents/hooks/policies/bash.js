@@ -251,11 +251,11 @@ function prGuard(command, data) {
 
 const PROD_PATTERNS = [
 	{ pattern: /\bvercel\b.*(?:--prod|--production)\b/, platform: "vercel", label: "vercel --prod" },
-	{ pattern: /\bgcloud\s+run\s+deploy\s+(\S+)/, platform: "gcloud", label: "gcloud run deploy", serviceGroup: 1 },
-	{ pattern: /\bgcloud\s+app\s+deploy\b/, platform: "gcloud", label: "gcloud app deploy" },
-	{ pattern: /\bgcloud\s+builds?\s+submit\b/, platform: "gcloud", label: "gcloud builds submit", alwaysBlock: true },
-	{ pattern: /\bgcloud\s+run\s+services?\s+update\s+(\S+)/, platform: "gcloud", label: "gcloud run services update", serviceGroup: 1 },
-	{ pattern: /\bgcloud\s+run\s+services?\s+replace\b/, platform: "gcloud", label: "gcloud run services replace" },
+	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+run\s+deploy\s+(\S+)/, platform: "gcloud", label: "gcloud run deploy", serviceGroup: 1 },
+	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+app\s+deploy\b/, platform: "gcloud", label: "gcloud app deploy" },
+	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+builds?\s+submit\b/, platform: "gcloud", label: "gcloud builds submit", alwaysBlock: true },
+	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+run\s+services?\s+update\s+(\S+)/, platform: "gcloud", label: "gcloud run services update", serviceGroup: 1 },
+	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+run\s+services?\s+replace\b/, platform: "gcloud", label: "gcloud run services replace", alwaysBlock: true },
 	{ pattern: /\bdocker\s+push\s+\S*(?:pkg\.dev|gcr\.io)\b/, platform: "gcloud", label: "docker push (registry)" },
 ];
 
@@ -291,6 +291,15 @@ function hasAnyDeployPlan(root) {
 	}
 }
 
+function hasApprovalPlanGate(root) {
+	if (!root) return false;
+	return (
+		fs.existsSync(path.join(root, "config", "deploy-gate.json")) ||
+		fs.existsSync(path.join(root, ".agents", "scripts", "approval-plan.mjs")) ||
+		hasAnyDeployPlan(root)
+	);
+}
+
 /**
  * deploy-guard — block prod deploy unless approved via approval-plan gate
  * (계획서 → 적대 리뷰 → 관문 발급 승인 코드 → 실행 때 바이트·고정 파일 sha 대조).
@@ -315,8 +324,8 @@ async function deploy(command, data, opts) {
 			if (proj.platform === "vercel" && /\bvercel\b/.test(cmd)) {
 				if (/(?:--prod|--production)\b/.test(cmd)) { if (cwd.includes(proj.cwd)) return name; }
 			}
-			if (proj.platform === "gcloud" && /\bgcloud\s+run\s+deploy\b/.test(cmd)) {
-				const sm = cmd.match(/gcloud\s+run\s+deploy\s+(\S+)/);
+			if (proj.platform === "gcloud" && /\bgcloud\b.*\brun\s+(?:deploy|services?\s+update)\b/.test(cmd)) {
+				const sm = cmd.match(/\brun\s+(?:deploy|services?\s+update)\s+(\S+)/);
 				if (sm) {
 					const service = sm[1];
 					if (name === service || proj.prod_command?.includes(service)) {
@@ -399,12 +408,12 @@ async function deploy(command, data, opts) {
 		fs.existsSync(APPROVALS_PATH) &&
 		!process.env.DEPLOY_READINESS_ROOT &&
 		!process.env.DEPLOY_APPROVAL_STATE_DIR &&
-		!fs.existsSync(path.join(root, "config", "deploy-gate.json")) &&
-		!hasAnyDeployPlan(root);
+		!hasApprovalPlanGate(root);
 
 	const precomputedMutations = classifyProdMutations(command, cwd, 0, false, root).filter((hit) => {
 		if (hit && typeof hit.service === "string" && hit.service.startsWith("gcloud:run:")) {
-			if (isLegacyDevService(hit.service.slice("gcloud:run:".length))) return false;
+			const svcName = hit.service.slice("gcloud:run:".length);
+			if (svcName !== "replace" && isLegacyDevService(svcName)) return false;
 		}
 		return true;
 	});
@@ -417,12 +426,25 @@ async function deploy(command, data, opts) {
 		if (matched) nonDevLegacyMatches.push({ ...matched, tokens });
 	}
 
-	if (useLegacyApprovals && precomputedMutations.length === 0) {
+	const isLegacyCoveredMutation = (hit) => {
+		if (!hit || hit.unclassified || typeof hit.service !== "string") return false;
+		return (
+			hit.service === "vercel:prod" ||
+			hit.service === "gcloud:app:default" ||
+			hit.service === "gcloud:builds:submit" ||
+			hit.service.startsWith("gcloud:run:")
+		);
+	};
+	const onlyLegacyMutations =
+		precomputedMutations.length === 0 ||
+		(nonDevLegacyMatches.length > 0 && precomputedMutations.every(isLegacyCoveredMutation));
+
+	if (useLegacyApprovals && onlyLegacyMutations) {
 		const firstLegacy = nonDevLegacyMatches[0];
 		const matchedPattern = firstLegacy ? firstLegacy.pattern : null;
 		if (matchedPattern) {
 			const project = detectProject(firstLegacy.clause, config, cwd);
-			const approval = findApproval(project);
+			const approval = !matchedPattern.alwaysBlock ? findApproval(project) : null;
 			if (approval) {
 				appendAudit({
 					event: "executed", project: project || "unknown", session: sessionId,
@@ -460,7 +482,19 @@ async function deploy(command, data, opts) {
 	const hits = [];
 	for (const hit of precomputedMutations) hits.push(hit);
 	for (const { pattern: p, clause, tokens } of nonDevLegacyMatches) {
-		if (hits.length > 0 && ["vercel --prod", "gcloud run deploy", "gcloud app deploy"].includes(p.label)) continue;
+		if (
+			hits.length > 0 &&
+			[
+				"vercel --prod",
+				"gcloud run deploy",
+				"gcloud app deploy",
+				"gcloud builds submit",
+				"gcloud run services update",
+				"gcloud run services replace",
+			].includes(p.label)
+		) {
+			continue;
+		}
 		const project = detectProject(clause, config, cwd);
 		hits.push({ service: `legacy:${project || p.label}`, label: p.label, project, clause: clauseText(tokens) });
 	}

@@ -792,5 +792,162 @@ test("14. P1-4 재현: bash scripts/rollout.sh 재귀 참조 파일 검사가 �
 	assert.equal(appYamlSha.length, 64);
 });
 
+test("15. 2회차 지적 1 재현: 명령 앞 전역 옵션 우회 12종 + 미지 옵션 + 감싼 대본(bash release.sh) 차단", async (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root);
+	const P = require(path.join(REPO_ROOT, ".agents/hooks/policies/bash.js"));
+	const deployDir = path.join(root, ".claude", "deploy");
+	fs.mkdirSync(deployDir, { recursive: true });
+
+	const releaseSh = path.join(root, "release.sh");
+	fs.writeFileSync(
+		releaseSh,
+		"#!/usr/bin/env bash\ngcloud run services update sample-svc --image gcr.io/sample/app:v1\n"
+	);
+
+	// 12가지 우회 모양
+	const bypass12 = [
+		{ name: "1. gcloud --project prod run deploy", cmd: "gcloud --project prod run deploy sample-svc", expectedService: /gcloud:run:sample-svc/ },
+		{ name: "2. gcloud --quiet run services update", cmd: "gcloud --quiet run services update sample-svc --image gcr.io/sample/app:v1", expectedService: /gcloud:run:sample-svc/ },
+		{ name: "3. gcloud --project prod run services replace", cmd: "gcloud --project prod run services replace service.yaml", expectedService: /gcloud:run:replace/ },
+		{ name: "4. gcloud --project prod builds submit", cmd: "gcloud --project prod builds submit --tag gcr.io/sample/app:v1", expectedService: /gcloud:builds:submit/ },
+		{ name: "5. bash release.sh (감싼 대본 안 gcloud run services update)", cmd: "bash release.sh", expectedService: /gcloud:run:sample-svc/ },
+		{ name: "6. kubectl -n prod apply", cmd: "kubectl -n prod apply -f app.yaml", expectedService: /kubectl:apply/ },
+		{ name: "7. helm -n prod upgrade", cmd: "helm -n prod upgrade sample-rel ./chart", expectedService: /helm:upgrade/ },
+		{ name: "8. terraform -chdir=infra apply", cmd: "terraform -chdir=infra apply", expectedService: /terraform:apply/ },
+		{ name: "9. fly -a app deploy", cmd: "fly -a app deploy", expectedService: /fly:deploy/ },
+		{ name: "10. wrangler --env prod deploy", cmd: "wrangler --env prod deploy", expectedService: /cloudflare:workers/ },
+		{ name: "11. railway -e prod up", cmd: "railway -e prod up", expectedService: /railway:up/ },
+		{ name: "12. supabase --project-ref x db push", cmd: "supabase --project-ref x db push", expectedService: /supabase:db:push/ },
+	];
+
+	for (const { name, cmd, expectedService } of bypass12) {
+		const hits = classifyProdMutations(cmd, root);
+		assert.ok(
+			hits.some((h) => expectedService.test(h.service)),
+			`[${name}] 분류기가 운영 서비스를 잡아야 함 (실제: ${JSON.stringify(hits)})`
+		);
+		const res = await P.deploy(cmd, { cwd: root, session_id: "leading-opt-test" }, { deployDir });
+		assert.ok(res && res.reason, `[${name}] P.deploy 에서 차단되어야 함`);
+		assert.match(res.reason, expectedService);
+
+		const hookDecision = runDeployGuardHook(cmd, { cwd: root, root, stateDir, transcriptPath });
+		assert.ok(hookDecision, `[${name}] deploy-guard 훅에서 차단되어야 함`);
+		assert.equal(hookDecision.decision, "block");
+		assert.match(hookDecision.reason, expectedService);
+	}
+
+	// 모르는 옵션이 앞에 오면 막는 쪽(승인 필요)으로 판정
+	const unknownOptCases = [
+		"gcloud --mystery-flag prod run deploy sample-svc",
+		"kubectl --mystery-flag prod apply -f app.yaml",
+		"helm --mystery-flag prod upgrade sample-rel ./chart",
+		"terraform -mystery=infra apply",
+		"fly --mystery-flag app deploy",
+		"wrangler --mystery-flag prod deploy",
+		"railway --mystery-flag prod up",
+		"supabase --mystery-flag x db push",
+	];
+	for (const cmd of unknownOptCases) {
+		const hits = classifyProdMutations(cmd, root);
+		assert.ok(hits.length > 0, `모르는 앞 옵션 명령(${cmd})은 막는 쪽으로 분류되어야 함`);
+		const res = await P.deploy(cmd, { cwd: root, session_id: "unknown-opt-test" }, { deployDir });
+		assert.ok(res && res.reason, `모르는 앞 옵션 명령(${cmd})은 P.deploy 에서 차단되어야 함`);
+	}
+
+	// 비운영(-dev) 및 읽기 하위 명령은 앞 옵션이 있어도 정상 통과
+	const safeCases = [
+		"gcloud --project dev run deploy sample-dev",
+		"gcloud --quiet run services update sample-dev --image gcr.io/sample/app:v1",
+		"kubectl -n prod get pods",
+		"helm -n prod list",
+		"terraform -chdir=infra plan",
+	];
+	for (const cmd of safeCases) {
+		const hits = classifyProdMutations(cmd, root);
+		assert.equal(hits.length, 0, `읽기/비운영 명령(${cmd})은 오탐 없이 빈 배열이어야 함 (실제: ${JSON.stringify(hits)})`);
+	}
+});
+
+test("16. 2회차 지적 2 재현: 사전승인(preapprove_steps)에서 s1 미실행 상태로 step-ok 만 부른 뒤 s2 실행 시 차단", async (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root);
+
+	const script1Rel = "scripts/step1.sh";
+	const script2Rel = "scripts/step2.sh";
+	const script1Abs = path.join(root, script1Rel);
+	const script2Abs = path.join(root, script2Rel);
+	fs.mkdirSync(path.dirname(script1Abs), { recursive: true });
+	fs.writeFileSync(script1Abs, "#!/usr/bin/env bash\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1-stage1\n");
+	fs.writeFileSync(script2Abs, "#!/usr/bin/env bash\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1-stage2\n");
+	const s1Sha = sha256(fs.readFileSync(script1Abs));
+	const s2Sha = sha256(fs.readFileSync(script2Abs));
+	const s1Cmd = `bash ${script1Rel} prod`;
+	const s2Cmd = `bash ${script2Rel} prod`;
+
+	const { planFile } = createValidPlan(root, {
+		scenario: [
+			{
+				id: "s1",
+				title: "1단계 카나리 이미지 반영",
+				commands: [s1Cmd],
+				files: { [script1Rel]: s1Sha },
+				success_check: "카나리 헬스체크 200 확인",
+				on_failure: "r1 단계로 즉시 롤백하고 보고",
+			},
+			{
+				id: "s2",
+				title: "2단계 본 트래픽 이미지 반영",
+				commands: [s2Cmd],
+				files: { [script2Rel]: s2Sha },
+				success_check: "전체 헬스체크 200 확인",
+				on_failure: "r1 단계로 즉시 롤백하고 보고",
+			},
+			{
+				id: "r1",
+				branch: "rollback",
+				title: "이전 리비전으로 복귀",
+				commands: ["az containerapp revision activate -n sample-web-prod -g sample-rg --revision sample-web-prod--prev"],
+				success_check: "이전 리비전 트래픽 100% 및 헬스 200 확인",
+				on_failure: "트래픽 차단 후 즉시 운영팀에 보고",
+			},
+		],
+	});
+	writePassingReviewReceipt(root, planFile);
+
+	const sessionId = "sess-step-skip-test";
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const pre = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, Date.now());
+	assert.equal(pre.ok, true, `preapprove failed: ${pre.why}`);
+	const s1Code = pre.steps.find((s) => s.step === "s1")?.code;
+	const s2Code = pre.steps.find((s) => s.step === "s2")?.code;
+	assert.ok(s1Code && s2Code);
+
+	// 사람이 대화창에 PLAN + s1 + s2 코드를 한 번에 입력
+	appendHumanTurn(transcriptPath, `승인: ${pre.plan_code} ${s1Code} ${s2Code}`);
+
+	// s1 을 실제로 실행하지 않고 step-ok 만 먼저 호출해 s1.json 생성
+	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
+	const evFile = path.join(stateDir, "fake-s1-ok.txt");
+	fs.writeFileSync(evFile, "HTTP/1.1 200 OK\ncanary=ok\n");
+	const stepOkRes = spawnSync(process.execPath, [workspaceScript, "step-ok", planFile, "s1", "--evidence", evFile], { cwd: root, env, encoding: "utf8" });
+	assert.equal(stepOkRes.status, 0, stepOkRes.stderr);
+
+	// s1 미실행 상태에서 s2 실행 시도 → 반드시 차단되어야 함
+	const skipDecision = runDeployGuardHook(s2Cmd, { cwd: root, root, stateDir, transcriptPath, sessionId });
+	assert.ok(skipDecision, "s1 이 executed 되지 않았으면 s1.json 이 있어도 s2 는 차단되어야 함");
+	assert.equal(skipDecision.decision, "block");
+	assert.match(skipDecision.reason, /s1.*실행되지 않았|executed/i);
+
+	// 이제 s1 을 실제로 실행 → 통과(null)
+	const s1Decision = runDeployGuardHook(s1Cmd, { cwd: root, root, stateDir, transcriptPath, sessionId });
+	assert.equal(s1Decision, null, `s1 실행은 통과해야 함: ${JSON.stringify(s1Decision)}`);
+
+	// s1 이 executed 된 뒤에는 s2 실행 → 통과(null)
+	const s2Decision = runDeployGuardHook(s2Cmd, { cwd: root, root, stateDir, transcriptPath, sessionId });
+	assert.equal(s2Decision, null, `s1 실행 및 step-ok 후 s2 실행은 통과해야 함: ${JSON.stringify(s2Decision)}`);
+});
+
+
 
 
