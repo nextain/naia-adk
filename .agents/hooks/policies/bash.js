@@ -251,36 +251,81 @@ function prGuard(command, data) {
 
 const PROD_PATTERNS = [
 	{ pattern: /\bvercel\b.*(?:--prod|--production)\b/, platform: "vercel", label: "vercel --prod" },
-	{ pattern: /\bgcloud\s+run\s+deploy\s+(\S+)/, platform: "gcloud", label: "gcloud run deploy", serviceGroup: 1 },
-	{ pattern: /\bgcloud\s+app\s+deploy\b/, platform: "gcloud", label: "gcloud app deploy" },
-	{ pattern: /\bgcloud\s+builds?\s+submit\b/, platform: "gcloud", label: "gcloud builds submit", alwaysBlock: true },
-	{ pattern: /\bgcloud\s+run\s+services?\s+update\s+(\S+)/, platform: "gcloud", label: "gcloud run services update", serviceGroup: 1 },
-	{ pattern: /\bgcloud\s+run\s+services?\s+replace\b/, platform: "gcloud", label: "gcloud run services replace" },
-	{ pattern: /\bdocker\s+push\s+\S*(?:pkg\.dev|gcr\.io)\b/, platform: "gcloud", label: "docker push (registry)" },
+	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+run\s+deploy\s+(\S+)/, platform: "gcloud", label: "gcloud run deploy", serviceGroup: 1 },
+	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+app\s+deploy\b/, platform: "gcloud", label: "gcloud app deploy" },
+	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+builds?\s+submit\b/, platform: "gcloud", label: "gcloud builds submit", alwaysBlock: true },
+	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+run\s+services?\s+update\s+(\S+)/, platform: "gcloud", label: "gcloud run services update", serviceGroup: 1 },
+	{ pattern: /\bgcloud(?:\s+(?:alpha|beta|preview|--[a-z0-9-]+(?:=\S+|\s+\S+)?|-q))*\s+run\s+services?\s+replace\b/, platform: "gcloud", label: "gcloud run services replace", alwaysBlock: true },
+	{ pattern: /\bdocker(?:\s+(?:--?[a-zA-Z0-9-]+(?:=\S+|\s+\S+)?))*\s+(?:image\s+)?push\s+\S*(?:pkg\.dev|gcr\.io)\b/, platform: "gcloud", label: "docker push (registry)" },
 ];
 
+function findApprovalGateRoot(cwd, deployDir) {
+	if (process.env.DEPLOY_READINESS_ROOT) return path.resolve(process.env.DEPLOY_READINESS_ROOT);
+	const candidates = [];
+	if (cwd) {
+		candidates.push(path.resolve(cwd));
+		let cur = path.resolve(cwd);
+		for (;;) {
+			if (fs.existsSync(path.join(cur, ".agents", "progress")) || fs.existsSync(path.join(cur, "config", "deploy-gate.json")) || fs.existsSync(path.join(cur, ".git"))) {
+				if (!candidates.includes(cur)) candidates.push(cur);
+			}
+			const parent = path.dirname(cur);
+			if (parent === cur) break;
+			cur = parent;
+		}
+	}
+	if (deployDir) candidates.push(path.resolve(deployDir, "..", ".."));
+	for (const c of candidates) {
+		if (fs.existsSync(path.join(c, "config", "deploy-gate.json")) || hasAnyDeployPlan(c)) return c;
+	}
+	return candidates[0] || path.resolve(__dirname, "..", "..", "..");
+}
+
+function hasAnyDeployPlan(root) {
+	try {
+		const base = path.join(root, ".agents", "progress");
+		const dirs = fs.readdirSync(base, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith("_"));
+		return dirs.some((d) => fs.existsSync(path.join(base, d.name, "gates", "deploy-plan.json")));
+	} catch {
+		return false;
+	}
+}
+
+function hasApprovalPlanGate(root) {
+	if (!root) return false;
+	return (
+		fs.existsSync(path.join(root, "config", "deploy-gate.json")) ||
+		fs.existsSync(path.join(root, ".agents", "scripts", "approval-plan.mjs")) ||
+		hasAnyDeployPlan(root)
+	);
+}
+
 /**
- * deploy-guard — block prod deploy unless approved.
+ * deploy-guard — block prod deploy unless approved via approval-plan gate
+ * (계획서 → 적대 리뷰 → 관문 발급 승인 코드 → 실행 때 바이트·고정 파일 sha 대조).
  * @param opts.deployDir REQUIRED — host config dir (adapter passes
- *   path.resolve(its __dirname,"..","deploy"); byte-identical to original
- *   __dirname-based DEPLOY_DIR which this module cannot resolve itself).
+ *   path.resolve(its __dirname,"..","deploy")).
  */
-function deploy(command, data, opts) {
-	const DEPLOY_DIR = opts.deployDir;
+async function deploy(command, data, opts) {
+	const DEPLOY_DIR = (opts && opts.deployDir) || path.resolve(__dirname, "..", "..", "..", ".claude", "deploy");
 	const CONFIG_PATH = path.join(DEPLOY_DIR, "config.json");
 	const APPROVALS_PATH = path.join(DEPLOY_DIR, "approvals.json");
-	const AUDIT_PATH = path.join(DEPLOY_DIR, "audit.jsonl");
+	const AUDIT_PATH = process.env.DEPLOY_AUDIT_PATH || path.join(DEPLOY_DIR, "audit.jsonl");
 	const loadJSON = (fp, fb) => { try { return JSON.parse(fs.readFileSync(fp, "utf8")); } catch { return fb; } };
 	const appendAudit = (entry) => {
-		try { entry.ts = new Date().toISOString(); fs.appendFileSync(AUDIT_PATH, JSON.stringify(entry) + "\n"); } catch {}
+		try {
+			fs.mkdirSync(path.dirname(AUDIT_PATH), { recursive: true });
+			entry.ts = new Date().toISOString();
+			fs.appendFileSync(AUDIT_PATH, JSON.stringify(entry) + "\n");
+		} catch {}
 	};
 	const detectProject = (cmd, config, cwd) => {
 		for (const [name, proj] of Object.entries(config.projects || {})) {
 			if (proj.platform === "vercel" && /\bvercel\b/.test(cmd)) {
 				if (/(?:--prod|--production)\b/.test(cmd)) { if (cwd.includes(proj.cwd)) return name; }
 			}
-			if (proj.platform === "gcloud" && /\bgcloud\s+run\s+deploy\b/.test(cmd)) {
-				const sm = cmd.match(/gcloud\s+run\s+deploy\s+(\S+)/);
+			if (proj.platform === "gcloud" && /\bgcloud\b.*\brun\s+(?:deploy|services?\s+update)\b/.test(cmd)) {
+				const sm = cmd.match(/\brun\s+(?:deploy|services?\s+update)\s+(\S+)/);
 				if (sm) {
 					const service = sm[1];
 					if (name === service || proj.prod_command?.includes(service)) {
@@ -317,56 +362,232 @@ function deploy(command, data, opts) {
 		} catch {}
 	};
 
+	const cwd = (data && data.cwd) || process.cwd();
+	const sessionId = (data && data.session_id) || "unknown";
+	const root = (opts && opts.rootDir) ? path.resolve(opts.rootDir) : findApprovalGateRoot(cwd, DEPLOY_DIR);
+	const config = loadJSON(CONFIG_PATH, { projects: {} });
 	const stripped = core.stripQuotesUnwrap(command);
-	if (/^\s*(echo|printf)\s/.test(stripped) && !stripped.includes("|")) return null;
-	let matchedPattern = null;
-	for (const p of PROD_PATTERNS) { if (p.pattern.test(stripped)) { matchedPattern = p; break; } }
-	if (!matchedPattern) return null;
-	if (matchedPattern.platform === "gcloud" && matchedPattern.serviceGroup && !matchedPattern.alwaysBlock) {
-		const sm = stripped.match(matchedPattern.pattern);
-		if (sm) {
-			const service = sm[matchedPattern.serviceGroup];
-			const config = loadJSON(CONFIG_PATH, { projects: {} });
-			for (const proj of Object.values(config.projects || {})) {
-				if (proj.dev_service === service || service.endsWith("-dev")) return null;
+	if (/^\s*(echo|printf)\s/.test(stripped) && !stripped.includes("|") && !/[;&\n]/.test(stripped)) return null;
+
+	const hooksLibDir = path.resolve(__dirname, "..", "..", "..", ".claude", "hooks", "lib");
+	const { shellClauses } = require(path.join(hooksLibDir, "git-command-parser.js"));
+	const { classifyProdMutations, clauseText, executedShellFile, SCRIPT_READ_LIMIT } = require(path.join(hooksLibDir, "deploy-command-classifier.js"));
+	const { effectiveCommands } = require(path.join(hooksLibDir, "effective-argv.js"));
+	const { assessReadiness, loadDeployGateConfig, TEMPLATE: READINESS_TEMPLATE } = require(path.join(hooksLibDir, "deploy-readiness.js"));
+	const deployPlan = require(path.join(hooksLibDir, "deploy-plan.js"));
+
+	// Legacy .claude/deploy/config.json dev_service exemption (per clause only)
+	const isLegacyDevService = (service) => {
+		if (!service) return false;
+		const s = String(service).toLowerCase();
+		if (s.endsWith("-dev")) return true;
+		for (const proj of Object.values(config.projects || {})) {
+			if (proj.dev_service && String(proj.dev_service).toLowerCase() === s) return true;
+		}
+		return false;
+	};
+	const matchLegacyClause = (rawClause) => {
+		const subClauses = shellClauses(core.stripQuotesUnwrap(rawClause));
+		const list = subClauses.length
+			? subClauses.map((t) => t.join(" ").replace(/'([^']*)'/g, "$1").replace(/"([^"]*)"/g, "$1"))
+			: [rawClause];
+		for (const sub of list) {
+			for (const p of PROD_PATTERNS) {
+				const m = sub.match(p.pattern);
+				if (!m) continue;
+				if (p.platform === "gcloud" && p.serviceGroup && !p.alwaysBlock && isLegacyDevService(m[p.serviceGroup])) {
+					continue;
+				}
+				return { pattern: p, clause: sub };
 			}
 		}
+		return null;
+	};
+
+	const useLegacyApprovals =
+		fs.existsSync(APPROVALS_PATH) &&
+		!process.env.DEPLOY_READINESS_ROOT &&
+		!process.env.DEPLOY_APPROVAL_STATE_DIR &&
+		!hasApprovalPlanGate(root);
+
+	const precomputedMutations = classifyProdMutations(command, cwd, 0, false, root).filter((hit) => {
+		if (hit && typeof hit.service === "string" && hit.service.startsWith("gcloud:run:")) {
+			const svcName = hit.service.slice("gcloud:run:".length);
+			if (svcName !== "replace" && isLegacyDevService(svcName)) return false;
+		}
+		return true;
+	});
+	const clauses = shellClauses(command);
+	const nonDevLegacyMatches = [];
+	for (const tokens of clauses) {
+		if (tokens.length === 0 || /^(?:echo|printf)$/.test(tokens[0])) continue;
+		const rawClause = tokens.join(" ").replace(/'([^']*)'/g, "$1").replace(/"([^"]*)"/g, "$1");
+		const matched = matchLegacyClause(rawClause);
+		if (matched) nonDevLegacyMatches.push({ ...matched, tokens });
 	}
-	const config = loadJSON(CONFIG_PATH, { projects: {} });
-	const cwd = (data && data.cwd) || process.cwd();
-	const project = detectProject(stripped, config, cwd);
-	const sessionId = (data && data.session_id) || "unknown";
-	const approval = findApproval(project);
-	if (approval) {
-		appendAudit({
-			event: "executed", project: project || "unknown", session: sessionId,
-			command: stripped.substring(0, 200), original_command: command.substring(0, 200),
-			approved_by: approval.approved_by, approval_expires: approval.expires_at,
-		});
-		if (approval.single_use) {
-			consumeApproval(project, approval.approved_at);
-			appendAudit({ event: "approval_consumed", project: project || "unknown", single_use: true });
+
+	const isLegacyCoveredMutation = (hit) => {
+		if (!hit || hit.unclassified || typeof hit.service !== "string") return false;
+		return (
+			hit.service === "vercel:prod" ||
+			hit.service === "gcloud:app:default" ||
+			hit.service === "gcloud:builds:submit" ||
+			hit.service.startsWith("gcloud:run:")
+		);
+	};
+	const onlyLegacyMutations =
+		precomputedMutations.length === 0 ||
+		(nonDevLegacyMatches.length > 0 && precomputedMutations.every(isLegacyCoveredMutation));
+
+	if (useLegacyApprovals && onlyLegacyMutations) {
+		const firstLegacy = nonDevLegacyMatches[0];
+		const matchedPattern = firstLegacy ? firstLegacy.pattern : null;
+		if (matchedPattern) {
+			const project = detectProject(firstLegacy.clause, config, cwd);
+			const approval = !matchedPattern.alwaysBlock ? findApproval(project) : null;
+			if (approval) {
+				appendAudit({
+					event: "executed", project: project || "unknown", session: sessionId,
+					command: stripped.substring(0, 200), original_command: command.substring(0, 200),
+					approved_by: approval.approved_by, approval_expires: approval.expires_at,
+				});
+				if (approval.single_use) {
+					consumeApproval(project, approval.approved_at);
+					appendAudit({ event: "approval_consumed", project: project || "unknown", single_use: true });
+				}
+				return null;
+			}
+			appendAudit({
+				event: "blocked", project: project || "unknown",
+				command: stripped.substring(0, 200), session: sessionId,
+				reason: project ? "no_approval" : "unknown_project",
+			});
+			const projectLabel = project || "(project not detected from cwd)";
+			const remainingMin = config.default_ttl_minutes || 30;
+			return {
+				reason:
+					`[Harness] prod 배포 명령 차단: \`${matchedPattern.label}\`\n` +
+					`프로젝트: ${projectLabel}\n\n` +
+					"prod 배포는 사전 승인이 필요합니다.\n\n" +
+					"승인 방법:\n" +
+					`  1. .claude/deploy/approvals.json에 "${project || "project"}" 승인 항목 추가\n` +
+					`  2. 또는 .claude/deploy/prod-deploy.sh 사용\n\n` +
+					`승인 TTL: ${remainingMin}분\n` +
+					"AI는 prod 배포를 직접 실행하지 않습니다.",
+			};
 		}
 		return null;
 	}
-	appendAudit({
-		event: "blocked", project: project || "unknown",
-		command: stripped.substring(0, 200), session: sessionId,
-		reason: project ? "no_approval" : "unknown_project",
+
+	const hits = [];
+	for (const hit of precomputedMutations) hits.push(hit);
+	for (const { pattern: p, clause, tokens } of nonDevLegacyMatches) {
+		if (
+			hits.length > 0 &&
+			[
+				"vercel --prod",
+				"gcloud run deploy",
+				"gcloud app deploy",
+				"gcloud builds submit",
+				"gcloud run services update",
+				"gcloud run services replace",
+			].includes(p.label)
+		) {
+			continue;
+		}
+		const project = detectProject(clause, config, cwd);
+		hits.push({ service: `legacy:${project || p.label}`, label: p.label, project, clause: clauseText(tokens) });
+	}
+
+	const unclassified = hits.filter((hit) => hit.unclassified);
+	if (unclassified.length) {
+		appendAudit({
+			event: "blocked-unclassified",
+			services: [...new Set(unclassified.map((hit) => hit.service))],
+			session: sessionId,
+			command: command.substring(0, 300),
+			items: unclassified.map(({ service, label, clause, file }) => ({ service, label, clause, file: file || null })),
+		});
+		const lines = ["[Harness] 운영 도구가 보이지만 대상을 분류하지 못해 차단합니다."];
+		for (const hit of unclassified.slice(0, 10)) {
+			lines.push(`서비스: ${hit.service}`, `분류: ${hit.label}`, `절: ${hit.clause || "(원래 절을 확인할 수 없음)"}`, `스크립트 파일: ${hit.file || "(스크립트 파일 없음)"}`);
+		}
+		lines.push("", "대상을 글자 그대로 적거나 감싸기 인자를 고정하십시오.");
+		return { reason: lines.join("\n") };
+	}
+
+	const seen = new Set();
+	const unique = hits.filter((h) => (seen.has(h.service) ? false : seen.add(h.service)));
+	if (unique.length === 0) {
+		let matches = [];
+		try {
+			matches = deployPlan.plansForCommand(command, root);
+			if (matches.length === 0) {
+				for (const tokens of clauses) {
+					if (!tokens.length || /^(?:echo|printf)$/.test(tokens[0])) continue;
+					matches.push(...deployPlan.plansForCommand(clauseText(tokens), root));
+				}
+			}
+		} catch { matches = []; }
+		for (const m of matches) {
+			const svc = Array.isArray(m.plan && m.plan.services) && m.plan.services.length ? m.plan.services : [`plan:${(m.plan && m.plan.planId) || "unknown"}`];
+			for (const service of svc) if (!seen.has(service)) { seen.add(service); unique.push({ service, label: "계획서 단계 명령", clause: command.substring(0, 200) }); }
+		}
+	}
+
+	const opaque = effectiveCommands(command, cwd).find((e) => e.opaque);
+	if (opaque) {
+		appendAudit({ event: "blocked-opaque", session: sessionId, command: command.substring(0, 300), reason: opaque.opaque });
+		return {
+			reason: [
+				`[Harness] 무엇이 실행되는지 확인할 수 없어 막습니다: ${opaque.opaque}`,
+				"",
+				"셸에 넘기는 프로그램은 파일로 저장한 뒤 bash <파일> 로 실행하거나, 명령에 그대로 적으십시오. 따옴표가 닫히지 않았다면 고쳐서 다시 실행하십시오.",
+			].join("\n"),
+		};
+	}
+
+	const tooLarge = effectiveCommands(command, cwd)
+		.map((e) => executedShellFile(e.argv, e.dir, e.dirKnown !== false, command, true))
+		.find((f) => {
+			if (!f) return false;
+			try { return fs.statSync(f).size > SCRIPT_READ_LIMIT; } catch { return false; }
+		});
+	if (tooLarge) {
+		appendAudit({ event: "blocked-opaque", session: sessionId, command: command.substring(0, 300), reason: `script too large: ${tooLarge}` });
+		return {
+			reason: [
+				`[Harness] 무엇이 실행되는지 확인할 수 없어 막습니다: 스크립트가 커서(${SCRIPT_READ_LIMIT / 1024 / 1024}MB 넘음) 안을 읽지 않습니다(${tooLarge})`,
+				"",
+				"스크립트를 나눠 주십시오. 승인자에게 붙여 넣어 실행할 명령을 넘기지 마십시오(승인 보고 양식으로 승인 요청).",
+			].join("\n"),
+		};
+	}
+
+	if (unique.length === 0) return null;
+
+	const prodServices = unique.map((h) => h.service);
+	const runText = [...new Set(hits.map((h) => h.clause).filter(Boolean))].join(" ; ") || command;
+	const gateConfigInfo = loadDeployGateConfig(root);
+	const gateConfig = (gateConfigInfo && gateConfigInfo.config) || {};
+	const res = await deployPlan.evaluate({
+		command,
+		cwd,
+		services: prodServices,
+		sessionId,
+		transcriptPath: data && data.transcript_path,
+		root,
+		approverId: (gateConfig.approver && gateConfig.approver.discordUserId) || (config.approver && config.approver.discordUserId),
+		readiness: (planBinding) => assessReadiness(prodServices, { root, auditPath: AUDIT_PATH, command: runText, cwd, planBinding }),
+		readinessTemplate: READINESS_TEMPLATE,
+		fileRefs: () => deployPlan.referencedFiles(command, cwd),
 	});
-	const projectLabel = project || "(project not detected from cwd)";
-	const remainingMin = config.default_ttl_minutes || 30;
-	return {
-		reason:
-			`[Harness] prod 배포 명령 차단: \`${matchedPattern.label}\`\n` +
-			`프로젝트: ${projectLabel}\n\n` +
-			"prod 배포는 사전 승인이 필요합니다.\n\n" +
-			"승인 방법:\n" +
-			`  1. .claude/deploy/approvals.json에 "${project || "project"}" 승인 항목 추가\n` +
-			`  2. 또는 .claude/deploy/prod-deploy.sh 사용\n\n` +
-			`승인 TTL: ${remainingMin}분\n` +
-			"AI는 prod 배포를 직접 실행하지 않습니다.",
-	};
+	appendAudit({ ...(res.audit || {}), services: prodServices, session: sessionId, command: command.substring(0, 300) });
+	if (res.allow) {
+		if (res.notice) process.stderr.write(`${res.notice}\n`);
+		return null;
+	}
+	return { reason: res.reason };
 }
 
 /**
