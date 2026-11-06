@@ -71,11 +71,11 @@ export default function (pi: ExtensionAPI) {
 			// the other guards: fail-OPEN (a throw ⇒ skip that guard, continue)
 			const failOpen = [
 				() => bash.destructiveGit(command),
-				() => bash.uncommittedArtifact(command, data),
 				() => bash.commit(command, data),
 				() => bash.deploy(command, data, { deployDir: DEPLOY_DIR }),
 				() => bash.gitPush(command),
 				() => bash.emailSend(command),
+				() => bash.uncommittedArtifact(command, data),
 			];
 			for (const run of failOpen) {
 				try {

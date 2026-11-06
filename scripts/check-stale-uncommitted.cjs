@@ -54,10 +54,24 @@ function isGitRepo(dir) {
 	}
 }
 
+function safeRealpath(p) {
+	try {
+		return fs.realpathSync.native ? fs.realpathSync.native(p) : fs.realpathSync(p);
+	} catch {
+		return path.resolve(p);
+	}
+}
+
 function discoverRepositories(root) {
 	const resolvedRoot = path.resolve(root);
+	const rootReal = safeRealpath(resolvedRoot);
+	const seenRealPaths = new Set();
 	const repos = [];
 	const subRepoRelPrefixes = [];
+
+	if (isGitRepo(resolvedRoot)) {
+		seenRealPaths.add(rootReal);
+	}
 
 	const projectsDir = path.join(resolvedRoot, "projects");
 	if (fs.existsSync(projectsDir)) {
@@ -71,6 +85,9 @@ function discoverRepositories(root) {
 				if (isGitRepo(subPath)) {
 					const relName = `projects/${entry.name}`;
 					subRepoRelPrefixes.push(`${relName}/`);
+					const subReal = safeRealpath(subPath);
+					if (seenRealPaths.has(subReal)) continue;
+					seenRealPaths.add(subReal);
 					repos.push({ name: relName, path: subPath, isRoot: false, skipPrefixes: [] });
 				}
 			}

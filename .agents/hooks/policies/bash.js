@@ -423,6 +423,8 @@ function rootDeleteReason(target) {
 	);
 }
 
+const { duplicateCodeFile } = require("./edit.js");
+
 const DEFAULT_ARTIFACT_EXTENSIONS = [
 	".nva",
 	".exe",
@@ -431,6 +433,12 @@ const DEFAULT_ARTIFACT_EXTENSIONS = [
 	".AppImage",
 	".apk",
 	".vrm",
+];
+
+const DEFAULT_ARTIFACT_SCRIPT_DIRS = [
+	"naia-labs/avatar",
+	"naia-labs/**/service",
+	"scripts/build*",
 ];
 
 const ARTIFACT_DRIFT_MESSAGE =
@@ -447,14 +455,21 @@ function normalizeExtensions(list) {
 	return out.length > 0 ? out : null;
 }
 
-function readDriftConfigFromRoot(dir) {
+function normalizeDirPatterns(list) {
+	if (!Array.isArray(list) || list.length === 0) return [];
+	return list
+		.filter((item) => typeof item === "string" && item.trim().length > 0)
+		.map((item) => item.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, ""))
+		.filter(Boolean);
+}
+
+function readDriftConfigObjectFromDir(dir) {
 	if (!dir) return null;
 	const driftJsonPath = path.join(dir, ".agents", "context", "drift-guard.json");
 	if (fs.existsSync(driftJsonPath)) {
 		try {
 			const parsed = JSON.parse(fs.readFileSync(driftJsonPath, "utf8"));
-			const exts = normalizeExtensions(parsed && parsed.artifact_extensions);
-			if (exts) return exts;
+			if (parsed && typeof parsed === "object") return parsed;
 		} catch {
 			/* ignore malformed json and fall through */
 		}
@@ -464,17 +479,20 @@ function readDriftConfigFromRoot(dir) {
 		if (!fs.existsSync(rulesPath)) continue;
 		try {
 			const parsed = JSON.parse(fs.readFileSync(rulesPath, "utf8"));
-			const candidate =
-				parsed?.conventions?.drift_guard?.artifact_extensions ||
-				parsed?.drift_guard?.artifact_extensions ||
-				parsed?.artifact_extensions;
-			const exts = normalizeExtensions(candidate);
-			if (exts) return exts;
+			const dg = parsed?.conventions?.drift_guard || parsed?.drift_guard;
+			if (dg && typeof dg === "object") return dg;
+			if (parsed?.artifact_extensions || parsed?.artifact_script_dirs) return parsed;
 		} catch {
 			/* ignore */
 		}
 	}
 	return null;
+}
+
+function readDriftConfigFromRoot(dir) {
+	const cfg = readDriftConfigObjectFromDir(dir);
+	if (!cfg) return null;
+	return normalizeExtensions(cfg.artifact_extensions);
 }
 
 function loadArtifactExtensions(cwd, opts) {
@@ -494,6 +512,93 @@ function loadArtifactExtensions(cwd, opts) {
 	const wsFound = readDriftConfigFromRoot(wsRoot);
 	if (wsFound) return wsFound;
 	return DEFAULT_ARTIFACT_EXTENSIONS.map((e) => e.toLowerCase());
+}
+
+function loadArtifactScriptDirs(cwd, opts, extraRoots = []) {
+	const merged = new Set(normalizeDirPatterns(DEFAULT_ARTIFACT_SCRIPT_DIRS));
+	if (opts && Array.isArray(opts.artifactScriptDirs)) {
+		for (const p of normalizeDirPatterns(opts.artifactScriptDirs)) merged.add(p);
+	}
+	const searchDirs = [];
+	const pushHierarchy = (startDir) => {
+		if (!startDir) return;
+		let cur = path.resolve(startDir);
+		while (cur) {
+			if (!searchDirs.includes(cur)) searchDirs.push(cur);
+			const parent = path.dirname(cur);
+			if (parent === cur) break;
+			cur = parent;
+		}
+	};
+	pushHierarchy(cwd || process.cwd());
+	for (const r of extraRoots) pushHierarchy(r);
+	const wsRoot = path.resolve(__dirname, "..", "..", "..");
+	if (!searchDirs.includes(wsRoot)) searchDirs.push(wsRoot);
+
+	for (const d of searchDirs) {
+		const cfg = readDriftConfigObjectFromDir(d);
+		if (!cfg) continue;
+		const patterns = normalizeDirPatterns(cfg.artifact_script_dirs || cfg.artifact_producer_dirs);
+		for (const p of patterns) merged.add(p);
+	}
+	return [...merged];
+}
+
+function matchesArtifactScriptPattern(relPath, pattern) {
+	if (!relPath || !pattern) return false;
+	const normPath = relPath.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
+	const normPat = pattern.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
+	if (!normPath || !normPat) return false;
+	if (normPath.startsWith("..")) return false;
+
+	// Convert glob pattern into regex:
+	// /**/ matches "/" or "/any/nested/"
+	const DOUBLE_STAR_SLASH = "\x00DOUBLE_STAR_SLASH\x00";
+	const DOUBLE_STAR = "\x00DOUBLE_STAR\x00";
+	const SINGLE_STAR = "\x00SINGLE_STAR\x00";
+	const QUESTION = "\x00QUESTION\x00";
+
+	const regexBody = normPat
+		.replace(/\/\*\*\//g, DOUBLE_STAR_SLASH)
+		.replace(/\*\*/g, DOUBLE_STAR)
+		.replace(/\*/g, SINGLE_STAR)
+		.replace(/\?/g, QUESTION)
+		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+		.replaceAll(DOUBLE_STAR_SLASH, "(?:/|/.+/)")
+		.replaceAll(DOUBLE_STAR, ".*")
+		.replaceAll(SINGLE_STAR, "[^/]*")
+		.replaceAll(QUESTION, "[^/]");
+
+	const re = new RegExp(`(?:^|/)${regexBody}(?:/.*|$)`, "i");
+	return re.test(normPath);
+}
+
+function isArtifactProducerScript(scriptArg, effectiveCwd, checkResult, dirPatterns) {
+	if (!Array.isArray(dirPatterns) || dirPatterns.length === 0) return false;
+	const candidates = [];
+	if (checkResult && checkResult.relPosix) {
+		candidates.push(checkResult.relPosix);
+	}
+	if (checkResult && checkResult.absScript && effectiveCwd) {
+		const relToCwd = path.relative(effectiveCwd, checkResult.absScript).replace(/\\/g, "/");
+		if (relToCwd && !relToCwd.startsWith("..") && !path.isAbsolute(relToCwd)) {
+			candidates.push(relToCwd);
+		}
+	}
+	if (scriptArg && typeof scriptArg === "string") {
+		const normArg = scriptArg.replace(/\\/g, "/").replace(/^\.\//, "");
+		if (normArg && !normArg.startsWith("/") && !normArg.startsWith("..")) {
+			candidates.push(normArg);
+		}
+	}
+	for (const candidate of candidates) {
+		for (const pattern of dirPatterns) {
+			if (matchesArtifactScriptPattern(candidate, pattern)) {
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 function splitShellSegments(command) {
@@ -574,6 +679,74 @@ function tokenizeSegment(segmentText) {
 	return tokens;
 }
 
+function unwrapGroupingTokens(rawTokens) {
+	const tokens = [...rawTokens];
+	let openParens = 0;
+	let closeParens = 0;
+
+	while (tokens.length > 0) {
+		const first = tokens[0];
+		if (first === "(" || first === "{") {
+			if (first === "(") openParens++;
+			tokens.shift();
+			continue;
+		}
+		if (first === ")" || first === "}" || first === ";") {
+			if (first === ")") closeParens++;
+			tokens.shift();
+			continue;
+		}
+		if (first.startsWith("(")) {
+			const m = first.match(/^\(+/);
+			if (m) openParens += m[0].length;
+			tokens[0] = first.replace(/^\(+/, "");
+			if (!tokens[0]) tokens.shift();
+			continue;
+		}
+		if (first.startsWith("{") && first !== "{}" && !first.startsWith("${")) {
+			tokens[0] = first.replace(/^\{+/, "");
+			if (!tokens[0]) tokens.shift();
+			continue;
+		}
+		break;
+	}
+
+	while (tokens.length > 0) {
+		const last = tokens[tokens.length - 1];
+		if (last === ")" || last === "}" || last === ";") {
+			if (last === ")") closeParens++;
+			tokens.pop();
+			continue;
+		}
+		if (
+			/[;)\}]+$/.test(last) &&
+			last !== "{}" &&
+			!last.endsWith("{}") &&
+			!/\$\{[^}]*\}$/.test(last) &&
+			!/\(\d+\)$/.test(last)
+		) {
+			const parenMatches = last.match(/\)+$/);
+			if (parenMatches) closeParens += parenMatches[0].length;
+			tokens[tokens.length - 1] = last.replace(/[;)\}]+$/, "");
+			if (!tokens[tokens.length - 1]) tokens.pop();
+			continue;
+		}
+		break;
+	}
+
+	return { tokens, openParens, closeParens };
+}
+
+function expandShellVars(token, varMap) {
+	if (!token || typeof token !== "string" || !token.includes("$") || !varMap || varMap.size === 0) {
+		return token;
+	}
+	return token.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, g1, g2) => {
+		const key = g1 || g2;
+		return varMap.has(key) ? varMap.get(key) : m;
+	});
+}
+
 function expandHomePath(p) {
 	const home = process.env.HOME || process.env.USERPROFILE || "";
 	if (!home) return p;
@@ -591,6 +764,9 @@ function matchArtifactToken(token, artifactExts) {
 	if (eqIdx >= 0) candidates.push(token.slice(eqIdx + 1));
 	const redirMatch = token.match(/^(?:\d*>>?|\&>>?)(.+)$/);
 	if (redirMatch) candidates.push(redirMatch[1]);
+	for (const part of token.split(/[\s'"()`,;:=<>[\]{}|&]+/)) {
+		if (part) candidates.push(part);
+	}
 
 	for (const raw of candidates) {
 		const cleaned = raw.replace(/^['"]+|['",;)]+$/g, "").trim();
@@ -639,6 +815,48 @@ const NODE_TWO_ARG_FLAGS = new Set([
 	"-C",
 ]);
 
+const XARGS_TWO_ARG_FLAGS = new Set([
+	"-L",
+	"-n",
+	"-P",
+	"-s",
+	"-a",
+	"-d",
+	"-E",
+	"-e",
+	"--max-args",
+	"--max-procs",
+	"--max-chars",
+	"--arg-file",
+	"--delimiter",
+	"--eof",
+	"--process-slot-var",
+]);
+
+const RSYNC_TWO_ARG_FLAGS = new Set([
+	"-e",
+	"--rsh",
+	"--exclude",
+	"--include",
+	"--exclude-from",
+	"--include-from",
+	"--files-from",
+	"--log-file",
+	"--temp-dir",
+	"--backup-dir",
+	"--suffix",
+	"--compare-dest",
+	"--copy-dest",
+	"--link-dest",
+	"--chmod",
+	"--chown",
+	"--max-size",
+	"--min-size",
+	"--bwlimit",
+	"--timeout",
+	"--port",
+]);
+
 function isInterpreterName(base) {
 	return (
 		PYTHON_BIN_RE.test(base) ||
@@ -649,10 +867,14 @@ function isInterpreterName(base) {
 	);
 }
 
-function extractScriptFromTokens(tokens, effectiveCwd) {
-	let idx = 0;
+function skipLeadingCommandWrappers(tokens, startIdx = 0, context = {}) {
+	let idx = startIdx;
 	while (idx < tokens.length) {
 		const t = tokens[idx];
+		if (t === "(" || t === "{" || t === "!" || t === "command" || t === "builtin" || t === "exec") {
+			idx++;
+			continue;
+		}
 		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) {
 			idx++;
 			continue;
@@ -661,7 +883,19 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 		if (base === "env") {
 			idx++;
 			while (idx < tokens.length) {
-				if (tokens[idx] === "-u" || tokens[idx] === "--unset" || tokens[idx] === "-C") {
+				if (tokens[idx] === "--") {
+					idx++;
+					break;
+				}
+				if (
+					(tokens[idx] === "-u" ||
+						tokens[idx] === "--unset" ||
+						tokens[idx] === "-C" ||
+						tokens[idx] === "--chdir" ||
+						tokens[idx] === "-S" ||
+						tokens[idx] === "--split-string") &&
+					idx + 1 < tokens.length
+				) {
 					idx += 2;
 				} else if (tokens[idx].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[idx])) {
 					idx++;
@@ -673,18 +907,31 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 		}
 		if (base === "nohup" || base === "time") {
 			idx++;
+			while (idx < tokens.length && tokens[idx].startsWith("-")) {
+				if (tokens[idx] === "--") {
+					idx++;
+					break;
+				}
+				idx++;
+			}
 			continue;
 		}
 		if (base === "nice") {
 			idx++;
-			if (tokens[idx] === "-n" && idx + 1 < tokens.length) idx += 2;
+			if ((tokens[idx] === "-n" || tokens[idx] === "--adjustment") && idx + 1 < tokens.length) idx += 2;
 			else if (tokens[idx] && tokens[idx].startsWith("-")) idx++;
 			continue;
 		}
 		if (base === "timeout") {
 			idx++;
 			while (idx < tokens.length && tokens[idx].startsWith("-")) {
-				if ((tokens[idx] === "-k" || tokens[idx] === "-s" || tokens[idx] === "--kill-after" || tokens[idx] === "--signal") && idx + 1 < tokens.length) {
+				if (
+					(tokens[idx] === "-k" ||
+						tokens[idx] === "-s" ||
+						tokens[idx] === "--kill-after" ||
+						tokens[idx] === "--signal") &&
+					idx + 1 < tokens.length
+				) {
 					idx += 2;
 				} else {
 					idx++;
@@ -696,13 +943,234 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 		if (base === "sudo") {
 			idx++;
 			while (idx < tokens.length && tokens[idx].startsWith("-")) {
-				if ((tokens[idx] === "-u" || tokens[idx] === "-g") && idx + 1 < tokens.length) idx += 2;
-				else idx++;
+				if (tokens[idx] === "--") {
+					idx++;
+					break;
+				}
+				if (
+					(tokens[idx] === "-u" ||
+						tokens[idx] === "-g" ||
+						tokens[idx] === "-C" ||
+						tokens[idx] === "-D" ||
+						tokens[idx] === "-h" ||
+						tokens[idx] === "-p" ||
+						tokens[idx] === "-r" ||
+						tokens[idx] === "-t" ||
+						tokens[idx] === "-T" ||
+						tokens[idx] === "-U") &&
+					idx + 1 < tokens.length
+				) {
+					idx += 2;
+				} else {
+					idx++;
+				}
 			}
 			continue;
 		}
+		if (base === "xargs") {
+			idx++;
+			let replacePlaceholder = "{}";
+			while (idx < tokens.length && tokens[idx].startsWith("-")) {
+				const flag = tokens[idx];
+				if (flag === "--") {
+					idx++;
+					break;
+				}
+				if (flag === "-I" || flag === "--replace") {
+					if (idx + 1 < tokens.length) {
+						replacePlaceholder = tokens[idx + 1] || "{}";
+						idx += 2;
+					} else {
+						idx++;
+					}
+					continue;
+				}
+				if (flag.startsWith("-I") && flag.length > 2) {
+					replacePlaceholder = flag.slice(2);
+					idx++;
+					continue;
+				}
+				if (flag.startsWith("--replace=")) {
+					replacePlaceholder = flag.slice("--replace=".length) || "{}";
+					idx++;
+					continue;
+				}
+				if (XARGS_TWO_ARG_FLAGS.has(flag) && idx + 1 < tokens.length) {
+					idx += 2;
+					continue;
+				}
+				idx++;
+			}
+			context.viaXargs = true;
+			context.placeholder = replacePlaceholder;
+			continue;
+		}
+		if (base === "find") {
+			let execIdx = -1;
+			let findNameCandidate = null;
+			const searchPaths = [];
+			for (let j = idx + 1; j < tokens.length; j++) {
+				const ft = tokens[j];
+				if (ft === "-exec" || ft === "-execdir" || ft === "-ok" || ft === "-okdir") {
+					execIdx = j;
+					break;
+				}
+				if ((ft === "-name" || ft === "-iname" || ft === "-path" || ft === "-wholename") && j + 1 < tokens.length) {
+					findNameCandidate = tokens[j + 1];
+					j++;
+					continue;
+				}
+				if (!ft.startsWith("-") && ft !== "!" && ft !== "(" && ft !== ")" && searchPaths.length === 0 && j === idx + 1) {
+					searchPaths.push(ft);
+				}
+			}
+			if (execIdx >= 0 && execIdx + 1 < tokens.length) {
+				context.viaFindExec = true;
+				context.placeholder = "{}";
+				if (findNameCandidate) {
+					const baseDir = searchPaths[0] && searchPaths[0] !== "." ? searchPaths[0] : "";
+					context.findCandidate = baseDir
+						? `${baseDir.replace(/\/+$/, "")}/${findNameCandidate}`
+						: findNameCandidate;
+				}
+				while (tokens.length > execIdx + 1) {
+					const tail = tokens[tokens.length - 1];
+					if (tail === ";" || tail === "\\;" || tail === "+") tokens.pop();
+					else break;
+				}
+				idx = execIdx + 1;
+				continue;
+			}
+		}
 		break;
 	}
+	return idx;
+}
+
+function extractFileTransferOp(rawTokens) {
+	const tokens = [...rawTokens];
+	const idx = skipLeadingCommandWrappers(tokens, 0, {});
+	if (idx >= tokens.length) return null;
+	const cmdBase = path.basename(tokens[idx]);
+	if (
+		cmdBase !== "cp" &&
+		cmdBase !== "mv" &&
+		cmdBase !== "ln" &&
+		cmdBase !== "install" &&
+		cmdBase !== "rsync"
+	) {
+		return null;
+	}
+
+	let i = idx + 1;
+	let targetDir = null;
+	let forceNoTargetDir = false;
+	const positional = [];
+	let endOfFlags = false;
+
+	while (i < tokens.length) {
+		const tok = tokens[i];
+		if (!endOfFlags && tok === "--") {
+			endOfFlags = true;
+			i++;
+			continue;
+		}
+		if (/^(?:\d*>>?|\&>>?|\d*<&?\d*)/.test(tok)) {
+			i++;
+			continue;
+		}
+		if (!endOfFlags && tok.startsWith("-") && tok !== "-") {
+			if ((tok === "-t" || tok === "--target-directory") && i + 1 < tokens.length) {
+				targetDir = tokens[i + 1];
+				i += 2;
+				continue;
+			}
+			if (tok.startsWith("--target-directory=")) {
+				targetDir = tok.slice("--target-directory=".length);
+				i++;
+				continue;
+			}
+			if (tok === "-T" || tok === "--no-target-directory") {
+				forceNoTargetDir = true;
+				i++;
+				continue;
+			}
+			if (
+				cmdBase === "install" &&
+				(tok === "-m" ||
+					tok === "--mode" ||
+					tok === "-o" ||
+					tok === "--owner" ||
+					tok === "-g" ||
+					tok === "--group" ||
+					tok === "-S" ||
+					tok === "--suffix" ||
+					tok === "-Z" ||
+					tok === "--context") &&
+				i + 1 < tokens.length
+			) {
+				i += 2;
+				continue;
+			}
+			if (
+				(cmdBase === "cp" || cmdBase === "mv" || cmdBase === "ln") &&
+				(tok === "-S" || tok === "--suffix") &&
+				i + 1 < tokens.length
+			) {
+				i += 2;
+				continue;
+			}
+			if (cmdBase === "rsync" && RSYNC_TWO_ARG_FLAGS.has(tok) && i + 1 < tokens.length) {
+				i += 2;
+				continue;
+			}
+			i++;
+			continue;
+		}
+		positional.push(tok);
+		i++;
+	}
+
+	if (targetDir) {
+		if (positional.length === 0) return null;
+		return { cmd: cmdBase, sources: positional, dest: null, destDir: targetDir, forceNoTargetDir };
+	}
+	if (positional.length < 2) return null;
+	return {
+		cmd: cmdBase,
+		sources: positional.slice(0, -1),
+		dest: positional[positional.length - 1],
+		destDir: null,
+		forceNoTargetDir,
+	};
+}
+
+function resolvePlaceholderScript(rawScriptArg, context) {
+	if (!rawScriptArg) return null;
+	const placeholder = (context && context.placeholder) || "{}";
+	if (rawScriptArg === placeholder || rawScriptArg === "{}" || rawScriptArg.includes(placeholder)) {
+		if (context && context.findCandidate && !/[*?\[]/.test(context.findCandidate)) {
+			return {
+				scriptArg: rawScriptArg.replace(placeholder, context.findCandidate).replace("{}", context.findCandidate),
+			};
+		}
+		if (context && Array.isArray(context.pipedCandidates) && context.pipedCandidates.length > 0) {
+			const candidate = context.pipedCandidates[0];
+			return {
+				scriptArg: rawScriptArg.replace(placeholder, candidate).replace("{}", candidate),
+			};
+		}
+		return {
+			unresolvedPlaceholder: rawScriptArg,
+			viaWrapper: context && context.viaFindExec ? "find -exec" : "xargs",
+		};
+	}
+	return { scriptArg: rawScriptArg };
+}
+
+function extractScriptFromTokens(rawTokens, effectiveCwd, context = {}) {
+	const tokens = [...rawTokens];
+	let idx = skipLeadingCommandWrappers(tokens, 0, context);
 
 	if (idx >= tokens.length) return null;
 	let cmdToken = tokens[idx];
@@ -733,7 +1201,7 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 			cmdToken = tokens[idx];
 			cmdBase = nextBase;
 		} else {
-			return { scriptArg: tokens[idx] };
+			return resolvePlaceholderScript(tokens[idx], context);
 		}
 	}
 
@@ -767,18 +1235,47 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 		idx++;
 		while (idx < tokens.length) {
 			const tok = tokens[idx];
-			if (tok === "-c" || tok === "--command") return null;
+			if (tok === "-c" || tok === "--command" || (tok.startsWith("-c") && tok.length > 2)) {
+				return { inlineCode: `${cmdBase} -c` };
+			}
 			if (tok === "-m" && idx + 1 < tokens.length) {
 				const modName = tokens[idx + 1];
-				const relCandidate = `${modName.replace(/\./g, "/")}.py`;
-				const absCandidate = path.resolve(effectiveCwd, relCandidate);
-				if (fs.existsSync(absCandidate)) return { scriptArg: relCandidate };
-				idx += 2;
-				continue;
+				const modRel = modName.replace(/\./g, "/");
+				const candidates = [
+					`${modRel}.py`,
+					`${modRel}/__main__.py`,
+					`${modRel}/__init__.py`,
+				];
+				for (const relCandidate of candidates) {
+					const absCandidate = path.resolve(effectiveCwd, relCandidate);
+					try {
+						if (fs.existsSync(absCandidate) && fs.statSync(absCandidate).isFile()) {
+							return { scriptArg: relCandidate };
+						}
+					} catch {
+						/* ignore */
+					}
+				}
+				if (modName.includes(".")) {
+					const topPkg = modRel.split("/")[0];
+					const topPkgAbs = path.resolve(effectiveCwd, topPkg);
+					try {
+						if (fs.existsSync(topPkgAbs) && fs.statSync(topPkgAbs).isDirectory()) {
+							return { scriptArg: `${modRel}.py` };
+						}
+					} catch {
+						/* ignore */
+					}
+				}
+				// External/stdlib module (e.g. pytest, unittest, pip): -m consumes the rest of argv
+				return null;
 			}
 			if ((tok === "-W" || tok === "-X") && idx + 1 < tokens.length) {
 				idx += 2;
 				continue;
+			}
+			if (tok === "-") {
+				return { stdinProgram: cmdBase };
 			}
 			if (tok === "--") {
 				idx++;
@@ -788,7 +1285,16 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 				idx++;
 				continue;
 			}
-			return { scriptArg: tok };
+			return resolvePlaceholderScript(tok, context);
+		}
+		if (idx < tokens.length) {
+			return resolvePlaceholderScript(tokens[idx], context);
+		}
+		if (context.viaXargs && Array.isArray(context.pipedCandidates) && context.pipedCandidates.length > 0) {
+			return { scriptArg: context.pipedCandidates[0] };
+		}
+		if (context.fromPipe) {
+			return { stdinProgram: cmdBase };
 		}
 		return null;
 	}
@@ -798,10 +1304,15 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 		if (cmdBase.toLowerCase() === "bun" && tokens[idx] === "run") idx++;
 		while (idx < tokens.length) {
 			const tok = tokens[idx];
-			if (tok === "-e" || tok === "--eval" || tok === "-p" || tok === "--print") return null;
+			if (tok === "-e" || tok === "--eval" || tok === "-p" || tok === "--print") {
+				return { inlineCode: `${cmdBase} ${tok}` };
+			}
 			if (NODE_TWO_ARG_FLAGS.has(tok) && idx + 1 < tokens.length) {
 				idx += 2;
 				continue;
+			}
+			if (tok === "-") {
+				return { stdinProgram: cmdBase };
 			}
 			if (tok === "--") {
 				idx++;
@@ -811,7 +1322,16 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 				idx++;
 				continue;
 			}
-			return { scriptArg: tok };
+			return resolvePlaceholderScript(tok, context);
+		}
+		if (idx < tokens.length) {
+			return resolvePlaceholderScript(tokens[idx], context);
+		}
+		if (context.viaXargs && Array.isArray(context.pipedCandidates) && context.pipedCandidates.length > 0) {
+			return { scriptArg: context.pipedCandidates[0] };
+		}
+		if (context.fromPipe) {
+			return { stdinProgram: cmdBase };
 		}
 		return null;
 	}
@@ -821,10 +1341,12 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 		if (tokens[idx] === "run") idx++;
 		while (idx < tokens.length) {
 			const tok = tokens[idx];
+			if (tok === "eval") return { inlineCode: "deno eval" };
 			if ((tok === "--config" || tok === "-c" || tok === "--import-map" || tok === "--lock") && idx + 1 < tokens.length) {
 				idx += 2;
 				continue;
 			}
+			if (tok === "-") return { stdinProgram: "deno" };
 			if (tok === "--") {
 				idx++;
 				break;
@@ -833,21 +1355,33 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 				idx++;
 				continue;
 			}
-			return { scriptArg: tok };
+			return resolvePlaceholderScript(tok, context);
 		}
+		if (context.fromPipe) return { stdinProgram: "deno" };
 		return null;
 	}
 
 	if (SHELL_BIN_RE.test(cmdBase)) {
 		idx++;
+		let stdinFlag = false;
 		while (idx < tokens.length) {
 			const tok = tokens[idx];
 			if (tok === "-c" && idx + 1 < tokens.length) {
-				return { inlineCommand: tokens[idx + 1] };
+				return { inlineCommand: tokens[idx + 1], inlineCode: `${cmdBase} -c` };
+			}
+			if (tok === "-s") {
+				stdinFlag = true;
+				idx++;
+				continue;
 			}
 			if ((tok === "-o" || tok === "+o") && idx + 1 < tokens.length) {
 				idx += 2;
 				continue;
+			}
+			if (tok === "-") {
+				stdinFlag = true;
+				idx++;
+				break;
 			}
 			if (tok === "--") {
 				idx++;
@@ -857,7 +1391,16 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 				idx++;
 				continue;
 			}
-			return { scriptArg: tok };
+			if (stdinFlag) {
+				return { stdinProgram: cmdBase };
+			}
+			return resolvePlaceholderScript(tok, context);
+		}
+		if (stdinFlag || context.fromPipe) {
+			return { stdinProgram: cmdBase };
+		}
+		if (idx < tokens.length) {
+			return resolvePlaceholderScript(tokens[idx], context);
 		}
 		return null;
 	}
@@ -866,17 +1409,21 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 		idx++;
 		while (idx < tokens.length) {
 			const tok = tokens[idx];
-			if (tok === "-e" || tok === "-Command" || tok === "-c") return null;
+			if (tok === "-e" || tok === "-Command" || tok === "-c" || tok === "-r") {
+				return { inlineCode: `${cmdBase} ${tok}` };
+			}
 			if (tok === "-File" || tok === "-f") {
-				if (idx + 1 < tokens.length) return { scriptArg: tokens[idx + 1] };
+				if (idx + 1 < tokens.length) return resolvePlaceholderScript(tokens[idx + 1], context);
 				return null;
 			}
+			if (tok === "-") return { stdinProgram: cmdBase };
 			if (tok.startsWith("-")) {
 				idx++;
 				continue;
 			}
-			return { scriptArg: tok };
+			return resolvePlaceholderScript(tok, context);
 		}
+		if (context.fromPipe) return { stdinProgram: cmdBase };
 		return null;
 	}
 
@@ -888,7 +1435,7 @@ function extractScriptFromTokens(tokens, effectiveCwd) {
 			expandedCmd.startsWith("/tmp/") ||
 			expandedCmd.startsWith(os.tmpdir() + path.sep))
 	) {
-		return { scriptArg: cmdToken };
+		return resolvePlaceholderScript(cmdToken, context);
 	}
 
 	return null;
@@ -934,8 +1481,21 @@ function checkScriptGitStatus(scriptArg, effectiveCwd) {
 		} catch {
 			realScript = absScript;
 		}
+		try {
+			const stat = fs.statSync(realScript);
+			if (stat.isDirectory()) {
+				const mainPy = path.join(realScript, "__main__.py");
+				if (fs.existsSync(mainPy)) {
+					realScript = mainPy;
+				} else {
+					return { ok: true, state: "directory", absScript, repoRoot };
+				}
+			}
+		} catch {
+			/* ignore */
+		}
 	} else {
-		return { ok: false, state: "untracked", absScript };
+		return { ok: false, state: "untracked", absScript, repoRoot };
 	}
 
 	const rel = path.relative(repoRoot, realScript);
@@ -949,7 +1509,7 @@ function checkScriptGitStatus(scriptArg, effectiveCwd) {
 		stdio: ["ignore", "pipe", "ignore"],
 	});
 	if (headRes.status !== 0) {
-		return { ok: false, state: "uncommitted-repo", absScript };
+		return { ok: false, state: "uncommitted-repo", absScript, repoRoot, relPosix };
 	}
 
 	const lsRes = spawnSync("git", ["-C", repoRoot, "ls-files", "--error-unmatch", "--", relPosix], {
@@ -957,7 +1517,7 @@ function checkScriptGitStatus(scriptArg, effectiveCwd) {
 		stdio: ["ignore", "pipe", "ignore"],
 	});
 	if (lsRes.status !== 0) {
-		return { ok: false, state: "untracked", absScript };
+		return { ok: false, state: "untracked", absScript, repoRoot, relPosix };
 	}
 
 	const statusRes = spawnSync(
@@ -969,7 +1529,7 @@ function checkScriptGitStatus(scriptArg, effectiveCwd) {
 		},
 	);
 	if (statusRes.status !== 0 || (statusRes.stdout && statusRes.stdout.trim().length > 0)) {
-		return { ok: false, state: "modified", absScript };
+		return { ok: false, state: "modified", absScript, repoRoot, relPosix };
 	}
 
 	return { ok: true, state: "committed", absScript, repoRoot, relPosix };
@@ -978,27 +1538,95 @@ function checkScriptGitStatus(scriptArg, effectiveCwd) {
 /**
  * uncommittedArtifact — block producing build/asset artifacts (.nva, .exe, .msi,
  * .dmg, .AppImage, .apk, .vrm, or configured extensions) from an uncommitted
- * (untracked/modified) script or an out-of-repo script (such as /tmp/...).
+ * (untracked/modified) script or an out-of-repo script (such as /tmp/...),
+ * running an uncommitted script inside configured artifact_script_dirs even
+ * without CLI artifact tokens, inline/stdin artifact generation, or copying/
+ * renaming uncommitted artifacts or variant code files via cp/mv/ln/install/rsync.
  */
 function uncommittedArtifact(command, data, opts) {
 	if (!command || typeof command !== "string") return null;
-	if (/^\s*(echo|printf)\b/.test(command) && !command.includes("|")) return null;
 
 	const baseCwd = (opts && opts.cwd) || (data && data.cwd) || process.cwd();
 	const artifactExts = loadArtifactExtensions(baseCwd, opts);
 	const segments = splitShellSegments(command);
 
 	let effectiveCwd = path.resolve(baseCwd);
+	const cwdStack = [];
+	const varMap = new Map();
 	const scriptsToCheck = [];
+	const inlineOrStdinToCheck = [];
 	const allArtifacts = [];
 
-	for (const seg of segments) {
-		const tokens = tokenizeSegment(seg.text);
-		if (tokens.length === 0) continue;
+	let prevSep = "";
+	let pipedEchoStrings = [];
+	let pipedScriptCandidates = [];
 
-		if (tokens[0] === "cd" && tokens[1] && seg.sep !== "|") {
-			const targetDir = expandHomePath(tokens[1]);
-			effectiveCwd = path.resolve(effectiveCwd, targetDir);
+	for (const seg of segments) {
+		const rawTokens = tokenizeSegment(seg.text);
+		const { tokens: unwrapped, openParens, closeParens } = unwrapGroupingTokens(rawTokens);
+		for (let p = 0; p < openParens; p++) cwdStack.push(effectiveCwd);
+
+		const finishSegment = (nextEchoStrings = [], nextScriptCandidates = []) => {
+			for (let p = 0; p < closeParens; p++) {
+				if (cwdStack.length > 0) effectiveCwd = cwdStack.pop();
+			}
+			prevSep = seg.sep;
+			pipedEchoStrings = seg.sep === "|" ? nextEchoStrings : [];
+			pipedScriptCandidates = seg.sep === "|" ? nextScriptCandidates : [];
+		};
+
+		if (unwrapped.length === 0) {
+			finishSegment();
+			continue;
+		}
+
+		// Record and expand shell variables (e.g., OUT=a.nva; python ... $OUT)
+		const tokens = [];
+		for (const rawTok of unwrapped) {
+			const assignMatch = rawTok.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+			if (assignMatch && tokens.length === 0) {
+				const expandedVal = expandShellVars(assignMatch[2].replace(/^['"]|['"]$/g, ""), varMap);
+				varMap.set(assignMatch[1], expandedVal);
+				tokens.push(`${assignMatch[1]}=${expandedVal}`);
+			} else {
+				tokens.push(expandShellVars(rawTok, varMap));
+			}
+		}
+
+		// Handle cd
+		if (tokens[0] === "cd" && seg.sep !== "|") {
+			let cdIdx = 1;
+			while (cdIdx < tokens.length && (tokens[cdIdx] === "-P" || tokens[cdIdx] === "-L" || tokens[cdIdx] === "--")) {
+				cdIdx++;
+			}
+			if (tokens[cdIdx]) {
+				const targetDir = expandHomePath(tokens[cdIdx]);
+				effectiveCwd = path.resolve(effectiveCwd, targetDir);
+			}
+			finishSegment();
+			continue;
+		}
+
+		// Handle echo / printf
+		if (tokens[0] === "echo" || tokens[0] === "printf") {
+			if (seg.sep !== "|") {
+				finishSegment();
+				continue;
+			}
+			const echoArgs = tokens.slice(1).filter((t) => !t.startsWith("-"));
+			for (const tok of echoArgs) {
+				const matched = matchArtifactToken(tok, artifactExts);
+				if (matched) allArtifacts.push(matched);
+			}
+			const candidates = [];
+			for (const tok of echoArgs) {
+				for (const part of tok.split(/\s+/)) {
+					if (part && (DIRECT_SCRIPT_EXT_RE.test(part) || !part.startsWith("-"))) {
+						candidates.push(part);
+					}
+				}
+			}
+			finishSegment(echoArgs, candidates);
 			continue;
 		}
 
@@ -1011,29 +1639,146 @@ function uncommittedArtifact(command, data, opts) {
 			}
 		}
 
-		const extracted = extractScriptFromTokens(tokens, effectiveCwd);
-		if (extracted && extracted.inlineCommand) {
-			const nested = uncommittedArtifact(
-				extracted.inlineCommand,
-				{ ...(data || {}), cwd: effectiveCwd },
-				opts,
-			);
-			if (nested) return nested;
-		} else if (extracted && extracted.scriptArg) {
-			scriptsToCheck.push({
-				scriptArg: extracted.scriptArg,
-				cwd: effectiveCwd,
-				segArtifacts,
-			});
+		// Check cp / mv / ln / install / rsync (Item 4: P1-3 & P1-7)
+		const transferOp = extractFileTransferOp(tokens);
+		if (transferOp) {
+			for (const src of transferOp.sources) {
+				let destPath = transferOp.dest;
+				if (transferOp.destDir) {
+					destPath = path.join(transferOp.destDir, path.basename(src));
+				} else if (destPath && !transferOp.forceNoTargetDir) {
+					const absDestProbe = path.resolve(effectiveCwd, expandHomePath(destPath));
+					let isDestDir = destPath.endsWith("/") || transferOp.sources.length > 1;
+					if (!isDestDir && fs.existsSync(absDestProbe)) {
+						try {
+							isDestDir = fs.statSync(absDestProbe).isDirectory();
+						} catch {
+							isDestDir = false;
+						}
+					}
+					if (isDestDir) {
+						destPath = path.join(destPath, path.basename(src));
+					}
+				}
+				if (!destPath) continue;
+
+				// (a) Target has an artifact extension and source is uncommitted
+				const matchedDestArtifact = matchArtifactToken(destPath, artifactExts);
+				if (matchedDestArtifact) {
+					const srcCheck = checkScriptGitStatus(src, effectiveCwd);
+					if (!srcCheck.ok) {
+						return {
+							reason:
+								`[Harness] ${ARTIFACT_DRIFT_MESSAGE}\n` +
+								`원본: ${src} (${srcCheck.state}) → 산출물: ${matchedDestArtifact}`,
+						};
+					}
+				}
+
+				// (b) Target is a variant/copy name of a sibling code file (shared edit.js duplicateCodeFile)
+				const absSrc = path.resolve(effectiveCwd, expandHomePath(src));
+				const absDest = path.resolve(effectiveCwd, expandHomePath(destPath));
+				const extraSiblings =
+					path.dirname(absSrc) === path.dirname(absDest) ? [path.basename(absSrc)] : [];
+				const dupDecision = duplicateCodeFile(
+					{
+						cwd: effectiveCwd,
+						tool_name: "Write",
+						tool_input: { file_path: destPath },
+					},
+					{
+						...(opts || {}),
+						cwd: effectiveCwd,
+						extraSiblings,
+					},
+				);
+				if (dupDecision && dupDecision.block) {
+					return { reason: dupDecision.block };
+				}
+			}
+			finishSegment();
+			continue;
 		}
+
+		const extractCtx = {
+			fromPipe: prevSep === "|",
+			pipedCandidates: pipedScriptCandidates,
+		};
+		const extracted = extractScriptFromTokens(tokens, effectiveCwd, extractCtx);
+		if (extracted) {
+			if (extracted.inlineCommand) {
+				const nested = uncommittedArtifact(
+					extracted.inlineCommand,
+					{ ...(data || {}), cwd: effectiveCwd },
+					opts,
+				);
+				if (nested) return nested;
+			}
+			if (extracted.stdinProgram && prevSep === "|" && pipedEchoStrings.length > 0) {
+				const pipedCmd = pipedEchoStrings.join(" ");
+				const nested = uncommittedArtifact(
+					pipedCmd,
+					{ ...(data || {}), cwd: effectiveCwd },
+					opts,
+				);
+				if (nested) return nested;
+			}
+			if (extracted.stdinProgram) {
+				inlineOrStdinToCheck.push({
+					label: `<stdin:${extracted.stdinProgram}>`,
+					state: "uncommitted-stdin",
+					segArtifacts,
+				});
+			} else if (extracted.inlineCode && !extracted.inlineCommand) {
+				inlineOrStdinToCheck.push({
+					label: `<inline:${extracted.inlineCode}>`,
+					state: "inline-code",
+					segArtifacts,
+				});
+			} else if (extracted.unresolvedPlaceholder) {
+				inlineOrStdinToCheck.push({
+					label: `${extracted.unresolvedPlaceholder} (${extracted.viaWrapper})`,
+					state: "untracked",
+					segArtifacts,
+				});
+			} else if (extracted.scriptArg) {
+				scriptsToCheck.push({
+					scriptArg: extracted.scriptArg,
+					cwd: effectiveCwd,
+					segArtifacts,
+				});
+			}
+		}
+
+		finishSegment();
 	}
 
-	if (allArtifacts.length === 0 || scriptsToCheck.length === 0) return null;
+	if (allArtifacts.length > 0 && inlineOrStdinToCheck.length > 0) {
+		const item = inlineOrStdinToCheck[0];
+		const artifactLabel = item.segArtifacts[0] || allArtifacts[0];
+		return {
+			reason:
+				`[Harness] ${ARTIFACT_DRIFT_MESSAGE}\n` +
+				`대본: ${item.label} (${item.state}) → 산출물: ${artifactLabel}`,
+		};
+	}
 
 	for (const item of scriptsToCheck) {
-		const artifactLabel = item.segArtifacts[0] || allArtifacts[0];
 		const check = checkScriptGitStatus(item.scriptArg, item.cwd);
-		if (!check.ok) {
+		const dirPatterns = loadArtifactScriptDirs(
+			item.cwd,
+			opts,
+			check.repoRoot ? [check.repoRoot] : [],
+		);
+		const inProducerDir = isArtifactProducerScript(
+			item.scriptArg,
+			item.cwd,
+			check,
+			dirPatterns,
+		);
+		if ((allArtifacts.length > 0 || inProducerDir) && !check.ok) {
+			const artifactLabel =
+				item.segArtifacts[0] || allArtifacts[0] || "(산출물 생산 폴더 대본)";
 			return {
 				reason:
 					`[Harness] ${ARTIFACT_DRIFT_MESSAGE}\n` +
@@ -1055,7 +1800,9 @@ module.exports = {
 	deploy,
 	uncommittedArtifact,
 	loadArtifactExtensions,
+	loadArtifactScriptDirs,
 	DEFAULT_ARTIFACT_EXTENSIONS,
+	DEFAULT_ARTIFACT_SCRIPT_DIRS,
 	ARTIFACT_DRIFT_MESSAGE,
 	PR_FAIL_REASON,
 };
