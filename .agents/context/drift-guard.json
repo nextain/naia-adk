@@ -1,0 +1,24 @@
+{
+  "$comment": "Configuration for drift-guard hooks (.claude/hooks/artifact-drift-guard.js, .claude/hooks/copy-file-guard.js, .claude/hooks/stale-uncommitted-notice.js). Guide: docs/guides/drift-guard.md.",
+  "artifact_extensions": [
+    ".nva",
+    ".exe",
+    ".msi",
+    ".dmg",
+    ".AppImage",
+    ".apk",
+    ".vrm"
+  ],
+  "code_extensions": [
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".rs",
+    ".go",
+    ".sh"
+  ],
+  "stale_uncommitted_hours": 4
+}

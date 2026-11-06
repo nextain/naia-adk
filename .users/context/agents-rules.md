@@ -76,38 +76,27 @@
 
 - **no_korean_in_agents**: Use concise English for machine-facing .agents/ files by default. Korean is allowed when a user explicitly requests it, when preserving a Korean user-facing trigger/example is necessary, or when localized human-facing text is part of the contract; machine JSON/YAML keys remain stable.
 - **concise_session_output**: AI responses should be extremely brief (less than 3 lines) to minimize history weight. Avoid long Korean preambles.
+- **agent_messaging**: Mention the other person or agent when requesting and replying: docs/guides/agent-messaging.md.
+- **document_size_refactoring**: Review oversized documents and archive eligible historical sections with the configurable procedure in docs/guides/doc-size-refactor.md.
 
 ## conventions
 
 - **response_language**: Korean (한국어로 응답)
 - **development_approach**: Issue-driven development (default). TDD where applicable.
-- **test_code_review**: After writing tests, never trust results blindly. Review test logic itself with iterative review (2 consecutive clean passes) before trusting outcomes. Signs of invalid tests: assertions that always pass, mocked internals that diverge from real behavior, missing negative cases.
 - **work_logs**: Don't modify unless explicitly requested
+- **artifact_drift_guard**: Never generate artifacts (.nva, .exe, .msi, .dmg, .AppImage, .apk, .vrm; configurable in .agents/context/drift-guard.json) from uncommitted or out-of-repo scripts; commit to shared code and open a PR first (.claude/hooks/artifact-drift-guard.js, docs/guides/drift-guard.md).
+- **copy_file_guard**: Never create variant or copy code files (*_v2, *-v3, *_new, *_old, *_copy, *-copy, *_backup, *_fixed, *_final, number-only variants, ' (1)') in the same folder; edit the original file instead, except test files and migrations/ (.claude/hooks/copy-file-guard.js, docs/guides/drift-guard.md).
+- **stale_uncommitted_notice**: Do not leave uncommitted changes older than 4 hours across the workspace or projects/*; SessionStart warns via scripts/check-stale-uncommitted.cjs (.claude/hooks/stale-uncommitted-notice.js, docs/guides/drift-guard.md).
 
 ## workflows
 
 - **instruction**: Read workflows on demand. Do not load all at once.
-
-### selection_guide
-
-- **reference**: .agents/context/ai-work-index.yaml
-
-#### steps
-
-- Extract keywords from the user request
-- Match the category in ai-work-index.yaml
-- Read the matching root quick reference first
-- Load the workflow document only if the task still needs details
 
 ### index
 
 - **submodule_init**: git submodule update --init --recursive
 - **development_cycle**: .agents/workflows/development-cycle.yaml
 - **issue_driven_development**: .agents/workflows/issue-driven-development.yaml
-
-## public_repository_release_gate
-
-- **policy**: FAIL CLOSED: Before creating a public repository, changing a repository to public, publishing or updating a public template, or pushing content copied from a private workspace into a public repository, complete and record a public-safety review. A private destination does not make source material safe when its template or upstream is public.
 
 ## context_governance
 
@@ -147,7 +136,9 @@
 - **conventions.contribution_fork_policy**: Contribution forks live under nextain with the upstream name and a README stating purpose, upstream link, status, and contact. AGENTS.md lives on the fork's main only; never add it to a feature branch that goes upstream.
 - **conventions.debug_observability**: Every service, batch job, and module logs structured start/end/duration/result/failure with a trace id, has a debug mode that defaults ON, keeps full failure reasons and per-stage artifacts, caps and cleans its logs on a schedule, and never logs secrets, personal data, or raw media. Guide: docs/guides/debug-logging.md.
 - **conventions.external_repo_policy**: Third-party and community repositories: read their guide, search for duplicates, match the community's tone, draft, and get user approval of the reviewed content before posting anything. AI-assisted external posts always carry a disclosure footer with a contact point (hook-enforced).
+- **conventions.external_writing_positive**: External-facing writing states what we can do and have done in positive sentences without unrequested disclaimers or legal/regulatory speculation unless asked (docs/guides/external-writing.md).
 - **conventions.git_workflow**: Maintainers direct-push only where repository policy permits; external contributions use pull requests (pr-guard allows only explicit --repo nextain/<repo>). An explicitly requested post in a Nextain or user-owned repository needs no second approval.
+- **conventions.test_code_review**: Review test logic iteratively (2 consecutive clean passes) for tautological assertions, divergent mocks, and missing negative cases before trusting test results.
 - **conventions.tmp_files**: Scratch scripts go under tmp/ of the active working directory; never tmp-* or tmp_* files in repository roots.
 - **conventions.workfile_lifecycle**: Work files follow a lifecycle: .agents/context/ is permanent and never deleted; .agents/work/ is temporary but only the user cleans it (no AI auto-delete); tmp/ is scratch; a progress MD/JSON pair moves to .agents/progress/archive/YYYY-MM/ only after the completion criteria hold (AI never self-declares complete), with current_phase closed or unbound first; handoff documents are never staged or committed, and cross-machine handoff goes through a GitHub issue plus commit SHAs, never session files through Git.
 - **financial_integrity**: Estimate cost and get explicit user approval before large cloud operations: storage moves over 10GB or over 1,000 API operations through mounts, high-tier GPUs, batch inference or fine-tuning, large database migrations or index rebuilds.
@@ -155,5 +146,4 @@
 - **public_repository_release_gate**: Before any public push, visibility change, or public-template publication, review the whole tree and reachable history for secrets, personal data, and private names, record the evidence, and get the repository owner's explicit approval of that exact reviewed commit (any later change voids it). A leak is handled by revoking credentials first; a cleanup commit never closes it. Full scope, evidence, incident response, and the deterministic remote-identity gate are in the detail file.
 - **reference_submodules**: Read-only upstream reference repositories (ref-*) used for architecture and pattern research.
 - **skills**: Mandatory skills: /read-doc for .hwp/.hwpx/.pdf/.docx/.xlsx/.pptx (never say a file type cannot be read); /webapp-testing for local web UI verification (never ask the user to test manually); /doc-coauthoring before a spec, proposal, RFC, design doc, PRD, or decision record.
-
-- **document_size_refactoring**: 크기가 커진 문서는 `docs/guides/doc-size-refactor.md` 절차에 따라 오래된 기록을 정리한다.
+- **workflows.selection_guide**: Route tasks by matching request keywords in .agents/context/ai-work-index.yaml, reading the root quick reference first, and loading full workflow docs on demand.

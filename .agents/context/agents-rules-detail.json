@@ -486,6 +486,19 @@
       "main_sync": "Keep main branch in sync with upstream at all times (rebase or merge upstream main regularly)",
       "work_branch": "All work on feature branches only (e.g. feat/minicpm-audio-output)",
       "lifecycle": "Archive or delete after upstream PR is merged"
+    },
+    "test_code_review": "After writing tests, never trust results blindly. Review test logic itself with iterative review (2 consecutive clean passes) before trusting outcomes. Signs of invalid tests: assertions that always pass, mocked internals that diverge from real behavior, missing negative cases.",
+    "external_writing_positive": "External-facing writing (proposals, emails, messages, presentations, social posts, books, product UI copy, AI service replies) states what we can do and have done in positive sentences. Do not add unrequested denials or disclaimers ('X is not ...', 'currently, because ...', 'we will make sure it is not ...') unless law or contract requires them. Do not raise legal, copyright, or country-specific regulatory risk unless the accountable owner asks or requests research. Never state anything false. Guide: docs/guides/external-writing.md"
+  },
+  "workflows": {
+    "selection_guide": {
+      "reference": ".agents/context/ai-work-index.yaml",
+      "steps": [
+        "Extract keywords from the user request",
+        "Match the category in ai-work-index.yaml",
+        "Read the matching root quick reference first",
+        "Load the workflow document only if the task still needs details"
+      ]
     }
   },
   "cascadeRules": {
@@ -544,6 +557,7 @@
     }
   },
   "public_repository_release_gate": {
+    "policy": "FAIL CLOSED: Before creating a public repository, changing a repository to public, publishing or updating a public template, or pushing content copied from a private workspace into a public repository, complete and record a public-safety review. A private destination does not make source material safe when its template or upstream is public.",
     "required_scope": [
       "Review the complete candidate tree, including hidden files, generated assets, examples, fixtures, logs, progress records, requirements, agent context, and documentation.",
       "Review reachable Git history, tags, branches intended for push, and inherited template history; deleting a file in a later commit is not sufficient removal.",

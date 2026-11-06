@@ -10,7 +10,9 @@
  * opts.unlockFile (adapter knows its own __dirname). Others have no path
  * dependency.
  */
-const { existsSync } = require("fs");
+const fs = require("fs");
+const { existsSync } = fs;
+const path = require("path");
 const { createHash } = require("crypto");
 
 /** design-doc-guard. opts.unlockFile REQUIRED (adapter: resolve(__dirname,"..","design-doc-unlock")). */
@@ -144,4 +146,145 @@ function cascadeCheck(data) {
 	return null;
 }
 
-module.exports = { designDoc, prodGateway, cascadeCheck };
+const DEFAULT_CODE_EXTENSIONS = [
+	".py",
+	".ts",
+	".tsx",
+	".js",
+	".mjs",
+	".cjs",
+	".rs",
+	".go",
+	".sh",
+];
+
+function isTestFileName(name) {
+	return (
+		/^test_/i.test(name) ||
+		/\.test\.[^.]+$/i.test(name) ||
+		/_test\.[^.]+$/i.test(name)
+	);
+}
+
+const VARIANT_SUFFIX_PATTERNS = [
+	/\s*\(\d+\)$/i,
+	/\s*\(copy(?:\s*\d+)?\)$/i,
+	/[_.-]+v\d+(?:[._-]\d+)*$/i,
+	/(?<=[A-Za-z])v\d+$/i,
+	/[_.-]+(?:new|old|copy|copied|backup|bak|fixed|fix|final|orig|original|temp|tmp|draft|alt|dup|duplicate|clone|mod|modified|patched|edited|wip|rev\d*|r\d+)(?:[_.-]*\d+)?$/i,
+	/[_-]+\d+$/i,
+	/(?<=[A-Za-z])\d+$/i,
+];
+
+function stripVariantSuffixes(stem) {
+	let current = stem;
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const pattern of VARIANT_SUFFIX_PATTERNS) {
+			const next = current.replace(pattern, "");
+			if (next && next !== current) {
+				current = next;
+				changed = true;
+				break;
+			}
+		}
+	}
+	return current;
+}
+
+function isVariantStem(newStem, existingStem, sameExt) {
+	if (!newStem || !existingStem) return false;
+	const newLower = newStem.toLowerCase();
+	const existingLower = existingStem.toLowerCase();
+	if (newLower === existingLower) return false;
+
+	const newBase = stripVariantSuffixes(newStem).toLowerCase();
+	const existingBase = stripVariantSuffixes(existingStem).toLowerCase();
+
+	// New file has a variant suffix over the existing file's stem (or shared base stem)
+	if (newBase !== newLower && (newBase === existingLower || (sameExt && newBase === existingBase))) {
+		return true;
+	}
+
+	// Differ only by numbers (e.g. render_scale085 vs render_scale082, foo1 vs foo2)
+	if (sameExt && /\d/.test(newLower) && /\d/.test(existingLower)) {
+		const newSkeleton = newLower.replace(/\d+/g, "#");
+		const existingSkeleton = existingLower.replace(/\d+/g, "#");
+		if (newSkeleton === existingSkeleton && /[a-z]{2,}/i.test(newSkeleton)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * duplicateCodeFile — block creating a new code file in the same folder when its
+ * name is a copy/version variant of an existing code file. Editing an existing
+ * file, test files (test_*, *.test.*, *_test.*), and migrations/ are allowed.
+ */
+function duplicateCodeFile(data, opts) {
+	const filePath =
+		data?.tool_input?.file_path ||
+		data?.tool_input?.path ||
+		data?.parameters?.file_path ||
+		"";
+	if (!filePath || typeof filePath !== "string") return null;
+
+	const cwd = (opts && opts.cwd) || (data && data.cwd) || process.cwd();
+	const absPath = path.resolve(cwd, filePath);
+
+	// Only applies when creating a new file; editing an existing file is allowed
+	if (existsSync(absPath)) return null;
+
+	const codeExts =
+		opts && Array.isArray(opts.codeExtensions) && opts.codeExtensions.length > 0
+			? opts.codeExtensions.map((e) => (e.startsWith(".") ? e.toLowerCase() : `.${e.toLowerCase()}`))
+			: DEFAULT_CODE_EXTENSIONS;
+
+	const ext = path.extname(absPath).toLowerCase();
+	if (!codeExts.includes(ext)) return null;
+
+	const normalized = absPath.replace(/\\/g, "/");
+	if (/(?:^|\/)migrations\//i.test(normalized)) return null;
+
+	const baseName = path.basename(absPath);
+	if (isTestFileName(baseName)) return null;
+
+	const dir = path.dirname(absPath);
+	if (!existsSync(dir)) return null;
+
+	let entries;
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return null;
+	}
+
+	const newStem = baseName.slice(0, baseName.length - ext.length);
+
+	for (const entry of entries) {
+		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+		const existingName = entry.name;
+		if (existingName === baseName) continue;
+		if (isTestFileName(existingName)) continue;
+
+		const existingExt = path.extname(existingName).toLowerCase();
+		if (!codeExts.includes(existingExt)) continue;
+
+		const existingStem = existingName.slice(0, existingName.length - existingExt.length);
+		const sameExt = existingExt === ext;
+		if (isVariantStem(newStem, existingStem, sameExt)) {
+			return {
+				block:
+					`[Harness] 사본 코드 파일 생성 차단: ${filePath} (같은 폴더의 ${existingName} 변형)\n` +
+					"새 사본 파일을 만들지 말고 원래 파일을 고치세요.",
+			};
+		}
+	}
+
+	return null;
+}
+
+module.exports = { designDoc, prodGateway, cascadeCheck, duplicateCodeFile, DEFAULT_CODE_EXTENSIONS };
