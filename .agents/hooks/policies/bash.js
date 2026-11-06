@@ -387,8 +387,8 @@ async function deploy(command, data, opts) {
 		!fs.existsSync(path.join(root, "config", "deploy-gate.json")) &&
 		!hasAnyDeployPlan(root);
 
-	let precomputedMutations = null;
-	if (useLegacyApprovals) {
+	const precomputedMutations = classifyProdMutations(command, cwd);
+	if (useLegacyApprovals && precomputedMutations.length === 0) {
 		let matchedPattern = null;
 		for (const p of PROD_PATTERNS) { if (p.pattern.test(stripped)) { matchedPattern = p; break; } }
 		if (matchedPattern) {
@@ -425,13 +425,12 @@ async function deploy(command, data, opts) {
 					"AI는 prod 배포를 직접 실행하지 않습니다.",
 			};
 		}
-		precomputedMutations = classifyProdMutations(command, cwd);
-		if (precomputedMutations.length === 0) return null;
+		return null;
 	}
 
 	const hits = [];
 	const clauses = shellClauses(command);
-	for (const hit of (precomputedMutations || classifyProdMutations(command, cwd))) hits.push(hit);
+	for (const hit of precomputedMutations) hits.push(hit);
 	if (hits.length === 0) {
 		for (const tokens of clauses) {
 			if (tokens.length === 0 || /^(?:echo|printf)$/.test(tokens[0])) continue;

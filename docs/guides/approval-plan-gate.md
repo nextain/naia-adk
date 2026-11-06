@@ -10,7 +10,7 @@
 각 인스턴스 저장소는 `config/deploy-gate.json`(예시: `config/deploy-gate.example.json`)과 선택 플러그인 모듈(`plugin`)로 자신의 운영 서비스 목록과 결합 규칙을 등록합니다.
 
 - **기본 동작(Fail-Closed)**: `config/deploy-gate.json`이 없거나 명령의 운영 서비스 키가 인스턴스 설정·플러그인에 등록되어 있지 않으면 **"알 수 없는 운영 명령은 막음"** 규칙에 따라 즉시 차단됩니다.
-- **옛 승인(`approvals.json`) 분기 방어**: `.claude/deploy/approvals.json`만 있고 `config/deploy-gate.json`이나 계획서가 없는 상태에서도 운영 명령 분류기(`classifyProdMutations`)에 적중하는 명령(`az`, `ssh` 등)은 통과하지 않고 승인 계획 관문으로 넘겨 차단합니다.
+- **옛 승인(`approvals.json`) 분기 방어**: 운영 명령 분류기(`classifyProdMutations`)를 옛 승인 분기보다 먼저 실행하여, 옛 `PROD_PATTERNS`(`vercel --prod`, `gcloud run deploy` 등)에 걸리는 명령이라도 분류기 적중이 1건 이상이면 유효한 옛 승인 항목으로 통과시키지 않고 새 승인 계획 관문으로 넘기며(옛 분기는 분류기 적중이 0건인 명령에만 적용), 계획서·설정이 없으면 차단합니다.
 - **인스턴스 확장 오류 시 차단**: `config/deploy-gate.json`의 `prodPatterns` 정규식 오류나 `plugin` 모듈 로드 실패가 나면 이미 모은 `prodPatterns` 적중을 보존한 채 `unclassified` 적중을 내어 즉시 차단합니다.
 - **설정 항목**:
   - `services`: 운영 서비스 키(`azure:containerapp:<이름>`, `gcp:cloudrun:<이름>`, `vercel:deploy:prod` 등)별 준비 기록(`gates/deploy.json`) 요구 여부, `ops`/`rollback` 허용 여부, 명령 결합 규칙(`commandMustContain` 등)

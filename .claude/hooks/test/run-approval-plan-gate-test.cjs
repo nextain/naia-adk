@@ -478,3 +478,107 @@ test("9. 차단 2 재현: classifyInstanceExtension 플러그인 로드 실패·
 	assert.match(d2.reason, /운영 도구가 보이지만 대상을 분류하지 못해 차단합니다/);
 });
 
+test("10. 유효한 옛 승인(approvals.json)과 프로젝트 설정이 있어도 vercel --prod·gcloud run deploy 및 우회 변형 차단", async (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	const P = require(path.join(REPO_ROOT, ".agents/hooks/policies/bash.js"));
+	const deployDir = path.join(root, ".claude", "deploy");
+	fs.mkdirSync(deployDir, { recursive: true });
+	const approvedAt = new Date().toISOString();
+	const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+	fs.writeFileSync(
+		path.join(deployDir, "config.json"),
+		JSON.stringify(
+			{
+				projects: {
+					"sample-web": {
+						platform: "vercel",
+						cwd: root,
+					},
+					"sample-svc": {
+						platform: "gcloud",
+						prod_command: "gcloud run deploy sample-svc --project sample-proj",
+					},
+				},
+				default_ttl_minutes: 30,
+			},
+			null,
+			2
+		)
+	);
+	fs.writeFileSync(
+		path.join(deployDir, "approvals.json"),
+		JSON.stringify(
+			{
+				approvals: [
+					{
+						project: "sample-web",
+						approved_by: "sample-owner",
+						approved_at: approvedAt,
+						expires_at: expiresAt,
+						single_use: false,
+					},
+					{
+						project: "sample-svc",
+						approved_by: "sample-owner",
+						approved_at: approvedAt,
+						expires_at: expiresAt,
+						single_use: false,
+					},
+				],
+			},
+			null,
+			2
+		)
+	);
+
+	const savedReadinessRoot = process.env.DEPLOY_READINESS_ROOT;
+	const savedStateDir = process.env.DEPLOY_APPROVAL_STATE_DIR;
+	const savedAuditPath = process.env.DEPLOY_AUDIT_PATH;
+	delete process.env.DEPLOY_READINESS_ROOT;
+	delete process.env.DEPLOY_APPROVAL_STATE_DIR;
+	process.env.DEPLOY_AUDIT_PATH = path.join(deployDir, "audit.jsonl");
+	t.after(() => {
+		if (savedReadinessRoot === undefined) delete process.env.DEPLOY_READINESS_ROOT;
+		else process.env.DEPLOY_READINESS_ROOT = savedReadinessRoot;
+		if (savedStateDir === undefined) delete process.env.DEPLOY_APPROVAL_STATE_DIR;
+		else process.env.DEPLOY_APPROVAL_STATE_DIR = savedStateDir;
+		if (savedAuditPath === undefined) delete process.env.DEPLOY_AUDIT_PATH;
+		else process.env.DEPLOY_AUDIT_PATH = savedAuditPath;
+	});
+
+	// 1) vercel --prod 차단 확인
+	const vercelRes = await P.deploy("vercel --prod", { cwd: root, session_id: "legacy-overlap-test" }, { deployDir });
+	assert.ok(vercelRes && vercelRes.reason, "유효한 옛 승인이 있어도 vercel --prod 는 차단되어야 함");
+	assert.match(vercelRes.reason, /계획 밖 운영 명령이라 막습니다|알 수 없는 운영 명령은 막음/);
+	assert.match(vercelRes.reason, /vercel:prod/);
+
+	// 2) gcloud run deploy <서비스> --project <x> 차단 확인
+	const gcloudCmd = "gcloud run deploy sample-svc --project sample-proj";
+	const gcloudRes = await P.deploy(gcloudCmd, { cwd: root, session_id: "legacy-overlap-test" }, { deployDir });
+	assert.ok(gcloudRes && gcloudRes.reason, "유효한 옛 승인이 있어도 gcloud run deploy 는 차단되어야 함");
+	assert.match(gcloudRes.reason, /계획 밖 운영 명령이라 막습니다|알 수 없는 운영 명령은 막음/);
+	assert.match(gcloudRes.reason, /gcloud:run:sample-svc/);
+
+	// 3) 우회 변형 5종(cd 접두, bash -c '…', 환경 변수 접두, ; 묶음, 줄바꿈 묶음) 각 1건씩 차단 확인
+	const bypassCases = [
+		{ name: "cd 접두", cmd: `cd "${root}" && vercel --prod`, expectedService: /vercel:prod/ },
+		{ name: "bash -c 인라인", cmd: "bash -c 'gcloud run deploy sample-svc --project sample-proj'", expectedService: /gcloud:run:sample-svc/ },
+		{ name: "환경 변수 접두", cmd: "NODE_ENV=production vercel --prod", expectedService: /vercel:prod/ },
+		{ name: "; 묶음", cmd: "pwd ; gcloud run deploy sample-svc --project sample-proj", expectedService: /gcloud:run:sample-svc/ },
+		{ name: "줄바꿈 묶음", cmd: "pwd\nvercel --prod", expectedService: /vercel:prod/ },
+	];
+
+	for (const { name, cmd, expectedService } of bypassCases) {
+		const legacyRes = await P.deploy(cmd, { cwd: root, session_id: "legacy-overlap-test" }, { deployDir });
+		assert.ok(legacyRes && legacyRes.reason, `우회 변형(${name})은 옛 승인 상태에서 차단되어야 함`);
+		assert.match(legacyRes.reason, /계획 밖 운영 명령이라 막습니다|알 수 없는 운영 명령은 막음/);
+		assert.match(legacyRes.reason, expectedService);
+
+		const hookDecision = runDeployGuardHook(cmd, { cwd: root, root, stateDir, transcriptPath });
+		assert.ok(hookDecision, `우회 변형(${name})은 deploy-guard 훅에서도 차단되어야 함`);
+		assert.equal(hookDecision.decision, "block");
+		assert.match(hookDecision.reason, expectedService);
+	}
+});
+
+
