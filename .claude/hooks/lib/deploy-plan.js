@@ -1097,7 +1097,7 @@ function referencedFiles(command, cwd) {
 			if (script && !seen.has(script)) {
 				seen.add(script);
 				const body = readSmallText(script, "/");
-				if (body) visit(body, path.dirname(script), depth + 1);
+				if (body) visit(body, e.dir || dir || cwd || "/", depth + 1);
 			}
 		}
 	};

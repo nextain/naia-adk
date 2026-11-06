@@ -360,25 +360,40 @@ async function deploy(command, data, opts) {
 	const stripped = core.stripQuotesUnwrap(command);
 	if (/^\s*(echo|printf)\s/.test(stripped) && !stripped.includes("|") && !/[;&\n]/.test(stripped)) return null;
 
-	// Legacy .claude/deploy/config.json dev_service exemption
-	for (const p of PROD_PATTERNS) {
-		if (p.platform === "gcloud" && p.serviceGroup && !p.alwaysBlock) {
-			const sm = stripped.match(p.pattern);
-			if (sm) {
-				const service = sm[p.serviceGroup];
-				for (const proj of Object.values(config.projects || {})) {
-					if (proj.dev_service === service || service.endsWith("-dev")) return null;
-				}
-			}
-		}
-	}
-
 	const hooksLibDir = path.resolve(__dirname, "..", "..", "..", ".claude", "hooks", "lib");
 	const { shellClauses } = require(path.join(hooksLibDir, "git-command-parser.js"));
 	const { classifyProdMutations, clauseText, executedShellFile, SCRIPT_READ_LIMIT } = require(path.join(hooksLibDir, "deploy-command-classifier.js"));
 	const { effectiveCommands } = require(path.join(hooksLibDir, "effective-argv.js"));
 	const { assessReadiness, loadDeployGateConfig, TEMPLATE: READINESS_TEMPLATE } = require(path.join(hooksLibDir, "deploy-readiness.js"));
 	const deployPlan = require(path.join(hooksLibDir, "deploy-plan.js"));
+
+	// Legacy .claude/deploy/config.json dev_service exemption (per clause only)
+	const isLegacyDevService = (service) => {
+		if (!service) return false;
+		const s = String(service).toLowerCase();
+		if (s.endsWith("-dev")) return true;
+		for (const proj of Object.values(config.projects || {})) {
+			if (proj.dev_service && String(proj.dev_service).toLowerCase() === s) return true;
+		}
+		return false;
+	};
+	const matchLegacyClause = (rawClause) => {
+		const subClauses = shellClauses(core.stripQuotesUnwrap(rawClause));
+		const list = subClauses.length
+			? subClauses.map((t) => t.join(" ").replace(/'([^']*)'/g, "$1").replace(/"([^"]*)"/g, "$1"))
+			: [rawClause];
+		for (const sub of list) {
+			for (const p of PROD_PATTERNS) {
+				const m = sub.match(p.pattern);
+				if (!m) continue;
+				if (p.platform === "gcloud" && p.serviceGroup && !p.alwaysBlock && isLegacyDevService(m[p.serviceGroup])) {
+					continue;
+				}
+				return { pattern: p, clause: sub };
+			}
+		}
+		return null;
+	};
 
 	const useLegacyApprovals =
 		fs.existsSync(APPROVALS_PATH) &&
@@ -387,12 +402,26 @@ async function deploy(command, data, opts) {
 		!fs.existsSync(path.join(root, "config", "deploy-gate.json")) &&
 		!hasAnyDeployPlan(root);
 
-	const precomputedMutations = classifyProdMutations(command, cwd);
+	const precomputedMutations = classifyProdMutations(command, cwd, 0, false, root).filter((hit) => {
+		if (hit && typeof hit.service === "string" && hit.service.startsWith("gcloud:run:")) {
+			if (isLegacyDevService(hit.service.slice("gcloud:run:".length))) return false;
+		}
+		return true;
+	});
+	const clauses = shellClauses(command);
+	const nonDevLegacyMatches = [];
+	for (const tokens of clauses) {
+		if (tokens.length === 0 || /^(?:echo|printf)$/.test(tokens[0])) continue;
+		const rawClause = tokens.join(" ").replace(/'([^']*)'/g, "$1").replace(/"([^"]*)"/g, "$1");
+		const matched = matchLegacyClause(rawClause);
+		if (matched) nonDevLegacyMatches.push({ ...matched, tokens });
+	}
+
 	if (useLegacyApprovals && precomputedMutations.length === 0) {
-		let matchedPattern = null;
-		for (const p of PROD_PATTERNS) { if (p.pattern.test(stripped)) { matchedPattern = p; break; } }
+		const firstLegacy = nonDevLegacyMatches[0];
+		const matchedPattern = firstLegacy ? firstLegacy.pattern : null;
 		if (matchedPattern) {
-			const project = detectProject(stripped, config, cwd);
+			const project = detectProject(firstLegacy.clause, config, cwd);
 			const approval = findApproval(project);
 			if (approval) {
 				appendAudit({
@@ -429,20 +458,11 @@ async function deploy(command, data, opts) {
 	}
 
 	const hits = [];
-	const clauses = shellClauses(command);
 	for (const hit of precomputedMutations) hits.push(hit);
-	if (hits.length === 0) {
-		for (const tokens of clauses) {
-			if (tokens.length === 0 || /^(?:echo|printf)$/.test(tokens[0])) continue;
-			const clause = tokens.join(" ").replace(/'([^']*)'/g, "$1").replace(/"([^"]*)"/g, "$1");
-			for (const p of PROD_PATTERNS) {
-				const m = clause.match(p.pattern);
-				if (!m) continue;
-				const project = detectProject(clause, config, cwd);
-				hits.push({ service: `legacy:${project || p.label}`, label: p.label, project, clause: clauseText(tokens) });
-				break;
-			}
-		}
+	for (const { pattern: p, clause, tokens } of nonDevLegacyMatches) {
+		if (hits.length > 0 && ["vercel --prod", "gcloud run deploy", "gcloud app deploy"].includes(p.label)) continue;
+		const project = detectProject(clause, config, cwd);
+		hits.push({ service: `legacy:${project || p.label}`, label: p.label, project, clause: clauseText(tokens) });
 	}
 
 	const unclassified = hits.filter((hit) => hit.unclassified);

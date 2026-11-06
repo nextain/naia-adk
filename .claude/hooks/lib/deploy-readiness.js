@@ -667,7 +667,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 		const inner = shellClauses(bare);
 		if (!/[$`\\#<>|&;]/.test(bare) && inner.length === 1 && inner[0][0] === "az" && !opsProblem(bare)) {
 			const { classifyProdMutations, isNonProd } = require("./deploy-command-classifier.js");
-			const targets = [...new Set(classifyProdMutations(bare, cwd).filter((h) => !isNonProd(h.service)).map((h) => h.service))];
+			const targets = [...new Set(classifyProdMutations(bare, cwd, 0, false, root).filter((h) => !isNonProd(h.service)).map((h) => h.service))];
 			if (targets.length && sameServices(targets)) return { ...yes("고정 파일의 단일 설정 절 전체·서비스·안전 동사 대조"), opsCommand: bare };
 		}
 	}

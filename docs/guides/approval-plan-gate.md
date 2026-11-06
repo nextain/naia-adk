@@ -10,7 +10,8 @@
 각 인스턴스 저장소는 `config/deploy-gate.json`(예시: `config/deploy-gate.example.json`)과 선택 플러그인 모듈(`plugin`)로 자신의 운영 서비스 목록과 결합 규칙을 등록합니다.
 
 - **기본 동작(Fail-Closed)**: `config/deploy-gate.json`이 없거나 명령의 운영 서비스 키가 인스턴스 설정·플러그인에 등록되어 있지 않으면 **"알 수 없는 운영 명령은 막음"** 규칙에 따라 즉시 차단됩니다.
-- **옛 승인(`approvals.json`) 분기 방어**: 운영 명령 분류기(`classifyProdMutations`)를 옛 승인 분기보다 먼저 실행하여, 옛 `PROD_PATTERNS`(`vercel --prod`, `gcloud run deploy` 등)에 걸리는 명령이라도 분류기 적중이 1건 이상이면 유효한 옛 승인 항목으로 통과시키지 않고 새 승인 계획 관문으로 넘기며(옛 분기는 분류기 적중이 0건인 명령에만 적용), 계획서·설정이 없으면 차단합니다.
+- **옛 승인(`approvals.json`) 분기 방어**: 운영 명령 분류기(`classifyProdMutations`)를 옛 승인 분기보다 먼저 실행하여, 옛 `PROD_PATTERNS`(`vercel --prod`, `gcloud run deploy` 등)에 걸리는 명령이라도 분류기 적중이 1건 이상이면 유효한 옛 승인 항목으로 통과시키지 않고 새 승인 계획 관문으로 넘기며(옛 분기는 분류기 적중이 0건인 명령에만 적용), 계획서·설정이 없으면 차단합니다. 옛 `.claude/deploy/config.json`의 개발 서비스(`dev_service`·`-dev`) 예외는 복합 명령에서 해당 절(clause)에만 적용되고 나머지 절의 운영 변경은 계속 검사합니다.
+- **관문 루트 기준 확장 설정 로드**: `config/deploy-gate.json`은 명령이 하위 폴더에서 실행되거나 `cd <하위폴더>` 뒤 실행되더라도 정책이 찾은 관문 루트(저장소 루트)에서 읽습니다.
 - **인스턴스 확장 오류 시 차단**: `config/deploy-gate.json`의 `prodPatterns` 정규식 오류나 `plugin` 모듈 로드 실패가 나면 이미 모은 `prodPatterns` 적중을 보존한 채 `unclassified` 적중을 내어 즉시 차단합니다.
 - **설정 항목**:
   - `services`: 운영 서비스 키(`azure:containerapp:<이름>`, `gcp:cloudrun:<이름>`, `vercel:deploy:prod` 등)별 준비 기록(`gates/deploy.json`) 요구 여부, `ops`/`rollback` 허용 여부, 명령 결합 규칙(`commandMustContain` 등)
@@ -36,7 +37,7 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - `services`: 관문이 분류한 운영 서비스 키를 빠짐없이 적습니다.
 - `scenario`: 실행할 단계(`s1`, `s2`, …)와 되돌리기 갈림길(`branch: "rollback"`)을 순서대로 적습니다.
 - `scenario[].commands`: **실제로 실행할 명령 문자열을 한 글자도 바꾸지 말고 그대로** 적습니다. 실행할 때 바이트 단위로 대조하므로 공백이나 따옴표가 달라도 막힙니다.
-- `scenario[].files`: 명령이 읽거나 실행하는 스크립트·설정 파일(`bash ./deploy.sh`, `--yaml app.yaml`, `@body.json` 등)은 반드시 `"경로": "<sha256>"` 형태로 고정합니다. 파일 내용이 1바이트라도 바뀌면 실행이 차단됩니다.
+- `scenario[].files`: 명령이 읽거나 실행하는 스크립트·설정 파일(`bash ./deploy.sh`, `--yaml app.yaml`, `@body.json` 등)은 반드시 `"경로": "<sha256>"` 형태로 고정합니다. 파일 내용이 1바이트라도 바뀌면 실행이 차단됩니다(`bash scripts/rollout.sh` 재귀 검사는 스크립트 폴더로 자동 이동하지 않고 호출자 작업 디렉터리를 유지하며, 스크립트 안의 명시적 `cd`만 반영합니다).
 - 사전승인 코드 일괄 발급(`preapprove`)을 쓰려면 최상위에 `"approval_mode": "preapprove_steps"`를 넣습니다.
 
 ---

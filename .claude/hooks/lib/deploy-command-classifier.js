@@ -909,7 +909,7 @@ function classifyScp(tokens) {
 	}
 	return hits;
 }
-function classifySsh(tokens, cwd, depth = 0) {
+function classifySsh(tokens, cwd, depth = 0, rootDir = "") {
 	if (path.basename(tokens[0] || "") !== "ssh") return [];
 	let queryOnly = false;
 	const optVals = [];
@@ -945,7 +945,8 @@ function classifySsh(tokens, cwd, depth = 0) {
 	if (body.trim() && (depth || 0) + 1 > 3) return [{ service: "ssh:depth-limit", label: `ssh ${host} (ssh 중첩 한도 초과)` }];
 	// 인스턴스 설정(config/deploy-gate.json)의 sshAlwaysGated 호스트는 읽기도 관문을 탄다.
 	const { loadDeployGateConfig } = require("./deploy-readiness.js");
-	const gateCfg = loadDeployGateConfig(process.env.DEPLOY_READINESS_ROOT || cwd);
+	const gateRoot = rootDir || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(cwd);
+	const gateCfg = loadDeployGateConfig(gateRoot);
 	const alwaysGatedList = Array.isArray(gateCfg?.sshAlwaysGated) ? gateCfg.sshAlwaysGated : [];
 	for (const rule of alwaysGatedList) {
 		const hosts = Array.isArray(rule?.hosts) ? rule.hosts.map((h) => String(h).toLowerCase()) : [];
@@ -957,14 +958,14 @@ function classifySsh(tokens, cwd, depth = 0) {
 	}
 	if (!override && isNonProd(host)) {
 		if (!body.trim()) return [];
-		return classifyProdMutations(body, cwd, (depth || 0) + 1).map((h) => ({ ...h, label: `${h.label} (ssh ${host} 안)` }));
+		return classifyProdMutations(body, cwd, (depth || 0) + 1, false, gateRoot).map((h) => ({ ...h, label: `${h.label} (ssh ${host} 안)` }));
 	}
 	const hit = { service: `ssh:${host.toLowerCase()}`, label: `ssh ${host} (운영 호스트 원격 변경)` };
 	// -o HostName 등으로 실제 대상을 덮어썼으면 호스트 낱말을 믿지 않으므로 variable 을 달지 않는다(검수 2회차 3번).
 	if (host.includes("$") && !override) hit.variable = host;
 	if (!body.trim()) return [hit];
 	// 운영 호스트의 읽기 판정 경로에서도 본문 속 운영 변경은 hit 로 본다.
-	if (classifyProdMutations(body, cwd, (depth || 0) + 1).length) return [hit];
+	if (classifyProdMutations(body, cwd, (depth || 0) + 1, false, gateRoot).length) return [hit];
 	// 본문이 전부 읽기 전용 sed 절이면 통과한다. 따옴표+절대경로 모양('…' /경로)은 불투명으로 보아 막히므로 그보다 먼저 본다.
 	if (sshBodyAllSedReads(body)) return [];
 	// 읽기면 통과: 불투명하지 않고, 안쪽 판정이 읽기이며, 변경 동사 낱말이 없고, sed 쓰기가 없을 때.
@@ -1093,8 +1094,30 @@ function classifyGeneralCloudCli(tokens) {
 	return [];
 }
 
+function resolveGateRoot(startDir) {
+	if (!startDir) return "";
+	let cur = path.resolve(startDir);
+	const candidates = [cur];
+	for (;;) {
+		if (
+			fs.existsSync(path.join(cur, "config", "deploy-gate.json")) ||
+			fs.existsSync(path.join(cur, ".agents", "progress")) ||
+			fs.existsSync(path.join(cur, ".git"))
+		) {
+			if (!candidates.includes(cur)) candidates.push(cur);
+		}
+		const parent = path.dirname(cur);
+		if (parent === cur) break;
+		cur = parent;
+	}
+	for (const c of candidates) {
+		if (fs.existsSync(path.join(c, "config", "deploy-gate.json"))) return c;
+	}
+	return candidates[0];
+}
+
 /** 인스턴스 확장(config/deploy-gate.json 의 prodPatterns 및 선택 플러그인 classifyCommand). */
-function classifyInstanceExtension(command, tokens, dir, assigns) {
+function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "") {
 	const hits = [];
 	const clause = clauseText(tokens, assigns);
 	const pushErrorHit = (msg) => {
@@ -1108,7 +1131,7 @@ function classifyInstanceExtension(command, tokens, dir, assigns) {
 	};
 	try {
 		const { deployGateConfigPath, loadDeployGateConfig, loadDeployGatePlugin } = require("./deploy-readiness.js");
-		const root = process.env.DEPLOY_READINESS_ROOT || dir;
+		const root = rootDir || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(dir);
 		const cfgPath = deployGateConfigPath(root);
 		const cfg = loadDeployGateConfig(root);
 		if (!cfg) {
@@ -1417,9 +1440,10 @@ function scriptText(file) {
 }
 
 /** 운영 변경 명령 목록을 돌려준다. 없으면 빈 배열. */
-function classifyProdMutations(command, cwd, depth = 0, scriptContext = false) {
+function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, rootDir = "") {
 	const found = [];
 	if (depth > 3) return found;
+	const gateRoot = rootDir || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(cwd);
 	// 앞 절의 cd 를 따라간다(설계 검수 6회차 2번): "cd <워크트리> && ./deploy/vm/deploy.sh prod" 는
 	// 세션 cwd 가 아니라 그 워크트리의 스크립트다. 배포 준비 기록은 이 경로의 저장소 HEAD 를 본다.
 	// 감싸개(setsid, timeout -s KILL, flock, systemd-run)와 문자열로 넘긴 명령(bash -c, tmux, script -c)은
@@ -1436,7 +1460,7 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false) {
 			continue;
 		}
 		if (/^(?:echo|printf|cat|grep|rg|sed|awk|head|tail|less|wc|git|man)$/.test(path.basename(tokens[0]))) continue;
-		const extHits = classifyInstanceExtension(command, tokens, dir, assigns);
+		const extHits = classifyInstanceExtension(command, tokens, dir, assigns, gateRoot);
 		if (extHits.length) {
 			for (const h of extHits) found.push(h);
 			continue;
@@ -1450,7 +1474,7 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false) {
 			if (cloudHits.length) for (const h of cloudHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
 			else {
 				// classifySsh 는 여러 hit 를 낼 수 있다(비운영 호스트 안의 운영 변경 재분류, 검수 2회차 1번).
-				const sshHits = [...classifySsh(tokens, dir, depth), ...classifyScp(tokens)];
+				const sshHits = [...classifySsh(tokens, dir, depth, gateRoot), ...classifyScp(tokens)];
 				if (sshHits.length) for (const h of sshHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
 				else {
 					const hit = classifyDeployScript(tokens, dir, assigns) || classifyPackageScript(tokens, dir);
@@ -1463,7 +1487,7 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false) {
 						// prod 표시가 없으면 운영이 아니다.
 						const nonProdCall = file && invokedNonProd(tokens, file, assigns);
 						const text = file ? selectCaseArms(scriptText(file), scriptArgs(tokens), command, assigns) : "";
-						if (file) for (const h of classifyProdMutations(text, dir, depth + 1, true)) {
+						if (file) for (const h of classifyProdMutations(text, dir, depth + 1, true, gateRoot)) {
 							if (h.variable && variableTargetIsNonProd(h.variable, text, dir, nonProdCall, assigns)) continue;
 							// 목록 밖 그룹(network 등)의 변수 대상이 스크립트 안에서 글자 그대로 한 값이면 서비스 이름을 그 값으로 적는다.
 							let service = h.service;
@@ -1494,7 +1518,7 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false) {
 		const invocation = /^(?:bash|sh|dash|zsh|ksh)$/.test(program) ? parser.shellInvocation(argv) : null;
 		const readsShellInput = invocation && invocation.command < 0 && invocation.script < 0 && !invocation.noexec;
 		if (!readsShellInput && !remoteShell) continue;
-		for (const body of clause.heredocs || []) for (const hit of classifyProdMutations(body, cwd, depth + 1)) {
+		for (const body of clause.heredocs || []) for (const hit of classifyProdMutations(body, cwd, depth + 1, false, gateRoot)) {
 			if (/^(?:cloudflare:|network:write:)/.test(hit.service) && !found.some((h) => h.service === hit.service)) found.push(hit);
 		}
 	}

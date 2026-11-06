@@ -78,7 +78,7 @@ export default function (pi: ExtensionAPI) {
 			];
 			for (const run of failOpen) {
 				try {
-					const r = run();
+					const r = await run();
 					if (r && r.reason) return { block: true, reason: r.reason };
 				} catch {
 					// fail-open: this guard errored → do not block, try next
