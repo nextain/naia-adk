@@ -68,13 +68,14 @@ export default function (pi: ExtensionAPI) {
 			} catch {
 				return { block: true, reason: bash.PR_FAIL_REASON };
 			}
-			// the other 5: fail-OPEN (a throw ⇒ skip that guard, continue)
+			// the other guards: fail-OPEN (a throw ⇒ skip that guard, continue)
 			const failOpen = [
 				() => bash.destructiveGit(command),
 				() => bash.commit(command, data),
 				() => bash.deploy(command, data, { deployDir: DEPLOY_DIR }),
 				() => bash.gitPush(command),
 				() => bash.emailSend(command),
+				() => bash.uncommittedArtifact(command, data),
 			];
 			for (const run of failOpen) {
 				try {
@@ -97,6 +98,7 @@ export default function (pi: ExtensionAPI) {
 			// inoperative in pi = security regression.]
 			const inp: any = event.input || {};
 			const data = {
+				cwd,
 				tool_input: {
 					file_path: inp.path ?? inp.file_path,
 					content: inp.content,
@@ -120,6 +122,12 @@ export default function (pi: ExtensionAPI) {
 				if (pg && pg.block !== undefined) return { block: true, reason: pg.block };
 			} catch {
 				// prod-gateway original is fail-OPEN
+			}
+			try {
+				const cf = edit.duplicateCodeFile(data);
+				if (cf && cf.block !== undefined) return { block: true, reason: cf.block };
+			} catch {
+				// copy-file-guard is fail-OPEN
 			}
 			return;
 		}

@@ -15,6 +15,8 @@
  */
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
+const { spawnSync } = require("child_process");
 const core = require(path.join(__dirname, "..", "core", "harness-core.js"));
 
 /** destructive-git-guard */
@@ -642,4 +644,1386 @@ function rootDeleteReason(target) {
 	);
 }
 
-module.exports = { destructiveGit, catastrophicDelete, commit, gitPush, emailSend, prGuard, deploy, PR_FAIL_REASON };
+const { duplicateCodeFile } = require("./edit.js");
+
+const DEFAULT_ARTIFACT_EXTENSIONS = [
+	".nva",
+	".exe",
+	".msi",
+	".dmg",
+	".AppImage",
+	".apk",
+	".vrm",
+];
+
+const DEFAULT_ARTIFACT_SCRIPT_DIRS = [
+	"naia-labs/avatar",
+	"naia-labs/**/service",
+	"scripts/build*",
+];
+
+const ARTIFACT_DRIFT_MESSAGE =
+	"커밋 안 된 대본으로 산출물을 만들 수 없습니다. 공통 코드에 고쳐 가지에 커밋하고 PR 로 올린 뒤 실행하세요.";
+
+function normalizeExtensions(list) {
+	if (!Array.isArray(list) || list.length === 0) return null;
+	const out = list
+		.filter((item) => typeof item === "string" && item.trim().length > 0)
+		.map((item) => {
+			const trimmed = item.trim();
+			return (trimmed.startsWith(".") ? trimmed : `.${trimmed}`).toLowerCase();
+		});
+	return out.length > 0 ? out : null;
+}
+
+function normalizeDirPatterns(list) {
+	if (!Array.isArray(list) || list.length === 0) return [];
+	return list
+		.filter((item) => typeof item === "string" && item.trim().length > 0)
+		.map((item) => item.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, ""))
+		.filter(Boolean);
+}
+
+function readDriftConfigObjectFromDir(dir) {
+	if (!dir) return null;
+	const driftJsonPath = path.join(dir, ".agents", "context", "drift-guard.json");
+	if (fs.existsSync(driftJsonPath)) {
+		try {
+			const parsed = JSON.parse(fs.readFileSync(driftJsonPath, "utf8"));
+			if (parsed && typeof parsed === "object") return parsed;
+		} catch {
+			/* ignore malformed json and fall through */
+		}
+	}
+	for (const rulesFile of ["agents-rules.json", "agents-rules-detail.json"]) {
+		const rulesPath = path.join(dir, ".agents", "context", rulesFile);
+		if (!fs.existsSync(rulesPath)) continue;
+		try {
+			const parsed = JSON.parse(fs.readFileSync(rulesPath, "utf8"));
+			const dg = parsed?.conventions?.drift_guard || parsed?.drift_guard;
+			if (dg && typeof dg === "object") return dg;
+			if (parsed?.artifact_extensions || parsed?.artifact_script_dirs) return parsed;
+		} catch {
+			/* ignore */
+		}
+	}
+	return null;
+}
+
+function readDriftConfigFromRoot(dir) {
+	const cfg = readDriftConfigObjectFromDir(dir);
+	if (!cfg) return null;
+	return normalizeExtensions(cfg.artifact_extensions);
+}
+
+function loadArtifactExtensions(cwd, opts) {
+	if (opts && Array.isArray(opts.artifactExtensions)) {
+		const custom = normalizeExtensions(opts.artifactExtensions);
+		if (custom) return custom;
+	}
+	let cur = path.resolve(cwd || process.cwd());
+	while (cur) {
+		const found = readDriftConfigFromRoot(cur);
+		if (found) return found;
+		const parent = path.dirname(cur);
+		if (parent === cur) break;
+		cur = parent;
+	}
+	const wsRoot = path.resolve(__dirname, "..", "..", "..");
+	const wsFound = readDriftConfigFromRoot(wsRoot);
+	if (wsFound) return wsFound;
+	return DEFAULT_ARTIFACT_EXTENSIONS.map((e) => e.toLowerCase());
+}
+
+function loadArtifactScriptDirs(cwd, opts, extraRoots = []) {
+	const merged = new Set(normalizeDirPatterns(DEFAULT_ARTIFACT_SCRIPT_DIRS));
+	if (opts && Array.isArray(opts.artifactScriptDirs)) {
+		for (const p of normalizeDirPatterns(opts.artifactScriptDirs)) merged.add(p);
+	}
+	const searchDirs = [];
+	const pushHierarchy = (startDir) => {
+		if (!startDir) return;
+		let cur = path.resolve(startDir);
+		while (cur) {
+			if (!searchDirs.includes(cur)) searchDirs.push(cur);
+			const parent = path.dirname(cur);
+			if (parent === cur) break;
+			cur = parent;
+		}
+	};
+	pushHierarchy(cwd || process.cwd());
+	for (const r of extraRoots) pushHierarchy(r);
+	const wsRoot = path.resolve(__dirname, "..", "..", "..");
+	if (!searchDirs.includes(wsRoot)) searchDirs.push(wsRoot);
+
+	for (const d of searchDirs) {
+		const cfg = readDriftConfigObjectFromDir(d);
+		if (!cfg) continue;
+		const patterns = normalizeDirPatterns(cfg.artifact_script_dirs || cfg.artifact_producer_dirs);
+		for (const p of patterns) merged.add(p);
+	}
+	return [...merged];
+}
+
+function matchesArtifactScriptPattern(relPath, pattern) {
+	if (!relPath || !pattern) return false;
+	const normPath = relPath.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
+	const normPat = pattern.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+|\/+$/g, "");
+	if (!normPath || !normPat) return false;
+	if (normPath.startsWith("..")) return false;
+
+	// Convert glob pattern into regex:
+	// /**/ matches "/" or "/any/nested/"
+	const DOUBLE_STAR_SLASH = "\x00DOUBLE_STAR_SLASH\x00";
+	const DOUBLE_STAR = "\x00DOUBLE_STAR\x00";
+	const SINGLE_STAR = "\x00SINGLE_STAR\x00";
+	const QUESTION = "\x00QUESTION\x00";
+
+	const regexBody = normPat
+		.replace(/\/\*\*\//g, DOUBLE_STAR_SLASH)
+		.replace(/\*\*/g, DOUBLE_STAR)
+		.replace(/\*/g, SINGLE_STAR)
+		.replace(/\?/g, QUESTION)
+		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+		.replaceAll(DOUBLE_STAR_SLASH, "(?:/|/.+/)")
+		.replaceAll(DOUBLE_STAR, ".*")
+		.replaceAll(SINGLE_STAR, "[^/]*")
+		.replaceAll(QUESTION, "[^/]");
+
+	const re = new RegExp(`(?:^|/)${regexBody}(?:/.*|$)`, "i");
+	return re.test(normPath);
+}
+
+function isArtifactProducerScript(scriptArg, effectiveCwd, checkResult, dirPatterns) {
+	if (!Array.isArray(dirPatterns) || dirPatterns.length === 0) return false;
+	const candidates = [];
+	if (checkResult && checkResult.relPosix) {
+		candidates.push(checkResult.relPosix);
+	}
+	if (checkResult && checkResult.absScript && effectiveCwd) {
+		const relToCwd = path.relative(effectiveCwd, checkResult.absScript).replace(/\\/g, "/");
+		if (relToCwd && !relToCwd.startsWith("..") && !path.isAbsolute(relToCwd)) {
+			candidates.push(relToCwd);
+		}
+	}
+	if (scriptArg && typeof scriptArg === "string") {
+		const normArg = scriptArg.replace(/\\/g, "/").replace(/^\.\//, "");
+		if (normArg && !normArg.startsWith("/") && !normArg.startsWith("..")) {
+			candidates.push(normArg);
+		}
+	}
+	for (const candidate of candidates) {
+		for (const pattern of dirPatterns) {
+			if (matchesArtifactScriptPattern(candidate, pattern)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+function splitShellSegments(command) {
+	const segments = [];
+	let current = "";
+	let quote = null;
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (quote) {
+			current += ch;
+			if (ch === "\\" && quote === '"' && i + 1 < command.length) {
+				current += command[++i];
+			} else if (ch === quote) {
+				quote = null;
+			}
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			current += ch;
+			continue;
+		}
+		if (ch === "\\" && i + 1 < command.length) {
+			current += ch + command[++i];
+			continue;
+		}
+		if ((ch === "&" && command[i + 1] === "&") || (ch === "|" && command[i + 1] === "|")) {
+			segments.push({ text: current, sep: ch + ch });
+			current = "";
+			i++;
+			continue;
+		}
+		if (ch === ";" || ch === "\n" || ch === "|") {
+			segments.push({ text: current, sep: ch });
+			current = "";
+			continue;
+		}
+		current += ch;
+	}
+	if (current.trim().length > 0) segments.push({ text: current, sep: "" });
+	return segments;
+}
+
+function tokenizeSegment(segmentText) {
+	const tokens = [];
+	let cur = "";
+	let quote = null;
+	for (let i = 0; i < segmentText.length; i++) {
+		const ch = segmentText[i];
+		if (quote) {
+			if (ch === "\\" && quote === '"' && i + 1 < segmentText.length) {
+				cur += segmentText[++i];
+			} else if (ch === quote) {
+				quote = null;
+			} else {
+				cur += ch;
+			}
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			continue;
+		}
+		if (ch === "\\" && i + 1 < segmentText.length) {
+			cur += segmentText[++i];
+			continue;
+		}
+		if (/\s/.test(ch)) {
+			if (cur.length > 0) {
+				tokens.push(cur);
+				cur = "";
+			}
+			continue;
+		}
+		cur += ch;
+	}
+	if (cur.length > 0) tokens.push(cur);
+	return tokens;
+}
+
+function unwrapGroupingTokens(rawTokens) {
+	const tokens = [...rawTokens];
+	let openParens = 0;
+	let closeParens = 0;
+
+	while (tokens.length > 0) {
+		const first = tokens[0];
+		if (first === "(" || first === "{") {
+			if (first === "(") openParens++;
+			tokens.shift();
+			continue;
+		}
+		if (first === ")" || first === "}" || first === ";") {
+			if (first === ")") closeParens++;
+			tokens.shift();
+			continue;
+		}
+		if (first.startsWith("(")) {
+			const m = first.match(/^\(+/);
+			if (m) openParens += m[0].length;
+			tokens[0] = first.replace(/^\(+/, "");
+			if (!tokens[0]) tokens.shift();
+			continue;
+		}
+		if (first.startsWith("{") && first !== "{}" && !first.startsWith("${")) {
+			tokens[0] = first.replace(/^\{+/, "");
+			if (!tokens[0]) tokens.shift();
+			continue;
+		}
+		break;
+	}
+
+	while (tokens.length > 0) {
+		const last = tokens[tokens.length - 1];
+		if (last === ")" || last === "}" || last === ";") {
+			if (last === ")") closeParens++;
+			tokens.pop();
+			continue;
+		}
+		if (
+			/[;)\}]+$/.test(last) &&
+			last !== "{}" &&
+			!last.endsWith("{}") &&
+			!/\$\{[^}]*\}$/.test(last) &&
+			!/\(\d+\)$/.test(last)
+		) {
+			const parenMatches = last.match(/\)+$/);
+			if (parenMatches) closeParens += parenMatches[0].length;
+			tokens[tokens.length - 1] = last.replace(/[;)\}]+$/, "");
+			if (!tokens[tokens.length - 1]) tokens.pop();
+			continue;
+		}
+		break;
+	}
+
+	return { tokens, openParens, closeParens };
+}
+
+function expandShellVars(token, varMap) {
+	if (!token || typeof token !== "string" || !token.includes("$") || !varMap || varMap.size === 0) {
+		return token;
+	}
+	return token.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, g1, g2) => {
+		const key = g1 || g2;
+		return varMap.has(key) ? varMap.get(key) : m;
+	});
+}
+
+function expandHomePath(p) {
+	const home = process.env.HOME || process.env.USERPROFILE || "";
+	if (!home) return p;
+	if (p === "~") return home;
+	if (p.startsWith("~/")) return path.join(home, p.slice(2));
+	if (p.startsWith("$HOME/")) return path.join(home, p.slice(6));
+	if (p.startsWith("${HOME}/")) return path.join(home, p.slice(8));
+	return p;
+}
+
+function matchArtifactToken(token, artifactExts) {
+	if (!token || typeof token !== "string") return null;
+	const candidates = [token];
+	const eqIdx = token.indexOf("=");
+	if (eqIdx >= 0) candidates.push(token.slice(eqIdx + 1));
+	const redirMatch = token.match(/^(?:\d*>>?|\&>>?)(.+)$/);
+	if (redirMatch) candidates.push(redirMatch[1]);
+	for (const part of token.split(/[\s'"()`,;:=<>[\]{}|&]+/)) {
+		if (part) candidates.push(part);
+	}
+
+	for (const raw of candidates) {
+		const cleaned = raw.replace(/^['"]+|['",;)]+$/g, "").trim();
+		if (!cleaned) continue;
+		const lower = cleaned.toLowerCase();
+		for (const ext of artifactExts) {
+			if (lower.length > ext.length && lower.endsWith(ext)) {
+				return cleaned;
+			}
+		}
+	}
+	return null;
+}
+
+const PYTHON_BIN_RE = /^(?:python(?:\d+(?:\.\d+)*)?|py|pypy3?)$/i;
+const NODE_BIN_RE = /^(?:node|nodejs|tsx|ts-node|bun)$/i;
+const SHELL_BIN_RE = /^(?:bash|sh|zsh|dash|ksh)$/i;
+const OTHER_SCRIPT_BIN_RE = /^(?:ruby|perl|php|rscript|pwsh|powershell)$/i;
+const DIRECT_SCRIPT_EXT_RE = /\.(?:py|sh|bash|zsh|js|mjs|cjs|ts|tsx|rb|pl|ps1)$/i;
+
+const UV_TWO_ARG_FLAGS = new Set([
+	"--python",
+	"-p",
+	"--with",
+	"--with-editable",
+	"--with-requirements",
+	"--directory",
+	"--project",
+	"--config-file",
+	"--index-url",
+	"--extra-index-url",
+	"--find-links",
+	"--package",
+	"--env-file",
+]);
+
+const NODE_TWO_ARG_FLAGS = new Set([
+	"-r",
+	"--require",
+	"--import",
+	"--loader",
+	"--experimental-loader",
+	"--tsconfig",
+	"--env-file",
+	"--conditions",
+	"-C",
+]);
+
+const XARGS_TWO_ARG_FLAGS = new Set([
+	"-L",
+	"-n",
+	"-P",
+	"-s",
+	"-a",
+	"-d",
+	"-E",
+	"-e",
+	"--max-args",
+	"--max-procs",
+	"--max-chars",
+	"--arg-file",
+	"--delimiter",
+	"--eof",
+	"--process-slot-var",
+]);
+
+const RSYNC_TWO_ARG_FLAGS = new Set([
+	"-e",
+	"--rsh",
+	"--exclude",
+	"--include",
+	"--exclude-from",
+	"--include-from",
+	"--files-from",
+	"--log-file",
+	"--temp-dir",
+	"--backup-dir",
+	"--suffix",
+	"--compare-dest",
+	"--copy-dest",
+	"--link-dest",
+	"--chmod",
+	"--chown",
+	"--max-size",
+	"--min-size",
+	"--bwlimit",
+	"--timeout",
+	"--port",
+]);
+
+function isInterpreterName(base) {
+	return (
+		PYTHON_BIN_RE.test(base) ||
+		NODE_BIN_RE.test(base) ||
+		SHELL_BIN_RE.test(base) ||
+		OTHER_SCRIPT_BIN_RE.test(base) ||
+		base === "deno"
+	);
+}
+
+function skipLeadingCommandWrappers(tokens, startIdx = 0, context = {}) {
+	let idx = startIdx;
+	while (idx < tokens.length) {
+		const t = tokens[idx];
+		if (t === "(" || t === "{" || t === "!" || t === "command" || t === "builtin" || t === "exec") {
+			idx++;
+			continue;
+		}
+		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) {
+			idx++;
+			continue;
+		}
+		const base = path.basename(t);
+		if (base === "env") {
+			idx++;
+			while (idx < tokens.length) {
+				if (tokens[idx] === "--") {
+					idx++;
+					break;
+				}
+				if (
+					(tokens[idx] === "-u" ||
+						tokens[idx] === "--unset" ||
+						tokens[idx] === "-C" ||
+						tokens[idx] === "--chdir" ||
+						tokens[idx] === "-S" ||
+						tokens[idx] === "--split-string") &&
+					idx + 1 < tokens.length
+				) {
+					idx += 2;
+				} else if (tokens[idx].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[idx])) {
+					idx++;
+				} else {
+					break;
+				}
+			}
+			continue;
+		}
+		if (base === "nohup" || base === "time") {
+			idx++;
+			while (idx < tokens.length && tokens[idx].startsWith("-")) {
+				if (tokens[idx] === "--") {
+					idx++;
+					break;
+				}
+				idx++;
+			}
+			continue;
+		}
+		if (base === "nice") {
+			idx++;
+			if ((tokens[idx] === "-n" || tokens[idx] === "--adjustment") && idx + 1 < tokens.length) idx += 2;
+			else if (tokens[idx] && tokens[idx].startsWith("-")) idx++;
+			continue;
+		}
+		if (base === "timeout") {
+			idx++;
+			while (idx < tokens.length && tokens[idx].startsWith("-")) {
+				if (
+					(tokens[idx] === "-k" ||
+						tokens[idx] === "-s" ||
+						tokens[idx] === "--kill-after" ||
+						tokens[idx] === "--signal") &&
+					idx + 1 < tokens.length
+				) {
+					idx += 2;
+				} else {
+					idx++;
+				}
+			}
+			if (idx < tokens.length) idx++; // skip duration
+			continue;
+		}
+		if (base === "sudo") {
+			idx++;
+			while (idx < tokens.length && tokens[idx].startsWith("-")) {
+				if (tokens[idx] === "--") {
+					idx++;
+					break;
+				}
+				if (
+					(tokens[idx] === "-u" ||
+						tokens[idx] === "-g" ||
+						tokens[idx] === "-C" ||
+						tokens[idx] === "-D" ||
+						tokens[idx] === "-h" ||
+						tokens[idx] === "-p" ||
+						tokens[idx] === "-r" ||
+						tokens[idx] === "-t" ||
+						tokens[idx] === "-T" ||
+						tokens[idx] === "-U") &&
+					idx + 1 < tokens.length
+				) {
+					idx += 2;
+				} else {
+					idx++;
+				}
+			}
+			continue;
+		}
+		if (base === "xargs") {
+			idx++;
+			let replacePlaceholder = "{}";
+			while (idx < tokens.length && tokens[idx].startsWith("-")) {
+				const flag = tokens[idx];
+				if (flag === "--") {
+					idx++;
+					break;
+				}
+				if (flag === "-I" || flag === "--replace") {
+					if (idx + 1 < tokens.length) {
+						replacePlaceholder = tokens[idx + 1] || "{}";
+						idx += 2;
+					} else {
+						idx++;
+					}
+					continue;
+				}
+				if (flag.startsWith("-I") && flag.length > 2) {
+					replacePlaceholder = flag.slice(2);
+					idx++;
+					continue;
+				}
+				if (flag.startsWith("--replace=")) {
+					replacePlaceholder = flag.slice("--replace=".length) || "{}";
+					idx++;
+					continue;
+				}
+				if (XARGS_TWO_ARG_FLAGS.has(flag) && idx + 1 < tokens.length) {
+					idx += 2;
+					continue;
+				}
+				idx++;
+			}
+			context.viaXargs = true;
+			context.placeholder = replacePlaceholder;
+			continue;
+		}
+		if (base === "find") {
+			let execIdx = -1;
+			let findNameCandidate = null;
+			const searchPaths = [];
+			for (let j = idx + 1; j < tokens.length; j++) {
+				const ft = tokens[j];
+				if (ft === "-exec" || ft === "-execdir" || ft === "-ok" || ft === "-okdir") {
+					execIdx = j;
+					break;
+				}
+				if ((ft === "-name" || ft === "-iname" || ft === "-path" || ft === "-wholename") && j + 1 < tokens.length) {
+					findNameCandidate = tokens[j + 1];
+					j++;
+					continue;
+				}
+				if (!ft.startsWith("-") && ft !== "!" && ft !== "(" && ft !== ")" && searchPaths.length === 0 && j === idx + 1) {
+					searchPaths.push(ft);
+				}
+			}
+			if (execIdx >= 0 && execIdx + 1 < tokens.length) {
+				context.viaFindExec = true;
+				context.placeholder = "{}";
+				if (findNameCandidate) {
+					const baseDir = searchPaths[0] && searchPaths[0] !== "." ? searchPaths[0] : "";
+					context.findCandidate = baseDir
+						? `${baseDir.replace(/\/+$/, "")}/${findNameCandidate}`
+						: findNameCandidate;
+				}
+				while (tokens.length > execIdx + 1) {
+					const tail = tokens[tokens.length - 1];
+					if (tail === ";" || tail === "\\;" || tail === "+") tokens.pop();
+					else break;
+				}
+				idx = execIdx + 1;
+				continue;
+			}
+		}
+		break;
+	}
+	return idx;
+}
+
+function extractFileTransferOp(rawTokens) {
+	const tokens = [...rawTokens];
+	const idx = skipLeadingCommandWrappers(tokens, 0, {});
+	if (idx >= tokens.length) return null;
+	const cmdBase = path.basename(tokens[idx]);
+	if (
+		cmdBase !== "cp" &&
+		cmdBase !== "mv" &&
+		cmdBase !== "ln" &&
+		cmdBase !== "install" &&
+		cmdBase !== "rsync"
+	) {
+		return null;
+	}
+
+	let i = idx + 1;
+	let targetDir = null;
+	let forceNoTargetDir = false;
+	const positional = [];
+	let endOfFlags = false;
+
+	while (i < tokens.length) {
+		const tok = tokens[i];
+		if (!endOfFlags && tok === "--") {
+			endOfFlags = true;
+			i++;
+			continue;
+		}
+		if (/^(?:\d*>>?|\&>>?|\d*<&?\d*)/.test(tok)) {
+			i++;
+			continue;
+		}
+		if (!endOfFlags && tok.startsWith("-") && tok !== "-") {
+			if ((tok === "-t" || tok === "--target-directory") && i + 1 < tokens.length) {
+				targetDir = tokens[i + 1];
+				i += 2;
+				continue;
+			}
+			if (tok.startsWith("--target-directory=")) {
+				targetDir = tok.slice("--target-directory=".length);
+				i++;
+				continue;
+			}
+			if (tok === "-T" || tok === "--no-target-directory") {
+				forceNoTargetDir = true;
+				i++;
+				continue;
+			}
+			if (
+				cmdBase === "install" &&
+				(tok === "-m" ||
+					tok === "--mode" ||
+					tok === "-o" ||
+					tok === "--owner" ||
+					tok === "-g" ||
+					tok === "--group" ||
+					tok === "-S" ||
+					tok === "--suffix" ||
+					tok === "-Z" ||
+					tok === "--context") &&
+				i + 1 < tokens.length
+			) {
+				i += 2;
+				continue;
+			}
+			if (
+				(cmdBase === "cp" || cmdBase === "mv" || cmdBase === "ln") &&
+				(tok === "-S" || tok === "--suffix") &&
+				i + 1 < tokens.length
+			) {
+				i += 2;
+				continue;
+			}
+			if (cmdBase === "rsync" && RSYNC_TWO_ARG_FLAGS.has(tok) && i + 1 < tokens.length) {
+				i += 2;
+				continue;
+			}
+			i++;
+			continue;
+		}
+		positional.push(tok);
+		i++;
+	}
+
+	if (targetDir) {
+		if (positional.length === 0) return null;
+		return { cmd: cmdBase, sources: positional, dest: null, destDir: targetDir, forceNoTargetDir };
+	}
+	if (positional.length < 2) return null;
+	return {
+		cmd: cmdBase,
+		sources: positional.slice(0, -1),
+		dest: positional[positional.length - 1],
+		destDir: null,
+		forceNoTargetDir,
+	};
+}
+
+function resolvePlaceholderScript(rawScriptArg, context) {
+	if (!rawScriptArg) return null;
+	const placeholder = (context && context.placeholder) || "{}";
+	if (rawScriptArg === placeholder || rawScriptArg === "{}" || rawScriptArg.includes(placeholder)) {
+		if (context && context.findCandidate && !/[*?\[]/.test(context.findCandidate)) {
+			return {
+				scriptArg: rawScriptArg.replace(placeholder, context.findCandidate).replace("{}", context.findCandidate),
+			};
+		}
+		if (context && Array.isArray(context.pipedCandidates) && context.pipedCandidates.length > 0) {
+			const candidate = context.pipedCandidates[0];
+			return {
+				scriptArg: rawScriptArg.replace(placeholder, candidate).replace("{}", candidate),
+			};
+		}
+		return {
+			unresolvedPlaceholder: rawScriptArg,
+			viaWrapper: context && context.viaFindExec ? "find -exec" : "xargs",
+		};
+	}
+	return { scriptArg: rawScriptArg };
+}
+
+function extractScriptFromTokens(rawTokens, effectiveCwd, context = {}) {
+	const tokens = [...rawTokens];
+	let idx = skipLeadingCommandWrappers(tokens, 0, context);
+
+	if (idx >= tokens.length) return null;
+	let cmdToken = tokens[idx];
+	let cmdBase = path.basename(cmdToken);
+
+	// Handle uv run / poetry run / pipenv run / pdm run
+	if ((cmdBase === "uv" || cmdBase === "poetry" || cmdBase === "pipenv" || cmdBase === "pdm") && tokens[idx + 1] === "run") {
+		idx += 2;
+		while (idx < tokens.length) {
+			const tok = tokens[idx];
+			if (tok === "--") {
+				idx++;
+				break;
+			}
+			if (UV_TWO_ARG_FLAGS.has(tok)) {
+				idx += 2;
+				continue;
+			}
+			if (tok.startsWith("-")) {
+				idx++;
+				continue;
+			}
+			break;
+		}
+		if (idx >= tokens.length) return null;
+		const nextBase = path.basename(tokens[idx]);
+		if (isInterpreterName(nextBase)) {
+			cmdToken = tokens[idx];
+			cmdBase = nextBase;
+		} else {
+			return resolvePlaceholderScript(tokens[idx], context);
+		}
+	}
+
+	// Handle npx / pnpx / bunx / pnpm / yarn / npm invoking tsx / ts-node / node
+	if (/^(?:npx|pnpx|bunx|pnpm|yarn)$/i.test(cmdBase)) {
+		let scan = idx + 1;
+		while (scan < tokens.length) {
+			const tok = tokens[scan];
+			if (tok === "exec" || tok === "dlx" || tok === "run" || tok === "-y" || tok === "--yes") {
+				scan++;
+				continue;
+			}
+			if ((tok === "-p" || tok === "--package") && scan + 1 < tokens.length) {
+				scan += 2;
+				continue;
+			}
+			if (tok.startsWith("-")) {
+				scan++;
+				continue;
+			}
+			break;
+		}
+		if (scan < tokens.length && isInterpreterName(path.basename(tokens[scan]))) {
+			idx = scan;
+			cmdToken = tokens[idx];
+			cmdBase = path.basename(cmdToken);
+		}
+	}
+
+	if (PYTHON_BIN_RE.test(cmdBase)) {
+		idx++;
+		while (idx < tokens.length) {
+			const tok = tokens[idx];
+			if (tok === "-c" || tok === "--command" || (tok.startsWith("-c") && tok.length > 2)) {
+				return { inlineCode: `${cmdBase} -c` };
+			}
+			if (tok === "-m" && idx + 1 < tokens.length) {
+				const modName = tokens[idx + 1];
+				const modRel = modName.replace(/\./g, "/");
+				const candidates = [
+					`${modRel}.py`,
+					`${modRel}/__main__.py`,
+					`${modRel}/__init__.py`,
+				];
+				for (const relCandidate of candidates) {
+					const absCandidate = path.resolve(effectiveCwd, relCandidate);
+					try {
+						if (fs.existsSync(absCandidate) && fs.statSync(absCandidate).isFile()) {
+							return { scriptArg: relCandidate };
+						}
+					} catch {
+						/* ignore */
+					}
+				}
+				if (modName.includes(".")) {
+					const topPkg = modRel.split("/")[0];
+					const topPkgAbs = path.resolve(effectiveCwd, topPkg);
+					try {
+						if (fs.existsSync(topPkgAbs) && fs.statSync(topPkgAbs).isDirectory()) {
+							return { scriptArg: `${modRel}.py` };
+						}
+					} catch {
+						/* ignore */
+					}
+				}
+				// External/stdlib module (e.g. pytest, unittest, pip): -m consumes the rest of argv
+				return null;
+			}
+			if ((tok === "-W" || tok === "-X") && idx + 1 < tokens.length) {
+				idx += 2;
+				continue;
+			}
+			if (tok === "-") {
+				return { stdinProgram: cmdBase };
+			}
+			if (tok === "--") {
+				idx++;
+				break;
+			}
+			if (tok.startsWith("-")) {
+				idx++;
+				continue;
+			}
+			return resolvePlaceholderScript(tok, context);
+		}
+		if (idx < tokens.length) {
+			return resolvePlaceholderScript(tokens[idx], context);
+		}
+		if (context.viaXargs && Array.isArray(context.pipedCandidates) && context.pipedCandidates.length > 0) {
+			return { scriptArg: context.pipedCandidates[0] };
+		}
+		if (context.fromPipe) {
+			return { stdinProgram: cmdBase };
+		}
+		return null;
+	}
+
+	if (NODE_BIN_RE.test(cmdBase)) {
+		idx++;
+		if (cmdBase.toLowerCase() === "bun" && tokens[idx] === "run") idx++;
+		while (idx < tokens.length) {
+			const tok = tokens[idx];
+			if (tok === "-e" || tok === "--eval" || tok === "-p" || tok === "--print") {
+				return { inlineCode: `${cmdBase} ${tok}` };
+			}
+			if (NODE_TWO_ARG_FLAGS.has(tok) && idx + 1 < tokens.length) {
+				idx += 2;
+				continue;
+			}
+			if (tok === "-") {
+				return { stdinProgram: cmdBase };
+			}
+			if (tok === "--") {
+				idx++;
+				break;
+			}
+			if (tok.startsWith("-")) {
+				idx++;
+				continue;
+			}
+			return resolvePlaceholderScript(tok, context);
+		}
+		if (idx < tokens.length) {
+			return resolvePlaceholderScript(tokens[idx], context);
+		}
+		if (context.viaXargs && Array.isArray(context.pipedCandidates) && context.pipedCandidates.length > 0) {
+			return { scriptArg: context.pipedCandidates[0] };
+		}
+		if (context.fromPipe) {
+			return { stdinProgram: cmdBase };
+		}
+		return null;
+	}
+
+	if (cmdBase.toLowerCase() === "deno") {
+		idx++;
+		if (tokens[idx] === "run") idx++;
+		while (idx < tokens.length) {
+			const tok = tokens[idx];
+			if (tok === "eval") return { inlineCode: "deno eval" };
+			if ((tok === "--config" || tok === "-c" || tok === "--import-map" || tok === "--lock") && idx + 1 < tokens.length) {
+				idx += 2;
+				continue;
+			}
+			if (tok === "-") return { stdinProgram: "deno" };
+			if (tok === "--") {
+				idx++;
+				break;
+			}
+			if (tok.startsWith("-")) {
+				idx++;
+				continue;
+			}
+			return resolvePlaceholderScript(tok, context);
+		}
+		if (context.fromPipe) return { stdinProgram: "deno" };
+		return null;
+	}
+
+	if (SHELL_BIN_RE.test(cmdBase)) {
+		idx++;
+		let stdinFlag = false;
+		while (idx < tokens.length) {
+			const tok = tokens[idx];
+			if (tok === "-c" && idx + 1 < tokens.length) {
+				return { inlineCommand: tokens[idx + 1], inlineCode: `${cmdBase} -c` };
+			}
+			if (tok === "-s") {
+				stdinFlag = true;
+				idx++;
+				continue;
+			}
+			if ((tok === "-o" || tok === "+o") && idx + 1 < tokens.length) {
+				idx += 2;
+				continue;
+			}
+			if (tok === "-") {
+				stdinFlag = true;
+				idx++;
+				break;
+			}
+			if (tok === "--") {
+				idx++;
+				break;
+			}
+			if (tok.startsWith("-") || tok.startsWith("+")) {
+				idx++;
+				continue;
+			}
+			if (stdinFlag) {
+				return { stdinProgram: cmdBase };
+			}
+			return resolvePlaceholderScript(tok, context);
+		}
+		if (stdinFlag || context.fromPipe) {
+			return { stdinProgram: cmdBase };
+		}
+		if (idx < tokens.length) {
+			return resolvePlaceholderScript(tokens[idx], context);
+		}
+		return null;
+	}
+
+	if (OTHER_SCRIPT_BIN_RE.test(cmdBase)) {
+		idx++;
+		while (idx < tokens.length) {
+			const tok = tokens[idx];
+			if (tok === "-e" || tok === "-Command" || tok === "-c" || tok === "-r") {
+				return { inlineCode: `${cmdBase} ${tok}` };
+			}
+			if (tok === "-File" || tok === "-f") {
+				if (idx + 1 < tokens.length) return resolvePlaceholderScript(tokens[idx + 1], context);
+				return null;
+			}
+			if (tok === "-") return { stdinProgram: cmdBase };
+			if (tok.startsWith("-")) {
+				idx++;
+				continue;
+			}
+			return resolvePlaceholderScript(tok, context);
+		}
+		if (context.fromPipe) return { stdinProgram: cmdBase };
+		return null;
+	}
+
+	// Direct script path execution (e.g. ./stream_render.py, /tmp/gen.sh, scripts/bake.py)
+	const expandedCmd = expandHomePath(cmdToken);
+	if (
+		cmdToken.includes("/") &&
+		(DIRECT_SCRIPT_EXT_RE.test(cmdToken) ||
+			expandedCmd.startsWith("/tmp/") ||
+			expandedCmd.startsWith(os.tmpdir() + path.sep))
+	) {
+		return resolvePlaceholderScript(cmdToken, context);
+	}
+
+	return null;
+}
+
+function findExistingDir(startDir) {
+	let cur = path.resolve(startDir);
+	while (cur && !fs.existsSync(cur)) {
+		const parent = path.dirname(cur);
+		if (parent === cur) break;
+		cur = parent;
+	}
+	return cur;
+}
+
+function checkScriptGitStatus(scriptArg, effectiveCwd) {
+	const expanded = expandHomePath(scriptArg);
+	const absScript = path.resolve(effectiveCwd, expanded);
+	const probeDir = findExistingDir(path.dirname(absScript));
+
+	const topRes = spawnSync("git", ["-C", probeDir, "rev-parse", "--show-toplevel"], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+	});
+	if (topRes.status !== 0 || !topRes.stdout || !topRes.stdout.trim()) {
+		return { ok: false, state: "outside-git", absScript };
+	}
+
+	const repoRoot = fs.realpathSync.native
+		? (() => {
+				try {
+					return fs.realpathSync.native(topRes.stdout.trim());
+				} catch {
+					return path.resolve(topRes.stdout.trim());
+				}
+			})()
+		: path.resolve(topRes.stdout.trim());
+
+	let realScript = absScript;
+	if (fs.existsSync(absScript)) {
+		try {
+			realScript = fs.realpathSync.native ? fs.realpathSync.native(absScript) : fs.realpathSync(absScript);
+		} catch {
+			realScript = absScript;
+		}
+		try {
+			const stat = fs.statSync(realScript);
+			if (stat.isDirectory()) {
+				const mainPy = path.join(realScript, "__main__.py");
+				if (fs.existsSync(mainPy)) {
+					realScript = mainPy;
+				} else {
+					return { ok: true, state: "directory", absScript, repoRoot };
+				}
+			}
+		} catch {
+			/* ignore */
+		}
+	} else {
+		return { ok: false, state: "untracked", absScript, repoRoot };
+	}
+
+	const rel = path.relative(repoRoot, realScript);
+	if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+		return { ok: false, state: "outside-git", absScript };
+	}
+	const relPosix = rel.replace(/\\/g, "/");
+
+	const headRes = spawnSync("git", ["-C", repoRoot, "rev-parse", "--verify", "HEAD"], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+	});
+	if (headRes.status !== 0) {
+		return { ok: false, state: "uncommitted-repo", absScript, repoRoot, relPosix };
+	}
+
+	const lsRes = spawnSync("git", ["-C", repoRoot, "ls-files", "--error-unmatch", "--", relPosix], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "ignore"],
+	});
+	if (lsRes.status !== 0) {
+		return { ok: false, state: "untracked", absScript, repoRoot, relPosix };
+	}
+
+	const statusRes = spawnSync(
+		"git",
+		["-c", "core.quotePath=false", "-C", repoRoot, "status", "--porcelain", "--untracked-files=all", "--", relPosix],
+		{
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		},
+	);
+	if (statusRes.status !== 0 || (statusRes.stdout && statusRes.stdout.trim().length > 0)) {
+		return { ok: false, state: "modified", absScript, repoRoot, relPosix };
+	}
+
+	return { ok: true, state: "committed", absScript, repoRoot, relPosix };
+}
+
+/**
+ * uncommittedArtifact — block producing build/asset artifacts (.nva, .exe, .msi,
+ * .dmg, .AppImage, .apk, .vrm, or configured extensions) from an uncommitted
+ * (untracked/modified) script or an out-of-repo script (such as /tmp/...),
+ * running an uncommitted script inside configured artifact_script_dirs even
+ * without CLI artifact tokens, inline/stdin artifact generation, or copying/
+ * renaming uncommitted artifacts or variant code files via cp/mv/ln/install/rsync.
+ */
+function uncommittedArtifact(command, data, opts) {
+	if (!command || typeof command !== "string") return null;
+
+	const baseCwd = (opts && opts.cwd) || (data && data.cwd) || process.cwd();
+	const artifactExts = loadArtifactExtensions(baseCwd, opts);
+	const segments = splitShellSegments(command);
+
+	let effectiveCwd = path.resolve(baseCwd);
+	const cwdStack = [];
+	const varMap = new Map();
+	const scriptsToCheck = [];
+	const inlineOrStdinToCheck = [];
+	const allArtifacts = [];
+
+	let prevSep = "";
+	let pipedEchoStrings = [];
+	let pipedScriptCandidates = [];
+
+	for (const seg of segments) {
+		const rawTokens = tokenizeSegment(seg.text);
+		const { tokens: unwrapped, openParens, closeParens } = unwrapGroupingTokens(rawTokens);
+		for (let p = 0; p < openParens; p++) cwdStack.push(effectiveCwd);
+
+		const finishSegment = (nextEchoStrings = [], nextScriptCandidates = []) => {
+			for (let p = 0; p < closeParens; p++) {
+				if (cwdStack.length > 0) effectiveCwd = cwdStack.pop();
+			}
+			prevSep = seg.sep;
+			pipedEchoStrings = seg.sep === "|" ? nextEchoStrings : [];
+			pipedScriptCandidates = seg.sep === "|" ? nextScriptCandidates : [];
+		};
+
+		if (unwrapped.length === 0) {
+			finishSegment();
+			continue;
+		}
+
+		// Record and expand shell variables (e.g., OUT=a.nva; python ... $OUT)
+		const tokens = [];
+		for (const rawTok of unwrapped) {
+			const assignMatch = rawTok.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+			if (assignMatch && tokens.length === 0) {
+				const expandedVal = expandShellVars(assignMatch[2].replace(/^['"]|['"]$/g, ""), varMap);
+				varMap.set(assignMatch[1], expandedVal);
+				tokens.push(`${assignMatch[1]}=${expandedVal}`);
+			} else {
+				tokens.push(expandShellVars(rawTok, varMap));
+			}
+		}
+
+		// Handle cd
+		if (tokens[0] === "cd" && seg.sep !== "|") {
+			let cdIdx = 1;
+			while (cdIdx < tokens.length && (tokens[cdIdx] === "-P" || tokens[cdIdx] === "-L" || tokens[cdIdx] === "--")) {
+				cdIdx++;
+			}
+			if (tokens[cdIdx]) {
+				const targetDir = expandHomePath(tokens[cdIdx]);
+				effectiveCwd = path.resolve(effectiveCwd, targetDir);
+			}
+			finishSegment();
+			continue;
+		}
+
+		// Handle echo / printf
+		if (tokens[0] === "echo" || tokens[0] === "printf") {
+			if (seg.sep !== "|") {
+				finishSegment();
+				continue;
+			}
+			const echoArgs = tokens.slice(1).filter((t) => !t.startsWith("-"));
+			for (const tok of echoArgs) {
+				const matched = matchArtifactToken(tok, artifactExts);
+				if (matched) allArtifacts.push(matched);
+			}
+			const candidates = [];
+			for (const tok of echoArgs) {
+				for (const part of tok.split(/\s+/)) {
+					if (part && (DIRECT_SCRIPT_EXT_RE.test(part) || !part.startsWith("-"))) {
+						candidates.push(part);
+					}
+				}
+			}
+			finishSegment(echoArgs, candidates);
+			continue;
+		}
+
+		const segArtifacts = [];
+		for (const tok of tokens) {
+			const matched = matchArtifactToken(tok, artifactExts);
+			if (matched) {
+				segArtifacts.push(matched);
+				allArtifacts.push(matched);
+			}
+		}
+
+		// Check cp / mv / ln / install / rsync (Item 4: P1-3 & P1-7)
+		const transferOp = extractFileTransferOp(tokens);
+		if (transferOp) {
+			for (const src of transferOp.sources) {
+				let destPath = transferOp.dest;
+				if (transferOp.destDir) {
+					destPath = path.join(transferOp.destDir, path.basename(src));
+				} else if (destPath && !transferOp.forceNoTargetDir) {
+					const absDestProbe = path.resolve(effectiveCwd, expandHomePath(destPath));
+					let isDestDir = destPath.endsWith("/") || transferOp.sources.length > 1;
+					if (!isDestDir && fs.existsSync(absDestProbe)) {
+						try {
+							isDestDir = fs.statSync(absDestProbe).isDirectory();
+						} catch {
+							isDestDir = false;
+						}
+					}
+					if (isDestDir) {
+						destPath = path.join(destPath, path.basename(src));
+					}
+				}
+				if (!destPath) continue;
+
+				// (a) Target has an artifact extension and source is uncommitted
+				const matchedDestArtifact = matchArtifactToken(destPath, artifactExts);
+				if (matchedDestArtifact) {
+					const srcCheck = checkScriptGitStatus(src, effectiveCwd);
+					if (!srcCheck.ok) {
+						return {
+							reason:
+								`[Harness] ${ARTIFACT_DRIFT_MESSAGE}\n` +
+								`원본: ${src} (${srcCheck.state}) → 산출물: ${matchedDestArtifact}`,
+						};
+					}
+				}
+
+				// (b) Target is a variant/copy name of a sibling code file (shared edit.js duplicateCodeFile)
+				const absSrc = path.resolve(effectiveCwd, expandHomePath(src));
+				const absDest = path.resolve(effectiveCwd, expandHomePath(destPath));
+				const extraSiblings =
+					path.dirname(absSrc) === path.dirname(absDest) ? [path.basename(absSrc)] : [];
+				const dupDecision = duplicateCodeFile(
+					{
+						cwd: effectiveCwd,
+						tool_name: "Write",
+						tool_input: { file_path: destPath },
+					},
+					{
+						...(opts || {}),
+						cwd: effectiveCwd,
+						extraSiblings,
+					},
+				);
+				if (dupDecision && dupDecision.block) {
+					return { reason: dupDecision.block };
+				}
+			}
+			finishSegment();
+			continue;
+		}
+
+		const extractCtx = {
+			fromPipe: prevSep === "|",
+			pipedCandidates: pipedScriptCandidates,
+		};
+		const extracted = extractScriptFromTokens(tokens, effectiveCwd, extractCtx);
+		if (extracted) {
+			if (extracted.inlineCommand) {
+				const nested = uncommittedArtifact(
+					extracted.inlineCommand,
+					{ ...(data || {}), cwd: effectiveCwd },
+					opts,
+				);
+				if (nested) return nested;
+			}
+			if (extracted.stdinProgram && prevSep === "|" && pipedEchoStrings.length > 0) {
+				const pipedCmd = pipedEchoStrings.join(" ");
+				const nested = uncommittedArtifact(
+					pipedCmd,
+					{ ...(data || {}), cwd: effectiveCwd },
+					opts,
+				);
+				if (nested) return nested;
+			}
+			if (extracted.stdinProgram) {
+				inlineOrStdinToCheck.push({
+					label: `<stdin:${extracted.stdinProgram}>`,
+					state: "uncommitted-stdin",
+					segArtifacts,
+				});
+			} else if (extracted.inlineCode && !extracted.inlineCommand) {
+				inlineOrStdinToCheck.push({
+					label: `<inline:${extracted.inlineCode}>`,
+					state: "inline-code",
+					segArtifacts,
+				});
+			} else if (extracted.unresolvedPlaceholder) {
+				inlineOrStdinToCheck.push({
+					label: `${extracted.unresolvedPlaceholder} (${extracted.viaWrapper})`,
+					state: "untracked",
+					segArtifacts,
+				});
+			} else if (extracted.scriptArg) {
+				scriptsToCheck.push({
+					scriptArg: extracted.scriptArg,
+					cwd: effectiveCwd,
+					segArtifacts,
+				});
+			}
+		}
+
+		finishSegment();
+	}
+
+	if (allArtifacts.length > 0 && inlineOrStdinToCheck.length > 0) {
+		const item = inlineOrStdinToCheck[0];
+		const artifactLabel = item.segArtifacts[0] || allArtifacts[0];
+		return {
+			reason:
+				`[Harness] ${ARTIFACT_DRIFT_MESSAGE}\n` +
+				`대본: ${item.label} (${item.state}) → 산출물: ${artifactLabel}`,
+		};
+	}
+
+	for (const item of scriptsToCheck) {
+		const check = checkScriptGitStatus(item.scriptArg, item.cwd);
+		const dirPatterns = loadArtifactScriptDirs(
+			item.cwd,
+			opts,
+			check.repoRoot ? [check.repoRoot] : [],
+		);
+		const inProducerDir = isArtifactProducerScript(
+			item.scriptArg,
+			item.cwd,
+			check,
+			dirPatterns,
+		);
+		if ((allArtifacts.length > 0 || inProducerDir) && !check.ok) {
+			const artifactLabel =
+				item.segArtifacts[0] || allArtifacts[0] || "(산출물 생산 폴더 대본)";
+			return {
+				reason:
+					`[Harness] ${ARTIFACT_DRIFT_MESSAGE}\n` +
+					`대본: ${item.scriptArg} (${check.state}) → 산출물: ${artifactLabel}`,
+			};
+		}
+	}
+
+	return null;
+}
+
+module.exports = {
+	destructiveGit,
+	catastrophicDelete,
+	commit,
+	gitPush,
+	emailSend,
+	prGuard,
+	deploy,
+	uncommittedArtifact,
+	loadArtifactExtensions,
+	loadArtifactScriptDirs,
+	DEFAULT_ARTIFACT_EXTENSIONS,
+	DEFAULT_ARTIFACT_SCRIPT_DIRS,
+	ARTIFACT_DRIFT_MESSAGE,
+	PR_FAIL_REASON,
+};

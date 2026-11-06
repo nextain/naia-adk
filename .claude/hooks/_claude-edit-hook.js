@@ -38,7 +38,12 @@ async function runEditHook(policy) {
 	}
 
 	const toolName = data.tool_name || "";
-	if (toolName !== "Edit" && toolName !== "Write") {
+	if (
+		toolName !== "Edit" &&
+		toolName !== "Write" &&
+		toolName !== "NotebookEdit" &&
+		toolName !== "MultiEdit"
+	) {
 		process.exit(0);
 	}
 
