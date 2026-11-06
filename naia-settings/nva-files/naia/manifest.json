@@ -55,6 +55,18 @@
       "can_talk": false,
       "label": "별빛 환호",
       "clip": "clips/happy.webm"
+    },
+    "keyboard-idle": {
+      "clip": "clips/keyboard-idle.webm",
+      "loop": true,
+      "can_talk": false,
+      "label": "키보드 대기"
+    },
+    "singing-keyboard": {
+      "loop": false,
+      "can_talk": false,
+      "label": "키보드 치며 노래",
+      "clip": "clips/singing-keyboard.webm"
     }
   },
   "speech_clips": {
