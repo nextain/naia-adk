@@ -258,7 +258,7 @@ function main() {
   while (count < bytes.length) { const read = fs.readSync(0, bytes, count, bytes.length - count, null); if (!read) break; count += read; }
   let input;
   if (count <= MAX_INPUT_BYTES) { try { input = JSON.parse(bytes.toString("utf8", 0, count)); } catch {} }
-  const output = count > MAX_INPUT_BYTES ? halt(eventName, "훅 입력 크기 제한 초과") : evaluate(input, { eventName, policyFile });
+  const output = count > MAX_INPUT_BYTES ? unverifiedAdvice(eventName, "invalid_input", policyFile || process.env.NAIA_COST_GUARD_POLICY || process.env.CLAUDE_COST_POLICY, "oversized-input", Date.now() / 1000) : evaluate(input, { eventName, policyFile });
   if (output) process.stdout.write(JSON.stringify(output) + "\n");
 }
 module.exports = { evaluate, halt, runtimeIdentity, unsupportedEnvironment, loadPolicy, validateMeter, inspectMeter, aggregateCurrent, DEFAULT_LIMITS, MAX_INPUT_BYTES };

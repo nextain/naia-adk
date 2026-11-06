@@ -75,6 +75,18 @@ test("cost guard blocks missing, malformed and invalid policies on every registe
   }
 });
 
+test("cost guard does not stop the session when a tool result exceeds the hook input limit", async () => {
+  // A full-size screenshot Read made PostToolUse input exceed 128 KiB and the
+  // guard halted the session as if the account were blocked (2026-11-06).
+  const f = fixture();
+  const big = { hook_event_name: "PostToolUse", session_id: "test", tool_name: "Read", tool_response: "x".repeat(200 * 1024) };
+  for (const event of ["PostToolUse", "PreToolUse", "UserPromptSubmit"]) {
+    const out = await invoke("cost-guard.cjs", { ...big, hook_event_name: event }, f, { NAIA_COST_GUARD_POLICY: path.join(f.config, "cost-guard/policy.json") }, [event]);
+    assert.notEqual(out?.continue, false, JSON.stringify(out));
+    assert.notEqual(out?.decision, "block", JSON.stringify(out));
+  }
+});
+
 test("cost guard preserves verified account blocks and permits matching fixture account", async () => {
   const f = fixture();
   const policyFile = path.join(f.config, "cost-guard/policy.json");
