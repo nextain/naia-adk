@@ -373,51 +373,6 @@ async function deploy(command, data, opts) {
 		}
 	}
 
-	const useLegacyApprovals =
-		fs.existsSync(APPROVALS_PATH) &&
-		!process.env.DEPLOY_READINESS_ROOT &&
-		!process.env.DEPLOY_APPROVAL_STATE_DIR &&
-		!fs.existsSync(path.join(root, "config", "deploy-gate.json")) &&
-		!hasAnyDeployPlan(root);
-
-	if (useLegacyApprovals) {
-		let matchedPattern = null;
-		for (const p of PROD_PATTERNS) { if (p.pattern.test(stripped)) { matchedPattern = p; break; } }
-		if (!matchedPattern) return null;
-		const project = detectProject(stripped, config, cwd);
-		const approval = findApproval(project);
-		if (approval) {
-			appendAudit({
-				event: "executed", project: project || "unknown", session: sessionId,
-				command: stripped.substring(0, 200), original_command: command.substring(0, 200),
-				approved_by: approval.approved_by, approval_expires: approval.expires_at,
-			});
-			if (approval.single_use) {
-				consumeApproval(project, approval.approved_at);
-				appendAudit({ event: "approval_consumed", project: project || "unknown", single_use: true });
-			}
-			return null;
-		}
-		appendAudit({
-			event: "blocked", project: project || "unknown",
-			command: stripped.substring(0, 200), session: sessionId,
-			reason: project ? "no_approval" : "unknown_project",
-		});
-		const projectLabel = project || "(project not detected from cwd)";
-		const remainingMin = config.default_ttl_minutes || 30;
-		return {
-			reason:
-				`[Harness] prod 배포 명령 차단: \`${matchedPattern.label}\`\n` +
-				`프로젝트: ${projectLabel}\n\n` +
-				"prod 배포는 사전 승인이 필요합니다.\n\n" +
-				"승인 방법:\n" +
-				`  1. .claude/deploy/approvals.json에 "${project || "project"}" 승인 항목 추가\n` +
-				`  2. 또는 .claude/deploy/prod-deploy.sh 사용\n\n` +
-				`승인 TTL: ${remainingMin}분\n` +
-				"AI는 prod 배포를 직접 실행하지 않습니다.",
-		};
-	}
-
 	const hooksLibDir = path.resolve(__dirname, "..", "..", "..", ".claude", "hooks", "lib");
 	const { shellClauses } = require(path.join(hooksLibDir, "git-command-parser.js"));
 	const { classifyProdMutations, clauseText, executedShellFile, SCRIPT_READ_LIMIT } = require(path.join(hooksLibDir, "deploy-command-classifier.js"));
@@ -425,9 +380,58 @@ async function deploy(command, data, opts) {
 	const { assessReadiness, loadDeployGateConfig, TEMPLATE: READINESS_TEMPLATE } = require(path.join(hooksLibDir, "deploy-readiness.js"));
 	const deployPlan = require(path.join(hooksLibDir, "deploy-plan.js"));
 
+	const useLegacyApprovals =
+		fs.existsSync(APPROVALS_PATH) &&
+		!process.env.DEPLOY_READINESS_ROOT &&
+		!process.env.DEPLOY_APPROVAL_STATE_DIR &&
+		!fs.existsSync(path.join(root, "config", "deploy-gate.json")) &&
+		!hasAnyDeployPlan(root);
+
+	let precomputedMutations = null;
+	if (useLegacyApprovals) {
+		let matchedPattern = null;
+		for (const p of PROD_PATTERNS) { if (p.pattern.test(stripped)) { matchedPattern = p; break; } }
+		if (matchedPattern) {
+			const project = detectProject(stripped, config, cwd);
+			const approval = findApproval(project);
+			if (approval) {
+				appendAudit({
+					event: "executed", project: project || "unknown", session: sessionId,
+					command: stripped.substring(0, 200), original_command: command.substring(0, 200),
+					approved_by: approval.approved_by, approval_expires: approval.expires_at,
+				});
+				if (approval.single_use) {
+					consumeApproval(project, approval.approved_at);
+					appendAudit({ event: "approval_consumed", project: project || "unknown", single_use: true });
+				}
+				return null;
+			}
+			appendAudit({
+				event: "blocked", project: project || "unknown",
+				command: stripped.substring(0, 200), session: sessionId,
+				reason: project ? "no_approval" : "unknown_project",
+			});
+			const projectLabel = project || "(project not detected from cwd)";
+			const remainingMin = config.default_ttl_minutes || 30;
+			return {
+				reason:
+					`[Harness] prod 배포 명령 차단: \`${matchedPattern.label}\`\n` +
+					`프로젝트: ${projectLabel}\n\n` +
+					"prod 배포는 사전 승인이 필요합니다.\n\n" +
+					"승인 방법:\n" +
+					`  1. .claude/deploy/approvals.json에 "${project || "project"}" 승인 항목 추가\n` +
+					`  2. 또는 .claude/deploy/prod-deploy.sh 사용\n\n` +
+					`승인 TTL: ${remainingMin}분\n` +
+					"AI는 prod 배포를 직접 실행하지 않습니다.",
+			};
+		}
+		precomputedMutations = classifyProdMutations(command, cwd);
+		if (precomputedMutations.length === 0) return null;
+	}
+
 	const hits = [];
 	const clauses = shellClauses(command);
-	for (const hit of classifyProdMutations(command, cwd)) hits.push(hit);
+	for (const hit of (precomputedMutations || classifyProdMutations(command, cwd))) hits.push(hit);
 	if (hits.length === 0) {
 		for (const tokens of clauses) {
 			if (tokens.length === 0 || /^(?:echo|printf)$/.test(tokens[0])) continue;

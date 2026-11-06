@@ -406,3 +406,75 @@ test("7. approval-plan.mjs CLI (template, check, report, preapprove, step-ok) �
 	assert.equal(stepOkRes.status, 0, stepOkRes.stderr);
 	assert.match(stepOkRes.stdout, /단계 s1 성공 확인 기록/);
 });
+
+test("8. 차단 1 재현: 옛 승인(approvals.json) 분기에서도 설정·계획서 없이 운영 명령(az/ssh 등) 실행 시 차단", async (t) => {
+	const { root } = makeWorkspace(t);
+	const P = require(path.join(REPO_ROOT, ".agents/hooks/policies/bash.js"));
+	const deployDir = path.join(root, ".claude", "deploy");
+	fs.mkdirSync(deployDir, { recursive: true });
+	fs.writeFileSync(path.join(deployDir, "config.json"), JSON.stringify({ projects: {} }, null, 2));
+	fs.writeFileSync(path.join(deployDir, "approvals.json"), JSON.stringify({ approvals: [] }, null, 2));
+
+	const savedReadinessRoot = process.env.DEPLOY_READINESS_ROOT;
+	const savedStateDir = process.env.DEPLOY_APPROVAL_STATE_DIR;
+	const savedAuditPath = process.env.DEPLOY_AUDIT_PATH;
+	delete process.env.DEPLOY_READINESS_ROOT;
+	delete process.env.DEPLOY_APPROVAL_STATE_DIR;
+	process.env.DEPLOY_AUDIT_PATH = path.join(deployDir, "audit.jsonl");
+	t.after(() => {
+		if (savedReadinessRoot === undefined) delete process.env.DEPLOY_READINESS_ROOT;
+		else process.env.DEPLOY_READINESS_ROOT = savedReadinessRoot;
+		if (savedStateDir === undefined) delete process.env.DEPLOY_APPROVAL_STATE_DIR;
+		else process.env.DEPLOY_APPROVAL_STATE_DIR = savedStateDir;
+		if (savedAuditPath === undefined) delete process.env.DEPLOY_AUDIT_PATH;
+		else process.env.DEPLOY_AUDIT_PATH = savedAuditPath;
+	});
+
+	// approvals.json 만 있고 config/deploy-gate.json 및 계획서가 없는 상태에서 az 운영 명령 실행
+	const cmd = "az containerapp update -n sample-web-prod -g rg --image x:v1";
+	const res = await P.deploy(cmd, { cwd: root, session_id: "legacy-bypass-test" }, { deployDir });
+	assert.ok(res && res.reason, "approvals.json 만 있는 레거시 상태에서도 az 운영 명령은 통과(null)하면 안 되고 차단되어야 함");
+	assert.match(res.reason, /계획 밖 운영 명령이라 막습니다|알 수 없는 운영 명령은 막음/);
+	assert.match(res.reason, /azure:containerapp:sample-web-prod/);
+});
+
+test("9. 차단 2 재현: classifyInstanceExtension 플러그인 로드 실패·정규식 오류 때 unclassified 차단 및 prodPatterns 적중 보존", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+
+	// 9-A) prodPatterns 적중 + 깨진 plugin 경로 → prodPatterns 적중 보존 + unclassified 적중으로 blocked-unclassified 차단
+	writeGateConfig(root, {
+		prodPatterns: [
+			{ pattern: "\\bcustom-deploy-cli\\s+--prod\\b", service: "custom:prod-svc", summary: "커스텀 운영 배포" },
+		],
+		plugin: "config/missing-plugin.cjs",
+	});
+	const cmd = "custom-deploy-cli --prod";
+	const hits = classifyProdMutations(cmd, root);
+	assert.ok(hits.some((h) => h.service === "custom:prod-svc"), "이미 모은 prodPatterns 적중을 버리지 않아야 함");
+	assert.ok(hits.some((h) => h.unclassified), "플러그인 로드 실패 시 unclassified 적중을 내야 함");
+
+	const d1 = runDeployGuardHook(cmd, { cwd: root, root, stateDir, transcriptPath });
+	assert.ok(d1, "플러그인 로드 실패 시 통과(null)하면 안 되고 차단되어야 함");
+	assert.equal(d1.decision, "block");
+	assert.match(d1.reason, /운영 도구가 보이지만 대상을 분류하지 못해 차단합니다/);
+
+	const auditLines = fs.readFileSync(path.join(stateDir, "audit.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+	assert.ok(auditLines.some((e) => e.event === "blocked-unclassified"), "blocked-unclassified 감사 로그가 남아야 함");
+
+	// 9-B) 잘못된 prodPatterns 정규식 + 정상 prodPatterns → 정상 적중 보존 + 정규식 오류 unclassified 적중
+	writeGateConfig(root, {
+		prodPatterns: [
+			{ pattern: "\\bcustom-deploy-cli\\s+--prod\\b", service: "custom:prod-svc", summary: "커스텀 운영 배포" },
+			{ pattern: "[invalid-regex", service: "custom:bad-regex", summary: "잘못된 정규식" },
+		],
+	});
+	const regexHits = classifyProdMutations(cmd, root);
+	assert.ok(regexHits.some((h) => h.service === "custom:prod-svc"), "유효한 prodPatterns 적중은 보존되어야 함");
+	assert.ok(regexHits.some((h) => h.unclassified), "정규식 오류 시 unclassified 적중을 내야 함");
+
+	const d2 = runDeployGuardHook(cmd, { cwd: root, root, stateDir, transcriptPath });
+	assert.ok(d2);
+	assert.equal(d2.decision, "block");
+	assert.match(d2.reason, /운영 도구가 보이지만 대상을 분류하지 못해 차단합니다/);
+});
+

@@ -1095,34 +1095,58 @@ function classifyGeneralCloudCli(tokens) {
 
 /** 인스턴스 확장(config/deploy-gate.json 의 prodPatterns 및 선택 플러그인 classifyCommand). */
 function classifyInstanceExtension(command, tokens, dir, assigns) {
+	const hits = [];
+	const clause = clauseText(tokens, assigns);
+	const pushErrorHit = (msg) => {
+		hits.push({
+			service: "unclassified:instance-extension",
+			label: `분류 불가: 인스턴스 확장 오류(${msg})`,
+			clause,
+			unclassified: true,
+			tool: "instance-extension",
+		});
+	};
 	try {
-		const { loadDeployGateConfig, loadDeployGatePlugin } = require("./deploy-readiness.js");
+		const { deployGateConfigPath, loadDeployGateConfig, loadDeployGatePlugin } = require("./deploy-readiness.js");
 		const root = process.env.DEPLOY_READINESS_ROOT || dir;
+		const cfgPath = deployGateConfigPath(root);
 		const cfg = loadDeployGateConfig(root);
-		if (!cfg) return [];
-		const hits = [];
-		const clause = clauseText(tokens, assigns);
+		if (!cfg) {
+			if (cfgPath && fs.existsSync(cfgPath)) {
+				pushErrorHit("config/deploy-gate.json 파싱 실패");
+			}
+			return hits;
+		}
 		if (Array.isArray(cfg.prodPatterns)) {
 			for (const p of cfg.prodPatterns) {
 				if (!p || typeof p.pattern !== "string" || !p.service) continue;
-				const re = new RegExp(p.pattern, "i");
-				if (re.test(clause) || re.test(command)) {
-					hits.push({ service: String(p.service), label: String(p.summary || p.label || p.service), clause });
+				try {
+					const re = new RegExp(p.pattern, "i");
+					if (re.test(clause) || re.test(command)) {
+						hits.push({ service: String(p.service), label: String(p.summary || p.label || p.service), clause });
+					}
+				} catch (err) {
+					pushErrorHit(`prodPatterns 정규식 오류(${p.service}): ${err && err.message ? err.message : String(err)}`);
 				}
 			}
 		}
-		const plugin = loadDeployGatePlugin(root, cfg);
-		if (plugin && typeof plugin.classifyCommand === "function") {
-			const res = plugin.classifyCommand(command, { tokens, assigns, dir, root, config: cfg, clause });
-			for (const h of Array.isArray(res) ? res : res ? [res] : []) {
-				if (h && typeof h.service === "string" && h.service) {
-					hits.push({ ...h, label: h.label || h.summary || h.service, clause: h.clause || clause });
+		try {
+			const plugin = loadDeployGatePlugin(root, cfg);
+			if (plugin && typeof plugin.classifyCommand === "function") {
+				const res = plugin.classifyCommand(command, { tokens, assigns, dir, root, config: cfg, clause });
+				for (const h of Array.isArray(res) ? res : res ? [res] : []) {
+					if (h && typeof h.service === "string" && h.service) {
+						hits.push({ ...h, label: h.label || h.summary || h.service, clause: h.clause || clause });
+					}
 				}
 			}
+		} catch (err) {
+			pushErrorHit(`플러그인 오류: ${err && err.message ? err.message : String(err)}`);
 		}
 		return hits;
-	} catch {
-		return [];
+	} catch (err) {
+		pushErrorHit(err && err.message ? err.message : String(err));
+		return hits;
 	}
 }
 
