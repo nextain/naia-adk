@@ -1564,7 +1564,8 @@ function executedShellFile(tokens, cwd, dirKnown = true, root = "", anySize = fa
 		// 읽는 한도는 scriptText 와 같다. 한도를 넘는 파일은 배포 훅이 따로 막는다(구현 검수 3번).
 		if (!st.isFile() || (!anySize && st.size > SCRIPT_READ_LIMIT)) return null;
 		if (!viaShell) {
-			const head = fs.readFileSync(file, "utf8").slice(0, 200);
+			// 셸 대본인지는 앞부분만 보면 된다. 크기 상관없이 받는 길(anySize)에서 큰 파일 전체를 읽지 않는다(#98 PC 검수 P2).
+			const head = readHead(file, 256);
 			if (!/\.(?:sh|bash)$/.test(file) && !/^#!.*\b(?:ba|z|da)?sh\b/.test(head)) return null;
 		}
 		return file;
@@ -1761,6 +1762,17 @@ function selectCaseArms(text, args, callerText = "", assigns = []) {
 }
 
 const SCRIPT_READ_LIMIT = 1024 * 1024;
+/** 파일 앞 n 바이트만 글로 읽는다. */
+function readHead(file, n) {
+	const fd = fs.openSync(file, "r");
+	try {
+		const buf = Buffer.alloc(n);
+		const got = fs.readSync(fd, buf, 0, n, 0);
+		return buf.subarray(0, got).toString("utf8");
+	} finally {
+		fs.closeSync(fd);
+	}
+}
 /** 스크립트 파일 전체 글(1MB 까지). 못 읽으면 빈 글. */
 function scriptText(file) {
 	try {

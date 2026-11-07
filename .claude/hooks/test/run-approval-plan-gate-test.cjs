@@ -1001,3 +1001,31 @@ test("중첩 대본: 4단계 감싼 운영 변경과 1MB 넘는 안쪽 대본은
 	write("plain.sh", "echo hi");
 	assert.deepEqual(classifyProdMutations("bash ./plain.sh", root), []);
 });
+
+test("큰 실행 파일: 셸 대본인지 볼 때 앞부분만 읽고 전체를 읽지 않음 (#98 PC 검수 P2)", (t) => {
+	const { root } = makeWorkspace(t);
+	writeGateConfig(root);
+	const f = path.join(root, "big-tool");
+	fs.writeFileSync(f, Buffer.alloc(2 * 1024 * 1024 + 10, 0x41));
+	fs.chmodSync(f, 0o755);
+	let maxRead = 0;
+	const origRead = fs.readFileSync;
+	const origReadSync = fs.readSync;
+	fs.readFileSync = function (p, ...rest) {
+		const out = origRead.call(fs, p, ...rest);
+		if (String(p) === f) maxRead = Math.max(maxRead, out.length);
+		return out;
+	};
+	fs.readSync = function (fd, buf, off, len, pos) {
+		const n = origReadSync.call(fs, fd, buf, off, len, pos);
+		maxRead = Math.max(maxRead, n);
+		return n;
+	};
+	try {
+		classifyProdMutations("./big-tool --run", root);
+	} finally {
+		fs.readFileSync = origRead;
+		fs.readSync = origReadSync;
+	}
+	assert.ok(maxRead <= 4096, `큰 파일을 ${maxRead} 바이트 읽음`);
+});
