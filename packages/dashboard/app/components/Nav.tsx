@@ -128,7 +128,7 @@ export function Nav({
 
       <div className="ml-auto flex items-center gap-1 sm:gap-3 shrink-0">
         {/* 개발자용 화면은 뒤로 뺀다. 좁은 화면에서는 숨긴다. */}
-        <div className="hidden md:flex items-center gap-1">
+        <div className="hidden xl:flex items-center gap-1">
           <span className="px-2 text-xs text-neutral-600 whitespace-nowrap">개발자 도구</span>
           <Link href="/" className={tabClass(pathname === "/")}>
             Overview
