@@ -1,1 +1,88 @@
 @import "tailwindcss";
+
+html {
+  color-scheme: dark;
+}
+
+html[data-font-size="sm"] {
+  font-size: 14px;
+}
+
+html[data-font-size="md"] {
+  font-size: 16px;
+}
+
+html[data-font-size="lg"] {
+  font-size: 18px;
+}
+
+html[data-font-size="xl"] {
+  font-size: 20px;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+
+  /* 라이트 테마 무채색 팔레트 (본문·보조 글자 모두 WCAG AA 4.5:1 이상) */
+  --color-white: #09090b;
+  --color-neutral-50: #09090b;
+  --color-neutral-100: #18181b;
+  --color-neutral-200: #27272a;
+  --color-neutral-300: #3f3f46;
+  --color-neutral-400: #4b5563;
+  --color-neutral-500: #52525b;
+  --color-neutral-600: #52525b;
+  --color-neutral-700: #cbd5e1;
+  --color-neutral-800: #e2e8f0;
+  --color-neutral-900: #f1f5f9;
+  --color-neutral-950: #ffffff;
+
+  /* 라이트 테마 강조색 팔레트 (흰 배경 및 밝은 배지 위 WCAG AA 4.5:1 이상) */
+  --color-amber-300: #92400e;
+  --color-amber-400: #92400e;
+  --color-amber-500: #92400e;
+  --color-amber-900: #fcd34d;
+  --color-amber-950: #fef3c7;
+
+  --color-blue-200: #1e3a8a;
+  --color-blue-300: #1e40af;
+  --color-blue-400: #1d4ed8;
+  --color-blue-500: #1d4ed8;
+  --color-blue-600: #2563eb;
+  --color-blue-900: #93c5fd;
+  --color-blue-950: #dbeafe;
+
+  --color-emerald-300: #065f46;
+  --color-emerald-400: #047857;
+  --color-emerald-900: #6ee7b7;
+  --color-emerald-950: #d1fae5;
+
+  --color-green-400: #166534;
+  --color-green-900: #86efac;
+
+  --color-red-300: #991b1b;
+  --color-red-400: #b91c1c;
+  --color-red-900: #fca5a5;
+  --color-red-950: #fee2e2;
+
+  --color-rose-300: #9f1239;
+  --color-rose-400: #be123c;
+  --color-rose-900: #fda4af;
+  --color-rose-950: #ffe4e6;
+
+  --color-purple-400: #6d28d9;
+  --color-purple-900: #d8b4fe;
+
+  --color-pink-400: #be185d;
+  --color-sky-400: #0369a1;
+}
+
+/* 파란 배경 주요 동작 단추([저장], [메모])는 라이트 테마에서도 흰색 글자를 유지한다 */
+html[data-theme="light"] .bg-blue-600.text-white {
+  color: #ffffff;
+}
+
+/* 처리된 메모 등 흐림 표시 카드도 라이트 테마에서 글자 대비(4.5:1 이상)를 유지한다 */
+html[data-theme="light"] .opacity-70 {
+  opacity: 0.88;
+}
