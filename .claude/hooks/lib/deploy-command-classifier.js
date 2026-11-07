@@ -1771,10 +1771,19 @@ function scriptText(file) {
 	}
 }
 
+function scriptTooLarge(file) {
+	try {
+		return fs.statSync(file).size > SCRIPT_READ_LIMIT;
+	} catch {
+		return false;
+	}
+}
+
 /** 운영 변경 명령 목록을 돌려준다. 없으면 빈 배열. */
 function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, rootDir = "") {
 	const found = [];
-	if (depth > 3) return found;
+	// 중첩 한도를 넘으면 안을 읽지 않으므로 확인 불가로 막는다(빈 결과로 통과시키지 않음, #95 검수 4단계 감싸기).
+	if (depth > 3) return String(command || "").trim() ? [{ service: "unclassified:depth-limit", label: "분류 불가: 셸 대본 중첩이 3단계를 넘어 안의 명령을 확인할 수 없음", clause: "", unclassified: true, tool: "depth-limit" }] : found;
 	const gateRoot = rootDir || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(cwd);
 	// 앞 절의 cd 를 따라간다(설계 검수 6회차 2번): "cd <워크트리> && ./deploy/vm/deploy.sh prod" 는
 	// 세션 cwd 가 아니라 그 워크트리의 스크립트다. 배포 준비 기록은 이 경로의 저장소 HEAD 를 본다.
@@ -1813,11 +1822,16 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 					if (hit) found.push({ ...hit, clause: clauseText(tokens, assigns) });
 					else {
 						// 로컬 셸 스크립트 파일을 실행하면 그 안의 명령도 본다(설계 검수 8회차 4번: 운영 배포를 스크립트 파일로 감싸면 안 보였음).
-						const file = executedShellFile(tokens, dir, dirKnown, command);
+						const file = executedShellFile(tokens, dir, dirKnown, command, true);
 						// 파일 전체를 한 번에 읽는다. 파서가 줄바꿈·주석·heredoc 을 bash 처럼 다루므로, 파일 안의 "bash <<EOF" 본문도 셸 프로그램으로 읽힌다(설계 검수 11회차 2번).
 						// 대상이 변수인 명령은, 스크립트를 부른 낱말(스크립트 이름, 뒤 인자, 앞의 KEY=value 값)에 dev 같은 운영 아닌 표시가 있고
 						// prod 표시가 없으면 운영이 아니다.
 						const nonProdCall = file && invokedNonProd(tokens, file, assigns);
+						// 안쪽 대본이 읽기 한도보다 크면 확인 불가로 막는다(바깥 크기 검사는 첫 단계 대본만 봄, #95 검수 1MB 감싸기).
+						if (file && scriptTooLarge(file)) {
+							found.push({ service: "unclassified:script-too-large", label: `분류 불가: 대본이 커서(${SCRIPT_READ_LIMIT / 1024 / 1024}MB 넘음) 안을 읽지 않음(${path.basename(file)})`, clause: clauseText(tokens, assigns), unclassified: true, tool: "script-too-large", file });
+							continue;
+						}
 						const text = file ? selectCaseArms(scriptText(file), scriptArgs(tokens), command, assigns) : "";
 						if (file) for (const h of classifyProdMutations(text, dir, depth + 1, true, gateRoot)) {
 							if (h.variable && variableTargetIsNonProd(h.variable, text, dir, nonProdCall, assigns)) continue;

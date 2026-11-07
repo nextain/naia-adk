@@ -963,3 +963,41 @@ test("16. 2회차 지적 2 재현: 사전승인(preapprove_steps)에서 s1 미�
 
 
 
+
+test("중첩 대본: 4단계 감싼 운영 변경과 1MB 넘는 안쪽 대본은 확인 불가로 막힘 (#95 검수)", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root);
+	const prodCmd = "az containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1";
+	const write = (name, body) => {
+		const f = path.join(root, name);
+		fs.writeFileSync(f, `#!/usr/bin/env bash\n${body}\n`);
+		fs.chmodSync(f, 0o755);
+		return f;
+	};
+
+	// 대조: 직접·2단계는 운영 변경으로 잡힌다
+	write("l1.sh", prodCmd);
+	write("l2.sh", "bash ./l1.sh");
+	assert.ok(classifyProdMutations("bash ./l2.sh", root).some((h) => !h.unclassified), "2단계 감싸기는 운영 변경으로 잡혀야 함");
+
+	// 4단계: 안을 못 읽으면 빈 결과가 아니라 확인 불가
+	write("l3.sh", "bash ./l2.sh");
+	write("l4.sh", "bash ./l3.sh");
+	const deepHits = classifyProdMutations("bash ./l4.sh", root);
+	assert.ok(deepHits.length > 0, "4단계 감싸기가 빈 결과로 통과하면 안 됨");
+	const deepDecision = runDeployGuardHook("bash ./l4.sh", { cwd: root, root, stateDir, transcriptPath });
+	assert.ok(deepDecision && deepDecision.decision === "block", `4단계 감싸기는 막혀야 함: ${JSON.stringify(deepDecision)}`);
+
+	// 1MB 넘는 대본을 작은 대본 한 겹으로 부름
+	write("big.sh", `${prodCmd}\n${"# pad\n".repeat(200000)}`);
+	assert.ok(fs.statSync(path.join(root, "big.sh")).size > 1024 * 1024);
+	write("small.sh", "bash ./big.sh");
+	const bigHits = classifyProdMutations("bash ./small.sh", root);
+	assert.ok(bigHits.some((h) => h.unclassified && h.service === "unclassified:script-too-large"), `큰 안쪽 대본은 확인 불가여야 함: ${JSON.stringify(bigHits)}`);
+	const bigDecision = runDeployGuardHook("bash ./small.sh", { cwd: root, root, stateDir, transcriptPath });
+	assert.ok(bigDecision && bigDecision.decision === "block", `작은 대본으로 감싼 큰 대본은 막혀야 함: ${JSON.stringify(bigDecision)}`);
+
+	// 운영 변경 없는 얕은 대본은 그대로 통과
+	write("plain.sh", "echo hi");
+	assert.deepEqual(classifyProdMutations("bash ./plain.sh", root), []);
+});
