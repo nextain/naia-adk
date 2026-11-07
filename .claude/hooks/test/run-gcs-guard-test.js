@@ -8,12 +8,22 @@ const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
-const HOOK = path.join(__dirname, "..", "gcs-guard.js");
+const os = require("os");
+
+// 훅은 자기 폴더의 gcs-guard.config.json 을 읽는다. 저장소마다 실설정이 다르므로
+// 임시 폴더에 훅과 예시 설정을 복사해 같은 조건에서 돌린다(#99).
+const HOOK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "gcs-guard-test-"));
+const HOOK = path.join(HOOK_DIR, "gcs-guard.js");
+fs.copyFileSync(path.join(__dirname, "..", "gcs-guard.js"), HOOK);
+fs.copyFileSync(path.join(__dirname, "..", "gcs-guard.config.example.json"), path.join(HOOK_DIR, "gcs-guard.config.json"));
+process.on("exit", () => fs.rmSync(HOOK_DIR, { recursive: true, force: true }));
+const HOOK_ENV = { ...process.env, CLAUDE_PROJECT_DIR: HOOK_DIR };
+delete HOOK_ENV.NAIA_ADK_ROOT;
 const FX = JSON.parse(fs.readFileSync(path.join(__dirname, "gcs-guard.fixtures.json"), "utf8"));
 
 function runHook(stdin) {
 	try {
-		const out = execFileSync("node", [HOOK], { input: stdin, encoding: "utf8" });
+		const out = execFileSync("node", [HOOK], { input: stdin, encoding: "utf8", env: HOOK_ENV, cwd: HOOK_DIR });
 		return out.trim();
 	} catch (e) {
 		return "__EXEC_ERROR__:" + (e.message || "");
