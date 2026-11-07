@@ -1,0 +1,28 @@
+{
+  "_comment": "gcs-guard 시험 자료. 버킷 이름은 gcs-guard.config.example.json 의 예시 이름만 쓴다(공개 저장소에 실버킷명 금지). 시험은 예시 설정으로 임시 폴더에서 훅을 돌린다.",
+  "cases": [
+    { "name": "lifecycle set 차단", "cmd": "gsutil lifecycle set rule.json gs://example-prod-bucket", "expect": "block" },
+    { "name": "gcloud lifecycle update 차단", "cmd": "gcloud storage buckets update gs://example-prod-bucket --lifecycle-file=rule.json", "expect": "block" },
+    { "name": "prod IAM 바인딩 차단", "cmd": "gcloud storage buckets add-iam-policy-binding gs://example-prod-bucket --member=allUsers --role=roles/storage.objectViewer", "expect": "block" },
+    { "name": "prod gsutil iam set 차단", "cmd": "gsutil iam set policy.json gs://example-prod-bucket", "expect": "block" },
+    { "name": "대량 storage class 변경 차단", "cmd": "gsutil -m rewrite -s coldline gs://example-prod-bucket/**", "expect": "block" },
+    { "name": "archive cp 차단", "cmd": "gsutil cp gs://example-archive-bucket/a.bin .", "expect": "block" },
+    { "name": "archive 따옴표 안 이름 cp 차단", "cmd": "gcloud storage cp \"gs://example-archive-bucket/a.bin\" .", "expect": "block" },
+    { "name": "archive du 차단", "cmd": "gsutil du -s gs://example-archive-bucket", "expect": "block" },
+    { "name": "archive 재귀 ls 차단", "cmd": "gsutil ls -r gs://example-archive-bucket", "expect": "block" },
+    { "name": "archive 단일 prefix ls 허용", "cmd": "gsutil ls gs://example-archive-bucket/2026/", "expect": "allow" },
+    { "name": "gcloud rsync -n 함정 차단", "cmd": "gcloud storage rsync -n ./out gs://other-bucket", "expect": "block" },
+    { "name": "gcloud rsync --dry-run 허용", "cmd": "gcloud storage rsync --dry-run ./out gs://other-bucket", "expect": "allow" },
+    { "name": "prod 대량 rsync 차단", "cmd": "gcloud storage rsync ./out gs://example-prod-bucket", "expect": "block" },
+    { "name": "prod rclone sync 차단", "cmd": "rclone sync ./out gcs:example-prod-bucket", "expect": "block" },
+    { "name": "prod 단일 파일 cp 허용", "cmd": "gsutil cp a.txt gs://example-prod-bucket/a.txt", "expect": "allow" },
+    { "name": "다른 버킷 cp 허용", "cmd": "gsutil cp gs://other-bucket/a.bin .", "expect": "allow" },
+    { "name": "GCS 아닌 명령 허용", "cmd": "ls -la", "expect": "allow" }
+  ],
+  "failopen": [
+    { "name": "빈 입력", "stdin": "" },
+    { "name": "JSON 아님", "stdin": "not json" },
+    { "name": "Bash 아닌 도구", "stdin": "{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"/x\"}}" },
+    { "name": "command 없음", "stdin": "{\"tool_name\":\"Bash\",\"tool_input\":{}}" }
+  ]
+}
