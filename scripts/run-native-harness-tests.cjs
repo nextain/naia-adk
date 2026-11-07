@@ -35,6 +35,7 @@ const runs=[
   ["BEH supervise wrapper",[".claude/hooks/test/run-beh-supervise-wrapper-test.js"]],
   ["BEH watchdog",[".claude/hooks/beh-watchdog.js","--selftest"]],
   ["GCS guard",[".claude/hooks/test/run-gcs-guard-test.js"]],
+  ["GCS fixture check",["scripts/test-gcs-fixture-check.cjs"]],
   ["request contract",["scripts/run-request-contract-tests.cjs"]]
 ];
 
@@ -52,9 +53,7 @@ for(const [label,args] of runs){
 }
 
 // 공개 시험 자료는 예시 버킷 이름만 쓴다(#99). 실버킷명이 섞이면 실패.
-const gcsFixture=fs.readFileSync(path.join(root,".claude","hooks","test","gcs-guard.fixtures.json"),"utf8");
-const gcsBuckets=new Set([...gcsFixture.matchAll(/(?:gs:\/\/|gcs:)([a-z0-9][a-z0-9._-]*)/g)].map(m=>m[1]));
-const privateBuckets=[...gcsBuckets].filter(name=>!/^(example-[a-z0-9-]+|other-bucket)$/.test(name));
+const privateBuckets=require("./gcs-fixture-check.cjs").findPrivateBuckets(JSON.parse(fs.readFileSync(path.join(root,".claude","hooks","test","gcs-guard.fixtures.json"),"utf8")));
 if(privateBuckets.length)throw new Error(`public naia-adk GCS fixture must use example bucket names only: ${privateBuckets.join(", ")}`);
 
 const entrypointPointers=["CLAUDE.md","GEMINI.md"].map(file=>fs.readFileSync(path.join(root,file),"utf8"));
