@@ -64,6 +64,17 @@ function writeFile(repoDir, relPath, content) {
 	const abs = path.join(repoDir, relPath);
 	fs.mkdirSync(path.dirname(abs), { recursive: true });
 	fs.writeFileSync(abs, content, "utf8");
+	if (relPath.includes(".agents/requirements/REQ-001")) {
+		const defaultArtifact = path.join(repoDir, "artifacts", "extracted-tables.json");
+		if (!fs.existsSync(defaultArtifact)) {
+			fs.mkdirSync(path.dirname(defaultArtifact), { recursive: true });
+			fs.writeFileSync(
+				defaultArtifact,
+				JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: 125000 }] }, null, 2) + "\n",
+				"utf8",
+			);
+		}
+	}
 }
 
 const BASE_REQ_YAML = `id: REQ-001-table-schema-stage
@@ -93,7 +104,7 @@ artifacts:
     intent_test:
       condition: "row_parse_error_rate <= 0.005 and amount_krw >= 0"
       test_path: "tests/extracted-tables-intent.test.mjs"
-      symbol: "extracted table rows maintain normalized KRW integers"
+      symbol: "verifyExtractedTablesIntent"
       receipt: null
 trace:
   code:
@@ -102,7 +113,7 @@ trace:
       coverage: full
   tests:
     - path: "tests/extracted-tables-intent.test.mjs"
-      symbol: "extracted table rows maintain normalized KRW integers"
+      symbol: "verifyExtractedTablesIntent"
       coverage: full
   reviews:
     planning: null
@@ -119,12 +130,18 @@ const UPDATED_DESIGN_REQ_YAML = BASE_REQ_YAML.replace(
 
 const BASE_TEST_CONTENT = `import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
-test("extracted table rows maintain normalized KRW integers", () => {
-  const row_parse_error_rate = 0.001;
-  const amount_krw = 125000;
+export function verifyExtractedTablesIntent() {
+  const data = JSON.parse(fs.readFileSync("artifacts/extracted-tables.json", "utf8"));
+  const row_parse_error_rate = data.row_parse_error_rate;
+  const amount_krw = data.rows[0].amount_krw;
   assert.ok(row_parse_error_rate <= 0.005);
   assert.ok(amount_krw >= 0);
+}
+
+test("extracted table rows maintain normalized KRW integers", () => {
+  verifyExtractedTablesIntent();
 });
 `;
 
@@ -406,7 +423,11 @@ describe("Design-Change Consumer / Upstream Artifact Intent Guard (intent-guard.
 		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", UPDATED_DESIGN_REQ_YAML);
 		const runRes = runCli(["--run-tests", "--cwd", repoDir], repoDir);
 		assert.equal(runRes.status, 0, `--run-tests should succeed: ${runRes.stderr}`);
-		git(repoDir, ["add", ".agents/requirements/REQ-001-table-schema-stage.yaml"]);
+		git(repoDir, [
+			"add",
+			".agents/requirements/REQ-001-table-schema-stage.yaml",
+			".agents/intent-receipts/REQ-001-table-schema-stage.json",
+		]);
 
 		const res = runHook(
 			{
@@ -517,6 +538,7 @@ describe("Design-Change Consumer / Upstream Artifact Intent Guard (intent-guard.
 			path.join(ROOT_DIR, ".users", "context", "agents-rules.md"),
 			__filename,
 		];
+		// [사소-S1] 회귀 방지 목적의 16진 인코딩 금지어 목록 (평문 도메인 용어가 저장소에 노출되지 않도록 유지)
 		const decodedBanned = [
 			Buffer.from("6261636b67726f756e642d6c6f6f70", "hex").toString("utf8"),
 			Buffer.from("636f6d706f7369746520726567696f6e", "hex").toString("utf8"),
@@ -562,7 +584,7 @@ describe("Design-Change Consumer / Upstream Artifact Intent Guard (intent-guard.
 		// 1) Hand-written receipt with only status: "pass" + design_sha256 (no runner proof / test_sha256 / exit_code)
 		writeFile(
 			repoDir,
-			".agents/progress/intent-receipts/REQ-001-table-schema-stage.json",
+			".agents/intent-receipts/REQ-001-table-schema-stage.json",
 			JSON.stringify({
 				requirement_id: "REQ-001-table-schema-stage",
 				artifact_id: "extracted-tables-json",
@@ -572,7 +594,11 @@ describe("Design-Change Consumer / Upstream Artifact Intent Guard (intent-guard.
 				ran_at: "2026-11-08T10:00:00Z",
 			}),
 		);
-		git(repoDir, ["add", ".agents/requirements/REQ-001-table-schema-stage.yaml"]);
+		git(repoDir, [
+			"add",
+			".agents/requirements/REQ-001-table-schema-stage.yaml",
+			".agents/intent-receipts/REQ-001-table-schema-stage.json",
+		]);
 
 		const forgedRes = runHook(
 			{
@@ -590,7 +616,7 @@ describe("Design-Change Consumer / Upstream Artifact Intent Guard (intent-guard.
 
 		const receiptRaw = JSON.parse(
 			fs.readFileSync(
-				path.join(repoDir, ".agents/progress/intent-receipts/REQ-001-table-schema-stage.json"),
+				path.join(repoDir, ".agents/intent-receipts/REQ-001-table-schema-stage.json"),
 				"utf8",
 			),
 		);
@@ -600,6 +626,11 @@ describe("Design-Change Consumer / Upstream Artifact Intent Guard (intent-guard.
 		assert.match(entry.test_sha256 || "", /^[a-f0-9]{64}$/);
 		assert.match(entry.run_proof || "", /^[a-f0-9]{64}$/);
 
+		git(repoDir, [
+			"add",
+			".agents/requirements/REQ-001-table-schema-stage.yaml",
+			".agents/intent-receipts/REQ-001-table-schema-stage.json",
+		]);
 		const passRes = runHook(
 			{
 				cwd: repoDir,
@@ -681,11 +712,11 @@ describe("Design-Change Consumer / Upstream Artifact Intent Guard (intent-guard.
 			repoDir,
 			"tests/extracted-tables-intent.test.mjs",
 			`import assert from "node:assert/strict";
-// extracted table rows maintain normalized KRW integers
-const row_parse_error_rate = 0.001;
-const amount_krw = 100;
-assert.ok(row_parse_error_rate <= 0.005);
-assert.ok(amount_krw >= 0);
+import fs from "node:fs";
+// verifyExtractedTablesIntent
+const data = JSON.parse(fs.readFileSync("artifacts/extracted-tables.json", "utf8"));
+assert.ok(data.row_parse_error_rate <= 0.005);
+assert.ok(data.rows[0].amount_krw >= 0);
 `,
 		);
 		git(repoDir, ["add", "."]);
@@ -706,9 +737,12 @@ assert.ok(amount_krw >= 0);
 			"tests/extracted-tables-intent.test.mjs",
 			`import test from "node:test";
 import assert from "node:assert/strict";
-test("extracted table rows maintain normalized KRW integers", () => {
+export function verifyExtractedTablesIntent() {
   // 0.005 and 0 in comment
   assert.ok(true);
+}
+test("extracted table rows maintain normalized KRW integers", () => {
+  verifyExtractedTablesIntent();
 });
 `,
 		);
@@ -729,11 +763,14 @@ test("extracted table rows maintain normalized KRW integers", () => {
 			"tests/extracted-tables-intent.test.mjs",
 			`import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+export function verifyExtractedTablesIntent() {
+  const data = JSON.parse(fs.readFileSync("artifacts/extracted-tables.json", "utf8"));
+  assert.ok(data.row_parse_error_rate <= 0.99);
+  assert.ok(data.rows[0].amount_krw >= 0);
+}
 test("extracted table rows maintain normalized KRW integers", () => {
-  const row_parse_error_rate = 0.1;
-  const amount_krw = 10;
-  assert.ok(row_parse_error_rate <= 0.99);
-  assert.ok(amount_krw >= 0);
+  verifyExtractedTablesIntent();
 });
 `,
 		);
@@ -848,9 +885,10 @@ test("extracted table rows maintain normalized KRW integers", () => {
 		);
 		assert.equal(retireNoReceipt.parsed?.decision, "block");
 
-		// With runner receipt, retiring passes
+		// With runner receipt staged in the same change set, retiring passes
 		const runRes = runCli(["--run-tests", "--cwd", repoDir], repoDir);
 		assert.equal(runRes.status, 0);
+		git(repoDir, ["add", ".agents/intent-receipts/REQ-001-table-schema-stage.json"]);
 		const retireWithReceipt = runHook(
 			{
 				cwd: repoDir,
@@ -968,5 +1006,497 @@ test("extracted table rows maintain normalized KRW integers", () => {
 		const elapsedMs = Date.now() - t0;
 		assert.equal(res.ok, true);
 		assert.ok(elapsedMs < 500, `checkRepositoryDesignIntent took too long: ${elapsedMs}ms`);
+	});
+
+	it("19. [차단 - 심각-R1 공개값 run_proof 재계산 위조 및 실패 시험 영수증 차단] 공개 상수·해시로 run_proof를 재계산한 위조 영수증과 실제 실행 시 실패하는 시험의 위조 영수증을 관문 재실행 및 출력 지문 대조로 차단한다", () => {
+		const crypto = require("node:crypto");
+		assert.equal(
+			policy.computeReceiptProof,
+			undefined,
+			"computeReceiptProof must not be exported publicly",
+		);
+
+		const repoDir = path.join(tmpRoot, "case-block-r1-proof-forgery");
+		initGitRepo(repoDir);
+		writeFile(
+			repoDir,
+			"artifacts/extracted-tables.json",
+			JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: 125000 }] }, null, 2) + "\n",
+		);
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", BASE_REQ_YAML);
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", BASE_TEST_CONTENT);
+		git(repoDir, ["add", "."]);
+		git(repoDir, ["commit", "-m", "initial"]);
+
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", UPDATED_DESIGN_REQ_YAML);
+		const newDoc = policy.parseRequirementDocument(UPDATED_DESIGN_REQ_YAML, "REQ-001-table-schema-stage");
+		const testBytes = fs.readFileSync(path.join(repoDir, "tests/extracted-tables-intent.test.mjs"), "utf8");
+		const testSha256 = crypto.createHash("sha256").update(testBytes, "utf8").digest("hex");
+		const fakeOutputSha256 = "a".repeat(64);
+		const ranAt = "2026-11-08T10:30:00.000Z";
+		const forgedProof = crypto
+			.createHash("sha256")
+			.update(
+				[
+					"naia-adk-intent-guard-receipt-v1",
+					"intent-guard-runner/v1",
+					"REQ-001-table-schema-stage",
+					"extracted-tables-json",
+					"tests/extracted-tables-intent.test.mjs",
+					newDoc.designDigest,
+					testSha256,
+					"0",
+					fakeOutputSha256,
+					ranAt,
+				].join("|"),
+				"utf8",
+			)
+			.digest("hex");
+
+		const forgedReceiptPayload = JSON.stringify(
+			{
+				runner: "intent-guard-runner/v1",
+				requirement_id: "REQ-001-table-schema-stage",
+				design_sha256: newDoc.designDigest,
+				ran_at: ranAt,
+				status: "pass",
+				artifacts: [
+					{
+						requirement_id: "REQ-001-table-schema-stage",
+						artifact_id: "extracted-tables-json",
+						path: "artifacts/extracted-tables.json",
+						test_path: "tests/extracted-tables-intent.test.mjs",
+						status: "pass",
+						exit_code: 0,
+						design_sha256: newDoc.designDigest,
+						test_sha256: testSha256,
+						output_sha256: fakeOutputSha256,
+						ran_at: ranAt,
+						runner: "intent-guard-runner/v1",
+						run_proof: forgedProof,
+					},
+				],
+			},
+			null,
+			2,
+		);
+		writeFile(repoDir, ".agents/intent-receipts/REQ-001-table-schema-stage.json", forgedReceiptPayload);
+		writeFile(repoDir, ".agents/progress/intent-receipts/REQ-001-table-schema-stage.json", forgedReceiptPayload);
+		git(repoDir, [
+			"add",
+			".agents/requirements/REQ-001-table-schema-stage.yaml",
+			".agents/intent-receipts/REQ-001-table-schema-stage.json",
+		]);
+
+		const resForgedProof = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'feat: forged run_proof receipt'" },
+			},
+			repoDir,
+		);
+		assert.equal(
+			resForgedProof.parsed?.decision,
+			"block",
+			"Receipt with recomputed run_proof and fabricated output_sha256 must be blocked",
+		);
+
+		// Subcase B: Test actually fails on execution (amount_krw < 0), even if test file was updated in the same commit
+		writeFile(
+			repoDir,
+			"artifacts/extracted-tables.json",
+			JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: -500 }] }, null, 2) + "\n",
+		);
+		writeFile(
+			repoDir,
+			"tests/extracted-tables-intent.test.mjs",
+			BASE_TEST_CONTENT + "\n// edited test but artifact violates amount_krw >= 0\n",
+		);
+		git(repoDir, ["add", "."]);
+		const resFailingTest = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'feat: failing test should be blocked by gate re-run'" },
+			},
+			repoDir,
+		);
+		assert.equal(
+			resFailingTest.parsed?.decision,
+			"block",
+			"Gate must re-run test at commit time and block when test exits non-zero",
+		);
+	});
+
+	it("20. [차단/통과 - 보통-R2 영수증 커밋 경로 및 CI 재현성] 기본 영수증 경로(.agents/intent-receipts/)가 gitignore 대상이 아니며 같은 변경 집합에 스테이지·커밋되어야 통과하고 깨끗한 체크아웃에서 --commit HEAD가 재현된다", () => {
+		const ignoreCheck = spawnSync(
+			"git",
+			["-C", ROOT_DIR, "check-ignore", "-q", ".agents/intent-receipts/REQ-001.json"],
+			{ encoding: "utf8" },
+		);
+		assert.notEqual(
+			ignoreCheck.status,
+			0,
+			".agents/intent-receipts/ must NOT be ignored by .gitignore",
+		);
+
+		const repoDir = path.join(tmpRoot, "case-r2-committed-receipt");
+		initGitRepo(repoDir);
+		writeFile(
+			repoDir,
+			"artifacts/extracted-tables.json",
+			JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: 125000 }] }, null, 2) + "\n",
+		);
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", BASE_REQ_YAML);
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", BASE_TEST_CONTENT);
+		git(repoDir, ["add", "."]);
+		git(repoDir, ["commit", "-m", "initial"]);
+
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", UPDATED_DESIGN_REQ_YAML);
+		const runRes = runCli(["--run-tests", "--cwd", repoDir], repoDir);
+		assert.equal(runRes.status, 0, `--run-tests failed: ${runRes.stderr}`);
+
+		const expectedReceiptRel = ".agents/intent-receipts/REQ-001-table-schema-stage.json";
+		assert.ok(
+			fs.existsSync(path.join(repoDir, expectedReceiptRel)),
+			"Runner must write receipt to committable .agents/intent-receipts/<REQ-ID>.json",
+		);
+
+		// Stage ONLY the requirement file without staging the receipt file -> must block!
+		git(repoDir, ["add", ".agents/requirements/REQ-001-table-schema-stage.yaml"]);
+		const unstagedReceiptRes = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'feat: unstaged receipt must block'" },
+			},
+			repoDir,
+		);
+		assert.equal(
+			unstagedReceiptRes.parsed?.decision,
+			"block",
+			"Receipt not staged in the same change set must be blocked",
+		);
+
+		// Stage the receipt file in the same change set -> passes commit and --commit HEAD even after worktree cleanup!
+		git(repoDir, ["add", expectedReceiptRel]);
+		const stagedReceiptRes = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'feat: staged receipt passes'" },
+			},
+			repoDir,
+		);
+		assert.equal(stagedReceiptRes.parsed, null, "Staged valid receipt must pass");
+		git(repoDir, ["commit", "-m", "feat: design change with committed receipt"]);
+
+		// Simulate clean CI checkout by deleting untracked/working-tree receipt cache if any, then run --commit HEAD
+		const ciCheck = runCli(["--commit", "HEAD", "--cwd", repoDir], repoDir);
+		assert.equal(ciCheck.status, 0, `--commit HEAD must succeed from committed receipt: ${ciCheck.stderr}`);
+		assert.match(ciCheck.stdout, /intent-guard: PASS/);
+	});
+
+	it("21. [차단 - 보통-R3/P2a/P2b/P3a 공허 상수 시험·문자열 리터럴 심볼/수치·다인자 상수 단언 차단] 산출물을 읽지 않는 상수 시험, 문자열 리터럴 안의 심볼·수치, assert.equal(1, 1)류를 모두 차단한다", () => {
+		const repoDir = path.join(tmpRoot, "case-r3-p2-p3-vacuous");
+		initGitRepo(repoDir);
+		writeFile(
+			repoDir,
+			"artifacts/extracted-tables.json",
+			JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: 125000 }] }, null, 2) + "\n",
+		);
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", BASE_REQ_YAML);
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", BASE_TEST_CONTENT);
+		git(repoDir, ["add", "."]);
+		git(repoDir, ["commit", "-m", "initial"]);
+
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", UPDATED_DESIGN_REQ_YAML);
+
+		// Subcase 1 [보통-R3]: Vacuous hardcoded constants without reading/referencing artifacts/extracted-tables.json
+		writeFile(
+			repoDir,
+			"tests/extracted-tables-intent.test.mjs",
+			`import test from "node:test";
+import assert from "node:assert/strict";
+export function verifyExtractedTablesIntent() {
+  const row_parse_error_rate = 0.001;
+  const amount_krw = 125000;
+  assert.ok(row_parse_error_rate <= 0.005);
+  assert.ok(amount_krw >= 0);
+}
+test("vacuous test", () => verifyExtractedTablesIntent());
+`,
+		);
+		git(repoDir, ["add", "."]);
+		const resVacuous = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'feat: vacuous constant test'" },
+			},
+			repoDir,
+		);
+		assert.equal(resVacuous.parsed?.decision, "block", "Vacuous constant test without reading artifact must be blocked");
+
+		// Subcase 2 [보통-P2a]: Symbol present only inside a string literal, not as an identifier
+		const reqWithIdentifierSymbol = UPDATED_DESIGN_REQ_YAML.replace(
+			/symbol:\s*"[^"]+"/,
+			'symbol: "verifyExtractedTablesIntent"',
+		);
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", reqWithIdentifierSymbol);
+		writeFile(
+			repoDir,
+			"tests/extracted-tables-intent.test.mjs",
+			`import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+test("verifyExtractedTablesIntent", () => {
+  const data = JSON.parse(fs.readFileSync("artifacts/extracted-tables.json", "utf8"));
+  assert.ok(data.row_parse_error_rate <= 0.005);
+  assert.ok(data.rows[0].amount_krw >= 0);
+});
+`,
+		);
+		git(repoDir, ["add", "."]);
+		const resStringSymbol = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'feat: symbol in string literal only'" },
+			},
+			repoDir,
+		);
+		assert.equal(
+			resStringSymbol.parsed?.decision,
+			"block",
+			"Symbol appearing only inside a string literal must be blocked",
+		);
+
+		// Subcase 3 [보통-P2b]: Multi-argument constant-to-constant assertions only (assert.equal(1, 1), assert.deepStrictEqual({}, {}))
+		writeFile(
+			repoDir,
+			"tests/extracted-tables-intent.test.mjs",
+			`import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+export function verifyExtractedTablesIntent() {
+  const data = JSON.parse(fs.readFileSync("artifacts/extracted-tables.json", "utf8"));
+  const threshold = 0.005;
+  const minVal = 0;
+  assert.equal(1, 1);
+  assert.deepStrictEqual({}, {});
+}
+test("constant-to-constant assertions", () => verifyExtractedTablesIntent());
+`,
+		);
+		git(repoDir, ["add", "."]);
+		const resConstAssert = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'feat: constant assertions only'" },
+			},
+			repoDir,
+		);
+		assert.equal(
+			resConstAssert.parsed?.decision,
+			"block",
+			"Multi-argument constant-to-constant assertions must be blocked",
+		);
+
+		// Subcase 4 [보통-P3a]: Numeric threshold (0.005) present only inside a string literal
+		writeFile(
+			repoDir,
+			"tests/extracted-tables-intent.test.mjs",
+			`import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+export function verifyExtractedTablesIntent() {
+  const data = JSON.parse(fs.readFileSync("artifacts/extracted-tables.json", "utf8"));
+  const description = "row_parse_error_rate <= 0.005";
+  assert.ok(data.row_parse_error_rate <= 0.5);
+  assert.ok(data.rows[0].amount_krw >= 0);
+}
+test("threshold in string literal", () => verifyExtractedTablesIntent());
+`,
+		);
+		git(repoDir, ["add", "."]);
+		const resStringThreshold = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'feat: threshold in string literal'" },
+			},
+			repoDir,
+		);
+		assert.equal(
+			resStringThreshold.parsed?.decision,
+			"block",
+			"Numeric threshold appearing only inside a string literal must be blocked",
+		);
+	});
+
+	it("22. [차단/정합 - 보통-R4/U1a/U2a/R5] find -exec 중첩 셸(sh -c), npx/pnpm/make 경유, git pull 감시 및 CI 워크플로·네이티브 하네스 연결을 모두 만족한다", () => {
+		const repoDir = path.join(tmpRoot, "case-r4-u1a-u2a-r5");
+		initGitRepo(repoDir);
+		writeFile(
+			repoDir,
+			"artifacts/extracted-tables.json",
+			JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: 125000 }] }, null, 2) + "\n",
+		);
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", BASE_REQ_YAML);
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", BASE_TEST_CONTENT);
+		writeFile(
+			repoDir,
+			"package.json",
+			JSON.stringify({ name: "tmp-pkg", scripts: { "commit-all": 'git commit -m "via npm script"' } }),
+		);
+		writeFile(repoDir, "Makefile", "commit-target:\n\tgit commit -m 'via makefile'\n");
+		git(repoDir, ["add", "."]);
+		git(repoDir, ["commit", "-m", "initial"]);
+
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", UPDATED_DESIGN_REQ_YAML);
+		git(repoDir, ["add", ".agents/requirements/REQ-001-table-schema-stage.yaml"]);
+
+		const cmds = [
+			`find . -maxdepth 0 -exec sh -c 'git commit -m "nested find sh"' \\;`,
+			`find . -maxdepth 0 -exec bash -c "git commit -m 'nested find bash'" \\;`,
+			`npx git commit -m "npx git commit"`,
+			`npm run commit-all`,
+			`pnpm commit-all`,
+			`make commit-target`,
+			`git pull origin main`,
+		];
+
+		for (const cmd of cmds) {
+			const res = runHook(
+				{
+					cwd: repoDir,
+					tool_name: "Bash",
+					tool_input: { command: cmd },
+				},
+				repoDir,
+			);
+			assert.equal(res.parsed?.decision, "block", `Command must be blocked: ${cmd}`);
+		}
+
+		// Guide documents pull / checkout / reset --hard
+		const guideText = fs.readFileSync(
+			path.join(ROOT_DIR, "docs", "guides", "design-intent-guard.md"),
+			"utf8",
+		);
+		assert.match(guideText, /pull/);
+		assert.match(guideText, /checkout/);
+		assert.match(guideText, /reset --hard/);
+
+		// CI workflow and run-native-harness-tests.cjs actually invoke intent-guard.js
+		const ciYml = fs.readFileSync(path.join(ROOT_DIR, ".github", "workflows", "ci.yml"), "utf8");
+		assert.match(ciYml, /intent-guard\.js/);
+		const nativeHarness = fs.readFileSync(
+			path.join(ROOT_DIR, "scripts", "run-native-harness-tests.cjs"),
+			"utf8",
+		);
+		assert.match(nativeHarness, /intent-guard\.js/);
+	});
+
+	it("23. [차단/통과 - 보통-U3a/사소-F1a] 설계·산출물 섹션을 통째로 지우는 2단계 우회 시도는 차단하고 정당한 git mv 파일 이동은 통과한다", () => {
+		const repoDir = path.join(tmpRoot, "case-u3a-two-step-delete");
+		initGitRepo(repoDir);
+		writeFile(
+			repoDir,
+			"artifacts/extracted-tables.json",
+			JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: 125000 }] }, null, 2) + "\n",
+		);
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", BASE_REQ_YAML);
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", BASE_TEST_CONTENT);
+		git(repoDir, ["add", "."]);
+		git(repoDir, ["commit", "-m", "initial"]);
+
+		// Step 1 of 2-step bypass: strip design and artifacts sections completely while keeping status: active
+		const strippedReq = `id: REQ-001-table-schema-stage
+title: "Stripped requirement"
+status: active
+`;
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", strippedReq);
+		git(repoDir, ["add", ".agents/requirements/REQ-001-table-schema-stage.yaml"]);
+
+		const resStripped = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'chore: strip design and artifacts sections'" },
+			},
+			repoDir,
+		);
+		assert.equal(
+			resStripped.parsed?.decision,
+			"block",
+			"Removing design/artifacts sections from a design-bearing requirement must be blocked",
+		);
+
+		// Legitimate git mv without changing design content passes
+		git(repoDir, ["reset", "--hard", "HEAD"]);
+		git(repoDir, [
+			"mv",
+			".agents/requirements/REQ-001-table-schema-stage.yaml",
+			".agents/requirements/REQ-001-table-schema-moved.yaml",
+		]);
+		const resMove = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'chore: rename requirement file via git mv'" },
+			},
+			repoDir,
+		);
+		assert.equal(resMove.parsed, null, "Legitimate git mv preserving requirement design must pass");
+	});
+
+	it("24. [정합 - 사소-C1a/C1b/C1c] bash.commit이 공용 추출기를 재사용하고 중복 옵션 집합이 없으며 예외 발생 시 stderr 경고 후 fail-open 한다", () => {
+		const repoDir = path.join(tmpRoot, "case-c1-abc");
+		initGitRepo(repoDir);
+		writeFile(
+			repoDir,
+			".agents/progress/issue-1.json",
+			JSON.stringify({ issue: "#1", current_phase: "build" }),
+		);
+
+		// [사소-C1a] bashPolicy.commit detects wrapped commit (`bash -c "git commit -m wip"`) via shared extractor
+		const commitRes = bashPolicy.commit('bash -c "git commit -m wip"', { cwd: repoDir });
+		assert.ok(
+			commitRes && commitRes.reason && commitRes.reason.includes("커밋 차단"),
+			"bash.commit must detect wrapped git commit via shared extractGitCommitInvocations",
+		);
+
+		// [사소-C1b] design-intent-guard.js does not define duplicate GIT_OPT_WITH_VALUE / GIT_OPT_NO_VALUE
+		const policySource = fs.readFileSync(
+			path.join(ROOT_DIR, ".agents", "hooks", "policies", "design-intent-guard.js"),
+			"utf8",
+		);
+		assert.doesNotMatch(policySource, /\bGIT_OPT_WITH_VALUE\b/);
+		assert.doesNotMatch(policySource, /\bGIT_OPT_NO_VALUE\b/);
+
+		// [사소-C1c] designIntentRecheck catches unexpected errors, writes warning to stderr, and returns null (fail-open)
+		const badData = {};
+		Object.defineProperty(badData, "cwd", {
+			get() {
+				throw new Error("simulated cwd getter failure");
+			},
+		});
+		let stderrCaptured = "";
+		const origWrite = process.stderr.write.bind(process.stderr);
+		process.stderr.write = (chunk, ...rest) => {
+			stderrCaptured += String(chunk);
+			return true;
+		};
+		let recRes;
+		try {
+			recRes = policy.designIntentRecheck("git commit -m test", badData);
+		} finally {
+			process.stderr.write = origWrite;
+		}
+		assert.equal(recRes, null, "designIntentRecheck must fail-open on unexpected exception");
+		assert.match(stderrCaptured, /simulated cwd getter failure|intent-guard/i);
 	});
 });

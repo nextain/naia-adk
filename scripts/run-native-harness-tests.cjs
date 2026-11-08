@@ -36,6 +36,8 @@ const runs=[
   ["BEH watchdog",[".claude/hooks/beh-watchdog.js","--selftest"]],
   ["GCS guard",[".claude/hooks/test/run-gcs-guard-test.js"]],
   ["GCS fixture check",["scripts/test-gcs-fixture-check.cjs"]],
+  ["design intent guard HEAD",[".claude/hooks/intent-guard.js","--commit","HEAD"]],
+  ["design intent guard worktree",[".claude/hooks/intent-guard.js","--worktree"]],
   ["request contract",["scripts/run-request-contract-tests.cjs"]]
 ];
 

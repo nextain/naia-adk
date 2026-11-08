@@ -50,8 +50,11 @@ const MIN_PHASE_FOR_COMMIT = "sync_verify";
 
 /** commit-guard — block git commit before sync_verify */
 function commit(command, data) {
-	if (!command.match(/(?:^|[;&|])\s*git\s+commit\b/)) return null;
 	const cwd = (data && data.cwd) || process.cwd();
+	const commitInvocations = extractGitCommitInvocations(command, cwd).filter(
+		(inv) => inv.subcommand === "commit",
+	);
+	if (commitInvocations.length === 0) return null;
 	const progressDir = path.join(cwd, ".agents", "progress");
 	if (!fs.existsSync(progressDir)) return null;
 	let latestFile = null;
@@ -2017,6 +2020,7 @@ const {
 	designIntentRecheck,
 	intentGuard,
 	checkRepositoryDesignIntent,
+	extractGitCommitInvocations,
 } = require("./design-intent-guard.js");
 
 module.exports = {

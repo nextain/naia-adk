@@ -20,8 +20,8 @@
 | 구분 | 파일 | 시점 | 역할 |
 | --- | --- | --- | --- |
 | 요구사항 양식 | `.agents/requirements/_template.yaml` | 요구사항 작성·변경 | `design` 칸과 `artifacts[].intent_test` (`condition`, `test_path`, `symbol`, `receipt`) 정의 |
-| 정책 모듈 | `.agents/hooks/policies/design-intent-guard.js` (`.agents/hooks/policies/bash.js`) | `git commit` / CLI | 요구사항 설계 칸 변경·폐기 감지 및 산출물별 (a) 의도 시험 기재, (b) 실제 시험 파일·단언문·기준값 정합성, (c) 동일 변경 내 재실행 확인 |
-| 훅 및 CLI 실행기 | `.claude/hooks/intent-guard.js` | `PreToolUse` (`Bash`) / CI | 커밋 전 차단, `--run-tests` 의도 시험 실행 영수증 발급, `--check` (`--staged`, `--worktree`, `--commit <rev>`) 검사 실행 |
+| 정책 모듈 | `.agents/hooks/policies/design-intent-guard.js` (`.agents/hooks/policies/bash.js`) | `git commit` / CLI | 요구사항 설계 칸 변경·폐기 감지 및 산출물별 (a) 의도 시험 기재, (b) 실제 시험 파일·식별자 심볼·단언문·기준값·산출물 실독 정합성, (c) 관문 재실행 및 영수증 확인 |
+| 훅 및 CLI 실행기 | `.claude/hooks/intent-guard.js` | `PreToolUse` (`Bash`) / CI | 커밋 전 차단, `--run-tests` 의도 시험 실행 영수증(`.agents/intent-receipts/<REQ-ID>.json`) 발급, `--check` (`--staged`, `--worktree`, `--commit <rev>`) 검사 실행 |
 | 거버넌스 규칙 | `.agents/context/agents-rules.json` (`conventions.design_intent_guard`) | 상시 | 파일 모양·개수만 보는 시험 금지 및 설계 변경 시 앞 단계 산출물 의도 시험 의무화 |
 
 ## 3. 어떻게 쓰는가 (요구사항 작성 규칙)
@@ -51,7 +51,7 @@ artifacts:
     intent_test:
       condition: "row_parse_error_rate <= 0.005 and amount_krw >= 0"
       test_path: "tests/extracted-tables-intent.test.mjs"
-      symbol: "extracted table rows maintain normalized KRW integers"
+      symbol: "verifyExtractedTablesIntent"
       receipt: null
 ```
 
@@ -60,24 +60,27 @@ artifacts:
 1. **내용 지표·비교 연산 기반 조건 판정 (파일 모양·개수 전용 조건 차단)**:
    - 판별기는 단순 금지어 블랙리스트에 의존하지 않고, `condition`이 **산출물의 내용 지표(속성·오차율·상태값)와 비교 연산자(`<=`, `>=`, `<`, `>`, `==`, `!=`, `=`, `이하`, `이상` 등) 및 구체적 기준값**을 포함하는지로 구조적 판정을 수행한다.
    - `"파일 존재 및 레코드 개수만 확인"`, `"파일이 존재한다"`, `"파일 있음"`, `"verify the file is present"`, `"file_count >= 1"`, `"파일 크기 >= 100B"`처럼 외형·존재·크기·개수만 가리키는 조건은 조사나 어미를 바꾸더라도 `(a)` 단계에서 차단된다.
-2. **실제 시험 파일(`test_path`) 및 코드·수치 교차 검증**:
-   - 주석을 제거한 실제 실행 코드 안에 `symbol`(지정 시), 비동어반복 단언문(`assert`/`expect`), 그리고 `condition`에 적힌 수치 기준값(예: `0.005`, `0`)이 실제로 등장해야 한다. 주석에만 심볼이나 숫자를 적어 넣거나 `assert.ok(true)`만 있는 시험은 `(b)` 단계에서 차단된다.
-3. **실행기 기반 영수증(`--run-tests`) 발급 및 검증**:
-   - 손으로 쓴 `design_sha256` JSON은 통과하지 못한다. `node .claude/hooks/intent-guard.js --run-tests` 실행기가 실제 `node --test <test_path>`를 돌려 생성한 영수증만 인정하며, 관문은 `design_sha256`·`test_sha256`(시험 파일 본문 해시)·`exit_code: 0`·`output_sha256`·`run_proof`를 모두 대조한다.
+2. **실제 시험 파일(`test_path`) 식별자·단언문·수치·산출물 실독 검증**:
+   - 주석과 문자열 리터럴을 모두 제외한 실제 식별자 코드 위치에 `symbol`(지정 시)과 `condition`의 수치 기준값(예: `0.005`, `0`)이 등장해야 한다. 주석이나 문자열 리터럴에만 심볼·숫자를 적어 넣으면 `(b)` 단계에서 차단된다.
+   - 단언문(`assert`/`expect`)은 단일 인자 동어반복(`assert.ok(true)`)뿐 아니라 다인자 상수-상수 비교(`assert.equal(1, 1)`, `assert.deepStrictEqual({}, {})`)도 차단하며, 최소 1개 단언의 피연산자에 비리터럴 식별자가 포함되어야 한다.
+   - 산출물 경로(`artifact.path` 또는 단계 식별자)를 코드에서 참조·실독하지 않고 조건 지표 변수에 상수 리터럴만 대입하는 공허한 상수 시험은 `(b)` 단계에서 차단된다(정적 분석만으로는 임의 코드의 완전한 의미론적 동치까지 증명할 수 없으므로 관문의 시험 직접 재실행 및 코드 리뷰와 병행한다).
+3. **관문 커밋 시점 직접 재실행 및 커밋 가능 영수증(`.agents/intent-receipts/`) 검증**:
+   - 공개 상수나 해시만으로 영수증을 재계산해 위조하는 시도를 막기 위해, 관문은 커밋·검사 시점에 `node --test <test_path>`를 **직접 다시 실행**하여 종료 코드(`exit_code === 0`)와 정규화된 실행 출력 지문(`output_sha256`), 대상 파일 지문(`design_sha256`, `test_sha256`, `artifact_sha256`)이 모두 일치하는지 대조한다.
+   - 기본 영수증 경로는 `.gitignore` 대상이 아닌 `.agents/intent-receipts/<REQ-ID>.json`이며, 영수증으로 통과하려면 영수증 파일도 같은 변경 집합(스테이지·커밋)에 함께 포함되어야 CI(`--commit HEAD`)에서 그대로 재현된다.
 
 ## 4. 검사기 동작 원리
 
 요구사항 파일(`.agents/requirements/*.yaml`, `_index.yaml`·`_template.yaml` 제외)의 설계 칸(`design`, `description`, `acceptance_criteria`, `change_effect`, `preserves`, `must_not_change`, `decisions`, `artifacts`)이 바뀐 커밋 또는 작업 트리에서 아래를 검사한다.
 
-1. **(a) 의도 시험 기재 및 요구사항 삭제 방어**:
+1. **(a) 의도 시험 기재 및 요구사항·섹션 삭제 방어**:
    - 산출물마다 `intent_test.condition`과 `intent_test.test_path`가 유효한 내용 지표 비교 조건인지 확인한다.
-   - 설계·산출물이 정의된 요구사항 파일을 직접 삭제하는 커밋은 차단된다. 정당한 폐기는 파일 삭제 대신 `status: retired`로 바꾸고 산출물 의도 시험(또는 실행 영수증)을 같은 변경에서 갱신해야 한다.
-2. **(b) 실제 시험 파일·심볼·단언문·기준값 정합성 확인**:
-   - `test_path`가 저장소 내부 일반 파일로 존재하고, 주석을 제외한 코드에 선언된 `symbol`, 유효한 단언문, `condition`의 수치 기준값이 포함되어 있는지 확인한다.
-3. **(c) 같은 변경에서 다시 돌았는지 확인**:
-   - 다음 둘 중 하나를 만족해야 한다:
-     - **같은 변경 집합에 시험 파일 갱신 포함**: 바뀐 설계 의도에 맞춰 갱신·검증된 `test_path` 파일이 같은 커밋(또는 스테이지 집합)에 함께 포함됨.
-     - **실행기 시험 영수증(`receipt`) 확인**: `--run-tests` 실행기가 기록한 `.agents/progress/intent-receipts/<REQ-ID>.json`(또는 `intent_test.receipt`)의 `design_sha256`, `test_sha256`, `exit_code === 0`, `output_sha256`, `run_proof`가 현재 설계 및 시험 파일 해시와 일치함.
+   - 설계·산출물이 정의된 요구사항 파일을 직접 삭제하거나, `design`·`artifacts` 섹션을 통째로 지우는 2단계 삭제 우회 시도는 차단된다. 파일 이름 이동은 동일한 `id`와 설계를 유지해 `git mv`로 함께 스테이지해야 하며, 정당한 폐기는 `status: retired` 전환과 의도 시험 재검증으로만 가능하다.
+2. **(b) 실제 시험 파일·심볼·단언문·기준값·산출물 실독 확인**:
+   - `test_path`가 저장소 내부 일반 파일로 존재하고, 주석·문자열 리터럴을 제외한 코드에 선언된 `symbol`, 비리터럴 피연산자 단언문, `condition`의 수치 기준값, 산출물 참조가 포함되어 있는지 확인한다.
+3. **(c) 같은 변경에서 다시 돌았는지 및 관문 직접 재실행 확인**:
+   - 관문은 커밋·검사 시점에 `test_path`를 직접 실행해 통과(`exit_code === 0`)함을 확인하며, 다음 둘 중 하나를 함께 만족해야 한다:
+     - **같은 변경 집합에 시험 파일 갱신 포함**: 바뀐 설계 의도에 맞춰 갱신·검증된 `test_path` 파일이 같은 커밋(또는 스테이지 집합)에 함께 포함되고 관문 직접 실행을 통과함.
+     - **커밋된 실행기 시험 영수증(`receipt`) 확인**: `--run-tests` 실행기가 기록한 `.agents/intent-receipts/<REQ-ID>.json`(또는 `intent_test.receipt`)이 같은 변경 집합에 스테이지·커밋되어 있고, `design_sha256`, `test_sha256`, `artifact_sha256`, `exit_code === 0`, `output_sha256`이 관문의 직접 재실행 결과와 일치함.
 4. **거짓 차단 방지 및 범위 분리**:
    - 일반 `git commit`은 스테이지된 파일 집합만 검사하므로, 작업 트리에 미스테이지 상태의 요구사항 수정이 남아 있어도 무관한 파일만 스테이지한 커밋은 차단하지 않는다(`git commit -a` 또는 `--worktree` 실행 시에만 작업 트리 변경 포함).
 5. **차단 메시지**:
@@ -85,11 +88,12 @@ artifacts:
 
 ## 5. CLI 실행 및 CI 최종 관문
 
-셸 훅(`PreToolUse` `Bash`)은 `.claude/hooks/lib/git-command-parser.js`와 `.claude/hooks/lib/effective-argv.js`를 재사용하여 `bash -c`, `env`, `cd &&`, `git -C`(붙임형 포함), `--amend`, `alias`, `for/do`, `xargs`, `find -exec`, `node -e`, `git merge/cherry-pick/rebase/apply` 등을 감시한다. 다만 비-`git` 외부 바이너리·컨테이너 경유 커밋이나 `.pi` 확장의 예외 시 fail-open(경고 로그 출력) 경로까지 빈틈없이 막기 위해 **CI에서 `--commit HEAD` 및 `--worktree` 검사를 최종 관문으로 실행**한다:
+셸 훅(`PreToolUse` `Bash`)은 `.claude/hooks/lib/git-command-parser.js`와 `.claude/hooks/lib/effective-argv.js`를 재사용하여 `bash -c`, `env`, `cd &&`, `git -C`(붙임형 포함), `--amend`, `alias`, `for/do`, `xargs`, `find -exec`(중첩 `sh -c` 포함), `node -e`, `npx`/`npm`/`pnpm`/`make` 대본, `git merge/cherry-pick/rebase/apply/pull` 등을 감시한다. 다만 `git pull`·`git checkout`·`git reset --hard`처럼 유입 diff를 실행 전에 알 수 없는 동작이나 비-`git` 외부 바이너리·컨테이너 경유 커밋, 어댑터의 예외 시 fail-open(stderr 경고 로그 출력) 경로까지 빈틈없이 막기 위해 **`.github/workflows/ci.yml` 및 `scripts/run-native-harness-tests.cjs`에서 `--commit HEAD`와 `--worktree` 검사를 실제 최종 관문으로 실행**한다:
 
 ```bash
-# 의도 시험 실제 실행 및 실행기 영수증(.agents/progress/intent-receipts/<REQ-ID>.json) 발급
+# 의도 시험 실제 실행 및 커밋 가능 영수증(.agents/intent-receipts/<REQ-ID>.json) 발급
 node .claude/hooks/intent-guard.js --run-tests
+git add .agents/intent-receipts/<REQ-ID>.json
 
 # 현재 스테이지/작업 트리 기준 검사
 node .claude/hooks/intent-guard.js --check
