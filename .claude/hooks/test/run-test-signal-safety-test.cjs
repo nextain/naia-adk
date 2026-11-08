@@ -15,3 +15,5 @@ test('child env stripping still carries signal protection and ESM exports match'
  const result=cp.spawnSync(process.execPath,['-e',"try{process.kill(123,'SIGKILL')}catch(e){console.log(e.message)}"],{env:{},encoding:'utf8'});
  assert.equal(result.status,0);assert.match(result.stdout,/TEST_SAFETY/);
 });
+
+test('native synchronous capture has no overflow signal path',()=>{assert.equal(safety.normalizeCapture({maxBuffer:8}).maxBuffer,Infinity);assert.throws(()=>safety.validate('node',[],{signal:{}}),/TEST_SAFETY/)});
