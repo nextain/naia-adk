@@ -13,15 +13,34 @@ export function createAdapter(
       return `(body read failed: ${error.message})`;
     }
   }
+  const threadOffsets = new Map();
+  const channelGuilds = new Map();
   return {
     async messages(channel, since) {
       const token = env[provider.token_env || "DISCORD_BOT_TOKEN"];
       if (!token)
         throw new Error("Messenger token environment variable is missing");
       const messages = [];
+      const seenIds = new Set();
       const threadIds = new Set();
+      let guildId =
+        provider.guild_id ||
+        provider.guildId ||
+        channelGuilds.get(channel) ||
+        null;
       let before;
+      let seenCreatedBeforeSince = false;
       const cursors = new Set();
+      const maxPages =
+        Number.isFinite(provider.max_pages) && provider.max_pages > 0
+          ? provider.max_pages
+          : 10;
+      const maxOldPages =
+        Number.isFinite(provider.max_old_pages) && provider.max_old_pages >= 0
+          ? provider.max_old_pages
+          : maxPages;
+      let pageCount = 0;
+      let oldPages = 0;
       while (true) {
         const url = new URL(
           `https://discord.com/api/v10/channels/${encodeURIComponent(channel)}/messages`,
@@ -40,6 +59,7 @@ export function createAdapter(
         }
         const page = await response.json();
         if (!Array.isArray(page)) throw new Error("Invalid Discord response");
+        let hasRecentOnPage = false;
         for (const m of page) {
           if (
             !m.id ||
@@ -49,6 +69,10 @@ export function createAdapter(
               !Number.isFinite(Date.parse(m.edited_timestamp)))
           )
             throw new Error("Invalid Discord message");
+          if (!guildId && (m.guild_id || m.thread?.guild_id)) {
+            guildId = m.guild_id || m.thread?.guild_id;
+            channelGuilds.set(channel, guildId);
+          }
           const attachedThreadId = m.thread?.id || m.thread_id || null;
           if (
             attachedThreadId &&
@@ -57,6 +81,7 @@ export function createAdapter(
           )
             threadIds.add(attachedThreadId);
           const createdMs = Date.parse(m.timestamp);
+          if (createdMs < since) seenCreatedBeforeSince = true;
           const editedMs = m.edited_timestamp
             ? Date.parse(m.edited_timestamp)
             : NaN;
@@ -64,10 +89,13 @@ export function createAdapter(
             Number.isFinite(editedMs) && editedMs > createdMs
               ? editedMs
               : createdMs;
-          if (effectiveMs >= since)
+          if (effectiveMs >= since && !seenIds.has(m.id)) {
+            seenIds.add(m.id);
+            hasRecentOnPage = true;
             messages.push({
               id: m.id,
               channel,
+              guild_id: m.guild_id || null,
               author_id: m.author.id,
               webhook_id: m.webhook_id || null,
               created_at: m.timestamp,
@@ -85,24 +113,35 @@ export function createAdapter(
               mention_everyone: m.mention_everyone === true,
               thread_id: attachedThreadId,
             });
+          }
         }
+        pageCount += 1;
+        if (hasRecentOnPage) oldPages = 0;
+        else oldPages += 1;
         if (
           page.length < 100 ||
-          page.some((m) => Date.parse(m.timestamp) < since)
+          pageCount >= maxPages ||
+          oldPages >= maxOldPages
         )
           break;
         before = page.at(-1).id;
-        if (cursors.has(before))
+        if (cursors.has(before)) {
+          if (seenCreatedBeforeSince) break;
           throw new Error("Discord pagination did not advance");
+        }
         cursors.add(before);
       }
       Object.defineProperty(messages, "threadIds", {
         value: [...threadIds],
         enumerable: false,
       });
+      Object.defineProperty(messages, "guildId", {
+        value: guildId,
+        enumerable: false,
+      });
       return messages;
     },
-    async threads(channel, channelMessages = []) {
+    async threads(channel, channelMessages = [], options = {}) {
       const token = env[provider.token_env || "DISCORD_BOT_TOKEN"];
       if (!token)
         throw new Error("Messenger token environment variable is missing");
@@ -116,51 +155,97 @@ export function createAdapter(
         )
           threadIds.add(tid);
       }
+      let targetGuild =
+        options?.guildId ||
+        provider.guild_id ||
+        provider.guildId ||
+        channelMessages?.guildId ||
+        channelMessages?.find?.((m) => m?.guild_id)?.guild_id ||
+        channelGuilds.get(channel) ||
+        null;
+      if (!targetGuild) {
+        try {
+          const chUrl = new URL(
+            `https://discord.com/api/v10/channels/${encodeURIComponent(channel)}`,
+          );
+          const chResponse = await fetchImpl(chUrl, {
+            headers: { Authorization: `Bot ${token}` },
+            signal: AbortSignal.timeout(30000),
+          });
+          if (chResponse?.ok) {
+            const chData = await chResponse.json();
+            if (
+              chData &&
+              typeof chData === "object" &&
+              !Array.isArray(chData) &&
+              typeof chData.guild_id === "string" &&
+              chData.guild_id
+            ) {
+              targetGuild = chData.guild_id;
+              channelGuilds.set(channel, targetGuild);
+            }
+          }
+        } catch {
+          // Fall through to active threads request so HTTP/network errors surface there.
+        }
+      }
+      targetGuild = targetGuild || channel;
       const url = new URL(
-        `https://discord.com/api/v10/channels/${encodeURIComponent(channel)}/threads/active`,
+        `https://discord.com/api/v10/guilds/${encodeURIComponent(targetGuild)}/threads/active`,
       );
       const response = await fetchImpl(url, {
         headers: { Authorization: `Bot ${token}` },
         signal: AbortSignal.timeout(30000),
       });
       if (!response.ok) {
-        if (response.status !== 404) {
-          const body = await readErrorBody(response);
-          throw new Error(
-            `Discord channel ${channel} active threads: HTTP ${response.status}; body: ${body}`,
-          );
-        }
-      } else {
-        const data = await response.json();
-        const list = Array.isArray(data?.threads)
-          ? data.threads
-          : Array.isArray(data)
-            ? data
-            : [];
-        for (const item of list) {
-          if (typeof item === "string") threadIds.add(item);
-          else if (item && typeof item === "object") {
-            if (
-              item.thread?.id &&
-              item.thread?.thread_metadata?.archived !== true &&
-              item.thread?.archived !== true
-            )
-              threadIds.add(item.thread.id);
-            else if (
-              item.id &&
-              !item.author &&
-              item.thread_metadata?.archived !== true &&
-              item.archived !== true &&
-              (!item.parent_id || item.parent_id === channel)
-            )
-              threadIds.add(item.id);
-          }
+        const body = await readErrorBody(response);
+        throw new Error(
+          `Discord guild ${targetGuild} active threads (channel ${channel}): HTTP ${response.status}; body: ${body}`,
+        );
+      }
+      const data = await response.json();
+      const list = Array.isArray(data?.threads)
+        ? data.threads
+        : Array.isArray(data)
+          ? data
+          : [];
+      for (const item of list) {
+        if (typeof item === "string") threadIds.add(item);
+        else if (item && typeof item === "object") {
+          if (
+            item.thread?.id &&
+            item.thread?.thread_metadata?.archived !== true &&
+            item.thread?.archived !== true
+          )
+            threadIds.add(item.thread.id);
+          else if (
+            item.id &&
+            !item.author &&
+            item.thread_metadata?.archived !== true &&
+            item.archived !== true &&
+            (!item.parent_id || item.parent_id === channel)
+          )
+            threadIds.add(item.id);
         }
       }
       threadIds.delete(channel);
       const result = [...threadIds];
-      if (Number.isFinite(provider.max_threads) && provider.max_threads >= 0)
-        return result.slice(0, provider.max_threads);
+      if (
+        options?.all !== true &&
+        Number.isFinite(provider.max_threads) &&
+        provider.max_threads >= 0
+      ) {
+        const limit = Math.max(0, provider.max_threads);
+        if (limit === 0 || result.length === 0) return [];
+        if (result.length <= limit) return result;
+        const offset = (threadOffsets.get(channel) ?? 0) % result.length;
+        const rotated = Array.from(
+          { length: limit },
+          (_, i) => result[(offset + i) % result.length],
+        );
+        threadOffsets.set(channel, (offset + limit) % result.length);
+        return rotated;
+      }
       return result;
     },
   };

@@ -3,6 +3,7 @@
   "provider": {
     "type": "discord",
     "token_env": "DISCORD_BOT_TOKEN",
+    "guild_id": "GUILD_ID",
     "max_threads": 25
   },
   "roles": [

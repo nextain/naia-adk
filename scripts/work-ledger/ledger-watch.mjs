@@ -17,7 +17,7 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
   const stateFile = path.join(root, ".agents/work/ledger", "watch-state.json");
   await mkdir(wakeDir, { recursive: true });
   return withLock(stateFile, async () => {
-    let state = { version: 1, sent: {} };
+    let state = { version: 1, sent: {}, thread_cursors: {}, mentions: {} };
     let stateError;
     try {
       state = JSON.parse(await readFile(stateFile, "utf8"));
@@ -29,13 +29,26 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
         !state.sent ||
         typeof state.sent !== "object" ||
         Array.isArray(state.sent) ||
-        Object.values(state.sent).some((v) => !Number.isFinite(v))
+        Object.values(state.sent).some((v) => !Number.isFinite(v)) ||
+        (state.thread_cursors !== undefined &&
+          (!state.thread_cursors ||
+            typeof state.thread_cursors !== "object" ||
+            Array.isArray(state.thread_cursors) ||
+            Object.values(state.thread_cursors).some(
+              (v) => !Number.isInteger(v) || v < 0,
+            ))) ||
+        (state.mentions !== undefined &&
+          (!state.mentions ||
+            typeof state.mentions !== "object" ||
+            Array.isArray(state.mentions)))
       )
         throw new Error("Invalid watch state");
+      state.thread_cursors ??= {};
+      state.mentions ??= {};
     } catch (error) {
       if (error.code !== "ENOENT") {
         stateError = "감시 상태 파일 읽기 실패";
-        state = { version: 1, sent: {} };
+        state = { version: 1, sent: {}, thread_cursors: {}, mentions: {} };
       }
     }
     const wakes = [];
@@ -234,11 +247,17 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
               if (m.author_id) threadStarterAuthor.set(tid, m.author_id);
             }
           }
+          const guildId =
+            roleConfig.guild_id ??
+            config.guild_id ??
+            config.provider?.guild_id ??
+            null;
           if (typeof messenger.threads === "function") {
             try {
               const activeThreads = await messenger.threads(
                 channel,
                 channelMessages,
+                { guildId, all: true },
               );
               for (const tid of activeThreads || []) {
                 if (tid) discoveredThreads.add(tid);
@@ -254,9 +273,29 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
               );
             }
           }
-          const threadIds = [...discoveredThreads]
-            .filter((tid) => tid && !visitedThreads.has(tid))
-            .slice(0, Math.max(0, maxThreads));
+          const candidateThreads = [...discoveredThreads].filter(
+            (tid) => tid && !visitedThreads.has(tid),
+          );
+          const threadLimit = Math.max(0, maxThreads);
+          const cursorKey = `${role}:${channel}`;
+          let threadIds = [];
+          if (threadLimit > 0 && candidateThreads.length > 0) {
+            if (candidateThreads.length <= threadLimit) {
+              threadIds = candidateThreads;
+              state.thread_cursors[cursorKey] = 0;
+            } else {
+              const start =
+                (state.thread_cursors[cursorKey] ?? 0) %
+                candidateThreads.length;
+              for (let i = 0; i < threadLimit; i++) {
+                threadIds.push(
+                  candidateThreads[(start + i) % candidateThreads.length],
+                );
+              }
+              state.thread_cursors[cursorKey] =
+                (start + threadLimit) % candidateThreads.length;
+            }
+          }
           for (const threadId of threadIds) {
             visitedThreads.add(threadId);
             let threadMessages;
@@ -300,31 +339,77 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
               return true;
             return false;
           }
-          function addressed(m) {
-            const mentions = new Set((m.mentions ?? []).map((value) =>
-              typeof value === "string" ? value : value.id,
-            ));
+          function extractMentions(m) {
+            const mentions = new Set(
+              (m.mentions ?? []).map((value) =>
+                typeof value === "string" ? value : value.id,
+              ),
+            );
             for (const match of (m.body || "").matchAll(/<@!?(\w[\w-]*)>/g))
               mentions.add(match[1]);
-            const roleMentions = new Set((m.mention_roles ?? []).map((value) =>
-              typeof value === "string" ? value : value.id,
-            ));
+            const roleMentions = new Set(
+              (m.mention_roles ?? []).map((value) =>
+                typeof value === "string" ? value : value.id,
+              ),
+            );
             for (const match of (m.body || "").matchAll(/<@&(\w[\w-]*)>/g))
               roleMentions.add(match[1]);
             const allMentions = new Set([...mentions, ...roleMentions]);
-            const ownMention = ownTargets.some((id) => allMentions.has(id));
-            const parentAuthor = m.reply_to_author_id || m.reply_to?.author_id ||
-              m.reply_to?.author?.id || byId.get(m.reply_to_id)?.author_id ||
-              threadStarterAuthor.get(m.channel);
-            const ownReply = ownTargets.includes(parentAuthor);
             const everyoneOrHere =
               m.mention_everyone === true ||
               /(?<![\p{L}\p{N}_@])@(?:everyone|here)\b/u.test(m.body || "");
-            const inDirectChannel = (roleConfig.direct_channels ?? []).includes(
-              channel,
+            const tokens = [
+              ...[...mentions].filter(Boolean).map((id) => `u:${id}`),
+              ...[...roleMentions].filter(Boolean).map((id) => `r:${id}`),
+              ...(everyoneOrHere ? ["all"] : []),
+            ].sort();
+            return {
+              mentions,
+              roleMentions,
+              allMentions,
+              everyoneOrHere,
+              tokens,
+            };
+          }
+          function extractItemMentions(i) {
+            const quote = i?.from?.quote || "";
+            const mentions = new Set(
+              (i?.from?.mentions ?? []).map((value) =>
+                typeof value === "string" ? value : value.id,
+              ),
             );
-            if (ownMention || ownReply || everyoneOrHere || inDirectChannel)
-              return true;
+            for (const match of quote.matchAll(/<@!?(\w[\w-]*)>/g))
+              mentions.add(match[1]);
+            const roleMentions = new Set(
+              (i?.from?.mention_roles ?? []).map((value) =>
+                typeof value === "string" ? value : value.id,
+              ),
+            );
+            for (const match of quote.matchAll(/<@&(\w[\w-]*)>/g))
+              roleMentions.add(match[1]);
+            const everyoneOrHere =
+              i?.from?.mention_everyone === true ||
+              /(?<![\p{L}\p{N}_@])@(?:everyone|here)\b/u.test(quote);
+            return new Set([
+              ...[...mentions].filter(Boolean).map((id) => `u:${id}`),
+              ...[...roleMentions].filter(Boolean).map((id) => `r:${id}`),
+              ...(everyoneOrHere ? ["all"] : []),
+            ]);
+          }
+          function addressed(m) {
+            const { allMentions, everyoneOrHere } = extractMentions(m);
+            const ownMention = ownTargets.some((id) => allMentions.has(id));
+            const parentAuthor =
+              m.reply_to_author_id ||
+              m.reply_to?.author_id ||
+              m.reply_to?.author?.id ||
+              byId.get(m.reply_to_id)?.author_id ||
+              threadStarterAuthor.get(m.channel);
+            const ownReply = ownTargets.includes(parentAuthor);
+            const inDirectChannel =
+              (roleConfig.direct_channels ?? []).includes(channel) ||
+              (roleConfig.direct_channels ?? []).includes(m.channel);
+            if (ownMention || ownReply || inDirectChannel) return true;
             const otherReply = Boolean(
               parentAuthor &&
                 (otherIdentities.includes(parentAuthor) ||
@@ -332,12 +417,8 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
                     !humans.includes(parentAuthor) &&
                     !relays.includes(parentAuthor))),
             );
-            const otherMention =
-              otherIdentities.some((id) => allMentions.has(id)) ||
-              [...allMentions].some(
-                (id) => !ownTargets.includes(id) && !humans.includes(id),
-              );
-            if (otherReply || otherMention) return false;
+            if (otherReply) return false;
+            if (everyoneOrHere) return true;
             return false;
           }
           function messageTimes(m) {
@@ -351,17 +432,19 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
           for (const m of messages) {
             try {
               if (!isHumanOrRelay(m) || !addressed(m)) continue;
-              const { createdMs, editedMs, isEdited, effectiveMs } =
-                messageTimes(m);
+              const { editedMs, isEdited, effectiveMs } = messageTimes(m);
               if (
                 !Number.isFinite(effectiveMs) ||
                 effectiveMs < since ||
                 effectiveMs > now
               )
                 continue;
+              const msgChannel = m.channel || channel;
               const replies = messages.filter(
                 (r) =>
-                  identities.includes(r.author_id) && r.reply_to_id === m.id,
+                  identities.includes(r.author_id) &&
+                  (r.channel || channel) === msgChannel &&
+                  r.reply_to_id === m.id,
               );
               const isReplied = isEdited
                 ? replies.some((r) => messageTimes(r).effectiveMs >= editedMs)
@@ -371,18 +454,32 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
                 messages.some(
                   (post) =>
                     identities.includes(post.author_id) &&
+                    (post.channel || channel) === msgChannel &&
                     messageTimes(post).effectiveMs > effectiveMs &&
                     messageTimes(post).effectiveMs <= now,
                 );
+              const { tokens: msgMentionTokens } = extractMentions(m);
+              const mentionSignature = JSON.stringify(msgMentionTokens);
               const recordedItems = ledger.items.filter(
                 (i) => i.from.msg_id === m.id,
               );
               const isRecorded = isEdited
-                ? recordedItems.some(
-                    (i) =>
-                      (i.checked_at && Date.parse(i.checked_at) >= editedMs) ||
-                      Boolean(i.from.quote && i.from.quote === m.body),
-                  )
+                ? recordedItems.some((i) => {
+                    if (!i.checked_at || Date.parse(i.checked_at) < editedMs)
+                      return false;
+                    const itemMentions = extractItemMentions(i);
+                    const hasRecordedContext =
+                      Boolean(i.from?.quote) ||
+                      Array.isArray(i.from?.mentions) ||
+                      Array.isArray(i.from?.mention_roles) ||
+                      itemMentions.size > 0;
+                    if (hasRecordedContext) {
+                      return msgMentionTokens.every((tok) =>
+                        itemMentions.has(tok),
+                      );
+                    }
+                    return true;
+                  })
                 : recordedItems.length > 0;
               const wakeId = `human-${safeName(m.id)}`;
               const wakeKey = JSON.stringify([
@@ -392,15 +489,25 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
               ]);
               if (isReplied || isAnsweredAfter || isRecorded) {
                 delete state.sent[wakeKey];
+                delete state.mentions[wakeKey];
                 continue;
+              }
+              if (
+                isEdited &&
+                state.sent[wakeKey] !== undefined &&
+                state.mentions[wakeKey] !== undefined &&
+                state.mentions[wakeKey] !== mentionSignature
+              ) {
+                delete state.sent[wakeKey];
               }
               await wake(
                 role,
                 wakeId,
                 "장부에 없는 사람 글",
                 m.body || "(본문 없음)",
-                `출처: ${m.channel || channel}/${m.id}\n기한: (미등록)\n결과: (없음)`,
+                `출처: ${msgChannel}/${m.id}\n기한: (미등록)\n결과: (없음)`,
               );
+              state.mentions[wakeKey] = mentionSignature;
             } catch (error) {
               const sourceChannel = m?.channel || channel;
               errors.push(`messenger:${role}:${sourceChannel}:${m?.id}`);
@@ -428,6 +535,9 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
     // Keep only recent dedup entries; timers do not grow the state indefinitely.
     state.sent = Object.fromEntries(
       Object.entries(state.sent).filter(([, at]) => now - at < 24 * 60 * 60000),
+    );
+    state.mentions = Object.fromEntries(
+      Object.entries(state.mentions).filter(([k]) => k in state.sent),
     );
     await atomicJson(stateFile, state);
     return { wakes, errors };
