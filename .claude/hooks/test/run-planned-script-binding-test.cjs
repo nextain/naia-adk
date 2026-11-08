@@ -62,3 +62,19 @@ test('outer command classifier gates an external symlink through sudo',t=>{
  const hits=require('../lib/deploy-command-classifier.js').classifyProdMutations(`sudo bash ${link} s0`,f.root);
  assert.ok(hits.some(h=>h.service==='systemd:sample-runtime'));
 });
+
+for (const kind of ['outside-missing','outside-dangling'])test(`unresolved script ${kind} fails closed`,t=>{
+ const f=fixture(t);const target=f.root+'-'+kind+'.sh';
+ if(kind==='outside-dangling'){fs.symlinkSync(f.root+'-no-target.sh',target);t.after(()=>fs.unlinkSync(target));}
+ const cfg=JSON.parse(fs.readFileSync(path.join(f.root,'config/deploy-gate.json')));
+ const hits=require('../lib/planned-script-binding.js').classifyPlannedScripts(['bash',target,'s0'],f.root,cfg);
+ assert.ok(hits.some(h=>h.unclassified===true),'unresolved outside membership must not bypass the gate');
+});
+
+test('rollback kind cannot label a forward step to bypass the stop lock',t=>{
+ const f=fixture(t);const cfg=JSON.parse(fs.readFileSync(path.join(f.root,'config/deploy-gate.json')));const verify=require('../lib/planned-script-binding.js').verifyPlannedScript;
+ const files=new Map([[f.script,fs.readFileSync(f.script,'utf8')]]);const services=cfg.plannedScripts.services;
+ const check=entry=>verify({config:cfg,plan:{services,scenario:[entry]},entry,command:entry.commands[0],files,services,kind:'rollback'});
+ assert.equal(check(f.entry).ok,false);
+ const rollback={...f.entry,id:'r2',branch:'rollback',commands:[`bash ${f.script} r2`]};assert.equal(check(rollback).ok,true);
+});

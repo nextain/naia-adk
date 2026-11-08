@@ -14,6 +14,7 @@ function verifyPlannedScript({ config, plan, command, entry, files, services, ki
   const entries = [...(plan.scenario || []), ...(plan.incident?.actions || [])];
   if (entries.filter(e => e.id === entry.id).length !== 1) return no("계획 단계 식별자가 고유하지 않음");
   if (/^r/.test(entry.id) && entry.branch !== "rollback") return no("되돌리기 단계 branch 불일치");
+  if (kind === "rollback" && (!/^r[0-9]+$/.test(entry.id) || entry.branch !== "rollback")) return no("되돌리기 종류는 고정 되돌리기 단계에만 허용");
   // Deliberately no shell prefixes, quoting, arguments, substitutions or chaining.
   const invocation = config.plannedScripts.allowSudo === true && command.startsWith("sudo ") ? command.slice(5) : command;
   const m = /^bash (\/[A-Za-z0-9_./-]+) ([sr][0-9]+)$/.exec(invocation);
@@ -59,7 +60,9 @@ function classifyPlannedScripts(tokens, cwd, config) {
   let matches = false;
   if (typeof word === "string" && !word.startsWith("-")) {
     const full = path.resolve(cwd || ".", word);
-    let real; try { real = fs.realpathSync(full); } catch {}
+    let real; try { real = fs.realpathSync(full); } catch {
+      return (cfg.services.length ? cfg.services : ["unclassified:planned-script-path"]).map(service => ({ service, unclassified: true, label: "실행 대본 실제 경로를 확인할 수 없음" }));
+    }
     matches = cfg.roots.some(dir => {
       if (!path.isAbsolute(dir)) return false;
       let root; try { root = fs.realpathSync(dir); } catch { root = path.resolve(dir); }
