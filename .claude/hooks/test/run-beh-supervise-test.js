@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("../../../scripts/test-signal-safety.cjs");
 /**
  * BEH §3.3 supervise core — fault-injection test (plan §4, §6.3).
  *

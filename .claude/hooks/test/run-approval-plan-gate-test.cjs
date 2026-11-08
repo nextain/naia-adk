@@ -1,3 +1,4 @@
+require("../../../scripts/test-signal-safety.cjs");
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert/strict");
@@ -1028,4 +1029,22 @@ test("큰 실행 파일: 셸 대본인지 볼 때 앞부분만 읽고 전체를 
 		fs.readSync = origReadSync;
 	}
 	assert.ok(maxRead <= 4096, `큰 파일을 ${maxRead} 바이트 읽음`);
+});
+
+test("declared script manifest ignores incidental existing path tokens but rejects changed bytes", async t => {
+ const {root}=makeWorkspace(t);
+ const service="azure:containerapp:sample-web-prod";
+ writeGateConfig(root,{plannedScripts:{enabled:true,services:[service],roots:[root],systemdUserUnits:[]}});
+ const p=createValidPlan(root);
+ const plan=JSON.parse(fs.readFileSync(p.planFile));
+ const script=path.join(root,"scripts/rollout.sh");
+ const unrelated=path.join(root,"README.md");fs.writeFileSync(unrelated,"unrelated preexisting file");
+ const helper=path.join(root,"scripts/helper.sh");const helperBody=`printf '%s\\n' ${unrelated}\n`;fs.writeFileSync(helper,helperBody);
+ const body=`#!/bin/bash\nbash ${helper}\n`;fs.writeFileSync(script,body);
+ const step=plan.scenario[0];step.commands=[`bash ${script} ${step.id}`];step.files={[script]:sha256(body),[helper]:sha256(helperBody)};
+ fs.writeFileSync(p.planFile,JSON.stringify(plan));
+ assert.ok(deployPlan.referencedFiles(step.commands[0],root).some(r=>r.path===unrelated),"legacy heuristic sees incidental token");
+ const ctx={root,cwd:root,command:step.commands[0],services:[service],sessionId:"manifest-test"};
+ const res=await deployPlan.evaluate(ctx);assert.equal(res.audit.event,"blocked-plan-review");
+ fs.appendFileSync(helper,"# changed\n");const changed=await deployPlan.evaluate(ctx);assert.equal(changed.audit.event,"blocked-plan-script-binding");
 });

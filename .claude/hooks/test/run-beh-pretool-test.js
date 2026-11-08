@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("../../../scripts/test-signal-safety.cjs");
 /**
  * BEH §3.4 PreToolUse + launcher — fault-injection + replay test (plan §4, §6.4).
  *

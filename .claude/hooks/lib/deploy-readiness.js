@@ -591,6 +591,8 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	}
 
 	const cfg = loadDeployGateConfig(root);
+	const scriptBinding = require("./planned-script-binding.js").verifyPlannedScript({ config: cfg, plan, command, entry, files, services, kind });
+	if (scriptBinding) return scriptBinding.ok ? scriptBinding : no(scriptBinding.why);
 	let plugin = null;
 	if (cfg) {
 		try {
@@ -694,6 +696,8 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
  * @returns {{ok:boolean, problems:string[], facts:string[], file?:string, kind?:string}}
  */
 function assessReadiness(services, { root, auditPath, command = "", cwd = "", now = Date.now(), planBinding = null } = {}) {
+	const locked = require("./stop-all-lock.js").operationalLockProblem();
+	if (locked) return locked;
 	const baseRoot = root || process.env.DEPLOY_READINESS_ROOT || cwd || path.resolve(__dirname, "../../..");
 	if (!Array.isArray(services) || services.length === 0) {
 		return { ok: false, problems: ["운영 서비스 집합이 비어 있습니다."], facts: [] };

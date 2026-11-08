@@ -1472,6 +1472,8 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "") 
 			}
 			return hits;
 		}
+		const plannedHits = require("./planned-script-binding.js").classifyPlannedScripts(tokens, dir, cfg);
+		if (plannedHits.length) return plannedHits.map(hit => ({ ...hit, clause }));
 		if (Array.isArray(cfg.prodPatterns)) {
 			for (const p of cfg.prodPatterns) {
 				if (!p || typeof p.pattern !== "string" || !p.service) continue;

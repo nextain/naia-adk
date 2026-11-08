@@ -162,9 +162,12 @@ test('line preservation rejects omissions, rewrites and duplicates', async t => 
 });
 
 test('model failure and timeout preserve source bytes', async t => {
-  for (const mode of ['exit','sleep']) await t.test(mode,t => {
-    const f = injectionFixture(t, text => mode === 'sleep' ? replaceOnce(text,'timeout: 15 * 60 * 1000','timeout: 250') : text);
-    const r = f.run({MODE:mode}); assert.equal(r.status,1,r.stderr); assert.match(r.stdout,mode === 'sleep' ? /ETIMEDOUT|timed out/i : /exit 9/);
+  for (const mode of ['exit','timeout']) await t.test(mode,t => {
+    const f = injectionFixture(t, text => mode === 'timeout' ? replaceOnce(text,
+      "import { spawnSync } from 'node:child_process';",
+      "import { spawnSync as nativeSpawnSync } from 'node:child_process';\n" +
+      "const spawnSync = (command, args, options) => { if (command !== process.env.DOC_SIZE_CODEX) return nativeSpawnSync(command, args, options); if (options.timeout !== 15 * 60 * 1000) throw Error('production timeout changed'); return { status: null, error: Object.assign(Error('spawnSync timed out'), { code: 'ETIMEDOUT' }) }; };") : text);
+    const r = f.run({MODE:mode}); assert.equal(r.status,1,r.stderr); assert.match(r.stdout,mode === 'timeout' ? /ETIMEDOUT|timed out/i : /exit 9/);
     assert.deepEqual(fs.readFileSync(f.source),f.original); assert.equal(fs.existsSync(f.archive),false);
   });
 });
@@ -209,7 +212,7 @@ test('concurrent edits are preserved and first rename is rolled back', async t =
   });
 });
 
-test('real Codex denies reading outside its workspace', {timeout:90000}, t => {
+test('real Codex denies reading outside its workspace', {timeout:90000, skip:process.env.DOC_SIZE_LIVE_TEST !== '1'}, t => {
   const found = spawnSync('which',['codex'],{encoding:'utf8'});
   if (found.status !== 0) return t.skip('codex executable is not available');
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'doc-size-codex-'));

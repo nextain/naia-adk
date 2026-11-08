@@ -1,3 +1,4 @@
+require("../../../scripts/test-signal-safety.cjs");
 "use strict";
 // node .agents/hooks/core/remote-identity.test.js
 const assert = require("assert");

@@ -1,3 +1,4 @@
+require("../../scripts/test-signal-safety.cjs");
 "use strict";
 
 const { describe, it, before, after } = require("node:test");

@@ -10,7 +10,7 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "build": "tsc",
-    "test": "vitest run"
+    "test": "node --require ../../scripts/test-signal-safety.cjs node_modules/vitest/vitest.mjs run --pool=threads"
   },
   "dependencies": {
     "@fastify/cors": "^11.0.0",

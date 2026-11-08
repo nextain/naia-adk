@@ -1,7 +1,7 @@
 {
   "name": "@naia-adk/process",
   "version": "0.0.1",
-  "description": "Process spec — workflow patterns for naia (review→decide→execute, IDD, single-PR, etc). Zero runtime deps.",
+  "description": "Process spec \u2014 workflow patterns for naia (review\u2192decide\u2192execute, IDD, single-PR, etc). Zero runtime deps.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -16,12 +16,17 @@
     }
   },
   "sideEffects": false,
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "license": "Apache-2.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run"
+    "test": "node --require ../../scripts/test-signal-safety.cjs node_modules/vitest/vitest.mjs run --pool=threads"
   },
   "devDependencies": {
     "vitest": "^3.2.4"

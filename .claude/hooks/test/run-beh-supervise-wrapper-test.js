@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("../../../scripts/test-signal-safety.cjs");
 /**
  * BEH supervise WRAPPER — hermetic real-process test (plan §4, §6.3).
  *

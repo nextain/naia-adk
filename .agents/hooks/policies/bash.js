@@ -177,6 +177,7 @@ function emailSend(command) {
 	];
 	for (const p of SEND_PATTERNS) {
 		if (p.pattern.test(cmd)) {
+			if (require("../../../.claude/hooks/lib/stop-all-lock.js").stopAllLocked()) return { reason: "모두 멈춤 잠금 중: 메일 차단" };
 			return {
 				reason:
 					`[Harness] 외부 이메일 발송 차단: \`${p.label}\`\n\n` +
@@ -419,6 +420,7 @@ async function deploy(command, data, opts) {
 		}
 		return true;
 	});
+	// Shared first decision for legacy and approval-plan operational commands.
 	const clauses = shellClauses(command);
 	const nonDevLegacyMatches = [];
 	for (const tokens of clauses) {
@@ -427,6 +429,10 @@ async function deploy(command, data, opts) {
 		const matched = matchLegacyClause(rawClause);
 		if (matched) nonDevLegacyMatches.push({ ...matched, tokens });
 	}
+
+ const planOperations = deployPlan.plansForCommand(command, root).length || clauses.some(tokens => tokens.length && !/^(?:echo|printf)$/.test(tokens[0]) && deployPlan.plansForCommand(clauseText(tokens), root).length);
+ const locked = require("../../../.claude/hooks/lib/stop-all-lock.js").operationalLockProblem(precomputedMutations.length || nonDevLegacyMatches.length || planOperations);
+ if (locked) return {reason:locked.problems[0]};
 
 	const isLegacyCoveredMutation = (hit) => {
 		if (!hit || hit.unclassified || typeof hit.service !== "string") return false;

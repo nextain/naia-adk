@@ -211,3 +211,6 @@ scripts/triage/
 # 워크스페이스 UUID(개인 식별자) 비추적
 .naia/
 .agents/research/**/.align-audit-stamp.json
+
+# Local deployment instance policy; use the tracked example as the template.
+/config/deploy-gate.json

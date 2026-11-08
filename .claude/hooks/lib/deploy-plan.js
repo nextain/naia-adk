@@ -279,6 +279,8 @@ function resolveRepoRoot(startDir) {
 }
 /** 리뷰 입력 고정 목록(계획서·핀·실행기)의 내용 해시. 전후 대조와 영수증 결박에 쓴다. */
 const REVIEW_EXECUTOR_FILES = [
+	".claude/hooks/lib/stop-all-lock.js",
+	".claude/hooks/lib/planned-script-binding.js",
 	".agents/scripts/approval-plan.mjs",
 	".claude/hooks/lib/deploy-plan.js",
 	".claude/hooks/lib/deploy-human-approval.js",
@@ -818,7 +820,19 @@ async function evaluate(ctx) {
 	}
 	// 명령이 읽거나 실행하는 파일(감싼 스크립트, --yaml 파일, 내용 파일)은 계획서 단계의 files 에 sha 로 고정해야 한다.
 	const pinned = new Map(Object.entries(entry.files || {}).map(([p, h]) => [path.resolve(ctx.cwd || ctx.root, p), String(h).toLowerCase()]));
-	const refs = typeof ctx.fileRefs === "function" ? ctx.fileRefs() : referencedFiles(ctx.command, ctx.cwd || ctx.root);
+	const readiness = require("./deploy-readiness.js");
+	const instance = readiness.loadDeployGateConfig(ctx.root);
+	const configured = instance?.plannedScripts;
+	const declared = configured?.enabled === true && (!Array.isArray(configured.services) || (ctx.services || []).some(s => configured.services.includes(s)));
+	let declaredManifest = false;
+	if (declared) {
+		const binding = readiness.verifiedPlanBinding({ plan: f.plan, entry, command: ctx.command, cwd: ctx.cwd || ctx.root }, "", "plan", ctx.services || [], ctx.root);
+		if (!binding.ok || !binding.plannedScript) return { allow: false, audit: { event: "blocked-plan-script-binding", plan: rel }, reason: `[Harness] ${binding.why || "고정 대본 결합 거부"}` };
+		declaredManifest = true;
+	}
+	// In explicitly configured script mode the independently reviewed pins are
+	// the complete input manifest; shell token guesses are not dependencies.
+	const refs = declaredManifest ? [] : (typeof ctx.fileRefs === "function" ? ctx.fileRefs() : referencedFiles(ctx.command, ctx.cwd || ctx.root));
 	const unpinned = refs.filter((r) => pinned.get(path.resolve(r.path)) !== r.sha);
 	// 글자에 나타나지 않는 도움 파일도 전부 실물과 대조한다. 같은 해시의 다른 경로는 대신할 수 없다.
 	for (const [p, h] of pinned) {

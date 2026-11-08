@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("../../../scripts/test-signal-safety.cjs");
 /**
  * BEH adapters — REAL-condition replay test (plan §4, §6.1).
  *

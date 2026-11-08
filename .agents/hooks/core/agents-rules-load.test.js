@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("../../../scripts/test-signal-safety.cjs");
 "use strict";
 
 const assert = require("node:assert/strict");
