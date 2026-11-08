@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "provider": {
+    "type": "discord",
+    "token_env": "DISCORD_BOT_TOKEN"
+  },
+  "roles": [
+    {
+      "role": "secretary",
+      "user_ids": ["BOT_USER_ID"],
+      "channels": ["CHANNEL_ID"],
+      "human_ids": ["HUMAN_USER_ID"],
+      "report": {
+        "every_min": 60,
+        "channel": "CHANNEL_ID"
+      }
+    }
+  ]
+}
