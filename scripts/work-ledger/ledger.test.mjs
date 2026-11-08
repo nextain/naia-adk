@@ -1034,3 +1034,103 @@ test("relayed human messages, webhook messages, and Discord role mentions wake t
     ["human-other-role-tag"],
   );
 });
+
+test("word-bounded everyone/here, mentionless replies to other roles, and unlisted bot mentions follow role priority", async () => {
+  const root = await setup();
+  const created_at = new Date(now - 1000).toISOString();
+  const conf = {
+    roles: [
+      {
+        role: "secretary",
+        channels: ["ch-main"],
+        direct_channels: ["ch-dm"],
+        human_ids: ["human-1"],
+        user_ids: ["bot-sec"],
+      },
+      {
+        role: "reviewer",
+        channels: ["ch-main"],
+        human_ids: ["human-1"],
+        user_ids: ["bot-rev"],
+      },
+    ],
+  };
+  const adapter = {
+    async messages(ch) {
+      if (ch === "ch-dm") {
+        return [
+          {
+            id: "dm-unlisted-bot",
+            author_id: "human-1",
+            body: "<@unlisted-bot> 1:1 채널에서 다른 봇 언급",
+            mentions: ["unlisted-bot"],
+            created_at,
+          },
+        ];
+      }
+      return [
+        {
+          id: "email-here",
+          author_id: "human-1",
+          body: "문의는 help@here.com 으로 보내주세요",
+          created_at,
+        },
+        {
+          id: "email-everyone",
+          author_id: "human-1",
+          body: "메일 주소는 team@everyone.org 입니다",
+          created_at,
+        },
+        {
+          id: "reply-other-no-mention",
+          author_id: "human-1",
+          body: "이 부분 다시 봐주세요",
+          reply_to_id: "rev-msg",
+          reply_to_author_id: "bot-rev",
+          mentions: [],
+          created_at,
+        },
+        {
+          id: "unlisted-bot-only",
+          author_id: "human-1",
+          body: "<@unlisted-bot> 이 작업 확인해줘",
+          mentions: ["unlisted-bot"],
+          created_at,
+        },
+        {
+          id: "unlisted-bot-with-here",
+          author_id: "human-1",
+          body: "@here <@unlisted-bot> 같이 확인 부탁",
+          mentions: ["unlisted-bot"],
+          created_at,
+        },
+        {
+          id: "reply-other-with-here",
+          author_id: "human-1",
+          body: "@here 이 부분 모두 확인 부탁",
+          reply_to_id: "rev-msg",
+          reply_to_author_id: "bot-rev",
+          mentions: [],
+          created_at,
+        },
+      ];
+    },
+  };
+  const res = await watch({ root, config: conf, adapter, now });
+  assert.deepEqual(
+    res.wakes.filter((w) => w.role === "secretary").map((w) => w.id),
+    [
+      "human-unlisted-bot-with-here",
+      "human-reply-other-with-here",
+      "human-dm-unlisted-bot",
+    ],
+  );
+  assert.deepEqual(
+    res.wakes.filter((w) => w.role === "reviewer").map((w) => w.id),
+    [
+      "human-reply-other-no-mention",
+      "human-unlisted-bot-with-here",
+      "human-reply-other-with-here",
+    ],
+  );
+});

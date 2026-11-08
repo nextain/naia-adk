@@ -301,15 +301,28 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
             const parentAuthor = m.reply_to_author_id || m.reply_to?.author_id ||
               m.reply_to?.author?.id || byId.get(m.reply_to_id)?.author_id ||
               threadStarterAuthor.get(m.channel);
-            if (
-              ownMention ||
-              identities.includes(parentAuthor) ||
+            const ownReply = ownTargets.includes(parentAuthor);
+            const everyoneOrHere =
               m.mention_everyone === true ||
-              /@(?:everyone|here)\b/.test(m.body || "") ||
-              (roleConfig.direct_channels ?? []).includes(channel)
-            )
+              /(?<![\p{L}\p{N}_@])@(?:everyone|here)\b/u.test(m.body || "");
+            const inDirectChannel = (roleConfig.direct_channels ?? []).includes(
+              channel,
+            );
+            if (ownMention || ownReply || everyoneOrHere || inDirectChannel)
               return true;
-            if (otherIdentities.some((id) => allMentions.has(id))) return false;
+            const otherReply = Boolean(
+              parentAuthor &&
+                (otherIdentities.includes(parentAuthor) ||
+                  (!ownTargets.includes(parentAuthor) &&
+                    !humans.includes(parentAuthor) &&
+                    !relays.includes(parentAuthor))),
+            );
+            const otherMention =
+              otherIdentities.some((id) => allMentions.has(id)) ||
+              [...allMentions].some(
+                (id) => !ownTargets.includes(id) && !humans.includes(id),
+              );
+            if (otherReply || otherMention) return false;
             return false;
           }
           function messageTimes(m) {
