@@ -591,6 +591,8 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	}
 
 	const cfg = loadDeployGateConfig(root);
+	const scriptBinding = require("./planned-script-binding.js").verifyPlannedScript({ config: cfg, plan, command, entry, files, services, kind });
+	if (scriptBinding) return scriptBinding.ok ? scriptBinding : no(scriptBinding.why);
 	let plugin = null;
 	if (cfg) {
 		try {
@@ -725,6 +727,7 @@ function assessReadiness(services, { root, auditPath, command = "", cwd = "", no
 	}
 
 	const rec = found.record;
+	if (rec.kind !== "rollback" && require("./stop-all-lock.js").stopAllLocked()) return { ok: false, problems: ["모두 멈춤 잠금 중: 배포 차단"], facts: [] };
 	const problems = [];
 	const facts = [];
 	const rel = path.relative(baseRoot, found.file);

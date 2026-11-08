@@ -4,7 +4,9 @@
     "discordUserId": "<승인자 디스코드 사용자 번호(17~20자리 Snowflake)>"
   },
   "discord": {
-    "instances": ["default"]
+    "instances": [
+      "default"
+    ]
   },
   "plugin": "./config/deploy-gate-plugin.cjs",
   "prodPatterns": [
@@ -28,7 +30,9 @@
       "allowOps": true,
       "allowRollback": true,
       "opsCommandPattern": "\\baz\\s+containerapp\\s+(?:update\\b(?![^\\n]*--image\\b)|ingress\\b|revision\\b)",
-      "commandMustContain": ["my-app-prod"]
+      "commandMustContain": [
+        "my-app-prod"
+      ]
     },
     "gcp:cloudrun:my-api-prod": {
       "label": "운영 Cloud Run API",
@@ -36,5 +40,20 @@
       "allowOps": true,
       "allowRollback": true
     }
-  }
+  },
+  "plannedScripts": {
+    "enabled": false,
+    "services": [
+      "systemd:sample-runtime"
+    ],
+    "roots": [
+      "/absolute/path/to/reviewed-scripts"
+    ],
+    "systemdUserUnits": [
+      "sample-stop.service",
+      "sample-stop.timer"
+    ],
+    "allowSudo": false
+  },
+  "stopAllLockFile": "/var/lib/ax-shared/stop-all.lock"
 }

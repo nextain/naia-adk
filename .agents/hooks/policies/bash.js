@@ -177,6 +177,7 @@ function emailSend(command) {
 	];
 	for (const p of SEND_PATTERNS) {
 		if (p.pattern.test(cmd)) {
+			if (require("../../../.claude/hooks/lib/stop-all-lock.js").stopAllLocked()) return { reason: "모두 멈춤 잠금 중: 메일 차단" };
 			return {
 				reason:
 					`[Harness] 외부 이메일 발송 차단: \`${p.label}\`\n\n` +
@@ -445,6 +446,7 @@ async function deploy(command, data, opts) {
 		const firstLegacy = nonDevLegacyMatches[0];
 		const matchedPattern = firstLegacy ? firstLegacy.pattern : null;
 		if (matchedPattern) {
+			if (require("../../../.claude/hooks/lib/stop-all-lock.js").stopAllLocked()) return { reason: "모두 멈춤 잠금 중: 배포 차단" };
 			const project = detectProject(firstLegacy.clause, config, cwd);
 			const approval = !matchedPattern.alwaysBlock ? findApproval(project) : null;
 			if (approval) {
