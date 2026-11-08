@@ -2,12 +2,15 @@
   "version": 1,
   "provider": {
     "type": "discord",
-    "token_env": "DISCORD_BOT_TOKEN"
+    "token_env": "DISCORD_BOT_TOKEN",
+    "max_threads": 25
   },
   "roles": [
     {
       "role": "secretary",
       "user_ids": ["BOT_USER_ID"],
+      "role_ids": ["BOT_ROLE_ID"],
+      "relay_ids": [],
       "channels": ["CHANNEL_ID"],
       "direct_channels": [],
       "answered_by_any_role_post_after": false,
