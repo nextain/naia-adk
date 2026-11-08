@@ -921,3 +921,116 @@ test("active threads and message-attached threads are read with count cap and is
     ],
   );
 });
+
+test("relayed human messages, webhook messages, and Discord role mentions wake the assigned role", async () => {
+  const recent = new Date(now - 1000).toISOString();
+  const discordAdapter = createAdapter(
+    { type: "discord", token_env: "T" },
+    {
+      env: { T: "tok" },
+      fetchImpl: async (url) => {
+        if (new URL(url).pathname.endsWith("/threads/active"))
+          return { ok: true, json: async () => ({ threads: [] }) };
+        return {
+          ok: true,
+          json: async () => [
+            {
+              id: "wh-role-msg",
+              author: { id: "webhook-user" },
+              webhook_id: "wh-100",
+              timestamp: recent,
+              content: "<@&role-sec> 웹훅 역할 호출",
+              mention_roles: ["role-sec"],
+            },
+          ],
+        };
+      },
+    },
+  );
+  const normalized = await discordAdapter.messages("ch-main", now - 60000);
+  assert.equal(normalized[0].webhook_id, "wh-100");
+  assert.deepEqual(normalized[0].mention_roles, ["role-sec"]);
+
+  const root = await setup();
+  const conf = {
+    roles: [
+      {
+        role: "secretary",
+        channels: ["ch-main"],
+        human_ids: ["human-1"],
+        relay_ids: ["relay-bot"],
+        user_ids: ["bot-sec"],
+        role_ids: ["role-sec"],
+      },
+      {
+        role: "reviewer",
+        channels: ["ch-main"],
+        human_ids: ["human-1"],
+        user_ids: ["bot-rev"],
+        role_ids: ["role-rev"],
+      },
+    ],
+  };
+  const adapter = {
+    async messages() {
+      return [
+        {
+          id: "relay-1",
+          author_id: "relay-bot",
+          body: "[human-1] <@bot-sec> 대신 전달된 지시",
+          mentions: ["bot-sec"],
+          created_at: recent,
+        },
+        {
+          id: "webhook-1",
+          author_id: "webhook-author",
+          webhook_id: "wh-100",
+          body: "<@bot-sec> 웹훅 전달 지시",
+          mentions: ["bot-sec"],
+          created_at: recent,
+        },
+        {
+          id: "role-tag-body",
+          author_id: "human-1",
+          body: "<@&role-sec> 역할 태그 호출",
+          created_at: recent,
+        },
+        {
+          id: "role-tag-array",
+          author_id: "human-1",
+          body: "배열 역할 호출",
+          mention_roles: ["role-sec"],
+          created_at: recent,
+        },
+        {
+          id: "other-role-tag",
+          author_id: "human-1",
+          body: "<@&role-rev> 리뷰어 역할만 호출",
+          mention_roles: ["role-rev"],
+          created_at: recent,
+        },
+        {
+          id: "unconfigured-bot",
+          author_id: "random-bot",
+          body: "<@bot-sec> 미등록 봇 자동 메시지",
+          mentions: ["bot-sec"],
+          created_at: recent,
+        },
+      ];
+    },
+  };
+  const res = await watch({ root, config: conf, adapter, now });
+  assert.deepEqual(
+    res.wakes.filter((w) => w.role === "secretary").map((w) => w.id),
+    [
+      "human-relay-1",
+      "human-webhook-1",
+      "human-role-tag-body",
+      "human-role-tag-array",
+    ],
+  );
+  assert.deepEqual(
+    res.wakes.filter((w) => w.role === "reviewer").map((w) => w.id),
+    ["human-other-role-tag"],
+  );
+});

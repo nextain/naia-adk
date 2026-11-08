@@ -69,13 +69,19 @@ export function createAdapter(
               id: m.id,
               channel,
               author_id: m.author.id,
+              webhook_id: m.webhook_id || null,
               created_at: m.timestamp,
               edited_at: m.edited_timestamp || null,
               edited_timestamp: m.edited_timestamp || null,
               body: m.content || "",
               reply_to_id: m.message_reference?.message_id || null,
               reply_to_author_id: m.referenced_message?.author?.id || null,
-              mentions: (m.mentions || []).map((mention) => mention.id),
+              mentions: (m.mentions || []).map((mention) =>
+                typeof mention === "string" ? mention : mention.id,
+              ),
+              mention_roles: (m.mention_roles || []).map((roleId) =>
+                typeof roleId === "string" ? roleId : roleId.id,
+              ),
               mention_everyone: m.mention_everyone === true,
               thread_id: attachedThreadId,
             });

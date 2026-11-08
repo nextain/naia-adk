@@ -160,8 +160,22 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
           ...(roleConfig.direct_channels ?? []),
         ])];
         const humans = roleConfig.human_ids ?? config.human_ids ?? [];
+        const relays = [
+          ...new Set([
+            ...(roleConfig.relay_ids ?? []),
+            ...(config.relay_ids ?? []),
+            ...(roleConfig.relay_bot_ids ?? []),
+            ...(config.relay_bot_ids ?? []),
+            ...(roleConfig.relay_user_ids ?? []),
+            ...(config.relay_user_ids ?? []),
+            ...(roleConfig.webhook_ids ?? []),
+            ...(config.webhook_ids ?? []),
+          ]),
+        ];
         const identities = roleConfig.user_ids ?? [];
-        if (channels.length && (!humans.length || !identities.length))
+        const roleIds = roleConfig.role_ids ?? [];
+        const ownTargets = [...new Set([...identities, ...roleIds])];
+        if (channels.length && (!humans.length || !ownTargets.length))
           throw new Error(
             "Messenger watch requires human_ids and role user_ids",
           );
@@ -250,17 +264,40 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
             }
           }
           const byId = new Map(messages.map((m) => [m.id, m]));
-          const otherIdentities = config.roles
+          const otherRoleUserIds = config.roles
             .filter((r) => r.role !== role)
             .flatMap((r) => r.user_ids ?? [])
             .filter((id) => !identities.includes(id));
+          const otherIdentities = config.roles
+            .filter((r) => r.role !== role)
+            .flatMap((r) => [...(r.user_ids ?? []), ...(r.role_ids ?? [])])
+            .filter((id) => !ownTargets.includes(id));
+          function isHumanOrRelay(m) {
+            if (
+              identities.includes(m.author_id) ||
+              otherRoleUserIds.includes(m.author_id)
+            )
+              return false;
+            if (humans.includes(m.author_id) || relays.includes(m.author_id))
+              return true;
+            if (m.webhook_id) return true;
+            if (humans.some((h) => (m.body || "").includes(`[${h}]`)))
+              return true;
+            return false;
+          }
           function addressed(m) {
             const mentions = new Set((m.mentions ?? []).map((value) =>
               typeof value === "string" ? value : value.id,
             ));
             for (const match of (m.body || "").matchAll(/<@!?(\w[\w-]*)>/g))
               mentions.add(match[1]);
-            const ownMention = identities.some((id) => mentions.has(id));
+            const roleMentions = new Set((m.mention_roles ?? []).map((value) =>
+              typeof value === "string" ? value : value.id,
+            ));
+            for (const match of (m.body || "").matchAll(/<@&(\w[\w-]*)>/g))
+              roleMentions.add(match[1]);
+            const allMentions = new Set([...mentions, ...roleMentions]);
+            const ownMention = ownTargets.some((id) => allMentions.has(id));
             const parentAuthor = m.reply_to_author_id || m.reply_to?.author_id ||
               m.reply_to?.author?.id || byId.get(m.reply_to_id)?.author_id ||
               threadStarterAuthor.get(m.channel);
@@ -272,7 +309,7 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
               (roleConfig.direct_channels ?? []).includes(channel)
             )
               return true;
-            if (otherIdentities.some((id) => mentions.has(id))) return false;
+            if (otherIdentities.some((id) => allMentions.has(id))) return false;
             return false;
           }
           function messageTimes(m) {
@@ -284,7 +321,7 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
             return { createdMs, editedMs, isEdited, effectiveMs };
           }
           for (const m of messages) {
-            if (!humans.includes(m.author_id) || !addressed(m)) continue;
+            if (!isHumanOrRelay(m) || !addressed(m)) continue;
             const { createdMs, editedMs, isEdited, effectiveMs } =
               messageTimes(m);
             if (
