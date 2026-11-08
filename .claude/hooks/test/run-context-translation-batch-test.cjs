@@ -1,3 +1,4 @@
+require("../../../scripts/test-signal-safety.cjs");
 const assert = require('node:assert/strict');
 const cp = require('node:child_process');
 const fs = require('node:fs');

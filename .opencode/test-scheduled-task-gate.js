@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../scripts/test-signal-safety.cjs";
 /**
  * OpenCode 예약 관문 플러그인의 시험.
  *

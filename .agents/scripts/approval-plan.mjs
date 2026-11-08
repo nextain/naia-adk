@@ -38,7 +38,7 @@ if (preloadFlag.test(process.env.NODE_OPTIONS || "") || process.execArgv.some((a
 	die("기동 거부: NODE_OPTIONS/execArgv 선적재 옵션은 허용하지 않음", 1);
 }
 const pinnedExecutors = PINNED_CJS_EXECUTORS.map((rel) => {
-	const requested = path.resolve(ROOT, rel);
+	const requested = path.resolve(fs.realpathSync(ROOT), rel);
 	const filename = fs.realpathSync(requested);
 	if (filename !== requested) die("기동 거부: 실행기 심볼릭 링크는 허용하지 않음", 1);
 	return { rel, requested, filename };
@@ -51,7 +51,14 @@ for (const { requested, filename } of pinnedExecutors) {
 const bootEntryAbs = (() => {
 	const fromArgv = process.argv[1] ? path.resolve(process.argv[1]) : null;
 	const fallback = fileURLToPath(import.meta.url);
-	try { return fs.realpathSync(fromArgv || fallback); }
+	try {
+  const requested = fromArgv || fallback;
+  const resolved = fs.realpathSync(requested);
+  // Permit a linked workspace ancestor, but never a linked entrypoint leaf.
+  const expected = path.join(fs.realpathSync(path.dirname(requested)), path.basename(requested));
+  if (resolved !== expected) die("기동 거부: 진입점 심볼릭 링크는 허용하지 않음", 1);
+  return resolved;
+ }
 	catch { return path.resolve(fromArgv || fallback); }
 })();
 let BOOT_ENTRY_SHA = null;
@@ -503,6 +510,10 @@ switch (cmd) {
 		try { for (const out of outputs) lib.resultFile(gatesDir, path.relative(gatesDir, out), true); }
 		catch { die("--out 은 해당 계획서 gatesDir 안 일반 파일 경로여야 합니다. 하위 폴더는 먼저 만드십시오"); }
 		const rec = { plan_sha256: sha, plan: path.relative(ROOT, abs), author_model: author, prompt_sha256: sha256(prompt), reviewers: [], reviewedAt: new Date().toISOString() };
+		if (args.includes("--dry")) {
+			console.log(JSON.stringify({ dry: true, boundary: "reviewer-start", plan_sha256: sha, prompt_sha256: sha256(prompt), input_manifest_sha256: early.digest, reviewers: ids }));
+			break;
+		}
 		const recordFile = path.join(gatesDir, lib.REVIEW_FILE);
 		fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
 		let results;

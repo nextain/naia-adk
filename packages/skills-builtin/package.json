@@ -16,15 +16,20 @@
     }
   },
   "sideEffects": false,
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public"
   },
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc -b",
-    "test": "vitest run"
+    "test": "node --require ../../scripts/test-signal-safety.cjs node_modules/vitest/vitest.mjs run --pool=threads"
   },
   "dependencies": {
     "@naia-adk/skill-spec": "workspace:*"

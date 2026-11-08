@@ -16,4 +16,9 @@ function stopAllLocked() {
  try { fs.lstatSync(lockFile()); return true; }
  catch(e) { return e.code !== "ENOENT"; }
 }
-module.exports = { lockFile, stopAllLocked };
+// All operational entrypoints and direct readiness calls use this first decision.
+function operationalLockProblem(operational = true) {
+ if (!operational || !module.exports.stopAllLocked()) return null;
+ return { ok: false, problems: ["모두 멈춤 잠금 중: 운영 명령 차단"], facts: [] };
+}
+module.exports = { lockFile, stopAllLocked, operationalLockProblem };

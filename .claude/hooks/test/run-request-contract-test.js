@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("../../../scripts/test-signal-safety.cjs");
 /** Deterministic fault-injection suite for request-contract integrity. */
 
 "use strict";

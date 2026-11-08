@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("../../scripts/test-signal-safety.cjs");
 
 const assert = require("assert");
 const fs = require("fs");

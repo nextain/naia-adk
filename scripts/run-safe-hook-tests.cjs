@@ -12,3 +12,5 @@ const results=[];for(const file of files){
  fs.writeFileSync(path.join(out,file.replaceAll('/','_')+'.log'),(res.stdout||'')+(res.stderr||''));results.push({file,status:res.status,error:res.error?.message});
 }
 fs.writeFileSync(path.join(out,'summary.json'),JSON.stringify(results,null,2));console.log(JSON.stringify({tests:results.length,failed:results.filter(r=>r.status!==undefined&&r.status!==0).map(r=>r.file),excluded:results.filter(r=>r.excluded)},null,2));
+
+process.exitCode=results.some(r=>r.status!==undefined&&r.status!==0||r.error)?1:0;

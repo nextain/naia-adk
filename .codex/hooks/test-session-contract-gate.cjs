@@ -1,3 +1,4 @@
+require("../../scripts/test-signal-safety.cjs");
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const crypto = require("node:crypto");

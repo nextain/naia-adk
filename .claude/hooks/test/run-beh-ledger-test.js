@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("../../../scripts/test-signal-safety.cjs");
 /**
  * BEH §3.1 ledger core — fault-injection test runner (plan §4, §6.1).
  *

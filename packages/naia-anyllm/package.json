@@ -1,12 +1,12 @@
 {
   "name": "@naia-adk/naia-anyllm",
   "version": "0.1.0",
-  "description": "LLM adapter for naia-adk — connects to any-llm gateway or direct providers",
+  "description": "LLM adapter for naia-adk \u2014 connects to any-llm gateway or direct providers",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
     "build": "tsc",
-    "test": "vitest run"
+    "test": "node --require ../../scripts/test-signal-safety.cjs node_modules/vitest/vitest.mjs run --pool=threads"
   },
   "dependencies": {
     "openai": "^4.93.0",

@@ -218,7 +218,7 @@ function runDeployGuardHook(command, { cwd, root, stateDir, transcriptPath, sess
 
 
 const lock=require('../lib/stop-all-lock.js');
-for(const mode of ['plan','deploy'])for(const locked of [false,true])for(const id of ['s0','r1','r2'])test(`actual hook ${mode} locked=${locked} ${id}`,t=>{
+for(const mode of ['plan','deploy'])for(const locked of [false,true])for(const id of ['s0','r1','r2'])for(const variant of ['exact','unclassified','plan-only'])test(`actual hook ${mode} locked=${locked} ${id} ${variant}`,t=>{
  const f=makeWorkspace(t), {root,stateDir,transcriptPath}=f;
  const script=path.join(root,'rollout.sh');fs.writeFileSync(script,'#!/bin/bash\n# mocked operational script; never executed\n');
  const services=['systemd:sample-runtime'];
@@ -229,9 +229,11 @@ for(const mode of ['plan','deploy'])for(const locked of [false,true])for(const i
  if(mode==='deploy')fs.writeFileSync(path.join(path.dirname(planFile),'deploy.json'),JSON.stringify({createdAt:new Date().toISOString(),services,kind:'ops',reason:'fixture operations only'}));
  const preload=path.join(root,'mock-lock.cjs');fs.writeFileSync(preload,`require(${JSON.stringify(path.join(REPO_ROOT,'.claude/hooks/lib/stop-all-lock.js'))}).stopAllLocked=()=>${locked};`);
  const prior=process.env.NODE_OPTIONS;process.env.NODE_OPTIONS=`${prior||''} --require=${preload}`;t.after(()=>{if(prior===undefined)delete process.env.NODE_OPTIONS;else process.env.NODE_OPTIONS=prior});
- const decision=runDeployGuardHook(plan.scenario.find(x=>x.id===id).commands[0],{cwd:root,root,stateDir,transcriptPath});
- console.log(JSON.stringify({mode,locked,id,reason:decision?.reason?.split('\n')[0]}));
- assert.equal(decision?.decision,'block');assert.match(decision.reason,locked?/모두 멈춤 잠금/:/전체 계획 승인이 아직 없습니다/);
+ if(variant==='plan-only')writeGateConfig(root,{plannedScripts:{enabled:false},services:{[services[0]]:{allowCustomCommands:true}}});
+ const command=variant==='unclassified'?`sudo bash ${path.join(f.tmp,'missing-operation.sh')} ${id}`:plan.scenario.find(x=>x.id===id).commands[0];
+ const decision=runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath});
+ console.log(JSON.stringify({mode,locked,id,variant,reason:decision?.reason?.split('\n')[0]}));
+ assert.equal(decision?.decision,'block');assert.match(decision.reason,locked?/모두 멈춤 잠금/:variant==='unclassified'?/분류하지 못해 차단/:/전체 계획 승인이 아직 없습니다/);
 });
 
 test('approval reviewer refuses symlink executors before command dispatch',t=>{

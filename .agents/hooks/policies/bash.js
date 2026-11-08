@@ -430,7 +430,9 @@ async function deploy(command, data, opts) {
 		if (matched) nonDevLegacyMatches.push({ ...matched, tokens });
 	}
 
-	if ((precomputedMutations.length || nonDevLegacyMatches.length) && require("../../../.claude/hooks/lib/stop-all-lock.js").stopAllLocked()) return { reason: "모두 멈춤 잠금 중: 운영 명령 차단" };
+ const planOperations = deployPlan.plansForCommand(command, root).length || clauses.some(tokens => tokens.length && !/^(?:echo|printf)$/.test(tokens[0]) && deployPlan.plansForCommand(clauseText(tokens), root).length);
+ const locked = require("../../../.claude/hooks/lib/stop-all-lock.js").operationalLockProblem(precomputedMutations.length || nonDevLegacyMatches.length || planOperations);
+ if (locked) return {reason:locked.problems[0]};
 
 	const isLegacyCoveredMutation = (hit) => {
 		if (!hit || hit.unclassified || typeof hit.service !== "string") return false;

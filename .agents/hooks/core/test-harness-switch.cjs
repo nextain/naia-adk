@@ -1,3 +1,4 @@
+require("../../../scripts/test-signal-safety.cjs");
 "use strict";
 /**
  * Pins the marker lookup in both directions. The bug this guards against is

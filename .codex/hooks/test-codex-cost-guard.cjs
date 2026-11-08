@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("../../scripts/test-signal-safety.cjs");
 
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");

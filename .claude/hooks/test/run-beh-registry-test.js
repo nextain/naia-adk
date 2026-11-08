@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("../../../scripts/test-signal-safety.cjs");
 /**
  * BEH §3.6 registry + §3.5 second-stream — test (plan §4, §6.5, §6.6).
  *

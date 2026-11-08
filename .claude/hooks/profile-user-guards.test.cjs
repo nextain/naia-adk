@@ -1,3 +1,4 @@
+require("../../scripts/test-signal-safety.cjs");
 "use strict";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");

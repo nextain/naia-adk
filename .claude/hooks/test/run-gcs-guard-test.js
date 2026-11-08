@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require("../../../scripts/test-signal-safety.cjs");
 /**
  * gcs-guard PreToolUse replay 검증 러너 (#246, codex 권고)
  * 실제 hook을 child process로 띄워 stdin payload를 replay → decision 확인.
