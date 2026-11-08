@@ -7,6 +7,7 @@ import {
   utimes,
   mkdir,
   readdir,
+  rm,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,12 @@ import { main, readLedger, ledgerPath, changeLedger } from "./ledger.mjs";
 import { watch } from "./ledger-watch.mjs";
 import { createAdapter } from "./messenger.mjs";
 const now = Date.parse("2026-11-08T12:00:00Z");
+const createdRoots = [];
+test.after(async () => {
+  await Promise.all(
+    createdRoots.map((dir) => rm(dir, { recursive: true, force: true })),
+  );
+});
 const config = {
   roles: [
     {
@@ -26,6 +33,7 @@ const config = {
 };
 async function setup() {
   const root = await mkdtemp(path.join(os.tmpdir(), "work-ledger-"));
+  createdRoots.push(root);
   await main([
     "add",
     "--root",
@@ -1132,5 +1140,78 @@ test("word-bounded everyone/here, mentionless replies to other roles, and unlist
       "human-unlisted-bot-with-here",
       "human-reply-other-with-here",
     ],
+  );
+});
+
+test("unsafe channel and message IDs emit single error wakes without aborting subsequent checks", async () => {
+  const root = await setup();
+  const created_at = new Date(now - 1000).toISOString();
+  const conf = {
+    roles: [
+      {
+        role: "secretary",
+        channels: ["bad/channel", "#invalid-ch", "healthy-1", "healthy-2"],
+        human_ids: ["human-1"],
+        user_ids: ["bot-sec"],
+      },
+    ],
+  };
+  const visited = [];
+  const adapter = {
+    async messages(ch) {
+      visited.push(ch);
+      if (ch === "bad/channel") throw new Error("HTTP 404");
+      if (ch === "#invalid-ch") {
+        return [
+          {
+            id: "msg-in-invalid-ch",
+            author_id: "human-1",
+            body: "<@bot-sec> 확인",
+            mentions: ["bot-sec"],
+            created_at,
+          },
+        ];
+      }
+      if (ch === "healthy-1") {
+        return [
+          {
+            id: "bad/msg:1",
+            author_id: "human-1",
+            body: "<@bot-sec> 잘못된 글 번호",
+            mentions: ["bot-sec"],
+            created_at,
+          },
+          {
+            id: "good-msg-1",
+            author_id: "human-1",
+            body: "<@bot-sec> 같은 채널 정상 글",
+            mentions: ["bot-sec"],
+            created_at,
+          },
+        ];
+      }
+      return [
+        {
+          id: "good-msg-2",
+          author_id: "human-1",
+          body: "<@bot-sec> 다음 채널 정상 글",
+          mentions: ["bot-sec"],
+          created_at,
+        },
+      ];
+    },
+  };
+  const res = await watch({ root, config: conf, adapter, now });
+  assert.ok(visited.includes("healthy-1"));
+  assert.ok(visited.includes("healthy-2"));
+  assert.equal(
+    res.wakes.filter((w) => w.reason === "감시 실패").length,
+    3,
+  );
+  assert.deepEqual(
+    res.wakes
+      .filter((w) => w.reason === "장부에 없는 사람 글")
+      .map((w) => w.id),
+    ["human-good-msg-1", "human-good-msg-2"],
   );
 });

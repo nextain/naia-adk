@@ -41,6 +41,19 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
     const wakes = [];
     const errors = [];
     let sequence = 0;
+    function safeIdPart(raw) {
+      try {
+        return safeName(raw);
+      } catch {
+        const cleaned = String(raw ?? "")
+          .replace(/[^a-zA-Z0-9_-]+/g, "_")
+          .replace(/^[^a-zA-Z0-9]+/, "")
+          .slice(0, 40);
+        const hex =
+          Buffer.from(String(raw ?? "")).toString("hex").slice(0, 16) || "0";
+        return cleaned ? `${cleaned}-${hex}` : `id-${hex}`;
+      }
+    }
     async function wake(role, id, reason, title, details = "") {
       safeName(role);
       safeName(id);
@@ -191,12 +204,13 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
           const since = now - 24 * 60 * 60000;
           let channelMessages;
           try {
+            safeName(channel);
             channelMessages = await messenger.messages(channel, since);
           } catch (error) {
             errors.push(`messenger:${role}:${channel}`);
             await wake(
               role,
-              `messenger-error-${safeName(channel)}`,
+              `messenger-error-${safeIdPart(channel)}`,
               "감시 실패",
               "메신저 읽기 실패",
               `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${channel}\n오류: ${error.message || String(error)}`,
@@ -233,7 +247,7 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
               errors.push(`messenger:${role}:${channel}:threads`);
               await wake(
                 role,
-                `messenger-error-${safeName(channel)}-threads`,
+                `messenger-error-${safeIdPart(channel)}-threads`,
                 "감시 실패",
                 "메신저 읽기 실패",
                 `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${channel}\n오류: ${error.message || String(error)}`,
@@ -247,12 +261,13 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
             visitedThreads.add(threadId);
             let threadMessages;
             try {
+              safeName(threadId);
               threadMessages = await messenger.messages(threadId, since);
             } catch (error) {
               errors.push(`messenger:${role}:${threadId}`);
               await wake(
                 role,
-                `messenger-error-${safeName(threadId)}`,
+                `messenger-error-${safeIdPart(threadId)}`,
                 "감시 실패",
                 "메신저 읽기 실패",
                 `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${threadId}\n오류: ${error.message || String(error)}`,
@@ -334,57 +349,86 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
             return { createdMs, editedMs, isEdited, effectiveMs };
           }
           for (const m of messages) {
-            if (!isHumanOrRelay(m) || !addressed(m)) continue;
-            const { createdMs, editedMs, isEdited, effectiveMs } =
-              messageTimes(m);
-            if (
-              !Number.isFinite(effectiveMs) ||
-              effectiveMs < since ||
-              effectiveMs > now
-            )
-              continue;
-            const replies = messages.filter(
-              (r) =>
-                identities.includes(r.author_id) && r.reply_to_id === m.id,
-            );
-            const isReplied = isEdited
-              ? replies.some((r) => messageTimes(r).effectiveMs >= editedMs)
-              : replies.length > 0;
-            const isAnsweredAfter =
-              roleConfig.answered_by_any_role_post_after === true &&
-              messages.some(
-                (post) =>
-                  identities.includes(post.author_id) &&
-                  messageTimes(post).effectiveMs > effectiveMs &&
-                  messageTimes(post).effectiveMs <= now,
+            try {
+              if (!isHumanOrRelay(m) || !addressed(m)) continue;
+              const { createdMs, editedMs, isEdited, effectiveMs } =
+                messageTimes(m);
+              if (
+                !Number.isFinite(effectiveMs) ||
+                effectiveMs < since ||
+                effectiveMs > now
+              )
+                continue;
+              const replies = messages.filter(
+                (r) =>
+                  identities.includes(r.author_id) && r.reply_to_id === m.id,
               );
-            const recordedItems = ledger.items.filter(
-              (i) => i.from.msg_id === m.id,
-            );
-            const isRecorded = isEdited
-              ? recordedItems.some(
-                  (i) =>
-                    (i.checked_at && Date.parse(i.checked_at) >= editedMs) ||
-                    Boolean(i.from.quote && i.from.quote === m.body),
-                )
-              : recordedItems.length > 0;
-            const wakeId = `human-${safeName(m.id)}`;
-            const wakeKey = JSON.stringify([
-              role,
-              wakeId,
-              "장부에 없는 사람 글",
-            ]);
-            if (isReplied || isAnsweredAfter || isRecorded) {
-              delete state.sent[wakeKey];
-              continue;
+              const isReplied = isEdited
+                ? replies.some((r) => messageTimes(r).effectiveMs >= editedMs)
+                : replies.length > 0;
+              const isAnsweredAfter =
+                roleConfig.answered_by_any_role_post_after === true &&
+                messages.some(
+                  (post) =>
+                    identities.includes(post.author_id) &&
+                    messageTimes(post).effectiveMs > effectiveMs &&
+                    messageTimes(post).effectiveMs <= now,
+                );
+              const hadAnswerBeforeEdit =
+                isEdited &&
+                (replies.length > 0 ||
+                  ledger.items.some((i) => i.from.msg_id === m.id) ||
+                  (roleConfig.answered_by_any_role_post_after === true &&
+                    messages.some(
+                      (post) =>
+                        identities.includes(post.author_id) &&
+                        messageTimes(post).effectiveMs > createdMs &&
+                        messageTimes(post).effectiveMs < editedMs,
+                    )));
+              const recordedItems = ledger.items.filter(
+                (i) => i.from.msg_id === m.id,
+              );
+              const isRecorded = isEdited
+                ? recordedItems.some(
+                    (i) =>
+                      (i.checked_at && Date.parse(i.checked_at) >= editedMs) ||
+                      Boolean(i.from.quote && i.from.quote === m.body),
+                  )
+                : recordedItems.length > 0;
+              const wakeId = `human-${safeName(m.id)}`;
+              const wakeKey = JSON.stringify([
+                role,
+                wakeId,
+                "장부에 없는 사람 글",
+              ]);
+              if (isReplied || isAnsweredAfter || isRecorded) {
+                delete state.sent[wakeKey];
+                continue;
+              }
+              if (
+                hadAnswerBeforeEdit &&
+                state.sent[wakeKey] !== undefined &&
+                state.sent[wakeKey] < editedMs
+              )
+                delete state.sent[wakeKey];
+              await wake(
+                role,
+                wakeId,
+                "장부에 없는 사람 글",
+                m.body || "(본문 없음)",
+                `출처: ${m.channel || channel}/${m.id}\n기한: (미등록)\n결과: (없음)`,
+              );
+            } catch (error) {
+              const sourceChannel = m?.channel || channel;
+              errors.push(`messenger:${role}:${sourceChannel}:${m?.id}`);
+              await wake(
+                role,
+                `messenger-error-${safeIdPart(`${sourceChannel}-${m?.id}`)}`,
+                "감시 실패",
+                "메신저 메시지 처리 실패",
+                `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${sourceChannel}\n메시지: ${m?.id}\n오류: ${error.message || String(error)}`,
+              );
             }
-            await wake(
-              role,
-              wakeId,
-              "장부에 없는 사람 글",
-              m.body || "(본문 없음)",
-              `출처: ${m.channel || channel}/${m.id}\n기한: (미등록)\n결과: (없음)`,
-            );
           }
         }
       } catch (error) {
