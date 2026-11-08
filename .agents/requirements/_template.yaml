@@ -33,6 +33,21 @@ description: |
 acceptance_criteria:
   - ""
 
+# Design specification and produced/upstream stage artifacts whose semantic intent
+# must be re-verified whenever this design changes (enforced by intent-guard).
+design: |
+  {Architectural/stage design contract and semantic role of upstream or produced artifacts}
+
+artifacts:
+  - id: "{artifact-id}"
+    path: "{artifact-path-or-glob}"
+    stage: "{upstream-producer-or-consumer-stage}"
+    intent_test:
+      condition: "{machine-measurable semantic condition, not file shape/count only}"
+      test_path: "{path/to/intent.test.mjs}"
+      symbol: "{test-name-or-symbol}"
+      receipt: null  # optional path to test receipt JSON (or update test_path in the same change)
+
 trace:
   code:
     - path: ""

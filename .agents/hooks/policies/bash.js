@@ -2011,6 +2011,16 @@ function uncommittedArtifact(command, data, opts) {
 	return null;
 }
 
+const {
+	designIntentRecheck,
+	intentGuard,
+	checkRepositoryDesignIntent,
+	parseRequirementDocument,
+	evaluateArtifactIntent,
+	isShapeOrCountOnlyCondition,
+	extractGitCommitInvocations,
+} = require("./design-intent-guard.js");
+
 module.exports = {
 	destructiveGit,
 	catastrophicDelete,
@@ -2020,6 +2030,13 @@ module.exports = {
 	prGuard,
 	deploy,
 	uncommittedArtifact,
+	designIntentRecheck,
+	intentGuard,
+	checkRepositoryDesignIntent,
+	parseRequirementDocument,
+	evaluateArtifactIntent,
+	isShapeOrCountOnlyCondition,
+	extractGitCommitInvocations,
 	loadArtifactExtensions,
 	loadArtifactScriptDirs,
 	DEFAULT_ARTIFACT_EXTENSIONS,

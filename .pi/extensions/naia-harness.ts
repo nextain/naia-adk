@@ -76,6 +76,7 @@ export default function (pi: ExtensionAPI) {
 				() => bash.gitPush(command),
 				() => bash.emailSend(command),
 				() => bash.uncommittedArtifact(command, data),
+				() => bash.designIntentRecheck(command, data),
 			];
 			for (const run of failOpen) {
 				try {
