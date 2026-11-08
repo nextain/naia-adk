@@ -374,17 +374,6 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
                     messageTimes(post).effectiveMs > effectiveMs &&
                     messageTimes(post).effectiveMs <= now,
                 );
-              const hadAnswerBeforeEdit =
-                isEdited &&
-                (replies.length > 0 ||
-                  ledger.items.some((i) => i.from.msg_id === m.id) ||
-                  (roleConfig.answered_by_any_role_post_after === true &&
-                    messages.some(
-                      (post) =>
-                        identities.includes(post.author_id) &&
-                        messageTimes(post).effectiveMs > createdMs &&
-                        messageTimes(post).effectiveMs < editedMs,
-                    )));
               const recordedItems = ledger.items.filter(
                 (i) => i.from.msg_id === m.id,
               );
@@ -405,12 +394,6 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
                 delete state.sent[wakeKey];
                 continue;
               }
-              if (
-                hadAnswerBeforeEdit &&
-                state.sent[wakeKey] !== undefined &&
-                state.sent[wakeKey] < editedMs
-              )
-                delete state.sent[wakeKey];
               await wake(
                 role,
                 wakeId,
