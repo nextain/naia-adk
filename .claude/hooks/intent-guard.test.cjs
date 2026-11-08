@@ -1032,6 +1032,8 @@ test("extracted table rows maintain normalized KRW integers", () => {
 		const newDoc = policy.parseRequirementDocument(UPDATED_DESIGN_REQ_YAML, "REQ-001-table-schema-stage");
 		const testBytes = fs.readFileSync(path.join(repoDir, "tests/extracted-tables-intent.test.mjs"), "utf8");
 		const testSha256 = crypto.createHash("sha256").update(testBytes, "utf8").digest("hex");
+		const artifactBytes = fs.readFileSync(path.join(repoDir, "artifacts/extracted-tables.json"), "utf8");
+		const artifactSha256 = crypto.createHash("sha256").update(artifactBytes, "utf8").digest("hex");
 		const fakeOutputSha256 = "a".repeat(64);
 		const ranAt = "2026-11-08T10:30:00.000Z";
 		const forgedProof = crypto
@@ -1045,6 +1047,7 @@ test("extracted table rows maintain normalized KRW integers", () => {
 					"tests/extracted-tables-intent.test.mjs",
 					newDoc.designDigest,
 					testSha256,
+					artifactSha256,
 					"0",
 					fakeOutputSha256,
 					ranAt,
@@ -1070,6 +1073,7 @@ test("extracted table rows maintain normalized KRW integers", () => {
 						exit_code: 0,
 						design_sha256: newDoc.designDigest,
 						test_sha256: testSha256,
+						artifact_sha256: artifactSha256,
 						output_sha256: fakeOutputSha256,
 						ran_at: ranAt,
 						runner: "intent-guard-runner/v1",
@@ -1100,6 +1104,11 @@ test("extracted table rows maintain normalized KRW integers", () => {
 			resForgedProof.parsed?.decision,
 			"block",
 			"Receipt with recomputed run_proof and fabricated output_sha256 must be blocked",
+		);
+		assert.match(
+			resForgedProof.parsed?.reason || "",
+			/실행 출력 지문\(output_sha256\)이 관문 직접 실행 출력과 불일치/,
+			"11-field forged proof must reach and fail at output_sha256 comparison",
 		);
 
 		// Subcase B: Test actually fails on execution (amount_krw < 0), even if test file was updated in the same commit
@@ -1498,5 +1507,408 @@ status: active
 		}
 		assert.equal(recRes, null, "designIntentRecheck must fail-open on unexpected exception");
 		assert.match(stderrCaptured, /simulated cwd getter failure|intent-guard/i);
+	});
+
+	it("25. [차단/통과 - 보통-N1 스테이지·커밋 블롭 materialize 검사 및 작업 트리 괴리 차단] staged·commit 모드에서 작업 트리와 인덱스/커밋 블롭이 다를 때 블롭을 임시 파일로 꺼내 검사·실행하고 괴리를 차단한다", () => {
+		const repoDir = path.join(tmpRoot, "case-n1-blob-materialize");
+		initGitRepo(repoDir);
+		writeFile(
+			repoDir,
+			"artifacts/extracted-tables.json",
+			JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: 125000 }] }, null, 2) + "\n",
+		);
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", BASE_REQ_YAML);
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", BASE_TEST_CONTENT);
+		git(repoDir, ["add", "."]);
+		git(repoDir, ["commit", "-m", "initial"]);
+
+		// Subcase A (staged mode): stage a broken/failing test in the index, then overwrite worktree with passing test without staging
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", UPDATED_DESIGN_REQ_YAML);
+		const failingTestContent = BASE_TEST_CONTENT.replace(
+			"assert.ok(amount_krw >= 0);",
+			"assert.ok(amount_krw >= 0);\n  assert.ok(amount_krw < 0);",
+		);
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", failingTestContent);
+		git(repoDir, [
+			"add",
+			".agents/requirements/REQ-001-table-schema-stage.yaml",
+			"tests/extracted-tables-intent.test.mjs",
+		]);
+		// Overwrite worktree with passing test WITHOUT git add
+		writeFile(
+			repoDir,
+			"tests/extracted-tables-intent.test.mjs",
+			BASE_TEST_CONTENT + "\n// worktree looks valid while index blob is broken\n",
+		);
+
+		const stagedDriftRes = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'feat: staged broken blob masked by worktree'" },
+			},
+			repoDir,
+		);
+		assert.equal(
+			stagedDriftRes.parsed?.decision,
+			"block",
+			"Staged mode must inspect/execute staged blob and block when index blob fails or diverges from worktree",
+		);
+
+		// Subcase B (commit mode --commit HEAD): commit a valid test+design, then corrupt/delete worktree files and verify --commit HEAD still passes from HEAD blobs
+		writeFile(
+			repoDir,
+			"tests/extracted-tables-intent.test.mjs",
+			BASE_TEST_CONTENT + "\n// valid committed test\n",
+		);
+		git(repoDir, ["add", "tests/extracted-tables-intent.test.mjs"]);
+		git(repoDir, ["commit", "-m", "feat: valid design and test commit"]);
+
+		// Corrupt worktree test and artifact after commit
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", "// empty comment only in worktree\n");
+		writeFile(
+			repoDir,
+			"artifacts/extracted-tables.json",
+			JSON.stringify({ row_parse_error_rate: 0.99, rows: [{ amount_krw: -999 }] }) + "\n",
+		);
+
+		const commitHeadRes = runCli(["--commit", "HEAD", "--cwd", repoDir], repoDir);
+		assert.equal(
+			commitHeadRes.status,
+			0,
+			`--commit HEAD must materialize and execute HEAD blobs rather than dirty worktree files: ${commitHeadRes.stderr}`,
+		);
+	});
+
+	it("26. [통과/정합 - 보통-N2/사소-N4 최소 env 허용목록·프로세스 그룹 종료·신뢰 경계 문서화] 의도 시험 실행 시 비허용 환경변수를 차단하고 자손 프로세스 그룹을 통째 종료하며 문서에 신뢰 경계를 명시한다", () => {
+		const repoDir = path.join(tmpRoot, "case-n2-n4-env-pgid");
+		initGitRepo(repoDir);
+		writeFile(
+			repoDir,
+			"artifacts/extracted-tables.json",
+			JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: 125000 }] }, null, 2) + "\n",
+		);
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", BASE_REQ_YAML);
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", BASE_TEST_CONTENT);
+		git(repoDir, ["add", "."]);
+		git(repoDir, ["commit", "-m", "initial"]);
+
+		const bgPidFile = path.join(repoDir, "bg-grandchild.pid");
+		const envAndGrandchildTest = `import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { spawn } from "node:child_process";
+
+export function verifyExtractedTablesIntent() {
+  const data = JSON.parse(fs.readFileSync("artifacts/extracted-tables.json", "utf8"));
+  const row_parse_error_rate = data.row_parse_error_rate;
+  const amount_krw = data.rows[0].amount_krw;
+  assert.ok(row_parse_error_rate <= 0.005);
+  assert.ok(amount_krw >= 0);
+  assert.equal(process.env.INTENT_GUARD_LEAKED_SECRET, undefined);
+  assert.equal(process.env.TZ, "UTC");
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  fs.writeFileSync(${JSON.stringify(bgPidFile)}, String(child.pid), "utf8");
+  child.unref();
+}
+
+test("minimal env and process group cleanup", () => {
+  verifyExtractedTablesIntent();
+});
+`;
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", UPDATED_DESIGN_REQ_YAML);
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", envAndGrandchildTest);
+		git(repoDir, [
+			"add",
+			".agents/requirements/REQ-001-table-schema-stage.yaml",
+			"tests/extracted-tables-intent.test.mjs",
+		]);
+
+		const prevSecret = process.env.INTENT_GUARD_LEAKED_SECRET;
+		const prevTz = process.env.TZ;
+		process.env.INTENT_GUARD_LEAKED_SECRET = "should-not-leak";
+		process.env.TZ = "America/New_York";
+		let checkRes;
+		try {
+			checkRes = policy.checkRepositoryDesignIntent(repoDir, { mode: "staged" });
+		} finally {
+			if (prevSecret === undefined) delete process.env.INTENT_GUARD_LEAKED_SECRET;
+			else process.env.INTENT_GUARD_LEAKED_SECRET = prevSecret;
+			if (prevTz === undefined) delete process.env.TZ;
+			else process.env.TZ = prevTz;
+		}
+
+		assert.equal(
+			checkRes.ok,
+			true,
+			`Test asserting minimal env allowlist and TZ=UTC must pass: ${checkRes.reason || ""}`,
+		);
+		assert.ok(fs.existsSync(bgPidFile), "Grandchild pid file should have been written");
+		const bgPid = Number(fs.readFileSync(bgPidFile, "utf8").trim());
+		assert.ok(Number.isInteger(bgPid) && bgPid > 0);
+
+		let bgAlive = false;
+		try {
+			process.kill(bgPid, 0);
+			if (fs.existsSync(`/proc/${bgPid}/stat`)) {
+				const statText = fs.readFileSync(`/proc/${bgPid}/stat`, "utf8");
+				const stateChar = statText.slice(statText.lastIndexOf(")") + 1).trim()[0];
+				bgAlive = stateChar !== "Z" && stateChar !== "X";
+			} else {
+				bgAlive = true;
+			}
+			if (bgAlive) process.kill(bgPid, "SIGKILL");
+		} catch {
+			bgAlive = false;
+		}
+		assert.equal(bgAlive, false, "Background grandchild process in test process group must be terminated");
+
+		const guideText = fs.readFileSync(
+			path.join(ROOT_DIR, "docs", "guides", "design-intent-guard.md"),
+			"utf8",
+		);
+		assert.match(guideText, /신뢰 경계/);
+		assert.match(guideText, /모르는 브랜치|시험 파일을 먼저/);
+	});
+
+	it("27. [통과 - 보통-N3 비결정적 콘솔 로그 출력 완화 및 TAP 집계 지문 검증] 시험이 시각·난수·경로 등 비결정적 console 로그를 출력해도 TAP 집계 지문으로 영수증 검증을 통과한다", () => {
+		const repoDir = path.join(tmpRoot, "case-n3-noisy-console-tap");
+		initGitRepo(repoDir);
+		writeFile(
+			repoDir,
+			"artifacts/extracted-tables.json",
+			JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: 125000 }] }, null, 2) + "\n",
+		);
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", BASE_REQ_YAML);
+		const noisyTestContent = `import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+
+export function verifyExtractedTablesIntent() {
+  console.log("diagnostic timestamp:", Date.now(), Math.random(), process.pid, import.meta.url);
+  const data = JSON.parse(fs.readFileSync("artifacts/extracted-tables.json", "utf8"));
+  const row_parse_error_rate = data.row_parse_error_rate;
+  const amount_krw = data.rows[0].amount_krw;
+  assert.ok(row_parse_error_rate <= 0.005);
+  assert.ok(amount_krw >= 0);
+}
+
+test("extracted table rows with diagnostic console output", () => {
+  verifyExtractedTablesIntent();
+});
+`;
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", noisyTestContent);
+		git(repoDir, ["add", "."]);
+		git(repoDir, ["commit", "-m", "initial with noisy test"]);
+
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", UPDATED_DESIGN_REQ_YAML);
+		const runRes = runCli(["--run-tests", "--cwd", repoDir], repoDir);
+		assert.equal(runRes.status, 0, `--run-tests must succeed: ${runRes.stderr}`);
+
+		git(repoDir, [
+			"add",
+			".agents/requirements/REQ-001-table-schema-stage.yaml",
+			".agents/intent-receipts/REQ-001-table-schema-stage.json",
+		]);
+
+		const hookRes = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "git commit -m 'feat: noisy test with receipt should pass'" },
+			},
+			repoDir,
+		);
+		assert.equal(
+			hookRes.parsed,
+			null,
+			`Legitimate test with console.log timestamp/random/path must not break receipt output_sha256: ${JSON.stringify(hookRes.parsed)}`,
+		);
+	});
+
+	it("28. [통과/차단 - 보통-N5 make 호출 타깃 한정 레시피 전개] Makefile의 다른 타깃에 git commit이 있어도 호출된 타깃(make build)은 통과하고 커밋 타깃(make commit-target)만 차단한다", () => {
+		const repoDir = path.join(tmpRoot, "case-n5-make-target-only");
+		initGitRepo(repoDir);
+		writeFile(
+			repoDir,
+			"artifacts/extracted-tables.json",
+			JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: 125000 }] }, null, 2) + "\n",
+		);
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", BASE_REQ_YAML);
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", BASE_TEST_CONTENT);
+		writeFile(
+			repoDir,
+			"Makefile",
+			[
+				".PHONY: build commit-target release",
+				"build:",
+				"\tnode -e \"console.log('building only')\"",
+				"",
+				"commit-target:",
+				"\tgit commit -m 'via makefile commit-target'",
+				"",
+				"release: commit-target",
+				"\tnode -e \"console.log('releasing')\"",
+				"",
+			].join("\n"),
+		);
+		git(repoDir, ["add", "."]);
+		git(repoDir, ["commit", "-m", "initial"]);
+
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", UPDATED_DESIGN_REQ_YAML);
+		git(repoDir, ["add", ".agents/requirements/REQ-001-table-schema-stage.yaml"]);
+
+		const buildRes = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "make build" },
+			},
+			repoDir,
+		);
+		assert.equal(
+			buildRes.parsed,
+			null,
+			`make build must NOT be over-blocked when only commit-target runs git commit: ${JSON.stringify(buildRes.parsed)}`,
+		);
+
+		const defaultMakeRes = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "make" },
+			},
+			repoDir,
+		);
+		assert.equal(defaultMakeRes.parsed, null, "default make target (build) must NOT be blocked");
+
+		const commitTargetRes = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "make commit-target" },
+			},
+			repoDir,
+		);
+		assert.equal(commitTargetRes.parsed?.decision, "block", "make commit-target must be blocked");
+
+		const releaseTargetRes = runHook(
+			{
+				cwd: repoDir,
+				tool_name: "Bash",
+				tool_input: { command: "make release" },
+			},
+			repoDir,
+		);
+		assert.equal(
+			releaseTargetRes.parsed?.decision,
+			"block",
+			"make release (depending on commit-target) must be blocked",
+		);
+	});
+
+	it("29. [차단/정합 - 보통-N6/사소-N7 11필드 정규 증명 output_sha256 불일치 차단 및 공허 검사 가장자리 문서화] 11필드 정규 run_proof 위조가 output_sha256 비교에서 차단되고 문서에 리터럴 경로·상수 이름 안내가 있다", () => {
+		const crypto = require("node:crypto");
+		const repoDir = path.join(tmpRoot, "case-n6-n7-exact-11-field");
+		initGitRepo(repoDir);
+		const artifactContent =
+			JSON.stringify({ row_parse_error_rate: 0.001, rows: [{ amount_krw: 125000 }] }, null, 2) + "\n";
+		writeFile(repoDir, "artifacts/extracted-tables.json", artifactContent);
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", BASE_REQ_YAML);
+		const distinctConstTest = `import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+
+export function verifyExtractedTablesIntent() {
+  const data = JSON.parse(fs.readFileSync("artifacts/extracted-tables.json", "utf8"));
+  const min_amount_krw = 0;
+  assert.ok(data.row_parse_error_rate <= 0.005);
+  assert.ok(data.rows[0].amount_krw >= min_amount_krw);
+}
+
+test("distinct constant name min_amount_krw passes vacuous check", () => {
+  verifyExtractedTablesIntent();
+});
+`;
+		writeFile(repoDir, "tests/extracted-tables-intent.test.mjs", distinctConstTest);
+		git(repoDir, ["add", "."]);
+		git(repoDir, ["commit", "-m", "initial"]);
+
+		writeFile(repoDir, ".agents/requirements/REQ-001-table-schema-stage.yaml", UPDATED_DESIGN_REQ_YAML);
+		const newDoc = policy.parseRequirementDocument(UPDATED_DESIGN_REQ_YAML, "REQ-001-table-schema-stage");
+		const testSha256 = crypto.createHash("sha256").update(distinctConstTest, "utf8").digest("hex");
+		const artifactSha256 = crypto.createHash("sha256").update(artifactContent, "utf8").digest("hex");
+		const wrongOutputSha256 = "b".repeat(64);
+		const ranAt = "2026-11-08T11:55:00.000Z";
+		const elevenFields = [
+			"naia-adk-intent-guard-receipt-v1",
+			"intent-guard-runner/v1",
+			"REQ-001-table-schema-stage",
+			"extracted-tables-json",
+			"tests/extracted-tables-intent.test.mjs",
+			newDoc.designDigest,
+			testSha256,
+			artifactSha256,
+			"0",
+			wrongOutputSha256,
+			ranAt,
+		];
+		assert.equal(elevenFields.length, 11);
+		const validProofWithWrongOutput = crypto
+			.createHash("sha256")
+			.update(elevenFields.join("|"), "utf8")
+			.digest("hex");
+
+		writeFile(
+			repoDir,
+			".agents/intent-receipts/REQ-001-table-schema-stage.json",
+			JSON.stringify(
+				{
+					runner: "intent-guard-runner/v1",
+					requirement_id: "REQ-001-table-schema-stage",
+					design_sha256: newDoc.designDigest,
+					ran_at: ranAt,
+					status: "pass",
+					artifacts: [
+						{
+							requirement_id: "REQ-001-table-schema-stage",
+							artifact_id: "extracted-tables-json",
+							path: "artifacts/extracted-tables.json",
+							test_path: "tests/extracted-tables-intent.test.mjs",
+							status: "pass",
+							exit_code: 0,
+							design_sha256: newDoc.designDigest,
+							test_sha256: testSha256,
+							artifact_sha256: artifactSha256,
+							output_sha256: wrongOutputSha256,
+							ran_at: ranAt,
+							runner: "intent-guard-runner/v1",
+							run_proof: validProofWithWrongOutput,
+						},
+					],
+				},
+				null,
+				2,
+			),
+		);
+		git(repoDir, [
+			"add",
+			".agents/requirements/REQ-001-table-schema-stage.yaml",
+			".agents/intent-receipts/REQ-001-table-schema-stage.json",
+		]);
+
+		const checkRes = policy.checkRepositoryDesignIntent(repoDir, { mode: "staged" });
+		assert.equal(checkRes.ok, false);
+		assert.match(
+			checkRes.reason || "",
+			/실행 출력 지문\(output_sha256\)이 관문 직접 실행 출력과 불일치/,
+		);
+
+		const guideText = fs.readFileSync(
+			path.join(ROOT_DIR, "docs", "guides", "design-intent-guard.md"),
+			"utf8",
+		);
+		assert.match(guideText, /리터럴/);
+		assert.match(guideText, /min_amount_krw|다른 이름/);
 	});
 });

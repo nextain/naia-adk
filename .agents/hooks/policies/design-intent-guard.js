@@ -27,6 +27,7 @@
  */
 
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const { spawnSync } = require("child_process");
@@ -64,62 +65,263 @@ const ARTIFACT_SECTION_KEYS = [
 	"stage_artifacts",
 ];
 
+const MINIMAL_ENV_ALLOWLIST = [
+	"PATH",
+	"SYSTEMROOT",
+	"SystemRoot",
+	"WINDIR",
+	"COMSPEC",
+	"PATHEXT",
+	"TMPDIR",
+	"TMP",
+	"TEMP",
+	"HOME",
+	"USERPROFILE",
+	"NODE_PATH",
+];
+
+function buildMinimalTestEnv() {
+	const env = {};
+	for (const key of MINIMAL_ENV_ALLOWLIST) {
+		if (typeof process.env[key] === "string" && process.env[key].length > 0) {
+			env[key] = process.env[key];
+		}
+	}
+	env.TZ = "UTC";
+	env.LANG = "C.UTF-8";
+	env.LC_ALL = "C.UTF-8";
+	env.NO_COLOR = "1";
+	env.FORCE_COLOR = "0";
+	env.CI = "true";
+	return env;
+}
+
 function sha256Hex(input) {
 	return crypto.createHash("sha256").update(String(input ?? ""), "utf8").digest("hex");
 }
 
-function normalizeTestOutput(stdout, stderr) {
-	return `${stdout || ""}\n${stderr || ""}`
-		.replace(/\r\n/g, "\n")
-		.replace(/\(\d+(?:\.\d+)?ms\)/g, "(0ms)")
-		.replace(/(\bduration_ms:?\s+)\d+(?:\.\d+)?/g, "$10")
-		.split("\n")
-		.map((l) => l.trimEnd())
-		.filter((l) => l.trim().length > 0)
-		.join("\n");
+/**
+ * [보통-N3] Normalize TAP output to a deterministic fingerprint of test point
+ * verdicts (`ok`/`not ok`), TAP plan (`1..N`), aggregate counts (`tests`, `pass`,
+ * `fail`, `cancelled`, `skipped`, `todo`), and `exit_code`. Non-deterministic
+ * console/diagnostic comment lines, timestamps, and temporary file prefixes are
+ * excluded so legitimate logging tests remain stable across local and CI runs.
+ */
+function normalizeTestOutput(stdout, stderr, exitCode = 0) {
+	const rawLines = `${stdout || ""}\n${stderr || ""}`.replace(/\r\n/g, "\n").split("\n");
+	const canonicalLines = [];
+
+	for (const rawLine of rawLines) {
+		const trimmed = rawLine.trim();
+		if (!trimmed) continue;
+
+		if (/^TAP version \d+$/i.test(trimmed)) {
+			canonicalLines.push("TAP version 13");
+			continue;
+		}
+
+		if (/^\d+\.\.\d+$/.test(trimmed)) {
+			canonicalLines.push(trimmed);
+			continue;
+		}
+
+		const testPointMatch = trimmed.match(/^(ok|not ok)\s+(\d+)(?:\s+-\s+(.*))?$/);
+		if (testPointMatch) {
+			const status = testPointMatch[1];
+			const num = testPointMatch[2];
+			let desc = (testPointMatch[3] || "")
+				.replace(/\s*#\s*(?:time|duration_ms)\s*=.*$/i, "")
+				.replace(/\s*\(\d+(?:\.\d+)?ms\)\s*$/i, "")
+				.trim();
+			if (/[\\/]/.test(desc) && /\.[mc]?[jt]s$/i.test(desc)) {
+				desc = path.posix.basename(desc.replace(/\\/g, "/"));
+			}
+			canonicalLines.push(desc ? `${status} ${num} - ${desc}` : `${status} ${num}`);
+			continue;
+		}
+
+		const summaryMatch = trimmed.match(
+			/^#\s*(tests|suites|pass|fail|cancelled|skipped|todo)\s+(\d+)$/i,
+		);
+		if (summaryMatch) {
+			canonicalLines.push(`# ${summaryMatch[1].toLowerCase()} ${summaryMatch[2]}`);
+			continue;
+		}
+	}
+
+	canonicalLines.push(`exit_code:${exitCode}`);
+	return canonicalLines.join("\n");
 }
 
-function executeIntentTest(repoRoot, absTestPath) {
-	const cleanEnv = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" };
-	delete cleanEnv.NODE_TEST_CONTEXT;
-	const runRes = spawnSync(
-		process.execPath,
-		["--test", "--test-reporter=tap", absTestPath],
-		{
-			cwd: repoRoot,
-			env: cleanEnv,
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "pipe"],
-			timeout: 30000,
-		},
-	);
-	const exitCode = typeof runRes.status === "number" ? runRes.status : 1;
-	const normalizedOutput = normalizeTestOutput(runRes.stdout, runRes.stderr);
-	const outputSha256 = sha256Hex(normalizedOutput);
-	return {
-		exitCode,
-		stdout: runRes.stdout || "",
-		stderr: runRes.stderr || "",
-		outputSha256,
-	};
+/**
+ * [보통-N1 / 보통-N2 / 사소-N4] Execute the declared intent test in an isolated
+ * process group with a minimal environment allowlist. When `materializeSpec` is
+ * provided (staged/commit modes), the blob contents are materialized into a
+ * temporary directory and executed from there rather than trusting the worktree.
+ */
+function executeIntentTest(repoRoot, absTestPath, materializeSpec = null) {
+	const runTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "naia-intent-run-"));
+	const pidFile = path.join(runTmpDir, "leader.pid");
+	const preloadFile = path.join(runTmpDir, "pgid-preload.cjs");
+
+	let execCwd = repoRoot;
+	let targetTestPath = absTestPath;
+
+	try {
+		fs.writeFileSync(
+			preloadFile,
+			[
+				'"use strict";',
+				'const fs = require("fs");',
+				"const p = process.env.INTENT_GUARD_PID_FILE;",
+				"delete process.env.INTENT_GUARD_PID_FILE;",
+				"delete process.env.NODE_OPTIONS;",
+				"if (p && !fs.existsSync(p)) {",
+				"  let pgrp = 0;",
+				"  try {",
+				'    const stat = fs.readFileSync("/proc/self/stat", "utf8");',
+				'    const rest = stat.slice(stat.lastIndexOf(")") + 1).trim().split(/\\s+/);',
+				"    pgrp = Number(rest[2]) || 0;",
+				"  } catch {}",
+				"  const ids = [...new Set([pgrp, process.ppid, process.pid].filter((n) => Number.isInteger(n) && n > 1))];",
+				'  try { fs.writeFileSync(p, ids.join("\\n"), { flag: "wx" }); } catch {}',
+				"}",
+			].join("\n") + "\n",
+			"utf8",
+		);
+
+		if (materializeSpec && materializeSpec.testRelPath && materializeSpec.testContent != null) {
+			const workspaceTmp = path.join(runTmpDir, "workspace");
+			fs.mkdirSync(workspaceTmp, { recursive: true });
+
+			const matTestAbs = path.join(workspaceTmp, materializeSpec.testRelPath);
+			fs.mkdirSync(path.dirname(matTestAbs), { recursive: true });
+			fs.writeFileSync(matTestAbs, materializeSpec.testContent, "utf8");
+
+			if (materializeSpec.artifactRelPath && materializeSpec.artifactContent != null) {
+				const matArtAbs = path.join(workspaceTmp, materializeSpec.artifactRelPath);
+				fs.mkdirSync(path.dirname(matArtAbs), { recursive: true });
+				fs.writeFileSync(matArtAbs, materializeSpec.artifactContent, "utf8");
+			}
+
+			if (materializeSpec.packageJsonContent != null) {
+				fs.writeFileSync(
+					path.join(workspaceTmp, "package.json"),
+					materializeSpec.packageJsonContent,
+					"utf8",
+				);
+			} else if (fs.existsSync(path.join(repoRoot, "package.json"))) {
+				try {
+					fs.copyFileSync(
+						path.join(repoRoot, "package.json"),
+						path.join(workspaceTmp, "package.json"),
+					);
+				} catch {
+					/* ignore */
+				}
+			}
+
+			try {
+				for (const entry of fs.readdirSync(repoRoot, { withFileTypes: true })) {
+					if (entry.name === ".git") continue;
+					const dest = path.join(workspaceTmp, entry.name);
+					if (fs.existsSync(dest)) continue;
+					try {
+						fs.symlinkSync(
+							path.join(repoRoot, entry.name),
+							dest,
+							entry.isDirectory() ? "dir" : "file",
+						);
+					} catch {
+						/* ignore symlink errors */
+					}
+				}
+			} catch {
+				/* ignore */
+			}
+
+			execCwd = workspaceTmp;
+			targetTestPath = matTestAbs;
+		}
+
+		const cleanEnv = buildMinimalTestEnv();
+		cleanEnv.INTENT_GUARD_PID_FILE = pidFile;
+		cleanEnv.NODE_OPTIONS = `--require ${preloadFile}`;
+
+		const runRes = spawnSync(
+			process.execPath,
+			["--test", "--test-reporter=tap", targetTestPath],
+			{
+				cwd: execCwd,
+				env: cleanEnv,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"],
+				timeout: 30000,
+				killSignal: "SIGKILL",
+				detached: process.platform !== "win32",
+			},
+		);
+		const exitCode = typeof runRes.status === "number" ? runRes.status : 1;
+		const normalizedOutput = normalizeTestOutput(runRes.stdout, runRes.stderr, exitCode);
+		const outputSha256 = sha256Hex(normalizedOutput);
+		return {
+			exitCode,
+			stdout: runRes.stdout || "",
+			stderr: runRes.stderr || "",
+			outputSha256,
+		};
+	} finally {
+		if (process.platform !== "win32" && fs.existsSync(pidFile)) {
+			try {
+				const rawIds = fs
+					.readFileSync(pidFile, "utf8")
+					.split(/\r?\n/)
+					.map((s) => Number(s.trim()))
+					.filter((n) => Number.isInteger(n) && n > 1 && n !== process.pid && n !== process.ppid);
+				for (const id of rawIds) {
+					try {
+						process.kill(-id, "SIGKILL");
+					} catch {
+						/* process group already exited */
+					}
+				}
+			} catch {
+				/* ignore */
+			}
+		}
+		try {
+			fs.rmSync(runTmpDir, { recursive: true, force: true });
+		} catch {
+			/* ignore */
+		}
+	}
 }
 
-function computeArtifactFingerprint(repoRoot, rawArtifactPath) {
-	if (!rawArtifactPath || isPlaceholderValue(rawArtifactPath)) return "";
+function readArtifactContent(repoRoot, rawArtifactPath, readTreeBlob = null) {
+	if (!rawArtifactPath || isPlaceholderValue(rawArtifactPath)) return null;
 	const normPath = String(rawArtifactPath).replace(/\\/g, "/").replace(/^\.\//, "");
 	if (!normPath || normPath.startsWith("/") || normPath.startsWith("..") || normPath.includes("/../")) {
-		return "";
+		return null;
+	}
+	if (typeof readTreeBlob === "function") {
+		const blob = readTreeBlob(normPath);
+		if (blob !== null) return blob;
 	}
 	const absPath = path.resolve(repoRoot, normPath);
-	if (absPath !== repoRoot && !absPath.startsWith(repoRoot + path.sep)) return "";
-	if (!fs.existsSync(absPath)) return "";
+	if (absPath !== repoRoot && !absPath.startsWith(repoRoot + path.sep)) return null;
+	if (!fs.existsSync(absPath)) return null;
 	try {
 		const st = fs.statSync(absPath);
-		if (!st.isFile()) return "";
-		return sha256Hex(fs.readFileSync(absPath, "utf8"));
+		if (!st.isFile()) return null;
+		return fs.readFileSync(absPath, "utf8");
 	} catch {
-		return "";
+		return null;
 	}
+}
+
+function computeArtifactFingerprint(repoRoot, rawArtifactPath, readTreeBlob = null) {
+	const content = readArtifactContent(repoRoot, rawArtifactPath, readTreeBlob);
+	return content != null ? sha256Hex(content) : "";
 }
 
 function computeReceiptProof({
@@ -504,7 +706,7 @@ function checkVacuousConstantTest(uncommentedCode, artifact, condition) {
 	if (candidateRefs.length > 0 && !candidateRefs.some((ref) => uncommentedCode.includes(ref))) {
 		return {
 			vacuous: true,
-			reason: `(b) 공허한 상수 시험 차단: 시험 파일 코드에 선언된 산출물 경로("${normArtPath || artId}") 또는 단계 식별자가 등장하지 않습니다(산출물을 실제로 읽거나 생성 함수를 호출해야 합니다).`,
+			reason: `(b) 공허한 상수 시험 차단: 시험 파일 코드에 선언된 산출물 경로("${normArtPath || artId}") 또는 단계 식별자가 리터럴로 등장하지 않습니다(산출물 경로·식별자를 리터럴로 직접 기재해 산출물을 실제로 읽거나 생성 함수를 호출해야 합니다).`,
 		};
 	}
 
@@ -518,7 +720,7 @@ function checkVacuousConstantTest(uncommentedCode, artifact, condition) {
 		if (constAssignRe.test(uncommentedCode)) {
 			return {
 				vacuous: true,
-				reason: `(b) 공허한 상수 시험 차단: 조건 지표("${ident}")가 산출물에서 읽히지 않고 상수 리터럴로 직접 하드코딩되어 있습니다.`,
+				reason: `(b) 공허한 상수 시험 차단: 조건 지표("${ident}")가 산출물에서 읽히지 않고 상수 리터럴로 직접 하드코딩되어 있습니다(기대값 상수는 min_${ident} 등 지표명과 다른 이름을 사용하세요).`,
 			};
 		}
 	}
@@ -827,6 +1029,8 @@ function evaluateArtifactIntent({
 	repoRoot,
 	activeChangedFiles,
 	readNewFileContent,
+	readTreeBlob,
+	effectiveMode,
 	designDigest,
 	fullDigest,
 }) {
@@ -847,6 +1051,10 @@ function evaluateArtifactIntent({
 			reason: "(a) 의도 시험 미기재: 기계로 재는 조건(condition)과 시험 파일 경로(test_path)가 없습니다.",
 		};
 	}
+
+	const useBlobMaterialization =
+		(effectiveMode === "staged" || effectiveMode === "commit") &&
+		typeof readTreeBlob === "function";
 
 	for (const testSpec of artifact.intentTests) {
 		const cond = (testSpec.condition || "").trim();
@@ -907,47 +1115,119 @@ function evaluateArtifactIntent({
 			};
 		}
 
-		if (!fs.existsSync(absTestPath)) {
-			return {
-				ok: false,
-				code: "missing_test_file",
-				reqId,
-				reqRelPath,
-				artifactLabel,
-				artifact,
-				reason: `(b) 의도 시험 실제 파일 없음: "${normTestPath}" 파일이 존재하지 않습니다.`,
-			};
-		}
+		let testContent = null;
+		let worktreeTestDiverged = false;
 
-		let stat;
-		try {
-			const realTest = fs.realpathSync(absTestPath);
-			const realRoot = fs.realpathSync(repoRoot);
-			if (realTest !== realRoot && !realTest.startsWith(realRoot + path.sep)) {
+		if (useBlobMaterialization) {
+			const blobTestContent = readTreeBlob(normTestPath);
+			if (blobTestContent == null) {
+				if (effectiveMode === "staged" && fs.existsSync(absTestPath)) {
+					return {
+						ok: false,
+						code: "unstaged_test_file",
+						reqId,
+						reqRelPath,
+						artifactLabel,
+						artifact,
+						reason: `(b) 의도 시험 파일("${normTestPath}")이 스테이지(인덱스)에 포함되지 않았습니다 (git add "${normTestPath}" 후 커밋하세요).`,
+					};
+				}
 				return {
 					ok: false,
-					code: "invalid_test_path",
+					code: "missing_test_file",
 					reqId,
 					reqRelPath,
 					artifactLabel,
 					artifact,
-					reason: `(b) 의도 시험 심볼릭 링크가 저장소 밖을 가리킵니다: "${normTestPath}".`,
+					reason: `(b) 의도 시험 실제 파일 없음: "${normTestPath}" 파일이 존재하지 않습니다.`,
 				};
 			}
-			stat = fs.statSync(realTest);
-		} catch {
-			return {
-				ok: false,
-				code: "missing_test_file",
-				reqId,
-				reqRelPath,
-				artifactLabel,
-				artifact,
-				reason: `(b) 의도 시험 파일을 읽을 수 없습니다: "${normTestPath}".`,
-			};
+			testContent = blobTestContent;
+
+			if (effectiveMode === "staged") {
+				if (!fs.existsSync(absTestPath)) {
+					worktreeTestDiverged = true;
+				} else {
+					try {
+						const realTest = fs.realpathSync(absTestPath);
+						const realRoot = fs.realpathSync(repoRoot);
+						if (realTest !== realRoot && !realTest.startsWith(realRoot + path.sep)) {
+							return {
+								ok: false,
+								code: "invalid_test_path",
+								reqId,
+								reqRelPath,
+								artifactLabel,
+								artifact,
+								reason: `(b) 의도 시험 심볼릭 링크가 저장소 밖을 가리킵니다: "${normTestPath}".`,
+							};
+						}
+						const wtText = fs.readFileSync(realTest, "utf8");
+						if (wtText !== blobTestContent) {
+							worktreeTestDiverged = true;
+						}
+					} catch {
+						worktreeTestDiverged = true;
+					}
+				}
+			}
+		} else {
+			if (!fs.existsSync(absTestPath)) {
+				return {
+					ok: false,
+					code: "missing_test_file",
+					reqId,
+					reqRelPath,
+					artifactLabel,
+					artifact,
+					reason: `(b) 의도 시험 실제 파일 없음: "${normTestPath}" 파일이 존재하지 않습니다.`,
+				};
+			}
+
+			let stat;
+			try {
+				const realTest = fs.realpathSync(absTestPath);
+				const realRoot = fs.realpathSync(repoRoot);
+				if (realTest !== realRoot && !realTest.startsWith(realRoot + path.sep)) {
+					return {
+						ok: false,
+						code: "invalid_test_path",
+						reqId,
+						reqRelPath,
+						artifactLabel,
+						artifact,
+						reason: `(b) 의도 시험 심볼릭 링크가 저장소 밖을 가리킵니다: "${normTestPath}".`,
+					};
+				}
+				stat = fs.statSync(realTest);
+			} catch {
+				return {
+					ok: false,
+					code: "missing_test_file",
+					reqId,
+					reqRelPath,
+					artifactLabel,
+					artifact,
+					reason: `(b) 의도 시험 파일을 읽을 수 없습니다: "${normTestPath}".`,
+				};
+			}
+
+			if (!stat.isFile() || stat.size === 0) {
+				return {
+					ok: false,
+					code: "missing_test_file",
+					reqId,
+					reqRelPath,
+					artifactLabel,
+					artifact,
+					reason: `(b) 의도 시험 파일이 비어 있거나 일반 파일이 아닙니다: "${normTestPath}".`,
+				};
+			}
+
+			testContent = fs.readFileSync(absTestPath, "utf8");
 		}
 
-		if (!stat.isFile() || stat.size === 0) {
+		if (!testContent || !testContent.trim()) {
 			return {
 				ok: false,
 				code: "missing_test_file",
@@ -959,7 +1239,6 @@ function evaluateArtifactIntent({
 			};
 		}
 
-		const testContent = fs.readFileSync(absTestPath, "utf8");
 		const uncommentedCode = stripCodeComments(testContent);
 		if (!uncommentedCode.trim()) {
 			return {
@@ -1038,8 +1317,61 @@ function evaluateArtifactIntent({
 			};
 		}
 
+		const normArtifactPath =
+			artifact.path && !isPlaceholderValue(artifact.path)
+				? String(artifact.path).replace(/\\/g, "/").replace(/^\.\//, "")
+				: "";
+		const artifactContent = readArtifactContent(
+			repoRoot,
+			artifact.path,
+			useBlobMaterialization ? readTreeBlob : null,
+		);
 		const actualTestSha256 = sha256Hex(testContent);
-		const actualArtifactSha256 = computeArtifactFingerprint(repoRoot, artifact.path);
+		const actualArtifactSha256 = artifactContent != null ? sha256Hex(artifactContent) : "";
+
+		if (effectiveMode === "staged" && normArtifactPath && artifactContent != null) {
+			const absArt = path.resolve(repoRoot, normArtifactPath);
+			if (fs.existsSync(absArt)) {
+				try {
+					const wtArt = fs.readFileSync(absArt, "utf8");
+					if (wtArt !== artifactContent) {
+						return {
+							ok: false,
+							code: "worktree_index_artifact_mismatch",
+							reqId,
+							reqRelPath,
+							artifactLabel,
+							artifact,
+							reason: `(c) 산출물 파일("${normArtifactPath}")의 스테이지(인덱스) 블롭과 작업 트리 내용이 불일치합니다(산출물 파일 해시 artifact_sha256 불일치 — git add "${normArtifactPath}" 후 다시 검증하세요).`,
+						};
+					}
+				} catch {
+					/* ignore */
+				}
+			}
+		}
+
+		if (worktreeTestDiverged) {
+			return {
+				ok: false,
+				code: "worktree_index_test_mismatch",
+				reqId,
+				reqRelPath,
+				artifactLabel,
+				artifact,
+				reason: `(c) 의도 시험 파일("${normTestPath}")의 스테이지(인덱스) 블롭과 작업 트리 내용이 불일치합니다(시험 파일 해시 test_sha256 불일치 — git add "${normTestPath}" 후 다시 검증하세요).`,
+			};
+		}
+
+		const materializeSpec = useBlobMaterialization
+			? {
+					testRelPath: normTestPath,
+					testContent,
+					artifactRelPath: normArtifactPath,
+					artifactContent,
+					packageJsonContent: readTreeBlob("package.json"),
+				}
+			: null;
 
 		// (c) Must be re-verified in the same change AND pass live gate execution:
 		const testChangedInSameChange = activeChangedFiles.has(normTestPath);
@@ -1054,6 +1386,7 @@ function evaluateArtifactIntent({
 			actualArtifactSha256,
 			activeChangedFiles,
 			readNewFileContent,
+			materializeSpec,
 			designDigest,
 			fullDigest,
 		});
@@ -1072,10 +1405,10 @@ function evaluateArtifactIntent({
 			};
 		}
 
-		// [심각-R1] Even when test_path was updated in the same change set without a receipt,
-		// the gate directly executes test_path at commit/check time and requires exitCode === 0.
+		// [심각-R1 / 보통-N1] Even when test_path was updated in the same change set without a receipt,
+		// the gate directly executes test_path (from materialized blob in staged/commit modes) and requires exitCode === 0.
 		if (testChangedInSameChange && !receiptCheck.ok) {
-			const liveRun = executeIntentTest(repoRoot, absTestPath);
+			const liveRun = executeIntentTest(repoRoot, absTestPath, materializeSpec);
 			if (liveRun.exitCode !== 0) {
 				return {
 					ok: false,
@@ -1110,6 +1443,7 @@ function verifyIntentReceipt({
 	actualArtifactSha256,
 	activeChangedFiles,
 	readNewFileContent,
+	materializeSpec,
 	designDigest,
 	fullDigest,
 }) {
@@ -1245,7 +1579,9 @@ function verifyIntentReceipt({
 
 		// [보통-R2] Receipt file must not be in gitignored .agents/progress/ and must be included in the same change set
 		if (relReceipt.startsWith(".agents/progress/")) {
-			lastDetail = `영수증(${relReceipt})이 gitignore 경로(.agents/progress/)에 있어 커밋·CI 재현이 불가합니다(.agents/intent-receipts/ 경로를 사용하세요)`;
+			if (!lastDetail) {
+				lastDetail = `영수증(${relReceipt})이 gitignore 경로(.agents/progress/)에 있어 커밋·CI 재현이 불가합니다(.agents/intent-receipts/ 경로를 사용하세요)`;
+			}
 			continue;
 		}
 		if (activeChangedFiles && !activeChangedFiles.has(relReceipt)) {
@@ -1301,9 +1637,9 @@ function verifyIntentReceipt({
 			continue;
 		}
 
-		// [심각-R1] Gate directly re-executes the declared test at verification/commit time
+		// [심각-R1 / 보통-N1] Gate directly re-executes the declared test (from materialized blob in staged/commit modes)
 		// and verifies both exitCode === 0 and normalized output_sha256 parity.
-		const liveRun = executeIntentTest(repoRoot, absTestPath);
+		const liveRun = executeIntentTest(repoRoot, absTestPath, materializeSpec);
 		if (liveRun.exitCode !== 0) {
 			lastDetail = `관문이 "${normTestPath}" 시험을 직접 재실행했으나 실패함 (exit_code=${liveRun.exitCode})`;
 			continue;
@@ -1496,12 +1832,15 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 	let activeChangedFiles;
 	let readNewFileContent;
 	let readOldFileContent;
+	let readTreeBlob = null;
+	let effectiveMode = mode;
 
 	const hasHeadRes = runGit(resolvedRoot, ["rev-parse", "--verify", "HEAD"]);
 	const hasHead = hasHeadRes.status === 0;
 
 	if (mode === "commit") {
 		const rev = options.commitRev || "HEAD";
+		effectiveMode = "commit";
 		const parentRes = runGit(resolvedRoot, ["rev-parse", "--verify", `${rev}^`]);
 		const hasParent = parentRes.status === 0;
 		const commitChanged = hasParent
@@ -1521,7 +1860,8 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 				);
 		candidateChangedFiles = new Set(commitChanged);
 		activeChangedFiles = candidateChangedFiles;
-		readNewFileContent = (relPath) => readGitBlob(resolvedRoot, `${rev}:${relPath}`);
+		readTreeBlob = (relPath) => readGitBlob(resolvedRoot, `${rev}:${relPath}`);
+		readNewFileContent = readTreeBlob;
 		readOldFileContent = (relPath) =>
 			hasParent ? readGitBlob(resolvedRoot, `${rev}^:${relPath}`) : null;
 	} else {
@@ -1537,6 +1877,7 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 			: [];
 
 		if (mode === "explicit") {
+			effectiveMode = "explicit";
 			candidateChangedFiles = new Set(normalizedExplicit);
 			activeChangedFiles = new Set([...stagedFiles, ...normalizedExplicit]);
 			readNewFileContent = (relPath) => {
@@ -1552,14 +1893,18 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 			mode === "staged" ||
 			(mode === "auto" && !options.includeWorktree && stagedFiles.size > 0)
 		) {
+			effectiveMode = "staged";
 			candidateChangedFiles = new Set(stagedFiles);
 			for (const p of normalizedExplicit) candidateChangedFiles.add(p);
 			activeChangedFiles = candidateChangedFiles;
+			readTreeBlob = (relPath) => readGitBlob(resolvedRoot, `:${relPath}`);
 			readNewFileContent = (relPath) => {
 				if (stagedFiles.has(relPath)) {
 					const indexBlob = readGitBlob(resolvedRoot, `:${relPath}`);
 					if (indexBlob !== null) return indexBlob;
 				}
+				const indexAny = readGitBlob(resolvedRoot, `:${relPath}`);
+				if (indexAny !== null) return indexAny;
 				const abs = path.resolve(resolvedRoot, relPath);
 				if (!fs.existsSync(abs)) return null;
 				try {
@@ -1569,6 +1914,7 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 				}
 			};
 		} else if (mode === "tracked-worktree") {
+			effectiveMode = "tracked-worktree";
 			const unstagedFiles = new Set(
 				parseNullSeparatedPaths(runGit(resolvedRoot, ["diff", "--name-only", "-z"]).stdout),
 			);
@@ -1806,6 +2152,8 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 				repoRoot: resolvedRoot,
 				activeChangedFiles,
 				readNewFileContent,
+				readTreeBlob,
+				effectiveMode,
 				designDigest: newDoc.designDigest,
 				fullDigest: newDoc.fullDigest,
 			});
@@ -1920,6 +2268,163 @@ function extractFindExecEntries(entry) {
 }
 
 /**
+ * [보통-N5] Extract only the recipes belonging to the invoked `make` target(s)
+ * and their transitive prerequisites (or the default first target when no target
+ * argument is given), avoiding false blocks on unrelated targets in the same Makefile.
+ */
+function extractMakefileTargetCommands(argv, baseDir) {
+	let makeDir = baseDir;
+	let explicitMakefile = null;
+	const requestedTargets = [];
+
+	const optsWithArg = new Set([
+		"-C",
+		"--directory",
+		"-f",
+		"--file",
+		"--makefile",
+		"-I",
+		"--include-dir",
+		"-W",
+		"--what-if",
+		"--new-file",
+		"--assume-new",
+		"-o",
+		"--old-file",
+		"--assume-old",
+	]);
+
+	for (let i = 1; i < argv.length; i++) {
+		const tok = argv[i];
+		if (!tok) continue;
+		if (tok === "-n" || tok === "--just-print" || tok === "--dry-run" || tok === "--recon") {
+			return [];
+		}
+		if (tok === "-C" || tok === "--directory") {
+			if (i + 1 < argv.length) {
+				makeDir = path.resolve(makeDir, argv[++i]);
+			}
+			continue;
+		}
+		if (tok.startsWith("--directory=")) {
+			makeDir = path.resolve(makeDir, tok.slice("--directory=".length));
+			continue;
+		}
+		if (tok.startsWith("-C") && tok.length > 2) {
+			makeDir = path.resolve(makeDir, tok.slice(2));
+			continue;
+		}
+		if (tok === "-f" || tok === "--file" || tok === "--makefile") {
+			if (i + 1 < argv.length) {
+				explicitMakefile = argv[++i];
+			}
+			continue;
+		}
+		if (tok.startsWith("--file=") || tok.startsWith("--makefile=")) {
+			explicitMakefile = tok.slice(tok.indexOf("=") + 1);
+			continue;
+		}
+		if (optsWithArg.has(tok)) {
+			i++;
+			continue;
+		}
+		if ((tok === "-j" || tok === "-l") && i + 1 < argv.length && /^\d+$/.test(argv[i + 1])) {
+			i++;
+			continue;
+		}
+		if (tok.startsWith("-")) continue;
+		if (tok.includes("=")) continue;
+		requestedTargets.push(tok);
+	}
+
+	const candidates = explicitMakefile
+		? [path.resolve(makeDir, explicitMakefile)]
+		: ["GNUmakefile", "makefile", "Makefile"].map((mf) => path.join(makeDir, mf));
+
+	let mfText = null;
+	for (const mfPath of candidates) {
+		if (!fs.existsSync(mfPath)) continue;
+		try {
+			mfText = fs.readFileSync(mfPath, "utf8");
+			break;
+		} catch {
+			/* ignore */
+		}
+	}
+	if (!mfText) return [];
+
+	const targetMap = new Map();
+	let defaultTarget = null;
+	let activeTargets = [];
+
+	const rawLines = mfText.split(/\r?\n/);
+	for (const line of rawLines) {
+		if (/^\t+/.test(line)) {
+			const recipeCmd = line.replace(/^\t+[@+-]*/, "").trim();
+			if (recipeCmd && activeTargets.length > 0) {
+				for (const t of activeTargets) {
+					if (!targetMap.has(t)) targetMap.set(t, { deps: [], recipes: [] });
+					targetMap.get(t).recipes.push(recipeCmd);
+				}
+			}
+			continue;
+		}
+		const stripped = line.replace(/#.*$/, "").trim();
+		if (!stripped) continue;
+
+		const ruleMatch = stripped.match(/^([^:=]+?)\s*:(?![=])\s*(.*)$/);
+		if (ruleMatch) {
+			const lhs = ruleMatch[1].trim();
+			const rhs = ruleMatch[2].trim();
+			const targets = lhs.split(/\s+/).filter(Boolean);
+			activeTargets = targets;
+
+			const semiIdx = rhs.indexOf(";");
+			const prereqPart = semiIdx >= 0 ? rhs.slice(0, semiIdx).trim() : rhs;
+			const inlineRecipe = semiIdx >= 0 ? rhs.slice(semiIdx + 1).trim() : "";
+			const deps = prereqPart.split(/\s+/).filter(Boolean);
+
+			for (const t of targets) {
+				if (!defaultTarget && !t.startsWith(".")) {
+					defaultTarget = t;
+				}
+				if (!targetMap.has(t)) {
+					targetMap.set(t, { deps: [], recipes: [] });
+				}
+				const entryObj = targetMap.get(t);
+				entryObj.deps.push(...deps);
+				if (inlineRecipe) {
+					entryObj.recipes.push(inlineRecipe.replace(/^[@+-]+/, "").trim());
+				}
+			}
+		} else {
+			activeTargets = [];
+		}
+	}
+
+	const entryTargets =
+		requestedTargets.length > 0 ? requestedTargets : defaultTarget ? [defaultTarget] : [];
+	if (entryTargets.length === 0) return [];
+
+	const collectedRecipes = [];
+	const visited = new Set();
+	const queue = [...entryTargets];
+	while (queue.length > 0) {
+		const cur = queue.shift();
+		if (!cur || visited.has(cur)) continue;
+		visited.add(cur);
+		const info = targetMap.get(cur);
+		if (!info) continue;
+		for (const dep of info.deps) {
+			if (!visited.has(dep)) queue.push(dep);
+		}
+		collectedRecipes.push(...info.recipes);
+	}
+
+	return collectedRecipes;
+}
+
+/**
  * Extract nested shell commands from `npx`, `npm`/`pnpm`/`yarn` package scripts, and `make` targets.
  */
 function extractBuildRunnerCommands(entry, defaultDir) {
@@ -1968,23 +2473,7 @@ function extractBuildRunnerCommands(entry, defaultDir) {
 			}
 		}
 	} else if (base === "make" || base === "gmake") {
-		const makefileNames = ["GNUmakefile", "makefile", "Makefile"];
-		for (const mf of makefileNames) {
-			const mfPath = path.join(dir, mf);
-			if (!fs.existsSync(mfPath)) continue;
-			try {
-				const mfText = fs.readFileSync(mfPath, "utf8");
-				const lines = mfText.split(/\r?\n/);
-				for (const line of lines) {
-					if (/^\t+/.test(line)) {
-						subCommands.push(line.replace(/^\t+[@+-]*/, "").trim());
-					}
-				}
-			} catch {
-				/* ignore */
-			}
-			break;
-		}
+		subCommands.push(...extractMakefileTargetCommands(argv, dir));
 	}
 
 	return subCommands;
