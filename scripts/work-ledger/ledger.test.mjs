@@ -518,6 +518,7 @@ test("role routing limits human wakes and optional later posts acknowledge", asy
   });
   const adapter = { messages: async ch => ch === "direct" ? [msg("direct"), msg("direct-other", { body: "<@other-bot>" })] : [
     msg("unaddressed"),
+    msg("only-other", { body: "<@other-bot>" }),
     msg("mention", { body: "<@bot>" }),
     msg("array", { mentions: [{ id: "bot" }] }),
     msg("reply", { reply_to_id: "parent" }),
@@ -528,11 +529,82 @@ test("role routing limits human wakes and optional later posts acknowledge", asy
     msg("parent", { author_id: "bot" }), msg("later", { author_id: "bot", created_at: new Date(now).toISOString() })
   ] };
   const result = await watch({ root, config: conf, adapter, now });
-  assert.deepEqual(result.wakes.map(w => w.id), ["human-mention", "human-array", "human-reply", "human-external-reply", "human-everyone", "human-here", "human-both", "human-direct"]);
+  assert.deepEqual(result.wakes.map(w => w.id), ["human-mention", "human-array", "human-reply", "human-external-reply", "human-everyone", "human-here", "human-other", "human-both", "human-direct", "human-direct-other"]);
   const second = await setup();
   conf.roles[0].answered_by_any_role_post_after = true;
   const acknowledged = await watch({ root: second, config: conf, adapter, now });
-  assert.deepEqual(acknowledged.wakes.map(w => w.id), ["human-direct"]);
+  assert.deepEqual(acknowledged.wakes.map(w => w.id), ["human-direct", "human-direct-other"]);
+});
+
+test("replies to role, everyone/here, and direct channels wake even when another role is mentioned", async () => {
+  const root = await setup();
+  const conf = {
+    roles: [
+      {
+        role: "secretary",
+        channels: ["ch-main"],
+        direct_channels: ["ch-dm"],
+        human_ids: ["human-1"],
+        user_ids: ["bot-sec"],
+      },
+      {
+        role: "reviewer",
+        channels: ["ch-main"],
+        human_ids: ["human-1"],
+        user_ids: ["bot-rev"],
+      },
+    ],
+  };
+  const created_at = new Date(now - 1000).toISOString();
+  const adapter = {
+    async messages(ch) {
+      if (ch === "ch-dm")
+        return [
+          {
+            id: "dm-1",
+            author_id: "human-1",
+            body: "<@bot-rev> 작업 상태 네가 확인해줘",
+            mentions: ["bot-rev"],
+            created_at,
+          },
+        ];
+      return [
+        {
+          id: "reply-1",
+          author_id: "human-1",
+          body: "<@bot-rev> 내용도 합쳐서 다시 보고해줘",
+          reply_to_id: "p1",
+          reply_to_author_id: "bot-sec",
+          mentions: ["bot-rev"],
+          created_at,
+        },
+        {
+          id: "every-1",
+          author_id: "human-1",
+          body: "@everyone <@bot-rev> 포함 각자 현황 올려줘",
+          mention_everyone: true,
+          mentions: ["bot-rev"],
+          created_at,
+        },
+        {
+          id: "only-rev",
+          author_id: "human-1",
+          body: "<@bot-rev> 이것만 봐줘",
+          mentions: ["bot-rev"],
+          created_at,
+        },
+      ];
+    },
+  };
+  const res = await watch({ root, config: conf, adapter, now });
+  assert.deepEqual(
+    res.wakes.filter((w) => w.role === "secretary").map((w) => w.id),
+    ["human-reply-1", "human-every-1", "human-dm-1"],
+  );
+  assert.deepEqual(
+    res.wakes.filter((w) => w.role === "reviewer").map((w) => w.id),
+    ["human-reply-1", "human-every-1", "human-only-rev"],
+  );
 });
 
 test("channel failures include HTTP diagnostics, continue, and deduplicate separately", async () => {

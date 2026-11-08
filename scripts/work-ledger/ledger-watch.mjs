@@ -195,14 +195,18 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
             for (const match of (m.body || "").matchAll(/<@!?(\w[\w-]*)>/g))
               mentions.add(match[1]);
             const ownMention = identities.some((id) => mentions.has(id));
-            if (!ownMention && otherIdentities.some((id) => mentions.has(id)))
-              return false;
             const parentAuthor = m.reply_to_author_id || m.reply_to?.author_id ||
               m.reply_to?.author?.id || byId.get(m.reply_to_id)?.author_id;
-            return ownMention || identities.includes(parentAuthor) ||
+            if (
+              ownMention ||
+              identities.includes(parentAuthor) ||
               m.mention_everyone === true ||
               /@(?:everyone|here)\b/.test(m.body || "") ||
-              (roleConfig.direct_channels ?? []).includes(channel);
+              (roleConfig.direct_channels ?? []).includes(channel)
+            )
+              return true;
+            if (otherIdentities.some((id) => mentions.has(id))) return false;
+            return false;
           }
           const replied = new Set(
             messages
