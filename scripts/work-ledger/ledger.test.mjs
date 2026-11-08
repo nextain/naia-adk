@@ -615,7 +615,10 @@ test("channel failures include HTTP diagnostics, continue, and deduplicate separ
   };
   const calls = [];
   const adapter = createAdapter(conf.provider, { env: { TEST_TOKEN: "fake" }, fetchImpl: async url => {
-    const ch = new URL(url).pathname.split("/").at(-2);
+    const pathname = new URL(url).pathname;
+    if (pathname.endsWith("/threads/active"))
+      return { ok: true, json: async () => ({ threads: [] }) };
+    const ch = pathname.split("/").at(-2);
     calls.push(ch);
     if (ch !== "healthy") return {
       ok: false, status: ch === "denied" ? 403 : 404,
@@ -807,6 +810,114 @@ test("edited messages are re-evaluated as new while suppressing duplicate wakes 
       "human-replied-then-edited",
       "human-source",
       "human-old-edited",
+    ],
+  );
+});
+
+test("active threads and message-attached threads are read with count cap and isolated errors", async () => {
+  const root = await setup();
+  const conf = {
+    provider: { type: "discord", token_env: "TEST_TOKEN", max_threads: 3 },
+    roles: [{ ...config.roles[0], channels: ["ch-main"] }],
+  };
+  const recent = new Date(now - 1000).toISOString();
+  const fetchedUrls = [];
+  const adapter = createAdapter(conf.provider, {
+    env: { TEST_TOKEN: "fake" },
+    fetchImpl: async (url) => {
+      const pathname = new URL(url).pathname;
+      fetchedUrls.push(pathname);
+      if (pathname === "/api/v10/channels/ch-main/messages") {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              id: "parent-msg",
+              author: { id: "bot" },
+              timestamp: recent,
+              content: "쓰레드 시작 글",
+              thread: { id: "thread-from-msg" },
+            },
+          ],
+        };
+      }
+      if (pathname === "/api/v10/channels/ch-main/threads/active") {
+        return {
+          ok: true,
+          json: async () => ({
+            threads: [
+              { id: "thread-from-msg", parent_id: "ch-main" },
+              { id: "thread-active-1", parent_id: "ch-main" },
+              { id: "thread-broken", parent_id: "ch-main" },
+              { id: "thread-over-cap", parent_id: "ch-main" },
+            ],
+          }),
+        };
+      }
+      if (pathname === "/api/v10/channels/thread-from-msg/messages") {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              id: "msg-in-thread-1",
+              author: { id: "human" },
+              timestamp: recent,
+              content: "부모 봇 글에 대한 쓰레드 안 답글",
+              message_reference: { message_id: "parent-msg" },
+            },
+          ],
+        };
+      }
+      if (pathname === "/api/v10/channels/thread-active-1/messages") {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              id: "msg-in-thread-2",
+              author: { id: "human" },
+              timestamp: recent,
+              content: "<@bot> 활성 쓰레드 지시",
+              mentions: [{ id: "bot" }],
+            },
+          ],
+        };
+      }
+      if (pathname === "/api/v10/channels/thread-broken/messages") {
+        return {
+          ok: false,
+          status: 403,
+          text: async () => "thread access denied",
+        };
+      }
+      if (pathname === "/api/v10/channels/thread-over-cap/messages") {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              id: "msg-over-cap",
+              author: { id: "human" },
+              timestamp: recent,
+              content: "<@bot> 상한 초과 쓰레드",
+              mentions: [{ id: "bot" }],
+            },
+          ],
+        };
+      }
+      return { ok: false, status: 404, text: async () => "not found" };
+    },
+  });
+  const result = await watch({ root, config: conf, adapter, now });
+  assert.equal(
+    fetchedUrls.includes("/api/v10/channels/thread-over-cap/messages"),
+    false,
+  );
+  assert.deepEqual(result.errors, ["messenger:secretary:thread-broken"]);
+  assert.deepEqual(
+    result.wakes.map((w) => w.id),
+    [
+      "messenger-error-thread-broken",
+      "human-msg-in-thread-1",
+      "human-msg-in-thread-2",
     ],
   );
 });

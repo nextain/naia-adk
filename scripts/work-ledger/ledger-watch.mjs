@@ -167,11 +167,17 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
           );
         const messenger =
           adapter || (channels.length ? createAdapter(config.provider) : null);
+        const maxThreads =
+          roleConfig.max_threads ??
+          config.max_threads ??
+          config.provider?.max_threads ??
+          25;
+        const visitedThreads = new Set(channels);
         for (const channel of channels) {
           const since = now - 24 * 60 * 60000;
-          let messages;
+          let channelMessages;
           try {
-            messages = await messenger.messages(channel, since);
+            channelMessages = await messenger.messages(channel, since);
           } catch (error) {
             errors.push(`messenger:${role}:${channel}`);
             await wake(
@@ -182,6 +188,66 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
               `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${channel}\n오류: ${error.message || String(error)}`,
             );
             continue;
+          }
+          const messages = channelMessages.map((m) => ({
+            ...m,
+            channel: m.channel || channel,
+          }));
+          const threadStarterAuthor = new Map();
+          const discoveredThreads = new Set(channelMessages.threadIds || []);
+          for (const m of channelMessages) {
+            const tid = m?.thread_id || m?.thread?.id;
+            if (
+              tid &&
+              m?.thread?.thread_metadata?.archived !== true &&
+              m?.thread?.archived !== true
+            ) {
+              discoveredThreads.add(tid);
+              if (m.author_id) threadStarterAuthor.set(tid, m.author_id);
+            }
+          }
+          if (typeof messenger.threads === "function") {
+            try {
+              const activeThreads = await messenger.threads(
+                channel,
+                channelMessages,
+              );
+              for (const tid of activeThreads || []) {
+                if (tid) discoveredThreads.add(tid);
+              }
+            } catch (error) {
+              errors.push(`messenger:${role}:${channel}:threads`);
+              await wake(
+                role,
+                `messenger-error-${safeName(channel)}-threads`,
+                "감시 실패",
+                "메신저 읽기 실패",
+                `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${channel}\n오류: ${error.message || String(error)}`,
+              );
+            }
+          }
+          const threadIds = [...discoveredThreads]
+            .filter((tid) => tid && !visitedThreads.has(tid))
+            .slice(0, Math.max(0, maxThreads));
+          for (const threadId of threadIds) {
+            visitedThreads.add(threadId);
+            let threadMessages;
+            try {
+              threadMessages = await messenger.messages(threadId, since);
+            } catch (error) {
+              errors.push(`messenger:${role}:${threadId}`);
+              await wake(
+                role,
+                `messenger-error-${safeName(threadId)}`,
+                "감시 실패",
+                "메신저 읽기 실패",
+                `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${threadId}\n오류: ${error.message || String(error)}`,
+              );
+              continue;
+            }
+            for (const tm of threadMessages) {
+              messages.push({ ...tm, channel: tm.channel || threadId });
+            }
           }
           const byId = new Map(messages.map((m) => [m.id, m]));
           const otherIdentities = config.roles
@@ -196,7 +262,8 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
               mentions.add(match[1]);
             const ownMention = identities.some((id) => mentions.has(id));
             const parentAuthor = m.reply_to_author_id || m.reply_to?.author_id ||
-              m.reply_to?.author?.id || byId.get(m.reply_to_id)?.author_id;
+              m.reply_to?.author?.id || byId.get(m.reply_to_id)?.author_id ||
+              threadStarterAuthor.get(m.channel);
             if (
               ownMention ||
               identities.includes(parentAuthor) ||
@@ -266,7 +333,7 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
               wakeId,
               "장부에 없는 사람 글",
               m.body || "(본문 없음)",
-              `출처: ${channel}/${m.id}\n기한: (미등록)\n결과: (없음)`,
+              `출처: ${m.channel || channel}/${m.id}\n기한: (미등록)\n결과: (없음)`,
             );
           }
         }

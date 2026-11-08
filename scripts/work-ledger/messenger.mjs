@@ -6,12 +6,20 @@ export function createAdapter(
 ) {
   if (provider?.type !== "discord")
     throw new Error("Unsupported messenger provider");
+  async function readErrorBody(response) {
+    try {
+      return (await response.text()).slice(0, 200);
+    } catch (error) {
+      return `(body read failed: ${error.message})`;
+    }
+  }
   return {
     async messages(channel, since) {
       const token = env[provider.token_env || "DISCORD_BOT_TOKEN"];
       if (!token)
         throw new Error("Messenger token environment variable is missing");
       const messages = [];
+      const threadIds = new Set();
       let before;
       const cursors = new Set();
       while (true) {
@@ -25,12 +33,7 @@ export function createAdapter(
           signal: AbortSignal.timeout(30000),
         });
         if (!response.ok) {
-          let body;
-          try {
-            body = (await response.text()).slice(0, 200);
-          } catch (error) {
-            body = `(body read failed: ${error.message})`;
-          }
+          const body = await readErrorBody(response);
           throw new Error(
             `Discord channel ${channel}: HTTP ${response.status}; body: ${body}`,
           );
@@ -46,6 +49,13 @@ export function createAdapter(
               !Number.isFinite(Date.parse(m.edited_timestamp)))
           )
             throw new Error("Invalid Discord message");
+          const attachedThreadId = m.thread?.id || m.thread_id || null;
+          if (
+            attachedThreadId &&
+            m.thread?.thread_metadata?.archived !== true &&
+            m.thread?.archived !== true
+          )
+            threadIds.add(attachedThreadId);
           const createdMs = Date.parse(m.timestamp);
           const editedMs = m.edited_timestamp
             ? Date.parse(m.edited_timestamp)
@@ -67,6 +77,7 @@ export function createAdapter(
               reply_to_author_id: m.referenced_message?.author?.id || null,
               mentions: (m.mentions || []).map((mention) => mention.id),
               mention_everyone: m.mention_everyone === true,
+              thread_id: attachedThreadId,
             });
         }
         if (
@@ -79,7 +90,72 @@ export function createAdapter(
           throw new Error("Discord pagination did not advance");
         cursors.add(before);
       }
+      Object.defineProperty(messages, "threadIds", {
+        value: [...threadIds],
+        enumerable: false,
+      });
       return messages;
+    },
+    async threads(channel, channelMessages = []) {
+      const token = env[provider.token_env || "DISCORD_BOT_TOKEN"];
+      if (!token)
+        throw new Error("Messenger token environment variable is missing");
+      const threadIds = new Set(channelMessages?.threadIds || []);
+      for (const m of channelMessages || []) {
+        const tid = m?.thread_id || m?.thread?.id;
+        if (
+          tid &&
+          m?.thread?.thread_metadata?.archived !== true &&
+          m?.thread?.archived !== true
+        )
+          threadIds.add(tid);
+      }
+      const url = new URL(
+        `https://discord.com/api/v10/channels/${encodeURIComponent(channel)}/threads/active`,
+      );
+      const response = await fetchImpl(url, {
+        headers: { Authorization: `Bot ${token}` },
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!response.ok) {
+        if (response.status !== 404) {
+          const body = await readErrorBody(response);
+          throw new Error(
+            `Discord channel ${channel} active threads: HTTP ${response.status}; body: ${body}`,
+          );
+        }
+      } else {
+        const data = await response.json();
+        const list = Array.isArray(data?.threads)
+          ? data.threads
+          : Array.isArray(data)
+            ? data
+            : [];
+        for (const item of list) {
+          if (typeof item === "string") threadIds.add(item);
+          else if (item && typeof item === "object") {
+            if (
+              item.thread?.id &&
+              item.thread?.thread_metadata?.archived !== true &&
+              item.thread?.archived !== true
+            )
+              threadIds.add(item.thread.id);
+            else if (
+              item.id &&
+              !item.author &&
+              item.thread_metadata?.archived !== true &&
+              item.archived !== true &&
+              (!item.parent_id || item.parent_id === channel)
+            )
+              threadIds.add(item.id);
+          }
+        }
+      }
+      threadIds.delete(channel);
+      const result = [...threadIds];
+      if (Number.isFinite(provider.max_threads) && provider.max_threads >= 0)
+        return result.slice(0, provider.max_threads);
+      return result;
     },
   };
 }
