@@ -208,34 +208,67 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
             if (otherIdentities.some((id) => mentions.has(id))) return false;
             return false;
           }
-          const replied = new Set(
-            messages
-              .filter((m) => identities.includes(m.author_id) && m.reply_to_id)
-              .map((m) => m.reply_to_id),
-          );
-          const recorded = new Set(ledger.items.map((i) => i.from.msg_id));
-          for (const m of messages)
+          function messageTimes(m) {
+            const createdMs = Date.parse(m.created_at || m.timestamp);
+            const rawEdit = m.edited_at || m.edited_timestamp;
+            const editedMs = rawEdit ? Date.parse(rawEdit) : NaN;
+            const isEdited = Number.isFinite(editedMs) && editedMs > createdMs;
+            const effectiveMs = isEdited ? editedMs : createdMs;
+            return { createdMs, editedMs, isEdited, effectiveMs };
+          }
+          for (const m of messages) {
+            if (!humans.includes(m.author_id) || !addressed(m)) continue;
+            const { createdMs, editedMs, isEdited, effectiveMs } =
+              messageTimes(m);
             if (
-              humans.includes(m.author_id) &&
-              addressed(m) &&
-              !(roleConfig.answered_by_any_role_post_after === true &&
-                messages.some((post) =>
-                  identities.includes(post.author_id) &&
-                  Date.parse(post.created_at) > Date.parse(m.created_at) &&
-                  Date.parse(post.created_at) <= now,
-                )) &&
-              Date.parse(m.created_at) >= since &&
-              Date.parse(m.created_at) <= now &&
-              !recorded.has(m.id) &&
-              !replied.has(m.id)
+              !Number.isFinite(effectiveMs) ||
+              effectiveMs < since ||
+              effectiveMs > now
             )
-              await wake(
-                role,
-                `human-${safeName(m.id)}`,
-                "장부에 없는 사람 글",
-                m.body || "(본문 없음)",
-                `출처: ${channel}/${m.id}\n기한: (미등록)\n결과: (없음)`,
+              continue;
+            const replies = messages.filter(
+              (r) =>
+                identities.includes(r.author_id) && r.reply_to_id === m.id,
+            );
+            const isReplied = isEdited
+              ? replies.some((r) => messageTimes(r).effectiveMs >= editedMs)
+              : replies.length > 0;
+            const isAnsweredAfter =
+              roleConfig.answered_by_any_role_post_after === true &&
+              messages.some(
+                (post) =>
+                  identities.includes(post.author_id) &&
+                  messageTimes(post).effectiveMs > effectiveMs &&
+                  messageTimes(post).effectiveMs <= now,
               );
+            const recordedItems = ledger.items.filter(
+              (i) => i.from.msg_id === m.id,
+            );
+            const isRecorded = isEdited
+              ? recordedItems.some(
+                  (i) =>
+                    (i.checked_at && Date.parse(i.checked_at) >= editedMs) ||
+                    Boolean(i.from.quote && i.from.quote === m.body),
+                )
+              : recordedItems.length > 0;
+            const wakeId = `human-${safeName(m.id)}`;
+            const wakeKey = JSON.stringify([
+              role,
+              wakeId,
+              "장부에 없는 사람 글",
+            ]);
+            if (isReplied || isAnsweredAfter || isRecorded) {
+              delete state.sent[wakeKey];
+              continue;
+            }
+            await wake(
+              role,
+              wakeId,
+              "장부에 없는 사람 글",
+              m.body || "(본문 없음)",
+              `출처: ${channel}/${m.id}\n기한: (미등록)\n결과: (없음)`,
+            );
+          }
         }
       } catch (error) {
         errors.push(`messenger:${role}`);

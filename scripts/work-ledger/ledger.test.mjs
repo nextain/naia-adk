@@ -690,3 +690,123 @@ test("HTTP status survives a failed error body read", async () => {
   });
   await assert.rejects(adapter.messages("denied", now), /channel denied: HTTP 403.*stream interrupted/);
 });
+
+test("edited messages are re-evaluated as new while suppressing duplicate wakes for unchanged judgment", async () => {
+  const discordAdapter = createAdapter(
+    { type: "discord", token_env: "T" },
+    {
+      env: { T: "tok" },
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => [
+          {
+            id: "edit-1",
+            author: { id: "human" },
+            timestamp: new Date(now - 25 * 3600000).toISOString(),
+            edited_timestamp: new Date(now - 60000).toISOString(),
+            content: "<@bot> 수정해서 추가 지시함",
+            mentions: [{ id: "bot" }],
+          },
+        ],
+      }),
+    },
+  );
+  const fetched = await discordAdapter.messages("channel", now - 24 * 3600000);
+  assert.equal(fetched.length, 1);
+  assert.equal(fetched[0].id, "edit-1");
+
+  const root = await setup();
+  const conf = {
+    roles: [
+      {
+        ...config.roles[0],
+        channels: ["channel"],
+        answered_by_any_role_post_after: true,
+      },
+    ],
+  };
+  let phase = 1;
+  const adapter = {
+    async messages() {
+      if (phase === 1) {
+        return [
+          {
+            id: "same-judgment",
+            author_id: "human",
+            body: "<@bot> 처음부터 호출",
+            mentions: ["bot"],
+            created_at: new Date(now - 600000).toISOString(),
+          },
+          {
+            id: "later-mentioned",
+            author_id: "human",
+            body: "그냥 혼잣말",
+            created_at: new Date(now - 600000).toISOString(),
+          },
+        ];
+      }
+      return [
+        {
+          id: "same-judgment",
+          author_id: "human",
+          body: "<@bot> 오타 고침",
+          mentions: ["bot"],
+          created_at: new Date(now - 600000).toISOString(),
+          edited_timestamp: new Date(now - 30000).toISOString(),
+        },
+        {
+          id: "later-mentioned",
+          author_id: "human",
+          body: "<@bot> 수정으로 호출 추가",
+          mentions: ["bot"],
+          created_at: new Date(now - 600000).toISOString(),
+          edited_timestamp: new Date(now - 30000).toISOString(),
+        },
+        {
+          id: "replied-then-edited",
+          author_id: "human",
+          body: "<@bot> 답변 뒤 추가 지시",
+          mentions: ["bot"],
+          created_at: new Date(now - 600000).toISOString(),
+          edited_timestamp: new Date(now - 20000).toISOString(),
+        },
+        {
+          id: "bot-reply",
+          author_id: "bot",
+          reply_to_id: "replied-then-edited",
+          created_at: new Date(now - 300000).toISOString(),
+        },
+        {
+          id: "source",
+          author_id: "human",
+          body: "<@bot> 장부 등록 뒤 수정 지시",
+          mentions: ["bot"],
+          created_at: new Date(now - 600000).toISOString(),
+          edited_timestamp: new Date(now - 10000).toISOString(),
+        },
+        {
+          id: "old-edited",
+          author_id: "human",
+          body: "<@bot> 25시간 전 글 수정",
+          mentions: ["bot"],
+          created_at: new Date(now - 25 * 3600000).toISOString(),
+          edited_timestamp: new Date(now - 15000).toISOString(),
+        },
+      ];
+    },
+  };
+  const first = await watch({ root, config: conf, adapter, now: now - 300000 });
+  assert.deepEqual(first.wakes.map((w) => w.id), ["human-same-judgment"]);
+
+  phase = 2;
+  const second = await watch({ root, config: conf, adapter, now });
+  assert.deepEqual(
+    second.wakes.map((w) => w.id),
+    [
+      "human-later-mentioned",
+      "human-replied-then-edited",
+      "human-source",
+      "human-old-edited",
+    ],
+  );
+});

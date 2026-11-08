@@ -41,15 +41,27 @@ export function createAdapter(
           if (
             !m.id ||
             !m.author?.id ||
-            !Number.isFinite(Date.parse(m.timestamp))
+            !Number.isFinite(Date.parse(m.timestamp)) ||
+            (m.edited_timestamp != null &&
+              !Number.isFinite(Date.parse(m.edited_timestamp)))
           )
             throw new Error("Invalid Discord message");
-          if (Date.parse(m.timestamp) >= since)
+          const createdMs = Date.parse(m.timestamp);
+          const editedMs = m.edited_timestamp
+            ? Date.parse(m.edited_timestamp)
+            : NaN;
+          const effectiveMs =
+            Number.isFinite(editedMs) && editedMs > createdMs
+              ? editedMs
+              : createdMs;
+          if (effectiveMs >= since)
             messages.push({
               id: m.id,
               channel,
               author_id: m.author.id,
               created_at: m.timestamp,
+              edited_at: m.edited_timestamp || null,
+              edited_timestamp: m.edited_timestamp || null,
               body: m.content || "",
               reply_to_id: m.message_reference?.message_id || null,
               reply_to_author_id: m.referenced_message?.author?.id || null,
