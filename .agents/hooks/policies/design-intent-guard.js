@@ -4,16 +4,21 @@
  * Design-Change Upstream/Consumer Artifact Intent Recheck Policy (intent-guard).
  *
  * When a requirement file (.agents/requirements/*.yaml) changes its design
- * fields, every artifact produced by or consumed under that requirement must:
- *   (a) declare a machine-measurable intent test (condition + test_path),
- *       rejecting empty placeholders and file-shape/file-count-only checks,
- *   (b) have the declared test_path actually exist inside the repository, and
- *   (c) re-verify the intent test in the same change (either by updating the
- *       test file in the same commit/change set or by providing a fresh passing
- *       test receipt bound to the current design digest).
+ * fields (or is deleted / retired), every artifact produced by or consumed
+ * under that requirement must:
+ *   (a) declare a machine-measurable intent test (condition + test_path) whose
+ *       condition expresses a content/semantic metric comparison (not merely
+ *       file existence, extension, byte size, or record/line count),
+ *   (b) have the declared test_path exist inside the repository with real
+ *       uncommented assertions, the declared symbol (outside comments), and
+ *       numeric thresholds matching the declared condition, and
+ *   (c) re-verify the intent test in the same change — either by updating the
+ *       test file in the same change set or by providing a runner-issued
+ *       execution receipt (--run-tests) bound to design_sha256, test_sha256,
+ *       exit_code === 0, output_sha256, and run_proof.
  *
- * If any artifact fails (a), (b), or (c), the guard blocks the commit/check and
- * outputs the "다시 검사해야 할 앞 단계 산출물" list.
+ * Shell parsing reuses .claude/hooks/lib/git-command-parser.js and
+ * .claude/hooks/lib/effective-argv.js (no duplicate shell tokenizer).
  */
 
 const fs = require("fs");
@@ -21,7 +26,13 @@ const path = require("path");
 const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 
+const HOOKS_LIB_DIR = path.resolve(__dirname, "..", "..", "..", ".claude", "hooks", "lib");
+const { shellClauses } = require(path.join(HOOKS_LIB_DIR, "git-command-parser.js"));
+const { effectiveCommands, gitClauseDirectory } = require(path.join(HOOKS_LIB_DIR, "effective-argv.js"));
+
 const REQ_PATH_RE = /(?:^|\/)\.agents\/requirements\/(?!_)[^/]+\.ya?ml$/;
+const RUNNER_ID = "intent-guard-runner/v1";
+const RECEIPT_PROOF_SALT = "naia-adk-intent-guard-receipt-v1";
 
 const DESIGN_TOP_KEYS = new Set([
 	"design",
@@ -44,7 +55,33 @@ const ARTIFACT_SECTION_KEYS = [
 ];
 
 function sha256Hex(input) {
-	return crypto.createHash("sha256").update(input, "utf8").digest("hex");
+	return crypto.createHash("sha256").update(String(input ?? ""), "utf8").digest("hex");
+}
+
+function computeReceiptProof({
+	runner,
+	reqId,
+	artifactId,
+	testPath,
+	designSha256,
+	testSha256,
+	exitCode,
+	outputSha256,
+	ranAt,
+}) {
+	const payload = [
+		RECEIPT_PROOF_SALT,
+		String(runner || ""),
+		String(reqId || ""),
+		String(artifactId || ""),
+		String(testPath || ""),
+		String(designSha256 || ""),
+		String(testSha256 || ""),
+		String(exitCode ?? ""),
+		String(outputSha256 || ""),
+		String(ranAt || ""),
+	].join("|");
+	return sha256Hex(payload);
 }
 
 function unquoteYaml(val) {
@@ -78,36 +115,165 @@ function isPlaceholderValue(val) {
 	return false;
 }
 
+const SUPERFICIAL_SUBJECT_EN_RE =
+	/^(?:the\s+)?(?:file|files|artifact|artifacts|output|outputs|record|records|row|rows|line|lines|item|items|byte|bytes|dir|directory|folder|ext|extension|format|shape|size|count|length|exists?|existence|present|non[-_]?empty)(?:[\s_-]*(?:count|size|length|bytes?|number|total|exists?|existence|ext|extension|format|shape))?$/i;
+
+const SUPERFICIAL_SUBJECT_KO_RE =
+	/^(?:산출물|파일|출력|결과물|폴더|디렉터리|레코드|행|줄|항목|바이트|확장자|크기|개수|모양|형식|길이|존재|유무)?\s*(?:파일\s*)?(?:존재|유무|있음|생성|개수|수|크기|용량|바이트|확장자|모양|형식|길이)(?:\s*(?:가|이|은|는|의))?$/;
+
+function isSuperficialSubject(rawSubject) {
+	const subj = String(rawSubject || "")
+		.trim()
+		.replace(/^['"(\[]+|['")\]]+$/g, "")
+		.trim();
+	if (!subj) return true;
+	if (SUPERFICIAL_SUBJECT_EN_RE.test(subj)) return true;
+	if (SUPERFICIAL_SUBJECT_KO_RE.test(subj)) return true;
+	return false;
+}
+
 /**
- * Detect conditions that only check superficial file existence, extension, byte size,
- * or count ("파일 모양·개수만 보는 시험") without measuring semantic design intent.
+ * Determine whether a condition only checks superficial file shape/count/existence
+ * rather than a content/semantic value metric with an explicit comparison operator
+ * or quantitative threshold.
+ *
+ * Approach chosen: Positive structural verification of content-value metric +
+ * comparison operator/bound (combined with superficial-metric rejection), rather
+ * than a narrow phrase blacklist.
  */
 function isShapeOrCountOnlyCondition(condition) {
 	if (!condition || typeof condition !== "string") return true;
 	const text = condition.trim();
 	if (!text) return true;
 
-	// Korean patterns indicating shape/count/existence-only checks
-	const koShapeOnlyPatterns = [
-		/파일\s*(?:모양|개수|존재|크기|유무|확장자|형식)(?:[·,\s/]|과|와|및|이나|만)*\s*만\s*(?:확인|검사|검증|체크|본다|봄|측정)/,
-		/(?:모양|개수|존재|확장자|파일\s*크기|프레임\s*개수|프레임\s*수)\s*만\s*(?:확인|검사|검증|체크|본다|봄|측정)/,
-		/^(?:산출물\s*|파일\s*|클립\s*|영상\s*)?(?:존재|생성|개수|크기|확장자|파일\s*모양|파일\s*개수|프레임\s*수|프레임\s*개수)(?:[·,\s/]|과|와|및)*(?:존재|생성|개수|크기|확장자|파일\s*모양|파일\s*개수|프레임\s*수|프레임\s*개수|여부)?\s*(?:만\s*)?(?:확인|검사|검증|체크)?\s*$/,
-	];
-	for (const re of koShapeOnlyPatterns) {
-		if (re.test(text)) return true;
+	// Explicit "only shape/count/existence/size/extension" phrasing is always rejected
+	if (
+		/(?:모양|개수|존재|유무|확장자|파일\s*크기|행\s*수|줄\s*수|레코드\s*개수)(?:[·,\s/]|과|와|및|이나)*\s*만\s*(?:확인|검사|검증|체크|본다|봄|측정)/.test(
+			text,
+		) ||
+		/\b(?:file\s+shape|file\s+count|record\s+count|line\s+count|shape\s+and\s+count|existence\s+and\s+(?:record\s+)?count)\s+only\b/i.test(
+			text,
+		)
+	) {
+		return true;
 	}
 
-	// English patterns indicating shape/count/existence-only checks
-	const enShapeOnlyPatterns = [
-		/\b(?:only\s+)?(?:check|verify|assert|test|validate)s?\s+(?:only\s+)?(?:that\s+)?(?:the\s+)?(?:file|artifact|output|clip|video)s?\s+(?:exist(?:s|ence)?|count|shape|size|extension|format|frame\s+count)(?:\s*(?:,|\/|and|or)\s*(?:file\s+)?(?:exist(?:s|ence)?|count|shape|size|extension|format|frame\s+count))*\s*(?:only)?\s*$/i,
-		/^(?:file|artifact|output|clip)?\s*(?:exists?|existence|count|shape|size|extension|non-empty|frame\s+count)(?:\s*(?:,|\/|and|or|\+)\s*(?:file\s+)?(?:exists?|existence|count|shape|size|extension|non-empty|frame\s+count))*\s*(?:only|check|test|verification)?\s*$/i,
-		/\b(?:file\s+shape|file\s+count|shape\s+and\s+count|existence\s+and\s+count)\s+only\b/i,
-	];
-	for (const re of enShapeOnlyPatterns) {
-		if (re.test(text)) return true;
+	const clauses = text
+		.split(/\b(?:and|or)\b|&&|\|\||,|;|(?:\s+및\s+)|(?:\s*이고\s*)|(?:\s*이며\s*)/i)
+		.map((c) => c.trim())
+		.filter(Boolean);
+
+	if (clauses.length === 0) return true;
+
+	let hasContentMetricComparison = false;
+
+	for (const clause of clauses) {
+		// 1) Symbolic comparison: <subject> (<=|>=|==|!=|===|!==|<|>|=|±) <target>
+		const symMatch = clause.match(
+			/^(.+?)\s*(<=|>=|===|!==|==|!=|<|>|=|±)\s*(['"][^'"]+['"]|-?\d+(?:\.\d+)?(?:\s*[A-Za-z%]+)?|\b(?:true|false|null)\b)\s*$/i,
+		);
+		if (symMatch) {
+			const subject = symMatch[1].trim();
+			const rhs = symMatch[3].trim();
+			// Reject pure byte-size unit comparisons like >= 100B / 10KB on file size
+			const isByteUnitOnly = /^-?\d+(?:\.\d+)?\s*(?:b|kb|mb|gb|bytes?)$/i.test(rhs);
+			if (!isSuperficialSubject(subject) && !(isByteUnitOnly && /크기|용량|size|byte/i.test(subject))) {
+				hasContentMetricComparison = true;
+			}
+			continue;
+		}
+
+		// 2) Korean quantitative bound: <subject> ... <number> (이하|이상|미만|초과|이내|동일|일치)
+		const koBoundMatch = clause.match(
+			/^(.+?)\s+(-?\d+(?:\.\d+)?(?:\s*[A-Za-z%개]*)?)\s*(?:이하|이상|미만|초과|이내|동일|일치)/,
+		);
+		if (koBoundMatch) {
+			const subject = koBoundMatch[1].trim();
+			if (!isSuperficialSubject(subject)) {
+				hasContentMetricComparison = true;
+			}
+			continue;
+		}
 	}
 
-	return false;
+	return !hasContentMetricComparison;
+}
+
+/**
+ * Strip JS/TS/Python line and block comments while preserving string literals.
+ */
+function stripCodeComments(source) {
+	if (!source || typeof source !== "string") return "";
+	let out = "";
+	let i = 0;
+	let quote = null;
+	while (i < source.length) {
+		const ch = source[i];
+		const next = source[i + 1];
+		if (quote) {
+			out += ch;
+			if (ch === "\\" && i + 1 < source.length) {
+				out += source[++i];
+			} else if (ch === quote) {
+				quote = null;
+			}
+			i++;
+			continue;
+		}
+		if (ch === "'" || ch === '"' || ch === "`") {
+			quote = ch;
+			out += ch;
+			i++;
+			continue;
+		}
+		if (ch === "/" && next === "/") {
+			const nl = source.indexOf("\n", i + 2);
+			if (nl < 0) break;
+			i = nl;
+			continue;
+		}
+		if (ch === "/" && next === "*") {
+			const end = source.indexOf("*/", i + 2);
+			if (end < 0) break;
+			i = end + 2;
+			continue;
+		}
+		if (ch === "#" && (i === 0 || source[i - 1] === "\n")) {
+			const nl = source.indexOf("\n", i + 1);
+			if (nl < 0) break;
+			i = nl;
+			continue;
+		}
+		out += ch;
+		i++;
+	}
+	return out;
+}
+
+function extractConditionThresholds(condition) {
+	if (!condition || typeof condition !== "string") return [];
+	const matches = condition.match(/(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?(?![A-Za-z0-9_])/g) || [];
+	return [...new Set(matches)];
+}
+
+function codeContainsNumericThreshold(uncommentedCode, numStr) {
+	if (uncommentedCode.includes(numStr)) return true;
+	const targetNum = Number(numStr);
+	if (!Number.isFinite(targetNum)) return false;
+	const codeNums =
+		uncommentedCode.match(/(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?(?![A-Za-z0-9_])/g) || [];
+	return codeNums.some((tok) => Number(tok) === targetNum);
+}
+
+function hasNonTautologicalAssertion(uncommentedCode) {
+	if (!/\b(?:assert(?:\.[A-Za-z_]\w*)?|expect)\s*\(/.test(uncommentedCode)) {
+		return false;
+	}
+	const strippedTautologies = uncommentedCode.replace(
+		/\b(?:assert(?:\.ok)?|expect)\s*\(\s*(?:true|1|!0|['"][^'"]*['"])\s*\)/g,
+		"",
+	);
+	return /\b(?:assert(?:\.[A-Za-z_]\w*)?|expect)\s*\(/.test(strippedTautologies);
 }
 
 /**
@@ -199,7 +365,6 @@ function parseArtifactItemLines(itemLines) {
 		const indent = indentMatch ? indentMatch[1].length : 0;
 		const content = indentMatch ? indentMatch[2].trim() : raw.trim();
 
-		// Sub-list item under intent_tests:
 		if (subSection && content.startsWith("- ")) {
 			const rest = content.slice(2).trim();
 			if (!subList) subList = [];
@@ -345,17 +510,17 @@ function parseArtifactsFromBlock(block) {
 		if (parsed) items.push(parsed);
 	}
 
-	// Filter out pure template placeholder items if and only if every field is a {placeholder}
 	return items;
 }
 
 /**
- * Parse a requirement YAML document into its id, design digest, and declared artifacts.
+ * Parse a requirement YAML document into its id, status, design digest, and declared artifacts.
  */
 function parseRequirementDocument(yamlText, fallbackId = "") {
 	const blocks = parseTopLevelBlocks(yamlText);
 	const rawId = blocks.has("id") ? unquoteYaml(blocks.get("id").inline) : fallbackId;
 	const id = rawId || fallbackId;
+	const status = blocks.has("status") ? unquoteYaml(blocks.get("status").inline).toLowerCase() : "";
 
 	const artifacts = [];
 	for (const key of ARTIFACT_SECTION_KEYS) {
@@ -364,7 +529,6 @@ function parseRequirementDocument(yamlText, fallbackId = "") {
 		}
 	}
 
-	// Compute canonical design digest from DESIGN_TOP_KEYS + artifact semantic fields (excluding receipts)
 	const designParts = [];
 	for (const key of [...DESIGN_TOP_KEYS].sort()) {
 		if (!blocks.has(key)) continue;
@@ -387,12 +551,14 @@ function parseRequirementDocument(yamlText, fallbackId = "") {
 	}));
 	designParts.push(`artifacts:${JSON.stringify(artifactDesignParts)}`);
 
-	const hasExplicitDesignFields = [...DESIGN_TOP_KEYS].some((k) => blocks.has(k)) || artifacts.length > 0;
+	const hasExplicitDesignFields =
+		[...DESIGN_TOP_KEYS].some((k) => blocks.has(k)) || artifacts.length > 0;
 	const designDigest = sha256Hex(designParts.join("\n---\n"));
 	const fullDigest = sha256Hex(String(yamlText || ""));
 
 	return {
 		id,
+		status,
 		blocks,
 		artifacts,
 		hasExplicitDesignFields,
@@ -410,7 +576,6 @@ function evaluateArtifactIntent({
 	artifact,
 	repoRoot,
 	activeChangedFiles,
-	headChangedFiles,
 	designDigest,
 	fullDigest,
 }) {
@@ -419,7 +584,7 @@ function evaluateArtifactIntent({
 			? `${artifact.id} (${artifact.path})`
 			: artifact.id || artifact.path || "(이름 없는 산출물)";
 
-	// (a) Intent test must be declared with a non-placeholder, non-shape/count-only condition and test_path
+	// (a) Intent test must be declared with a non-placeholder, content-metric condition and test_path
 	if (!artifact.intentTests || artifact.intentTests.length === 0) {
 		return {
 			ok: false,
@@ -456,7 +621,7 @@ function evaluateArtifactIntent({
 				reqRelPath,
 				artifactLabel,
 				artifact,
-				reason: `(a) 의도 시험 부적격(파일 모양·개수만 보는 시험): "${cond}" — 산출물이 바뀐 설계 의도를 지키는지 기계로 재는 의미 조건을 적으세요.`,
+				reason: `(a) 의도 시험 부적격(파일 모양·개수만 보는 시험): "${cond}" — 산출물 내용 지표와 비교 연산자(<=, >=, == 등)를 포함한 기계적 의미 조건을 적으세요.`,
 			};
 		}
 
@@ -546,7 +711,8 @@ function evaluateArtifactIntent({
 		}
 
 		const testContent = fs.readFileSync(absTestPath, "utf8");
-		if (!testContent.trim()) {
+		const uncommentedCode = stripCodeComments(testContent);
+		if (!uncommentedCode.trim()) {
 			return {
 				ok: false,
 				code: "missing_test_file",
@@ -554,14 +720,14 @@ function evaluateArtifactIntent({
 				reqRelPath,
 				artifactLabel,
 				artifact,
-				reason: `(b) 의도 시험 파일 내용이 비어 있습니다: "${normTestPath}".`,
+				reason: `(b) 의도 시험 파일("${normTestPath}")에 주석을 제외한 실제 실행 코드가 없습니다.`,
 			};
 		}
 
 		if (
 			testSpec.symbol &&
 			!isPlaceholderValue(testSpec.symbol) &&
-			!testContent.includes(testSpec.symbol)
+			!uncommentedCode.includes(testSpec.symbol)
 		) {
 			return {
 				ok: false,
@@ -570,12 +736,42 @@ function evaluateArtifactIntent({
 				reqRelPath,
 				artifactLabel,
 				artifact,
-				reason: `(b) 의도 시험 파일("${normTestPath}")에 선언된 시험 심볼("${testSpec.symbol}")이 없습니다.`,
+				reason: `(b) 의도 시험 파일("${normTestPath}")의 실제 코드(주석 제외)에 선언된 시험 심볼("${testSpec.symbol}")이 없습니다.`,
 			};
 		}
 
+		if (!hasNonTautologicalAssertion(uncommentedCode)) {
+			return {
+				ok: false,
+				code: "weak_test_assertion",
+				reqId,
+				reqRelPath,
+				artifactLabel,
+				artifact,
+				reason: `(b) 의도 시험 파일("${normTestPath}")에 실제 산출물 지표를 검증하는 단언문(assert/expect)이 없거나 동어반복 단언뿐입니다.`,
+			};
+		}
+
+		const thresholds = extractConditionThresholds(cond);
+		for (const numStr of thresholds) {
+			if (!codeContainsNumericThreshold(uncommentedCode, numStr)) {
+				return {
+					ok: false,
+					code: "condition_threshold_mismatch",
+					reqId,
+					reqRelPath,
+					artifactLabel,
+					artifact,
+					reason: `(b) 의도 시험 내용 불일치: 조건("${cond}")의 수치 기준값("${numStr}")이 시험 파일("${normTestPath}")의 실제 코드(주석 제외)에 없습니다.`,
+				};
+			}
+		}
+
+		const actualTestSha256 = sha256Hex(testContent);
+
 		// (c) Must be re-verified in the same change:
-		//     Either test_path is in activeChangedFiles, or a valid non-stale test receipt exists.
+		//     Either test_path is updated in activeChangedFiles, or a runner-verified receipt exists
+		//     matching design_sha256, test_sha256, exit_code === 0, and run_proof.
 		const testChangedInSameChange = activeChangedFiles.has(normTestPath);
 		const receiptCheck = verifyIntentReceipt({
 			repoRoot,
@@ -583,8 +779,7 @@ function evaluateArtifactIntent({
 			artifact,
 			testSpec,
 			normTestPath,
-			activeChangedFiles,
-			headChangedFiles,
+			actualTestSha256,
 			designDigest,
 			fullDigest,
 		});
@@ -619,8 +814,7 @@ function verifyIntentReceipt({
 	artifact,
 	testSpec,
 	normTestPath,
-	activeChangedFiles,
-	headChangedFiles,
+	actualTestSha256,
 	designDigest,
 	fullDigest,
 }) {
@@ -638,13 +832,21 @@ function verifyIntentReceipt({
 
 	let lastDetail = "";
 	for (const relReceipt of candidates) {
-		if (!relReceipt || relReceipt.startsWith("/") || relReceipt.startsWith("..") || relReceipt.includes("/../")) {
+		if (
+			!relReceipt ||
+			relReceipt.startsWith("/") ||
+			relReceipt.startsWith("..") ||
+			relReceipt.includes("/../")
+		) {
 			continue;
 		}
 		const absReceipt = path.resolve(repoRoot, relReceipt);
 		if (absReceipt !== repoRoot && !absReceipt.startsWith(repoRoot + path.sep)) continue;
 		if (!fs.existsSync(absReceipt)) {
-			if (testSpec.receipt && relReceipt === testSpec.receipt.replace(/\\/g, "/").replace(/^\.\//, "")) {
+			if (
+				testSpec.receipt &&
+				relReceipt === testSpec.receipt.replace(/\\/g, "/").replace(/^\.\//, "")
+			) {
 				lastDetail = `영수증 파일 없음: ${relReceipt}`;
 			}
 			continue;
@@ -659,9 +861,12 @@ function verifyIntentReceipt({
 		}
 		if (!parsed || typeof parsed !== "object") continue;
 
-		// Find matching entry if receipt contains an array of results/artifacts
 		let targetEntry = parsed;
-		if (Array.isArray(parsed.artifacts) || Array.isArray(parsed.results) || Array.isArray(parsed.receipts)) {
+		if (
+			Array.isArray(parsed.artifacts) ||
+			Array.isArray(parsed.results) ||
+			Array.isArray(parsed.receipts)
+		) {
 			const list = parsed.artifacts || parsed.results || parsed.receipts;
 			const matched = list.find(
 				(item) =>
@@ -669,9 +874,7 @@ function verifyIntentReceipt({
 					(item.artifact_id === artifact.id ||
 						item.id === artifact.id ||
 						item.path === artifact.path ||
-						item.test_path === normTestPath ||
-						item.requirement_id === reqId ||
-						item.req_id === reqId),
+						item.test_path === normTestPath),
 			);
 			if (!matched) {
 				lastDetail = `영수증(${relReceipt})에 산출물(${artifact.id || artifact.path}) 항목 없음`;
@@ -680,7 +883,6 @@ function verifyIntentReceipt({
 			targetEntry = { ...parsed, ...matched };
 		}
 
-		// Check pass verdict
 		const statusVal = String(
 			targetEntry.status ?? targetEntry.result ?? targetEntry.verdict ?? "",
 		).toLowerCase();
@@ -688,9 +890,7 @@ function verifyIntentReceipt({
 			targetEntry.passed === true ||
 			targetEntry.ok === true ||
 			statusVal === "pass" ||
-			statusVal === "passed" ||
-			statusVal === "ok" ||
-			statusVal === "clean";
+			statusVal === "passed";
 		const failedBool =
 			targetEntry.passed === false ||
 			targetEntry.ok === false ||
@@ -704,7 +904,6 @@ function verifyIntentReceipt({
 			continue;
 		}
 
-		// Check test_path match if specified in receipt
 		if (
 			targetEntry.test_path &&
 			targetEntry.test_path.replace(/\\/g, "/").replace(/^\.\//, "") !== normTestPath
@@ -713,7 +912,6 @@ function verifyIntentReceipt({
 			continue;
 		}
 
-		// Check freshness / binding to the current design change:
 		const recordedDigest =
 			targetEntry.design_sha256 ||
 			targetEntry.req_sha256 ||
@@ -723,30 +921,185 @@ function verifyIntentReceipt({
 			parsed.requirement_sha256 ||
 			null;
 
-		if (recordedDigest) {
-			const cleanDigest = String(recordedDigest).replace(/^sha256:/, "");
-			if (cleanDigest !== designDigest && cleanDigest !== fullDigest) {
-				lastDetail = `영수증(${relReceipt})의 설계 해시가 현재 설계와 불일치(이전 설계 영수증)`;
-				continue;
-			}
-			return { ok: true, receiptPath: relReceipt };
+		if (!recordedDigest) {
+			lastDetail = `영수증(${relReceipt})에 설계 해시(design_sha256)가 없음`;
+			continue;
 		}
 
-		// If no explicit digest is in the receipt, the receipt file MUST be updated in the current change set
-		if (activeChangedFiles.has(relReceipt) || (headChangedFiles && headChangedFiles.has(relReceipt))) {
-			return { ok: true, receiptPath: relReceipt };
+		const cleanDigest = String(recordedDigest).replace(/^sha256:/, "");
+		if (cleanDigest !== designDigest && cleanDigest !== fullDigest) {
+			lastDetail = `영수증(${relReceipt})의 설계 해시가 현재 설계와 불일치(이전 설계 영수증)`;
+			continue;
 		}
 
-		lastDetail = `영수증(${relReceipt})이 이번 설계 변경에서 갱신되지 않음(stale receipt)`;
+		// Verify runner execution fields (blocks hand-written receipts)
+		const runner = targetEntry.runner || parsed.runner || "";
+		const exitCode = targetEntry.exit_code;
+		const ranAt = targetEntry.ran_at || parsed.ran_at || "";
+		const outputSha256 = targetEntry.output_sha256 || "";
+		const recordedTestSha256 = String(targetEntry.test_sha256 || "").replace(/^sha256:/, "");
+		const recordedProof = String(targetEntry.run_proof || "");
+
+		if (runner !== RUNNER_ID || exitCode !== 0 || !ranAt || !/^[a-f0-9]{64}$/.test(outputSha256)) {
+			lastDetail = `영수증(${relReceipt})에 실행기 증명(runner/exit_code: 0/output_sha256)이 없음(수기 영수증 차단 — --run-tests로 생성하세요)`;
+			continue;
+		}
+
+		if (!recordedTestSha256 || recordedTestSha256 !== actualTestSha256) {
+			lastDetail = `영수증(${relReceipt})의 시험 파일 해시(test_sha256)가 현재 시험 파일("${normTestPath}")과 불일치`;
+			continue;
+		}
+
+		const expectedProof = computeReceiptProof({
+			runner,
+			reqId: targetEntry.requirement_id || parsed.requirement_id || reqId,
+			artifactId: targetEntry.artifact_id || artifact.id,
+			testPath: normTestPath,
+			designSha256: cleanDigest,
+			testSha256: recordedTestSha256,
+			exitCode,
+			outputSha256,
+			ranAt,
+		});
+
+		if (!recordedProof || recordedProof !== expectedProof) {
+			lastDetail = `영수증(${relReceipt})의 실행 증명(run_proof) 검증 실패(수기 위조 차단)`;
+			continue;
+		}
+
+		return { ok: true, receiptPath: relReceipt };
 	}
 
 	return { ok: false, detail: lastDetail };
+}
+
+/**
+ * Execute declared intent tests for requirement files and write verified receipts
+ * containing design_sha256, test_sha256, exit_code, output_sha256, and run_proof.
+ */
+function runRequirementIntentTests(repoRoot, options = {}) {
+	const resolvedRoot = resolveGitRepoRoot(repoRoot) || path.resolve(repoRoot || process.cwd());
+	const reqDir = path.join(resolvedRoot, ".agents", "requirements");
+	if (!fs.existsSync(reqDir)) {
+		return { ok: true, receiptsWritten: [] };
+	}
+
+	const filterReqId = options.reqId ? String(options.reqId).trim() : null;
+	const receiptsWritten = [];
+	const failures = [];
+
+	const entries = fs.readdirSync(reqDir, { withFileTypes: true });
+	for (const entry of entries) {
+		if (!entry.isFile() || entry.name.startsWith("_") || !/\.ya?ml$/i.test(entry.name)) continue;
+		const relPath = `.agents/requirements/${entry.name}`;
+		const absPath = path.join(resolvedRoot, relPath);
+		const content = fs.readFileSync(absPath, "utf8");
+		const fallbackId = entry.name.replace(/\.ya?ml$/i, "");
+		const doc = parseRequirementDocument(content, fallbackId);
+		if (filterReqId && doc.id !== filterReqId && fallbackId !== filterReqId) continue;
+		if (!doc.artifacts || doc.artifacts.length === 0) continue;
+
+		const artifactReceipts = [];
+		const isoNow = new Date().toISOString();
+
+		for (const artifact of doc.artifacts) {
+			for (const testSpec of artifact.intentTests || []) {
+				const rawTestPath = (testSpec.test_path || "").trim();
+				if (isPlaceholderValue(rawTestPath)) continue;
+				const normTestPath = rawTestPath.replace(/\\/g, "/").replace(/^\.\//, "");
+				const absTestPath = path.resolve(resolvedRoot, normTestPath);
+				if (!fs.existsSync(absTestPath)) {
+					failures.push({
+						reqId: doc.id,
+						artifactId: artifact.id,
+						testPath: normTestPath,
+						reason: `Test file does not exist: ${normTestPath}`,
+					});
+					continue;
+				}
+
+				const testContent = fs.readFileSync(absTestPath, "utf8");
+				const testSha256 = sha256Hex(testContent);
+				const runRes = spawnSync(process.execPath, ["--test", absTestPath], {
+					cwd: resolvedRoot,
+					encoding: "utf8",
+					stdio: ["ignore", "pipe", "pipe"],
+					timeout: 30000,
+				});
+				const exitCode = typeof runRes.status === "number" ? runRes.status : 1;
+				const outputText = `${runRes.stdout || ""}\n${runRes.stderr || ""}`;
+				const outputSha256 = sha256Hex(outputText);
+				const status = exitCode === 0 ? "pass" : "fail";
+				const runProof = computeReceiptProof({
+					runner: RUNNER_ID,
+					reqId: doc.id,
+					artifactId: artifact.id,
+					testPath: normTestPath,
+					designSha256: doc.designDigest,
+					testSha256,
+					exitCode,
+					outputSha256,
+					ranAt: isoNow,
+				});
+
+				const itemReceipt = {
+					requirement_id: doc.id,
+					artifact_id: artifact.id,
+					path: artifact.path,
+					test_path: normTestPath,
+					status,
+					exit_code: exitCode,
+					design_sha256: doc.designDigest,
+					test_sha256: testSha256,
+					output_sha256: outputSha256,
+					ran_at: isoNow,
+					runner: RUNNER_ID,
+					run_proof: runProof,
+				};
+				artifactReceipts.push(itemReceipt);
+
+				if (exitCode !== 0) {
+					failures.push({
+						reqId: doc.id,
+						artifactId: artifact.id,
+						testPath: normTestPath,
+						exitCode,
+						reason: (runRes.stderr || runRes.stdout || "Test execution failed").trim(),
+					});
+				}
+			}
+		}
+
+		if (artifactReceipts.length > 0) {
+			const receiptDir = path.join(resolvedRoot, ".agents", "progress", "intent-receipts");
+			fs.mkdirSync(receiptDir, { recursive: true });
+			const receiptPath = path.join(receiptDir, `${doc.id}.json`);
+			const receiptPayload = {
+				runner: RUNNER_ID,
+				requirement_id: doc.id,
+				design_sha256: doc.designDigest,
+				req_sha256: doc.fullDigest,
+				ran_at: isoNow,
+				status: artifactReceipts.every((r) => r.exit_code === 0) ? "pass" : "fail",
+				artifacts: artifactReceipts,
+			};
+			fs.writeFileSync(receiptPath, JSON.stringify(receiptPayload, null, 2) + "\n", "utf8");
+			receiptsWritten.push(path.relative(resolvedRoot, receiptPath).replace(/\\/g, "/"));
+		}
+	}
+
+	return {
+		ok: failures.length === 0,
+		receiptsWritten,
+		failures,
+	};
 }
 
 function runGit(repoRoot, args) {
 	return spawnSync("git", ["-c", "core.quotePath=false", "-C", repoRoot, ...args], {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
+		timeout: 5000,
 	});
 }
 
@@ -760,6 +1113,7 @@ function resolveGitRepoRoot(startDir) {
 	const res = spawnSync("git", ["-C", probe, "rev-parse", "--show-toplevel"], {
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "ignore"],
+		timeout: 5000,
 	});
 	if (res.status !== 0 || !res.stdout || !res.stdout.trim()) return null;
 	const rawTop = res.stdout.trim();
@@ -790,7 +1144,7 @@ function readGitBlob(repoRoot, revSpec) {
  *
  * @param {string} repoRoot
  * @param {object} [options]
- * @param {"auto"|"staged"|"worktree"|"commit"} [options.mode="auto"]
+ * @param {"auto"|"staged"|"worktree"|"tracked-worktree"|"explicit"|"commit"} [options.mode="auto"]
  * @param {string} [options.commitRev="HEAD"]
  * @param {boolean} [options.includeWorktree=false]
  * @param {string[]} [options.explicitPaths=[]]
@@ -799,26 +1153,16 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 	const resolvedRoot = resolveGitRepoRoot(repoRoot);
 	if (!resolvedRoot) return { ok: true, violations: [] };
 
+	const reqDir = path.join(resolvedRoot, ".agents", "requirements");
 	const mode = options.mode || "auto";
-	const hasHeadRes = runGit(resolvedRoot, ["rev-parse", "--verify", "HEAD"]);
-	const hasHead = hasHeadRes.status === 0;
-
-	const stagedFiles = new Set(
-		parseNullSeparatedPaths(runGit(resolvedRoot, ["diff", "--cached", "--name-only", "-z"]).stdout),
-	);
-	const unstagedFiles = new Set(
-		parseNullSeparatedPaths(runGit(resolvedRoot, ["diff", "--name-only", "-z"]).stdout),
-	);
-	const untrackedFiles = new Set(
-		parseNullSeparatedPaths(
-			runGit(resolvedRoot, ["ls-files", "--others", "--exclude-standard", "-z"]).stdout,
-		),
-	);
-	const worktreeFiles = new Set([...stagedFiles, ...unstagedFiles, ...untrackedFiles]);
 
 	let candidateChangedFiles;
+	let activeChangedFiles;
 	let readNewFileContent;
 	let readOldFileContent;
+
+	const hasHeadRes = runGit(resolvedRoot, ["rev-parse", "--verify", "HEAD"]);
+	const hasHead = hasHeadRes.status === 0;
 
 	if (mode === "commit") {
 		const rev = options.commitRev || "HEAD";
@@ -826,49 +1170,112 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 		const hasParent = parentRes.status === 0;
 		const commitChanged = hasParent
 			? parseNullSeparatedPaths(
-					runGit(resolvedRoot, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", rev]).stdout,
+					runGit(resolvedRoot, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", rev])
+						.stdout,
 				)
 			: parseNullSeparatedPaths(
 					runGit(resolvedRoot, ["ls-tree", "--name-only", "-r", "-z", rev]).stdout,
 				);
 		candidateChangedFiles = new Set(commitChanged);
+		activeChangedFiles = candidateChangedFiles;
 		readNewFileContent = (relPath) => readGitBlob(resolvedRoot, `${rev}:${relPath}`);
-		readOldFileContent = (relPath) => (hasParent ? readGitBlob(resolvedRoot, `${rev}^:${relPath}`) : null);
+		readOldFileContent = (relPath) =>
+			hasParent ? readGitBlob(resolvedRoot, `${rev}^:${relPath}`) : null;
 	} else {
-		const useWorktree =
-			mode === "worktree" ||
-			options.includeWorktree === true ||
-			stagedFiles.size === 0;
+		const stagedFiles = new Set(
+			parseNullSeparatedPaths(
+				runGit(resolvedRoot, ["diff", "--cached", "--name-only", "-z"]).stdout,
+			),
+		);
+		const normalizedExplicit = Array.isArray(options.explicitPaths)
+			? options.explicitPaths
+					.map((p) => String(p).replace(/\\/g, "/").replace(/^\.\//, ""))
+					.filter(Boolean)
+			: [];
 
-		candidateChangedFiles = useWorktree ? worktreeFiles : new Set([...stagedFiles]);
-
-		// Also check if any requirement file was modified in working tree when running git commit
-		for (const f of worktreeFiles) {
-			if (REQ_PATH_RE.test(f)) {
-				candidateChangedFiles.add(f);
-			}
+		if (mode === "explicit") {
+			candidateChangedFiles = new Set(normalizedExplicit);
+			activeChangedFiles = new Set([...stagedFiles, ...normalizedExplicit]);
+			readNewFileContent = (relPath) => {
+				const abs = path.resolve(resolvedRoot, relPath);
+				if (!fs.existsSync(abs)) return null;
+				try {
+					return fs.readFileSync(abs, "utf8");
+				} catch {
+					return null;
+				}
+			};
+		} else if (
+			mode === "staged" ||
+			(mode === "auto" && !options.includeWorktree && stagedFiles.size > 0)
+		) {
+			candidateChangedFiles = new Set(stagedFiles);
+			for (const p of normalizedExplicit) candidateChangedFiles.add(p);
+			activeChangedFiles = candidateChangedFiles;
+			readNewFileContent = (relPath) => {
+				if (stagedFiles.has(relPath)) {
+					const indexBlob = readGitBlob(resolvedRoot, `:${relPath}`);
+					if (indexBlob !== null) return indexBlob;
+				}
+				const abs = path.resolve(resolvedRoot, relPath);
+				if (!fs.existsSync(abs)) return null;
+				try {
+					return fs.readFileSync(abs, "utf8");
+				} catch {
+					return null;
+				}
+			};
+		} else if (mode === "tracked-worktree") {
+			const unstagedFiles = new Set(
+				parseNullSeparatedPaths(runGit(resolvedRoot, ["diff", "--name-only", "-z"]).stdout),
+			);
+			candidateChangedFiles = new Set([...stagedFiles, ...unstagedFiles, ...normalizedExplicit]);
+			activeChangedFiles = candidateChangedFiles;
+			readNewFileContent = (relPath) => {
+				const abs = path.resolve(resolvedRoot, relPath);
+				if (!fs.existsSync(abs)) return null;
+				try {
+					return fs.readFileSync(abs, "utf8");
+				} catch {
+					return null;
+				}
+			};
+		} else {
+			// mode === "worktree" or mode === "auto" when nothing is staged
+			const unstagedFiles = new Set(
+				parseNullSeparatedPaths(runGit(resolvedRoot, ["diff", "--name-only", "-z"]).stdout),
+			);
+			const untrackedFiles = new Set(
+				parseNullSeparatedPaths(
+					runGit(resolvedRoot, [
+						"ls-files",
+						"--others",
+						"--exclude-standard",
+						"-z",
+						"--",
+						".agents/requirements",
+						"tests",
+						"test",
+					]).stdout,
+				),
+			);
+			candidateChangedFiles = new Set([
+				...stagedFiles,
+				...unstagedFiles,
+				...untrackedFiles,
+				...normalizedExplicit,
+			]);
+			activeChangedFiles = candidateChangedFiles;
+			readNewFileContent = (relPath) => {
+				const abs = path.resolve(resolvedRoot, relPath);
+				if (!fs.existsSync(abs)) return null;
+				try {
+					return fs.readFileSync(abs, "utf8");
+				} catch {
+					return null;
+				}
+			};
 		}
-
-		if (Array.isArray(options.explicitPaths) && options.explicitPaths.length > 0) {
-			for (const p of options.explicitPaths) {
-				const norm = p.replace(/\\/g, "/").replace(/^\.\//, "");
-				if (norm) candidateChangedFiles.add(norm);
-			}
-		}
-
-		readNewFileContent = (relPath) => {
-			if (!useWorktree && stagedFiles.has(relPath) && !unstagedFiles.has(relPath)) {
-				const indexBlob = readGitBlob(resolvedRoot, `:${relPath}`);
-				if (indexBlob !== null) return indexBlob;
-			}
-			const abs = path.resolve(resolvedRoot, relPath);
-			if (!fs.existsSync(abs)) return null;
-			try {
-				return fs.readFileSync(abs, "utf8");
-			} catch {
-				return null;
-			}
-		};
 
 		readOldFileContent = (relPath) => {
 			if (!hasHead) return null;
@@ -881,9 +1288,7 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 		return { ok: true, violations: [] };
 	}
 
-	// Load all requirement files in .agents/requirements/ so cross-requirement artifact references work too
 	const allReqDocs = new Map();
-	const reqDir = path.join(resolvedRoot, ".agents", "requirements");
 	if (fs.existsSync(reqDir)) {
 		try {
 			for (const entry of fs.readdirSync(reqDir, { withFileTypes: true })) {
@@ -903,38 +1308,48 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 	const violations = [];
 
 	for (const reqRelPath of changedReqPaths) {
-		const newContent = readNewFileContent(reqRelPath);
-		if (newContent == null) continue; // deleted requirement file
 		const fallbackId = path.posix.basename(reqRelPath).replace(/\.ya?ml$/i, "");
-		const newDoc = parseRequirementDocument(newContent, fallbackId);
+		const newContent = readNewFileContent(reqRelPath);
 		const oldContent = readOldFileContent(reqRelPath);
-		const oldDoc = oldContent != null ? parseRequirementDocument(oldContent, fallbackId) : null;
+		const oldDoc =
+			oldContent != null ? parseRequirementDocument(oldContent, fallbackId) : null;
+
+		// [보통-U3] Block direct deletion of a design-bearing requirement file
+		if (newContent == null) {
+			if (oldDoc && oldDoc.hasExplicitDesignFields && oldDoc.artifacts.length > 0) {
+				const firstArt = oldDoc.artifacts[0];
+				const label =
+					firstArt.id && firstArt.path
+						? `${firstArt.id} (${firstArt.path})`
+						: `${oldDoc.id} (요구사항 파일 삭제됨)`;
+				violations.push({
+					ok: false,
+					code: "deleted_design_requirement",
+					reqId: oldDoc.id,
+					reqRelPath,
+					artifactLabel: label,
+					reason:
+						"(a) 설계와 산출물이 정의된 요구사항 파일을 직접 삭제할 수 없습니다. 정당한 폐기는 파일 삭제 대신 status: retired 로 바꾸고 산출물 의도 시험(또는 실행 영수증)을 함께 갱신하세요.",
+				});
+			}
+			continue;
+		}
+
+		const newDoc = parseRequirementDocument(newContent, fallbackId);
+		const retiredTransition =
+			oldDoc !== null &&
+			oldDoc.status !== "retired" &&
+			newDoc.status === "retired" &&
+			newDoc.hasExplicitDesignFields &&
+			newDoc.artifacts.length > 0;
 
 		const designChanged =
 			oldDoc === null
 				? newDoc.hasExplicitDesignFields && newDoc.artifacts.length > 0
-				: oldDoc.designDigest !== newDoc.designDigest;
+				: oldDoc.designDigest !== newDoc.designDigest || retiredTransition;
 
 		if (!designChanged) continue;
 
-		// Determine which changed-files set governs (c) for this requirement:
-		// If the requirement was staged and git commit is not -a/worktree, require test/receipt in stagedFiles
-		// (unless nothing was staged at all, in which case worktreeFiles applies).
-		let activeChangedFiles;
-		if (mode === "commit") {
-			activeChangedFiles = candidateChangedFiles;
-		} else if (
-			mode !== "worktree" &&
-			!options.includeWorktree &&
-			stagedFiles.size > 0 &&
-			stagedFiles.has(reqRelPath)
-		) {
-			activeChangedFiles = stagedFiles;
-		} else {
-			activeChangedFiles = worktreeFiles;
-		}
-
-		// Collect artifacts from this requirement + any other requirement referencing this reqId
 		const targetArtifacts = [...newDoc.artifacts];
 		for (const [otherRel, otherDoc] of allReqDocs.entries()) {
 			if (otherRel === reqRelPath) continue;
@@ -945,16 +1360,19 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 			}
 		}
 
-		// If the requirement explicitly has a `design` block in YAML and changed it,
-		// but declared `artifacts: []` (zero artifacts), flag that upstream artifacts are missing.
-		if (targetArtifacts.length === 0 && newDoc.blocks.has("design") && newDoc.blocks.has("artifacts")) {
+		if (
+			targetArtifacts.length === 0 &&
+			newDoc.blocks.has("design") &&
+			newDoc.blocks.has("artifacts")
+		) {
 			violations.push({
 				ok: false,
 				code: "empty_artifacts_on_design",
 				reqId: newDoc.id,
 				reqRelPath,
 				artifactLabel: `${newDoc.id} (산출물 목록 비어 있음)`,
-				reason: "(a) 요구사항의 설계(design) 칸이 바뀌었으나 artifacts 목록에 산출물과 의도 시험이 적혀 있지 않습니다.",
+				reason:
+					"(a) 요구사항의 설계(design) 칸이 바뀌었으나 artifacts 목록에 산출물과 의도 시험이 적혀 있지 않습니다.",
 			});
 			continue;
 		}
@@ -966,7 +1384,6 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 				artifact,
 				repoRoot: resolvedRoot,
 				activeChangedFiles,
-				headChangedFiles: candidateChangedFiles,
 				designDigest: newDoc.designDigest,
 				fullDigest: newDoc.fullDigest,
 			});
@@ -991,8 +1408,8 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 	lines.push(
 		"",
 		"조치 방법:",
-		"  1. 요구사항 파일(.agents/requirements/*.yaml)의 artifacts[].intent_test에 기계로 재는 조건(condition)과 실제 시험 파일 경로(test_path)를 적으세요 (파일 모양·개수만 보는 시험 금지).",
-		"  2. 바뀐 설계 의도에 맞춰 의도 시험 파일(test_path)을 다시 돌려 같은 변경에 포함하거나 통과 시험 영수증(receipt, design_sha256 일치)을 갱신하세요.",
+		"  1. 요구사항 파일(.agents/requirements/*.yaml)의 artifacts[].intent_test에 내용 지표·비교 연산을 포함한 조건(condition)과 실제 시험 파일 경로(test_path)를 적으세요 (파일 모양·개수만 보는 시험 금지).",
+		"  2. 바뀐 설계 의도에 맞춰 의도 시험 파일(test_path)을 갱신해 같은 변경에 포함하거나, `node .claude/hooks/intent-guard.js --run-tests`로 실행기 영수증(design_sha256·test_sha256·exit_code 일치)을 발급받으세요.",
 		"  3. 안내 문서: docs/guides/design-intent-guard.md",
 	);
 
@@ -1001,142 +1418,6 @@ function checkRepositoryDesignIntent(repoRoot, options = {}) {
 		violations,
 		reason: lines.join("\n"),
 	};
-}
-
-/**
- * Shell command parser to extract `git commit` invocations across compound segments,
- * subshells, wrappers (env, sudo, timeout, nohup, time), and `sh -c` / `bash -c` / `eval`.
- */
-function splitShellSegments(command) {
-	const segments = [];
-	let current = "";
-	let quote = null;
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		if (quote) {
-			current += ch;
-			if (ch === "\\" && quote === '"' && i + 1 < command.length) {
-				current += command[++i];
-			} else if (ch === quote) {
-				quote = null;
-			}
-			continue;
-		}
-		if (ch === "'" || ch === '"') {
-			quote = ch;
-			current += ch;
-			continue;
-		}
-		if (ch === "\\" && i + 1 < command.length) {
-			current += ch + command[++i];
-			continue;
-		}
-		if ((ch === "&" && command[i + 1] === "&") || (ch === "|" && command[i + 1] === "|")) {
-			segments.push({ text: current, sep: ch + ch });
-			current = "";
-			i++;
-			continue;
-		}
-		if (ch === ";" || ch === "\n" || ch === "|") {
-			segments.push({ text: current, sep: ch });
-			current = "";
-			continue;
-		}
-		current += ch;
-	}
-	if (current.trim().length > 0) segments.push({ text: current, sep: "" });
-	return segments;
-}
-
-function tokenizeSegment(segmentText) {
-	const tokens = [];
-	let cur = "";
-	let quote = null;
-	for (let i = 0; i < segmentText.length; i++) {
-		const ch = segmentText[i];
-		if (quote) {
-			if (ch === "\\" && quote === '"' && i + 1 < segmentText.length) {
-				cur += segmentText[++i];
-			} else if (ch === quote) {
-				quote = null;
-			} else {
-				cur += ch;
-			}
-			continue;
-		}
-		if (ch === "'" || ch === '"') {
-			quote = ch;
-			continue;
-		}
-		if (ch === "\\" && i + 1 < segmentText.length) {
-			cur += segmentText[++i];
-			continue;
-		}
-		if (/\s/.test(ch)) {
-			if (cur.length > 0) {
-				tokens.push(cur);
-				cur = "";
-			}
-			continue;
-		}
-		cur += ch;
-	}
-	if (cur.length > 0) tokens.push(cur);
-	return tokens;
-}
-
-function unwrapGroupTokens(rawTokens) {
-	const tokens = [...rawTokens];
-	let openParens = 0;
-	let closeParens = 0;
-	while (tokens.length > 0) {
-		const first = tokens[0];
-		if (first === "(" || first === "{") {
-			if (first === "(") openParens++;
-			tokens.shift();
-			continue;
-		}
-		if (first.startsWith("(") && !first.startsWith("$(")) {
-			const m = first.match(/^\(+/);
-			if (m) openParens += m[0].length;
-			tokens[0] = first.replace(/^\(+/, "");
-			if (!tokens[0]) tokens.shift();
-			continue;
-		}
-		break;
-	}
-	while (tokens.length > 0) {
-		const last = tokens[tokens.length - 1];
-		if (last === ")" || last === "}" || last === ";") {
-			if (last === ")") closeParens++;
-			tokens.pop();
-			continue;
-		}
-		if (/[;)\}]+$/.test(last) && !/\$\{[^}]*\}$/.test(last) && !/\$\([^)]*\)$/.test(last)) {
-			const m = last.match(/\)+$/);
-			if (m) closeParens += m[0].length;
-			tokens[tokens.length - 1] = last.replace(/[;)\}]+$/, "");
-			if (!tokens[tokens.length - 1]) tokens.pop();
-			continue;
-		}
-		break;
-	}
-	return { tokens, openParens, closeParens };
-}
-
-function extractCommandSubstitutions(command) {
-	const subs = [];
-	if (!command || typeof command !== "string") return subs;
-	const dollarParenRe = /\$\(([^()]+)\)/g;
-	let m;
-	while ((m = dollarParenRe.exec(command)) !== null) {
-		subs.push(m[1]);
-	}
-	const backtickRe = /`([^`]+)`/g;
-	while ((m = backtickRe.exec(command)) !== null) {
-		subs.push(m[1]);
-	}
-	return subs;
 }
 
 const GIT_OPT_WITH_VALUE = new Set([
@@ -1161,323 +1442,235 @@ const GIT_OPT_NO_VALUE = new Set([
 	"--icase-pathspecs",
 ]);
 
-function extractGitCommitInvocations(command, baseCwd, depth = 0) {
-	if (!command || typeof command !== "string" || depth > 6) return [];
-	const invocations = [];
-	let effectiveCwd = path.resolve(baseCwd || process.cwd());
-	const cwdStack = [];
+const DESIGN_LANDING_SUBCOMMANDS = new Set([
+	"merge",
+	"rebase",
+	"cherry-pick",
+	"revert",
+	"am",
+	"apply",
+]);
 
-	// Check $(...) and `...` command substitutions
-	for (const sub of extractCommandSubstitutions(command)) {
-		invocations.push(...extractGitCommitInvocations(sub, effectiveCwd, depth + 1));
+/**
+ * Expand in-command shell aliases (e.g. `alias g=git; g commit -m x`) using
+ * clauses parsed by .claude/hooks/lib/git-command-parser.js.
+ */
+function expandInlineAliases(command) {
+	if (!command || typeof command !== "string" || !/\balias\b/.test(command)) {
+		return command;
 	}
-
-	const segments = splitShellSegments(command);
-	for (const seg of segments) {
-		const rawTokens = tokenizeSegment(seg.text);
-		const { tokens, openParens, closeParens } = unwrapGroupTokens(rawTokens);
-		for (let p = 0; p < openParens; p++) cwdStack.push(effectiveCwd);
-
-		const finishSeg = () => {
-			for (let p = 0; p < closeParens; p++) {
-				if (cwdStack.length > 0) effectiveCwd = cwdStack.pop();
+	const clauses = shellClauses(command);
+	const aliases = new Map();
+	for (const clause of clauses) {
+		if (!Array.isArray(clause) || clause.length === 0) continue;
+		if (clause[0] === "alias") {
+			for (let i = 1; i < clause.length; i++) {
+				const m = clause[i].match(/^([A-Za-z_][A-Za-z0-9_-]*)=(.*)$/);
+				if (m) {
+					const val = m[2].replace(/^['"]|['"]$/g, "").trim();
+					if (val) aliases.set(m[1], val);
+				}
 			}
-		};
-
-		if (tokens.length === 0) {
-			finishSeg();
-			continue;
 		}
+	}
+	if (aliases.size === 0) return command;
 
-		// Strip leading VAR=val and command wrappers
-		let idx = 0;
-		while (idx < tokens.length) {
-			const tok = tokens[idx];
-			if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tok)) {
-				idx++;
-				continue;
-			}
-			const base = path.basename(tok);
-			if (base === "command" || base === "builtin" || base === "exec" || tok === "!") {
-				idx++;
-				continue;
-			}
-			if (base === "env") {
-				idx++;
-				while (idx < tokens.length) {
-					if (tokens[idx] === "--") {
-						idx++;
-						break;
-					}
-					if (
-						(tokens[idx] === "-u" ||
-							tokens[idx] === "--unset" ||
-							tokens[idx] === "-C" ||
-							tokens[idx] === "--chdir" ||
-							tokens[idx] === "-S" ||
-							tokens[idx] === "--split-string") &&
-						idx + 1 < tokens.length
-					) {
-						if (tokens[idx] === "-C" || tokens[idx] === "--chdir") {
-							effectiveCwd = path.resolve(effectiveCwd, tokens[idx + 1]);
-						}
-						idx += 2;
-						continue;
-					}
-					if (tokens[idx].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[idx])) {
-						idx++;
-						continue;
-					}
+	let expanded = command;
+	for (const [name, target] of aliases.entries()) {
+		const re = new RegExp(`(^|[;&|()\\n]\\s*)${name}(?=\\s|$)`, "g");
+		expanded = expanded.replace(re, `$1${target}`);
+	}
+	return expanded;
+}
+
+/**
+ * Extract `find ... -exec <cmd> ... \;` subcommand entries from an effective command argv.
+ */
+function extractFindExecEntries(entry) {
+	const argv = entry && Array.isArray(entry.argv) ? entry.argv : [];
+	if (argv.length === 0 || path.basename(argv[0]) !== "find") return [];
+	const results = [];
+	for (let i = 1; i < argv.length; i++) {
+		if (argv[i] === "-exec" || argv[i] === "-execdir") {
+			const sub = [];
+			let j = i + 1;
+			while (j < argv.length && argv[j] !== ";" && argv[j] !== "\\;" && argv[j] !== "+") {
+				if (argv[j].endsWith(";") && argv[j] !== ";") {
+					sub.push(argv[j].replace(/\\?;$/, ""));
 					break;
 				}
+				sub.push(argv[j]);
+				j++;
+			}
+			if (sub.length > 0) {
+				results.push({ argv: sub, dir: entry.dir });
+			}
+			i = j;
+		}
+	}
+	return results;
+}
+
+/**
+ * Extract `git commit` (and design-landing git subcommands) from a shell command
+ * by reusing .claude/hooks/lib/effective-argv.js and .claude/hooks/lib/git-command-parser.js.
+ */
+function extractGitCommitInvocations(command, baseCwd) {
+	if (!command || typeof command !== "string") return [];
+	const resolvedBaseCwd = path.resolve(baseCwd || process.cwd());
+	const aliasExpanded = expandInlineAliases(command);
+	const rawEntries = effectiveCommands(aliasExpanded, resolvedBaseCwd);
+	const allEntries = [];
+	for (const entry of rawEntries) {
+		allEntries.push(entry);
+		allEntries.push(...extractFindExecEntries(entry));
+	}
+
+	const invocations = [];
+	for (const entry of allEntries) {
+		const argv = entry && Array.isArray(entry.argv) ? entry.argv : [];
+		if (argv.length === 0) continue;
+		const cmdBase = path.basename(argv[0] || "");
+		if (!/^(?:git(?:\.exe)?|hub)$/i.test(cmdBase)) continue;
+
+		let gitCwd = gitClauseDirectory(entry, entry.dir || resolvedBaseCwd);
+		let gIdx = 1;
+		while (gIdx < argv.length) {
+			const gt = argv[gIdx];
+			if ((gt === "-C" || gt === "--work-tree") && gIdx + 1 < argv.length) {
+				gitCwd = path.resolve(gitCwd, argv[gIdx + 1]);
+				gIdx += 2;
 				continue;
 			}
-			if (base === "sudo") {
-				idx++;
-				while (idx < tokens.length && tokens[idx].startsWith("-")) {
-					if (tokens[idx] === "--") {
-						idx++;
-						break;
-					}
-					if (
-						(tokens[idx] === "-u" ||
-							tokens[idx] === "-g" ||
-							tokens[idx] === "-D" ||
-							tokens[idx] === "-R" ||
-							tokens[idx] === "-h" ||
-							tokens[idx] === "-p") &&
-						idx + 1 < tokens.length
-					) {
-						if (tokens[idx] === "-D") {
-							effectiveCwd = path.resolve(effectiveCwd, tokens[idx + 1]);
-						}
-						idx += 2;
-						continue;
-					}
-					idx++;
-				}
+			if (gt.startsWith("-C") && gt.length > 2) {
+				const attached = gt.slice(2).replace(/^=/, "");
+				if (attached) gitCwd = path.resolve(gitCwd, attached);
+				gIdx++;
 				continue;
 			}
-			if (base === "nohup" || base === "time") {
-				idx++;
-				while (idx < tokens.length && tokens[idx].startsWith("-")) {
-					if (tokens[idx] === "--") {
-						idx++;
-						break;
-					}
-					idx++;
-				}
+			if (gt.startsWith("--work-tree=")) {
+				gitCwd = path.resolve(gitCwd, gt.slice("--work-tree=".length));
+				gIdx++;
 				continue;
 			}
-			if (base === "nice") {
-				idx++;
-				if ((tokens[idx] === "-n" || tokens[idx] === "--adjustment") && idx + 1 < tokens.length) {
-					idx += 2;
-				} else if (tokens[idx] && tokens[idx].startsWith("-")) {
-					idx++;
-				}
+			if (GIT_OPT_WITH_VALUE.has(gt) && gIdx + 1 < argv.length) {
+				gIdx += 2;
 				continue;
 			}
-			if (base === "timeout") {
-				idx++;
-				while (idx < tokens.length && tokens[idx].startsWith("-")) {
-					if (tokens[idx] === "--") {
-						idx++;
-						break;
-					}
-					if (
-						(tokens[idx] === "-k" ||
-							tokens[idx] === "--kill-after" ||
-							tokens[idx] === "-s" ||
-							tokens[idx] === "--signal") &&
-						idx + 1 < tokens.length
-					) {
-						idx += 2;
-						continue;
-					}
-					idx++;
-				}
-				if (idx < tokens.length) idx++; // skip duration
+			if (
+				GIT_OPT_NO_VALUE.has(gt) ||
+				/^-c.+/.test(gt) ||
+				/^--(?:config-env|git-dir|work-tree|namespace)=\S+$/.test(gt)
+			) {
+				gIdx++;
 				continue;
 			}
 			break;
 		}
 
-		if (idx >= tokens.length) {
-			finishSeg();
-			continue;
-		}
+		const subcmd = argv[gIdx];
+		if (!subcmd) continue;
 
-		const cmdToken = tokens[idx];
-		const cmdBase = path.basename(cmdToken);
+		if (subcmd === "commit") {
+			const commitArgs = argv.slice(gIdx + 1);
+			let isDryRun = false;
+			let isInteractive = false;
+			let includeWorktree = false;
+			let includeStagedWithExplicit = false;
+			const explicitPaths = [];
 
-		// Handle cd
-		if (cmdBase === "cd" && seg.sep !== "|") {
-			let cdIdx = idx + 1;
-			while (
-				cdIdx < tokens.length &&
-				(tokens[cdIdx] === "-P" || tokens[cdIdx] === "-L" || tokens[cdIdx] === "--")
-			) {
-				cdIdx++;
-			}
-			if (tokens[cdIdx]) {
-				effectiveCwd = path.resolve(effectiveCwd, tokens[cdIdx]);
-			}
-			finishSeg();
-			continue;
-		}
-
-		// Handle eval
-		if (cmdBase === "eval") {
-			const inner = tokens.slice(idx + 1).join(" ");
-			if (inner) {
-				invocations.push(...extractGitCommitInvocations(inner, effectiveCwd, depth + 1));
-			}
-			finishSeg();
-			continue;
-		}
-
-		// Handle sh -c / bash -c / zsh -c
-		if (/^(?:bash|sh|zsh|dash|ksh)$/i.test(cmdBase)) {
-			let sIdx = idx + 1;
-			while (sIdx < tokens.length) {
-				const st = tokens[sIdx];
-				if (st === "-c" && sIdx + 1 < tokens.length) {
-					invocations.push(
-						...extractGitCommitInvocations(tokens[sIdx + 1], effectiveCwd, depth + 1),
+			for (let aIdx = 0; aIdx < commitArgs.length; aIdx++) {
+				const arg = commitArgs[aIdx];
+				if (arg === "--") {
+					explicitPaths.push(
+						...commitArgs.slice(aIdx + 1).filter((tok) => tok && !/^[;&|]+$/.test(tok)),
 					);
 					break;
 				}
-				if ((st === "-o" || st === "+o") && sIdx + 1 < tokens.length) {
-					sIdx += 2;
-					continue;
-				}
-				if (st.startsWith("-") && st.includes("c") && !st.startsWith("--") && sIdx + 1 < tokens.length) {
-					invocations.push(
-						...extractGitCommitInvocations(tokens[sIdx + 1], effectiveCwd, depth + 1),
-					);
-					break;
-				}
-				if (st.startsWith("-") || st.startsWith("+")) {
-					sIdx++;
-					continue;
-				}
-				break;
-			}
-			finishSeg();
-			continue;
-		}
-
-		// Handle git commit
-		if (/^git(?:\.exe)?$/i.test(cmdBase)) {
-			let gIdx = idx + 1;
-			let gitCwd = effectiveCwd;
-			while (gIdx < tokens.length) {
-				const gt = tokens[gIdx];
-				if ((gt === "-C" || gt === "--work-tree") && gIdx + 1 < tokens.length) {
-					gitCwd = path.resolve(gitCwd, tokens[gIdx + 1]);
-					gIdx += 2;
-					continue;
-				}
-				if (gt.startsWith("--work-tree=")) {
-					gitCwd = path.resolve(gitCwd, gt.slice("--work-tree=".length));
-					gIdx++;
-					continue;
-				}
-				if (GIT_OPT_WITH_VALUE.has(gt) && gIdx + 1 < tokens.length) {
-					gIdx += 2;
+				if (arg === "--dry-run" || arg === "-n") {
+					isDryRun = true;
 					continue;
 				}
 				if (
-					GIT_OPT_NO_VALUE.has(gt) ||
-					/^--(?:config-env|git-dir|work-tree|namespace)=\S+$/.test(gt)
+					arg === "--interactive" ||
+					arg === "--patch" ||
+					arg === "-p" ||
+					/^--(?:inter|pa)/.test(arg)
 				) {
-					gIdx++;
+					isInteractive = true;
+					includeWorktree = true;
 					continue;
 				}
-				break;
-			}
-
-			if (tokens[gIdx] === "commit") {
-				const commitArgs = tokens.slice(gIdx + 1);
-				let isDryRun = false;
-				let isInteractive = false;
-				let includeWorktree = false;
-				const explicitPaths = [];
-
-				for (let aIdx = 0; aIdx < commitArgs.length; aIdx++) {
-					const arg = commitArgs[aIdx];
-					if (arg === "--") {
-						explicitPaths.push(...commitArgs.slice(aIdx + 1));
-						break;
-					}
-					if (arg === "--dry-run" || arg === "-n") {
-						isDryRun = true;
-						continue;
+				if (
+					arg === "-a" ||
+					arg === "--all" ||
+					arg === "-i" ||
+					arg === "--include" ||
+					arg === "-o" ||
+					arg === "--only" ||
+					/^-(?!-)[A-Za-z]*[aio][A-Za-z]*$/.test(arg)
+				) {
+					includeWorktree = true;
+					if (arg === "-i" || arg === "--include" || /^-(?!-)[A-Za-z]*i[A-Za-z]*$/.test(arg)) {
+						includeStagedWithExplicit = true;
 					}
 					if (
-						arg === "--interactive" ||
-						arg === "--patch" ||
-						arg === "-p" ||
-						/^--(?:inter|pa)/.test(arg)
-					) {
-						isInteractive = true;
-						includeWorktree = true;
-						continue;
-					}
-					if (
-						arg === "-a" ||
-						arg === "--all" ||
-						arg === "-i" ||
-						arg === "--include" ||
-						arg === "-o" ||
-						arg === "--only" ||
-						/^-(?!-)[A-Za-z]*[aio][A-Za-z]*$/.test(arg)
-					) {
-						includeWorktree = true;
-						if (
-							/^-(?!-)[A-Za-z]*[mFctC][A-Za-z]*$/.test(arg) &&
-							aIdx + 1 < commitArgs.length
-						) {
-							aIdx++;
-						}
-						continue;
-					}
-					if (
-						(arg === "-m" ||
-							arg === "--message" ||
-							arg === "-F" ||
-							arg === "--file" ||
-							arg === "-c" ||
-							arg === "--reedit-message" ||
-							arg === "-C" ||
-							arg === "--reuse-message" ||
-							arg === "--author" ||
-							arg === "--date" ||
-							arg === "--cleanup" ||
-							arg === "-u" ||
-							arg === "--untracked-files") &&
+						/^-(?!-)[A-Za-z]*[mFctC][A-Za-z]*$/.test(arg) &&
 						aIdx + 1 < commitArgs.length
 					) {
 						aIdx++;
-						continue;
 					}
-					if (arg.startsWith("-")) continue;
-					explicitPaths.push(arg);
-					includeWorktree = true;
+					continue;
 				}
+				if (
+					(arg === "-m" ||
+						arg === "--message" ||
+						arg === "-F" ||
+						arg === "--file" ||
+						arg === "-c" ||
+						arg === "--reedit-message" ||
+						arg === "-C" ||
+						arg === "--reuse-message" ||
+						arg === "--author" ||
+						arg === "--date" ||
+						arg === "--cleanup" ||
+						arg === "-u" ||
+						arg === "--untracked-files") &&
+					aIdx + 1 < commitArgs.length
+				) {
+					aIdx++;
+					continue;
+				}
+				if (arg.startsWith("-") || /^[;&|]+$/.test(arg)) continue;
+				// Ignore placeholder markers produced by spawnedCommands when no file path was given
+				if (arg === "$?" || arg === "$X") continue;
+				explicitPaths.push(arg);
+			}
 
-				if (!(isDryRun && !isInteractive)) {
-					invocations.push({
-						cwd: gitCwd,
-						includeWorktree,
-						explicitPaths,
-					});
-				}
+			if (!(isDryRun && !isInteractive)) {
+				invocations.push({
+					subcommand: "commit",
+					cwd: gitCwd,
+					includeWorktree,
+					includeStagedWithExplicit,
+					explicitPaths,
+				});
+			}
+		} else if (DESIGN_LANDING_SUBCOMMANDS.has(subcmd)) {
+			const subArgs = argv.slice(gIdx + 1);
+			const isAbortOrReadOnly = subArgs.some((a) =>
+				/^--(?:abort|quit|show-current-patch|check|stat|numstat|summary)$/.test(a),
+			);
+			if (!isAbortOrReadOnly) {
+				invocations.push({
+					subcommand: subcmd,
+					cwd: gitCwd,
+					includeWorktree: true,
+					includeStagedWithExplicit: false,
+					explicitPaths: [],
+				});
 			}
 		}
-
-		finishSeg();
 	}
 
 	return invocations;
@@ -1493,8 +1686,17 @@ function designIntentRecheck(command, data, opts) {
 	if (invocations.length === 0) return null;
 
 	for (const inv of invocations) {
+		let mode = "staged";
+		if (inv.subcommand !== "commit") {
+			mode = "auto";
+		} else if (inv.explicitPaths.length > 0 && !inv.includeStagedWithExplicit) {
+			mode = "explicit";
+		} else if (inv.includeWorktree) {
+			mode = "tracked-worktree";
+		}
+
 		const res = checkRepositoryDesignIntent(inv.cwd, {
-			mode: "auto",
+			mode,
 			includeWorktree: inv.includeWorktree,
 			explicitPaths: inv.explicitPaths,
 		});
@@ -1509,8 +1711,10 @@ module.exports = {
 	designIntentRecheck,
 	intentGuard: designIntentRecheck,
 	checkRepositoryDesignIntent,
+	runRequirementIntentTests,
 	parseRequirementDocument,
 	evaluateArtifactIntent,
 	isShapeOrCountOnlyCondition,
 	extractGitCommitInvocations,
+	computeReceiptProof,
 };

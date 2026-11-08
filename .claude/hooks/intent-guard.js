@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Design-Change Consumer / Upstream Artifact Intent Guard Hook (PreToolUse on Bash) & CLI Checker.
+ * Design-Change Consumer / Upstream Artifact Intent Guard Hook (PreToolUse on Bash) & CLI Checker/Runner.
  * Envelope: ./_claude-bash-guard.js. Policy: .agents/hooks/policies/design-intent-guard.js
  * (re-exported via .agents/hooks/policies/bash.js → designIntentRecheck / intentGuard).
  */
@@ -11,7 +11,8 @@ if (
 	args.includes("--check") ||
 	args.includes("--staged") ||
 	args.includes("--worktree") ||
-	args.includes("--commit")
+	args.includes("--commit") ||
+	args.includes("--run-tests")
 ) {
 	const policy = require(path.join(
 		__dirname,
@@ -25,8 +26,12 @@ if (
 	let mode = "auto";
 	let commitRev = "HEAD";
 	let cwd = process.cwd();
+	let reqId = null;
+	let runTests = false;
 	for (let i = 0; i < args.length; i++) {
-		if (args[i] === "--staged") mode = "staged";
+		if (args[i] === "--run-tests") runTests = true;
+		else if (args[i] === "--req" && i + 1 < args.length) reqId = args[++i];
+		else if (args[i] === "--staged") mode = "staged";
 		else if (args[i] === "--worktree") mode = "worktree";
 		else if (args[i] === "--commit") {
 			mode = "commit";
@@ -36,6 +41,17 @@ if (
 		} else if (args[i] === "--cwd" && i + 1 < args.length) {
 			cwd = path.resolve(args[++i]);
 		}
+	}
+	if (runTests) {
+		const runRes = policy.runRequirementIntentTests(cwd, { reqId });
+		if (!runRes.ok) {
+			for (const f of runRes.failures || []) {
+				process.stderr.write(`[intent-guard] FAIL ${f.reqId}/${f.artifactId} (${f.testPath}): ${f.reason}\n`);
+			}
+			process.exit(1);
+		}
+		process.stdout.write(`intent-guard: RECEIPTS_WRITTEN (${runRes.receiptsWritten.length})\n`);
+		process.exit(0);
 	}
 	const result = policy.checkRepositoryDesignIntent(cwd, { mode, commitRev });
 	if (!result.ok) {

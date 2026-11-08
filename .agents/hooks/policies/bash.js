@@ -2011,14 +2011,12 @@ function uncommittedArtifact(command, data, opts) {
 	return null;
 }
 
+// Public intent-guard surface re-exported for host adapters (.claude/hooks/intent-guard.js, .pi/extensions/naia-harness.ts):
+// Only designIntentRecheck, intentGuard, and checkRepositoryDesignIntent are part of the public bash policy contract.
 const {
 	designIntentRecheck,
 	intentGuard,
 	checkRepositoryDesignIntent,
-	parseRequirementDocument,
-	evaluateArtifactIntent,
-	isShapeOrCountOnlyCondition,
-	extractGitCommitInvocations,
 } = require("./design-intent-guard.js");
 
 module.exports = {
@@ -2033,10 +2031,6 @@ module.exports = {
 	designIntentRecheck,
 	intentGuard,
 	checkRepositoryDesignIntent,
-	parseRequirementDocument,
-	evaluateArtifactIntent,
-	isShapeOrCountOnlyCondition,
-	extractGitCommitInvocations,
 	loadArtifactExtensions,
 	loadArtifactScriptDirs,
 	DEFAULT_ARTIFACT_EXTENSIONS,

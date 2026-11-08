@@ -82,8 +82,9 @@ export default function (pi: ExtensionAPI) {
 				try {
 					const r = await run();
 					if (r && r.reason) return { block: true, reason: r.reason };
-				} catch {
-					// fail-open: this guard errored → do not block, try next
+				} catch (err: any) {
+					// fail-open: this guard errored → log warning and try next (CI --commit HEAD is final gate)
+					console.warn(`[naia-harness] fail-open bash guard error: ${err?.message || err}`);
 				}
 			}
 			return;
