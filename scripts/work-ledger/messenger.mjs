@@ -24,8 +24,17 @@ export function createAdapter(
           headers: { Authorization: `Bot ${token}` },
           signal: AbortSignal.timeout(30000),
         });
-        if (!response.ok)
-          throw new Error(`Discord read failed (${response.status})`);
+        if (!response.ok) {
+          let body;
+          try {
+            body = (await response.text()).slice(0, 200);
+          } catch (error) {
+            body = `(body read failed: ${error.message})`;
+          }
+          throw new Error(
+            `Discord channel ${channel}: HTTP ${response.status}; body: ${body}`,
+          );
+        }
         const page = await response.json();
         if (!Array.isArray(page)) throw new Error("Invalid Discord response");
         for (const m of page) {
@@ -43,6 +52,9 @@ export function createAdapter(
               created_at: m.timestamp,
               body: m.content || "",
               reply_to_id: m.message_reference?.message_id || null,
+              reply_to_author_id: m.referenced_message?.author?.id || null,
+              mentions: (m.mentions || []).map((mention) => mention.id),
+              mention_everyone: m.mention_everyone === true,
             });
         }
         if (

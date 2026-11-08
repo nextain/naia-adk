@@ -101,7 +101,7 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
           "ledger-error",
           "감시 실패",
           "장부 읽기 실패",
-          `장부: .agents/work/ledger/${role}.json\n오류: ${error.name}`,
+          `장부: .agents/work/ledger/${role}.json\n오류: ${error.message || String(error)}`,
         );
         continue;
       }
@@ -155,7 +155,10 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
           `출처: ${report.channel}\n기한: ${report.last_at ? new Date(Date.parse(report.last_at) + report.every_min * 60000).toISOString() : "첫 보고 대기"}\n결과: (없음)`,
         );
       try {
-        const channels = roleConfig.channels ?? config.channels ?? [];
+        const channels = [...new Set([
+          ...(roleConfig.channels ?? config.channels ?? []),
+          ...(roleConfig.direct_channels ?? []),
+        ])];
         const humans = roleConfig.human_ids ?? config.human_ids ?? [];
         const identities = roleConfig.user_ids ?? [];
         if (channels.length && (!humans.length || !identities.length))
@@ -166,7 +169,41 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
           adapter || (channels.length ? createAdapter(config.provider) : null);
         for (const channel of channels) {
           const since = now - 24 * 60 * 60000;
-          const messages = await messenger.messages(channel, since);
+          let messages;
+          try {
+            messages = await messenger.messages(channel, since);
+          } catch (error) {
+            errors.push(`messenger:${role}:${channel}`);
+            await wake(
+              role,
+              `messenger-error-${safeName(channel)}`,
+              "감시 실패",
+              "메신저 읽기 실패",
+              `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${channel}\n오류: ${error.message || String(error)}`,
+            );
+            continue;
+          }
+          const byId = new Map(messages.map((m) => [m.id, m]));
+          const otherIdentities = config.roles
+            .filter((r) => r.role !== role)
+            .flatMap((r) => r.user_ids ?? [])
+            .filter((id) => !identities.includes(id));
+          function addressed(m) {
+            const mentions = new Set((m.mentions ?? []).map((value) =>
+              typeof value === "string" ? value : value.id,
+            ));
+            for (const match of (m.body || "").matchAll(/<@!?(\w[\w-]*)>/g))
+              mentions.add(match[1]);
+            const ownMention = identities.some((id) => mentions.has(id));
+            if (!ownMention && otherIdentities.some((id) => mentions.has(id)))
+              return false;
+            const parentAuthor = m.reply_to_author_id || m.reply_to?.author_id ||
+              m.reply_to?.author?.id || byId.get(m.reply_to_id)?.author_id;
+            return ownMention || identities.includes(parentAuthor) ||
+              m.mention_everyone === true ||
+              /@(?:everyone|here)\b/.test(m.body || "") ||
+              (roleConfig.direct_channels ?? []).includes(channel);
+          }
           const replied = new Set(
             messages
               .filter((m) => identities.includes(m.author_id) && m.reply_to_id)
@@ -176,6 +213,13 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
           for (const m of messages)
             if (
               humans.includes(m.author_id) &&
+              addressed(m) &&
+              !(roleConfig.answered_by_any_role_post_after === true &&
+                messages.some((post) =>
+                  identities.includes(post.author_id) &&
+                  Date.parse(post.created_at) > Date.parse(m.created_at) &&
+                  Date.parse(post.created_at) <= now,
+                )) &&
               Date.parse(m.created_at) >= since &&
               Date.parse(m.created_at) <= now &&
               !recorded.has(m.id) &&
@@ -196,7 +240,7 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
           "messenger-error",
           "감시 실패",
           "메신저 읽기 실패",
-          `공급자: ${config.provider?.type || "(미설정)"}\n오류: ${error.name}`,
+          `공급자: ${config.provider?.type || "(미설정)"}\n오류: ${error.message || String(error)}`,
         );
       }
     }

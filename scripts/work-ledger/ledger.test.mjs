@@ -144,6 +144,7 @@ test("all channels checked, registered messages and role replies excluded", asyn
           author_id: "human",
           created_at: new Date(now).toISOString(),
           body: "forgotten",
+          mentions: ["bot"],
         },
       ].map((m) => ({
         ...m,
@@ -250,7 +251,7 @@ test("corrupt ledger and provider failure produce wake and errors", async () => 
     now,
   });
   assert.equal(r.errors.length, 1);
-  assert.equal(r.wakes[0].id, "messenger-error");
+  assert.equal(r.wakes[0].id, "messenger-error-channel");
 });
 test("Discord adapter paginates until 24 hour boundary and normalizes replies", async () => {
   const calls = [];
@@ -334,7 +335,7 @@ test("config report applies after add and roles keep independent replies", async
       {
         id: "question",
         author_id: "human",
-        body: "please check",
+        body: "please check @everyone",
         created_at: new Date(now).toISOString(),
       },
       {
@@ -424,6 +425,7 @@ test("24 hour inclusive boundary and another bot reply do not hide a request", a
         id: "boundary",
         author_id: "human",
         body: "request",
+        mentions: ["bot"],
         created_at: new Date(now - 24 * 3600000).toISOString(),
       },
       {
@@ -502,4 +504,117 @@ test("non-object dedup state alerts and recovers persisted suppression", async (
     assert.equal(Array.isArray(state.sent), false);
     assert.equal(Object.keys(state.sent).length, 1);
   }
+});
+
+test("role routing limits human wakes and optional later posts acknowledge", async () => {
+  const root = await setup();
+  const conf = { roles: [
+    { ...config.roles[0], channels: ["group"], direct_channels: ["direct"] },
+    { role: "other", user_ids: ["other-bot"], channels: [] },
+  ] };
+  const msg = (id, extra = {}) => ({
+    id, author_id: "human", body: "plain",
+    created_at: new Date(now - 1000).toISOString(), ...extra,
+  });
+  const adapter = { messages: async ch => ch === "direct" ? [msg("direct"), msg("direct-other", { body: "<@other-bot>" })] : [
+    msg("unaddressed"),
+    msg("mention", { body: "<@bot>" }),
+    msg("array", { mentions: [{ id: "bot" }] }),
+    msg("reply", { reply_to_id: "parent" }),
+    msg("external-reply", { reply_to_author_id: "bot" }),
+    msg("everyone", { body: "@everyone" }), msg("here", { body: "@here" }),
+    msg("other", { body: "<@other-bot> @everyone", reply_to_author_id: "bot" }),
+    msg("both", { body: "<@other-bot> <@bot>" }),
+    msg("parent", { author_id: "bot" }), msg("later", { author_id: "bot", created_at: new Date(now).toISOString() })
+  ] };
+  const result = await watch({ root, config: conf, adapter, now });
+  assert.deepEqual(result.wakes.map(w => w.id), ["human-mention", "human-array", "human-reply", "human-external-reply", "human-everyone", "human-here", "human-both", "human-direct"]);
+  const second = await setup();
+  conf.roles[0].answered_by_any_role_post_after = true;
+  const acknowledged = await watch({ root: second, config: conf, adapter, now });
+  assert.deepEqual(acknowledged.wakes.map(w => w.id), ["human-direct"]);
+});
+
+test("channel failures include HTTP diagnostics, continue, and deduplicate separately", async () => {
+  const root = await setup();
+  const conf = {
+    provider: { type: "discord", token_env: "TEST_TOKEN" },
+    roles: [{ ...config.roles[0], channels: ["denied", "missing", "healthy"] }],
+  };
+  const calls = [];
+  const adapter = createAdapter(conf.provider, { env: { TEST_TOKEN: "fake" }, fetchImpl: async url => {
+    const ch = new URL(url).pathname.split("/").at(-2);
+    calls.push(ch);
+    if (ch !== "healthy") return {
+      ok: false, status: ch === "denied" ? 403 : 404,
+      text: async () => "x".repeat(210),
+    };
+    return { ok: true, json: async () => [{
+      id: "request", author: { id: "human" },
+      timestamp: new Date(now).toISOString(), content: "<@bot>",
+      mentions: [{ id: "bot" }],
+      referenced_message: { author: { id: "bot" } },
+      message_reference: { message_id: "parent" },
+    }] };
+  } });
+  const normalized = await adapter.messages("healthy", now - 1000);
+  assert.deepEqual(normalized[0].mentions, ["bot"]);
+  assert.equal(normalized[0].reply_to_author_id, "bot");
+  calls.length = 0;
+  const result = await watch({ root, config: conf, adapter, now });
+  assert.deepEqual(calls, ["denied", "missing", "healthy"]);
+  assert.equal(result.errors.length, 2);
+  assert.equal(result.wakes.filter(w => w.reason === "감시 실패").length, 2);
+  assert.ok(result.wakes.some(w => w.id === "human-request"));
+  const texts = await Promise.all((await readdir(path.join(root, ".agents/work/l4/wake"))).map(f => readFile(path.join(root, ".agents/work/l4/wake", f), "utf8")));
+  for (const [ch, status] of [["denied", 403], ["missing", 404]]) {
+    const text = texts.find(t => t.includes(`채널: ${ch}`));
+    assert.ok(text);
+    assert.match(text, new RegExp(`HTTP ${status}`));
+    assert.ok(text.includes("x".repeat(200)));
+    assert.ok(!text.includes("x".repeat(201)));
+  }
+  assert.equal((await watch({ root, config: conf, adapter, now: now + 29 * 60000 })).wakes.length, 0);
+  assert.equal((await watch({ root, config: conf, adapter, now: now + 30 * 60000 })).wakes.filter(w => w.reason === "감시 실패").length, 2);
+});
+
+test("later post acknowledgement excludes other roles, past and future posts", async () => {
+  for (const post of [
+    { author_id: "other-bot", at: now },
+    { author_id: "bot", at: now - 2000 },
+    { author_id: "bot", at: now + 1000 },
+  ]) {
+    const root = await setup();
+    const conf = {
+      roles: [{
+        ...config.roles[0], channels: ["channel"],
+        answered_by_any_role_post_after: true,
+      }],
+    };
+    const adapter = {
+      messages: async () => [{
+        id: "question", author_id: "human", body: "request",
+        mention_everyone: true,
+        created_at: new Date(now - 1000).toISOString(),
+      }, {
+        id: "post", author_id: post.author_id,
+        created_at: new Date(post.at).toISOString(),
+      }],
+    };
+    assert.deepEqual(
+      (await watch({ root, config: conf, adapter, now })).wakes.map(w => w.id),
+      ["human-question"],
+    );
+  }
+});
+
+test("HTTP status survives a failed error body read", async () => {
+  const adapter = createAdapter({ type: "discord" }, {
+    env: { DISCORD_BOT_TOKEN: "fake" },
+    fetchImpl: async () => ({
+      ok: false, status: 403,
+      text: async () => { throw new Error("stream interrupted"); },
+    }),
+  });
+  await assert.rejects(adapter.messages("denied", now), /channel denied: HTTP 403.*stream interrupted/);
 });

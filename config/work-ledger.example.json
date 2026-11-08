@@ -9,6 +9,8 @@
       "role": "secretary",
       "user_ids": ["BOT_USER_ID"],
       "channels": ["CHANNEL_ID"],
+      "direct_channels": [],
+      "answered_by_any_role_post_after": false,
       "human_ids": ["HUMAN_USER_ID"],
       "report": {
         "every_min": 60,
