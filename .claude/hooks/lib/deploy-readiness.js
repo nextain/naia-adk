@@ -727,7 +727,6 @@ function assessReadiness(services, { root, auditPath, command = "", cwd = "", no
 	}
 
 	const rec = found.record;
-	if (rec.kind !== "rollback" && require("./stop-all-lock.js").stopAllLocked()) return { ok: false, problems: ["모두 멈춤 잠금 중: 배포 차단"], facts: [] };
 	const problems = [];
 	const facts = [];
 	const rel = path.relative(baseRoot, found.file);

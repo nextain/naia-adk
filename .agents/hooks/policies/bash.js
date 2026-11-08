@@ -420,6 +420,7 @@ async function deploy(command, data, opts) {
 		}
 		return true;
 	});
+	// Shared first decision for legacy and approval-plan operational commands.
 	const clauses = shellClauses(command);
 	const nonDevLegacyMatches = [];
 	for (const tokens of clauses) {
@@ -428,6 +429,8 @@ async function deploy(command, data, opts) {
 		const matched = matchLegacyClause(rawClause);
 		if (matched) nonDevLegacyMatches.push({ ...matched, tokens });
 	}
+
+	if ((precomputedMutations.length || nonDevLegacyMatches.length) && require("../../../.claude/hooks/lib/stop-all-lock.js").stopAllLocked()) return { reason: "모두 멈춤 잠금 중: 운영 명령 차단" };
 
 	const isLegacyCoveredMutation = (hit) => {
 		if (!hit || hit.unclassified || typeof hit.service !== "string") return false;
@@ -446,7 +449,6 @@ async function deploy(command, data, opts) {
 		const firstLegacy = nonDevLegacyMatches[0];
 		const matchedPattern = firstLegacy ? firstLegacy.pattern : null;
 		if (matchedPattern) {
-			if (require("../../../.claude/hooks/lib/stop-all-lock.js").stopAllLocked()) return { reason: "모두 멈춤 잠금 중: 배포 차단" };
 			const project = detectProject(firstLegacy.clause, config, cwd);
 			const approval = !matchedPattern.alwaysBlock ? findApproval(project) : null;
 			if (approval) {
