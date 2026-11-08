@@ -320,19 +320,9 @@ ADK 디렉터리로 지정하세요. 스킬과 데이터가 API로 제공됩니�
   링크로 연결해, 필요한 조각만 정확히 꺼내 쓰는 방향을 검토 중입니다. CLI나 MCP로 접근해 도구에
   매이지 않게 하는 것이 목표입니다.
 
-## 라이선스
+## 라이선스 및 특허 고지 (License & Patent Notice)
 
-Apache License 2.0. 자세한 내용은 [LICENSE](LICENSE)를 참고하세요.
-
-```
-Copyright 2026 Nextain Inc.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-```
+코드는 [Apache License 2.0 (`Apache-2.0`)](LICENSE)으로 배포되며, 특허 경계 및 조건부 특허 서약([`PATENTS.md`](PATENTS.md)), 상용·엔터프라이즈 라이선스([`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)), 기여자 약정([`CONTRIBUTING.md`](CONTRIBUTING.md), [`CLA.md`](CLA.md), [`CLA-CORPORATE.md`](CLA-CORPORATE.md)) 전문은 영문 [`README.md`의 License & Patent Notice](README.md#license--patent-notice) 절을 참고하세요.
 
 ## 링크
 
