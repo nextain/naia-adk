@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to private config/task-cards.json. Use the same absolute wakeRoot/stateFile in every checkout; wakeRoot is the flat wake-pump consumer folder.",
+  "_comment": "Copy to private config/task-cards.json. Only the central to-ledger caller writes wakeRoot/stateFile. Other checkouts use --no-wake; wakeRoot is the flat wake-pump consumer folder.",
   "maxRecheckHours": 4,
   "timeZone": "UTC",
   "ownerSenderIds": ["<owner-user-id>"],

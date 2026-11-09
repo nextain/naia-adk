@@ -8,6 +8,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { serializeCard, slugify, loadRoleCards } from "./task-cards.mjs";
+import { validateWorkLedger } from "../../scripts/lib/ledger.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const script = path.join(here, "task-cards.mjs");
@@ -343,7 +344,9 @@ describe("check 여덟 항목", () => {
 		run(["new", "--role", "role-a", "--title", "멈춘 일", "--source", "s", "--due", "2026-11-10", "--next", "n", "--calendar", "yes"], "2026-10-27T06:00:00Z");
 		// 다시 볼 날 지남: 미룸 뒤 날짜가 지남
 		run(["new", "--role", "role-a", "--title", "미룬 일", "--source", "s", "--due", "2026-11-10", "--next", "n", "--calendar", "yes"]);
-		run(["defer", "20261028-미룬-일", "--reason", "나중에", "--revisit", "2026-10-20"]);
+		run(["defer", "20261028-미룬-일", "--reason", "나중에", "--revisit", "2026-10-29"]);
+		const deferredFile = path.join(root, "docs", "common", "team", "cards", "role-a", "20261028-미룬-일.md");
+		fs.writeFileSync(deferredFile, fs.readFileSync(deferredFile, "utf8").replace(/^revisit:.*$/m, "revisit: 2026-10-20"));
 		// 빠진 칸: 끝인데 결과 없음(고의로 지움)
 		run(["new", "--role", "role-a", "--title", "끝난 일", "--source", "s", "--next", "n"]);
 		const doneFile = path.join(root, "docs", "common", "team", "cards", "role-a", "20261028-끝난-일.md");
@@ -529,7 +532,9 @@ describe("받은편지 대조·defer 필수·board 표시", () => {
 		run(["new", "--role", "role-a", "--title", "지난 카드", "--source", "s", "--due", "2026-10-20", "--next", "n", "--calendar", "yes"]);
 		run(["new", "--role", "role-a", "--title", "멈춘 카드", "--source", "s", "--due", "2026-11-10", "--next", "n", "--calendar", "yes"], "2026-10-27T06:00:00Z");
 		run(["new", "--role", "role-a", "--title", "미룸 카드", "--source", "s", "--due", "2026-11-10", "--next", "n", "--calendar", "yes"]);
-		run(["defer", "20261028-미룸-카드", "--reason", "나중에", "--revisit", "2026-10-20"]);
+		run(["defer", "20261028-미룸-카드", "--reason", "나중에", "--revisit", "2026-10-29"]);
+		const deferredFile = path.join(root, "docs", "common", "team", "cards", "role-a", "20261028-미룸-카드.md");
+		fs.writeFileSync(deferredFile, fs.readFileSync(deferredFile, "utf8").replace(/^revisit:.*$/m, "revisit: 2026-10-20"));
 		run(["board"]);
 		const index = fs.readFileSync(path.join(root, "docs", "common", "team", "cards", "index.md"), "utf8");
 		assert.match(index, /\| 진행 \[기한 지남\] \| 지난 카드/);
@@ -565,5 +570,131 @@ describe("받은편지 대조·defer 필수·board 표시", () => {
 		assert.equal(exported.work.length, 1);
 		assert.equal(exported.work[0].status, "대기");
 		assert.equal(exported.work[0].wait_reason, "돈 드는 것");
+	});
+});
+
+
+describe("rev2 재현 회귀: 직접 편집·미룸 범위·깨움 단일 작성자", () => {
+	function cardFile(id = "20261028-회귀") {
+		return path.join(root, "docs", "common", "team", "cards", "role-a", `${id}.md`);
+	}
+	function create() {
+		assert.equal(run(["new", "--role", "role-a", "--title", "회귀", "--source", "s", "--next", "확인", "--due", "2026-10-29", "--calendar", "yes"]).status, 0);
+	}
+	function edit(fields) {
+		let text = fs.readFileSync(cardFile(), "utf8");
+		for (const [key, value] of Object.entries(fields)) text = text.replace(new RegExp(`^${key}:.*$`, "m"), `${key}: ${value}`);
+		fs.writeFileSync(cardFile(), text);
+	}
+	function wakeFiles() {
+		const dir = path.join(root, ".agents", "work", "l4", "wake");
+		return fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith(".md")) : [];
+	}
+	const statePath = () => path.join(root, ".agents", "work", "task-cards", "wait-wake-state.json");
+
+	it("request-ref 숫자 0와 자리표시자를 거부하고 저장하지 않는다", () => {
+		create();
+		const before = fs.readFileSync(cardFile(), "utf8");
+		for (const ref of ["0", "#0", "#-", "#없음", "discord:0", "evt-0"]) {
+			const result = run(["wait", "20261028-회귀", "--wait-reason", "돈 드는 것", "--recheck-at", "2026-10-28T08:00:00Z", "--request-ref", ref]);
+			assert.equal(result.status, 2, `${ref}: ${result.stdout}`);
+			assert.equal(fs.readFileSync(cardFile(), "utf8"), before);
+		}
+	});
+
+	it("defer 과거·1년 초과·자리표시자 사유는 카드와 장부를 바꾸지 않는다", () => {
+		create();
+		const before = fs.readFileSync(cardFile(), "utf8");
+		const ledger = path.join(root, "docs", "common", "team", "cards", "ledger.jsonl");
+		const ledgerBefore = fs.readFileSync(ledger, "utf8");
+		const cases = [["사유 있음", "2020-01-01"], ["사유 있음", "2027-10-29"], ["사유 있음", "9999-12-31"], ...["0", "-", "없음", "none", "null", "n/a"].map((reason) => [reason, "2026-10-29"])];
+		for (const [reason, revisit] of cases) {
+			const result = run(["defer", "20261028-회귀", "--reason", reason, "--revisit", revisit]);
+			assert.equal(result.status, 2, `${reason}/${revisit}: ${result.stdout}`);
+			assert.equal(fs.readFileSync(cardFile(), "utf8"), before);
+			assert.equal(fs.readFileSync(ledger, "utf8"), ledgerBefore);
+		}
+		assert.equal(wakeFiles().length, 0);
+	});
+
+	it("defer UTC 오늘과 정확히 1년 뒤 경계를 허용한다", () => {
+		create();
+		for (const revisit of ["2026-10-28", "2027-10-28"]) {
+			const result = run(["defer", "20261028-회귀", "--reason", "다음 검토", "--revisit", revisit]);
+			assert.equal(result.status, 0, result.stderr);
+			assert.match(fs.readFileSync(cardFile(), "utf8"), new RegExp(`^revisit: ${revisit}$`, "m"));
+		}
+		assert.equal(wakeFiles().length, 0);
+	});
+
+	it("직접 편집한 due/revisit 오류가 다른 카드 깨움을 중단하지 않는다", () => {
+		create();
+		const healthyWait = fs.readFileSync(cardFile(), "utf8")
+			.replace(/^id:.*$/m, "id: 20261028-다른-카드")
+			.replace(/^status:.*$/m, "status: waiting")
+			.replace(/^wait_reason:.*$/m, "wait_reason: 다른 사람 결과물")
+			.replace(/^recheck_at:.*$/m, "recheck_at: 2026-10-28T07:00:00Z");
+		fs.writeFileSync(cardFile("20261028-다른-카드"), healthyWait);
+		for (const value of ["0", "미정", "2026-99-99"]) {
+			edit({ status: "deferred", due: value, revisit: value, defer_reason: "다음 검토" });
+			const check = run(["check", "--role", "role-a"]);
+			assert.equal(check.status, 0, check.stderr);
+			assert.doesNotMatch(check.stderr, /오류|RangeError/);
+			assert.match(check.stdout, /\[다시 볼 시각 지남\] role-a\/20261028-다른-카드/);
+		}
+		assert.ok(wakeFiles().length > 0, "잘못된 미룸 날짜도 교정 깨움이 필요함");
+	});
+
+	it("직접 편집한 빈 deferred와 4시간 초과 waiting을 즉시 한 번 깨운다", () => {
+		create();
+		edit({ status: "deferred", defer_reason: "", revisit: "" });
+		const out = path.join(root, "out.json");
+		assert.equal(run(["to-ledger", out]).status, 0);
+		assert.equal(wakeFiles().length, 1, "빈 미룸은 깨워야 함");
+		assert.equal(run(["to-ledger", out]).status, 0);
+		assert.equal(wakeFiles().length, 1, "같은 비정상 미룸 중복 금지");
+		edit({ status: "waiting", wait_reason: "다른 사람 결과물", recheck_at: "2099-12-31T00:00:00Z" });
+		assert.equal(run(["to-ledger", out], "2026-10-28T07:21:00Z").status, 0);
+		assert.equal(wakeFiles().length, 2, "상한 초과 대기도 깨워야 함");
+	});
+
+	it("초 없는 ISO와 시간대 오프셋 recheck_at을 원장 UTC ISO로 정규화한다", () => {
+		create();
+		const out = path.join(root, "out.json");
+		for (const recheck of ["2026-10-28T08:00Z", "2026-10-28T17:00+09:00"]) {
+			edit({ status: "waiting", wait_reason: "다른 사람 결과물", recheck_at: recheck });
+			const result = run(["to-ledger", out]);
+			assert.equal(result.status, 0, result.stderr);
+			const ledger = JSON.parse(fs.readFileSync(out, "utf8"));
+			assert.equal(ledger.work[0].due_at, "2026-10-28T08:00:00.000Z");
+			assert.doesNotThrow(() => validateWorkLedger(ledger, NOW_MS));
+		}
+	});
+
+	it("외부 to-ledger 뒤 로컬 no-wake check/tick와 move/defer/done이 공유 영수증을 보존한다", () => {
+		create();
+		const external = path.join(root, "archive", "cards");
+		fs.mkdirSync(path.join(external, "role-a"), { recursive: true });
+		let text = fs.readFileSync(cardFile(), "utf8").replace(/^id:.*$/m, "id: 20261028-원격").replace(/^status:.*$/m, "status: waiting").replace(/^wait_reason:.*$/m, "wait_reason: 다른 사람 결과물").replace(/^recheck_at:.*$/m, "recheck_at: 2026-10-28T07:00:00Z");
+		fs.writeFileSync(path.join(external, "role-a", "20261028-원격.md"), text);
+		const out = path.join(root, "out.json");
+		assert.equal(run(["to-ledger", external, out]).status, 0);
+		const receipt = fs.readFileSync(statePath(), "utf8");
+		assert.equal(wakeFiles().length, 1);
+		const commands = [
+			["check", "--role", "role-a", "--no-wake"],
+			["tick", "--role", "role-a", "--session", "local", "--no-wake"],
+			["move", "20261028-회귀", "--next", "계속 확인"],
+			["defer", "20261028-회귀", "--reason", "다음 검토", "--revisit", "2026-10-29"],
+			["done", "20261028-회귀", "--result", "docs/result.md"],
+		];
+		for (const command of commands) {
+			const result = run(command);
+			assert.equal(result.status, 0, `${command[0]}: ${result.stderr}`);
+			assert.equal(fs.readFileSync(statePath(), "utf8"), receipt, `${command[0]}가 공유 영수증을 변경함`);
+			assert.equal(wakeFiles().length, 1);
+		}
+		assert.equal(run(["to-ledger", external, out], "2026-10-28T07:25:00Z").status, 0);
+		assert.equal(wakeFiles().length, 1, "외부 영수증이 남아 중복 깨움이 없어야 함");
 	});
 });

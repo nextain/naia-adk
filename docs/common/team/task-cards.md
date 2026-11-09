@@ -36,5 +36,5 @@
 - `node .agents/scripts/task-cards.mjs move <id> --status waiting --wait-reason "운영 배포·운영 접속" --recheck-at 2030-01-01T12:00:00Z --request-ref "#업무-요청/<글번호>"`
 - `node .agents/scripts/task-cards.mjs defer <id> --reason "급한 일 먼저" --revisit 2030-01-03`
 - `node .agents/scripts/task-cards.mjs done <id> --result <결과 주소>`
-- `node .agents/scripts/task-cards.mjs check --role <역할>`
-- `node .agents/scripts/task-cards.mjs board`
+- `node .agents/scripts/task-cards.mjs check --no-wake --role <역할>`
+- `node .agents/scripts/task-cards.mjs board --no-wake`

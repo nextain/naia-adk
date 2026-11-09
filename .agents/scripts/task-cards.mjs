@@ -301,6 +301,14 @@ export function dueMs(value) {
 	return ms;
 }
 
+export function tryDueMs(value) {
+	try { return dueMs(value); } catch { return null; }
+}
+
+function meaningful(value) {
+	return !!String(value || "").trim() && !/^(?:0+|-|없음|none|null|n\/a|yes)$/i.test(String(value).trim());
+}
+
 // Waiting wake timestamps require an explicit ISO-8601 timezone.
 export function tryRecheckMs(value) {
 	if (value === undefined || value === null) return null;
@@ -349,6 +357,8 @@ export function normalizeWaitReason(value) {
 }
 
 export function validRequestRef(value) {
+	const text = String(value || "").trim();
+	if (!meaningful(text.replace(/^(?:#|discord:|evt-)/, ""))) return false;
 	return /^(?:https?:\/\/\S+|discord:\S+|#\S+|\d+|evt-[a-zA-Z0-9_-]+)$/.test(String(value || "").trim());
 }
 
@@ -588,7 +598,7 @@ export function statusKo(status) {
 }
 
 function compareDue(a, b) {
-	const am = dueMs(a.due), bm = dueMs(b.due);
+	const am = tryDueMs(a.due), bm = tryDueMs(b.due);
 	if (am === null && bm === null) return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 	if (am === null) return 1;
 	if (bm === null) return -1;
@@ -702,7 +712,8 @@ export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, stale
 		const cards = loadRoleCards(root, role, cardsBaseDir);
 		for (const card of cards) {
 			const open = card.status !== "done";
-			const due = dueMs(card.due || "");
+			const due = tryDueMs(card.due || "");
+			if (card.due && due === null) problems.push({ kind: "missing-field", role, id: card.id, reason: "잘못된 due 날짜" });
 			// 1. 기한 지남
 			if (open && due !== null && due < now) {
 				problems.push({ kind: "overdue", role, id: card.id, reason: `예상 완료 ${card.due} 가 지났습니다` });
@@ -724,10 +735,11 @@ export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, stale
 				const recheck = tryRecheckMs(card.recheck_at);
 				const needsRef = canonicalReason && HUMAN_APPROVAL_WAIT_REASONS.includes(canonicalReason);
 				const hasRef = !needsRef || validRequestRef(card.request_ref);
-				if (!canonicalReason || recheck === null || !hasRef) {
+				const tooFar = recheck !== null && recheck > Math.max(now, Number.isFinite(moved) ? moved : now) + cfg.maxRecheckHours * 3600_000;
+				if (!canonicalReason || recheck === null || tooFar || !hasRef) {
 					const missingParts = [];
 					if (!canonicalReason) missingParts.push("waitReason");
-					if (recheck === null) missingParts.push("recheckAt");
+					if (recheck === null || tooFar) missingParts.push("recheckAt");
 					if (!hasRef) missingParts.push("requestRef");
 					problems.push({
 						kind: "legacy-waiting",
@@ -753,7 +765,7 @@ export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, stale
 			}
 			// 3. 다시 볼 날 지남
 			if (card.status === "deferred" && card.revisit) {
-				const revisit = dueMs(card.revisit);
+				const revisit = tryDueMs(card.revisit);
 				if (revisit !== null && revisit < now) {
 					problems.push({ kind: "revisit", role, id: card.id, wakeKey: `revisit:${role}/${card.id}@${card.revisit}`, reason: `다시 볼 날 ${card.revisit} 가 지났습니다(사유: ${card.defer_reason || "없음"})` });
 				}
@@ -762,8 +774,8 @@ export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, stale
 			if (card.status === "done" && !card.result) {
 				problems.push({ kind: "missing-field", role, id: card.id, reason: "끝냈는데 결과 주소가 없습니다" });
 			}
-			if (card.status === "deferred" && (!card.defer_reason || !card.revisit)) {
-				problems.push({ kind: "missing-field", role, id: card.id, reason: "미룸인데 사유·다시 볼 날이 비었습니다" });
+			if (card.status === "deferred" && (!meaningful(card.defer_reason) || tryDueMs(card.revisit) === null)) {
+				problems.push({ kind: "missing-field", role, id: card.id, wakeKey: `invalid-deferred:${role}/${card.id}`, reason: "미룸인데 사유·다시 볼 날이 비었습니다" });
 			}
 			// 7. 캘린더 안 올림 — 예상 완료가 있는데 회사 캘린더에 안 올림
 			if (open && card.due && card.calendar !== "yes") {
@@ -850,13 +862,14 @@ export function cardsToLedger(root, cardsDirPath, outFilePath, { now = Date.now(
 			let requested = clamp(iso(c.received) ?? updated);
 			if (Date.parse(requested) > Date.parse(updated)) requested = updated;
 			const cardRef = `${role}/${f}`;
+			const recheck = tryRecheckMs(c.recheck_at);
 			work.push({
 				id: c.id,
 				role: c.owner || role,
 				task: c.title || c.id,
 				status,
 				requested_at: requested,
-				due_at: iso(isWaitingStatus(c.status) ? c.recheck_at : c.status === "deferred" ? c.revisit : c.due),
+				due_at: isWaitingStatus(c.status) ? (recheck === null ? null : new Date(recheck).toISOString()) : iso(c.status === "deferred" ? c.revisit : c.due),
 				evidence: c.source || cardRef,
 				result: c.result || (status === "끝" ? cardRef : null),
 				updated_at: updated,
@@ -1010,7 +1023,7 @@ function cmdMove(root, ms, flags, positional, config) {
 	card.moved = nowIso(ms);
 	changes.moved = card.moved;
 	fs.writeFileSync(found.file, serializeCard(card));
-	runCheck(root, [found.role], { now: ms, wake: true, config });
+	runCheck(root, [found.role], { now: ms, wake: false, config });
 	appendLedger(root, { at: card.moved, cmd: "move", role: found.role, id: found.id, changes });
 	return `바꿈 ${found.role}/${found.id}`;
 }
@@ -1027,8 +1040,12 @@ function cmdDefer(root, ms, flags, positional, config) {
 	if (!reason || !revisit) {
 		fail("미룸은 사유(--reason)·다시 볼 날(--revisit)이 필요합니다");
 	}
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(revisit) || reason === "yes") fail("미룸은 사유와 YYYY-MM-DD 다시 볼 날이 필요합니다");
-	dueMs(revisit);
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(revisit) || !meaningful(reason)) fail("미룸은 사유와 YYYY-MM-DD 다시 볼 날이 필요합니다");
+	const revisitMs = dueMs(revisit);
+	const today = Date.parse(`${new Date(ms).toISOString().slice(0, 10)}T00:00:00Z`);
+	const limit = new Date(today);
+	limit.setUTCFullYear(limit.getUTCFullYear() + 1);
+	if (revisitMs < today || Date.parse(`${revisit}T00:00:00Z`) > limit.getTime()) fail("다시 볼 날은 오늘부터 1년 이내여야 합니다");
 	const found = findCard(root, id);
 	const card = loadCard(found.file);
 	card.defer_reason = reason;
@@ -1040,7 +1057,7 @@ function cmdDefer(root, ms, flags, positional, config) {
 	card.defer_count = (Number.parseInt(card.defer_count, 10) || 0) + 1;
 	card.moved = nowIso(ms);
 	fs.writeFileSync(found.file, serializeCard(card));
-	runCheck(root, [found.role], { now: ms, wake: true, config });
+	runCheck(root, [found.role], { now: ms, wake: false, config });
 	appendLedger(root, {
 		at: card.moved, cmd: "defer", role: found.role, id: found.id,
 		changes: { status: "deferred", defer_reason: card.defer_reason, revisit: card.revisit, defer_count: card.defer_count, moved: card.moved },
@@ -1060,10 +1077,10 @@ function cmdDone(root, ms, flags, positional, config) {
 	card.result = result;
 	card.moved = nowIso(ms);
 	fs.writeFileSync(found.file, serializeCard(card));
-	runCheck(root, [found.role], { now: ms, wake: true, config });
+	runCheck(root, [found.role], { now: ms, wake: false, config });
 	appendLedger(root, { at: card.moved, cmd: "done", role: found.role, id: found.id, changes: { status: "done", result, moved: card.moved } });
 	const rest = listLines(loadRoleCards(root, found.role));
-	const checks = formatProblems(runCheck(root, [found.role], { now: ms, config }));
+	const checks = formatProblems(runCheck(root, [found.role], { now: ms, wake: false, config }));
 	const out = [`끝냄 ${found.role}/${found.id}`, "다음 일(기한 순):", ...(rest.length > 0 ? rest : ["(남은 카드 없음)"]), "점검:", ...checks];
 	return out.join("\n");
 }
@@ -1172,7 +1189,7 @@ function cmdTick(root, ms, flags, config) {
 		if (Number.isFinite(last) && ms - last < everyMin * 60_000) return "";
 		const cards = loadRoleCards(root, role);
 		const list = listLines(cards).slice(0, 8);
-		const checks = formatProblems(runCheck(root, [role], { now: ms, wake: true, config })).slice(0, 6);
+		const checks = formatProblems(runCheck(root, [role], { now: ms, wake: flags["no-wake"] === undefined, config })).slice(0, 6);
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, `${JSON.stringify({ last: nowIso(ms) })}\n`);
 		return ["[업무 카드 정기 점검]", ...list, ...checks].join("\n");

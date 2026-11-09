@@ -25,20 +25,29 @@ test('external cardsToLedger scans supplied store, writes consumer wake folder a
   const root = fixture(t), external = join(root, 'external-cards');
   card(root, 'external', 'elapsed', { wait_reason: WAIT_REASONS[3], recheck_at: '2030-01-01T11:00:00Z' }, external);
   const rows = cardsToLedger(root, external, join(root, 'ledger.json'), { now });
-  assert.equal(rows[0].due_at, '2030-01-01T11:00:00Z');
+  assert.equal(rows[0].due_at, '2030-01-01T11:00:00.000Z');
   assert.equal('recheck_at' in rows[0], false);
   assert.equal(wakes(root).length, 1); assert.ok(wakes(root).every(f => f.isFile()));
   assert.match(readFileSync(join(root, '.agents/work/l4/wake', wakes(root)[0].name), 'utf8'), /external/);
 });
 
-test('central runHealth card store discovers role absent from configured health roles', async t => {
+test('central runHealth leaves card wake ownership with to-ledger', async t => {
   const root = fixture(t), central = join(root, 'central'), workspace = join(root, 'workspace');
   mkdirSync(workspace); card(central, 'unlisted', 'legacy');
   const snapshot = join(root, 'snapshot.json'); writeFileSync(snapshot, JSON.stringify({ windows: [{ name: 'agent', aiRunning: true, output: 'running' }] }));
   const config = { stateFile: join(root, 'health.json'), reportFile: join(root, 'report.md'), baselineRepo: workspace, baselineSha: 'a'.repeat(40), taskCardsRoot: central, roles: [{ id: 'listed', workspace, window: 'agent', adapter: { kind: 'snapshot', path: snapshot } }] };
-  await runHealth(config, { now, dry: true, log: () => {} }); assert.equal(wakes(central).length, 0);
-  await runHealth(config, { now, log: () => {} }); assert.equal(wakes(central).length, 1);
-  await runHealth(config, { now: now + 1000, log: () => {} }); assert.equal(wakes(central).length, 1);
+  const external = join(root, 'remote-cards');
+  card(central, 'unlisted', 'remote-only', {}, external);
+  cardsToLedger(central, external, join(root, 'ledger.json'), { now });
+  const stateFile = join(central, '.agents/work/task-cards/wait-wake-state.json');
+  const receipt = readFileSync(stateFile, 'utf8');
+  for (const options of [{ now, dry: true }, { now }, { now: now + 1000 }]) {
+    await runHealth(config, { ...options, log: () => {} });
+    assert.equal(wakes(central).length, 1);
+    assert.equal(readFileSync(stateFile, 'utf8'), receipt);
+  }
+  cardsToLedger(central, external, join(root, 'ledger.json'), { now: now + 2000 });
+  assert.equal(wakes(central).length, 1);
 });
 
 test('37 legacy cards batch once per role, preserve overdue and stale warnings, and deduplicate', t => {

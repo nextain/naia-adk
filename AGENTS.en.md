@@ -10,7 +10,6 @@ project-local entrypoints; this file keeps the English link explicit for tools
 that discover `AGENTS.en.md`.
 
 - [Rules and session contracts](.agents/context/agents-rules.json)
-- [Task-card waiting rules and next wake](docs/guides/task-cards.md)
 - [Work index](.agents/context/ai-work-index.yaml)
 - [Project index](.agents/context/project-index.yaml)
 - [Skills index](.agents/context/skills-index.yaml)

@@ -326,7 +326,7 @@ test('waiting, blocked and completed ledger rows do not count as active assignme
   assert.equal(f.sent.length, 0);
 });
 
-test('runHealth wakes role once on elapsed waiting card recheckAt and legacy waiting card', async () => {
+test('runHealth never emits card wakes even with legacy taskCardsRoot configuration', async () => {
   const f = await fixture();
   const { readdir } = await import('node:fs/promises');
   const cardsDir = join(f.repo, 'docs/common/team/cards/role-a');
@@ -366,9 +366,7 @@ test('runHealth wakes role once on elapsed waiting card recheckAt and legacy wai
   await f.run({ now, dry: true });
   await assert.rejects(readdir(wakeDir), { code: 'ENOENT' });
   await f.run({ now });
-  const files1 = (await readdir(wakeDir)).filter(n => n.endsWith('.md'));
-  assert.equal(files1.length, 1);
+  await assert.rejects(readdir(wakeDir), { code: 'ENOENT' });
   await f.run({ now: now + 5 * 60000 });
-  const files2 = (await readdir(wakeDir)).filter(n => n.endsWith('.md'));
-  assert.equal(files2.length, 1);
+  await assert.rejects(readdir(wakeDir), { code: 'ENOENT' });
 });

@@ -49,14 +49,13 @@ are rejected. Card `due` remains the work deadline; the waiting ledger row uses
 date at UTC end of day as ledger `due_at`. Legacy offsetless work deadlines use
 UTC consistently for parsing and display.
 
-The existing periodic check writes wake files directly under the consumer's
-`wakeRoot` (default `.agents/work/l4/wake/<file>`), including card roles absent
-from configured `roles`. Do not create role subdirectories. All observers must
-share the same central `wakeRoot`, `stateFile`, and card root; configure
-session-health `taskCardsRoot` to the repository root containing
-`docs/common/team/cards`; pass the actual `docs/common/team/cards` directory
-(or its archived equivalent) to `to-ledger`.
-Use absolute instance paths when running observers from different checkouts.
+Only `session-health-run.sh`'s `to-ledger "$CARDS"` emits card wakes, using
+cards archived from the latest remote branch. Configure that caller's absolute
+central `wakeRoot` and `stateFile`. Wake files go directly under
+`.agents/work/l4/wake/<file>` with `route-<role>`, including unconfigured roles.
+Omit `taskCardsRoot` from session-health configuration. Role hooks run
+`tick --no-wake`; manual local check/board calls also use `--no-wake`.
+These observers and move/defer/done never update central wake receipts.
 
 Legacy waiting cards remain readable. The first check groups their migration
 wake by role rather than writing one file per card. Fill the waiting fields,

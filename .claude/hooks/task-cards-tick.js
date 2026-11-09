@@ -5,7 +5,7 @@
  * 왜 두는가: 한 가지 업무에 몰입하면 다른 업무나 대기 중인 카드의 다시 볼 시각을
  * 놓치기 쉽기 때문이다. 이 훅은 게이트가 아니다. 마지막 점검에서 60분이 지났을 때만
  * 자기 카드 요약·점검 요약을 맥락에 싣고(다시 볼 시각이 지난 대기 카드나 까닭·시각 없는
- * 옛 대기 카드가 있으면 깨움 파일도 함께 남김), 그 전에는 조용하다.
+ * 옛 대기 카드가 있으면 세션 안에 글로 알림), 그 전에는 조용하다.
  * 시각 기록은 `.agents/work/task-cards/session-roles.json` 옆 `tick-<세션>.json`에 둔다.
  *
  * 역할은 환경 값 ADK_AGENT_ROLE, 없으면 저장소
@@ -72,7 +72,7 @@ function main() {
 	const script = path.join(root, ".agents", "scripts", "task-cards.mjs");
 	let output = "";
 	try {
-		const run = spawnSync("node", [script, "--root", root, "tick", "--role", role, "--session", sessionId], {
+		const run = spawnSync("node", [script, "--root", root, "tick", "--no-wake", "--role", role, "--session", sessionId], {
 			encoding: "utf8",
 			timeout: TIMEOUT_MS,
 		});

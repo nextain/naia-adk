@@ -98,6 +98,8 @@ try {
 		assert.equal(quiet.status, 0);
 		assert.equal(quiet.stdout, "", "60분이 안 지났으면 조용해야 함");
 		assert.ok(fs.existsSync(path.join(root, ".agents", "work", "task-cards", "tick-sess-1.json")));
+		assert.equal(fs.existsSync(path.join(root, ".agents", "work", "task-cards", "wait-wake-state.json")), false, "역할 tick은 공유 깨움 영수증을 쓰면 안 됨");
+		assert.equal(fs.existsSync(path.join(root, ".agents", "work", "l4", "wake")), false, "역할 tick은 세션 글 알림만 해야 함");
 	}
 
 	// ── 4. 환경 값 없이 session-roles.json 으로도 역할을 찾는다 ──
@@ -120,6 +122,23 @@ try {
 		const bad = runHook(root, JSON.stringify({ hook_event_name: "PostToolUse", cwd: root, session_id: "s" }), { ADK_AGENT_ROLE: "../탈출" });
 		assert.equal(bad.status, 0);
 		assert.equal(bad.stdout, "");
+	}
+
+	// ── 6. 기존 공유 영수증과 옛 대기 카드가 있어도 세션 알림만 한다 ──
+	{
+		const root = fixtureRoot();
+		makeCard(root, "role-a");
+		const card = path.join(root, "docs", "common", "team", "cards", "role-a", "20261028-알림-일.md");
+		fs.writeFileSync(card, fs.readFileSync(card, "utf8").replace(/^status: doing$/m, "status: waiting"));
+		const state = path.join(root, ".agents", "work", "task-cards", "wait-wake-state.json");
+		fs.mkdirSync(path.dirname(state), { recursive: true });
+		const receipt = JSON.stringify({ version: 1, sent: { "external:remote-card": { role: "role-a", at: "2026-10-28T07:00:00Z" } } });
+		fs.writeFileSync(state, receipt);
+		const result = runHook(root, JSON.stringify({ hook_event_name: "PostToolUse", cwd: root, session_id: "legacy-no-wake" }), { ADK_AGENT_ROLE: "role-a" });
+		assert.equal(result.status, 0, result.stderr);
+		assert.match(JSON.parse(result.stdout).hookSpecificOutput.additionalContext, /까닭·시각 없는 대기/);
+		assert.equal(fs.readFileSync(state, "utf8"), receipt, "세션 tick이 외부 깨움 영수증을 지우면 안 됨");
+		assert.equal(fs.existsSync(path.join(root, ".agents", "work", "l4", "wake")), false);
 	}
 
 	console.log("task-cards tick hook: PASS");

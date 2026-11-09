@@ -15,7 +15,6 @@ descendant workspaces. Those are two possible lineages, not one required chain.
 - Wake completion and server acceptance: `docs/guides/wake-completion-contract.md`, `docs/guides/server-wake-onboarding.md`
 - Human-response observation and schedule ledger: `docs/guides/response-watch.md`, `docs/guides/regular-schedule-ledger.md`
 - Work instructions and execution records: `docs/guides/work-ledger.md`, `docs/guides/regular-schedule-ledger.md`
-- Task-card waiting, next wake (`recheck_at`, ledger `due_at`), and migration: `docs/guides/task-cards.md`
 - Session health: `docs/guides/session-health.md`
 - Fork-specific additions belong in `FORK.md`, not this shared entrypoint.
 

@@ -124,5 +124,5 @@
       "workflows.selection_guide": "Route tasks by matching request keywords in .agents/context/ai-work-index.yaml, reading the root quick reference first, and loading full workflow docs on demand."
     }
   },
-  "task_card_waiting": "Already authorized reversible work stays doing; waiting requires an allowed wait_reason, an offset-qualified recheck_at (ledger due_at) within maxRecheckHours, and request_ref for human approval; wake files use the consumer wakeRoot directly, including unconfigured roles; legacy migration and shared watcher paths: docs/guides/task-cards.md."
+  "task_card_waiting": "Waiting: reason, recheck, approval ref if needed; docs/guides/task-cards.md."
 }

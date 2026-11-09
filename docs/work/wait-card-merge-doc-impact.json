@@ -1,0 +1,29 @@
+{
+  "issue": "waitcard3",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      ".agents/context/agents-rules.json",
+      "AGENTS.md",
+      "AGENTS.en.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/task-cards.md",
+      "docs/guides/work-ledger.md",
+      "config/task-cards.example.json",
+      "docs/common/team/task-cards.md"
+    ]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      ".agents/scripts/task-cards.test.mjs",
+      "scripts/wait-card-regression.test.mjs",
+      "scripts/session-health.test.mjs",
+      ".claude/hooks/test-task-cards-tick.js"
+    ]
+  }
+}

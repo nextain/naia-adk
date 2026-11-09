@@ -38,7 +38,7 @@
    - `recheck_at`(`--recheck-at`)은 필수이며, 현재 시각 이후부터 **최대 지금+4시간**(`config/task-cards.json`의 `maxRecheckHours`로 설정 가능, 기본 4시간) 이내여야 합니다.
    - 사람 승인을 기다리는 앞의 세 까닭(`바깥 송출·게시`, `운영 배포·운영 접속`, `돈 드는 것`)은 반드시 `requestRef`(`--request-ref`, 예: `#업무-요청` 등 요청 글 주소/번호)를 함께 적어야 합니다.
 3. **`recheck_at` 경과 시 담당 역할 깨움(한 카드·한 시각당 한 번)**:
-   - `recheck_at`이 지나면 정기 점검(`check`, `board`, `tick`, `to-ledger`, `session-health`)이 소비자 wake-pump가 읽는 `wakeRoot` 바로 아래(기본 `.agents/work/l4/wake/<파일>`)에 담당 역할을 담은 깨움 파일을 만듭니다. 역할별 하위 폴더를 만들지 않으며 설정 `roles`에 없는 카드 역할도 점검합니다.
+   - `recheck_at`이 지나면 중앙 정기 감시의 `to-ledger`이 소비자 wake-pump가 읽는 `wakeRoot` 바로 아래(기본 `.agents/work/l4/wake/<파일>`)에 담당 역할을 담은 깨움 파일을 만듭니다. 역할별 하위 폴더를 만들지 않으며 설정 `roles`에 없는 카드 역할도 점검합니다.
    - 깨움 기록은 `.agents/work/task-cards/wait-wake-state.json`에 남겨 **한 카드·한 시각당 한 번**만 깨우며, 새 상주 서비스를 만들지 않고 기존 정기 타이머·장부 점검에 붙여서 동작합니다.
 4. **옛 카드(필드 없는 대기) 호환 및 1회 깨움**:
    - 필수 필드가 생기기 전에 만들어진 옛 대기 카드(`wait_reason`·`recheck_at` 등이 없는 `waiting` 카드)는 읽기(`list`, `board`, `check`)는 그대로 되며, 감시가 **"까닭·시각 없는 대기"** 로 역할마다 한 건으로 묶어 한 번 깨웁니다. 담당자는 까닭·시각을 채우거나 진행(`doing`), 결과를 적은 완료(`done`), 사유와 날짜를 적은 미룸(`defer --reason ... --revisit YYYY-MM-DD`)으로 옮깁니다. 옛 카드 표시와 관계없이 기한 초과·진행 정체 경고도 함께 표시합니다.
@@ -61,7 +61,7 @@
 }
 ```
 
-같은 운영 카드 폴더를 보는 모든 호출은 같은 `wakeRoot`와 `stateFile`을 사용해야 합니다. 인스턴스 설정의 `wakeRoot`·`stateFile`에 중앙 경로를 지정하고, session-health 설정의 `taskCardsRoot`는 `docs/common/team/cards`를 포함한 카드 정본 저장소 뿌리로 맞춥니다. 별도 체크아웃에서 실행한다면 상대 경로 대신 같은 절대 경로를 지정하여 깨움 중복과 상태 분리를 막습니다. `to-ledger <카드 폴더> <출력>`의 첫 인자는 역할 폴더들을 직접 포함한 `docs/common/team/cards` 경로이며, 전달받은 그 폴더를 점검합니다. 실제 인스턴스 변경은 운영 담당자가 수행합니다.
+깨움 생성은 `session-health-run.sh`의 `to-ledger "$CARDS" <출력>` 한 곳에서만 합니다. `$CARDS`는 원격 최신 가지 아카이브의 `docs/common/team/cards`입니다. 이 호출 root의 `config/task-cards.json`에 중앙 `wakeRoot`·`stateFile` 절대 경로를 지정합니다. session-health 설정에는 `taskCardsRoot`를 넣지 않습니다. 역할별 훅은 `tick --no-wake`로 세션 내 글 알림만 만들며 중앙 영수증을 쓰지 않습니다. 수동 `check`·`board`도 `--no-wake`로 실행합니다. 실제 인스턴스 변경은 운영 담당자가 수행합니다.
 
 대기 깨움 시각은 시간대 없는 값을 거부합니다. 설정 `timeZone`은 `UTC`만 지원합니다(기본값 UTC). 기존 작업 마감일의 시간대 없는 `YYYY-MM-DDTHH:MM`은 UTC로 해석하며, 날짜만 있는 마감일·미룸 날짜는 그날 UTC 끝으로 해석·표시합니다. 입력한 시각의 시간대 표시와 같은 순간을 기준으로 비교·표시합니다. `--request-ref`는 비어 있지 않은 문자열 값이 있어야 합니다. `defer`는 필수 사유와 날짜를 검증하며 대기 상태를 그대로 남기는 우회로가 아닙니다. 카드 직접 수정으로 진행·미룸·완료가 된 경우도 다음 점검에서 깨움 상태를 정리합니다.
 
@@ -95,8 +95,10 @@ node .agents/scripts/task-cards.mjs defer <id> --reason "선행 작업 우선 �
 # 끝내기 (결과 주소 필수)
 node .agents/scripts/task-cards.mjs done <id> --result <결과-주소>
 
-# 점검 및 깨움 생성 (기존 정기 타이머에서 호출)
-node .agents/scripts/task-cards.mjs check
-node .agents/scripts/task-cards.mjs board
+# 로컬 점검 (세션 알림만, 공유 깨움 영수증 보존)
+node .agents/scripts/task-cards.mjs check --no-wake
+node .agents/scripts/task-cards.mjs board --no-wake
 node .agents/scripts/task-cards.mjs to-ledger docs/common/team/cards /<private>/work-ledger.json
 ```
+
+미룸은 의미 있는 사유와 UTC 오늘부터 1년 이내의 `YYYY-MM-DD` 날짜가 필요합니다. move/defer/done은 깨움 상태를 쓰지 않으며 다음 중앙 to-ledger 회차가 영수증을 정리합니다.

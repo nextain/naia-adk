@@ -210,10 +210,10 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
     if (config.responseWatchState) try { response = await json(config.responseWatchState); } catch { response = null; responseError = true; }
     const save = () => dry ? Promise.resolve() : atomic(config.stateFile, JSON.stringify(state, null, 2));
     const rows = []; let previews = 0, degraded = responseError;
-    // Cards have their own role inventory; never derive their store from a role workspace.
+    // Legacy taskCardsRoot is observation only; the archived to-ledger caller owns wake receipts.
     if (config.taskCardsRoot) {
       const cardsRoot = resolve(config.taskCardsRoot);
-      try { runTaskCardsCheck(cardsRoot, discoverRoles(cardsRoot), { now, wake: !dry }); }
+      try { runTaskCardsCheck(cardsRoot, discoverRoles(cardsRoot), { now, wake: false }); }
       catch (e) { degraded = true; emit({ stage: 'task-cards', result: 'failed', reason: e.message }); }
     }
     for (const role of config.roles) {
