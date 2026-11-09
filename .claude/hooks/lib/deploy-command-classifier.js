@@ -7,7 +7,7 @@
  * - gcloud / vercel / kubectl / helm / terraform / fly / wrangler / railway / supabase 운영 배포 명령.
  * - ssh / scp 로 비개발(운영) 호스트에 원격 변경·파일 복사.
  * - 이름이 deploy 를 담은 스크립트(또는 npm run 스크립트)를 prod 인자로 실행.
- * - 인스턴스 확장(config/deploy-gate.json 의 prodPatterns·sshAlwaysGated·plugin.classifyCommand).
+ * - 인스턴스 확장(config/deploy-gate.json 의 prodPatterns·sshAlwaysGated·testHosts·plugin.classifyCommand).
  *
  * 대상 이름이나 리소스 그룹에 dev·staging·preview·test 표시가 없으면 운영으로 본다.
  * 모르는 대상은 막는 쪽으로 기운다.
@@ -685,12 +685,40 @@ function optionValue(tokens, names) {
 	return "";
 }
 
+let activeGateRoot = "";
+
+function loadTestHosts(rootDir = "") {
+	try {
+		const root = rootDir || activeGateRoot || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+		const cfgPath = process.env.DEPLOY_GATE_CONFIG
+			? path.resolve(process.env.DEPLOY_GATE_CONFIG)
+			: root
+				? path.join(root, "config", "deploy-gate.json")
+				: "";
+		if (!cfgPath || !fs.existsSync(cfgPath)) return new Set();
+		const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+		if (!cfg || typeof cfg !== "object" || !Array.isArray(cfg.testHosts)) return new Set();
+		const out = new Set();
+		for (const h of cfg.testHosts) {
+			if (typeof h !== "string") continue;
+			const norm = h.toLowerCase().replace(/\.$/, "");
+			if (!norm || /[*?\s]/.test(norm)) continue;
+			out.add(norm);
+		}
+		return out;
+	} catch {
+		return new Set();
+	}
+}
+
 function isNonProd(...names) {
 	// Cloudflare API 쓰기는 도메인에 dev/test 가 들어가도 운영 관문에서 제외하지 않는다.
 	if (names.some((n) => typeof n === "string" && /^cloudflare:/i.test(n))) return false;
 	const joined = names.filter(Boolean).join(" ");
 	if (!joined) return false;
 	if (/prod/i.test(joined)) return false;
+	const testHosts = loadTestHosts();
+	if (testHosts.size > 0 && names.some((n) => typeof n === "string" && testHosts.has(n.toLowerCase().replace(/\.$/, "")))) return true;
 	return names.some((n) => n && NON_PROD.test(n));
 }
 
@@ -1427,8 +1455,9 @@ function classifyGeneralCloudCli(tokens) {
 }
 
 function resolveGateRoot(startDir) {
-	if (!startDir) return "";
-	let cur = path.resolve(startDir);
+	const base = startDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+	if (!base) return "";
+	let cur = path.resolve(base);
 	const candidates = [cur];
 	for (;;) {
 		if (
@@ -1797,6 +1826,9 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 	// 중첩 한도를 넘으면 안을 읽지 않으므로 확인 불가로 막는다(빈 결과로 통과시키지 않음, #95 검수 4단계 감싸기).
 	if (depth > 3) return String(command || "").trim() ? [{ service: "unclassified:depth-limit", label: "분류 불가: 셸 대본 중첩이 3단계를 넘어 안의 명령을 확인할 수 없음", clause: "", unclassified: true, tool: "depth-limit" }] : found;
 	const gateRoot = rootDir || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(cwd);
+	const prevGateRoot = activeGateRoot;
+	activeGateRoot = gateRoot;
+	try {
 	// 앞 절의 cd 를 따라간다(설계 검수 6회차 2번): "cd <워크트리> && ./deploy/vm/deploy.sh prod" 는
 	// 세션 cwd 가 아니라 그 워크트리의 스크립트다. 배포 준비 기록은 이 경로의 저장소 HEAD 를 본다.
 	// 감싸개(setsid, timeout -s KILL, flock, systemd-run)와 문자열로 넘긴 명령(bash -c, tmux, script -c)은
@@ -1881,6 +1913,9 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 		}
 	}
 	return found;
+	} finally {
+		activeGateRoot = prevGateRoot;
+	}
 }
 
 /** 실제로 도는 절을 다시 셸 글로 적는다(앞의 환경 변수 대입 포함). 글자가 있는 인자는 작은따옴표로 감싼다. */

@@ -56,3 +56,27 @@ JSON documents are also accepted with standard JSON parsing semantics.
 Keep names, links, paths and task contents in private instance files. Follow
 [regular execution recording](regular-schedule-ledger.md) and
 [server acceptance](server-wake-onboarding.md) for the second ledger and rollout.
+
+When role work is tracked with [task cards](task-cards.md), already authorized
+reversible work stays `doing`. Waiting requires one of the four documented
+`wait_reason` values, a next wake time in card `recheck_at` (ledger `due_at`) within `maxRecheckHours`
+(default four hours), and a nonempty `request_ref` for human approval. Use an
+ISO-8601 timestamp with `Z` or an explicit offset; waiting timestamps without a timezone
+are rejected. Card `due` remains the work deadline; the waiting ledger row uses
+`due_at` for the next wake, matching the human-response watcher contract. Deferred cards use their revisit
+date at UTC end of day as ledger `due_at`. Legacy offsetless work deadlines use
+UTC consistently for parsing and display.
+
+Only `session-health-run.sh`'s `to-ledger "$CARDS"` emits card wakes, using
+cards archived from the latest remote branch. Configure that caller's absolute
+central `wakeRoot` and `stateFile`. Wake files go directly under
+`.agents/work/l4/wake/<file>` with `route-<role>`, including unconfigured roles.
+Omit `taskCardsRoot` from session-health configuration. Role hooks run
+`tick --no-wake`; manual local check/board calls also use `--no-wake`.
+These observers and move/defer/done never update central wake receipts.
+
+Legacy waiting cards remain readable. The first check groups their migration
+wake by role rather than writing one file per card. Fill the waiting fields,
+resume authorized work, record completion with a result, or defer with a reason
+and a revisit date. Legacy notices do not suppress overdue or stale warnings.
+The next check also reconciles wake state after direct card edits.

@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { readWorkLedger, readScheduleLedger, scheduleStatus } from './lib/ledger.mjs';
+import { discoverRoles, runCheck as runTaskCardsCheck } from '../.agents/scripts/task-cards.mjs';
 const exec = promisify(execFile);
 const hash = s => createHash('sha256').update(s).digest('hex');
 const command = async (file, args = [], cwd) => (await exec(file, args, { cwd, timeout: 15000, maxBuffer: 4 * 1024 * 1024 })).stdout;
@@ -209,6 +210,12 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
     if (config.responseWatchState) try { response = await json(config.responseWatchState); } catch { response = null; responseError = true; }
     const save = () => dry ? Promise.resolve() : atomic(config.stateFile, JSON.stringify(state, null, 2));
     const rows = []; let previews = 0, degraded = responseError;
+    // Legacy taskCardsRoot is observation only; the archived to-ledger caller owns wake receipts.
+    if (config.taskCardsRoot) {
+      const cardsRoot = resolve(config.taskCardsRoot);
+      try { runTaskCardsCheck(cardsRoot, discoverRoles(cardsRoot), { now, wake: false }); }
+      catch (e) { degraded = true; emit({ stage: 'task-cards', result: 'failed', reason: e.message }); }
+    }
     for (const role of config.roles) {
       const previous = state.roles[role.id];
       const result = await observeRole(config, role, previous, now, response, windowProbe);

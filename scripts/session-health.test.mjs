@@ -325,3 +325,48 @@ test('waiting, blocked and completed ledger rows do not count as active assignme
   }
   assert.equal(f.sent.length, 0);
 });
+
+test('runHealth never emits card wakes even with legacy taskCardsRoot configuration', async () => {
+  const f = await fixture();
+  const { readdir } = await import('node:fs/promises');
+  const cardsDir = join(f.repo, 'docs/common/team/cards/role-a');
+  await mkdir(cardsDir, { recursive: true });
+  await writeFile(join(cardsDir, '20300101-elapsed.md'), [
+    '---',
+    'id: 20300101-elapsed',
+    'title: "elapsed wait"',
+    'owner: role-a',
+    'status: waiting',
+    'source: chat-1',
+    'received: 2030-01-01T10:00:00Z',
+    'due: 2030-01-02',
+    'next: "recheck"',
+    'moved: 2030-01-01T10:00:00Z',
+    'wait_reason: "다른 사람 결과물"',
+    'recheck_at: 2030-01-01T11:30:00Z',
+    '---',
+    '',
+  ].join('\n'));
+  await writeFile(join(cardsDir, '20300101-legacy.md'), [
+    '---',
+    'id: 20300101-legacy',
+    'title: "legacy wait"',
+    'owner: role-a',
+    'status: waiting',
+    'source: chat-2',
+    'received: 2030-01-01T09:00:00Z',
+    'due: 2030-01-02',
+    'next: "fill fields"',
+    'moved: 2030-01-01T09:00:00Z',
+    '---',
+    '',
+  ].join('\n'));
+  f.c.taskCardsRoot = f.repo;
+  const wakeDir = join(f.repo, '.agents/work/l4/wake');
+  await f.run({ now, dry: true });
+  await assert.rejects(readdir(wakeDir), { code: 'ENOENT' });
+  await f.run({ now });
+  await assert.rejects(readdir(wakeDir), { code: 'ENOENT' });
+  await f.run({ now: now + 5 * 60000 });
+  await assert.rejects(readdir(wakeDir), { code: 'ENOENT' });
+});

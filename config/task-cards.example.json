@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy to private config/task-cards.json. Only the central to-ledger caller writes wakeRoot/stateFile. Other checkouts use --no-wake; wakeRoot is the flat wake-pump consumer folder.",
+  "maxRecheckHours": 4,
+  "timeZone": "UTC",
+  "ownerSenderIds": ["<owner-user-id>"],
+  "wakeRoot": ".agents/work/l4/wake",
+  "stateFile": ".agents/work/task-cards/wait-wake-state.json"
+}
