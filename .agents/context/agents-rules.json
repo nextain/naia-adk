@@ -60,8 +60,8 @@
     "no_korean_in_agents": "Use concise English for machine-facing .agents/ files by default. Korean is allowed when a user explicitly requests it, when preserving a Korean user-facing trigger/example is necessary, or when localized human-facing text is part of the contract; machine JSON/YAML keys remain stable.",
     "concise_session_output": "AI responses should be extremely brief (less than 3 lines) to minimize history weight. Avoid long Korean preambles."
   },
-  "work_ledger": "Before replying, add requests to the configured ledger: docs/common/work-ledger.md.",
-  "agent_messaging": "Mention the other person or agent when requesting and replying: docs/guides/agent-messaging.md.",
+  "work_ledger": "Before replies log requests: docs/common/work-ledger.md.",
+  "agent_messaging": "Mention counterparts: docs/guides/agent-messaging.md.",
   "document_size_refactoring": "Review oversized documents and archive eligible historical sections with the configurable procedure in docs/guides/doc-size-refactor.md.",
   "conventions": {
     "response_language": "Korean (한국어로 응답)",
@@ -125,5 +125,5 @@
       "workflows.selection_guide": "Route tasks by matching request keywords in .agents/context/ai-work-index.yaml, reading the root quick reference first, and loading full workflow docs on demand."
     }
   },
-  "task_card_waiting": "Waiting: reason, recheck, approval ref if needed; docs/guides/task-cards.md."
+  "task_card_waiting": "Follow docs/guides/task-cards.md."
 }
