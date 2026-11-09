@@ -1,0 +1,17 @@
+{
+  "work": "multi-approver",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/guides/approval-plan-gate.md", "config/deploy-gate.example.json"]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/guides/approval-plan-gate.md"],
+    "reason": "Documents plural and legacy instance configuration, fail-closed validation and per-code actual author records."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": ["docs/guides/approval-plan-gate.md"],
+    "reason": "Distinguishes independent Discord code approvals from the signed runner's unchanged same-signer PLAN and STEP binding."
+  }
+}

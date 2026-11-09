@@ -1089,3 +1089,85 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 	fs.rmSync(cfgPath, { force: true });
 	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "설정 파일이 없을 때는 시험 기기 예외가 적용되지 않아야 함");
 });
+
+const MULTI_A = "111111111111111111";
+const MULTI_B = "222222222222222222";
+const MULTI_OUTSIDE = "333333333333333333";
+function discordFixture(overrides = {}) {
+	const code = "PLAN-ABC123";
+	const channelId = "444444444444444444", messageId = "555555555555555555";
+	return {
+		code, sinceIso: "2026-01-01T00:00:00.000Z",
+		refs: [{ code, channelId, messageId }], token: "test-only-placeholder",
+		approverIds: [MULTI_A, MULTI_B], expectedApproverIds: [MULTI_A, MULTI_B],
+		fetchImpl: async () => ({ ok: true, json: async () => ({
+			id: messageId, channel_id: channelId, content: code,
+			timestamp: "2026-01-01T00:00:01.000Z", author: { id: MULTI_B }, ...overrides,
+		}) }),
+	};
+}
+
+test("multi-approver: second configured author is accepted with actual identity", async () => {
+	const result = await deployPlan.discordConfirms(discordFixture());
+	assert.equal(result.ok, true);
+	assert.equal(result.approverId, MULTI_B);
+});
+
+test("multi-approver: outsider and automated or stale messages are rejected", async () => {
+	for (const overrides of [
+		{ author: { id: MULTI_OUTSIDE } }, { author: { id: MULTI_B, bot: true } },
+		{ author: { id: MULTI_B, system: true } }, { webhook_id: "fixture-webhook" },
+		{ application_id: "fixture-app" }, { timestamp: "2025-12-31T23:59:59.000Z" },
+	]) assert.equal((await deployPlan.discordConfirms(discordFixture(overrides))).ok, false, JSON.stringify(overrides));
+});
+
+test("multi-approver: legacy single ID remains compatible and mismatch fails closed", async () => {
+	const args = discordFixture({ author: { id: MULTI_A } });
+	delete args.approverIds; delete args.expectedApproverIds;
+	assert.equal((await deployPlan.discordConfirms({ ...args, approverId: MULTI_A, expectedApproverId: MULTI_A })).ok, true);
+	assert.equal((await deployPlan.discordConfirms({ ...args, approverId: MULTI_B, expectedApproverId: MULTI_A })).ok, false);
+	assert.equal((await deployPlan.discordConfirms({ ...discordFixture(), approverId: MULTI_OUTSIDE })).ok, false);
+	assert.equal((await deployPlan.discordConfirms({ ...discordFixture(), expectedApproverIds: [MULTI_A] })).ok, false);
+});
+
+test("multi-approver: configuration merges legacy ID and rejects invalid lists", () => {
+	assert.deepEqual(new Set(deployPlan.normalizeApproverIds({ discordUserIds: [MULTI_B], discordUserId: MULTI_A })), new Set([MULTI_A, MULTI_B]));
+	assert.deepEqual(deployPlan.normalizeApproverIds({ discordUserId: MULTI_A }), [MULTI_A]);
+	for (const discordUserIds of [[], "invalid", ["invalid"], [MULTI_A, null], [111111111111111111], Array.from({ length: 21 }, (_, i) => String(111111111111111111n + BigInt(i)))]) {
+		assert.equal(deployPlan.normalizeApproverIds({ discordUserIds }), null);
+	}
+});
+
+test("multi-approver: PLAN and STEP may have different authors recorded in receipt and audit", async (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root, { approver: { discordUserIds: [MULTI_A, MULTI_B] } });
+	const { planFile, gatesDir, step1Cmd } = createValidPlan(root);
+	writePassingReviewReceipt(root, planFile);
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const sessionId = "sess-multi-approver";
+	const pre = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, Date.now());
+	assert.equal(pre.ok, true);
+	const stepCode = pre.steps.find(s => s.step === "s1").code;
+	const channelId = "444444444444444444";
+	const approvals = [
+		{ code: pre.plan_code, channelId, messageId: "555555555555555555" },
+		{ code: stepCode, channelId, messageId: "666666666666666666" },
+	];
+	fs.writeFileSync(path.join(gatesDir, deployPlan.DISCORD_FILE), JSON.stringify({ approvals }));
+	const fetchImpl = async url => {
+		const ref = approvals.find(item => url.endsWith(`/${item.messageId}`));
+		assert.ok(ref);
+		return { ok: true, json: async () => ({ id: ref.messageId, channel_id: channelId,
+			content: ref.code, timestamp: new Date(Date.now() + 1000).toISOString(),
+			author: { id: ref.code === pre.plan_code ? MULTI_A : MULTI_B } }) };
+	};
+	const result = await deployPlan.evaluate({ command: step1Cmd, sessionId, transcriptPath, root, env,
+		services: ["azure:containerapp:sample-web-prod"], discordToken: "test-only-placeholder", fetchImpl,
+		readiness: () => ({ ok: true, problems: [], facts: [] }) });
+	assert.equal(result.allow, true, result.reason);
+	assert.equal(result.audit.plan_approver_id, MULTI_A);
+	assert.equal(result.audit.step_approver_id, MULTI_B);
+	const state = JSON.parse(fs.readFileSync(deployPlan.stateFile(env), "utf8"));
+	assert.equal(state.challenges.find(item => item.code === pre.plan_code).approvedBy, MULTI_A);
+	assert.equal(state.challenges.find(item => item.code === stepCode).approvedBy, MULTI_B);
+});

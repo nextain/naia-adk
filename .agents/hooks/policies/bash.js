@@ -572,6 +572,8 @@ async function deploy(command, data, opts) {
 	const runText = [...new Set(hits.map((h) => h.clause).filter(Boolean))].join(" ; ") || command;
 	const gateConfigInfo = loadDeployGateConfig(root);
 	const gateConfig = (gateConfigInfo && gateConfigInfo.config) || {};
+	const gateApprover = gateConfig.approver;
+	const approver = gateApprover && (gateApprover.discordUserIds !== undefined || gateApprover.discordUserId !== undefined) ? gateApprover : config.approver;
 	const res = await deployPlan.evaluate({
 		command,
 		cwd,
@@ -579,7 +581,7 @@ async function deploy(command, data, opts) {
 		sessionId,
 		transcriptPath: data && data.transcript_path,
 		root,
-		approverId: (gateConfig.approver && gateConfig.approver.discordUserId) || (config.approver && config.approver.discordUserId),
+		approverIds: deployPlan.normalizeApproverIds(approver || {}) || [],
 		readiness: (planBinding) => assessReadiness(prodServices, { root, auditPath: AUDIT_PATH, command: runText, cwd, planBinding }),
 		readinessTemplate: READINESS_TEMPLATE,
 		fileRefs: () => deployPlan.referencedFiles(command, cwd),
