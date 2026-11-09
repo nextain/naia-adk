@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, mkdir, writeFile, stat } from "node:fs/promises";
+import { readFile, mkdir, writeFile, stat, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -25,8 +25,11 @@ export async function watch({
   return withLock(stateFile, async () => {
     let state = { version: 1, sent: {}, thread_cursors: {}, mentions: {} };
     let stateError;
+    let recoveredHumanWait = {};
     try {
       state = JSON.parse(await readFile(stateFile, "utf8"));
+      if (state?.human_wait_sent && typeof state.human_wait_sent === "object" && !Array.isArray(state.human_wait_sent))
+        recoveredHumanWait = Object.fromEntries(Object.entries(state.human_wait_sent).filter(([, at]) => Number.isFinite(at) && at >= 0));
       if (
         !state ||
         typeof state !== "object" ||
@@ -63,14 +66,36 @@ export async function watch({
         state = { version: 1, sent: {}, thread_cursors: {}, mentions: {} };
       }
     }
-    state.human_wait_sent ??= {};
+    state.human_wait_sent ??= recoveredHumanWait;
     state.channel_failures ??= {};
+    // Receipts outlive consumed wake files and are independent of watch-state.
+    const receiptDir = path.join(root, ".agents/work/ledger/human-wait-receipts");
+    await mkdir(receiptDir, { recursive: true });
+    const receipts = new Set();
+    const oldWakeFiles = await readdir(wakeDir);
+    for (const [key, at] of Object.entries(state.human_wait_sent)) {
+      if (now - at >= 48 * 60 * 60000) continue;
+      const name = Buffer.from(key).toString("base64url") + ".json";
+      try { await writeFile(path.join(receiptDir, name), JSON.stringify({ key, at }), { flag: "wx", mode: 0o600 }); }
+      catch (error) { if (error.code !== "EEXIST") throw error; }
+    }
+    for (const name of await readdir(receiptDir)) {
+      const file = path.join(receiptDir, name);
+      let at;
+      try { at = JSON.parse(await readFile(file, "utf8")).at; } catch { at = (await stat(file)).mtimeMs; }
+      if (Number.isFinite(at) && now - at > 48 * 60 * 60000) await unlink(file);
+      else receipts.add(name);
+    }
     const wakes = [];
     const warnings = [];
     const readCache = new Map();
     const failedThisRound = new Set();
     const successfulThisRound = new Set();
     let readStarted = false;
+    let retryWaitMs = 0;
+    let sharedMessenger = adapter;
+    let messengerRoundStarted = false;
+    const networkChecks = [];
     async function readMessages(messenger, channel, since) {
       const key = `messages:${channel}`;
       if (!readCache.has(key))
@@ -87,9 +112,10 @@ export async function watch({
         const limited = error.status === 429 || /HTTP 429/.test(error.message || "");
         if (!limited || error.retry_exhausted) throw error;
         const seconds = Number(error.retry_after ?? 1);
-        await sleep(
-          (Number.isFinite(seconds) && seconds >= 0 ? seconds : 1) * 1000,
-        );
+        const delay = (Number.isFinite(seconds) && seconds >= 0 ? seconds : 1) * 1000;
+        if (delay > 5000 || retryWaitMs + delay > 30000) throw error;
+        retryWaitMs += delay;
+        await sleep(delay);
         return read();
       }
     }
@@ -167,6 +193,7 @@ export async function watch({
       if (stateError) {
         errors.push(stateError);
         await wake(role, "watch-error", "감시 실패", stateError);
+        stateError = undefined;
       }
       let ledger;
       try {
@@ -244,6 +271,7 @@ export async function watch({
           `${report.every_min}분 정기 보고`,
           `출처: ${report.channel}\n기한: ${report.last_at ? new Date(Date.parse(report.last_at) + report.every_min * 60000).toISOString() : "첫 보고 대기"}\n결과: (없음)`,
         );
+      networkChecks.push(async () => {
       try {
         const channels = [...new Set([
           ...(roleConfig.channels ?? config.channels ?? []),
@@ -270,8 +298,11 @@ export async function watch({
           throw new Error(
             "Messenger watch requires human_ids and role user_ids",
           );
-        const messenger =
-          adapter || (channels.length ? createAdapter(config.provider) : null);
+        const messenger = sharedMessenger ??= (channels.length ? createAdapter(config.provider) : null);
+        if (messenger && !messengerRoundStarted) {
+          messenger.beginRound?.();
+          messengerRoundStarted = true;
+        }
         const maxThreads =
           roleConfig.max_threads ??
           config.max_threads ??
@@ -314,13 +345,19 @@ export async function watch({
           if (typeof messenger.threads === "function") {
             try {
               const activeThreads = await readWithRetry(() =>
-                messenger.threads(channel, channelMessages, { guildId, all: true }),
+                messenger.threads(channel, channelMessages, { guildId, all: true, direct: (roleConfig.direct_channels ?? []).includes(channel) }),
               );
-              for (const tid of activeThreads || []) {
+              for (const value of activeThreads || []) {
+                const tid = typeof value === "string" ? value : value.id;
                 if (tid) discoveredThreads.add(tid);
+                const owner = typeof value === "string" ? activeThreads.threadOwners?.get(tid) : value.owner_id;
+                if (owner) threadStarterAuthor.set(tid, owner);
               }
             } catch (error) {
-              await channelFailure(role, channel, error, ":threads");
+              // Thread discovery failing must not mark a successful channel read failed.
+              if (error.status === 429 || /HTTP 429/.test(error.message || ""))
+                warnings.push(`messenger:${role}:${channel}:threads: ${error.message || String(error)}`);
+              else await channelFailure(role, channel, error, ":threads");
             }
           }
           const candidateThreads = [...discoveredThreads].filter(
@@ -477,49 +514,93 @@ export async function watch({
             ...(config.human_wait ?? {}),
             ...(roleConfig.human_wait ?? {}),
           };
-          const questionPatterns = humanWait.question_patterns ?? [
-            "[?？](?:\\s|$)", "될까요", "알려\\s*주시면",
-            "말씀\\s*주시면", "골라\\s*주시면", "기다리겠습니다",
-          ];
-          const questionMatchers = questionPatterns.map(
-            (pattern) => new RegExp(pattern, "u"),
-          );
-          for (const question of messages) {
-            if (!identities.includes(question.author_id)) continue;
-            const parentAuthor = question.reply_to_author_id ||
-              question.reply_to?.author_id || question.reply_to?.author?.id ||
-              byId.get(question.reply_to_id)?.author_id;
-            const mentioned = extractMentions(question).mentions;
-            const targets = humans.filter((id) => mentioned.has(id) || id === parentAuthor);
-            if (!targets.length || !questionMatchers.some(
-              (pattern) => pattern.test(question.body || ""),
-            )) continue;
-            const questionAt = messageTimes(question).effectiveMs;
-            if (
-              !Number.isFinite(questionAt) || questionAt < since ||
-              questionAt > now ||
-              now - questionAt < (humanWait.after_min ?? 15) * 60000
-            ) continue;
+          const cleanBody = (body) => (body || "")
+            .replace(/```[\s\S]*?(?:```|$)/g, "")
+            .replace(/~~~[\s\S]*?(?:~~~|$)/g, "")
+            .replace(/^\s*>.*$/gm, "").replace(/`[^`]*`/g, "");
+          const questionMatchers = (humanWait.question_patterns ?? [
+            "[?？](?:\\s|$)", "될까요", "(?:골라\\s*주시면|고르시면)",
+            "(?:답변|응답|승인)을?\\s*기다리겠습니다",
+            "(?:시각|시간|선택|승인|결정).*(?:알려|말씀)\\s*주시면",
+          ]).map((pattern) => new RegExp(pattern, "u"));
+          const groups = [];
+          for (const post of [...messages].sort((a, b) => messageTimes(a).createdMs - messageTimes(b).createdMs)) {
+            if (!identities.includes(post.author_id)) continue;
+            const previous = groups.at(-1);
+            if (previous && previous.author_id === post.author_id && previous.channel === post.channel &&
+                (previous.parts.at(-1).body || "").length >= 1900 &&
+                messageTimes(post).createdMs - messageTimes(previous.parts.at(-1)).createdMs <= 120000 &&
+                // Split sends are contiguous: an intervening participant starts a new utterance.
+                !messages.some((m) => m.channel === post.channel && m.author_id !== post.author_id &&
+                  messageTimes(m).createdMs > messageTimes(previous.parts.at(-1)).createdMs &&
+                  messageTimes(m).createdMs < messageTimes(post).createdMs)) previous.parts.push(post);
+            else groups.push({ ...post, parts: [post] });
+          }
+          for (const question of groups) {
+            const body = question.parts.map((part) => cleanBody(part.body)).join("\n");
+            const parentAuthor = question.parts.map((part) => part.reply_to_author_id ||
+              part.reply_to?.author_id || part.reply_to?.author?.id ||
+              byId.get(part.reply_to_id)?.author_id).find(Boolean);
+            const mentioned = extractMentions({ body }).mentions;
+            const implicit = (roleConfig.direct_channels ?? []).includes(question.channel) ||
+              humans.includes(threadStarterAuthor.get(question.channel));
+            const targets = humans.filter((id) => mentioned.has(id) || id === parentAuthor ||
+              (implicit && (!threadStarterAuthor.get(question.channel) || threadStarterAuthor.get(question.channel) === id)));
+            if (!targets.length) continue;
+            if (/[?？][ \t]*(?:네|아니요)[,，]?[ \t]+[^\r\n]*(?:시작했|진행했|완료했)/u.test(body)) continue;
+            // Keep a standalone addressee attached to its following question.
+            // A blank line starts a new scope, so a human report cannot lend its
+            // recipient to a separate paragraph directed at another bot.
+            const isQuestion = body.split(/\n\s*\n/).some((block) => {
+              let scopedMentions = new Set();
+              return block.split(/\n+|(?<=[.!?？])\s+/).some((sentence) => {
+                const mentions = extractMentions({ body: sentence }).mentions;
+                if (mentions.size) scopedMentions = mentions;
+                if (!questionMatchers.some((pattern) => pattern.test(sentence))) return false;
+                if ([...scopedMentions].some((id) => otherRoleUserIds.includes(id)) &&
+                    !targets.some((id) => scopedMentions.has(id))) return false;
+                if (/(?:문제|이상|추가로? 필요).*(?:알려|말씀).*주시면.*(?:수정|반영)/u.test(sentence)) return false;
+                return true;
+              });
+            });
+            if (!isQuestion) continue;
+            const questionAt = messageTimes(question).createdMs;
+            if (!Number.isFinite(questionAt) || questionAt < since || questionAt > now ||
+                now - questionAt < (humanWait.after_min ?? 15) * 60000) continue;
             const questionChannel = question.channel || channel;
-            const continued = messages.some((post) =>
-              (post.channel || channel) === questionChannel &&
-              (targets.includes(post.author_id) || post.author_id === question.author_id) &&
-              messageTimes(post).effectiveMs > questionAt &&
-              messageTimes(post).effectiveMs <= now,
-            );
+            const ids = question.parts.map((part) => part.id);
+            const continued = messages.some((post) => targets.includes(post.author_id) &&
+              ((post.channel || channel) === questionChannel || ids.includes(post.reply_to_id) ||
+                ids.includes(post.channel) || question.parts.some((part) =>
+                  post.channel === part.thread_id || post.channel === part.thread?.id)) &&
+              messageTimes(post).createdMs > questionAt && messageTimes(post).createdMs <= now);
             const key = JSON.stringify([role, questionChannel, question.id]);
-            if (continued || state.human_wait_sent[key] !== undefined) continue;
+            const receipt = Buffer.from(key).toString("base64url") + ".json";
+            const wasSent = question.parts.some((part) => {
+              const partKey = JSON.stringify([role, questionChannel, part.id]);
+              const partReceipt = Buffer.from(partKey).toString("base64url") + ".json";
+              return state.human_wait_sent[partKey] !== undefined || receipts.has(partReceipt) ||
+                oldWakeFiles.some((name) => name.includes(`-ledger-human-wait-${safeIdPart(part.id)}-`) && name.endsWith(`-route-${role}.md`));
+            });
+            if (wasSent && !receipts.has(receipt)) {
+              await writeFile(path.join(receiptDir, receipt), JSON.stringify({ key, at: now }), { mode: 0o600 });
+              receipts.add(receipt);
+            }
+            if (continued || wasSent || receipts.has(receipt)) continue;
             const guild = question.guild_id || guildId || channelMessages.guildId || "@me";
             const url = question.url || messenger.messageUrl?.(questionChannel, question.id) ||
               `https://discord.com/channels/${guild}/${questionChannel}/${question.id}`;
-            const firstLine = (question.body || "").split(/\r?\n/)[0];
+            const firstLine = body.split(/\r?\n/).find((line) => line.trim()) || "(질문)";
             await wake(
               role, `human-wait-${safeIdPart(question.id)}`,
               "사람 답 기다림", firstLine,
               `채널: ${questionChannel}\n글: ${url}\n질문: ${firstLine}\n1) 이 일에 이미 받은 지시가 있는지 그 채널 앞 글을 다시 읽음\n2) 바깥 발송·운영 변경·돈이 아니고 되돌릴 수 있으면 지금 진행하고 그 채널에 알림\n3) 정말 사람 승인이 필요한 일이면 #업무-요청 에 [분류] 양식으로 옮김`,
             );
+            await writeFile(path.join(receiptDir, receipt), JSON.stringify({ key, at: now }), { mode: 0o600 });
+            receipts.add(receipt);
             state.human_wait_sent[key] = now;
           }
+          if (roleConfig.check_unrecorded_human === false || config.check_unrecorded_human === false) continue;
           for (const m of messages) {
             try {
               if (!isHumanOrRelay(m) || !addressed(m)) continue;
@@ -622,10 +703,15 @@ export async function watch({
           `공급자: ${config.provider?.type || "(미설정)"}\n오류: ${error.message || String(error)}`,
         );
       }
+      });
     }
+    for (const check of networkChecks) await check();
     // Keep only recent dedup entries; timers do not grow the state indefinitely.
     state.sent = Object.fromEntries(
       Object.entries(state.sent).filter(([, at]) => now - at < 24 * 60 * 60000),
+    );
+    state.human_wait_sent = Object.fromEntries(
+      Object.entries(state.human_wait_sent).filter(([, at]) => now - at < 48 * 60 * 60000),
     );
     state.mentions = Object.fromEntries(
       Object.entries(state.mentions).filter(([k]) => k in state.sent),

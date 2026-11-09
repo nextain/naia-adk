@@ -34,17 +34,18 @@ async function tick(root, messages, time = "01:19", config = conf()) {
   return watch({ root, config, adapter: fake(messages), now: instant(time), sleep: async () => {} });
 }
 
-test("incident: latest question wakes at 01:19 once, using existing role route", async (t) => {
+test("incident: each pending question wakes once, using existing role route", async (t) => {
   const root = await rootFor(t);
-  assert.equal((await tick(root, incident(), "01:18")).wakes.length, 0);
+  assert.equal((await tick(root, incident(), "01:18")).wakes.length, 1);
   const result = await tick(root, incident());
   assert.deepEqual(result.errors, []);
   assert.equal(result.wakes.length, 1);
   assert.equal(result.wakes[0].role, "radio");
   const files = await readdir(path.join(root, ".agents/work/l4/wake"));
-  assert.equal(files.length, 1);
-  assert.match(files[0], /-route-radio\.md$/);
-  const body = await readFile(path.join(root, ".agents/work/l4/wake", files[0]), "utf8");
+  assert.equal(files.length, 2);
+  const latest = files.find((file) => file.includes("question-latest"));
+  assert.match(latest, /-route-radio\.md$/);
+  const body = await readFile(path.join(root, ".agents/work/l4/wake", latest), "utf8");
   assert.match(body, /studio/);
   assert.match(body, /https:\/\/discord\.com\/channels\/example-guild\/studio\/question-latest/);
   assert.match(body, /지금 바로 시작해도 될까요/);
@@ -58,7 +59,7 @@ test("incident: latest question wakes at 01:19 once, using existing role route",
 
 for (const [name, posts] of [
   ["human response", [message("answer", "owner-a", "01:10", "진행하세요")]],
-  ["same agent followup", [message("followup", "bot-a", "01:10", "내부 시험을 시작했습니다.")]],
+
 ]) {
   test(`${name} cancels a pending question`, async (t) => {
     const root = await rootFor(t);
@@ -128,7 +129,7 @@ test("another channel's human or bot post does not cancel the question", async (
   const posts = [...incident(),
     message("elsewhere-owner", "owner-a", "01:10", "확인", { channel: "elsewhere" }),
     message("elsewhere-bot", "bot-a", "01:11", "확인", { channel: "elsewhere" })];
-  assert.equal((await tick(root, posts)).wakes.length, 1);
+  assert.equal((await tick(root, posts)).wakes.length, 2);
 });
 test("successful round resets consecutive channel rate limit failures", async (t) => {
   const root = await rootFor(t);
@@ -199,7 +200,7 @@ test("exhausted adapter retry exposes structured 429 without a third fetch", asy
   assert.deepEqual(sleeps, [250]);
 });
 
-for (const wording of ["시각을 알려 주시면 시작합니다.", "시각을 말씀 주시면 시작합니다.", "하나 골라 주시면 시작합니다.", "시작할 수 있나요?\n내부 시험입니다.", "기다리겠습니다."]) {
+for (const wording of ["시각을 알려 주시면 시작합니다.", "시각을 말씀 주시면 시작합니다.", "하나 골라 주시면 시작합니다.", "시작할 수 있나요?\n내부 시험입니다.", "승인을 기다리겠습니다."]) {
   test(`default pattern detects ${JSON.stringify(wording)} without final question mark`, async (t) => {
     const root = await rootFor(t);
     const posts = [message("pattern-question", "bot-a", "01:04", `<@owner-a> ${wording}`, { mentions: ["owner-a"] })];
@@ -209,7 +210,7 @@ for (const wording of ["시각을 알려 주시면 시작합니다.", "시각을
 test("JSON example question regexes compile and match whitespace", async () => {
   const example = JSON.parse(await readFile(new URL("../../config/work-ledger.example.json", import.meta.url), "utf8"));
   const matchers = example.human_wait.question_patterns.map((pattern) => new RegExp(pattern, "u"));
-  for (const body of ["알려 주시면", "말씀 주시면", "골라 주시면", "시작하나요?\n안내입니다."]) {
+  for (const body of ["시각을 알려 주시면 시작합니다.", "시간을 말씀 주시면 시작합니다.", "승인을 기다리겠습니다.", "하나 골라 주시면 시작합니다.", "시안 고르시면 시작합니다.", "시작하나요?\n안내입니다."]) {
     assert.ok(matchers.some((matcher) => matcher.test(body)), body);
   }
 });

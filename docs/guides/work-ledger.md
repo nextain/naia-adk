@@ -16,9 +16,12 @@ production changes or spending. A `대기` card must include its next wake time 
 `due_at` and describe what will be checked then.
 
 The [work-ledger watcher](../common/work-ledger.md) separately detects a bot
-asking a configured person and then stopping in the same channel. After the
+asking a configured person in a channel, thread or configured direct channel. After the
 configured wait (15 minutes by default), it wakes the mapped role once per
-question if neither that person nor that bot has posted again. The wake asks
+question while that person has not answered. The bot’s unrelated posts and replies
+to other bots do not close the question. Human replies in the same channel, a
+question thread or a reply reference close it; editing a question preserves
+its original ordering. Split messages retain their shared addressee. The wake asks
 the role to reread prior instructions, continue reversible authorized work, or
 move a true approval request to the instance's work-request channel using its
 `[분류]` form. This observation uses private IDs and does not send a reply.

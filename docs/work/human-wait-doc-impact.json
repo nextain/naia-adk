@@ -1,5 +1,5 @@
 {
-  "work": "human-wait-20261109",
+  "work": "humanwaitfix2",
   "repository_docs": {
     "status": "UPDATED",
     "files": [
@@ -11,9 +11,10 @@
   "user_manual": {
     "status": "UPDATED",
     "files": [
-      "docs/common/work-ledger.md"
+      "docs/common/work-ledger.md",
+      "config/work-ledger.example.json"
     ],
-    "detail": "Documents human-wait configuration, per-question deduplication, role routing, HTTP 429 retry and warning behavior."
+    "detail": "Documents flat route-role wake files and legacy-consumer incompatibility, optional unrecorded-human checks, split/thread/direct questions, human-only closure and bounded retries."
   },
   "reusable_learning": {
     "status": "UPDATED",
@@ -21,6 +22,6 @@
       "docs/common/work-ledger.md",
       "docs/guides/agent-messaging.md"
     ],
-    "detail": "Continue authorized reversible work, state a silence deadline and next action when asking a person, and require a next wake time on waiting cards."
+    "detail": "Unrelated bot activity never closes a human question; preserve original question ordering and independent deduplication when recovering corrupt state."
   }
 }

@@ -17,6 +17,10 @@ export function createAdapter(
       return `(body read failed: ${error.message})`;
     }
   }
+  let retryWaitMs = 0;
+  const activeGuilds = new Map();
+  const threadOwners = new Map();
+  const referencedAuthors = new Map();
   async function request(url, options) {
     for (let attempt = 0; ; attempt++) {
       const response = await fetchImpl(url, {
@@ -33,7 +37,8 @@ export function createAdapter(
         // Some proxies send plain text; use Retry-After when available.
       }
       if (!Number.isFinite(retryAfter) || retryAfter < 0) retryAfter = 1;
-      if (attempt === 0) {
+      if (attempt === 0 && retryAfter <= 5 && retryWaitMs + retryAfter * 1000 <= 30000) {
+        retryWaitMs += retryAfter * 1000;
         await sleep(retryAfter * 1000);
         continue;
       }
@@ -46,8 +51,11 @@ export function createAdapter(
   }
   const threadOffsets = new Map();
   const channelGuilds = new Map();
+  const directChannels = new Set();
   return {
+    beginRound() { activeGuilds.clear(); referencedAuthors.clear(); threadOwners.clear(); retryWaitMs = 0; },
     messageUrl(channel, messageId) {
+      if (directChannels.has(channel)) return `https://discord.com/channels/@me/${channel}/${messageId}`;
       const guild = provider.guild_id || provider.guildId || channelGuilds.get(channel);
       return guild
         ? `https://discord.com/channels/${guild}/${channel}/${messageId}`
@@ -116,7 +124,12 @@ export function createAdapter(
             m.thread?.thread_metadata?.archived !== true &&
             m.thread?.archived !== true
           )
-            threadIds.add(attachedThreadId);
+            {
+              threadIds.add(attachedThreadId);
+              if (guildId) channelGuilds.set(attachedThreadId, guildId);
+              if (m.thread?.owner_id) threadOwners.set(attachedThreadId, m.thread.owner_id);
+            }
+          referencedAuthors.set(`${channel}:${m.id}`, Promise.resolve(m.author.id));
           const createdMs = Date.parse(m.timestamp);
           if (createdMs < since) seenCreatedBeforeSince = true;
           const editedMs = m.edited_timestamp
@@ -127,6 +140,21 @@ export function createAdapter(
               ? editedMs
               : createdMs;
           if (effectiveMs >= since && !seenIds.has(m.id)) {
+            let replyAuthor = m.referenced_message?.author?.id || null;
+            const reference = m.message_reference;
+            if (!replyAuthor && reference?.message_id) {
+              const referenceChannel = reference.channel_id || channel;
+              const key = `${referenceChannel}:${reference.message_id}`;
+              if (!referencedAuthors.has(key)) referencedAuthors.set(key, (async () => {
+                const reply = await request(new URL(`https://discord.com/api/v10/channels/${encodeURIComponent(referenceChannel)}/messages/${encodeURIComponent(reference.message_id)}`), {
+                  headers: { Authorization: `Bot ${token}` },
+                });
+                if (!reply.ok) return null;
+                return (await reply.json())?.author?.id || null;
+              })());
+              try { replyAuthor = await referencedAuthors.get(key); }
+              catch { /* Deleted/inaccessible references retain explicit mentions and thread context. */ }
+            }
             seenIds.add(m.id);
             hasRecentOnPage = true;
             messages.push({
@@ -140,7 +168,7 @@ export function createAdapter(
               edited_timestamp: m.edited_timestamp || null,
               body: m.content || "",
               reply_to_id: m.message_reference?.message_id || null,
-              reply_to_author_id: m.referenced_message?.author?.id || null,
+              reply_to_author_id: replyAuthor,
               mentions: (m.mentions || []).map((mention) =>
                 typeof mention === "string" ? mention : mention.id,
               ),
@@ -149,6 +177,7 @@ export function createAdapter(
               ),
               mention_everyone: m.mention_everyone === true,
               thread_id: attachedThreadId,
+              thread: m.thread || null,
             });
           }
         }
@@ -192,6 +221,8 @@ export function createAdapter(
         )
           threadIds.add(tid);
       }
+      if (options.direct) directChannels.add(channel);
+      if (directChannels.has(channel)) return [];
       let targetGuild =
         options?.guildId ||
         provider.guild_id ||
@@ -211,6 +242,10 @@ export function createAdapter(
           });
           if (chResponse?.ok) {
             const chData = await chResponse.json();
+            if (chData?.type === 1 || chData?.type === 3) {
+              directChannels.add(channel);
+              return [];
+            }
             if (
               chData &&
               typeof chData === "object" &&
@@ -231,23 +266,24 @@ export function createAdapter(
       const url = new URL(
         `https://discord.com/api/v10/guilds/${encodeURIComponent(targetGuild)}/threads/active`,
       );
-      const response = await request(url, {
-        headers: { Authorization: `Bot ${token}` },
-        signal: AbortSignal.timeout(30000),
-      });
-      if (!response.ok) {
-        const body = await readErrorBody(response);
-        throw new Error(
-          `Discord guild ${targetGuild} active threads (channel ${channel}): HTTP ${response.status}; body: ${body}`,
-        );
+      // Cache the promise, including failures, for this watch round.
+      if (targetGuild !== channel) {
+        for (const tid of threadIds) channelGuilds.set(tid, targetGuild);
       }
-      const data = await response.json();
-      const list = Array.isArray(data?.threads)
-        ? data.threads
-        : Array.isArray(data)
-          ? data
-          : [];
+      if (!activeGuilds.has(targetGuild)) activeGuilds.set(targetGuild, (async () => {
+        const response = await request(url, {
+          headers: { Authorization: `Bot ${token}` },
+        });
+        if (!response.ok) {
+          const body = await readErrorBody(response);
+          throw new Error(`Discord guild ${targetGuild} active threads: HTTP ${response.status}; body: ${body}`);
+        }
+        const data = await response.json();
+        return Array.isArray(data?.threads) ? data.threads : Array.isArray(data) ? data : [];
+      })());
+      const list = await activeGuilds.get(targetGuild);
       for (const item of list) {
+        if (item?.id && item.owner_id) threadOwners.set(item.id, item.owner_id);
         if (typeof item === "string") threadIds.add(item);
         else if (item && typeof item === "object") {
           if (
@@ -268,6 +304,7 @@ export function createAdapter(
       }
       threadIds.delete(channel);
       const result = [...threadIds];
+      Object.defineProperty(result, "threadOwners", { value: new Map(threadOwners) });
       if (targetGuild !== channel) {
         for (const threadId of result) channelGuilds.set(threadId, targetGuild);
       }
