@@ -156,134 +156,86 @@ function bareSourceId(v) {
 	return normSourceId(v).replace(/^[(\[（]+|[)\]）]+$/g, "").trim();
 }
 
-/**
- * 근거 정본(sourceDocs) 검사.
- * - sourceDocs 가 없으면 옛 계획서 호환으로 통과하되 한 줄 경고를 돌려준다.
- * - sourceDocs 가 있으면:
- *   (a) 정본 파일 sha256 이 현재 디스크 파일과 일치해야 함
- *   (b) sourceDocs[].steps 의 모든 id 가 어느 scenario[].covers 에 있거나
- *       계획서 excludedSourceSteps:[{id, reason}] 에 이유와 함께 있어야 통과.
- *       빠지면 "정본 단계 누락: <id> <text>" 를 problems 에 넣는다.
- *   (c) sourceDocs[].acceptance 형식을 함께 점검한다.
- */
+// Validate lexical and real boundaries before any source document read.
+function sourceFile(base, name) {
+ if (typeof name !== "string" || !name.trim()) throw new Error("정본 경로 없음");
+ const root = fs.realpathSync(base);
+ const abs = path.resolve(base, name);
+ const inside = (p) => { const rel = path.relative(root, p); return rel && !rel.startsWith(".." + path.sep) && rel !== ".." && !path.isAbsolute(rel); };
+ if (!inside(abs)) throw new Error("저장소 밖 정본 경로: " + name);
+ const real = fs.realpathSync(abs);
+ if (!inside(real) || !fs.statSync(real).isFile()) throw new Error("저장소 밖 정본 또는 파일 아님: " + name);
+ return real;
+}
+
 function sourceDocsCheck(plan, root) {
-	const base = root ? path.resolve(root) : ROOT;
-	const problems = [];
-	const warnings = [];
-	if (!plan || typeof plan !== "object") {
-		return { ok: false, problems: ["계획서를 JSON 으로 읽지 못함"], warnings };
-	}
-
-	const coveredIds = new Set();
-	for (const [i, s] of (Array.isArray(plan.scenario) ? plan.scenario : []).entries()) {
-		if (!s || typeof s !== "object" || s.covers === undefined) continue;
-		if (!Array.isArray(s.covers)) {
-			problems.push(`scenario[${i}].covers 는 정본 단계 id 배열이어야 함`);
-			continue;
-		}
-		for (const cid of s.covers) {
-			const nid = normSourceId(cid);
-			if (!nid) {
-				problems.push(`scenario[${i}].covers 에 빈 단계 id 가 있음`);
-				continue;
-			}
-			coveredIds.add(nid);
-			coveredIds.add(bareSourceId(nid));
-		}
-	}
-
-	const excludedIds = new Set();
-	if (plan.excludedSourceSteps !== undefined) {
-		if (!Array.isArray(plan.excludedSourceSteps)) {
-			problems.push("excludedSourceSteps 는 [{id, reason}] 배열이어야 함");
-		} else {
-			for (const [i, ex] of plan.excludedSourceSteps.entries()) {
-				const eid = normSourceId(ex?.id);
-				const hasReason = Boolean(ex && typeof ex === "object" && str(ex.reason, 1));
-				if (!eid) problems.push(`excludedSourceSteps[${i}].id 없음`);
-				if (!hasReason) problems.push(`excludedSourceSteps[${i}].reason(제외 이유) 없음${eid ? `: ${eid}` : ""}`);
-				if (eid && hasReason) {
-					excludedIds.add(eid);
-					excludedIds.add(bareSourceId(eid));
-				}
-			}
-		}
-	}
-
-	if (plan.sourceDocs === undefined || plan.sourceDocs === null) {
-		warnings.push("경고: sourceDocs(근거 정본)가 없습니다 — 옛 계획서 호환으로 통과합니다.");
-		return { ok: problems.length === 0, problems, warnings };
-	}
-
-	if (!Array.isArray(plan.sourceDocs) || plan.sourceDocs.length === 0) {
-		problems.push("sourceDocs 는 비어 있지 않은 배열이어야 함");
-		return { ok: false, problems, warnings };
-	}
-
-	for (const [docIdx, doc] of plan.sourceDocs.entries()) {
-		const dTag = `sourceDocs[${docIdx}]`;
-		if (!doc || typeof doc !== "object") {
-			problems.push(`${dTag} 모양이 틀림`);
-			continue;
-		}
-		const docPath = typeof doc.path === "string" ? doc.path.trim() : "";
-		if (!docPath) {
-			problems.push(`${dTag}.path(정본 파일 경로) 없음`);
-		}
-		const wantSha = typeof doc.sha256 === "string" ? doc.sha256.trim().toLowerCase() : "";
-		if (!/^[a-f0-9]{64}$/.test(wantSha)) {
-			problems.push(`${dTag}.sha256(64자리 hex) 없음 또는 형식 오류${docPath ? `: ${docPath}` : ""}`);
-		}
-		if (docPath) {
-			const abs = path.isAbsolute(docPath) ? docPath : path.join(base, docPath);
-			let actualSha = null;
-			try {
-				if (fs.statSync(abs).isFile()) {
-					actualSha = sha256(fs.readFileSync(abs));
-				}
-			} catch {}
-			if (!actualSha) {
-				problems.push(`정본 파일을 읽지 못함: ${docPath}`);
-			} else if (/^[a-f0-9]{64}$/.test(wantSha) && actualSha !== wantSha) {
-				problems.push(`정본 파일 sha256 불일치: ${docPath} (계획서 ${wantSha.slice(0, 12)}, 현재 ${actualSha.slice(0, 12)})`);
-			}
-		}
-
-		if (!Array.isArray(doc.steps) || doc.steps.length === 0) {
-			problems.push(`${dTag}.steps(정본 단계 목록) 없음`);
-		} else {
-			for (const [stepIdx, st] of doc.steps.entries()) {
-				const sid = normSourceId(st?.id);
-				const stext = typeof st?.text === "string" ? st.text.trim() : "";
-				if (!sid || !stext) {
-					problems.push(`${dTag}.steps[${stepIdx}] 에 id 와 text 가 필요함`);
-					continue;
-				}
-				const bare = bareSourceId(sid);
-				const prefixed = docPath ? `${docPath}#${sid}` : sid;
-				const barePrefixed = docPath ? `${docPath}#${bare}` : bare;
-				const isCovered = coveredIds.has(sid) || coveredIds.has(bare) || coveredIds.has(prefixed) || coveredIds.has(barePrefixed);
-				const isExcluded = excludedIds.has(sid) || excludedIds.has(bare) || excludedIds.has(prefixed) || excludedIds.has(barePrefixed);
-				if (!isCovered && !isExcluded) {
-					problems.push(`정본 단계 누락: ${st.id} ${stext}`);
-				}
-			}
-		}
-
-		if (doc.acceptance !== undefined) {
-			if (!Array.isArray(doc.acceptance)) {
-				problems.push(`${dTag}.acceptance 는 [{id, text}] 배열이어야 함`);
-			} else {
-				for (const [accIdx, acc] of doc.acceptance.entries()) {
-					const aid = normSourceId(acc?.id);
-					const atext = typeof acc?.text === "string" ? acc.text.trim() : "";
-					if (!aid || !atext) problems.push(`${dTag}.acceptance[${accIdx}] 에 id 와 text 가 필요함`);
-				}
-			}
-		}
-	}
-
-	return { ok: problems.length === 0, problems, warnings };
+ const base = root ? path.resolve(root) : ROOT;
+ const problems = [], warnings = [];
+ if (!plan || typeof plan !== "object" || Array.isArray(plan)) return {ok:false, problems:["계획서를 JSON 으로 읽지 못함"], warnings};
+ // A document reference anywhere in the plan requires declared source coverage.
+ const references = new Set();
+ function scan(v, prosePath = false) {
+  if (typeof v === "string") {
+   for (const m of v.matchAll(/(?:\.\.?\/|\/)?(?:[\p{L}\p{N}_.-]+\/)*[\p{L}\p{N}_.-]+\.(?:md|markdown|txt|rst|adoc|ya?ml|json|pdf|docx?|hwpx?)\b/giu)) references.add(m[0]);
+   if (prosePath || /정본|source\s*(?:doc|document)/i.test(v)) for (const m of v.matchAll(/(?:\.\.?\/|\/)?(?:[\p{L}\p{N}_.-]+\/)+[\p{L}\p{N}_.-]+/gu)) references.add(m[0]);
+  } else if (Array.isArray(v)) v.forEach(x=>scan(x,prosePath));
+  else if (v && typeof v === "object") for (const [k,x] of Object.entries(v)) if (!['sourceDocs','files','commands'].includes(k)) scan(x,prosePath || ['body','rationale','steps'].includes(k));
+ }
+ scan(plan);
+ if (plan.sourceDocs === undefined || plan.sourceDocs === null) {
+  if (plan.sourcePolicy === "required" || references.size || plan.sourceDocs === null || plan.scenario?.some(s=>s.covers !== undefined) || plan.excludedSourceSteps !== undefined) problems.push("정본 경로 참조 계획서는 sourceDocs 필수: " + [...references].join(', '));
+  else warnings.push("경고: sourceDocs(근거 정본)가 없습니다 — 정본 참조 없는 옛 계획서 호환으로 통과합니다.");
+  return {ok:!problems.length, problems, warnings};
+ }
+ if (!Array.isArray(plan.sourceDocs) || !plan.sourceDocs.length) return {ok:false,problems:["sourceDocs 는 비어 있지 않은 배열이어야 함"],warnings};
+ for (const ref of references) if (!plan.sourceDocs.some(d => d?.path === ref)) problems.push("참조 정본 sourceDocs 누락: " + ref);
+ const multi=plan.sourceDocs.length>1, known=new Set(), docPaths=new Set();
+ for (const [i,doc] of plan.sourceDocs.entries()) {
+  const tag=`sourceDocs[${i}]`;
+  if (!doc || typeof doc!=='object') {problems.push(tag+" 모양이 틀림");continue;}
+  let markdown;
+  try {
+   const abs=sourceFile(base,doc.path), canonical=path.relative(fs.realpathSync(base),abs).split(path.sep).join('/');
+   if(docPaths.has(canonical)) problems.push("중복 정본 경로: "+doc.path);
+   docPaths.add(canonical);
+   if(doc.path!==canonical) problems.push("정본 경로는 정규 상대 경로 필수: "+doc.path);
+   const buf=fs.readFileSync(abs);markdown=buf.toString('utf8');
+   if(typeof doc.sha256!=='string' || sha256(buf)!==doc.sha256.trim().toLowerCase()) problems.push("정본 파일 sha256 불일치: "+doc.path);
+  } catch(e) {problems.push(e.message);}
+  if(!str(doc.section,1) || !str(doc.acceptanceSection,1) || doc.section===doc.acceptanceSection) problems.push(tag+" section 및 별도 acceptanceSection 필수");
+  for(const kind of ['steps','acceptance']) {
+   const entries=doc[kind];
+   if(!Array.isArray(entries) || !entries.length) {problems.push(tag+'.'+kind+' 정본 목록 필수');continue;}
+   const ids=new Set();
+   for(const entry of entries) {
+    const id=normSourceId(entry?.id);
+    if(!id || !str(entry?.text,1) || ids.has(id)) problems.push(tag+'.'+kind+' 빈 값 또는 중복 id: '+id);
+    ids.add(id);
+    if(kind==='steps') known.add(multi?`${doc.path}#${id}`:id);
+   }
+   if(markdown && doc.section && doc.acceptanceSection) try {
+    const extracted=extractSourceSteps(markdown,kind==='steps'?doc.section:doc.acceptanceSection);
+    if(JSON.stringify(entries)!==JSON.stringify(extracted)) problems.push(tag+'.'+kind+' 정본 원문 추출 목록 불일치');
+   } catch(e) {problems.push(e.message);}
+  }
+  if(markdown && doc.section && doc.acceptanceSection) try {
+   const all=extractSourceSteps(markdown, undefined, true), selected=[...extractSourceSteps(markdown,doc.section,true),...extractSourceSteps(markdown,doc.acceptanceSection,true)];
+   const signature=x=>x.line;
+   if(JSON.stringify(all.map(signature).sort())!==JSON.stringify(selected.map(signature).sort())) problems.push(tag+' 지정 절 밖 정본 단계 누락 또는 중복');
+  } catch(e) {problems.push(e.message);}
+ }
+ const covered=new Set(),excluded=new Set();
+ const canonicalRef=id=>{const value=normSourceId(id);if(!multi && value.includes('#')) {const parts=value.split('#');if(parts.length===2 && parts[0]===plan.sourceDocs[0]?.path && parts[1])return parts[1];}return value;};
+ for(const step of Array.isArray(plan.scenario)?plan.scenario:[]) {
+  if(step?.covers===undefined)continue;
+  if(!Array.isArray(step.covers)){problems.push('covers 는 배열 필수');continue;}
+  if(step.covers.length && (step.branch === 'rollback' || (plan.rollback?.step_ids || []).includes(step.id))) {problems.push('되돌리기 단계는 정본 실행 covers로 인정하지 않음');continue;}
+  for(const raw of step.covers){const id=canonicalRef(raw);if(!known.has(id)||covered.has(id))problems.push('모르는 또는 중복 covers id: '+id);covered.add(id);}
+ }
+ if(plan.excludedSourceSteps!==undefined&&!Array.isArray(plan.excludedSourceSteps))problems.push('excludedSourceSteps 는 배열 필수');
+ for(const ex of Array.isArray(plan.excludedSourceSteps)?plan.excludedSourceSteps:[]){const id=canonicalRef(ex?.id);if(!known.has(id)||excluded.has(id)||covered.has(id)||!str(ex?.reason,1))problems.push('모르는/중복/동시 covers 또는 이유 없는 제외 id: '+id);if(str(ex?.reason,1))excluded.add(id);}
+ for(const doc of plan.sourceDocs)for(const st of Array.isArray(doc?.steps)?doc.steps:[]){const id=multi?`${doc.path}#${st.id}`:normSourceId(st.id);if(!covered.has(id)&&!excluded.has(id))problems.push(`정본 단계 누락: ${st.id} ${st.text}`);}
+ return {ok:!problems.length,problems,warnings};
 }
 
 function sourceDocsProblems(plan, root) {
@@ -293,10 +245,11 @@ function sourceDocsProblems(plan, root) {
 /**
  * 마크다운 정본 문서에서 지정 절(--section <제목>)의 (1) · 1. · - [ ] 꼴 단계 목록을 추출한다.
  */
-function extractSourceSteps(markdown, sectionTitle) {
+function extractSourceSteps(markdown, sectionTitle, locations = false) {
 	const text = String(markdown ?? "");
 	const lines = text.split(/\r?\n/);
 	let sliceLines = lines;
+ let startOffset = 0;
 
 	if (sectionTitle !== undefined && sectionTitle !== null && String(sectionTitle).trim() !== "") {
 		const target = String(sectionTitle).trim().replace(/^#+\s*/, "").trim().toLowerCase();
@@ -312,12 +265,13 @@ function extractSourceSteps(markdown, sectionTitle) {
 			const level = m[1].length;
 			const rawHeading = m[2].replace(/[*`~]/g, "").trim().toLowerCase();
 			if (startIdx < 0) {
-				if (rawHeading === target || rawHeading.includes(target)) {
+				if (rawHeading === target) {
 					startIdx = i + 1;
 					startLevel = level;
 				}
 			} else if (level <= startLevel) {
 				sliceLines = lines.slice(startIdx, i);
+    startOffset = startIdx;
 				startIdx = -2;
 				break;
 			}
@@ -327,12 +281,13 @@ function extractSourceSteps(markdown, sectionTitle) {
 		}
 		if (startIdx >= 0) {
 			sliceLines = lines.slice(startIdx);
+   startOffset = startIdx;
 		}
 	}
 
 	const steps = [];
 	let inFence = false;
-	for (const line of sliceLines) {
+	for (const [lineOffset, line] of sliceLines.entries()) {
 		if (/^\s*```/.test(line)) { inFence = !inFence; continue; }
 		if (inFence) continue;
 		// 1) - [ ] 또는 - [x] 체크박스 형태
@@ -342,24 +297,24 @@ function extractSourceSteps(markdown, sectionTitle) {
 			const mInnerParen = inner.match(/^[(\uff08]([A-Za-z0-9_-]+)[)\uff09]\s+(.+?)\s*$/);
 			const mInnerNum = !mInnerParen && inner.match(/^(\d+)[.)]\s+(.+?)\s*$/);
 			if (mInnerParen) {
-				steps.push({ id: String(mInnerParen[1]), text: mInnerParen[2].trim() });
+				steps.push({ ...(locations ? {line: startOffset + lineOffset} : {}), id: String(mInnerParen[1]), text: mInnerParen[2].trim() });
 			} else if (mInnerNum) {
-				steps.push({ id: String(mInnerNum[1]), text: mInnerNum[2].trim() });
+				steps.push({ ...(locations ? {line: startOffset + lineOffset} : {}), id: String(mInnerNum[1]), text: mInnerNum[2].trim() });
 			} else {
-				steps.push({ id: String(steps.length + 1), text: inner });
+				steps.push({ ...(locations ? {line: startOffset + lineOffset} : {}), id: String(steps.length + 1), text: inner });
 			}
 			continue;
 		}
 		// 2) (1) 또는 - (1) 형태
 		const mParen = line.match(/^\s*(?:[-*+]\s+)?[(\uff08]([A-Za-z0-9_-]+)[)\uff09]\s+(.+?)\s*$/);
 		if (mParen) {
-			steps.push({ id: String(mParen[1]), text: mParen[2].trim() });
+			steps.push({ ...(locations ? {line: startOffset + lineOffset} : {}), id: String(mParen[1]), text: mParen[2].trim() });
 			continue;
 		}
 		// 3) 1. 또는 1) 형태
 		const mNum = line.match(/^\s*(\d+)[.)]\s+(.+?)\s*$/);
 		if (mNum) {
-			steps.push({ id: String(mNum[1]), text: mNum[2].trim() });
+			steps.push({ ...(locations ? {line: startOffset + lineOffset} : {}), id: String(mNum[1]), text: mNum[2].trim() });
 			continue;
 		}
 	}
@@ -371,7 +326,7 @@ function extractSourceSteps(markdown, sectionTitle) {
  */
 function buildSourceDocDraft(docFile, { section, acceptanceSection, root } = {}) {
 	const base = root ? path.resolve(root) : ROOT;
-	const abs = path.isAbsolute(docFile) ? docFile : path.resolve(base, docFile);
+	const abs = sourceFile(base, docFile);
 	if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
 		throw new Error(`정본 문서를 읽지 못함: ${docFile}`);
 	}
@@ -383,6 +338,8 @@ function buildSourceDocDraft(docFile, { section, acceptanceSection, root } = {})
 	const steps = extractSourceSteps(markdown, section);
 	const draft = {
 		path: relPath,
+		section,
+		acceptanceSection,
 		sha256: sha256(buf),
 		steps,
 	};
@@ -392,12 +349,17 @@ function buildSourceDocDraft(docFile, { section, acceptanceSection, root } = {})
 	return draft;
 }
 
+// 모든 완료 보고 형식에서 공유하는 빈말 목록. 관측의 진실성을 증명하는 검사는 아니다.
+const MEASUREMENT_PLACEHOLDERS = /^(?:[-–—.?]+|n\/?a|none|null|undefined|tbd|todo|pending|미정|없음|해당\s*없음|확인\s*(?:함|완료|됨|했습니다|하였습니다)?|완료|통과|성공|ok|pass|checked|done)$/i;
+function hasMeasuredValue(value) {
+ return typeof value === "string" && value.trim().length > 0 && !MEASUREMENT_PLACEHOLDERS.test(value.trim().replace(/^[\s.!?。！？]+|[\s.!?。！？]+$/g, "").replace(/\s+/g, ""));
+}
 /**
  * 완료 보고(또는 영수증) 검사:
  * sourceDocs[].acceptance 항목마다 완료 보고에 실측(실측 / actual / observed / measured / evidence / result / value) 칸이
  * 비어 있지 않게 채워져 있어야 완료로 인정한다.
  */
-function verifyCompletionReport(planInput, completionInput, { root, gatesDir } = {}) {
+function verifyCompletionReport(planInput, completionInput, { root, gatesDir, expectedPlanSha } = {}) {
 	const base = root ? path.resolve(root) : ROOT;
 	const plan = typeof planInput === "string" ? readJson(path.resolve(base, planInput)) : planInput;
 	if (!plan || typeof plan !== "object") {
@@ -411,11 +373,11 @@ function verifyCompletionReport(planInput, completionInput, { root, gatesDir } =
 		for (const acc of Array.isArray(doc?.acceptance) ? doc.acceptance : []) {
 			const aid = normSourceId(acc?.id);
 			const atext = typeof acc?.text === "string" ? acc.text.trim() : "";
-			if (aid) requiredAcceptance.push({ id: aid, bareId: bareSourceId(aid), rawId: acc.id, text: atext, docPath: doc.path });
+			if (aid) requiredAcceptance.push({ id: plan.sourceDocs.length > 1 ? `${doc.path}#${aid}` : aid, bareId: bareSourceId(aid), rawId: acc.id, text: atext, docPath: doc.path });
 		}
 	}
 
-	if (requiredAcceptance.length === 0) {
+	if (requiredAcceptance.length === 0 && completionInput === undefined && !expectedPlanSha) {
 		return { ok: problems.length === 0, problems };
 	}
 
@@ -442,15 +404,35 @@ function verifyCompletionReport(planInput, completionInput, { root, gatesDir } =
 		}
 	}
 
-	if (!report) {
+	if (expectedPlanSha && (!report || typeof report !== "object" || Array.isArray(report) || report.plan_sha256 !== expectedPlanSha)) {
+  problems.push("완료 보고 plan_sha256 이 현재 계획서 SHA-256 과 다름");
+ }
+ if (!report || typeof report !== "object") {
+  problems.push("완료 보고는 JSON 객체 또는 배열이어야 함");
+  return { ok: false, problems };
+ }
+ if (!report) {
 		for (const acc of requiredAcceptance) {
 			problems.push(`정본 인수 확인(acceptance) 실측 누락: ${acc.rawId} ${acc.text}`);
 		}
 		return { ok: false, problems };
 	}
 
+ // Reject ambiguous or malformed rows before selecting a matching acceptance result.
+ const rows = Array.isArray(report) ? report : report && typeof report === "object" ? (report.acceptance ?? report.measurements ?? report.실측 ?? report.results ?? report.items) : null;
+ if (Array.isArray(rows)) {
+  const ids = new Set();
+  for (const row of rows) {
+   const id = typeof row?.id === "string" ? row.id.trim() : "";
+   if (!row || typeof row !== "object" || Array.isArray(row) || !id || ids.has(id) || !requiredAcceptance.some(acc => acc.id === id)) problems.push("완료 보고 항목 모양이 틀리거나 중복/모르는 id: " + id);
+   ids.add(id);
+  }
+ } else if (rows !== null && rows !== undefined && (typeof rows !== "object" || Array.isArray(rows))) {
+  problems.push("완료 보고 실측 목록은 배열 또는 ID별 객체여야 함");
+ }
+
 	const extractMeasuredFromEntry = (entry) => {
-		if (typeof entry === "string") return { measured: entry.trim(), failedVerdict: false };
+		if (typeof entry === "string") return { measured: hasMeasuredValue(entry) ? entry.trim() : "", failedVerdict: false };
 		if (!entry || typeof entry !== "object") return { measured: "", failedVerdict: false };
 		const verdict = entry.verdict ?? entry.status ?? entry.ok;
 		const failedVerdict =
@@ -468,7 +450,7 @@ function verifyCompletionReport(planInput, completionInput, { root, gatesDir } =
 			entry.result ??
 			entry.value ??
 			"";
-		return { measured: typeof val === "string" ? val.trim() : String(val ?? "").trim(), failedVerdict };
+		return { measured: hasMeasuredValue(val) ? val.trim() : "", failedVerdict };
 	};
 
 	if (typeof report === "object" && !Array.isArray(report)) {
@@ -484,12 +466,12 @@ function verifyCompletionReport(planInput, completionInput, { root, gatesDir } =
 			if (Array.isArray(container)) {
 				foundEntry = container.find((item) => {
 					const iid = normSourceId(item?.id);
-					return iid === acc.id || (iid && bareSourceId(iid) === acc.bareId);
+					return iid === acc.id;
 				});
 			} else if (container && typeof container === "object") {
-				foundEntry = container[acc.rawId] ?? container[acc.id] ?? container[acc.bareId] ?? null;
-			} else if (report[acc.rawId] !== undefined || report[acc.id] !== undefined) {
-				foundEntry = report[acc.rawId] ?? report[acc.id];
+				foundEntry = container[acc.id] ?? (plan.sourceDocs.length === 1 ? container[acc.rawId] ?? container[acc.bareId] : null);
+			} else if (report[acc.id] !== undefined || (plan.sourceDocs.length === 1 && report[acc.rawId] !== undefined)) {
+				foundEntry = report[acc.id] ?? report[acc.rawId];
 			}
 			const { measured, failedVerdict } = extractMeasuredFromEntry(foundEntry);
 			if (!foundEntry || !measured || failedVerdict) {
@@ -500,19 +482,10 @@ function verifyCompletionReport(planInput, completionInput, { root, gatesDir } =
 		for (const acc of requiredAcceptance) {
 			const foundEntry = report.find((item) => {
 				const iid = normSourceId(item?.id);
-				return iid === acc.id || (iid && bareSourceId(iid) === acc.bareId);
+				return iid === acc.id;
 			});
 			const { measured, failedVerdict } = extractMeasuredFromEntry(foundEntry);
 			if (!foundEntry || !measured || failedVerdict) {
-				problems.push(`정본 인수 확인(acceptance) 실측 누락: ${acc.rawId} ${acc.text}`);
-			}
-		}
-	} else if (typeof report === "string") {
-		const lines = report.split(/\r?\n/);
-		for (const acc of requiredAcceptance) {
-			const matchingLine = lines.find((l) => l.includes(String(acc.rawId)) || (acc.text && l.includes(acc.text)));
-			const m = matchingLine && matchingLine.match(/(?:실측|actual|observed|measured)\s*[:：=]\s*(\S.+)/i);
-			if (!m || !m[1].trim()) {
 				problems.push(`정본 인수 확인(acceptance) 실측 누락: ${acc.rawId} ${acc.text}`);
 			}
 		}
@@ -1159,6 +1132,18 @@ function renderReport(plan, sha, review) {
  * 돌려줌: { allow:boolean, reason?:string, audit:object }
  */
 async function evaluate(ctx) {
+ const scoped = { ...ctx };
+ const result = await evaluateInternal(scoped);
+ const warnings = scoped.sourceWarnings || [];
+ if (warnings.length) {
+  result.warnings = warnings;
+  result.audit = { ...result.audit, warnings };
+  const field = result.allow ? "notice" : "reason";
+  result[field] = [result[field], ...warnings].filter(Boolean).join("\n");
+ }
+ return result;
+}
+async function evaluateInternal(ctx) {
 	const env = ctx.env || process.env;
 	const now = ctx.now || Date.now();
 	if (!(ctx.services || []).length) return { allow: false, audit: { event: "blocked-unclassified" }, reason: "[Harness] 운영 서비스 집합이 비어 있어 거부합니다." };
@@ -1190,6 +1175,7 @@ async function evaluate(ctx) {
 		return { allow: false, audit: { event: "blocked-plan-form", plan: rel, problems: form.slice(0, 20) }, reason: ["[Harness] 승인 보고 양식에 빈 칸이 있어 승인 요청을 낼 수 없습니다.", `계획서: ${rel}`, ...form.map((x) => `- ${x}`), "", "양식: docs/guides/approval-plan-gate.md (node .agents/scripts/approval-plan.mjs template)"].join("\n") };
 	}
 	const src = sourceDocsCheck(f.plan, ctx.root);
+ ctx.sourceWarnings = src.warnings;
 	if (!src.ok) {
 		return { allow: false, audit: { event: "blocked-plan-source-docs", plan: rel, problems: src.problems.slice(0, 20) }, reason: ["[Harness] 계획서가 근거 정본(sourceDocs)과 맞지 않아 승인 코드를 내주지 않습니다.", `계획서: ${rel}`, ...src.problems.map((x) => `- ${x}`), "", "근거 정본의 모든 단계를 scenario[].covers 에 넣거나 excludedSourceSteps 에 이유와 함께 적으십시오."].join("\n") };
 	}

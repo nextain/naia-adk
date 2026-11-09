@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isGatewayOwned } from './lib/owner-reminder-policy.mjs';
 import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -13,6 +14,7 @@ const compare = (a, b) => BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1
 const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const names = role => [role.id, ...(role.aliases ?? [])];
 export function validateConfig(c) {
+  if (typeof c.ownerRoutingStateFile !== 'string' || !c.ownerRoutingStateFile.startsWith('/')) throw Error('absolute ownerRoutingStateFile required');
   if (!object(c) || typeof c.stateFile !== 'string' || !c.stateFile || !Array.isArray(c.roles) || c.roles.length < 2 || !Array.isArray(c.guilds) || !c.guilds.length) throw Error('stateFile, roles and guilds required');
   const ids = new Set(), bots = new Set(), aliases = new Set(), guilds = new Set(), dirs = new Set();
   for (const r of c.roles) {
@@ -71,6 +73,7 @@ const defaults = {
 
 export async function runWatch(config, { token, fetchImpl = fetch, dry = false, now = Date.now(), healthProbe, log = e => console.log(JSON.stringify(e)) } = {}) {
   validateConfig(config);
+  isGatewayOwned(config, ''); // Validate the required shared ledger before any network side effect.
   if (!token) throw Error('configured token unavailable');
   const trace = randomUUID(), started = Date.now();
   const emit = (stage, result, extra = {}) => log({ trace, stage, result, ...extra });
@@ -182,6 +185,7 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
         state.channels[key] = next; delete state.errors[key]; await save();
         for (const request of Object.values(next.pending)) {
           if (request.closedAt !== undefined) continue;
+          if (isGatewayOwned(config, request.messageId)) continue;
           const target = config.roles.find(r => r.botId === request.to), source = config.roles.find(r => r.botId === request.from);
           if (!target || !source || !object(request.stages)) throw Error('request role/state mismatch');
           const due = request.receiptId ? request.deadline : request.at + (config.thresholds?.nudgeMinutes ?? 10) * 60000;

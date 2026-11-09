@@ -257,7 +257,7 @@ test("① 이번 사고 재현 — 정본 6단계, 계획서가 1~5만 covers �
 	const { docRel, docSha, steps, acceptance } = createW004SourceDoc(root);
 
 	const { planFile, step1Cmd } = createPlanWithSourceDocs(root, {
-		sourceDocs: [{ path: docRel, sha256: docSha, steps, acceptance }],
+		sourceDocs: [{ path: docRel, section: "운영 반영 단계", acceptanceSection: "사후 확인", sha256: docSha, steps, acceptance }],
 	});
 	// scenario[0].covers 를 1~5로만 수정 (6단계 "시험 키 설정 주입" 누락)
 	const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
@@ -293,7 +293,7 @@ test("② 6까지 covers → 통과 (check·preapprove·관문 실행 통과)", 
 	const { docRel, docSha, steps, acceptance } = createW004SourceDoc(root);
 
 	const { planFile, step1Cmd } = createPlanWithSourceDocs(root, {
-		sourceDocs: [{ path: docRel, sha256: docSha, steps, acceptance }],
+		sourceDocs: [{ path: docRel, section: "운영 반영 단계", acceptanceSection: "사후 확인", sha256: docSha, steps, acceptance }],
 	});
 	writePassingReviewReceipt(root, planFile);
 
@@ -320,7 +320,7 @@ test("③ 6을 excludedSourceSteps 이유와 함께 → 통과 (이유가 비면
 	const { docRel, docSha, steps, acceptance } = createW004SourceDoc(root);
 
 	const { planFile, step1Cmd } = createPlanWithSourceDocs(root, {
-		sourceDocs: [{ path: docRel, sha256: docSha, steps, acceptance }],
+		sourceDocs: [{ path: docRel, section: "운영 반영 단계", acceptanceSection: "사후 확인", sha256: docSha, steps, acceptance }],
 		excludedSourceSteps: [
 			{ id: "6", reason: "시험 키 설정은 이미 전날 운영 환경변수에 주입됨" },
 		],
@@ -359,7 +359,7 @@ test("④ 정본 파일이 바뀌어 sha 다름 → 막힘", async (t) => {
 	const { docRel, docAbs, docSha, steps, acceptance } = createW004SourceDoc(root);
 
 	const { planFile, step1Cmd } = createPlanWithSourceDocs(root, {
-		sourceDocs: [{ path: docRel, sha256: docSha, steps, acceptance }],
+		sourceDocs: [{ path: docRel, section: "운영 반영 단계", acceptanceSection: "사후 확인", sha256: docSha, steps, acceptance }],
 	});
 	writePassingReviewReceipt(root, planFile);
 
@@ -390,7 +390,7 @@ test("⑤ acceptance 실측 없이 완료 보고 → 완료 불인정 (실측 �
 	const { docRel, docSha, steps, acceptance } = createW004SourceDoc(root);
 
 	const { planFile, gatesDir, plan } = createPlanWithSourceDocs(root, {
-		sourceDocs: [{ path: docRel, sha256: docSha, steps, acceptance }],
+		sourceDocs: [{ path: docRel, section: "운영 반영 단계", acceptanceSection: "사후 확인", sha256: docSha, steps, acceptance }],
 	});
 	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
 	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
@@ -398,6 +398,7 @@ test("⑤ acceptance 실측 없이 완료 보고 → 완료 불인정 (실측 �
 	// 1) 사고 재현: 1단계 화면 200 OK 만 적고 정본 acceptance(결제 3단계 화면 시험 결제창) 실측이 없는 완료 보고
 	const badReportFile = path.join(gatesDir, "deploy-completion-bad.json");
 	fs.writeFileSync(badReportFile, JSON.stringify({
+		plan_sha256: sha256(fs.readFileSync(planFile)),
 		summary: "1단계 화면 200 OK 확인 완료",
 		acceptance: [{ id: "1", text: "결제 3단계 화면에 시험 결제창이 뜸", 실측: "" }],
 	}, null, 2));
@@ -406,7 +407,7 @@ test("⑤ acceptance 실측 없이 완료 보고 → 완료 불인정 (실측 �
 	assert.equal(badRes.ok, false, "acceptance 실측 칸이 비어 있으면 완료 불인정이어야 함");
 	assert.ok(badRes.problems.some((p) => /정본 인수 확인\(acceptance\) 실측 누락:\s*1\s+결제 3단계 화면에 시험 결제창이 뜸/.test(p)));
 
-	const cliBad = spawnSync(process.execPath, [workspaceScript, "complete", planFile, badReportFile], { cwd: root, env, encoding: "utf8" });
+	const cliBad = spawnSync(process.execPath, [workspaceScript, "complete", planFile, "--report", badReportFile], { cwd: root, env, encoding: "utf8" });
 	assert.equal(cliBad.status, 1);
 	assert.match(cliBad.stderr, /완료 불인정/);
 	assert.match(cliBad.stderr, /결제 3단계 화면에 시험 결제창이 뜸/);
@@ -414,6 +415,7 @@ test("⑤ acceptance 실측 없이 완료 보고 → 완료 불인정 (실측 �
 	// 2) 실측 칸이 채워진 완료 보고 → 완료 인정
 	const goodReportFile = path.join(gatesDir, "deploy-completion-good.json");
 	fs.writeFileSync(goodReportFile, JSON.stringify({
+		plan_sha256: sha256(fs.readFileSync(planFile)),
 		summary: "전체 단계 및 사후 확인 완료",
 		acceptance: [
 			{ id: "1", text: "결제 3단계 화면에 시험 결제창이 뜸", 실측: "결제 3단계 진입 시 시험 결제창 모달 노출 및 200 응답 실측 완료" },
@@ -423,7 +425,7 @@ test("⑤ acceptance 실측 없이 완료 보고 → 완료 불인정 (실측 �
 	const goodRes = deployPlan.verifyCompletionReport(plan, goodReportFile, { root, gatesDir });
 	assert.equal(goodRes.ok, true, `실측이 있으면 통과해야 함: ${goodRes.problems.join(", ")}`);
 
-	const cliGood = spawnSync(process.execPath, [workspaceScript, "complete", planFile, goodReportFile], { cwd: root, env, encoding: "utf8" });
+	const cliGood = spawnSync(process.execPath, [workspaceScript, "complete", planFile, "--report", goodReportFile], { cwd: root, env, encoding: "utf8" });
 	assert.equal(cliGood.status, 0, cliGood.stderr);
 	assert.match(cliGood.stdout, /완료 인정/);
 });

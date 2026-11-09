@@ -403,7 +403,9 @@ test("7. approval-plan.mjs CLI (template, check, report, preapprove, step-ok) �
 	// step-ok
 	const evFile = path.join(stateDir, "s1-ok.txt");
 	fs.writeFileSync(evFile, "HTTP/1.1 200 OK\nhealth=ok\n");
-	const stepOkRes = spawnSync(process.execPath, [workspaceScript, "step-ok", planFile, "s1", "--evidence", evFile], { cwd: root, env, encoding: "utf8" });
+	const completionFile = path.join(stateDir, "completion.json");
+	fs.writeFileSync(completionFile, JSON.stringify({ plan_sha256: sha256(fs.readFileSync(planFile)), acceptance: [] }));
+	const stepOkRes = spawnSync(process.execPath, [workspaceScript, "step-ok", planFile, "s1", "--evidence", evFile, "--report", completionFile], { cwd: root, env, encoding: "utf8" });
 	assert.equal(stepOkRes.status, 0, stepOkRes.stderr);
 	assert.match(stepOkRes.stdout, /단계 s1 성공 확인 기록/);
 });

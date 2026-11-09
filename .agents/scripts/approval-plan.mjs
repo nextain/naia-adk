@@ -8,6 +8,8 @@
  *   review <plan> --author muse [--out <file>] Argon 단독 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json
  *   review-prompt <plan>             리뷰 요청문만 출력
  *   preapprove <plan> --session <id>      사전승인 코드 발급(승인 아님: PLAN+전단계 코드, approval_mode 사전 계획만)
+ *   source-steps <doc> --section <title> 정본 단계 초안 추출
+ *   complete <plan> --report <json> 완료 실측 검사 및 계획서 SHA 결박 영수증 기록
  *   step-ok <plan> <step> --evidence <file>   단계 성공 확인 증거 기록(gates/deploy-steps/<step>.json)
  *   judge <plan> --evidence <file>... --executor-session <id>   장애/개발 독립 판정(다른 세션: muse 헤드리스)
  *
@@ -442,6 +444,28 @@ function reviewStatus(gatesDir, sha, writeFindings = false) {
 	return r;
 }
 
+function printWarnings(result) {
+ for (const warning of result.warnings || []) console.error(warning);
+}
+
+// 완료 상태를 쓰기 전에 현재 계획서와 실측 보고를 함께 검증한다.
+function requireCompletion(plan, gatesDir, sha, args, writeReceipt = false) {
+ const reportFile = path.resolve(opt(args, "--report") || opt(args, "--receipt") || path.join(gatesDir, "deploy-completion.json"));
+ let bytes;
+ try { bytes = fs.readFileSync(reportFile); }
+ catch { die("완료 불인정: --report <완료 JSON 보고서> 또는 gates/deploy-completion.json 이 필요합니다", 1); }
+ let report;
+ try { report = JSON.parse(bytes.toString("utf8")); }
+ catch { die("완료 불인정: 계획서 SHA-256 에 묶인 JSON 보고서가 필요합니다", 1); }
+ const result = lib.verifyCompletionReport(plan, report, { root: ROOT, gatesDir, expectedPlanSha: sha });
+ if (!result.ok) die(`완료 불인정:\n${result.problems.map(x => `- ${x}`).join("\n")}`, 1);
+ if (writeReceipt) {
+  const receipt = {plan_sha256: sha, report: path.relative(gatesDir, reportFile), report_sha256: sha256(bytes), verdict: "pass", checkedAt: new Date().toISOString()};
+  fs.writeFileSync(path.join(gatesDir, "deploy-completion-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`);
+ }
+ return result;
+}
+
 const [cmd, ...args] = process.argv.slice(2);
 switch (cmd) {
 	case "template":
@@ -456,7 +480,7 @@ switch (cmd) {
 		for (const a of plan.incident?.actions || []) for (const c of a.commands || []) console.log(`  장애 ${a.id}  ${commandHash(c)}  ${String(c).slice(0, 120)}`);
 		console.log(form.length ? `양식: 빈 칸 ${form.length}\n${form.map((x) => `- ${x}`).join("\n")}` : "양식: 통과");
 		for (const w of src.warnings) console.log(w);
-		if (plan.sourceDocs !== undefined && plan.sourceDocs !== null) {
+		if (!src.ok || (plan.sourceDocs !== undefined && plan.sourceDocs !== null)) {
 			console.log(src.ok ? "근거 정본: 통과" : `근거 정본: 미통과\n${src.problems.map((x) => `- ${x}`).join("\n")}`);
 		}
 		const r = reviewStatus(gatesDir, sha);
@@ -465,7 +489,7 @@ switch (cmd) {
 	}
 	case "source-steps": {
 		const docArg = args[0];
-		if (!docArg || docArg.startsWith("--")) die("사용: approval-plan.mjs source-steps <문서> --section <제목>");
+		if (!docArg || docArg.startsWith("--")) die("사용: approval-plan.mjs source-steps <문서> --section <제목> --acceptance-section <제목>");
 		const section = opt(args, "--section");
 		const acceptanceSection = opt(args, "--acceptance-section");
 		try {
@@ -478,18 +502,18 @@ switch (cmd) {
 	}
 	case "complete":
 	case "complete-check": {
-		const { plan, gatesDir } = loadPlan(args[0]);
-		const reportArg = opt(args, "--report") || opt(args, "--receipt") || (args[1] && !args[1].startsWith("--") ? args[1] : path.join(gatesDir, "deploy-completion.json"));
-		const res = lib.verifyCompletionReport(plan, reportArg, { root: ROOT, gatesDir });
-		if (!res.ok) die(`완료 불인정:\n${res.problems.map((x) => `- ${x}`).join("\n")}`, 1);
-		console.log("완료 인정: 근거 정본 인수 확인(acceptance) 실측 확인 통과");
-		break;
-	}
+  const { plan, gatesDir, sha } = loadPlan(args[0]);
+  requireCompletion(plan, gatesDir, sha, args, cmd === "complete");
+  console.log("완료 인정: 현재 계획서 SHA-256 및 근거 정본 인수 실측 확인 통과");
+  break;
+ }
+
 	case "report": {
 		const { plan, gatesDir, sha } = loadPlan(args[0]);
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 보고문을 낼 수 없습니다\n${form.join("\n")}`, 1);
 		const src = lib.sourceDocsCheck(plan, ROOT);
+  printWarnings(src);
 		if (!src.ok) die(`근거 정본 미통과 — 보고문을 낼 수 없습니다\n${src.problems.join("\n")}`, 1);
 		const r = lib.reviewProblems(gatesDir, sha, ROOT);
 		if (!r.ok) die(`적대 리뷰 미통과 — 보고문을 낼 수 없습니다\n${r.problems.join("\n")}`, 1);
@@ -528,6 +552,7 @@ switch (cmd) {
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 먼저 채우십시오\n${form.join("\n")}`, 1);
 		const src = lib.sourceDocsCheck(plan, ROOT);
+  printWarnings(src);
 		if (!src.ok) die(src.problems.join("\n"), 1);
 		const pins = lib.pinnedFileProblems(plan, ROOT);
 		if (pins.length) die(pins.join("\n"), 1);
@@ -570,7 +595,8 @@ switch (cmd) {
 		const { abs, plan, sha } = loadPlan(args[0]);
 		const session = opt(args, "--session");
 		if (!session) die("--session <rootSessionId> 가 필요합니다");
-		const r = await lib.preapproveStepCodes(abs, ROOT, session, process.env, Date.now());
+		printWarnings(lib.sourceDocsCheck(plan, ROOT));
+  const r = await lib.preapproveStepCodes(abs, ROOT, session, process.env, Date.now());
 		if (!r.ok) die(`사전발급 거부: ${r.why}`, 1);
 		console.log(lib.renderReport(plan, sha, r.review));
 		console.log(`사전발급 코드(사용자 본인이 한 메시지로 승인): PLAN ${r.plan_code} ` + r.steps.map((s) => `${s.step} ${s.code}`).join(" "));
@@ -582,7 +608,10 @@ switch (cmd) {
 		if (!(plan.scenario || []).some((s) => s.id === step)) die(`단계 ${step} 가 계획서에 없습니다`);
 		const ev = opt(args, "--evidence");
 		if (!ev || !fs.existsSync(ev)) die("--evidence <성공 확인 출력 파일> 이 필요합니다");
-		const dir = path.join(gatesDir, "deploy-steps");
+		const forwardSteps = plan.scenario.filter(s => s.branch !== "rollback" && !(plan.rollback?.step_ids || []).includes(s.id));
+  const lastStep = forwardSteps[forwardSteps.length - 1];
+  if (step === lastStep?.id) requireCompletion(plan, gatesDir, sha, args, true);
+  const dir = path.join(gatesDir, "deploy-steps");
 		fs.mkdirSync(dir, { recursive: true });
 		const copy = path.join(dir, `${step}-evidence.txt`);
 		fs.copyFileSync(ev, copy);
@@ -627,5 +656,5 @@ switch (cmd) {
 		process.exit(verdict === "incident" ? 0 : 1);
 	}
 	default:
-		die("사용: approval-plan.mjs template|check|report|review|review-prompt|preapprove|step-ok|judge (docs/guides/approval-plan-gate.md)");
+		die("사용: approval-plan.mjs template|check|source-steps|report|review|review-prompt|preapprove|step-ok|complete|complete-check|judge (docs/guides/approval-plan-gate.md)");
 }

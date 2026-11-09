@@ -50,5 +50,6 @@
     "escalate": "<@{user}> Response remains unconfirmed: {link}",
     "siteFailure": "Configured site check {site} failed repeatedly.",
     "siteRecovered": "Configured site check {site} recovered."
-  }
+  },
+  "ownerRoutingStateFile": "/srv/example/bot-mention-wake.json.owners.json"
 }
