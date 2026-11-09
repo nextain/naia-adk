@@ -353,10 +353,46 @@ function deployGateConfigPath(root) {
 	return path.join(base, "config", "deploy-gate.json");
 }
 
+/** Normalize the instance allowlist. Explicit invalid fields never fall back. */
+function normalizeApproverIds(approver = {}) {
+	if (!approver || typeof approver !== "object" || Array.isArray(approver)) return null;
+	const { discordUserIds, discordUserId } = approver;
+	const ids = [];
+	if (discordUserIds !== undefined) {
+		if (!Array.isArray(discordUserIds) || discordUserIds.length === 0 || discordUserIds.length > 20) return null;
+		ids.push(...discordUserIds);
+	}
+	if (discordUserId !== undefined) ids.push(discordUserId);
+	if (ids.length === 0 || ids.some((id) => typeof id !== "string" || !/^\d{17,20}$/.test(id))) return null;
+	const unique = [...new Set(ids)];
+	return unique.length <= 20 ? unique : null;
+}
+
+/** Only a missing file permits fallback; unreadable or invalid settings close the gate. */
+function readDeployGateConfig(root) {
+	const configPath = deployGateConfigPath(root);
+	try {
+		const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+		if (!config || typeof config !== "object" || Array.isArray(config)) return { ok: false, config: null };
+		if (config.approver !== undefined && !normalizeApproverIds(config.approver)) return { ok: false, config };
+		return { ok: true, config };
+	} catch (error) {
+		// A dangling symlink also reads as ENOENT; only a path with no entry at all is "missing".
+		return { ok: error.code === "ENOENT" && !pathEntryExists(configPath), config: null };
+	}
+}
+
+function pathEntryExists(p) {
+	try {
+		fs.lstatSync(p);
+		return true;
+	} catch (error) {
+		return error.code !== "ENOENT";
+	}
+}
+
 function loadDeployGateConfig(root) {
-	const file = deployGateConfigPath(root);
-	if (!fs.existsSync(file)) return null;
-	return readJson(file);
+	return readDeployGateConfig(root).config;
 }
 
 function loadDeployGatePlugin(root, cfg) {
@@ -889,6 +925,8 @@ module.exports = {
 	executedBefore,
 	commandBinding,
 	loadDeployGateConfig,
+	readDeployGateConfig,
+	normalizeApproverIds,
 	loadDeployGatePlugin,
 	matchServiceRule,
 	deployGateConfigPath,

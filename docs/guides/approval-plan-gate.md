@@ -18,7 +18,7 @@
   - `services`: 운영 서비스 키(`azure:containerapp:<이름>`, `gcp:cloudrun:<이름>`, `vercel:deploy:prod` 등)별 준비 기록(`gates/deploy.json`) 요구 여부, `ops`/`rollback` 허용 여부, 명령 결합 규칙(`commandMustContain` 등)
   - `prodPatterns` / `sshAlwaysGated`: 인스턴스 추가 운영 명령·SSH 호스트 분류 패턴
   - `testHosts`: 비운영(시험) 기기 호스트·IP 문자열 목록. 소문자·끝 점(`.`)을 정규화하여 와일드카드 없이 정확히 같은 이름만 비운영으로 판정하며, 설정이 없거나 깨졌으면 빈 목록으로 동작합니다. 비운영 호스트로 판정되어도 `ssh` 원격 본문은 다시 분류하므로 시험 기기 안에서 실행하는 운영 변경(`az vm delete` 등)과 `-F`·`-o HostName` 대상 덮어쓰기는 그대로 차단됩니다.
-  - `approver.discordUserId`: 디스코드 승인 시 대조할 승인자 본인의 디스코드 사용자 ID(Snowflake)
+  - `approver.discordUserIds`: 디스코드 승인을 허용할 사용자 ID 배열(17~20자리 숫자 문자열인 Snowflake). 예: `{"approver":{"discordUserIds":["111111111111111111","222222222222222222"]}}`의 번호는 설명용 가짜 값입니다. 옛 `approver.discordUserId` 단일 값도 지원하며, 둘 다 있으면 합칩니다. 빈 배열, 배열이 아닌 값, 잘못된 ID, 20개를 넘는 목록은 승인자를 일부만 골라 쓰지 않고 차단합니다.
   - `plugin`: 서비스별 세부 결합 검증(`assessService(service, ctx)`)이나 추가 명령 분류(`classifyCommand(ctx)`)를 수행하는 선택 모듈 경로
 
 ---
@@ -83,7 +83,11 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
 - **승인자에게 실행할 명령이나 스크립트를 복사·붙여넣기하게 넘기지 마십시오.**
 - 승인자는 보고문을 검토한 뒤 두 가지 방법 중 하나로 승인합니다:
   1. **대화창 직접 입력**: 현재 세션 대화창에 사람이 직접 `PLAN-xxxxxx`와 허용할 단계의 `STEP-xxxxxx` 코드를 입력합니다(도구 출력·시스템 알림·AI 메시지는 인정되지 않음).
-  2. **디스코드 본인 메시지**: 승인자 본인이 디스코드에 코드를 남기고, `gates/deploy-approval-discord.json`에 채널·메시지 ID를 기록하면 관문이 디스코드 REST API로 직접 작성자 ID(`approver.discordUserId`)와 시각을 대조합니다.
+  2. **디스코드 본인 메시지**: 승인자 본인이 디스코드에 코드를 남기고, `gates/deploy-approval-discord.json`에 채널·메시지 ID를 기록하면 관문이 디스코드 REST API로 직접 작성자가 설정의 승인자 목록(`approver.discordUserIds`, 옛 `discordUserId` 포함)에 속하는지와 코드 발급 이후 시각인지 대조합니다. 봇·웹훅·앱 메시지는 인정하지 않습니다. 실행 맥락이 특정 승인자 ID를 지정하면 그 ID도 설정 목록 안에 있어야 합니다.
+
+- 대화창(`terminal`) 직접 입력 경로에서는 디스코드 작성자 ID가 없으므로 `approvedBy`와 감사 기록의 `plan_approver_id`·`step_approver_id`는 `null`입니다.
+- 한 계획의 PLAN과 STEP은 목록 안의 서로 다른 사람이 승인할 수 있습니다. 승인 영수증과 감사 기록에는 각 코드를 실제로 승인한 작성자의 ID를 따로 남깁니다.
+- **서명 실행기는 별도 규칙을 유지합니다.** `scripts/approved-root-runner.mjs`는 `scripts/sign-approved-runner.mjs`가 승인자 표의 키로 만든 서명을 검증하고, PLAN과 STEP 서명자의 `approverId`가 같아야 합니다. 이는 권한 있는 실행 요청에서 계획과 명령의 서명 책임을 한 사람에게 묶는 검증 조건입니다. 디스코드 관문은 각 코드에 대한 목록 내 사람의 메시지를 확인하므로 서로 다른 사람이 승인할 수 있지만, 이 설정 변경이 서명 실행기의 승인자 표나 동일 서명자 조건을 완화하지는 않습니다.
 
 ---
 

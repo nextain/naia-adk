@@ -1,7 +1,7 @@
 {
   "schema": "deploy-gate/v1",
   "approver": {
-    "discordUserId": "<승인자 디스코드 사용자 번호(17~20자리 Snowflake)>"
+    "discordUserIds": ["111111111111111111", "222222222222222222"]
   },
   "discord": {
     "instances": ["default"]

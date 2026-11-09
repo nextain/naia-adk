@@ -18,12 +18,13 @@
  *    명령마다 한 번) 순서로만 통과.
  *
  * 사람 승인 = 대화창에 사람이 친 코드(deploy-human-approval.humanTyped) 또는 승인자 본인 디스코드 글(디스코드 REST 로
- * 직접 받아 작성자 번호를 인스턴스 설정 approver.discordUserId 와 대조, 봇·웹훅·앱 글 불인정).
+ * 직접 받아 작성자 번호를 인스턴스 설정 approver.discordUserIds/discordUserId 와 대조, 봇·웹훅·앱 글 불인정).
  */
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { humanTyped, commandHash, statePath } = require("./deploy-human-approval.js");
+const { readDeployGateConfig, normalizeApproverIds } = require("./deploy-readiness.js");
 
 const ROOT = path.resolve(__dirname, "../../..");
 const PLAN_FILE = "deploy-plan.json";
@@ -282,6 +283,7 @@ const REVIEW_EXECUTOR_FILES = [
 	".agents/scripts/approval-plan.mjs",
 	".claude/hooks/lib/deploy-plan.js",
 	".claude/hooks/lib/deploy-human-approval.js",
+	".claude/hooks/lib/deploy-readiness.js",
 ];
 /**
  * 계획서 소속 저장소 root 기준으로 항목을 읽는다. root 미지정 시 planFile에서 역산.
@@ -537,20 +539,30 @@ function newCode(prefix) {
 
 // ── 디스코드 승인자 확인 ──────────────────────────────────────────
 const SNOWFLAKE = /^\d{17,20}$/;
-/**
- * 승인자 본인 디스코드 글에 code 가 있는가. 메시지는 AI 가 준 파일이 아니라 디스코드 REST 에서 직접 받는다.
- * 작성자 번호 = approverId(인스턴스 설정값), 봇·웹훅·앱 글 불인정, 글 시각은 코드 발급 뒤.
- */
-async function discordConfirms({ code, sinceIso, refs, approverId, expectedApproverId, token, fetchImpl = globalThis.fetch }) {
-	const configuredId = expectedApproverId !== undefined ? expectedApproverId : approverId;
-	if (!SNOWFLAKE.test(String(approverId || "")) || !SNOWFLAKE.test(String(configuredId || ""))) {
-		return { ok: false, why: "approver-id-unset" };
-	}
-	if (String(approverId) !== String(configuredId)) {
+/** Parse a complete ISO timestamp with a real calendar date and explicit timezone. */
+function strictIsoTime(value) {
+	if (typeof value !== "string") return NaN;
+	const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(value);
+	if (!match) return NaN;
+	const [, year, month, day, hour, minute, second, , offsetHour, offsetMinute] = match;
+	const leap = Number(year) % 4 === 0 && (Number(year) % 100 !== 0 || Number(year) % 400 === 0);
+	const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+	if (+month < 1 || +month > 12 || +day < 1 || +day > days[+month - 1] || +hour > 23 || +minute > 59 || +second > 59 || +(offsetHour || 0) > 23 || +(offsetMinute || 0) > 59) return NaN;
+	return Date.parse(value);
+}
+
+/** Discord REST author must be a configured human, with a post-issuance message. */
+async function discordConfirms({ code, sinceIso, refs, approverId, approverIds, expectedApproverId, expectedApproverIds, token, fetchImpl = globalThis.fetch }) {
+	const contextIds = normalizeApproverIds({ discordUserIds: approverIds, discordUserId: approverId });
+	const hasExpected = expectedApproverIds !== undefined || expectedApproverId !== undefined;
+	const configuredIds = hasExpected ? normalizeApproverIds({ discordUserIds: expectedApproverIds, discordUserId: expectedApproverId }) : contextIds;
+	if (!configuredIds || !contextIds) return { ok: false, why: "approver-id-unset" };
+	if (contextIds.some((id) => !configuredIds.includes(id)) || (approverIds !== undefined && (contextIds.length !== configuredIds.length || configuredIds.some((id) => !contextIds.includes(id))))) {
 		return { ok: false, why: "approver-id-mismatch" };
 	}
 	if (typeof token !== "string" || !token) return { ok: false, why: "token-unavailable" };
-	const since = Date.parse(sinceIso) || 0;
+	const since = strictIsoTime(sinceIso);
+	if (!Number.isFinite(since)) return { ok: false, why: "invalid-since" };
 	for (const r of Array.isArray(refs) ? refs : []) {
 		if (!r || r.code !== code || !SNOWFLAKE.test(String(r.channelId || "")) || !SNOWFLAKE.test(String(r.messageId || ""))) continue;
 		let m;
@@ -564,11 +576,12 @@ async function discordConfirms({ code, sinceIso, refs, approverId, expectedAppro
 		if (!m || String(m.id) !== String(r.messageId)) continue;
 		if (m.channel_id !== undefined && String(m.channel_id) !== String(r.channelId)) continue;
 		const a = m.author || {};
-		if (String(a.id || "") !== String(approverId) || a.bot === true || a.system === true || m.webhook_id || m.application_id) continue;
+		if (!contextIds.includes(String(a.id || "")) || a.bot === true || a.system === true || m.webhook_id || m.application_id) continue;
+		if (m.edited_timestamp != null) continue;
 		if (!String(m.content || "").includes(code)) continue;
-		const at = Date.parse(m.timestamp || "");
+		const at = strictIsoTime(m.timestamp);
 		if (!Number.isFinite(at) || at < since) continue;
-		return { ok: true, at: m.timestamp, via: `discord:${r.channelId}/${r.messageId}` };
+		return { ok: true, approverId: String(a.id), at: m.timestamp, via: `discord:${r.channelId}/${r.messageId}` };
 	}
 	return { ok: false, why: "no-discord-confirmation" };
 }
@@ -577,7 +590,9 @@ async function discordConfirms({ code, sinceIso, refs, approverId, expectedAppro
 async function loadDiscordToken(repoRoot) {
 	try {
 		const { pathToFileURL } = require("url");
-		const gateCfg = readJson(path.join(repoRoot, "config", "deploy-gate.json")) || {};
+		const gate = readDeployGateConfig(repoRoot);
+		if (!gate.ok) return null;
+		const gateCfg = gate.config || {};
 		const configuredInstances = Array.isArray(gateCfg?.discord?.instances) ? gateCfg.discord.instances : [];
 		const instances = [...new Set([process.env.NAIA_MESSENGER_INSTANCE, ...configuredInstances].filter(Boolean))];
 		if (instances.length === 0) return null;
@@ -599,17 +614,22 @@ async function loadDiscordToken(repoRoot) {
 
 /** 사람 확인: 대화창 입력 또는 승인자 디스코드 글. */
 async function humanConfirmed(code, sinceIso, ctx) {
+	const gate = readDeployGateConfig(ctx.repoRoot || ROOT);
+	if (!gate.ok) return { ok: false, why: "approver-id-unset" };
 	const typed = humanTyped(ctx.transcriptPath, code, sinceIso);
 	if (typed.ok) return { ok: true, at: typed.at, via: "terminal" };
 	const refsFile = path.join(ctx.gatesDir, DISCORD_FILE);
 	const refs = readJson(refsFile);
 	const list = Array.isArray(refs?.approvals) ? refs.approvals.filter((r) => r && r.code === code) : [];
 	if (list.length === 0) return { ok: false, why: typed.why };
-	const gateCfg = readJson(path.join(ctx.repoRoot || ROOT, "config", "deploy-gate.json")) || {};
-	const expectedApproverId = gateCfg?.approver?.discordUserId !== undefined ? gateCfg.approver.discordUserId : ctx.approverId;
-	const approverId = ctx.approverId !== undefined ? ctx.approverId : expectedApproverId;
+	const gateCfg = gate.config || {};
+	const configApprover = gateCfg.approver;
+	const hasConfiguredIds = configApprover !== undefined;
+	const configuredIds = hasConfiguredIds ? normalizeApproverIds(configApprover) : normalizeApproverIds({ discordUserIds: ctx.approverIds, discordUserId: ctx.approverId });
+	if (!configuredIds) return { ok: false, why: "approver-id-unset" };
+	const context = ctx.approverIds !== undefined || ctx.approverId !== undefined ? { approverIds: ctx.approverIds, approverId: ctx.approverId } : { approverIds: configuredIds };
 	const token = ctx.discordToken !== undefined ? ctx.discordToken : await loadDiscordToken(ctx.repoRoot);
-	const d = await discordConfirms({ code, sinceIso, refs: list, approverId, expectedApproverId, token, fetchImpl: ctx.fetchImpl });
+	const d = await discordConfirms({ code, sinceIso, refs: list, ...context, expectedApproverIds: configuredIds, token, fetchImpl: ctx.fetchImpl });
 	return d.ok ? d : { ok: false, why: d.why };
 }
 
@@ -773,7 +793,7 @@ function renderReport(plan, sha, review) {
 
 /**
  * 운영 변경 명령 하나를 판정한다.
- * ctx: { command, sessionId, transcriptPath, root, env, now, approverId, fetchImpl, discordToken, readiness(step) → {ok, problems, facts} }
+ * ctx: { command, sessionId, transcriptPath, root, env, now, approverId, approverIds, fetchImpl, discordToken, readiness(step) → {ok, problems, facts} }
  * 돌려줌: { allow:boolean, reason?:string, audit:object }
  */
 async function evaluate(ctx) {
@@ -868,7 +888,7 @@ async function evaluate(ctx) {
 
 async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly }) {
 	const state = loadState(env);
-	const ctxH = { transcriptPath: ctx.transcriptPath, gatesDir: f.gatesDir, repoRoot: ctx.root, approverId: ctx.approverId, fetchImpl: ctx.fetchImpl, discordToken: ctx.discordToken };
+	const ctxH = { transcriptPath: ctx.transcriptPath, gatesDir: f.gatesDir, repoRoot: ctx.root, approverId: ctx.approverId, approverIds: ctx.approverIds, fetchImpl: ctx.fetchImpl, discordToken: ctx.discordToken };
 
 	// 전체 계획 승인
 	let planCh = state.challenges.filter((c) => c.kind === "plan" && c.planSha === f.sha && c.sessionId === ctx.sessionId && !c.riskAccepted && now - Date.parse(c.createdAt) < PLAN_APPROVAL_TTL_MS).pop();
@@ -891,6 +911,10 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		].join("\n") };
 	}
 
+	planCh.approvedAt = planOk.at;
+	planCh.approvedVia = planOk.via;
+	planCh.approvedBy = planOk.approverId || null;
+
 	// 앞 장애 선조치 보고가 없으면 다음 선조치도 다음 단계도 못 한다.
 	const pending = reportPending(state, f.sha, f.gatesDir);
 	if (pending) {
@@ -904,7 +928,7 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		if (v.ok) {
 			state.incidents.push({ planSha: f.sha, plan: rel, action: f.action.id, command_sha256: h, at: new Date(now).toISOString(), judge: v.judge });
 			saveState(env, state);
-			return { allow: true, audit: { event: "incident-action-executed", plan: rel, plan_sha256: f.sha, action: f.action.id, judge: v.judge, verdict_file: v.file, approved_by: "plan-approval+independent-incident-verdict" }, notice: `장애 선조치 ${f.action.id} 실행. 실행 직후 gates/deploy-incident-report-*.md 로 보고(무슨 일·한 조치·지금 상태·다음 선택지)하십시오. 보고 전에는 다음 단계 승인을 받을 수 없습니다.` };
+			return { allow: true, audit: { event: "incident-action-executed", plan: rel, plan_sha256: f.sha, action: f.action.id, judge: v.judge, verdict_file: v.file, plan_approver_id: planOk.approverId || null, approved_by: "plan-approval+independent-incident-verdict" }, notice: `장애 선조치 ${f.action.id} 실행. 실행 직후 gates/deploy-incident-report-*.md 로 보고(무슨 일·한 조치·지금 상태·다음 선택지)하십시오. 보고 전에는 다음 단계 승인을 받을 수 없습니다.` };
 		}
 		if (!f.step) return { allow: false, audit: { event: "blocked-incident-unverified", plan: rel, why: v.why }, reason: ["[Harness] 장애 선조치 명령이지만 독립 장애 판정이 없습니다.", `- ${v.why}`, "", "실행 세션이 스스로 장애라고 판단할 수 없습니다. node .agents/scripts/approval-plan.mjs judge <계획서> --evidence <확인 결과·헬스·오류 로그> 로 다른 세션 판정을 받으십시오. 개발로 판정되면 멈추고 보고하십시오."].join("\n") };
 	}
@@ -969,6 +993,7 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		}
 		if (!stepCh.approvedAt) stepCh.approvedAt = new Date(now).toISOString();
 		stepCh.approvedVia = ok.via;
+		stepCh.approvedBy = ok.approverId || null;
 	}
 	stepCh.executed = [...(stepCh.executed || []), h];
 	const stepCmdHashes = (f.step.commands || []).map((c) => commandHash(c));
@@ -981,7 +1006,7 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		stepCh.executedAt = new Date(now).toISOString();
 	}
 	saveState(env, st2);
-	return { allow: true, audit: { event: "executed", plan: rel, plan_sha256: f.sha, step: f.step.id, plan_code_sha256_12: sha256(planCh.code).slice(0, 12), step_code_sha256_12: sha256(stepCh.code).slice(0, 12), approved_by: `plan(${planOk.via})+step(${stepCh.approvedVia})` } };
+	return { allow: true, audit: { event: "executed", plan: rel, plan_sha256: f.sha, step: f.step.id, plan_code_sha256_12: sha256(planCh.code).slice(0, 12), step_code_sha256_12: sha256(stepCh.code).slice(0, 12), plan_approver_id: planOk.approverId || null, step_approver_id: stepCh.approvedBy, approved_by: `plan(${planOk.via})+step(${stepCh.approvedVia})` } };
 }
 
 const TEMPLATE = {
@@ -1128,5 +1153,5 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, reviewProblems, reviewerIdsFor, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
+	withStateLock, evaluate, formProblems, reviewProblems, reviewerIdsFor, plansForCommand, normalizeApproverIds, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };
