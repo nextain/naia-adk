@@ -1,0 +1,26 @@
+{
+  "work": "human-wait-20261109",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/common/work-ledger.md",
+      "docs/guides/work-ledger.md",
+      "docs/guides/agent-messaging.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/common/work-ledger.md"
+    ],
+    "detail": "Documents human-wait configuration, per-question deduplication, role routing, HTTP 429 retry and warning behavior."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      "docs/common/work-ledger.md",
+      "docs/guides/agent-messaging.md"
+    ],
+    "detail": "Continue authorized reversible work, state a silence deadline and next action when asking a person, and require a next wake time on waiting cards."
+  }
+}

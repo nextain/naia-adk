@@ -21,5 +21,17 @@
         "channel": "CHANNEL_ID"
       }
     }
-  ]
+  ],
+  "channel_read_interval_ms": 300,
+  "human_wait": {
+    "after_min": 15,
+    "question_patterns": [
+      "[?？](?:\\s|$)",
+      "될까요",
+      "알려\\s*주시면",
+      "말씀\\s*주시면",
+      "골라\\s*주시면",
+      "기다리겠습니다"
+    ]
+  }
 }

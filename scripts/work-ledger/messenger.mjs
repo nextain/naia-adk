@@ -2,7 +2,11 @@
 // Watchers never depend on a local messenger script.
 export function createAdapter(
   provider,
-  { fetchImpl = fetch, env = process.env } = {},
+  {
+    fetchImpl = fetch,
+    env = process.env,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  } = {},
 ) {
   if (provider?.type !== "discord")
     throw new Error("Unsupported messenger provider");
@@ -13,9 +17,42 @@ export function createAdapter(
       return `(body read failed: ${error.message})`;
     }
   }
+  async function request(url, options) {
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetchImpl(url, {
+        ...options,
+        signal: AbortSignal.timeout(30000),
+      });
+      if (response.status !== 429) return response;
+      const body = await response.text();
+      const retryHeader = response.headers?.get?.("retry-after");
+      let retryAfter = retryHeader == null ? NaN : Number(retryHeader);
+      try {
+        retryAfter = Number(JSON.parse(body).retry_after ?? retryAfter);
+      } catch {
+        // Some proxies send plain text; use Retry-After when available.
+      }
+      if (!Number.isFinite(retryAfter) || retryAfter < 0) retryAfter = 1;
+      if (attempt === 0) {
+        await sleep(retryAfter * 1000);
+        continue;
+      }
+      const error = new Error(`Discord HTTP 429; body: ${body.slice(0, 200)}`);
+      error.status = 429;
+      error.retry_after = retryAfter;
+      error.retry_exhausted = true;
+      throw error;
+    }
+  }
   const threadOffsets = new Map();
   const channelGuilds = new Map();
   return {
+    messageUrl(channel, messageId) {
+      const guild = provider.guild_id || provider.guildId || channelGuilds.get(channel);
+      return guild
+        ? `https://discord.com/channels/${guild}/${channel}/${messageId}`
+        : null;
+    },
     async messages(channel, since) {
       const token = env[provider.token_env || "DISCORD_BOT_TOKEN"];
       if (!token)
@@ -47,7 +84,7 @@ export function createAdapter(
         );
         url.searchParams.set("limit", "100");
         if (before) url.searchParams.set("before", before);
-        const response = await fetchImpl(url, {
+        const response = await request(url, {
           headers: { Authorization: `Bot ${token}` },
           signal: AbortSignal.timeout(30000),
         });
@@ -168,7 +205,7 @@ export function createAdapter(
           const chUrl = new URL(
             `https://discord.com/api/v10/channels/${encodeURIComponent(channel)}`,
           );
-          const chResponse = await fetchImpl(chUrl, {
+          const chResponse = await request(chUrl, {
             headers: { Authorization: `Bot ${token}` },
             signal: AbortSignal.timeout(30000),
           });
@@ -185,7 +222,8 @@ export function createAdapter(
               channelGuilds.set(channel, targetGuild);
             }
           }
-        } catch {
+        } catch (error) {
+          if (error.status === 429) throw error;
           // Fall through to active threads request so HTTP/network errors surface there.
         }
       }
@@ -193,7 +231,7 @@ export function createAdapter(
       const url = new URL(
         `https://discord.com/api/v10/guilds/${encodeURIComponent(targetGuild)}/threads/active`,
       );
-      const response = await fetchImpl(url, {
+      const response = await request(url, {
         headers: { Authorization: `Bot ${token}` },
         signal: AbortSignal.timeout(30000),
       });
@@ -230,6 +268,9 @@ export function createAdapter(
       }
       threadIds.delete(channel);
       const result = [...threadIds];
+      if (targetGuild !== channel) {
+        for (const threadId of result) channelGuilds.set(threadId, targetGuild);
+      }
       if (
         options?.all !== true &&
         Number.isFinite(provider.max_threads) &&

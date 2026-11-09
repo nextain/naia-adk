@@ -12,7 +12,13 @@ import {
   parseArgs,
 } from "./ledger.mjs";
 import { createAdapter } from "./messenger.mjs";
-export async function watch({ root, config, adapter, now = Date.now() }) {
+export async function watch({
+  root,
+  config,
+  adapter,
+  now = Date.now(),
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+}) {
   const wakeDir = path.join(root, ".agents/work/l4/wake");
   const stateFile = path.join(root, ".agents/work/ledger", "watch-state.json");
   await mkdir(wakeDir, { recursive: true });
@@ -26,6 +32,12 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
         typeof state !== "object" ||
         Array.isArray(state) ||
         state.version !== 1 ||
+        [state.human_wait_sent, state.channel_failures].some(
+          (map) => map !== undefined && (
+            !map || typeof map !== "object" || Array.isArray(map) ||
+            Object.values(map).some((value) => !Number.isFinite(value) || value < 0)
+          ),
+        ) ||
         !state.sent ||
         typeof state.sent !== "object" ||
         Array.isArray(state.sent) ||
@@ -51,7 +63,59 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
         state = { version: 1, sent: {}, thread_cursors: {}, mentions: {} };
       }
     }
+    state.human_wait_sent ??= {};
+    state.channel_failures ??= {};
     const wakes = [];
+    const warnings = [];
+    const readCache = new Map();
+    const failedThisRound = new Set();
+    const successfulThisRound = new Set();
+    let readStarted = false;
+    async function readMessages(messenger, channel, since) {
+      const key = `messages:${channel}`;
+      if (!readCache.has(key))
+        readCache.set(key, readWithRetry(() => messenger.messages(channel, since)));
+      return readCache.get(key);
+    }
+    async function readWithRetry(read) {
+      const interval = config.channel_read_interval_ms ?? 300;
+      if (readStarted && interval > 0) await sleep(interval);
+      readStarted = true;
+      try {
+        return await read();
+      } catch (error) {
+        const limited = error.status === 429 || /HTTP 429/.test(error.message || "");
+        if (!limited || error.retry_exhausted) throw error;
+        const seconds = Number(error.retry_after ?? 1);
+        await sleep(
+          (Number.isFinite(seconds) && seconds >= 0 ? seconds : 1) * 1000,
+        );
+        return read();
+      }
+    }
+    async function channelFailure(role, channel, error, suffix = "") {
+      if (!(error.status === 429 || /HTTP 429/.test(error.message || ""))) {
+        if (!failedThisRound.has(channel)) delete state.channel_failures[channel];
+        errors.push(`messenger:${role}:${channel}${suffix}`);
+        await wake(
+          role, `messenger-error-${safeIdPart(channel)}${suffix ? "-threads" : ""}`,
+          "감시 실패", "메신저 읽기 실패",
+          `채널: ${channel}\n오류: ${error.message || String(error)}`,
+        );
+        return;
+      }
+      if (!failedThisRound.has(channel)) {
+        state.channel_failures[channel] = (state.channel_failures[channel] || 0) + 1;
+        failedThisRound.add(channel);
+      }
+      warnings.push(`messenger:${role}:${channel}: ${error.message || String(error)}`);
+      if (state.channel_failures[channel] >= 3)
+        await wake(
+          role, `messenger-error-${safeIdPart(channel)}`,
+          "감시 실패", "메신저 읽기 연속 실패",
+          `채널: ${channel}\n연속 실패: ${state.channel_failures[channel]}회\n오류: ${error.message || String(error)}`,
+        );
+    }
     const errors = [];
     let sequence = 0;
     function safeIdPart(raw) {
@@ -185,7 +249,8 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
           ...(roleConfig.channels ?? config.channels ?? []),
           ...(roleConfig.direct_channels ?? []),
         ])];
-        const humans = roleConfig.human_ids ?? config.human_ids ?? [];
+        const humans = roleConfig.human_ids ?? roleConfig.humans ??
+          config.human_ids ?? config.humans ?? [];
         const relays = [
           ...new Set([
             ...(roleConfig.relay_ids ?? []),
@@ -218,18 +283,12 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
           let channelMessages;
           try {
             safeName(channel);
-            channelMessages = await messenger.messages(channel, since);
+            channelMessages = await readMessages(messenger, channel, since);
           } catch (error) {
-            errors.push(`messenger:${role}:${channel}`);
-            await wake(
-              role,
-              `messenger-error-${safeIdPart(channel)}`,
-              "감시 실패",
-              "메신저 읽기 실패",
-              `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${channel}\n오류: ${error.message || String(error)}`,
-            );
+            await channelFailure(role, channel, error);
             continue;
           }
+          successfulThisRound.add(channel);
           const messages = channelMessages.map((m) => ({
             ...m,
             channel: m.channel || channel,
@@ -254,23 +313,14 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
             null;
           if (typeof messenger.threads === "function") {
             try {
-              const activeThreads = await messenger.threads(
-                channel,
-                channelMessages,
-                { guildId, all: true },
+              const activeThreads = await readWithRetry(() =>
+                messenger.threads(channel, channelMessages, { guildId, all: true }),
               );
               for (const tid of activeThreads || []) {
                 if (tid) discoveredThreads.add(tid);
               }
             } catch (error) {
-              errors.push(`messenger:${role}:${channel}:threads`);
-              await wake(
-                role,
-                `messenger-error-${safeIdPart(channel)}-threads`,
-                "감시 실패",
-                "메신저 읽기 실패",
-                `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${channel}\n오류: ${error.message || String(error)}`,
-              );
+              await channelFailure(role, channel, error, ":threads");
             }
           }
           const candidateThreads = [...discoveredThreads].filter(
@@ -301,18 +351,12 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
             let threadMessages;
             try {
               safeName(threadId);
-              threadMessages = await messenger.messages(threadId, since);
+              threadMessages = await readMessages(messenger, threadId, since);
             } catch (error) {
-              errors.push(`messenger:${role}:${threadId}`);
-              await wake(
-                role,
-                `messenger-error-${safeIdPart(threadId)}`,
-                "감시 실패",
-                "메신저 읽기 실패",
-                `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${threadId}\n오류: ${error.message || String(error)}`,
-              );
+              await channelFailure(role, threadId, error);
               continue;
             }
+            successfulThisRound.add(threadId);
             for (const tm of threadMessages) {
               messages.push({ ...tm, channel: tm.channel || threadId });
             }
@@ -429,6 +473,53 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
             const effectiveMs = isEdited ? editedMs : createdMs;
             return { createdMs, editedMs, isEdited, effectiveMs };
           }
+          const humanWait = {
+            ...(config.human_wait ?? {}),
+            ...(roleConfig.human_wait ?? {}),
+          };
+          const questionPatterns = humanWait.question_patterns ?? [
+            "[?？](?:\\s|$)", "될까요", "알려\\s*주시면",
+            "말씀\\s*주시면", "골라\\s*주시면", "기다리겠습니다",
+          ];
+          const questionMatchers = questionPatterns.map(
+            (pattern) => new RegExp(pattern, "u"),
+          );
+          for (const question of messages) {
+            if (!identities.includes(question.author_id)) continue;
+            const parentAuthor = question.reply_to_author_id ||
+              question.reply_to?.author_id || question.reply_to?.author?.id ||
+              byId.get(question.reply_to_id)?.author_id;
+            const mentioned = extractMentions(question).mentions;
+            const targets = humans.filter((id) => mentioned.has(id) || id === parentAuthor);
+            if (!targets.length || !questionMatchers.some(
+              (pattern) => pattern.test(question.body || ""),
+            )) continue;
+            const questionAt = messageTimes(question).effectiveMs;
+            if (
+              !Number.isFinite(questionAt) || questionAt < since ||
+              questionAt > now ||
+              now - questionAt < (humanWait.after_min ?? 15) * 60000
+            ) continue;
+            const questionChannel = question.channel || channel;
+            const continued = messages.some((post) =>
+              (post.channel || channel) === questionChannel &&
+              (targets.includes(post.author_id) || post.author_id === question.author_id) &&
+              messageTimes(post).effectiveMs > questionAt &&
+              messageTimes(post).effectiveMs <= now,
+            );
+            const key = JSON.stringify([role, questionChannel, question.id]);
+            if (continued || state.human_wait_sent[key] !== undefined) continue;
+            const guild = question.guild_id || guildId || channelMessages.guildId || "@me";
+            const url = question.url || messenger.messageUrl?.(questionChannel, question.id) ||
+              `https://discord.com/channels/${guild}/${questionChannel}/${question.id}`;
+            const firstLine = (question.body || "").split(/\r?\n/)[0];
+            await wake(
+              role, `human-wait-${safeIdPart(question.id)}`,
+              "사람 답 기다림", firstLine,
+              `채널: ${questionChannel}\n글: ${url}\n질문: ${firstLine}\n1) 이 일에 이미 받은 지시가 있는지 그 채널 앞 글을 다시 읽음\n2) 바깥 발송·운영 변경·돈이 아니고 되돌릴 수 있으면 지금 진행하고 그 채널에 알림\n3) 정말 사람 승인이 필요한 일이면 #업무-요청 에 [분류] 양식으로 옮김`,
+            );
+            state.human_wait_sent[key] = now;
+          }
           for (const m of messages) {
             try {
               if (!isHumanOrRelay(m) || !addressed(m)) continue;
@@ -539,8 +630,11 @@ export async function watch({ root, config, adapter, now = Date.now() }) {
     state.mentions = Object.fromEntries(
       Object.entries(state.mentions).filter(([k]) => k in state.sent),
     );
+    for (const channel of successfulThisRound) {
+      if (!failedThisRound.has(channel)) delete state.channel_failures[channel];
+    }
     await atomicJson(stateFile, state);
-    return { wakes, errors };
+    return { wakes, errors, warnings };
   });
 }
 export async function main(args = process.argv.slice(2)) {
@@ -553,6 +647,8 @@ export async function main(args = process.argv.slice(2)) {
     ),
   );
   const result = await watch({ root, config });
+  for (const warning of result.warnings)
+    console.warn(`work-ledger-watch warning: ${warning}`);
   console.log(JSON.stringify({ event: "work-ledger-watch", ...result }));
   if (result.errors.length) process.exitCode = 1;
 }
