@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, rm, readdir, readFile, writeFile } from 'node:fs/promis
 import os from 'node:os';
 import path from 'node:path';
 import { watch } from './ledger-watch.mjs';
+import { main as ledgerMain } from './ledger.mjs';
 import { createAdapter } from './messenger.mjs';
 
 const at = (time) => Date.parse(`2026-11-09T${time}Z`);
@@ -93,12 +94,14 @@ for (const body of ['<@owner-a> 완료했습니다.\n> 지금 시작해도 될�
 test('corrupt state warns once and keeps durable question dedup', async (t) => {
   const s = await setup(t, { studio: [question()] });
   assert.equal((await s.run()).wakes.length, 1);
+  const wakeDir = path.join(s.root, '.agents/work/l4/wake');
+  for (const file of await readdir(wakeDir)) await rm(path.join(wakeDir, file));
   await writeFile(path.join(s.root, '.agents/work/ledger/watch-state.json'), '{broken');
   const reset = await s.run('02:20:00');
   assert.equal(reset.wakes.filter((w) => w.reason?.includes('사람')).length, 0);
   assert.ok(reset.warnings.length + reset.errors.length + reset.wakes.length > 0);
   assert.equal((await s.run('02:30:00')).wakes.length, 0);
-  assert.equal((await wakeBodies(s.root)).filter((f) => f.name.includes('human-wait')).length, 1);
+  assert.equal((await wakeBodies(s.root)).filter((f) => f.name.includes('human-wait')).length, 0);
 });
 test('human-wait-only empty ledger avoids unrecorded human alarms and uses flat wake route', async (t) => {
   const s = await setup(t, { studio: [msg('human', 'owner-a', '00:00:00', '<@bot-a> 이전 대화입니다.'), question()] });
@@ -203,4 +206,54 @@ test('unrelated progress paragraph does not self-answer pending human question',
   const s = await setup(t, { studio: [msg('question-with-other-progress', 'bot-a', '01:04:00', '<@owner-a> 지금 시작해도 될까요?\n\n다른 작업은 바로 시작했습니다.')] });
   assert.equal((await s.run()).wakes.length, 1);
   assert.equal((await s.run('02:20:00')).wakes.length, 0);
+});
+
+test('attached thread retains learned guild URL when active threads return 429', async (t) => {
+  const conf = config(); delete conf.provider.guild_id;
+  const limited = () => ({ ok: false, status: 429, headers: { get: () => null }, text: async () => JSON.stringify({ retry_after: 3600 }) });
+  const s = await setup(t, {
+    studio: [msg('starter', 'owner-a', '00:00:00', '이곳에서 준비하세요.', { thread: { id: 'attached', type: 11, parent_id: 'studio', thread_metadata: { archived: false } } })],
+    attached: [msg('attached-question', 'bot-a', '01:04:00', '지금 시작해도 될까요?', { channel_id: 'attached' })],
+  }, [], conf, { '/api/v10/channels/studio': () => ok({ id: 'studio', type: 0, guild_id: 'guild-learned' }), '/api/v10/guilds/guild-learned/threads/active': limited });
+  const result = await s.run();
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.warnings.length > 0);
+  assert.equal(result.wakes.length, 1);
+  const [file] = await wakeBodies(s.root);
+  assert.match(file.body, /channels\/guild-learned\/attached\/attached-question/);
+  assert.doesNotMatch(file.body, /channels\/@me/);
+});
+
+test('retry budget across seven channels waits no more than thirty seconds', async (t) => {
+  const conf = config(); conf.roles[0].channels = Array.from({ length: 7 }, (_, i) => `limited-${i}`);
+  const limited = () => ({ ok: false, status: 429, headers: { get: () => null }, text: async () => JSON.stringify({ retry_after: 5 }) });
+  const failures = Object.fromEntries(conf.roles[0].channels.map((ch) => [`/api/v10/channels/${ch}/messages`, limited]));
+  const s = await setup(t, {}, [], conf, failures);
+  const result = await s.run();
+  assert.deepEqual(result.errors, []);
+  assert.ok(result.warnings.length >= 7);
+  assert.equal(s.sleeps.reduce((sum, delay) => sum + delay, 0), 30000);
+  assert.ok(s.sleeps.every((delay) => delay <= 5000));
+  assert.equal(s.requests.filter((p) => p.endsWith('/messages')).length, 13);
+});
+
+
+test('all roles local overdue checks finish before first network request', async (t) => {
+  const conf = config(); conf.roles.push({ ...conf.roles[0], role: 'helper', user_ids: ['bot-b'] });
+  let root, firstNetworkChecked = false;
+  const s = await setup(t, {}, [], conf, {
+    '/api/v10/channels/studio/messages': async () => {
+      const files = await wakeBodies(root);
+      assert.ok(files.some((f) => f.name.endsWith('-route-radio.md')));
+      assert.ok(files.some((f) => f.name.endsWith('-route-helper.md')));
+      firstNetworkChecked = true;
+      return ok([]);
+    },
+  });
+  root = s.root;
+  for (const role of ['radio', 'helper']) await ledgerMain(['add', '--root', root, '--role', role, '--id', 'overdue', '--title', '검토', '--due', '2026-11-09T00:00:00Z', '--channel', 'studio', '--msg-id', 'source']);
+  const result = await s.run();
+  assert.ok(firstNetworkChecked);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.wakes.filter((w) => w.reason === '기한 넘음').length, 2);
 });
