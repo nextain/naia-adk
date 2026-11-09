@@ -1050,3 +1050,22 @@ test("declared script manifest ignores incidental existing path tokens but rejec
  const res=await deployPlan.evaluate(ctx);assert.equal(res.audit.event,"blocked-plan-review");
  fs.appendFileSync(helper,"# changed\n");const changed=await deployPlan.evaluate(ctx);assert.equal(changed.audit.event,"blocked-plan-script-binding");
 });
+
+test("rollback.step_ids alone permits recovery before failed forward step has success receipt", async (t) => {
+ const { root, stateDir, transcriptPath } = makeWorkspace(t);
+ writeGateConfig(root);
+ const { planFile, plan, step1Cmd, rollbackCmd, gatesDir } = createValidPlan(root);
+ delete plan.scenario[1].branch;
+ fs.writeFileSync(planFile, JSON.stringify(plan, null, 2));
+ assert.deepEqual(deployPlan.formProblems(plan), []);
+ writePassingReviewReceipt(root, planFile);
+ const sessionId = "sample-rollback-session";
+ const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+ const pre = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, Date.now());
+ assert.equal(pre.ok, true, pre.why);
+ appendHumanTurn(transcriptPath, `승인 ${pre.plan_code} ${pre.steps.map(s => s.code).join(' ')}`);
+ assert.equal(runDeployGuardHook(step1Cmd, {cwd:root, root, stateDir, transcriptPath, sessionId}), null);
+ assert.equal(fs.existsSync(path.join(gatesDir, 'deploy-steps/s1.json')), false);
+ assert.equal(runDeployGuardHook(rollbackCmd, {cwd:root, root, stateDir, transcriptPath, sessionId}), null,
+  'rollback marked only by step_ids must remain reachable without forward success');
+});

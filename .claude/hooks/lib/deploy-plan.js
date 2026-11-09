@@ -119,7 +119,7 @@ function formProblems(plan) {
 			stepHashes.set(h, s.id);
 		}
 	}
-	if (steps.length && !steps.some((s) => s && s.branch !== "rollback")) p.push("본 단계(branch 없는 단계)가 하나도 없음");
+	if (steps.length && !steps.some((s) => s && !isRollbackStep(plan, s))) p.push("본 단계(branch 없는 단계)가 하나도 없음");
 	const risks = plan.risks || {};
 	if (!strList(risks.items, 3)) p.push("risks.items(위험 목록) 없음");
 	if (!str(risks.worst_case, 5)) p.push("risks.worst_case(최악의 경우) 없음");
@@ -172,23 +172,13 @@ function sourceDocsCheck(plan, root) {
  const base = root ? path.resolve(root) : ROOT;
  const problems = [], warnings = [];
  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return {ok:false, problems:["계획서를 JSON 으로 읽지 못함"], warnings};
- // A document reference anywhere in the plan requires declared source coverage.
- const references = new Set();
- function scan(v, prosePath = false) {
-  if (typeof v === "string") {
-   for (const m of v.matchAll(/(?:\.\.?\/|\/)?(?:[\p{L}\p{N}_.-]+\/)*[\p{L}\p{N}_.-]+\.(?:md|markdown|txt|rst|adoc|ya?ml|json|pdf|docx?|hwpx?)\b/giu)) references.add(m[0]);
-   if (prosePath || /정본|source\s*(?:doc|document)/i.test(v)) for (const m of v.matchAll(/(?:\.\.?\/|\/)?(?:[\p{L}\p{N}_.-]+\/)+[\p{L}\p{N}_.-]+/gu)) references.add(m[0]);
-  } else if (Array.isArray(v)) v.forEach(x=>scan(x,prosePath));
-  else if (v && typeof v === "object") for (const [k,x] of Object.entries(v)) if (!['sourceDocs','files','commands'].includes(k)) scan(x,prosePath || ['body','rationale','steps'].includes(k));
- }
- scan(plan);
- if (plan.sourceDocs === undefined || plan.sourceDocs === null) {
-  if (plan.sourcePolicy === "required" || references.size || plan.sourceDocs === null || plan.scenario?.some(s=>s.covers !== undefined) || plan.excludedSourceSteps !== undefined) problems.push("정본 경로 참조 계획서는 sourceDocs 필수: " + [...references].join(', '));
-  else warnings.push("경고: sourceDocs(근거 정본)가 없습니다 — 정본 참조 없는 옛 계획서 호환으로 통과합니다.");
+ const instance = readJson(path.join(base, "config", "deploy-gate.json"));
+ if (plan.sourceDocs === undefined) {
+  if (plan.sourcePolicy === "required" || instance?.sourcePolicy === "required") problems.push("sourceDocs 필수: sourcePolicy required");
+  else warnings.push("경고: sourceDocs(근거 정본)가 없습니다 — 옛 계획서 호환으로 통과합니다.");
   return {ok:!problems.length, problems, warnings};
  }
  if (!Array.isArray(plan.sourceDocs) || !plan.sourceDocs.length) return {ok:false,problems:["sourceDocs 는 비어 있지 않은 배열이어야 함"],warnings};
- for (const ref of references) if (!plan.sourceDocs.some(d => d?.path === ref)) problems.push("참조 정본 sourceDocs 누락: " + ref);
  const multi=plan.sourceDocs.length>1, known=new Set(), docPaths=new Set();
  for (const [i,doc] of plan.sourceDocs.entries()) {
   const tag=`sourceDocs[${i}]`;
@@ -252,7 +242,7 @@ function extractSourceSteps(markdown, sectionTitle, locations = false) {
  let startOffset = 0;
 
 	if (sectionTitle !== undefined && sectionTitle !== null && String(sectionTitle).trim() !== "") {
-		const target = String(sectionTitle).trim().replace(/^#+\s*/, "").trim().toLowerCase();
+		const target = String(sectionTitle).trim().replace(/^#+\s*/, "").replace(/[*`~]/g, "").trim().toLowerCase();
 		let startIdx = -1;
 		let startLevel = 0;
 		let inFence = false;
@@ -967,6 +957,19 @@ async function humanConfirmed(code, sinceIso, ctx) {
 }
 
 // ── 승인 흐름 ───────────────────────────────────────────────────
+function isRollbackStep(plan, step) {
+ return step.branch === "rollback" || (plan.rollback?.step_ids || []).includes(step.id);
+}
+
+// Use the latest execution attempt; an older successful attempt cannot complete a rerun.
+function stepExecutionProblem(plan, sha, step, env = process.env) {
+ const attempts = loadState(env).challenges.filter(c => c.kind === "step" && c.planSha === sha && c.step === step.id);
+ const latest = attempts[attempts.length - 1];
+ const hashes = (step.commands || []).map(commandHash);
+ if (!latest || latest.status !== "executed" || !hashes.length || !hashes.every(h => (latest.executed || []).includes(h))) return `${step.id} 단계가 실제 실행(executed)되지 않음`;
+ return null;
+}
+
 function stepSuccessProblem(gatesDir, sha, stepId) {
 	const rec = readJson(path.join(gatesDir, "deploy-steps", `${stepId}.json`));
 	if (!rec) return `앞 단계 ${stepId} 성공 확인 기록 없음(gates/deploy-steps/${stepId}.json: plan_sha256, step, verdict "pass", evidence, evidence_sha256)`;
@@ -1298,8 +1301,8 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 	const steps = f.plan.scenario;
 	const idx = steps.indexOf(f.step);
 	const st2 = loadState(env);
-	if (f.step.branch !== "rollback") {
-		for (const prev of steps.slice(0, idx).filter((s) => s.branch !== "rollback")) {
+	if (!isRollbackStep(f.plan, f.step)) {
+		for (const prev of steps.slice(0, idx).filter((s) => !isRollbackStep(f.plan, s))) {
 			const prevCmdHashes = (prev.commands || []).map((c) => commandHash(c));
 			const prevChallenges = st2.challenges.filter((c) => c.kind === "step" && c.planSha === f.sha && c.step === prev.id && c.sessionId === ctx.sessionId);
 			const executedHashes = new Set();
@@ -1320,12 +1323,20 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 
 	let stepCh = st2.challenges.filter((c) => c.kind === "step" && c.planSha === f.sha && c.step === f.step.id && c.sessionId === ctx.sessionId && !c.closed).pop();
 	if (stepCh && (stepCh.executed || []).includes(h)) {
+  if (f.plan.sourceDocs !== undefined) {
+   fs.rmSync(path.join(f.gatesDir, "deploy-steps", `${f.step.id}.json`), { force: true });
+   fs.rmSync(path.join(f.gatesDir, "deploy-completion-receipt.json"), { force: true });
+  }
 		stepCh.closed = new Date(now).toISOString();
 		stepCh = null;
 	}
 	const stepTtl = stepCodeTtlMs(stepCh, f.plan);
 	if (stepCh && !stepCh.approvedAt && now - Date.parse(stepCh.createdAt) > stepTtl) { stepCh.closed = new Date(now).toISOString(); stepCh = null; }
 	if (stepCh && stepCh.approvedAt && now - Date.parse(stepCh.approvedAt) > stepTtl) { stepCh.closed = new Date(now).toISOString(); stepCh = null; }
+ if (!stepCh && f.plan.sourceDocs !== undefined) {
+  fs.rmSync(path.join(f.gatesDir, "deploy-steps", `${f.step.id}.json`), { force: true });
+  fs.rmSync(path.join(f.gatesDir, "deploy-completion-receipt.json"), { force: true });
+ }
 	if (!stepCh) {
 		stepCh = { kind: "step", code: newCode("STEP"), planSha: f.sha, step: f.step.id, sessionId: ctx.sessionId, createdAt: new Date(now).toISOString(), executed: [] };
 		st2.challenges.push(stepCh);
@@ -1335,7 +1346,7 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 	{
 		const ok = await humanConfirmed(stepCh.code, stepCh.createdAt, ctxH);
 		if (!ok.ok) {
-			const prev = steps.slice(0, idx).filter((s) => s.branch !== "rollback").pop();
+			const prev = steps.slice(0, idx).filter((s) => !isRollbackStep(f.plan, s)).pop();
 			const prevOut = prev ? stepSuccessSummary(f.gatesDir, prev.id) : null;
 			return { allow: false, audit: { event: "step-approval-requested", plan: rel, step: f.step.id }, reason: [
 				`[Harness] 단계 승인 필요: ${f.plan.planId} / ${f.step.id}${f.step.branch ? " (되돌리기 갈림길)" : ""}. ${f.step.title}`,
@@ -1356,10 +1367,12 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 	}
 	stepCh.executed = [...(stepCh.executed || []), h];
 	const stepCmdHashes = (f.step.commands || []).map((c) => commandHash(c));
-	const allExecutedForStep = new Set();
-	for (const c of st2.challenges.filter((ch) => ch.kind === "step" && ch.planSha === f.sha && ch.step === f.step.id && ch.sessionId === ctx.sessionId)) {
-		for (const eh of c.executed || []) allExecutedForStep.add(eh);
-	}
+	const allExecutedForStep = new Set(stepCh.executed || []);
+ if (f.plan.sourceDocs === undefined) {
+  for (const c of st2.challenges.filter(ch => ch.kind === "step" && ch.planSha === f.sha && ch.step === f.step.id && ch.sessionId === ctx.sessionId)) {
+   for (const eh of c.executed || []) allExecutedForStep.add(eh);
+  }
+ }
 	if (stepCmdHashes.length > 0 && stepCmdHashes.every((ch) => allExecutedForStep.has(ch))) {
 		stepCh.status = "executed";
 		stepCh.executedAt = new Date(now).toISOString();
@@ -1512,5 +1525,5 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, sourceDocsCheck, sourceDocsProblems, extractSourceSteps, buildSourceDocDraft, verifyCompletionReport, checkCompletionReport: verifyCompletionReport, completionProblems, reviewProblems, reviewerIdsFor, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
+	isRollbackStep, stepExecutionProblem, stepSuccessProblem, withStateLock, evaluate, formProblems, sourceDocsCheck, sourceDocsProblems, extractSourceSteps, buildSourceDocDraft, verifyCompletionReport, checkCompletionReport: verifyCompletionReport, completionProblems, reviewProblems, reviewerIdsFor, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };

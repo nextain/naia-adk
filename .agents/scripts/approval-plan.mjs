@@ -449,7 +449,19 @@ function printWarnings(result) {
 }
 
 // 완료 상태를 쓰기 전에 현재 계획서와 실측 보고를 함께 검증한다.
-function requireCompletion(plan, gatesDir, sha, args, writeReceipt = false) {
+function requireCompletion(plan, gatesDir, sha, args, writeReceipt = false, pendingStep = null) {
+ if (writeReceipt) fs.rmSync(path.join(gatesDir, "deploy-completion-receipt.json"), { force: true });
+ const source = lib.sourceDocsCheck(plan, ROOT);
+ if (!source.ok) die(`완료 불인정: ${source.problems.join("; ")}`, 1);
+ if (plan.sourceDocs === undefined) { printWarnings(source); return {ok:true, problems:[]}; }
+ for (const step of plan.scenario.filter(s => !lib.isRollbackStep(plan, s))) {
+  const bad = lib.stepExecutionProblem(plan, sha, step);
+  if (bad) die(`완료 불인정: ${bad}`, 1);
+  if (step.id !== pendingStep) {
+   const success = lib.stepSuccessProblem(gatesDir, sha, step.id);
+   if (success) die(`완료 불인정: ${success}`, 1);
+  }
+ }
  const reportFile = path.resolve(opt(args, "--report") || opt(args, "--receipt") || path.join(gatesDir, "deploy-completion.json"));
  let bytes;
  try { bytes = fs.readFileSync(reportFile); }
@@ -504,7 +516,7 @@ switch (cmd) {
 	case "complete-check": {
   const { plan, gatesDir, sha } = loadPlan(args[0]);
   requireCompletion(plan, gatesDir, sha, args, cmd === "complete");
-  console.log("완료 인정: 현재 계획서 SHA-256 및 근거 정본 인수 실측 확인 통과");
+  console.log(plan.sourceDocs === undefined ? "옛 계획서 호환 통과: 정본 완료 보고 및 영수증 대상 아님" : "완료 인정: 현재 계획서 SHA-256 및 근거 정본 인수 실측 확인 통과");
   break;
  }
 
@@ -606,17 +618,31 @@ switch (cmd) {
 		const { plan, gatesDir, sha } = loadPlan(args[0]);
 		const step = args[1];
 		if (!(plan.scenario || []).some((s) => s.id === step)) die(`단계 ${step} 가 계획서에 없습니다`);
-		const ev = opt(args, "--evidence");
-		if (!ev || !fs.existsSync(ev)) die("--evidence <성공 확인 출력 파일> 이 필요합니다");
-		const forwardSteps = plan.scenario.filter(s => s.branch !== "rollback" && !(plan.rollback?.step_ids || []).includes(s.id));
-  const lastStep = forwardSteps[forwardSteps.length - 1];
-  if (step === lastStep?.id) requireCompletion(plan, gatesDir, sha, args, true);
   const dir = path.join(gatesDir, "deploy-steps");
-		fs.mkdirSync(dir, { recursive: true });
-		const copy = path.join(dir, `${step}-evidence.txt`);
-		fs.copyFileSync(ev, copy);
-		const rec = { plan_sha256: sha, step, verdict: "pass", evidence: path.basename(copy), evidence_sha256: sha256(fs.readFileSync(copy)), checkedAt: new Date().toISOString() };
-		fs.writeFileSync(path.join(dir, `${step}.json`), `${JSON.stringify(rec, null, 2)}\n`);
+  const sourceDeclared = plan.sourceDocs !== undefined;
+  if (sourceDeclared) {
+   fs.rmSync(path.join(dir, `${step}.json`), { force: true });
+   fs.rmSync(path.join(gatesDir, "deploy-completion-receipt.json"), { force: true });
+  }
+  const ev = opt(args, "--evidence");
+  if (!ev || !fs.existsSync(ev) || !fs.statSync(ev).isFile()) die("--evidence <성공 확인 출력 파일> 이 필요합니다");
+  const forwardSteps = plan.scenario.filter(s => !lib.isRollbackStep(plan, s));
+  const lastStep = forwardSteps[forwardSteps.length - 1];
+  if (sourceDeclared) {
+   const current = plan.scenario.find(s => s.id === step);
+   const bad = lib.stepExecutionProblem(plan, sha, current);
+   if (bad) die(`성공 불인정: ${bad}`, 1);
+  }
+  const source = lib.sourceDocsCheck(plan, ROOT);
+  if (!source.ok) die(`성공 불인정: ${source.problems.join("; ")}`, 1);
+  printWarnings(source);
+  if (sourceDeclared && step === lastStep?.id) requireCompletion(plan, gatesDir, sha, args, false, step);
+  fs.mkdirSync(dir, { recursive: true });
+  const copy = path.join(dir, `${step}-evidence.txt`);
+  fs.copyFileSync(ev, copy);
+  const rec = { plan_sha256: sha, step, verdict: "pass", evidence: path.basename(copy), evidence_sha256: sha256(fs.readFileSync(copy)), checkedAt: new Date().toISOString() };
+  fs.writeFileSync(path.join(dir, `${step}.json`), `${JSON.stringify(rec, null, 2)}\n`);
+  if (sourceDeclared && step === lastStep?.id) requireCompletion(plan, gatesDir, sha, args, true);
 		console.log(`단계 ${step} 성공 확인 기록: ${path.relative(ROOT, path.join(dir, `${step}.json`))}`);
 		break;
 	}

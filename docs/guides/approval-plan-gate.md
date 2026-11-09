@@ -44,7 +44,7 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 
 ### 근거 정본 (`sourceDocs`)
 
-운영 반영 절차가 담긴 정본 작업 문서(마크다운 등)를 요약해 배포 계획서를 만들 때 단계나 사후 인수 확인(acceptance)이 빠지는 사고를 막기 위해, `deploy-plan.json`에 `sourceDocs`와 `scenario[].covers`를 반드시 적습니다. 본문·rationale·steps 등에서 문서 경로를 참조하면 sourceDocs 삭제/null은 거부됩니다. 인스턴스는 `sourcePolicy: "required"`로 경로 언급 여부와 무관하게 필수화할 수 있습니다. 의도적 제외는 `excludedSourceSteps`에 이유를 적습니다.
+운영 반영 절차가 담긴 정본 작업 문서(마크다운 등)를 요약해 배포 계획서를 만들 때 단계나 사후 인수 확인(acceptance)이 빠지는 사고를 막기 위해, `deploy-plan.json`에 `sourceDocs`와 `scenario[].covers`를 반드시 적습니다. 정본 대조 여부는 `sourceDocs` 선언만으로 결정하며 본문·rationale·steps의 자유 문장은 추정하지 않습니다. 계획서 또는 인스턴스 `config/deploy-gate.json`의 `sourcePolicy: "required"`는 선언을 필수화합니다. `null`이나 빈 배열은 잘못된 선언으로 거부합니다. 의도적 제외는 `excludedSourceSteps`에 이유를 적습니다.
 
 ```json
 {
@@ -77,8 +77,8 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - **관문 검사 (`check` 및 승인 코드 발급 경로)**:
   1. **정본 파일 SHA-256 대조**: `sourceDocs[].path` 경로는 저장소 내 정규 상대 경로여야 하며 realpath가 밖을 가리키는 심볼릭 링크도 거부합니다. 파일의 현재 디스크 SHA-256(소문자 비교)이 `sourceDocs[].sha256`과 다르면 차단합니다.
   2. **정본 단계 누락 차단**: 지정 절을 원문에서 재추출해 `steps`와 `acceptance` 전체를 대조합니다. 두 절 밖에 지원 목록 형식의 단계가 있거나 절을 일부만 선택해도 거부합니다. 정본은 실행 단계와 인수 확인만 담은 전용 마크다운 파일로 관리합니다. `sourceDocs[].steps`의 모든 `id`가 어느 `scenario[]` 단계의 `covers` 배열에 들어 있거나, 계획서 최상위 `excludedSourceSteps: [{id, reason}]`에 이유(`reason`)와 함께 적혀 있어야 통과합니다. 하나라도 빠지면 `"정본 단계 누락: <id> <text>"`로 막고 승인 코드를 내주지 않습니다.
-  3. **인수 확인(`acceptance`) 실측 검증**: 되돌리기 갈림을 제외한 마지막 실행 단계의 `step-ok`는 현재 계획서 SHA-256에 묶인 완료 JSON 보고서를 반드시 검사합니다. 인수 확인 항목마다 실측 문자열이 필요하며 `-`, `N/A`, `TBD`, `확인함` 같은 빈말과 문자열이 아닌 값은 거부합니다. 허용 실측 키는 `실측`, `actual`, `observed`, `measured`, `measurement`, `evidence`, `result`, `value`입니다. 이 검사는 형식과 누락을 막으며 관측 내용의 진실성은 독립 검토와 증거 대조로 확인해야 합니다.
-  4. **ID와 호환**: 모르는 ID, 중복 steps/acceptance/covers/excluded, covers와 제외의 동시 선언을 거부합니다. 여러 문서는 covers·제외·완료 실측에 `문서경로#ID`를 씁니다. 한 단계 ID를 여러 scenario에서 재사용할 수 없으며 되돌리기 단계의 covers로 실행 단계 누락을 대신할 수 없습니다. 정본 경로 참조가 전혀 없는 옛 계획서만 한 줄 경고와 함께 통과합니다. 경로를 참조하는 옛 계획서는 정본 메타데이터 보강과 재리뷰·재승인이 필요합니다.
+  3. **인수 확인(`acceptance`) 실측 검증**: `sourceDocs`를 선언한 계획서에서 되돌리기 갈림을 제외한 마지막 실행 단계의 `step-ok`는 현재 계획서 SHA-256에 묶인 완료 JSON 보고서를 반드시 검사합니다. 인수 확인 항목마다 실측 문자열이 필요하며 `-`, `N/A`, `TBD`, `확인함` 같은 빈말과 문자열이 아닌 값은 거부합니다. 허용 실측 키는 `실측`, `actual`, `observed`, `measured`, `measurement`, `evidence`, `result`, `value`입니다. 이 검사는 형식과 누락을 막으며 관측 내용의 진실성은 독립 검토와 증거 대조로 확인해야 합니다.
+  4. **ID와 호환**: 모르는 ID, 중복 steps/acceptance/covers/excluded, covers와 제외의 동시 선언을 거부합니다. 여러 문서는 covers·제외·완료 실측에 `문서경로#ID`를 씁니다. 한 단계 ID를 여러 scenario에서 재사용할 수 없으며 되돌리기 단계의 covers로 실행 단계 누락을 대신할 수 없습니다. `sourceDocs` 선언이 없는 옛 계획서는 필수 정책이 없으면 본문 파일명과 무관하게 한 줄 경고로 통과하며 완료 보고를 강제하지 않습니다. 정본 대조를 도입할 때는 선언을 보강하고 재리뷰·재승인합니다.
 
 ---
 
@@ -146,7 +146,7 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
 
 ## 완료 확인과 영수증
 
-`report`는 실행 전 승인 요청문을 만드는 명령입니다. 완료 상태는 되돌리기 갈림을 제외한 마지막 실행 단계의 `step-ok`에서 검사합니다. 기본 보고서 경로는 계획서와 같은 폴더의 `deploy-completion.json`이며 `--report <파일>`로 지정할 수도 있습니다.
+`report`는 실행 전 승인 요청문을 만드는 명령입니다. 완료 상태는 `sourceDocs`를 선언한 계획서의 마지막 본 단계 `step-ok`에서 검사합니다. `branch: "rollback"` 또는 `rollback.step_ids`에 든 단계는 되돌리기 단계이며 앞 단계 성공 기록을 요구하지 않습니다. 기본 보고서 경로는 계획서와 같은 폴더의 `deploy-completion.json`이며 `--report <파일>`로 지정할 수도 있습니다.
 
 ```json
 {
@@ -163,6 +163,8 @@ node .agents/scripts/approval-plan.mjs complete-check <계획서> --report <완�
 node .agents/scripts/approval-plan.mjs complete <계획서> --report <완료보고.json>
 ```
 
+정본 선언 계획서는 각 단계의 최신 실행 시도가 `executed`이고 해당 시도의 모든 명령이 실행되어야 성공을 기록합니다. 완료 검사에는 모든 본 단계의 성공 증거도 필요합니다. 같은 단계 재실행을 요청하거나 `step-ok`를 다시 시도하면 이전 단계 성공 기록과 완료 영수증을 무효화하며, `complete` 실패도 이전 완료 영수증을 지웁니다. 증거 파일과 완료 검사가 모두 통과한 뒤에만 새 기록을 씁니다.
+
 마지막 `step-ok`와 `complete`는 검사가 통과하면 `deploy-completion-receipt.json`에 계획서 SHA-256, 보고서 SHA-256, 판정 시각을 기록합니다. `complete-check`는 검사만 합니다. `actual: "확인함"`, 보고서 누락, 이전 계획서 SHA-256을 담은 보고서는 실패하며 마지막 단계 성공 기록을 쓰지 않습니다. 마지막이 아닌 단계는 기존처럼 성공 증거만 기록합니다. 일반 대화문이나 이 도구 밖의 상태 기록은 이 CLI가 강제할 수 있는 범위가 아닙니다.
 
-정본이 없는 호환 계획서의 경고는 `check`, `report`, `review`, `preapprove`에서 표시합니다. 경고가 있어도 정본 참조 계획서의 필수 검사 실패를 승인으로 바꾸지는 않습니다.
+정본이 없는 호환 계획서의 경고는 `check`, `report`, `review`, `preapprove`, `step-ok`, `complete`, `complete-check`에서 표시합니다. 경고가 있어도 정본 선언 계획서의 필수 검사 실패를 승인으로 바꾸지는 않습니다.

@@ -395,6 +395,17 @@ test("⑤ acceptance 실측 없이 완료 보고 → 완료 불인정 (실측 �
 	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
 	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
 
+ const planSha = sha256(fs.readFileSync(planFile));
+ const forward = plan.scenario.filter(step => !deployPlan.isRollbackStep(plan, step));
+ const { commandHash } = require('../lib/deploy-human-approval.js');
+ fs.writeFileSync(path.join(stateDir, 'deploy-plan-state.json'), JSON.stringify({challenges:forward.map(step => ({kind:'step',planSha,step:step.id,status:'executed',executed:step.commands.map(commandHash)}))}));
+ fs.mkdirSync(path.join(gatesDir,'deploy-steps'),{recursive:true});
+ for(const step of forward) {
+  const evidence=path.join(gatesDir,'deploy-steps',`${step.id}-evidence.txt`);
+  fs.writeFileSync(evidence,'sample execution observed at 12:00 UTC');
+  fs.writeFileSync(path.join(gatesDir,'deploy-steps',`${step.id}.json`),JSON.stringify({plan_sha256:planSha,step:step.id,verdict:'pass',evidence:path.basename(evidence),evidence_sha256:sha256(fs.readFileSync(evidence))}));
+ }
+
 	// 1) 사고 재현: 1단계 화면 200 OK 만 적고 정본 acceptance(결제 3단계 화면 시험 결제창) 실측이 없는 완료 보고
 	const badReportFile = path.join(gatesDir, "deploy-completion-bad.json");
 	fs.writeFileSync(badReportFile, JSON.stringify({
