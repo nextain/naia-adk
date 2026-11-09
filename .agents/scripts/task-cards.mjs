@@ -85,14 +85,14 @@ const KIND_KO = {
 	repeat: "계속 밀리는 일",
 };
 const CHECK_ORDER = [
-	"wait-recheck",
-	"legacy-waiting",
+	"unlinked-inbox",
 	"overdue",
 	"stale",
+	"wait-recheck",
+	"legacy-waiting",
 	"revisit",
 	"missing-field",
 	"vanished",
-	"unlinked-inbox",
 	"no-calendar",
 	"repeat",
 ];
@@ -117,8 +117,6 @@ const CARD_KEYS = [
 	"result",
 ];
 const DUE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/;
-const RECHECK_NO_TZ_MIN_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})$/;
-const RECHECK_NO_TZ_SEC_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
 const RECHECK_WITH_TZ_RE = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)(Z|[+-]\d{2}:\d{2})$/;
 
 export function fail(message) {
@@ -159,7 +157,10 @@ function parseFlags(args) {
 			if (eq >= 0) { flags[arg.slice(2, eq)] = arg.slice(eq + 1); continue; }
 			const key = arg.slice(2);
 			if (i + 1 < args.length && !args[i + 1].startsWith("--")) flags[key] = args[++i];
-			else flags[key] = "yes";
+			else {
+				if (["wait-reason", "waitReason", "wait_reason", "recheck-at", "recheckAt", "recheck_at", "request-ref", "requestRef", "request_ref", "reason", "revisit"].includes(key)) fail(`--${key} 값이 필요합니다`);
+				flags[key] = "yes";
+			}
 		} else positional.push(arg);
 	}
 	return { flags, positional };
@@ -187,6 +188,7 @@ export function loadTaskCardsConfig(root, options = {}) {
 		}
 	}
 
+	if (rawConfig.timeZone && rawConfig.timeZone !== "UTC") fail("task-cards timeZone must be UTC");
 	let maxRecheckHours = DEFAULT_MAX_RECHECK_HOURS;
 	if (options.maxRecheckHours !== undefined && options.maxRecheckHours !== null) {
 		maxRecheckHours = Number(options.maxRecheckHours);
@@ -218,7 +220,7 @@ export function loadTaskCardsConfig(root, options = {}) {
 	if (fs.existsSync(discordWatchPath)) {
 		try {
 			const dw = JSON.parse(fs.readFileSync(discordWatchPath, "utf8"));
-			for (const list of [dw?.ownerUserIds, dw?.lukeUserIds]) {
+			for (const list of [dw?.ownerUserIds]) {
 				if (Array.isArray(list)) {
 					for (const id of list) {
 						if (typeof id === "string" && id.trim()) ownerIds.add(id.trim());
@@ -228,16 +230,13 @@ export function loadTaskCardsConfig(root, options = {}) {
 		} catch { /* 무시 */ }
 	}
 
-	const roleWakeDirs = isPlainObject(rawConfig.roleWakeDirs) ? { ...rawConfig.roleWakeDirs } : {};
-	const leadRole = typeof rawConfig.leadRole === "string" && rawConfig.leadRole.trim() && !rawConfig.leadRole.includes("<")
-		? rawConfig.leadRole.trim()
-		: null;
 
 	return {
+		timeZone: "UTC",
+		wakeRoot: rawConfig.wakeRoot,
+		stateFile: rawConfig.stateFile,
 		maxRecheckHours,
 		ownerSenderIds: [...ownerIds],
-		roleWakeDirs,
-		leadRole,
 	};
 }
 
@@ -289,6 +288,11 @@ function validCalendarDate(datePart) {
 export function dueMs(value) {
 	if (!value) return null;
 	const text = String(value).trim();
+	if (RECHECK_WITH_TZ_RE.test(text)) {
+		const ms = tryRecheckMs(text);
+		if (ms === null) fail(`날짜가 틀렸습니다: ${value}`);
+		return ms;
+	}
 	if (!DUE_RE.test(text)) fail(`날짜가 틀렸습니다(YYYY-MM-DD 또는 YYYY-MM-DDTHH:MM): ${value}`);
 	const datePart = text.slice(0, 10);
 	if (!validCalendarDate(datePart)) fail(`날짜가 틀렸습니다: ${value}`);
@@ -297,7 +301,7 @@ export function dueMs(value) {
 	return ms;
 }
 
-// 다시 볼 시각(recheckAt) 파싱. 시각까지 포함된 형식(YYYY-MM-DDTHH:MM 또는 ISO-8601)만 허용한다.
+// Waiting wake timestamps require an explicit ISO-8601 timezone.
 export function tryRecheckMs(value) {
 	if (value === undefined || value === null) return null;
 	const text = String(value).trim();
@@ -309,12 +313,6 @@ export function tryRecheckMs(value) {
 		datePart = match[1];
 		const timePart = match[2].length === 5 ? `${match[2]}:00` : match[2];
 		isoText = `${match[1]}T${timePart}${match[3]}`;
-	} else if ((match = RECHECK_NO_TZ_MIN_RE.exec(text))) {
-		datePart = match[1];
-		isoText = `${match[1]}T${match[2]}:00Z`;
-	} else if ((match = RECHECK_NO_TZ_SEC_RE.exec(text))) {
-		datePart = match[1];
-		isoText = `${match[1]}T${match[2]}Z`;
 	} else {
 		return null;
 	}
@@ -326,7 +324,7 @@ export function tryRecheckMs(value) {
 export function recheckMs(value) {
 	const ms = tryRecheckMs(value);
 	if (ms === null) {
-		fail(`다시 볼 시각(--recheck-at) 형식이 틀렸습니다(YYYY-MM-DDTHH:MM 또는 ISO 시각): ${value}`);
+		fail(`다시 볼 시각(--recheck-at) 형식이 틀렸습니다(시간대 Z 또는 ±HH:MM을 포함한 ISO 시각): ${value}`);
 	}
 	return ms;
 }
@@ -350,6 +348,10 @@ export function normalizeWaitReason(value) {
 	return WAIT_REASONS.includes(trimmed) ? trimmed : null;
 }
 
+export function validRequestRef(value) {
+	return /^(?:https?:\/\/\S+|discord:\S+|#\S+|\d+|evt-[a-zA-Z0-9_-]+)$/.test(String(value || "").trim());
+}
+
 export function validateWaitCardFields({ waitReason, recheckAt, requestRef, now = Date.now(), maxRecheckHours = DEFAULT_MAX_RECHECK_HOURS }) {
 	const canonicalReason = normalizeWaitReason(waitReason);
 	if (!canonicalReason) {
@@ -370,12 +372,12 @@ export function validateWaitCardFields({ waitReason, recheckAt, requestRef, now 
 		fail(`다시 볼 시각(--recheck-at)은 최대 지금+${maxRecheckHours}시간(${nowIso(maxMs)}) 이내여야 합니다: ${rawRecheck}`);
 	}
 	const cleanRef = requestRef === undefined || requestRef === null ? "" : String(requestRef).trim();
-	if (HUMAN_APPROVAL_WAIT_REASONS.includes(canonicalReason) && !cleanRef) {
+	if (HUMAN_APPROVAL_WAIT_REASONS.includes(canonicalReason) && !validRequestRef(cleanRef)) {
 		fail(`사람 승인 기다림(${canonicalReason})에는 요청 글 주소·번호(--request-ref, 예: #업무-요청 글 주소/번호)가 필수입니다.`);
 	}
 	return {
 		wait_reason: canonicalReason,
-		recheck_at: rawRecheck,
+		recheck_at: new Date(targetMs).toISOString(),
 		request_ref: cleanRef,
 	};
 }
@@ -435,38 +437,16 @@ export function tickFile(root, session) {
 	return path.join(root, ".agents", "work", "task-cards", `tick-${session}.json`);
 }
 
-export function waitWakeStateFile(root) {
-	return path.join(root, ".agents", "work", "task-cards", "wait-wake-state.json");
+export function waitWakeStateFile(root, config = null) {
+	const cfg = config || loadTaskCardsConfig(root);
+	return path.resolve(root, cfg.stateFile || ".agents/work/task-cards/wait-wake-state.json");
 }
 
-// 인스턴스의 역할 깨움 경로 규칙대로 깨움 폴더를 찾는다.
-// 1) config/task-cards.json 의 roleWakeDirs[role]
-// 2) .agents/context/work-watch.json 의 roles[].wakeDir 또는 defaultRole
-// 3) config/task-cards.json 의 leadRole 이면 .agents/work/l4/wake
-// 4) 기본값 .agents/work/l4/wake/<role>
+// All roles share the consumer folder; route-role in the filename selects the recipient.
 export function resolveRoleWakeDir(root, role, config = null) {
 	checkRole(role);
 	const cfg = config || loadTaskCardsConfig(root);
-	if (cfg.roleWakeDirs && typeof cfg.roleWakeDirs[role] === "string" && cfg.roleWakeDirs[role].trim() && !cfg.roleWakeDirs[role].includes("<")) {
-		return path.resolve(root, cfg.roleWakeDirs[role].trim());
-	}
-	const workWatchPath = path.join(root, ".agents", "context", "work-watch.json");
-	if (fs.existsSync(workWatchPath)) {
-		try {
-			const ww = JSON.parse(fs.readFileSync(workWatchPath, "utf8"));
-			if (Array.isArray(ww?.roles)) {
-				const found = ww.roles.find((r) => r && r.id === role && typeof r.wakeDir === "string" && r.wakeDir.trim());
-				if (found) return path.resolve(root, found.wakeDir.trim());
-			}
-			if (typeof ww?.defaultRole === "string" && ww.defaultRole.trim() === role) {
-				return path.join(root, ".agents", "work", "l4", "wake");
-			}
-		} catch { /* 무시 */ }
-	}
-	if (cfg.leadRole && cfg.leadRole === role) {
-		return path.join(root, ".agents", "work", "l4", "wake");
-	}
-	return path.join(root, ".agents", "work", "l4", "wake", role);
+	return path.resolve(root, cfg.wakeRoot || ".agents/work/l4/wake");
 }
 
 function writeAtomic(filePath, content) {
@@ -477,8 +457,8 @@ function writeAtomic(filePath, content) {
 	try { fs.chmodSync(filePath, 0o600); } catch { /* 무시 */ }
 }
 
-function loadWaitWakeState(root) {
-	const file = waitWakeStateFile(root);
+function loadWaitWakeState(root, config) {
+	const file = waitWakeStateFile(root, config);
 	try {
 		const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
 		if (isPlainObject(parsed) && parsed.version === 1 && isPlainObject(parsed.sent)) {
@@ -488,8 +468,8 @@ function loadWaitWakeState(root) {
 	return { version: 1, sent: {} };
 }
 
-function saveWaitWakeState(root, state) {
-	writeAtomic(waitWakeStateFile(root), `${JSON.stringify(state, null, 2)}\n`);
+function saveWaitWakeState(root, state, config) {
+	writeAtomic(waitWakeStateFile(root, config), `${JSON.stringify(state, null, 2)}\n`);
 }
 
 function safeWakeSlug(id) {
@@ -503,68 +483,34 @@ function safeWakeSlug(id) {
 
 // recheckAt 경과 및 옛 대기 카드(까닭·시각 없는 대기)에 대해 담당 역할 깨움 파일을
 // 한 카드·한 시각당 한 번(옛 카드는 카드당 한 번) 만든다.
-export function emitWaitWakes(root, problems, { now = Date.now(), config = null } = {}) {
+export function emitWaitWakes(root, problems, { now = Date.now(), config = null, roles = null } = {}) {
 	const cfg = config || loadTaskCardsConfig(root);
-	const targets = (problems || []).filter((p) => p && (p.kind === "wait-recheck" || p.kind === "legacy-waiting"));
-	if (targets.length === 0) return [];
-	const state = loadWaitWakeState(root);
+	const targets = problems.filter(p => p.wakeKey);
+	const state = loadWaitWakeState(root, cfg);
+	const active = new Set(targets.map(p => p.wakeKey));
+	// Reconcile only observed roles, including direct edits, deleted cards and changed schedules.
+	for (const [key, receipt] of Object.entries(state.sent)) {
+		if ((!roles || roles.includes(receipt.role)) && !active.has(key)) delete state.sent[key];
+	}
+	const groups = new Map();
+	for (const p of targets) {
+		if (state.sent[p.wakeKey]) continue;
+		if (!groups.has(p.role)) groups.set(p.role, []);
+		groups.get(p.role).push(p);
+	}
 	const created = [];
 	let seq = 0;
-	let dirty = false;
-
-	for (const p of targets) {
-		const key = p.wakeKey || (p.kind === "wait-recheck"
-			? `wait-recheck:${p.role}/${p.id}@${p.recheckAt || ""}`
-			: `legacy-waiting:${p.role}/${p.id}`);
-		const existing = state.sent[key];
-		if (existing && typeof existing.wakeFile === "string") {
-			continue;
-		}
-		const wakeDir = resolveRoleWakeDir(root, p.role, cfg);
-		const stamp = timestampKey(new Date(now + seq++));
-		const tag = p.kind === "wait-recheck" ? "recheck" : "legacy-wait";
-		const fileName = `${stamp}-task-card-${safeWakeSlug(p.id)}-${tag}-route-${p.role}.md`;
-		const filePath = path.join(wakeDir, fileName);
-		const body = p.kind === "wait-recheck"
-			? [
-				"# 업무 카드 대기 다시 보기 깨움",
-				"",
-				`- 시각: ${nowIso(now)}`,
-				`- 역할: ${p.role}`,
-				`- 카드: ${p.id}${p.title ? ` (${p.title})` : ""}`,
-				`- 까닭: 다시 볼 시각 지남 (${p.waitReason || "없음"})`,
-				`- 다시 볼 시각: ${p.recheckAt || "없음"}`,
-				`- 요청 고리: ${p.requestRef || "없음"}`,
-				"",
-				`[업무 카드] 다시 볼 시각 지남: ${p.role}/${p.id} — ${p.reason}. 결과를 확인해 진행(--status doing)으로 바꾸거나, 아직 기다려야 하면 새 다시 볼 시각(--recheck-at, 최대 지금+${cfg.maxRecheckHours}시간)으로 갱신하십시오.`,
-				"",
-			].join("\n")
-			: [
-				"# 업무 카드 까닭·시각 없는 대기 깨움",
-				"",
-				`- 시각: ${nowIso(now)}`,
-				`- 역할: ${p.role}`,
-				`- 카드: ${p.id}${p.title ? ` (${p.title})` : ""}`,
-				"- 까닭: 까닭·시각 없는 대기",
-				"",
-				`[업무 카드] 까닭·시각 없는 대기: ${p.role}/${p.id} — ${p.reason}. 정해진 네 가지 대기 까닭(${WAIT_REASONS.join(" / ")})과 다시 볼 시각(--recheck-at, 최대 지금+${cfg.maxRecheckHours}시간), 사람 승인 기다림이면 요청 글 주소(--request-ref)를 채우거나, 이미 지시가 있고 되돌릴 수 있는 일은 대기에 넣지 않고 진행(--status doing)으로 바꾸십시오.`,
-				"",
-			].join("\n");
-		writeAtomic(filePath, body);
-		const relPath = path.relative(root, filePath);
-		state.sent[key] = {
-			at: nowIso(now),
-			role: p.role,
-			id: p.id,
-			kind: p.kind,
-			recheckAt: p.recheckAt || null,
-			wakeFile: relPath,
-		};
-		dirty = true;
-		created.push({ key, role: p.role, id: p.id, kind: p.kind, file: filePath });
+	for (const [role, batch] of groups) {
+		const file = path.join(resolveRoleWakeDir(root, role, cfg), `${timestampKey(new Date(now + seq++))}-task-card-${safeWakeSlug(batch[0].id)}-route-${role}.md`);
+		const body = ["# 업무 카드 다시 보기 깨움", "", `- 시각: ${nowIso(now)}`, `- 역할: ${role}`,
+			...batch.map(p => `- 카드: ${p.id} [${KIND_KO[p.kind]}] — ${p.reason}`), "",
+			`정해진 네 가지 대기 까닭(${WAIT_REASONS.join(" / ")}), --recheck-at(시간대 필수, 최대 지금+${cfg.maxRecheckHours}시간), 승인 요청 --request-ref를 채우십시오.`,
+			"이미 지시가 있고 되돌릴 수 있는 일은 대기에 넣지 않고 진행(--status doing). 끝났거나 넘긴 일은 done <id> --result <주소>, 날짜 지정 미룸은 defer <id> --reason <사유> --revisit <YYYY-MM-DD>. 다시 볼 날이 지나면 한 번 깨웁니다.", ""].join("\n");
+		writeAtomic(file, body);
+		for (const p of batch) state.sent[p.wakeKey] = { at: nowIso(now), role, id: p.id, kind: p.kind, wakeFile: path.relative(root, file) };
+		created.push({ role, file, count: batch.length });
 	}
-
-	if (dirty) saveWaitWakeState(root, state);
+	if (targets.length || Object.keys(state.sent).length || fs.existsSync(waitWakeStateFile(root, cfg))) saveWaitWakeState(root, state, cfg);
 	return created;
 }
 
@@ -593,9 +539,9 @@ export function loadCard(file) {
 
 // 끝난 카드까지 전부. 파일이 깨졌으면 건너뛰지 않고 멈춘다(조용히 놓치는 쪽이 더 해롭다).
 // 옛 카드(wait_reason·recheck_at 없는 대기)도 읽기는 그대로 된다.
-export function loadRoleCards(root, role) {
+export function loadRoleCards(root, role, cardsBaseDir = null) {
 	checkRole(role);
-	const dir = cardsDir(root, role);
+	const dir = cardsBaseDir ? path.join(cardsBaseDir, role) : cardsDir(root, role);
 	let names = [];
 	try { names = fs.readdirSync(dir); } catch { return []; }
 	const cards = [];
@@ -608,11 +554,11 @@ export function loadRoleCards(root, role) {
 	return cards;
 }
 
-export function discoverRoles(root) {
+export function discoverRoles(root, cardsBaseDir = null) {
 	const roles = new Set();
 	for (const sub of ["docs/common/team/cards", ".agents/work/l4/role-inbox"]) {
 		let entries = [];
-		try { entries = fs.readdirSync(path.join(root, sub), { withFileTypes: true }); } catch { continue; }
+		try { entries = fs.readdirSync(cardsBaseDir && sub === "docs/common/team/cards" ? cardsBaseDir : path.join(root, sub), { withFileTypes: true }); } catch { continue; }
 		for (const entry of entries) {
 			if (entry.isDirectory() && ROLE_RE.test(entry.name)) roles.add(entry.name);
 		}
@@ -681,7 +627,7 @@ export function isOwnerMail(text, ownerSenderIds = []) {
 	});
 }
 
-export const isLukeMail = isOwnerMail;
+
 
 // 카드와 받은편지를 잇는 고리: 글 번호(메시지 아이디)와 사건(evt) 번호만 쓴다.
 const EVT_RE = /\bevt-[0-9a-f]{4,}\b/g;
@@ -726,7 +672,7 @@ function inboxFiles(root, role) {
 }
 
 // 점검 항목 + 대기 카드(recheckAt 경과·옛 카드) 점검 및 깨움 생성.
-export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, staleHours = 24, wake = true, config = null } = {}) {
+export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, staleHours = 24, wake = true, config = null, cardsBaseDir = null } = {}) {
 	const cfg = config || loadTaskCardsConfig(root);
 	const problems = [];
 	const ledger = readLedger(root);
@@ -747,13 +693,13 @@ export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, stale
 		if (seenMissing.has(key)) continue;
 		seenMissing.add(key);
 		let stat = null;
-		try { stat = fs.statSync(cardFile(root, entry.role, id)); } catch { stat = null; }
+		try { stat = fs.statSync(cardsBaseDir ? path.join(cardsBaseDir, entry.role, `${id}.md`) : cardFile(root, entry.role, id)); } catch { stat = null; }
 		if (!stat || !stat.isFile()) {
 			problems.push({ kind: "vanished", role: entry.role, id, reason: `장부(${entry.cmd})에는 있는데 파일이 없습니다` });
 		}
 	}
 	for (const role of roles) {
-		const cards = loadRoleCards(root, role);
+		const cards = loadRoleCards(root, role, cardsBaseDir);
 		for (const card of cards) {
 			const open = card.status !== "done";
 			const due = dueMs(card.due || "");
@@ -777,7 +723,7 @@ export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, stale
 				const canonicalReason = normalizeWaitReason(card.wait_reason);
 				const recheck = tryRecheckMs(card.recheck_at);
 				const needsRef = canonicalReason && HUMAN_APPROVAL_WAIT_REASONS.includes(canonicalReason);
-				const hasRef = !needsRef || Boolean(String(card.request_ref || "").trim());
+				const hasRef = !needsRef || validRequestRef(card.request_ref);
 				if (!canonicalReason || recheck === null || !hasRef) {
 					const missingParts = [];
 					if (!canonicalReason) missingParts.push("waitReason");
@@ -809,7 +755,7 @@ export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, stale
 			if (card.status === "deferred" && card.revisit) {
 				const revisit = dueMs(card.revisit);
 				if (revisit !== null && revisit < now) {
-					problems.push({ kind: "revisit", role, id: card.id, reason: `다시 볼 날 ${card.revisit} 가 지났습니다(사유: ${card.defer_reason || "없음"})` });
+					problems.push({ kind: "revisit", role, id: card.id, wakeKey: `revisit:${role}/${card.id}@${card.revisit}`, reason: `다시 볼 날 ${card.revisit} 가 지났습니다(사유: ${card.defer_reason || "없음"})` });
 				}
 			}
 			// 4. 빠진 칸 — 끝인데 결과 없음, 미룸인데 사유·날짜 없음
@@ -851,7 +797,7 @@ export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, stale
 	const rank = new Map(CHECK_ORDER.map((k, i) => [k, i]));
 	problems.sort((a, b) => (rank.get(a.kind) ?? 99) - (rank.get(b.kind) ?? 99) || (a.role < b.role ? -1 : a.role > b.role ? 1 : 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 	if (wake) {
-		emitWaitWakes(root, problems, { now, config: cfg });
+		emitWaitWakes(root, problems, { now, config: cfg, roles });
 	}
 	return problems;
 }
@@ -879,9 +825,9 @@ export function cardsToLedger(root, cardsDirPath, outFilePath, { now = Date.now(
 	const iso = (v) => {
 		if (!v) return null;
 		const s = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v)
-			? `${v}:00+09:00`
+			? `${v}:00Z`
 			: /^\d{4}-\d{2}-\d{2}$/.test(v)
-				? `${v}T23:59:00+09:00`
+				? `${v}T23:59:59Z`
 				: v;
 		return Number.isNaN(Date.parse(s)) ? null : s;
 	};
@@ -910,20 +856,19 @@ export function cardsToLedger(root, cardsDirPath, outFilePath, { now = Date.now(
 				task: c.title || c.id,
 				status,
 				requested_at: requested,
-				due_at: iso(c.due),
+				due_at: iso(isWaitingStatus(c.status) ? c.recheck_at : c.status === "deferred" ? c.revisit : c.due),
 				evidence: c.source || cardRef,
 				result: c.result || (status === "끝" ? cardRef : null),
 				updated_at: updated,
 				...(c.wait_reason ? { wait_reason: c.wait_reason } : {}),
-				...(c.recheck_at ? { recheck_at: c.recheck_at } : {}),
 				...(c.request_ref ? { request_ref: c.request_ref } : {}),
 			});
 		}
 	}
 	writeAtomic(outFilePath, `${JSON.stringify({ version: 1, work }, null, 2)}\n`);
 	if (wake) {
-		const roles = discoverRoles(root);
-		runCheck(root, roles, { now, wake: true, config });
+		const roles = discoverRoles(root, cardsDirPath);
+		runCheck(root, roles, { now, wake: true, config, cardsBaseDir: cardsDirPath });
 	}
 	return work;
 }
@@ -1065,6 +1010,7 @@ function cmdMove(root, ms, flags, positional, config) {
 	card.moved = nowIso(ms);
 	changes.moved = card.moved;
 	fs.writeFileSync(found.file, serializeCard(card));
+	runCheck(root, [found.role], { now: ms, wake: true, config });
 	appendLedger(root, { at: card.moved, cmd: "move", role: found.role, id: found.id, changes });
 	return `바꿈 ${found.role}/${found.id}`;
 }
@@ -1073,7 +1019,7 @@ function cmdWait(root, ms, flags, positional, config) {
 	return cmdMove(root, ms, { ...flags, status: "waiting" }, positional, config);
 }
 
-function cmdDefer(root, ms, flags, positional) {
+function cmdDefer(root, ms, flags, positional, config) {
 	const id = checkId(positional[0] || flags.id || fail("카드 id가 필요합니다"));
 	// 미룸은 사유·다시 볼 날 둘 다 필수. 하나라도 비면 장부·카드를 건드리기 전에 멈춘다.
 	const reason = flags.reason === undefined ? "" : String(flags.reason).trim();
@@ -1081,6 +1027,7 @@ function cmdDefer(root, ms, flags, positional) {
 	if (!reason || !revisit) {
 		fail("미룸은 사유(--reason)·다시 볼 날(--revisit)이 필요합니다");
 	}
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(revisit) || reason === "yes") fail("미룸은 사유와 YYYY-MM-DD 다시 볼 날이 필요합니다");
 	dueMs(revisit);
 	const found = findCard(root, id);
 	const card = loadCard(found.file);
@@ -1093,6 +1040,7 @@ function cmdDefer(root, ms, flags, positional) {
 	card.defer_count = (Number.parseInt(card.defer_count, 10) || 0) + 1;
 	card.moved = nowIso(ms);
 	fs.writeFileSync(found.file, serializeCard(card));
+	runCheck(root, [found.role], { now: ms, wake: true, config });
 	appendLedger(root, {
 		at: card.moved, cmd: "defer", role: found.role, id: found.id,
 		changes: { status: "deferred", defer_reason: card.defer_reason, revisit: card.revisit, defer_count: card.defer_count, moved: card.moved },
@@ -1112,6 +1060,7 @@ function cmdDone(root, ms, flags, positional, config) {
 	card.result = result;
 	card.moved = nowIso(ms);
 	fs.writeFileSync(found.file, serializeCard(card));
+	runCheck(root, [found.role], { now: ms, wake: true, config });
 	appendLedger(root, { at: card.moved, cmd: "done", role: found.role, id: found.id, changes: { status: "done", result, moved: card.moved } });
 	const rest = listLines(loadRoleCards(root, found.role));
 	const checks = formatProblems(runCheck(root, [found.role], { now: ms, config }));
@@ -1262,7 +1211,7 @@ function main(argv) {
 		case "new": return cmdNew(root, currentMs, flags, currentConfig);
 		case "move": return cmdMove(root, currentMs, flags, positional, currentConfig);
 		case "wait": return cmdWait(root, currentMs, flags, positional, currentConfig);
-		case "defer": return cmdDefer(root, currentMs, flags, positional);
+		case "defer": return cmdDefer(root, currentMs, flags, positional, currentConfig);
 		case "done": return cmdDone(root, currentMs, flags, positional, currentConfig);
 		case "ack": return cmdAck(root, currentMs, flags);
 		case "list": return cmdList(root, flags);

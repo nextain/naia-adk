@@ -1,12 +1,8 @@
 {
-  "_comment": "Copy to config/task-cards.json in each instance. Keep company-specific role IDs, user IDs, and wake paths in the instance file.",
+  "_comment": "Copy to private config/task-cards.json. Use the same absolute wakeRoot/stateFile in every checkout; wakeRoot is the flat wake-pump consumer folder.",
   "maxRecheckHours": 4,
-  "leadRole": "<lead-role-id>",
-  "ownerSenderIds": [
-    "<owner-user-id>"
-  ],
-  "roleWakeDirs": {
-    "<lead-role-id>": ".agents/work/l4/wake",
-    "<role-id>": ".agents/work/l4/wake/<role-id>"
-  }
+  "timeZone": "UTC",
+  "ownerSenderIds": ["<owner-user-id>"],
+  "wakeRoot": ".agents/work/l4/wake",
+  "stateFile": ".agents/work/task-cards/wait-wake-state.json"
 }

@@ -123,5 +123,6 @@
       "skills": "Mandatory skills: /read-doc for .hwp/.hwpx/.pdf/.docx/.xlsx/.pptx (never say a file type cannot be read); /webapp-testing for local web UI verification (never ask the user to test manually); /doc-coauthoring before a spec, proposal, RFC, design doc, PRD, or decision record.",
       "workflows.selection_guide": "Route tasks by matching request keywords in .agents/context/ai-work-index.yaml, reading the root quick reference first, and loading full workflow docs on demand."
     }
-  }
+  },
+  "task_card_waiting": "Already authorized reversible work stays doing; waiting requires an allowed wait_reason, an offset-qualified recheck_at (ledger due_at) within maxRecheckHours, and request_ref for human approval; wake files use the consumer wakeRoot directly, including unconfigured roles; legacy migration and shared watcher paths: docs/guides/task-cards.md."
 }

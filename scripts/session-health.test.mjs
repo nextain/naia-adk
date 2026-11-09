@@ -361,13 +361,14 @@ test('runHealth wakes role once on elapsed waiting card recheckAt and legacy wai
     '---',
     '',
   ].join('\n'));
-  const wakeDir = join(f.repo, '.agents/work/l4/wake/role-a');
+  f.c.taskCardsRoot = f.repo;
+  const wakeDir = join(f.repo, '.agents/work/l4/wake');
   await f.run({ now, dry: true });
   await assert.rejects(readdir(wakeDir), { code: 'ENOENT' });
   await f.run({ now });
   const files1 = (await readdir(wakeDir)).filter(n => n.endsWith('.md'));
-  assert.equal(files1.length, 2);
+  assert.equal(files1.length, 1);
   await f.run({ now: now + 5 * 60000 });
   const files2 = (await readdir(wakeDir)).filter(n => n.endsWith('.md'));
-  assert.equal(files2.length, 2);
+  assert.equal(files2.length, 1);
 });

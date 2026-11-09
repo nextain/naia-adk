@@ -76,7 +76,7 @@ describe("new/move/defer/done/ack 정상 흐름", () => {
 		const text = fs.readFileSync(path.join(root, "docs", "common", "team", "cards", "role-a", "20261028-옮길-일.md"), "utf8");
 		assert.match(text, /^status: waiting$/m);
 		assert.match(text, /^wait_reason: 바깥 송출·게시$/m);
-		assert.match(text, /^recheck_at: 2026-10-28T10:20:00Z$/m);
+		assert.match(text, /^recheck_at: 2026-10-28T10:20:00.000Z$/m);
 		assert.match(text, /^request_ref: #업무-요청\/200000000000000010$/m);
 		assert.match(text, /새 행동/);
 		assert.match(text, /2026-10-28T08:20:00/);
@@ -215,7 +215,7 @@ describe("대기(waiting/blocked/대기/보류) 까닭 넷·recheckAt·requestRe
 		]);
 		assert.equal(m.status, 0, m.stderr);
 
-		const wakeDir = path.join(root, ".agents", "work", "l4", "wake", "role-a");
+		const wakeDir = path.join(root, ".agents", "work", "l4", "wake");
 
 		// 1) recheckAt 전(07:50Z)에는 깨움 없음
 		const beforeCheck = run(["check", "--role", "role-a"], "2026-10-28T07:50:00Z");
@@ -287,7 +287,7 @@ describe("대기(waiting/blocked/대기/보류) 까닭 넷·recheckAt·requestRe
 		assert.match(listRes.stdout, /\[대기\] 20261020-옛-대기-카드/);
 
 		// 2) 감시(check)가 "까닭·시각 없는 대기"로 잡아서 담당을 한 번 깨움
-		const wakeDir = path.join(root, ".agents", "work", "l4", "wake", "role-a");
+		const wakeDir = path.join(root, ".agents", "work", "l4", "wake");
 		const c1 = run(["check", "--role", "role-a"]);
 		assert.equal(c1.status, 0, c1.stderr);
 		assert.match(c1.stdout, /\[까닭·시각 없는 대기\] role-a\/20261020-옛-대기-카드/);
@@ -537,7 +537,7 @@ describe("받은편지 대조·defer 필수·board 표시", () => {
 		assert.match(index, /\| 미룸 \[다시 볼 날 지남\] \| 미룸 카드/);
 	});
 
-	it("인스턴스 work-watch.json 또는 config/task-cards.json 의 역할 깨움 경로 규칙을 따르고 to-ledger 도 깨움을 만든다", () => {
+	it("기존 역할별 work-watch 설정과 관계없이 to-ledger 는 소비자 단일 폴더에 깨움을 만든다", () => {
 		const ctxDir = path.join(root, ".agents", "context");
 		fs.mkdirSync(ctxDir, { recursive: true });
 		fs.writeFileSync(path.join(ctxDir, "work-watch.json"), JSON.stringify({

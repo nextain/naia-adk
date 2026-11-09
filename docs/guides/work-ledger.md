@@ -39,8 +39,25 @@ Keep names, links, paths and task contents in private instance files. Follow
 [regular execution recording](regular-schedule-ledger.md) and
 [server acceptance](server-wake-onboarding.md) for the second ledger and rollout.
 
-When role work is tracked with [task cards](task-cards.md) (`.agents/scripts/task-cards.mjs` and `docs/common/team/cards/<role>/*.md`), **이미 지시가 있고 되돌릴 수 있는 일은 대기에 넣지 않고 진행**:
-1. Moving a card to `waiting` (`대기`/`blocked`/`보류`) requires `waitReason` to be one of `바깥 송출·게시`, `운영 배포·운영 접속`, `돈 드는 것`, or `다른 사람 결과물`; any other reason is rejected with `"진행으로 두고 바로 하십시오"`.
-2. `recheckAt` is required (at most `now + 4h`, configurable via `maxRecheckHours`), and the three human-approval reasons also require `requestRef` (request message link/ID such as `#업무-요청`).
-3. Once `recheckAt` passes, the existing periodic check (`session-health` / `task-cards.mjs check`) writes a role wake file under the instance's role wake path once per card and `recheckAt` timestamp without adding a new daemon.
-4. Legacy waiting cards without those fields remain readable and trigger a one-time `"까닭·시각 없는 대기"` wake so the owner fills them in or resumes work.
+When role work is tracked with [task cards](task-cards.md), already authorized
+reversible work stays `doing`. Waiting requires one of the four documented
+`wait_reason` values, a next wake time in card `recheck_at` (ledger `due_at`) within `maxRecheckHours`
+(default four hours), and a nonempty `request_ref` for human approval. Use an
+ISO-8601 timestamp with `Z` or an explicit offset; waiting timestamps without a timezone
+are rejected. Card `due` remains the work deadline; the waiting ledger row uses
+`due_at` for the next wake, matching the human-response watcher contract. Deferred cards use their revisit
+date at UTC end of day as ledger `due_at`. Legacy offsetless work deadlines use
+UTC consistently for parsing and display.
+
+The existing periodic check writes wake files directly under the consumer's
+`wakeRoot` (default `.agents/work/l4/wake/<file>`), including card roles absent
+from configured `roles`. Do not create role subdirectories. All observers must
+share the same central `wakeRoot`, `stateFile`, and card root; configure
+session-health `taskCardsRoot` and pass that same card root to `to-ledger`.
+Use absolute instance paths when running observers from different checkouts.
+
+Legacy waiting cards remain readable. The first check groups their migration
+wake by role rather than writing one file per card. Fill the waiting fields,
+resume authorized work, record completion with a result, or defer with a reason
+and a revisit date. Legacy notices do not suppress overdue or stale warnings.
+The next check also reconciles wake state after direct card edits.
