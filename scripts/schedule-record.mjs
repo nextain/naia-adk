@@ -1,10 +1,9 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 import { randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { recordSchedule } from './lib/ledger.mjs';
 export { recordSchedule } from './lib/ledger.mjs';
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMain(import.meta.url)) {
   const trace = randomUUID(), started = Date.now();
   const emit = event => console.log(JSON.stringify({ trace, ...event }));
   emit({ stage: 'start' });

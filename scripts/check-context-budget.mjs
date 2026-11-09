@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 // Read-set budgets: every file an agent reads rides along on each later model
 // call. When a set is over budget, split content into docs/ or docs/archive/
 // instead of raising the budget. Budgets: .agents/context/context-budget.json.
@@ -28,7 +29,7 @@ export function checkContextBudget(root) {
 	return failures;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
 	const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 	const failures = checkContextBudget(root);
 	for (const failure of failures) console.error(`[context-budget] ${failure}`);

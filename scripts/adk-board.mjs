@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 import fs from "node:fs"
 import net from "node:net"
 import path from "node:path"
@@ -222,6 +223,6 @@ export async function main() {
   })
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
   main()
 }

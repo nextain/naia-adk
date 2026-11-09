@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 // Apply the shared Claude user profile (templates/claude-user-profile) to a user's
 // ~/.claude: env keys, absolute-path hooks for role sessions, and the compaction
 // summary rule block in ~/.claude/CLAUDE.md. Idempotent; existing settings are kept.
@@ -207,7 +208,7 @@ export function run(args, now = new Date()) {
   return { drift, changed, overridden }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   try {
     const args = parseArgs(process.argv.slice(2))
     const result = run(args)

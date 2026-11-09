@@ -1,6 +1,6 @@
 #!/usr/bin/env node
+import { isMain } from './is-main.mjs';
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { manageLinuxService } from "./service-manager-linux.mjs";
 import { manageWindowsService } from "./service-manager-windows.mjs";
 
@@ -42,7 +42,7 @@ export function manageService(options) {
 	return process.platform === "win32" ? manageWindowsService(options) : manageLinuxService(options);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
 	const args = process.argv.slice(2);
 	const rootIndex = args.indexOf("--adk-root");
 	const instanceIndex = args.indexOf("--instance");

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from '../lib/is-main.mjs';
 /**
  * scripts/it/workspace-docs-it.mjs
  * 
@@ -725,6 +726,8 @@ async function main() {
 
     const scriptsDest = path.join(testWs, "scripts")
     fs.mkdirSync(scriptsDest, { recursive: true })
+    fs.mkdirSync(path.join(scriptsDest, "lib"), { recursive: true })
+    fs.copyFileSync(path.join(REPO_ROOT, "scripts", "lib", "is-main.mjs"), path.join(scriptsDest, "lib", "is-main.mjs"))
     fs.copyFileSync(path.join(REPO_ROOT, "scripts", "doc-notes.mjs"), path.join(scriptsDest, "doc-notes.mjs"))
 
     // 시험 데이터 폴더 구성
@@ -2900,7 +2903,7 @@ async function cleanupChildren(pids) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
+if (isMain(import.meta.url)) {
   main().catch((err) => {
     console.error("IT 실행 중 예외 발생:", err)
     process.exit(1)

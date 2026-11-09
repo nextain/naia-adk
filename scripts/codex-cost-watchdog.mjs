@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 
 import fs from "node:fs";
 import crypto from "node:crypto";
@@ -459,7 +460,7 @@ function argumentValue(name) {
 	return index >= 0 ? process.argv[index + 1] : null;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMain(import.meta.url)) {
 	const projectRoot = argumentValue("--project-root") || watchdogProjectRoot();
 	const enforce = process.argv.includes("--enforce");
 	const stateFile = argumentValue("--state-file");

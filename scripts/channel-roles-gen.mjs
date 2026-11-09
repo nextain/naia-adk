@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 /**
  * Naia ADK v0.2.0 — Organization Channel & Role Table Generator (channel-roles-gen.mjs)
  *
@@ -8,7 +9,6 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseChannelsYaml, renderChannelsMarkdown } from './lib/channel-roles-yaml.mjs';
 import {
   resolveWatchConfigPath,
@@ -254,7 +254,7 @@ function parseCliArgs(argv) {
   return opts;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+if (isMain(import.meta.url)) {
   try {
     const opts = parseCliArgs(process.argv.slice(2));
     if (opts.tablePaths.length === 0 || !opts.idsPath) {

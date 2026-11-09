@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 /**
  * Naia ADK v2.0.0 — Relative Symlink Linker, Group & Schedule Checker CLI
  *
@@ -10,7 +11,6 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   VALID_KINDS,
   LEGACY_KIND_ALIASES,
@@ -342,7 +342,7 @@ function parseCliArgs(argv) {
   return opts;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+if (isMain(import.meta.url)) {
   const opts = parseCliArgs(process.argv.slice(2));
   if (!opts.mode) {
     console.error('Usage: adk-link.mjs <--validate | --link | --check> [--json] [options]');

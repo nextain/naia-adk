@@ -1,7 +1,7 @@
 #!/usr/bin/env node
+import { isMain } from './is-main.mjs';
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { runComplexityMeasurement } from "./measure-complexity.mjs";
 
 function parseArgs(argv) {
@@ -27,7 +27,7 @@ export function evaluateReviewPreflight(options) {
 	return { schemaVersion: 1, verdict: "PREFLIGHT_CLEAN", reason: null, complexitySha256, complexity };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
 	try {
 		const options = parseArgs(process.argv.slice(2));
 		const report = evaluateReviewPreflight(options);

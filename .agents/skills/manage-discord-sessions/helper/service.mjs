@@ -146,7 +146,17 @@ export function runtimeLaunchForEntrypoint(environment = process.env, platform =
 	return platform === "win32" && environment.NAIA_DISCORD_LAUNCH_MODE === "direct" ? "direct" : "environment";
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+// Keep this integrity bootstrap limited to built-ins before runtime verification.
+export function isMain(importMetaUrl) {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(importMetaUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isMain(import.meta.url)) {
 	let exitCode = 0;
 	let serviceArguments = null;
 	try {

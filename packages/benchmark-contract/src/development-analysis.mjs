@@ -1,3 +1,4 @@
+import { isMain } from './is-main.mjs';
 import fs from "node:fs";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
@@ -56,4 +57,4 @@ export function analyzeDevelopmentJournals({journalPaths,integrityKey=process.en
 }
 
 async function main(argv){const journals=argv.filter(value=>!value.startsWith("--"));return analyzeDevelopmentJournals({journalPaths:journals});}
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main(process.argv.slice(2)).then(report=>process.stdout.write(`${JSON.stringify(report,null,2)}\n`)).catch(error=>{process.stderr.write(`${error.code||"development_analysis_error"}: ${error.message}\n`);process.exitCode=1;});
+if(isMain(import.meta.url))main(process.argv.slice(2)).then(report=>process.stdout.write(`${JSON.stringify(report,null,2)}\n`)).catch(error=>{process.stderr.write(`${error.code||"development_analysis_error"}: ${error.message}\n`);process.exitCode=1;});

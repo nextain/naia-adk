@@ -1,0 +1,16 @@
+{
+  "work": "main-guard-realpath",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/guides/dev-docs-writing.md"]
+  },
+  "user_manual": {
+    "status": "N/A",
+    "detail": "CLI arguments and user workflows are unchanged; this fixes entrypoint detection for linked paths."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": ["docs/guides/dev-docs-writing.md", "scripts/is-main.test.mjs"],
+    "detail": "Use filesystem identity for entrypoint guards, include the shared implementation in independent distributions, and reject unresolved path comparisons."
+  }
+}

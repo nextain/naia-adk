@@ -1,9 +1,9 @@
 #!/usr/bin/env node
+import { isMain } from './is-main.mjs';
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { extname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 
 const SOURCE_EXTENSIONS = new Set([
 	".c", ".cc", ".cjs", ".cpp", ".cs", ".cts", ".dart", ".ex", ".exs", ".go", ".h", ".hpp",
@@ -403,7 +403,7 @@ function printHuman(report) {
 	for (const path of report.deletedSourceFiles) console.log(`DELETED_SOURCE ${path}`);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
 	try {
 		const options = parseArgs(process.argv.slice(2));
 		const report = runComplexityMeasurement(options);

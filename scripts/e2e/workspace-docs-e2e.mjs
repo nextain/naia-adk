@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from '../lib/is-main.mjs';
 /**
  * scripts/e2e/workspace-docs-e2e.mjs
  *
@@ -752,6 +753,8 @@ async function runScratchMode({ outDir }) {
     // 도구 복사
     const wsScripts = path.join(testWs, "scripts")
     fs.mkdirSync(wsScripts, { recursive: true })
+    fs.mkdirSync(path.join(wsScripts, "lib"), { recursive: true })
+    fs.copyFileSync(path.join(REPO_ROOT, "scripts", "lib", "is-main.mjs"), path.join(wsScripts, "lib", "is-main.mjs"))
     fs.copyFileSync(path.join(REPO_ROOT, "scripts", "doc-notes.mjs"), path.join(wsScripts, "doc-notes.mjs"))
     fs.copyFileSync(path.join(REPO_ROOT, "scripts", "view-folders.mjs"), path.join(wsScripts, "view-folders.mjs"))
 
@@ -3968,7 +3971,7 @@ async function runUc01Mode({
 }
 
 // 직접 실행 시
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename)) {
+if (isMain(import.meta.url)) {
   main().catch((err) => {
     console.error("E2E 스크립트 실행 중 예외 발생:", err)
     process.exit(1)

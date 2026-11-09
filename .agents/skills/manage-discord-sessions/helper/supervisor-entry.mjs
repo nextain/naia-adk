@@ -2,8 +2,7 @@
 // Managed observer bootstrap: validate the immutable runtime with the service's
 // built-in-only preflight before evaluating any observer helper module.
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { verifyManagedServiceRuntimeEnvironment } from "./service.mjs";
+import { isMain, verifyManagedServiceRuntimeEnvironment } from "./service.mjs";
 
 function argumentsFor(argv) {
 	const rootIndex = argv.indexOf("--adk-root");
@@ -16,7 +15,7 @@ function argumentsFor(argv) {
 	return { adkRoot: resolve(argv[rootIndex + 1]), instance };
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
 	try {
 		const options = argumentsFor(process.argv.slice(2));
 		verifyManagedServiceRuntimeEnvironment();

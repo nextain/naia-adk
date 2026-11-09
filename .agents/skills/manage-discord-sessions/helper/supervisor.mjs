@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './is-main.mjs';
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
@@ -69,7 +70,7 @@ export function observeOnce({ adkRoot, instance = "default", nowMs = Date.now(),
 	} finally { store?.close(); }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
 	try {
 		const options = argumentsFor(process.argv.slice(2));
 		const runtimeLaunch = process.platform === "win32" && process.env.NAIA_DISCORD_LAUNCH_MODE === "direct" ? "direct" : "environment";

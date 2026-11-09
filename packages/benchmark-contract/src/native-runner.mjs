@@ -1,3 +1,4 @@
+import { isMain } from './is-main.mjs';
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -279,6 +280,6 @@ async function main(argv) {
   return runPlan({plan,adapter:loaded.default || loaded,journalPath:path.resolve(journalPath),integrityKey:process.env.NAIA_BENCHMARK_JOURNAL_KEY,recoverStaleLock:rest.includes("--recover-stale-lock")});
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   main(process.argv.slice(2)).then((result) => process.stdout.write(`${JSON.stringify(result,null,2)}\n`)).catch((error) => { process.stderr.write(`${error.code || "runner_error"}: ${error.message}\n`); process.exitCode=1; });
 }

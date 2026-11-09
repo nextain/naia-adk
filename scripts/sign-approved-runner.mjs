@@ -1,8 +1,8 @@
 #!/usr/bin/node
+import { isMain } from './lib/is-main.mjs';
 // Offline primitive only: run on the human's separate host, never the execution server.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
-import { pathToFileURL } from 'node:url';
 import { approvalBytes, sha256, parseRoles, readProtectedFile, assertProtectedPath } from './approved-root-runner.mjs';
 
 export function readSigningKey(filename, subjectUid, testBoundary = null) {
@@ -60,6 +60,6 @@ export function main(args) {
   process.stderr.write(`${JSON.stringify({ command: step.command, stepId, planApproval: request.planApproval.payload, stepApproval: request.stepApproval.payload }, null, 2)}\n`);
   process.stdout.write(`${JSON.stringify(request)}\n`);
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   try { main(process.argv.slice(2)); } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }
 }

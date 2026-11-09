@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 /**
  * Naia ADK v0.2.0 — Project Studio Dev & Document Server with Live-Reload (SSE)
  * - GET / or /docs : Split Studio View (Left Doc Tree + Center Interactive Mermaid Viewer + Right Play Dock)
@@ -315,7 +316,7 @@ export function createStudioServer({ root = defaultRoot } = {}) {
   });
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+if (isMain(import.meta.url)) {
   const port = Number(process.env.PORT || 4173);
   const srv = createStudioServer({ root: defaultRoot });
   srv.listen(port, '127.0.0.1', () => {

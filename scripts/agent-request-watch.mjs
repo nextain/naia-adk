@@ -1,7 +1,7 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { runHealth } from './session-health.mjs';
 import { fill } from './response-watch.mjs';
@@ -207,7 +207,7 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
   } catch (e) { emit('end', 'failed', { durationMs: Date.now() - started, reason: e.message }); throw e; }
   finally { if (lock) { await lock.close(); await unlink(`${stateFile}.lock`); } }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMain(import.meta.url)) {
   try {
     const args = process.argv.slice(2), at = args.indexOf('--config');
     if (at < 0 || !args[at + 1] || args.some((x, i) => !['--config', '--dry'].includes(x) && i !== at + 1)) throw Error('Usage: agent-request-watch.mjs --config <file> [--dry]');
