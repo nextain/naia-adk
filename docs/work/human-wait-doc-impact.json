@@ -1,0 +1,27 @@
+{
+  "work": "humanwaitfix2",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/common/work-ledger.md",
+      "docs/guides/work-ledger.md",
+      "docs/guides/agent-messaging.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/common/work-ledger.md",
+      "config/work-ledger.example.json"
+    ],
+    "detail": "Documents flat route-role wake files and legacy-consumer incompatibility, optional unrecorded-human checks, split/thread/direct questions, human-only closure and bounded retries."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      "docs/common/work-ledger.md",
+      "docs/guides/agent-messaging.md"
+    ],
+    "detail": "Unrelated bot activity never closes a human question; preserve original question ordering and independent deduplication when recovering corrupt state."
+  }
+}
