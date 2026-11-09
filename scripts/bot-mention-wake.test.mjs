@@ -136,24 +136,3 @@ for (const code of [4007, 4009]) test(`close ${code} clears invalid resume befor
   assert.equal(f.sockets.at(-1).sent[0].op, 2);
   assert.equal(f.sockets.at(-1).sent[0].d.session_id, undefined);
 });
-
-test('MESSAGE_CREATE relay suppresses standby and collects own owner claim', async t => {
-  const { createOwnerRouting } = await import('./bot-mention-wake.mjs');
-  const f = setup(t);
-  const roles = [f.role, { id: 'reviewer', botUserId: other, wakeDir: path.join(f.dir, 'reviewer') }];
-  const timers = [];
-  const routing = createOwnerRouting(roles, { stateFile: path.join(f.dir, 'owners.json'), now: () => 0, schedule: fn => { timers.push(fn); return fn; }, cancel: () => {} });
-  // The old fixture worker is replaced with the real shared routing injected.
-  await f.worker.stop();
-  const routed = createRoleWake(f.role, { ...f.options, ownerRouting: routing });
-  f.worker.stop = async () => { await routed.stop(); routing.stop(); };
-  routed.start();
-  const send = async data => { f.sockets.at(-1).receive({ op: 0, t: 'MESSAGE_CREATE', s: 1, d: data }); await routed.session.drain(); };
-  await send(f.message('01', { author: { id: '500000000000000001' }, content: `<@${other}> <@${bot}> help`, mentions: [{ id: bot }, { id: other }] }));
-  assert.equal(f.files().length, 0);
-  await send(f.message('02', { author: { id: '500000000000000001' }, content: `<@${bot}> <@${other}> help`, mentions: [{ id: bot }, { id: other }] }));
-  assert.equal(f.files().length, 1);
-  await send(f.message('03', { author: { id: bot }, content: '맡음 12:30까지', message_reference: { message_id: f.message('02').id } }));
-  const state = JSON.parse(fs.readFileSync(path.join(f.dir, 'owners.json')));
-  assert.equal(state[f.message('02').id].claimed, true);
-});

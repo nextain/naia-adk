@@ -7,10 +7,9 @@ import { detectRequests, isReceipt, parseDeadline, validateConfig, runWatch } fr
 const roles = [{ id: 'a', botId: '1', aliases: ['갑'] }, { id: 'b', botId: '2', aliases: ['을'] }, { id: 'ops', botId: '3', aliases: ['운영'] }];
 const at = Date.parse('2026-11-04T14:00:00Z');
 const message = (id, from, content, extra = {}) => ({ id, author: { id: from, bot: true }, timestamp: new Date(at).toISOString(), content, ...extra });
-const config = dir => ({ ownerRoutingStateFile: join(dir, 'owners.json'), roles: structuredClone(roles), stateFile: join(dir, 'state.json'), sessionHealthConfig: join(dir, 'health.json'), recovery: { roleId: 'ops' }, guilds: [{ id: '10' }], timezoneOffsetMinutes: 540 });
+const config = dir => ({ roles: structuredClone(roles), stateFile: join(dir, 'state.json'), sessionHealthConfig: join(dir, 'health.json'), recovery: { roleId: 'ops' }, guilds: [{ id: '10' }], timezoneOffsetMinutes: 540 });
 async function setup() {
   const dir = await mkdtemp(join(tmpdir(), 'agent-request-test-')), c = config(dir);
-  await writeFile(c.ownerRoutingStateFile, '{}');
   let rows = [], sent = [], failPost = false, probes = 0;
   const fetchImpl = async (url, init) => {
     if (init.method === 'POST') { sent.push(JSON.parse(init.body)); if (failPost) throw Error('network failed'); return { ok: true, json: async () => ({ id: '999' }) }; }
@@ -186,7 +185,6 @@ test('uncertain notification echoed with nonce is not ingested as request', asyn
 const snowflake = time => ((BigInt(time - 1420070400000) << 22n) + 1n).toString();
 async function discoveryHarness() {
   const dir = await mkdtemp(join(tmpdir(), 'agent-request-discovery-')), c = config(dir), calls = [], logs = [];
-  await writeFile(c.ownerRoutingStateFile, '{}');
   let listed = [0, 5, 15, 2].map((type, index) => ({ id: String(11 + index), guild_id: '10', type }));
   let threads = [{ id: '20', guild_id: '10', parent_id: '13', type: 11 }], denied = new Set(), rows = new Map();
   const run = (now = at) => runWatch(c, {
@@ -274,14 +272,4 @@ test('initial failed read preserves its two-hour cursor across retries', async (
   h.rows.set('11', [message(recent, '1', 'plain', { timestamp: new Date(at - 2 * 3600000 + 1000).toISOString() })]);
   const state = await h.run(at + 3 * 3600000);
   assert.equal(h.calls.at(-1).query.get('after'), cursor); assert.equal(state.channels['10/11'].cursor, recent);
-});
-
-test('shared gateway ownership suppresses bot-to-bot reminder and recovery publications', async () => {
-  const f = await setup();
-  f.c.ownerRoutingStateFile = join(f.dir, 'owners.json');
-  await writeFile(f.c.ownerRoutingStateFile, JSON.stringify({ '100': { ownerRole: 'b' } }));
-  f.rows([message('100', '1', '<@2> <@3> help')]);
-  await f.run(at + 10 * 60000);
-  await f.run(at + 40 * 60000);
-  assert.equal(f.sent.length, 0); assert.equal(f.probes(), 0);
 });

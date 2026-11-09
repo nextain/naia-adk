@@ -48,6 +48,5 @@
     "overdue": "<@{bot}> 약속한 끝 시각이 지났습니다. 결과를 확인해 주세요: {link}",
     "escalate": "<@{bot}> 아직 답 없음 — 다시 부를지·다른 역할인지 확인해 주세요: {link}",
     "recovery": "<@{bot}> {role} 세션이 {health} 상태입니다. 복구를 확인해 주세요: {link}"
-  },
-  "ownerRoutingStateFile": "/srv/example/bot-mention-wake.json.owners.json"
+  }
 }

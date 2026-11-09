@@ -1,9 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { selectSingleOwnerRole, shouldWakeUnclaimedOwner, extractCalledRoles } from './lib/role-routing.mjs';
 import { DiscordGatewaySession } from '../.agents/skills/manage-discord-sessions/helper/discord-gateway.mjs';
 
 const snowflake = value => typeof value === 'string' && /^\d{17,20}$/.test(value);
@@ -33,86 +31,11 @@ export function loadConfig(file, env = process.env) {
     ids.add(role.id); bots.add(role.botUserId); dirs.add(wakeDir);
     const token = (role.tokenFile ? fs.readFileSync(path.resolve(base, role.tokenFile), 'utf8') : env[role.tokenEnv])?.trim();
     if (!token || token.length < 16) throw new Error('credential unavailable');
-    return { id: role.id, botUserId: role.botUserId, aliases: role.aliases ?? [], wakeDir, token };
+    return { id: role.id, botUserId: role.botUserId, wakeDir, token };
   });
 }
 
-// One shared, durable election ledger for all gateway workers. A process-wide
-// exclusive lock rejects a second relay before either can publish handoffs.
-export function createOwnerRouting(roles, { stateFile, rules = [], now = Date.now, schedule = setTimeout, cancel = clearTimeout } = {}) {
-  fs.mkdirSync(path.dirname(stateFile), { recursive: true, mode: 0o700 });
-  const lock = `${stateFile}.lock`;
-  fs.writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 });
-  let state;
-  try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); }
-  catch (error) { if (error.code !== 'ENOENT') { fs.unlinkSync(lock); throw error; } state = {}; }
-  if (!state || typeof state !== 'object' || Array.isArray(state)) { fs.unlinkSync(lock); throw Error('invalid ownership state'); }
-  const memberships = new Map();
-  const timers = new Map();
-  let stopped = false;
-  const save = () => atomic(stateFile, JSON.stringify(state));
-  const routingRoles = roles.map(role => ({ ...role, botId: role.botUserId }));
-  function arm(id, entry) {
-    if (entry.claimed || entry.wakeCount || timers.has(id)) return;
-    timers.set(id, schedule(() => {
-      timers.delete(id);
-      if (stopped || !shouldWakeUnclaimedOwner({ calledAtMs: entry.calledAt, nowMs: now(), claimed: entry.claimed, wakeCount: entry.wakeCount }).shouldWake) return;
-      const owner = roles.find(role => role.id === entry.ownerRole);
-      // Durable intent before publication: an uncertain crash is never retried.
-      // This guarantees at most one wake even if the consumer removes the file.
-      entry.wakeCount = 1; save();
-      fs.mkdirSync(owner.wakeDir, { recursive: true, mode: 0o700 });
-      const wakeId = (1000000000000000000n + BigInt(`0x${createHash('sha256').update(`owner-wake/${id}`).digest('hex')}`) % 9000000000000000000n).toString();
-      atomic(path.join(owner.wakeDir, `${id}-owner.md`), `# Discord wake\n\nRole: ${owner.id}\nGuild: ${entry.guild} (${entry.guild})\nChannel: ${entry.channel} (${entry.channel})\nAuthor: owner-routing\nMessage ID: ${wakeId}\nOriginal Message ID: ${id}\nURL: https://discord.com/channels/${entry.guild}/${entry.channel}/${id}\n\n10분 동안 맡음 + 끝낼 시각이 없습니다. 원문에 맡음과 끝낼 시각을 남겨 주세요.\n`);
-    }, Math.max(0, entry.calledAt + 600000 - now())));
-  }
-  for (const [id, entry] of Object.entries(state)) {
-    if (!snowflake(id) || !entry || !roles.some(role => role.id === entry.ownerRole) || !Number.isFinite(entry.calledAt) || typeof entry.claimed !== 'boolean' || ![0, 1].includes(entry.wakeCount) || !snowflake(entry.channel)) { fs.unlinkSync(lock); throw Error('invalid ownership state'); }
-    arm(id, entry);
-  }
-  function observe(data) {
-    const entry = state[data.message_reference?.message_id];
-    if (!entry || entry.claimed || entry.channel !== data.channel_id || entry.guild !== (data.guild_id ?? '@me')) return;
-    const owner = roles.find(role => role.id === entry.ownerRole);
-    const content = String(data.content ?? '');
-    if (data.author?.id !== owner.botUserId || !/맡음/.test(content) || !/(?<![\d:])(?:[01]\d|2[0-3]):[0-5]\d\s*까지(?!\d)/u.test(content)) return;
-    entry.claimed = true; entry.claimMessageId = data.id; save();
-    if (timers.has(data.message_reference.message_id)) { cancel(timers.get(data.message_reference.message_id)); timers.delete(data.message_reference.message_id); }
-  }
-  save();
-  return {
-    observe,
-    membership(type, data) {
-      if (type === 'GUILD_CREATE') for (const member of data.members ?? []) memberships.set(`${data.id}/${member.user?.id}`, member.roles ?? []);
-      if (type === 'GUILD_MEMBER_UPDATE') memberships.set(`${data.guild_id}/${data.user?.id}`, data.roles ?? []);
-    },
-    allow(data, role) {
-      if (!data.guild_id) return true; // DMs have only one addressed bot.
-      let entry = state[data.id];
-      if (!entry) {
-        const called = extractCalledRoles(data.content, routingRoles);
-        for (const mentioned of data.mentions ?? []) {
-          const target = roles.find(item => item.botUserId === mentioned.id);
-          if (target && !called.includes(target.id)) called.push(target.id);
-        }
-        for (const roleId of data.mention_roles ?? []) for (const target of roles) {
-          if (memberships.get(`${data.guild_id}/${target.botUserId}`)?.includes(roleId) && !called.includes(target.id)) called.push(target.id);
-        }
-        // Role membership may not yet be cached for every worker. Fail closed
-        // instead of independently waking every bot for an unresolved group.
-        if (!called.length) return false;
-        if (called.length < 2) return true;
-        const selected = selectSingleOwnerRole({ calledRoles: called, text: data.content }, { roles: routingRoles, rules });
-        entry = state[data.id] = { ownerRole: selected.ownerRole, calledAt: now(), claimed: false, wakeCount: 0, guild: data.guild_id, channel: data.channel_id };
-        save(); arm(data.id, entry);
-      }
-      return entry.ownerRole === role.id;
-    },
-    stop() { if (stopped) return; stopped = true; for (const timer of timers.values()) cancel(timer); fs.unlinkSync(lock); },
-  };
-}
-
-export function createRoleWake(role, { ownerRouting, gatewayOptions = {}, log = record => process.stderr.write(`${JSON.stringify(record)}\n`), reconnectMs = 1_000, schedule = setTimeout, cancel = clearTimeout, now = Date.now, tokens = [role.token], onFatal = () => {} } = {}) {
+export function createRoleWake(role, { gatewayOptions = {}, log = record => process.stderr.write(`${JSON.stringify(record)}\n`), reconnectMs = 1_000, schedule = setTimeout, cancel = clearTimeout, now = Date.now, tokens = [role.token], onFatal = () => {} } = {}) {
   fs.mkdirSync(role.wakeDir, { recursive: true, mode: 0o700 });
   const stateFile = path.join(role.wakeDir, '.bot-mention-wake-state.json');
   const lockFile = path.join(role.wakeDir, '.bot-mention-wake.lock');
@@ -155,7 +78,6 @@ export function createRoleWake(role, { ownerRouting, gatewayOptions = {}, log = 
   const safe = value => tokens.reduce((text, token) => redact(text, token), String(value ?? ''));
   const cacheChannel = channel => { if (snowflake(channel?.id)) state.channels[channel.id] = safe(channel.name ?? 'DM'); };
   async function onDispatch(type, data) {
-    ownerRouting?.membership(type, data);
     if (type === 'GUILD_CREATE') {
       state.guilds[data.id] = safe(data.name ?? data.id);
       for (const channel of [...(data.channels ?? []), ...(data.threads ?? [])]) cacheChannel(channel);
@@ -166,12 +88,10 @@ export function createRoleWake(role, { ownerRouting, gatewayOptions = {}, log = 
       state.roles[data.guild_id] = data.roles ?? []; persist();
     } else if (['CHANNEL_CREATE', 'CHANNEL_UPDATE', 'THREAD_CREATE', 'THREAD_UPDATE'].includes(type)) { cacheChannel(data); persist(); }
     else if (type === 'GUILD_UPDATE') { state.guilds[data.id] = safe(data.name ?? data.id); persist(); }
-    if (type === 'MESSAGE_CREATE') ownerRouting?.observe(data);
     if (type !== 'MESSAGE_CREATE' || (data?.guild_id != null && !snowflake(data.guild_id)) || !snowflake(data?.id) || !snowflake(data.channel_id) || data.author?.id === role.botUserId) return;
     const direct = !data.guild_id;
     const mentioned = data.mentions?.some(user => user.id === role.botUserId) || data.mention_roles?.some(id => state.roles[data.guild_id]?.includes(id));
     if ((!direct && !mentioned) || state.seen[data.id]) return;
-    if (ownerRouting && !ownerRouting.allow(data, role)) return;
     finishPending();
     const clean = value => safe(value).replace(/[\r\n]/g, ' ');
     const guild = data.guild_id ?? '@me';
@@ -198,22 +118,19 @@ export function createRoleWake(role, { ownerRouting, gatewayOptions = {}, log = 
 }
 
 export async function main(args = process.argv.slice(2)) {
-  let workers = [], ownerRouting;
+  let workers = [];
   try {
     if (args[0] === '--config') args = args.slice(1);
     if (args.length !== 1) throw new Error('config path required');
     const roles = loadConfig(args[0]);
-    const config = JSON.parse(fs.readFileSync(args[0], 'utf8'));
-    ownerRouting = createOwnerRouting(roles, { stateFile: `${path.resolve(args[0])}.owners.json`, rules: config.roleRouting?.rules ?? [] });
-    const onFatal = () => { process.exitCode = 1; Promise.allSettled(workers.map(worker => worker.stop())).then(() => ownerRouting?.stop()); };
-    for (const role of roles) workers.push(createRoleWake(role, { tokens: roles.map(item => item.token), onFatal, ownerRouting }));
+    const onFatal = () => { process.exitCode = 1; for (const worker of workers) worker.stop().catch(() => {}); };
+    for (const role of roles) workers.push(createRoleWake(role, { tokens: roles.map(item => item.token), onFatal }));
     for (const worker of workers) worker.start();
     let stopping = false;
-    const stop = async () => { if (stopping) return; stopping = true; await Promise.all(workers.map(worker => worker.stop())); ownerRouting?.stop(); };
+    const stop = async () => { if (stopping) return; stopping = true; await Promise.all(workers.map(worker => worker.stop())); };
     process.once('SIGTERM', stop); process.once('SIGINT', stop);
   } catch {
     await Promise.allSettled(workers.map(worker => worker.stop()));
-    ownerRouting?.stop();
     process.stderr.write(`${JSON.stringify({ event: 'bot_mention_wake_failed', reason: 'configuration_or_storage' })}\n`);
     process.exitCode = 1;
   }

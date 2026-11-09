@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { isGatewayOwned } from './lib/owner-reminder-policy.mjs';
 import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,7 +20,6 @@ const namedRole = (content, name) => {
 const fingerprint = value => createHash('sha256').update(value).digest('hex').slice(0, 16);
 
 export function validateConfig(config) {
-  if (typeof config.ownerRoutingStateFile !== 'string' || !config.ownerRoutingStateFile.startsWith('/')) throw Error('absolute ownerRoutingStateFile required');
   const id = value => typeof value === 'string' && /^\d+$/.test(value);
   const requireId = value => { if (!id(value)) throw new Error('invalid configured Discord id'); };
   if (!config.stateFile || !Array.isArray(config.guilds) || !config.guilds.length) throw new Error('stateFile and guilds required');
@@ -53,7 +51,6 @@ export function validateConfig(config) {
 
 export async function runWatch(config, { fetchImpl = fetch, token, dry = false, now = Date.now(), log = event => console.log(JSON.stringify(event)) } = {}) {
   validateConfig(config);
-  isGatewayOwned(config, ''); // Validate the required shared ledger before any network side effect.
   if (!token) throw new Error('configured token environment variable is empty');
   const trace = randomUUID(), started = Date.now(), stateFile = resolve(config.stateFile);
   const emit = (stage, result, extra = {}) => log({ trace, stage, result, ...extra });
@@ -167,7 +164,6 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         delete state.errors[key];
         state.channels[key] = next; state.replies = replies; await save();
         for (const [messageId, request] of Object.entries(next.pending)) {
-          if (isGatewayOwned(config, messageId)) continue;
           const age = (now - request.at) / 60000;
           const link = `https://discord.com/channels/${guild.id}/${channel.id}/${messageId}`;
           if (age >= (config.thresholds?.nudgeMinutes ?? 10)) await send(request.stages, `${key}/${messageId}/nudge`, guild.nudgeChannelId, fill(config.messages?.nudge ?? '<@{bot}> Please respond to the pending request: {link}', { bot: request.botId, link }), [request.botId]);

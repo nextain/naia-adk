@@ -10,8 +10,7 @@ const epoch = Date.parse('2026-01-01T00:00:00Z');
 const human = (id, extra = {}) => ({ id: String(id), type: 0, author: { id: '40' }, timestamp: new Date(epoch).toISOString(), mentions: [{ id: '20', bot: true }], ...extra });
 async function fixture() {
   const directory = await mkdtemp(`${base}/response-watch-`);
-  const config = { ownerRoutingStateFile: `${directory}/owners.json`, stateFile: `${directory}/state.json`, guilds: [{ id: '10', defaultBotId: '20', channels: [{ id: '30', mode: 'all-human' }], excludeChannelIds: [], nudgeChannelId: '31', escalation: { channelId: '32', userId: '41' } }] };
-  await writeFile(config.ownerRoutingStateFile, '{}');
+  const config = { stateFile: `${directory}/state.json`, guilds: [{ id: '10', defaultBotId: '20', channels: [{ id: '30', mode: 'all-human' }], excludeChannelIds: [], nudgeChannelId: '31', escalation: { channelId: '32', userId: '41' } }] };
   const remote = { messages: [human(1)], posts: [], events: [], siteOk: true, failRead: false, failPost: false, uncertain: false };
   const fetchImpl = async (url, options = {}) => {
     const parsed = new URL(url);
@@ -168,13 +167,4 @@ test('instance message templates replace known placeholders and keep unknown one
   const { fill } = await import('./response-watch.mjs');
   assert.equal(fill('<@{bot}> 답해 주세요: {link}', { bot: '1', link: 'https://x/y' }), '<@1> 답해 주세요: https://x/y');
   assert.equal(fill('{site} {unknown}', { site: 'a' }), 'a {unknown}');
-});
-
-test('shared gateway ownership suppresses human observer nudge and escalation', async () => {
-  const f = await fixture(); await f.run();
-  f.config.ownerRoutingStateFile = `${f.config.stateFile}.owners`;
-  await writeFile(f.config.ownerRoutingStateFile, JSON.stringify({ '2': { ownerRole: 'builder' } }));
-  f.remote.messages.push(human(2));
-  await f.run(10); await f.run(40);
-  assert.equal(f.remote.posts.length, 0);
 });
