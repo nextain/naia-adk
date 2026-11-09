@@ -1,5 +1,5 @@
 {
-  "work": "sensitive-path-guard-fix2",
+  "work": "sensitive-path-guard-fix3",
   "repository_docs": {
     "status": "UPDATED",
     "paths": [
@@ -22,6 +22,6 @@
   "review": {
     "independent_model_family": "NOT_RUN",
     "public_push_review": "NOT_RUN; no push authorized",
-    "regressions": "Review findings 1-7; false-positive table, upload/patch/ancestor bypasses, single-process Git batching, dynamically assembled fake headers"
+    "regressions": "Reviews 1/2 counterexamples retained; first-round 94 cases restored with explicit scope changes; safe child Git, literal operands and false positives covered"
   }
 }

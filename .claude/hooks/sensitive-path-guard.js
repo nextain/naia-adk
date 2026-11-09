@@ -56,59 +56,98 @@ function containsSensitiveContent(v, names=true) {
  const s=typeof v==='string'?v:JSON.stringify(v);
  return /BEGIN (?:ENCRYPTED )?PRIVATE KEY/i.test(s) || /\bMII[A-Za-z0-9+/=]{60,}/.test(s) || (names && /\b(?:signPri\.key|kmPri\.key|signCert\.der)\b/i.test(s));
 }
-function gitPayload(s) { return /^\s*-----BEGIN (?:ENCRYPTED )?PRIVATE KEY-----\s*$/m.test(s) || /^\s*MII[A-Za-z0-9+/=]{60,}/m.test(s); }
 function strings(v) { if(typeof v==='string') return [v]; if(v && typeof v==='object') return Object.values(v).flatMap(strings); return []; }
 const {shellClauses}=require('./lib/git-command-parser');
 const {normalizedToolName}=require('./tool-names');
 function patchPaths(s) {
  return [...String(s).matchAll(/^(?:\*\*\* (?:Add|Update|Delete) File: |\*\*\* Move to: |\+\+\+ b\/|--- a\/)(.+)$/gm)].map(m=>m[1].trim());
 }
-function gitContentGuard(tokens,cwd,c) {
- if(!/^(?:.*\/)?git$/.test(tokens[0] || '')) return false;
- let i=1; const globals=[];
+// Inspection children receive only fixed policy and validated repository locations.
+const SAFE_GIT = ['-c','core.fsmonitor=false','-c','core.hooksPath=/dev/null','-c','diff.external=','--no-pager'];
+function gitEnvironment() {
+ const env=Object.fromEntries(Object.entries(process.env).filter(([k])=>!k.startsWith('GIT_')));
+ return {...env,GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:'/dev/null',GIT_TERMINAL_PROMPT:'0'};
+}
+function gitInvocation(tokens,cwd,c) {
+ if(!/^(?:.*\/)?git$/.test(tokens[0] || '')) return null;
+ let i=1;const locations=[];
  while(tokens[i]?.startsWith('-')) {
-  const t=tokens[i++];
-  if(t==='-C') {cwd=path.resolve(cwd,expand(tokens[i++] || '')); continue;}
-  globals.push(t);
-  if(['-c','--git-dir','--work-tree','--namespace','--config-env'].includes(t)) globals.push(tokens[i++]);
+  const option=tokens[i++];
+  const key=option.split('=')[0];
+  if(!['-C','--git-dir','--work-tree'].includes(key)) return {blocked:true};
+  const value=option.includes('=')?option.slice(option.indexOf('=')+1):tokens[i++];
+  if(!value || sensitivePath(value,c,cwd)) return {blocked:true};
+  const resolved=path.resolve(cwd,expand(value));
+  if(key==='-C') cwd=resolved; else locations.push(key+'='+resolved);
  }
- const sub=tokens[i++]; if(!['commit','push'].includes(sub)) return false;
- const args=tokens.slice(i);
- for(let j=0;j<args.length;j++) {
-  if(sub==='commit' && (['-F','--file'].includes(args[j]) || args[j].startsWith('--file='))) {
-   const file=path.resolve(cwd,expand(args[j].startsWith('--file=')?args[j].slice(7):(args[++j] || '')));
-   if(sensitivePath(file,c,cwd,{extensions:true})) return true;
-   try {if(containsSensitiveContent(fs.readFileSync(file,'utf8'),false)) return true;} catch {return true;}
-  }
-  if(sub==='commit' && ['-m','--message'].includes(args[j]) && containsSensitiveContent(args[++j] || '',false)) return true;
- }
+ return {cwd,locations,sub:tokens[i++],args:tokens.slice(i)};
+}
+function gitPayload(s) { return /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/.test(s) || /\bMII[A-Za-z0-9+/=]{60,}/.test(s); }
+function gitContentGuard(tokens,cwd,c) {
+ const invocation=gitInvocation(tokens,cwd,c);if(!invocation)return false;if(invocation.blocked)return true;
+ const {locations,sub,args}=invocation;cwd=invocation.cwd;
+ if(!['commit','push'].includes(sub))return false;
+ const git=(argv)=>cp.execFileSync('git',[...SAFE_GIT,...locations,...argv],{cwd,env:gitEnvironment(),encoding:'utf8',maxBuffer:256*1024*1024,timeout:30000,stdio:['ignore','pipe','pipe']});
  try {
+  for(let j=0;j<args.length;j++) {
+   if(sub!=='commit')break;
+   const arg=args[j];
+   if(['-F','--file'].includes(arg)||arg.startsWith('--file=')) {
+    const value=arg.startsWith('--file=')?arg.slice(7):args[++j];
+    if(value==='-') {if(gitPayload((tokens.heredocs||[]).join('\n')))return true;continue;}
+    const file=path.resolve(cwd,expand(value||''));
+    if(sensitivePath(file,c,cwd,{extensions:true})||gitPayload(fs.readFileSync(file,'utf8')))return true;
+   }
+   let message;
+   if(['-m','--message','-am'].includes(arg))message=args[++j];
+   else if(arg.startsWith('--message='))message=arg.slice(10);
+   else if(/^-m.+/.test(arg))message=arg.slice(2);
+   if(message && gitPayload(message))return true;
+  }
   let gitArgs;
   if(sub==='commit') {
-   // One process, independent of file count. -a/paths and preceding git add need worktree diff.
-   const values=new Set(['-m','--message','-F','--file','-C','--reuse-message','-c','--reedit-message','--author','--date','--cleanup','--trailer']);
-   let positional=false, all=false;
-   for(let j=0;j<args.length;j++) {if(values.has(args[j])) {j++;continue;} if(!args[j].startsWith('-')) positional=true; if(/^-[^-]*a/.test(args[j]) || args[j]==='--all') all=true;}
-   const implicit=all || positional || tokens.pendingAdd;
-   gitArgs=['diff',...(implicit?['HEAD']:['--cached']),'--no-ext-diff','--no-textconv','--unified=0','--no-renames'];
+   const values=new Set(['-m','-am','--message','-F','--file','-C','--reuse-message','-c','--reedit-message','--author','--date','--cleanup','--trailer']);
+   let positional=false,all=false;
+   for(let j=0;j<args.length;j++){const arg=args[j];if(/^-[^-]*a/.test(arg)||arg==='--all')all=true;if(values.has(arg)){j++;continue;}if(!arg.startsWith('-'))positional=true;}
+   // Pending add files include untracked operands; never execute the proposed add.
+   if(tokens.pendingAdd) {
+    const names=git(['ls-files','--cached','--others','--exclude-standard','-z']).split('\0').filter(Boolean);
+    for(const name of names) {
+     if(!tokens.pendingAdd.some(v=>within(path.resolve(cwd,name),path.resolve(cwd,v)) || globRegex(v).test(name)))continue;
+     if(/(?:^|\/)(?:\.env(?:\..*)?|auth\.json|\.ssh|\.azure|\.codex|[^/]*-keys)(?:\/|$)/i.test(name))return true;
+     if(sensitivePath(name,c,cwd,{extensions:true}))return true;
+     const file=path.resolve(cwd,name);
+     try {if(fs.statSync(file).isFile() && gitPayload(fs.readFileSync(file,'utf8')))return true;}catch(e){if(e.code!=='ENOENT')throw e;}
+    }
+   }
+   gitArgs=['diff',...(all||positional?['HEAD']:['--cached']),'--no-ext-diff','--no-textconv','--unified=0','--no-renames'];
   } else {
-   const positional=args.filter(a=>!a.startsWith('-'));
+   const positional=[];
+   for(let j=0;j<args.length;j++){if(['-o','--push-option','--repo','--receive-pack','--exec'].includes(args[j])){j++;continue;}if(!args[j].startsWith('-'))positional.push(args[j]);}
    const specs=positional.slice(1);
-   const refs=args.includes('--all')?['--branches']:args.includes('--tags')?['--tags']:(specs.length?specs.map(s=>s.replace(/^\+/,'').split(':')[0]).filter(Boolean):['HEAD']);
+   const refs=args.includes('--all')?['--branches']:args.includes('--tags')?['--tags']:(specs.length?(specs[0]==='tag'?['refs/tags/'+specs[1]]:specs.map(v=>v.replace(/^\+/,'').split(':')[0]).filter(Boolean)):['HEAD']);
+   if(!args.includes('--all') && !args.includes('--tags') && refs.some(ref=>ref.startsWith('-') || !ref))return true;
    gitArgs=['log','--format=','--patch','--no-ext-diff','--no-textconv','--unified=0','--no-renames',...refs,'--not','--remotes'];
   }
-  const diff=cp.execFileSync('git',[...globals,...gitArgs],{cwd,encoding:'utf8',maxBuffer:256*1024*1024,timeout:30000,stdio:['ignore','pipe','pipe']});
+  let diff;
+  try {diff=git(gitArgs);} catch(e) {
+   if(sub==='commit' && gitArgs.includes('HEAD') && /(?:bad revision|ambiguous argument).*HEAD/.test(String(e.stderr))) diff=git(gitArgs.map(v=>v==='HEAD'?'--cached':v));
+   else throw e;
+  }
   for(const line of diff.split('\n')) {
    if(line.startsWith('diff --git ')) {
-    const header=line.slice(11);
-    const names=[...header.matchAll(/"(?:[^"\\]|\\.)*"|[ab]\/.*?(?= [ab]\/|$)/g)].map(m=>{try{return m[0].startsWith('"')?JSON.parse(m[0]):m[0];}catch{return m[0];}});
-    if(names.some(n=>sensitivePath(n.slice(2),c,cwd))) return true;
+    const names=[...line.slice(11).matchAll(/"(?:[^"\\]|\\.)*"|[ab]\/.*?(?= [ab]\/|$)/g)].map(m=>{try{return m[0].startsWith('"')?JSON.parse(m[0]):m[0];}catch{return m[0];}});
+    if(names.some(n=>sensitivePath(n.slice(2),c,cwd)))return true;
    }
-   if(line.startsWith('+++ b/') && sensitivePath(line.slice(6),c,cwd)) return true;
-   if(line.startsWith('+') && !line.startsWith('+++') && gitPayload(line.slice(1))) return true;
+   if(line.startsWith('+++ b/')&&sensitivePath(line.slice(6),c,cwd))return true;
+   if(line.startsWith('+')&&!line.startsWith('+++')&&gitPayload(line.slice(1)))return true;
   }
- } catch { return true; }
+ }catch{return true;}
  return false;
+}
+function sensitiveFragment(value,c) {
+ const names=[...c.directoryNames,...c.fileNames,...c.additionalPaths.map(v=>path.basename(v))];
+ return names.some(n=>String(value).toLowerCase().includes(n.toLowerCase())) || /(?:np[?*]|n[?*]ki|signpri|kmpri|signcert)/i.test(value);
 }
 function braceVariants(s) {
  let variants=[s];
@@ -125,22 +164,28 @@ function braceVariants(s) {
  return variants;
 }
 function shellGuard(command,cwd,c,depth=0) {
- if(depth>12) return false;
- const vars={}; let pendingAdd=false;
- for(const clause of shellClauses(command)) {
+ if(depth>12) return sensitiveFragment(command,c);
+ const vars={}; const pendingAdds=new Map();
+ const clauses=shellClauses(command);
+ if(clauses.unbalanced || command.length>131072 || /\{[^{}]*,[^{}]*\}/.test(command) && braceVariants(command).length>=16) return sensitiveFragment(command,c);
+ for(const clause of clauses) {
   let tokens=clause.map(t=>expand(t,vars));
   for(const t of tokens) {const m=t.match(/^([A-Za-z_]\w*)=(.*)$/s); if(m) vars[m[1]]=expand(m[2],vars);}
   tokens=tokens.map(t=>expand(t,vars));
   while(tokens[0] && /^[A-Za-z_]\w*=/.test(tokens[0])) tokens.shift();
+  while(['env','command'].includes(tokens[0]))tokens.shift();
   const cmd=path.basename(tokens[0] || '');
-  const recursive=['cp','mv','rsync','tar','zip','scp','find','grep','rg','cd','pushd'].includes(cmd);
-  if(sensitivePath(cwd,c,cwd)) return true;
-  for(const token of tokens.slice(1)) {
+  // Inline interpreter programs are outside this lexical boundary.
+  if((['bash','sh','zsh','python','python3'].includes(cmd)&&tokens.some(v=>/^-[a-z]*c$/.test(v))) || (cmd==='node'&&tokens.includes('-e')))continue;
+  const recursive=['tar','find','rg'].includes(cmd) || (['cp','rsync','zip','grep','scp'].includes(cmd)&&tokens.some(v=>/^-[^-]*[rRa]/.test(v)||v==='--recursive'));
+  if(sensitivePath(cwd,c,cwd) || sensitivePath(tokens[0]||'',c,cwd)) return true;
+  for(const [index,token] of tokens.slice(1).entries()) {
    // Upload forms include field=@path, --data=@path, and @~/path.
-   const operands=[token,...token.split(/[=@]/).slice(1)].flatMap(v=>braceVariants(v));
+   const normalized=token.replace(/^-[Ti](?=\/|~)/,'').replace(/;type=.*$/,'');
+   const operands=[normalized,...normalized.split(/[=@<]/).slice(1)].flatMap(v=>braceVariants(v));
    for(const operand of operands) {
     if(!operand || operand.startsWith('-')) continue;
-    if(sensitivePath(operand,c,cwd,{recursive,extensions:['cp','mv','scp','rsync','install'].includes(cmd),shell:true})) return true;
+    if(sensitivePath(operand,c,cwd,{recursive:recursive && (!['cp','rsync','scp'].includes(cmd)||index<tokens.length-2),extensions:['cp','mv','scp','rsync','install','cat','base64','xxd','curl'].includes(cmd),shell:true})) return true;
    }
    // Unknown expansion alone is ordinary shell syntax; sensitive fragments are not.
    if(/[$`{}]/.test(token) && (/(?:npki|gpki|signpri|kmpri|signcert)/i.test(token) || token.split('/').some(part=>/[a-z]/i.test(part) && [...c.directoryNames,...c.fileNames].some(n=>globRegex(part).test(n))))) return true;
@@ -148,33 +193,43 @@ function shellGuard(command,cwd,c,depth=0) {
   if(cmd==='apply_patch' && patchPaths(tokens.slice(1).join('\n')).some(p=>sensitivePath(p,c,cwd,{extensions:true}))) return true;
   if(patchPaths((clause.heredocs || []).join('\n')).some(p=>sensitivePath(p,c,cwd,{extensions:true}))) return true;
   if((clause.subs || []).some(s=>shellGuard(s,cwd,c,depth+1))) return true;
-  if(['bash','sh','zsh'].includes(cmd) && tokens.includes('-c') && shellGuard(tokens[tokens.indexOf('-c')+1] || '',cwd,c,depth+1)) return true;
-  tokens.pendingAdd=pendingAdd;
+
+  const invocation=gitInvocation(tokens,cwd,c);
+  tokens.pendingAdd=invocation && pendingAdds.get(invocation.cwd);tokens.heredocs=clause.heredocs;
   if(gitContentGuard(tokens,cwd,c)) return true;
-  if(cmd==='git' && tokens[1]==='add') pendingAdd=true;
+  if(invocation?.sub==='add') {
+   const selected=invocation.args.filter(v=>!v.startsWith('-'));
+   pendingAdds.set(invocation.cwd,[...(pendingAdds.get(invocation.cwd)||[]),...(selected.length?selected:['.'])]);
+  }
   if(cmd==='cd' || cmd==='pushd') cwd=path.resolve(cwd,tokens[1] || process.env.HOME || cwd);
  }
  return false;
 }
 async function evaluate(data, config = {}) {
  const c=configWithDefaults(config), name=normalizedToolName(data.tool_name), input=data.tool_input || {}, cwd=data.cwd || process.cwd();
+ c.additionalPaths=c.additionalPaths.map(v=>path.resolve(cwd,expand(v)));
  if(name==='shell') {
   const command=input.command || input.cmd || '';
   if(c.signingScript && command===c.signingScript) return null;
+  if(c.signingScript && command.includes(c.signingScript))return {reason:REASON};
   if(shellGuard(command,cwd,c)) return {reason:REASON};
- } else if(['read','file-mutation','multiedit','grep','glob'].includes(name)) {
+ } else if((['read','file-mutation','multiedit','grep','glob','ls'].includes(name)||/^(?:read_file|write_file|edit_file|list_directory|directory_tree|search_files)$/.test(String(data.tool_name).split('__').pop()))) {
   const paths=Object.entries(input).filter(([key])=>/path|file|glob|include/i.test(key)).flatMap(([,v])=>strings(v));
   if(name==='glob' && input.pattern) {
+   if(braceVariants(input.pattern).length>=16 && sensitiveFragment(input.pattern,c))return {reason:REASON};
    const root=path.resolve(cwd,expand(input.path || '.'));
-   const fixed=expand(input.pattern).split(/[?*[]/)[0];
+   for(const variant of braceVariants(input.pattern)) {
+   const fixed=expand(variant).split(/[?*[]/)[0];
    const scanRoot=path.resolve(root,fixed.endsWith('/')?fixed:fixed.slice(0,fixed.lastIndexOf('/')+1));
-   if(/[?*[]/.test(input.pattern) && sensitivePath(scanRoot,c,cwd,{recursive:true})) return {reason:REASON};
-   paths.push(path.resolve(root,expand(input.pattern)));
+   if(variant.includes('**') && !within(scanRoot,cwd) && sensitivePath(scanRoot,c,cwd,{recursive:true})) return {reason:REASON};
+   paths.push(path.resolve(root,expand(variant)));
+   }
   }
   paths.push(...patchPaths(strings(input).join('\n')));
   if(name==='grep') paths.push(input.path || cwd);
-  if(paths.some(v=>sensitivePath(v,c,cwd,{recursive:name==='grep',extensions:!['grep','glob'].includes(name)}))) return {reason:REASON};
+  if(paths.some(v=>sensitivePath(v,c,cwd,{recursive:name==='grep' && ((Boolean(input.path) && path.resolve(cwd,expand(v))!==cwd) || path.resolve(cwd,expand(v))===process.env.HOME),extensions:!['grep','glob'].includes(name)}))) return {reason:REASON};
  } else if(/send|mail|discord|message|commit|push/i.test(data.tool_name || '')) {
+  if(Object.entries(input).filter(([k])=>/attachment|files?|paths?/i.test(k)).flatMap(([,v])=>strings(v)).some(v=>sensitivePath(v,c,cwd,{extensions:true}))) return {reason:REASON};
   if(strings(input).some(v=>containsSensitiveContent(v))) return {reason:REASON};
  }
  return null;
