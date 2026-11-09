@@ -77,7 +77,7 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - **관문 검사 (`check` 및 승인 코드 발급 경로)**:
   1. **정본 파일 SHA-256 대조**: `sourceDocs[].path` 경로는 저장소 내 정규 상대 경로여야 하며 realpath가 밖을 가리키는 심볼릭 링크도 거부합니다. 파일의 현재 디스크 SHA-256(소문자 비교)이 `sourceDocs[].sha256`과 다르면 차단합니다.
   2. **정본 단계 누락 차단**: 지정 절을 원문에서 재추출해 `steps`와 `acceptance` 전체를 대조합니다. 두 절 밖에 지원 목록 형식의 단계가 있거나 절을 일부만 선택해도 거부합니다. 정본은 실행 단계와 인수 확인만 담은 전용 마크다운 파일로 관리합니다. `sourceDocs[].steps`의 모든 `id`가 어느 `scenario[]` 단계의 `covers` 배열에 들어 있거나, 계획서 최상위 `excludedSourceSteps: [{id, reason}]`에 이유(`reason`)와 함께 적혀 있어야 통과합니다. 하나라도 빠지면 `"정본 단계 누락: <id> <text>"`로 막고 승인 코드를 내주지 않습니다.
-  3. **인수 확인(`acceptance`) 실측 검증**: 마지막 시나리오의 `step-ok`는 현재 계획서 SHA-256에 묶인 완료 JSON 보고서를 반드시 검사합니다. 인수 확인 항목마다 실측 문자열이 필요하며 `-`, `N/A`, `TBD`, `확인함` 같은 빈말과 문자열이 아닌 값은 거부합니다. 허용 실측 키는 `실측`, `actual`, `observed`, `measured`, `measurement`, `evidence`, `result`, `value`입니다. 이 검사는 형식과 누락을 막으며 관측 내용의 진실성은 독립 검토와 증거 대조로 확인해야 합니다.
+  3. **인수 확인(`acceptance`) 실측 검증**: 되돌리기 갈림을 제외한 마지막 실행 단계의 `step-ok`는 현재 계획서 SHA-256에 묶인 완료 JSON 보고서를 반드시 검사합니다. 인수 확인 항목마다 실측 문자열이 필요하며 `-`, `N/A`, `TBD`, `확인함` 같은 빈말과 문자열이 아닌 값은 거부합니다. 허용 실측 키는 `실측`, `actual`, `observed`, `measured`, `measurement`, `evidence`, `result`, `value`입니다. 이 검사는 형식과 누락을 막으며 관측 내용의 진실성은 독립 검토와 증거 대조로 확인해야 합니다.
   4. **ID와 호환**: 모르는 ID, 중복 steps/acceptance/covers/excluded, covers와 제외의 동시 선언을 거부합니다. 여러 문서는 covers·제외·완료 실측에 `문서경로#ID`를 씁니다. 한 단계 ID를 여러 scenario에서 재사용할 수 없으며 되돌리기 단계의 covers로 실행 단계 누락을 대신할 수 없습니다. 정본 경로 참조가 전혀 없는 옛 계획서만 한 줄 경고와 함께 통과합니다. 경로를 참조하는 옛 계획서는 정본 메타데이터 보강과 재리뷰·재승인이 필요합니다.
 
 ---
@@ -146,7 +146,7 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
 
 ## 완료 확인과 영수증
 
-`report`는 실행 전 승인 요청문을 만드는 명령입니다. 완료 상태는 마지막 시나리오의 `step-ok`에서 검사합니다. 기본 보고서 경로는 계획서와 같은 폴더의 `deploy-completion.json`이며 `--report <파일>`로 지정할 수도 있습니다.
+`report`는 실행 전 승인 요청문을 만드는 명령입니다. 완료 상태는 되돌리기 갈림을 제외한 마지막 실행 단계의 `step-ok`에서 검사합니다. 기본 보고서 경로는 계획서와 같은 폴더의 `deploy-completion.json`이며 `--report <파일>`로 지정할 수도 있습니다.
 
 ```json
 {
