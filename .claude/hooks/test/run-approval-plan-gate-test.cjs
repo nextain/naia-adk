@@ -1042,9 +1042,9 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 		"ssh user@192.0.2.10 'podman ps --format \"{{.Names}}\"'",
 		"ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'",
 		"ssh user@192.0.2.10. ls",
-		"ssh user@gpu-box.example ls",
-		"ssh user@GPU-BOX.EXAMPLE. ls",
-		"ssh user@lab-node.example.com systemctl --user restart sample-worker",
+		"ssh -l user gpu-box.example ls",
+		"ssh -l user GPU-BOX.EXAMPLE. ls",
+		"ssh -l user lab-node.example.com systemctl --user restart sample-worker",
 		"scp a.txt user@192.0.2.10:~/work/",
 	];
 	for (const cmd of allowedCmds) {
@@ -1074,9 +1074,9 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 	// 4) 목록 밖 호스트와 와일드카드 이름은 비운영으로 보지 않음
 	for (const blockedCmd of [
 		"ssh user@192.0.2.11 sudo systemctl restart sample",
-		"ssh user@prod-host.example sudo systemctl restart sample",
-		"ssh user@sub.gpu-box.example sudo systemctl restart sample",
-		"ssh user@host.wildcard.example sudo systemctl restart sample",
+		"ssh -l user prod-host.example sudo systemctl restart sample",
+		"ssh -l user sub.gpu-box.example sudo systemctl restart sample",
+		"ssh -l user host.wildcard.example sudo systemctl restart sample",
 	]) {
 		const hits = classifyProdMutations(blockedCmd, root);
 		assert.ok(hits.length > 0, `목록 밖/와일드카드 호스트는 운영으로 분류되어야 함: ${blockedCmd}`);
