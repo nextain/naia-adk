@@ -27,8 +27,11 @@
 | `deploy-guard.js` | `Bash` | ADK 배포 설정·승인·감사 기록. 승인 없는 운영 배포 차단 |
 | `remote-identity-gate.js` | `Bash` | ADK 저장소 목록·공개 저장소 승인. 실제 Git 대상 경로도 검사 |
 | `gcs-guard.js` | `Bash` | ADK 버킷 정책. 정책 누락·손상 시 버킷 작업 차단 |
+| `heavy-search-guard.js` | `Bash` | `.claude/projects/`의 JSONL 검색·폴더 재귀 검색에 `timeout <초>` 요구. 권장: `timeout 60 nice -n 19 grep -m 5 -F ...`. 큰 문맥 정규식(`.{100}` 이상)은 `-F`·`-m`이 없으면 시간 제한이 있어도 경고 |
 | `prod-gateway-guard.js` | `Edit|Write` | 편집 입력의 운영 게이트웨이 값. 외부 정책 불필요 |
 | `subagent-spawn-guard.js` | `Task|Agent` | 역할 폴더의 `.claude/allow-subagents`와 생성 한도. 역할마다 카운터 분리 |
+
+대화 검색 관문은 파일 내용 대신 경로·파일 종류 메타데이터만 확인합니다. 존재하는 일반 파일은 JSONL일 때만 대상으로 삼습니다. 아직 존재하지 않거나 글로브인 경로는 보수적으로 판별하므로, 폴더 여부가 모호하면 위의 시간 제한 형태를 사용하세요. `cd` 뒤 상대 경로, 경로를 생략한 재귀 검색, `bash -c` 안의 명령에도 같은 규칙이 적용됩니다.
 
 추가 사용자 훅은 비용 이벤트 일곱 개(`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `PreCompact`), GPU 생성 확인(`PreToolUse`, `Bash`), 하위 모델 제한(`PreToolUse`, `Task|Agent|Workflow`)입니다. GPU 훅은 원본처럼 생성·재시도·백그라운드 실행에 확인을 요청합니다. 하위 모델 훅은 기본 `haiku`·`sonnet`과 `상위 목표:`·`막히면 올림:` 안내 줄을 요구합니다. 생성 허용 표지가 있어도 모델 검사는 함께 적용됩니다.
 

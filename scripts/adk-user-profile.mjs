@@ -49,7 +49,7 @@ export function loadProfile(adkRoot, home = os.homedir(), instanceRoot = adkRoot
 }
 
 const commandsOf = (groups) => (groups ?? []).flatMap((g) => (g.hooks ?? []).map((h) => h.command))
-export const PROFILE_HOOKS = ["role-compact-brief.js", "destructive-git-guard.js", "catastrophic-delete-guard.js", "git-push-guard.js", "email-send-guard.js", "commit-guard.js", "deploy-guard.js", "remote-identity-gate.js", "gcs-guard.js", "prod-gateway-guard.js", "subagent-spawn-guard.js", "cost-guard.cjs", "guard-runpod-create.cjs", "subagent-model-guard.cjs"]
+export const PROFILE_HOOKS = ["role-compact-brief.js", "destructive-git-guard.js", "catastrophic-delete-guard.js", "git-push-guard.js", "email-send-guard.js", "commit-guard.js", "deploy-guard.js", "remote-identity-gate.js", "gcs-guard.js", "heavy-search-guard.js", "prod-gateway-guard.js", "subagent-spawn-guard.js", "cost-guard.cjs", "guard-runpod-create.cjs", "subagent-model-guard.cjs"]
 const ownHook = (command) => typeof command === "string" && PROFILE_HOOKS.some((name) => command.includes(name))
 export function validateProfileHooks(settings) {
   const names = new Set(Object.values(settings.hooks ?? {}).flatMap(commandsOf).map((command) => {

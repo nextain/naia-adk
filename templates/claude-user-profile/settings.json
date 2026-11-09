@@ -18,6 +18,7 @@
         { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/deploy-guard.js\"" },
         { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/remote-identity-gate.js\"" },
         { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/gcs-guard.js\"" },
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/heavy-search-guard.js\"" },
         { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/guard-runpod-create.cjs\"" }
       ] },
       { "matcher": "Edit|Write", "hooks": [
