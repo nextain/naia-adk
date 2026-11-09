@@ -24,6 +24,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { humanTyped, commandHash, statePath } = require("./deploy-human-approval.js");
+const { readDeployGateConfig, normalizeApproverIds } = require("./deploy-readiness.js");
 
 const ROOT = path.resolve(__dirname, "../../..");
 const PLAN_FILE = "deploy-plan.json";
@@ -282,6 +283,7 @@ const REVIEW_EXECUTOR_FILES = [
 	".agents/scripts/approval-plan.mjs",
 	".claude/hooks/lib/deploy-plan.js",
 	".claude/hooks/lib/deploy-human-approval.js",
+	".claude/hooks/lib/deploy-readiness.js",
 ];
 /**
  * 계획서 소속 저장소 root 기준으로 항목을 읽는다. root 미지정 시 planFile에서 역산.
@@ -537,19 +539,16 @@ function newCode(prefix) {
 
 // ── 디스코드 승인자 확인 ──────────────────────────────────────────
 const SNOWFLAKE = /^\d{17,20}$/;
-/** Normalize the instance allowlist. Explicit invalid fields never fall back. */
-function normalizeApproverIds(approver = {}) {
-	if (!approver || typeof approver !== "object" || Array.isArray(approver)) return null;
-	const { discordUserIds, discordUserId } = approver;
-	const ids = [];
-	if (discordUserIds !== undefined) {
-		if (!Array.isArray(discordUserIds) || discordUserIds.length === 0 || discordUserIds.length > 20) return null;
-		ids.push(...discordUserIds);
-	}
-	if (discordUserId !== undefined) ids.push(discordUserId);
-	if (ids.length === 0 || ids.some((id) => typeof id !== "string" || !SNOWFLAKE.test(id))) return null;
-	const unique = [...new Set(ids)];
-	return unique.length <= 20 ? unique : null;
+/** Parse a complete ISO timestamp with a real calendar date and explicit timezone. */
+function strictIsoTime(value) {
+	if (typeof value !== "string") return NaN;
+	const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/.exec(value);
+	if (!match) return NaN;
+	const [, year, month, day, hour, minute, second, , offsetHour, offsetMinute] = match;
+	const leap = Number(year) % 4 === 0 && (Number(year) % 100 !== 0 || Number(year) % 400 === 0);
+	const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+	if (+month < 1 || +month > 12 || +day < 1 || +day > days[+month - 1] || +hour > 23 || +minute > 59 || +second > 59 || +(offsetHour || 0) > 23 || +(offsetMinute || 0) > 59) return NaN;
+	return Date.parse(value);
 }
 
 /** Discord REST author must be a configured human, with a post-issuance message. */
@@ -562,7 +561,7 @@ async function discordConfirms({ code, sinceIso, refs, approverId, approverIds, 
 		return { ok: false, why: "approver-id-mismatch" };
 	}
 	if (typeof token !== "string" || !token) return { ok: false, why: "token-unavailable" };
-	const since = Date.parse(sinceIso);
+	const since = strictIsoTime(sinceIso);
 	if (!Number.isFinite(since)) return { ok: false, why: "invalid-since" };
 	for (const r of Array.isArray(refs) ? refs : []) {
 		if (!r || r.code !== code || !SNOWFLAKE.test(String(r.channelId || "")) || !SNOWFLAKE.test(String(r.messageId || ""))) continue;
@@ -580,7 +579,7 @@ async function discordConfirms({ code, sinceIso, refs, approverId, approverIds, 
 		if (!contextIds.includes(String(a.id || "")) || a.bot === true || a.system === true || m.webhook_id || m.application_id) continue;
 		if (m.edited_timestamp != null) continue;
 		if (!String(m.content || "").includes(code)) continue;
-		const at = Date.parse(m.timestamp || "");
+		const at = strictIsoTime(m.timestamp);
 		if (!Number.isFinite(at) || at < since) continue;
 		return { ok: true, approverId: String(a.id), at: m.timestamp, via: `discord:${r.channelId}/${r.messageId}` };
 	}
@@ -591,7 +590,9 @@ async function discordConfirms({ code, sinceIso, refs, approverId, approverIds, 
 async function loadDiscordToken(repoRoot) {
 	try {
 		const { pathToFileURL } = require("url");
-		const gateCfg = readJson(path.join(repoRoot, "config", "deploy-gate.json")) || {};
+		const gate = readDeployGateConfig(repoRoot);
+		if (!gate.ok) return null;
+		const gateCfg = gate.config || {};
 		const configuredInstances = Array.isArray(gateCfg?.discord?.instances) ? gateCfg.discord.instances : [];
 		const instances = [...new Set([process.env.NAIA_MESSENGER_INSTANCE, ...configuredInstances].filter(Boolean))];
 		if (instances.length === 0) return null;
@@ -613,13 +614,15 @@ async function loadDiscordToken(repoRoot) {
 
 /** 사람 확인: 대화창 입력 또는 승인자 디스코드 글. */
 async function humanConfirmed(code, sinceIso, ctx) {
+	const gate = readDeployGateConfig(ctx.repoRoot || ROOT);
+	if (!gate.ok) return { ok: false, why: "approver-id-unset" };
 	const typed = humanTyped(ctx.transcriptPath, code, sinceIso);
 	if (typed.ok) return { ok: true, at: typed.at, via: "terminal" };
 	const refsFile = path.join(ctx.gatesDir, DISCORD_FILE);
 	const refs = readJson(refsFile);
 	const list = Array.isArray(refs?.approvals) ? refs.approvals.filter((r) => r && r.code === code) : [];
 	if (list.length === 0) return { ok: false, why: typed.why };
-	const gateCfg = readJson(path.join(ctx.repoRoot || ROOT, "config", "deploy-gate.json")) || {};
+	const gateCfg = gate.config || {};
 	const configApprover = gateCfg.approver;
 	const hasConfiguredIds = configApprover !== undefined;
 	const configuredIds = hasConfiguredIds ? normalizeApproverIds(configApprover) : normalizeApproverIds({ discordUserIds: ctx.approverIds, discordUserId: ctx.approverId });

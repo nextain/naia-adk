@@ -1240,3 +1240,109 @@ test("multi-approver: malformed gate approver never falls back in either entrypo
 		} finally { deployPlan.evaluate = original; }
 	}
 });
+
+// approversrev2 reproduction: malformed file must never select the legacy author.
+for (const [label, raw] of [
+	["syntax-error", `{"approver":{"discordUserIds":["${MULTI_B}"],}}`],
+	["top-level-array", JSON.stringify([MULTI_B])], ["top-level-null", "null"],
+	["top-level-string", '"invalid"'], ["top-level-number", "1"], ["top-level-boolean", "true"],
+	["approver-shape", '{"approver":{}}'], ["unreadable-directory", null],
+]) {
+	for (const override of [false, true]) test(`approversrev2: ${label} ${override ? "DEPLOY_GATE_CONFIG" : "repository"} closes both entrypoints`, async (t) => {
+		const { tmp, root, stateDir, transcriptPath } = makeWorkspace(t);
+		const { planFile, gatesDir, step1Cmd } = createValidPlan(root, {
+			incident: { criteria: ["5xx 5% 초과"], actions: [{ id: "a1", commands: ["git push prod rollback-tag:main"], why_safe: "이전 태그로 즉시 복귀" }] },
+		});
+		const deployDir = path.join(root, ".claude", "deploy");
+		fs.mkdirSync(deployDir, { recursive: true });
+		fs.writeFileSync(path.join(deployDir, "config.json"), JSON.stringify({ approver: { discordUserId: MULTI_A } }));
+		writePassingReviewReceipt(root, planFile);
+		const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+		const pre = await deployPlan.preapproveStepCodes(planFile, root, "sess-1", env, Date.now());
+		assert.equal(pre.ok, true);
+		const approvals = [
+			{ code: pre.plan_code, channelId: "444444444444444444", messageId: "555555555555555555" },
+			{ code: pre.steps[0].code, channelId: "444444444444444444", messageId: "666666666666666666" },
+		];
+		fs.writeFileSync(path.join(gatesDir, deployPlan.DISCORD_FILE), JSON.stringify({ approvals }));
+		const cfgPath = override ? path.join(tmp, "override.json") : path.join(root, "config", "deploy-gate.json");
+		fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+		if (raw === null) fs.mkdirSync(cfgPath); else fs.writeFileSync(cfgPath, raw);
+		const previous = process.env.DEPLOY_GATE_CONFIG;
+		if (override) process.env.DEPLOY_GATE_CONFIG = cfgPath;
+		t.after(() => { if (previous === undefined) delete process.env.DEPLOY_GATE_CONFIG; else process.env.DEPLOY_GATE_CONFIG = previous; });
+		let calls = 0;
+		const context = { command: step1Cmd, sessionId: "sess-1", transcriptPath, root, env,
+			services: ["azure:containerapp:sample-web-prod"], approverId: MULTI_A, discordToken: "test-only-placeholder",
+			fetchImpl: async (url) => { calls++; const ref = approvals.find(x => url.endsWith(`/${x.messageId}`));
+				return { ok: true, json: async () => ({ id: ref.messageId, channel_id: ref.channelId, content: ref.code,
+					timestamp: new Date(Date.now() + 1000).toISOString(), edited_timestamp: null, author: { id: MULTI_A } }) }; },
+			readiness: () => ({ ok: true, problems: [], facts: [] }),
+		};
+		const result = await deployPlan.evaluate(context);
+		appendHumanTurn(transcriptPath, `승인: ${pre.plan_code} ${pre.steps[0].code}`);
+		assert.equal((await deployPlan.evaluate(context)).allow, false, "invalid configuration also blocks terminal approval");
+		// Capture the incident git path, which bypasses instance-extension classification.
+		const policy = require("../../../.agents/hooks/policies/bash.js");
+		const original = deployPlan.evaluate;
+		let captured;
+		try {
+			deployPlan.evaluate = async ctx => { captured = ctx.approverIds; return { allow: false, reason: "stop" }; };
+			await policy.deploy("git push prod rollback-tag:main", { cwd: root, session_id: "sess-1" }, { rootDir: root, deployDir });
+		} finally { deployPlan.evaluate = original; }
+		assert.deepEqual({ allow: result.allow, calls, captured }, { allow: false, calls: 0, captured: [] });
+	});
+}
+
+for (const sinceIso of [0, "0", "not-a-date-1", [1], "2020-01-01T00:00:00", "2020-02-30T00:00:00Z"]) {
+	test(`approversrev2: strict issuance time rejects ${JSON.stringify(sinceIso)}`, async () => {
+		const args = discordFixture({ timestamp: "2020-01-01T00:00:00.000Z", edited_timestamp: null });
+		let calls = 0;
+		const fetchImpl = args.fetchImpl;
+		const result = await deployPlan.discordConfirms({ ...args, sinceIso, fetchImpl: async (...params) => { calls++; return fetchImpl(...params); } });
+		assert.deepEqual(result, { ok: false, why: "invalid-since" });
+		assert.equal(calls, 0);
+	});
+}
+
+for (const sinceIso of ["2026-01-01T00:00:00Z", "2026-01-01T09:00:00+09:00", "2025-12-31T19:00:00-05:00", "2026-01-01T00:00:00.123Z"]) {
+	test(`approversrev2: strict issuance time accepts ${sinceIso}`, async () => {
+		assert.equal((await deployPlan.discordConfirms({ ...discordFixture(), sinceIso })).ok, true);
+	});
+}
+
+test("approversrev2: valid override selects its own author in both entrypoints", async (t) => {
+	const { tmp, root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root, { approver: { discordUserId: MULTI_A } });
+	const { planFile, gatesDir, step1Cmd } = createValidPlan(root);
+	writePassingReviewReceipt(root, planFile);
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const pre = await deployPlan.preapproveStepCodes(planFile, root, "sess-override", env, Date.now());
+	const approvals = [pre.plan_code, pre.steps[0].code].map((code, i) => ({ code, channelId: "444444444444444444", messageId: i ? "666666666666666666" : "555555555555555555" }));
+	fs.writeFileSync(path.join(gatesDir, deployPlan.DISCORD_FILE), JSON.stringify({ approvals }));
+	const cfgPath = path.join(tmp, "override.json");
+	fs.writeFileSync(cfgPath, JSON.stringify({ approver: { discordUserId: MULTI_B } }));
+	const previous = process.env.DEPLOY_GATE_CONFIG;
+	process.env.DEPLOY_GATE_CONFIG = cfgPath;
+	t.after(() => { if (previous === undefined) delete process.env.DEPLOY_GATE_CONFIG; else process.env.DEPLOY_GATE_CONFIG = previous; });
+	let calls = 0;
+	const ctx = { command: step1Cmd, sessionId: "sess-override", transcriptPath, root, env,
+		services: ["azure:containerapp:sample-web-prod"], discordToken: "test-only-placeholder",
+		fetchImpl: async url => { calls++; const ref = approvals.find(x => url.endsWith(`/${x.messageId}`));
+			return { ok: true, json: async () => ({ id: ref.messageId, channel_id: ref.channelId, content: ref.code,
+				timestamp: new Date(Date.now() + 1000).toISOString(), edited_timestamp: null, author: { id: MULTI_B } }) }; },
+		readiness: () => ({ ok: true, problems: [], facts: [] }) };
+	assert.equal((await deployPlan.evaluate({ ...ctx, approverId: MULTI_A })).allow, false);
+	assert.equal(calls, 0);
+	const result = await deployPlan.evaluate({ ...ctx, approverId: MULTI_B });
+	assert.equal(result.allow, true, result.reason);
+	assert.equal(result.audit.plan_approver_id, MULTI_B);
+	const policy = require("../../../.agents/hooks/policies/bash.js");
+	const original = deployPlan.evaluate;
+	let captured;
+	try {
+		deployPlan.evaluate = async context => { captured = context.approverIds; return { allow: false, reason: "stop" }; };
+		await policy.deploy(step1Cmd, { cwd: root, session_id: "sess-override" }, { rootDir: root });
+	} finally { deployPlan.evaluate = original; }
+	assert.deepEqual(captured, [MULTI_B]);
+});

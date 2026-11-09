@@ -375,7 +375,7 @@ async function deploy(command, data, opts) {
 	const { shellClauses } = require(path.join(hooksLibDir, "git-command-parser.js"));
 	const { classifyProdMutations, clauseText, executedShellFile, SCRIPT_READ_LIMIT } = require(path.join(hooksLibDir, "deploy-command-classifier.js"));
 	const { effectiveCommands } = require(path.join(hooksLibDir, "effective-argv.js"));
-	const { assessReadiness, loadDeployGateConfig, TEMPLATE: READINESS_TEMPLATE } = require(path.join(hooksLibDir, "deploy-readiness.js"));
+	const { assessReadiness, readDeployGateConfig, TEMPLATE: READINESS_TEMPLATE } = require(path.join(hooksLibDir, "deploy-readiness.js"));
 	const deployPlan = require(path.join(hooksLibDir, "deploy-plan.js"));
 
 	// Legacy .claude/deploy/config.json dev_service exemption (per clause only)
@@ -570,9 +570,10 @@ async function deploy(command, data, opts) {
 
 	const prodServices = unique.map((h) => h.service);
 	const runText = [...new Set(hits.map((h) => h.clause).filter(Boolean))].join(" ; ") || command;
-	const gateConfig = loadDeployGateConfig(root) || {};
+	const gate = readDeployGateConfig(root);
+	const gateConfig = gate.config || {};
 	const gateApprover = gateConfig.approver;
-	const approver = gateApprover !== undefined ? gateApprover : config.approver;
+	const approver = !gate.ok ? null : gateApprover !== undefined ? gateApprover : config.approver;
 	const res = await deployPlan.evaluate({
 		command,
 		cwd,
