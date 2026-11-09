@@ -12,7 +12,7 @@
 
 사람에게 물을 때는 상대를 멘션하거나 그 사람 글에 답글을 달고, “N분 안에 말씀 없으면 이렇게 진행하겠습니다”처럼 기다릴 시간과 그 뒤 행동을 함께 적습니다. 침묵은 필요한 승인 대신 쓰지 않습니다. 정말 승인이 필요하면 업무 요청 채널에 `[분류]` 양식으로 옮깁니다.
 
-사람 대기의 주 감시는 업무 카드입니다. 짝 저장소 `naia-adk-waitcard`의 `.agents/scripts/task-cards.mjs`와 `docs/guides/work-ledger.md`에 맞춰 카드를 `waiting`으로 남기고, `wait_reason`과 다시 볼 시각 `recheck_at`을 적습니다. 사람 승인을 기다리면 요청 글 주소·번호인 `request_ref`도 필수입니다. `recheck_at`은 시간대를 포함한 ISO 시각으로 최대 4시간 뒤이며, 카드에서 내보낸 장부의 `due_at`에 대응합니다. 카드의 `due`는 업무 기한으로 유지합니다. 이 문서의 JSON 장부에서 `waiting_human`을 쓸 때는 `due`에 재확인 시각을, `note`에 기다리는 답과 다음 행동을 적습니다. 시각 없는 대기로 일을 내려놓지 않습니다.
+사람 대기의 주 감시는 업무 카드입니다. `.agents/scripts/task-cards.mjs`와 `docs/guides/work-ledger.md`에 맞춰 카드를 `waiting`으로 남기고, `wait_reason`과 다시 볼 시각 `recheck_at`을 적습니다. 사람 승인을 기다리면 요청 글 주소·번호인 `request_ref`도 필수입니다. `recheck_at`은 시간대를 포함한 ISO 시각으로 최대 4시간 뒤이며, 카드에서 내보낸 장부의 `due_at`에 대응합니다. 카드의 `due`는 업무 기한으로 유지합니다. 이 문서의 JSON 장부에서 `waiting_human`을 쓸 때는 `due`에 재확인 시각을, `note`에 기다리는 답과 다음 행동을 적습니다. 시각 없는 대기로 일을 내려놓지 않습니다.
 
 ## 장부 모양
 

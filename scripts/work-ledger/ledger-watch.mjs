@@ -345,12 +345,12 @@ export async function watch({
                 messenger.threads(channel, channelMessages, { guildId, all: true, direct: (roleConfig.direct_channels ?? []).includes(channel) }),
               );
               for (const [tid, owner] of activeThreads?.threadOwners ?? [])
-                if (owner) threadStarterAuthor.set(tid, owner);
+                if (owner && !threadStarterAuthor.has(tid)) threadStarterAuthor.set(tid, owner);
               for (const value of activeThreads || []) {
                 const tid = typeof value === "string" ? value : value.id;
                 if (tid) discoveredThreads.add(tid);
                 const owner = typeof value === "string" ? activeThreads.threadOwners?.get(tid) : value.owner_id;
-                if (owner) threadStarterAuthor.set(tid, owner);
+                if (owner && !threadStarterAuthor.has(tid)) threadStarterAuthor.set(tid, owner);
               }
             } catch (error) {
               // Thread discovery failing must not mark a successful channel read failed.
