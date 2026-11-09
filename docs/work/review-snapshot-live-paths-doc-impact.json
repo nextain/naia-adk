@@ -1,0 +1,23 @@
+{
+  "work": "review-snapshot-live-paths",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approval-plan-gate.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approval-plan-gate.md"
+    ],
+    "reason": "Exact file declarations, protected real paths, and append-only identity and prefix checks."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approval-plan-gate.md"
+    ],
+    "reason": "Reject ambiguous links, directory prefixes and protected aliases; preserve baseline snapshots without configuration."
+  }
+}

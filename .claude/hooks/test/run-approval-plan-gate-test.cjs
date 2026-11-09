@@ -1089,3 +1089,321 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 	fs.rmSync(cfgPath, { force: true });
 	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "설정 파일이 없을 때는 시험 기기 예외가 적용되지 않아야 함");
 });
+
+// Exercise the real review CLI and Git snapshot, with a deterministic reviewer
+// that mutates fixture files after the before-snapshot has been taken.
+function snapshotReviewWorkspace(t, config, files = {}) {
+	const fixture = makeWorkspace(t);
+	const { root, tmp, stateDir } = fixture;
+	// referencedFiles resolves shell commands through these real local modules.
+	for (const name of ["effective-argv.js", "git-command-parser.js", "deploy-command-classifier.js"]) {
+		const rel = path.join(".claude/hooks/lib", name);
+		fs.copyFileSync(path.join(REPO_ROOT, rel), path.join(root, rel));
+	}
+	fs.rmSync(path.join(root, ".git"), { recursive: true, force: true });
+	const git = (...args) => {
+		const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+		assert.equal(result.status, 0, result.stderr);
+		return result.stdout;
+	};
+	git("init", "-q");
+	const plan = createValidPlan(root);
+	for (const [rel, body] of Object.entries(files)) {
+		const file = path.join(root, rel);
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, body);
+	}
+	if (config !== null) {
+		fs.mkdirSync(path.join(root, "config"), { recursive: true });
+		fs.writeFileSync(path.join(root, "config/review-snapshot.json"), JSON.stringify(config));
+	}
+	git("add", ".");
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Fixture");
+	const bin = path.join(tmp, "bin");
+	fs.mkdirSync(bin);
+	const gitPath = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+	fs.symlinkSync(gitPath, path.join(bin, "git"));
+	const reviewer = path.join(bin, "reviewer.cjs");
+	const marker = path.join(tmp, "reviewer-started");
+	const body = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS — 확인 통과`), "참고 지적: 0", "남은 지적: 0", ""].join("\n");
+	function run(mutation = "") {
+		fs.writeFileSync(reviewer, `#!${process.execPath}\nconst fs = require('node:fs');\nfs.writeFileSync(${JSON.stringify(marker)}, 'started');\n${mutation}\nprocess.stdin.resume(); process.stdin.on('end', () => process.stdout.write(${JSON.stringify(body)}));\n`, { mode: 0o700 });
+		const result = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", plan.planFile, "--author", "muse"], {
+			cwd: root, encoding: "utf8", timeout: 30000,
+			env: { ...process.env, PATH: bin, NODE_OPTIONS: "", APPROVAL_PLAN_ARGON_BIN: reviewer, DEPLOY_APPROVAL_STATE_DIR: stateDir },
+		});
+		assert.equal(result.error, undefined, String(result.error));
+		return { ...result, output: `${result.stdout}\n${result.stderr}`, invoked: fs.existsSync(marker) };
+	}
+	return { ...fixture, ...plan, git, run };
+}
+
+const snapshotConfig = (extra = {}) => ({ version: 1, exclude: [], appendOnly: [], ...extra });
+const snapshotWrite = (rel, body) => `fs.writeFileSync(${JSON.stringify(rel)}, ${JSON.stringify(body)});`;
+
+test("review snapshot: unchanged workspace passes the real review CLI", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig());
+	const r = f.run();
+	assert.equal(r.status, 0, r.output);
+	assert.equal(r.invoked, true);
+});
+
+test("review snapshot: declared ignored live files may change inside a collapsed ignored directory", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/current.md", "live/generated/new.md"] }), {
+		".gitignore": "live/\n", "live/current.md": "before", "live/stable.md": "stable", "live/generated/old.md": "old",
+	});
+	const r = f.run(snapshotWrite("live/current.md", "after") + snapshotWrite("live/generated/new.md", "new"));
+	assert.equal(r.status, 0, r.output);
+	assert.equal(r.invoked, true);
+});
+
+test("review snapshot: undeclared ignored sibling changes still fail", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/current.md"] }), {
+		".gitignore": "live/\n", "live/current.md": "before", "live/stable.md": "stable",
+	});
+	const r = f.run(snapshotWrite("live/stable.md", "changed"));
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+test("review snapshot: undeclared tracked changes still fail", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig(), { "ordinary.txt": "before" });
+	const r = f.run(snapshotWrite("ordinary.txt", "after"));
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+for (const protectedPath of [".claude/hooks/", ".agents/scripts/", "gates/", ".agents/progress/sample-work/gates/deploy-plan.json", "scripts/rollout.sh", "config/review-snapshot.json"]) {
+	test(`review snapshot: protected declaration rejected before reviewer: ${protectedPath}`, (t) => {
+		const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: [protectedPath] }));
+		const r = f.run();
+		assert.notEqual(r.status, 0, r.output);
+		assert.equal(r.invoked, false, r.output);
+		assert.match(r.output, /SNAPSHOT_(PROTECTED_PATH|CONFIG_INVALID)/);
+	});
+}
+
+test("review snapshot: tracked JSONL permits append from an already dirty baseline", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: ["logs/audit.jsonl"] }), { "logs/audit.jsonl": '{"event":"first"}\n' });
+	fs.appendFileSync(path.join(f.root, "logs/audit.jsonl"), '{"event":"before-review"}\n');
+	const r = f.run(`fs.appendFileSync('logs/audit.jsonl', '{"event":"during-review"}\\n');`);
+	assert.equal(r.status, 0, r.output);
+});
+
+test("review snapshot: tracked JSONL prefix mutation fails even when length grows", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: ["logs/audit.jsonl"] }), { "logs/audit.jsonl": '{"event":"first"}\n' });
+	const r = f.run(snapshotWrite("logs/audit.jsonl", '{"event":"other"}\n{"event":"appended"}\n'));
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+test("review snapshot: configuration changes during review fail", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig());
+	const r = f.run(snapshotWrite("config/review-snapshot.json", JSON.stringify(snapshotConfig({ exclude: ["live/"] }))));
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+test("review snapshot: tracked JSONL truncation fails", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: ["logs/audit.jsonl"] }), { "logs/audit.jsonl": '{"event":"first"}\n{"event":"second"}\n' });
+	const r = f.run(snapshotWrite("logs/audit.jsonl", '{"event":"first"}\n'));
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+test("review snapshot: staging an allowed audit append still fails", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: ["logs/audit.jsonl"] }), { "logs/audit.jsonl": '{"event":"first"}\n' });
+	const r = f.run(`fs.appendFileSync('logs/audit.jsonl', '{"event":"second"}\\n'); require('node:child_process').execFileSync('git', ['add', 'logs/audit.jsonl']);`);
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+test("review snapshot: protected appendOnly path is rejected before reviewer", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: [".claude/hooks/audit.jsonl"] }), { ".claude/hooks/audit.jsonl": '{}\n' });
+	const r = f.run();
+	assert.notEqual(r.status, 0, r.output);
+	assert.equal(r.invoked, false, r.output);
+	assert.match(r.output, /SNAPSHOT_PROTECTED_PATH/);
+});
+
+test("review snapshot: symlink declaration is rejected before reviewer", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/link.md"] }), { ".gitignore": "live/\n", "live/target.md": "before" });
+	fs.symlinkSync("target.md", path.join(f.root, "live/link.md"));
+	const r = f.run();
+	assert.notEqual(r.status, 0, r.output);
+	assert.equal(r.invoked, false, r.output);
+	assert.match(r.output, /SNAPSHOT_CONFIG_INVALID/);
+});
+
+test("review snapshot: directory prefix declaration is rejected before reviewer", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/"] }), { ".gitignore": "live/\n", "live/current.md": "before" });
+	const r = f.run();
+	assert.notEqual(r.status, 0, r.output);
+	assert.equal(r.invoked, false, r.output);
+});
+
+
+// Review findings 1–4: fail closed for aliases, policy inputs, replacements,
+// and the no-policy compatibility path. All mutations run inside the reviewer.
+for (const rel of ["live/", "live", "./live/current.md", "live/../current.md", "Live/current.md", ".Claude/hooks/audit.jsonl", "GATES/entry.md", "live/deploy-plan.JSON"]) {
+	test(`review snapshot: noncanonical or directory exclusion rejected: ${rel}`, (t) => {
+		const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: [rel] }), { ".gitignore": "live/\n", "live/current.md": "before" });
+		const r = f.run();
+		assert.notEqual(r.status, 0, r.output);
+		assert.equal(r.invoked, false, r.output);
+	});
+}
+
+for (const target of [".agents/progress/sample-work/gates/deploy-plan.json", ".agents/scripts/approval-plan.mjs", ".claude/hooks/lib/deploy-plan.js", "scripts/rollout.sh"]) {
+	for (const kind of ["symlink", "hardlink"]) {
+		test(`review snapshot: late ${kind} to protected file fails: ${target}`, (t) => {
+			const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/link.md"] }), { ".gitignore": "live/\n", "live/placeholder.md": "before" });
+			const mutation = kind === "symlink"
+				? `fs.symlinkSync(${JSON.stringify("../" + target)}, 'live/link.md');`
+				: `fs.linkSync(${JSON.stringify(target)}, 'live/link.md');`;
+			const r = f.run(mutation);
+			assert.notEqual(r.status, 0, r.output);
+			assert.equal(r.invoked, true, r.output);
+		});
+	}
+}
+
+for (const kind of ["symlink", "hardlink"]) {
+	test(`review snapshot: existing excluded file replaced by ${kind} fails`, (t) => {
+		const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/current.md"] }), { ".gitignore": "live/\n", "live/current.md": "before" });
+		const mutation = `fs.unlinkSync('live/current.md'); ` + (kind === "symlink"
+			? `fs.symlinkSync('../scripts/rollout.sh', 'live/current.md');`
+			: `fs.linkSync('scripts/rollout.sh', 'live/current.md');`);
+		const r = f.run(mutation);
+		assert.notEqual(r.status, 0, r.output);
+		assert.equal(r.invoked, true, r.output);
+	});
+}
+
+test("review snapshot: preexisting excluded hardlink rejected before reviewer", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/link.md"] }), { ".gitignore": "live/\n", "live/current.md": "before" });
+	fs.linkSync(f.scriptAbs, path.join(f.root, "live/link.md"));
+	const r = f.run();
+	assert.notEqual(r.status, 0, r.output);
+	assert.equal(r.invoked, false, r.output);
+});
+
+for (const gates of ["gates/deploy-plan.json", "GATES/deploy-plan.JSON"]) {
+	test(`review snapshot: nested git cannot hide undeclared plan: ${gates}`, (t) => {
+		const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/current.md"] }), { ".gitignore": "live/\n", "live/current.md": "before" });
+		const r = f.run(`fs.mkdirSync('live/nested/.git/objects', {recursive:true}); fs.mkdirSync('live/nested/.git/refs', {recursive:true}); fs.writeFileSync('live/nested/.git/HEAD', 'ref: refs/heads/main\\n'); fs.mkdirSync(${JSON.stringify("live/nested/" + gates.split('/')[0])}, {recursive:true}); ${snapshotWrite("live/nested/" + gates, "{}\n")}`);
+		assert.notEqual(r.status, 0, r.output);
+		assert.equal(r.invoked, true, r.output);
+	});
+}
+
+for (const rel of [".claude/deploy/config.json", ".claude/deploy/approvals.json", ".claude/prod-access-approved.marker", ".claude/git-push-approved.marker", ".claude/beh-test", ".agents/harness/settings.json"]) {
+	test(`review snapshot: gate config or marker exclusion rejected: ${rel}`, (t) => {
+		const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: [rel] }), { [rel]: "{}\n" });
+		const r = f.run(snapshotWrite(rel, '{"projects":{"p":{"dev_service":"prod-svc"}}}'));
+		assert.notEqual(r.status, 0, r.output);
+		assert.equal(r.invoked, false, r.output);
+		assert.match(r.output, /SNAPSHOT_PROTECTED_PATH/);
+	});
+}
+
+for (const source of ["step.files", "command reference"]) {
+	test(`review snapshot: realpath of ${source} cannot be excluded`, (t) => {
+		const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: ["real-logs/audit.jsonl"] }), { "real-logs/audit.jsonl": '{}\n' });
+		fs.symlinkSync("real-logs", path.join(f.root, "link-logs"));
+		if (source === "step.files") f.plan.scenario[0].files["link-logs/audit.jsonl"] = sha256(fs.readFileSync(path.join(f.root, "real-logs/audit.jsonl")));
+		else f.plan.scenario[0].commands.push("cat link-logs/audit.jsonl");
+		fs.writeFileSync(f.planFile, JSON.stringify(f.plan));
+		const r = f.run();
+		assert.notEqual(r.status, 0, r.output);
+		assert.equal(r.invoked, false, r.output);
+		assert.match(r.output, /SNAPSHOT_PROTECTED_PATH/);
+	});
+}
+
+for (const mutation of [
+	["unlink and recreate", `const old = fs.readFileSync('logs/audit.jsonl'); fs.unlinkSync('logs/audit.jsonl'); fs.writeFileSync('logs/audit.jsonl', Buffer.concat([old, Buffer.from('{}\\n')]));`],
+	["rename replacement", `const old = fs.readFileSync('logs/audit.jsonl'); fs.writeFileSync('logs/new.jsonl', Buffer.concat([old, Buffer.from('{}\\n')])); fs.renameSync('logs/new.jsonl', 'logs/audit.jsonl');`],
+	["same length overwrite", snapshotWrite("logs/audit.jsonl", '{"seq":2}\n')],
+	["append with tracked mutation", `fs.appendFileSync('logs/audit.jsonl', '{}\\n'); ${snapshotWrite("ordinary.txt", "after")}`],
+]) {
+	test(`review snapshot: appendOnly ${mutation[0]} fails`, (t) => {
+		const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: ["logs/audit.jsonl"] }), { "logs/audit.jsonl": '{"seq":1}\n', "ordinary.txt": "before" });
+		const r = f.run(mutation[1]);
+		assert.notEqual(r.status, 0, r.output);
+		assert.equal(r.invoked, true, r.output);
+	});
+}
+
+for (const [name, mutation] of [
+	["create directory", "fs.mkdirSync('dist/new-dir', {recursive:true});"],
+	["delete directory", "fs.rmdirSync('dist/old-dir');"],
+	["chmod directory", "fs.chmodSync('dist/old-dir', 0o700);"],
+]) {
+	test(`review snapshot: absent config preserves baseline ignored ${name} failure`, (t) => {
+		const f = snapshotReviewWorkspace(t, null, { ".gitignore": "dist/\n" });
+		fs.mkdirSync(path.join(f.root, "dist/old-dir"), {recursive:true, mode: 0o755});
+		const r = f.run(mutation);
+		assert.equal(r.status, 1, r.output);
+		assert.equal(r.invoked, true, r.output);
+		assert.match(r.output, /읽기 전용 검사 실패/);
+	});
+}
+
+test("review snapshot: absent configuration created during review fails", (t) => {
+	const f = snapshotReviewWorkspace(t, null);
+	const r = f.run(`fs.mkdirSync('config', {recursive:true}); ${snapshotWrite("config/review-snapshot.json", JSON.stringify(snapshotConfig()))}`);
+	assert.notEqual(r.status, 0, r.output);
+	assert.equal(r.invoked, true, r.output);
+});
+
+
+test("review snapshot: absent config unchanged workspace preserves baseline pass", (t) => {
+	const f = snapshotReviewWorkspace(t, null, { ".gitignore": "dist/\n", "dist/stable.txt": "stable" });
+	const r = f.run();
+	assert.equal(r.status, 0, r.output);
+	assert.equal(r.invoked, true, r.output);
+});
+
+
+test("review snapshot: actual three live paths allow exact edits and audit append", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["docs/developer/now-live.md", "docs/developer/claude-usage-live.md"], appendOnly: [".claude/deploy/audit.jsonl"] }), {
+		".gitignore": "docs/developer/*-live.md\n",
+		"docs/developer/now-live.md": "before", "docs/developer/claude-usage-live.md": "before", ".claude/deploy/audit.jsonl": '{}\n',
+	});
+	const r = f.run(snapshotWrite("docs/developer/now-live.md", "after") + snapshotWrite("docs/developer/claude-usage-live.md", "after") + `fs.appendFileSync('.claude/deploy/audit.jsonl', '{}\\n');`);
+	assert.equal(r.status, 0, r.output);
+});
+
+for (const policy of ["exclude", "appendOnly"]) {
+	test(`review snapshot: ${policy} ancestor replaced by symlink during review fails`, (t) => {
+		const rel = policy === "exclude" ? "live/current.md" : "logs/audit.jsonl";
+		const dir = rel.split('/')[0];
+		const f = snapshotReviewWorkspace(t, snapshotConfig({ [policy]: [rel] }), { ".gitignore": "live/\n", [rel]: '{}\n' });
+		const r = f.run(`fs.renameSync(${JSON.stringify(dir)}, ${JSON.stringify(dir + '-saved')}); fs.symlinkSync(${JSON.stringify(dir + '-saved')}, ${JSON.stringify(dir)});`);
+		assert.notEqual(r.status, 0, r.output);
+		assert.equal(r.invoked, true, r.output);
+	});
+}
+
+test("review snapshot: absent config hash bytes match 90bbc5fd across ignored directory states", (t) => {
+	const f = snapshotReviewWorkspace(t, null, { ".gitignore": "dist/\ngates/\ntmp/\n", "dist/stable.txt": "stable", "gates/local.txt": "gate", "tmp/local.txt": "temp" });
+	const baseline = spawnSync("git", ["show", "90bbc5fd:.agents/scripts/approval-plan.mjs"], { cwd: REPO_ROOT, encoding: "utf8" });
+	assert.equal(baseline.status, 0, baseline.stderr);
+	const current = fs.readFileSync(SCRIPT_PATH, "utf8");
+	const snapshot = (source) => {
+		const start = source.indexOf("function gitSnapshot(");
+		const end = source.indexOf("function reviewErrorDetails(", start);
+		assert.ok(start >= 0 && end > start);
+		return require("node:vm").runInNewContext(source.slice(start, end) + "\ngitSnapshot(ROOT)", { ROOT: f.root, fs, path, crypto, spawnSync, Buffer });
+	};
+	for (const [name, mutate] of [
+		["unchanged", () => {}],
+		["create", () => fs.mkdirSync(path.join(f.root, "dist/empty"), { mode: 0o755 })],
+		["chmod", () => fs.chmodSync(path.join(f.root, "dist/empty"), 0o700)],
+		["delete", () => fs.rmdirSync(path.join(f.root, "dist/empty"))],
+	]) {
+		mutate();
+		assert.equal(snapshot(current), snapshot(baseline.stdout), name);
+	}
+});
