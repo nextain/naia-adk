@@ -1089,3 +1089,56 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 	fs.rmSync(cfgPath, { force: true });
 	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "설정 파일이 없을 때는 시험 기기 예외가 적용되지 않아야 함");
 });
+
+
+test("local systemd: configured mutations require a plan across shell forms", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	const service = "local:systemd:sample-web";
+	writeGateConfig(root, { services: { [service]: { requireDeployGate: false, allowOps: true, paths: ["/opt/sample-web"] } } });
+	const commands = [
+		...["stop", "start", "restart", "reload", "enable", "disable", "mask", "kill", "daemon-reload"].map(v => `/usr/bin/sudo /usr/bin/env MODE=sample /usr/bin/systemctl ${v} sample-web.service sample-web.socket`),
+		"sh -c 'systemctl stop sample-web'", "sudo sh -c 'systemctl stop sample-web'",
+		"bash -c 'systemctl stop sample-web.socket'", "( systemctl restart sample-web )",
+		"for unit in sample-web; do systemctl stop $unit; done",
+		"for unit in 'sample-web'; do systemctl stop \"$unit\"; done",
+		"echo ready && systemctl stop sample-web; echo done",
+		"install source /etc/systemd/system/sample-web.service",
+		"cp /tmp/sample-web.service /etc/systemd/system/", "install -t /etc/systemd/system /tmp/sample-web.service",
+		"cp source /etc/systemd/system/sample-web.service.d/override.conf",
+		"mv source /etc/systemd/system/sample-web.socket", "mv /tmp/sample-web.service /etc/systemd/system/",
+		"rm -r /etc/systemd/system/sample-web.service.d",
+		"echo data | tee /etc/systemd/system/sample-web.service.d/override.conf",
+		"sed -i s/a/b/ /etc/systemd/system/sample-web.service",
+		"rm /etc/systemd/system/sample-web.service", "ln -s source /etc/systemd/system/sample-web.service",
+		"cp source /opt/sample-web/releases/current", "rm /opt/sample-web/old",
+		"mv -t /tmp /opt/sample-web/current", "install -d /opt/sample-web /tmp/sample-dir",
+	];
+	for (const command of commands) {
+		assert.equal(runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath })?.decision, "block", command);
+		const hits = classifyProdMutations(command, root, 0, false, root);
+		assert.ok(hits.some(h => h.service === service), command);
+	}
+	for (const command of ["systemctl status sample-web", "systemctl status stop sample-web", "sed -i /opt/sample-web /tmp/unrelated", "systemctl show sample-web", "systemctl is-active sample-web", "systemctl cat sample-web", "systemctl list-units sample-web", "systemctl stop sample-other", "cp /opt/sample-web/readme /tmp/sample-copy", "cp source /opt/sample-web-other/file", "cat /etc/systemd/system/sample-web.service"]) {
+		assert.deepEqual(classifyProdMutations(command, root, 0, false, root), [], command);
+	}
+});
+
+test("local systemd: reviewed plan issues PLAN and STEP codes", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	const service = "local:systemd:sample-web";
+	writeGateConfig(root, { services: { [service]: { requireDeployGate: false, allowOps: true } } });
+	const command = "systemctl restart sample-web.service";
+	const { planFile } = createValidPlan(root, { services: [service], scenario: [{ id: "s1", title: "Restart sample", commands: [command], success_check: "Check status", on_failure: "Report failure" }], rollback: { method: "Restart sample", duration: "1 minute", step_ids: ["s1"] } });
+	writePassingReviewReceipt(root, planFile);
+	const d1 = runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath });
+	const code = d1?.reason.match(/승인 코드:\s*(PLAN-[A-Z0-9]{6})/);
+	assert.ok(code, JSON.stringify(d1));
+	appendHumanTurn(transcriptPath, `계획 승인합니다 ${code[1]}`);
+	const d2 = runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath });
+	assert.match(d2?.reason || "", /단계 승인 코드:\s*STEP-[A-Z0-9]{6}/);
+	assert.equal(d2.decision, "block");
+	const stepCode = d2.reason.match(/단계 승인 코드:\s*(STEP-[A-Z0-9]{6})/)[1];
+	appendHumanTurn(transcriptPath, `단계 승인합니다 ${stepCode}`);
+	assert.equal(runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath }), null);
+
+});
