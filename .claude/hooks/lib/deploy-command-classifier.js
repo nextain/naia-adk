@@ -1477,22 +1477,31 @@ function resolveGateRoot(startDir) {
 	return candidates[0];
 }
 
-// Only explicitly registered local units and their write destinations are production targets.
+// Unresolved local mutations fail closed whenever a local service is registered.
 function classifyLocalSystemd(command, tokens, dir, cfg) {
+	const redirectTargets = [];
+	const args = [];
+	for (let i = 0; i < tokens.length; i++) {
+		const match = tokens[i].match(/^(?:\d+|&)?(>\||>>|>|>&)(.*)$/);
+		if (!match) {
+			if (/^(?:\d+)?(?:<|<<|<<<)$/.test(tokens[i])) { i++; continue; }
+			args.push(tokens[i]); continue;
+		}
+		const target = match[2] || tokens[++i];
+		if (target && !(match[1] === ">&" && /^(?:\d+-?|-)$/.test(target))) redirectTargets.push(target);
+	}
+	const redirectHits = redirectTargets.length ? classifyLocalSystemd("", ["tee", ...redirectTargets], dir, cfg) : [];
+	tokens = args;
 	const entries = Array.isArray(cfg.services)
 		? cfg.services.map(item => typeof item === "string" ? [item, {}] : [item?.service, item])
 		: Object.entries(cfg.services || {}).filter(([, rule]) => rule);
 	const tool = path.basename(tokens[0] || "");
-	const writes = new Set(["stop", "start", "restart", "reload", "enable", "disable", "mask", "kill", "daemon-reload", "try-restart", "reload-or-restart", "reload-or-try-restart", "reenable", "unmask", "revert", "edit", "set-property"]);
-	const words = tokens.slice(1).flatMap(word => {
-		const variable = word.match(/^\$(?:\{(\w+)\}|(\w+))$/);
-		if (!variable) return [word];
-		const name = variable[1] || variable[2];
-		const loop = new RegExp(`\\bfor\\s+${name}\\s+in\\s+([^;\\n]+)[;\\n]`).exec(command);
-		return loop ? require("./git-command-parser.js").shellClauses(loop[1]).flat().filter(w => /^[A-Za-z0-9_.@-]+$/.test(w)) : [word];
-	});
-	let targets = [];
+	const writes = new Set(["stop", "start", "restart", "reload", "enable", "disable", "mask", "kill", "daemon-reload", "try-restart", "reload-or-restart", "reload-or-try-restart", "reenable", "unmask", "revert", "edit", "set-property", "preset", "link", "add-wants", "add-requires"]);
+	// Shell variables may have been reassigned or scoped by a loop; retain them as unresolved.
+	const words = tokens.slice(1);
+	let targets = [], unresolved = false, unitCommand = false;
 	if (tool === "systemctl") {
+		unitCommand = true;
 		let verb = -1;
 		const valueOptions = new Set(["-H", "--host", "-M", "--machine", "--root", "--image", "--job-mode", "--kill-whom", "--kill-who", "-s", "--signal"]);
 		for (let i = 0; i < words.length; i++) {
@@ -1501,12 +1510,24 @@ function classifyLocalSystemd(command, tokens, dir, cfg) {
 			verb = writes.has(words[i]) ? i : -1;
 			break;
 		}
-		if (verb < 0 || words.includes("--user") || words.includes("--help")) return [];
-		targets = words.slice(verb + 1).filter(word => !word.startsWith("-"));
+		if (verb < 0 || words.includes("--user") || words.includes("--help")) return redirectHits;
+		targets = words.slice(verb + 1).filter(word => !word.startsWith("-") && !/^[<>]/.test(word));
+		if (words[verb] === "link") targets = targets.map(target => path.posix.basename(target));
+		unresolved = words[verb] === "daemon-reload" || !targets.length || targets.some(target => /[$`]/.test(target));
+	} else if (tool === "service") {
+		unitCommand = true;
+		if (!writes.has(words[1]) || words.includes("--help")) return redirectHits;
+		targets = words.slice(0, 1);
+		unresolved = !targets.length || targets.some(target => /[$`]/.test(target));
 	} else {
-		if (!["install", "cp", "mv", "tee", "sed", "rm", "ln"].includes(tool)) return [];
-		if (tool === "sed" && !words.some(word => /^-[A-Za-z]*i|^--in-place/.test(word))) return [];
-		const positional = words.filter(word => !word.startsWith("-"));
+		if (!["install", "cp", "mv", "tee", "sed", "rm", "ln", "dd", "truncate", "rsync", "chmod", "chown"].includes(tool)) return redirectHits;
+		if (tool === "sed" && !words.some(word => /^-[A-Za-z]*i|^--in-place/.test(word))) return redirectHits;
+		const optionValues = new Set(tool === "install" ? ["-m", "--mode", "-o", "--owner", "-g", "--group"] : tool === "truncate" ? ["-s", "--size", "-r", "--reference"] : tool === "chmod" || tool === "chown" ? ["--reference", "--from"] : []);
+		const positional = [];
+		for (let i = 0; i < words.length; i++) {
+			if (optionValues.has(words[i])) { i++; continue; }
+			if (!words[i].startsWith("-")) positional.push(words[i]);
+		}
 		if (["cp", "install", "ln", "mv"].includes(tool)) {
 			const targetDir = optionValue(words, ["-t", "--target-directory"]);
 			const destination = targetDir || positional[positional.length - 1];
@@ -1528,16 +1549,42 @@ function classifyLocalSystemd(command, tokens, dir, cfg) {
 				if (!expressionSeen) { expressionSeen = true; continue; }
 				targets.push(word);
 			}
-		} else targets = positional;
+		} else if (tool === "dd") targets = words.filter(word => word.startsWith("of=")).map(word => word.slice(3));
+		else if (tool === "rsync") targets = positional.slice(-1);
+		else if (tool === "chmod" || tool === "chown") targets = positional.slice(words.includes("--reference") || words.some(w => w.startsWith("--reference=")) || (tool === "chmod" && words.some(w => /^-[rwxXstugo]+(?:,[ugoa]*[+=-][rwxXstugo]*)*$/.test(w))) ? 0 : 1);
+		else targets = positional;
 	}
-	const hits = [];
+	const hits = [...redirectHits];
 	for (const [service, rule] of entries) {
 		if (typeof service !== "string" || !service.startsWith("local:systemd:")) continue;
 		const unit = service.slice("local:systemd:".length).replace(/\.(?:service|socket)$/, "");
 		if (!/^[A-Za-z0-9_@.-]+$/.test(unit) || /[*?]/.test(unit)) continue;
-		const matches = tool === "systemctl"
-			? targets.some(target => target.replace(/\.(?:service|socket)$/, "") === unit)
+		const matches = unitCommand
+			? unresolved || targets.some(target => {
+				if (/[*?\[]/.test(target)) {
+					// Match only registered units when possible; an unresolvable pattern fails closed.
+					let pattern = "";
+					for (let i = 0; i < target.length; i++) {
+						const c = target[i];
+						if (c === "*") pattern += ".*";
+						else if (c === "?") pattern += ".";
+						else if (c === "[") {
+							const end = target.indexOf("]", i + 1);
+							if (end < 0) return true;
+							const body = target.slice(i + 1, end);
+							if (!/^[A-Za-z0-9_@.!^-]+$/.test(body)) return true;
+							pattern += "[" + body.replace(/^!/, "^") + "]"; i = end;
+						} else pattern += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+					}
+					let re;
+					try { re = new RegExp("^" + pattern + "$"); } catch { return true; }
+					const selected = entries.filter(([key]) => typeof key === "string" && key.startsWith("local:systemd:")).map(([key]) => key.slice("local:systemd:".length).replace(/\.(?:service|socket)$/, "")).filter(name => [name, name + ".service", name + ".socket"].some(name => re.test(name)));
+					return !selected.length || selected.includes(unit);
+				}
+				return target.replace(/\.(?:service|socket)$/, "") === unit;
+			})
 			: targets.some(target => {
+				if (/[$`*?\[]/.test(target)) return true;
 				const dest = path.posix.normalize(path.posix.isAbsolute(target) ? target : path.resolve(dir, target));
 				if (["service", "socket"].some(suffix => dest === `/etc/systemd/system/${unit}.${suffix}` || dest === `/etc/systemd/system/${unit}.${suffix}.d` || dest.startsWith(`/etc/systemd/system/${unit}.${suffix}.d/`))) return true;
 				return (Array.isArray(rule?.paths) ? rule.paths : []).some(base => typeof base === "string" && path.posix.isAbsolute(base) && (dest === path.posix.normalize(base) || dest.startsWith(path.posix.normalize(base).replace(/\/$/, "") + "/")));

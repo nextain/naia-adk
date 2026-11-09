@@ -17,7 +17,7 @@ const { classifyProdMutations } = require("../lib/deploy-command-classifier.js")
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
 
 function makeWorkspace(t) {
-	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-gate-test-"));
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sample-approval-plan-gate-test-"));
 	t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 	const root = path.join(tmp, "workspace");
 	const stateDir = path.join(tmp, "state");
@@ -1096,7 +1096,7 @@ test("local systemd: configured mutations require a plan across shell forms", (t
 	const service = "local:systemd:sample-web";
 	writeGateConfig(root, { services: { [service]: { requireDeployGate: false, allowOps: true, paths: ["/opt/sample-web"] } } });
 	const commands = [
-		...["stop", "start", "restart", "reload", "enable", "disable", "mask", "kill", "daemon-reload"].map(v => `/usr/bin/sudo /usr/bin/env MODE=sample /usr/bin/systemctl ${v} sample-web.service sample-web.socket`),
+		...["stop", "start", "restart", "reload", "enable", "disable", "mask", "kill"].map(v => `/usr/bin/sudo /usr/bin/env MODE=sample /usr/bin/systemctl ${v} sample-web.service sample-web.socket`),
 		"sh -c 'systemctl stop sample-web'", "sudo sh -c 'systemctl stop sample-web'",
 		"bash -c 'systemctl stop sample-web.socket'", "( systemctl restart sample-web )",
 		"for unit in sample-web; do systemctl stop $unit; done",
@@ -1141,4 +1141,71 @@ test("local systemd: reviewed plan issues PLAN and STEP codes", (t) => {
 	appendHumanTurn(transcriptPath, `단계 승인합니다 ${stepCode}`);
 	assert.equal(runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath }), null);
 
+});
+
+const localRegressionCases = {
+ "F-1 redirection": ["printf x > /etc/systemd/system/sample-web.service", "echo x >> /etc/systemd/system/sample-web.service.d/override.conf", "cat /tmp/sample-source >| /opt/sample-web/app.conf", "echo x &> /opt/sample-web/app.conf"],
+ "F-2 unresolved expansion": ["U=sample-web; systemctl stop $U", "U=sample-web systemctl stop $U", "systemctl stop ${U}", "for U in sample-other; do echo $U; done; U=sample-web; systemctl stop $U", "for U in sample-other $OTHER; do systemctl stop $U; done", "systemctl stop $(printf sample-web)", "systemctl stop `printf sample-web`"],
+ "F-3 unit glob": ["systemctl stop 'sample-*'", "systemctl stop sample-web?", "systemctl stop 'sample-[w]eb.service'"],
+ "F-4 global daemon reload": ["systemctl daemon-reload"],
+ "F-5 stdin target": ["echo sample-web | xargs systemctl stop", "xargs -a /tmp/sample-units systemctl stop", "systemctl stop < /tmp/sample-units"],
+ "F-6 service wrapper": ["service sample-web stop", "sudo service sample-web restart", "service $U restart"],
+ "F-7 enablement": ["systemctl preset sample-web.service", "systemctl add-wants sample-other.target sample-web.service", "systemctl add-requires sample-other.target sample-web.service"],
+ "F-8 write tools": ["dd if=/tmp/sample-source of=/etc/systemd/system/sample-web.service", "truncate -s0 /opt/sample-web/app.conf", "truncate --size 0 /opt/sample-web/app.conf", "rsync -a /tmp/sample-source/ /opt/sample-web/", "chmod 644 /etc/systemd/system/sample-web.service", "chmod -w /opt/sample-web/app.conf", "chmod --reference /tmp/sample-mode /opt/sample-web/app.conf", "chown --reference=/tmp/sample-owner /opt/sample-web/app.conf", "chown sample-user /opt/sample-web/app.conf", "install -m 644 /tmp/sample-source /opt/sample-web/app.conf"],
+ "F-9 link path": ["systemctl link /tmp/sample-web.service"],
+};
+for (const [finding, commands] of Object.entries(localRegressionCases)) test(`local systemd regression: ${finding}`, t => {
+ const {root, stateDir, transcriptPath} = makeWorkspace(t);
+ const service = "local:systemd:sample-web";
+ writeGateConfig(root, {services: {[service]: {paths: ["/opt/sample-web"]}}});
+ for (const command of commands) {
+  assert.ok(classifyProdMutations(command, root, 0, false, root).some(h => h.service === service), command);
+  assert.equal(runDeployGuardHook(command, {cwd:root, root, stateDir, transcriptPath})?.decision, "block", command);
+ }
+});
+test("local systemd regression: precise unrelated targets and reads stay open", t => {
+ const {root,stateDir,transcriptPath} = makeWorkspace(t);
+ writeGateConfig(root, {services: {"local:systemd:sample-web": {paths:["/opt/sample-web"]}}});
+ for (const command of ["systemctl --user daemon-reload", "systemctl stop sample-other", "systemctl status sample-web", "service sample-web status", "cp sample-source /opt/sample-web2/file", "cat /etc/systemd/system/sample-web.service", "dd if=/opt/sample-web/app.conf of=/tmp/sample-output", "rsync /opt/sample-web/app.conf /tmp/sample-output", "chmod --reference /opt/sample-web/app.conf /tmp/sample-output", "chown --reference=/opt/sample-web/app.conf /tmp/sample-output"]) {
+  assert.deepEqual(classifyProdMutations(command, root, 0, false, root), [], command);
+  assert.equal(runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath}),null,command);
+ }
+});
+
+test("local systemd regression: globs select matching registered units", t => {
+ const {root} = makeWorkspace(t);
+ writeGateConfig(root, {services: {"local:systemd:sample-web": {}, "local:systemd:sample-api": {}}});
+ assert.deepEqual(classifyProdMutations("systemctl stop 'sample-web*'",root,0,false,root).map(h => h.service), ["local:systemd:sample-web"]);
+});
+for (const changed of [false,true]) test(`local systemd approval: ${changed ? "changed plan invalidates codes" : "STEP is consumed once"}`, async t => {
+ const {root,stateDir,transcriptPath} = makeWorkspace(t);
+ const service = "local:systemd:sample-web", command = "systemctl restart sample-web.service", sessionId = "sample-local-approval";
+ writeGateConfig(root, {services:{[service]:{requireDeployGate:false,allowOps:true}}});
+ const {planFile,plan} = createValidPlan(root, {services:[service],scenario:[{id:"s1",title:"Restart sample",commands:[command],success_check:"Check status",on_failure:"Report failure"}],rollback:{method:"Restart sample",duration:"1 minute",step_ids:["s1"]}});
+ writePassingReviewReceipt(root,planFile);
+ const pre = await deployPlan.preapproveStepCodes(planFile,root,sessionId,{...process.env,DEPLOY_APPROVAL_STATE_DIR:stateDir},Date.now());
+ assert.equal(pre.ok,true,pre.why);
+ appendHumanTurn(transcriptPath,`승인 ${pre.plan_code} ${pre.steps.find(s=>s.step==="s1").code}`);
+ if(changed) fs.writeFileSync(planFile,JSON.stringify({...plan,what_why:"Changed sample reason after approval"}));
+ else assert.equal(runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath,sessionId}),null);
+ const decision=runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath,sessionId});
+ assert.equal(decision?.decision,"block");
+ assert.match(decision.reason,changed ? /적대 리뷰를 통과하지 않아|지금 계획서가 아닌 판을 검수함/ : /단계 승인 필요/);
+});
+test("local systemd regression: unresolved write destinations fail closed", t => {
+ const {root,stateDir,transcriptPath} = makeWorkspace(t);
+ writeGateConfig(root,{services:{"local:systemd:sample-web":{paths:["/opt/sample-web"]}}});
+ for(const command of ["echo x > $P","cp /tmp/sample-source $P","dd of=${P}","truncate -s0 /opt/sample-*/app.conf"]) {
+  assert.ok(classifyProdMutations(command,root,0,false,root).some(h=>h.service==="local:systemd:sample-web"),command);
+  assert.equal(runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath})?.decision,"block",command);
+ }
+});
+
+test("local systemd regression: comma separated negative chmod modes", t => {
+ const {root,stateDir,transcriptPath} = makeWorkspace(t);
+ writeGateConfig(root,{services:{"local:systemd:sample-web":{paths:["/opt/sample-web"]}}});
+ for(const command of ["chmod -w,+x /opt/sample-web/app.conf", "chmod -w,u+x /opt/sample-web/app.conf"]) {
+  assert.ok(classifyProdMutations(command,root,0,false,root).some(h=>h.service==="local:systemd:sample-web"),command);
+  assert.equal(runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath})?.decision,"block",command);
+ }
 });
