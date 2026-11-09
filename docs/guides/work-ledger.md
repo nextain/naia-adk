@@ -53,7 +53,9 @@ The existing periodic check writes wake files directly under the consumer's
 `wakeRoot` (default `.agents/work/l4/wake/<file>`), including card roles absent
 from configured `roles`. Do not create role subdirectories. All observers must
 share the same central `wakeRoot`, `stateFile`, and card root; configure
-session-health `taskCardsRoot` and pass that same card root to `to-ledger`.
+session-health `taskCardsRoot` to the repository root containing
+`docs/common/team/cards`; pass the actual `docs/common/team/cards` directory
+(or its archived equivalent) to `to-ledger`.
 Use absolute instance paths when running observers from different checkouts.
 
 Legacy waiting cards remain readable. The first check groups their migration
