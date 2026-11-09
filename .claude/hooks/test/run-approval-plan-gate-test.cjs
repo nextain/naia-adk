@@ -1029,3 +1029,63 @@ test("큰 실행 파일: 셸 대본인지 볼 때 앞부분만 읽고 전체를 
 	}
 	assert.ok(maxRead <= 4096, `큰 파일을 ${maxRead} 바이트 읽음`);
 });
+
+test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음·막음 검증 (문서용 주소·example 이름만 사용)", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root, {
+		testHosts: ["192.0.2.10", "GPU-BOX.example.", "lab-node.example.com", "*.wildcard.example"],
+	});
+
+	// 1) 설정된 시험 기기로의 읽기·루프·복사·사용자 서비스 재시작은 비운영으로 통과
+	const allowedCmds = [
+		"ssh user@192.0.2.10 nvidia-smi",
+		"ssh user@192.0.2.10 'podman ps --format \"{{.Names}}\"'",
+		"ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'",
+		"ssh user@192.0.2.10. ls",
+		"ssh user@gpu-box.example ls",
+		"ssh user@GPU-BOX.EXAMPLE. ls",
+		"ssh user@lab-node.example.com systemctl --user restart sample-worker",
+		"scp a.txt user@192.0.2.10:~/work/",
+	];
+	for (const cmd of allowedCmds) {
+		assert.deepEqual(classifyProdMutations(cmd, root), [], `시험 기기 명령은 비운영으로 분류되어야 함: ${cmd}`);
+		const decision = runDeployGuardHook(cmd, { cwd: root, root, stateDir, transcriptPath });
+		assert.equal(decision, null, `시험 기기 명령은 관문을 통과해야 함: ${cmd}`);
+	}
+
+	// 2) 시험 기기 안이라도 원격 본문의 운영 변경(az vm delete 등)은 다시 분류해 차단
+	const remoteProdCmd = "ssh user@192.0.2.10 az vm delete -n sample-vm -g sample-rg";
+	const remoteProdHits = classifyProdMutations(remoteProdCmd, root);
+	assert.ok(remoteProdHits.some((h) => h.service === "azure:vm:sample-vm"), `시험 기기 안 운영 변경은 잡혀야 함: ${JSON.stringify(remoteProdHits)}`);
+	const remoteProdDecision = runDeployGuardHook(remoteProdCmd, { cwd: root, root, stateDir, transcriptPath });
+	assert.ok(remoteProdDecision && remoteProdDecision.decision === "block", "시험 기기 안 az vm delete 는 막혀야 함");
+
+	// 3) -F·-o HostName 덮어쓰기는 비운영 판정을 하지 않고 차단
+	for (const overrideCmd of [
+		"ssh -o HostName=192.0.2.20 user@192.0.2.10 sudo systemctl restart sample",
+		"ssh -F /tmp/custom_ssh_config user@192.0.2.10 sudo systemctl restart sample",
+	]) {
+		const hits = classifyProdMutations(overrideCmd, root);
+		assert.ok(hits.length > 0, `덮어쓰기 옵션 명령은 막아야 함: ${overrideCmd}`);
+		const decision = runDeployGuardHook(overrideCmd, { cwd: root, root, stateDir, transcriptPath });
+		assert.ok(decision && decision.decision === "block", `덮어쓰기 옵션 명령은 훅에서 막혀야 함: ${overrideCmd}`);
+	}
+
+	// 4) 목록 밖 호스트와 와일드카드 이름은 비운영으로 보지 않음
+	for (const blockedCmd of [
+		"ssh user@192.0.2.11 sudo systemctl restart sample",
+		"ssh user@prod-host.example sudo systemctl restart sample",
+		"ssh user@sub.gpu-box.example sudo systemctl restart sample",
+		"ssh user@host.wildcard.example sudo systemctl restart sample",
+	]) {
+		const hits = classifyProdMutations(blockedCmd, root);
+		assert.ok(hits.length > 0, `목록 밖/와일드카드 호스트는 운영으로 분류되어야 함: ${blockedCmd}`);
+	}
+
+	// 5) 설정이 없거나 깨졌으면 빈 목록(기존 동작대로 막힘)
+	const cfgPath = path.join(root, "config", "deploy-gate.json");
+	fs.writeFileSync(cfgPath, "{ broken json");
+	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "깨진 설정일 때는 시험 기기 예외가 적용되지 않아야 함");
+	fs.rmSync(cfgPath, { force: true });
+	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "설정 파일이 없을 때는 시험 기기 예외가 적용되지 않아야 함");
+});
