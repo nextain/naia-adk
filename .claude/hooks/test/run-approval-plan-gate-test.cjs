@@ -1089,3 +1089,150 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 	fs.rmSync(cfgPath, { force: true });
 	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "설정 파일이 없을 때는 시험 기기 예외가 적용되지 않아야 함");
 });
+
+// Exercise the real review CLI and Git snapshot, with a deterministic reviewer
+// that mutates fixture files after the before-snapshot has been taken.
+function snapshotReviewWorkspace(t, config, files = {}) {
+	const fixture = makeWorkspace(t);
+	const { root, tmp, stateDir } = fixture;
+	fs.rmSync(path.join(root, ".git"), { recursive: true, force: true });
+	const git = (...args) => {
+		const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+		assert.equal(result.status, 0, result.stderr);
+		return result.stdout;
+	};
+	git("init", "-q");
+	const plan = createValidPlan(root);
+	for (const [rel, body] of Object.entries(files)) {
+		const file = path.join(root, rel);
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, body);
+	}
+	if (config !== null) {
+		fs.mkdirSync(path.join(root, "config"), { recursive: true });
+		fs.writeFileSync(path.join(root, "config/review-snapshot.json"), JSON.stringify(config));
+	}
+	git("add", ".");
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Fixture");
+	const bin = path.join(tmp, "bin");
+	fs.mkdirSync(bin);
+	const gitPath = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+	fs.symlinkSync(gitPath, path.join(bin, "git"));
+	const reviewer = path.join(bin, "reviewer.cjs");
+	const marker = path.join(tmp, "reviewer-started");
+	const body = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS — 확인 통과`), "참고 지적: 0", "남은 지적: 0", ""].join("\n");
+	function run(mutation = "") {
+		fs.writeFileSync(reviewer, `#!${process.execPath}\nconst fs = require('node:fs');\nfs.writeFileSync(${JSON.stringify(marker)}, 'started');\n${mutation}\nprocess.stdin.resume(); process.stdin.on('end', () => process.stdout.write(${JSON.stringify(body)}));\n`, { mode: 0o700 });
+		const result = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", plan.planFile, "--author", "muse"], {
+			cwd: root, encoding: "utf8", timeout: 30000,
+			env: { ...process.env, PATH: bin, NODE_OPTIONS: "", APPROVAL_PLAN_ARGON_BIN: reviewer, DEPLOY_APPROVAL_STATE_DIR: stateDir },
+		});
+		assert.equal(result.error, undefined, String(result.error));
+		return { ...result, output: `${result.stdout}\n${result.stderr}`, invoked: fs.existsSync(marker) };
+	}
+	return { ...fixture, ...plan, git, run };
+}
+
+const snapshotConfig = (extra = {}) => ({ version: 1, exclude: [], appendOnly: [], ...extra });
+const snapshotWrite = (rel, body) => `fs.writeFileSync(${JSON.stringify(rel)}, ${JSON.stringify(body)});`;
+
+test("review snapshot: unchanged workspace passes the real review CLI", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig());
+	const r = f.run();
+	assert.equal(r.status, 0, r.output);
+	assert.equal(r.invoked, true);
+});
+
+test("review snapshot: declared ignored live files may change inside a collapsed ignored directory", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/current.md", "live/generated/"] }), {
+		".gitignore": "live/\n", "live/current.md": "before", "live/stable.md": "stable", "live/generated/old.md": "old",
+	});
+	const r = f.run(snapshotWrite("live/current.md", "after") + snapshotWrite("live/generated/new.md", "new"));
+	assert.equal(r.status, 0, r.output);
+	assert.equal(r.invoked, true);
+});
+
+test("review snapshot: undeclared ignored sibling changes still fail", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/current.md"] }), {
+		".gitignore": "live/\n", "live/current.md": "before", "live/stable.md": "stable",
+	});
+	const r = f.run(snapshotWrite("live/stable.md", "changed"));
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+test("review snapshot: undeclared tracked changes still fail", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig(), { "ordinary.txt": "before" });
+	const r = f.run(snapshotWrite("ordinary.txt", "after"));
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+for (const protectedPath of [".claude/hooks/", ".agents/scripts/", "gates/", ".agents/progress/sample-work/gates/deploy-plan.json", "scripts/rollout.sh", "config/review-snapshot.json"]) {
+	test(`review snapshot: protected declaration rejected before reviewer: ${protectedPath}`, (t) => {
+		const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: [protectedPath] }));
+		const r = f.run();
+		assert.notEqual(r.status, 0, r.output);
+		assert.equal(r.invoked, false, r.output);
+		assert.match(r.output, /SNAPSHOT_PROTECTED_PATH/);
+	});
+}
+
+test("review snapshot: tracked JSONL permits append from an already dirty baseline", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: ["logs/audit.jsonl"] }), { "logs/audit.jsonl": '{"event":"first"}\n' });
+	fs.appendFileSync(path.join(f.root, "logs/audit.jsonl"), '{"event":"before-review"}\n');
+	const r = f.run(`fs.appendFileSync('logs/audit.jsonl', '{"event":"during-review"}\\n');`);
+	assert.equal(r.status, 0, r.output);
+});
+
+test("review snapshot: tracked JSONL prefix mutation fails even when length grows", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: ["logs/audit.jsonl"] }), { "logs/audit.jsonl": '{"event":"first"}\n' });
+	const r = f.run(snapshotWrite("logs/audit.jsonl", '{"event":"other"}\n{"event":"appended"}\n'));
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+test("review snapshot: configuration changes during review fail", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig());
+	const r = f.run(snapshotWrite("config/review-snapshot.json", JSON.stringify(snapshotConfig({ exclude: ["live/"] }))));
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+test("review snapshot: tracked JSONL truncation fails", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: ["logs/audit.jsonl"] }), { "logs/audit.jsonl": '{"event":"first"}\n{"event":"second"}\n' });
+	const r = f.run(snapshotWrite("logs/audit.jsonl", '{"event":"first"}\n'));
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+test("review snapshot: staging an allowed audit append still fails", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: ["logs/audit.jsonl"] }), { "logs/audit.jsonl": '{"event":"first"}\n' });
+	const r = f.run(`fs.appendFileSync('logs/audit.jsonl', '{"event":"second"}\\n'); require('node:child_process').execFileSync('git', ['add', 'logs/audit.jsonl']);`);
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});
+
+test("review snapshot: protected appendOnly path is rejected before reviewer", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ appendOnly: [".claude/hooks/audit.jsonl"] }), { ".claude/hooks/audit.jsonl": '{}\n' });
+	const r = f.run();
+	assert.notEqual(r.status, 0, r.output);
+	assert.equal(r.invoked, false, r.output);
+	assert.match(r.output, /SNAPSHOT_PROTECTED_PATH/);
+});
+
+test("review snapshot: symlink declaration is rejected before reviewer", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/link.md"] }), { ".gitignore": "live/\n", "live/target.md": "before" });
+	fs.symlinkSync("target.md", path.join(f.root, "live/link.md"));
+	const r = f.run();
+	assert.notEqual(r.status, 0, r.output);
+	assert.equal(r.invoked, false, r.output);
+	assert.match(r.output, /SNAPSHOT_CONFIG_INVALID/);
+});
+
+test("review snapshot: excluded live prefix cannot hide a newly created nested plan", (t) => {
+	const f = snapshotReviewWorkspace(t, snapshotConfig({ exclude: ["live/"] }), { ".gitignore": "live/\n", "live/current.md": "before" });
+	const r = f.run(`fs.mkdirSync('live/nested/gates', {recursive:true}); ${snapshotWrite("live/nested/gates/deploy-plan.json", "{}\n")}`);
+	assert.equal(r.status, 1, r.output);
+	assert.match(r.output, /읽기 전용 검사 실패/);
+});

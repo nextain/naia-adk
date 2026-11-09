@@ -1,0 +1,23 @@
+{
+  "work": "review-snapshot-live-paths",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approval-plan-gate.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approval-plan-gate.md"
+    ],
+    "reason": "Instance configuration, protected paths and append-only audit behavior."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/approval-plan-gate.md"
+    ],
+    "reason": "Snapshot exceptions must preserve review inputs, index state and original audit bytes."
+  }
+}

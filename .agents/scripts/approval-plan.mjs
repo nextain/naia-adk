@@ -185,11 +185,12 @@ function gitSnapshot(cwd = ROOT, seen = new Set(), isolated = false) {
 	const h = crypto.createHash("sha256");
 	h.update(filterSnapshotStatus(git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"]), cwd));
 	const hasHead = git(["rev-parse", "--verify", "HEAD"], true) !== null;
-	h.update(git(["diff", "--binary", ...(hasHead ? ["HEAD"] : []), "--ignore-submodules=all"]));
+	h.update(git(["diff", "--binary", ...(hasHead ? ["HEAD"] : []), "--ignore-submodules=all", ...snapshotDiffPaths(cwd)]));
 	h.update(git(["diff", "--cached", "--binary", "--ignore-submodules=all"]));
 	const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]).toString("utf8").split("\0").filter(Boolean).filter((f) => !isSnapshotExcluded(cwd, f));
-	const ignored = git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]).toString("utf8").split("\0").filter(Boolean).filter((f) => !isSnapshotExcluded(cwd, f));
-	for (const file of ignored.sort()) hashIgnoredPath(h, path.resolve(cwd, file));
+	const ignored = git(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]).toString("utf8").split("\0").filter(Boolean).filter((f) => !isSnapshotExcluded(cwd, f));
+	for (const file of ignored.sort()) hashIgnoredPath(h, path.resolve(cwd, file), undefined, cwd);
+	if (cwd === REAL_ROOT) hashSnapshotPolicy(h);
 	for (const name of ["hooks", "config", "info/exclude"]) {
 		const file = git(["rev-parse", "--git-path", name]).toString("utf8").trim();
 		hashPath(h, path.resolve(cwd, file));
@@ -219,7 +220,8 @@ function gitSnapshot(cwd = ROOT, seen = new Set(), isolated = false) {
 	return h.digest("hex");
 }
 
-function hashIgnoredPath(h, file, rel = path.relative(ROOT, file) || ".") {
+function hashIgnoredPath(h, file, rel = path.relative(ROOT, file) || ".", top = ROOT) {
+	if (isSnapshotExcluded(top, path.relative(top, file))) return;
 	let st;
 	try { st = fs.lstatSync(file, { bigint: true }); }
 	catch (error) {
@@ -227,12 +229,12 @@ function hashIgnoredPath(h, file, rel = path.relative(ROOT, file) || ".") {
 		throw error;
 	}
 	const kind = st.isSymbolicLink() ? "symlink" : st.isDirectory() ? "directory" : st.isFile() ? "file" : "special";
-	h.update(JSON.stringify([rel, kind, ...[st.mode, st.uid, st.gid, st.size, st.mtimeNs, st.ctimeNs].map(String)]));
+	h.update(JSON.stringify([rel, kind, ...[st.mode, st.uid, st.gid, ...(st.isDirectory() ? [] : [st.size, st.mtimeNs, st.ctimeNs])].map(String)]));
 	if (!st.isDirectory()) return;
 	try {
 		const prefix = file.endsWith(path.sep) ? file : file + path.sep;
 		const relPrefix = rel === "." ? "" : rel + path.sep;
-		for (const name of fs.readdirSync(file).sort()) hashIgnoredPath(h, prefix + name, relPrefix + name);
+		for (const name of fs.readdirSync(file).sort()) hashIgnoredPath(h, prefix + name, relPrefix + name, top);
 	} catch (error) {
 		if (error.code !== "EACCES") throw error;
 		h.update(JSON.stringify([rel, "unreadable"]));
@@ -257,6 +259,58 @@ function hashPath(h, file, recurse = true) {
 
 const REVIEW_SNAPSHOT_EXCLUDED_PREFIXES = [".agents/progress/", ".agents/work/", ".agents/.dm-outbox/", "gates/", "tmp/"];
 const REAL_ROOT = fs.realpathSync(ROOT);
+const SNAPSHOT_CONFIG = "config/review-snapshot.json";
+let snapshotPolicy = null;
+function hashSnapshotPolicy(h) {
+	hashPath(h, path.join(ROOT, SNAPSHOT_CONFIG));
+	for (const [file, baseline] of snapshotPolicy?.appendOnly || []) {
+		const abs = path.join(ROOT, file);
+		const fd = fs.openSync(abs, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+		try {
+			const st = fs.fstatSync(fd, { bigint: true });
+			const current = fs.readFileSync(fd);
+			if (!st.isFile() || st.mode !== baseline.mode || st.ino !== baseline.ino || current.length < baseline.bytes.length || !current.subarray(0, baseline.bytes.length).equals(baseline.bytes)) throw new Error("덧붙이기 전용 감사 기록의 앞부분 또는 파일이 바뀜");
+			h.update(file); h.update(baseline.bytes);
+		} finally { fs.closeSync(fd); }
+	}
+}
+function snapshotDiffPaths(top) {
+	return top === REAL_ROOT && snapshotPolicy?.appendOnly.size ? ["--", ".", ...[...snapshotPolicy.appendOnly.keys()].map(f => `:(top,literal,exclude)${f}`)] : [];
+}
+function prepareSnapshotPolicy(planFile) {
+	const configFile = path.join(ROOT, SNAPSHOT_CONFIG);
+	let text;
+	try { if (!fs.lstatSync(configFile).isFile() || fs.lstatSync(path.dirname(configFile)).isSymbolicLink()) throw new Error("리뷰 스냅샷 설정은 일반 파일이어야 함"); text = fs.readFileSync(configFile, "utf8"); } catch (error) { if (error.code === "ENOENT") return null; throw error; }
+	const config = JSON.parse(text);
+	if (!config || config.version !== 1 || Object.keys(config).some(k => !["version", "exclude", "appendOnly"].includes(k)) || !Array.isArray(config.exclude || []) || !Array.isArray(config.appendOnly || [])) throw new Error("리뷰 스냅샷 설정 형식 오류");
+	const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
+	const protectedPaths = [".claude/hooks", ".claude/settings.json", ".claude/settings.local.json", ".agents/hooks", ".codex", ".pi", ".agents/scripts", ".agents/context", ".agents/requirements", ".agents/workflows", ".agents/session-contracts", "config", "AGENTS.md", "CLAUDE.md", "GEMINI.md", ".gitignore", ".git", path.relative(ROOT, planFile).replaceAll("\\", "/")];
+	for (const step of [...(plan.scenario || []), ...(plan.incident?.actions || [])]) for (const f of Object.keys(step.files || {})) protectedPaths.push(path.relative(ROOT, path.resolve(ROOT, f)).replaceAll("\\", "/"));
+	const overlaps = (a, b) => a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+	const validate = (entry, append = false) => {
+		if (typeof entry !== "string" || !entry || entry.includes("\\") || entry.includes("\0") || entry.startsWith("/") || entry.replace(/\/+$/, "").split("/").some(p => p === "." || p === ".." || !p)) throw new Error("리뷰 스냅샷 경로 형식 오류");
+		const rel = entry.replace(/\/+$/, "");
+		if (!rel || rel.split("/").includes("gates") || /(?:^|\/)(?:deploy-plan|.*plan)\.json$/.test(rel) || protectedPaths.some(p => overlaps(rel, p))) throw Object.assign(new Error("보호 경로는 리뷰 스냅샷에서 제외할 수 없음"), { code: "SNAPSHOT_PROTECTED_PATH" });
+		let cursor = ROOT;
+		for (const component of rel.split("/")) { cursor = path.join(cursor, component); try { if (fs.lstatSync(cursor).isSymbolicLink()) throw new Error("스냅샷 제외 경로의 심볼릭 링크 금지"); } catch (e) { if (e.code !== "ENOENT") throw e; } }
+		if (append && (!rel.endsWith(".jsonl") || entry.endsWith("/"))) throw new Error("덧붙이기 전용 경로는 jsonl 파일이어야 함");
+		return rel;
+	};
+	const exclude = (config.exclude || []).map(entry => ({ path: validate(entry), prefix: entry.endsWith("/") }));
+	const trackedPaths = spawnSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" });
+	if (trackedPaths.status !== 0) throw new Error("추적 파일 목록 확인 실패");
+	if (exclude.some(p => trackedPaths.stdout.split("\0").filter(Boolean).some(f => f === p.path || p.prefix && f.startsWith(p.path + "/")))) throw new Error("추적 파일은 일반 스냅샷 제외 선언을 할 수 없음");
+	const appendOnly = new Map();
+	for (const entry of config.appendOnly || []) {
+		const file = validate(entry, true);
+		const tracked = spawnSync("git", ["ls-files", "--error-unmatch", "--", file], { cwd: ROOT, encoding: "utf8" });
+		if (tracked.status !== 0) throw new Error("덧붙이기 전용 경로는 추적 파일이어야 함");
+		const abs = path.join(ROOT, file), st = fs.lstatSync(abs, { bigint: true });
+		if (!st.isFile()) throw new Error("덧붙이기 전용 경로는 일반 파일이어야 함");
+		appendOnly.set(file, { bytes: fs.readFileSync(abs), mode: st.mode, ino: st.ino });
+	}
+	return { exclude, appendOnly };
+}
 function isRecoveryMode() {
 	for (const marker of [".codex/no-harness", ".claude/no-harness", ".pi/no-harness"]) {
 		try { if (fs.statSync(path.join(ROOT, marker)).isFile()) return true; } catch {}
@@ -274,7 +328,7 @@ function isSnapshotExcluded(top, file) {
 	if (rel.startsWith("./")) rel = rel.slice(2);
 	if (path.isAbsolute(rel)) rel = path.relative(top, rel).replace(/\\/g, "/");
 	if (!rel || rel === "." || rel.startsWith("..")) return false;
-	return REVIEW_SNAPSHOT_EXCLUDED_PREFIXES.some((p) => rel === p.replace(/\/+$/, "") || rel.startsWith(p));
+	return REVIEW_SNAPSHOT_EXCLUDED_PREFIXES.some((p) => rel === p.replace(/\/+$/, "") || rel.startsWith(p)) || Boolean(!rel.split("/").includes("gates") && !/(?:^|\/).*plan\.json$/.test(rel) && snapshotPolicy?.exclude.some(p => rel === p.path || p.prefix && rel.startsWith(p.path + "/")));
 }
 function filterSnapshotStatus(buf, top) {
 	if (!buf || buf.length === 0) return buf;
@@ -282,7 +336,9 @@ function filterSnapshotStatus(buf, top) {
 	for (const chunk of buf.toString("utf8").split("\0")) {
 		if (chunk === "") continue;
 		const m = chunk.match(/^(.{2}) (.*)$/s);
-		if (m && (m[1] === "??" || m[1] === "!!") && isSnapshotExcluded(top, m[2])) continue;
+		if (m?.[1] === "!!") continue; // Ignored entries are checked recursively below, after exclusions.
+		if (m && m[1] === "??" && isSnapshotExcluded(top, m[2])) continue;
+		if (m && top === REAL_ROOT && m[1] === " M" && snapshotPolicy?.appendOnly.has(m[2])) continue;
 		kept.push(chunk);
 	}
 	if (!kept.length) return Buffer.alloc(0);
@@ -316,6 +372,7 @@ function readOnlySnapshot(isolated = false) {
 
 function stateSnapshot() {
 	const h = crypto.createHash("sha256");
+	hashSnapshotPolicy(h);
 	for (const file of new Set([statePath(process.env), lib.stateFile(process.env)])) hashPath(h, file);
 	return h.digest("hex");
 }
@@ -360,6 +417,8 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined) {
 		const sandboxArgs = ids.includes("argon") && bwrap ? argonSandboxArgs(dir) : null;
 		const boundedRecovery = isRecoveryMode() && Boolean(sandboxArgs);
 		stage = "snapshot-before";
+		snapshotPolicy = null;
+		try { snapshotPolicy = prepareSnapshotPolicy(abs); } catch (error) { error.code ||= "SNAPSHOT_CONFIG_INVALID"; throw error; }
 		const before = boundedRecovery ? null : readOnlySnapshot(Boolean(sandboxArgs));
 		const beforeState = boundedRecovery ? stateSnapshot() : null;
 		const beforeManifest = preManifest === undefined ? (() => { try { return lib.reviewInputManifest(abs, ROOT); } catch { return null; } })() : preManifest;
