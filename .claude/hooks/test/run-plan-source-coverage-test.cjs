@@ -11,11 +11,6 @@ const { spawnSync } = require("node:child_process");
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 const HOOK_PATH = path.join(REPO_ROOT, ".claude/hooks/deploy-guard.js");
 const deployPlan = require("../lib/deploy-plan.js");
-const {
-	selectSingleOwnerRole,
-	shouldWakeUnclaimedOwner,
-	extractCalledRoles,
-} = require("../lib/role-routing.js");
 
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
 
@@ -484,61 +479,4 @@ test("⑥ sourceDocs 없는 옛 계획서 → 기존대로 통과(경고 한 줄
 	assert.equal(draft.steps.length, 6);
 	assert.deepEqual(draft.steps[5], { id: "6", text: "시험 키 설정 주입" });
 	assert.deepEqual(draft.acceptance, [{ id: "1", text: "결제 3단계 화면에 시험 결제창이 뜸" }]);
-});
-
-test("역할 하나 맡기(role-routing): 여러 역할 호출 → 분류표로 하나 고름, 분류 없음 → 첫 번째 역할, 10분 미응답 시 한 번만 깨움", () => {
-	const exampleCfgPath = path.join(REPO_ROOT, "config", "role-routing.example.json");
-	const cfg = JSON.parse(fs.readFileSync(exampleCfgPath, "utf8"));
-
-	// 1) 한 글에 역할 넷을 함께 부름 + 배포/운영 키워드 → operator 하나만 선정
-	const r1 = selectSingleOwnerRole(
-		{
-			calledRoles: ["coordinator", "builder", "operator", "reviewer"],
-			text: "@조정 @개발 @운영 @검수 오늘 아침 운영 서버 컨테이너 배포 계획서 확인 부탁합니다",
-		},
-		cfg
-	);
-	assert.equal(r1.ownerRole, "operator");
-	assert.equal(r1.reason, "matched-classification-rule");
-	assert.equal(r1.matchedRule, "ops-deploy");
-	assert.deepEqual(r1.standbyRoles, ["coordinator", "builder", "reviewer"]);
-	assert.equal(r1.policy.ownerMustPost, "맡음 + 끝낼 시각");
-	assert.equal(r1.policy.otherRolesForward, false);
-	assert.equal(r1.policy.unclaimedWakeAfterMinutes, 10);
-	assert.equal(r1.policy.maxUnclaimedWakeCount, 1);
-
-	// 2) 한 글에 역할 넷을 함께 부름 + 결제 화면 버그 수정 → builder 하나만 선정
-	const r2 = selectSingleOwnerRole(
-		["coordinator", "builder", "operator", "reviewer"],
-		cfg,
-		"결제 3단계 화면 버그 수정 건 확인해 주세요"
-	);
-	assert.equal(r2.ownerRole, "builder");
-	assert.equal(r2.matchedRule, "code-implementation");
-
-	// 3) 분류표에 없는 일반 요청이거나 분류 설정이 없을 때 → 부른 순서의 첫 번째 역할 선정
-	const r3 = selectSingleOwnerRole(
-		{
-			calledRoles: ["reviewer", "builder", "operator", "coordinator"],
-			text: "오늘 전체 회의록 참고 부탁드립니다",
-		},
-		cfg
-	);
-	assert.equal(r3.ownerRole, "reviewer");
-	assert.equal(r3.reason, "fallback-first-role");
-	assert.deepEqual(r3.standbyRoles, ["builder", "operator", "coordinator"]);
-
-	const r4 = selectSingleOwnerRole(["builder", "operator"], {}, "아무 분류표 없는 인스턴스");
-	assert.equal(r4.ownerRole, "builder");
-	assert.equal(r4.reason, "fallback-first-role");
-
-	// 4) 본문 멘션 순서 추출 + 10분 미응답 시 한 번만 깨우기 판정
-	const extracted = extractCalledRoles("<@100000000000000003> <@100000000000000002> 확인 부탁", cfg.roles);
-	assert.deepEqual(extracted, ["operator", "builder"]);
-
-	const t0 = 1_700_000_000_000;
-	assert.equal(shouldWakeUnclaimedOwner({ calledAtMs: t0, nowMs: t0 + 9 * 60 * 1000, claimed: false, wakeCount: 0 }).shouldWake, false);
-	assert.equal(shouldWakeUnclaimedOwner({ calledAtMs: t0, nowMs: t0 + 10 * 60 * 1000, claimed: false, wakeCount: 0 }).shouldWake, true);
-	assert.equal(shouldWakeUnclaimedOwner({ calledAtMs: t0, nowMs: t0 + 15 * 60 * 1000, claimed: false, wakeCount: 1 }).shouldWake, false);
-	assert.equal(shouldWakeUnclaimedOwner({ calledAtMs: t0, nowMs: t0 + 15 * 60 * 1000, claimed: true, wakeCount: 0 }).shouldWake, false);
 });

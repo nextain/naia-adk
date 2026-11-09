@@ -94,9 +94,6 @@ session_lifecycle:
     unknown_or_system_event: exclude_from_reply_obligation_and_conversation_context
     author_check: apply_after_message_type_filter
     synthetic_dispatch_prompt: never_use_as_a_session_title_or_new_work_item
-    multi_role_call_rule: "한 글에 여러 역할이 불리면 요청 분류표(인스턴스 설정)로 맡는 역할 하나를 정하고, 맡은 역할이 먼저 '맡음 + 끝낼 시각'을 남긴다. 다른 역할은 대신 전달하지 않고 맡은 역할이 10분 안에 맡음을 안 남기면 그때 한 번만 깨운다"
-    multi_role_routing_example: config/role-routing.example.json
-    multi_role_routing_evaluator: .claude/hooks/lib/role-routing.js
   state_writers:
     database: use_the_existing_transactional_store
     external_json_tracker: all_writers_share_one_lock_across_read_modify_write_and_atomic_replace
