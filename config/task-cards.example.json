@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to config/task-cards.json in each instance. Keep company-specific role IDs, user IDs, and wake paths in the instance file.",
+  "maxRecheckHours": 4,
+  "leadRole": "<lead-role-id>",
+  "ownerSenderIds": [
+    "<owner-user-id>"
+  ],
+  "roleWakeDirs": {
+    "<lead-role-id>": ".agents/work/l4/wake",
+    "<role-id>": ".agents/work/l4/wake/<role-id>"
+  }
+}

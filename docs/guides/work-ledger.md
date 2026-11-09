@@ -38,3 +38,9 @@ JSON documents are also accepted with standard JSON parsing semantics.
 Keep names, links, paths and task contents in private instance files. Follow
 [regular execution recording](regular-schedule-ledger.md) and
 [server acceptance](server-wake-onboarding.md) for the second ledger and rollout.
+
+When role work is tracked with [task cards](task-cards.md) (`.agents/scripts/task-cards.mjs` and `docs/common/team/cards/<role>/*.md`), **이미 지시가 있고 되돌릴 수 있는 일은 대기에 넣지 않고 진행**:
+1. Moving a card to `waiting` (`대기`/`blocked`/`보류`) requires `waitReason` to be one of `바깥 송출·게시`, `운영 배포·운영 접속`, `돈 드는 것`, or `다른 사람 결과물`; any other reason is rejected with `"진행으로 두고 바로 하십시오"`.
+2. `recheckAt` is required (at most `now + 4h`, configurable via `maxRecheckHours`), and the three human-approval reasons also require `requestRef` (request message link/ID such as `#업무-요청`).
+3. Once `recheckAt` passes, the existing periodic check (`session-health` / `task-cards.mjs check`) writes a role wake file under the instance's role wake path once per card and `recheckAt` timestamp without adding a new daemon.
+4. Legacy waiting cards without those fields remain readable and trigger a one-time `"까닭·시각 없는 대기"` wake so the owner fills them in or resumes work.

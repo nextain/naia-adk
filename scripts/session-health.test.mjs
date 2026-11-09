@@ -325,3 +325,49 @@ test('waiting, blocked and completed ledger rows do not count as active assignme
   }
   assert.equal(f.sent.length, 0);
 });
+
+test('runHealth wakes role once on elapsed waiting card recheckAt and legacy waiting card', async () => {
+  const f = await fixture();
+  const { readdir } = await import('node:fs/promises');
+  const cardsDir = join(f.repo, 'docs/common/team/cards/role-a');
+  await mkdir(cardsDir, { recursive: true });
+  await writeFile(join(cardsDir, '20300101-elapsed.md'), [
+    '---',
+    'id: 20300101-elapsed',
+    'title: "elapsed wait"',
+    'owner: role-a',
+    'status: waiting',
+    'source: chat-1',
+    'received: 2030-01-01T10:00:00Z',
+    'due: 2030-01-02',
+    'next: "recheck"',
+    'moved: 2030-01-01T10:00:00Z',
+    'wait_reason: "다른 사람 결과물"',
+    'recheck_at: 2030-01-01T11:30:00Z',
+    '---',
+    '',
+  ].join('\n'));
+  await writeFile(join(cardsDir, '20300101-legacy.md'), [
+    '---',
+    'id: 20300101-legacy',
+    'title: "legacy wait"',
+    'owner: role-a',
+    'status: waiting',
+    'source: chat-2',
+    'received: 2030-01-01T09:00:00Z',
+    'due: 2030-01-02',
+    'next: "fill fields"',
+    'moved: 2030-01-01T09:00:00Z',
+    '---',
+    '',
+  ].join('\n'));
+  const wakeDir = join(f.repo, '.agents/work/l4/wake/role-a');
+  await f.run({ now, dry: true });
+  await assert.rejects(readdir(wakeDir), { code: 'ENOENT' });
+  await f.run({ now });
+  const files1 = (await readdir(wakeDir)).filter(n => n.endsWith('.md'));
+  assert.equal(files1.length, 2);
+  await f.run({ now: now + 5 * 60000 });
+  const files2 = (await readdir(wakeDir)).filter(n => n.endsWith('.md'));
+  assert.equal(files2.length, 2);
+});
