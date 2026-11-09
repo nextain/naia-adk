@@ -450,18 +450,47 @@ switch (cmd) {
 	case "check": {
 		const { abs, plan, gatesDir, sha } = loadPlan(args[0]);
 		const form = lib.formProblems(plan);
+		const src = lib.sourceDocsCheck(plan, ROOT);
 		console.log(`계획서: ${path.relative(ROOT, abs)}  sha256 ${sha}`);
 		for (const s of plan.scenario || []) for (const c of s.commands || []) console.log(`  ${s.id}  ${commandHash(c)}  ${String(c).slice(0, 120)}`);
 		for (const a of plan.incident?.actions || []) for (const c of a.commands || []) console.log(`  장애 ${a.id}  ${commandHash(c)}  ${String(c).slice(0, 120)}`);
 		console.log(form.length ? `양식: 빈 칸 ${form.length}\n${form.map((x) => `- ${x}`).join("\n")}` : "양식: 통과");
+		for (const w of src.warnings) console.log(w);
+		if (plan.sourceDocs !== undefined && plan.sourceDocs !== null) {
+			console.log(src.ok ? "근거 정본: 통과" : `근거 정본: 미통과\n${src.problems.map((x) => `- ${x}`).join("\n")}`);
+		}
 		const r = reviewStatus(gatesDir, sha);
 		console.log(r.ok ? "적대 리뷰: 통과" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
-		process.exit(form.length || !r.ok ? 1 : 0);
+		process.exit(form.length || !src.ok || !r.ok ? 1 : 0);
+	}
+	case "source-steps": {
+		const docArg = args[0];
+		if (!docArg || docArg.startsWith("--")) die("사용: approval-plan.mjs source-steps <문서> --section <제목>");
+		const section = opt(args, "--section");
+		const acceptanceSection = opt(args, "--acceptance-section");
+		try {
+			const draft = lib.buildSourceDocDraft(docArg, { section, acceptanceSection, root: ROOT });
+			console.log(JSON.stringify(draft, null, 2));
+		} catch (e) {
+			die(e && e.message ? e.message : String(e), 1);
+		}
+		break;
+	}
+	case "complete":
+	case "complete-check": {
+		const { plan, gatesDir } = loadPlan(args[0]);
+		const reportArg = opt(args, "--report") || opt(args, "--receipt") || (args[1] && !args[1].startsWith("--") ? args[1] : path.join(gatesDir, "deploy-completion.json"));
+		const res = lib.verifyCompletionReport(plan, reportArg, { root: ROOT, gatesDir });
+		if (!res.ok) die(`완료 불인정:\n${res.problems.map((x) => `- ${x}`).join("\n")}`, 1);
+		console.log("완료 인정: 근거 정본 인수 확인(acceptance) 실측 확인 통과");
+		break;
 	}
 	case "report": {
 		const { plan, gatesDir, sha } = loadPlan(args[0]);
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 보고문을 낼 수 없습니다\n${form.join("\n")}`, 1);
+		const src = lib.sourceDocsCheck(plan, ROOT);
+		if (!src.ok) die(`근거 정본 미통과 — 보고문을 낼 수 없습니다\n${src.problems.join("\n")}`, 1);
 		const r = lib.reviewProblems(gatesDir, sha, ROOT);
 		if (!r.ok) die(`적대 리뷰 미통과 — 보고문을 낼 수 없습니다\n${r.problems.join("\n")}`, 1);
 		console.log(lib.renderReport(plan, sha, r));
@@ -498,6 +527,8 @@ switch (cmd) {
 		if (!Object.hasOwn(lib.REVIEW_MODELS, plan.author_model || "") || plan.author_model !== author) die("--author(muse) 와 계획서 author_model 이 다릅니다");
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 먼저 채우십시오\n${form.join("\n")}`, 1);
+		const src = lib.sourceDocsCheck(plan, ROOT);
+		if (!src.ok) die(src.problems.join("\n"), 1);
 		const pins = lib.pinnedFileProblems(plan, ROOT);
 		if (pins.length) die(pins.join("\n"), 1);
 		const prompt = lib.reviewPrompt(plan, sha, ROOT);

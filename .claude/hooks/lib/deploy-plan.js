@@ -147,6 +147,384 @@ function formProblems(plan) {
 	return p;
 }
 
+function normSourceId(v) {
+	if (v === undefined || v === null) return "";
+	return String(v).trim();
+}
+
+function bareSourceId(v) {
+	return normSourceId(v).replace(/^[(\[（]+|[)\]）]+$/g, "").trim();
+}
+
+/**
+ * 근거 정본(sourceDocs) 검사.
+ * - sourceDocs 가 없으면 옛 계획서 호환으로 통과하되 한 줄 경고를 돌려준다.
+ * - sourceDocs 가 있으면:
+ *   (a) 정본 파일 sha256 이 현재 디스크 파일과 일치해야 함
+ *   (b) sourceDocs[].steps 의 모든 id 가 어느 scenario[].covers 에 있거나
+ *       계획서 excludedSourceSteps:[{id, reason}] 에 이유와 함께 있어야 통과.
+ *       빠지면 "정본 단계 누락: <id> <text>" 를 problems 에 넣는다.
+ *   (c) sourceDocs[].acceptance 형식을 함께 점검한다.
+ */
+function sourceDocsCheck(plan, root) {
+	const base = root ? path.resolve(root) : ROOT;
+	const problems = [];
+	const warnings = [];
+	if (!plan || typeof plan !== "object") {
+		return { ok: false, problems: ["계획서를 JSON 으로 읽지 못함"], warnings };
+	}
+
+	const coveredIds = new Set();
+	for (const [i, s] of (Array.isArray(plan.scenario) ? plan.scenario : []).entries()) {
+		if (!s || typeof s !== "object" || s.covers === undefined) continue;
+		if (!Array.isArray(s.covers)) {
+			problems.push(`scenario[${i}].covers 는 정본 단계 id 배열이어야 함`);
+			continue;
+		}
+		for (const cid of s.covers) {
+			const nid = normSourceId(cid);
+			if (!nid) {
+				problems.push(`scenario[${i}].covers 에 빈 단계 id 가 있음`);
+				continue;
+			}
+			coveredIds.add(nid);
+			coveredIds.add(bareSourceId(nid));
+		}
+	}
+
+	const excludedIds = new Set();
+	if (plan.excludedSourceSteps !== undefined) {
+		if (!Array.isArray(plan.excludedSourceSteps)) {
+			problems.push("excludedSourceSteps 는 [{id, reason}] 배열이어야 함");
+		} else {
+			for (const [i, ex] of plan.excludedSourceSteps.entries()) {
+				const eid = normSourceId(ex?.id);
+				const hasReason = Boolean(ex && typeof ex === "object" && str(ex.reason, 1));
+				if (!eid) problems.push(`excludedSourceSteps[${i}].id 없음`);
+				if (!hasReason) problems.push(`excludedSourceSteps[${i}].reason(제외 이유) 없음${eid ? `: ${eid}` : ""}`);
+				if (eid && hasReason) {
+					excludedIds.add(eid);
+					excludedIds.add(bareSourceId(eid));
+				}
+			}
+		}
+	}
+
+	if (plan.sourceDocs === undefined || plan.sourceDocs === null) {
+		warnings.push("경고: sourceDocs(근거 정본)가 없습니다 — 옛 계획서 호환으로 통과합니다.");
+		return { ok: problems.length === 0, problems, warnings };
+	}
+
+	if (!Array.isArray(plan.sourceDocs) || plan.sourceDocs.length === 0) {
+		problems.push("sourceDocs 는 비어 있지 않은 배열이어야 함");
+		return { ok: false, problems, warnings };
+	}
+
+	for (const [docIdx, doc] of plan.sourceDocs.entries()) {
+		const dTag = `sourceDocs[${docIdx}]`;
+		if (!doc || typeof doc !== "object") {
+			problems.push(`${dTag} 모양이 틀림`);
+			continue;
+		}
+		const docPath = typeof doc.path === "string" ? doc.path.trim() : "";
+		if (!docPath) {
+			problems.push(`${dTag}.path(정본 파일 경로) 없음`);
+		}
+		const wantSha = typeof doc.sha256 === "string" ? doc.sha256.trim().toLowerCase() : "";
+		if (!/^[a-f0-9]{64}$/.test(wantSha)) {
+			problems.push(`${dTag}.sha256(64자리 hex) 없음 또는 형식 오류${docPath ? `: ${docPath}` : ""}`);
+		}
+		if (docPath) {
+			const abs = path.isAbsolute(docPath) ? docPath : path.join(base, docPath);
+			let actualSha = null;
+			try {
+				if (fs.statSync(abs).isFile()) {
+					actualSha = sha256(fs.readFileSync(abs));
+				}
+			} catch {}
+			if (!actualSha) {
+				problems.push(`정본 파일을 읽지 못함: ${docPath}`);
+			} else if (/^[a-f0-9]{64}$/.test(wantSha) && actualSha !== wantSha) {
+				problems.push(`정본 파일 sha256 불일치: ${docPath} (계획서 ${wantSha.slice(0, 12)}, 현재 ${actualSha.slice(0, 12)})`);
+			}
+		}
+
+		if (!Array.isArray(doc.steps) || doc.steps.length === 0) {
+			problems.push(`${dTag}.steps(정본 단계 목록) 없음`);
+		} else {
+			for (const [stepIdx, st] of doc.steps.entries()) {
+				const sid = normSourceId(st?.id);
+				const stext = typeof st?.text === "string" ? st.text.trim() : "";
+				if (!sid || !stext) {
+					problems.push(`${dTag}.steps[${stepIdx}] 에 id 와 text 가 필요함`);
+					continue;
+				}
+				const bare = bareSourceId(sid);
+				const prefixed = docPath ? `${docPath}#${sid}` : sid;
+				const barePrefixed = docPath ? `${docPath}#${bare}` : bare;
+				const isCovered = coveredIds.has(sid) || coveredIds.has(bare) || coveredIds.has(prefixed) || coveredIds.has(barePrefixed);
+				const isExcluded = excludedIds.has(sid) || excludedIds.has(bare) || excludedIds.has(prefixed) || excludedIds.has(barePrefixed);
+				if (!isCovered && !isExcluded) {
+					problems.push(`정본 단계 누락: ${st.id} ${stext}`);
+				}
+			}
+		}
+
+		if (doc.acceptance !== undefined) {
+			if (!Array.isArray(doc.acceptance)) {
+				problems.push(`${dTag}.acceptance 는 [{id, text}] 배열이어야 함`);
+			} else {
+				for (const [accIdx, acc] of doc.acceptance.entries()) {
+					const aid = normSourceId(acc?.id);
+					const atext = typeof acc?.text === "string" ? acc.text.trim() : "";
+					if (!aid || !atext) problems.push(`${dTag}.acceptance[${accIdx}] 에 id 와 text 가 필요함`);
+				}
+			}
+		}
+	}
+
+	return { ok: problems.length === 0, problems, warnings };
+}
+
+function sourceDocsProblems(plan, root) {
+	return sourceDocsCheck(plan, root).problems;
+}
+
+/**
+ * 마크다운 정본 문서에서 지정 절(--section <제목>)의 (1) · 1. · - [ ] 꼴 단계 목록을 추출한다.
+ */
+function extractSourceSteps(markdown, sectionTitle) {
+	const text = String(markdown ?? "");
+	const lines = text.split(/\r?\n/);
+	let sliceLines = lines;
+
+	if (sectionTitle !== undefined && sectionTitle !== null && String(sectionTitle).trim() !== "") {
+		const target = String(sectionTitle).trim().replace(/^#+\s*/, "").trim().toLowerCase();
+		let startIdx = -1;
+		let startLevel = 0;
+		let inFence = false;
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			if (/^\s*```/.test(line)) { inFence = !inFence; continue; }
+			if (inFence) continue;
+			const m = line.match(/^\s*(#{1,6})\s+(.+?)\s*$/);
+			if (!m) continue;
+			const level = m[1].length;
+			const rawHeading = m[2].replace(/[*`~]/g, "").trim().toLowerCase();
+			if (startIdx < 0) {
+				if (rawHeading === target || rawHeading.includes(target)) {
+					startIdx = i + 1;
+					startLevel = level;
+				}
+			} else if (level <= startLevel) {
+				sliceLines = lines.slice(startIdx, i);
+				startIdx = -2;
+				break;
+			}
+		}
+		if (startIdx === -1) {
+			throw new Error(`정본 문서에서 지정한 절을 찾지 못함: ${sectionTitle}`);
+		}
+		if (startIdx >= 0) {
+			sliceLines = lines.slice(startIdx);
+		}
+	}
+
+	const steps = [];
+	let inFence = false;
+	for (const line of sliceLines) {
+		if (/^\s*```/.test(line)) { inFence = !inFence; continue; }
+		if (inFence) continue;
+		// 1) - [ ] 또는 - [x] 체크박스 형태
+		const mCheck = line.match(/^\s*[-*+]\s+\[[ xX]\]\s+(.+?)\s*$/);
+		if (mCheck) {
+			const inner = mCheck[1].trim();
+			const mInnerParen = inner.match(/^[(\uff08]([A-Za-z0-9_-]+)[)\uff09]\s+(.+?)\s*$/);
+			const mInnerNum = !mInnerParen && inner.match(/^(\d+)[.)]\s+(.+?)\s*$/);
+			if (mInnerParen) {
+				steps.push({ id: String(mInnerParen[1]), text: mInnerParen[2].trim() });
+			} else if (mInnerNum) {
+				steps.push({ id: String(mInnerNum[1]), text: mInnerNum[2].trim() });
+			} else {
+				steps.push({ id: String(steps.length + 1), text: inner });
+			}
+			continue;
+		}
+		// 2) (1) 또는 - (1) 형태
+		const mParen = line.match(/^\s*(?:[-*+]\s+)?[(\uff08]([A-Za-z0-9_-]+)[)\uff09]\s+(.+?)\s*$/);
+		if (mParen) {
+			steps.push({ id: String(mParen[1]), text: mParen[2].trim() });
+			continue;
+		}
+		// 3) 1. 또는 1) 형태
+		const mNum = line.match(/^\s*(\d+)[.)]\s+(.+?)\s*$/);
+		if (mNum) {
+			steps.push({ id: String(mNum[1]), text: mNum[2].trim() });
+			continue;
+		}
+	}
+	return steps;
+}
+
+/**
+ * 마크다운 정본 파일에서 sourceDocs 항목 초안({ path, sha256, steps, acceptance })을 생성한다.
+ */
+function buildSourceDocDraft(docFile, { section, acceptanceSection, root } = {}) {
+	const base = root ? path.resolve(root) : ROOT;
+	const abs = path.isAbsolute(docFile) ? docFile : path.resolve(base, docFile);
+	if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+		throw new Error(`정본 문서를 읽지 못함: ${docFile}`);
+	}
+	const buf = fs.readFileSync(abs);
+	const relPath = path.isAbsolute(docFile)
+		? (abs.startsWith(base + path.sep) ? path.relative(base, abs).replace(/\\/g, "/") : docFile)
+		: docFile.replace(/\\/g, "/");
+	const markdown = buf.toString("utf8");
+	const steps = extractSourceSteps(markdown, section);
+	const draft = {
+		path: relPath,
+		sha256: sha256(buf),
+		steps,
+	};
+	if (acceptanceSection) {
+		draft.acceptance = extractSourceSteps(markdown, acceptanceSection);
+	}
+	return draft;
+}
+
+/**
+ * 완료 보고(또는 영수증) 검사:
+ * sourceDocs[].acceptance 항목마다 완료 보고에 실측(실측 / actual / observed / measured / evidence / result / value) 칸이
+ * 비어 있지 않게 채워져 있어야 완료로 인정한다.
+ */
+function verifyCompletionReport(planInput, completionInput, { root, gatesDir } = {}) {
+	const base = root ? path.resolve(root) : ROOT;
+	const plan = typeof planInput === "string" ? readJson(path.resolve(base, planInput)) : planInput;
+	if (!plan || typeof plan !== "object") {
+		return { ok: false, problems: ["계획서를 JSON 으로 읽지 못함"] };
+	}
+	const src = sourceDocsCheck(plan, base);
+	const problems = [...src.problems];
+
+	const requiredAcceptance = [];
+	for (const doc of Array.isArray(plan.sourceDocs) ? plan.sourceDocs : []) {
+		for (const acc of Array.isArray(doc?.acceptance) ? doc.acceptance : []) {
+			const aid = normSourceId(acc?.id);
+			const atext = typeof acc?.text === "string" ? acc.text.trim() : "";
+			if (aid) requiredAcceptance.push({ id: aid, bareId: bareSourceId(aid), rawId: acc.id, text: atext, docPath: doc.path });
+		}
+	}
+
+	if (requiredAcceptance.length === 0) {
+		return { ok: problems.length === 0, problems };
+	}
+
+	let report = completionInput;
+	if (report === undefined && gatesDir) {
+		const defaultFile = path.join(gatesDir, "deploy-completion.json");
+		if (fs.existsSync(defaultFile)) report = defaultFile;
+	}
+	if (typeof report === "string" && report.trim()) {
+		const candidatePath = path.isAbsolute(report) ? report : path.resolve(gatesDir || base, report);
+		if (fs.existsSync(candidatePath) && fs.statSync(candidatePath).isFile()) {
+			const raw = fs.readFileSync(candidatePath, "utf8");
+			try {
+				report = JSON.parse(raw);
+			} catch {
+				report = raw;
+			}
+		} else {
+			try {
+				report = JSON.parse(report);
+			} catch {
+				// treat as markdown/plain text completion report
+			}
+		}
+	}
+
+	if (!report) {
+		for (const acc of requiredAcceptance) {
+			problems.push(`정본 인수 확인(acceptance) 실측 누락: ${acc.rawId} ${acc.text}`);
+		}
+		return { ok: false, problems };
+	}
+
+	const extractMeasuredFromEntry = (entry) => {
+		if (typeof entry === "string") return { measured: entry.trim(), failedVerdict: false };
+		if (!entry || typeof entry !== "object") return { measured: "", failedVerdict: false };
+		const verdict = entry.verdict ?? entry.status ?? entry.ok;
+		const failedVerdict =
+			verdict !== undefined &&
+			verdict !== null &&
+			verdict !== true &&
+			!/^(?:pass|passed|ok|true|완료|통과)$/i.test(String(verdict).trim());
+		const val =
+			entry.실측 ??
+			entry.actual ??
+			entry.observed ??
+			entry.measured ??
+			entry.measurement ??
+			entry.evidence ??
+			entry.result ??
+			entry.value ??
+			"";
+		return { measured: typeof val === "string" ? val.trim() : String(val ?? "").trim(), failedVerdict };
+	};
+
+	if (typeof report === "object" && !Array.isArray(report)) {
+		const container =
+			report.acceptance ??
+			report.measurements ??
+			report.실측 ??
+			report.results ??
+			report.items ??
+			null;
+		for (const acc of requiredAcceptance) {
+			let foundEntry = null;
+			if (Array.isArray(container)) {
+				foundEntry = container.find((item) => {
+					const iid = normSourceId(item?.id);
+					return iid === acc.id || (iid && bareSourceId(iid) === acc.bareId);
+				});
+			} else if (container && typeof container === "object") {
+				foundEntry = container[acc.rawId] ?? container[acc.id] ?? container[acc.bareId] ?? null;
+			} else if (report[acc.rawId] !== undefined || report[acc.id] !== undefined) {
+				foundEntry = report[acc.rawId] ?? report[acc.id];
+			}
+			const { measured, failedVerdict } = extractMeasuredFromEntry(foundEntry);
+			if (!foundEntry || !measured || failedVerdict) {
+				problems.push(`정본 인수 확인(acceptance) 실측 누락: ${acc.rawId} ${acc.text}`);
+			}
+		}
+	} else if (Array.isArray(report)) {
+		for (const acc of requiredAcceptance) {
+			const foundEntry = report.find((item) => {
+				const iid = normSourceId(item?.id);
+				return iid === acc.id || (iid && bareSourceId(iid) === acc.bareId);
+			});
+			const { measured, failedVerdict } = extractMeasuredFromEntry(foundEntry);
+			if (!foundEntry || !measured || failedVerdict) {
+				problems.push(`정본 인수 확인(acceptance) 실측 누락: ${acc.rawId} ${acc.text}`);
+			}
+		}
+	} else if (typeof report === "string") {
+		const lines = report.split(/\r?\n/);
+		for (const acc of requiredAcceptance) {
+			const matchingLine = lines.find((l) => l.includes(String(acc.rawId)) || (acc.text && l.includes(acc.text)));
+			const m = matchingLine && matchingLine.match(/(?:실측|actual|observed|measured)\s*[:：=]\s*(\S.+)/i);
+			if (!m || !m[1].trim()) {
+				problems.push(`정본 인수 확인(acceptance) 실측 누락: ${acc.rawId} ${acc.text}`);
+			}
+		}
+	}
+
+	return { ok: problems.length === 0, problems };
+}
+
+function completionProblems(planInput, completionInput, opts) {
+	return verifyCompletionReport(planInput, completionInput, opts).problems;
+}
+
 function planSha(file) {
 	return sha256(fs.readFileSync(file));
 }
@@ -711,6 +1089,8 @@ async function preapproveStepCodes(planFile, root, sessionId, env = process.env,
 	const sha = planSha(abs);
 	const form = formProblems(plan);
 	if (form.length) return { ok: false, why: "양식: " + form[0] };
+	const src = sourceDocsCheck(plan, base);
+	if (!src.ok) return { ok: false, why: src.problems.join("; "), problems: src.problems };
 	if (plan.approval_mode !== "preapprove_steps") return { ok: false, why: 'approval_mode "preapprove_steps" 없음' };
 	const review = reviewProblems(gatesDir, sha, base);
 	if (!review.ok) return { ok: false, why: "리뷰: " + review.problems[0] };
@@ -734,7 +1114,7 @@ async function preapproveStepCodes(planFile, root, sessionId, env = process.env,
 			steps.push({ step: s.id, code: stepCh.code });
 		}
 		saveState(env, state);
-		return { ok: true, plan: path.relative(base, abs), plan_sha256: sha, plan_code: planCh.code, steps, input_manifest_sha256: manifest, review };
+		return { ok: true, plan: path.relative(base, abs), plan_sha256: sha, plan_code: planCh.code, steps, input_manifest_sha256: manifest, review, warnings: src.warnings };
 	});
 	return made || { ok: false, why: "상태 잠금 실패" };
 }
@@ -808,6 +1188,10 @@ async function evaluate(ctx) {
 	const form = formProblems(f.plan);
 	if (form.length) {
 		return { allow: false, audit: { event: "blocked-plan-form", plan: rel, problems: form.slice(0, 20) }, reason: ["[Harness] 승인 보고 양식에 빈 칸이 있어 승인 요청을 낼 수 없습니다.", `계획서: ${rel}`, ...form.map((x) => `- ${x}`), "", "양식: docs/guides/approval-plan-gate.md (node .agents/scripts/approval-plan.mjs template)"].join("\n") };
+	}
+	const src = sourceDocsCheck(f.plan, ctx.root);
+	if (!src.ok) {
+		return { allow: false, audit: { event: "blocked-plan-source-docs", plan: rel, problems: src.problems.slice(0, 20) }, reason: ["[Harness] 계획서가 근거 정본(sourceDocs)과 맞지 않아 승인 코드를 내주지 않습니다.", `계획서: ${rel}`, ...src.problems.map((x) => `- ${x}`), "", "근거 정본의 모든 단계를 scenario[].covers 에 넣거나 excludedSourceSteps 에 이유와 함께 적으십시오."].join("\n") };
 	}
 	const entry = f.step || f.action;
 	// 단계 명령 바이트 대조: 정규화 sha 가 같더라도 실행 명령 바이트가 계획서 commands 원문과 다르면 차단한다.
@@ -1142,5 +1526,5 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, reviewProblems, reviewerIdsFor, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
+	withStateLock, evaluate, formProblems, sourceDocsCheck, sourceDocsProblems, extractSourceSteps, buildSourceDocDraft, verifyCompletionReport, checkCompletionReport: verifyCompletionReport, completionProblems, reviewProblems, reviewerIdsFor, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };

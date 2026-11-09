@@ -40,6 +40,43 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - `scenario[].commands`: **실제로 실행할 명령 문자열을 한 글자도 바꾸지 말고 그대로** 적습니다. 실행할 때 바이트 단위로 대조하므로 공백이나 따옴표가 달라도 막힙니다.
 - `scenario[].files`: 명령이 읽거나 실행하는 스크립트·설정 파일(`bash ./deploy.sh`, `--yaml app.yaml`, `@body.json` 등)은 반드시 `"경로": "<sha256>"` 형태로 고정합니다. 파일 내용이 1바이트라도 바뀌면 실행이 차단됩니다(`bash scripts/rollout.sh` 재귀 검사는 스크립트 폴더로 자동 이동하지 않고 호출자 작업 디렉터리를 유지하며, 스크립트 안의 명시적 `cd`만 반영합니다).
 - 사전승인 코드 일괄 발급(`preapprove`)을 쓰려면 최상위에 `"approval_mode": "preapprove_steps"`를 넣습니다.
+- `scenario[].covers`: 근거 정본 문서(`sourceDocs`)의 단계 ID 목록(`["1", "2"]` 등)을 적어, 정본의 어느 단계를 이 시나리오 단계가 수행하는지 대응시킵니다.
+
+### 근거 정본 (`sourceDocs`)
+
+운영 반영 절차가 담긴 정본 작업 문서(마크다운 등)를 요약해 배포 계획서를 만들 때 단계나 사후 인수 확인(acceptance)이 빠지는 사고를 막기 위해, `deploy-plan.json`에 선택 칸 `sourceDocs`, `scenario[].covers`, `excludedSourceSteps`를 적습니다.
+
+```json
+{
+  "sourceDocs": [
+    {
+      "path": "docs/work/sample-rollout.md",
+      "sha256": "<정본 파일의 64자리 SHA-256>",
+      "steps": [
+        { "id": "1", "text": "DB 마이그레이션 반영" },
+        { "id": "2", "text": "컨테이너 이미지 교체" },
+        { "id": "6", "text": "시험 키 설정 주입" }
+      ],
+      "acceptance": [
+        { "id": "acc-1", "text": "결제 3단계 화면에 시험 결제창이 뜸" }
+      ]
+    }
+  ],
+  "excludedSourceSteps": [
+    { "id": "2", "reason": "이번 작업은 설정 주입 전용이라 이미지 교체를 제외함" }
+  ]
+}
+```
+
+- **정본 단계 추출 도우미 (`source-steps`)**: 마크다운 정본 문서의 지정 절(`--section <제목>`)에서 `(1)`·`1.`·`- [ ]` 꼴 단계 목록을 뽑아 `sourceDocs` 초안 JSON(`path`, `sha256`, `steps`)을 만듭니다.
+  ```bash
+  node .agents/scripts/approval-plan.mjs source-steps docs/work/sample-rollout.md --section "운영 반영 단계"
+  ```
+- **관문 검사 (`check` 및 승인 코드 발급 경로)**:
+  1. **정본 파일 SHA-256 대조**: `sourceDocs[].path` 파일의 현재 디스크 SHA-256이 `sourceDocs[].sha256`과 다르면 차단합니다.
+  2. **정본 단계 누락 차단**: `sourceDocs[].steps`의 모든 `id`가 어느 `scenario[]` 단계의 `covers` 배열에 들어 있거나, 계획서 최상위 `excludedSourceSteps: [{id, reason}]`에 이유(`reason`)와 함께 적혀 있어야 통과합니다. 하나라도 빠지면 `"정본 단계 누락: <id> <text>"`로 막고 승인 코드를 내주지 않습니다.
+  3. **인수 확인(`acceptance`) 실측 검증**: `sourceDocs[].acceptance` 항목마다 완료 보고(`gates/deploy-completion.json` 또는 완료 보고 검사 `complete`)에 실측 칸(`실측` / `observed` / `measured` / `actual`)이 채워져 있어야 완료로 인정합니다.
+  4. **옛 계획서 호환**: `sourceDocs`가 없는 옛 계획서는 기존대로 통과하되 한 줄 경고를 남깁니다.
 
 ---
 
