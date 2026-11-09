@@ -11,13 +11,13 @@
     "files": [
       "docs/guides/approval-plan-gate.md"
     ],
-    "reason": "Instance configuration, protected paths and append-only audit behavior."
+    "reason": "Exact file declarations, protected real paths, and append-only identity and prefix checks."
   },
   "reusable_learning": {
     "status": "UPDATED",
     "files": [
       "docs/guides/approval-plan-gate.md"
     ],
-    "reason": "Snapshot exceptions must preserve review inputs, index state and original audit bytes."
+    "reason": "Reject ambiguous links, directory prefixes and protected aliases; preserve baseline snapshots without configuration."
   }
 }
