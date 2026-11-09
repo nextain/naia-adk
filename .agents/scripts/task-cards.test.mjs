@@ -219,13 +219,13 @@ describe("대기(waiting/blocked/대기/보류) 까닭 넷·recheckAt·requestRe
 		const wakeDir = path.join(root, ".agents", "work", "l4", "wake");
 
 		// 1) recheckAt 전(07:50Z)에는 깨움 없음
-		const beforeCheck = run(["check", "--role", "role-a"], "2026-10-28T07:50:00Z");
+		const beforeCheck = run(["check", "--role", "role-a", "--wake"], "2026-10-28T07:50:00Z");
 		assert.equal(beforeCheck.status, 0);
 		assert.match(beforeCheck.stdout, /놓친 일 없음/);
 		assert.equal(fs.existsSync(wakeDir), false);
 
 		// 2) recheckAt 지남(08:01Z) → 깨움 1건 생성
-		const dueCheck = run(["check", "--role", "role-a"], "2026-10-28T08:01:00Z");
+		const dueCheck = run(["check", "--role", "role-a", "--wake"], "2026-10-28T08:01:00Z");
 		assert.equal(dueCheck.status, 0);
 		assert.match(dueCheck.stdout, /\[다시 볼 시각 지남\] role-a\/20261028-라디오-게시/);
 		const wakeFiles1 = fs.readdirSync(wakeDir).filter((n) => n.endsWith(".md"));
@@ -236,7 +236,7 @@ describe("대기(waiting/blocked/대기/보류) 까닭 넷·recheckAt·requestRe
 		assert.match(wakeBody, /#업무-요청\/200000000000000055/);
 
 		// 3) 같은 카드·같은 시각에 다시 점검해도 중복 깨움 없음
-		const repeatCheck = run(["check", "--role", "role-a"], "2026-10-28T08:15:00Z");
+		const repeatCheck = run(["check", "--role", "role-a", "--wake"], "2026-10-28T08:15:00Z");
 		assert.equal(repeatCheck.status, 0);
 		const wakeFiles2 = fs.readdirSync(wakeDir).filter((n) => n.endsWith(".md"));
 		assert.equal(wakeFiles2.length, 1, "한 카드·한 시각당 한 번만 깨워야 함");
@@ -250,7 +250,7 @@ describe("대기(waiting/blocked/대기/보류) 까닭 넷·recheckAt·requestRe
 			"--request-ref", "#업무-요청/200000000000000055",
 		], "2026-10-28T08:20:00Z");
 		assert.equal(updateWait.status, 0, updateWait.stderr);
-		run(["check", "--role", "role-a"], "2026-10-28T10:05:00Z");
+		run(["check", "--role", "role-a", "--wake"], "2026-10-28T10:05:00Z");
 		const wakeFiles3 = fs.readdirSync(wakeDir).filter((n) => n.endsWith(".md"));
 		assert.equal(wakeFiles3.length, 2, "새 다시 볼 시각이 지나면 한 번 더 깨워야 함");
 	});
@@ -289,7 +289,7 @@ describe("대기(waiting/blocked/대기/보류) 까닭 넷·recheckAt·requestRe
 
 		// 2) 감시(check)가 "까닭·시각 없는 대기"로 잡아서 담당을 한 번 깨움
 		const wakeDir = path.join(root, ".agents", "work", "l4", "wake");
-		const c1 = run(["check", "--role", "role-a"]);
+		const c1 = run(["check", "--role", "role-a", "--wake"]);
 		assert.equal(c1.status, 0, c1.stderr);
 		assert.match(c1.stdout, /\[까닭·시각 없는 대기\] role-a\/20261020-옛-대기-카드/);
 		const files1 = fs.readdirSync(wakeDir).filter((n) => n.endsWith(".md"));
@@ -298,7 +298,7 @@ describe("대기(waiting/blocked/대기/보류) 까닭 넷·recheckAt·requestRe
 		assert.match(body, /까닭·시각 없는 대기/);
 
 		// 3) 다시 check 를 돌려도 중복 깨움 없음(한 번만 깨움)
-		const c2 = run(["check", "--role", "role-a"], "2026-10-28T08:00:00Z");
+		const c2 = run(["check", "--role", "role-a", "--wake"], "2026-10-28T08:00:00Z");
 		assert.equal(c2.status, 0);
 		const files2 = fs.readdirSync(wakeDir).filter((n) => n.endsWith(".md"));
 		assert.equal(files2.length, 1, "옛 카드는 한 번만 깨워야 함");
@@ -637,7 +637,7 @@ describe("rev2 재현 회귀: 직접 편집·미룸 범위·깨움 단일 작성
 		fs.writeFileSync(cardFile("20261028-다른-카드"), healthyWait);
 		for (const value of ["0", "미정", "2026-99-99"]) {
 			edit({ status: "deferred", due: value, revisit: value, defer_reason: "다음 검토" });
-			const check = run(["check", "--role", "role-a"]);
+			const check = run(["check", "--role", "role-a", "--wake"]);
 			assert.equal(check.status, 0, check.stderr);
 			assert.doesNotMatch(check.stderr, /오류|RangeError/);
 			assert.match(check.stdout, /\[다시 볼 시각 지남\] role-a\/20261028-다른-카드/);
@@ -696,5 +696,62 @@ describe("rev2 재현 회귀: 직접 편집·미룸 범위·깨움 단일 작성
 		}
 		assert.equal(run(["to-ledger", external, out], "2026-10-28T07:25:00Z").status, 0);
 		assert.equal(wakeFiles().length, 1, "외부 영수증이 남아 중복 깨움이 없어야 함");
+	});
+
+	it("rev3 재현: 초 없는 --due·없는 날·숫자 0 날짜도 원장 검증을 깨지 않는다", () => {
+		const made = run(["new", "--role", "role-a", "--title", "초 없는 마감", "--source", "s", "--next", "확인", "--due", "2026-11-10T14:00Z", "--calendar", "yes"]);
+		assert.equal(made.status, 0, made.stderr);
+		const out = path.join(root, "out.json");
+		for (const value of ["0", "2026-02-30", "2026-11-10T14:00Z"]) {
+			create();
+			edit({ due: value, moved: value, received: value });
+			const result = run(["to-ledger", out]);
+			assert.equal(result.status, 0, result.stderr);
+			const ledger = JSON.parse(fs.readFileSync(out, "utf8"));
+			assert.doesNotThrow(() => validateWorkLedger(ledger, NOW_MS), `due=${value}`);
+			for (const row of ledger.work) assert.ok(row.due_at === null || /\.\d{3}Z$/.test(row.due_at), row.due_at);
+		}
+	});
+
+	it("rev3 재현: 알 수 없는 상태는 깨우고 원장에 막힘으로 남긴다", () => {
+		create();
+		const out = path.join(root, "out.json");
+		for (const status of ["hold", "미룸", "진행", "wating"]) {
+			edit({ status });
+			const check = run(["check", "--role", "role-a"]);
+			assert.match(check.stdout, /알 수 없는 상태/);
+			assert.equal(run(["to-ledger", out]).status, 0);
+			const ledger = JSON.parse(fs.readFileSync(out, "utf8"));
+			assert.equal(ledger.work.length, 1);
+			assert.equal(ledger.work[0].status, "막힘");
+		}
+		assert.ok(wakeFiles().length > 0);
+	});
+
+	it("rev3 재현: 직접 편집 미룸 1년 초과·미래 moved 동반 대기도 깨운다", () => {
+		create();
+		edit({ status: "deferred", defer_reason: "나중에", revisit: "9999-12-31" });
+		assert.match(run(["check", "--role", "role-a"]).stdout, /미룸인데/);
+		edit({ status: "waiting", wait_reason: "다른 사람 결과물", moved: "2099-12-31T00:00:00Z", recheck_at: "2099-12-31T01:00:00Z" });
+		assert.match(run(["check", "--role", "role-a"]).stdout, /까닭·시각 없는 대기/);
+	});
+
+	it("rev3 재현: 손으로 돌린 check·board·tick 은 기본으로 영수증을 안 건드리고, --no-wake 가 위치 인자를 삼키지 않는다", () => {
+		create();
+		const external = path.join(root, "archive", "cards");
+		fs.mkdirSync(path.join(external, "role-a"), { recursive: true });
+		const text = fs.readFileSync(cardFile(), "utf8").replace(/^id:.*$/m, "id: 20261028-원격").replace(/^status:.*$/m, "status: waiting").replace(/^wait_reason:.*$/m, "wait_reason: 다른 사람 결과물").replace(/^recheck_at:.*$/m, "recheck_at: 2026-10-28T07:00:00Z");
+		fs.writeFileSync(path.join(external, "role-a", "20261028-원격.md"), text);
+		const out = path.join(root, "out.json");
+		assert.equal(run(["to-ledger", external, out]).status, 0);
+		const receipt = fs.readFileSync(statePath(), "utf8");
+		for (const command of [["check"], ["board"], ["tick", "--role", "role-a", "--session", "bare"]]) {
+			assert.equal(run(command).status, 0);
+			assert.equal(fs.readFileSync(statePath(), "utf8"), receipt, `${command[0]} 기본값이 영수증을 바꿈`);
+		}
+		const swallow = path.join(root, "swallow.json");
+		assert.equal(run(["to-ledger", "--no-wake", external, swallow]).status, 0);
+		const rows = JSON.parse(fs.readFileSync(swallow, "utf8")).work.map((r) => r.id);
+		assert.deepEqual(rows, ["20261028-원격"]);
 	});
 });

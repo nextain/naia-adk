@@ -25,8 +25,8 @@
 //   done <id> --result <결과 주소>
 //   ack --role <역할> --ref <evt 번호 또는 글 번호> --reason <왜 카드가 아닌지>
 //   list --role <역할>
-//   check [--role <역할>] [--since-hours 72] [--stale-hours 24] [--no-wake] [--json]
-//   board [--no-wake]
+//   check [--role <역할>] [--since-hours 72] [--stale-hours 24] [--wake] [--json]
+//   board [--wake]
 //   tick --role <역할> --session <세션 id> [--every-min 60]
 //   to-ledger [<카드 폴더>] <출력 파일>
 //
@@ -63,6 +63,24 @@ const WAITING_STATUS_INPUTS = new Set(["waiting", "blocked", "대기", "보류"]
 const DOING_STATUS_INPUTS = new Set(["doing", "진행", "진행 중", "진행중"]);
 
 const ROLE_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+const DEFER_MAX_MS = 366 * 24 * 3600_000;
+
+// 장부용 시각: 날짜만·초 없는 시각·시간대 붙은 시각을 Z 표준 ISO 로 바꾸고, 없는 날(2/30)·숫자 하나(0) 등은 null.
+export function strictIso(v) {
+	if (typeof v !== "string" || !v) return null;
+	const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/.exec(v.trim());
+	if (!m) return null;
+	const [, y, mo, d] = m.map((x) => x);
+	const day = new Date(Date.UTC(+y, +mo - 1, +d));
+	if (day.getUTCFullYear() !== +y || day.getUTCMonth() !== +mo - 1 || day.getUTCDate() !== +d) return null;
+	const s = m[4] === undefined ? `${v.trim()}T23:59:59Z` : m[7] === undefined ? `${v.trim()}Z` : v.trim();
+	const ms = Date.parse(s);
+	return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
+function isKnownStatus(status) {
+	return status === "doing" || status === "done" || status === "deferred" || isWaitingStatus(status);
+}
 const STATUS_KO = {
 	doing: "진행",
 	waiting: "대기",
@@ -147,6 +165,8 @@ function parseCli(argv) {
 	return { global, rest };
 }
 
+const BOOLEAN_FLAGS = new Set(["no-wake", "wake", "json"]);
+
 function parseFlags(args) {
 	const flags = {};
 	const positional = [];
@@ -156,6 +176,7 @@ function parseFlags(args) {
 			const eq = arg.indexOf("=");
 			if (eq >= 0) { flags[arg.slice(2, eq)] = arg.slice(eq + 1); continue; }
 			const key = arg.slice(2);
+			if (BOOLEAN_FLAGS.has(key)) { flags[key] = "yes"; continue; }
 			if (i + 1 < args.length && !args[i + 1].startsWith("--")) flags[key] = args[++i];
 			else {
 				if (["wait-reason", "waitReason", "wait_reason", "recheck-at", "recheckAt", "recheck_at", "request-ref", "requestRef", "request_ref", "reason", "revisit"].includes(key)) fail(`--${key} 값이 필요합니다`);
@@ -712,6 +733,9 @@ export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, stale
 		const cards = loadRoleCards(root, role, cardsBaseDir);
 		for (const card of cards) {
 			const open = card.status !== "done";
+			if (!isKnownStatus(card.status)) {
+				problems.push({ kind: "missing-field", role, id: card.id, wakeKey: `invalid-status:${role}/${card.id}@${card.status}`, reason: `알 수 없는 상태 ${JSON.stringify(card.status ?? "")} — doing·waiting·deferred·done 중 하나로 고치십시오` });
+			}
 			const due = tryDueMs(card.due || "");
 			if (card.due && due === null) problems.push({ kind: "missing-field", role, id: card.id, reason: "잘못된 due 날짜" });
 			// 1. 기한 지남
@@ -735,7 +759,7 @@ export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, stale
 				const recheck = tryRecheckMs(card.recheck_at);
 				const needsRef = canonicalReason && HUMAN_APPROVAL_WAIT_REASONS.includes(canonicalReason);
 				const hasRef = !needsRef || validRequestRef(card.request_ref);
-				const tooFar = recheck !== null && recheck > Math.max(now, Number.isFinite(moved) ? moved : now) + cfg.maxRecheckHours * 3600_000;
+				const tooFar = recheck !== null && recheck > now + cfg.maxRecheckHours * 3600_000;
 				if (!canonicalReason || recheck === null || tooFar || !hasRef) {
 					const missingParts = [];
 					if (!canonicalReason) missingParts.push("waitReason");
@@ -774,7 +798,8 @@ export function runCheck(root, roles, { now = Date.now(), sinceHours = 72, stale
 			if (card.status === "done" && !card.result) {
 				problems.push({ kind: "missing-field", role, id: card.id, reason: "끝냈는데 결과 주소가 없습니다" });
 			}
-			if (card.status === "deferred" && (!meaningful(card.defer_reason) || tryDueMs(card.revisit) === null)) {
+			const revisitMs = /^\d{4}-\d{2}-\d{2}$/.test(card.revisit || "") ? tryDueMs(card.revisit) : null;
+			if (card.status === "deferred" && (!meaningful(card.defer_reason) || revisitMs === null || revisitMs > now + DEFER_MAX_MS)) {
 				problems.push({ kind: "missing-field", role, id: card.id, wakeKey: `invalid-deferred:${role}/${card.id}`, reason: "미룸인데 사유·다시 볼 날이 비었습니다" });
 			}
 			// 7. 캘린더 안 올림 — 예상 완료가 있는데 회사 캘린더에 안 올림
@@ -834,15 +859,7 @@ export function cardsToLedger(root, cardsDirPath, outFilePath, { now = Date.now(
 		보류: "대기",
 		done: "끝",
 	};
-	const iso = (v) => {
-		if (!v) return null;
-		const s = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v)
-			? `${v}:00Z`
-			: /^\d{4}-\d{2}-\d{2}$/.test(v)
-				? `${v}T23:59:59Z`
-				: v;
-		return Number.isNaN(Date.parse(s)) ? null : s;
-	};
+	const iso = strictIso;
 	const work = [];
 	let roleDirs = [];
 	try { roleDirs = fs.readdirSync(cardsDirPath); } catch { roleDirs = []; }
@@ -855,8 +872,8 @@ export function cardsToLedger(root, cardsDirPath, outFilePath, { now = Date.now(
 			const p = path.join(dir, f);
 			let c = null;
 			try { c = parseCard(fs.readFileSync(p, "utf8")); } catch { continue; }
-			const status = STATUS_MAP[c.status];
-			if (!c?.id || !status) continue;
+			if (!c?.id) continue;
+			const status = STATUS_MAP[c.status] ?? "막힘";
 			const clamp = (v) => (v && Date.parse(v) > now ? new Date(now).toISOString() : v);
 			const updated = clamp(iso(c.moved) ?? new Date(fs.statSync(p).mtimeMs).toISOString());
 			let requested = clamp(iso(c.received) ?? updated);
@@ -1105,7 +1122,8 @@ function cmdCheck(root, flags, config) {
 	const sinceHours = flags["since-hours"] === undefined ? 72 : Number(flags["since-hours"]);
 	const staleHours = flags["stale-hours"] === undefined ? 24 : Number(flags["stale-hours"]);
 	if (!Number.isFinite(sinceHours) || !Number.isFinite(staleHours)) fail("시간(--since-hours, --stale-hours)은 숫자입니다");
-	const wake = flags["no-wake"] === undefined;
+	// 깨움·영수증은 to-ledger(session-health-run.sh) 한 곳만 쓴다. 손으로 돌리는 check·board 는 --wake 를 줄 때만.
+	const wake = flags.wake !== undefined && flags["no-wake"] === undefined;
 	const problems = runCheck(root, roles, { now: currentMs, sinceHours, staleHours, wake, config });
 	if (flags.json !== undefined) return JSON.stringify(problems, null, 2);
 	return formatProblems(problems).join("\n");
@@ -1121,7 +1139,8 @@ function cmdBoard(root, flags, config) {
 		else lines.push(`- ${role}`);
 	}
 	if (roles.length > 0) lines.push("");
-	const wake = flags["no-wake"] === undefined;
+	// 깨움·영수증은 to-ledger(session-health-run.sh) 한 곳만 쓴다. 손으로 돌리는 check·board 는 --wake 를 줄 때만.
+	const wake = flags.wake !== undefined && flags["no-wake"] === undefined;
 	// 점검은 한 번만 돌리고 표·두 절이 같이 쓴다(같은 입력 → 같은 출력 유지).
 	const problems = runCheck(root, roles, { now: currentMs, wake, config });
 	const marks = new Map();
@@ -1189,7 +1208,7 @@ function cmdTick(root, ms, flags, config) {
 		if (Number.isFinite(last) && ms - last < everyMin * 60_000) return "";
 		const cards = loadRoleCards(root, role);
 		const list = listLines(cards).slice(0, 8);
-		const checks = formatProblems(runCheck(root, [role], { now: ms, wake: flags["no-wake"] === undefined, config })).slice(0, 6);
+		const checks = formatProblems(runCheck(root, [role], { now: ms, wake: flags.wake !== undefined && flags["no-wake"] === undefined, config })).slice(0, 6);
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, `${JSON.stringify({ last: nowIso(ms) })}\n`);
 		return ["[업무 카드 정기 점검]", ...list, ...checks].join("\n");
