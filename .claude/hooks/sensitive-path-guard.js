@@ -32,7 +32,7 @@ function within(p,b) { p=p.toLowerCase(); b=b.toLowerCase(); return p===b || p.s
 function sensitivePath(value, config = {}, cwd = process.cwd(), options = {}) {
  const c=configWithDefaults(config), s=expand(value).replace(/^@/,'');
  const resolved=path.resolve(cwd,s), parts=s.split(/[\\/]/);
- if(parts.some(p=>c.fileNames.some(n=>n.toLowerCase()===p.toLowerCase() || (/[a-z]/i.test(p) && /[?*[]/.test(p) && globRegex(p).test(n))))) return true;
+ if(parts.some(p=>c.fileNames.some(n=>n.toLowerCase()===p.toLowerCase() || (/[a-z]/i.test(p.replace(/\.(?:key|der|pfx|p12)$/i,'')) && /[?*[]/.test(p) && globRegex(p).test(n))))) return true;
  for(const base of bases(c,cwd)) {
   if(within(resolved,base) || (options.recursive && within(base,resolved))) return true;
   if(/[?*[]/.test(s)) {
@@ -42,7 +42,7 @@ function sensitivePath(value, config = {}, cwd = process.cwd(), options = {}) {
    const segments=resolved.split(path.sep);
    if(segments.some((segment,i)=>/[a-z0-9]/i.test(segment) && /[?*[]/.test(segment) && globRegex(segment).test(path.basename(base)) && within(base,segments.slice(0,i).join(path.sep) || path.sep))) return true;
    if(parts.some(p=>/[a-z0-9]/i.test(p) && /[?*[]/.test(p) && [...c.directoryNames,...c.fileNames].some(n=>globRegex(p).test(n)))) {
-    if(within(base,path.dirname(resolved)) || globRegex(resolved).test(base) || options.shell) return true;
+    if(within(base,path.dirname(resolved)) || globRegex(resolved).test(base)) return true;
    }
   }
  }
@@ -86,21 +86,43 @@ function gitContentGuard(tokens,cwd,c) {
   let gitArgs;
   if(sub==='commit') {
    // One process, independent of file count. -a/paths and preceding git add need worktree diff.
-   const implicit=args.includes('-a') || args.includes('--all') || args.includes('--') || tokens.pendingAdd;
-   gitArgs=['diff',...(implicit?['HEAD']:['--cached']),'--no-ext-diff','--no-textconv','--unified=0'];
+   const values=new Set(['-m','--message','-F','--file','-C','--reuse-message','-c','--reedit-message','--author','--date','--cleanup','--trailer']);
+   let positional=false, all=false;
+   for(let j=0;j<args.length;j++) {if(values.has(args[j])) {j++;continue;} if(!args[j].startsWith('-')) positional=true; if(/^-[^-]*a/.test(args[j]) || args[j]==='--all') all=true;}
+   const implicit=all || positional || tokens.pendingAdd;
+   gitArgs=['diff',...(implicit?['HEAD']:['--cached']),'--no-ext-diff','--no-textconv','--unified=0','--no-renames'];
   } else {
    const positional=args.filter(a=>!a.startsWith('-'));
    const specs=positional.slice(1);
-   const refs=specs.length?specs.map(s=>s.replace(/^\+/,'').split(':')[0]).filter(Boolean):['HEAD'];
-   gitArgs=['log','--format=','--patch','--no-ext-diff','--no-textconv','--unified=0',...refs,'--not','--remotes'];
+   const refs=args.includes('--all')?['--branches']:args.includes('--tags')?['--tags']:(specs.length?specs.map(s=>s.replace(/^\+/,'').split(':')[0]).filter(Boolean):['HEAD']);
+   gitArgs=['log','--format=','--patch','--no-ext-diff','--no-textconv','--unified=0','--no-renames',...refs,'--not','--remotes'];
   }
   const diff=cp.execFileSync('git',[...globals,...gitArgs],{cwd,encoding:'utf8',maxBuffer:256*1024*1024,timeout:30000,stdio:['ignore','pipe','pipe']});
   for(const line of diff.split('\n')) {
+   if(line.startsWith('diff --git ')) {
+    const header=line.slice(11);
+    const names=[...header.matchAll(/"(?:[^"\\]|\\.)*"|[ab]\/.*?(?= [ab]\/|$)/g)].map(m=>{try{return m[0].startsWith('"')?JSON.parse(m[0]):m[0];}catch{return m[0];}});
+    if(names.some(n=>sensitivePath(n.slice(2),c,cwd))) return true;
+   }
    if(line.startsWith('+++ b/') && sensitivePath(line.slice(6),c,cwd)) return true;
    if(line.startsWith('+') && !line.startsWith('+++') && gitPayload(line.slice(1))) return true;
   }
  } catch { return true; }
  return false;
+}
+function braceVariants(s) {
+ let variants=[s];
+ for(let depth=0;depth<6;depth++) {
+  let changed=false; const next=[];
+  for(const value of variants) {
+   const m=value.match(/\{([^{}]*,[^{}]*)\}/);
+   if(!m) next.push(value);
+   else { changed=true; for(const v of m[1].split(',').slice(0,16)) next.push(value.slice(0,m.index)+v+value.slice(m.index+m[0].length)); }
+   if(next.length>=64) break;
+  }
+  variants=next.slice(0,64); if(!changed) break;
+ }
+ return variants;
 }
 function shellGuard(command,cwd,c,depth=0) {
  if(depth>12) return false;
@@ -115,14 +137,15 @@ function shellGuard(command,cwd,c,depth=0) {
   if(sensitivePath(cwd,c,cwd)) return true;
   for(const token of tokens.slice(1)) {
    // Upload forms include field=@path, --data=@path, and @~/path.
-   const operands=[token,...token.split(/[=@]/).slice(1)];
+   const operands=[token,...token.split(/[=@]/).slice(1)].flatMap(v=>braceVariants(v));
    for(const operand of operands) {
     if(!operand || operand.startsWith('-')) continue;
     if(sensitivePath(operand,c,cwd,{recursive,extensions:['cp','mv','scp','rsync','install'].includes(cmd),shell:true})) return true;
    }
    // Unknown expansion alone is ordinary shell syntax; sensitive fragments are not.
-   if(/[$`{}]/.test(token) && /(?:np|gp|pri|cert)/i.test(token) && /[?*]|npki|gpki|signpri|kmpri|signcert/i.test(token)) return true;
+   if(/[$`{}]/.test(token) && (/(?:npki|gpki|signpri|kmpri|signcert)/i.test(token) || token.split('/').some(part=>/[a-z]/i.test(part) && [...c.directoryNames,...c.fileNames].some(n=>globRegex(part).test(n))))) return true;
   }
+  if(cmd==='apply_patch' && patchPaths(tokens.slice(1).join('\n')).some(p=>sensitivePath(p,c,cwd,{extensions:true}))) return true;
   if(patchPaths((clause.heredocs || []).join('\n')).some(p=>sensitivePath(p,c,cwd,{extensions:true}))) return true;
   if((clause.subs || []).some(s=>shellGuard(s,cwd,c,depth+1))) return true;
   if(['bash','sh','zsh'].includes(cmd) && tokens.includes('-c') && shellGuard(tokens[tokens.indexOf('-c')+1] || '',cwd,c,depth+1)) return true;
@@ -141,7 +164,13 @@ async function evaluate(data, config = {}) {
   if(shellGuard(command,cwd,c)) return {reason:REASON};
  } else if(['read','file-mutation','multiedit','grep','glob'].includes(name)) {
   const paths=Object.entries(input).filter(([key])=>/path|file|glob|include/i.test(key)).flatMap(([,v])=>strings(v));
-  if(name==='glob' && input.pattern) paths.push(path.resolve(cwd,expand(input.path || '.'),expand(input.pattern)));
+  if(name==='glob' && input.pattern) {
+   const root=path.resolve(cwd,expand(input.path || '.'));
+   const fixed=expand(input.pattern).split(/[?*[]/)[0];
+   const scanRoot=path.resolve(root,fixed.endsWith('/')?fixed:fixed.slice(0,fixed.lastIndexOf('/')+1));
+   if(/[?*[]/.test(input.pattern) && sensitivePath(scanRoot,c,cwd,{recursive:true})) return {reason:REASON};
+   paths.push(path.resolve(root,expand(input.pattern)));
+  }
   paths.push(...patchPaths(strings(input).join('\n')));
   if(name==='grep') paths.push(input.path || cwd);
   if(paths.some(v=>sensitivePath(v,c,cwd,{recursive:name==='grep',extensions:!['grep','glob'].includes(name)}))) return {reason:REASON};
