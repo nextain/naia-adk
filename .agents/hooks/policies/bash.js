@@ -570,10 +570,9 @@ async function deploy(command, data, opts) {
 
 	const prodServices = unique.map((h) => h.service);
 	const runText = [...new Set(hits.map((h) => h.clause).filter(Boolean))].join(" ; ") || command;
-	const gateConfigInfo = loadDeployGateConfig(root);
-	const gateConfig = (gateConfigInfo && gateConfigInfo.config) || {};
+	const gateConfig = loadDeployGateConfig(root) || {};
 	const gateApprover = gateConfig.approver;
-	const approver = gateApprover && (gateApprover.discordUserIds !== undefined || gateApprover.discordUserId !== undefined) ? gateApprover : config.approver;
+	const approver = gateApprover !== undefined ? gateApprover : config.approver;
 	const res = await deployPlan.evaluate({
 		command,
 		cwd,

@@ -538,7 +538,9 @@ function newCode(prefix) {
 // ── 디스코드 승인자 확인 ──────────────────────────────────────────
 const SNOWFLAKE = /^\d{17,20}$/;
 /** Normalize the instance allowlist. Explicit invalid fields never fall back. */
-function normalizeApproverIds({ discordUserIds, discordUserId } = {}) {
+function normalizeApproverIds(approver = {}) {
+	if (!approver || typeof approver !== "object" || Array.isArray(approver)) return null;
+	const { discordUserIds, discordUserId } = approver;
 	const ids = [];
 	if (discordUserIds !== undefined) {
 		if (!Array.isArray(discordUserIds) || discordUserIds.length === 0 || discordUserIds.length > 20) return null;
@@ -560,7 +562,8 @@ async function discordConfirms({ code, sinceIso, refs, approverId, approverIds, 
 		return { ok: false, why: "approver-id-mismatch" };
 	}
 	if (typeof token !== "string" || !token) return { ok: false, why: "token-unavailable" };
-	const since = Date.parse(sinceIso) || 0;
+	const since = Date.parse(sinceIso);
+	if (!Number.isFinite(since)) return { ok: false, why: "invalid-since" };
 	for (const r of Array.isArray(refs) ? refs : []) {
 		if (!r || r.code !== code || !SNOWFLAKE.test(String(r.channelId || "")) || !SNOWFLAKE.test(String(r.messageId || ""))) continue;
 		let m;
@@ -574,7 +577,8 @@ async function discordConfirms({ code, sinceIso, refs, approverId, approverIds, 
 		if (!m || String(m.id) !== String(r.messageId)) continue;
 		if (m.channel_id !== undefined && String(m.channel_id) !== String(r.channelId)) continue;
 		const a = m.author || {};
-		if (!configuredIds.includes(String(a.id || "")) || a.bot === true || a.system === true || m.webhook_id || m.application_id) continue;
+		if (!contextIds.includes(String(a.id || "")) || a.bot === true || a.system === true || m.webhook_id || m.application_id) continue;
+		if (m.edited_timestamp != null) continue;
 		if (!String(m.content || "").includes(code)) continue;
 		const at = Date.parse(m.timestamp || "");
 		if (!Number.isFinite(at) || at < since) continue;
@@ -617,7 +621,7 @@ async function humanConfirmed(code, sinceIso, ctx) {
 	if (list.length === 0) return { ok: false, why: typed.why };
 	const gateCfg = readJson(path.join(ctx.repoRoot || ROOT, "config", "deploy-gate.json")) || {};
 	const configApprover = gateCfg.approver;
-	const hasConfiguredIds = configApprover && (configApprover.discordUserIds !== undefined || configApprover.discordUserId !== undefined);
+	const hasConfiguredIds = configApprover !== undefined;
 	const configuredIds = hasConfiguredIds ? normalizeApproverIds(configApprover) : normalizeApproverIds({ discordUserIds: ctx.approverIds, discordUserId: ctx.approverId });
 	if (!configuredIds) return { ok: false, why: "approver-id-unset" };
 	const context = ctx.approverIds !== undefined || ctx.approverId !== undefined ? { approverIds: ctx.approverIds, approverId: ctx.approverId } : { approverIds: configuredIds };

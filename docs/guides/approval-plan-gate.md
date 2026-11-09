@@ -85,6 +85,7 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
   1. **대화창 직접 입력**: 현재 세션 대화창에 사람이 직접 `PLAN-xxxxxx`와 허용할 단계의 `STEP-xxxxxx` 코드를 입력합니다(도구 출력·시스템 알림·AI 메시지는 인정되지 않음).
   2. **디스코드 본인 메시지**: 승인자 본인이 디스코드에 코드를 남기고, `gates/deploy-approval-discord.json`에 채널·메시지 ID를 기록하면 관문이 디스코드 REST API로 직접 작성자가 설정의 승인자 목록(`approver.discordUserIds`, 옛 `discordUserId` 포함)에 속하는지와 코드 발급 이후 시각인지 대조합니다. 봇·웹훅·앱 메시지는 인정하지 않습니다. 실행 맥락이 특정 승인자 ID를 지정하면 그 ID도 설정 목록 안에 있어야 합니다.
 
+- 대화창(`terminal`) 직접 입력 경로에서는 디스코드 작성자 ID가 없으므로 `approvedBy`와 감사 기록의 `plan_approver_id`·`step_approver_id`는 `null`입니다.
 - 한 계획의 PLAN과 STEP은 목록 안의 서로 다른 사람이 승인할 수 있습니다. 승인 영수증과 감사 기록에는 각 코드를 실제로 승인한 작성자의 ID를 따로 남깁니다.
 - **서명 실행기는 별도 규칙을 유지합니다.** `scripts/approved-root-runner.mjs`는 `scripts/sign-approved-runner.mjs`가 승인자 표의 키로 만든 서명을 검증하고, PLAN과 STEP 서명자의 `approverId`가 같아야 합니다. 이는 권한 있는 실행 요청에서 계획과 명령의 서명 책임을 한 사람에게 묶는 검증 조건입니다. 디스코드 관문은 각 코드에 대한 목록 내 사람의 메시지를 확인하므로 서로 다른 사람이 승인할 수 있지만, 이 설정 변경이 서명 실행기의 승인자 표나 동일 서명자 조건을 완화하지는 않습니다.
 
