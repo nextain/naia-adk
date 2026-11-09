@@ -1246,7 +1246,7 @@ for (const [label, raw] of [
 	["syntax-error", `{"approver":{"discordUserIds":["${MULTI_B}"],}}`],
 	["top-level-array", JSON.stringify([MULTI_B])], ["top-level-null", "null"],
 	["top-level-string", '"invalid"'], ["top-level-number", "1"], ["top-level-boolean", "true"],
-	["approver-shape", '{"approver":{}}'], ["unreadable-directory", null],
+	["approver-shape", '{"approver":{}}'], ["unreadable-directory", null], ["dangling-symlink", undefined],
 ]) {
 	for (const override of [false, true]) test(`approversrev2: ${label} ${override ? "DEPLOY_GATE_CONFIG" : "repository"} closes both entrypoints`, async (t) => {
 		const { tmp, root, stateDir, transcriptPath } = makeWorkspace(t);
@@ -1267,7 +1267,9 @@ for (const [label, raw] of [
 		fs.writeFileSync(path.join(gatesDir, deployPlan.DISCORD_FILE), JSON.stringify({ approvals }));
 		const cfgPath = override ? path.join(tmp, "override.json") : path.join(root, "config", "deploy-gate.json");
 		fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
-		if (raw === null) fs.mkdirSync(cfgPath); else fs.writeFileSync(cfgPath, raw);
+		if (raw === null) fs.mkdirSync(cfgPath);
+		else if (raw === undefined) fs.symlinkSync(path.join(tmp, "missing-target.json"), cfgPath);
+		else fs.writeFileSync(cfgPath, raw);
 		const previous = process.env.DEPLOY_GATE_CONFIG;
 		if (override) process.env.DEPLOY_GATE_CONFIG = cfgPath;
 		t.after(() => { if (previous === undefined) delete process.env.DEPLOY_GATE_CONFIG; else process.env.DEPLOY_GATE_CONFIG = previous; });

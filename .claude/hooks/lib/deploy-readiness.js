@@ -370,13 +370,24 @@ function normalizeApproverIds(approver = {}) {
 
 /** Only a missing file permits fallback; unreadable or invalid settings close the gate. */
 function readDeployGateConfig(root) {
+	const configPath = deployGateConfigPath(root);
 	try {
-		const config = JSON.parse(fs.readFileSync(deployGateConfigPath(root), "utf8"));
+		const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 		if (!config || typeof config !== "object" || Array.isArray(config)) return { ok: false, config: null };
 		if (config.approver !== undefined && !normalizeApproverIds(config.approver)) return { ok: false, config };
 		return { ok: true, config };
 	} catch (error) {
-		return { ok: error.code === "ENOENT", config: null };
+		// A dangling symlink also reads as ENOENT; only a path with no entry at all is "missing".
+		return { ok: error.code === "ENOENT" && !pathEntryExists(configPath), config: null };
+	}
+}
+
+function pathEntryExists(p) {
+	try {
+		fs.lstatSync(p);
+		return true;
+	} catch (error) {
+		return error.code !== "ENOENT";
 	}
 }
 
