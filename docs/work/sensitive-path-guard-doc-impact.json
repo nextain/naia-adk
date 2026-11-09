@@ -1,8 +1,27 @@
 {
-  "work": "sensitive-path-guard",
-  "repository_docs": {"status": "UPDATED", "paths": ["docs/guides/drift-guard.md"]},
-  "user_manual": {"status": "UPDATED", "paths": ["docs/guides/drift-guard.md"]},
-  "reusable_learning": {"status": "UPDATED", "paths": ["docs/guides/drift-guard.md"]},
+  "work": "sensitive-path-guard-fix2",
+  "repository_docs": {
+    "status": "UPDATED",
+    "paths": [
+      "docs/guides/drift-guard.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "paths": [
+      "docs/guides/drift-guard.md"
+    ]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "paths": [
+      "docs/guides/drift-guard.md"
+    ]
+  },
   "source_handling": "Generic derived requirements only; instance paths, personal names, IP addresses and original request remain outside the public tree",
-  "review": {"independent_model_family": "NOT_RUN", "public_push_review": "NOT_RUN; no push authorized"}
+  "review": {
+    "independent_model_family": "NOT_RUN",
+    "public_push_review": "NOT_RUN; no push authorized",
+    "regressions": "Review findings 1-7; false-positive table, upload/patch/ancestor bypasses, single-process Git batching, dynamically assembled fake headers"
+  }
 }
