@@ -328,11 +328,8 @@ export async function watch({
           const discoveredThreads = new Set(channelMessages.threadIds || []);
           for (const m of channelMessages) {
             const tid = m?.thread_id || m?.thread?.id;
-            if (
-              tid &&
-              m?.thread?.thread_metadata?.archived !== true &&
-              m?.thread?.archived !== true
-            ) {
+            // A question's own thread can contain the answer after archiving.
+            if (tid) {
               discoveredThreads.add(tid);
               if (m.author_id) threadStarterAuthor.set(tid, m.author_id);
             }
@@ -347,6 +344,8 @@ export async function watch({
               const activeThreads = await readWithRetry(() =>
                 messenger.threads(channel, channelMessages, { guildId, all: true, direct: (roleConfig.direct_channels ?? []).includes(channel) }),
               );
+              for (const [tid, owner] of activeThreads?.threadOwners ?? [])
+                if (owner) threadStarterAuthor.set(tid, owner);
               for (const value of activeThreads || []) {
                 const tid = typeof value === "string" ? value : value.id;
                 if (tid) discoveredThreads.add(tid);
@@ -555,7 +554,7 @@ export async function watch({
               let scopedMentions = new Set();
               return block.split(/\n+|(?<=[.!?？])\s+/).some((sentence) => {
                 const mentions = extractMentions({ body: sentence }).mentions;
-                if (mentions.size) scopedMentions = mentions;
+                for (const id of mentions) scopedMentions.add(id);
                 if (!questionMatchers.some((pattern) => pattern.test(sentence))) return false;
                 if ([...scopedMentions].some((id) => otherRoleUserIds.includes(id)) &&
                     !targets.some((id) => scopedMentions.has(id))) return false;
@@ -594,11 +593,15 @@ export async function watch({
             await wake(
               role, `human-wait-${safeIdPart(question.id)}`,
               "사람 답 기다림", firstLine,
-              `채널: ${questionChannel}\n글: ${url}\n질문: ${firstLine}\n1) 이 일에 이미 받은 지시가 있는지 그 채널 앞 글을 다시 읽음\n2) 바깥 발송·운영 변경·돈이 아니고 되돌릴 수 있으면 지금 진행하고 그 채널에 알림\n3) 정말 사람 승인이 필요한 일이면 #업무-요청 에 [분류] 양식으로 옮김`,
+              `채널: ${questionChannel}\n글: ${url}\n질문: ${firstLine}\n1) 이 일에 이미 받은 지시가 있는지 그 채널 앞 글을 다시 읽음\n2) 바깥 발송·운영 변경·돈이 아니고 되돌릴 수 있으면 지금 진행하고 그 채널에 알림\n3) 정말 사람 승인이 필요한 일이면 #업무-요청 에 [분류] 양식으로 옮김\n사람 답을 기다려야 하면 대기 카드를 waiting 으로 남기고 recheck_at 과 request_ref 를 채우세요.`,
             );
-            await writeFile(path.join(receiptDir, receipt), JSON.stringify({ key, at: now }), { mode: 0o600 });
-            receipts.add(receipt);
-            state.human_wait_sent[key] = now;
+            for (const part of question.parts) {
+              const partKey = JSON.stringify([role, questionChannel, part.id]);
+              const partReceipt = Buffer.from(partKey).toString("base64url") + ".json";
+              await writeFile(path.join(receiptDir, partReceipt), JSON.stringify({ key: partKey, at: now }), { mode: 0o600 });
+              receipts.add(partReceipt);
+              state.human_wait_sent[partKey] = now;
+            }
           }
           if (roleConfig.check_unrecorded_human === false || config.check_unrecorded_human === false) continue;
           for (const m of messages) {

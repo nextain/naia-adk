@@ -257,3 +257,39 @@ test('all roles local overdue checks finish before first network request', async
   assert.deepEqual(result.errors, []);
   assert.equal(result.wakes.filter((w) => w.reason === '기한 넘음').length, 2);
 });
+
+// Review counterexamples preserve the original sentence, including its third-party bot mention.
+test('review 1: original selection request retains human across third-party bot mention', async (t) => {
+  const conf = config(); conf.roles.push({ role: 'helper', user_ids: ['bot-alpha'], channels: [] });
+  const s = await setup(t, { studio: [msg('selection', 'bot-a', '01:10:38', '<@owner-a> 썰렁하지 않은 "방송 자리" 배경 시안 둘입니다.\n고르시면 구름·김만 천천히 움직이는 반복 영상으로 만들어 <@bot-alpha> 에게 넘기겠습니다.')] }, [], conf);
+  assert.deepEqual((await s.run('01:26:00')).wakes, [{ role: 'radio', id: 'human-wait-selection', reason: '사람 답 기다림' }]);
+  assert.match((await wakeBodies(s.root))[0].body, /대기 카드를 waiting 으로 남기고 recheck_at 과 request_ref 를 채우세요/);
+});
+test('review 2: directly configured thread retains active thread owner', async (t) => {
+  const conf = config(); conf.roles[0].channels = ['shell-026'];
+  const s = await setup(t, { 'shell-026': [msg('thread-question', 'bot-a', '01:04:00', '지금 바로 시작해도 될까요?', { channel_id: 'shell-026' })] },
+    [{ id: 'shell-026', type: 11, parent_id: 'shell-parent', owner_id: 'owner-a', guild_id: 'example-guild', thread_metadata: { archived: false } }], conf);
+  assert.deepEqual((await s.run()).wakes, [{ role: 'radio', id: 'human-wait-thread-question', reason: '사람 답 기다림' }]);
+});
+test('review 4: split question tail cannot wake again across 24 hour boundary', async (t) => {
+  const conf = config();
+  const s = await setup(t, { studio: [msg('part2', 'bot-a', '01:04:30', '<@owner-a> 지금 바로 시작해도 될까요?'),
+    msg('part1', 'bot-a', '01:04:00', '<@owner-a> ' + '안내 '.repeat(660))] }, [], conf);
+  assert.deepEqual((await s.run()).wakes, [{ role: 'radio', id: 'human-wait-part1', reason: '사람 답 기다림' }]);
+  const receiptDir = path.join(s.root, '.agents/work/ledger/human-wait-receipts');
+  const next = await watch({ root: s.root, config: conf, adapter: createAdapter(conf.provider, {
+    env: { DISCORD_BOT_TOKEN: 'fake-test-token' }, sleep: async () => {},
+    fetchImpl: async (url) => new URL(url).pathname.endsWith('/threads/active') ? ok({ threads: [] }) : ok([
+      msg('part2', 'bot-a', '01:04:30', '<@owner-a> 지금 바로 시작해도 될까요?'),
+      msg('part1', 'bot-a', '01:04:00', '<@owner-a> ' + '안내 '.repeat(660)),
+    ]),
+  }), now: Date.parse('2026-11-10T01:04:15Z'), sleep: async () => {} });
+  assert.equal(next.wakes.length, 0);
+  assert.equal((await readdir(receiptDir)).length, 2);
+});
+test('review 3-1: human reply in archived question thread closes question', async (t) => {
+  const q = question(); q.thread = { id: 'question', type: 11, parent_id: 'studio', thread_metadata: { archived: true } };
+  const s = await setup(t, { studio: [q], question: [msg('answer', 'owner-a', '01:10:00', '네 진행하세요.', { channel_id: 'question' })] });
+  assert.equal((await s.run()).wakes.length, 0);
+  assert.ok(s.requests.some((endpoint) => endpoint.endsWith('/channels/question/messages')));
+});
