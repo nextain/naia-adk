@@ -66,8 +66,9 @@ function sha256(buf) {
 function readJson(file) {
 	try {
 		return JSON.parse(fs.readFileSync(file, "utf8"));
-	} catch {
-		return null;
+	} catch (error) {
+		if (error.code === "ENOENT") return null;
+		throw error;
 	}
 }
 
@@ -172,13 +173,8 @@ function sourceDocsCheck(plan, root) {
  const base = root ? path.resolve(root) : ROOT;
  const problems = [], warnings = [];
  if (!plan || typeof plan !== "object" || Array.isArray(plan)) return {ok:false, problems:["계획서를 JSON 으로 읽지 못함"], warnings};
- const instance = readJson(path.join(base, "config", "deploy-gate.json"));
- if (plan.sourceDocs === undefined) {
-  if (plan.sourcePolicy === "required" || instance?.sourcePolicy === "required") problems.push("sourceDocs 필수: sourcePolicy required");
-  else warnings.push("경고: sourceDocs(근거 정본)가 없습니다 — 옛 계획서 호환으로 통과합니다.");
-  return {ok:!problems.length, problems, warnings};
- }
- if (!Array.isArray(plan.sourceDocs) || !plan.sourceDocs.length) return {ok:false,problems:["sourceDocs 는 비어 있지 않은 배열이어야 함"],warnings};
+ if (plan.sourceDocs === undefined) return {ok:false,problems:["sourceDocs 선언 필요; 정본 문서가 없으면 빈 배열 [] 를 명시"],warnings};
+ if (!Array.isArray(plan.sourceDocs)) return {ok:false,problems:["sourceDocs 는 배열이어야 함"],warnings};
  const multi=plan.sourceDocs.length>1, known=new Set(), docPaths=new Set();
  for (const [i,doc] of plan.sourceDocs.entries()) {
   const tag=`sourceDocs[${i}]`;
@@ -1323,17 +1319,15 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 
 	let stepCh = st2.challenges.filter((c) => c.kind === "step" && c.planSha === f.sha && c.step === f.step.id && c.sessionId === ctx.sessionId && !c.closed).pop();
 	if (stepCh && (stepCh.executed || []).includes(h)) {
-  if (f.plan.sourceDocs !== undefined) {
-   fs.rmSync(path.join(f.gatesDir, "deploy-steps", `${f.step.id}.json`), { force: true });
-   fs.rmSync(path.join(f.gatesDir, "deploy-completion-receipt.json"), { force: true });
-  }
+  fs.rmSync(path.join(f.gatesDir, "deploy-steps", `${f.step.id}.json`), { force: true });
+  fs.rmSync(path.join(f.gatesDir, "deploy-completion-receipt.json"), { force: true });
 		stepCh.closed = new Date(now).toISOString();
 		stepCh = null;
 	}
 	const stepTtl = stepCodeTtlMs(stepCh, f.plan);
 	if (stepCh && !stepCh.approvedAt && now - Date.parse(stepCh.createdAt) > stepTtl) { stepCh.closed = new Date(now).toISOString(); stepCh = null; }
 	if (stepCh && stepCh.approvedAt && now - Date.parse(stepCh.approvedAt) > stepTtl) { stepCh.closed = new Date(now).toISOString(); stepCh = null; }
- if (!stepCh && f.plan.sourceDocs !== undefined) {
+ if (!stepCh) {
   fs.rmSync(path.join(f.gatesDir, "deploy-steps", `${f.step.id}.json`), { force: true });
   fs.rmSync(path.join(f.gatesDir, "deploy-completion-receipt.json"), { force: true });
  }
@@ -1368,11 +1362,6 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 	stepCh.executed = [...(stepCh.executed || []), h];
 	const stepCmdHashes = (f.step.commands || []).map((c) => commandHash(c));
 	const allExecutedForStep = new Set(stepCh.executed || []);
- if (f.plan.sourceDocs === undefined) {
-  for (const c of st2.challenges.filter(ch => ch.kind === "step" && ch.planSha === f.sha && ch.step === f.step.id && ch.sessionId === ctx.sessionId)) {
-   for (const eh of c.executed || []) allExecutedForStep.add(eh);
-  }
- }
 	if (stepCmdHashes.length > 0 && stepCmdHashes.every((ch) => allExecutedForStep.has(ch))) {
 		stepCh.status = "executed";
 		stepCh.executedAt = new Date(now).toISOString();

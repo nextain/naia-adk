@@ -454,18 +454,11 @@ test("⑥ sourceDocs 없는 옛 계획서 → 기존대로 통과(경고 한 줄
 	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
 
 	const chk = spawnSync(process.execPath, [workspaceScript, "check", planFile], { cwd: root, env, encoding: "utf8" });
-	assert.equal(chk.status, 0, chk.stdout + chk.stderr);
-	const warningLines = chk.stdout.split(/\r?\n/).filter((l) => l.startsWith("경고: sourceDocs"));
-	assert.equal(warningLines.length, 1, `경고 한 줄이 출력되어야 함: ${chk.stdout}`);
-
+	assert.notEqual(chk.status, 0, chk.stdout + chk.stderr);
+	assert.match(chk.stdout, /sourceDocs 선언 필요/);
 	const pre = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, Date.now());
-	assert.equal(pre.ok, true, pre.why);
-	assert.equal(pre.warnings.length, 1);
-	const s1Code = pre.steps.find((s) => s.step === "s1").code;
-	appendHumanTurn(transcriptPath, `승인 ${pre.plan_code} ${s1Code}`);
-
-	const decision = runDeployGuardHook(step1Cmd, { cwd: root, root, stateDir, transcriptPath, sessionId });
-	assert.equal(decision, null, "sourceDocs 없는 옛 계획서는 기존대로 통과해야 함");
+	assert.equal(pre.ok, false);
+	assert.match(pre.why, /sourceDocs/);
 
 	// source-steps 추출 도우미 검증: (1)~(6) 및 - [ ] 및 1. 형태 추출
 	const extRes = spawnSync(
