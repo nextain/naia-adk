@@ -54,7 +54,7 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 
 계획서 양식과 고정 파일 SHA-256이 모두 맞으면 차례상 다음 모델(`argon`→`codex`→`muse`→`argon`) 한 명에게 아홉 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`) 적대 리뷰를 받습니다. 작성자는 셋 중 누구나 될 수 있고, 첫 후보가 한도에 걸리면 남은 하나로 넘어가며 넘긴 기록은 `skipped`로 남깁니다.
 
-Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그대로 돌리고, Codex·Argon 리뷰어 실행에는 복구 모드 여부와 관계없이 `bwrap` 읽기 전용 격리가 필요합니다. 고정 `planReview`가 없으면 차례상 다음 모델이 먼저 리뷰합니다. 승인자 결정으로 인스턴스의 `.claude/deploy/config.json`에 다음 `planReview`를 추가하면 지정한 시각 전까지 그 리뷰어를 먼저 쓰고, 실패하면 차례대로 넘어갑니다. 기존 설정의 다른 항목은 유지합니다.
+Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그대로 돌리고, Codex·Argon 리뷰어 실행에는 복구 모드 여부와 관계없이 `bwrap` 읽기 전용 격리가 필요합니다. 고정 `planReview`가 없으면 차례상 다음 모델이 먼저 리뷰합니다. 승인자 결정으로 인스턴스의 `.claude/deploy/config.json`에 다음 `planReview`를 추가하면 지정한 시각 전까지 그 리뷰어를 먼저 쓰고, 한도 실패일 때만 남은 하나로 넘어갑니다. 한도 실패는 종료 코드가 0이 아니고 실행기 stderr·실행 오류에 한도 문구(rate limit, quota, usage limit, 429, RESOURCE_EXHAUSTED, exhausted)가 있을 때입니다. 리뷰 본문은 판별에 쓰지 않습니다. 기존 설정의 다른 항목은 유지합니다.
 
 ```json
 "planReview": {
@@ -64,7 +64,7 @@ Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그
 }
 ```
 
-`until`이 없거나 유효하지 않거나 지났을 때, 또는 `reviewer`가 차례 셋(`argon`·`codex`·`muse`) 밖이거나 작성자와 같을 때는 차례만 씁니다. 설정 JSON의 파스 오류는 거부합니다. 관문은 차례 기록(`rotation: true`)의 등록된 리뷰어 영수증 1명을 받고, 작성자와 같은 모델·차례 밖 모델·2인 기록은 막습니다. 설정을 바꾼 뒤에도 기존 영수증이 유효합니다. 작성자와 리뷰어는 같을 수 없습니다.
+`until`이 없거나 지났을 때, 또는 `reviewer`가 작성자와 같을 때는 차례만 씁니다. 설정 JSON 파스 오류와 형식 오류(`reviewer`가 차례 셋 밖, `until`이 ISO 시각이 아님)는 거부합니다. 관문은 차례 기록(`rotation: true`)의 리뷰어 영수증 1명을 받습니다. 기록 시각(`reviewedAt`)의 차례를 다시 만들어, `skipped`가 앞에서부터 건너뛴 후보 그대로이고(각각 0이 아닌 `exit_code`) 실제 리뷰어가 그 다음 후보인지 대조합니다. 작성자와 같은 모델, 차례 밖 모델, 한도 기록 없는 뒤 후보, 2인 기록은 막습니다. 리뷰 뒤 `planReview`를 바꾸면 차례가 달라져 다시 리뷰해야 할 수 있습니다. 작성자와 리뷰어는 같을 수 없습니다.
 
 ```bash
 node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/deploy-plan.json --author muse

@@ -111,8 +111,8 @@ const AUTHOR_IDS = ["sol", "muse", "argon"];
 const ROTATION = Object.freeze(["argon", "codex", "muse"]);
 // 새 모양 작성자(차례 셋)와 옛 모양 작성자(sol 포함)를 함께 받는다. 옛 sol·argon 2인 기록은 그대로 읽는다.
 const AUTHOR_MODELS = Object.freeze(["sol", "muse", "argon", "codex"]);
-// 한도 실패 판별식: 종료 코드가 0이 아니고 출력이 이 식과 맞을 때만 다음 후보로 넘어간다.
-const LIMIT_RE = /rate.?limit|quota|usage limit|\b429\b|RESOURCE_EXHAUSTED/i;
+// 한도 실패 판별식: 종료 코드가 0이 아니고 실행기 진단(stderr·실행 오류)이 이 식과 맞을 때만 다음 후보로 넘어간다. 리뷰 본문(stdout)은 계획서 낱말을 되풀이할 수 있어 보지 않는다.
+const LIMIT_RE = /rate.?limit|quota|usage limit|\b429\b|RESOURCE_EXHAUSTED|\bexhausted\b/i;
 function reviewerIdsFor(author, root = ROOT, at = Date.now()) {
 	if (author !== "muse") return AUTHOR_IDS.filter((id) => id !== author);
 	const file = path.join(root, ".claude/deploy/config.json");
@@ -137,30 +137,30 @@ function rotationOrder(author) {
 	return [ROTATION[(i + 1) % ROTATION.length], ROTATION[(i + 2) % ROTATION.length]];
 }
 
-// 차례 후보 둘(먼저 쓸 리뷰어, 한도 실패 때 넘어갈 리뷰어). 고정 planReview 가 형식·기한·작성자 다름을 모두 만족하면 맨 앞에 두고, 지났거나 없으면 차례만 쓴다. 설정 JSON 깨짐은 예전처럼 던진다.
+// 차례 후보 둘(먼저 쓸 리뷰어, 한도 실패 때 넘어갈 리뷰어). 고정 planReview 가 기한 안이고 작성자와 다르면 맨 앞에 두고, 지났거나 until 이 없거나 작성자 자신이면 차례만 쓴다. 설정 JSON 깨짐·형식 틀림(차례 밖 리뷰어, 읽을 수 없는 until)은 던진다.
 function orderedReviewers(author, root = ROOT, at = Date.now()) {
 	if (!ROTATION.includes(author)) return reviewerIdsFor(author, root, at);
 	const base = rotationOrder(author);
 	const file = path.join(root, ".claude/deploy/config.json");
 	const started = typeof at === "number" ? at : Date.parse(at);
+	if (!Number.isFinite(started)) throw new Error("리뷰 시각을 읽지 못함");
 	let config;
 	try { config = JSON.parse(fs.readFileSync(file, "utf8"))?.planReview; }
 	catch (error) { if (error.code === "ENOENT") return base; throw error; }
-	const until = config?.until;
+	if (config === undefined) return base;
+	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("planReview 형식이 틀림(객체여야 함)");
+	if (!ROTATION.includes(config.reviewer)) throw new Error("planReview.reviewer 는 argon·codex·muse 중 하나여야 함");
+	const until = config.until;
+	if (until === undefined) return base;
 	const date = typeof until === "string" ? /^(\d{4})-(\d{2})-(\d{2})T/.exec(until) : null;
 	const validDate = date && Number(date[2]) >= 1 && Number(date[2]) <= 12 && Number(date[3]) >= 1 && Number(date[3]) <= new Date(Date.UTC(Number(date[1]), Number(date[2]), 0)).getUTCDate();
-	if (Number.isFinite(started) &&
-		typeof config?.reviewer === "string" && ROTATION.includes(config.reviewer) && config.reviewer !== author &&
-		validDate && typeof until === "string" &&
-		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(until) &&
-		Number.isFinite(Date.parse(until)) && started < Date.parse(until)) {
-		if (config.reviewer === base[0]) return base;
-		return [config.reviewer, ...base.filter((id) => id !== config.reviewer)];
-	}
-	return base;
+	if (!validDate || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(until) || !Number.isFinite(Date.parse(until))) throw new Error("planReview.until 형식이 틀림(ISO 시각)");
+	if (started >= Date.parse(until) || config.reviewer === author) return base;
+	if (config.reviewer === base[0]) return base;
+	return [config.reviewer, ...base.filter((id) => id !== config.reviewer)];
 }
 
-// 한도 실패인가: 종료 코드가 0이 아니고 출력(stdout·오류문 합침)이 LIMIT_RE 와 맞을 때만 참이다.
+// 한도 실패인가: 종료 코드가 0이 아니고 실행기 진단(stderr·실행 오류문)이 LIMIT_RE 와 맞을 때만 참이다.
 function isLimitFailure(exitCode, text) {
 	return exitCode !== 0 && LIMIT_RE.test(String(text || ""));
 }
@@ -510,14 +510,23 @@ function reviewProblems(gatesDir, sha, root) {
 	if (isRotationRecord(rec)) {
 		if (!ROTATION.includes(rec.author_model)) problems.push("차례 기록(rotation:true)의 작성자는 argon·codex·muse 중 하나여야 함");
 		if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 1) problems.push("차례 기록(rotation:true)은 리뷰어 1명의 기록이 필요함");
-		if (rec.skipped !== undefined) {
-			if (!Array.isArray(rec.skipped)) problems.push("차례 기록의 skipped 는 배열이어야 함");
-			else for (const [i, s] of rec.skipped.entries()) {
+		// 차례 대조: 리뷰 시각의 차례(고정 설정 포함)에서 skipped 는 앞에서부터 건너뛴 후보 그대로, 실제 리뷰어는 그 다음 후보여야 한다. 한도 실패 없이 뒤 후보를 쓰거나 모순된 skipped 는 막는다.
+		let order = null;
+		try { order = ROTATION.includes(rec.author_model) ? orderedReviewers(rec.author_model, base, rec.reviewedAt) : null; }
+		catch (error) { problems.push(`차례 기록의 리뷰 차례를 다시 만들지 못함: ${error.message}`); }
+		if (!Array.isArray(rec.skipped)) problems.push("차례 기록의 skipped 는 배열이어야 함");
+		else {
+			if (rec.skipped.length > 1) problems.push("차례 기록의 skipped 는 최대 1개여야 함");
+			for (const [i, s] of rec.skipped.entries()) {
 				if (!s || typeof s !== "object") { problems.push(`차례 기록의 skipped[${i}] 모양이 틀림`); continue; }
 				if (!ROTATION.includes(s.id)) problems.push(`차례 기록의 skipped[${i}] id 는 차례 셋 안이어야 함`);
 				if (s.id === rec.author_model) problems.push(`차례 기록의 skipped[${i}] 가 작성자와 같음`);
 				if (s.reason !== "limit") problems.push(`차례 기록의 skipped[${i}] reason 은 "limit" 이어야 함`);
+				if (!Number.isInteger(s.exit_code) || s.exit_code === 0) problems.push(`차례 기록의 skipped[${i}] exit_code 는 0이 아닌 정수여야 함`);
+				if (order && s.id !== order[i]) problems.push(`차례 기록의 skipped[${i}] 가 차례(${order[i]})와 다름`);
 			}
+			const reviewer = Array.isArray(rec.reviewers) && rec.reviewers.length === 1 ? Object.keys(REVIEW_MODELS).find((k) => REVIEW_MODELS[k].model === rec.reviewers[0]?.model) : undefined;
+			if (order && reviewer !== undefined && reviewer !== order[rec.skipped.length]) problems.push(`차례 기록의 리뷰어가 차례(${order[rec.skipped.length] ?? "없음"})와 다름`);
 		}
 	} else if (rec.author_model === "codex") {
 		problems.push("codex 작성 계획서는 차례 기록(rotation:true)이 필요함(옛 단일·2인 기록은 재리뷰 필요)");

@@ -136,12 +136,12 @@ function runMuse(prompt) {
 function execReviewer(bin, args, input = "", promptSha = "", model = "") {
 	return new Promise((resolve) => {
 		const startedAt = new Date().toISOString();
-		let stdout = "", bytes = 0, finished = false, failed = "";
+		let stdout = "", stderr = "", bytes = 0, finished = false, failed = "";
 		const child = spawn(bin, args, { cwd: ROOT, stdio: ["pipe", "pipe", "pipe"] });
 		const finish = (status, error = "") => {
 			if (finished) return;
 			finished = true; clearTimeout(timer);
-			resolve({ body: stdout, receipt: { model, started_at: startedAt, ended_at: new Date().toISOString(), exit_code: status, prompt_sha256: promptSha }, error: failed || error || (status !== 0 ? `status ${status}` : !stdout.trim() ? "빈 출력" : "") });
+			resolve({ body: stdout, stderr, receipt: { model, started_at: startedAt, ended_at: new Date().toISOString(), exit_code: status, prompt_sha256: promptSha }, error: failed || error || (status !== 0 ? `status ${status}` : !stdout.trim() ? "빈 출력" : "") });
 		};
 		const timer = setTimeout(() => { failed = "45분 실행 제한 초과"; child.kill("SIGKILL"); }, 45 * 60 * 1000);
 		child.on("error", () => finish(null, "실행 파일을 시작하지 못함"));
@@ -151,7 +151,9 @@ function execReviewer(bin, args, input = "", promptSha = "", model = "") {
 			if (bytes > 64 * 1024 * 1024) { failed = "출력 크기 제한 초과"; child.kill("SIGKILL"); }
 			else stdout += b;
 		});
-		child.stderr.resume();
+		// stderr 는 한도 판별에만 쓰고 기록에는 남기지 않는다. 끝 16KB 만 둔다.
+		child.stderr.setEncoding("utf8");
+		child.stderr.on("data", (b) => { stderr = (stderr + b).slice(-16 * 1024); });
 		child.on("close", (status) => finish(status));
 		child.stdin.on("error", () => {});
 		child.stdin.end(input);
@@ -509,22 +511,27 @@ switch (cmd) {
 		const prompt = lib.reviewPrompt(plan, sha, ROOT);
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID();
 		const base = path.resolve(opt(args, "--out") || path.join(gatesDir, `deploy-plan-review-${stamp}.md`));
-		const ids = lib.orderedReviewers(author, ROOT);
+		// 차례는 기록 reviewedAt 과 같은 시각으로 고른다. 관문이 같은 시각으로 차례를 다시 만들어 대조한다.
+		const reviewedAt = new Date().toISOString();
+		let ids;
+		try { ids = lib.orderedReviewers(author, ROOT, reviewedAt); }
+		catch (error) { die(`리뷰 차례를 정하지 못함: ${error.message}`); }
 		const parsed = path.parse(base);
 		const outputs = ids.map((id) => path.join(parsed.dir, `${parsed.name}-${id}${parsed.ext || ".md"}`));
 		for (const out of outputs) if (out === abs || fs.existsSync(out)) die("리뷰 결과 경로가 이미 있습니다. 새 --out 경로를 쓰십시오");
 		try { for (const out of outputs) lib.resultFile(gatesDir, path.relative(gatesDir, out), true); }
 		catch { die("--out 은 해당 계획서 gatesDir 안 일반 파일 경로여야 합니다. 하위 폴더는 먼저 만드십시오"); }
-		const rec = { plan_sha256: sha, plan: path.relative(ROOT, abs), author_model: author, prompt_sha256: sha256(prompt), rotation: true, skipped: [], reviewers: [], reviewedAt: new Date().toISOString() };
+		const rec = { plan_sha256: sha, plan: path.relative(ROOT, abs), author_model: author, prompt_sha256: sha256(prompt), rotation: true, skipped: [], reviewers: [], reviewedAt };
 		const recordFile = path.join(gatesDir, lib.REVIEW_FILE);
 		fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
 		const reviewStartedAt = Date.now();
-		const limitTextOf = (r) => `${r.body || ""}\n${r.error || ""}`;
+		// 리뷰 본문은 계획서 낱말을 되풀이할 수 있으므로 한도 판별에서 뺀다.
+		const limitTextOf = (r) => `${r.stderr || ""}\n${r.error || ""}`;
 		let actual = null, actualOutput = null;
 		try {
 			const [first] = await runReviewers([ids[0]], prompt, abs, early.digest);
 			if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first))) {
-				rec.skipped.push({ id: ids[0], reason: "limit" });
+				rec.skipped.push({ id: ids[0], reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
 				console.log(`한도 실패로 다음 차례 리뷰어로 넘어감: ${ids[0]} → ${ids[1]}`);
 				const [second] = await runReviewers([ids[1]], prompt, abs, early.digest);
 				actual = second; actualOutput = outputs[1];

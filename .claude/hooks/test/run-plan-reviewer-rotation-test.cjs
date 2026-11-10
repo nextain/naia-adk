@@ -174,11 +174,18 @@ test("고정 planReview: 유효하면 먼저 쓰고, 지났거나 없으면 차�
 	// until 이 없으면 차례만 쓴다
 	set({ reviewer: "codex", reason: "승인자 결정" });
 	assert.deepEqual(deployPlan.orderedReviewers("muse", root, now), ["argon", "codex"]);
-	// 차례 밖 리뷰어·작성자 자신이면 차례만 쓴다
-	set({ reviewer: "sol", until: new Date(now + 60000).toISOString(), reason: "승인자 결정" });
-	assert.deepEqual(deployPlan.orderedReviewers("muse", root, now), ["argon", "codex"]);
+	// 작성자 자신을 고정했으면 차례만 쓴다
 	set({ reviewer: "muse", until: new Date(now + 60000).toISOString(), reason: "승인자 결정" });
 	assert.deepEqual(deployPlan.orderedReviewers("muse", root, now), ["argon", "codex"]);
+	// 형식이 틀리면 던진다: 차례 밖 리뷰어, 읽을 수 없는 until, 객체 아님
+	set({ reviewer: "sol", until: new Date(now + 60000).toISOString(), reason: "승인자 결정" });
+	assert.throws(() => deployPlan.orderedReviewers("muse", root, now), /reviewer/);
+	set({ reviewer: "codxe", until: "not-a-date" });
+	assert.throws(() => deployPlan.orderedReviewers("muse", root, now), /reviewer/);
+	set({ reviewer: "codex", until: "not-a-date" });
+	assert.throws(() => deployPlan.orderedReviewers("muse", root, now), /until/);
+	set("codex");
+	assert.throws(() => deployPlan.orderedReviewers("muse", root, now), /형식/);
 	// 설정 JSON 깨짐은 예전처럼 던진다
 	fs.writeFileSync(file, "{");
 	assert.throws(() => deployPlan.orderedReviewers("muse", root, now));
@@ -190,12 +197,13 @@ test("한도 판별식: 종료 코드가 0이 아니고 출력이 맞을 때만 
 	assert.equal(deployPlan.isLimitFailure(1, "429 too many requests"), true);
 	assert.equal(deployPlan.isLimitFailure(1, "RESOURCE_EXHAUSTED: try again"), true);
 	assert.equal(deployPlan.isLimitFailure(1, "usage limit reached"), true);
+	assert.equal(deployPlan.isLimitFailure(1, "capacity exhausted"), true);
 	assert.equal(deployPlan.isLimitFailure(0, "rate limit exceeded"), false);
 	assert.equal(deployPlan.isLimitFailure(1, "boom: something broke"), false);
 	assert.equal(deployPlan.isLimitFailure(1, ""), false);
 });
 
-function writeFakeBins(tmp, { argonBody, argonStatus = 0, codexBody, codexStatus = 0, withMarker = false }) {
+function writeFakeBins(tmp, { argonBody, argonStderr = "", argonStatus = 0, codexBody, codexStatus = 0, withMarker = false }) {
 	const binDir = path.join(tmp, "bin");
 	const fakeHome = path.join(tmp, "home");
 	fs.mkdirSync(binDir, { recursive: true });
@@ -206,7 +214,7 @@ function writeFakeBins(tmp, { argonBody, argonStatus = 0, codexBody, codexStatus
 	const marker = path.join(tmp, "codex-ran");
 	const passBody = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "참고 지적: 0", "남은 지적: 0"].join("\n");
 	const argon = path.join(binDir, "fake-agy");
-	fs.writeFileSync(argon, `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' "${argonBody}"\nexit ${argonStatus}\n`, { mode: 0o755 });
+	fs.writeFileSync(argon, `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' "${argonBody}"\nprintf '%s\\n' "${argonStderr}" >&2\nexit ${argonStatus}\n`, { mode: 0o755 });
 	const codex = path.join(binDir, "fake-codex");
 	fs.writeFileSync(codex, `#!/bin/sh\n${withMarker ? `: > "${marker}"\n` : ""}[ "$1" = exec ] || exit 19\n[ -z "$(cat)" ] || exit 20\nprintf 'codex\\n'\ncat <<'REVIEW_EOF'\n${codexBody ?? passBody}\nREVIEW_EOF\nprintf 'tokens used\\n'\nexit ${codexStatus}\n`, { mode: 0o755 });
 	return { binDir, fakeHome, marker };
@@ -216,7 +224,7 @@ test("한도 실패에서 다음 차례로 넘어간다 (가짜 실행 파일)",
 	const { root, tmp, stateDir } = makeWorkspace(t);
 	const { planFile, gatesDir } = createValidPlan(root);
 	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
-	const { binDir, fakeHome } = writeFakeBins(tmp, { argonBody: "Error: request hit rate limit, retry later", argonStatus: 1 });
+	const { binDir, fakeHome } = writeFakeBins(tmp, { argonBody: "", argonStderr: "Error: request hit rate limit, retry later", argonStatus: 1 });
 	const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
 		cwd: root, encoding: "utf8", timeout: 30000,
 		env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_ARGON_BIN: path.join(binDir, "fake-agy"), APPROVAL_PLAN_CODEX_BIN: path.join(binDir, "fake-codex"), DEPLOY_APPROVAL_STATE_DIR: stateDir },
@@ -224,7 +232,10 @@ test("한도 실패에서 다음 차례로 넘어간다 (가짜 실행 파일)",
 	assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
 	const record = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), "utf8"));
 	assert.equal(record.rotation, true);
-	assert.deepEqual(record.skipped, [{ id: "argon", reason: "limit" }]);
+	assert.equal(record.skipped.length, 1);
+	assert.equal(record.skipped[0].id, "argon");
+	assert.equal(record.skipped[0].reason, "limit");
+	assert.equal(record.skipped[0].exit_code, 1);
 	assert.equal(record.reviewers.length, 1);
 	assert.equal(record.reviewers[0].id, "codex");
 	assert.match(fs.readFileSync(path.join(gatesDir, record.reviewers[0].result), "utf8"), /review-run: .*\n$/);
@@ -263,37 +274,87 @@ test("관문이 차례 영수증을 받는다 (작성자 셋 전부)", (t) => {
 	}
 });
 
+// 기록의 첫 리뷰어를 다른 모델로 통째로 바꾼다(id·model·effort·receipt.model 함께). 바꾼 규칙 하나만 걸리게 하려고.
+function swapReviewer(file, id) {
+	const record = JSON.parse(fs.readFileSync(file, "utf8"));
+	const r = record.reviewers[0];
+	r.id = id;
+	r.model = deployPlan.REVIEW_MODELS[id].model;
+	r.effort = deployPlan.REVIEW_MODELS[id].effort;
+	r.receipt.model = r.model;
+	fs.writeFileSync(file, JSON.stringify(record));
+}
+
 test("관문이 같은 모델·차례 밖 리뷰어·새 모양 2인 영수증을 막는다", (t) => {
 	for (const author of ["argon", "codex", "muse"]) {
 		const { root } = makeWorkspace(t);
 		const { planFile, gatesDir } = createValidPlan(root, { author_model: author });
 		const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
-		const good = deployPlan.rotationOrder(author)[0];
-		// 같은 모델이 리뷰하면 막는다
+		const [good, other] = deployPlan.rotationOrder(author);
+		// 같은 모델이 리뷰하면 막는다(id·강도까지 맞춘 자기 리뷰)
 		{
 			const { planSha } = writeRotationReceipt(root, planFile, good);
-			const record = JSON.parse(fs.readFileSync(file, "utf8"));
-			record.reviewers[0].model = deployPlan.REVIEW_MODELS[author].model;
-			record.reviewers[0].receipt.model = record.reviewers[0].model;
-			fs.writeFileSync(file, JSON.stringify(record));
-			assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, false, `${author} 스스로 리뷰`);
+			swapReviewer(file, author);
+			// 차례 대조도 함께 막으므로, 이 규칙 자체가 살아 있는지 지적 문구로 본다
+			assert.ok(deployPlan.reviewProblems(gatesDir, planSha, root).problems.some((p) => p.includes("작성자와 같은 모델이 리뷰함")), `${author} 스스로 리뷰`);
 		}
 		// 차례 밖 모델(sol)이 리뷰하면 막는다
 		{
 			const { planSha } = writeRotationReceipt(root, planFile, good);
-			const record = JSON.parse(fs.readFileSync(file, "utf8"));
-			record.reviewers[0].model = deployPlan.REVIEW_MODELS.sol.model;
-			record.reviewers[0].receipt.model = record.reviewers[0].model;
-			fs.writeFileSync(file, JSON.stringify(record));
+			swapReviewer(file, "sol");
 			assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, false, `${author} 차례 밖 리뷰어`);
 		}
-		// 새 모양에 리뷰어가 2명이면 막는다
+		// 새 모양에 서로 다른 유효 리뷰어 2명이면 막는다
 		{
+			writeRotationReceipt(root, planFile, other);
+			const second = JSON.parse(fs.readFileSync(file, "utf8")).reviewers[0];
 			const { planSha } = writeRotationReceipt(root, planFile, good);
 			const record = JSON.parse(fs.readFileSync(file, "utf8"));
-			record.reviewers.push(structuredClone(record.reviewers[0]));
+			record.reviewers.push(second);
 			fs.writeFileSync(file, JSON.stringify(record));
-			assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, false, `${author} 새 모양 2인`);
+			assert.ok(deployPlan.reviewProblems(gatesDir, planSha, root).problems.some((p) => p.includes("리뷰어 1명의 기록이 필요함")), `${author} 새 모양 2인`);
 		}
 	}
+});
+
+test("관문이 차례와 skipped 를 대조한다", (t) => {
+	for (const author of ["argon", "codex", "muse"]) {
+		const { root } = makeWorkspace(t);
+		const { planFile, gatesDir } = createValidPlan(root, { author_model: author });
+		const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+		const [first, second] = deployPlan.rotationOrder(author);
+		const limit = (id, extra = {}) => ({ id, reason: "limit", exit_code: 1, ended_at: new Date().toISOString(), ...extra });
+		const check = (reviewer, skipped) => {
+			const { planSha } = writeRotationReceipt(root, planFile, reviewer, { skipped });
+			return deployPlan.reviewProblems(gatesDir, planSha, root).ok;
+		};
+		assert.equal(check(second, [limit(first)]), true, `${author} 한도 기록 뒤 둘째`);
+		assert.equal(check(second, []), false, `${author} 한도 기록 없이 둘째`);
+		assert.equal(check(second, [limit(second)]), false, `${author} 리뷰어 자신을 skipped`);
+		assert.equal(check(second, [limit(first), limit(first)]), false, `${author} skipped 중복`);
+		{
+			const { planSha } = writeRotationReceipt(root, planFile, second, { skipped: [limit(first), limit(first)] });
+			assert.ok(deployPlan.reviewProblems(gatesDir, planSha, root).problems.some((p) => p.includes("skipped 는 최대 1개")), `${author} skipped 2개 규칙`);
+		}
+		assert.equal(check(second, [limit(first, { exit_code: 0 })]), false, `${author} 종료 0 skipped`);
+		assert.equal(check(first, [limit(first)]), false, `${author} 건너뛴 후보가 리뷰`);
+		const { planSha } = writeRotationReceipt(root, planFile, first);
+		const record = JSON.parse(fs.readFileSync(file, "utf8"));
+		delete record.skipped;
+		fs.writeFileSync(file, JSON.stringify(record));
+		assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, false, `${author} skipped 없음`);
+	}
+});
+
+test("리뷰 본문의 한도 낱말로는 넘어가지 않는다", (t) => {
+	const { root, tmp, stateDir } = makeWorkspace(t);
+	const { planFile } = createValidPlan(root);
+	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
+	const { binDir, fakeHome, marker } = writeFakeBins(tmp, { argonBody: "판정: FAIL; 계획의 quota 설정이 틀림 429 rate limit", argonStatus: 1, withMarker: true });
+	const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
+		cwd: root, encoding: "utf8", timeout: 30000,
+		env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_ARGON_BIN: path.join(binDir, "fake-agy"), APPROVAL_PLAN_CODEX_BIN: path.join(binDir, "fake-codex"), DEPLOY_APPROVAL_STATE_DIR: stateDir },
+	});
+	assert.notEqual(run.status, 0, `${run.stdout}\n${run.stderr}`);
+	assert.equal(fs.existsSync(marker), false, "본문 낱말로 다음 리뷰어를 실행하면 안 됨");
 });
