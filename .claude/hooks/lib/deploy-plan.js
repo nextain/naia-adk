@@ -74,6 +74,31 @@ function readJson(file) {
 const str = (v, min = 1) => typeof v === "string" && v.trim().length >= min;
 const strList = (v, min = 1) => Array.isArray(v) && v.length > 0 && v.every((x) => str(x, min));
 
+// 승인자 위험 수용: security 기준 하나만, 이미 공개된 같은 값, 승인자 결정 글 주소, 끝나는 날이 있을 때만. 다른 기준 FAIL 은 그대로 막는다.
+const RISK_ACCEPTANCE_MAX_DAYS = 7;
+function riskAcceptanceProblems(plan) {
+	const a = plan?.risk_acceptance;
+	if (a === undefined) return [];
+	if (!a || typeof a !== "object" || Array.isArray(a)) return ["risk_acceptance 는 객체여야 함"];
+	const p = [];
+	const allowed = ["criterion", "accepted_by", "decision_url", "same_value_as", "no_new_exposure", "expires_at", "reason"];
+	for (const k of Object.keys(a)) if (!allowed.includes(k)) p.push(`risk_acceptance 에 모르는 칸 ${k}`);
+	if (a.criterion !== "security") p.push('risk_acceptance.criterion 은 "security" 만 쓸 수 있음(다른 기준은 위험 수용 불가)');
+	if (!str(a.accepted_by, 2)) p.push("risk_acceptance.accepted_by(위험을 받아들인 승인자) 없음");
+	if (!/^https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+$/.test(String(a.decision_url || ""))) p.push("risk_acceptance.decision_url 은 승인자 결정 디스코드 글 주소");
+	if (!str(a.same_value_as, 10)) p.push("risk_acceptance.same_value_as(같은 값이 이미 나간 앞 계획서·지문) 없음");
+	if (a.no_new_exposure !== true) p.push("risk_acceptance.no_new_exposure 는 true 여야 함(새 노출이면 위험 수용 불가)");
+	if (!str(a.reason, 10)) p.push("risk_acceptance.reason 없음");
+	const created = Date.parse(plan.createdAt || "");
+	const until = Date.parse(a.expires_at || "");
+	if (!Number.isFinite(until)) p.push("risk_acceptance.expires_at(ISO 시각) 없음");
+	else if (!Number.isFinite(created) || until <= created || until - created > RISK_ACCEPTANCE_MAX_DAYS * 86400000) p.push(`risk_acceptance.expires_at 은 createdAt 뒤 ${RISK_ACCEPTANCE_MAX_DAYS}일 안`);
+	return p;
+}
+function riskAcceptanceActive(plan, now = Date.now()) {
+	return plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && Date.parse(plan.risk_acceptance.expires_at) > now;
+}
+
 // 리뷰 배치: author muse → planReview 설정에 따라 argon 또는 codex 1명. 옛 author(sol|argon)의 2인 기록은 재리뷰까지만 구 기록으로 인정한다.
 const REVIEW_MODELS = Object.freeze({
 	sol: { model: "gpt-6.1-sol", effort: "high" },
@@ -105,7 +130,7 @@ function formProblems(plan) {
 	if (!plan || typeof plan !== "object") return ["계획서를 JSON 으로 읽지 못함"];
 	if (plan.schema !== "deploy-plan/v1") p.push('schema 가 "deploy-plan/v1" 이 아님');
 	if (!AUTHOR_IDS.includes(plan.author_model)) p.push("author_model(sol|muse|argon) 필수");
-	if (Object.hasOwn(plan, "risk_acceptance")) p.push("risk_acceptance 금지: 리뷰어 PASS·남은 지적 0 조건은 위험 수용으로 우회할 수 없음");
+	p.push(...riskAcceptanceProblems(plan));
 	if (plan.approval_mode !== undefined && plan.approval_mode !== "preapprove_steps") p.push('approval_mode 는 "preapprove_steps" 만 쓸 수 있음');
 	if (!str(plan.planId, 3)) p.push("planId(계획 이름) 없음");
 	const at = Date.parse(plan.createdAt || "");
@@ -367,7 +392,7 @@ function pinnedFilesText(plan, root) {
 	return L;
 }
 
-function reviewBodyProblems(text, sha) {
+function reviewBodyProblems(text, sha, acceptSecurity = false) {
 	const problems = [];
 	const tr = reviewTrailer(text);
 	if (!tr) problems.push("적대 리뷰 결과 끝줄이 review-run: 줄이 아님");
@@ -383,21 +408,24 @@ function reviewBodyProblems(text, sha) {
 		if (hits.length === 0) { problems.push(`적대 리뷰 결과에 기준 ${id} 판정 줄이 없음("${id}: PASS" 또는 "${id}: FAIL")`); summary.push({ id, verdict: "없음" }); continue; }
 		const verdicts = hits.map((h) => h[1].toUpperCase());
 		const verdict = verdicts.includes("FAIL") ? "FAIL" : "PASS";
-		if (verdict !== "PASS") problems.push(`적대 리뷰 기준 ${id} 미통과`);
+		if (verdict !== "PASS" && !(acceptSecurity && id === "security")) problems.push(`적대 리뷰 기준 ${id} 미통과`);
 		summary.push({ id, verdict, note: (hits[0][2] || "").replace(/^[\s*|—-]+/, "").trim().slice(0, 160) });
 	}
 	// 마지막 줄을 본다. 앞 회차 요약의 "남은 지적: 0" 뒤에 새 지적이 붙어도 통과하지 않게.
 	const open = [...body.matchAll(/(?:남은\s*지적|open[_ ]findings)\s*[:：=]\s*(\d+)/gi)].pop();
 	if (!open) problems.push("적대 리뷰 결과에 \"남은 지적: <수>\" 줄이 없음");
-	else if (Number(open[1]) !== 0) problems.push(`적대 리뷰 남은 지적 ${open[1]}건`);
 	// 남은 지적은 차단 지적 수다. 참고 지적은 세지 않는다. 다만 목록에 [차단] 줄이 하나라도 있으면 남은 지적 숫자와 관계없이 미통과.
 	const blockingLines = body.split(/\r?\n/).filter((line) => /^\s*(?:\d+[.)]|[-*])\s*\**\s*\[\s*차단/.test(line) || /^\s*\|.*\[\s*차단\s*:/.test(line));
-	if (blockingLines.length) problems.push(`적대 리뷰 목록에 차단 지적 ${blockingLines.length}건`);
+	// 위험 수용 중에는 security 를 적은 차단 지적만 뺀다. 남은 지적 수도 그 수와 같아야 한다.
+	const securityFailed = summary.some((s) => s.id === "security" && s.verdict === "FAIL");
+	const accepted = acceptSecurity && securityFailed ? blockingLines.filter((line) => /\bsecurity\b/i.test(line)) : [];
+	if (blockingLines.length > accepted.length) problems.push(`적대 리뷰 목록에 차단 지적 ${blockingLines.length - accepted.length}건${accepted.length ? "(security 위험 수용분 제외)" : ""}`);
+	if (open && Number(open[1]) !== accepted.length) problems.push(`적대 리뷰 남은 지적 ${open[1]}건${accepted.length ? `(security 위험 수용 ${accepted.length}건만 남아야 함)` : ""}`);
 	const advisoryLines = body.split(/\r?\n/).filter((line) => /^\s*(?:\d+[.)]|[-*])\s*\**\s*\[\s*참고/.test(line));
 	const advisory = [...body.matchAll(/참고\s*지적\s*[:：=]\s*(\d+)/g)].pop();
 	const first = body.trim().split(/\r?\n/).find((line) => !/^(?:codex|tokens used|\d[\d,]*)\s*$/i.test(line.trim())) || "";
-	if (!/^판정:\s*PASS\s*$/i.test(first)) problems.push("적대 리뷰 전체 판정이 PASS 가 아님");
-	return { ok: problems.length === 0, problems, summary, openFindings: open ? Number(open[1]) : null, advisoryFindings: advisory ? Number(advisory[1]) : advisoryLines.length, body, prompt_sha256: tr?.prompt };
+	if (!/^판정:\s*PASS\s*$/i.test(first) && !(accepted.length && /^판정:\s*FAIL\s*$/i.test(first))) problems.push("적대 리뷰 전체 판정이 PASS 가 아님");
+	return { ok: problems.length === 0, riskAccepted: accepted.length > 0, problems, summary, openFindings: open ? Number(open[1]) : null, advisoryFindings: advisory ? Number(advisory[1]) : advisoryLines.length, body, prompt_sha256: tr?.prompt };
 }
 
 /** 리뷰 결과의 무결성·대상·작성자 분리·아홉 기준을 모두 확인한다. 작성자별 리뷰어 구성(muse→argon 또는 codex 1명, 옛 author→2명)과 다르면 거절한다. */
@@ -417,7 +445,9 @@ function reviewProblems(gatesDir, sha, root) {
 		return { ok: problems.length === 0, problems, reviewers, summary: reviewers.flatMap((r) => r.summary.map((s) => ({ ...s, reviewer: r.id }))) };
 	};
 	if (!plan || !AUTHOR_IDS.includes(plan.author_model)) problems.push("계획서 author_model(sol|muse|argon) 필수");
-	if (plan && Object.hasOwn(plan, "risk_acceptance")) problems.push("risk_acceptance 금지: 리뷰어 조건은 위험 수용 불가");
+	if (plan) problems.push(...riskAcceptanceProblems(plan));
+	if (plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && !riskAcceptanceActive(plan)) problems.push("risk_acceptance 끝남(expires_at 지남)");
+	const acceptSecurity = riskAcceptanceActive(plan);
 	problems.push(...pinnedFileProblems(plan, base));
 	let promptSha = null;
 	try { if (plan) promptSha = sha256(reviewPrompt(plan, sha, base)); } catch { problems.push("현재 요청문을 다시 만들지 못함"); }
@@ -467,7 +497,7 @@ function reviewProblems(gatesDir, sha, root) {
 		if (text === null) own.push("적대 리뷰 결과 파일을 읽지 못함");
 		else {
 			if (r.result_sha256 !== sha256(Buffer.from(text, "utf8"))) own.push("적대 리뷰 결과 파일의 sha256 이 기록과 다름");
-			parsed = reviewBodyProblems(text, sha);
+			parsed = reviewBodyProblems(text, sha, acceptSecurity);
 			own.push(...parsed.problems);
 			if (!parsed.prompt_sha256 || parsed.prompt_sha256 !== rec.prompt_sha256 || parsed.prompt_sha256 !== promptSha) own.push("결과 prompt_sha256 이 기록 또는 현재 요청문과 다름");
 			const receipt = r.receipt;
@@ -1144,5 +1174,5 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, reviewProblems, reviewerIdsFor, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
+	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };
