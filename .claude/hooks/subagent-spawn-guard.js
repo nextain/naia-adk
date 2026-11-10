@@ -22,6 +22,7 @@ const OPT_IN_FILE = "allow-subagents";
 // Both hosts' spawn tools. A name this set misses is a spawn the budget below
 // never caps, and each guard used to know only its own host's names.
 const SPAWN_TOOLS = new Set(["task", "agent", "spawn_agent", "multi_agent_v1", "multi_agent_v1__spawn_agent", "collaboration.spawn_agent", "collaborationspawn_agent"]);
+const OPT_IN_KEYS = new Set(["maxSpawns"]);
 const DEFAULT_MAX_SPAWNS = 4;
 const HARD_MAX_SPAWNS = 8;
 
@@ -125,6 +126,17 @@ function evaluate({ toolName, sessionId = null, root = process.cwd(), env = proc
 				"코덱스 입력 토큰의 72퍼센트가 서브에이전트에서 나왔고 한 부모가 자식 71개를 만들었다. " +
 				`필요하면 사람이 \`.claude/${OPT_IN_FILE}\` 를 만들어 예산과 함께 허용한다. ` +
 				"대부분의 작업은 직접 도구로 처리하는 편이 싸고 빠르다.",
+		};
+	}
+
+	// A misspelled budget key (2026-11-10: every role wrote "maxConcurrent") used
+	// to fall back to the default silently, capping sessions at 4 for days.
+	const unknownKeys = Object.keys(optIn).filter((key) => !OPT_IN_KEYS.has(key));
+	if (unknownKeys.length) {
+		return {
+			reason:
+				`[SUBAGENT GUARD] \`.claude/${OPT_IN_FILE}\` 에 모르는 키가 있다: ${unknownKeys.join(", ")}. ` +
+				`예산 키는 maxSpawns 하나다. 예: { "maxSpawns": 8 } (상한 ${HARD_MAX_SPAWNS}).`,
 		};
 	}
 
