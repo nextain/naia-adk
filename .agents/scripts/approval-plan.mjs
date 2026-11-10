@@ -5,7 +5,7 @@
  *   template                         빈 양식(JSON) 출력
  *   check <plan>                     양식 칸·적대 리뷰 기록 점검, 명령별 sha 출력
  *   report <plan>                    승인자에게 올릴 보고문 출력(리뷰 통과 시)
- *   review <plan> --author muse [--out <file>] Argon 단독 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json
+ *   review <plan> --author muse [--out <file>] planReview 설정에 따라 argon 또는 codex 1명 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json
  *   review-prompt <plan>             리뷰 요청문만 출력
  *   preapprove <plan> --session <id>      사전승인 코드 발급(승인 아님: PLAN+전단계 코드, approval_mode 사전 계획만)
  *   step-ok <plan> <step> --evidence <file>   단계 성공 확인 증거 기록(gates/deploy-steps/<step>.json)
@@ -328,12 +328,12 @@ function findBwrap() {
 	return null;
 }
 
-function argonSandboxArgs(promptDir) {
+function reviewerSandboxArgs(promptDir, id) {
 	const root = fs.realpathSync(ROOT), cwd = fs.realpathSync(process.cwd());
 	const overlaps = (a, b) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
 	const home = fs.realpathSync(os.homedir());
-	const runtime = fs.realpathSync(path.join(home, ".gemini"));
-	if (!fs.statSync(runtime).isDirectory() || !runtime.startsWith(home + path.sep) || [root, cwd].some(p => overlaps(p, runtime))) throw new Error("agy home overlaps protected workspace");
+	const runtime = id === "argon" ? fs.realpathSync(path.join(home, ".gemini")) : null;
+	if (runtime && (!fs.statSync(runtime).isDirectory() || !runtime.startsWith(home + path.sep) || [root, cwd].some(p => overlaps(p, runtime)))) throw new Error("reviewer home overlaps protected workspace");
 	const protectedDirs = new Set([root, cwd, fs.realpathSync(promptDir)]);
 	for (const state of new Set([statePath(process.env), lib.stateFile(process.env)])) {
 		let parent = path.dirname(path.resolve(state));
@@ -341,7 +341,21 @@ function argonSandboxArgs(promptDir) {
 		protectedDirs.add(fs.realpathSync(parent));
 		if (fs.existsSync(state)) protectedDirs.add(path.dirname(fs.realpathSync(state)));
 	}
-	const args = ["--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--bind", runtime, runtime];
+	const args = ["--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
+	if (runtime) args.push("--bind", runtime, runtime);
+	if (id === "codex") {
+		// Codex may write session and SQLite runtime state even in ephemeral mode, and opens installation_id read-write at start
+		// (without it the reviewer exits 1 with "Read-only file system", found by the 2026-11-10 real QC).
+		// Grant only existing runtime paths; the repository and gate directories stay read-only.
+		const codexHome = path.join(home, ".codex");
+		for (const name of ["sessions", "tmp", "log", "installation_id", "state_5.sqlite", "state_5.sqlite-wal", "state_5.sqlite-shm"]) {
+			const target = path.join(codexHome, name);
+			if (!fs.existsSync(target)) continue;
+			const real = fs.realpathSync(target);
+			if (real !== target || [...protectedDirs].some(p => overlaps(p, real))) throw new Error("codex runtime overlaps protected workspace");
+			args.push("--bind", target, target);
+		}
+	}
 	for (const dir of protectedDirs) args.push("--ro-bind", dir, dir);
 	return [...args, "--chdir", root];
 }
@@ -356,8 +370,9 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined) {
 		fs.writeFileSync(file, prompt, { mode: 0o600 });
 		stage = "sandbox-prepare";
 		const bwrap = findBwrap();
-		if (isRecoveryMode() && ids.includes("argon") && !bwrap) throw new Error("복구 모드: bwrap 읽기 전용 격리 없음");
-		const sandboxArgs = ids.includes("argon") && bwrap ? argonSandboxArgs(dir) : null;
+		if (ids.includes("codex") && !bwrap) throw new Error("codex 리뷰어: bwrap 읽기 전용 격리 없음");
+		if (isRecoveryMode() && ids.some((id) => id === "argon" || id === "codex") && !bwrap) throw new Error("복구 모드: bwrap 읽기 전용 격리 없음");
+		const sandboxArgs = ids.some((id) => id === "argon" || id === "codex") && bwrap ? reviewerSandboxArgs(dir, ids.includes("argon") ? "argon" : "codex") : null;
 		const boundedRecovery = isRecoveryMode() && Boolean(sandboxArgs);
 		stage = "snapshot-before";
 		const before = boundedRecovery ? null : readOnlySnapshot(Boolean(sandboxArgs));
@@ -370,13 +385,16 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined) {
 			if (id === "muse") {
 				bin = MUSE;
 				args = ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", config.model, "--reasoning-effort", config.effort, "--prompt-file", file];
+			} else if (id === "codex") {
+				bin = process.env.APPROVAL_PLAN_CODEX_BIN || "codex";
+				args = ["exec", "-m", config.model, "-c", `model_reasoning_effort=${config.effort}`, "-s", "read-only", "--skip-git-repo-check", "--ephemeral", prompt];
 			} else {
 				bin = process.env.APPROVAL_PLAN_ARGON_BIN || "agy";
 				args = ["--model", config.model, "--effort", config.effort, "--mode", "plan", "--sandbox", "--disable-slash-commands", "--output-format", "text"];
 				input = prompt;
 			}
-			let isolation = id === "argon" ? "snapshot-only" : "cli-read-only";
-			if (id === "argon" && bwrap) {
+			let isolation = (id === "argon" || id === "codex") ? "snapshot-only" : "cli-read-only";
+			if ((id === "argon" || id === "codex") && bwrap) {
 				args = [...sandboxArgs, "--", bin, ...args];
 				bin = bwrap; isolation = "bwrap-ro-bind";
 			}
@@ -482,7 +500,7 @@ switch (cmd) {
 		}
 		if (bindProblems.length) die(bindProblems.join("\n"), 1);
 		const author = opt(args, "--author");
-		if (author !== "muse") die("--author muse 가 필수입니다(분석·구현 muse, 리뷰 argon 단독, sol 큐레이션만)");
+		if (author !== "muse") die("--author muse 가 필수입니다(분석·구현 muse, 리뷰 planReview 설정에 따라 argon 또는 codex 1명, sol 큐레이션만)");
 		if (!Object.hasOwn(lib.REVIEW_MODELS, plan.author_model || "") || plan.author_model !== author) die("--author(muse) 와 계획서 author_model 이 다릅니다");
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 먼저 채우십시오\n${form.join("\n")}`, 1);
@@ -491,7 +509,7 @@ switch (cmd) {
 		const prompt = lib.reviewPrompt(plan, sha, ROOT);
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID();
 		const base = path.resolve(opt(args, "--out") || path.join(gatesDir, `deploy-plan-review-${stamp}.md`));
-		const ids = lib.reviewerIdsFor(author);
+		const ids = lib.reviewerIdsFor(author, ROOT);
 		const parsed = path.parse(base);
 		const outputs = ids.map((id) => path.join(parsed.dir, `${parsed.name}-${id}${parsed.ext || ".md"}`));
 		for (const out of outputs) if (out === abs || fs.existsSync(out)) die("리뷰 결과 경로가 이미 있습니다. 새 --out 경로를 쓰십시오");
@@ -511,7 +529,7 @@ switch (cmd) {
 			try { output = lib.resultFile(gatesDir, path.relative(gatesDir, outputs[i]), true); }
 			catch { die("리뷰 실행 중 결과 경로가 gatesDir 밖 또는 일반 파일이 아닌 경로로 바뀜", 3); }
 			fs.writeFileSync(output, final, { flag: "wx" });
-			rec.reviewers.push({ model: r.model, effort: r.effort, result: path.relative(gatesDir, outputs[i]), result_sha256: sha256(final), target_sha256: sha, receipt: { ...r.receipt, stdout_sha256: sha256(text), isolation: r.isolation }, ...(r.error ? { execution_error: r.error } : {}) });
+			rec.reviewers.push({ id: r.id, model: r.model, effort: r.effort, result: path.relative(gatesDir, outputs[i]), result_sha256: sha256(final), target_sha256: sha, receipt: { ...r.receipt, stdout_sha256: sha256(text), isolation: r.isolation }, ...(r.error ? { execution_error: r.error } : {}) });
 			console.log(`결과 ${r.id}: ${path.relative(ROOT, outputs[i])}`);
 		}
 		fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
