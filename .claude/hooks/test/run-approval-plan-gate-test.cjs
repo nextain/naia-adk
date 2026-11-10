@@ -71,6 +71,7 @@ function createValidPlan(root, overrides = {}) {
 	const rollbackCmd = "az containerapp revision activate -n sample-web-prod -g sample-rg --revision sample-web-prod--prev";
 
 	const plan = {
+		sourceDocs: [],
 		schema: "deploy-plan/v1",
 		author_model: "muse",
 		approval_mode: "preapprove_steps",
@@ -403,9 +404,11 @@ test("7. approval-plan.mjs CLI (template, check, report, preapprove, step-ok) �
 	// step-ok
 	const evFile = path.join(stateDir, "s1-ok.txt");
 	fs.writeFileSync(evFile, "HTTP/1.1 200 OK\nhealth=ok\n");
-	const stepOkRes = spawnSync(process.execPath, [workspaceScript, "step-ok", planFile, "s1", "--evidence", evFile], { cwd: root, env, encoding: "utf8" });
-	assert.equal(stepOkRes.status, 0, stepOkRes.stderr);
-	assert.match(stepOkRes.stdout, /단계 s1 성공 확인 기록/);
+	const completionFile = path.join(stateDir, "completion.json");
+	fs.writeFileSync(completionFile, JSON.stringify({ plan_sha256: sha256(fs.readFileSync(planFile)), acceptance: [] }));
+	const stepOkRes = spawnSync(process.execPath, [workspaceScript, "step-ok", planFile, "s1", "--evidence", evFile, "--report", completionFile], { cwd: root, env, encoding: "utf8" });
+	assert.notEqual(stepOkRes.status, 0, stepOkRes.stderr);
+	assert.match(stepOkRes.stderr, /실제 실행/);
 });
 
 test("8. 차단 1 재현: 옛 승인(approvals.json) 분기에서도 설정·계획서 없이 운영 명령(az/ssh 등) 실행 시 차단", async (t) => {
@@ -944,7 +947,7 @@ test("16. 2회차 지적 2 재현: 사전승인(preapprove_steps)에서 s1 미�
 	const evFile = path.join(stateDir, "fake-s1-ok.txt");
 	fs.writeFileSync(evFile, "HTTP/1.1 200 OK\ncanary=ok\n");
 	const stepOkRes = spawnSync(process.execPath, [workspaceScript, "step-ok", planFile, "s1", "--evidence", evFile], { cwd: root, env, encoding: "utf8" });
-	assert.equal(stepOkRes.status, 0, stepOkRes.stderr);
+	assert.notEqual(stepOkRes.status, 0, stepOkRes.stderr);
 
 	// s1 미실행 상태에서 s2 실행 시도 → 반드시 차단되어야 함
 	const skipDecision = runDeployGuardHook(s2Cmd, { cwd: root, root, stateDir, transcriptPath, sessionId });
@@ -956,7 +959,9 @@ test("16. 2회차 지적 2 재현: 사전승인(preapprove_steps)에서 s1 미�
 	const s1Decision = runDeployGuardHook(s1Cmd, { cwd: root, root, stateDir, transcriptPath, sessionId });
 	assert.equal(s1Decision, null, `s1 실행은 통과해야 함: ${JSON.stringify(s1Decision)}`);
 
-	// s1 이 executed 된 뒤에는 s2 실행 → 통과(null)
+	// s1 이 executed 된 뒤 성공을 기록하고 s2 실행
+	const confirmed = spawnSync(process.execPath, [workspaceScript, "step-ok", planFile, "s1", "--evidence", evFile], { cwd: root, env, encoding: "utf8" });
+	assert.equal(confirmed.status, 0, confirmed.stderr);
 	const s2Decision = runDeployGuardHook(s2Cmd, { cwd: root, root, stateDir, transcriptPath, sessionId });
 	assert.equal(s2Decision, null, `s1 실행 및 step-ok 후 s2 실행은 통과해야 함: ${JSON.stringify(s2Decision)}`);
 });
@@ -1047,4 +1052,23 @@ test("declared script manifest ignores incidental existing path tokens but rejec
  const ctx={root,cwd:root,command:step.commands[0],services:[service],sessionId:"manifest-test"};
  const res=await deployPlan.evaluate(ctx);assert.equal(res.audit.event,"blocked-plan-review");
  fs.appendFileSync(helper,"# changed\n");const changed=await deployPlan.evaluate(ctx);assert.equal(changed.audit.event,"blocked-plan-script-binding");
+});
+
+test("rollback.step_ids alone permits recovery before failed forward step has success receipt", async (t) => {
+ const { root, stateDir, transcriptPath } = makeWorkspace(t);
+ writeGateConfig(root);
+ const { planFile, plan, step1Cmd, rollbackCmd, gatesDir } = createValidPlan(root);
+ delete plan.scenario[1].branch;
+ fs.writeFileSync(planFile, JSON.stringify(plan, null, 2));
+ assert.deepEqual(deployPlan.formProblems(plan), []);
+ writePassingReviewReceipt(root, planFile);
+ const sessionId = "sample-rollback-session";
+ const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+ const pre = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, Date.now());
+ assert.equal(pre.ok, true, pre.why);
+ appendHumanTurn(transcriptPath, `승인 ${pre.plan_code} ${pre.steps.map(s => s.code).join(' ')}`);
+ assert.equal(runDeployGuardHook(step1Cmd, {cwd:root, root, stateDir, transcriptPath, sessionId}), null);
+ assert.equal(fs.existsSync(path.join(gatesDir, 'deploy-steps/s1.json')), false);
+ assert.equal(runDeployGuardHook(rollbackCmd, {cwd:root, root, stateDir, transcriptPath, sessionId}), null,
+  'rollback marked only by step_ids must remain reachable without forward success');
 });

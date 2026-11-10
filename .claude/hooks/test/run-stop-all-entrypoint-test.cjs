@@ -71,6 +71,7 @@ function createValidPlan(root, overrides = {}) {
 	const rollbackCmd = "az containerapp revision activate -n sample-web-prod -g sample-rg --revision sample-web-prod--prev";
 
 	const plan = {
+		sourceDocs: [],
 		schema: "deploy-plan/v1",
 		author_model: "muse",
 		approval_mode: "preapprove_steps",

@@ -40,6 +40,45 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - `scenario[].commands`: **실제로 실행할 명령 문자열을 한 글자도 바꾸지 말고 그대로** 적습니다. 실행할 때 바이트 단위로 대조하므로 공백이나 따옴표가 달라도 막힙니다.
 - `scenario[].files`: 명령이 읽거나 실행하는 스크립트·설정 파일(`bash ./deploy.sh`, `--yaml app.yaml`, `@body.json` 등)은 반드시 `"경로": "<sha256>"` 형태로 고정합니다. 파일 내용이 1바이트라도 바뀌면 실행이 차단됩니다(`bash scripts/rollout.sh` 재귀 검사는 스크립트 폴더로 자동 이동하지 않고 호출자 작업 디렉터리를 유지하며, 스크립트 안의 명시적 `cd`만 반영합니다).
 - 사전승인 코드 일괄 발급(`preapprove`)을 쓰려면 최상위에 `"approval_mode": "preapprove_steps"`를 넣습니다.
+- `scenario[].covers`: 근거 정본 문서(`sourceDocs`)의 단계 ID 목록(`["1", "2"]` 등)을 적어, 정본의 어느 단계를 이 시나리오 단계가 수행하는지 대응시킵니다.
+
+### 근거 정본 (`sourceDocs`)
+
+운영 반영 절차가 담긴 정본 작업 문서(마크다운 등)를 요약해 배포 계획서를 만들 때 단계나 사후 인수 확인(acceptance)이 빠지는 사고를 막기 위해, `deploy-plan.json`에 `sourceDocs`와 `scenario[].covers`를 반드시 적습니다. 정본 대조 여부는 `sourceDocs` 선언만으로 결정하며 본문·rationale·steps의 자유 문장은 추정하지 않습니다. 선언이 없거나 `null`이면 거부합니다. 정본 문서가 없으면 `sourceDocs: []`를 명시합니다. 의도적 제외는 `excludedSourceSteps`에 이유를 적습니다.
+
+```json
+{
+  "sourceDocs": [
+    {
+      "path": "docs/work/sample-rollout.md",
+      "section": "운영 반영 단계",
+      "acceptanceSection": "사후 확인",
+      "sha256": "<정본 파일의 64자리 SHA-256>",
+      "steps": [
+        { "id": "1", "text": "DB 마이그레이션 반영" },
+        { "id": "2", "text": "컨테이너 이미지 교체" },
+        { "id": "6", "text": "시험 키 설정 주입" }
+      ],
+      "acceptance": [
+        { "id": "acc-1", "text": "결제 3단계 화면에 시험 결제창이 뜸" }
+      ]
+    }
+  ],
+  "excludedSourceSteps": [
+    { "id": "2", "reason": "이번 작업은 설정 주입 전용이라 이미지 교체를 제외함" }
+  ]
+}
+```
+
+- **정본 단계 추출 도우미 (`source-steps`)**: 마크다운 정본 문서의 지정 절(`--section <제목>`)에서 `(1)`·`1.`·`- [ ]` 꼴 단계 목록을 뽑아 `sourceDocs` 초안 JSON(`path`, `sha256`, `steps`)을 만듭니다.
+  ```bash
+  node .agents/scripts/approval-plan.mjs source-steps docs/work/sample-rollout.md --section "운영 반영 단계" --acceptance-section "사후 확인"
+  ```
+- **관문 검사 (`check` 및 승인 코드 발급 경로)**:
+  1. **정본 파일 SHA-256 대조**: `sourceDocs[].path` 경로는 저장소 내 정규 상대 경로여야 하며 realpath가 밖을 가리키는 심볼릭 링크도 거부합니다. 파일의 현재 디스크 SHA-256(소문자 비교)이 `sourceDocs[].sha256`과 다르면 차단합니다.
+  2. **정본 단계 누락 차단**: 지정 절을 원문에서 재추출해 `steps`와 `acceptance` 전체를 대조합니다. 두 절 밖에 지원 목록 형식의 단계가 있거나 절을 일부만 선택해도 거부합니다. 정본은 실행 단계와 인수 확인만 담은 전용 마크다운 파일로 관리합니다. `sourceDocs[].steps`의 모든 `id`가 어느 `scenario[]` 단계의 `covers` 배열에 들어 있거나, 계획서 최상위 `excludedSourceSteps: [{id, reason}]`에 이유(`reason`)와 함께 적혀 있어야 통과합니다. 하나라도 빠지면 `"정본 단계 누락: <id> <text>"`로 막고 승인 코드를 내주지 않습니다.
+  3. **인수 확인(`acceptance`) 실측 검증**: `sourceDocs`를 선언한 계획서에서 되돌리기 갈림을 제외한 마지막 실행 단계의 `step-ok`는 현재 계획서 SHA-256에 묶인 완료 JSON 보고서를 반드시 검사합니다. 인수 확인 항목마다 실측 문자열이 필요하며 `-`, `N/A`, `TBD`, `확인함` 같은 빈말과 문자열이 아닌 값은 거부합니다. 허용 실측 키는 `실측`, `actual`, `observed`, `measured`, `measurement`, `evidence`, `result`, `value`입니다. 이 검사는 형식과 누락을 막으며 관측 내용의 진실성은 독립 검토와 증거 대조로 확인해야 합니다.
+  4. **ID와 호환**: 모르는 ID, 중복 steps/acceptance/covers/excluded, covers와 제외의 동시 선언을 거부합니다. 여러 문서는 covers·제외·완료 실측에 `문서경로#ID`를 씁니다. 한 단계 ID를 여러 scenario에서 재사용할 수 없으며 되돌리기 단계의 covers로 실행 단계 누락을 대신할 수 없습니다. 옛 계획서도 정본이 없으면 `sourceDocs: []`를 추가하고 재리뷰·재승인해야 합니다.
 
 ---
 
@@ -104,3 +143,28 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
 3. **실패·장애 시**:
    - 단계 확인이 실패하면 계획서의 `on_failure` 갈림길(예: 되돌리기 단계 `r1`)대로 행동하고 보고합니다.
    - 운영 장애 기준(`incident.criteria`)에 해당해 선조치(`incident.actions`)를 실행해야 할 때는 다른 독립 세션 판정(`node .agents/scripts/approval-plan.mjs judge <계획서> --evidence <로그> --executor-session <세션ID>`)을 받아야 하며, 선조치 직후 `gates/deploy-incident-report-*.md` 보고서를 작성해야 다음 단계로 진행할 수 있습니다.
+
+## 완료 확인과 영수증
+
+`report`는 실행 전 승인 요청문을 만드는 명령입니다. 완료 상태는 `sourceDocs`를 선언한 계획서의 마지막 본 단계 `step-ok`에서 검사합니다. `branch: "rollback"` 또는 `rollback.step_ids`에 든 단계는 되돌리기 단계이며 앞 단계 성공 기록을 요구하지 않습니다. 기본 보고서 경로는 계획서와 같은 폴더의 `deploy-completion.json`이며 `--report <파일>`로 지정할 수도 있습니다.
+
+```json
+{
+  "plan_sha256": "<현재 deploy-plan.json 파일의 SHA-256>",
+  "acceptance": [
+    { "id": "acc-1", "actual": "12:00 UTC 가상 시험 화면에서 결제창 표시를 관측; 증거 sample-screen.txt" }
+  ]
+}
+```
+
+```bash
+node .agents/scripts/approval-plan.mjs step-ok <계획서> <마지막단계> --evidence <성공출력> --report <완료보고.json>
+node .agents/scripts/approval-plan.mjs complete-check <계획서> --report <완료보고.json>
+node .agents/scripts/approval-plan.mjs complete <계획서> --report <완료보고.json>
+```
+
+정본 선언 계획서는 각 단계의 최신 실행 시도가 `executed`이고 해당 시도의 모든 명령이 실행되어야 성공을 기록합니다. 완료 검사에는 모든 본 단계의 성공 증거도 필요합니다. 같은 단계 재실행을 요청하거나 `step-ok`를 다시 시도하면 이전 단계 성공 기록과 완료 영수증을 무효화하며, `complete` 실패도 이전 완료 영수증을 지웁니다. 증거 파일과 완료 검사가 모두 통과한 뒤에만 새 기록을 씁니다.
+
+마지막 `step-ok`와 `complete`는 검사가 통과하면 `deploy-completion-receipt.json`에 계획서 SHA-256, 보고서 SHA-256, 판정 시각을 기록합니다. `complete-check`는 검사만 합니다. `actual: "확인함"`, 보고서 누락, 이전 계획서 SHA-256을 담은 보고서는 실패하며 마지막 단계 성공 기록을 쓰지 않습니다. 마지막이 아닌 단계는 기존처럼 성공 증거만 기록합니다. 일반 대화문이나 이 도구 밖의 상태 기록은 이 CLI가 강제할 수 있는 범위가 아닙니다.
+
+`check`를 비롯한 관문은 선언이 없으면 거부 사유를 표시합니다.
