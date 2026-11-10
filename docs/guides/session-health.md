@@ -77,6 +77,15 @@ An omitted `workLedger`, unreadable ledger file or invalid ledger also keeps
 This option leaves `missing`, `empty`, and independent progress, schedule and
 drift anomalies unchanged.
 
+A role waiting on a human can declare when it will look again. Any line in one
+of its `workFiles` that starts with `기다림` or `Waiting` and contains
+`다음 확인` or `next check` followed by a time turns a quiet `stopped` session
+into `waiting` until that time. The time is either ISO 8601 with an offset
+(`2026-11-11T00:30:00Z`) or `M/D HH:MM KST|UTC` (the year closest to now). A past
+time, or one more than `waitMaxHours` (positive, default 24) ahead, is ignored.
+`waiting` creates no notification; `missing`, `empty` and the other anomalies are
+unchanged.
+
 `responseWatchState` reuses the observer's `replies[botId].at` confirmed explicit
 reply evidence. Missing older response-watch state has no reply evidence.
 With `stoppedRequiresWork: true`, pending requests are read from

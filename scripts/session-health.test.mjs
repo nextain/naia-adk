@@ -325,3 +325,31 @@ test('waiting, blocked and completed ledger rows do not count as active assignme
   }
   assert.equal(f.sent.length, 0);
 });
+test('wait line with a future next check keeps a quiet session waiting, then stops after it', async () => {
+  const f = await fixture();
+  const at = new Date(now + 2 * 3600000).toISOString().replace(/\.\d+Z$/, 'Z');
+  await writeFile(join(f.repo, 'work.md'), `- in progress: task\n기다림(1/1): Luke / approval / since 11:00 / 다음 확인 ${at}\n`);
+  await f.run();
+  const r = await f.run({ now: now + 30 * 60000 });
+  assert.equal(r.rows[0].alive, 'waiting');
+  assert.ok(!r.rows[0].anomalies.includes('stopped'));
+  assert.equal(f.sent.filter(s => s.content.endsWith('stopped')).length, 0);
+  const late = await f.run({ now: now + 2 * 3600000 + 60000 });
+  assert.equal(late.rows[0].alive, 'stopped');
+  assert.ok(late.rows[0].anomalies.includes('stopped'));
+});
+test('wait line beyond waitMaxHours or in the past does not silence stopped', async () => {
+  for (const [hours, max] of [[30, undefined], [3, 2], [-1, undefined]]) {
+    const f = await fixture(); if (max) f.c.waitMaxHours = max;
+    await writeFile(join(f.repo, 'work.md'), `Waiting: Luke / x / next check ${new Date(now + hours * 3600000).toISOString()}\n`);
+    await f.run();
+    assert.equal((await f.run({ now: now + 30 * 60000 })).rows[0].alive, 'stopped');
+  }
+});
+test('wait line accepts M/D HH:MM KST and rejects a zero waitMaxHours', async () => {
+  const { waitUntil } = await import('./session-health.mjs');
+  assert.equal(waitUntil('기다림(11/10 23:15 KST): 대표님 / x / 다음 확인 11/11 09:30 KST, 10:00 점검', Date.parse('2026-11-10T15:00:00Z')), Date.parse('2026-11-11T00:30:00Z'));
+  assert.equal(waitUntil('기다림: x / 다음 확인 1/2 09:00 KST', Date.parse('2026-12-31T10:00:00Z')), Date.parse('2027-01-02T00:00:00Z'));
+  assert.equal(waitUntil('- in progress: waiting for review', now), null);
+  const f = await fixture(); f.c.waitMaxHours = 0; assert.throws(() => validateConfig(f.c), /positive/);
+});
