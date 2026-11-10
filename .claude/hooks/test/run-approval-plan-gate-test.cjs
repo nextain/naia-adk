@@ -1231,7 +1231,8 @@ test("temporary reviewer selection defaults safely and expires", (t) => {
  }
  fs.writeFileSync(configPath, "{");
  assert.throws(() => deployPlan.reviewerIdsFor("muse", root, now));
- assert.ok(deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "codex" }).some(p => p.includes("author_model")));
+ assert.ok(!deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "codex" }).some(p => p.includes("author_model")), "차례 셋(codex)은 새 작성자로 받는다");
+ assert.ok(deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "gemini" }).some(p => p.includes("author_model")));
 });
 
 test("codex receipt remains valid after configuration changes", (t) => {
