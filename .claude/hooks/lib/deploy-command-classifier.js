@@ -796,7 +796,8 @@ function classifyAzAll(tokens) {
 				unlistedGroup: groupLower,
 			});
 		}
-		return hits;
+		return groupLower === "cognitiveservices" && verbs.slice(0, 2).map((v) => v.toLowerCase()).join(" ") === "account deployment"
+			? hits.map((hit) => ({ ...hit, azureModelDeployment: true })) : hits;
 	}
 	if (verbs.length === 0 || verbs.some((v) => READ_VERBS.has(v) || v.startsWith("list-") || v.startsWith("show-"))) return [];
 	const rest = tokens.slice(azIndex + 2);
@@ -1926,4 +1927,9 @@ function clauseText(argv, assigns = []) {
 	return [...assigns.map((a) => { const i = a.indexOf("="); return `${a.slice(0, i + 1)}${shellQuote(a.slice(i + 1))}`; }), ...argv.map(shellQuote)].join(" ");
 }
 
-module.exports = { classifyProdMutations, classifyGeneralCloudCli, isNonProd, executedShellFile, scriptText, clauseText, SCRIPT_READ_LIMIT };
+function hasAzureModelDeployment(command, cwd) {
+	const { effectiveCommands } = require("./effective-argv.js");
+	return effectiveCommands(command, cwd).some(({ argv }) => classifyAzAll(argv).some((hit) => hit.azureModelDeployment));
+}
+
+module.exports = { hasAzureModelDeployment, classifyProdMutations, classifyGeneralCloudCli, isNonProd, executedShellFile, scriptText, clauseText, SCRIPT_READ_LIMIT };

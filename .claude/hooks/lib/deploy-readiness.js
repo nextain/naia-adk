@@ -564,40 +564,35 @@ function commandBinding(command, candidate, services, cwd) {
 /**
  * 계획서 단계·명령·고정 파일·인스턴스 확장(config/deploy-gate.json + 선택 plugin)의 결합을 검증한다.
  */
-const AZ_MODEL_DEPLOYMENT = /\bcognitiveservices\s+account\s+deployment\s+(?:create|delete)\b/;
-
-function isAzureModelDeployment(command, depth = 0) {
-	if (AZ_MODEL_DEPLOYMENT.test(command)) return true;
-	if (depth >= 4) return false;
-	const { shellClauses } = require("./git-command-parser.js");
-	return shellClauses(command).some((clause) => AZ_MODEL_DEPLOYMENT.test(clause.join(" "))
-		|| clause.some((token) => token !== command && /\s/.test(token) && isAzureModelDeployment(token, depth + 1))
-		|| (clause.subs || []).some((sub) => isAzureModelDeployment(sub, depth + 1)));
-}
-
 function azureDeploymentBinding(command, record, services) {
 	const { shellClauses } = require("./git-command-parser.js");
 	const clauses = shellClauses(command);
-	if (/[\$`\\#<>|&;*?\[\]{}'"\n\r]/.test(command) || clauses.unbalanced || clauses.length !== 1) return false;
+	if (/[\$`\\#<>|&;*?\[\]{}'"\n\r]/.test(command) || clauses.unbalanced || clauses.length !== 1) return "셸 구문·전개 또는 여러 명령은 허용하지 않음";
 	const c = clauses[0];
-	if (c.slice(0, 4).join(" ") !== "az cognitiveservices account deployment" || !["create", "delete"].includes(c[4])) return false;
+	if (c.slice(0, 4).join(" ") !== "az cognitiveservices account deployment" || !["create", "delete"].includes(c[4])) return "명령과 동사는 소문자 create 또는 delete여야 함";
 	const declaration = record && record.azureDeployment;
-	if (!declaration || typeof declaration !== "object") return false;
+	if (!declaration || typeof declaration !== "object" || Array.isArray(declaration)) return "azureDeployment 선언이 없거나 객체가 아님";
 	const fields = { "--name": "account", "--resource-group": "resourceGroup", "--deployment-name": "deploymentName" };
 	if (c[4] === "create") Object.assign(fields, { "--model-name": "modelName", "--model-version": "modelVersion", "--model-format": "modelFormat", "--sku-name": "skuName", "--sku-capacity": "skuCapacity" });
 	const values = {};
 	for (let i = 5; i < c.length; i += 2) {
 		const flag = c[i], value = c[i + 1];
-		if (!Object.hasOwn(fields, flag) || Object.hasOwn(values, flag) || typeof value !== "string" || !/^[A-Za-z0-9._-]+$/.test(value)) return false;
+		if (!Object.hasOwn(fields, flag)) return `옵션 ${flag}은 허용되지 않음`;
+		if (Object.hasOwn(values, flag)) return `옵션 ${flag}이 중복됨`;
+		if (typeof value !== "string" || !/^[A-Za-z0-9._-]+$/.test(value)) return `옵션 ${flag}의 값이 없거나 형식이 잘못됨`;
 		values[flag] = value;
 	}
-	if (Object.keys(values).length !== Object.keys(fields).length) return false;
 	for (const [flag, key] of Object.entries(fields)) {
-		const expected = c[4] === "delete" && key === "deploymentName" ? declaration.rollback?.deploymentName : declaration[key];
-		if (typeof expected !== "string" || values[flag] !== expected) return false;
+		const field = c[4] === "delete" && key === "deploymentName" ? "rollback.deploymentName" : key;
+		const expected = field === "rollback.deploymentName" ? declaration.rollback?.deploymentName : declaration[key];
+		if (typeof expected !== "string" || !expected) return `azureDeployment.${field}이 비어 있거나 문자열이 아님`;
+		if (!Object.hasOwn(values, flag)) return `옵션 ${flag}이 누락됨`;
+		if (values[flag] !== expected) return `옵션 ${flag}이 azureDeployment.${field}과 다름`;
 	}
-	if (c[4] === "create" && (values["--model-format"] !== "OpenAI" || !/^\d+$/.test(values["--sku-capacity"]))) return false;
-	return services.length === 1 && services[0] === `azure:cognitiveservices:${declaration.account.toLowerCase()}`;
+	if (c[4] === "create" && values["--model-format"] !== "OpenAI") return "modelFormat은 OpenAI여야 함";
+	if (c[4] === "create" && !/^\d+$/.test(values["--sku-capacity"])) return "skuCapacity는 숫자로 된 문자열이어야 함";
+	if (services.length !== 1 || services[0] !== `azure:cognitiveservices:${declaration.account.toLowerCase()}`) return "services가 azureDeployment.account와 다름";
+	return "";
 }
 
 function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir, readinessRecord = null) {
@@ -627,8 +622,9 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir, re
 	}
 
 	const cfg = loadDeployGateConfig(root);
-	if (isAzureModelDeployment(command)) {
-		if (!azureDeploymentBinding(command, readinessRecord, services)) return no("Azure 모델 배포 명령이 준비 기록의 선언과 다름");
+	if (require("./deploy-command-classifier.js").hasAzureModelDeployment(command, cwd)) {
+		const bindingError = azureDeploymentBinding(command, readinessRecord, services);
+		if (bindingError) return no(`Azure 모델 배포: ${bindingError}`);
 		const rule = cfg && matchServiceRule(services[0], cfg);
 		if (!rule) return no("Azure 모델 배포 서비스가 설정에 등록되지 않음");
 		if (Array.isArray(rule.allowedCommands) && rule.allowedCommands.length && !rule.allowedCommands.some((pat) => new RegExp(pat).test(command))) return no("서비스 allowedCommands 에 맞지 않는 명령");
@@ -745,7 +741,7 @@ function assessReadiness(services, { root, auditPath, command = "", cwd = "", no
 
 	const cfg = loadDeployGateConfig(baseRoot);
 	const found = findReadiness(services, baseRoot, now);
-	if ((isAzureModelDeployment(command) || isAzureModelDeployment(planBinding?.command || "")) && (!found || !planBinding || command !== planBinding.command)) {
+	if ((require("./deploy-command-classifier.js").hasAzureModelDeployment(command, cwd) || require("./deploy-command-classifier.js").hasAzureModelDeployment(planBinding?.command || "", cwd)) && (!found || !planBinding || command !== planBinding.command)) {
 		return { ok: false, problems: ["Azure 모델 배포에는 준비 기록과 일치하는 계획 명령이 필요함"], facts: [] };
 	}
 

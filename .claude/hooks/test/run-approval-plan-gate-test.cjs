@@ -1117,6 +1117,22 @@ test("Azure model deployment readiness binds the declared values", (t) => {
 		command.replace("sample-model", "${SAMPLE_MODEL}"),
 		command.replace("sample-model", "sample-?odel"),
 		command + " --yes",
+		command.replace("--name sample-account", "--name=sample-account"),
+		command.replace("--name", "-n"),
+		command.replace("--resource-group", "-g"),
+		command + " --name sample-other-account",
+		... ["--scale-type Standard", "--capacity 2", "--rai-policy-name sample-policy"].map((x) => `${command} ${x}`),
+		command.replace("deployment create", "deployment Create"),
+		command.replace("deployment create", "deployment update"),
+		command.replace("cognitiveservices", "CognitiveServices"),
+		command.replace("--name", "--Name"),
+		`env SAMPLE=1 ${command}`,
+		`sudo ${command}`,
+		`timeout 10 ${command}`,
+		`xargs ${command}`,
+		command.replace("sample-model", "$(echo sample-model)"),
+		command.replace("sample-model", "`echo sample-model`"),
+		... [";", "|", "\n"].map((sep) => `${command}${sep} echo sample`),
 	]) {
 		const changedBinding = { plan: { services: [service] }, entry: { commands: [changed] }, command: changed, cwd: root };
 		assert.equal(assessReadiness([service], { root, cwd: root, command: changed, planBinding: changedBinding }).ok, false, changed);
@@ -1127,6 +1143,19 @@ test("Azure model deployment readiness binds the declared values", (t) => {
 	const declaredDeletion = deletion.replace("sample-other-deployment", "sample-deployment");
 	const declaredDeleteBinding = { plan: { services: [service] }, entry: { commands: [declaredDeletion] }, command: declaredDeletion, cwd: root };
 	assert.equal(assessReadiness([service], { root, cwd: root, command: declaredDeletion, planBinding: declaredDeleteBinding }).ok, true);
+	for (const altered of [declaredDeletion.replace("sample-account", "sample-other-account"), declaredDeletion.replace("sample-rg", "sample-other-rg"), declaredDeletion + " --model-name sample-model"]) {
+		assert.equal(assessReadiness([service], { root, cwd: root, command: altered, planBinding: { plan: { services: [service] }, entry: { commands: [altered] }, command: altered, cwd: root } }).ok, false, altered);
+	}
+	for (const [declaration, field, cmd] of [[undefined, "azureDeployment", command], [{ ...azureDeployment, skuCapacity: 1 }, "skuCapacity", command], [{ ...azureDeployment, rollback: undefined }, "rollback.deploymentName", declaredDeletion]]) {
+		fs.writeFileSync(path.join(gates, "deploy.json"), JSON.stringify({ kind: "ops", reason: "sample deployment", services: [service], createdAt: new Date().toISOString(), azureDeployment: declaration }));
+		const result = assessReadiness([service], { root, cwd: root, command: cmd, planBinding: { plan: { services: [service] }, entry: { commands: [cmd] }, command: cmd, cwd: root } });
+		assert.equal(result.ok, false, field);
+		assert.match(result.problems.join(" "), new RegExp(field.replace(".", "\\.")));
+	}
+	const newer = path.join(root, ".agents/progress/newer/gates");
+	fs.mkdirSync(newer, { recursive: true });
+	fs.writeFileSync(path.join(newer, "deploy.json"), JSON.stringify({ kind: "ops", reason: "sample deployment", services: [service], createdAt: new Date(Date.now() + 1000).toISOString(), azureDeployment }));
+	assert.equal(assessReadiness([service], { root, cwd: root, command, planBinding }).ok, true, "newest record wins");
 	assert.equal(assessReadiness([service], { root, cwd: root, command }).ok, false);
 });
 
@@ -1162,9 +1191,18 @@ test("Azure deployment binding cannot be bypassed by missing records or extensio
 		command.replace("sample-model", "$SAMPLE_MODEL"),
 		command.replace("sample-model", "sample-*"),
 		command + " --yes",
+		command.replace("deployment create", "deployment Create"),
+		`xargs ${command}`,
+		`env SAMPLE=1 ${command}`,
+		`sudo ${command}`,
+		`timeout 10 ${command}`,
+		`echo $(${command})`,
+		`echo ` + "`" + command + "`",
+		`${command}; echo sample`,
 	]) assert.equal(assess(altered).ok, false, `plugin must not override binding: ${altered}`);
 	writeGateConfig(root, { services: { [service]: { allowOps: true, allowCustomCommands: true } } });
 	assert.equal(assess(command.replace("sample-version", "sample-other-version")).ok, false, "allowCustomCommands must not override a mismatched record");
+	assert.equal(assess(command.replace("deployment create", "deployment Create")).ok, false, "case variant must not bypass binding");
 });
 
 test("Azure deployment still requires plan and human PLAN and STEP approvals", (t) => {
@@ -1205,4 +1243,24 @@ test("Azure deployment still requires plan and human PLAN and STEP approvals", (
 	assert.ok(stepCode);
 	appendHumanTurn(transcriptPath, `sample approval ${stepCode[1]}`);
 	assert.equal(runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath }), null);
+});
+
+test("alternative Azure deployment commands are classified and require their normal plan policy", (t) => {
+	const { root } = makeWorkspace(t);
+	const commands = [
+		"az rest --method put --uri https://management.azure.com/subscriptions/sample/resourceGroups/sample-rg/providers/Microsoft.CognitiveServices/accounts/sample-account/deployments/sample-deployment",
+		"az resource delete --ids /subscriptions/sample/resourceGroups/sample-rg/providers/Microsoft.CognitiveServices/accounts/sample-account/deployments/sample-deployment",
+		"az deployment group create --resource-group sample-rg --template-file sample.json",
+	];
+	for (const command of commands) {
+		const hits = classifyProdMutations(command, root);
+		assert.ok(hits.length, command);
+		const services = hits.map((hit) => hit.service);
+		const planBinding = { plan: { services }, entry: { commands: [command] }, command, cwd: root };
+		assert.equal(assessReadiness(services, { root, cwd: root, command, planBinding }).ok, false, command);
+		writeGateConfig(root, { services: Object.fromEntries(services.map((service) => [service, { allowOps: true, allowCustomCommands: true }])) });
+		assert.equal(assessReadiness(services, { root, cwd: root, command, planBinding }).ok, true, `custom policy permits without readiness: ${command}`);
+		fs.rmSync(path.join(root, "config", "deploy-gate.json"));
+	}
+	for (const command of ["echo sample", "az cognitiveservices account deployment show --name sample-account", "az cognitiveservices account deployment list --name sample-account"]) assert.deepEqual(classifyProdMutations(command, root), []);
 });

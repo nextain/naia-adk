@@ -66,7 +66,7 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 }
 ```
 
-`create`는 `--name`, `--resource-group`, `--deployment-name`, `--model-name`, `--model-version`, `--model-format`, `--sku-name`, `--sku-capacity`의 값이 각각 선언과 글자 그대로 일치해야 합니다. `delete`는 같은 계정과 리소스 그룹을 지정하고 배포 이름이 `rollback.deploymentName`과 일치해야 합니다. 다른 옵션, 셸 변수 전개와 글롭은 허용하지 않습니다. `show`와 `list`는 이 준비 기록 결합 없이 조회할 수 있습니다. 생성 명령은 기존 배포의 변경에도 쓰일 수 있으며, 관문은 현재 상태를 조회하거나 기존 배포인지 판별하지 않습니다.
+`create`는 `--name`, `--resource-group`, `--deployment-name`, `--model-name`, `--model-version`, `--model-format`, `--sku-name`, `--sku-capacity`의 값이 각각 선언과 글자 그대로 일치해야 합니다. `delete`는 같은 계정과 리소스 그룹을 지정하고 배포 이름이 `rollback.deploymentName`과 일치해야 합니다. 다른 옵션, 셸 변수 전개와 글롭은 허용하지 않습니다. `--옵션=값`, 짧은 옵션, 중복 옵션과 대소문자가 다른 동사·옵션도 거부합니다. `show`와 `list`는 이 준비 기록 결합 없이 조회할 수 있습니다. 생성 명령은 기존 배포의 변경에도 쓰일 수 있으며, 관문은 현재 상태를 조회하거나 기존 배포인지 판별하지 않습니다.
 
 계획서에는 `create` 앞에 `show` 조회 단계를 두어 현재 상태를 기록하고, 되돌리기에는 이전 값으로 복원하는 명령 또는 `delete`를 선언합니다. 이 조회와 이전 값의 기록은 계획 작성 규칙이며 관문이 강제하지 않습니다. 준비 기록의 일치는 계획과 사람의 `PLAN`·`STEP` 승인을 대신하지 않습니다.
 
