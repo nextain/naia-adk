@@ -74,7 +74,7 @@ function readJson(file) {
 const str = (v, min = 1) => typeof v === "string" && v.trim().length >= min;
 const strList = (v, min = 1) => Array.isArray(v) && v.length > 0 && v.every((x) => str(x, min));
 
-// 리뷰 배치: author muse → 리뷰어는 argon 1명. 옛 author(sol|argon)의 2인 기록은 재리뷰까지만 구 기록으로 인정한다.
+// 리뷰 배치: author muse → planReview 설정에 따라 argon 또는 codex 1명. 옛 author(sol|argon)의 2인 기록은 재리뷰까지만 구 기록으로 인정한다.
 const REVIEW_MODELS = Object.freeze({
 	sol: { model: "gpt-6.1-sol", effort: "high" },
 	muse: { model: "muse-spark-1.3", effort: "xhigh" },
@@ -85,19 +85,17 @@ const AUTHOR_IDS = ["sol", "muse", "argon"];
 function reviewerIdsFor(author, root = ROOT, at = Date.now()) {
 	if (author !== "muse") return AUTHOR_IDS.filter((id) => id !== author);
 	const file = path.join(root, ".claude/deploy/config.json");
-	try {
-		const started = typeof at === "number" ? at : Date.parse(at);
-		let config;
-		try { config = JSON.parse(fs.readFileSync(file, "utf8"))?.planReview; }
-		catch (error) { if (error.code === "ENOENT") return ["argon"]; throw error; }
-		const until = config?.until;
-		const date = typeof until === "string" ? /^(\d{4})-(\d{2})-(\d{2})T/.exec(until) : null;
-		const validDate = date && Number(date[2]) >= 1 && Number(date[2]) <= 12 && Number(date[3]) >= 1 && Number(date[3]) <= new Date(Date.UTC(Number(date[1]), Number(date[2]), 0)).getUTCDate();
-		if (Number.isFinite(started) &&
-			config?.reviewer === "codex" && validDate && typeof until === "string" &&
-			/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(until) &&
-			Number.isFinite(Date.parse(until)) && started < Date.parse(until)) return ["codex"];
-	} catch (error) { throw error; }
+	const started = typeof at === "number" ? at : Date.parse(at);
+	let config;
+	try { config = JSON.parse(fs.readFileSync(file, "utf8"))?.planReview; }
+	catch (error) { if (error.code === "ENOENT") return ["argon"]; throw error; }
+	const until = config?.until;
+	const date = typeof until === "string" ? /^(\d{4})-(\d{2})-(\d{2})T/.exec(until) : null;
+	const validDate = date && Number(date[2]) >= 1 && Number(date[2]) <= 12 && Number(date[3]) >= 1 && Number(date[3]) <= new Date(Date.UTC(Number(date[1]), Number(date[2]), 0)).getUTCDate();
+	if (Number.isFinite(started) &&
+		config?.reviewer === "codex" && validDate && typeof until === "string" &&
+		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(until) &&
+		Number.isFinite(Date.parse(until)) && started < Date.parse(until)) return ["codex"];
 	return ["argon"];
 }
 

@@ -137,7 +137,7 @@ function writePassingReviewReceipt(root, planFile, options = {}) {
 	const bodyLines = [
 		"판정: PASS",
 		...deployPlan.CRITERIA.map(([id]) => `${id}: PASS — 계획서 및 고정 스크립트 확인 통과`),
-		"참고 지적: 0",
+		`참고 지적: 0${options.bodyMarker || ""}`,
 		"남은 지적: 0",
 		"",
 	];
@@ -153,7 +153,7 @@ function writePassingReviewReceipt(root, planFile, options = {}) {
 	const reviewRecord = {
 		plan_sha256: planSha,
 		plan: path.relative(root, planFile),
-		author_model: "muse",
+		author_model: plan.author_model,
 		prompt_sha256: promptSha,
 		reviewedAt: endedAt,
 		reviewers: [
@@ -1162,4 +1162,87 @@ test("fake codex reviewer runs through the complete review flow", (t) => {
  assert.equal(record.reviewers[0].model, "gpt-6.1-terra");
  assert.equal(record.reviewers[0].receipt.isolation, "bwrap-ro-bind");
  assert.match(fs.readFileSync(path.join(gatesDir, record.reviewers[0].result), "utf8"), /review-run: .*\n$/);
+});
+
+
+test("reviewer configuration boundaries are fail closed", (t) => {
+ const { root } = makeWorkspace(t);
+ const now = Date.parse("2026-11-10T00:00:00Z");
+ const file = path.join(root, ".claude/deploy/config.json");
+ const set = (value) => { fs.mkdirSync(path.dirname(file), {recursive: true}); fs.writeFileSync(file, JSON.stringify(value)); };
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ for (const until of ["2026-11-09T23:59:59Z", "2026-11-10T00:00:00Z", "invalid", "2026-02-30T23:40:00Z", "2025-02-29T00:00:00Z", "2026-13-01T00:00:00Z", "2026-00-10T00:00:00Z", "2026-01-00T00:00:00Z", "2026-11-13", 123]) {
+  set({planReview:{reviewer:"codex", until}});
+  assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"], String(until));
+ }
+ for (const reviewer of ["sol", "argon", "CODEX", " codex"]) {
+  set({planReview:{reviewer, until:"2026-11-13T00:00:00Z"}});
+  assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"], reviewer);
+ }
+ for (const planReview of [undefined, "codex"]) {
+  set({planReview}); assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ }
+ for (const until of ["2026-11-13T23:40:00+09:00", "2026-11-13T23:40:00.123Z"]) {
+  set({planReview:{reviewer:"codex", until}}); assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["codex"]);
+ }
+ fs.writeFileSync(file, "{"); assert.throws(() => deployPlan.reviewerIdsFor("muse", root, now));
+});
+
+test("review gate enforces reviewer identity, count and effort", (t) => {
+ const {root} = makeWorkspace(t);
+ const {planFile, gatesDir} = createValidPlan(root);
+ const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+ for (const reviewer of ["argon", "codex"]) {
+  const {planSha} = writePassingReviewReceipt(root, planFile, {reviewer});
+  const valid = JSON.parse(fs.readFileSync(file));
+  const check = (record, expected, label) => { fs.writeFileSync(file, JSON.stringify(record)); const result = deployPlan.reviewProblems(gatesDir, planSha, root); assert.equal(result.ok, expected, `${label}: ${result.problems.join('; ')}`); };
+  check(valid, true, reviewer);
+  for (const [label, change] of [
+   ["zero", r => {r.reviewers=[];}],
+   ["two", r => {r.reviewers.push(structuredClone(r.reviewers[0]));}],
+   ["muse", r => {r.reviewers[0].model=deployPlan.REVIEW_MODELS.muse.model; r.reviewers[0].receipt.model=r.reviewers[0].model;}],
+   ["sol", r => {r.reviewers[0].model=deployPlan.REVIEW_MODELS.sol.model; r.reviewers[0].receipt.model=r.reviewers[0].model;}],
+   ["id mismatch", r => {r.reviewers[0].id=reviewer === "argon" ? "codex" : "argon";}],
+   ["effort", r => {r.reviewers[0].effort="wrong";}],
+  ]) { const rec=structuredClone(valid); change(rec); check(rec, false, `${reviewer} ${label}`); }
+ }
+});
+
+test("legacy authors still require their two distinct reviewers", (t) => {
+ for (const author of ["sol", "argon"]) {
+  const {root} = makeWorkspace(t);
+  const {planFile, gatesDir} = createValidPlan(root, {author_model:author});
+  const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+  const ids = deployPlan.reviewerIdsFor(author, root);
+  const entries = [];
+  let planSha;
+  for (const reviewer of ids) {
+   ({planSha} = writePassingReviewReceipt(root, planFile, {reviewer, bodyMarker:` ${reviewer}`}));
+   entries.push(JSON.parse(fs.readFileSync(file)).reviewers[0]);
+  }
+  const record = JSON.parse(fs.readFileSync(file)); record.reviewers=entries;
+  fs.writeFileSync(file, JSON.stringify(record));
+  let result = deployPlan.reviewProblems(gatesDir, planSha, root);
+  assert.equal(result.ok, true, `${author}: ${result.problems.join('; ')}`);
+  record.reviewers.pop(); fs.writeFileSync(file, JSON.stringify(record));
+  result = deployPlan.reviewProblems(gatesDir, planSha, root);
+  assert.equal(result.ok, false, author);
+ }
+});
+
+test("codex reviewer refuses to run without bwrap outside recovery mode", (t) => {
+ const {root, tmp, stateDir} = makeWorkspace(t);
+ const {planFile} = createValidPlan(root);
+ assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ fs.mkdirSync(path.dirname(configPath), {recursive:true});
+ fs.writeFileSync(configPath, JSON.stringify({planReview:{reviewer:"codex", until:new Date(Date.now()+60000).toISOString()}}));
+ const binDir=path.join(tmp,"bin"), fakeHome=path.join(tmp,"home"), marker=path.join(tmp,"ran"), codex=path.join(binDir,"fake-codex");
+ fs.mkdirSync(binDir); fs.mkdirSync(fakeHome);
+ fs.symlinkSync(process.platform === "win32" ? "git.exe" : "/usr/bin/git", path.join(binDir,"git"));
+ fs.writeFileSync(codex, `#!/bin/sh\n : > "${marker}"\nexit 0\n`, {mode:0o755});
+ const run=spawnSync(process.execPath,[path.join(root,".agents/scripts/approval-plan.mjs"),"review",planFile,"--author","muse"], {cwd:root, encoding:"utf8", timeout:30000, env:{...process.env, HOME:fakeHome, PATH:binDir, APPROVAL_PLAN_CODEX_BIN:codex, DEPLOY_APPROVAL_STATE_DIR:stateDir}});
+ assert.notEqual(run.status, 0, `${run.stdout}\n${run.stderr}`);
+ assert.match(`${run.stdout}\n${run.stderr}`, /sandbox-prepare/);
+ assert.equal(fs.existsSync(marker), false);
 });

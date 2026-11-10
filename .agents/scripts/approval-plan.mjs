@@ -5,7 +5,7 @@
  *   template                         빈 양식(JSON) 출력
  *   check <plan>                     양식 칸·적대 리뷰 기록 점검, 명령별 sha 출력
  *   report <plan>                    승인자에게 올릴 보고문 출력(리뷰 통과 시)
- *   review <plan> --author muse [--out <file>] Argon 단독 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json
+ *   review <plan> --author muse [--out <file>] planReview 설정에 따라 argon 또는 codex 1명 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json
  *   review-prompt <plan>             리뷰 요청문만 출력
  *   preapprove <plan> --session <id>      사전승인 코드 발급(승인 아님: PLAN+전단계 코드, approval_mode 사전 계획만)
  *   step-ok <plan> <step> --evidence <file>   단계 성공 확인 증거 기록(gates/deploy-steps/<step>.json)
@@ -369,6 +369,7 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined) {
 		fs.writeFileSync(file, prompt, { mode: 0o600 });
 		stage = "sandbox-prepare";
 		const bwrap = findBwrap();
+		if (ids.includes("codex") && !bwrap) throw new Error("codex 리뷰어: bwrap 읽기 전용 격리 없음");
 		if (isRecoveryMode() && ids.some((id) => id === "argon" || id === "codex") && !bwrap) throw new Error("복구 모드: bwrap 읽기 전용 격리 없음");
 		const sandboxArgs = ids.some((id) => id === "argon" || id === "codex") && bwrap ? reviewerSandboxArgs(dir, ids.includes("argon") ? "argon" : "codex") : null;
 		const boundedRecovery = isRecoveryMode() && Boolean(sandboxArgs);
@@ -498,7 +499,7 @@ switch (cmd) {
 		}
 		if (bindProblems.length) die(bindProblems.join("\n"), 1);
 		const author = opt(args, "--author");
-		if (author !== "muse") die("--author muse 가 필수입니다(분석·구현 muse, 리뷰 argon 단독, sol 큐레이션만)");
+		if (author !== "muse") die("--author muse 가 필수입니다(분석·구현 muse, 리뷰 planReview 설정에 따라 argon 또는 codex 1명, sol 큐레이션만)");
 		if (!Object.hasOwn(lib.REVIEW_MODELS, plan.author_model || "") || plan.author_model !== author) die("--author(muse) 와 계획서 author_model 이 다릅니다");
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 먼저 채우십시오\n${form.join("\n")}`, 1);

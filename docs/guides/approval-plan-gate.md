@@ -46,9 +46,9 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 
 ## 2. 적대 리뷰 받기 (`review`)
 
-계획서 양식과 고정 파일 SHA-256이 모두 맞으면 독립 리뷰어 모델(Argon)로 아홉 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`) 적대 리뷰를 받습니다.
+계획서 양식과 고정 파일 SHA-256이 모두 맞으면 독립 리뷰어 한 명(설정 `planReview`에 따라 Argon 또는 Codex)에게 아홉 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`) 적대 리뷰를 받습니다.
 
-기본 리뷰어는 Argon입니다. 승인자 결정으로 인스턴스의 `.claude/deploy/config.json`에 다음 `planReview`를 추가하면 지정한 시각 전까지 Muse 작성 계획을 Codex (`gpt-6.1-terra`, `high`)가 리뷰합니다. 기존 설정의 다른 항목은 유지합니다.
+Codex 리뷰어 실행에는 복구 모드 여부와 관계없이 `bwrap` 읽기 전용 격리가 필요합니다. 기본 리뷰어는 Argon입니다. 승인자 결정으로 인스턴스의 `.claude/deploy/config.json`에 다음 `planReview`를 추가하면 지정한 시각 전까지 Muse 작성 계획을 Codex (`gpt-6.1-terra`, `high`)가 리뷰합니다. 기존 설정의 다른 항목은 유지합니다.
 
 ```json
 "planReview": {
