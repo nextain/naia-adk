@@ -344,10 +344,11 @@ function reviewerSandboxArgs(promptDir, id) {
 	const args = ["--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp"];
 	if (runtime) args.push("--bind", runtime, runtime);
 	if (id === "codex") {
-		// Codex may write session and SQLite runtime state even in ephemeral mode.
+		// Codex may write session and SQLite runtime state even in ephemeral mode, and opens installation_id read-write at start
+		// (without it the reviewer exits 1 with "Read-only file system", found by the 2026-11-10 real QC).
 		// Grant only existing runtime paths; the repository and gate directories stay read-only.
 		const codexHome = path.join(home, ".codex");
-		for (const name of ["sessions", "tmp", "log", "state_5.sqlite", "state_5.sqlite-wal", "state_5.sqlite-shm"]) {
+		for (const name of ["sessions", "tmp", "log", "installation_id", "state_5.sqlite", "state_5.sqlite-wal", "state_5.sqlite-shm"]) {
 			const target = path.join(codexHome, name);
 			if (!fs.existsSync(target)) continue;
 			const real = fs.realpathSync(target);
