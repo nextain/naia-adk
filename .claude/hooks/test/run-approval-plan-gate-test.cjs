@@ -1374,6 +1374,8 @@ test("위험 수용: security FAIL 하나만, 결정 글·같은 값·끝나는 
 	const cases = [
 		{ desc: "맞는 위험 수용 + security FAIL 만", ra: goodRa(), fail: ["security"], open: 1, extra: secLine, pass: true },
 		{ desc: "위험 수용 + correctness 도 FAIL", ra: goodRa(), fail: ["security", "correctness"], open: 1, extra: secLine, pass: false },
+		{ desc: "위험 수용 + security 차단 지적 두 건(두 번째 새 비밀)", ra: goodRa(), fail: ["security"], open: 2, extra: [...secLine, "2. [차단: security] 새 열쇠가 번들에 들어감"], pass: false },
+		{ desc: "위험 수용 + security 차단 지적 두 건, 남은 지적 1로 적음", ra: goodRa(), fail: ["security"], open: 1, extra: [...secLine, "2. [차단: security] 새 열쇠가 번들에 들어감"], pass: false },
 		{ desc: "위험 수용 + security 아닌 차단 지적", ra: goodRa(), fail: ["security"], open: 2, extra: [...secLine, "2. [차단: 불일치] 명령이 다름"], pass: false },
 		{ desc: "결정 글 주소 없음", ra: { ...goodRa(), decision_url: "" }, fail: ["security"], open: 1, extra: secLine, pass: false },
 		{ desc: "새 노출", ra: { ...goodRa(), no_new_exposure: false }, fail: ["security"], open: 1, extra: secLine, pass: false },

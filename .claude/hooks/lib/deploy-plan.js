@@ -416,9 +416,10 @@ function reviewBodyProblems(text, sha, acceptSecurity = false) {
 	if (!open) problems.push("적대 리뷰 결과에 \"남은 지적: <수>\" 줄이 없음");
 	// 남은 지적은 차단 지적 수다. 참고 지적은 세지 않는다. 다만 목록에 [차단] 줄이 하나라도 있으면 남은 지적 숫자와 관계없이 미통과.
 	const blockingLines = body.split(/\r?\n/).filter((line) => /^\s*(?:\d+[.)]|[-*])\s*\**\s*\[\s*차단/.test(line) || /^\s*\|.*\[\s*차단\s*:/.test(line));
-	// 위험 수용 중에는 security 를 적은 차단 지적만 뺀다. 남은 지적 수도 그 수와 같아야 한다.
+	// 위험 수용 중에는 security 를 적은 차단 지적 하나만 뺀다(승인자는 값 하나를 받아들였다). 두 번째 security 지적은 새 노출로 보고 막는다.
+	// 남은 지적 수도 1 이어야 한다.
 	const securityFailed = summary.some((s) => s.id === "security" && s.verdict === "FAIL");
-	const accepted = acceptSecurity && securityFailed ? blockingLines.filter((line) => /\bsecurity\b/i.test(line)) : [];
+	const accepted = acceptSecurity && securityFailed ? blockingLines.filter((line) => /\bsecurity\b/i.test(line)).slice(0, 1) : [];
 	if (blockingLines.length > accepted.length) problems.push(`적대 리뷰 목록에 차단 지적 ${blockingLines.length - accepted.length}건${accepted.length ? "(security 위험 수용분 제외)" : ""}`);
 	if (open && Number(open[1]) !== accepted.length) problems.push(`적대 리뷰 남은 지적 ${open[1]}건${accepted.length ? `(security 위험 수용 ${accepted.length}건만 남아야 함)` : ""}`);
 	const advisoryLines = body.split(/\r?\n/).filter((line) => /^\s*(?:\d+[.)]|[-*])\s*\**\s*\[\s*참고/.test(line));
