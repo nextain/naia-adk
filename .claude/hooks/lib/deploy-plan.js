@@ -432,8 +432,10 @@ function markRound(gatesDir, rel, receiptSha) {
 		fs.writeFileSync(tmp, `${receiptSha}\n`, { flag: "wx" });
 		try { fs.linkSync(tmp, mark); }
 		catch (error) {
+			// 확인용 stat 도 실패하면 확정됐는지 알 수 없다. 이때는 uncertain 을 붙여 던지고, 판정은 디스크(관문)를 따른다.
 			let committed = false;
-			try { const a = fs.statSync(tmp), b = fs.statSync(mark); committed = a.ino === b.ino && a.dev === b.dev; } catch {}
+			try { const a = fs.statSync(tmp), b = fs.statSync(mark); committed = a.ino === b.ino && a.dev === b.dev; }
+			catch (statError) { if (statError.code !== "ENOENT") error.uncertain = true; }
 			if (!committed) throw error;
 		}
 	} finally {

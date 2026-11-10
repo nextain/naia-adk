@@ -579,7 +579,10 @@ switch (cmd) {
 		try { recordSha = lib.writeReviewRecord(gatesDir, rec); }
 		catch (error) { die(`최신 리뷰 영수증 저장 실패(${error.code || error.message}). 회차를 확정하지 않았으므로 이번 리뷰는 무효입니다. 다시 리뷰하십시오`, 3); }
 		try { lib.markRound(gatesDir, saved.rel, recordSha); }
-		catch (error) { die(`회차 확정 표지 저장 실패(${error.code || error.message}). 이번 리뷰는 무효입니다. 다시 리뷰하십시오`, 3); }
+		catch (error) {
+			if (error.uncertain) die(`회차 확정 여부 불명(${error.code || error.message}). 판정은 디스크를 따릅니다: approval-plan check 로 관문 상태를 확인하고, 막히면 다시 리뷰하십시오`, 5);
+			die(`회차 확정 표지 저장 실패(${error.code || error.message}). 이번 리뷰는 무효입니다. 다시 리뷰하십시오`, 3);
+		}
 		console.log(`회차 기록: gates/${saved.rel} (판정 ${outcome.verdict})`);
 		console.log(r.ok ? "적대 리뷰: 통과 — 승인 요청 가능" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
 		process.exit(r.ok ? 0 : 1);

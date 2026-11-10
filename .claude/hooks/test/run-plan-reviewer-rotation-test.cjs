@@ -617,6 +617,27 @@ test("회차 확정: link 가 표지를 만든 뒤 오류를 내면 디스크대
 	}
 });
 
+const STAT_AT = "try { const a = fs.statSync(tmp), b = fs.statSync(mark);";
+test("회차 확정: link 오류 뒤 확인용 stat 도 오류면 코드 5(확정 여부 불명)이고 판정은 디스크를 따른다", (t) => {
+	for (const [label, link, want] of [
+		["link 뒤 EIO", `try { fs.linkSync(tmp, mark); ${throwCode("EIO")} }`, { mark: true, gate: true }],
+		["link 전 EIO", `try { ${throwCode("EIO")} }`, { mark: false, gate: false }],
+	]) {
+		const { root, tmp } = makeWorkspace(t);
+		const { planFile, gatesDir } = createValidPlan(root, { author_model: "argon" });
+		assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
+		injectLibFault(root, LINK_AT, link);
+		injectLibFault(root, STAT_AT, `try { ${throwCode("EIO")} const a = fs.statSync(tmp), b = fs.statSync(mark);`);
+		const bins = writeRoundBins(tmp);
+		const run = bins.review(root, planFile, passBody());
+		assert.equal(run.status, 5, `${label}: ${run.stdout}\n${run.stderr}`);
+		assert.match(run.stderr, /회차 확정 여부 불명\(EIO\)/, label);
+		assert.equal(fs.existsSync(roundMarkFile(gatesDir, 1)), want.mark, label);
+		assert.equal(deployPlan.reviewProblems(gatesDir, sha256(fs.readFileSync(planFile)), root).ok, want.gate, label);
+		assert.equal(deployPlan.priorRound(gatesDir) !== null, want.gate, `${label}: 직전 회차는 확정된 것만`);
+	}
+});
+
 test("회차 확정: [FAIL, FAIL, 영수증 쓰기 전 ENOSPC 로 확정 안 된 PASS] 는 연속 2·직전 2회차이고, 다음 FAIL 로 상한 3", (t) => {
 	const { root, tmp } = makeWorkspace(t);
 	const { planFile, gatesDir } = createValidPlan(root, { author_model: "argon" });
