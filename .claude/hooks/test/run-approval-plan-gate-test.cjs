@@ -1481,16 +1481,18 @@ test("공통 상태 3. 같은 tool_use_id 인데 명령·sha·단계·세션이 
 	}
 });
 
-test("공통 상태 4. tool_use_id 가 없으면 첫 관문도 둘째 관문도 막힘", async (t) => {
+test("공통 상태 4. tool_use_id 가 없으면 결합 없이 예전처럼 한 번 소비, 둘째 관문은 재실행으로 막힘", async (t) => {
 	const g = twoGateFixture(t);
 	await g.approve();
-	const none = g.run(g.gateA, { toolUseId: null });
-	assert.equal(none?.decision, "block");
-	assert.match(none.reason, /tool_use_id/);
-	assert.equal(g.run(g.gateA, { toolUseId: "toolu_with_id" }), null, "ID 없는 시도는 코드를 소비하지 않음");
+	assert.equal(g.run(g.gateA, { toolUseId: null }), null, "ID 없는 호스트도 첫 관문은 예전처럼 통과");
 	const second = g.run(g.gateB, { toolUseId: null });
-	assert.equal(second?.decision, "block");
-	assert.match(second.reason, /tool_use_id/);
+	assert.equal(second?.decision, "block", "ID 가 없으면 이어받지 못함");
+	const st = JSON.parse(fs.readFileSync(g.stateFile, "utf8"));
+	const consumed = st.challenges.flatMap((c) => c.consumed || []);
+	assert.equal(consumed.length, 1);
+	assert.equal(consumed[0].tool_use_id, null, "ID 없는 소비 기록은 결합에 쓰이지 않음");
+	const later = g.run(g.gateB, { toolUseId: "toolu_later" });
+	assert.equal(later?.decision, "block", "뒤에 ID 를 가진 호출도 ID 없는 소비를 이어받지 못함");
 });
 
 test("공통 상태 5. 상태 파일 손상·모르는 판·옛 모양이면 관문과 preapprove 모두 막힘", async (t) => {

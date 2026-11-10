@@ -1113,13 +1113,11 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 
 	// 한 도구 호출에 관문이 여럿 걸리면(프로젝트 관문 + 사용자 전체 관문) 첫 관문만 코드를 소비하고,
 	// 나머지는 자기 검증을 다 통과한 뒤 같은 호출 ID·계획 sha·단계·세션·명령으로 남은 소비 기록만 인정한다.
+	// 호출 ID 를 주지 않는 호스트는 결합 없이 예전처럼 관문마다 한 번 소비한다(결합 기록도 남기지 않아 다른 호출이 이어받지 못함).
 	const toolUseId = typeof ctx.toolUseId === "string" && ctx.toolUseId.trim() ? ctx.toolUseId : null;
-	if (!toolUseId) {
-		return { allow: false, audit: { event: "blocked-tool-use-id-missing", plan: rel, step: f.step.id }, reason: "[Harness] 도구 호출 ID(tool_use_id)가 없어 단계 승인 코드를 소비할 수 없습니다. 이 호스트 훅 입력에 tool_use_id 가 오는지 확인하십시오." };
-	}
 	const call = { plan_sha: f.sha, step: f.step.id, session: ctx.sessionId, cmd_hash: h, tool_use_id: toolUseId };
 	const sameCall = [];
-	for (const c of st2.challenges) {
+	if (toolUseId) for (const c of st2.challenges) {
 		if (c.kind !== "step" || !Array.isArray(c.consumed)) continue;
 		for (const r of c.consumed) if (r && r.tool_use_id === toolUseId) sameCall.push({ c, r });
 	}
