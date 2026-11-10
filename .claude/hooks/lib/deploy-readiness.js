@@ -125,9 +125,11 @@ const CURL_WRITE = /^(?:-d|--data(?:-\w+)?|-F|--form(?:-string)?|-T|--upload-fil
 // 예외는 낱말 전체가 정확히 2>/dev/null, >/dev/null, 2>&1, >&2 인 경우뿐이다. 원격 본문·bash -c 글처럼 안쪽을 다시 판정하는
 // 인자도 빈칸으로 나눈 조각마다 같은 규칙을 적용한다(예외 밖 '>'·'<' 가 있으면 거부). az --query "[?a > b]" 같은 조회도 막히는 보수적 판정이다.
 // 따옴표를 벗긴 낱말만 보면 "x "2>"/dev/null y" 가 낱말 'x 2>/dev/null y' 로 보여 통과한다. 그래서 명령 원문(raw)도 같은 규칙으로 본다:
-// 원문의 '>'·'<' 는 모두 예외 글 하나에 들어 있어야 하고, 그 예외 글 앞은 처음·빈칸·따옴표·;|&(, 뒤는 끝·빈칸·;|&) 이거나 닫는 따옴표 뒤 끝·빈칸·;|&) 여야 한다.
+// 원문의 '>'·'<' 는 모두 예외 글 하나에 들어 있어야 하고, 그 예외 글 앞은 처음·빈칸·;|&(, 뒤는 끝·빈칸·;|&) 여야 한다.
+// 따옴표·역빗금이 붙으면 셸이 대상 이름에 이어 붙이므로(>/dev/null" x" 는 '/dev/null x' 에 씀) 예외로 보지 않는다.
+// 그래서 원격 본문·bash -c 글 끝의 "… 2>/dev/null" 도 막힌다(받아들인 비용).
 const READ_ONLY_REDIRECT_OK = new Set(["2>/dev/null", ">/dev/null", "2>&1", ">&2"]);
-const RAW_REDIRECT_OK = /(?<=^|[\s'";|&(])(?:2>\/dev\/null|>\/dev\/null|2>&1|>&2)(?=$|[\s;|&)]|["'](?:$|[\s;|&)]))/g;
+const RAW_REDIRECT_OK = /(?<=^|[\s;|&(])(?:2>\/dev\/null|>\/dev\/null|2>&1|>&2)(?=$|[\s;|&)])/g;
 function readOnlyRedirectProblem(tokens, raw) {
 	if (raw !== undefined && /[<>]/.test(String(raw).replace(RAW_REDIRECT_OK, " "))) return `read_only 에서 받지 않는 리다이렉트·'<'·'>' 글자: ${String(raw).slice(0, 200)}`;
 	for (const token of tokens) {

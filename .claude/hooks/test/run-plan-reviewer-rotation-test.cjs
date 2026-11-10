@@ -524,7 +524,7 @@ function injectLibFault(root, at, fault) {
 	return () => fs.writeFileSync(file, src);
 }
 const RECORD_WRITE_AT = "fs.writeFileSync(path.join(gatesDir, REVIEW_FILE), buf);";
-const MARK_WRITE_AT = 'fs.writeFileSync(path.join(gatesDir, markRel(rel)), `${receiptSha}\\n`, { flag: "wx" });';
+const MARK_WRITE_AT = 'fs.writeFileSync(tmp, `${receiptSha}\\n`, { flag: "wx" });';
 const throwCode = (code) => `{ const e = new Error("${code}"); e.code = "${code}"; throw e; }`;
 const roundMarkFile = (gatesDir, n) => path.join(gatesDir, "review-rounds", `round-${String(n).padStart(3, "0")}.ok`);
 
@@ -579,6 +579,23 @@ test("회차 확정: 표지 쓰기 실패면 코드 3이고 관문이 막는다"
 	assert.equal(run.status, 3, `${run.stdout}\n${run.stderr}`);
 	assert.match(run.stderr, /회차 확정 표지 저장 실패\(ENOSPC\)/);
 	assert.equal(deployPlan.reviewProblems(gatesDir, sha256(fs.readFileSync(planFile)), root).ok, false);
+});
+
+test("회차 확정: 표지를 다 쓴 직후 오류(close 실패 모사)여도 확정되지 않아 관문이 막고 직전 회차로 쓰이지 않는다", (t) => {
+	const { root, tmp } = makeWorkspace(t);
+	const { planFile, gatesDir } = createValidPlan(root, { author_model: "argon" });
+	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
+	injectLibFault(root, MARK_WRITE_AT, `${MARK_WRITE_AT} ${throwCode("EIO")}`);
+	const bins = writeRoundBins(tmp);
+	const run = bins.review(root, planFile, passBody());
+	assert.equal(run.status, 3, `${run.stdout}\n${run.stderr}`);
+	assert.match(run.stderr, /회차 확정 표지 저장 실패\(EIO\)/);
+	assert.equal(fs.existsSync(roundMarkFile(gatesDir, 1)), false);
+	assert.deepEqual(fs.readdirSync(path.join(gatesDir, "review-rounds")).filter((n) => n.includes(".tmp-")), [], "임시 파일은 남지 않음");
+	const gate = deployPlan.reviewProblems(gatesDir, sha256(fs.readFileSync(planFile)), root);
+	assert.equal(gate.ok, false);
+	assert.ok(gate.problems.some((p) => p.includes("리뷰 회차 확정 안 됨")), gate.problems.join("; "));
+	assert.equal(deployPlan.priorRound(gatesDir), null, "확정 안 된 회차는 직전 회차가 아님");
 });
 
 test("회차 확정: [FAIL, FAIL, 영수증 쓰기 전 ENOSPC 로 확정 안 된 PASS] 는 연속 2·직전 2회차이고, 다음 FAIL 로 상한 3", (t) => {

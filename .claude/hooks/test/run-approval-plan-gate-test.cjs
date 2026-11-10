@@ -1417,7 +1417,7 @@ test("read_only 계획 위반: 바꾸는 단계·되돌리기 단계·step_ids·
 	assert.ok(!deployPlan.formProblems({ ...step("az containerapp update -n example-web -g example-rg --set-env-vars X=1"), read_only: false }).some((p) => p.includes("read_only")));
 });
 
-test("read_only 리다이렉트: 해석하지 않고 거부한다. 낱말 전체가 2>/dev/null·>/dev/null·2>&1·>&2 일 때만 받는다", () => {
+test("read_only 리다이렉트: 해석하지 않고 거부한다. 낱말 전체가 2>/dev/null·>/dev/null·2>&1·>&2 이고 앞뒤에 따옴표가 붙지 않을 때만 받는다", () => {
 	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
 	const invoke = (script) => `az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts "${script}"`;
 	for (const command of [
@@ -1449,8 +1449,16 @@ test("read_only 리다이렉트: 해석하지 않고 거부한다. 낱말 전체
 		"cat /etc/hostname </tmp/in",
 		invoke("df -h >/tmp/x"),
 		"bash -c \"ls 2>/tmp/err\"",
-		// 받아들인 비용: az --query 의 비교 연산자도 막힌다
+		// 따옴표가 대상에 붙음: 셸은 '/dev/null x'·'2 x' 파일에 쓴다
+		"az account show >/dev/null\" x\"",
+		"az account show 2>/dev/null\" x\"",
+		"az account show >&2\" x\"",
+		"az account show 2>/dev/null\\ x",
+		// 받아들인 비용: az --query 의 비교 연산자, 따옴표 글 끝에 붙은 예외 꼴도 막힌다
 		"az containerapp logs show -n example-web -g example-rg --query \"[?a > b]\"",
+		invoke("docker ps 2>/dev/null"),
+		"ssh example-gw \"cat /etc/hostname 2>/dev/null\"",
+		"bash -c \"ls /etc 2>&1\"",
 	]) assert.match(String(readOnlyProblem(command)), /리다이렉트/, command);
 	for (const command of [
 		"az vm show -g example-rg -n example-gw 2>/dev/null",
@@ -1458,9 +1466,9 @@ test("read_only 리다이렉트: 해석하지 않고 거부한다. 낱말 전체
 		"az account show >/dev/null",
 		"az account show >&2",
 		"ls /etc 2>/dev/null",
-		invoke("docker ps 2>/dev/null"),
-		"ssh example-gw \"cat /etc/hostname 2>/dev/null\"",
-		"bash -c \"ls /etc 2>&1\"",
+		invoke("docker ps 2>/dev/null | head"),
+		"ssh example-gw \"cat /etc/hostname 2>/dev/null | head -1\"",
+		"az account show 2>/dev/null; az group list 2>&1",
 	]) assert.equal(readOnlyProblem(command), null, command);
 });
 
