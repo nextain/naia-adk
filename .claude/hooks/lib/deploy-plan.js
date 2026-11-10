@@ -41,12 +41,16 @@ const TOOL_CALL_JOIN_TTL_MS = 5 * 60 * 1000;
 // 공통 PLAN·STEP 상태 규약. 관문 사본(alpha·naia 등)이 모두 같은 규약을 써야 한 코드로 함께 통과한다.
 const STATE_PROTOCOL = "naia-deploy-plan-state";
 const STATE_VERSION = 2;
-// 관문 사본 식별자: 이 모듈 파일과 사본별 일반 승인 상태 폴더. 한 관문은 한 호출 ID 를 한 번만 판정한다.
+// 관문 사본 식별자: 이 모듈 파일과 사본별 일반 승인 상태 폴더의 실제 경로. 한 관문은 한 호출 ID 를 한 번만 판정한다.
+// 별칭(심볼릭 링크·상대 경로)이 다른 관문으로 보이지 않게 둘 다 실제 경로로 바꾸고, 바꾸지 못하면 null(호출한 쪽이 막음).
 function gateId(env = process.env) {
-	let file = __filename;
-	try { file = fs.realpathSync(__filename); } catch {}
-	const dir = env.DEPLOY_APPROVAL_STATE_DIR || path.join(env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"), "naia-harness");
-	return `${file}|${path.resolve(dir)}`;
+	const dir = path.resolve(env.DEPLOY_APPROVAL_STATE_DIR || path.join(env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"), "naia-harness"));
+	try {
+		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+		return `${fs.realpathSync(__filename)}|${fs.realpathSync(dir)}`;
+	} catch {
+		return null;
+	}
 }
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -1128,6 +1132,10 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		if (c.kind !== "step" || !Array.isArray(c.consumed)) continue;
 		for (const r of c.consumed) if (r && r.tool_use_id === toolUseId) sameCall.push({ c, r });
 	}
+	const me = toolUseId ? gateId(env) : null;
+	if (toolUseId && !me) {
+		return { allow: false, audit: { event: "blocked-gate-identity-uncertain", plan: rel, step: f.step.id, tool_use_id: toolUseId }, reason: "[Harness] 이 관문의 식별자(모듈·일반 승인 상태 폴더의 실제 경로)를 정하지 못해 막습니다. 상태 폴더를 확인하십시오." };
+	}
 	if (sameCall.length) {
 		const { c: joinCh, r } = sameCall[0];
 		const matches = sameCall.length === 1 && r.plan_sha === call.plan_sha && r.step === call.step && r.session === call.session && r.cmd_hash === call.cmd_hash &&
@@ -1140,7 +1148,6 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 			return { allow: false, audit: { event: "blocked-tool-use-id-stale", plan: rel, step: f.step.id, tool_use_id: toolUseId }, reason: "[Harness] 같은 도구 호출 ID 의 소비 기록이 오래되어 함께 통과로 인정하지 않습니다. 새 단계 승인을 받으십시오." };
 		}
 		// 한 관문은 한 호출 ID 를 한 번만 판정한다. 같은 ID 가 다시 오면(호스트의 ID 재사용·같은 관문 중복) 막는다.
-		const me = gateId(env);
 		if (!Array.isArray(r.gates) || r.gates.includes(me)) {
 			return { allow: false, audit: { event: "blocked-tool-use-id-reused", plan: rel, step: f.step.id, tool_use_id: toolUseId }, reason: "[Harness] 이 관문이 이미 판정한 도구 호출 ID 입니다. 같은 승인으로 다시 실행할 수 없습니다. 새 단계 승인을 받으십시오." };
 		}
@@ -1192,7 +1199,7 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		stepCh.approvedVia = ok.via;
 	}
 	stepCh.executed = [...(stepCh.executed || []), h];
-	stepCh.consumed = [...(Array.isArray(stepCh.consumed) ? stepCh.consumed : []), { ...call, ...(toolUseId ? { gates: [gateId(env)] } : {}), at: new Date(now).toISOString() }];
+	stepCh.consumed = [...(Array.isArray(stepCh.consumed) ? stepCh.consumed : []), { ...call, ...(toolUseId ? { gates: [me] } : {}), at: new Date(now).toISOString() }];
 	const stepCmdHashes = (f.step.commands || []).map((c) => commandHash(c));
 	const allExecutedForStep = new Set();
 	for (const c of st2.challenges.filter((ch) => ch.kind === "step" && ch.planSha === f.sha && ch.step === f.step.id && ch.sessionId === ctx.sessionId)) {

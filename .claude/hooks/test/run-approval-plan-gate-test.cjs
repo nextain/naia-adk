@@ -1615,3 +1615,29 @@ test("공통 상태 10. 소비 기록이 있는데 executed 만 비어 있으면
 	assert.equal(again?.decision, "block");
 	assert.match(again.reason, /단계 승인 필요/);
 });
+
+test("공통 상태 11. 관문 식별자는 실제 경로: 같은 상태 폴더의 별칭은 같은 관문, 식별자를 못 정하면 막힘", async (t) => {
+	await t.test("같은 폴더의 심볼릭 링크로 같은 ID 재제출", async (tt) => {
+		const g = twoGateFixture(tt);
+		await g.approve();
+		const id = "toolu_alias_dir";
+		assert.equal(g.run(g.gateA, { toolUseId: id }), null, "첫 판정은 통과");
+		const alias = path.join(g.stateDir, "alias-of-naia-harness");
+		fs.symlinkSync(g.gateA.DEPLOY_APPROVAL_STATE_DIR, alias);
+		const again = g.run({ ...g.gateA, DEPLOY_APPROVAL_STATE_DIR: alias }, { toolUseId: id });
+		assert.equal(again?.decision, "block", "별칭 폴더는 다른 관문으로 인정하지 않음");
+		const rec = JSON.parse(fs.readFileSync(g.stateFile, "utf8")).challenges.flatMap((c) => c.consumed || []);
+		assert.equal(rec[0].gates.length, 1, "판정한 관문은 하나뿐");
+	});
+	await t.test("상태 폴더 자리에 파일이 있어 식별자를 못 정함", async (tt) => {
+		const g = twoGateFixture(tt);
+		await g.approve();
+		const notDir = path.join(g.stateDir, "not-a-dir");
+		fs.writeFileSync(notDir, "x");
+		const r = g.run({ ...g.gateA, DEPLOY_APPROVAL_STATE_DIR: notDir }, { toolUseId: "toolu_no_identity" });
+		assert.equal(r?.decision, "block");
+		assert.match(r.reason, /식별자/);
+		const st = JSON.parse(fs.readFileSync(g.stateFile, "utf8"));
+		assert.equal(st.challenges.flatMap((c) => c.consumed || []).length, 0, "막힌 판정은 코드를 소비하지 않음");
+	});
+});
