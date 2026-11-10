@@ -126,7 +126,7 @@ function createValidPlan(root, overrides = {}) {
 	return { planFile, gatesDir, plan, scriptRel, scriptAbs, step1Cmd, rollbackCmd };
 }
 
-function writePassingReviewReceipt(root, planFile) {
+function writePassingReviewReceipt(root, planFile, options = {}) {
 	const gatesDir = path.dirname(planFile);
 	const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
 	const planSha = sha256(fs.readFileSync(planFile));
@@ -137,33 +137,34 @@ function writePassingReviewReceipt(root, planFile) {
 	const bodyLines = [
 		"판정: PASS",
 		...deployPlan.CRITERIA.map(([id]) => `${id}: PASS — 계획서 및 고정 스크립트 확인 통과`),
-		"참고 지적: 0",
+		`참고 지적: 0${options.bodyMarker || ""}`,
 		"남은 지적: 0",
 		"",
 	];
 	const body = bodyLines.join("\n");
 	const stdoutSha = sha256(body);
 	const finalText = `${body}review-run: target_sha256=${planSha} prompt_sha256=${promptSha} stdout_sha256=${stdoutSha}\n`;
-	const resultRel = "deploy-plan-review-argon.md";
+	const reviewer = options.reviewer || "argon";
+	const resultRel = `deploy-plan-review-${reviewer}.md`;
 	fs.writeFileSync(path.join(gatesDir, resultRel), finalText);
 
-	const startedAt = new Date(Date.now() - 2000).toISOString();
+	const startedAt = options.startedAt || new Date(Date.now() - 2000).toISOString();
 	const endedAt = new Date().toISOString();
 	const reviewRecord = {
 		plan_sha256: planSha,
 		plan: path.relative(root, planFile),
-		author_model: "muse",
+		author_model: plan.author_model,
 		prompt_sha256: promptSha,
 		reviewedAt: endedAt,
 		reviewers: [
 			{
-				model: deployPlan.REVIEW_MODELS.argon.model,
-				effort: deployPlan.REVIEW_MODELS.argon.effort,
+				model: deployPlan.REVIEW_MODELS[reviewer].model,
+				effort: deployPlan.REVIEW_MODELS[reviewer].effort,
 				result: resultRel,
 				result_sha256: sha256(finalText),
 				target_sha256: planSha,
 				receipt: {
-					model: deployPlan.REVIEW_MODELS.argon.model,
+					model: deployPlan.REVIEW_MODELS[reviewer].model,
 					started_at: startedAt,
 					ended_at: endedAt,
 					exit_code: 0,
@@ -1088,4 +1089,160 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "깨진 설정일 때는 시험 기기 예외가 적용되지 않아야 함");
 	fs.rmSync(cfgPath, { force: true });
 	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "설정 파일이 없을 때는 시험 기기 예외가 적용되지 않아야 함");
+});
+
+
+test("temporary reviewer selection defaults safely and expires", (t) => {
+ const { root } = makeWorkspace(t);
+ const now = Date.now();
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ const set = (planReview) => { fs.mkdirSync(path.dirname(configPath), { recursive: true }); fs.writeFileSync(configPath, JSON.stringify({ planReview })); fs.utimesSync(configPath, new Date(now - 1000), new Date(now - 1000)); };
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ set({ reviewer: "codex", until: new Date(now + 60000).toISOString(), reason: "temporary" });
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["codex"]);
+ set({ reviewer: "codex", until: new Date(now - 60000).toISOString(), reason: "temporary" });
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ set({ reviewer: "sol", until: new Date(now + 60000).toISOString(), reason: "temporary" });
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ for (const until of [undefined, "invalid"]) {
+  set({ reviewer: "codex", until, reason: "temporary" });
+  assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ }
+ fs.writeFileSync(configPath, "{");
+ assert.throws(() => deployPlan.reviewerIdsFor("muse", root, now));
+ assert.ok(deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "codex" }).some(p => p.includes("author_model")));
+});
+
+test("codex receipt remains valid after configuration changes", (t) => {
+ const { root } = makeWorkspace(t);
+ const { planFile, gatesDir } = createValidPlan(root);
+ const { planSha } = writePassingReviewReceipt(root, planFile, { reviewer: "codex" });
+ const result = deployPlan.reviewProblems(gatesDir, planSha, root);
+ assert.equal(result.ok, true, result.problems.join("; "));
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ fs.mkdirSync(path.dirname(configPath), { recursive: true });
+ fs.writeFileSync(configPath, JSON.stringify({ planReview: { reviewer: "argon" } }));
+ assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, true);
+});
+
+test("same author and unregistered reviewer receipts are rejected", (t) => {
+ const { root } = makeWorkspace(t);
+ const { planFile, gatesDir } = createValidPlan(root);
+ const { planSha } = writePassingReviewReceipt(root, planFile);
+ const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+ const record = JSON.parse(fs.readFileSync(file));
+ for (const model of [deployPlan.REVIEW_MODELS.muse.model, "unregistered-model"]) {
+  record.reviewers[0].model = model;
+  record.reviewers[0].receipt.model = model;
+  fs.writeFileSync(file, JSON.stringify(record));
+  assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, false);
+ }
+});
+
+test("fake codex reviewer runs through the complete review flow", (t) => {
+ const { root, tmp, stateDir } = makeWorkspace(t);
+ const { planFile, gatesDir } = createValidPlan(root);
+ const init = spawnSync("git", ["init", "-q", root], { encoding: "utf8" });
+ assert.equal(init.status, 0, init.stderr);
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ fs.mkdirSync(path.dirname(configPath), { recursive: true });
+ fs.writeFileSync(configPath, JSON.stringify({ planReview: { reviewer: "codex", until: new Date(Date.now() + 60000).toISOString(), reason: "temporary" } }));
+ const binDir = path.join(tmp, "bin"), fakeHome = path.join(tmp, "home");
+ fs.mkdirSync(binDir); fs.mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
+ const bwrap = path.join(binDir, "bwrap"), codex = path.join(binDir, "fake-codex");
+ fs.writeFileSync(bwrap, '#!/bin/sh\nwhile [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done\nshift\nexec "$@"\n', { mode: 0o755 });
+ const body = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "남은 지적: 0"].join("\n");
+ fs.writeFileSync(codex, `#!/bin/sh\n[ "$1" = exec ] || exit 19\n[ -z "$(cat)" ] || exit 20\nprintf 'codex\\n'\ncat <<'REVIEW_EOF'\n${body}\nREVIEW_EOF\nprintf 'tokens used\\n'\n`, { mode: 0o755 });
+ const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
+  cwd: root, encoding: "utf8", timeout: 30000,
+  env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CODEX_BIN: codex, DEPLOY_APPROVAL_STATE_DIR: stateDir },
+ });
+ assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+ const record = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), "utf8"));
+ assert.equal(record.reviewers[0].model, "gpt-6.1-terra");
+ assert.equal(record.reviewers[0].receipt.isolation, "bwrap-ro-bind");
+ assert.match(fs.readFileSync(path.join(gatesDir, record.reviewers[0].result), "utf8"), /review-run: .*\n$/);
+});
+
+
+test("reviewer configuration boundaries are fail closed", (t) => {
+ const { root } = makeWorkspace(t);
+ const now = Date.parse("2026-11-10T00:00:00Z");
+ const file = path.join(root, ".claude/deploy/config.json");
+ const set = (value) => { fs.mkdirSync(path.dirname(file), {recursive: true}); fs.writeFileSync(file, JSON.stringify(value)); };
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ for (const until of ["2026-11-09T23:59:59Z", "2026-11-10T00:00:00Z", "invalid", "2026-02-30T23:40:00Z", "2025-02-29T00:00:00Z", "2026-13-01T00:00:00Z", "2026-00-10T00:00:00Z", "2026-01-00T00:00:00Z", "2026-11-13", 123]) {
+  set({planReview:{reviewer:"codex", until}});
+  assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"], String(until));
+ }
+ for (const reviewer of ["sol", "argon", "CODEX", " codex"]) {
+  set({planReview:{reviewer, until:"2026-11-13T00:00:00Z"}});
+  assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"], reviewer);
+ }
+ for (const planReview of [undefined, "codex"]) {
+  set({planReview}); assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ }
+ for (const until of ["2026-11-13T23:40:00+09:00", "2026-11-13T23:40:00.123Z"]) {
+  set({planReview:{reviewer:"codex", until}}); assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["codex"]);
+ }
+ fs.writeFileSync(file, "{"); assert.throws(() => deployPlan.reviewerIdsFor("muse", root, now));
+});
+
+test("review gate enforces reviewer identity, count and effort", (t) => {
+ const {root} = makeWorkspace(t);
+ const {planFile, gatesDir} = createValidPlan(root);
+ const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+ for (const reviewer of ["argon", "codex"]) {
+  const {planSha} = writePassingReviewReceipt(root, planFile, {reviewer});
+  const valid = JSON.parse(fs.readFileSync(file));
+  const check = (record, expected, label) => { fs.writeFileSync(file, JSON.stringify(record)); const result = deployPlan.reviewProblems(gatesDir, planSha, root); assert.equal(result.ok, expected, `${label}: ${result.problems.join('; ')}`); };
+  check(valid, true, reviewer);
+  for (const [label, change] of [
+   ["zero", r => {r.reviewers=[];}],
+   ["two", r => {r.reviewers.push(structuredClone(r.reviewers[0]));}],
+   ["muse", r => {r.reviewers[0].model=deployPlan.REVIEW_MODELS.muse.model; r.reviewers[0].receipt.model=r.reviewers[0].model;}],
+   ["sol", r => {r.reviewers[0].model=deployPlan.REVIEW_MODELS.sol.model; r.reviewers[0].receipt.model=r.reviewers[0].model;}],
+   ["id mismatch", r => {r.reviewers[0].id=reviewer === "argon" ? "codex" : "argon";}],
+   ["effort", r => {r.reviewers[0].effort="wrong";}],
+  ]) { const rec=structuredClone(valid); change(rec); check(rec, false, `${reviewer} ${label}`); }
+ }
+});
+
+test("legacy authors still require their two distinct reviewers", (t) => {
+ for (const author of ["sol", "argon"]) {
+  const {root} = makeWorkspace(t);
+  const {planFile, gatesDir} = createValidPlan(root, {author_model:author});
+  const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+  const ids = deployPlan.reviewerIdsFor(author, root);
+  const entries = [];
+  let planSha;
+  for (const reviewer of ids) {
+   ({planSha} = writePassingReviewReceipt(root, planFile, {reviewer, bodyMarker:` ${reviewer}`}));
+   entries.push(JSON.parse(fs.readFileSync(file)).reviewers[0]);
+  }
+  const record = JSON.parse(fs.readFileSync(file)); record.reviewers=entries;
+  fs.writeFileSync(file, JSON.stringify(record));
+  let result = deployPlan.reviewProblems(gatesDir, planSha, root);
+  assert.equal(result.ok, true, `${author}: ${result.problems.join('; ')}`);
+  record.reviewers.pop(); fs.writeFileSync(file, JSON.stringify(record));
+  result = deployPlan.reviewProblems(gatesDir, planSha, root);
+  assert.equal(result.ok, false, author);
+ }
+});
+
+test("codex reviewer refuses to run without bwrap outside recovery mode", (t) => {
+ const {root, tmp, stateDir} = makeWorkspace(t);
+ const {planFile} = createValidPlan(root);
+ assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ fs.mkdirSync(path.dirname(configPath), {recursive:true});
+ fs.writeFileSync(configPath, JSON.stringify({planReview:{reviewer:"codex", until:new Date(Date.now()+60000).toISOString()}}));
+ const binDir=path.join(tmp,"bin"), fakeHome=path.join(tmp,"home"), marker=path.join(tmp,"ran"), codex=path.join(binDir,"fake-codex");
+ fs.mkdirSync(binDir); fs.mkdirSync(fakeHome);
+ fs.symlinkSync(process.platform === "win32" ? "git.exe" : "/usr/bin/git", path.join(binDir,"git"));
+ fs.writeFileSync(codex, `#!/bin/sh\n : > "${marker}"\nexit 0\n`, {mode:0o755});
+ const run=spawnSync(process.execPath,[path.join(root,".agents/scripts/approval-plan.mjs"),"review",planFile,"--author","muse"], {cwd:root, encoding:"utf8", timeout:30000, env:{...process.env, HOME:fakeHome, PATH:binDir, APPROVAL_PLAN_CODEX_BIN:codex, DEPLOY_APPROVAL_STATE_DIR:stateDir}});
+ assert.notEqual(run.status, 0, `${run.stdout}\n${run.stderr}`);
+ assert.match(`${run.stdout}\n${run.stderr}`, /sandbox-prepare/);
+ assert.equal(fs.existsSync(marker), false);
 });
