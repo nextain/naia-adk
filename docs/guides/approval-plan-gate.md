@@ -48,6 +48,18 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 
 계획서 양식과 고정 파일 SHA-256이 모두 맞으면 독립 리뷰어 모델(Argon)로 아홉 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`) 적대 리뷰를 받습니다.
 
+기본 리뷰어는 Argon입니다. 승인자 결정으로 인스턴스의 `.claude/deploy/config.json`에 다음 `planReview`를 추가하면 지정한 시각 전까지 Muse 작성 계획을 Codex (`gpt-6.1-terra`, `high`)가 리뷰합니다. 기존 설정의 다른 항목은 유지합니다.
+
+```json
+"planReview": {
+  "reviewer": "codex",
+  "until": "2026-11-13T23:40:00Z",
+  "reason": "승인자 결정에 따른 임시 대체"
+}
+```
+
+`until`이 없거나 유효하지 않거나 지났을 때, 또는 `reviewer`가 `argon`이나 `codex`가 아닐 때는 기본 Argon으로 돌아갑니다. 설정 JSON의 파스 오류는 거부합니다. 관문은 설정이나 시각에 관계없이 등록된 Argon 또는 Codex 영수증을 받으므로, 설정을 바꾼 뒤에도 기존 영수증이 유효합니다. 작성자와 리뷰어는 같을 수 없습니다.
+
 ```bash
 node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/deploy-plan.json --author muse
 ```

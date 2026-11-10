@@ -79,9 +79,26 @@ const REVIEW_MODELS = Object.freeze({
 	sol: { model: "gpt-6.1-sol", effort: "high" },
 	muse: { model: "muse-spark-1.3", effort: "xhigh" },
 	argon: { model: "gemini-4-argon-medium", effort: "medium" },
+	codex: { model: "gpt-6.1-terra", effort: "high" },
 });
-function reviewerIdsFor(author) {
-	return author === "muse" ? ["argon"] : Object.keys(REVIEW_MODELS).filter((id) => id !== author);
+const AUTHOR_IDS = ["sol", "muse", "argon"];
+function reviewerIdsFor(author, root = ROOT, at = Date.now()) {
+	if (author !== "muse") return AUTHOR_IDS.filter((id) => id !== author);
+	const file = path.join(root, ".claude/deploy/config.json");
+	try {
+		const started = typeof at === "number" ? at : Date.parse(at);
+		let config;
+		try { config = JSON.parse(fs.readFileSync(file, "utf8"))?.planReview; }
+		catch (error) { if (error.code === "ENOENT") return ["argon"]; throw error; }
+		const until = config?.until;
+		const date = typeof until === "string" ? /^(\d{4})-(\d{2})-(\d{2})T/.exec(until) : null;
+		const validDate = date && Number(date[2]) >= 1 && Number(date[2]) <= 12 && Number(date[3]) >= 1 && Number(date[3]) <= new Date(Date.UTC(Number(date[1]), Number(date[2]), 0)).getUTCDate();
+		if (Number.isFinite(started) &&
+			config?.reviewer === "codex" && validDate && typeof until === "string" &&
+			/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(until) &&
+			Number.isFinite(Date.parse(until)) && started < Date.parse(until)) return ["codex"];
+	} catch (error) { throw error; }
+	return ["argon"];
 }
 
 /** 양식 검사. 빈 칸마다 한 줄. */
@@ -89,7 +106,7 @@ function formProblems(plan) {
 	const p = [];
 	if (!plan || typeof plan !== "object") return ["계획서를 JSON 으로 읽지 못함"];
 	if (plan.schema !== "deploy-plan/v1") p.push('schema 가 "deploy-plan/v1" 이 아님');
-	if (!Object.hasOwn(REVIEW_MODELS, plan.author_model || "")) p.push("author_model(sol|muse|argon) 필수");
+	if (!AUTHOR_IDS.includes(plan.author_model)) p.push("author_model(sol|muse|argon) 필수");
 	if (Object.hasOwn(plan, "risk_acceptance")) p.push("risk_acceptance 금지: 리뷰어 PASS·남은 지적 0 조건은 위험 수용으로 우회할 수 없음");
 	if (plan.approval_mode !== undefined && plan.approval_mode !== "preapprove_steps") p.push('approval_mode 는 "preapprove_steps" 만 쓸 수 있음');
 	if (!str(plan.planId, 3)) p.push("planId(계획 이름) 없음");
@@ -380,12 +397,12 @@ function reviewBodyProblems(text, sha) {
 	if (blockingLines.length) problems.push(`적대 리뷰 목록에 차단 지적 ${blockingLines.length}건`);
 	const advisoryLines = body.split(/\r?\n/).filter((line) => /^\s*(?:\d+[.)]|[-*])\s*\**\s*\[\s*참고/.test(line));
 	const advisory = [...body.matchAll(/참고\s*지적\s*[:：=]\s*(\d+)/g)].pop();
-	const first = body.trim().split(/\r?\n/)[0] || "";
+	const first = body.trim().split(/\r?\n/).find((line) => !/^(?:codex|tokens used|\d[\d,]*)\s*$/i.test(line.trim())) || "";
 	if (!/^판정:\s*PASS\s*$/i.test(first)) problems.push("적대 리뷰 전체 판정이 PASS 가 아님");
 	return { ok: problems.length === 0, problems, summary, openFindings: open ? Number(open[1]) : null, advisoryFindings: advisory ? Number(advisory[1]) : advisoryLines.length, body, prompt_sha256: tr?.prompt };
 }
 
-/** 리뷰 결과의 무결성·대상·작성자 분리·아홉 기준을 모두 확인한다. 작성자별 리뷰어 구성(muse→argon 1명, 옛 author→2명)과 다르면 거절한다. */
+/** 리뷰 결과의 무결성·대상·작성자 분리·아홉 기준을 모두 확인한다. 작성자별 리뷰어 구성(muse→argon 또는 codex 1명, 옛 author→2명)과 다르면 거절한다. */
 function reviewProblems(gatesDir, sha, root) {
 	const base = root ? path.resolve(root) : resolveRepoRoot(gatesDir);
 	const rec = readJson(path.join(gatesDir, REVIEW_FILE));
@@ -394,14 +411,14 @@ function reviewProblems(gatesDir, sha, root) {
 	const reviewers = [];
 	const finish = () => {
 		const author = rec?.author_model || plan?.author_model;
-		if (Object.hasOwn(REVIEW_MODELS, author || "")) {
-			for (const id of reviewerIdsFor(author)) {
+		if (AUTHOR_IDS.includes(author)) {
+			for (const id of (author === "muse" ? [] : reviewerIdsFor(author))) {
 				if (!reviewers.some((r) => r.id === id)) reviewers.push({ id, ...REVIEW_MODELS[id], ok: false, summary: [], openFindings: null, body: "", problems: ["리뷰어 결과 없음"] });
 			}
 		}
 		return { ok: problems.length === 0, problems, reviewers, summary: reviewers.flatMap((r) => r.summary.map((s) => ({ ...s, reviewer: r.id }))) };
 	};
-	if (!plan || !Object.hasOwn(REVIEW_MODELS, plan.author_model || "")) problems.push("계획서 author_model(sol|muse|argon) 필수");
+	if (!plan || !AUTHOR_IDS.includes(plan.author_model)) problems.push("계획서 author_model(sol|muse|argon) 필수");
 	if (plan && Object.hasOwn(plan, "risk_acceptance")) problems.push("risk_acceptance 금지: 리뷰어 조건은 위험 수용 불가");
 	problems.push(...pinnedFileProblems(plan, base));
 	let promptSha = null;
@@ -411,15 +428,15 @@ function reviewProblems(gatesDir, sha, root) {
 	try {
 		if (!plan || planSha(path.join(gatesDir, PLAN_FILE)) !== sha) problems.push("현재 계획서 sha256 이 검증 대상과 다름");
 	} catch { problems.push("현재 계획서를 읽지 못함"); }
-	if (!Object.hasOwn(REVIEW_MODELS, rec.author_model || "")) problems.push("적대 리뷰 작성자 author_model 없음 또는 잘못됨");
+	if (!AUTHOR_IDS.includes(rec.author_model)) problems.push("적대 리뷰 작성자 author_model 없음 또는 잘못됨");
 	if (!plan || plan.author_model !== rec.author_model) problems.push("계획서 author_model 과 적대 리뷰 작성자가 다름");
 	if (rec.author_model === "muse") {
-		if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 1) problems.push("Muse 작성 계획서는 Argon 리뷰어 1명의 기록이 필요함(옛 2인·단일 기록은 재리뷰 필요)");
+		if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 1) problems.push("Muse 작성 계획서는 리뷰어 1명의 기록이 필요함(옛 2인·단일 기록은 재리뷰 필요)");
 	} else if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 2) problems.push("서로 다른 리뷰어 두 명의 기록이 필요함(옛 단일 리뷰 기록 미통과)");
 	if (!promptSha || rec.prompt_sha256 !== promptSha) problems.push("기록 prompt_sha256 이 현재 요청문과 다름");
 	const entries = Array.isArray(rec.reviewers) ? rec.reviewers : [];
 	if (entries.length === 2 && entries[0]?.result === entries[1]?.result) problems.push("리뷰어 결과 파일이 서로 같음");
-	const expected = reviewerIdsFor(rec.author_model);
+	const expected = rec.author_model === "muse" ? [] : reviewerIdsFor(rec.author_model);
 	for (const id of expected) {
 		const config = REVIEW_MODELS[id];
 		const matches = entries.filter((r) => r && r.model === config.model);
@@ -430,7 +447,8 @@ function reviewProblems(gatesDir, sha, root) {
 	for (const [i, r] of entries.entries()) {
 		const id = Object.keys(REVIEW_MODELS).find((k) => REVIEW_MODELS[k].model === r?.model) || `unknown-${i}`;
 		const own = [];
-		if (!REVIEW_MODELS[id]) own.push("허용되지 않은 모델");
+		if (r?.id !== undefined && r.id !== id) own.push("리뷰어 id 와 모델이 다름");
+		if (!REVIEW_MODELS[id] || (rec.author_model === "muse" && !["argon", "codex"].includes(id))) own.push("허용되지 않은 모델");
 		else if (r.effort !== REVIEW_MODELS[id].effort) own.push("리뷰어 추론 강도가 다름");
 		if (id === rec.author_model || id === plan?.author_model) own.push("작성자와 같은 모델이 리뷰함");
 		if (entries.filter((x) => x?.model === r?.model).length !== 1) own.push("리뷰어 모델 기록 중복");

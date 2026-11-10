@@ -126,7 +126,7 @@ function createValidPlan(root, overrides = {}) {
 	return { planFile, gatesDir, plan, scriptRel, scriptAbs, step1Cmd, rollbackCmd };
 }
 
-function writePassingReviewReceipt(root, planFile) {
+function writePassingReviewReceipt(root, planFile, options = {}) {
 	const gatesDir = path.dirname(planFile);
 	const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
 	const planSha = sha256(fs.readFileSync(planFile));
@@ -144,10 +144,11 @@ function writePassingReviewReceipt(root, planFile) {
 	const body = bodyLines.join("\n");
 	const stdoutSha = sha256(body);
 	const finalText = `${body}review-run: target_sha256=${planSha} prompt_sha256=${promptSha} stdout_sha256=${stdoutSha}\n`;
-	const resultRel = "deploy-plan-review-argon.md";
+	const reviewer = options.reviewer || "argon";
+	const resultRel = `deploy-plan-review-${reviewer}.md`;
 	fs.writeFileSync(path.join(gatesDir, resultRel), finalText);
 
-	const startedAt = new Date(Date.now() - 2000).toISOString();
+	const startedAt = options.startedAt || new Date(Date.now() - 2000).toISOString();
 	const endedAt = new Date().toISOString();
 	const reviewRecord = {
 		plan_sha256: planSha,
@@ -157,13 +158,13 @@ function writePassingReviewReceipt(root, planFile) {
 		reviewedAt: endedAt,
 		reviewers: [
 			{
-				model: deployPlan.REVIEW_MODELS.argon.model,
-				effort: deployPlan.REVIEW_MODELS.argon.effort,
+				model: deployPlan.REVIEW_MODELS[reviewer].model,
+				effort: deployPlan.REVIEW_MODELS[reviewer].effort,
 				result: resultRel,
 				result_sha256: sha256(finalText),
 				target_sha256: planSha,
 				receipt: {
-					model: deployPlan.REVIEW_MODELS.argon.model,
+					model: deployPlan.REVIEW_MODELS[reviewer].model,
 					started_at: startedAt,
 					ended_at: endedAt,
 					exit_code: 0,
@@ -1088,4 +1089,77 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "깨진 설정일 때는 시험 기기 예외가 적용되지 않아야 함");
 	fs.rmSync(cfgPath, { force: true });
 	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "설정 파일이 없을 때는 시험 기기 예외가 적용되지 않아야 함");
+});
+
+
+test("temporary reviewer selection defaults safely and expires", (t) => {
+ const { root } = makeWorkspace(t);
+ const now = Date.now();
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ const set = (planReview) => { fs.mkdirSync(path.dirname(configPath), { recursive: true }); fs.writeFileSync(configPath, JSON.stringify({ planReview })); fs.utimesSync(configPath, new Date(now - 1000), new Date(now - 1000)); };
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ set({ reviewer: "codex", until: new Date(now + 60000).toISOString(), reason: "temporary" });
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["codex"]);
+ set({ reviewer: "codex", until: new Date(now - 60000).toISOString(), reason: "temporary" });
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ set({ reviewer: "sol", until: new Date(now + 60000).toISOString(), reason: "temporary" });
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ for (const until of [undefined, "invalid"]) {
+  set({ reviewer: "codex", until, reason: "temporary" });
+  assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ }
+ fs.writeFileSync(configPath, "{");
+ assert.throws(() => deployPlan.reviewerIdsFor("muse", root, now));
+ assert.ok(deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "codex" }).some(p => p.includes("author_model")));
+});
+
+test("codex receipt remains valid after configuration changes", (t) => {
+ const { root } = makeWorkspace(t);
+ const { planFile, gatesDir } = createValidPlan(root);
+ const { planSha } = writePassingReviewReceipt(root, planFile, { reviewer: "codex" });
+ const result = deployPlan.reviewProblems(gatesDir, planSha, root);
+ assert.equal(result.ok, true, result.problems.join("; "));
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ fs.mkdirSync(path.dirname(configPath), { recursive: true });
+ fs.writeFileSync(configPath, JSON.stringify({ planReview: { reviewer: "argon" } }));
+ assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, true);
+});
+
+test("same author and unregistered reviewer receipts are rejected", (t) => {
+ const { root } = makeWorkspace(t);
+ const { planFile, gatesDir } = createValidPlan(root);
+ const { planSha } = writePassingReviewReceipt(root, planFile);
+ const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+ const record = JSON.parse(fs.readFileSync(file));
+ for (const model of [deployPlan.REVIEW_MODELS.muse.model, "unregistered-model"]) {
+  record.reviewers[0].model = model;
+  record.reviewers[0].receipt.model = model;
+  fs.writeFileSync(file, JSON.stringify(record));
+  assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, false);
+ }
+});
+
+test("fake codex reviewer runs through the complete review flow", (t) => {
+ const { root, tmp, stateDir } = makeWorkspace(t);
+ const { planFile, gatesDir } = createValidPlan(root);
+ const init = spawnSync("git", ["init", "-q", root], { encoding: "utf8" });
+ assert.equal(init.status, 0, init.stderr);
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ fs.mkdirSync(path.dirname(configPath), { recursive: true });
+ fs.writeFileSync(configPath, JSON.stringify({ planReview: { reviewer: "codex", until: new Date(Date.now() + 60000).toISOString(), reason: "temporary" } }));
+ const binDir = path.join(tmp, "bin"), fakeHome = path.join(tmp, "home");
+ fs.mkdirSync(binDir); fs.mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
+ const bwrap = path.join(binDir, "bwrap"), codex = path.join(binDir, "fake-codex");
+ fs.writeFileSync(bwrap, '#!/bin/sh\nwhile [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done\nshift\nexec "$@"\n', { mode: 0o755 });
+ const body = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "남은 지적: 0"].join("\n");
+ fs.writeFileSync(codex, `#!/bin/sh\n[ "$1" = exec ] || exit 19\n[ -z "$(cat)" ] || exit 20\nprintf 'codex\\n'\ncat <<'REVIEW_EOF'\n${body}\nREVIEW_EOF\nprintf 'tokens used\\n'\n`, { mode: 0o755 });
+ const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
+  cwd: root, encoding: "utf8", timeout: 30000,
+  env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CODEX_BIN: codex, DEPLOY_APPROVAL_STATE_DIR: stateDir },
+ });
+ assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+ const record = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), "utf8"));
+ assert.equal(record.reviewers[0].model, "gpt-6.1-terra");
+ assert.equal(record.reviewers[0].receipt.isolation, "bwrap-ro-bind");
+ assert.match(fs.readFileSync(path.join(gatesDir, record.reviewers[0].result), "utf8"), /review-run: .*\n$/);
 });
