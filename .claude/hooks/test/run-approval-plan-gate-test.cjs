@@ -1089,3 +1089,120 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 	fs.rmSync(cfgPath, { force: true });
 	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "설정 파일이 없을 때는 시험 기기 예외가 적용되지 않아야 함");
 });
+
+test("Azure model deployment readiness binds the declared values", (t) => {
+	const { root } = makeWorkspace(t);
+	const service = "azure:cognitiveservices:sample-account";
+	writeGateConfig(root, { services: { [service]: { allowOps: true } } });
+	const gates = path.join(root, ".agents/progress/sample-work/gates");
+	fs.mkdirSync(gates, { recursive: true });
+	const azureDeployment = { account: "sample-account", resourceGroup: "sample-rg", deploymentName: "sample-deployment", modelName: "sample-model", modelVersion: "sample-version", modelFormat: "OpenAI", skuName: "sample-sku", skuCapacity: "1", rollback: { deploymentName: "sample-deployment" } };
+	fs.writeFileSync(path.join(gates, "deploy.json"), JSON.stringify({ kind: "ops", reason: "sample deployment", services: [service], createdAt: new Date().toISOString(), azureDeployment }));
+	const command = "az cognitiveservices account deployment create --name sample-account --resource-group sample-rg --deployment-name sample-deployment --model-name sample-model --model-version sample-version --model-format OpenAI --sku-name sample-sku --sku-capacity 1";
+	const entry = { commands: [command] };
+	const planBinding = { plan: { services: [service] }, entry, command, cwd: root };
+	const result = assessReadiness([service], { root, cwd: root, command, planBinding });
+	assert.equal(result.ok, true, JSON.stringify(result.problems));
+	for (const changed of [
+		command.replace("--sku-capacity 1", "--sku-capacity 2"),
+		command.replace("sample-version", "sample-other-version"),
+		command.replace("sample-sku", "sample-other-sku"),
+		command.replace("sample-account", "sample-other-account"),
+		command.replace("sample-model", "$VAR"),
+		command + " --extra sample-value",
+		command.replace("sample-model", "sample-*"),
+		command.replace("deployment create", '"deployment" create'),
+		`bash -c '${command}'`,
+		`echo sample && ${command}`,
+		command.replace("sample-model", "${SAMPLE_MODEL}"),
+		command.replace("sample-model", "sample-?odel"),
+		command + " --yes",
+	]) {
+		const changedBinding = { plan: { services: [service] }, entry: { commands: [changed] }, command: changed, cwd: root };
+		assert.equal(assessReadiness([service], { root, cwd: root, command: changed, planBinding: changedBinding }).ok, false, changed);
+	}
+	const deletion = "az cognitiveservices account deployment delete --name sample-account --resource-group sample-rg --deployment-name sample-other-deployment";
+	const deleteBinding = { plan: { services: [service] }, entry: { commands: [deletion] }, command: deletion, cwd: root };
+	assert.equal(assessReadiness([service], { root, cwd: root, command: deletion, planBinding: deleteBinding }).ok, false);
+	const declaredDeletion = deletion.replace("sample-other-deployment", "sample-deployment");
+	const declaredDeleteBinding = { plan: { services: [service] }, entry: { commands: [declaredDeletion] }, command: declaredDeletion, cwd: root };
+	assert.equal(assessReadiness([service], { root, cwd: root, command: declaredDeletion, planBinding: declaredDeleteBinding }).ok, true);
+	assert.equal(assessReadiness([service], { root, cwd: root, command }).ok, false);
+});
+
+test("Azure model deployment reads do not need a deployment binding", () => {
+	for (const operation of ["show", "list"]) {
+		const command = `az cognitiveservices account deployment ${operation} --name sample-account --resource-group sample-rg`;
+		assert.deepEqual(classifyProdMutations(command), []);
+	}
+});
+
+
+test("Azure deployment binding cannot be bypassed by missing records or extension rules", (t) => {
+	const { root } = makeWorkspace(t);
+	const service = "azure:cognitiveservices:sample-account";
+	const command = "az cognitiveservices account deployment create --name sample-account --resource-group sample-rg --deployment-name sample-deployment --model-name sample-model --model-version sample-version --model-format OpenAI --sku-name sample-sku --sku-capacity 1";
+	const planBinding = { plan: { services: [service] }, entry: { commands: [command] }, command, cwd: root };
+	const pluginRel = "config/sample-plugin.cjs";
+	writeGateConfig(root, { services: { [service]: { allowOps: true, allowCustomCommands: true } } });
+	const gates = path.join(root, ".agents/progress/sample-work/gates");
+	fs.mkdirSync(gates, { recursive: true });
+	fs.writeFileSync(path.join(root, pluginRel), 'module.exports = { verifyPlanBinding: () => ({ ok: true, ops: true }), assessService: () => ({ ok: true }) };');
+	const assess = (cmd = command) => assessReadiness([service], { root, cwd: root, command: cmd, planBinding: { ...planBinding, command: cmd, entry: { commands: [cmd] } } });
+	assert.equal(assess().ok, false, "allowCustomCommands must not permit a missing record");
+	writeGateConfig(root, { plugin: pluginRel, services: { [service]: { allowOps: true, allowCustomCommands: true } } });
+	assert.equal(assess().ok, false, "plugin must not permit a missing record");
+	const azureDeployment = { account: "sample-account", resourceGroup: "sample-rg", deploymentName: "sample-deployment", modelName: "sample-model", modelVersion: "sample-version", modelFormat: "OpenAI", skuName: "sample-sku", skuCapacity: "1", rollback: { deploymentName: "sample-deployment" } };
+	fs.writeFileSync(path.join(gates, "deploy.json"), JSON.stringify({ kind: "ops", reason: "sample deployment", services: [service], createdAt: new Date().toISOString(), azureDeployment }));
+	for (const altered of [
+		command.replace("sample-version", "sample-other-version"),
+		command.replace("deployment create", '"deployment" create'),
+		`bash -c '${command}'`,
+		`echo sample && ${command}`,
+		command.replace("sample-model", "$SAMPLE_MODEL"),
+		command.replace("sample-model", "sample-*"),
+		command + " --yes",
+	]) assert.equal(assess(altered).ok, false, `plugin must not override binding: ${altered}`);
+	writeGateConfig(root, { services: { [service]: { allowOps: true, allowCustomCommands: true } } });
+	assert.equal(assess(command.replace("sample-version", "sample-other-version")).ok, false, "allowCustomCommands must not override a mismatched record");
+});
+
+test("Azure deployment still requires plan and human PLAN and STEP approvals", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	const service = "azure:cognitiveservices:sample-account";
+	const command = "az cognitiveservices account deployment create --name sample-account --resource-group sample-rg --deployment-name sample-deployment --model-name sample-model --model-version sample-version --model-format OpenAI --sku-name sample-sku --sku-capacity 1";
+	const rollback = "az cognitiveservices account deployment delete --name sample-account --resource-group sample-rg --deployment-name sample-deployment";
+	writeGateConfig(root, { services: { [service]: { allowOps: true } } });
+	const noPlan = runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath });
+	assert.equal(noPlan?.decision, "block");
+	for (const altered of [
+		command.replace("deployment create", '"deployment" create'),
+		`bash -c '${command}'`,
+		`echo sample && ${command}`,
+		command.replace("sample-model", "$SAMPLE_MODEL"),
+		command.replace("sample-model", "sample-*"),
+		command + " --yes",
+	]) {
+		assert.equal(runDeployGuardHook(altered, { cwd: root, root, stateDir, transcriptPath })?.decision, "block", altered);
+	}
+	const { planFile, gatesDir } = createValidPlan(root, { services: [service], scenario: [
+		{ id: "s1", title: "sample create", commands: [command], success_check: "sample check", on_failure: "sample rollback" },
+		{ id: "r1", branch: "rollback", title: "sample rollback", commands: [rollback], success_check: "sample check", on_failure: "sample report" },
+	] });
+	const azureDeployment = { account: "sample-account", resourceGroup: "sample-rg", deploymentName: "sample-deployment", modelName: "sample-model", modelVersion: "sample-version", modelFormat: "OpenAI", skuName: "sample-sku", skuCapacity: "1", rollback: { deploymentName: "sample-deployment" } };
+	fs.writeFileSync(path.join(gatesDir, "deploy.json"), JSON.stringify({ kind: "ops", reason: "sample deployment", services: [service], createdAt: new Date().toISOString(), azureDeployment }));
+	writePassingReviewReceipt(root, planFile);
+	const noApproval = runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath });
+	assert.equal(noApproval?.decision, "block");
+	assert.match(noApproval.reason, /전체 계획 승인이 아직 없습니다/);
+	const code = noApproval.reason.match(/승인 코드:\s*(PLAN-[A-Z0-9]{6})/);
+	assert.ok(code);
+	appendHumanTurn(transcriptPath, `sample approval ${code[1]}`);
+	const noStep = runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath });
+	assert.equal(noStep?.decision, "block");
+	assert.match(noStep.reason, /단계 승인 필요/);
+	const stepCode = noStep.reason.match(/단계 승인 코드:\s*(STEP-[A-Z0-9]{6})/);
+	assert.ok(stepCode);
+	appendHumanTurn(transcriptPath, `sample approval ${stepCode[1]}`);
+	assert.equal(runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath }), null);
+});

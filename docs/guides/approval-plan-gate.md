@@ -42,6 +42,34 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - `scenario[].files`: 명령이 읽거나 실행하는 스크립트·설정 파일(`bash ./deploy.sh`, `--yaml app.yaml`, `@body.json` 등)은 반드시 `"경로": "<sha256>"` 형태로 고정합니다. 파일 내용이 1바이트라도 바뀌면 실행이 차단됩니다(`bash scripts/rollout.sh` 재귀 검사는 스크립트 폴더로 자동 이동하지 않고 호출자 작업 디렉터리를 유지하며, 스크립트 안의 명시적 `cd`만 반영합니다).
 - 사전승인 코드 일괄 발급(`preapprove`)을 쓰려면 최상위에 `"approval_mode": "preapprove_steps"`를 넣습니다.
 
+### Azure 모델 배포 준비 기록
+
+`az cognitiveservices account deployment create|delete`에는 해당 계정의 서비스 키와 준비 기록이 필요합니다. 예를 들어 `.agents/progress/sample-work/gates/deploy.json`에 다음과 같이 선언합니다. `createdAt`은 기록을 작성할 때 현재 시각으로 바꿉니다.
+
+```json
+{
+  "kind": "ops",
+  "reason": "sample deployment",
+  "services": ["azure:cognitiveservices:sample-account"],
+  "createdAt": "2026-11-10T00:00:00.000Z",
+  "azureDeployment": {
+    "account": "sample-account",
+    "resourceGroup": "sample-rg",
+    "deploymentName": "sample-deployment",
+    "modelName": "sample-model",
+    "modelVersion": "sample-version",
+    "modelFormat": "OpenAI",
+    "skuName": "sample-sku",
+    "skuCapacity": "1",
+    "rollback": { "deploymentName": "sample-deployment" }
+  }
+}
+```
+
+`create`는 `--name`, `--resource-group`, `--deployment-name`, `--model-name`, `--model-version`, `--model-format`, `--sku-name`, `--sku-capacity`의 값이 각각 선언과 글자 그대로 일치해야 합니다. `delete`는 같은 계정과 리소스 그룹을 지정하고 배포 이름이 `rollback.deploymentName`과 일치해야 합니다. 다른 옵션, 셸 변수 전개와 글롭은 허용하지 않습니다. `show`와 `list`는 이 준비 기록 결합 없이 조회할 수 있습니다. 생성 명령은 기존 배포의 변경에도 쓰일 수 있으며, 관문은 현재 상태를 조회하거나 기존 배포인지 판별하지 않습니다.
+
+계획서에는 `create` 앞에 `show` 조회 단계를 두어 현재 상태를 기록하고, 되돌리기에는 이전 값으로 복원하는 명령 또는 `delete`를 선언합니다. 이 조회와 이전 값의 기록은 계획 작성 규칙이며 관문이 강제하지 않습니다. 준비 기록의 일치는 계획과 사람의 `PLAN`·`STEP` 승인을 대신하지 않습니다.
+
 ---
 
 ## 2. 적대 리뷰 받기 (`review`)

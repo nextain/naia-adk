@@ -564,7 +564,43 @@ function commandBinding(command, candidate, services, cwd) {
 /**
  * 계획서 단계·명령·고정 파일·인스턴스 확장(config/deploy-gate.json + 선택 plugin)의 결합을 검증한다.
  */
-function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
+const AZ_MODEL_DEPLOYMENT = /\bcognitiveservices\s+account\s+deployment\s+(?:create|delete)\b/;
+
+function isAzureModelDeployment(command, depth = 0) {
+	if (AZ_MODEL_DEPLOYMENT.test(command)) return true;
+	if (depth >= 4) return false;
+	const { shellClauses } = require("./git-command-parser.js");
+	return shellClauses(command).some((clause) => AZ_MODEL_DEPLOYMENT.test(clause.join(" "))
+		|| clause.some((token) => token !== command && /\s/.test(token) && isAzureModelDeployment(token, depth + 1))
+		|| (clause.subs || []).some((sub) => isAzureModelDeployment(sub, depth + 1)));
+}
+
+function azureDeploymentBinding(command, record, services) {
+	const { shellClauses } = require("./git-command-parser.js");
+	const clauses = shellClauses(command);
+	if (/[\$`\\#<>|&;*?\[\]{}'"\n\r]/.test(command) || clauses.unbalanced || clauses.length !== 1) return false;
+	const c = clauses[0];
+	if (c.slice(0, 4).join(" ") !== "az cognitiveservices account deployment" || !["create", "delete"].includes(c[4])) return false;
+	const declaration = record && record.azureDeployment;
+	if (!declaration || typeof declaration !== "object") return false;
+	const fields = { "--name": "account", "--resource-group": "resourceGroup", "--deployment-name": "deploymentName" };
+	if (c[4] === "create") Object.assign(fields, { "--model-name": "modelName", "--model-version": "modelVersion", "--model-format": "modelFormat", "--sku-name": "skuName", "--sku-capacity": "skuCapacity" });
+	const values = {};
+	for (let i = 5; i < c.length; i += 2) {
+		const flag = c[i], value = c[i + 1];
+		if (!Object.hasOwn(fields, flag) || Object.hasOwn(values, flag) || typeof value !== "string" || !/^[A-Za-z0-9._-]+$/.test(value)) return false;
+		values[flag] = value;
+	}
+	if (Object.keys(values).length !== Object.keys(fields).length) return false;
+	for (const [flag, key] of Object.entries(fields)) {
+		const expected = c[4] === "delete" && key === "deploymentName" ? declaration.rollback?.deploymentName : declaration[key];
+		if (typeof expected !== "string" || values[flag] !== expected) return false;
+	}
+	if (c[4] === "create" && (values["--model-format"] !== "OpenAI" || !/^\d+$/.test(values["--sku-capacity"]))) return false;
+	return services.length === 1 && services[0] === `azure:cognitiveservices:${declaration.account.toLowerCase()}`;
+}
+
+function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir, readinessRecord = null) {
 	const no = (why) => ({ ok: false, why: `계획 결합 거부: ${why}` });
 	const yes = (fact, ops = false) => ({ ok: true, fact, ops });
 	if (!Array.isArray(services) || services.length === 0) return no("운영 서비스 집합이 비어 있음");
@@ -591,6 +627,14 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	}
 
 	const cfg = loadDeployGateConfig(root);
+	if (isAzureModelDeployment(command)) {
+		if (!azureDeploymentBinding(command, readinessRecord, services)) return no("Azure 모델 배포 명령이 준비 기록의 선언과 다름");
+		const rule = cfg && matchServiceRule(services[0], cfg);
+		if (!rule) return no("Azure 모델 배포 서비스가 설정에 등록되지 않음");
+		if (Array.isArray(rule.allowedCommands) && rule.allowedCommands.length && !rule.allowedCommands.some((pat) => new RegExp(pat).test(command))) return no("서비스 allowedCommands 에 맞지 않는 명령");
+		for (const file of rule.requiredFiles || []) if (!files.has(path.resolve(cwd || root || ".", file))) return no(`서비스 필수 고정 파일 누락: ${file}`);
+		return yes("Azure 모델 배포 명령과 준비 기록 선언 일치", kind === "ops");
+	}
 	let plugin = null;
 	if (cfg) {
 		try {
@@ -701,6 +745,9 @@ function assessReadiness(services, { root, auditPath, command = "", cwd = "", no
 
 	const cfg = loadDeployGateConfig(baseRoot);
 	const found = findReadiness(services, baseRoot, now);
+	if ((isAzureModelDeployment(command) || isAzureModelDeployment(planBinding?.command || "")) && (!found || !planBinding || command !== planBinding.command)) {
+		return { ok: false, problems: ["Azure 모델 배포에는 준비 기록과 일치하는 계획 명령이 필요함"], facts: [] };
+	}
 
 	if (!found) {
 		if (!cfg) {
@@ -730,7 +777,7 @@ function assessReadiness(services, { root, auditPath, command = "", cwd = "", no
 	const rel = path.relative(baseRoot, found.file);
 	if (!KINDS.has(rec.kind)) problems.push(`kind 는 feature, ops, rollback 가운데 하나여야 함(지금: ${rec.kind})`);
 	const candidate = typeof rec.candidate === "string" ? rec.candidate.trim() : "";
-	const planned = verifiedPlanBinding(planBinding, candidate, rec.kind, services, baseRoot);
+	const planned = verifiedPlanBinding(planBinding, candidate, rec.kind, services, baseRoot, rec);
 	if (planned && !planned.ok) problems.push(planned.why);
 	if (rec.kind !== "ops" && candidate.length < 7) problems.push("candidate(올릴 커밋 또는 이미지 태그)가 없음");
 
