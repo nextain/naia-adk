@@ -367,6 +367,30 @@ test("관문이 reviewedAt 을 영수증 시작 시각과 대조한다(고정 �
 	assert.ok(ok("codex", { reviewedAt: new Date(now - 3 * 3600 * 1000).toISOString() }).problems.some((p) => p.includes("시작 전 90분 안")));
 });
 
+test("관문이 차례 도입 뒤 옛 모양 기록(rotation 칸 없음)을 막는다", (t) => {
+	const { root } = makeWorkspace(t);
+	const file = path.join(root, ".claude/deploy/config.json");
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.writeFileSync(file, JSON.stringify({ planReview: { reviewer: "codex", until: new Date(Date.now() + 3600 * 1000).toISOString(), reason: "승인자 결정" } }));
+	const { planFile, gatesDir } = createValidPlan(root, { author_model: "muse" });
+	const cutoff = Date.parse(deployPlan.LEGACY_REVIEW_CUTOFF);
+	// 차례 기록에서 rotation·skipped 칸을 지우고 시각을 옮긴 기록(고정 codex 대신 argon)
+	const legacy = (at) => {
+		const { planSha } = writeRotationReceipt(root, planFile, "argon");
+		const recFile = path.join(gatesDir, deployPlan.REVIEW_FILE);
+		const rec = JSON.parse(fs.readFileSync(recFile, "utf8"));
+		delete rec.rotation;
+		delete rec.skipped;
+		rec.reviewedAt = new Date(at).toISOString();
+		rec.reviewers[0].receipt.started_at = new Date(at - 1000).toISOString();
+		fs.writeFileSync(recFile, JSON.stringify(rec, null, 2));
+		return deployPlan.reviewProblems(gatesDir, planSha, root);
+	};
+	const after = legacy(cutoff + 3600 * 1000);
+	assert.ok(after.problems.some((p) => p.includes("옛 모양 리뷰 기록")), after.problems.join("; "));
+	assert.equal(legacy(cutoff - 3600 * 1000).ok, true, "차례 도입 전 옛 기록은 그대로 받음");
+});
+
 test("리뷰 본문의 한도 낱말로는 넘어가지 않는다", (t) => {
 	const { root, tmp, stateDir } = makeWorkspace(t);
 	const { planFile } = createValidPlan(root);

@@ -150,8 +150,10 @@ function writePassingReviewReceipt(root, planFile, options = {}) {
 	const resultRel = `deploy-plan-review-${reviewer}.md`;
 	fs.writeFileSync(path.join(gatesDir, resultRel), finalText);
 
-	const startedAt = options.startedAt || new Date(Date.now() - 2000).toISOString();
-	const endedAt = new Date().toISOString();
+	// 옛 모양(rotation 칸 없음) 기록은 차례 도입 시각 앞선 것만 받으므로 그 앞 시각으로 쓴다.
+	const legacyEnd = Date.parse(deployPlan.LEGACY_REVIEW_CUTOFF) - 60_000;
+	const startedAt = options.startedAt || new Date(legacyEnd - 2000).toISOString();
+	const endedAt = new Date(legacyEnd).toISOString();
 	const reviewRecord = {
 		plan_sha256: planSha,
 		plan: path.relative(root, planFile),

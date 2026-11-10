@@ -166,6 +166,13 @@ function isLimitFailure(exitCode, text) {
 	return Number.isInteger(exitCode) && exitCode !== 0 && LIMIT_RE.test(String(text || ""));
 }
 
+// 차례 도입 시각. 옛 모양(rotation 칸 없음) 기록은 이보다 앞선 것만 받는다. 새 기록에서 rotation 칸 하나를 지워 차례 대조를 건너뛰는 길을 막는다.
+const LEGACY_REVIEW_CUTOFF = "2026-11-10T10:00:00Z";
+
+function isoMs(value) {
+	return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) ? Date.parse(value) : NaN;
+}
+
 // 새 모양 기록인가(명시 칸 rotation:true). 작성자만으로 가르면 argon 작성자의 옛 2인 기록과 새 1인 기록이 충돌하므로, 옛 영수증과 부딪히지 않는 명시 칸으로 가른다.
 function isRotationRecord(rec) {
 	return !!rec && rec.rotation === true;
@@ -508,12 +515,17 @@ function reviewProblems(gatesDir, sha, root) {
 	} catch { problems.push("현재 계획서를 읽지 못함"); }
 	if (!AUTHOR_MODELS.includes(rec.author_model)) problems.push("적대 리뷰 작성자 author_model 없음 또는 잘못됨");
 	if (!plan || plan.author_model !== rec.author_model) problems.push("계획서 author_model 과 적대 리뷰 작성자가 다름");
+	if (!isRotationRecord(rec)) {
+		const cutoff = Date.parse(LEGACY_REVIEW_CUTOFF);
+		const times = [rec.reviewedAt, ...(Array.isArray(rec.reviewers) ? rec.reviewers.map((r) => r?.receipt?.started_at) : [])].map(isoMs);
+		if (!times.every((t) => Number.isFinite(t) && t < cutoff)) problems.push(`옛 모양 리뷰 기록(rotation 칸 없음)은 ${LEGACY_REVIEW_CUTOFF} 앞선 것만 받음(reviewedAt·영수증 시작 시각). 차례 리뷰로 다시 받을 것`);
+	}
 	if (isRotationRecord(rec)) {
 		if (!ROTATION.includes(rec.author_model)) problems.push("차례 기록(rotation:true)의 작성자는 argon·codex·muse 중 하나여야 함");
 		if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 1) problems.push("차례 기록(rotation:true)은 리뷰어 1명의 기록이 필요함");
 		// 차례 대조: 리뷰 시각의 차례(고정 설정 포함)에서 skipped 는 앞에서부터 건너뛴 후보 그대로, 실제 리뷰어는 그 다음 후보여야 한다. 한도 실패 없이 뒤 후보를 쓰거나 모순된 skipped 는 막는다.
 		// 차례를 다시 만들 시각(reviewedAt)은 실제 리뷰 시작보다 늦을 수 없고, 90분보다 앞설 수 없다(첫 후보 45분 제한 + 준비 여유). 시각을 미래로 옮겨 고정 리뷰어를 피하는 길을 막는다.
-		const reviewedAtMs = typeof rec.reviewedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(rec.reviewedAt) ? Date.parse(rec.reviewedAt) : NaN;
+		const reviewedAtMs = isoMs(rec.reviewedAt);
 		const firstStartMs = Date.parse(rec.reviewers?.[0]?.receipt?.started_at);
 		let order = null;
 		if (!Number.isFinite(reviewedAtMs)) problems.push("차례 기록의 reviewedAt(UTC ISO 시각)이 없거나 틀림");
@@ -1254,5 +1266,5 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
+	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };
