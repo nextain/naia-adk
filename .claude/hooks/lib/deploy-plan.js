@@ -49,6 +49,14 @@ const CRITERIA = [
 	["honesty", "양식 정직성: 위험을 축소하거나 숨기지 않았는가"],
 	["incident_safety", "장애 시 선조치(incident.actions)가 있으면 그것이 상황을 더 나쁘게 만들 수 없는가. 비어 있으면([]) 위반이 아니다(선조치를 새로 요구하지 않는다)"],
 ];
+// read_only 계획(양식 검사가 모든 명령을 읽기 갈래로 확인함)의 기준 문구. read_only 가 아니면 CRITERIA 그대로.
+const READ_ONLY_CRITERIA = Object.freeze({
+	disconnect: "끊김: read_only 계획은 끊기면 결과를 버리고 다시 실행한다고 적혀 있으면 충족한다",
+	rollback: "되돌리기: 계획서가 read_only 이고 바꾸는 것이 없으면, 복귀 단계 없음과 그 근거가 적혀 있는 것으로 충족한다",
+});
+function criteriaFor(plan) {
+	return plan?.read_only === true ? CRITERIA.map(([id, text]) => [id, READ_ONLY_CRITERIA[id] || text]) : CRITERIA;
+}
 // 지적 분류. 차단 지적만 FAIL·남은 지적에 센다. 계획에 없는 새 장치를 더하라는 요구는 참고로만 남긴다.
 const BLOCKING_KINDS = [
 	"불일치: 계획 문구와 명령·스크립트 실제 동작이 다름",
@@ -178,6 +186,32 @@ function isRotationRecord(rec) {
 	return !!rec && rec.rotation === true;
 }
 
+/**
+ * read_only 계획 검사: 바꾸는 것이 없음을 기계로 확인한다. 모든 단계·선조치 명령이 읽기 갈래(deploy-readiness readOnlyProblem,
+ * ops 판정의 조회 갈래)이고, 되돌리기 단계(branch rollback)와 rollback.step_ids 가 없어야 한다. 판정기를 못 읽으면 막는다.
+ */
+function readOnlyProblems(plan) {
+	let readOnlyProblem;
+	try { ({ readOnlyProblem } = require("./deploy-readiness.js")); }
+	catch { return ["read_only 판정기(deploy-readiness.js)를 읽지 못함"]; }
+	const p = [];
+	const check = (owner, commands) => {
+		for (const c of Array.isArray(commands) ? commands : []) {
+			const bad = readOnlyProblem(c);
+			if (bad) p.push(`read_only 계획의 ${owner} 명령이 읽기 갈래가 아님: ${bad}`);
+		}
+	};
+	for (const [i, s] of (Array.isArray(plan.scenario) ? plan.scenario : []).entries()) {
+		if (!s || typeof s !== "object") continue;
+		if (s.branch === "rollback") p.push(`read_only 계획에 되돌리기 단계가 있음: scenario[${i}](${s.id}). 바꾸는 것이 없으면 되돌리기 단계를 두지 않음`);
+		check(`단계 ${s.id}`, s.commands);
+	}
+	for (const a of Array.isArray(plan.incident?.actions) ? plan.incident.actions : []) if (a) check(`장애 선조치 ${a.id}`, a.commands);
+	const stepIds = plan.rollback?.step_ids;
+	if (stepIds !== undefined && (!Array.isArray(stepIds) || stepIds.length > 0)) p.push("read_only 계획의 rollback.step_ids 는 비어 있어야 함([])");
+	return p;
+}
+
 /** 양식 검사. 빈 칸마다 한 줄. */
 function formProblems(plan) {
 	const p = [];
@@ -228,6 +262,8 @@ function formProblems(plan) {
 	if (!str(rb.method, 5)) p.push("rollback.method(되돌리기 방법) 없음");
 	if (!str(rb.duration, 2)) p.push("rollback.duration(되돌리기 소요 시간) 없음");
 	for (const id of Array.isArray(rb.step_ids) ? rb.step_ids : []) if (!ids.has(id)) p.push(`rollback.step_ids 의 단계 ${id} 가 scenario 에 없음`);
+	if (plan.read_only !== undefined && typeof plan.read_only !== "boolean") p.push("read_only 는 true 또는 false 여야 함");
+	if (plan.read_only === true) p.push(...readOnlyProblems(plan));
 	if (!strList(plan.residual_risks, 3)) p.push("residual_risks(남은 위험, 승인자가 책임지는 것) 없음");
 	const inc = plan.incident || {};
 	if (!strList(inc.criteria, 3)) p.push("incident.criteria(장애 판단 기준) 없음");
@@ -317,7 +353,143 @@ function resultFile(gatesDir, result, allowMissing = false) {
 	return real;
 }
 
-function reviewPrompt(plan, sha, root) {
+// ── 리뷰 회차 ───────────────────────────────────────────────────
+// 리뷰마다 gates/review-rounds/round-<NNN>.json 을 쌓는다(덮어쓰지 않음). deploy-plan-review.json 은 최신 판으로 계속 쓴다.
+// 다음 리뷰 요청문에 직전 회차의 기준별 판정과 차단 지적을 붙이고, 같은 계획서가 연속 3회 FAIL 이면 4회차 리뷰를 돌리지 않는다.
+const ROUNDS_DIR = "review-rounds";
+const ROUND_FAIL_LIMIT = 3;
+const BLOCKING_LINE = (line) => /^\s*(?:\d+[.)]|[-*])\s*\**\s*\[\s*차단/.test(line) || /^\s*\|.*\[\s*차단\s*:/.test(line);
+
+function blockingLinesOf(body) {
+	return String(body || "").split(/\r?\n/).filter(BLOCKING_LINE);
+}
+function firstVerdictLine(body) {
+	return String(body || "").trim().split(/\r?\n/).find((line) => !/^(?:codex|tokens used|\d[\d,]*)\s*$/i.test(line.trim())) || "";
+}
+
+/** 회차 파일 목록(회차 오름차순). */
+function roundFiles(gatesDir) {
+	let names = [];
+	try { names = fs.readdirSync(path.join(gatesDir, ROUNDS_DIR)); } catch { return []; }
+	return names.map((name) => ({ name, m: /^round-(\d{3,})\.json$/.exec(name) })).filter((x) => x.m)
+		.map((x) => ({ round: Number(x.m[1]), rel: `${ROUNDS_DIR}/${x.name}` })).sort((a, b) => a.round - b.round);
+}
+function readRound(gatesDir, rel) {
+	try {
+		const file = resultFile(gatesDir, rel);
+		const buf = fs.readFileSync(file);
+		const data = JSON.parse(buf.toString("utf8"));
+		if (!data || typeof data !== "object" || !data.outcome || !Array.isArray(data.outcome.criteria) || !Array.isArray(data.outcome.blocking)) return null;
+		return { rel, sha256: sha256(buf), data };
+	} catch { return null; }
+}
+
+/** reviewProblems 결과로 한 회차의 판정을 만든다. 리뷰 본문이 없으면(실행 실패) 판정 "없음": 회차 수에도 FAIL 연속에도 넣지 않는다. */
+function roundOutcome(review) {
+	const rows = (review?.reviewers || []).filter((r) => r && r.body);
+	if (!rows.length) return { verdict: "없음", criteria: [], blocking: [] };
+	const criteria = CRITERIA.map(([id]) => {
+		const v = rows.map((r) => (r.summary || []).find((s) => s.id === id)?.verdict || "없음");
+		return { id, verdict: v.includes("FAIL") ? "FAIL" : v.every((x) => x === "PASS") ? "PASS" : "없음" };
+	});
+	const blocking = rows.flatMap((r) => blockingLinesOf(r.body)).map((l) => l.trim().slice(0, 400)).slice(0, 50);
+	const firsts = rows.map((r) => firstVerdictLine(r.body));
+	let verdict;
+	if (review.ok) verdict = "PASS";
+	else if (firsts.some((l) => /^판정:\s*FAIL\b/i.test(l)) || criteria.some((c) => c.verdict === "FAIL") || blocking.length) verdict = "FAIL";
+	else if (firsts.every((l) => /^판정:\s*PASS\s*$/i.test(l))) verdict = "PASS";
+	else verdict = "없음";
+	return { verdict, criteria, blocking };
+}
+
+/** 회차 하나를 새 파일로 남긴다(wx: 있던 파일은 덮지 않음). 돌려줌: { round, rel, sha256 } */
+function writeRound(gatesDir, { plan_sha256, plan, record, outcome, legacy = false }) {
+	const dir = path.join(gatesDir, ROUNDS_DIR);
+	fs.mkdirSync(dir, { recursive: true });
+	const round = (roundFiles(gatesDir).pop()?.round || 0) + 1;
+	const rel = `${ROUNDS_DIR}/round-${String(round).padStart(3, "0")}.json`;
+	const text = `${JSON.stringify({ schema: "deploy-plan-review-round/v1", round, recordedAt: new Date().toISOString(), ...(legacy ? { legacy: true } : {}), plan_sha256, plan: plan ?? null, outcome, record }, null, 2)}\n`;
+	fs.writeFileSync(path.join(gatesDir, rel), text, { flag: "wx" });
+	return { round, rel, sha256: sha256(Buffer.from(text, "utf8")) };
+}
+
+/** 직전 회차(판정 PASS 또는 FAIL 인 가장 최근 회차). 없으면 null. */
+function priorRound(gatesDir) {
+	for (const f of roundFiles(gatesDir).reverse()) {
+		const r = readRound(gatesDir, f.rel);
+		if (r && ["PASS", "FAIL"].includes(r.data.outcome.verdict)) return r;
+	}
+	return null;
+}
+/** 최근부터 센 연속 FAIL 회차. 판정 "없음"(실행 실패)은 건너뛰고, PASS 에서 멈춘다. */
+function failStreak(gatesDir) {
+	const rounds = [];
+	for (const f of roundFiles(gatesDir).reverse()) {
+		const r = readRound(gatesDir, f.rel);
+		if (!r) continue;
+		if (r.data.outcome.verdict === "PASS") break;
+		if (r.data.outcome.verdict === "FAIL") rounds.push(r);
+	}
+	return { count: rounds.length, rounds };
+}
+/** 기록의 prior_round({round, file, sha256})가 가리키는 회차를 다시 읽는다. sha 가 다르면 null. */
+function loadPriorRound(gatesDir, ref) {
+	if (!ref || typeof ref !== "object" || typeof ref.file !== "string") return null;
+	const r = readRound(gatesDir, ref.file);
+	return r && r.sha256 === ref.sha256 && r.data.round === ref.round ? r : null;
+}
+
+/** 직전 회차 계획서와 지금 계획서에서 달라진 최상위 칸(scenario 는 단계 id 별). 직전 사본이 없으면 null. */
+function changedFields(before, after) {
+	if (!before || typeof before !== "object" || !after || typeof after !== "object") return null;
+	const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+	const out = [];
+	for (const k of [...new Set([...Object.keys(before), ...Object.keys(after)])].sort()) {
+		if (same(before[k], after[k])) continue;
+		if (k === "scenario" && Array.isArray(before.scenario) && Array.isArray(after.scenario)) {
+			const find = (list, id) => list.find((s) => s && s.id === id);
+			const ids = [...new Set([...before.scenario, ...after.scenario].map((s) => s && s.id))];
+			const steps = ids.filter((id) => !same(find(before.scenario, id), find(after.scenario, id))).map((id) => `scenario[${id}]`);
+			out.push(...(steps.length ? steps : ["scenario(순서)"]));
+		} else out.push(k);
+	}
+	return out;
+}
+
+function priorRoundLines(prior, plan) {
+	if (!prior) return [];
+	const d = prior.data;
+	const changed = changedFields(d.plan, plan);
+	return [
+		`직전 회차 리뷰(회차 ${d.round}, 계획서 sha256 ${d.plan_sha256}, 판정 ${d.outcome.verdict}, 기록 gates/${prior.rel}):`,
+		"기준별 판정:",
+		...d.outcome.criteria.map((c) => `- ${c.id}: ${c.verdict}`),
+		"차단 지적:",
+		...(d.outcome.blocking.length ? d.outcome.blocking.map((l) => `- ${l}`) : ["- 없음"]),
+		`직전 회차 뒤 바뀐 칸: ${changed === null ? "알 수 없음(직전 계획서 사본 없음)" : changed.length ? changed.join(", ") : "없음(계획서가 같음)"}`,
+		"규칙: 바뀌지 않은 부분에서 이전에 PASS 한 기준을 FAIL 로 바꾸려면 이전 판정이 틀린 이유를 적을 것. 새 차단은 이번에 바뀐 부분에서 찾을 것.",
+		"",
+	];
+}
+
+/** 연속 FAIL 상한에 걸렸을 때 리뷰 대신 내는 사람 판정 요청문. */
+function humanDecisionRequest(planRel, streak) {
+	const last = streak.rounds[0];
+	return [
+		`사람 판정 요청: 같은 계획서(${planRel})의 적대 리뷰가 연속 ${streak.count}회 FAIL 이라 ${ROUND_FAIL_LIMIT + 1}회차 리뷰를 돌리지 않습니다.`,
+		`FAIL 회차: ${streak.rounds.map((r) => r.data.round).reverse().join(", ")} (gates/${ROUNDS_DIR}/)`,
+		`남은 차단 지적(회차 ${last.data.round}):`,
+		...(last.data.outcome.blocking.length ? last.data.outcome.blocking.map((l) => `- ${l}`) : ["- (차단 지적 줄 없음) 기준별 FAIL: " + last.data.outcome.criteria.filter((c) => c.verdict !== "PASS").map((c) => c.id).join(", ")]),
+		"",
+		"승인자가 지적마다 수용·수정을 판정합니다. 위험 수용은 이미 있는 risk_acceptance 칸(security 기준 하나만, docs/guides/approval-plan-gate.md)으로만 받습니다.",
+	].join("\n");
+}
+
+function reviewPrompt(plan, sha, root, prior = null) {
+	const criteria = criteriaFor(plan);
+	const rollbackRule = plan?.read_only === true
+		? ["- 이 계획서는 read_only 입니다(양식 검사가 모든 명령을 읽기 갈래로 기계 확인함). 복귀 단계 없음과 그 근거가 적혀 있으면 rollback 기준을 충족하고, 끊기면 결과를 버리고 다시 실행한다고 적혀 있으면 disconnect 기준을 충족합니다."]
+		: ["- 되돌리기는 \"사람이 실행하는 이전 판 복귀 한 단계와 걸리는 시간\"이 적혀 있고 그 명령이 실제로 보존된 이전 판으로 돌아가면 rollback 기준을 충족합니다."];
 	return [
 		"당신은 운영 배포 계획서(승인 보고 양식)의 적대적 검수자입니다. 이 계획을 승인하면 승인자가 결과에 책임을 집니다.",
 		"계획서를 깨뜨릴 방법을 찾으십시오. 아래 기준마다 PASS 또는 FAIL 을 판정하고, FAIL 이면 구체적 지적(어느 칸, 무엇이 왜 틀림, 고칠 방향)을 적으십시오.",
@@ -327,14 +499,15 @@ function reviewPrompt(plan, sha, root) {
 		"- 차단 지적으로 셀 수 있는 것은 다음 다섯 가지뿐입니다:",
 		...BLOCKING_KINDS.map((k) => `  - ${k}`),
 		`- 차단 지적이 아닌 것(참고로만 남김): 계획에 없는 새 장치를 더하라는 요구. 예: ${ADVISORY_EXAMPLES}.`,
-		"- 되돌리기는 \"사람이 실행하는 이전 판 복귀 한 단계와 걸리는 시간\"이 적혀 있고 그 명령이 실제로 보존된 이전 판으로 돌아가면 rollback 기준을 충족합니다.",
+		...rollbackRule,
 		"- incident.actions 가 비어 있는 것([])은 incident_safety 위반이 아닙니다.",
 		"- 새 장치가 없어서 생기는 위험이 계획서(risks·impact·residual_risks 등)에 적히지 않았거나 축소돼 있으면 그것은 \"위험숨김\" 차단 지적입니다. 적혀 있으면 장치 추가 요구는 참고입니다.",
 		"- 기준 판정은 차단 지적만으로 정합니다. 참고 지적만 있는 기준은 PASS 입니다.",
 		"",
 		"기준:",
-		...CRITERIA.map(([id, text]) => `- ${id}: ${text}`),
+		...criteria.map(([id, text]) => `- ${id}: ${text}`),
 		"",
+		...priorRoundLines(prior, plan),
 		"출력 형식(정확히):",
 		"첫 줄: 판정: PASS 또는 판정: FAIL (기준 하나라도 FAIL 이면 FAIL)",
 		...CRITERIA.map(([id]) => `${id}: PASS|FAIL — 한 줄 근거`),
@@ -469,7 +642,7 @@ function reviewBodyProblems(text, sha, acceptSecurity = false) {
 	const open = [...body.matchAll(/(?:남은\s*지적|open[_ ]findings)\s*[:：=]\s*(\d+)/gi)].pop();
 	if (!open) problems.push("적대 리뷰 결과에 \"남은 지적: <수>\" 줄이 없음");
 	// 남은 지적은 차단 지적 수다. 참고 지적은 세지 않는다. 다만 목록에 [차단] 줄이 하나라도 있으면 남은 지적 숫자와 관계없이 미통과.
-	const blockingLines = body.split(/\r?\n/).filter((line) => /^\s*(?:\d+[.)]|[-*])\s*\**\s*\[\s*차단/.test(line) || /^\s*\|.*\[\s*차단\s*:/.test(line));
+	const blockingLines = blockingLinesOf(body);
 	// 위험 수용 중에는 security 를 적은 차단 지적 하나만 뺀다(승인자는 값 하나를 받아들였다). 두 번째 security 지적은 새 노출로 보고 막는다.
 	// 남은 지적 수도 1 이어야 한다.
 	const securityFailed = summary.some((s) => s.id === "security" && s.verdict === "FAIL");
@@ -478,7 +651,7 @@ function reviewBodyProblems(text, sha, acceptSecurity = false) {
 	if (open && Number(open[1]) !== accepted.length) problems.push(`적대 리뷰 남은 지적 ${open[1]}건${accepted.length ? `(security 위험 수용 ${accepted.length}건만 남아야 함)` : ""}`);
 	const advisoryLines = body.split(/\r?\n/).filter((line) => /^\s*(?:\d+[.)]|[-*])\s*\**\s*\[\s*참고/.test(line));
 	const advisory = [...body.matchAll(/참고\s*지적\s*[:：=]\s*(\d+)/g)].pop();
-	const first = body.trim().split(/\r?\n/).find((line) => !/^(?:codex|tokens used|\d[\d,]*)\s*$/i.test(line.trim())) || "";
+	const first = firstVerdictLine(body);
 	if (!/^판정:\s*PASS\s*$/i.test(first) && !(accepted.length && /^판정:\s*FAIL\s*$/i.test(first))) problems.push("적대 리뷰 전체 판정이 PASS 가 아님");
 	return { ok: problems.length === 0, riskAccepted: accepted.length > 0, problems, summary, openFindings: open ? Number(open[1]) : null, advisoryFindings: advisory ? Number(advisory[1]) : advisoryLines.length, body, prompt_sha256: tr?.prompt };
 }
@@ -506,8 +679,12 @@ function reviewProblems(gatesDir, sha, root) {
 	if (plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && !riskAcceptanceActive(plan)) problems.push("risk_acceptance 끝남(expires_at 지남)");
 	const acceptSecurity = riskAcceptanceActive(plan);
 	problems.push(...pinnedFileProblems(plan, base));
+	// 기록이 직전 회차를 요청문에 붙였으면(prior_round) 그 회차 파일을 sha 로 다시 읽어 같은 요청문을 만든다.
+	const hasPrior = rec?.prior_round !== undefined && rec?.prior_round !== null;
+	const prior = hasPrior ? loadPriorRound(gatesDir, rec.prior_round) : null;
+	if (hasPrior && !prior) problems.push("기록 prior_round(직전 회차 영수증)를 읽지 못했거나 sha256 이 다름");
 	let promptSha = null;
-	try { if (plan) promptSha = sha256(reviewPrompt(plan, sha, base)); } catch { problems.push("현재 요청문을 다시 만들지 못함"); }
+	try { if (plan) promptSha = sha256(reviewPrompt(plan, sha, base, prior)); } catch { problems.push("현재 요청문을 다시 만들지 못함"); }
 	if (!rec) { problems.push("적대 리뷰 기록 없음: " + REVIEW_FILE); return finish(); }
 	if (rec.plan_sha256 !== sha) problems.push("적대 리뷰가 지금 계획서가 아닌 판을 검수함. 계획서를 고쳤으면 다시 검수받을 것");
 	try {
@@ -1126,6 +1303,7 @@ const TEMPLATE = {
 	schema: "deploy-plan/v1",
 	author_model: "<muse>",
 	planId: "<짧은 이름, 예: app-web-20261016>",
+	read_only: false,
 	createdAt: "<ISO 시각>",
 	services: ["<deploy-guard 가 알려 준 운영 서비스 키, 예: azure:containerapp:my-app-prod>"],
 	what_why: "<무엇을 왜 배포하나 한두 줄>",
@@ -1266,5 +1444,6 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
+	criteriaFor, readOnlyProblems, roundFiles, readRound, roundOutcome, writeRound, priorRound, failStreak, loadPriorRound, changedFields, humanDecisionRequest, ROUNDS_DIR, ROUND_FAIL_LIMIT,
 	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };

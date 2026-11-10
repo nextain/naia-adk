@@ -6,7 +6,8 @@
  *   check <plan>                     양식 칸·적대 리뷰 기록 점검, 명령별 sha 출력
  *   report <plan>                    승인자에게 올릴 보고문 출력(리뷰 통과 시)
  *   review <plan> --author <argon|codex|muse> [--out <file>] 차례(작성자 다음 모델) 1명 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json. 고정 planReview 가 유효하면 그 리뷰어를 먼저 쓰고, 한도 실패 때만 차례대로 넘어간다(넘긴 리뷰어는 skipped 로 남긴다)
- *   review-prompt <plan>             리뷰 요청문만 출력
+ *       리뷰마다 gates/review-rounds/round-<NNN>.json 을 쌓고, 직전 회차 판정·차단 지적을 요청문에 붙인다. 연속 3회 FAIL 이면 리뷰 대신 사람 판정 요청을 내고 코드 4로 끝낸다
+ *   review-prompt <plan>             리뷰 요청문만 출력(직전 회차 포함)
  *   preapprove <plan> --session <id>      사전승인 코드 발급(승인 아님: PLAN+전단계 코드, approval_mode 사전 계획만)
  *   step-ok <plan> <step> --evidence <file>   단계 성공 확인 증거 기록(gates/deploy-steps/<step>.json)
  *   judge <plan> --evidence <file>... --executor-session <id>   장애/개발 독립 판정(다른 세션: muse 헤드리스)
@@ -476,8 +477,8 @@ switch (cmd) {
 		break;
 	}
 	case "review-prompt": {
-		const { plan, sha } = loadPlan(args[0]);
-		console.log(lib.reviewPrompt(plan, sha, ROOT));
+		const { plan, sha, gatesDir } = loadPlan(args[0]);
+		console.log(lib.reviewPrompt(plan, sha, ROOT, lib.priorRound(gatesDir)));
 		break;
 	}
 	case "review": {
@@ -508,7 +509,21 @@ switch (cmd) {
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 먼저 채우십시오\n${form.join("\n")}`, 1);
 		const pins = lib.pinnedFileProblems(plan, ROOT);
 		if (pins.length) die(pins.join("\n"), 1);
-		const prompt = lib.reviewPrompt(plan, sha, ROOT);
+		// 회차: 회차 파일이 아직 없고 앞 리뷰 기록이 있으면 그것을 첫 회차로 옮겨 둔다(회차 도입 전 기록도 직전 회차로 쓴다).
+		if (!lib.roundFiles(gatesDir).length) {
+			let old = null;
+			try { old = JSON.parse(fs.readFileSync(path.join(gatesDir, lib.REVIEW_FILE), "utf8")); } catch { old = null; }
+			if (old && typeof old.plan_sha256 === "string" && Array.isArray(old.reviewers) && old.reviewers.some((r) => r && r.result)) {
+				let outcome = { verdict: "없음", criteria: [], blocking: [] };
+				try { outcome = lib.roundOutcome(lib.reviewProblems(gatesDir, old.plan_sha256, ROOT)); } catch {}
+				lib.writeRound(gatesDir, { plan_sha256: old.plan_sha256, plan: old.plan_sha256 === sha ? plan : null, record: old, outcome, legacy: true });
+			}
+		}
+		// 같은 계획서가 연속 상한만큼 FAIL 이면 리뷰를 돌리지 않고 사람 판정을 요청한다.
+		const streak = lib.failStreak(gatesDir);
+		if (streak.count >= lib.ROUND_FAIL_LIMIT) die(lib.humanDecisionRequest(path.relative(ROOT, abs), streak), 4);
+		const prior = lib.priorRound(gatesDir);
+		const prompt = lib.reviewPrompt(plan, sha, ROOT, prior);
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID();
 		const base = path.resolve(opt(args, "--out") || path.join(gatesDir, `deploy-plan-review-${stamp}.md`));
 		// 차례는 기록 reviewedAt 과 같은 시각으로 고른다. 관문이 같은 시각으로 차례를 다시 만들어 대조한다.
@@ -521,7 +536,7 @@ switch (cmd) {
 		for (const out of outputs) if (out === abs || fs.existsSync(out)) die("리뷰 결과 경로가 이미 있습니다. 새 --out 경로를 쓰십시오");
 		try { for (const out of outputs) lib.resultFile(gatesDir, path.relative(gatesDir, out), true); }
 		catch { die("--out 은 해당 계획서 gatesDir 안 일반 파일 경로여야 합니다. 하위 폴더는 먼저 만드십시오"); }
-		const rec = { plan_sha256: sha, plan: path.relative(ROOT, abs), author_model: author, prompt_sha256: sha256(prompt), rotation: true, skipped: [], reviewers: [], reviewedAt };
+		const rec = { plan_sha256: sha, plan: path.relative(ROOT, abs), author_model: author, prompt_sha256: sha256(prompt), rotation: true, skipped: [], reviewers: [], reviewedAt, ...(prior ? { prior_round: { round: prior.data.round, file: prior.rel, sha256: prior.sha256 } } : {}) };
 		const recordFile = path.join(gatesDir, lib.REVIEW_FILE);
 		fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
 		const reviewStartedAt = Date.now();
@@ -553,6 +568,9 @@ switch (cmd) {
 		}
 		fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
 		const r = reviewStatus(gatesDir, sha, true);
+		const outcome = lib.roundOutcome(r);
+		const saved = lib.writeRound(gatesDir, { plan_sha256: sha, plan, record: rec, outcome });
+		console.log(`회차 기록: gates/${saved.rel} (판정 ${outcome.verdict})`);
 		console.log(r.ok ? "적대 리뷰: 통과 — 승인 요청 가능" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
 		process.exit(r.ok ? 0 : 1);
 	}

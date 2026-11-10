@@ -1371,6 +1371,52 @@ test("codex reviewer refuses to run without bwrap outside recovery mode", (t) =>
  assert.equal(fs.existsSync(marker), false);
 });
 
+// 읽기 전용 계획: 단계가 모두 조회이고 되돌리기 단계·step_ids 가 없어야 양식을 지난다. 시험 대상 이름은 example 만 쓴다.
+function readOnlyPlan(overrides = {}) {
+	return {
+		schema: "deploy-plan/v1", author_model: "muse", planId: "example-read-01", createdAt: new Date().toISOString(), read_only: true,
+		services: ["azure:vm:example-gw"], what_why: "게이트웨이 상태를 읽기만 하여 다음 계획의 근거를 모읍니다.", changes: ["없음: 조회만 함"],
+		scenario: [
+			{ id: "s1", title: "VM 안 상태 조회", commands: ["az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts \"docker ps\" \"nvidia-smi\""], success_check: "출력에 컨테이너 목록이 있음", on_failure: "결과를 버리고 다시 실행" },
+			{ id: "s2", title: "앱 설정 조회", commands: ["az containerapp show -n example-web -g example-rg -o json"], success_check: "JSON 출력", on_failure: "결과를 버리고 다시 실행" },
+		],
+		risks: { items: ["조회 출력에 내부 주소가 보임"], worst_case: "조회 실패로 근거를 못 모음" }, irreversible: ["없음: 바꾸는 것이 없음"],
+		disconnect_safety: "끊기면 결과를 버리고 같은 명령을 다시 실행한다", rerun_safety: { lock: "조회라 잠금 불필요", run_dir: "출력은 매번 새 파일", no_latest_pick: "실행 id 를 명시" },
+		success_verification: "두 단계 출력이 모두 있음", rollback: { method: "없음: 읽기만 하여 되돌릴 판이 없음", duration: "0분", step_ids: [] },
+		residual_risks: ["조회 부하 미미"], incident: { criteria: ["조회 명령이 5분 넘게 안 끝남"], actions: [] },
+		...overrides,
+	};
+}
+
+test("read_only 계획: 모든 단계가 조회이고 되돌리기 단계가 없으면 양식 통과, 기준 문구가 바뀜", () => {
+	const plan = readOnlyPlan();
+	assert.deepEqual(deployPlan.formProblems(plan), []);
+	const prompt = deployPlan.reviewPrompt(plan, "0".repeat(64), REPO_ROOT);
+	assert.match(prompt, /rollback: 되돌리기: 계획서가 read_only 이고 바꾸는 것이 없으면, 복귀 단계 없음과 그 근거가 적혀 있는 것으로 충족한다/);
+	assert.match(prompt, /disconnect: 끊김: read_only 계획은 끊기면 결과를 버리고 다시 실행한다고 적혀 있으면 충족한다/);
+	assert.doesNotMatch(prompt, /사람이 실행하는 이전 판 복귀 한 단계와 걸리는 시간/);
+	// read_only 가 아니면 지금 문구 그대로
+	const normal = deployPlan.reviewPrompt({ ...plan, read_only: false }, "0".repeat(64), REPO_ROOT);
+	assert.ok(normal.includes(`- rollback: ${deployPlan.CRITERIA_TEXT.rollback}`));
+	assert.ok(normal.includes(`- disconnect: ${deployPlan.CRITERIA_TEXT.disconnect}`));
+});
+
+test("read_only 계획 위반: 바꾸는 단계·되돌리기 단계·step_ids·불투명 대본·재시작은 양식 FAIL", () => {
+	const base = readOnlyPlan();
+	const has = (plan, re, label) => assert.ok(deployPlan.formProblems(plan).some((p) => re.test(p)), `${label}: ${deployPlan.formProblems(plan).join(" / ")}`);
+	const step = (command) => ({ ...base, scenario: [{ ...base.scenario[0], commands: [command] }] });
+	has(step("az containerapp update -n example-web -g example-rg --set-env-vars X=1"), /단계 s1 명령이 읽기 갈래가 아님/, "설정 변경");
+	has(step("az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts \"docker restart gw\""), /읽기 갈래가 아님.*docker restart/, "VM 안 재시작");
+	has(step("az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts @scripts/read.sh"), /불투명/, "@대본 파일");
+	has(step("bash scripts/read.sh"), /읽기 갈래가 아님/, "로컬 대본");
+	has({ ...base, rollback: { ...base.rollback, step_ids: ["r1"] }, scenario: [...base.scenario, { id: "r1", branch: "rollback", title: "되돌리기", commands: ["az containerapp show -n example-web -g example-rg -o table"], success_check: "출력 확인", on_failure: "보고만 함" }] }, /되돌리기 단계가 있음/, "rollback 단계");
+	has({ ...base, rollback: { ...base.rollback, step_ids: ["s1"] } }, /step_ids 는 비어 있어야 함/, "step_ids");
+	has({ ...base, incident: { ...base.incident, actions: [{ id: "a1", commands: ["az containerapp revision restart -n example-web -g example-rg --revision example-web--1"], why_safe: "재시작만 함" }] } }, /장애 선조치 a1 명령이 읽기 갈래가 아님/, "선조치 변경");
+	has({ ...base, read_only: "yes" }, /read_only 는 true 또는 false/, "불리언 아님");
+	// read_only 가 아니면 같은 변경 단계도 양식은 막지 않는다
+	assert.ok(!deployPlan.formProblems({ ...step("az containerapp update -n example-web -g example-rg --set-env-vars X=1"), read_only: false }).some((p) => p.includes("read_only")));
+});
+
 test("위험 수용: security FAIL 하나만, 결정 글·같은 값·끝나는 날이 맞을 때만 리뷰 관문을 지남", (t) => {
 	const goodRa = () => ({ criterion: "security", accepted_by: "approver", decision_url: "https://discord.com/channels/1/2/3", same_value_as: "앞 판 번들 같은 지문 0123456789ab", no_new_exposure: true, expires_at: new Date(Date.now() + 86400000).toISOString(), reason: "이미 공개된 같은 시연 값, 새 노출 없음" });
 	const secLine = ["1. [차단: security] 공개 번들에 시연 값"];

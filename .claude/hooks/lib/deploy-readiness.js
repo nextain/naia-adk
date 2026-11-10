@@ -121,7 +121,8 @@ const INNER_DOCKER = new Set(["ps", "logs", "inspect", "stats", "images", "versi
 const INNER_COMPOSE = new Set(["ps", "logs", "restart", "config", "images", "top", "ls"]);
 const CURL_WRITE = /^(?:-d|--data(?:-\w+)?|-F|--form(?:-string)?|-T|--upload-file|-o|--output|-O|--remote-name(?:-all)?|--json)(?:=|$)/;
 
-function innerClauseProblem(tokens0) {
+// readOnly 가 참이면 같은 판정에서 조회 갈래만 받는다(재시작·멈춤·시작·이름 바꾸기·설정 갱신은 읽기가 아님). 계획서 read_only 검사가 쓴다.
+function innerClauseProblem(tokens0, readOnly = false) {
 	let t;
 	for (let i = 0; i < tokens0.length; i++) {
 		const x = tokens0[i];
@@ -152,12 +153,12 @@ function innerClauseProblem(tokens0) {
 	const positional = rest.filter((a) => !a.startsWith("-"));
 	if (INNER_READ.has(cmd) && !readCommandWrites(cmd, rest)) return null;
 	if (cmd === "sed" && !rest.some((a) => /^-[a-zA-Z]*i|^--in-place/.test(a))) return null;
-	if (cmd === "systemctl" && INNER_SYSTEMCTL.has(positional[0])) return null;
+	if (cmd === "systemctl" && INNER_SYSTEMCTL.has(positional[0]) && !(readOnly && positional[0] === "restart")) return null;
 	if (cmd === "docker" || cmd === "docker-compose") {
-		if (cmd === "docker" && INNER_DOCKER.has(positional[0])) return null;
-		if (cmd === "docker" && (positional[0] === "stop" || positional[0] === "start")) return null;
-		if (cmd === "docker" && positional[0] === "update" && rest.includes("--restart=no") && rest.filter((a) => a.startsWith("-")).every((a) => a === "--restart=no")) return null;
-		if (cmd === "docker" && positional[0] === "rename") {
+		if (cmd === "docker" && INNER_DOCKER.has(positional[0]) && !(readOnly && positional[0] === "restart")) return null;
+		if (!readOnly && cmd === "docker" && (positional[0] === "stop" || positional[0] === "start")) return null;
+		if (!readOnly && cmd === "docker" && positional[0] === "update" && rest.includes("--restart=no") && rest.filter((a) => a.startsWith("-")).every((a) => a === "--restart=no")) return null;
+		if (!readOnly && cmd === "docker" && positional[0] === "rename") {
 			const after = rest.slice(rest.indexOf("rename") + 1);
 			if (after.length === 2 && rest.every((a) => !a.startsWith("-")) && after.every((a) => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(a))) return null;
 		}
@@ -165,18 +166,18 @@ function innerClauseProblem(tokens0) {
 			const after = rest.slice(rest.indexOf("exec") + 1);
 			let k = 0;
 			while (k < after.length && after[k].startsWith("-")) k += /^(?:-u|--user|-e|--env|-w|--workdir|--env-file)$/.test(after[k]) ? 2 : 1;
-			if (k + 1 < after.length) return innerClauseProblem(after.slice(k + 1));
+			if (k + 1 < after.length) return innerClauseProblem(after.slice(k + 1), readOnly);
 		}
 		const ci = cmd === "docker-compose" ? -1 : rest.indexOf("compose");
 		if (cmd === "docker-compose" || positional[0] === "compose") {
 			const after = rest.slice(ci + 1);
 			let k = 0;
 			while (k < after.length && after[k].startsWith("-")) k += /^(?:-f|--file|-p|--project-name|--env-file|--profile)$/.test(after[k]) ? 2 : 1;
-			if (INNER_COMPOSE.has(after[k])) return null;
+			if (INNER_COMPOSE.has(after[k]) && !(readOnly && after[k] === "restart")) return null;
 			if (after[k] === "exec") {
 				let e = k + 1;
 				while (e < after.length && after[e].startsWith("-")) e += /^(?:-u|--user|-e|--env|-w|--workdir|--index)$/.test(after[e]) ? 2 : 1;
-				if (e + 1 < after.length) return innerClauseProblem(after.slice(e + 1));
+				if (e + 1 < after.length) return innerClauseProblem(after.slice(e + 1), readOnly);
 			}
 		}
 	}
@@ -194,7 +195,7 @@ function innerClauseProblem(tokens0) {
 			const { shellClauses } = require("./git-command-parser.js");
 			const clauses = shellClauses(rest[c + 1]);
 			if (clauses.unbalanced) return `따옴표가 닫히지 않은 글: ${rest[c + 1].slice(0, 200)}`;
-			for (const x of clauses) { const bad = innerClauseProblem(x); if (bad) return bad; }
+			for (const x of clauses) { const bad = innerClauseProblem(x, readOnly); if (bad) return bad; }
 			return null;
 		}
 	}
@@ -265,6 +266,8 @@ function innerProblem(command) {
 	return null;
 }
 
+// az 조회 동사(show·list·logs 등). ops 판정과 계획서 read_only 판정이 같이 쓴다.
+const AZ_READ_PHRASE = /(?:^| )(?:show|list|logs?|browse|tail|get|wait)(?: |$)|(?:^| )(?:list|show)-/;
 const OPS_AZ_VERBS = [
 	/^(?:containerapp|webapp|functionapp) update$/,
 	/^(?:containerapp|webapp|functionapp|vm|vmss) (?:restart|stop|start)$/,
@@ -294,7 +297,7 @@ function opsAzProblem(command) {
 		let i = at + 1;
 		for (; i < tokens.length && !tokens[i].startsWith("-"); i++) verbs.push(tokens[i]);
 		const phrase = verbs.join(" ");
-		if (/(?:^| )(?:show|list|logs?|browse|tail|get|wait)(?: |$)|(?:^| )(?:list|show)-/.test(phrase)) continue;
+		if (AZ_READ_PHRASE.test(phrase)) continue;
 		if (remotePayload(tokens) !== undefined) {
 			const script = remotePayload(tokens);
 			if (script === null) return "원격 실행 본문 또는 지원하는 원격 동사가 없음";
@@ -310,6 +313,43 @@ function opsAzProblem(command) {
 			const flag = t.split("=")[0];
 			if (!OPS_AZ_FLAGS.has(flag) && !OPS_AZ_VERB_FLAGS[phrase]?.has(flag)) return `ops 로 받을 수 없는 옵션: az ${phrase} ${flag}. 설정만 바꾸는 옵션이 아니면 feature 나 rollback 으로 신고함`;
 		}
+	}
+	return null;
+}
+
+/**
+ * 계획서 read_only 검사: 명령이 조회만 하면 null, 아니면 이유. ops 판정의 조회 갈래만 받는다.
+ * az 조회 동사, VM·컨테이너 안 글이 조회·진단뿐인 원격 실행(az vm run-command invoke·containerapp exec·ssh), 로컬 조회 명령.
+ * 재시작·멈춤·설정 변경·불투명한 글(변수·대본 파일·@파일)은 읽기가 아니다.
+ */
+function readOnlyProblem(command) {
+	if (typeof command !== "string" || !command.trim()) return "명령이 비어 있음";
+	if (VERSION_CHANGE.test(command)) return "이미지·리비전·트래픽을 바꾸는 명령";
+	const { shellClauses } = require("./git-command-parser.js");
+	for (const tokens of opsClauses(command)) {
+		if (!tokens.length) continue;
+		const program = path.basename(tokens[0]);
+		const script = remotePayload(tokens);
+		if (script !== undefined) {
+			if (program === "az" && tokens[1] === "vm" && tokens[3] !== "invoke") return `원격 실행 명령을 만들거나 바꿈: az vm run-command ${tokens[3] || ""}`.trim();
+			if (script === null) return "VM·컨테이너 안에서 도는 글을 명령에서 찾지 못함";
+			if (INNER_OPAQUE.test(script)) return "VM·컨테이너 안에서 도는 글이 불투명함(변수·대본 파일·@파일 등)";
+			const clauses = shellClauses(script);
+			if (clauses.unbalanced) return `따옴표가 닫히지 않은 글: ${script.slice(0, 200)}`;
+			for (const clause of clauses) {
+				const bad = innerClauseProblem(clause, true);
+				if (bad) return `VM·컨테이너 안에서 조회가 아닌 명령: ${bad}`;
+			}
+			continue;
+		}
+		if (program === "az") {
+			const verbs = [];
+			for (let i = 1; i < tokens.length && !tokens[i].startsWith("-"); i++) verbs.push(tokens[i]);
+			if (AZ_READ_PHRASE.test(verbs.join(" "))) continue;
+			return `조회가 아닌 az 명령: az ${verbs.join(" ")}`;
+		}
+		const bad = innerClauseProblem(tokens, true);
+		if (bad) return `조회가 아닌 명령: ${bad}`;
 	}
 	return null;
 }
@@ -898,5 +938,6 @@ module.exports = {
 	innerProblem,
 	opsAzProblem,
 	opsProblem,
+	readOnlyProblem,
 	TEMPLATE,
 };

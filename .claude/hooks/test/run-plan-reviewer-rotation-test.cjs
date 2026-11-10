@@ -391,6 +391,95 @@ test("관문이 차례 도입 뒤 옛 모양 기록(rotation 칸 없음)을 막�
 	assert.equal(legacy(cutoff - 3600 * 1000).ok, true, "차례 도입 전 옛 기록은 그대로 받음");
 });
 
+// 회차 시험용 가짜 codex: 요청문(마지막 인자)을 prompt-<n>.txt 로 남기고, body.txt 를 리뷰 본문으로 낸다. 실행 횟수는 runs 파일 줄 수.
+function writeRoundBins(tmp) {
+	const binDir = path.join(tmp, "bin"), fakeHome = path.join(tmp, "home");
+	fs.mkdirSync(binDir, { recursive: true });
+	fs.mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
+	fs.writeFileSync(path.join(binDir, "bwrap"), '#!/bin/sh\nwhile [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done\nshift\nexec "$@"\n', { mode: 0o755 });
+	const runs = path.join(tmp, "runs"), bodyFile = path.join(tmp, "body.txt");
+	fs.writeFileSync(path.join(binDir, "fake-codex"), `#!/bin/sh\n[ "$1" = exec ] || exit 19\nfor a; do last="$a"; done\necho run >> "${runs}"\nn=$(wc -l < "${runs}" | tr -d ' ')\nprintf '%s' "$last" > "${tmp}/prompt-$n.txt"\nprintf 'codex\\n'\ncat "${bodyFile}"\nprintf 'tokens used\\n'\n`, { mode: 0o755 });
+	const review = (root, planFile, body) => {
+		fs.writeFileSync(bodyFile, `${body}\n`);
+		return spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "argon"], {
+			cwd: root, encoding: "utf8", timeout: 30000,
+			env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CODEX_BIN: path.join(binDir, "fake-codex"), DEPLOY_APPROVAL_STATE_DIR: path.join(tmp, "state") },
+		});
+	};
+	const runCount = () => (fs.existsSync(runs) ? fs.readFileSync(runs, "utf8").trim().split("\n").length : 0);
+	return { review, runCount, prompt: (n) => fs.readFileSync(path.join(tmp, `prompt-${n}.txt`), "utf8") };
+}
+const ROUND_FINDING = "1. [차단:되돌리기] rollback — r1 이 교체된 컨테이너를 시작할 수 있음";
+const failBody = () => ["판정: FAIL", ...deployPlan.CRITERIA.map(([id]) => `${id}: ${id === "rollback" ? "FAIL" : "PASS"}`), ROUND_FINDING, "참고 지적: 0", "남은 지적: 1"].join("\n");
+const passBody = () => ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "참고 지적: 0", "남은 지적: 0"].join("\n");
+
+test("회차 기억: 직전 회차 판정·차단 지적이 요청문에 들어가고, 회차 영수증은 쌓이며 관문이 같은 요청문을 다시 만든다", (t) => {
+	const { root, tmp } = makeWorkspace(t);
+	const { planFile, gatesDir } = createValidPlan(root, { author_model: "argon" });
+	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
+	const bins = writeRoundBins(tmp);
+	const first = bins.review(root, planFile, failBody());
+	assert.equal(first.status, 1, `${first.stdout}\n${first.stderr}`);
+	assert.doesNotMatch(bins.prompt(1), /직전 회차 리뷰/);
+	const round1 = path.join(gatesDir, "review-rounds", "round-001.json");
+	const round1Bytes = fs.readFileSync(round1);
+	assert.equal(JSON.parse(round1Bytes).outcome.verdict, "FAIL");
+	// 계획서 한 칸을 고치고 다시 리뷰한다
+	const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
+	plan.rollback.duration = "2분";
+	fs.writeFileSync(planFile, JSON.stringify(plan, null, 2));
+	const second = bins.review(root, planFile, passBody());
+	assert.equal(second.status, 0, `${second.stdout}\n${second.stderr}`);
+	const prompt = bins.prompt(2);
+	assert.match(prompt, /직전 회차 리뷰\(회차 1, .*판정 FAIL/);
+	assert.match(prompt, /- rollback: FAIL/);
+	assert.match(prompt, /- correctness: PASS/);
+	assert.ok(prompt.includes(`- ${ROUND_FINDING}`), "직전 차단 지적이 요청문에 있어야 함");
+	assert.match(prompt, /직전 회차 뒤 바뀐 칸: rollback/);
+	assert.ok(prompt.includes("규칙: 바뀌지 않은 부분에서 이전에 PASS 한 기준을 FAIL 로 바꾸려면 이전 판정이 틀린 이유를 적을 것. 새 차단은 이번에 바뀐 부분에서 찾을 것."));
+	// 회차 영수증은 덮어쓰지 않고 쌓인다. 최신 판 이름(deploy-plan-review.json)은 그대로 쓴다.
+	assert.deepEqual(fs.readFileSync(round1), round1Bytes);
+	assert.equal(JSON.parse(fs.readFileSync(path.join(gatesDir, "review-rounds", "round-002.json"), "utf8")).outcome.verdict, "PASS");
+	const record = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), "utf8"));
+	assert.equal(record.prior_round.file, "review-rounds/round-001.json");
+	const planSha = sha256(fs.readFileSync(planFile));
+	const ok = deployPlan.reviewProblems(gatesDir, planSha, root);
+	assert.equal(ok.ok, true, ok.problems.join("; "));
+	// 직전 회차 파일을 바꾸면 관문이 막는다
+	fs.writeFileSync(round1, round1Bytes.toString("utf8").replace("교체된", "바뀐"));
+	assert.ok(deployPlan.reviewProblems(gatesDir, planSha, root).problems.some((p) => p.includes("prior_round")));
+});
+
+test("회차 상한: 같은 계획서가 연속 3회 FAIL 이면 4회차는 리뷰 없이 사람 판정 요청을 내고 0 아닌 코드로 끝난다", (t) => {
+	const { root, tmp } = makeWorkspace(t);
+	const { planFile, gatesDir } = createValidPlan(root, { author_model: "argon" });
+	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
+	const bins = writeRoundBins(tmp);
+	for (let i = 1; i <= 3; i++) assert.equal(bins.review(root, planFile, failBody()).status, 1, `회차 ${i}`);
+	assert.equal(bins.runCount(), 3);
+	const fourth = bins.review(root, planFile, passBody());
+	assert.equal(fourth.status, 4, `${fourth.stdout}\n${fourth.stderr}`);
+	assert.equal(bins.runCount(), 3, "4회차 리뷰어를 실행하면 안 됨");
+	assert.match(fourth.stderr, /사람 판정 요청: .*연속 3회 FAIL/);
+	assert.ok(fourth.stderr.includes(`- ${ROUND_FINDING}`), fourth.stderr);
+	assert.match(fourth.stderr, /risk_acceptance/);
+	assert.equal(deployPlan.roundFiles(gatesDir).length, 3);
+});
+
+test("회차 도입 전 리뷰 기록은 첫 회차로 옮겨 직전 회차로 쓴다", (t) => {
+	const { root, tmp } = makeWorkspace(t);
+	const { planFile, gatesDir } = createValidPlan(root, { author_model: "argon" });
+	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
+	writeRotationReceipt(root, planFile, "codex");
+	const bins = writeRoundBins(tmp);
+	assert.equal(bins.review(root, planFile, passBody()).status, 0);
+	const legacy = JSON.parse(fs.readFileSync(path.join(gatesDir, "review-rounds", "round-001.json"), "utf8"));
+	assert.equal(legacy.legacy, true);
+	assert.equal(legacy.outcome.verdict, "PASS");
+	assert.match(bins.prompt(1), /직전 회차 리뷰\(회차 1, .*판정 PASS/);
+	assert.equal(deployPlan.roundFiles(gatesDir).length, 2);
+});
+
 test("리뷰 본문의 한도 낱말로는 넘어가지 않는다", (t) => {
 	const { root, tmp, stateDir } = makeWorkspace(t);
 	const { planFile } = createValidPlan(root);
