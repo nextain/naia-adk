@@ -423,13 +423,19 @@ function readRoundMark(gatesDir, rel) {
 	try { return fs.readFileSync(resultFile(gatesDir, markRel(rel)), "utf8").trim(); } catch { return null; }
 }
 /** 회차 확정 표지: 임시 파일에 다 쓴 뒤 link 로 표지 이름을 만든다(이미 있으면 실패). link 가 확정 시점이라,
- * 그 전 어느 오류든 표지가 없고(관문 닫힘), 그 뒤 임시 파일 지우기 오류는 확정에 영향이 없어 무시한다. */
+ * 그 전 어느 오류든 표지가 없고(관문 닫힘), 그 뒤 임시 파일 지우기 오류는 확정에 영향이 없어 무시한다.
+ * 디스크 상태가 정본이다: link 가 오류를 내도 표지가 이 임시 파일과 같은 파일(inode)로 생겼으면 확정된 것으로 보고 성공한다. */
 function markRound(gatesDir, rel, receiptSha) {
 	const mark = path.join(gatesDir, markRel(rel));
 	const tmp = `${mark}.tmp-${process.pid}`;
 	try {
 		fs.writeFileSync(tmp, `${receiptSha}\n`, { flag: "wx" });
-		fs.linkSync(tmp, mark);
+		try { fs.linkSync(tmp, mark); }
+		catch (error) {
+			let committed = false;
+			try { const a = fs.statSync(tmp), b = fs.statSync(mark); committed = a.ino === b.ino && a.dev === b.dev; } catch {}
+			if (!committed) throw error;
+		}
 	} finally {
 		try { fs.unlinkSync(tmp); } catch {}
 	}
