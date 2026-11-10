@@ -50,7 +50,7 @@ export function validateConfig(c) {
     if (r.adapter.kind === 'snapshot' && !isAbsolute(r.adapter.path ?? '')) throw Error('absolute snapshot path required');
     if (r.adapter.kind === 'herdr' && (!Array.isArray(r.adapter.command) || !r.adapter.command.length || r.adapter.command.some(x => typeof x !== 'string'))) throw Error('herdr command argv required');
   }
-  for (const [key, fallback] of [['idleMinutes', 30], ['staleHours', 2], ['escalateMinutes', 30]]) if (!(Number.isFinite(c[key] ?? fallback) && (c[key] ?? fallback) > 0)) throw Error('positive thresholds required');
+  for (const [key, fallback] of [['idleMinutes', 30], ['staleHours', 2], ['escalateMinutes', 30], ['waitMaxHours', 24]]) if (!(Number.isFinite(c[key] ?? fallback) && (c[key] ?? fallback) > 0)) throw Error('positive thresholds required');
   for (const key of ['workLedger', 'regularSchedule']) if (c[key] != null && !isAbsolute(c[key])) throw Error('absolute ledger path required');
   if (c.responseWatchState && !isAbsolute(c.responseWatchState)) throw Error('absolute response state required');
   if (c.notifications) for (const id of [c.notifications.nudgeChannelId, c.notifications.escalation?.channelId, c.notifications.escalation?.userId, ...c.roles.map(r => r.botId)]) if (!/^\d+$/.test(id ?? '')) throw Error('invalid notification id');
@@ -135,6 +135,24 @@ export async function compareRules(config, role) {
   return { status: diffs.some(d => !d.allowed) ? 'drift' : 'match', diffs };
 }
 
+// A role waiting on a human may declare it in a work file: a line starting with
+// "기다림" or "Waiting" that holds "다음 확인" / "next check" and a time, either ISO
+// with offset or "M/D HH:MM KST|UTC". Until that time, and only within
+// waitMaxHours (default 24), a quiet session is "waiting" instead of "stopped".
+const WAIT_LINE = /^\s*(?:기다림|waiting\b).*?(?:다음\s*확인|next\s+check)\s*:?\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})|(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})\s*(KST|UTC))/i;
+export function waitUntil(text, now) {
+  for (const line of String(text).split('\n')) {
+    const m = line.match(WAIT_LINE);
+    if (!m) continue;
+    if (!m[2]) return time(m[1]);
+    const offset = m[6].toUpperCase() === 'KST' ? 9 : 0, year = new Date(now).getUTCFullYear();
+    const at = y => Date.UTC(y, Number(m[2]) - 1, Number(m[3]), Number(m[4]) - offset, Number(m[5]));
+    const candidates = [year - 1, year, year + 1].map(at);
+    return candidates.reduce((a, b) => Math.abs(b - now) < Math.abs(a - now) ? b : a);
+  }
+  return null;
+}
+
 export async function observeRole(config, role, previous, now, response, windowProbe = collectWindow) {
   const record = { firstAt: previous?.firstAt ?? now, lastActivity: previous?.lastActivity ?? null, outputHash: previous?.outputHash, episodes: previous?.episodes ?? {}, sequence: previous?.sequence ?? 0, baselines: previous?.baselines ?? {} };
   const anomalies = [], errors = [];
@@ -161,7 +179,14 @@ export async function observeRole(config, role, previous, now, response, windowP
     if (pending === null) errors.push('response evidence unavailable');
     if (alive === 'stopped' && config.workLedger && ledgerKnown && !ledgerTasks.length && pending === false) alive = 'idle';
   }
-  if (!['alive', 'idle', 'unknown'].includes(alive)) anomalies.push(alive);
+  if (alive === 'stopped') {
+    const limit = (config.waitMaxHours ?? 24) * 3600000;
+    for (const path of role.workFiles ?? []) {
+      const until = waitUntil(await readFile(path, 'utf8').catch(() => ''), now);
+      if (Number.isFinite(until) && until > now && until - now <= limit) { alive = 'waiting'; break; }
+    }
+  }
+  if (!['alive', 'idle', 'waiting', 'unknown'].includes(alive)) anomalies.push(alive);
   if (config.regularSchedule) {
     try {
       schedules = scheduleStatus(await readScheduleLedger(config.regularSchedule, now), role.id, now);
