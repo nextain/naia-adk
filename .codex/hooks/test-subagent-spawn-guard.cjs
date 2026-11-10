@@ -356,6 +356,25 @@ assert.equal(JSON.parse(malformedAdapter.stdout).decision, "block");
 	fsx.rmSync(optRoot, { recursive: true, force: true });
 }
 
+// A misspelled budget key must block loudly instead of falling back to the default.
+{
+	const fsx = require("node:fs");
+	const osx = require("node:os");
+	const claudeGuard = require("../../.claude/hooks/subagent-spawn-guard.js");
+	const keyRoot = fsx.mkdtempSync(path.join(osx.tmpdir(), "spawn-optkey-"));
+	fsx.mkdirSync(path.join(keyRoot, ".claude"), { recursive: true });
+	fsx.writeFileSync(path.join(keyRoot, ".claude", "allow-subagents"), JSON.stringify({ maxConcurrent: 8 }));
+	const tmpRoot = fsx.mkdtempSync(path.join(osx.tmpdir(), "spawn-optkey-count-"));
+	assert.match(
+		claudeGuard.evaluate({ toolName: "Agent", sessionId: "k", root: keyRoot, env: {}, tmpRoot })?.reason || "",
+		/모르는 키가 있다: maxConcurrent/, "an unknown opt-in key is reported");
+	fsx.writeFileSync(path.join(keyRoot, ".claude", "allow-subagents"), JSON.stringify({ maxSpawns: 8 }));
+	assert.equal(claudeGuard.evaluate({ toolName: "Agent", sessionId: "k", root: keyRoot, env: {}, tmpRoot }), null,
+		"the corrected key passes");
+	fsx.rmSync(keyRoot, { recursive: true, force: true });
+	fsx.rmSync(tmpRoot, { recursive: true, force: true });
+}
+
 assert.deepEqual(guard.roleRules("grok-balanced").secretary, ["grok-4.6", ["medium"], "grok_workhorse"]);
 assert.deepEqual(guard.roleRules("grok-balanced").analysis, ["grok-4.6", ["high"], "grok_flagship"]);
 assert.deepEqual(guard.roleRules("grok-balanced").test, ["grok-4.6", ["low"], "grok_light"]);
