@@ -136,7 +136,8 @@ function writeRotationReceipt(root, planFile, reviewer, extra = {}) {
 				},
 			},
 		],
-		reviewedAt: endedAt,
+		// review 는 차례를 고른 뒤 리뷰어를 띄우므로 reviewedAt 은 영수증 시작보다 앞선다
+		reviewedAt: new Date(Date.now() - 3000).toISOString(),
 		...extra,
 	};
 	fs.writeFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), JSON.stringify(record, null, 2));
@@ -201,6 +202,8 @@ test("한도 판별식: 종료 코드가 0이 아니고 출력이 맞을 때만 
 	assert.equal(deployPlan.isLimitFailure(0, "rate limit exceeded"), false);
 	assert.equal(deployPlan.isLimitFailure(1, "boom: something broke"), false);
 	assert.equal(deployPlan.isLimitFailure(1, ""), false);
+	// 신호로 끝난 실행(null)은 한도로 보지 않는다(관문 skipped exit_code 기준과 같음)
+	assert.equal(deployPlan.isLimitFailure(null, "rate limit exceeded"), false);
 });
 
 function writeFakeBins(tmp, { argonBody, argonStderr = "", argonStatus = 0, codexBody, codexStatus = 0, withMarker = false }) {
@@ -302,7 +305,7 @@ test("관문이 같은 모델·차례 밖 리뷰어·새 모양 2인 영수증�
 		{
 			const { planSha } = writeRotationReceipt(root, planFile, good);
 			swapReviewer(file, "sol");
-			assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, false, `${author} 차례 밖 리뷰어`);
+			assert.ok(deployPlan.reviewProblems(gatesDir, planSha, root).problems.some((p) => p.includes("허용되지 않은 모델")), `${author} 차례 밖 리뷰어`);
 		}
 		// 새 모양에 서로 다른 유효 리뷰어 2명이면 막는다
 		{
@@ -344,6 +347,24 @@ test("관문이 차례와 skipped 를 대조한다", (t) => {
 		fs.writeFileSync(file, JSON.stringify(record));
 		assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, false, `${author} skipped 없음`);
 	}
+});
+
+test("관문이 reviewedAt 을 영수증 시작 시각과 대조한다(고정 리뷰어 피하기 막음)", (t) => {
+	const { root } = makeWorkspace(t);
+	const now = Date.now();
+	const file = path.join(root, ".claude/deploy/config.json");
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.writeFileSync(file, JSON.stringify({ planReview: { reviewer: "codex", until: new Date(now + 3600 * 1000).toISOString(), reason: "승인자 결정" } }));
+	const { planFile, gatesDir } = createValidPlan(root, { author_model: "muse" });
+	const ok = (reviewer, extra) => deployPlan.reviewProblems(gatesDir, writeRotationReceipt(root, planFile, reviewer, extra).planSha, root);
+	assert.equal(ok("codex").ok, true, "고정 리뷰어 영수증");
+	assert.equal(ok("argon").ok, false, "고정 기한 안 argon");
+	// reviewedAt 을 고정 기한 뒤로 옮기면 영수증 시작보다 늦어 막힌다
+	const moved = ok("argon", { reviewedAt: new Date(now + 2 * 3600 * 1000).toISOString() });
+	assert.ok(moved.problems.some((p) => p.includes("reviewedAt 이 리뷰어 영수증 시작 시각과 맞지 않음")), moved.problems.join("; "));
+	// 시각이 없거나 영수증보다 너무 이르면 막는다
+	assert.ok(ok("codex", { reviewedAt: undefined }).problems.some((p) => p.includes("reviewedAt(UTC ISO 시각)")));
+	assert.ok(ok("codex", { reviewedAt: new Date(now - 3 * 3600 * 1000).toISOString() }).problems.some((p) => p.includes("시작 전 90분 안")));
 });
 
 test("리뷰 본문의 한도 낱말로는 넘어가지 않는다", (t) => {

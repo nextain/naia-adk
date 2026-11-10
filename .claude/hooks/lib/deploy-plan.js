@@ -161,8 +161,9 @@ function orderedReviewers(author, root = ROOT, at = Date.now()) {
 }
 
 // 한도 실패인가: 종료 코드가 0이 아니고 실행기 진단(stderr·실행 오류문)이 LIMIT_RE 와 맞을 때만 참이다.
+// 신호로 끝난 실행(종료 코드 null)은 한도로 보지 않는다. 관문의 skipped exit_code 검사(0 아닌 정수)와 같은 기준이다.
 function isLimitFailure(exitCode, text) {
-	return exitCode !== 0 && LIMIT_RE.test(String(text || ""));
+	return Number.isInteger(exitCode) && exitCode !== 0 && LIMIT_RE.test(String(text || ""));
 }
 
 // 새 모양 기록인가(명시 칸 rotation:true). 작성자만으로 가르면 argon 작성자의 옛 2인 기록과 새 1인 기록이 충돌하므로, 옛 영수증과 부딪히지 않는 명시 칸으로 가른다.
@@ -511,8 +512,13 @@ function reviewProblems(gatesDir, sha, root) {
 		if (!ROTATION.includes(rec.author_model)) problems.push("차례 기록(rotation:true)의 작성자는 argon·codex·muse 중 하나여야 함");
 		if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 1) problems.push("차례 기록(rotation:true)은 리뷰어 1명의 기록이 필요함");
 		// 차례 대조: 리뷰 시각의 차례(고정 설정 포함)에서 skipped 는 앞에서부터 건너뛴 후보 그대로, 실제 리뷰어는 그 다음 후보여야 한다. 한도 실패 없이 뒤 후보를 쓰거나 모순된 skipped 는 막는다.
+		// 차례를 다시 만들 시각(reviewedAt)은 실제 리뷰 시작보다 늦을 수 없고, 90분보다 앞설 수 없다(첫 후보 45분 제한 + 준비 여유). 시각을 미래로 옮겨 고정 리뷰어를 피하는 길을 막는다.
+		const reviewedAtMs = typeof rec.reviewedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(rec.reviewedAt) ? Date.parse(rec.reviewedAt) : NaN;
+		const firstStartMs = Date.parse(rec.reviewers?.[0]?.receipt?.started_at);
 		let order = null;
-		try { order = ROTATION.includes(rec.author_model) ? orderedReviewers(rec.author_model, base, rec.reviewedAt) : null; }
+		if (!Number.isFinite(reviewedAtMs)) problems.push("차례 기록의 reviewedAt(UTC ISO 시각)이 없거나 틀림");
+		else if (!Number.isFinite(firstStartMs) || reviewedAtMs > firstStartMs || firstStartMs - reviewedAtMs > 90 * 60 * 1000) problems.push("차례 기록의 reviewedAt 이 리뷰어 영수증 시작 시각과 맞지 않음(시작 전 90분 안이어야 함)");
+		else try { order = ROTATION.includes(rec.author_model) ? orderedReviewers(rec.author_model, base, reviewedAtMs) : null; }
 		catch (error) { problems.push(`차례 기록의 리뷰 차례를 다시 만들지 못함: ${error.message}`); }
 		if (!Array.isArray(rec.skipped)) problems.push("차례 기록의 skipped 는 배열이어야 함");
 		else {
