@@ -16,6 +16,12 @@
 - **인스턴스 확장 오류 시 차단**: `config/deploy-gate.json`의 `prodPatterns` 정규식 오류나 `plugin` 모듈 로드 실패가 나면 이미 모은 `prodPatterns` 적중을 보존한 채 `unclassified` 적중을 내어 즉시 차단합니다.
 - **설정 항목**:
   - `services`: 운영 서비스 키(`azure:containerapp:<이름>`, `gcp:cloudrun:<이름>`, `vercel:deploy:prod` 등)별 준비 기록(`gates/deploy.json`) 요구 여부, `ops`/`rollback` 허용 여부, 명령 결합 규칙(`commandMustContain` 등)
+  - `local:systemd:<유닛>`: `services`에 등록한 로컬 시스템 유닛을 운영 서비스로 분류합니다. 예: `"local:systemd:sample-web": { "requireDeployGate": false, "allowOps": true, "paths": ["/opt/sample-web"] }`. `.service`·`.socket` 접미, 실행파일 절대 경로, `sudo`·`env`·`sh -c` 같은 셸 감싸기를 인식합니다. 다음 변경은 같은 서비스의 계획·승인을 요구합니다.
+    - `systemctl` 변경 동사: `stop`, `start`, `restart`, `reload`, `enable`, `disable`, `mask`, `kill`, `daemon-reload`, `try-restart`, `reload-or-restart`, `reload-or-try-restart`, `reenable`, `unmask`, `revert`, `edit`, `set-property`, `preset`, `link`, `add-wants`, `add-requires`. `service <유닛> <동사>`도 같은 변경 동사로 분류하고, `link`의 경로 인자는 파일 이름으로 유닛을 맞춥니다.
+    - 시스템 범위의 인자 없는 `systemctl daemon-reload`는 등록된 로컬 서비스 전체를 대상으로 봅니다. `daemon-reload <유닛>`은 실제 문법이 아니므로 시험은 인자 없는 형태를 사용합니다. `systemctl --user ...`는 시스템 유닛 분류에서 제외합니다.
+    - 등록 서비스가 하나라도 있을 때 변경 대상의 `$변수`·`${변수}`·명령 치환을 정확히 풀 수 없거나, 대상이 비어 stdin·`xargs`에서 올 수 있으면 등록 서비스 전체를 대상으로 보아 차단합니다. 글롭(`*`·`?`·`[`)은 등록 유닛에 맞춰 보고, 대상을 확정할 수 없으면 차단합니다. 정확히 풀리는 미등록 유닛과 읽기 동사(`status`, `show`, `cat` 등)는 기존대로 처리합니다.
+    - `/etc/systemd/system/<유닛>.service`, `.socket`, 각 유닛의 `.d/` 및 선택 항목 `paths`(절대 경로 배열)의 경로 자체와 하위 파일 변경도 같은 서비스로 분류합니다. 대상 도구는 `install`, `cp`, `mv`, `tee`, `sed -i`, `rm`, `ln`, `dd`의 `of=`, `truncate`, `rsync`의 목적지, `chmod`, `chown`입니다. `>`·`>>`·`>|`·`&>` 리다이렉트도 포함하므로 `echo`·`printf`·`cat`으로 쓰는 경우도 검사합니다. 경로는 디렉터리 경계로 맞추므로 `/opt/sample-web2`는 `/opt/sample-web`에 속하지 않습니다. 등록 서비스가 있을 때 쓰기 대상 경로에 풀리지 않는 변수·명령 치환·글롭이 남으면 등록 서비스 전체를 대상으로 보아 차단합니다.
+    - 이 분류는 유닛과 파일 경로를 기준으로 합니다. PID를 직접 지정하는 `kill`이나 프로세스 문자열을 찾는 `pkill -f`는 유닛 소유 관계를 조회하지 않으므로 이 로컬 분류의 보장 범위 밖에 남습니다. `systemctl kill <등록 유닛>`은 위 변경 동사에 포함합니다.
   - `prodPatterns` / `sshAlwaysGated`: 인스턴스 추가 운영 명령·SSH 호스트 분류 패턴
   - `testHosts`: 비운영(시험) 기기 호스트·IP 문자열 목록. 소문자·끝 점(`.`)을 정규화하여 와일드카드 없이 정확히 같은 이름만 비운영으로 판정하며, 설정이 없거나 깨졌으면 빈 목록으로 동작합니다. 비운영 호스트로 판정되어도 `ssh` 원격 본문은 다시 분류하므로 시험 기기 안에서 실행하는 운영 변경(`az vm delete` 등)과 `-F`·`-o HostName` 대상 덮어쓰기는 그대로 차단됩니다.
   - `approver.discordUserId`: 디스코드 승인 시 대조할 승인자 본인의 디스코드 사용자 ID(Snowflake)

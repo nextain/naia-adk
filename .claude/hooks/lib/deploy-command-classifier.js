@@ -713,7 +713,7 @@ function loadTestHosts(rootDir = "") {
 
 function isNonProd(...names) {
 	// Cloudflare API 쓰기는 도메인에 dev/test 가 들어가도 운영 관문에서 제외하지 않는다.
-	if (names.some((n) => typeof n === "string" && /^cloudflare:/i.test(n))) return false;
+	if (names.some((n) => typeof n === "string" && /^(?:cloudflare:|local:systemd:)/i.test(n))) return false;
 	const joined = names.filter(Boolean).join(" ");
 	if (!joined) return false;
 	if (/prod/i.test(joined)) return false;
@@ -1477,8 +1477,125 @@ function resolveGateRoot(startDir) {
 	return candidates[0];
 }
 
+// Unresolved local mutations fail closed whenever a local service is registered.
+function classifyLocalSystemd(command, tokens, dir, cfg) {
+	const redirectTargets = [];
+	const args = [];
+	for (let i = 0; i < tokens.length; i++) {
+		const match = tokens[i].match(/^(?:\d+|&)?(>\||>>|>|>&)(.*)$/);
+		if (!match) {
+			if (/^(?:\d+)?(?:<|<<|<<<)$/.test(tokens[i])) { i++; continue; }
+			args.push(tokens[i]); continue;
+		}
+		const target = match[2] || tokens[++i];
+		if (target && !(match[1] === ">&" && /^(?:\d+-?|-)$/.test(target))) redirectTargets.push(target);
+	}
+	const redirectHits = redirectTargets.length ? classifyLocalSystemd("", ["tee", ...redirectTargets], dir, cfg) : [];
+	tokens = args;
+	const entries = Array.isArray(cfg.services)
+		? cfg.services.map(item => typeof item === "string" ? [item, {}] : [item?.service, item])
+		: Object.entries(cfg.services || {}).filter(([, rule]) => rule);
+	const tool = path.basename(tokens[0] || "");
+	const writes = new Set(["stop", "start", "restart", "reload", "enable", "disable", "mask", "kill", "daemon-reload", "try-restart", "reload-or-restart", "reload-or-try-restart", "reenable", "unmask", "revert", "edit", "set-property", "preset", "link", "add-wants", "add-requires"]);
+	// Shell variables may have been reassigned or scoped by a loop; retain them as unresolved.
+	const words = tokens.slice(1);
+	let targets = [], unresolved = false, unitCommand = false;
+	if (tool === "systemctl") {
+		unitCommand = true;
+		let verb = -1;
+		const valueOptions = new Set(["-H", "--host", "-M", "--machine", "--root", "--image", "--job-mode", "--kill-whom", "--kill-who", "-s", "--signal"]);
+		for (let i = 0; i < words.length; i++) {
+			if (valueOptions.has(words[i])) { i++; continue; }
+			if (words[i].startsWith("-")) continue;
+			verb = writes.has(words[i]) ? i : -1;
+			break;
+		}
+		if (verb < 0 || words.includes("--user") || words.includes("--help")) return redirectHits;
+		targets = words.slice(verb + 1).filter(word => !word.startsWith("-") && !/^[<>]/.test(word));
+		if (words[verb] === "link") targets = targets.map(target => path.posix.basename(target));
+		unresolved = words[verb] === "daemon-reload" || !targets.length || targets.some(target => /[$`]/.test(target));
+	} else if (tool === "service") {
+		unitCommand = true;
+		if (!writes.has(words[1]) || words.includes("--help")) return redirectHits;
+		targets = words.slice(0, 1);
+		unresolved = !targets.length || targets.some(target => /[$`]/.test(target));
+	} else {
+		if (!["install", "cp", "mv", "tee", "sed", "rm", "ln", "dd", "truncate", "rsync", "chmod", "chown"].includes(tool)) return redirectHits;
+		if (tool === "sed" && !words.some(word => /^-[A-Za-z]*i|^--in-place/.test(word))) return redirectHits;
+		const optionValues = new Set(tool === "install" ? ["-m", "--mode", "-o", "--owner", "-g", "--group"] : tool === "truncate" ? ["-s", "--size", "-r", "--reference"] : tool === "chmod" || tool === "chown" ? ["--reference", "--from"] : []);
+		const positional = [];
+		for (let i = 0; i < words.length; i++) {
+			if (optionValues.has(words[i])) { i++; continue; }
+			if (!words[i].startsWith("-")) positional.push(words[i]);
+		}
+		if (["cp", "install", "ln", "mv"].includes(tool)) {
+			const targetDir = optionValue(words, ["-t", "--target-directory"]);
+			const destination = targetDir || positional[positional.length - 1];
+			targets = destination ? [destination] : [];
+			if (tool === "mv") targets.push(...(targetDir ? positional.filter(word => word !== targetDir) : positional.slice(0, -1)));
+			if (tool === "install" && words.some(word => word === "--directory" || /^-[A-Za-z]*d/.test(word))) targets.push(...positional);
+			if (destination && (targetDir || destination.endsWith("/") || destination === "/etc/systemd/system")) {
+				const sources = targetDir ? positional.filter(word => word !== targetDir) : positional.slice(0, -1);
+				targets.push(...sources.map(source => path.posix.join(destination, path.posix.basename(source))));
+			}
+		} else if (tool === "sed") {
+			let expressionSeen = false;
+			for (let i = 0; i < words.length; i++) {
+				const word = words[i];
+				if (word === "--") { targets.push(...words.slice(i + 1)); break; }
+				if (["-e", "--expression", "-f", "--file"].includes(word)) { expressionSeen = true; i++; continue; }
+				if (/^(?:-[ef].+|--(?:expression|file)=)/.test(word)) { expressionSeen = true; continue; }
+				if (word.startsWith("-")) continue;
+				if (!expressionSeen) { expressionSeen = true; continue; }
+				targets.push(word);
+			}
+		} else if (tool === "dd") targets = words.filter(word => word.startsWith("of=")).map(word => word.slice(3));
+		else if (tool === "rsync") targets = positional.slice(-1);
+		else if (tool === "chmod" || tool === "chown") targets = positional.slice(words.includes("--reference") || words.some(w => w.startsWith("--reference=")) || (tool === "chmod" && words.some(w => /^-[rwxXstugo]+(?:,[ugoa]*[+=-][rwxXstugo]*)*$/.test(w))) ? 0 : 1);
+		else targets = positional;
+	}
+	const hits = [...redirectHits];
+	for (const [service, rule] of entries) {
+		if (typeof service !== "string" || !service.startsWith("local:systemd:")) continue;
+		const unit = service.slice("local:systemd:".length).replace(/\.(?:service|socket)$/, "");
+		if (!/^[A-Za-z0-9_@.-]+$/.test(unit) || /[*?]/.test(unit)) continue;
+		const matches = unitCommand
+			? unresolved || targets.some(target => {
+				if (/[*?\[]/.test(target)) {
+					// Match only registered units when possible; an unresolvable pattern fails closed.
+					let pattern = "";
+					for (let i = 0; i < target.length; i++) {
+						const c = target[i];
+						if (c === "*") pattern += ".*";
+						else if (c === "?") pattern += ".";
+						else if (c === "[") {
+							const end = target.indexOf("]", i + 1);
+							if (end < 0) return true;
+							const body = target.slice(i + 1, end);
+							if (!/^[A-Za-z0-9_@.!^-]+$/.test(body)) return true;
+							pattern += "[" + body.replace(/^!/, "^") + "]"; i = end;
+						} else pattern += c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+					}
+					let re;
+					try { re = new RegExp("^" + pattern + "$"); } catch { return true; }
+					const selected = entries.filter(([key]) => typeof key === "string" && key.startsWith("local:systemd:")).map(([key]) => key.slice("local:systemd:".length).replace(/\.(?:service|socket)$/, "")).filter(name => [name, name + ".service", name + ".socket"].some(name => re.test(name)));
+					return !selected.length || selected.includes(unit);
+				}
+				return target.replace(/\.(?:service|socket)$/, "") === unit;
+			})
+			: targets.some(target => {
+				if (/[$`*?\[]/.test(target)) return true;
+				const dest = path.posix.normalize(path.posix.isAbsolute(target) ? target : path.resolve(dir, target));
+				if (["service", "socket"].some(suffix => dest === `/etc/systemd/system/${unit}.${suffix}` || dest === `/etc/systemd/system/${unit}.${suffix}.d` || dest.startsWith(`/etc/systemd/system/${unit}.${suffix}.d/`))) return true;
+				return (Array.isArray(rule?.paths) ? rule.paths : []).some(base => typeof base === "string" && path.posix.isAbsolute(base) && (dest === path.posix.normalize(base) || dest.startsWith(path.posix.normalize(base).replace(/\/$/, "") + "/")));
+			});
+		if (matches) hits.push({ service, label: service, clause: clauseText(tokens) });
+	}
+	return hits;
+}
+
 /** 인스턴스 확장(config/deploy-gate.json 의 prodPatterns 및 선택 플러그인 classifyCommand). */
-function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "") {
+function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", localOnly = false) {
 	const hits = [];
 	const clause = clauseText(tokens, assigns);
 	const pushErrorHit = (msg) => {
@@ -1496,11 +1613,13 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "") 
 		const cfgPath = deployGateConfigPath(root);
 		const cfg = loadDeployGateConfig(root);
 		if (!cfg) {
-			if (cfgPath && fs.existsSync(cfgPath)) {
+			if (!localOnly && cfgPath && fs.existsSync(cfgPath)) {
 				pushErrorHit("config/deploy-gate.json 파싱 실패");
 			}
 			return hits;
 		}
+		hits.push(...classifyLocalSystemd(command, tokens, dir, cfg));
+		if (localOnly) return hits;
 		if (Array.isArray(cfg.prodPatterns)) {
 			for (const p of cfg.prodPatterns) {
 				if (!p || typeof p.pattern !== "string" || !p.service) continue;
@@ -1844,7 +1963,10 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 			if (tool) found.push(unclassifiedOpaque(opaqueEntry, tool));
 			continue;
 		}
-		if (/^(?:echo|printf|cat|grep|rg|sed|awk|head|tail|less|wc|git|man)$/.test(path.basename(tokens[0]))) continue;
+		if (/^(?:echo|printf|cat|grep|rg|sed|awk|head|tail|less|wc|git|man)$/.test(path.basename(tokens[0]))) {
+			found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true));
+			continue;
+		}
 		const extHits = classifyInstanceExtension(command, tokens, dir, assigns, gateRoot);
 		if (extHits.length) {
 			for (const h of extHits) found.push(h);
