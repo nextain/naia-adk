@@ -196,25 +196,31 @@ function appendHumanTurn(transcriptPath, text) {
 	fs.appendFileSync(transcriptPath, JSON.stringify(entry) + "\n");
 }
 
-function runDeployGuardHook(command, { cwd, root, stateDir, transcriptPath, sessionId = "sess-test-1" }) {
+// 훅은 호출마다 새 프로세스라 lib 를 따로 불러온다. env 로 다른 관문 사본(상태 이름 등)을 흉내 낸다.
+// env 값이 null 이면 그 변수를 지운다.
+function runDeployGuardHook(command, { cwd, root, stateDir, transcriptPath, sessionId = "sess-test-1", toolUseId = `toolu_${crypto.randomBytes(8).toString("hex")}`, env: extraEnv = {} }) {
 	const payload = JSON.stringify({
 		tool_name: "Bash",
 		tool_input: { command },
 		cwd,
 		session_id: sessionId,
 		transcript_path: transcriptPath,
+		...(toolUseId === null ? {} : { tool_use_id: toolUseId }),
 	});
+	const env = {
+		...process.env,
+		CLAUDE_PROJECT_DIR: cwd,
+		DEPLOY_READINESS_ROOT: root,
+		DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir,
+		DEPLOY_AUDIT_PATH: path.join(stateDir, "audit.jsonl"),
+		...extraEnv,
+	};
+	for (const k of Object.keys(env)) if (env[k] === null) delete env[k];
 	const res = spawnSync(process.execPath, [HOOK_PATH], {
 		cwd,
 		input: payload,
 		encoding: "utf8",
-		env: {
-			...process.env,
-			CLAUDE_PROJECT_DIR: cwd,
-			DEPLOY_READINESS_ROOT: root,
-			DEPLOY_APPROVAL_STATE_DIR: stateDir,
-			DEPLOY_AUDIT_PATH: path.join(stateDir, "audit.jsonl"),
-		},
+		env,
 	});
 	assert.equal(res.status, 0, `deploy-guard exited ${res.status}: ${res.stderr}`);
 	return res.stdout.trim() ? JSON.parse(res.stdout) : null;
@@ -301,7 +307,7 @@ test("4. 코드 맞는 단계 통과 (preapprove 발급 코드 + 사람 입력 �
 	writePassingReviewReceipt(root, planFile);
 
 	const sessionId = "sess-preapprove-ok";
-	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir };
 	const pre = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, Date.now());
 	assert.equal(pre.ok, true, `preapprove failed: ${pre.why}`);
 	assert.match(pre.plan_code, /^PLAN-[A-Z0-9]{6}$/);
@@ -329,7 +335,7 @@ test("5. 계획을 바꾸면 코드 무효 (Modifying the plan after code issuan
 	writePassingReviewReceipt(root, planFile);
 
 	const sessionId = "sess-plan-tamper";
-	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir };
 	const pre = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, Date.now());
 	assert.equal(pre.ok, true);
 	const s1Code = pre.steps.find((s) => s.step === "s1").code;
@@ -352,7 +358,7 @@ test("6. 고정 파일 sha 다르면 막힘 & 단계 명령 바이트 다르면 
 	writePassingReviewReceipt(root, planFile);
 
 	const sessionId = "sess-pin-and-byte";
-	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir };
 	const pre = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, Date.now());
 	assert.equal(pre.ok, true);
 	const s1Code = pre.steps.find((s) => s.step === "s1").code;
@@ -379,7 +385,7 @@ test("7. approval-plan.mjs CLI (template, check, report, preapprove, step-ok) �
 	const { planFile } = createValidPlan(root);
 	writePassingReviewReceipt(root, planFile);
 
-	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir };
 	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
 
 	// template
@@ -933,7 +939,7 @@ test("16. 2회차 지적 2 재현: 사전승인(preapprove_steps)에서 s1 미�
 	writePassingReviewReceipt(root, planFile);
 
 	const sessionId = "sess-step-skip-test";
-	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir };
 	const pre = await deployPlan.preapproveStepCodes(planFile, root, sessionId, env, Date.now());
 	assert.equal(pre.ok, true, `preapprove failed: ${pre.why}`);
 	const s1Code = pre.steps.find((s) => s.step === "s1")?.code;
@@ -1188,7 +1194,7 @@ for (const changed of [false,true]) test(`local systemd approval: ${changed ? "c
  writeGateConfig(root, {services:{[service]:{requireDeployGate:false,allowOps:true}}});
  const {planFile,plan} = createValidPlan(root, {services:[service],scenario:[{id:"s1",title:"Restart sample",commands:[command],success_check:"Check status",on_failure:"Report failure"}],rollback:{method:"Restart sample",duration:"1 minute",step_ids:["s1"]}});
  writePassingReviewReceipt(root,planFile);
- const pre = await deployPlan.preapproveStepCodes(planFile,root,sessionId,{...process.env,DEPLOY_APPROVAL_STATE_DIR:stateDir},Date.now());
+ const pre = await deployPlan.preapproveStepCodes(planFile,root,sessionId,{...process.env,DEPLOY_APPROVAL_STATE_DIR:stateDir,DEPLOY_PLAN_STATE_DIR:stateDir},Date.now());
  assert.equal(pre.ok,true,pre.why);
  appendHumanTurn(transcriptPath,`승인 ${pre.plan_code} ${pre.steps.find(s=>s.step==="s1").code}`);
  if(changed) fs.writeFileSync(planFile,JSON.stringify({...plan,what_why:"Changed sample reason after approval"}));
@@ -1279,7 +1285,7 @@ test("fake codex reviewer runs through the complete review flow", (t) => {
  fs.writeFileSync(codex, `#!/bin/sh\n[ "$1" = exec ] || exit 19\n[ -z "$(cat)" ] || exit 20\nprintf 'codex\\n'\ncat <<'REVIEW_EOF'\n${body}\nREVIEW_EOF\nprintf 'tokens used\\n'\n`, { mode: 0o755 });
  const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
   cwd: root, encoding: "utf8", timeout: 30000,
-  env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CODEX_BIN: codex, DEPLOY_APPROVAL_STATE_DIR: stateDir },
+  env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CODEX_BIN: codex, DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir },
  });
  assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
  const record = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), "utf8"));
@@ -1365,7 +1371,7 @@ test("codex reviewer refuses to run without bwrap outside recovery mode", (t) =>
  fs.mkdirSync(binDir); fs.mkdirSync(fakeHome);
  fs.symlinkSync(process.platform === "win32" ? "git.exe" : "/usr/bin/git", path.join(binDir,"git"));
  fs.writeFileSync(codex, `#!/bin/sh\n : > "${marker}"\nexit 0\n`, {mode:0o755});
- const run=spawnSync(process.execPath,[path.join(root,".agents/scripts/approval-plan.mjs"),"review",planFile,"--author","muse"], {cwd:root, encoding:"utf8", timeout:30000, env:{...process.env, HOME:fakeHome, PATH:binDir, APPROVAL_PLAN_CODEX_BIN:codex, DEPLOY_APPROVAL_STATE_DIR:stateDir}});
+ const run=spawnSync(process.execPath,[path.join(root,".agents/scripts/approval-plan.mjs"),"review",planFile,"--author","muse"], {cwd:root, encoding:"utf8", timeout:30000, env:{...process.env, HOME:fakeHome, PATH:binDir, APPROVAL_PLAN_CODEX_BIN:codex, DEPLOY_APPROVAL_STATE_DIR:stateDir,DEPLOY_PLAN_STATE_DIR:stateDir}});
  assert.notEqual(run.status, 0, `${run.stdout}\n${run.stderr}`);
  assert.match(`${run.stdout}\n${run.stderr}`, /sandbox-prepare/);
  assert.equal(fs.existsSync(marker), false);
@@ -1398,4 +1404,176 @@ test("위험 수용: security FAIL 하나만, 결정 글·같은 값·끝나는 
 		const review = deployPlan.reviewProblems(gatesDir, planSha, root);
 		assert.equal(review.ok, c.pass, `${c.desc}: ${review.problems.join(" / ")}`);
 	}
+});
+
+// ── 공통 상태 + 도구 호출 ID 결합(한 기기에 관문 둘) ─────────────────────────
+// 두 관문 사본(프로젝트 관문·사용자 전체 관문)은 일반 승인 상태 이름(naia-harness·alpha-harness)이 다르다.
+// DEPLOY_PLAN_STATE_DIR 없이 XDG_STATE_HOME 만 같으면 같은 공통 PLAN·STEP 상태를 써야 한다.
+function twoGateFixture(t) {
+	const ws = makeWorkspace(t);
+	writeGateConfig(ws.root);
+	const made = createValidPlan(ws.root);
+	writePassingReviewReceipt(ws.root, made.planFile);
+	const xdg = path.join(ws.stateDir, "xdg");
+	const copyEnv = (name) => ({ DEPLOY_APPROVAL_STATE_DIR: path.join(ws.stateDir, name), DEPLOY_PLAN_STATE_DIR: null, XDG_STATE_HOME: xdg });
+	const gateA = copyEnv("naia-harness"), gateB = copyEnv("alpha-harness");
+	const libEnv = { ...process.env, ...gateA };
+	delete libEnv.DEPLOY_PLAN_STATE_DIR;
+	const stateFile = path.join(xdg, "naia-deploy-plan", "deploy-plan-state.json");
+	const sessionId = "sess-two-gates";
+	const run = (gateEnv, opts = {}) => runDeployGuardHook(opts.command || made.step1Cmd, { cwd: ws.root, root: ws.root, stateDir: ws.stateDir, transcriptPath: opts.transcriptPath || ws.transcriptPath, sessionId: opts.sessionId || sessionId, toolUseId: opts.toolUseId, env: gateEnv });
+	const approve = async () => {
+		const pre = await deployPlan.preapproveStepCodes(made.planFile, ws.root, sessionId, libEnv, Date.now());
+		assert.equal(pre.ok, true, `preapprove failed: ${pre.why}`);
+		assert.equal(pre.state_file, stateFile, "preapprove 도 공통 상태 경로에 발급");
+		appendHumanTurn(ws.transcriptPath, `승인 ${pre.plan_code} ${pre.steps.find((s) => s.step === "s1").code}`);
+		return pre;
+	};
+	return { ...ws, ...made, gateA, gateB, libEnv, stateFile, sessionId, run, approve };
+}
+
+test("공통 상태 1. 관문 두 사본이 같은 tool_use_id 로 STEP 코드 하나에 함께 통과, 새 ID 재실행은 막힘", async (t) => {
+	const g = twoGateFixture(t);
+	await g.approve();
+	const id = "toolu_same_call_01";
+	assert.equal(g.run(g.gateA, { toolUseId: id }), null, "첫 관문 통과");
+	assert.equal(g.run(g.gateB, { toolUseId: id }), null, "둘째 관문은 같은 호출이면 새 코드 없이 통과");
+	assert.ok(!fs.existsSync(path.join(g.stateDir, "naia-harness", "deploy-plan-state.json")), "사본별 옛 상태 경로는 쓰지 않음");
+	assert.ok(!fs.existsSync(path.join(g.stateDir, "alpha-harness", "deploy-plan-state.json")), "사본별 옛 상태 경로는 쓰지 않음");
+	const state = JSON.parse(fs.readFileSync(g.stateFile, "utf8"));
+	assert.equal(state.protocol, deployPlan.STATE_PROTOCOL);
+	assert.equal(state.version, deployPlan.STATE_VERSION);
+	const s1 = state.challenges.filter((c) => c.kind === "step" && c.step === "s1");
+	assert.equal(s1.length, 1, "STEP 코드는 하나만 발급");
+	const { commandHash } = require("../lib/deploy-human-approval.js");
+	assert.deepEqual(s1[0].consumed.map((r) => [r.tool_use_id, r.step, r.session, r.plan_sha, r.cmd_hash]), [[id, "s1", g.sessionId, sha256(fs.readFileSync(g.planFile)), commandHash(g.step1Cmd)]], "소비 기록은 한 번, 호출 ID 와 묶임");
+
+	for (const gate of [g.gateA, g.gateB]) {
+		const again = g.run(gate, { toolUseId: "toolu_rerun_02" });
+		assert.equal(again?.decision, "block", "새 호출 ID 로 같은 명령 재실행은 막힘");
+		assert.match(again.reason, /단계 승인 필요/);
+	}
+});
+
+test("공통 상태 2. 관문 하나뿐이어도 새 tool_use_id 재실행은 막힘", async (t) => {
+	const g = twoGateFixture(t);
+	await g.approve();
+	assert.equal(g.run(g.gateA, { toolUseId: "toolu_single_01" }), null);
+	const again = g.run(g.gateA, { toolUseId: "toolu_single_02" });
+	assert.equal(again?.decision, "block");
+	assert.match(again.reason, /단계 승인 필요/);
+});
+
+test("공통 상태 3. 같은 tool_use_id 인데 명령·sha·단계·세션이 다르면 막힘", async (t) => {
+	for (const [field, value] of [["cmd_hash", "0".repeat(64)], ["plan_sha", "f".repeat(64)], ["step", "s2"], ["session", "other-session"]]) {
+		await t.test(field, async (tt) => {
+			const g = twoGateFixture(tt);
+			await g.approve();
+			const id = `toolu_mismatch_${field}`;
+			assert.equal(g.run(g.gateA, { toolUseId: id }), null);
+			const state = JSON.parse(fs.readFileSync(g.stateFile, "utf8"));
+			state.challenges.find((c) => c.kind === "step" && c.step === "s1").consumed[0][field] = value;
+			fs.writeFileSync(g.stateFile, JSON.stringify(state));
+			const second = g.run(g.gateB, { toolUseId: id });
+			assert.equal(second?.decision, "block", `${field} 가 다르면 막힘`);
+			assert.match(second.reason, /같은 도구 호출 ID 로 이미 소비된 단계 승인이/);
+		});
+	}
+});
+
+test("공통 상태 4. tool_use_id 가 없으면 첫 관문도 둘째 관문도 막힘", async (t) => {
+	const g = twoGateFixture(t);
+	await g.approve();
+	const none = g.run(g.gateA, { toolUseId: null });
+	assert.equal(none?.decision, "block");
+	assert.match(none.reason, /tool_use_id/);
+	assert.equal(g.run(g.gateA, { toolUseId: "toolu_with_id" }), null, "ID 없는 시도는 코드를 소비하지 않음");
+	const second = g.run(g.gateB, { toolUseId: null });
+	assert.equal(second?.decision, "block");
+	assert.match(second.reason, /tool_use_id/);
+});
+
+test("공통 상태 5. 상태 파일 손상·모르는 판·옛 모양이면 관문과 preapprove 모두 막힘", async (t) => {
+	for (const [name, body] of [["손상", "{broken"], ["모르는 판", JSON.stringify({ protocol: "naia-deploy-plan-state", version: 3, challenges: [], incidents: [] })], ["옛 모양", JSON.stringify({ challenges: [], incidents: [] })]]) {
+		await t.test(name, async (tt) => {
+			const g = twoGateFixture(tt);
+			await g.approve();
+			fs.writeFileSync(g.stateFile, body);
+			const d = g.run(g.gateA, { toolUseId: `toolu_state_${name}` });
+			assert.equal(d?.decision, "block");
+			assert.match(d.reason, /승인 상태를 믿을 수 없어 막습니다/);
+			const pre = await deployPlan.preapproveStepCodes(g.planFile, g.root, g.sessionId, g.libEnv, Date.now());
+			assert.equal(pre.ok, false);
+			assert.match(pre.why, /상태:/);
+			assert.equal(fs.readFileSync(g.stateFile, "utf8"), body, "손상된 상태를 덮어쓰지 않음");
+		});
+	}
+});
+
+test("공통 상태 6. 옛 사본별 상태 파일의 코드는 공통 관문에서 쓸 수 없음", async (t) => {
+	const g = twoGateFixture(t);
+	const sha = sha256(fs.readFileSync(g.planFile));
+	const now = new Date().toISOString();
+	const legacy = { challenges: [
+		{ kind: "plan", code: "PLAN-LEGACY", planSha: sha, sessionId: g.sessionId, createdAt: now },
+		{ kind: "step", code: "STEP-LEGACY", planSha: sha, step: "s1", sessionId: g.sessionId, createdAt: now, executed: [], preapprove: true },
+	], incidents: [] };
+	fs.mkdirSync(path.join(g.stateDir, "naia-harness"), { recursive: true });
+	fs.writeFileSync(path.join(g.stateDir, "naia-harness", "deploy-plan-state.json"), JSON.stringify(legacy));
+	appendHumanTurn(g.transcriptPath, "승인 PLAN-LEGACY STEP-LEGACY");
+	const d = g.run(g.gateA, { toolUseId: "toolu_legacy" });
+	assert.equal(d?.decision, "block");
+	assert.match(d.reason, /전체 계획 승인이 아직 없습니다/);
+	assert.doesNotMatch(d.reason, /PLAN-LEGACY/);
+});
+
+test("공통 상태 7. 잠금을 못 잡으면 막힘", async (t) => {
+	const g = twoGateFixture(t);
+	await g.approve();
+	fs.mkdirSync(`${g.stateFile}.lock`);
+	const held = g.run(g.gateA, { toolUseId: "toolu_lock_held" });
+	assert.equal(held?.decision, "block");
+	assert.match(held.reason, /잠금을 잡지 못해 막습니다/);
+	fs.rmdirSync(`${g.stateFile}.lock`);
+	// 상태 폴더 자리가 일반 파일이라 잠금 폴더를 만들 수 없을 때도 막는다.
+	const blocker = path.join(g.stateDir, "not-a-dir");
+	fs.writeFileSync(blocker, "");
+	const broken = g.run({ ...g.gateA, DEPLOY_PLAN_STATE_DIR: path.join(blocker, "state") }, { toolUseId: "toolu_lock_broken" });
+	assert.equal(broken?.decision, "block");
+	assert.match(broken.reason, /승인 상태를 믿을 수 없어 막습니다/);
+});
+
+test("공통 상태 8. 둘째 관문의 독립 검증이 실패하면 같은 tool_use_id 라도 막힘", async (t) => {
+	await t.test("핀 바뀜", async (tt) => {
+		const g = twoGateFixture(tt);
+		await g.approve();
+		assert.equal(g.run(g.gateA, { toolUseId: "toolu_pin" }), null);
+		fs.appendFileSync(g.scriptAbs, "# changed between gates\n");
+		const second = g.run(g.gateB, { toolUseId: "toolu_pin" });
+		assert.equal(second?.decision, "block");
+		assert.match(second.reason, /고정한 뒤 바뀌었습니다/);
+	});
+	await t.test("둘째 관문이 STEP 사람 입력을 못 찾음", async (tt) => {
+		const g = twoGateFixture(tt);
+		const pre = await g.approve();
+		assert.equal(g.run(g.gateA, { toolUseId: "toolu_human" }), null);
+		// 둘째 관문이 보는 대화 기록에는 PLAN 코드만 있다: 계획 승인은 통과, 단계 코드 재확인에서 막혀야 한다.
+		const planOnly = path.join(g.tmp, "plan-only-transcript.jsonl");
+		fs.writeFileSync(planOnly, "");
+		appendHumanTurn(planOnly, `승인 ${pre.plan_code}`);
+		const second = g.run(g.gateB, { toolUseId: "toolu_human", transcriptPath: planOnly });
+		assert.equal(second?.decision, "block");
+		assert.match(second.reason, /사람 입력을 이 관문에서 확인하지 못해 막습니다/);
+	});
+	await t.test("오래된 소비 기록", async (tt) => {
+		const g = twoGateFixture(tt);
+		await g.approve();
+		assert.equal(g.run(g.gateA, { toolUseId: "toolu_stale" }), null);
+		const state = JSON.parse(fs.readFileSync(g.stateFile, "utf8"));
+		state.challenges.find((c) => c.kind === "step" && c.step === "s1").consumed[0].at = new Date(Date.now() - deployPlan.TOOL_CALL_JOIN_TTL_MS - 60000).toISOString();
+		fs.writeFileSync(g.stateFile, JSON.stringify(state));
+		const second = g.run(g.gateB, { toolUseId: "toolu_stale" });
+		assert.equal(second?.decision, "block");
+		assert.match(second.reason, /오래되어/);
+	});
 });

@@ -564,6 +564,7 @@ switch (cmd) {
 		if (!r.ok) die(`사전발급 거부: ${r.why}`, 1);
 		console.log(lib.renderReport(plan, sha, r.review));
 		console.log(`사전발급 코드(사용자 본인이 한 메시지로 승인): PLAN ${r.plan_code} ` + r.steps.map((s) => `${s.step} ${s.code}`).join(" "));
+		console.log(`공통 상태: ${r.state_file} (모든 관문 사본이 이 파일 하나로 코드를 확인·소비)`);
 		break;
 	}
 	case "step-ok": {
