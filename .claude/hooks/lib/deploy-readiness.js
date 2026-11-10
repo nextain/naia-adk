@@ -121,8 +121,54 @@ const INNER_DOCKER = new Set(["ps", "logs", "inspect", "stats", "images", "versi
 const INNER_COMPOSE = new Set(["ps", "logs", "restart", "config", "images", "top", "ls"]);
 const CURL_WRITE = /^(?:-d|--data(?:-\w+)?|-F|--form(?:-string)?|-T|--upload-file|-o|--output|-O|--remote-name(?:-all)?|--json)(?:=|$)/;
 
-// readOnly 가 참이면 같은 판정에서 조회 갈래만 받는다(재시작·멈춤·시작·이름 바꾸기·설정 갱신은 읽기가 아님). 계획서 read_only 검사가 쓴다.
+// read_only 출력 리다이렉트: 셸 절 낱말에 '>' 가 있으면 리다이렉트로 본다(따옴표 안 글자도 막는 보수적 판정).
+// 받는 것은 /dev/null 대상과 파일 설명자 복사(>&2, 2>&1, >&-)뿐이다. >, >>, >|, &>, &>>, N>, <>, >(...) 의 파일 대상은 쓰기다.
+const REDIRECT_OP = /^(?:\d*|&)(?:>&|>\||>>?)/;
+function redirectProblem(tokens) {
+	for (let i = 0; i < tokens.length; i++) {
+		const x = String(tokens[i]);
+		// 빈칸이 든 낱말은 따옴표로 묶인 인자(원격 본문·bash -c 글 등)라 리다이렉트가 아니다. 그 안은 원격·재귀 판정이 따로 본다.
+		if (!x.includes(">") || /\s/.test(x)) continue;
+		const m = x.match(REDIRECT_OP);
+		if (!m) return `출력 리다이렉트를 판별할 수 없음: ${x}`;
+		const op = m[0], rest = x.slice(op.length);
+		if (op.endsWith(">&") && /^(?:\d+|-)$/.test(rest)) continue;
+		const target = rest || tokens[i + 1];
+		if (!rest) i++;
+		if (target === "/dev/null") continue;
+		return `파일에 씀: ${tokens.join(" ")}`;
+	}
+	return null;
+}
+
+// read_only sed: 단순 출력 형태만 받는다. 옵션은 -n·-E·-r·-s·-u·-e 와 그 긴 이름, 스크립트는 ';'·줄로 나눈 각 명령이
+// [주소[,주소]][!] 뒤 p·d·q·Q·=·l 이거나 s/찾을/바꿀/[gpiI숫자] 일 때만. w·W·e·r·R 명령, s///w·s///e, -f 스크립트 파일, -i, 판별 못 하는 글은 거부.
+const SED_ADDR = String.raw`(?:\d+|\$|/(?:[^/\\]|\\.)*/[IM]*)`;
+const SED_CMD = new RegExp(String.raw`^\s*(?:${SED_ADDR}(?:\s*,\s*${SED_ADDR})?)?\s*!?\s*(?:[pdqQ=l]|s/(?:[^/\\\n]|\\.)*/(?:[^/\\\n]|\\.)*/[gpiI0-9]*)?\s*$`);
+function sedReadOnlyProblem(rest) {
+	const scripts = [];
+	let positional = 0;
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i];
+		if (a === "-e" || a === "--expression" || (/^-[nErsu]+e$/.test(a))) { if (rest[i + 1] === undefined) return "sed -e 뒤 스크립트 없음"; scripts.push(rest[++i]); continue; }
+		if (/^--expression=/.test(a)) { scripts.push(a.slice(a.indexOf("=") + 1)); continue; }
+		if (/^-[nErsu]+$/.test(a) || ["--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered"].includes(a)) continue;
+		if (a.startsWith("-")) return `read_only 에서 받지 않는 sed 옵션: ${a}`;
+		if (!scripts.length && positional === 0) scripts.push(a);
+		positional++;
+	}
+	if (!scripts.length) return "sed 스크립트를 찾지 못함";
+	for (const s of scripts) {
+		for (const part of String(s).split(/[;\n]/)) {
+			if (!SED_CMD.test(part)) return `읽기만 보장할 수 없는 sed 스크립트: ${s}`;
+		}
+	}
+	return null;
+}
+
+// readOnly 가 참이면 같은 판정에서 조회 갈래만 받는다(재시작·멈춤·시작·이름 바꾸기·설정 갱신·리다이렉트 파일 쓰기·sed 쓰기는 읽기가 아님). 계획서 read_only 검사가 쓴다.
 function innerClauseProblem(tokens0, readOnly = false) {
+	if (readOnly) { const bad = redirectProblem(tokens0); if (bad) return bad; }
 	let t;
 	for (let i = 0; i < tokens0.length; i++) {
 		const x = tokens0[i];
@@ -152,6 +198,7 @@ function innerClauseProblem(tokens0, readOnly = false) {
 	const rest = t.slice(1);
 	const positional = rest.filter((a) => !a.startsWith("-"));
 	if (INNER_READ.has(cmd) && !readCommandWrites(cmd, rest)) return null;
+	if (readOnly && cmd === "sed") return sedReadOnlyProblem(rest);
 	if (cmd === "sed" && !rest.some((a) => /^-[a-zA-Z]*i|^--in-place/.test(a))) return null;
 	if (cmd === "systemctl" && INNER_SYSTEMCTL.has(positional[0]) && !(readOnly && positional[0] === "restart")) return null;
 	if (cmd === "docker" || cmd === "docker-compose") {
@@ -328,6 +375,9 @@ function readOnlyProblem(command) {
 	const { shellClauses } = require("./git-command-parser.js");
 	for (const tokens of opsClauses(command)) {
 		if (!tokens.length) continue;
+		// 명령 종류(az·원격·기타)로 나누기 전에 모든 절의 출력 리다이렉트를 막는다. 원격 본문 안은 innerClauseProblem(…, true) 가 다시 본다.
+		const redirect = redirectProblem(tokens);
+		if (redirect) return `조회가 아닌 명령: ${redirect}`;
 		const program = path.basename(tokens[0]);
 		const script = remotePayload(tokens);
 		if (script !== undefined) {

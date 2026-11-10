@@ -384,22 +384,24 @@ function readRound(gatesDir, rel) {
 	} catch { return null; }
 }
 
-/** reviewProblems 결과로 한 회차의 판정을 만든다. 리뷰 본문이 없으면(실행 실패) 판정 "없음": 회차 수에도 FAIL 연속에도 넣지 않는다. */
+/**
+ * reviewProblems 결과로 한 회차의 판정을 만든다. PASS 는 관문을 통과한(review.ok) 리뷰만이다.
+ * 관문이 막았는데 본문에 FAIL 신호가 있으면 FAIL, 그 밖(본문 없음·무효 영수증의 본문 PASS)은 판정 "없음"과 실패 이유(reasons).
+ * "없음"은 직전 회차로 쓰지 않고 FAIL 연속을 끊지도 않는다.
+ */
 function roundOutcome(review) {
 	const rows = (review?.reviewers || []).filter((r) => r && r.body);
-	if (!rows.length) return { verdict: "없음", criteria: [], blocking: [] };
+	const reasons = () => (review?.problems || []).map((p) => String(p).slice(0, 400)).slice(0, 20);
+	if (!rows.length) return { verdict: "없음", criteria: [], blocking: [], reasons: review?.ok ? ["리뷰 본문 없음"] : reasons() };
 	const criteria = CRITERIA.map(([id]) => {
 		const v = rows.map((r) => (r.summary || []).find((s) => s.id === id)?.verdict || "없음");
 		return { id, verdict: v.includes("FAIL") ? "FAIL" : v.every((x) => x === "PASS") ? "PASS" : "없음" };
 	});
 	const blocking = rows.flatMap((r) => blockingLinesOf(r.body)).map((l) => l.trim().slice(0, 400)).slice(0, 50);
 	const firsts = rows.map((r) => firstVerdictLine(r.body));
-	let verdict;
-	if (review.ok) verdict = "PASS";
-	else if (firsts.some((l) => /^판정:\s*FAIL\b/i.test(l)) || criteria.some((c) => c.verdict === "FAIL") || blocking.length) verdict = "FAIL";
-	else if (firsts.every((l) => /^판정:\s*PASS\s*$/i.test(l))) verdict = "PASS";
-	else verdict = "없음";
-	return { verdict, criteria, blocking };
+	if (review.ok) return { verdict: "PASS", criteria, blocking };
+	if (firsts.some((l) => /^판정:\s*FAIL\b/i.test(l)) || criteria.some((c) => c.verdict === "FAIL") || blocking.length) return { verdict: "FAIL", criteria, blocking };
+	return { verdict: "없음", criteria, blocking, reasons: reasons() };
 }
 
 /** 회차 하나를 새 파일로 남긴다(wx: 있던 파일은 덮지 않음). 돌려줌: { round, rel, sha256 } */
@@ -413,7 +415,7 @@ function writeRound(gatesDir, { plan_sha256, plan, record, outcome, legacy = fal
 	return { round, rel, sha256: sha256(Buffer.from(text, "utf8")) };
 }
 
-/** 직전 회차(판정 PASS 또는 FAIL 인 가장 최근 회차). 없으면 null. */
+/** 직전 회차(판정 PASS 또는 FAIL 인 가장 최근 회차). 없으면 null. 회차 파일의 PASS 는 roundOutcome 이 관문 통과 때만 적는다. */
 function priorRound(gatesDir) {
 	for (const f of roundFiles(gatesDir).reverse()) {
 		const r = readRound(gatesDir, f.rel);
@@ -657,9 +659,10 @@ function reviewBodyProblems(text, sha, acceptSecurity = false) {
 }
 
 /** 리뷰 결과의 무결성·대상·작성자 분리·아홉 기준을 모두 확인한다. 새 모양(rotation:true)은 차례 리뷰어 1명, 옛 모양은 예전 구성(muse→argon 또는 codex 1명, sol·argon→2명)과 다르면 거절한다. */
-function reviewProblems(gatesDir, sha, root) {
+// opts.record: 디스크의 최신 영수증 대신 볼 기록. review 명령이 회차 파일을 먼저 확정하고 영수증을 나중에 쓰려고 쓴다.
+function reviewProblems(gatesDir, sha, root, opts = {}) {
 	const base = root ? path.resolve(root) : resolveRepoRoot(gatesDir);
-	const rec = readJson(path.join(gatesDir, REVIEW_FILE));
+	const rec = opts.record !== undefined ? opts.record : readJson(path.join(gatesDir, REVIEW_FILE));
 	const plan = readJson(path.join(gatesDir, PLAN_FILE));
 	const problems = [];
 	const reviewers = [];

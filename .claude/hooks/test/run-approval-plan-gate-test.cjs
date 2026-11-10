@@ -1417,6 +1417,56 @@ test("read_only 계획 위반: 바꾸는 단계·되돌리기 단계·step_ids·
 	assert.ok(!deployPlan.formProblems({ ...step("az containerapp update -n example-web -g example-rg --set-env-vars X=1"), read_only: false }).some((p) => p.includes("read_only")));
 });
 
+test("read_only 출력 리다이렉트: 명령 종류(az·원격·기타)와 무관하게 파일 대상 리다이렉트는 막고 /dev/null·설명자 복사만 받는다", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	const invoke = (script) => `az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts "${script}"`;
+	for (const command of [
+		"az vm show -g example-rg -n example-gw > /tmp/out",
+		"az account show --output json > /tmp/out",
+		"az containerapp show -n example-web -g example-rg -o json >> /tmp/out",
+		"az vm list -g example-rg &> /tmp/out",
+		"az vm list -g example-rg >| /tmp/out",
+		"az vm list -g example-rg 2>/tmp/err",
+		"az vm list -g example-rg >&/tmp/out",
+		"docker ps >/tmp/out",
+		"echo hi>/tmp/out",
+		invoke("docker ps > /tmp/out"),
+		invoke("nvidia-smi 2>/tmp/err"),
+		"ssh example-gw \"cat /etc/hostname >> /tmp/out\"",
+		"az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts \"docker ps\" > /tmp/out",
+		"bash -c \"ls /etc > /tmp/out\"",
+	]) assert.match(String(readOnlyProblem(command)), /파일에 씀|리다이렉트를 판별할 수 없음/, command);
+	for (const command of [
+		"az vm show -g example-rg -n example-gw 2>/dev/null",
+		"az vm show -g example-rg -n example-gw 2>&1",
+		"docker ps &>/dev/null",
+		invoke("docker ps 2>/dev/null"),
+		"az containerapp logs show -n example-web -g example-rg --query \"[?a > b]\"",
+	]) assert.equal(readOnlyProblem(command), null, command);
+});
+
+test("read_only sed: 단순 출력 형태만 받고 w·W·e·s///w·s///e·-f·-i·판별 못 하는 스크립트는 거부", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	for (const command of [
+		"sed -n 'w /tmp/x' /tmp/a",
+		"sed 'w /tmp/x' /tmp/a",
+		"sed -n '1W /tmp/x' /tmp/a",
+		"sed -n 's/a/b/w /tmp/x' /tmp/a",
+		"sed 's/a/b/e' /tmp/a",
+		"sed e /tmp/a",
+		"sed -n -e 1p -e 'w /tmp/x' /tmp/a",
+		"sed -f /tmp/script.sed /tmp/a",
+		"sed -i s/a/b/ /tmp/a",
+		"sed -n '1{p;w /tmp/x' /tmp/a",
+		"sed 'r /etc/shadow' /tmp/a",
+		"docker exec example sed -n '1w /tmp/x' /tmp/a",
+		"az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts \"sed -n 'w /tmp/x' /etc/hostname\"",
+	]) assert.ok(readOnlyProblem(command), command);
+	for (const command of ["sed -n 1,20p /etc/hostname", "sed -n '/error/p' /var/log/x", "sed 's/a/b/g' /etc/hostname", "sed -ne 3p /etc/hostname", "sed -n -e 1p -e '$p' /etc/hostname", "sed -E -n '/^x+$/p' /etc/hostname"]) {
+		assert.equal(readOnlyProblem(command), null, command);
+	}
+});
+
 test("위험 수용: security FAIL 하나만, 결정 글·같은 값·끝나는 날이 맞을 때만 리뷰 관문을 지남", (t) => {
 	const goodRa = () => ({ criterion: "security", accepted_by: "approver", decision_url: "https://discord.com/channels/1/2/3", same_value_as: "앞 판 번들 같은 지문 0123456789ab", no_new_exposure: true, expires_at: new Date(Date.now() + 86400000).toISOString(), reason: "이미 공개된 같은 시연 값, 새 노출 없음" });
 	const secLine = ["1. [차단: security] 공개 번들에 시연 값"];
