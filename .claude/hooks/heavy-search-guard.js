@@ -4,6 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const RECOMMENDATION = 'timeout 60 nice -n 19 grep -m 5 -F ...';
+const MAX_SECONDS = 600;
 const resolveTarget = (cwd, target) => path.posix.resolve(cwd, target.replace(/^~(?=\/)/, os.homedir()).replaceAll('\\', '/'));
 
 // Keep shell separators out of quoted arguments, especially bash -c payloads.
@@ -29,7 +30,8 @@ function clauses(command) {
 function inspect(command, bounded = false, depth = 0, cwd = process.cwd()) {
   if (depth > 12) return { reason: `Search wrapper nesting is too deep; use ${RECOMMENDATION}` };
   let warning = false;
-  for (const words of clauses(command)) {
+  const parts = clauses(command);
+  for (const words of parts) {
     if (words[0] === 'cd') {
       const directory = words.slice(1).find(word => !word.startsWith('-'));
       if (directory) cwd = resolveTarget(cwd, directory);
@@ -38,14 +40,28 @@ function inspect(command, bounded = false, depth = 0, cwd = process.cwd()) {
     let i = 0; let timed = bounded;
     while (i < words.length) {
       const head = path.posix.basename(words[i]);
-      if (/^[A-Za-z_][A-Za-z_0-9]*=/.test(head) || ['env', 'command', 'exec', 'nohup'].includes(head)) { i++; continue; }
-      if (head === 'timeout') {
+      if (/^[A-Za-z_][A-Za-z_0-9]*=/.test(head) || ['exec', 'nohup'].includes(head)) { i++; continue; }
+      if (head === 'time') { i++; if (words[i] === '-p') i++; continue; }
+      if (['env', 'command', 'sudo'].includes(head)) {
         i++;
         while (words[i]?.startsWith('-')) {
-          if (['-s', '--signal', '-k', '--kill-after'].includes(words[i])) i += 2;
+          const option = words[i++];
+          if ((head === 'env' && ['-u', '--unset', '-C', '--chdir'].includes(option)) ||
+              (head === 'sudo' && ['-u', '--user', '-g', '--group', '-h', '--host', '-p', '--prompt', '-C', '--close-from'].includes(option))) i++;
+        }
+        continue;
+      }
+      if (head === 'timeout') {
+        i++; let signalZero = false;
+        while (words[i]?.startsWith('-')) {
+          if (['-s', '--signal'].includes(words[i])) { signalZero ||= /^0+$/.test(words[i + 1] || ''); i += 2; }
+          else if (/^(?:--signal=|-s)0+$/.test(words[i])) { signalZero = true; i++; }
+          else if (['-k', '--kill-after'].includes(words[i])) i += 2;
           else i++;
         }
-        if (/^(?:\d+(?:\.\d+)?|\.\d+)(?:s|m|h|d)?$/.test(words[i] || '') && parseFloat(words[i]) > 0) { timed = true; i++; continue; }
+        const duration = /^(\d+(?:\.\d+)?|\.\d+)([smhd]?)$/.exec(words[i] || '');
+        const seconds = duration && Number(duration[1]) * ({ '': 1, s: 1, m: 60, h: 3600, d: 86400 }[duration[2]]);
+        if (duration && seconds > 0 && seconds <= MAX_SECONDS && !signalZero) { timed = true; i++; continue; }
         // A disabled or malformed timeout does not protect the following search.
         if (words[i]) { i++; continue; }
         break;
@@ -63,6 +79,25 @@ function inspect(command, bounded = false, depth = 0, cwd = process.cwd()) {
           if (nested.reason) return nested;
           warning ||= nested.warning;
         }
+        break;
+      }
+      const recordPath = arg => {
+        const normalized = resolveTarget(cwd, arg);
+        return /(?:^|\/)\.claude\/projects(?:\/|$)/.test(normalized);
+      };
+      if (head === 'xargs') {
+        const remainder = words.slice(i + 1).join(' ');
+        const input = words.slice(i + 1).some(recordPath) || parts.slice(0, parts.indexOf(words)).flat().some(recordPath);
+        if (input && /\b(?:grep|egrep|ugrep|rg|ag|cat|head|tail)\b/.test(remainder) && !timed)
+          return { reason: `Conversation record reads require timeout at most ${MAX_SECONDS} seconds. Recommended: ${RECOMMENDATION}` };
+        break;
+      }
+      if (['eval', 'find', 'awk', 'sed', 'python', 'python3', 'node', 'perl', 'jq', 'cat', 'head', 'tail'].includes(head)) {
+        const args = words.slice(i + 1);
+        // Inline programs may contain a quoted path, rather than a path argument.
+        const hasRecord = args.some(arg => recordPath(arg) || /(?:^|[\s'"(])(?:(?:~|\$\{?HOME\}?|\/[^\s'"()]*)\/)?\.claude\/projects(?:\/|\b)/.test(arg));
+        const reads = head !== 'find' || args.some(arg => arg === '-exec' || arg === '-execdir');
+        if (hasRecord && reads && !timed) return { reason: `Conversation record reads require timeout at most ${MAX_SECONDS} seconds. Recommended: ${RECOMMENDATION}` };
         break;
       }
       if (!['grep', 'egrep', 'ugrep', 'rg', 'ag'].includes(head)) break;
@@ -88,6 +123,7 @@ function inspect(command, bounded = false, depth = 0, cwd = process.cwd()) {
       const recordTarget = targets.some(arg => {
         const normalized = resolveTarget(cwd, arg);
         if (!/(?:^|\/)\.claude\/projects(?:\/|$)/.test(normalized)) return false;
+        if (/[*?\[]/.test(arg)) return true;
         if (/\.jsonl(?:$|[?*\]])/.test(normalized)) return true;
         if (!recursive) return false;
         // Metadata only: preserve searches of existing non-JSONL files and
