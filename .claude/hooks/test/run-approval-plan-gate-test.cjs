@@ -1579,3 +1579,39 @@ test("공통 상태 8. 둘째 관문의 독립 검증이 실패하면 같은 too
 		assert.match(second.reason, /오래되어/);
 	});
 });
+
+test("공통 상태 9. 한 관문은 한 호출 ID 를 한 번만 판정: 같은 ID 재제출·두 관문 뒤 ID 재사용은 막힘", async (t) => {
+	await t.test("관문 하나에 같은 ID 세 번", async (tt) => {
+		const g = twoGateFixture(tt);
+		await g.approve();
+		const id = "toolu_single_gate";
+		assert.equal(g.run(g.gateA, { toolUseId: id }), null, "첫 판정은 통과");
+		for (let i = 0; i < 2; i++) {
+			const again = g.run(g.gateA, { toolUseId: id });
+			assert.equal(again?.decision, "block", `같은 관문 같은 ID ${i + 2}번째`);
+		}
+	});
+	await t.test("두 관문 통과 뒤 같은 ID 를 다른 실행에 다시 씀", async (tt) => {
+		const g = twoGateFixture(tt);
+		await g.approve();
+		const id = "toolu_reused_by_host";
+		assert.equal(g.run(g.gateA, { toolUseId: id }), null);
+		assert.equal(g.run(g.gateB, { toolUseId: id }), null);
+		for (const gate of [g.gateA, g.gateB]) assert.equal(g.run(gate, { toolUseId: id })?.decision, "block", "재사용된 ID 는 두 관문 모두 막음");
+		const rec = JSON.parse(fs.readFileSync(g.stateFile, "utf8")).challenges.flatMap((c) => c.consumed || []);
+		assert.equal(rec.length, 1);
+		assert.equal(rec[0].gates.length, 2, "판정한 관문 둘이 기록됨");
+	});
+});
+
+test("공통 상태 10. 소비 기록이 있는데 executed 만 비어 있으면(상태 불일치) 새 ID 로도 다시 통과하지 못함", async (t) => {
+	const g = twoGateFixture(t);
+	await g.approve();
+	assert.equal(g.run(g.gateA, { toolUseId: "toolu_first" }), null);
+	const st = JSON.parse(fs.readFileSync(g.stateFile, "utf8"));
+	for (const c of st.challenges) if (c.kind === "step" && (c.consumed || []).length) c.executed = [];
+	fs.writeFileSync(g.stateFile, JSON.stringify(st, null, 2));
+	const again = g.run(g.gateA, { toolUseId: "toolu_after_tamper" });
+	assert.equal(again?.decision, "block");
+	assert.match(again.reason, /단계 승인 필요/);
+});

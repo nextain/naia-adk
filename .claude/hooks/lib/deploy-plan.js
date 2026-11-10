@@ -41,6 +41,13 @@ const TOOL_CALL_JOIN_TTL_MS = 5 * 60 * 1000;
 // 공통 PLAN·STEP 상태 규약. 관문 사본(alpha·naia 등)이 모두 같은 규약을 써야 한 코드로 함께 통과한다.
 const STATE_PROTOCOL = "naia-deploy-plan-state";
 const STATE_VERSION = 2;
+// 관문 사본 식별자: 이 모듈 파일과 사본별 일반 승인 상태 폴더. 한 관문은 한 호출 ID 를 한 번만 판정한다.
+function gateId(env = process.env) {
+	let file = __filename;
+	try { file = fs.realpathSync(__filename); } catch {}
+	const dir = env.DEPLOY_APPROVAL_STATE_DIR || path.join(env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"), "naia-harness");
+	return `${file}|${path.resolve(dir)}`;
+}
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 // 적대 리뷰 기준. 기준마다 결과 파일에 "<id>: PASS" 줄이 있어야 한다.
@@ -1132,16 +1139,24 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		if (!Number.isFinite(at) || now - at > TOOL_CALL_JOIN_TTL_MS || at - now > 60 * 1000) {
 			return { allow: false, audit: { event: "blocked-tool-use-id-stale", plan: rel, step: f.step.id, tool_use_id: toolUseId }, reason: "[Harness] 같은 도구 호출 ID 의 소비 기록이 오래되어 함께 통과로 인정하지 않습니다. 새 단계 승인을 받으십시오." };
 		}
+		// 한 관문은 한 호출 ID 를 한 번만 판정한다. 같은 ID 가 다시 오면(호스트의 ID 재사용·같은 관문 중복) 막는다.
+		const me = gateId(env);
+		if (!Array.isArray(r.gates) || r.gates.includes(me)) {
+			return { allow: false, audit: { event: "blocked-tool-use-id-reused", plan: rel, step: f.step.id, tool_use_id: toolUseId }, reason: "[Harness] 이 관문이 이미 판정한 도구 호출 ID 입니다. 같은 승인으로 다시 실행할 수 없습니다. 새 단계 승인을 받으십시오." };
+		}
 		// 상태 파일의 approvedAt 을 믿지 않고 이 관문도 사람 입력을 다시 확인한다.
 		const ok = await humanConfirmed(joinCh.code, joinCh.createdAt, ctxH);
 		if (!ok.ok) {
 			return { allow: false, audit: { event: "blocked-joined-unconfirmed", plan: rel, step: f.step.id, tool_use_id: toolUseId }, reason: `[Harness] 같은 호출을 먼저 통과시킨 단계 승인 코드의 사람 입력을 이 관문에서 확인하지 못해 막습니다(${ok.why}).` };
 		}
+		r.gates = [...r.gates, me];
+		saveState(env, st2);
 		return { allow: true, audit: { event: "executed-joined", plan: rel, plan_sha256: f.sha, step: f.step.id, tool_use_id: toolUseId, plan_code_sha256_12: sha256(planCh.code).slice(0, 12), step_code_sha256_12: sha256(joinCh.code).slice(0, 12), approved_by: `plan(${planOk.via})+step(${ok.via})+same-tool-call` } };
 	}
 
 	let stepCh = st2.challenges.filter((c) => c.kind === "step" && c.planSha === f.sha && c.step === f.step.id && c.sessionId === ctx.sessionId && !c.closed).pop();
-	if (stepCh && (stepCh.executed || []).includes(h)) {
+	// 소비 기록이 있는 명령은 executed 목록이 비어 있어도(상태 불일치) 이미 실행한 것으로 본다.
+	if (stepCh && ((stepCh.executed || []).includes(h) || (Array.isArray(stepCh.consumed) && stepCh.consumed.some((r) => r && r.cmd_hash === h)))) {
 		stepCh.closed = new Date(now).toISOString();
 		stepCh = null;
 	}
@@ -1177,7 +1192,7 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		stepCh.approvedVia = ok.via;
 	}
 	stepCh.executed = [...(stepCh.executed || []), h];
-	stepCh.consumed = [...(Array.isArray(stepCh.consumed) ? stepCh.consumed : []), { ...call, at: new Date(now).toISOString() }];
+	stepCh.consumed = [...(Array.isArray(stepCh.consumed) ? stepCh.consumed : []), { ...call, ...(toolUseId ? { gates: [gateId(env)] } : {}), at: new Date(now).toISOString() }];
 	const stepCmdHashes = (f.step.commands || []).map((c) => commandHash(c));
 	const allExecutedForStep = new Set();
 	for (const c of st2.challenges.filter((ch) => ch.kind === "step" && ch.planSha === f.sha && ch.step === f.step.id && ch.sessionId === ctx.sessionId)) {
