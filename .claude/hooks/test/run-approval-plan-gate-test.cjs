@@ -150,8 +150,10 @@ function writePassingReviewReceipt(root, planFile, options = {}) {
 	const resultRel = `deploy-plan-review-${reviewer}.md`;
 	fs.writeFileSync(path.join(gatesDir, resultRel), finalText);
 
-	const startedAt = options.startedAt || new Date(Date.now() - 2000).toISOString();
-	const endedAt = new Date().toISOString();
+	// 옛 모양(rotation 칸 없음) 기록은 차례 도입 시각 앞선 것만 받으므로 그 앞 시각으로 쓴다.
+	const legacyEnd = Date.parse(deployPlan.LEGACY_REVIEW_CUTOFF) - 60_000;
+	const startedAt = options.startedAt || new Date(legacyEnd - 2000).toISOString();
+	const endedAt = new Date(legacyEnd).toISOString();
 	const reviewRecord = {
 		plan_sha256: planSha,
 		plan: path.relative(root, planFile),
@@ -1231,7 +1233,8 @@ test("temporary reviewer selection defaults safely and expires", (t) => {
  }
  fs.writeFileSync(configPath, "{");
  assert.throws(() => deployPlan.reviewerIdsFor("muse", root, now));
- assert.ok(deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "codex" }).some(p => p.includes("author_model")));
+ assert.ok(!deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "codex" }).some(p => p.includes("author_model")), "차례 셋(codex)은 새 작성자로 받는다");
+ assert.ok(deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "gemini" }).some(p => p.includes("author_model")));
 });
 
 test("codex receipt remains valid after configuration changes", (t) => {
