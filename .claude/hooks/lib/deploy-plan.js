@@ -415,30 +415,66 @@ function writeRound(gatesDir, { plan_sha256, plan, record, outcome, legacy = fal
 	return { round, rel, sha256: sha256(Buffer.from(text, "utf8")) };
 }
 
-/** 직전 회차(판정 PASS 또는 FAIL 인 가장 최근 회차). 없으면 null. 회차 파일의 PASS 는 roundOutcome 이 관문 통과 때만 적는다. */
+// 회차 확정 표지: review 명령은 회차 파일 → 최신 영수증 → round-NNN.ok(wx, 방금 쓴 영수증 바이트의 sha256 한 줄) 순서로 쓴다.
+// 표지가 없거나 표지 sha 가 회차 안 record 의 영수증 바이트 sha 와 다르면 그 회차 판정은 "없음"으로 본다(연속을 끊지도 더하지도 않음).
+const recordBytes = (record) => Buffer.from(`${JSON.stringify(record, null, 2)}\n`, "utf8");
+const markRel = (rel) => rel.replace(/\.json$/, ".ok");
+function readRoundMark(gatesDir, rel) {
+	try { return fs.readFileSync(resultFile(gatesDir, markRel(rel)), "utf8").trim(); } catch { return null; }
+}
+/** 회차 확정 표지를 새 파일로 쓴다(wx). */
+function markRound(gatesDir, rel, receiptSha) {
+	fs.writeFileSync(path.join(gatesDir, markRel(rel)), `${receiptSha}\n`, { flag: "wx" });
+}
+/** 최신 영수증을 쓴다. 돌려줌: 쓴 바이트의 sha256. */
+function writeReviewRecord(gatesDir, record) {
+	const buf = recordBytes(record);
+	fs.writeFileSync(path.join(gatesDir, REVIEW_FILE), buf);
+	return sha256(buf);
+}
+/** 확정된 회차만 판정을 갖는다. 확정 안 된 회차는 판정 "없음"으로 바꿔 돌려준다(unconfirmed: true). */
+function confirmedRound(gatesDir, rel) {
+	const r = readRound(gatesDir, rel);
+	if (!r) return null;
+	const mark = readRoundMark(gatesDir, rel);
+	if (mark !== null && r.data.record !== undefined && mark === sha256(recordBytes(r.data.record))) return r;
+	return { ...r, data: { ...r.data, outcome: { ...r.data.outcome, verdict: "없음" } }, unconfirmed: true };
+}
+/** 관문: 회차 폴더가 있으면 가장 최근 회차의 확정 표지가 지금 디스크 영수증 바이트 sha 와 같아야 한다. 폴더가 없으면(옛 기록) null. */
+function roundConfirmProblem(gatesDir) {
+	if (!fs.existsSync(path.join(gatesDir, ROUNDS_DIR))) return null;
+	const last = roundFiles(gatesDir).pop();
+	let disk = null;
+	try { disk = sha256(fs.readFileSync(path.join(gatesDir, REVIEW_FILE))); } catch { disk = null; }
+	const mark = last ? readRoundMark(gatesDir, last.rel) : null;
+	if (last && mark !== null && disk !== null && mark === disk) return null;
+	return `리뷰 회차 확정 안 됨: 가장 최근 회차(${last ? `gates/${last.rel}` : "없음"})의 확정 표지가 없거나 지금 ${REVIEW_FILE} 와 다름. 다시 리뷰할 것`;
+}
+
+/** 직전 회차(판정 PASS 또는 FAIL 인 가장 최근 확정 회차). 없으면 null. 회차 파일의 PASS 는 roundOutcome 이 관문 통과 때만 적는다. */
 function priorRound(gatesDir) {
 	for (const f of roundFiles(gatesDir).reverse()) {
-		const r = readRound(gatesDir, f.rel);
+		const r = confirmedRound(gatesDir, f.rel);
 		if (r && ["PASS", "FAIL"].includes(r.data.outcome.verdict)) return r;
 	}
 	return null;
 }
-/** 최근부터 센 연속 FAIL 회차. 판정 "없음"(실행 실패)은 건너뛰고, PASS 에서 멈춘다. */
+/** 최근부터 센 연속 FAIL 회차. 판정 "없음"(실행 실패·확정 안 됨)은 건너뛰고, PASS 에서 멈춘다. */
 function failStreak(gatesDir) {
 	const rounds = [];
 	for (const f of roundFiles(gatesDir).reverse()) {
-		const r = readRound(gatesDir, f.rel);
+		const r = confirmedRound(gatesDir, f.rel);
 		if (!r) continue;
 		if (r.data.outcome.verdict === "PASS") break;
 		if (r.data.outcome.verdict === "FAIL") rounds.push(r);
 	}
 	return { count: rounds.length, rounds };
 }
-/** 기록의 prior_round({round, file, sha256})가 가리키는 회차를 다시 읽는다. sha 가 다르면 null. */
+/** 기록의 prior_round({round, file, sha256})가 가리키는 확정 회차를 다시 읽는다. sha 가 다르거나 확정 안 됐으면 null. */
 function loadPriorRound(gatesDir, ref) {
 	if (!ref || typeof ref !== "object" || typeof ref.file !== "string") return null;
-	const r = readRound(gatesDir, ref.file);
-	return r && r.sha256 === ref.sha256 && r.data.round === ref.round ? r : null;
+	const r = confirmedRound(gatesDir, ref.file);
+	return r && !r.unconfirmed && r.sha256 === ref.sha256 && r.data.round === ref.round ? r : null;
 }
 
 /** 직전 회차 계획서와 지금 계획서에서 달라진 최상위 칸(scenario 는 단계 id 별). 직전 사본이 없으면 null. */
@@ -689,6 +725,8 @@ function reviewProblems(gatesDir, sha, root, opts = {}) {
 	let promptSha = null;
 	try { if (plan) promptSha = sha256(reviewPrompt(plan, sha, base, prior)); } catch { problems.push("현재 요청문을 다시 만들지 못함"); }
 	if (!rec) { problems.push("적대 리뷰 기록 없음: " + REVIEW_FILE); return finish(); }
+	// 디스크를 읽는 관문은 회차 확정 표지까지 본다(review 명령이 메모리 기록을 넘기는 경우는 확정 전이라 빼고).
+	if (opts.record === undefined) { const bad = roundConfirmProblem(gatesDir); if (bad) problems.push(bad); }
 	if (rec.plan_sha256 !== sha) problems.push("적대 리뷰가 지금 계획서가 아닌 판을 검수함. 계획서를 고쳤으면 다시 검수받을 것");
 	try {
 		if (!plan || planSha(path.join(gatesDir, PLAN_FILE)) !== sha) problems.push("현재 계획서 sha256 이 검증 대상과 다름");
@@ -1447,6 +1485,6 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
-	criteriaFor, readOnlyProblems, roundFiles, readRound, roundOutcome, writeRound, priorRound, failStreak, loadPriorRound, changedFields, humanDecisionRequest, ROUNDS_DIR, ROUND_FAIL_LIMIT,
+	criteriaFor, readOnlyProblems, roundFiles, readRound, roundOutcome, writeRound, markRound, writeReviewRecord, recordBytes, confirmedRound, roundConfirmProblem, priorRound, failStreak, loadPriorRound, changedFields, humanDecisionRequest, ROUNDS_DIR, ROUND_FAIL_LIMIT,
 	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };

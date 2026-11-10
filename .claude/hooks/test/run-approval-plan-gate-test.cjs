@@ -1417,7 +1417,7 @@ test("read_only 계획 위반: 바꾸는 단계·되돌리기 단계·step_ids·
 	assert.ok(!deployPlan.formProblems({ ...step("az containerapp update -n example-web -g example-rg --set-env-vars X=1"), read_only: false }).some((p) => p.includes("read_only")));
 });
 
-test("read_only 출력 리다이렉트: 명령 종류(az·원격·기타)와 무관하게 파일 대상 리다이렉트는 막고 /dev/null·설명자 복사만 받는다", () => {
+test("read_only 리다이렉트: 해석하지 않고 거부한다. 낱말 전체가 2>/dev/null·>/dev/null·2>&1·>&2 일 때만 받는다", () => {
 	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
 	const invoke = (script) => `az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts "${script}"`;
 	for (const command of [
@@ -1435,13 +1435,32 @@ test("read_only 출력 리다이렉트: 명령 종류(az·원격·기타)와 무
 		"ssh example-gw \"cat /etc/hostname >> /tmp/out\"",
 		"az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts \"docker ps\" > /tmp/out",
 		"bash -c \"ls /etc > /tmp/out\"",
-	]) assert.match(String(readOnlyProblem(command)), /파일에 씀|리다이렉트를 판별할 수 없음/, command);
+		// 공백 든 대상(따옴표를 벗기면 낱말에 빈칸이 생김)
+		"az account show >\"/tmp/has space\"",
+		"az account show 2>\"/tmp/a b\"",
+		"az account show >\"/dev/null x\"",
+		// 따옴표로 이어 붙인 대상: 낱말은 'x 2>/dev/null y' 지만 셸은 '/dev/null y' 파일에 쓴다
+		"az account show \"x \"2>\"/dev/null y\"",
+		"ssh example-gw \"x \"2>\"/dev/null y\"",
+		"az account show 2>/dev/null\"x y\"",
+		"az account show 2> /dev/null",
+		"az account show 1>&2",
+		"docker ps &>/dev/null",
+		"cat /etc/hostname </tmp/in",
+		invoke("df -h >/tmp/x"),
+		"bash -c \"ls 2>/tmp/err\"",
+		// 받아들인 비용: az --query 의 비교 연산자도 막힌다
+		"az containerapp logs show -n example-web -g example-rg --query \"[?a > b]\"",
+	]) assert.match(String(readOnlyProblem(command)), /리다이렉트/, command);
 	for (const command of [
 		"az vm show -g example-rg -n example-gw 2>/dev/null",
 		"az vm show -g example-rg -n example-gw 2>&1",
-		"docker ps &>/dev/null",
+		"az account show >/dev/null",
+		"az account show >&2",
+		"ls /etc 2>/dev/null",
 		invoke("docker ps 2>/dev/null"),
-		"az containerapp logs show -n example-web -g example-rg --query \"[?a > b]\"",
+		"ssh example-gw \"cat /etc/hostname 2>/dev/null\"",
+		"bash -c \"ls /etc 2>&1\"",
 	]) assert.equal(readOnlyProblem(command), null, command);
 });
 

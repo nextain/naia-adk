@@ -121,22 +121,19 @@ const INNER_DOCKER = new Set(["ps", "logs", "inspect", "stats", "images", "versi
 const INNER_COMPOSE = new Set(["ps", "logs", "restart", "config", "images", "top", "ls"]);
 const CURL_WRITE = /^(?:-d|--data(?:-\w+)?|-F|--form(?:-string)?|-T|--upload-file|-o|--output|-O|--remote-name(?:-all)?|--json)(?:=|$)/;
 
-// read_only 출력 리다이렉트: 셸 절 낱말에 '>' 가 있으면 리다이렉트로 본다(따옴표 안 글자도 막는 보수적 판정).
-// 받는 것은 /dev/null 대상과 파일 설명자 복사(>&2, 2>&1, >&-)뿐이다. >, >>, >|, &>, &>>, N>, <>, >(...) 의 파일 대상은 쓰기다.
-const REDIRECT_OP = /^(?:\d*|&)(?:>&|>\||>>?)/;
-function redirectProblem(tokens) {
-	for (let i = 0; i < tokens.length; i++) {
-		const x = String(tokens[i]);
-		// 빈칸이 든 낱말은 따옴표로 묶인 인자(원격 본문·bash -c 글 등)라 리다이렉트가 아니다. 그 안은 원격·재귀 판정이 따로 본다.
-		if (!x.includes(">") || /\s/.test(x)) continue;
-		const m = x.match(REDIRECT_OP);
-		if (!m) return `출력 리다이렉트를 판별할 수 없음: ${x}`;
-		const op = m[0], rest = x.slice(op.length);
-		if (op.endsWith(">&") && /^(?:\d+|-)$/.test(rest)) continue;
-		const target = rest || tokens[i + 1];
-		if (!rest) i++;
-		if (target === "/dev/null") continue;
-		return `파일에 씀: ${tokens.join(" ")}`;
+// read_only 리다이렉트: 해석하지 않고 거부한다. 따옴표 처리 뒤 낱말에 '>' 나 '<' 가 있으면 막는다.
+// 예외는 낱말 전체가 정확히 2>/dev/null, >/dev/null, 2>&1, >&2 인 경우뿐이다. 원격 본문·bash -c 글처럼 안쪽을 다시 판정하는
+// 인자도 빈칸으로 나눈 조각마다 같은 규칙을 적용한다(예외 밖 '>'·'<' 가 있으면 거부). az --query "[?a > b]" 같은 조회도 막히는 보수적 판정이다.
+// 따옴표를 벗긴 낱말만 보면 "x "2>"/dev/null y" 가 낱말 'x 2>/dev/null y' 로 보여 통과한다. 그래서 명령 원문(raw)도 같은 규칙으로 본다:
+// 원문의 '>'·'<' 는 모두 예외 글 하나에 들어 있어야 하고, 그 예외 글 앞은 처음·빈칸·따옴표·;|&(, 뒤는 끝·빈칸·;|&) 이거나 닫는 따옴표 뒤 끝·빈칸·;|&) 여야 한다.
+const READ_ONLY_REDIRECT_OK = new Set(["2>/dev/null", ">/dev/null", "2>&1", ">&2"]);
+const RAW_REDIRECT_OK = /(?<=^|[\s'";|&(])(?:2>\/dev\/null|>\/dev\/null|2>&1|>&2)(?=$|[\s;|&)]|["'](?:$|[\s;|&)]))/g;
+function readOnlyRedirectProblem(tokens, raw) {
+	if (raw !== undefined && /[<>]/.test(String(raw).replace(RAW_REDIRECT_OK, " "))) return `read_only 에서 받지 않는 리다이렉트·'<'·'>' 글자: ${String(raw).slice(0, 200)}`;
+	for (const token of tokens) {
+		const x = String(token);
+		if (!/[<>]/.test(x) || READ_ONLY_REDIRECT_OK.has(x)) continue;
+		if (x.split(/\s+/).some((w) => /[<>]/.test(w) && !READ_ONLY_REDIRECT_OK.has(w))) return `read_only 에서 받지 않는 리다이렉트·'<'·'>' 글자: ${x.slice(0, 200)}`;
 	}
 	return null;
 }
@@ -168,7 +165,7 @@ function sedReadOnlyProblem(rest) {
 
 // readOnly 가 참이면 같은 판정에서 조회 갈래만 받는다(재시작·멈춤·시작·이름 바꾸기·설정 갱신·리다이렉트 파일 쓰기·sed 쓰기는 읽기가 아님). 계획서 read_only 검사가 쓴다.
 function innerClauseProblem(tokens0, readOnly = false) {
-	if (readOnly) { const bad = redirectProblem(tokens0); if (bad) return bad; }
+	if (readOnly) { const bad = readOnlyRedirectProblem(tokens0); if (bad) return bad; }
 	let t;
 	for (let i = 0; i < tokens0.length; i++) {
 		const x = tokens0[i];
@@ -240,6 +237,7 @@ function innerClauseProblem(tokens0, readOnly = false) {
 		const c = rest.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
 		if (c >= 0 && rest[c + 1] !== undefined) {
 			const { shellClauses } = require("./git-command-parser.js");
+			if (readOnly) { const bad = readOnlyRedirectProblem([], rest[c + 1]); if (bad) return bad; }
 			const clauses = shellClauses(rest[c + 1]);
 			if (clauses.unbalanced) return `따옴표가 닫히지 않은 글: ${rest[c + 1].slice(0, 200)}`;
 			for (const x of clauses) { const bad = innerClauseProblem(x, readOnly); if (bad) return bad; }
@@ -373,10 +371,12 @@ function readOnlyProblem(command) {
 	if (typeof command !== "string" || !command.trim()) return "명령이 비어 있음";
 	if (VERSION_CHANGE.test(command)) return "이미지·리비전·트래픽을 바꾸는 명령";
 	const { shellClauses } = require("./git-command-parser.js");
+	// 리다이렉트는 해석하지 않고 거부한다: 명령 원문과 모든 절 낱말에서 예외 넷 밖의 '>'·'<' 를 막는다. 원격 본문 안은 innerClauseProblem(…, true) 가 다시 본다.
+	const rawRedirect = readOnlyRedirectProblem([], command);
+	if (rawRedirect) return `조회가 아닌 명령: ${rawRedirect}`;
 	for (const tokens of opsClauses(command)) {
 		if (!tokens.length) continue;
-		// 명령 종류(az·원격·기타)로 나누기 전에 모든 절의 출력 리다이렉트를 막는다. 원격 본문 안은 innerClauseProblem(…, true) 가 다시 본다.
-		const redirect = redirectProblem(tokens);
+		const redirect = readOnlyRedirectProblem(tokens);
 		if (redirect) return `조회가 아닌 명령: ${redirect}`;
 		const program = path.basename(tokens[0]);
 		const script = remotePayload(tokens);
@@ -384,6 +384,8 @@ function readOnlyProblem(command) {
 			if (program === "az" && tokens[1] === "vm" && tokens[3] !== "invoke") return `원격 실행 명령을 만들거나 바꿈: az vm run-command ${tokens[3] || ""}`.trim();
 			if (script === null) return "VM·컨테이너 안에서 도는 글을 명령에서 찾지 못함";
 			if (INNER_OPAQUE.test(script)) return "VM·컨테이너 안에서 도는 글이 불투명함(변수·대본 파일·@파일 등)";
+			const inner = readOnlyRedirectProblem([], script);
+			if (inner) return `VM·컨테이너 안에서 조회가 아닌 명령: ${inner}`;
 			const clauses = shellClauses(script);
 			if (clauses.unbalanced) return `따옴표가 닫히지 않은 글: ${script.slice(0, 200)}`;
 			for (const clause of clauses) {

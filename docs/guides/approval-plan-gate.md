@@ -49,6 +49,7 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - 사전승인 코드 일괄 발급(`preapprove`)을 쓰려면 최상위에 `"approval_mode": "preapprove_steps"`를 넣습니다.
 
 **읽기 전용 계획(`read_only`).** 바꾸는 것 없이 운영 상태만 읽는 계획은 최상위에 `"read_only": true`를 적습니다. 양식 검사가 이 칸을 기계로 확인합니다. 모든 단계와 장애 선조치의 명령이 읽기 갈래(배포 준비 기록 ops 판정의 조회 갈래: `az … show·list·logs` 같은 조회 동사, VM·컨테이너 안 글이 조회·진단 명령뿐인 `az vm run-command invoke`·`az containerapp exec`·`ssh`, 로컬 조회 명령)여야 하고, 재시작·멈춤·설정 변경이나 안이 보이지 않는 글(`@파일`, 대본 파일 실행, 변수)은 읽기가 아닙니다. 되돌리기 단계(`branch: "rollback"`)를 두지 않고 `rollback.step_ids`는 `[]`로 둡니다. 하나라도 어기면 양식에서 막힙니다. 통과하면 리뷰 요청문의 기준이 바뀝니다. rollback 은 "계획서가 read_only 이고 바꾸는 것이 없으면, 복귀 단계 없음과 그 근거가 적혀 있는 것으로 충족한다", disconnect 는 "read_only 계획은 끊기면 결과를 버리고 다시 실행한다고 적혀 있으면 충족한다"입니다. 그래서 `rollback.method`에는 복귀 단계가 없는 근거를, `disconnect_safety`에는 끊기면 결과를 버리고 다시 실행한다는 것을 적습니다. `read_only`가 없거나 `false`이면 기준 문구는 그대로입니다.
+`read_only` 명령의 리다이렉트는 해석하지 않고 거부합니다. 명령 원문과 따옴표를 벗긴 낱말에 `>`·`<`가 있으면 막고, 낱말 전체가 정확히 `2>/dev/null`·`>/dev/null`·`2>&1`·`>&2`일 때만 받습니다(원격 본문·`bash -c` 글 안도 같음). 그래서 `az … --query "[?a > b]"`처럼 비교 연산자를 쓰는 조회도 `read_only`에서는 막힙니다. 받아들인 비용이며, 이런 조회는 `>`·`<` 없이 쓰거나 `read_only` 없이 계획합니다.
 
 ---
 
@@ -78,6 +79,7 @@ node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/
 - **리뷰 뒤에 계획서나 고정 파일을 고치면 이전 리뷰와 승인 코드는 즉시 무효**가 되며 다시 리뷰를 받아야 합니다.
 
 **리뷰 회차 기억.** `review`는 리뷰마다 `gates/review-rounds/round-<NNN>.json`을 새로 쌓고 덮어쓰지 않습니다(계획서 사본, 기록, 기준별 판정, 차단 지적). `gates/deploy-plan-review.json`은 지금처럼 최신 판입니다. 회차 파일이 없을 때 앞서 받은 `deploy-plan-review.json`이 있으면 그것을 첫 회차로 옮깁니다. 같은 계획서 경로에 직전 회차(판정 PASS 또는 FAIL)가 있으면 요청문에 그 회차의 기준별 판정, 차단 지적, 그 뒤 바뀐 칸과 규칙 한 문장("바뀌지 않은 부분에서 이전에 PASS 한 기준을 FAIL 로 바꾸려면 이전 판정이 틀린 이유를 적을 것. 새 차단은 이번에 바뀐 부분에서 찾을 것.")을 붙입니다. 기록의 `prior_round`가 그 회차 파일과 sha256 을 가리키고, 관문은 그 파일로 같은 요청문을 다시 만들어 대조합니다. 같은 계획서가 연속 3회 FAIL 이면(리뷰어 실행 실패 회차는 세지 않음) 4회차 `review`는 리뷰어를 돌리지 않고 "사람 판정 요청"과 남은 차단 지적 목록을 내고 코드 4로 끝납니다. 이때 승인자가 지적마다 수용·수정을 판정합니다. 위험 수용은 위의 `risk_acceptance` 칸(`security` 기준 하나만)뿐이고 범위는 넓히지 않았습니다.
+- 회차 확정: `review`는 회차 파일 → 최신 영수증 → 확정 표지 `round-<NNN>.ok`(방금 쓴 영수증 바이트의 sha256) 순서로 쓰고, 어느 단계든 실패하면 코드 3으로 끝납니다. 표지가 없거나 회차 안 기록과 맞지 않는 회차는 판정 "없음"으로 보아 직전 회차·연속 FAIL 에 쓰지 않습니다. 관문은 `gates/review-rounds/`가 있으면 가장 최근 회차의 표지가 지금 `deploy-plan-review.json` 바이트 sha256 과 같아야 통과합니다(폴더가 없는 옛 기록은 예전대로 판정).
 - `deploy-plan.js`는 리뷰 입력 목록(`REVIEW_EXECUTOR_FILES`)에 들어 있어, 이 파일이 바뀌면 그 전에 받은 PASS 영수증은 모두 다시 리뷰해야 합니다.
 
 ---

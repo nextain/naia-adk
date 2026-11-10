@@ -511,13 +511,15 @@ switch (cmd) {
 		if (pins.length) die(pins.join("\n"), 1);
 		// 회차: 회차 파일이 아직 없고 앞 리뷰 기록이 있으면 그것을 첫 회차로 옮겨 둔다(회차 도입 전 기록도 직전 회차로 쓴다).
 		if (!lib.roundFiles(gatesDir).length) {
-			let old = null;
-			try { old = JSON.parse(fs.readFileSync(path.join(gatesDir, lib.REVIEW_FILE), "utf8")); } catch { old = null; }
+			let old = null, oldSha = null;
+			try { const buf = fs.readFileSync(path.join(gatesDir, lib.REVIEW_FILE)); oldSha = sha256(buf); old = JSON.parse(buf.toString("utf8")); } catch { old = null; }
 			if (old && typeof old.plan_sha256 === "string" && Array.isArray(old.reviewers) && old.reviewers.some((r) => r && r.result)) {
 				// 옛 기록도 관문을 통과해야 PASS 다. 무효 영수증의 본문 PASS 는 판정 "없음"과 실패 이유로 남는다(roundOutcome).
 				let outcome = { verdict: "없음", criteria: [], blocking: [], reasons: ["옛 리뷰 기록을 관문으로 확인하지 못함"] };
 				try { outcome = lib.roundOutcome(lib.reviewProblems(gatesDir, old.plan_sha256, ROOT)); } catch {}
-				lib.writeRound(gatesDir, { plan_sha256: old.plan_sha256, plan: old.plan_sha256 === sha ? plan : null, record: old, outcome, legacy: true });
+				// 옮길 때 영수증은 그대로이므로 그 바이트 sha 로 확정 표지를 함께 쓴다.
+				const moved = lib.writeRound(gatesDir, { plan_sha256: old.plan_sha256, plan: old.plan_sha256 === sha ? plan : null, record: old, outcome, legacy: true });
+				lib.markRound(gatesDir, moved.rel, oldSha);
 			}
 		}
 		// 같은 계획서가 연속 상한만큼 FAIL 이면 리뷰를 돌리지 않고 사람 판정을 요청한다.
@@ -567,14 +569,17 @@ switch (cmd) {
 			rec.reviewers.push({ id: r.id, model: r.model, effort: r.effort, result: path.relative(gatesDir, actualOutput), result_sha256: sha256(final), target_sha256: sha, receipt: { ...r.receipt, stdout_sha256: sha256(text), isolation: r.isolation }, ...(r.error ? { execution_error: r.error } : {}) });
 			console.log(`결과 ${r.id}: ${path.relative(ROOT, actualOutput)}`);
 		}
-		// 회차 파일을 먼저 확정하고 그 뒤에 최신 영수증을 쓴다. 회차 저장이 실패(ENOSPC·EEXIST 경쟁 등)하면 디스크 영수증은
-		// 리뷰 전에 쓴 리뷰어 없는 기록으로 남아 관문이 막는다(실패 시 닫힘).
+		// 회차 파일 → 최신 영수증 → 확정 표지(round-NNN.ok, 영수증 바이트 sha) 순서로 쓴다. 어느 단계든 실패하면 표지가 없거나
+		// 디스크 영수증과 맞지 않아 관문이 막고, 회차 판정도 "없음"으로 본다(실패 시 닫힘).
 		const r = reviewStatus(gatesDir, sha, true, rec);
 		const outcome = lib.roundOutcome(r);
-		let saved;
+		let saved, recordSha;
 		try { saved = lib.writeRound(gatesDir, { plan_sha256: sha, plan, record: rec, outcome }); }
 		catch (error) { die(`회차 기록 저장 실패(${error.code || error.message}). 최신 리뷰 영수증을 확정하지 않았으므로 이번 리뷰는 무효입니다. 다시 리뷰하십시오`, 3); }
-		fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
+		try { recordSha = lib.writeReviewRecord(gatesDir, rec); }
+		catch (error) { die(`최신 리뷰 영수증 저장 실패(${error.code || error.message}). 회차를 확정하지 않았으므로 이번 리뷰는 무효입니다. 다시 리뷰하십시오`, 3); }
+		try { lib.markRound(gatesDir, saved.rel, recordSha); }
+		catch (error) { die(`회차 확정 표지 저장 실패(${error.code || error.message}). 이번 리뷰는 무효입니다. 다시 리뷰하십시오`, 3); }
 		console.log(`회차 기록: gates/${saved.rel} (판정 ${outcome.verdict})`);
 		console.log(r.ok ? "적대 리뷰: 통과 — 승인 요청 가능" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
 		process.exit(r.ok ? 0 : 1);

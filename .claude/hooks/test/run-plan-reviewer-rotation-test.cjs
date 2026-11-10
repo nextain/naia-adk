@@ -140,7 +140,8 @@ function writeRotationReceipt(root, planFile, reviewer, extra = {}) {
 		reviewedAt: new Date(Date.now() - 3000).toISOString(),
 		...extra,
 	};
-	fs.writeFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), JSON.stringify(record, null, 2));
+	// review 명령이 쓰는 영수증 바이트와 같게 쓴다(옛 기록 옮김의 확정 표지가 회차 record 바이트와 맞도록)
+	fs.writeFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), deployPlan.recordBytes(record));
 	return { planSha, promptSha, manifestSha };
 }
 
@@ -514,6 +515,92 @@ for (const mode of ["enospc", "eexist"]) {
 	});
 }
 
+// 시험 작업 공간 deploy-plan.js 사본의 한 지점을 바꾼다. 돌려줌: 원래대로 되돌리는 함수.
+function injectLibFault(root, at, fault) {
+	const file = path.join(root, ".claude/hooks/lib/deploy-plan.js");
+	const src = fs.readFileSync(file, "utf8");
+	assert.ok(src.includes(at), `고장 지점을 찾지 못함: ${at}`);
+	fs.writeFileSync(file, src.replace(at, fault));
+	return () => fs.writeFileSync(file, src);
+}
+const RECORD_WRITE_AT = "fs.writeFileSync(path.join(gatesDir, REVIEW_FILE), buf);";
+const MARK_WRITE_AT = 'fs.writeFileSync(path.join(gatesDir, markRel(rel)), `${receiptSha}\\n`, { flag: "wx" });';
+const throwCode = (code) => `{ const e = new Error("${code}"); e.code = "${code}"; throw e; }`;
+const roundMarkFile = (gatesDir, n) => path.join(gatesDir, "review-rounds", `round-${String(n).padStart(3, "0")}.ok`);
+
+test("회차 확정: 정상 PASS 는 회차·영수증·표지가 맞아 관문이 받고, 회차 폴더 없는 옛 영수증은 표지 없이 예전대로 판정한다", (t) => {
+	const { root, tmp } = makeWorkspace(t);
+	const { planFile, gatesDir } = createValidPlan(root, { author_model: "argon" });
+	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
+	const bins = writeRoundBins(tmp);
+	const run = bins.review(root, planFile, passBody());
+	assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+	const planSha = sha256(fs.readFileSync(planFile));
+	const ok = deployPlan.reviewProblems(gatesDir, planSha, root);
+	assert.equal(ok.ok, true, ok.problems.join("; "));
+	assert.equal(fs.readFileSync(roundMarkFile(gatesDir, 1), "utf8").trim(), sha256(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE))));
+	// 표지를 지우면 관문이 막는다
+	fs.rmSync(roundMarkFile(gatesDir, 1));
+	assert.ok(deployPlan.reviewProblems(gatesDir, planSha, root).problems.some((p) => p.includes("리뷰 회차 확정 안 됨")));
+	// 회차 폴더가 없는 옛 영수증: 표지 검사 없이 통과
+	const other = makeWorkspace(t);
+	const old = createValidPlan(other.root, { author_model: "argon" });
+	const r = writeRotationReceipt(other.root, old.planFile, "codex");
+	assert.equal(fs.existsSync(path.join(old.gatesDir, deployPlan.ROUNDS_DIR)), false);
+	const legacy = deployPlan.reviewProblems(old.gatesDir, r.planSha, other.root);
+	assert.equal(legacy.ok, true, legacy.problems.join("; "));
+});
+
+test("회차 확정: 영수증을 다 쓴 뒤 오류(close 실패 모사)면 표지가 없어 관문이 막는다", (t) => {
+	const { root, tmp } = makeWorkspace(t);
+	const { planFile, gatesDir } = createValidPlan(root, { author_model: "argon" });
+	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
+	injectLibFault(root, RECORD_WRITE_AT, `${RECORD_WRITE_AT} ${throwCode("EIO")}`);
+	const bins = writeRoundBins(tmp);
+	const run = bins.review(root, planFile, passBody());
+	assert.equal(run.status, 3, `${run.stdout}\n${run.stderr}`);
+	assert.match(run.stderr, /최신 리뷰 영수증 저장 실패\(EIO\)/);
+	const record = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), "utf8"));
+	assert.equal(record.reviewers.length, 1, "영수증은 끝까지 쓰였음");
+	assert.equal(fs.existsSync(roundMarkFile(gatesDir, 1)), false);
+	const gate = deployPlan.reviewProblems(gatesDir, sha256(fs.readFileSync(planFile)), root);
+	assert.equal(gate.ok, false);
+	assert.ok(gate.problems.some((p) => p.includes("리뷰 회차 확정 안 됨")), gate.problems.join("; "));
+	assert.equal(deployPlan.priorRound(gatesDir), null, "확정 안 된 회차는 직전 회차가 아님");
+});
+
+test("회차 확정: 표지 쓰기 실패면 코드 3이고 관문이 막는다", (t) => {
+	const { root, tmp } = makeWorkspace(t);
+	const { planFile, gatesDir } = createValidPlan(root, { author_model: "argon" });
+	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
+	injectLibFault(root, MARK_WRITE_AT, throwCode("ENOSPC"));
+	const bins = writeRoundBins(tmp);
+	const run = bins.review(root, planFile, passBody());
+	assert.equal(run.status, 3, `${run.stdout}\n${run.stderr}`);
+	assert.match(run.stderr, /회차 확정 표지 저장 실패\(ENOSPC\)/);
+	assert.equal(deployPlan.reviewProblems(gatesDir, sha256(fs.readFileSync(planFile)), root).ok, false);
+});
+
+test("회차 확정: [FAIL, FAIL, 영수증 쓰기 전 ENOSPC 로 확정 안 된 PASS] 는 연속 2·직전 2회차이고, 다음 FAIL 로 상한 3", (t) => {
+	const { root, tmp } = makeWorkspace(t);
+	const { planFile, gatesDir } = createValidPlan(root, { author_model: "argon" });
+	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
+	const bins = writeRoundBins(tmp);
+	for (let i = 1; i <= 2; i++) assert.equal(bins.review(root, planFile, failBody()).status, 1, `회차 ${i}`);
+	const restore = injectLibFault(root, RECORD_WRITE_AT, throwCode("ENOSPC"));
+	const third = bins.review(root, planFile, passBody());
+	assert.equal(third.status, 3, `${third.stdout}\n${third.stderr}`);
+	restore();
+	assert.equal(JSON.parse(fs.readFileSync(path.join(gatesDir, "review-rounds", "round-003.json"), "utf8")).outcome.verdict, "PASS", "회차 파일에는 PASS 가 적힘");
+	assert.equal(deployPlan.failStreak(gatesDir).count, 2);
+	assert.equal(deployPlan.priorRound(gatesDir).data.round, 2);
+	const fourth = bins.review(root, planFile, failBody());
+	assert.equal(fourth.status, 1, `${fourth.stdout}\n${fourth.stderr}`);
+	assert.match(bins.prompt(4), /직전 회차 리뷰\(회차 2, /);
+	assert.equal(deployPlan.failStreak(gatesDir).count, deployPlan.ROUND_FAIL_LIMIT);
+	assert.equal(bins.review(root, planFile, passBody()).status, 4, "상한에 걸려 사람 판정 요청");
+});
+
 test("무효 영수증의 본문 PASS 는 회차 PASS 가 아니다: 옛 기록 옮김은 판정 없음과 실패 이유로 남고 직전 회차로 쓰지 않는다", (t) => {
 	const { root, tmp } = makeWorkspace(t);
 	const { planFile, gatesDir } = createValidPlan(root, { author_model: "argon" });
@@ -540,13 +627,18 @@ test("FAIL·무효 PASS·FAIL 연속은 무효 PASS 로 끊기지 않고, 한 �
 	const outcome = deployPlan.roundOutcome(invalidPass);
 	assert.equal(outcome.verdict, "없음");
 	assert.deepEqual(outcome.reasons, ["기록 prompt_sha256 이 현재 요청문과 다름"]);
-	for (const review of [fail, invalidPass, fail]) deployPlan.writeRound(gatesDir, { plan_sha256: "0".repeat(64), plan: null, record: {}, outcome: deployPlan.roundOutcome(review) });
+	// 확정 표지까지 쓴 회차(review 명령과 같은 순서의 끝 상태)
+	const confirmed = (review) => {
+		const saved = deployPlan.writeRound(gatesDir, { plan_sha256: "0".repeat(64), plan: null, record: {}, outcome: deployPlan.roundOutcome(review) });
+		deployPlan.markRound(gatesDir, saved.rel, sha256(deployPlan.recordBytes({})));
+	};
+	for (const review of [fail, invalidPass, fail]) confirmed(review);
 	assert.equal(deployPlan.failStreak(gatesDir).count, 2);
 	assert.equal(deployPlan.priorRound(gatesDir).data.round, 3);
-	deployPlan.writeRound(gatesDir, { plan_sha256: "0".repeat(64), plan: null, record: {}, outcome: deployPlan.roundOutcome(fail) });
+	confirmed(fail);
 	assert.equal(deployPlan.failStreak(gatesDir).count, deployPlan.ROUND_FAIL_LIMIT);
 	// 관문을 통과한 PASS 만 연속을 끊는다
-	deployPlan.writeRound(gatesDir, { plan_sha256: "0".repeat(64), plan: null, record: {}, outcome: deployPlan.roundOutcome({ ...invalidPass, ok: true, problems: [] }) });
+	confirmed({ ...invalidPass, ok: true, problems: [] });
 	assert.equal(deployPlan.failStreak(gatesDir).count, 0);
 });
 
