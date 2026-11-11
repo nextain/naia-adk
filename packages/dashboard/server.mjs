@@ -6,6 +6,8 @@ import process from "node:process"
 import { fileURLToPath } from "node:url"
 import next from "next"
 import { hostGuard } from "./host-guard.mjs"
+import { GATE_ACCOUNT_HEADER, getVerifiedPublishActor, inspectSingleHeaderOnReq, stripUntrustedIdentityHeaders } from "./identity-header-guard.mjs"
+import { randomUUID } from "node:crypto"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -106,14 +108,18 @@ export function clearProxySecretCache() {
  * - 쓰기 메서드(PUT·POST·PATCH·DELETE)이고 Origin이 scheme://Host와 같으면 x-naia-origin-ok: 1
  * - Host를 127.0.0.1:<포트>로 설정
  */
-export function buildProxyHeaders(req, socket, proxySecret, apiPort) {
+export function buildProxyHeaders(req, socket, proxySecret, apiPort, env = process.env) {
   const sock = socket || req.socket || {}
   const remoteAddr = normalizeIp(sock.remoteAddress || "")
   const localAddr = normalizeIp(sock.localAddress || "")
 
   const outHeaders = {}
   for (const [key, val] of Object.entries(req.headers || {})) {
-    if (key.toLowerCase().startsWith("x-naia-")) {
+    const lower = key.toLowerCase()
+    const configuredUserHeader = [env?.NAIA_NOTE_USER_HEADER, env?.NAIA_SCHEDULE_USER_HEADER]
+      .some((header) => typeof header === "string" && header.trim().toLowerCase() === GATE_ACCOUNT_HEADER)
+    const publishRequest = typeof req.url === "string" && req.url.split("?")[0].startsWith("/api/portal/publish/")
+    if (lower.startsWith("x-naia-") || lower.startsWith("cf-access-") || (lower === GATE_ACCOUNT_HEADER && (publishRequest || !configuredUserHeader))) {
       continue
     }
     outHeaders[key] = val
@@ -128,19 +134,21 @@ export function buildProxyHeaders(req, socket, proxySecret, apiPort) {
   }
   if (proxySecret) {
     outHeaders["x-naia-proxy-secret"] = proxySecret
+    const actor = getVerifiedPublishActor(req, env)
+    if (actor) {
+      outHeaders["x-naia-actor-id"] = actor
+      outHeaders["x-naia-actor-verified"] = "1"
+    }
   }
 
   const method = (req.method || "GET").toUpperCase()
   if (["PUT", "POST", "PATCH", "DELETE"].includes(method)) {
     const isEncrypted = Boolean(sock.encrypted)
     const scheme = isEncrypted ? "https" : "http"
-    const hostHeader = req.headers?.host
-    if (hostHeader) {
-      const expectedOrigin = `${scheme}://${hostHeader}`
-      const incomingOrigin = req.headers?.origin
-      if (incomingOrigin && incomingOrigin === expectedOrigin) {
-        outHeaders["x-naia-origin-ok"] = "1"
-      }
+    const hostHeader = inspectSingleHeaderOnReq(req, "host")
+    const incomingOrigin = inspectSingleHeaderOnReq(req, "origin")
+    if (hostHeader.present && hostHeader.valid && incomingOrigin.present && incomingOrigin.valid && incomingOrigin.value === `${scheme}://${hostHeader.value}`) {
+      outHeaders["x-naia-origin-ok"] = "1"
     }
   }
 
@@ -198,9 +206,9 @@ export function validatePortalPathname(rawPathname) {
  * - frame-ancestors 'self'는 두 번째 Content-Security-Policy 머리글로 더함
  * - X-Frame-Options는 없을 때만 SAMEORIGIN 추가
  */
-export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket = null) {
+export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket = null, env = process.env) {
   const sock = socket || req.socket
-  const headers = buildProxyHeaders(req, sock, proxySecret, apiPort)
+  const headers = buildProxyHeaders(req, sock, proxySecret, apiPort, env)
 
   const reqOptions = {
     hostname: "127.0.0.1",
@@ -259,8 +267,9 @@ export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket =
 /**
  * 대시보드 HTTP 요청 처리기 생성
  */
-export function createRequestHandler(nextHandler) {
+export function createRequestHandler(nextHandler, _options = {}, env = process.env) {
   return function handleRequest(req, res) {
+    stripUntrustedIdentityHeaders(req, env)
     // 0. 프록시 경고 머리글 감지 (FE 8장 145행)
     if (req.headers["x-forwarded-for"] || req.headers["tailscale-user-login"]) {
       console.warn("[WARN] Proxy header detected (x-forwarded-for or tailscale-user-login). Reverse proxy / tailscale serve should not be used in front of dashboard.")
@@ -290,9 +299,19 @@ export function createRequestHandler(nextHandler) {
       }
 
       const forwardPath = valResult.resolvedPathname + rawQuery
-      const apiPort = Number(process.env.NAIA_API_PORT) || 3141
+      // Decode only for the fail-closed check; the forwarded path remains validated above.
+      let publishPath = ""
+      try { publishPath = decodeURIComponent(valResult.resolvedPathname).replace(/\/+/g, "/").replace(/\/$/, "") } catch { publishPath = valResult.resolvedPathname }
+      if (/^\/api\/portal\/publish(?:\/|$)/.test(publishPath) && env.PUBLISH_GATEWAY_OVERWRITE_CONFIRMED !== "1") {
+        res.statusCode = 403
+        res.setHeader("content-type", "application/json; charset=utf-8")
+        res.setHeader("cache-control", "no-store")
+        res.end(JSON.stringify({ ok: false, code: "publish_gateway_unconfirmed", message: "관문의 계정 덮어쓰기 확인이 필요합니다.", retryable: false, request_id: randomUUID(), operation_id: null, issues: [] }))
+        return
+      }
+      const apiPort = Number(env.NAIA_API_PORT) || 3141
       const secret = readProxySecret(apiPort)
-      proxyToApi(req, res, forwardPath, apiPort, secret)
+      proxyToApi(req, res, forwardPath, apiPort, secret, null, env)
       return
     }
 

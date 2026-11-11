@@ -13,6 +13,7 @@ import {
   type DocTab,
 } from "./tabs"
 import {
+  canEditDoc,
   determineDocViewMode,
   inferKindFromPath,
   MSG_FORBIDDEN,
@@ -25,10 +26,12 @@ import {
 import { addFavorite, removeFavorite } from "./Favorites"
 import { DocsView, type SearchHit, type Source } from "./DocsView"
 import { canNavigateWithDiscardConfirm, loadDocsViewState } from "./docs-handlers"
+import { useDocumentPublish } from "./use-publish-document"
 
 interface PortalResponse {
   sources: Source[]
   board: { port: number } | null
+  publish?: { configured?: boolean } | null
 }
 
 function DocsViewer() {
@@ -58,6 +61,7 @@ function DocsViewer() {
   // 문서 데이터
   const [docContent, setDocContent] = useState<string | null>(null)
   const [docBaseHash, setDocBaseHash] = useState<string>("")
+  const [docLoadedKey, setDocLoadedKey] = useState<string | null>(null)
   const [docLoading, setDocLoading] = useState(false)
   const [docError, setDocError] = useState<string | null>(null)
   const [isEditing, setIsEditing] = useState(false)
@@ -246,6 +250,7 @@ function DocsViewer() {
         if (!skipDocContent) {
           setDocContent(state.docContent)
           setDocBaseHash(state.docBaseHash)
+          setDocLoadedKey(currentAddress)
         }
         setDocError(state.docError)
         setFileData(state.fileData)
@@ -368,8 +373,18 @@ function DocsViewer() {
   const tabSections = sectionsForTab(sources, activeTab)
   const hasCompanySource = sources.some((s) => s.id.startsWith("company:"))
 
+  const publish = useDocumentPublish({
+    source: sourceParam, path: pathParam, savedRevision: docBaseHash, configured: portal?.publish?.configured,
+    enabled: viewMode === "doc" && !docLoading && !docError && !!docContent && docLoadedKey === `${sourceParam ?? ""}\u0000${pathParam ?? ""}`,
+    canEdit: !forbidden && canEditDoc(sourceParam, !!currentSourceObj?.readOnly || !!sourceParam?.startsWith("data:"), currentSourceObj?.missing),
+    isDirty, pendingUploads: 0, reviewId: searchParams.get("publishReview"), revisionId: searchParams.get("publishRevision"), onNavigate: handleNavigate,
+  })
+
   return (
     <DocsView
+      publishActions={publish.actions}
+      publishNotice={publish.notice}
+      publishReview={publish.review}
       portalStatus={portalStatus}
       activeTab={activeTab}
       sources={sources}

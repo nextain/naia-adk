@@ -5,6 +5,8 @@ import { workspaceRoutes } from "./routes/workspace.js"
 import { skillRoutes } from "./routes/skills.js"
 import { watchRoutes } from "./routes/watch.js"
 import { portalRoutes } from "./routes/portal.js"
+import { portalPublishRoutes } from "./routes/portal-publish.js"
+import type { PublishFault } from "./publish-store.js"
 import {
   validateHost,
   validatePath,
@@ -21,6 +23,7 @@ export interface ServerConfig {
   host: string
   folderCheckContext?: FolderCheckContext
   beforeRenameHook?: () => Promise<void> | void
+  publishFault?: PublishFault
 }
 
 export function getExpectedPort(app: FastifyInstance, configPort: number): number {
@@ -90,6 +93,7 @@ export async function createServer(config: ServerConfig) {
   app.register(skillRoutes, { prefix: "/api/skills" })
   // /api/files 라우트 등록 제거됨
   app.register(watchRoutes, { prefix: "/api/ws" })
+  app.register(portalPublishRoutes, { prefix: "/api/portal/publish", fault: config.publishFault })
   app.register(portalRoutes, {
     prefix: "/api/portal",
     beforeRename: config.beforeRenameHook,
