@@ -5,6 +5,7 @@ import { workspaceRoutes } from "./routes/workspace.js"
 import { skillRoutes } from "./routes/skills.js"
 import { watchRoutes } from "./routes/watch.js"
 import { portalRoutes } from "./routes/portal.js"
+import { portalMessengerRoutes, messengerEnabled, type MessengerOptions } from "./routes/portal-messenger.js"
 import {
   validateHost,
   validatePath,
@@ -21,6 +22,7 @@ export interface ServerConfig {
   host: string
   folderCheckContext?: FolderCheckContext
   beforeRenameHook?: () => Promise<void> | void
+  messenger?: MessengerOptions
 }
 
 export function getExpectedPort(app: FastifyInstance, configPort: number): number {
@@ -33,6 +35,13 @@ export function getExpectedPort(app: FastifyInstance, configPort: number): numbe
 
 export async function createServer(config: ServerConfig) {
   const app = Fastify({ logger: true })
+
+  // End long-lived SSE responses before Fastify waits for HTTP connections.
+  const close = app.close.bind(app)
+  app.close = ((...args: any[]) => {
+    app.server.emit("messengerShutdown")
+    return (close as any)(...args)
+  }) as typeof app.close
 
   // CORS 끔
   await app.register(cors, { origin: false })
@@ -90,10 +99,15 @@ export async function createServer(config: ServerConfig) {
   app.register(skillRoutes, { prefix: "/api/skills" })
   // /api/files 라우트 등록 제거됨
   app.register(watchRoutes, { prefix: "/api/ws" })
+  // Shared with the messenger plugin, which turns it off when its DB or spool cannot be created.
+  const messengerStatus = { enabled: messengerEnabled() }
   app.register(portalRoutes, {
     prefix: "/api/portal",
     beforeRename: config.beforeRenameHook,
+    messengerStatus,
   })
+
+  if (messengerStatus.enabled) app.register(portalMessengerRoutes, { prefix: "/api/portal/messenger", ...config.messenger, status: messengerStatus })
 
   app.get("/api/health", async () => ({
     status: "ok",
@@ -104,8 +118,20 @@ export async function createServer(config: ServerConfig) {
   return app
 }
 
+/**
+ * fd of a port inherited through systemd socket activation, or null to listen on the configured port.
+ * sd_listen_fds rules: trust it only when LISTEN_PID is this process; fds start at 3; accept exactly one.
+ * The tsx CLI spawns a child that reuses fd 3, so run with the `node --import tsx` loader to inherit it.
+ */
+export function inheritedSocketFd(env: NodeJS.ProcessEnv = process.env, pid: number = process.pid): number | null {
+  if (env.LISTEN_FDS === undefined || env.LISTEN_PID !== String(pid)) return null
+  if (env.LISTEN_FDS !== "1") throw new Error(`Expected one inherited socket, got LISTEN_FDS=${env.LISTEN_FDS}`)
+  return 3
+}
+
 export async function startServer(config: ServerConfig) {
   const app = await createServer(config)
-  await app.listen({ port: config.port, host: config.host })
+  const fd = inheritedSocketFd()
+  await app.listen(fd === null ? { port: config.port, host: config.host } : ({ fd } as any))
   return app
 }

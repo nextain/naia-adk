@@ -6,6 +6,8 @@ import process from "node:process"
 import { fileURLToPath } from "node:url"
 import next from "next"
 import { hostGuard } from "./host-guard.mjs"
+import { readGateSecret } from "./gate-secret.mjs"
+import { applyMessengerIdentity, verifyMessengerGate } from "./messenger-gate.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -106,7 +108,7 @@ export function clearProxySecretCache() {
  * - 쓰기 메서드(PUT·POST·PATCH·DELETE)이고 Origin이 scheme://Host와 같으면 x-naia-origin-ok: 1
  * - Host를 127.0.0.1:<포트>로 설정
  */
-export function buildProxyHeaders(req, socket, proxySecret, apiPort) {
+export function buildProxyHeaders(req, socket, proxySecret, apiPort, env = process.env) {
   const sock = socket || req.socket || {}
   const remoteAddr = normalizeIp(sock.remoteAddress || "")
   const localAddr = normalizeIp(sock.localAddress || "")
@@ -118,6 +120,8 @@ export function buildProxyHeaders(req, socket, proxySecret, apiPort) {
     }
     outHeaders[key] = val
   }
+
+  applyMessengerIdentity(outHeaders, req, env)
 
   outHeaders["host"] = `127.0.0.1:${apiPort}`
   if (remoteAddr) {
@@ -241,6 +245,9 @@ export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket =
       res.setHeader("x-frame-options", "SAMEORIGIN")
     }
 
+    // If the API side drops mid-response (restart etc.), drop the browser side too so messenger SSE notices and reconnects.
+    apiRes.on("aborted", () => res.destroy())
+    apiRes.on("error", () => res.destroy())
     apiRes.pipe(res)
   })
 
@@ -259,8 +266,11 @@ export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket =
 /**
  * 대시보드 HTTP 요청 처리기 생성
  */
-export function createRequestHandler(nextHandler) {
+export function createRequestHandler(nextHandler, env = process.env) {
   return function handleRequest(req, res) {
+    // Check the login gate before anything else reads or strips its headers (messenger paths only).
+    verifyMessengerGate(req, env)
+
     // 0. 프록시 경고 머리글 감지 (FE 8장 145행)
     if (req.headers["x-forwarded-for"] || req.headers["tailscale-user-login"]) {
       console.warn("[WARN] Proxy header detected (x-forwarded-for or tailscale-user-login). Reverse proxy / tailscale serve should not be used in front of dashboard.")
@@ -305,6 +315,16 @@ export function createRequestHandler(nextHandler) {
 }
 
 /**
+ * fd of a port inherited through systemd socket activation, or null to listen with -p/-H.
+ * sd_listen_fds rules: trust it only when LISTEN_PID is this process; fds start at 3; accept exactly one.
+ */
+export function inheritedSocketFd(env = process.env, pid = process.pid) {
+  if (env.LISTEN_FDS === undefined || env.LISTEN_PID !== String(pid)) return null
+  if (env.LISTEN_FDS !== "1") throw new Error(`Expected one inherited socket, got LISTEN_FDS=${env.LISTEN_FDS}`)
+  return 3
+}
+
+/**
  * 대시보드 서버 기동
  */
 export async function startServer(customArgv = process.argv.slice(2), customEnv = process.env) {
@@ -317,13 +337,18 @@ export async function startServer(customArgv = process.argv.slice(2), customEnv 
   await nextApp.prepare()
   const nextHandler = nextApp.getRequestHandler()
 
-  const requestHandler = createRequestHandler(nextHandler)
+  if (!readGateSecret(customEnv)) {
+    console.warn("[WARN] Login gate secret unavailable (NAIA_GATE_SECRET_FILE): people get 401 on the messenger")
+  }
+
+  const requestHandler = createRequestHandler(nextHandler, customEnv)
   const server = http.createServer(requestHandler)
+  const fd = inheritedSocketFd(customEnv)
 
   return new Promise((resolve, reject) => {
     server.on("error", reject)
-    server.listen(port, host, () => {
-      console.log(`> Dashboard ready on http://${host}:${port}`)
+    server.listen(fd === null ? { port, host } : { fd }, () => {
+      console.log(fd === null ? `> Dashboard ready on http://${host}:${port}` : `> Dashboard ready on inherited socket fd ${fd}`)
       resolve(server)
     })
   })
