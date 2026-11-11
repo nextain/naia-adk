@@ -36,6 +36,9 @@ export function Nav() {
         <Link href="/docs" className={tabClass(isActive("/docs"))}>
           문서
         </Link>
+        <Link href="/schedule" className={tabClass(isActive("/schedule"))}>
+          일정
+        </Link>
         {hasBoard === false ? (
           <span
             className="px-3 py-1.5 text-sm font-medium text-neutral-600 cursor-not-allowed"
