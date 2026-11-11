@@ -174,7 +174,9 @@ import {
   loadTable,
   chooseKey,
   isValidDocPath,
+  saveTable,
 } from "./short-links.mjs"
+import * as shortLinksModule from "./short-links.mjs"
 
 describe("문서 짧은 주소", () => {
   const ARCH = "developer/architecture/ARCHITECTURE.md"
@@ -246,7 +248,7 @@ describe("문서 짧은 주소", () => {
       assert.equal(res.status, 302)
       assert.equal(res.headers.location, "/docs?tab=developer&source=adk&path=developer%2Farchitecture%2FARCHITECTURE.md")
       const upper = await request(port, { path: `/d/${key.toUpperCase()}` })
-      assert.equal(upper.status, 302)
+      assert.equal(upper.status, 404)
       assert.equal(nextCalls.length, 0)
     })
   })
@@ -351,6 +353,106 @@ describe("문서 짧은 주소", () => {
       const res = await request(port, { path: `/d/adk/${ARCH}`, headers: { host: "evil.example" } })
       assert.equal(res.status, 421)
     })
+  })
+
+  // ── 검수 지적 반례 (axshortrev1) ──
+  const postJson = (port, body, extra = {}) =>
+    request(port, {
+      method: "POST",
+      path: "/d",
+      headers: { origin: `http://127.0.0.1:${port}`, "content-type": "application/json", ...extra },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    })
+
+  async function withLimitedServer(tableFile, limits, fn) {
+    const handler = createRequestHandler((req, res) => res.end("next"), { tableFile, tabFor, ...limits })
+    const server = http.createServer(handler)
+    await new Promise((r) => server.listen(0, "127.0.0.1", r))
+    try {
+      await fn({ port: server.address().port })
+    } finally {
+      await new Promise((r) => server.close(r))
+    }
+  }
+
+  it("표 항목 수에 상한이 있다: 넘으면 507, 같은 경로 재등록은 새 항목을 만들지 않는다", async () => {
+    assert.equal(shortLinksModule.MAX_SHORT_LINKS, 10000)
+    const file = tmpTable()
+    await withLimitedServer(file, { maxLinks: 3 }, async ({ port }) => {
+      const keys = []
+      for (const p of ["a/1.md", "a/2.md", "a/3.md"]) {
+        const res = await postJson(port, { source: "adk", path: p })
+        assert.equal(res.status, 200)
+        keys.push(JSON.parse(res.body).key)
+      }
+      const full = await postJson(port, { source: "adk", path: "a/4.md" })
+      assert.equal(full.status, 507)
+      const again = await postJson(port, { source: "adk", path: "a/1.md" })
+      assert.equal(again.status, 200)
+      assert.equal(JSON.parse(again.body).key, keys[0])
+    })
+    assert.equal(Object.keys(loadTable(file).links).length, 3)
+  })
+
+  it("표 파일 크기에도 상한이 있다(넘으면 등록 거절)", () => {
+    const file = tmpTable()
+    registerShortLink("adk", "a/1.md", file)
+    assert.throws(() => registerShortLink("adk", "a/2.md", file, new Date(), { maxBytes: 200 }), (e) => e.code === "SHORT_LINK_TABLE_FULL")
+    assert.equal(Object.keys(loadTable(file).links).length, 1)
+  })
+
+  it("대문자 키는 키 규칙 밖이라 404", async () => {
+    const file = tmpTable()
+    const key = registerShortLink("adk", ARCH, file)
+    await withServer(file, async ({ port }) => {
+      assert.equal((await request(port, { path: `/d/${key.toUpperCase()}` })).status, 404)
+    })
+  })
+
+  it("서버도 점 폴더·node_modules·data-private·.md 아닌 경로는 등록을 거절한다(400)", async () => {
+    const file = tmpTable()
+    await withServer(file, async ({ port }) => {
+      for (const p of [".agents/context/agents-rules.json", ".agents/progress/x.md", "node_modules/x.md", "a/data-private/x.md", "x.txt", "a/.hidden/b.md"]) {
+        const res = await postJson(port, { source: "adk", path: p })
+        assert.equal(res.status, 400, `${p} should be 400, got ${res.status}`)
+      }
+    })
+    assert.throws(() => registerShortLink("adk", ".agents/x.md", file))
+    assert.equal(fs.existsSync(file), false)
+  })
+
+  it("본문 한도는 바이트로 센다(한글 1500자 ≈ 4.5 KB 는 413)", async () => {
+    const file = tmpTable()
+    await withServer(file, async ({ port }) => {
+      const res = await postJson(port, { source: "adk", path: "a.md", pad: "가".repeat(1500) })
+      assert.equal(res.status, 413)
+    })
+  })
+
+  it("깨진 표 모양이면 200 을 주지 않고 표도 덮어쓰지 않는다", async () => {
+    for (const content of ['{"links":[]}', "{not json", "null", '{"version":1}']) {
+      const file = tmpTable()
+      fs.writeFileSync(file, content)
+      await withServer(file, async ({ port }) => {
+        const res = await postJson(port, { source: "adk", path: ARCH })
+        assert.equal(res.status, 500, `${content} should be 500, got ${res.status}`)
+      })
+      assert.equal(fs.readFileSync(file, "utf8"), content)
+    }
+  })
+
+  it("저장 실패 500 응답에 서버 경로를 싣지 않고 임시 파일을 남기지 않는다", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "short-links-test-"))
+    const asDir = path.join(dir, "table.json")
+    fs.mkdirSync(asDir)
+    await withServer(asDir, async ({ port }) => {
+      const res = await postJson(port, { source: "adk", path: ARCH })
+      assert.equal(res.status, 500)
+      assert.ok(!res.body.includes(dir), res.body)
+      assert.ok(!res.body.includes("EISDIR"), res.body)
+    })
+    assert.throws(() => saveTable({ version: 1, links: {} }, asDir))
+    assert.deepEqual(fs.readdirSync(dir).filter((n) => n.endsWith(".tmp")), [])
   })
 
   it("입력 해석: 긴 주소·/d/ 주소·docs/ 로 시작하는 저장소 경로", () => {

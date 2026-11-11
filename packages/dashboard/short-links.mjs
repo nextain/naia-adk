@@ -18,6 +18,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const SHORT_KEY_LENGTH = 6
 const MAX_KEY_LENGTH = 16
 const MAX_PATH_LENGTH = 1024
+// 표 상한. 인증 없는 POST /d 로 표가 끝없이 커지지 않게 한다. 넘으면 새 키를 받지 않는다(이미 있는 키는 그대로 돌려준다).
+export const MAX_SHORT_LINKS = 10000
+export const MAX_TABLE_BYTES = 4 * 1024 * 1024
 const KEY_RE = /^[0-9a-f]{6,16}$/
 const SOURCE_RE = /^[A-Za-z0-9][A-Za-z0-9._@:-]{0,127}$/
 
@@ -41,6 +44,28 @@ export function isValidDocPath(docPath) {
   return true
 }
 
+// 대시보드 문서 API 의 숨김 규칙과 같다: 끝의 점·공백을 떼고 소문자로 본 이름이 점으로 시작하거나
+// node_modules·data-private 이면 숨김. 숨긴 조각을 돌려주고, 없으면 null.
+export function hiddenSegment(docPath) {
+  for (const seg of docPath.split("/")) {
+    const name = seg.normalize("NFC").replace(/[\s.]+$/, "").toLowerCase()
+    if (!name || name.startsWith(".") || name === "node_modules" || name === "data-private") return seg
+  }
+  return null
+}
+
+// 표에 등록할 수 있는 문서 경로: 출처 안의 .md 이고 대시보드가 숨기는 조각이 없어야 한다.
+// 출처 밖(..·앞 /)은 isValidDocPath 가 막는다. adk 출처의 뿌리가 docs/ 라서 등록되는 경로는 늘 docs/ 안이다.
+export function isRegistrableDocPath(docPath) {
+  return isValidDocPath(docPath) && docPath.toLowerCase().endsWith(".md") && hiddenSegment(docPath) === null
+}
+
+function tableError(code, message) {
+  const err = new Error(message)
+  err.code = code
+  return err
+}
+
 export function shortKeyFor(source, docPath, length = SHORT_KEY_LENGTH) {
   return crypto.createHash("sha256").update(`${source}\n${docPath}`, "utf8").digest("hex").slice(0, length)
 }
@@ -49,23 +74,58 @@ export function emptyTable() {
   return { version: 1, links: {} }
 }
 
-// 표 읽기. 파일이 없거나 깨졌으면 빈 표.
-export function loadTable(file = defaultTableFile()) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8"))
-    if (parsed && typeof parsed === "object" && parsed.links && typeof parsed.links === "object") {
-      return { version: 1, links: parsed.links }
-    }
-  } catch {}
-  return emptyTable()
+function isTableShape(parsed) {
+  return (
+    parsed !== null &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    parsed.links !== null &&
+    typeof parsed.links === "object" &&
+    !Array.isArray(parsed.links)
+  )
 }
 
-// 표 쓰기: 임시 파일에 쓰고 이름을 바꿔, 읽는 쪽이 반쯤 쓴 파일을 보지 않게 한다.
+// 등록용 표 읽기. 파일이 없으면 빈 표, 읽을 수 없거나 모양이 깨졌으면 던진다(깨진 표를 덮어쓰거나 저장한 척하지 않는다).
+function readTableForWrite(file) {
+  let text
+  try {
+    text = fs.readFileSync(file, "utf8")
+  } catch (err) {
+    if (err.code === "ENOENT") return emptyTable()
+    throw tableError("SHORT_LINK_TABLE_UNREADABLE", `short link table cannot be read: ${err.message}`)
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    parsed = null
+  }
+  if (!isTableShape(parsed)) throw tableError("SHORT_LINK_TABLE_BROKEN", `short link table is not {"version":1,"links":{…}}: ${file}`)
+  return { version: 1, links: parsed.links }
+}
+
+// 표 읽기(넘겨 주기용). 파일이 없거나 깨졌으면 빈 표.
+export function loadTable(file = defaultTableFile()) {
+  try {
+    return readTableForWrite(file)
+  } catch {
+    return emptyTable()
+  }
+}
+
+// 표 쓰기: 임시 파일에 쓰고 이름을 바꿔, 읽는 쪽이 반쯤 쓴 파일을 보지 않게 한다. 실패하면 임시 파일을 지운다.
 export function saveTable(table, file = defaultTableFile()) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-  fs.writeFileSync(tmp, `${JSON.stringify(table, null, 2)}\n`, "utf8")
-  fs.renameSync(tmp, file)
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify(table, null, 2)}\n`, "utf8")
+    fs.renameSync(tmp, file)
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp)
+    } catch {}
+    throw err
+  }
 }
 
 // 표에서 키 찾기(등록 안 한 경우). 같은 문서가 이미 있으면 그 키, 앞 6자가 다른 문서와 겹치면 한 자씩 늘린다.
@@ -80,15 +140,24 @@ export function chooseKey(table, source, docPath) {
 }
 
 // 문서를 표에 등록하고 키를 돌려준다. 이미 있으면 파일을 다시 쓰지 않는다.
-export function registerShortLink(source, docPath, file = defaultTableFile(), now = new Date()) {
+//   limits: { maxLinks, maxBytes } (기본 MAX_SHORT_LINKS·MAX_TABLE_BYTES). 넘으면 code SHORT_LINK_TABLE_FULL 로 던진다.
+// 표 파일 하나는 쓰는 쪽 하나(대시보드 하나)를 전제로 한다. 잠금이 없어 둘이 함께 쓰면 키를 잃을 수 있다.
+export function registerShortLink(source, docPath, file = defaultTableFile(), now = new Date(), limits = {}) {
   if (!isValidSource(source)) throw new Error(`invalid source: ${source}`)
-  if (!isValidDocPath(docPath)) throw new Error(`invalid path: ${docPath}`)
-  const table = loadTable(file)
+  if (!isRegistrableDocPath(docPath)) throw new Error(`invalid path: ${docPath}`)
+  const maxLinks = limits.maxLinks ?? MAX_SHORT_LINKS
+  const maxBytes = limits.maxBytes ?? MAX_TABLE_BYTES
+  const table = readTableForWrite(file)
   const key = chooseKey(table, source, docPath)
-  if (!table.links[key]) {
-    table.links[key] = { source, path: docPath, created: now.toISOString() }
-    saveTable(table, file)
+  if (table.links[key]) return key
+  if (Object.keys(table.links).length >= maxLinks) {
+    throw tableError("SHORT_LINK_TABLE_FULL", `short link table is full (${maxLinks} links)`)
   }
+  table.links[key] = { source, path: docPath, created: now.toISOString() }
+  if (Buffer.byteLength(JSON.stringify(table, null, 2), "utf8") + 1 > maxBytes) {
+    throw tableError("SHORT_LINK_TABLE_FULL", `short link table would exceed ${maxBytes} bytes`)
+  }
+  saveTable(table, file)
   return key
 }
 
@@ -132,7 +201,8 @@ export function resolveShortPath(rawPathname, { table = emptyTable(), tabFor } =
   }
 
   if (segs.length === 1) {
-    const key = segs[0].toLowerCase()
+    // 키는 소문자 16진만. 대문자는 키 규칙 밖이라 404.
+    const key = segs[0]
     if (!KEY_RE.test(key)) return { status: 404 }
     const hit = table.links?.[key]
     if (!hit || !isValidSource(hit.source) || !isValidDocPath(hit.path)) return { status: 404 }

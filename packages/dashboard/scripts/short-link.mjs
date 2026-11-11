@@ -26,7 +26,7 @@ import path from "node:path"
 import process from "node:process"
 import { pathToFileURL } from "node:url"
 import { getTailscaleDnsName } from "../host-guard.mjs"
-import { defaultTableFile, parseDocTarget, publicBaseUrl, registerShortLink } from "../short-links.mjs"
+import { defaultTableFile, hiddenSegment, parseDocTarget, publicBaseUrl, registerShortLink } from "../short-links.mjs"
 
 const MOVE_HINT = "the dashboard only shows markdown under docs/ (source adk); move or copy the document under docs/ and make the link from there"
 
@@ -36,15 +36,6 @@ function usage(code) {
     "usage: node packages/dashboard/scripts/short-link.mjs <long-url | /d/<source>/<path> | doc-path> [--source <id>] [--base <url>] [--path-form] [--root <adk-root>] [--verify]\n",
   )
   process.exit(code)
-}
-
-// 대시보드 서버의 숨김 규칙과 같다: 끝의 점·공백을 떼고 소문자로 본 이름이 점으로 시작하거나 node_modules·data-private 이면 숨김.
-function hiddenSegment(docPath) {
-  for (const seg of docPath.split("/")) {
-    const name = seg.normalize("NFC").replace(/[\s.]+$/, "").toLowerCase()
-    if (!name || name.startsWith(".") || name === "node_modules" || name === "data-private") return seg
-  }
-  return null
 }
 
 export function findAdkRoot({ explicit, env = process.env, cwd = process.cwd() } = {}) {

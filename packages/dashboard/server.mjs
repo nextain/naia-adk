@@ -9,13 +9,14 @@ import { hostGuard } from "./host-guard.mjs"
 import {
   createTableReader,
   defaultTableFile,
-  isValidDocPath,
+  isRegistrableDocPath,
   isValidSource,
   registerShortLink,
   resolveShortPath,
 } from "./short-links.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
+const MAX_SHORT_LINK_BODY_BYTES = 4096
 const __dirname = path.dirname(__filename)
 
 /**
@@ -293,32 +294,43 @@ export function handleShortLink(req, res, rawPathname, opts = {}) {
     if (!String(req.headers?.["content-type"] || "").toLowerCase().startsWith("application/json")) {
       return sendJson(415, { error: "JSON body required" })
     }
-    let body = ""
+    // 본문 한도는 바이트로 센다(한글은 한 자가 3바이트).
+    const chunks = []
+    let bytes = 0
     let tooBig = false
-    req.setEncoding?.("utf8")
     req.on("data", (chunk) => {
       if (tooBig) return
-      body += chunk
-      if (body.length > 4096) tooBig = true
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), "utf8")
+      bytes += buf.length
+      if (bytes > MAX_SHORT_LINK_BODY_BYTES) {
+        tooBig = true
+        chunks.length = 0
+        return
+      }
+      chunks.push(buf)
     })
     req.on("end", () => {
       if (tooBig) return sendJson(413, { error: "Body too large" })
       let parsed
       try {
-        parsed = JSON.parse(body)
+        parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"))
       } catch {
         return sendJson(400, { error: "Invalid JSON" })
       }
       const source = parsed?.source
       const docPath = parsed?.path
-      if (!isValidSource(source) || !isValidDocPath(docPath)) {
+      // 명령과 같은 규칙: 점 폴더·node_modules·data-private·.md 아닌 경로는 대시보드가 열지 못하므로 받지 않는다.
+      if (!isValidSource(source) || !isRegistrableDocPath(docPath)) {
         return sendJson(400, { error: "Invalid source or path" })
       }
       try {
-        const key = registerShortLink(source, docPath, tableFile)
+        const key = registerShortLink(source, docPath, tableFile, new Date(), { maxLinks: opts.maxLinks, maxBytes: opts.maxBytes })
         return sendJson(200, { key, path: `/d/${key}` })
       } catch (err) {
-        return sendJson(500, { error: "Could not save short link", message: err.message })
+        if (err.code === "SHORT_LINK_TABLE_FULL") return sendJson(507, { error: "Short link table is full" })
+        // 응답에는 서버 경로·시스템 오류를 싣지 않는다. 자세한 것은 서버 기록에만.
+        console.error(`[dashboard] short link not saved: ${err.message}`)
+        return sendJson(500, { error: "Could not save short link" })
       }
     })
     return
@@ -347,7 +359,7 @@ export function handleShortLink(req, res, rawPathname, opts = {}) {
 
 /**
  * 대시보드 HTTP 요청 처리기 생성
- * - shortLinkOpts: { tableFile, readTable, tabFor } (시험에서 바꿔 끼운다)
+ * - shortLinkOpts: { tableFile, readTable, tabFor, maxLinks, maxBytes } (시험에서 바꿔 끼운다)
  */
 export function createRequestHandler(nextHandler, shortLinkOpts = {}) {
   const shortOpts = {
