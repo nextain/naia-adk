@@ -13,7 +13,7 @@ const git = (cwd, args) => command('git', ['-C', cwd, ...args]);
 const json = async path => JSON.parse(await readFile(path, 'utf8'));
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
 const stamp = value => value == null ? 'unknown' : new Date(value).toISOString();
-const signalFor = (code, config) => code.startsWith('schedule-missed:') ? 'schedule' : code === 'drift' ? 'rules' : code === 'stalled' ? (config.workLedger ? 'ledger' : 'progress') : 'window';
+const signalFor = (code, config) => code.startsWith('schedule-missed:') ? 'schedule' : code.startsWith('work-overdue:') ? 'ledger' : code === 'drift' ? 'rules' : code === 'stalled' ? (config.workLedger ? 'ledger' : 'progress') : 'window';
 const cell = value => String(value).replace(/[|\r\n]/g, ' ').replace(/[<>]/g, '');
 async function optionalStat(path) { try { return (await stat(path)).mtimeMs; } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
 
@@ -21,7 +21,7 @@ const messageKeys = new Set(['user', 'role', 'code', 'codeText', 'report']);
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 function notificationMessage(config, stage, user, role, code) {
   const descriptions = config.codeText ?? {};
-  const family = code.startsWith('schedule-missed:') ? 'schedule-missed' : code;
+  const family = code.startsWith('schedule-missed:') ? 'schedule-missed' : code.startsWith('work-overdue:') ? 'work-overdue' : code;
   const codeText = Object.hasOwn(descriptions, code) ? descriptions[code] : Object.hasOwn(descriptions, family) ? descriptions[family] : code;
   const values = { user, role, code, codeText, report: config.reportFile };
   return (config.messages?.[stage] ?? '<@{user}> Session health {role}: {code}')
@@ -166,11 +166,13 @@ export async function observeRole(config, role, previous, now, response, windowP
     if (role.sessionLog) { try { compact = compactEvidence(await readFile(role.sessionLog, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
   } catch { errors.push('window/session evidence unavailable'); }
   const evidence = [];
-  let ledgerKnown = !config.workLedger, ledgerTasks = [], schedules = null;
+  let ledgerKnown = !config.workLedger, ledgerTasks = [], overdueWork = [], schedules = null;
   if (config.workLedger) {
     try {
       ledgerTasks = (await readWorkLedger(config.workLedger, now)).filter(row => row.role === role.id && row.status === '진행 중');
       tasks.push(...ledgerTasks.map(row => `${row.id}: ${row.task}`));
+      overdueWork = ledgerTasks.filter(row => row.due_at !== null && Date.parse(row.due_at) < now).map(row => ({ id: row.id, task: row.task, dueAt: Date.parse(row.due_at), code: `work-overdue:${hash(row.id).slice(0, 16)}:${Date.parse(row.due_at)}` }));
+      anomalies.push(...overdueWork.map(row => row.code));
       ledgerKnown = true;
     } catch { errors.push('work ledger unavailable'); }
   }
@@ -215,7 +217,7 @@ export async function observeRole(config, role, previous, now, response, windowP
   progressSources.push(...ledgerProgress);
   progress = progressSources.length ? Math.max(...progressSources.map(e => e.at)) : null;
   try { rules = await compareRules(config, role); if (rules.status === 'drift') anomalies.push('drift'); } catch { errors.push('rule evidence unavailable'); }
-  return { record, role: role.id, alive, compact, tasks, progress, progressSources, rules, anomalies, errors, ledgerKnown, schedules };
+  return { record, role: role.id, alive, compact, tasks, progress, progressSources, rules, anomalies, errors, ledgerKnown, schedules, overdueWork };
 }
 
 const atomic = async (path, text) => { await mkdir(dirname(path), { recursive: true, mode: 0o700 }); const tmp = `${path}.${process.pid}.tmp`; await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, path); };
@@ -272,6 +274,7 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
     for (const r of rows) {
       report += `| ${r.role} | ${r.alive} | ${stamp(r.record.lastActivity)} | ${cell(r.tasks.join('; ') || (!r.ledgerKnown ? 'unknown (ledger unavailable)' : 'none observed'))} | ${r.anomalies.includes('stalled') ? 'stalled' : (r.errors.includes('work evidence unavailable') || !r.ledgerKnown) ? 'unknown' : r.tasks.length ? 'active' : 'no active task'} | ${stamp(r.progress)} (${r.progressSources.map(e => `${e.source}: ${stamp(e.at)}`).join('; ')}) | ${r.rules.status} | ${r.compact} |\n`;
       if (config.regularSchedule) details.push(`\n${r.role} regular schedule: ${r.schedules === null ? 'unknown' : r.schedules.map(s => `${cell(s.id)}: ${s.status === 'missed' ? '안 돎 (missed)' : s.status} (due ${stamp(s.dueAt)})`).join('; ') || 'no installed schedule'}\n`);
+      for (const row of r.overdueWork) details.push(`\n${r.role} overdue work: ${cell(row.id)}: ${cell(row.task)} (due ${stamp(row.dueAt)}; ${row.code})\n`);
       for (const d of r.rules.diffs) details.push(`\n${r.role}: ${d.path} lines ${d.lines.join(',')} (${d.allowed ? 'allowed' : 'unexpected'}); SHA256 ${d.expected} → ${d.actual}\n`);
       if (r.errors.length) details.push(`\n${r.role}: ${r.errors.join('; ')}\n`);
     }
