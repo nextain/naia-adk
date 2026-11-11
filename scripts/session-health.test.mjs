@@ -353,3 +353,18 @@ test('wait line accepts M/D HH:MM KST and rejects a zero waitMaxHours', async ()
   assert.equal(waitUntil('- in progress: waiting for review', now), null);
   const f = await fixture(); f.c.waitMaxHours = 0; assert.throws(() => validateConfig(f.c), /positive/);
 });
+
+test('overdue active work wakes its role once, retains episode on read failure, and clears on completion', async () => {
+  const f = await ledgerFixture(); f.schedule.schedules = []; f.work.work[0].due_at = '2030-01-01T12:01:00Z'; f.work.work[0].updated_at = '2030-01-01T12:00:00Z'; await f.saveLedgers();
+  await f.run();
+  assert.ok(!(await f.run({ now: now + 60000 })).rows[0].anomalies.some(x => x.startsWith('work-overdue:')));
+  const overdue = await f.run({ now: now + 61000 });
+  const code = overdue.rows[0].anomalies.find(x => x.startsWith('work-overdue:'));
+  assert.ok(code); assert.match(overdue.report, /overdue work: old: Review draft/); assert.ok(overdue.report.includes(code)); assert.equal(f.sent.filter(s => s.content.includes(code)).length, 1);
+  await f.run({ now: now + 62000 }); assert.equal(f.sent.filter(s => s.content.includes(code)).length, 1);
+  await writeFile(f.c.workLedger, '{bad'); await f.run({ now: now + 63000 });
+  assert.ok(JSON.parse(await readFile(f.c.stateFile, 'utf8')).roles['role-a'].episodes[code]);
+  f.work.work[0].status = '끝'; f.work.work[0].result = 'result'; await f.saveLedgers();
+  await f.run({ now: now + 64000 });
+  assert.equal(JSON.parse(await readFile(f.c.stateFile, 'utf8')).roles['role-a'].episodes[code], undefined);
+});
