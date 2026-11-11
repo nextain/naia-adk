@@ -185,6 +185,34 @@ export async function loadMessages(
   return sortMessages((data.messages ?? []).map(normalizeMessage))
 }
 
+// 직접 링크 대상이 최신 페이지 밖이면 대상이 나올 때까지 이전 페이지를 더 부른다(최대 maxPages 번).
+// 글 번호는 시간순 문자열이라, 대상보다 옛 글까지 받았는데 없으면 이 채널에 없는 것으로 보고 멈춘다.
+export async function loadMessagesThrough(
+  channelId: string,
+  targetId: string | null,
+  opts: { limit: number; maxPages?: number },
+  fetchFn: typeof fetch = fetch,
+): Promise<{ messages: Message[]; hasMore: boolean; pages: number }> {
+  const maxPages = opts.maxPages ?? 20
+  let messages = await loadMessages(channelId, { limit: opts.limit }, fetchFn)
+  let hasMore = messages.length >= opts.limit
+  let pages = 1
+  while (
+    targetId &&
+    hasMore &&
+    pages < maxPages &&
+    messages[0] &&
+    messages[0].id > targetId &&
+    !messages.some((m) => m.id === targetId)
+  ) {
+    const older = await loadMessages(channelId, { before: messages[0].id, limit: opts.limit }, fetchFn)
+    for (const m of older) messages = upsertMessage(messages, m)
+    hasMore = older.length >= opts.limit
+    pages++
+  }
+  return { messages, hasMore, pages }
+}
+
 const jsonInit = (method: string, body: unknown): RequestInit => ({
   method,
   headers: { "content-type": "application/json" },

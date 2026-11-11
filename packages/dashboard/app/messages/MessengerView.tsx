@@ -16,6 +16,7 @@ import {
   loadRoles,
   setMentionRoles,
   loadMessages,
+  loadMessagesThrough,
   markRead,
   messagesHref,
   messengerUrl,
@@ -255,6 +256,8 @@ export function MessengerView({
   stateRef.current = state
   const activeRef = useRef(activeId)
   activeRef.current = activeId
+  const focusRef = useRef(focusId)
+  focusRef.current = focusId
 
   useEffect(() => {
     const saved = Number(window.localStorage.getItem(SIDE_WIDTH_KEY))
@@ -278,13 +281,14 @@ export function MessengerView({
     async (channelId: string) => {
       setLoadState((s) => (stateRef.current.messages[channelId] ? s : "loading"))
       try {
-        const list = await loadMessages(channelId, { limit: PAGE_SIZE }, f)
+        const page = await loadMessagesThrough(channelId, focusRef.current, { limit: PAGE_SIZE }, f)
         setState((s) => {
           let merged = s.messages[channelId] ?? []
-          for (const m of list) merged = upsertMessage(merged, m)
+          for (const m of page.messages) merged = upsertMessage(merged, m)
           return { ...s, messages: { ...s.messages, [channelId]: merged } }
         })
-        setHasMore((h) => ({ ...h, [channelId]: h[channelId] ?? list.length >= PAGE_SIZE }))
+        // 직접 링크로 이전 페이지까지 받았으면 그 끝이 '더 보기'의 기준이다.
+        setHasMore((h) => ({ ...h, [channelId]: page.pages > 1 ? page.hasMore : h[channelId] ?? page.hasMore }))
         setLoadState("idle")
       } catch {
         setLoadState("error")
@@ -332,11 +336,17 @@ export function MessengerView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // 채널을 바꾸면 다시 읽는다. 같은 채널에서 고른 글(무응답 알림의 '글 보기' 등)이 아직 없으면 그 글까지 불러온다.
+  const shownChannelRef = useRef<string | null>(null)
   useEffect(() => {
     if (!activeId || initialState?.messages[activeId]) return
+    const switched = shownChannelRef.current !== activeId
+    shownChannelRef.current = activeId
+    const list = stateRef.current.messages[activeId]
+    if (!switched && (!focusId || !list || list.some((m) => m.id === focusId))) return
     void refreshMessages(activeId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId])
+  }, [activeId, focusId])
 
   const messages = useMemo(() => (activeId ? state.messages[activeId] ?? [] : []), [activeId, state.messages])
   const { roots, replies } = useMemo(() => splitThreads(messages), [messages])

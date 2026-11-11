@@ -6,8 +6,8 @@ import process from "node:process"
 import { fileURLToPath } from "node:url"
 import next from "next"
 import { hostGuard } from "./host-guard.mjs"
-import { readGateSecret } from "./gate-secret.mjs"
-import { applyMessengerIdentity, verifyMessengerGate } from "./messenger-gate.mjs"
+import { inspectSingleHeaderOnReq, readGateSecret } from "./gate-secret.mjs"
+import { applyMessengerIdentity, isMessengerGateVerified, verifyMessengerGate } from "./messenger-gate.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -106,6 +106,7 @@ export function clearProxySecretCache() {
  * - 소켓 이 PC 쪽 주소를 x-naia-local로
  * - 비밀 값을 x-naia-proxy-secret으로
  * - 쓰기 메서드(PUT·POST·PATCH·DELETE)이고 Origin이 scheme://Host와 같으면 x-naia-origin-ok: 1
+ *   (게이트가 확인한 메신저 요청은 X-Forwarded-Proto 나 NAIA_DASHBOARD_PUBLIC_URL 원점도 받는다)
  * - Host를 127.0.0.1:<포트>로 설정
  */
 export function buildProxyHeaders(req, socket, proxySecret, apiPort, env = process.env) {
@@ -139,12 +140,22 @@ export function buildProxyHeaders(req, socket, proxySecret, apiPort, env = proce
     const isEncrypted = Boolean(sock.encrypted)
     const scheme = isEncrypted ? "https" : "http"
     const hostHeader = req.headers?.host
-    if (hostHeader) {
-      const expectedOrigin = `${scheme}://${hostHeader}`
-      const incomingOrigin = req.headers?.origin
-      if (incomingOrigin && incomingOrigin === expectedOrigin) {
-        outHeaders["x-naia-origin-ok"] = "1"
+    const allowed = new Set()
+    if (hostHeader) allowed.add(`${scheme}://${hostHeader}`)
+    // 앞단 로그인 게이트가 TLS 를 끝내면 이 소켓은 평문이다. 게이트 비밀이 확인된 요청만
+    // 앞단이 보낸 프로토콜(한 개)이나 설정된 공개 주소로 원점을 맞춘다.
+    if (isMessengerGateVerified(req)) {
+      const proto = inspectSingleHeaderOnReq(req, "x-forwarded-proto")
+      if (hostHeader && proto.present && proto.valid && /^https?$/.test(proto.value ?? "")) {
+        allowed.add(`${proto.value}://${hostHeader}`)
       }
+      try {
+        if (env?.NAIA_DASHBOARD_PUBLIC_URL) allowed.add(new URL(env.NAIA_DASHBOARD_PUBLIC_URL).origin)
+      } catch {}
+    }
+    const incomingOrigin = req.headers?.origin
+    if (incomingOrigin && allowed.has(incomingOrigin)) {
+      outHeaders["x-naia-origin-ok"] = "1"
     }
   }
 

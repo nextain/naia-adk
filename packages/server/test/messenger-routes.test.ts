@@ -152,6 +152,17 @@ describe('messenger REST',()=>{
   expect((await app.inject({url:file.url,headers:other})).body).toBe('attached text')
   expect((await app.inject({method:'POST',url:messageUrl,headers,payload:{body:'duplicate',attachment_ids:[file.id]}})).statusCode).toBe(403)
  })
+ it('accepts an attachment-only message with an empty body, but not an empty body alone',async()=>{
+  const {app,headers,url}=await fixture()
+  const payload=Buffer.from('--only\r\nContent-Disposition: form-data; name="file"; filename="only.txt"\r\nContent-Type: text/plain\r\n\r\nonly\r\n--only--\r\n')
+  const file=(await app.inject({method:'POST',url:url+'/attachments',headers:{...headers,'content-type':'multipart/form-data; boundary=only'},payload})).json()
+  const messageUrl=url+'/channels/'+encodeURIComponent('자유')+'/messages'
+  expect((await app.inject({method:'POST',url:messageUrl,headers,payload:{body:''}})).statusCode).toBe(400)
+  expect((await app.inject({method:'POST',url:messageUrl,headers,payload:{body:'  ',attachment_ids:[]}})).statusCode).toBe(400)
+  const created=await app.inject({method:'POST',url:messageUrl,headers,payload:{body:'',attachment_ids:[file.id]}})
+  expect(created.statusCode).toBe(200)
+  expect(created.json()).toMatchObject({body:'',attachments:[expect.objectContaining({id:file.id})]})
+ })
  it('closes an active SSE connection when the application closes',async()=>{
   const {app,headers,url,post}=await fixture()
   await post('stream close test')

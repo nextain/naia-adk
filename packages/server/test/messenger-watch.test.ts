@@ -77,6 +77,9 @@ describe('messenger wake and response watch', () => {
   })
   it('quotes a channel id with shell characters in the reply command', () => {
     const s = setup()
+    // Only a DM member is woken, so the fixture DM has coder in it.
+    s.store.db.prepare("INSERT INTO channels VALUES (?, 'dm', 'dm', 0)").run("dm:o'neil$(id):coder")
+    s.store.db.prepare("INSERT INTO channel_members VALUES (?, 'coder', 'agent')").run("dm:o'neil$(id):coder")
     s.watch.onMessage({ id: 'm1', channel_id: "dm:o'neil$(id):coder", author_id: 'naia', author_kind: 'agent', body: '@coder 보세요', created_at: 1 })
     const name = fs.readdirSync(s.spool)[0]
     expect(JSON.parse(fs.readFileSync(path.join(s.spool, name), 'utf8')).body).toContain(`post 'dm:o'\\''neil$(id):coder' 'm1' reply.md)`)
@@ -165,6 +168,26 @@ describe('messenger wake and response watch', () => {
     s.post('답변', { id: 'coder', kind: 'agent' }, undefined, '자유')
     s.advance(1_800_000); s.watch.tick()
     expect(s.store.eventsAfter(0)).toHaveLength(1)
+  })
+  it('does not wake or watch a mentioned role that is not a member of the DM', () => {
+    const s = setup()
+    s.store.channels({ id: 'owner', kind: 'human' })
+    const dm = 'dm:owner:coder'
+    const message = s.post('@coder @reviewer 비공개 부탁', undefined, undefined, dm)
+    expect(fs.readdirSync(s.spool).filter(name => name.endsWith('-route-reviewer.json'))).toEqual([])
+    expect(fs.readdirSync(s.spool).filter(name => name.endsWith('-route-coder.json'))).toHaveLength(1)
+    expect(s.store.db.prepare('SELECT target_id FROM watch_state WHERE message_id = ?').all(message.id)).toEqual([{ target_id: 'coder' }])
+    s.advance(600_000); s.watch.tick()
+    expect(fs.readdirSync(s.spool).some(name => name.endsWith('-route-reviewer.json'))).toBe(false)
+  })
+  it('treats a hyphen as part of the role name, so @foo-bar does not wake foo', () => {
+    const previous = process.env.NAIA_MESSENGER_ROLES
+    process.env.NAIA_MESSENGER_ROLES = 'foo,foo-bar'
+    try {
+      const s = setup()
+      s.post('@foo-bar 확인')
+      expect(fs.readdirSync(s.spool).map(name => name.replace(/^.*-route-/, ''))).toEqual(['foo-bar.json'])
+    } finally { process.env.NAIA_MESSENGER_ROLES = previous }
   })
   it('ignores partial mentions and does not watch agent requests', () => {
     const s = setup(); s.post('@coderc @coder_extra email@coder')

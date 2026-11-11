@@ -165,8 +165,9 @@ export class MessengerStore {
     const rows = this.db.prepare('SELECT id FROM messages WHERE channel_id=? AND (? IS NULL OR id<?) ORDER BY id DESC LIMIT ?').all(channelId,before ?? null,before ?? null,Math.max(1,Math.min(MAX_LIST_LIMIT,Math.trunc(limit) || 50)));
     return rows.reverse().map(row => this.message(String(row.id),reader)!);
   }
-  createMessage(channelId: string, author: MessengerAuthor, body: string, replyTo?: string): MessengerMessage {
-    if (typeof body !== 'string' || !body.trim() || [...body].length > 64000) fail('Invalid message body');
+  /** allowEmptyBody: the caller has already checked the attachments this message carries. */
+  createMessage(channelId: string, author: MessengerAuthor, body: string, replyTo?: string, allowEmptyBody = false): MessengerMessage {
+    if (typeof body !== 'string' || (!allowEmptyBody && !body.trim()) || [...body].length > 64000) fail('Invalid message body');
     if (!this.db.prepare('SELECT id FROM channels WHERE id=?').get(channelId)) fail('Channel not found',404);
     const parent = replyTo ? this.message(replyTo,author) : undefined;
     if (replyTo && (!parent || parent.channel_id !== channelId)) fail('Invalid reply target');

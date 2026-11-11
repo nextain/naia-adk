@@ -6,7 +6,7 @@ import path from "node:path"
 import { afterEach, beforeEach, describe, it } from "node:test"
 import { clearGateSecretCache, GATE_SECRET_HEADER } from "./gate-secret.mjs"
 import { applyMessengerIdentity, MESSENGER_GATE_MARK_HEADER, verifyMessengerGate } from "./messenger-gate.mjs"
-import { createRequestHandler } from "./server.mjs"
+import { buildProxyHeaders, createRequestHandler } from "./server.mjs"
 
 const SECRET = "gate-secret-".padEnd(64, "x")
 const CHANNELS = "/api/portal/messenger/channels"
@@ -82,7 +82,7 @@ describe("메신저 게이트 확인", () => {
       gateRequest({ [GATE_SECRET_HEADER]: "wrong".padEnd(64, "y") }),
       (({ [GATE_SECRET_HEADER]: _s, ...headers }) => ({ url: CHANNELS, socket, headers }))(gateRequest().headers),
       { ...gateRequest(), rawHeaders: [GATE_SECRET_HEADER, SECRET, GATE_SECRET_HEADER, SECRET] },
-      { ...gateRequest(), socket: { remoteAddress: "10.0.0.9" } },
+      { ...gateRequest(), socket: { remoteAddress: "192.0.2.9" } },
     ]
     for (const req of cases) {
       const out = forwarded(req, env)
@@ -184,5 +184,47 @@ describe("대시보드 프록시를 거친 메신저 요청", () => {
     const seen = await throughDashboard({ "x-ax-user": "kim" }, "/api/portal")
     assert.equal(seen["x-ax-user"], "kim")
     assert.equal(seen[MESSENGER_GATE_MARK_HEADER], undefined)
+  })
+})
+
+describe("TLS 를 앞단 로그인 게이트가 끝낸 쓰기 요청의 원점", () => {
+  const PUBLIC = "https://dashboard.example.com"
+  function writeRequest(extra = {}, sock = socket) {
+    const req = gateRequest({ host: "dashboard.example.com", origin: PUBLIC, ...extra })
+    return { ...req, method: "POST", socket: sock }
+  }
+  function originOk(req, env) {
+    verifyMessengerGate(req, env)
+    return buildProxyHeaders(req, req.socket, "proxy", 3141, env)["x-naia-origin-ok"]
+  }
+
+  it("게이트가 확인한 요청은 앞단이 보낸 https 프로토콜로 원점을 맞춘다", () => {
+    assert.equal(originOk(writeRequest({ "x-forwarded-proto": "https" }), secretEnv()), "1")
+  })
+
+  it("게이트가 확인한 요청은 설정된 공개 주소의 원점도 맞는 원점으로 본다", () => {
+    assert.equal(originOk(writeRequest(), { ...secretEnv(), NAIA_DASHBOARD_PUBLIC_URL: `${PUBLIC}/` }), "1")
+  })
+
+  it("게이트가 확인하지 않은 요청의 머리글·공개 주소로는 원점을 넓히지 않는다", () => {
+    const env = { ...secretEnv(), NAIA_DASHBOARD_PUBLIC_URL: PUBLIC }
+    const cases = [
+      writeRequest({ "x-forwarded-proto": "https", [GATE_SECRET_HEADER]: "wrong".padEnd(64, "y") }),
+      writeRequest({ "x-forwarded-proto": "https" }, { remoteAddress: "192.0.2.9" }),
+    ]
+    for (const req of cases) assert.equal(originOk(req, env), undefined)
+    assert.equal(originOk(writeRequest({ "x-forwarded-proto": "https" }), {}), undefined)
+  })
+
+  it("확인된 요청이라도 다른 원점이나 두 번 온 프로토콜은 받지 않는다", () => {
+    const env = secretEnv()
+    assert.equal(originOk(writeRequest({ "x-forwarded-proto": "https", origin: "https://other.example.com" }), env), undefined)
+    assert.equal(originOk(writeRequest({ "x-forwarded-proto": "https,http" }), env), undefined)
+    assert.equal(originOk({ ...writeRequest({ "x-forwarded-proto": "https" }), rawHeaders: ["x-forwarded-proto", "https", "x-forwarded-proto", "https"] }, env), undefined)
+    assert.equal(originOk(writeRequest({ "x-forwarded-proto": "ftp", origin: "ftp://dashboard.example.com" }), env), undefined)
+  })
+
+  it("평문 http 로 바로 온 같은 원점 요청은 예전처럼 받는다", () => {
+    assert.equal(originOk(writeRequest({ origin: "http://dashboard.example.com" }), {}), "1")
   })
 })

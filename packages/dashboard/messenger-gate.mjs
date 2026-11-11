@@ -43,6 +43,11 @@ export function verifyMessengerGate(req, env = process.env) {
   return true
 }
 
+/** verifyMessengerGate 가 이 요청의 게이트 비밀·계정을 확인했는지. */
+export function isMessengerGateVerified(req) {
+  return verifiedAccounts.has(req)
+}
+
 /**
  * API 로 넘길 머리글을 메신저 길에 맞게 고친다. 다른 길은 건드리지 않는다.
  * 확인된 요청만 계정·표시 이름과 표시를 넘기고, 나머지는 사람 신원 머리글을 모두 지운다.

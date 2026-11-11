@@ -10,6 +10,7 @@ import {
   findDocLinks,
   loadChannels,
   loadMessages,
+  loadMessagesThrough,
   mentionCandidates,
   mentionQueryAt,
   messageAuthorLabel,
@@ -80,6 +81,61 @@ describe("메신저 REST 호출 모양(약속)", () => {
     await decideApproval("m1", "approve", fake)
     assert.equal(calls[5][0], "/api/portal/messenger/approvals/m1")
     assert.deepEqual(JSON.parse(String(calls[5][1]?.body)), { decision: "approve" })
+  })
+
+  it("첨부만 있는 글은 빈 본문과 첨부 번호를 함께 보낸다", async () => {
+    let sent: unknown
+    const fake = (async (_url: string, init?: RequestInit) => {
+      sent = JSON.parse(String(init?.body))
+      return Response.json({ id: "m9", channel_id: "c1", body: "" })
+    }) as unknown as typeof fetch
+    await postMessage("c1", "", null, ["a1"], fake)
+    assert.deepEqual(sent, { body: "", attachment_ids: ["a1"] })
+  })
+
+  describe("직접 링크 대상까지 이전 페이지 불러오기", () => {
+    // 글 번호는 시간순으로 정렬되는 문자열(ULID 와 같은 성질)이다.
+    const ids = Array.from({ length: 130 }, (_, i) => `m${String(i).padStart(3, "0")}`)
+    function pagedFetch() {
+      const calls: string[] = []
+      const fake = (async (url: string) => {
+        calls.push(url)
+        const q = new URL(url, "http://x").searchParams
+        const before = q.get("before")
+        const limit = Number(q.get("limit"))
+        const older = before ? ids.filter((id) => id < before) : ids
+        const at = (id: string) => new Date(Date.UTC(2026, 10, 8, 10, 0, Number(id.slice(1, 4)))).toISOString()
+        return Response.json({ messages: older.slice(-limit).reverse().map((id) => msg(id, { created_at: at(id) })) })
+      }) as unknown as typeof fetch
+      return { calls, fake }
+    }
+
+    it("대상이 최신 페이지 밖이면 대상이 나올 때까지 이전 페이지를 더 불러온다", async () => {
+      const { calls, fake } = pagedFetch()
+      const out = await loadMessagesThrough("c1", "m005", { limit: 50 }, fake)
+      assert.ok(out.messages.some((m) => m.id === "m005"))
+      assert.equal(calls.length, 3)
+      assert.equal(out.messages[0].id, "m000")
+      assert.equal(out.hasMore, false)
+      assert.deepEqual(out.messages.map((m) => m.id), ids, "시간순, 빠짐·겹침 없음")
+    })
+
+    it("대상이 최신 페이지에 있으면 한 번만 부른다", async () => {
+      const { calls, fake } = pagedFetch()
+      const out = await loadMessagesThrough("c1", "m120", { limit: 50 }, fake)
+      assert.equal(calls.length, 1)
+      assert.equal(out.messages.length, 50)
+      assert.equal(out.hasMore, true)
+    })
+
+    it("상한에서 멈추고, 대상보다 옛 글까지 받았는데 없으면 더 부르지 않는다", async () => {
+      const capped = pagedFetch()
+      await loadMessagesThrough("c1", "m000", { limit: 10, maxPages: 3 }, capped.fake)
+      assert.equal(capped.calls.length, 3)
+      const missing = pagedFetch()
+      await loadMessagesThrough("c1", "m100x", { limit: 50 }, missing.fake)
+      assert.equal(missing.calls.length, 1, "m080~m129 를 받으면 m100x 는 이 채널에 없다")
+    })
   })
 
   it("/d/<키> 는 짧은 주소가 넘겨 준 /docs 주소에서 출처·경로를 풀어 문서를 읽는다", async () => {

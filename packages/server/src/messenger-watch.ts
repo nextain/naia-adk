@@ -21,6 +21,7 @@ interface Message {
 interface WatchStore {
   db: { prepare(sql: string): { all(...args: any[]): any[]; get(...args: any[]): any; run(...args: any[]): any } }
   addEvent(type: string, data: any): unknown
+  canAccess(channelId: string, reader: { id: string; kind: "human" | "agent" }): boolean
 }
 const epoch = (value: string | number) => typeof value === "number" ? value : Date.parse(value)
 // A DM channel id comes from an account name, so nothing in the pasted reply command is left unquoted.
@@ -71,7 +72,10 @@ export class MessengerWatch {
       this.cancelAnswered()
     }
     for (const role of messengerRoleIds()) {
-      if (!new RegExp(`(?<![A-Za-z0-9_@])@${role}(?![A-Za-z0-9_])`, "i").test(message.body)) continue
+      // The right edge covers every character a role id may hold, so @foo-bar does not also reach foo.
+      if (!new RegExp(`(?<![A-Za-z0-9_@])@${role}(?![A-Za-z0-9_-])`, "i").test(message.body)) continue
+      // A DM reaches only its members, the same rule the API and the stream apply.
+      if (!this.store.canAccess(message.channel_id, { id: role, kind: "agent" })) continue
       this.wake(message, role)
       if (message.author_kind === "human") {
         this.store.db.prepare("INSERT OR IGNORE INTO watch_state (message_id, target_id, stage, updated_at) VALUES (?, ?, 'none', ?)")

@@ -137,7 +137,8 @@ export const portalMessengerRoutes: FastifyPluginAsync<MessengerOptions> = async
         if (!owner || owner.author_id !== actor(req).id || owner.author_kind !== actor(req).kind || owner.message_id) throw failure(403,'Unattached upload owner required')
       }
     }
-    const message = store.createMessage(id(req),actor(req),body.body,body.reply_to_id)
+    // A message may be attachments only; the uploads were checked above.
+    const message = store.createMessage(id(req),actor(req),body.body,body.reply_to_id,(body.attachment_ids?.length ?? 0) > 0)
     if (body.attachment_ids !== undefined) {
       for (const attachmentId of body.attachment_ids) store.db.prepare('UPDATE attachments SET message_id=? WHERE id=?').run(message.id,attachmentId)
     }
