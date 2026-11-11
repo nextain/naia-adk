@@ -1400,160 +1400,118 @@ test("위험 수용: security FAIL 하나만, 결정 글·같은 값·끝나는 
 	}
 });
 
-// 계획 폴더 안 고정 대본: 대본·지문·단계는 계획 files 에서 읽고, 코드에 적지 않는다.
+// 계획 고정 대본(적대 리뷰 B1): 대본 본문은 분류기가 다 읽을 수 없으므로 ops 로 받지 않는다.
+// 준비 기록 없는 계획 승인(kind plan)으로만 돌고, 대본·files 지문은 계획 결합이 대조한다.
 const { verifiedPlanBinding } = require("../lib/deploy-readiness.js");
 const PIN_SERVICE = "azure:vm:sample-vm";
+const PIN_OPS_WHY = /계획 고정 대본은 ops 로 받지 않음/;
 
-function pinnedScriptFixture(t, { cfgRule = {}, scriptDir = null } = {}) {
+function pinnedScriptFixture(t, { body = 'case "$1" in s1) az vm run-command invoke -g sample-rg -n sample-vm --command-id RunShellScript --scripts @remote-s1.sh ;; r1) echo "$2" ;; esac\n', remote = "#!/usr/bin/env bash\nsystemctl restart sample-web\n", services = null } = {}) {
 	const { root } = makeWorkspace(t);
-	fs.mkdirSync(path.join(root, "config"), { recursive: true });
-	fs.writeFileSync(path.join(root, "config", "deploy-gate.json"), JSON.stringify({ schema: "deploy-gate/v1", services: { [PIN_SERVICE]: { label: "샘플 VM", allowOps: true, ...cfgRule } } }));
 	const planDir = path.join(root, ".agents", "progress", "sample-vm-work");
 	const gatesDir = path.join(planDir, "gates");
 	fs.mkdirSync(gatesDir, { recursive: true });
-	const dir = scriptDir ? path.join(root, scriptDir) : planDir;
-	fs.mkdirSync(dir, { recursive: true });
-	const script = path.join(dir, "vm.sh");
-	const remote = path.join(dir, "remote-s1.sh");
-	fs.writeFileSync(script, "#!/usr/bin/env bash\nset -euo pipefail\ncase \"$1\" in s1) az vm run-command invoke -g sample-rg -n sample-vm --command-id RunShellScript --scripts @remote-s1.sh ;; r1) echo \"$2\" ;; esac\n");
-	fs.writeFileSync(remote, "#!/usr/bin/env bash\nsystemctl restart sample-web\n");
-	const files = { [script]: sha256(fs.readFileSync(script)), [remote]: sha256(fs.readFileSync(remote)) };
+	const script = path.join(planDir, "vm.sh");
+	const remotePath = path.join(planDir, "remote-s1.sh");
+	fs.writeFileSync(script, `#!/usr/bin/env bash\nset -euo pipefail\n${body}`);
+	fs.writeFileSync(remotePath, remote);
+	const files = { [script]: sha256(fs.readFileSync(script)), [remotePath]: sha256(fs.readFileSync(remotePath)) };
+	const real = services || (() => {
+		// 훅처럼 분류기(classifyProdMutations)가 낸 서비스 집합을 쓴다.
+		const hits = classifyProdMutations(`sudo bash ${script} s1`, root, 0, false, root);
+		return [...new Set(hits.map((h) => h.service))];
+	})();
+	assert.ok(real.length > 0, "분류기 서비스 집합이 비어 있지 않아야 함");
+	fs.mkdirSync(path.join(root, "config"), { recursive: true });
+	fs.writeFileSync(path.join(root, "config", "deploy-gate.json"), JSON.stringify({ schema: "deploy-gate/v1", services: Object.fromEntries(real.map((s) => [s, { label: s, allowOps: true }])) }));
 	const plan = {
 		planId: "sample-vm-work",
-		services: [`script:${script}`, PIN_SERVICE],
+		services: [`script:${script}`, ...real],
 		scenario: [
 			{ id: "s1", commands: [`sudo bash ${script} s1`], files: { ...files } },
 			{ id: "r1", branch: "rollback", commands: [`bash ${script} r1 fixed-1`], files: { ...files } },
 		],
 		rollback: { step_ids: ["r1"] },
 	};
-	const bind = (stepId = "s1", kind = "ops", services = [PIN_SERVICE]) => {
+	const assess = (stepId = "s1") => {
 		const entry = plan.scenario.find((s) => s.id === stepId);
-		return verifiedPlanBinding({ plan, entry, command: entry.commands[0], cwd: root, gatesDir }, "", kind, services, root);
+		const command = entry.commands[0];
+		return assessReadiness(real, { root, command, cwd: root, planBinding: { plan, entry, command, cwd: root, gatesDir } });
 	};
-	return { root, planDir, gatesDir, script, remote, files, plan, bind };
+	const writeOps = () => fs.writeFileSync(path.join(gatesDir, "deploy.json"), JSON.stringify({ kind: "ops", services: real, reason: "고정 대본 운영 작업", createdAt: new Date().toISOString() }));
+	const bind = (stepId = "s1", kind = "ops") => {
+		const entry = plan.scenario.find((s) => s.id === stepId);
+		return verifiedPlanBinding({ plan, entry, command: entry.commands[0], cwd: root, gatesDir }, "", kind, real, root);
+	};
+	return { root, planDir, gatesDir, script, remote: remotePath, files, plan, services: real, assess, writeOps, bind };
 }
 
-test("계획 고정 대본: 계획 폴더 안 대본·단계 id·지문이 맞으면 sudo bash 와 고정 인자 호출을 ops 로 받는다", (t) => {
+test("계획 고정 대본: 준비 기록 없는 계획 승인으로는 지문이 맞으면 받고, 대본·files 지문이 바뀌면 막는다", (t) => {
 	const f = pinnedScriptFixture(t);
+	assert.deepEqual(f.services, [PIN_SERVICE]);
 	for (const id of ["s1", "r1"]) {
-		const r = f.bind(id);
-		assert.equal(r.ok, true, `${id}: ${r.why}`);
-		assert.equal(r.ops, true);
-		assert.match(r.fact, /계획 고정 대본 .*vm\.sh 단계 /);
+		const res = f.assess(id);
+		assert.equal(res.ok, true, `${id}: ${res.problems.join(" / ")}`);
+		assert.equal(res.kind, "plan");
 	}
-	// 끝까지: ops 준비 기록이 있으면 ops 사실로 들어간다. 안쪽 검사는 결합 안에서 대본·고정 파일에 이미 걸었다(B1).
-	fs.writeFileSync(path.join(f.gatesDir, "deploy.json"), JSON.stringify({ kind: "ops", services: [PIN_SERVICE], reason: "샘플 VM 웹 서비스 재시작", createdAt: new Date().toISOString() }));
-	const entry = f.plan.scenario[0];
-	const res = assessReadiness([PIN_SERVICE], { root: f.root, command: entry.commands[0], cwd: f.root, planBinding: { plan: f.plan, entry, command: entry.commands[0], cwd: f.root, gatesDir: f.gatesDir } });
-	assert.equal(res.ok, true, res.problems.join(" / "));
-	assert.ok(res.facts.some((x) => /계획 고정 대본/.test(x)));
+	for (const target of ["script", "remote"]) {
+		const g = pinnedScriptFixture(t);
+		fs.appendFileSync(g[target], "#");
+		const res = g.assess("s1");
+		assert.equal(res.ok, false, `${target} 지문이 바뀌면 받히면 안 됨`);
+		assert.ok(res.problems.some((x) => /고정 파일 sha256 불일치/.test(x)), res.problems.join(" / "));
+	}
 });
 
-test("계획 고정 대본: 서비스 허용 규칙(allowedCommands)은 그대로 따로 요구한다", (t) => {
-	const f = pinnedScriptFixture(t, { cfgRule: { allowedCommands: ["^az vm restart "] } });
-	const r = f.bind("s1");
+test("계획 고정 대본: 계획 승인에서도 서비스 허용 규칙(allowedCommands)은 그대로 따로 요구한다", (t) => {
+	const f = pinnedScriptFixture(t);
+	fs.writeFileSync(path.join(f.root, "config", "deploy-gate.json"), JSON.stringify({ schema: "deploy-gate/v1", services: { [PIN_SERVICE]: { label: "샘플 VM", allowedCommands: ["^az vm restart "] } } }));
+	const r = f.bind("s1", "plan");
 	assert.equal(r.ok, false);
 	assert.match(r.why, /allowedCommands/);
 });
 
-test("계획 고정 대본: 모양·위치·지문·단계·서비스가 하나라도 다르면 막는다", async (t) => {
-	const cases = [
-		{ desc: "지문이 다름(본문 한 바이트)", why: /고정 파일 sha256 불일치|고정 파일 지문이 디스크 본문과 다름/, edit: (f) => fs.appendFileSync(f.remote, "#") },
-		{ desc: "계획 폴더 밖 대본", why: /계획 고정 대본: 대본이 계획 폴더 .* 안에 있지 않음/, opts: { scriptDir: "scripts" } },
-		{ desc: "단계 id 가 다름", why: /계획 고정 대본: 호출 단계 id s1 와 대본 단계 인자 s2 가 다름/, edit: (f) => { f.plan.scenario[0].commands = [`sudo bash ${f.script} s2`]; } },
-		{ desc: "단계 명령이 둘", why: /계획 고정 대본: 호출 단계 commands 가 이 명령 한 줄뿐이 아님/, edit: (f) => { f.plan.scenario[0].commands.push(`bash ${f.script} s1 again`); } },
-		{ desc: "인자에 $x", why: /계획 고정 대본: 명령은 `bash <대본>/, edit: (f) => { f.plan.scenario[0].commands = [`bash ${f.script} s1 $x`]; } },
-		{ desc: "인자에 ;", why: /계획 고정 대본: 명령 절이 하나가 아님|계획 고정 대본: 명령은 `bash <대본>/, edit: (f) => { f.plan.scenario[0].commands = [`bash ${f.script} s1 a;b`]; } },
-		{ desc: "인자에 >", why: /계획 고정 대본: 명령은 `bash <대본>/, edit: (f) => { f.plan.scenario[0].commands = [`bash ${f.script} s1 >out`]; } },
-		{ desc: "sudo -E bash", why: /계획 고정 대본: 명령은 `bash <대본>/, edit: (f) => { f.plan.scenario[0].commands = [`sudo -E bash ${f.script} s1`]; } },
-		{ desc: "services 에 script: 없음", why: /계획 고정 대본: 계획 services 의 script: 항목이/, edit: (f) => { f.plan.services = [PIN_SERVICE]; } },
-		{ desc: "단계마다 files 맵이 다름", why: /계획 고정 대본: 단계 r1 의 files 맵이 호출 단계와 다름/, edit: (f) => { delete f.plan.scenario[1].files[f.remote]; } },
-		{ desc: "되돌리기 단계에 branch 없음", why: /계획 고정 대본: 단계 r1 갈래가 다름/, edit: (f) => { delete f.plan.scenario[1].branch; } },
-		{ desc: "다른 단계가 다른 대본을 부름", why: /계획 고정 대본: 단계 r1 가 같은 대본을/, edit: (f) => { f.plan.scenario[1].commands = [`bash ${f.planDir}/other.sh r1`]; } },
-		{ desc: "명령 서비스가 계획 실제 서비스와 다름", why: /계획 고정 대본: 명령이 바꾸는 서비스가/, edit: (f) => { f.plan.services.push("azure:vm:other-vm"); } },
-	];
-	for (const c of cases) {
-		await t.test(c.desc, (st) => {
-			const f = pinnedScriptFixture(st, c.opts || {});
-			if (c.edit) c.edit(f);
-			const r = f.bind("s1");
-			assert.equal(r.ok, false, `${c.desc}: 받히면 안 됨`);
-			assert.match(r.why, c.why, `${c.desc}: ${r.why}`);
-		});
+test("계획 고정 대본: 정상 대본이라도 ops 준비 기록으로는 받지 않는다", (t) => {
+	const f = pinnedScriptFixture(t);
+	for (const id of ["s1", "r1"]) {
+		const r = f.bind(id);
+		assert.equal(r.ok, false, `${id}: ops 로 받히면 안 됨`);
+		assert.match(r.why, PIN_OPS_WHY);
 	}
+	f.writeOps();
+	const res = f.assess("s1");
+	assert.equal(res.ok, false);
+	assert.ok(res.problems.some((x) => PIN_OPS_WHY.test(x)), res.problems.join(" / "));
 });
 
-test("계획 고정 대본: kind=feature 는 이 갈래를 타지 않는다", (t) => {
+test("계획 고정 대본: kind=feature 는 ops 거부 문구 없이 기존 판정을 탄다", (t) => {
 	const f = pinnedScriptFixture(t);
 	const r = f.bind("s1", "feature");
 	assert.equal(r.ok, false);
-	assert.doesNotMatch(r.why, /계획 고정 대본/);
+	assert.doesNotMatch(r.why, PIN_OPS_WHY);
 	assert.match(r.why, /지원하지 않는 실행 형식/);
 });
 
-// 적대 리뷰 B1: 고정 대본 갈래도 ops 안쪽 검사(판 바꾸기 금지, az 설정 동사·옵션)를 받는다.
-// 서비스 집합은 훅처럼 분류기(classifyProdMutations)를 거쳐 만든다.
-function classifiedServices(command, root) {
-	const hits = classifyProdMutations(command, root, 0, false, root);
-	assert.deepEqual(hits.filter((h) => h.unclassified), [], "분류 불가 없음");
-	return [...new Set(hits.map((h) => h.service))];
-}
-
-function writeOpsRecord(gatesDir, services) {
-	fs.writeFileSync(path.join(gatesDir, "deploy.json"), JSON.stringify({ kind: "ops", services, reason: "고정 대본 운영 작업", createdAt: new Date().toISOString() }));
-}
-
-test("계획 고정 대본: 분류기가 낸 서비스 집합으로 끝까지 ops 를 받는다", (t) => {
-	const f = pinnedScriptFixture(t);
-	const entry = f.plan.scenario[0];
-	const services = classifiedServices(entry.commands[0], f.root);
-	assert.deepEqual(services, [PIN_SERVICE]);
-	writeOpsRecord(f.gatesDir, services);
-	const res = assessReadiness(services, { root: f.root, command: entry.commands[0], cwd: f.root, planBinding: { plan: f.plan, entry, command: entry.commands[0], cwd: f.root, gatesDir: f.gatesDir } });
-	assert.equal(res.ok, true, res.problems.join(" / "));
-	assert.ok(res.facts.some((x) => /계획 고정 대본/.test(x)));
-});
-
-test("계획 고정 대본: 리뷰어 재현 — 대본 안 containerapp --image 는 분류기 서비스로도 ops 로 받지 않는다", (t) => {
-	const { root } = makeWorkspace(t);
-	const service = "azure:containerapp:prod-app";
-	fs.mkdirSync(path.join(root, "config"), { recursive: true });
-	fs.writeFileSync(path.join(root, "config", "deploy-gate.json"), JSON.stringify({ schema: "deploy-gate/v1", services: { [service]: { label: "운영 앱", allowOps: true } } }));
-	const planDir = path.join(root, ".agents", "progress", "w");
-	const gatesDir = path.join(planDir, "gates");
-	fs.mkdirSync(gatesDir, { recursive: true });
-	const script = path.join(planDir, "vm.sh");
-	fs.writeFileSync(script, 'case "$1" in s1) az containerapp update -n prod-app -g rg --image reg/app:2 ;; esac\n');
-	const command = `bash ${script} s1`;
-	const plan = { planId: "w", services: [`script:${script}`, service], scenario: [{ id: "s1", commands: [command], files: { [script]: sha256(fs.readFileSync(script)) } }] };
-	const services = classifiedServices(command, root);
-	assert.deepEqual(services, [service]);
-	writeOpsRecord(gatesDir, services);
-	const entry = plan.scenario[0];
-	const res = assessReadiness(services, { root, command, cwd: root, planBinding: { plan, entry, command, cwd: root, gatesDir } });
-	assert.equal(res.ok, false, "이미지 교체를 ops 로 받으면 안 됨");
-	assert.ok(res.problems.some((x) => /계획 고정 대본: 고정 파일에 이미지·리비전·트래픽을 바꾸는 명령/.test(x)), res.problems.join(" / "));
-});
-
-test("계획 고정 대본: 대본·고정 본문의 판 바꾸기와 설정 밖 az 명령은 막는다", async (t) => {
+// 적대 리뷰 a5 우회 1~5 재현 입력 그대로: 분류기 서비스를 allowOps 로 등록하고 kind ops 준비 기록을 둬도 ops 로 받지 않는다.
+test("계획 고정 대본: 리뷰 a5 우회 1~5 는 ops 로 통과하지 못한다", async (t) => {
+	const vmCall = 'case "$1" in s1) az vm run-command invoke -g rg -n sample-vm --command-id RunShellScript --scripts @remote-s1.sh ;; esac\n';
 	const cases = [
-		{ desc: "대본 안 --image", why: /고정 파일에 이미지·리비전·트래픽을 바꾸는 명령.*vm\.sh/, body: 'case "$1" in s1) az containerapp update -n prod-app -g rg --image reg/app:2 ;; r1) echo "$2" ;; esac\n' },
-		{ desc: "대본 안 revision activate", why: /고정 파일에 이미지·리비전·트래픽을 바꾸는 명령.*vm\.sh/, body: 'case "$1" in s1) az containerapp revision activate -n prod-app -g rg --revision prod-app--v2 ;; r1) echo "$2" ;; esac\n' },
-		{ desc: "대본 안 docker push", why: /고정 파일에 이미지·리비전·트래픽을 바꾸는 명령.*vm\.sh/, body: 'case "$1" in s1) docker push reg/app:2 ;; r1) echo "$2" ;; esac\n' },
-		{ desc: "원격 본문 안 docker push", why: /고정 파일에 이미지·리비전·트래픽을 바꾸는 명령.*remote-s1\.sh/, remote: "#!/usr/bin/env bash\ndocker push reg/app:2\n" },
-		{ desc: "대본 안 설정 밖 az 동사", why: /대본 안 명령: ops 로 받을 수 없는 az 명령: az webapp deploy/, body: 'case "$1" in s1) az webapp deploy -n prod-web -g rg --src-path app.zip ;; r1) echo "$2" ;; esac\n' },
+		{ desc: "1 원격 본문 docker pull/run", body: vmCall, remote: "docker pull reg/app:2\ndocker rm -f app; docker run -d --name app reg/app:2\n" },
+		{ desc: "1 원격 본문 git pull·compose", body: vmCall, remote: "cd /srv/app && git pull && docker compose up -d --build\n" },
+		{ desc: "1 인라인 --scripts docker", body: 'case "$1" in s1) az vm run-command invoke -g rg -n sample-vm --command-id RunShellScript --scripts "docker pull reg/app:2 && docker compose up -d" ;; esac\n' },
+		{ desc: "2 here-doc ssh", body: "case \"$1\" in s1) ssh sample-vm bash -s <<'R'\ndocker pull reg/app:2\ndocker compose up -d\nR\n;; esac\n" },
+		{ desc: "3 변수로 az 조립", body: 'case "$1" in s1) A=az; "$A" containerapp update -n prod-app -g rg --ima""ge reg/app:2 ;; esac\n' },
+		{ desc: "4 eval+base64", body: 'case "$1" in s1) eval "az containerapp update -n prod-app -g rg --$(echo aW1hZ2U=|base64 -d) reg/app:2" ;; esac\n' },
+		{ desc: "5 kubectl set image", body: 'case "$1" in s1) kubectl set image deployment/prod-app app=reg/app:2 ;; esac\n' },
+		{ desc: "5 kubectl apply", body: 'case "$1" in s1) kubectl apply -f deploy.yaml ;; esac\n' },
 	];
 	for (const c of cases) {
 		await t.test(c.desc, (st) => {
-			const f = pinnedScriptFixture(st);
-			if (c.body) fs.writeFileSync(f.script, `#!/usr/bin/env bash\nset -euo pipefail\n${c.body}`);
-			if (c.remote) fs.writeFileSync(f.remote, c.remote);
-			const files = { [f.script]: sha256(fs.readFileSync(f.script)), [f.remote]: sha256(fs.readFileSync(f.remote)) };
-			for (const step of f.plan.scenario) step.files = { ...files };
-			const r = f.bind("s1");
-			assert.equal(r.ok, false, `${c.desc}: 받히면 안 됨`);
-			assert.match(r.why, c.why, `${c.desc}: ${r.why}`);
+			const f = pinnedScriptFixture(st, { body: c.body, ...(c.remote ? { remote: c.remote } : {}) });
+			f.writeOps();
+			const res = f.assess("s1");
+			assert.equal(res.ok, false, `${c.desc}: ops 로 받히면 안 됨 (서비스 ${f.services.join(", ")})`);
+			assert.ok(res.problems.some((x) => PIN_OPS_WHY.test(x)), `${c.desc}: ${res.problems.join(" / ")}`);
 		});
 	}
 });
