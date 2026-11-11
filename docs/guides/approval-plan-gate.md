@@ -50,6 +50,8 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 
 ### 여러 절 고정 대본을 ops 로 올리기
 대본을 계획 폴더(`.agents/progress/<작업>/`) 안에 두고, 모든 단계의 `commands` 를 `bash <대본 절대 경로> <단계id>[ 고정 인자…]`(또는 `sudo bash …`, sudo 옵션 없음) 한 줄로 적습니다. 첫 인자는 그 단계의 `id` 와 같아야 하고, 인자는 영숫자와 `_ . , : = @ + / -` 만 씁니다(`$`, 백틱, 역슬래시, `; | & < >`, 따옴표 불가). 모든 단계가 같은 대본을 부르고 같은 `files` 맵(대본과 대본이 원격에 올리는 본문까지 `{절대 경로: sha256}`)을 고정합니다. `rollback.step_ids` 단계는 `branch: "rollback"`, 나머지는 `branch` 를 두지 않습니다. `services` 에는 `script:<대본 절대 경로>` 하나와 명령이 실제로 바꾸는 서비스를 함께 적습니다. 이렇게 맞으면 `kind: "ops"` 준비 기록이 이 대본 호출을 실행 형식으로 결합합니다(`deploy-readiness.js` `pinnedScriptBinding`). 대본 경로·지문은 코드가 아니라 계획에서 읽으므로 계획마다 코드를 고칠 필요가 없습니다. 이 결합은 실행 형식만 정하며, `config/deploy-gate.json` 서비스 규칙(`allowedCommands` 등)·적대 리뷰·STEP 승인 코드는 그대로 따로 요구합니다.
+이 갈래도 ops 안쪽 검사를 받습니다. 대본과 `files` 에 고정한 모든 파일 어디에든 판 바꾸기(`--image`, `--yaml`, `revision activate|copy`, `ingress traffic set`, `set-image`, `docker push` 등)가 있으면 단계 id 와 상관없이 거부하고, 대본 안 `az` 절은 설정만 바꾸는 동사·옵션이어야 합니다(원격 실행 절 `az vm run-command … --scripts @<파일>` 의 본문은 고정 파일이라 판 바꾸기 검사만 받습니다). 새 판을 올리는 대본은 `feature`·`rollback` 으로 신고합니다.
+한계: 지문은 훅 시점에 한 번 확인하고 bash 는 대본을 실행하면서 읽으므로, 계획 폴더(에이전트가 쓸 수 있는 곳) 안 대본을 실행 중에 다른 프로세스가 바꾸면 승인과 다른 글이 돌 수 있습니다(TOCTOU, 기존 `bash <파일>` 갈래와 같은 성질).
 
 ---
 

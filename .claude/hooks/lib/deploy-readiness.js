@@ -286,7 +286,7 @@ const OPS_AZ_FLAGS = new Set(["-n", "--name", "-g", "--resource-group", "--subsc
 	"--revision", "--label", "--source-label", "--target-label", "--secrets", "--secret-names", "--settings", "--setting-names", "--new-capacity",
 	"--type", "--allow-insecure", "--transport", "--target-port", "--exposed-port", "--rule-name", "--ip-address", "--action", "--description", "--affinity", "--allowed-origins"]);
 
-function opsAzProblem(command) {
+function opsAzProblem(command, { skipRemote = false } = {}) {
 	for (const tokens of opsClauses(command)) {
 		const at = tokens.findIndex((t) => /(?:^|\/)az$/.test(t));
 		if (at < 0) continue;
@@ -296,6 +296,7 @@ function opsAzProblem(command) {
 		const phrase = verbs.join(" ");
 		if (/(?:^| )(?:show|list|logs?|browse|tail|get|wait)(?: |$)|(?:^| )(?:list|show)-/.test(phrase)) continue;
 		if (remotePayload(tokens) !== undefined) {
+			if (skipRemote) continue;
 			const script = remotePayload(tokens);
 			if (script === null) return "원격 실행 본문 또는 지원하는 원격 동사가 없음";
 			if (INNER_OPAQUE.test(script)) return "원격 실행 본문이 불투명함";
@@ -572,7 +573,8 @@ function pinnedScriptCall(command) {
 
 /**
  * 계획 폴더 안 대본을 단계 id 로 부르는 ops 명령을 계획이 이미 고정한 files 지문에 묶는다.
- * 실행 형식만 결합한다. 서비스 허용 규칙과 STEP 승인은 호출한 쪽에서 따로 요구한다.
+ * 실행 형식을 결합하고, 대본·고정 파일에 ops 안쪽 검사(판 바꾸기 금지, az 설정 동사·옵션)를 건다.
+ * 서비스 허용 규칙과 STEP 승인은 호출한 쪽에서 따로 요구한다.
  */
 function pinnedScriptBinding({ plan, entry, command, clauseCount, services, base, gatesDir }) {
 	const no = (why) => ({ ok: false, why });
@@ -605,13 +607,21 @@ function pinnedScriptBinding({ plan, entry, command, clauseCount, services, base
 	const pinsOf = (files) => new Map(Object.entries(files && typeof files === "object" ? files : {}).map(([p, h]) => [path.resolve(base, p), String(h).toLowerCase()]));
 	const pins = pinsOf(entry.files);
 	if (!pins.has(script)) return no("호출 단계 files 에 대본이 고정되지 않음");
+	const bodies = new Map();
 	for (const [p, want] of pins) {
 		let got = "";
 		try {
-			got = crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+			const buf = fs.readFileSync(p);
+			got = crypto.createHash("sha256").update(buf).digest("hex");
+			bodies.set(p, buf.toString("utf8"));
 		} catch {}
 		if (got !== want) return no(`고정 파일 지문이 디스크 본문과 다름: ${p}`);
 	}
+	// 지문은 실행 형식만 묶는다. ops 안쪽 검사도 받는다(적대 리뷰 B1): 판 바꾸기는 대본·고정 파일 어디에 있어도 막고,
+	// 대본 안 az 절은 설정만 바꾸는 동사·옵션이어야 한다. 원격 실행 절의 본문은 고정 파일이라 위 판 바꾸기 검사만 받는다.
+	for (const [p, body] of bodies) if (VERSION_CHANGE.test(body)) return no(`고정 파일에 이미지·리비전·트래픽을 바꾸는 명령이 있어 ops 로 받을 수 없음: ${p}`);
+	const azBad = opsAzProblem(bodies.get(script), { skipRemote: true });
+	if (azBad) return no(`대본 안 명령: ${azBad}`);
 	const samePins = (files) => {
 		const other = pinsOf(files);
 		return other.size === pins.size && [...pins].every(([p, h]) => other.get(p) === h);
