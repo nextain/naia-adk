@@ -139,3 +139,66 @@ describe("짧은 주소: --verify", () => {
     assert.equal(out, `${BASE}/d/adk/developer/a.md`)
   })
 })
+
+describe("짧은 주소: 대시보드가 응답하지 않을 때만 표에 직접 쓴다", () => {
+  const answering = (status, body) => async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+  const tableIn = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "short-link-fb-")), "other-copy.json")
+
+  it("대시보드가 507·500·400 으로 답하면 그 코드와 이유로 실패하고 다른 사본의 표에 쓰지 않는다", async () => {
+    for (const [status, error] of [[507, "Short link table is full"], [500, "Could not save short link"], [400, "Invalid source or path"]]) {
+      const file = tableIn()
+      const errs = []
+      await assert.rejects(
+        run(["docs/developer/a.md", "--base", BASE], { env: { NAIA_SHORT_LINKS_FILE: file }, cwd: os.tmpdir(), fetchImpl: answering(status, { error }), tailscaleDns: "", stderr: { write: (x) => errs.push(x) } }),
+        (err) => err.message.includes(`answered ${status}`) && err.message.includes(error),
+        String(status),
+      )
+      assert.equal(fs.existsSync(file), false, `${status}: table written`)
+      assert.equal(errs.join("").includes("directly"), false, `${status}: ${errs.join("")}`)
+    }
+  })
+
+  it("200 인데 키가 없으면 실패하고 직접 쓰지 않는다", async () => {
+    const file = tableIn()
+    await assert.rejects(
+      run(["docs/developer/a.md", "--base", BASE], { env: { NAIA_SHORT_LINKS_FILE: file }, cwd: os.tmpdir(), fetchImpl: answering(200, {}), tailscaleDns: "", stderr: quiet }),
+      /without a key/,
+    )
+    assert.equal(fs.existsSync(file), false)
+  })
+
+  it("연결 실패·시간 초과(응답 없음)이면 표에 직접 쓰고 표준 오류에 알린다", async () => {
+    const refused = async () => { throw new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }) }) }
+    const timeout = async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError") }
+    for (const fetchImpl of [refused, timeout]) {
+      const file = tableIn()
+      const errs = []
+      const out = await run(["docs/developer/a.md", "--base", BASE], { env: { NAIA_SHORT_LINKS_FILE: file }, cwd: os.tmpdir(), fetchImpl, tailscaleDns: "", stderr: { write: (x) => errs.push(x) } })
+      assert.equal(out, `${BASE}/d/${shortKeyFor("adk", "developer/a.md")}`)
+      assert.ok(JSON.parse(fs.readFileSync(file, "utf8")).links[shortKeyFor("adk", "developer/a.md")])
+      assert.match(errs.join(""), /directly/)
+    }
+  })
+
+  it("명령 줄: 507 이면 종료 코드 1, 표준 출력 비움", async () => {
+    const http = await import("node:http")
+    const server = http.createServer((req, res) => { res.statusCode = 507; res.setHeader("content-type", "application/json"); res.end('{"error":"Short link table is full"}') })
+    await new Promise((r) => server.listen(0, "127.0.0.1", r))
+    const file = tableIn()
+    try {
+      const { spawn } = await import("node:child_process")
+      const child = spawn(process.execPath, [SCRIPT, "docs/developer/a.md", "--base", `http://127.0.0.1:${server.address().port}`], { env: { ...process.env, NAIA_SHORT_LINKS_FILE: file }, cwd: os.tmpdir() })
+      let stdout = ""
+      let stderr = ""
+      child.stdout.on("data", (c) => (stdout += c))
+      child.stderr.on("data", (c) => (stderr += c))
+      const code = await new Promise((r) => child.on("close", r))
+      assert.equal(code, 1)
+      assert.equal(stdout, "")
+      assert.match(stderr, /answered 507.*Short link table is full/)
+      assert.equal(fs.existsSync(file), false)
+    } finally {
+      server.close()
+    }
+  })
+})

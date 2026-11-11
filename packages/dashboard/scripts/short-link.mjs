@@ -76,16 +76,31 @@ export function assertDashboardReadable({ source, path: docPath, input, root }) 
   }
 }
 
-async function registerViaServer(origin, target, fetchImpl) {
-  const res = await fetchImpl(`${origin}/d`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin },
-    body: JSON.stringify({ source: target.source, path: target.path }),
-    signal: AbortSignal.timeout(3000),
-  })
-  if (!res.ok) throw new Error(`dashboard answered ${res.status}`)
-  const body = await res.json()
-  if (typeof body?.key !== "string" || !/^[0-9a-f]{6,16}$/.test(body.key)) throw new Error("dashboard answered without a key")
+// 대시보드가 응답하지 않으면(연결 실패·시간 초과) null 을 돌려 직접 쓰게 한다.
+// 응답 코드를 받았으면(4xx·5xx·507) 그 코드와 이유로 던진다. 다른 사본의 표에 쓰면 이 대시보드에서 열리지 않는 키가 나온다.
+async function registerViaServer(origin, target, fetchImpl, stderr) {
+  let res
+  try {
+    res = await fetchImpl(`${origin}/d`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ source: target.source, path: target.path }),
+      signal: AbortSignal.timeout(3000),
+    })
+  } catch (err) {
+    stderr.write(`short-link: dashboard at ${origin} did not answer (${err.cause?.code || err.message})\n`)
+    return null
+  }
+  const text = await res.text().catch(() => "")
+  let body = null
+  try {
+    body = JSON.parse(text)
+  } catch {}
+  if (!res.ok) {
+    const reason = typeof body?.error === "string" ? body.error : text.slice(0, 200).trim()
+    throw new Error(`dashboard at ${origin} answered ${res.status}${reason ? ` (${reason})` : ""}; no short link made`)
+  }
+  if (typeof body?.key !== "string" || !/^[0-9a-f]{6,16}$/.test(body.key)) throw new Error(`dashboard at ${origin} answered without a key`)
   return body.key
 }
 
@@ -138,12 +153,10 @@ export async function run(argv, { env = process.env, cwd = process.cwd(), fetchI
     const encoded = [target.source, ...target.path.split("/")].map(encodeURIComponent).join("/")
     line = `${origin}/d/${encoded}`
   } else {
-    let key
-    try {
-      key = await registerViaServer(origin, target, fetchImpl)
-    } catch (err) {
+    let key = await registerViaServer(origin, target, fetchImpl, stderr)
+    if (key === null) {
       const file = defaultTableFile(env)
-      stderr.write(`short-link: dashboard at ${origin} did not register (${err.message}); writing ${file} directly\n`)
+      stderr.write(`short-link: writing ${file} directly\n`)
       key = registerShortLink(target.source, target.path, file)
     }
     line = `${origin}/d/${key}`
