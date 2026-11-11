@@ -308,6 +308,10 @@ export interface DocsViewProps {
     truncated: boolean
   } | null
 
+  publishActions?: React.ReactNode
+  publishNotice?: React.ReactNode
+  publishReview?: React.ReactNode
+
   // 문서 데이터 (viewMode === "doc")
   docContent?: string | null
   docBaseHash?: string
@@ -385,6 +389,9 @@ export function DocsView({
   viewMode,
   forbidden = false,
   folderData,
+  publishActions,
+  publishNotice,
+  publishReview,
   docContent,
   docBaseHash = "",
   docLoading = false,
@@ -884,7 +891,7 @@ export function DocsView({
                           )}
 
                           {/* 문서 상단 헤더: breadcrumbs, 제목, 별, [편집] */}
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-neutral-800">
+                          <div data-testid="doc-title-row" className="flex flex-wrap flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-neutral-800">
                             <div className="space-y-1 min-w-0">
                               <nav aria-label="문서 경로" className="flex items-center gap-1.5 text-xs text-neutral-400 flex-wrap">
                                 {createBreadcrumbs(sourceTitle, currentPath || "").map((crumb, idx, arr) => {
@@ -944,6 +951,7 @@ export function DocsView({
                             </div>
 
                             {/* 편집 단추: 데이터 폴더 및 readOnly 출처에는 없음 (SP-04, FE 46행) */}
+                            <div className="flex flex-wrap items-center gap-2">
                             {canEdit && onStartEdit && (
                               <div className="shrink-0">
                                 <button
@@ -962,7 +970,10 @@ export function DocsView({
                                 </button>
                               </div>
                             )}
+                            {publishActions}
+                            </div>
                           </div>
+                          {publishNotice}
 
                           {/* 고른 글 옆 [메모] 단추 (SP-05, 결함 3) */}
                           {activeSelection && (
@@ -993,9 +1004,11 @@ export function DocsView({
                           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
                             {/* 마크다운 본문 (2열) */}
                             <div
+                              data-testid="doc-body-shell"
                               onMouseUp={handleBodyMouseUp}
                               className="lg:col-span-2 prose prose-invert max-w-none space-y-4 text-neutral-200"
                             >
+                              {publishReview || <>
                               {parsedDoc?.meta && (
                                 <pre className="p-3 rounded bg-neutral-900/60 border border-neutral-800 text-xs text-neutral-400 whitespace-pre-wrap font-mono">
                                   {parsedDoc.meta}
@@ -1035,6 +1048,7 @@ export function DocsView({
                               >
                                 {docBody}
                               </ReactMarkdown>
+                              </>}
                             </div>
 
                             {/* 메모 목록 (1열, SP-05) */}

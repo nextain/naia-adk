@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation"
 
 interface PortalData {
   board: { port: number } | null
+  publish?: { configured?: boolean } | null
 }
 
 const tabClass = (active: boolean) =>
@@ -16,12 +17,13 @@ const tabClass = (active: boolean) =>
 export function Nav() {
   const pathname = usePathname() || "/"
   const [hasBoard, setHasBoard] = useState<boolean | null>(null)
+  const [hasPublish, setHasPublish] = useState<boolean | null>(null)
 
   useEffect(() => {
     fetch("/api/portal")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: PortalData | null) => setHasBoard(Boolean(data?.board?.port)))
-      .catch(() => setHasBoard(false))
+      .then((data: PortalData | null) => { setHasBoard(Boolean(data?.board?.port)); setHasPublish(data?.publish?.configured !== false) })
+      .catch(() => { setHasBoard(false); setHasPublish(true) })
   }, [])
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`)
@@ -32,13 +34,14 @@ export function Nav() {
         Naia ADK
       </Link>
 
-      <div className="flex items-center gap-1">
+      <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
         <Link href="/docs" className={tabClass(isActive("/docs"))}>
           문서
         </Link>
         <Link href="/decisions" className={tabClass(isActive("/decisions"))}>
           결정
         </Link>
+        {hasPublish !== false && <Link href="/publish-reviews" className={tabClass(isActive("/publish-reviews"))}>게시 확인</Link>}
         {hasBoard === false ? (
           <span
             className="px-3 py-1.5 text-sm font-medium text-neutral-600 cursor-not-allowed"

@@ -1,4 +1,6 @@
 import type { FastifyInstance, FastifyPluginCallback, FastifyRequest, FastifyReply } from "fastify"
+import { isPublishPrivatePath, withPublishLock } from "../publish-lock.js"
+import { openRegularFile } from "../publish-files.js"
 import fs from "node:fs"
 import path from "node:path"
 import crypto from "node:crypto"
@@ -199,6 +201,7 @@ export interface InspectFileResult {
   stat?: fs.Stats
   isHardlink?: boolean
   error?: "hardlink" | "not_file" | "open_failed"
+  cause?: unknown
 }
 
 /**
@@ -213,15 +216,26 @@ export function inspectSecureFile(
   keepFdOpen = false,
   forListing = false,
 ): InspectFileResult {
+  if (isPublishPrivatePath(realPath)) return { ok: false, error: "open_failed" }
   let fd: number
   try {
-    fd = fs.openSync(realPath, OPEN_READ_FLAGS)
-  } catch {
-    return { ok: false, error: "open_failed" }
+    fd = openRegularFile(realPath).fd
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "EISDIR") return { ok: false, error: "not_file" }
+    if ((cause as NodeJS.ErrnoException).code === "EMLINK") {
+      if (forListing) logHardlinkHidden(realPath)
+      return { ok: false, isHardlink: true, error: "hardlink" }
+    }
+    return { ok: false, error: "open_failed", cause }
   }
 
   try {
     const stat = fs.fstatSync(fd)
+    // 실제로 연 파일도 다시 검사해 경로 검사 뒤 링크가 바뀌는 경우를 막는다.
+    if (isPublishPrivatePath(realPath) || (process.platform === "linux" && isPublishPrivatePath(`/proc/self/fd/${fd}`))) {
+      fs.closeSync(fd)
+      return { ok: false, error: "open_failed" }
+    }
     if (!stat.isFile()) {
       fs.closeSync(fd)
       return { ok: false, error: "not_file" }
@@ -240,16 +254,17 @@ export function inspectSecureFile(
       fs.closeSync(fd)
       return { ok: true, stat }
     }
-  } catch {
+  } catch (cause) {
     try {
       fs.closeSync(fd)
     } catch {}
-    return { ok: false, error: "open_failed" }
+    return { ok: false, error: "open_failed", cause }
   }
 }
 
 export function buildTree(absBaseDir: string, currentRelDir: string): PortalTreeNode[] {
   const currentAbsDir = path.join(absBaseDir, currentRelDir)
+  if (isPublishPrivatePath(currentAbsDir)) return []
   if (!fs.existsSync(currentAbsDir)) return []
 
   let entries: fs.Dirent[] = []
@@ -310,6 +325,7 @@ export function buildTree(absBaseDir: string, currentRelDir: string): PortalTree
       } catch {
         continue
       }
+      if (isPublishPrivatePath(realPath)) continue
       let stat: fs.Stats
       try {
         stat = fs.statSync(realPath)
@@ -667,15 +683,17 @@ export interface SecureFileResult {
 export function resolveSecureFile(
   source: ResolvedSource,
   normPath: string,
-  options?: { keepFdOpen?: boolean; forListing?: boolean },
-): { error: "not_found" } | SecureFileResult {
+  options?: { keepFdOpen?: boolean; forListing?: boolean; rejectLinks?: boolean },
+): { error: "not_found"; cause?: unknown; reason?: "not_file" } | SecureFileResult {
   if (isHiddenPath(normPath)) return { error: "not_found" }
 
   const allowedDir = matchingAllowedDir(source, normPath)
   if (!allowedDir) return { error: "not_found" }
 
   const absPath = path.resolve(source.baseDir, normPath)
-  if (!fs.existsSync(absPath)) return { error: "not_found" }
+  if (isPublishPrivatePath(absPath)) return { error: "not_found" }
+  let namedStat: fs.Stats
+  try { namedStat = fs.lstatSync(absPath) } catch (cause) { return { error: "not_found", cause } }
 
   let realPath: string
   let realAllowedDir: string
@@ -684,9 +702,10 @@ export function resolveSecureFile(
     realPath = fs.realpathSync.native(absPath)
     realAllowedDir = fs.realpathSync.native(allowedDir)
     realBaseDir = fs.realpathSync.native(source.baseDir)
-  } catch {
-    return { error: "not_found" }
+  } catch (cause) {
+    return { error: "not_found", cause }
   }
+  if (isPublishPrivatePath(realPath)) return { error: "not_found" }
 
   // 심볼릭 링크를 따라간 실제 위치가 그 보여 주기 폴더 안이어야 한다.
   // 같은 저장소의 제외 폴더(예: 증빙서류)를 가리키는 링크도 여기서 막힌다.
@@ -696,9 +715,25 @@ export function resolveSecureFile(
   const realRelPath = path.relative(realBaseDir, realPath)
   if (isHiddenPath(realRelPath)) return { error: "not_found" }
 
+  if (options?.rejectLinks) {
+    let current = path.parse(absPath).root
+    try {
+      for (const part of absPath.slice(current.length).split(path.sep).filter(Boolean)) {
+        current = path.join(current, part)
+        const stat = fs.lstatSync(current)
+        if (stat.isSymbolicLink() || (current !== absPath && !stat.isDirectory())) return { error: "not_found", reason: "not_file" }
+      }
+    } catch (cause) { return { error: "not_found", cause } }
+  }
+
+  // 허용 경계 안의 비정규 파일은 열기 전에 구분한다. FIFO 열기의 대기도 피한다.
+  if (!namedStat.isFile() && !namedStat.isSymbolicLink()) return { error: "not_found", reason: "not_file" }
+
   const check = inspectSecureFile(realPath, options?.keepFdOpen, options?.forListing)
   if (!check.ok || !check.stat) {
-    return { error: "not_found" }
+    if (check.error === "not_file") return { error: "not_found", reason: "not_file" }
+    if (options?.rejectLinks && (check.error === "hardlink" || ["ELOOP", "ESTALE"].includes((check.cause as NodeJS.ErrnoException)?.code ?? ""))) return { error: "not_found", reason: "not_file" }
+    return check.cause ? { error: "not_found", cause: check.cause } : { error: "not_found" }
   }
 
   return { absPath: realPath, fd: check.fd, stat: check.stat }
@@ -709,7 +744,7 @@ export function resolveSecureFile(
 export function resolveSecureDir(
   source: ResolvedSource,
   relPath: string,
-): { error: "not_found" } | { absPath: string } {
+): { error: "not_found"; cause?: unknown } | { absPath: string } {
   const normPath = relPath === "" ? "" : normalizeRelativePath(relPath)
   if (normPath === null) return { error: "not_found" }
   if (isHiddenPath(normPath)) return { error: "not_found" }
@@ -733,7 +768,8 @@ export function resolveSecureDir(
     absPath = path.resolve(source.baseDir, normPath)
   }
 
-  if (!fs.existsSync(absPath)) return { error: "not_found" }
+  if (isPublishPrivatePath(absPath)) return { error: "not_found" }
+  try { fs.lstatSync(absPath) } catch (cause) { return { error: "not_found", cause } }
 
   let realPath: string
   let realAllowedDir: string
@@ -742,9 +778,10 @@ export function resolveSecureDir(
     realPath = fs.realpathSync.native(absPath)
     realAllowedDir = fs.realpathSync.native(targetAllowedDir)
     realBaseDir = fs.realpathSync.native(source.baseDir)
-  } catch {
-    return { error: "not_found" }
+  } catch (cause) {
+    return { error: "not_found", cause }
   }
+  if (isPublishPrivatePath(realPath)) return { error: "not_found" }
 
   // 실경로가 출처의 허용 폴더 안(또는 같음)인지 확인
   if (!isInsideOrEqual(realPath, realAllowedDir)) return { error: "not_found" }
@@ -753,7 +790,9 @@ export function resolveSecureDir(
   const realRelPath = path.relative(realBaseDir, realPath)
   if (isHiddenPath(realRelPath)) return { error: "not_found" }
 
-  if (!fs.statSync(realPath).isDirectory()) return { error: "not_found" }
+  try {
+    if (!fs.statSync(realPath).isDirectory()) return { error: "not_found" }
+  } catch (cause) { return { error: "not_found", cause } }
   return { absPath: realPath }
 }
 
@@ -1103,21 +1142,24 @@ export interface PortalOptions {
 const docWriteLocks = new Map<string, Promise<void>>()
 
 export async function withDocWriteLock<T>(realPath: string, fn: () => Promise<T>): Promise<T> {
-  const prev = docWriteLocks.get(realPath) ?? Promise.resolve()
-  let release: () => void
-  const current = new Promise<void>((r) => {
-    release = r
-  })
-  docWriteLocks.set(realPath, prev.then(() => current, () => current))
-  try {
-    await prev
-    return await fn()
-  } finally {
-    release!()
-    if (docWriteLocks.get(realPath) === current) {
-      docWriteLocks.delete(realPath)
+  return withPublishLock(async () => {
+    const prev = docWriteLocks.get(realPath) ?? Promise.resolve()
+    let release: () => void
+    const current = new Promise<void>((r) => {
+      release = r
+    })
+    const queued = prev.then(() => current, () => current)
+    docWriteLocks.set(realPath, queued)
+    try {
+      await prev
+      return await fn()
+    } finally {
+      release!()
+      if (docWriteLocks.get(realPath) === queued) {
+        docWriteLocks.delete(realPath)
+      }
     }
-  }
+  })
 }
 
 export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, done) => {
@@ -1137,7 +1179,9 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             ...s,
             tree: filterUntrustedTree(s.tree),
           }))
-    return reply.send({ sources: resultSources, board })
+    const publishSettings = ["PUBLISH_STATE_DIR", "PUBLISH_SIGNING_KEY_FILE", "PUBLISH_SIGNING_KEY_ID", "PUBLISH_PUBLIC_KEYS", "PUBLISH_GATEWAY_SCOPE", "PUBLISH_GATEWAY_OVERWRITE_CONFIRMED", "PUBLISH_APPROVER_IDS"]
+    const configured = publishSettings.some((name) => process.env[name] !== undefined)
+    return reply.send({ sources: resultSources, board, publish: { configured } })
   })
 
   // GET /api/portal/workspace
@@ -1599,8 +1643,9 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
         return reply.code(404).send({ error: "Document not found" })
       }
 
-      // 프로세스 안 잠금 (realpath 하나 단위 Promise 사슬)이 첫 열기부터 rename까지 감싼다.
+      if (isPublishPrivatePath(realPath)) return reply.code(404).send({ error: "Document not found" })
       return withDocWriteLock(realPath, async () => {
+        if (isPublishPrivatePath(realPath)) return reply.code(404).send({ error: "Document not found" })
         // 경로 및 허용 폴더 검사
         const allowedDir = matchingAllowedDir(source, normPath)
         if (!allowedDir) return reply.code(404).send({ error: "Document not found" })
@@ -1647,7 +1692,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
           }
 
           // 정규 파일·nlink === 1 판정
-          if (!initialStat.isFile() || initialStat.nlink > 1) {
+          if (!initialStat.isFile() || initialStat.nlink > 1 || isPublishPrivatePath(realPath) || (process.platform === "linux" && isPublishPrivatePath(`/proc/self/fd/${targetFd}`))) {
             return reply.code(404).send({ error: "Document not found" })
           }
 
