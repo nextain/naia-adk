@@ -6,6 +6,14 @@ import process from "node:process"
 import { fileURLToPath } from "node:url"
 import next from "next"
 import { hostGuard } from "./host-guard.mjs"
+import {
+  createTableReader,
+  defaultTableFile,
+  isValidDocPath,
+  isValidSource,
+  registerShortLink,
+  resolveShortPath,
+} from "./short-links.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -257,9 +265,96 @@ export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket =
 }
 
 /**
- * 대시보드 HTTP 요청 처리기 생성
+ * 문서 짧은 주소 처리 (/d/<키>, /d/<출처>/<경로>, POST /d 등록)
+ * - Host 검사를 통과한 요청만 여기에 온다(기존 대시보드와 같은 접근 범위).
+ * - POST /d 는 같은 출처(Origin = scheme://Host)에서 온 JSON {source, path} 만 받는다.
  */
-export function createRequestHandler(nextHandler) {
+export function handleShortLink(req, res, rawPathname, opts = {}) {
+  const tableFile = opts.tableFile || defaultTableFile()
+  const readTable = opts.readTable || createTableReader(tableFile)
+  const method = (req.method || "GET").toUpperCase()
+  const sendJson = (status, body) => {
+    res.statusCode = status
+    res.setHeader("content-type", "application/json; charset=utf-8")
+    res.setHeader("cache-control", "no-store")
+    res.end(JSON.stringify(body))
+  }
+
+  if (rawPathname === "/d" || rawPathname === "/d/") {
+    if (method !== "POST") {
+      res.setHeader("allow", "POST")
+      return sendJson(405, { error: "Method Not Allowed" })
+    }
+    const scheme = req.socket?.encrypted ? "https" : "http"
+    const host = req.headers?.host
+    if (!host || req.headers?.origin !== `${scheme}://${host}`) {
+      return sendJson(403, { error: "Cross-origin request" })
+    }
+    if (!String(req.headers?.["content-type"] || "").toLowerCase().startsWith("application/json")) {
+      return sendJson(415, { error: "JSON body required" })
+    }
+    let body = ""
+    let tooBig = false
+    req.setEncoding?.("utf8")
+    req.on("data", (chunk) => {
+      if (tooBig) return
+      body += chunk
+      if (body.length > 4096) tooBig = true
+    })
+    req.on("end", () => {
+      if (tooBig) return sendJson(413, { error: "Body too large" })
+      let parsed
+      try {
+        parsed = JSON.parse(body)
+      } catch {
+        return sendJson(400, { error: "Invalid JSON" })
+      }
+      const source = parsed?.source
+      const docPath = parsed?.path
+      if (!isValidSource(source) || !isValidDocPath(docPath)) {
+        return sendJson(400, { error: "Invalid source or path" })
+      }
+      try {
+        const key = registerShortLink(source, docPath, tableFile)
+        return sendJson(200, { key, path: `/d/${key}` })
+      } catch (err) {
+        return sendJson(500, { error: "Could not save short link", message: err.message })
+      }
+    })
+    return
+  }
+
+  if (method !== "GET" && method !== "HEAD") {
+    res.setHeader("allow", "GET, HEAD")
+    res.statusCode = 405
+    res.setHeader("content-type", "text/plain; charset=utf-8")
+    res.end("Method Not Allowed")
+    return
+  }
+
+  const result = resolveShortPath(rawPathname, { table: readTable(), tabFor: opts.tabFor })
+  res.setHeader("cache-control", "no-store")
+  if (result.status === 302) {
+    res.statusCode = 302
+    res.setHeader("location", result.location)
+    res.end()
+    return
+  }
+  res.statusCode = result.status
+  res.setHeader("content-type", "text/plain; charset=utf-8")
+  res.end(result.status === 400 ? "Bad short link" : "Short link not found")
+}
+
+/**
+ * 대시보드 HTTP 요청 처리기 생성
+ * - shortLinkOpts: { tableFile, readTable, tabFor } (시험에서 바꿔 끼운다)
+ */
+export function createRequestHandler(nextHandler, shortLinkOpts = {}) {
+  const shortOpts = {
+    ...shortLinkOpts,
+    tableFile: shortLinkOpts.tableFile || defaultTableFile(),
+  }
+  if (!shortOpts.readTable) shortOpts.readTable = createTableReader(shortOpts.tableFile)
   return function handleRequest(req, res) {
     // 0. 프록시 경고 머리글 감지 (FE 8장 145행)
     if (req.headers["x-forwarded-for"] || req.headers["tailscale-user-login"]) {
@@ -296,7 +391,15 @@ export function createRequestHandler(nextHandler) {
       return
     }
 
-    // 3. 일반 대시보드 화면 응답 헤더 추가
+    // 3. 문서 짧은 주소 (/d, /d/…)
+    if (rawPathname === "/d" || rawPathname.startsWith("/d/")) {
+      res.setHeader("Content-Security-Policy", "frame-ancestors 'self'")
+      res.setHeader("X-Frame-Options", "SAMEORIGIN")
+      handleShortLink(req, res, rawPathname, shortOpts)
+      return
+    }
+
+    // 4. 일반 대시보드 화면 응답 헤더 추가
     res.setHeader("Content-Security-Policy", "frame-ancestors 'self'")
     res.setHeader("X-Frame-Options", "SAMEORIGIN")
 
@@ -317,7 +420,16 @@ export async function startServer(customArgv = process.argv.slice(2), customEnv 
   await nextApp.prepare()
   const nextHandler = nextApp.getRequestHandler()
 
-  const requestHandler = createRequestHandler(nextHandler)
+  // 짧은 주소가 넘겨 줄 때 문서 탭을 붙이려고 대시보드 탭 규칙을 읽는다. 못 읽으면 탭 없이 넘긴다(화면이 탭을 고른다).
+  let tabFor
+  try {
+    const tabs = await import("./app/docs/tabs.ts")
+    tabFor = (source, docPath) => (source.startsWith("data:") ? undefined : tabs.tabOfDoc(source, docPath).tab)
+  } catch (err) {
+    console.warn("[WARN] short links: tab rules unavailable, redirecting without tab:", err?.message)
+  }
+
+  const requestHandler = createRequestHandler(nextHandler, { tabFor })
   const server = http.createServer(requestHandler)
 
   return new Promise((resolve, reject) => {
