@@ -14,7 +14,9 @@ out of JSON, shell history, logs and repository files. Use a dedicated observer
 bot, with history/read permissions for watched channels and send permission
 only for alert channels. To post alerts to the Naia messenger instead, set
 `notify.kind` to `messenger` ([watch alert channel](watch-notify.md)); the
-Discord token is still needed to read the watched channels.
+Discord token is still needed to read the watched channels. In that mode
+`notify.mentions` must give a messenger name for every bot a nudge can mention,
+because `roles[].id` here are Discord role IDs.
 
 - `guilds[].id`, `channels[].id`: explicit allowlist, including thread IDs if
   needed. Metadata must match the configured guild. `excludeChannelIds` wins.

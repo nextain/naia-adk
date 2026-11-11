@@ -43,6 +43,8 @@ export function validateConfig(config) {
       if (channel.mode && !['mentions', 'all-human'].includes(channel.mode)) throw new Error('invalid channel mode');
     }
     for (const role of guild.roles ?? []) { requireId(role.id); requireId(role.botId); }
+    // Role IDs here are Discord role IDs, so in messenger mode every bot a nudge can mention needs its messenger name.
+    if (messenger) for (const bot of [guild.defaultBotId, ...guild.channels.map(c => c.botId), ...(guild.roles ?? []).map(r => r.botId)]) if (bot && !Object.hasOwn(config.notify.mentions ?? {}, bot)) throw new Error(`notify.mentions needs a messenger name for bot ${bot}`);
     (guild.excludeChannelIds ?? []).forEach(requireId);
   }
   for (const site of config.sites ?? []) {
@@ -56,7 +58,7 @@ export function validateConfig(config) {
 
 export async function runWatch(config, { fetchImpl = fetch, token, dry = false, now = Date.now(), log = event => console.log(JSON.stringify(event)), notifier, env = process.env } = {}) {
   validateConfig(config);
-  notifier ??= createNotifier(config.notify, { token, env, fetchImpl, names: Object.fromEntries(config.guilds.flatMap(g => (g.roles ?? []).map(r => [r.botId, r.id]))) });
+  notifier ??= createNotifier(config.notify, { token, env, fetchImpl });
   if (!token) throw new Error('configured token environment variable is empty');
   const trace = randomUUID(), started = Date.now(), stateFile = resolve(config.stateFile);
   const emit = (stage, result, extra = {}) => log({ trace, stage, result, ...extra });
@@ -87,7 +89,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
       try { return await response.json(); }
       catch { const error = new Error('Discord invalid JSON'); error.uncertain = !!body; throw error; }
     };
-    const send = async (holder, key, channelId, content, mentions, stage) => {
+    const send = async (holder, key, channelId, content, mentions, stage, people) => {
       const existing = holder[key];
       if (existing?.status === 'confirmed' || existing?.status === 'intent' || existing?.status === 'uncertain') {
         if (existing.status !== 'confirmed') { degraded = true; emit('send', 'reconciliation_required', { key: fingerprint(key) }); }
@@ -97,7 +99,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
       holder[key] = { status: 'intent', at: now };
       await save();
       try {
-        const receipt = await notifier.send({ stage, channelId, content, mentions, nonce: fingerprint(key) });
+        const receipt = await notifier.send({ stage, channelId, content, mentions, people, nonce: fingerprint(key) });
         holder[key] = { status: 'confirmed', at: now, messageId: receipt.id };
         emit('send', 'confirmed', { key: fingerprint(key) });
       } catch (error) {
@@ -172,7 +174,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
           const age = (now - request.at) / 60000;
           const link = `https://discord.com/channels/${guild.id}/${channel.id}/${messageId}`;
           if (age >= (config.thresholds?.nudgeMinutes ?? 10)) await send(request.stages, `${key}/${messageId}/nudge`, guild.nudgeChannelId, fill(config.messages?.nudge ?? '<@{bot}> Please respond to the pending request: {link}', { bot: request.botId, link }), [request.botId], 'nudge');
-          if (age >= (config.thresholds?.escalateMinutes ?? 30)) await send(request.stages, `${key}/${messageId}/escalate`, guild.escalation.channelId, fill(config.messages?.escalate ?? '<@{user}> Response remains unconfirmed: {link}', { user: guild.escalation.userId, link }), [guild.escalation.userId], 'escalate');
+          if (age >= (config.thresholds?.escalateMinutes ?? 30)) await send(request.stages, `${key}/${messageId}/escalate`, guild.escalation.channelId, fill(config.messages?.escalate ?? '<@{user}> Response remains unconfirmed: {link}', { user: guild.escalation.userId, link }), [guild.escalation.userId], 'escalate', [guild.escalation.userId]);
         }
       } catch (error) {
         degraded = true;

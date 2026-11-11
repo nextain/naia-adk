@@ -91,7 +91,7 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
       for (const r of Object.values(ch.pending)) {
         if (!object(r) || ![r.messageId, r.from, r.to].every(id) || !Number.isFinite(r.at) || r.at < 0 || !object(r.stages) || !config.roles.some(role => role.id === r.roleId && role.botId === r.to) || !config.roles.some(role => role.botId === r.from) ||
           (r.receiptId !== undefined && (!id(r.receiptId) || !(r.deadline === null || Number.isFinite(r.deadline)))) || (r.closedAt !== undefined && !Number.isFinite(r.closedAt)) ||
-          Object.values(r.stages).some(stage => !object(stage) || !['confirmed', 'intent', 'uncertain'].includes(stage.status))) throw Error('invalid pending state');
+          Object.values(r.stages).some(stage => !object(stage) || !['confirmed', 'intent', 'uncertain', 'rejected'].includes(stage.status))) throw Error('invalid pending state');
       }
     }
     const save = () => dry ? Promise.resolve() : atomic(stateFile, `${JSON.stringify(state, null, 2)}\n`);
@@ -102,7 +102,8 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
     };
     const notify = async (request, stage, role, guild, channel, health = '') => {
       const stageKey = request.receiptId ? `deadline-${stage}` : stage;
-      if (request.stages[stageKey]) { if (request.stages[stageKey].status !== 'confirmed') degraded = true; return; }
+      // A rejected stage failed in setup before anything was posted, so it is sent again.
+      if (request.stages[stageKey] && request.stages[stageKey].status !== 'rejected') { if (request.stages[stageKey].status !== 'confirmed') degraded = true; return; }
       const key = hash(`${guild.id}/${channel.id}/${request.messageId}/${request.to}/${stageKey}`);
       const values = { bot: role.botId, role: request.roleId, health, link: `https://discord.com/channels/${guild.id}/${channel.id}/${request.messageId}` };
       const content = fill(config.messages?.[stage] ?? defaults[stage], values);
@@ -119,7 +120,11 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
           request.stages[stageKey] = { status: 'confirmed', at: now, messageId: sent.id };
         }
         emit(stage, 'confirmed', { key });
-      } catch (e) { request.stages[stageKey] = { status: 'uncertain', at: now }; degraded = true; emit(stage, 'reconciliation_required', { key, reason: e.message }); }
+      } catch (e) {
+        degraded = true;
+        if (e.setup) { request.stages[stageKey] = { status: 'rejected', at: now }; emit(stage, 'rejected', { key, reason: e.message }); }
+        else { request.stages[stageKey] = { status: 'uncertain', at: now }; emit(stage, 'reconciliation_required', { key, reason: e.message }); }
+      }
       await save();
     };
     let healthRows;

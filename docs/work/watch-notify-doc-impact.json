@@ -24,6 +24,6 @@
     "files": [
       "docs/guides/watch-notify.md"
     ],
-    "detail": "One alert module for the watch scripts. The messenger API has no idempotency key, so only HTTP 429 is retried in-process; other failures keep the rejected/uncertain receipt rules."
+    "detail": "One alert module for the watch scripts. The messenger API has no idempotency key, so only HTTP 429 is retried in-process (messenger by default, Discord only with notify.retries); setup failures are rejected and resent in every watch; other failures keep the rejected/uncertain receipt rules."
   }
 }

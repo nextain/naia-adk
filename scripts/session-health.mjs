@@ -263,7 +263,7 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
           const n = config.notifications, user = stage === 'nudge' ? role.botId : n.escalation.userId;
           const channel = stage === 'nudge' ? n.nudgeChannelId : n.escalation.channelId;
           try {
-            const sent = await notifier.send({ stage, channelId: channel, content: notificationMessage(config, stage, user, role.id, code), mentions: [user], nonce: hash(`${role.id}/${code}/${episode.sequence}/${stage}/${episode.at}`).slice(0, 24) });
+            const sent = await notifier.send({ stage, channelId: channel, content: notificationMessage(config, stage, user, role.id, code), mentions: [user], people: stage === 'escalate' ? [user] : [], nonce: hash(`${role.id}/${code}/${episode.sequence}/${stage}/${episode.at}`).slice(0, 24) });
             episode.stages[stage] = { status: 'confirmed', at: now, id: sent.id };
           } catch (e) { episode.stages[stage].status = e.uncertain === false ? 'rejected' : 'uncertain'; degraded = true; }
           await save();

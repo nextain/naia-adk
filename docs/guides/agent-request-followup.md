@@ -113,6 +113,8 @@ Other API failures are recorded as degraded and retried. Newly accessible channe
 start with the same two-hour window.
 
 Each request keeps independent per-stage intent and confirmed/uncertain receipts.
+A stage that failed in alert setup before anything was posted is `rejected` and
+is sent again on the next run.
 An uncertain delivery is never automatically replayed. Inspect the destination,
 back up the state, then reconcile only the affected stage using actual delivery
 evidence. Keep pending requests, source IDs and cursor intact. Closed requests are

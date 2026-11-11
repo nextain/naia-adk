@@ -56,7 +56,7 @@ test('HTTP 429 is retried up to notify.retries, then recorded as rejected', asyn
   assert.equal(calls, 3); assert.equal(error.status, 429); assert.equal(error.uncertain, false);
   calls = 0;
   const flaky = async () => (++calls === 1 ? { ok: false, status: 429, headers: new Headers() } : { ok: true, json: async () => ({ id: '7' }) });
-  assert.deepEqual(await createNotifier(undefined, { token: 't', fetchImpl: flaky, sleep: noSleep }).send({ channelId: '1', content: 'x' }), { id: '7' });
+  assert.deepEqual(await createNotifier({ retries: 1 }, { token: 't', fetchImpl: flaky, sleep: noSleep }).send({ channelId: '1', content: 'x' }), { id: '7' });
 });
 
 test('messenger posts to the named channel with the agent token and turns <@id> into @mentions', async () => {
@@ -65,8 +65,8 @@ test('messenger posts to the named channel with the agent token and turns <@id> 
     const notifier = createNotifier({ kind: 'messenger', url: fake.url, channel: 'ops', mentions: { 41: 'owner' } }, { env: { NAIA_MESSENGER_TOKEN: 'agent-token' }, names: { 20: 'helper' } });
     assert.deepEqual(await notifier.send({ stage: 'nudge', channelId: '31', content: '<@20> please reply: link', mentions: ['20'] }), { id: 'msg-1' });
     assert.deepEqual(await notifier.send({ stage: 'escalate', content: '<@41> still unanswered', mentions: ['41'] }), { id: 'msg-2' });
-    assert.deepEqual(await notifier.send({ stage: 'escalate', content: '<@luke> plain name' }), { id: 'msg-3' });
-    assert.deepEqual(fake.posts, [{ channel: 'ch-ops', body: '@helper please reply: link' }, { channel: 'ch-ops', body: '@owner still unanswered' }, { channel: 'ch-ops', body: '@luke plain name' }]);
+    assert.deepEqual(await notifier.send({ stage: 'escalate', content: '<@alice> plain name' }), { id: 'msg-3' });
+    assert.deepEqual(fake.posts, [{ channel: 'ch-ops', body: '@helper please reply: link' }, { channel: 'ch-ops', body: '@owner still unanswered' }, { channel: 'ch-ops', body: '@alice plain name' }]);
     assert.ok(fake.requests.every(r => r.token === 'agent-token'));
     assert.equal(fake.requests.filter(r => r.method === 'GET').length, 1, 'channel list is read once per notifier');
   } finally { await fake.close(); }
@@ -117,4 +117,33 @@ test('validateNotify rejects bad settings and recipientOk follows the kind', () 
     assert.throws(() => validateNotify(bad), undefined, JSON.stringify(bad));
   assert.ok(recipientOk(undefined, '41')); assert.ok(!recipientOk(undefined, 'owner'));
   assert.ok(recipientOk({ kind: 'messenger', channel: 'ops' }, 'owner')); assert.ok(!recipientOk({ kind: 'messenger', channel: 'ops' }, '@owner'));
+});
+
+test('discord default sends once on HTTP 429, as before: no in-process retry unless notify.retries is set', async () => {
+  for (const notify of [undefined, { kind: 'discord' }]) {
+    let calls = 0; const sleeps = [];
+    const error = await createNotifier(notify, { token: 't', fetchImpl: async () => { calls++; return { ok: false, status: 429, headers: new Headers({ 'Retry-After': '120' }) }; }, sleep: async ms => sleeps.push(ms) }).send({ channelId: '1', content: 'x' }).catch(e => e);
+    assert.equal(calls, 1); assert.deepEqual(sleeps, []); assert.equal(error.message, 'Discord HTTP 429'); assert.equal(error.uncertain, false);
+  }
+});
+
+test('mention names: only own keys, and a person mention is not replaced by a role default', async () => {
+  const bodies = [];
+  const fetchImpl = async (url, init) => url.endsWith('/channels') ? { ok: true, json: async () => [{ id: 'c', name: 'c' }] } : (bodies.push(JSON.parse(init.body).body), { ok: true, json: async () => ({ id: 'm' }) });
+  const notifier = createNotifier({ kind: 'messenger', url: 'http://h.invalid', channel: 'c' }, { env: { NAIA_MESSENGER_TOKEN: 'x' }, names: { 123: 'dev' }, fetchImpl });
+  await notifier.send({ stage: 'nudge', content: '<@toString> <@constructor> hi' });
+  await notifier.send({ stage: 'escalate', content: '<@123> owner please', people: ['123'] });
+  await notifier.send({ stage: 'nudge', content: '<@123> role please' });
+  assert.deepEqual(bodies, ['@toString @constructor hi', '@123 owner please', '@dev role please']);
+});
+
+test('messenger setup failures from the environment URL are rejected setup errors before any request', async () => {
+  for (const value of ['not a url SECRET', 'http://h.invalid/?x=1', 'http://h.invalid/#f', 'ftp://h.invalid', 'http://u:p@h.invalid']) {
+    let calls = 0;
+    const error = await createNotifier({ kind: 'messenger', channel: 'c' }, { env: { NAIA_MESSENGER_URL: value, NAIA_MESSENGER_TOKEN: 'x' }, fetchImpl: async () => { calls++; return { ok: true, json: async () => [] }; } }).send({ content: 'x' }).catch(e => e);
+    assert.equal(calls, 0, value); assert.equal(error.uncertain, false, value); assert.equal(error.setup, true, value);
+    assert.doesNotMatch(error.message, /SECRET|h\.invalid/);
+  }
+  const error = await createNotifier({ kind: 'messenger', channel: 'missing', url: 'http://h.invalid' }, { env: { NAIA_MESSENGER_TOKEN: 'x' }, fetchImpl: async () => ({ ok: true, json: async () => [] }) }).send({ content: 'x' }).catch(e => e);
+  assert.equal(error.setup, true); assert.equal(error.uncertain, false);
 });

@@ -288,3 +288,17 @@ test('messenger notify posts the nudge to the messenger channel and keeps its ID
   assert.equal(posts.length, 1); assert.match(posts[0].url, /\/channels\/ch-req\/messages$/); assert.match(posts[0].body, /^@b /);
   assert.deepEqual(state.channels['10/11'].pending['100/2'].stages.nudge, { status: 'confirmed', at: at + 600000, messageId: 'm-1' });
 });
+test('messenger setup failure from a bad environment URL is rejected and sent again next run', async () => {
+  const h = await setup(); const posts = [];
+  h.c.notify = { kind: 'messenger', channel: 'requests' };
+  const fetchImpl = async (url, init = {}) => {
+    if (!url.startsWith('http://messenger.invalid/')) return h.fetchImpl(url, init);
+    if (url.endsWith('/api/portal/messenger/channels')) return { ok: true, json: async () => [{ id: 'ch-req', name: 'requests' }] };
+    posts.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ id: 'm-1' }) };
+  };
+  h.rows([message('100', '1', '<@2> 부탁')]);
+  let state = await h.run(at + 600000, { fetchImpl, env: { NAIA_MESSENGER_URL: 'not a url', NAIA_MESSENGER_TOKEN: 'agent-token' } });
+  assert.equal(state.channels['10/11'].pending['100/2'].stages.nudge.status, 'rejected'); assert.equal(posts.length, 0);
+  state = await h.run(at + 660000, { fetchImpl, env: { NAIA_MESSENGER_URL: 'http://messenger.invalid', NAIA_MESSENGER_TOKEN: 'agent-token' } });
+  assert.equal(state.channels['10/11'].pending['100/2'].stages.nudge.status, 'confirmed'); assert.equal(posts.length, 1);
+});

@@ -371,3 +371,19 @@ test('messenger notify sends alerts with the agent token and stores the messenge
   assert.equal(stages.length, 2); assert.ok(stages.every(x => x.status === 'confirmed' && /^m-\d+$/.test(x.id)));
   await assert.rejects(f.run({ fetchImpl, env: {}, token: undefined, now: now + 61 * 60000 }), /notification token missing/);
 });
+test('messenger setup failure from a bad environment URL is rejected and sent again next run', async () => {
+  const f = await fixture(); const posts = [];
+  f.c.notify = { kind: 'messenger', channel: 'ops' };
+  f.c.notifications.escalation.userId = 'owner';
+  const fetchImpl = async (url, init = {}) => {
+    if (url.endsWith('/channels')) return { ok: true, json: async () => [{ id: 'ch-ops', name: 'ops' }] };
+    posts.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ id: `m-${posts.length}` }) };
+  };
+  const bad = { NAIA_MESSENGER_URL: 'not a url', NAIA_MESSENGER_TOKEN: 'agent-token' };
+  await f.run({ fetchImpl, env: bad, token: undefined }); await f.run({ fetchImpl, env: bad, token: undefined, now: now + 1000 });
+  let stages = JSON.parse(await readFile(f.c.stateFile, 'utf8')).roles['role-a'].episodes.stalled.stages;
+  assert.equal(stages.nudge.status, 'rejected'); assert.equal(posts.length, 0);
+  await f.run({ fetchImpl, env: { NAIA_MESSENGER_URL: 'http://messenger.invalid', NAIA_MESSENGER_TOKEN: 'agent-token' }, token: undefined, now: now + 60000 });
+  stages = JSON.parse(await readFile(f.c.stateFile, 'utf8')).roles['role-a'].episodes.stalled.stages;
+  assert.equal(stages.nudge.status, 'confirmed'); assert.equal(posts.length, 1);
+});

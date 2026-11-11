@@ -11,7 +11,7 @@
       }
     },
     "mentions": {
-      "<discord-or-config-user-id>": "<messenger-name>"
+      "<discord-bot-id>": "<messenger-role-id-or-name>"
     },
     "retries": 2
   }
