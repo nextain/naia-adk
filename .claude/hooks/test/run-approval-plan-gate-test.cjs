@@ -1399,3 +1399,95 @@ test("위험 수용: security FAIL 하나만, 결정 글·같은 값·끝나는 
 		assert.equal(review.ok, c.pass, `${c.desc}: ${review.problems.join(" / ")}`);
 	}
 });
+
+// 계획 폴더 안 고정 대본: 대본·지문·단계는 계획 files 에서 읽고, 코드에 적지 않는다.
+const { verifiedPlanBinding } = require("../lib/deploy-readiness.js");
+const PIN_SERVICE = "azure:vm:sample-vm";
+
+function pinnedScriptFixture(t, { cfgRule = {}, scriptDir = null } = {}) {
+	const { root } = makeWorkspace(t);
+	fs.mkdirSync(path.join(root, "config"), { recursive: true });
+	fs.writeFileSync(path.join(root, "config", "deploy-gate.json"), JSON.stringify({ schema: "deploy-gate/v1", services: { [PIN_SERVICE]: { label: "샘플 VM", allowOps: true, ...cfgRule } } }));
+	const planDir = path.join(root, ".agents", "progress", "sample-vm-work");
+	const gatesDir = path.join(planDir, "gates");
+	fs.mkdirSync(gatesDir, { recursive: true });
+	const dir = scriptDir ? path.join(root, scriptDir) : planDir;
+	fs.mkdirSync(dir, { recursive: true });
+	const script = path.join(dir, "vm.sh");
+	const remote = path.join(dir, "remote-s1.sh");
+	fs.writeFileSync(script, "#!/usr/bin/env bash\nset -euo pipefail\ncase \"$1\" in s1) az vm run-command invoke -g sample-rg -n sample-vm --command-id RunShellScript --scripts @remote-s1.sh ;; r1) echo \"$2\" ;; esac\n");
+	fs.writeFileSync(remote, "#!/usr/bin/env bash\nsystemctl restart sample-web\n");
+	const files = { [script]: sha256(fs.readFileSync(script)), [remote]: sha256(fs.readFileSync(remote)) };
+	const plan = {
+		planId: "sample-vm-work",
+		services: [`script:${script}`, PIN_SERVICE],
+		scenario: [
+			{ id: "s1", commands: [`sudo bash ${script} s1`], files: { ...files } },
+			{ id: "r1", branch: "rollback", commands: [`bash ${script} r1 fixed-1`], files: { ...files } },
+		],
+		rollback: { step_ids: ["r1"] },
+	};
+	const bind = (stepId = "s1", kind = "ops", services = [PIN_SERVICE]) => {
+		const entry = plan.scenario.find((s) => s.id === stepId);
+		return verifiedPlanBinding({ plan, entry, command: entry.commands[0], cwd: root, gatesDir }, "", kind, services, root);
+	};
+	return { root, planDir, gatesDir, script, remote, files, plan, bind };
+}
+
+test("계획 고정 대본: 계획 폴더 안 대본·단계 id·지문이 맞으면 sudo bash 와 고정 인자 호출을 ops 로 받는다", (t) => {
+	const f = pinnedScriptFixture(t);
+	for (const id of ["s1", "r1"]) {
+		const r = f.bind(id);
+		assert.equal(r.ok, true, `${id}: ${r.why}`);
+		assert.equal(r.ops, true);
+		assert.match(r.fact, /계획 고정 대본 .*vm\.sh 단계 /);
+	}
+	// 끝까지: ops 준비 기록이 있으면 ops 사실로 들어가고, 안쪽 명령 검사(opsProblem)로 다시 막지 않는다.
+	fs.writeFileSync(path.join(f.gatesDir, "deploy.json"), JSON.stringify({ kind: "ops", services: [PIN_SERVICE], reason: "샘플 VM 웹 서비스 재시작", createdAt: new Date().toISOString() }));
+	const entry = f.plan.scenario[0];
+	const res = assessReadiness([PIN_SERVICE], { root: f.root, command: entry.commands[0], cwd: f.root, planBinding: { plan: f.plan, entry, command: entry.commands[0], cwd: f.root, gatesDir: f.gatesDir } });
+	assert.equal(res.ok, true, res.problems.join(" / "));
+	assert.ok(res.facts.some((x) => /계획 고정 대본/.test(x)));
+});
+
+test("계획 고정 대본: 서비스 허용 규칙(allowedCommands)은 그대로 따로 요구한다", (t) => {
+	const f = pinnedScriptFixture(t, { cfgRule: { allowedCommands: ["^az vm restart "] } });
+	const r = f.bind("s1");
+	assert.equal(r.ok, false);
+	assert.match(r.why, /allowedCommands/);
+});
+
+test("계획 고정 대본: 모양·위치·지문·단계·서비스가 하나라도 다르면 막는다", async (t) => {
+	const cases = [
+		{ desc: "지문이 다름(본문 한 바이트)", why: /고정 파일 sha256 불일치|고정 파일 지문이 디스크 본문과 다름/, edit: (f) => fs.appendFileSync(f.remote, "#") },
+		{ desc: "계획 폴더 밖 대본", why: /계획 고정 대본: 대본이 계획 폴더 .* 안에 있지 않음/, opts: { scriptDir: "scripts" } },
+		{ desc: "단계 id 가 다름", why: /계획 고정 대본: 호출 단계 id s1 와 대본 단계 인자 s2 가 다름/, edit: (f) => { f.plan.scenario[0].commands = [`sudo bash ${f.script} s2`]; } },
+		{ desc: "단계 명령이 둘", why: /계획 고정 대본: 호출 단계 commands 가 이 명령 한 줄뿐이 아님/, edit: (f) => { f.plan.scenario[0].commands.push(`bash ${f.script} s1 again`); } },
+		{ desc: "인자에 $x", why: /계획 고정 대본: 명령은 `bash <대본>/, edit: (f) => { f.plan.scenario[0].commands = [`bash ${f.script} s1 $x`]; } },
+		{ desc: "인자에 ;", why: /계획 고정 대본: 명령 절이 하나가 아님|계획 고정 대본: 명령은 `bash <대본>/, edit: (f) => { f.plan.scenario[0].commands = [`bash ${f.script} s1 a;b`]; } },
+		{ desc: "인자에 >", why: /계획 고정 대본: 명령은 `bash <대본>/, edit: (f) => { f.plan.scenario[0].commands = [`bash ${f.script} s1 >out`]; } },
+		{ desc: "sudo -E bash", why: /계획 고정 대본: 명령은 `bash <대본>/, edit: (f) => { f.plan.scenario[0].commands = [`sudo -E bash ${f.script} s1`]; } },
+		{ desc: "services 에 script: 없음", why: /계획 고정 대본: 계획 services 의 script: 항목이/, edit: (f) => { f.plan.services = [PIN_SERVICE]; } },
+		{ desc: "단계마다 files 맵이 다름", why: /계획 고정 대본: 단계 r1 의 files 맵이 호출 단계와 다름/, edit: (f) => { delete f.plan.scenario[1].files[f.remote]; } },
+		{ desc: "되돌리기 단계에 branch 없음", why: /계획 고정 대본: 단계 r1 갈래가 다름/, edit: (f) => { delete f.plan.scenario[1].branch; } },
+		{ desc: "다른 단계가 다른 대본을 부름", why: /계획 고정 대본: 단계 r1 가 같은 대본을/, edit: (f) => { f.plan.scenario[1].commands = [`bash ${f.planDir}/other.sh r1`]; } },
+		{ desc: "명령 서비스가 계획 실제 서비스와 다름", why: /계획 고정 대본: 명령이 바꾸는 서비스가/, edit: (f) => { f.plan.services.push("azure:vm:other-vm"); } },
+	];
+	for (const c of cases) {
+		await t.test(c.desc, (st) => {
+			const f = pinnedScriptFixture(st, c.opts || {});
+			if (c.edit) c.edit(f);
+			const r = f.bind("s1");
+			assert.equal(r.ok, false, `${c.desc}: 받히면 안 됨`);
+			assert.match(r.why, c.why, `${c.desc}: ${r.why}`);
+		});
+	}
+});
+
+test("계획 고정 대본: kind=feature 는 이 갈래를 타지 않는다", (t) => {
+	const f = pinnedScriptFixture(t);
+	const r = f.bind("s1", "feature");
+	assert.equal(r.ok, false);
+	assert.doesNotMatch(r.why, /계획 고정 대본/);
+	assert.match(r.why, /지원하지 않는 실행 형식/);
+});

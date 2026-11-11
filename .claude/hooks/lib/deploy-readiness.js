@@ -561,6 +561,77 @@ function commandBinding(command, candidate, services, cwd) {
 	return { ok: true, fact: "배포 스크립트 저장소 HEAD 가 후보와 같고 커밋 안 된 변경이 없음" };
 }
 
+// 계획 고정 대본 호출: `[sudo ]bash <절대 경로> <단계id>[ 고정 인자…]`. 인자에는 확장·묶음·넘겨쓰기·따옴표 글자가 없다.
+const PINNED_SCRIPT_HEAD = /^(?:sudo\s+(?:\S+\s+)*?)?bash\s+\//;
+const PINNED_SCRIPT_CALL = /^(sudo )?bash (\/[A-Za-z0-9_./-]+) ([A-Za-z0-9_-]+)((?: [A-Za-z0-9_.,:=@+/-]+)*)$/;
+
+function pinnedScriptCall(command) {
+	const m = PINNED_SCRIPT_CALL.exec(String(command));
+	return m ? { script: m[2], id: m[3] } : null;
+}
+
+/**
+ * 계획 폴더 안 대본을 단계 id 로 부르는 ops 명령을 계획이 이미 고정한 files 지문에 묶는다.
+ * 실행 형식만 결합한다. 서비스 허용 규칙과 STEP 승인은 호출한 쪽에서 따로 요구한다.
+ */
+function pinnedScriptBinding({ plan, entry, command, clauseCount, services, base, gatesDir }) {
+	const no = (why) => ({ ok: false, why });
+	if (clauseCount !== 1) return no("명령 절이 하나가 아님");
+	const call = pinnedScriptCall(command);
+	if (!call) return no("명령은 `bash <대본> <단계id>[ 고정 인자]` 또는 `sudo bash …` 그대로여야 함(sudo 옵션, $ ` \\ ; | & < >, 따옴표 없음)");
+	const script = call.script;
+	if (path.resolve(script) !== script) return no("대본 경로가 정규화된 절대 경로가 아님");
+
+	const gates = typeof gatesDir === "string" && gatesDir ? path.resolve(gatesDir) : "";
+	const planDir = path.basename(gates) === "gates" ? path.dirname(gates) : "";
+	if (!planDir || path.basename(path.dirname(planDir)) !== "progress" || path.basename(path.dirname(path.dirname(planDir))) !== ".agents") return no("계획 폴더(.agents/progress/<작업>/)를 정하지 못함");
+	let inside = false;
+	try {
+		const rel = path.relative(fs.realpathSync(planDir), fs.realpathSync(script));
+		inside = script.startsWith(planDir + path.sep) && !!rel && rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+	} catch {}
+	if (!inside) return no(`대본이 계획 폴더 ${planDir} 안에 있지 않음`);
+
+	const planServices = Array.isArray(plan.services) ? plan.services.map(String) : [];
+	const scripts = planServices.filter((s) => s.startsWith("script:"));
+	if (scripts.length !== 1 || scripts[0] !== `script:${script}`) return no(`계획 services 의 script: 항목이 script:${script} 하나가 아님`);
+	const real = new Set(planServices.filter((s) => !s.startsWith("script:")));
+	const actual = new Set(services);
+	if (real.size !== actual.size || [...real].some((s) => !actual.has(s))) return no("명령이 바꾸는 서비스가 계획 services 에서 script: 를 뺀 것과 다름");
+
+	if (!Array.isArray(entry.commands) || entry.commands.length !== 1 || entry.commands[0] !== command) return no("호출 단계 commands 가 이 명령 한 줄뿐이 아님");
+	if (entry.id !== call.id) return no(`호출 단계 id ${entry.id} 와 대본 단계 인자 ${call.id} 가 다름`);
+
+	const pinsOf = (files) => new Map(Object.entries(files && typeof files === "object" ? files : {}).map(([p, h]) => [path.resolve(base, p), String(h).toLowerCase()]));
+	const pins = pinsOf(entry.files);
+	if (!pins.has(script)) return no("호출 단계 files 에 대본이 고정되지 않음");
+	for (const [p, want] of pins) {
+		let got = "";
+		try {
+			got = crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+		} catch {}
+		if (got !== want) return no(`고정 파일 지문이 디스크 본문과 다름: ${p}`);
+	}
+	const samePins = (files) => {
+		const other = pinsOf(files);
+		return other.size === pins.size && [...pins].every(([p, h]) => other.get(p) === h);
+	};
+
+	const scenario = Array.isArray(plan.scenario) ? plan.scenario : [];
+	const ids = scenario.map((s) => s && s.id);
+	if (new Set(ids).size !== ids.length || ids.filter((id) => id === entry.id).length !== 1) return no("계획 단계 id 가 겹치거나 호출 단계가 계획에 없음");
+	const rollbackIds = new Set(Array.isArray(plan.rollback?.step_ids) ? plan.rollback.step_ids : []);
+	if ([...rollbackIds].some((id) => !ids.includes(id))) return no("rollback.step_ids 에 계획에 없는 단계가 있음");
+	for (const step of scenario) {
+		const cmds = step.commands;
+		const sc = Array.isArray(cmds) && cmds.length === 1 ? pinnedScriptCall(cmds[0]) : null;
+		if (!sc || sc.script !== script || sc.id !== step.id) return no(`단계 ${step.id} 가 같은 대본을 \`bash ${script} ${step.id}[ 고정 인자]\` 한 줄로 부르지 않음`);
+		if (!samePins(step.files)) return no(`단계 ${step.id} 의 files 맵이 호출 단계와 다름`);
+		if (rollbackIds.has(step.id) ? step.branch !== "rollback" : step.branch != null) return no(`단계 ${step.id} 갈래가 다름: rollback.step_ids 단계는 branch=rollback, 나머지는 branch 없음`);
+	}
+	return { ok: true, fact: `계획 고정 대본 ${script} 단계 ${call.id}: 고정 파일 ${pins.size}개 지문·전체 ${scenario.length}단계 명령·갈래·서비스 대조` };
+}
+
 /**
  * 계획서 단계·명령·고정 파일·인스턴스 확장(config/deploy-gate.json + 선택 plugin)의 결합을 검증한다.
  */
@@ -675,6 +746,13 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 		const inner = shellClauses(c[2]);
 		if (inner.length === 1 && inner[0][0] === "az" && !opsProblem(c[2])) return yes("계획 고정 인라인 Azure 명령 — 안쪽 안전 검사 필요");
 	}
+	// 계획 폴더 안 고정 대본: 대본·지문·단계는 계획에서 읽는다. 맞지 않으면 아래 기존 판정으로 넘기고 마지막 거부에 이유를 싣는다.
+	let pinnedWhy = "";
+	if (kind === "ops" && PINNED_SCRIPT_HEAD.test(command)) {
+		const pinned = pinnedScriptBinding({ plan, entry, command, clauseCount: clauses.length, services, base: cwd || root || ".", gatesDir: planBinding.gatesDir });
+		if (pinned.ok) return yes(pinned.fact, true);
+		pinnedWhy = pinned.why;
+	}
 	if (kind !== "ops" && kind !== "plan" && services.length && services.every((sv) => sv.startsWith("script:") || sv.startsWith("package:"))) {
 		return commandBinding(command, candidate, services, cwd);
 	}
@@ -687,6 +765,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	if (rules.every((r) => r.allowCustomCommands === true)) {
 		return yes(`config/deploy-gate.json allowCustomCommands 결합 확인 (${services.join(", ")})`, kind === "ops");
 	}
+	if (pinnedWhy) return no(`계획 고정 대본: ${pinnedWhy}`);
 	return no("지원하지 않는 실행 형식: 명령에 후보가 있다는 문자열 포함 검사로 대체하지 않음");
 }
 

@@ -48,6 +48,9 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - `scenario[].files`: 명령이 읽거나 실행하는 스크립트·설정 파일(`bash ./deploy.sh`, `--yaml app.yaml`, `@body.json` 등)은 반드시 `"경로": "<sha256>"` 형태로 고정합니다. 파일 내용이 1바이트라도 바뀌면 실행이 차단됩니다(`bash scripts/rollout.sh` 재귀 검사는 스크립트 폴더로 자동 이동하지 않고 호출자 작업 디렉터리를 유지하며, 스크립트 안의 명시적 `cd`만 반영합니다).
 - 사전승인 코드 일괄 발급(`preapprove`)을 쓰려면 최상위에 `"approval_mode": "preapprove_steps"`를 넣습니다.
 
+### 여러 절 고정 대본을 ops 로 올리기
+대본을 계획 폴더(`.agents/progress/<작업>/`) 안에 두고, 모든 단계의 `commands` 를 `bash <대본 절대 경로> <단계id>[ 고정 인자…]`(또는 `sudo bash …`, sudo 옵션 없음) 한 줄로 적습니다. 첫 인자는 그 단계의 `id` 와 같아야 하고, 인자는 영숫자와 `_ . , : = @ + / -` 만 씁니다(`$`, 백틱, 역슬래시, `; | & < >`, 따옴표 불가). 모든 단계가 같은 대본을 부르고 같은 `files` 맵(대본과 대본이 원격에 올리는 본문까지 `{절대 경로: sha256}`)을 고정합니다. `rollback.step_ids` 단계는 `branch: "rollback"`, 나머지는 `branch` 를 두지 않습니다. `services` 에는 `script:<대본 절대 경로>` 하나와 명령이 실제로 바꾸는 서비스를 함께 적습니다. 이렇게 맞으면 `kind: "ops"` 준비 기록이 이 대본 호출을 실행 형식으로 결합합니다(`deploy-readiness.js` `pinnedScriptBinding`). 대본 경로·지문은 코드가 아니라 계획에서 읽으므로 계획마다 코드를 고칠 필요가 없습니다. 이 결합은 실행 형식만 정하며, `config/deploy-gate.json` 서비스 규칙(`allowedCommands` 등)·적대 리뷰·STEP 승인 코드는 그대로 따로 요구합니다.
+
 ---
 
 ## 2. 적대 리뷰 받기 (`review`)
