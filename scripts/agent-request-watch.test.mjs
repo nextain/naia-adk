@@ -21,7 +21,7 @@ async function setup() {
   const run = (now, extra = {}) => runWatch(c, { token: 'test', fetchImpl, now, log() {}, healthProbe: async () => { probes++; return [{ role: 'b', alive: 'alive' }]; }, ...extra });
   await writeFile(c.stateFile, JSON.stringify({ version: 1, channels: { '10/11': { cursor: '0', pending: {} } }, errors: {} }));
   await run(at);
-  return { c, dir, run, sent, rows: value => { rows = value; }, fail: () => { failPost = true; }, probes: () => probes };
+  return { c, dir, run, sent, fetchImpl, rows: value => { rows = value; }, fail: () => { failPost = true; }, probes: () => probes };
 }
 test('request forms use bot identities and addressing boundaries', () => {
   for (const text of ['<@2> 부탁', '<@!2> 부탁', '[갑 → 을] 부탁', '을에게 부탁', '을께 부탁', '- 을: 부탁']) assert.deepEqual(detectRequests(message('100', '1', text), roles).map(r => r.id), ['b'], text);
@@ -272,4 +272,19 @@ test('initial failed read preserves its two-hour cursor across retries', async (
   h.rows.set('11', [message(recent, '1', 'plain', { timestamp: new Date(at - 2 * 3600000 + 1000).toISOString() })]);
   const state = await h.run(at + 3 * 3600000);
   assert.equal(h.calls.at(-1).query.get('after'), cursor); assert.equal(state.channels['10/11'].cursor, recent);
+});
+test('messenger notify posts the nudge to the messenger channel and keeps its ID as the stage receipt', async () => {
+  const h = await setup(); const posts = [];
+  h.c.notify = { kind: 'messenger', url: 'http://messenger.invalid', channel: 'requests' };
+  const fetchImpl = async (url, init = {}) => {
+    if (!url.startsWith('http://messenger.invalid/')) return h.fetchImpl(url, init);
+    assert.equal(init.headers['X-AX-Agent-Token'], 'agent-token');
+    if (url.endsWith('/api/portal/messenger/channels')) return { ok: true, json: async () => [{ id: 'ch-req', name: 'requests' }] };
+    posts.push({ url, ...JSON.parse(init.body) }); return { ok: true, json: async () => ({ id: 'm-1' }) };
+  };
+  h.rows([message('100', '1', '<@2> 부탁')]);
+  const state = await h.run(at + 600000, { fetchImpl, env: { NAIA_MESSENGER_TOKEN: 'agent-token' } });
+  assert.equal(h.sent.length, 0);
+  assert.equal(posts.length, 1); assert.match(posts[0].url, /\/channels\/ch-req\/messages$/); assert.match(posts[0].body, /^@b /);
+  assert.deepEqual(state.channels['10/11'].pending['100/2'].stages.nudge, { status: 'confirmed', at: at + 600000, messageId: 'm-1' });
 });

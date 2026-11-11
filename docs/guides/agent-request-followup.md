@@ -78,6 +78,8 @@ instance path and replace placeholders. Configure:
   role IDs; checks run in dry mode without writing health state or sending notices.
 - `recovery.roleId`: role accountable for restoring stopped target sessions.
 - `tokenEnv`: protected environment variable, default `DISCORD_BOT_TOKEN`.
+- `notify`: alert channel, `discord` (default) or `messenger`; the Discord
+  token is still needed to read requests. See `docs/guides/watch-notify.md`.
 - `thresholds`, `timezoneOffsetMinutes`, `maxPages`: timing and history limits.
 - `requireMentionInReply`: boolean, default `true`. Require the requester mention
   or a reply reference to the request or recorded receipt. With `false`, an

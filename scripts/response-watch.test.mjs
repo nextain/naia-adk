@@ -168,3 +168,21 @@ test('instance message templates replace known placeholders and keep unknown one
   assert.equal(fill('<@{bot}> 답해 주세요: {link}', { bot: '1', link: 'https://x/y' }), '<@1> 답해 주세요: https://x/y');
   assert.equal(fill('{site} {unknown}', { site: 'a' }), 'a {unknown}');
 });
+test('messenger notify sends nudge and escalation there with @names and stores the messenger receipt', async () => {
+  const { config, remote, run } = await fixture(); await run(); remote.messages.push(human(2));
+  config.notify = { kind: 'messenger', url: 'http://messenger.invalid', channel: 'ops', mentions: { 20: 'helper' } };
+  config.guilds[0].escalation.userId = 'owner';
+  const posts = [], discord = [];
+  const fetchImpl = async (url, options = {}) => {
+    if (!url.startsWith('http://messenger.invalid/')) { if (options.method === 'POST') discord.push(url); return { ok: true, json: async () => (url.endsWith('/channels/30') ? { guild_id: '10' } : remote.messages.filter(m => !new URL(url).searchParams.get('before'))) }; }
+    if (url.endsWith('/channels')) return { ok: true, json: async () => [{ id: 'ch-ops', name: 'ops' }] };
+    posts.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ id: `m-${posts.length}` }) };
+  };
+  const env = { NAIA_MESSENGER_TOKEN: 'agent-token' };
+  await run(10, { fetchImpl, env });
+  const state = await run(30, { fetchImpl, env });
+  assert.equal(discord.length, 0);
+  assert.deepEqual(posts.map(p => p.body.split(' ')[0]), ['@helper', '@owner']);
+  assert.deepEqual(Object.values(state.channels['10/30'].pending['2'].stages).map(s => s.messageId), ['m-1', 'm-2']);
+  assert.throws(() => validateConfig({ ...config, notify: undefined }), /invalid escalation user/);
+});
