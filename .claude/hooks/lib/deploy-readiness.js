@@ -165,6 +165,113 @@ function sedReadOnlyProblem(rest) {
 	return null;
 }
 
+// read_only 옵션 허용 목록 풀이. 묶인 짧은 옵션(-sfX)은 한 글자씩, 붙은 값(-dx=1·-m5·--max-time=5)은 떼어 각각 본다.
+// spec.flags·spec.valued 는 짧은 글자 모음, spec.long 은 긴 이름 → [이름표, 값을 받는가]. 목록 밖 옵션이면 { problem }.
+function allowListedOptions(rest, spec, tool) {
+	const values = [];
+	const positionals = [];
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i];
+		if (a === "--") { positionals.push(...rest.slice(i + 1)); break; }
+		if (a.startsWith("--")) {
+			const eq = a.indexOf("=");
+			const name = eq < 0 ? a : a.slice(0, eq);
+			const known = Object.hasOwn(spec.long, name) ? spec.long[name] : null;
+			if (!known || (eq >= 0 && !known[1])) return { problem: `read_only 에서 받지 않는 ${tool} 옵션: ${a}` };
+			if (known[1]) values.push([known[0], eq < 0 ? rest[++i] : a.slice(eq + 1)]);
+			continue;
+		}
+		if (a.length > 1 && a.startsWith("-")) {
+			for (let k = 1; k < a.length; k++) {
+				const c = a[k];
+				if (spec.flags.includes(c)) continue;
+				if (spec.valued.includes(c)) { values.push([c, k + 1 < a.length ? a.slice(k + 1) : rest[++i]]); break; }
+				return { problem: `read_only 에서 받지 않는 ${tool} 옵션: -${c} (${a})` };
+			}
+			continue;
+		}
+		positionals.push(a);
+	}
+	return { values, positionals };
+}
+
+// read_only curl: 허용 목록. -s -S -f -L -I -m -H -o /dev/null -w -X GET|HEAD 와 그 긴 이름(--connect-timeout 포함)만 받는다.
+// 그 밖(-d·--data*·-F·--form·-T·--upload-file·-K·--config·-u·-b·-x 등)은 어떤 모양으로 와도 거부. 값이 @ 로 시작하면(파일 읽기) 거부,
+// -w 의 %output{…}(파일 쓰기)와 메서드를 바꾸는 머리(X-HTTP-Method-Override 등)도 거부.
+const CURL_RO_SPEC = {
+	flags: "sSfLI",
+	valued: "mHowX",
+	long: {
+		"--silent": ["s", false], "--show-error": ["S", false], "--fail": ["f", false], "--location": ["L", false], "--head": ["I", false],
+		"--max-time": ["m", true], "--connect-timeout": ["--connect-timeout", true], "--header": ["H", true], "--write-out": ["w", true], "--request": ["X", true],
+	},
+};
+function curlReadOnlyProblem(rest) {
+	const r = allowListedOptions(rest, CURL_RO_SPEC, "curl");
+	if (r.problem) return r.problem;
+	for (const [o, v] of r.values) {
+		if (v === undefined) return `curl ${o.length > 1 ? o : `-${o}`} 뒤 값 없음`;
+		if (o === "X" && !/^(?:GET|HEAD)$/i.test(v)) return `HTTP ${v.toUpperCase()}`;
+		if ((o === "m" || o === "--connect-timeout") && !/^\d+(?:\.\d+)?$/.test(v)) return `curl 시간 값이 숫자가 아님: ${v}`;
+		if (o === "o" && v !== "/dev/null") return `curl -o 는 /dev/null 만 받음: ${v}`;
+		if (v.startsWith("@")) return `curl 값이 파일을 읽음: -${o} ${v}`;
+		if (o === "w" && /%output\{/i.test(v)) return `curl -w 가 파일에 씀: ${v}`;
+		if (o === "H" && /^\s*x-(?:http-)?method(?:-override)?\s*:/i.test(v)) return `curl 머리가 HTTP 메서드를 바꿈: ${v}`;
+	}
+	if (!r.positionals.length) return "curl 주소 없음";
+	return null;
+}
+
+// read_only DB: 옵션도 허용 목록(파일 출력 -o·--tee·-cmd·-f 같은 것은 거부), 문장은 select·show·describe·psql \d 만.
+// explain 은 어디 있든 거부(explain analyze 는 실제로 실행함). '(' 는 모두 바로 앞이 집계 함수 이름(count·max·min·sum·avg·now)일 때만 받는다:
+// 그래서 함수 호출(pg_terminate_backend(…)·sleep(…))뿐 아니라 in (…)·하위 질의도 막힌다(받아들인 비용). 역빗금(psql \g·\!·\gexec)·/* 주석·into·for update 도 거부.
+const DB_RO_SPEC = {
+	psql: { flags: "tAXqw", valued: "hpUdc", sql: "c", maxPositionals: 2, long: { "--host": ["h", true], "--port": ["p", true], "--username": ["U", true], "--dbname": ["d", true], "--command": ["c", true], "--tuples-only": ["t", false], "--no-align": ["A", false], "--no-psqlrc": ["X", false], "--quiet": ["q", false], "--no-password": ["w", false] } },
+	mysql: { flags: "NBstE", valued: "hPuDe", sql: "e", maxPositionals: 1, long: { "--host": ["h", true], "--port": ["P", true], "--user": ["u", true], "--database": ["D", true], "--execute": ["e", true], "--skip-column-names": ["N", false], "--batch": ["B", false], "--silent": ["s", false], "--table": ["t", false], "--vertical": ["E", false] } },
+};
+DB_RO_SPEC.mariadb = DB_RO_SPEC.mysql;
+const SQLITE_RO_FLAGS = new Set(["readonly", "header", "noheader", "csv", "json", "line", "column", "list", "batch", "bail", "box", "table", "markdown"]);
+const DB_RO_AGGREGATES = new Set(["count", "max", "min", "sum", "avg", "now"]);
+function sqlReadOnlyProblem(cmd, sql) {
+	const stmts = String(sql ?? "").split(";").map((x) => x.trim()).filter(Boolean);
+	if (!stmts.length) return "조회 문장이 명령에 드러나지 않음";
+	for (const x of stmts) {
+		if (/\bexplain\b/i.test(x)) return `read_only 에서 explain 은 받지 않음: ${x}`;
+		if (cmd === "psql" && /^\\d[A-Za-z+]*(?:\s+[\w.*"]+)?$/.test(x)) continue;
+		if (!/^(?:select|show|describe)\b/i.test(x)) return `조회 문장이 아님: ${x}`;
+		if (/[\\]|\/\*|\n\s*\./.test(x)) return `read_only 에서 받지 않는 역빗금·주석·점 명령: ${x}`;
+		if (/\b(?:into|for\s+(?:update|share|no\s+key|key))\b/i.test(x)) return `쓰기·잠금 문장: ${x}`;
+		for (let p = x.indexOf("("); p >= 0; p = x.indexOf("(", p + 1)) {
+			const name = x.slice(0, p).match(/(?:^|[^\w."`$])([A-Za-z_]\w*)\s*$/);
+			if (!name || !DB_RO_AGGREGATES.has(name[1].toLowerCase())) return `read_only 에서 받지 않는 함수 호출·괄호: ${x}`;
+		}
+	}
+	return null;
+}
+function dbReadOnlyProblem(cmd, rest) {
+	if (cmd === "sqlite3") {
+		const positionals = [];
+		for (const a of rest) {
+			if (a.startsWith("-")) { if (!SQLITE_RO_FLAGS.has(a.replace(/^--?/, ""))) return `read_only 에서 받지 않는 sqlite3 옵션: ${a}`; continue; }
+			positionals.push(a);
+		}
+		if (positionals.length !== 2) return "sqlite3 는 DB 파일과 조회 문장 하나만 받음";
+		return sqlReadOnlyProblem(cmd, positionals[1]);
+	}
+	const spec = DB_RO_SPEC[cmd];
+	const r = allowListedOptions(rest, spec, cmd);
+	if (r.problem) return r.problem;
+	if (r.positionals.length > spec.maxPositionals) return `${cmd} 인자가 많음: ${r.positionals.join(" ")}`;
+	const sqls = [];
+	for (const [o, v] of r.values) {
+		if (v === undefined) return `${cmd} -${o} 뒤 값 없음`;
+		if (o === spec.sql) sqls.push(v);
+	}
+	if (!sqls.length) return "조회 문장이 명령에 드러나지 않음";
+	for (const sql of sqls) { const bad = sqlReadOnlyProblem(cmd, sql); if (bad) return bad; }
+	return null;
+}
+
 // readOnly 가 참이면 같은 판정에서 조회 갈래만 받는다(재시작·멈춤·시작·이름 바꾸기·설정 갱신·리다이렉트 파일 쓰기·sed 쓰기는 읽기가 아님). 계획서 read_only 검사가 쓴다.
 function innerClauseProblem(tokens0, readOnly = false) {
 	if (readOnly) { const bad = readOnlyRedirectProblem(tokens0); if (bad) return bad; }
@@ -228,6 +335,7 @@ function innerClauseProblem(tokens0, readOnly = false) {
 		}
 	}
 	if (cmd === "psql" || cmd === "mysql" || cmd === "mariadb" || cmd === "sqlite3") {
+		if (readOnly) { const bad = dbReadOnlyProblem(cmd, rest); return bad ? `DB 조회만 보장할 수 없음: ${bad}` : null; }
 		const ci = rest.findIndex((a) => a === "-c" || a === "--command" || a === "-e" || a === "--execute");
 		const sql = cmd === "sqlite3" ? positional[1] : ci >= 0 ? rest[ci + 1] : rest.find((a) => /^--(?:command|execute)=/.test(a))?.replace(/^--\w+=/, "");
 		const stmts = String(sql || "").split(";").map((x) => x.trim()).filter(Boolean);
@@ -247,6 +355,7 @@ function innerClauseProblem(tokens0, readOnly = false) {
 		}
 	}
 	if (cmd === "curl") {
+		if (readOnly) return curlReadOnlyProblem(rest);
 		const xi = rest.findIndex((a) => a === "-X" || a === "--request" || /^(?:-X|--request=)./.test(a));
 		const method = xi < 0 ? "GET" : (rest[xi].replace(/^(?:-X|--request=?)/, "") || rest[xi + 1] || "").toUpperCase();
 		if (!["GET", "HEAD"].includes(method)) return `HTTP ${method}: ${t.join(" ")}`;

@@ -1494,6 +1494,81 @@ test("read_only sed: 단순 출력 형태만 받고 w·W·e·s///w·s///e·-f·-
 	}
 });
 
+test("read_only curl: 허용 목록 옵션만 받고, 묶인 짧은 옵션·붙은 값도 풀어서 판정한다", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	for (const command of [
+		// PC 쪽 검수에서 통과했던 꼴
+		"curl -sX POST http://localhost:8000/v1/admin/x",
+		"curl -sfX DELETE http://h/x",
+		"curl -s -dx=1 http://h/x",
+		"curl -sdx=1 http://h/x",
+		"curl -Ffile=@a http://h/x",
+		// 거부 목록에 늘 빠지던 갈래
+		"curl -K cfg http://h/x",
+		"curl --config cfg http://h/x",
+		"curl -T a http://h/x",
+		"curl --upload-file a http://h/x",
+		"curl --data-raw x http://h/x",
+		"curl --form a=b http://h/x",
+		"curl -o /tmp/x http://h/x",
+		"curl --request PUT http://h/x",
+		"curl -u user:pw http://h/x",
+		"curl -t x http://h/x",
+		"curl -H 'X-HTTP-Method-Override: DELETE' http://h/x",
+		"curl -H @headers.txt http://h/x",
+		"curl -w '%output{/tmp/x}a' http://h/x",
+		"curl -m soon http://h/x",
+		// 붙은 값: -X 값은 POST 이고 GET 은 주소다
+		"curl -XPOST GET http://h/x",
+		"ssh example-gw \"curl -sX POST http://h/x\"",
+		"bash -c \"curl -sdx=1 http://h/x\"",
+	]) assert.ok(readOnlyProblem(command), command);
+	for (const command of [
+		"curl -s http://h/x",
+		"curl -sS -m 5 -H 'Accept: application/json' http://h/x",
+		"curl -sX GET http://h/x",
+		"curl -I http://h/x",
+		"curl -sXGET -m5 http://h/x",
+		"curl -so /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 10 http://h/x",
+		"curl --silent --fail --location --request HEAD http://h/x",
+		"ssh example-gw \"curl -s http://h/x\"",
+	]) assert.equal(readOnlyProblem(command), null, command);
+});
+
+test("read_only DB: explain·함수 호출(집계 함수 밖)·괄호·허용 밖 옵션은 거부한다", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	for (const command of [
+		"psql -c \"explain analyze delete from users\"",
+		"psql -c \"select pg_terminate_backend(123)\"",
+		"psql -c \"explain select 1\"",
+		// explain 은 문장 어디에 있든 거부(첫머리 검사와 별개)
+		"psql -c \"select explain from t\"",
+		"psql -c \"select pg_catalog.count(1)\"",
+		"psql -c \"select count(pg_terminate_backend(1))\"",
+		"psql -c \"select x from t where id in (select 1)\"",
+		"psql -o /tmp/x -c \"select 1\"",
+		"psql -c \"select 1\" -c \"delete from t\"",
+		"psql -c \"select 1 \\g /tmp/x\"",
+		"psql -c \"select 1 for update\"",
+		"psql -f q.sql",
+		"mysql -e \"select sleep(5)\"",
+		"mysql --tee=/tmp/x -e \"select 1\"",
+		"mysql -e \"select /*! 1 */ 1\"",
+		"sqlite3 -cmd \".shell id\" \"select 1\"",
+		"sqlite3 a.db \"select writefile('x','y')\"",
+		"docker exec example-db psql -c \"select pg_terminate_backend(1)\"",
+	]) assert.ok(readOnlyProblem(command), command);
+	for (const command of [
+		"psql -tAc \"select count(*) from users\"",
+		"psql -h db -U app -d app -c \"select now()\"",
+		"psql --command=\"select max(id), min(id) from users\"",
+		"psql -c \"\\dt\"",
+		"mysql -N -e \"show tables\"",
+		"sqlite3 -readonly a.db \"select sum(n) from t\"",
+		"docker exec example-db psql -tAc \"select avg(n) from t\"",
+	]) assert.equal(readOnlyProblem(command), null, command);
+});
+
 test("위험 수용: security FAIL 하나만, 결정 글·같은 값·끝나는 날이 맞을 때만 리뷰 관문을 지남", (t) => {
 	const goodRa = () => ({ criterion: "security", accepted_by: "approver", decision_url: "https://discord.com/channels/1/2/3", same_value_as: "앞 판 번들 같은 지문 0123456789ab", no_new_exposure: true, expires_at: new Date(Date.now() + 86400000).toISOString(), reason: "이미 공개된 같은 시연 값, 새 노출 없음" });
 	const secLine = ["1. [차단: security] 공개 번들에 시연 값"];
