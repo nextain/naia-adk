@@ -1559,14 +1559,84 @@ test("read_only DB: explain·함수 호출(집계 함수 밖)·괄호·허용 �
 		"docker exec example-db psql -c \"select pg_terminate_backend(1)\"",
 	]) assert.ok(readOnlyProblem(command), command);
 	for (const command of [
-		"psql -tAc \"select count(*) from users\"",
-		"psql -h db -U app -d app -c \"select now()\"",
-		"psql --command=\"select max(id), min(id) from users\"",
-		"psql -c \"\\dt\"",
+		"psql -tAXc \"select count(*) from users\"",
+		"psql -X -h db -U app -d app -c \"select now()\"",
+		"psql --no-psqlrc --command=\"select max(id), min(id) from users\"",
+		"psql -Xc \"\\dt\"",
 		"mysql -N -e \"show tables\"",
 		"sqlite3 -readonly a.db \"select sum(n) from t\"",
-		"docker exec example-db psql -tAc \"select avg(n) from t\"",
+		"docker exec example-db psql -tAXc \"select avg(n) from t\"",
 	]) assert.equal(readOnlyProblem(command), null, command);
+});
+
+test("read_only curl 주소: http:// 와 https:// 만 받는다(gopher·dict·telnet·file·스킴 없음은 거부)", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	for (const command of [
+		"curl -s gopher://127.0.0.1:6379/_FLUSHALL",
+		"curl -s dict://127.0.0.1:6379/flushall",
+		"curl -s telnet://127.0.0.1:6379",
+		"curl -s file:///etc/passwd",
+		"curl -o /dev/null -s file:///etc/shadow",
+		"curl -s ftp://h/x",
+		"curl -s localhost:8080/health",
+		"curl -s https://h/x gopher://h/_x",
+		"ssh example-gw \"curl -s dict://127.0.0.1:6379/flushall\"",
+	]) assert.match(String(readOnlyProblem(command)), /http:\/\/ 와 https:\/\/ 만/, command);
+	for (const command of ["curl -s https://h/x", "curl -s http://h/x", "curl -sI HTTPS://h/x", "curl -s -- https://h/x"]) assert.equal(readOnlyProblem(command), null, command);
+});
+
+test("read_only 환경 변수: VAR=값 앞머리·docker exec -e/--env·원격 본문 안 VAR= 는 거부, psql 은 -X 필수", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	const invoke = (script) => `az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts "${script}"`;
+	for (const command of [
+		"CURL_HOME=/tmp/evil curl -s http://h/x",
+		"XDG_CONFIG_HOME=/tmp/evil curl -s http://h/x",
+		"LD_PRELOAD=/tmp/x.so curl -s http://h/x",
+		"PSQLRC=/tmp/evil.sql psql -X -c \"select 1\"",
+		"sudo LD_PRELOAD=/tmp/x.so ls /etc",
+		"bash -c \"CURL_HOME=/tmp/evil curl -s http://h/x\"",
+		// 원격 본문 안
+		"ssh example-gw \"PSQLRC=/tmp/evil.sql psql -X -c 'select 1'\"",
+		invoke("CURL_HOME=/tmp/evil curl -s http://h/x"),
+	]) assert.match(String(readOnlyProblem(command)), /앞머리 환경 변수/, command);
+	for (const command of [
+		"docker exec -e PSQLRC=/tmp/evil.sql example-db psql -X -c \"select 1\"",
+		"docker exec --env PSQLRC=/tmp/evil.sql example-db psql -X -c \"select 1\"",
+		"docker exec --env=PSQLRC=/tmp/evil.sql example-db psql -X -c \"select 1\"",
+		"docker exec -ie PSQLRC=/tmp/evil.sql example-db psql -X -c \"select 1\"",
+		"docker exec --env-file /tmp/evil.env example-db psql -X -c \"select 1\"",
+		"docker compose exec -e PSQLRC=/tmp/evil.sql db psql -X -c \"select 1\"",
+	]) assert.match(String(readOnlyProblem(command)), /환경 변수 옵션/, command);
+	for (const command of [
+		"psql -c \"select 1\"",
+		"psql -tAc \"select 1\"",
+		"docker exec example-db psql -c \"select 1\"",
+		"ssh example-gw \"psql -c 'select 1'\"",
+	]) assert.match(String(readOnlyProblem(command)), /-X/, command);
+	for (const command of [
+		"psql -X -c \"select 1\"",
+		"psql --no-psqlrc -tAc \"select 1\"",
+		"docker exec -it -u postgres example-db psql -X -c \"select 1\"",
+		"docker exec -uuser example-db ls /etc",
+		"ssh example-gw \"psql -X -c 'select 1'\"",
+	]) assert.equal(readOnlyProblem(command), null, command);
+});
+
+test("read_only 명령 치환: 로컬 원문의 $(…)·`…`·${…} 는 거부(원격 본문 INNER_OPAQUE 와 같은 기준)", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	for (const command of [
+		"curl -s http://h/$(touch /tmp/p)",
+		"curl -s `touch /tmp/p`",
+		"curl -s -H \"$(id)\" http://h/x",
+		"ls $(rm -rf /tmp/zz)",
+		"cat `id`",
+		"ls ${HOME}",
+		"az vm show -g example-rg -n $(rm -rf /tmp/zz)",
+		// 받아들인 비용: 홑따옴표 안의 글자도 막힌다
+		"grep -c '$(cat ' /etc/hostname",
+	]) assert.match(String(readOnlyProblem(command)), /명령 치환·변수 펼침/, command);
+	assert.match(String(readOnlyProblem("A=-XPOST; curl $A http://h/x")), /앞머리 환경 변수/);
+	for (const command of ["ls /etc", "curl -s https://h/x", "grep -c 'a$' /etc/hostname", "sed -n '$p' /etc/hostname"]) assert.equal(readOnlyProblem(command), null, command);
 });
 
 test("위험 수용: security FAIL 하나만, 결정 글·같은 값·끝나는 날이 맞을 때만 리뷰 관문을 지남", (t) => {
