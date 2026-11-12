@@ -40,6 +40,8 @@ export function resolveScheduleUser(headers: Headers, env: Record<string, string
       return normalizeScheduleUser(header.value)
     }
   }
+  // A gate means several people sign in, so a missing or mistyped identity header must not fall back to one fixed user.
+  if (env.NAIA_GATE_SECRET_FILE?.trim()) return null
   return normalizeScheduleUser(env.NAIA_SCHEDULE_SINGLE_USER)
 }
 

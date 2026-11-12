@@ -86,6 +86,26 @@ test("a revision from one user's missing file cannot create another user's sched
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
 
+test("a configured gate ignores the single-user fallback when the identity header is missing or misnamed", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "schedule-gate-single-"))
+  const key = path.join(root, "gate-key")
+  fs.writeFileSync(key, secret, { mode: 0o600 })
+  try {
+    for (const header of [undefined, "x-wrong"]) {
+      const env = { NAIA_GATE_SECRET_FILE: key, NAIA_SCHEDULE_SINGLE_USER: "person-a", NAIA_SCHEDULE_USER_HEADER: header }
+      const opts = { env, dir: path.join(root, "data") }
+      for (const method of ["GET", "POST"]) {
+        const res = await handlePersonalScheduleRequest(makeRequest(method, gated("person-b", env), method === "POST" ? { title: "X", start: "2026-11-11" } : undefined), opts)
+        assert.equal(res.status, 403)
+        assert.equal((await res.json()).error, "personal-schedule-identity-required")
+      }
+      assert.equal(fs.existsSync(path.join(root, "data", "person-a.yaml")), false)
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("stale revisions cannot update, delete, or add over another client's changes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "schedule-revision-"))
   const file = path.join(root, "person-a.yaml")

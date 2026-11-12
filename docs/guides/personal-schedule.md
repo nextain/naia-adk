@@ -14,7 +14,9 @@ has verified the gate secret and the requesting peer. Configure
 The secret file must be an absolute path to a regular file with mode `0600`
 and at least 32 characters. Without verified identity, the personal API
 returns 403. For a single-user device, `NAIA_SCHEDULE_SINGLE_USER` explicitly
-selects one user; leave it unset in a multi-user installation.
+selects one user; leave it unset in a multi-user installation. When
+`NAIA_GATE_SECRET_FILE` is set, `NAIA_SCHEDULE_SINGLE_USER` is ignored and a
+request without a verified identity header returns 403.
 The gateway must remove every client-supplied copy of the configured identity
 header and replace it with the authenticated user's own value. A shared gate
 secret alone does not prove that a forwarded user header is authentic.
