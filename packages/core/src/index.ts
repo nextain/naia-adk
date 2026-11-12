@@ -245,3 +245,4 @@ export function getWorkspaceMeta(root: string): WorkspaceMeta | null {
 }
 
 export * from "./personal-schedule.js"
+export * from "./schedule-link.js"

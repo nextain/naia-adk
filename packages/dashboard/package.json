@@ -6,7 +6,7 @@
     "dev": "node server.mjs -p 3142",
     "build": "next build",
     "start": "node server.mjs -p 3142",
-    "test": "node --test app/docs/markdown.test.ts app/docs/tabs.test.ts app/docs/kinds.test.ts host-guard.test.mjs server.test.mjs identity-header-guard.test.mjs && node --import tsx --test app/docs/doc-save.test.ts app/docs/*.render.test.tsx app/schedule/*.test.ts"
+    "test": "node --test app/docs/markdown.test.ts app/docs/tabs.test.ts app/docs/kinds.test.ts app/components/nav-tabs.test.ts app/messages/messenger.test.ts host-guard.test.mjs messenger-gate.test.mjs server.test.mjs identity-header-guard.test.mjs merged-identity.test.mjs && node --import tsx --test app/docs/doc-save.test.ts app/docs/*.render.test.tsx app/messages/*.render.test.tsx app/messages/schedule-from-message.test.ts app/schedule/*.test.ts"
   },
   "dependencies": {
     "@naia-adk/core": "workspace:*",

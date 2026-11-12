@@ -1,4 +1,5 @@
 import type { PersonalScheduleItem } from "@naia-adk/core/src/personal-schedule"
+import type { ScheduleLinkTarget } from "@naia-adk/core/src/schedule-link"
 import type { BoardScheduleProjection, CalendarCellEvent, CalendarUnit, ScheduleDisplayMode, ScheduleLayers, WorkScheduleFilter } from "./schedule-calendar"
 
 export const PERSONAL_IDENTITY_REQUIRED_NOTICE =
@@ -99,6 +100,8 @@ export interface ScheduleViewProps {
   initialFormOpen?: boolean
   initialSelectedEvent?: CalendarCellEvent | null
   initialDayListDate?: string | null
+  /** Detail link to open once its item is loaded. Undefined reads ?item=&date= from the address. */
+  initialDeepLink?: ScheduleLinkTarget | null
   fetchFn?: typeof fetch
 }
 

@@ -9,7 +9,23 @@ import {
   createRequestHandler,
   parseArgs,
   normalizeIp,
+  inheritedSocketFd,
 } from "./server.mjs"
+
+describe("물려받은 포트 fd", () => {
+  it("LISTEN_PID 가 이 과정이고 LISTEN_FDS 가 1 이면 fd 3 을 쓴다", () => {
+    assert.equal(inheritedSocketFd({ LISTEN_FDS: "1", LISTEN_PID: "42" }, 42), 3)
+  })
+  it("없거나 다른 과정 몫이면 -p/-H 로 listen 한다", () => {
+    assert.equal(inheritedSocketFd({}, 42), null)
+    assert.equal(inheritedSocketFd({ LISTEN_FDS: "1" }, 42), null)
+    assert.equal(inheritedSocketFd({ LISTEN_FDS: "1", LISTEN_PID: "41" }, 42), null)
+  })
+  it("이 과정 몫인데 하나가 아니면 고르지 않고 멈춘다", () => {
+    assert.throws(() => inheritedSocketFd({ LISTEN_FDS: "2", LISTEN_PID: "42" }, 42), /LISTEN_FDS=2/)
+    assert.throws(() => inheritedSocketFd({ LISTEN_FDS: "0", LISTEN_PID: "42" }, 42), /LISTEN_FDS=0/)
+  })
+})
 
 describe("Server.mjs 단위 시험", () => {
   it("server.mjs 모듈을 import했을 때 listen 소켓을 열지 않는다", async () => {
@@ -157,5 +173,44 @@ describe("Server.mjs 단위 시험", () => {
     })
     assert.equal(port, 3175)
     assert.equal(host, "127.0.0.1")
+  })
+})
+
+describe("메신저 SSE 프록시", () => {
+  it("API 쪽이 응답 도중 끊기면 브라우저 쪽 연결도 1초 안에 끊긴다(메신저 SSE 다시 붙기)", async () => {
+    const dummyApi = http.createServer((apiReq, apiRes) => {
+      apiRes.writeHead(200, { "content-type": "text/event-stream" })
+      apiRes.write(": hello\n\n")
+      setTimeout(() => apiRes.socket.destroy(), 50)
+    })
+    await new Promise((resolve) => dummyApi.listen(0, "127.0.0.1", resolve))
+    const apiPort = dummyApi.address().port
+    const dashServer = http.createServer((req, res) => {
+      proxyToApi(req, res, "/api/portal/messenger/stream", apiPort, "test-secret", req.socket)
+    })
+    await new Promise((resolve) => dashServer.listen(0, "127.0.0.1", resolve))
+    const dashPort = dashServer.address().port
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("browser side stayed open")), 1000)
+        const clientReq = http.get(`http://127.0.0.1:${dashPort}/api/portal/messenger/stream`, (clientRes) => {
+          clientRes.resume()
+          clientRes.on("close", () => {
+            clearTimeout(timer)
+            resolve()
+          })
+        })
+        clientReq.on("error", () => {})
+      })
+    } finally {
+      if (typeof dashServer.closeAllConnections === "function") {
+        dashServer.closeAllConnections()
+      }
+      if (typeof dummyApi.closeAllConnections === "function") {
+        dummyApi.closeAllConnections()
+      }
+      await new Promise((resolve) => dashServer.close(resolve))
+      await new Promise((resolve) => dummyApi.close(resolve))
+    }
   })
 })
