@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { realpath, readFile, mkdir, writeFile, readdir, stat, unlink } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -32,13 +32,14 @@ export function calendarSpec(due) {
 }
 
 /** Pure comparison. Only supplied roles are owned; other roles are untouched. */
-export function plan({ root, ledgers, timers, now = Date.now(), horizonMs = 24 * HOUR, limit = 200, onlyUnits, configTag }) {
+export function plan({ root, ledgers, timers, now = Date.now(), horizonMs = 24 * HOUR, limit = 200, onlyUnits, configTag, pruneUnknownRoles = false, configuredRoles = [] }) {
   if (!Number.isFinite(now) || !Number.isFinite(horizonMs) || horizonMs < 0 || !Number.isInteger(limit) || limit < 0) throw new Error('Invalid planning options');
   if (!Array.isArray(ledgers) || !Array.isArray(timers)) throw new Error('Invalid planning input');
   const owned = new Map();
   const desired = new Map();
   for (const ledger of ledgers) {
     const role = safeName(ledger.role);
+    if (role.length > 240) throw new Error('Role too long for wake routing (maximum 240 characters)');
     if (!Array.isArray(ledger.items) || owned.has(role)) throw new Error('Invalid ledger list');
     owned.set(role, rolePrefix(root, role));
     for (const item of ledger.items) {
@@ -58,7 +59,9 @@ export function plan({ root, ledgers, timers, now = Date.now(), horizonMs = 24 *
   const actions = [];
   const occupied = new Set(existing.keys());
   for (const [unit] of existing) {
-    if ([...owned.values()].some(prefix => unit.startsWith(prefix)) && !desired.has(unit) && (!onlyUnits || onlyUnits.has(unit))) {
+    const known = [...owned.values()].some(prefix => unit.startsWith(prefix));
+    const configured = configuredRoles.some(role => unit.startsWith(rolePrefix(root, role)));
+    if ((known || (pruneUnknownRoles && !configured)) && !desired.has(unit) && (!onlyUnits || onlyUnits.has(unit))) {
       actions.push({ type: 'disarm', unit });
       occupied.delete(unit);
     }
@@ -86,6 +89,7 @@ export function plan({ root, ledgers, timers, now = Date.now(), horizonMs = 24 *
 
 // The runner receives an argv array, never shell text. Tests inject a fake.
 export function systemRunner(command, args, options = {}) {
+  if (process.env.NODE_TEST_CONTEXT || process.env.ADK_FORBID_SYSTEM_RUNNER === '1') throw new Error('System runner forbidden in tests; inject a runner');
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
@@ -100,7 +104,7 @@ function runtimeEnv() {
 }
 const enabled = config => config?.due_timer?.enabled === true;
 function parseCalendar(value) {
-  const matches = [...value.matchAll(/OnCalendar=(?:[A-Za-z]{3}\s+)?(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) UTC(?=\s*[;}])/g)];
+  const matches = [...value.matchAll(/(?:OnCalendar=|^\s*)(?:[A-Za-z]{3}\s+)?(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) UTC(?=\s*(?:[;}]|$))/gm)];
   if (matches.length !== 1) throw new Error('Cannot determine timer calendar');
   const date = matches[0][1].replace(' ', 'T') + '.000Z';
   if (!validDate(date)) throw new Error('Invalid timer calendar');
@@ -121,59 +125,70 @@ export async function list({ root, config, runner = systemRunner }) {
     const value = await runner('systemctl', ['--user', 'show', unit, '--property=TimersCalendar', '--value'], { env: runtimeEnv() });
     const service = unit.slice(0, -6) + '.service';
     const argv = await runner('systemctl', ['--user', 'show', service, '--property=ExecStart', '--value'], { env: runtimeEnv() });
-    const matches = [...String(argv).matchAll(/(?:^|\s)--due\s+(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z)\s*;/g)];
-    const originalDue = matches.length === 1 && validDate(matches[0][1]) ? matches[0][1] : null;
-    const tags = [...String(argv).matchAll(/(?:^|\s)--config-tag\s+([a-f0-9]{64})(?=\s)/g)];
-    timers.push({ unit, due: parseCalendar(String(value)), originalDue, configTag: tags.length === 1 ? tags[0][1] : null });
+    const tokens = String(argv).replace(/argv\[\]=/g, ' ').split(/[\s;{}]+/).filter(Boolean);
+    const values = option => tokens.flatMap((token, index) => token === option && tokens[index + 1] ? [tokens[index + 1]] : []);
+    const matches = values('--due');
+    const originalDue = matches.length === 1 && validDate(matches[0]) ? matches[0] : null;
+    const tags = values('--config-tag');
+    timers.push({ unit, due: parseCalendar(String(value)), originalDue, configTag: tags.length === 1 && /^[a-f0-9]{64}$/.test(tags[0]) ? tags[0] : null });
   }
   return timers;
 }
 async function armUnit({ root, role, id, due, config, configPath, runner = systemRunner }) {
   const unit = unitName(root, role, id).slice(0, -6);
-  const options = configPath ? ['--config', configPath] : [];
+  configPath = await canonicalConfig(root, configPath);
+  const options = ['--config', configPath];
   await runner('systemd-run', [ '--user', '--collect', `--unit=${unit}`, `--on-calendar=${calendarSpec(due)}`, '--timer-property=AccuracySec=1s', `--description=ADK ledger due ${role}/${id}`, process.execPath, path.join(root, 'scripts/work-ledger/due-timer.mjs'), 'fire', '--root', root, '--role', role, '--id', id, ...options, '--config-tag', hash(configPath || ''), '--due', due ], { env: runtimeEnv() });
   return true;
+}
+async function canonicalConfig(root, configPath) {
+  const file = path.resolve(root, configPath || 'config/work-ledger.json');
+  try { return await realpath(file); } catch (error) { if (error.code === 'ENOENT') return file; throw error; }
 }
 export const timerLockPath = root => path.join(root, '.agents/work/ledger/due-timer-reconcile');
 export async function arm({ root, role, id, due, config, configPath, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, fire: fireHandler }) {
   if (!enabled(config)) return false;
   root = await canonicalRoot(root);
+  configPath = await canonicalConfig(root, configPath);
+  const at = clock();
   const unit = unitName(root, role, id);
   return withLock(timerLockPath(root), async () => {
     const timers = await list({ root, config, runner });
-    const actions = plan({ root, ledgers: [{ role, items: [{ id, due, status: 'open' }] }], timers, now: clock(), horizonMs: (config.due_timer.horizon_hours ?? 24) * HOUR, onlyUnits: new Set([unit]), configTag: hash(configPath || '') });
-    const warnings = await executePlan({ root, config, configPath, actions, runner, clock, fire: fireHandler ?? (entry => fire({ root, config, runner, now: clock(), ...entry })) });
+    const actions = plan({ root, ledgers: [{ role, items: [{ id, due, status: 'open' }] }], timers, now: at, horizonMs: (config.due_timer.horizon_hours ?? 24) * HOUR, onlyUnits: new Set([unit]), configTag: hash(configPath) });
+    const warnings = await executePlan({ root, config, configPath, actions, runner, now: at, fire: fireHandler ?? (entry => fire({ root, config, runner, now: at, ...entry })) });
     if (warnings.length) throw new Error(warnings.join('; '));
     return actions.some(action => action.type === 'arm' || action.type === 'fire');
   });
 }
 async function stopUnit({ root, unit, config, runner = systemRunner }) {
-  if (!enabled(config)) return false;
   root = await canonicalRoot(root);
   if (typeof unit !== 'string' || !/^adk-due-[a-f0-9]{8}-[a-f0-9]{16}-[a-zA-Z0-9_-]+\.timer$/.test(unit) || !unit.startsWith(rootPrefix(root))) throw new Error('Timer outside root');
   await runner('systemctl', ['--user', 'stop', unit], { env: runtimeEnv() });
   return true;
 }
 export async function disarm({ root, unit, config, runner = systemRunner }) {
-  if (!enabled(config)) return false;
   root = await canonicalRoot(root);
   return withLock(timerLockPath(root), () => stopUnit({ root, unit, config, runner }));
 }
 export async function clear({ root, config, runner = systemRunner }) {
-  if (!enabled(config)) return 0;
   root = await canonicalRoot(root);
   return withLock(timerLockPath(root), async () => {
     const units = await listNames({ root, runner });
-    for (const unit of units) await stopUnit({ root, unit, config, runner });
+    const errors = [];
+    for (const unit of units) {
+      try { await stopUnit({ root, unit, config, runner }); }
+      catch (error) { errors.push(`${unit}: ${error.message}`); }
+    }
+    if (errors.length) throw new AggregateError(errors.map(message => new Error(message)), `Failed to clear ${errors.length} timer(s): ${errors.join('; ')}`);
     return units.length;
   });
 }
-export async function executePlan({ root, config, actions, runner = systemRunner, fire, configPath, clock = Date.now }) {
+export async function executePlan({ root, config, actions, runner = systemRunner, fire, configPath, now = Date.now() }) {
   if (!enabled(config)) return [];
   const warnings = [];
   for (const action of actions) {
     if (action.type === 'arm') {
-      const remaining = Date.parse(action.due) - clock();
+      const remaining = Date.parse(action.due) - now;
       if (remaining <= 5000) {
         if (!fire) throw new Error('Fire handler unavailable');
         await fire(action);
@@ -190,18 +205,21 @@ export async function executePlan({ root, config, actions, runner = systemRunner
   }
   return warnings;
 }
-export async function reconcile({ root, config, ledgers, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, fire, configPath }) {
+export async function reconcile({ root, config, ledgers, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, fire, configPath, pruneUnknownRoles = false, configuredRoles = [] }) {
   if (!enabled(config)) return [];
   root = await canonicalRoot(root);
+  configPath = await canonicalConfig(root, configPath);
+  const at = now ?? clock();
   const timers = await list({ root, config, runner });
-  const actions = plan({ root, ledgers, timers, now: clock(), horizonMs: (config.due_timer.horizon_hours ?? 24) * HOUR, configTag: hash(configPath || '') });
-  return executePlan({ root, config, actions, runner, fire, configPath, clock });
+  const actions = plan({ root, ledgers, timers, now: at, horizonMs: (config.due_timer.horizon_hours ?? 24) * HOUR, configTag: hash(configPath), pruneUnknownRoles, configuredRoles });
+  return executePlan({ root, config, actions, runner, fire, configPath, now: at });
 }
 
 // Load the latest ledger snapshots only after acquiring the common scheduler lock.
-export async function reconcileCurrent({ root, config, roles, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, configPath, overdueViaWatch = false }) {
+export async function reconcileCurrent({ root, config, roles, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, configPath, overdueViaWatch = false, pruneUnknownRoles = false }) {
   if (!enabled(config)) return [];
   root = await canonicalRoot(root);
+  const at = now ?? clock();
   return withLock(timerLockPath(root), async () => {
     const ledgers = [];
     const warnings = [];
@@ -209,7 +227,7 @@ export async function reconcileCurrent({ root, config, roles, now, clock = now =
       try { ledgers.push(await readLedger(root, safeName(role))); }
       catch (error) { warnings.push(`ledger:${role}: ${error.message}`); }
     }
-    warnings.push(...await reconcile({ root, config, ledgers, clock, runner, configPath, fire: action => overdueViaWatch && Date.parse(action.due) < now ? false : fire({ root, config, now: clock(), runner, ...action }) }));
+    warnings.push(...await reconcile({ root, config, ledgers, now: at, runner, configPath, pruneUnknownRoles, configuredRoles: roles, fire: action => overdueViaWatch && Date.parse(action.due) < at ? false : fire({ root, config, now: at, runner, ...action }) }));
     return warnings;
   });
 }
@@ -224,8 +242,8 @@ function receiptLock(root, file) {
   return path.join(root, '.agents/work/ledger/due-fired/.locks', path.basename(file).slice(0, 2));
 }
 
-// Both writers take the ledger lock before the receipt lock. A live claim holds
-// its lock until the wake is written; a claim left by a crash can be recovered.
+// Both writers take the ledger lock before the receipt lock. Persist the
+// receipt before emitting so a crash after delivery cannot duplicate the wake.
 export async function dueWake({ root, role, id, due, now = Date.now(), source = 'timer', lastSent, emit }) {
   safeName(role); safeName(id);
   if (!validDate(due) || !Number.isFinite(now) || !['timer', 'watch'].includes(source)) throw new Error('Invalid due wake');
@@ -246,9 +264,8 @@ export async function dueWake({ root, role, id, due, now = Date.now(), source = 
         const previous = Math.max(Number.isFinite(lastSent) ? lastSent : -Infinity, sent ?? -Infinity);
         if (now - previous < 30 * 60000) return false;
       }
-      if (!receipt) await writeFile(file, JSON.stringify({ role, id, due, status: 'claimed', at: now }), { flag: 'wx', mode: 0o600 });
-      await emit(item);
       await atomicJson(file, { role, id, due, status: 'sent', at: now });
+      await emit(item);
       return true;
     });
   });
@@ -280,19 +297,18 @@ export async function fire({ root, role, id, due, now = Date.now(), config = {},
     const dir = path.join(root, '.agents/work/l4/wake');
     await mkdir(dir, { recursive: true });
     const stamp = new Date(now).toISOString().replace(/\D/g, '');
-    let wakeId = id;
-    if (`${stamp}-ledger-${wakeId}-route-${role}.md`.length > 246) wakeId = hash(id).slice(0, 8);
-    const base = `${stamp}-ledger-${wakeId}-route-${role}.md`;
-    if (base.length > 246) throw new Error('Role too long for wake filename');
+    const route = `-route-${role}.md`;
+    let base = `${stamp}-${hash(due).slice(0, 8)}-ledger-${id}${route}`;
+    if (Buffer.byteLength(base) > 255) {
+      const available = 255 - Buffer.byteLength(route);
+      if (available < 5) throw new Error('Role too long for wake filename');
+      base = `${hash(JSON.stringify([role, id, due, now])).slice(0, available)}${route}`;
+    }
     const file = path.join(dir, base);
     const late = now - Date.parse(due);
     const lateText = late > 120000 ? `\n늦음 ${Math.floor(late / 60000)}분 (기계 꺼짐·잠듦)` : '';
     const body = `[장부] 정한 시각: ${item.title.replace(/[\r\n]/g, ' ')}\n출처: ${item.from.channel}/${item.from.msg_id}\n기한: ${item.due}\n결과: ${item.worker?.result || '(없음)'}${lateText}\n`;
-    try { await writeFile(file, body, { flag: 'wx', mode: 0o600 }); }
-    catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      await writeFile(path.join(dir, `${stamp}-ledger-${wakeId}-${randomUUID().slice(0, 8)}-route-${role}.md`), body, { flag: 'wx', mode: 0o600 });
-    }
+    await writeFile(file, body, { flag: 'wx', mode: 0o600 });
   } });
   const command = config?.due_timer?.after_fire;
   if (sent && enabled(config) && command !== undefined) {

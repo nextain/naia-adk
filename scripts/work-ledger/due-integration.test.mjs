@@ -186,8 +186,8 @@ test('disarm and reconciliation serialize against the same timer', async t => {
   assert.ok(f.timers.has(unitName(root, 'a', 'job')));
 });
 
-test('clock is reread after listing and before arm, so an expired timer fires immediately', async t => {
-  for (const phase of ['list', 'stop']) {
+test('one clock snapshot controls planning and execution despite clock jumps', async t => {
+  for (const jump of [-3600000, 3600000]) {
     const root = await setup(t), f = systemFake();
     let current = now;
     await ledgerMain(add(root), { runner: f.runner, clock: () => current });
@@ -195,15 +195,31 @@ test('clock is reread after listing and before arm, so an expired timer fires im
     const next = '2026-11-12T12:30:00Z';
     const runner = async (...a) => {
       const output = await f.runner(...a);
-      if (a[1].includes(phase === 'list' ? 'list-units' : 'stop')) current = Date.parse(next) + 1000;
+      if (a[1].includes('list-units')) current += jump;
       return output;
     };
     await ledgerMain(args(root, 'due', 'job', ['--due', next, '--reason', 'changed']), { runner, clock: () => current });
-    assert.equal(f.calls.filter(c => c.cmd === 'systemd-run').length, 0);
-    const files = await readdir(path.join(root, '.agents/work/l4/wake'));
-    assert.equal(files.length, 1);
-    assert.match(await readFile(path.join(root, '.agents/work/l4/wake', files[0]), 'utf8'), /정한 시각/);
+    assert.equal(f.calls.filter(c => c.cmd === 'systemd-run').length, 1);
+    assert.equal([...f.timers.values()][0].originalDue, next);
   }
+});
+
+test('watch removes timers for roles removed from config, preserving unreadable configured roles', async t => {
+  const root = await setup(t), f = systemFake();
+  const stale = unitName(root, 'removed', 'job'), broken = unitName(root, 'broken', 'job');
+  for (const unit of [stale, broken]) f.timers.set(unit, { calendar: '2026-11-12 13:00:01 UTC', originalDue: due });
+  const result = await watch({ root, config: { ...config, roles: [...config.roles, { role: 'broken', channels: [] }] }, runner: f.runner, now });
+  assert.equal(f.timers.has(stale), false);
+  assert.equal(f.timers.has(broken), true);
+  assert.ok(result.warnings.some(w => w.startsWith('ledger:broken:')));
+});
+
+test('default and explicit config paths identify the same timer', async t => {
+  const root = await setup(t), f = systemFake();
+  await ledgerMain(add(root), { runner: f.runner, now });
+  await watch({ root, config, configPath: path.join(root, 'config/work-ledger.json'), runner: f.runner, now });
+  assert.equal(f.calls.filter(c => c.args.includes('stop')).length, 0);
+  assert.equal(f.calls.filter(c => c.cmd === 'systemd-run').length, 1);
 });
 
 test('switching timer mode preserves a recorded fallback for the same due', async t => {

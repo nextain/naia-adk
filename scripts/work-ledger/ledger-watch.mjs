@@ -30,7 +30,7 @@ export async function watch({
   const timerWarnings = [];
   if (config.due_timer?.enabled === true && Array.isArray(config.roles)) {
     try {
-      timerWarnings.push(...await reconcileCurrent({ root, config, roles: config.roles.map(entry => entry.role), now, clock, runner, configPath, overdueViaWatch: true }));
+      timerWarnings.push(...await reconcileCurrent({ root, config, roles: config.roles.map(entry => entry.role), now, runner, configPath, overdueViaWatch: true, pruneUnknownRoles: true }));
     } catch (error) { timerWarnings.push(`timer: 못 걺 (${error.message})`); }
   }
   return withLock(stateFile, async () => {
@@ -176,9 +176,15 @@ export async function watch({
       if (state.sent[key] !== undefined && now - state.sent[key] < 30 * 60000)
         return;
       const stamp = new Date(now + sequence++).toISOString().replace(/\D/g, "");
-      const wakeId = `${stamp}-ledger-${id}-route-${role}.md`.length > 246
-        ? createHash("sha256").update(id).digest("hex").slice(0, 8) : id;
-      const file = path.join(wakeDir, `${stamp}-ledger-${wakeId}-route-${role}.md`);
+      const route = `-route-${role}.md`;
+      const filename = (nonce = "") => {
+        const normal = `${stamp}-ledger-${id}${nonce}${route}`;
+        if (Buffer.byteLength(normal) <= 255) return normal;
+        const available = 255 - Buffer.byteLength(route);
+        if (available < 5) throw new Error("Role too long for wake filename");
+        return `${createHash("sha256").update(JSON.stringify([role, id, reason, stamp, nonce])).digest("hex").slice(0, available)}${route}`;
+      };
+      const file = path.join(wakeDir, filename());
       // wx prevents overwriting an existing wake when a prior state write failed.
       try {
         await writeFile(
@@ -188,10 +194,7 @@ export async function watch({
         );
       } catch (error) {
         if (error.code !== "EEXIST") throw error;
-        const alternate = path.join(
-          wakeDir,
-          `${stamp}-ledger-${wakeId}-${randomUUID().slice(0, 8)}-route-${role}.md`,
-        );
+        const alternate = path.join(wakeDir, filename(`-${randomUUID().slice(0, 8)}`));
         await writeFile(alternate, `[장부] ${reason}: ${title}\n${details}\n`, {
           flag: "wx",
           mode: 0o600,

@@ -127,18 +127,57 @@ test('disabled configuration neither runs post-fire command nor changes watch be
   await assert.rejects(stat(path.join(second, '.agents/work/ledger/due-fired')), { code: 'ENOENT' });
 });
 
-test('long names fit the route filename or fail explicitly when the role cannot fit', async t => {
-  for (const [size, succeeds] of [[200, true], [240, false]]) {
+test('long names preserve the complete route within the filename limit', async t => {
+  for (const size of [200, 240]) {
     const root = await setup(t);
     const role = 'r'.repeat(size), id = 'i'.repeat(100);
     const ledger = JSON.parse(await readFile(path.join(root, '.agents/work/ledger/a.json'), 'utf8'));
     ledger.role = role;
     ledger.items[0].id = id;
     await writeFile(path.join(root, '.agents/work/ledger', `${role}.json`), JSON.stringify(ledger));
-    const result = fire({ root, role, id, due, now, config });
-    if (succeeds) {
-      assert.equal(await result, true);
-      assert.match((await wakes(root))[0], new RegExp(`-route-${role}\\.md$`));
-    } else await assert.rejects(result, /Role too long/);
+    assert.equal(await fire({ root, role, id, due, now, config }), true);
+    const [name] = await wakes(root);
+    assert.ok(Buffer.byteLength(name) <= 255);
+    assert.match(name, new RegExp(`-route-${role}\\.md$`));
   }
+});
+
+test('watch can also route an overdue item for a 240-character role', async t => {
+  const root = await setup(t);
+  const role = 'r'.repeat(240);
+  const ledger = JSON.parse(await readFile(path.join(root, '.agents/work/ledger/a.json'), 'utf8'));
+  ledger.role = role;
+  await writeFile(path.join(root, '.agents/work/ledger', `${role}.json`), JSON.stringify(ledger));
+  const result = await watch({ root, config: { roles: [{ role, channels: [] }], due_timer: { enabled: true } }, now, runner: unavailable });
+  assert.equal(result.wakes.length, 1);
+  const [name] = await wakes(root);
+  assert.ok(Buffer.byteLength(name) <= 255);
+  assert.match(name, new RegExp(`-route-${role}\\.md$`));
+});
+
+test('a crash after delivery cannot be recovered as a duplicate', async t => {
+  const root = await setup(t);
+  await assert.rejects(dueWake({ root, role: 'a', id: 'job', due, now,
+    emit: async () => { await writeFile(path.join(root, 'delivered'), 'wake'); throw Error('simulated crash'); } }), /simulated crash/);
+  assert.equal(await readFile(path.join(root, 'delivered'), 'utf8'), 'wake');
+  assert.equal((await runWatch(root)).wakes.length, 0);
+  assert.equal(JSON.parse(await readFile(receiptPath(root, 'a', 'job', due))).status, 'sent');
+});
+
+test('closing a ledger item and firing are serialized by the ledger lock', async t => {
+  const root = await setup(t);
+  let release, entered;
+  const inside = new Promise(resolve => { entered = resolve; });
+  const wait = new Promise(resolve => { release = resolve; });
+  const firing = dueWake({ root, role: 'a', id: 'job', due, now,
+    emit: async () => { entered(); await wait; } });
+  await inside;
+  let closed = false;
+  const closing = changeLedger(root, 'a', ledger => { ledger.items[0].status = 'done'; closed = true; });
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(closed, false);
+  release();
+  assert.equal(await firing, true);
+  await closing;
+  assert.equal(await runFire(root), false);
 });
