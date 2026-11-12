@@ -1,6 +1,8 @@
 "use client"
 
 import React, { useRef, useState } from "react"
+import Link from "next/link"
+import { scheduleLinkPath } from "@naia-adk/core/src/schedule-link"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { CodeBlock, isUnsafeMarkdownHref } from "./MessageMarkdown"
@@ -83,6 +85,19 @@ export function MessageBody({ body, onOpenDoc }: MessageBodyProps) {
           a: ({ href, children }) => {
             const raw = typeof href === "string" ? href : ""
             if (!raw || isUnsafeMarkdownHref(raw)) return <span>{children}</span>
+            // 일정 화면 링크(알림 글의 [일정에서 보기])는 새 탭이 아니라 이 대시보드 안에서 연다.
+            const schedulePath = scheduleLinkPath(raw, typeof window === "undefined" ? [] : [window.location.origin])
+            if (schedulePath) {
+              return (
+                <Link
+                  href={schedulePath}
+                  data-testid="msg-schedule-link"
+                  className="text-emerald-300 underline decoration-emerald-800 underline-offset-2 hover:text-emerald-200"
+                >
+                  {children}
+                </Link>
+              )
+            }
             const key = docLinkKey(raw)
             if (key && onOpenDoc) {
               return (

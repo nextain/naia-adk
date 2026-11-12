@@ -15,6 +15,7 @@ import {
   type FormState, type PersonalLayerState, type ScheduleViewProps,
 } from "./schedule-view-model"
 import { requestBoardSchedule, retainLocalToday, type BoardScheduleStatus } from "./schedule-board-state"
+import { findLinkedEvent, readScheduleDeepLink, type ScheduleLinkTarget } from "./schedule-deep-link"
 
 export function createLatestRequestGuard() {
   let generation = 0
@@ -40,6 +41,7 @@ export function useScheduleView(props: ScheduleViewProps) {
     initialFormOpen = false,
     initialSelectedEvent = null,
     initialDayListDate = null,
+    initialDeepLink,
     fetchFn,
   } = props
 
@@ -52,7 +54,9 @@ export function useScheduleView(props: ScheduleViewProps) {
     ...initialLayers,
   })
   const [workFilter, setWorkFilterState] = useState<WorkScheduleFilter>(initialWorkFilter ?? "open")
-  const [anchorDate, setAnchorDate] = useState<string>(defaultToday)
+  const [anchorDate, setAnchorDate] = useState<string>(initialDeepLink?.date ?? defaultToday)
+  // Detail link waiting for its event to appear (personal and board data load after mount).
+  const pendingDeepLink = useRef<ScheduleLinkTarget | null>(initialDeepLink ?? null)
 
   const [personalState, setPersonalState] = useState<PersonalLayerState>(() => buildInitialPersonalLayerState(props))
   const personalRevision = useRef<string | null>(null)
@@ -84,7 +88,7 @@ export function useScheduleView(props: ScheduleViewProps) {
     if (initialAnchorDate !== undefined || initialBoardSchedule !== undefined) return
     const today = localDateOnly(new Date())
     if (!today) return
-    setAnchorDate(today)
+    setAnchorDate(pendingDeepLink.current?.date ?? today)
     setBoardSchedule((current) => ({ ...current, todayDate: today }))
   }, [initialAnchorDate, initialBoardSchedule])
 
@@ -111,6 +115,20 @@ export function useScheduleView(props: ScheduleViewProps) {
     if (initialWorkFilter === undefined) {
       setWorkFilterState(readStoredWorkFilter())
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Read the detail link from the address once; show its layer even if the stored view hides it.
+  useEffect(() => {
+    if (initialDeepLink === undefined && typeof window !== "undefined") {
+      const link = readScheduleDeepLink(window.location.search)
+      if (link) {
+        pendingDeepLink.current = link
+        setAnchorDate(link.date)
+      }
+    }
+    const link = pendingDeepLink.current
+    if (link) setLayersState((prev) => (prev[link.layer] ? prev : { ...prev, [link.layer]: true }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -431,6 +449,15 @@ export function useScheduleView(props: ScheduleViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [canMutatePersonal],
   )
+
+  useEffect(() => {
+    const link = pendingDeepLink.current
+    if (!link) return
+    const ev = findLinkedEvent(calendarCells, link)
+    if (!ev) return
+    pendingDeepLink.current = null
+    handleSelectCalendarEvent(ev)
+  }, [calendarCells, handleSelectCalendarEvent])
 
   const layerCounts: Record<ScheduleLayerKey, number> = {
     personal: personalItems.length,
