@@ -1,0 +1,23 @@
+{
+  "work": "task-cards",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/task-cards.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/task-cards.md",
+      "config/task-cards.example.json"
+    ]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/task-cards.md"
+    ],
+    "detail": "Task cards reuse the watch alert module, so card events and the scheduled check go to Discord or the messenger with the same notify block. Card changes are written before the post, so a failed event post only warns; the scheduled check exits 3 on a failed post."
+  }
+}
