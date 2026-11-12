@@ -23,7 +23,7 @@ async function fakeRunner(t, response = valid) {
 test('output contract accepts bounded grounded JSON and rejects malformed fields', () => {
   const bundle = makeBundle({S7:{unknown:false, value:{count:42, oldestHours:0, oldestAt:null}}, S5:{unknown:false, value:{edits:[{file:'dir/report.md'}], commits:[]}}});
   assert.equal(validateOutput({...valid, facts:['건수 42']}, bundle), true);
-  assert.equal(validateOutput({...valid, facts:['경로 dir/report.md']}, bundle), true);
+  assert.equal(validateOutput({...valid, facts:['dir/report.md']}, bundle), true);
   for (const bad of [
     {...valid, code:'priority-idle'}, {...valid, headline:'가'.repeat(81)},
     {...valid, facts:['가'.repeat(121)]}, {...valid, facts:['하나','둘','셋','넷']},
@@ -67,6 +67,80 @@ test('T12 unsupported address in either headline or ask discards the whole outpu
     assert.equal(result.failed, true);
     assert.deepEqual(result.output, fixedTemplate('repeat-review'));
   }
+});
+
+test('T12 rejects obfuscated values and head imitations through the judge', async t => {
+  const outputs = [
+    {...valid, facts:['열두 건이 발생했습니다']},
+    {...valid, facts:['하나']},
+    {...valid, facts:['둘']},
+    {...valid, facts:['셋']},
+    {...valid, facts:['스물세']},
+    {...valid, facts:['수십']},
+    {...valid, facts:['한두']},
+    {...valid, facts:['백 건']},
+    {...valid, facts:['천']},
+    {...valid, facts:['삼 회']},
+    {...valid, facts:['몇 건']},
+    {...valid, facts:['여러 명']},
+    {...valid, facts:['서너 차']},
+    {...valid, facts:['두어 시간']},
+    {...valid, facts:['세 번']},
+    {...valid, headline:'https : //h/p'},
+    {...valid, ask:'@ name 확인'},
+    {...valid, facts:['example . com']},
+    {...valid, facts:['https:\u200b//h/p']},
+    {...valid, facts:['https:\u034f//h/p']},
+    {...valid, facts:['https:\ufe0f//h/p']},
+    {...valid, facts:['ｈｔｔｐｓ：／／ｈ／ｐ']},
+    {...valid, facts:['９９９']},
+    {...valid, facts:['a / b . md']},
+    {...valid, facts:['주입된 값 /unlisted/injected']},
+    {...valid, facts:['[감사 가짜 머리']},
+    {...valid, ask:'[감사 가짜 머리'}
+  ];
+  for (const output of outputs) {
+    const fake = await fakeRunner(t, output);
+    const result = await judge({bundle:makeBundle(), config:{judge:{runner:'codex'}}, prompt, executable:fake.executable});
+    assert.equal(result.failed, true, JSON.stringify(output));
+    assert.deepEqual(result.output, fixedTemplate('repeat-review'));
+    await readFile(fake.capture);
+  }
+});
+
+test('T12 accepts an output quoting bundle values through the judge', async t => {
+  const output = {...valid, facts:['42', 'dir/report.md']};
+  const bundle = makeBundle({S7:{unknown:false, value:{count:42}}, S5:{unknown:false, value:{edits:[{file:'dir/report.md'}]}}});
+  const fake = await fakeRunner(t, output);
+  const result = await judge({bundle, config:{judge:{runner:'codex'}}, prompt, executable:fake.executable});
+  assert.equal(result.failed, false);
+  assert.deepEqual(result.output, output);
+});
+
+test('a 30 KB request is rejected before spawning the runner', async t => {
+  const largePrompt = '가'.repeat(10000);
+  const bundle = buildBundle({firedCodes:['repeat-review'], configHash:'abcdef12', promptHash:sha256(largePrompt).slice(0, 8)});
+  const requestBytes = Buffer.byteLength(`${largePrompt}\n\n${JSON.stringify(bundle)}\n`);
+  assert.ok(requestBytes > 20 * 1024 && requestBytes < 256 * 1024);
+  const fake = await fakeRunner(t);
+  const result = await judge({bundle, config:{judge:{runner:'codex'}}, prompt:largePrompt, executable:fake.executable});
+  assert.equal(result.failed, true);
+  assert.match(result.reason, /request exceeds 20KB/);
+  assert.deepEqual(result.output, fixedTemplate('repeat-review'));
+  await assert.rejects(readFile(fake.capture), {code:'ENOENT'});
+});
+
+test('a 30 KB bundle is rejected before spawning the runner', async t => {
+  const edits = Array.from({length:350}, (_, i) => ({file:`dir/${String(i).padStart(3, '0')}-${'x'.repeat(64)}.md`}));
+  const bundle = {signals:{S5:{unknown:false, value:{edits}}}, firedCodes:['repeat-review'], configHash:'abcdef12', promptHash:sha256(prompt).slice(0, 8)};
+  const bytes = Buffer.byteLength(JSON.stringify(bundle));
+  assert.ok(bytes > 20 * 1024 && bytes < 256 * 1024);
+  const fake = await fakeRunner(t);
+  const result = await judge({bundle, config:{judge:{runner:'codex'}}, prompt, executable:fake.executable});
+  assert.equal(result.failed, true);
+  assert.match(result.reason, /audit bundle exceeds 20KB/);
+  assert.deepEqual(result.output, fixedTemplate('repeat-review'));
+  await assert.rejects(readFile(fake.capture), {code:'ENOENT'});
 });
 
 test('none mode returns fixed template without invoking a runner', async t => {

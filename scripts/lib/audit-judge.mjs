@@ -82,6 +82,13 @@ const tokenPatterns = [
   /(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|[\\/])[\p{L}\p{N}._~%+@:/\\-]+|[\p{L}\p{N}._~%+-]+(?:[\\/][\p{L}\p{N}._~%+@-]+)+|[\p{L}\p{N}_-]+(?:\.[\p{L}\p{N}_-]+)+/gu,
   /\p{N}+(?:[.,]\p{N}+)*/gu
 ];
+// Conservative rejection avoids approving partial or ambiguous Korean quantities.
+const koreanNumberPatterns = [
+  /(?:하나|둘|셋|넷|다섯|여섯|일곱|여덟|아홉|열|스물|스무|서른|마흔|쉰|예순|일흔|여든|아흔|백|천|몇|여러|서너|두어|한두|두세|너댓|대여섯|예닐곱|여남은|수십|수백|수천|수만|수억|수조)+(?:한|두|세|네)?/gu,
+  /[영공일이삼사오육륙칠팔구십백천만억조한두세네다섯여섯일곱여덟아홉열스물서른마흔쉰예순일흔여든아흔몇여러]+(?=[\s\p{Default_Ignorable_Code_Point}]*(?:건|회|개|번|시간|분|명|차))/gu
+];
+const normalized = text => text.normalize('NFKC');
+const stripped = text => normalized(text).replace(/[\s\p{Default_Ignorable_Code_Point}\p{Cf}]/gu, '');
 function tokens(text, pattern) { return [...text.matchAll(pattern)].map(match => match[0].replace(/[.,;:!?。]+$/u, '')); }
 function strings(value) {
   if (typeof value === 'string' || typeof value === 'number') return [String(value)];
@@ -92,15 +99,20 @@ function strings(value) {
 export function validateOutput(output, bundle) {
   if (!output || typeof output !== 'object' || Array.isArray(output) || Object.keys(output).sort().join(',') !== 'ask,code,facts,headline') return false;
   if (typeof output.code !== 'string' || ![...bundle.firedCodes, ...(bundle.priority ? ['priority-match', 'priority-mismatch'] : [])].includes(output.code)) return false;
-  if (typeof output.headline !== 'string' || !output.headline.trim() || chars(output.headline) > 80 || /\[감사\]/.test(output.headline)) return false;
+  if (typeof output.headline !== 'string' || !output.headline.trim() || chars(output.headline) > 80) return false;
   if (!Array.isArray(output.facts) || output.facts.length > 3 || output.facts.some(f => typeof f !== 'string' || chars(f) > 120)) return false;
   if (typeof output.ask !== 'string' || !output.ask.trim() || chars(output.ask) > 120) return false;
   // Hash digits are integrity metadata, not evidence of numerical facts.
   const { configHash: _configHash, promptHash: _promptHash, ...evidence } = bundle;
   const sources = strings(evidence), content = [output.headline, ...output.facts, output.ask];
+  if (content.some(s => /\[감사/u.test(stripped(s)))) return false;
+  if (content.some(s => [normalized, stripped].some(normalize => koreanNumberPatterns.some(pattern => tokens(normalize(s), pattern).length)))) return false;
   return tokenPatterns.every(pattern => {
-    const allowed = new Set(sources.flatMap(s => tokens(s, pattern)));
-    return content.every(s => tokens(s, pattern).every(token => allowed.has(token)));
+    // Removing separators in a source must not invent evidence such as `1 2` → `12`.
+    const allowed = new Set(sources.flatMap(s => tokens(normalized(s), pattern)));
+    return [normalized, stripped].every(normalize =>
+      content.every(s => tokens(normalize(s), pattern).every(token => allowed.has(token)))
+    );
   });
 }
 export function fixedTemplate(code) {
