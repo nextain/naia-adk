@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { acquireLock, dueNotices, messengerSender, noticeBody, readState, runOnce, wallNow } from './schedule-notify.mjs';
 import { createClient } from '../messenger/msg.mjs';
 
@@ -131,6 +132,61 @@ test('lock: a live holder blocks a second run, a dead holder\'s lock is cleared'
   const again = acquireLock(file);
   assert.ok(again);
   again();
+});
+
+test('lock: an empty or unreadable lock is treated as held until it is stale', () => {
+  const dir = temp();
+  const file = path.join(dir, 'state.json');
+  // 잠금을 막 만든 실행이 pid 를 아직 못 적은 순간과 같은 모양. 지우면 두 실행이 함께 돈다.
+  fs.writeFileSync(`${file}.lock`, '');
+  assert.equal(acquireLock(file), null);
+  assert.ok(fs.existsSync(`${file}.lock`));
+  const old = new Date(Date.now() - 60 * 60 * 1000);
+  fs.utimesSync(`${file}.lock`, old, old);
+  const release = acquireLock(file);
+  assert.ok(release);
+  assert.equal(fs.readFileSync(`${file}.lock`, 'utf8'), String(process.pid));
+  release();
+  assert.ok(!fs.existsSync(`${file}.lock`));
+});
+
+test('lock: release does not remove a lock someone else now holds', () => {
+  const dir = temp();
+  const file = path.join(dir, 'state.json');
+  const release = acquireLock(file);
+  fs.unlinkSync(`${file}.lock`);
+  fs.writeFileSync(`${file}.lock`, '1');
+  release();
+  assert.equal(fs.readFileSync(`${file}.lock`, 'utf8'), '1');
+});
+
+test('lock race: many processes start at once, with or without a dead lock, and exactly one gets it', async () => {
+  const modulePath = new URL('./schedule-notify.mjs', import.meta.url).href;
+  const script = `
+    import { acquireLock } from ${JSON.stringify(modulePath)};
+    const [file, go] = process.argv.slice(1);
+    while (Date.now() < Number(go)) {}
+    const release = acquireLock(file);
+    process.stdout.write(release ? 'got' : 'busy');
+    if (release) { const until = Date.now() + 1500; while (Date.now() < until) {} release(); }
+  `;
+  for (const deadLock of [false, true]) {
+    const dir = temp();
+    const file = path.join(dir, 'state.json');
+    if (deadLock) fs.writeFileSync(`${file}.lock`, '999999999');
+    const go = String(Date.now() + 1500);
+    const runs = Array.from({ length: 8 }, () => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', script, file, go], { stdio: ['ignore', 'pipe', 'inherit'] });
+      let out = '';
+      child.stdout.on('data', (chunk) => { out += chunk; });
+      child.on('error', reject);
+      child.on('close', () => resolve(out));
+    }));
+    const outcomes = await Promise.all(runs);
+    assert.equal(outcomes.filter((o) => o === 'got').length, 1, `deadLock=${deadLock}: ${outcomes.join(',')}`);
+    assert.equal(outcomes.filter((o) => o === 'busy').length, 7);
+    assert.deepEqual(fs.readdirSync(dir), []);
+  }
 });
 
 test('messengerSender posts to the channel by name through the messenger API', async (t) => {

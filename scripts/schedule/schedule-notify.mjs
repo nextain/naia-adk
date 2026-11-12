@@ -137,26 +137,72 @@ function pruneReceipts(state, now) {
   }
 }
 
-// 동시에 두 번 돌면 같은 알림을 두 번 보낼 수 있으니 잠금 파일 하나로 막는다. 죽은 프로세스의 잠금은 걷는다.
-export function acquireLock(file) {
+// 동시에 두 번 돌면 같은 알림을 두 번 보낼 수 있으니 잠금 파일 하나로 막는다.
+// pid 를 다 적은 임시 파일을 linkSync 로 잠금 이름에 걸므로, 잠금은 늘 pid 가 든 채로 생긴다.
+// 죽은 프로세스의 잠금과, 비었거나 못 읽는 잠금 중 staleMs 보다 오래된 것만 걷는다(새것은 살아 있다고 본다).
+// 걷기는 따로 건 걷기 잠금(.lock.break)을 쥔 한 실행만 하고, 쥔 뒤 같은 잠금(inode·pid)이 아직 죽어 있는지 다시 본다.
+// 그래서 두 실행이 함께 걷다가 한쪽이 남의 새 잠금을 지우는 일이 없다.
+export const LOCK_STALE_MS = 10 * 60 * 1000;
+
+function readLock(file) {
+  try {
+    const stat = fs.statSync(file);
+    return { ino: stat.ino, mtimeMs: stat.mtimeMs, text: fs.readFileSync(file, 'utf8').trim() };
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+function isDead(holder, staleMs) {
+  const pid = /^\d+$/.test(holder.text) ? Number(holder.text) : 0;
+  if (pid > 0) { try { process.kill(pid, 0); return false; } catch (e) { return e.code !== 'EPERM'; } }
+  return Date.now() - holder.mtimeMs > staleMs;
+}
+
+function linkLock(tmp, lock) {
+  try { fs.linkSync(tmp, lock); } catch (error) { if (error.code === 'EEXIST') return null; throw error; }
+  const { ino } = fs.statSync(lock);
+  const pid = String(process.pid);
+  return () => {
+    try { const now = readLock(lock); if (now?.ino === ino && now.text === pid) fs.unlinkSync(lock); } catch {}
+  };
+}
+
+// 걷기 잠금을 쥐고 seen 과 같은 죽은 잠금만 지운다. 걷기 잠금을 남이 쥐고 있으면 그쪽에 맡긴다.
+function clearDeadLock(tmp, lock, seen, staleMs) {
+  const breaker = `${lock}.break`;
+  let releaseBreaker = linkLock(tmp, breaker);
+  if (!releaseBreaker) {
+    // 걷던 실행이 죽어서 남은 걷기 잠금만 치운다(걷기는 순식간이라 남는 일은 드물다).
+    const other = readLock(breaker);
+    if (other && isDead(other, staleMs)) { try { fs.unlinkSync(breaker); } catch {} }
+    return;
+  }
+  try {
+    const now = readLock(lock);
+    if (now && now.ino === seen.ino && now.text === seen.text && isDead(now, staleMs)) fs.unlinkSync(lock);
+  } finally { releaseBreaker(); }
+}
+
+export function acquireLock(file, { staleMs = LOCK_STALE_MS } = {}) {
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const fd = fs.openSync(lock, 'wx', 0o600);
-      fs.writeSync(fd, String(process.pid));
-      fs.closeSync(fd);
-      return () => { try { fs.unlinkSync(lock); } catch {} };
-    } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      const pid = Number(fs.readFileSync(lock, 'utf8').trim());
-      let alive = false;
-      if (Number.isInteger(pid) && pid > 0) { try { process.kill(pid, 0); alive = true; } catch (e) { alive = e.code === 'EPERM'; } }
-      if (alive) return null;
-      fs.unlinkSync(lock);
+  const tmp = `${lock}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  fs.writeFileSync(tmp, String(process.pid), { mode: 0o600 });
+  try {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const release = linkLock(tmp, lock);
+      if (release) return release;
+      const holder = readLock(lock);
+      if (!holder) continue;
+      if (!isDead(holder, staleMs)) return null;
+      clearDeadLock(tmp, lock, holder, staleMs);
     }
+    return null;
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
   }
-  return null;
 }
 
 /**
