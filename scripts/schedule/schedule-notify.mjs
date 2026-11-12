@@ -91,17 +91,23 @@ function timeRange(item) {
   return `${item.start.slice(11)}~${end}`;
 }
 
+// 링크 모양에 맞지 않는 id(작업보드가 준 마일스톤 id 등)는 일정 화면 첫 화면으로 보낸다.
+function detailLink(target, dashboardUrl) {
+  try { return scheduleDetailHref(target, dashboardUrl); }
+  catch { return `${dashboardUrl.replace(/\/+$/, '')}/schedule`; }
+}
+
 /** 알림 글 본문. 일정 화면 상세로 가는 링크를 붙인다. */
 export function noticeBody(notice, { dashboardUrl = '', mention = '' } = {}) {
   const lead = mention ? `${mention} ` : '';
   if (notice.kind === 'milestone') {
     const ms = notice.milestone;
-    const link = scheduleDetailHref({ layer: 'milestone', id: ms.id, date: notice.date }, dashboardUrl);
+    const link = detailLink({ layer: 'milestone', id: String(ms.id), date: notice.date }, dashboardUrl);
     const progress = ms.total > 0 ? ` (${ms.completed}/${ms.total})` : '';
     return `${lead}오늘 기한 마일스톤: **${inline(ms.name)}**${progress}\n[일정에서 보기](${link})`;
   }
   const { item } = notice;
-  const link = scheduleDetailHref({ layer: 'personal', id: item.id, date: notice.date }, dashboardUrl);
+  const link = detailLink({ layer: 'personal', id: item.id, date: notice.date }, dashboardUrl);
   const head = notice.trigger === 'morning' ? '오늘 일정' : `${notice.minutes}분 뒤 시작`;
   return `${lead}${head}: **${inline(item.title)}** · ${timeRange(item)}\n[일정에서 보기](${link})`;
 }
@@ -178,7 +184,7 @@ export async function runOnce({ config, nowDate = new Date(), send, loadPersonal
     if (receipt?.messageId) { results.push({ key: notice.key, status: 'skipped', messageId: receipt.messageId }); continue; }
     if (receipt?.pending) { results.push({ key: notice.key, status: 'unknown' }); continue; }
     const target = notice.kind === 'milestone' ? config.milestones : users.find((u) => u.user === notice.user);
-    const body = noticeBody(notice, { dashboardUrl: config.dashboardUrl, mention: target?.mention });
+    const body = noticeBody(notice, { dashboardUrl: config.dashboardUrl || '', mention: target?.mention || '' });
     if (dryRun) { results.push({ key: notice.key, status: 'dry-run', channel: target.channel, body }); continue; }
     state.receipts[notice.key] = { pending: true, channel: target.channel, startedAt: nowDate.toISOString() };
     writeState(stateFile, state);

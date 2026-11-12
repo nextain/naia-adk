@@ -48,6 +48,11 @@ test('notice body links to the schedule detail and escapes markdown in titles', 
   assert.match(noticeBody(ms), /^오늘 기한 마일스톤: \*\*Beta\*\* \(1\/3\)\n\[일정에서 보기\]\(\/schedule\?item=milestone%3Am1&date=2026-11-12\)$/);
 });
 
+test('an id the link cannot carry falls back to the schedule screen', () => {
+  const [ms] = dueNotices({ now: '2026-11-12 08:30', milestones: [{ ...milestone, id: 'has space' }] });
+  assert.match(noticeBody(ms, { dashboardUrl: 'https://dash.example.test/' }), /\(https:\/\/dash\.example\.test\/schedule\)$/);
+});
+
 test('wallNow uses the configured time zone', () => {
   assert.equal(wallNow(new Date('2026-11-11T23:35:00Z'), 'Asia/Seoul'), '2026-11-12 08:35');
   assert.equal(wallNow(new Date('2026-11-11T23:35:00Z'), 'UTC'), '2026-11-11 23:35');
