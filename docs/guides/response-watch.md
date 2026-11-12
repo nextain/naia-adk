@@ -26,6 +26,7 @@ only for alert channels.
 - `thresholds`: default 10/30 minutes since the source post. With a one-minute
   timer, delivery occurs at the next successful poll after each threshold.
   `thresholds.burstMinutes` (default 10) bounds a batched reply, below.
+  `thresholds.followMinutes` (default 30) bounds the previous-addressee rule.
 - `sites`: URL and notice `channelId`, optional `failureThreshold` (default 2).
   Probes accept successful HTTP responses, reject redirects and use a timeout.
   URLs must have no credentials, query or fragment. Site checks prove HTTP
@@ -65,7 +66,17 @@ configured role, that message re-addresses the burst and the author's earlier
 fallback posts stop waiting; mentioning a person does not. A direct mention of
 the expected bot is tracked as its own request; a mention of a bot that no role
 maps to is not watched. Pending rows stored before `via` existed do not carry
-it and keep the strict rule until they are answered or removed. A receipt may acknowledge
+it and keep the strict rule until they are answered or removed.
+
+Previous addressee: people continue a conversation without naming the bot
+again ("ok, so what now?" right after a bot answered). When a bot sends an
+explicit reply to a person's post, or a person's post names exactly one bot
+(user mention or configured role), that bot becomes the person's partner in the
+channel. The person's next unaddressed post within `followMinutes` of that
+exchange is assigned to the partner instead of the channel bot, still with
+`via: "fallback"`. After `followMinutes` the partner is dropped and the channel
+bot takes unaddressed posts again. Watcher notices carry no reply reference, so
+they never make a partner. A receipt may acknowledge
 an unfinished task; assess the actual work result separately.
 
 ## State, failures and recovery

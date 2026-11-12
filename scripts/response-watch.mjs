@@ -28,6 +28,8 @@ export function validateConfig(config) {
   if (!(Number.isFinite(nudge) && nudge > 0 && Number.isFinite(escalate) && escalate > nudge)) throw new Error('invalid thresholds');
   const burst = config.thresholds?.burstMinutes ?? 10;
   if (!(Number.isFinite(burst) && burst >= 0)) throw new Error('invalid thresholds');
+  const follow = config.thresholds?.followMinutes ?? 30;
+  if (!(Number.isFinite(follow) && follow >= 0)) throw new Error('invalid thresholds');
   if (!Number.isInteger(config.maxPages ?? 100) || (config.maxPages ?? 100) < 1) throw new Error('invalid maxPages');
   const channels = new Set();
   for (const guild of config.guilds) {
@@ -152,6 +154,9 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
               }
               for (const [id] of answered) delete next.pending[id];
             }
+            // A bot's reply to a person makes that bot the person's current partner; their next unaddressed post follows it.
+            const partnerAt = Date.parse(message.timestamp), person = message.referenced_message?.author;
+            if (person && !person.bot && Number.isFinite(partnerAt)) (next.partners ??= {})[fingerprint(person.id)] = { botId: replier, at: partnerAt };
             continue;
           }
           if (!eligible(message)) continue;
@@ -163,19 +168,25 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
           if (direct) candidates.add(botId);
           if (candidates.size > 1) throw new Error('ambiguous assignment; cursor retained');
           const fallback = !candidates.size && channel.mode === 'all-human' && !mentions.length && !ref(message);
-          const assigned = [...candidates][0] ?? (fallback ? botId : undefined);
           const timestamp = Date.parse(message.timestamp);
           const author = fingerprint(message.author.id);
+          // An unaddressed post continues the author's latest exchange with a bot (the previous addressee) within followMinutes, else goes to the channel bot.
+          const partner = next.partners?.[author];
+          const following = fallback && partner && timestamp - partner.at <= (config.thresholds?.followMinutes ?? 30) * 60000 ? partner.botId : undefined;
+          const assigned = [...candidates][0] ?? (fallback ? following ?? botId : undefined);
           // Naming an agent right after an unaddressed post ("now" then "@other now") re-addresses that burst, so its fallback posts stop waiting.
           // Mentioning a person does not: "thanks @friend" leaves the question pending.
           if ((mentions.some(user => user.bot) || roles.length) && Number.isFinite(timestamp)) {
             const since = timestamp - (config.thresholds?.burstMinutes ?? 10) * 60000;
             for (const [id, request] of Object.entries(next.pending)) if (request.via === 'fallback' && request.author === author && request.at >= since && compare(id, message.id) < 0) delete next.pending[id];
           }
+          const named = mentions.filter(user => user.bot).map(user => user.id).concat(roles.map(role => role.botId));
+          if (new Set(named).size === 1 && Number.isFinite(timestamp)) (next.partners ??= {})[author] = { botId: named[0], at: timestamp };
           if (!assigned) continue;
           if (!Number.isFinite(timestamp)) throw new Error('invalid request timestamp');
           next.pending[message.id] = { botId: assigned, author, at: timestamp, stages: {}, ...(fallback ? { via: 'fallback' } : {}) };
         }
+        for (const [author, partner] of Object.entries(next.partners ?? {})) if (!(now - partner.at <= (config.thresholds?.followMinutes ?? 30) * 60000)) delete next.partners[author];
         if (messages.length) next.cursor = messages.at(-1).id;
         delete next.error;
         delete state.errors[key];
