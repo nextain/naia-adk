@@ -25,6 +25,7 @@ only for alert channels.
   `escalation.userId`: accountable-owner notice destination and person.
 - `thresholds`: default 10/30 minutes since the source post. With a one-minute
   timer, delivery occurs at the next successful poll after each threshold.
+  `thresholds.burstMinutes` (default 10) bounds a batched reply, below.
 - `sites`: URL and notice `channelId`, optional `failureThreshold` (default 2).
   Probes accept successful HTTP responses, reject redirects and use a timeout.
   URLs must have no credentials, query or fragment. Site checks prove HTTP
@@ -49,8 +50,9 @@ channel later baselines only that channel. Preserve state across upgrades.
 Subsequent scans page back to the durable cursor and process oldest first.
 Only an expected bot's explicit Discord reply closes a pending request. It
 closes the post it references and the same author's earlier posts still pending
-for that bot in the channel, because one reply commonly answers a burst of
-posts. Later posts, other authors' posts and requests assigned to another bot
+for that bot in the channel that were posted at most `burstMinutes` before the
+referenced post, because one reply commonly answers a burst of posts. An older
+question outside that window stays pending until it gets its own reply. Later posts, other authors' posts and requests assigned to another bot
 stay pending. Configure the executor to reference the newest post it answers.
 Bot chatter, unreferenced bot posts and another bot's reply do not prove
 response. A receipt may acknowledge
@@ -58,9 +60,11 @@ an unfinished task; assess the actual work result separately.
 
 ## State, failures and recovery
 
-State version 1 contains channel cursors, pending request identifiers, a hashed
-author key per request (no raw user ID; requests stored by older versions lack
-it and close only on a direct reference), timestamps,
+State version 1 contains channel cursors, pending request identifiers, an
+author key per request (an unsalted SHA-256 prefix of the user ID: not the raw
+ID, but anyone holding the state can confirm a known ID, so keep the state
+private; requests stored by older versions lack it and close only on a direct
+reference), timestamps,
 stage receipts and site counters. Optional `replies[botId].at` retains the latest
 confirmed referenced-reply timestamp (milliseconds since epoch) for
 [session progress observation](session-health.md); older version-1 state remains

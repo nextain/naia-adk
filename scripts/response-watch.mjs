@@ -26,6 +26,8 @@ export function validateConfig(config) {
   const nudge = config.thresholds?.nudgeMinutes ?? 10;
   const escalate = config.thresholds?.escalateMinutes ?? 30;
   if (!(Number.isFinite(nudge) && nudge > 0 && Number.isFinite(escalate) && escalate > nudge)) throw new Error('invalid thresholds');
+  const burst = config.thresholds?.burstMinutes ?? 10;
+  if (!(Number.isFinite(burst) && burst >= 0)) throw new Error('invalid thresholds');
   if (!Number.isInteger(config.maxPages ?? 100) || (config.maxPages ?? 100) < 1) throw new Error('invalid maxPages');
   const channels = new Set();
   for (const guild of config.guilds) {
@@ -137,7 +139,10 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
             // One reply often answers a burst: it closes the referenced post and the same author's earlier posts still pending for this bot.
             const target = ref(message), replier = message.author.id;
             const poster = next.pending[target]?.author ?? (message.referenced_message?.author?.id ? fingerprint(message.referenced_message.author.id) : undefined);
-            const answered = !target ? [] : Object.entries(next.pending).filter(([id, request]) => request.botId === replier && (id === target || (poster && request.author === poster && compare(id, target) < 0)));
+            // Only posts within burstMinutes before the referenced post count as the same burst, so an unrelated older question stays pending.
+            const targetAt = next.pending[target]?.at ?? Date.parse(message.referenced_message?.timestamp ?? message.timestamp);
+            const since = Number.isFinite(targetAt) ? targetAt - (config.thresholds?.burstMinutes ?? 10) * 60000 : Infinity;
+            const answered = !target ? [] : Object.entries(next.pending).filter(([id, request]) => request.botId === replier && (id === target || (poster && request.author === poster && compare(id, target) < 0 && request.at >= since)));
             if (answered.length) {
               const at = Date.parse(message.timestamp);
               if (Number.isFinite(at) && at <= now) {

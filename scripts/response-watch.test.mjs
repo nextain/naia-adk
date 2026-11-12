@@ -185,6 +185,12 @@ test('batched reply never closes another author\'s, another bot\'s or unreferenc
   const state = await run(1); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['2']);
   assert.equal(state.channels['10/30'].pending['2'].author.length, 16); assert.ok(!JSON.stringify(state).includes('"42"'));
 });
+test('batched reply closes only the author\'s posts within burstMinutes of the referenced post', async () => {
+  const { remote, run } = await fixture(); await run();
+  const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes) => human(id, { mentions: [], timestamp: at(minutes) });
+  remote.messages.push(plain(2, 0), plain(3, 15), plain(4, 20), human(5, { author: { id: '20', bot: true }, message_reference: { message_id: '4' }, timestamp: at(21) }));
+  const state = await run(21); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['2']);
+});
 test('reply to an unwatched post closes its author\'s earlier requests; requests stored before author tracking need their own reply', async () => {
   const { config, remote, run } = await fixture(); await run();
   remote.messages.push(human(2, { mentions: [] }), human(3, { mentions: [], message_reference: { message_id: '1' } }));
