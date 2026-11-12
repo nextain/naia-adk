@@ -1654,7 +1654,7 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 }
 
 const GATEWAY_RUNNER_FORMATS = Object.freeze({
- "launch-local.sh": "a1e34a06a516688e625a6116497088d5614b1252fcebe7e25187fdcbbd5ccc46",
+ "launch-local.sh": "79047d4f2b712c1c6f746c1d458870dc8485b32e242e035f4d59103d544071c6",
  "operation-local.sh": "35b139bd826a79a729b677cb5dcd02b4cf2f881dbc02c18d8d40788118b85977",
  "status-local.sh": "a3890864be7a66486cbc8389053cb804aa17194689b41df0b638fd445367a505",
  "rollback-local.sh": "0c473db41ebc292c988f737f66984d54254117eb4d72ba86b6a44abbffcb1b3e",
@@ -2001,17 +2001,17 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 		const azHits = gwHit ? [] : classifyAzAll(tokens);
 		// 준비 기록 검사는 바깥 글자가 아니라 실제로 도는 절을 본다(설계 검수 10회차 2번: bash -c "…", 스크립트 파일 속 --image 가 ops 로 통과).
 		if (gwHit || azHits.length) for (const h of gwHit ? [gwHit] : azHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
-		else {
+		if (!gwHit && (!azHits.length || runnerHit)) {
 			const cloudHits = classifyGeneralCloudCli(tokens);
 			if (cloudHits.length) for (const h of cloudHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
-			else {
+			if (!cloudHits.length || runnerHit) {
 				// classifySsh 는 여러 hit 를 낼 수 있다(비운영 호스트 안의 운영 변경 재분류, 검수 2회차 1번).
 				const sshHits = [...classifySsh(tokens, dir, depth, gateRoot), ...classifyScp(tokens)];
 				if (sshHits.length) for (const h of sshHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
-				else {
+				if (!sshHits.length || runnerHit) {
 					const hit = classifyDeployScript(tokens, dir, assigns) || classifyPackageScript(tokens, dir);
 					if (hit) found.push({ ...hit, clause: clauseText(tokens, assigns) });
-					else {
+					if (!hit || runnerHit) {
 						// 로컬 셸 스크립트 파일을 실행하면 그 안의 명령도 본다(설계 검수 8회차 4번: 운영 배포를 스크립트 파일로 감싸면 안 보였음).
 						const file = executedShellFile(tokens, dir, dirKnown, command, true);
 						// 파일 전체를 한 번에 읽는다. 파서가 줄바꿈·주석·heredoc 을 bash 처럼 다루므로, 파일 안의 "bash <<EOF" 본문도 셸 프로그램으로 읽힌다(설계 검수 11회차 2번).

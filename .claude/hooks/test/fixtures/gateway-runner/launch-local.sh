@@ -17,7 +17,11 @@ esac
 SUBSCRIPTION=83b29893-2929-4593-bf1f-1f7b8aa53630
 ACR=acrnaia83b29893
 REPO=acrnaia83b29893.azurecr.io/naia/gateway
-HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+trap 'echo MOTIF_KEY_FILE_INVALID; exit 1' ERR
+HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+trap - ERR
+SOURCE_PATH="$(realpath -m -- "${BASH_SOURCE[0]}")" || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+[[ "$SOURCE_PATH" == "$HERE/$(basename -- "${BASH_SOURCE[0]}")" ]] || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
 if [[ "$STAGE" == cleanup ]]; then
   NAME="naia-gw-cleanup-$RUN_ID"
 else
@@ -31,7 +35,18 @@ if [[ "$STAGE" == backup ]]; then
   # The value is read here with shell builtins only and leaves this PC solely as a Managed Run
   # Command protected parameter, like ACR_TOKEN: never argv, script literal, trace or log.
   # Checked before any Azure call, so a bad key file changes nothing anywhere.
-  MOTIF_KEY_FILE="$(cd -- "$HERE/../../../../.." && pwd -P)/data-private/key/motif-api-key.env"
+  MOTIF_KEY_FILE="$(cd -- "$HERE/../../../../.." && pwd -P)/data-private/key/motif-api-key.env" || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+  ROOT="${MOTIF_KEY_FILE%/data-private/key/motif-api-key.env}"
+  [[ -e "$ROOT/.git" && -f "$ROOT/AGENTS.md" ]] || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+  for KEY_DIR in "$ROOT" "$ROOT/data-private" "$ROOT/data-private/key"; do
+    [[ -d "$KEY_DIR" && ! -L "$KEY_DIR" ]] || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+    KEY_DIR_MODE="$(stat -c '%a' -- "$KEY_DIR")" || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+    KEY_DIR_UID="$(stat -c '%u' -- "$KEY_DIR")" || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+    [[ "$KEY_DIR_MODE" =~ ^[0-7]{3,4}$ && "$KEY_DIR_UID" =~ ^[0-9]+$ ]] &&
+      (( (8#$KEY_DIR_MODE & 0022) == 0 )) &&
+      { [[ "$KEY_DIR_UID" == "$(id -u)" ]] || (( (8#$KEY_DIR_MODE & 0200) == 0 )); } ||
+      { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+  done
   [[ -f "$MOTIF_KEY_FILE" && ! -L "$MOTIF_KEY_FILE" && "$(stat -c '%a %u' -- "$MOTIF_KEY_FILE")" == "600 $(id -u)" ]] ||
     { echo MOTIF_KEY_FILE_INVALID; exit 1; }
   MOTIF_VALUE=''
