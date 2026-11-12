@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState } from "react"
-import { CornerDownRight, FileText, MessageSquare, Paperclip, SmilePlus } from "lucide-react"
+import { CalendarPlus, CornerDownRight, FileText, MessageSquare, Paperclip, SmilePlus } from "lucide-react"
 import { copyTextToClipboard } from "../docs/clipboard"
 import { MessageBody } from "./MessageBody"
 import {
@@ -23,6 +23,8 @@ export interface MessageActions {
   onOpenThread?: (m: Message) => void
   onOpenDoc?: (key: string) => void
   onDecide?: (m: Message, decision: "approve" | "reject") => Promise<void> | void
+  /** "일정에 넣기": 보는 사람 본인의 개인 일정에 이 글로 한 줄을 만든다(사람 화면에서만). */
+  onAddToSchedule?: (m: Message) => void
 }
 
 export interface MessageItemProps extends MessageActions {
@@ -250,7 +252,9 @@ export function MessageItem({
   onOpenThread,
   onOpenDoc,
   onDecide,
+  onAddToSchedule,
 }: MessageItemProps) {
+  const addToSchedule = viewerKind === "human" ? onAddToSchedule : undefined
   return (
     <article
       id={`msg-${message.id}`}
@@ -313,8 +317,21 @@ export function MessageItem({
           )}
         </div>
       </div>
-      {onReply && (
-        <div className="absolute right-2 top-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 max-sm:opacity-100">
+      {(onReply || addToSchedule) && (
+        <div className="absolute right-2 top-1 flex gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 max-sm:opacity-100">
+          {addToSchedule && (
+            <button
+              type="button"
+              data-testid="msg-add-schedule"
+              title={MSG.addToSchedule}
+              aria-label={MSG.addToSchedule}
+              onClick={() => addToSchedule(message)}
+              className="p-1 rounded-md text-neutral-500 hover:text-emerald-200 hover:bg-neutral-800"
+            >
+              <CalendarPlus className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {onReply && (
           <button
             type="button"
             data-testid="msg-reply"
@@ -325,6 +342,7 @@ export function MessageItem({
           >
             <CornerDownRight className="w-3.5 h-3.5" />
           </button>
+          )}
         </div>
       )}
     </article>

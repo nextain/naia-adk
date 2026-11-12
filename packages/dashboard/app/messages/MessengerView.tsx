@@ -6,6 +6,7 @@ import { PanelResizer } from "../docs/PanelResizer"
 import { Composer } from "./Composer"
 import { DocPreview } from "./DocPreview"
 import { MessageItem } from "./MessageItem"
+import { ScheduleAddPanel } from "./ScheduleAddPanel"
 import {
   alertText,
   applyStreamEvent,
@@ -41,7 +42,11 @@ const STREAM_EVENTS: StreamEventType[] = ["message", "attachment", "reaction", "
 const PAGE_SIZE = 50
 const SIDE_WIDTH_KEY = "messages.sideWidth"
 
-export type SidePanel = { kind: "thread"; rootId: string } | { kind: "doc"; key: string } | null
+export type SidePanel =
+  | { kind: "thread"; rootId: string }
+  | { kind: "doc"; key: string }
+  | { kind: "schedule"; message: Message }
+  | null
 
 export interface MessengerViewProps {
   initialChannelId?: string | null
@@ -469,7 +474,11 @@ export function MessengerView({
   const openDoc = (key: string) => setPanel({ kind: "doc", key })
   const openThread = (m: Message) => setPanel({ kind: "thread", rootId: threadRootOf(m) ?? m.id })
   const upload = (file: File) => uploadAttachment(file, f)
-  const actions = { onReact: react, onReply: openThread, onOpenThread: openThread, onOpenDoc: openDoc, onDecide: decide }
+  const openScheduleAdd = (m: Message) => setPanel({ kind: "schedule", message: m })
+  const actions = {
+    onReact: react, onReply: openThread, onOpenThread: openThread, onOpenDoc: openDoc, onDecide: decide,
+    onAddToSchedule: openScheduleAdd,
+  }
   const visibleAlerts = state.alerts.filter((a) => !hidden.has(`${a.message_id}-${a.target_id ?? ""}`))
 
   const threadRoot = panel?.kind === "thread" ? messages.find((m) => m.id === panel.rootId) ?? null : null
@@ -478,6 +487,8 @@ export function MessengerView({
   const sideContent =
     panel?.kind === "doc" ? (
       <DocPreview key={panel.key} docKey={panel.key} onClose={() => setPanel(null)} fetchFn={fetchFn} />
+    ) : panel?.kind === "schedule" ? (
+      <ScheduleAddPanel key={panel.message.id} message={panel.message} onClose={() => setPanel(null)} fetchFn={fetchFn} />
     ) : threadRoot ? (
       <section data-testid="thread-panel" aria-label={MSG.thread} className="flex h-full min-h-0 flex-col bg-neutral-950">
         <header className="flex items-center gap-2 border-b border-neutral-800 px-3 py-2">

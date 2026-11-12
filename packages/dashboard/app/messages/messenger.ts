@@ -131,6 +131,11 @@ export const MSG = {
   alertOpen: "글 보기",
   agent: "에이전트",
   backToList: "채널 목록",
+  addToSchedule: "일정에 넣기",
+  scheduleOwnOnly: "내 개인 일정에만 들어갑니다. 글쓴이나 다른 사람 일정에는 넣지 않습니다.",
+  scheduleSaving: "넣는 중",
+  scheduleAdded: "개인 일정에 넣었습니다.",
+  scheduleOpen: "일정에서 보기",
 } as const
 
 export function messengerUrl(path: string): string {
