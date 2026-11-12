@@ -14,8 +14,11 @@ export function resolvingEvidence(e, target, since, now) {
   return e.target === target && t(e.at) > since && t(e.at) <= now &&
     ((e.kind === 'status-transition' && e.from === 'blocked' && ['waiting', 'done', '대기', '끝'].includes(e.to)) || e.kind === 'human-approval-request');
 }
-export function priorityMismatch() { return { value: null, unknown: true, reason: 'S9 requires W3' }; }
-export function initialState() { return { episodes: {}, reviewFiles: {}, lastCounts: {}, blindRuns: 0, initialized: false }; }
+export function priorityMismatch(result) {
+  if (!result || result.failed || result.disabled || result.reason === 'none' || !['priority-match', 'priority-mismatch'].includes(result.output?.code)) return { value: null, unknown: true, reason: 'S9 판정 불가' };
+  return { value: result.output.code === 'priority-mismatch', unknown: false, reason: null };
+}
+export function initialState() { return { episodes: {}, reviewFiles: {}, lastCounts: {}, blindRuns: 0, llmFailures: 0, initialized: false }; }
 
 // State is passed in and returned; no filesystem or delivery side effects.
 export function evaluate(signals, state, now, options = {}) {
@@ -27,7 +30,7 @@ export function evaluate(signals, state, now, options = {}) {
   const coreMissing = ['S1','S3','S4','S6'].filter(id => signals[id]?.unknown !== false).length;
   const allUnknown = unknown('S1') && unknown('S3','S4','S8') && unknown('S5','S6') && unknown('S7');
   next.blindRuns = coreMissing >= cfg.blindInputs || allUnknown ? next.blindRuns + 1 : 0;
-  if (Object.values(signals).some(s => s.unknown)) add('audit-degraded', '');
+  if (Object.values(signals).some(s => s.unknown) || next.llmFailures >= 2) add('audit-degraded', '');
   if (next.blindRuns >= 2) add('audit-blind', '', { immediate: true });
 
   if (unknown('S1')) uncertain.add('repeat-review');
@@ -64,6 +67,8 @@ export function evaluate(signals, state, now, options = {}) {
   }
   if (unknown('S7')) uncertain.add('wake-backlog');
   else { const w = signals.S7.value; if (w.count >= cfg.wakeCount || w.oldestHours >= cfg.wakeHours) add('wake-backlog', '', { deadline: w.oldestAt + 4*HOUR }); }
+  if (signals.S9?.unknown !== false) uncertain.add('priority-mismatch');
+  else if (signals.S9.value === true) add('priority-mismatch', options.priorityTarget ?? 'priority', { warningOnly: true });
 
   for (const [id, ep] of Object.entries(next.episodes)) {
     if (!active.has(id) && !uncertain.has(id) && !uncertain.has(ep.code)) { delete next.episodes[id]; events.push({ at: now, code: ep.code, target: ep.target, stage: 'recovered' }); }
