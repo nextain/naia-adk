@@ -12,6 +12,7 @@ import {
   parseArgs,
 } from "./ledger.mjs";
 import { createAdapter } from "./messenger.mjs";
+import { cleanReceipts, dueWake } from "./due-timer.mjs";
 export async function watch({
   root,
   config,
@@ -143,6 +144,7 @@ export async function watch({
         );
     }
     const errors = [];
+    if (config.due_timer?.enabled === true) await cleanReceipts(root, now);
     let sequence = 0;
     function safeIdPart(raw) {
       try {
@@ -224,8 +226,14 @@ export async function watch({
       }
       for (const item of ledger.items) {
         const details = `출처: ${item.from.channel}/${item.from.msg_id}\n기한: ${item.due}\n결과: ${item.worker?.result || "(없음)"}`;
-        if (item.status === "open" && Date.parse(item.due) < now)
-          await wake(role, item.id, "기한 넘음", item.title, details);
+        if (item.status === "open" && Date.parse(item.due) < now) {
+          const key = JSON.stringify([role, item.id, "기한 넘음"]);
+          if (config.due_timer?.enabled === true) {
+            await dueWake({ root, role, id: item.id, due: item.due, now, source: "watch", lastSent: state.sent[key],
+              emit: (latest) => wake(role, latest.id, "기한 넘음", latest.title,
+                `출처: ${latest.from.channel}/${latest.from.msg_id}\n기한: ${latest.due}\n결과: ${latest.worker?.result || "(없음)"}\n늦음 ${Math.floor((now - Date.parse(latest.due)) / 60000)}분`) });
+          } else await wake(role, item.id, "기한 넘음", item.title, details);
+        }
         if (item.worker) {
           try {
             const info = await stat(path.resolve(root, item.worker.done_file));
