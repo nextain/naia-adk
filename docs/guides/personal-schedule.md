@@ -80,3 +80,6 @@ write path. A future messenger integration can consume this boundary.
 The [regular schedule ledger](regular-schedule-ledger.md) is a separate record
 of recurring work, approvals and execution results. Personal calendar entries
 do not create timers, approve work or alter that ledger.
+
+The messenger side (reminder posts, schedule links in messages and the
+"일정에 넣기" action) is described in [schedule and messenger](schedule-messenger.md).
