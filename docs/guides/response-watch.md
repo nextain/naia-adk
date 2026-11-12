@@ -47,14 +47,20 @@ later observations apply the threshold. Adding a new
 channel later baselines only that channel. Preserve state across upgrades.
 
 Subsequent scans page back to the durable cursor and process oldest first.
-Only an expected bot's explicit Discord reply referencing the original post
-closes a pending request. Configure the executor to use that reference. Bot
-chatter and another bot's reply do not prove response. A receipt may acknowledge
+Only an expected bot's explicit Discord reply closes a pending request. It
+closes the post it references and the same author's earlier posts still pending
+for that bot in the channel, because one reply commonly answers a burst of
+posts. Later posts, other authors' posts and requests assigned to another bot
+stay pending. Configure the executor to reference the newest post it answers.
+Bot chatter, unreferenced bot posts and another bot's reply do not prove
+response. A receipt may acknowledge
 an unfinished task; assess the actual work result separately.
 
 ## State, failures and recovery
 
-State version 1 contains channel cursors, pending request identifiers, timestamps,
+State version 1 contains channel cursors, pending request identifiers, a hashed
+author key per request (no raw user ID; requests stored by older versions lack
+it and close only on a direct reference), timestamps,
 stage receipts and site counters. Optional `replies[botId].at` retains the latest
 confirmed referenced-reply timestamp (milliseconds since epoch) for
 [session progress observation](session-health.md); older version-1 state remains

@@ -168,3 +168,30 @@ test('instance message templates replace known placeholders and keep unknown one
   assert.equal(fill('<@{bot}> 답해 주세요: {link}', { bot: '1', link: 'https://x/y' }), '<@1> 답해 주세요: https://x/y');
   assert.equal(fill('{site} {unknown}', { site: 'a' }), 'a {unknown}');
 });
+test('one referenced reply closes the same author\'s earlier pending posts but not later ones', async () => {
+  const { remote, run } = await fixture(); await run();
+  const plain = (id, extra = {}) => human(id, { mentions: [], ...extra }), bot = (id, to, extra = {}) => human(id, { author: { id: '20', bot: true }, message_reference: { message_id: String(to) }, ...extra });
+  remote.messages.push(plain(2), plain(3), plain(4), bot(5, 3));
+  let state = await run(1); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['4']);
+  remote.messages.push(plain(6), plain(7), plain(8), bot(9, 7)); state = await run(2); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['8']);
+  await run(9); assert.equal(remote.posts.length, 0);
+  await run(60); assert.equal(remote.posts.length, 2); assert.ok(remote.posts.every(post => post.content.endsWith('/8')));
+});
+test('batched reply never closes another author\'s, another bot\'s or unreferenced requests', async () => {
+  const { remote, run } = await fixture(); await run();
+  const plain = (id, extra = {}) => human(id, { mentions: [], ...extra });
+  remote.messages.push(plain(2, { author: { id: '42' } }), plain(3, { mentions: [{ id: '21', bot: true }] }), plain(4), plain(5),
+    human(6, { author: { id: '20', bot: true } }), human(7, { author: { id: '21', bot: true }, message_reference: { message_id: '5' } }), human(8, { author: { id: '20', bot: true }, message_reference: { message_id: '5' } }));
+  const state = await run(1); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['2']);
+  assert.equal(state.channels['10/30'].pending['2'].author.length, 16); assert.ok(!JSON.stringify(state).includes('"42"'));
+});
+test('reply to an unwatched post closes its author\'s earlier requests; requests stored before author tracking need their own reply', async () => {
+  const { config, remote, run } = await fixture(); await run();
+  remote.messages.push(human(2, { mentions: [] }), human(3, { mentions: [], message_reference: { message_id: '1' } }));
+  remote.messages.push(human(4, { author: { id: '20', bot: true }, message_reference: { message_id: '3' }, referenced_message: { id: '3', author: { id: '40' } } }));
+  let state = await run(1); assert.deepEqual(state.channels['10/30'].pending, {});
+  remote.messages.push(human(5, { mentions: [] }), human(6, { mentions: [] })); state = await run(2);
+  delete state.channels['10/30'].pending['5'].author; await writeFile(config.stateFile, JSON.stringify(state));
+  remote.messages.push(human(7, { author: { id: '20', bot: true }, message_reference: { message_id: '6' } }));
+  state = await run(3); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['5']);
+});

@@ -134,14 +134,17 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         for (const message of messages.sort((a, b) => compare(a.id, b.id))) {
           if (![0, 19].includes(message.type ?? 0)) continue;
           if (message.author?.bot) {
-            const request = next.pending[ref(message)];
-            if (request && message.author.id === request.botId) {
+            // One reply often answers a burst: it closes the referenced post and the same author's earlier posts still pending for this bot.
+            const target = ref(message), replier = message.author.id;
+            const poster = next.pending[target]?.author ?? (message.referenced_message?.author?.id ? fingerprint(message.referenced_message.author.id) : undefined);
+            const answered = !target ? [] : Object.entries(next.pending).filter(([id, request]) => request.botId === replier && (id === target || (poster && request.author === poster && compare(id, target) < 0)));
+            if (answered.length) {
               const at = Date.parse(message.timestamp);
               if (Number.isFinite(at) && at <= now) {
-                const old = replies[request.botId]?.at ?? 0;
-                replies[request.botId] = { at: Math.max(old, at) };
+                const old = replies[replier]?.at ?? 0;
+                replies[replier] = { at: Math.max(old, at) };
               }
-              delete next.pending[ref(message)];
+              for (const [id] of answered) delete next.pending[id];
             }
             continue;
           }
@@ -157,7 +160,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
           if (!assigned) continue;
           const timestamp = Date.parse(message.timestamp);
           if (!Number.isFinite(timestamp)) throw new Error('invalid request timestamp');
-          next.pending[message.id] = { botId: assigned, at: timestamp, stages: {} };
+          next.pending[message.id] = { botId: assigned, author: fingerprint(message.author.id), at: timestamp, stages: {} };
         }
         if (messages.length) next.cursor = messages.at(-1).id;
         delete next.error;
