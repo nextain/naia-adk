@@ -1,0 +1,26 @@
+{
+  "cardsDir": "docs/team/cards",
+  "staleHours": 24,
+  "sinceHours": 72,
+  "requireCalendar": false,
+  "inbox": {
+    "dir": ".agents/work/l4/role-inbox",
+    "leaderIds": ["<leader-discord-or-messenger-id>"]
+  },
+  "notify": {
+    "kind": "messenger",
+    "urlEnv": "NAIA_MESSENGER_URL",
+    "tokenEnv": "NAIA_MESSENGER_TOKEN",
+    "channel": "<task-card-channel-name-or-id>",
+    "routes": {
+      "check": { "channel": "<check-summary-channel-name-or-id>" }
+    }
+  },
+  "alerts": {
+    "events": ["new", "defer", "done"],
+    "linkBase": "<optional-https-base-for-card-files>",
+    "owners": {
+      "<role>": "<messenger-name-or-discord-id>"
+    }
+  }
+}
