@@ -1,19 +1,58 @@
 #!/usr/bin/env node
 import { readFixture, collectSignals } from './lib/audit-signals.mjs';
 import { evaluate, initialState, priorityMismatch } from './lib/audit-rules.mjs';
-import { readFile, mkdir, open, unlink } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import { atomic } from './session-health.mjs';
+import { readFile, mkdir, open, unlink, realpath, lstat, rename } from 'node:fs/promises';
+import { dirname, resolve, relative, isAbsolute, sep, basename, join } from 'node:path';
 import { createDiscordApi, postDiscord } from './response-watch.mjs';
 import { deliverAudit, deliveryKey, validateDelivery } from './lib/audit-delivery.mjs';
 import { buildBundle, judge, sha256, fixedTemplate, formatText } from './lib/audit-judge.mjs';
+import { recordSchedule } from './schedule-record.mjs';
+
+async function canonical(path) {
+  if (typeof path !== 'string' || !path || !isAbsolute(path)) throw Error('absolute audit paths required');
+  let current = resolve(path), missing = [];
+  while (true) {
+    try { return join(await realpath(current), ...missing); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      // A dangling symlink must not be mistaken for an absent path.
+      try { await lstat(current); throw Error('unresolvable audit path'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+      const parent = dirname(current);
+      if (parent === current) throw Error('unresolvable audit path');
+      missing.unshift(basename(current)); current = parent;
+    }
+  }
+}
+const overlaps = (a, b) => { const r = relative(a, b); return !r || (!r.startsWith(`..${sep}`) && r !== '..' && !isAbsolute(r)); };
+async function atomic(path, text) {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = `${path}.${process.pid}.tmp`, handle = await open(tmp, 'wx', 0o600);
+  try { await handle.writeFile(text); await handle.close(); await rename(tmp, path); }
+  catch (error) { await handle.close().catch(() => {}); await unlink(tmp).catch(() => {}); throw error; }
+}
+export async function validateAuditPaths(config, extraSessionDirs = []) {
+  if (!Array.isArray(config.roles) || !config.roles.length || config.roles.some(r => !Array.isArray(r.sessionDirs) || !r.sessionDirs.length)) throw Error('session directories required');
+  if (typeof config.schedule?.id !== 'string' || !config.schedule.id) throw Error('schedule id required');
+  const outputs = [config.stateFile, config.reportFile, config.schedule.file, ...config.roles.map(r => r.wakeDir)];
+  const derived = [config.stateFile, config.reportFile, config.schedule.file].flatMap(p => typeof p === 'string' ? [`${p}.lock`, `${p}.${process.pid}.tmp`] : []);
+  const roots = await Promise.all(outputs.map(canonical));
+  const sessions = await Promise.all([...config.roles.flatMap(r => r.sessionDirs), ...extraSessionDirs].map(canonical));
+  for (let i = 0; i < roots.length; i++) {
+    if (sessions.some(s => overlaps(s, roots[i]) || overlaps(roots[i], s))) throw Error('audit output overlaps session directory');
+    if (roots.some((p, j) => i !== j && (overlaps(p, roots[i]) || overlaps(roots[i], p)))) throw Error('audit outputs overlap');
+  }
+  for (let i = 0; i < derived.length; i++) {
+    const p = await canonical(derived[i]);
+    if (sessions.some(s => overlaps(s, p) || overlaps(p, s)) || roots.some((r, j) => j !== Math.floor(i / 2) && (overlaps(r, p) || overlaps(p, r)))) throw Error('audit temporary path overlaps protected path');
+  }
+}
 
 export async function runFixture({ fixture, input: suppliedInput, from, to, step = 30 * 60000, evidence, verifyEvidence, config = { judge: { runner: 'none' } }, configBytes, executable, priority, role = 'role', state: previousState }) {
   const input = suppliedInput ?? await readFixture(fixture);
   const prompt = await readFile(new URL('../prompts/session-audit.md', import.meta.url), 'utf8');
   const configHash = sha256(configBytes ?? JSON.stringify(config)), promptHash = sha256(prompt);
   const header = { configHash: configHash.slice(0, 8), promptHash: promptHash.slice(0, 8) };
-  const options = { evidence: evidence ?? input.ledger?.evidence ?? [], verifyEvidence };
+  const options = { ...(config.thresholds ?? {}), evidence: evidence ?? input.ledger?.evidence ?? [], verifyEvidence };
   let state = structuredClone(previousState ?? initialState()), last; const timeline = [], texts = [], outputs = [];
   for (let at = from; at <= to; at += step) {
     const signals = collectSignals(input, { now: at });
@@ -58,6 +97,8 @@ function validateState(state) {
 }
 // The delivery journal records intent before I/O so a crash cannot silently resend.
 export async function runAudit({ config, role: roleId, fixture, input, now = Date.now(), sender, token, fetchImpl = fetch, channelMessages, verifyEvidence, priority, configBytes } = {}) {
+  await validateAuditPaths(config, fixture ? [resolve(fixture)] : []);
+  if (config.hold === true) throw Error('HOLD output is outside permitted audit paths');
   const role = config.roles?.find(r => r.id === roleId);
   if (!role || typeof config.stateFile !== 'string' || !config.stateFile || typeof config.reportFile !== 'string' || !config.reportFile) throw Error('missing audit role or files');
   const transport = sender ?? (token ? item => postDiscord(createDiscordApi(fetchImpl, token), item) : undefined);
@@ -145,4 +186,19 @@ async function main(args) {
     for (const e of result.timeline) console.log(`${new Date(e.at).toISOString()} ${e.stage} ${e.code}${e.target ? `:${e.target}` : ''}`);
   } else console.log(JSON.stringify({ header: result.header, unreadableInputs: result.unknown.length, ...result }, null, 2));
 }
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) main(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });
+async function recordedMain(args) {
+  const index = args.indexOf('--config');
+  let config;
+  try {
+    if (index < 0 || !args[index + 1]) throw Error('configuration required for schedule record');
+    config = JSON.parse(await readFile(args[index + 1], 'utf8'));
+    const fixtureIndex = args.indexOf('--fixture');
+    await validateAuditPaths(config, fixtureIndex >= 0 && args[fixtureIndex + 1] ? [resolve(args[fixtureIndex + 1])] : []);
+  } catch (error) { console.error(`schedule record unavailable: ${error.message}`); return 2; }
+  let failed = false;
+  try { await main(args); } catch (error) { failed = true; console.error(error.message); }
+  try { await recordSchedule(config.schedule.file, config.schedule.id, failed ? 'failed' : 'success'); }
+  catch (error) { console.error(`schedule record failed: ${error.message}`); return 2; }
+  return failed ? 1 : 0;
+}
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) recordedMain(process.argv.slice(2)).then(code => { process.exitCode = code; });

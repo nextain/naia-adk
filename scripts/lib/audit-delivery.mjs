@@ -1,8 +1,14 @@
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { writeWakeFile } from '../agent-request-watch.mjs';
+import { mkdir, open, rename, unlink } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { fixedTemplate } from './audit-judge.mjs';
+
+async function writeWakeFile(path, content) {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = `${path}.${process.pid}.tmp`, file = await open(tmp, 'wx', 0o600);
+  try { await file.writeFile(content); await file.close(); await rename(tmp, path); }
+  catch (error) { await file.close().catch(() => {}); await unlink(tmp).catch(() => {}); throw error; }
+}
 
 const digest = value => createHash('sha256').update(value).digest('hex').slice(0, 24);
 const safeName = value => typeof value === 'string' && /^[\p{L}\p{N}_.-]+$/u.test(value) && value !== '.' && value !== '..';
@@ -20,6 +26,7 @@ export function reportChannel(config, now) {
   return (start < end ? hour >= start && hour < end : hour >= start || hour < end) ? config.channels.night : config.channels.day;
 }
 export function validateDelivery(config, role, now, hashes) {
+  if (config.hold === true) throw Error('HOLD output is outside permitted audit paths');
   if ((config.senderBotId !== undefined && !isId(config.senderBotId)) || !safeName(role?.id) || !Array.isArray(role.botIds) || !role.botIds.length || !role.botIds.every(isId) || !isId(config.ownerId) || (role.leaderId && !isId(role.leaderId))) throw Error('invalid audit recipients');
   if (![config.channels?.internal, config.channels?.day, config.channels?.night].every(isId)) throw Error('invalid audit channels');
   if (!Number.isFinite(now) || !Number.isInteger(config.dailyCap ?? 6) || (config.dailyCap ?? 6) < 1 || !hashes.every(h => typeof h === 'string' && /^[0-9a-f]{8,64}$/i.test(h))) throw Error('invalid audit delivery settings');
@@ -88,11 +95,6 @@ export async function deliverAudit({ role, events = [], config, state, reportPat
       } catch { next.episodes[key] = { status: 'uncertain', at: now }; report.push('깨움 파일 쓰기 실패: 수동 확인 필요'); await save(next); await capReport(); continue; }
     }
     await post({ channelId, content, mentions, stage: event.stage }, key);
-    if (config.hold === true && !dry) {
-      const dir = join(config.workspace, '.agents', 'work', 'audit');
-      await mkdir(dir, { recursive: true, mode: 0o700 });
-      try { await writeFile(join(dir, `HOLD-${role.id}-${event.code}`), `${content}\n`, { mode: 0o600, flag: 'wx' }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
-    }
     await capReport();
   }
   if (capSkipped.size) report.push(`상한으로 보류 ${capSkipped.size}건`);

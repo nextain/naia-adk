@@ -18,8 +18,8 @@ const report = { ...warn, stage: 'report', at: at + 3600000 };
 async function setup(t, overrides = {}) {
   const workspace = await mkdtemp(join(tmpdir(), 'audit-delivery-test-'));
   t.after(() => rm(workspace, { recursive: true, force: true }));
-  const role = { id: 'role', wakeDir: join(workspace, 'wake'), botIds: [bot], leaderId: leader };
-  const config = { workspace, dry: false, timezone: 'UTC', night: { start: 0, end: 9 }, channels: { internal, day, night }, ownerId: owner, ...overrides };
+  const role = { id: 'role', wakeDir: join(workspace, 'wake'), sessionDirs: [join(workspace, 'session')], botIds: [bot], leaderId: leader };
+  const config = { workspace, schedule: { file: join(workspace, 'schedule.yaml'), id: 'session-audit' }, dry: false, timezone: 'UTC', night: { start: 0, end: 9 }, channels: { internal, day, night }, ownerId: owner, ...overrides };
   const sent = [];
   const sender = async message => { sent.push(message); return { id: String(sent.length) }; };
   const args = { role, config, reportPath: join(workspace, 'report.md'), configHash, promptHash, now: at, sender };
@@ -147,7 +147,7 @@ test('report channel follows configured timezone and the fixed day/night boundar
 
 test('dry mode and missing sender create no wake or HOLD files and report proposed sends', async t => {
   for (const mode of ['dry', 'missing']) {
-    const { args, sent } = await setup(t, { dry: mode === 'dry', hold: true });
+    const { args, sent } = await setup(t, { dry: mode === 'dry' });
     if (mode === 'missing') delete args.sender;
     const result = await deliverAudit({ ...args, events: [warn, report] });
     assert.equal(sent.length, 0);
@@ -166,14 +166,11 @@ test('recovery is reported locally and sends no message or wake file', async t =
   await assert.rejects(readdir(args.role.wakeDir), { code: 'ENOENT' });
 });
 
-test('HOLD is created only when explicitly enabled', async t => {
-  for (const enabled of [false, true]) {
-    const { args } = await setup(t, { hold: enabled });
-    await deliverAudit({ ...args, events: [warn] });
-    const path = join(args.config.workspace, '.agents', 'work', 'audit', 'HOLD-role-repeat-review');
-    if (enabled) assert.match(await readFile(path, 'utf8'), /^\[감사\]/);
-    else await assert.rejects(readFile(path), { code: 'ENOENT' });
-  }
+test('HOLD is rejected before delivery because its path is outside audit outputs', async t => {
+  const { args, sent } = await setup(t, { hold: true });
+  await assert.rejects(deliverAudit({ ...args, events: [warn] }), /HOLD/);
+  assert.equal(sent.length, 0);
+  await assert.rejects(readdir(args.role.wakeDir), { code: 'ENOENT' });
 });
 
 test('T5 a continuing code sends only warning and report across repeated runs and state reloads', async t => {
@@ -197,7 +194,7 @@ test('T5 a continuing code sends only warning and report across repeated runs an
 });
 
 test('interruption after the first of multiple sends resumes only the remaining event', async t => {
-  const { args, sent } = await setup(t, { hold: true });
+  const { args, sent } = await setup(t);
   const config = { ...args.config, roles: [args.role], stateFile: join(args.config.workspace, 'state.json'), reportFile: args.reportPath, judge: { runner: 'none' } };
   const input = await readFixture('scripts/test/fixtures/session-audit/case-normal');
   input.reviews.plans = [];
@@ -209,13 +206,11 @@ test('interruption after the first of multiple sends resumes only the remaining 
   input.ledger.rows = [];
   const now = Date.parse('2026-11-12T04:00:00Z');
   await runAudit({ config, role: 'role', input, now, sender: args.sender });
-  const workDir = join(config.workspace, '.agents', 'work');
-  await mkdir(workDir, { recursive: true });
-  const obstruction = join(workDir, 'audit');
-  await writeFile(obstruction, 'fixture');
-  await assert.rejects(runAudit({ config, role: 'role', input, now: now + 1800000, sender: args.sender }));
+  const obstruction = `${config.stateFile}.${process.pid}.tmp`;
+  const failingSender = async message => { const receipt = await args.sender(message); await mkdir(obstruction); return receipt; };
+  await assert.rejects(runAudit({ config, role: 'role', input, now: now + 1800000, sender: failingSender }));
   assert.equal(sent.length, 1);
-  await unlink(obstruction);
+  await rm(obstruction, { recursive: true });
   await runAudit({ config, role: 'role', input, now: now + 1800000, sender: args.sender });
   assert.equal(sent.length, 2);
   assert.equal(new Set(sent.map(item => item.nonce)).size, 2);
