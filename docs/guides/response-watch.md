@@ -57,11 +57,15 @@ stay pending. Configure the executor to reference the newest post it answers.
 Bot chatter, unreferenced bot posts and another bot's reply do not prove
 response, with one exception: a post assigned only by the `all-human` fallback
 (no mention, no role, no reply reference) names no recipient, so it is stored
-with `via: "fallback"` and any bot's explicit reply closes it under the same
-burst rule. When the same author then posts within `burstMinutes` a message that
-mentions a user or role, that message re-addresses the burst and the author's
-earlier fallback posts stop waiting; a direct mention of the expected bot is
-tracked as its own request. A receipt may acknowledge
+with `via: "fallback"`. Another bot's explicit reply closes it under the same
+burst rule only when that reply references a post that is itself pending; a
+reply to an untracked post closes nothing for other bots. When the same author
+then posts within `burstMinutes` a message that mentions a bot user or a
+configured role, that message re-addresses the burst and the author's earlier
+fallback posts stop waiting; mentioning a person does not. A direct mention of
+the expected bot is tracked as its own request; a mention of a bot that no role
+maps to is not watched. Pending rows stored before `via` existed do not carry
+it and keep the strict rule until they are answered or removed. A receipt may acknowledge
 an unfinished task; assess the actual work result separately.
 
 ## State, failures and recovery

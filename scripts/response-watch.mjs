@@ -142,8 +142,8 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
             // Only posts within burstMinutes before the referenced post count as the same burst, so an unrelated older question stays pending.
             const targetAt = next.pending[target]?.at ?? Date.parse(message.referenced_message?.timestamp ?? message.timestamp);
             const since = Number.isFinite(targetAt) ? targetAt - (config.thresholds?.burstMinutes ?? 10) * 60000 : Infinity;
-            // A post assigned only by the all-human fallback names no recipient, so any bot's reply answers it.
-            const answered = !target ? [] : Object.entries(next.pending).filter(([id, request]) => (request.botId === replier || request.via === 'fallback') && (id === target || (poster && request.author === poster && compare(id, target) < 0 && request.at >= since)));
+            // A post assigned only by the all-human fallback names no recipient, so another bot's reply answers it when that reply references a pending post.
+            const answered = !target ? [] : Object.entries(next.pending).filter(([id, request]) => (request.botId === replier || (request.via === 'fallback' && next.pending[target])) && (id === target || (poster && request.author === poster && compare(id, target) < 0 && request.at >= since)));
             if (answered.length) {
               const at = Date.parse(message.timestamp);
               if (Number.isFinite(at) && at <= now) {
@@ -166,8 +166,9 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
           const assigned = [...candidates][0] ?? (fallback ? botId : undefined);
           const timestamp = Date.parse(message.timestamp);
           const author = fingerprint(message.author.id);
-          // Naming a recipient right after an unaddressed post ("now" then "@other now") re-addresses that burst, so its fallback posts stop waiting.
-          if ((mentions.length || roles.length) && Number.isFinite(timestamp)) {
+          // Naming an agent right after an unaddressed post ("now" then "@other now") re-addresses that burst, so its fallback posts stop waiting.
+          // Mentioning a person does not: "thanks @friend" leaves the question pending.
+          if ((mentions.some(user => user.bot) || roles.length) && Number.isFinite(timestamp)) {
             const since = timestamp - (config.thresholds?.burstMinutes ?? 10) * 60000;
             for (const [id, request] of Object.entries(next.pending)) if (request.via === 'fallback' && request.author === author && request.at >= since && compare(id, message.id) < 0) delete next.pending[id];
           }

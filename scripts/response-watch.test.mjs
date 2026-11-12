@@ -200,6 +200,16 @@ test('fallback posts close on any bot\'s reply or when the author names a recipi
   const state = await run(32); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['8']);
   assert.equal(state.channels['10/30'].pending['8'].via, undefined);
 });
+test('a person mention, a mention outside burstMinutes and another bot\'s reply to an untracked post leave fallback posts pending', async () => {
+  const { remote, run } = await fixture(); await run();
+  const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes, extra = {}) => human(id, { mentions: [], timestamp: at(minutes), ...extra });
+  remote.messages.push(plain(2, 0), plain(3, 1, { mentions: [{ id: '99' }] }));
+  remote.messages.push(plain(4, 20), plain(5, 40, { mentions: [{ id: '21', bot: true }] }));
+  remote.messages.push(plain(6, 50), plain(7, 51, { message_reference: { message_id: '1' } }), human(8, { author: { id: '21', bot: true }, message_reference: { message_id: '7' }, referenced_message: { id: '7', author: { id: '40' }, timestamp: at(51) }, timestamp: at(52) }));
+  let state = await run(52); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['2', '4', '6']);
+  remote.messages.push(human(9, { author: { id: '21', bot: true }, message_reference: { message_id: '6' }, timestamp: at(53) }));
+  state = await run(53); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['2', '4']);
+});
 test('reply to an unwatched post closes its author\'s earlier requests; requests stored before author tracking need their own reply', async () => {
   const { config, remote, run } = await fixture(); await run();
   remote.messages.push(human(2, { mentions: [] }), human(3, { mentions: [], message_reference: { message_id: '1' } }));
