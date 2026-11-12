@@ -30,16 +30,16 @@ PC 미확인. systemd 버전, Linger, 절전 복귀 후 달력 타이머와 Node
 
 ## W4 켜기 전 필수 조건
 
-이 저장소에는 work-watch 구현이 없다. 운영 work-watch에 `alpha-wwtimer`의 `2c3b31fcb` 수정본을 적용하고 실행 중인 감시 프로세스에도 반영해야 한다. 역방향 `Triggers` 확인과 시작 시점 `TriggeredBy` 보존이 빠져 있으면 W4를 켜지 않는다. 운영 검증에서 정시 타이머 발화 후 정시 깨움 하나만 생기고 별도의 작업 완료 깨움이 생기지 않는지 확인한다. 파일 검사만으로 실행 중인 코드나 실제 깨움 결과를 증명할 수 없으므로 이 두 검증은 운영자가 직접 수행한다.
+이 저장소에는 work-watch 구현이 없다. **work-watch에 `adk-due-*`와 `adk-sched-*` 제외가 들어가기 전에는 enable을 금지한다.** 운영 work-watch에 `alpha-wwtimer`의 `2c3b31fcb` 수정본을 적용하고 실행 중인 감시 프로세스에도 반영해야 한다. 역방향 `Triggers` 확인과 시작 시점 `TriggeredBy` 보존이 빠져 있으면 W4를 켜지 않는다. 운영 검증에서 정시 타이머 발화 후 정시 깨움 하나만 생기고 별도의 작업 완료 깨움이 생기지 않는지 확인한다. 파일 검사만으로 실행 중인 코드나 실제 깨움 결과를 증명할 수 없으므로 이 두 검증은 운영자가 직접 수행한다.
 
-확인 후 운영자가 증빙 JSON에 실제 실행 파일의 `realpath`와 SHA-256을 기록하고, 실행 중인 코드 확인과 추가 깨움 없음 확인을 각각 `true`로 기록한다. 예: `{"work_watch_path":"/absolute/path/work-watch.mjs","work_watch_sha256":"<sha256>","running_code_verified":true,"no_extra_completion_wake_verified":true}`. `node scripts/work-ledger/enable-due-timer.mjs --config /absolute/path/work-ledger.json --work-watch /absolute/path/work-watch.mjs --evidence /absolute/path/evidence.json`으로 켠다. 명령은 증빙의 경로·해시와 지정된 수정본의 파일 해시를 대조하고 모든 항목이 맞을 때만 설정을 바꾼다. 수정본의 바이트가 다른 후속 버전은 이 검사에서 거부되므로 동등성 검증과 검사 갱신이 먼저 필요하다. JSON을 직접 편집해 이 조건을 우회하지 않는다.
+확인 후 운영자가 증빙 JSON에 실제 실행 파일의 `realpath`와 SHA-256을 기록하고, 실행 중인 코드 확인과 추가 깨움 없음 확인을 각각 `true`로 기록한다. 예: `{"work_watch_path":"/absolute/path/work-watch.mjs","work_watch_sha256":"<sha256>","running_code_verified":true,"no_extra_completion_wake_verified":true}`. `node scripts/work-ledger/enable-due-timer.mjs --config /absolute/path/work-ledger.json --work-watch /absolute/path/work-watch.mjs --evidence /absolute/path/evidence.json`으로 켠다. 명령은 증빙의 경로·해시와 지정된 수정본의 파일 해시를 대조하고 모든 항목이 맞을 때만 설정을 바꾼다. 수정본의 바이트가 다른 후속 버전은 이 검사에서 거부되므로 동등성 검증과 검사 갱신이 먼저 필요하다. 명령은 설정 내용의 SHA-256, 승인된 감시 대본 해시, 켠 시각, 활성화 대본 SHA-256을 설정 옆 증빙 사이드카에 기록한다. 사이드카가 없거나 설정 내용이 달라지면 맞추기와 발화를 거부한다. 설정을 변경한 뒤에는 검증을 다시 거쳐 켠다. 사이드카는 서명이 아니므로 파일 쓰기 권한 자체를 통제해야 한다.
 
 ## 운영·되돌리기
 
-설정의 `due_timer.enabled`를 `false`로 바꾼 다음 `node scripts/work-ledger/due-timer.mjs clear --root <작업공간> --config <설정>`을 실행한다. `clear`와 `disarm`은 꺼진 상태에서도 이 작업공간의 타이머를 정리하며 새 타이머는 만들지 않는다. 각 장치의 오류는 나머지 정리를 계속한 후 합산해 보고한다. 설정에서 역할을 제거하면 다음 전체 순회에서 그 역할의 장치를 정리한다. 설정에는 있으나 장부를 읽을 수 없는 역할의 장치는 보존하고 경고한다. 타이머 조정 잠금을 10초 안에 얻지 못하면 장부 변경은 유지하고 다음 순회에서 다시 조정한다. 역할명은 최대 240자다.
+설정의 `due_timer.enabled`를 `false`로 바꾼 다음 `node scripts/work-ledger/due-timer.mjs clear --root <작업공간> --config <설정>`을 실행한다. `clear`와 `disarm`은 꺼진 상태에서도 이 작업공간의 타이머를 정리하며 새 타이머는 만들지 않는다. 각 장치의 오류는 나머지 정리를 계속한 후 합산해 보고한다. 구형 이름의 장치는 보고만 하며, 정리가 필요하면 `clear --include-legacy`로 이 작업공간의 구형 장치까지 명시적으로 지운다. 설정에서 역할을 제거하면 다음 전체 순회에서 그 역할의 장치를 정리한다. 설정에는 있으나 장부를 읽을 수 없는 역할의 장치는 보존하고 경고한다. 타이머 조정 잠금을 10초 안에 얻지 못하면 장부 변경은 유지하고 다음 순회에서 다시 조정한다. 역할명은 최대 240자다.
 
 `due_timer.after_fire`는 셸을 거치지 않는 명령 인자 배열이지만 설정 작성자는 이 사용자 권한으로 임의 명령을 실행할 수 있다. 설정 파일과 그 경로는 신뢰할 수 있는 사용자만 소유·수정하도록 제한하고, 인자에 토큰이나 민감값을 넣지 않는다. 후속 명령이 실패해도 깨움은 이미 기록됐으므로 발화를 재호출하지 말고 운영자가 후속 전달 프로그램을 직접 확인하고 수동으로 실행한다.
 
-중복 방지를 위해 깨움 전에 영수증을 기록한다. 그 직후 깨움 파일 작성 전 종료 또는 작성 실패가 나면 최초 깨움이 빠질 수 있고, 항목이 열려 있으면 순회가 30분 후 다시 시도한다. 실패 로그와 깨움 디렉터리를 확인해 필요하면 운영자가 수동으로 전달한다.
+중복 방지를 위해 깨움 전에 영수증을 기록한다. 파일 작성 실패는 영수증을 `claimed`로 되돌려 순회에서 복구한다. 장부 잠금 획득 실패는 `failed`로 기록하고 순회가 `정한 시각` 사유로 다시 깨운다. 영수증 기록 직후 프로세스가 강제 종료되면 깨움 없이 `sent`가 남을 수 있으므로 실패 로그와 깨움 디렉터리를 확인한다.
 
 시험 시 작업 트리 안에 `systemctl`, `systemd-run`을 차단하는 가짜 실행 파일을 두고 그 디렉터리를 `PATH` 맨 앞에 둔다. `TMPDIR`도 작업 트리 안으로 지정하고 실행기를 주입한다. `NODE_TEST_CONTEXT` 또는 `ADK_FORBID_SYSTEM_RUNNER=1`에서는 기본 실행기가 호출을 거부한다.

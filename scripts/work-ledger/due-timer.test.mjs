@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { approveFixture } from './due-test-helper.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
@@ -14,6 +15,7 @@ const ledger = (items = [item()], role = 'a') => ({ role, items });
 const setup = async t => {
   const dir = await mkdtemp(path.join(tmpdir(), 'timer-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
+  await approveFixture(dir, config);
   return dir;
 };
 function fake(existing = []) {
@@ -122,7 +124,9 @@ test('list and clear select only this root; bad properties fail closed', async t
   assert.ok(f.calls.some(x => x.args.includes('stop') && x.args.includes(mine)));
   const invalid = async (_, args) => args.includes('list-units') ? `${mine} loaded active waiting` : 'unknown';
   assert.equal(await clear({ root: dir, config, runner: invalid }), 1);
-  await assert.rejects(list({ root: dir, config, runner: invalid }), /calendar/);
+  const warnings = [];
+  assert.deepEqual(await list({ root: dir, config, runner: invalid, warnings }), []);
+  assert.match(warnings.join(' '), /calendar/);
 });
 
 test('cap counts timers for all roles in same root', () => {

@@ -169,11 +169,11 @@ export async function watch({
         return cleaned ? `${cleaned}-${hex}` : `id-${hex}`;
       }
     }
-    async function wake(role, id, reason, title, details = "", dedupKey) {
+    async function wake(role, id, reason, title, details = "", dedupKey, force = false) {
       safeName(role);
       safeName(id);
       const key = dedupKey || JSON.stringify([role, id, reason]);
-      if (state.sent[key] !== undefined && now - state.sent[key] < 30 * 60000)
+      if (!force && state.sent[key] !== undefined && now - state.sent[key] < 30 * 60000)
         return;
       const stamp = new Date(now + sequence++).toISOString().replace(/\D/g, "");
       const route = `-route-${role}.md`;
@@ -207,7 +207,9 @@ export async function watch({
     if (!Array.isArray(config.roles) || !config.roles.length)
       throw new Error("Configuration requires roles");
     for (const roleConfig of config.roles) {
-      const role = safeName(roleConfig.role);
+      let role;
+      try { role = safeName(roleConfig.role); if (role.length > 240) throw new Error("Role too long"); }
+      catch (error) { warnings.push(`ledger:${roleConfig?.role}: ${error.message}`); continue; }
       if (stateError) {
         errors.push(stateError);
         await wake(role, "watch-error", "감시 실패", stateError);
@@ -244,10 +246,13 @@ export async function watch({
         const details = `출처: ${item.from.channel}/${item.from.msg_id}\n기한: ${item.due}\n결과: ${item.worker?.result || "(없음)"}`;
         if (item.status === "open" && Date.parse(item.due) < now) {
           const key = JSON.stringify([role, item.id, "기한 넘음", item.due]);
-          if (config.due_timer?.enabled === true) {
+          let failedReceipt = false;
+          try { failedReceipt = JSON.parse(await readFile(receiptPath(root, role, item.id, item.due), "utf8")).status === "failed"; }
+          catch (error) { if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
+          if (config.due_timer?.enabled === true || failedReceipt) {
             const emitted = await dueWake({ root, role, id: item.id, due: item.due, now, source: "watch", lastSent: state.sent[key],
-              emit: (latest) => wake(role, latest.id, "기한 넘음", latest.title,
-                `출처: ${latest.from.channel}/${latest.from.msg_id}\n기한: ${latest.due}\n결과: ${latest.worker?.result || "(없음)"}\n늦음 ${Math.floor((now - Date.parse(latest.due)) / 60000)}분`, key) });
+              emit: (latest, status) => wake(role, latest.id, status === "failed" ? "정한 시각" : "기한 넘음", latest.title,
+                `출처: ${latest.from.channel}/${latest.from.msg_id}\n기한: ${latest.due}\n결과: ${latest.worker?.result || "(없음)"}\n늦음 ${Math.floor((now - Date.parse(latest.due)) / 60000)}분`, key, status === "failed") });
             if (emitted) state.sent[JSON.stringify([role, item.id, "기한 넘음"])] = now;
           } else {
             // A timer may have fired just before the feature was disabled.

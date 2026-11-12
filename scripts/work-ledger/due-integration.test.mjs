@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { approveFixture } from './due-test-helper.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -15,6 +16,7 @@ async function setup(t, conf = config) {
   t.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, 'config'));
   await writeFile(path.join(root, 'config/work-ledger.json'), JSON.stringify(conf));
+  if (conf.due_timer?.enabled) await approveFixture(root, conf);
   return root;
 }
 function systemFake() {
@@ -104,7 +106,7 @@ test('fallback distinguishes changed due and supports long ids', async t => {
 test('custom config is passed to the scheduled fire and controls post-fire command', async t => {
   const root = await setup(t), f = systemFake();
   const custom = path.join(root, 'config/custom path.json');
-  await writeFile(custom, JSON.stringify({ ...config, due_timer: { enabled: true, after_fire: ['/fake/pump', 'literal'] } }));
+  await approveFixture(root, { ...config, due_timer: { enabled: true, after_fire: ['/fake/pump', 'literal'] } }, custom);
   await ledgerMain(add(root, ['--config', custom]), { runner: f.runner, now });
   const launch = f.calls.find(c => c.cmd === 'systemd-run');
   assert.equal(launch.args[launch.args.indexOf('--config') + 1], custom);
@@ -158,7 +160,7 @@ test('concurrent changes reconcile the latest saved due last', async t => {
 test('switching config paths replaces an otherwise unchanged timer', async t => {
   const root = await setup(t), f = systemFake();
   const custom = path.join(root, 'config/other.json');
-  await writeFile(custom, JSON.stringify(config));
+  await approveFixture(root, config, custom);
   await ledgerMain(add(root), { runner: f.runner, now });
   await watch({ root, config, configPath: custom, runner: f.runner, now });
   assert.equal(f.calls.filter(c => c.args.includes('stop')).length, 1);
@@ -226,6 +228,7 @@ test('switching timer mode preserves a recorded fallback for the same due', asyn
   const root = await setup(t, { roles: config.roles }), f = systemFake();
   await ledgerMain(add(root, ['--due', '2026-11-12T11:00:00Z']), { now, runner: f.runner });
   assert.equal((await watch({ root, config: { roles: config.roles }, now, runner: f.runner })).wakes.length, 1);
+  await approveFixture(root, config);
   assert.equal((await watch({ root, config, now: now + 60000, runner: f.runner })).wakes.length, 0);
   assert.equal((await watch({ root, config, now: now + 30 * 60000, runner: f.runner })).wakes.length, 1);
   assert.equal((await watch({ root, config: { roles: config.roles }, now: now + 31 * 60000, runner: f.runner })).wakes.length, 0);

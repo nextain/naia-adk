@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { approveFixture } from './due-test-helper.mjs';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -14,6 +15,7 @@ async function setup(t) {
   const root = await mkdtemp(path.join(tmpdir(), 'due-fire-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await main(['add', '--root', root, '--role', 'a', '--id', 'job', '--title', '일', '--due', due, '--channel', 'c', '--msg-id', 'm']);
+  await approveFixture(root, config);
   return root;
 }
 const wakes = root => readdir(path.join(root, '.agents/work/l4/wake')).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error));
@@ -110,6 +112,7 @@ test('post-fire command uses injected argv runner exactly once, including failur
   const calls = [];
   const runner = async (...args) => { calls.push(args); throw Error('post failed'); };
   const conf = { due_timer: { enabled: true, after_fire: ['/safe/wake', 'arg;literal'] } };
+  await approveFixture(root, conf);
   await assert.rejects(runFire(root, { config: conf, runner }), /post failed/);
   assert.equal(await runFire(root, { config: conf, runner }), false);
   assert.equal(calls.length, 1);
@@ -155,12 +158,13 @@ test('watch can also route an overdue item for a 240-character role', async t =>
   assert.match(name, new RegExp(`-route-${role}\\.md$`));
 });
 
-test('a crash after delivery cannot be recovered as a duplicate', async t => {
+test('an emit error after side effects is surfaced and recovered by watch', async t => {
   const root = await setup(t);
   await assert.rejects(dueWake({ root, role: 'a', id: 'job', due, now,
     emit: async () => { await writeFile(path.join(root, 'delivered'), 'wake'); throw Error('simulated crash'); } }), /simulated crash/);
   assert.equal(await readFile(path.join(root, 'delivered'), 'utf8'), 'wake');
-  assert.equal((await runWatch(root)).wakes.length, 0);
+  assert.equal(JSON.parse(await readFile(receiptPath(root, 'a', 'job', due))).status, 'claimed');
+  assert.equal((await runWatch(root)).wakes.length, 1);
   assert.equal(JSON.parse(await readFile(receiptPath(root, 'a', 'job', due))).status, 'sent');
 });
 

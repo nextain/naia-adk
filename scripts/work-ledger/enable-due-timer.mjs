@@ -26,12 +26,18 @@ export async function enableDueTimer({ configPath, watchPath, evidencePath, expe
   }
   config.due_timer = { ...config.due_timer, enabled: true };
   const mode = (await stat(configFile)).mode & 0o777;
+  const content = `${JSON.stringify(config, null, 2)}\n`;
+  const proof = { config_sha256: createHash('sha256').update(content).digest('hex'), approved_watch_sha256: watchHash, enabled_at: new Date().toISOString(), enable_script_sha256: createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex') };
+  const proofFile = `${configFile}.due-timer-proof.json`;
+  const proofTemp = `${proofFile}.${randomUUID()}.tmp`;
   const temp = `${configFile}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temp, `${JSON.stringify(config, null, 2)}\n`, { flag: 'wx', mode });
+    await writeFile(temp, content, { flag: 'wx', mode });
+    await writeFile(proofTemp, `${JSON.stringify(proof, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+    await rename(proofTemp, proofFile);
     await rename(temp, configFile);
   } catch (error) {
-    if (error.code !== 'EEXIST') await unlink(temp).catch(() => {});
+    if (error.code !== 'EEXIST') { await unlink(temp).catch(() => {}); await unlink(proofTemp).catch(() => {}); }
     throw error;
   }
   return configFile;

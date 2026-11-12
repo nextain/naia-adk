@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { realpath, readFile, mkdir, writeFile, readdir, stat, unlink } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -114,14 +114,14 @@ async function listNames({ root, runner }) {
   const output = await runner('systemctl', ['--user', 'list-units', '--all', '--type=timer', '--no-legend', '--plain', '--no-pager'], { env: runtimeEnv() });
   return String(output).split('\n').map(line => line.trim().split(/\s+/)[0]).filter(unit => unit.startsWith(rootPrefix(root)) && unit.endsWith('.timer'));
 }
-export async function list({ root, config, runner = systemRunner }) {
+export async function list({ root, config, runner = systemRunner, warnings = [], skippedUnits = new Set() }) {
   if (!enabled(config)) return [];
   root = await canonicalRoot(root);
   const units = await listNames({ root, runner });
   const timers = [];
   for (const unit of units) {
-    // An unknown or disappearing unit makes reconciliation fail safely. Never
-    // infer absence from a failed show, which could otherwise cause deletion.
+    try {
+    if (!/^adk-due-[a-f0-9]{8}-[a-f0-9]{16}-[a-zA-Z0-9_-]+\.timer$/.test(unit)) throw new Error('Legacy unit; use clear --include-legacy true');
     const value = await runner('systemctl', ['--user', 'show', unit, '--property=TimersCalendar', '--value'], { env: runtimeEnv() });
     const service = unit.slice(0, -6) + '.service';
     const argv = await runner('systemctl', ['--user', 'show', service, '--property=ExecStart', '--value'], { env: runtimeEnv() });
@@ -131,6 +131,7 @@ export async function list({ root, config, runner = systemRunner }) {
     const originalDue = matches.length === 1 && validDate(matches[0]) ? matches[0] : null;
     const tags = values('--config-tag');
     timers.push({ unit, due: parseCalendar(String(value)), originalDue, configTag: tags.length === 1 && /^[a-f0-9]{64}$/.test(tags[0]) ? tags[0] : null });
+    } catch (error) { skippedUnits.add(unit); warnings.push(`${unit}: ${error.message}`); }
   }
   return timers;
 }
@@ -149,20 +150,23 @@ export const timerLockPath = root => path.join(root, '.agents/work/ledger/due-ti
 export async function arm({ root, role, id, due, config, configPath, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, fire: fireHandler }) {
   if (!enabled(config)) return false;
   root = await canonicalRoot(root);
+  if (!await proofValid(root, config, configPath)) throw Error(proofWarning);
   configPath = await canonicalConfig(root, configPath);
   const at = clock();
   const unit = unitName(root, role, id);
   return withLock(timerLockPath(root), async () => {
-    const timers = await list({ root, config, runner });
+    const listWarnings = [], skippedUnits = new Set();
+    const timers = await list({ root, config, runner, warnings: listWarnings, skippedUnits });
+    if (skippedUnits.has(unit)) throw Error(listWarnings.join('; '));
     const actions = plan({ root, ledgers: [{ role, items: [{ id, due, status: 'open' }] }], timers, now: at, horizonMs: (config.due_timer.horizon_hours ?? 24) * HOUR, onlyUnits: new Set([unit]), configTag: hash(configPath) });
-    const warnings = await executePlan({ root, config, configPath, actions, runner, now: at, fire: fireHandler ?? (entry => fire({ root, config, runner, now: at, ...entry })) });
-    if (warnings.length) throw new Error(warnings.join('; '));
+    const warnings = await executePlan({ root, config, configPath, actions, runner, now: at, fire: fireHandler ?? (entry => fire({ root, config, configPath, runner, now: at, ...entry })) });
+    if (warnings.length || listWarnings.length) throw new Error([...listWarnings, ...warnings].join('; '));
     return actions.some(action => action.type === 'arm' || action.type === 'fire');
   });
 }
-async function stopUnit({ root, unit, config, runner = systemRunner }) {
+async function stopUnit({ root, unit, config, includeLegacy = false, runner = systemRunner }) {
   root = await canonicalRoot(root);
-  if (typeof unit !== 'string' || !/^adk-due-[a-f0-9]{8}-[a-f0-9]{16}-[a-zA-Z0-9_-]+\.timer$/.test(unit) || !unit.startsWith(rootPrefix(root))) throw new Error('Timer outside root');
+  if (typeof unit !== 'string' || !unit.startsWith(rootPrefix(root)) || !(includeLegacy ? /^adk-due-[a-f0-9]{8}-[a-zA-Z0-9_-]+\.timer$/ : /^adk-due-[a-f0-9]{8}-[a-f0-9]{16}-[a-zA-Z0-9_-]+\.timer$/).test(unit)) throw new Error('Timer outside root');
   await runner('systemctl', ['--user', 'stop', unit], { env: runtimeEnv() });
   return true;
 }
@@ -170,13 +174,13 @@ export async function disarm({ root, unit, config, runner = systemRunner }) {
   root = await canonicalRoot(root);
   return withLock(timerLockPath(root), () => stopUnit({ root, unit, config, runner }));
 }
-export async function clear({ root, config, runner = systemRunner }) {
+export async function clear({ root, config, includeLegacy = false, runner = systemRunner }) {
   root = await canonicalRoot(root);
   return withLock(timerLockPath(root), async () => {
     const units = await listNames({ root, runner });
     const errors = [];
     for (const unit of units) {
-      try { await stopUnit({ root, unit, config, runner }); }
+      try { await stopUnit({ root, unit, config, runner, includeLegacy }); }
       catch (error) { errors.push(`${unit}: ${error.message}`); }
     }
     if (errors.length) throw new AggregateError(errors.map(message => new Error(message)), `Failed to clear ${errors.length} timer(s): ${errors.join('; ')}`);
@@ -185,8 +189,9 @@ export async function clear({ root, config, runner = systemRunner }) {
 }
 export async function executePlan({ root, config, actions, runner = systemRunner, fire, configPath, now = Date.now() }) {
   if (!enabled(config)) return [];
-  const warnings = [];
+  const warnings = [], errors = [];
   for (const action of actions) {
+    try {
     if (action.type === 'arm') {
       const remaining = Date.parse(action.due) - now;
       if (remaining <= 5000) {
@@ -202,33 +207,86 @@ export async function executePlan({ root, config, actions, runner = systemRunner
       await fire(action);
     } else if (action.type === 'warning') warnings.push(action.message);
     else throw new Error('Unknown timer action');
+    } catch (error) { errors.push(new Error(`${action.unit || action.id || action.type}: ${error.message}`)); }
   }
+  if (errors.length) throw new AggregateError(errors, `Timer actions failed: ${errors.map(e => e.message).join('; ')}`);
   return warnings;
 }
-export async function reconcile({ root, config, ledgers, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, fire, configPath, pruneUnknownRoles = false, configuredRoles = [] }) {
+async function proofValid(root, config, configPath) {
+  try {
+    const file = await canonicalConfig(root, configPath);
+    const contents = await readFile(file);
+    const proof = JSON.parse(await readFile(`${file}.due-timer-proof.json`, 'utf8'));
+    const saved = JSON.parse(contents);
+    const scriptHash = hash(await readFile(new URL('./enable-due-timer.mjs', import.meta.url)));
+    return proof.config_sha256 === hash(contents) && /^[a-f0-9]{64}$/.test(proof.approved_watch_sha256) &&
+      Number.isFinite(Date.parse(proof.enabled_at)) && proof.enable_script_sha256 === scriptHash &&
+      saved.due_timer?.enabled === true && JSON.stringify(saved.due_timer) === JSON.stringify(config.due_timer);
+  } catch { return false; }
+}
+const proofWarning = 'timer: 활성화 증빙이 없거나 설정과 일치하지 않음';
+
+export async function reconcile({ root, config, ledgers, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, fire, configPath, pruneUnknownRoles = false, configuredRoles = [], timers: givenTimers, warnings = [], skippedUnits = new Set() }) {
   if (!enabled(config)) return [];
   root = await canonicalRoot(root);
+  if (!await proofValid(root, config, configPath)) return [proofWarning];
   configPath = await canonicalConfig(root, configPath);
   const at = now ?? clock();
-  const timers = await list({ root, config, runner });
-  const actions = plan({ root, ledgers, timers, now: at, horizonMs: (config.due_timer.horizon_hours ?? 24) * HOUR, configTag: hash(configPath), pruneUnknownRoles, configuredRoles });
-  return executePlan({ root, config, actions, runner, fire, configPath, now: at });
+  const timers = givenTimers ?? await list({ root, config, runner, warnings, skippedUnits });
+  const accepted = [], validConfigured = [];
+  for (const role of new Set(configuredRoles)) {
+    try { safeName(role); validConfigured.push(role); }
+    catch (error) { warnings.push(`ledger:${role}: ${error.message}`); }
+  }
+  for (const ledger of ledgers) {
+    try {
+      if (accepted.some(x => x.role === ledger.role)) throw Error('Duplicate role');
+      plan({ root, ledgers: [ledger], timers: [], now: at });
+      accepted.push(ledger);
+    } catch (error) { warnings.push(`ledger:${ledger?.role}: ${error.message}`); }
+  }
+  const actions = plan({ root, ledgers: accepted, timers: [...timers, ...[...skippedUnits].map(unit => ({ unit }))], now: at, horizonMs: (config.due_timer.horizon_hours ?? 24) * HOUR, configTag: hash(configPath), pruneUnknownRoles, configuredRoles: validConfigured }).filter(action => !skippedUnits.has(action.unit));
+  warnings.push(...await executePlan({ root, config, actions, runner, fire, configPath, now: at }));
+  return warnings;
 }
 
-// Load the latest ledger snapshots only after acquiring the common scheduler lock.
+// Revalidate each snapshot after listing under the scheduler lock; a concurrent
+// ledger commit during enumeration must not be overwritten by stale decisions.
 export async function reconcileCurrent({ root, config, roles, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, configPath, overdueViaWatch = false, pruneUnknownRoles = false }) {
   if (!enabled(config)) return [];
   root = await canonicalRoot(root);
+  if (!await proofValid(root, config, configPath)) return [proofWarning];
   const at = now ?? clock();
   return withLock(timerLockPath(root), async () => {
-    const ledgers = [];
-    const warnings = [];
-    for (const role of new Set(roles)) {
-      try { ledgers.push(await readLedger(root, safeName(role))); }
-      catch (error) { warnings.push(`ledger:${role}: ${error.message}`); }
+    if (!await proofValid(root, config, configPath)) return [proofWarning];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const ledgers = [], versions = [], warnings = [];
+      const seenRoles = new Set();
+      for (const role of roles) { if (seenRoles.has(role)) warnings.push(`ledger:${role}: Duplicate role`); else seenRoles.add(role); }
+      for (const role of seenRoles) {
+        try {
+          safeName(role);
+          const file = ledgerPath(root, role);
+          const before = await readFile(file);
+          const ledger = await readLedger(root, role);
+          const after = await readFile(file);
+          versions.push({ file, digest: hash(before), stable: hash(before) === hash(after) });
+          ledgers.push(ledger);
+        } catch (error) {
+          if (error.code === 'ENOENT') versions.push({ file: ledgerPath(root, role), digest: null, stable: true });
+          warnings.push(`ledger:${role}: ${error.message}`);
+        }
+      }
+      const skippedUnits = new Set();
+      const timers = await list({ root, config, runner, warnings, skippedUnits });
+      let changed = false;
+      for (const version of versions) {
+        try { if (!version.stable || hash(await readFile(version.file)) !== version.digest) changed = true; }
+        catch (error) { if (!(version.digest === null && error.code === 'ENOENT')) changed = true; }
+      }
+      if (changed) { if (attempt < 2) continue; throw Error('Ledger changed during reconciliation after 3 attempts'); }
+      return reconcile({ root, config, ledgers, timers, warnings, skippedUnits, now: at, runner, configPath, pruneUnknownRoles, configuredRoles: roles, fire: action => overdueViaWatch && Date.parse(action.due) < at ? false : fire({ root, config, configPath, now: at, runner, ...action }) });
     }
-    warnings.push(...await reconcile({ root, config, ledgers, now: at, runner, configPath, pruneUnknownRoles, configuredRoles: roles, fire: action => overdueViaWatch && Date.parse(action.due) < at ? false : fire({ root, config, now: at, runner, ...action }) }));
-    return warnings;
   });
 }
 
@@ -248,7 +306,9 @@ export async function dueWake({ root, role, id, due, now = Date.now(), source = 
   safeName(role); safeName(id);
   if (!validDate(due) || !Number.isFinite(now) || !['timer', 'watch'].includes(source)) throw new Error('Invalid due wake');
   const file = receiptPath(root, role, id, due);
-  return withLock(ledgerPath(root, role), async () => {
+  let entered = false;
+  try { return await withLock(ledgerPath(root, role), async () => {
+    entered = true;
     let ledger;
     try { ledger = await readLedger(root, role); }
     catch (error) { if (error.code === 'ENOENT') return false; throw error; }
@@ -261,14 +321,21 @@ export async function dueWake({ root, role, id, due, now = Date.now(), source = 
       if (source === 'timer' && receipt) return false;
       if (source === 'watch') {
         const sent = receipt?.status === 'sent' && Number.isFinite(receipt.at) ? receipt.at : undefined;
-        const previous = Math.max(Number.isFinite(lastSent) ? lastSent : -Infinity, sent ?? -Infinity);
+        const previous = receipt?.status === 'failed' ? -Infinity : Math.max(Number.isFinite(lastSent) ? lastSent : -Infinity, sent ?? -Infinity);
         if (now - previous < 30 * 60000) return false;
       }
       await atomicJson(file, { role, id, due, status: 'sent', at: now });
-      await emit(item);
+      try { await emit(item, receipt?.status); }
+      catch (error) { await atomicJson(file, { role, id, due, status: 'claimed', at: now }); throw error; }
       return true;
     });
-  });
+  }); } catch (error) {
+    if (!entered && source === 'timer') await withLock(receiptLock(root, file), async () => {
+      let existing; try { existing = JSON.parse(await readFile(file, 'utf8')); } catch (e) { if (e.code !== 'ENOENT' && !(e instanceof SyntaxError)) throw e; }
+      if (!existing || existing.status !== 'sent') await atomicJson(file, { role, id, due, status: 'failed', at: now });
+    });
+    throw error;
+  }
 }
 
 export async function cleanReceipts(root, now = Date.now()) {
@@ -289,8 +356,9 @@ export async function cleanReceipts(root, now = Date.now()) {
   }
 }
 
-export async function fire({ root, role, id, due, now = Date.now(), config = {}, runner = systemRunner }) {
+export async function fire({ root, role, id, due, now = Date.now(), config = {}, configPath, runner = systemRunner, warn = console.warn }) {
   if (!enabled(config)) return false;
+  if (!await proofValid(root, config, configPath)) { warn(proofWarning); return false; }
   if (!validDate(due) || !Number.isFinite(now)) throw new Error('Invalid due wake');
   if (Date.parse(due) - now > 5000) return false;
   const sent = await dueWake({ root, role, id, due, now, emit: async item => {
@@ -308,7 +376,12 @@ export async function fire({ root, role, id, due, now = Date.now(), config = {},
     const late = now - Date.parse(due);
     const lateText = late > 120000 ? `\n늦음 ${Math.floor(late / 60000)}분 (기계 꺼짐·잠듦)` : '';
     const body = `[장부] 정한 시각: ${item.title.replace(/[\r\n]/g, ' ')}\n출처: ${item.from.channel}/${item.from.msg_id}\n기한: ${item.due}\n결과: ${item.worker?.result || '(없음)'}${lateText}\n`;
-    await writeFile(file, body, { flag: 'wx', mode: 0o600 });
+    try { await writeFile(file, body, { flag: 'wx', mode: 0o600 }); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const alternate = `${hash(randomUUID()).slice(0, Math.min(32, 255 - Buffer.byteLength(route)))}${route}`;
+      await writeFile(path.join(dir, alternate), body, { flag: 'wx', mode: 0o600 });
+    }
   } });
   const command = config?.due_timer?.after_fire;
   if (sent && enabled(config) && command !== undefined) {
@@ -318,14 +391,20 @@ export async function fire({ root, role, id, due, now = Date.now(), config = {},
   return sent;
 }
 export async function main(args = process.argv.slice(2), { runner, now } = {}) {
+  args = args.flatMap((arg, i) => arg === '--include-legacy' && (!args[i + 1] || args[i + 1].startsWith('--')) ? [arg, 'true'] : [arg]);
   const { opts, positional: [command] } = parseArgs(args);
   const root = await canonicalRoot(opts.root || process.cwd());
   let config;
   try { config = JSON.parse(await readFile(path.resolve(root, opts.config || 'config/work-ledger.json'), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT' || opts.config) throw error; config = {}; }
-  if (command === 'fire') return fire({ root, role: opts.role, id: opts.id, due: opts.due, config, runner, now });
-  if (command === 'list') return list({ root, config, runner });
-  if (command === 'clear') return clear({ root, config, runner });
+  if (command === 'fire') return fire({ root, role: opts.role, id: opts.id, due: opts.due, config, configPath: opts.config, runner, now });
+  if (command === 'list') {
+    const warnings = [];
+    const timers = await list({ root, config, runner, warnings });
+    for (const warning of warnings) console.warn(`timer: ${warning}`);
+    return timers;
+  }
+  if (command === 'clear') return clear({ root, config, runner, includeLegacy: opts['include-legacy'] === 'true' });
   if (command === 'arm') return arm({ root, role: opts.role, id: opts.id, due: opts.due, config, configPath: opts.config ? path.resolve(root, opts.config) : undefined, runner, now });
   if (command === 'disarm') return disarm({ root, unit: unitName(root, opts.role, opts.id), config, runner });
   throw new Error('Commands: arm disarm list clear fire');
