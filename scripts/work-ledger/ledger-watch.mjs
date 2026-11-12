@@ -2,7 +2,7 @@
 import { readFile, mkdir, writeFile, stat, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   readLedger,
   changeLedger,
@@ -12,17 +12,27 @@ import {
   parseArgs,
 } from "./ledger.mjs";
 import { createAdapter } from "./messenger.mjs";
-import { cleanReceipts, dueWake } from "./due-timer.mjs";
+import { cleanReceipts, dueWake, receiptPath, reconcileCurrent } from "./due-timer.mjs";
 export async function watch({
   root,
   config,
   adapter,
-  now = Date.now(),
+  runner,
+  configPath,
+  now,
+  clock = now === undefined ? Date.now : () => now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 }) {
+  now ??= clock();
   const wakeDir = path.join(root, ".agents/work/l4/wake");
   const stateFile = path.join(root, ".agents/work/ledger", "watch-state.json");
   await mkdir(wakeDir, { recursive: true });
+  const timerWarnings = [];
+  if (config.due_timer?.enabled === true && Array.isArray(config.roles)) {
+    try {
+      timerWarnings.push(...await reconcileCurrent({ root, config, roles: config.roles.map(entry => entry.role), now, clock, runner, configPath, overdueViaWatch: true }));
+    } catch (error) { timerWarnings.push(`timer: 못 걺 (${error.message})`); }
+  }
   return withLock(stateFile, async () => {
     let state = { version: 1, sent: {}, thread_cursors: {}, mentions: {} };
     let stateError;
@@ -88,7 +98,7 @@ export async function watch({
       else receipts.add(name);
     }
     const wakes = [];
-    const warnings = [];
+    const warnings = [...timerWarnings];
     const readCache = new Map();
     const failedThisRound = new Set();
     const successfulThisRound = new Set();
@@ -159,14 +169,16 @@ export async function watch({
         return cleaned ? `${cleaned}-${hex}` : `id-${hex}`;
       }
     }
-    async function wake(role, id, reason, title, details = "") {
+    async function wake(role, id, reason, title, details = "", dedupKey) {
       safeName(role);
       safeName(id);
-      const key = JSON.stringify([role, id, reason]);
+      const key = dedupKey || JSON.stringify([role, id, reason]);
       if (state.sent[key] !== undefined && now - state.sent[key] < 30 * 60000)
         return;
       const stamp = new Date(now + sequence++).toISOString().replace(/\D/g, "");
-      const file = path.join(wakeDir, `${stamp}-ledger-${id}-route-${role}.md`);
+      const wakeId = `${stamp}-ledger-${id}-route-${role}.md`.length > 246
+        ? createHash("sha256").update(id).digest("hex").slice(0, 8) : id;
+      const file = path.join(wakeDir, `${stamp}-ledger-${wakeId}-route-${role}.md`);
       // wx prevents overwriting an existing wake when a prior state write failed.
       try {
         await writeFile(
@@ -178,7 +190,7 @@ export async function watch({
         if (error.code !== "EEXIST") throw error;
         const alternate = path.join(
           wakeDir,
-          `${stamp}-ledger-${id}-${randomUUID()}-route-${role}.md`,
+          `${stamp}-ledger-${wakeId}-${randomUUID().slice(0, 8)}-route-${role}.md`,
         );
         await writeFile(alternate, `[장부] ${reason}: ${title}\n${details}\n`, {
           flag: "wx",
@@ -187,6 +199,7 @@ export async function watch({
       }
       state.sent[key] = now;
       wakes.push({ role, id, reason });
+      return true;
     }
     if (!Array.isArray(config.roles) || !config.roles.length)
       throw new Error("Configuration requires roles");
@@ -227,12 +240,26 @@ export async function watch({
       for (const item of ledger.items) {
         const details = `출처: ${item.from.channel}/${item.from.msg_id}\n기한: ${item.due}\n결과: ${item.worker?.result || "(없음)"}`;
         if (item.status === "open" && Date.parse(item.due) < now) {
-          const key = JSON.stringify([role, item.id, "기한 넘음"]);
+          const key = JSON.stringify([role, item.id, "기한 넘음", item.due]);
           if (config.due_timer?.enabled === true) {
-            await dueWake({ root, role, id: item.id, due: item.due, now, source: "watch", lastSent: state.sent[key],
+            const emitted = await dueWake({ root, role, id: item.id, due: item.due, now, source: "watch", lastSent: state.sent[key],
               emit: (latest) => wake(role, latest.id, "기한 넘음", latest.title,
-                `출처: ${latest.from.channel}/${latest.from.msg_id}\n기한: ${latest.due}\n결과: ${latest.worker?.result || "(없음)"}\n늦음 ${Math.floor((now - Date.parse(latest.due)) / 60000)}분`) });
-          } else await wake(role, item.id, "기한 넘음", item.title, details);
+                `출처: ${latest.from.channel}/${latest.from.msg_id}\n기한: ${latest.due}\n결과: ${latest.worker?.result || "(없음)"}\n늦음 ${Math.floor((now - Date.parse(latest.due)) / 60000)}분`, key) });
+            if (emitted) state.sent[JSON.stringify([role, item.id, "기한 넘음"])] = now;
+          } else {
+            // A timer may have fired just before the feature was disabled.
+            // Honor that receipt without starting any systemd operation.
+            try {
+              const receipt = JSON.parse(await readFile(receiptPath(root, role, item.id, item.due), "utf8"));
+              if (receipt && typeof receipt === "object" && receipt.status === "sent" && receipt.role === role && receipt.id === item.id &&
+                  receipt.due === item.due && Number.isFinite(receipt.at) && receipt.at <= now) {
+                const legacyKey = JSON.stringify([role, item.id, "기한 넘음"]);
+                state.sent[legacyKey] = Math.max(state.sent[legacyKey] ?? 0, receipt.at);
+                state.sent[key] = Math.max(state.sent[key] ?? 0, receipt.at);
+              }
+            } catch (error) { if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
+            if (await wake(role, item.id, "기한 넘음", item.title, details)) state.sent[key] = now;
+          }
         }
         if (item.worker) {
           try {
@@ -743,7 +770,7 @@ export async function main(args = process.argv.slice(2)) {
       "utf8",
     ),
   );
-  const result = await watch({ root, config });
+  const result = await watch({ root, config, configPath: opts.config ? path.resolve(root, opts.config) : undefined });
   for (const warning of result.warnings)
     console.warn(`work-ledger-watch warning: ${warning}`);
   console.log(JSON.stringify({ event: "work-ledger-watch", ...result }));

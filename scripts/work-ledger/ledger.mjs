@@ -109,6 +109,7 @@ export function validateLedger(ledger, role) {
       typeof item.from.quote !== "string" ||
       typeof item.note !== "string" ||
       !validDate(item.due) ||
+      (item.created_at !== undefined && !validDate(item.created_at)) ||
       !["open", "waiting_human", "done", "dropped"].includes(item.status) ||
       (item.checked_at !== null && !validDate(item.checked_at)) ||
       (item.worker !== null &&
@@ -164,7 +165,7 @@ export function parseArgs(args) {
   }
   return { opts, positional };
 }
-export async function main(args = process.argv.slice(2)) {
+export async function main(args = process.argv.slice(2), { runner, now, clock = now === undefined ? Date.now : () => now, warn = console.warn } = {}) {
   const {
     opts: o,
     positional: [command, id],
@@ -180,17 +181,18 @@ export async function main(args = process.argv.slice(2)) {
     );
   }
   let roleConfig;
+  let config = {};
   const configFile = o.config
     ? path.resolve(root, o.config)
     : path.join(root, "config/work-ledger.json");
   try {
-    const config = JSON.parse(await readFile(configFile, "utf8"));
+    config = JSON.parse(await readFile(configFile, "utf8"));
     roleConfig = config.roles?.find((entry) => entry.role === role);
     if (!roleConfig) throw new Error("Role missing in configuration");
   } catch (error) {
     if (error.code !== "ENOENT" || o.config) throw error;
   }
-  return changeLedger(root, role, (l) => {
+  const result = await changeLedger(root, role, (l) => {
     if (l.report.every_min === 0 && roleConfig?.report) {
       l.report.every_min = roleConfig.report.every_min;
       l.report.channel = roleConfig.report.channel;
@@ -212,6 +214,7 @@ export async function main(args = process.argv.slice(2)) {
         title: o.title,
         from: { channel: o.channel, msg_id: o["msg-id"], quote: o.quote || "" },
         due: o.due,
+        created_at: new Date(clock()).toISOString(),
         status: "open",
         worker: o["worker-name"]
           ? {
@@ -238,17 +241,29 @@ export async function main(args = process.argv.slice(2)) {
       l.report.last_at = new Date().toISOString();
       return "보고 기록";
     }
-    if (!["done", "drop", "touch"].includes(command))
-      throw new Error("Commands: add done drop touch report list");
+    if (!["done", "drop", "touch", "due"].includes(command))
+      throw new Error("Commands: add due done drop touch report list");
     const item = l.items.find((i) => i.id === (id || o.id));
     if (!item) throw new Error("Unknown item");
     if (command === "drop" && !o.reason?.trim())
       throw new Error("drop requires --reason");
-    if (command === "touch") item.checked_at = new Date().toISOString();
+    if (command === "due") {
+      if (!o.reason?.trim() || !validDate(o.due)) throw new Error("due requires --reason and --due (UTC ISO)");
+      if (item.status !== "open") throw new Error("due requires an open item");
+      item.due = o.due;
+    } else if (command === "touch") item.checked_at = new Date().toISOString();
     else item.status = command === "done" ? "done" : "dropped";
     if (o.reason) item.note = o.reason;
     return item.id;
   });
+  if (["add", "due", "done", "drop"].includes(command) && config.due_timer?.enabled === true) {
+    try {
+      const { reconcileCurrent } = await import("./due-timer.mjs");
+      const warnings = await reconcileCurrent({ root, config, roles: [role], clock, runner, configPath: o.config ? configFile : undefined });
+      for (const warning of warnings) warn(`timer: 못 걺 (${warning})`);
+    } catch (error) { warn(`timer: 못 걺 (${error.message})`); }
+  }
+  return result;
 }
 if (
   process.argv[1] &&
@@ -256,7 +271,12 @@ if (
 )
   main()
     .then((value) =>
-      console.log(typeof value === "string" ? value : JSON.stringify(value)),
+      {
+        console.log(typeof value === "string" ? value : JSON.stringify(value));
+        const { opts, positional } = parseArgs(process.argv.slice(2));
+        if (positional[0] === "add" && validDate(opts.due))
+          console.log(`지금부터 ${Math.round((Date.parse(opts.due) - Date.now()) / 60000)}분 뒤`);
+      },
     )
     .catch((error) => {
       console.error(error.message);

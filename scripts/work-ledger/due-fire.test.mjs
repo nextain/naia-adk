@@ -17,8 +17,9 @@ async function setup(t) {
   return root;
 }
 const wakes = root => readdir(path.join(root, '.agents/work/l4/wake')).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error));
-const runFire = (root, options = {}) => fire({ root, role: 'a', id: 'job', due, now, ...options });
-const runWatch = (root, time = now) => watch({ root, config, now: time });
+const runFire = (root, options = {}) => fire({ root, role: 'a', id: 'job', due, now, config, ...options });
+const unavailable = async () => { throw Error('fake systemd unavailable'); };
+const runWatch = (root, time = now) => watch({ root, config, now: time, runner: unavailable });
 
 test('fire rechecks closed and changed items and keys receipts by due', async t => {
   const root = await setup(t);
@@ -120,7 +121,7 @@ test('disabled configuration neither runs post-fire command nor changes watch be
   const root = await setup(t);
   const disabled = { due_timer: { enabled: false, after_fire: ['systemctl'] } };
   const runner = () => { throw Error('must not run'); };
-  assert.equal(await runFire(root, { config: disabled, runner }), true);
+  assert.equal(await runFire(root, { config: disabled, runner }), false);
   const second = await setup(t);
   assert.equal((await watch({ root: second, config: { roles: config.roles }, now })).wakes.length, 1);
   await assert.rejects(stat(path.join(second, '.agents/work/ledger/due-fired')), { code: 'ENOENT' });
@@ -134,7 +135,7 @@ test('long names fit the route filename or fail explicitly when the role cannot 
     ledger.role = role;
     ledger.items[0].id = id;
     await writeFile(path.join(root, '.agents/work/ledger', `${role}.json`), JSON.stringify(ledger));
-    const result = fire({ root, role, id, due, now });
+    const result = fire({ root, role, id, due, now, config });
     if (succeeds) {
       assert.equal(await result, true);
       assert.match((await wakes(root))[0], new RegExp(`-route-${role}\\.md$`));

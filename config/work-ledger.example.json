@@ -23,6 +23,7 @@
       "check_unrecorded_human": true
     }
   ],
+  "due_timer": { "enabled": false, "horizon_hours": 24 },
   "channel_read_interval_ms": 300,
   "human_wait": {
     "after_min": 15,

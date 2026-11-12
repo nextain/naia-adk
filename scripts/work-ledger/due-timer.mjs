@@ -32,7 +32,7 @@ export function calendarSpec(due) {
 }
 
 /** Pure comparison. Only supplied roles are owned; other roles are untouched. */
-export function plan({ root, ledgers, timers, now = Date.now(), horizonMs = 24 * HOUR, limit = 200 }) {
+export function plan({ root, ledgers, timers, now = Date.now(), horizonMs = 24 * HOUR, limit = 200, onlyUnits, configTag }) {
   if (!Number.isFinite(now) || !Number.isFinite(horizonMs) || horizonMs < 0 || !Number.isInteger(limit) || limit < 0) throw new Error('Invalid planning options');
   if (!Array.isArray(ledgers) || !Array.isArray(timers)) throw new Error('Invalid planning input');
   const owned = new Map();
@@ -58,7 +58,7 @@ export function plan({ root, ledgers, timers, now = Date.now(), horizonMs = 24 *
   const actions = [];
   const occupied = new Set(existing.keys());
   for (const [unit] of existing) {
-    if ([...owned.values()].some(prefix => unit.startsWith(prefix)) && !desired.has(unit)) {
+    if ([...owned.values()].some(prefix => unit.startsWith(prefix)) && !desired.has(unit) && (!onlyUnits || onlyUnits.has(unit))) {
       actions.push({ type: 'disarm', unit });
       occupied.delete(unit);
     }
@@ -72,7 +72,7 @@ export function plan({ root, ledgers, timers, now = Date.now(), horizonMs = 24 *
       if (remaining <= 5000) actions.push({ type: 'fire', ...entry });
       continue;
     }
-    if (current && current.due === calendarDate(entry.due)) continue;
+    if (current && current.due === calendarDate(entry.due) && current.originalDue === entry.due && (configTag === undefined || current.configTag === configTag)) continue;
     if (current) { actions.push({ type: 'disarm', unit: entry.unit }); occupied.delete(entry.unit); }
     if (occupied.size >= limit) {
       if (!warned) { actions.push({ type: 'warning', message: `Timer limit ${limit} reached` }); warned = true; }
@@ -106,44 +106,82 @@ function parseCalendar(value) {
   if (!validDate(date)) throw new Error('Invalid timer calendar');
   return date;
 }
+async function listNames({ root, runner }) {
+  const output = await runner('systemctl', ['--user', 'list-units', '--all', '--type=timer', '--no-legend', '--plain', '--no-pager'], { env: runtimeEnv() });
+  return String(output).split('\n').map(line => line.trim().split(/\s+/)[0]).filter(unit => unit.startsWith(rootPrefix(root)) && unit.endsWith('.timer'));
+}
 export async function list({ root, config, runner = systemRunner }) {
   if (!enabled(config)) return [];
   root = await canonicalRoot(root);
-  const output = await runner('systemctl', ['--user', 'list-units', '--all', '--type=timer', '--no-legend', '--plain', '--no-pager'], { env: runtimeEnv() });
-  const units = String(output).split('\n').map(line => line.trim().split(/\s+/)[0]).filter(unit => unit.startsWith(rootPrefix(root)) && unit.endsWith('.timer'));
+  const units = await listNames({ root, runner });
   const timers = [];
   for (const unit of units) {
+    // An unknown or disappearing unit makes reconciliation fail safely. Never
+    // infer absence from a failed show, which could otherwise cause deletion.
     const value = await runner('systemctl', ['--user', 'show', unit, '--property=TimersCalendar', '--value'], { env: runtimeEnv() });
-    timers.push({ unit, due: parseCalendar(String(value)) });
+    const service = unit.slice(0, -6) + '.service';
+    const argv = await runner('systemctl', ['--user', 'show', service, '--property=ExecStart', '--value'], { env: runtimeEnv() });
+    const matches = [...String(argv).matchAll(/(?:^|\s)--due\s+(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z)\s*;/g)];
+    const originalDue = matches.length === 1 && validDate(matches[0][1]) ? matches[0][1] : null;
+    const tags = [...String(argv).matchAll(/(?:^|\s)--config-tag\s+([a-f0-9]{64})(?=\s)/g)];
+    timers.push({ unit, due: parseCalendar(String(value)), originalDue, configTag: tags.length === 1 ? tags[0][1] : null });
   }
   return timers;
 }
-export async function arm({ root, role, id, due, config, runner = systemRunner }) {
-  if (!enabled(config)) return false;
-  root = await canonicalRoot(root);
+async function armUnit({ root, role, id, due, config, configPath, runner = systemRunner }) {
   const unit = unitName(root, role, id).slice(0, -6);
-  await runner('systemd-run', [ '--user', '--collect', `--unit=${unit}`, `--on-calendar=${calendarSpec(due)}`, '--timer-property=AccuracySec=1s', `--description=ADK ledger due ${role}/${id}`, process.execPath, path.join(root, 'scripts/work-ledger/due-timer.mjs'), 'fire', '--root', root, '--role', role, '--id', id, '--due', due ], { env: runtimeEnv() });
+  const options = configPath ? ['--config', configPath] : [];
+  await runner('systemd-run', [ '--user', '--collect', `--unit=${unit}`, `--on-calendar=${calendarSpec(due)}`, '--timer-property=AccuracySec=1s', `--description=ADK ledger due ${role}/${id}`, process.execPath, path.join(root, 'scripts/work-ledger/due-timer.mjs'), 'fire', '--root', root, '--role', role, '--id', id, ...options, '--config-tag', hash(configPath || ''), '--due', due ], { env: runtimeEnv() });
   return true;
 }
-export async function disarm({ root, unit, config, runner = systemRunner }) {
+export const timerLockPath = root => path.join(root, '.agents/work/ledger/due-timer-reconcile');
+export async function arm({ root, role, id, due, config, configPath, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, fire: fireHandler }) {
+  if (!enabled(config)) return false;
+  root = await canonicalRoot(root);
+  const unit = unitName(root, role, id);
+  return withLock(timerLockPath(root), async () => {
+    const timers = await list({ root, config, runner });
+    const actions = plan({ root, ledgers: [{ role, items: [{ id, due, status: 'open' }] }], timers, now: clock(), horizonMs: (config.due_timer.horizon_hours ?? 24) * HOUR, onlyUnits: new Set([unit]), configTag: hash(configPath || '') });
+    const warnings = await executePlan({ root, config, configPath, actions, runner, clock, fire: fireHandler ?? (entry => fire({ root, config, runner, now: clock(), ...entry })) });
+    if (warnings.length) throw new Error(warnings.join('; '));
+    return actions.some(action => action.type === 'arm' || action.type === 'fire');
+  });
+}
+async function stopUnit({ root, unit, config, runner = systemRunner }) {
   if (!enabled(config)) return false;
   root = await canonicalRoot(root);
   if (typeof unit !== 'string' || !/^adk-due-[a-f0-9]{8}-[a-f0-9]{16}-[a-zA-Z0-9_-]+\.timer$/.test(unit) || !unit.startsWith(rootPrefix(root))) throw new Error('Timer outside root');
   await runner('systemctl', ['--user', 'stop', unit], { env: runtimeEnv() });
   return true;
 }
+export async function disarm({ root, unit, config, runner = systemRunner }) {
+  if (!enabled(config)) return false;
+  root = await canonicalRoot(root);
+  return withLock(timerLockPath(root), () => stopUnit({ root, unit, config, runner }));
+}
 export async function clear({ root, config, runner = systemRunner }) {
   if (!enabled(config)) return 0;
-  const timers = await list({ root, config, runner });
-  for (const timer of timers) await disarm({ root, unit: timer.unit, config, runner });
-  return timers.length;
+  root = await canonicalRoot(root);
+  return withLock(timerLockPath(root), async () => {
+    const units = await listNames({ root, runner });
+    for (const unit of units) await stopUnit({ root, unit, config, runner });
+    return units.length;
+  });
 }
-export async function executePlan({ root, config, actions, runner = systemRunner, fire }) {
+export async function executePlan({ root, config, actions, runner = systemRunner, fire, configPath, clock = Date.now }) {
   if (!enabled(config)) return [];
   const warnings = [];
   for (const action of actions) {
-    if (action.type === 'arm') await arm({ root, config, runner, ...action });
-    else if (action.type === 'disarm') await disarm({ root, config, runner, ...action });
+    if (action.type === 'arm') {
+      const remaining = Date.parse(action.due) - clock();
+      if (remaining <= 5000) {
+        if (!fire) throw new Error('Fire handler unavailable');
+        await fire(action);
+      } else if (remaining <= (config.due_timer.horizon_hours ?? 24) * HOUR) {
+        await armUnit({ root, config, configPath, runner, ...action });
+      }
+    }
+    else if (action.type === 'disarm') await stopUnit({ root, config, runner, ...action });
     else if (action.type === 'fire') {
       if (!fire) throw new Error('Fire handler unavailable');
       await fire(action);
@@ -152,12 +190,28 @@ export async function executePlan({ root, config, actions, runner = systemRunner
   }
   return warnings;
 }
-export async function reconcile({ root, config, ledgers, now, runner = systemRunner, fire }) {
+export async function reconcile({ root, config, ledgers, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, fire, configPath }) {
   if (!enabled(config)) return [];
   root = await canonicalRoot(root);
   const timers = await list({ root, config, runner });
-  const actions = plan({ root, ledgers, timers, now, horizonMs: (config.due_timer.horizon_hours ?? 24) * HOUR });
-  return executePlan({ root, config, actions, runner, fire });
+  const actions = plan({ root, ledgers, timers, now: clock(), horizonMs: (config.due_timer.horizon_hours ?? 24) * HOUR, configTag: hash(configPath || '') });
+  return executePlan({ root, config, actions, runner, fire, configPath, clock });
+}
+
+// Load the latest ledger snapshots only after acquiring the common scheduler lock.
+export async function reconcileCurrent({ root, config, roles, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, configPath, overdueViaWatch = false }) {
+  if (!enabled(config)) return [];
+  root = await canonicalRoot(root);
+  return withLock(timerLockPath(root), async () => {
+    const ledgers = [];
+    const warnings = [];
+    for (const role of new Set(roles)) {
+      try { ledgers.push(await readLedger(root, safeName(role))); }
+      catch (error) { warnings.push(`ledger:${role}: ${error.message}`); }
+    }
+    warnings.push(...await reconcile({ root, config, ledgers, clock, runner, configPath, fire: action => overdueViaWatch && Date.parse(action.due) < now ? false : fire({ root, config, now: clock(), runner, ...action }) }));
+    return warnings;
+  });
 }
 
 // The full identity is hashed to avoid filesystem name limits and delimiter ambiguity.
@@ -219,6 +273,7 @@ export async function cleanReceipts(root, now = Date.now()) {
 }
 
 export async function fire({ root, role, id, due, now = Date.now(), config = {}, runner = systemRunner }) {
+  if (!enabled(config)) return false;
   if (!validDate(due) || !Number.isFinite(now)) throw new Error('Invalid due wake');
   if (Date.parse(due) - now > 5000) return false;
   const sent = await dueWake({ root, role, id, due, now, emit: async item => {
@@ -246,17 +301,17 @@ export async function fire({ root, role, id, due, now = Date.now(), config = {},
   }
   return sent;
 }
-export async function main(args = process.argv.slice(2)) {
+export async function main(args = process.argv.slice(2), { runner, now } = {}) {
   const { opts, positional: [command] } = parseArgs(args);
   const root = await canonicalRoot(opts.root || process.cwd());
   let config;
   try { config = JSON.parse(await readFile(path.resolve(root, opts.config || 'config/work-ledger.json'), 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT' || opts.config) throw error; config = {}; }
-  if (command === 'fire') return fire({ root, role: opts.role, id: opts.id, due: opts.due, config });
-  if (command === 'list') return list({ root, config });
-  if (command === 'clear') return clear({ root, config });
-  if (command === 'arm') return arm({ root, role: opts.role, id: opts.id, due: opts.due, config });
-  if (command === 'disarm') return disarm({ root, unit: unitName(root, opts.role, opts.id), config });
+  if (command === 'fire') return fire({ root, role: opts.role, id: opts.id, due: opts.due, config, runner, now });
+  if (command === 'list') return list({ root, config, runner });
+  if (command === 'clear') return clear({ root, config, runner });
+  if (command === 'arm') return arm({ root, role: opts.role, id: opts.id, due: opts.due, config, configPath: opts.config ? path.resolve(root, opts.config) : undefined, runner, now });
+  if (command === 'disarm') return disarm({ root, unit: unitName(root, opts.role, opts.id), config, runner });
   throw new Error('Commands: arm disarm list clear fire');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

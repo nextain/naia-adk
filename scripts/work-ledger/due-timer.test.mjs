@@ -22,7 +22,9 @@ function fake(existing = []) {
     calls.push({ command, args, opts });
     if (args.includes('list-units')) return existing.map(x => `${x.unit} loaded active waiting Example`).join('\n');
     if (args.includes('show')) {
-      const found = existing.find(x => args.includes(x.unit));
+      const service = args.find(x => x.endsWith('.service'));
+      const found = existing.find(x => args.includes(x.unit) || service === x.unit.replace(/\.timer$/, '.service'));
+      if (service) return `{ path=/node ; argv[]=/node script --due ${found.originalDue || found.due} ; }`;
       return `{ OnCalendar=${found.due.replace('T', ' ').replace('.000Z', ' UTC')} ; next_elapse=none }`;
     }
     return '';
@@ -40,7 +42,7 @@ test('planning arms, replaces, removes, fires, and ignores another role/root', (
   assert.deepEqual(plan({ root, ledgers: [ledger([item('job', '2026-11-14T12:00:00Z')])], timers: [], now }), []);
   assert.equal(plan({ root, ledgers: [ledger([item('job', '2026-11-12T12:00:05Z')])], timers: [], now })[0].type, 'fire');
   assert.equal(plan({ root, ledgers: [ledger([item('job', '2026-11-12T11:00:00Z')])], timers: [], now })[0].type, 'fire');
-  assert.deepEqual(plan({ root, ledgers: [ledger()], timers: [{ unit, due: '2026-11-12T13:00:00.000Z' }], now }), []);
+  assert.deepEqual(plan({ root, ledgers: [ledger()], timers: [{ unit, due: '2026-11-12T13:00:00.000Z', originalDue: due }], now }), []);
 });
 
 test('names distinguish ambiguous roles, reject unsafe input, and bound long ids and roles', () => {
@@ -57,12 +59,13 @@ test('enabled fake runner uses UTC, argv, canonical root and selective stop', as
   await symlink(dir, link);
   assert.equal(await canonicalRoot(link), await realpath(dir));
   const f = fake();
-  await arm({ root: link, role: 'a', id: 'b', due: '2026-11-12T13:00:00.123Z', config, runner: f.runner });
-  assert.equal(f.calls[0].command, 'systemd-run');
-  assert.ok(f.calls[0].args.includes('--on-calendar=2026-11-12 13:00:01 UTC'));
-  assert.ok(f.calls[0].args.includes(dir));
-  assert.ok(f.calls[0].args.includes('--timer-property=AccuracySec=1s'));
-  assert.ok(f.calls[0].opts.env.XDG_RUNTIME_DIR);
+  await arm({ root: link, role: 'a', id: 'b', due: '2026-11-12T13:00:00.123Z', config, now, runner: f.runner });
+  const call = f.calls.find(call => call.command === 'systemd-run');
+  assert.ok(call);
+  assert.ok(call.args.includes('--on-calendar=2026-11-12 13:00:01 UTC'));
+  assert.ok(call.args.includes(dir));
+  assert.ok(call.args.includes('--timer-property=AccuracySec=1s'));
+  assert.ok(call.opts.env.XDG_RUNTIME_DIR);
   assert.throws(() => plan({ root: dir, ledgers: [ledger([item('x', '2026-11-12T13:00:00+09:00')])], timers: [], now }), /UTC/);
   await assert.rejects(disarm({ root: dir, unit: unitName('/other', 'a', 'b'), config, runner: f.runner }), /outside root/);
 });
@@ -84,12 +87,13 @@ test('list and clear select only this root; bad properties fail closed', async t
   const dir = await setup(t);
   const mine = unitName(dir, 'a', 'job'), other = unitName('/other', 'a', 'job');
   const f = fake([{ unit: mine, due: '2026-11-12T13:00:00.000Z' }, { unit: other, due: '2026-11-12T13:00:00.000Z' }]);
-  assert.deepEqual(await list({ root: dir, config, runner: f.runner }), [{ unit: mine, due: '2026-11-12T13:00:00.000Z' }]);
+  assert.deepEqual(await list({ root: dir, config, runner: f.runner }), [{ unit: mine, due: '2026-11-12T13:00:00.000Z', originalDue: '2026-11-12T13:00:00.000Z', configTag: null }]);
   assert.equal(await clear({ root: dir, config, runner: f.runner }), 1);
   assert.equal(f.calls.filter(x => x.args.includes('stop')).length, 1);
   assert.ok(f.calls.some(x => x.args.includes('stop') && x.args.includes(mine)));
   const invalid = async (_, args) => args.includes('list-units') ? `${mine} loaded active waiting` : 'unknown';
-  await assert.rejects(clear({ root: dir, config, runner: invalid }), /calendar/);
+  assert.equal(await clear({ root: dir, config, runner: invalid }), 1);
+  await assert.rejects(list({ root: dir, config, runner: invalid }), /calendar/);
 });
 
 test('cap counts timers for all roles in same root', () => {
