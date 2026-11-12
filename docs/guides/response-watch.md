@@ -73,10 +73,14 @@ again ("ok, so what now?" right after a bot answered). When a bot sends an
 explicit reply to a person's post, or a person's post names exactly one bot
 (user mention or configured role), that bot becomes the person's partner in the
 channel. The person's next unaddressed post within `followMinutes` of that
-exchange is assigned to the partner instead of the channel bot, still with
+exchange (measured from the post's own time, not the scan time) is assigned to
+the partner instead of the channel bot, still with
 `via: "fallback"`. After `followMinutes` the partner is dropped and the channel
-bot takes unaddressed posts again. Watcher notices carry no reply reference, so
-they never make a partner. A receipt may acknowledge
+bot takes unaddressed posts again. Only known agents become a partner: the
+channel bot, role bots and the guild's optional `partnerBotIds` (other agents
+that answer people in the channel). A third-party bot never does, and a bot post
+counts only when it is an explicit Discord reply, so watcher notices never make a
+partner. Partners are stored per channel as `partners` in the state file. A receipt may acknowledge
 an unfinished task; assess the actual work result separately.
 
 ## State, failures and recovery

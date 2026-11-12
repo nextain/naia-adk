@@ -134,6 +134,8 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         }
         if (!complete) throw new Error('pagination limit reached; cursor retained');
         const next = structuredClone(previous);
+        // Only known agents become a partner, so a third-party bot (a notifier, a music bot) never takes a person's follow-up posts.
+        const agents = new Set([channel.botId ?? guild.defaultBotId, ...(guild.roles ?? []).map(role => role.botId), ...(guild.partnerBotIds ?? [])].filter(Boolean));
         const replies = structuredClone(state.replies ?? {});
         for (const message of messages.sort((a, b) => compare(a.id, b.id))) {
           if (![0, 19].includes(message.type ?? 0)) continue;
@@ -156,7 +158,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
             }
             // A bot's reply to a person makes that bot the person's current partner; their next unaddressed post follows it.
             const partnerAt = Date.parse(message.timestamp), person = message.referenced_message?.author;
-            if (person && !person.bot && Number.isFinite(partnerAt)) (next.partners ??= {})[fingerprint(person.id)] = { botId: replier, at: partnerAt };
+            if (target && person && !person.bot && agents.has(replier) && Number.isFinite(partnerAt)) (next.partners ??= {})[fingerprint(person.id)] = { botId: replier, at: partnerAt };
             continue;
           }
           if (!eligible(message)) continue;
@@ -180,7 +182,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
             const since = timestamp - (config.thresholds?.burstMinutes ?? 10) * 60000;
             for (const [id, request] of Object.entries(next.pending)) if (request.via === 'fallback' && request.author === author && request.at >= since && compare(id, message.id) < 0) delete next.pending[id];
           }
-          const named = mentions.filter(user => user.bot).map(user => user.id).concat(roles.map(role => role.botId));
+          const named = mentions.filter(user => user.bot && agents.has(user.id)).map(user => user.id).concat(roles.map(role => role.botId));
           if (new Set(named).size === 1 && Number.isFinite(timestamp)) (next.partners ??= {})[author] = { botId: named[0], at: timestamp };
           if (!assigned) continue;
           if (!Number.isFinite(timestamp)) throw new Error('invalid request timestamp');

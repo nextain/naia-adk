@@ -221,7 +221,7 @@ test('reply to an unwatched post closes its author\'s earlier requests; requests
   state = await run(3); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['5']);
 });
 test('an unaddressed post follows the author\'s latest bot exchange within followMinutes, else the channel bot', async () => {
-  const { remote, run } = await fixture(); await run();
+  const { config, remote, run } = await fixture(); config.guilds[0].partnerBotIds = ['21']; await run();
   const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes, extra = {}) => human(id, { mentions: [], timestamp: at(minutes), ...extra });
   remote.messages.push(plain(2, 0, { author: { id: '42' } }), human(3, { author: { id: '21', bot: true }, message_reference: { message_id: '2' }, referenced_message: { id: '2', author: { id: '42' } }, timestamp: at(1) }));
   remote.messages.push(plain(4, 7, { author: { id: '42' } }), plain(5, 7));
@@ -232,4 +232,16 @@ test('an unaddressed post follows the author\'s latest bot exchange within follo
   state = await run(12); assert.equal(state.channels['10/30'].pending['4'], undefined); assert.equal(state.channels['10/30'].pending['8'].botId, '21');
   remote.messages.push(plain(9, 60, { author: { id: '42' } })); state = await run(60);
   assert.equal(state.channels['10/30'].pending['9'].botId, '20'); assert.equal(state.channels['10/30'].partners['42'], undefined);
+});
+test('third-party bots and unreferenced bot posts never become a partner; configured partnerBotIds do', async () => {
+  const { config, remote, run } = await fixture(); await run();
+  const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes, extra = {}) => human(id, { mentions: [], timestamp: at(minutes), ...extra });
+  const reply = (id, bot, to, minutes, extra = {}) => human(id, { author: { id: bot, bot: true }, message_reference: { message_id: to }, referenced_message: { id: to, author: { id: '40' } }, timestamp: at(minutes), ...extra });
+  remote.messages.push(plain(2, 0), reply(3, '99', '2', 1), plain(4, 2), plain(5, 3, { mentions: [{ id: '99', bot: true }] }), plain(6, 4));
+  remote.messages.push(human(7, { author: { id: '21', bot: true }, referenced_message: { id: '6', author: { id: '40' } }, timestamp: at(5) }), plain(8, 6));
+  let state = await run(6); const pending = state.channels['10/30'].pending;
+  assert.equal(pending['8'].botId, '20'); assert.equal(state.channels['10/30'].partners?.['40'], undefined);
+  config.guilds[0].partnerBotIds = ['21'];
+  remote.messages.push(reply(9, '21', '8', 7), plain(10, 8)); state = await run(8);
+  assert.equal(state.channels['10/30'].pending['10'].botId, '21');
 });
