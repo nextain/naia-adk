@@ -1,6 +1,6 @@
 // Top tabs and main-area width. hasMessenger is /api/portal messenger.enabled: the 대화 tab hides only
 // when the server says the messenger is off; older servers that omit it keep the tab.
-export type TopNavTabId = "docs" | "work" | "messages"
+export type TopNavTabId = "docs" | "schedule" | "work" | "messages"
 
 export interface TopNavTabItem {
   id: TopNavTabId
@@ -11,6 +11,7 @@ export interface TopNavTabItem {
 
 export const TOP_NAV_TABS: readonly TopNavTabItem[] = [
   { id: "docs", label: "문서", href: "/docs", requiresBoard: false },
+  { id: "schedule", label: "일정", href: "/schedule", requiresBoard: false },
   { id: "work", label: "작업", href: "/work", requiresBoard: true },
   { id: "messages", label: "대화", href: "/messages", requiresBoard: false },
 ]

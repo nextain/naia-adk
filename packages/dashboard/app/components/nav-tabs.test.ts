@@ -4,9 +4,9 @@ import { isMessagesPath, isTopNavTabActive, mainClassForPath, TOP_NAV_TABS, visi
 
 describe("위 탭", () => {
   it("서버가 메신저를 껐다고 할 때만 대화 탭을 숨긴다", () => {
-    assert.deepEqual(visibleTopNavTabs(true).map((t) => t.id), ["docs", "work", "messages"])
-    assert.deepEqual(visibleTopNavTabs(null).map((t) => t.id), ["docs", "work", "messages"])
-    assert.deepEqual(visibleTopNavTabs(false).map((t) => t.id), ["docs", "work"])
+    assert.deepEqual(visibleTopNavTabs(true).map((t) => t.id), ["docs", "schedule", "work", "messages"])
+    assert.deepEqual(visibleTopNavTabs(null).map((t) => t.id), ["docs", "schedule", "work", "messages"])
+    assert.deepEqual(visibleTopNavTabs(false).map((t) => t.id), ["docs", "schedule", "work"])
   })
   it("/messages 아래에서 대화 탭이 켜지고 본문은 꽉 찬다", () => {
     const messages = TOP_NAV_TABS.find((t) => t.id === "messages")!
