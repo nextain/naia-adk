@@ -191,6 +191,15 @@ test('batched reply closes only the author\'s posts within burstMinutes of the r
   remote.messages.push(plain(2, 0), plain(3, 15), plain(4, 20), human(5, { author: { id: '20', bot: true }, message_reference: { message_id: '4' }, timestamp: at(21) }));
   const state = await run(21); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['2']);
 });
+test('fallback posts close on any bot\'s reply or when the author names a recipient; mentioned requests still need the expected bot', async () => {
+  const { remote, run } = await fixture(); await run();
+  const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes, extra = {}) => human(id, { mentions: [], timestamp: at(minutes), ...extra });
+  remote.messages.push(plain(2, 0), plain(3, 1), human(4, { author: { id: '21', bot: true }, message_reference: { message_id: '3' }, timestamp: at(2) }));
+  remote.messages.push(plain(5, 3), plain(6, 3, { mentions: [{ id: '21', bot: true }] }));
+  remote.messages.push(plain(7, 30), plain(8, 31, { mentions: [{ id: '20', bot: true }] }), human(9, { author: { id: '21', bot: true }, message_reference: { message_id: '8' }, timestamp: at(32) }));
+  const state = await run(32); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['8']);
+  assert.equal(state.channels['10/30'].pending['8'].via, undefined);
+});
 test('reply to an unwatched post closes its author\'s earlier requests; requests stored before author tracking need their own reply', async () => {
   const { config, remote, run } = await fixture(); await run();
   remote.messages.push(human(2, { mentions: [] }), human(3, { mentions: [], message_reference: { message_id: '1' } }));

@@ -55,7 +55,13 @@ referenced post, because one reply commonly answers a burst of posts. An older
 question outside that window stays pending until it gets its own reply. Later posts, other authors' posts and requests assigned to another bot
 stay pending. Configure the executor to reference the newest post it answers.
 Bot chatter, unreferenced bot posts and another bot's reply do not prove
-response. A receipt may acknowledge
+response, with one exception: a post assigned only by the `all-human` fallback
+(no mention, no role, no reply reference) names no recipient, so it is stored
+with `via: "fallback"` and any bot's explicit reply closes it under the same
+burst rule. When the same author then posts within `burstMinutes` a message that
+mentions a user or role, that message re-addresses the burst and the author's
+earlier fallback posts stop waiting; a direct mention of the expected bot is
+tracked as its own request. A receipt may acknowledge
 an unfinished task; assess the actual work result separately.
 
 ## State, failures and recovery

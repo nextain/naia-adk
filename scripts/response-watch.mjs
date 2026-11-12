@@ -142,7 +142,8 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
             // Only posts within burstMinutes before the referenced post count as the same burst, so an unrelated older question stays pending.
             const targetAt = next.pending[target]?.at ?? Date.parse(message.referenced_message?.timestamp ?? message.timestamp);
             const since = Number.isFinite(targetAt) ? targetAt - (config.thresholds?.burstMinutes ?? 10) * 60000 : Infinity;
-            const answered = !target ? [] : Object.entries(next.pending).filter(([id, request]) => request.botId === replier && (id === target || (poster && request.author === poster && compare(id, target) < 0 && request.at >= since)));
+            // A post assigned only by the all-human fallback names no recipient, so any bot's reply answers it.
+            const answered = !target ? [] : Object.entries(next.pending).filter(([id, request]) => (request.botId === replier || request.via === 'fallback') && (id === target || (poster && request.author === poster && compare(id, target) < 0 && request.at >= since)));
             if (answered.length) {
               const at = Date.parse(message.timestamp);
               if (Number.isFinite(at) && at <= now) {
@@ -161,11 +162,18 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
           const candidates = new Set(roles.map(role => role.botId));
           if (direct) candidates.add(botId);
           if (candidates.size > 1) throw new Error('ambiguous assignment; cursor retained');
-          const assigned = [...candidates][0] ?? (channel.mode === 'all-human' && !mentions.length && !ref(message) ? botId : undefined);
-          if (!assigned) continue;
+          const fallback = !candidates.size && channel.mode === 'all-human' && !mentions.length && !ref(message);
+          const assigned = [...candidates][0] ?? (fallback ? botId : undefined);
           const timestamp = Date.parse(message.timestamp);
+          const author = fingerprint(message.author.id);
+          // Naming a recipient right after an unaddressed post ("now" then "@other now") re-addresses that burst, so its fallback posts stop waiting.
+          if ((mentions.length || roles.length) && Number.isFinite(timestamp)) {
+            const since = timestamp - (config.thresholds?.burstMinutes ?? 10) * 60000;
+            for (const [id, request] of Object.entries(next.pending)) if (request.via === 'fallback' && request.author === author && request.at >= since && compare(id, message.id) < 0) delete next.pending[id];
+          }
+          if (!assigned) continue;
           if (!Number.isFinite(timestamp)) throw new Error('invalid request timestamp');
-          next.pending[message.id] = { botId: assigned, author: fingerprint(message.author.id), at: timestamp, stages: {} };
+          next.pending[message.id] = { botId: assigned, author, at: timestamp, stages: {}, ...(fallback ? { via: 'fallback' } : {}) };
         }
         if (messages.length) next.cursor = messages.at(-1).id;
         delete next.error;
