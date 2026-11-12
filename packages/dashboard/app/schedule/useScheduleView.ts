@@ -15,7 +15,7 @@ import {
   type FormState, type PersonalLayerState, type ScheduleViewProps,
 } from "./schedule-view-model"
 import { requestBoardSchedule, retainLocalToday, type BoardScheduleStatus } from "./schedule-board-state"
-import { findLinkedEvent, readScheduleDeepLink, type ScheduleLinkTarget } from "./schedule-deep-link"
+import { readScheduleDeepLink, resolveDeepLink, type ScheduleLinkTarget } from "./schedule-deep-link"
 
 export function createLatestRequestGuard() {
   let generation = 0
@@ -57,6 +57,7 @@ export function useScheduleView(props: ScheduleViewProps) {
   const [anchorDate, setAnchorDate] = useState<string>(initialDeepLink?.date ?? defaultToday)
   // Detail link waiting for its event to appear (personal and board data load after mount).
   const pendingDeepLink = useRef<ScheduleLinkTarget | null>(initialDeepLink ?? null)
+  const [deepLinkMissing, setDeepLinkMissing] = useState<boolean>(false)
 
   const [personalState, setPersonalState] = useState<PersonalLayerState>(() => buildInitialPersonalLayerState(props))
   const personalRevision = useRef<string | null>(null)
@@ -453,11 +454,15 @@ export function useScheduleView(props: ScheduleViewProps) {
   useEffect(() => {
     const link = pendingDeepLink.current
     if (!link) return
-    const ev = findLinkedEvent(calendarCells, link)
-    if (!ev) return
+    const result = resolveDeepLink(calendarCells, link, {
+      sourceLoaded: link.layer === "personal" ? !personalLoading : boardStatus !== "loading",
+      layerShown: layers[link.layer],
+    })
+    if (result.status === "wait") return
     pendingDeepLink.current = null
-    handleSelectCalendarEvent(ev)
-  }, [calendarCells, handleSelectCalendarEvent])
+    if (result.status === "found") handleSelectCalendarEvent(result.event)
+    else setDeepLinkMissing(true)
+  }, [calendarCells, handleSelectCalendarEvent, personalLoading, boardStatus, layers])
 
   const layerCounts: Record<ScheduleLayerKey, number> = {
     personal: personalItems.length,
@@ -477,5 +482,6 @@ export function useScheduleView(props: ScheduleViewProps) {
     toggleLayer, setWorkFilter, loadPersonal, openAddForm, openEditForm,
     handleSaveForm, handleDeleteItem, filteredUndatedItems, calendarWeeks,
     selectedDayCell, handleSelectCalendarEvent, layerCounts, periodTitle,
+    deepLinkMissing, dismissDeepLinkMissing: () => setDeepLinkMissing(false),
   }
 }
