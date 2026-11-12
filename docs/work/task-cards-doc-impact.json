@@ -18,6 +18,6 @@
     "files": [
       "docs/guides/task-cards.md"
     ],
-    "detail": "Task cards reuse the watch alert module, so card events and the scheduled check go to Discord or the messenger with the same notify block. Card changes are written before the post, so a failed event post only warns; the scheduled check exits 3 on a failed post."
+    "detail": "Task cards reuse the watch alert module, so card events and the scheduled check go to Discord or the messenger with the same notify block. Card changes are written before the post, so a failed event post only warns; the scheduled check exits 3 on a failed post. The session hook runs tick once an hour on UserPromptSubmit and PostToolUse; it is opt-in and never blocks a session."
   }
 }

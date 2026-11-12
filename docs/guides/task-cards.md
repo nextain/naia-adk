@@ -39,6 +39,30 @@ for a session hook: it prints the role's cards at most once per `--every-min`
 
 Times are UTC. A bare date means the end of that day.
 
+## Session hook
+
+`.claude/hooks/task-cards-tick.js` runs `tick` from a Claude Code session, so
+an agent working on one task sees its other cards once an hour. It is not a
+gate: inside the interval it prints nothing, and it exits 0 on any failure.
+
+The role comes from `ADK_AGENT_ROLE`, else from
+`.agents/work/task-cards/session-roles.json` (`{"<session id>": "<role>"}`).
+Without a role the hook does nothing. The hook is not registered by default;
+add it to `.claude/settings.json` on both events:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/task-cards-tick.js\" UserPromptSubmit", "timeout": 5 }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/task-cards-tick.js\" PostToolUse", "timeout": 5 }] }
+    ]
+  }
+}
+```
+
 ## What check reports
 
 | Kind | When |
