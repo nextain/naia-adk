@@ -1654,7 +1654,7 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 }
 
 const GATEWAY_RUNNER_FORMATS = Object.freeze({
- "launch-local.sh": "79047d4f2b712c1c6f746c1d458870dc8485b32e242e035f4d59103d544071c6",
+ "launch-local.sh": "f9218442bd86db0c5205cf56c840c5b2e6edcdc9d7db89d40f47656494758b80",
  "operation-local.sh": "35b139bd826a79a729b677cb5dcd02b4cf2f881dbc02c18d8d40788118b85977",
  "status-local.sh": "a3890864be7a66486cbc8389053cb804aa17194689b41df0b638fd445367a505",
  "rollback-local.sh": "0c473db41ebc292c988f737f66984d54254117eb4d72ba86b6a44abbffcb1b3e",

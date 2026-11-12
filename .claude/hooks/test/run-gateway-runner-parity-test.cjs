@@ -93,11 +93,14 @@ test("key path checks reject unsafe fixture directories before any cloud call",(
   // Execute only the local preflight prefix, ending before the key is read or any Azure call.
   const prefix=fs.readFileSync(launch,"utf8").split("  MOTIF_VALUE='' ".trimEnd())[0];
   assert(prefix.includes("KEY_DIR_MODE"));
-  const script=path.join(runner,"check.sh"); fs.writeFileSync(script,prefix+"  echo PREFLIGHT_OK\nfi\n");
-  const invoke=(file=script,env=process.env)=>spawnSync("bash",[file,"prod",run,tag,`sha256:${b}`,`sha256:${a}`,"rev","backup"],{encoding:"utf8",env});
+  const script=path.join(runner,"check.sh"); fs.writeFileSync(script,prefix+"  echo PREFLIGHT_OK\nfi\necho PATH_CHECK_OK\n");
+  const invoke=(file=script,env=process.env,stage="backup")=>spawnSync("bash",[file,"prod",run,tag,`sha256:${b}`,`sha256:${a}`,"rev",stage],{encoding:"utf8",env});
   const ok=invoke(); assert.equal(ok.status,0,ok.stderr+ok.stdout); assert.match(ok.stdout,/PREFLIGHT_OK/);
   const rejected=()=>{const r=invoke(); assert.notEqual(r.status,0); assert.match(r.stdout,/MOTIF_KEY_FILE_INVALID/); assert.doesNotMatch(r.stdout,/PREFLIGHT_OK/);};
-  fs.chmodSync(keydir,0o720); rejected(); fs.chmodSync(keydir,0o700);
+  const cleanup=invoke(script,process.env,"cleanup"); assert.equal(cleanup.status,0,cleanup.stderr+cleanup.stdout); assert.match(cleanup.stdout,/PATH_CHECK_OK/);
+  fs.chmodSync(keydir,0o720); rejected();
+  const unsafeCleanup=invoke(script,process.env,"cleanup"); assert.notEqual(unsafeCleanup.status,0); assert.match(unsafeCleanup.stdout,/MOTIF_KEY_FILE_INVALID/); assert.doesNotMatch(unsafeCleanup.stdout,/PATH_CHECK_OK/);
+  fs.chmodSync(keydir,0o700);
   fs.chmodSync(repo,0o702); rejected(); fs.chmodSync(repo,0o700);
   // Simulate a foreign owner on an otherwise 0700 parent without requiring chown privileges.
   const bin=path.join(fake,"bin"); fs.mkdirSync(bin);

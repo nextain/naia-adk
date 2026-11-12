@@ -30,23 +30,21 @@ fi
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/naia-gw-prepare.XXXXXX")"
 trap 'rm -f -- "$TMP/script.sh" "$TMP/protected.txt" "$TMP/protected-motif.txt" "$TMP/result.json"; rmdir -- "$TMP" 2>/dev/null || true' EXIT
 PROTECTED=("@$TMP/protected.txt")
+MOTIF_KEY_FILE="$(cd -- "$HERE/../../../../.." && pwd -P)/data-private/key/motif-api-key.env" || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+ROOT="${MOTIF_KEY_FILE%/data-private/key/motif-api-key.env}"
+[[ -e "$ROOT/.git" && -f "$ROOT/AGENTS.md" ]] || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+for KEY_DIR in "$ROOT" "$ROOT/data-private" "$ROOT/data-private/key"; do
+  [[ -d "$KEY_DIR" && ! -L "$KEY_DIR" ]] || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+  KEY_DIR_MODE="$(stat -c '%a' -- "$KEY_DIR")" || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+  KEY_DIR_UID="$(stat -c '%u' -- "$KEY_DIR")" || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+  [[ "$KEY_DIR_MODE" =~ ^[0-7]{3,4}$ && "$KEY_DIR_UID" =~ ^[0-9]+$ ]] &&
+    (( (8#$KEY_DIR_MODE & 0022) == 0 )) &&
+    { [[ "$KEY_DIR_UID" == "$(id -u)" ]] || (( (8#$KEY_DIR_MODE & 0200) == 0 )); } ||
+    { echo MOTIF_KEY_FILE_INVALID; exit 1; }
+done
 if [[ "$STAGE" == backup ]]; then
   # fit075 decision "가" (2026-10-24T23:43Z): the candidate container also gets MOTIF_API_KEY.
-  # The value is read here with shell builtins only and leaves this PC solely as a Managed Run
-  # Command protected parameter, like ACR_TOKEN: never argv, script literal, trace or log.
-  # Checked before any Azure call, so a bad key file changes nothing anywhere.
-  MOTIF_KEY_FILE="$(cd -- "$HERE/../../../../.." && pwd -P)/data-private/key/motif-api-key.env" || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
-  ROOT="${MOTIF_KEY_FILE%/data-private/key/motif-api-key.env}"
-  [[ -e "$ROOT/.git" && -f "$ROOT/AGENTS.md" ]] || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
-  for KEY_DIR in "$ROOT" "$ROOT/data-private" "$ROOT/data-private/key"; do
-    [[ -d "$KEY_DIR" && ! -L "$KEY_DIR" ]] || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
-    KEY_DIR_MODE="$(stat -c '%a' -- "$KEY_DIR")" || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
-    KEY_DIR_UID="$(stat -c '%u' -- "$KEY_DIR")" || { echo MOTIF_KEY_FILE_INVALID; exit 1; }
-    [[ "$KEY_DIR_MODE" =~ ^[0-7]{3,4}$ && "$KEY_DIR_UID" =~ ^[0-9]+$ ]] &&
-      (( (8#$KEY_DIR_MODE & 0022) == 0 )) &&
-      { [[ "$KEY_DIR_UID" == "$(id -u)" ]] || (( (8#$KEY_DIR_MODE & 0200) == 0 )); } ||
-      { echo MOTIF_KEY_FILE_INVALID; exit 1; }
-  done
+  # The value leaves this PC only as a Managed Run Command protected parameter.
   [[ -f "$MOTIF_KEY_FILE" && ! -L "$MOTIF_KEY_FILE" && "$(stat -c '%a %u' -- "$MOTIF_KEY_FILE")" == "600 $(id -u)" ]] ||
     { echo MOTIF_KEY_FILE_INVALID; exit 1; }
   MOTIF_VALUE=''
