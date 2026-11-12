@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { acquireLock, dueNotices, messengerSender, noticeBody, readState, runOnce, wallNow } from './schedule-notify.mjs';
+import { acquireLock, dueNotices, messengerSender, noticeBody, readState, runOnce, validateConfig, wallNow } from './schedule-notify.mjs';
 import { createClient } from '../messenger/msg.mjs';
 
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'schedule-notify-'));
@@ -117,6 +117,26 @@ test('dry run writes no state and sends nothing', async () => {
   const h = harness();
   const results = await runOnce({ config, nowDate: new Date('2026-11-12T08:31:00Z'), ...h, dryRun: true });
   assert.deepEqual(results.map((r) => r.status), ['dry-run', 'dry-run', 'dry-run']);
+  assert.equal(h.posts.length, 0);
+  assert.ok(!fs.existsSync(h.stateFile));
+});
+
+test('config: timeZone is required and minute values must be positive integers', async () => {
+  assert.equal(validateConfig(config), config);
+  assert.doesNotThrow(() => validateConfig({ timeZone: 'Asia/Seoul' }));
+  const { timeZone, ...noZone } = config;
+  assert.throws(() => validateConfig(noZone), /timeZone 은 필수/);
+  assert.throws(() => validateConfig({ ...config, timeZone: 'Mars/Base' }), /timeZone 을 알 수 없습니다/);
+  for (const graceMinutes of ['30', 0, -5, 1.5, null]) {
+    assert.throws(() => validateConfig({ ...config, graceMinutes }), /graceMinutes 는 양의 정수/);
+  }
+  for (const beforeMinutes of [10, ['10'], [0], [5, -1], null]) {
+    assert.throws(() => validateConfig({ ...config, beforeMinutes }), /beforeMinutes 는 양의 정수 배열/);
+  }
+  // 실행기도 보내기 전에 멈춘다(문자열 grace 로 지난 알림이 쏟아지지 않음).
+  const h = harness();
+  await assert.rejects(runOnce({ config: { ...config, graceMinutes: '30' }, nowDate: new Date('2026-11-12T08:31:00Z'), ...h }), /graceMinutes/);
+  await assert.rejects(runOnce({ config: noZone, nowDate: new Date('2026-11-12T08:31:00Z'), ...h }), /timeZone/);
   assert.equal(h.posts.length, 0);
   assert.ok(!fs.existsSync(h.stateFile));
 });

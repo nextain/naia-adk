@@ -38,6 +38,25 @@ export function wallNow(now = new Date(), timeZone) {
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
 }
 
+/**
+ * 설정 값 확인. 틀리면 오류로 멈춘다. 문자열 "30" 같은 값을 그대로 쓰면 유예 창이 끝없어져 지난 알림이 몰려 가고,
+ * timeZone 이 없으면 기계 시간대를 써서 알림이 밀리므로 둘 다 받지 않는다.
+ */
+export function validateConfig(config) {
+  if (!config || typeof config !== 'object') throw new Error('설정이 객체가 아닙니다');
+  if (typeof config.timeZone !== 'string' || !config.timeZone.trim()) throw new Error('timeZone 은 필수입니다(IANA 이름, 예: "Asia/Seoul")');
+  try { new Intl.DateTimeFormat('en-CA', { timeZone: config.timeZone }); }
+  catch { throw new Error(`timeZone 을 알 수 없습니다: ${config.timeZone}`); }
+  const positive = (value) => Number.isInteger(value) && value > 0;
+  if (config.graceMinutes !== undefined && !positive(config.graceMinutes)) {
+    throw new Error(`graceMinutes 는 양의 정수여야 합니다: ${JSON.stringify(config.graceMinutes)}`);
+  }
+  if (config.beforeMinutes !== undefined && (!Array.isArray(config.beforeMinutes) || !config.beforeMinutes.every(positive))) {
+    throw new Error(`beforeMinutes 는 양의 정수 배열이어야 합니다: ${JSON.stringify(config.beforeMinutes)}`);
+  }
+  return config;
+}
+
 function clock(value) {
   return /^\d{2}:\d{2}$/.test(value ?? '') ? value : null;
 }
@@ -210,6 +229,7 @@ export function acquireLock(file, { staleMs = LOCK_STALE_MS } = {}) {
  * 돌려주는 값: [{ key, status: 'sent'|'skipped'|'unknown'|'failed'|'dry-run', messageId?, error? }]
  */
 export async function runOnce({ config, nowDate = new Date(), send, loadPersonal, loadMilestones, stateFile, dryRun = false, log = () => {} }) {
+  validateConfig(config);
   const now = wallNow(nowDate, config.timeZone);
   const users = Array.isArray(config.personal) ? config.personal : [];
   const personal = [];

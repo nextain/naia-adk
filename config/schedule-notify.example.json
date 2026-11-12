@@ -1,5 +1,5 @@
 {
-  "_comment": "Copy to an instance-private schedule-notify.json. Relative paths resolve from this file's directory. The token comes from NAIA_MESSENGER_TOKEN or messenger.tokenFile (an agent token issued by scripts/messenger/issue-agent-token.mjs). stateFile null means $XDG_STATE_HOME/naia-adk/schedule-notify.json; personalDir null means NAIA_PERSONAL_SCHEDULE_DIR or the dashboard default.",
+  "_comment": "Copy to an instance-private schedule-notify.json. Relative paths resolve from this file's directory. The token comes from NAIA_MESSENGER_TOKEN or messenger.tokenFile (an agent token issued by scripts/messenger/issue-agent-token.mjs). stateFile null means $XDG_STATE_HOME/naia-adk/schedule-notify.json; personalDir null means NAIA_PERSONAL_SCHEDULE_DIR or the dashboard default. timeZone is required; beforeMinutes and graceMinutes must be positive whole numbers (not strings), or the script stops.",
   "timeZone": "Asia/Seoul",
   "morning": "08:30",
   "beforeMinutes": [10],

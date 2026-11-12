@@ -22,7 +22,9 @@ schedule screen.
 
 A notice is sent only while the current time is inside
 `[notice time, notice time + graceMinutes)`. A run after a long stop does not
-flood the channel with old notices.
+flood the channel with old notices. `graceMinutes` and `beforeMinutes` must be
+positive whole numbers (not strings such as `"30"`); any other value stops
+the script before it reads the state file or posts.
 
 ### Configuration
 
@@ -31,7 +33,10 @@ fill in:
 
 | Key | Meaning |
 | --- | --- |
-| `timeZone` | IANA zone for schedule wall-clock values; omit to use the machine zone |
+| `timeZone` | Required. IANA zone for schedule wall-clock values (for example `Asia/Seoul`); the script stops if it is missing or unknown |
+| `morning` | Morning notice time `HH:mm`; default `08:30` |
+| `beforeMinutes` | Array of positive whole minutes before a timed item starts; default `[10]` |
+| `graceMinutes` | Positive whole minutes a notice stays sendable after its time; default `30` |
 | `personal[]` | `user` (the personal schedule key), `channel` (messenger channel name or id), optional `mention` text |
 | `milestones` | `channel` and `source` URL; omit the block to skip milestones |
 | `dashboardUrl` | Origin prefixed to links; empty keeps links relative (`/schedule?...`) |
@@ -57,7 +62,9 @@ after the post but before the receipt is written, the next run reports the key
 as `unknown` and does not post it again: a missed reminder is preferred over a
 duplicate. If the messenger answers with an HTTP error, the pending mark is
 removed and the next run retries. A lock file next to the state file keeps two
-runs from overlapping. Receipts older than 14 days are pruned.
+runs from overlapping; it is created atomically with the holder's pid, and a
+lock is cleared only when its process is gone (or, for an empty lock, after ten
+minutes). Receipts older than 14 days are pruned.
 
 Each result is one JSON line on stdout (`sent`, `skipped`, `unknown`,
 `failed`, `dry-run`); the exit code is 1 when any post failed. Check a
