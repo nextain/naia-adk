@@ -41,9 +41,9 @@ test('warning and report use only configured mentions, have a hash suffix and no
     const mentions = [...item.content.matchAll(/<@(\d+)>/g)].map(match => match[1]);
     assert.deepEqual(new Set(mentions), new Set(item.mentions));
   }
-  assert.match(sent[0].content, /^\[감사\] role repeat-review\n/);
+  assert.match(sent[0].content, /^\[감사\] role repeat-review 표\n/);
   assert.match(sent[0].content, /보고서:/);
-  assert.match(sent[1].content, /^\[감사 보고\] role repeat-review\n/);
+  assert.match(sent[1].content, /^\[감사 보고\] role repeat-review 감사 신호를 확인했습니다\n/);
   assert.doesNotMatch(sent[1].content, /승인\s*코드/);
   const files = await readdir(args.role.wakeDir);
   assert.equal(files.length, 1);
@@ -51,6 +51,21 @@ test('warning and report use only configured mentions, have a hash suffix and no
   assert.match(wake, /^# Discord wake\n\nRole: role\nChannel: \d+\nAuthor: session-audit\nMessage ID: \d+\n\n/);
   assert.ok(wake.trimEnd().endsWith(sent[0].content));
   assert.equal(result.dry, false);
+});
+
+test('직접 전달한 머리줄의 구분자와 줄바꿈은 발신 글과 깨움 파일에서 제거한다', async t => {
+  for (const separator of ['|', '\r', '\n', '\u0085', '\u2028', '\u2029', '｜']) {
+    const { args, sent } = await setup(t);
+    const output = { code: warn.code, headline: `앞${separator}뒤`, facts: [], ask: '확인' };
+    await deliverAudit({ ...args, events: [{ ...warn, output }] });
+    assert.match(sent[0].content, /^\[감사\] role repeat-review 앞 뒤\n/);
+    assert.doesNotMatch(sent[0].content, /[|｜\r\u0085\u2028\u2029]/u);
+    assert.equal(sent[0].content.split('\n').length, 5);
+    const [file] = await readdir(args.role.wakeDir);
+    const wake = await readFile(join(args.role.wakeDir, file), 'utf8');
+    assert.ok(wake.endsWith(`${sent[0].content}\n`));
+    assert.doesNotMatch(wake, /[|｜\r\u0085\u2028\u2029]/u);
+  }
 });
 
 test('T6 counts other audit posts from a fixture without suppressing delivery', async t => {
@@ -78,6 +93,36 @@ test('daily cap sends exactly one self-report and suppresses subsequent alerts',
   assert.ok(sent[2].content.endsWith(`prompt=${promptHash.slice(0, 8)} config=${configHash.slice(0, 8)}`));
   await deliverAudit({ ...args, state: first.state, events: [{ ...warn, code: 'wake-backlog' }] });
   assert.equal(sent.length, 3);
+});
+
+test('상한으로 건너뛴 사건만 중복 없이 보고하고 다음 날 처리한다', async t => {
+  const { args, sent } = await setup(t, { dailyCap: 1 });
+  const skipped = { ...warn, code: 'wake-backlog' };
+  const first = await deliverAudit({ ...args, events: [warn, skipped, skipped, report] });
+  assert.match(first.report, /(?:^|\n)상한으로 보류 2건(?:\n|$)/);
+  assert.deepEqual(sent.map(item => item.stage), ['warn', 'cap']);
+  const next = await deliverAudit({ ...args, now: at + 86400000, state: first.state, events: [skipped] });
+  assert.doesNotMatch(next.report, /상한으로 보류/);
+  assert.deepEqual(sent.map(item => item.stage), ['warn', 'cap', 'warn', 'cap']);
+});
+
+test('상한으로 남은 대기 사건 수가 실제 보고서에 표시된다', async t => {
+  const { args } = await setup(t, { dailyCap: 1 });
+  const config = { ...args.config, roles: [args.role], stateFile: join(args.config.workspace, 'state.json'), reportFile: args.reportPath, judge: { runner: 'none' } };
+  const input = await readFixture('scripts/test/fixtures/session-audit/case-normal');
+  input.reviews.plans = [];
+  input.session.period.from = '2026-11-12T00:00:00Z';
+  input.session.edits = [];
+  input.session.hourly_tool_calls = [{ hour: '2026-11-12T01', total: 100 }];
+  input.session.text_markers = [];
+  input.wake.files = Array.from({ length: 50 }, () => ({ name_at: '2026-11-12T01:00:00Z' }));
+  input.ledger.rows = [];
+  const now = Date.parse('2026-11-12T04:00:00Z');
+  await runAudit({ config, role: 'role', input, now, sender: args.sender });
+  await runAudit({ config, role: 'role', input, now: now + 1800000, sender: args.sender });
+  const state = JSON.parse(await readFile(config.stateFile, 'utf8'));
+  assert.equal(state.pending.role.length, 1);
+  assert.match(await readFile(config.reportFile, 'utf8'), /(?:^|\n)상한으로 보류 1건(?:\n|$)/);
 });
 
 test('a new local day resets the cap but does not resend an earlier episode', async t => {

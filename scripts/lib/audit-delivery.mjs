@@ -6,7 +6,7 @@ import { fixedTemplate } from './audit-judge.mjs';
 
 const digest = value => createHash('sha256').update(value).digest('hex').slice(0, 24);
 const safeName = value => typeof value === 'string' && /^[\p{L}\p{N}_.-]+$/u.test(value) && value !== '.' && value !== '..';
-const clean = value => String(value ?? '').replace(/[|\r\n]/g, ' ').replace(/<@[^>]*>|@(?:everyone|here|\S+)/giu, '').trim();
+const clean = value => String(value ?? '').normalize('NFKC').replace(/[|\r\n\u0085\u2028\u2029]/gu, ' ').replace(/<@[^>]*>|@(?:everyone|here|\S+)/giu, '').trim();
 const isId = value => typeof value === 'string' && /^\d+$/.test(value);
 function localTime(now, zone) {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(now);
@@ -41,7 +41,7 @@ export async function deliverAudit({ role, events = [], config, state, reportPat
   const dayKey = `${role.id}:${day}`, daily = next.days[dayKey] ??= { count: 0, capReported: false };
   if (!Number.isInteger(daily.count) || daily.count < 0 || typeof daily.capReported !== 'boolean') throw Error('invalid daily state');
   const hashLine = `prompt=${promptHash.slice(0, 8)} config=${configHash.slice(0, 8)}`;
-  const deliveries = [], report = [];
+  const deliveries = [], report = [], capSkipped = new Set();
   const ownIds = new Set(Object.values(next.episodes).map(e => e?.id).filter(Boolean));
   const count = channelMessages.filter(m => typeof m?.content === 'string' && /^\[감사(?: 보고)?\]/u.test(m.content.trimStart()) && !ownIds.has(String(m.id ?? '')) && !(config.senderBotId && m.author?.id === config.senderBotId)).length;
   report.push(`같은 채널 다른 감사 글 ${count}건`);
@@ -69,13 +69,14 @@ export async function deliverAudit({ role, events = [], config, state, reportPat
     if (event.stage === 'recovered') { report.push(`회복: ${role.id} ${clean(event.code)}`); continue; }
     if (!['warn', 'report'].includes(event.stage) || !safeName(event.code)) continue;
     const key = deliveryKey(role, event);
-    if (next.episodes[key] || daily.count >= (config.dailyCap ?? 6)) continue;
+    if (next.episodes[key]) continue;
+    if (daily.count >= (config.dailyCap ?? 6)) { capSkipped.add(key); continue; }
     const output = event.output?.code === event.code ? event.output : fixedTemplate(event.code);
     const facts = Array.isArray(output.facts) ? output.facts.slice(0, 3).map(clean).filter(Boolean) : [];
     const mentions = event.stage === 'warn' ? [...new Set(role.botIds)] : [...new Set([config.ownerId, ...(role.leaderId ? [role.leaderId] : [])])];
     const title = event.stage === 'warn' ? '[감사]' : '[감사 보고]';
     const action = event.stage === 'warn' ? clean(output.ask) || '관련 근거를 확인하고 필요한 조치를 정해 주세요.' : '진행을 멈출지 또는 방식을 바꿀지 결정해 주세요.';
-    const content = [`${title} ${role.id} ${event.code}`, ...facts, action, ...(event.stage === 'warn' ? [`보고서: ${reportPath}`] : []), mentions.map(id => `<@${id}>`).join(' '), hashLine].filter(Boolean).join('\n');
+    const content = [`${title} ${role.id} ${event.code} ${clean(output.headline)}`.trimEnd(), ...facts, action, ...(event.stage === 'warn' ? [`보고서: ${reportPath}`] : []), mentions.map(id => `<@${id}>`).join(' '), hashLine].filter(Boolean).join('\n');
     const channelId = event.stage === 'warn' ? config.channels.internal : reportChannel(config, now);
     daily.count++;
     if (event.stage === 'warn' && !dry) {
@@ -94,5 +95,6 @@ export async function deliverAudit({ role, events = [], config, state, reportPat
     }
     await capReport();
   }
+  if (capSkipped.size) report.push(`상한으로 보류 ${capSkipped.size}건`);
   return { state: dry ? structuredClone(state ?? { days: {}, episodes: {} }) : next, ...(dry ? { projectedState: next } : {}), report: report.join('\n'), deliveries, dry };
 }

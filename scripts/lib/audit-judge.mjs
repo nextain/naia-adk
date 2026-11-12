@@ -107,6 +107,7 @@ export function validateOutput(output, bundle) {
   // Hash digits are integrity metadata, not evidence of numerical facts.
   const { configHash: _configHash, promptHash: _promptHash, ...evidence } = bundle;
   const sources = strings(evidence), content = [output.headline, ...output.facts, output.ask];
+  if (content.some(s => /[|\r\n\u0085\u2028\u2029]/u.test(normalized(s)))) return false;
   if (content.some(s => /\[감사/u.test(stripped(s)))) return false;
   if (content.some(s => [normalized, stripped].some(normalize => koreanNumberPatterns.some(pattern => tokens(normalize(s), pattern).length)))) return false;
   return tokenPatterns.every(pattern => {

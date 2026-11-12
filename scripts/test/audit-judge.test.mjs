@@ -69,6 +69,18 @@ test('T12 unsupported address in either headline or ask discards the whole outpu
   }
 });
 
+test('구분자나 줄바꿈이 있는 머리줄, 사실, 요청은 고정 양식으로 바꾼다', async t => {
+  for (const field of ['headline', 'facts', 'ask']) {
+    for (const separator of ['|', '\r', '\n', '\u0085', '\u2028', '\u2029', '｜']) {
+      const value = `앞${separator}뒤`;
+      const fake = await fakeRunner(t, {...valid, [field]: field === 'facts' ? [value] : value});
+      const result = await judge({bundle:makeBundle(), config:{judge:{runner:'codex'}}, prompt, executable:fake.executable});
+      assert.equal(result.failed, true, `${field}: ${JSON.stringify(separator)}`);
+      assert.deepEqual(result.output, fixedTemplate('repeat-review'));
+    }
+  }
+});
+
 test('T12 rejects obfuscated values and head imitations through the judge', async t => {
   const outputs = [
     {...valid, facts:['열두 건이 발생했습니다']},
