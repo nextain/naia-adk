@@ -80,7 +80,9 @@ bot takes unaddressed posts again. Only known agents become a partner: the
 channel bot, role bots and the guild's optional `partnerBotIds` (other agents
 that answer people in the channel). A third-party bot never does, and a bot post
 counts only when it is an explicit Discord reply, so watcher notices never make a
-partner. Partners are stored per channel as `partners` in the state file. A receipt may acknowledge
+partner. The replied-to person is taken from the pending request, or from the
+reply's embedded snapshot only when that snapshot is the referenced post. A
+receipt may acknowledge
 an unfinished task; assess the actual work result separately.
 
 ## State, failures and recovery
@@ -90,7 +92,10 @@ author key per request (an unsalted SHA-256 prefix of the user ID: not the raw
 ID, but anyone holding the state can confirm a known ID, so keep the state
 private; requests stored by older versions lack it and close only on a direct
 reference), timestamps,
-stage receipts and site counters. Optional `replies[botId].at` retains the latest
+stage receipts and site counters. Optional per-channel `partners` maps the same
+author key to the partner bot ID and exchange time; entries older than
+`followMinutes` are dropped on each successful scan, and state without
+`partners` is compatible. Optional `replies[botId].at` retains the latest
 confirmed referenced-reply timestamp (milliseconds since epoch) for
 [session progress observation](session-health.md); older version-1 state remains
 compatible. Reply progress is committed only with a successful channel scan. It stores no message content or display names.

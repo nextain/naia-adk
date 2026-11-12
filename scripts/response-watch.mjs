@@ -43,6 +43,7 @@ export function validateConfig(config) {
     }
     for (const role of guild.roles ?? []) { requireId(role.id); requireId(role.botId); }
     (guild.excludeChannelIds ?? []).forEach(requireId);
+    if (guild.partnerBotIds !== undefined) { if (!Array.isArray(guild.partnerBotIds)) throw new Error('invalid configured Discord id'); guild.partnerBotIds.forEach(requireId); }
   }
   for (const site of config.sites ?? []) {
     const url = new URL(site.url);
@@ -157,8 +158,11 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
               for (const [id] of answered) delete next.pending[id];
             }
             // A bot's reply to a person makes that bot the person's current partner; their next unaddressed post follows it.
-            const partnerAt = Date.parse(message.timestamp), person = message.referenced_message?.author;
-            if (target && person && !person.bot && agents.has(replier) && Number.isFinite(partnerAt)) (next.partners ??= {})[fingerprint(person.id)] = { botId: replier, at: partnerAt };
+            // The pending row knows the replied-to author; otherwise trust the snapshot only when it is the referenced post.
+            const snapshot = target && message.referenced_message?.id === target ? message.referenced_message.author : undefined;
+            const person = next.pending[target]?.author ?? answered.find(([id]) => id === target)?.[1].author ?? (snapshot && !snapshot.bot ? fingerprint(snapshot.id) : undefined);
+            const partnerAt = Date.parse(message.timestamp);
+            if (target && person && agents.has(replier) && Number.isFinite(partnerAt)) (next.partners ??= {})[person] = { botId: replier, at: partnerAt };
             continue;
           }
           if (!eligible(message)) continue;

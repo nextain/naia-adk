@@ -245,3 +245,13 @@ test('third-party bots and unreferenced bot posts never become a partner; config
   remote.messages.push(reply(9, '21', '8', 7), plain(10, 8)); state = await run(8);
   assert.equal(state.channels['10/30'].pending['10'].botId, '21');
 });
+test('partner author comes from the pending reply target, never a mismatched snapshot; partnerBotIds must be ids', async () => {
+  const { config, remote, run } = await fixture(); config.guilds[0].partnerBotIds = ['21']; await run();
+  const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes, extra = {}) => human(id, { mentions: [], timestamp: at(minutes), ...extra });
+  remote.messages.push(plain(2, 0, { author: { id: '42' } }), human(3, { author: { id: '21', bot: true }, message_reference: { message_id: '2' }, timestamp: at(1) }));
+  remote.messages.push(human(4, { author: { id: '21', bot: true }, message_reference: { message_id: '1' }, referenced_message: { id: '9', author: { id: '43' } }, timestamp: at(1) }));
+  remote.messages.push(plain(5, 2, { author: { id: '42' } }), plain(6, 2, { author: { id: '43' } }));
+  const state = await run(2); const pending = state.channels['10/30'].pending;
+  assert.equal(pending['5'].botId, '21'); assert.equal(pending['6'].botId, '20');
+  for (const bad of [[21], ['x'], '21']) assert.throws(() => validateConfig({ ...config, guilds: [{ ...config.guilds[0], partnerBotIds: bad }] }));
+});
