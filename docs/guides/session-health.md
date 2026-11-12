@@ -51,7 +51,7 @@ are absolute. `roles[].workspace` must be the actual session rules root;
 `baselineRepo` is a local upstream checkout containing the pinned commit (no
 fetch occurs). Use a distinct state/report path from response-watch. Reports
 contain task lines and must remain owner-private; default alerts contain only role IDs
-and anomaly codes. Configured messages may also include descriptions and the report path. Keep credentials in the environment named by `tokenEnv`.
+and anomaly codes. Configured messages may also include descriptions and the report path. Keep credentials in the environment named by `tokenEnv`. To send alerts to the Naia messenger instead of Discord, set `notify.kind` to `messenger`; see `docs/guides/watch-notify.md`.
 
 `adapter.kind: tmux` uses local list-panes, capture-pane and process descendant
 inspection, matching the exact `session:window.pane` target. `aiPrograms` is an

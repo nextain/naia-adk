@@ -1,0 +1,18 @@
+{
+  "notify": {
+    "kind": "messenger",
+    "urlEnv": "NAIA_MESSENGER_URL",
+    "tokenEnv": "NAIA_MESSENGER_TOKEN",
+    "channel": "<messenger-channel-name-or-id>",
+    "threadId": "<optional-thread-root-message-id>",
+    "routes": {
+      "escalate": {
+        "channel": "<owner-notice-channel-name-or-id>"
+      }
+    },
+    "mentions": {
+      "<discord-bot-id>": "<messenger-role-id-or-name>"
+    },
+    "retries": 2
+  }
+}

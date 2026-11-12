@@ -1,4 +1,7 @@
 {
+  "notify": {
+    "kind": "discord"
+  },
   "stateFile": "<private-state-directory>/response-watch.json",
   "tokenEnv": "DISCORD_BOT_TOKEN",
   "thresholds": {

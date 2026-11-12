@@ -78,6 +78,8 @@ instance path and replace placeholders. Configure:
   role IDs; checks run in dry mode without writing health state or sending notices.
 - `recovery.roleId`: role accountable for restoring stopped target sessions.
 - `tokenEnv`: protected environment variable, default `DISCORD_BOT_TOKEN`.
+- `notify`: alert channel, `discord` (default) or `messenger`; the Discord
+  token is still needed to read requests. See `docs/guides/watch-notify.md`.
 - `thresholds`, `timezoneOffsetMinutes`, `maxPages`: timing and history limits.
 - `requireMentionInReply`: boolean, default `true`. Require the requester mention
   or a reply reference to the request or recorded receipt. With `false`, an
@@ -111,6 +113,8 @@ Other API failures are recorded as degraded and retried. Newly accessible channe
 start with the same two-hour window.
 
 Each request keeps independent per-stage intent and confirmed/uncertain receipts.
+A stage that failed in alert setup before anything was posted is `rejected` and
+is sent again on the next run.
 An uncertain delivery is never automatically replayed. Inspect the destination,
 back up the state, then reconcile only the affected stage using actual delivery
 evidence. Keep pending requests, source IDs and cursor intact. Closed requests are

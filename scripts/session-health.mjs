@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { createNotifier, validateNotify, recipientOk, notifyKind } from './notify.mjs';
 import { readWorkLedger, readScheduleLedger, scheduleStatus } from './lib/ledger.mjs';
 const exec = promisify(execFile);
 const hash = s => createHash('sha256').update(s).digest('hex');
@@ -53,7 +54,10 @@ export function validateConfig(c) {
   for (const [key, fallback] of [['idleMinutes', 30], ['staleHours', 2], ['escalateMinutes', 30], ['waitMaxHours', 24]]) if (!(Number.isFinite(c[key] ?? fallback) && (c[key] ?? fallback) > 0)) throw Error('positive thresholds required');
   for (const key of ['workLedger', 'regularSchedule']) if (c[key] != null && !isAbsolute(c[key])) throw Error('absolute ledger path required');
   if (c.responseWatchState && !isAbsolute(c.responseWatchState)) throw Error('absolute response state required');
-  if (c.notifications) for (const id of [c.notifications.nudgeChannelId, c.notifications.escalation?.channelId, c.notifications.escalation?.userId, ...c.roles.map(r => r.botId)]) if (!/^\d+$/.test(id ?? '')) throw Error('invalid notification id');
+  validateNotify(c.notify);
+  // In messenger mode alerts go to notify.channel, and the escalation user may be a messenger name.
+  if (c.notifications) for (const id of [...(notifyKind(c.notify) === 'messenger' ? [] : [c.notifications.nudgeChannelId, c.notifications.escalation?.channelId]), ...c.roles.map(r => r.botId)]) if (!/^\d+$/.test(id ?? '')) throw Error('invalid notification id');
+  if (c.notifications && !recipientOk(c.notify, c.notifications.escalation?.userId)) throw Error('invalid notification id');
 }
 
 // A configured watcher must be readable before absence of requests proves idle.
@@ -219,9 +223,10 @@ export async function observeRole(config, role, previous, now, response, windowP
 }
 
 const atomic = async (path, text) => { await mkdir(dirname(path), { recursive: true, mode: 0o700 }); const tmp = `${path}.${process.pid}.tmp`; await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, path); };
-export async function runHealth(config, { now = Date.now(), dry = false, fetchImpl = fetch, token, windowProbe, log = e => console.log(JSON.stringify(e)) } = {}) {
+export async function runHealth(config, { now = Date.now(), dry = false, fetchImpl = fetch, token, windowProbe, log = e => console.log(JSON.stringify(e)), notifier, env = process.env } = {}) {
   validateConfig(config);
-  if (config.notifications && !dry && !token) throw Error('notification token missing');
+  if (config.notifications && !dry && !notifier && (notifyKind(config.notify) === 'discord' ? !token : !env[config.notify.tokenEnv ?? 'NAIA_MESSENGER_TOKEN'])) throw Error('notification token missing');
+  notifier ??= createNotifier(config.notify, { token, env, fetchImpl, names: Object.fromEntries(config.roles.map(r => [r.botId, r.id])) });
   let lock;
   if (!dry) { await mkdir(dirname(config.stateFile), { recursive: true, mode: 0o700 }); lock = await open(`${config.stateFile}.lock`, 'wx', 0o600); await lock.writeFile(JSON.stringify({ pid: process.pid, started: now })); }
   const started = Date.now(), trace = randomUUID();
@@ -258,10 +263,9 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
           const n = config.notifications, user = stage === 'nudge' ? role.botId : n.escalation.userId;
           const channel = stage === 'nudge' ? n.nudgeChannelId : n.escalation.channelId;
           try {
-            const reply = await fetchImpl(`https://discord.com/api/v10/channels/${channel}/messages`, { method: 'POST', headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content: notificationMessage(config, stage, user, role.id, code), allowed_mentions: { parse: [], users: [user] }, nonce: hash(`${role.id}/${code}/${episode.sequence}/${stage}/${episode.at}`).slice(0, 24), enforce_nonce: true }), signal: AbortSignal.timeout(15000) });
-            if (!reply.ok) { episode.stages[stage].status = reply.status >= 400 && reply.status < 500 ? 'rejected' : 'uncertain'; degraded = true; }
-            else { const data = await reply.json(); if (!data.id) throw Error('missing receipt'); episode.stages[stage] = { status: 'confirmed', at: now, id: data.id }; }
-          } catch { episode.stages[stage].status = 'uncertain'; degraded = true; }
+            const sent = await notifier.send({ stage, channelId: channel, content: notificationMessage(config, stage, user, role.id, code), mentions: [user], people: stage === 'escalate' ? [user] : [], nonce: hash(`${role.id}/${code}/${episode.sequence}/${stage}/${episode.at}`).slice(0, 24) });
+            episode.stages[stage] = { status: 'confirmed', at: now, id: sent.id };
+          } catch (e) { episode.stages[stage].status = e.uncertain === false ? 'rejected' : 'uncertain'; degraded = true; }
           await save();
         }
       }

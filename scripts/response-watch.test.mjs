@@ -168,3 +168,58 @@ test('instance message templates replace known placeholders and keep unknown one
   assert.equal(fill('<@{bot}> 답해 주세요: {link}', { bot: '1', link: 'https://x/y' }), '<@1> 답해 주세요: https://x/y');
   assert.equal(fill('{site} {unknown}', { site: 'a' }), 'a {unknown}');
 });
+test('messenger notify sends nudge and escalation there with @names and stores the messenger receipt', async () => {
+  const { config, remote, run } = await fixture(); await run(); remote.messages.push(human(2));
+  config.notify = { kind: 'messenger', url: 'http://messenger.invalid', channel: 'ops', mentions: { 20: 'helper' } };
+  config.guilds[0].escalation.userId = 'owner';
+  const posts = [], discord = [];
+  const fetchImpl = async (url, options = {}) => {
+    if (!url.startsWith('http://messenger.invalid/')) { if (options.method === 'POST') discord.push(url); return { ok: true, json: async () => (url.endsWith('/channels/30') ? { guild_id: '10' } : remote.messages.filter(m => !new URL(url).searchParams.get('before'))) }; }
+    if (url.endsWith('/channels')) return { ok: true, json: async () => [{ id: 'ch-ops', name: 'ops' }] };
+    posts.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ id: `m-${posts.length}` }) };
+  };
+  const env = { NAIA_MESSENGER_TOKEN: 'agent-token' };
+  await run(10, { fetchImpl, env });
+  const state = await run(30, { fetchImpl, env });
+  assert.equal(discord.length, 0);
+  assert.deepEqual(posts.map(p => p.body.split(' ')[0]), ['@helper', '@owner']);
+  assert.deepEqual(Object.values(state.channels['10/30'].pending['2'].stages).map(s => s.messageId), ['m-1', 'm-2']);
+  assert.throws(() => validateConfig({ ...config, notify: undefined }), /invalid escalation user/);
+});
+test('messenger mode needs notify.mentions for every bot a nudge can mention; role IDs here are Discord IDs', async () => {
+  const { config } = await fixture();
+  config.notify = { kind: 'messenger', url: 'http://messenger.invalid', channel: 'ops' };
+  config.guilds[0].escalation.userId = 'owner'; config.guilds[0].roles = [{ id: '555', name: 'Helper', botId: '22' }];
+  assert.throws(() => validateConfig(config), /notify\.mentions/);
+  config.notify.mentions = { 20: 'helper' }; assert.throws(() => validateConfig(config), /notify\.mentions/);
+  config.notify.mentions = { 20: 'helper', 22: 'helper-role' }; validateConfig(config);
+  config.guilds[0].channels[0].botId = '23'; assert.throws(() => validateConfig(config), /notify\.mentions/);
+});
+test('messenger escalation to a person wins over a bot mapping with the same ID', async () => {
+  const { config, remote, run } = await fixture(); await run(); remote.messages.push(human(2));
+  config.notify = { kind: 'messenger', url: 'http://messenger.invalid', channel: 'ops', mentions: { 20: 'helper' } };
+  config.guilds[0].escalation.userId = '20';
+  const posts = [];
+  const fetchImpl = async (url, options = {}) => {
+    if (!url.startsWith('http://messenger.invalid/')) return { ok: true, json: async () => (url.endsWith('/channels/30') ? { guild_id: '10' } : remote.messages.filter(m => !new URL(url).searchParams.get('before'))) };
+    if (url.endsWith('/channels')) return { ok: true, json: async () => [{ id: 'ch-ops', name: 'ops' }] };
+    posts.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ id: `m-${posts.length}` }) };
+  };
+  await run(30, { fetchImpl, env: { NAIA_MESSENGER_TOKEN: 'agent-token' } });
+  assert.deepEqual(posts.map(p => p.body.split(' ')[0]), ['@helper', '@20']);
+});
+test('messenger setup failure from a bad environment URL is rejected and sent again next run', async () => {
+  const { config, remote, run } = await fixture(); await run(); remote.messages.push(human(2));
+  config.notify = { kind: 'messenger', channel: 'ops', mentions: { 20: 'helper' } };
+  config.guilds[0].escalation.userId = 'owner';
+  const posts = [];
+  const fetchImpl = async (url, options = {}) => {
+    if (!url.startsWith('http://messenger.invalid/')) return { ok: true, json: async () => (url.endsWith('/channels/30') ? { guild_id: '10' } : remote.messages.filter(m => !new URL(url).searchParams.get('before'))) };
+    if (url.endsWith('/channels')) return { ok: true, json: async () => [{ id: 'ch-ops', name: 'ops' }] };
+    posts.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ id: `m-${posts.length}` }) };
+  };
+  let state = await run(10, { fetchImpl, env: { NAIA_MESSENGER_URL: 'http://messenger.invalid/?x=1', NAIA_MESSENGER_TOKEN: 'agent-token' } });
+  assert.equal(Object.values(state.channels['10/30'].pending['2'].stages)[0].status, 'rejected'); assert.equal(posts.length, 0);
+  state = await run(11, { fetchImpl, env: { NAIA_MESSENGER_URL: 'http://messenger.invalid', NAIA_MESSENGER_TOKEN: 'agent-token' } });
+  assert.equal(Object.values(state.channels['10/30'].pending['2'].stages)[0].status, 'confirmed'); assert.equal(posts.length, 1);
+});

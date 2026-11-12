@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { runHealth } from './session-health.mjs';
 import { fill } from './response-watch.mjs';
+import { createNotifier, validateNotify } from './notify.mjs';
 
 const id = value => typeof value === 'string' && /^\d+$/.test(value);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -30,6 +31,7 @@ export function validateConfig(c) {
   if (!Number.isFinite(n) || n <= 0 || !Number.isFinite(e) || e <= n) throw Error('invalid thresholds');
   if (!Number.isInteger(c.maxPages ?? 100) || (c.maxPages ?? 100) < 1) throw Error('invalid limits');
   if (!Number.isInteger(c.timezoneOffsetMinutes ?? 0) || Math.abs(c.timezoneOffsetMinutes ?? 0) > 840) throw Error('invalid timezone offset');
+  validateNotify(c.notify);
   if (c.requireMentionInReply !== undefined && typeof c.requireMentionInReply !== 'boolean') throw Error('requireMentionInReply must be boolean');
   if (c.messages && (!object(c.messages) || Object.entries(c.messages).some(([key, value]) => !['nudge', 'overdue', 'escalate', 'recovery'].includes(key) || typeof value !== 'string' || !value.trim() || [...value.matchAll(/\{([^}]+)\}/g)].some(m => !['bot', 'role', 'health', 'link'].includes(m[1]))))) throw Error('invalid messages');
   return c;
@@ -69,9 +71,10 @@ const defaults = {
   recovery: '<@{bot}> {role} 세션이 {health} 상태입니다. 복구를 확인해 주세요: {link}',
 };
 
-export async function runWatch(config, { token, fetchImpl = fetch, dry = false, now = Date.now(), healthProbe, log = e => console.log(JSON.stringify(e)) } = {}) {
+export async function runWatch(config, { token, fetchImpl = fetch, dry = false, now = Date.now(), healthProbe, log = e => console.log(JSON.stringify(e)), notifier, env = process.env } = {}) {
   validateConfig(config);
   if (!token) throw Error('configured token unavailable');
+  notifier ??= createNotifier(config.notify, { token, env, fetchImpl, names: Object.fromEntries(config.roles.map(r => [r.botId, r.id])) });
   const trace = randomUUID(), started = Date.now();
   const emit = (stage, result, extra = {}) => log({ trace, stage, result, ...extra });
   emit('start', dry ? 'dry' : 'running');
@@ -88,7 +91,7 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
       for (const r of Object.values(ch.pending)) {
         if (!object(r) || ![r.messageId, r.from, r.to].every(id) || !Number.isFinite(r.at) || r.at < 0 || !object(r.stages) || !config.roles.some(role => role.id === r.roleId && role.botId === r.to) || !config.roles.some(role => role.botId === r.from) ||
           (r.receiptId !== undefined && (!id(r.receiptId) || !(r.deadline === null || Number.isFinite(r.deadline)))) || (r.closedAt !== undefined && !Number.isFinite(r.closedAt)) ||
-          Object.values(r.stages).some(stage => !object(stage) || !['confirmed', 'intent', 'uncertain'].includes(stage.status))) throw Error('invalid pending state');
+          Object.values(r.stages).some(stage => !object(stage) || !['confirmed', 'intent', 'uncertain', 'rejected'].includes(stage.status))) throw Error('invalid pending state');
       }
     }
     const save = () => dry ? Promise.resolve() : atomic(stateFile, `${JSON.stringify(state, null, 2)}\n`);
@@ -99,7 +102,8 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
     };
     const notify = async (request, stage, role, guild, channel, health = '') => {
       const stageKey = request.receiptId ? `deadline-${stage}` : stage;
-      if (request.stages[stageKey]) { if (request.stages[stageKey].status !== 'confirmed') degraded = true; return; }
+      // A rejected stage failed in setup before anything was posted, so it is sent again.
+      if (request.stages[stageKey] && request.stages[stageKey].status !== 'rejected') { if (request.stages[stageKey].status !== 'confirmed') degraded = true; return; }
       const key = hash(`${guild.id}/${channel.id}/${request.messageId}/${request.to}/${stageKey}`);
       const values = { bot: role.botId, role: request.roleId, health, link: `https://discord.com/channels/${guild.id}/${channel.id}/${request.messageId}` };
       const content = fill(config.messages?.[stage] ?? defaults[stage], values);
@@ -112,12 +116,15 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
           await atomic(filename, `# Discord wake\n\nRole: ${role.id}\nGuild: ${guild.id} (${guild.id})\nChannel: ${channel.id} (${channel.id})\nAuthor: agent-request-watch\nMessage ID: ${(1000000000000000000n + BigInt(`0x${key}`) % 9000000000000000000n).toString()}\nOriginal Message ID: ${request.messageId}\nRequest stage ID: ${key}\nURL: ${values.link}\n\n${content}\n`);
           request.stages[stageKey] = { status: 'confirmed', at: now, filename };
         } else {
-          const sent = await api(`/channels/${channel.id}/messages`, { content, allowed_mentions: { parse: [], users: [role.botId] }, nonce: key, enforce_nonce: true });
-          if (!id(sent.id)) throw Error('missing send receipt');
+          const sent = await notifier.send({ stage, channelId: channel.id, content, mentions: [role.botId], nonce: key });
           request.stages[stageKey] = { status: 'confirmed', at: now, messageId: sent.id };
         }
         emit(stage, 'confirmed', { key });
-      } catch (e) { request.stages[stageKey] = { status: 'uncertain', at: now }; degraded = true; emit(stage, 'reconciliation_required', { key, reason: e.message }); }
+      } catch (e) {
+        degraded = true;
+        if (e.setup) { request.stages[stageKey] = { status: 'rejected', at: now }; emit(stage, 'rejected', { key, reason: e.message }); }
+        else { request.stages[stageKey] = { status: 'uncertain', at: now }; emit(stage, 'reconciliation_required', { key, reason: e.message }); }
+      }
       await save();
     };
     let healthRows;

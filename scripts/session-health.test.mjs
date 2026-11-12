@@ -353,3 +353,37 @@ test('wait line accepts M/D HH:MM KST and rejects a zero waitMaxHours', async ()
   assert.equal(waitUntil('- in progress: waiting for review', now), null);
   const f = await fixture(); f.c.waitMaxHours = 0; assert.throws(() => validateConfig(f.c), /positive/);
 });
+test('messenger notify sends alerts with the agent token and stores the messenger ID as the receipt', async () => {
+  const f = await fixture(); const posts = [];
+  f.c.notify = { kind: 'messenger', url: 'http://messenger.invalid', channel: 'ops' };
+  f.c.notifications.escalation.userId = 'owner';
+  const fetchImpl = async (url, init = {}) => {
+    assert.ok(url.startsWith('http://messenger.invalid/api/portal/messenger/')); assert.equal(init.headers['X-AX-Agent-Token'], 'agent-token');
+    if (url.endsWith('/channels')) return { ok: true, json: async () => [{ id: 'ch-ops', name: 'ops' }] };
+    posts.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ id: `m-${posts.length}` }) };
+  };
+  const env = { NAIA_MESSENGER_TOKEN: 'agent-token' };
+  await f.run({ fetchImpl, env, token: undefined }); await f.run({ fetchImpl, env, token: undefined, now: now + 31 * 60000 });
+  assert.equal(f.sent.length, 0);
+  assert.ok(posts.some(p => p.body.startsWith('@role-a ')) && posts.some(p => p.body.startsWith('@owner ')));
+  const s = JSON.parse(await readFile(f.c.stateFile, 'utf8'));
+  const stages = Object.values(s.roles['role-a'].episodes.stalled.stages);
+  assert.equal(stages.length, 2); assert.ok(stages.every(x => x.status === 'confirmed' && /^m-\d+$/.test(x.id)));
+  await assert.rejects(f.run({ fetchImpl, env: {}, token: undefined, now: now + 61 * 60000 }), /notification token missing/);
+});
+test('messenger setup failure from a bad environment URL is rejected and sent again next run', async () => {
+  const f = await fixture(); const posts = [];
+  f.c.notify = { kind: 'messenger', channel: 'ops' };
+  f.c.notifications.escalation.userId = 'owner';
+  const fetchImpl = async (url, init = {}) => {
+    if (url.endsWith('/channels')) return { ok: true, json: async () => [{ id: 'ch-ops', name: 'ops' }] };
+    posts.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ id: `m-${posts.length}` }) };
+  };
+  const bad = { NAIA_MESSENGER_URL: 'not a url', NAIA_MESSENGER_TOKEN: 'agent-token' };
+  await f.run({ fetchImpl, env: bad, token: undefined }); await f.run({ fetchImpl, env: bad, token: undefined, now: now + 1000 });
+  let stages = JSON.parse(await readFile(f.c.stateFile, 'utf8')).roles['role-a'].episodes.stalled.stages;
+  assert.equal(stages.nudge.status, 'rejected'); assert.equal(posts.length, 0);
+  await f.run({ fetchImpl, env: { NAIA_MESSENGER_URL: 'http://messenger.invalid', NAIA_MESSENGER_TOKEN: 'agent-token' }, token: undefined, now: now + 60000 });
+  stages = JSON.parse(await readFile(f.c.stateFile, 'utf8')).roles['role-a'].episodes.stalled.stages;
+  assert.equal(stages.nudge.status, 'confirmed'); assert.equal(posts.length, 1);
+});
