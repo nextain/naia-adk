@@ -84,10 +84,12 @@ const tokenPatterns = [
 ];
 // Conservative rejection avoids approving partial or ambiguous Korean quantities.
 const koreanNumberPatterns = [
+  // False rejects are preferable to accepting an unsupported quantity.
+  /[한두세네零〇一二三四五六七八九十百千万萬億亿兆两兩壹貳贰參叁肆伍陸陆柒捌玖拾佰仟]/gu,
   /(?:하나|둘|셋|넷|다섯|여섯|일곱|여덟|아홉|열|스물|스무|서른|마흔|쉰|예순|일흔|여든|아흔|백|천|몇|여러|서너|두어|한두|두세|너댓|대여섯|예닐곱|여남은|수십|수백|수천|수만|수억|수조)+(?:한|두|세|네)?/gu,
-  /[영공일이삼사오육륙칠팔구십백천만억조한두세네다섯여섯일곱여덟아홉열스물서른마흔쉰예순일흔여든아흔몇여러]+(?=[\s\p{Default_Ignorable_Code_Point}]*(?:건|회|개|번|시간|분|명|차))/gu
+  /[영공일이삼사오육륙칠팔구십백천만억조한두세네다섯여섯일곱여덟아홉열스물서른마흔쉰예순일흔여든아흔몇여러]+(?=[\s\p{Default_Ignorable_Code_Point}]*(?:건|회|개|번|시간|분|명|차|곳|사람|마리|달|주|일|줄|장))/gu
 ];
-const normalized = text => text.normalize('NFKC');
+const normalized = text => text.normalize('NFKC').replace(/[。｡]/gu, '.');
 const stripped = text => normalized(text).replace(/[\s\p{Default_Ignorable_Code_Point}\p{Cf}]/gu, '');
 function tokens(text, pattern) { return [...text.matchAll(pattern)].map(match => match[0].replace(/[.,;:!?。]+$/u, '')); }
 function strings(value) {

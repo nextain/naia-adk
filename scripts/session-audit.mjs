@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { readFixture, collectSignals } from './lib/audit-signals.mjs';
 import { evaluate, initialState, priorityMismatch } from './lib/audit-rules.mjs';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdir, open, unlink } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { atomic } from './session-health.mjs';
+import { createDiscordApi, postDiscord } from './response-watch.mjs';
+import { deliverAudit, deliveryKey, validateDelivery } from './lib/audit-delivery.mjs';
 import { buildBundle, judge, sha256, fixedTemplate, formatText } from './lib/audit-judge.mjs';
 
 export async function runFixture({ fixture, input: suppliedInput, from, to, step = 30 * 60000, evidence, verifyEvidence, config = { judge: { runner: 'none' } }, configBytes, executable, priority, role = 'role', state: previousState }) {
@@ -10,7 +14,7 @@ export async function runFixture({ fixture, input: suppliedInput, from, to, step
   const configHash = sha256(configBytes ?? JSON.stringify(config)), promptHash = sha256(prompt);
   const header = { configHash: configHash.slice(0, 8), promptHash: promptHash.slice(0, 8) };
   const options = { evidence: evidence ?? input.ledger?.evidence ?? [], verifyEvidence };
-  let state = structuredClone(previousState ?? initialState()), last; const timeline = [], texts = [];
+  let state = structuredClone(previousState ?? initialState()), last; const timeline = [], texts = [], outputs = [];
   for (let at = from; at <= to; at += step) {
     const signals = collectSignals(input, { now: at });
     const preliminary = evaluate(signals, state, at, options);
@@ -33,14 +37,100 @@ export async function runFixture({ fixture, input: suppliedInput, from, to, step
     for (const event of result.events.filter(e => e.stage !== 'recovered')) {
       const output = judged?.output?.code === event.code ? judged.output : fixedTemplate(event.code);
       texts.push(formatText({ role, output, configHash, promptHash }));
+      outputs.push(output);
     }
     const summary = result.active.some(e => e.code !== 'audit-degraded') ? '신호 감지' : '신호 없음';
-    if (from === to) return { ...result, summary, header, texts, timeline };
+    if (from === to) return { ...result, summary, header, texts, outputs, timeline };
   }
-  return { ...last, state, header, texts, timeline };
+  return { ...last, state, header, texts, outputs, timeline };
+}
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+function validateState(state) {
+  if (!record(state) || state.version !== 1 || !record(state.roles) || !record(state.delivery) || !record(state.delivery.days) || !record(state.delivery.episodes) || (state.pending !== undefined && !record(state.pending))) throw Error('invalid audit state');
+  for (const role of Object.values(state.roles)) {
+    if (!record(role) || !record(role.episodes) || !record(role.reviewFiles) || !record(role.lastCounts) || typeof role.initialized !== 'boolean' || !Number.isInteger(role.blindRuns) || role.blindRuns < 0 || !Number.isInteger(role.llmFailures) || role.llmFailures < 0) throw Error('invalid audit role state');
+    for (const ep of Object.values(role.episodes)) if (!record(ep) || typeof ep.code !== 'string' || typeof ep.target !== 'string' || !Number.isFinite(ep.at) || typeof ep.warned !== 'boolean' || typeof ep.reported !== 'boolean' || !Array.isArray(ep.evidenceIds) || !Array.isArray(ep.claimIds) || !Number.isInteger(ep.deferrals)) throw Error('invalid audit episode');
+    if (Object.values(role.reviewFiles).some(v => !Array.isArray(v) || v.some(n => typeof n !== 'string')) || Object.values(role.lastCounts).some(v => !Number.isInteger(v) || v < 0)) throw Error('invalid audit counters');
+  }
+  for (const d of Object.values(state.delivery.days)) if (!record(d) || !Number.isInteger(d.count) || d.count < 0 || typeof d.capReported !== 'boolean') throw Error('invalid audit day');
+  for (const e of Object.values(state.delivery.episodes)) if (!record(e) || !['intent', 'confirmed', 'uncertain'].includes(e.status) || !Number.isFinite(e.at) || (e.status === 'confirmed' && typeof e.id !== 'string')) throw Error('invalid delivery receipt');
+  for (const queue of Object.values(state.pending ?? {})) if (!Array.isArray(queue) || queue.some(e => !record(e) || !['warn', 'report'].includes(e.stage) || typeof e.code !== 'string' || typeof e.target !== 'string' || !Number.isFinite(e.at) || !Number.isFinite(e.episodeAt))) throw Error('invalid pending audit events');
+}
+// The delivery journal records intent before I/O so a crash cannot silently resend.
+export async function runAudit({ config, role: roleId, fixture, input, now = Date.now(), sender, token, fetchImpl = fetch, channelMessages, verifyEvidence, priority, configBytes } = {}) {
+  const role = config.roles?.find(r => r.id === roleId);
+  if (!role || typeof config.stateFile !== 'string' || !config.stateFile || typeof config.reportFile !== 'string' || !config.reportFile) throw Error('missing audit role or files');
+  const transport = sender ?? (token ? item => postDiscord(createDiscordApi(fetchImpl, token), item) : undefined);
+  const dry = config.dry === true || !transport;
+  let lock;
+  try {
+    if (!dry) {
+      await mkdir(dirname(config.stateFile), { recursive: true, mode: 0o700 });
+      lock = await open(`${config.stateFile}.lock`, 'wx', 0o600);
+    }
+    let persisted;
+    try { persisted = JSON.parse(await readFile(config.stateFile, 'utf8')); }
+    catch (error) { if (error.code !== 'ENOENT') throw Error('state unreadable; refusing reset'); persisted = { version: 1, roles: {}, delivery: { days: {}, episodes: {} } }; }
+    validateState(persisted);
+    const dryBinding = sha256(`${sha256(configBytes ?? JSON.stringify(config))}:${sha256(JSON.stringify(persisted))}`);
+    if (dry) {
+      let previousReport;
+      try { previousReport = await readFile(config.reportFile, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      const marker = previousReport?.match(/<!-- audit-dry-state:([A-Za-z0-9+/=]+) -->/);
+      if (marker) {
+        let simulation;
+        try { simulation = JSON.parse(Buffer.from(marker[1], 'base64').toString('utf8')); } catch { throw Error('invalid dry audit state'); }
+        if (simulation.binding === dryBinding) { validateState(simulation.state); persisted = simulation.state; }
+      } else if (previousReport?.includes('<!-- audit-dry-state:')) throw Error('invalid dry audit state');
+    }
+    validateDelivery(config, role, now, ['00000000', '00000000']);
+    if (/[|\r\n@<>]/.test(config.reportFile)) throw Error('invalid report path');
+    const result = await runFixture({ fixture, input, from: now, to: now, config, role: role.id, state: persisted.roles[role.id], verifyEvidence, priority, configBytes });
+    let index = 0;
+    const generated = result.events.map(event => {
+      if (event.stage === 'recovered') return event;
+      const id = event.target ? `${event.code}:${event.target}` : event.code;
+      return { ...event, episodeAt: result.state.episodes[id]?.at ?? event.at, output: result.outputs[index++] };
+    });
+    persisted.pending ??= {};
+    if (typeof persisted.pending !== 'object' || Array.isArray(persisted.pending)) throw Error('invalid pending audit state');
+    if (!Array.isArray(persisted.pending[role.id] ?? [])) throw Error('invalid pending audit events');
+    const recovered = generated.filter(e => e.stage === 'recovered');
+    const pending = (persisted.pending[role.id] ?? []).filter(e => !recovered.some(r => r.code === e.code && r.target === e.target));
+    const events = [...pending, ...generated];
+    persisted.pending[role.id] = events.filter(e => e.stage !== 'recovered');
+    persisted.roles[role.id] = result.state;
+    const save = async delivery => {
+      if (dry) return;
+      persisted.delivery = delivery;
+      persisted.pending[role.id] = persisted.pending[role.id].filter(event => !delivery.episodes[deliveryKey(role, event)]);
+      await atomic(config.stateFile, `${JSON.stringify(persisted, null, 2)}\n`);
+    };
+    if (!dry && persisted.pending[role.id].length) await atomic(config.stateFile, `${JSON.stringify(persisted, null, 2)}\n`);
+    const observedMessages = channelMessages ?? (config.channelReadFile ? JSON.parse(await readFile(config.channelReadFile, 'utf8')) : []);
+    const delivered = await deliverAudit({ role, events, config, state: persisted.delivery, reportPath: config.reportFile, configHash: result.header.configHash, promptHash: result.header.promptHash, now, sender: dry ? undefined : transport, channelMessages: observedMessages, save });
+    let report = [`prompt=${result.header.promptHash} config=${result.header.configHash}`, result.summary, `못 읽은 입력: ${result.unknown.join(', ') || '없음'}`, delivered.report].join('\n') + '\n';
+    if (dry) {
+      persisted.delivery = delivered.projectedState;
+      persisted.pending[role.id] = persisted.pending[role.id].filter(event => !persisted.delivery.episodes[deliveryKey(role, event)]);
+      const encoded = Buffer.from(JSON.stringify({ binding: dryBinding, state: persisted })).toString('base64');
+      report += `<!-- audit-dry-state:${encoded} -->\n`;
+    } else await save(delivered.state);
+    await atomic(config.reportFile, report);
+    return { ...result, ...delivered, report };
+  } finally { if (lock) { await lock.close(); await unlink(`${config.stateFile}.lock`); } }
 }
 async function main(args) {
   const get = flag => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i+1]; };
+  if (args.includes('--run')) {
+    if (!get('--config') || !get('--fixture') || !get('--role')) throw Error('--config, --fixture and --role are required');
+    const configBytes = await readFile(get('--config'), 'utf8'), config = JSON.parse(configBytes);
+    const now = get('--at') ? Date.parse(get('--at')) : Date.now();
+    if (args.includes('--dry')) config.dry = true;
+    const token = config.sender?.tokenEnv ? process.env[config.sender.tokenEnv] : undefined;
+    const result = await runAudit({ config, configBytes, role: get('--role'), fixture: get('--fixture'), now, token });
+    console.log(result.report); return;
+  }
   if (!args.includes('--dry') || !get('--fixture')) throw Error('--dry and --fixture are required');
   const replay = args.includes('--replay');
   const from = Date.parse(get(replay ? '--from' : '--at')), to = replay ? Date.parse(get('--to')) : from;
