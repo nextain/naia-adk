@@ -9,6 +9,21 @@
  * DEPLOY_DIR is __dirname-dependent → this adapter resolves it and
  * passes via opts (byte-identical to original). (G-OC01 part2.)
  */
+// 파이프에 64KB 넘게 쓰고 바로 process.exit 하면 뒷부분이 잘려 판정 JSON 이 깨진다(11/11 우면창신 계획 85KB, 승인 코드 줄이 잘림).
+// 깨진 JSON 은 막음으로 읽히지 않으므로, stdout 을 파일 기술자에 끝까지 동기로 쓴다.
+process.stdout.write = (chunk, enc, cb) => {
+	const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), typeof enc === "string" ? enc : "utf8");
+	for (let o = 0; o < b.length;) {
+		try { o += require("fs").writeSync(1, b, o); } catch (e) { if (e.code !== "EAGAIN") throw e; }
+	}
+	const done = typeof enc === "function" ? enc : cb;
+	if (typeof done === "function") done();
+	return true;
+};
+
+// 멈춘 훅은 시간 초과로 취소되고 명령이 그대로 돈다. 본문은 자식에서 돌고 부모가 시한을 지켜 막는다(lib/hook-watchdog.js).
+if (require("./lib/hook-watchdog.js").runWithWatchdog({ script: __filename, args: process.argv.slice(2) })) return;
+
 const path = require("path");
 const fs = require("fs");
 const roleMode = fs.existsSync(path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".naia-role.json"));
