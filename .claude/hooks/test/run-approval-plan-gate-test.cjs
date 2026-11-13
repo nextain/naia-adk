@@ -134,11 +134,13 @@ function writePassingReviewReceipt(root, planFile, options = {}) {
 	const promptSha = sha256(prompt);
 	const manifestSha = deployPlan.reviewInputManifest(planFile, root);
 
+	const fail = options.fail || [];
 	const bodyLines = [
-		"판정: PASS",
-		...deployPlan.CRITERIA.map(([id]) => `${id}: PASS — 계획서 및 고정 스크립트 확인 통과`),
+		fail.length ? "판정: FAIL" : "판정: PASS",
+		...deployPlan.CRITERIA.map(([id]) => (fail.includes(id) ? `${id}: FAIL — 차단 지적 있음` : `${id}: PASS — 계획서 및 고정 스크립트 확인 통과`)),
+		...(options.extra || []),
 		`참고 지적: 0${options.bodyMarker || ""}`,
-		"남은 지적: 0",
+		`남은 지적: ${options.open ?? 0}`,
 		"",
 	];
 	const body = bodyLines.join("\n");
@@ -148,8 +150,10 @@ function writePassingReviewReceipt(root, planFile, options = {}) {
 	const resultRel = `deploy-plan-review-${reviewer}.md`;
 	fs.writeFileSync(path.join(gatesDir, resultRel), finalText);
 
-	const startedAt = options.startedAt || new Date(Date.now() - 2000).toISOString();
-	const endedAt = new Date().toISOString();
+	// 옛 모양(rotation 칸 없음) 기록은 차례 도입 시각 앞선 것만 받으므로 그 앞 시각으로 쓴다.
+	const legacyEnd = Date.parse(deployPlan.LEGACY_REVIEW_CUTOFF) - 60_000;
+	const startedAt = options.startedAt || new Date(legacyEnd - 2000).toISOString();
+	const endedAt = new Date(legacyEnd).toISOString();
 	const reviewRecord = {
 		plan_sha256: planSha,
 		plan: path.relative(root, planFile),
@@ -1229,7 +1233,8 @@ test("temporary reviewer selection defaults safely and expires", (t) => {
  }
  fs.writeFileSync(configPath, "{");
  assert.throws(() => deployPlan.reviewerIdsFor("muse", root, now));
- assert.ok(deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "codex" }).some(p => p.includes("author_model")));
+ assert.ok(!deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "codex" }).some(p => p.includes("author_model")), "차례 셋(codex)은 새 작성자로 받는다");
+ assert.ok(deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "gemini" }).some(p => p.includes("author_model")));
 });
 
 test("codex receipt remains valid after configuration changes", (t) => {
@@ -1271,7 +1276,7 @@ test("fake codex reviewer runs through the complete review flow", (t) => {
  const bwrap = path.join(binDir, "bwrap"), codex = path.join(binDir, "fake-codex");
  fs.writeFileSync(bwrap, '#!/bin/sh\nwhile [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done\nshift\nexec "$@"\n', { mode: 0o755 });
  const body = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "남은 지적: 0"].join("\n");
- fs.writeFileSync(codex, `#!/bin/sh\n[ "$1" = exec ] || exit 19\n[ -z "$(cat)" ] || exit 20\nprintf 'codex\\n'\ncat <<'REVIEW_EOF'\n${body}\nREVIEW_EOF\nprintf 'tokens used\\n'\n`, { mode: 0o755 });
+ fs.writeFileSync(codex, `#!/bin/sh\n[ "$1" = exec ] || exit 19\nfor arg do last="$arg"; done\n[ "$last" = - ] || exit 20\ncat >/dev/null\nprintf 'codex\\n'\ncat <<'REVIEW_EOF'\n${body}\nREVIEW_EOF\nprintf 'tokens used\\n'\n`, { mode: 0o755 });
  const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
   cwd: root, encoding: "utf8", timeout: 30000,
   env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CODEX_BIN: codex, DEPLOY_APPROVAL_STATE_DIR: stateDir },
@@ -1364,4 +1369,33 @@ test("codex reviewer refuses to run without bwrap outside recovery mode", (t) =>
  assert.notEqual(run.status, 0, `${run.stdout}\n${run.stderr}`);
  assert.match(`${run.stdout}\n${run.stderr}`, /sandbox-prepare/);
  assert.equal(fs.existsSync(marker), false);
+});
+
+test("위험 수용: security FAIL 하나만, 결정 글·같은 값·끝나는 날이 맞을 때만 리뷰 관문을 지남", (t) => {
+	const goodRa = () => ({ criterion: "security", accepted_by: "approver", decision_url: "https://discord.com/channels/1/2/3", same_value_as: "앞 판 번들 같은 지문 0123456789ab", no_new_exposure: true, expires_at: new Date(Date.now() + 86400000).toISOString(), reason: "이미 공개된 같은 시연 값, 새 노출 없음" });
+	const secLine = ["1. [차단: security] 공개 번들에 시연 값"];
+	const cases = [
+		{ desc: "맞는 위험 수용 + security FAIL 만", ra: goodRa(), fail: ["security"], open: 1, extra: secLine, pass: true },
+		{ desc: "위험 수용 + correctness 도 FAIL", ra: goodRa(), fail: ["security", "correctness"], open: 1, extra: secLine, pass: false },
+		{ desc: "위험 수용 + security 차단 지적 두 건(두 번째 새 비밀)", ra: goodRa(), fail: ["security"], open: 2, extra: [...secLine, "2. [차단: security] 새 열쇠가 번들에 들어감"], pass: false },
+		{ desc: "위험 수용 + security 차단 지적 두 건, 남은 지적 1로 적음", ra: goodRa(), fail: ["security"], open: 1, extra: [...secLine, "2. [차단: security] 새 열쇠가 번들에 들어감"], pass: false },
+		{ desc: "위험 수용 + security 아닌 차단 지적", ra: goodRa(), fail: ["security"], open: 2, extra: [...secLine, "2. [차단: 불일치] 명령이 다름"], pass: false },
+		{ desc: "결정 글 주소 없음", ra: { ...goodRa(), decision_url: "" }, fail: ["security"], open: 1, extra: secLine, pass: false },
+		{ desc: "새 노출", ra: { ...goodRa(), no_new_exposure: false }, fail: ["security"], open: 1, extra: secLine, pass: false },
+		{ desc: "다른 기준 수용", ra: { ...goodRa(), criterion: "rollback" }, fail: ["rollback"], open: 0, extra: [], pass: false },
+		{ desc: "끝나는 날 8일 뒤", ra: { ...goodRa(), expires_at: new Date(Date.now() + 8 * 86400000).toISOString() }, fail: ["security"], open: 1, extra: secLine, pass: false },
+		{ desc: "끝나는 날 지남", ra: { ...goodRa(), expires_at: new Date(Date.now() - 1000).toISOString() }, fail: ["security"], open: 1, extra: secLine, pass: false, createdAt: new Date(Date.now() - 3600000).toISOString() },
+		{ desc: "위험 수용 없음", ra: undefined, fail: ["security"], open: 1, extra: secLine, pass: false },
+	];
+	for (const c of cases) {
+		const { root } = makeWorkspace(t);
+		writeGateConfig(root);
+		const overrides = {};
+		if (c.ra) overrides.risk_acceptance = c.ra;
+		if (c.createdAt) overrides.createdAt = c.createdAt;
+		const { planFile, gatesDir } = createValidPlan(root, overrides);
+		const { planSha } = writePassingReviewReceipt(root, planFile, { fail: c.fail, open: c.open, extra: c.extra });
+		const review = deployPlan.reviewProblems(gatesDir, planSha, root);
+		assert.equal(review.ok, c.pass, `${c.desc}: ${review.problems.join(" / ")}`);
+	}
 });
