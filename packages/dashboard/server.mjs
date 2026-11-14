@@ -6,6 +6,7 @@ import process from "node:process"
 import { fileURLToPath } from "node:url"
 import next from "next"
 import { hostGuard } from "./host-guard.mjs"
+import { stripUntrustedIdentityHeaders } from "./identity-header-guard.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -261,6 +262,7 @@ export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket =
  */
 export function createRequestHandler(nextHandler) {
   return function handleRequest(req, res) {
+    stripUntrustedIdentityHeaders(req)
     // 0. 프록시 경고 머리글 감지 (FE 8장 145행)
     if (req.headers["x-forwarded-for"] || req.headers["tailscale-user-login"]) {
       console.warn("[WARN] Proxy header detected (x-forwarded-for or tailscale-user-login). Reverse proxy / tailscale serve should not be used in front of dashboard.")
@@ -308,6 +310,9 @@ export function createRequestHandler(nextHandler) {
  * 대시보드 서버 기동
  */
 export async function startServer(customArgv = process.argv.slice(2), customEnv = process.env) {
+  if (!process.env.NAIA_PERSONAL_SCHEDULE_DIR) {
+    process.env.NAIA_PERSONAL_SCHEDULE_DIR = path.join(__dirname, "data", "schedule", "personal")
+  }
   const { port, host } = parseArgs(customArgv, customEnv)
   const dev = customEnv.NODE_ENV === "development" || (
     customEnv.NODE_ENV !== "production" && !fs.existsSync(path.join(__dirname, ".next", "BUILD_ID"))

@@ -1,0 +1,4 @@
+/data/schedule/personal/*.yaml
+/data/schedule/personal/*.yml
+/data/schedule/personal/*.tmp
+/data/schedule/personal/*.lock
