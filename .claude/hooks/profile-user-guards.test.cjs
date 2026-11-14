@@ -161,6 +161,9 @@ test("subagent model guard blocks missing or corrupt policy and preserves model 
   }
   assert.equal((await invoke("subagent-model-guard.cjs", { tool_name: "Workflow" }, f, env)).decision, "block");
   assert.equal((await invoke("subagent-model-guard.cjs", { tool_name: "Bash", tool_input: { command: "ls" } }, f, env)), null);
+  // Every unmet condition is listed in one refusal, so a caller fixes them in one retry.
+  const all = (await invoke("subagent-model-guard.cjs", { tool_name: "Agent", tool_input: { model: "opus", prompt: "no brief" } }, f, env)).reason;
+  for (const part of ["허용 목록:", "모델(", "안내 줄(상위 목표:)", "안내 줄(막히면 올림:)"]) assert.ok(all.includes(part), part);
 });
 
 test("subagent model override keeps brief mandatory and refuses expiry outside its window", async () => {

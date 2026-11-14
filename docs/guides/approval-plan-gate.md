@@ -48,13 +48,18 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - `scenario[].files`: 명령이 읽거나 실행하는 스크립트·설정 파일(`bash ./deploy.sh`, `--yaml app.yaml`, `@body.json` 등)은 반드시 `"경로": "<sha256>"` 형태로 고정합니다. 파일 내용이 1바이트라도 바뀌면 실행이 차단됩니다(`bash scripts/rollout.sh` 재귀 검사는 스크립트 폴더로 자동 이동하지 않고 호출자 작업 디렉터리를 유지하며, 스크립트 안의 명시적 `cd`만 반영합니다).
 - 사전승인 코드 일괄 발급(`preapprove`)을 쓰려면 최상위에 `"approval_mode": "preapprove_steps"`를 넣습니다.
 
+### 여러 절 고정 대본 돌리기
+대본(예: `sudo bash <대본 절대 경로> <단계id>`)을 계획 단계 `commands` 에 그대로 적고, 대본과 대본이 원격에 올리는 본문까지 `files` 에 `{경로: sha256}` 로 고정합니다. 이런 대본은 **ops 로 받지 않습니다.** 대본 본문(변수·eval·here-doc·원격 본문·kubectl 등)이 판을 바꾸는지 관문 분류기가 다 읽을 수 없기 때문입니다. `kind: "ops"` 준비 기록(`deploy.json`)으로 `bash /…` 대본을 부르면 "계획 고정 대본은 ops 로 받지 않음" 으로 막힙니다(`config/deploy-gate.json` 에서 그 서비스에 `allowCustomCommands` 를 명시한 경우만 예외).
+고정 대본은 준비 기록 없이 계획 승인으로 돌립니다. 적대 리뷰·PLAN·STEP 승인을 받은 계획의 명령 바이트와 `files` 지문이 실행 때와 같으면 받고, 대본이나 고정 파일이 1바이트라도 바뀌면 `고정 파일 sha256 불일치` 로 막습니다. `config/deploy-gate.json` 서비스 규칙(`allowedCommands` 등)은 그대로 따로 요구하며, 계획 경로·지문은 계획에서 읽으므로 계획마다 코드를 고칠 필요가 없습니다. 같은 서비스로 12시간 안의 `deploy.json` 이 있으면 그 기록의 kind 로 판정하므로, ops 기록을 남겨 두면 대본이 막힙니다. 설정에 `requireReadiness: true` 가 있으면 계획 승인 경로를 쓸 수 없습니다.
+한계: 지문은 훅 시점에 한 번 확인하고 bash 는 대본을 실행하면서 읽으므로, 계획 폴더(에이전트가 쓸 수 있는 곳) 안 대본을 실행 중에 다른 프로세스가 바꾸면 승인과 다른 글이 돌 수 있습니다(TOCTOU, 기존 `bash <파일>` 갈래와 같은 성질).
+
 ---
 
 ## 2. 적대 리뷰 받기 (`review`)
 
-계획서 양식과 고정 파일 SHA-256이 모두 맞으면 독립 리뷰어 한 명(설정 `planReview`에 따라 Argon 또는 Codex)에게 아홉 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`) 적대 리뷰를 받습니다.
+계획서 양식과 고정 파일 SHA-256이 모두 맞으면 차례상 다음 모델(`argon`→`codex`→`muse`→`argon`) 한 명에게 아홉 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`) 적대 리뷰를 받습니다. 작성자는 셋 중 누구나 될 수 있고, 첫 후보가 한도에 걸리면 남은 하나로 넘어가며 넘긴 기록은 `skipped`로 남깁니다.
 
-Codex 리뷰어 실행에는 복구 모드 여부와 관계없이 `bwrap` 읽기 전용 격리가 필요합니다. 기본 리뷰어는 Argon입니다. 승인자 결정으로 인스턴스의 `.claude/deploy/config.json`에 다음 `planReview`를 추가하면 지정한 시각 전까지 Muse 작성 계획을 Codex (`gpt-6.1-terra`, `high`)가 리뷰합니다. 기존 설정의 다른 항목은 유지합니다.
+Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그대로 돌리고, Codex·Argon 리뷰어 실행에는 복구 모드 여부와 관계없이 `bwrap` 읽기 전용 격리가 필요합니다. 고정 `planReview`가 없으면 차례상 다음 모델이 먼저 리뷰합니다. 승인자 결정으로 인스턴스의 `.claude/deploy/config.json`에 다음 `planReview`를 추가하면 지정한 시각 전까지 그 리뷰어를 먼저 쓰고, 한도 실패일 때만 남은 하나로 넘어갑니다. 한도 실패는 종료 코드가 0이 아닌 정수이고 실행기 stderr·실행 오류에 한도 문구(rate limit, quota, usage limit, 429, RESOURCE_EXHAUSTED, exhausted)가 있을 때입니다. 리뷰 본문은 판별에 쓰지 않습니다. 신호로 끝난 실행(종료 코드 없음)은 한도로 보지 않습니다. 기존 설정의 다른 항목은 유지합니다.
 
 ```json
 "planReview": {
@@ -64,13 +69,14 @@ Codex 리뷰어 실행에는 복구 모드 여부와 관계없이 `bwrap` 읽기
 }
 ```
 
-`until`이 없거나 유효하지 않거나 지났을 때, 또는 `reviewer`가 `argon`이나 `codex`가 아닐 때는 기본 Argon으로 돌아갑니다. 설정 JSON의 파스 오류는 거부합니다. 관문은 설정이나 시각에 관계없이 등록된 Argon 또는 Codex 영수증을 받으므로, 설정을 바꾼 뒤에도 기존 영수증이 유효합니다. 작성자와 리뷰어는 같을 수 없습니다.
+`until`이 없거나 지났을 때, 또는 `reviewer`가 작성자와 같을 때는 차례만 씁니다. 설정 JSON 파스 오류와 형식 오류(`reviewer`가 차례 셋 밖, `until`이 ISO 시각이 아님)는 거부합니다. 관문은 차례 기록(`rotation: true`)의 리뷰어 영수증 1명을 받습니다. 기록 시각(`reviewedAt`)의 차례를 다시 만들어, `skipped`가 앞에서부터 건너뛴 후보 그대로이고(각각 0이 아닌 `exit_code`) 실제 리뷰어가 그 다음 후보인지 대조합니다. `reviewedAt`은 UTC ISO 시각이어야 하고, 리뷰어 영수증 시작 시각(`started_at`) 이전 90분 안이어야 합니다. 시각을 옮겨 다른 차례를 만드는 기록은 막습니다. 작성자와 같은 모델, 차례 밖 모델, 한도 기록 없는 뒤 후보, 2인 기록은 막습니다. 옛 모양 기록(`rotation` 칸 없음)은 `reviewedAt`과 리뷰어 영수증 시작 시각이 모두 차례 도입 시각(`2026-11-10T10:00:00Z`)보다 앞설 때만 받습니다. 새 기록에서 `rotation` 칸을 지워 차례 대조를 건너뛰는 길을 막습니다. 리뷰 뒤 `planReview`를 바꾸면 차례가 달라져 다시 리뷰해야 할 수 있습니다. 작성자와 리뷰어는 같을 수 없습니다.
 
 ```bash
 node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/deploy-plan.json --author muse
 ```
 
 - 모든 기준이 `PASS`이고 `남은 지적: 0`(차단 지적 0건)이어야 통과합니다.
+- 예외는 좁은 위험 수용 하나입니다. 승인자가 결정 글로 받아들인 경우 계획서에 `risk_acceptance` 칸(`criterion: "security"`, `accepted_by`, `decision_url`, `same_value_as`, `no_new_exposure: true`, `reason`, `expires_at`)을 모두 적으면, `security` 기준 하나의 `FAIL`과 그 기준을 적은 차단 지적 한 건만 면제합니다(`남은 지적`도 1이어야 합니다). 다른 기준이 하나라도 `FAIL`이거나, 차단 지적이 두 건 이상이거나, `security`를 적지 않은 차단 지적이 남거나, `expires_at`이 지났거나 `createdAt` 뒤 7일을 넘으면 그대로 막힙니다. 모르는 칸은 거부합니다. 이미 나간 값과 같은 값을 다시 내보낼 때만 쓰고, 새 노출을 만드는 계획에는 쓰지 않습니다.
 - 리뷰 영수증(`gates/deploy-plan-review.json`)에는 계획서 SHA-256, 요청문 SHA-256, 고정 파일·실행기 입력 목록 해시(`input_manifest_sha256`)가 함께 묶입니다.
 - **리뷰 뒤에 계획서나 고정 파일을 고치면 이전 리뷰와 승인 코드는 즉시 무효**가 되며 다시 리뷰를 받아야 합니다.
 

@@ -370,19 +370,12 @@ The following is planned, not a feature that works today.
   out only the exact piece you need. Access would go through the CLI or MCP so it
   stays tool-agnostic.
 
-## License
+## License & Patent Notice
 
-Apache License 2.0. See [LICENSE](LICENSE) for details.
-
-```
-Copyright 2026 Nextain Inc.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-```
+- **Code (`Apache-2.0`):** Licensed under the [Apache License 2.0 (`Apache-2.0`)](LICENSE). Free to use, modify, and distribute—including for commercial purposes, paid hosted or managed services (SaaS), and organizations of any size. Section 3 of the Apache License 2.0 includes a patent license for the code contained in this repository.
+- **Patents:** [`PATENTS.md`](PATENTS.md) explains the claim boundary split, lists Nextain's patent applications, and grants an additional conditional patent covenant (beyond the scope already licensed under Section 3 of the Apache License 2.0) for individuals, non-profits, and conforming Naia ecosystem developers. That additional covenant does not cover practicing a Listed Patent through a method or module not contained in this repository in paid hosted services for third parties, closed/OEM products, or enterprise-wide deployments meeting or exceeding the revenue or seat thresholds in [`PATENTS.md`](PATENTS.md) Section 2; see [`PATENTS.md`](PATENTS.md) Sections 2 and 3.
+- **Commercial:** [`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md) covers proprietary Nextain Tier-2 modules and cloud pipelines not published in this repository, commercial patent licenses for methods not contained here, and enterprise support and indemnification.
+- **Contributing:** see [`CONTRIBUTING.md`](CONTRIBUTING.md). Pull requests are accepted under [`CLA.md`](CLA.md) (or [`CLA-CORPORATE.md`](CLA-CORPORATE.md) for corporate contributions).
 
 ## Links
 
