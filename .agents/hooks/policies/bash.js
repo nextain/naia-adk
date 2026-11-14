@@ -578,6 +578,7 @@ async function deploy(command, data, opts) {
 		cwd,
 		services: prodServices,
 		sessionId,
+		toolUseId: data && data.tool_use_id,
 		transcriptPath: data && data.transcript_path,
 		root,
 		approverId: (gateConfig.approver && gateConfig.approver.discordUserId) || (config.approver && config.approver.discordUserId),

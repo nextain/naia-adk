@@ -22,8 +22,9 @@
  */
 const crypto = require("crypto");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
-const { humanTyped, commandHash, statePath } = require("./deploy-human-approval.js");
+const { humanTyped, commandHash } = require("./deploy-human-approval.js");
 
 const ROOT = path.resolve(__dirname, "../../..");
 const PLAN_FILE = "deploy-plan.json";
@@ -35,6 +36,22 @@ const STEP_CODE_TTL_MS = 2 * 60 * 60 * 1000;
 // 사전승인 단계 코드 유효 기간: 발급 시각부터 12시간(PLAN TTL과 동일). 일반 단계 코드는 2시간 유지.
 const PREAPPROVE_STEP_TTL_MS = 12 * 60 * 60 * 1000;
 const INCIDENT_VERDICT_TTL_MS = 30 * 60 * 1000;
+// 한 도구 호출에 걸린 다른 관문이 같은 소비 기록을 인정하는 시간. 훅들은 같은 호출 직전에 함께 돈다.
+const TOOL_CALL_JOIN_TTL_MS = 5 * 60 * 1000;
+// 공통 PLAN·STEP 상태 규약. 관문 사본(alpha·naia 등)이 모두 같은 규약을 써야 한 코드로 함께 통과한다.
+const STATE_PROTOCOL = "naia-deploy-plan-state";
+const STATE_VERSION = 2;
+// 관문 사본 식별자: 이 모듈 파일과 사본별 일반 승인 상태 폴더의 실제 경로. 한 관문은 한 호출 ID 를 한 번만 판정한다.
+// 별칭(심볼릭 링크·상대 경로)이 다른 관문으로 보이지 않게 둘 다 실제 경로로 바꾸고, 바꾸지 못하면 null(호출한 쪽이 막음).
+function gateId(env = process.env) {
+	const dir = path.resolve(env.DEPLOY_APPROVAL_STATE_DIR || path.join(env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"), "naia-harness"));
+	try {
+		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+		return `${fs.realpathSync(__filename)}|${fs.realpathSync(dir)}`;
+	} catch {
+		return null;
+	}
+}
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 // 적대 리뷰 기준. 기준마다 결과 파일에 "<id>: PASS" 줄이 있어야 한다.
@@ -626,18 +643,39 @@ function renderMergedFindings(review, sha) {
 }
 
 // ── 상태(저장소 밖) ─────────────────────────────────────────────
-function stateFile(env) {
-	return path.join(path.dirname(statePath(env)), "deploy-plan-state.json");
+/**
+ * PLAN·STEP 공통 상태 경로. 관문 사본 이름(alpha-harness·naia-harness)과 상관없이 같은 파일이다.
+ * DEPLOY_PLAN_STATE_DIR > $XDG_STATE_HOME/naia-deploy-plan > ~/.local/state/naia-deploy-plan.
+ * 일반 명령 승인(deploy-challenges.json)은 여기 들지 않는다.
+ */
+function stateFile(env = process.env) {
+	const dir = env.DEPLOY_PLAN_STATE_DIR
+		? path.resolve(env.DEPLOY_PLAN_STATE_DIR)
+		: path.join(env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"), "naia-deploy-plan");
+	return path.join(dir, "deploy-plan-state.json");
 }
+class StateError extends Error {}
+/** 없으면 빈 상태. 읽기 실패·손상·규약 이름이나 버전이 다르면 StateError(막음). */
 function loadState(env) {
-	const d = readJson(stateFile(env));
-	return { challenges: Array.isArray(d?.challenges) ? d.challenges : [], incidents: Array.isArray(d?.incidents) ? d.incidents : [] };
+	const file = stateFile(env);
+	let text;
+	try {
+		text = fs.readFileSync(file, "utf8");
+	} catch (e) {
+		if (e && e.code === "ENOENT") return { protocol: STATE_PROTOCOL, version: STATE_VERSION, challenges: [], incidents: [] };
+		throw new StateError(`승인 상태 파일을 읽지 못함(${file}): ${e && e.code ? e.code : e}`);
+	}
+	let d;
+	try { d = JSON.parse(text); } catch { throw new StateError(`승인 상태 파일이 손상됨(${file})`); }
+	if (!d || typeof d !== "object" || Array.isArray(d) || !Array.isArray(d.challenges) || !Array.isArray(d.incidents)) throw new StateError(`승인 상태 파일 모양이 다름(${file})`);
+	if (d.protocol !== STATE_PROTOCOL || d.version !== STATE_VERSION) throw new StateError(`승인 상태 파일 규약을 모름(${file}: ${d.protocol || "규약 없음"} v${d.version ?? "?"}, 이 관문은 ${STATE_PROTOCOL} v${STATE_VERSION})`);
+	return d;
 }
 function saveState(env, data) {
 	const file = stateFile(env);
-	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
 	const tmp = `${file}.${process.pid}.tmp`;
-	fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
+	fs.writeFileSync(tmp, JSON.stringify({ ...data, protocol: STATE_PROTOCOL, version: STATE_VERSION }, null, 2), { mode: 0o600 });
 	fs.renameSync(tmp, file);
 }
 /**
@@ -852,7 +890,14 @@ async function preapproveStepCodes(planFile, root, sessionId, env = process.env,
 	if (!review.ok) return { ok: false, why: "리뷰: " + review.problems[0] };
 	let manifest = null;
 	try { manifest = reviewInputManifest(abs, base); } catch (e) { return { ok: false, why: "핀: " + (e && e.message ? e.message : e) }; }
-	const made = await withStateLock(env, () => {
+	let made;
+	try {
+		made = await withStateLock(env, () => preapproveLocked());
+	} catch (e) {
+		return { ok: false, why: `상태: ${e && e.message ? e.message : e}` };
+	}
+	return made || { ok: false, why: "상태 잠금 실패" };
+	function preapproveLocked() {
 		const state = loadState(env);
 		const fresh = (c) => c && c.planSha === sha && c.sessionId === sessionId && !c.closed;
 		let planCh = state.challenges.filter((c) => c.kind === "plan" && fresh(c) && now - Date.parse(c.createdAt) < PLAN_APPROVAL_TTL_MS).pop();
@@ -870,9 +915,8 @@ async function preapproveStepCodes(planFile, root, sessionId, env = process.env,
 			steps.push({ step: s.id, code: stepCh.code });
 		}
 		saveState(env, state);
-		return { ok: true, plan: path.relative(base, abs), plan_sha256: sha, plan_code: planCh.code, steps, input_manifest_sha256: manifest, review };
-	});
-	return made || { ok: false, why: "상태 잠금 실패" };
+		return { ok: true, plan: path.relative(base, abs), plan_sha256: sha, plan_code: planCh.code, steps, input_manifest_sha256: manifest, review, state_file: stateFile(env) };
+	}
 }
 
 const CRITERIA_TEXT = Object.fromEntries(CRITERIA);
@@ -999,7 +1043,13 @@ async function evaluate(ctx) {
 	const factLines = facts.length ? ["", "배포 준비 기록에서 확인한 사실:", ...facts.map((x) => `  ${x}`)] : [];
 	const hostNote = ctx.transcriptPath ? [] : ["", "이 호스트는 대화 기록을 읽을 수 없어 대화창 승인을 확인할 수 없습니다. 디스코드 승인 경로(gates/deploy-approval-discord.json)를 쓰십시오. 승인자에게 붙여 넣을 명령을 넘기지 마십시오."];
 
-	const locked = await withStateLock(env, () => approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly }));
+	let locked;
+	try {
+		locked = await withStateLock(env, () => approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly }));
+	} catch (e) {
+		const why = e && e.message ? e.message : String(e);
+		return { allow: false, audit: { event: "blocked-state-invalid", plan: rel, why }, reason: [`[Harness] 승인 상태를 믿을 수 없어 막습니다: ${why}`, "", `공통 상태 파일: ${stateFile(env)}. 손상되었거나 다른 규약 판이면 자동으로 고치지 않습니다. 사람이 원인을 확인한 뒤 새 코드를 받으십시오(docs/guides/approval-plan-gate.md).`].join("\n") };
+	}
 	if (locked) return locked;
 	return { allow: false, audit: { event: "blocked-state-lock", plan: rel }, reason: "[Harness] 승인 상태 파일 잠금을 잡지 못해 막습니다(다른 운영 명령 판정이 진행 중). 잠시 뒤 다시 실행하십시오." };
 }
@@ -1072,8 +1122,48 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		}
 	}
 
+	// 한 도구 호출에 관문이 여럿 걸리면(프로젝트 관문 + 사용자 전체 관문) 첫 관문만 코드를 소비하고,
+	// 나머지는 자기 검증을 다 통과한 뒤 같은 호출 ID·계획 sha·단계·세션·명령으로 남은 소비 기록만 인정한다.
+	// 호출 ID 를 주지 않는 호스트는 결합 없이 예전처럼 관문마다 한 번 소비한다(결합 기록도 남기지 않아 다른 호출이 이어받지 못함).
+	const toolUseId = typeof ctx.toolUseId === "string" && ctx.toolUseId.trim() ? ctx.toolUseId : null;
+	const call = { plan_sha: f.sha, step: f.step.id, session: ctx.sessionId, cmd_hash: h, tool_use_id: toolUseId };
+	const sameCall = [];
+	if (toolUseId) for (const c of st2.challenges) {
+		if (c.kind !== "step" || !Array.isArray(c.consumed)) continue;
+		for (const r of c.consumed) if (r && r.tool_use_id === toolUseId) sameCall.push({ c, r });
+	}
+	const me = toolUseId ? gateId(env) : null;
+	if (toolUseId && !me) {
+		return { allow: false, audit: { event: "blocked-gate-identity-uncertain", plan: rel, step: f.step.id, tool_use_id: toolUseId }, reason: "[Harness] 이 관문의 식별자(모듈·일반 승인 상태 폴더의 실제 경로)를 정하지 못해 막습니다. 상태 폴더를 확인하십시오." };
+	}
+	if (sameCall.length) {
+		const { c: joinCh, r } = sameCall[0];
+		const matches = sameCall.length === 1 && r.plan_sha === call.plan_sha && r.step === call.step && r.session === call.session && r.cmd_hash === call.cmd_hash &&
+			joinCh.planSha === call.plan_sha && joinCh.step === call.step && joinCh.sessionId === call.session && (joinCh.executed || []).includes(h);
+		if (!matches) {
+			return { allow: false, audit: { event: "blocked-tool-use-id-mismatch", plan: rel, step: f.step.id, tool_use_id: toolUseId }, reason: "[Harness] 같은 도구 호출 ID 로 이미 소비된 단계 승인이 이 명령·계획서 sha·단계·세션과 다릅니다. 막습니다." };
+		}
+		const at = Date.parse(r.at);
+		if (!Number.isFinite(at) || now - at > TOOL_CALL_JOIN_TTL_MS || at - now > 60 * 1000) {
+			return { allow: false, audit: { event: "blocked-tool-use-id-stale", plan: rel, step: f.step.id, tool_use_id: toolUseId }, reason: "[Harness] 같은 도구 호출 ID 의 소비 기록이 오래되어 함께 통과로 인정하지 않습니다. 새 단계 승인을 받으십시오." };
+		}
+		// 한 관문은 한 호출 ID 를 한 번만 판정한다. 같은 ID 가 다시 오면(호스트의 ID 재사용·같은 관문 중복) 막는다.
+		if (!Array.isArray(r.gates) || r.gates.includes(me)) {
+			return { allow: false, audit: { event: "blocked-tool-use-id-reused", plan: rel, step: f.step.id, tool_use_id: toolUseId }, reason: "[Harness] 이 관문이 이미 판정한 도구 호출 ID 입니다. 같은 승인으로 다시 실행할 수 없습니다. 새 단계 승인을 받으십시오." };
+		}
+		// 상태 파일의 approvedAt 을 믿지 않고 이 관문도 사람 입력을 다시 확인한다.
+		const ok = await humanConfirmed(joinCh.code, joinCh.createdAt, ctxH);
+		if (!ok.ok) {
+			return { allow: false, audit: { event: "blocked-joined-unconfirmed", plan: rel, step: f.step.id, tool_use_id: toolUseId }, reason: `[Harness] 같은 호출을 먼저 통과시킨 단계 승인 코드의 사람 입력을 이 관문에서 확인하지 못해 막습니다(${ok.why}).` };
+		}
+		r.gates = [...r.gates, me];
+		saveState(env, st2);
+		return { allow: true, audit: { event: "executed-joined", plan: rel, plan_sha256: f.sha, step: f.step.id, tool_use_id: toolUseId, plan_code_sha256_12: sha256(planCh.code).slice(0, 12), step_code_sha256_12: sha256(joinCh.code).slice(0, 12), approved_by: `plan(${planOk.via})+step(${ok.via})+same-tool-call` } };
+	}
+
 	let stepCh = st2.challenges.filter((c) => c.kind === "step" && c.planSha === f.sha && c.step === f.step.id && c.sessionId === ctx.sessionId && !c.closed).pop();
-	if (stepCh && (stepCh.executed || []).includes(h)) {
+	// 소비 기록이 있는 명령은 executed 목록이 비어 있어도(상태 불일치) 이미 실행한 것으로 본다.
+	if (stepCh && ((stepCh.executed || []).includes(h) || (Array.isArray(stepCh.consumed) && stepCh.consumed.some((r) => r && r.cmd_hash === h)))) {
 		stepCh.closed = new Date(now).toISOString();
 		stepCh = null;
 	}
@@ -1109,6 +1199,7 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 		stepCh.approvedVia = ok.via;
 	}
 	stepCh.executed = [...(stepCh.executed || []), h];
+	stepCh.consumed = [...(Array.isArray(stepCh.consumed) ? stepCh.consumed : []), { ...call, ...(toolUseId ? { gates: [me] } : {}), at: new Date(now).toISOString() }];
 	const stepCmdHashes = (f.step.commands || []).map((c) => commandHash(c));
 	const allExecutedForStep = new Set();
 	for (const c of st2.challenges.filter((ch) => ch.kind === "step" && ch.planSha === f.sha && ch.step === f.step.id && ch.sessionId === ctx.sessionId)) {
@@ -1267,4 +1358,5 @@ function referencedFiles(command, cwd) {
 
 module.exports = {
 	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
+	loadState, STATE_PROTOCOL, STATE_VERSION, TOOL_CALL_JOIN_TTL_MS,
 };
