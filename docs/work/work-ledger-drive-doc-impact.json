@@ -1,0 +1,24 @@
+{
+  "work": "ledger-drive-fix1",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/common/work-ledger.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/common/work-ledger.md",
+      "config/work-ledger.example.json"
+    ],
+    "detail": "Documents the optional instruction on a ledger item, the drive pass inside the ten-minute watcher, per-role wake_dir, retry of failed notices, the closing gate, enabling and rollback."
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      "docs/common/work-ledger.md"
+    ],
+    "detail": "Extend the one ledger instead of adding a parallel one; record a notice cooldown only after delivery; keep the old wake whenever the new pass fails."
+  }
+}

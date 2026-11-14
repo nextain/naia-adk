@@ -8,6 +8,24 @@ Use `진행 중`, `대기`, `막힘` or `끝`. On completion set `끝`, add the 
 result link and update the timestamp. Use ISO-8601 timestamps with an offset;
 use null for an undecided deadline or a result that does not exist yet.
 
+Already authorized, reversible work proceeds after checking the existing
+instruction. Do not ask for the same permission again. When asking a person,
+include “If I hear nothing within N minutes, I will proceed as follows” and the
+planned action. Silence does not replace approval required for external sends,
+production changes or spending. A `대기` card must include its next wake time in
+`due_at` and describe what will be checked then.
+
+The [work-ledger watcher](../common/work-ledger.md) separately detects a bot
+asking a configured person in a channel, thread or configured direct channel. After the
+configured wait (15 minutes by default), it wakes the mapped role once per
+question while that person has not answered. The bot’s unrelated posts and replies
+to other bots do not close the question. Human replies in the same channel, a
+question thread or a reply reference close it; editing a question preserves
+its original ordering. Split messages retain their shared addressee. The wake asks
+the role to reread prior instructions, continue reversible authorized work, or
+move a true approval request to the instance's work-request channel using its
+`[분류]` form. This observation uses private IDs and does not send a reply.
+
 The YAML is the single machine-readable source. Markdown is a human view:
 
 | id | role | task | status | requested_at | due_at | evidence | result | updated_at |
@@ -38,3 +56,7 @@ JSON documents are also accepted with standard JSON parsing semantics.
 Keep names, links, paths and task contents in private instance files. Follow
 [regular execution recording](regular-schedule-ledger.md) and
 [server acceptance](server-wake-onboarding.md) for the second ledger and rollout.
+
+To have an overdue item start its own worker from an instruction file, see the
+drive section of the [work-ledger watcher](../common/work-ledger.md). It extends
+the JSON ledger the watcher already reads; there is no separate drive ledger.
