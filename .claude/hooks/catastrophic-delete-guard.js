@@ -10,7 +10,11 @@ try {
 	H = require("./_claude-bash-guard.js");
 	P = require(path.join(__dirname, "..", "..", ".agents", "hooks", "policies", "bash.js"));
 } catch {
-	process.exit(0); // fail-open, matching the sibling guards
+	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Catastrophic delete policy module is unavailable (fail-closed)." }));
+	process.exit(0);
 }
 
-H.start((command) => P.catastrophicDelete(command));
+H.start((command) => P.catastrophicDelete(command), {
+	failClosed: true,
+	failClosedReason: "[Harness] Catastrophic delete policy could not be verified (fail-closed).",
+});

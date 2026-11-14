@@ -17,7 +17,10 @@
  * opts.failClosedReason — the block reason used when failClosed.
  */
 
-async function runBashGuard(policy) {
+async function runBashGuard(policy, opts) {
+	const failClosed = opts.failClosed !== false;
+	const failReason = opts.failClosedReason || "[Harness] Command policy could not be verified (fail-closed).";
+
 	let input = "";
 	for await (const chunk of process.stdin) {
 		input += chunk;
@@ -27,6 +30,9 @@ async function runBashGuard(policy) {
 	try {
 		data = JSON.parse(input);
 	} catch {
+		if (failClosed) {
+			process.stdout.write(JSON.stringify({ decision: "block", reason: failReason }));
+		}
 		process.exit(0);
 	}
 
@@ -48,10 +54,12 @@ async function runBashGuard(policy) {
 
 function start(policy, opts) {
 	opts = opts || {};
-	runBashGuard(policy).catch(() => {
-		if (opts.failClosed) {
+	const failClosed = opts.failClosed !== false;
+	const failReason = opts.failClosedReason || "[Harness] Command policy could not be verified (fail-closed).";
+	runBashGuard(policy, opts).catch(() => {
+		if (failClosed) {
 			process.stdout.write(
-				JSON.stringify({ decision: "block", reason: opts.failClosedReason }),
+				JSON.stringify({ decision: "block", reason: failReason }),
 			);
 		}
 		process.exit(0);

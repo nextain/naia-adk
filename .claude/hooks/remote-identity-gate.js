@@ -16,8 +16,7 @@ const roleMode = fs.existsSync(path.join(projectDir, ".naia-role.json"));
 let core;
 try {
 	core = require("../../.agents/hooks/core/remote-identity.js");
-} catch (error) {
-	if (!roleMode) throw error;
+} catch {
 	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Remote identity policy module is unavailable (fail-closed)." }));
 	process.exit(0);
 }
@@ -77,18 +76,24 @@ async function main() {
 	let input = "";
 	for await (const chunk of process.stdin) input += chunk;
 	let data;
-	try { data = JSON.parse(input); } catch { process.exit(0); }
+	try {
+		data = JSON.parse(input);
+	} catch {
+		process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Remote identity input could not be parsed (fail-closed)." }));
+		process.exit(0);
+	}
 	if ((data.tool_name || "") !== "Bash") process.exit(0);
 	const command = data.tool_input?.command || "";
 	let result = null;
 	try { result = evaluateProfile(command, data.cwd || process.cwd()); }
 	catch {
-		result = roleMode
-			? { decision: "block", reason: "[Harness] ADK identity policy could not be verified (fail-closed)." }
-			: null;
+		result = { decision: "block", reason: "[Harness] ADK identity policy could not be verified (fail-closed)." };
 	}
 	if (result) process.stdout.write(JSON.stringify(result));
 	process.exit(0);
 }
 
-main().catch(() => process.exit(0));
+main().catch(() => {
+	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] ADK identity policy failed unexpectedly (fail-closed)." }));
+	process.exit(0);
+});

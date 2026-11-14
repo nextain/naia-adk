@@ -729,7 +729,7 @@ function reviewInputEntries(planFile, root, opts = null) {
 		entries.push({ file: f, sha256: actual });
 	}
 	for (const rel of REVIEW_EXECUTOR_FILES) {
-		try { entries.push({ file: rel, sha256: sha256(fs.readFileSync(path.join(base, rel))) }); }
+		try { entries.push({ file: rel, sha256: sha256(fs.readFileSync(path.join(ROOT, rel))) }); }
 		catch { problems.push(`실행기를 읽지 못함: ${rel}`); }
 	}
 	entries.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));

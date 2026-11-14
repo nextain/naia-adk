@@ -68,6 +68,14 @@ function bucketPattern(names) {
 	return new RegExp(`(gs://|storage\\.googleapis\\.com/(storage/v1/b/)?|gcs:)(${alt})\\b`);
 }
 
+function isGcsRequired() {
+	const role = fs.existsSync(path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".naia-role.json"));
+	const dir = role && process.env.NAIA_ADK_ROOT
+		? path.resolve(process.env.NAIA_ADK_ROOT, ".claude", "hooks")
+		: __dirname;
+	return role || fs.existsSync(path.join(dir, "gcs-guard.required"));
+}
+
 async function main() {
 	let input = "";
 	for await (const chunk of process.stdin) input += chunk;
@@ -75,7 +83,14 @@ async function main() {
 	try {
 		data = JSON.parse(input);
 	} catch {
-		process.exit(0); // 비정상 입력: crash 금지, 통과
+		// 비대상(!markerRequired) 저장소는 run-gcs-guard-test.js(FX.failopen) 문서화 예외를 유지한다.
+		if (isGcsRequired()) {
+			process.stdout.write(JSON.stringify({
+				decision: "block",
+				reason: "[GCS Guard] 입력 JSON을 해석하지 못해 차단합니다 (fail-closed).",
+			}));
+		}
+		process.exit(0);
 	}
 	if ((data.tool_name || "") !== "Bash") process.exit(0);
 
@@ -186,4 +201,10 @@ async function main() {
 	process.exit(0);
 }
 
-main().catch(() => process.exit(0));
+main().catch(() => {
+	process.stdout.write(JSON.stringify({
+		decision: "block",
+		reason: "[GCS Guard] 가드 내부 오류로 명령을 검증하지 못해 차단합니다 (fail-closed).",
+	}));
+	process.exit(0);
+});

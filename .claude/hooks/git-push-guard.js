@@ -11,7 +11,11 @@ try {
 	H = require("./_claude-bash-guard.js");
 	P = require(path.join(__dirname, "..", "..", ".agents", "hooks", "policies", "bash.js"));
 } catch {
-	process.exit(0); // original main().catch fail-open
+	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Git push policy module is unavailable (fail-closed)." }));
+	process.exit(0);
 }
 
-H.start((command) => P.gitPush(command));
+H.start((command) => P.gitPush(command), {
+	failClosed: true,
+	failClosedReason: "[Harness] Git push policy could not be verified (fail-closed).",
+});

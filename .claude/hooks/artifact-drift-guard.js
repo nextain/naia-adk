@@ -10,7 +10,11 @@ try {
 	H = require("./_claude-bash-guard.js");
 	P = require(path.join(__dirname, "..", "..", ".agents", "hooks", "policies", "bash.js"));
 } catch {
+	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Artifact drift policy module is unavailable (fail-closed)." }));
 	process.exit(0);
 }
 
-H.start((command, data) => P.uncommittedArtifact(command, data));
+H.start((command, data) => P.uncommittedArtifact(command, data), {
+	failClosed: true,
+	failClosedReason: "[Harness] Artifact drift policy could not be verified (fail-closed).",
+});

@@ -24,15 +24,25 @@ process.stdout.write = (chunk, enc, cb) => {
 const path = require("path");
 const fs = require("fs");
 const roleMode = fs.existsSync(path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".naia-role.json"));
+
+// 멈춘 훅은 시간 초과로 취소되고 명령이 그대로 돈다. 본문은 자식에서 돌고 부모가 시한을 지켜 막는다(lib/hook-watchdog.js).
+const watchdogPath = path.join(__dirname, "lib", "hook-watchdog.js");
+let W;
+try {
+	W = require(watchdogPath);
+} catch {
+	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Deployment watchdog module is unavailable (fail-closed)." }));
+	process.exit(0);
+}
+if (W.runWithWatchdog({ script: __filename, args: process.argv.slice(2) })) return;
+
 let H, P;
 try {
 	H = require("./_claude-bash-guard.js");
 	P = require(path.join(__dirname, "..", "..", ".agents", "hooks", "policies", "bash.js"));
 } catch {
-	if (roleMode) {
-		process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Deployment policy module is unavailable (fail-closed)." }));
-	}
-	process.exit(0); // original main().catch fail-open
+	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Deployment policy module is unavailable (fail-closed)." }));
+	process.exit(0);
 }
 
 // __dirname = .claude/hooks → .claude/deploy (identical to original DEPLOY_DIR).
@@ -42,6 +52,6 @@ const deployDir = roleMode && process.env.NAIA_ADK_ROOT
 	: path.resolve(__dirname, "..", "deploy");
 
 H.start((command, data) => P.deploy(command, data, { deployDir }), {
-	failClosed: roleMode,
+	failClosed: true,
 	failClosedReason: "[Harness] Deployment policy could not be verified (fail-closed).",
 });

@@ -11,7 +11,11 @@ try {
 	H = require("./_claude-bash-guard.js");
 	P = require(path.join(__dirname, "..", "..", ".agents", "hooks", "policies", "bash.js"));
 } catch {
-	process.exit(0); // original main().catch fail-open
+	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Email send policy module is unavailable (fail-closed)." }));
+	process.exit(0);
 }
 
-H.start((command) => P.emailSend(command));
+H.start((command) => P.emailSend(command), {
+	failClosed: true,
+	failClosedReason: "[Harness] Email send policy could not be verified (fail-closed).",
+});

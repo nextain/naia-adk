@@ -13,10 +13,14 @@ try {
 	H = require("./_claude-edit-hook.js");
 	P = require(path.join(__dirname, "..", "..", ".agents", "hooks", "policies", "edit.js"));
 } catch {
-	process.exit(0); // original main().catch fail-open
+	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Design-doc policy module is unavailable (fail-closed)." }));
+	process.exit(0);
 }
 
 // __dirname = .claude/hooks → .claude/design-doc-unlock (identical to original)
 const unlockFile = resolve(__dirname, "..", "design-doc-unlock");
 
-H.start((data) => P.designDoc(data, { unlockFile }));
+H.start((data) => P.designDoc(data, { unlockFile }), {
+	failClosed: true,
+	failClosedReason: "[Harness] Design-doc policy could not be verified (fail-closed).",
+});
