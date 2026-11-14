@@ -314,16 +314,19 @@ function opsAzProblem(command) {
 	return null;
 }
 
-function opsProblem(command) {
+function opsProblem(command, opts = null) {
 	if (VERSION_CHANGE.test(command)) return "이미지·리비전·트래픽을 바꾸는 명령은 ops 로 신고할 수 없음";
-	const scripts = innerScripts(command);
+	const rawCmd = opts?.readOnlyTarget?.sanitizedAzCommand || command;
+	if (opts?.readOnlyTarget && String(command).replace(/\s+/g, " ").length > 1500) return "VM·컨테이너 안에서 도는 글이 1500자를 넘음";
+	if (opts?.readOnlyTarget?.mode === "shell") return null;
+	const scripts = innerScripts(rawCmd);
 	if (scripts.length && scripts.some((x) => x !== null && INNER_OPAQUE.test(x))) return "VM·컨테이너 안에서 도는 글이 명령에 그대로 있지 않음(불투명함)";
-	const inner = innerProblem(command);
+	const inner = innerProblem(rawCmd);
 	if (inner) return `VM·컨테이너 안에서 조회·진단·재시작이 아닌 명령(코드를 올리는 명령, 파일·DB·API 쓰기 등): ${inner}`;
-	const az = opsAzProblem(command);
+	const az = opsAzProblem(rawCmd);
 	if (az) return az;
 	if (scripts.length && String(command).replace(/\s+/g, " ").length > 1500) return "VM·컨테이너 안에서 도는 글이 1500자를 넘음";
-	if (!scripts.length && !CONFIG_ONLY.test(command)) return "ops 는 설정만 바꾸는 명령에만 쓸 수 있음";
+	if (!scripts.length && !CONFIG_ONLY.test(rawCmd)) return "ops 는 설정만 바꾸는 명령에만 쓸 수 있음";
 	return null;
 }
 
@@ -564,12 +567,223 @@ function commandBinding(command, candidate, services, cwd) {
 // 계획 고정 대본 호출(`[sudo …]bash /<대본> …`). 대본 본문은 분류기가 다 읽을 수 없으므로 ops 로 받지 않는다(적대 리뷰 B1).
 const PINNED_SCRIPT_HEAD = /^(?:sudo\s+(?:\S+\s+)*?)?bash\s+\//;
 
+const AZ_READONLY_VALUE_FLAGS = new Map([
+	["-g", "rg"],
+	["--resource-group", "rg"],
+	["-n", "name"],
+	["--name", "name"],
+	["--command-id", "command-id"],
+	["--scripts", "scripts"],
+	["--subscription", "subscription"],
+	["--query", "query"],
+	["-o", "output"],
+	["--output", "output"],
+]);
+
+/**
+ * 읽기 전용 무코드 허용 명령을 원문 문자열 그대로 엄격히 토큰화한다.
+ * 셸 연산자·따옴표 쪼개기(--scr"i"pts, --scripts=""@p 등)·치환·글롭이 있으면 null 을 돌려 기존 경로로 떨어뜨린다.
+ */
+function tokenizeStrictNoCodeCommand(command) {
+	if (typeof command !== "string") return null;
+	const s = command.trim();
+	if (!s || /[\r\n\0;|&`<>\\]|\$\(|\$\{/.test(s)) return null;
+	const tokens = [];
+	let i = 0;
+	while (i < s.length) {
+		while (i < s.length && (s[i] === " " || s[i] === "\t")) i++;
+		if (i >= s.length) break;
+		const ch = s[i];
+		if (ch === "'" || ch === '"') {
+			const quote = ch;
+			const close = s.indexOf(quote, i + 1);
+			if (close < 0) return null;
+			if (close + 1 < s.length && s[close + 1] !== " " && s[close + 1] !== "\t") return null;
+			const inner = s.slice(i + 1, close);
+			if (quote === '"' && inner.includes("$")) return null;
+			tokens.push({ v: inner, q: quote === "'" ? "single" : "double" });
+			i = close + 1;
+		} else {
+			const start = i;
+			while (i < s.length && s[i] !== " " && s[i] !== "\t") {
+				if (/['"\\$`;|&<>()*?\[\]{}~#!]/.test(s[i])) return null;
+				i++;
+			}
+			tokens.push({ v: s.slice(start, i), q: "none" });
+		}
+	}
+	return tokens.length ? tokens : null;
+}
+
+/**
+ * 허용된 정확한 읽기 전용 무코드 명령 꼴(az vm run-command invoke ... --scripts @<경로> 또는 2토큰 bash/sh <경로>)에서
+ * 고정 대본 정보를 꺼낸다. --parameters·다중 --scripts·모르는 옵션·쪼갠 따옴표·sudo bash·인자 추가는 전부 null.
+ */
+function extractPinnedReadOnlyScript(command, c, clauses, files, fileHashes, services, cwd, root) {
+	if (!c || clauses.unbalanced || clauses.length !== 1) return null;
+	if ((c.subs && c.subs.length) || (c.heredocs && c.heredocs.length)) return null;
+	if (c.some((t) => /^(\d*&?|&)>>?/.test(t) || /^\d*<</.test(t) || /^\d*<[^=]/.test(t) || t === "<")) return null;
+	const tokens = tokenizeStrictNoCodeCommand(command);
+	if (!tokens || tokens.length !== c.length) return null;
+	for (let k = 0; k < tokens.length; k++) {
+		if (tokens[k].v !== c[k]) return null;
+	}
+
+	let mode = null;
+	let rawScript = null;
+	let vmService = null;
+	let sanitizedAzCommand = null;
+
+	const baseCmd = path.basename(tokens[0].v).toLowerCase();
+	if (tokens[0].q === "none" && tokens.length === 2 && (baseCmd === "bash" || baseCmd === "sh")) {
+		if (tokens[1].q !== "none" || !tokens[1].v || tokens[1].v.startsWith("-")) return null;
+		mode = "shell";
+		rawScript = tokens[1].v;
+	} else if (
+		tokens[0].q === "none" && (tokens[0].v === "az" || baseCmd === "az")
+		&& tokens.length >= 4
+		&& tokens[1].q === "none" && tokens[1].v === "vm"
+		&& tokens[2].q === "none" && tokens[2].v === "run-command"
+		&& tokens[3].q === "none" && tokens[3].v === "invoke"
+	) {
+		const seen = new Set();
+		const sanitizedParts = ["az", "vm", "run-command", "invoke"];
+		let rg = null;
+		let vmName = null;
+		let commandId = null;
+		let scriptsRaw = null;
+		for (let i = 4; i < tokens.length; i++) {
+			const tok = tokens[i];
+			if (tok.q !== "none" || !tok.v.startsWith("-")) return null;
+			if (tok.v === "--only-show-errors") {
+				if (seen.has("only-show-errors")) return null;
+				seen.add("only-show-errors");
+				sanitizedParts.push(tok.v);
+				continue;
+			}
+			let flag = tok.v;
+			let val = null;
+			let valQuoted = "none";
+			if (tok.v.startsWith("--")) {
+				const eq = tok.v.indexOf("=");
+				if (eq >= 0) {
+					flag = tok.v.slice(0, eq);
+					val = tok.v.slice(eq + 1);
+				}
+			} else if (tok.v.includes("=")) {
+				return null;
+			}
+			const key = AZ_READONLY_VALUE_FLAGS.get(flag);
+			if (!key || seen.has(key)) return null;
+			seen.add(key);
+			if (val === null) {
+				if (i + 1 >= tokens.length) return null;
+				const nextTok = tokens[++i];
+				if (!nextTok.v || nextTok.v.startsWith("-")) return null;
+				val = nextTok.v;
+				valQuoted = nextTok.q;
+			}
+			if (!val) return null;
+			if (key !== "query" && valQuoted !== "none") return null;
+			if (key === "rg") rg = val;
+			else if (key === "name") vmName = val;
+			else if (key === "command-id") {
+				if (val !== "RunShellScript") return null;
+				commandId = val;
+			} else if (key === "scripts") {
+				if (!val.startsWith("@") || val.length <= 1 || /[\s'"]/.test(val)) return null;
+				scriptsRaw = val.slice(1);
+			} else if (key === "output") {
+				if (!/^(?:tsv|json|jsonc|table|yaml|yamlc|none)$/i.test(val)) return null;
+			}
+			if (key !== "scripts") {
+				const qVal = valQuoted === "single" ? `'${val}'` : valQuoted === "double" ? `"${val}"` : val;
+				sanitizedParts.push(flag, qVal);
+			}
+		}
+		if (!rg || !vmName || commandId !== "RunShellScript" || !scriptsRaw) return null;
+		vmService = `azure:vm:${vmName.toLowerCase()}`;
+		if (!Array.isArray(services) || !services.includes(vmService)) return null;
+		mode = "az-run-command";
+		rawScript = scriptsRaw;
+		sanitizedParts.push("--scripts", "0");
+		sanitizedAzCommand = sanitizedParts.join(" ");
+	} else {
+		return null;
+	}
+
+	if (!rawScript || rawScript.includes("$")) return null;
+	const abs = path.resolve(cwd || root || ".", rawScript);
+	if (files.size !== 1 || !files.has(abs) || !fileHashes.has(abs)) return null;
+	return { mode, abs, rawScript, sha256: fileHashes.get(abs), vmService, sanitizedAzCommand };
+}
+
+/**
+ * 읽기 전용 대본 무코드 바인딩(B1~B4, R5)을 fail-closed 로 검증한다.
+ * 설정 오류(와일드카드 service·비정상 config) 및 설정 파일 git 미일치 시에는 차단({ ok:false })하고,
+ * 명령 형식/대본/리뷰 바인딩/sha-경로-서비스가 맞지 않을 때는 null 을 돌려 기존 경로(승인 코드 또는 차단)로 떨어뜨린다.
+ */
+function matchReadOnlyScriptBinding({ cfg, root, command, clauses, files, fileHashes, services, cwd, planBinding }) {
+	const { validateReadOnlyScriptsConfig, verifyRepoFileGitClean } = require("./deploy-plan.js");
+	const valid = validateReadOnlyScriptsConfig(cfg);
+	if (!valid.ok) return { ok: false, why: valid.why };
+	if (valid.items.length === 0) return null;
+	if (services.some((sv) => sv.startsWith("script:") || sv.startsWith("package:"))) return null;
+	const target = extractPinnedReadOnlyScript(command, clauses[0], clauses, files, fileHashes, services, cwd, root);
+	if (!target) return null;
+
+	const shaAndSvcMatched = valid.items.filter((item) => item.sha256 === target.sha256 && services.includes(item.service));
+	if (shaAndSvcMatched.length === 0) return null;
+
+	const cleanConfig = verifyRepoFileGitClean(deployGateConfigPath(root), null, "config/deploy-gate.json");
+	if (!cleanConfig.ok) {
+		return { ok: false, why: `읽기 전용 대본 허용 거부: ${cleanConfig.why}` };
+	}
+
+	const cleanScript = verifyRepoFileGitClean(target.abs, cleanConfig.realTop, target.rawScript);
+	if (!cleanScript.ok || cleanScript.sha256 !== target.sha256) return null;
+
+	const matched = shaAndSvcMatched.filter((item) => item.path === cleanScript.rel);
+	if (!services.every((s) => matched.some((item) => item.service === s))) return null;
+
+	const gatesDir = planBinding && planBinding.gatesDir;
+	if (!gatesDir) return null;
+	let reviewRec;
+	try {
+		reviewRec = JSON.parse(fs.readFileSync(path.join(gatesDir, "deploy-plan-review.json"), "utf8"));
+	} catch {
+		return null;
+	}
+	if (!reviewRec || !Array.isArray(reviewRec.read_only_scripts)) return null;
+	for (const s of services) {
+		const item = matched.find((m) => m.service === s);
+		if (!item) return null;
+		const bound = reviewRec.read_only_scripts.some((r) =>
+			r && typeof r === "object"
+			&& r.sha256 === item.sha256
+			&& r.path === item.path
+			&& r.service === item.service
+			&& r.script_sha256 === cleanScript.sha256
+		);
+		if (!bound) return null;
+	}
+
+	const notes = [...new Set(matched.map((item) => item.note || "").filter(Boolean))];
+	return {
+		ok: true,
+		ops: false,
+		readOnlyNoCode: true,
+		readOnlyTarget: target,
+		fact: `읽기 전용 대본 승인 생략 확인: ${cleanConfig.rel}·${cleanScript.rel}(HEAD·리뷰 일치) readOnlyScripts sha256 ${cleanScript.sha256.slice(0, 12)} (${services.join(", ")}${notes.length ? `, ${notes.join("; ")}` : ""})`,
+	};
+}
+
 /**
  * 계획서 단계·명령·고정 파일·인스턴스 확장(config/deploy-gate.json + 선택 plugin)의 결합을 검증한다.
  */
 function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	const no = (why) => ({ ok: false, why: `계획 결합 거부: ${why}` });
-	const yes = (fact, ops = false) => ({ ok: true, fact, ops });
+	const yes = (fact, ops = false, extra = null) => ({ ok: true, fact, ops, ...(extra || {}) });
 	if (!Array.isArray(services) || services.length === 0) return no("운영 서비스 집합이 비어 있음");
 	if (!planBinding || !planBinding.plan || !planBinding.entry || typeof planBinding.command !== "string") return no("계획·단계·명령 문맥이 없음");
 	const { plan, entry, command, cwd = "" } = planBinding;
@@ -579,6 +793,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	if (!(entry.commands || []).includes(command)) return no("실행 명령 바이트가 승인된 단계 명령과 다름");
 
 	const files = new Map();
+	const fileHashes = new Map();
 	for (const [p, want] of Object.entries(entry.files || {})) {
 		if (!/^[a-f0-9]{64}$/i.test(String(want))) return no(`고정 파일 sha256 형식이 아님: ${p}`);
 		const full = path.resolve(cwd || root || ".", p);
@@ -589,11 +804,18 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 		} catch {
 			return no(`고정 파일을 읽지 못함: ${p}`);
 		}
-		if (crypto.createHash("sha256").update(body).digest("hex") !== String(want).toLowerCase()) return no(`고정 파일 sha256 불일치: ${p}`);
+		const actualSha = crypto.createHash("sha256").update(body).digest("hex");
+		if (actualSha !== String(want).toLowerCase()) return no(`고정 파일 sha256 불일치: ${p}`);
 		files.set(full, body.toString("utf8"));
+		fileHashes.set(full, actualSha);
 	}
 
 	const cfg = loadDeployGateConfig(root);
+	if (cfg) {
+		const { validateReadOnlyScriptsConfig } = require("./deploy-plan.js");
+		const roCfg = validateReadOnlyScriptsConfig(cfg);
+		if (!roCfg.ok) return no(roCfg.why);
+	}
 	let plugin = null;
 	if (cfg) {
 		try {
@@ -664,6 +886,11 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	const c = clauses[0];
 	const sameServices = (actual) => actual.length === services.length && services.every((s) => actual.includes(s));
 
+	if (kind === "ops") {
+		const ro = matchReadOnlyScriptBinding({ cfg, root, command, clauses, files, fileHashes, services, cwd, planBinding });
+		if (ro) return ro.ok ? ro : no(ro.why);
+	}
+
 	if (kind === "ops" && clauses.length === 1 && c.length === 2 && c[0] === "bash" && files.size === 1 && files.has(path.resolve(cwd || root || ".", c[1]))) {
 		const body = files.get(path.resolve(cwd || root || ".", c[1]));
 		const bare = body.replace(/^#![^\n]*\n/, "").trim();
@@ -706,6 +933,11 @@ function assessReadiness(services, { root, auditPath, command = "", cwd = "", no
 	}
 
 	const cfg = loadDeployGateConfig(baseRoot);
+	if (cfg) {
+		const { validateReadOnlyScriptsConfig } = require("./deploy-plan.js");
+		const roCfg = validateReadOnlyScriptsConfig(cfg);
+		if (!roCfg.ok) return { ok: false, problems: [roCfg.why], facts: [] };
+	}
 	const found = findReadiness(services, baseRoot, now);
 
 	if (!found) {
@@ -758,8 +990,14 @@ function assessReadiness(services, { root, auditPath, command = "", cwd = "", no
 	}
 
 	if (rec.kind === "ops") {
-		if (planned?.ok && planned.ops) facts.push(planned.fact);
-		else {
+		if (planned?.ok && planned.readOnlyNoCode) {
+			facts.push(planned.fact);
+			const bad = opsProblem(command, { readOnlyTarget: planned.readOnlyTarget });
+			if (bad) problems.push(bad);
+			if (services.some((sv) => sv.startsWith("script:") || sv.startsWith("package:"))) problems.push("배포 스크립트는 코드를 올리므로 ops 로 신고할 수 없음");
+		} else if (planned?.ok && planned.ops) {
+			facts.push(planned.fact);
+		} else {
 			const opsCommand = planned?.opsCommand || command;
 			const bad = opsProblem(opsCommand);
 			if (bad) problems.push(bad);
@@ -869,7 +1107,8 @@ function assessReadiness(services, { root, auditPath, command = "", cwd = "", no
 			facts.push(`변경 목록 계산 실패: ${String(e.message || e).split("\n")[0]}`);
 		}
 	}
-	return { ok: problems.length === 0, problems, facts, file: found.file, kind: rec.kind };
+	const readOnlyNoCode = problems.length === 0 && rec.kind === "ops" && !!(planned && planned.ok && planned.readOnlyNoCode === true);
+	return { ok: problems.length === 0, problems, facts, file: found.file, kind: rec.kind, ...(readOnlyNoCode ? { readOnlyNoCode: true } : {}) };
 }
 
 const TEMPLATE = {
