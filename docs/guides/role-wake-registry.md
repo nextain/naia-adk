@@ -26,7 +26,7 @@ only; the script is the same on every server.
 | `delivery.retry_max_seconds` | Longest gap between retries of a file that failed (default 300). |
 | `delivery.baseline_seen_file` | The old deliverer's record, one delivered path per line. Used when a box is first seen; see Migration order. |
 | `dm_backup.max_age_seconds` | How old a DM room's last good catch-up may be (default 900). |
-| `role_views` | Role lists other tools still keep (`l4-roles`, `wake-routes`, `liveness`, `session-health`, `bot-mention-wake`). |
+| `role_views` | Role lists other tools still keep (`l4-roles`, `wake-routes`, `liveness`, `session-health`, `bot-mention-wake`). Each entry `{ kind, path, roles? }` accepts an optional non-empty string array `roles` listing the role ids that view covers: when set, `role is missing` checks only those ids and any unknown id in `roles` is an error; when omitted, every registry role is required. Every row present in the file—even outside `roles`—is still checked against the registry for unknown roles and mismatched fields (`bot_id`, etc.). |
 
 The role block keeps the keys the pane liveness tool already reads (`user`,
 `find`, `tool`, `restart_cmd`, `wait`), so that tool can read the registry

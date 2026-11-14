@@ -62,6 +62,12 @@ test('registry rejects roles without a consumer, duplicate boxes and a retired r
   assert.throws(broken(doc => { doc.roles['role-b'].dm_channels = ['12']; }), /dm_channels/);
   assert.throws(broken(doc => { doc.roles['role-b'].dm_users = 'someone'; }), /dm_users/);
   assert.throws(broken(doc => { doc.delivery.baseline_seen_file = 'seen'; }), /baseline_seen_file/);
+  assert.throws(broken(doc => { doc.role_views = 'bad'; }), /role_views must be an array/);
+  assert.throws(broken(doc => { doc.role_views = [{ kind: 'session-health', path: '/tmp/h.json', roles: [] }]; }), /role_views roles/);
+  assert.throws(broken(doc => { doc.role_views = [{ kind: 'session-health', path: '/tmp/h.json', roles: null }]; }), /role_views roles/);
+  assert.throws(broken(doc => { doc.role_views = [{ kind: 'session-health', path: '/tmp/h.json', roles: 'role-a' }]; }), /role_views roles/);
+  assert.throws(broken(doc => { doc.role_views = [{ kind: 'session-health', path: '/tmp/h.json', roles: ['   '] }]; }), /role_views roles/);
+  assert.throws(broken(doc => { doc.role_views = [{ kind: 'session-health', path: '/tmp/h.json', roles: [123] }]; }), /role_views roles/);
 });
 
 test('tool detection reads the foreground program, not the registry', () => {
@@ -507,6 +513,57 @@ test('other role lists that disagree with the registry are reported', t => {
   assert.deepEqual(legacyView(f.load(), 'wake-routes').roles['role-a'], { name: 'Role A', bot_id: botA, wake_subdir: '' });
 });
 
+test('role_views with roles scopes missing checks while still checking rows and unknown roles', t => {
+  const f = setup(t);
+  const view = (name, body) => { const file = path.join(f.dir, name); fs.writeFileSync(file, JSON.stringify(body)); return file; };
+  const partial = view('health-partial.json', { roles: [{ id: 'role-a', botId: botA }] });
+  const fmt = findings => findings.map(finding => `${finding.level}|${finding.code}|${finding.role}|${finding.detail.split(' ')[0]}|${finding.detail.split(': ')[1]}`);
+
+  // roles present + partial list passes
+  f.doc.role_views = [{ kind: 'session-health', path: partial, roles: ['role-a'] }];
+  f.write();
+  assert.deepEqual(compareViews(f.load()), []);
+  assert.equal(main(['validate', '--config', f.file], {}, f.deps, () => {}), 0);
+  deliver(f.load(), f.deps);
+  assert.equal(main(['check', '--config', f.file, '--json'], {}, f.deps, () => {}), 0);
+
+  // rows outside roles are still compared when present (matching passes; mismatch/unknown errors)
+  const withExtraOk = view('health-extra-ok.json', { roles: [{ id: 'role-a', botId: botA }, { id: 'role-b', botId: botB }] });
+  f.doc.role_views = [{ kind: 'session-health', path: withExtraOk, roles: ['role-a'] }];
+  f.write();
+  assert.deepEqual(compareViews(f.load()), []);
+
+  const withExtraBad = view('health-extra-bad.json', { roles: [{ id: 'role-a', botId: botA }, { id: 'role-b', botId: botA }, { id: 'role-c', botId: botB }] });
+  f.doc.role_views = [{ kind: 'session-health', path: withExtraBad, roles: ['role-a'] }];
+  f.write();
+  assert.deepEqual(fmt(compareViews(f.load())), [
+    'error|role-view-drift|role-b|session-health|bot_id differ',
+    'error|role-view-drift|role-c|session-health|role is not in the registry',
+  ]);
+
+  // role listed in roles is missing -> error (only listed roles are required)
+  const emptyHealth = view('health-empty.json', { roles: [] });
+  f.doc.role_views = [{ kind: 'session-health', path: emptyHealth, roles: ['role-a'] }];
+  f.write();
+  assert.deepEqual(fmt(compareViews(f.load())), ['error|role-view-drift|role-a|session-health|role is missing']);
+
+  f.doc.role_views = [{ kind: 'session-health', path: partial, roles: ['role-a', 'role-b'] }];
+  f.write();
+  assert.deepEqual(fmt(compareViews(f.load())), ['error|role-view-drift|role-b|session-health|role is missing']);
+  assert.equal(main(['check', '--config', f.file, '--json'], {}, f.deps, () => {}), 1);
+
+  // unknown id in roles -> error (catches config typos)
+  f.doc.role_views = [{ kind: 'session-health', path: partial, roles: ['role-a', 'role-typo'] }];
+  f.write();
+  assert.deepEqual(fmt(compareViews(f.load())), ['error|role-view-drift|role-typo|session-health|role in role_views is not in the registry']);
+  assert.equal(main(['check', '--config', f.file, '--json'], {}, f.deps, () => {}), 1);
+
+  // roles omitted -> existing full-registry behavior preserved
+  f.doc.role_views = [{ kind: 'session-health', path: partial }];
+  f.write();
+  assert.deepEqual(fmt(compareViews(f.load())), ['error|role-view-drift|role-b|session-health|role is missing']);
+});
+
 test('watch --repair restarts a stopped delivery run and notifies once per period', t => {
   const f = setup(t, { notify: { command: ['/opt/notify', '{text}'], repeat_seconds: 600 } });
   const registry = f.load();
@@ -595,5 +652,10 @@ test('the role-session table shows the real tool, wait state and undelivered cou
 
 test('the example configuration is a valid registry', () => {
   const example = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../config/role-wake.example.json');
-  assert.deepEqual(loadRegistry(example).roles.map(role => role.id), ['role-a', 'role-b']);
+  const registry = loadRegistry(example);
+  assert.deepEqual(registry.roles.map(role => role.id), ['role-a', 'role-b']);
+  assert.deepEqual(registry.roleViews.map(view => ({ kind: view.kind, roles: view.roles })), [
+    { kind: 'wake-routes', roles: null },
+    { kind: 'session-health', roles: ['role-a'] },
+  ]);
 });
