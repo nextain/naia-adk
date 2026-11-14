@@ -97,6 +97,15 @@
         ]
       },
       {
+        "matcher": "Bash|Edit|Write|NotebookEdit|MultiEdit|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/lead-write-guard.js\""
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|NotebookEdit|MultiEdit",
         "hooks": [
           {
