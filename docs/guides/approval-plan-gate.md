@@ -113,6 +113,7 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
 1. **1단계 실행**: 관문(`deploy-guard.js`)이 명령을 가로채어 다음을 모두 대조합니다:
    - 계획서 존재 및 유효 기간(24시간 이내)
    - 계획서 `commands`와 실행 명령의 **정확한 바이트 일치** 및 정규화 SHA-256 일치
+   - 단계 명령에 글자를 덧붙인 꼴(`… 2>&1 | tail`, `cd … && …`, `timeout …`, `> 파일`, `bash -c "…"`)은 승인된 명령이 아니라서 막힙니다. 읽기만 하는 단계도 같습니다. 덧붙여 돌리면 단계 승인과 실행 기록이 남지 않아 다음 단계가 막히므로, 출력이 길어도 계획서 글자 그대로 실행합니다.
    - 고정 파일(`files`) 및 명령이 참조하는 모든 파일의 **현재 디스크 SHA-256 일치**
    - 적대 리뷰 영수증(`deploy-plan-review.json`)과 입력 매니페스트 해시 일치
    - 인스턴스 서비스 준비 상태(`config/deploy-gate.json` 및 `gates/deploy.json`)

@@ -531,6 +531,8 @@ async function deploy(command, data, opts) {
 					matches.push(...deployPlan.plansForCommand(clauseText(tokens), root));
 				}
 			}
+			// 단계 명령에 글자를 덧붙인 꼴(… 2>&1 | tail, timeout …, bash -c "…")도 관문에 건다. 승인은 하지 않고 글자 불일치로 막는다.
+			if (matches.length === 0) matches.push(...deployPlan.plansCarryingCommand(command, root, cwd));
 		} catch { matches = []; }
 		for (const m of matches) {
 			const svc = Array.isArray(m.plan && m.plan.services) && m.plan.services.length ? m.plan.services : [`plan:${(m.plan && m.plan.planId) || "unknown"}`];
