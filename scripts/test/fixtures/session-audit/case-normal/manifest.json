@@ -1,0 +1,30 @@
+{
+ "case": "case-normal",
+ "kind": "synthetic",
+ "period": {
+  "from": "2026-11-13T00:00:00Z",
+  "to": "2026-11-13T20:00:00Z"
+ },
+ "files": [
+  "reviews.json",
+  "progress/<plan>/gates/*",
+  "todo-doc.json",
+  "ledger.json",
+  "session-log.json",
+  "gate-git.json",
+  "wake.json",
+  "wake/*"
+ ],
+ "expected": {
+  "S1_reviews_per_plan": {
+   "plan-01": 2,
+   "plan-02": 1,
+   "plan-03": 2
+  },
+  "S3_priority_idle_max_hours": "< 3",
+  "S5_gate_edits": 0,
+  "S7_wake_backlog": 0,
+  "S10_cap_markers": 0,
+  "alerts": 0
+ }
+}

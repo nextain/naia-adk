@@ -69,6 +69,14 @@ const defaults = {
   recovery: '<@{bot}> {role} 세션이 {health} 상태입니다. 복구를 확인해 주세요: {link}',
 };
 
+// Same atomic wake writer for every producer of the wake inbox format.
+export async function writeWakeFile(file, text) {
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.tmp`;
+  await writeFile(tmp, text, { mode: 0o600 });
+  await rename(tmp, file);
+}
+
 export async function runWatch(config, { token, fetchImpl = fetch, dry = false, now = Date.now(), healthProbe, log = e => console.log(JSON.stringify(e)) } = {}) {
   validateConfig(config);
   if (!token) throw Error('configured token unavailable');
@@ -77,7 +85,7 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
   emit('start', dry ? 'dry' : 'running');
   const stateFile = resolve(config.stateFile);
   let lock, degraded = false;
-  const atomic = async (file, text) => { await mkdir(dirname(file), { recursive: true, mode: 0o700 }); const tmp = `${file}.${process.pid}.tmp`; await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, file); };
+  const atomic = writeWakeFile;
   try {
     if (!dry) { await mkdir(dirname(stateFile), { recursive: true }); lock = await open(`${stateFile}.lock`, 'wx', 0o600); }
     let state;
@@ -109,7 +117,7 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
         if (role.wakeDir) {
           const filename = join(resolve(role.wakeDir), `${key}-agent-request.md`);
           // Deterministic filenames and persisted intent prevent duplicate publication.
-          await atomic(filename, `# Discord wake\n\nRole: ${role.id}\nGuild: ${guild.id} (${guild.id})\nChannel: ${channel.id} (${channel.id})\nAuthor: agent-request-watch\nMessage ID: ${(1000000000000000000n + BigInt(`0x${key}`) % 9000000000000000000n).toString()}\nOriginal Message ID: ${request.messageId}\nRequest stage ID: ${key}\nURL: ${values.link}\n\n${content}\n`);
+          await writeWakeFile(filename, `# Discord wake\n\nRole: ${role.id}\nGuild: ${guild.id} (${guild.id})\nChannel: ${channel.id} (${channel.id})\nAuthor: agent-request-watch\nMessage ID: ${(1000000000000000000n + BigInt(`0x${key}`) % 9000000000000000000n).toString()}\nOriginal Message ID: ${request.messageId}\nRequest stage ID: ${key}\nURL: ${values.link}\n\n${content}\n`);
           request.stages[stageKey] = { status: 'confirmed', at: now, filename };
         } else {
           const sent = await api(`/channels/${channel.id}/messages`, { content, allowed_mentions: { parse: [], users: [role.botId] }, nonce: key, enforce_nonce: true });
