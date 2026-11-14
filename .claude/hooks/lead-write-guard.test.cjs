@@ -34,13 +34,19 @@ put(fakeClaude, '#!/bin/sh\n[ -n "$HOOK_ENV_PROJECT" ] && export CLAUDE_PROJECT_
 fs.chmodSync(fakeClaude, 0o755);
 
 let seq = 0;
-// 가짜 claude(sh 스크립트)가 훅의 부모가 되어, 훅은 실제처럼 조상 프로세스에서 claude 와 -p 를 읽는다.
-function run(payload, { headless = false, projectDir = role, env = {}, cwd = role } = {}) {
+function cleanEnv(extra = {}) {
+	const env = { ...process.env, ...extra };
+	if (!Object.prototype.hasOwnProperty.call(extra, "CLAUDE_PROJECT_DIR")) delete env.CLAUDE_PROJECT_DIR;
+	return env;
+}
+
+// 가짜 claude(sh 스크립트)가 훅의 부모가 되어, 실제와 같이 CLAUDE_PROJECT_DIR 없이 조상 프로세스의 /proc/<pid>/cwd 와 -p 를 읽는다.
+function run(payload, { headless = false, argvExtra = [], env = {}, cwd = role, hookCwd } = {}) {
 	const input = path.join(scratch, `in-${++seq}.json`);
-	fs.writeFileSync(input, JSON.stringify({ session_id: "s1", cwd, ...payload }));
-	const r = spawnSync(fakeClaude, headless ? ["-p", "일"] : [], {
+	fs.writeFileSync(input, JSON.stringify({ session_id: "s1", cwd: hookCwd || cwd, ...payload }));
+	const r = spawnSync(fakeClaude, [...(headless ? ["-p", "일"] : []), ...argvExtra], {
 		cwd, encoding: "utf8",
-		env: { ...process.env, HOOK: path.join(hookDir, "lead-write-guard.js"), INPUT: input, CLAUDE_PROJECT_DIR: projectDir, ...env },
+		env: cleanEnv({ HOOK: path.join(hookDir, "lead-write-guard.js"), INPUT: input, ...env }),
 	});
 	assert.equal(r.status, 0, r.stderr);
 	return r.stdout.trim() ? JSON.parse(r.stdout) : null;
@@ -112,18 +118,21 @@ test("2층 일꾼은 막히지 않는다: 헤드리스 claude -p, 서브에이�
 	passed(edit("Write", path.join(repo, "src/app.js"), o));
 	passed(bash(`sed -i 's/a/b/' ${repo}/src/app.js`, o));
 	passed(run({ tool_name: "Edit", agent_id: "sub1", tool_input: { file_path: path.join(repo, "src/app.js") } }));
-	passed(edit("Write", path.join(repo, "src/app.js"), { projectDir: repo, cwd: repo }));
-	passed(edit("Write", path.join(repo, "src/app.js"), { projectDir: plainRole, cwd: plainRole }));
+	passed(edit("Write", path.join(repo, "src/app.js"), { cwd: repo }));
+	passed(edit("Write", path.join(repo, "src/app.js"), { cwd: plainRole }));
+	// B-1/B-3: 값 옵션 뒤의 "-p" 를 print 모드로 오인하지 않는다.
+	blocked(edit("Write", path.join(repo, "src/app.js"), { argvExtra: ["--append-system-prompt", "-p"] }));
 });
 
 test("역할 위장: 환경 변수만 바꿔도, 명령 앞에 변수를 붙여도 풀리지 않는다", () => {
 	const app = path.join(repo, "src/app.js");
 	const spoof = { NAIA_ROLE: "worker", ADK_SESSION_ROLE: "worker", NAIA_LEAD_GUARD: "off", LEAD_ROLE_GUARD_DISABLED: "1", CLAUDE_CODE_ENTRYPOINT: "sdk-cli", HOOK_ENV_PROJECT: repo };
-	blocked(edit("Write", app, { env: spoof, projectDir: role }));
+	blocked(edit("Write", app, { env: spoof }));
 	blocked(bash(`NAIA_ROLE=worker ADK_SESSION_ROLE=worker echo hi > ${app}`));
 	blocked(bash(`export NAIA_ROLE=worker; env -u NAIA_ROLE sh -c 'echo hi > ${app}'`));
-	// 실제 환경(CLAUDE_PROJECT_DIR)이 바뀌어도 조상 claude 가 띄운 폴더가 정한다: 가짜 claude 는 role 에서 떴다.
-	blocked(bash(`echo hi > ${app}`, { env: { HOOK_ENV_PROJECT: repo }, projectDir: role }));
+	// 실제 환경(CLAUDE_PROJECT_DIR)·훅 입력 cwd 가 바뀌어도 조상 claude 의 실제 /proc/<pid>/cwd 가 정한다.
+	blocked(bash(`echo hi > ${app}`, { env: { HOOK_ENV_PROJECT: repo } }));
+	blocked(bash(`echo hi > ${app}`, { hookCwd: repo }));
 });
 
 test("비상 길: 대표님이 연 예외 기록 하나만 범위 안 쓰기를 허용하고, 감사 기록에 남으며, 만료·불량은 무효", () => {
@@ -154,19 +163,26 @@ test("비상 길: 대표님이 연 예외 기록 하나만 범위 안 쓰기를 
 test("예외 대본: 일꾼·사람 자리에서는 열리고 기록과 감사가 남고, 3층 세션에서는 거부된다", () => {
 	fs.mkdirSync(path.join(adk, "scripts"), { recursive: true });
 	fs.copyFileSync(path.join(__dirname, "../../scripts/lead-guard-exception.mjs"), path.join(adk, "scripts/lead-guard-exception.mjs"));
-	const args = ["open", "--scope", path.join(repo, "src"), "--ttl-min", "30", "--approved-by", "대표님", "--approval-ref", "11/14 대표님 긴급 허락 원문", "--reason", "긴급"];
+	const args = ["open", "--scope", path.join(repo, "src"), "--ttl-min", "30", "--approved-by", "승인자", "--approval-ref", "11/14 승인자 긴급 허락 원문", "--reason", "긴급"];
 	const script = path.join(adk, "scripts/lead-guard-exception.mjs");
-	const human = spawnSync("node", [script, ...args], { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: "" } });
+	const human = spawnSync("node", [script, ...args], { encoding: "utf8", env: cleanEnv() });
 	assert.equal(human.status, 0, human.stderr);
 	assert.match(fs.readFileSync(path.join(adk, ".agents/lead-guard/audit.jsonl"), "utf8"), /"event":"exception-open"/);
 	passed(edit("Write", path.join(repo, "src/viaexc.js")));
-	assert.equal(spawnSync("node", [script, "close"], { encoding: "utf8" }).status, 0);
+	assert.equal(spawnSync("node", [script, "close"], { encoding: "utf8", env: cleanEnv() }).status, 0);
 	blocked(edit("Write", path.join(repo, "src/viaexc.js")));
-	// 3층 세션 안(조상이 role 에서 뜬 claude)에서 돌리면 거부
+	// 단독 claude -p 일꾼은 cwd 가 role 이어도 예외 대본을 열 수 있다.
+	const standalone = path.join(scratch, "bin1/claude");
+	put(standalone, `#!/bin/sh\nnode "${script}" "${args[0]}" "${args[1]}" "${args[2]}" "${args[3]}" "${args[4]}" "${args[5]}" "${args[6]}" "${args[7]}" "${args[8]}" "${args[9]}" "${args[10]}"\n`);
+	fs.chmodSync(standalone, 0o755);
+	const stRes = spawnSync(standalone, ["-p", "work"], { cwd: role, encoding: "utf8", env: cleanEnv() });
+	assert.equal(stRes.status, 0, stRes.stderr);
+	assert.equal(spawnSync("node", [script, "close"], { encoding: "utf8", env: cleanEnv() }).status, 0);
+	// 3층 세션 안(조상이 role 에서 뜬 claude, CLAUDE_PROJECT_DIR 없음)에서 돌리면 거부
 	const wrapper = path.join(scratch, "bin2/claude");
 	put(wrapper, `#!/bin/sh\nnode "${script}" "$@"\n`);
 	fs.chmodSync(wrapper, 0o755);
-	const denied = spawnSync(wrapper, args, { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: role } });
+	const denied = spawnSync(wrapper, args, { cwd: role, encoding: "utf8", env: cleanEnv() });
 	assert.notEqual(denied.status, 0);
 	assert.match(denied.stderr, /3층 세션/);
 	assert.equal(fs.existsSync(path.join(adk, ".agents/lead-guard/exception.json")), false);
@@ -177,13 +193,131 @@ test("예외 대본: 일꾼·사람 자리에서는 열리고 기록과 감사�
 	const outer = path.join(scratch, "bin4/claude");
 	put(outer, `#!/bin/sh\n"${inner}" -p x "$@"\n`);
 	fs.chmodSync(outer, 0o755);
-	const viaWorker = spawnSync(outer, args, { encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: role } });
+	const viaWorker = spawnSync(outer, args, { cwd: role, encoding: "utf8", env: cleanEnv() });
 	assert.notEqual(viaWorker.status, 0, viaWorker.stdout);
 	assert.equal(fs.existsSync(path.join(adk, ".agents/lead-guard/exception.json")), false);
 });
 
 test("훅이 깨져도 통과한다(기본 허용): 잘못된 입력", () => {
-	const r = spawnSync(fakeClaude, [], { encoding: "utf8", env: { ...process.env, HOOK: path.join(hookDir, "lead-write-guard.js"), INPUT: "/dev/null", CLAUDE_PROJECT_DIR: role } });
+	const r = spawnSync(fakeClaude, [], { cwd: role, encoding: "utf8", env: cleanEnv({ HOOK: path.join(hookDir, "lead-write-guard.js"), INPUT: "/dev/null" }) });
 	assert.equal(r.status, 0);
 	assert.equal(r.stdout.trim(), "");
+});
+
+test("B-2 오탐 수정: team/now 역할 문서, mkdir .agents/progress, 연결 worktree 통삭제 허용(내부 파일·주 저장소는 막힘)", () => {
+	passed(edit("Write", path.join(repo, "docs/common/team/now/minho.md")));
+	passed(edit("Write", path.join(repo, "docs/common/team/now/minho/status.md")));
+	blocked(edit("Write", path.join(repo, "docs/common/team/now/other.md")));
+	passed(bash(`mkdir -p ${adk}/.agents/progress`));
+	passed(bash(`mkdir -p ${repo}/.agents/progress ${repo}/.agents/work/job1`));
+	blocked(bash(`mkdir -p ${repo}/src/newdir`));
+
+	// 연결 git worktree 만들기
+	const mainRepo = path.join(scratch, "main-git");
+	const wtRepo = path.join(scratch, "linked-wt");
+	fs.mkdirSync(mainRepo, { recursive: true });
+	const gitEnv = cleanEnv({ GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
+	assert.equal(spawnSync("git", ["-C", mainRepo, "init", "-q"], { env: gitEnv }).status, 0);
+	put(path.join(mainRepo, "src/f.js"), "ok\n");
+	assert.equal(spawnSync("git", ["-C", mainRepo, "add", "src/f.js"], { env: gitEnv }).status, 0);
+	assert.equal(spawnSync("git", ["-C", mainRepo, "commit", "-qm", "init"], { env: gitEnv }).status, 0);
+	assert.equal(spawnSync("git", ["-C", mainRepo, "worktree", "add", "-q", "-b", "wt1", wtRepo], { env: gitEnv }).status, 0);
+
+	// 연결 worktree 내부 쓰기·부분 삭제는 막히고, 통삭제만 허용되며, 주 저장소/ADK 루트 통삭제는 막힌다.
+	blocked(edit("Write", path.join(wtRepo, "src/f.js")));
+	blocked(bash(`rm -rf ${wtRepo}/src`));
+	blocked(bash(`rm -rf ${mainRepo}`));
+	blocked(bash(`rm -rf ${adk}`));
+	passed(bash(`rm -rf ${wtRepo}`));
+});
+
+test("B-3 미탐 보완: touch·mkdir·chmod·curl·wget·git 쓰기·패키지·xargs·find·대본 파일·Python/Node 변수 결합", () => {
+	const app = path.join(repo, "src/app.js");
+	blocked(bash(`touch ${repo}/src/newfile.js`));
+	passed(bash(`touch -r ${app} ${work}/ref-time.txt`));
+	blocked(bash(`mkdir -p ${repo}/src/sub`));
+	blocked(bash(`chmod +x ${app}`));
+	blocked(bash(`chmod -x ${app}`));
+	blocked(bash(`chown root:root ${app}`));
+	blocked(bash(`curl -o ${repo}/src/dl.js https://example.com/a.js`));
+	blocked(bash(`cd ${repo}/src && curl -O https://example.com/a.js`));
+	blocked(bash(`wget -O ${repo}/src/dl.js https://example.com/a.js`));
+	blocked(bash(`wget -P ${repo}/src https://example.com/a.js`));
+	passed(bash(`wget -qO- https://example.com/health`));
+
+	// git
+	blocked(bash(`cd ${repo} && git checkout -- src/app.js`));
+	blocked(bash(`cd ${repo} && git switch feat`));
+	blocked(bash(`cd ${repo} && git stash`));
+	blocked(bash(`cd ${repo} && git merge feat`));
+	blocked(bash(`cd ${repo} && git pull`));
+	blocked(bash(`cd ${repo} && git cherry-pick HEAD`));
+	blocked(bash(`cd ${repo} && git rebase main`));
+	blocked(bash(`cd ${repo} && git revert HEAD`));
+	blocked(bash(`cd ${repo} && git commit -am "quick"`));
+	blocked(bash(`cd ${repo} && git commit --all -m "quick"`));
+	blocked(bash(`cd ${repo} && git commit -m "ok" src/app.js`));
+	passed(bash(`cd ${repo} && git stash list`));
+	passed(bash(`cd ${repo} && git stash show`));
+	passed(bash(`cd ${repo} && git commit -m "-a is in message"`));
+
+	// npm/pnpm/yarn/bun
+	blocked(bash(`npm --prefix ${repo} install pkg`));
+	blocked(bash(`cd ${repo} && pnpm add pkg`));
+	blocked(bash(`cd ${repo} && yarn install`));
+	blocked(bash(`cd ${repo} && bun add pkg`));
+	passed(bash(`cd ${repo} && npm test`));
+
+	// xargs / find
+	blocked(bash(`echo ${app} | xargs rm -f`));
+	blocked(bash(`find ${repo}/src -name '*.js' | xargs -I{} sed -i 's/a/b/' {}`));
+	blocked(bash(`find ${repo}/src -delete`));
+	blocked(bash(`find ${repo}/src -exec chmod +x {} +`));
+	passed(bash(`find ${work} -delete`));
+	passed(bash(`find ${repo}/src -exec grep a {} +`));
+
+	// 지역 셸 대본 (<= 1MB)
+	const mutSh = path.join(work, "mut.sh");
+	const roSh = path.join(work, "ro.sh");
+	put(mutSh, `#!/bin/sh\nsed -i 's/a/b/' ${app}\n`);
+	put(roSh, `#!/bin/sh\ncat ${app}\n`);
+	passed(edit("Write", mutSh));
+	blocked(bash(`bash ${mutSh}`));
+	passed(bash(`bash ${roSh}`));
+
+	// Python / Node 상수 변수·결합·삭제·이동
+	blocked(bash(`python3 -c "p='${repo}/src' + '/app.js'; open(p,'w').write('x')"`));
+	blocked(bash(`python3 -c "import os; d='${repo}/src'; os.remove(d + '/app.js')"`));
+	blocked(bash(`python3 -c "import os; os.rename('${work}/x', '${app}')"`));
+	blocked(bash(`python3 -c "import shutil; shutil.rmtree('${repo}/src')"`));
+	blocked(bash(`python3 -c "from pathlib import Path; p = Path('${repo}/src') / 'app.js'; p.write_text('x')"`));
+	blocked(bash(`python3 -c "p='${role}'; open(p + '/.naia-role.json','w').write('{}')"`));
+	blocked(bash(`node -e "const p='${repo}/src' + '/app.js'; require('fs').rmSync(p)"`));
+	passed(bash(`python3 -c "p='${work}/ok.txt'; open(p,'w').write('ok')"`));
+});
+
+test("B-4 설정 분리: 기본 안내문에 박힌 경로/이름이 없고, 표지 설정으로 바뀐다", () => {
+	const r = edit("Edit", path.join(repo, "src/app.js"));
+	blocked(r);
+	assert.doesNotMatch(r.reason, /\/home\/nextain|minho-kit|대표님/);
+	assert.match(r.reason, /<작업 폴더>/);
+	assert.match(r.reason, /승인자/);
+
+	const customRole = path.join(scratch, "custom-role");
+	put(path.join(customRole, ".naia-role.json"), JSON.stringify({
+		role: "custom",
+		lead_guard: { enabled: true, work_dir: "/srv/jobs", worker_guide: "/srv/kit/workers.md", approver_label: "운영자" },
+	}));
+	const rc = edit("Edit", path.join(repo, "src/app.js"), { cwd: customRole });
+	blocked(rc);
+	assert.match(rc.reason, /\/srv\/jobs\/<일>\/prompt\.md/);
+	assert.match(rc.reason, /\/srv\/kit\/workers\.md/);
+	assert.match(rc.reason, /운영자/);
+	const script = path.join(adk, "scripts/lead-guard-exception.mjs");
+	const wrapper = path.join(scratch, "bin5/claude");
+	put(wrapper, `#!/bin/sh\nnode "${script}" "$@"\n`);
+	fs.chmodSync(wrapper, 0o755);
+	const denied = spawnSync(wrapper, ["open", "--scope", "/a/b/c", "--ttl-min", "10", "--approved-by", "x", "--approval-ref", "long-enough-ref", "--reason", "test"], { cwd: customRole, encoding: "utf8", env: cleanEnv() });
+	assert.notEqual(denied.status, 0);
+	assert.match(denied.stderr, /운영자가 직접 엽니다/);
 });

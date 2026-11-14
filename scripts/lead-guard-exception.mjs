@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 // 3층 쓰기 막기의 긴급 예외 기록(.agents/lead-guard/exception.json, 한 번에 하나)을 연다·닫는다·본다.
-// 대표님이 허락한 예외만 연다. 3층 세션에서는 이 대본이 열리지 않는다(훅이 막고, 이 대본도 조상 claude 를 보고 거부한다).
-// 사용: node scripts/lead-guard-exception.mjs open --scope <절대경로>[,..] --ttl-min <1..480> --approved-by <이름> --approval-ref "<대표님 원문 또는 링크>" --reason "<이유>"
+// 승인자가 허락한 예외만 연다. 3층 세션에서는 이 대본이 열리지 않는다(훅이 막고, 이 대본도 조상 claude 를 보고 거부한다).
+// 사용: node scripts/lead-guard-exception.mjs open --scope <절대경로>[,..] --ttl-min <1..480> --approved-by <이름> --approval-ref "<승인자 원문 또는 링크>" --reason "<이유>"
 //       node scripts/lead-guard-exception.mjs close | status
 import fs from "node:fs"
 import { createRequire } from "node:module"
 
 const require = createRequire(import.meta.url)
 const g = require("../.claude/hooks/lib/lead-guard.js")
+
+const josa = (word, a, b) => {
+  const c = word ? word.charCodeAt(word.length - 1) : 0
+  return c >= 0xAC00 && c <= 0xD7A3 ? ((c - 0xAC00) % 28 !== 0 ? a : b) : b
+}
 
 const [cmd, ...rest] = process.argv.slice(2)
 const opt = {}
@@ -22,8 +27,14 @@ if (cmd === "status") {
 if (cmd !== "open" && cmd !== "close") die("사용: open|close|status")
 
 // 가장 가까운 claude 만이 아니라 조상 전부를 본다: 3층이 띄운 일꾼(claude -p)이 대신 열어도 거부한다.
-const lead = g.claudeAncestors().some((a) => a.projectDir && g.roleConfigFrom(a.projectDir))
-if (lead) die("3층 세션에서는(3층이 띄운 일꾼 포함) 예외를 열거나 닫을 수 없습니다. 대표님이 직접 엽니다.")
+const leadRole = g.claudeAncestors()
+  .filter((a) => !a.headless)
+  .map((a) => (a.cwd || a.projectDir) && g.roleConfigFrom(a.cwd || a.projectDir))
+  .find(Boolean)
+if (leadRole) {
+  const { approverLabel } = g.guardMeta(leadRole)
+  die(`3층 세션에서는(3층이 띄운 일꾼 포함) 예외를 열거나 닫을 수 없습니다. ${josa(approverLabel, approverLabel + "이", approverLabel + "가")} 직접 엽니다.`)
+}
 
 if (cmd === "close") {
   const ex = g.activeException()
