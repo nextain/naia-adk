@@ -62,8 +62,9 @@ input of `notify.command`. The same alert repeats at most once per
    reads, and the owner ids.
 2. Run `tick --dry` and read which items would start.
 3. Attach instructions to existing open rows with `adopt`.
-4. Run `tick` from a timer, for example a systemd user timer every 10 minutes
-   with the messenger token in the service environment.
+4. Run `tick` from a timer, for example a systemd user timer every 10 minutes.
+   The tick needs no messenger token; only `confirm` reads `token_env`, and a
+   worker never inherits that variable.
 5. Point the lead's ledger wrapper at this script so `add` and `done` go
    through it.
 

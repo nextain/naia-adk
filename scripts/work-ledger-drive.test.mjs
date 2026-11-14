@@ -21,7 +21,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 const args = process.argv.slice(2), opt = name => args.find(a => a.startsWith(name + '='))?.split('=')[1];
 const dir = opt('--calls'); mkdirSync(dir, { recursive: true });
-writeFileSync(join(dir, process.pid + '.json'), JSON.stringify({ args, stdin: readFileSync(0, 'utf8'), item: process.env.LEDGER_ITEM_ID }));
+writeFileSync(join(dir, process.pid + '.json'), JSON.stringify({ args, stdin: readFileSync(0, 'utf8'), item: process.env.LEDGER_ITEM_ID, token: process.env.TEST_TOKEN ?? null }));
 setTimeout(() => { if (args.includes('--write-result')) writeFileSync(process.env.LEDGER_RESULT_FILE, 'result'); }, Number(opt('--sleep') ?? 0) * 1000);
 `;
 
@@ -89,6 +89,7 @@ test('an overdue item starts a worker from its instruction file; the lead is onl
   assert.deepEqual(call.args.slice(0, 3), ['-p', '--model', 'model-a']);
   assert.match(call.stdin, /Do the assigned work\./);
   assert.ok(call.stdin.includes(path.join(f.root, 'out/late.md')));
+  assert.equal(call.token, null);
   assert.equal((await f.callsFor('later')).length, 0);
   assert.equal((await f.wakes('launched')).length, 1);
   const item = await f.item('late');

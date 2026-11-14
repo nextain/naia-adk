@@ -160,10 +160,12 @@ async function launch(root, cfg, role, item, now) {
   const [command, ...args] = cfg.worker.command.map(part => fill(part, values));
   const input = await open(promptFile, 'r'), output = await open(log, 'a', 0o600);
   const run = { pid: null, start: null, started_at: new Date(now).toISOString(), ended_at: null, attempts: attempt, log, error: null };
+  // The owner-confirmation token is for confirm only; a worker never receives it.
+  const env = { ...process.env, LEDGER_ROLE: role, LEDGER_ITEM_ID: item.id, LEDGER_RESULT_FILE: item.result_file };
+  if (cfg.owner) delete env[cfg.owner.tokenEnv];
   try {
     const child = spawn(command, args, {
-      cwd: path.resolve(root, item.cwd ?? cfg.worker.cwd ?? '.'), detached: true, stdio: [input.fd, output.fd, output.fd],
-      env: { ...process.env, LEDGER_ROLE: role, LEDGER_ITEM_ID: item.id, LEDGER_RESULT_FILE: item.result_file },
+      cwd: path.resolve(root, item.cwd ?? cfg.worker.cwd ?? '.'), detached: true, stdio: [input.fd, output.fd, output.fd], env,
     });
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
     child.unref();
