@@ -287,19 +287,9 @@ issue、PR、讨论可以用你习惯的语言来写，AI 会居中协调沟通�
   token。我们正在考虑把它拆分成有意义的最小知识单元，用标签和链接连接起来，只精确取出需要的那一块。目标是
   通过 CLI 或 MCP 访问，使其不绑定于特定工具。
 
-## 许可证
+## 许可证与专利声明 (License & Patent Notice)
 
-Apache License 2.0。详情请参阅 [LICENSE](LICENSE)。
-
-```
-Copyright 2026 Nextain Inc.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-```
+代码基于 [Apache License 2.0 (`Apache-2.0`)](LICENSE) 授权；关于专利边界与附条件专利承诺（[`PATENTS.md`](PATENTS.md)）、商业与企业版许可证（[`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md)）以及贡献者协议（[`CONTRIBUTING.md`](CONTRIBUTING.md)、[`CLA.md`](CLA.md)、[`CLA-CORPORATE.md`](CLA-CORPORATE.md)）的完整内容，请参阅英文版 [`README.md` 的 License & Patent Notice](README.md#license--patent-notice) 章节。
 
 ## 链接
 

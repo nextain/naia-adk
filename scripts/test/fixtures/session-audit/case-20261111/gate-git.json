@@ -1,0 +1,108 @@
+{
+ "repo": "instance workspace (role-a)",
+ "gate_files_glob": [
+  ".claude/hooks/**",
+  ".claude/settings.json"
+ ],
+ "period": {
+  "from": "2026-11-11T07:00:00Z",
+  "to": "2026-11-12T03:40:00Z"
+ },
+ "commits": [
+  {
+   "commit": "27af1881",
+   "at": "2026-11-11T16:44:38Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js"
+   ]
+  },
+  {
+   "commit": "479cf103",
+   "at": "2026-11-11T16:18:40Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js"
+   ]
+  },
+  {
+   "commit": "fd4f00b7",
+   "at": "2026-11-11T16:08:28Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js"
+   ]
+  },
+  {
+   "commit": "b50a1f5d",
+   "at": "2026-11-11T15:51:52Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js"
+   ]
+  },
+  {
+   "commit": "a74f8860",
+   "at": "2026-11-11T15:47:20Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js"
+   ]
+  },
+  {
+   "commit": "35b96326",
+   "at": "2026-11-11T15:44:06Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js"
+   ]
+  },
+  {
+   "commit": "b0af5829",
+   "at": "2026-11-11T15:38:41Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js"
+   ]
+  },
+  {
+   "commit": "b177273d",
+   "at": "2026-11-11T15:29:16Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js",
+    ".claude/hooks/test/run-customer-b-gate-test.cjs"
+   ]
+  },
+  {
+   "commit": "28238c90",
+   "at": "2026-11-11T15:15:28Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js"
+   ]
+  },
+  {
+   "commit": "9bbceac5",
+   "at": "2026-11-11T15:13:03Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js"
+   ]
+  },
+  {
+   "commit": "6f6b9607",
+   "at": "2026-11-11T15:09:33Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js"
+   ]
+  },
+  {
+   "commit": "f67f33ce",
+   "at": "2026-11-11T15:05:59Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js"
+   ]
+  },
+  {
+   "commit": "751801fb",
+   "at": "2026-11-11T14:50:20Z",
+   "files": [
+    ".claude/hooks/lib/deploy-readiness.js",
+    ".claude/hooks/test/run-customer-c-gate-test.cjs"
+   ]
+  }
+ ],
+ "commit_count": 13,
+ "note": "세션 기록의 Edit/Write 편집 수(session-log.json edits target=gate)와 다름: 커밋은 편집 여러 건을 묶는다"
+}
