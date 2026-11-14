@@ -22,7 +22,7 @@
   ],
   "testHostsNote": "비운영(시험) 기기 호스트·IP 목록(문자열 배열, 소문자·끝 점 정규화, 정확히 일치하는 이름만 비운영으로 보며 원격 본문은 다시 분류)",
   "testHosts": [],
-  "readOnlyScriptsNote": "사람 승인 코드 없이 반복 실행할 kind=ops 고정 읽기 대본 목록([{sha256, service, note}]). 이 파일이 git 에 추적되고 HEAD 커밋과 같은 상태이며 적대 리뷰를 통과한 계획서·대본 지문이 일치할 때만 적용",
+  "readOnlyScriptsNote": "사람 승인 코드 없이 반복 실행할 kind=ops 고정 읽기 대본 목록([{sha256, path, service, note}]). service 와일드카드(*, ? 등) 금지, 설정·대본 모두 심볼릭 링크 없이 git 추적 및 HEAD 블롭과 일치하고 적대 리뷰 영수증에 동일 항목·대본 지문이 묶였으며 허용된 정확한 명령 꼴일 때만 적용",
   "readOnlyScripts": [],
   "services": {
     "azure:containerapp:my-app-prod": {

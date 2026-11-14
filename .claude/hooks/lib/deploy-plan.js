@@ -20,6 +20,7 @@
  * 사람 승인 = 대화창에 사람이 친 코드(deploy-human-approval.humanTyped) 또는 승인자 본인 디스코드 글(디스코드 REST 로
  * 직접 받아 작성자 번호를 인스턴스 설정 approver.discordUserId 와 대조, 봇·웹훅·앱 글 불인정).
  */
+const { execFileSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -339,18 +340,268 @@ function reviewTrailer(text) {
 	return { targets: m[1].split(","), prompt: m[2], stdout: m[3], bodySha: sha256(Buffer.from(body, "utf8")), body };
 }
 
+/** 저장소 상대 POSIX 경로를 정규화하고, 절대경로·상위 탈출(..)·와일드카드·널 바이트를 거절한다. */
+function normalizeRepoRelPath(raw) {
+	if (typeof raw !== "string") return null;
+	const trimmed = raw.trim();
+	if (!trimmed || /[\0'"*?\[\]{}]/.test(trimmed)) return null;
+	if (trimmed.startsWith("/") || trimmed.startsWith("\\") || /^[A-Za-z]:/.test(trimmed)) return null;
+	const norm = path.posix.normalize(trimmed.replace(/\\/g, "/"));
+	if (!norm || norm === "." || norm === ".." || norm.startsWith("../") || norm.startsWith("/")) return null;
+	return norm;
+}
+
+function hasGlobChars(s) {
+	return /[*?\[\]{}]/.test(String(s || ""));
+}
+
+/** config/deploy-gate.json readOnlyScripts 배열을 검증하고 정규화한다(service 글롭·path 누락 금지). */
+function validateReadOnlyScriptsConfig(cfg) {
+	if (!cfg || cfg.readOnlyScripts === undefined) return { ok: true, items: [] };
+	if (!Array.isArray(cfg.readOnlyScripts)) return { ok: false, why: "config/deploy-gate.json readOnlyScripts 는 배열이어야 함", items: [] };
+	const items = [];
+	for (let i = 0; i < cfg.readOnlyScripts.length; i++) {
+		const item = cfg.readOnlyScripts[i];
+		if (!item || typeof item !== "object" || Array.isArray(item)) return { ok: false, why: `config/deploy-gate.json readOnlyScripts[${i}] 는 객체여야 함`, items: [] };
+		const shaRaw = typeof item.sha256 === "string" ? item.sha256.trim() : "";
+		if (!/^[a-f0-9]{64}$/i.test(shaRaw)) return { ok: false, why: `config/deploy-gate.json readOnlyScripts[${i}].sha256 는 64자리 hex 여야 함`, items: [] };
+		const relPath = normalizeRepoRelPath(item.path);
+		if (!relPath) return { ok: false, why: `config/deploy-gate.json readOnlyScripts[${i}].path 는 와일드카드·상위 탈출 없는 저장소 상대 경로여야 함`, items: [] };
+		const svc = typeof item.service === "string" ? item.service.trim() : "";
+		if (!svc || /\s/.test(svc) || hasGlobChars(svc)) return { ok: false, why: `config/deploy-gate.json readOnlyScripts[${i}].service 에 와일드카드(*, ? 등)나 공백을 쓸 수 없으며 정확한 서비스 키여야 함: ${svc || "(비어 있음)"}`, items: [] };
+		const note = typeof item.note === "string" ? item.note.trim() : "";
+		items.push({ sha256: shaRaw.toLowerCase(), path: relPath, service: svc, ...(note ? { note } : {}) });
+	}
+	return { ok: true, items };
+}
+
+/**
+ * 저장소 파일이 심볼릭 링크(상위 경로 포함) 없이 git 으로 추적되고 작업 트리·스테이지 내용이 HEAD 블롭과 바이트 일치하는지 검증한다.
+ */
+function verifyRepoFileGitClean(filePath, expectedRealTop = null, shownName = null) {
+	const shown = shownName || (filePath ? path.basename(String(filePath)) : "파일");
+	if (!filePath || typeof filePath !== "string") return { ok: false, why: `${shown} 경로가 없음` };
+	const absFile = path.resolve(filePath);
+	let st;
+	try {
+		st = fs.lstatSync(absFile);
+	} catch {
+		return { ok: false, why: `${shown} 파일이 없음` };
+	}
+	if (st.isSymbolicLink() || !st.isFile()) {
+		return { ok: false, why: `${shown} 은 심볼릭 링크가 아닌 일반 파일이어야 함` };
+	}
+	let topRaw;
+	try {
+		topRaw = execFileSync("git", ["-C", path.dirname(absFile), "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	} catch {
+		return { ok: false, why: `${shown} 이 git 저장소 안에 없음` };
+	}
+	let realTop;
+	try {
+		realTop = fs.realpathSync(topRaw);
+	} catch {
+		return { ok: false, why: `${shown} git 저장소 루트 확인 실패` };
+	}
+	if (expectedRealTop && realTop !== expectedRealTop) {
+		return { ok: false, why: `${shown} 이 설정 파일과 같은 git 저장소 안에 없음` };
+	}
+	let anc = path.dirname(absFile);
+	const tail = [path.basename(absFile)];
+	let matchedTop = false;
+	for (;;) {
+		try {
+			if (fs.realpathSync(anc) === realTop) { matchedTop = true; break; }
+		} catch {}
+		tail.unshift(path.basename(anc));
+		const parent = path.dirname(anc);
+		if (parent === anc) break;
+		anc = parent;
+	}
+	if (!matchedTop) return { ok: false, why: `${shown} 이 git 저장소 밖에 있음` };
+	let checkCur = anc;
+	for (const seg of tail) {
+		checkCur = path.join(checkCur, seg);
+		let lst;
+		try { lst = fs.lstatSync(checkCur); } catch { return { ok: false, why: `${shown} 경로 확인 실패` }; }
+		if (lst.isSymbolicLink()) return { ok: false, why: `${shown} 경로(또는 상위 경로)에 심볼릭 링크를 쓸 수 없음` };
+	}
+	let realFile;
+	try { realFile = fs.realpathSync(absFile); } catch { return { ok: false, why: `${shown} realpath 확인 실패` }; }
+	if (realFile !== path.join(realTop, ...tail)) {
+		return { ok: false, why: `${shown} 실제 경로가 저장소 내 등록 경로와 다름` };
+	}
+	const rel = tail.join("/");
+	try {
+		execFileSync("git", ["-C", realTop, "ls-files", "--error-unmatch", "--", rel], { stdio: ["ignore", "pipe", "pipe"] });
+	} catch {
+		return { ok: false, why: `${rel} 이 git 으로 추적되지 않음` };
+	}
+	let statusOut = "";
+	try {
+		statusOut = execFileSync("git", ["-C", realTop, "status", "--porcelain", "--untracked-files=all", "--", rel], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	} catch {
+		return { ok: false, why: `${rel} git 상태 확인 실패` };
+	}
+	if (statusOut.trim() !== "") {
+		return { ok: false, why: `${rel} 에 커밋되지 않은 변경(또는 미추적 상태)이 있음` };
+	}
+	let committedBuf;
+	let diskBuf;
+	try {
+		committedBuf = execFileSync("git", ["-C", realTop, "show", `HEAD:${rel}`], { encoding: null, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 5 * 1024 * 1024 });
+		diskBuf = fs.readFileSync(absFile);
+	} catch {
+		return { ok: false, why: `${rel} 커밋 내용(HEAD) 대조 실패` };
+	}
+	const shaDisk = sha256(diskBuf);
+	const shaHead = sha256(committedBuf);
+	if (shaDisk !== shaHead) {
+		return { ok: false, why: `${rel} 작업 트리 내용이 HEAD 커밋과 다름` };
+	}
+	return { ok: true, rel, realTop, realFile, sha256: shaDisk };
+}
+
+function canonicalReadOnlyBinding(items) {
+	const seen = new Set();
+	const out = [];
+	for (const item of items || []) {
+		const row = {
+			sha256: String(item.sha256).trim().toLowerCase(),
+			path: normalizeRepoRelPath(item.path),
+			service: String(item.service).trim(),
+			script_sha256: String(item.script_sha256 || item.sha256).trim().toLowerCase(),
+		};
+		const key = `${row.service}\0${row.path}\0${row.sha256}\0${row.script_sha256}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push(row);
+	}
+	out.sort((a, b) => (a.service !== b.service ? (a.service < b.service ? -1 : 1) : a.path !== b.path ? (a.path < b.path ? -1 : 1) : (a.sha256 < b.sha256 ? -1 : a.sha256 > b.sha256 ? 1 : 0)));
+	return out;
+}
+
+function validateReadOnlyBindingRecords(records) {
+	if (!Array.isArray(records)) return { ok: false, why: "적대 리뷰 read_only_scripts 는 배열이어야 함", items: [] };
+	for (let i = 0; i < records.length; i++) {
+		const r = records[i];
+		if (!r || typeof r !== "object" || Array.isArray(r)) return { ok: false, why: `적대 리뷰 read_only_scripts[${i}] 모양이 틀림`, items: [] };
+		if (!/^[a-f0-9]{64}$/i.test(String(r.sha256 || "")) || !/^[a-f0-9]{64}$/i.test(String(r.script_sha256 || ""))) return { ok: false, why: `적대 리뷰 read_only_scripts[${i}] sha256 이 틀림`, items: [] };
+		if (!normalizeRepoRelPath(r.path)) return { ok: false, why: `적대 리뷰 read_only_scripts[${i}] path 가 틀림`, items: [] };
+		const svc = typeof r.service === "string" ? r.service.trim() : "";
+		if (!svc || /\s/.test(svc) || hasGlobChars(svc)) return { ok: false, why: `적대 리뷰 read_only_scripts[${i}] service 가 틀림`, items: [] };
+	}
+	return { ok: true, items: canonicalReadOnlyBinding(records) };
+}
+
+/** 계획서의 services·고정 files 와 git HEAD 일치 config/deploy-gate.json readOnlyScripts 를 대조해 리뷰 시점 바인딩 목록을 만든다. */
+function planReadOnlyScriptsBinding(plan, root) {
+	const base = root ? path.resolve(root) : ROOT;
+	const cfgPath = path.join(base, "config", "deploy-gate.json");
+	if (!fs.existsSync(cfgPath)) return { ok: true, items: [] };
+	let cfg;
+	try { cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); }
+	catch (e) { return { ok: false, why: `config/deploy-gate.json 파싱 실패: ${e.message}`, items: [] }; }
+	const valid = validateReadOnlyScriptsConfig(cfg);
+	if (!valid.ok) return { ok: false, why: valid.why, items: [] };
+	if (valid.items.length === 0) return { ok: true, items: [] };
+	const cleanCfg = verifyRepoFileGitClean(cfgPath, null, "config/deploy-gate.json");
+	if (!cleanCfg.ok) return { ok: true, items: [] };
+	const planServices = new Set(Array.isArray(plan?.services) ? plan.services.map((s) => String(s || "").trim()) : []);
+	const pinnedAbsToSha = new Map();
+	for (const step of Array.isArray(plan?.scenario) ? plan.scenario : []) {
+		if (!step || !step.files || typeof step.files !== "object" || Array.isArray(step.files)) continue;
+		for (const [f, want] of Object.entries(step.files)) {
+			if (!/^[a-f0-9]{64}$/i.test(String(want))) continue;
+			const abs = path.isAbsolute(f) ? path.resolve(f) : path.resolve(base, f);
+			try {
+				if (!fs.statSync(abs).isFile()) continue;
+				const actual = sha256(fs.readFileSync(abs));
+				if (actual === String(want).toLowerCase()) pinnedAbsToSha.set(abs, actual);
+			} catch {}
+		}
+	}
+	const bound = [];
+	for (const item of valid.items) {
+		if (!planServices.has(item.service)) continue;
+		const absScript = path.join(cleanCfg.realTop, item.path);
+		if (pinnedAbsToSha.get(absScript) !== item.sha256) continue;
+		const cleanScript = verifyRepoFileGitClean(absScript, cleanCfg.realTop, item.path);
+		if (!cleanScript.ok || cleanScript.rel !== item.path || cleanScript.sha256 !== item.sha256) continue;
+		bound.push({ sha256: item.sha256, path: item.path, service: item.service, script_sha256: cleanScript.sha256 });
+	}
+	return { ok: true, items: canonicalReadOnlyBinding(bound) };
+}
+
+/** 계획 단계 명령이 직접 호출하는 저장소 내 대본 경로를 뽑는다(리뷰 시 본문 고정을 강제하기 위함). */
+function directCommandScriptPaths(command, base) {
+	const out = [];
+	let clauses;
+	try { clauses = require("./git-command-parser.js").shellClauses(String(command || "")); }
+	catch { return out; }
+	if (!clauses || clauses.unbalanced) return out;
+	const addIfRepoFile = (raw) => {
+		if (!raw || typeof raw !== "string" || raw.startsWith("-") || raw.includes("$")) return;
+		const abs = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(base, raw);
+		const rel = path.relative(base, abs);
+		if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return;
+		try { if (fs.statSync(abs).isFile()) out.push(abs); } catch {}
+	};
+	for (const c of clauses) {
+		if (!Array.isArray(c) || c.length === 0) continue;
+		let i = 0;
+		if (path.basename(c[i] || "") === "sudo") {
+			i++;
+			while (i < c.length && c[i].startsWith("-")) i++;
+		}
+		const prog = path.basename(c[i] || "").replace(/\.(?:cmd|exe|bat)$/i, "").toLowerCase();
+		if (prog === "bash" || prog === "sh") {
+			let j = i + 1;
+			let inlineC = false;
+			while (j < c.length && c[j].startsWith("-")) {
+				if (c[j] === "-c" || /^-[a-z]*c[a-z]*$/.test(c[j])) inlineC = true;
+				j++;
+			}
+			if (!inlineC && j < c.length) addIfRepoFile(c[j]);
+		} else if (prog === "az" && c[i + 1] === "vm" && c[i + 2] === "run-command" && c[i + 3] === "invoke") {
+			for (let j = i + 4; j < c.length; j++) {
+				const t = c[j];
+				if ((t === "--scripts" || t === "--script") && j + 1 < c.length && c[j + 1].startsWith("@")) {
+					addIfRepoFile(c[j + 1].slice(1));
+				} else if ((t.startsWith("--scripts=@") || t.startsWith("--script=@"))) {
+					addIfRepoFile(t.slice(t.indexOf("=@") + 2));
+				}
+			}
+		}
+	}
+	return [...new Set(out)];
+}
+
 /** 계획서 소속 저장소 root 기준. 모든 단계와 선조치의 고정 파일을 검사한다. */
 function pinnedFileProblems(plan, root) {
 	const base = root ? path.resolve(root) : ROOT;
 	const problems = [];
 	for (const entry of [...(Array.isArray(plan?.scenario) ? plan.scenario : []), ...(Array.isArray(plan?.incident?.actions) ? plan.incident.actions : [])]) {
-		if (!entry || entry.files === undefined) continue;
-		if (!entry.files || typeof entry.files !== "object" || Array.isArray(entry.files)) { problems.push(`${entry.id}: files 는 경로와 sha256 사전이어야 함`); continue; }
-		for (const [file, want] of Object.entries(entry.files)) {
-			try {
-				const abs = path.isAbsolute(file) ? file : path.join(base, file);
-				if (!/^[a-f0-9]{64}$/i.test(String(want)) || !fs.statSync(abs).isFile() || sha256(fs.readFileSync(abs)) !== String(want).toLowerCase()) problems.push(`${entry.id}: 고정 파일 sha256 불일치: ${file}`);
-			} catch { problems.push(`${entry.id}: 고정 파일을 읽지 못함: ${file}`); }
+		if (!entry) continue;
+		const pinnedAbs = new Map();
+		if (entry.files !== undefined) {
+			if (!entry.files || typeof entry.files !== "object" || Array.isArray(entry.files)) { problems.push(`${entry.id}: files 는 경로와 sha256 사전이어야 함`); continue; }
+			for (const [file, want] of Object.entries(entry.files)) {
+				try {
+					const abs = path.isAbsolute(file) ? path.resolve(file) : path.resolve(base, file);
+					const actual = sha256(fs.readFileSync(abs));
+					if (!/^[a-f0-9]{64}$/i.test(String(want)) || !fs.statSync(abs).isFile() || actual !== String(want).toLowerCase()) problems.push(`${entry.id}: 고정 파일 sha256 불일치: ${file}`);
+					else pinnedAbs.set(abs, actual);
+				} catch { problems.push(`${entry.id}: 고정 파일을 읽지 못함: ${file}`); }
+			}
+		}
+		for (const cmd of Array.isArray(entry.commands) ? entry.commands : []) {
+			for (const scriptAbs of directCommandScriptPaths(cmd, base)) {
+				if (!pinnedAbs.has(scriptAbs)) {
+					const rel = path.relative(base, scriptAbs).split(path.sep).join("/");
+					problems.push(`${entry.id}: 실행 대본이 files 에 고정되지 않음(리뷰어가 본문을 볼 수 있도록 경로·sha256 를 files 에 적어야 함): ${rel}`);
+				}
+			}
 		}
 	}
 	return problems;
@@ -373,7 +624,15 @@ function resultFile(gatesDir, result, allowMissing = false) {
 	return real;
 }
 
-function reviewPrompt(plan, sha, root) {
+function reviewPrompt(plan, sha, root, opts = null) {
+	const roItems = opts && Array.isArray(opts.readOnlyScripts) ? canonicalReadOnlyBinding(opts.readOnlyScripts) : [];
+	const roLines = roItems.length
+		? [
+			"",
+			"읽기 전용 무코드 바인딩(readOnlyScripts, 리뷰 당시 확정 목록 — 이 외의 항목·변경·추가는 사람 승인 코드 필요):",
+			...roItems.map((x) => `- service=${x.service} path=${x.path} sha256=${x.sha256} script_sha256=${x.script_sha256}`),
+		]
+		: [];
 	return [
 		"당신은 운영 배포 계획서(승인 보고 양식)의 적대적 검수자입니다. 이 계획을 승인하면 승인자가 결과에 책임을 집니다.",
 		"계획서를 깨뜨릴 방법을 찾으십시오. 아래 기준마다 PASS 또는 FAIL 을 판정하고, FAIL 이면 구체적 지적(어느 칸, 무엇이 왜 틀림, 고칠 방향)을 적으십시오.",
@@ -409,6 +668,7 @@ function reviewPrompt(plan, sha, root) {
 		...((plan.incident && plan.incident.actions) || []).flatMap((a) => (a.commands || []).map((c) => `- 장애 ${a.id}: ${commandHash(c)}`)),
 		"",
 		...pinnedFilesText(plan, root),
+		...roLines,
 	].join("\n");
 }
 
@@ -437,7 +697,7 @@ const REVIEW_EXECUTOR_FILES = [
  * 계획서 소속 저장소 root 기준으로 항목을 읽는다. root 미지정 시 planFile에서 역산.
  * 핀 실물이 계획서 want와 다르면 problems에 적는다(호출자는 digest 대신 무효 처리).
  */
-function reviewInputEntries(planFile, root) {
+function reviewInputEntries(planFile, root, opts = null) {
 	const base = root ? path.resolve(root) : resolveRepoRoot(path.dirname(path.resolve(planFile)));
 	const plan = readJson(planFile);
 	if (!plan) throw new Error("계획서를 읽지 못함");
@@ -447,6 +707,13 @@ function reviewInputEntries(planFile, root) {
 	const entries = [{ file: "\0plan", sha256: planSha256 }];
 	const problems = [];
 	const seen = new Set(["\0plan"]);
+	if (opts && Array.isArray(opts.readOnlyScripts)) {
+		const canonicalRo = canonicalReadOnlyBinding(opts.readOnlyScripts);
+		if (canonicalRo.length) {
+			seen.add("\0read_only_scripts");
+			entries.push({ file: "\0read_only_scripts", sha256: sha256(JSON.stringify(canonicalRo)) });
+		}
+	}
 	const pins = [];
 	for (const entry of [...(Array.isArray(plan.scenario) ? plan.scenario : []), ...(Array.isArray(plan.incident?.actions) ? plan.incident.actions : [])]) {
 		if (!entry || !entry.files || typeof entry.files !== "object" || Array.isArray(entry.files)) continue;
@@ -468,8 +735,8 @@ function reviewInputEntries(planFile, root) {
 	entries.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
 	return { base, planSha256, entries, problems, digest: problems.length ? null : sha256(JSON.stringify(entries)) };
 }
-function reviewInputManifest(planFile, root) {
-	const r = reviewInputEntries(planFile, root);
+function reviewInputManifest(planFile, root, opts = null) {
+	const r = reviewInputEntries(planFile, root, opts);
 	if (r.problems.length) throw new Error(r.problems[0]);
 	return r.digest;
 }
@@ -562,8 +829,14 @@ function reviewProblems(gatesDir, sha, root) {
 	if (plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && !riskAcceptanceActive(plan)) problems.push("risk_acceptance 끝남(expires_at 지남)");
 	const acceptSecurity = riskAcceptanceActive(plan);
 	problems.push(...pinnedFileProblems(plan, base));
+	let roOpt = null;
+	if (rec && rec.read_only_scripts !== undefined) {
+		const validRo = validateReadOnlyBindingRecords(rec.read_only_scripts);
+		if (!validRo.ok) problems.push(validRo.why);
+		else roOpt = { readOnlyScripts: validRo.items };
+	}
 	let promptSha = null;
-	try { if (plan) promptSha = sha256(reviewPrompt(plan, sha, base)); } catch { problems.push("현재 요청문을 다시 만들지 못함"); }
+	try { if (plan) promptSha = sha256(reviewPrompt(plan, sha, base, roOpt)); } catch { problems.push("현재 요청문을 다시 만들지 못함"); }
 	if (!rec) { problems.push("적대 리뷰 기록 없음: " + REVIEW_FILE); return finish(); }
 	if (rec.plan_sha256 !== sha) problems.push("적대 리뷰가 지금 계획서가 아닌 판을 검수함. 계획서를 고쳤으면 다시 검수받을 것");
 	try {
@@ -652,7 +925,7 @@ function reviewProblems(gatesDir, sha, root) {
 			if (!receipt || receipt.model !== r.model || receipt.prompt_sha256 !== promptSha || receipt.exit_code !== 0 || !Number.isFinite(Date.parse(receipt.started_at)) || !Number.isFinite(Date.parse(receipt.ended_at)) || Date.parse(receipt.started_at) > Date.parse(receipt.ended_at) || receipt.stdout_sha256 !== sha256(parsed.body)) own.push("리뷰어 실행 영수증(모델·시작·끝·종료 코드·요청문·본문 해시) 불일치");
 			// 승인에 쓰는 영수증의 manifest는 필수다. 없거나 현재 값과 다르면 승인 불가(옛 기록은 재리뷰 필요).
 			let current = null;
-			try { current = reviewInputManifest(path.join(gatesDir, PLAN_FILE), base); } catch { current = null; }
+			try { current = reviewInputManifest(path.join(gatesDir, PLAN_FILE), base, roOpt); } catch { current = null; }
 			if (!receipt || typeof receipt.input_manifest_sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(receipt.input_manifest_sha256) || current === null || receipt.input_manifest_sha256.toLowerCase() !== current) own.push("리뷰어 실행 영수증(input manifest) 없음 또는 불일치(없는 옛 기록은 재리뷰 필요)");
 			const bodyHash = sha256(parsed.body);
 			if (bodyHashes.has(bodyHash)) own.push("두 리뷰어 결과 본문이 바이트로 같음(복사 바꿔치기)");
@@ -1357,5 +1630,5 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
+	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };

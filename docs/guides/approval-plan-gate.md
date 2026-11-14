@@ -24,10 +24,17 @@
     - 이 분류는 유닛과 파일 경로를 기준으로 합니다. PID를 직접 지정하는 `kill`이나 프로세스 문자열을 찾는 `pkill -f`는 유닛 소유 관계를 조회하지 않으므로 이 로컬 분류의 보장 범위 밖에 남습니다. `systemctl kill <등록 유닛>`은 위 변경 동사에 포함합니다.
   - `prodPatterns` / `sshAlwaysGated`: 인스턴스 추가 운영 명령·SSH 호스트 분류 패턴
   - `testHosts`: 비운영(시험) 기기 호스트·IP 문자열 목록. 소문자·끝 점(`.`)을 정규화하여 와일드카드 없이 정확히 같은 이름만 비운영으로 판정하며, 설정이 없거나 깨졌으면 빈 목록으로 동작합니다. 비운영 호스트로 판정되어도 `ssh` 원격 본문은 다시 분류하므로 시험 기기 안에서 실행하는 운영 변경(`az vm delete` 등)과 `-F`·`-o HostName` 대상 덮어쓰기는 그대로 차단됩니다.
-  - `readOnlyScripts`: `[{ "sha256": "<64자리 hex>", "service": "<서비스 키>", "note": "<설명>" }]` 배열. `gates/deploy.json`이 `kind: "ops"`이고 실행 명령(`az vm run-command invoke ... --scripts @<대본>` 또는 `bash <대본>`)의 고정 대본 SHA-256과 대상 `service`가 이 목록과 맞으면, **관문이 `config/deploy-gate.json`이 git으로 추적되고 작업 트리·스테이지가 HEAD 커밋과 동일한지 직접 검증한 뒤** 적대 리뷰(PASS) 통과 이후 `PLAN`/`STEP` 사람 승인 코드 입력 단계를 건너뜁니다.
-    - 실행은 감사 기록(`audit.jsonl`)에 `"readonly-no-code"`(`approved_by: "readonly-no-code"`)로 남습니다.
-    - 계획서·대본이 바뀌지 않는 한 같은 읽기 전용 계획을 승인 코드 없이 반복 실행할 수 있으며, 계획서나 대본을 수정하면 기존 규칙대로 적대 리뷰 영수증이 무효화됩니다.
-    - 설정에 없는 SHA, `config/deploy-gate.json` 미커밋 변경·미추적 상태, 인라인 명령(`bash -c`·`--scripts "..."`), `kind !== "ops"`, 적대 리뷰 미통과 시에는 기존 동작 그대로 차단되거나 사람 승인 코드를 요구합니다.
+  - `readOnlyScripts`: `[{ "sha256": "<64자리 hex>", "path": "<저장소 상대 경로>", "service": "<정확한 서비스 키>", "note": "<설명>" }]` 배열. `gates/deploy.json`이 `kind: "ops"`이고 아래 허용 명령 꼴의 대본이 등록된 `{sha256, path, service}` 셋과 모두 맞으면, **관문이 `config/deploy-gate.json`과 대본 파일이 심볼릭 링크 없이 git으로 추적되고 작업 트리·인덱스 내용이 HEAD 블롭과 동일한지 직접 검증하며** 적대 리뷰(PASS) 통과 이후 `PLAN`/`STEP` 사람 승인 코드 입력 단계를 건너뜁니다.
+    - `service` 와일드카드 금지: `service`에는 `*`, `?`, `[`, `{` 등 글롭을 쓸 수 없으며 정확한 서비스 키 하나만 적어야 합니다(글롭 발견 시 설정 검사 오류). 같은 `sha256`이라도 다른 `path`나 다른 `service`로 재사용하면 무코드가 되지 않습니다.
+    - 허용 명령 꼴(정확한 형태만 무코드 인정, 의심 시 기존 승인 코드·차단 경로로 복귀):
+      - `az vm run-command invoke -g|--resource-group <RG> -n|--name <VM> --command-id RunShellScript --scripts @<등록 경로>` (허용 읽기·출력 옵션만 추가 가능: `--subscription`, `--query`, `-o|--output` [`tsv|json|jsonc|table|yaml|yamlc|none`], `--only-show-errors`; 각 옵션 최대 1회, `--command-id`는 `RunShellScript`만, `--scripts`는 `@<등록 경로>` 1개만)
+      - 또는 정확히 2토큰 `bash <등록 경로>` / `sh <등록 경로>` (옵션·인자 추가·`sudo bash ...`·`bash <대본> <단계id>` 등 3토큰 이상은 무코드 아님)
+      - `--parameters`, 둘 이상의 `--scripts` 또는 여러 인자를 받는 `--scripts`, 허용 목록 밖 옵션(`--ids` 등), 셸 연산자(`;`, `&&`, `||`, `|`, 백틱, `$( )`, `>`, `<`, `(`, `)`, 줄바꿈), 따옴표로 쪼갠 옵션·토큰(`--scr"i"pts`, `--"parameters"`, `--scripts=""@...`, `'--query'`)은 무코드로 받지 않습니다. `readonly-no-code` 판정이어도 기존 `opsProblem`(버전/이미지 변경 금지·길이 제한·외부 명령 안전 검사)과 `script:`/`package:` 금지는 건너뛰지 않습니다.
+    - 리뷰 시점 바인딩: 계획서 단계 `files`에 대본 경로·SHA-256을 고정해 적대 리뷰 요청문에 대본 본문이 실리게 하고, 리뷰 영수증(`gates/deploy-plan-review.json`)·요청문·입력 목록 해시에도 리뷰 당시의 `readOnlyScripts` 항목(`sha256`·`path`·`service`)과 대본 `sha256`을 함께 묶습니다. 실행 시 현재 설정·대본이 리뷰 당시 묶음과 다르면(리뷰 뒤 `config/deploy-gate.json`에 항목을 새로 넣거나 고쳐 커밋한 경우 포함) 무코드가 되지 않고 기존 승인 코드 경로로 떨어집니다.
+    - 심볼릭 링크·HEAD 대조: 대본 경로 및 상위 경로에 심볼릭 링크를 두지 않고(`lstat`), `realpath`가 저장소 안 등록 `path`와 같으며 git 추적·`HEAD` 블롭과 바이트가 같아야 합니다(쓰기 가능한 미추적 파일·작업 트리 수정본 거절).
+    - 실행은 감사 기록(`audit.jsonl`)에 `"readonly-no-code"`(`approved_by: "readonly-no-code"`)로 남으며, 계획서·대본·설정이 리뷰 당시와 같은 동안만 승인 코드 없이 반복 실행할 수 있습니다.
+    - 설정에 없는 `(sha256, path, service)`, `config/deploy-gate.json`이나 대본의 미추적·미커밋 변경, 인라인 명령(`bash -c`·`--scripts "..."`), `kind !== "ops"`, 적대 리뷰 미통과 시에는 기존 동작 그대로 차단되거나 사람 승인 코드를 요구합니다.
+    - **남는 위험**: (1) 관문 훅은 실행 시점에 리뷰 영수증·HEAD 일치를 검사할 뿐 `git commit` 자체를 막지는 않으므로(범위 밖), 설정 파일(`config/deploy-gate.json`) 변경 커밋 통제는 PR 리뷰·브랜치 보호에 의존합니다. (2) 훅이 대본 `sha256`과 HEAD 일치를 검사한 시각과 실제 `az`/`bash` 프로세스가 대본을 여는 시각 사이에는 짧은 TOCTOU 창이 남습니다(실행 중 디스크 변경 시 다른 내용이 실행될 수 있음).
   - `approver.discordUserId`: 디스코드 승인 시 대조할 승인자 본인의 디스코드 사용자 ID(Snowflake)
   - `plugin`: 서비스별 세부 결합 검증(`assessService(service, ctx)`)이나 추가 명령 분류(`classifyCommand(ctx)`)를 수행하는 선택 모듈 경로
 
@@ -53,7 +60,7 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - 사전승인 코드 일괄 발급(`preapprove`)을 쓰려면 최상위에 `"approval_mode": "preapprove_steps"`를 넣습니다.
 
 ### 여러 절 고정 대본 돌리기
-대본(예: `sudo bash <대본 절대 경로> <단계id>`)을 계획 단계 `commands` 에 그대로 적고, 대본과 대본이 원격에 올리는 본문까지 `files` 에 `{경로: sha256}` 로 고정합니다. 이런 대본은 **ops 로 받지 않습니다.** 대본 본문(변수·eval·here-doc·원격 본문·kubectl 등)이 판을 바꾸는지 관문 분류기가 다 읽을 수 없기 때문입니다. `kind: "ops"` 준비 기록(`deploy.json`)으로 `bash /…` 대본을 부르면 "계획 고정 대본은 ops 로 받지 않음" 으로 막힙니다(`config/deploy-gate.json` 에서 그 서비스에 `allowCustomCommands` 를 명시했거나, git 커밋된 `readOnlyScripts` 에 대본 SHA·서비스가 등록된 단일 읽기 대본을 적대 리뷰 PASS 뒤에 돌리는 경우만 예외).
+대본(예: `sudo bash <대본 절대 경로> <단계id>`)을 계획 단계 `commands` 에 그대로 적고, 대본과 대본이 원격에 올리는 본문까지 `files` 에 `{경로: sha256}` 로 고정합니다. 이런 대본은 **ops 로 받지 않습니다.** 대본 본문(변수·eval·here-doc·원격 본문·kubectl 등)이 판을 바꾸는지 관문 분류기가 다 읽을 수 없기 때문입니다. `kind: "ops"` 준비 기록(`deploy.json`)으로 `bash /…` 대본을 부르면 "계획 고정 대본은 ops 로 받지 않음" 으로 막힙니다(`config/deploy-gate.json` 에서 그 서비스에 `allowCustomCommands` 를 명시해 `PLAN`/`STEP` 사람 승인을 받거나, git 커밋된 `readOnlyScripts` 에 `{sha256, path, service}` 가 등록된 **정확히 2토큰** `bash <등록 경로>`/`sh <등록 경로>` 또는 허용 옵션만 쓰는 `az vm run-command invoke ... --scripts @<등록 경로>` 단일 읽기 대본을 적대 리뷰 PASS 뒤에 돌리는 경우만 예외; `sudo bash ...` 나 `bash <대본> <인자>` 3토큰 이상은 `readOnlyScripts` 무코드 대상이 아님).
 고정 대본은 준비 기록 없이 계획 승인으로 돌립니다. 적대 리뷰·PLAN·STEP 승인을 받은 계획의 명령 바이트와 `files` 지문이 실행 때와 같으면 받고, 대본이나 고정 파일이 1바이트라도 바뀌면 `고정 파일 sha256 불일치` 로 막습니다. `config/deploy-gate.json` 서비스 규칙(`allowedCommands` 등)은 그대로 따로 요구하며, 계획 경로·지문은 계획에서 읽으므로 계획마다 코드를 고칠 필요가 없습니다. 같은 서비스로 12시간 안의 `deploy.json` 이 있으면 그 기록의 kind 로 판정하므로, ops 기록을 남겨 두면 대본이 막힙니다. 설정에 `requireReadiness: true` 가 있으면 계획 승인 경로를 쓸 수 없습니다.
 한계: 지문은 훅 시점에 한 번 확인하고 bash 는 대본을 실행하면서 읽으므로, 계획 폴더(에이전트가 쓸 수 있는 곳) 안 대본을 실행 중에 다른 프로세스가 바꾸면 승인과 다른 글이 돌 수 있습니다(TOCTOU, 기존 `bash <파일>` 갈래와 같은 성질).
 
@@ -81,7 +88,7 @@ node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/
 
 - 모든 기준이 `PASS`이고 `남은 지적: 0`(차단 지적 0건)이어야 통과합니다.
 - 예외는 좁은 위험 수용 하나입니다. 승인자가 결정 글로 받아들인 경우 계획서에 `risk_acceptance` 칸(`criterion: "security"`, `accepted_by`, `decision_url`, `same_value_as`, `no_new_exposure: true`, `reason`, `expires_at`)을 모두 적으면, `security` 기준 하나의 `FAIL`과 그 기준을 적은 차단 지적 한 건만 면제합니다(`남은 지적`도 1이어야 합니다). 다른 기준이 하나라도 `FAIL`이거나, 차단 지적이 두 건 이상이거나, `security`를 적지 않은 차단 지적이 남거나, `expires_at`이 지났거나 `createdAt` 뒤 7일을 넘으면 그대로 막힙니다. 모르는 칸은 거부합니다. 이미 나간 값과 같은 값을 다시 내보낼 때만 쓰고, 새 노출을 만드는 계획에는 쓰지 않습니다.
-- 리뷰 영수증(`gates/deploy-plan-review.json`)에는 계획서 SHA-256, 요청문 SHA-256, 고정 파일·실행기 입력 목록 해시(`input_manifest_sha256`)가 함께 묶입니다.
+- 리뷰 영수증(`gates/deploy-plan-review.json`)에는 계획서 SHA-256, 요청문 SHA-256, 고정 파일·실행기 입력 목록 해시(`input_manifest_sha256`), 그리고 리뷰 시점의 `readOnlyScripts` 바인딩 목록(`read_only_scripts`, 항목별 `sha256`·`path`·`service`)이 함께 묶입니다.
 - **리뷰 뒤에 계획서나 고정 파일을 고치면 이전 리뷰와 승인 코드는 즉시 무효**가 되며 다시 리뷰를 받아야 합니다.
 
 ---
@@ -126,7 +133,7 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
    - 고정 파일(`files`) 및 명령이 참조하는 모든 파일의 **현재 디스크 SHA-256 일치**
    - 적대 리뷰 영수증(`deploy-plan-review.json`)과 입력 매니페스트 해시 일치
    - 인스턴스 서비스 준비 상태(`config/deploy-gate.json` 및 `gates/deploy.json`)
-   - 사람의 `PLAN-xxxxxx` 및 해당 단계 `STEP-xxxxxx` 승인 확인(1회용, 실행 즉시 소진). 단, `gates/deploy.json`이 `kind: "ops"`이고 `config/deploy-gate.json`(git 추적·HEAD 일치)의 `readOnlyScripts`에 대본 SHA·`service`가 등록된 고정 읽기 대본이면 적대 리뷰 PASS 뒤 코드 단계만 건너뛰고 반복 실행할 수 있으며, 감사 기록(`audit.jsonl`)에 `"readonly-no-code"`(`approved_by: "readonly-no-code"`)로 남습니다.
+   - 사람의 `PLAN-xxxxxx` 및 해당 단계 `STEP-xxxxxx` 승인 확인(1회용, 실행 즉시 소진). 단, `gates/deploy.json`이 `kind: "ops"`이고 `config/deploy-gate.json`(git 추적·HEAD 일치, 와일드카드 금지)의 `readOnlyScripts`에 `{sha256, path, service}`가 리뷰 당시 영수증과 동일하게 묶여 있으며 대본 파일이 심볼릭 링크 없이 git 추적·HEAD 일치하고 명령이 허용된 정확한 꼴(`az vm run-command invoke ... --scripts @<등록 경로>` 또는 2토큰 `bash`/`sh <등록 경로>`)인 고정 읽기 대본이면 적대 리뷰 PASS 뒤 코드 단계만 건너뛰고 반복 실행할 수 있으며, 감사 기록(`audit.jsonl`)에 `"readonly-no-code"`(`approved_by: "readonly-no-code"`)로 남습니다.
 2. **단계 성공 확인 기록 (`step-ok`)**: 다음 본 단계(`s2`)로 넘어가기 전에 반드시 앞 단계(`s1`)의 모든 명령이 실제로 실행(`status === "executed"`)되었고 성공 확인 출력 파일이 `step-ok`로 기록되어 있어야 합니다(`s1`을 실행하지 않고 `step-ok`만 먼저 부른 뒤 `s2`를 실행하는 단계 건너뛰기는 차단됩니다).
    ```bash
    node .agents/scripts/approval-plan.mjs step-ok .agents/progress/<작업ID>/gates/deploy-plan.json s1 --evidence /tmp/s1-check.txt

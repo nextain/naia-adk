@@ -362,7 +362,7 @@ function reviewerSandboxArgs(promptDir, id) {
 	return [...args, "--chdir", root];
 }
 
-async function runReviewers(ids, prompt, abs, preManifest = undefined) {
+async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = null) {
 	let dir, failure;
 	let stage = "prompt-create";
 	const startedAt = Date.now();
@@ -379,7 +379,7 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined) {
 		stage = "snapshot-before";
 		const before = boundedRecovery ? null : readOnlySnapshot(Boolean(sandboxArgs));
 		const beforeState = boundedRecovery ? stateSnapshot() : null;
-		const beforeManifest = preManifest === undefined ? (() => { try { return lib.reviewInputManifest(abs, ROOT); } catch { return null; } })() : preManifest;
+		const beforeManifest = preManifest === undefined ? (() => { try { return lib.reviewInputManifest(abs, ROOT, roOpt); } catch { return null; } })() : preManifest;
 		stage = "reviewers";
 		const results = await Promise.all(ids.map(async (id) => {
 			const config = lib.REVIEW_MODELS[id];
@@ -405,7 +405,11 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined) {
 		}));
 		stage = "manifest-after";
 		let afterManifest = null;
-		try { afterManifest = lib.reviewInputManifest(abs, ROOT); } catch { afterManifest = null; }
+		try {
+			const planAfter = JSON.parse(fs.readFileSync(abs, "utf8"));
+			const afterRo = lib.planReadOnlyScriptsBinding(planAfter, ROOT);
+			if (afterRo.ok) afterManifest = lib.reviewInputManifest(abs, ROOT, { readOnlyScripts: afterRo.items });
+		} catch { afterManifest = null; }
 		const manifestChanged = beforeManifest === null || beforeManifest === undefined || afterManifest === null || beforeManifest !== afterManifest;
 		for (const r of results) {
 			if (beforeManifest && r.receipt) r.receipt.input_manifest_sha256 = beforeManifest;
@@ -478,13 +482,17 @@ switch (cmd) {
 	}
 	case "review-prompt": {
 		const { plan, sha } = loadPlan(args[0]);
-		console.log(lib.reviewPrompt(plan, sha, ROOT));
+		const roBind = lib.planReadOnlyScriptsBinding(plan, ROOT);
+		if (!roBind.ok) die(roBind.why, 1);
+		console.log(lib.reviewPrompt(plan, sha, ROOT, { readOnlyScripts: roBind.items }));
 		break;
 	}
 	case "review": {
-		let early = null;
-		try { if (args[0]) early = lib.reviewInputEntries(path.resolve(args[0]), ROOT); } catch { early = null; }
 		const { abs, plan, gatesDir, sha } = loadPlan(args[0]);
+		const roBind = lib.planReadOnlyScriptsBinding(plan, ROOT);
+		if (!roBind.ok) die(roBind.why, 1);
+		let early = null;
+		try { early = lib.reviewInputEntries(abs, ROOT, { readOnlyScripts: roBind.items }); } catch { early = null; }
 		const bindProblems = [];
 		if (!early || early.digest === null) bindProblems.push(`읽기 전용 검사 실패: 리뷰 대상 또는 실행기가 바뀜(${early && early.problems.length ? early.problems[0] : "계획서·핀·실행기를 읽지 못함"})`);
 		else {
@@ -509,7 +517,7 @@ switch (cmd) {
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 먼저 채우십시오\n${form.join("\n")}`, 1);
 		const pins = lib.pinnedFileProblems(plan, ROOT);
 		if (pins.length) die(pins.join("\n"), 1);
-		const prompt = lib.reviewPrompt(plan, sha, ROOT);
+		const prompt = lib.reviewPrompt(plan, sha, ROOT, { readOnlyScripts: roBind.items });
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID();
 		const base = path.resolve(opt(args, "--out") || path.join(gatesDir, `deploy-plan-review-${stamp}.md`));
 		// 차례는 기록 reviewedAt 과 같은 시각으로 고른다. 관문이 같은 시각으로 차례를 다시 만들어 대조한다.
@@ -522,19 +530,20 @@ switch (cmd) {
 		for (const out of outputs) if (out === abs || fs.existsSync(out)) die("리뷰 결과 경로가 이미 있습니다. 새 --out 경로를 쓰십시오");
 		try { for (const out of outputs) lib.resultFile(gatesDir, path.relative(gatesDir, out), true); }
 		catch { die("--out 은 해당 계획서 gatesDir 안 일반 파일 경로여야 합니다. 하위 폴더는 먼저 만드십시오"); }
-		const rec = { plan_sha256: sha, plan: path.relative(ROOT, abs), author_model: author, prompt_sha256: sha256(prompt), rotation: true, skipped: [], reviewers: [], reviewedAt };
+		const rec = { plan_sha256: sha, plan: path.relative(ROOT, abs), author_model: author, prompt_sha256: sha256(prompt), read_only_scripts: roBind.items, rotation: true, skipped: [], reviewers: [], reviewedAt };
 		const recordFile = path.join(gatesDir, lib.REVIEW_FILE);
 		fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
 		const reviewStartedAt = Date.now();
 		// 리뷰 본문은 계획서 낱말을 되풀이할 수 있으므로 한도 판별에서 뺀다.
 		const limitTextOf = (r) => `${r.stderr || ""}\n${r.error || ""}`;
 		let actual = null, actualOutput = null;
+		const roOpt = { readOnlyScripts: roBind.items };
 		try {
-			const [first] = await runReviewers([ids[0]], prompt, abs, early.digest);
+			const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt);
 			if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first))) {
 				rec.skipped.push({ id: ids[0], reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
 				console.log(`한도 실패로 다음 차례 리뷰어로 넘어감: ${ids[0]} → ${ids[1]}`);
-				const [second] = await runReviewers([ids[1]], prompt, abs, early.digest);
+				const [second] = await runReviewers([ids[1]], prompt, abs, early.digest, roOpt);
 				actual = second; actualOutput = outputs[1];
 			} else {
 				actual = first; actualOutput = outputs[0];
