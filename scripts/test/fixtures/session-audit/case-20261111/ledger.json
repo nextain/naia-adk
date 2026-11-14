@@ -1,0 +1,374 @@
+{
+ "role": "role-a",
+ "period": {
+  "from": "2026-11-11T07:00:00Z",
+  "to": "2026-11-12T03:40:00Z"
+ },
+ "rows": [
+  {
+   "id": "a6caaf69",
+   "status": "dropped",
+   "title": "메신저 통합(1단계 11/11)",
+   "due": "2026-11-11T09:00:00Z",
+   "checked_at": "2026-11-08T13:26:56.169Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "35618ff7",
+   "status": "done",
+   "title": "product-b muse 보낼함 어긋남 구조 고침(/tmp/muse-role-c-out→product-b-wake), role-g 인계 2건",
+   "due": "2026-11-11T09:00:00Z",
+   "checked_at": "2026-11-10T11:07:45.415Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "3514c0f8",
+   "status": "done",
+   "title": "product-b 보낼함 막힘 감지 장치: 역할 칸이 보낼함 쓰기 실패(읽기 전용·/tmp 우회)하면 센서가 channel-12 알림, 막히는지 시험",
+   "due": "2026-11-11T09:00:00Z",
+   "checked_at": "2026-11-10T11:27:59.043Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "5d6611a8",
+   "status": "done",
+   "title": "대시보드 글 내보내기 2단계 구현 일정을 role-f 정리 문서에 넣고 channel-13 알림(대표님 03:58Z 어드민 질문)",
+   "due": "2026-11-11T09:00:00Z",
+   "checked_at": "2026-11-11T04:27:51.672Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "4bc049c6",
+   "status": "dropped",
+   "title": "웹GPU 머리 구멍 고친 판 channel-09 올림",
+   "due": "2026-11-11T07:00:00Z",
+   "checked_at": "2026-11-11T05:55:57.013Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "01ad0134",
+   "status": "dropped",
+   "title": "웹GPU 11판 승인 양식 channel-02 (07:00Z 약속 늦춤)",
+   "due": "2026-11-11T07:40:00Z",
+   "checked_at": "2026-11-11T06:56:57.606Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "00c55d13",
+   "status": "done",
+   "title": "role-b role-h 정책 채움 답 확인→apply·check→대표님 진행 답 뒤 role-b 다시 시작",
+   "due": "2026-11-11T08:00:00Z",
+   "checked_at": "2026-11-11T07:01:47.321Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "199c2fe9",
+   "status": "dropped",
+   "title": "customer-c 비번 찾기 메일: role-c 계획서 받으면 plan-review→channel-02 코드→실행, 시각 product-b장애 글에",
+   "due": "2026-11-11T08:00:00Z",
+   "checked_at": "2026-11-11T07:11:00.427Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "53e1229b",
+   "status": "dropped",
+   "title": "게이트웨이 목소리 전용(68aa1d74) 승인 코드 channel-02 (06:00Z 약속 늦춤)",
+   "due": "2026-11-11T07:30:00Z",
+   "checked_at": "2026-11-11T07:12:36.173Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "864e4036",
+   "status": "open",
+   "title": "ax 일정 (가)보드 최신 문서 읽기 (나)대표님 개인 일정 7건 옮기기: 계획 리뷰 뒤 channel-02 여쭘(PC role-a·role-d에게 약속)",
+   "due": "2026-11-11T07:00:00Z",
+   "checked_at": "2026-11-11T07:12:36.500Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "5502df32",
+   "status": "open",
+   "title": "role-e 부탁 Vast 풀 읽기 계획서: #125 7줄 고침(w5) 뒤 다시 리뷰·여쭘 (02Z 기한 넘겨 다시 잡음)",
+   "due": "2026-11-11T06:00:00Z",
+   "checked_at": "2026-11-11T07:12:36.581Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "8ff545f3",
+   "status": "open",
+   "title": "Fable 개선 반영: #125 7줄 고침(w5)·고정 대본 결합 일반화(w6) 뒤 #125·#126 병합 (02Z 기한 넘겨 다시 잡음)",
+   "due": "2026-11-11T06:00:00Z",
+   "checked_at": "2026-11-11T07:12:36.660Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "a4b3a83c",
+   "status": "open",
+   "title": "product-b customer-a 업로드 백업 링크: role-c 계획서→plan-review→대표님 승인→실행",
+   "due": "2026-11-11T06:00:00Z",
+   "checked_at": "2026-11-11T07:12:36.744Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "910655ec",
+   "status": "open",
+   "title": "테라 s1 실행·PR174 알림(승인 CODE-09, STEP 코드 대표님 기다림)",
+   "due": "2026-11-11T06:00:00Z",
+   "checked_at": "2026-11-11T07:12:36.825Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "f441d047",
+   "status": "open",
+   "title": "customer-a s1 실행(승인 CODE-10, STEP 코드 대표님 기다림)",
+   "due": "2026-11-11T06:00:00Z",
+   "checked_at": "2026-11-11T07:12:36.903Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "50d5c105",
+   "status": "open",
+   "title": "repo-c PR 174 charter-approved 라벨: 대표님 손일, 04:56Z 정기 보고에 다시 여쭘 → 라벨 뒤 verify 초록·병합",
+   "due": "2026-11-11T05:30:00Z",
+   "checked_at": "2026-11-11T07:12:37.069Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "c2af7510",
+   "status": "open",
+   "title": "웹GPU 10판: channel-02 대표님 코드 확인, 오면 role-e s0→292개·공개 index 확인→channel-09 알림 (04:56Z 정기 보고에 다시 여쭘)",
+   "due": "2026-11-11T05:30:00Z",
+   "checked_at": "2026-11-11T07:12:37.150Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "78d11794",
+   "status": "done",
+   "title": "upstream-adk #128 병합 여쭘 → 병합 뒤 목소리·11판 리뷰 다시",
+   "due": "2026-11-11T09:30:00Z",
+   "checked_at": "2026-11-11T07:14:33.310Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "a0ecade3",
+   "status": "open",
+   "title": "웹GPU 11판 운영 반영 승인 양식 channel-02 (게이트웨이 목소리 뒤)",
+   "due": "2026-11-11T09:30:00Z",
+   "checked_at": "2026-11-11T07:32:50.860Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "566ecfa3",
+   "status": "open",
+   "title": "channel-02 세 여쭘 답 확인: #864 라벨·하네스 땜방 처리안·role-b 다시 시작",
+   "due": "2026-11-11T08:30:00Z",
+   "checked_at": "2026-11-11T08:33:24.266Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "0695a066",
+   "status": "done",
+   "title": "site-a 9화·등장인물 운영 반영 계획서→리뷰→승인 코드 여쭘",
+   "due": "2026-11-11T08:30:00Z",
+   "checked_at": "2026-11-11T08:33:24.349Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "1201f0d4",
+   "status": "open",
+   "title": "ADK2 전환 계획서 대표님 결정 3건(개인 기기 권한·product-b DNS·11/24 계정) 답 받기, 서버 역할 폴더 정리 11/11",
+   "due": "2026-11-11T09:00:00Z",
+   "checked_at": "2026-11-11T08:48:27.701Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "b44c77e6",
+   "status": "open",
+   "title": "product-b wp26061907 계획서(muse 다시 씀) 리뷰 결과 product-b 채널 알림",
+   "due": "2026-11-11T09:00:00Z",
+   "checked_at": "2026-11-11T08:48:27.852Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "6e7003af",
+   "status": "open",
+   "title": "게이트웨이 목소리: s0 운영 읽기 방식 '진행' 답 확인 → s0 계획·리뷰·양식, MOTIF 열쇠 실행 위치",
+   "due": "2026-11-11T09:00:00Z",
+   "checked_at": "2026-11-11T08:48:27.928Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "2c7c72b7",
+   "status": "open",
+   "title": "instance-adk PR 118 기록 이관: codex 리뷰 P1 둘(진행 중 기록 보호·--sync-commit-push 에서 --dry-run 무시)+P2 체크섬 고침 → 재검수 → 병합·타이머(10판 s0 뒤, instance-adk 쓰기)",
+   "due": "2026-11-11T06:00:00Z",
+   "checked_at": "2026-11-11T08:58:50.978Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "d6109370",
+   "status": "dropped",
+   "title": "메신저: 배울 것 흡수·개선(trina 대조)",
+   "due": "2026-11-11T09:00:00Z",
+   "checked_at": null,
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "7eaa282d",
+   "status": "open",
+   "title": "product-b 손 떼기: role-a 몫 product-b 일(customer-a s1·07·576·DNS 결정) 끝내거나 role-c 인계 글, channel-06 보고",
+   "due": "2026-11-11T14:00:00Z",
+   "checked_at": null,
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "pc-copie",
+   "status": "done",
+   "title": "PC role-a 묶음 여섯(클로드 복사기·자동 전환·사용량 감시) 처리 대표님께 여쭘(PC role-a 이관 보고 00:02Z)",
+   "due": "2026-11-12T03:00:00Z",
+   "checked_at": "2026-11-12T00:06:59.974Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "metrics-",
+   "status": "done",
+   "title": "site-a 지표 열쇠(secret-name)를 서버 role-f 자리에 넣는 계획→리뷰→승인(11/11 13:46 약속, PC 콘텐츠 지표 끄기 조건)",
+   "due": "2026-11-12T09:00:00Z",
+   "checked_at": "2026-11-12T00:14:57.068Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "b5e342c4",
+   "status": "done",
+   "title": "Vast 소액 충전 대표님 답 확인(잔액 11/12 무렵 0)",
+   "due": "2026-11-11T06:00:00Z",
+   "checked_at": "2026-11-12T00:44:26.800Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "9091fab7",
+   "status": "done",
+   "title": "site-a 9화 1단계(관문 정규식) 승인 답 확인 → 반영·준비 확인·s1 코드 여쭘",
+   "due": "2026-11-11T09:30:00Z",
+   "checked_at": "2026-11-12T00:44:26.950Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "583f4718",
+   "status": "done",
+   "title": "ax s2(CODE-11): 새 PLAN 코드 대표님 기다림",
+   "due": "2026-11-11T06:00:00Z",
+   "checked_at": "2026-11-12T01:07:32.017Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "c87db89a",
+   "status": "done",
+   "title": "company-site 처리방침 2.1(feat/privacy-2-1-20261111 e956920) 운영 반영 계획 리뷰·channel-02 여쭘",
+   "due": "2026-11-11T09:00:00Z",
+   "checked_at": "2026-11-12T01:07:32.189Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "5525d120",
+   "status": "done",
+   "title": "구글 My Files 접근 허용 알림 대표님 확인 답 → 모르면 권한 끊기",
+   "due": "2026-11-12T05:00:00Z",
+   "checked_at": "2026-11-12T01:13:15.592Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "af626911",
+   "status": "done",
+   "title": "처리방침 2.1 PLAN 코드 대표님 답 확인 → STEP 코드 여쭘·s1 실행·role-d 알림",
+   "due": "2026-11-12T03:00:00Z",
+   "checked_at": "2026-11-12T01:17:36.711Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "cd6151da",
+   "status": "dropped",
+   "title": "게이트웨이 목소리(68aa1d74) 승인 양식: e2big-fix PR→리뷰 다시→channel-02",
+   "due": "2026-11-11T09:30:00Z",
+   "checked_at": "2026-11-12T02:25:06.635Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  }
+ ],
+ "status_counts": {
+  "dropped": 7,
+  "done": 14,
+  "open": 15
+ }
+}

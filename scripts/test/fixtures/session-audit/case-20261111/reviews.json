@@ -1,0 +1,1102 @@
+{
+ "period": {
+  "from": "2026-11-11T07:00:00Z",
+  "to": "2026-11-12T03:40:00Z"
+ },
+ "review_glob": "progress/*/gates/deploy-plan-review-*.md",
+ "plans": [
+  {
+   "plan": "plan-01",
+   "review_count": 35,
+   "in_period": 35,
+   "findings_headline": "- codex: PASS, 남은 지적(차단) 0건, 참고 지적 0건(차단 아님)",
+   "files": [
+    {
+     "name": "deploy-plan-review-2026-11-11T08-56-19-779Z-1a375dea-1a2c-4a37-a65a-6f4d71de048f-codex.md",
+     "mtime": "2026-11-11T08:56:53Z",
+     "started_at": "2026-11-11T08-56-19-779Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T09-08-39-474Z-a840f279-6bc6-4348-9290-a55cf76641b0-codex.md",
+     "mtime": "2026-11-11T09:09:14Z",
+     "started_at": "2026-11-11T09-08-39-474Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "rerun",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T09-17-51-235Z-1ed61054-3024-4638-beb3-9c847519a4d2-codex.md",
+     "mtime": "2026-11-11T09:18:23Z",
+     "started_at": "2026-11-11T09-17-51-235Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T09-26-21-654Z-a7039b27-2cb1-4ebd-bbeb-ef0837e602bb-codex.md",
+     "mtime": "2026-11-11T09:27:09Z",
+     "started_at": "2026-11-11T09-26-21-654Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T09-38-33-980Z-ed93f382-3dea-484d-be17-aab34099baa4-codex.md",
+     "mtime": "2026-11-11T09:39:17Z",
+     "started_at": "2026-11-11T09-38-33-980Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T09-49-48-139Z-fedc8797-26f5-41d7-b484-bfbd95a3a0ce-codex.md",
+     "mtime": "2026-11-11T09:50:20Z",
+     "started_at": "2026-11-11T09-49-48-139Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T10-00-43-038Z-f690a0bf-15b0-494c-86d3-0009736d10c2-codex.md",
+     "mtime": "2026-11-11T10:01:36Z",
+     "started_at": "2026-11-11T10-00-43-038Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "rerun",
+      "irreversible",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T10-20-24-441Z-0230b33c-d392-4a4a-bd7a-d55164f9306f-codex.md",
+     "mtime": "2026-11-11T10:21:08Z",
+     "started_at": "2026-11-11T10-20-24-441Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rollback",
+      "irreversible",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T10-32-41-565Z-8b95a000-b0d5-4a88-aa98-08fe4b0b8e32-codex.md",
+     "mtime": "2026-11-11T10:33:34Z",
+     "started_at": "2026-11-11T10-32-41-565Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T10-44-52-632Z-e5217955-bfda-47fd-9262-0559e2c566b8-codex.md",
+     "mtime": "2026-11-11T10:45:33Z",
+     "started_at": "2026-11-11T10-44-52-632Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T11-02-45-460Z-49226564-1703-445d-aff4-f27b0ebcc47b-codex.md",
+     "mtime": "2026-11-11T11:03:38Z",
+     "started_at": "2026-11-11T11-02-45-460Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T11-13-53-480Z-71fb4af0-f435-4111-8646-418ac7021469-codex.md",
+     "mtime": "2026-11-11T11:14:46Z",
+     "started_at": "2026-11-11T11-13-53-480Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "irreversible",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T12-36-33-441Z-00c75112-263c-40bf-a024-3f3402bd2e44-codex.md",
+     "mtime": "2026-11-11T12:37:03Z",
+     "started_at": "2026-11-11T12-36-33-441Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T13-50-28-390Z-c845e300-af56-4e9f-8f32-2887d01e2c77-codex.md",
+     "mtime": "2026-11-11T13:51:01Z",
+     "started_at": "2026-11-11T13-50-28-390Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T15-35-56-526Z-34c3a455-246f-4843-9db7-476ba28b04e1-codex.md",
+     "mtime": "2026-11-11T15:36:37Z",
+     "started_at": "2026-11-11T15-35-56-526Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T15-39-43-872Z-4c688afc-6dd3-4b81-9ac4-4d72369cf0b3-codex.md",
+     "mtime": "2026-11-11T15:40:21Z",
+     "started_at": "2026-11-11T15-39-43-872Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "security",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T15-42-11-733Z-2b62edac-2047-4857-9257-744927a1a0fb-codex.md",
+     "mtime": "2026-11-11T15:42:45Z",
+     "started_at": "2026-11-11T15-42-11-733Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "disconnect",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T15-45-09-740Z-ffe64037-d604-4214-a766-97c92507b5c9-codex.md",
+     "mtime": "2026-11-11T15:45:56Z",
+     "started_at": "2026-11-11T15-45-09-740Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rollback",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T15-48-23-103Z-5f88e1c3-b3af-4abc-8ac3-dbb540d3fb9e-codex.md",
+     "mtime": "2026-11-11T15:49:01Z",
+     "started_at": "2026-11-11T15-48-23-103Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "security",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T15-52-55-969Z-a5dee892-6b3f-44e2-b41d-b55e920e2b1b-codex.md",
+     "mtime": "2026-11-11T15:53:40Z",
+     "started_at": "2026-11-11T15-52-55-969Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "security",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T16-02-57-974Z-950719eb-9ede-4f3c-b45f-395c16b9ea36-codex.md",
+     "mtime": "2026-11-11T16:03:38Z",
+     "started_at": "2026-11-11T16-02-57-974Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T16-05-29-490Z-fa8047b9-78ab-4a58-82a9-a9dd710a7b0e-codex.md",
+     "mtime": "2026-11-11T16:06:14Z",
+     "started_at": "2026-11-11T16-05-29-490Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rollback",
+      "irreversible",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T16-09-30-949Z-332fd266-677b-4a8e-9d5b-ad43a45fd947-codex.md",
+     "mtime": "2026-11-11T16:10:11Z",
+     "started_at": "2026-11-11T16-09-30-949Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T16-12-26-869Z-f962a1c6-8b9c-4755-a8e1-1c283665bd0d-codex.md",
+     "mtime": "2026-11-11T16:13:07Z",
+     "started_at": "2026-11-11T16-12-26-869Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T16-15-01-240Z-06b1c78f-b232-4a96-96be-f24682676f1a-codex.md",
+     "mtime": "2026-11-11T16:15:42Z",
+     "started_at": "2026-11-11T16-15-01-240Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "security"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T16-19-47-645Z-0d3399aa-4800-4708-b512-5ae132498397-codex.md",
+     "mtime": "2026-11-11T16:20:19Z",
+     "started_at": "2026-11-11T16-19-47-645Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T16-22-30-546Z-6f87fb76-0c27-4cc5-acf6-dc05cf143663-codex.md",
+     "mtime": "2026-11-11T16:22:59Z",
+     "started_at": "2026-11-11T16-22-30-546Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T16-24-58-124Z-9126b3fb-685a-43d8-ad16-cd78a46a767f-codex.md",
+     "mtime": "2026-11-11T16:25:41Z",
+     "started_at": "2026-11-11T16-24-58-124Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T16-32-58-136Z-d7388a53-f02b-47d2-964a-674f9a0b07c4-codex.md",
+     "mtime": "2026-11-11T16:33:39Z",
+     "started_at": "2026-11-11T16-32-58-136Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T16-35-30-883Z-006fa7fa-612c-4ab8-b238-3ebfc5bbee05-codex.md",
+     "mtime": "2026-11-11T16:36:06Z",
+     "started_at": "2026-11-11T16-35-30-883Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T16-45-42-553Z-f19074bb-b858-455c-817b-46dd29f5760a-codex.md",
+     "mtime": "2026-11-11T16:46:21Z",
+     "started_at": "2026-11-11T16-45-42-553Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T21-21-56-643Z-af87053c-1640-4dff-993e-b67de2cf4239-codex.md",
+     "mtime": "2026-11-11T21:22:55Z",
+     "started_at": "2026-11-11T21-21-56-643Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T21-32-50-780Z-3c8c6e9a-b6c7-4ee5-9db3-876512ba80a6-codex.md",
+     "mtime": "2026-11-11T21:33:49Z",
+     "started_at": "2026-11-11T21-32-50-780Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T21-50-07-250Z-e7ccda8c-ddb0-4932-a788-d4a7f9779012-codex.md",
+     "mtime": "2026-11-11T21:50:41Z",
+     "started_at": "2026-11-11T21-50-07-250Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T22-07-55-623Z-65c0b669-da4e-4121-926a-2e17c1ead4ec-codex.md",
+     "mtime": "2026-11-11T22:08:35Z",
+     "started_at": "2026-11-11T22-07-55-623Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    }
+   ]
+  },
+  {
+   "plan": "plan-02",
+   "review_count": 19,
+   "in_period": 18,
+   "findings_headline": "- codex: PASS, 남은 지적(차단) 0건, 참고 지적 1건(차단 아님)",
+   "files": [
+    {
+     "name": "deploy-plan-review-2026-11-11T05-23-47-711Z-4a4acb35-5e1d-493b-8ceb-1d41d175ae61-codex.md",
+     "mtime": "2026-11-11T05:24:25Z",
+     "started_at": "2026-11-11T05-23-47-711Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rollback",
+      "irreversible",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T07-16-06-880Z-7795fb22-12b5-452f-a146-5958a679bc01-codex.md",
+     "mtime": "2026-11-11T07:16:46Z",
+     "started_at": "2026-11-11T07-16-06-880Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T07-18-03-439Z-e6d5faf6-906a-4ae7-9d41-ab19569604ca-codex.md",
+     "mtime": "2026-11-11T07:18:52Z",
+     "started_at": "2026-11-11T07-18-03-439Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T07-20-17-191Z-704b9de1-1887-412c-9380-4d3762989b32-codex.md",
+     "mtime": "2026-11-11T07:32:08Z",
+     "started_at": "2026-11-11T07-20-17-191Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T17-10-10-115Z-88b07c55-307f-44e3-b5fb-c6df16c9214a-codex.md",
+     "mtime": "2026-11-11T17:10:43Z",
+     "started_at": "2026-11-11T17-10-10-115Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "rollback",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T17-14-52-468Z-ed442dd2-439b-403a-b507-e58c6aa6239f-codex.md",
+     "mtime": "2026-11-11T17:15:23Z",
+     "started_at": "2026-11-11T17-14-52-468Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "impact"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T17-16-28-963Z-58780fe3-3679-4160-94bc-caf66b18b202-codex.md",
+     "mtime": "2026-11-11T17:16:55Z",
+     "started_at": "2026-11-11T17-16-28-963Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T02-47-37-792Z-18e20883-732d-4fe9-b586-01c5d188ce63-codex.md",
+     "mtime": "2026-11-12T02:48:18Z",
+     "started_at": "2026-11-12T02-47-37-792Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "impact"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T02-51-49-662Z-21f50fe9-3e2c-43ef-9975-99c62adc01b7-codex.md",
+     "mtime": "2026-11-12T02:52:22Z",
+     "started_at": "2026-11-12T02-51-49-662Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T02-54-23-062Z-65e69691-bca7-414f-abcc-622047ffaecc-codex.md",
+     "mtime": "2026-11-12T02:55:01Z",
+     "started_at": "2026-11-12T02-54-23-062Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T02-56-08-940Z-5b12b2e7-d47a-4b8a-8a1c-c91e4bef35c6-codex.md",
+     "mtime": "2026-11-12T02:56:38Z",
+     "started_at": "2026-11-12T02-56-08-940Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T02-57-52-510Z-980121d4-ab58-418c-abe0-8f3958a3ba55-codex.md",
+     "mtime": "2026-11-12T02:58:22Z",
+     "started_at": "2026-11-12T02-57-52-510Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T02-59-49-795Z-0f8143da-d212-4c53-a3c9-6079b9e02bbe-codex.md",
+     "mtime": "2026-11-12T03:00:28Z",
+     "started_at": "2026-11-12T02-59-49-795Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T03-03-42-855Z-f07e8807-64e1-4928-9034-a677df1945b0-codex.md",
+     "mtime": "2026-11-12T03:04:19Z",
+     "started_at": "2026-11-12T03-03-42-855Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T03-05-52-117Z-e6a3fefb-ea77-4bfb-9735-27f135dd81bc-codex.md",
+     "mtime": "2026-11-12T03:06:34Z",
+     "started_at": "2026-11-12T03-05-52-117Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "rerun",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T03-09-13-810Z-214739d8-46a9-483d-b9b8-c42d4c6b233f-codex.md",
+     "mtime": "2026-11-12T03:09:44Z",
+     "started_at": "2026-11-12T03-09-13-810Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "rerun"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T03-11-13-802Z-37b3552f-e753-4c40-b634-bb24becaf8a1-codex.md",
+     "mtime": "2026-11-12T03:11:50Z",
+     "started_at": "2026-11-12T03-11-13-802Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T03-13-47-034Z-717c99c0-477d-4341-8b99-89c9aa22ca9d-codex.md",
+     "mtime": "2026-11-12T03:14:29Z",
+     "started_at": "2026-11-12T03-13-47-034Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T03-15-51-661Z-ba82fa3f-002d-4804-a6e2-3992d14b26a6-codex.md",
+     "mtime": "2026-11-12T03:16:36Z",
+     "started_at": "2026-11-12T03-15-51-661Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    }
+   ]
+  },
+  {
+   "plan": "plan-03",
+   "review_count": 17,
+   "in_period": 17,
+   "findings_headline": "- codex: PASS, 남은 지적(차단) 0건, 참고 지적 1건(차단 아님)",
+   "files": [
+    {
+     "name": "deploy-plan-review-2026-11-11T08-05-13-817Z-ec1197c7-8d8b-43bf-a43b-6160a9f9a989-codex.md",
+     "mtime": "2026-11-11T08:05:54Z",
+     "started_at": "2026-11-11T08-05-13-817Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "security",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T08-15-57-626Z-b16c88f6-6db9-4675-9719-22a3019d2397-codex.md",
+     "mtime": "2026-11-11T08:16:37Z",
+     "started_at": "2026-11-11T08-15-57-626Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "irreversible",
+      "security",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T08-31-44-555Z-e55c0c01-a060-42e0-966f-395f319fa1ee-codex.md",
+     "mtime": "2026-11-11T08:32:28Z",
+     "started_at": "2026-11-11T08-31-44-555Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T08-42-12-715Z-352d0c0a-e2f6-45c2-99f5-911e1076914c-codex.md",
+     "mtime": "2026-11-11T08:43:04Z",
+     "started_at": "2026-11-11T08-42-12-715Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T11-42-19-189Z-354ab161-4baf-434c-97e7-7a453219ad86-codex.md",
+     "mtime": "2026-11-11T11:42:57Z",
+     "started_at": "2026-11-11T11-42-19-189Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "security",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T12-46-44-187Z-4386cb4b-36f0-417a-a6c1-e2d80e8ef3f1-codex.md",
+     "mtime": "2026-11-11T12:47:25Z",
+     "started_at": "2026-11-11T12-46-44-187Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "security",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T14-04-02-082Z-22b3f1f5-827d-4cc0-b6b7-2a9648cc16fc-codex.md",
+     "mtime": "2026-11-11T14:04:47Z",
+     "started_at": "2026-11-11T14-04-02-082Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "irreversible",
+      "security",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T14-24-09-464Z-f2202ed7-89f4-4f95-b9e3-dfa206394952-codex.md",
+     "mtime": "2026-11-11T14:24:57Z",
+     "started_at": "2026-11-11T14-24-09-464Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "security",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T14-27-22-056Z-3ab54a5d-9028-4cbe-ba12-6ae1eb9fb4ac-codex.md",
+     "mtime": "2026-11-11T14:28:09Z",
+     "started_at": "2026-11-11T14-27-22-056Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T14-34-01-619Z-bcdbb193-5dc8-400c-83e2-e98d7231d3d8-codex.md",
+     "mtime": "2026-11-11T14:34:42Z",
+     "started_at": "2026-11-11T14-34-01-619Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T14-35-54-329Z-095c1764-7ea7-4f43-a722-812f22c488f5-codex.md",
+     "mtime": "2026-11-11T14:36:29Z",
+     "started_at": "2026-11-11T14-35-54-329Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T14-37-38-886Z-7523d611-2a95-4111-bac8-5376480e9370-codex.md",
+     "mtime": "2026-11-11T14:38:10Z",
+     "started_at": "2026-11-11T14-37-38-886Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T14-55-19-920Z-85250bf8-311f-473b-a4cf-6a9405343080-codex.md",
+     "mtime": "2026-11-11T14:55:57Z",
+     "started_at": "2026-11-11T14-55-19-920Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rollback",
+      "irreversible",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T15-06-35-990Z-50908654-be72-4947-8180-101bfb79522d-codex.md",
+     "mtime": "2026-11-11T15:07:12Z",
+     "started_at": "2026-11-11T15-06-35-990Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "disconnect",
+      "rollback",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T15-10-08-952Z-228d0936-304e-46d9-9683-cbf4b93ac4ab-codex.md",
+     "mtime": "2026-11-11T15:10:53Z",
+     "started_at": "2026-11-11T15-10-08-952Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rollback",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T15-13-47-676Z-bf63399f-74da-4ac7-883f-0be00a8eb7c5-codex.md",
+     "mtime": "2026-11-11T15:14:32Z",
+     "started_at": "2026-11-11T15-13-47-676Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "rerun",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T15-16-03-751Z-0d5a65a9-93e8-4f40-a5d4-a19573c35a37-codex.md",
+     "mtime": "2026-11-11T15:16:36Z",
+     "started_at": "2026-11-11T15-16-03-751Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    }
+   ]
+  },
+  {
+   "plan": "plan-04",
+   "review_count": 15,
+   "in_period": 15,
+   "findings_headline": "- 검증: [codex] 적대 리뷰 기준 rerun 미통과",
+   "files": [
+    {
+     "name": "deploy-plan-review-2026-11-12T00-32-37-070Z-0f0447ce-50ac-4f5d-a5de-fb4d69a26dd7-codex.md",
+     "mtime": "2026-11-12T00:33:15Z",
+     "started_at": "2026-11-12T00-32-37-070Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "rollback",
+      "irreversible",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T00-39-59-887Z-3f6dc592-88b0-463e-adfb-31e76a8dd15d-codex.md",
+     "mtime": "2026-11-12T00:40:40Z",
+     "started_at": "2026-11-12T00-39-59-887Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "irreversible",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T00-45-08-992Z-3d391393-9e35-479c-a2b4-b3c2a4ebaf39-codex.md",
+     "mtime": "2026-11-12T00:45:52Z",
+     "started_at": "2026-11-12T00-45-08-992Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "rollback",
+      "irreversible",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T01-09-16-561Z-72c3dad0-8fc5-4835-bd85-6ee38ef385b6-codex.md",
+     "mtime": "2026-11-12T01:10:01Z",
+     "started_at": "2026-11-12T01-09-16-561Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "rerun",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T01-19-50-736Z-be6fd0ef-38c4-4d85-83ec-d99a596290c9-codex.md",
+     "mtime": "2026-11-12T01:20:43Z",
+     "started_at": "2026-11-12T01-19-50-736Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "rerun",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T01-25-32-456Z-d6cac14a-434d-494d-98c0-b98f9eeb1abf-codex.md",
+     "mtime": "2026-11-12T01:26:07Z",
+     "started_at": "2026-11-12T01-25-32-456Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "rerun"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T01-29-27-070Z-23f351a6-cf25-49d4-8c7d-ea867feb1ece-codex.md",
+     "mtime": "2026-11-12T01:30:04Z",
+     "started_at": "2026-11-12T01-29-27-070Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T01-33-24-011Z-a58373e8-40f8-4e5c-8135-3446ba973cb5-codex.md",
+     "mtime": "2026-11-12T01:34:22Z",
+     "started_at": "2026-11-12T01-33-24-011Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T01-39-08-316Z-0b24d216-ea20-4b15-984d-99cf4bd455b4-codex.md",
+     "mtime": "2026-11-12T01:39:52Z",
+     "started_at": "2026-11-12T01-39-08-316Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "impact"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T01-42-13-471Z-da56c62e-5412-404d-8154-0d109855b2a9-codex.md",
+     "mtime": "2026-11-12T01:42:57Z",
+     "started_at": "2026-11-12T01-42-13-471Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "rerun",
+      "irreversible",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T01-52-17-060Z-0f655383-903c-4cb5-a335-5ddc30e421e0-codex.md",
+     "mtime": "2026-11-12T01:52:49Z",
+     "started_at": "2026-11-12T01-52-17-060Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "rerun",
+      "irreversible",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T01-57-05-428Z-e816f9ff-5c9f-43b1-b1a1-1078495a5333-codex.md",
+     "mtime": "2026-11-12T01:57:46Z",
+     "started_at": "2026-11-12T01-57-05-428Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "rerun",
+      "rollback",
+      "irreversible",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T02-05-02-267Z-8b9b80c8-0a47-4d96-b6ee-8f44679cab1a-codex.md",
+     "mtime": "2026-11-12T02:05:38Z",
+     "started_at": "2026-11-12T02-05-02-267Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "irreversible",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T02-12-23-963Z-5fd9adb0-18e5-4441-b11c-6ceb667612b3-codex.md",
+     "mtime": "2026-11-12T02:12:59Z",
+     "started_at": "2026-11-12T02-12-23-963Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "correctness",
+      "disconnect",
+      "irreversible",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-12T02-17-23-369Z-24072248-2562-4f9c-96dd-532b79e00fcd-codex.md",
+     "mtime": "2026-11-12T02:17:58Z",
+     "started_at": "2026-11-12T02-17-23-369Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "rerun",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    }
+   ]
+  },
+  {
+   "plan": "plan-05",
+   "review_count": 5,
+   "in_period": 2,
+   "findings_headline": "- codex: PASS, 남은 지적(차단) 0건, 참고 지적 1건(차단 아님)",
+   "files": [
+    {
+     "name": "deploy-plan-review-2026-11-11T05-35-25-057Z-43a24fb1-c5a3-47f3-ba46-cdb0ddfb8d09-codex.md",
+     "mtime": "2026-11-11T05:36:12Z",
+     "started_at": "2026-11-11T05-35-25-057Z",
+     "verdict": "판정: FAIL",
+     "fail_criteria": [
+      "disconnect",
+      "rerun",
+      "impact",
+      "honesty"
+     ],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T05-37-35-366Z-f5e41c47-a6bc-4a91-9eae-b6b82c9e7055-codex.md",
+     "mtime": "2026-11-11T05:43:32Z",
+     "started_at": "2026-11-11T05-37-35-366Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T05-59-31-191Z-6dc05afc-e078-4d36-8c7e-81f9af80fda0-codex.md",
+     "mtime": "2026-11-11T06:00:09Z",
+     "started_at": "2026-11-11T05-59-31-191Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T08-19-06-335Z-9e993eba-f478-44a9-94d1-4db12b827d4f-codex.md",
+     "mtime": "2026-11-11T08:19:38Z",
+     "started_at": "2026-11-11T08-19-06-335Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    },
+    {
+     "name": "deploy-plan-review-2026-11-11T08-29-35-590Z-4d579b60-841f-4d6c-ae83-8b4ba9d7127e-codex.md",
+     "mtime": "2026-11-11T08:30:04Z",
+     "started_at": "2026-11-11T08-29-35-590Z",
+     "verdict": "판정: PASS",
+     "fail_criteria": [],
+     "criteria_total": 8
+    }
+   ]
+  }
+ ]
+}

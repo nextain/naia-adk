@@ -43,7 +43,12 @@ const LEAK_RULES = [
   ["private/cloud-ip", /\b(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168|34\.\d{1,3}|35\.\d{1,3})\.\d{1,3}\.\d{1,3}\b/g],
   ["tailscale-host", /\b[a-z0-9-]+\.tail[a-z0-9]+\.ts\.net\b/g],
   ["internal-project-slug", /\bnaia-corp-site(?:-prod|-dev|-db)?\b/g], // 메인테이너 내부 GCP 프로젝트 슬러그(bare — 크로스리뷰 발견)
+  // 2026-11-08: 관문 시험 자료에 실제 애저 구독 번호가 든 채 공개 저장소로 갈 뻔함(푸시 전 리뷰에서 발견).
+  // 주소(/subscriptions/<번호>)·옵션(--subscription <번호>)·이름에 sub·tenant 가 든 값(SUB1 = "…", subscriptionId, tenantId) 모양.
+  // 같은 글자 반복 번호(0000…·1111…)는 예시로 본다.
+  ["azure-subscription-id", /(?:\/subscriptions\/|--(?:subscription|tenant)[=\s]+["']?|\b[A-Za-z0-9_]*(?:sub|tenant)[A-Za-z0-9_]*["']?\s*[:=]\s*["'])([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/gi],
 ];
+const isDummyUuid = (u) => new Set(u.replace(/-/g, "").toLowerCase()).size <= 2;
 
 function entropy(s) {
   const m = {}; for (const c of s) m[c] = (m[c] || 0) + 1;
@@ -102,6 +107,12 @@ for (const f of tracked) {
     for (const [name, re] of PATH_RULES) { re.lastIndex = 0; if (re.test(line)) findings.paths.push({ file: f, line: i + 1, rule: name, val: line.trim().slice(0, 60) }); }
     for (const [name, re] of LEAK_RULES) {
       re.lastIndex = 0; const hit = line.match(re);
+      if (hit && name === "azure-subscription-id") {
+        const real = [...line.matchAll(re)].filter((m) => !isDummyUuid(m[1]));
+        // 공개 CI 로그에 번호가 남지 않게 앞 4자만 보인다.
+        if (real.length) findings.leaks.push({ file: f, line: i + 1, rule: name, val: real[0][0].replace(real[0][1], real[0][1].slice(0, 4) + "…") });
+        continue;
+      }
       if (hit && !(name === "biz-reg-no(KR)" && DUMMY_BIZ.has(hit[0]))) findings.leaks.push({ file: f, line: i + 1, rule: name, val: hit[0].slice(0, 48) });
     }
   });
