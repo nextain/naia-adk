@@ -98,6 +98,14 @@ test('schedule baseline and both alert stages once per occurrence survive restar
   await f.run({ now: now + 24 * 3600000 }); assert.equal(scheduled().length, 3);
   await f.run({ now: now + 24 * 3600000 + 30 * 60000 }); assert.equal(scheduled().length, 4);
 });
+test('T3 session audit missing its configured schedule is detected at its due time', async () => {
+  const f = await ledgerFixture(); f.work.work = [];
+  f.schedule.schedules[0].id = 'session-audit'; await f.saveLedgers();
+  const expected = `schedule-missed:session-audit/${Date.parse('2030-01-01T11:00:00Z')}`;
+  assert.ok((await f.run()).rows[0].anomalies.includes(expected));
+  await f.run({ now: now + 60000 });
+  assert.ok(f.sent.some(message => message.content.includes(expected)));
+});
 test('failed execution covers due run and next missed occurrence opens new episode', async () => {
   const f = await ledgerFixture(); await f.run(); await f.run();
   f.schedule.schedules[0].last_result = { at: '2030-01-01T11:05:00Z', outcome: 'failed', evidence: null };

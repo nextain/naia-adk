@@ -96,6 +96,7 @@
     "rule": "Rules below are one line each. The detail file keeps the full text under the same key paths; read only the section a task touches. Code reads the merge of both files.",
     "sections": {
       "ai_workflow.ask_user_question_format": "Decision questions: re-ground in 1-2 sentences, ask without jargon, give an explicit recommendation with completeness score (1-10) and AI and review time, then lettered options each with effort, completeness, and a one-sentence trade-off.",
+      "ai_workflow.existing_first": "Unless new, analyze existing first; regression order in detail.",
       "ai_workflow.completeness_principle": "Build approved work completely (edge cases, errors, tests). Never add unrequested scope. Keep fork deltas from upstream minimal.",
       "ai_workflow.dead_code_safety": "Dead code is not harmless; never casually delete or ignore it. Before material, irreversible, ambiguous, or out-of-scope deletion, understand why it is dead, resolve the exact target and impact, preserve recovery, and get explicit user confirmation. Agent-owned temporary artifacts with an explicit lifecycle and user-requested recoverable deletions proceed without a prompt only after exact-target verification.",
       "ai_workflow.documentation_impact_policy": "A production change is complete only when repository docs, user manual, and reusable learning are each recorded as UPDATED (changed files or immutable commit URLs) or N/A (a concrete reason; bare 'not relevant' is invalid) in one per-issue JSON receipt, finalized at Sync and required before Commit.",
