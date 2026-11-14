@@ -17,7 +17,7 @@ const { classifyProdMutations } = require("../lib/deploy-command-classifier.js")
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
 
 function makeWorkspace(t) {
-	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-gate-test-"));
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sample-approval-plan-gate-test-"));
 	t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 	const root = path.join(tmp, "workspace");
 	const stateDir = path.join(tmp, "state");
@@ -126,7 +126,7 @@ function createValidPlan(root, overrides = {}) {
 	return { planFile, gatesDir, plan, scriptRel, scriptAbs, step1Cmd, rollbackCmd };
 }
 
-function writePassingReviewReceipt(root, planFile) {
+function writePassingReviewReceipt(root, planFile, options = {}) {
 	const gatesDir = path.dirname(planFile);
 	const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
 	const planSha = sha256(fs.readFileSync(planFile));
@@ -134,36 +134,41 @@ function writePassingReviewReceipt(root, planFile) {
 	const promptSha = sha256(prompt);
 	const manifestSha = deployPlan.reviewInputManifest(planFile, root);
 
+	const fail = options.fail || [];
 	const bodyLines = [
-		"판정: PASS",
-		...deployPlan.CRITERIA.map(([id]) => `${id}: PASS — 계획서 및 고정 스크립트 확인 통과`),
-		"참고 지적: 0",
-		"남은 지적: 0",
+		fail.length ? "판정: FAIL" : "판정: PASS",
+		...deployPlan.CRITERIA.map(([id]) => (fail.includes(id) ? `${id}: FAIL — 차단 지적 있음` : `${id}: PASS — 계획서 및 고정 스크립트 확인 통과`)),
+		...(options.extra || []),
+		`참고 지적: 0${options.bodyMarker || ""}`,
+		`남은 지적: ${options.open ?? 0}`,
 		"",
 	];
 	const body = bodyLines.join("\n");
 	const stdoutSha = sha256(body);
 	const finalText = `${body}review-run: target_sha256=${planSha} prompt_sha256=${promptSha} stdout_sha256=${stdoutSha}\n`;
-	const resultRel = "deploy-plan-review-argon.md";
+	const reviewer = options.reviewer || "argon";
+	const resultRel = `deploy-plan-review-${reviewer}.md`;
 	fs.writeFileSync(path.join(gatesDir, resultRel), finalText);
 
-	const startedAt = new Date(Date.now() - 2000).toISOString();
-	const endedAt = new Date().toISOString();
+	// 옛 모양(rotation 칸 없음) 기록은 차례 도입 시각 앞선 것만 받으므로 그 앞 시각으로 쓴다.
+	const legacyEnd = Date.parse(deployPlan.LEGACY_REVIEW_CUTOFF) - 60_000;
+	const startedAt = options.startedAt || new Date(legacyEnd - 2000).toISOString();
+	const endedAt = new Date(legacyEnd).toISOString();
 	const reviewRecord = {
 		plan_sha256: planSha,
 		plan: path.relative(root, planFile),
-		author_model: "muse",
+		author_model: plan.author_model,
 		prompt_sha256: promptSha,
 		reviewedAt: endedAt,
 		reviewers: [
 			{
-				model: deployPlan.REVIEW_MODELS.argon.model,
-				effort: deployPlan.REVIEW_MODELS.argon.effort,
+				model: deployPlan.REVIEW_MODELS[reviewer].model,
+				effort: deployPlan.REVIEW_MODELS[reviewer].effort,
 				result: resultRel,
 				result_sha256: sha256(finalText),
 				target_sha256: planSha,
 				receipt: {
-					model: deployPlan.REVIEW_MODELS.argon.model,
+					model: deployPlan.REVIEW_MODELS[reviewer].model,
 					started_at: startedAt,
 					ended_at: endedAt,
 					exit_code: 0,
@@ -1028,4 +1033,369 @@ test("큰 실행 파일: 셸 대본인지 볼 때 앞부분만 읽고 전체를 
 		fs.readSync = origReadSync;
 	}
 	assert.ok(maxRead <= 4096, `큰 파일을 ${maxRead} 바이트 읽음`);
+});
+
+test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음·막음 검증 (문서용 주소·example 이름만 사용)", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root, {
+		testHosts: ["192.0.2.10", "GPU-BOX.example.", "lab-node.example.com", "*.wildcard.example"],
+	});
+
+	// 1) 설정된 시험 기기로의 읽기·루프·복사·사용자 서비스 재시작은 비운영으로 통과
+	const allowedCmds = [
+		"ssh user@192.0.2.10 nvidia-smi",
+		"ssh user@192.0.2.10 'podman ps --format \"{{.Names}}\"'",
+		"ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'",
+		"ssh user@192.0.2.10. ls",
+		"ssh -l user gpu-box.example ls",
+		"ssh -l user GPU-BOX.EXAMPLE. ls",
+		"ssh -l user lab-node.example.com systemctl --user restart sample-worker",
+		"scp a.txt user@192.0.2.10:~/work/",
+	];
+	for (const cmd of allowedCmds) {
+		assert.deepEqual(classifyProdMutations(cmd, root), [], `시험 기기 명령은 비운영으로 분류되어야 함: ${cmd}`);
+		const decision = runDeployGuardHook(cmd, { cwd: root, root, stateDir, transcriptPath });
+		assert.equal(decision, null, `시험 기기 명령은 관문을 통과해야 함: ${cmd}`);
+	}
+
+	// 2) 시험 기기 안이라도 원격 본문의 운영 변경(az vm delete 등)은 다시 분류해 차단
+	const remoteProdCmd = "ssh user@192.0.2.10 az vm delete -n sample-vm -g sample-rg";
+	const remoteProdHits = classifyProdMutations(remoteProdCmd, root);
+	assert.ok(remoteProdHits.some((h) => h.service === "azure:vm:sample-vm"), `시험 기기 안 운영 변경은 잡혀야 함: ${JSON.stringify(remoteProdHits)}`);
+	const remoteProdDecision = runDeployGuardHook(remoteProdCmd, { cwd: root, root, stateDir, transcriptPath });
+	assert.ok(remoteProdDecision && remoteProdDecision.decision === "block", "시험 기기 안 az vm delete 는 막혀야 함");
+
+	// 3) -F·-o HostName 덮어쓰기는 비운영 판정을 하지 않고 차단
+	for (const overrideCmd of [
+		"ssh -o HostName=192.0.2.20 user@192.0.2.10 sudo systemctl restart sample",
+		"ssh -F /tmp/custom_ssh_config user@192.0.2.10 sudo systemctl restart sample",
+	]) {
+		const hits = classifyProdMutations(overrideCmd, root);
+		assert.ok(hits.length > 0, `덮어쓰기 옵션 명령은 막아야 함: ${overrideCmd}`);
+		const decision = runDeployGuardHook(overrideCmd, { cwd: root, root, stateDir, transcriptPath });
+		assert.ok(decision && decision.decision === "block", `덮어쓰기 옵션 명령은 훅에서 막혀야 함: ${overrideCmd}`);
+	}
+
+	// 4) 목록 밖 호스트와 와일드카드 이름은 비운영으로 보지 않음
+	for (const blockedCmd of [
+		"ssh user@192.0.2.11 sudo systemctl restart sample",
+		"ssh -l user prod-host.example sudo systemctl restart sample",
+		"ssh -l user sub.gpu-box.example sudo systemctl restart sample",
+		"ssh -l user host.wildcard.example sudo systemctl restart sample",
+	]) {
+		const hits = classifyProdMutations(blockedCmd, root);
+		assert.ok(hits.length > 0, `목록 밖/와일드카드 호스트는 운영으로 분류되어야 함: ${blockedCmd}`);
+	}
+
+	// 5) 설정이 없거나 깨졌으면 빈 목록(기존 동작대로 막힘)
+	const cfgPath = path.join(root, "config", "deploy-gate.json");
+	fs.writeFileSync(cfgPath, "{ broken json");
+	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "깨진 설정일 때는 시험 기기 예외가 적용되지 않아야 함");
+	fs.rmSync(cfgPath, { force: true });
+	assert.ok(classifyProdMutations("ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'", root).length > 0, "설정 파일이 없을 때는 시험 기기 예외가 적용되지 않아야 함");
+});
+
+
+test("local systemd: configured mutations require a plan across shell forms", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	const service = "local:systemd:sample-web";
+	writeGateConfig(root, { services: { [service]: { requireDeployGate: false, allowOps: true, paths: ["/opt/sample-web"] } } });
+	const commands = [
+		...["stop", "start", "restart", "reload", "enable", "disable", "mask", "kill"].map(v => `/usr/bin/sudo /usr/bin/env MODE=sample /usr/bin/systemctl ${v} sample-web.service sample-web.socket`),
+		"sh -c 'systemctl stop sample-web'", "sudo sh -c 'systemctl stop sample-web'",
+		"bash -c 'systemctl stop sample-web.socket'", "( systemctl restart sample-web )",
+		"for unit in sample-web; do systemctl stop $unit; done",
+		"for unit in 'sample-web'; do systemctl stop \"$unit\"; done",
+		"echo ready && systemctl stop sample-web; echo done",
+		"install source /etc/systemd/system/sample-web.service",
+		"cp /tmp/sample-web.service /etc/systemd/system/", "install -t /etc/systemd/system /tmp/sample-web.service",
+		"cp source /etc/systemd/system/sample-web.service.d/override.conf",
+		"mv source /etc/systemd/system/sample-web.socket", "mv /tmp/sample-web.service /etc/systemd/system/",
+		"rm -r /etc/systemd/system/sample-web.service.d",
+		"echo data | tee /etc/systemd/system/sample-web.service.d/override.conf",
+		"sed -i s/a/b/ /etc/systemd/system/sample-web.service",
+		"rm /etc/systemd/system/sample-web.service", "ln -s source /etc/systemd/system/sample-web.service",
+		"cp source /opt/sample-web/releases/current", "rm /opt/sample-web/old",
+		"mv -t /tmp /opt/sample-web/current", "install -d /opt/sample-web /tmp/sample-dir",
+	];
+	for (const command of commands) {
+		assert.equal(runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath })?.decision, "block", command);
+		const hits = classifyProdMutations(command, root, 0, false, root);
+		assert.ok(hits.some(h => h.service === service), command);
+	}
+	for (const command of ["systemctl status sample-web", "systemctl status stop sample-web", "sed -i /opt/sample-web /tmp/unrelated", "systemctl show sample-web", "systemctl is-active sample-web", "systemctl cat sample-web", "systemctl list-units sample-web", "systemctl stop sample-other", "cp /opt/sample-web/readme /tmp/sample-copy", "cp source /opt/sample-web-other/file", "cat /etc/systemd/system/sample-web.service"]) {
+		assert.deepEqual(classifyProdMutations(command, root, 0, false, root), [], command);
+	}
+});
+
+test("local systemd: reviewed plan issues PLAN and STEP codes", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	const service = "local:systemd:sample-web";
+	writeGateConfig(root, { services: { [service]: { requireDeployGate: false, allowOps: true } } });
+	const command = "systemctl restart sample-web.service";
+	const { planFile } = createValidPlan(root, { services: [service], scenario: [{ id: "s1", title: "Restart sample", commands: [command], success_check: "Check status", on_failure: "Report failure" }], rollback: { method: "Restart sample", duration: "1 minute", step_ids: ["s1"] } });
+	writePassingReviewReceipt(root, planFile);
+	const d1 = runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath });
+	const code = d1?.reason.match(/승인 코드:\s*(PLAN-[A-Z0-9]{6})/);
+	assert.ok(code, JSON.stringify(d1));
+	appendHumanTurn(transcriptPath, `계획 승인합니다 ${code[1]}`);
+	const d2 = runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath });
+	assert.match(d2?.reason || "", /단계 승인 코드:\s*STEP-[A-Z0-9]{6}/);
+	assert.equal(d2.decision, "block");
+	const stepCode = d2.reason.match(/단계 승인 코드:\s*(STEP-[A-Z0-9]{6})/)[1];
+	appendHumanTurn(transcriptPath, `단계 승인합니다 ${stepCode}`);
+	assert.equal(runDeployGuardHook(command, { cwd: root, root, stateDir, transcriptPath }), null);
+
+});
+
+const localRegressionCases = {
+ "F-1 redirection": ["printf x > /etc/systemd/system/sample-web.service", "echo x >> /etc/systemd/system/sample-web.service.d/override.conf", "cat /tmp/sample-source >| /opt/sample-web/app.conf", "echo x &> /opt/sample-web/app.conf"],
+ "F-2 unresolved expansion": ["U=sample-web; systemctl stop $U", "U=sample-web systemctl stop $U", "systemctl stop ${U}", "for U in sample-other; do echo $U; done; U=sample-web; systemctl stop $U", "for U in sample-other $OTHER; do systemctl stop $U; done", "systemctl stop $(printf sample-web)", "systemctl stop `printf sample-web`"],
+ "F-3 unit glob": ["systemctl stop 'sample-*'", "systemctl stop sample-web?", "systemctl stop 'sample-[w]eb.service'"],
+ "F-4 global daemon reload": ["systemctl daemon-reload"],
+ "F-5 stdin target": ["echo sample-web | xargs systemctl stop", "xargs -a /tmp/sample-units systemctl stop", "systemctl stop < /tmp/sample-units"],
+ "F-6 service wrapper": ["service sample-web stop", "sudo service sample-web restart", "service $U restart"],
+ "F-7 enablement": ["systemctl preset sample-web.service", "systemctl add-wants sample-other.target sample-web.service", "systemctl add-requires sample-other.target sample-web.service"],
+ "F-8 write tools": ["dd if=/tmp/sample-source of=/etc/systemd/system/sample-web.service", "truncate -s0 /opt/sample-web/app.conf", "truncate --size 0 /opt/sample-web/app.conf", "rsync -a /tmp/sample-source/ /opt/sample-web/", "chmod 644 /etc/systemd/system/sample-web.service", "chmod -w /opt/sample-web/app.conf", "chmod --reference /tmp/sample-mode /opt/sample-web/app.conf", "chown --reference=/tmp/sample-owner /opt/sample-web/app.conf", "chown sample-user /opt/sample-web/app.conf", "install -m 644 /tmp/sample-source /opt/sample-web/app.conf"],
+ "F-9 link path": ["systemctl link /tmp/sample-web.service"],
+};
+for (const [finding, commands] of Object.entries(localRegressionCases)) test(`local systemd regression: ${finding}`, t => {
+ const {root, stateDir, transcriptPath} = makeWorkspace(t);
+ const service = "local:systemd:sample-web";
+ writeGateConfig(root, {services: {[service]: {paths: ["/opt/sample-web"]}}});
+ for (const command of commands) {
+  assert.ok(classifyProdMutations(command, root, 0, false, root).some(h => h.service === service), command);
+  assert.equal(runDeployGuardHook(command, {cwd:root, root, stateDir, transcriptPath})?.decision, "block", command);
+ }
+});
+test("local systemd regression: precise unrelated targets and reads stay open", t => {
+ const {root,stateDir,transcriptPath} = makeWorkspace(t);
+ writeGateConfig(root, {services: {"local:systemd:sample-web": {paths:["/opt/sample-web"]}}});
+ for (const command of ["systemctl --user daemon-reload", "systemctl stop sample-other", "systemctl status sample-web", "service sample-web status", "cp sample-source /opt/sample-web2/file", "cat /etc/systemd/system/sample-web.service", "dd if=/opt/sample-web/app.conf of=/tmp/sample-output", "rsync /opt/sample-web/app.conf /tmp/sample-output", "chmod --reference /opt/sample-web/app.conf /tmp/sample-output", "chown --reference=/opt/sample-web/app.conf /tmp/sample-output"]) {
+  assert.deepEqual(classifyProdMutations(command, root, 0, false, root), [], command);
+  assert.equal(runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath}),null,command);
+ }
+});
+
+test("local systemd regression: globs select matching registered units", t => {
+ const {root} = makeWorkspace(t);
+ writeGateConfig(root, {services: {"local:systemd:sample-web": {}, "local:systemd:sample-api": {}}});
+ assert.deepEqual(classifyProdMutations("systemctl stop 'sample-web*'",root,0,false,root).map(h => h.service), ["local:systemd:sample-web"]);
+});
+for (const changed of [false,true]) test(`local systemd approval: ${changed ? "changed plan invalidates codes" : "STEP is consumed once"}`, async t => {
+ const {root,stateDir,transcriptPath} = makeWorkspace(t);
+ const service = "local:systemd:sample-web", command = "systemctl restart sample-web.service", sessionId = "sample-local-approval";
+ writeGateConfig(root, {services:{[service]:{requireDeployGate:false,allowOps:true}}});
+ const {planFile,plan} = createValidPlan(root, {services:[service],scenario:[{id:"s1",title:"Restart sample",commands:[command],success_check:"Check status",on_failure:"Report failure"}],rollback:{method:"Restart sample",duration:"1 minute",step_ids:["s1"]}});
+ writePassingReviewReceipt(root,planFile);
+ const pre = await deployPlan.preapproveStepCodes(planFile,root,sessionId,{...process.env,DEPLOY_APPROVAL_STATE_DIR:stateDir},Date.now());
+ assert.equal(pre.ok,true,pre.why);
+ appendHumanTurn(transcriptPath,`승인 ${pre.plan_code} ${pre.steps.find(s=>s.step==="s1").code}`);
+ if(changed) fs.writeFileSync(planFile,JSON.stringify({...plan,what_why:"Changed sample reason after approval"}));
+ else assert.equal(runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath,sessionId}),null);
+ const decision=runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath,sessionId});
+ assert.equal(decision?.decision,"block");
+ assert.match(decision.reason,changed ? /적대 리뷰를 통과하지 않아|지금 계획서가 아닌 판을 검수함/ : /단계 승인 필요/);
+});
+test("local systemd regression: unresolved write destinations fail closed", t => {
+ const {root,stateDir,transcriptPath} = makeWorkspace(t);
+ writeGateConfig(root,{services:{"local:systemd:sample-web":{paths:["/opt/sample-web"]}}});
+ for(const command of ["echo x > $P","cp /tmp/sample-source $P","dd of=${P}","truncate -s0 /opt/sample-*/app.conf"]) {
+  assert.ok(classifyProdMutations(command,root,0,false,root).some(h=>h.service==="local:systemd:sample-web"),command);
+  assert.equal(runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath})?.decision,"block",command);
+ }
+});
+
+test("local systemd regression: comma separated negative chmod modes", t => {
+ const {root,stateDir,transcriptPath} = makeWorkspace(t);
+ writeGateConfig(root,{services:{"local:systemd:sample-web":{paths:["/opt/sample-web"]}}});
+ for(const command of ["chmod -w,+x /opt/sample-web/app.conf", "chmod -w,u+x /opt/sample-web/app.conf"]) {
+  assert.ok(classifyProdMutations(command,root,0,false,root).some(h=>h.service==="local:systemd:sample-web"),command);
+  assert.equal(runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath})?.decision,"block",command);
+ }
+});
+
+test("temporary reviewer selection defaults safely and expires", (t) => {
+ const { root } = makeWorkspace(t);
+ const now = Date.now();
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ const set = (planReview) => { fs.mkdirSync(path.dirname(configPath), { recursive: true }); fs.writeFileSync(configPath, JSON.stringify({ planReview })); fs.utimesSync(configPath, new Date(now - 1000), new Date(now - 1000)); };
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ set({ reviewer: "codex", until: new Date(now + 60000).toISOString(), reason: "temporary" });
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["codex"]);
+ set({ reviewer: "codex", until: new Date(now - 60000).toISOString(), reason: "temporary" });
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ set({ reviewer: "sol", until: new Date(now + 60000).toISOString(), reason: "temporary" });
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ for (const until of [undefined, "invalid"]) {
+  set({ reviewer: "codex", until, reason: "temporary" });
+  assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ }
+ fs.writeFileSync(configPath, "{");
+ assert.throws(() => deployPlan.reviewerIdsFor("muse", root, now));
+ assert.ok(!deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "codex" }).some(p => p.includes("author_model")), "차례 셋(codex)은 새 작성자로 받는다");
+ assert.ok(deployPlan.formProblems({ schema: "deploy-plan/v1", author_model: "gemini" }).some(p => p.includes("author_model")));
+});
+
+test("codex receipt remains valid after configuration changes", (t) => {
+ const { root } = makeWorkspace(t);
+ const { planFile, gatesDir } = createValidPlan(root);
+ const { planSha } = writePassingReviewReceipt(root, planFile, { reviewer: "codex" });
+ const result = deployPlan.reviewProblems(gatesDir, planSha, root);
+ assert.equal(result.ok, true, result.problems.join("; "));
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ fs.mkdirSync(path.dirname(configPath), { recursive: true });
+ fs.writeFileSync(configPath, JSON.stringify({ planReview: { reviewer: "argon" } }));
+ assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, true);
+});
+
+test("same author and unregistered reviewer receipts are rejected", (t) => {
+ const { root } = makeWorkspace(t);
+ const { planFile, gatesDir } = createValidPlan(root);
+ const { planSha } = writePassingReviewReceipt(root, planFile);
+ const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+ const record = JSON.parse(fs.readFileSync(file));
+ for (const model of [deployPlan.REVIEW_MODELS.muse.model, "unregistered-model"]) {
+  record.reviewers[0].model = model;
+  record.reviewers[0].receipt.model = model;
+  fs.writeFileSync(file, JSON.stringify(record));
+  assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, false);
+ }
+});
+
+test("fake codex reviewer runs through the complete review flow", (t) => {
+ const { root, tmp, stateDir } = makeWorkspace(t);
+ const { planFile, gatesDir } = createValidPlan(root);
+ const init = spawnSync("git", ["init", "-q", root], { encoding: "utf8" });
+ assert.equal(init.status, 0, init.stderr);
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ fs.mkdirSync(path.dirname(configPath), { recursive: true });
+ fs.writeFileSync(configPath, JSON.stringify({ planReview: { reviewer: "codex", until: new Date(Date.now() + 60000).toISOString(), reason: "temporary" } }));
+ const binDir = path.join(tmp, "bin"), fakeHome = path.join(tmp, "home");
+ fs.mkdirSync(binDir); fs.mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
+ const bwrap = path.join(binDir, "bwrap"), codex = path.join(binDir, "fake-codex");
+ fs.writeFileSync(bwrap, '#!/bin/sh\nwhile [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done\nshift\nexec "$@"\n', { mode: 0o755 });
+ const body = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "남은 지적: 0"].join("\n");
+ fs.writeFileSync(codex, `#!/bin/sh\n[ "$1" = exec ] || exit 19\nfor arg do last="$arg"; done\n[ "$last" = - ] || exit 20\ncat >/dev/null\nprintf 'codex\\n'\ncat <<'REVIEW_EOF'\n${body}\nREVIEW_EOF\nprintf 'tokens used\\n'\n`, { mode: 0o755 });
+ const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
+  cwd: root, encoding: "utf8", timeout: 30000,
+  env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CODEX_BIN: codex, DEPLOY_APPROVAL_STATE_DIR: stateDir },
+ });
+ assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+ const record = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), "utf8"));
+ assert.equal(record.reviewers[0].model, "gpt-6.1-terra");
+ assert.equal(record.reviewers[0].receipt.isolation, "bwrap-ro-bind");
+ assert.match(fs.readFileSync(path.join(gatesDir, record.reviewers[0].result), "utf8"), /review-run: .*\n$/);
+});
+
+
+test("reviewer configuration boundaries are fail closed", (t) => {
+ const { root } = makeWorkspace(t);
+ const now = Date.parse("2026-11-10T00:00:00Z");
+ const file = path.join(root, ".claude/deploy/config.json");
+ const set = (value) => { fs.mkdirSync(path.dirname(file), {recursive: true}); fs.writeFileSync(file, JSON.stringify(value)); };
+ assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ for (const until of ["2026-11-09T23:59:59Z", "2026-11-10T00:00:00Z", "invalid", "2026-02-30T23:40:00Z", "2025-02-29T00:00:00Z", "2026-13-01T00:00:00Z", "2026-00-10T00:00:00Z", "2026-01-00T00:00:00Z", "2026-11-13", 123]) {
+  set({planReview:{reviewer:"codex", until}});
+  assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"], String(until));
+ }
+ for (const reviewer of ["sol", "argon", "CODEX", " codex"]) {
+  set({planReview:{reviewer, until:"2026-11-13T00:00:00Z"}});
+  assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"], reviewer);
+ }
+ for (const planReview of [undefined, "codex"]) {
+  set({planReview}); assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["argon"]);
+ }
+ for (const until of ["2026-11-13T23:40:00+09:00", "2026-11-13T23:40:00.123Z"]) {
+  set({planReview:{reviewer:"codex", until}}); assert.deepEqual(deployPlan.reviewerIdsFor("muse", root, now), ["codex"]);
+ }
+ fs.writeFileSync(file, "{"); assert.throws(() => deployPlan.reviewerIdsFor("muse", root, now));
+});
+
+test("review gate enforces reviewer identity, count and effort", (t) => {
+ const {root} = makeWorkspace(t);
+ const {planFile, gatesDir} = createValidPlan(root);
+ const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+ for (const reviewer of ["argon", "codex"]) {
+  const {planSha} = writePassingReviewReceipt(root, planFile, {reviewer});
+  const valid = JSON.parse(fs.readFileSync(file));
+  const check = (record, expected, label) => { fs.writeFileSync(file, JSON.stringify(record)); const result = deployPlan.reviewProblems(gatesDir, planSha, root); assert.equal(result.ok, expected, `${label}: ${result.problems.join('; ')}`); };
+  check(valid, true, reviewer);
+  for (const [label, change] of [
+   ["zero", r => {r.reviewers=[];}],
+   ["two", r => {r.reviewers.push(structuredClone(r.reviewers[0]));}],
+   ["muse", r => {r.reviewers[0].model=deployPlan.REVIEW_MODELS.muse.model; r.reviewers[0].receipt.model=r.reviewers[0].model;}],
+   ["sol", r => {r.reviewers[0].model=deployPlan.REVIEW_MODELS.sol.model; r.reviewers[0].receipt.model=r.reviewers[0].model;}],
+   ["id mismatch", r => {r.reviewers[0].id=reviewer === "argon" ? "codex" : "argon";}],
+   ["effort", r => {r.reviewers[0].effort="wrong";}],
+  ]) { const rec=structuredClone(valid); change(rec); check(rec, false, `${reviewer} ${label}`); }
+ }
+});
+
+test("legacy authors still require their two distinct reviewers", (t) => {
+ for (const author of ["sol", "argon"]) {
+  const {root} = makeWorkspace(t);
+  const {planFile, gatesDir} = createValidPlan(root, {author_model:author});
+  const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+  const ids = deployPlan.reviewerIdsFor(author, root);
+  const entries = [];
+  let planSha;
+  for (const reviewer of ids) {
+   ({planSha} = writePassingReviewReceipt(root, planFile, {reviewer, bodyMarker:` ${reviewer}`}));
+   entries.push(JSON.parse(fs.readFileSync(file)).reviewers[0]);
+  }
+  const record = JSON.parse(fs.readFileSync(file)); record.reviewers=entries;
+  fs.writeFileSync(file, JSON.stringify(record));
+  let result = deployPlan.reviewProblems(gatesDir, planSha, root);
+  assert.equal(result.ok, true, `${author}: ${result.problems.join('; ')}`);
+  record.reviewers.pop(); fs.writeFileSync(file, JSON.stringify(record));
+  result = deployPlan.reviewProblems(gatesDir, planSha, root);
+  assert.equal(result.ok, false, author);
+ }
+});
+
+test("codex reviewer refuses to run without bwrap outside recovery mode", (t) => {
+ const {root, tmp, stateDir} = makeWorkspace(t);
+ const {planFile} = createValidPlan(root);
+ assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
+ const configPath = path.join(root, ".claude/deploy/config.json");
+ fs.mkdirSync(path.dirname(configPath), {recursive:true});
+ fs.writeFileSync(configPath, JSON.stringify({planReview:{reviewer:"codex", until:new Date(Date.now()+60000).toISOString()}}));
+ const binDir=path.join(tmp,"bin"), fakeHome=path.join(tmp,"home"), marker=path.join(tmp,"ran"), codex=path.join(binDir,"fake-codex");
+ fs.mkdirSync(binDir); fs.mkdirSync(fakeHome);
+ fs.symlinkSync(process.platform === "win32" ? "git.exe" : "/usr/bin/git", path.join(binDir,"git"));
+ fs.writeFileSync(codex, `#!/bin/sh\n : > "${marker}"\nexit 0\n`, {mode:0o755});
+ const run=spawnSync(process.execPath,[path.join(root,".agents/scripts/approval-plan.mjs"),"review",planFile,"--author","muse"], {cwd:root, encoding:"utf8", timeout:30000, env:{...process.env, HOME:fakeHome, PATH:binDir, APPROVAL_PLAN_CODEX_BIN:codex, DEPLOY_APPROVAL_STATE_DIR:stateDir}});
+ assert.notEqual(run.status, 0, `${run.stdout}\n${run.stderr}`);
+ assert.match(`${run.stdout}\n${run.stderr}`, /sandbox-prepare/);
+ assert.equal(fs.existsSync(marker), false);
+});
+
+test("위험 수용: security FAIL 하나만, 결정 글·같은 값·끝나는 날이 맞을 때만 리뷰 관문을 지남", (t) => {
+	const goodRa = () => ({ criterion: "security", accepted_by: "approver", decision_url: "https://discord.com/channels/1/2/3", same_value_as: "앞 판 번들 같은 지문 0123456789ab", no_new_exposure: true, expires_at: new Date(Date.now() + 86400000).toISOString(), reason: "이미 공개된 같은 시연 값, 새 노출 없음" });
+	const secLine = ["1. [차단: security] 공개 번들에 시연 값"];
+	const cases = [
+		{ desc: "맞는 위험 수용 + security FAIL 만", ra: goodRa(), fail: ["security"], open: 1, extra: secLine, pass: true },
+		{ desc: "위험 수용 + correctness 도 FAIL", ra: goodRa(), fail: ["security", "correctness"], open: 1, extra: secLine, pass: false },
+		{ desc: "위험 수용 + security 차단 지적 두 건(두 번째 새 비밀)", ra: goodRa(), fail: ["security"], open: 2, extra: [...secLine, "2. [차단: security] 새 열쇠가 번들에 들어감"], pass: false },
+		{ desc: "위험 수용 + security 차단 지적 두 건, 남은 지적 1로 적음", ra: goodRa(), fail: ["security"], open: 1, extra: [...secLine, "2. [차단: security] 새 열쇠가 번들에 들어감"], pass: false },
+		{ desc: "위험 수용 + security 아닌 차단 지적", ra: goodRa(), fail: ["security"], open: 2, extra: [...secLine, "2. [차단: 불일치] 명령이 다름"], pass: false },
+		{ desc: "결정 글 주소 없음", ra: { ...goodRa(), decision_url: "" }, fail: ["security"], open: 1, extra: secLine, pass: false },
+		{ desc: "새 노출", ra: { ...goodRa(), no_new_exposure: false }, fail: ["security"], open: 1, extra: secLine, pass: false },
+		{ desc: "다른 기준 수용", ra: { ...goodRa(), criterion: "rollback" }, fail: ["rollback"], open: 0, extra: [], pass: false },
+		{ desc: "끝나는 날 8일 뒤", ra: { ...goodRa(), expires_at: new Date(Date.now() + 8 * 86400000).toISOString() }, fail: ["security"], open: 1, extra: secLine, pass: false },
+		{ desc: "끝나는 날 지남", ra: { ...goodRa(), expires_at: new Date(Date.now() - 1000).toISOString() }, fail: ["security"], open: 1, extra: secLine, pass: false, createdAt: new Date(Date.now() - 3600000).toISOString() },
+		{ desc: "위험 수용 없음", ra: undefined, fail: ["security"], open: 1, extra: secLine, pass: false },
+	];
+	for (const c of cases) {
+		const { root } = makeWorkspace(t);
+		writeGateConfig(root);
+		const overrides = {};
+		if (c.ra) overrides.risk_acceptance = c.ra;
+		if (c.createdAt) overrides.createdAt = c.createdAt;
+		const { planFile, gatesDir } = createValidPlan(root, overrides);
+		const { planSha } = writePassingReviewReceipt(root, planFile, { fail: c.fail, open: c.open, extra: c.extra });
+		const review = deployPlan.reviewProblems(gatesDir, planSha, root);
+		assert.equal(review.ok, c.pass, `${c.desc}: ${review.problems.join(" / ")}`);
+	}
 });

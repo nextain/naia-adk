@@ -1,0 +1,59 @@
+{
+ "case": "case-20261111",
+ "kind": "real (names/text redacted)",
+ "period": {
+  "from": "2026-11-11T07:00:00Z",
+  "to": "2026-11-12T03:40:00Z"
+ },
+ "design_doc_section": "2.1 / 5.2 / 부록 A",
+ "files": [
+  "reviews.json",
+  "progress/<plan>/gates/*",
+  "todo-doc.json",
+  "ledger.json",
+  "session-log.json",
+  "gate-git.json",
+  "wake.json",
+  "wake/*"
+ ],
+ "measured": {
+  "S1_reviews_per_plan": {
+   "plan-01": 35,
+   "plan-02": 19,
+   "plan-03": 17,
+   "plan-04": 15,
+   "plan-05": 5
+  },
+  "S1_reviews_in_period": {
+   "plan-01": 35,
+   "plan-02": 18,
+   "plan-03": 17,
+   "plan-04": 15,
+   "plan-05": 2
+  },
+  "S3_priority_idle_max_hours_strict": 17.23,
+  "S3_priority_idle_max_hours_with_role_docs": 7.6,
+  "S4_tool_calls_total": 3588,
+  "S5_deploy_readiness_edits": 26,
+  "S5_gate_edits_any": 33,
+  "S5_gate_commits": 13,
+  "S7_wake_files_in_period": 1259,
+  "S7_wake_from_0645Z": 1275,
+  "S10_text_markers": 143,
+  "compacts": 43,
+  "plan_review_calls": 228,
+  "user_inputs": {
+   "bg-job-event": 133,
+   "scripted-template": 69,
+   "other": 2
+  }
+ },
+ "design_table_2_1": {
+  "S1": "35·19·17·15·5 (합계 141)",
+  "S3": "7.7h (09:19Z~16:59Z), 이어서 7.05h",
+  "S4": "3,363 (07Z~03Z)",
+  "S5": "deploy-readiness.js 27건",
+  "S7": "819/12h, 06:45Z 이후 835",
+  "S10": "01:25Z·01:28Z"
+ }
+}
