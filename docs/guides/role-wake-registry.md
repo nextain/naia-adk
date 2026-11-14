@@ -19,8 +19,13 @@ only; the script is the same on every server.
 | `roles.<id>.find.pane_id` | The session pane. The foreground program of this pane decides whether the session is alive and which tool it runs. |
 | `roles.<id>.tool`, `tools` | First-choice tool and the ordered list a start script may fall back to. `tool` must equal `tools[0]`. |
 | `roles.<id>.wake_subdir` | Folder under `wake_root`; `""` is the top-level box. |
-| `roles.<id>.wait` | Optional in-session wait script, checked under the pane's own process tree. |
+| `roles.<id>.extra_boxes` | More boxes of the same role outside `root`: `[{ "path": "/abs", "via": ["sudo", "-n"] }]`. `via` is the command prefix that can read a box another account owns; without it the box is read directly. |
+| `roles.<id>.dm_channels`, `dm_users` | DM rooms whose REST catch-up by [bot-mention-wake](bot-mention-wake.md) is checked: by room id, or by the id of the person on the other side when the room id is not known. |
+| `roles.<id>.wait` | Optional in-session wait script, checked under the pane's own process tree. `mode: "nudge"` (default) marks a script the role depends on; `"observe"` is recorded only. |
 | `delivery.command` | Instance command that puts one wake file in front of a role (`{role}`, `{file}`). |
+| `delivery.retry_max_seconds` | Longest gap between retries of a file that failed (default 300). |
+| `delivery.baseline_seen_file` | The old deliverer's record, one delivered path per line. Used when a box is first seen; see Migration order. |
+| `dm_backup.max_age_seconds` | How old a DM room's last good catch-up may be (default 900). |
 | `role_views` | Role lists other tools still keep (`l4-roles`, `wake-routes`, `liveness`, `session-health`, `bot-mention-wake`). |
 
 The role block keeps the keys the pane liveness tool already reads (`user`,
@@ -33,13 +38,43 @@ A wait script started inside a session exists only for tools that can run
 background commands, and it stops whenever the session restarts or compacts.
 The registry therefore requires a consumer that runs outside the session:
 
-- `deliver` hands each new wake file to `delivery.command` in name order and
-  records it in `state_dir/delivered-<role>.jsonl`. A box seen for the first
-  time is recorded, not replayed. A failed file holds that role until it
-  succeeds, so later files cannot overtake it.
+- `deliver` hands each new wake file to `delivery.command` in arrival order
+  (file time, then name: box names mix clocks and free titles) and records it
+  in `state_dir/delivered-<role>.jsonl`.
+- A file that fails is written to `state_dir/failed-<role>.json` and the run
+  goes on to the files behind it and to the other roles. The file is retried
+  after 60 seconds, doubling up to `retry_max_seconds`; new files go before
+  retries and retries with fewer failures go first. Three failures in a row
+  end that role's turn for the run (its session is probably down).
+- A box seen for the first time is recorded, not replayed: the role's own box
+  on the first run, an extra box whenever it is added. With
+  `baseline_seen_file`, only the files that record lists count as delivered
+  and the rest are delivered.
+- A file in a box read through `via` is copied to `state_dir/spool/<role>/`,
+  the copy is delivered, and the copy is removed. Extra boxes are never swept.
+- A box that cannot be read is an error (`box-unreadable`), never an empty box.
+- One run at a time: `state_dir/deliver.lock` carries the owner's pid and
+  start time. An empty or damaged lock, a dead owner or a recycled pid is
+  taken over; a lock whose owner cannot be verified holds for 30 minutes.
+- `state_dir/deliver-heartbeat.json`: `at` says the runner ran, `ok_at` moves
+  only when nothing failed. The check reads failures from their own records,
+  so a run that fails is not hidden by a fresh `at`.
 - A role with neither `delivery` nor `wait` is rejected when the file loads.
-- `wait` stays optional. When delivery is configured, a stopped wait script is
-  a warning; without delivery it is an error.
+- `wait` stays optional. A stopped `nudge` wait script is an error whether or
+  not delivery runs, because the role depends on it (it may be the only reader
+  of the box, or the role's channel poller); so is a wait state that cannot be
+  read. An `observe` script only warns.
+
+## DM rooms
+
+The gateway does not replay what it missed beyond its resume window, and one
+credential cannot read another role's DM room. [bot-mention-wake](bot-mention-wake.md)
+therefore reads each role's DM rooms over REST with that role's own credential
+and writes the last good time per room to its state file in the role's box.
+List the rooms a role must not miss under `dm_channels` or `dm_users`; the
+check raises `dm-backup-stale` when a room has no recent catch-up, and
+`role-view-drift` when the gateway tool's own list (`role_views` kind
+`bot-mention-wake`) does not name the same rooms.
 
 ## Commands
 
@@ -55,8 +90,13 @@ The registry therefore requires a consumer that runs outside the session:
 
 Findings: `retired-root-in-use`, `role-view-missing`, `role-view-drift`,
 `session-down`, `pane-unreadable`, `tool-drift`, `tool-fallback`,
-`wait-script-missing`, `wait-down`, `delivery-stale`, `delivery-lag`,
-`box-backlog`.
+`wait-script-missing`, `wait-down`, `wait-unknown`, `delivery-stale`,
+`delivery-error`, `delivery-failed`, `delivery-lag`, `box-unreadable`,
+`box-backlog`, `dm-backup-stale`.
+
+`deliver` exits 1 when any file failed or any role could not be worked
+through. A delivery command that refuses a file for good keeps
+`delivery-failed` raised until that file is removed from the box.
 
 Run `watch --repair` from a scheduler other than the one that runs `deliver`
 (for example the pane liveness cadence), so one stopped timer cannot hide the
@@ -66,8 +106,10 @@ liveness tool; this script does not type into panes.
 ## Retention
 
 `sweep` never deletes. It moves only files the delivery ledger records, and
-leaves undelivered files where they are however old. Removing archive folders
-is a separate decision for the workspace owner.
+leaves undelivered files where they are however old. A name already in the
+archive keeps both files (`<name>.dup1.md`), and one file or role in trouble
+does not stop the rest. Removing archive folders is a separate decision for
+the workspace owner.
 
 ## Migration order
 
@@ -76,11 +118,22 @@ is a separate decision for the workspace owner.
 2. List every other role list under `role_views` and clear each
    `role-view-drift` by making that tool read the registry or by regenerating
    its list with `view`.
-3. Run `deliver` once while the old deliverer still runs (the first run records
-   the existing box contents without replay), stop the old deliverer, then
-   install the periodic runner. A file that arrives in between is delivered
-   twice rather than lost.
-4. Install `watch --repair` on a separate scheduler.
-5. Run `sweep`, review the counts, then `sweep --apply`.
-6. Retire units that `retired-root-in-use` names, following
+3. List every way a wake reaches a role today (makers, deliverers, in-session
+   pollers, boxes outside `root`, DM rooms) and map each to the registry:
+   `extra_boxes` for outside boxes, `dm_channels`/`dm_users` for DM rooms,
+   `wait` for scripts a role still depends on. Do not stop an old path that has
+   no row.
+4. Stop the old deliverer, set `baseline_seen_file` to its record, then install
+   the periodic runner. The first run takes only what that record lists as
+   delivered and delivers the rest, so nothing the old deliverer left behind is
+   swallowed and nothing it delivered is replayed. Without such a record, run
+   `deliver` once while the old deliverer still runs (the first run records
+   the existing box contents without replay) and then stop it; a file that
+   arrives in between is delivered twice rather than lost. Never leave both
+   running. Remove `baseline_seen_file` once every role has a ledger.
+5. Install `watch --repair` on a separate scheduler.
+6. Run `sweep`, review the counts, then `sweep --apply`.
+7. Retire an old DM poller only after `dm-backup-stale` is clear for the rooms
+   it covered.
+8. Retire units that `retired-root-in-use` names, following
    [server onboarding](server-wake-onboarding.md) backup rules.

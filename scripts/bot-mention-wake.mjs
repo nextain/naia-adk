@@ -23,19 +23,24 @@ export function loadConfig(file, env = process.env) {
   const base = path.dirname(path.resolve(file));
   const config = JSON.parse(fs.readFileSync(file, 'utf8'));
   if (!Array.isArray(config.roles) || !config.roles.length) throw new Error('invalid roles');
+  const dmCatchupMs = (config.dmCatchupSeconds ?? 300) * 1_000;
+  if (!Number.isFinite(dmCatchupMs) || dmCatchupMs < 30_000) throw new Error('dmCatchupSeconds must be 30 or more');
   const ids = new Set(), bots = new Set(), dirs = new Set();
   return config.roles.map(role => {
     if (!/^[a-zA-Z0-9_-]+$/.test(role.id ?? '') || !snowflake(role.botUserId) || !role.wakeDir || Boolean(role.tokenFile) === Boolean(role.tokenEnv)) throw new Error('invalid role');
+    const dmChannelIds = role.dmChannelIds ?? [];
+    const dmUserIds = role.dmUserIds ?? [];
+    if (!Array.isArray(dmChannelIds) || !dmChannelIds.every(snowflake) || !Array.isArray(dmUserIds) || !dmUserIds.every(snowflake)) throw new Error('invalid role');
     const wakeDir = path.resolve(base, role.wakeDir);
     if (ids.has(role.id) || bots.has(role.botUserId) || dirs.has(wakeDir)) throw new Error('duplicate role');
     ids.add(role.id); bots.add(role.botUserId); dirs.add(wakeDir);
     const token = (role.tokenFile ? fs.readFileSync(path.resolve(base, role.tokenFile), 'utf8') : env[role.tokenEnv])?.trim();
     if (!token || token.length < 16) throw new Error('credential unavailable');
-    return { id: role.id, botUserId: role.botUserId, wakeDir, token };
+    return { id: role.id, botUserId: role.botUserId, wakeDir, token, dmChannelIds, dmUserIds, dmCatchupMs };
   });
 }
 
-export function createRoleWake(role, { gatewayOptions = {}, log = record => process.stderr.write(`${JSON.stringify(record)}\n`), reconnectMs = 1_000, schedule = setTimeout, cancel = clearTimeout, now = Date.now, tokens = [role.token], onFatal = () => {} } = {}) {
+export function createRoleWake(role, { gatewayOptions = {}, log = record => process.stderr.write(`${JSON.stringify(record)}\n`), reconnectMs = 1_000, schedule = setTimeout, cancel = clearTimeout, now = Date.now, tokens = [role.token], onFatal = () => {}, fetchImpl = globalThis.fetch, apiBase = 'https://discord.com/api/v10', catchupMs = role.dmCatchupMs ?? 300_000, every = setInterval, cancelEvery = clearInterval } = {}) {
   fs.mkdirSync(role.wakeDir, { recursive: true, mode: 0o700 });
   const stateFile = path.join(role.wakeDir, '.bot-mention-wake-state.json');
   const lockFile = path.join(role.wakeDir, '.bot-mention-wake.lock');
@@ -55,8 +60,10 @@ export function createRoleWake(role, { gatewayOptions = {}, log = record => proc
     fs.writeFileSync(lockFile, String(process.pid), { flag: 'wx', mode: 0o600 });
   } finally { fs.unlinkSync(guardFile); }
   let state;
-  try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('invalid state'); } catch (error) { if (error.code !== 'ENOENT') { fs.unlinkSync(lockFile); throw error; } state = { seen: {}, gateway: {}, guilds: {}, channels: {}, roles: {} }; }
-  state.seen ??= {}; state.gateway ??= {}; state.guilds ??= {}; state.channels ??= {}; state.roles ??= {};
+  try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); if (!state || typeof state !== 'object' || Array.isArray(state)) throw new Error('invalid state'); } catch (error) { if (error.code !== 'ENOENT') { fs.unlinkSync(lockFile); throw error; } state = { seen: {}, gateway: {}, guilds: {}, channels: {}, roles: {}, dm: {}, dmUsers: {} }; }
+  state.seen ??= {}; state.gateway ??= {}; state.guilds ??= {}; state.channels ??= {}; state.roles ??= {}; state.dm ??= {}; state.dmUsers ??= {};
+  // DM rooms to catch up over REST: the configured ones plus every room a DM arrives in.
+  for (const channel of role.dmChannelIds ?? []) state.dm[channel] ??= {};
   const persist = () => atomic(stateFile, JSON.stringify(state));
   // Persist the pending handoff before publishing its file. Resume finishes an
   // interrupted publication using the same name. A consumer must durably claim
@@ -88,7 +95,13 @@ export function createRoleWake(role, { gatewayOptions = {}, log = record => proc
       state.roles[data.guild_id] = data.roles ?? []; persist();
     } else if (['CHANNEL_CREATE', 'CHANNEL_UPDATE', 'THREAD_CREATE', 'THREAD_UPDATE'].includes(type)) { cacheChannel(data); persist(); }
     else if (type === 'GUILD_UPDATE') { state.guilds[data.id] = safe(data.name ?? data.id); persist(); }
-    if (type !== 'MESSAGE_CREATE' || (data?.guild_id != null && !snowflake(data.guild_id)) || !snowflake(data?.id) || !snowflake(data.channel_id) || data.author?.id === role.botUserId) return;
+    if (type === 'READY' || type === 'RESUMED') void catchUp();
+    if (type !== 'MESSAGE_CREATE') return;
+    if (!data?.guild_id && snowflake(data?.channel_id) && !state.dm[data.channel_id]) { state.dm[data.channel_id] = {}; persist(); }
+    publish(data);
+  }
+  function publish(data) {
+    if ((data?.guild_id != null && !snowflake(data.guild_id)) || !snowflake(data?.id) || !snowflake(data.channel_id) || data.author?.id === role.botUserId) return;
     const direct = !data.guild_id;
     const mentioned = data.mentions?.some(user => user.id === role.botUserId) || data.mention_roles?.some(id => state.roles[data.guild_id]?.includes(id));
     if ((!direct && !mentioned) || state.seen[data.id]) return;
@@ -99,7 +112,69 @@ export function createRoleWake(role, { gatewayOptions = {}, log = record => proc
     state.pending = { id: data.id, filename: `${now()}-${data.id}-gw.md`, body };
     persist(); finishPending();
   }
-  let stopped = false, timer;
+  // The gateway does not replay what it missed beyond its resume window. Each DM
+  // room is therefore also read over REST with this role's own credential, from a
+  // cursor only this reader moves; `seen` keeps the two paths from doubling. A room
+  // looked at for the first time is recorded, not replayed. A room that fails
+  // keeps its cursor and its last good time (`okAt`), which a monitor can check.
+  async function catchUpRoom(channel) {
+    const room = state.dm[channel];
+    const get = async query => {
+      const response = await fetchImpl(`${apiBase}/channels/${channel}/messages?${query}`, { headers: { Authorization: `Bot ${role.token}` }, signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) throw Object.assign(new Error('rest'), { status: response.status });
+      const page = await response.json();
+      if (!Array.isArray(page)) throw Object.assign(new Error('rest'), { status: 'invalid-body' });
+      return page.filter(item => snowflake(item?.id)).sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+    };
+    if (room.last === undefined) room.last = (await get('limit=1')).at(-1)?.id ?? '0';
+    else for (let pages = 0; pages < 20 && !stopped; pages += 1) {
+      const page = await get(`after=${room.last}&limit=100`);
+      for (const item of page) { publish({ ...item, channel_id: channel, guild_id: undefined }); room.last = item.id; }
+      if (page.length < 100) break;
+    }
+    room.okAt = new Date(now()).toISOString(); delete room.error;
+    persist();
+  }
+  // A DM room configured by its other member (`dmUserIds`) is looked up once:
+  // opening a DM returns the existing room and sends nothing.
+  async function findRoom(user) {
+    const response = await fetchImpl(`${apiBase}/users/@me/channels`, { method: 'POST', headers: { Authorization: `Bot ${role.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ recipient_id: user }), signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw Object.assign(new Error('rest'), { status: response.status });
+    const channel = (await response.json())?.id;
+    if (!snowflake(channel)) throw Object.assign(new Error('rest'), { status: 'invalid-body' });
+    state.dmUsers[user] = { channel }; state.dm[channel] ??= {};
+    persist();
+  }
+  const failure = error => Number.isInteger(error?.status) || error?.status === 'invalid-body' ? error.status : 'unreachable';
+  let stopped = false, timer, catchTimer, catching = null, again = false;
+  async function catchUpRound() {
+    for (const user of role.dmUserIds ?? []) {
+      if (stopped) break;
+      if (state.dmUsers[user]?.channel) continue;
+      try { await findRoom(user); } catch (error) {
+        const status = failure(error);
+        state.dmUsers[user] = { error: { status, at: new Date(now()).toISOString() } };
+        log({ event: 'dm_room_lookup_failed', role: role.id, user, status });
+        try { persist(); } catch { /* the next round records it */ }
+      }
+    }
+    for (const channel of Object.keys(state.dm)) {
+      if (stopped) break;
+      try { await catchUpRoom(channel); } catch (error) {
+        const status = failure(error);
+        state.dm[channel].error = { status, at: new Date(now()).toISOString() };
+        log({ event: 'dm_catchup_failed', role: role.id, channel, status });
+        try { persist(); } catch { /* the next round records it */ }
+      }
+    }
+  }
+  // A request that arrives while a round runs (a reconnect, most of all) gets a
+  // full round of its own afterwards: the running one may already be past a room.
+  function catchUp() {
+    if (catching) { again = true; return catching; }
+    catching = (async () => { do { again = false; await catchUpRound(); } while (again && !stopped); })().finally(() => { catching = null; });
+    return catching;
+  }
   const session = new DiscordGatewaySession({ ...gatewayOptions, token: role.token, expectedBotUserId: role.botUserId, stateRepository: repository, onDispatch,
     onDisconnect: ({ code, resumable }) => {
       log({ event: 'gateway_disconnect', role: role.id, code, resumable });
@@ -112,9 +187,10 @@ export function createRoleWake(role, { gatewayOptions = {}, log = record => proc
   });
   function connect() {
     if (stopped) return;
+    if (!catchTimer) { catchTimer = every(() => void catchUp(), catchupMs); catchTimer?.unref?.(); }
     try { session.connect(); } catch { log({ event: 'gateway_connect_failed', role: role.id }); timer = schedule(connect, reconnectMs); }
   }
-  return { session, start: connect, stop: async () => { if (stopped) return; stopped = true; if (timer) cancel(timer); session.close(); try { await session.drain(); } finally { fs.unlinkSync(lockFile); } } };
+  return { session, start: connect, catchUp, stop: async () => { if (stopped) return; stopped = true; if (timer) cancel(timer); if (catchTimer) cancelEvery(catchTimer); session.close(); try { await session.drain(); await catching; } finally { fs.unlinkSync(lockFile); } } };
 }
 
 export async function main(args = process.argv.slice(2)) {

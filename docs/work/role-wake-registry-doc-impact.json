@@ -1,8 +1,8 @@
 {
   "work": "role-wake-registry",
-  "repository_docs": {"status": "UPDATED", "files": ["docs/guides/role-wake-registry.md", "docs/guides/server-wake-onboarding.md"]},
-  "user_manual": {"status": "UPDATED", "files": ["docs/guides/role-wake-registry.md", "config/role-wake.example.json"]},
-  "reusable_learning": {"status": "UPDATED", "files": ["docs/guides/role-wake-registry.md"], "detail": "A watcher left on a retired workspace copy, several hand-kept role lists, a registered tool that differs from the running one, and a wake box with no retention."},
+  "repository_docs": {"status": "UPDATED", "files": ["docs/guides/role-wake-registry.md", "docs/guides/server-wake-onboarding.md", "docs/guides/bot-mention-wake.md"]},
+  "user_manual": {"status": "UPDATED", "files": ["docs/guides/role-wake-registry.md", "docs/guides/bot-mention-wake.md", "config/role-wake.example.json", "config/bot-mention-wake.example.json"]},
+  "reusable_learning": {"status": "UPDATED", "files": ["docs/guides/role-wake-registry.md"], "detail": "A watcher left on a retired workspace copy, several hand-kept role lists, a registered tool that differs from the running one, and a wake box with no retention. Replacing a deliverer: list every live wake path first (boxes outside the workspace, per-role DM rooms, scripts a role depends on); one failing file must not hold a queue or keep the heartbeat green; a lock must name a verifiable owner."},
   "review": {
     "independent_model_family": "NOT_RUN; no cross-family review receipt is claimed",
     "public_push_review": "NOT_RUN; publication and remote push are outside this local task"

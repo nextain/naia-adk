@@ -10,8 +10,10 @@
     "command": ["/<private>/role-wake.sh", "{role}", "{file}"],
     "heartbeat_max_age_seconds": 300,
     "lag_seconds": 600,
-    "max_per_run": 50
+    "max_per_run": 50,
+    "retry_max_seconds": 300
   },
+  "dm_backup": { "max_age_seconds": 900 },
   "retention": {
     "delivered_days": 3,
     "max_box_files": 500,
@@ -34,6 +36,7 @@
       "tool": "claude",
       "restart_cmd": "cd /<home>/role-a && claude --resume {resume}",
       "wake_subdir": "",
+      "dm_channels": ["300000000000000001"],
       "wait": { "script": "/<private>/role-a/wait.sh", "mode": "nudge" }
     },
     "role-b": {
@@ -44,7 +47,9 @@
       "tool": "agy",
       "tools": ["agy", "muse"],
       "restart_cmd": "bash /<private>/role-start.sh role-b",
-      "wake_subdir": "role-b"
+      "wake_subdir": "role-b",
+      "extra_boxes": [{ "path": "/<other-owner-workspace>/.agents/work/l4/wake/role-b", "via": ["sudo", "-n"] }],
+      "dm_users": ["400000000000000001"]
     }
   }
 }
