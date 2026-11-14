@@ -16,7 +16,14 @@
 - **인스턴스 확장 오류 시 차단**: `config/deploy-gate.json`의 `prodPatterns` 정규식 오류나 `plugin` 모듈 로드 실패가 나면 이미 모은 `prodPatterns` 적중을 보존한 채 `unclassified` 적중을 내어 즉시 차단합니다.
 - **설정 항목**:
   - `services`: 운영 서비스 키(`azure:containerapp:<이름>`, `gcp:cloudrun:<이름>`, `vercel:deploy:prod` 등)별 준비 기록(`gates/deploy.json`) 요구 여부, `ops`/`rollback` 허용 여부, 명령 결합 규칙(`commandMustContain` 등)
+  - `local:systemd:<유닛>`: `services`에 등록한 로컬 시스템 유닛을 운영 서비스로 분류합니다. 예: `"local:systemd:sample-web": { "requireDeployGate": false, "allowOps": true, "paths": ["/opt/sample-web"] }`. `.service`·`.socket` 접미, 실행파일 절대 경로, `sudo`·`env`·`sh -c` 같은 셸 감싸기를 인식합니다. 다음 변경은 같은 서비스의 계획·승인을 요구합니다.
+    - `systemctl` 변경 동사: `stop`, `start`, `restart`, `reload`, `enable`, `disable`, `mask`, `kill`, `daemon-reload`, `try-restart`, `reload-or-restart`, `reload-or-try-restart`, `reenable`, `unmask`, `revert`, `edit`, `set-property`, `preset`, `link`, `add-wants`, `add-requires`. `service <유닛> <동사>`도 같은 변경 동사로 분류하고, `link`의 경로 인자는 파일 이름으로 유닛을 맞춥니다.
+    - 시스템 범위의 인자 없는 `systemctl daemon-reload`는 등록된 로컬 서비스 전체를 대상으로 봅니다. `daemon-reload <유닛>`은 실제 문법이 아니므로 시험은 인자 없는 형태를 사용합니다. `systemctl --user ...`는 시스템 유닛 분류에서 제외합니다.
+    - 등록 서비스가 하나라도 있을 때 변경 대상의 `$변수`·`${변수}`·명령 치환을 정확히 풀 수 없거나, 대상이 비어 stdin·`xargs`에서 올 수 있으면 등록 서비스 전체를 대상으로 보아 차단합니다. 글롭(`*`·`?`·`[`)은 등록 유닛에 맞춰 보고, 대상을 확정할 수 없으면 차단합니다. 정확히 풀리는 미등록 유닛과 읽기 동사(`status`, `show`, `cat` 등)는 기존대로 처리합니다.
+    - `/etc/systemd/system/<유닛>.service`, `.socket`, 각 유닛의 `.d/` 및 선택 항목 `paths`(절대 경로 배열)의 경로 자체와 하위 파일 변경도 같은 서비스로 분류합니다. 대상 도구는 `install`, `cp`, `mv`, `tee`, `sed -i`, `rm`, `ln`, `dd`의 `of=`, `truncate`, `rsync`의 목적지, `chmod`, `chown`입니다. `>`·`>>`·`>|`·`&>` 리다이렉트도 포함하므로 `echo`·`printf`·`cat`으로 쓰는 경우도 검사합니다. 경로는 디렉터리 경계로 맞추므로 `/opt/sample-web2`는 `/opt/sample-web`에 속하지 않습니다. 등록 서비스가 있을 때 쓰기 대상 경로에 풀리지 않는 변수·명령 치환·글롭이 남으면 등록 서비스 전체를 대상으로 보아 차단합니다.
+    - 이 분류는 유닛과 파일 경로를 기준으로 합니다. PID를 직접 지정하는 `kill`이나 프로세스 문자열을 찾는 `pkill -f`는 유닛 소유 관계를 조회하지 않으므로 이 로컬 분류의 보장 범위 밖에 남습니다. `systemctl kill <등록 유닛>`은 위 변경 동사에 포함합니다.
   - `prodPatterns` / `sshAlwaysGated`: 인스턴스 추가 운영 명령·SSH 호스트 분류 패턴
+  - `testHosts`: 비운영(시험) 기기 호스트·IP 문자열 목록. 소문자·끝 점(`.`)을 정규화하여 와일드카드 없이 정확히 같은 이름만 비운영으로 판정하며, 설정이 없거나 깨졌으면 빈 목록으로 동작합니다. 비운영 호스트로 판정되어도 `ssh` 원격 본문은 다시 분류하므로 시험 기기 안에서 실행하는 운영 변경(`az vm delete` 등)과 `-F`·`-o HostName` 대상 덮어쓰기는 그대로 차단됩니다.
   - `approver.discordUserId`: 디스코드 승인 시 대조할 승인자 본인의 디스코드 사용자 ID(Snowflake)
   - `plugin`: 서비스별 세부 결합 검증(`assessService(service, ctx)`)이나 추가 명령 분류(`classifyCommand(ctx)`)를 수행하는 선택 모듈 경로
 
@@ -45,13 +52,26 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 
 ## 2. 적대 리뷰 받기 (`review`)
 
-계획서 양식과 고정 파일 SHA-256이 모두 맞으면 독립 리뷰어 모델(Argon)로 아홉 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`) 적대 리뷰를 받습니다.
+계획서 양식과 고정 파일 SHA-256이 모두 맞으면 차례상 다음 모델(`argon`→`codex`→`muse`→`argon`) 한 명에게 아홉 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`) 적대 리뷰를 받습니다. 작성자는 셋 중 누구나 될 수 있고, 첫 후보가 한도에 걸리면 남은 하나로 넘어가며 넘긴 기록은 `skipped`로 남깁니다.
+
+Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그대로 돌리고, Codex·Argon 리뷰어 실행에는 복구 모드 여부와 관계없이 `bwrap` 읽기 전용 격리가 필요합니다. 고정 `planReview`가 없으면 차례상 다음 모델이 먼저 리뷰합니다. 승인자 결정으로 인스턴스의 `.claude/deploy/config.json`에 다음 `planReview`를 추가하면 지정한 시각 전까지 그 리뷰어를 먼저 쓰고, 한도 실패일 때만 남은 하나로 넘어갑니다. 한도 실패는 종료 코드가 0이 아닌 정수이고 실행기 stderr·실행 오류에 한도 문구(rate limit, quota, usage limit, 429, RESOURCE_EXHAUSTED, exhausted)가 있을 때입니다. 리뷰 본문은 판별에 쓰지 않습니다. 신호로 끝난 실행(종료 코드 없음)은 한도로 보지 않습니다. 기존 설정의 다른 항목은 유지합니다.
+
+```json
+"planReview": {
+  "reviewer": "codex",
+  "until": "2026-11-13T23:40:00Z",
+  "reason": "승인자 결정에 따른 임시 대체"
+}
+```
+
+`until`이 없거나 지났을 때, 또는 `reviewer`가 작성자와 같을 때는 차례만 씁니다. 설정 JSON 파스 오류와 형식 오류(`reviewer`가 차례 셋 밖, `until`이 ISO 시각이 아님)는 거부합니다. 관문은 차례 기록(`rotation: true`)의 리뷰어 영수증 1명을 받습니다. 기록 시각(`reviewedAt`)의 차례를 다시 만들어, `skipped`가 앞에서부터 건너뛴 후보 그대로이고(각각 0이 아닌 `exit_code`) 실제 리뷰어가 그 다음 후보인지 대조합니다. `reviewedAt`은 UTC ISO 시각이어야 하고, 리뷰어 영수증 시작 시각(`started_at`) 이전 90분 안이어야 합니다. 시각을 옮겨 다른 차례를 만드는 기록은 막습니다. 작성자와 같은 모델, 차례 밖 모델, 한도 기록 없는 뒤 후보, 2인 기록은 막습니다. 옛 모양 기록(`rotation` 칸 없음)은 `reviewedAt`과 리뷰어 영수증 시작 시각이 모두 차례 도입 시각(`2026-11-10T10:00:00Z`)보다 앞설 때만 받습니다. 새 기록에서 `rotation` 칸을 지워 차례 대조를 건너뛰는 길을 막습니다. 리뷰 뒤 `planReview`를 바꾸면 차례가 달라져 다시 리뷰해야 할 수 있습니다. 작성자와 리뷰어는 같을 수 없습니다.
 
 ```bash
 node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/deploy-plan.json --author muse
 ```
 
 - 모든 기준이 `PASS`이고 `남은 지적: 0`(차단 지적 0건)이어야 통과합니다.
+- 예외는 좁은 위험 수용 하나입니다. 승인자가 결정 글로 받아들인 경우 계획서에 `risk_acceptance` 칸(`criterion: "security"`, `accepted_by`, `decision_url`, `same_value_as`, `no_new_exposure: true`, `reason`, `expires_at`)을 모두 적으면, `security` 기준 하나의 `FAIL`과 그 기준을 적은 차단 지적만 면제합니다. 다른 기준이 하나라도 `FAIL`이거나, `security`를 적지 않은 차단 지적이 남거나, `expires_at`이 지났거나 `createdAt` 뒤 7일을 넘으면 그대로 막힙니다. 모르는 칸은 거부합니다. 이미 나간 값과 같은 값을 다시 내보낼 때만 쓰고, 새 노출을 만드는 계획에는 쓰지 않습니다.
 - 리뷰 영수증(`gates/deploy-plan-review.json`)에는 계획서 SHA-256, 요청문 SHA-256, 고정 파일·실행기 입력 목록 해시(`input_manifest_sha256`)가 함께 묶입니다.
 - **리뷰 뒤에 계획서나 고정 파일을 고치면 이전 리뷰와 승인 코드는 즉시 무효**가 되며 다시 리뷰를 받아야 합니다.
 

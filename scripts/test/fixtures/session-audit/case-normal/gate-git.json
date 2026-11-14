@@ -1,0 +1,14 @@
+{
+ "repo": "instance workspace (synthetic)",
+ "gate_files_glob": [
+  ".claude/hooks/**",
+  ".claude/settings.json"
+ ],
+ "period": {
+  "from": "2026-11-13T00:00:00Z",
+  "to": "2026-11-13T20:00:00Z"
+ },
+ "commits": [],
+ "commit_count": 0,
+ "note": "정상 사례: 관문 파일 변경 없음"
+}

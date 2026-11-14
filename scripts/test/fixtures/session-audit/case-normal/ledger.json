@@ -1,0 +1,64 @@
+{
+ "role": "role-a",
+ "period": {
+  "from": "2026-11-13T00:00:00Z",
+  "to": "2026-11-13T20:00:00Z"
+ },
+ "rows": [
+  {
+   "id": "a1000001",
+   "status": "done",
+   "title": "수집기 W1 시험 추가",
+   "due": "2026-11-13T03:00:00Z",
+   "checked_at": "2026-11-13T02:40:00Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "a1000002",
+   "status": "done",
+   "title": "plan-01 계획 리뷰 2회차 PASS 뒤 승인 양식 올림",
+   "due": "2026-11-13T04:00:00Z",
+   "checked_at": "2026-11-13T02:20:00Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "a1000003",
+   "status": "waiting-approval",
+   "title": "plan-02 운영 반영 승인 코드 기다림",
+   "due": "2026-11-13T12:00:00Z",
+   "checked_at": "2026-11-13T05:10:00Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "a1000004",
+   "status": "open",
+   "title": "하네스북 상한 절 반영(1순위)",
+   "due": "2026-11-13T18:00:00Z",
+   "checked_at": "2026-11-13T16:35:00Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  },
+  {
+   "id": "a1000005",
+   "status": "done",
+   "title": "plan-03 계획 리뷰 PASS 뒤 승인 요청",
+   "due": "2026-11-13T12:00:00Z",
+   "checked_at": "2026-11-13T10:40:00Z",
+   "from": {
+    "quote": "인용 생략"
+   }
+  }
+ ],
+ "status_counts": {
+  "done": 3,
+  "waiting-approval": 1,
+  "open": 1
+ }
+}

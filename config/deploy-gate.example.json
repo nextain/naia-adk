@@ -20,6 +20,8 @@
       "service": "vm:ssh:prod-bastion"
     }
   ],
+  "testHostsNote": "비운영(시험) 기기 호스트·IP 목록(문자열 배열, 소문자·끝 점 정규화, 정확히 일치하는 이름만 비운영으로 보며 원격 본문은 다시 분류)",
+  "testHosts": [],
   "services": {
     "azure:containerapp:my-app-prod": {
       "label": "운영 웹 컨테이너 앱",

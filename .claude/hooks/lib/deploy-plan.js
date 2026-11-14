@@ -74,14 +74,108 @@ function readJson(file) {
 const str = (v, min = 1) => typeof v === "string" && v.trim().length >= min;
 const strList = (v, min = 1) => Array.isArray(v) && v.length > 0 && v.every((x) => str(x, min));
 
-// 리뷰 배치: author muse → 리뷰어는 argon 1명. 옛 author(sol|argon)의 2인 기록은 재리뷰까지만 구 기록으로 인정한다.
+// 승인자 위험 수용: security 기준 하나만, 이미 공개된 같은 값, 승인자 결정 글 주소, 끝나는 날이 있을 때만. 다른 기준 FAIL 은 그대로 막는다.
+const RISK_ACCEPTANCE_MAX_DAYS = 7;
+function riskAcceptanceProblems(plan) {
+	const a = plan?.risk_acceptance;
+	if (a === undefined) return [];
+	if (!a || typeof a !== "object" || Array.isArray(a)) return ["risk_acceptance 는 객체여야 함"];
+	const p = [];
+	const allowed = ["criterion", "accepted_by", "decision_url", "same_value_as", "no_new_exposure", "expires_at", "reason"];
+	for (const k of Object.keys(a)) if (!allowed.includes(k)) p.push(`risk_acceptance 에 모르는 칸 ${k}`);
+	if (a.criterion !== "security") p.push('risk_acceptance.criterion 은 "security" 만 쓸 수 있음(다른 기준은 위험 수용 불가)');
+	if (!str(a.accepted_by, 2)) p.push("risk_acceptance.accepted_by(위험을 받아들인 승인자) 없음");
+	if (!/^https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+$/.test(String(a.decision_url || ""))) p.push("risk_acceptance.decision_url 은 승인자 결정 디스코드 글 주소");
+	if (!str(a.same_value_as, 10)) p.push("risk_acceptance.same_value_as(같은 값이 이미 나간 앞 계획서·지문) 없음");
+	if (a.no_new_exposure !== true) p.push("risk_acceptance.no_new_exposure 는 true 여야 함(새 노출이면 위험 수용 불가)");
+	if (!str(a.reason, 10)) p.push("risk_acceptance.reason 없음");
+	const created = Date.parse(plan.createdAt || "");
+	const until = Date.parse(a.expires_at || "");
+	if (!Number.isFinite(until)) p.push("risk_acceptance.expires_at(ISO 시각) 없음");
+	else if (!Number.isFinite(created) || until <= created || until - created > RISK_ACCEPTANCE_MAX_DAYS * 86400000) p.push(`risk_acceptance.expires_at 은 createdAt 뒤 ${RISK_ACCEPTANCE_MAX_DAYS}일 안`);
+	return p;
+}
+function riskAcceptanceActive(plan, now = Date.now()) {
+	return plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && Date.parse(plan.risk_acceptance.expires_at) > now;
+}
+
+// 리뷰 배치: author muse → planReview 설정에 따라 argon 또는 codex 1명. 옛 author(sol|argon)의 2인 기록은 재리뷰까지만 구 기록으로 인정한다.
 const REVIEW_MODELS = Object.freeze({
 	sol: { model: "gpt-6.1-sol", effort: "high" },
 	muse: { model: "muse-spark-1.3", effort: "xhigh" },
 	argon: { model: "gemini-4-argon-medium", effort: "medium" },
+	codex: { model: "gpt-6.1-terra", effort: "high" },
 });
-function reviewerIdsFor(author) {
-	return author === "muse" ? ["argon"] : Object.keys(REVIEW_MODELS).filter((id) => id !== author);
+const AUTHOR_IDS = ["sol", "muse", "argon"];
+// 리뷰 차례(번갈아): ROTATION 순서대로 작성자 다음 모델이 먼저 리뷰하고, 한도에 걸리면 나머지 하나로 넘어간다. 작성자 자신은 절대 리뷰하지 않는다.
+const ROTATION = Object.freeze(["argon", "codex", "muse"]);
+// 새 모양 작성자(차례 셋)와 옛 모양 작성자(sol 포함)를 함께 받는다. 옛 sol·argon 2인 기록은 그대로 읽는다.
+const AUTHOR_MODELS = Object.freeze(["sol", "muse", "argon", "codex"]);
+// 한도 실패 판별식: 종료 코드가 0이 아니고 실행기 진단(stderr·실행 오류)이 이 식과 맞을 때만 다음 후보로 넘어간다. 리뷰 본문(stdout)은 계획서 낱말을 되풀이할 수 있어 보지 않는다.
+const LIMIT_RE = /rate.?limit|quota|usage limit|\b429\b|RESOURCE_EXHAUSTED|\bexhausted\b/i;
+function reviewerIdsFor(author, root = ROOT, at = Date.now()) {
+	if (author !== "muse") return AUTHOR_IDS.filter((id) => id !== author);
+	const file = path.join(root, ".claude/deploy/config.json");
+	const started = typeof at === "number" ? at : Date.parse(at);
+	let config;
+	try { config = JSON.parse(fs.readFileSync(file, "utf8"))?.planReview; }
+	catch (error) { if (error.code === "ENOENT") return ["argon"]; throw error; }
+	const until = config?.until;
+	const date = typeof until === "string" ? /^(\d{4})-(\d{2})-(\d{2})T/.exec(until) : null;
+	const validDate = date && Number(date[2]) >= 1 && Number(date[2]) <= 12 && Number(date[3]) >= 1 && Number(date[3]) <= new Date(Date.UTC(Number(date[1]), Number(date[2]), 0)).getUTCDate();
+	if (Number.isFinite(started) &&
+		config?.reviewer === "codex" && validDate && typeof until === "string" &&
+		/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(until) &&
+		Number.isFinite(Date.parse(until)) && started < Date.parse(until)) return ["codex"];
+	return ["argon"];
+}
+
+// 차례상 후보 순서(작성자 제외): 작성자 다음 모델이 먼저, 그 다음이 나머지 하나다. 옛 reviewerIdsFor 는 손대지 않고 새 review 흐름만 이 순서를 쓴다.
+function rotationOrder(author) {
+	const i = ROTATION.indexOf(author);
+	if (i < 0) return [];
+	return [ROTATION[(i + 1) % ROTATION.length], ROTATION[(i + 2) % ROTATION.length]];
+}
+
+// 차례 후보 둘(먼저 쓸 리뷰어, 한도 실패 때 넘어갈 리뷰어). 고정 planReview 가 기한 안이고 작성자와 다르면 맨 앞에 두고, 지났거나 until 이 없거나 작성자 자신이면 차례만 쓴다. 설정 JSON 깨짐·형식 틀림(차례 밖 리뷰어, 읽을 수 없는 until)은 던진다.
+function orderedReviewers(author, root = ROOT, at = Date.now()) {
+	if (!ROTATION.includes(author)) return reviewerIdsFor(author, root, at);
+	const base = rotationOrder(author);
+	const file = path.join(root, ".claude/deploy/config.json");
+	const started = typeof at === "number" ? at : Date.parse(at);
+	if (!Number.isFinite(started)) throw new Error("리뷰 시각을 읽지 못함");
+	let config;
+	try { config = JSON.parse(fs.readFileSync(file, "utf8"))?.planReview; }
+	catch (error) { if (error.code === "ENOENT") return base; throw error; }
+	if (config === undefined) return base;
+	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("planReview 형식이 틀림(객체여야 함)");
+	if (!ROTATION.includes(config.reviewer)) throw new Error("planReview.reviewer 는 argon·codex·muse 중 하나여야 함");
+	const until = config.until;
+	if (until === undefined) return base;
+	const date = typeof until === "string" ? /^(\d{4})-(\d{2})-(\d{2})T/.exec(until) : null;
+	const validDate = date && Number(date[2]) >= 1 && Number(date[2]) <= 12 && Number(date[3]) >= 1 && Number(date[3]) <= new Date(Date.UTC(Number(date[1]), Number(date[2]), 0)).getUTCDate();
+	if (!validDate || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(until) || !Number.isFinite(Date.parse(until))) throw new Error("planReview.until 형식이 틀림(ISO 시각)");
+	if (started >= Date.parse(until) || config.reviewer === author) return base;
+	if (config.reviewer === base[0]) return base;
+	return [config.reviewer, ...base.filter((id) => id !== config.reviewer)];
+}
+
+// 한도 실패인가: 종료 코드가 0이 아니고 실행기 진단(stderr·실행 오류문)이 LIMIT_RE 와 맞을 때만 참이다.
+// 신호로 끝난 실행(종료 코드 null)은 한도로 보지 않는다. 관문의 skipped exit_code 검사(0 아닌 정수)와 같은 기준이다.
+function isLimitFailure(exitCode, text) {
+	return Number.isInteger(exitCode) && exitCode !== 0 && LIMIT_RE.test(String(text || ""));
+}
+
+// 차례 도입 시각. 옛 모양(rotation 칸 없음) 기록은 이보다 앞선 것만 받는다. 새 기록에서 rotation 칸 하나를 지워 차례 대조를 건너뛰는 길을 막는다.
+const LEGACY_REVIEW_CUTOFF = "2026-11-10T10:00:00Z";
+
+function isoMs(value) {
+	return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) ? Date.parse(value) : NaN;
+}
+
+// 새 모양 기록인가(명시 칸 rotation:true). 작성자만으로 가르면 argon 작성자의 옛 2인 기록과 새 1인 기록이 충돌하므로, 옛 영수증과 부딪히지 않는 명시 칸으로 가른다.
+function isRotationRecord(rec) {
+	return !!rec && rec.rotation === true;
 }
 
 /** 양식 검사. 빈 칸마다 한 줄. */
@@ -89,8 +183,8 @@ function formProblems(plan) {
 	const p = [];
 	if (!plan || typeof plan !== "object") return ["계획서를 JSON 으로 읽지 못함"];
 	if (plan.schema !== "deploy-plan/v1") p.push('schema 가 "deploy-plan/v1" 이 아님');
-	if (!Object.hasOwn(REVIEW_MODELS, plan.author_model || "")) p.push("author_model(sol|muse|argon) 필수");
-	if (Object.hasOwn(plan, "risk_acceptance")) p.push("risk_acceptance 금지: 리뷰어 PASS·남은 지적 0 조건은 위험 수용으로 우회할 수 없음");
+	if (!AUTHOR_MODELS.includes(plan.author_model)) p.push("author_model(sol|muse|argon|codex) 필수");
+	p.push(...riskAcceptanceProblems(plan));
 	if (plan.approval_mode !== undefined && plan.approval_mode !== "preapprove_steps") p.push('approval_mode 는 "preapprove_steps" 만 쓸 수 있음');
 	if (!str(plan.planId, 3)) p.push("planId(계획 이름) 없음");
 	const at = Date.parse(plan.createdAt || "");
@@ -352,7 +446,7 @@ function pinnedFilesText(plan, root) {
 	return L;
 }
 
-function reviewBodyProblems(text, sha) {
+function reviewBodyProblems(text, sha, acceptSecurity = false) {
 	const problems = [];
 	const tr = reviewTrailer(text);
 	if (!tr) problems.push("적대 리뷰 결과 끝줄이 review-run: 줄이 아님");
@@ -368,24 +462,28 @@ function reviewBodyProblems(text, sha) {
 		if (hits.length === 0) { problems.push(`적대 리뷰 결과에 기준 ${id} 판정 줄이 없음("${id}: PASS" 또는 "${id}: FAIL")`); summary.push({ id, verdict: "없음" }); continue; }
 		const verdicts = hits.map((h) => h[1].toUpperCase());
 		const verdict = verdicts.includes("FAIL") ? "FAIL" : "PASS";
-		if (verdict !== "PASS") problems.push(`적대 리뷰 기준 ${id} 미통과`);
+		if (verdict !== "PASS" && !(acceptSecurity && id === "security")) problems.push(`적대 리뷰 기준 ${id} 미통과`);
 		summary.push({ id, verdict, note: (hits[0][2] || "").replace(/^[\s*|—-]+/, "").trim().slice(0, 160) });
 	}
 	// 마지막 줄을 본다. 앞 회차 요약의 "남은 지적: 0" 뒤에 새 지적이 붙어도 통과하지 않게.
 	const open = [...body.matchAll(/(?:남은\s*지적|open[_ ]findings)\s*[:：=]\s*(\d+)/gi)].pop();
 	if (!open) problems.push("적대 리뷰 결과에 \"남은 지적: <수>\" 줄이 없음");
-	else if (Number(open[1]) !== 0) problems.push(`적대 리뷰 남은 지적 ${open[1]}건`);
 	// 남은 지적은 차단 지적 수다. 참고 지적은 세지 않는다. 다만 목록에 [차단] 줄이 하나라도 있으면 남은 지적 숫자와 관계없이 미통과.
 	const blockingLines = body.split(/\r?\n/).filter((line) => /^\s*(?:\d+[.)]|[-*])\s*\**\s*\[\s*차단/.test(line) || /^\s*\|.*\[\s*차단\s*:/.test(line));
-	if (blockingLines.length) problems.push(`적대 리뷰 목록에 차단 지적 ${blockingLines.length}건`);
+	// 위험 수용 중에는 security 를 적은 차단 지적 하나만 뺀다(승인자는 값 하나를 받아들였다). 두 번째 security 지적은 새 노출로 보고 막는다.
+	// 남은 지적 수도 1 이어야 한다.
+	const securityFailed = summary.some((s) => s.id === "security" && s.verdict === "FAIL");
+	const accepted = acceptSecurity && securityFailed ? blockingLines.filter((line) => /\bsecurity\b/i.test(line)).slice(0, 1) : [];
+	if (blockingLines.length > accepted.length) problems.push(`적대 리뷰 목록에 차단 지적 ${blockingLines.length - accepted.length}건${accepted.length ? "(security 위험 수용분 제외)" : ""}`);
+	if (open && Number(open[1]) !== accepted.length) problems.push(`적대 리뷰 남은 지적 ${open[1]}건${accepted.length ? `(security 위험 수용 ${accepted.length}건만 남아야 함)` : ""}`);
 	const advisoryLines = body.split(/\r?\n/).filter((line) => /^\s*(?:\d+[.)]|[-*])\s*\**\s*\[\s*참고/.test(line));
 	const advisory = [...body.matchAll(/참고\s*지적\s*[:：=]\s*(\d+)/g)].pop();
-	const first = body.trim().split(/\r?\n/)[0] || "";
-	if (!/^판정:\s*PASS\s*$/i.test(first)) problems.push("적대 리뷰 전체 판정이 PASS 가 아님");
-	return { ok: problems.length === 0, problems, summary, openFindings: open ? Number(open[1]) : null, advisoryFindings: advisory ? Number(advisory[1]) : advisoryLines.length, body, prompt_sha256: tr?.prompt };
+	const first = body.trim().split(/\r?\n/).find((line) => !/^(?:codex|tokens used|\d[\d,]*)\s*$/i.test(line.trim())) || "";
+	if (!/^판정:\s*PASS\s*$/i.test(first) && !(accepted.length && /^판정:\s*FAIL\s*$/i.test(first))) problems.push("적대 리뷰 전체 판정이 PASS 가 아님");
+	return { ok: problems.length === 0, riskAccepted: accepted.length > 0, problems, summary, openFindings: open ? Number(open[1]) : null, advisoryFindings: advisory ? Number(advisory[1]) : advisoryLines.length, body, prompt_sha256: tr?.prompt };
 }
 
-/** 리뷰 결과의 무결성·대상·작성자 분리·아홉 기준을 모두 확인한다. 작성자별 리뷰어 구성(muse→argon 1명, 옛 author→2명)과 다르면 거절한다. */
+/** 리뷰 결과의 무결성·대상·작성자 분리·아홉 기준을 모두 확인한다. 새 모양(rotation:true)은 차례 리뷰어 1명, 옛 모양은 예전 구성(muse→argon 또는 codex 1명, sol·argon→2명)과 다르면 거절한다. */
 function reviewProblems(gatesDir, sha, root) {
 	const base = root ? path.resolve(root) : resolveRepoRoot(gatesDir);
 	const rec = readJson(path.join(gatesDir, REVIEW_FILE));
@@ -393,16 +491,20 @@ function reviewProblems(gatesDir, sha, root) {
 	const problems = [];
 	const reviewers = [];
 	const finish = () => {
-		const author = rec?.author_model || plan?.author_model;
-		if (Object.hasOwn(REVIEW_MODELS, author || "")) {
-			for (const id of reviewerIdsFor(author)) {
-				if (!reviewers.some((r) => r.id === id)) reviewers.push({ id, ...REVIEW_MODELS[id], ok: false, summary: [], openFindings: null, body: "", problems: ["리뷰어 결과 없음"] });
+		if (!isRotationRecord(rec)) {
+			const author = rec?.author_model || plan?.author_model;
+			if (AUTHOR_IDS.includes(author)) {
+				for (const id of (author === "muse" ? [] : reviewerIdsFor(author))) {
+					if (!reviewers.some((r) => r.id === id)) reviewers.push({ id, ...REVIEW_MODELS[id], ok: false, summary: [], openFindings: null, body: "", problems: ["리뷰어 결과 없음"] });
+				}
 			}
 		}
 		return { ok: problems.length === 0, problems, reviewers, summary: reviewers.flatMap((r) => r.summary.map((s) => ({ ...s, reviewer: r.id }))) };
 	};
-	if (!plan || !Object.hasOwn(REVIEW_MODELS, plan.author_model || "")) problems.push("계획서 author_model(sol|muse|argon) 필수");
-	if (plan && Object.hasOwn(plan, "risk_acceptance")) problems.push("risk_acceptance 금지: 리뷰어 조건은 위험 수용 불가");
+	if (!plan || !AUTHOR_MODELS.includes(plan.author_model)) problems.push("계획서 author_model(sol|muse|argon|codex) 필수");
+	if (plan) problems.push(...riskAcceptanceProblems(plan));
+	if (plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && !riskAcceptanceActive(plan)) problems.push("risk_acceptance 끝남(expires_at 지남)");
+	const acceptSecurity = riskAcceptanceActive(plan);
 	problems.push(...pinnedFileProblems(plan, base));
 	let promptSha = null;
 	try { if (plan) promptSha = sha256(reviewPrompt(plan, sha, base)); } catch { problems.push("현재 요청문을 다시 만들지 못함"); }
@@ -411,15 +513,48 @@ function reviewProblems(gatesDir, sha, root) {
 	try {
 		if (!plan || planSha(path.join(gatesDir, PLAN_FILE)) !== sha) problems.push("현재 계획서 sha256 이 검증 대상과 다름");
 	} catch { problems.push("현재 계획서를 읽지 못함"); }
-	if (!Object.hasOwn(REVIEW_MODELS, rec.author_model || "")) problems.push("적대 리뷰 작성자 author_model 없음 또는 잘못됨");
+	if (!AUTHOR_MODELS.includes(rec.author_model)) problems.push("적대 리뷰 작성자 author_model 없음 또는 잘못됨");
 	if (!plan || plan.author_model !== rec.author_model) problems.push("계획서 author_model 과 적대 리뷰 작성자가 다름");
-	if (rec.author_model === "muse") {
-		if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 1) problems.push("Muse 작성 계획서는 Argon 리뷰어 1명의 기록이 필요함(옛 2인·단일 기록은 재리뷰 필요)");
+	if (!isRotationRecord(rec)) {
+		const cutoff = Date.parse(LEGACY_REVIEW_CUTOFF);
+		const times = [rec.reviewedAt, ...(Array.isArray(rec.reviewers) ? rec.reviewers.map((r) => r?.receipt?.started_at) : [])].map(isoMs);
+		if (!times.every((t) => Number.isFinite(t) && t < cutoff)) problems.push(`옛 모양 리뷰 기록(rotation 칸 없음)은 ${LEGACY_REVIEW_CUTOFF} 앞선 것만 받음(reviewedAt·영수증 시작 시각). 차례 리뷰로 다시 받을 것`);
+	}
+	if (isRotationRecord(rec)) {
+		if (!ROTATION.includes(rec.author_model)) problems.push("차례 기록(rotation:true)의 작성자는 argon·codex·muse 중 하나여야 함");
+		if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 1) problems.push("차례 기록(rotation:true)은 리뷰어 1명의 기록이 필요함");
+		// 차례 대조: 리뷰 시각의 차례(고정 설정 포함)에서 skipped 는 앞에서부터 건너뛴 후보 그대로, 실제 리뷰어는 그 다음 후보여야 한다. 한도 실패 없이 뒤 후보를 쓰거나 모순된 skipped 는 막는다.
+		// 차례를 다시 만들 시각(reviewedAt)은 실제 리뷰 시작보다 늦을 수 없고, 90분보다 앞설 수 없다(첫 후보 45분 제한 + 준비 여유). 시각을 미래로 옮겨 고정 리뷰어를 피하는 길을 막는다.
+		const reviewedAtMs = isoMs(rec.reviewedAt);
+		const firstStartMs = Date.parse(rec.reviewers?.[0]?.receipt?.started_at);
+		let order = null;
+		if (!Number.isFinite(reviewedAtMs)) problems.push("차례 기록의 reviewedAt(UTC ISO 시각)이 없거나 틀림");
+		else if (!Number.isFinite(firstStartMs) || reviewedAtMs > firstStartMs || firstStartMs - reviewedAtMs > 90 * 60 * 1000) problems.push("차례 기록의 reviewedAt 이 리뷰어 영수증 시작 시각과 맞지 않음(시작 전 90분 안이어야 함)");
+		else try { order = ROTATION.includes(rec.author_model) ? orderedReviewers(rec.author_model, base, reviewedAtMs) : null; }
+		catch (error) { problems.push(`차례 기록의 리뷰 차례를 다시 만들지 못함: ${error.message}`); }
+		if (!Array.isArray(rec.skipped)) problems.push("차례 기록의 skipped 는 배열이어야 함");
+		else {
+			if (rec.skipped.length > 1) problems.push("차례 기록의 skipped 는 최대 1개여야 함");
+			for (const [i, s] of rec.skipped.entries()) {
+				if (!s || typeof s !== "object") { problems.push(`차례 기록의 skipped[${i}] 모양이 틀림`); continue; }
+				if (!ROTATION.includes(s.id)) problems.push(`차례 기록의 skipped[${i}] id 는 차례 셋 안이어야 함`);
+				if (s.id === rec.author_model) problems.push(`차례 기록의 skipped[${i}] 가 작성자와 같음`);
+				if (s.reason !== "limit") problems.push(`차례 기록의 skipped[${i}] reason 은 "limit" 이어야 함`);
+				if (!Number.isInteger(s.exit_code) || s.exit_code === 0) problems.push(`차례 기록의 skipped[${i}] exit_code 는 0이 아닌 정수여야 함`);
+				if (order && s.id !== order[i]) problems.push(`차례 기록의 skipped[${i}] 가 차례(${order[i]})와 다름`);
+			}
+			const reviewer = Array.isArray(rec.reviewers) && rec.reviewers.length === 1 ? Object.keys(REVIEW_MODELS).find((k) => REVIEW_MODELS[k].model === rec.reviewers[0]?.model) : undefined;
+			if (order && reviewer !== undefined && reviewer !== order[rec.skipped.length]) problems.push(`차례 기록의 리뷰어가 차례(${order[rec.skipped.length] ?? "없음"})와 다름`);
+		}
+	} else if (rec.author_model === "codex") {
+		problems.push("codex 작성 계획서는 차례 기록(rotation:true)이 필요함(옛 단일·2인 기록은 재리뷰 필요)");
+	} else if (rec.author_model === "muse") {
+		if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 1) problems.push("Muse 작성 계획서는 리뷰어 1명의 기록이 필요함(옛 2인·단일 기록은 재리뷰 필요)");
 	} else if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 2) problems.push("서로 다른 리뷰어 두 명의 기록이 필요함(옛 단일 리뷰 기록 미통과)");
 	if (!promptSha || rec.prompt_sha256 !== promptSha) problems.push("기록 prompt_sha256 이 현재 요청문과 다름");
 	const entries = Array.isArray(rec.reviewers) ? rec.reviewers : [];
 	if (entries.length === 2 && entries[0]?.result === entries[1]?.result) problems.push("리뷰어 결과 파일이 서로 같음");
-	const expected = reviewerIdsFor(rec.author_model);
+	const expected = (isRotationRecord(rec) || rec.author_model === "muse" || rec.author_model === "codex") ? [] : reviewerIdsFor(rec.author_model);
 	for (const id of expected) {
 		const config = REVIEW_MODELS[id];
 		const matches = entries.filter((r) => r && r.model === config.model);
@@ -430,7 +565,10 @@ function reviewProblems(gatesDir, sha, root) {
 	for (const [i, r] of entries.entries()) {
 		const id = Object.keys(REVIEW_MODELS).find((k) => REVIEW_MODELS[k].model === r?.model) || `unknown-${i}`;
 		const own = [];
+		if (r?.id !== undefined && r.id !== id) own.push("리뷰어 id 와 모델이 다름");
 		if (!REVIEW_MODELS[id]) own.push("허용되지 않은 모델");
+		else if (isRotationRecord(rec) && !ROTATION.includes(id)) own.push("허용되지 않은 모델");
+		else if (!isRotationRecord(rec) && rec.author_model === "muse" && !["argon", "codex"].includes(id)) own.push("허용되지 않은 모델");
 		else if (r.effort !== REVIEW_MODELS[id].effort) own.push("리뷰어 추론 강도가 다름");
 		if (id === rec.author_model || id === plan?.author_model) own.push("작성자와 같은 모델이 리뷰함");
 		if (entries.filter((x) => x?.model === r?.model).length !== 1) own.push("리뷰어 모델 기록 중복");
@@ -451,7 +589,7 @@ function reviewProblems(gatesDir, sha, root) {
 		if (text === null) own.push("적대 리뷰 결과 파일을 읽지 못함");
 		else {
 			if (r.result_sha256 !== sha256(Buffer.from(text, "utf8"))) own.push("적대 리뷰 결과 파일의 sha256 이 기록과 다름");
-			parsed = reviewBodyProblems(text, sha);
+			parsed = reviewBodyProblems(text, sha, acceptSecurity);
 			own.push(...parsed.problems);
 			if (!parsed.prompt_sha256 || parsed.prompt_sha256 !== rec.prompt_sha256 || parsed.prompt_sha256 !== promptSha) own.push("결과 prompt_sha256 이 기록 또는 현재 요청문과 다름");
 			const receipt = r.receipt;
@@ -1128,5 +1266,5 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, reviewProblems, reviewerIdsFor, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
+	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };
