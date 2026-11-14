@@ -561,6 +561,9 @@ function commandBinding(command, candidate, services, cwd) {
 	return { ok: true, fact: "배포 스크립트 저장소 HEAD 가 후보와 같고 커밋 안 된 변경이 없음" };
 }
 
+// 계획 고정 대본 호출(`[sudo …]bash /<대본> …`). 대본 본문은 분류기가 다 읽을 수 없으므로 ops 로 받지 않는다(적대 리뷰 B1).
+const PINNED_SCRIPT_HEAD = /^(?:sudo\s+(?:\S+\s+)*?)?bash\s+\//;
+
 /**
  * 계획서 단계·명령·고정 파일·인스턴스 확장(config/deploy-gate.json + 선택 plugin)의 결합을 검증한다.
  */
@@ -686,6 +689,9 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	}
 	if (rules.every((r) => r.allowCustomCommands === true)) {
 		return yes(`config/deploy-gate.json allowCustomCommands 결합 확인 (${services.join(", ")})`, kind === "ops");
+	}
+	if (kind === "ops" && PINNED_SCRIPT_HEAD.test(command)) {
+		return no("계획 고정 대본은 ops 로 받지 않음: 대본 본문이 판을 바꾸는지 관문이 판정할 수 없음. ops 준비 기록(deploy.json) 없이 계획 승인(PLAN·STEP 승인)으로 실행할 것");
 	}
 	return no("지원하지 않는 실행 형식: 명령에 후보가 있다는 문자열 포함 검사로 대체하지 않음");
 }
