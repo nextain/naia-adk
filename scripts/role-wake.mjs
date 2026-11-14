@@ -60,7 +60,12 @@ export function loadRegistry(file) {
     archiveDir: inRoot(doc.retention?.archive_dir ?? `${doc.wake_root}-archive`, 'retention.archive_dir'),
   };
   if (retention.archiveDir === wakeRoot || retention.archiveDir.startsWith(wakeRoot + path.sep)) fail('retention.archive_dir must be outside wake_root');
-  const roleViews = (doc.role_views ?? []).map(view => VIEW_KINDS.has(view?.kind) && typeof view.path === 'string' && path.isAbsolute(view.path) ? { kind: view.kind, path: view.path } : fail('invalid role_views entry'));
+  if (doc.role_views !== undefined && !Array.isArray(doc.role_views)) fail('role_views must be an array');
+  const roleViews = (doc.role_views ?? []).map(view => {
+    if (!isObject(view) || !VIEW_KINDS.has(view.kind) || typeof view.path !== 'string' || !path.isAbsolute(view.path)) fail('invalid role_views entry');
+    if (view.roles !== undefined && (!Array.isArray(view.roles) || !view.roles.length || view.roles.some(id => typeof id !== 'string' || !id.trim()))) fail('role_views roles must be a non-empty string array');
+    return { kind: view.kind, path: view.path, roles: view.roles === undefined ? null : [...new Set(view.roles)] };
+  });
   if (!isObject(doc.roles) || !Object.keys(doc.roles).length) fail('roles must be a non-empty object');
   const bots = new Set(), dirs = new Set(), panes = new Set();
   const roles = Object.entries(doc.roles).map(([id, role]) => {
@@ -395,6 +400,10 @@ export function compareViews(registry) {
   const findings = [];
   const byId = new Map(registry.roles.map(role => [role.id, role]));
   for (const view of registry.roleViews) {
+    const scoped = view.roles ? [...new Set(view.roles)] : null;
+    for (const id of scoped ?? []) {
+      if (!byId.has(id)) findings.push({ level: 'error', code: 'role-view-drift', role: id, detail: `${view.kind} ${view.path}: role in role_views is not in the registry` });
+    }
     let rows;
     try { rows = VIEW_READERS[view.kind](readJson(view.path)); } catch (error) {
       findings.push({ level: 'error', code: 'role-view-missing', role: null, detail: `${view.kind} ${view.path}: ${error.code === 'ENOENT' ? 'file not found' : 'unreadable'}` });
@@ -415,7 +424,9 @@ export function compareViews(registry) {
       if (row.dmUsers !== undefined && role.dmUsers.some(user => !row.dmUsers.includes(user))) diffs.push('dm_users');
       if (diffs.length) findings.push({ level: 'error', code: 'role-view-drift', role: row.id, detail: `${view.kind} ${view.path}: ${diffs.join(', ')} differ` });
     }
-    for (const id of byId.keys()) if (!seen.has(id)) findings.push({ level: 'error', code: 'role-view-drift', role: id, detail: `${view.kind} ${view.path}: role is missing` });
+    for (const id of scoped ?? byId.keys()) {
+      if (byId.has(id) && !seen.has(id)) findings.push({ level: 'error', code: 'role-view-drift', role: id, detail: `${view.kind} ${view.path}: role is missing` });
+    }
   }
   return findings;
 }

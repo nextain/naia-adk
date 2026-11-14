@@ -25,7 +25,7 @@
   },
   "role_views": [
     { "kind": "wake-routes", "path": "/<live-workspace>/docs/common/team/wake-routes.json" },
-    { "kind": "session-health", "path": "/<private>/session-health.json" }
+    { "kind": "session-health", "path": "/<private>/session-health.json", "roles": ["role-a"] }
   ],
   "roles": {
     "role-a": {
