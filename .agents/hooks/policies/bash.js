@@ -369,7 +369,8 @@ async function deploy(command, data, opts) {
 	const root = (opts && opts.rootDir) ? path.resolve(opts.rootDir) : findApprovalGateRoot(cwd, DEPLOY_DIR);
 	const config = loadJSON(CONFIG_PATH, { projects: {} });
 	const stripped = core.stripQuotesUnwrap(command);
-	if (/^\s*(echo|printf)\s/.test(stripped) && !stripped.includes("|") && !/[;&\n]/.test(stripped)) return null;
+	// Output commands can write registered service files through redirection.
+	// Let the classifier inspect destinations before deciding they are harmless.
 
 	const hooksLibDir = path.resolve(__dirname, "..", "..", "..", ".claude", "hooks", "lib");
 	const { shellClauses } = require(path.join(hooksLibDir, "git-command-parser.js"));

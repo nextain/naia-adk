@@ -422,6 +422,7 @@
 - 1. Report to user: 'Found potential design issue at [file:line]: [description]'
 - 2. Propose: 'Options: A) fix typo/grammar (allowed), B) this is a design decision I should not change — your call'
 - 3. Do not make the change until user confirms it's (A)
+- **existing_first**: Existing-first: unless the work is new development, analyze the existing implementation before changing it. When something that used to work breaks, keep this order: (1) quarantine or disable unexplained patches and return to the last working state only through a reversible, policy-compliant path (verify the exact target first; destructive or irreversible removal still needs explicit confirmation), (2) find the cause with evidence: last-good time, first-broken time, and what changed in between (code, config, data, deploy), (3) isolate and reproduce the cause, (4) fix only the cause and prove it with the same reproduction.
 
 ### completeness_principle
 

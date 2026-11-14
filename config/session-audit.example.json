@@ -1,0 +1,15 @@
+{
+  "stateFile": "/<audit-private>/state.json",
+  "reportFile": "/<audit-private>/report.md",
+  "workspace": "/<audit-workspace>",
+  "schedule": { "file": "/<audit-private>/regular-schedule.yaml", "id": "session-audit" },
+  "timezone": "UTC",
+  "night": { "start": 0, "end": 9 },
+  "dailyCap": 6,
+  "thresholds": { "reviewCap": 6, "reviewBurst": 4, "priorityIdleHours": 3, "busyPerHour": 60, "wakeCount": 50, "wakeHours": 2, "respondMinutes": 60, "cycleMinutes": 30, "blindInputs": 2 },
+  "judge": { "runner": "none" },
+  "sender": { "tokenEnv": "<TOKEN_ENVIRONMENT_VARIABLE>" },
+  "ownerId": "<owner-id>",
+  "channels": { "internal": "<internal-channel-id>", "day": "<day-channel-id>", "night": "<night-channel-id>" },
+  "roles": [{ "id": "<role>", "botIds": ["<bot-id>"], "leaderId": "<leader-id>", "wakeDir": "/<audit-private>/wake", "sessionDirs": ["/<audited-session-directory>"] }]
+}
