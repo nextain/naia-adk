@@ -34,6 +34,8 @@ const runs=[
   ["BEH adapter",[".claude/hooks/test/run-beh-adapter-test.js"]],
   ["BEH supervise wrapper",[".claude/hooks/test/run-beh-supervise-wrapper-test.js"]],
   ["BEH watchdog",[".claude/hooks/beh-watchdog.js","--selftest"]],
+  ["GCS guard",[".claude/hooks/test/run-gcs-guard-test.js"]],
+  ["GCS fixture check",["scripts/test-gcs-fixture-check.cjs"]],
   ["request contract",["scripts/run-request-contract-tests.cjs"]]
 ];
 
@@ -50,10 +52,10 @@ for(const [label,args] of runs){
   process.stdout.write(`${label}: PASS\n`);
 }
 
-const privateGcsFixture=path.join(root,".claude","hooks","test","gcs-guard.fixtures.json");
-if(fs.existsSync(privateGcsFixture))throw new Error("public naia-adk must not contain a private GCS bucket fixture");
-process.stdout.write("GCS guard: NOT_APPLICABLE (public base has no private bucket config or fixture; downstream must add its own native gate)\n");
+// 공개 시험 자료는 예시 버킷 이름만 쓴다(#99). 실버킷명이 섞이면 실패.
+const privateBuckets=require("./gcs-fixture-check.cjs").findPrivateBuckets(JSON.parse(fs.readFileSync(path.join(root,".claude","hooks","test","gcs-guard.fixtures.json"),"utf8")));
+if(privateBuckets.length)throw new Error(`public naia-adk GCS fixture must use example bucket names only: ${privateBuckets.join(", ")}`);
 
 const entrypointPointers=["CLAUDE.md","GEMINI.md"].map(file=>fs.readFileSync(path.join(root,file),"utf8"));
 if(!entrypointPointers.every(text=>text==="@AGENTS.md\n"))throw new Error("native entry-point pointer check failed: CLAUDE.md and GEMINI.md must be the one-line import @AGENTS.md");
-process.stdout.write(`native harness: PASS (${runs.length} native Node entrypoints, 1 explicit downstream-only skip; Node ${process.version}; platform ${process.platform}; direct entrypoints are shell-free; the Windows BEH test separately pins native CPython and rejects command-wrapper redirection; this is not an OS-wide process audit)\n`);
+process.stdout.write(`native harness: PASS (${runs.length} native Node entrypoints, Node ${process.version}; platform ${process.platform}; direct entrypoints are shell-free; the Windows BEH test separately pins native CPython and rejects command-wrapper redirection; this is not an OS-wide process audit)\n`);

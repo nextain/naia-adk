@@ -1,0 +1,48 @@
+{
+ "doc": "role-a now-doc (synthetic)",
+ "rule": "1순위 절 = \"## 지금 하는 일\" 바로 아래 첫 ### 소절",
+ "versions": [
+  {
+   "commit": "n0rmal00",
+   "committed_at": "2026-11-13T00:30:00Z",
+   "effective": "in_period",
+   "top_section_heading": "1순위 — 업스트림 ADK 감사 장치·하네스북 반영",
+   "item_names": [
+    "수집기 W1 시험 통과 확인",
+    "하네스북 상한 절 반영",
+    "리뷰 상한 2회 지킴 점검"
+   ],
+   "explicit_priority_lines": [
+    "1순위 — 업스트림 ADK 감사 장치·하네스북 반영"
+   ]
+  },
+  {
+   "commit": "n0rmal01",
+   "committed_at": "2026-11-13T08:30:00Z",
+   "effective": "in_period",
+   "top_section_heading": "1순위 — 업스트림 ADK 감사 장치·하네스북 반영",
+   "item_names": [
+    "수집기 W1 시험 통과 확인",
+    "하네스북 상한 절 반영",
+    "리뷰 상한 2회 지킴 점검"
+   ],
+   "explicit_priority_lines": [
+    "1순위 — 업스트림 ADK 감사 장치·하네스북 반영"
+   ]
+  },
+  {
+   "commit": "n0rmal02",
+   "committed_at": "2026-11-13T16:30:00Z",
+   "effective": "in_period",
+   "top_section_heading": "1순위 — 업스트림 ADK 감사 장치·하네스북 반영",
+   "item_names": [
+    "수집기 W1 시험 통과 확인",
+    "하네스북 상한 절 반영",
+    "리뷰 상한 2회 지킴 점검"
+   ],
+   "explicit_priority_lines": [
+    "1순위 — 업스트림 ADK 감사 장치·하네스북 반영"
+   ]
+  }
+ ]
+}

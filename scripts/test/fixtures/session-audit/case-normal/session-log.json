@@ -1,0 +1,492 @@
+{
+ "period": {
+  "from": "2026-11-13T00:00:00Z",
+  "to": "2026-11-13T20:00:00Z"
+ },
+ "adapter_note": "합성 정규화 세션 기록(정상 하루). 본문 없음.",
+ "hourly_tool_calls": [
+  {
+   "hour": "2026-11-13T00",
+   "total": 56,
+   "by_tool": {
+    "Bash": 47,
+    "Edit": 0,
+    "Read": 8,
+    "Write": 1
+   }
+  },
+  {
+   "hour": "2026-11-13T01",
+   "total": 40,
+   "by_tool": {
+    "Bash": 26,
+    "Edit": 3,
+    "Read": 11,
+    "Write": 0
+   }
+  },
+  {
+   "hour": "2026-11-13T02",
+   "total": 50,
+   "by_tool": {
+    "Bash": 41,
+    "Edit": 0,
+    "Read": 9,
+    "Write": 0
+   }
+  },
+  {
+   "hour": "2026-11-13T03",
+   "total": 47,
+   "by_tool": {
+    "Bash": 31,
+    "Edit": 4,
+    "Read": 12,
+    "Write": 0
+   }
+  },
+  {
+   "hour": "2026-11-13T04",
+   "total": 76,
+   "by_tool": {
+    "Bash": 64,
+    "Edit": 0,
+    "Read": 10,
+    "Write": 2
+   }
+  },
+  {
+   "hour": "2026-11-13T05",
+   "total": 44,
+   "by_tool": {
+    "Bash": 26,
+    "Edit": 5,
+    "Read": 11,
+    "Write": 2
+   }
+  },
+  {
+   "hour": "2026-11-13T06",
+   "total": 92,
+   "by_tool": {
+    "Bash": 80,
+    "Edit": 2,
+    "Read": 10,
+    "Write": 0
+   }
+  },
+  {
+   "hour": "2026-11-13T07",
+   "total": 84,
+   "by_tool": {
+    "Bash": 75,
+    "Edit": 2,
+    "Read": 5,
+    "Write": 2
+   }
+  },
+  {
+   "hour": "2026-11-13T08",
+   "total": 60,
+   "by_tool": {
+    "Bash": 46,
+    "Edit": 6,
+    "Read": 8,
+    "Write": 0
+   }
+  },
+  {
+   "hour": "2026-11-13T09",
+   "total": 102,
+   "by_tool": {
+    "Bash": 86,
+    "Edit": 6,
+    "Read": 7,
+    "Write": 3
+   }
+  },
+  {
+   "hour": "2026-11-13T10",
+   "total": 84,
+   "by_tool": {
+    "Bash": 75,
+    "Edit": 2,
+    "Read": 3,
+    "Write": 4
+   }
+  },
+  {
+   "hour": "2026-11-13T11",
+   "total": 97,
+   "by_tool": {
+    "Bash": 81,
+    "Edit": 5,
+    "Read": 8,
+    "Write": 3
+   }
+  },
+  {
+   "hour": "2026-11-13T12",
+   "total": 93,
+   "by_tool": {
+    "Bash": 84,
+    "Edit": 0,
+    "Read": 7,
+    "Write": 2
+   }
+  },
+  {
+   "hour": "2026-11-13T13",
+   "total": 43,
+   "by_tool": {
+    "Bash": 28,
+    "Edit": 0,
+    "Read": 14,
+    "Write": 1
+   }
+  },
+  {
+   "hour": "2026-11-13T14",
+   "total": 55,
+   "by_tool": {
+    "Bash": 45,
+    "Edit": 5,
+    "Read": 4,
+    "Write": 1
+   }
+  },
+  {
+   "hour": "2026-11-13T15",
+   "total": 99,
+   "by_tool": {
+    "Bash": 85,
+    "Edit": 2,
+    "Read": 11,
+    "Write": 1
+   }
+  },
+  {
+   "hour": "2026-11-13T16",
+   "total": 70,
+   "by_tool": {
+    "Bash": 52,
+    "Edit": 3,
+    "Read": 13,
+    "Write": 2
+   }
+  },
+  {
+   "hour": "2026-11-13T17",
+   "total": 67,
+   "by_tool": {
+    "Bash": 55,
+    "Edit": 1,
+    "Read": 8,
+    "Write": 3
+   }
+  },
+  {
+   "hour": "2026-11-13T18",
+   "total": 61,
+   "by_tool": {
+    "Bash": 36,
+    "Edit": 6,
+    "Read": 15,
+    "Write": 4
+   }
+  },
+  {
+   "hour": "2026-11-13T19",
+   "total": 53,
+   "by_tool": {
+    "Bash": 36,
+    "Edit": 4,
+    "Read": 12,
+    "Write": 1
+   }
+  }
+ ],
+ "tool_calls_total": 1373,
+ "compacts": [
+  "2026-11-13T06:02:11Z",
+  "2026-11-13T14:40:03Z"
+ ],
+ "text_markers": [
+  {
+   "at": "2026-11-13T02:09:50Z",
+   "marker": "round"
+  }
+ ],
+ "edits": [
+  {
+   "at": "2026-11-13T00:30:05Z",
+   "tool": "Edit",
+   "tags": [
+    "todo-doc"
+   ],
+   "file": "now-doc.md"
+  },
+  {
+   "at": "2026-11-13T01:17:45Z",
+   "tool": "Edit",
+   "tags": [
+    "priority"
+   ],
+   "file": "harness-book-cap-section.md"
+  },
+  {
+   "at": "2026-11-13T03:26:27Z",
+   "tool": "Edit",
+   "tags": [
+    "priority"
+   ],
+   "file": "harness-book-cap-section.md"
+  },
+  {
+   "at": "2026-11-13T05:29:47Z",
+   "tool": "Edit",
+   "tags": [
+    "priority"
+   ],
+   "file": "harness-book-cap-section.md"
+  },
+  {
+   "at": "2026-11-13T07:12:51Z",
+   "tool": "Edit",
+   "tags": [
+    "priority"
+   ],
+   "file": "harness-book-cap-section.md"
+  },
+  {
+   "at": "2026-11-13T08:30:05Z",
+   "tool": "Edit",
+   "tags": [
+    "todo-doc"
+   ],
+   "file": "now-doc.md"
+  },
+  {
+   "at": "2026-11-13T09:14:54Z",
+   "tool": "Edit",
+   "tags": [
+    "priority"
+   ],
+   "file": "harness-book-cap-section.md"
+  },
+  {
+   "at": "2026-11-13T11:10:50Z",
+   "tool": "Edit",
+   "tags": [
+    "priority"
+   ],
+   "file": "harness-book-cap-section.md"
+  },
+  {
+   "at": "2026-11-13T13:29:35Z",
+   "tool": "Edit",
+   "tags": [
+    "priority"
+   ],
+   "file": "harness-book-cap-section.md"
+  },
+  {
+   "at": "2026-11-13T15:30:38Z",
+   "tool": "Edit",
+   "tags": [
+    "priority"
+   ],
+   "file": "harness-book-cap-section.md"
+  },
+  {
+   "at": "2026-11-13T16:30:05Z",
+   "tool": "Edit",
+   "tags": [
+    "todo-doc"
+   ],
+   "file": "now-doc.md"
+  },
+  {
+   "at": "2026-11-13T17:10:53Z",
+   "tool": "Edit",
+   "tags": [
+    "priority"
+   ],
+   "file": "harness-book-cap-section.md"
+  },
+  {
+   "at": "2026-11-13T19:15:56Z",
+   "tool": "Edit",
+   "tags": [
+    "priority"
+   ],
+   "file": "harness-book-cap-section.md"
+  }
+ ],
+ "plan_review_calls": [
+  {
+   "at": "2026-11-13T01:00:12Z",
+   "plan": "plan-01"
+  },
+  {
+   "at": "2026-11-13T02:10:05Z",
+   "plan": "plan-01"
+  },
+  {
+   "at": "2026-11-13T05:00:40Z",
+   "plan": "plan-02"
+  },
+  {
+   "at": "2026-11-13T09:00:03Z",
+   "plan": "plan-03"
+  },
+  {
+   "at": "2026-11-13T10:30:22Z",
+   "plan": "plan-03"
+  }
+ ],
+ "user_inputs": [
+  {
+   "at": "2026-11-13T01:00:00Z",
+   "kind": "human-text",
+   "len": 40
+  },
+  {
+   "at": "2026-11-13T09:30:00Z",
+   "kind": "human-text",
+   "len": 25
+  },
+  {
+   "at": "2026-11-13T04:00:00Z",
+   "kind": "scripted-template",
+   "len": 360
+  }
+ ],
+ "derived": {
+  "edit_tag_counts": {
+   "priority": 10,
+   "todo-doc": 3
+  },
+  "priority_edit_gaps_strict": [
+   {
+    "from": "2026-11-13T00:00:00Z",
+    "to": "2026-11-13T01:17:45Z",
+    "hours": 1.3
+   },
+   {
+    "from": "2026-11-13T01:17:45Z",
+    "to": "2026-11-13T03:26:27Z",
+    "hours": 2.15
+   },
+   {
+    "from": "2026-11-13T03:26:27Z",
+    "to": "2026-11-13T05:29:47Z",
+    "hours": 2.06
+   },
+   {
+    "from": "2026-11-13T05:29:47Z",
+    "to": "2026-11-13T07:12:51Z",
+    "hours": 1.72
+   },
+   {
+    "from": "2026-11-13T07:12:51Z",
+    "to": "2026-11-13T09:14:54Z",
+    "hours": 2.03
+   },
+   {
+    "from": "2026-11-13T09:14:54Z",
+    "to": "2026-11-13T11:10:50Z",
+    "hours": 1.93
+   },
+   {
+    "from": "2026-11-13T11:10:50Z",
+    "to": "2026-11-13T13:29:35Z",
+    "hours": 2.31
+   },
+   {
+    "from": "2026-11-13T13:29:35Z",
+    "to": "2026-11-13T15:30:38Z",
+    "hours": 2.02
+   },
+   {
+    "from": "2026-11-13T15:30:38Z",
+    "to": "2026-11-13T17:10:53Z",
+    "hours": 1.67
+   },
+   {
+    "from": "2026-11-13T17:10:53Z",
+    "to": "2026-11-13T19:15:56Z",
+    "hours": 2.08
+   },
+   {
+    "from": "2026-11-13T19:15:56Z",
+    "to": "2026-11-13T20:00:00Z",
+    "hours": 0.73
+   }
+  ],
+  "priority_edit_gaps_with_role_docs": [
+   {
+    "from": "2026-11-13T00:00:00Z",
+    "to": "2026-11-13T01:17:45Z",
+    "hours": 1.3
+   },
+   {
+    "from": "2026-11-13T01:17:45Z",
+    "to": "2026-11-13T03:26:27Z",
+    "hours": 2.15
+   },
+   {
+    "from": "2026-11-13T03:26:27Z",
+    "to": "2026-11-13T05:29:47Z",
+    "hours": 2.06
+   },
+   {
+    "from": "2026-11-13T05:29:47Z",
+    "to": "2026-11-13T07:12:51Z",
+    "hours": 1.72
+   },
+   {
+    "from": "2026-11-13T07:12:51Z",
+    "to": "2026-11-13T09:14:54Z",
+    "hours": 2.03
+   },
+   {
+    "from": "2026-11-13T09:14:54Z",
+    "to": "2026-11-13T11:10:50Z",
+    "hours": 1.93
+   },
+   {
+    "from": "2026-11-13T11:10:50Z",
+    "to": "2026-11-13T13:29:35Z",
+    "hours": 2.31
+   },
+   {
+    "from": "2026-11-13T13:29:35Z",
+    "to": "2026-11-13T15:30:38Z",
+    "hours": 2.02
+   },
+   {
+    "from": "2026-11-13T15:30:38Z",
+    "to": "2026-11-13T17:10:53Z",
+    "hours": 1.67
+   },
+   {
+    "from": "2026-11-13T17:10:53Z",
+    "to": "2026-11-13T19:15:56Z",
+    "hours": 2.08
+   },
+   {
+    "from": "2026-11-13T19:15:56Z",
+    "to": "2026-11-13T20:00:00Z",
+    "hours": 0.73
+   }
+  ],
+  "gate_edit_count": 0,
+  "deploy_readiness_edit_count": 0,
+  "plan_review_call_count": 5,
+  "user_input_kinds": {
+   "human-text": 2,
+   "scripted-template": 1
+  }
+ }
+}
