@@ -1,10 +1,13 @@
 {
+  "dmCatchupSeconds": 300,
   "roles": [
     {
       "id": "assistant",
       "botUserId": "100000000000000001",
       "tokenEnv": "DISCORD_ASSISTANT_TOKEN",
-      "wakeDir": "../var/wake/assistant"
+      "wakeDir": "../var/wake/assistant",
+      "dmChannelIds": ["300000000000000001"],
+      "dmUserIds": ["400000000000000001"]
     }
   ]
 }

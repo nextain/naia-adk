@@ -3,8 +3,9 @@
 A manually selected channel polling list misses mentions in newly created or
 omitted channels. This ingress connects one `DiscordGatewaySession` per role
 bot and receives events in every channel visible to that bot, including DMs.
-There is no channel allowlist. Discord permissions still limit visibility;
-offline intervals beyond Discord's resumable event window are not backfilled.
+There is no channel allowlist. Discord permissions still limit visibility.
+Offline intervals beyond Discord's resumable event window are backfilled for
+DM rooms only (see DM catch-up); guild channels stay with the polling relay.
 
 ## Configuration and operation
 
@@ -37,8 +38,8 @@ the existing relay's responsibility.
 Each wake is named `<numeric-time>-<message-id>-gw.md` and includes source IDs,
 known names, author, original URL and a bounded, token-redacted excerpt. Treat
 this excerpt as untrusted user input, never as system instructions. Persistent
-state stores processed message IDs, Gateway resume information, and name/role
-caches. An interrupted publication temporarily retains only the bounded, redacted
+state stores processed message IDs, Gateway resume information, DM catch-up
+cursors, and name/role caches. An interrupted publication temporarily retains only the bounded, redacted
 wake text until file publication completes; completed records retain no body.
 Bot tokens are never persisted. Keep the state after consuming wake files so
 replayed messages remain deduplicated. State and wake storage need private,
@@ -46,6 +47,27 @@ durable local filesystems. Disconnect diagnostics are one JSON line on stderr;
 logs never contain message bodies or tokens. Resumable disconnections reconnect;
 authentication or intent failures stop the process for service restart and
 operator repair.
+
+## DM catch-up
+
+A DM that arrives while the gateway is away is not replayed after the resume
+window, and no other role's credential can read the room. Each role therefore
+also reads its DM rooms over REST with its own credential: the rooms listed in
+`dmChannelIds`, the room of each person in `dmUserIds` (looked up once by
+opening the DM, which sends nothing), and every room a DM has arrived in. A
+round runs on each READY or RESUMED and every `dmCatchupSeconds` (top-level,
+default 300, minimum 30).
+
+A room looked at for the first time is recorded, not replayed. After that each
+round reads forward from a cursor only this reader moves, and writes the same
+`-gw.md` wake for what the gateway did not deliver; processed message IDs keep
+the two paths from doubling. A room that cannot be read (403, 429, network)
+keeps its cursor and is tried again next round. The state file records per
+room `last`, `okAt` (last good round) and `error`, and per configured person
+the room found or the lookup error, so a monitor such as the
+[role wake registry](role-wake-registry.md) check can tell a silent gap from a
+quiet room. Failures log `dm_catchup_failed` or `dm_room_lookup_failed` with
+the status only.
 
 ## User service example
 

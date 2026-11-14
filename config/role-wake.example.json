@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "root": "/<live-workspace>",
+  "wake_root": ".agents/work/l4/wake",
+  "state_dir": "/<private>/role-wake",
+  "retired_roots": ["/<old-workspace-copy>"],
+  "unit_dirs": ["/<home>/.config/systemd/user"],
+  "pane": { "kind": "herdr", "bin": "/<home>/.local/bin/herdr" },
+  "delivery": {
+    "command": ["/<private>/role-wake.sh", "{role}", "{file}"],
+    "heartbeat_max_age_seconds": 300,
+    "lag_seconds": 600,
+    "max_per_run": 50,
+    "retry_max_seconds": 300
+  },
+  "dm_backup": { "max_age_seconds": 900 },
+  "retention": {
+    "delivered_days": 3,
+    "max_box_files": 500,
+    "archive_dir": ".agents/work/l4/wake-archive"
+  },
+  "notify": {
+    "command": ["/<private>/notify.sh", "{text}"],
+    "repeat_seconds": 3600
+  },
+  "role_views": [
+    { "kind": "wake-routes", "path": "/<live-workspace>/docs/common/team/wake-routes.json" },
+    { "kind": "session-health", "path": "/<private>/session-health.json" }
+  ],
+  "roles": {
+    "role-a": {
+      "names": ["Role A"],
+      "bot_id": "100000000000000001",
+      "user": "<os-user>",
+      "find": { "type": "cwd", "cwd": "/<home>/role-a", "pane_id": "w1:p1" },
+      "tool": "claude",
+      "restart_cmd": "cd /<home>/role-a && claude --resume {resume}",
+      "wake_subdir": "",
+      "dm_channels": ["300000000000000001"],
+      "wait": { "script": "/<private>/role-a/wait.sh", "mode": "nudge" }
+    },
+    "role-b": {
+      "names": ["Role B"],
+      "bot_id": "100000000000000002",
+      "user": "<os-user>",
+      "find": { "type": "cwd", "cwd": "/<home>/role-b", "pane_id": "w1:p2" },
+      "tool": "agy",
+      "tools": ["agy", "muse"],
+      "restart_cmd": "bash /<private>/role-start.sh role-b",
+      "wake_subdir": "role-b",
+      "extra_boxes": [{ "path": "/<other-owner-workspace>/.agents/work/l4/wake/role-b", "via": ["sudo", "-n"] }],
+      "dm_users": ["400000000000000001"]
+    }
+  }
+}
