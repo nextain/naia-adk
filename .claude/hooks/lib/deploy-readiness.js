@@ -121,7 +121,177 @@ const INNER_DOCKER = new Set(["ps", "logs", "inspect", "stats", "images", "versi
 const INNER_COMPOSE = new Set(["ps", "logs", "restart", "config", "images", "top", "ls"]);
 const CURL_WRITE = /^(?:-d|--data(?:-\w+)?|-F|--form(?:-string)?|-T|--upload-file|-o|--output|-O|--remote-name(?:-all)?|--json)(?:=|$)/;
 
-function innerClauseProblem(tokens0) {
+// read_only 리다이렉트: 해석하지 않고 거부한다. 따옴표 처리 뒤 낱말에 '>' 나 '<' 가 있으면 막는다.
+// 예외는 낱말 전체가 정확히 2>/dev/null, >/dev/null, 2>&1, >&2 인 경우뿐이다. 원격 본문·bash -c 글처럼 안쪽을 다시 판정하는
+// 인자도 빈칸으로 나눈 조각마다 같은 규칙을 적용한다(예외 밖 '>'·'<' 가 있으면 거부). az --query "[?a > b]" 같은 조회도 막히는 보수적 판정이다.
+// 따옴표를 벗긴 낱말만 보면 "x "2>"/dev/null y" 가 낱말 'x 2>/dev/null y' 로 보여 통과한다. 그래서 명령 원문(raw)도 같은 규칙으로 본다:
+// 원문의 '>'·'<' 는 모두 예외 글 하나에 들어 있어야 하고, 그 예외 글 앞은 처음·빈칸·;|&(, 뒤는 끝·빈칸·;|&) 여야 한다.
+// 따옴표·역빗금이 붙으면 셸이 대상 이름에 이어 붙이므로(>/dev/null" x" 는 '/dev/null x' 에 씀) 예외로 보지 않는다.
+// 그래서 원격 본문·bash -c 글 끝의 "… 2>/dev/null" 도 막힌다(받아들인 비용).
+const READ_ONLY_REDIRECT_OK = new Set(["2>/dev/null", ">/dev/null", "2>&1", ">&2"]);
+const RAW_REDIRECT_OK = /(?<=^|[\s;|&(])(?:2>\/dev\/null|>\/dev\/null|2>&1|>&2)(?=$|[\s;|&)])/g;
+function readOnlyRedirectProblem(tokens, raw) {
+	if (raw !== undefined && /[<>]/.test(String(raw).replace(RAW_REDIRECT_OK, " "))) return `read_only 에서 받지 않는 리다이렉트·'<'·'>' 글자: ${String(raw).slice(0, 200)}`;
+	for (const token of tokens) {
+		const x = String(token);
+		if (!/[<>]/.test(x) || READ_ONLY_REDIRECT_OK.has(x)) continue;
+		if (x.split(/\s+/).some((w) => /[<>]/.test(w) && !READ_ONLY_REDIRECT_OK.has(w))) return `read_only 에서 받지 않는 리다이렉트·'<'·'>' 글자: ${x.slice(0, 200)}`;
+	}
+	return null;
+}
+
+// read_only sed: 단순 출력 형태만 받는다. 옵션은 -n·-E·-r·-s·-u·-e 와 그 긴 이름, 스크립트는 ';'·줄로 나눈 각 명령이
+// [주소[,주소]][!] 뒤 p·d·q·Q·=·l 이거나 s/찾을/바꿀/[gpiI숫자] 일 때만. w·W·e·r·R 명령, s///w·s///e, -f 스크립트 파일, -i, 판별 못 하는 글은 거부.
+const SED_ADDR = String.raw`(?:\d+|\$|/(?:[^/\\]|\\.)*/[IM]*)`;
+const SED_CMD = new RegExp(String.raw`^\s*(?:${SED_ADDR}(?:\s*,\s*${SED_ADDR})?)?\s*!?\s*(?:[pdqQ=l]|s/(?:[^/\\\n]|\\.)*/(?:[^/\\\n]|\\.)*/[gpiI0-9]*)?\s*$`);
+function sedReadOnlyProblem(rest) {
+	const scripts = [];
+	let positional = 0;
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i];
+		if (a === "-e" || a === "--expression" || (/^-[nErsu]+e$/.test(a))) { if (rest[i + 1] === undefined) return "sed -e 뒤 스크립트 없음"; scripts.push(rest[++i]); continue; }
+		if (/^--expression=/.test(a)) { scripts.push(a.slice(a.indexOf("=") + 1)); continue; }
+		if (/^-[nErsu]+$/.test(a) || ["--quiet", "--silent", "--regexp-extended", "--separate", "--unbuffered"].includes(a)) continue;
+		if (a.startsWith("-")) return `read_only 에서 받지 않는 sed 옵션: ${a}`;
+		if (!scripts.length && positional === 0) scripts.push(a);
+		positional++;
+	}
+	if (!scripts.length) return "sed 스크립트를 찾지 못함";
+	for (const s of scripts) {
+		for (const part of String(s).split(/[;\n]/)) {
+			if (!SED_CMD.test(part)) return `읽기만 보장할 수 없는 sed 스크립트: ${s}`;
+		}
+	}
+	return null;
+}
+
+// read_only 옵션 허용 목록 풀이. 묶인 짧은 옵션(-sfX)은 한 글자씩, 붙은 값(-dx=1·-m5·--max-time=5)은 떼어 각각 본다.
+// spec.flags·spec.valued 는 짧은 글자 모음, spec.long 은 긴 이름 → [이름표, 값을 받는가]. 목록 밖 옵션이면 { problem }.
+function allowListedOptions(rest, spec, tool) {
+	const values = [];
+	const flags = [];
+	const positionals = [];
+	for (let i = 0; i < rest.length; i++) {
+		const a = rest[i];
+		if (a === "--") { positionals.push(...rest.slice(i + 1)); break; }
+		if (a.startsWith("--")) {
+			const eq = a.indexOf("=");
+			const name = eq < 0 ? a : a.slice(0, eq);
+			const known = Object.hasOwn(spec.long, name) ? spec.long[name] : null;
+			if (!known || (eq >= 0 && !known[1])) return { problem: `read_only 에서 받지 않는 ${tool} 옵션: ${a}` };
+			if (known[1]) values.push([known[0], eq < 0 ? rest[++i] : a.slice(eq + 1)]);
+			else flags.push(known[0]);
+			continue;
+		}
+		if (a.length > 1 && a.startsWith("-")) {
+			for (let k = 1; k < a.length; k++) {
+				const c = a[k];
+				if (spec.flags.includes(c)) { flags.push(c); continue; }
+				if (spec.valued.includes(c)) { values.push([c, k + 1 < a.length ? a.slice(k + 1) : rest[++i]]); break; }
+				return { problem: `read_only 에서 받지 않는 ${tool} 옵션: -${c} (${a})` };
+			}
+			continue;
+		}
+		positionals.push(a);
+	}
+	return { values, flags, positionals };
+}
+
+// read_only curl: 허용 목록. -s -S -f -L -I -m -H -o /dev/null -w -X GET|HEAD 와 그 긴 이름(--connect-timeout 포함)만 받는다.
+// 그 밖(-d·--data*·-F·--form·-T·--upload-file·-K·--config·-u·-b·-x 등)은 어떤 모양으로 와도 거부. 값이 @ 로 시작하면(파일 읽기) 거부,
+// -w 의 %output{…}(파일 쓰기)와 메서드를 바꾸는 머리(X-HTTP-Method-Override 등)도 거부.
+// 주소(위치 인자)는 http:// 와 https:// 만 받는다. gopher·dict·telnet 은 임의 TCP 바이트를 보내고(Redis 등에 쓰기), 스킴 없는 주소는 curl 이 이름으로 짐작한다. file:// 도 거부.
+const CURL_RO_SPEC = {
+	flags: "sSfLI",
+	valued: "mHowX",
+	long: {
+		"--silent": ["s", false], "--show-error": ["S", false], "--fail": ["f", false], "--location": ["L", false], "--head": ["I", false],
+		"--max-time": ["m", true], "--connect-timeout": ["--connect-timeout", true], "--header": ["H", true], "--write-out": ["w", true], "--request": ["X", true],
+	},
+};
+function curlReadOnlyProblem(rest) {
+	const r = allowListedOptions(rest, CURL_RO_SPEC, "curl");
+	if (r.problem) return r.problem;
+	for (const [o, v] of r.values) {
+		if (v === undefined) return `curl ${o.length > 1 ? o : `-${o}`} 뒤 값 없음`;
+		if (o === "X" && !/^(?:GET|HEAD)$/i.test(v)) return `HTTP ${v.toUpperCase()}`;
+		if ((o === "m" || o === "--connect-timeout") && !/^\d+(?:\.\d+)?$/.test(v)) return `curl 시간 값이 숫자가 아님: ${v}`;
+		if (o === "o" && v !== "/dev/null") return `curl -o 는 /dev/null 만 받음: ${v}`;
+		if (v.startsWith("@")) return `curl 값이 파일을 읽음: -${o} ${v}`;
+		if (o === "w" && /%output\{/i.test(v)) return `curl -w 가 파일에 씀: ${v}`;
+		if (o === "H" && /^\s*x-(?:http-)?method(?:-override)?\s*:/i.test(v)) return `curl 머리가 HTTP 메서드를 바꿈: ${v}`;
+	}
+	if (!r.positionals.length) return "curl 주소 없음";
+	const bad = r.positionals.find((u) => !/^https?:\/\//i.test(u));
+	if (bad !== undefined) return `curl 주소는 http:// 와 https:// 만 받음: ${bad}`;
+	return null;
+}
+
+// read_only DB: 옵션도 허용 목록(파일 출력 -o·--tee·-cmd·-f 같은 것은 거부), 문장은 select·show·describe·psql \d 만. psql 은 -X 필수(-c 여도 psqlrc 를 읽음).
+// explain 은 어디 있든 거부(explain analyze 는 실제로 실행함). '(' 는 모두 바로 앞이 집계 함수 이름(count·max·min·sum·avg·now)일 때만 받는다:
+// 그래서 함수 호출(pg_terminate_backend(…)·sleep(…))뿐 아니라 in (…)·하위 질의도 막힌다(받아들인 비용). 역빗금(psql \g·\!·\gexec)·/* 주석·into·for update 도 거부.
+const DB_RO_SPEC = {
+	psql: { flags: "tAXqw", valued: "hpUdc", sql: "c", maxPositionals: 2, long: { "--host": ["h", true], "--port": ["p", true], "--username": ["U", true], "--dbname": ["d", true], "--command": ["c", true], "--tuples-only": ["t", false], "--no-align": ["A", false], "--no-psqlrc": ["X", false], "--quiet": ["q", false], "--no-password": ["w", false] } },
+	mysql: { flags: "NBstE", valued: "hPuDe", sql: "e", maxPositionals: 1, long: { "--host": ["h", true], "--port": ["P", true], "--user": ["u", true], "--database": ["D", true], "--execute": ["e", true], "--skip-column-names": ["N", false], "--batch": ["B", false], "--silent": ["s", false], "--table": ["t", false], "--vertical": ["E", false] } },
+};
+DB_RO_SPEC.mariadb = DB_RO_SPEC.mysql;
+const SQLITE_RO_FLAGS = new Set(["readonly", "header", "noheader", "csv", "json", "line", "column", "list", "batch", "bail", "box", "table", "markdown"]);
+const DB_RO_AGGREGATES = new Set(["count", "max", "min", "sum", "avg", "now"]);
+function sqlReadOnlyProblem(cmd, sql) {
+	const stmts = String(sql ?? "").split(";").map((x) => x.trim()).filter(Boolean);
+	if (!stmts.length) return "조회 문장이 명령에 드러나지 않음";
+	for (const x of stmts) {
+		if (/\bexplain\b/i.test(x)) return `read_only 에서 explain 은 받지 않음: ${x}`;
+		if (cmd === "psql" && /^\\d[A-Za-z+]*(?:\s+[\w.*"]+)?$/.test(x)) continue;
+		if (!/^(?:select|show|describe)\b/i.test(x)) return `조회 문장이 아님: ${x}`;
+		if (/[\\]|\/\*|\n\s*\./.test(x)) return `read_only 에서 받지 않는 역빗금·주석·점 명령: ${x}`;
+		if (/\b(?:into|for\s+(?:update|share|no\s+key|key))\b/i.test(x)) return `쓰기·잠금 문장: ${x}`;
+		for (let p = x.indexOf("("); p >= 0; p = x.indexOf("(", p + 1)) {
+			const name = x.slice(0, p).match(/(?:^|[^\w."`$])([A-Za-z_]\w*)\s*$/);
+			if (!name || !DB_RO_AGGREGATES.has(name[1].toLowerCase())) return `read_only 에서 받지 않는 함수 호출·괄호: ${x}`;
+		}
+	}
+	return null;
+}
+function dbReadOnlyProblem(cmd, rest) {
+	if (cmd === "sqlite3") {
+		const positionals = [];
+		for (const a of rest) {
+			if (a.startsWith("-")) { if (!SQLITE_RO_FLAGS.has(a.replace(/^--?/, ""))) return `read_only 에서 받지 않는 sqlite3 옵션: ${a}`; continue; }
+			positionals.push(a);
+		}
+		if (positionals.length !== 2) return "sqlite3 는 DB 파일과 조회 문장 하나만 받음";
+		return sqlReadOnlyProblem(cmd, positionals[1]);
+	}
+	const spec = DB_RO_SPEC[cmd];
+	const r = allowListedOptions(rest, spec, cmd);
+	if (r.problem) return r.problem;
+	if (r.positionals.length > spec.maxPositionals) return `${cmd} 인자가 많음: ${r.positionals.join(" ")}`;
+	if (cmd === "psql" && !r.flags.includes("X")) return "psql 은 -X(--no-psqlrc) 가 있어야 함(psqlrc 를 읽지 않게)";
+	const sqls = [];
+	for (const [o, v] of r.values) {
+		if (v === undefined) return `${cmd} -${o} 뒤 값 없음`;
+		if (o === spec.sql) sqls.push(v);
+	}
+	if (!sqls.length) return "조회 문장이 명령에 드러나지 않음";
+	for (const sql of sqls) { const bad = sqlReadOnlyProblem(cmd, sql); if (bad) return bad; }
+	return null;
+}
+
+// docker (compose) exec 옵션 낱말이 환경 변수를 넣는가: --env·--env-file(=값 포함), 묶인 짧은 옵션 속 e(값을 받는 글자 뒤는 값이라 보지 않음).
+function dockerExecEnvOption(a, valued) {
+	if (/^--env(?:-file)?(?:=|$)/.test(a)) return true;
+	if (a.startsWith("--")) return false;
+	for (let k = 1; k < a.length; k++) {
+		if (a[k] === "e") return true;
+		if (valued.includes(a[k])) return false;
+	}
+	return false;
+}
+
+// readOnly 가 참이면 같은 판정에서 조회 갈래만 받는다(재시작·멈춤·시작·이름 바꾸기·설정 갱신·리다이렉트 파일 쓰기·sed 쓰기는 읽기가 아님). 계획서 read_only 검사가 쓴다.
+function innerClauseProblem(tokens0, readOnly = false) {
+	if (readOnly) { const bad = readOnlyRedirectProblem(tokens0); if (bad) return bad; }
 	let t;
 	for (let i = 0; i < tokens0.length; i++) {
 		const x = tokens0[i];
@@ -143,6 +313,7 @@ function innerClauseProblem(tokens0) {
 	if (bare === null) return null;
 	t = bare;
 	while (t.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t[0]) || t[0] === "sudo")) {
+		if (readOnly && t[0] !== "sudo") return `read_only 에서 받지 않는 앞머리 환경 변수: ${t[0]}`;
 		if (t[0] === "sudo") { t = t.slice(1); while (t.length && t[0].startsWith("-")) t = t.slice(t[0] === "-u" ? 2 : 1); continue; }
 		t = t.slice(1);
 	}
@@ -151,36 +322,44 @@ function innerClauseProblem(tokens0) {
 	const rest = t.slice(1);
 	const positional = rest.filter((a) => !a.startsWith("-"));
 	if (INNER_READ.has(cmd) && !readCommandWrites(cmd, rest)) return null;
+	if (readOnly && cmd === "sed") return sedReadOnlyProblem(rest);
 	if (cmd === "sed" && !rest.some((a) => /^-[a-zA-Z]*i|^--in-place/.test(a))) return null;
-	if (cmd === "systemctl" && INNER_SYSTEMCTL.has(positional[0])) return null;
+	if (cmd === "systemctl" && INNER_SYSTEMCTL.has(positional[0]) && !(readOnly && positional[0] === "restart")) return null;
 	if (cmd === "docker" || cmd === "docker-compose") {
-		if (cmd === "docker" && INNER_DOCKER.has(positional[0])) return null;
-		if (cmd === "docker" && (positional[0] === "stop" || positional[0] === "start")) return null;
-		if (cmd === "docker" && positional[0] === "update" && rest.includes("--restart=no") && rest.filter((a) => a.startsWith("-")).every((a) => a === "--restart=no")) return null;
-		if (cmd === "docker" && positional[0] === "rename") {
+		if (cmd === "docker" && INNER_DOCKER.has(positional[0]) && !(readOnly && positional[0] === "restart")) return null;
+		if (!readOnly && cmd === "docker" && (positional[0] === "stop" || positional[0] === "start")) return null;
+		if (!readOnly && cmd === "docker" && positional[0] === "update" && rest.includes("--restart=no") && rest.filter((a) => a.startsWith("-")).every((a) => a === "--restart=no")) return null;
+		if (!readOnly && cmd === "docker" && positional[0] === "rename") {
 			const after = rest.slice(rest.indexOf("rename") + 1);
 			if (after.length === 2 && rest.every((a) => !a.startsWith("-")) && after.every((a) => /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(a))) return null;
 		}
 		if (cmd === "docker" && positional[0] === "exec") {
 			const after = rest.slice(rest.indexOf("exec") + 1);
 			let k = 0;
-			while (k < after.length && after[k].startsWith("-")) k += /^(?:-u|--user|-e|--env|-w|--workdir|--env-file)$/.test(after[k]) ? 2 : 1;
-			if (k + 1 < after.length) return innerClauseProblem(after.slice(k + 1));
+			while (k < after.length && after[k].startsWith("-")) {
+				if (readOnly && dockerExecEnvOption(after[k], "uw")) return `read_only 에서 받지 않는 docker exec 환경 변수 옵션: ${after[k]}`;
+				k += /^(?:-u|--user|-e|--env|-w|--workdir|--env-file)$/.test(after[k]) ? 2 : 1;
+			}
+			if (k + 1 < after.length) return innerClauseProblem(after.slice(k + 1), readOnly);
 		}
 		const ci = cmd === "docker-compose" ? -1 : rest.indexOf("compose");
 		if (cmd === "docker-compose" || positional[0] === "compose") {
 			const after = rest.slice(ci + 1);
 			let k = 0;
 			while (k < after.length && after[k].startsWith("-")) k += /^(?:-f|--file|-p|--project-name|--env-file|--profile)$/.test(after[k]) ? 2 : 1;
-			if (INNER_COMPOSE.has(after[k])) return null;
+			if (INNER_COMPOSE.has(after[k]) && !(readOnly && after[k] === "restart")) return null;
 			if (after[k] === "exec") {
 				let e = k + 1;
-				while (e < after.length && after[e].startsWith("-")) e += /^(?:-u|--user|-e|--env|-w|--workdir|--index)$/.test(after[e]) ? 2 : 1;
-				if (e + 1 < after.length) return innerClauseProblem(after.slice(e + 1));
+				while (e < after.length && after[e].startsWith("-")) {
+					if (readOnly && dockerExecEnvOption(after[e], "uw")) return `read_only 에서 받지 않는 docker compose exec 환경 변수 옵션: ${after[e]}`;
+					e += /^(?:-u|--user|-e|--env|-w|--workdir|--index)$/.test(after[e]) ? 2 : 1;
+				}
+				if (e + 1 < after.length) return innerClauseProblem(after.slice(e + 1), readOnly);
 			}
 		}
 	}
 	if (cmd === "psql" || cmd === "mysql" || cmd === "mariadb" || cmd === "sqlite3") {
+		if (readOnly) { const bad = dbReadOnlyProblem(cmd, rest); return bad ? `DB 조회만 보장할 수 없음: ${bad}` : null; }
 		const ci = rest.findIndex((a) => a === "-c" || a === "--command" || a === "-e" || a === "--execute");
 		const sql = cmd === "sqlite3" ? positional[1] : ci >= 0 ? rest[ci + 1] : rest.find((a) => /^--(?:command|execute)=/.test(a))?.replace(/^--\w+=/, "");
 		const stmts = String(sql || "").split(";").map((x) => x.trim()).filter(Boolean);
@@ -192,13 +371,15 @@ function innerClauseProblem(tokens0) {
 		const c = rest.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
 		if (c >= 0 && rest[c + 1] !== undefined) {
 			const { shellClauses } = require("./git-command-parser.js");
+			if (readOnly) { const bad = readOnlyRedirectProblem([], rest[c + 1]); if (bad) return bad; }
 			const clauses = shellClauses(rest[c + 1]);
 			if (clauses.unbalanced) return `따옴표가 닫히지 않은 글: ${rest[c + 1].slice(0, 200)}`;
-			for (const x of clauses) { const bad = innerClauseProblem(x); if (bad) return bad; }
+			for (const x of clauses) { const bad = innerClauseProblem(x, readOnly); if (bad) return bad; }
 			return null;
 		}
 	}
 	if (cmd === "curl") {
+		if (readOnly) return curlReadOnlyProblem(rest);
 		const xi = rest.findIndex((a) => a === "-X" || a === "--request" || /^(?:-X|--request=)./.test(a));
 		const method = xi < 0 ? "GET" : (rest[xi].replace(/^(?:-X|--request=?)/, "") || rest[xi + 1] || "").toUpperCase();
 		if (!["GET", "HEAD"].includes(method)) return `HTTP ${method}: ${t.join(" ")}`;
@@ -208,15 +389,16 @@ function innerClauseProblem(tokens0) {
 	return t.join(" ");
 }
 
-function opsClauses(command) {
+// envPrefixes 를 주면 벗긴 앞머리 환경 변수 대입(VAR=값)을 거기에 모은다(read_only 판정이 거부에 쓴다).
+function opsClauses(command, envPrefixes) {
 	const { shellClauses } = require("./git-command-parser.js");
 	const out = [];
 	for (let raw of shellClauses(String(command))) {
 		while (raw.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(raw[0]) || path.basename(raw[0]) === "sudo")) {
 			if (path.basename(raw[0]) === "sudo") { raw = raw.slice(1); while (raw[0]?.startsWith("-")) raw = raw.slice(["-u", "-g", "--user", "--group"].includes(raw[0]) ? 2 : 1); }
-			else raw = raw.slice(1);
+			else { envPrefixes?.push(raw[0]); raw = raw.slice(1); }
 		}
-		if (["bash", "sh", "zsh", "dash"].includes(raw[0]) && raw[1] === "-c" && raw.length === 3) out.push(...opsClauses(raw[2]));
+		if (["bash", "sh", "zsh", "dash"].includes(raw[0]) && raw[1] === "-c" && raw.length === 3) out.push(...opsClauses(raw[2], envPrefixes));
 		else out.push(raw.flatMap((x) => /^--[a-z][\w-]*=/.test(x) ? [x.slice(0, x.indexOf("=")), x.slice(x.indexOf("=") + 1)] : [x]));
 	}
 	return out;
@@ -265,6 +447,8 @@ function innerProblem(command) {
 	return null;
 }
 
+// az 조회 동사(show·list·logs 등). ops 판정과 계획서 read_only 판정이 같이 쓴다.
+const AZ_READ_PHRASE = /(?:^| )(?:show|list|logs?|browse|tail|get|wait)(?: |$)|(?:^| )(?:list|show)-/;
 const OPS_AZ_VERBS = [
 	/^(?:containerapp|webapp|functionapp) update$/,
 	/^(?:containerapp|webapp|functionapp|vm|vmss) (?:restart|stop|start)$/,
@@ -294,7 +478,7 @@ function opsAzProblem(command) {
 		let i = at + 1;
 		for (; i < tokens.length && !tokens[i].startsWith("-"); i++) verbs.push(tokens[i]);
 		const phrase = verbs.join(" ");
-		if (/(?:^| )(?:show|list|logs?|browse|tail|get|wait)(?: |$)|(?:^| )(?:list|show)-/.test(phrase)) continue;
+		if (AZ_READ_PHRASE.test(phrase)) continue;
 		if (remotePayload(tokens) !== undefined) {
 			const script = remotePayload(tokens);
 			if (script === null) return "원격 실행 본문 또는 지원하는 원격 동사가 없음";
@@ -310,6 +494,57 @@ function opsAzProblem(command) {
 			const flag = t.split("=")[0];
 			if (!OPS_AZ_FLAGS.has(flag) && !OPS_AZ_VERB_FLAGS[phrase]?.has(flag)) return `ops 로 받을 수 없는 옵션: az ${phrase} ${flag}. 설정만 바꾸는 옵션이 아니면 feature 나 rollback 으로 신고함`;
 		}
+	}
+	return null;
+}
+
+/**
+ * 계획서 read_only 검사: 명령이 조회만 하면 null, 아니면 이유. ops 판정의 조회 갈래만 받는다.
+ * az 조회 동사, VM·컨테이너 안 글이 조회·진단뿐인 원격 실행(az vm run-command invoke·containerapp exec·ssh), 로컬 조회 명령.
+ * 재시작·멈춤·설정 변경·불투명한 글(변수·대본 파일·@파일)은 읽기가 아니다.
+ */
+const READ_ONLY_OPAQUE = /\$\(|`|\$\{/;
+function readOnlyProblem(command) {
+	if (typeof command !== "string" || !command.trim()) return "명령이 비어 있음";
+	if (VERSION_CHANGE.test(command)) return "이미지·리비전·트래픽을 바꾸는 명령";
+	const { shellClauses } = require("./git-command-parser.js");
+	// 리다이렉트는 해석하지 않고 거부한다: 명령 원문과 모든 절 낱말에서 예외 넷 밖의 '>'·'<' 를 막는다. 원격 본문 안은 innerClauseProblem(…, true) 가 다시 본다.
+	const rawRedirect = readOnlyRedirectProblem([], command);
+	if (rawRedirect) return `조회가 아닌 명령: ${rawRedirect}`;
+	// 명령 치환·변수 펼침은 해석하지 않고 거부한다(원격 본문의 INNER_OPAQUE 와 같은 기준의 $(·`·${ 를 로컬 원문에도). 따옴표 안의 글자도 막힌다(받아들인 비용).
+	// 맨 $VAR 는 sed '$p' 같은 글자 때문에 로컬에서는 보지 않는다. 같은 명령 안에서 VAR= 로 값을 정하는 꼴은 아래 앞머리 검사가 막는다.
+	if (READ_ONLY_OPAQUE.test(command)) return "조회가 아닌 명령: read_only 에서 받지 않는 명령 치환·변수 펼침($(…)·`…`·${…})";
+	const envPrefixes = [];
+	const clauses = opsClauses(command, envPrefixes);
+	if (envPrefixes.length) return `조회가 아닌 명령: read_only 에서 받지 않는 앞머리 환경 변수: ${envPrefixes[0]}`;
+	for (const tokens of clauses) {
+		if (!tokens.length) continue;
+		const redirect = readOnlyRedirectProblem(tokens);
+		if (redirect) return `조회가 아닌 명령: ${redirect}`;
+		const program = path.basename(tokens[0]);
+		const script = remotePayload(tokens);
+		if (script !== undefined) {
+			if (program === "az" && tokens[1] === "vm" && tokens[3] !== "invoke") return `원격 실행 명령을 만들거나 바꿈: az vm run-command ${tokens[3] || ""}`.trim();
+			if (script === null) return "VM·컨테이너 안에서 도는 글을 명령에서 찾지 못함";
+			if (INNER_OPAQUE.test(script)) return "VM·컨테이너 안에서 도는 글이 불투명함(변수·대본 파일·@파일 등)";
+			const inner = readOnlyRedirectProblem([], script);
+			if (inner) return `VM·컨테이너 안에서 조회가 아닌 명령: ${inner}`;
+			const clauses = shellClauses(script);
+			if (clauses.unbalanced) return `따옴표가 닫히지 않은 글: ${script.slice(0, 200)}`;
+			for (const clause of clauses) {
+				const bad = innerClauseProblem(clause, true);
+				if (bad) return `VM·컨테이너 안에서 조회가 아닌 명령: ${bad}`;
+			}
+			continue;
+		}
+		if (program === "az") {
+			const verbs = [];
+			for (let i = 1; i < tokens.length && !tokens[i].startsWith("-"); i++) verbs.push(tokens[i]);
+			if (AZ_READ_PHRASE.test(verbs.join(" "))) continue;
+			return `조회가 아닌 az 명령: az ${verbs.join(" ")}`;
+		}
+		const bad = innerClauseProblem(tokens, true);
+		if (bad) return `조회가 아닌 명령: ${bad}`;
 	}
 	return null;
 }
@@ -898,5 +1133,6 @@ module.exports = {
 	innerProblem,
 	opsAzProblem,
 	opsProblem,
+	readOnlyProblem,
 	TEMPLATE,
 };

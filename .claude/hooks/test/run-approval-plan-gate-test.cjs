@@ -1371,6 +1371,274 @@ test("codex reviewer refuses to run without bwrap outside recovery mode", (t) =>
  assert.equal(fs.existsSync(marker), false);
 });
 
+// 읽기 전용 계획: 단계가 모두 조회이고 되돌리기 단계·step_ids 가 없어야 양식을 지난다. 시험 대상 이름은 example 만 쓴다.
+function readOnlyPlan(overrides = {}) {
+	return {
+		schema: "deploy-plan/v1", author_model: "muse", planId: "example-read-01", createdAt: new Date().toISOString(), read_only: true,
+		services: ["azure:vm:example-gw"], what_why: "게이트웨이 상태를 읽기만 하여 다음 계획의 근거를 모읍니다.", changes: ["없음: 조회만 함"],
+		scenario: [
+			{ id: "s1", title: "VM 안 상태 조회", commands: ["az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts \"docker ps\" \"nvidia-smi\""], success_check: "출력에 컨테이너 목록이 있음", on_failure: "결과를 버리고 다시 실행" },
+			{ id: "s2", title: "앱 설정 조회", commands: ["az containerapp show -n example-web -g example-rg -o json"], success_check: "JSON 출력", on_failure: "결과를 버리고 다시 실행" },
+		],
+		risks: { items: ["조회 출력에 내부 주소가 보임"], worst_case: "조회 실패로 근거를 못 모음" }, irreversible: ["없음: 바꾸는 것이 없음"],
+		disconnect_safety: "끊기면 결과를 버리고 같은 명령을 다시 실행한다", rerun_safety: { lock: "조회라 잠금 불필요", run_dir: "출력은 매번 새 파일", no_latest_pick: "실행 id 를 명시" },
+		success_verification: "두 단계 출력이 모두 있음", rollback: { method: "없음: 읽기만 하여 되돌릴 판이 없음", duration: "0분", step_ids: [] },
+		residual_risks: ["조회 부하 미미"], incident: { criteria: ["조회 명령이 5분 넘게 안 끝남"], actions: [] },
+		...overrides,
+	};
+}
+
+test("read_only 계획: 모든 단계가 조회이고 되돌리기 단계가 없으면 양식 통과, 기준 문구가 바뀜", () => {
+	const plan = readOnlyPlan();
+	assert.deepEqual(deployPlan.formProblems(plan), []);
+	const prompt = deployPlan.reviewPrompt(plan, "0".repeat(64), REPO_ROOT);
+	assert.match(prompt, /rollback: 되돌리기: 계획서가 read_only 이고 바꾸는 것이 없으면, 복귀 단계 없음과 그 근거가 적혀 있는 것으로 충족한다/);
+	assert.match(prompt, /disconnect: 끊김: read_only 계획은 끊기면 결과를 버리고 다시 실행한다고 적혀 있으면 충족한다/);
+	assert.doesNotMatch(prompt, /사람이 실행하는 이전 판 복귀 한 단계와 걸리는 시간/);
+	// read_only 가 아니면 지금 문구 그대로
+	const normal = deployPlan.reviewPrompt({ ...plan, read_only: false }, "0".repeat(64), REPO_ROOT);
+	assert.ok(normal.includes(`- rollback: ${deployPlan.CRITERIA_TEXT.rollback}`));
+	assert.ok(normal.includes(`- disconnect: ${deployPlan.CRITERIA_TEXT.disconnect}`));
+});
+
+test("read_only 계획 위반: 바꾸는 단계·되돌리기 단계·step_ids·불투명 대본·재시작은 양식 FAIL", () => {
+	const base = readOnlyPlan();
+	const has = (plan, re, label) => assert.ok(deployPlan.formProblems(plan).some((p) => re.test(p)), `${label}: ${deployPlan.formProblems(plan).join(" / ")}`);
+	const step = (command) => ({ ...base, scenario: [{ ...base.scenario[0], commands: [command] }] });
+	has(step("az containerapp update -n example-web -g example-rg --set-env-vars X=1"), /단계 s1 명령이 읽기 갈래가 아님/, "설정 변경");
+	has(step("az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts \"docker restart gw\""), /읽기 갈래가 아님.*docker restart/, "VM 안 재시작");
+	has(step("az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts @scripts/read.sh"), /불투명/, "@대본 파일");
+	has(step("bash scripts/read.sh"), /읽기 갈래가 아님/, "로컬 대본");
+	has({ ...base, rollback: { ...base.rollback, step_ids: ["r1"] }, scenario: [...base.scenario, { id: "r1", branch: "rollback", title: "되돌리기", commands: ["az containerapp show -n example-web -g example-rg -o table"], success_check: "출력 확인", on_failure: "보고만 함" }] }, /되돌리기 단계가 있음/, "rollback 단계");
+	has({ ...base, rollback: { ...base.rollback, step_ids: ["s1"] } }, /step_ids 는 비어 있어야 함/, "step_ids");
+	has({ ...base, incident: { ...base.incident, actions: [{ id: "a1", commands: ["az containerapp revision restart -n example-web -g example-rg --revision example-web--1"], why_safe: "재시작만 함" }] } }, /장애 선조치 a1 명령이 읽기 갈래가 아님/, "선조치 변경");
+	has({ ...base, read_only: "yes" }, /read_only 는 true 또는 false/, "불리언 아님");
+	// read_only 가 아니면 같은 변경 단계도 양식은 막지 않는다
+	assert.ok(!deployPlan.formProblems({ ...step("az containerapp update -n example-web -g example-rg --set-env-vars X=1"), read_only: false }).some((p) => p.includes("read_only")));
+});
+
+test("read_only 리다이렉트: 해석하지 않고 거부한다. 낱말 전체가 2>/dev/null·>/dev/null·2>&1·>&2 이고 앞뒤에 따옴표가 붙지 않을 때만 받는다", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	const invoke = (script) => `az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts "${script}"`;
+	for (const command of [
+		"az vm show -g example-rg -n example-gw > /tmp/out",
+		"az account show --output json > /tmp/out",
+		"az containerapp show -n example-web -g example-rg -o json >> /tmp/out",
+		"az vm list -g example-rg &> /tmp/out",
+		"az vm list -g example-rg >| /tmp/out",
+		"az vm list -g example-rg 2>/tmp/err",
+		"az vm list -g example-rg >&/tmp/out",
+		"docker ps >/tmp/out",
+		"echo hi>/tmp/out",
+		invoke("docker ps > /tmp/out"),
+		invoke("nvidia-smi 2>/tmp/err"),
+		"ssh example-gw \"cat /etc/hostname >> /tmp/out\"",
+		"az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts \"docker ps\" > /tmp/out",
+		"bash -c \"ls /etc > /tmp/out\"",
+		// 공백 든 대상(따옴표를 벗기면 낱말에 빈칸이 생김)
+		"az account show >\"/tmp/has space\"",
+		"az account show 2>\"/tmp/a b\"",
+		"az account show >\"/dev/null x\"",
+		// 따옴표로 이어 붙인 대상: 낱말은 'x 2>/dev/null y' 지만 셸은 '/dev/null y' 파일에 쓴다
+		"az account show \"x \"2>\"/dev/null y\"",
+		"ssh example-gw \"x \"2>\"/dev/null y\"",
+		"az account show 2>/dev/null\"x y\"",
+		"az account show 2> /dev/null",
+		"az account show 1>&2",
+		"docker ps &>/dev/null",
+		"cat /etc/hostname </tmp/in",
+		invoke("df -h >/tmp/x"),
+		"bash -c \"ls 2>/tmp/err\"",
+		// 따옴표가 대상에 붙음: 셸은 '/dev/null x'·'2 x' 파일에 쓴다
+		"az account show >/dev/null\" x\"",
+		"az account show 2>/dev/null\" x\"",
+		"az account show >&2\" x\"",
+		"az account show 2>/dev/null\\ x",
+		// 받아들인 비용: az --query 의 비교 연산자, 따옴표 글 끝에 붙은 예외 꼴도 막힌다
+		"az containerapp logs show -n example-web -g example-rg --query \"[?a > b]\"",
+		invoke("docker ps 2>/dev/null"),
+		"ssh example-gw \"cat /etc/hostname 2>/dev/null\"",
+		"bash -c \"ls /etc 2>&1\"",
+	]) assert.match(String(readOnlyProblem(command)), /리다이렉트/, command);
+	for (const command of [
+		"az vm show -g example-rg -n example-gw 2>/dev/null",
+		"az vm show -g example-rg -n example-gw 2>&1",
+		"az account show >/dev/null",
+		"az account show >&2",
+		"ls /etc 2>/dev/null",
+		invoke("docker ps 2>/dev/null | head"),
+		"ssh example-gw \"cat /etc/hostname 2>/dev/null | head -1\"",
+		"az account show 2>/dev/null; az group list 2>&1",
+	]) assert.equal(readOnlyProblem(command), null, command);
+});
+
+test("read_only sed: 단순 출력 형태만 받고 w·W·e·s///w·s///e·-f·-i·판별 못 하는 스크립트는 거부", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	for (const command of [
+		"sed -n 'w /tmp/x' /tmp/a",
+		"sed 'w /tmp/x' /tmp/a",
+		"sed -n '1W /tmp/x' /tmp/a",
+		"sed -n 's/a/b/w /tmp/x' /tmp/a",
+		"sed 's/a/b/e' /tmp/a",
+		"sed e /tmp/a",
+		"sed -n -e 1p -e 'w /tmp/x' /tmp/a",
+		"sed -f /tmp/script.sed /tmp/a",
+		"sed -i s/a/b/ /tmp/a",
+		"sed -n '1{p;w /tmp/x' /tmp/a",
+		"sed 'r /etc/shadow' /tmp/a",
+		"docker exec example sed -n '1w /tmp/x' /tmp/a",
+		"az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts \"sed -n 'w /tmp/x' /etc/hostname\"",
+	]) assert.ok(readOnlyProblem(command), command);
+	for (const command of ["sed -n 1,20p /etc/hostname", "sed -n '/error/p' /var/log/x", "sed 's/a/b/g' /etc/hostname", "sed -ne 3p /etc/hostname", "sed -n -e 1p -e '$p' /etc/hostname", "sed -E -n '/^x+$/p' /etc/hostname"]) {
+		assert.equal(readOnlyProblem(command), null, command);
+	}
+});
+
+test("read_only curl: 허용 목록 옵션만 받고, 묶인 짧은 옵션·붙은 값도 풀어서 판정한다", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	for (const command of [
+		// PC 쪽 검수에서 통과했던 꼴
+		"curl -sX POST http://localhost:8000/v1/admin/x",
+		"curl -sfX DELETE http://h/x",
+		"curl -s -dx=1 http://h/x",
+		"curl -sdx=1 http://h/x",
+		"curl -Ffile=@a http://h/x",
+		// 거부 목록에 늘 빠지던 갈래
+		"curl -K cfg http://h/x",
+		"curl --config cfg http://h/x",
+		"curl -T a http://h/x",
+		"curl --upload-file a http://h/x",
+		"curl --data-raw x http://h/x",
+		"curl --form a=b http://h/x",
+		"curl -o /tmp/x http://h/x",
+		"curl --request PUT http://h/x",
+		"curl -u user:pw http://h/x",
+		"curl -t x http://h/x",
+		"curl -H 'X-HTTP-Method-Override: DELETE' http://h/x",
+		"curl -H @headers.txt http://h/x",
+		"curl -w '%output{/tmp/x}a' http://h/x",
+		"curl -m soon http://h/x",
+		// 붙은 값: -X 값은 POST 이고 GET 은 주소다
+		"curl -XPOST GET http://h/x",
+		"ssh example-gw \"curl -sX POST http://h/x\"",
+		"bash -c \"curl -sdx=1 http://h/x\"",
+	]) assert.ok(readOnlyProblem(command), command);
+	for (const command of [
+		"curl -s http://h/x",
+		"curl -sS -m 5 -H 'Accept: application/json' http://h/x",
+		"curl -sX GET http://h/x",
+		"curl -I http://h/x",
+		"curl -sXGET -m5 http://h/x",
+		"curl -so /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 10 http://h/x",
+		"curl --silent --fail --location --request HEAD http://h/x",
+		"ssh example-gw \"curl -s http://h/x\"",
+	]) assert.equal(readOnlyProblem(command), null, command);
+});
+
+test("read_only DB: explain·함수 호출(집계 함수 밖)·괄호·허용 밖 옵션은 거부한다", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	for (const command of [
+		"psql -c \"explain analyze delete from users\"",
+		"psql -c \"select pg_terminate_backend(123)\"",
+		"psql -c \"explain select 1\"",
+		// explain 은 문장 어디에 있든 거부(첫머리 검사와 별개)
+		"psql -c \"select explain from t\"",
+		"psql -c \"select pg_catalog.count(1)\"",
+		"psql -c \"select count(pg_terminate_backend(1))\"",
+		"psql -c \"select x from t where id in (select 1)\"",
+		"psql -o /tmp/x -c \"select 1\"",
+		"psql -c \"select 1\" -c \"delete from t\"",
+		"psql -c \"select 1 \\g /tmp/x\"",
+		"psql -c \"select 1 for update\"",
+		"psql -f q.sql",
+		"mysql -e \"select sleep(5)\"",
+		"mysql --tee=/tmp/x -e \"select 1\"",
+		"mysql -e \"select /*! 1 */ 1\"",
+		"sqlite3 -cmd \".shell id\" \"select 1\"",
+		"sqlite3 a.db \"select writefile('x','y')\"",
+		"docker exec example-db psql -c \"select pg_terminate_backend(1)\"",
+	]) assert.ok(readOnlyProblem(command), command);
+	for (const command of [
+		"psql -tAXc \"select count(*) from users\"",
+		"psql -X -h db -U app -d app -c \"select now()\"",
+		"psql --no-psqlrc --command=\"select max(id), min(id) from users\"",
+		"psql -Xc \"\\dt\"",
+		"mysql -N -e \"show tables\"",
+		"sqlite3 -readonly a.db \"select sum(n) from t\"",
+		"docker exec example-db psql -tAXc \"select avg(n) from t\"",
+	]) assert.equal(readOnlyProblem(command), null, command);
+});
+
+test("read_only curl 주소: http:// 와 https:// 만 받는다(gopher·dict·telnet·file·스킴 없음은 거부)", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	for (const command of [
+		"curl -s gopher://127.0.0.1:6379/_FLUSHALL",
+		"curl -s dict://127.0.0.1:6379/flushall",
+		"curl -s telnet://127.0.0.1:6379",
+		"curl -s file:///etc/passwd",
+		"curl -o /dev/null -s file:///etc/shadow",
+		"curl -s ftp://h/x",
+		"curl -s localhost:8080/health",
+		"curl -s https://h/x gopher://h/_x",
+		"ssh example-gw \"curl -s dict://127.0.0.1:6379/flushall\"",
+	]) assert.match(String(readOnlyProblem(command)), /http:\/\/ 와 https:\/\/ 만/, command);
+	for (const command of ["curl -s https://h/x", "curl -s http://h/x", "curl -sI HTTPS://h/x", "curl -s -- https://h/x"]) assert.equal(readOnlyProblem(command), null, command);
+});
+
+test("read_only 환경 변수: VAR=값 앞머리·docker exec -e/--env·원격 본문 안 VAR= 는 거부, psql 은 -X 필수", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	const invoke = (script) => `az vm run-command invoke -g example-rg -n example-gw --command-id RunShellScript --scripts "${script}"`;
+	for (const command of [
+		"CURL_HOME=/tmp/evil curl -s http://h/x",
+		"XDG_CONFIG_HOME=/tmp/evil curl -s http://h/x",
+		"LD_PRELOAD=/tmp/x.so curl -s http://h/x",
+		"PSQLRC=/tmp/evil.sql psql -X -c \"select 1\"",
+		"sudo LD_PRELOAD=/tmp/x.so ls /etc",
+		"bash -c \"CURL_HOME=/tmp/evil curl -s http://h/x\"",
+		// 원격 본문 안
+		"ssh example-gw \"PSQLRC=/tmp/evil.sql psql -X -c 'select 1'\"",
+		invoke("CURL_HOME=/tmp/evil curl -s http://h/x"),
+	]) assert.match(String(readOnlyProblem(command)), /앞머리 환경 변수/, command);
+	for (const command of [
+		"docker exec -e PSQLRC=/tmp/evil.sql example-db psql -X -c \"select 1\"",
+		"docker exec --env PSQLRC=/tmp/evil.sql example-db psql -X -c \"select 1\"",
+		"docker exec --env=PSQLRC=/tmp/evil.sql example-db psql -X -c \"select 1\"",
+		"docker exec -ie PSQLRC=/tmp/evil.sql example-db psql -X -c \"select 1\"",
+		"docker exec --env-file /tmp/evil.env example-db psql -X -c \"select 1\"",
+		"docker compose exec -e PSQLRC=/tmp/evil.sql db psql -X -c \"select 1\"",
+	]) assert.match(String(readOnlyProblem(command)), /환경 변수 옵션/, command);
+	for (const command of [
+		"psql -c \"select 1\"",
+		"psql -tAc \"select 1\"",
+		"docker exec example-db psql -c \"select 1\"",
+		"ssh example-gw \"psql -c 'select 1'\"",
+	]) assert.match(String(readOnlyProblem(command)), /-X/, command);
+	for (const command of [
+		"psql -X -c \"select 1\"",
+		"psql --no-psqlrc -tAc \"select 1\"",
+		"docker exec -it -u postgres example-db psql -X -c \"select 1\"",
+		"docker exec -uuser example-db ls /etc",
+		"ssh example-gw \"psql -X -c 'select 1'\"",
+	]) assert.equal(readOnlyProblem(command), null, command);
+});
+
+test("read_only 명령 치환: 로컬 원문의 $(…)·`…`·${…} 는 거부(원격 본문 INNER_OPAQUE 와 같은 기준)", () => {
+	const { readOnlyProblem } = require("../lib/deploy-readiness.js");
+	for (const command of [
+		"curl -s http://h/$(touch /tmp/p)",
+		"curl -s `touch /tmp/p`",
+		"curl -s -H \"$(id)\" http://h/x",
+		"ls $(rm -rf /tmp/zz)",
+		"cat `id`",
+		"ls ${HOME}",
+		"az vm show -g example-rg -n $(rm -rf /tmp/zz)",
+		// 받아들인 비용: 홑따옴표 안의 글자도 막힌다
+		"grep -c '$(cat ' /etc/hostname",
+	]) assert.match(String(readOnlyProblem(command)), /명령 치환·변수 펼침/, command);
+	assert.match(String(readOnlyProblem("A=-XPOST; curl $A http://h/x")), /앞머리 환경 변수/);
+	for (const command of ["ls /etc", "curl -s https://h/x", "grep -c 'a$' /etc/hostname", "sed -n '$p' /etc/hostname"]) assert.equal(readOnlyProblem(command), null, command);
+});
+
 test("위험 수용: security FAIL 하나만, 결정 글·같은 값·끝나는 날이 맞을 때만 리뷰 관문을 지남", (t) => {
 	const goodRa = () => ({ criterion: "security", accepted_by: "approver", decision_url: "https://discord.com/channels/1/2/3", same_value_as: "앞 판 번들 같은 지문 0123456789ab", no_new_exposure: true, expires_at: new Date(Date.now() + 86400000).toISOString(), reason: "이미 공개된 같은 시연 값, 새 노출 없음" });
 	const secLine = ["1. [차단: security] 공개 번들에 시연 값"];
