@@ -112,6 +112,9 @@ export function Nav({
         <Link href="/docs" className={tabClass(isActive("/docs"))}>
           문서
         </Link>
+        <Link href="/decisions" className={tabClass(isActive("/decisions"))}>
+          결정
+        </Link>
         {hasBoard === false ? (
           <span
             className="px-1.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-sm font-medium text-neutral-600 cursor-not-allowed whitespace-nowrap"
