@@ -11,7 +11,11 @@ try {
 	H = require("./_claude-bash-guard.js");
 	P = require(path.join(__dirname, "..", "..", ".agents", "hooks", "policies", "bash.js"));
 } catch {
-	process.exit(0); // original main().catch fail-open
+	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Destructive git policy module is unavailable (fail-closed)." }));
+	process.exit(0);
 }
 
-H.start((command) => P.destructiveGit(command));
+H.start((command) => P.destructiveGit(command), {
+	failClosed: true,
+	failClosedReason: "[Harness] Destructive git policy could not be verified (fail-closed).",
+});

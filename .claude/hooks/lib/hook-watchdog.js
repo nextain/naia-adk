@@ -57,8 +57,13 @@ function runWithWatchdog({ script, args = [], env = {} }) {
 		settled = true;
 		clearTimeout(timer);
 		if (signal) block(`[Harness] 운영 관문이 신호 ${signal} 로 끝나 막습니다.`);
-		writeAll(Buffer.concat(out));
-		process.exit(code == null ? 2 : code);
+		const output = Buffer.concat(out);
+		writeAll(output);
+		if (code !== 0) {
+			if (code === 2 && output.length === 0) process.exit(2);
+			block(`[Harness] 운영 관문이 비정상 종료(코드 ${code ?? "null"})해 막습니다.`);
+		}
+		process.exit(0);
 	});
 	return true;
 }

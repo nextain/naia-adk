@@ -201,11 +201,11 @@ function runMuse(prompt) {
 	return String(res.stdout);
 }
 
-function execReviewer(bin, args, input = "", promptSha = "", model = "") {
+function execReviewer(bin, args, input = "", promptSha = "", model = "", cwd = ROOT) {
 	return new Promise((resolve) => {
 		const startedAt = new Date().toISOString();
 		let stdout = "", stderr = "", bytes = 0, finished = false, failed = "";
-		const child = spawn(bin, args, { cwd: ROOT, stdio: ["pipe", "pipe", "pipe"] });
+		const child = spawn(bin, args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
 		const finish = (status, error = "") => {
 			if (finished) return;
 			finished = true; clearTimeout(timer);
@@ -228,7 +228,7 @@ function execReviewer(bin, args, input = "", promptSha = "", model = "") {
 	});
 }
 
-function gitSnapshot(cwd = ROOT, seen = new Set(), isolated = false) {
+function gitSnapshot(cwd = ROOT, seen = new Set(), isolated = false, baseRoot = cwd) {
 	const git = (args, allowFailure = false) => {
 		const r = spawnSync("git", args, { cwd, encoding: "buffer", maxBuffer: 128 * 1024 * 1024 });
 		if (r.status !== 0 || r.error) {
@@ -253,13 +253,13 @@ function gitSnapshot(cwd = ROOT, seen = new Set(), isolated = false) {
 	if (seen.has(top)) throw new Error("중첩 저장소 경로가 순환함");
 	seen.add(top); cwd = top;
 	const h = crypto.createHash("sha256");
-	h.update(filterSnapshotStatus(git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"]), cwd));
+	h.update(filterSnapshotStatus(git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"]), cwd, baseRoot));
 	const hasHead = git(["rev-parse", "--verify", "HEAD"], true) !== null;
 	h.update(git(["diff", "--binary", ...(hasHead ? ["HEAD"] : []), "--ignore-submodules=all"]));
 	h.update(git(["diff", "--cached", "--binary", "--ignore-submodules=all"]));
-	const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]).toString("utf8").split("\0").filter(Boolean).filter((f) => !isSnapshotExcluded(cwd, f));
-	const ignored = git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]).toString("utf8").split("\0").filter(Boolean).filter((f) => !isSnapshotExcluded(cwd, f));
-	for (const file of ignored.sort()) hashIgnoredPath(h, path.resolve(cwd, file));
+	const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]).toString("utf8").split("\0").filter(Boolean).filter((f) => !isSnapshotExcluded(cwd, f, baseRoot));
+	const ignored = git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]).toString("utf8").split("\0").filter(Boolean).filter((f) => !isSnapshotExcluded(cwd, f, baseRoot));
+	for (const file of ignored.sort()) hashIgnoredPath(h, path.resolve(cwd, file), path.relative(baseRoot, path.resolve(cwd, file)) || ".");
 	for (const name of ["hooks", "config", "info/exclude"]) {
 		const file = git(["rev-parse", "--git-path", name]).toString("utf8").trim();
 		hashPath(h, path.resolve(cwd, file));
@@ -276,14 +276,14 @@ function gitSnapshot(cwd = ROOT, seen = new Set(), isolated = false) {
 	}
 	for (const file of [...nested].sort()) {
 		const abs = path.join(cwd, file);
-		if (isRecoveryMode() && isOutsideWorkspace(abs)) {
+		if (isRecoveryMode(baseRoot) && isOutsideWorkspace(abs, baseRoot)) {
 			h.update(file + "\0external-recovery-skip"); continue;
 		}
 		if (!fs.existsSync(path.join(abs, ".git"))) {
 			if (fs.existsSync(abs) && fs.readdirSync(abs).length) throw new Error("submodule 내용 확인 불가");
 			h.update(file + "\0uninitialized"); continue;
 		}
-		h.update(file); h.update(gitSnapshot(abs, seen, isolated));
+		h.update(file); h.update(gitSnapshot(abs, seen, isolated, baseRoot));
 	}
 	seen.delete(top);
 	return h.digest("hex");
@@ -326,44 +326,45 @@ function hashPath(h, file, recurse = true) {
 }
 
 const REVIEW_SNAPSHOT_EXCLUDED_PREFIXES = [".agents/progress/", ".agents/work/", ".agents/.dm-outbox/", "gates/", "tmp/"];
-const REAL_ROOT = fs.realpathSync(ROOT);
-function isRecoveryMode() {
+function isRecoveryMode(root = ROOT) {
 	for (const marker of [".codex/no-harness", ".claude/no-harness", ".pi/no-harness"]) {
-		try { if (fs.statSync(path.join(ROOT, marker)).isFile()) return true; } catch {}
+		try { if (fs.statSync(path.join(root, marker)).isFile()) return true; } catch {}
 	}
 	return false;
 }
-function isOutsideWorkspace(abs) {
-	let real;
-	try { real = fs.realpathSync(abs); } catch { return false; }
-	return real !== REAL_ROOT && !real.startsWith(REAL_ROOT + path.sep);
+function isOutsideWorkspace(abs, root = ROOT) {
+	let real, realRoot;
+	try { real = fs.realpathSync(abs); realRoot = fs.realpathSync(root); } catch { return false; }
+	return real !== realRoot && !real.startsWith(realRoot + path.sep);
 }
-function isSnapshotExcluded(top, file) {
-	if (path.resolve(top) !== REAL_ROOT) return false;
+function isSnapshotExcluded(top, file, root = ROOT) {
+	let realRoot;
+	try { realRoot = fs.realpathSync(root); } catch { realRoot = path.resolve(root); }
+	if (path.resolve(top) !== realRoot) return false;
 	let rel = String(file).replace(/\\/g, "/").replace(/\/+$/, "");
 	if (rel.startsWith("./")) rel = rel.slice(2);
 	if (path.isAbsolute(rel)) rel = path.relative(top, rel).replace(/\\/g, "/");
 	if (!rel || rel === "." || rel.startsWith("..")) return false;
 	return REVIEW_SNAPSHOT_EXCLUDED_PREFIXES.some((p) => rel === p.replace(/\/+$/, "") || rel.startsWith(p));
 }
-function filterSnapshotStatus(buf, top) {
+function filterSnapshotStatus(buf, top, root = ROOT) {
 	if (!buf || buf.length === 0) return buf;
 	const kept = [];
 	for (const chunk of buf.toString("utf8").split("\0")) {
 		if (chunk === "") continue;
 		const m = chunk.match(/^(.{2}) (.*)$/s);
-		if (m && (m[1] === "??" || m[1] === "!!") && isSnapshotExcluded(top, m[2])) continue;
+		if (m && (m[1] === "??" || m[1] === "!!") && isSnapshotExcluded(top, m[2], root)) continue;
 		kept.push(chunk);
 	}
 	if (!kept.length) return Buffer.alloc(0);
 	return Buffer.from(kept.join("\0") + "\0", "utf8");
 }
 
-function reviewErrorDetails(error, stage, startedAt) {
+function reviewErrorDetails(error, stage, startedAt, root = ROOT) {
 	const token = (v) => typeof v === "string" && /^[A-Za-z0-9_ -]{1,64}$/.test(v) ? v : null;
 	let rel = null;
 	if (typeof error?.path === "string") {
-		const candidate = path.relative(ROOT, path.resolve(ROOT, error.path));
+		const candidate = path.relative(root, path.resolve(root, error.path));
 		if (!path.isAbsolute(candidate) && candidate !== ".." && !candidate.startsWith(".." + path.sep)) rel = candidate || ".";
 	}
 	return JSON.stringify({
@@ -373,12 +374,13 @@ function reviewErrorDetails(error, stage, startedAt) {
 	});
 }
 
-function readOnlySnapshot(isolated = false) {
+function readOnlySnapshot(isolated = false, root = ROOT) {
 	const h = crypto.createHash("sha256");
-	h.update(gitSnapshot(ROOT, new Set(), isolated));
-	if (fs.realpathSync(process.cwd()) !== fs.realpathSync(ROOT)) {
-		if (isRecoveryMode() && isOutsideWorkspace(process.cwd())) h.update("cwd-external-recovery-skip");
-		else h.update(gitSnapshot(process.cwd(), new Set(), isolated));
+	const realRoot = fs.realpathSync(root);
+	h.update(gitSnapshot(root, new Set(), isolated, root));
+	if (fs.realpathSync(process.cwd()) !== realRoot) {
+		if (isRecoveryMode(root) && isOutsideWorkspace(process.cwd(), root)) h.update("cwd-external-recovery-skip");
+		else h.update(gitSnapshot(process.cwd(), new Set(), isolated, root));
 	}
 	for (const file of new Set([statePath(process.env), lib.stateFile(process.env)])) hashPath(h, file);
 	return h.digest("hex");
@@ -398,8 +400,8 @@ function findBwrap() {
 	return null;
 }
 
-function reviewerSandboxArgs(promptDir, id) {
-	const root = fs.realpathSync(ROOT), cwd = fs.realpathSync(process.cwd());
+function reviewerSandboxArgs(promptDir, id, rootDir = ROOT) {
+	const root = fs.realpathSync(rootDir), cwd = fs.realpathSync(process.cwd());
 	const overlaps = (a, b) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
 	const home = fs.realpathSync(os.homedir());
 	const runtime = id === "argon" ? fs.realpathSync(path.join(home, ".gemini")) : null;
@@ -430,7 +432,7 @@ function reviewerSandboxArgs(promptDir, id) {
 	return [...args, "--chdir", root];
 }
 
-async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = null) {
+async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = null, planRoot = ROOT) {
 	let dir, failure;
 	let stage = "prompt-create";
 	const startedAt = Date.now();
@@ -441,13 +443,13 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 		stage = "sandbox-prepare";
 		const bwrap = findBwrap();
 		if (ids.includes("codex") && !bwrap) throw new Error("codex 리뷰어: bwrap 읽기 전용 격리 없음");
-		if (isRecoveryMode() && ids.some((id) => id === "argon" || id === "codex") && !bwrap) throw new Error("복구 모드: bwrap 읽기 전용 격리 없음");
-		const sandboxArgs = ids.some((id) => id === "argon" || id === "codex") && bwrap ? reviewerSandboxArgs(dir, ids.includes("argon") ? "argon" : "codex") : null;
-		const boundedRecovery = isRecoveryMode() && Boolean(sandboxArgs);
+		if (isRecoveryMode(planRoot) && ids.some((id) => id === "argon" || id === "codex") && !bwrap) throw new Error("복구 모드: bwrap 읽기 전용 격리 없음");
+		const sandboxArgs = ids.some((id) => id === "argon" || id === "codex") && bwrap ? reviewerSandboxArgs(dir, ids.includes("argon") ? "argon" : "codex", planRoot) : null;
+		const boundedRecovery = isRecoveryMode(planRoot) && Boolean(sandboxArgs);
 		stage = "snapshot-before";
-		const before = boundedRecovery ? null : readOnlySnapshot(Boolean(sandboxArgs));
+		const before = boundedRecovery ? null : readOnlySnapshot(Boolean(sandboxArgs), planRoot);
 		const beforeState = boundedRecovery ? stateSnapshot() : null;
-		const beforeManifest = preManifest === undefined ? (() => { try { return lib.reviewInputManifest(abs, ROOT, roOpt); } catch { return null; } })() : preManifest;
+		const beforeManifest = preManifest === undefined ? (() => { try { return lib.reviewInputManifest(abs, planRoot, roOpt); } catch { return null; } })() : preManifest;
 		stage = "reviewers";
 		const results = await Promise.all(ids.map(async (id) => {
 			const config = lib.REVIEW_MODELS[id];
@@ -469,14 +471,14 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 				args = [...sandboxArgs, "--", bin, ...args];
 				bin = bwrap; isolation = "bwrap-ro-bind";
 			}
-			return { id, ...config, isolation, ...await execReviewer(bin, args, input, sha256(prompt), config.model) };
+			return { id, ...config, isolation, ...await execReviewer(bin, args, input, sha256(prompt), config.model, planRoot) };
 		}));
 		stage = "manifest-after";
 		let afterManifest = null;
 		try {
 			const planAfter = JSON.parse(fs.readFileSync(abs, "utf8"));
-			const afterRo = lib.planReadOnlyScriptsBinding(planAfter, ROOT);
-			if (afterRo.ok) afterManifest = lib.reviewInputManifest(abs, ROOT, { readOnlyScripts: afterRo.items });
+			const afterRo = lib.planReadOnlyScriptsBinding(planAfter, planRoot);
+			if (afterRo.ok) afterManifest = lib.reviewInputManifest(abs, planRoot, { readOnlyScripts: afterRo.items });
 		} catch { afterManifest = null; }
 		const manifestChanged = beforeManifest === null || beforeManifest === undefined || afterManifest === null || beforeManifest !== afterManifest;
 		for (const r of results) {
@@ -487,12 +489,12 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 		} else if (boundedRecovery) {
 			let changed = true;
 			try { changed = beforeState !== stateSnapshot(); }
-			catch (error) { console.error(reviewErrorDetails(error, "snapshot-after", startedAt)); }
+			catch (error) { console.error(reviewErrorDetails(error, "snapshot-after", startedAt, planRoot)); }
 			if (changed) for (const r of results) r.error = "읽기 전용 검사 실패: 승인 상태가 바뀜";
 		} else {
 			let changed = true;
-			try { changed = before !== readOnlySnapshot(Boolean(sandboxArgs)); }
-			catch (error) { console.error(reviewErrorDetails(error, "snapshot-after", startedAt)); }
+			try { changed = before !== readOnlySnapshot(Boolean(sandboxArgs), planRoot); }
+			catch (error) { console.error(reviewErrorDetails(error, "snapshot-after", startedAt, planRoot)); }
 			if (changed) for (const r of results) r.error = "읽기 전용 검사 실패: git status 또는 작업 트리 내용이 바뀜";
 		}
 		return results;
@@ -503,7 +505,7 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 	} finally {
 		try { if (dir) fs.rmSync(dir, { recursive: true, force: true }); }
 		catch (error) {
-			if (failure) console.error(reviewErrorDetails(error, "prompt-cleanup", startedAt));
+			if (failure) console.error(reviewErrorDetails(error, "prompt-cleanup", startedAt, planRoot));
 			else { error.reviewStage = "prompt-cleanup"; throw error; }
 		}
 	}
@@ -556,11 +558,11 @@ switch (cmd) {
 		break;
 	}
 	case "review": {
-		const { abs, plan, gatesDir, sha } = loadPlan(args[0]);
-		const roBind = lib.planReadOnlyScriptsBinding(plan, ROOT);
+		const { abs, plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
+		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
 		if (!roBind.ok) die(roBind.why, 1);
 		let early = null;
-		try { early = lib.reviewInputEntries(abs, ROOT, { readOnlyScripts: roBind.items }); } catch { early = null; }
+		try { early = lib.reviewInputEntries(abs, planRoot, { readOnlyScripts: roBind.items }); } catch { early = null; }
 		const bindProblems = [];
 		if (!early || early.digest === null) bindProblems.push(`읽기 전용 검사 실패: 리뷰 대상 또는 실행기가 바뀜(${early && early.problems.length ? early.problems[0] : "계획서·핀·실행기를 읽지 못함"})`);
 		else {
@@ -583,22 +585,22 @@ switch (cmd) {
 		if (!Object.hasOwn(lib.REVIEW_MODELS, plan.author_model || "") || plan.author_model !== author) die("--author(argon|codex|muse) 와 계획서 author_model 이 다릅니다");
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 먼저 채우십시오\n${form.join("\n")}`, 1);
-		const pins = lib.pinnedFileProblems(plan, ROOT);
+		const pins = lib.pinnedFileProblems(plan, planRoot);
 		if (pins.length) die(pins.join("\n"), 1);
-		const prompt = lib.reviewPrompt(plan, sha, ROOT, { readOnlyScripts: roBind.items });
+		const prompt = lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items });
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID();
 		const base = path.resolve(opt(args, "--out") || path.join(gatesDir, `deploy-plan-review-${stamp}.md`));
 		// 차례는 기록 reviewedAt 과 같은 시각으로 고른다. 관문이 같은 시각으로 차례를 다시 만들어 대조한다.
 		const reviewedAt = new Date().toISOString();
 		let ids;
-		try { ids = lib.orderedReviewers(author, ROOT, reviewedAt); }
+		try { ids = lib.orderedReviewers(author, planRoot, reviewedAt); }
 		catch (error) { die(`리뷰 차례를 정하지 못함: ${error.message}`); }
 		const parsed = path.parse(base);
 		const outputs = ids.map((id) => path.join(parsed.dir, `${parsed.name}-${id}${parsed.ext || ".md"}`));
 		for (const out of outputs) if (out === abs || fs.existsSync(out)) die("리뷰 결과 경로가 이미 있습니다. 새 --out 경로를 쓰십시오");
 		try { for (const out of outputs) lib.resultFile(gatesDir, path.relative(gatesDir, out), true); }
 		catch { die("--out 은 해당 계획서 gatesDir 안 일반 파일 경로여야 합니다. 하위 폴더는 먼저 만드십시오"); }
-		const rec = { plan_sha256: sha, plan: path.relative(ROOT, abs), author_model: author, prompt_sha256: sha256(prompt), read_only_scripts: roBind.items, rotation: true, skipped: [], reviewers: [], reviewedAt };
+		const rec = { plan_sha256: sha, plan: path.relative(planRoot, abs), author_model: author, prompt_sha256: sha256(prompt), read_only_scripts: roBind.items, rotation: true, skipped: [], reviewers: [], reviewedAt };
 		const recordFile = path.join(gatesDir, lib.REVIEW_FILE);
 		fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
 		const reviewStartedAt = Date.now();
@@ -607,17 +609,17 @@ switch (cmd) {
 		let actual = null, actualOutput = null;
 		const roOpt = { readOnlyScripts: roBind.items };
 		try {
-			const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt);
+			const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt, planRoot);
 			if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first))) {
 				rec.skipped.push({ id: ids[0], reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
 				console.log(`한도 실패로 다음 차례 리뷰어로 넘어감: ${ids[0]} → ${ids[1]}`);
-				const [second] = await runReviewers([ids[1]], prompt, abs, early.digest, roOpt);
+				const [second] = await runReviewers([ids[1]], prompt, abs, early.digest, roOpt, planRoot);
 				actual = second; actualOutput = outputs[1];
 			} else {
 				actual = first; actualOutput = outputs[0];
 			}
 		}
-		catch (error) { die(`읽기 전용 실행 준비 실패. 이전 리뷰 기록은 무효입니다 ${reviewErrorDetails(error, error.reviewStage || "review-prepare", reviewStartedAt)}`, 3); }
+		catch (error) { die(`읽기 전용 실행 준비 실패. 이전 리뷰 기록은 무효입니다 ${reviewErrorDetails(error, error.reviewStage || "review-prepare", reviewStartedAt, planRoot)}`, 3); }
 		{
 			const r = actual;
 			const text = r.body.endsWith("\n") ? r.body : `${r.body}\n`;
@@ -627,10 +629,10 @@ switch (cmd) {
 			catch { die("리뷰 실행 중 결과 경로가 gatesDir 밖 또는 일반 파일이 아닌 경로로 바뀜", 3); }
 			fs.writeFileSync(output, final, { flag: "wx" });
 			rec.reviewers.push({ id: r.id, model: r.model, effort: r.effort, result: path.relative(gatesDir, actualOutput), result_sha256: sha256(final), target_sha256: sha, receipt: { ...r.receipt, stdout_sha256: sha256(text), isolation: r.isolation }, ...(r.error ? { execution_error: r.error } : {}) });
-			console.log(`결과 ${r.id}: ${path.relative(ROOT, actualOutput)}`);
+			console.log(`결과 ${r.id}: ${path.relative(planRoot, actualOutput)}`);
 		}
 		fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
-		const r = reviewStatus(gatesDir, sha, true);
+		const r = reviewStatus(gatesDir, sha, true, planRoot);
 		console.log(r.ok ? "적대 리뷰: 통과 — 승인 요청 가능" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
 		process.exit(r.ok ? 0 : 1);
 	}
@@ -660,7 +662,7 @@ switch (cmd) {
 		break;
 	}
 	case "judge": {
-		const { plan, gatesDir, sha } = loadPlan(args[0]);
+		const { plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
 		const evidence = optAll(args, "--evidence");
 		const executor = opt(args, "--executor-session") || process.env.CLAUDE_SESSION_ID || "";
 		if (!executor) die("--executor-session <실행 세션 id> 가 필요합니다");
@@ -691,7 +693,7 @@ switch (cmd) {
 		const rec = { plan_sha256: sha, verdict, judge: { model: MODEL, effort: EFFORT, session: judgeSession }, executor_session: executor, evidence: ev.map(({ path: p, sha256: s }) => ({ path: p, sha256: s })), decidedAt: new Date().toISOString(), raw_output: raw.slice(-4000), raw_sha256: sha256(raw) };
 		const file = path.join(dir, `${rec.decidedAt.replace(/[:.]/g, "-")}.json`);
 		fs.writeFileSync(file, `${JSON.stringify(rec, null, 2)}\n`);
-		console.log(`판정: ${verdict === "incident" ? "장애 — 계획서의 선조치만 실행하고 바로 보고" : "개발 — 선조치 불가, 멈추고 보고"}\n기록: ${path.relative(ROOT, file)}`);
+		console.log(`판정: ${verdict === "incident" ? "장애 — 계획서의 선조치만 실행하고 바로 보고" : "개발 — 선조치 불가, 멈추고 보고"}\n기록: ${path.relative(planRoot, file)}`);
 		process.exit(verdict === "incident" ? 0 : 1);
 	}
 	default:

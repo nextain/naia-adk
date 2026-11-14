@@ -1445,11 +1445,29 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 function main() {
 	const raw = readStdin();
 	let data = {};
-	try { data = JSON.parse(raw || "{}"); } catch { /* fail-open */ }
+	try {
+		data = JSON.parse(raw || "{}");
+	} catch {
+		process.stdout.write(JSON.stringify({
+			decision: "block",
+			reason: "[HARNESS] 세션 계약 관문 입력 JSON을 해석하지 못해 막습니다 (fail-closed).",
+		}));
+		return;
+	}
 	sessionRecovery.handleEvent("PreToolUse", raw, data.cwd || process.cwd());
 	const output = decide(data);
 	if (output) process.stdout.write(JSON.stringify(output));
 }
 
-if (require.main === module) main();
+if (require.main === module) {
+	try {
+		main();
+	} catch (error) {
+		process.stdout.write(JSON.stringify({
+			decision: "block",
+			reason: `[HARNESS] 세션 계약 관문 내부 오류로 막습니다 (fail-closed): ${error && error.message || error}`,
+		}));
+		process.exit(0);
+	}
+}
 module.exports = { routineAllowance, routineRefusedSubcommands, routineMutationRefused, governanceWriteCommand, shellRedirectionTargets, splitShellStatements, ambiguousShellWrapper, reviewInvokerCommand, routineCommandAllowed, baselineCommandAllowed, bootstrapMutationAllowed, bootstrapWriteAllowed, contractAllowsTarget, contractPathMatches, decide, entrypointMutationOutsideHelper, entrypointTarget, executableReadCommand, explicitlyScopedRead, fallbackAllowsTarget, fileMutationTargets, main, nestedModelRuntimeCommand, normalizedToolName, patchTargets, readOnlyShell, rebindCommandAllowed, reclaimCommandAllowed, reconstructSingleFilePatch, requestedWorkdirIssue, stateTarget, trustedSessionParserCommand, unboundOrdinaryMutationAllowed, unboundGitMutationAllowed, unboundOrdinaryShellAllowed };

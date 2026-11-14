@@ -14,10 +14,8 @@ try {
 	H = require("./_claude-bash-guard.js");
 	P = require(path.join(__dirname, "..", "..", ".agents", "hooks", "policies", "bash.js"));
 } catch {
-	if (roleMode) {
-		process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Commit policy module is unavailable (fail-closed)." }));
-	}
-	process.exit(0); // original main().catch fail-open
+	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Commit policy module is unavailable (fail-closed)." }));
+	process.exit(0);
 }
 
 H.start((command, data) => {
@@ -26,6 +24,6 @@ H.start((command, data) => {
 		? { ...data, cwd: path.resolve(process.env.NAIA_ADK_ROOT || projectDir) }
 		: data);
 }, {
-	failClosed: roleMode,
+	failClosed: true,
 	failClosedReason: "[Harness] Commit evidence could not be verified (fail-closed).",
 });

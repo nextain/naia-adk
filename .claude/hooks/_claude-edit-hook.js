@@ -24,7 +24,10 @@
  * opts.failClosedReason — the block reason used when failClosed.
  */
 
-async function runEditHook(policy) {
+async function runEditHook(policy, opts) {
+	const failClosed = Boolean(opts && opts.failClosed);
+	const failReason = (opts && opts.failClosedReason) || "[Harness] Edit policy could not be verified (fail-closed).";
+
 	let input = "";
 	for await (const chunk of process.stdin) {
 		input += chunk;
@@ -34,6 +37,9 @@ async function runEditHook(policy) {
 	try {
 		data = JSON.parse(input);
 	} catch {
+		if (failClosed) {
+			process.stdout.write(JSON.stringify({ decision: "block", reason: failReason }));
+		}
 		process.exit(0);
 	}
 
@@ -72,10 +78,11 @@ async function runEditHook(policy) {
 
 function start(policy, opts) {
 	opts = opts || {};
-	runEditHook(policy).catch(() => {
+	const failReason = opts.failClosedReason || "[Harness] Edit policy could not be verified (fail-closed).";
+	runEditHook(policy, opts).catch(() => {
 		if (opts.failClosed) {
 			process.stdout.write(
-				JSON.stringify({ decision: "block", reason: opts.failClosedReason }),
+				JSON.stringify({ decision: "block", reason: failReason }),
 			);
 		}
 		process.exit(0);

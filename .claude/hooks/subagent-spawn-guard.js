@@ -174,6 +174,10 @@ async function main() {
 	try {
 		data = JSON.parse(raw || "{}");
 	} catch {
+		process.stdout.write(JSON.stringify({
+			decision: "block",
+			reason: "[SUBAGENT GUARD] 가드 입력 JSON을 해석하지 못해 차단합니다 (fail-closed).",
+		}));
 		process.exit(0);
 	}
 

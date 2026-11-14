@@ -2475,3 +2475,269 @@ test("hook-watchdog: 멈춘(무한 루프)·신호 종료 deploy-guard 자식을
 	const blocked = runDeployGuardHook("vercel --prod", { cwd: root, root, stateDir, transcriptPath });
 	assert.equal(blocked?.decision, "block");
 });
+
+test("차단-1·2: deploy-guard 는 hook-watchdog 누락·예외 및 정책 로드 실패 시 일반·역할 세션 모두 block JSON 을 냄", (t) => {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-guard-failclosed-"));
+	t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+	const invoke = (guardFile, cwdDir, adkDir = "") => spawnSync(process.execPath, [guardFile], {
+		cwd: cwdDir,
+		input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "echo hi" }, cwd: cwdDir }),
+		encoding: "utf8",
+		timeout: 5000,
+		env: { ...process.env, CLAUDE_PROJECT_DIR: cwdDir, NAIA_ADK_ROOT: adkDir },
+	});
+	const roleDir = path.join(tmp, "role-ws");
+	const normalDir = path.join(tmp, "normal-ws");
+	fs.mkdirSync(roleDir, { recursive: true });
+	fs.mkdirSync(normalDir, { recursive: true });
+	fs.writeFileSync(path.join(roleDir, ".naia-role.json"), JSON.stringify({ read: [] }));
+
+	for (const [mode, setupFn] of [
+		["watchdog-missing", () => {}],
+		["watchdog-throws", (rootDir) => {
+			fs.mkdirSync(path.join(rootDir, ".claude/hooks/lib"), { recursive: true });
+			fs.writeFileSync(path.join(rootDir, ".claude/hooks/lib/hook-watchdog.js"), 'throw new Error("watchdog broken");\n');
+		}],
+		["policy-load-fail", (rootDir) => {
+			fs.mkdirSync(path.join(rootDir, ".claude/hooks/lib"), { recursive: true });
+			fs.copyFileSync(path.join(REPO_ROOT, ".claude/hooks/lib/hook-watchdog.js"), path.join(rootDir, ".claude/hooks/lib/hook-watchdog.js"));
+			// bash.js 를 만들지 않아 policy require 실패 유발
+		}],
+	]) {
+		const iso = path.join(tmp, mode);
+		fs.mkdirSync(path.join(iso, ".claude/hooks"), { recursive: true });
+		const guardCopy = path.join(iso, ".claude/hooks/deploy-guard.js");
+		fs.copyFileSync(path.join(REPO_ROOT, ".claude/hooks/deploy-guard.js"), guardCopy);
+		fs.copyFileSync(path.join(REPO_ROOT, ".claude/hooks/_claude-bash-guard.js"), path.join(iso, ".claude/hooks/_claude-bash-guard.js"));
+		setupFn(iso);
+		for (const [label, cwdDir] of [["normal", normalDir], ["role", roleDir]]) {
+			const res = invoke(guardCopy, cwdDir, iso);
+			assert.equal(res.status, 0, `${mode}/${label}: exit 0 expected, got ${res.status} stderr=${res.stderr}`);
+			const parsed = JSON.parse(res.stdout || "null");
+			assert.equal(parsed?.decision, "block", `${mode}/${label}: must emit block JSON, got ${res.stdout}`);
+		}
+	}
+});
+
+test("cross-repo review: 외부 저장소 계획서 review 가 planRoot 기준으로 프롬프트·매니페스트·bwrap --chdir 를 쓰고 check/preapprove 를 통과함", (t) => {
+	const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-cross-review-")));
+	t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+	const extRoot = path.join(tmp, "external-app");
+	fs.mkdirSync(path.join(extRoot, "scripts"), { recursive: true });
+	assert.equal(spawnSync("git", ["init", "-q", extRoot], { encoding: "utf8" }).status, 0);
+	assert.equal(spawnSync("git", ["-C", extRoot, "config", "user.email", "ext@example.invalid"], { encoding: "utf8" }).status, 0);
+	assert.equal(spawnSync("git", ["-C", extRoot, "config", "user.name", "Ext"], { encoding: "utf8" }).status, 0);
+
+	// 주의: external-app 안에는 .agents/scripts 실행기 파일이 전혀 없다(순수 외부 저장소).
+	const { planFile, scriptRel, gatesDir } = createValidPlan(extRoot, { name: "ext-web-rollout-01" });
+	// createValidPlan 이 복사한 실행기 파일은 제거해 "실행기 없는 순수 외부 저장소" 조건 검증
+	fs.rmSync(path.join(extRoot, ".agents/scripts"), { recursive: true, force: true });
+	fs.rmSync(path.join(extRoot, ".claude/hooks"), { recursive: true, force: true });
+	fs.rmSync(path.join(extRoot, ".claude/deploy"), { recursive: true, force: true });
+
+	const pinnedScript = "#!/usr/bin/env bash\n# external-pinned-unique-marker\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v9\n";
+	fs.writeFileSync(path.join(extRoot, scriptRel), pinnedScript, { mode: 0o755 });
+	const pinnedSha = sha256(Buffer.from(pinnedScript, "utf8"));
+
+	const roScriptRel = "scripts/check-ext-ro.sh";
+	const roScript = "#!/usr/bin/env bash\n# external-ro-unique-marker\naz containerapp show -n sample-web-prod -g sample-rg\n";
+	fs.writeFileSync(path.join(extRoot, roScriptRel), roScript, { mode: 0o755 });
+	const roSha = sha256(Buffer.from(roScript, "utf8"));
+
+	writeGateConfig(extRoot, {
+		services: {
+			"azure:containerapp:sample-web-prod": { label: "샘플 웹 운영 앱", allowOps: true, allowRollback: true, commandMustContain: ["sample-web-prod"] },
+		},
+		readOnlyScripts: [{ sha256: roSha, path: roScriptRel, service: "azure:containerapp:sample-web-prod", note: "읽기 전용 확인" }],
+	});
+
+	const planObj = JSON.parse(fs.readFileSync(planFile, "utf8"));
+	planObj.scenario[0].files[scriptRel] = pinnedSha;
+	planObj.scenario[0].files[roScriptRel] = roSha;
+	fs.writeFileSync(planFile, JSON.stringify(planObj, null, 2));
+
+	assert.equal(spawnSync("git", ["-C", extRoot, "add", "scripts", "config"], { encoding: "utf8" }).status, 0);
+	assert.equal(spawnSync("git", ["-C", extRoot, "commit", "-qm", "init ext"], { encoding: "utf8" }).status, 0);
+
+	const binDir = path.join(tmp, "bin");
+	const fakeHome = path.join(tmp, "home");
+	fs.mkdirSync(binDir, { recursive: true });
+	fs.mkdirSync(path.join(fakeHome, ".gemini"), { recursive: true });
+	fs.mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
+	const bwrapArgsFile = path.join(tmp, "bwrap-args.txt");
+	const reviewerCwdFile = path.join(tmp, "reviewer-cwd.txt");
+	const receivedPromptFile = path.join(tmp, "received-prompt.txt");
+	fs.writeFileSync(path.join(binDir, "bwrap"), `#!/bin/sh
+printf '%s\\n' "$@" > "${bwrapArgsFile}"
+while [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done
+shift
+exec "$@"
+`, { mode: 0o755 });
+	const passBody = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "참고 지적: 0", "남은 지적: 0"].join("\n");
+	const fakeArgon = path.join(binDir, "fake-agy");
+	fs.writeFileSync(fakeArgon, `#!/bin/sh
+pwd -P > "${reviewerCwdFile}"
+cat > "${receivedPromptFile}"
+cat <<'REVIEW_EOF'
+${passBody}
+REVIEW_EOF
+`, { mode: 0o755 });
+
+	const stateDir = path.join(tmp, "state");
+	fs.mkdirSync(stateDir, { recursive: true });
+	const env = {
+		...process.env,
+		HOME: fakeHome,
+		PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
+		APPROVAL_PLAN_ARGON_BIN: fakeArgon,
+		DEPLOY_APPROVAL_STATE_DIR: stateDir,
+	};
+
+	// ADK 저장소 루트(REPO_ROOT)에서 외부 계획서를 리뷰해도 planRoot(extRoot) 기준으로 동작해야 함
+	const rev = spawnSync(process.execPath, [SCRIPT_PATH, "review", planFile, "--author", "muse"], {
+		cwd: REPO_ROOT, encoding: "utf8", timeout: 30000, env,
+	});
+	assert.equal(rev.status, 0, `cross-repo review failed:\n${rev.stdout}\n${rev.stderr}`);
+
+	const bwrapArgs = fs.readFileSync(bwrapArgsFile, "utf8").trim().split("\n");
+	const chdirIdx = bwrapArgs.indexOf("--chdir");
+	assert.ok(chdirIdx >= 0, `bwrap --chdir missing: ${JSON.stringify(bwrapArgs)}`);
+	assert.equal(bwrapArgs[chdirIdx + 1], extRoot, "bwrap --chdir 는 planRoot 여야 함");
+	assert.equal(fs.readFileSync(reviewerCwdFile, "utf8").trim(), extRoot, "reviewer process cwd 는 planRoot 여야 함");
+
+	const promptSent = fs.readFileSync(receivedPromptFile, "utf8");
+	assert.match(promptSent, new RegExp(pinnedSha));
+	assert.match(promptSent, /external-pinned-unique-marker/);
+	assert.match(promptSent, new RegExp(roSha));
+	assert.match(promptSent, /external-ro-unique-marker/);
+
+	const rec = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), "utf8"));
+	assert.equal(rec.plan, path.relative(extRoot, planFile), "review record plan path must be relative to planRoot");
+	assert.equal(rec.read_only_scripts?.length, 1, "readOnlyScripts must bind from external planRoot");
+	assert.equal(rec.read_only_scripts[0].path, roScriptRel);
+	assert.equal(rec.reviewers.length, 1);
+	const expectedManifest = deployPlan.reviewInputManifest(planFile, extRoot, { readOnlyScripts: rec.read_only_scripts });
+	assert.equal(rec.reviewers[0].receipt.input_manifest_sha256, expectedManifest, "manifest 는 planRoot 기준으로 계산돼야 함");
+
+	const chk = spawnSync(process.execPath, [SCRIPT_PATH, "check", planFile], { cwd: REPO_ROOT, encoding: "utf8", env });
+	assert.equal(chk.status, 0, `cross-repo check after review failed:\n${chk.stdout}\n${chk.stderr}`);
+	const pre = spawnSync(process.execPath, [SCRIPT_PATH, "preapprove", planFile, "--session", "ext-review-sess-1"], { cwd: REPO_ROOT, encoding: "utf8", env });
+	assert.equal(pre.status, 0, `cross-repo preapprove after review failed:\n${pre.stdout}\n${pre.stderr}`);
+
+	// 다른 실행기 해시(foreignMarker)가 있는 외부 저장소에서도 ADK(ROOT) 실행기 기준으로 review 통과(deploy-plan.js:732 회귀 방지)
+	const markedRoot = path.join(tmp, "marked-foreign-app");
+	populatePlanRepo(markedRoot, { foreignMarker: "different-foreign-executor" });
+	assert.equal(spawnSync("git", ["init", "-q", markedRoot], { encoding: "utf8" }).status, 0);
+	assert.equal(spawnSync("git", ["-C", markedRoot, "config", "user.email", "ext@example.invalid"], { encoding: "utf8" }).status, 0);
+	assert.equal(spawnSync("git", ["-C", markedRoot, "config", "user.name", "Ext"], { encoding: "utf8" }).status, 0);
+	const { planFile: markedPlan } = createValidPlan(markedRoot, { name: "marked-ext-rollout-01" });
+	assert.equal(spawnSync("git", ["-C", markedRoot, "add", "-A"], { encoding: "utf8" }).status, 0);
+	assert.equal(spawnSync("git", ["-C", markedRoot, "commit", "-qm", "init marked"], { encoding: "utf8" }).status, 0);
+	const markedRev = spawnSync(process.execPath, [SCRIPT_PATH, "review", markedPlan, "--author", "muse"], {
+		cwd: markedRoot, encoding: "utf8", timeout: 30000, env,
+	});
+	assert.equal(markedRev.status, 0, `marked foreign review failed:\n${markedRev.stdout}\n${markedRev.stderr}`);
+});
+
+test("참고-1: heredoc 꼴(<<-, 따옴표 구분자, 한 줄 둘, 닫힘 없음, bash/ssh/az run-command) 분류기 검증", (t) => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "heredoc-classifier-"));
+	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+	const dir = path.join(root, "scripts");
+	fs.mkdirSync(dir, { recursive: true });
+
+	// 1. <<- 탭 벗기기 구분자: 탭 들여쓴 \tEOF 는 닫히고, bash <<-EOF 안 탭 들여쓴 본문도 실행으로 탐지; 스크립트 case 에서는 공백+EOF 가 안 닫혀 보수적으로 양쪽 분기 유지
+	const dashCmd = [
+		"cat <<-EOF >/dev/null",
+		"\techo safe",
+		"\tEOF",
+		"vercel --prod",
+	].join("\n");
+	assert.ok(classifyProdMutations(dashCmd, root).some((h) => h.service === "vercel:prod"), "<<- 탭 닫힘 뒤 명령이 분류돼야 함");
+	const dashBash = [
+		"bash <<-'EOF'",
+		"\tvercel --prod",
+		"\tEOF",
+	].join("\n");
+	assert.ok(classifyProdMutations(dashBash, root).some((h) => h.service === "vercel:prod"), "<<-'EOF' 로 bash 에 먹인 탭 들여쓴 명령도 탐지");
+	const spaceDashScript = path.join(dir, "space-dash.sh");
+	fs.writeFileSync(spaceDashScript, [
+		"#!/usr/bin/env bash",
+		'ENVIRONMENT="$1"',
+		"cat <<-INNER",
+		"\techo note",
+		"  INNER",
+		'case "$ENVIRONMENT" in',
+		"  prod) az vm run-command invoke -g rg-prod --vm-name sample-prod-vm --command-id RunShellScript --scripts 'echo prod' ;;",
+		"  dev) echo dev-only ;;",
+		"esac",
+	].join("\n"), { mode: 0o755 });
+	assert.ok(classifyProdMutations(`bash ${spaceDashScript} dev`, root).some((h) => h.service === "azure:vm:sample-prod-vm"), "<<- 에서 공백+INNER 는 blankHeredocBodies 에서 닫힘 줄이 아니므로 보수적으로 prod 갈래도 유지");
+
+	// 스크립트 내 <<- 'INNER' 본문이 바깥 ENV="$1" + case 분기를 가리지 않음
+	const dashCaseScript = path.join(dir, "dash-case.sh");
+	fs.writeFileSync(dashCaseScript, [
+		"#!/usr/bin/env bash",
+		'ENVIRONMENT="$1"',
+		"cat <<-'INNER'",
+		"\tshift",
+		"\teval bad",
+		'\tOTHER_VAR="$1"',
+		"\tINNER",
+		'case "$ENVIRONMENT" in',
+		"  prod) az vm run-command invoke -g rg-prod --vm-name sample-prod-vm --command-id RunShellScript --scripts 'echo prod' ;;",
+		"  dev) echo dev-only ;;",
+		"esac",
+	].join("\n"), { mode: 0o755 });
+	assert.equal(classifyProdMutations(`bash ${dashCaseScript} dev`, root).length, 0, "<<-'INNER' 본문은 바깥 case 분기를 깨지 않아야 함");
+	assert.ok(classifyProdMutations(`bash ${dashCaseScript} prod`, root).some((h) => h.service === "azure:vm:sample-prod-vm"), "<<-'INNER' 이후 prod 분기는 탐지돼야 함");
+
+	// 2. 따옴표 구분자(<<'EOF', <<"EOF"): 본문이 bash 에 들어가면 실행으로 탐지되고, cat 에 들어가면 문서로만 남음
+	const singleQuoted = ["bash <<'EOF'", "vercel --prod", "EOF"].join("\n");
+	const doubleQuoted = ['bash <<"EOF"', "vercel --prod", "EOF"].join("\n");
+	assert.ok(classifyProdMutations(singleQuoted, root).some((h) => h.service === "vercel:prod"), "<<'EOF' 로 bash 에 먹인 운영 배포를 탐지");
+	assert.ok(classifyProdMutations(doubleQuoted, root).some((h) => h.service === "vercel:prod"), '<<"EOF" 로 bash 에 먹인 운영 배포를 탐지');
+	assert.equal(classifyProdMutations(["cat <<'EOF'", "vercel --prod", "EOF"].join("\n"), root).length, 0, "cat <<'EOF' 문서는 실행이 아님");
+
+	// 따옴표 구분자의 닫힘 줄은 따옴표 없는 EOF 여야 함 ('EOF' 는 본문 일부이고 EOF 가 닫음)
+	const mismatchQuote = ["cat <<'EOF'", "'EOF'", "EOF", "vercel --prod"].join("\n");
+	assert.ok(classifyProdMutations(mismatchQuote, root).some((h) => h.service === "vercel:prod"));
+
+	// 3. 한 줄에 heredoc 둘: 첫째 cat 이후 둘째 bash heredoc 이 실행으로 탐지됨
+	const twoOnLine = [
+		"cat <<'FIRST' >/dev/null; bash <<'SECOND'",
+		"safe note",
+		"FIRST",
+		"vercel --prod",
+		"SECOND",
+	].join("\n");
+	assert.ok(classifyProdMutations(twoOnLine, root).some((h) => h.service === "vercel:prod"), "한 줄에 heredoc 둘 중 둘째 bash 본문을 탐지");
+
+	const twoOnSameCmd = [
+		"diff <(cat <<A) <(cat <<B) >/dev/null; vercel --prod",
+		"left",
+		"A",
+		"right",
+		"B",
+	].join("\n");
+	assert.ok(classifyProdMutations(twoOnSameCmd, root).some((h) => h.service === "vercel:prod"), "한 절에 heredoc 둘 뒤의 운영 명령을 탐지");
+
+	// 4. 끝 구분자 없는 heredoc (닫히지 않음)
+	const unclosedBash = ["bash <<'UNCLOSED'", "vercel --prod"].join("\n");
+	assert.ok(classifyProdMutations(unclosedBash, root).some((h) => h.service === "vercel:prod"), "끝 구분자 없는 bash heredoc 본문도 탐지");
+
+	// 5. bash / ssh / az vm run-command 에 heredoc 먹이기
+	const sshHeredoc = [
+		"ssh user@example.invalid 'bash -s' <<'EOF'",
+		"wrangler deploy",
+		"EOF",
+	].join("\n");
+	const sshHits = classifyProdMutations(sshHeredoc, root);
+	assert.ok(sshHits.some((h) => h.service === "cloudflare:workers"), `ssh 원격 셸 heredoc 안 wrangler deploy 를 탐지: ${JSON.stringify(sshHits)}`);
+
+	const azRunCmdHeredoc = [
+		"az vm run-command invoke -g rg-prod --vm-name sample-prod-vm --command-id RunShellScript --scripts @- <<'EOF'",
+		"systemctl restart sample",
+		"EOF",
+	].join("\n");
+	assert.ok(classifyProdMutations(azRunCmdHeredoc, root).some((h) => h.service === "azure:vm:sample-prod-vm"), "az vm run-command invoke heredoc 먹이기를 탐지");
+});

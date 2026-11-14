@@ -27,6 +27,8 @@ function fixture(t) {
 	const deploymentHook = path.join(adk, ".claude/hooks/deploy-guard.js");
 	fs.copyFileSync(path.join(__dirname, "deploy-guard.js"), deploymentHook);
 	fs.copyFileSync(path.join(__dirname, "_claude-bash-guard.js"), path.join(adk, ".claude/hooks/_claude-bash-guard.js"));
+	fs.mkdirSync(path.join(adk, ".claude/hooks/lib"), { recursive: true });
+	fs.copyFileSync(path.join(__dirname, "lib/hook-watchdog.js"), path.join(adk, ".claude/hooks/lib/hook-watchdog.js"));
 	// Route the isolated adapter to the real shared policy, without replacing
 	// its implementation or letting approvals/audit touch the checkout.
 	write(path.join(adk, ".agents/hooks/policies/bash.js"),
@@ -111,7 +113,8 @@ for (const [name, denied, allowed] of cases) {
 		fs.mkdirSync(path.join(repository, ".git"), { recursive: true });
 		fs.unlinkSync(path.join(adk, ".agents/progress/work.json"));
 		fs.unlinkSync(path.join(adk, ".claude/hooks/gcs-guard.config.json"));
-		for (const helper of ["_claude-bash-guard.js", "_claude-edit-hook.js"]) {
+		for (const helper of ["_claude-bash-guard.js", "_claude-edit-hook.js", "lib/hook-watchdog.js"]) {
+			fs.mkdirSync(path.dirname(path.join(adk, ".claude/hooks", helper)), { recursive: true });
 			fs.copyFileSync(path.join(__dirname, helper), path.join(adk, ".claude/hooks", helper));
 		}
 		write(path.join(adk, ".agents/hooks/policies/edit.js"),
@@ -278,40 +281,28 @@ test("subagent counters are isolated between two roles with the same session id"
 	assert.equal(fs.existsSync(path.join(adk, ".claude/subagent-budget")), false);
 });
 
-test("only role adapters fail closed when shared policy code is missing or broken", async (t) => {
+test("all adapters fail closed regardless of role mode when shared policy code is missing or broken", async (t) => {
 	const { base, role, adk } = fixture(t);
 	for (const name of ["commit-guard.js", "deploy-guard.js", "prod-gateway-guard.js", "remote-identity-gate.js"]) {
 		const brokenRoot = path.join(base, name.replace(/\.js$/, ""));
 		const copiedHook = path.join(brokenRoot, ".claude/hooks", name);
 		write(copiedHook, fs.readFileSync(path.join(__dirname, name), "utf8"));
-		for (const helper of ["_claude-bash-guard.js", "_claude-edit-hook.js"]) {
+		for (const helper of ["_claude-bash-guard.js", "_claude-edit-hook.js", "lib/hook-watchdog.js"]) {
+			fs.mkdirSync(path.dirname(path.join(brokenRoot, ".claude/hooks", helper)), { recursive: true });
 			fs.copyFileSync(path.join(__dirname, helper), path.join(brokenRoot, ".claude/hooks", helper));
 		}
 		const payload = cases.find(([hook]) => hook === name)[1];
 		assert.equal((await run(name, role, payload, adk, copiedHook))?.decision, "block", `${name}: profile loader fails closed`);
 		assert.equal((await run(name, role, payload, "", copiedHook))?.decision, "block", `${name}: role marker fails closed`);
 		assert.equal((await run(name, adk, payload, adk, copiedHook, { CLAUDE_PROJECT_DIR: role }))?.decision, "block", `${name}: project role takes priority over cwd`);
-		if (name !== "remote-identity-gate.js") {
-			assert.equal(await run(name, adk, payload, adk, copiedHook), null, `${name}: profile env preserves legacy loader failure`);
-			assert.equal(await run(name, role, payload, adk, copiedHook, { CLAUDE_PROJECT_DIR: adk }), null, `${name}: project repository ignores cwd role marker`);
-			assert.equal(await run(name, adk, payload, "", copiedHook), null, `${name}: legacy repository fallback is preserved`);
-		} else {
-			assert.equal(await run(name, adk, payload, adk, copiedHook, {}, 1), null, "profile env preserves legacy remote loader exit");
-			assert.equal(await run(name, role, payload, adk, copiedHook, { CLAUDE_PROJECT_DIR: adk }, 1), null, "project repository ignores cwd role marker for remote loader");
-			const legacyExit = await new Promise((resolve, reject) => {
-				const child = spawn(process.execPath, [copiedHook], {
-					cwd: adk, env: { ...process.env, NAIA_ADK_ROOT: "", CLAUDE_PROJECT_DIR: adk }, stdio: "ignore",
-				});
-				const timer = setTimeout(() => { child.kill(); reject(new Error("legacy remote loader timed out")); }, 10000);
-				child.on("error", error => { clearTimeout(timer); reject(error); });
-				child.on("close", code => { clearTimeout(timer); resolve(code); });
-			});
-			assert.equal(legacyExit, 1, "legacy missing remote module still fails as before");
-		}
+		assert.equal((await run(name, adk, payload, adk, copiedHook))?.decision, "block", `${name}: non-role session fails closed on missing policy`);
+		assert.equal((await run(name, role, payload, adk, copiedHook, { CLAUDE_PROJECT_DIR: adk }))?.decision, "block", `${name}: project repository fails closed on missing policy`);
+		assert.equal((await run(name, adk, payload, "", copiedHook))?.decision, "block", `${name}: repository without env fails closed on missing policy`);
 		const policyFile = name === "remote-identity-gate.js" ? ".agents/hooks/core/remote-identity.js"
 			: name === "prod-gateway-guard.js" ? ".agents/hooks/policies/edit.js" : ".agents/hooks/policies/bash.js";
 		write(path.join(brokenRoot, policyFile), "this is invalid JavaScript");
-		assert.equal((await run(name, role, payload, adk, copiedHook))?.decision, "block", `${name}: broken shared code fails closed`);
+		assert.equal((await run(name, role, payload, adk, copiedHook))?.decision, "block", `${name}: broken shared code fails closed in role session`);
+		assert.equal((await run(name, adk, payload, adk, copiedHook))?.decision, "block", `${name}: broken shared code fails closed in normal session`);
 	}
 });
 
@@ -321,6 +312,8 @@ test("without a role file NAIA_ADK_ROOT does not redirect deployment approvals",
 	const repositoryHook = path.join(repository, ".claude/hooks/deploy-guard.js");
 	write(repositoryHook, fs.readFileSync(path.join(__dirname, "deploy-guard.js"), "utf8"));
 	fs.copyFileSync(path.join(__dirname, "_claude-bash-guard.js"), path.join(repository, ".claude/hooks/_claude-bash-guard.js"));
+	fs.mkdirSync(path.join(repository, ".claude/hooks/lib"), { recursive: true });
+	fs.copyFileSync(path.join(__dirname, "lib/hook-watchdog.js"), path.join(repository, ".claude/hooks/lib/hook-watchdog.js"));
 	write(path.join(repository, ".agents/hooks/policies/bash.js"),
 		`module.exports = require(${JSON.stringify(path.resolve(__dirname, "../../.agents/hooks/policies/bash.js"))});\n`);
 	const config = { projects: { sample: { platform: "gcloud", dev_service: "sample-dev" } } };
@@ -353,7 +346,7 @@ test("without a role file NAIA_ADK_ROOT does not redirect the GCS bucket policy"
 	assert.equal(await run("gcs-guard.js", role, payload, adk, repositoryHook, { CLAUDE_PROJECT_DIR: role }), null, "a role session reads the central policy");
 });
 
-test("role adapters fail closed when shared policy throws at run time", async (t) => {
+test("adapters fail closed regardless of role mode when shared policy throws at run time", async (t) => {
 	const { base, role, adk } = fixture(t);
 	for (const [name, policyFile, exported] of [
 		["deploy-guard.js", ".agents/hooks/policies/bash.js", "deploy"],
@@ -362,12 +355,71 @@ test("role adapters fail closed when shared policy throws at run time", async (t
 		const throwingRoot = path.join(base, `throwing-${exported}`);
 		const copiedHook = path.join(throwingRoot, ".claude/hooks", name);
 		write(copiedHook, fs.readFileSync(path.join(__dirname, name), "utf8"));
-		for (const helper of ["_claude-bash-guard.js", "_claude-edit-hook.js"]) {
+		for (const helper of ["_claude-bash-guard.js", "_claude-edit-hook.js", "lib/hook-watchdog.js"]) {
+			fs.mkdirSync(path.dirname(path.join(throwingRoot, ".claude/hooks", helper)), { recursive: true });
 			fs.copyFileSync(path.join(__dirname, helper), path.join(throwingRoot, ".claude/hooks", helper));
 		}
 		write(path.join(throwingRoot, policyFile), `module.exports = { ${exported}() { throw new Error("policy failure"); } };\n`);
 		const payload = cases.find(([hook]) => hook === name)[1];
 		assert.equal((await run(name, role, payload, adk, copiedHook))?.decision, "block", `${name}: role fails closed`);
-		assert.equal(await run(name, adk, payload, "", copiedHook), null, `${name}: repository keeps the fail-open envelope`);
+		assert.equal((await run(name, adk, payload, "", copiedHook))?.decision, "block", `${name}: non-role session also fails closed`);
 	}
+});
+
+test("deploy-guard fails closed when lib/hook-watchdog.js is missing or throws on require (normal & role)", async (t) => {
+	const { base, role, adk } = fixture(t);
+	const payload = bash("echo hello");
+	for (const [modeName, mutator] of [
+		["missing", () => {}],
+		["throwing", (watchdogDest) => write(watchdogDest, 'throw new Error("watchdog load boom");\n')],
+	]) {
+		const iso = path.join(base, `watchdog-${modeName}`);
+		const copiedHook = path.join(iso, ".claude/hooks/deploy-guard.js");
+		write(copiedHook, fs.readFileSync(path.join(__dirname, "deploy-guard.js"), "utf8"));
+		fs.copyFileSync(path.join(__dirname, "_claude-bash-guard.js"), path.join(iso, ".claude/hooks/_claude-bash-guard.js"));
+		write(path.join(iso, ".agents/hooks/policies/bash.js"),
+			`module.exports = { deploy() { throw new Error("must not run policy without watchdog"); } };\n`);
+		mutator(path.join(iso, ".claude/hooks/lib/hook-watchdog.js"));
+		assert.equal((await run("deploy-guard.js", adk, payload, "", copiedHook))?.decision, "block", `normal session blocks when watchdog is ${modeName}`);
+		assert.equal((await run("deploy-guard.js", role, payload, adk, copiedHook))?.decision, "block", `role session blocks when watchdog is ${modeName}`);
+	}
+});
+
+test("all closed PreToolUse wrappers and standalone guards block when module is missing or stdin JSON is broken", async (t) => {
+	const { base, role, adk } = fixture(t);
+	for (const [name, helper, payload] of [
+		["destructive-git-guard.js", "_claude-bash-guard.js", bash("echo ok")],
+		["catastrophic-delete-guard.js", "_claude-bash-guard.js", bash("echo ok")],
+		["git-push-guard.js", "_claude-bash-guard.js", bash("echo ok")],
+		["email-send-guard.js", "_claude-bash-guard.js", bash("echo ok")],
+		["artifact-drift-guard.js", "_claude-bash-guard.js", bash("echo ok")],
+		["rdd-experiment-guard.js", "_claude-bash-guard.js", bash("echo ok")],
+		["design-doc-guard.js", "_claude-edit-hook.js", { tool_name: "Edit", tool_input: { file_path: "README.md" } }],
+		["copy-file-guard.js", "_claude-edit-hook.js", { tool_name: "Write", tool_input: { file_path: "README.md" } }],
+	]) {
+		const iso = path.join(base, `wrapper-${name}`);
+		const copiedHook = path.join(iso, ".claude/hooks", name);
+		write(copiedHook, fs.readFileSync(path.join(__dirname, name), "utf8"));
+		fs.copyFileSync(path.join(__dirname, helper), path.join(iso, ".claude/hooks", helper));
+		assert.equal((await run(name, adk, payload, "", copiedHook))?.decision, "block", `${name}: normal session blocks on missing policy module`);
+		assert.equal((await run(name, role, payload, adk, copiedHook))?.decision, "block", `${name}: role session blocks on missing policy module`);
+	}
+	for (const name of ["session-contract-gate.js", "remote-identity-gate.js", "subagent-spawn-guard.js", "destructive-git-guard.js", "design-doc-guard.js"]) {
+		const out = await new Promise((resolve, reject) => {
+			const child = spawn(process.execPath, [path.join(__dirname, name)], {
+				cwd: adk, env: { ...process.env, CLAUDE_PROJECT_DIR: adk }, stdio: ["pipe", "pipe", "pipe"],
+			});
+			let stdout = "";
+			child.stdout.on("data", (d) => { stdout += d; });
+			child.on("error", reject);
+			child.on("close", (code) => resolve({ code, stdout }));
+			child.stdin.end("{broken json");
+		});
+		assert.equal(out.code, 0, `${name}: exits 0 with block JSON on malformed stdin`);
+		assert.equal(JSON.parse(out.stdout)?.decision, "block", `${name}: blocks on malformed stdin`);
+	}
+	const sessionGateIso = path.join(base, "session-gate-missing");
+	const copiedSessionGate = path.join(sessionGateIso, ".claude/hooks/session-contract-gate.js");
+	write(copiedSessionGate, fs.readFileSync(path.join(__dirname, "session-contract-gate.js"), "utf8"));
+	assert.equal((await run("session-contract-gate.js", adk, bash("echo ok"), "", copiedSessionGate))?.decision, "block", "session-contract-gate blocks when .codex gate module is missing");
 });

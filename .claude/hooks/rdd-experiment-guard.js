@@ -14,7 +14,11 @@ try {
 	H = require("./_claude-bash-guard.js");
 	P = require(path.join(__dirname, "..", "..", ".agents", "hooks", "policies", "experiment.js"));
 } catch {
-	process.exit(0); // fail-open on wiring error
+	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Experiment policy module is unavailable (fail-closed)." }));
+	process.exit(0);
 }
 
-H.start((command, data) => P.experiment(command, data));
+H.start((command, data) => P.experiment(command, data), {
+	failClosed: true,
+	failClosedReason: "[Harness] Experiment policy could not be verified (fail-closed).",
+});
