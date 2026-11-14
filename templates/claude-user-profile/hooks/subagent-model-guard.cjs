@@ -203,7 +203,7 @@ function evaluate({ toolName, toolInput = {}, cwd = process.cwd(), home, env = p
 	if (tool.toLowerCase() === "workflow") {
 		if (!override) {
 			return {
-				reason: `[SUBAGENT MODEL GUARD] 여러 하위 작업 묶음 실행은 긴급 예외 때만 허용됩니다. 일반 하위 작업은 Agent/Task에 model haiku/sonnet과 두 안내 줄을 지정하세요. ${urgentHint} ${implementationHint}`,
+				reason: `[SUBAGENT MODEL GUARD] 여러 하위 작업 묶음 실행은 긴급 예외 때만 허용됩니다. 일반 하위 작업은 Agent/Task에 model ${policy.allowedModels.join("/")}과 상위 목표: 및 막히면 올림: 줄을 지정하세요. ${urgentHint} ${implementationHint}`,
 			};
 		}
 		return { stderr: overrideLog };
@@ -212,7 +212,7 @@ function evaluate({ toolName, toolInput = {}, cwd = process.cwd(), home, env = p
 	const isFork = input.subagent_type === "fork";
 	if (isFork && !override) {
 		return {
-			reason: `[SUBAGENT MODEL GUARD] subagent_type=fork는 부모 모델을 그대로 물려받습니다. Agent/Task에 model을 haiku/sonnet으로 지정하고 prompt에 상위 목표: 및 막히면 올림: 줄을 넣으세요. ${urgentHint} ${implementationHint}`,
+			reason: `[SUBAGENT MODEL GUARD] subagent_type=fork는 부모 모델을 그대로 물려받습니다. Agent/Task에 model을 ${policy.allowedModels.join("/")} 중 하나로 지정하고 prompt에 상위 목표: 및 막히면 올림: 줄을 넣으세요. ${urgentHint} ${implementationHint}`,
 		};
 	}
 
@@ -224,21 +224,25 @@ function evaluate({ toolName, toolInput = {}, cwd = process.cwd(), home, env = p
 	let modelProblem = null;
 	if (missingModel && policy.requireExplicitModel) modelProblem = "model이 지정되지 않았습니다";
 	else if (!missingModel && !allowed) modelProblem = `허용 목록 밖 model(${String(requestedModel).slice(0, 80)})입니다`;
-	if (modelProblem && !override) {
-		return {
-			reason: `[SUBAGENT MODEL GUARD] ${tool} 도구 거부: ${modelProblem}. model을 ${policy.allowedModels.join("/")} 중 하나로 지정하세요. ${implementationHint} ${urgentHint}`,
-		};
+	const effectiveModelProblem = modelProblem && !override ? modelProblem : null;
+
+	let briefMissing = [];
+	if (policy.requireBrief) {
+		if (!hasRequiredBrief(input.prompt, "상위 목표")) briefMissing.push("상위 목표:");
+		if (!hasRequiredBrief(input.prompt, "막히면 올림")) briefMissing.push("막히면 올림:");
 	}
 
-	if (policy.requireBrief) {
-		const missing = [];
-		if (!hasRequiredBrief(input.prompt, "상위 목표")) missing.push("상위 목표:");
-		if (!hasRequiredBrief(input.prompt, "막히면 올림")) missing.push("막히면 올림:");
-		if (missing.length) {
-			return {
-				reason: `[SUBAGENT MODEL GUARD] ${tool} prompt에 ${missing.join(" 및 ")} 줄이 필요합니다. 두 줄을 추가하세요. 긴급 예외 표지로도 이 드리프트 방지 규칙은 풀리지 않습니다. 구현·검수는 바깥 모델 대본으로 진행하세요.`,
-			};
-		}
+	if (effectiveModelProblem || briefMissing.length) {
+		const parts = [];
+		if (effectiveModelProblem) parts.push(`${effectiveModelProblem}. model을 ${policy.allowedModels.join("/")} 중 하나로 지정하세요`);
+		if (briefMissing.length) parts.push(`prompt에 ${briefMissing.join(" 및 ")} 줄이 필요합니다`);
+		const briefNote = briefMissing.length ? " 긴급 예외 표지로도 이 드리프트 방지 규칙은 풀리지 않습니다." : "";
+		return {
+			reason: `[SUBAGENT MODEL GUARD] ${tool} 도구 거부: ${parts.join(". ")}. 허용 목록: ${policy.allowedModels.join("/")}. 미충족: ${[
+				effectiveModelProblem ? `모델(${effectiveModelProblem})` : null,
+				...briefMissing.map((line) => `안내 줄(${line})`),
+			].filter(Boolean).join(", ")}.${briefNote} ${implementationHint} ${urgentHint}`,
+		};
 	}
 
 	return override && (isFork || modelProblem) ? { stderr: overrideLog } : null;

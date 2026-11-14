@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "instance": "example",
+  "note": "공통 예시. 저장소 뿌리의 config/short-link.json 으로 복사해 도메인과 대상 주소만 바꾼다. domains 의 첫 줄이 기본 도메인이고, 줄마다 이름(name)·용도(use)·넘김 서버가 섰는지(live)를 적는다. 도메인이 하나면 옛 모양 \"domain\" + \"live\" 도 받는다. 주소 모양은 {도메인}/{키} 이고 종류 글자가 없다. prefixes 에는 등록표의 기본 종류(d) 하나만 켤 수 있고, 모든 도메인이 같은 대상 주소를 쓴다. 대상 주소는 대시보드의 /d/{key} 를 그대로 둔다. 대상이 로그인 앞단 뒤에 있으면 prefixes.d 에 internal_target(로그인 없는 내부 대시보드 /d/{key})과 login_path(예: /login)를 더한다. prefer 를 target 으로 두면 도메인이 서도 기본 출력은 대상 주소다.",
+  "scheme": "https",
+  "root_redirect": null,
+  "domains": [
+    { "name": "example.com", "use": "internal", "live": false },
+    { "name": "example.net", "use": "external", "live": false }
+  ],
+  "prefixes": {
+    "d": {
+      "target": "https://docs.internal.example/d/{key}",
+      "issue_base": "https://docs.internal.example"
+    }
+  }
+}

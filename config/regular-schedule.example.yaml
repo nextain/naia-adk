@@ -2,6 +2,22 @@
 version: 1
 timezone: UTC
 schedules:
+  - id: session-audit
+    role: "<role>"
+    task: "Audit session activity"
+    cadence: daily
+    time: "00:00"
+    graceMinutes: 15
+    status: 제안
+    mechanism:
+      kind: timer
+      target: "<reviewed-local-command-mapping>"
+      timer: null
+    approval: null
+    last_result:
+      at: null
+      outcome: not-run
+      evidence: null
   - id: daily-reflection
     role: "<role>"
     task: "Write a daily reflection"

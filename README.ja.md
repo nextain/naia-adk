@@ -318,19 +318,9 @@ Nextain の内部の系譜は、上の選択肢とは別の運用例です。公
   つなぎ、必要な一片だけを正確に取り出して使う方向を検討しています。CLI や MCP でアクセスし、
   ツールに縛られないようにすることが目標です。
 
-## ライセンス
+## ライセンスおよび特許に関する通知 (License & Patent Notice)
 
-Apache License 2.0。詳しくは [LICENSE](LICENSE) を参照してください。
-
-```
-Copyright 2026 Nextain Inc.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-```
+コードは [Apache License 2.0 (`Apache-2.0`)](LICENSE) の下で提供されており、特許境界および条件付き特許誓約 ([`PATENTS.md`](PATENTS.md))、商用・エンタープライズライセンス ([`LICENSE-COMMERCIAL.md`](LICENSE-COMMERCIAL.md))、コントリビューター規約 ([`CONTRIBUTING.md`](CONTRIBUTING.md)、[`CLA.md`](CLA.md)、[`CLA-CORPORATE.md`](CLA-CORPORATE.md)) の全文については、英語版 [`README.md` の License & Patent Notice](README.md#license--patent-notice) セクションを参照してください。
 
 ## リンク
 
