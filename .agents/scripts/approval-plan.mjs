@@ -106,17 +106,85 @@ function optAll(args, name) {
 	for (let i = 0; i < args.length; i++) if (args[i] === name && args[i + 1]) out.push(args[++i]);
 	return out;
 }
+function isInside(parentDir, targetPath) {
+	const rel = path.relative(parentDir, targetPath);
+	return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+function hasSymlinkSegment(baseDir, targetAbs) {
+	const rel = path.relative(baseDir, targetAbs);
+	if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return true;
+	let cur = baseDir;
+	for (const seg of rel.split(path.sep)) {
+		cur = path.join(cur, seg);
+		if (fs.lstatSync(cur).isSymbolicLink()) return true;
+	}
+	return false;
+}
+
+function findGitRoot(startDir) {
+	let dir = path.resolve(startDir);
+	for (;;) {
+		const dotGit = path.join(dir, ".git");
+		let gitStat = null;
+		try { gitStat = fs.lstatSync(dotGit); } catch (e) { if (e.code !== "ENOENT") return null; }
+		if (gitStat) {
+			if (gitStat.isSymbolicLink() || (!gitStat.isDirectory() && !gitStat.isFile())) return null;
+			return dir;
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
+	}
+}
+
+function resolvePlanRoot(abs) {
+	let st;
+	try { st = fs.lstatSync(abs); } catch (e) { die(`계획서를 읽지 못함: ${e.message}`); }
+	if (st.isSymbolicLink() || !st.isFile()) die("계획서 경로는 심볼릭 링크가 아닌 일반 파일이어야 합니다");
+	let realAbs;
+	try { realAbs = fs.realpathSync(abs); } catch (e) { die(`계획서를 읽지 못함: ${e.message}`); }
+	const realRoot = fs.realpathSync(ROOT);
+
+	if (isInside(ROOT, abs)) {
+		if (hasSymlinkSegment(ROOT, abs) || !isInside(realRoot, realAbs)) {
+			die("계획서 경로에 심볼릭 링크는 허용하지 않습니다");
+		}
+		const relFromRoot = path.relative(ROOT, abs);
+		if (relFromRoot.split(path.sep)[0] === ".git") die("계획서 경로가 .git 안에 있을 수 없습니다");
+		return ROOT;
+	}
+
+	if (isInside(realRoot, realAbs) || realAbs !== abs) {
+		die("계획서 경로에 심볼릭 링크는 허용하지 않습니다");
+	}
+	const gitRoot = findGitRoot(path.dirname(abs));
+	if (!gitRoot) die("계획서가 git 저장소(.git) 안에 있지 않습니다");
+	let realGitRoot;
+	try { realGitRoot = fs.realpathSync(gitRoot); } catch (e) { die(`계획서 저장소 확인 실패: ${e.message}`); }
+	if (realGitRoot !== gitRoot || !isInside(gitRoot, abs) || hasSymlinkSegment(gitRoot, abs)) {
+		die("계획서 저장소 경로가 유효하지 않습니다");
+	}
+	const relFromGitRoot = path.relative(gitRoot, abs);
+	if (relFromGitRoot.split(path.sep)[0] === ".git") die("계획서 경로가 .git 안에 있을 수 없습니다");
+	if (lib.resolveRepoRoot(path.dirname(abs)) !== gitRoot) {
+		die("계획서 저장소 루트가 일치하지 않습니다");
+	}
+	return gitRoot;
+}
+
 function loadPlan(p) {
 	if (!p) die("계획서 경로가 필요합니다(.agents/progress/<작업>/gates/deploy-plan.json)");
 	const abs = path.resolve(p);
 	if (path.basename(abs) !== lib.PLAN_FILE || path.basename(path.dirname(abs)) !== "gates") die(`계획서는 .agents/progress/<작업>/gates/${lib.PLAN_FILE} 여야 합니다`);
+	const root = resolvePlanRoot(abs);
 	let plan;
 	try {
 		plan = JSON.parse(fs.readFileSync(abs, "utf8"));
 	} catch (e) {
 		die(`계획서를 읽지 못함: ${e.message}`);
 	}
-	return { abs, plan, gatesDir: path.dirname(abs), sha: sha256(fs.readFileSync(abs)) };
+	return { abs, plan, gatesDir: path.dirname(abs), sha: sha256(fs.readFileSync(abs)), root };
 }
 
 function runMuse(prompt) {
@@ -441,8 +509,8 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 	}
 }
 
-function reviewStatus(gatesDir, sha, writeFindings = false) {
-	const r = lib.reviewProblems(gatesDir, sha, ROOT);
+function reviewStatus(gatesDir, sha, writeFindings = false, root = ROOT) {
+	const r = lib.reviewProblems(gatesDir, sha, root);
 	for (const row of r.reviewers) {
 		const fail = row.summary.filter((s) => s.verdict !== "PASS").map((s) => s.id);
 		console.log(`리뷰어 ${row.id}: ${row.body ? (row.ok ? "PASS" : "FAIL") : "결과 없음"}; 불통과 기준 ${fail.join(", ") || (row.summary.length === lib.CRITERIA.length ? "없음" : "결과 없음")}; 남은 지적(차단) ${row.openFindings ?? "확인 불가"}; 참고 지적 ${row.advisoryFindings ?? 0}(차단 아님)`);
@@ -450,7 +518,7 @@ function reviewStatus(gatesDir, sha, writeFindings = false) {
 	const merged = path.join(gatesDir, "deploy-plan-review-findings.md");
 	if (writeFindings) {
 		fs.writeFileSync(merged, lib.renderMergedFindings(r, sha));
-		console.log(`통합 지적: ${path.relative(ROOT, merged)}`);
+		console.log(`통합 지적: ${path.relative(root, merged)}`);
 	}
 	return r;
 }
@@ -461,30 +529,30 @@ switch (cmd) {
 		console.log(JSON.stringify({ ...lib.TEMPLATE, createdAt: new Date().toISOString() }, null, 2));
 		break;
 	case "check": {
-		const { abs, plan, gatesDir, sha } = loadPlan(args[0]);
+		const { abs, plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
 		const form = lib.formProblems(plan);
-		console.log(`계획서: ${path.relative(ROOT, abs)}  sha256 ${sha}`);
+		console.log(`계획서: ${path.relative(planRoot, abs)}  sha256 ${sha}`);
 		for (const s of plan.scenario || []) for (const c of s.commands || []) console.log(`  ${s.id}  ${commandHash(c)}  ${String(c).slice(0, 120)}`);
 		for (const a of plan.incident?.actions || []) for (const c of a.commands || []) console.log(`  장애 ${a.id}  ${commandHash(c)}  ${String(c).slice(0, 120)}`);
 		console.log(form.length ? `양식: 빈 칸 ${form.length}\n${form.map((x) => `- ${x}`).join("\n")}` : "양식: 통과");
-		const r = reviewStatus(gatesDir, sha);
+		const r = reviewStatus(gatesDir, sha, false, planRoot);
 		console.log(r.ok ? "적대 리뷰: 통과" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
 		process.exit(form.length || !r.ok ? 1 : 0);
 	}
 	case "report": {
-		const { plan, gatesDir, sha } = loadPlan(args[0]);
+		const { plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 보고문을 낼 수 없습니다\n${form.join("\n")}`, 1);
-		const r = lib.reviewProblems(gatesDir, sha, ROOT);
+		const r = lib.reviewProblems(gatesDir, sha, planRoot);
 		if (!r.ok) die(`적대 리뷰 미통과 — 보고문을 낼 수 없습니다\n${r.problems.join("\n")}`, 1);
 		console.log(lib.renderReport(plan, sha, r));
 		break;
 	}
 	case "review-prompt": {
-		const { plan, sha } = loadPlan(args[0]);
-		const roBind = lib.planReadOnlyScriptsBinding(plan, ROOT);
+		const { plan, sha, root: planRoot } = loadPlan(args[0]);
+		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
 		if (!roBind.ok) die(roBind.why, 1);
-		console.log(lib.reviewPrompt(plan, sha, ROOT, { readOnlyScripts: roBind.items }));
+		console.log(lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items }));
 		break;
 	}
 	case "review": {
@@ -567,17 +635,17 @@ switch (cmd) {
 		process.exit(r.ok ? 0 : 1);
 	}
 	case "preapprove": {
-		const { abs, plan, sha } = loadPlan(args[0]);
+		const { abs, plan, sha, root: planRoot } = loadPlan(args[0]);
 		const session = opt(args, "--session");
 		if (!session) die("--session <rootSessionId> 가 필요합니다");
-		const r = await lib.preapproveStepCodes(abs, ROOT, session, process.env, Date.now());
+		const r = await lib.preapproveStepCodes(abs, planRoot, session, process.env, Date.now());
 		if (!r.ok) die(`사전발급 거부: ${r.why}`, 1);
 		console.log(lib.renderReport(plan, sha, r.review));
 		console.log(`사전발급 코드(사용자 본인이 한 메시지로 승인): PLAN ${r.plan_code} ` + r.steps.map((s) => `${s.step} ${s.code}`).join(" "));
 		break;
 	}
 	case "step-ok": {
-		const { plan, gatesDir, sha } = loadPlan(args[0]);
+		const { plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
 		const step = args[1];
 		if (!(plan.scenario || []).some((s) => s.id === step)) die(`단계 ${step} 가 계획서에 없습니다`);
 		const ev = opt(args, "--evidence");
@@ -588,7 +656,7 @@ switch (cmd) {
 		fs.copyFileSync(ev, copy);
 		const rec = { plan_sha256: sha, step, verdict: "pass", evidence: path.basename(copy), evidence_sha256: sha256(fs.readFileSync(copy)), checkedAt: new Date().toISOString() };
 		fs.writeFileSync(path.join(dir, `${step}.json`), `${JSON.stringify(rec, null, 2)}\n`);
-		console.log(`단계 ${step} 성공 확인 기록: ${path.relative(ROOT, path.join(dir, `${step}.json`))}`);
+		console.log(`단계 ${step} 성공 확인 기록: ${path.relative(planRoot, path.join(dir, `${step}.json`))}`);
 		break;
 	}
 	case "judge": {

@@ -24,6 +24,21 @@ process.stdout.write = (chunk, enc, cb) => {
 const path = require("path");
 const fs = require("fs");
 const roleMode = fs.existsSync(path.join(process.env.CLAUDE_PROJECT_DIR || process.cwd(), ".naia-role.json"));
+
+// 멈춘 훅은 시간 초과로 취소되고 명령이 그대로 돈다. 본문은 자식에서 돌고 부모가 시한을 지켜 막는다(lib/hook-watchdog.js).
+const watchdogPath = path.join(__dirname, "lib", "hook-watchdog.js");
+if (fs.existsSync(watchdogPath)) {
+	let W;
+	try {
+		W = require(watchdogPath);
+	} catch {
+		if (roleMode) {
+			process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Deployment watchdog module is unavailable (fail-closed)." }));
+		}
+		process.exit(0);
+	}
+	if (W.runWithWatchdog({ script: __filename, args: process.argv.slice(2) })) return;
+}
 let H, P;
 try {
 	H = require("./_claude-bash-guard.js");

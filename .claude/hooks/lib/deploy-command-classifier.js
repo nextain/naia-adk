@@ -815,6 +815,8 @@ function classifyAzAll(tokens) {
 			// 대상이 스크립트 안의 변수(--name "${VM}")면 운영인지는 스크립트를 부른 모양이 정한다(설계 검수 15회차 3번).
 			// 설계 검수 16회차 1번: 리소스 그룹만 변수여도 이름이 글자 그대로 운영이면 운영이다. 이름 낱말만 본다.
 			variable: /\$/.test(name || "") ? name : "",
+			// 변수 대상(--vm-name "$VM")도 스크립트 안에서 글자 그대로 한 값이면 그 값으로 서비스 이름을 정한다(목록 밖 그룹과 같은 풀이).
+			resolveGroup: groupLower,
 		});
 	}
 	return hits;
@@ -1856,15 +1858,46 @@ function scriptArgs(tokens) {
  * 확실하지 않으면 원문을 그대로 돌려준다(더 막는 쪽): 인자 없음·변수 인자, shift·getopts·set --·eval, 변수 재대입·local·read·unset,
  * 부르는 명령이나 훅 환경에 같은 변수, 단순 글자가 아닌 갈래 무늬, ;& ;;&, 갈래 안 heredoc·중첩 case.
  */
+// heredoc 본문 줄을 비운 글(줄 수는 그대로). 본문은 자식 프로세스의 입력이라 이 셸의 위치 인자·변수를 바꾸지 못한다.
+// 끝 줄을 못 찾으면 null(모름).
+function blankHeredocBodies(text) {
+	const lines = text.split("\n");
+	for (let i = 0; i < lines.length; i++) {
+		const tags = [...lines[i].matchAll(/(?<!<)<<(-?)\s*(['"]?)\\?([A-Za-z_][A-Za-z0-9_]*)\2/g)].map((m) => ({ dash: m[1] === "-", tag: m[3] }));
+		for (const { dash, tag } of tags) {
+			let j = i + 1;
+			while (j < lines.length && (dash ? lines[j].replace(/^\t+/, "") : lines[j]) !== tag) { lines[j] = ""; j++; }
+			if (j >= lines.length) return null;
+			lines[j] = "";
+			i = j;
+		}
+	}
+	return lines.join("\n");
+}
+
 function selectCaseArms(text, args, callerText = "", assigns = []) {
 	if (!text || !args.length) return text;
-	if (/(?:^|[\s;&|(])(?:shift|getopts|eval|source)\b|\bset\s+--|(?:^|[\s;&|(])\.\s+\S/m.test(text)) return text;
-	const inFunction = functionLines(text);
+	const guardText = blankHeredocBodies(text);
+	if (guardText === null) return text;
+	if (/(?:^|[\s;&|(])(?:shift|getopts|eval|source)\b|\bset\s+--|(?:^|[\s;&|(])\.\s+\S/m.test(guardText)) return text;
+	const inFunction = functionLines(guardText);
 	const bound = new Map();
-	for (const m of text.matchAll(/^([A-Za-z_][A-Za-z0-9_]*)=(?:"\$\{?([1-9])\}?"|\$\{?([1-9])\}?)[ \t]*(?:#.*)?$/gm)) {
+	// 대입만 있는 줄(ENVIRONMENT="$1" RUN_ID="$2" 처럼 한 줄 여러 대입 포함)에서 위치 인자를 묶는다.
+	// 줄의 모든 낱말이 대입이어야 한다. "A=$1 cmd" 는 cmd 에만 주는 환경이라 묶지 않는다.
+	const assignOnly = [];
+	guardText.split("\n").forEach((raw, lineNo) => {
+		const line = raw.replace(/[ \t]+#.*$/, "").trim();
+		if (!line) return;
+		const toks = line.split(/[ \t]+/);
+		if (!toks.every((t) => /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\s`\\]*"|[^\s"'`;&|()<>\\]*)$/.test(t))) return;
+		for (const t of toks) {
+			const m = t.match(/^([A-Za-z_][A-Za-z0-9_]*)=(?:"\$\{?([1-9])\}?"|\$\{?([1-9])\}?)$/);
+			if (m) assignOnly.push({ m, lineNo });
+		}
+	});
+	for (const { m, lineNo } of assignOnly) {
 		const v = m[1];
 		// 함수 안의 $1 은 함수 인자다(검수 5회차 1번). 함수 밖(최상위) 대입만 묶는다.
-		const lineNo = text.slice(0, m.index).split("\n").length - 1;
 		if (inFunction === null || inFunction.has(lineNo)) continue;
 		const arg = args[Number(m[2] || m[3]) - 1];
 		if (arg === undefined || !/^[A-Za-z0-9._-]+$/.test(arg)) continue;
@@ -1901,7 +1934,8 @@ function selectCaseArms(text, args, callerText = "", assigns = []) {
 		}
 		if (!ok || end < 0 || cur) return text;
 		const keep = arms.find((a) => a.pats.includes(arg));
-		const envSwitch = STAGE_WORD.test(arg) && arms.some((a) => a.pats.some((p) => /^(?:prod|production|live)$/i.test(p)));
+		// prod 인자도 그 갈래만 남긴다. 실제로 도는 갈래의 값(VM=…)으로 운영 서비스 이름을 정확히 적기 위해서다(막는 판정은 그대로).
+		const envSwitch = (STAGE_WORD.test(arg) || /^(?:prod|production|live)$/i.test(arg)) && arms.some((a) => a.pats.some((p) => /^(?:prod|production|live)$/i.test(p)));
 		if (!keep || !envSwitch) { i = end; continue; }
 		for (const a of arms) if (a !== keep) for (let k = a.from; k <= a.to; k++) lines[k] = "";
 		i = end;
@@ -2003,9 +2037,9 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 							if (h.variable && variableTargetIsNonProd(h.variable, text, dir, nonProdCall, assigns)) continue;
 							// 목록 밖 그룹(network 등)의 변수 대상이 스크립트 안에서 글자 그대로 한 값이면 서비스 이름을 그 값으로 적는다.
 							let service = h.service;
-							if (h.variable && h.unlistedGroup) {
+							if (h.variable && (h.unlistedGroup || h.resolveGroup)) {
 								const r = require("./effective-argv.js").dynamicWord(h.variable, text, dir);
-								if (r && r.words && r.words.length === 1 && /^[A-Za-z0-9._-]+$/.test(r.words[0])) service = `azure:${h.unlistedGroup}:${r.words[0].toLowerCase()}`;
+								if (r && r.words && r.words.length === 1 && /^[A-Za-z0-9._-]+$/.test(r.words[0])) service = `azure:${h.unlistedGroup || h.resolveGroup}:${r.words[0].toLowerCase()}`;
 							}
 							// 변수 대상의 dev·prod 판단은 그 명령을 품은 스크립트 한 단계에서 끝낸다. 바깥 단계는 풀어 줄 수 없다(설계 검수 17회차 1번).
 							found.push({ ...h, service, ...(h.unclassified ? { file: h.file || file } : {}), variable: "", label: `${h.label} (${path.basename(file)} 안)` });

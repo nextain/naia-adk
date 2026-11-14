@@ -2201,3 +2201,277 @@ test("읽기 전용 ops 우회: 인라인 명령·다른 service·덧붙인 명�
 	appendHumanTurn(fNoRo.transcriptPath, `단계 승인 ${dStepAsk.reason.match(/STEP-[A-Z0-9]{6}/)[0]}`);
 	assert.equal(runDeployGuardHook(fNoRo.command, { cwd: fNoRo.root, root: fNoRo.root, stateDir: fNoRo.stateDir, transcriptPath: fNoRo.transcriptPath, sessionId: "sess-no-ro" }), null, "readOnlyScripts 없으면 기존 PLAN/STEP 승인으로 통과");
 });
+
+test("목록 그룹(vm) run-command 의 변수 대상도 스크립트 안 한 값으로 서비스 이름을 정함", (t) => {
+	const { root } = makeWorkspace(t);
+	const dir = path.join(root, "runner");
+	fs.mkdirSync(dir, { recursive: true });
+	const tool = ["a", "z"].join("");
+	fs.writeFileSync(path.join(dir, "op.sh"), [
+		"#!/bin/bash",
+		"case \"$1\" in",
+		"  prod) RG=sample-prod-rg; VM=sample-prod-vm ;;",
+		"  *) exit 2 ;;",
+		"esac",
+		`${tool} vm run-command invoke -g "$RG" --vm-name "$VM" --command-id RunShellScript --scripts 'true'`,
+		"",
+	].join("\n"));
+	const hits = classifyProdMutations(`bash ${path.join(dir, "op.sh")} prod`, root);
+	assert.ok(hits.some((h) => h.service === "azure:vm:sample-prod-vm"), `변수 대상이 풀려야 함: ${JSON.stringify(hits)}`);
+	assert.ok(!hits.some((h) => /\$/.test(h.service)), `변수 이름이 서비스에 남으면 안 됨: ${JSON.stringify(hits)}`);
+});
+
+test("한 줄 여러 대입·heredoc 안 함수와 source 가 있어도 prod 갈래 값으로 VM 이름을 정하고, 명령 앞 대입은 묶지 않음", (t) => {
+	const { root } = makeWorkspace(t);
+	const dir = path.join(root, "runner");
+	fs.mkdirSync(dir, { recursive: true });
+	const tool = ["a", "z"].join("");
+	const body = (bind, heredocBlock) => [
+		"#!/bin/bash",
+		"set -euo pipefail",
+		bind,
+		"case \"$ENVIRONMENT\" in",
+		"  prod) RG=sample-prod-rg; VM=sample-prod-vm ;;",
+		"  dev) RG=sample-dev-rg; VM=sample-dev-vm ;;",
+		"  *) exit 64 ;;",
+		"esac",
+		...heredocBlock,
+		`${tool} vm run-command create -g "$RG" --vm-name "$VM" --run-command-name x --script "@$TMPDIR/remote.sh"`,
+		"",
+	].join("\n");
+	const quotedHeredoc = [
+		"{",
+		"  cat <<'REMOTE'",
+		"cleanup() {",
+		"  true",
+		"}",
+		"# the source just verified",
+		"REMOTE",
+		"} > \"$TMPDIR/remote.sh\"",
+	];
+	fs.writeFileSync(path.join(dir, "multi.sh"), body("ENVIRONMENT=\"$1\" RUN_ID=\"$2\" STAGE=\"${3:-backup}\"", quotedHeredoc));
+	const hits = classifyProdMutations(`bash ${path.join(dir, "multi.sh")} prod 20261111T050000Z-x`, root);
+	assert.ok(hits.length > 0 && hits.every((h) => h.service === "azure:vm:sample-prod-vm"), `prod 갈래 VM 으로 풀려야 함: ${JSON.stringify(hits)}`);
+	const devHits = classifyProdMutations(`bash ${path.join(dir, "multi.sh")} dev 20261111T050000Z-x`, root);
+	assert.deepEqual(devHits, [], `dev 인자는 운영 아님: ${JSON.stringify(devHits)}`);
+	fs.writeFileSync(path.join(dir, "prefix.sh"), body("ENVIRONMENT=\"$1\" true", quotedHeredoc));
+	const prefixHits = classifyProdMutations(`bash ${path.join(dir, "prefix.sh")} prod 20261111T050000Z-x`, root);
+	assert.ok(prefixHits.length > 0 && prefixHits.every((h) => h.service !== "azure:vm:sample-prod-vm"), `명령 앞 대입은 셸 변수가 아니므로 갈래를 고르면 안 됨: ${JSON.stringify(prefixHits)}`);
+
+	// <<- 탭 들여쓰기 종료자와 본문 안 eval/shift 도 본문이 비워져 정상 분기 선택
+	fs.writeFileSync(path.join(dir, "dash-heredoc.sh"), body("ENVIRONMENT=\"$1\" RUN_ID=\"$2\"", [
+		"cat <<-'REMOTE' > \"$TMPDIR/remote.sh\"",
+		"\teval \"$PAYLOAD\"",
+		"\tshift",
+		"\tREMOTE",
+	]));
+	const dashHits = classifyProdMutations(`bash ${path.join(dir, "dash-heredoc.sh")} prod 20261111T050000Z-x`, root);
+	assert.ok(dashHits.length > 0 && dashHits.every((h) => h.service === "azure:vm:sample-prod-vm"), `<<- 탭 heredoc 본문의 eval/shift 는 무시되어야 함: ${JSON.stringify(dashHits)}`);
+
+	// heredoc 밖의 실제 source 는 보수적으로 원문을 유지해 갈래를 줄이지 않음
+	fs.writeFileSync(path.join(dir, "outside-source.sh"), body("ENVIRONMENT=\"$1\"", [
+		...quotedHeredoc,
+		"source ./env.sh",
+	]));
+	const outsideSourceHits = classifyProdMutations(`bash ${path.join(dir, "outside-source.sh")} prod`, root);
+	assert.ok(outsideSourceHits.length > 0 && outsideSourceHits.every((h) => h.service !== "azure:vm:sample-prod-vm"), `heredoc 밖 source 는 갈래를 줄이지 않아야 함: ${JSON.stringify(outsideSourceHits)}`);
+
+	// 닫히지 않은 heredoc 이 명령 뒤에 있으면 보수적으로 원문을 유지해 갈래를 줄이지 않음
+	fs.writeFileSync(path.join(dir, "unclosed-heredoc.sh"), [
+		body("ENVIRONMENT=\"$1\"", []),
+		"cat <<'REMOTE' > \"$TMPDIR/remote.sh\"",
+		"echo unclosed",
+		"",
+	].join("\n"));
+	const unclosedHits = classifyProdMutations(`bash ${path.join(dir, "unclosed-heredoc.sh")} prod`, root);
+	assert.ok(unclosedHits.length > 0 && unclosedHits.every((h) => h.service !== "azure:vm:sample-prod-vm"), `닫히지 않은 heredoc 은 갈래를 줄이지 않아야 함: ${JSON.stringify(unclosedHits)}`);
+});
+
+function populatePlanRepo(repoRoot, options = {}) {
+	if (options.gitMode === "worktree") {
+		const realGitDir = path.join(path.dirname(repoRoot), `${path.basename(repoRoot)}-gitdir`);
+		fs.mkdirSync(realGitDir, { recursive: true });
+		fs.mkdirSync(repoRoot, { recursive: true });
+		fs.writeFileSync(path.join(repoRoot, ".git"), `gitdir: ${realGitDir}\n`);
+	} else if (options.gitMode !== "none") {
+		fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+	} else {
+		fs.mkdirSync(repoRoot, { recursive: true });
+	}
+	for (const rel of deployPlan.REVIEW_EXECUTOR_FILES) {
+		const dst = path.join(repoRoot, rel);
+		fs.mkdirSync(path.dirname(dst), { recursive: true });
+		fs.copyFileSync(path.join(REPO_ROOT, rel), dst);
+	}
+	if (options.foreignMarker) {
+		fs.appendFileSync(path.join(repoRoot, ".agents/scripts/approval-plan.mjs"), `\n// ${options.foreignMarker}\n`);
+	}
+}
+
+test("cross-repo: 다른 git 저장소·worktree 계획서 check·report·review-prompt(readOnlyScripts)·preapprove·step-ok 및 심볼릭 거부", (t) => {
+	const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-cross-repo-")));
+	t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+	// 1. 다른 git 저장소(.git 디렉토리) + 실행기 해시가 REPO_ROOT 와 다른 경우
+	const foreignRoot = path.join(tmp, "foreign-repo");
+	const stateDir = path.join(tmp, "state");
+	fs.mkdirSync(stateDir, { recursive: true });
+	populatePlanRepo(foreignRoot, { foreignMarker: "foreign-repo-only" });
+	const { planFile, scriptRel } = createValidPlan(foreignRoot);
+	const customScript = "#!/usr/bin/env bash\n# foreign-only-rollout\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1\n";
+	fs.writeFileSync(path.join(foreignRoot, scriptRel), customScript);
+	const customSha = sha256(Buffer.from(customScript, "utf8"));
+	const loadedForeignPlan = JSON.parse(fs.readFileSync(planFile, "utf8"));
+	loadedForeignPlan.scenario[0].files[scriptRel] = customSha;
+	fs.writeFileSync(planFile, JSON.stringify(loadedForeignPlan, null, 2));
+	writePassingReviewReceipt(foreignRoot, planFile);
+
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const chk = spawnSync(process.execPath, [SCRIPT_PATH, "check", planFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	assert.equal(chk.status, 0, `check failed:\n${chk.stdout}\n${chk.stderr}`);
+	assert.match(chk.stdout, /계획서: \.agents\/progress\/sample-work\/gates\/deploy-plan\.json/);
+	assert.match(chk.stdout, /적대 리뷰: 통과/);
+
+	const rep = spawnSync(process.execPath, [SCRIPT_PATH, "report", planFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	assert.equal(rep.status, 0, `report failed:\n${rep.stderr}`);
+	assert.match(rep.stdout, /\[운영 배포 승인 요청\] sample-web-rollout-01/);
+
+	const rp = spawnSync(process.execPath, [SCRIPT_PATH, "review-prompt", planFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	assert.equal(rp.status, 0, `review-prompt failed:\n${rp.stderr}`);
+	assert.match(rp.stdout, new RegExp(`\\(sha ${customSha}\\)`));
+	assert.match(rp.stdout, /# foreign-only-rollout/);
+
+	const pre = spawnSync(process.execPath, [SCRIPT_PATH, "preapprove", planFile, "--session", "cross-repo-sess-1"], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	assert.equal(pre.status, 0, `preapprove failed:\n${pre.stdout}\n${pre.stderr}`);
+	assert.match(pre.stdout, /사전발급 코드\(사용자 본인이 한 메시지로 승인\): PLAN PLAN-[A-Z0-9]{6} s1 STEP-[A-Z0-9]{6} r1 STEP-[A-Z0-9]{6}/);
+
+	const evFile = path.join(stateDir, "s1-ok.txt");
+	fs.writeFileSync(evFile, "HTTP/1.1 200 OK\n");
+	const okRes = spawnSync(process.execPath, [SCRIPT_PATH, "step-ok", planFile, "s1", "--evidence", evFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	assert.equal(okRes.status, 0, `step-ok failed:\n${okRes.stderr}`);
+	assert.match(okRes.stdout, /단계 s1 성공 확인 기록: \.agents\/progress\/sample-work\/gates\/deploy-steps\/s1\.json/);
+
+	// 1b. 다른 git 저장소의 readOnlyScripts 가 review-prompt 에도 planRoot 기준으로 실림(PR147 결합)
+	const fRoForeign = setupReadOnlyOpsWorkspace(t);
+	const realRoRoot = fs.realpathSync(fRoForeign.root);
+	const realRoPlan = path.join(realRoRoot, ".agents", "progress", "sample-ro-work", "gates", "deploy-plan.json");
+	const rpRo = spawnSync(process.execPath, [SCRIPT_PATH, "review-prompt", realRoPlan], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	assert.equal(rpRo.status, 0, `cross-repo readOnlyScripts review-prompt failed:\n${rpRo.stderr}`);
+	assert.match(rpRo.stdout, /readOnlyScripts/);
+	assert.match(rpRo.stdout, new RegExp(fRoForeign.scriptSha));
+
+	// 2. 다른 git worktree(.git 파일) 저장소
+	const wtRoot = path.join(tmp, "foreign-wt");
+	populatePlanRepo(wtRoot, { gitMode: "worktree", foreignMarker: "foreign-wt-only" });
+	const { planFile: wtPlan } = createValidPlan(wtRoot);
+	writePassingReviewReceipt(wtRoot, wtPlan);
+	const wtChk = spawnSync(process.execPath, [SCRIPT_PATH, "check", wtPlan], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	assert.equal(wtChk.status, 0, `worktree check failed:\n${wtChk.stdout}\n${wtChk.stderr}`);
+	const wtPre = spawnSync(process.execPath, [SCRIPT_PATH, "preapprove", wtPlan, "--session", "cross-repo-wt-1"], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	assert.equal(wtPre.status, 0, `worktree preapprove failed:\n${wtPre.stderr}`);
+
+	// 3. 자기 저장소(ROOT) 안 계획서
+	const toolRoot = path.join(tmp, "self-repo");
+	populatePlanRepo(toolRoot);
+	const { planFile: selfPlan } = createValidPlan(toolRoot);
+	writePassingReviewReceipt(toolRoot, selfPlan);
+	const selfScript = path.join(toolRoot, ".agents/scripts/approval-plan.mjs");
+	assert.equal(spawnSync(process.execPath, [selfScript, "check", selfPlan], { cwd: toolRoot, env, encoding: "utf8" }).status, 0);
+	assert.equal(spawnSync(process.execPath, [selfScript, "preapprove", selfPlan, "--session", "self-sess-1"], { cwd: toolRoot, env, encoding: "utf8" }).status, 0);
+
+	// 4. 심볼릭 링크·저장소 밖(.git 없음)·심볼릭 .git 경로 거부
+	const symPlanRepo = path.join(tmp, "sym-plan-repo");
+	populatePlanRepo(symPlanRepo, { foreignMarker: "sym-plan" });
+	const { planFile: targetCopy, gatesDir: symGatesDir } = createValidPlan(symPlanRepo);
+	const renamedReal = path.join(symGatesDir, "real-plan.json");
+	fs.renameSync(targetCopy, renamedReal);
+	fs.symlinkSync(renamedReal, targetCopy);
+
+	const linkedRepo = path.join(tmp, "linked-foreign-repo");
+	fs.symlinkSync(foreignRoot, linkedRepo);
+	const linkedPlan = path.join(linkedRepo, ".agents/progress/sample-work/gates/deploy-plan.json");
+
+	const selfGates = path.join(toolRoot, ".agents/progress/sym-work/gates");
+	fs.mkdirSync(selfGates, { recursive: true });
+	const selfSymPlan = path.join(selfGates, "deploy-plan.json");
+	fs.symlinkSync(planFile, selfSymPlan);
+
+	const noGitRoot = path.join(tmp, "no-git-dir");
+	populatePlanRepo(noGitRoot, { gitMode: "none" });
+	const { planFile: noGitPlan } = createValidPlan(noGitRoot);
+	writePassingReviewReceipt(noGitRoot, noGitPlan);
+
+	const symGitRepo = path.join(tmp, "sym-git-repo");
+	const realGit = path.join(tmp, "real-dot-git");
+	fs.mkdirSync(realGit, { recursive: true });
+	fs.mkdirSync(symGitRepo, { recursive: true });
+	fs.symlinkSync(realGit, path.join(symGitRepo, ".git"));
+	populatePlanRepo(symGitRepo, { gitMode: "none" });
+	const { planFile: symGitPlan } = createValidPlan(symGitRepo);
+	writePassingReviewReceipt(symGitRepo, symGitPlan);
+
+	for (const [label, script, planArg] of [
+		["symlinked plan file", SCRIPT_PATH, targetCopy],
+		["symlinked repo dir", SCRIPT_PATH, linkedPlan],
+		["symlink inside ROOT", selfScript, selfSymPlan],
+		["no .git directory", SCRIPT_PATH, noGitPlan],
+		["symlinked .git", SCRIPT_PATH, symGitPlan],
+	]) {
+		assert.notEqual(spawnSync(process.execPath, [script, "check", planArg], { cwd: REPO_ROOT, env, encoding: "utf8" }).status, 0, `${label}: check must fail closed`);
+		assert.notEqual(spawnSync(process.execPath, [script, "preapprove", planArg, "--session", "deny-sess"], { cwd: REPO_ROOT, env, encoding: "utf8" }).status, 0, `${label}: preapprove must fail closed`);
+	}
+});
+
+test("hook-watchdog: 멈춘(무한 루프)·신호 종료 deploy-guard 자식을 시한 안에 끊고 JSON block 으로 막음", (t) => {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "hook-watchdog-test-"));
+	t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+	const hooksDir = path.join(tmp, ".claude", "hooks");
+	const libDir = path.join(hooksDir, "lib");
+	const polDir = path.join(tmp, ".agents", "hooks", "policies");
+	fs.mkdirSync(libDir, { recursive: true });
+	fs.mkdirSync(polDir, { recursive: true });
+
+	const guardCopy = path.join(hooksDir, "deploy-guard.js");
+	fs.copyFileSync(HOOK_PATH, guardCopy);
+	fs.copyFileSync(path.join(REPO_ROOT, ".claude/hooks/lib/hook-watchdog.js"), path.join(libDir, "hook-watchdog.js"));
+	fs.writeFileSync(path.join(polDir, "bash.js"), "module.exports = { deploy: () => null };\n");
+
+	// 1. CPU 동기 무한 루프에 빠진 자식 프로세스 -> 부모 시한 감시(150ms)가 SIGKILL 후 JSON block 반환
+	fs.writeFileSync(path.join(hooksDir, "_claude-bash-guard.js"), "exports.start = () => { for (;;) {} };\n");
+	const started = Date.now();
+	const hung = spawnSync(process.execPath, [guardCopy], {
+		cwd: tmp,
+		input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }),
+		encoding: "utf8",
+		timeout: 5000,
+		env: { ...process.env, NAIA_DEPLOY_GUARD_WATCHDOG_MS: "150" },
+	});
+	const elapsed = Date.now() - started;
+	assert.equal(hung.status, 0, `watchdog timeout must exit 0 with block JSON: ${hung.stderr}`);
+	assert.ok(elapsed < 4000, `watchdog must abort promptly, took ${elapsed}ms`);
+	const hungDecision = JSON.parse(hung.stdout);
+	assert.equal(hungDecision.decision, "block");
+	assert.match(hungDecision.reason, /판정하지 못해 막습니다/);
+
+	// 2. 신호(SIGTERM)로 자식이 죽어도 JSON block 으로 막음
+	fs.writeFileSync(path.join(hooksDir, "_claude-bash-guard.js"), "exports.start = () => { process.kill(process.pid, 'SIGTERM'); };\n");
+	const sigRes = spawnSync(process.execPath, [guardCopy], {
+		cwd: tmp,
+		input: JSON.stringify({ tool_name: "Bash", tool_input: { command: "ls" } }),
+		encoding: "utf8",
+		timeout: 5000,
+		env: { ...process.env, NAIA_DEPLOY_GUARD_WATCHDOG_MS: "5000" },
+	});
+	assert.equal(sigRes.status, 0, `watchdog signal must exit 0 with block JSON: ${sigRes.stderr}`);
+	const sigDecision = JSON.parse(sigRes.stdout);
+	assert.equal(sigDecision.decision, "block");
+	assert.match(sigDecision.reason, /신호 SIGTERM/);
+
+	// 3. 실제 deploy-guard.js 가 watchdog 감시 하에서도 정상 판정(통과/차단)을 그대로 전달
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root);
+	assert.equal(runDeployGuardHook("ls", { cwd: root, root, stateDir, transcriptPath }), null);
+	const blocked = runDeployGuardHook("vercel --prod", { cwd: root, root, stateDir, transcriptPath });
+	assert.equal(blocked?.decision, "block");
+});
