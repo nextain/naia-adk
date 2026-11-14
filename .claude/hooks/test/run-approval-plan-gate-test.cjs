@@ -1646,3 +1646,275 @@ test("읽기 전용 단계: 덧붙여 돌린 s0 과 step-ok 기록만으로는 s
 	assert.equal(hook(`bash ${scriptRel} s0`), null);
 	assert.match(hook(`bash ${scriptRel} s1`).reason, /단계 승인 필요: .* \/ s1/);
 });
+
+function gitRun(root, args) {
+	const r = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+	assert.equal(r.status, 0, `git ${args.join(" ")} failed: ${r.stderr}`);
+	return r.stdout;
+}
+
+function setupReadOnlyOpsWorkspace(t, {
+	scriptRel = ".agents/progress/sample-ro-work/gates/ops/ro-check.sh",
+	scriptBody = "#!/usr/bin/env bash\nset -euo pipefail\ndocker inspect sample-app >/dev/null\ndf -h / | tail -1\n",
+	service = "azure:vm:sample-vm",
+	commandKind = "az",
+	configServices = null,
+	readOnlyScripts = null,
+	commitConfig = true,
+	kind = "ops",
+	candidate = undefined,
+	withReview = true,
+	reviewFail = [],
+	planExtras = {},
+} = {}) {
+	const { tmp, root, stateDir, transcriptPath } = makeWorkspace(t);
+	fs.rmSync(path.join(root, ".git"), { recursive: true, force: true });
+	gitRun(root, ["init"]);
+	gitRun(root, ["config", "user.email", "test@example.com"]);
+	gitRun(root, ["config", "user.name", "Tester"]);
+
+	const scriptAbs = path.join(root, scriptRel);
+	fs.mkdirSync(path.dirname(scriptAbs), { recursive: true });
+	fs.writeFileSync(scriptAbs, scriptBody);
+	const scriptSha = sha256(fs.readFileSync(scriptAbs));
+
+	const cfgPath = path.join(root, "config", "deploy-gate.json");
+	fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+	const cfg = {
+		schema: "deploy-gate/v1",
+		services: configServices || {
+			[service]: { label: "샘플 VM", allowOps: true },
+		},
+		readOnlyScripts: readOnlyScripts !== null
+			? readOnlyScripts
+			: [{ sha256: scriptSha, service, note: "샘플 읽기 점검" }],
+	};
+	fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+	if (commitConfig) {
+		gitRun(root, ["add", "config/deploy-gate.json"]);
+		gitRun(root, ["commit", "-m", "commit deploy-gate config"]);
+	}
+
+	const workDir = path.join(root, ".agents", "progress", "sample-ro-work");
+	const gatesDir = path.join(workDir, "gates");
+	fs.mkdirSync(gatesDir, { recursive: true });
+
+	const command = commandKind === "az"
+		? `az vm run-command invoke --resource-group sample-rg --name sample-vm --command-id RunShellScript --scripts @${scriptAbs} --query 'value[0].message' --output tsv`
+		: `bash ${scriptRel}`;
+
+	const plan = {
+		schema: "deploy-plan/v1",
+		author_model: "muse",
+		planId: "sample-ro-work",
+		createdAt: new Date().toISOString(),
+		services: [service],
+		what_why: "샘플 운영 VM 상태 읽기 점검",
+		changes: ["변경 없음(읽기 전용 상태 확인)"],
+		scenario: [
+			{
+				id: "s1",
+				title: "VM 상태 읽기 확인",
+				commands: [command],
+				files: { [scriptRel]: scriptSha },
+				success_check: "종료 코드 0 및 상태 출력 확인",
+				on_failure: "멈추고 보고",
+			},
+		],
+		risks: { items: ["단순 조회 부하"], worst_case: "조회 시간 초과" },
+		irreversible: ["없음: 읽기 전용 확인"],
+		disconnect_safety: "끊겨도 상태 변화 없음",
+		rerun_safety: { lock: "읽기 전용 조회", run_dir: ".agents/progress/sample-ro-work", no_latest_pick: "대본 경로·sha 고정" },
+		success_verification: "출력 상태 요약 확인",
+		rollback: { method: "읽기 전용 점검이라 되돌릴 것이 없음", duration: "0분", step_ids: [] },
+		residual_risks: ["조회 명령 응답 지연 가능"],
+		incident: { criteria: ["원격 명령 실행 오류"], actions: [] },
+		...planExtras,
+	};
+	const planFile = path.join(gatesDir, "deploy-plan.json");
+	fs.writeFileSync(planFile, JSON.stringify(plan, null, 2));
+	fs.writeFileSync(path.join(gatesDir, "deploy.json"), JSON.stringify({
+		services: [service],
+		kind,
+		...(candidate ? { candidate } : {}),
+		reason: "샘플 VM 상태 읽기 확인",
+		createdAt: new Date().toISOString(),
+	}, null, 2));
+
+	if (withReview) {
+		writePassingReviewReceipt(root, planFile, { fail: reviewFail });
+	}
+	const readAudit = () => {
+		const auditFile = path.join(stateDir, "audit.jsonl");
+		if (!fs.existsSync(auditFile)) return [];
+		return fs.readFileSync(auditFile, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+	};
+	return { tmp, root, stateDir, transcriptPath, cfgPath, scriptAbs, scriptSha, gatesDir, planFile, command, readAudit };
+}
+
+test("읽기 전용 ops 대본: 리뷰 PASS + 커밋된 readOnlyScripts sha 일치 시 승인 코드 없이 반복 실행 및 readonly-no-code 감사", (t) => {
+	// 1. az vm run-command invoke --scripts @<script>
+	const fAz = setupReadOnlyOpsWorkspace(t, { commandKind: "az" });
+	for (let i = 0; i < 3; i++) {
+		const res = runDeployGuardHook(fAz.command, { cwd: fAz.root, root: fAz.root, stateDir: fAz.stateDir, transcriptPath: fAz.transcriptPath, sessionId: `sess-ro-az-${i}` });
+		assert.equal(res, null, `${i + 1}회차 읽기 전용 az 실행은 승인 코드 없이 통과해야 함`);
+	}
+	const auditsAz = fAz.readAudit().filter((a) => a.event === "executed");
+	assert.equal(auditsAz.length, 3);
+	for (const a of auditsAz) {
+		assert.equal(a.approved_by, "readonly-no-code");
+	}
+
+	// 2. bash <script>
+	const sshScript = "#!/usr/bin/env bash\nset -euo pipefail\nssh sample-vm 'uptime && df -h /'\n";
+	const fBash = setupReadOnlyOpsWorkspace(t, {
+		commandKind: "bash",
+		service: "ssh:sample-vm",
+		scriptRel: "scripts/ro-ssh-check.sh",
+		scriptBody: sshScript,
+	});
+	const resBash1 = runDeployGuardHook(fBash.command, { cwd: fBash.root, root: fBash.root, stateDir: fBash.stateDir, transcriptPath: fBash.transcriptPath, sessionId: "sess-ro-bash" });
+	const resBash2 = runDeployGuardHook(fBash.command, { cwd: fBash.root, root: fBash.root, stateDir: fBash.stateDir, transcriptPath: fBash.transcriptPath, sessionId: "sess-ro-bash" });
+	assert.equal(resBash1, null, "bash 읽기 대본 1회차 통과");
+	assert.equal(resBash2, null, "bash 읽기 대본 2회차 반복 통과");
+	const auditsBash = fBash.readAudit().filter((a) => a.event === "executed");
+	assert.equal(auditsBash.length, 2);
+	assert.ok(auditsBash.every((a) => a.approved_by === "readonly-no-code"));
+});
+
+test("읽기 전용 ops 우회: 설정에 없는 sha 는 막히고 allowCustomCommands 여도 승인 코드 생략 불가", (t) => {
+	const wrongSha = "0".repeat(64);
+	const f1 = setupReadOnlyOpsWorkspace(t, {
+		readOnlyScripts: [{ sha256: wrongSha, service: "azure:vm:sample-vm", note: "다른 대본" }],
+	});
+	const d1 = runDeployGuardHook(f1.command, { cwd: f1.root, root: f1.root, stateDir: f1.stateDir, transcriptPath: f1.transcriptPath });
+	assert.equal(d1?.decision, "block");
+	assert.ok(!f1.readAudit().some((a) => a.approved_by === "readonly-no-code"));
+
+	const f2 = setupReadOnlyOpsWorkspace(t, {
+		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } },
+		readOnlyScripts: [],
+	});
+	const d2 = runDeployGuardHook(f2.command, { cwd: f2.root, root: f2.root, stateDir: f2.stateDir, transcriptPath: f2.transcriptPath });
+	assert.equal(d2?.decision, "block", "설정에 없는 sha 는 allowCustomCommands 여도 승인 코드 없이 통과 불가");
+	assert.match(d2.reason, /PLAN-/);
+});
+
+test("읽기 전용 ops 우회: config/deploy-gate.json 미커밋 변경·스테이징·미추적 시 모두 막힘", (t) => {
+	// 미커밋 작업 트리 변경 (allowCustomCommands 로도 우회 불가 검증 포함)
+	const fDirty = setupReadOnlyOpsWorkspace(t, {
+		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } },
+	});
+	const cur = JSON.parse(fs.readFileSync(fDirty.cfgPath, "utf8"));
+	cur.readOnlyScripts[0].note = "작업 트리에서 고침";
+	fs.writeFileSync(fDirty.cfgPath, JSON.stringify(cur, null, 2));
+	const dDirty = runDeployGuardHook(fDirty.command, { cwd: fDirty.root, root: fDirty.root, stateDir: fDirty.stateDir, transcriptPath: fDirty.transcriptPath });
+	assert.equal(dDirty?.decision, "block", "작업 트리 미커밋 변경은 막혀야 함");
+
+	// git add 만 하고 커밋 안 함
+	const fStaged = setupReadOnlyOpsWorkspace(t);
+	const stagedCur = JSON.parse(fs.readFileSync(fStaged.cfgPath, "utf8"));
+	stagedCur.readOnlyScripts[0].note = "스테이징만 함";
+	fs.writeFileSync(fStaged.cfgPath, JSON.stringify(stagedCur, null, 2));
+	gitRun(fStaged.root, ["add", "config/deploy-gate.json"]);
+	const dStaged = runDeployGuardHook(fStaged.command, { cwd: fStaged.root, root: fStaged.root, stateDir: fStaged.stateDir, transcriptPath: fStaged.transcriptPath });
+	assert.equal(dStaged?.decision, "block", "스테이징 미커밋 변경은 막혀야 함");
+
+	// git 미추적
+	const fUntracked = setupReadOnlyOpsWorkspace(t, { commitConfig: false });
+	const dUntracked = runDeployGuardHook(fUntracked.command, { cwd: fUntracked.root, root: fUntracked.root, stateDir: fUntracked.stateDir, transcriptPath: fUntracked.transcriptPath });
+	assert.equal(dUntracked?.decision, "block", "git 미추적 config/deploy-gate.json 은 막혀야 함");
+});
+
+test("읽기 전용 ops 우회: 대본 실행 직전 바뀜 및 계획서 변경 시 리뷰 무효화", (t) => {
+	const fEditScript = setupReadOnlyOpsWorkspace(t);
+	fs.appendFileSync(fEditScript.scriptAbs, "# tampered right before run\n");
+	const d1 = runDeployGuardHook(fEditScript.command, { cwd: fEditScript.root, root: fEditScript.root, stateDir: fEditScript.stateDir, transcriptPath: fEditScript.transcriptPath });
+	assert.equal(d1?.decision, "block");
+	assert.match(d1.reason, /고정되지 않았거나, 고정한 뒤 바뀌었습니다/);
+
+	const fEditPlan = setupReadOnlyOpsWorkspace(t);
+	const p = JSON.parse(fs.readFileSync(fEditPlan.planFile, "utf8"));
+	p.what_why = "리뷰 뒤 계획서 수정";
+	fs.writeFileSync(fEditPlan.planFile, JSON.stringify(p, null, 2));
+	const d2 = runDeployGuardHook(fEditPlan.command, { cwd: fEditPlan.root, root: fEditPlan.root, stateDir: fEditPlan.stateDir, transcriptPath: fEditPlan.transcriptPath });
+	assert.equal(d2?.decision, "block");
+	assert.match(d2.reason, /적대 리뷰를 통과하지 않아/);
+});
+
+test("읽기 전용 ops 우회: kind=feature 는 readOnlyScripts 에 있는 대본이어도 막히고 readonly-no-code 불가", (t) => {
+	const f = setupReadOnlyOpsWorkspace(t, {
+		kind: "feature",
+		candidate: "abc1234",
+		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } },
+	});
+	const d = runDeployGuardHook(f.command, { cwd: f.root, root: f.root, stateDir: f.stateDir, transcriptPath: f.transcriptPath });
+	assert.equal(d?.decision, "block");
+	assert.match(d.reason, /운영 변경 준비 안 됨/);
+	assert.ok(!f.readAudit().some((a) => a.approved_by === "readonly-no-code"));
+
+	const plan = JSON.parse(fs.readFileSync(f.planFile, "utf8"));
+	const bind = verifiedPlanBinding(
+		{ plan, entry: plan.scenario[0], command: f.command, cwd: f.root, gatesDir: f.gatesDir },
+		"abc1234",
+		"feature",
+		["azure:vm:sample-vm"],
+		f.root
+	);
+	assert.ok(!bind.readOnlyNoCode, "kind=feature 는 readOnlyNoCode 가 켜질 수 없음");
+});
+
+test("읽기 전용 ops 우회: 적대 리뷰 없음·FAIL 이면 막힘", (t) => {
+	const fNoRev = setupReadOnlyOpsWorkspace(t, { withReview: false });
+	const d1 = runDeployGuardHook(fNoRev.command, { cwd: fNoRev.root, root: fNoRev.root, stateDir: fNoRev.stateDir, transcriptPath: fNoRev.transcriptPath });
+	assert.equal(d1?.decision, "block");
+	assert.match(d1.reason, /적대 리뷰를 통과하지 않아/);
+
+	const fFailRev = setupReadOnlyOpsWorkspace(t, { withReview: true, reviewFail: ["a1"] });
+	const d2 = runDeployGuardHook(fFailRev.command, { cwd: fFailRev.root, root: fFailRev.root, stateDir: fFailRev.stateDir, transcriptPath: fFailRev.transcriptPath });
+	assert.equal(d2?.decision, "block");
+	assert.match(d2.reason, /적대 리뷰를 통과하지 않아/);
+});
+
+test("읽기 전용 ops 우회: 인라인 명령·다른 service·덧붙인 명령·계획서 자체 읽기 선언 모두 막힘", (t) => {
+	// 1. service 불일치
+	const fSvc = setupReadOnlyOpsWorkspace(t, {
+		scriptBody: "#!/usr/bin/env bash\necho ok\n",
+		readOnlyScripts: null,
+	});
+	// Override committed config so sha matches but service points elsewhere
+	const curSvc = JSON.parse(fs.readFileSync(fSvc.cfgPath, "utf8"));
+	curSvc.readOnlyScripts = [{ sha256: fSvc.scriptSha, service: "azure:vm:other-vm", note: "다른 VM" }];
+	fs.writeFileSync(fSvc.cfgPath, JSON.stringify(curSvc, null, 2));
+	gitRun(fSvc.root, ["add", "config/deploy-gate.json"]);
+	gitRun(fSvc.root, ["commit", "-m", "other service"]);
+	const dSvc = runDeployGuardHook(fSvc.command, { cwd: fSvc.root, root: fSvc.root, stateDir: fSvc.stateDir, transcriptPath: fSvc.transcriptPath });
+	assert.equal(dSvc?.decision, "block", "service 불일치 막힘");
+
+	// 2. 인라인 명령 (az --scripts "echo ok && df -h")
+	const fInline = setupReadOnlyOpsWorkspace(t, {
+		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true } },
+		readOnlyScripts: [],
+	});
+	const inlineCmd = "az vm run-command invoke --resource-group sample-rg --name sample-vm --command-id RunShellScript --scripts \"docker ps && df -h\"";
+	const pIn = JSON.parse(fs.readFileSync(fInline.planFile, "utf8"));
+	pIn.scenario[0].commands = [inlineCmd];
+	pIn.scenario[0].files = {};
+	fs.writeFileSync(fInline.planFile, JSON.stringify(pIn, null, 2));
+	writePassingReviewReceipt(fInline.root, fInline.planFile);
+	const dIn = runDeployGuardHook(inlineCmd, { cwd: fInline.root, root: fInline.root, stateDir: fInline.stateDir, transcriptPath: fInline.transcriptPath });
+	assert.equal(dIn?.decision, "block", "인라인 명령은 기존처럼 막힘");
+
+	// 3. 덧붙인 명령
+	const fChain = setupReadOnlyOpsWorkspace(t);
+	const dChain = runDeployGuardHook(`${fChain.command} && echo extra`, { cwd: fChain.root, root: fChain.root, stateDir: fChain.stateDir, transcriptPath: fChain.transcriptPath });
+	assert.equal(dChain?.decision, "block", "덧붙인 명령 막힘");
+
+	// 4. 계획서 자체 읽기 전용 주장(설정에 없는 대본 + planExtras.readOnly: true)
+	const fProse = setupReadOnlyOpsWorkspace(t, {
+		readOnlyScripts: [],
+		planExtras: { readOnly: true, approval_mode: "readonly-no-code" },
+	});
+	const dProse = runDeployGuardHook(fProse.command, { cwd: fProse.root, root: fProse.root, stateDir: fProse.stateDir, transcriptPath: fProse.transcriptPath });
+	assert.equal(dProse?.decision, "block", "계획서 글 자체 읽기 선언으로 우회 불가");
+});

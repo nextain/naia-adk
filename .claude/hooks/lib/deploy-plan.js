@@ -1051,6 +1051,7 @@ async function evaluate(ctx) {
 	// 독립 판정된 장애 선조치만 뺀다.
 	const verdictEarly = f.action ? incidentVerdict(f.gatesDir, f.sha, ctx.sessionId, now) : { ok: false };
 	let facts = [];
+	let readOnlyNoCode = false;
 	if (f.step && !verdictEarly.ok && typeof ctx.readiness === "function") {
 		const r = ctx.readiness({ plan: f.plan, entry, command: ctx.command, cwd: ctx.cwd || ctx.root, gatesDir: f.gatesDir });
 		if (r && !r.ok) return { allow: false, audit: { event: "blocked-not-ready", plan: rel, problems: r.problems.slice(0, 20) }, reason: [
@@ -1065,38 +1066,43 @@ async function evaluate(ctx) {
 			"긴급 되돌리기는 kind rollback, 설정만 바꾸는 명령(환경 변수·복제 수·재시작·리비전 끄기)과 VM·컨테이너 안 조회·진단은 kind ops(reason 한 줄)로 적습니다. 배포 스크립트처럼 코드를 올리는 명령은 ops 가 될 수 없습니다. 승인자에게 붙여 넣을 명령을 넘기지 마십시오.",
 		].join("\n") };
 		facts = (r && r.facts) || [];
+		readOnlyNoCode = !!(r && r.readOnlyNoCode === true);
 	}
 	const factLines = facts.length ? ["", "배포 준비 기록에서 확인한 사실:", ...facts.map((x) => `  ${x}`)] : [];
 	const hostNote = ctx.transcriptPath ? [] : ["", "이 호스트는 대화 기록을 읽을 수 없어 대화창 승인을 확인할 수 없습니다. 디스코드 승인 경로(gates/deploy-approval-discord.json)를 쓰십시오. 승인자에게 붙여 넣을 명령을 넘기지 마십시오."];
 
-	const locked = await withStateLock(env, () => approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly }));
+	const locked = await withStateLock(env, () => approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly, readOnlyNoCode }));
 	if (locked) return locked;
 	return { allow: false, audit: { event: "blocked-state-lock", plan: rel }, reason: "[Harness] 승인 상태 파일 잠금을 잡지 못해 막습니다(다른 운영 명령 판정이 진행 중). 잠시 뒤 다시 실행하십시오." };
 }
 
-async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly }) {
+async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly, readOnlyNoCode = false }) {
 	const state = loadState(env);
 	const ctxH = { transcriptPath: ctx.transcriptPath, gatesDir: f.gatesDir, repoRoot: ctx.root, approverId: ctx.approverId, fetchImpl: ctx.fetchImpl, discordToken: ctx.discordToken };
 
-	// 전체 계획 승인
-	let planCh = state.challenges.filter((c) => c.kind === "plan" && c.planSha === f.sha && c.sessionId === ctx.sessionId && !c.riskAccepted && now - Date.parse(c.createdAt) < PLAN_APPROVAL_TTL_MS).pop();
-	if (!planCh) {
-		planCh = { kind: "plan", code: newCode("PLAN"), planSha: f.sha, plan: rel, sessionId: ctx.sessionId, createdAt: new Date(now).toISOString() };
-		state.challenges.push(planCh);
-		saveState(env, state);
-	}
-	const planOk = await humanConfirmed(planCh.code, planCh.createdAt, ctxH);
-	if (!planOk.ok) {
-		return { allow: false, audit: { event: "plan-approval-requested", plan: rel, plan_sha256: f.sha }, reason: [
-			"[Harness] 전체 계획 승인이 아직 없습니다. 아래 승인 보고 양식을 그대로 승인자에게 올리십시오(대화창 또는 디스코드).",
-			"",
-			renderReport(f.plan, f.sha, review),
-			...factLines,
-			"",
-			`승인 코드: ${planCh.code}  — 승인자가 대화창에 직접 치거나, 디스코드에 본인 글로 남기면(글 위치를 gates/${DISCORD_FILE} 에 적음) 이 계획 전체가 승인됩니다. 승인은 책임 수용입니다.`,
-			"승인 뒤에도 각 단계는 실행 직전에 단계 승인을 받습니다. AI 가 코드를 대신 입력하거나 파일·봇 글로 승인을 만들 수 없습니다.",
-			...hostNote,
-		].join("\n") };
+	// 전체 계획 승인 (검수 통과한 읽기 전용 고정 ops 대본은 사람 승인 코드 단계를 건너뜀)
+	let planCh = null;
+	let planOk = null;
+	if (!readOnlyNoCode) {
+		planCh = state.challenges.filter((c) => c.kind === "plan" && c.planSha === f.sha && c.sessionId === ctx.sessionId && !c.riskAccepted && now - Date.parse(c.createdAt) < PLAN_APPROVAL_TTL_MS).pop();
+		if (!planCh) {
+			planCh = { kind: "plan", code: newCode("PLAN"), planSha: f.sha, plan: rel, sessionId: ctx.sessionId, createdAt: new Date(now).toISOString() };
+			state.challenges.push(planCh);
+			saveState(env, state);
+		}
+		planOk = await humanConfirmed(planCh.code, planCh.createdAt, ctxH);
+		if (!planOk.ok) {
+			return { allow: false, audit: { event: "plan-approval-requested", plan: rel, plan_sha256: f.sha }, reason: [
+				"[Harness] 전체 계획 승인이 아직 없습니다. 아래 승인 보고 양식을 그대로 승인자에게 올리십시오(대화창 또는 디스코드).",
+				"",
+				renderReport(f.plan, f.sha, review),
+				...factLines,
+				"",
+				`승인 코드: ${planCh.code}  — 승인자가 대화창에 직접 치거나, 디스코드에 본인 글로 남기면(글 위치를 gates/${DISCORD_FILE} 에 적음) 이 계획 전체가 승인됩니다. 승인은 책임 수용입니다.`,
+				"승인 뒤에도 각 단계는 실행 직전에 단계 승인을 받습니다. AI 가 코드를 대신 입력하거나 파일·봇 글로 승인을 만들 수 없습니다.",
+				...hostNote,
+			].join("\n") };
+		}
 	}
 
 	// 앞 장애 선조치 보고가 없으면 다음 선조치도 다음 단계도 못 한다.
@@ -1140,6 +1146,21 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 			const bad = stepSuccessProblem(f.gatesDir, f.sha, prev.id);
 			if (bad) return { allow: false, audit: { event: "blocked-step-order", plan: rel, step: f.step.id, why: bad }, reason: ["[Harness] 앞 단계 성공 확인 전에는 다음 단계 승인을 요청할 수 없습니다.", `- ${bad}`, "", "앞 단계의 성공 확인을 실행해 증거를 남기십시오: node .agents/scripts/approval-plan.mjs step-ok <계획서> <단계> --evidence <확인 출력 파일>. 확인이 실패했으면 계획의 실패 갈림길대로 하고 보고하십시오."].join("\n") };
 		}
+	}
+
+	if (readOnlyNoCode) {
+		const isoNow = new Date(now).toISOString();
+		let roCh = st2.challenges.find((c) => c.kind === "step" && c.readonly === true && c.planSha === f.sha && c.step === f.step.id && c.sessionId === ctx.sessionId);
+		if (!roCh) {
+			roCh = { kind: "step", readonly: true, code: null, planSha: f.sha, step: f.step.id, sessionId: ctx.sessionId, createdAt: isoNow, approvedAt: isoNow, approvedVia: "readonly-no-code", status: "executed", executedAt: isoNow, executed: [h], closed: isoNow };
+			st2.challenges.push(roCh);
+		} else {
+			if (!(roCh.executed || []).includes(h)) roCh.executed = [...(roCh.executed || []), h];
+			roCh.status = "executed";
+			roCh.executedAt = isoNow;
+		}
+		saveState(env, st2);
+		return { allow: true, audit: { event: "executed", plan: rel, plan_sha256: f.sha, step: f.step.id, approved_by: "readonly-no-code", readonly: true } };
 	}
 
 	let stepCh = st2.challenges.filter((c) => c.kind === "step" && c.planSha === f.sha && c.step === f.step.id && c.sessionId === ctx.sessionId && !c.closed).pop();
@@ -1303,7 +1324,7 @@ function referencedFiles(command, cwd) {
 		}
 		for (const e of entries) {
 			for (const t of (e.argv || []).map(String)) {
-				for (const cand of new Set([t, t.replace(/^[^=]*=/, ""), t.replace(/^@/, ""), t.replace(/^\d*</, ""), t.replace(/^file:\/\//, "")])) {
+				for (const cand of new Set([t, t.replace(/^[^=]*=/, ""), t.replace(/^[^=]*=/, "").replace(/^@/, ""), t.replace(/^@/, ""), t.replace(/^\d*</, ""), t.replace(/^file:\/\//, "")])) {
 					if (!cand || cand.length > 1024) continue;
 					let resolved = null;
 					try {

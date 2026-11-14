@@ -565,11 +565,139 @@ function commandBinding(command, candidate, services, cwd) {
 const PINNED_SCRIPT_HEAD = /^(?:sudo\s+(?:\S+\s+)*?)?bash\s+\//;
 
 /**
+ * config/deploy-gate.json 파일이 git 으로 추적되고 작업 트리·스테이지 내용이 HEAD 커밋과 바이트 일치하는지 검증한다.
+ */
+function verifyConfigGitClean(configPath) {
+	if (!configPath) return { ok: false, why: "config/deploy-gate.json 경로가 없음" };
+	let st;
+	try {
+		st = fs.lstatSync(configPath);
+	} catch {
+		return { ok: false, why: "config/deploy-gate.json 파일이 없음" };
+	}
+	if (st.isSymbolicLink() || !st.isFile()) {
+		return { ok: false, why: "config/deploy-gate.json 은 일반 파일이어야 함" };
+	}
+	const dir = path.dirname(configPath);
+	let topRaw;
+	try {
+		topRaw = execFileSync("git", ["-C", dir, "rev-parse", "--show-toplevel"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+	} catch {
+		return { ok: false, why: "config/deploy-gate.json 이 git 저장소 안에 없음" };
+	}
+	let realTop;
+	let realFile;
+	try {
+		realTop = fs.realpathSync(topRaw);
+		realFile = fs.realpathSync(configPath);
+	} catch {
+		return { ok: false, why: "config/deploy-gate.json 경로 확인 실패" };
+	}
+	const rel = path.relative(realTop, realFile).split(path.sep).join("/");
+	if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+		return { ok: false, why: "config/deploy-gate.json 이 git 저장소 밖에 있음" };
+	}
+	try {
+		execFileSync("git", ["-C", realTop, "ls-files", "--error-unmatch", "--", rel], { stdio: ["ignore", "pipe", "pipe"] });
+	} catch {
+		return { ok: false, why: `${rel} 이 git 으로 추적되지 않음` };
+	}
+	let statusOut = "";
+	try {
+		statusOut = execFileSync("git", ["-C", realTop, "status", "--porcelain", "--untracked-files=all", "--", rel], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	} catch {
+		return { ok: false, why: `${rel} git 상태 확인 실패` };
+	}
+	if (statusOut.trim() !== "") {
+		return { ok: false, why: `${rel} 에 커밋되지 않은 변경이 있음` };
+	}
+	let committedBuf;
+	let diskBuf;
+	try {
+		committedBuf = execFileSync("git", ["-C", realTop, "show", `HEAD:${rel}`], { encoding: null, stdio: ["ignore", "pipe", "pipe"], maxBuffer: 5 * 1024 * 1024 });
+		diskBuf = fs.readFileSync(configPath);
+	} catch {
+		return { ok: false, why: `${rel} 커밋 내용(HEAD) 대조 실패` };
+	}
+	const shaDisk = crypto.createHash("sha256").update(diskBuf).digest("hex");
+	const shaHead = crypto.createHash("sha256").update(committedBuf).digest("hex");
+	if (shaDisk !== shaHead) {
+		return { ok: false, why: `${rel} 작업 트리 내용이 HEAD 커밋과 다름` };
+	}
+	return { ok: true, rel, sha256: shaDisk };
+}
+
+/**
+ * 단일 ops 명령에서 고정 대본 파일 경로와 실제 디스크 sha256 을 꺼낸다(인라인·리다이렉션·치환 명령은 제외).
+ */
+function extractPinnedReadOnlyScript(c, clauses, files, fileHashes, cwd, root) {
+	if (!c || clauses.unbalanced || clauses.length !== 1) return null;
+	if ((c.subs && c.subs.length) || (c.heredocs && c.heredocs.length)) return null;
+	if (c.some((t) => /^(\d*&?|&)>>?/.test(t) || /^\d*<</.test(t) || /^\d*<[^=]/.test(t) || t === "<")) return null;
+
+	let rawScript = null;
+	const prog = path.basename(c[0] || "").replace(/\.(?:cmd|exe|bat)$/i, "").toLowerCase();
+	if ((prog === "bash" || prog === "sh") && c.length === 2 && !c[1].startsWith("-")) {
+		rawScript = c[1];
+	} else if (prog === "az" && c[1] === "vm" && c[2] === "run-command" && c[3] === "invoke") {
+		const scriptsVals = [];
+		for (let i = 4; i < c.length; i++) {
+			const tok = c[i];
+			if (tok === "--scripts" || tok === "--script") {
+				let j = i + 1;
+				while (j < c.length && !c[j].startsWith("-")) {
+					scriptsVals.push(c[j]);
+					j++;
+				}
+				i = j - 1;
+			} else if (tok.startsWith("--scripts=") || tok.startsWith("--script=")) {
+				scriptsVals.push(tok.slice(tok.indexOf("=") + 1));
+			}
+		}
+		if (scriptsVals.length !== 1 || !scriptsVals[0].startsWith("@") || scriptsVals[0].length <= 1) return null;
+		rawScript = scriptsVals[0].slice(1);
+	}
+	if (!rawScript || rawScript.includes("$")) return null;
+	const abs = path.resolve(cwd || root || ".", rawScript);
+	if (files.size !== 1 || !files.has(abs) || !fileHashes.has(abs)) return null;
+	return { path: abs, sha256: fileHashes.get(abs) };
+}
+
+/**
+ * git 에 커밋된 config/deploy-gate.json 의 readOnlyScripts 목록으로 ops 대본 읽기 전용 무코드 허용 여부를 판정한다.
+ */
+function matchReadOnlyScriptBinding({ cfg, root, clauses, files, fileHashes, services, cwd }) {
+	if (!cfg || !Array.isArray(cfg.readOnlyScripts) || cfg.readOnlyScripts.length === 0) return null;
+	if (services.some((sv) => sv.startsWith("script:") || sv.startsWith("package:"))) return null;
+	const target = extractPinnedReadOnlyScript(clauses[0], clauses, files, fileHashes, cwd, root);
+	if (!target) return null;
+	const matched = cfg.readOnlyScripts.filter((item) =>
+		item && typeof item === "object"
+		&& typeof item.sha256 === "string" && /^[a-f0-9]{64}$/i.test(item.sha256.trim())
+		&& item.sha256.trim().toLowerCase() === target.sha256
+		&& typeof item.service === "string" && item.service.trim() !== ""
+	);
+	if (matched.length === 0) return null;
+	if (!services.every((s) => matched.some((item) => globMatch(item.service, s)))) return null;
+	const clean = verifyConfigGitClean(deployGateConfigPath(root));
+	if (!clean.ok) {
+		return { ok: false, why: `읽기 전용 대본 허용 거부: ${clean.why}` };
+	}
+	const notes = [...new Set(matched.map((item) => (typeof item.note === "string" ? item.note.trim() : "")).filter(Boolean))];
+	return {
+		ok: true,
+		ops: true,
+		readOnlyNoCode: true,
+		fact: `읽기 전용 대본 승인 생략 확인: ${clean.rel}(HEAD 일치) readOnlyScripts sha256 ${target.sha256.slice(0, 12)} (${services.join(", ")}${notes.length ? `, ${notes.join("; ")}` : ""})`,
+	};
+}
+
+/**
  * 계획서 단계·명령·고정 파일·인스턴스 확장(config/deploy-gate.json + 선택 plugin)의 결합을 검증한다.
  */
 function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	const no = (why) => ({ ok: false, why: `계획 결합 거부: ${why}` });
-	const yes = (fact, ops = false) => ({ ok: true, fact, ops });
+	const yes = (fact, ops = false, extra = null) => ({ ok: true, fact, ops, ...(extra || {}) });
 	if (!Array.isArray(services) || services.length === 0) return no("운영 서비스 집합이 비어 있음");
 	if (!planBinding || !planBinding.plan || !planBinding.entry || typeof planBinding.command !== "string") return no("계획·단계·명령 문맥이 없음");
 	const { plan, entry, command, cwd = "" } = planBinding;
@@ -579,6 +707,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	if (!(entry.commands || []).includes(command)) return no("실행 명령 바이트가 승인된 단계 명령과 다름");
 
 	const files = new Map();
+	const fileHashes = new Map();
 	for (const [p, want] of Object.entries(entry.files || {})) {
 		if (!/^[a-f0-9]{64}$/i.test(String(want))) return no(`고정 파일 sha256 형식이 아님: ${p}`);
 		const full = path.resolve(cwd || root || ".", p);
@@ -589,8 +718,10 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 		} catch {
 			return no(`고정 파일을 읽지 못함: ${p}`);
 		}
-		if (crypto.createHash("sha256").update(body).digest("hex") !== String(want).toLowerCase()) return no(`고정 파일 sha256 불일치: ${p}`);
+		const actualSha = crypto.createHash("sha256").update(body).digest("hex");
+		if (actualSha !== String(want).toLowerCase()) return no(`고정 파일 sha256 불일치: ${p}`);
 		files.set(full, body.toString("utf8"));
+		fileHashes.set(full, actualSha);
 	}
 
 	const cfg = loadDeployGateConfig(root);
@@ -663,6 +794,11 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	if (clauses.unbalanced || clauses.length === 0) return no("명령 절 파싱 실패");
 	const c = clauses[0];
 	const sameServices = (actual) => actual.length === services.length && services.every((s) => actual.includes(s));
+
+	if (kind === "ops") {
+		const ro = matchReadOnlyScriptBinding({ cfg, root, clauses, files, fileHashes, services, cwd });
+		if (ro) return ro.ok ? ro : no(ro.why);
+	}
 
 	if (kind === "ops" && clauses.length === 1 && c.length === 2 && c[0] === "bash" && files.size === 1 && files.has(path.resolve(cwd || root || ".", c[1]))) {
 		const body = files.get(path.resolve(cwd || root || ".", c[1]));
@@ -869,7 +1005,8 @@ function assessReadiness(services, { root, auditPath, command = "", cwd = "", no
 			facts.push(`변경 목록 계산 실패: ${String(e.message || e).split("\n")[0]}`);
 		}
 	}
-	return { ok: problems.length === 0, problems, facts, file: found.file, kind: rec.kind };
+	const readOnlyNoCode = problems.length === 0 && rec.kind === "ops" && !!(planned && planned.ok && planned.readOnlyNoCode === true);
+	return { ok: problems.length === 0, problems, facts, file: found.file, kind: rec.kind, ...(readOnlyNoCode ? { readOnlyNoCode: true } : {}) };
 }
 
 const TEMPLATE = {

@@ -22,6 +22,8 @@
   ],
   "testHostsNote": "비운영(시험) 기기 호스트·IP 목록(문자열 배열, 소문자·끝 점 정규화, 정확히 일치하는 이름만 비운영으로 보며 원격 본문은 다시 분류)",
   "testHosts": [],
+  "readOnlyScriptsNote": "사람 승인 코드 없이 반복 실행할 kind=ops 고정 읽기 대본 목록([{sha256, service, note}]). 이 파일이 git 에 추적되고 HEAD 커밋과 같은 상태이며 적대 리뷰를 통과한 계획서·대본 지문이 일치할 때만 적용",
+  "readOnlyScripts": [],
   "services": {
     "azure:containerapp:my-app-prod": {
       "label": "운영 웹 컨테이너 앱",
