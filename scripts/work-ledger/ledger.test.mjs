@@ -1509,3 +1509,325 @@ test("unsafe channel and message IDs emit single error wakes without aborting su
     ["human-good-msg-1", "human-good-msg-2"],
   );
 });
+
+test("parent reply, adjacent burst reply, and untouched other-role direct reply rules", async () => {
+  const root = await setup();
+  const base = now - 30 * 60000;
+  const iso = (offsetSec) => new Date(base + offsetSec * 1000).toISOString();
+  const conf = {
+    roles: [
+      { role: "secretary", channels: ["ch-main"], human_ids: ["human"], user_ids: ["bot"] },
+      { role: "other", channels: [], human_ids: ["human"], user_ids: ["other-bot"] },
+    ],
+  };
+  const adapter = {
+    async messages() {
+      return [
+        // 1. Parent reply: role replied to orig-req before h-parent-late (not an answer) and after h-parent-done (answer)
+        { id: "orig-req", author_id: "bot", body: "승인 요청", created_at: iso(0) },
+        { id: "h-parent-done", author_id: "human", reply_to_id: "orig-req", body: "승인", created_at: iso(10), mentions: ["bot"] },
+        { id: "bot-parent-rep", author_id: "bot", reply_to_id: "orig-req", body: "승인 받았습니다", created_at: iso(30) },
+        { id: "h-parent-late", author_id: "human", reply_to_id: "orig-req", body: "<@bot> 추가 확인", created_at: iso(60), mentions: ["bot"] },
+
+        // 2. Adjacent burst with intervening other-bot reply: burst reply to b3 covers b1/b2 too
+        { id: "unrelated-old", author_id: "human", body: "<@bot> 8분 전 딴 일", created_at: iso(100), mentions: ["bot"] },
+        { id: "b1", author_id: "human", body: "<@bot> 첫째 줄", created_at: iso(600), mentions: ["bot"] },
+        { id: "other-intervene", author_id: "other-bot", body: "중간 다른 봇 글", created_at: iso(630) },
+        { id: "b2", author_id: "human", body: "둘째 줄", created_at: iso(660) },
+        { id: "b3", author_id: "human", body: "셋째 줄", created_at: iso(700) },
+        { id: "bot-burst-rep", author_id: "bot", reply_to_id: "b3", body: "세 건 같이 처리", created_at: iso(740) },
+
+        // 3. Other-role direct reply does NOT suppress secretary wake
+        { id: "h-other-direct", author_id: "human", body: "<@bot> 민호 확인해줘", created_at: iso(900), mentions: ["bot"] },
+        { id: "other-direct-rep", author_id: "other-bot", reply_to_id: "h-other-direct", body: "다른 봇 답글", created_at: iso(920) },
+      ];
+    },
+  };
+  const res = await watch({ root, config: conf, adapter, now });
+  assert.deepEqual(
+    res.wakes.map((w) => w.id),
+    ["human-h-parent-late", "human-unrelated-old", "human-h-other-direct"],
+  );
+});
+
+test("answered-elsewhere file suppresses listed ids via explicit config and configPath sibling auto-discovery", async () => {
+  const rootExplicit = await setup();
+  const explicitFile = path.join(rootExplicit, "custom-elsewhere.txt");
+  await writeFile(
+    explicitFile,
+    "# comment\n\nmsg-else-1 - 다른 채널에서 답함\nmsg-else-2 msg-reply-99 설명\n",
+  );
+  const ts = new Date(now - 60000).toISOString();
+  const posts = [
+    { id: "msg-else-1", author_id: "human", body: "<@bot> 건1", mentions: ["bot"], created_at: ts },
+    { id: "msg-else-2", author_id: "human", body: "<@bot> 건2", mentions: ["bot"], created_at: ts },
+    { id: "msg-keep", author_id: "human", body: "<@bot> 건3", mentions: ["bot"], created_at: ts },
+  ];
+  const confExplicit = {
+    roles: [{ ...config.roles[0], channels: ["ch"], answered_elsewhere_file: "custom-elsewhere.txt" }],
+  };
+  const res1 = await watch({ root: rootExplicit, config: confExplicit, adapter: { messages: async () => posts }, now });
+  assert.deepEqual(res1.wakes.map((w) => w.id), ["human-msg-keep"]);
+
+  const rootSibling = await setup();
+  const kitDir = path.join(rootSibling, "kit");
+  await mkdir(kitDir, { recursive: true });
+  const fakeConfigPath = path.join(kitDir, "work-ledger.json");
+  await writeFile(path.join(kitDir, "answered-elsewhere.txt"), "msg-else-2 none sibling\n");
+  const confSibling = { roles: [{ ...config.roles[0], channels: ["ch"] }] };
+  const res2 = await watch({ root: rootSibling, config: confSibling, configPath: fakeConfigPath, adapter: { messages: async () => posts }, now });
+  assert.deepEqual(res2.wakes.map((w) => w.id), ["human-msg-else-1", "human-msg-keep"]);
+});
+
+test("mention-only empty posts wake once without waiting_human unless edited to add text", async () => {
+  const root = await setup();
+  const conf = { roles: [{ ...config.roles[0], channels: ["ch"] }] };
+  let edited = false;
+  const adapter = {
+    async messages() {
+      return [
+        {
+          id: "ping-only",
+          author_id: "human",
+          body: edited ? "<@bot> 이제 작업 진행해줘" : "<@bot>",
+          mentions: ["bot"],
+          created_at: new Date(now - 60000).toISOString(),
+          ...(edited ? { edited_timestamp: new Date(now + 105 * 60000).toISOString() } : {}),
+        },
+        {
+          id: "ping-everyone",
+          author_id: "human",
+          body: "@everyone",
+          mention_everyone: true,
+          created_at: new Date(now - 60000).toISOString(),
+        },
+      ];
+    },
+  };
+  const r1 = await watch({ root, config: conf, adapter, now });
+  assert.deepEqual(
+    r1.wakes.filter((w) => w.reason === "장부에 없는 사람 글").map((w) => w.id),
+    ["human-ping-only", "human-ping-everyone"],
+  );
+  for (const mins of [35, 70, 100]) {
+    const rx = await watch({ root, config: conf, adapter, now: now + mins * 60000 });
+    assert.deepEqual(rx.wakes.filter((w) => w.reason === "장부에 없는 사람 글"), []);
+  }
+  const midLedger = await readLedger(root, "secretary");
+  assert.equal(midLedger.items.some((i) => i.status === "waiting_human"), false);
+
+  edited = true;
+  const rEdited = await watch({ root, config: conf, adapter, now: now + 110 * 60000 });
+  assert.deepEqual(
+    rEdited.wakes.filter((w) => w.reason === "장부에 없는 사람 글").map((w) => w.id),
+    ["human-ping-only"],
+  );
+});
+
+test("normal human post caps re-wakes at 3 and moves 4th attempt to waiting_human", async () => {
+  const root = await setup();
+  const conf = { roles: [{ ...config.roles[0], channels: ["ch"] }] };
+  let editedAt = null;
+  const adapter = {
+    async messages() {
+      return [
+        {
+          id: "unanswered-cap",
+          author_id: "human",
+          body: "<@bot> 작업 처리 부탁",
+          mentions: ["bot"],
+          created_at: new Date(now - 60000).toISOString(),
+          ...(editedAt ? { edited_timestamp: new Date(editedAt).toISOString() } : {}),
+        },
+      ];
+    },
+  };
+  // Simulate pre-edited post hitting 3-wake cap
+  editedAt = now - 30000;
+  for (const round of [0, 30, 60]) {
+    const r = await watch({ root, config: conf, adapter, now: now + round * 60000 });
+    assert.deepEqual(
+      r.wakes.filter((w) => w.reason === "장부에 없는 사람 글").map((w) => w.id),
+      ["human-unanswered-cap"],
+    );
+  }
+  // Within cooldown (80m), still waiting before 4th trigger
+  assert.deepEqual(
+    (await watch({ root, config: conf, adapter, now: now + 80 * 60000 })).wakes.filter((w) => w.reason === "장부에 없는 사람 글"),
+    [],
+  );
+  // 4th attempt (90m) suppresses wake and transitions to waiting_human
+  const r4 = await watch({ root, config: conf, adapter, now: now + 90 * 60000 });
+  assert.deepEqual(r4.wakes.filter((w) => w.reason === "장부에 없는 사람 글"), []);
+  const ledger4 = await readLedger(root, "secretary");
+  const waiting = ledger4.items.filter((i) => i.from.msg_id === "unanswered-cap");
+  assert.equal(waiting.length, 1);
+  assert.equal(waiting[0].status, "waiting_human");
+  assert.match(waiting[0].note, /3회/);
+
+  // 5th round stays silent and does not duplicate
+  const r5 = await watch({ root, config: conf, adapter, now: now + 120 * 60000 });
+  assert.deepEqual(r5.wakes.filter((w) => w.reason === "장부에 없는 사람 글"), []);
+  assert.equal((await readLedger(root, "secretary")).items.filter((i) => i.from.msg_id === "unanswered-cap").length, 1);
+
+  // Subsequent edit after waiting_human creation re-opens detection
+  editedAt = now + 125 * 60000;
+  const r6 = await watch({ root, config: conf, adapter, now: now + 130 * 60000 });
+  assert.deepEqual(
+    r6.wakes.filter((w) => w.reason === "장부에 없는 사람 글").map((w) => w.id),
+    ["human-unanswered-cap"],
+  );
+});
+
+test("role configuration inherits common defaults from config.defaults and top-level config", async () => {
+  const root = await setup();
+  const elsewhereFile = path.join(root, "shared-elsewhere.txt");
+  await writeFile(elsewhereFile, "skip-me - elsewhere\n");
+  const conf = {
+    channels: ["ch-shared"],
+    human_ids: ["human"],
+    answered_elsewhere_file: "shared-elsewhere.txt",
+    defaults: {
+      answered_by_own_post_after: true,
+      report_prefixes: ["[공통 보고]"],
+    },
+    roles: [
+      { role: "secretary", user_ids: ["bot"] },
+    ],
+  };
+  const posts = [
+    { id: "skip-me", author_id: "human", body: "<@bot> 건1", mentions: ["bot"], created_at: new Date(now - 60000).toISOString() },
+    { id: "rep-blocked", author_id: "human", body: "<@bot> 보고 뒤 미응답", mentions: ["bot"], created_at: new Date(now - 60000).toISOString() },
+    { id: "bot-rep", author_id: "bot", body: "[공통 보고] 상태 양호", created_at: new Date(now - 30000).toISOString() },
+    { id: "answered-plain", author_id: "human", body: "<@bot> 일반 응답", mentions: ["bot"], created_at: new Date(now - 120000).toISOString() },
+    { id: "bot-ok", author_id: "bot", body: "일반 답변 완료", created_at: new Date(now - 90000).toISOString() },
+  ];
+  const res = await watch({ root, config: conf, adapter: { messages: async () => posts }, now });
+  assert.deepEqual(res.wakes.map((w) => w.id), ["human-rep-blocked"]);
+});
+
+test("answered_by_own_post_after defaults false, counts own non-report channel/thread posts, excludes other roles and report_prefixes (with real message examples)", async () => {
+  const minhoId = "1559779745317789727";
+  const humanId = "865850174651498506";
+  const otherBotId = "1527145187342548992";
+
+  // 1. Default false: own post after human message does NOT suppress wake
+  const rootDefault = await setup();
+  const baseConf = {
+    roles: [
+      { role: "minho", channels: ["1560846231406649484", "1560656430187679755"], human_ids: [humanId], user_ids: [minhoId] },
+      { role: "other", channels: [], human_ids: [humanId], user_ids: [otherBotId] },
+    ],
+  };
+  const ex1Human = {
+    id: "1569941406775246969",
+    author_id: humanId,
+    channel: "1560846231406649484",
+    body: `<@${minhoId}> 해당 부분 준비해줘`,
+    mentions: [minhoId],
+    created_at: "2026-11-11T05:06:39.476Z",
+  };
+  const ex1OwnReply = {
+    id: "1569941520973439110",
+    author_id: minhoId,
+    channel: "1560846231406649484",
+    body: "[PC 민호] 14:05~14:06 지시 받았습니다. carbon 이 3층을 대신할 수 있는지 확인하는 일은 PC 민호가 맡겠습니다.",
+    created_at: "2026-11-11T05:07:06.703Z",
+  };
+  const nowEx1 = Date.parse("2026-11-11T08:40:20.632Z");
+  const rOff = await watch({
+    root: rootDefault,
+    config: baseConf,
+    adapter: { messages: async (ch) => (ch === "1560846231406649484" ? [ex1Human, ex1OwnReply] : []) },
+    now: nowEx1,
+  });
+  assert.deepEqual(rOff.wakes.map((w) => w.id), ["human-1569941406775246969"]);
+
+  // 2. When enabled: 1569941406775246969 -> 1569941520973439110 IS answered;
+  //    1570532601293443213 -> report post 1570558888611418143 IS NOT answered;
+  //    other-role post in same channel IS NOT an answer; same-thread own post IS an answer.
+  const rootEx1 = await setup();
+  const onConf = {
+    roles: [
+      { ...baseConf.roles[0], answered_by_own_post_after: true },
+      baseConf.roles[1],
+    ],
+  };
+  const rEx1 = await watch({
+    root: rootEx1,
+    config: onConf,
+    adapter: { messages: async (ch) => (ch === "1560846231406649484" ? [ex1Human, ex1OwnReply] : []) },
+    now: nowEx1,
+  });
+  assert.deepEqual(rEx1.wakes, []);
+
+  const rootEx2 = await setup();
+  const ex2Human = {
+    id: "1570532601293443213",
+    author_id: humanId,
+    channel: "1560656430187679755",
+    body: `<@${minhoId}> azure 크래딧 쓰라고`,
+    mentions: [minhoId],
+    created_at: "2026-11-12T20:15:51.233Z",
+  };
+  const ex2Report = {
+    id: "1570558888611418143",
+    author_id: minhoId,
+    channel: "1560656430187679755",
+    body: "[서버 민호 22:00Z] 살아 있음. 도는 일 없음",
+    created_at: "2026-11-12T22:00:18.618Z",
+  };
+  const ex2OtherRole = {
+    id: "other-post-1",
+    author_id: otherBotId,
+    channel: "1560656430187679755",
+    body: "[다른 역할] 확인 중",
+    created_at: "2026-11-12T22:05:00.000Z",
+  };
+  const nowEx2 = Date.parse("2026-11-12T23:22:37.618Z");
+  const rEx2 = await watch({
+    root: rootEx2,
+    config: onConf,
+    adapter: { messages: async (ch) => (ch === "1560656430187679755" ? [ex2Human, ex2Report, ex2OtherRole] : []) },
+    now: nowEx2,
+  });
+  assert.deepEqual(rEx2.wakes.map((w) => w.id), ["human-1570532601293443213"]);
+
+  // 3. Thread boundary + custom role report_prefixes override
+  const rootThread = await setup();
+  const customConf = {
+    roles: [
+      {
+        role: "minho",
+        channels: ["1560656430187679755"],
+        human_ids: [humanId],
+        user_ids: [minhoId],
+        answered_by_own_post_after: true,
+        report_prefixes: ["[커스텀 보고]"],
+      },
+    ],
+  };
+  const rThread = await watch({
+    root: rootThread,
+    config: customConf,
+    adapter: {
+      async messages(ch) {
+        if (ch === "th-1") {
+          return [
+            { id: "th-human", author_id: humanId, channel: "th-1", body: `<@${minhoId}> 쓰레드 지시`, mentions: [minhoId], created_at: "2026-11-12T21:00:00.000Z" },
+            { id: "th-minho", author_id: minhoId, channel: "th-1", body: "쓰레드 내 답글", created_at: "2026-11-12T21:01:00.000Z" },
+          ];
+        }
+        return [
+          { id: "thread-root", author_id: humanId, channel: "1560656430187679755", thread_id: "th-1", body: "일반 글", created_at: "2026-11-12T20:59:00.000Z" },
+          ex2Human,
+          ex2Report, // allowed as answer here because role overrode report_prefixes
+          { id: "main-blocked", author_id: humanId, channel: "1560656430187679755", body: `<@${minhoId}> 메인 채널 일`, mentions: [minhoId], created_at: "2026-11-12T22:10:00.000Z" },
+          { id: "main-custom-rep", author_id: minhoId, channel: "1560656430187679755", body: "[커스텀 보고] 상태 이상 없음", created_at: "2026-11-12T22:12:00.000Z" },
+        ];
+      },
+    },
+    now: nowEx2,
+  });
+  assert.deepEqual(rThread.wakes.map((w) => w.id), ["human-main-blocked"]);
+});

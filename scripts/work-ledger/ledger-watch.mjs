@@ -15,6 +15,125 @@ import {
 } from "./ledger.mjs";
 import { createAdapter } from "./messenger.mjs";
 import { cleanReceipts, dueWake, receiptPath, reconcileCurrent } from "./due-timer.mjs";
+
+const DEFAULT_REPORT_PREFIXES = ["[서버 민호 정기 보고", "[서버 민호 "];
+const DEFAULT_MAX_HUMAN_WAKES = 3;
+const MENTION_ONLY_MAX_WAKES = 1;
+const BURST_GAP_MS = 3 * 60000;
+const BURST_SPAN_MS = 5 * 60000;
+const WAKE_COOLDOWN_MS = 30 * 60000;
+
+function roleOption(roleConfig, config, key, fallback) {
+  if (roleConfig?.[key] !== undefined) return roleConfig[key];
+  if (config?.defaults?.[key] !== undefined) return config.defaults[key];
+  if (config?.[key] !== undefined) return config[key];
+  return fallback;
+}
+
+function positiveIntOption(value, fallback) {
+  return Number.isInteger(value) && value >= 1 ? value : fallback;
+}
+
+function normalizePrefixes(raw) {
+  if (!Array.isArray(raw)) return DEFAULT_REPORT_PREFIXES;
+  return raw.filter((prefix) => typeof prefix === "string" && prefix.length > 0);
+}
+
+function isReportPost(post, prefixes) {
+  if (!prefixes.length) return false;
+  const body = String(post?.body ?? post?.content ?? "").trimStart();
+  return prefixes.some((prefix) => body.startsWith(prefix));
+}
+
+function isMentionOnlyBody(m) {
+  if (Array.isArray(m?.attachments) && m.attachments.length > 0) return false;
+  const stripped = String(m?.body ?? m?.content ?? "")
+    .replace(/<@!?\w[\w-]*>/g, "")
+    .replace(/<@&\w[\w-]*>/g, "")
+    .replace(/<#\w[\w-]*>/g, "")
+    .replace(/(?<![\p{L}\p{N}_@])@(?:everyone|here)\b/gu, "")
+    .trim();
+  return stripped.length === 0;
+}
+
+function parseAnsweredElsewhere(text) {
+  const ids = new Set();
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const [msgId] = line.split(/\s+/, 1);
+    if (msgId) ids.add(msgId);
+  }
+  return ids;
+}
+
+async function loadAnsweredElsewhere({ root, configPath, configured, warnings, role }) {
+  if (configured === false || configured === null) return new Set();
+  const ids = new Set();
+  const addFromText = (text) => {
+    for (const id of parseAnsweredElsewhere(text)) ids.add(id);
+  };
+  if (configured !== undefined) {
+    const entries = (Array.isArray(configured) ? configured : [configured])
+      .filter((item) => typeof item === "string" && item.trim() !== "");
+    for (const entry of entries) {
+      const candidates = path.isAbsolute(entry)
+        ? [entry]
+        : [
+            path.resolve(root, entry),
+            ...(configPath ? [path.resolve(path.dirname(configPath), entry)] : []),
+          ];
+      for (const file of [...new Set(candidates)]) {
+        try {
+          addFromText(await readFile(file, "utf8"));
+          break;
+        } catch (error) {
+          if (error.code !== "ENOENT") {
+            warnings.push(`elsewhere:${role}:${file}: ${error.message || String(error)}`);
+            break;
+          }
+        }
+      }
+    }
+    return ids;
+  }
+  const autoFiles = [
+    ...(configPath ? [path.join(path.dirname(configPath), "answered-elsewhere.txt")] : []),
+    path.join(root, ".agents/work/ledger/answered-elsewhere.txt"),
+  ];
+  for (const file of [...new Set(autoFiles.map((p) => path.resolve(p)))]) {
+    try {
+      addFromText(await readFile(file, "utf8"));
+    } catch (error) {
+      if (error.code !== "ENOENT")
+        warnings.push(`elsewhere:${role}:${file}: ${error.message || String(error)}`);
+    }
+  }
+  return ids;
+}
+
+function collectAuthorBurstIds(chList, targetIdx, authorId, targetCreatedMs, stopAuthors, getCreatedMs) {
+  const ids = new Set([chList[targetIdx].id]);
+  if (!Number.isFinite(targetCreatedMs)) return ids;
+  for (const step of [-1, 1]) {
+    let prevMs = targetCreatedMs;
+    for (let j = targetIdx + step; j >= 0 && j < chList.length; j += step) {
+      const om = chList[j];
+      const oc = getCreatedMs(om);
+      if (!Number.isFinite(oc)) break;
+      if (Math.abs(oc - targetCreatedMs) > BURST_SPAN_MS) break;
+      if (om.author_id === authorId) {
+        if (Math.abs(oc - prevMs) > BURST_GAP_MS) break;
+        ids.add(om.id);
+        prevMs = oc;
+      } else if (stopAuthors.has(om.author_id) || Boolean(om.webhook_id)) {
+        break;
+      }
+    }
+  }
+  return ids;
+}
+
 export async function watch({
   root,
   config,
@@ -46,7 +165,7 @@ export async function watch({
   }
   const handled = new Set(drive?.handled ?? []);
   return withLock(stateFile, async () => {
-    let state = { version: 1, sent: {}, thread_cursors: {}, mentions: {} };
+    let state = { version: 1, sent: {}, thread_cursors: {}, mentions: {}, wake_counts: {}, wake_mention_only: {} };
     let stateError;
     let recoveredHumanWait = {};
     try {
@@ -78,15 +197,31 @@ export async function watch({
         (state.mentions !== undefined &&
           (!state.mentions ||
             typeof state.mentions !== "object" ||
-            Array.isArray(state.mentions)))
+            Array.isArray(state.mentions))) ||
+        (state.wake_counts !== undefined &&
+          (!state.wake_counts ||
+            typeof state.wake_counts !== "object" ||
+            Array.isArray(state.wake_counts) ||
+            Object.values(state.wake_counts).some(
+              (v) => !Number.isInteger(v) || v < 0,
+            ))) ||
+        (state.wake_mention_only !== undefined &&
+          (!state.wake_mention_only ||
+            typeof state.wake_mention_only !== "object" ||
+            Array.isArray(state.wake_mention_only) ||
+            Object.values(state.wake_mention_only).some(
+              (v) => typeof v !== "boolean",
+            )))
       )
         throw new Error("Invalid watch state");
       state.thread_cursors ??= {};
       state.mentions ??= {};
+      state.wake_counts ??= {};
+      state.wake_mention_only ??= {};
     } catch (error) {
       if (error.code !== "ENOENT") {
         stateError = "감시 상태 파일 읽기 실패";
-        state = { version: 1, sent: {}, thread_cursors: {}, mentions: {} };
+        state = { version: 1, sent: {}, thread_cursors: {}, mentions: {}, wake_counts: {}, wake_mention_only: {} };
       }
     }
     state.human_wait_sent ??= recoveredHumanWait;
@@ -186,7 +321,7 @@ export async function watch({
       safeName(role);
       safeName(id);
       const key = dedupKey || JSON.stringify([role, id, reason]);
-      if (!force && state.sent[key] !== undefined && now - state.sent[key] < 30 * 60000)
+      if (!force && state.sent[key] !== undefined && now - state.sent[key] < WAKE_COOLDOWN_MS)
         return;
       const stamp = new Date(now + sequence++).toISOString().replace(/\D/g, "");
       const route = `-route-${role}.md`;
@@ -234,10 +369,11 @@ export async function watch({
           ledger = await readLedger(root, role);
         } catch (error) {
           if (error.code !== "ENOENT") throw error;
+          const initialReport = roleOption(roleConfig, config, "report", undefined);
           await changeLedger(root, role, (l) => {
             l.report = {
-              every_min: roleConfig.report?.every_min ?? 0,
-              channel: roleConfig.report?.channel || "",
+              every_min: initialReport?.every_min ?? 0,
+              channel: initialReport?.channel || "",
               last_msg_id: null,
               last_at: null,
             };
@@ -320,12 +456,13 @@ export async function watch({
           }
         }
       }
+      const configuredReport = roleOption(roleConfig, config, "report", undefined);
       const report =
-        ledger.report.every_min === 0 && roleConfig.report
+        ledger.report.every_min === 0 && configuredReport
           ? {
               ...ledger.report,
-              every_min: roleConfig.report.every_min,
-              channel: roleConfig.report.channel,
+              every_min: configuredReport.every_min,
+              channel: configuredReport.channel,
             }
           : ledger.report;
       if (
@@ -342,31 +479,57 @@ export async function watch({
         );
       networkChecks.push(async () => {
       try {
+        const directChannels = roleOption(roleConfig, config, "direct_channels", []);
         const channels = [...new Set([
-          ...(roleConfig.channels ?? config.channels ?? []),
-          ...(roleConfig.direct_channels ?? []),
+          ...roleOption(roleConfig, config, "channels", []),
+          ...directChannels,
         ])];
         const humans = roleConfig.human_ids ?? roleConfig.humans ??
+          config.defaults?.human_ids ?? config.defaults?.humans ??
           config.human_ids ?? config.humans ?? [];
         const relays = [
           ...new Set([
             ...(roleConfig.relay_ids ?? []),
+            ...(config.defaults?.relay_ids ?? []),
             ...(config.relay_ids ?? []),
             ...(roleConfig.relay_bot_ids ?? []),
+            ...(config.defaults?.relay_bot_ids ?? []),
             ...(config.relay_bot_ids ?? []),
             ...(roleConfig.relay_user_ids ?? []),
+            ...(config.defaults?.relay_user_ids ?? []),
             ...(config.relay_user_ids ?? []),
             ...(roleConfig.webhook_ids ?? []),
+            ...(config.defaults?.webhook_ids ?? []),
             ...(config.webhook_ids ?? []),
           ]),
         ];
-        const identities = roleConfig.user_ids ?? [];
-        const roleIds = roleConfig.role_ids ?? [];
+        const identities = roleOption(roleConfig, config, "user_ids", []);
+        const roleIds = roleOption(roleConfig, config, "role_ids", []);
         const ownTargets = [...new Set([...identities, ...roleIds])];
         if (channels.length && (!humans.length || !ownTargets.length))
           throw new Error(
             "Messenger watch requires human_ids and role user_ids",
           );
+        const answeredByAnyRolePostAfter =
+          roleOption(roleConfig, config, "answered_by_any_role_post_after", false) === true;
+        const answeredByOwnPostAfter =
+          roleOption(roleConfig, config, "answered_by_own_post_after", false) === true;
+        const reportPrefixes = normalizePrefixes(
+          roleOption(roleConfig, config, "report_prefixes", DEFAULT_REPORT_PREFIXES),
+        );
+        const maxHumanWakes = positiveIntOption(
+          roleOption(roleConfig, config, "max_human_wakes", DEFAULT_MAX_HUMAN_WAKES),
+          DEFAULT_MAX_HUMAN_WAKES,
+        );
+        const checkUnrecordedHuman =
+          roleOption(roleConfig, config, "check_unrecorded_human", true) !== false;
+        const elsewhereIds = await loadAnsweredElsewhere({
+          root,
+          configPath,
+          configured: roleOption(roleConfig, config, "answered_elsewhere_file", undefined),
+          warnings,
+          role,
+        });
         const messenger = sharedMessenger ??= (channels.length ? createAdapter(config.provider) : null);
         if (messenger && !messengerRoundStarted) {
           messenger.beginRound?.();
@@ -374,6 +537,7 @@ export async function watch({
         }
         const maxThreads =
           roleConfig.max_threads ??
+          config.defaults?.max_threads ??
           config.max_threads ??
           config.provider?.max_threads ??
           25;
@@ -405,13 +569,14 @@ export async function watch({
           }
           const guildId =
             roleConfig.guild_id ??
+            config.defaults?.guild_id ??
             config.guild_id ??
             config.provider?.guild_id ??
             null;
           if (typeof messenger.threads === "function") {
             try {
               const activeThreads = await readWithRetry(() =>
-                messenger.threads(channel, channelMessages, { guildId, all: true, direct: (roleConfig.direct_channels ?? []).includes(channel) }),
+                messenger.threads(channel, channelMessages, { guildId, all: true, direct: directChannels.includes(channel) }),
               );
               for (const [tid, owner] of activeThreads?.threadOwners ?? [])
                 if (owner && !threadStarterAuthor.has(tid)) threadStarterAuthor.set(tid, owner);
@@ -556,8 +721,8 @@ export async function watch({
               threadStarterAuthor.get(m.channel);
             const ownReply = ownTargets.includes(parentAuthor);
             const inDirectChannel =
-              (roleConfig.direct_channels ?? []).includes(channel) ||
-              (roleConfig.direct_channels ?? []).includes(m.channel);
+              directChannels.includes(channel) ||
+              directChannels.includes(m.channel);
             if (ownMention || ownReply || inDirectChannel) return true;
             const otherReply = Boolean(
               parentAuthor &&
@@ -579,6 +744,7 @@ export async function watch({
             return { createdMs, editedMs, isEdited, effectiveMs };
           }
           const humanWait = {
+            ...(config.defaults?.human_wait ?? {}),
             ...(config.human_wait ?? {}),
             ...(roleConfig.human_wait ?? {}),
           };
@@ -610,7 +776,7 @@ export async function watch({
               part.reply_to?.author_id || part.reply_to?.author?.id ||
               byId.get(part.reply_to_id)?.author_id).find(Boolean);
             const mentioned = extractMentions({ body }).mentions;
-            const implicit = (roleConfig.direct_channels ?? []).includes(question.channel) ||
+            const implicit = directChannels.includes(question.channel) ||
               humans.includes(threadStarterAuthor.get(question.channel));
             const targets = humans.filter((id) => mentioned.has(id) || id === parentAuthor ||
               (implicit && (!threadStarterAuthor.get(question.channel) || threadStarterAuthor.get(question.channel) === id)));
@@ -672,11 +838,30 @@ export async function watch({
               state.human_wait_sent[partKey] = now;
             }
           }
-          if (roleConfig.check_unrecorded_human === false || config.check_unrecorded_human === false) continue;
+          if (!checkUnrecordedHuman) continue;
+          const orderedByChannel = new Map();
+          for (const msg of messages) {
+            const ch = msg.channel || channel;
+            if (!orderedByChannel.has(ch)) orderedByChannel.set(ch, []);
+            orderedByChannel.get(ch).push(msg);
+          }
+          for (const list of orderedByChannel.values()) {
+            list.sort((a, b) => {
+              const ta = messageTimes(a).createdMs;
+              const tb = messageTimes(b).createdMs;
+              if (!Number.isFinite(ta) || !Number.isFinite(tb)) return 0;
+              return ta - tb;
+            });
+          }
+          const stopBurstAuthors = new Set([...identities, ...humans, ...relays]);
+          const replyTimeOk = (r, sinceMs) => {
+            const reEffMs = messageTimes(r).effectiveMs;
+            return Number.isFinite(reEffMs) && reEffMs > sinceMs && reEffMs <= now;
+          };
           for (const m of messages) {
             try {
               if (!isHumanOrRelay(m) || !addressed(m)) continue;
-              const { editedMs, isEdited, effectiveMs } = messageTimes(m);
+              const { createdMs, editedMs, isEdited, effectiveMs } = messageTimes(m);
               if (
                 !Number.isFinite(effectiveMs) ||
                 effectiveMs < since ||
@@ -693,23 +878,54 @@ export async function watch({
               const isReplied = isEdited
                 ? replies.some((r) => messageTimes(r).effectiveMs >= editedMs)
                 : replies.length > 0;
-              const isAnsweredAfter =
-                roleConfig.answered_by_any_role_post_after === true &&
+              const isParentReplied =
+                Boolean(m.reply_to_id) &&
                 messages.some(
-                  (post) =>
-                    identities.includes(post.author_id) &&
-                    (post.channel || channel) === msgChannel &&
-                    messageTimes(post).effectiveMs > effectiveMs &&
-                    messageTimes(post).effectiveMs <= now,
+                  (r) =>
+                    identities.includes(r.author_id) &&
+                    (r.channel || channel) === msgChannel &&
+                    r.reply_to_id === m.reply_to_id &&
+                    replyTimeOk(r, effectiveMs),
                 );
-              const { tokens: msgMentionTokens } = extractMentions(m);
+              let isBurstReplied = false;
+              const chList = orderedByChannel.get(msgChannel) || [];
+              const targetIdx = chList.indexOf(m);
+              if (targetIdx !== -1) {
+                const burstIds = collectAuthorBurstIds(
+                  chList,
+                  targetIdx,
+                  m.author_id,
+                  createdMs,
+                  stopBurstAuthors,
+                  (post) => messageTimes(post).createdMs,
+                );
+                isBurstReplied = messages.some(
+                  (r) =>
+                    identities.includes(r.author_id) &&
+                    (r.channel || channel) === msgChannel &&
+                    burstIds.has(r.reply_to_id) &&
+                    replyTimeOk(r, effectiveMs),
+                );
+              }
+              const isAnsweredAfter =
+                (answeredByAnyRolePostAfter || answeredByOwnPostAfter) &&
+                messages.some((post) => {
+                  if (!identities.includes(post.author_id)) return false;
+                  if ((post.channel || channel) !== msgChannel) return false;
+                  if (!replyTimeOk(post, effectiveMs)) return false;
+                  if (answeredByAnyRolePostAfter) return true;
+                  return !isReportPost(post, reportPrefixes);
+                });
+              const msgMentions = extractMentions(m);
+              const { tokens: msgMentionTokens } = msgMentions;
               const mentionSignature = JSON.stringify(msgMentionTokens);
               const recordedItems = ledger.items.filter(
                 (i) => i.from.msg_id === m.id,
               );
               const isRecorded = isEdited
                 ? recordedItems.some((i) => {
-                    if (!i.checked_at || Date.parse(i.checked_at) < editedMs)
+                    const handledAt = i.checked_at || (i.status === "waiting_human" ? i.created_at : null);
+                    if (!handledAt || Date.parse(handledAt) < editedMs)
                       return false;
                     const itemMentions = extractItemMentions(i);
                     const hasRecordedContext =
@@ -725,33 +941,90 @@ export async function watch({
                     return true;
                   })
                 : recordedItems.length > 0;
+              const isRecordedElsewhere = elsewhereIds.has(m.id);
               const wakeId = `human-${safeName(m.id)}`;
               const wakeKey = JSON.stringify([
                 role,
                 wakeId,
                 "장부에 없는 사람 글",
               ]);
-              if (isReplied || isAnsweredAfter || isRecorded) {
+              const clearHumanWakeState = () => {
                 delete state.sent[wakeKey];
                 delete state.mentions[wakeKey];
+                delete state.wake_counts[wakeKey];
+                delete state.wake_mention_only[wakeKey];
+              };
+              if (
+                isReplied ||
+                isParentReplied ||
+                isBurstReplied ||
+                isAnsweredAfter ||
+                isRecorded ||
+                isRecordedElsewhere
+              ) {
+                clearHumanWakeState();
                 continue;
               }
+              const mentionOnly = isMentionOnlyBody(m);
               if (
                 isEdited &&
                 state.sent[wakeKey] !== undefined &&
-                state.mentions[wakeKey] !== undefined &&
-                state.mentions[wakeKey] !== mentionSignature
+                ((state.mentions[wakeKey] !== undefined &&
+                  state.mentions[wakeKey] !== mentionSignature) ||
+                  (state.wake_mention_only[wakeKey] === true && !mentionOnly))
               ) {
-                delete state.sent[wakeKey];
+                clearHumanWakeState();
               }
-              await wake(
+              const wakeLimit = mentionOnly ? MENTION_ONLY_MAX_WAKES : maxHumanWakes;
+              const priorCount = state.wake_counts[wakeKey] ?? 0;
+              if (priorCount >= wakeLimit) {
+                const cooldownElapsed =
+                  state.sent[wakeKey] === undefined ||
+                  now - state.sent[wakeKey] >= WAKE_COOLDOWN_MS;
+                if (!mentionOnly && cooldownElapsed) {
+                  ledger = await changeLedger(root, role, async (l) => {
+                    if (l.items.some((i) => i.from?.msg_id === m.id && i.status === "waiting_human")) return;
+                    const baseId = `human-${safeName(m.id)}`;
+                    let itemId = baseId;
+                    let suffix = 2;
+                    while (l.items.some((i) => i.id === itemId)) itemId = `${baseId}-${suffix++}`;
+                    const bodyText = String(m.body || "").trim();
+                    l.items.push({
+                      id: itemId,
+                      title: bodyText.replace(/\s+/g, " ").slice(0, 120) || "(본문 없음)",
+                      from: {
+                        channel: msgChannel,
+                        msg_id: m.id,
+                        quote: bodyText.slice(0, 200),
+                        mentions: [...msgMentions.mentions],
+                        mention_roles: [...msgMentions.roleMentions],
+                        mention_everyone: msgMentions.everyoneOrHere,
+                      },
+                      due: new Date(now + 4 * 60 * 60000).toISOString(),
+                      created_at: new Date(now).toISOString(),
+                      status: "waiting_human",
+                      worker: null,
+                      checked_at: null,
+                      note: `재깨움 ${maxHumanWakes}회 상한 뒤 사람 대기 등록`,
+                    });
+                  });
+                  clearHumanWakeState();
+                }
+                continue;
+              }
+              const woken = await wake(
                 role,
                 wakeId,
                 "장부에 없는 사람 글",
                 m.body || "(본문 없음)",
                 `출처: ${msgChannel}/${m.id}\n기한: (미등록)\n결과: (없음)`,
               );
-              state.mentions[wakeKey] = mentionSignature;
+              if (woken) {
+                state.mentions[wakeKey] = mentionSignature;
+                state.wake_counts[wakeKey] = priorCount + 1;
+                if (mentionOnly) state.wake_mention_only[wakeKey] = true;
+                else delete state.wake_mention_only[wakeKey];
+              }
             } catch (error) {
               const sourceChannel = m?.channel || channel;
               errors.push(`messenger:${role}:${sourceChannel}:${m?.id}`);
@@ -787,6 +1060,12 @@ export async function watch({
     );
     state.mentions = Object.fromEntries(
       Object.entries(state.mentions).filter(([k]) => k in state.sent),
+    );
+    state.wake_counts = Object.fromEntries(
+      Object.entries(state.wake_counts).filter(([k]) => k in state.sent),
+    );
+    state.wake_mention_only = Object.fromEntries(
+      Object.entries(state.wake_mention_only).filter(([k]) => k in state.sent),
     );
     for (const channel of successfulThisRound) {
       if (!failedThisRound.has(channel)) delete state.channel_failures[channel];
