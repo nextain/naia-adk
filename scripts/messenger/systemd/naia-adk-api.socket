@@ -1,0 +1,11 @@
+[Unit]
+Description=Naia ADK API port hold (127.0.0.1:3141)
+
+[Socket]
+ListenStream=127.0.0.1:3141
+# systemd keeps the port while the service restarts or stops, so another local account cannot take the API port and receive people's messages and the proxy secret.
+# Past the default trigger limit the socket fails and frees the port, so it is off. PollLimit defaults slow down connection floods.
+TriggerLimitIntervalSec=0
+
+[Install]
+WantedBy=sockets.target

@@ -29,6 +29,7 @@ import {
   type DocFavoriteItem,
 } from "../favorites.js"
 import { withFileLock, FileLockTimeoutError } from "../file-lock.js"
+import { messengerEnabled } from "./portal-messenger.js"
 
 export type FileKind = "doc" | "image" | "video" | "audio" | "pdf" | "text" | "other"
 
@@ -59,6 +60,7 @@ export interface PortalBoardInfo {
 export interface PortalResponse {
   sources: PortalSource[]
   board: PortalBoardInfo | null
+  messenger?: { enabled: boolean }
 }
 
 export function getFileKind(fileName: string): FileKind {
@@ -1098,6 +1100,8 @@ export function isSourceAllowedForUntrusted(sourceId: string, isTrusted: boolean
 
 export interface PortalOptions {
   beforeRename?: () => Promise<void> | void
+  /** Messenger state shared with portal-messenger; off when disabled or its initialization failed. */
+  messengerStatus?: { enabled: boolean }
 }
 
 const docWriteLocks = new Map<string, Promise<void>>()
@@ -1127,6 +1131,8 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
 
   // GET /api/portal
   app.get("/", async (req, reply) => {
+    // The dashboard hides its messages tab when NAIA_MESSENGER_ENABLED turns the messenger routes off or they failed to start.
+    const messenger = { enabled: opts?.messengerStatus?.enabled ?? messengerEnabled() }
     const { sources, board } = getSourcesAndBoard(root, getFolderCtx())
     const isTrusted = (req as any).trust?.trusted === true
     const resultSources = isTrusted
@@ -1137,7 +1143,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             ...s,
             tree: filterUntrustedTree(s.tree),
           }))
-    return reply.send({ sources: resultSources, board })
+    return reply.send({ sources: resultSources, board, messenger })
   })
 
   // GET /api/portal/workspace
