@@ -367,10 +367,10 @@ export function NotesPanel({
               }`}
             >
               {/* 상단: 상태, 인용, 때 */}
-              <div className="flex items-center justify-between text-[11px] text-neutral-400">
-                <div className="flex items-center gap-1.5">
+              <div className="flex items-center justify-between gap-2 text-[11px] text-neutral-400">
+                <div className="flex items-center gap-1.5 min-w-0">
                   <span
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                    className={`shrink-0 whitespace-nowrap px-1.5 py-0.5 rounded text-[10px] font-medium ${
                       isOpen
                         ? "bg-blue-950 text-blue-300 border border-blue-900/60"
                         : "bg-neutral-800 text-neutral-400"
@@ -378,11 +378,11 @@ export function NotesPanel({
                   >
                     {isOpen ? "열림" : "처리됨"}
                   </span>
-                  <span className="truncate max-w-[150px] text-neutral-400">
+                  <span className="truncate text-neutral-400">
                     {note.quote ? `"${note.quote}"` : MSG_QUOTE_WHOLE_DOC}
                   </span>
                 </div>
-                <span>{new Date(note.createdAt).toLocaleDateString("ko-KR")}</span>
+                <span className="shrink-0 whitespace-nowrap">{new Date(note.createdAt).toLocaleDateString("ko-KR")}</span>
               </div>
 
               {/* 본문 또는 수정창 */}
