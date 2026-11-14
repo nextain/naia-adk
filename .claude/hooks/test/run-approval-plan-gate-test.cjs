@@ -271,6 +271,18 @@ test("2. 인스턴스 설정(config/deploy-gate.json) 없는 알 수 없는 운�
 	assert.match(withPluginDecision.reason, /plugin verified azure:containerapp:sample-web-prod/);
 });
 
+test("3a. 64KB 넘는 승인 양식도 잘리지 않고 JSON 으로 끝까지 나옴 (Long plan block output is not truncated on a pipe)", (t) => {
+	// 파이프에 64KB 넘게 쓰고 바로 process.exit 하면 뒷부분이 잘려 판정 JSON 이 깨졌다(2026-11-11, 85KB 계획에서 승인 코드 줄이 사라짐).
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root);
+	const { planFile, step1Cmd } = createValidPlan(root, { what_why: "긴 설명 문장입니다. ".repeat(6000) });
+	writePassingReviewReceipt(root, planFile);
+	const d = runDeployGuardHook(step1Cmd, { cwd: root, root, stateDir, transcriptPath });
+	assert.ok(Buffer.byteLength(JSON.stringify(d)) > 65536, "시험 출력이 64KB 를 넘어야 함");
+	assert.equal(d.decision, "block");
+	assert.match(d.reason, /승인 코드:\s*PLAN-[A-Z0-9]{6}/);
+});
+
 test("3. 코드 없는 단계 막힘 (Reviewed plan without approval code is blocked and issues code)", (t) => {
 	const { root, stateDir, transcriptPath } = makeWorkspace(t);
 	writeGateConfig(root);
