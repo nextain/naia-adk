@@ -74,6 +74,8 @@ jobs:
         run: node .claude/hooks/test/run-approval-plan-gate-test.cjs
       - name: Plan reviewer rotation gate
         run: node .claude/hooks/test/run-plan-reviewer-rotation-test.cjs
+      - name: Gateway runner binding
+        run: node --test .claude/hooks/test/run-gateway-runner-parity-test.cjs
       - name: Naia account document translation adapter
         run: python .agents/skills/translate-doc/tests/test_naia_translate.py
       - name: Natural writing skill linter tests

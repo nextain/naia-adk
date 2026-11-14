@@ -590,6 +590,123 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 		files.set(full, body.toString("utf8"));
 	}
 
+
+	// Runner binding is evaluated before instance plugins and generic custom-command
+	// rules so that neither can accept an unreviewed body under a runner name.
+	const { shellClauses: runnerClauses } = require("./git-command-parser.js");
+	const parsedRunner = runnerClauses(command);
+	const runnerArgs = parsedRunner[0] || [];
+	const runnerNames = ["launch-local.sh", "operation-local.sh", "status-local.sh", "rollback-local.sh"];
+	// The classifier unwraps assignments and process wrappers. They must not
+	// fall through to a generic custom-command rule in readiness.
+	const effective = require("./effective-argv.js").effectiveCommands(command, cwd || root);
+	const wrappedRunner = effective.some(({ argv = [] }) => argv[0] === "bash" && runnerNames.includes(path.basename(argv[1] || "")));
+	if (wrappedRunner && !(runnerArgs[0] === "bash" && runnerNames.includes(path.basename(runnerArgs[1] || "")))) return no("실행기는 직접 호출해야 함");
+	if (runnerArgs[0] === "bash" && (runnerNames.includes(path.basename(runnerArgs[1] || "")) || (services.includes("azure:vm:naia-gateway-prod-az") && (runnerArgs[1] || "").endsWith("-local.sh")))) {
+	 const RUNNER_FORMATS = require("./deploy-command-classifier.js").GATEWAY_RUNNER_FORMATS;
+	 const GATEWAY_SERVICE = "azure:vm:naia-gateway-prod-az";
+	 const GATEWAY_REPO = "acrnaia83b29893.azurecr.io/naia/gateway";
+	 const textSha = (s) => crypto.createHash("sha256").update(s).digest("hex");
+	 const sameServices = wanted => services.length === wanted.length && services.every(x => wanted.includes(x));
+	 const clauses = parsedRunner, c = runnerArgs, shellClauses = runnerClauses;
+	 const texts = e => {
+	  const out = new Map();
+	  for (const [p, h] of Object.entries(e.files || {})) {
+	   const full = path.resolve(cwd || root, p);
+	   try { const body = fs.readFileSync(full); if (textSha(body) !== h) return null; out.set(full, body.toString("utf8")); } catch { return null; }
+	  }
+	  return out;
+	 };
+	 if (parsedRunner.unbalanced || !sameServices([GATEWAY_SERVICE]) || !plannedServices.includes(GATEWAY_SERVICE)) return no("실행기 서비스 또는 명령 불일치");
+	 const cfg = loadDeployGateConfig(root);
+	 const rule = cfg && matchServiceRule(GATEWAY_SERVICE, cfg);
+	 if (!rule || (rule.allowedCommands?.length && !rule.allowedCommands.some(p => new RegExp(p).test(command))) ||
+	     (rule.requiredFiles || []).some(p => !files.has(path.resolve(cwd || root, p)))) return no("실행기 서비스 설정 불일치");
+ const declarations = [];
+ for (const change of plan.changes || []) {
+  const tagged = change.match(/^서비스 (azure:containerapp:[A-Za-z0-9_-]+) 이미지 ([A-Za-z0-9./_-]+):([A-Za-z0-9_.-]+)$/);
+  if (tagged) declarations.push({ repo: tagged[2], targets: [tagged[1]], tag: tagged[3] });
+  const repo = (change.match(/([a-z0-9.-]+\.azurecr\.io\/[\w/-]+)/) || [])[1];
+  const targets = (plan.services || []).filter((sv) => change.includes(sv.split(":").at(-1)));
+  for (const m of change.matchAll(/([\w.:-]+)\s*\(sha256:([a-f0-9]{8,64})(…?)([^)]*)\)/g)) {
+   let digest = m[2];
+   // 줄여 쓴 이전 이미지 선언은 같은 서비스 사전 점검에 적힌 전체 digest로만 완성한다.
+   // 실행할 명령이나 후보 문자열에서 digest를 역으로 만들어 인정하지 않는다.
+   if (digest.length !== 64) {
+    if (m[3] !== "…" || !repo) continue;
+    const full = new Set();
+    for (const step of plan.scenario || []) {
+     const pre = String(step.precheck || "");
+     if (!targets.some((sv) => pre.includes(sv.split(":").at(-1)))) continue;
+     for (const hit of pre.matchAll(/([A-Za-z0-9./_-]+)@(sha256:[a-f0-9]{64})/g)) {
+      if ((hit[1] === repo || hit[1] === repo.split("/").slice(1).join("/")) && hit[2].startsWith(`sha256:${digest}`)) full.add(hit[2].slice(7));
+     }
+    }
+    if (full.size !== 1) continue;
+    digest = [...full][0];
+   } else if (m[3]) continue;
+   const commit = (m[4].match(/커밋\s+([a-f0-9]{7,40})\b/) || [])[1];
+   declarations.push({ repo, targets, tag: m[1], digest: `sha256:${digest}`, commit });
+  }
+ }
+ const matchesCandidate = (x) => x.tag === candidate || `${x.repo}:${x.tag}` === candidate || x.tag.endsWith(`-${candidate}`) || (x.commit && x.commit === candidate) || candidate === x.digest;
+ const gateway = declarations.filter((x) => x.repo === GATEWAY_REPO && x.targets.includes(GATEWAY_SERVICE));
+ const format = (p, pins, name) => pins.has(p) && RUNNER_FORMATS[name] === textSha(pins.get(p));
+ const wrapper = (argv, pins) => {
+  if (argv[0] !== "bash" || !path.isAbsolute(argv[1] || "")) return null;
+  const name = path.basename(argv[1]);
+  if (!["launch-local.sh", "operation-local.sh", "status-local.sh", "rollback-local.sh"].includes(name) || !format(argv[1], pins, name)) return null;
+  if (argv[2] !== "prod" || !/^\d{8}T\d{6}Z-[a-z0-9-]{1,32}$/.test(argv[3] || "")) return null;
+  if (name === "launch-local.sh") {
+   if (argv.length < 8 || argv.length > 9 || !/^[A-Za-z0-9_.-]{1,128}$/.test(argv[4]) ||
+       !/^sha256:[a-f0-9]{64}$/.test(argv[5]) || !/^sha256:[a-f0-9]{64}$/.test(argv[6]) ||
+       !/^[A-Za-z0-9_.-]{1,128}$/.test(argv[7]) ||
+       (argv[8] && !["backup", "cleanup"].includes(argv[8]))) return null;
+  }
+  if (name === "operation-local.sh" && (argv.length !== 5 || !["deploy", "verify", "status", "rollback"].includes(argv[4]))) return null;
+  if (name === "rollback-local.sh" && argv.length !== 4) return null;
+  if (name === "status-local.sh" && (argv.length < 4 || argv.length > 5 || (argv[4] && !["recent", "full-log"].includes(argv[4])))) return null;
+  // 현재 호출 사슬의 같은 폴더 의존성만 받는다. 다른 경로의 같은 해시도 대신할 수 없다.
+  const dependencies = ["naia-gw-deploy.sh", "gateway-operation.py", ...(["status-local.sh", "rollback-local.sh"].includes(name) ? ["operation-local.sh"] : [])];
+  if (!dependencies.every(dep => format(path.join(path.dirname(argv[1]), dep), pins, dep))) return null;
+  const phase = name === "operation-local.sh" ? argv[4] : name === "rollback-local.sh" ? "rollback" : name === "status-local.sh" ? "status" : "backup";
+  return { name, phase, env: argv[2], run: argv[3], tag: argv[4], digest: argv[5], previous: argv[6] };
+ };
+ const current = wrapper(c, files);
+ if (current) {
+  // 장애 선조치의 고정 완료 표시만 별도 허용한다. 임의 추가 절은 받지 않는다.
+  const incidentStatus = current.name === "operation-local.sh" && current.phase === "status" && entry.id === "a1" && clauses.length === 2 && command.endsWith(" && echo INCIDENT_A1_STATUS_CHECKED") && JSON.stringify(clauses[1]) === JSON.stringify(["echo", "INCIDENT_A1_STATUS_CHECKED"]);
+  if (clauses.length !== 1 && !incidentStatus) return no("실행기 뒤에 지원하지 않는 절이 있음");
+  if (!sameServices([GATEWAY_SERVICE])) return no("실행기 서비스·환경 불일치");
+  let launches = [];
+  if (current.name === "launch-local.sh") launches = [current];
+  else for (const s of plan.scenario || []) {
+   const pins = texts(s);
+   if (!pins) continue;
+   for (const source of s.commands || []) {
+    const cs = shellClauses(source);
+    const w = cs.length === 1 ? wrapper(cs[0], pins) : null;
+    if (w?.name === "launch-local.sh" && w.env === current.env && w.run === current.run) launches.push(w);
+   }
+  }
+  const targets = new Set(launches.map((w) => JSON.stringify([w.tag, w.digest, w.previous])));
+  const w = launches[0];
+  if (targets.size !== 1 || !w) return no("실행번호·환경에 결합된 유일한 반영 원천 없음");
+  const forward = gateway.find((x) => x.tag === w.tag && x.digest === w.digest);
+  const previous = gateway.find((x) => x.digest === w.previous && x.digest !== w.digest);
+  if (!forward || !previous || forward !== gateway.at(-1) || previous !== gateway[0] || gateway.indexOf(previous) >= gateway.indexOf(forward)) return no("후보 또는 이전 digest가 서비스의 계획 선언과 다름");
+  const rollback = current.phase === "rollback";
+  if ((current.name === "launch-local.sh" || current.phase === "deploy" || current.phase === "verify") && kind !== "feature") return no("정방향 반영은 feature 준비 기록과 새 후보 영수증이 필요함");
+  const selected = rollback ? previous : forward;
+  // 되돌린 뒤 조회는 같은 실행번호에 한해 이전 이미지 준비 기록도 인정한다.
+  const bound = matchesCandidate(selected) || (current.phase === "status" && ((kind === "rollback" && matchesCandidate(previous)) || (kind === "ops" && !candidate)));
+  if (!bound || (rollback && kind !== "rollback") || (kind === "ops" && current.phase !== "status")) return no("실행번호의 후보·이전 이미지가 준비 후보와 다름");
+  return yes("계획 실행기 본문·도움 파일·인자·서비스·실행번호·후보/이전 digest 대조", kind === "ops");
+ }
+
+	 return no("실행기 본문·인자·의존 파일 불일치");
+	}
+
 	const cfg = loadDeployGateConfig(root);
 	let plugin = null;
 	if (cfg) {

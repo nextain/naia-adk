@@ -1653,6 +1653,26 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 	}
 }
 
+const GATEWAY_RUNNER_FORMATS = Object.freeze({
+ "launch-local.sh": "f9218442bd86db0c5205cf56c840c5b2e6edcdc9d7db89d40f47656494758b80",
+ "operation-local.sh": "35b139bd826a79a729b677cb5dcd02b4cf2f881dbc02c18d8d40788118b85977",
+ "status-local.sh": "a3890864be7a66486cbc8389053cb804aa17194689b41df0b638fd445367a505",
+ "rollback-local.sh": "0c473db41ebc292c988f737f66984d54254117eb4d72ba86b6a44abbffcb1b3e",
+ "naia-gw-deploy.sh": "9d25e23fdabc97d62f8463bc5d60dc526b5ae7bbecd00ca0f0883eb7594eb823",
+ "gateway-operation.py": "fb5ada82030c0bf7faa3f0eb4bc0a7a7bcf5bfd9b03c5843bcc0aa94f5ccbef7"
+});
+function classifyGatewayLocal(tokens) {
+ // 이 분류기는 "게이트웨이 운영 실행기 호출인가"만 판정한다. 본문이 승인된 지문과 같은지는
+ // 준비 검사(deploy-readiness.js 의 wrapper)와 계획서 파일 고정(deploy-plan.js)이 검사한다(검수 2회차 2번).
+ // 그래서 파일 이름이 고정 실행기 이름이면 지문이 달라도 같은 운영 hit 를 낸다(막는 쪽). 첫 인자 dev 같은 비운영 조건은 그대로 둔다.
+ if (tokens[0] !== "bash" || !path.isAbsolute(tokens[1] || "") || tokens[2] !== "prod" || !tokens[1].endsWith("-local.sh")) return null;
+ const name = path.basename(tokens[1]);
+ if (!Object.prototype.hasOwnProperty.call(GATEWAY_RUNNER_FORMATS, name)) return null;
+ let verified = false;
+ try { verified = require("crypto").createHash("sha256").update(scriptText(tokens[1])).digest("hex") === GATEWAY_RUNNER_FORMATS[name]; } catch {}
+ return { service: "azure:vm:naia-gateway-prod-az", label: tokens.join(" ") + (verified ? "" : " (고정 지문과 다름)"), verified };
+}
+
 function classifyDeployScript(tokens, cwd, assigns = []) {
 	for (let i = 0; i < tokens.length; i++) {
 		const t = tokens[i];
@@ -1973,20 +1993,25 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 			continue;
 		}
 		// --ids 가 여러 운영 대상을 가리키면 hit 도 여러 개다. classifyAz 는 첫 원소만 내고, 여기서는 전부를 쓴다.
-		const azHits = classifyAzAll(tokens);
+		const runnerHit = classifyGatewayLocal(tokens);
+		// An altered body still receives a gateway hit, but is also inspected for
+		// other targets; its filename cannot hide additional operations.
+		if (runnerHit && !runnerHit.verified) found.push({ service: runnerHit.service, label: runnerHit.label, clause: clauseText(tokens, assigns) });
+		const gwHit = runnerHit?.verified ? { service: runnerHit.service, label: runnerHit.label } : null;
+		const azHits = gwHit ? [] : classifyAzAll(tokens);
 		// 준비 기록 검사는 바깥 글자가 아니라 실제로 도는 절을 본다(설계 검수 10회차 2번: bash -c "…", 스크립트 파일 속 --image 가 ops 로 통과).
-		if (azHits.length) for (const h of azHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
-		else {
+		if (gwHit || azHits.length) for (const h of gwHit ? [gwHit] : azHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
+		if (!gwHit && (!azHits.length || runnerHit)) {
 			const cloudHits = classifyGeneralCloudCli(tokens);
 			if (cloudHits.length) for (const h of cloudHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
-			else {
+			if (!cloudHits.length || runnerHit) {
 				// classifySsh 는 여러 hit 를 낼 수 있다(비운영 호스트 안의 운영 변경 재분류, 검수 2회차 1번).
 				const sshHits = [...classifySsh(tokens, dir, depth, gateRoot), ...classifyScp(tokens)];
 				if (sshHits.length) for (const h of sshHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
-				else {
+				if (!sshHits.length || runnerHit) {
 					const hit = classifyDeployScript(tokens, dir, assigns) || classifyPackageScript(tokens, dir);
 					if (hit) found.push({ ...hit, clause: clauseText(tokens, assigns) });
-					else {
+					if (!hit || runnerHit) {
 						// 로컬 셸 스크립트 파일을 실행하면 그 안의 명령도 본다(설계 검수 8회차 4번: 운영 배포를 스크립트 파일로 감싸면 안 보였음).
 						const file = executedShellFile(tokens, dir, dirKnown, command, true);
 						// 파일 전체를 한 번에 읽는다. 파서가 줄바꿈·주석·heredoc 을 bash 처럼 다루므로, 파일 안의 "bash <<EOF" 본문도 셸 프로그램으로 읽힌다(설계 검수 11회차 2번).
@@ -2048,4 +2073,4 @@ function clauseText(argv, assigns = []) {
 	return [...assigns.map((a) => { const i = a.indexOf("="); return `${a.slice(0, i + 1)}${shellQuote(a.slice(i + 1))}`; }), ...argv.map(shellQuote)].join(" ");
 }
 
-module.exports = { classifyProdMutations, classifyGeneralCloudCli, isNonProd, executedShellFile, scriptText, clauseText, SCRIPT_READ_LIMIT };
+module.exports = { GATEWAY_RUNNER_FORMATS, classifyProdMutations, classifyGeneralCloudCli, isNonProd, executedShellFile, scriptText, clauseText, SCRIPT_READ_LIMIT };
