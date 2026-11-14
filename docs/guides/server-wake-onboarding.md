@@ -14,6 +14,9 @@ the reviewed implementation; a hosted issue is not the work-process entrance.
    replace, repair or retire so two ingress paths cannot execute the same request.
    Before overwriting any server file, save the original and symlink target;
    record backup paths. Use `rsync --dry-run` before any approved copy.
+   Keep one live workspace and one role list: write the
+   [role wake registry](role-wake-registry.md) and clear every finding of
+   `node scripts/role-wake.mjs check` before enabling delivery.
 3. **Test the wake contract.** In an authorized test channel, choose and record
    N minutes, then test mention → durable cursor → owner → executable session →
    delivery receipt → referenced reply within N. Record stage evidence, actual

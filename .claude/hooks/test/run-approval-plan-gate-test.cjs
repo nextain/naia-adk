@@ -1527,3 +1527,122 @@ test("계획 고정 대본: 리뷰 a5 우회 1~5 는 ops 로 통과하지 못한
 		});
 	}
 });
+
+test("읽기 전용 단계: 글자를 덧붙인 단계 명령은 막히고, 글자 그대로 낸 s0 은 승인·실행 기록을 남겨 s1 승인 요청까지 감", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root);
+
+	// 분류기가 운영 변경으로 보지 않는 대본(읽기만). 계획서 단계 명령이라는 사실만으로 관문에 걸려야 한다.
+	const scriptRel = "scripts/sample-web-prod-check.sh";
+	const scriptAbs = path.join(root, scriptRel);
+	fs.mkdirSync(path.dirname(scriptAbs), { recursive: true });
+	fs.writeFileSync(scriptAbs, "#!/usr/bin/env bash\ncase \"$1\" in\n  s0) echo candidate-ok ;;\n  s1) echo secret-ok ;;\n  *) exit 2 ;;\nesac\n");
+	const scriptSha = sha256(fs.readFileSync(scriptAbs));
+	const s0Cmd = `bash ${scriptRel} s0`;
+	const s1Cmd = `bash ${scriptRel} s1`;
+	assert.deepEqual(classifyProdMutations(s0Cmd, root, 0, false, root), [], "이 시험은 분류기가 못 알아보는 단계 명령을 다룬다");
+
+	const step = (id, cmd, title) => ({ id, title, commands: [cmd], files: { [scriptRel]: scriptSha }, success_check: "끝줄 ok 확인", on_failure: "멈추고 보고" });
+	const { planFile } = createValidPlan(root, {
+		approval_mode: undefined,
+		scenario: [
+			step("s0", s0Cmd, "0단계 미리 확인(읽기만)"),
+			step("s1", s1Cmd, "1단계 비밀 확인(읽기만)"),
+			{ id: "r1", branch: "rollback", title: "이전 리비전으로 복귀", commands: ["az containerapp revision activate -n sample-web-prod -g sample-rg --revision sample-web-prod--prev"], success_check: "이전 리비전 트래픽 100% 확인", on_failure: "트래픽 차단 후 보고" },
+		],
+	});
+	writePassingReviewReceipt(root, planFile);
+
+	const sessionId = "sess-readonly-step";
+	const hook = (cmd) => runDeployGuardHook(cmd, { cwd: root, root, stateDir, transcriptPath, sessionId });
+	const stepState = (id) => {
+		let d;
+		try { d = JSON.parse(fs.readFileSync(path.join(stateDir, "deploy-plan-state.json"), "utf8")); } catch { return []; }
+		return d.challenges.filter((c) => c.kind === "step" && c.step === id);
+	};
+
+	// 1. 글자를 덧붙인 꼴은 전부 막힌다. 승인 코드도 실행 기록도 생기지 않는다.
+	for (const cmd of [
+		`${s0Cmd} 2>&1 | tail -30`,
+		`${s1Cmd} 2>&1 | tail -3`,
+		`cd ${root} && ${s0Cmd}`,
+		`timeout 60 ${s0Cmd} > ${path.join(stateDir, "out.txt")}`,
+		`bash -c '${s0Cmd} | tail'`,
+		`${s0Cmd}; echo done`,
+	]) {
+		const d = hook(cmd);
+		assert.ok(d, `덧붙인 단계 명령은 막혀야 함: ${cmd}`);
+		assert.equal(d.decision, "block");
+		assert.match(d.reason, /계획서 단계 명령에 다른 글자가 붙어 있어 막습니다/, cmd);
+		assert.ok(d.reason.includes(cmd.includes(s1Cmd) ? s1Cmd : s0Cmd), "계획서에 적힌 원문을 알려 줘야 함");
+	}
+	assert.deepEqual(stepState("s0"), [], "막힌 실행은 단계 도전을 만들지 않음");
+
+	// 2. 단계 명령을 말하기만 하는 명령은 막지 않는다.
+	const noteFile = path.join(stateDir, "note.txt");
+	fs.writeFileSync(noteFile, `${s0Cmd}\n`);
+	for (const cmd of [`grep -n '${s0Cmd}' ${noteFile}`, `echo ${s0Cmd}`, `cat ${scriptAbs}`, `bash ${scriptRel} s9`]) {
+		assert.equal(hook(cmd), null, `단계 명령을 실행하지 않는 명령은 통과: ${cmd}`);
+	}
+
+	// 3. 글자 그대로 낸 s0: 계획 승인 → 단계 승인 → 통과, 실행 기록이 남는다.
+	const planAsk = hook(s0Cmd);
+	assert.match(planAsk.reason, /전체 계획 승인이 아직 없습니다/);
+	appendHumanTurn(transcriptPath, `승인: ${planAsk.reason.match(/PLAN-[A-Z0-9]+/)[0]}`);
+	const s0Ask = hook(s0Cmd);
+	assert.match(s0Ask.reason, /단계 승인 필요: .* \/ s0/);
+	// 승인 전에 덧붙여 돌려도 통과하지 않고, 승인 코드도 쓰이지 않는다.
+	assert.equal(hook(`${s0Cmd} 2>&1 | tail -30`).decision, "block");
+	assert.deepEqual(stepState("s0").map((c) => c.executed), [[]]);
+	appendHumanTurn(transcriptPath, `승인: ${s0Ask.reason.match(/STEP-[A-Z0-9]+/)[0]}`);
+	assert.equal(hook(`${s0Cmd} 2>&1 | tail -30`).decision, "block", "단계 승인이 있어도 덧붙인 꼴은 막힘");
+	assert.equal(hook(s0Cmd), null, "승인된 s0 은 통과");
+	assert.equal(stepState("s0").pop().status, "executed", "s0 실행 기록이 남아야 함");
+
+	// 4. s1: s0 성공 확인 전에는 막히고, 확인 뒤에는 단계 승인 요청까지 간다.
+	assert.match(hook(s1Cmd).reason, /앞 단계 성공 확인 전에는/);
+	const evFile = path.join(stateDir, "s0-ok.txt");
+	fs.writeFileSync(evFile, "candidate-ok\n");
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const ok = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "step-ok", planFile, "s0", "--evidence", evFile], { cwd: root, env, encoding: "utf8" });
+	assert.equal(ok.status, 0, ok.stderr);
+	const s1Ask = hook(s1Cmd);
+	assert.match(s1Ask.reason, /단계 승인 필요: .* \/ s1/);
+	assert.match(s1Ask.reason, /단계 승인 코드: STEP-[A-Z0-9]+/);
+	appendHumanTurn(transcriptPath, `승인: ${s1Ask.reason.match(/STEP-[A-Z0-9]+/)[0]}`);
+	assert.equal(hook(s1Cmd), null, "승인된 s1 은 통과");
+});
+
+test("읽기 전용 단계: 덧붙여 돌린 s0 과 step-ok 기록만으로는 s1 로 못 넘어가고, 막는 글이 글자 그대로 다시 내라고 알림", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root);
+	const scriptRel = "scripts/sample-web-prod-check.sh";
+	const scriptAbs = path.join(root, scriptRel);
+	fs.mkdirSync(path.dirname(scriptAbs), { recursive: true });
+	fs.writeFileSync(scriptAbs, "#!/usr/bin/env bash\necho ok \"$1\"\n");
+	const scriptSha = sha256(fs.readFileSync(scriptAbs));
+	const step = (id) => ({ id, title: `${id} 확인(읽기만)`, commands: [`bash ${scriptRel} ${id}`], files: { [scriptRel]: scriptSha }, success_check: "끝줄 ok 확인", on_failure: "멈추고 보고" });
+	const { planFile } = createValidPlan(root, { approval_mode: undefined, scenario: [step("s0"), step("s1")], rollback: { method: "읽기만 하는 계획이라 되돌릴 것이 없음", duration: "0분", step_ids: [] } });
+	writePassingReviewReceipt(root, planFile);
+	const sessionId = "sess-readonly-skip";
+	const hook = (cmd) => runDeployGuardHook(cmd, { cwd: root, root, stateDir, transcriptPath, sessionId });
+
+	const planAsk = hook(`bash ${scriptRel} s0`);
+	assert.match(planAsk.reason, /전체 계획 승인이 아직 없습니다/, planAsk.reason);
+	appendHumanTurn(transcriptPath, `승인: ${planAsk.reason.match(/PLAN-[A-Z0-9]+/)[0]}`);
+	const s0Ask = hook(`bash ${scriptRel} s0`);
+	appendHumanTurn(transcriptPath, `승인: ${s0Ask.reason.match(/STEP-[A-Z0-9]+/)[0]}`);
+	// 승인 뒤 덧붙여 돌리려 함(11/14 실측 꼴) → 막힘. step-ok 를 남겨도 s1 은 못 간다.
+	assert.equal(hook(`bash ${scriptRel} s0 2>&1 | tail -30`).decision, "block");
+	const evFile = path.join(stateDir, "s0-ok.txt");
+	fs.writeFileSync(evFile, "ok s0\n");
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	assert.equal(spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "step-ok", planFile, "s0", "--evidence", evFile], { cwd: root, env, encoding: "utf8" }).status, 0);
+	const blocked = hook(`bash ${scriptRel} s1`);
+	assert.equal(blocked.decision, "block");
+	assert.match(blocked.reason, /s0 단계가 실제 실행\(executed\)되지 않음/);
+	assert.match(blocked.reason, /계획서에 적힌 글자 그대로/);
+	// 글자 그대로 s0 을 내면 풀린다.
+	assert.equal(hook(`bash ${scriptRel} s0`), null);
+	assert.match(hook(`bash ${scriptRel} s1`).reason, /단계 승인 필요: .* \/ s1/);
+});

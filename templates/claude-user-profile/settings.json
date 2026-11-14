@@ -23,6 +23,9 @@
       { "matcher": "Edit|Write", "hooks": [
         { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/prod-gateway-guard.js\"" }
       ] },
+      { "matcher": "Bash|Edit|Write|NotebookEdit|MultiEdit|apply_patch", "hooks": [
+        { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/lead-write-guard.js\"" }
+      ] },
       { "matcher": "Task|Agent", "hooks": [
         { "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/subagent-spawn-guard.js\"" }
       ] },

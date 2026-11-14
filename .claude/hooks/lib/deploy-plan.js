@@ -245,9 +245,8 @@ function planSha(file) {
 	return sha256(fs.readFileSync(file));
 }
 
-/** 명령의 sha 가 든 계획서들. 24시간 안의 것만. */
-function plansForCommand(command, root, now = Date.now()) {
-	const h = commandHash(command);
+/** 24시간 안에 만든 계획서들. */
+function recentPlans(root, now = Date.now()) {
 	const base = path.join(root, ".agents", "progress");
 	let dirs = [];
 	try {
@@ -264,10 +263,67 @@ function plansForCommand(command, root, now = Date.now()) {
 		const at = Date.parse(plan.createdAt || "");
 		if (!Number.isFinite(at) || now - at > PLAN_MAX_AGE_MS || at - now > 5 * 60 * 1000) continue;
 		const steps = Array.isArray(plan.scenario) ? plan.scenario : [];
-		const step = steps.find((s) => s && Array.isArray(s.commands) && s.commands.some((c) => typeof c === "string" && commandHash(c) === h));
 		const actions = plan.incident && Array.isArray(plan.incident.actions) ? plan.incident.actions : [];
-		const action = actions.find((a) => a && Array.isArray(a.commands) && a.commands.some((c) => typeof c === "string" && commandHash(c) === h));
+		out.push({ file, plan, steps, actions });
+	}
+	return out;
+}
+
+/** 명령의 sha 가 든 계획서들. 24시간 안의 것만. */
+function plansForCommand(command, root, now = Date.now()) {
+	const h = commandHash(command);
+	const has = (e) => e && Array.isArray(e.commands) && e.commands.some((c) => typeof c === "string" && commandHash(c) === h);
+	const out = [];
+	for (const { file, plan, steps, actions } of recentPlans(root, now)) {
+		const step = steps.find(has);
+		const action = actions.find(has);
 		if (step || action) out.push({ file, gatesDir: path.dirname(file), plan, step: step || null, action: action || null, sha: planSha(file) });
+	}
+	return out;
+}
+
+/** 실제로 도는 명령들의 argv(sudo·timeout·bash -c 등을 벗기고 리다이렉션 낱말을 뺀 것). 무엇이 도는지 모르는 절은 뺀다. */
+function runArgvs(command, cwd) {
+	const { effectiveCommands, redirectSpan } = require("./effective-argv.js");
+	const out = [];
+	for (const e of effectiveCommands(command, cwd)) {
+		if (e.opaque || !Array.isArray(e.argv)) continue;
+		const argv = [];
+		for (let i = 0; i < e.argv.length; i++) {
+			const r = redirectSpan(e.argv, i);
+			if (r) { i += r - 1; continue; }
+			argv.push(e.argv[i]);
+		}
+		if (argv.length) out.push(argv);
+	}
+	return out;
+}
+
+/**
+ * 계획서 단계·선조치 명령을 품었지만 글자가 다른 명령(뒤에 2>&1 | tail, 앞에 cd … &&·timeout, bash -c 로 감쌈)의 계획서들.
+ * 이런 명령은 sha 가 달라 plansForCommand 에 안 걸리고, 분류기가 대본을 운영 변경으로 못 알아보면 승인도 실행 기록도 없이 돈다.
+ * 승인된 명령으로 치지 않는다. 부르는 쪽은 막고 계획서 글자 그대로 실행하라고 알린다.
+ */
+function plansCarryingCommand(command, root, cwd, now = Date.now()) {
+	const plans = recentPlans(root, now);
+	if (!plans.length) return [];
+	const h = commandHash(command);
+	const ran = runArgvs(command, cwd || root);
+	if (!ran.length) return [];
+	const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+	const carries = (c) => {
+		if (typeof c !== "string" || commandHash(c) === h) return false;
+		const want = runArgvs(c, cwd || root);
+		if (!want.length) return false;
+		for (let i = 0; i + want.length <= ran.length; i++) if (want.every((w, j) => same(w, ran[i + j]))) return true;
+		return false;
+	};
+	const out = [];
+	for (const { file, plan, steps, actions } of plans) {
+		const has = (e) => e && Array.isArray(e.commands) && e.commands.some(carries);
+		const step = steps.find(has);
+		const action = actions.find(has);
+		if (step || action) out.push({ file, gatesDir: path.dirname(file), plan, step: step || null, action: action || null, sha: planSha(file), carried: (step || action).commands.find(carries) });
 	}
 	return out;
 }
@@ -922,6 +978,20 @@ async function evaluate(ctx) {
 	const found = plansForCommand(ctx.command, ctx.root, now);
 	const howTo = "승인 보고 양식(.agents/progress/<작업>/gates/deploy-plan.json, docs/guides/approval-plan-gate.md)을 만들고, 기준별 적대 리뷰를 통과한 뒤 승인을 요청하십시오. 승인자에게 붙여 넣을 명령을 넘기지 마십시오.";
 	if (found.length === 0) {
+		// 계획서 단계 명령에 글자를 덧붙인 꼴은 "계획 밖"이 아니라 글자 불일치로 알린다(같은 단계를 글자 그대로 다시 내면 된다).
+		let carried = [];
+		try { carried = plansCarryingCommand(ctx.command, ctx.root, ctx.cwd || ctx.root, now); } catch {}
+		if (carried.length) {
+			const c = carried[0];
+			const where = c.step ? `단계 ${c.step.id}` : `장애 선조치 ${c.action.id}`;
+			return { allow: false, audit: { event: "blocked-command-byte-mismatch", plan: path.relative(ctx.root, c.file), ...(c.step ? { step: c.step.id } : { action: c.action.id }), command_sha256: h, decorated: true }, reason: [
+				"[Harness] 계획서 단계 명령에 다른 글자가 붙어 있어 막습니다.",
+				`계획서: ${path.relative(ctx.root, c.file)} / ${where}`,
+				"계획서 commands 에 적힌 문자열과 바이트 단위로 똑같이 실행하십시오:",
+				`  ${c.carried}`,
+				"앞뒤에 cd … &&, 2>&1, | tail, > 파일, timeout 을 붙이거나 bash -c 로 감싸면 승인된 명령이 아닙니다. 단계 승인과 실행 기록(executed)이 남지 않아 다음 단계도 막힙니다.",
+			].join("\n") };
+		}
 		return { allow: false, audit: { event: "blocked-out-of-plan", command_sha256: h }, reason: [
 			"[Harness] 계획 밖 운영 명령이라 막습니다.",
 			`명령 sha256(공백 정규화): ${h}`,
@@ -1065,7 +1135,7 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 			const allPrevCommandsExecuted = prevCmdHashes.length > 0 && prevCmdHashes.every((ch) => executedHashes.has(ch));
 			if (!prevStatusExecuted || !allPrevCommandsExecuted) {
 				const why = `${prev.id} 단계가 실제 실행(executed)되지 않음`;
-				return { allow: false, audit: { event: "blocked-step-order", plan: rel, step: f.step.id, why }, reason: ["[Harness] 앞 단계가 실제 실행(executed)되지 않아 다음 단계로 넘어갈 수 없습니다.", `- ${why}`, "", `앞 단계(${prev.id}) 명령을 먼저 실행하고 성공 확인(step-ok) 증거를 남기십시오.`].join("\n") };
+				return { allow: false, audit: { event: "blocked-step-order", plan: rel, step: f.step.id, why }, reason: ["[Harness] 앞 단계가 실제 실행(executed)되지 않아 다음 단계로 넘어갈 수 없습니다.", `- ${why}`, "", `앞 단계(${prev.id}) 명령을 계획서에 적힌 글자 그대로 먼저 실행하고(단계 승인을 거쳐야 실행 기록이 남습니다) 성공 확인(step-ok) 증거를 남기십시오.`, "글자를 덧붙여 돌린 실행이나 step-ok 기록만으로는 실행한 것으로 치지 않습니다."].join("\n") };
 			}
 			const bad = stepSuccessProblem(f.gatesDir, f.sha, prev.id);
 			if (bad) return { allow: false, audit: { event: "blocked-step-order", plan: rel, step: f.step.id, why: bad }, reason: ["[Harness] 앞 단계 성공 확인 전에는 다음 단계 승인을 요청할 수 없습니다.", `- ${bad}`, "", "앞 단계의 성공 확인을 실행해 증거를 남기십시오: node .agents/scripts/approval-plan.mjs step-ok <계획서> <단계> --evidence <확인 출력 파일>. 확인이 실패했으면 계획의 실패 갈림길대로 하고 보고하십시오."].join("\n") };
@@ -1266,5 +1336,5 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
+	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };

@@ -211,3 +211,6 @@ scripts/triage/
 # 워크스페이스 UUID(개인 식별자) 비추적
 .naia/
 .agents/research/**/.align-audit-stamp.json
+
+# 3층 쓰기 막기 예외·감사 기록(기기별, docs/guides/lead-write-guard.md)
+.agents/lead-guard/
