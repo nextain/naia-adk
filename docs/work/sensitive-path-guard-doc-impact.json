@@ -1,0 +1,27 @@
+{
+  "work": "sensitive-path-guard-fix3",
+  "repository_docs": {
+    "status": "UPDATED",
+    "paths": [
+      "docs/guides/drift-guard.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "paths": [
+      "docs/guides/drift-guard.md"
+    ]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "paths": [
+      "docs/guides/drift-guard.md"
+    ]
+  },
+  "source_handling": "Generic derived requirements only; instance paths, personal names, IP addresses and original request remain outside the public tree",
+  "review": {
+    "independent_model_family": "NOT_RUN",
+    "public_push_review": "NOT_RUN; no push authorized",
+    "regressions": "Reviews 1/2 counterexamples retained; first-round 94 cases restored with explicit scope changes; safe child Git, literal operands and false positives covered"
+  }
+}

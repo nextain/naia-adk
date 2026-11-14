@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy to sensitive-path-guard.config.json (ignored). Defaults are always retained; lists add protections. Use instance-local absolute paths; never commit real identities or locations.",
+  "directoryNames": ["NPKI", "GPKI"],
+  "extensions": [".pfx", ".p12", ".der", ".key"],
+  "fileNames": ["signPri.key", "signCert.der", "kmPri.key"],
+  "additionalPaths": ["~/.ssh"],
+  "signingScript": null
+}
