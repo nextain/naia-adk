@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 import fs from "node:fs"
 import path from "node:path"
 import process from "node:process"
@@ -369,10 +370,7 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 }
 
-const isDirectRun =
-  process.argv[1] &&
-  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
-if (isDirectRun) {
+if (isMain(import.meta.url)) {
   runCli().catch((err) => {
     console.error(err)
     process.exit(1)

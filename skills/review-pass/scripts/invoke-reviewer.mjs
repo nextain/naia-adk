@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './is-main.mjs';
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -437,4 +438,4 @@ async function main() {
 	process.stdout.write(`${JSON.stringify(await runCli(process.argv.slice(2)))}\n`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch((error) => { console.error(`review invocation failed: ${diagnosticExcerpt(error.message)}`); process.exit(error.exitCode || 1); });
+if (isMain(import.meta.url)) main().catch((error) => { console.error(`review invocation failed: ${diagnosticExcerpt(error.message)}`); process.exit(error.exitCode || 1); });

@@ -1,3 +1,4 @@
+import { isMain } from './is-main.mjs';
 import fs from "node:fs";
 import crypto from "node:crypto";
 import os from "node:os";
@@ -166,6 +167,6 @@ async function main(argv){
   throw new Error("usage: development-profiles.mjs list|show|select [--profile balanced] [--role bounded_worker] [--risk medium] [--bounded-scope] [--validator-command command] [--allowed-shell-command command]");
 }
 
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url))main(process.argv.slice(2)).then(value=>process.stdout.write(`${JSON.stringify(value,null,2)}\n`)).catch(error=>{process.stderr.write(`development_profiles_error: ${error.message}\n`);process.exitCode=1;});
+if(isMain(import.meta.url))main(process.argv.slice(2)).then(value=>process.stdout.write(`${JSON.stringify(value,null,2)}\n`)).catch(error=>{process.stderr.write(`development_profiles_error: ${error.message}\n`);process.exitCode=1;});
 
 export {catalogPath};

@@ -110,6 +110,8 @@ describe("adk-board (scripts/adk-board.mjs)", () => {
     fs.mkdirSync(path.join(root, "scripts"), { recursive: true })
     const __dirname = path.dirname(fileURLToPath(import.meta.url))
     fs.copyFileSync(path.join(__dirname, "adk-board.mjs"), path.join(root, "scripts", "adk-board.mjs"))
+    fs.mkdirSync(path.join(root, "scripts", "lib"), { recursive: true })
+    fs.copyFileSync(path.join(__dirname, "lib", "is-main.mjs"), path.join(root, "scripts", "lib", "is-main.mjs"))
     const hubScripts = path.join(root, "projects", "hub", "scripts")
     fs.mkdirSync(hubScripts, { recursive: true })
     // 작업보드가 실제로 실행되면 표시 파일을 남긴다.

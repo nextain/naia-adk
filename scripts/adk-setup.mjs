@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 import fs from "node:fs"
 import path from "node:path"
 import process from "node:process"
@@ -280,7 +281,7 @@ export function runSetup(options = {}, customAdkRoot = null) {
   return summary
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
   const options = parseArgs(process.argv.slice(2))
   const summary = runSetup(options)
   if (summary.errors.length > 0) {

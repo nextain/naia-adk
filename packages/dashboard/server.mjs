@@ -1,3 +1,4 @@
+import { isMain } from '../../scripts/lib/is-main.mjs';
 import http from "node:http"
 import path from "node:path"
 import fs from "node:fs"
@@ -330,12 +331,8 @@ export async function startServer(customArgv = process.argv.slice(2), customEnv 
 }
 
 // 프로세스 진입점일 때만 listen 실행
-const isMain = process.argv[1] && (
-  path.resolve(process.argv[1]) === __filename ||
-  (fs.existsSync(process.argv[1]) && fs.realpathSync(process.argv[1]) === fs.realpathSync(__filename))
-)
 
-if (isMain) {
+if (isMain(import.meta.url)) {
   startServer().catch((err) => {
     console.error("Failed to start dashboard server:", err)
     process.exit(1)

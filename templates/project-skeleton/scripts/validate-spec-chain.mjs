@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 /**
  * Naia ADK v0.2.0 — Deterministic Specification Chain, Traceability & Link Integrity Validator
  * Validates:
@@ -270,7 +271,7 @@ export async function validateProjectSpecChain(rootDir = defaultRoot) {
   };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+if (isMain(import.meta.url)) {
   const targetDir = process.argv[2] ? path.resolve(process.argv[2]) : defaultRoot;
   validateProjectSpecChain(targetDir)
     .then((res) => {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 /**
  * 가이드가 설명하는 대상보다 낡았는지 센다.
  *
@@ -175,7 +176,7 @@ function main() {
   return broken.length ? 1 : 0;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   try { process.exitCode = main(); }
   catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 2; }
 }

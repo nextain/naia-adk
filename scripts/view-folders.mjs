@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
@@ -536,6 +537,6 @@ export function runCli(argv = process.argv.slice(2)) {
 }
 
 // 직접 실행 시
-if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+if (isMain(import.meta.url)) {
   runCli()
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 /**
  * Naia ADK v2.0.0 — Automated Project ADK Scaffolder
  *
@@ -278,7 +279,7 @@ function parseArgs(argv) {
   return opts;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+if (isMain(import.meta.url)) {
   try {
     const opts = parseArgs(process.argv.slice(2));
     const res = scaffoldProjectAdk(opts);

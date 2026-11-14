@@ -1,5 +1,6 @@
 #!/usr/bin/node
 // Privileged entrypoint: installed with a fixed interpreter and no CLI options.
+import { realpathSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -227,6 +228,16 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result)}\n`);
   process.exitCode = result.exitCode === 0 ? 0 : 1;
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// This entrypoint ships independently; keep the realpath guard self-contained.
+function isMain(importMetaUrl) {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(importMetaUrl));
+  } catch {
+    return false;
+  }
+}
+
+if (isMain(import.meta.url)) {
   main().catch(error => { process.stderr.write(`Approved runner refused: ${error.message}\n`); process.exitCode = 1; });
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 /**
  * gen-lists — `.agents/<kind>/` (SoT) 에서 `.users/<kind>-list.md` (사람용 단일 색인)를 결정론 생성.
  *   kind ∈ { skills, hooks, commands, workflows }.
@@ -82,8 +83,7 @@ export function buildList(kind, root = ROOT) {
 	return header + body + "\n";
 }
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]).endsWith("gen-lists.mjs");
-if (isMain) {
+if (isMain(import.meta.url)) {
 	const args = process.argv.slice(2);
 	const check = args.includes("--check");
 	const kinds = args.filter((a) => KINDS.includes(a));

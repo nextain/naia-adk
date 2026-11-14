@@ -1,7 +1,7 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 // Instance-configurable message text; {name} placeholders are replaced, unknown ones are left as is.
 export function fill(template, values) { return String(template).replace(/\{(\w+)\}/g, (m, k) => (k in values ? String(values[k]) : m)); }
@@ -214,7 +214,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
   finally { if (lock) { await lock.close(); await unlink(`${stateFile}.lock`); } }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMain(import.meta.url)) {
   const args = process.argv.slice(2);
   const configAt = args.indexOf('--config');
   if (configAt < 0 || !args[configAt + 1] || args.some((arg, i) => !['--config', '--dry'].includes(arg) && i !== configAt + 1)) {

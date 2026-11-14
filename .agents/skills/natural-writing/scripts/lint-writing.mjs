@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isMain } from './is-main.mjs';
 /**
  * lint-writing.mjs — Language-selectable translationese & AI-writing candidate finder.
  * Uses Node.js standard library only. Never modifies source files.
@@ -592,6 +593,6 @@ export function runCli(argv = process.argv.slice(2), { cwd = process.cwd(), stdo
   return 0;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+if (isMain(import.meta.url)) {
   process.exitCode = runCli();
 }

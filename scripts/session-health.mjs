@@ -1,10 +1,10 @@
 #!/usr/bin/env node
+import { isMain } from './lib/is-main.mjs';
 import { readFile, writeFile, stat, readdir, mkdir, rename, open, unlink } from 'node:fs/promises';
 import { resolve, dirname, isAbsolute } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
 import { readWorkLedger, readScheduleLedger, scheduleStatus } from './lib/ledger.mjs';
 const exec = promisify(execFile);
 const hash = s => createHash('sha256').update(s).digest('hex');
@@ -281,7 +281,7 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
     return { rows, report, degraded, previews };
   } catch (error) { emit({ stage: 'end', result: 'failed', durationMs: Date.now() - started }); throw error; } finally { if (lock) { await lock.close(); await unlink(`${config.stateFile}.lock`); } }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isMain(import.meta.url)) {
   try {
     const args = process.argv.slice(2), at = args.indexOf('--config');
     if (at < 0 || !args[at + 1] || args.some((x, i) => !['--config', '--dry'].includes(x) && i !== at + 1)) throw Error('usage: session-health.mjs --config <file> [--dry]');
