@@ -168,3 +168,90 @@ test('instance message templates replace known placeholders and keep unknown one
   assert.equal(fill('<@{bot}> 답해 주세요: {link}', { bot: '1', link: 'https://x/y' }), '<@1> 답해 주세요: https://x/y');
   assert.equal(fill('{site} {unknown}', { site: 'a' }), 'a {unknown}');
 });
+test('one referenced reply closes the same author\'s earlier pending posts but not later ones', async () => {
+  const { remote, run } = await fixture(); await run();
+  const plain = (id, extra = {}) => human(id, { mentions: [], ...extra }), bot = (id, to, extra = {}) => human(id, { author: { id: '20', bot: true }, message_reference: { message_id: String(to) }, ...extra });
+  remote.messages.push(plain(2), plain(3), plain(4), bot(5, 3));
+  let state = await run(1); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['4']);
+  remote.messages.push(plain(6), plain(7), plain(8), bot(9, 7)); state = await run(2); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['8']);
+  await run(9); assert.equal(remote.posts.length, 0);
+  await run(60); assert.equal(remote.posts.length, 2); assert.ok(remote.posts.every(post => post.content.endsWith('/8')));
+});
+test('batched reply never closes another author\'s, another bot\'s or unreferenced requests', async () => {
+  const { remote, run } = await fixture(); await run();
+  const plain = (id, extra = {}) => human(id, { mentions: [], ...extra });
+  remote.messages.push(plain(2, { author: { id: '42' } }), plain(3, { mentions: [{ id: '21', bot: true }] }), plain(4), plain(5),
+    human(6, { author: { id: '20', bot: true } }), human(7, { author: { id: '21', bot: true }, message_reference: { message_id: '5' } }), human(8, { author: { id: '20', bot: true }, message_reference: { message_id: '5' } }));
+  const state = await run(1); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['2']);
+  assert.equal(state.channels['10/30'].pending['2'].author.length, 16); assert.ok(!JSON.stringify(state).includes('"42"'));
+});
+test('batched reply closes only the author\'s posts within burstMinutes of the referenced post', async () => {
+  const { remote, run } = await fixture(); await run();
+  const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes) => human(id, { mentions: [], timestamp: at(minutes) });
+  remote.messages.push(plain(2, 0), plain(3, 15), plain(4, 20), human(5, { author: { id: '20', bot: true }, message_reference: { message_id: '4' }, timestamp: at(21) }));
+  const state = await run(21); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['2']);
+});
+test('fallback posts close on any bot\'s reply or when the author names a recipient; mentioned requests still need the expected bot', async () => {
+  const { remote, run } = await fixture(); await run();
+  const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes, extra = {}) => human(id, { mentions: [], timestamp: at(minutes), ...extra });
+  remote.messages.push(plain(2, 0), plain(3, 1), human(4, { author: { id: '21', bot: true }, message_reference: { message_id: '3' }, timestamp: at(2) }));
+  remote.messages.push(plain(5, 3), plain(6, 3, { mentions: [{ id: '21', bot: true }] }));
+  remote.messages.push(plain(7, 30), plain(8, 31, { mentions: [{ id: '20', bot: true }] }), human(9, { author: { id: '21', bot: true }, message_reference: { message_id: '8' }, timestamp: at(32) }));
+  const state = await run(32); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['8']);
+  assert.equal(state.channels['10/30'].pending['8'].via, undefined);
+});
+test('a person mention, a mention outside burstMinutes and another bot\'s reply to an untracked post leave fallback posts pending', async () => {
+  const { remote, run } = await fixture(); await run();
+  const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes, extra = {}) => human(id, { mentions: [], timestamp: at(minutes), ...extra });
+  remote.messages.push(plain(2, 0), plain(3, 1, { mentions: [{ id: '99' }] }));
+  remote.messages.push(plain(4, 20), plain(5, 40, { mentions: [{ id: '22', bot: true }] }));
+  remote.messages.push(plain(6, 50), plain(7, 51, { message_reference: { message_id: '1' } }), human(8, { author: { id: '21', bot: true }, message_reference: { message_id: '7' }, referenced_message: { id: '7', author: { id: '40' }, timestamp: at(51) }, timestamp: at(52) }));
+  let state = await run(52); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['2', '4', '6']);
+  remote.messages.push(human(9, { author: { id: '21', bot: true }, message_reference: { message_id: '6' }, timestamp: at(53) }));
+  state = await run(53); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['2', '4']);
+});
+test('reply to an unwatched post closes its author\'s earlier requests; requests stored before author tracking need their own reply', async () => {
+  const { config, remote, run } = await fixture(); await run();
+  remote.messages.push(human(2, { mentions: [] }), human(3, { mentions: [], message_reference: { message_id: '1' } }));
+  remote.messages.push(human(4, { author: { id: '20', bot: true }, message_reference: { message_id: '3' }, referenced_message: { id: '3', author: { id: '40' } } }));
+  let state = await run(1); assert.deepEqual(state.channels['10/30'].pending, {});
+  remote.messages.push(human(5, { mentions: [] }), human(6, { mentions: [] })); state = await run(2);
+  delete state.channels['10/30'].pending['5'].author; await writeFile(config.stateFile, JSON.stringify(state));
+  remote.messages.push(human(7, { author: { id: '20', bot: true }, message_reference: { message_id: '6' } }));
+  state = await run(3); assert.deepEqual(Object.keys(state.channels['10/30'].pending), ['5']);
+});
+test('an unaddressed post follows the author\'s latest bot exchange within followMinutes, else the channel bot', async () => {
+  const { config, remote, run } = await fixture(); config.guilds[0].partnerBotIds = ['21']; await run();
+  const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes, extra = {}) => human(id, { mentions: [], timestamp: at(minutes), ...extra });
+  remote.messages.push(plain(2, 0, { author: { id: '42' } }), human(3, { author: { id: '21', bot: true }, message_reference: { message_id: '2' }, referenced_message: { id: '2', author: { id: '42' } }, timestamp: at(1) }));
+  remote.messages.push(plain(4, 7, { author: { id: '42' } }), plain(5, 7));
+  let state = await run(8); const pending = state.channels['10/30'].pending;
+  assert.equal(pending['4'].botId, '21'); assert.equal(pending['4'].via, 'fallback'); assert.equal(pending['5'].botId, '20');
+  remote.messages.push(human(6, { author: { id: '21', bot: true }, message_reference: { message_id: '4' }, referenced_message: { id: '4', author: { id: '42' } }, timestamp: at(9) }));
+  remote.messages.push(plain(7, 10, { author: { id: '43' }, mentions: [{ id: '21', bot: true }] }), plain(8, 12, { author: { id: '43' } }));
+  state = await run(12); assert.equal(state.channels['10/30'].pending['4'], undefined); assert.equal(state.channels['10/30'].pending['8'].botId, '21');
+  remote.messages.push(plain(9, 60, { author: { id: '42' } })); state = await run(60);
+  assert.equal(state.channels['10/30'].pending['9'].botId, '20'); assert.equal(state.channels['10/30'].partners['42'], undefined);
+});
+test('third-party bots and unreferenced bot posts never become a partner; configured partnerBotIds do', async () => {
+  const { config, remote, run } = await fixture(); await run();
+  const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes, extra = {}) => human(id, { mentions: [], timestamp: at(minutes), ...extra });
+  const reply = (id, bot, to, minutes, extra = {}) => human(id, { author: { id: bot, bot: true }, message_reference: { message_id: to }, referenced_message: { id: to, author: { id: '40' } }, timestamp: at(minutes), ...extra });
+  remote.messages.push(plain(2, 0), reply(3, '99', '2', 1), plain(4, 2), plain(5, 3, { mentions: [{ id: '99', bot: true }] }), plain(6, 4));
+  remote.messages.push(human(7, { author: { id: '21', bot: true }, referenced_message: { id: '6', author: { id: '40' } }, timestamp: at(5) }), plain(8, 6));
+  let state = await run(6); const pending = state.channels['10/30'].pending;
+  assert.equal(pending['8'].botId, '20'); assert.equal(state.channels['10/30'].partners?.['40'], undefined);
+  config.guilds[0].partnerBotIds = ['21'];
+  remote.messages.push(reply(9, '21', '8', 7), plain(10, 8)); state = await run(8);
+  assert.equal(state.channels['10/30'].pending['10'].botId, '21');
+});
+test('partner author comes from the pending reply target, never a mismatched snapshot; partnerBotIds must be ids', async () => {
+  const { config, remote, run } = await fixture(); config.guilds[0].partnerBotIds = ['21']; await run();
+  const at = minutes => new Date(epoch + minutes * 60000).toISOString(), plain = (id, minutes, extra = {}) => human(id, { mentions: [], timestamp: at(minutes), ...extra });
+  remote.messages.push(plain(2, 0, { author: { id: '42' } }), human(3, { author: { id: '21', bot: true }, message_reference: { message_id: '2' }, timestamp: at(1) }));
+  remote.messages.push(human(4, { author: { id: '21', bot: true }, message_reference: { message_id: '1' }, referenced_message: { id: '9', author: { id: '43' } }, timestamp: at(1) }));
+  remote.messages.push(plain(5, 2, { author: { id: '42' } }), plain(6, 2, { author: { id: '43' } }));
+  const state = await run(2); const pending = state.channels['10/30'].pending;
+  assert.equal(pending['5'].botId, '21'); assert.equal(pending['6'].botId, '20');
+  for (const bad of [[21], ['x'], '21']) assert.throws(() => validateConfig({ ...config, guilds: [{ ...config.guilds[0], partnerBotIds: bad }] }));
+});

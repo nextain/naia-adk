@@ -26,6 +26,10 @@ export function validateConfig(config) {
   const nudge = config.thresholds?.nudgeMinutes ?? 10;
   const escalate = config.thresholds?.escalateMinutes ?? 30;
   if (!(Number.isFinite(nudge) && nudge > 0 && Number.isFinite(escalate) && escalate > nudge)) throw new Error('invalid thresholds');
+  const burst = config.thresholds?.burstMinutes ?? 10;
+  if (!(Number.isFinite(burst) && burst >= 0)) throw new Error('invalid thresholds');
+  const follow = config.thresholds?.followMinutes ?? 30;
+  if (!(Number.isFinite(follow) && follow >= 0)) throw new Error('invalid thresholds');
   if (!Number.isInteger(config.maxPages ?? 100) || (config.maxPages ?? 100) < 1) throw new Error('invalid maxPages');
   const channels = new Set();
   for (const guild of config.guilds) {
@@ -39,6 +43,7 @@ export function validateConfig(config) {
     }
     for (const role of guild.roles ?? []) { requireId(role.id); requireId(role.botId); }
     (guild.excludeChannelIds ?? []).forEach(requireId);
+    if (guild.partnerBotIds !== undefined) { if (!Array.isArray(guild.partnerBotIds)) throw new Error('invalid configured Discord id'); guild.partnerBotIds.forEach(requireId); }
   }
   for (const site of config.sites ?? []) {
     const url = new URL(site.url);
@@ -138,19 +143,34 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         }
         if (!complete) throw new Error('pagination limit reached; cursor retained');
         const next = structuredClone(previous);
+        // Only known agents become a partner, so a third-party bot (a notifier, a music bot) never takes a person's follow-up posts.
+        const agents = new Set([channel.botId ?? guild.defaultBotId, ...(guild.roles ?? []).map(role => role.botId), ...(guild.partnerBotIds ?? [])].filter(Boolean));
         const replies = structuredClone(state.replies ?? {});
         for (const message of messages.sort((a, b) => compare(a.id, b.id))) {
           if (![0, 19].includes(message.type ?? 0)) continue;
           if (message.author?.bot) {
-            const request = next.pending[ref(message)];
-            if (request && message.author.id === request.botId) {
+            // One reply often answers a burst: it closes the referenced post and the same author's earlier posts still pending for this bot.
+            const target = ref(message), replier = message.author.id;
+            const poster = next.pending[target]?.author ?? (message.referenced_message?.author?.id ? fingerprint(message.referenced_message.author.id) : undefined);
+            // Only posts within burstMinutes before the referenced post count as the same burst, so an unrelated older question stays pending.
+            const targetAt = next.pending[target]?.at ?? Date.parse(message.referenced_message?.timestamp ?? message.timestamp);
+            const since = Number.isFinite(targetAt) ? targetAt - (config.thresholds?.burstMinutes ?? 10) * 60000 : Infinity;
+            // A post assigned only by the all-human fallback names no recipient, so another bot's reply answers it when that reply references a pending post.
+            const answered = !target ? [] : Object.entries(next.pending).filter(([id, request]) => (request.botId === replier || (request.via === 'fallback' && next.pending[target])) && (id === target || (poster && request.author === poster && compare(id, target) < 0 && request.at >= since)));
+            if (answered.length) {
               const at = Date.parse(message.timestamp);
               if (Number.isFinite(at) && at <= now) {
-                const old = replies[request.botId]?.at ?? 0;
-                replies[request.botId] = { at: Math.max(old, at) };
+                const old = replies[replier]?.at ?? 0;
+                replies[replier] = { at: Math.max(old, at) };
               }
-              delete next.pending[ref(message)];
+              for (const [id] of answered) delete next.pending[id];
             }
+            // A bot's reply to a person makes that bot the person's current partner; their next unaddressed post follows it.
+            // The pending row knows the replied-to author; otherwise trust the snapshot only when it is the referenced post.
+            const snapshot = target && message.referenced_message?.id === target ? message.referenced_message.author : undefined;
+            const person = next.pending[target]?.author ?? answered.find(([id]) => id === target)?.[1].author ?? (snapshot && !snapshot.bot ? fingerprint(snapshot.id) : undefined);
+            const partnerAt = Date.parse(message.timestamp);
+            if (target && person && agents.has(replier) && Number.isFinite(partnerAt)) (next.partners ??= {})[person] = { botId: replier, at: partnerAt };
             continue;
           }
           if (!eligible(message)) continue;
@@ -161,12 +181,26 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
           const candidates = new Set(roles.map(role => role.botId));
           if (direct) candidates.add(botId);
           if (candidates.size > 1) throw new Error('ambiguous assignment; cursor retained');
-          const assigned = [...candidates][0] ?? (channel.mode === 'all-human' && !mentions.length && !ref(message) ? botId : undefined);
-          if (!assigned) continue;
+          const fallback = !candidates.size && channel.mode === 'all-human' && !mentions.length && !ref(message);
           const timestamp = Date.parse(message.timestamp);
+          const author = fingerprint(message.author.id);
+          // An unaddressed post continues the author's latest exchange with a bot (the previous addressee) within followMinutes, else goes to the channel bot.
+          const partner = next.partners?.[author];
+          const following = fallback && partner && timestamp - partner.at <= (config.thresholds?.followMinutes ?? 30) * 60000 ? partner.botId : undefined;
+          const assigned = [...candidates][0] ?? (fallback ? following ?? botId : undefined);
+          // Naming an agent right after an unaddressed post ("now" then "@other now") re-addresses that burst, so its fallback posts stop waiting.
+          // Mentioning a person does not: "thanks @friend" leaves the question pending.
+          if ((mentions.some(user => user.bot) || roles.length) && Number.isFinite(timestamp)) {
+            const since = timestamp - (config.thresholds?.burstMinutes ?? 10) * 60000;
+            for (const [id, request] of Object.entries(next.pending)) if (request.via === 'fallback' && request.author === author && request.at >= since && compare(id, message.id) < 0) delete next.pending[id];
+          }
+          const named = mentions.filter(user => user.bot && agents.has(user.id)).map(user => user.id).concat(roles.map(role => role.botId));
+          if (new Set(named).size === 1 && Number.isFinite(timestamp)) (next.partners ??= {})[author] = { botId: named[0], at: timestamp };
+          if (!assigned) continue;
           if (!Number.isFinite(timestamp)) throw new Error('invalid request timestamp');
-          next.pending[message.id] = { botId: assigned, at: timestamp, stages: {} };
+          next.pending[message.id] = { botId: assigned, author, at: timestamp, stages: {}, ...(fallback ? { via: 'fallback' } : {}) };
         }
+        for (const [author, partner] of Object.entries(next.partners ?? {})) if (!(now - partner.at <= (config.thresholds?.followMinutes ?? 30) * 60000)) delete next.partners[author];
         if (messages.length) next.cursor = messages.at(-1).id;
         delete next.error;
         delete state.errors[key];
