@@ -389,7 +389,8 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined) {
 				args = ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", config.model, "--reasoning-effort", config.effort, "--prompt-file", file];
 			} else if (id === "codex") {
 				bin = process.env.APPROVAL_PLAN_CODEX_BIN || "codex";
-				args = ["exec", "-m", config.model, "-c", `model_reasoning_effort=${config.effort}`, "-s", "read-only", "--skip-git-repo-check", "--ephemeral", prompt];
+				args = ["exec", "-m", config.model, "-c", `model_reasoning_effort=${config.effort}`, "-s", "read-only", "--skip-git-repo-check", "--ephemeral", "-"];
+				input = prompt;
 			} else {
 				bin = process.env.APPROVAL_PLAN_ARGON_BIN || "agy";
 				args = ["--model", config.model, "--effort", config.effort, "--mode", "plan", "--sandbox", "--disable-slash-commands", "--output-format", "text"];

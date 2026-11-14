@@ -219,9 +219,30 @@ function writeFakeBins(tmp, { argonBody, argonStderr = "", argonStatus = 0, code
 	const argon = path.join(binDir, "fake-agy");
 	fs.writeFileSync(argon, `#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' "${argonBody}"\nprintf '%s\\n' "${argonStderr}" >&2\nexit ${argonStatus}\n`, { mode: 0o755 });
 	const codex = path.join(binDir, "fake-codex");
-	fs.writeFileSync(codex, `#!/bin/sh\n${withMarker ? `: > "${marker}"\n` : ""}[ "$1" = exec ] || exit 19\n[ -z "$(cat)" ] || exit 20\nprintf 'codex\\n'\ncat <<'REVIEW_EOF'\n${codexBody ?? passBody}\nREVIEW_EOF\nprintf 'tokens used\\n'\nexit ${codexStatus}\n`, { mode: 0o755 });
+	fs.writeFileSync(codex, `#!/bin/sh\n${withMarker ? `: > "${marker}"\n` : ""}[ "$1" = exec ] || exit 19\nfor arg do last="$arg"; done\n[ "$last" = - ] || exit 20\ncat >/dev/null\nprintf 'codex\\n'\ncat <<'REVIEW_EOF'\n${codexBody ?? passBody}\nREVIEW_EOF\nprintf 'tokens used\\n'\nexit ${codexStatus}\n`, { mode: 0o755 });
 	return { binDir, fakeHome, marker };
 }
+
+test("codex 는 큰 요청문을 마지막 인자 - 와 stdin 으로 받는다", (t) => {
+	const { root, tmp, stateDir } = makeWorkspace(t);
+	const { planFile, plan } = createValidPlan(root, { what_why: "배포 이유 " + "x".repeat(310 * 1024) });
+	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
+	const { binDir, fakeHome } = writeFakeBins(tmp, { argonBody: "", argonStderr: "rate limit", argonStatus: 1 });
+	const received = path.join(tmp, "received-prompt");
+	const lastArg = path.join(tmp, "last-arg");
+	const fakeCodex = path.join(binDir, "fake-codex");
+	const passBody = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "참고 지적: 0", "남은 지적: 0"].join("\n");
+	fs.writeFileSync(fakeCodex, `#!/bin/sh\nfor arg do last="$arg"; done\nprintf '%s' "$last" > "${lastArg}"\ncat > "${received}"\ncat <<'REVIEW_EOF'\n${passBody}\nREVIEW_EOF\n`, { mode: 0o755 });
+	const prompt = deployPlan.reviewPrompt(plan, sha256(fs.readFileSync(planFile)), root);
+	assert.ok(Buffer.byteLength(prompt) > 300 * 1024);
+	const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
+		cwd: root, encoding: "utf8", timeout: 30000,
+		env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_ARGON_BIN: path.join(binDir, "fake-agy"), APPROVAL_PLAN_CODEX_BIN: fakeCodex, DEPLOY_APPROVAL_STATE_DIR: stateDir },
+	});
+	assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+	assert.equal(fs.readFileSync(lastArg, "utf8"), "-");
+	assert.equal(fs.readFileSync(received, "utf8"), prompt);
+});
 
 test("한도 실패에서 다음 차례로 넘어간다 (가짜 실행 파일)", (t) => {
 	const { root, tmp, stateDir } = makeWorkspace(t);
