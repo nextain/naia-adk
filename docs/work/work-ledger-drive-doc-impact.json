@@ -1,0 +1,20 @@
+{
+  "work": "work-ledger-drive",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/work/work-ledger-drive.md", "docs/guides/work-ledger.md"]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/guides/work-ledger-drive.md", "config/work-ledger-drive.example.json"]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": ["docs/work/work-ledger-drive.md"],
+    "detail": "A ledger that only notifies does not reduce overdue work. Items carry an executable instruction, the tick starts the worker, and closing requires a result address or a verified owner message."
+  },
+  "review": {
+    "independent_review": "NOT_RUN; local commit only",
+    "public_push_review": "NOT_RUN; no push authorized"
+  }
+}

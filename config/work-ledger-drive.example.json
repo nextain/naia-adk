@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "roles": [{ "role": "role-a" }],
+  "worker": {
+    "command": ["claude", "-p", "--model", "{model}", "--permission-mode", "acceptEdits"],
+    "models": ["model-name-a", "model-name-b"],
+    "cwd": ".",
+    "max_parallel": 2,
+    "max_attempts": 3,
+    "retry_min": 30,
+    "max_run_min": 240
+  },
+  "disk": { "path": "/", "min_free_gb": 2 },
+  "notify": { "wake_dir": ".agents/work/wake", "repeat_min": 60 },
+  "owner_confirm": {
+    "provider": "discord",
+    "token_env": "DISCORD_BOT_TOKEN",
+    "owner_ids": ["000000000000000000"]
+  }
+}

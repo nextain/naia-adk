@@ -38,3 +38,6 @@ JSON documents are also accepted with standard JSON parsing semantics.
 Keep names, links, paths and task contents in private instance files. Follow
 [regular execution recording](regular-schedule-ledger.md) and
 [server acceptance](server-wake-onboarding.md) for the second ledger and rollout.
+
+To have overdue items start their own worker from a registered instruction
+file, see [work ledger drive](work-ledger-drive.md).
