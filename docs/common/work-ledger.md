@@ -57,7 +57,7 @@ node scripts/work-ledger/ledger.mjs --root . --role secretary report --every-min
 
 | 까닭 | 언제 깨우나 |
 | --- | --- |
-| 기한 넘음 | `open` 항목의 기한이 지났을 때 |
+| 기한 넘음 | `open` 또는 `waiting_human` 항목의 기한이 지났을 때 (`waiting_human`은 깨운 뒤 기한을 다음 날로 하루 밀어 하루 한 번 다시 알림) |
 | 일꾼 끝, 결과 안 읽음 | 끝 파일이 있고, 결과 확인 시각이 끝 파일 수정 시각보다 앞일 때 |
 | 장부에 없는 사람 글 | 최근 24시간(작성 또는 수정 시각 기준) 사람·중계·웹훅 글 중 담당 역할 몫인 글이 장부 출처에 없고, 담당 역할이 그 글(수정된 경우 수정 시각 뒤)에 답글도 달지 않았을 때 |
 | 사람에게 묻고 멈춤(보조) | 대기 카드를 남기지 않은 질문을 찾는 안전망으로, 감시 채널·쓰레드·1:1 채널에서 기본 15분 동안 답이 없는 질문마다 한 번 깨울 때 |
@@ -76,14 +76,16 @@ node scripts/work-ledger/ledger.mjs --root . --role secretary report --every-min
 
 역할 설정의 `answered_by_any_role_post_after`는 기본 `false`입니다. 기본값에서는 같은 채널·같은 쓰레드에서 해당 사람 글에 직접 단 담당 역할 답글만 답변으로 봅니다. `true`이면 같은 채널·같은 쓰레드에서 그 사람 글의 유효 시각(수정된 경우 수정 시각)보다 뒤에 담당 역할이 올린 일반 글도 답변으로 봅니다. 다른 채널이나 다른 쓰레드의 글, 다른 역할의 글, 사람 글 이전의 글은 답변으로 보지 않습니다.
 
-- `answered_by_own_post_after`(기본 `false`): `true`로 켜면 같은 채널·같은 쓰레드에서 사람 글의 유효 시각보다 뒤에 **그 역할 자신**(`user_ids`)이 올린 글도 답으로 봅니다. 다른 역할(`roles`의 다른 항목) 글은 답으로 치지 않으며, `report_prefixes`에 해당하는 정기 보고 글도 답으로 치지 않습니다.
-- `report_prefixes`(기본 `["[서버 민호 정기 보고", "[서버 민호 "]`): `answered_by_own_post_after`가 켜졌을 때 답으로 치지 않을 정기 보고 글 접두어 목록입니다. 역할 설정(`roles[]`) 또는 공통 기본값(`defaults`·최상위 설정)에서 바꿀 수 있으며, `[]`로 비우면 접두어 제외를 끕니다.
-- 구조적 답변 확장·외부 목록·재깨움 상한·공통 기본값:
-  - 직접 답글(`r.reply_to_id === m.id`) 외에 같은 채널·쓰레드에서 사람 글의 **부모 글에 단 답글**(`r.reply_to_id === m.reply_to_id`, 사람 글 이후)과 같은 작성자의 **인접 연쇄 발화 묶음**(인접 간격 3분 이하·총 범위 5분 이하, 역할·다른 사람·웹훅 발화로 끊기지 않은 묶음) 안의 다른 글에 단 담당 역할 답글도 답으로 봅니다. 다른 역할이 단 직접 답글은 기존 규칙대로 답으로 치지 않습니다.
-  - `answered_elsewhere_file`(미지정 시 설정 파일 옆 `answered-elsewhere.txt` 및 `.agents/work/ledger/answered-elsewhere.txt` 자동 조회): `#` 주석을 뺀 줄의 첫 공백 구분 토큰을 이미 다른 곳에서 답한 메시지 ID로 읽어 재깨움에서 뺍니다.
-  - 멘션만 있는 빈 글(`<@id>`, `@everyone`, `@here` 등만 있고 본문·첨부가 없는 글)은 한 번만 깨우고 `waiting_human`으로 올리지 않습니다(빈 글이 수정으로 본문이 추가되면 제한을 풉니다).
-  - 일반 미등록 사람 글은 재깨움 상한(`max_human_wakes`, 기본 `3`회)을 채운 뒤 다음 재깨움 차례(쿨다운 30분 경과 뒤)에 깨움 대신 해당 역할 장부에 `waiting_human` 항목을 남기고 재깨움을 멈춥니다.
-  - 역할 설정 키(`channels`, `direct_channels`, `human_ids`, `relay_ids`, `report`, `max_threads`, `guild_id`, `human_wait`, `check_unrecorded_human`, `answered_by_any_role_post_after`, `answered_by_own_post_after`, `report_prefixes`, `answered_elsewhere_file`, `max_human_wakes` 등)는 역할별 값 → `defaults.<키>` → 최상위 `<키>` 순으로 공통 기본값을 물려받습니다.
+- 답 판정은 같은 채널·같은 쓰레드에서 사람 글(수정된 경우 수정 시각 이후)에 직접 달린 담당 역할 답글(`r.reply_to_id === m.id`, 또는 `answered_by_any_role_post_after: true`일 때 그 뒤 담당 역할 글)만 답변으로 봅니다. 부모 글 답글·연쇄 발화 묶음 확장과 `answered_by_own_post_after`·`report_prefixes` 추정 규칙은 사용하지 않습니다.
+- 외부 확인 목록(`answered_elsewhere_file`): 설정에 파일 경로를 명시한 경우에만 읽습니다(자동 경로 탐색 없음). 줄마다 `<글 ID> <기록 시각 ISO> <이유>` 형식이어야 하며, 7일이 지난 줄은 무시합니다. 사람이 `<기록 시각 ISO>`보다 뒤에 글을 수정하면 억제하지 않고 다시 깨웁니다.
+- 재깨움 상한과 `waiting_human`:
+  - 일반 미등록 사람 글은 재깨움 상한(`max_human_wakes`, 기본 `3`회 — `1` 이상 정수가 아니면 stderr에 경고 1줄을 남기고 기본값 사용)을 채운 뒤 다음 깨움 차례(쿨다운 30분 경과 뒤)에 깨움 대신 `waiting_human` 항목(초기 기한 4시간 뒤)을 등록합니다.
+  - 멘션만 있는 빈 글(본문·첨부·임베드가 모두 비어 있는 글; 첨부 또는 임베드가 있으면 일반 글로 취급)은 상한 `1`회 뒤 동일하게 `waiting_human`을 등록합니다.
+  - 24시간(`since`) 감시 창을 벗어나는 미등록 사람 글도 버리기 전에 `waiting_human`으로 등록합니다.
+  - `waiting_human` 항목의 기한이 지나면 한 번 깨운 뒤 기한을 다음 날(+24시간)로 밀어 하루 한 번 다시 깨우며, 사람이 해당 글을 수정하거나 같은 쓰레드에 새 글을 올리면 재깨움 상한을 초기화해 다시 깨웁니다.
+- 감시 상태와 공통 기본값:
+  - `watch-state.json`에서 일부 항목·값이 손상되면 해당 항목만 버리고 나머지 `sent`·쿨다운·횟수는 유지하며, `wake_counts` 정수는 `0..상한` 범위로 자릅니다.
+  - `user_ids`는 역할(`roles[]`)별로만 설정하며(`defaults`·최상위 상속 금지), 나머지 공통 설정 키(`channels`, `direct_channels`, `human_ids`, `relay_ids`, `report`, `max_threads`, `guild_id`, `human_wait`, `check_unrecorded_human`, `answered_by_any_role_post_after`, `answered_elsewhere_file`, `max_human_wakes` 등)는 역할별 → `defaults.<키>` → 최상위 `<키>` 순으로 물려받습니다.
 
 감시 채널을 읽을 때는 길드 활성 쓰레드(`/guilds/{guild.id}/threads/active`)와 감시 채널 글에 달린 쓰레드(`thread`)도 함께 읽습니다. 한 번에 읽는 쓰레드 수 상한은 `max_threads`(기본 25)로 제한하되, 상한을 넘는 쓰레드는 감시 상태 파일의 라운드로빈 커서로 다음 실행에서 이어서 읽어 영구 누락을 막습니다. 길드 활성 쓰레드 목록은 감시 한 회차에 길드마다 한 번만 조회해 역할과 채널 사이에 공유합니다. Discord가 HTTP 429를 반환하면 한 번 최대 5초, 회차당 누적 30초 예산 안에서 한 번 기다렸다 다시 읽습니다. 이 상한을 넘는 `retry_after`는 기다리지 않고 이번 회차를 건너뜁니다. 다시 429이면 해당 채널·쓰레드는 이번 회차만 건너뛰고 경고를 남깁니다. 이 경우만 있으면 종료코드는 0입니다. 같은 채널에서 3회차 연속 429가 나면 담당 역할을 깨우며, 정상적으로 읽은 회차에는 연속 실패 수를 지웁니다. 채널 읽기 사이에는 기본 300ms 간격을 둡니다. 다른 활성 쓰레드 목록 조회 오류(404·403 포함)나 메신저 채널·쓰레드 읽기 오류는 해당 대상과 HTTP 상태, 응답 본문 앞 200자를 실패 깨움에 남긴 뒤 나머지 쓰레드·채널을 계속 확인합니다. `safeName` 규칙(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)이 막는 채널·쓰레드·메시지 ID 모양을 만나더라도 감시 전체가 죽지 않고 그 한 건만 오류 깨움으로 남긴 뒤 다음 검사를 이어 갑니다. 실패 건마다 30분 동안 중복을 억제합니다.
 

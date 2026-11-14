@@ -16,12 +16,13 @@ import {
 import { createAdapter } from "./messenger.mjs";
 import { cleanReceipts, dueWake, receiptPath, reconcileCurrent } from "./due-timer.mjs";
 
-const DEFAULT_REPORT_PREFIXES = ["[서버 민호 정기 보고", "[서버 민호 "];
 const DEFAULT_MAX_HUMAN_WAKES = 3;
 const MENTION_ONLY_MAX_WAKES = 1;
-const BURST_GAP_MS = 3 * 60000;
-const BURST_SPAN_MS = 5 * 60000;
 const WAKE_COOLDOWN_MS = 30 * 60000;
+const DAY_MS = 24 * 60 * 60000;
+const ELSEWHERE_MAX_AGE_MS = 7 * DAY_MS;
+const ISO_TIMESTAMP_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
 
 function roleOption(roleConfig, config, key, fallback) {
   if (roleConfig?.[key] !== undefined) return roleConfig[key];
@@ -30,23 +31,49 @@ function roleOption(roleConfig, config, key, fallback) {
   return fallback;
 }
 
-function positiveIntOption(value, fallback) {
-  return Number.isInteger(value) && value >= 1 ? value : fallback;
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function normalizePrefixes(raw) {
-  if (!Array.isArray(raw)) return DEFAULT_REPORT_PREFIXES;
-  return raw.filter((prefix) => typeof prefix === "string" && prefix.length > 0);
-}
-
-function isReportPost(post, prefixes) {
-  if (!prefixes.length) return false;
-  const body = String(post?.body ?? post?.content ?? "").trimStart();
-  return prefixes.some((prefix) => body.startsWith(prefix));
+function resolveMaxHumanWakesByRole(config, warnings, emitStderr) {
+  const byRole = new Map();
+  const warnedSources = new Set();
+  if (!Array.isArray(config?.roles)) return byRole;
+  for (const rc of config.roles) {
+    let roleName;
+    try {
+      roleName = safeName(rc?.role);
+    } catch {
+      continue;
+    }
+    const raw = roleOption(rc, config, "max_human_wakes", undefined);
+    let resolved = DEFAULT_MAX_HUMAN_WAKES;
+    if (raw !== undefined) {
+      if (Number.isInteger(raw) && raw >= 1) {
+        resolved = raw;
+      } else {
+        const source =
+          rc?.max_human_wakes !== undefined
+            ? roleName
+            : config?.defaults?.max_human_wakes !== undefined
+              ? "defaults"
+              : "config";
+        if (!warnedSources.has(source)) {
+          warnedSources.add(source);
+          const msg = `config:${source}: max_human_wakes(${JSON.stringify(raw)})는 1 이상의 정수가 아니므로 기본값 ${DEFAULT_MAX_HUMAN_WAKES} 사용`;
+          warnings.push(msg);
+          if (emitStderr) console.warn(`work-ledger-watch warning: ${msg}`);
+        }
+      }
+    }
+    byRole.set(roleName, resolved);
+  }
+  return byRole;
 }
 
 function isMentionOnlyBody(m) {
   if (Array.isArray(m?.attachments) && m.attachments.length > 0) return false;
+  if (Array.isArray(m?.embeds) && m.embeds.length > 0) return false;
   const stripped = String(m?.body ?? m?.content ?? "")
     .replace(/<@!?\w[\w-]*>/g, "")
     .replace(/<@&\w[\w-]*>/g, "")
@@ -56,82 +83,232 @@ function isMentionOnlyBody(m) {
   return stripped.length === 0;
 }
 
-function parseAnsweredElsewhere(text) {
-  const ids = new Set();
+/**
+ * answered-elsewhere 파일 줄(`<글 ID> <기록 시각 ISO> <이유>`)을 파싱한다.
+ * 7일 지난 항목과 시각 형식이 잘못된 항목은 건너뛴다.
+ */
+function parseAnsweredElsewhere(text, now, warnings, label) {
+  const entries = new Map();
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
-    const [msgId] = line.split(/\s+/, 1);
-    if (msgId) ids.add(msgId);
+    const match = /^(\S+)\s+(\S+)(?:\s+(.+))?$/.exec(line);
+    if (!match) {
+      warnings?.push(`elsewhere:${label}: 형식 오류 줄 무시`);
+      continue;
+    }
+    const [, msgId, iso] = match;
+    const recordedMs = ISO_TIMESTAMP_RE.test(iso) ? Date.parse(iso) : NaN;
+    if (!Number.isFinite(recordedMs)) {
+      warnings?.push(`elsewhere:${label}: 잘못된 시각 줄 무시 (${msgId})`);
+      continue;
+    }
+    if (now - recordedMs > ELSEWHERE_MAX_AGE_MS) continue;
+    const prev = entries.get(msgId);
+    if (prev === undefined || recordedMs > prev) entries.set(msgId, recordedMs);
   }
-  return ids;
+  return entries;
 }
 
-async function loadAnsweredElsewhere({ root, configPath, configured, warnings, role }) {
-  if (configured === false || configured === null) return new Set();
-  const ids = new Set();
-  const addFromText = (text) => {
-    for (const id of parseAnsweredElsewhere(text)) ids.add(id);
-  };
-  if (configured !== undefined) {
-    const entries = (Array.isArray(configured) ? configured : [configured])
-      .filter((item) => typeof item === "string" && item.trim() !== "");
-    for (const entry of entries) {
-      const candidates = path.isAbsolute(entry)
-        ? [entry]
-        : [
-            path.resolve(root, entry),
-            ...(configPath ? [path.resolve(path.dirname(configPath), entry)] : []),
-          ];
-      for (const file of [...new Set(candidates)]) {
-        try {
-          addFromText(await readFile(file, "utf8"));
+/**
+ * 설정에 명시한 `answered_elsewhere_file`만 읽는다(자동 경로 탐색 없음).
+ */
+async function loadAnsweredElsewhere({
+  root,
+  configPath,
+  configured,
+  warnings,
+  role,
+  now,
+}) {
+  const entries = new Map();
+  if (configured === undefined || configured === false || configured === null)
+    return entries;
+  const configuredPaths = (Array.isArray(configured) ? configured : [configured])
+    .filter((item) => typeof item === "string" && item.trim() !== "");
+  for (const entry of configuredPaths) {
+    const candidates = path.isAbsolute(entry)
+      ? [entry]
+      : [
+          path.resolve(root, entry),
+          ...(configPath ? [path.resolve(path.dirname(configPath), entry)] : []),
+        ];
+    for (const file of [...new Set(candidates)]) {
+      try {
+        const parsed = parseAnsweredElsewhere(
+          await readFile(file, "utf8"),
+          now,
+          warnings,
+          `${role}:${file}`,
+        );
+        for (const [id, ts] of parsed) {
+          const prev = entries.get(id);
+          if (prev === undefined || ts > prev) entries.set(id, ts);
+        }
+        break;
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          warnings.push(`elsewhere:${role}:${file}: ${error.message || String(error)}`);
           break;
-        } catch (error) {
-          if (error.code !== "ENOENT") {
-            warnings.push(`elsewhere:${role}:${file}: ${error.message || String(error)}`);
-            break;
-          }
         }
       }
     }
-    return ids;
   }
-  const autoFiles = [
-    ...(configPath ? [path.join(path.dirname(configPath), "answered-elsewhere.txt")] : []),
-    path.join(root, ".agents/work/ledger/answered-elsewhere.txt"),
-  ];
-  for (const file of [...new Set(autoFiles.map((p) => path.resolve(p)))]) {
-    try {
-      addFromText(await readFile(file, "utf8"));
-    } catch (error) {
-      if (error.code !== "ENOENT")
-        warnings.push(`elsewhere:${role}:${file}: ${error.message || String(error)}`);
-    }
-  }
-  return ids;
+  return entries;
 }
 
-function collectAuthorBurstIds(chList, targetIdx, authorId, targetCreatedMs, stopAuthors, getCreatedMs) {
-  const ids = new Set([chList[targetIdx].id]);
-  if (!Number.isFinite(targetCreatedMs)) return ids;
-  for (const step of [-1, 1]) {
-    let prevMs = targetCreatedMs;
-    for (let j = targetIdx + step; j >= 0 && j < chList.length; j += step) {
-      const om = chList[j];
-      const oc = getCreatedMs(om);
-      if (!Number.isFinite(oc)) break;
-      if (Math.abs(oc - targetCreatedMs) > BURST_SPAN_MS) break;
-      if (om.author_id === authorId) {
-        if (Math.abs(oc - prevMs) > BURST_GAP_MS) break;
-        ids.add(om.id);
-        prevMs = oc;
-      } else if (stopAuthors.has(om.author_id) || Boolean(om.webhook_id)) {
-        break;
+function emptyWatchState() {
+  return {
+    version: 1,
+    sent: {},
+    thread_cursors: {},
+    mentions: {},
+    wake_counts: {},
+    wake_mention_only: {},
+    wake_reset_at: {},
+    wake_meta: {},
+    human_wait_sent: {},
+    channel_failures: {},
+  };
+}
+
+/**
+ * watch-state.json에서 손상된 개별 항목만 버리고 나머지 유효 상태는 유지한다.
+ * wake_counts 정수는 `[0, 상한]` 범위로 자른다.
+ */
+function sanitizeWatchState(raw, roleMaxHumanWakes, warnings) {
+  if (!isPlainObject(raw)) {
+    return { state: emptyWatchState(), stateError: "감시 상태 파일 읽기 실패" };
+  }
+  let partialCorrupt = false;
+  const pickMap = (value, pred) => {
+    if (value === undefined) return {};
+    if (!isPlainObject(value)) {
+      partialCorrupt = true;
+      return {};
+    }
+    const clean = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (pred(k, v)) clean[k] = v;
+      else partialCorrupt = true;
+    }
+    return clean;
+  };
+  const topInvalid = raw.version !== 1 || !isPlainObject(raw.sent);
+  const mentionOnlyMap = pickMap(raw.wake_mention_only, (k, v) => typeof k === "string" && typeof v === "boolean");
+  const resolveCap = (wakeKey) => {
+    let roleCap = DEFAULT_MAX_HUMAN_WAKES;
+    try {
+      const parsedKey = JSON.parse(wakeKey);
+      if (Array.isArray(parsedKey) && typeof parsedKey[0] === "string" && roleMaxHumanWakes.has(parsedKey[0])) {
+        roleCap = roleMaxHumanWakes.get(parsedKey[0]);
+      }
+    } catch { /* fallback to default cap */ }
+    return mentionOnlyMap[wakeKey] === true ? Math.min(roleCap, MENTION_ONLY_MAX_WAKES) : roleCap;
+  };
+  const cleanCounts = {};
+  if (raw.wake_counts !== undefined) {
+    if (!isPlainObject(raw.wake_counts)) {
+      partialCorrupt = true;
+    } else {
+      for (const [k, v] of Object.entries(raw.wake_counts)) {
+        if (!Number.isInteger(v)) {
+          partialCorrupt = true;
+          continue;
+        }
+        const cap = resolveCap(k);
+        const clamped = Math.max(0, Math.min(cap, v));
+        if (clamped !== v) partialCorrupt = true;
+        cleanCounts[k] = clamped;
       }
     }
   }
-  return ids;
+  const state = {
+    version: 1,
+    sent: isPlainObject(raw.sent) ? pickMap(raw.sent, (_, v) => Number.isFinite(v)) : {},
+    human_wait_sent: pickMap(raw.human_wait_sent, (_, v) => Number.isFinite(v) && v >= 0),
+    channel_failures: pickMap(raw.channel_failures, (_, v) => Number.isFinite(v) && v >= 0),
+    thread_cursors: pickMap(raw.thread_cursors, (_, v) => Number.isInteger(v) && v >= 0),
+    mentions: pickMap(raw.mentions, (_, v) => typeof v === "string"),
+    wake_mention_only: mentionOnlyMap,
+    wake_reset_at: pickMap(raw.wake_reset_at, (_, v) => Number.isFinite(v) && v >= 0),
+    wake_meta: pickMap(
+      raw.wake_meta,
+      (_, v) =>
+        isPlainObject(v) &&
+        typeof v.role === "string" &&
+        typeof v.channel === "string" &&
+        typeof v.msg_id === "string" &&
+        Number.isFinite(v.effective_ms),
+    ),
+    wake_counts: cleanCounts,
+  };
+  if (topInvalid) {
+    return { state, stateError: "감시 상태 파일 읽기 실패" };
+  }
+  if (partialCorrupt) {
+    warnings.push("watch-state: 손상된 항목을 제외하거나 횟수 범위를 보정함");
+  }
+  return { state, stateError: undefined };
+}
+
+async function upsertWaitingHuman({
+  root,
+  role,
+  msgId,
+  msgChannel,
+  title,
+  quote,
+  mentions,
+  roleMentions,
+  everyoneOrHere,
+  reopenMs,
+  note,
+  now,
+}) {
+  return changeLedger(root, role, async (l) => {
+    const fromObj = {
+      channel: msgChannel,
+      msg_id: msgId,
+      quote,
+      mentions,
+      mention_roles: roleMentions,
+      mention_everyone: everyoneOrHere,
+    };
+    const nextDue = new Date(now + 4 * 60 * 60000).toISOString();
+    const nextCreated = new Date(now).toISOString();
+    const existing = l.items.find(
+      (i) => i.from?.msg_id === msgId && i.status === "waiting_human",
+    );
+    if (existing) {
+      const handledMs = Date.parse(existing.checked_at || existing.created_at);
+      if (Number.isFinite(reopenMs) && (!Number.isFinite(handledMs) || reopenMs > handledMs)) {
+        existing.title = title;
+        existing.from = fromObj;
+        existing.due = nextDue;
+        existing.created_at = nextCreated;
+        existing.checked_at = null;
+        existing.note = note;
+      }
+      return;
+    }
+    if (l.items.some((i) => i.from?.msg_id === msgId)) return;
+    const baseId = `human-${safeName(msgId)}`;
+    let itemId = baseId;
+    let suffix = 2;
+    while (l.items.some((i) => i.id === itemId)) itemId = `${baseId}-${suffix++}`;
+    l.items.push({
+      id: itemId,
+      title,
+      from: fromObj,
+      due: nextDue,
+      created_at: nextCreated,
+      status: "waiting_human",
+      worker: null,
+      checked_at: null,
+      note,
+    });
+  });
 }
 
 export async function watch({
@@ -143,6 +320,7 @@ export async function watch({
   now,
   clock = now === undefined ? Date.now : () => now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  _emitWarnings = true,
 }) {
   now ??= clock();
   const wakeDir = path.join(root, ".agents/work/l4/wake");
@@ -165,67 +343,19 @@ export async function watch({
   }
   const handled = new Set(drive?.handled ?? []);
   return withLock(stateFile, async () => {
-    let state = { version: 1, sent: {}, thread_cursors: {}, mentions: {}, wake_counts: {}, wake_mention_only: {} };
+    const warnings = [...timerWarnings];
+    const roleMaxHumanWakes = resolveMaxHumanWakesByRole(config, warnings, _emitWarnings !== false);
+    let state = emptyWatchState();
     let stateError;
-    let recoveredHumanWait = {};
     try {
-      state = JSON.parse(await readFile(stateFile, "utf8"));
-      if (state?.human_wait_sent && typeof state.human_wait_sent === "object" && !Array.isArray(state.human_wait_sent))
-        recoveredHumanWait = Object.fromEntries(Object.entries(state.human_wait_sent).filter(([, at]) => Number.isFinite(at) && at >= 0));
-      if (
-        !state ||
-        typeof state !== "object" ||
-        Array.isArray(state) ||
-        state.version !== 1 ||
-        [state.human_wait_sent, state.channel_failures].some(
-          (map) => map !== undefined && (
-            !map || typeof map !== "object" || Array.isArray(map) ||
-            Object.values(map).some((value) => !Number.isFinite(value) || value < 0)
-          ),
-        ) ||
-        !state.sent ||
-        typeof state.sent !== "object" ||
-        Array.isArray(state.sent) ||
-        Object.values(state.sent).some((v) => !Number.isFinite(v)) ||
-        (state.thread_cursors !== undefined &&
-          (!state.thread_cursors ||
-            typeof state.thread_cursors !== "object" ||
-            Array.isArray(state.thread_cursors) ||
-            Object.values(state.thread_cursors).some(
-              (v) => !Number.isInteger(v) || v < 0,
-            ))) ||
-        (state.mentions !== undefined &&
-          (!state.mentions ||
-            typeof state.mentions !== "object" ||
-            Array.isArray(state.mentions))) ||
-        (state.wake_counts !== undefined &&
-          (!state.wake_counts ||
-            typeof state.wake_counts !== "object" ||
-            Array.isArray(state.wake_counts) ||
-            Object.values(state.wake_counts).some(
-              (v) => !Number.isInteger(v) || v < 0,
-            ))) ||
-        (state.wake_mention_only !== undefined &&
-          (!state.wake_mention_only ||
-            typeof state.wake_mention_only !== "object" ||
-            Array.isArray(state.wake_mention_only) ||
-            Object.values(state.wake_mention_only).some(
-              (v) => typeof v !== "boolean",
-            )))
-      )
-        throw new Error("Invalid watch state");
-      state.thread_cursors ??= {};
-      state.mentions ??= {};
-      state.wake_counts ??= {};
-      state.wake_mention_only ??= {};
+      const parsedState = JSON.parse(await readFile(stateFile, "utf8"));
+      ({ state, stateError } = sanitizeWatchState(parsedState, roleMaxHumanWakes, warnings));
     } catch (error) {
       if (error.code !== "ENOENT") {
         stateError = "감시 상태 파일 읽기 실패";
-        state = { version: 1, sent: {}, thread_cursors: {}, mentions: {}, wake_counts: {}, wake_mention_only: {} };
+        state = emptyWatchState();
       }
     }
-    state.human_wait_sent ??= recoveredHumanWait;
-    state.channel_failures ??= {};
     // Receipts outlive consumed wake files and are independent of watch-state.
     const receiptDir = path.join(root, ".agents/work/ledger/human-wait-receipts");
     await mkdir(receiptDir, { recursive: true });
@@ -245,7 +375,6 @@ export async function watch({
       else receipts.add(name);
     }
     const wakes = [];
-    const warnings = [...timerWarnings];
     const readCache = new Map();
     const failedThisRound = new Set();
     const successfulThisRound = new Set();
@@ -430,6 +559,17 @@ export async function watch({
             } catch (error) { if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error; }
             if (await wake(role, item.id, "기한 넘음", item.title, details)) state.sent[key] = now;
           }
+        } else if (item.status === "waiting_human" && Date.parse(item.due) < now) {
+          if (await wake(role, item.id, "기한 넘음", item.title, details)) {
+            const nextDue = new Date(now + DAY_MS).toISOString();
+            ledger = await changeLedger(root, role, (l) => {
+              const target = l.items.find(
+                (i) => i.id === item.id && i.status === "waiting_human",
+              );
+              if (!target || target.due !== item.due) return;
+              target.due = nextDue;
+            });
+          }
         }
         if (item.worker) {
           try {
@@ -503,7 +643,8 @@ export async function watch({
             ...(config.webhook_ids ?? []),
           ]),
         ];
-        const identities = roleOption(roleConfig, config, "user_ids", []);
+        // user_ids는 봇 정체성이므로 역할별로만 설정한다(defaults·최상위 상속 금지).
+        const identities = roleConfig.user_ids ?? [];
         const roleIds = roleOption(roleConfig, config, "role_ids", []);
         const ownTargets = [...new Set([...identities, ...roleIds])];
         if (channels.length && (!humans.length || !ownTargets.length))
@@ -512,15 +653,8 @@ export async function watch({
           );
         const answeredByAnyRolePostAfter =
           roleOption(roleConfig, config, "answered_by_any_role_post_after", false) === true;
-        const answeredByOwnPostAfter =
-          roleOption(roleConfig, config, "answered_by_own_post_after", false) === true;
-        const reportPrefixes = normalizePrefixes(
-          roleOption(roleConfig, config, "report_prefixes", DEFAULT_REPORT_PREFIXES),
-        );
-        const maxHumanWakes = positiveIntOption(
-          roleOption(roleConfig, config, "max_human_wakes", DEFAULT_MAX_HUMAN_WAKES),
-          DEFAULT_MAX_HUMAN_WAKES,
-        );
+        const maxHumanWakes =
+          roleMaxHumanWakes.get(role) ?? DEFAULT_MAX_HUMAN_WAKES;
         const checkUnrecordedHuman =
           roleOption(roleConfig, config, "check_unrecorded_human", true) !== false;
         const elsewhereIds = await loadAnsweredElsewhere({
@@ -529,6 +663,7 @@ export async function watch({
           configured: roleOption(roleConfig, config, "answered_elsewhere_file", undefined),
           warnings,
           role,
+          now,
         });
         const messenger = sharedMessenger ??= (channels.length ? createAdapter(config.provider) : null);
         if (messenger && !messengerRoundStarted) {
@@ -616,6 +751,7 @@ export async function watch({
                 (start + threadLimit) % candidateThreads.length;
             }
           }
+          const readChannelsInScan = new Set([channel]);
           for (const threadId of threadIds) {
             visitedThreads.add(threadId);
             let threadMessages;
@@ -627,6 +763,7 @@ export async function watch({
               continue;
             }
             successfulThisRound.add(threadId);
+            readChannelsInScan.add(threadId);
             for (const tm of threadMessages) {
               messages.push({ ...tm, channel: tm.channel || threadId });
             }
@@ -839,35 +976,13 @@ export async function watch({
             }
           }
           if (!checkUnrecordedHuman) continue;
-          const orderedByChannel = new Map();
-          for (const msg of messages) {
-            const ch = msg.channel || channel;
-            if (!orderedByChannel.has(ch)) orderedByChannel.set(ch, []);
-            orderedByChannel.get(ch).push(msg);
-          }
-          for (const list of orderedByChannel.values()) {
-            list.sort((a, b) => {
-              const ta = messageTimes(a).createdMs;
-              const tb = messageTimes(b).createdMs;
-              if (!Number.isFinite(ta) || !Number.isFinite(tb)) return 0;
-              return ta - tb;
-            });
-          }
-          const stopBurstAuthors = new Set([...identities, ...humans, ...relays]);
-          const replyTimeOk = (r, sinceMs) => {
-            const reEffMs = messageTimes(r).effectiveMs;
-            return Number.isFinite(reEffMs) && reEffMs > sinceMs && reEffMs <= now;
-          };
+          const seenInScan = new Set();
           for (const m of messages) {
+            seenInScan.add(m.id);
             try {
               if (!isHumanOrRelay(m) || !addressed(m)) continue;
               const { createdMs, editedMs, isEdited, effectiveMs } = messageTimes(m);
-              if (
-                !Number.isFinite(effectiveMs) ||
-                effectiveMs < since ||
-                effectiveMs > now
-              )
-                continue;
+              if (!Number.isFinite(effectiveMs) || effectiveMs > now) continue;
               const msgChannel = m.channel || channel;
               const replies = messages.filter(
                 (r) =>
@@ -878,70 +993,82 @@ export async function watch({
               const isReplied = isEdited
                 ? replies.some((r) => messageTimes(r).effectiveMs >= editedMs)
                 : replies.length > 0;
-              const isParentReplied =
-                Boolean(m.reply_to_id) &&
-                messages.some(
-                  (r) =>
-                    identities.includes(r.author_id) &&
-                    (r.channel || channel) === msgChannel &&
-                    r.reply_to_id === m.reply_to_id &&
-                    replyTimeOk(r, effectiveMs),
-                );
-              let isBurstReplied = false;
-              const chList = orderedByChannel.get(msgChannel) || [];
-              const targetIdx = chList.indexOf(m);
-              if (targetIdx !== -1) {
-                const burstIds = collectAuthorBurstIds(
-                  chList,
-                  targetIdx,
-                  m.author_id,
-                  createdMs,
-                  stopBurstAuthors,
-                  (post) => messageTimes(post).createdMs,
-                );
-                isBurstReplied = messages.some(
-                  (r) =>
-                    identities.includes(r.author_id) &&
-                    (r.channel || channel) === msgChannel &&
-                    burstIds.has(r.reply_to_id) &&
-                    replyTimeOk(r, effectiveMs),
-                );
-              }
               const isAnsweredAfter =
-                (answeredByAnyRolePostAfter || answeredByOwnPostAfter) &&
+                answeredByAnyRolePostAfter &&
                 messages.some((post) => {
                   if (!identities.includes(post.author_id)) return false;
                   if ((post.channel || channel) !== msgChannel) return false;
-                  if (!replyTimeOk(post, effectiveMs)) return false;
-                  if (answeredByAnyRolePostAfter) return true;
-                  return !isReportPost(post, reportPrefixes);
+                  const postEffMs = messageTimes(post).effectiveMs;
+                  return (
+                    Number.isFinite(postEffMs) &&
+                    postEffMs > effectiveMs &&
+                    postEffMs <= now
+                  );
                 });
+              const mThreadId =
+                msgChannel !== channel || discoveredThreads.has(msgChannel)
+                  ? msgChannel
+                  : m.thread_id || m.thread?.id || null;
+              let latestThreadHumanMs = -Infinity;
+              for (const post of messages) {
+                if (post.id === m.id || !isHumanOrRelay(post)) continue;
+                const postCh = post.channel || channel;
+                const sameThread =
+                  (mThreadId !== null && postCh === mThreadId) ||
+                  (postCh !== channel && postCh === m.id);
+                if (!sameThread) continue;
+                const postEffMs = messageTimes(post).effectiveMs;
+                if (
+                  Number.isFinite(postEffMs) &&
+                  postEffMs > effectiveMs &&
+                  postEffMs <= now &&
+                  postEffMs > latestThreadHumanMs
+                ) {
+                  latestThreadHumanMs = postEffMs;
+                }
+              }
+              const reopenMs = Math.max(
+                isEdited ? editedMs : -Infinity,
+                latestThreadHumanMs,
+              );
               const msgMentions = extractMentions(m);
               const { tokens: msgMentionTokens } = msgMentions;
               const mentionSignature = JSON.stringify(msgMentionTokens);
               const recordedItems = ledger.items.filter(
                 (i) => i.from.msg_id === m.id,
               );
-              const isRecorded = isEdited
-                ? recordedItems.some((i) => {
-                    const handledAt = i.checked_at || (i.status === "waiting_human" ? i.created_at : null);
-                    if (!handledAt || Date.parse(handledAt) < editedMs)
+              const isRecorded = recordedItems.some((i) => {
+                if (i.status === "waiting_human") {
+                  if (Number.isFinite(reopenMs)) {
+                    const handledAt = i.checked_at || i.created_at;
+                    if (!handledAt || Date.parse(handledAt) < reopenMs)
                       return false;
-                    const itemMentions = extractItemMentions(i);
-                    const hasRecordedContext =
-                      Boolean(i.from?.quote) ||
-                      Array.isArray(i.from?.mentions) ||
-                      Array.isArray(i.from?.mention_roles) ||
-                      itemMentions.size > 0;
-                    if (hasRecordedContext) {
-                      return msgMentionTokens.every((tok) =>
-                        itemMentions.has(tok),
-                      );
-                    }
-                    return true;
-                  })
-                : recordedItems.length > 0;
-              const isRecordedElsewhere = elsewhereIds.has(m.id);
+                  }
+                  if (!isEdited) return true;
+                } else if (!isEdited) {
+                  return true;
+                } else {
+                  const handledAt = i.checked_at;
+                  if (!handledAt || Date.parse(handledAt) < editedMs)
+                    return false;
+                }
+                const itemMentions = extractItemMentions(i);
+                const hasRecordedContext =
+                  Boolean(i.from?.quote) ||
+                  Array.isArray(i.from?.mentions) ||
+                  Array.isArray(i.from?.mention_roles) ||
+                  itemMentions.size > 0;
+                if (hasRecordedContext) {
+                  return msgMentionTokens.every((tok) =>
+                    itemMentions.has(tok),
+                  );
+                }
+                return true;
+              });
+              // 수정 시각이 answered-elsewhere 기록 시각보다 뒤면 수정 재감지가 우선한다.
+              const elsewhereAt = elsewhereIds.get(m.id);
+              const isRecordedElsewhere =
+                elsewhereAt !== undefined && (!isEdited || elsewhereAt >= editedMs);
               const wakeId = `human-${safeName(m.id)}`;
               const wakeKey = JSON.stringify([
                 role,
@@ -953,62 +1080,97 @@ export async function watch({
                 delete state.mentions[wakeKey];
                 delete state.wake_counts[wakeKey];
                 delete state.wake_mention_only[wakeKey];
+                delete state.wake_meta[wakeKey];
               };
+              const bodyText = String(m.body || "").trim();
+              const itemTitle =
+                bodyText.replace(/\s+/g, " ").slice(0, 120) || "(본문 없음)";
+              if (effectiveMs < since) {
+                if (
+                  !isReplied &&
+                  !isAnsweredAfter &&
+                  !recordedItems.length &&
+                  !isRecordedElsewhere
+                ) {
+                  ledger = await upsertWaitingHuman({
+                    root,
+                    role,
+                    msgId: m.id,
+                    msgChannel,
+                    title: itemTitle,
+                    quote: bodyText.slice(0, 200),
+                    mentions: [...msgMentions.mentions],
+                    roleMentions: [...msgMentions.roleMentions],
+                    everyoneOrHere: msgMentions.everyoneOrHere,
+                    reopenMs: effectiveMs,
+                    note: "24시간 감시 창 밖 미등록 글 사람 대기 등록",
+                    now,
+                  });
+                }
+                clearHumanWakeState();
+                delete state.wake_reset_at[wakeKey];
+                continue;
+              }
               if (
                 isReplied ||
-                isParentReplied ||
-                isBurstReplied ||
                 isAnsweredAfter ||
                 isRecorded ||
                 isRecordedElsewhere
               ) {
                 clearHumanWakeState();
+                delete state.wake_reset_at[wakeKey];
                 continue;
               }
               const mentionOnly = isMentionOnlyBody(m);
-              if (
+              const wakeLimit = mentionOnly
+                ? MENTION_ONLY_MAX_WAKES
+                : maxHumanWakes;
+              let priorCount = state.wake_counts[wakeKey] ?? 0;
+              const mentionsChanged =
                 isEdited &&
-                state.sent[wakeKey] !== undefined &&
-                ((state.mentions[wakeKey] !== undefined &&
-                  state.mentions[wakeKey] !== mentionSignature) ||
-                  (state.wake_mention_only[wakeKey] === true && !mentionOnly))
+                state.mentions[wakeKey] !== undefined &&
+                state.mentions[wakeKey] !== mentionSignature;
+              const promotedToBody =
+                isEdited && state.wake_mention_only[wakeKey] === true && !mentionOnly;
+              const resetBaseline =
+                state.wake_reset_at[wakeKey] ??
+                Math.max(createdMs, state.sent[wakeKey] ?? -Infinity);
+              const hasNewActivity =
+                Number.isFinite(reopenMs) && reopenMs > resetBaseline;
+              if (
+                mentionsChanged ||
+                promotedToBody ||
+                (hasNewActivity && priorCount >= wakeLimit)
               ) {
                 clearHumanWakeState();
+                if (Number.isFinite(reopenMs)) state.wake_reset_at[wakeKey] = reopenMs;
+                priorCount = 0;
+              } else if (hasNewActivity) {
+                state.wake_counts[wakeKey] = 0;
+                state.wake_reset_at[wakeKey] = reopenMs;
+                priorCount = 0;
               }
-              const wakeLimit = mentionOnly ? MENTION_ONLY_MAX_WAKES : maxHumanWakes;
-              const priorCount = state.wake_counts[wakeKey] ?? 0;
               if (priorCount >= wakeLimit) {
                 const cooldownElapsed =
                   state.sent[wakeKey] === undefined ||
                   now - state.sent[wakeKey] >= WAKE_COOLDOWN_MS;
-                if (!mentionOnly && cooldownElapsed) {
-                  ledger = await changeLedger(root, role, async (l) => {
-                    if (l.items.some((i) => i.from?.msg_id === m.id && i.status === "waiting_human")) return;
-                    const baseId = `human-${safeName(m.id)}`;
-                    let itemId = baseId;
-                    let suffix = 2;
-                    while (l.items.some((i) => i.id === itemId)) itemId = `${baseId}-${suffix++}`;
-                    const bodyText = String(m.body || "").trim();
-                    l.items.push({
-                      id: itemId,
-                      title: bodyText.replace(/\s+/g, " ").slice(0, 120) || "(본문 없음)",
-                      from: {
-                        channel: msgChannel,
-                        msg_id: m.id,
-                        quote: bodyText.slice(0, 200),
-                        mentions: [...msgMentions.mentions],
-                        mention_roles: [...msgMentions.roleMentions],
-                        mention_everyone: msgMentions.everyoneOrHere,
-                      },
-                      due: new Date(now + 4 * 60 * 60000).toISOString(),
-                      created_at: new Date(now).toISOString(),
-                      status: "waiting_human",
-                      worker: null,
-                      checked_at: null,
-                      note: `재깨움 ${maxHumanWakes}회 상한 뒤 사람 대기 등록`,
-                    });
+                if (cooldownElapsed) {
+                  ledger = await upsertWaitingHuman({
+                    root,
+                    role,
+                    msgId: m.id,
+                    msgChannel,
+                    title: itemTitle,
+                    quote: bodyText.slice(0, 200),
+                    mentions: [...msgMentions.mentions],
+                    roleMentions: [...msgMentions.roleMentions],
+                    everyoneOrHere: msgMentions.everyoneOrHere,
+                    reopenMs: Number.isFinite(reopenMs) ? reopenMs : effectiveMs,
+                    note: `재깨움 ${wakeLimit}회 상한 뒤 사람 대기 등록`,
+                    now,
                   });
                   clearHumanWakeState();
+                  delete state.wake_reset_at[wakeKey];
                 }
                 continue;
               }
@@ -1022,8 +1184,21 @@ export async function watch({
               if (woken) {
                 state.mentions[wakeKey] = mentionSignature;
                 state.wake_counts[wakeKey] = priorCount + 1;
+                if (Number.isFinite(reopenMs)) state.wake_reset_at[wakeKey] = reopenMs;
                 if (mentionOnly) state.wake_mention_only[wakeKey] = true;
                 else delete state.wake_mention_only[wakeKey];
+                state.wake_meta[wakeKey] = {
+                  role,
+                  channel: msgChannel,
+                  scan_channel: channel,
+                  msg_id: m.id,
+                  title: itemTitle,
+                  quote: bodyText.slice(0, 200),
+                  mentions: [...msgMentions.mentions],
+                  mention_roles: [...msgMentions.roleMentions],
+                  mention_everyone: msgMentions.everyoneOrHere,
+                  effective_ms: effectiveMs,
+                };
               }
             } catch (error) {
               const sourceChannel = m?.channel || channel;
@@ -1036,6 +1211,59 @@ export async function watch({
                 `공급자: ${config.provider?.type || "(미설정)"}\n채널: ${sourceChannel}\n메시지: ${m?.id}\n오류: ${error.message || String(error)}`,
               );
             }
+          }
+          // 24시간 감시 창을 벗어나 API 응답에서 빠진 미등록 사람 글을 버리기 전에 waiting_human으로 등록한다.
+          for (const [wk, meta] of Object.entries(state.wake_meta)) {
+            if (meta.role !== role || meta.scan_channel !== channel) continue;
+            if (seenInScan.has(meta.msg_id)) continue;
+            if (!readChannelsInScan.has(meta.channel) && meta.channel !== channel) continue;
+            if (!(meta.effective_ms < since)) continue;
+            const recorded = ledger.items.some((i) => i.from?.msg_id === meta.msg_id);
+            const metaElsewhereAt = elsewhereIds.get(meta.msg_id);
+            const metaElsewhere =
+              metaElsewhereAt !== undefined && metaElsewhereAt >= meta.effective_ms;
+            const metaReplied = messages.some(
+              (r) =>
+                identities.includes(r.author_id) &&
+                (r.channel || channel) === meta.channel &&
+                r.reply_to_id === meta.msg_id,
+            );
+            const metaAnsweredAfter =
+              answeredByAnyRolePostAfter &&
+              messages.some((post) => {
+                if (!identities.includes(post.author_id)) return false;
+                if ((post.channel || channel) !== meta.channel) return false;
+                const postEffMs = messageTimes(post).effectiveMs;
+                return (
+                  Number.isFinite(postEffMs) &&
+                  postEffMs > meta.effective_ms &&
+                  postEffMs <= now
+                );
+              });
+            if (!recorded && !metaElsewhere && !metaReplied && !metaAnsweredAfter) {
+              ledger = await upsertWaitingHuman({
+                root,
+                role,
+                msgId: meta.msg_id,
+                msgChannel: meta.channel,
+                title: meta.title || "(본문 없음)",
+                quote: meta.quote || "",
+                mentions: Array.isArray(meta.mentions) ? meta.mentions : [],
+                roleMentions: Array.isArray(meta.mention_roles)
+                  ? meta.mention_roles
+                  : [],
+                everyoneOrHere: meta.mention_everyone === true,
+                reopenMs: meta.effective_ms,
+                note: "24시간 감시 창 밖 미등록 글 사람 대기 등록",
+                now,
+              });
+            }
+            delete state.sent[wk];
+            delete state.mentions[wk];
+            delete state.wake_counts[wk];
+            delete state.wake_mention_only[wk];
+            delete state.wake_reset_at[wk];
+            delete state.wake_meta[wk];
           }
         }
       } catch (error) {
@@ -1067,6 +1295,14 @@ export async function watch({
     state.wake_mention_only = Object.fromEntries(
       Object.entries(state.wake_mention_only).filter(([k]) => k in state.sent),
     );
+    state.wake_reset_at = Object.fromEntries(
+      Object.entries(state.wake_reset_at).filter(([k]) => k in state.sent),
+    );
+    state.wake_meta = Object.fromEntries(
+      Object.entries(state.wake_meta).filter(
+        ([k, meta]) => k in state.sent || now - meta.effective_ms < 48 * 60 * 60000,
+      ),
+    );
     for (const channel of successfulThisRound) {
       if (!failedThisRound.has(channel)) delete state.channel_failures[channel];
     }
@@ -1088,7 +1324,12 @@ export async function main(args = process.argv.slice(2)) {
       "utf8",
     ),
   );
-  const result = await watch({ root, config, configPath: opts.config ? path.resolve(root, opts.config) : undefined });
+  const result = await watch({
+    root,
+    config,
+    configPath: opts.config ? path.resolve(root, opts.config) : undefined,
+    _emitWarnings: false,
+  });
   for (const warning of result.warnings)
     console.warn(`work-ledger-watch warning: ${warning}`);
   console.log(JSON.stringify({ event: "work-ledger-watch", ...result }));

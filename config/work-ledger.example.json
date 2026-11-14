@@ -16,8 +16,6 @@
       "channels": ["CHANNEL_ID"],
       "direct_channels": [],
       "answered_by_any_role_post_after": false,
-      "answered_by_own_post_after": false,
-      "report_prefixes": ["[서버 민호 정기 보고", "[서버 민호 "],
       "human_ids": ["HUMAN_USER_ID"],
       "report": {
         "every_min": 60,

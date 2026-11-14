@@ -178,6 +178,8 @@ export function createAdapter(
               mention_everyone: m.mention_everyone === true,
               thread_id: attachedThreadId,
               thread: m.thread || null,
+              attachments: Array.isArray(m.attachments) ? m.attachments : [],
+              embeds: Array.isArray(m.embeds) ? m.embeds : [],
             });
           }
         }
