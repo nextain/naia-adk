@@ -10,6 +10,8 @@ import {
   withLock,
   atomicJson,
   parseArgs,
+  driven,
+  closedProperly,
 } from "./ledger.mjs";
 import { createAdapter } from "./messenger.mjs";
 import { cleanReceipts, dueWake, receiptPath, reconcileCurrent } from "./due-timer.mjs";
@@ -33,6 +35,16 @@ export async function watch({
       timerWarnings.push(...await reconcileCurrent({ root, config, roles: config.roles.map(entry => entry.role), now, runner, configPath, overdueViaWatch: true, pruneUnknownRoles: true }));
     } catch (error) { timerWarnings.push(`timer: 못 걺 (${error.message})`); }
   }
+  // Instructed items are driven on the watcher's own schedule. An item the pass
+  // handled gets the pass's notice in its role's box; any other overdue item
+  // keeps the wake below, so a failed pass is never a silent one.
+  let drive;
+  let driveFailure;
+  if (config.drive?.enabled === true) {
+    try { drive = await (await import("./drive.mjs")).tick({ root, config, now }); }
+    catch (error) { driveFailure = error.message || String(error); }
+  }
+  const handled = new Set(drive?.handled ?? []);
   return withLock(stateFile, async () => {
     let state = { version: 1, sent: {}, thread_cursors: {}, mentions: {} };
     let stateError;
@@ -154,6 +166,7 @@ export async function watch({
         );
     }
     const errors = [];
+    if (driveFailure !== undefined) errors.push("drive");
     if (config.due_timer?.enabled === true) await cleanReceipts(root, now);
     let sequence = 0;
     function safeIdPart(raw) {
@@ -242,9 +255,22 @@ export async function watch({
         );
         continue;
       }
+      const driveErrors = driveFailure !== undefined
+        ? (ledger.items.some((item) => driven(item) && !closedProperly(item)) ? [driveFailure] : [])
+        : (drive?.errors ?? []).filter((text) => text.startsWith(`${role}: `));
+      if (driveErrors.length) {
+        if (driveFailure === undefined) errors.push(`drive:${role}`);
+        await wake(
+          role,
+          "drive-error",
+          "감시 실패",
+          "굴리기 실패",
+          `장부: .agents/work/ledger/${role}.json\n오류: ${driveErrors.join("\n")}`,
+        );
+      }
       for (const item of ledger.items) {
         const details = `출처: ${item.from.channel}/${item.from.msg_id}\n기한: ${item.due}\n결과: ${item.worker?.result || "(없음)"}`;
-        if (item.status === "open" && Date.parse(item.due) < now) {
+        if (item.status === "open" && Date.parse(item.due) < now && !handled.has(`${role}/${item.id}`)) {
           const key = JSON.stringify([role, item.id, "기한 넘음", item.due]);
           let failedReceipt = false;
           try { failedReceipt = JSON.parse(await readFile(receiptPath(root, role, item.id, item.due), "utf8")).status === "failed"; }
@@ -766,7 +792,12 @@ export async function watch({
       if (!failedThisRound.has(channel)) delete state.channel_failures[channel];
     }
     await atomicJson(stateFile, state);
-    return { wakes, errors, warnings };
+    return {
+      wakes,
+      errors,
+      warnings,
+      ...(drive ? { drive: { launched: drive.launched, alerts: drive.alerts, skipped: drive.skipped } } : {}),
+    };
   });
 }
 export async function main(args = process.argv.slice(2)) {

@@ -57,5 +57,6 @@ Keep names, links, paths and task contents in private instance files. Follow
 [regular execution recording](regular-schedule-ledger.md) and
 [server acceptance](server-wake-onboarding.md) for the second ledger and rollout.
 
-To have overdue items start their own worker from a registered instruction
-file, see [work ledger drive](work-ledger-drive.md).
+To have an overdue item start its own worker from an instruction file, see the
+drive section of the [work-ledger watcher](../common/work-ledger.md). It extends
+the JSON ledger the watcher already reads; there is no separate drive ledger.

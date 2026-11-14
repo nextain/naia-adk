@@ -4,7 +4,7 @@ import { realpath, readFile, mkdir, writeFile, readdir, stat, unlink } from 'nod
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { parseArgs, safeName, validDate, ledgerPath, readLedger, withLock, atomicJson } from './ledger.mjs';
+import { parseArgs, safeName, validDate, ledgerPath, readLedger, withLock, atomicJson, driven } from './ledger.mjs';
 
 const HOUR = 60 * 60 * 1000;
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -361,6 +361,13 @@ export async function fire({ root, role, id, due, now = Date.now(), config = {},
   if (!await proofValid(root, config, configPath)) { warn(proofWarning); return false; }
   if (!validDate(due) || !Number.isFinite(now)) throw new Error('Invalid due wake');
   if (Date.parse(due) - now > 5000) return false;
+  // The drive pass starts the worker for an instructed item. Waking the role as
+  // well would have the work done twice, and no receipt is written here so the
+  // watcher's own overdue wake still covers a pass that fails.
+  if (config.drive?.enabled === true) {
+    try { if (driven((await readLedger(root, role)).items.find(entry => entry.id === id) ?? {})) return false; }
+    catch { /* dueWake below reports a ledger that cannot be read */ }
+  }
   const sent = await dueWake({ root, role, id, due, now, emit: async item => {
     const dir = path.join(root, '.agents/work/l4/wake');
     await mkdir(dir, { recursive: true });

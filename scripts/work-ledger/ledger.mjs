@@ -4,6 +4,7 @@ import {
   open,
   readFile,
   rename,
+  stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -83,6 +84,43 @@ export function validDate(value) {
       value.replace(/Z$/, value.includes(".") ? "Z" : ".000Z")
   );
 }
+const isObject = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+const oneLine = (value) =>
+  typeof value === "string" && value.trim() !== "" && !/[\r\n]/.test(value);
+// An item with an instruction file ("drive") is worked by a worker the ledger
+// starts itself (drive.mjs). The field is optional and additive: items without
+// it behave exactly as before, and older readers ignore it.
+export const driven = (item) => item.drive !== undefined;
+// Such an item counts as closed only with its record: a result address, or a
+// verified owner message. Anything else is reopened by the next drive pass.
+export const closedProperly = (item) =>
+  ["done", "dropped"].includes(item.status) &&
+  isObject(item.drive?.closed) &&
+  ((item.drive.closed.by === "result" &&
+    item.status === "done" &&
+    oneLine(item.drive.closed.result)) ||
+    (item.drive.closed.by === "owner" &&
+      oneLine(item.drive.closed.msg_id) &&
+      oneLine(item.drive.closed.author)));
+function validDrive(drive) {
+  return (
+    isObject(drive) &&
+    oneLine(drive.prompt) &&
+    oneLine(drive.result_file) &&
+    oneLine(drive.model) &&
+    (drive.cwd === undefined || oneLine(drive.cwd)) &&
+    (drive.run === null ||
+      (isObject(drive.run) &&
+        Number.isInteger(drive.run.attempts) &&
+        drive.run.attempts >= 0 &&
+        validDate(drive.run.started_at) &&
+        (drive.run.ended_at === null || validDate(drive.run.ended_at)))) &&
+    (drive.closed === null || isObject(drive.closed)) &&
+    isObject(drive.alerts) &&
+    Object.values(drive.alerts).every(validDate)
+  );
+}
 export function validateLedger(ledger, role) {
   if (
     !ledger ||
@@ -116,7 +154,8 @@ export function validateLedger(ledger, role) {
         (!item.worker ||
           typeof item.worker.done_file !== "string" ||
           typeof item.worker.name !== "string" ||
-          typeof item.worker.result !== "string"))
+          typeof item.worker.result !== "string")) ||
+      (driven(item) && !validDrive(item.drive))
     )
       throw new Error("Invalid ledger item");
     ids.add(item.id);
@@ -156,7 +195,8 @@ export function parseArgs(args) {
   const opts = {};
   const positional = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i].startsWith("--")) {
+    if (args[i] === "--dry") opts.dry = true;
+    else if (args[i].startsWith("--")) {
       const key = args[i].slice(2);
       if (!args[i + 1] || args[i + 1].startsWith("--"))
         throw new Error(`Missing --${key} value`);
@@ -165,12 +205,17 @@ export function parseArgs(args) {
   }
   return { opts, positional };
 }
-export async function main(args = process.argv.slice(2), { runner, now, clock = now === undefined ? Date.now : () => now, warn = console.warn } = {}) {
+export async function main(args = process.argv.slice(2), { runner, now, clock = now === undefined ? Date.now : () => now, warn = console.warn, fetchImpl, env = process.env, sleep, freeGb } = {}) {
   const {
     opts: o,
     positional: [command, id],
   } = parseArgs(args);
   const root = path.resolve(o.root || process.cwd());
+  if (command === "drive") {
+    // One pass over every configured role: start workers for overdue items that carry an instruction.
+    const driveConfig = JSON.parse(await readFile(o.config ? path.resolve(root, o.config) : path.join(root, "config/work-ledger.json"), "utf8"));
+    return (await import("./drive.mjs")).tick({ root, config: driveConfig, now: clock(), dry: o.dry === true, env, freeGb });
+  }
   const role = safeName(o.role);
   if (command === "list") {
     const l = await readLedger(root, role);
@@ -192,7 +237,33 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
   } catch (error) {
     if (error.code !== "ENOENT" || o.config) throw error;
   }
-  const result = await changeLedger(root, role, (l) => {
+  const instructed = Boolean(o.prompt || o["result-file"] || o.model);
+  const drive =
+    ["adopt", "start", "attach", "confirm"].includes(command) || (command === "add" && instructed)
+      ? await import("./drive.mjs")
+      : null;
+  const find = (l) => {
+    const item = l.items.find((i) => i.id === (id || o.id));
+    if (!item) throw new Error("Unknown item");
+    return item;
+  };
+  const close = (item, status, record) => {
+    if (closedProperly(item)) throw new Error("Item is already closed");
+    const at = new Date(clock()).toISOString();
+    item.status = status;
+    item.drive.closed = { ...record, at };
+    item.checked_at = at;
+  };
+  let ownerRecord;
+  if (command === "confirm") {
+    if (!["done", "dropped"].includes(o.as ?? "dropped")) throw new Error("--as must be done or dropped");
+    const target = find(await readLedger(root, role));
+    if (!driven(target)) throw new Error("confirm requires an item with an instruction file");
+    // The messenger is read before the ledger lock is taken.
+    ownerRecord = await drive.verifyOwner({ config, item: target, channel: o.channel, msgId: o["msg-id"], fetchImpl, env, sleep });
+  }
+  let startedItem;
+  const result = await changeLedger(root, role, async (l) => {
     if (l.report.every_min === 0 && roleConfig?.report) {
       l.report.every_min = roleConfig.report.every_min;
       l.report.channel = roleConfig.report.channel;
@@ -209,6 +280,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
         !(o["worker-name"] && o.result && o["done-file"])
       )
         throw new Error("Worker requires --worker-name --result --done-file");
+      const driveFields = drive ? await drive.register({ root, config, role, ledger: l, opts: o, now: clock() }) : undefined;
       l.items.push({
         id: itemId,
         title: o.title,
@@ -225,6 +297,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
           : null,
         checked_at: null,
         note: o.note || "",
+        ...(driveFields ? { drive: driveFields } : {}),
       });
       return itemId;
     }
@@ -241,10 +314,45 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       l.report.last_at = new Date().toISOString();
       return "보고 기록";
     }
-    if (!["done", "drop", "touch", "due"].includes(command))
-      throw new Error("Commands: add due done drop touch report list");
-    const item = l.items.find((i) => i.id === (id || o.id));
-    if (!item) throw new Error("Unknown item");
+    if (!["done", "drop", "touch", "due", "adopt", "start", "attach", "confirm"].includes(command))
+      throw new Error("Commands: add due done drop touch report list adopt start attach confirm drive");
+    const item = find(l);
+    if (command === "adopt") {
+      if (driven(item)) throw new Error("Item already has an instruction file");
+      if (item.status !== "open") throw new Error("adopt requires an open item");
+      item.drive = await drive.register({ root, config, role, ledger: l, opts: o, now: clock() });
+      return item.id;
+    }
+    if (command === "start") {
+      const text = await drive.start({ root, config, role, item, now: clock(), env, freeGb });
+      startedItem = item;
+      return text;
+    }
+    if (command === "attach") return drive.attach(item, o.pid, clock());
+    if (command === "confirm") {
+      if (!driven(item)) throw new Error("confirm requires an item with an instruction file");
+      close(item, o.as ?? "dropped", { by: "owner", ...ownerRecord });
+      if (o.reason) item.note = o.reason;
+      return item.id;
+    }
+    // An item with an instruction closes only on a result address or an owner confirmation.
+    if (driven(item) && command === "drop")
+      throw new Error("drop is not available for an item with an instruction file. Close with: done <id> --result <file or URL>, or confirm <id> --channel <id> --msg-id <id> (owner confirmation)");
+    if (driven(item) && command === "done") {
+      if (!oneLine(o.result)) throw new Error("done requires --result <file or URL> for an item with an instruction file");
+      let address = o.result;
+      if (!/^https?:\/\/\S+$/.test(address)) {
+        address = path.resolve(root, address);
+        const info = await stat(address).catch(() => null);
+        if (!info?.isFile() || info.size === 0) throw new Error(`Result file is missing or empty: ${address}`);
+      }
+      close(item, "done", { by: "result", result: address });
+      if (o.reason) item.note = o.reason;
+      return item.id;
+    }
+    // Its due time is what starts the worker, so a command cannot push it away.
+    if (driven(item) && command === "due")
+      throw new Error("due is not available for an item with an instruction file. Close it (done --result or confirm) and register the new due time as a new item");
     if (command === "drop" && !o.reason?.trim())
       throw new Error("drop requires --reason");
     if (command === "due") {
@@ -255,8 +363,12 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
     else item.status = command === "done" ? "done" : "dropped";
     if (o.reason) item.note = o.reason;
     return item.id;
+  }).catch((error) => {
+    // A worker whose run could not be recorded would be started a second time.
+    if (startedItem) try { process.kill(-startedItem.drive.run.pid, "SIGKILL"); } catch { /* already gone */ }
+    throw error;
   });
-  if (["add", "due", "done", "drop"].includes(command) && config.due_timer?.enabled === true) {
+  if (["add", "due", "done", "drop", "confirm"].includes(command) && config.due_timer?.enabled === true) {
     try {
       const { reconcileCurrent } = await import("./due-timer.mjs");
       const warnings = await reconcileCurrent({ root, config, roles: [role], clock, runner, configPath: o.config ? configFile : undefined });
@@ -274,6 +386,7 @@ if (
       {
         console.log(typeof value === "string" ? value : JSON.stringify(value));
         const { opts, positional } = parseArgs(process.argv.slice(2));
+        if (positional[0] === "drive" && value.errors.length) process.exitCode = 1;
         if (positional[0] === "add" && validDate(opts.due))
           console.log(`지금부터 ${Math.round((Date.parse(opts.due) - Date.now()) / 60000)}분 뒤`);
       },

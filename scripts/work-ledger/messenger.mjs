@@ -207,6 +207,22 @@ export function createAdapter(
       });
       return messages;
     },
+    // One message by id, with the same time limit and 429 handling as channel reads.
+    async message(channel, messageId) {
+      const token = env[provider.token_env || "DISCORD_BOT_TOKEN"];
+      if (!token)
+        throw new Error("Messenger token environment variable is missing");
+      const response = await request(
+        new URL(`https://discord.com/api/v10/channels/${encodeURIComponent(channel)}/messages/${encodeURIComponent(messageId)}`),
+        { headers: { Authorization: `Bot ${token}` } },
+      );
+      if (!response.ok) {
+        const error = new Error(`Discord HTTP ${response.status}; body: ${await readErrorBody(response)}`);
+        error.status = response.status;
+        throw error;
+      }
+      return response.json();
+    },
     async threads(channel, channelMessages = [], options = {}) {
       const token = env[provider.token_env || "DISCORD_BOT_TOKEN"];
       if (!token)
