@@ -15,8 +15,8 @@ PC 미확인. systemd 버전, Linger, 절전 복귀 후 달력 타이머와 Node
 
 ## ③ 작업 감시
 
-- 서버의 `/home/nextain/minho/alpha-adk/.agents/scripts/work-watch.mjs`는 `TriggeredBy` 속성이나 기존 기록이 있으면 타이머 서비스로 분류해 제외한다(1606행). 하지만 같은 파일에는 수거된 서비스의 타이머 역방향 관계를 확인하는 `timerForService`가 없다.
-- `/home/nextain/work/alpha-wwtimer`의 `git rev-parse HEAD` → `2c3b31fcb152ecfb55da3cafd627998351cc66f1`; 그 파일 1590~1601행은 `TriggeredBy`가 사라진 서비스에 대해 타이머의 `Triggers`가 해당 서비스와 정확히 일치하는지 확인한다.
+- 서버 체크아웃의 `.agents/scripts/work-watch.mjs`는 `TriggeredBy` 속성이나 기존 기록이 있으면 타이머 서비스로 분류해 제외한다(1606행). 하지만 같은 파일에는 수거된 서비스의 타이머 역방향 관계를 확인하는 `timerForService`가 없다.
+- 별도 작업 체크아웃(`alpha-wwtimer`)의 `git rev-parse HEAD` → `2c3b31fcb152ecfb55da3cafd627998351cc66f1`; 그 파일 1590~1601행은 `TriggeredBy`가 사라진 서비스에 대해 타이머의 `Triggers`가 해당 서비스와 정확히 일치하는지 확인한다.
 - 서버 체크아웃에서 `git merge-base --is-ancestor 2c3b31fcb HEAD`의 종료 값은 1이다. 위 비교는 현재 파일에 해당 보완이 없음을 보여 주지만 실행 중인 프로세스의 코드나 실제 깨움 발생은 확인하지 않았다. 따라서 수거된 `adk-due-*` 서비스가 작업 완료 깨움을 낼 위험이 남으며 W4 전에 운영 측에서 확인하고 해결해야 한다.
 
 ## ④ 대시보드
