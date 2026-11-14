@@ -49,6 +49,21 @@ export function validateConfig(config) {
   return config;
 }
 
+// Shared Discord transport used by watchers; callers supply their own durable intent policy.
+export function createDiscordApi(fetchImpl, token) {
+  return async (path, body) => {
+    let response;
+    try { response = await fetchImpl(`https://discord.com/api/v10${path}`, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15000) }); }
+    catch { const error = new Error('Discord transport failure'); error.uncertain = !!body; throw error; }
+    if (!response.ok) { const error = new Error(`Discord HTTP ${response.status}`); error.uncertain = !!body && response.status >= 500; throw error; }
+    try { return await response.json(); }
+    catch { const error = new Error('Discord invalid JSON'); error.uncertain = !!body; throw error; }
+  };
+}
+export async function postDiscord(api, { channelId, content, mentions, nonce }) {
+  return api(`/channels/${channelId}/messages`, { content, allowed_mentions: { parse: [], users: mentions }, nonce, enforce_nonce: true });
+}
+
 export async function runWatch(config, { fetchImpl = fetch, token, dry = false, now = Date.now(), log = event => console.log(JSON.stringify(event)) } = {}) {
   validateConfig(config);
   if (!token) throw new Error('configured token environment variable is empty');
@@ -73,14 +88,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
       await writeFile(temporary, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
       await rename(temporary, stateFile);
     };
-    const api = async (path, body) => {
-      let response;
-      try { response = await fetchImpl(`https://discord.com/api/v10${path}`, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15000) }); }
-      catch { const error = new Error('Discord transport failure'); error.uncertain = !!body; throw error; }
-      if (!response.ok) { const error = new Error(`Discord HTTP ${response.status}`); error.uncertain = !!body && response.status >= 500; throw error; }
-      try { return await response.json(); }
-      catch { const error = new Error('Discord invalid JSON'); error.uncertain = !!body; throw error; }
-    };
+    const api = createDiscordApi(fetchImpl, token);
     const send = async (holder, key, channelId, content, mentions) => {
       const existing = holder[key];
       if (existing?.status === 'confirmed' || existing?.status === 'intent' || existing?.status === 'uncertain') {
@@ -91,7 +99,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
       holder[key] = { status: 'intent', at: now };
       await save();
       try {
-        const receipt = await api(`/channels/${channelId}/messages`, { content, allowed_mentions: { parse: [], users: mentions }, nonce: fingerprint(key), enforce_nonce: true });
+        const receipt = await postDiscord(api, { channelId, content, mentions, nonce: fingerprint(key) });
         if (!receipt.id) { const error = new Error('Discord missing send receipt'); error.uncertain = true; throw error; }
         holder[key] = { status: 'confirmed', at: now, messageId: receipt.id };
         emit('send', 'confirmed', { key: fingerprint(key) });

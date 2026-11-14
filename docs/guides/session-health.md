@@ -1,5 +1,9 @@
 # Session health observation
 
+For patterns in the work itself, see [session audit](session-audit.md).
+Session health observes availability; session audit evaluates review activity,
+priorities and other work signals.
+
 Run one local observer per instance every five minutes. This produces one private
 Markdown status sheet for all configured roles. It observes evidence; a running AI
 or a recent commit does not establish task correctness. Start with the
