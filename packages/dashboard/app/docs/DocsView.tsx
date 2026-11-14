@@ -56,6 +56,7 @@ import { FolderGrid } from "./FolderGrid"
 import { FileView } from "./FileView"
 import { DocEditor } from "./DocEditor"
 import { NotesBanner, NotesPanel } from "./NotesPanel"
+import { ShortLinkButton } from "./ShortLinkButton"
 
 export type TreeNode = DocTreeNode
 
@@ -940,6 +941,7 @@ export function DocsView({
                                 {starError && (
                                   <span className="text-xs text-amber-400 font-normal">{starError}</span>
                                 )}
+                                {currentSource && currentPath && <ShortLinkButton source={currentSource} path={currentPath} />}
                               </div>
                             </div>
 
