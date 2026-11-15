@@ -5,12 +5,20 @@ import { afterEach, describe, expect, it } from "vitest"
 import { getApiKey, getProvider, loadLLMConfig } from "./index.js"
 
 const originalEnv = { ...process.env }
+const createdDirs: string[] = []
 
-afterEach(() => { process.env = { ...originalEnv } })
+afterEach(() => {
+  process.env = { ...originalEnv }
+  while (createdDirs.length) {
+    const dir = createdDirs.pop()!
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 describe("Naia account defaults", () => {
   it("works from a fresh clone with NAIA_KEY", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "naia-anyllm-"))
+    createdDirs.push(root)
     process.env.NAIA_KEY = "gw-test-only"
     const config = loadLLMConfig(root)
     const provider = getProvider(config)
@@ -21,6 +29,7 @@ describe("Naia account defaults", () => {
 
   it("keeps built-in providers when a local config overrides one provider", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "naia-anyllm-"))
+    createdDirs.push(root)
     const dir = path.join(root, ".agents", "context")
     fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(path.join(dir, "llm-config.yaml"), "providers:\n  naia:\n    endpoint: https://example.test/v1\n")

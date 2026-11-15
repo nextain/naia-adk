@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { rmSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -167,6 +168,7 @@ assert.equal(
 );
 
 const dir = await mkdtemp(path.join(os.tmpdir(), "review-invoke-"));
+process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch {} });
 const fake = path.join(dir, "fake.mjs");
 await writeFile(fake, `#!/usr/bin/env node\nlet input=""; process.stdin.on("data", c => input += c); process.stdin.on("end", () => { if (input !== "ONE-SHOT") process.exit(2); console.log(${JSON.stringify(validReview)}); });\n`, { mode: 0o700 });
 await invoke({ tool:"codex", repo:dir, prompt:"ONE-SHOT", atomIds:["ATOM-1"], startupMs:1000, idleMs:1000, totalMs:2000, executable:fake });

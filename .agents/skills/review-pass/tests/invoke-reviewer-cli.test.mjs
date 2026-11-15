@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { rmSync } from "node:fs";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const runner = path.resolve(here, "../scripts/invoke-reviewer.mjs");
 const dir = await mkdtemp(path.join(os.tmpdir(), "review-cli-"));
+process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch {} });
 const base = path.join(dir, "base.md");
 const atoms = path.join(dir, "atoms.json");
 const delta = path.join(dir, "delta.md");

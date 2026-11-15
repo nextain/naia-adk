@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isIP } from 'node:net';
 import { parseLedgerYaml, validateWorkLedger, serializeLedgerYaml } from './ledger.mjs';
+import { acquirePidLock } from './pid-lock.mjs';
 const run = promisify(execFile);
 const object = v => v && typeof v === 'object' && !Array.isArray(v);
 const string = (v, label) => { if (typeof v !== 'string' || !v.trim() || /[\x00-\x1f\x7f]/.test(v)) throw Error(`invalid ${label}`); return v; };
@@ -102,9 +103,8 @@ export const matches = (a,assets) => a.affected.some(p=>assets.some(q=>p.ecosyst
 export async function consume(c,{dry=false,now=Date.now()}={}) {
   const advisories=await readAdvisories(c), assets=await collectAssets(c);
   const lockPath=`${c.workLedger}.lock`; let lock;
-  if(!dry) lock=await open(lockPath,'wx',0o600);
+  if(!dry) lock=await acquirePidLock(lockPath,{createParent:false});
   try {
-    if(lock) await lock.writeFile(JSON.stringify({pid:process.pid,started:now}));
     const meta=await lstat(c.workLedger); if(!meta.isFile() || meta.isSymbolicLink()) throw Error('regular work ledger required');
     const doc=parseLedgerYaml(await readFile(c.workLedger,'utf8')); validateWorkLedger(doc,now);
     const results=[]; const time=new Date(now).toISOString();
@@ -119,5 +119,5 @@ export async function consume(c,{dry=false,now=Date.now()}={}) {
       try { h=await open(tmp,'wx',meta.mode & 0o777); await h.writeFile(serializeLedgerYaml(doc)); await h.close(); h=null; await rename(tmp,c.workLedger); } finally { await h?.close(); await unlink(tmp).catch(e=>{if(e.code!=='ENOENT') throw e;}); }
     }
     return results;
-  } finally { if(lock) { await lock.close(); await unlink(lockPath); } }
+  } finally { if(lock) await lock.release(); }
 }

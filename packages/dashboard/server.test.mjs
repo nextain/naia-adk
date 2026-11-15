@@ -183,9 +183,14 @@ describe("문서 짧은 주소", () => {
   const tabFor = (source, p) => (source === "adk" && p.startsWith("developer/") ? "developer" : undefined)
   // 명령 시험의 바깥 주소. 아무것도 듣지 않는 이 PC 포트라서 등록 요청이 바로 실패하고 표 파일에 직접 쓴다.
   const OFFLINE_BASE = "http://127.0.0.1:9"
+  const createdDirs = []
+  test.after(() => {
+    for (const dir of createdDirs) fs.rmSync(dir, { recursive: true, force: true })
+  })
 
   function tmpTable() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "short-links-test-"))
+    createdDirs.push(dir)
     return path.join(dir, "short-links.json")
   }
 
@@ -443,6 +448,7 @@ describe("문서 짧은 주소", () => {
 
   it("저장 실패 500 응답에 서버 경로를 싣지 않고 임시 파일을 남기지 않는다", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "short-links-test-"))
+    createdDirs.push(dir)
     const asDir = path.join(dir, "table.json")
     fs.mkdirSync(asDir)
     await withServer(asDir, async ({ port }) => {

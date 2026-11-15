@@ -99,7 +99,96 @@ test("3층: 허용 경로는 통과한다(지시서·결과, 임시 파일, 진�
 	passed(bash(`cd ${repo} && git status && cat src/app.js && grep -n a src/app.js`));
 	passed(bash(`cd ${repo} && git commit -m x`));
 	passed(bash(`sed -n 1,5p ${repo}/src/app.js`));
-	passed(bash(`claude -p "일" > ${work}/out.log 2>&1 &`));
+	passed(bash(`node scripts/worker-runner/spawn-worker.mjs --id job1 --role minho --work-dir ${work} --watch-dir ${work} --result-file ${work}/result.md -- claude -p "일"`));
+	passed(bash(`claude -p "일" > ${work}/out.log 2>&1`));
+});
+
+test("감시 밖 일꾼 직접 분리 실행 차단: nohup·setsid·& 로 agy·codex·claude -p·muse exec 띄우기는 막히고 표준 대본을 안내한다", () => {
+	for (const cmd of [
+		`claude -p "일" > ${work}/out.log 2>&1 &`,
+		`nohup agy --prompt "일" > ${work}/out.log 2>&1 &`,
+		`setsid codex exec "일" > ${work}/out.log 2>&1`,
+		`nohup muse exec "일" &`,
+	]) {
+		const r = bash(cmd);
+		blocked(r);
+		assert.match(r.reason, /spawn-worker\.mjs/);
+		const rWorker = bash(cmd, { cwd: repo });
+		blocked(rWorker);
+		assert.match(rWorker.reason, /spawn-worker\.mjs/);
+	}
+});
+
+test("차단 1 일반화: systemd-run·at/batch·daemonize·disown·setsid 긴 옵션·부분 셸·bash -c·opencode run 차단 및 표준 진입점 2종·정상 명령 허용", () => {
+	const { checkDetachedWorkerCommand } = require("./lib/effective-argv.js");
+	const jobScript = path.join(work, "at-job.sh");
+	put(jobScript, "#!/bin/sh\ncodex exec 'from at file'\n");
+	const adapterFile = path.join(work, "bin/worker-runner-adapter.sh");
+	put(adapterFile, "#!/bin/sh\necho adapter\n");
+	fs.chmodSync(adapterFile, 0o755);
+
+	const mustBlock = [
+		`systemd-run --user --unit=raw-worker codex exec "일"`,
+		`systemd-run --user --collect node scripts/worker-runner/cli.mjs run --id w1 --work-dir ${work} -- claude -p "일"`,
+		`echo 'codex exec "일"' | at now`,
+		`at now + 1 minute <<'EOF'\nclaude --print "일"\nEOF`,
+		`batch <<< 'muse exec "일"'`,
+		`at -f ${jobScript} now`,
+		`daemonize /usr/local/bin/codex exec "일"`,
+		`daemon --name=w1 -- opencode run "일"`,
+		`codex exec "일" & disown`,
+		`coproc claude -p "일"`,
+		`setsid --fork agy "일"`,
+		`setsid --wait opencode run "일"`,
+		`sudo -b codex exec "일"`,
+		`sudo -E nohup claude -p "일" &`,
+		`( cd ${work} && codex exec "일" ) > ${work}/out.log 2>&1 &`,
+		`{ opencode run "일"; } > ${work}/out.log 2>&1 &`,
+		`codex exec "일" | tee ${work}/out.log &`,
+		`bash -euo pipefail -c 'nohup codex exec "일" &'`,
+		`nohup sh -c 'claude -p "일"' &`,
+		`echo 'opencode run "일" &' | sh`,
+		`nohup /tmp/unconfigured/worker-runner-adapter.sh job1 &`,
+	];
+	for (const cmd of mustBlock) {
+		const hit = checkDetachedWorkerCommand(cmd, { cwd: adk, env: cleanEnv() });
+		assert.ok(hit && hit.reason, `expected checkDetachedWorkerCommand to block: ${cmd}`);
+		assert.match(hit.reason, /spawn-worker\.mjs/);
+		const hookRes = bash(cmd);
+		blocked(hookRes);
+		assert.match(hookRes.reason, /spawn-worker\.mjs/);
+	}
+
+	// 허용: 시험 문자열·grep 패턴·표준 진입점 1(spawn-worker.mjs)·표준 진입점 2(설정된 어댑터 경로)·포그라운드 claude -p 짧은 호출
+	const mustAllow = [
+		`grep -rn "nohup codex\\|setsid --fork\\|systemd-run" ${repo}/src`,
+		`echo "nohup codex exec test &"`,
+		`node --test scripts/watch-wake-faults.test.mjs`,
+		`claude -p "2+2만 답해"`,
+		`claude --print "한 줄 요약"`,
+		`node scripts/worker-runner/spawn-worker.mjs --id job1 --role minho --work-dir ${work} --watch-dir ${work} --result-file ${work}/result.md -- opencode run "일"`,
+	];
+	for (const cmd of mustAllow) {
+		assert.equal(checkDetachedWorkerCommand(cmd, { cwd: adk, env: cleanEnv() }), null, `expected allow: ${cmd}`);
+		passed(bash(cmd));
+	}
+
+	// 표준 진입점 2: 설정된 서버 표준 어댑터 대본 경로만 허용하고 다른 경로의 동명 대본은 막는다.
+	assert.equal(
+		checkDetachedWorkerCommand(`nohup ${adapterFile} job1 &`, {
+			cwd: adk,
+			env: cleanEnv(),
+			standardAdapterPath: adapterFile,
+		}),
+		null,
+	);
+	assert.ok(
+		checkDetachedWorkerCommand(`nohup /srv/other/worker-runner-adapter.sh job1 &`, {
+			cwd: adk,
+			env: cleanEnv(),
+			standardAdapterPath: adapterFile,
+		}),
+	);
 });
 
 test("자기 보호: 역할 표지·예외 기록·훅 등록·protect 경로는 3층이 못 바꾼다", () => {

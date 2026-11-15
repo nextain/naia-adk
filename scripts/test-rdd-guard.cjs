@@ -1,7 +1,9 @@
 const fs=require("fs"),path=require("path"),os=require("os"),cp=require("crypto");
 const P=require(process.argv[2]); // policy path
 let pass=0,fail=0;
-function mk(){const d=fs.mkdtempSync(path.join(os.tmpdir(),"rdd-"));return d;}
+const createdDirs=[];
+function mk(){const d=fs.mkdtempSync(path.join(os.tmpdir(),"rdd-"));createdDirs.push(d);return d;}
+process.on("exit",()=>{for(const d of createdDirs){try{fs.rmSync(d,{recursive:true,force:true});}catch{}}});
 function sha(s){return cp.createHash("sha256").update(s).digest("hex").slice(0,16);}
 function setup(d,{ledger,stampFresh,stampMatch}={}){
   const rd=path.join(d,".agents","research","prog");fs.mkdirSync(rd,{recursive:true});
