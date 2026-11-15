@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +11,17 @@ import {
 	resolveCostLogPath,
 } from "../scripts/invoke-reviewer.mjs";
 
-const frameOk = { runtime_observed: false, frame_assessment: { scope_is_sufficient: true, missing_concerns: [] } };
+const frameOk = {
+	runtime_observed: false,
+	frame_assessment: { scope_is_sufficient: true, missing_concerns: [] },
+	architecture_fit_assessment: {
+		fit_is_sufficient: true,
+		original_request: "Review target carries original request aligned with parent ADK architecture",
+		parent_structure: "naia-adk review-pass skill and shared deploy-plan architecture fit gate",
+		acceptance_rationale: "Extends existing review-pass stage validation via shared architectureFitProblems rather than adding a new hook",
+		missing_or_invalid_reasons: [],
+	},
+};
 const validReview = JSON.stringify({ verdict: "CLEAN", coverage: [{ atom_id: "ATOM-1", status: "COVERED" }], findings: [], ...frameOk });
 
 // 1. fixture-based agy usage extraction
@@ -68,6 +79,7 @@ assert.equal(claudeUsage.usage.cost_usd, 0.0425);
 // 3. logging failure does not alter invocation result or exit code
 const impossibleLogPath = "/dev/null/forbidden/cost.jsonl";
 const logFailDir = await mkdtemp(path.join(os.tmpdir(), "review-cost-fail-"));
+process.on("exit", () => { try { rmSync(logFailDir, { recursive: true, force: true }); } catch {} });
 const fakeSuccess = path.join(logFailDir, "fake-success.mjs");
 await writeFile(fakeSuccess, `#!/usr/bin/env node\nlet input=""; process.stdin.on("data", c => input += c); process.stdin.on("end", () => { console.log(${JSON.stringify(validReview)}); });\n`, { mode: 0o700 });
 const invResult = await invoke({
@@ -159,6 +171,7 @@ const entryWithUsage = createCostLogEntry({
 
 // 5. every invoke() path writes exactly one log line
 const testLogDir = await mkdtemp(path.join(os.tmpdir(), "review-cost-direct-"));
+process.on("exit", () => { try { rmSync(testLogDir, { recursive: true, force: true }); } catch {} });
 const singleLineSuccessLog = path.join(testLogDir, "direct-success-cost.jsonl");
 await invoke({
 	tool: "codex",

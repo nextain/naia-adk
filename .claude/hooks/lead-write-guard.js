@@ -12,7 +12,7 @@
 const fs = require("fs");
 const path = require("path");
 const { isFileMutationTool, isShellTool } = require("./tool-names.js");
-const { effectiveCommands, writtenPaths, interpreterProgram, gitClauseDirectory, resolvePathWord, SHELLS, SHELL_ALT } = require("./lib/effective-argv.js");
+const { effectiveCommands, writtenPaths, interpreterProgram, gitClauseDirectory, resolvePathWord, SHELLS, SHELL_ALT, checkDetachedWorkerCommand } = require("./lib/effective-argv.js");
 const SHEBANG_SHELL_RE = new RegExp(`^#!\\s*/.*\\b(?:${SHELL_ALT})\\b`);
 const guard = require("./lib/lead-guard.js");
 
@@ -32,8 +32,8 @@ function guideMessage(target, rule, lead) {
 	}
 	const extra = workerGuide ? ` (다른 도구 예시는 ${workerGuide})` : "";
 	return `[3층 쓰기 막기] 3층은 저장소 코드를 직접 쓰지 않습니다(${target}). 2층 일꾼에게 지시서로 맡기십시오.\n`
-		+ `1) ${workDir}/<일>/prompt.md 에 지시서를 씁니다(허용). 2) 한 줄로 띄웁니다: `
-		+ `\`claude -p --model sonnet "$(cat ${workDir}/<일>/prompt.md)" > ${workDir}/<일>/out.log 2>&1 &\`${extra}. `
+		+ `1) ${workDir}/<일>/prompt.md 에 지시서를 씁니다(허용). 2) 표준 대본으로 띄웁니다(work-watch 자동 등록): `
+		+ `\`node scripts/worker-runner/spawn-worker.mjs --id <일> --role <역할> --work-dir ${workDir}/<일> --watch-dir ${workDir}/<일> --result-file ${workDir}/<일>/result.md -- claude -p --model sonnet "$(cat ${workDir}/<일>/prompt.md)"\`${extra}. `
 		+ "3) 결과 파일을 읽고 평가합니다.\n"
 		+ `허용 경로: 저장소 밖 파일, docs/common/<역할>/, docs/common/team/now/<역할>.md, .agents/progress/, .agents/work/. 긴급 예외는 ${approverLabel} 허락이 있어야 하고 3층이 열 수 없습니다.`;
 }
@@ -552,10 +552,23 @@ function main() {
 	const tool = data.tool_name;
 	const isShell = isShellTool(tool);
 	if (!isShell && !isFileMutationTool(tool) && !/^(multiedit)$/i.test(String(tool).split(/[.:/]/).pop())) return;
+	const input = data.tool_input || {};
+	if (isShell) {
+		const rawCmd = String(input.command || input.cmd || "");
+		const hookCwd = typeof data.cwd === "string" ? data.cwd : process.cwd();
+		const detachedHit = checkDetachedWorkerCommand(rawCmd, { cwd: hookCwd, env: process.env });
+		if (detachedHit) {
+			const leadCheck = guard.leadSession(data);
+			if (leadCheck.lead) {
+				block(detachedHit.reason, { role: leadCheck.role, session_id: data.session_id, tool, rule: "detached-worker", command: rawCmd.slice(0, 300) });
+			}
+			process.stdout.write(JSON.stringify({ decision: "block", reason: detachedHit.reason }));
+			process.exit(0);
+		}
+	}
 	const lead = guard.leadSession(data);
 	if (!lead.lead) return;
 	const { approverLabel } = guard.guardMeta(lead);
-	const input = data.tool_input || {};
 	const cwd = typeof data.cwd === "string" ? data.cwd : process.cwd();
 	const targets = [];
 	let command = "";

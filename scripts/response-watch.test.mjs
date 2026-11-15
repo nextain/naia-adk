@@ -1,15 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdtemp, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { runWatch, validateConfig } from './response-watch.mjs';
 
-const base = resolve(process.env.RESPONSE_WATCH_TEST_TMP ?? 'tmp');
+const explicitBase = process.env.RESPONSE_WATCH_TEST_TMP;
+const base = explicitBase ? resolve(explicitBase) : await mkdtemp(join(tmpdir(), 'response-watch-test-'));
 await mkdir(base, { recursive: true });
+const createdDirs = [];
+test.after(async () => {
+  await Promise.all(createdDirs.map(d => rm(d, { recursive: true, force: true })));
+  if (!explicitBase) await rm(base, { recursive: true, force: true });
+});
 const epoch = Date.parse('2026-01-01T00:00:00Z');
 const human = (id, extra = {}) => ({ id: String(id), type: 0, author: { id: '40' }, timestamp: new Date(epoch).toISOString(), mentions: [{ id: '20', bot: true }], ...extra });
 async function fixture() {
   const directory = await mkdtemp(`${base}/response-watch-`);
+  createdDirs.push(directory);
   const config = { stateFile: `${directory}/state.json`, guilds: [{ id: '10', defaultBotId: '20', channels: [{ id: '30', mode: 'all-human' }], excludeChannelIds: [], nudgeChannelId: '31', escalation: { channelId: '32', userId: '41' } }] };
   const remote = { messages: [human(1)], posts: [], events: [], siteOk: true, failRead: false, failPost: false, uncertain: false };
   const fetchImpl = async (url, options = {}) => {

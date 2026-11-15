@@ -1,14 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, utimes } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { runHealth, compareRules, compactEvidence, collectWindow, validateConfig } from './session-health.mjs';
-const root = process.env.SESSION_HEALTH_TEST_TMP || join((await import('node:os')).tmpdir(), 'session-health-test');
+const ownTmpRoot = !process.env.SESSION_HEALTH_TEST_TMP;
+const root = process.env.SESSION_HEALTH_TEST_TMP || await mkdtemp(join(tmpdir(), 'session-health-test-'));
+const createdDirs = [];
+test.after(async () => {
+  await Promise.all(createdDirs.map(d => rm(d, { recursive: true, force: true })));
+  if (ownTmpRoot) await rm(root, { recursive: true, force: true });
+});
 const now = Date.parse('2030-01-01T12:00:00Z');
 async function fixture() {
   await mkdir(root, { recursive: true });
   const dir = await mkdtemp(join(root, 'health-')), repo = join(dir, 'repo');
+  createdDirs.push(dir);
   await mkdir(join(repo, '.agents/context'), { recursive: true }); await mkdir(join(repo, '.claude'));
   for (const [name, text] of [['AGENTS.md', 'rules\n'], ['.agents/context/agents-rules.json', '{}'], ['.claude/settings.json', '{"hooks":{}}'], ['work.md', '- in progress: task\n']]) await writeFile(join(repo, name), text);
   const git = args => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid', GIT_AUTHOR_DATE: '2029-12-30T00:00:00Z', GIT_COMMITTER_DATE: '2029-12-30T00:00:00Z' } }).trim();
@@ -46,6 +54,7 @@ test('tmux descendant AI is detected behind shell and output is captured', async
 async function ledgerFixture() {
   const f = await fixture();
   f.c.roles[0].workFiles = [];
+  f.c.roles[0].wakeDir = join(f.dir, 'wake');
   f.c.workLedger = join(f.dir, 'work-ledger.yaml');
   f.c.regularSchedule = join(f.dir, 'regular-schedule.yaml');
   f.work = { version: 1, work: [
@@ -145,7 +154,7 @@ test('first valid work ledger gets its own silent baseline after a read failure'
 });
 test('multiple roles remain in one contiguous Markdown table with schedule details', async () => {
   const f = await ledgerFixture();
-  f.c.roles.push({ ...f.c.roles[0], id: 'role-b', botId: '456' });
+  f.c.roles.push({ ...f.c.roles[0], id: 'role-b', botId: '456', wakeDir: join(f.dir, 'wake-b') });
   const { report, rows } = await f.run();
   assert.deepEqual(rows[1].tasks, ['other: Other assignment']);
   assert.ok(!rows[1].anomalies.includes('stalled'));
@@ -360,4 +369,51 @@ test('wait line accepts M/D HH:MM KST and rejects a zero waitMaxHours', async ()
   assert.equal(waitUntil('기다림: x / 다음 확인 1/2 09:00 KST', Date.parse('2026-12-31T10:00:00Z')), Date.parse('2027-01-02T00:00:00Z'));
   assert.equal(waitUntil('- in progress: waiting for review', now), null);
   const f = await fixture(); f.c.waitMaxHours = 0; assert.throws(() => validateConfig(f.c), /positive/);
+});
+
+test('periodic runHealth wires workWatch and watcherUnits by default without extra timers and honors opt-out', async () => {
+  const { registerWorker } = await import('./work-watch.mjs');
+  const f = await fixture();
+  const wakeDir = join(f.dir, 'wake-role-a');
+  const resultFile = join(f.dir, 'worker-result.md');
+  await writeFile(resultFile, '끝: 완료\n');
+  await registerWorker({
+    root: f.repo,
+    id: 'periodic-w1',
+    unit: 'role-a-worker-periodic-w1.service',
+    role: 'role-a',
+    wakeDir,
+    resultFile,
+    watchDirs: [f.dir],
+    stallMinutes: 15,
+    now: now - 120_000,
+  });
+  // overwrite initialResultSize so resultFile looks newly written after registration
+  const regPath = join(f.repo, '.agents/work/work-watch/registry.json');
+  const regDoc = JSON.parse(await readFile(regPath, 'utf8'));
+  regDoc.workers[0].initialResultMtimeMs = null;
+  regDoc.workers[0].initialResultSize = null;
+  await writeFile(regPath, JSON.stringify(regDoc, null, 2));
+
+  const res = await f.run({
+    workWatchUnitProbe: async () => ({ ok: true, loadState: 'loaded', activeState: 'inactive', subState: 'dead', result: 'success', execMainStatus: 0 }),
+    unitProbe: async () => [
+      { unit: 'naia-l4-watch.service', loadState: 'loaded', activeState: 'failed', subState: 'failed', result: 'exit-code', execMainStatus: 1, nRestarts: 0 },
+    ],
+  });
+  assert.ok(res.workWatch);
+  assert.deepEqual(res.workWatch.completed, ['periodic-w1']);
+  assert.ok(res.watcherUnits);
+  assert.equal(res.watcherUnits.wakes.length, 1);
+  assert.match(res.report, /work-watch: checked 1/);
+  assert.match(res.report, /watcher units: naia-l4-watch\.service: failing/);
+
+  // Explicit false disables both
+  f.c.workWatch = false;
+  f.c.watcherUnits = false;
+  const disabled = await f.run({
+    unitProbe: async () => { throw new Error('should not be called when watcherUnits is false'); },
+  });
+  assert.equal(disabled.workWatch, undefined);
+  assert.equal(disabled.watcherUnits, undefined);
 });

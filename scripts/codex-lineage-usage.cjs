@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const os = require("node:os");
 const path = require("node:path");
 const { StringDecoder } = require("node:string_decoder");
+const { acquirePidLockSync } = require("./lib/pid-lock.cjs");
 
 const HARD_MAX_CHILDREN = 8;
 const READ_CHUNK_BYTES = 256 * 1024;
@@ -463,7 +464,7 @@ function reserveLineageSpawn(lineage, policy, tmpRoot, pendingPromptBytes = 0) {
 	const durableRoot = path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "adk-subagent-budget");
 	const target = path.join(tmpRoot || durableRoot, `${root}.json`);
 	const lock = `${target}.lock`;
-	let fd = null;
+	let lockHandle = null;
 	let temporary = null;
 	let temporaryFd = null;
 	let directoryFd = null;
@@ -471,7 +472,7 @@ function reserveLineageSpawn(lineage, policy, tmpRoot, pendingPromptBytes = 0) {
 		const directory = path.dirname(target);
 		fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 		fs.chmodSync(directory, 0o700);
-		fd = fs.openSync(lock, "wx");
+		lockHandle = acquirePidLockSync(lock, { createParent: false });
 		let state = { admitted: 0, promptBytes: 0, policyDigest };
 		if (fs.existsSync(target)) state = JSON.parse(fs.readFileSync(target, "utf8"));
 		if (state.policyDigest !== policyDigest || !Number.isSafeInteger(state.admitted) || state.admitted < 0 || !Number.isSafeInteger(state.promptBytes) || state.promptBytes < 0) throw new Error("counter");
@@ -505,10 +506,8 @@ function reserveLineageSpawn(lineage, policy, tmpRoot, pendingPromptBytes = 0) {
 		if (temporary) {
 			try { fs.unlinkSync(temporary); } catch {}
 		}
-		if (fd !== null) {
-			try { fs.closeSync(fd); } finally {
-				try { fs.unlinkSync(lock); } catch {}
-			}
+		if (lockHandle) {
+			try { lockHandle.release(); } catch {}
 		}
 	}
 }

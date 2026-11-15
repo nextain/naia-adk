@@ -62,8 +62,10 @@
 **자기 보호**(항상 막힘): `.naia-role.json`, `~/.claude/settings*.json`, `~/.claude/hooks`, `.agents/lead-guard/`, 표지의 `lead_guard.protect`.
 
 안내문은 하드코딩 대신 `.naia-role.json` 의 `lead_guard` 설정을 따른다(`work_dir` 기본 `<작업 폴더>`, `worker_guide` 선택, `approver_label` 기본 `승인자`):
-"2층 일꾼에게 지시서로 맡기십시오" + 한 줄 예시
-`claude -p --model sonnet "$(cat <작업 폴더>/<일>/prompt.md)" > <작업 폴더>/<일>/out.log 2>&1 &`.
+"2층 일꾼에게 지시서로 맡기십시오" + 표준 일꾼 실행 대본 예시
+`node scripts/worker-runner/spawn-worker.mjs --id <일> --role <역할> --work-dir <작업 폴더>/<일> --watch-dir <작업 폴더>/<일> --result-file <작업 폴더>/<일>/result.md -- claude -p --model sonnet "$(cat <작업 폴더>/<일>/prompt.md)"`.
+또한 PreToolUse 관문(`.claude/hooks/lead-write-guard.js`, `.agents/hooks/policies/bash.js`, `.codex/hooks/session-contract-gate.cjs`, `.pi/extensions/naia-harness.ts`)은 에이전트 셸에서 일꾼 CLI(`agy`·`codex`·`claude -p`/`--print`·`muse exec`·`opencode run` 등)를 분리 실행(`nohup`, `setsid`/`setsid --fork`, `systemd-run`, `daemonize`, `at`/`batch`, `disown`, 백그라운드 `&`, `( … ) &`/`{ …; } &` 부분 셸, `bash -c`/`sh -c`, `tmux -d`/`send-keys`/`run-shell`, `screen -dm` 등)하는 명령을 가로막고, 허용된 두 표준 진입점(`scripts/worker-runner/spawn-worker.mjs` 또는 설정으로 지정된 서버 표준 어댑터 대본 경로)만 통과시킨다.
+일꾼 지시서(`prompt.md`)에는 고치기 전 [상위 구조 적합 세 칸](./architecture-fit-before-fix.md)(`original_request` 최초 요구 원문 · `parent_structure` 붙는 상위 구조 · `acceptance_rationale` 받아들이는 방식)을 반드시 적는다(`review-pass` planning/development 리뷰가 세 칸 누락·견본·단일 서버만 기술을 차단한다).
 막힘·예외 사용·훅 오류는 `.agents/lead-guard/audit.jsonl` 에 남는다(기기별, git 제외).
 
 ## 비상 길 (긴급 예외)

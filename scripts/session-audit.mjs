@@ -7,6 +7,7 @@ import { createDiscordApi, postDiscord } from './response-watch.mjs';
 import { deliverAudit, deliveryKey, validateDelivery } from './lib/audit-delivery.mjs';
 import { buildBundle, judge, sha256, fixedTemplate, formatText } from './lib/audit-judge.mjs';
 import { recordSchedule } from './schedule-record.mjs';
+import { acquirePidLock } from './lib/pid-lock.mjs';
 
 async function canonical(path) {
   if (typeof path !== 'string' || !path || !isAbsolute(path)) throw Error('absolute audit paths required');
@@ -107,7 +108,7 @@ export async function runAudit({ config, role: roleId, fixture, input, now = Dat
   try {
     if (!dry) {
       await mkdir(dirname(config.stateFile), { recursive: true, mode: 0o700 });
-      lock = await open(`${config.stateFile}.lock`, 'wx', 0o600);
+      lock = await acquirePidLock(`${config.stateFile}.lock`);
     }
     let persisted;
     try { persisted = JSON.parse(await readFile(config.stateFile, 'utf8')); }
@@ -159,7 +160,7 @@ export async function runAudit({ config, role: roleId, fixture, input, now = Dat
     } else await save(delivered.state);
     await atomic(config.reportFile, report);
     return { ...result, ...delivered, report };
-  } finally { if (lock) { await lock.close(); await unlink(`${config.stateFile}.lock`); } }
+  } finally { if (lock) await lock.release(); }
 }
 async function main(args) {
   const get = flag => { const i = args.indexOf(flag); return i < 0 ? undefined : args[i+1]; };

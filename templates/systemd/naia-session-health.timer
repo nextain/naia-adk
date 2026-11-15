@@ -1,0 +1,11 @@
+[Unit]
+Description=Run ADK session health and stalled-card wake check every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+AccuracySec=1s
+Unit=naia-session-health.service
+
+[Install]
+WantedBy=timers.target

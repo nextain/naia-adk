@@ -2,7 +2,7 @@
 // starts its own worker. The role is only notified, in its own wake box.
 // This file holds no ledger of its own: paths, locking, validation and writes
 // all come from ledger.mjs.
-import { mkdir, open, readFile, readdir, stat, statfs, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -18,6 +18,8 @@ import {
   withLock,
 } from "./ledger.mjs";
 import { createAdapter } from "./messenger.mjs";
+import { measureMinFreeGb } from "../lib/disk-free.mjs";
+import { registerWorker } from "../work-watch.mjs";
 
 const CLOSED = ["done", "dropped"];
 const isObject = (value) =>
@@ -134,8 +136,7 @@ async function instructionProblem(file) {
   }
 }
 export async function freeGb(dir) {
-  const info = await statfs(dir);
-  return (Number(info.bavail) * Number(info.bsize)) / 2 ** 30;
+  return measureMinFreeGb([dir]);
 }
 
 // Drive fields for add/adopt. An existing result file is refused in both, so
@@ -170,7 +171,7 @@ export async function register({ root, config, role, ledger, opts, now }) {
 }
 
 const DEFAULT_PREAMBLE =
-  "업무 장부 항목 {id} ({role}): {title}\n결과를 이 파일에 쓴다: {result_file}\n지시서: {prompt}\n";
+  "업무 장부 항목 {id} ({role}): {title}\n결과를 이 파일에 쓴다: {result_file}\n지시서: {prompt}\n고치기 전 지시서·결과에 architecture_fit 세 칸(original_request · parent_structure · acceptance_rationale)을 확인한다(docs/guides/architecture-fit-before-fix.md).\n";
 const fill = (template, values) =>
   template.replace(/\{(\w+)\}/g, (all, key) =>
     Object.hasOwn(values, key) ? values[key] : all,
@@ -232,6 +233,17 @@ async function launch({ root, config, cfg, role, item, now, env }) {
       log,
     };
     delete d.error;
+    await registerWorker({
+      root,
+      env,
+      id: `ledger-${role}-${item.id}`,
+      role,
+      pid: child.pid,
+      watchDirs: [dir, path.dirname(d.result_file)],
+      resultFile: d.result_file,
+      wakeDir: roleWakeDir(root, config, role),
+      now: Date.parse(d.run.started_at),
+    });
     return null;
   } catch (error) {
     d.error = error.message;

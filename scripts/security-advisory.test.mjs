@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parseLedgerYaml, serializeLedgerYaml } from './lib/ledger.mjs';
 import { publish, consume, collectAssets, loadConfig, validateAdvisory, matches } from './lib/security-advisory.mjs';
+const createdDirs = [];
+test.after(async () => { await Promise.all(createdDirs.map(d => rm(d, { recursive: true, force: true }))); });
 const advisory = () => ({schemaVersion:1,id:'CVE-2026-1234',sourceUrl:'https://example.com/advisory',affected:[{ecosystem:'npm',name:'widget',versions:['1.0.0']}],severity:'high',action:'Upgrade the affected package',dueAt:'2026-11-09T00:00:00Z'});
 async function fixture() {
- const dir=await mkdtemp(join(tmpdir(),'advisory-')); const c={shared:{directory:join(dir,'shared')},role:'security-owner',workLedger:join(dir,'work.yaml'),assets:{files:[join(dir,'assets.json')],lockfiles:[],osCommands:[]}};
+ const dir=await mkdtemp(join(tmpdir(),'advisory-')); createdDirs.push(dir); const c={shared:{directory:join(dir,'shared')},role:'security-owner',workLedger:join(dir,'work.yaml'),assets:{files:[join(dir,'assets.json')],lockfiles:[],osCommands:[]}};
  await writeFile(c.workLedger,'version: 1\nwork: []\n'); await writeFile(c.assets.files[0],JSON.stringify({assets:[{ecosystem:'npm',name:'widget',version:'1.0.0'}]})); return {c,dir};
 }
 test('publish immutable IDs, reject duplicates and dry publish makes no directory',async()=>{

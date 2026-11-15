@@ -269,15 +269,18 @@ test("subagent counters are isolated between two roles with the same session id"
 	const other = path.join(base, "other-role");
 	write(path.join(other, ".naia-role.json"), { read: [] });
 	const payload = { tool_name: "Task", tool_input: { prompt: "example" } };
-	for (const dir of [role, other]) write(path.join(dir, ".claude/allow-subagents"), { maxSpawns: 1 });
-	assert.equal((await run("subagent-spawn-guard.js", role, payload, adk)), null);
-	assert.equal((await run("subagent-spawn-guard.js", role, payload, adk))?.decision, "block");
-	assert.equal((await run("subagent-spawn-guard.js", other, payload, adk)), null, "another role has its own budget");
-	assert.equal((await run("subagent-spawn-guard.js", other, payload, adk))?.decision, "block");
+	for (const dir of [role, other]) write(path.join(dir, ".claude/allow-subagents"), { maxConcurrent: 1 });
+	assert.equal((await run("subagent-spawn-guard.js", role, { ...payload, tool_use_id: "role-1" }, adk)), null);
+	assert.equal((await run("subagent-spawn-guard.js", role, { ...payload, tool_use_id: "role-2" }, adk))?.decision, "block");
+	assert.equal((await run("subagent-spawn-guard.js", other, { ...payload, tool_use_id: "other-1" }, adk)), null, "another role has its own budget");
+	assert.equal((await run("subagent-spawn-guard.js", other, { ...payload, tool_use_id: "other-2" }, adk))?.decision, "block");
 	for (const dir of [role, other]) {
 		const state = JSON.parse(fs.readFileSync(path.join(dir, ".claude/subagent-budget/profile-test.json"), "utf8"));
-		assert.equal(state.spawns, 1);
+		assert.equal(state.active.length, 1);
 	}
+	assert.equal((await run("subagent-spawn-guard.js", role, { hook_event_name: "PostToolUse", tool_name: "Task", tool_use_id: "role-1", tool_response: { status: "completed" } }, adk)), null);
+	assert.equal(JSON.parse(fs.readFileSync(path.join(role, ".claude/subagent-budget/profile-test.json"), "utf8")).active.length, 0);
+	assert.equal(JSON.parse(fs.readFileSync(path.join(other, ".claude/subagent-budget/profile-test.json"), "utf8")).active.length, 1);
 	assert.equal(fs.existsSync(path.join(adk, ".claude/subagent-budget")), false);
 });
 
