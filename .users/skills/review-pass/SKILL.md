@@ -54,6 +54,10 @@ fail-closed입니다. 명시적인 `--require-review false` 선택에서만 `NOT
   맞는지 확인합니다.
 - `unjustified_product_surface`: 기존 표면은 비오탐으로 보호하되, 새 공개·제품
   표면에는 목표 근거와 콘텐츠 출처 권한이 모두 있어야 합니다.
+- `architecture_fit` (`planning`, `development` 단계 필수): 지시서·PR 설명·계획서에
+  최초 요구 원문(`original_request`), 붙는 상위 구조(`parent_structure`, 단일 서버·파일 아님),
+  받아들여지는 방식(`acceptance_rationale`) 세 칸이 `.claude/hooks/lib/deploy-plan.js`
+  (`architectureFitProblems`) 기준으로 유효해야 하며 누락·빈칸·견본·좁은 수정이면 `NOT_CLEAN`입니다.
 
 ## 완료 기준
 

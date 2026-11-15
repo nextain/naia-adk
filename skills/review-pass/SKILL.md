@@ -145,14 +145,15 @@ The orchestrator passes `--review-id --stage --round --reviewer-index` on every 
 > **Only the final report is shown after convergence.**
 > **Governed mode forbids `--light`, caller-only file scope, unsigned deferral, and review without the exact current request-contract bundle.**
 > **Planning/integration without original source, immutable baseline, and a preservation contract is NOT CLEAN.**
+> **Planning/development targets (directives, PR descriptions, or plans) without valid `architecture_fit` (`original_request`, `parent_structure`, `acceptance_rationale` verified via `architectureFitProblems`) are NOT CLEAN (`architecture_fit_assessment.fit_is_sufficient: false`).**
 > **A solo CRITICAL preservation, scope, authority, or release finding is a veto and is never auto-dismissed.**
 > **An unwaived deterministic `REFACTOR_REQUIRED` result blocks CLEAN before model voting.**
 
 ## Mandatory workflow
 
 1. Validate the input schema and detect governed mode.
-2. Before **planning**, read [Preflight Gates](references/preflight.md) and [Stage Profiles and Reviewer Roles](references/stage-profiles.md) in full; apply the governed and product-preservation gates.
-3. Before **development**, read those same references in full; apply the governed and deterministic-complexity gates.
+2. Before **planning**, read [Preflight Gates](references/preflight.md) and [Stage Profiles and Reviewer Roles](references/stage-profiles.md) in full; apply the governed, product-preservation, and `architecture_fit` lenses.
+3. Before **development**, read those same references in full; apply the governed, deterministic-complexity, and `architecture_fit` lenses.
 4. Before **test**, read those same references in full; apply the governed and deterministic-complexity gates.
 5. Before **integration**, read those same references in full; apply all governed, product-preservation, and deterministic-complexity gates.
 6. Before invoking any reviewer, read [Invocation and Output Contract](references/invocation-and-output.md) and [Consensus and Convergence](references/consensus-and-convergence.md) in full.
