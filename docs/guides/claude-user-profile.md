@@ -44,10 +44,12 @@
 4. 역할 세션을 다시 시작합니다.
 
 ```bash
-node scripts/adk-user-profile.mjs apply              # 지금 사용자
-node scripts/adk-user-profile.mjs apply --home /home/<다른 사용자>
+node scripts/adk-user-profile.mjs apply              # 지금 사용자 (Claude + Muse)
+node scripts/adk-user-profile.mjs apply --target muse --home /home/<다른 사용자>
 node scripts/adk-user-profile.mjs check              # 다르면 경로를 찍고 1로 끝남
 ```
+
+- `templates/muse-user-profile/settings.json` → `~/.config/muse/settings.json`(`--home` 미지정 시 `$XDG_CONFIG_HOME` 우선): `muse-pretooluse-adapter.cjs` 를 통해 Muse `PreToolUse` 에 같은 안전·역할 훅을 연결한다(`--target all|claude|muse`).
 
 - 프로파일의 환경 변수와 같은 이름의 기존 값은 덮어쓰며, 바뀐 키 이름을 출력합니다. 다른 설정은 유지합니다. 같은 훅은 두 번 넣지 않습니다. ADK 경로가 바뀌어 다시 돌리면 옛 경로의 프로파일 훅을 지우고 새 경로로 바꿉니다.
 - 정책 파일이 없으면 견본을 권한 `0600`으로 한 번 복사합니다. 자리표시가 남아 있거나 정책이 유효하지 않으면 `settings.json`을 쓰기 전에 오류(2)로 멈춥니다. 안내에는 정책 파일 경로와 채울 키 이름만 나오며 값은 출력하지 않습니다. 기존 정책은 내용·서식을 그대로 보존합니다. 비용 정책의 `{{USER_HOME}}`·`{{ACCOUNT_EMAIL}}`을 채운 뒤 `apply`를 다시 실행합니다. 개인정보는 사용자 홈에만 둡니다. `NAIA_COST_GUARD_POLICY`·`NAIA_SUBAGENT_MODEL_POLICY`는 적용한 홈의 정책을 가리킵니다.

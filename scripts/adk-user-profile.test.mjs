@@ -6,10 +6,11 @@ import path from "node:path"
 import { spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
-import { loadProfile, mergeRule, mergeSettings, parseArgs, PROFILE_HOOKS, run, validateProfileHooks } from "./adk-user-profile.mjs"
+import { loadMuseProfile, loadProfile, mergeMuseSettings, mergeRule, mergeSettings, MUSE_PROFILE_HOOKS, parseArgs, PROFILE_HOOKS, run, validateMuseProfileHooks, validateProfileHooks } from "./adk-user-profile.mjs"
 import "../.claude/hooks/profile-role-guards.test.cjs"
 import "../.claude/hooks/profile-user-guards.test.cjs"
 import "../.claude/hooks/lead-write-guard.test.cjs"
+import "../.agents/hooks/muse-pretooluse-adapter.test.cjs"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 // Keep every fixture under the system temporary folder, never beside the checkout.
@@ -57,7 +58,8 @@ test("apply adds env, absolute hooks and the rule block, keeping existing settin
   fs.writeFileSync(path.join(home, ".claude", "settings.json"), JSON.stringify(existing))
   fs.writeFileSync(path.join(home, ".claude", "CLAUDE.md"), "# mine\n")
   const result = run({ mode: "apply", home, adkRoot: root }, new Date("2026-11-05T06:00:00Z"))
-  assert.equal(result.changed.length, 2)
+  assert.equal(result.changed.length, 3)
+  assert.ok(result.changed.includes(path.join(home, ".config", "muse", "settings.json")))
   const s = read(path.join(home, ".claude", "settings.json"))
   assert.equal(s.model, "opus")
   assert.equal(s.env.KEEP, "1")
@@ -67,6 +69,9 @@ test("apply adds env, absolute hooks and the rule block, keeping existing settin
   assert.equal(s.hooks.PreToolUse[0].hooks[0].command, "gate")
   assert.match(s.hooks.SessionStart[0].hooks[0].command, new RegExp(`${root}/\\.claude/hooks/role-compact-brief\\.js`))
   assert.equal(s.hooks.PostCompact, undefined)
+  const muse = read(path.join(home, ".config", "muse", "settings.json"))
+  assert.equal(muse.schema_version, 1)
+  assert.match(muse.hooks.PreToolUse[0].hooks[0].command, /muse-pretooluse-adapter\.cjs/)
   const rule = fs.readFileSync(path.join(home, ".claude", "CLAUDE.md"), "utf8")
   assert.ok(rule.startsWith("# mine\n"))
   assert.match(rule, /naia-adk claude-user-profile: begin/)
@@ -82,7 +87,10 @@ test("instance root sets NAIA_ADK_ROOT while hook commands stay on the ADK root"
   assert.equal(s.env.NAIA_ADK_ROOT, instance)
   assert.match(s.hooks.PreToolUse[0].hooks[0].command, new RegExp(`${root}/\\.claude/hooks/`))
   assert.deepEqual(run({ mode: "check", home, adkRoot: root, instanceRoot: instance }).drift, [])
-  assert.deepEqual(run({ mode: "check", home, adkRoot: root }).drift, [path.join(home, ".claude", "settings.json")])
+  assert.deepEqual(run({ mode: "check", home, adkRoot: root }).drift, [
+    path.join(home, ".claude", "settings.json"),
+    path.join(home, ".config", "muse", "settings.json"),
+  ])
 })
 
 test("parseArgs defaults the instance root to the ADK root and refuses one without .claude", () => {
@@ -273,6 +281,7 @@ test("model policy preflight blocks invalid and placeholder policies, preserving
     assert.ok(run({ mode: "check", home, adkRoot: root }).drift.includes(policy))
     assert.equal(fs.readFileSync(policy, "utf8"), content)
     assert.equal(fs.existsSync(path.join(home, ".claude/settings.json")), false)
+    assert.equal(fs.existsSync(path.join(home, ".config/muse/settings.json")), false)
   }
   fs.rmSync(policy)
   run({ mode: "apply", home, adkRoot: root })
@@ -343,6 +352,7 @@ test("CLI empty home stops before settings, reports only policy keys, then succe
     assert.doesNotMatch(output, /\{\{|ACCOUNT_EMAIL|USER_HOME/)
     statuses.push(result.status)
     assert.equal(fs.existsSync(path.join(home, ".claude/settings.json")), false)
+    assert.equal(fs.existsSync(path.join(home, ".config/muse/settings.json")), false)
   }
   const policy = read(costFile(home))
   policy.configDir = path.join(home, ".claude")
@@ -372,4 +382,67 @@ test("CLI invalid configDir types report keys without exposing policy values", a
       assert.equal(fs.readFileSync(settingsFile, "utf8"), settings)
     }
   }
+})
+
+test("MUSE_PROFILE_HOOKS matches templates/muse-user-profile/settings.json and validates mismatches", () => {
+  const { settings } = loadMuseProfile(root)
+  validateMuseProfileHooks(settings)
+  assert.equal(settings.schema_version, 1)
+  const missing = structuredClone(settings)
+  missing.hooks.PreToolUse.pop()
+  assert.throws(() => validateMuseProfileHooks(missing), /disagree/)
+  const extra = structuredClone(settings)
+  extra.hooks.PreToolUse.push({ hooks: [{ command: '"node" "/adk/muse-pretooluse-adapter.cjs" --hook "/adk/extra.js"' }] })
+  assert.throws(() => validateMuseProfileHooks(extra), /disagree/)
+  const noAdapter = structuredClone(settings)
+  noAdapter.hooks.PreToolUse[0].hooks[0].command = '"node" "/adk/direct.js"'
+  assert.throws(() => validateMuseProfileHooks(noAdapter), /muse-pretooluse-adapter\.cjs/)
+})
+
+test("--target muse applies ~/.config/muse/settings.json without Claude policies, preserves existing keys, and replaces stale adapter entries", async () => {
+  const home = tmpHome()
+  const museFile = path.join(home, ".config", "muse", "settings.json")
+  fs.mkdirSync(path.dirname(museFile), { recursive: true })
+  fs.writeFileSync(museFile, JSON.stringify({
+    model: "test-model",
+    hooks: {
+      PreToolUse: [
+        { hooks: [{ type: "command", command: "custom-user-hook" }] },
+        { hooks: [{ type: "command", command: '"node" "/old/adk/.agents/hooks/muse-pretooluse-adapter.cjs" --hook "/old/hook.js"' }] },
+      ],
+    },
+  }))
+
+  const applied = run({ mode: "apply", home, adkRoot: root, target: "muse" }, new Date("2026-11-15T05:00:00Z"))
+  assert.deepEqual(applied.changed, [museFile])
+  assert.equal(fs.existsSync(path.join(home, ".claude")), false)
+  assert.ok(fs.existsSync(`${museFile}.bak-20261115T050000`))
+
+  const saved = read(museFile)
+  assert.equal(saved.schema_version, 1)
+  assert.equal(saved.model, "test-model")
+  const cmds = saved.hooks.PreToolUse.flatMap((g) => g.hooks.map((h) => h.command))
+  assert.ok(cmds.includes("custom-user-hook"))
+  assert.ok(!cmds.some((c) => c.includes("/old/adk/")))
+  assert.equal(cmds.filter((c) => c.includes("muse-pretooluse-adapter.cjs")).length, 4)
+  assert.equal(run({ mode: "check", home, adkRoot: root, target: "muse" }).drift.length, 0)
+
+  // Mutate a matcher -> check catches drift -> CLI --target muse apply restores cleanly.
+  saved.hooks.PreToolUse[1].matcher = "bogus"
+  fs.writeFileSync(museFile, JSON.stringify(saved))
+  assert.deepEqual(run({ mode: "check", home, adkRoot: root, target: "muse" }).drift, [museFile])
+
+  const cliApply = await nodeProcess([path.join(root, "scripts/adk-user-profile.mjs"), "apply", "--home", home, "--target", "muse"])
+  assert.equal(cliApply.status, 0, cliApply.stderr || cliApply.stdout)
+  const cliCheck = await nodeProcess([path.join(root, "scripts/adk-user-profile.mjs"), "check", "--home", home, "--target", "muse"])
+  assert.equal(cliCheck.status, 0, cliCheck.stderr || cliCheck.stdout)
+  assert.equal(mergeMuseSettings(saved, saved).schema_version, 1)
+})
+
+test("--target claude leaves ~/.config/muse untouched", () => {
+  const home = readyHome()
+  const result = run({ mode: "apply", home, adkRoot: root, target: "claude" })
+  assert.equal(result.changed.includes(path.join(home, ".claude", "settings.json")), true)
+  assert.equal(fs.existsSync(path.join(home, ".config", "muse", "settings.json")), false)
+  assert.deepEqual(run({ mode: "check", home, adkRoot: root, target: "claude" }).drift, [])
 })

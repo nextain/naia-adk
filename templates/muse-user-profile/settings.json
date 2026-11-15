@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^(?:bash|Bash|shell|shell_command|exec_command|execute_command|run_terminal_command)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\" --adk-root \"{{INSTANCE_ROOT}}\" --hook \"{{ADK_ROOT}}/.claude/hooks/destructive-git-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/catastrophic-delete-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/git-push-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/email-send-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/commit-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/deploy-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/remote-identity-gate.js\" \"{{ADK_ROOT}}/.claude/hooks/gcs-guard.js\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/guard-runpod-create.cjs\"",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "^(?:edit_file|write_file|multi_edit|apply_patch|Edit|Write|MultiEdit|NotebookEdit|edit|write|search_replace)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\" --adk-root \"{{INSTANCE_ROOT}}\" --expand-patch --hook \"{{ADK_ROOT}}/.claude/hooks/prod-gateway-guard.js\"",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "^(?:bash|Bash|shell|shell_command|exec_command|execute_command|run_terminal_command|edit_file|write_file|multi_edit|apply_patch|Edit|Write|MultiEdit|NotebookEdit|edit|write|search_replace)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\" --adk-root \"{{INSTANCE_ROOT}}\" --hook \"{{ADK_ROOT}}/.claude/hooks/lead-write-guard.js\"",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "^(?:subagent_spawn|spawn_agent|Agent|Task|agent|task)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\" --adk-root \"{{INSTANCE_ROOT}}\" --hook \"{{ADK_ROOT}}/.claude/hooks/subagent-spawn-guard.js\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
