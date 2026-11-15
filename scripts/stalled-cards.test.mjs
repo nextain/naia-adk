@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, utimes, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, utimes, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { runHealth, validateConfig } from './session-health.mjs';
+import { syncCardWakes } from './lib/stalled-cards.mjs';
 
 const root = process.env.SESSION_HEALTH_TEST_TMP || join((await import('node:os')).tmpdir(), 'stalled-cards-test');
 const now = Date.parse('2030-01-01T12:00:00Z');
@@ -219,4 +220,203 @@ test('card wake reuses session-health YAML workLedger stalled rows and validates
   assert.throws(() => validateConfig({ ...f.c, staleMinutes: 0 }), /positive/);
   assert.throws(() => validateConfig({ ...f.c, repeatMinutes: 0 }), /positive/);
   assert.throws(() => validateConfig({ ...f.c, escalateAfterCount: 0 }), /escalateAfterCount/);
+});
+
+test('C1: missing JSON work ledger fails with work ledger unavailable, degraded, unknown report, and preserves episode state', async () => {
+  const f = await cardWakeFixture({ createdHoursAgo: 3, status: 'open' });
+  const first = await f.run();
+  assert.equal(first.wakes.length, 1);
+
+  await rm(f.ledgerPath);
+  const missing = await f.run({ now: now + 30 * 60000 });
+  assert.equal(missing.degraded, true);
+  assert.equal(missing.wakes.length, 0);
+  assert.equal(missing.wakePreviews, 0);
+  assert.equal(missing.rows[0].ledgerKnown, false);
+  assert.ok(missing.rows[0].errors.includes('work ledger unavailable'));
+  assert.match(missing.report, /unknown \(ledger unavailable\)/);
+  assert.match(missing.report, /\| unknown \|/);
+  const state = JSON.parse(await readFile(f.c.stateFile, 'utf8'));
+  assert.equal(state.roles['role-a'].cardStalls['json:webgpu-15'].wakeCount, 1);
+
+  // Explicit nonexistent roles[0].ledgerFile also reports unavailable and keeps stoppedRequiresWork conservative.
+  const f2 = await baseFixture();
+  f2.c.stoppedRequiresWork = true;
+  f2.c.roles[0].wakeDir = join(f2.dir, 'wake');
+  f2.c.roles[0].ledgerFile = join(f2.dir, 'missing-role.json');
+  const cold = await f2.run();
+  assert.equal(cold.degraded, true);
+  assert.equal(cold.rows[0].ledgerKnown, false);
+  assert.ok(cold.rows[0].errors.includes('work ledger unavailable'));
+  assert.match(cold.report, /unknown \(ledger unavailable\)/);
+  const afterIdle = await f2.run({ now: now + 30 * 60000 });
+  assert.equal(afterIdle.rows[0].alive, 'stopped');
+});
+
+test('R1: missing wakeDir for ledger-configured role is rejected by validateConfig or fails degraded at runtime', async () => {
+  const f = await baseFixture();
+  assert.throws(() => validateConfig({ ...f.c, workLedger: join(f.dir, 'work.yaml') }), /wakeDir/);
+  assert.throws(() => validateConfig({ ...f.c, workLedgerDir: join(f.dir, 'ledger') }), /wakeDir/);
+  assert.throws(() => validateConfig({
+    ...f.c,
+    roles: [{ ...f.c.roles[0], ledgerFile: join(f.dir, 'role-a.json') }],
+  }), /wakeDir/);
+
+  // When workLedgerConfig is used without role.wakeDir and work-ledger.json omits wake_dir, runtime must fail degraded.
+  const wlc = await cardWakeFixture({ createdHoursAgo: 3, status: 'done' });
+  await writeFile(wlc.c.workLedgerConfig, JSON.stringify({
+    version: 1,
+    roles: [{ role: 'role-a', report: { every_min: 60, channel: 'human-ch-99' } }],
+  }));
+  const quietErr = await wlc.run();
+  assert.equal(quietErr.degraded, true);
+  assert.ok(quietErr.rows[0].errors.includes('wake dir unavailable'));
+  assert.match(quietErr.report, /role-a: wake dir unavailable/);
+
+  const wlcStalled = await cardWakeFixture({ createdHoursAgo: 3, status: 'open' });
+  await writeFile(wlcStalled.c.workLedgerConfig, JSON.stringify({
+    version: 1,
+    roles: [{ role: 'role-a', report: { every_min: 60, channel: 'human-ch-99' } }],
+  }));
+  const stalledErr = await wlcStalled.run();
+  assert.equal(stalledErr.degraded, true);
+  assert.equal(stalledErr.wakes.length, 0);
+  assert.ok(stalledErr.rows[0].anomalies.includes('stalled'));
+  assert.ok(stalledErr.rows[0].errors.includes('wake dir unavailable'));
+});
+
+test('R2: unknown card status is treated as degraded error, never closed, and preserves episode state', async () => {
+  const f = await cardWakeFixture({ createdHoursAgo: 3, status: 'open' });
+  assert.equal((await f.run()).wakes.length, 1);
+
+  f.ledger.items[0].status = 'Open';
+  await f.saveJsonLedger();
+  const bad = await f.run({ now: now + 30 * 60000 });
+  assert.equal(bad.degraded, true);
+  assert.equal(bad.wakes.length, 0);
+  assert.equal(bad.rows[0].ledgerKnown, false);
+  assert.ok(bad.rows[0].errors.includes('work ledger unavailable'));
+  assert.match(bad.report, /unknown \(ledger unavailable\)/);
+  const state = JSON.parse(await readFile(f.c.stateFile, 'utf8'));
+  assert.equal(state.roles['role-a'].cardStalls['json:webgpu-15'].wakeCount, 1);
+  assert.equal(state.roles['role-a'].cardStatuses['json:webgpu-15'].status, 'open');
+
+  // Restoring open status continues the preserved episode rather than resetting it.
+  f.ledger.items[0].status = 'open';
+  await f.saveJsonLedger();
+  const resumed = await f.run({ now: now + 60 * 60000 });
+  assert.equal(resumed.wakes.length, 1);
+  assert.equal(resumed.wakes[0].wakeCount, 2);
+
+  // Cold unknown status with stoppedRequiresWork must not mark the role idle.
+  const f2 = await cardWakeFixture({ createdHoursAgo: 3, status: '진행중' });
+  f2.c.stoppedRequiresWork = true;
+  await f2.run();
+  const quiet = await f2.run({ now: now + 30 * 60000 });
+  assert.equal(quiet.degraded, true);
+  assert.equal(quiet.rows[0].alive, 'stopped');
+
+  // Direct syncCardWakes defense-in-depth preserves state and reports an error on unknown status cards.
+  const record = {
+    cardStalls: { 'json:c1': { cardId: 'c1', episodeAt: now - 3600000, evidenceAt: now - 7200000, wakeCount: 1, lastWakeAt: now - 1800000 } },
+    cardStatuses: { 'json:c1': { status: 'open', at: now - 1800000 } },
+    cardTransitions: {},
+    cardFirstSeen: {},
+  };
+  const direct = await syncCardWakes({
+    role: { role: 'role-a', record },
+    cardResults: [{ cardKey: 'json:c1', id: 'c1', title: 't', status: 'Open', isOpen: false, isHumanWait: false, isClosed: false, wakeDir: join(f.dir, 'wake') }],
+    ledgerKnown: true,
+    now,
+    dry: false,
+    thresholds: { staleMs: 5400000, repeatMs: 1800000, escalateAfterCount: 3 },
+  });
+  assert.ok(direct.errors?.length > 0);
+  assert.equal(record.cardStalls['json:c1'].wakeCount, 1);
+  assert.equal(record.cardStatuses['json:c1'].status, 'open');
+});
+
+test('R3: EEXIST on wake file creation does not increment wakeCount or update lastWakeAt', async () => {
+  const f = await cardWakeFixture({ createdHoursAgo: 2, status: 'open' });
+  await mkdir(f.wakeDir, { recursive: true });
+  const stamp = new Date(now).toISOString().replace(/\D/g, '');
+  const collision = join(f.wakeDir, `${stamp}-stalled-webgpu-15-route-role-a.md`);
+  await writeFile(collision, 'preexisting\n');
+
+  const first = await f.run({ now });
+  assert.equal(first.wakes.length, 0);
+  assert.equal(first.wakePreviews, 0);
+  assert.equal(await readFile(collision, 'utf8'), 'preexisting\n');
+  let state = JSON.parse(await readFile(f.c.stateFile, 'utf8'));
+  assert.equal(state.roles['role-a'].cardStalls['json:webgpu-15'].wakeCount, 0);
+  assert.equal(state.roles['role-a'].cardStalls['json:webgpu-15'].lastWakeAt, null);
+
+  // Because lastWakeAt was not advanced on EEXIST, the next tick 5m later succeeds as wake #1.
+  const retry = await f.run({ now: now + 5 * 60000 });
+  assert.equal(retry.wakes.length, 1);
+  assert.equal(retry.wakes[0].wakeCount, 1);
+  state = JSON.parse(await readFile(f.c.stateFile, 'utf8'));
+  assert.equal(state.roles['role-a'].cardStalls['json:webgpu-15'].wakeCount, 1);
+  assert.equal(state.roles['role-a'].cardStalls['json:webgpu-15'].lastWakeAt, now + 5 * 60000);
+});
+
+test('same-branch fixes: per-role ledger scoping, malformed workLedgerConfig, bad dates, responseWatchState, and config validation', async () => {
+  // 1. Per-role ledgerFile on role-a must not make ledgerless role-b appear idle under stoppedRequiresWork.
+  const f = await cardWakeFixture({ createdHoursAgo: 1, status: 'open' });
+  delete f.c.workLedgerConfig;
+  delete f.c.workLedgerRoot;
+  f.c.stoppedRequiresWork = true;
+  f.c.roles[0].ledgerFile = f.ledgerPath;
+  f.c.roles[0].wakeDir = f.wakeDir;
+  const snapB = join(f.dir, 'windows-b.json');
+  await writeFile(snapB, JSON.stringify({ windows: [{ name: 'agent-b', aiRunning: true, output: 'b' }] }));
+  f.c.roles.push({ id: 'role-b', botId: '456', window: 'agent-b', workspace: f.repo, workFiles: [], adapter: { kind: 'snapshot', path: snapB } });
+  await f.run();
+  const quiet = await f.run({ now: now + 30 * 60000 });
+  assert.equal(quiet.rows[1].alive, 'stopped');
+  assert.ok(quiet.rows[1].anomalies.includes('stopped'));
+
+  // 2. Malformed workLedgerConfig (non-array roles or invalid version) reports unavailable instead of crashing or returning empty.
+  const fMeta = await cardWakeFixture({ createdHoursAgo: 2, status: 'open' });
+  await writeFile(fMeta.c.workLedgerConfig, JSON.stringify({ version: 1, roles: {} }));
+  const badMeta = await fMeta.run();
+  assert.equal(badMeta.degraded, true);
+  assert.ok(badMeta.rows[0].errors.includes('work ledger unavailable'));
+
+  // 3. Invalid calendar date (e.g. Feb 30) in JSON ledger is rejected as unavailable.
+  const fDate = await cardWakeFixture({ createdHoursAgo: 2, status: 'open' });
+  fDate.ledger.items[0].checked_at = '2030-02-30T00:00:00Z';
+  await fDate.saveJsonLedger();
+  const badDate = await fDate.run();
+  assert.equal(badDate.degraded, true);
+  assert.ok(badDate.rows[0].errors.includes('work ledger unavailable'));
+
+  // 4. Role id starting with '_' with workLedgerDir fails gracefully per-role instead of crashing uncaught.
+  const fId = await baseFixture();
+  fId.c.workLedgerDir = join(fId.dir, '.agents/work/ledger');
+  fId.c.roles[0].id = '_role';
+  fId.c.roles[0].wakeDir = join(fId.dir, 'wake');
+  const badRoleId = await fId.run();
+  assert.equal(badRoleId.degraded, true);
+  assert.ok(badRoleId.rows[0].errors.includes('work ledger unavailable'));
+
+  // 5. Non-object responseWatchState (e.g. JSON null) is flagged degraded even when stoppedRequiresWork is false.
+  const fResp = await baseFixture();
+  fResp.c.responseWatchState = join(fResp.dir, 'resp.json');
+  await writeFile(fResp.c.responseWatchState, 'null');
+  const badResp = await fResp.run();
+  assert.equal(badResp.degraded, true);
+  assert.ok(badResp.rows[0].errors.includes('response evidence unavailable'));
+
+  // 6. validateConfig rejects missing role id and empty string paths instead of coercing/ignoring.
+  const fVal = await baseFixture();
+  const noId = structuredClone(fVal.c);
+  delete noId.roles[0].id;
+  assert.throws(() => validateConfig(noId), /unique safe role id/);
+  for (const field of ['wakeDir', 'ledgerFile', 'sessionLog']) {
+    const emptyRolePath = structuredClone(fVal.c);
+    emptyRolePath.roles[0][field] = '';
+    assert.throws(() => validateConfig(emptyRolePath), /absolute evidence path/);
+  }
+  assert.throws(() => validateConfig({ ...fVal.c, responseWatchState: '' }), /absolute response state/);
 });
