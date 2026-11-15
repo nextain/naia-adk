@@ -436,7 +436,7 @@ test("--target muse applies ~/.config/muse/settings.json without Claude policies
   assert.ok(cmds.includes("custom-user-hook"))
   assert.ok(!cmds.some((c) => c.includes("/old/adk/")))
   assert.equal(cmds.filter((c) => c.includes("muse-pretooluse-adapter.cjs")).length, 1)
-  assert.equal(Object.keys(saved.hooks).length, 8)
+  assert.equal(Object.keys(saved.hooks).length, 9)
   assert.equal(run({ mode: "check", home, adkRoot: root, target: "muse" }).drift.length, 0)
 
   // Mutate a matcher -> check catches drift -> CLI --target muse apply restores cleanly.
