@@ -119,13 +119,13 @@ function shellClauses(command) {
 		}
 		if (char === "<" && s[i + 1] === "<" && s[i + 2] !== "<" && s[i - 1] !== "<") {
 			const m = s.slice(i).match(/^<<(-?)[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_.-]*)\2/);
-			if (m) heredocs.push({ delim: m[3], strip: m[1] === "-", quoted: !!m[2], owner: tokens });
+			if (m) heredocs.push({ delim: m[3], strip: m[1] === "-", quoted: !!m[2], owner: tokens, fd: /^\d+$/.test(token) ? Number(token) : 0 });
 		}
 		if (char === "\n") {
 			flushClause();
 			sep = "\n";
 			while (heredocs.length) {
-				const { delim, strip, quoted, owner } = heredocs.shift();
+				const { delim, strip, quoted, owner, fd } = heredocs.shift();
 				const body = [];
 				let end = s.indexOf("\n", i + 1);
 				for (;;) {
@@ -138,6 +138,7 @@ function shellClauses(command) {
 					end = s.indexOf("\n", i + 1);
 				}
 				owner.heredocs = [...(owner.heredocs || []), body.join("\n")];
+				owner.heredocFds = [...(owner.heredocFds || []), fd ?? 0];
 				if (!quoted) {
 					const subs = bodySubs(body.join("\n"));
 					if (subs === null) broken = true;

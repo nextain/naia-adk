@@ -1597,7 +1597,7 @@ function classifyLocalSystemd(command, tokens, dir, cfg) {
 }
 
 /** 인스턴스 확장(config/deploy-gate.json 의 prodPatterns 및 선택 플러그인 classifyCommand). */
-function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", localOnly = false) {
+function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", localOnly = false, entry = null) {
 	const hits = [];
 	const clause = clauseText(tokens, assigns);
 	const pushErrorHit = (msg) => {
@@ -1635,7 +1635,7 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 				}
 			}
 		}
-		hits.push(...classifyRegisteredAllowedCommands(command, clause, tokens, dir, root, cfg, pushErrorHit));
+		hits.push(...classifyRegisteredAllowedCommands(command, clause, tokens, dir, root, cfg, pushErrorHit, entry));
 		try {
 			const plugin = loadDeployGatePlugin(root, cfg);
 			if (plugin && typeof plugin.classifyCommand === "function") {
@@ -1656,28 +1656,48 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 	}
 }
 
-function classifyDeployScript(tokens, cwd, assigns = []) {
-	for (let i = 0; i < tokens.length; i++) {
-		const t = tokens[i];
-		const base = path.basename(t);
-		if (!/deploy/i.test(base)) continue;
-		// 셸은 bash 문법으로 스크립트 자리를 찾는다(설계 검수 14회차 1번: bash -e·bash -euo pipefail 뒤의 스크립트).
-		if (i > 0 && SHELL_RE.test(tokens[0])) {
-			if (i !== require("./effective-argv.js").shellInvocation(tokens).script) continue;
-		} else {
-		// 실행 자리여야 한다: 첫 토큰이거나 인터프리터 바로 뒤(옵션 건너뜀).
-		let j = i - 1;
-		while (j >= 0 && tokens[j].startsWith("-")) j--;
-		// node -e·python -c 뒤의 글은 코드이지 스크립트 경로가 아니다.
-		const code = i > 0 && /^(?:-e|-c|-p|--eval|--print)$/.test(tokens[i - 1]);
-		const executed = !code && (i === 0 || (j === 0 && INTERPRETERS.test(tokens[0])));
-		if (!executed) continue;
+function classifyDeployScript(tokens, cwd, assigns = [], entry = null) {
+	const checkTokens = (toks) => {
+		for (let i = 0; i < toks.length; i++) {
+			const t = toks[i];
+			const base = path.basename(t);
+			if (!/deploy/i.test(base)) continue;
+			// 셸은 bash 문법으로 스크립트 자리를 찾는다(설계 검수 14회차 1번: bash -e·bash -euo pipefail 뒤의 스크립트).
+			if (i > 0 && SHELL_RE.test(toks[0])) {
+				if (i !== require("./effective-argv.js").shellInvocation(toks).script) continue;
+			} else {
+			// 실행 자리여야 한다: 첫 토큰이거나 인터프리터 바로 뒤(옵션 건너뜀).
+			let j = i - 1;
+			while (j >= 0 && toks[j].startsWith("-")) j--;
+			// node -e·python -c 뒤의 글은 코드이지 스크립트 경로가 아니다.
+			const code = i > 0 && /^(?:-e|-c|-p|--eval|--print)$/.test(toks[i - 1]);
+			const executed = !code && (i === 0 || (j === 0 && INTERPRETERS.test(toks[0])));
+			if (!executed) continue;
+			}
+			const args = toks.slice(i + 1);
+			const prod = PROD_WORD.test(base) || args.some((a) => PROD_ARG.test(a) || PROD_WORD.test(a)) || assigns.some((a) => PROD_WORD.test(a.slice(a.indexOf("="))));
+			if (!prod) continue;
+			const resolved = t.includes("/") ? path.resolve(cwd || "/", t) : t;
+			return { service: `script:${resolved}`, label: `${base} ${args.join(" ")}`.trim() };
 		}
-		const args = tokens.slice(i + 1);
-		const prod = PROD_WORD.test(base) || args.some((a) => PROD_ARG.test(a) || PROD_WORD.test(a)) || assigns.some((a) => PROD_WORD.test(a.slice(a.indexOf("="))));
-		if (!prod) continue;
-		const resolved = t.includes("/") ? path.resolve(cwd || "/", t) : t;
-		return { service: `script:${resolved}`, label: `${base} ${args.join(" ")}`.trim() };
+		return null;
+	};
+	const direct = checkTokens(tokens);
+	if (direct) return direct;
+	if (entry && Array.isArray(entry.stdinSourceFiles) && entry.stdinSourceFiles.length && (SHELL_RE.test(tokens[0] || "") || /^(?:source|\.)$/.test(path.basename(tokens[0] || "")))) {
+		const { fdStdinSpec, redirectSpan } = require("./effective-argv.js");
+		const posArgs = [];
+		for (let i = 1; i < tokens.length; i++) {
+			const sp = redirectSpan(tokens, i);
+			if (sp) { i += sp - 1; continue; }
+			if (tokens[i].startsWith("-") && posArgs.length === 0) continue;
+			if (!posArgs.length && fdStdinSpec(tokens[i], cwd || "/", "", true)) continue;
+			posArgs.push(tokens[i]);
+		}
+		for (const sf of entry.stdinSourceFiles) {
+			const hit = checkTokens(["bash", sf, ...posArgs]);
+			if (hit) return hit;
+		}
 	}
 	return null;
 }
@@ -1999,10 +2019,10 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 			continue;
 		}
 		if (/^(?:echo|printf|cat|grep|rg|sed|awk|head|tail|less|wc|git|man)$/.test(path.basename(tokens[0]))) {
-			found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true));
+			found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true, entry));
 			continue;
 		}
-		const extHits = classifyInstanceExtension(command, tokens, dir, assigns, gateRoot);
+		const extHits = classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, false, entry);
 		if (extHits.length) {
 			for (const h of extHits) found.push(h);
 			continue;
@@ -2019,7 +2039,7 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 				const sshHits = [...classifySsh(tokens, dir, depth, gateRoot), ...classifyScp(tokens)];
 				if (sshHits.length) for (const h of sshHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
 				else {
-					const hit = classifyDeployScript(tokens, dir, assigns) || classifyPackageScript(tokens, dir);
+					const hit = classifyDeployScript(tokens, dir, assigns, entry) || classifyPackageScript(tokens, dir);
 					if (hit) found.push({ ...hit, clause: clauseText(tokens, assigns) });
 					else {
 						// 로컬 셸 스크립트 파일을 실행하면 그 안의 명령도 본다(설계 검수 8회차 4번: 운영 배포를 스크립트 파일로 감싸면 안 보였음).
@@ -2086,7 +2106,9 @@ function executedTargetWord(tokens) {
 		return { target: tokens[inv.script], kind: "shell" };
 	}
 	if (headBase === "source" || headBase === ".") {
-		return tokens[1] ? { target: tokens[1], kind: "shell" } : null;
+		const { sourceTargetIndex } = require("./effective-argv.js");
+		const idx = sourceTargetIndex(tokens);
+		return idx >= 0 && tokens[idx] ? { target: tokens[idx], kind: "shell" } : null;
 	}
 	if (INTERPRETERS.test(head)) {
 		for (let i = 1; i < tokens.length; i++) {
@@ -2143,15 +2165,29 @@ function extractPatternScriptPaths(pattern, root, canonicalTargetPath) {
 }
 
 /** config/deploy-gate.json services[*].allowedCommands 에 등록된 고정 운영 대본을 서비스로 분류한다. */
-function classifyRegisteredAllowedCommands(command, clause, tokens, dir, root, cfg, pushErrorHit) {
+function classifyRegisteredAllowedCommands(command, clause, tokens, dir, root, cfg, pushErrorHit, entry = null) {
 	const hits = [];
 	if (!cfg || !cfg.services || typeof cfg.services !== "object") return hits;
 	const { canonicalTargetPath } = require("./deploy-readiness.js");
-	const { resolvePathWord } = require("./effective-argv.js");
+	const { resolvePathWord, fdStdinSpec, extractReadSubFile } = require("./effective-argv.js");
 	const execWord = executedTargetWord(tokens);
-	const resolvedExec = execWord ? (resolvePathWord(execWord.target, dir, root, true) || execWord.target) : null;
-	const canExec = resolvedExec && !/\$|\$\{/.test(resolvedExec) ? canonicalTargetPath(resolvedExec, dir || root) : null;
-	const canonClause = execWord ? canonicalClauseText(tokens, dir || root, canonicalTargetPath) : "";
+	const isStdinExec = !execWord || fdStdinSpec(execWord.target, dir || root, "", true) || extractReadSubFile(execWord.target);
+	const canExecList = [];
+	if (execWord && !isStdinExec) {
+		const resolvedExec = resolvePathWord(execWord.target, dir, root, true) || execWord.target;
+		if (resolvedExec && !/\$|\$\{/.test(resolvedExec)) canExecList.push(canonicalTargetPath(resolvedExec, dir || root));
+	}
+	if (entry && Array.isArray(entry.stdinSourceFiles)) {
+		for (const sf of entry.stdinSourceFiles) {
+			if (sf && !/\$|\$\{/.test(sf)) {
+				const cp = canonicalTargetPath(sf, dir || root);
+				if (!canExecList.includes(cp)) canExecList.push(cp);
+			}
+		}
+	}
+	const canonClause = execWord && !isStdinExec
+		? canonicalClauseText(tokens, dir || root, canonicalTargetPath)
+		: (canExecList.length ? canonicalClauseText(["bash", canExecList[0], ...tokens.slice(1)], dir || root, canonicalTargetPath) : "");
 	const seenServices = new Set();
 
 	for (const [service, rule] of Object.entries(cfg.services)) {
@@ -2166,10 +2202,10 @@ function classifyRegisteredAllowedCommands(command, clause, tokens, dir, root, c
 				continue;
 			}
 			// 스크립트/실행 경로가 아닌 일반 조회(git status, ls, az show 등)까지 광범위 패턴에 걸리지 않도록 실행 경로가 있을 때만 검사한다.
-			if (!canExec || seenServices.has(service)) continue;
+			if (!canExecList.length || seenServices.has(service)) continue;
 			const safePattern = !re.test("") && !re.test("git status") && !re.test("ls");
-			const scriptMatched = extractPatternScriptPaths(pat, root, canonicalTargetPath).includes(canExec);
-			const clauseMatched = safePattern && (re.test(clause) || re.test(command) || re.test(canonClause) || re.test(`sudo ${canonClause}`));
+			const scriptMatched = extractPatternScriptPaths(pat, root, canonicalTargetPath).some((p) => canExecList.includes(p));
+			const clauseMatched = safePattern && (re.test(clause) || re.test(command) || (canonClause && (re.test(canonClause) || re.test(`sudo ${canonClause}`))));
 			if (scriptMatched || clauseMatched) {
 				seenServices.add(service);
 				hits.push({ service, label: String(rule.label || service), clause });
@@ -2181,7 +2217,7 @@ function classifyRegisteredAllowedCommands(command, clause, tokens, dir, root, c
 
 /** 명령 안의 경로·작업 디렉터리·실행 대본을 canonical 경로로 뽑는다(소속 저장소 판별용). */
 function extractCommandTargets(command, cwd) {
-	const { effectiveCommands, redirectSpan, resolvePathWord } = require("./effective-argv.js");
+	const { effectiveCommands, redirectSpan, resolvePathWord, fdStdinSpec, extractReadSubFile } = require("./effective-argv.js");
 	const { shellClauses } = require("./git-command-parser.js");
 	const { tryCanonicalTargetPath } = require("./deploy-readiness.js");
 	const paths = new Set();
@@ -2192,8 +2228,11 @@ function extractCommandTargets(command, cwd) {
 	const addTarget = (raw, baseDir, opts = {}) => {
 		if (!raw || typeof raw !== "string") return;
 		let cleaned = raw.trim().replace(/^\d*(?:>>?|<<?|<&|>&|&>>?)/, "");
+		const sub = extractReadSubFile(cleaned);
+		if (sub) cleaned = sub.file;
 		if (!cleaned || cleaned.length > 2048 || /^&(?:\d+|-)$/.test(cleaned) || cleaned.endsWith(">")) return;
 		if (cleaned.startsWith("/dev/") || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(cleaned)) return;
+		if (fdStdinSpec(cleaned, baseDir || cwd || "/", "", true)) return;
 		if (cleaned.startsWith("@")) cleaned = cleaned.slice(1);
 		if (!cleaned || /\$|\$\{/.test(cleaned)) return;
 		if (!opts.allowSpaces && /\s/.test(cleaned)) return;
@@ -2220,11 +2259,19 @@ function extractCommandTargets(command, cwd) {
 		for (const e of entries) {
 			const cDir = e.dir || baseDir || cwd || "/";
 			if (e.dir) addTarget(e.dir, baseDir, { isDir: true, allowSpaces: true, reportError: depth === 0 });
+			if (Array.isArray(e.stdinSourceFiles)) {
+				for (const sf of e.stdinSourceFiles) addTarget(sf, cDir, { allowSpaces: true, reportError: depth === 0 });
+			}
 			const tokens = Array.isArray(e.argv) ? e.argv : [];
 			const execWord = executedTargetWord(tokens);
-			if (execWord) {
-				const resolved = resolvePathWord(execWord.target, cDir, cDir, e.dirKnown !== false) || execWord.target;
-				addTarget(resolved, cDir, { allowSpaces: true, reportError: depth === 0 });
+			if (execWord && !fdStdinSpec(execWord.target, cDir, cDir, e.dirKnown !== false)) {
+				const subExec = extractReadSubFile(execWord.target);
+				if (subExec) {
+					addTarget(subExec.file, cDir, { allowSpaces: true, reportError: depth === 0 });
+				} else {
+					const resolved = resolvePathWord(execWord.target, cDir, cDir, e.dirKnown !== false) || execWord.target;
+					addTarget(resolved, cDir, { allowSpaces: true, reportError: depth === 0 });
+				}
 			}
 			for (let i = 0; i < tokens.length; i++) {
 				const r = redirectSpan(tokens, i);
@@ -2261,88 +2308,123 @@ function extractCommandTargets(command, cwd) {
 
 /** 존재하지 않거나 읽을 수 없는 대본 실행 시도를 확인 불가로 차단한다(판단 불확실 시 fail-closed). */
 function classifyUnresolvedScriptTargets(command, cwd) {
-	const { effectiveCommands, resolvePathWord } = require("./effective-argv.js");
+	const { effectiveCommands, resolvePathWord, fdStdinSpec, extractReadSubFile } = require("./effective-argv.js");
 	const { tryCanonicalTargetPath } = require("./deploy-readiness.js");
 	const hits = [];
 	const seen = new Set();
 	const visitedScripts = new Set();
+
+	const pushUniqueHit = (key, hit) => {
+		if (seen.has(key)) return false;
+		seen.add(key);
+		hits.push(hit);
+		return true;
+	};
+
+	const validateTargetFile = (raw, baseDir, dirKnown, clause, depth, { isShell = false, isInterp = false, isDirectScript = false, pathExec = false } = {}) => {
+		if (!raw) return false;
+		const isDynamic = /\$|\$\{/.test(raw);
+		if (depth > 0 && isDynamic) return false;
+		const resolved = resolvePathWord(raw, baseDir, baseDir, dirKnown);
+		if (!resolved) {
+			if (isShell || isDirectScript) {
+				pushUniqueHit(`unresolved:${raw}`, { service: "unclassified:missing-script", label: `분류 불가: 실행 대본 경로를 확인할 수 없음(${raw})`, clause, unclassified: true, tool: "missing-script" });
+				return true;
+			}
+			return false;
+		}
+		const probe = tryCanonicalTargetPath(resolved, baseDir);
+		if (probe.error) {
+			pushUniqueHit(`err:${resolved}`, { service: "unclassified:script-unreadable", label: `분류 불가: 대본 경로를 확인할 수 없음(${probe.error})`, clause, unclassified: true, tool: "script-unreadable" });
+			return true;
+		}
+		let st = null;
+		let statErr = null;
+		try { st = fs.statSync(resolved); } catch (err) { statErr = err; }
+		if (statErr) {
+			const unreadable = statErr.code === "EACCES" || statErr.code === "EPERM" || statErr.code === "ELOOP";
+			if (isShell || isInterp || isDirectScript || pathExec) {
+				pushUniqueHit(`stat:${resolved}`, {
+					service: unreadable ? "unclassified:script-unreadable" : "unclassified:missing-script",
+					label: unreadable ? `분류 불가: 대본을 읽을 수 없음(${resolved}: ${statErr.code})` : `분류 불가: 실행하려는 대본 파일이 없어 내용을 확인할 수 없음(${resolved})`,
+					clause,
+					unclassified: true,
+					tool: unreadable ? "script-unreadable" : "missing-script",
+				});
+				return true;
+			}
+			return false;
+		}
+		if (!st.isFile()) {
+			if (isShell || isInterp || isDirectScript) {
+				pushUniqueHit(`nonfile:${resolved}`, { service: "unclassified:script-unreadable", label: `분류 불가: 실행 대상이 일반 파일이 아님(${resolved})`, clause, unclassified: true, tool: "script-unreadable" });
+				return true;
+			}
+			return false;
+		}
+		if (isShell || isInterp || isDirectScript) {
+			try {
+				fs.accessSync(resolved, fs.constants.R_OK);
+			} catch (err) {
+				pushUniqueHit(`access:${resolved}`, { service: "unclassified:script-unreadable", label: `분류 불가: 대본 읽기 권한이 없어 내용을 확인할 수 없음(${resolved}: ${err.code || "EACCES"})`, clause, unclassified: true, tool: "script-unreadable" });
+				return true;
+			}
+		}
+		return false;
+	};
 
 	const visit = (text, baseDir, depth) => {
 		if (depth > 3 || !String(text || "").trim()) return;
 		let entries = [];
 		try { entries = effectiveCommands(String(text || ""), baseDir); } catch { return; }
 		for (const e of entries) {
-			if (e.opaque) continue;
-			const tokens = Array.isArray(e.argv) ? e.argv : [];
 			const cDir = e.dir || baseDir || cwd || "/";
 			const dirKnown = e.dirKnown !== false;
-			const execWord = executedTargetWord(tokens);
-			if (execWord && execWord.target !== "-" && !execWord.target.startsWith("/dev/")) {
-				const raw = execWord.target;
-				const isShell = execWord.kind === "shell";
-				const isInterp = execWord.kind === "interpreter";
-				const isDirectScript = /\.(?:sh|bash|mjs|js|py)$/i.test(raw);
-				const isDynamic = /\$|\$\{/.test(raw);
-				if (!(depth > 0 && isDynamic)) {
-					const resolved = resolvePathWord(raw, cDir, cDir, dirKnown);
-					const clause = clauseText(tokens, e.assigns);
-					if (!resolved) {
-						if (isShell || isDirectScript) {
-							const key = `unresolved:${raw}`;
-							if (!seen.has(key)) {
-								seen.add(key);
-								hits.push({ service: "unclassified:missing-script", label: `분류 불가: 실행 대본 경로를 확인할 수 없음(${raw})`, clause, unclassified: true, tool: "missing-script" });
-							}
-						}
-					} else {
-						const probe = tryCanonicalTargetPath(resolved, cDir);
-						if (probe.error) {
-							const key = `err:${resolved}`;
-							if (!seen.has(key)) {
-								seen.add(key);
-								hits.push({ service: "unclassified:script-unreadable", label: `분류 불가: 대본 경로를 확인할 수 없음(${probe.error})`, clause, unclassified: true, tool: "script-unreadable" });
-							}
-						} else {
-							let st = null;
-							let statErr = null;
-							try { st = fs.statSync(resolved); } catch (err) { statErr = err; }
-							if (statErr) {
-								const unreadable = statErr.code === "EACCES" || statErr.code === "EPERM" || statErr.code === "ELOOP";
-								if (isShell || isInterp || isDirectScript || (tokens[0] || "").includes("/")) {
-									const key = `stat:${resolved}`;
-									if (!seen.has(key)) {
-										seen.add(key);
-										hits.push({
-											service: unreadable ? "unclassified:script-unreadable" : "unclassified:missing-script",
-											label: unreadable ? `분류 불가: 대본을 읽을 수 없음(${resolved}: ${statErr.code})` : `분류 불가: 실행하려는 대본 파일이 없어 내용을 확인할 수 없음(${resolved})`,
-											clause,
-											unclassified: true,
-											tool: unreadable ? "script-unreadable" : "missing-script",
-										});
-									}
-								}
-							} else if (!st.isFile()) {
-								if (isShell || isInterp || isDirectScript) {
-									const key = `nonfile:${resolved}`;
-									if (!seen.has(key)) {
-										seen.add(key);
-										hits.push({ service: "unclassified:script-unreadable", label: `분류 불가: 실행 대상이 일반 파일이 아님(${resolved})`, clause, unclassified: true, tool: "script-unreadable" });
-									}
-								}
-							} else if (isShell || isInterp || isDirectScript) {
-								try {
-									fs.accessSync(resolved, fs.constants.R_OK);
-								} catch (err) {
-									const key = `access:${resolved}`;
-									if (!seen.has(key)) {
-										seen.add(key);
-										hits.push({ service: "unclassified:script-unreadable", label: `분류 불가: 대본 읽기 권한이 없어 내용을 확인할 수 없음(${resolved}: ${err.code || "EACCES"})`, clause, unclassified: true, tool: "script-unreadable" });
-									}
-								}
-							}
-						}
+			if (e.opaque) {
+				const headOpaque = Array.isArray(e.argv) ? e.argv[0] : "";
+				const isStdinOpaque = headOpaque === "<shell-stdin>" || (headOpaque === "<dynamic-program>" && (Boolean(e.stdinTarget) || /<\(/.test(String(e.opaque || ""))));
+				if (isStdinOpaque) {
+					const clause = Array.isArray(e.clause) && e.clause.length ? clauseText(e.clause) : String(e.opaque || headOpaque);
+					const target = e.stdinTarget && String(e.stdinTarget);
+					const isSpecTarget = !target || target === "-s" || fdStdinSpec(target, cDir, cDir, dirKnown) || /^(?:\$\(|\`|<\()/.test(target);
+					let flagged = false;
+					if (!isSpecTarget) flagged = validateTargetFile(target, cDir, dirKnown, clause, depth, { isShell: true });
+					if (!flagged) {
+						pushUniqueHit(`stdin-opaque:${clause}:${target || ""}`, {
+							service: "unclassified:script-unreadable",
+							label: `분류 불가: ${e.opaque || "표준입력·파일 설명자 대본을 확인할 수 없음"}`,
+							clause,
+							unclassified: true,
+							tool: "script-unreadable",
+						});
 					}
 				}
+				continue;
+			}
+			const tokens = Array.isArray(e.argv) ? e.argv : [];
+			const clause = clauseText(tokens, e.assigns);
+			const execWord = executedTargetWord(tokens);
+			if (execWord) {
+				const raw = execWord.target;
+				if (fdStdinSpec(raw, cDir, cDir, dirKnown)) {
+					if (Array.isArray(e.stdinSourceFiles)) {
+						for (const sf of e.stdinSourceFiles) validateTargetFile(sf, cDir, true, clause, depth, { isShell: true });
+					}
+				} else {
+					const sub = extractReadSubFile(raw);
+					if (sub) {
+						validateTargetFile(sub.file, cDir, dirKnown, clause, depth, { isShell: true });
+					} else {
+						validateTargetFile(raw, cDir, dirKnown, clause, depth, {
+							isShell: execWord.kind === "shell",
+							isInterp: execWord.kind === "interpreter",
+							isDirectScript: /\.(?:sh|bash|mjs|js|py)$/i.test(raw),
+							pathExec: (tokens[0] || "").includes("/"),
+						});
+					}
+				}
+			} else if (Array.isArray(e.stdinSourceFiles) && e.stdinSourceFiles.length) {
+				for (const sf of e.stdinSourceFiles) validateTargetFile(sf, cDir, true, clause, depth, { isShell: true });
 			}
 			const sf = executedShellFile(tokens, cDir, dirKnown, String(text || ""), false);
 			if (sf && !visitedScripts.has(sf)) {
@@ -2358,7 +2440,7 @@ function classifyUnresolvedScriptTargets(command, cwd) {
 }
 
 const SUDO_VALUE_OPTS = {
-	sudo: /^(?:-u|--user|-g|--group|-C|-D|--chdir|-h|--host|-p|--prompt|-r|-t)$/,
+	sudo: /^(?:-u|--user|-U|--other-user|-g|--group|-C|-D|--chdir|-h|--host|-p|--prompt|-r|-t)$/,
 	doas: /^(?:-u|-C)$/,
 	env: /^(?:-u|--unset|-C|--chdir|-S|--split-string)$/,
 	timeout: /^(?:-k|--kill-after|-s|--signal)$/,
@@ -2371,10 +2453,74 @@ const PRIV_WRAPPERS = new Set(["sudo", "doas", "nohup", "time", "env", "exec", "
 const PRIV_LEAD = new Set(["!", "{", "if", "then", "elif", "else", "do", "while", "until"]);
 const PRIV_NOT_CMD = new Set(["for", "select", "case", "fi", "done", "esac", "}", "in", ";;"]);
 
-/** 저장소 정책을 찾지 못해도 sudo 명령을 기본 차단 목록과 보수적 규칙으로 검사한다. */
+const SYSTEMCTL_READ_VERBS = new Set([
+	"status",
+	"show",
+	"is-active",
+	"is-enabled",
+	"is-failed",
+	"list-units",
+	"list-unit-files",
+	"list-timers",
+	"list-sockets",
+	"list-dependencies",
+	"cat",
+]);
+const SYSTEMCTL_VALUE_OPTS = new Set([
+	"-H", "--host", "-M", "--machine", "--root", "--image", "--job-mode",
+	"--kill-whom", "--kill-who", "-s", "--signal", "-p", "--property",
+	"-t", "--type", "--state", "-n", "--lines", "-o", "--output",
+	"--after", "--before", "--with-dependencies", "--legend",
+]);
+const JOURNALCTL_MUTATING_FLAG = /^--(?:vacuum(?:-[a-z-]+)?|rotate|flush|sync|relinquish-var|smart-relinquish-var|setup-keys|update-catalog|cursor-file)(?:=|$)/;
+
+function hasSudoWriteRedirect(tokens, redirectSpan) {
+	for (let i = 0; i < tokens.length; i++) {
+		const sp = redirectSpan(tokens, i);
+		if (!sp) continue;
+		const m = String(tokens[i]).match(/^(?:\d+|&)?(>\||>>|>|<&|>&|<>)(.*)$/);
+		if (m) {
+			const op = m[1];
+			const rhs = (sp === 2 ? String(tokens[i + 1] || "") : m[2]).trim();
+			if (op === ">|" || op === ">>" || op === ">" || op === "<>" || op === ">&") {
+				const isBenignDup = op === ">&" && /^(?:\d+-?|-)$/.test(rhs);
+				if (!isBenignDup && rhs !== "/dev/null") return true;
+			}
+		}
+		i += sp - 1;
+	}
+	return false;
+}
+
+function isAllowedReadOnlySudo(clean) {
+	if (!clean.length) return false;
+	const head = path.basename(clean[0]).toLowerCase();
+	const args = clean.slice(1);
+	if (head === "true" || head === ":" || head === "whoami") return true;
+	if (head === "cat" || head === "ls" || head === "stat" || head === "df" || head === "du") return true;
+	if (head === "systemctl") {
+		let verb = "";
+		for (let i = 0; i < args.length; i++) {
+			const a = args[i];
+			if (a === "--") { verb = args[i + 1] || ""; break; }
+			if (SYSTEMCTL_VALUE_OPTS.has(a)) { i++; continue; }
+			if (a.startsWith("-")) continue;
+			verb = a;
+			break;
+		}
+		if (!verb) return args.some((a) => /^(?:-h|--help|--version)$/.test(a));
+		return SYSTEMCTL_READ_VERBS.has(verb.toLowerCase());
+	}
+	if (head === "journalctl") {
+		return !args.some((a) => JOURNALCTL_MUTATING_FLAG.test(a));
+	}
+	return false;
+}
+
+/** 저장소 정책을 찾지 못해도 sudo 명령을 기본 허용·거부 목록과 보수적 규칙으로 검사한다. */
 function classifyBaselineSudo(command, cwd) {
 	const { shellClauses } = require("./git-command-parser.js");
-	const { redirectSpan, shellInvocation } = require("./effective-argv.js");
+	const { redirectSpan, shellInvocation, stdinProgramInfo, extractReadSubFile, expandClause } = require("./effective-argv.js");
 	const hits = [];
 	const seen = new Set();
 	const visitedScripts = new Set();
@@ -2386,7 +2532,7 @@ function classifyBaselineSudo(command, cwd) {
 		hits.push({ service, label, clause });
 	};
 
-	const unwrapAndInspectClause = (clauseTokens, baseDir, depth, inheritedSudo) => {
+	const unwrapAndInspectClause = (clauseTokens, baseDir, depth, inheritedSudo, prevExpanded = null) => {
 		if (!Array.isArray(clauseTokens) || !clauseTokens.length) return;
 		if (Array.isArray(clauseTokens.subs)) {
 			for (const sub of clauseTokens.subs) inspectText(sub, baseDir, depth + 1, inheritedSudo);
@@ -2394,6 +2540,8 @@ function classifyBaselineSudo(command, cwd) {
 		let t = clauseTokens.slice();
 		let underSudo = inheritedSudo;
 		let sudoSawHelpOrVersion = false;
+		let sudoSawList = false;
+		let sudoSawUnsafeOpt = false;
 		for (let guard = 0; guard < 20 && t.length; guard++) {
 			if (PRIV_LEAD.has(t[0])) { t = t.slice(1); continue; }
 			const r = redirectSpan(t, 0);
@@ -2406,7 +2554,16 @@ function classifyBaselineSudo(command, cwd) {
 			t = t.slice(1);
 			while (t.length && t[0].startsWith("-")) {
 				const opt = t[0];
-				if ((w === "sudo" || w === "doas") && /^(?:-V|--version|-h|--help)$/.test(opt)) sudoSawHelpOrVersion = true;
+				if (opt === "--") { t = t.slice(1); break; }
+				const valRe = SUDO_VALUE_OPTS[w];
+				const isValOpt = !!(valRe && valRe.test(opt));
+				if (w === "sudo" || w === "doas") {
+					if (/^(?:-V|--version|--help)$/.test(opt) || (opt === "-h" && t.length === 1)) sudoSawHelpOrVersion = true;
+					if (w === "sudo") {
+						if (opt === "--list" || (!isValOpt && /^-[A-Za-z]*l/.test(opt))) sudoSawList = true;
+						if (/^--(?:login|shell|edit)$/.test(opt) || (!isValOpt && /^-[A-Za-z]*[ise]/.test(opt))) sudoSawUnsafeOpt = true;
+					}
+				}
 				if (w === "command" && /^-[a-zA-Z]*[vV]/.test(opt)) return;
 				if (w === "flock" && (opt === "-c" || opt === "--command") && t[1]) {
 					inspectText(t[1], baseDir, depth + 1, underSudo);
@@ -2416,11 +2573,11 @@ function classifyBaselineSudo(command, cwd) {
 					inspectText(t.slice(1).join(" "), baseDir, depth + 1, underSudo);
 					return;
 				}
-				const valRe = SUDO_VALUE_OPTS[w];
-				t = t.slice(valRe && valRe.test(opt) ? 2 : 1);
+				t = t.slice(isValOpt ? 2 : 1);
 			}
 			if (w === "timeout" && t.length) t = t.slice(1);
 		}
+		const writeRedir = hasSudoWriteRedirect(t, redirectSpan) || hasSudoWriteRedirect(clauseTokens, redirectSpan);
 		const clean = [];
 		for (let i = 0; i < t.length; i++) {
 			const r = redirectSpan(t, i);
@@ -2428,12 +2585,14 @@ function classifyBaselineSudo(command, cwd) {
 			clean.push(t[i]);
 		}
 		if (!clean.length) {
-			if (underSudo && !sudoSawHelpOrVersion) pushHit("sudo:unclassified", "기본 sudo 차단: 권한 실행 대상을 확인할 수 없음", clauseText(clauseTokens));
+			if (underSudo && (sudoSawUnsafeOpt || writeRedir || !(sudoSawHelpOrVersion || sudoSawList))) {
+				pushHit("sudo:unclassified", "기본 sudo 차단: 권한 실행 대상을 확인할 수 없음", clauseText(clauseTokens));
+			}
 			return;
 		}
 		const head = path.basename(clean[0]).toLowerCase();
 		if (SHELL_RE.test(clean[0])) {
-			const inv = shellInvocation(clean);
+			const inv = shellInvocation(clean, { dir: baseDir });
 			if (inv.command >= 0) inspectText(clean[inv.command], baseDir, depth + 1, underSudo);
 			if (Array.isArray(clauseTokens.heredocs)) {
 				for (const hb of clauseTokens.heredocs) inspectText(hb, baseDir, depth + 1, underSudo);
@@ -2442,19 +2601,44 @@ function classifyBaselineSudo(command, cwd) {
 		if (underSudo) {
 			const rawClause = clauseText(clean);
 			if (SHELL_RE.test(clean[0]) || head === "source" || head === ".") {
-				const inv = SHELL_RE.test(clean[0]) ? shellInvocation(clean) : { script: 1, command: -1 };
-				const svc = inv.script >= 0 ? "sudo:bash-script" : "sudo:shell";
+				const inv = SHELL_RE.test(clean[0]) ? shellInvocation(clean, { dir: baseDir }) : { script: 1, command: -1 };
+				const svc = inv.script >= 0 || inv.readsStdin ? "sudo:bash-script" : "sudo:shell";
 				pushHit(svc, `기본 sudo 차단 목록(sudo ${head})에 해당해 막습니다`, `sudo ${rawClause}`);
 				return;
 			}
+			if (!writeRedir && !sudoSawUnsafeOpt && isAllowedReadOnlySudo(clean)) return;
 			if (head === "systemctl" || head === "service" || head === "journalctl") {
 				pushHit("sudo:systemctl", `기본 sudo 차단 목록(sudo ${head})에 해당해 막습니다`, `sudo ${rawClause}`);
+				return;
+			}
+			if (writeRedir) {
+				pushHit("sudo:file-write", `기본 sudo 차단 목록(쓰기 리다이렉션)에 해당해 막습니다`, `sudo ${rawClause}`);
 				return;
 			}
 			pushHit("sudo:unclassified", `저장소 승인 계획 없이 sudo(${head}) 는 실행할 수 없어 막습니다`, `sudo ${rawClause}`);
 			return;
 		}
-		// sudo 없이 부른 로컬 셸 스크립트 안의 sudo 도 검사한다.
+		// sudo 없이 부른 로컬 셸 스크립트나 stdin/FD 입력 안의 sudo 도 검사한다.
+		if ((SHELL_RE.test(clean[0]) || head === "source" || head === ".") && depth < 3) {
+			const stdinInfo = stdinProgramInfo(
+				{ argv: t, piped: !!clauseTokens.piped, heredocs: clauseTokens.heredocs, heredocFds: clauseTokens.heredocFds },
+				prevExpanded,
+				baseDir,
+				"",
+				true
+			);
+			if (stdinInfo.program) inspectText(stdinInfo.program, baseDir, depth + 1, false);
+			const targetTok = clean[1];
+			const sub = targetTok ? extractReadSubFile(targetTok) : null;
+			if (sub) {
+				const subFile = path.resolve(baseDir || "/", sub.file);
+				if (!visitedScripts.has(subFile)) {
+					visitedScripts.add(subFile);
+					const body = scriptText(subFile);
+					if (body) inspectText(body, baseDir, depth + 1, false);
+				}
+			}
+		}
 		const sf = executedShellFile(clean, baseDir, true, "", false);
 		if (sf && !visitedScripts.has(sf) && depth < 3) {
 			visitedScripts.add(sf);
@@ -2468,11 +2652,18 @@ function classifyBaselineSudo(command, cwd) {
 		let clauses = [];
 		try { clauses = shellClauses(String(text || "")); } catch { return; }
 		let curDir = baseDir || cwd || "/";
+		let prevExp = null;
 		for (const c of clauses) {
 			if (Array.isArray(c) && c[0] === "cd" && c[1] && !c[1].startsWith("-") && !/\$|\$\{/.test(c[1])) {
 				curDir = path.resolve(curDir, c[1]);
 			}
-			unwrapAndInspectClause(c, curDir, depth, inheritedSudo);
+			unwrapAndInspectClause(c, curDir, depth, inheritedSudo, prevExp);
+			try {
+				const exp = expandClause(c);
+				prevExp = exp.length ? { ...exp[0], dir: curDir, dirKnown: true } : null;
+			} catch {
+				prevExp = null;
+			}
 		}
 	};
 

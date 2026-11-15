@@ -126,7 +126,7 @@ function parseShellClauses(command) {
 function shellState(inherited, dir) {
 	const initial = {};
 	return { dir, dirKnown: true, vars: {...initial}, exported: {...initial}, autoExport:false, uncertain:false,
-		...inherited, vars:{...(inherited ? inherited.vars : initial)}, exported:{...(inherited ? inherited.exported : initial)}, exportFlags:{...inherited?.exportFlags}, explicitExports:{...inherited?.explicitExports}, readonly:{...inherited?.readonly} };
+		...inherited, vars:{...(inherited ? inherited.vars : initial)}, exported:{...(inherited ? inherited.exported : initial)}, exportFlags:{...inherited?.exportFlags}, explicitExports:{...inherited?.explicitExports}, readonly:{...inherited?.readonly}, fds:new Map(inherited?.fds || []) };
 }
 
 // Every body entry uses this function: files, source, -c, stdin (heredoc,
@@ -162,7 +162,16 @@ function shellBodyState(entry, kind = "exec") {
 	return child;
 }
 
-function sourceTargetIndex(argv) { return argv[1] === "--" ? 2 : 1; }
+function sourceTargetIndex(argv) {
+	let i = 1;
+	while (i < argv.length) {
+		const r = redirectSpan(argv, i);
+		if (r) { i += r; continue; }
+		if (argv[i] === "--") { i++; break; }
+		break;
+	}
+	return i < argv.length ? i : -1;
+}
 
 function updateShellState(words, state) {
 	const name = /^[A-Za-z_]\w*$/;
@@ -276,20 +285,48 @@ function redirectSpan(tokens, i) {
 	return REDIR_GLUED.test(t) ? 1 : 0;
 }
 
-function shellInvocation(argv) {
+/** 낱말이 표준입력(`-`, `/dev/stdin`)이나 파일 설명자 경로(`/dev/fd/N`, `/proc/.../fd/N`)를 가리키는지 판별한다. */
+function fdStdinSpec(word, dir, root = "", dirKnown = true) {
+	if (typeof word !== "string" || !word) return null;
+	if (word === "-") return { fd: 0, kind: "dash", token: word };
+	const matchPath = (p) => {
+		const norm = path.posix.normalize(p.replace(/\\/g, "/"));
+		if (norm === "/dev/stdin") return { fd: 0, kind: "dev-stdin", token: word };
+		let m = norm.match(/^\/dev\/fd\/(\d+)$/);
+		if (m) return { fd: Number(m[1]), kind: "dev-fd", token: word };
+		m = norm.match(/^\/proc\/(?:self|thread-self|\d+)\/fd\/(\d+)$/);
+		if (m) return { fd: Number(m[1]), kind: "proc-fd", token: word };
+		return null;
+	};
+	if (word.startsWith("/")) {
+		const hit = matchPath(word);
+		if (hit) return hit;
+	}
+	if (dir !== undefined) {
+		const resolved = resolvePathWord(word, dir, root, dirKnown);
+		if (resolved) {
+			const hit = matchPath(resolved);
+			if (hit) return hit;
+		}
+	}
+	return null;
+}
+
+function shellInvocation(argv, opts = {}) {
 	let c = false, s = false, n = false, i = 1;
+	let stdinTok = null;
 	for (; i < argv.length; i++) {
 		const a = argv[i];
 		const r = c ? 0 : redirectSpan(argv, i); // -c 뒤 글은 따옴표가 벗겨져 "<…" 로 시작할 수 있다
 		if (r) { i += r - 1; continue; }
-		if (a === "-") { s = true; i++; break; } // "bash -" 는 표준 입력에서 프로그램을 읽는다
+		if (a === "-") { s = true; stdinTok = "-"; i++; break; } // "bash -" 는 표준 입력에서 프로그램을 읽는다
 		if (a === "--") { i++; break; }
 		if (/^--(?:rcfile|init-file)$/.test(a)) { i++; continue; }
 		if (a.startsWith("--")) continue;
 		if (/^[-+][A-Za-z]+$/.test(a)) {
 			const letters = a.slice(1);
 			if (a[0] === "-" && letters.includes("c")) c = true;
-			if (a[0] === "-" && letters.includes("s")) s = true;
+			if (a[0] === "-" && letters.includes("s")) { s = true; stdinTok = stdinTok || a; }
 			if (a[0] === "-" && letters.includes("n")) n = true; // -n 은 문법 검사만 하고 실행하지 않는다
 			i += (letters.match(/[oO]/g) || []).length;
 			continue;
@@ -298,8 +335,20 @@ function shellInvocation(argv) {
 	}
 	while (!c && i < argv.length && redirectSpan(argv, i)) i += redirectSpan(argv, i);
 	const first = i < argv.length ? i : -1;
-	if (n) return { command: -1, script: -1, readsStdin: false, noexec: true };
-	return { command: c ? first : -1, script: c || s ? -1 : first, readsStdin: s };
+	if (n) return { command: -1, script: -1, readsStdin: false, noexec: true, stdinFd: null, fdToken: null };
+	if (!c && !s && first >= 0) {
+		const fdSpec = fdStdinSpec(argv[first], opts.dir, opts.root, opts.dirKnown);
+		if (fdSpec) {
+			return { command: -1, script: -1, readsStdin: true, stdinFd: fdSpec.fd, fdToken: argv[first] };
+		}
+	}
+	return {
+		command: c ? first : -1,
+		script: c || s ? -1 : first,
+		readsStdin: !c && s,
+		stdinFd: !c && s ? 0 : null,
+		fdToken: !c && s ? stdinTok : null,
+	};
 }
 const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const ENV_PROGRAM_VARIABLE = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\}|[0-9]+|[@*?#$!])$/;
@@ -339,10 +388,23 @@ function nested(str, depth, assigns) {
 function expandClause(tokens, depth = 0, inherited = []) {
 	const piped = !!tokens.piped;
 	const heredocs = tokens.heredocs || [];
+	const heredocFds = tokens.heredocFds || [];
 	let t = tokens.slice();
 	const assigns = inherited.slice();
 	const out = [];
 	const moved = [];
+	const withOuterIo = (clauses) => {
+		if (!clauses.length) return clauses;
+		const first = clauses[0];
+		clauses[0] = {
+			...first,
+			argv: moved.length ? [...first.argv, ...moved] : first.argv,
+			piped: first.piped || piped,
+			heredocs: first.heredocs && first.heredocs.length ? first.heredocs : heredocs,
+			heredocFds: first.heredocFds && first.heredocFds.length ? first.heredocFds : heredocFds,
+		};
+		return clauses;
+	};
 	let envProgramVariable = false;
 	for (let guard = 0; guard < 20 && t.length; guard++) {
 		if (RESERVED_LEAD.has(t[0])) { t = t.slice(1); continue; }
@@ -356,8 +418,15 @@ function expandClause(tokens, depth = 0, inherited = []) {
 		t = t.slice(1);
 		while (t.length && t[0].startsWith("-")) {
 			if (w === "command" && /^-[a-zA-Z]*[vV]/.test(t[0])) return out; // command -v 는 찾기만 하고 실행하지 않는다
-			if (w === "flock" && (t[0] === "-c" || t[0] === "--command")) return [...out, ...nested(t[1], depth, assigns)];
-			if (w === "env" && (t[0] === "-S" || t[0] === "--split-string")) return [...out, ...nested(t.slice(1).join(" "), depth, assigns)];
+			if (w === "flock" && /^(?:-c|--command)(?:=|$)/.test(t[0])) {
+				const cmdStr = t[0].includes("=") ? t[0].slice(t[0].indexOf("=") + 1) : t[1];
+				const restAfter = t[0].includes("=") ? t.slice(1) : t.slice(2);
+				return [...out, ...withOuterIo(nested(restAfter.length ? `${cmdStr} ${restAfter.map(quoteArg).join(" ")}` : cmdStr, depth, assigns))];
+			}
+			if (w === "env" && /^(?:-S|--split-string)(?:=.+)?$/.test(t[0])) {
+				const str = t[0] === "-S" || t[0] === "--split-string" ? t.slice(1).join(" ") : `${t[0].replace(/^(?:-S|--split-string)=?/, "")} ${t.slice(1).join(" ")}`.trim();
+				return [...out, ...withOuterIo(nested(str, depth, assigns))];
+			}
 			t = t.slice(VALUE_OPTS[w] && VALUE_OPTS[w].test(t[0]) ? 2 : 1);
 		}
 		// timeout's first positional argument is always DURATION. It may be a variable or
@@ -366,7 +435,11 @@ function expandClause(tokens, depth = 0, inherited = []) {
 		if (w === "flock" && t.length) {
 			t = t.slice(1); // lock file or fd
 			while (t.length && t[0].startsWith("-")) {
-				if (t[0] === "-c" || t[0] === "--command") return [...out, ...nested(t[1], depth, assigns)];
+				if (/^(?:-c|--command)(?:=|$)/.test(t[0])) {
+					const cmdStr = t[0].includes("=") ? t[0].slice(t[0].indexOf("=") + 1) : t[1];
+					const restAfter = t[0].includes("=") ? t.slice(1) : t.slice(2);
+					return [...out, ...withOuterIo(nested(restAfter.length ? `${cmdStr} ${restAfter.map(quoteArg).join(" ")}` : cmdStr, depth, assigns))];
+				}
 				t = t.slice(VALUE_OPTS.flock.test(t[0]) ? 2 : 1);
 			}
 		}
@@ -379,7 +452,7 @@ function expandClause(tokens, depth = 0, inherited = []) {
 	}
 	if (t.length === 0) return out;
 	if (moved.length) t = [...t, ...moved];
-	out.push({ argv: t, assigns, piped, heredocs, ...(envProgramVariable ? { envProgramVariable: true } : {}) });
+	out.push({ argv: t, assigns, piped, heredocs, heredocFds, ...(envProgramVariable ? { envProgramVariable: true } : {}) });
 	const head = path.basename(t[0]);
 	const rest = t.slice(1);
 	if (SHELLS.test(t[0])) {
@@ -476,45 +549,266 @@ function expandClause(tokens, depth = 0, inherited = []) {
  * "cat f.sh | bash" hid a deploy or agent run). undefined = the shell does not read a program from stdin
  * here (it runs -c text or a script file, or has no stdin source); null = it does, but the hook cannot read it.
  */
-function stdinProgram(e, prev, dir) {
-	const rest = e.argv.slice(1);
-	const inv = shellInvocation(e.argv);
-	if (inv.command >= 0 || inv.script >= 0) return undefined; // -c text or a script file: read elsewhere
-	if (inv.noexec) return undefined;
-	const readsStdin = inv.readsStdin;
-	if (e.heredocs && e.heredocs.length) return e.heredocs.join("\n");
-	const hi = rest.findIndex((a) => /^\d*<<</.test(a));
-	if (hi >= 0) return rest[hi].replace(/^\d*<<</, "") || (rest[hi + 1] ?? "");
-	const ri = rest.findIndex((a) => a === "<" || (a.startsWith("<") && !a.startsWith("<<")));
-	if (ri >= 0) return readLocal(rest[ri] === "<" ? rest[ri + 1] : rest[ri].slice(1), dir);
-	if (e.piped) {
-		if (!prev) return null;
-		const head = path.basename(prev.argv[0]);
-		if (head === "cat" && prev.argv.length > 1 && prev.argv.slice(1).every((a) => !a.startsWith("-"))) {
-			const parts = prev.argv.slice(1).map((f) => readLocal(f, prev.dir));
-			return parts.some((x) => x === null) ? null : parts.join("\n");
-		}
-		if (head === "echo" || head === "printf") return prev.argv.slice(1).filter((a) => !/^-[neE]+$/.test(a)).join(" ").replace(/\\n/g, "\n");
-		return null;
-	}
-	return readsStdin ? null : undefined;
+const READ_SUB = /^(?:\$\(\s*(?:cat\s+([^\s()<>|;&$`'"]+)|<\s*([^\s()<>|;&$`'"]+))\s*\)|`\s*cat\s+([^\s()<>|;&$`'"]+)\s*`|<\(\s*cat\s+([^\s()<>|;&$`'"]+)\s*\))$/;
+
+function extractReadSubFile(word) {
+	if (typeof word !== "string") return null;
+	const m = word.match(READ_SUB);
+	if (m) return { file: m[1] || m[2] || m[3] || m[4], isProcSub: word.startsWith("<(") };
+	const proc = word.match(/^<\(\s*(?:cat(?:\s+--)?|<)\s+(?:'([^'$`\n]+)'|"([^"$`\n]+)"|([^\s()<>|;&$`'"]+))\s*\)$/);
+	if (proc) return { file: proc[1] || proc[2] || proc[3], isProcSub: true };
+	return null;
 }
 
 function readLocal(file, dir) {
 	if (!file || /[$`*?]/.test(file)) return null;
 	try {
 		const p = path.resolve(dir || "/", file.replace(/^~(?=\/|$)/, require("os").homedir()));
-		return readCachedText(p, 1024 * 1024);
+		return readCachedText(p, 1024 * 1024, true);
 	} catch {
 		return null;
 	}
 }
 
-// 설계 검수 13회차 2번: 실행 중에 만들어지는 프로그램 글. 명령 자리의 $(…)·역따옴표·변수, source 대상과 셸 스크립트 인자의
-// <(…)·$(…)·변수는 훅이 읽은 글과 bash 가 실행하는 글이 다르다("bash -c \"$(cat cmd.txt)\"", "eval \"$CMD\"", "source <(cat f)").
-// $(cat F)·$(< F)·<(cat F) 는 F 를 읽어 그 글을 본다. 변수는 이 명령 안에서 글자 그대로의 값으로만 정해졌으면 그 값을 보고,
-// 이 명령 안에서 값을 정한 적이 없으면(프로필 환경의 $HOME 등) 예전처럼 둔다. 그 밖은 막을 표시(opaque)를 남긴다.
-const READ_SUB = /^(?:\$\(\s*(?:cat\s+([^\s()<>|;&$`'"]+)|<\s*([^\s()<>|;&$`'"]+))\s*\)|`\s*cat\s+([^\s()<>|;&$`'"]+)\s*`|<\(\s*cat\s+([^\s()<>|;&$`'"]+)\s*\))$/;
+function readInputFileWord(rawTarget, dir, root = "", dirKnown = true, written = null) {
+	const sub = extractReadSubFile(rawTarget);
+	if (sub) {
+		const resolvedSub = resolvePathWord(sub.file, dir, root, dirKnown);
+		if (!resolvedSub) return { ok: false, resolved: null, target: sub.file, reason: "unresolved-proc-sub" };
+		return readInputFileWord(resolvedSub, "/", root, true, written);
+	}
+	if (!rawTarget || /^(?:\$\(|\`|<\(|>\()/.test(rawTarget) || /[*?]/.test(rawTarget)) {
+		return { ok: false, resolved: null, target: rawTarget || "", reason: "dynamic-redirect" };
+	}
+	const resolved = resolvePathWord(rawTarget, dir, root, dirKnown);
+	if (!resolved) return { ok: false, resolved: null, target: rawTarget, reason: "unresolved-redirect" };
+	const fdSpec = fdStdinSpec(resolved, "/", root, true);
+	if (fdSpec) return { ok: false, resolved, fdSpec, target: resolved, reason: "fd-target" };
+	if (written && written.has(resolved)) {
+		const val = written.get(resolved);
+		if (val === null) return { ok: false, resolved, target: resolved, reason: "unknown-written-file" };
+		return { ok: true, resolved, text: val };
+	}
+	const text = readLocal(resolved, "/");
+	if (text === null) return { ok: false, resolved, target: resolved, reason: "unreadable-file" };
+	return { ok: true, resolved, text };
+}
+
+function unescapeSimpleEscapes(s) {
+	return s.replace(/\\(n|t|\\)/g, (_, k) => (k === "n" ? "\n" : k === "t" ? "\t" : "\\"));
+}
+
+const UNSAFE_PIPE_ESCAPE = /\\(?:x[0-9a-fA-F]|[0-7]{1,3}|u[0-9a-fA-F]|U[0-9a-fA-F]|c)/;
+
+function formatPrintfPipe(args) {
+	if (!args.length) return null;
+	let i = 0;
+	while (i < args.length && args[i] === "--") { i++; break; }
+	if (args[i] === "-v" || /^-[a-zA-Z]*v/.test(args[i] || "")) return null;
+	const fmt = args[i];
+	if (fmt === undefined) return null;
+	const rest = args.slice(i + 1);
+	if (UNSAFE_PIPE_ESCAPE.test(fmt)) return null;
+	// %s·%b·%% 와 단순 \n·\t 외의 형식 지정자나 이스케이프는 안전하게 복원할 수 없으므로 fail-closed 처리한다.
+	const stripped = fmt.replace(/%%/g, "").replace(/%[sb]/g, "");
+	if (/%/.test(stripped)) return null;
+	const tokens = fmt.match(/%%|%[sb]|[^%]+/g) || [""];
+	const specCount = tokens.filter((t) => t === "%s" || t === "%b").length;
+	if (specCount === 0) return rest.length ? null : unescapeSimpleEscapes(fmt.replace(/%%/g, "%"));
+	let argIdx = 0;
+	const parts = [];
+	for (let cycle = 0; cycle < 8; cycle++) {
+		for (const tok of tokens) {
+			if (tok === "%%") { parts.push("%"); continue; }
+			if (tok === "%s") { parts.push(argIdx < rest.length ? rest[argIdx++] : ""); continue; }
+			if (tok === "%b") {
+				const v = argIdx < rest.length ? rest[argIdx++] : "";
+				if (UNSAFE_PIPE_ESCAPE.test(v)) return null;
+				parts.push(unescapeSimpleEscapes(v));
+				continue;
+			}
+			parts.push(unescapeSimpleEscapes(tok));
+		}
+		if (argIdx >= rest.length) break;
+		if (cycle === 7) return null;
+	}
+	return parts.join("");
+}
+
+function formatCatOrPrintPipe(prev, root, written) {
+	if (!prev || !Array.isArray(prev.argv) || !prev.argv.length) {
+		return { program: null, sourceFiles: [], reason: "unknown-pipe-producer" };
+	}
+	const head = path.basename(prev.argv[0]);
+	const args = prev.argv.slice(1);
+	if (head === "cat") {
+		const files = [];
+		let dashDash = false;
+		for (let i = 0; i < args.length; i++) {
+			const span = redirectSpan(args, i);
+			if (span) {
+				const m = args[i].match(/^(\d+|&)?(<<<|<<-|<<|<>|<&|>&|>\||>>|>|<)(.*)$/);
+				const op = m && m[2];
+				const rhs = span === 2 ? args[i + 1] : (m ? m[3] : "");
+				if (op && /^(?:>|>>|>\||>&)$/.test(op) && (m[1] === "2" || rhs === "/dev/null" || /^&?\d+-?$/.test(rhs))) {
+					i += span - 1; continue;
+				}
+				if (op === "<" && (!m[1] || m[1] === "0")) {
+					files.push(rhs); i += span - 1; continue;
+				}
+				return { program: null, sourceFiles: [], reason: "unverified-cat-redirect" };
+			}
+			if (!dashDash && args[i] === "--") { dashDash = true; continue; }
+			if (!dashDash && args[i].startsWith("-")) return { program: null, sourceFiles: [], reason: `unsupported-cat-flag:${args[i]}` };
+			files.push(args[i]);
+		}
+		if (!files.length) return { program: null, sourceFiles: [], reason: "cat-without-files" };
+		const parts = [];
+		const sourceFiles = [];
+		for (const f of files) {
+			const res = readInputFileWord(f, prev.dir, root, prev.dirKnown !== false, written);
+			if (res.resolved) sourceFiles.push(res.resolved);
+			if (!res.ok) return { program: null, sourceFiles, unresolvedTarget: res.target, reason: res.reason };
+			parts.push(res.text);
+		}
+		return { program: parts.join("\n"), sourceFiles };
+	}
+	if (head === "echo" || head === "printf") {
+		const cleanArgs = [];
+		for (let i = 0; i < args.length; i++) {
+			const span = redirectSpan(args, i);
+			if (span) {
+				const m = args[i].match(/^(\d+|&)?(<<<|<<-|<<|<>|<&|>&|>\||>>|>|<)(.*)$/);
+				const rhs = span === 2 ? args[i + 1] : (m ? m[3] : "");
+				if (m && /^(?:>|>>|>\||>&)$/.test(m[2]) && (m[1] === "2" || rhs === "/dev/null" || /^&?\d+-?$/.test(rhs))) {
+					i += span - 1; continue;
+				}
+				return { program: null, sourceFiles: [], reason: "unverified-print-redirect" };
+			}
+			cleanArgs.push(args[i]);
+		}
+		if (head === "echo") {
+			let interpret = false;
+			const words = [];
+			let stopFlags = false;
+			for (const a of cleanArgs) {
+				if (!stopFlags && /^-[neE]+$/.test(a)) { if (a.includes("e")) interpret = true; continue; }
+				stopFlags = true;
+				words.push(a);
+			}
+			const joined = words.join(" ");
+			if (interpret && UNSAFE_PIPE_ESCAPE.test(joined)) return { program: null, sourceFiles: [], reason: "unsafe-echo-escape" };
+			return { program: joined.replace(/\\n/g, "\n"), sourceFiles: [] };
+		}
+		const formatted = formatPrintfPipe(cleanArgs);
+		return formatted === null ? { program: null, sourceFiles: [], reason: "unverified-printf" } : { program: formatted, sourceFiles: [] };
+	}
+	return { program: null, sourceFiles: [], reason: `unverified-pipe:${head}` };
+}
+
+/** 셸 또는 source 가 표준입력·파일 설명자에서 읽을 프로그램 글과 원본 파일 경로를 구한다. */
+function stdinProgramInfo(e, prev, dir, root = "", dirKnown = true, written = null, stFds = null) {
+	const argv = Array.isArray(e?.argv) ? e.argv : [];
+	if (!argv.length) return { program: undefined, sourceFiles: [] };
+	const head = path.basename(argv[0] || "");
+	const isShell = SHELLS.test(argv[0]);
+	const isSource = head === "source" || head === ".";
+	if (!isShell && !isSource) return { program: undefined, sourceFiles: [] };
+
+	let targetFd = 0;
+	let explicitRequired = false;
+	let fdToken = argv[0];
+	if (isShell) {
+		const inv = shellInvocation(argv, { dir, root, dirKnown });
+		if (inv.command >= 0 || inv.script >= 0 || inv.noexec) return { program: undefined, sourceFiles: [] };
+		targetFd = inv.stdinFd ?? 0;
+		explicitRequired = !!inv.readsStdin;
+		if (inv.fdToken) fdToken = inv.fdToken;
+	} else {
+		const idx = sourceTargetIndex(argv);
+		const spec = idx >= 0 ? fdStdinSpec(argv[idx], dir, root, dirKnown) : null;
+		if (!spec) return { program: undefined, sourceFiles: [] };
+		targetFd = spec.fd;
+		explicitRequired = true;
+		fdToken = spec.token;
+	}
+
+	const rest = argv.slice(1);
+	const heredocs = Array.isArray(e.heredocs) ? e.heredocs : [];
+	const heredocFds = Array.isArray(e.heredocFds) && e.heredocFds.length === heredocs.length ? e.heredocFds : heredocs.map(() => 0);
+	const hdByFd = new Map();
+	for (let hi = 0; hi < heredocs.length; hi++) {
+		const fd = heredocFds[hi] ?? 0;
+		if (!hdByFd.has(fd)) hdByFd.set(fd, []);
+		hdByFd.get(fd).push(heredocs[hi]);
+	}
+
+	// 절 안의 리다이렉션을 왼->오른쪽 순서로 스캔(같은 FD 는 마지막 리다이렉션이 이긴다).
+	const lastInputByFd = new Map();
+	for (let i = 0; i < rest.length; i++) {
+		const span = redirectSpan(rest, i);
+		if (!span) continue;
+		const m = rest[i].match(/^(\d+|&)?(<<<|<<-|<<|<>|<&|>&|>\||>>|>|<)(.*)$/);
+		if (m) {
+			const rfd = /^\d+$/.test(m[1] || "") ? Number(m[1]) : 0;
+			const op = m[2];
+			const rhs = span === 2 ? (rest[i + 1] ?? "") : m[3];
+			if (op === "<<" || op === "<<-") {
+				const q = hdByFd.get(rfd);
+				lastInputByFd.set(rfd, { kind: "heredoc", body: q && q.length ? q.shift() : (heredocs.length === 1 && rfd === 0 ? heredocs[0] : null) });
+			} else if (op === "<<<") {
+				lastInputByFd.set(rfd, { kind: "herestring", body: rhs, rawEmpty: span === 2 && rest[i + 1] === undefined });
+			} else if (op === "<" || op === "<>") {
+				lastInputByFd.set(rfd, { kind: "redirect", rhs });
+			} else if (op === "<&") {
+				lastInputByFd.set(rfd, { kind: "dup", target: rhs });
+			}
+		}
+		i += span - 1;
+	}
+	// moved 등으로 heredoc 토큰이 유실되었으나 heredocs가 해당 FD에 남아 있으면 보전한다.
+	for (const [hfd, list] of hdByFd.entries()) {
+		if (!lastInputByFd.has(hfd) && list.length) lastInputByFd.set(hfd, { kind: "heredoc", body: list[list.length - 1] });
+	}
+
+	const resolveFd = (fd, requiredHere, seenFds) => {
+		if (seenFds.has(fd)) return { program: null, sourceFiles: [], reason: "cyclic-fd" };
+		seenFds.add(fd);
+		const redir = lastInputByFd.get(fd);
+		if (redir) {
+			if (redir.kind === "heredoc") {
+				return redir.body === null ? { program: null, sourceFiles: [], reason: "missing-heredoc" } : { program: redir.body, sourceFiles: [] };
+			}
+			if (redir.kind === "herestring") {
+				return redir.rawEmpty ? { program: null, sourceFiles: [], reason: "empty-herestring" } : { program: redir.body, sourceFiles: [] };
+			}
+			if (redir.kind === "dup") {
+				if (redir.target === "-") return { program: null, sourceFiles: [], reason: "closed-fd" };
+				if (/^\d+$/.test(redir.target)) return resolveFd(Number(redir.target), true, seenFds);
+				return { program: null, sourceFiles: [], reason: `unknown-dup-fd:${redir.target}` };
+			}
+			if (redir.kind === "redirect") {
+				const res = readInputFileWord(redir.rhs, dir, root, dirKnown, written);
+				if (res.fdSpec) {
+					if (res.fdSpec.fd !== fd) return resolveFd(res.fdSpec.fd, true, seenFds);
+					return { program: null, sourceFiles: [], unresolvedTarget: res.target, reason: "self-fd-redirect" };
+				}
+				if (!res.ok) return { program: null, sourceFiles: res.resolved ? [res.resolved] : [], unresolvedTarget: res.target, reason: res.reason };
+				return { program: res.text, sourceFiles: res.resolved ? [res.resolved] : [] };
+			}
+		}
+		if (fd === 0 && e.piped) return formatCatOrPrintPipe(prev, root, written);
+		if (stFds && stFds.has(fd)) return stFds.get(fd);
+		if (requiredHere || fd > 0) return { program: null, sourceFiles: [], unresolvedTarget: fdToken, reason: `unbacked-stdin:${fdToken}` };
+		return { program: undefined, sourceFiles: [] };
+	};
+
+	return resolveFd(targetFd, explicitRequired, new Set());
+}
+
+function stdinProgram(e, prev, dir, root = "", dirKnown = true, written = null, stFds = null) {
+	return stdinProgramInfo(e, prev, dir, root, dirKnown, written, stFds).program;
+}
 
 function quoteArg(a) {
 	return /^[A-Za-z0-9_@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`;
@@ -634,14 +928,16 @@ function expandRefs(v, root, depth) {
  * 실행 중에 정해지는 낱말이 가리키는 것. undefined = 정해진 글자이거나 명령 밖 환경 변수, null = 알 수 없음,
  * { program } = <(cat F) 가 넘기는 파일 글, { words } = $(cat F) 의 글이나 변수를 푼 글들(낱말로 쪼개져 쓰임).
  */
-function dynamicWord(word, root, dir) {
+function dynamicWord(word, root, dir, dirKnown = true, written = null) {
 	if (typeof word !== "string") return undefined;
 	if (/^(?:\$\(|`|<\()/.test(word)) {
-		const m = word.match(READ_SUB);
-		if (!m) return null;
-		const text = readLocal(m[1] || m[2] || m[3] || m[4], dir);
-		if (text === null) return null;
-		return m[4] ? { program: text } : { words: [text] };
+		const sub = extractReadSubFile(word);
+		if (!sub) return null;
+		const resolved = resolvePathWord(sub.file, dir, root, dirKnown);
+		if (!resolved) return null;
+		const res = readInputFileWord(resolved, "/", root, true, written);
+		if (!res.ok) return null;
+		return sub.isProcSub ? { program: res.text, sourceFiles: [res.resolved] } : { words: [res.text] };
 	}
 	if (!word.includes("$")) return undefined;
 	const words = expandRefs(word, root, 0);
@@ -682,10 +978,13 @@ function resolvePathWord(word, dir, root, dirKnown = true) {
 function scriptWord(argv, dir, root, dirKnown, afterWriters) {
 	const head = path.basename(argv[0]);
 	if (SHELLS.test(argv[0])) {
-		const at = shellInvocation(argv).script;
+		const at = shellInvocation(argv, { dir, root, dirKnown }).script;
 		return at >= 0 ? argv[at] : undefined;
 	}
-	if (head === "source" || head === ".") return argv[sourceTargetIndex(argv)];
+	if (head === "source" || head === ".") {
+		const target = argv[sourceTargetIndex(argv)];
+		return target && fdStdinSpec(target, dir, root, dirKnown) ? undefined : target;
+	}
 	if (argv[0].includes("/") && /\.(?:sh|bash)$/.test(argv[0])) return argv[0];
 	// 확장자 없는 파일을 경로로 실행해도, 셸 shebang 이거나 shebang 없는 글 파일이면 셸이 돌리는 스크립트다(설계 검수 22회차 3번).
 	// 같은 명령의 앞 절이 그 파일 이름을 적고 쓴 뒤 아직 없는 파일을 경로로 실행하면 그것도 스크립트로 본다(curl -o x … && ./x).
@@ -1433,26 +1732,31 @@ function effectiveCommandsInner(command, cwd, depth, root, spawned, inherited) {
 			const dir = st.dir;
 			const dirKnown = st.dirKnown;
 			if (e.envProgramVariable) {
-				out.push({ argv: ["<dynamic-program>"], assigns: [], dir, clause, opaque: `env 뒤의 프로그램 변수를 확인할 수 없음(${argv[0]})` });
-				prev = { ...e, dir };
+				out.push({ argv: ["<dynamic-program>"], assigns: [], dir, dirKnown, clause, opaque: `env 뒤의 프로그램 변수를 확인할 수 없음(${argv[0]})` });
+				prev = { ...e, dir, dirKnown };
 				continue;
 			}
 			// 실행 중에 만들어지는 프로그램(설계 검수 13회차 2번).
 			const head = path.basename(argv[0]);
 			const target = head === "source" || head === "." ? sourceTargetIndex(argv)
-				: SHELLS.test(argv[0]) ? shellInvocation(argv).script : 0;
-			const dyn = target >= 0 && depth < 4 ? dynamicWord(argv[target], root, dir) : undefined;
+				: SHELLS.test(argv[0]) ? shellInvocation(argv, { dir, root, dirKnown }).script : 0;
+			const dyn = target >= 0 && depth < 4 ? dynamicWord(argv[target], root, dir, dirKnown, written) : undefined;
 			if (dyn === null) {
-				out.push({ argv: ["<dynamic-program>"], assigns: [], dir, clause, opaque: `실행 중에 정해지는 프로그램(${argv[target]}). 훅이 읽은 글과 실제로 도는 글이 다를 수 있음` });
-				prev = { ...e, dir };
+				const sub = extractReadSubFile(argv[target]);
+				const resolvedSub = sub ? resolvePathWord(sub.file, dir, root, dirKnown) || sub.file : argv[target];
+				out.push({ argv: ["<dynamic-program>"], assigns: [], dir, dirKnown, clause, stdinTarget: resolvedSub, stdinSourceFiles: sub && resolvedSub ? [resolvedSub] : [], opaque: `실행 중에 정해지는 프로그램(${argv[target]}). 훅이 읽은 글과 실제로 도는 글이 다를 수 있음` });
+				prev = { ...e, dir, dirKnown };
 				continue;
 			}
 			if (dyn) {
+				if (dyn.sourceFiles && dyn.sourceFiles.length) {
+					out.push({ argv, assigns, prefixAssigns, dir, dirKnown, shellPath: st.vars.PATH ?? undefined, shellState: shellBodyState(st, "source"), environment: { ...st.exported }, clause, heredocs: e.heredocs, heredocFds: e.heredocFds, piped: e.piped, stdinSourceFiles: dyn.sourceFiles, syntheticStdinHolder: true });
+				}
 				const lead = argv.slice(0, target).map(quoteArg);
 				const tail = argv.slice(target + 1).map(quoteArg);
 				const program = dyn.program !== undefined ? dyn.program : dyn.words.map((v) => [...lead, v, ...tail].join(" ")).join("\n");
 				out.push(...effectiveCommands(program, dir, depth + 1, `${root}\n${program}`, false, shellBodyState({...st,prefixAssigns}, head === "source" || head === "." ? "source" : "exec")));
-				prev = { ...e, dir };
+				prev = { ...e, dir, dirKnown };
 				continue;
 			}
 			// cd·pushd 는 한 부류로 따라간다. 옵션(-P, -L)과 --, $HOME 같은 변수를 풀고, 대상을 모르면(cd -, popd, 풀 수 없는 변수)
@@ -1467,9 +1771,10 @@ function effectiveCommandsInner(command, cwd, depth, root, spawned, inherited) {
 					const r = t === undefined ? require("os").homedir() : resolvePathWord(t, dir, root, dirKnown);
 					if (r) { st.dir = r; st.dirKnown = true; } else st.dirKnown = false;
 				}
+				prev = null;
 				continue;
 			}
-			const entry = { argv, assigns, prefixAssigns, dir, dirKnown, shellPath: st.vars.PATH ?? undefined, shellState: shellBodyState(st,"source"), environment: {...st.exported}, clause, heredocs:e.heredocs, piped: e.piped, ...(spawned ? { spawned: true } : {}), ...(e.guess ? { guess: true } : {}) };
+			const entry = { argv, assigns, prefixAssigns, dir, dirKnown, shellPath: st.vars.PATH ?? undefined, shellState: shellBodyState(st,"source"), environment: {...st.exported}, clause, heredocs:e.heredocs, heredocFds:e.heredocFds, piped: e.piped, ...(spawned ? { spawned: true } : {}), ...(e.guess ? { guess: true } : {}) };
 			out.push(entry);
 			if (shellCommand) {
 				const body = argv[shellInvocation(argv).command];
@@ -1559,10 +1864,51 @@ function effectiveCommandsInner(command, cwd, depth, root, spawned, inherited) {
 			}
 			// 파일을 실행하는 것은 그 파일을 바꾸는 것이 아니다. 실행한 파일 자리의 낱말은 빼고, 그 파일이 스스로를 가리키는 글도 셈하지 않는다.
 			if (!e.guess && mayWrite(argv)) earlier.push({ self: swPath, known: (INLINE_EDITOR.test(head) || !!interp) && !fetches(argv), fetch: fetches(argv), code: interp ? programText || "" : "", dir, blob: withUnescaped([argv.filter((a, k) => a !== sw && !(k === 0 && a.includes("/"))).join(" "), ...(e.heredocs || []), programText || ""].join("\n")) });
-			if (SHELLS.test(argv[0]) && depth < 4) {
-				const program = stdinProgram(e, prev, dir);
-				if (program === null) out.push({ argv: ["<shell-stdin>"], assigns: [], dir, clause, opaque: `셸이 읽는 프로그램을 알 수 없음(${argv[0]} 에 넘기는 표준 입력)` });
-				else if (program !== undefined) out.push(...effectiveCommands(program, dir, depth + 1, `${root}\n${program}`,false,shellBodyState(entry,"stdin")));
+			if (clause && path.basename(String(clause[0] || "")) === "exec") {
+				let allRedirs = argv.length > 0;
+				for (let ri = 0; ri < argv.length;) {
+					const sp = redirectSpan(argv, ri);
+					if (!sp) { allRedirs = false; break; }
+					ri += sp;
+				}
+				if (allRedirs) {
+					for (let ri = 0; ri < argv.length;) {
+						const sp = redirectSpan(argv, ri);
+						const m = argv[ri].match(/^(\d+)?(<<<|<<-|<<|<>|<&|<)(.*)$/);
+						const rhs = sp === 2 ? (argv[ri + 1] ?? "") : (m ? m[3] : "");
+						if (m) {
+							const rfd = m[1] ? Number(m[1]) : 0;
+							if (m[2] === "<" || m[2] === "<>") {
+								const res = readInputFileWord(rhs, dir, root, dirKnown, written);
+								if (res.ok) st.fds.set(rfd, { program: res.text, sourceFiles: res.resolved ? [res.resolved] : [] });
+								else st.fds.set(rfd, { program: null, sourceFiles: res.resolved ? [res.resolved] : [], unresolvedTarget: res.target, reason: res.reason });
+							} else if (m[2] === "<&") {
+								st.fds.set(rfd, rhs === "-" ? { program: null, sourceFiles: [], reason: "closed-fd" } : (/^\d+$/.test(rhs) ? (st.fds.get(Number(rhs)) || { program: null, sourceFiles: [], reason: "unbacked-fd" }) : { program: null, sourceFiles: [], reason: "unknown-dup-fd" }));
+							}
+						}
+						ri += sp;
+					}
+				}
+			}
+			if ((SHELLS.test(argv[0]) || head === "source" || head === ".") && depth < 4) {
+				const info = stdinProgramInfo(e, prev, dir, root, dirKnown, written, st.fds);
+				if (info.sourceFiles && info.sourceFiles.length) entry.stdinSourceFiles = info.sourceFiles;
+				if (info.unresolvedTarget) entry.stdinUnresolvedTarget = info.unresolvedTarget;
+				if (info.program === null) {
+					entry.stdinError = info.reason || "unverified-stdin";
+					out.push({
+						argv: ["<shell-stdin>"],
+						assigns: [],
+						dir,
+						dirKnown,
+						clause,
+						stdinTarget: info.unresolvedTarget || (info.sourceFiles && info.sourceFiles[0]) || "",
+						stdinSourceFiles: info.sourceFiles || [],
+						opaque: `셸이 읽는 프로그램을 알 수 없음(${info.unresolvedTarget || argv[0]} 에 넘기는 표준 입력)`,
+					});
+				} else if (info.program !== undefined) {
+					out.push(...effectiveCommands(info.program, dir, depth + 1, `${root}\n${info.program}`, false, shellBodyState(entry, head === "source" || head === "." ? "source" : "stdin")));
+				}
 			}
 			prev = entry;
 		}
@@ -1635,6 +1981,9 @@ module.exports = {
 	sourceFile,
 	sourceTargetIndex,
 	stdinProgram,
+	stdinProgramInfo,
+	fdStdinSpec,
+	extractReadSubFile,
 	expandClause,
 	effectiveCommands,
 	stripReserved,
