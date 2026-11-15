@@ -148,7 +148,7 @@ node scripts/work-ledger/ledger.mjs --root . --role secretary confirm --id ITEM_
 node scripts/work-ledger/ledger.mjs --root . drive --dry
 ```
 
-- `add`에 `--prompt --result-file --model` 셋을 함께 주면 지시서가 붙습니다. 셋 중 일부만 주거나, 지시서 파일이 없거나 비었거나, 결과 파일이 이미 있거나, 모델이 `drive.worker.models`에 없으면 등록을 거절합니다. `adopt`는 이미 있는 열린 항목에 지시서를 붙입니다.
+- `add`에 `--prompt --result-file --model` 셋을 함께 주면 지시서가 붙습니다. 셋 중 일부만 주거나, 지시서 파일이 없거나 비었거나, 결과 파일이 이미 있거나, 모델이 `drive.worker.models`에 없으면 등록을 거절합니다. 지시서 파일(`--prompt`)에는 [상위 구조 적합 세 칸](../guides/architecture-fit-before-fix.md)(`original_request`·`parent_structure`·`acceptance_rationale`)을 적고, `drive`의 기본 머리글(`DEFAULT_PREAMBLE`)도 실행 전 세 칸 확인을 일꾼에게 함께 전달합니다. `adopt`는 이미 있는 열린 항목에 지시서를 붙입니다.
 - `start`는 기한을 기다리지 않고 지금 띄웁니다. `attach`는 손으로 띄운 일꾼의 프로세스 번호를 항목에 붙여 감시가 같은 일을 또 띄우지 않게 합니다.
 - 지시서가 붙은 항목은 `drop`으로 닫지 못하고 `due`로 기한을 옮기지 못합니다. 닫는 길은 둘입니다. 결과가 있으면 `done --result <파일 또는 주소>`(파일이면 실제로 있고 내용이 있어야 함), 중단이면 `confirm`으로 `drive.owner_ids`에 적힌 사람이 그 항목 ID 앞 8자를 적은 글(또는 그런 글에 단 답글)을 가리킵니다. 기록 없이 닫힌 항목은 다음 순회가 다시 열고 그 역할에 알립니다.
 - `drive`는 순회를 한 번 손으로 돌립니다. `--dry`는 무엇을 띄울지만 보여 주고 아무것도 쓰지 않습니다. 순회가 오류를 보고하면 종료 코드가 1입니다.

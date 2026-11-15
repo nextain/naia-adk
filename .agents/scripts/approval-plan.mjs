@@ -537,6 +537,8 @@ switch (cmd) {
 		for (const s of plan.scenario || []) for (const c of s.commands || []) console.log(`  ${s.id}  ${commandHash(c)}  ${String(c).slice(0, 120)}`);
 		for (const a of plan.incident?.actions || []) for (const c of a.commands || []) console.log(`  장애 ${a.id}  ${commandHash(c)}  ${String(c).slice(0, 120)}`);
 		console.log(form.length ? `양식: 빈 칸 ${form.length}\n${form.map((x) => `- ${x}`).join("\n")}` : "양식: 통과");
+		const warnings = typeof lib.formWarnings === "function" ? lib.formWarnings(plan) : [];
+		if (warnings.length) console.log(`경고 ${warnings.length}\n${warnings.map((x) => `- ${x}`).join("\n")}`);
 		const r = reviewStatus(gatesDir, sha, false, planRoot);
 		console.log(r.ok ? "적대 리뷰: 통과" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
 		process.exit(form.length || !r.ok ? 1 : 0);
@@ -545,6 +547,8 @@ switch (cmd) {
 		const { plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 보고문을 낼 수 없습니다\n${form.join("\n")}`, 1);
+		const warnings = typeof lib.formWarnings === "function" ? lib.formWarnings(plan) : [];
+		for (const w of warnings) console.error(w);
 		const r = lib.reviewProblems(gatesDir, sha, planRoot);
 		if (!r.ok) die(`적대 리뷰 미통과 — 보고문을 낼 수 없습니다\n${r.problems.join("\n")}`, 1);
 		console.log(lib.renderReport(plan, sha, r));
@@ -585,6 +589,8 @@ switch (cmd) {
 		if (!Object.hasOwn(lib.REVIEW_MODELS, plan.author_model || "") || plan.author_model !== author) die("--author(argon|codex|muse) 와 계획서 author_model 이 다릅니다");
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 먼저 채우십시오\n${form.join("\n")}`, 1);
+		const warnings = typeof lib.formWarnings === "function" ? lib.formWarnings(plan) : [];
+		for (const w of warnings) console.error(w);
 		const pins = lib.pinnedFileProblems(plan, planRoot);
 		if (pins.length) die(pins.join("\n"), 1);
 		const prompt = lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items });

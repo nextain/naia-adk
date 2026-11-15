@@ -53,9 +53,9 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 ```
 
 ### 작성할 때 주의할 점
-- `architecture_fit`: 고치기 전 **최초 요구·붙는 상위 구조·수용 방식** 세 칸을 반드시 채웁니다([architecture-fit-before-fix.md](./architecture-fit-before-fix.md)).
+- `architecture_fit`: 고치기 전 **최초 요구·붙는 상위 구조·수용 방식** 세 칸을 반드시 채웁니다([architecture-fit-before-fix.md](./architecture-fit-before-fix.md)). 단, 기준 시각(`2026-11-15T04:30:00Z`) 이전 생성(`createdAt`)이고 `version >= 2`가 아닌 기존 계획서는 막지 않고 경고(`check`·`report`·관문 안내)만 남깁니다. `template` 이 생성하는 새 양식(`version: 2`)과 기준 이후 계획서는 필수입니다.
   - `original_request` (a): 누가 무엇을 바랐는지 최초 요구 원문 요지(최소 10자).
-  - `parent_structure` (b): 붙는 플랫폼·ADK 업스트림·제품 상위 구조(최소 8자). 특정 서버 이름, IP, 서비스 키, 단일 파일명만 적으면 막힙니다.
+  - `parent_structure` (b): 붙는 플랫폼·ADK 업스트림·제품 상위 구조(최소 8자). 특정 서버 이름, IP, 서비스 키, 단일 파일명만 적으면 막히며, `<...>` 부분 견본 문구도 차단됩니다.
   - `acceptance_rationale` (c): 기존 확장인지 새 층인지, 왜 일시 땜빵이 아닌지 적습니다(최소 10자).
 - `services`: 관문이 분류한 운영 서비스 키를 빠짐없이 적습니다.
 - `scenario`: 실행할 단계(`s1`, `s2`, …)와 되돌리기 갈림길(`branch: "rollback"`)을 순서대로 적습니다.
@@ -72,7 +72,7 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 
 ## 2. 적대 리뷰 받기 (`review`)
 
-계획서 양식과 고정 파일 SHA-256이 모두 맞으면 차례상 다음 모델(`argon`→`codex`→`muse`→`argon`) 한 명에게 열 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`, `architecture_fit`) 적대 리뷰를 받습니다. 작성자는 셋 중 누구나 될 수 있고, 첫 후보가 한도에 걸리면 남은 하나로 넘어가며 넘긴 기록은 `skipped`로 남깁니다.
+계획서 양식과 고정 파일 SHA-256이 모두 맞으면 차례상 다음 모델(`argon`→`codex`→`muse`→`argon`) 한 명에게 열 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`, `architecture_fit` — 단 기준 시각 이전 옛 계획서는 기존 9기준 호환) 적대 리뷰를 받습니다. 작성자는 셋 중 누구나 될 수 있고, 첫 후보가 한도에 걸리면 남은 하나로 넘어가며 넘긴 기록은 `skipped`로 남깁니다.
 
 Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그대로 돌리고, Codex·Argon 리뷰어 실행에는 복구 모드 여부와 관계없이 `bwrap` 읽기 전용 격리가 필요합니다. 고정 `planReview`가 없으면 차례상 다음 모델이 먼저 리뷰합니다. 승인자 결정으로 인스턴스의 `.claude/deploy/config.json`에 다음 `planReview`를 추가하면 지정한 시각 전까지 그 리뷰어를 먼저 쓰고, 한도 실패일 때만 남은 하나로 넘어갑니다. 한도 실패는 종료 코드가 0이 아닌 정수이고 실행기 stderr·실행 오류에 한도 문구(rate limit, quota, usage limit, 429, RESOURCE_EXHAUSTED, exhausted)가 있을 때입니다. 리뷰 본문은 판별에 쓰지 않습니다. 신호로 끝난 실행(종료 코드 없음)은 한도로 보지 않습니다. 기존 설정의 다른 항목은 유지합니다.
 

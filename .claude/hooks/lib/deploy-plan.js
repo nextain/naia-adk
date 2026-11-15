@@ -91,16 +91,18 @@ const NARROW_WRAPPER_WORDS = new Set([
 const KOREAN_PARTICLES_RE = /(?:에서만|에서는|에서도|에서|으로|까지|부터|처럼|조차|밖에|만|뿐|의|에|로|을|를|은|는|이|가|와|과|도)$/;
 const COMMON_FILE_EXT_RE = /(?:^|[\s,.;:()[\]{}"'<>~·|/])[\w.-]+\.(?:js|cjs|mjs|ts|tsx|jsx|py|sh|bash|zsh|yaml|yml|json|toml|ini|conf|cfg|service|socket|timer|unit|env|sql|tf|md|txt|lock|log)(?=$|[\s,.;:()[\]{}"'<>~·|/\u3131-\uD7A3])/gi;
 
+const NARROW_COMPOUND_PARTS_RE = /(?:서버|호스트|노드|인스턴스|기기|장비|머신|서비스|유닛|컨테이너|파일|스크립트|대본|설정|문서|경로|특정|개별|단독|단일|해당|수정|고침|변경|패치|재시작|배포|점검|확인|추가|삭제)/g;
+
 function isTemplatePlaceholder(value) {
 	if (typeof value !== "string") return false;
-	return /^<[^<>]+>$/.test(value.trim());
+	return /^<[^<>]+>$/.test(value.trim()) || /<(?![@#:!\s])[^<>\n]{1,80}>/.test(value);
 }
 
 /** (b) 붙는 상위 구조가 특정 서버·서비스 키·단일 파일명만 가리키는지 검사한다. */
 function isNarrowServerOrFileOnly(value, services = []) {
 	if (typeof value !== "string") return true;
 	const trimmed = value.trim();
-	if (!trimmed || !/\s/.test(trimmed)) return true;
+	if (!trimmed) return true;
 	const norm = trimmed.toLowerCase();
 	if (Array.isArray(services) && services.some((s) => typeof s === "string" && s.trim() && s.trim().toLowerCase() === norm)) return true;
 
@@ -124,6 +126,11 @@ function isNarrowServerOrFileOnly(value, services = []) {
 		.split(/[\s,.;:()[\]{}"'<>~·/+|=!?&]+/)
 		.map((t) => t.replace(/^-+|-+$/g, "").trim().toLowerCase().replace(KOREAN_PARTICLES_RE, ""))
 		.filter((t) => t.length > 0 && !/^\d+$/.test(t) && !NARROW_WRAPPER_WORDS.has(t));
+
+	if (tokens.length === 1 && !/\s/.test(trimmed) && /[\uAC00-\uD7A3]/.test(tokens[0])) {
+		const meaningful = tokens[0].replace(NARROW_COMPOUND_PARTS_RE, "").replace(KOREAN_PARTICLES_RE, "");
+		return meaningful.length < 5;
+	}
 
 	const totalChars = tokens.reduce((sum, t) => sum + t.length, 0);
 	return tokens.length < 2 || totalChars < 6;
@@ -244,6 +251,23 @@ function isLimitFailure(exitCode, text) {
 
 // 차례 도입 시각. 옛 모양(rotation 칸 없음) 기록은 이보다 앞선 것만 받는다. 새 기록에서 rotation 칸 하나를 지워 차례 대조를 건너뛰는 길을 막는다.
 const LEGACY_REVIEW_CUTOFF = "2026-11-10T10:00:00Z";
+// 상위 구조 적합(architecture_fit) 의무 기준 시각. 이 시각 앞선 옛 양식(version < 2) 계획서는 막지 않고 경고만 남긴다.
+const ARCHITECTURE_FIT_CUTOFF = "2026-11-15T04:30:00Z";
+
+function requiresArchitectureFit(plan) {
+	if (!plan || typeof plan !== "object" || Array.isArray(plan)) return true;
+	if (Number(plan.version) >= 2) return true;
+	const at = Date.parse(plan.createdAt || "");
+	if (!Number.isFinite(at)) return true;
+	return at >= Date.parse(ARCHITECTURE_FIT_CUTOFF);
+}
+
+function formWarnings(plan) {
+	if (!plan || typeof plan !== "object" || Array.isArray(plan) || requiresArchitectureFit(plan)) return [];
+	const probs = architectureFitProblems(plan);
+	if (!probs.length) return [];
+	return probs.map((m) => `경고(기존 계획서 ${ARCHITECTURE_FIT_CUTOFF} 이전): ${m}`);
+}
 
 function isoMs(value) {
 	return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value) ? Date.parse(value) : NaN;
@@ -267,7 +291,7 @@ function formProblems(plan) {
 	if (!Number.isFinite(at)) p.push("createdAt(ISO 시각) 없음");
 	if (!strList(plan.services)) p.push("services(운영 서비스 키 목록) 없음");
 	if (!str(plan.what_why, 10)) p.push("what_why(무엇을 왜 배포하나) 없음");
-	p.push(...architectureFitProblems(plan));
+	if (requiresArchitectureFit(plan)) p.push(...architectureFitProblems(plan));
 	if (!strList(plan.changes, 3)) p.push("changes(바뀌는 것 목록) 없음");
 	const steps = Array.isArray(plan.scenario) ? plan.scenario : [];
 	if (steps.length === 0) p.push("scenario(단계 목록) 없음");
@@ -755,14 +779,17 @@ function reviewPrompt(plan, sha, root, opts = null) {
 			...roItems.map((x) => `- service=${x.service} path=${x.path} sha256=${x.sha256} script_sha256=${x.script_sha256}`),
 		]
 		: [];
+	const requireArchFit = requiresArchitectureFit(plan);
+	const activeCriteria = requireArchFit ? CRITERIA : CRITERIA.filter(([id]) => id !== "architecture_fit");
+	const activeBlockingKinds = requireArchFit ? BLOCKING_KINDS : BLOCKING_KINDS.filter((k) => !k.startsWith("구조이탈:"));
 	return [
 		"당신은 운영 배포 계획서(승인 보고 양식)의 적대적 검수자입니다. 이 계획을 승인하면 승인자가 결과에 책임을 집니다.",
 		"계획서를 깨뜨릴 방법을 찾으십시오. 아래 기준마다 PASS 또는 FAIL 을 판정하고, FAIL 이면 구체적 지적(어느 칸, 무엇이 왜 틀림, 고칠 방향)을 적으십시오.",
 		"추측으로 PASS 하지 마십시오. 계획서에 적힌 것만 근거로 삼고, 적히지 않은 안전장치는 없는 것으로 봅니다. 다만 없는 장치를 새로 더하라는 요구는 차단 지적이 아니라 참고 지적입니다.",
 		"",
 		"지적 분류(판정은 이 분류를 따릅니다):",
-		"- 차단 지적으로 셀 수 있는 것은 다음 다섯 가지뿐입니다:",
-		...BLOCKING_KINDS.map((k) => `  - ${k}`),
+		`- 차단 지적으로 셀 수 있는 것은 다음 ${requireArchFit ? "여섯" : "다섯"} 가지뿐입니다:`,
+		...activeBlockingKinds.map((k) => `  - ${k}`),
 		`- 차단 지적이 아닌 것(참고로만 남김): 계획에 없는 새 장치를 더하라는 요구. 예: ${ADVISORY_EXAMPLES}.`,
 		"- 되돌리기는 \"사람이 실행하는 이전 판 복귀 한 단계와 걸리는 시간\"이 적혀 있고 그 명령이 실제로 보존된 이전 판으로 돌아가면 rollback 기준을 충족합니다.",
 		"- incident.actions 가 비어 있는 것([])은 incident_safety 위반이 아닙니다.",
@@ -770,12 +797,12 @@ function reviewPrompt(plan, sha, root, opts = null) {
 		"- 기준 판정은 차단 지적만으로 정합니다. 참고 지적만 있는 기준은 PASS 입니다.",
 		"",
 		"기준:",
-		...CRITERIA.map(([id, text]) => `- ${id}: ${text}`),
+		...activeCriteria.map(([id, text]) => `- ${id}: ${text}`),
 		"",
 		"출력 형식(정확히):",
 		"첫 줄: 판정: PASS 또는 판정: FAIL (기준 하나라도 FAIL 이면 FAIL)",
-		...CRITERIA.map(([id]) => `${id}: PASS|FAIL — 한 줄 근거`),
-		"지적 목록: 한 줄에 하나, \"<번호>. [차단:<분류>] <기준 id> — 내용\" 또는 \"<번호>. [참고] <기준 id> — 내용\". 분류는 불일치·되돌리기·비밀·위험숨김·선조치악화 중 하나",
+		...activeCriteria.map(([id]) => `${id}: PASS|FAIL — 한 줄 근거`),
+		`지적 목록: 한 줄에 하나, "<번호>. [차단:<분류>] <기준 id> — 내용" 또는 "<번호>. [참고] <기준 id> — 내용". 분류는 ${requireArchFit ? "불일치·되돌리기·비밀·위험숨김·선조치악화·구조이탈" : "불일치·되돌리기·비밀·위험숨김·선조치악화"} 중 하나`,
 		"참고 지적: <참고 지적 수>",
 		"마지막 줄: 남은 지적: <차단 지적 수>",
 		"",
@@ -891,7 +918,8 @@ function pinnedFilesText(plan, root) {
 	return L;
 }
 
-function reviewBodyProblems(text, sha, acceptSecurity = false) {
+function reviewBodyProblems(text, sha, acceptSecurity = false, opts = null) {
+	const requireArchFit = !opts || opts.requireArchitectureFit !== false;
 	const problems = [];
 	const tr = reviewTrailer(text);
 	if (!tr) problems.push("적대 리뷰 결과 끝줄이 review-run: 줄이 아님");
@@ -904,7 +932,13 @@ function reviewBodyProblems(text, sha, acceptSecurity = false) {
 	for (const [id] of CRITERIA) {
 		const re = new RegExp(`^[\\s>*#|\\-]*(?:기준\\s*)?\`?${id}\`?\\b[^\\n]*?[:：|=]\\s*\\**\\s*(PASS|FAIL)\\b(.*)$`, "gim");
 		const hits = [...body.matchAll(re)];
-		if (hits.length === 0) { problems.push(`적대 리뷰 결과에 기준 ${id} 판정 줄이 없음("${id}: PASS" 또는 "${id}: FAIL")`); summary.push({ id, verdict: "없음" }); continue; }
+		if (hits.length === 0) {
+			if (id === "architecture_fit" && !requireArchFit) {
+				summary.push({ id, verdict: "생략(옛 계획)" });
+				continue;
+			}
+			problems.push(`적대 리뷰 결과에 기준 ${id} 판정 줄이 없음("${id}: PASS" 또는 "${id}: FAIL")`); summary.push({ id, verdict: "없음" }); continue;
+		}
 		const verdicts = hits.map((h) => h[1].toUpperCase());
 		const verdict = verdicts.includes("FAIL") ? "FAIL" : "PASS";
 		if (verdict !== "PASS" && !(acceptSecurity && id === "security")) problems.push(`적대 리뷰 기준 ${id} 미통과`);
@@ -1040,7 +1074,7 @@ function reviewProblems(gatesDir, sha, root) {
 		if (text === null) own.push("적대 리뷰 결과 파일을 읽지 못함");
 		else {
 			if (r.result_sha256 !== sha256(Buffer.from(text, "utf8"))) own.push("적대 리뷰 결과 파일의 sha256 이 기록과 다름");
-			parsed = reviewBodyProblems(text, sha, acceptSecurity);
+			parsed = reviewBodyProblems(text, sha, acceptSecurity, { requireArchitectureFit: requiresArchitectureFit(plan) });
 			own.push(...parsed.problems);
 			if (!parsed.prompt_sha256 || parsed.prompt_sha256 !== rec.prompt_sha256 || parsed.prompt_sha256 !== promptSha) own.push("결과 prompt_sha256 이 기록 또는 현재 요청문과 다름");
 			const receipt = r.receipt;
@@ -1342,6 +1376,8 @@ function renderReport(plan, sha, review) {
 		L.push(`최초 요구: ${plan.architecture_fit.original_request || ""}`);
 		L.push(`붙는 상위 구조: ${plan.architecture_fit.parent_structure || ""}`);
 		L.push(`수용 방식: ${plan.architecture_fit.acceptance_rationale || ""}`);
+	} else {
+		for (const w of formWarnings(plan)) L.push(w);
 	}
 	L.push(`서비스: ${(plan.services || []).join(", ")}`);
 	L.push("바뀌는 것:", ...(plan.changes || []).map((c) => `  - ${c}`));
@@ -1487,8 +1523,15 @@ async function evaluate(ctx) {
 	const factLines = facts.length ? ["", "배포 준비 기록에서 확인한 사실:", ...facts.map((x) => `  ${x}`)] : [];
 	const hostNote = ctx.transcriptPath ? [] : ["", "이 호스트는 대화 기록을 읽을 수 없어 대화창 승인을 확인할 수 없습니다. 디스코드 승인 경로(gates/deploy-approval-discord.json)를 쓰십시오. 승인자에게 붙여 넣을 명령을 넘기지 마십시오."];
 
+	const warnings = formWarnings(f.plan);
 	const locked = await withStateLock(env, () => approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly, readOnlyNoCode }));
-	if (locked) return locked;
+	if (locked) {
+		if (warnings.length) {
+			locked.audit = { ...(locked.audit || {}), warnings };
+			if (locked.allow) locked.notice = [locked.notice, ...warnings].filter(Boolean).join("\n");
+		}
+		return locked;
+	}
 	return { allow: false, audit: { event: "blocked-state-lock", plan: rel }, reason: "[Harness] 승인 상태 파일 잠금을 잡지 못해 막습니다(다른 운영 명령 판정이 진행 중). 잠시 뒤 다시 실행하십시오." };
 }
 
@@ -1631,6 +1674,7 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 
 const TEMPLATE = {
 	schema: "deploy-plan/v1",
+	version: 2,
 	author_model: "<muse>",
 	planId: "<짧은 이름, 예: app-web-20261016>",
 	createdAt: "<ISO 시각>",
@@ -1779,5 +1823,5 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
+	withStateLock, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };

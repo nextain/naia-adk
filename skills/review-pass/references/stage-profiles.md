@@ -29,11 +29,13 @@ project overrides or `--light`:
   2. `design_coherence` — Check: no internal contradictions between sections; dependencies are identified; scope is bounded
   3. `feasibility` — Check: technical approach is realistic; no assumed-but-unverified capabilities; effort estimate matches scope
   4. `preservation_setup` — Check: baseline is immutable; every product surface has a disposition and probe; destructive dispositions carry exact user authority
+  5. `architecture_fit` (`FINDING-ARCHITECTURE-FIT`) — Check against shared `.claude/hooks/lib/deploy-plan.js` (`architectureFitProblems`): the target (worker directive, PR description, or plan) states (a) `original_request` (최초 요구 원문, min 10 chars, non-template), (b) `parent_structure` (붙는 플랫폼·ADK·제품 상위 구조, min 8 chars, non-template, never only a single server/service key/file name), and (c) `acceptance_rationale` (상위 구조 수용 방식·기존 확장 또는 새 공통 층 근거, min 10 chars, non-template, not a one-off band-aid); if any field is missing, blank, `<...>` placeholder, narrow server/file-only, or the design drifts from the original request/parent structure, emit a blocking finding and `NOT_CLEAN` (`fit_is_sufficient: false`)
 - **Lenses (without REQ-IDs)**:
   1. `source_fidelity` — (same as above; source authority is required even without REQ-IDs)
   2. `design_coherence` — (same as above)
   3. `feasibility` — (same as above)
   4. `preservation_setup` — (same as above)
+  5. `architecture_fit` — (same as above; mandatory before implementation even without REQ-IDs)
 
 These lenses are checks distributed across the four canonical roles in section 1.1; they are not
 replacement role names and must not be recorded as role coverage.
@@ -49,12 +51,14 @@ replacement role names and must not be recorded as role coverage.
   4. `pattern_compliance` — Check: same patterns as similar files in project; not inventing novel approaches alone; read 2-3 similar files to compare
   5. `req_to_code` — Check: each REQ-ID maps to specific code (file + symbol); acceptance criteria traceable to implementation
   6. `structural_complexity` — Check: consume the deterministic complexity report; split new/expanded oversized files by cohesive responsibility; verify every complexity-waiver reason against actual code
+  7. `architecture_fit` (`FINDING-ARCHITECTURE-FIT`) — Check against shared `.claude/hooks/lib/deploy-plan.js` (`architectureFitProblems`): directive/PR description/plan carries valid (a) `original_request`, (b) `parent_structure` (never a single server/service key/file name), and (c) `acceptance_rationale` (extension or new layer, not band-aid), and the code change follows that parent structure instead of symptom-patching one card/host/file; missing/blank/placeholder/narrow fields force `NOT_CLEAN` (`fit_is_sufficient: false`)
 - **Lenses (without REQ-IDs)**:
   1. `correctness` — (same as above)
   2. `completeness` — Check: all planned items implemented; no missing files; no TODO stubs
   3. `consistency` — (same as above)
   4. `pattern_compliance` — (same as above)
   5. `structural_complexity` — (same as above; deterministic preflight is mandatory without REQ-IDs too)
+  6. `architecture_fit` — (same as above; mandatory without REQ-IDs too)
 
 ### test
 - **Reviewers**: 2 (configurable)

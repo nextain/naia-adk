@@ -64,6 +64,7 @@ codex·agy·muse 는 Claude 훅이 안 돌므로 이 훅의 대상이 아니다(
 안내문은 하드코딩 대신 `.naia-role.json` 의 `lead_guard` 설정을 따른다(`work_dir` 기본 `<작업 폴더>`, `worker_guide` 선택, `approver_label` 기본 `승인자`):
 "2층 일꾼에게 지시서로 맡기십시오" + 한 줄 예시
 `claude -p --model sonnet "$(cat <작업 폴더>/<일>/prompt.md)" > <작업 폴더>/<일>/out.log 2>&1 &`.
+일꾼 지시서(`prompt.md`)에는 고치기 전 [상위 구조 적합 세 칸](./architecture-fit-before-fix.md)(`original_request` 최초 요구 원문 · `parent_structure` 붙는 상위 구조 · `acceptance_rationale` 받아들이는 방식)을 반드시 적는다(`review-pass` planning/development 리뷰가 세 칸 누락·견본·단일 서버만 기술을 차단한다).
 막힘·예외 사용·훅 오류는 `.agents/lead-guard/audit.jsonl` 에 남는다(기기별, git 제외).
 
 ## 비상 길 (긴급 예외)

@@ -3377,9 +3377,26 @@ test("architecture_fit(최초 요구·붙는 상위 구조·수용 방식) 통�
 		},
 	};
 	const phMsgs = deployPlan.formProblems(placeholderPlan);
-	assert.equal(phMsgs.filter((m) => m.includes("견본 문구")).length, 3, "견본 <...> 문구 그대로면 세 칸 모두 차단");
+	assert.ok(phMsgs.filter((m) => m.includes("견본 문구")).length === 3, "견본 <...> 문구 그대로면 세 칸 모두 차단");
 
-	// 2. (b)가 특정 서버·IP·서비스 키·단일 파일명뿐이면 차단
+	// 1-2. 참고-3: 부분 견본(<...> 섞임) 차단 및 디스코드 멘션(<@id>) 오탐 방지
+	for (const partial of ["원문 <추가> 반영 요청", "<최초 요구> 를 정리한 문장", "기존 계층 <TODO> 확장 적용"]) {
+		const probs = deployPlan.formProblems({
+			...base,
+			architecture_fit: { ...base.architecture_fit, original_request: partial },
+		});
+		assert.ok(probs.some((m) => m.includes("견본 문구")), `부분 견본 '${partial}' 는 차단돼야 함: ${JSON.stringify(probs)}`);
+	}
+	assert.deepEqual(
+		deployPlan.formProblems({
+			...base,
+			architecture_fit: { ...base.architecture_fit, original_request: "<@123456> 님이 공통 배포 게이트 개선을 요청함" },
+		}),
+		[],
+		"디스코드 멘션 <@id> 포함 원문은 부분 견본으로 오탐하지 않음",
+	);
+
+	// 2. (b)가 특정 서버·IP·서비스 키·단일 파일명뿐이면 차단 (띄어쓰기 없는 좁은 표현 포함)
 	const narrowParents = [
 		"prod-app-01",
 		"prod-app-01 서버만 수정",
@@ -3390,6 +3407,8 @@ test("architecture_fit(최초 요구·붙는 상위 구조·수용 방식) 통�
 		"192.0.2.40 호스트 재시작",
 		"app-01.internal 호스트의 nginx.conf만 변경",
 		"단일 VM 서비스 배포",
+		"특정서버호스트만수정",
+		"단일컨테이너재시작",
 	];
 	for (const narrow of narrowParents) {
 		const probs = deployPlan.formProblems({
@@ -3402,11 +3421,13 @@ test("architecture_fit(최초 요구·붙는 상위 구조·수용 방식) 통�
 		);
 	}
 
-	// 3. 경로·서비스를 언급하더라도 붙는 상위 구조 설명이 함께 있으면 통과
+	// 3. 경로·서비스를 언급하더라도 붙는 상위 구조 설명이 함께 있거나 띄어쓰기 없는 정식 구조명이면 통과
 	const validParents = [
 		"naia-adk 승인 계획 게이트 및 azure 컨테이너 앱 공통 배포 계층",
 		"naia-adk/.claude/hooks/lib/deploy-plan.js 승인 계획 게이트 공통 계층",
 		"플랫폼 공통 systemd 배포 표준 및 승인 계획 게이트",
+		"플랫폼공통배포계층표준",
+		"공통인증게이트웨이구조",
 	];
 	for (const parent of validParents) {
 		const probs = deployPlan.formProblems({
@@ -3437,4 +3458,110 @@ test("architecture_fit(최초 요구·붙는 상위 구조·수용 방식) 통�
 	assert.equal(goodChk.status, 0, `${goodChk.stdout}\n${goodChk.stderr}`);
 	assert.match(goodChk.stdout, /양식: 통과/);
 	assert.match(goodChk.stdout, /적대 리뷰: 통과/);
+});
+
+test("참고-4: 기준 시각 이전 옛 계획서·기존 승인 영수증은 경고만 남기고 막지 않으며, 새 판(version 2·기준 이후)만 차단", async (t) => {
+	const { root, stateDir } = makeWorkspace(t);
+	writeGateConfig(root);
+	const legacyGatesDir = path.join(root, ".agents", "progress", "legacy-work", "gates");
+	const { planFile: tmpPlanFile, step1Cmd } = createValidPlan(root);
+	const templatePlan = JSON.parse(fs.readFileSync(tmpPlanFile, "utf8"));
+	fs.rmSync(path.dirname(path.dirname(tmpPlanFile)), { recursive: true, force: true });
+
+	const legacyCreatedAt = "2026-11-15T04:00:00.000Z";
+	const legacyPlan = { ...templatePlan, planId: "legacy-work-01", createdAt: legacyCreatedAt };
+	delete legacyPlan.architecture_fit;
+	delete legacyPlan.version;
+
+	fs.mkdirSync(legacyGatesDir, { recursive: true });
+	const legacyPlanFile = path.join(legacyGatesDir, "deploy-plan.json");
+	fs.writeFileSync(legacyPlanFile, JSON.stringify(legacyPlan, null, 2));
+
+	assert.equal(deployPlan.requiresArchitectureFit(legacyPlan), false, "기준 시각 이전 옛 계획서는 architecture_fit 의무 면제");
+	assert.deepEqual(deployPlan.formProblems(legacyPlan), [], "옛 계획서는 architecture_fit 없어도 formProblems 통과");
+	assert.ok(deployPlan.formWarnings(legacyPlan).length > 0, "옛 계획서는 경고 문구를 돌려주어야 함");
+
+	// 옛 계획서는 구 9기준 적대 리뷰 영수증도 계속 유효해야 함
+	const legacySha = sha256(fs.readFileSync(legacyPlanFile));
+	const prompt = deployPlan.reviewPrompt(legacyPlan, legacySha, root);
+	assert.ok(!prompt.includes("architecture_fit:"), "옛 계획서 리뷰 요청문에는 architecture_fit 미포함");
+	const promptSha = sha256(prompt);
+	const manifestSha = deployPlan.reviewInputManifest(legacyPlanFile, root);
+	const legacyCriteria = deployPlan.CRITERIA.filter(([id]) => id !== "architecture_fit");
+	const bodyLines = [
+		"판정: PASS",
+		...legacyCriteria.map(([id]) => `${id}: PASS — 기존 계획서 통과`),
+		"참고 지적: 0",
+		"남은 지적: 0",
+		"",
+	];
+	const body = bodyLines.join("\n");
+	const stdoutSha = sha256(body);
+	const finalText = `${body}review-run: target_sha256=${legacySha} prompt_sha256=${promptSha} stdout_sha256=${stdoutSha}\n`;
+	const resultRel = "deploy-plan-review-argon.md";
+	fs.writeFileSync(path.join(legacyGatesDir, resultRel), finalText);
+	const legacyReviewEnd = Date.parse(deployPlan.LEGACY_REVIEW_CUTOFF) - 60_000;
+	fs.writeFileSync(path.join(legacyGatesDir, deployPlan.REVIEW_FILE), JSON.stringify({
+		plan_sha256: legacySha,
+		plan: path.relative(root, legacyPlanFile),
+		author_model: legacyPlan.author_model,
+		prompt_sha256: promptSha,
+		reviewedAt: new Date(legacyReviewEnd).toISOString(),
+		reviewers: [{
+			model: deployPlan.REVIEW_MODELS.argon.model,
+			effort: deployPlan.REVIEW_MODELS.argon.effort,
+			result: resultRel,
+			result_sha256: sha256(finalText),
+			target_sha256: legacySha,
+			receipt: {
+				model: deployPlan.REVIEW_MODELS.argon.model,
+				started_at: new Date(legacyReviewEnd - 2000).toISOString(),
+				ended_at: new Date(legacyReviewEnd).toISOString(),
+				exit_code: 0,
+				prompt_sha256: promptSha,
+				stdout_sha256: stdoutSha,
+				input_manifest_sha256: manifestSha,
+				isolation: "bwrap-ro-bind",
+			},
+		}],
+	}, null, 2));
+
+	const revStatus = deployPlan.reviewProblems(legacyGatesDir, legacySha, root);
+	assert.equal(revStatus.ok, true, `옛 계획서 9기준 영수증 통과: ${revStatus.problems.join("; ")}`);
+
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
+	const chk = spawnSync(process.execPath, [workspaceScript, "check", legacyPlanFile], { cwd: root, env, encoding: "utf8" });
+	assert.equal(chk.status, 0, `${chk.stdout}\n${chk.stderr}`);
+	assert.match(chk.stdout, /양식: 통과/);
+	assert.match(chk.stdout, /경고/);
+	assert.match(chk.stdout, /적대 리뷰: 통과/);
+
+	// 승인된 옛 계획서 단계 실행 시 form 차단 없이 정상 동작(PLAN 승인 요청 단계로 진행)해야 함
+	const transcriptPath = path.join(stateDir, "transcript.jsonl");
+	fs.writeFileSync(transcriptPath, "");
+	const evalRes = await deployPlan.evaluate({
+		command: step1Cmd,
+		cwd: root,
+		root,
+		services: ["azure:containerapp:sample-web-prod"],
+		sessionId: "sess-legacy-ok",
+		transcriptPath,
+		env,
+		now: Date.parse("2026-11-15T04:10:00.000Z"),
+		readiness: () => ({ ok: true, problems: [], facts: [] }),
+	});
+	assert.equal(evalRes.allow, false);
+	assert.equal(evalRes.audit?.event, "plan-approval-requested");
+	assert.match(evalRes.reason, /승인 코드: PLAN-/);
+	assert.match(evalRes.reason, /경고\(기존 계획서/);
+
+	// version: 2 명시 또는 기준 시각 이후 createdAt (version: 1 위장 포함)은 반드시 architecture_fit 요구·차단
+	const optedInOld = { ...legacyPlan, version: 2 };
+	assert.equal(deployPlan.requiresArchitectureFit(optedInOld), true);
+	assert.ok(deployPlan.formProblems(optedInOld).some((m) => m.includes("architecture_fit")));
+
+	const newDatedV1 = { ...legacyPlan, version: 1, createdAt: "2026-11-15T05:00:00.000Z" };
+	assert.equal(deployPlan.requiresArchitectureFit(newDatedV1), true);
+	assert.ok(deployPlan.formProblems(newDatedV1).some((m) => m.includes("architecture_fit")));
 });
