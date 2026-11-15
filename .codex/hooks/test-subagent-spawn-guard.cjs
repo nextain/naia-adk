@@ -352,7 +352,7 @@ assert.equal(JSON.parse(malformedAdapter.stdout).decision, "block");
 		null, "flattened collaboration spawn reaches the unbound opt-in budget path");
 	assert.match(
 		guard.evaluate({ ...base, ...unbound, sessionId: `flat-b-${uid}`, toolName: "collaborationspawn_agent", toolInput: { prompt: "w", fork_context: false, fork_turns: "none" } })?.reason || "",
-		/1개를 생성/, "the second flattened spawn is stopped by the budget");
+		/지금 동시 1개 구동 중\(상한 1\)/, "the second flattened spawn is stopped by the budget");
 	fsx.rmSync(optRoot, { recursive: true, force: true });
 }
 
@@ -363,14 +363,17 @@ assert.equal(JSON.parse(malformedAdapter.stdout).decision, "block");
 	const claudeGuard = require("../../.claude/hooks/subagent-spawn-guard.js");
 	const keyRoot = fsx.mkdtempSync(path.join(osx.tmpdir(), "spawn-optkey-"));
 	fsx.mkdirSync(path.join(keyRoot, ".claude"), { recursive: true });
-	fsx.writeFileSync(path.join(keyRoot, ".claude", "allow-subagents"), JSON.stringify({ maxConcurrent: 8 }));
+	fsx.writeFileSync(path.join(keyRoot, ".claude", "allow-subagents"), JSON.stringify({ maxConcurent: 8 }));
 	const tmpRoot = fsx.mkdtempSync(path.join(osx.tmpdir(), "spawn-optkey-count-"));
 	assert.match(
 		claudeGuard.evaluate({ toolName: "Agent", sessionId: "k", root: keyRoot, env: {}, tmpRoot })?.reason || "",
-		/모르는 키가 있다: maxConcurrent/, "an unknown opt-in key is reported");
+		/모르는 키가 있다: maxConcurent/, "an unknown opt-in key is reported");
+	fsx.writeFileSync(path.join(keyRoot, ".claude", "allow-subagents"), JSON.stringify({ maxConcurrent: 8, windowMinutes: 60 }));
+	assert.equal(claudeGuard.evaluate({ toolName: "Agent", sessionId: "k", root: keyRoot, env: {}, tmpRoot }), null,
+		"maxConcurrent with ignored windowMinutes passes");
 	fsx.writeFileSync(path.join(keyRoot, ".claude", "allow-subagents"), JSON.stringify({ maxSpawns: 8 }));
 	assert.equal(claudeGuard.evaluate({ toolName: "Agent", sessionId: "k", root: keyRoot, env: {}, tmpRoot }), null,
-		"the corrected key passes");
+		"the legacy maxSpawns alias passes");
 	fsx.rmSync(keyRoot, { recursive: true, force: true });
 	fsx.rmSync(tmpRoot, { recursive: true, force: true });
 }
