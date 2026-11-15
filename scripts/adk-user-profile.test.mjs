@@ -11,6 +11,7 @@ import "../.claude/hooks/profile-role-guards.test.cjs"
 import "../.claude/hooks/profile-user-guards.test.cjs"
 import "../.claude/hooks/lead-write-guard.test.cjs"
 import "../.claude/hooks/subagent-spawn-guard.test.cjs"
+import "../.claude/hooks/plan-review-write-guard.test.cjs"
 import "../.agents/hooks/muse-pretooluse-adapter.test.cjs"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
