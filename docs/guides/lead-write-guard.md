@@ -5,8 +5,8 @@
 
 - 훅: `.claude/hooks/lead-write-guard.js`, 공용 판정 `.claude/hooks/lib/lead-guard.js`
 - 예외 대본: `scripts/lead-guard-exception.mjs`
-- 시험: `.claude/hooks/lead-write-guard.test.cjs` (`scripts/adk-user-profile.test.mjs` 가 같이 부른다)
-- 등록: 사용자 프로필 `templates/claude-user-profile/settings.json` (`adk-user-profile` 이 사용자 설정에 병합)
+- 시험: `.claude/hooks/lead-write-guard.test.cjs` (`scripts/adk-user-profile.test.mjs` 가 같이 부른다), `.agents/hooks/muse-pretooluse-adapter.test.cjs`
+- 등록: 사용자 프로필 `templates/claude-user-profile/settings.json` · `templates/muse-user-profile/settings.json` (`adk-user-profile` 이 Claude·Muse 사용자 설정에 병합), 저장소 `.claude/settings.json` · `.muse/hooks.json`
 
 ## 옛 장치(`lead-role-guard.js`, alpha-adk)와의 차이
 
@@ -43,7 +43,7 @@
 2. 그 claude 가 `-p/--print` 가 아니고(값 옵션 `--append-system-prompt -p` 나 `--` 뒤 인자는 플래그로 오인하지 않음), 훅 입력에 `agent_id`(서브에이전트)가 없다.
 
 표지가 없거나 `enabled` 가 아니면 3층이 아니다. **기본은 허용**이다. 2층 일꾼(`claude -p`, 서브에이전트)은 통과한다.
-codex·agy·muse 는 Claude 훅이 안 돌므로 이 훅의 대상이 아니다(3층이 agy·muse 인 서버는 해당 도구의 훅으로 별도 설계가 필요하다 — 미해결).
+`muse` 는 `.agents/hooks/muse-pretooluse-adapter.cjs` 로 `PreToolUse` (매처 없이 모든 도구·`multi_edit` 각 edit·`apply_patch` 각 파일·`workflow`·미지 도구 포함) 에서 같은 `lead-write-guard.js` 와 짝 관문들을 호출한다(저장소 `.muse/hooks.json`, 사용자 설정 `templates/muse-user-profile/settings.json` → 승인 후 `adk-user-profile.mjs` 로 `~/.config/muse/settings.json` 병합). 저장소 밖 폴더에서는 사용자 층(`~/.config/muse/settings.json`)만 걸리며 그 범위는 같은 층의 Claude Code 사용자 프로파일(`templates/claude-user-profile/settings.json`)과 같다. `codex·agy` 는 Claude·Muse 훅이 안 돌므로 이 훅의 대상이 아니다(3층이 `agy·codex` 인 환경은 해당 도구의 훅으로 별도 설계가 필요하다 — 미해결).
 역할 폴더에 표지를 두는 일은 켜는 절차의 일부다(아래).
 
 ## 무엇이 막히나
@@ -86,8 +86,8 @@ node scripts/lead-guard-exception.mjs close | status
 ## 켜는 절차 (3층 검수·승인 뒤, 사람이 한다)
 
 1. 역할 폴더(예: `/path/to/<역할>`)에 `.naia-role.json` 을 둔다: `{"role":"<역할>","lead_guard":{"enabled":true,"work_dir":"/path/to/work","approver_label":"<승인자>"}}`. 역할 이름은 `docs/common/<역할>/` 과 같다.
-2. `node scripts/adk-user-profile.mjs` 로 사용자 프로필을 병합한다(훅이 사용자 설정 PreToolUse 에 등록된다). 새 claude 세션부터 적용.
+2. `node scripts/adk-user-profile.mjs apply` 로 사용자 프로필을 병합한다(Claude `~/.claude/settings.json` 과 Muse `~/.config/muse/settings.json` PreToolUse 에 훅이 등록된다; Muse 만 적용할 때는 `--target muse`). 새 claude·muse 세션부터 적용.
 3. 확인: 역할 세션에서 저장소 파일 Edit → 안내문과 함께 막히는지, `claude -p` 일꾼은 통과하는지.
 
 되돌리기: 역할 폴더의 `.naia-role.json` 에서 `lead_guard.enabled` 를 `false`(또는 파일 삭제) → 즉시 3층 판정이 꺼진다(훅이 안 막음).
-훅 등록까지 빼려면 사용자 설정(`~/.claude/settings.json`)에서 `lead-write-guard.js` 항목을 지운다. 훅이 예외로 끝나도 통과하는 기본 허용이므로 켠 뒤 막혀 일이 멈추는 일은 표지를 끄면 풀린다.
+훅 등록까지 빼려면 사용자 설정(`~/.claude/settings.json` · `~/.config/muse/settings.json`)에서 `lead-write-guard.js` 항목을 지운다. Claude 는 훅 예외 시 통과하고, Muse 어댑터는 훅 오류 시 fail-closed 로 막히지만 표지를 끄면 정상 통과한다.
