@@ -90,7 +90,7 @@ test("1. 잠금 없음 통과: Edit·Write·NotebookEdit·쓰기 셸 모두 조�
 test("2. 살아 있는 잠금 + 파일 변이 도구(Edit/Write/NotebookEdit/MultiEdit/apply_patch) 막힘", () => {
 	const fx = makeRepoFixture("live-edit-");
 	const holder = spawnLiveHolder();
-	const now = Date.parse("2026-11-15T12:20:00.000Z");
+	const now = Date.now();
 	const acq = deployPlan.acquirePlanReviewLock({
 		repoRoot: fx.repo,
 		plan: fx.planRel,
@@ -100,7 +100,7 @@ test("2. 살아 있는 잠금 + 파일 변이 도구(Edit/Write/NotebookEdit/Mul
 	});
 	assert.equal(acq.ok, true);
 
-	const expectedMsg = `계획 리뷰 중(${fx.planRel}, 2026-11-15T12:20:00.000Z) — 끝난 뒤 다시`;
+	const expectedMsg = `계획 리뷰 중(${fx.planRel}, ${acq.lock.startedAt}) — 끝난 뒤 다시`;
 	const target = path.join(fx.repo, "src/app.js");
 
 	for (const [tool_name, tool_input, callCwd] of [
@@ -451,6 +451,11 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 		createdAt: new Date().toISOString(),
 		services: ["azure:containerapp:sample-web-prod"],
 		what_why: "리뷰 중 쓰기 잠금 통합 검증용 샘플 배포 계획입니다.",
+		architecture_fit: {
+			original_request: "계획 리뷰 진행 중 인스턴스 저장소 쓰기 잠금 및 PreToolUse 관문 통합 검증",
+			parent_structure: "ADK 배포 승인 계획 관문(approval-plan) 및 PreToolUse 하네스 계층",
+			acceptance_rationale: "기존 배포 계획 리뷰 실행기 흐름과 PreToolUse 관문 체인에 정식 잠금 계층으로 결합하며 단일 파일 우회 땜빵이 아님",
+		},
 		changes: ["컨테이너 이미지 sample/web:v1 반영"],
 		scenario: [
 			{
