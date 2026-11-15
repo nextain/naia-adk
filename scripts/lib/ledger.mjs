@@ -1,4 +1,5 @@
 import { readFile, lstat, open, rename, unlink } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 
 const object = x => x && typeof x === 'object' && !Array.isArray(x);
 const required = (x, label) => { if (typeof x !== 'string' || !x.trim() || /[\r\n]/.test(x)) throw Error(`invalid ${label}`); return x; };
@@ -100,6 +101,29 @@ export function validateScheduleLedger(doc, now = Date.now()) {
 }
 export const readWorkLedger = async (path, now = Date.now()) => validateWorkLedger(parseLedgerYaml(await readFile(path, 'utf8')), now);
 export const readScheduleLedger = async (path, now = Date.now()) => validateScheduleLedger(parseLedgerYaml(await readFile(path, 'utf8')), now);
+// A promise is a work row, so session health observes the same source of truth.
+export async function addPromise(path, { role, title, due, channel, message, id = randomUUID(), now = Date.now() }) {
+  for (const [key, value] of Object.entries({ role, title, channel, message, id })) required(value, key);
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw Error('invalid id');
+  if (!Number.isFinite(now) || timestamp(due, now) <= now) throw Error('future deadline required');
+  const lockPath = `${path}.lock`, tmp = `${path}.${randomUUID()}.tmp`;
+  const lock = await open(lockPath, 'wx', 0o600); let temporary = false;
+  try {
+    const meta = await lstat(path);
+    if (meta.isSymbolicLink() || !meta.isFile()) throw Error('regular ledger file required; symlinks are not replaced');
+    const doc = parseLedgerYaml(await readFile(path, 'utf8'));
+    validateWorkLedger(doc, now);
+    if (doc.work.some(row => row.id === id)) throw Error('duplicate id');
+    const at = new Date(now).toISOString();
+    const row = { id, role, task: title, status: '진행 중', requested_at: at, due_at: due, evidence: message, result: null, updated_at: at, source_channel: channel, source_message: message };
+    doc.work.push(row);
+    validateWorkLedger(doc, now);
+    const handle = await open(tmp, 'wx', meta.mode & 0o777); temporary = true;
+    try { await handle.writeFile(serializeLedgerYaml(doc)); } finally { await handle.close(); }
+    await rename(tmp, path); temporary = false;
+    return row;
+  } finally { if (temporary) await unlink(tmp); await lock.close(); await unlink(lockPath); }
+}
 const formatters = new Map();
 function parts(at, zone) {
   if (!formatters.has(zone)) formatters.set(zone, new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }));
