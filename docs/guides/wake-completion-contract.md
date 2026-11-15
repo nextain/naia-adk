@@ -39,7 +39,8 @@ The [response observer](response-watch.md) detects requests independent of job
 admission. Default thresholds are 10 minutes for an internal re-call and 30
 minutes for accountable-owner notification. These are measured from the human
 post timestamp; they are distinct from the 30-second/120-second job deadlines.
-Only configured expected-bot explicit replies prove the reply relationship.
+Only configured expected-bot explicit replies prove the reply relationship;
+one reply also covers the same author's earlier pending posts.
 Unreferenced bot activity does not close a pending request. Human replies to
 humans and explicitly addressed other bots do not create obligations.
 Configure channel-wide responsibility only in channels where it is intended.

@@ -25,6 +25,8 @@ only for alert channels.
   `escalation.userId`: accountable-owner notice destination and person.
 - `thresholds`: default 10/30 minutes since the source post. With a one-minute
   timer, delivery occurs at the next successful poll after each threshold.
+  `thresholds.burstMinutes` (default 10) bounds a batched reply, below.
+  `thresholds.followMinutes` (default 30) bounds the previous-addressee rule.
 - `sites`: URL and notice `channelId`, optional `failureThreshold` (default 2).
   Probes accept successful HTTP responses, reject redirects and use a timeout.
   URLs must have no credentials, query or fragment. Site checks prove HTTP
@@ -47,15 +49,53 @@ later observations apply the threshold. Adding a new
 channel later baselines only that channel. Preserve state across upgrades.
 
 Subsequent scans page back to the durable cursor and process oldest first.
-Only an expected bot's explicit Discord reply referencing the original post
-closes a pending request. Configure the executor to use that reference. Bot
-chatter and another bot's reply do not prove response. A receipt may acknowledge
+Only an expected bot's explicit Discord reply closes a pending request. It
+closes the post it references and the same author's earlier posts still pending
+for that bot in the channel that were posted at most `burstMinutes` before the
+referenced post, because one reply commonly answers a burst of posts. An older
+question outside that window stays pending until it gets its own reply. Later posts, other authors' posts and requests assigned to another bot
+stay pending. Configure the executor to reference the newest post it answers.
+Bot chatter, unreferenced bot posts and another bot's reply do not prove
+response, with one exception: a post assigned only by the `all-human` fallback
+(no mention, no role, no reply reference) names no recipient, so it is stored
+with `via: "fallback"`. Another bot's explicit reply closes it under the same
+burst rule only when that reply references a post that is itself pending; a
+reply to an untracked post closes nothing for other bots. When the same author
+then posts within `burstMinutes` a message that mentions a bot user or a
+configured role, that message re-addresses the burst and the author's earlier
+fallback posts stop waiting; mentioning a person does not. A direct mention of
+the expected bot is tracked as its own request; a mention of a bot that no role
+maps to is not watched. Pending rows stored before `via` existed do not carry
+it and keep the strict rule until they are answered or removed.
+
+Previous addressee: people continue a conversation without naming the bot
+again ("ok, so what now?" right after a bot answered). When a bot sends an
+explicit reply to a person's post, or a person's post names exactly one bot
+(user mention or configured role), that bot becomes the person's partner in the
+channel. The person's next unaddressed post within `followMinutes` of that
+exchange (measured from the post's own time, not the scan time) is assigned to
+the partner instead of the channel bot, still with
+`via: "fallback"`. After `followMinutes` the partner is dropped and the channel
+bot takes unaddressed posts again. Only known agents become a partner: the
+channel bot, role bots and the guild's optional `partnerBotIds` (other agents
+that answer people in the channel). A third-party bot never does, and a bot post
+counts only when it is an explicit Discord reply, so watcher notices never make a
+partner. The replied-to person is taken from the pending request, or from the
+reply's embedded snapshot only when that snapshot is the referenced post. A
+receipt may acknowledge
 an unfinished task; assess the actual work result separately.
 
 ## State, failures and recovery
 
-State version 1 contains channel cursors, pending request identifiers, timestamps,
-stage receipts and site counters. Optional `replies[botId].at` retains the latest
+State version 1 contains channel cursors, pending request identifiers, an
+author key per request (an unsalted SHA-256 prefix of the user ID: not the raw
+ID, but anyone holding the state can confirm a known ID, so keep the state
+private; requests stored by older versions lack it and close only on a direct
+reference), timestamps,
+stage receipts and site counters. Optional per-channel `partners` maps the same
+author key to the partner bot ID and exchange time; entries older than
+`followMinutes` are dropped on each successful scan, and state without
+`partners` is compatible. Optional `replies[botId].at` retains the latest
 confirmed referenced-reply timestamp (milliseconds since epoch) for
 [session progress observation](session-health.md); older version-1 state remains
 compatible. Reply progress is committed only with a successful channel scan. It stores no message content or display names.
