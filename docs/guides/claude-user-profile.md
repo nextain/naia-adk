@@ -19,7 +19,7 @@
 
 압축 기준이 없으면 세션은 모델 최대 창까지 맥락을 키운 뒤에야 압축합니다. 부를 때마다 보내는 맥락이 커져 비용이 늘고 중간 내용을 놓치는 일이 커집니다.
 
-사용자 설정에는 파괴적 Git, 최상위 삭제, 강제 푸시, 메일 발송 훅과 아래 여섯 훅을 등록합니다. 매처는 저장소 설정과 같습니다. 여섯 훅의 역할 모드는 `CLAUDE_PROJECT_DIR`(없으면 cwd) 바로 아래에 `.naia-role.json`이 있을 때만 켭니다. 역할 파일이 없는 세션은 `NAIA_ADK_ROOT` 환경 변수가 있어도 기존 저장소 훅과 같은 판정을 내립니다. `NAIA_ADK_ROOT`는 정책·기록을 찾을 ADK 절대 경로만 지정합니다. 저장소 안에서 연 세션에는 같은 훅이 저장소 설정과 사용자 설정에서 두 번 걸립니다. 둘 다 막는 쪽으로 판정하므로 위험은 없고 실행만 두 번입니다.
+사용자 설정에는 파괴적 Git, 최상위 삭제, 강제 푸시, 메일 발송 훅과 아래 여덟 훅을 등록합니다. 매처는 저장소 설정과 같습니다. 역할 모드를 쓰는 훅은 `CLAUDE_PROJECT_DIR`(없으면 cwd) 바로 아래에 `.naia-role.json`이 있을 때만 역할 모드를 켭니다. 역할 파일이 없는 세션은 `NAIA_ADK_ROOT` 환경 변수가 있어도 기존 저장소 훅과 같은 판정을 내립니다. `NAIA_ADK_ROOT`는 정책·기록을 찾을 ADK 절대 경로만 지정합니다. 저장소 안에서 연 세션에는 같은 훅이 저장소 설정과 사용자 설정에서 두 번 걸립니다. 둘 다 막는 쪽으로 판정하므로 위험은 없고 실행만 두 번입니다.
 
 | 훅 | 매처 | 역할 폴더에서 읽는 것 |
 | --- | --- | --- |
@@ -28,6 +28,8 @@
 | `remote-identity-gate.js` | `Bash` | ADK 저장소 목록·공개 저장소 승인. 실제 Git 대상 경로도 검사 |
 | `gcs-guard.js` | `Bash` | ADK 버킷 정책. 정책 누락·손상 시 버킷 작업 차단 |
 | `prod-gateway-guard.js` | `Edit|Write` | 편집 입력의 운영 게이트웨이 값. 외부 정책 불필요 |
+| `lead-write-guard.js` | `Bash|Edit|Write|NotebookEdit|MultiEdit|apply_patch` | 3층 역할 세션(`.naia-role.json` `lead_guard.enabled`)의 저장소 작업 트리 직접 쓰기 차단 (`lead-write-guard.md`) |
+| `plan-review-write-guard.js` | `Bash|Edit|Write|NotebookEdit|MultiEdit|apply_patch` | 대상 저장소의 `.agents/state/plan-review.lock` 확인. 적대 리뷰 진행 중 저장소 쓰기 차단 (`plan-review-write-guard.md`) |
 | `subagent-spawn-guard.js` | `Task|Agent` | 역할 폴더의 `.claude/allow-subagents`와 생성 한도. 역할마다 카운터 분리 |
 
 추가 사용자 훅은 비용 이벤트 일곱 개(`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `PreCompact`), GPU 생성 확인(`PreToolUse`, `Bash`), 하위 모델 제한(`PreToolUse`, `Task|Agent|Workflow`)입니다. GPU 훅은 원본처럼 생성·재시도·백그라운드 실행에 확인을 요청합니다. 하위 모델 훅은 기본 `haiku`·`sonnet`과 `상위 목표:`·`막히면 올림:` 안내 줄을 요구합니다. 생성 허용 표지가 있어도 모델 검사는 함께 적용됩니다.

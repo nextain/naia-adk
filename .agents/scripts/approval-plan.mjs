@@ -325,7 +325,7 @@ function hashPath(h, file, recurse = true) {
 	}
 }
 
-const REVIEW_SNAPSHOT_EXCLUDED_PREFIXES = [".agents/progress/", ".agents/work/", ".agents/.dm-outbox/", "gates/", "tmp/"];
+const REVIEW_SNAPSHOT_EXCLUDED_PREFIXES = [".agents/progress/", ".agents/work/", ".agents/state/", ".agents/.dm-outbox/", "gates/", "tmp/"];
 function isRecoveryMode(root = ROOT) {
 	for (const marker of [".codex/no-harness", ".claude/no-harness", ".pi/no-harness"]) {
 		try { if (fs.statSync(path.join(root, marker)).isFile()) return true; } catch {}
@@ -600,41 +600,60 @@ switch (cmd) {
 		for (const out of outputs) if (out === abs || fs.existsSync(out)) die("리뷰 결과 경로가 이미 있습니다. 새 --out 경로를 쓰십시오");
 		try { for (const out of outputs) lib.resultFile(gatesDir, path.relative(gatesDir, out), true); }
 		catch { die("--out 은 해당 계획서 gatesDir 안 일반 파일 경로여야 합니다. 하위 폴더는 먼저 만드십시오"); }
-		const rec = { plan_sha256: sha, plan: path.relative(planRoot, abs), author_model: author, prompt_sha256: sha256(prompt), read_only_scripts: roBind.items, rotation: true, skipped: [], reviewers: [], reviewedAt };
-		const recordFile = path.join(gatesDir, lib.REVIEW_FILE);
-		fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
-		const reviewStartedAt = Date.now();
-		// 리뷰 본문은 계획서 낱말을 되풀이할 수 있으므로 한도 판별에서 뺀다.
-		const limitTextOf = (r) => `${r.stderr || ""}\n${r.error || ""}`;
-		let actual = null, actualOutput = null;
-		const roOpt = { readOnlyScripts: roBind.items };
+		const planRel = path.relative(planRoot, abs);
+		const lockHandle = lib.acquirePlanReviewLock({ repoRoot: planRoot, plan: planRel, pid: process.pid, env: process.env });
+		if (!lockHandle.ok) die(lockHandle.why, 1);
+		const cleanupLock = () => { try { lib.releasePlanReviewLock(lockHandle); } catch {} };
+		const onSigInt = () => { cleanupLock(); process.exit(130); };
+		const onSigTerm = () => { cleanupLock(); process.exit(143); };
+		const onSigHup = () => { cleanupLock(); process.exit(129); };
+		process.once("exit", cleanupLock);
+		process.once("SIGINT", onSigInt);
+		process.once("SIGTERM", onSigTerm);
+		process.once("SIGHUP", onSigHup);
 		try {
-			const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt, planRoot);
-			if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first))) {
-				rec.skipped.push({ id: ids[0], reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
-				console.log(`한도 실패로 다음 차례 리뷰어로 넘어감: ${ids[0]} → ${ids[1]}`);
-				const [second] = await runReviewers([ids[1]], prompt, abs, early.digest, roOpt, planRoot);
-				actual = second; actualOutput = outputs[1];
-			} else {
-				actual = first; actualOutput = outputs[0];
+			const rec = { plan_sha256: sha, plan: planRel, author_model: author, prompt_sha256: sha256(prompt), read_only_scripts: roBind.items, rotation: true, skipped: [], reviewers: [], reviewedAt };
+			const recordFile = path.join(gatesDir, lib.REVIEW_FILE);
+			fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
+			const reviewStartedAt = Date.now();
+			// 리뷰 본문은 계획서 낱말을 되풀이할 수 있으므로 한도 판별에서 뺀다.
+			const limitTextOf = (r) => `${r.stderr || ""}\n${r.error || ""}`;
+			let actual = null, actualOutput = null;
+			const roOpt = { readOnlyScripts: roBind.items };
+			try {
+				const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt, planRoot);
+				if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first))) {
+					rec.skipped.push({ id: ids[0], reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
+					console.log(`한도 실패로 다음 차례 리뷰어로 넘어감: ${ids[0]} → ${ids[1]}`);
+					const [second] = await runReviewers([ids[1]], prompt, abs, early.digest, roOpt, planRoot);
+					actual = second; actualOutput = outputs[1];
+				} else {
+					actual = first; actualOutput = outputs[0];
+				}
 			}
+			catch (error) { die(`읽기 전용 실행 준비 실패. 이전 리뷰 기록은 무효입니다 ${reviewErrorDetails(error, error.reviewStage || "review-prepare", reviewStartedAt, planRoot)}`, 3); }
+			{
+				const r = actual;
+				const text = r.body.endsWith("\n") ? r.body : `${r.body}\n`;
+				const final = `${text}review-run: target_sha256=${sha} prompt_sha256=${sha256(prompt)} stdout_sha256=${sha256(text)}\n`;
+				let output;
+				try { output = lib.resultFile(gatesDir, path.relative(gatesDir, actualOutput), true); }
+				catch { die("리뷰 실행 중 결과 경로가 gatesDir 밖 또는 일반 파일이 아닌 경로로 바뀜", 3); }
+				fs.writeFileSync(output, final, { flag: "wx" });
+				rec.reviewers.push({ id: r.id, model: r.model, effort: r.effort, result: path.relative(gatesDir, actualOutput), result_sha256: sha256(final), target_sha256: sha, receipt: { ...r.receipt, stdout_sha256: sha256(text), isolation: r.isolation }, ...(r.error ? { execution_error: r.error } : {}) });
+				console.log(`결과 ${r.id}: ${path.relative(planRoot, actualOutput)}`);
+			}
+			fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
+			const r = reviewStatus(gatesDir, sha, true, planRoot);
+			console.log(r.ok ? "적대 리뷰: 통과 — 승인 요청 가능" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
+			cleanupLock();
+			process.exit(r.ok ? 0 : 1);
+		} finally {
+			cleanupLock();
+			process.removeListener("SIGINT", onSigInt);
+			process.removeListener("SIGTERM", onSigTerm);
+			process.removeListener("SIGHUP", onSigHup);
 		}
-		catch (error) { die(`읽기 전용 실행 준비 실패. 이전 리뷰 기록은 무효입니다 ${reviewErrorDetails(error, error.reviewStage || "review-prepare", reviewStartedAt, planRoot)}`, 3); }
-		{
-			const r = actual;
-			const text = r.body.endsWith("\n") ? r.body : `${r.body}\n`;
-			const final = `${text}review-run: target_sha256=${sha} prompt_sha256=${sha256(prompt)} stdout_sha256=${sha256(text)}\n`;
-			let output;
-			try { output = lib.resultFile(gatesDir, path.relative(gatesDir, actualOutput), true); }
-			catch { die("리뷰 실행 중 결과 경로가 gatesDir 밖 또는 일반 파일이 아닌 경로로 바뀜", 3); }
-			fs.writeFileSync(output, final, { flag: "wx" });
-			rec.reviewers.push({ id: r.id, model: r.model, effort: r.effort, result: path.relative(gatesDir, actualOutput), result_sha256: sha256(final), target_sha256: sha, receipt: { ...r.receipt, stdout_sha256: sha256(text), isolation: r.isolation }, ...(r.error ? { execution_error: r.error } : {}) });
-			console.log(`결과 ${r.id}: ${path.relative(planRoot, actualOutput)}`);
-		}
-		fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
-		const r = reviewStatus(gatesDir, sha, true, planRoot);
-		console.log(r.ok ? "적대 리뷰: 통과 — 승인 요청 가능" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
-		process.exit(r.ok ? 0 : 1);
 	}
 	case "preapprove": {
 		const { abs, plan, sha, root: planRoot } = loadPlan(args[0]);

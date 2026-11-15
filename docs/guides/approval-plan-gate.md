@@ -91,6 +91,15 @@ node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/
 - 리뷰 영수증(`gates/deploy-plan-review.json`)에는 계획서 SHA-256, 요청문 SHA-256, 고정 파일·실행기 입력 목록 해시(`input_manifest_sha256`), 그리고 리뷰 시점의 `readOnlyScripts` 바인딩 목록(`read_only_scripts`, 항목별 `sha256`·`path`·`service`)이 함께 묶입니다.
 - **리뷰 뒤에 계획서나 고정 파일을 고치면 이전 리뷰와 승인 코드는 즉시 무효**가 되며 다시 리뷰를 받아야 합니다.
 
+### 2.1 리뷰 중 저장소 쓰기 잠금 (`plan-review.lock` + `plan-review-write-guard`)
+
+적대 리뷰가 도는 동안 다른 세션(3층 역할 세션, 2층 `claude -p` 일꾼, 서브에이전트, 저장소 직접 세션)이 같은 인스턴스 저장소 안 파일을 고치면 입력 매니페스트·작업 트리 스냅샷이 어긋나 리뷰가 무효가 되거나 PASS 직후 관문이 막힙니다. 이를 글 규칙이 아니라 장치로 막습니다(상세: `docs/guides/plan-review-write-guard.md`).
+
+- **잠금 파일**: `approval-plan.mjs review` 실행기는 시작할 때 계획서가 속한 저장소 뿌리 아래 `.agents/state/plan-review.lock`(`schema: "plan-review-lock/v1"`, `pid`, `pidStartTicks`, `plan`, `repoRoot`, `startedAt`, `expiresAt`, 기본 시한 60분·`APPROVAL_PLAN_REVIEW_LOCK_TTL_MS` 조정 가능)을 배타 생성(`wx`)하고, 정상 종료·실패·신호 중단(`SIGINT`/`SIGTERM`/`SIGHUP`) 모두에서 잠금 파일과 비어 있는 `.agents/state` 폴더를 지웁니다. 이미 살아 있는 잠금이 있으면 중복 리뷰 시작을 거부합니다.
+- **PreToolUse 차단**: `.claude/hooks/plan-review-write-guard.js`(저장소 `.claude/settings.json` 및 사용자 프로파일 `templates/claude-user-profile/settings.json` 동시 등록)가 잠긴 저장소 안을 바꾸는 `Write`/`Edit`/`NotebookEdit`/`MultiEdit`/`apply_patch` 와 쓰기 셸 명령(리다이렉션, `sed -i`, `rm/cp/mv/touch/mkdir`, `git add/commit/checkout/reset/stash`, 인라인 Python/Node 파일 쓰기, 심볼릭 링크 우회 포함)을 가로채어 `"계획 리뷰 중(<계획 경로>, <시작 시각>) — 끝난 뒤 다시"` 안내와 함께 막습니다.
+- **통과 범위**: 읽기 도구와 읽기 전용 셸 명령(`git status`, `git diff`, `ls`, `cat`, `rg`, `node --test` 등), 잠긴 저장소 밖 경로 쓰기, 리뷰 실행기 자신(PID 계보), 그리고 `gates/` 아래 리뷰 기록(`deploy-plan-review.json`, `deploy-plan-review-*.md`, `deploy-plan-review-findings.md` — 단 `deploy-plan.json` 원본 수정과 잠금 파일 삭제는 차단)은 그대로 통과합니다.
+- **죽은·만료 잠금과 시한 감시**: 이전 프로세스가 죽었거나(`pid` 부재·좀비·PID 재사용) `expiresAt` 시한이 지난 잠금은 쓰기를 막지 않고 한 줄 알림(`additionalContext`)을 내보냅니다. 반대로 관문 입력·잠금 JSON 손상, 내부 오류, 또는 관문 프로세스 멈춤 시에는 `lib/hook-watchdog.js`(기본 15초, `NAIA_PLAN_REVIEW_GUARD_WATCHDOG_MS`)가 자식을 종료하고 **막음(fail-closed)** 으로 판정합니다.
+
 ---
 
 ## 3. 승인 코드 발급 (`preapprove`)

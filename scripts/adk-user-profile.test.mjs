@@ -10,6 +10,7 @@ import { loadProfile, mergeRule, mergeSettings, parseArgs, PROFILE_HOOKS, run, v
 import "../.claude/hooks/profile-role-guards.test.cjs"
 import "../.claude/hooks/profile-user-guards.test.cjs"
 import "../.claude/hooks/lead-write-guard.test.cjs"
+import "../.claude/hooks/plan-review-write-guard.test.cjs"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 // Keep every fixture under the system temporary folder, never beside the checkout.

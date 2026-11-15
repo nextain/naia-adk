@@ -27,10 +27,11 @@ function block(reason) {
  * 자식이면 false 를 돌려 호출한 쪽이 본문을 그대로 돌게 한다.
  * 부모면 자식을 띄워 결과를 그대로 옮기고 true 를 돌린다(호출한 쪽은 본문을 돌리지 않는다).
  */
-function runWithWatchdog({ script, args = [], env = {} }) {
+function runWithWatchdog({ script, args = [], env = {}, defaultMs = DEFAULT_MS, msEnvVar = "NAIA_DEPLOY_GUARD_WATCHDOG_MS", label = "운영 관문" }) {
 	if (process.env[CHILD_ENV] === "1") return false;
-	const rawMs = Number(process.env.NAIA_DEPLOY_GUARD_WATCHDOG_MS);
-	const ms = Number.isFinite(rawMs) && rawMs > 0 ? rawMs : DEFAULT_MS;
+	const rawMs = Number(process.env[msEnvVar]);
+	const ms = Number.isFinite(rawMs) && rawMs > 0 ? rawMs : defaultMs;
+	const secLabel = ms % 1000 === 0 ? String(ms / 1000) : (ms / 1000).toFixed(1);
 	const child = spawn(process.execPath, [script, ...args], {
 		env: { ...process.env, ...env, [CHILD_ENV]: "1" },
 		stdio: ["pipe", "pipe", "inherit"],
@@ -44,24 +45,24 @@ function runWithWatchdog({ script, args = [], env = {} }) {
 		if (settled) return;
 		settled = true;
 		try { child.kill("SIGKILL"); } catch {}
-		block(`[Harness] 운영 관문이 ${Math.round(ms / 1000)}초 안에 판정하지 못해 막습니다. 멈춘 관문은 시간 초과로 통과되므로 기다리지 않습니다(11/13 v0 사고). 디스크 여유(df -h /)와 상태 잠금을 확인한 뒤 다시 실행하십시오.`);
+		block(`[Harness] ${label}이 ${secLabel}초 안에 판정하지 못해 막습니다. 멈춘 관문은 시간 초과로 통과되므로 기다리지 않습니다(11/13 v0 사고). 디스크 여유(df -h /)와 상태 잠금을 확인한 뒤 다시 실행하십시오.`);
 	}, ms);
 	child.on("error", (e) => {
 		if (settled) return;
 		settled = true;
 		clearTimeout(timer);
-		block(`[Harness] 운영 관문을 띄우지 못해 막습니다: ${e.message}`);
+		block(`[Harness] ${label}을 띄우지 못해 막습니다: ${e.message}`);
 	});
 	child.on("close", (code, signal) => {
 		if (settled) return;
 		settled = true;
 		clearTimeout(timer);
-		if (signal) block(`[Harness] 운영 관문이 신호 ${signal} 로 끝나 막습니다.`);
+		if (signal) block(`[Harness] ${label}이 신호 ${signal} 로 끝나 막습니다.`);
 		const output = Buffer.concat(out);
 		writeAll(output);
 		if (code !== 0) {
 			if (code === 2 && output.length === 0) process.exit(2);
-			block(`[Harness] 운영 관문이 비정상 종료(코드 ${code ?? "null"})해 막습니다.`);
+			block(`[Harness] ${label}이 비정상 종료(코드 ${code ?? "null"})해 막습니다.`);
 		}
 		process.exit(0);
 	});

@@ -70,6 +70,7 @@ desktop.ini
 
 # Deterministic local hook queues and scratch receipts
 .agents/work/
+.agents/state/
 
 # BEH runtime artifacts (per-session ledger/state + opt-in/runtime markers)
 .agents/harness/ledger/
