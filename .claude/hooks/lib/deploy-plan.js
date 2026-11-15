@@ -1623,10 +1623,11 @@ function readSmallText(f, dir) {
 
 function scriptFileOf(e, command) {
 	const { executedShellFile } = require("./deploy-command-classifier.js");
+	const { SHELLS } = require("./effective-argv.js");
 	const argv = e.argv || [];
 	const direct = executedShellFile(argv, e.dir, e.dirKnown !== false, command);
 	if (direct) return direct;
-	if (!/(?:^|\/)(?:ba|z|da)?sh$/.test(argv[0] || "")) return null;
+	if (!SHELLS.test(argv[0] || "")) return null;
 	for (let i = 1; i < argv.length; i++) {
 		const m = argv[i].match(/^0?<(.*)$/);
 		if (!m) continue;

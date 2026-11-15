@@ -12,7 +12,8 @@
 const fs = require("fs");
 const path = require("path");
 const { isFileMutationTool, isShellTool } = require("./tool-names.js");
-const { effectiveCommands, writtenPaths, interpreterProgram, gitClauseDirectory, resolvePathWord } = require("./lib/effective-argv.js");
+const { effectiveCommands, writtenPaths, interpreterProgram, gitClauseDirectory, resolvePathWord, SHELLS, SHELL_ALT } = require("./lib/effective-argv.js");
+const SHEBANG_SHELL_RE = new RegExp(`^#!\\s*/.*\\b(?:${SHELL_ALT})\\b`);
 const guard = require("./lib/lead-guard.js");
 
 const GIT_WRITES = new Set(["apply", "am", "rm", "mv", "restore", "clean", "checkout", "merge", "pull", "cherry-pick", "rebase", "revert", "switch"]);
@@ -256,7 +257,7 @@ function isMutatingArgv(argv) {
 function localShellScript(argv, dir, resolveFn) {
 	const head = path.basename(argv[0] || "");
 	let candidate = null;
-	if (/^(?:ba|z|da|k)?sh$/.test(head) || head === "." || head === "source") {
+	if (SHELLS.test(head) || head === "." || head === "source") {
 		if (argv.slice(1).some((a) => a === "-c" || a === "-s")) return null;
 		const pos = nonFlags(argv, 1, new Set(["-o", "+o"]));
 		if (pos.length) candidate = resolveFn(pos[0]);
@@ -270,7 +271,7 @@ function localShellScript(argv, dir, resolveFn) {
 		const buf = fs.readFileSync(candidate);
 		if (buf.subarray(0, 512).includes(0)) return null;
 		const text = buf.toString("utf8");
-		if (/^(?:ba|z|da|k)?sh$/.test(head) || head === "." || head === "source" || /\.(?:ba)?sh$/.test(candidate) || /^#!\s*\/.*(?:ba|z|da|k)?sh\b/.test(text)) return { file: candidate, text };
+		if (SHELLS.test(head) || head === "." || head === "source" || /\.(?:ba)?sh$/.test(candidate) || SHEBANG_SHELL_RE.test(text)) return { file: candidate, text };
 	} catch {}
 	return null;
 }

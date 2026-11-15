@@ -3139,6 +3139,22 @@ test("2회차: 표준입력·파일설명자 실행 갈래(/dev/stdin·/dev/fd/N
 		["registered op.sh via bash < file", `bash < ${opScript}`],
 		["registered op.sh via bash <(cat)", `bash <(cat ${opScript}) s2`],
 		["registered op.sh via source <(cat)", `source <(cat ${opScript}) s2`],
+		// 3회차: 멀티콜 바이너리(busybox·toybox)·확장 셸 이름
+		["busybox sh /dev/stdin go", `cat ${prodScript} | busybox sh /dev/stdin go`],
+		["busybox ash /dev/stdin go", `cat ${prodScript} | busybox ash /dev/stdin go`],
+		["busybox sh -s go", `cat ${prodScript} | busybox sh -s go`],
+		["env busybox sh /dev/stdin go", `cat ${prodScript} | env busybox sh /dev/stdin go`],
+		["timeout busybox sh /dev/stdin go", `cat ${prodScript} | timeout 10 busybox sh /dev/stdin go`],
+		["busybox sh -c $(cat prod.sh)", `busybox sh -c "$(cat ${prodScript})"`],
+		["busybox sh prod.sh go", `busybox sh ${prodScript} go`],
+		["toybox sh /dev/stdin go", `cat ${prodScript} | toybox sh /dev/stdin go`],
+		["/usr/bin/busybox sh prod.sh go", `/usr/bin/busybox sh ${prodScript} go`],
+		["busybox hush /dev/stdin go", `cat ${prodScript} | busybox hush /dev/stdin go`],
+		["mksh /dev/stdin go", `cat ${prodScript} | mksh /dev/stdin go`],
+		["yash /dev/stdin go", `cat ${prodScript} | yash /dev/stdin go`],
+		["posh /dev/stdin go", `cat ${prodScript} | posh /dev/stdin go`],
+		["fish /dev/stdin go", `cat ${prodScript} | fish /dev/stdin go`],
+		["busybox ssh prod host", "busybox ssh deploy@api.example.com 'systemctl restart app'"],
 	];
 	for (const [label, cmd] of blockCases) {
 		const res = runHook(cmd, outside);
@@ -3147,6 +3163,8 @@ test("2회차: 표준입력·파일설명자 실행 갈래(/dev/stdin·/dev/fd/N
 
 	const passCases = [
 		["verified pipe cat safe.sh", `cat ${safeScript} | bash /dev/stdin go`],
+		["verified pipe cat safe.sh | busybox sh", `cat ${safeScript} | busybox sh /dev/stdin`],
+		["verified pipe cat safe.sh | toybox sh", `cat ${safeScript} | toybox sh /dev/stdin`],
 		["verified redirect safe.sh", `bash < ${safeScript}`],
 		["verified fd/3 3< safe.sh", `bash /dev/fd/3 3< ${safeScript}`],
 		["verified proc sub bash <(cat safe)", `bash <(cat ${safeScript}) go`],
@@ -3238,6 +3256,7 @@ test("2회차: sudo 기본 허용·거부 목록 (비파괴 조회 통과·상�
 		"sudo cat /etc/hosts > /tmp/sudo-leak",
 		"sudo -i",
 		"sudo -e /etc/hosts",
+		"sudo busybox sh /tmp/safe.sh",
 	];
 	for (const cmd of blockedSudo) {
 		const res = runHook(cmd, outside);

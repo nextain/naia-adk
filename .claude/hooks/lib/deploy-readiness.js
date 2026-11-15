@@ -14,6 +14,7 @@ const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { stripReserved, SHELLS, SHELL_ALT } = require("./effective-argv.js");
 
 const MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const TOOL_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -23,7 +24,7 @@ const VERSION_CHANGE = /--image\b|--yaml\b|--container-image\b|\brevision\s+(?:c
 // ops 는 설정만 바꾸는 명령일 때만 받는다. 목록 밖 명령은 feature 나 rollback 으로 신고한다.
 const CONFIG_ONLY = /--(?:set|remove|replace)-env-vars\b|--(?:min|max)-replicas\b|--cpu\b|--memory\b|\bscale\b|\brestart\b|\brevision\s+(?:deactivate|restart|label)\b|\bingress\s+(?:enable|disable|access-restriction|sticky-sessions|cors)\b|\bsecret\s+(?:set|remove)\b|\b(?:stop|start)\b|\bvm\s+deallocate\b|\bdisk\s+update\b|\bsnapshot\s+create\b|\b(?:vm|disk|snapshot|nic|public-ip|nsg|flexible-server)\s+delete\b/;
 // VM·컨테이너 안에서 도는 글. 글이 명령에 드러나지 않거나 코드를 올리는 부류면 ops 가 아니다.
-const INNER_OPAQUE = /\$\(|`|\$\{?[A-Za-z_]|(?:^|\s)@\S|\bbase64\b|\S\.(?:sh|bash|py|js|mjs|cjs|ts|rb|pl|php)\b|(?:^|[\s;&|"'(])(?:bash|sh|zsh|dash|python\d*(?:\.\d+)?|node|perl|ruby|php|source)\s+(?!-c\b|-e\b)[^\s-]|(?:^|[\s;&|"'(])\.{1,2}\/\S|(?:^|[;&|"'(]\s*)\.\s+\S|(?:^|[;&|"'(]\s*)\/[\w.\/-]+/;
+const INNER_OPAQUE = new RegExp("\\$\\(|`|\\$\\{?[A-Za-z_]|(?:^|\\s)@\\S|\\bbase64\\b|\\S\\.(?:sh|bash|py|js|mjs|cjs|ts|rb|pl|php)\\b|(?:^|[\\s;&|\"'(])(?:" + SHELL_ALT + "|python\\d*(?:\\.\\d+)?|node|perl|ruby|php|source)\\s+(?!-c\\b|-e\\b)[^\\s-]|(?:^|[\\s;&|\"'(])\\.{1,2}\\/\\S|(?:^|[;&|\"'(]\\s*)\\.\\s+\\S|(?:^|[;&|\"'(]\\s*)\\/[\\w.\\/-]+");
 const INNER_READ = new Set(["cat", "tail", "head", "grep", "egrep", "zgrep", "rg", "ls", "df", "du", "free", "uptime", "ps", "pgrep", "whoami", "id", "hostname", "date", "wc", "stat", "echo", "printf", "true", "sleep", "uname", "nproc", "lsblk", "lscpu", "ss", "netstat", "nvidia-smi", "journalctl", "dmesg", "which", "getent", "vmstat", "iostat", "sort", "uniq", "cut", "tr", "jq", "column", "cd", "test", "["]);
 
 const READ_WRITE_LONG = {
@@ -138,7 +139,6 @@ function innerClauseProblem(tokens0) {
 		if (m) { if (m[3] === "") i++; continue; }
 		t.push(x);
 	}
-	const { stripReserved } = require("./effective-argv.js");
 	const bare = stripReserved(t);
 	if (bare === null) return null;
 	t = bare;
@@ -188,7 +188,7 @@ function innerClauseProblem(tokens0) {
 		return `DB 쓰기이거나 조회 문장이 명령에 드러나지 않음: ${t.join(" ")}`;
 	}
 	if (cmd === "alembic" && ["current", "history", "heads", "show", "branches"].includes(positional[0])) return null;
-	if (/^(?:bash|sh|zsh|dash|ash)$/.test(cmd)) {
+	if (SHELLS.test(cmd)) {
 		const c = rest.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
 		if (c >= 0 && rest[c + 1] !== undefined) {
 			const { shellClauses } = require("./git-command-parser.js");
@@ -216,7 +216,7 @@ function opsClauses(command) {
 			if (path.basename(raw[0]) === "sudo") { raw = raw.slice(1); while (raw[0]?.startsWith("-")) raw = raw.slice(["-u", "-g", "--user", "--group"].includes(raw[0]) ? 2 : 1); }
 			else raw = raw.slice(1);
 		}
-		if (["bash", "sh", "zsh", "dash"].includes(raw[0]) && raw[1] === "-c" && raw.length === 3) out.push(...opsClauses(raw[2]));
+		if (SHELLS.test(raw[0] || "") && raw[1] === "-c" && raw.length === 3) out.push(...opsClauses(raw[2]));
 		else out.push(raw.flatMap((x) => /^--[a-z][\w-]*=/.test(x) ? [x.slice(0, x.indexOf("=")), x.slice(x.indexOf("=") + 1)] : [x]));
 	}
 	return out;

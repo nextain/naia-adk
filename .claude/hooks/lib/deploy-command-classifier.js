@@ -14,6 +14,7 @@
  */
 const fs = require("fs");
 const path = require("path");
+const { SHELLS, SHELL_ALT, ARGV_WRAPPERS, VALUE_OPTS, RESERVED_LEAD, NOT_COMMAND } = require("./effective-argv.js");
 
 const AZ_GROUPS = new Set(["containerapp", "webapp", "functionapp", "staticwebapp", "vm", "vmss", "aks", "spring"]);
 const READ_VERBS = new Set(["show", "list", "logs", "log", "browse", "tail", "get", "wait", "list-sizes", "list-usage", "get-instance-view", "show-deleted"]);
@@ -26,8 +27,10 @@ const NON_PROD = /(?:^|[-_.\/])(dev|develop|development|staging|stage|stg|previe
 const PROD_ARG = /^(?:--?)?(prod|production|live)$/i;
 // 스크립트 이름·인자·--k=v·앞의 KEY=value 어디든 prod 가 단어로 있으면 운영이다(설계 검수 7회차 3번: deploy-prod.sh, ENV=prod ./deploy.sh).
 const PROD_WORD = /(?:^|[-_.\/=:])(prod|production|live)(?:[-_.\/:]|$)/i;
-const INTERPRETERS = /(?:^|\/)(?:bash|sh|zsh|dash|node|python3?|pwsh|bun|deno|tsx|ts-node)$/;
-const SHELL_RE = /(?:^|\/)(?:bash|sh|zsh|dash|ksh)$/;
+const INTERPRETERS = new RegExp(`(?:^|/)(?:${SHELL_ALT}|node|python3?|pwsh|bun|deno|tsx|ts-node)$`);
+const QUOTED_SHELLS = new RegExp(`^(?:["'\`])(?:[^"'\`]*\\/)?(?:${SHELL_ALT})["'\`]$`);
+const SHEBANG_SHELLS = new RegExp(`^#!.*\\b(?:${SHELL_ALT})\\b`);
+const REMOTE_SHELLS = new RegExp(`(?:^|[\\s/])(?:${SHELL_ALT})(?:\\s|$)`);
 
 // 셸에서 흔히 쓰는 ANSI-C 이스케이프를 풀어 명령 글자를 비교한다.
 function gateUnescapeAnsi(s) {
@@ -219,7 +222,7 @@ function gateFoldLiterals(code, state = {}, language = "") {
 // 하나의 인터프리터 호출에서 실제 코드 인자를 추출한다. 프로그램은 실행하지 않는다.
 function gateInlineCode(argv, state = {}) {
 	const tool = path.basename(argv[0] || "");
-	const shell = /^(?:bash|sh|dash|zsh|ksh)$/.test(tool);
+	const shell = SHELLS.test(tool);
 	if (shell) {
 		const i = require("./effective-argv.js").shellInvocation(argv).command;
 		const options = i >= 0 ? argv.slice(1, i) : argv.slice(1);
@@ -335,7 +338,7 @@ function gateEvidence(command, cwd) {
 			const quoted = shellQuote(code);
 			if (clean.includes(quoted)) clean = clean.replace(quoted, "''");
 			else if (clean.includes(code)) clean = clean.replace(code, "");
-			if (/^(?:bash|sh|dash|zsh|ksh)$/.test(language)) folded.push(...gateEvidence(gateFilteredCommand(code), cwd));
+			if (SHELLS.test(language)) folded.push(...gateEvidence(gateFilteredCommand(code), cwd));
 			else {
 				const inline = gateInlineEvidence(code, language);
 				folded.push([inline.env, ...inline.requests, ...inline.reads, ...inline.executes].join(" "));
@@ -573,7 +576,7 @@ function gateNestedRequestTargets(inline, language, cwd) {
 	for (const call of inline.shellExecutes) {
 		const strings = gateCodeTokens(call.args, language).tokens.filter(token => token.type === "string");
 		const isFile = /(?:execFile|spawn)/i.test(call.name);
-		if (isFile && !(strings.length >= 3 && /^(?:["'`])(?:[^"'`]*\/)?(?:ba|da|k|z)?sh["'`]$/.test(strings[0].value) && /^['"`]-c['"`]$/.test(strings[1].value))) continue;
+		if (isFile && !(strings.length >= 3 && QUOTED_SHELLS.test(strings[0].value) && /^['"`]-c['"`]$/.test(strings[1].value))) continue;
 		const token = strings[isFile ? 2 : 0];
 		if (!token) continue;
 		let text = token.value.slice(1, -1);
@@ -624,7 +627,7 @@ function gateNetworkRisks(command, normalized, entries, cwd, scriptContext = fal
 	for (let depth = 0; depth < 8 && shellEntries.length; depth++) {
 		const nested = [];
 		for (const { argv = [] } of shellEntries) {
-			if (!/^(?:bash|sh|dash|zsh|ksh)$/.test(path.basename(argv[0] || ""))) continue;
+			if (!SHELLS.test(path.basename(argv[0] || ""))) continue;
 			const code = gateInlineCode(argv);
 			if (code !== null) {
 				const filtered = gateFilteredCommand(code);
@@ -641,7 +644,7 @@ function gateNetworkRisks(command, normalized, entries, cwd, scriptContext = fal
 		if (/^(?:curl|wget2?|http|https|xh|httpie|aria2c)$/.test(tool)) targetValues.push(...gateRequestTargets(tool, args).targets);
 		targetValues.push(...gateNetworkTargets(tool, args, assigns));
 		const code = gateInlineCode(argv);
-		if (code !== null && !/^(?:bash|sh|dash|zsh|ksh)$/.test(tool)) {
+		if (code !== null && !SHELLS.test(tool)) {
 			const inline = gateInlineEvidence(code, tool);
 			targetValues.push(...inline.requests.map(gateFirstRequestArg));
 			targetValues.push(...gateNestedRequestTargets(inline, tool, cwd));
@@ -662,7 +665,7 @@ function gateNetworkRisks(command, normalized, entries, cwd, scriptContext = fal
 		}
 		const code = gateInlineCode(argv);
 		if (code === null) return false;
-		if (/^(?:bash|sh|dash|zsh|ksh)$/.test(tool)) return false;
+		if (SHELLS.test(tool)) return false;
 		const inline = gateInlineEvidence(code, tool);
 		if (gateNestedRequestTargets(inline, tool, cwd).some(a => /^\$/.test(a))) return true;
 		return inline.requests.some(args => /^\s*(?:url\s*=\s*)?(?:\$?[A-Za-z_]\w*(?:\s*\(|\b)|\$ENV\{[^}]+\}|`https?:\/\/\$\{)/i.test(args));
@@ -1663,7 +1666,7 @@ function classifyDeployScript(tokens, cwd, assigns = [], entry = null) {
 			const base = path.basename(t);
 			if (!/deploy/i.test(base)) continue;
 			// 셸은 bash 문법으로 스크립트 자리를 찾는다(설계 검수 14회차 1번: bash -e·bash -euo pipefail 뒤의 스크립트).
-			if (i > 0 && SHELL_RE.test(toks[0])) {
+			if (i > 0 && SHELLS.test(toks[0])) {
 				if (i !== require("./effective-argv.js").shellInvocation(toks).script) continue;
 			} else {
 			// 실행 자리여야 한다: 첫 토큰이거나 인터프리터 바로 뒤(옵션 건너뜀).
@@ -1684,7 +1687,7 @@ function classifyDeployScript(tokens, cwd, assigns = [], entry = null) {
 	};
 	const direct = checkTokens(tokens);
 	if (direct) return direct;
-	if (entry && Array.isArray(entry.stdinSourceFiles) && entry.stdinSourceFiles.length && (SHELL_RE.test(tokens[0] || "") || /^(?:source|\.)$/.test(path.basename(tokens[0] || "")))) {
+	if (entry && Array.isArray(entry.stdinSourceFiles) && entry.stdinSourceFiles.length && (SHELLS.test(tokens[0] || "") || /^(?:source|\.)$/.test(path.basename(tokens[0] || "")))) {
 		const { fdStdinSpec, redirectSpan } = require("./effective-argv.js");
 		const posArgs = [];
 		for (let i = 1; i < tokens.length; i++) {
@@ -1717,7 +1720,7 @@ function classifyPackageScript(tokens, cwd) {
 function executedShellFile(tokens, cwd, dirKnown = true, root = "", anySize = false) {
 	let target = null;
 	let viaShell = false;
-	if (SHELL_RE.test(tokens[0])) {
+	if (SHELLS.test(tokens[0])) {
 		const at = require("./effective-argv.js").shellInvocation(tokens).script;
 		if (at < 0) return null;
 		target = tokens[at];
@@ -1737,7 +1740,7 @@ function executedShellFile(tokens, cwd, dirKnown = true, root = "", anySize = fa
 		if (!viaShell) {
 			// 셸 대본인지는 앞부분만 보면 된다. 크기 상관없이 받는 길(anySize)에서 큰 파일 전체를 읽지 않는다(#98 PC 검수 P2).
 			const head = readHead(file, 256);
-			if (!/\.(?:sh|bash)$/.test(file) && !/^#!.*\b(?:ba|z|da)?sh\b/.test(head)) return null;
+			if (!/\.(?:sh|bash)$/.test(file) && !SHEBANG_SHELLS.test(head)) return null;
 		}
 		return file;
 	} catch {
@@ -1750,7 +1753,7 @@ function executedShellFile(tokens, cwd, dirKnown = true, root = "", anySize = fa
 const STAGE_WORD = /^(?:--?)?(dev|develop|development|staging|stage|stg|preview|test|testing|sandbox|local)$/i;
 function invokedNonProd(tokens, file, assigns = []) {
 	const head = path.basename(tokens[0]);
-	const at = SHELL_RE.test(tokens[0]) ? require("./effective-argv.js").shellInvocation(tokens).script : head === "source" || head === "." ? 1 : 0;
+	const at = SHELLS.test(tokens[0]) ? require("./effective-argv.js").shellInvocation(tokens).script : head === "source" || head === "." ? 1 : 0;
 	if (at < 0) return false;
 	const words = [...tokens.slice(at + 1), ...assigns.map((a) => a.slice(a.indexOf("=") + 1))];
 	if ([path.basename(file), ...words].some((w) => PROD_WORD.test(w) || PROD_ARG.test(w))) return false;
@@ -1870,7 +1873,7 @@ function functionLines(text) {
 /** 스크립트에 넘긴 위치 인자(스크립트 낱말 뒤). */
 function scriptArgs(tokens) {
 	const head = path.basename(tokens[0]);
-	const at = SHELL_RE.test(tokens[0]) ? require("./effective-argv.js").shellInvocation(tokens).script : head === "source" || head === "." ? 1 : 0;
+	const at = SHELLS.test(tokens[0]) ? require("./effective-argv.js").shellInvocation(tokens).script : head === "source" || head === "." ? 1 : 0;
 	return at < 0 ? [] : tokens.slice(at + 1);
 }
 
@@ -2081,8 +2084,8 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 		const call = parser.expandClause(clause)[0];
 		const argv = call?.argv || [];
 		const program = path.basename(argv[0] || "");
-		const remoteShell = program === "ssh" && (argv.length <= 3 || /(?:^|[\s/])(?:ba|da|k|z)?sh(?:\s|$)/.test(argv.slice(1).join(" ")));
-		const invocation = /^(?:bash|sh|dash|zsh|ksh)$/.test(program) ? parser.shellInvocation(argv) : null;
+		const remoteShell = program === "ssh" && (argv.length <= 3 || REMOTE_SHELLS.test(argv.slice(1).join(" ")));
+		const invocation = SHELLS.test(program) ? parser.shellInvocation(argv) : null;
 		const readsShellInput = invocation && invocation.command < 0 && invocation.script < 0 && !invocation.noexec;
 		if (!readsShellInput && !remoteShell) continue;
 		for (const body of clause.heredocs || []) for (const hit of classifyProdMutations(body, cwd, depth + 1, false, gateRoot)) {
@@ -2100,7 +2103,7 @@ function executedTargetWord(tokens) {
 	if (!Array.isArray(tokens) || !tokens.length) return null;
 	const head = tokens[0] || "";
 	const headBase = path.basename(head);
-	if (SHELL_RE.test(head)) {
+	if (SHELLS.test(head)) {
 		const inv = require("./effective-argv.js").shellInvocation(tokens);
 		if (inv.noexec || inv.script < 0) return null;
 		return { target: tokens[inv.script], kind: "shell" };
@@ -2439,20 +2442,6 @@ function classifyUnresolvedScriptTargets(command, cwd) {
 	return hits;
 }
 
-const SUDO_VALUE_OPTS = {
-	sudo: /^(?:-u|--user|-U|--other-user|-g|--group|-C|-D|--chdir|-h|--host|-p|--prompt|-r|-t)$/,
-	doas: /^(?:-u|-C)$/,
-	env: /^(?:-u|--unset|-C|--chdir|-S|--split-string)$/,
-	timeout: /^(?:-k|--kill-after|-s|--signal)$/,
-	nice: /^(?:-n|--adjustment)$/,
-	ionice: /^(?:-c|-n|-t)$/,
-	stdbuf: /^(?:-i|-o|-e)$/,
-	flock: /^(?:-w|--wait)$/,
-};
-const PRIV_WRAPPERS = new Set(["sudo", "doas", "nohup", "time", "env", "exec", "command", "stdbuf", "nice", "ionice", "setsid", "chronic", "caffeinate", "timeout", "flock", "unbuffer", "builtin"]);
-const PRIV_LEAD = new Set(["!", "{", "if", "then", "elif", "else", "do", "while", "until"]);
-const PRIV_NOT_CMD = new Set(["for", "select", "case", "fi", "done", "esac", "}", "in", ";;"]);
-
 const SYSTEMCTL_READ_VERBS = new Set([
 	"status",
 	"show",
@@ -2543,19 +2532,19 @@ function classifyBaselineSudo(command, cwd) {
 		let sudoSawList = false;
 		let sudoSawUnsafeOpt = false;
 		for (let guard = 0; guard < 20 && t.length; guard++) {
-			if (PRIV_LEAD.has(t[0])) { t = t.slice(1); continue; }
+			if (RESERVED_LEAD.has(t[0])) { t = t.slice(1); continue; }
 			const r = redirectSpan(t, 0);
 			if (r && t.length > r) { t = t.slice(r); continue; }
-			if (PRIV_NOT_CMD.has(t[0])) return;
+			if (NOT_COMMAND.has(t[0])) return;
 			if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t[0])) { t = t.slice(1); continue; }
 			const w = path.basename(t[0]).toLowerCase();
-			if (!PRIV_WRAPPERS.has(w)) break;
+			if (!ARGV_WRAPPERS.has(w)) break;
 			if (w === "sudo" || w === "doas") underSudo = true;
 			t = t.slice(1);
 			while (t.length && t[0].startsWith("-")) {
 				const opt = t[0];
 				if (opt === "--") { t = t.slice(1); break; }
-				const valRe = SUDO_VALUE_OPTS[w];
+				const valRe = VALUE_OPTS[w];
 				const isValOpt = !!(valRe && valRe.test(opt));
 				if (w === "sudo" || w === "doas") {
 					if (/^(?:-V|--version|--help)$/.test(opt) || (opt === "-h" && t.length === 1)) sudoSawHelpOrVersion = true;
@@ -2565,17 +2554,32 @@ function classifyBaselineSudo(command, cwd) {
 					}
 				}
 				if (w === "command" && /^-[a-zA-Z]*[vV]/.test(opt)) return;
-				if (w === "flock" && (opt === "-c" || opt === "--command") && t[1]) {
-					inspectText(t[1], baseDir, depth + 1, underSudo);
+				if (w === "flock" && /^(?:-c|--command)(?:=|$)/.test(opt)) {
+					const cmdStr = opt.includes("=") ? opt.slice(opt.indexOf("=") + 1) : t[1];
+					const restAfter = opt.includes("=") ? t.slice(1) : t.slice(2);
+					if (cmdStr) inspectText(restAfter.length ? `${cmdStr} ${restAfter.join(" ")}` : cmdStr, baseDir, depth + 1, underSudo);
 					return;
 				}
-				if (w === "env" && (opt === "-S" || opt === "--split-string") && t.length > 1) {
-					inspectText(t.slice(1).join(" "), baseDir, depth + 1, underSudo);
+				if (w === "env" && /^(?:-S|--split-string)(?:=.+)?$/.test(opt)) {
+					const str = opt === "-S" || opt === "--split-string" ? t.slice(1).join(" ") : `${opt.replace(/^(?:-S|--split-string)=?/, "")} ${t.slice(1).join(" ")}`.trim();
+					if (str) inspectText(str, baseDir, depth + 1, underSudo);
 					return;
 				}
 				t = t.slice(isValOpt ? 2 : 1);
 			}
 			if (w === "timeout" && t.length) t = t.slice(1);
+			if (w === "flock" && t.length) {
+				t = t.slice(1);
+				while (t.length && t[0].startsWith("-")) {
+					if (/^(?:-c|--command)(?:=|$)/.test(t[0])) {
+						const cmdStr = t[0].includes("=") ? t[0].slice(t[0].indexOf("=") + 1) : t[1];
+						const restAfter = t[0].includes("=") ? t.slice(1) : t.slice(2);
+						if (cmdStr) inspectText(restAfter.length ? `${cmdStr} ${restAfter.join(" ")}` : cmdStr, baseDir, depth + 1, underSudo);
+						return;
+					}
+					t = t.slice(VALUE_OPTS.flock.test(t[0]) ? 2 : 1);
+				}
+			}
 		}
 		const writeRedir = hasSudoWriteRedirect(t, redirectSpan) || hasSudoWriteRedirect(clauseTokens, redirectSpan);
 		const clean = [];
@@ -2591,7 +2595,7 @@ function classifyBaselineSudo(command, cwd) {
 			return;
 		}
 		const head = path.basename(clean[0]).toLowerCase();
-		if (SHELL_RE.test(clean[0])) {
+		if (SHELLS.test(clean[0])) {
 			const inv = shellInvocation(clean, { dir: baseDir });
 			if (inv.command >= 0) inspectText(clean[inv.command], baseDir, depth + 1, underSudo);
 			if (Array.isArray(clauseTokens.heredocs)) {
@@ -2600,8 +2604,8 @@ function classifyBaselineSudo(command, cwd) {
 		}
 		if (underSudo) {
 			const rawClause = clauseText(clean);
-			if (SHELL_RE.test(clean[0]) || head === "source" || head === ".") {
-				const inv = SHELL_RE.test(clean[0]) ? shellInvocation(clean, { dir: baseDir }) : { script: 1, command: -1 };
+			if (SHELLS.test(clean[0]) || head === "source" || head === ".") {
+				const inv = SHELLS.test(clean[0]) ? shellInvocation(clean, { dir: baseDir }) : { script: 1, command: -1 };
 				const svc = inv.script >= 0 || inv.readsStdin ? "sudo:bash-script" : "sudo:shell";
 				pushHit(svc, `기본 sudo 차단 목록(sudo ${head})에 해당해 막습니다`, `sudo ${rawClause}`);
 				return;
@@ -2619,7 +2623,7 @@ function classifyBaselineSudo(command, cwd) {
 			return;
 		}
 		// sudo 없이 부른 로컬 셸 스크립트나 stdin/FD 입력 안의 sudo 도 검사한다.
-		if ((SHELL_RE.test(clean[0]) || head === "source" || head === ".") && depth < 3) {
+		if ((SHELLS.test(clean[0]) || head === "source" || head === ".") && depth < 3) {
 			const stdinInfo = stdinProgramInfo(
 				{ argv: t, piped: !!clauseTokens.piped, heredocs: clauseTokens.heredocs, heredocFds: clauseTokens.heredocFds },
 				prevExpanded,

@@ -18,6 +18,10 @@ const fs = require("fs");
 const os = require("os");
 const { spawnSync } = require("child_process");
 const core = require(path.join(__dirname, "..", "core", "harness-core.js"));
+const { SHELLS, MULTICALL_BINARIES } = require(path.resolve(__dirname, "..", "..", "..", ".claude", "hooks", "lib", "effective-argv.js"));
+function isShellBin(base) {
+	return SHELLS.test(String(base || "").toLowerCase());
+}
 
 /** destructive-git-guard */
 function destructiveGit(command) {
@@ -1139,7 +1143,6 @@ function matchArtifactToken(token, artifactExts) {
 
 const PYTHON_BIN_RE = /^(?:python(?:\d+(?:\.\d+)*)?|py|pypy3?)$/i;
 const NODE_BIN_RE = /^(?:node|nodejs|tsx|ts-node|bun)$/i;
-const SHELL_BIN_RE = /^(?:bash|sh|zsh|dash|ksh)$/i;
 const OTHER_SCRIPT_BIN_RE = /^(?:ruby|perl|php|rscript|pwsh|powershell)$/i;
 const DIRECT_SCRIPT_EXT_RE = /\.(?:py|sh|bash|zsh|js|mjs|cjs|ts|tsx|rb|pl|ps1)$/i;
 
@@ -1217,7 +1220,7 @@ function isInterpreterName(base) {
 	return (
 		PYTHON_BIN_RE.test(base) ||
 		NODE_BIN_RE.test(base) ||
-		SHELL_BIN_RE.test(base) ||
+		isShellBin(base) ||
 		OTHER_SCRIPT_BIN_RE.test(base) ||
 		base === "deno"
 	);
@@ -1270,6 +1273,11 @@ function skipLeadingCommandWrappers(tokens, startIdx = 0, context = {}) {
 				}
 				idx++;
 			}
+			continue;
+		}
+		if (MULTICALL_BINARIES.includes(base.toLowerCase())) {
+			idx++;
+			while (idx < tokens.length && tokens[idx].startsWith("-")) idx++;
 			continue;
 		}
 		if (base === "nice") {
@@ -1717,7 +1725,7 @@ function extractScriptFromTokens(rawTokens, effectiveCwd, context = {}) {
 		return null;
 	}
 
-	if (SHELL_BIN_RE.test(cmdBase)) {
+	if (isShellBin(cmdBase)) {
 		idx++;
 		let stdinFlag = false;
 		while (idx < tokens.length) {

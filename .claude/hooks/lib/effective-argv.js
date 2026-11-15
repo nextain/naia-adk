@@ -251,13 +251,14 @@ function sourceFile(word, dir, root, dirKnown = true, shellPath = process.env.PA
 	return resolvePathWord(word,dir,root,dirKnown);
 }
 
-const ARGV_WRAPPERS = new Set(["sudo", "doas", "nohup", "time", "env", "exec", "command", "stdbuf", "nice", "ionice", "setsid", "chronic", "caffeinate", "systemd-run", "xargs", "timeout", "flock", "unbuffer", "builtin"]);
+const MULTICALL_BINARIES = ["busybox", "toybox"];
+const ARGV_WRAPPERS = new Set(["sudo", "doas", "nohup", "time", "env", "exec", "command", "stdbuf", "nice", "ionice", "setsid", "chronic", "caffeinate", "systemd-run", "xargs", "timeout", "flock", "unbuffer", "builtin", ...MULTICALL_BINARIES]);
 const VALUE_OPTS = {
 	timeout: /^(?:-s|--signal|-k|--kill-after)$/,
 	time: /^(?:-f|--format|-o|--output)$/,
 	flock: /^(?:-w|--wait|--timeout|-E|--conflict-exit-code)$/,
 	"systemd-run": /^(?:-u|--unit|-p|--property|-E|--setenv|-M|--machine|--slice|--description|--working-directory|-d|--uid|--gid|--nice|--on-calendar|--on-active)$/,
-	sudo: /^(?:-u|--user|-g|--group|-C|-D|--chdir|-h|--host|-p|--prompt|-r|-t)$/,
+	sudo: /^(?:-u|--user|-U|--other-user|-g|--group|-C|-D|--chdir|-h|--host|-p|--prompt|-r|-t)$/,
 	doas: /^(?:-u|-C)$/,
 	nice: /^(?:-n|--adjustment)$/,
 	ionice: /^(?:-c|-n|-p|-t|--class|--classdata)$/,
@@ -265,7 +266,9 @@ const VALUE_OPTS = {
 	xargs: /^(?:-I|-L|-n|-P|-d|-s|-a|-E|--max-args|--max-procs|--delimiter|--arg-file)$/,
 	env: /^(?:-u|--unset|-C|--chdir)$/,
 };
-const SHELLS = /(?:^|\/)(?:bash|sh|zsh|dash|ksh|fish)$/;
+const SHELL_NAMES = ["bash", "rbash", "sh", "ash", "hush", "dash", "zsh", "ksh", "mksh", "pdksh", "oksh", "loksh", "yash", "posh", "fish"];
+const SHELL_ALT = SHELL_NAMES.join("|");
+const SHELLS = new RegExp(`(?:^|/)(?:${SHELL_ALT})$`);
 
 /**
  * 셸을 부른 인자를 bash 문법대로 읽는다(설계 검수 14회차 1번: "bash -euo pipefail ./deploy.sh prod" 에서 pipefail 을 스크립트로,
@@ -1406,15 +1409,17 @@ function fetches(argv) {
 const GATED_SIGNAL = /(?:^|[^\w.-])(?:agy|gemini|grok|qwen|opencode|aider|goose|cursor-agent|crush|kimi|droid)(?![\w.-])|\bclaude\s+(?:-p|--print)\b|\bcodex\s+exec\b|\baz(?:["'`,\s]+)(?:containerapp|webapp|functionapp|staticwebapp|vm|vmss|aks|spring)\b|deploy|(?<![a-z])prod(?:uction)?(?![a-z])/i;
 // 해석기 코드가 가리키는 파일 글은 명령 자리에 관문 낱말이 있을 때만 셈한다(틀 파일의 "timeout 2700 agy …", 코드 틀의 spawn 호출).
 // 산문(scope.md 의 "deploy 절차")이나 시험 파일의 예시 글은 명령 자리가 아니므로 편집 뒤 시험 흐름을 막지 않는다(19회차 과하게 조이기 재측정).
-const WRAPPER = /^(?:timeout|nohup|exec|sudo|env|time|nice|stdbuf|setsid|then|do|else|!)$/;
-const TIMEOUT_VALUE_OPTS = new Set(["-s", "--signal", "-k", "--kill-after"]);
+const CLAUSE_LEAD_WRAPPERS = new Set(["then", "do", "else", "!"]);
+function isLineWrapper(word) {
+	return CLAUSE_LEAD_WRAPPERS.has(word) || ARGV_WRAPPERS.has(path.basename(word || ""));
+}
 function timeoutWrapperArgument(words, index) {
 	for (let start = index - 1; start >= 0 && index - start <= 12; start--) {
-		if (words[start] !== "timeout") continue;
+		if (path.basename(words[start] || "") !== "timeout") continue;
 		let i = start + 1;
 		while (i < index && words[i].startsWith("-")) {
 			if (words[i] === "--") { i++; break; }
-			if (TIMEOUT_VALUE_OPTS.has(words[i])) {
+			if (VALUE_OPTS.timeout.test(words[i])) {
 				if (i === index || i + 1 === index) return true;
 				i += 2;
 			} else i++;
@@ -1425,7 +1430,7 @@ function timeoutWrapperArgument(words, index) {
 	return false;
 }
 function wrapperValue(words, index) {
-	return (index > 0 && WRAPPER.test(words[index - 1]) && /^(?:-\S+|\d+\S*)$/.test(words[index])) || timeoutWrapperArgument(words, index);
+	return (index > 0 && isLineWrapper(words[index - 1]) && /^(?:-\S+|\d+\S*)$/.test(words[index])) || timeoutWrapperArgument(words, index);
 }
 // 파일 종류로 나눈다. 셸·틀 파일은 줄의 명령 자리, 프로그램 파일은 spawn 호출만, 자료 파일(json, md, yaml, html …)은 보지 않는다.
 // 설계 검수 20회차 3번: 틀 확장자 목록(.tpl …)은 .hbs·.ejs 같은 틀을 놓친다. 자료 파일만 빼고 나머지는 모두 틀로 본다.
@@ -1443,7 +1448,7 @@ function commandLines(text) {
 	for (const seg of t.split(/\n|&&|\|\||[;|]|\$\(|`/)) {
 		const words = seg.trim().replace(/^[({"']+/, "").split(/\s+/).filter(Boolean);
 		let i = 0;
-		while (i < words.length && (/^[A-Za-z_]\w*=/.test(words[i]) || WRAPPER.test(words[i]) || wrapperValue(words, i))) i++;
+		while (i < words.length && (/^[A-Za-z_]\w*=/.test(words[i]) || isLineWrapper(words[i]) || wrapperValue(words, i))) i++;
 		if (i >= words.length) continue;
 		if (GATED_SIGNAL.test(` ${path.basename(words[i])}`) && !/^(?:prod|production)$/i.test(words[i])) return true;
 		if (/^(?:claude\s+(?:-p|--print)|codex\s+exec|az\s+(?:containerapp|webapp|functionapp|staticwebapp|vm|vmss|aks|spring))\b/.test(words.slice(i, i + 2).join(" "))) return true;
@@ -1479,7 +1484,7 @@ function hiddenCommand(f, t, depth = 0) {
 		for (const u of hidden) {
 			const words = u.trim().split(/\s+/);
 			let i = 0;
-			while (i < words.length && (/^[A-Za-z_]\w*=/.test(words[i]) || WRAPPER.test(words[i]) || SHELLS.test(words[i]) || /^(?:node|python3?|source|\.)$/.test(words[i]) || (i > 0 && /^(?:-\S+|\d+\S*)$/.test(words[i])) || timeoutWrapperArgument(words, i))) i++;
+			while (i < words.length && (/^[A-Za-z_]\w*=/.test(words[i]) || isLineWrapper(words[i]) || SHELLS.test(words[i]) || /^(?:node|python3?|source|\.)$/.test(words[i]) || (i > 0 && /^(?:-\S+|\d+\S*)$/.test(words[i])) || timeoutWrapperArgument(words, i))) i++;
 			const w = (words[i] || "").replace(/^["']|["']$/g, "");
 			if (!w || !/[/.]/.test(w) || /[$`*?]/.test(w)) continue;
 			const target = path.resolve(path.dirname(f), w);
@@ -1496,7 +1501,7 @@ function hiddenCommand(f, t, depth = 0) {
 function hiddenLineIsCommand(u) {
 	const words = String(u).trim().split(/\s+/).filter(Boolean);
 	let i = 0;
-	while (i < words.length && (/^[A-Za-z_]\w*=/.test(words[i]) || WRAPPER.test(words[i]) || wrapperValue(words, i))) i++;
+	while (i < words.length && (/^[A-Za-z_]\w*=/.test(words[i]) || isLineWrapper(words[i]) || wrapperValue(words, i))) i++;
 	const w0 = words[i] || "";
 	if (!/^[a-z0-9_./~-]+$/.test(w0)) return false;
 	if (/^(?:claude\s+(?:-p|--print)|codex\s+exec|az\s+(?:containerapp|webapp|functionapp|staticwebapp|vm|vmss|aks|spring))\b/.test(words.slice(i, i + 2).join(" "))) return true;
@@ -1987,6 +1992,13 @@ module.exports = {
 	expandClause,
 	effectiveCommands,
 	stripReserved,
+	MULTICALL_BINARIES,
+	ARGV_WRAPPERS,
+	VALUE_OPTS,
+	RESERVED_LEAD,
+	NOT_COMMAND,
+	SHELL_NAMES,
+	SHELL_ALT,
 	SHELLS,
 	dynamicWord,
 	shellInvocation,
