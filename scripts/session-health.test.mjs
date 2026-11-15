@@ -46,6 +46,7 @@ test('tmux descendant AI is detected behind shell and output is captured', async
 async function ledgerFixture() {
   const f = await fixture();
   f.c.roles[0].workFiles = [];
+  f.c.roles[0].wakeDir = join(f.dir, 'wake');
   f.c.workLedger = join(f.dir, 'work-ledger.yaml');
   f.c.regularSchedule = join(f.dir, 'regular-schedule.yaml');
   f.work = { version: 1, work: [
@@ -145,7 +146,7 @@ test('first valid work ledger gets its own silent baseline after a read failure'
 });
 test('multiple roles remain in one contiguous Markdown table with schedule details', async () => {
   const f = await ledgerFixture();
-  f.c.roles.push({ ...f.c.roles[0], id: 'role-b', botId: '456' });
+  f.c.roles.push({ ...f.c.roles[0], id: 'role-b', botId: '456', wakeDir: join(f.dir, 'wake-b') });
   const { report, rows } = await f.run();
   assert.deepEqual(rows[1].tasks, ['other: Other assignment']);
   assert.ok(!rows[1].anomalies.includes('stalled'));
