@@ -14,6 +14,7 @@ const crypto = require("crypto");
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { stripReserved, SHELLS, SHELL_ALT } = require("./effective-argv.js");
 
 const MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const TOOL_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -23,7 +24,7 @@ const VERSION_CHANGE = /--image\b|--yaml\b|--container-image\b|\brevision\s+(?:c
 // ops 는 설정만 바꾸는 명령일 때만 받는다. 목록 밖 명령은 feature 나 rollback 으로 신고한다.
 const CONFIG_ONLY = /--(?:set|remove|replace)-env-vars\b|--(?:min|max)-replicas\b|--cpu\b|--memory\b|\bscale\b|\brestart\b|\brevision\s+(?:deactivate|restart|label)\b|\bingress\s+(?:enable|disable|access-restriction|sticky-sessions|cors)\b|\bsecret\s+(?:set|remove)\b|\b(?:stop|start)\b|\bvm\s+deallocate\b|\bdisk\s+update\b|\bsnapshot\s+create\b|\b(?:vm|disk|snapshot|nic|public-ip|nsg|flexible-server)\s+delete\b/;
 // VM·컨테이너 안에서 도는 글. 글이 명령에 드러나지 않거나 코드를 올리는 부류면 ops 가 아니다.
-const INNER_OPAQUE = /\$\(|`|\$\{?[A-Za-z_]|(?:^|\s)@\S|\bbase64\b|\S\.(?:sh|bash|py|js|mjs|cjs|ts|rb|pl|php)\b|(?:^|[\s;&|"'(])(?:bash|sh|zsh|dash|python\d*(?:\.\d+)?|node|perl|ruby|php|source)\s+(?!-c\b|-e\b)[^\s-]|(?:^|[\s;&|"'(])\.{1,2}\/\S|(?:^|[;&|"'(]\s*)\.\s+\S|(?:^|[;&|"'(]\s*)\/[\w.\/-]+/;
+const INNER_OPAQUE = new RegExp("\\$\\(|`|\\$\\{?[A-Za-z_]|(?:^|\\s)@\\S|\\bbase64\\b|\\S\\.(?:sh|bash|py|js|mjs|cjs|ts|rb|pl|php)\\b|(?:^|[\\s;&|\"'(])(?:" + SHELL_ALT + "|python\\d*(?:\\.\\d+)?|node|perl|ruby|php|source)\\s+(?!-c\\b|-e\\b)[^\\s-]|(?:^|[\\s;&|\"'(])\\.{1,2}\\/\\S|(?:^|[;&|\"'(]\\s*)\\.\\s+\\S|(?:^|[;&|\"'(]\\s*)\\/[\\w.\\/-]+");
 const INNER_READ = new Set(["cat", "tail", "head", "grep", "egrep", "zgrep", "rg", "ls", "df", "du", "free", "uptime", "ps", "pgrep", "whoami", "id", "hostname", "date", "wc", "stat", "echo", "printf", "true", "sleep", "uname", "nproc", "lsblk", "lscpu", "ss", "netstat", "nvidia-smi", "journalctl", "dmesg", "which", "getent", "vmstat", "iostat", "sort", "uniq", "cut", "tr", "jq", "column", "cd", "test", "["]);
 
 const READ_WRITE_LONG = {
@@ -138,7 +139,6 @@ function innerClauseProblem(tokens0) {
 		if (m) { if (m[3] === "") i++; continue; }
 		t.push(x);
 	}
-	const { stripReserved } = require("./effective-argv.js");
 	const bare = stripReserved(t);
 	if (bare === null) return null;
 	t = bare;
@@ -188,7 +188,7 @@ function innerClauseProblem(tokens0) {
 		return `DB 쓰기이거나 조회 문장이 명령에 드러나지 않음: ${t.join(" ")}`;
 	}
 	if (cmd === "alembic" && ["current", "history", "heads", "show", "branches"].includes(positional[0])) return null;
-	if (/^(?:bash|sh|zsh|dash|ash)$/.test(cmd)) {
+	if (SHELLS.test(cmd)) {
 		const c = rest.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a));
 		if (c >= 0 && rest[c + 1] !== undefined) {
 			const { shellClauses } = require("./git-command-parser.js");
@@ -216,7 +216,7 @@ function opsClauses(command) {
 			if (path.basename(raw[0]) === "sudo") { raw = raw.slice(1); while (raw[0]?.startsWith("-")) raw = raw.slice(["-u", "-g", "--user", "--group"].includes(raw[0]) ? 2 : 1); }
 			else raw = raw.slice(1);
 		}
-		if (["bash", "sh", "zsh", "dash"].includes(raw[0]) && raw[1] === "-c" && raw.length === 3) out.push(...opsClauses(raw[2]));
+		if (SHELLS.test(raw[0] || "") && raw[1] === "-c" && raw.length === 3) out.push(...opsClauses(raw[2]));
 		else out.push(raw.flatMap((x) => /^--[a-z][\w-]*=/.test(x) ? [x.slice(0, x.indexOf("=")), x.slice(x.indexOf("=") + 1)] : [x]));
 	}
 	return out;
@@ -350,6 +350,213 @@ function resolveIn(root, p) {
 }
 
 // ── 인스턴스 확장 설정(config/deploy-gate.json + 선택 플러그인) ──────────────
+function probePathError(target) {
+	try {
+		fs.lstatSync(target);
+		return { exists: true, error: null };
+	} catch (err) {
+		if (err && (err.code === "ENOENT" || err.code === "ENOTDIR")) return { exists: false, error: null };
+		return { exists: false, error: err && (err.code || err.message) ? `${err.code || err.message}` : String(err) };
+	}
+}
+
+/**
+ * 대상 경로를 realpath(심볼릭 링크·.. 해소)로 풀고, 파일이 없으면 글자 정규화 + 존재하는 최하위 상위 realpath 로 정규화한다.
+ */
+function tryCanonicalTargetPath(rawPath, baseDir = "/") {
+	if (typeof rawPath !== "string") return { path: "", error: null };
+	const trimmed = rawPath.trim();
+	if (!trimmed) return { path: "", error: null };
+	if (trimmed.includes("\0")) return { path: "", error: "EINVAL" };
+	let expanded = trimmed;
+	if (expanded === "~" || expanded.startsWith("~/")) {
+		const home = require("os").homedir();
+		expanded = expanded === "~" ? home : path.join(home, expanded.slice(2));
+	}
+	const resolvedBase = path.resolve(baseDir || "/");
+	const rawAbs = path.isAbsolute(expanded) ? expanded : path.join(resolvedBase, expanded);
+	try {
+		return { path: fs.realpathSync(rawAbs), error: null };
+	} catch (err) {
+		if (err && err.code !== "ENOENT" && err.code !== "ENOTDIR") {
+			return { path: path.resolve(resolvedBase, expanded), error: err.code || err.message || String(err) };
+		}
+	}
+	const normAbs = path.resolve(resolvedBase, expanded);
+	try {
+		return { path: fs.realpathSync(normAbs), error: null };
+	} catch (err) {
+		if (err && err.code !== "ENOENT" && err.code !== "ENOTDIR") {
+			return { path: normAbs, error: err.code || err.message || String(err) };
+		}
+	}
+	let anc = path.dirname(normAbs);
+	for (;;) {
+		try {
+			const realAnc = fs.realpathSync(anc);
+			const rel = path.relative(anc, normAbs);
+			return { path: rel ? path.join(realAnc, rel) : realAnc, error: null };
+		} catch (err) {
+			if (err && err.code !== "ENOENT" && err.code !== "ENOTDIR") {
+				return { path: normAbs, error: err.code || err.message || String(err) };
+			}
+		}
+		const parent = path.dirname(anc);
+		if (parent === anc) break;
+		anc = parent;
+	}
+	return { path: normAbs, error: null };
+}
+
+function canonicalTargetPath(rawPath, baseDir = "/") {
+	return tryCanonicalTargetPath(rawPath, baseDir).path;
+}
+
+function hasDeployPlanMarker(root) {
+	if (!root) return { present: false, error: null };
+	const agentsDir = path.join(root, ".agents");
+	const aProbe = probePathError(agentsDir);
+	if (aProbe.error || !aProbe.exists) return { present: false, error: null };
+	const progressDir = path.join(agentsDir, "progress");
+	const pProbe = probePathError(progressDir);
+	if (pProbe.error) return { present: false, error: pProbe.error };
+	if (!pProbe.exists) return { present: false, error: null };
+	let entries;
+	try {
+		entries = fs.readdirSync(progressDir, { withFileTypes: true });
+	} catch (err) {
+		return { present: false, error: err && (err.code || err.message) ? `${err.code || err.message}` : String(err) };
+	}
+	for (const d of entries) {
+		if ((!d.isDirectory() && !d.isSymbolicLink()) || d.name.startsWith("_")) continue;
+		const gatesDir = path.join(progressDir, d.name, "gates");
+		const gProbe = probePathError(gatesDir);
+		if (gProbe.error) return { present: false, error: gProbe.error };
+		if (!gProbe.exists) continue;
+		const planProbe = probePathError(path.join(gatesDir, "deploy-plan.json"));
+		if (planProbe.exists || planProbe.error) return { present: true, error: planProbe.error };
+	}
+	return { present: false, error: null };
+}
+
+/**
+ * 실행하려는 대본·파일·작업 폴더의 정규화 경로에서 위로 올라가 해당 저장소의 배포 정책 루트를 찾는다.
+ */
+function findPolicyRootForPath(targetPath) {
+	const resolved = tryCanonicalTargetPath(targetPath, "/");
+	if (!resolved.path) return null;
+	let cur = resolved.path;
+	try {
+		if (!fs.statSync(cur).isDirectory()) cur = path.dirname(cur);
+	} catch {
+		cur = path.dirname(cur);
+	}
+	for (;;) {
+		const dirProbe = probePathError(cur);
+		if (dirProbe.exists && !dirProbe.error) {
+			const cfgDirProbe = probePathError(path.join(cur, "config"));
+			const cfgProbe = cfgDirProbe.exists ? probePathError(path.join(cur, "config", "deploy-gate.json")) : { exists: false, error: null };
+			const planMarker = hasDeployPlanMarker(cur);
+			const agentsDirProbe = probePathError(path.join(cur, ".agents"));
+			const scriptsDirProbe = agentsDirProbe.exists ? probePathError(path.join(cur, ".agents", "scripts")) : { exists: false };
+			const scriptProbe = scriptsDirProbe.exists ? probePathError(path.join(cur, ".agents", "scripts", "approval-plan.mjs")) : { exists: false, error: null };
+			const claudeDirProbe = probePathError(path.join(cur, ".claude"));
+			const claudeDeployProbe = claudeDirProbe.exists ? probePathError(path.join(cur, ".claude", "deploy")) : { exists: false };
+			const legacyCfgProbe = claudeDeployProbe.exists ? probePathError(path.join(cur, ".claude", "deploy", "config.json")) : { exists: false, error: null };
+			const legacyAppProbe = claudeDeployProbe.exists ? probePathError(path.join(cur, ".claude", "deploy", "approvals.json")) : { exists: false, error: null };
+			if (
+				cfgProbe.exists || cfgProbe.error ||
+				planMarker.present || planMarker.error ||
+				scriptProbe.exists || scriptProbe.error ||
+				legacyCfgProbe.exists || legacyCfgProbe.error ||
+				legacyAppProbe.exists || legacyAppProbe.error
+			) {
+				return cur;
+			}
+			const gitProbe = probePathError(path.join(cur, ".git"));
+			if (gitProbe.exists) return null;
+		}
+		const parent = path.dirname(cur);
+		if (parent === cur) break;
+		cur = parent;
+	}
+	return null;
+}
+
+function checkJsonObjectFile(filePath, label) {
+	const p = probePathError(filePath);
+	if (p.error) return `정책 파일(${label}) 접근 실패: ${p.error}`;
+	if (!p.exists) return null;
+	try {
+		const raw = fs.readFileSync(filePath, "utf8");
+		const parsed = JSON.parse(raw);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return `정책 파일(${label}) 형식이 올바른 JSON 객체가 아님`;
+		}
+		return null;
+	} catch (err) {
+		return `정책 파일(${label}) 읽기 또는 파싱 실패: ${err && err.message ? err.message : String(err)}`;
+	}
+}
+
+/**
+ * 저장소 루트와 deployDir 에서 찾은 정책 파일이 읽기·파싱 불가인지 검사한다(찾았는데 못 읽으면 차단).
+ */
+function inspectDeployPolicyErrors(root, opts = {}) {
+	const errors = [];
+	const pushErr = (msg) => {
+		if (msg && !errors.includes(msg)) errors.push(msg);
+	};
+	if (root) {
+		const cfgDirProbe = probePathError(path.join(root, "config"));
+		if (cfgDirProbe.error) pushErr(`정책 디렉터리(config) 접근 실패: ${cfgDirProbe.error}`);
+		pushErr(checkJsonObjectFile(path.join(root, "config", "deploy-gate.json"), "config/deploy-gate.json"));
+		if (opts.checkDeployGateEnv && process.env.DEPLOY_GATE_CONFIG) {
+			pushErr(checkJsonObjectFile(path.resolve(process.env.DEPLOY_GATE_CONFIG), "DEPLOY_GATE_CONFIG"));
+		}
+		const progressDir = path.join(root, ".agents", "progress");
+		const pProbe = probePathError(progressDir);
+		if (pProbe.error) {
+			pushErr(`정책 디렉터리(.agents/progress) 접근 실패: ${pProbe.error}`);
+		} else if (pProbe.exists) {
+			try {
+				const entries = fs.readdirSync(progressDir, { withFileTypes: true });
+				for (const d of entries) {
+					if ((!d.isDirectory() && !d.isSymbolicLink()) || d.name.startsWith("_")) continue;
+					const gatesDir = path.join(progressDir, d.name, "gates");
+					const gProbe = probePathError(gatesDir);
+					if (gProbe.error) {
+						pushErr(`정책 디렉터리(.agents/progress/${d.name}/gates) 접근 실패: ${gProbe.error}`);
+						continue;
+					}
+					if (!gProbe.exists) continue;
+					pushErr(checkJsonObjectFile(path.join(gatesDir, "deploy-plan.json"), `.agents/progress/${d.name}/gates/deploy-plan.json`));
+				}
+			} catch (err) {
+				pushErr(`정책 디렉터리(.agents/progress) 읽기 실패: ${err && err.message ? err.message : String(err)}`);
+			}
+		}
+		const localDeployDir = path.join(root, ".claude", "deploy");
+		const ldProbe = probePathError(localDeployDir);
+		if (ldProbe.error) {
+			pushErr(`정책 디렉터리(.claude/deploy) 접근 실패: ${ldProbe.error}`);
+		} else if (ldProbe.exists) {
+			pushErr(checkJsonObjectFile(path.join(localDeployDir, "config.json"), ".claude/deploy/config.json"));
+			pushErr(checkJsonObjectFile(path.join(localDeployDir, "approvals.json"), ".claude/deploy/approvals.json"));
+		}
+	}
+	if (opts.deployDir) {
+		const ddProbe = probePathError(opts.deployDir);
+		if (ddProbe.error) {
+			pushErr(`정책 디렉터리(.claude/deploy) 접근 실패: ${ddProbe.error}`);
+		} else if (ddProbe.exists) {
+			pushErr(checkJsonObjectFile(path.join(opts.deployDir, "config.json"), ".claude/deploy/config.json"));
+			pushErr(checkJsonObjectFile(path.join(opts.deployDir, "approvals.json"), ".claude/deploy/approvals.json"));
+		}
+	}
+	return { errors };
+}
+
 function deployGateConfigPath(root) {
 	if (process.env.DEPLOY_GATE_CONFIG) return path.resolve(process.env.DEPLOY_GATE_CONFIG);
 	const base = root || process.env.DEPLOY_READINESS_ROOT || path.resolve(__dirname, "../../..");
@@ -796,7 +1003,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	const fileHashes = new Map();
 	for (const [p, want] of Object.entries(entry.files || {})) {
 		if (!/^[a-f0-9]{64}$/i.test(String(want))) return no(`고정 파일 sha256 형식이 아님: ${p}`);
-		const full = path.resolve(cwd || root || ".", p);
+		const full = path.isAbsolute(p) ? path.resolve(p) : path.resolve(root || cwd || ".", p);
 		let body;
 		try {
 			if (!fs.statSync(full).isFile()) return no(`고정 파일이 일반 파일이 아님: ${p}`);
@@ -874,7 +1081,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 		}
 		if (Array.isArray(rule.requiredFiles) && rule.requiredFiles.length > 0) {
 			for (const reqFile of rule.requiredFiles) {
-				const absReq = path.resolve(cwd || root || ".", reqFile);
+				const absReq = path.isAbsolute(reqFile) ? path.resolve(reqFile) : path.resolve(root || cwd || ".", reqFile);
 				if (!files.has(absReq)) return no(`서비스(${rule.service}) 결합 규칙상 필수 고정 파일 누락: ${reqFile}`);
 			}
 		}
@@ -1137,6 +1344,11 @@ module.exports = {
 	loadDeployGatePlugin,
 	matchServiceRule,
 	deployGateConfigPath,
+	tryCanonicalTargetPath,
+	canonicalTargetPath,
+	hasDeployPlanMarker,
+	findPolicyRootForPath,
+	inspectDeployPolicyErrors,
 	VERSION_CHANGE,
 	CONFIG_ONLY,
 	INNER_OPAQUE,
