@@ -283,8 +283,34 @@ function plansForCommand(command, root, now = Date.now()) {
 	return out;
 }
 
-/** 실제로 도는 명령들의 argv(sudo·timeout·bash -c 등을 벗기고 리다이렉션 낱말을 뺀 것). 무엇이 도는지 모르는 절은 뺀다. */
-function runArgvs(command, cwd) {
+function canonicalizeArgvToken(token, baseDir, isShellScriptArg, canonicalTargetPath) {
+	if (!token || typeof token !== "string") return token;
+	const isPathLike = (s, allowBareExisting = false) => {
+		if (!s || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s)) return false;
+		if (s === "." || s === ".." || s.startsWith("/") || s.startsWith("./") || s.startsWith("../")) return true;
+		if (s.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(s) || /^[^/]+@[^/]+:/.test(s)) return false;
+		if (s.includes("/")) return true;
+		if (allowBareExisting && baseDir) {
+			try { return fs.existsSync(path.resolve(baseDir, s)); } catch { return false; }
+		}
+		return false;
+	};
+	if (token.startsWith("@")) {
+		const rest = token.slice(1);
+		if (isPathLike(rest, false)) return `@${canonicalTargetPath(rest, baseDir)}`;
+		return token;
+	}
+	const eqMatch = /^(--?[A-Za-z0-9_-]+)=(@?)(.+)$/.exec(token);
+	if (eqMatch) {
+		const [, opt, at, rhs] = eqMatch;
+		if (isPathLike(rhs, false)) return `${opt}=${at}${canonicalTargetPath(rhs, baseDir)}`;
+		return token;
+	}
+	if (isPathLike(token, isShellScriptArg)) return canonicalTargetPath(token, baseDir);
+	return token;
+}
+
+function collectStrippedRunEntries(command, cwd) {
 	const { effectiveCommands, redirectSpan } = require("./effective-argv.js");
 	const out = [];
 	for (const e of effectiveCommands(command, cwd)) {
@@ -295,9 +321,24 @@ function runArgvs(command, cwd) {
 			if (r) { i += r - 1; continue; }
 			argv.push(e.argv[i]);
 		}
-		if (argv.length) out.push(argv);
+		if (argv.length) out.push({ argv, dir: e.dir || cwd || "/" });
 	}
 	return out;
+}
+
+/** 실제로 도는 명령들의 argv(sudo·timeout·bash -c 등을 벗기고 리다이렉션 낱말을 뺀 것). 무엇이 도는지 모르는 절은 뺀다. */
+function runArgvs(command, cwd) {
+	return collectStrippedRunEntries(command, cwd).map((e) => e.argv);
+}
+
+/** 경로 낱말을 realpath·렉시컬 정규화한 runArgvs. 다른 cwd/상대경로/심볼릭링크/../cd X 변형도 같은 대본으로 묶는다. */
+function normalizedRunArgvs(command, cwd) {
+	const { shellInvocation } = require("./effective-argv.js");
+	const { canonicalTargetPath } = require("./deploy-readiness.js");
+	return collectStrippedRunEntries(command, cwd).map(({ argv, dir }) => {
+		const scriptIdx = shellInvocation(argv).script;
+		return argv.map((tok, idx) => canonicalizeArgvToken(tok, dir, idx === scriptIdx, canonicalTargetPath));
+	});
 }
 
 /**
@@ -309,15 +350,20 @@ function plansCarryingCommand(command, root, cwd, now = Date.now()) {
 	const plans = recentPlans(root, now);
 	if (!plans.length) return [];
 	const h = commandHash(command);
-	const ran = runArgvs(command, cwd || root);
-	if (!ran.length) return [];
+	const ranRaw = runArgvs(command, cwd || root);
+	const ranNorm = normalizedRunArgvs(command, cwd || root);
+	if (!ranRaw.length && !ranNorm.length) return [];
 	const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
-	const carries = (c) => {
-		if (typeof c !== "string" || commandHash(c) === h) return false;
-		const want = runArgvs(c, cwd || root);
-		if (!want.length) return false;
+	const sliceMatch = (ran, want) => {
+		if (!want.length || !ran.length) return false;
 		for (let i = 0; i + want.length <= ran.length; i++) if (want.every((w, j) => same(w, ran[i + j]))) return true;
 		return false;
+	};
+	const carries = (c) => {
+		if (typeof c !== "string" || commandHash(c) === h) return false;
+		// 계획서 명령은 계획서 소속 저장소(root) 기준으로 해석해야 다른 cwd 에서도 상대/심볼릭 경로가 맞는다.
+		if (sliceMatch(ranRaw, runArgvs(c, root))) return true;
+		return sliceMatch(ranNorm, normalizedRunArgvs(c, root));
 	};
 	const out = [];
 	for (const { file, plan, steps, actions } of plans) {
@@ -1298,14 +1344,30 @@ async function evaluate(ctx) {
 		].join("\n") };
 	}
 	// 명령이 읽거나 실행하는 파일(감싼 스크립트, --yaml 파일, 내용 파일)은 계획서 단계의 files 에 sha 로 고정해야 한다.
-	const pinned = new Map(Object.entries(entry.files || {}).map(([p, h]) => [path.resolve(ctx.cwd || ctx.root, p), String(h).toLowerCase()]));
+	const fileBase = ctx.root || ctx.cwd || ROOT;
+	const { canonicalTargetPath } = require("./deploy-readiness.js");
+	const pinned = new Map();
+	const pinnedCanonical = new Map();
+	for (const [p, h] of Object.entries(entry.files || {})) {
+		const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(fileBase, p);
+		const low = String(h).toLowerCase();
+		pinned.set(abs, low);
+		pinnedCanonical.set(canonicalTargetPath(abs, fileBase), low);
+	}
 	const refs = typeof ctx.fileRefs === "function" ? ctx.fileRefs() : referencedFiles(ctx.command, ctx.cwd || ctx.root);
-	const unpinned = refs.filter((r) => pinned.get(path.resolve(r.path)) !== r.sha);
+	const unpinned = refs.filter((r) => {
+		const abs = path.resolve(r.path);
+		const can = canonicalTargetPath(abs, ctx.cwd || fileBase);
+		return pinned.get(abs) !== r.sha && pinnedCanonical.get(can) !== r.sha;
+	});
 	// 글자에 나타나지 않는 도움 파일도 전부 실물과 대조한다. 같은 해시의 다른 경로는 대신할 수 없다.
 	for (const [p, h] of pinned) {
 		let actual = null;
 		try { actual = sha256(fs.readFileSync(p)); } catch {}
-		if (actual !== h && !unpinned.some((r) => path.resolve(r.path) === p)) unpinned.push({ path: p, sha: actual || "읽기 실패" });
+		const pCan = canonicalTargetPath(p, fileBase);
+		if (actual !== h && !unpinned.some((r) => path.resolve(r.path) === p || canonicalTargetPath(r.path, ctx.cwd || fileBase) === pCan)) {
+			unpinned.push({ path: p, sha: actual || "읽기 실패" });
+		}
 	}
 	if (unpinned.length) {
 		return { allow: false, audit: { event: "blocked-plan-file-unpinned", plan: rel, files: unpinned.map((r) => ({ path: r.path, sha256: r.sha })) }, reason: [

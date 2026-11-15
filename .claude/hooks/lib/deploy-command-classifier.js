@@ -1635,6 +1635,7 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 				}
 			}
 		}
+		hits.push(...classifyRegisteredAllowedCommands(command, clause, tokens, dir, root, cfg, pushErrorHit));
 		try {
 			const plugin = loadDeployGatePlugin(root, cfg);
 			if (plugin && typeof plugin.classifyCommand === "function") {
@@ -2074,6 +2075,411 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 	}
 }
 
+/** tokens 가 실행하려는 스크립트/실행 파일 경로를 꺼낸다(없으면 null). */
+function executedTargetWord(tokens) {
+	if (!Array.isArray(tokens) || !tokens.length) return null;
+	const head = tokens[0] || "";
+	const headBase = path.basename(head);
+	if (SHELL_RE.test(head)) {
+		const inv = require("./effective-argv.js").shellInvocation(tokens);
+		if (inv.noexec || inv.script < 0) return null;
+		return { target: tokens[inv.script], kind: "shell" };
+	}
+	if (headBase === "source" || headBase === ".") {
+		return tokens[1] ? { target: tokens[1], kind: "shell" } : null;
+	}
+	if (INTERPRETERS.test(head)) {
+		for (let i = 1; i < tokens.length; i++) {
+			const t = tokens[i];
+			if (/^(?:-e|-c|-p|--eval|--print|-m)$/.test(t)) return null;
+			if (/^(?:-v|-V|--version|-h|--help)$/.test(t)) return null;
+			if (t === "--") return tokens[i + 1] ? { target: tokens[i + 1], kind: "interpreter" } : null;
+			if (t.startsWith("-")) continue;
+			return { target: t, kind: "interpreter" };
+		}
+		return null;
+	}
+	if (head.includes("/")) return { target: head, kind: "path-exec" };
+	return null;
+}
+
+/** 낱말 배열의 경로 낱말을 canonicalTargetPath 로 정규화한 절 문자열을 만든다. */
+function canonicalClauseText(tokens, dir, canonicalTargetPath) {
+	const base = dir || "/";
+	const normTok = (t) => {
+		if (!t || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(t) || t.startsWith("/dev/")) return t;
+		if (t.startsWith("@") && (t.slice(1).includes("/") || t.slice(1).startsWith("."))) return `@${canonicalTargetPath(t.slice(1), base)}`;
+		const m = /^(--?[A-Za-z0-9_-]+)=(@?)(.+)$/.exec(t);
+		if (m && (m[2] || m[3].includes("/") || m[3].startsWith("."))) return `${m[1]}=${m[2]}${canonicalTargetPath(m[3], base)}`;
+		if (t === "." || t === ".." || t.startsWith("/") || t.startsWith("./") || t.startsWith("../") || (!t.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t) && !/^[^/]+@[^/]+:/.test(t) && t.includes("/"))) {
+			return canonicalTargetPath(t, base);
+		}
+		return t;
+	};
+	return clauseText(tokens.map(normTok));
+}
+
+/** allowedCommands 정규식 문자열에서 등록된 고정 스크립트 경로 리터럴을 추출한다. */
+function extractPatternScriptPaths(pattern, root, canonicalTargetPath) {
+	const unescaped = String(pattern || "").replace(/^\^/, "").replace(/\$$/, "").replace(/\\([.\\/+-])/g, "$1");
+	const out = [];
+	const candidates = unescaped.split(/\s+/);
+	for (const raw of candidates) {
+		const clean = raw.replace(/^['"]|['"]$/g, "");
+		if (!clean || clean.includes("[") || clean.includes("*") || clean.includes("?") || !clean.includes("/")) continue;
+		const variants = [];
+		const alt = /^([^(]*)\(([A-Za-z0-9_.-]+(?:\|[A-Za-z0-9_.-]+)+)\)([^()]*)$/.exec(clean);
+		if (alt) {
+			for (const opt of alt[2].split("|")) variants.push(`${alt[1]}${opt}${alt[3]}`);
+		} else if (!/[(){}]/.test(clean)) {
+			variants.push(clean);
+		}
+		for (const v of variants) {
+			if (!/\.(?:sh|bash|mjs|js|ts|py|rb|pl|ps1)$/i.test(v)) continue;
+			out.push(canonicalTargetPath(v, root));
+		}
+	}
+	return out;
+}
+
+/** config/deploy-gate.json services[*].allowedCommands 에 등록된 고정 운영 대본을 서비스로 분류한다. */
+function classifyRegisteredAllowedCommands(command, clause, tokens, dir, root, cfg, pushErrorHit) {
+	const hits = [];
+	if (!cfg || !cfg.services || typeof cfg.services !== "object") return hits;
+	const { canonicalTargetPath } = require("./deploy-readiness.js");
+	const { resolvePathWord } = require("./effective-argv.js");
+	const execWord = executedTargetWord(tokens);
+	const resolvedExec = execWord ? (resolvePathWord(execWord.target, dir, root, true) || execWord.target) : null;
+	const canExec = resolvedExec && !/\$|\$\{/.test(resolvedExec) ? canonicalTargetPath(resolvedExec, dir || root) : null;
+	const canonClause = execWord ? canonicalClauseText(tokens, dir || root, canonicalTargetPath) : "";
+	const seenServices = new Set();
+
+	for (const [service, rule] of Object.entries(cfg.services)) {
+		if (!rule || !Array.isArray(rule.allowedCommands)) continue;
+		for (const pat of rule.allowedCommands) {
+			if (typeof pat !== "string" || !pat.trim()) continue;
+			let re;
+			try {
+				re = new RegExp(pat);
+			} catch (err) {
+				pushErrorHit(`services.${service}.allowedCommands 정규식 오류: ${err && err.message ? err.message : String(err)}`);
+				continue;
+			}
+			// 스크립트/실행 경로가 아닌 일반 조회(git status, ls, az show 등)까지 광범위 패턴에 걸리지 않도록 실행 경로가 있을 때만 검사한다.
+			if (!canExec || seenServices.has(service)) continue;
+			const safePattern = !re.test("") && !re.test("git status") && !re.test("ls");
+			const scriptMatched = extractPatternScriptPaths(pat, root, canonicalTargetPath).includes(canExec);
+			const clauseMatched = safePattern && (re.test(clause) || re.test(command) || re.test(canonClause) || re.test(`sudo ${canonClause}`));
+			if (scriptMatched || clauseMatched) {
+				seenServices.add(service);
+				hits.push({ service, label: String(rule.label || service), clause });
+			}
+		}
+	}
+	return hits;
+}
+
+/** 명령 안의 경로·작업 디렉터리·실행 대본을 canonical 경로로 뽑는다(소속 저장소 판별용). */
+function extractCommandTargets(command, cwd) {
+	const { effectiveCommands, redirectSpan, resolvePathWord } = require("./effective-argv.js");
+	const { shellClauses } = require("./git-command-parser.js");
+	const { tryCanonicalTargetPath } = require("./deploy-readiness.js");
+	const paths = new Set();
+	const dirs = new Set();
+	const errors = [];
+	const visitedScripts = new Set();
+
+	const addTarget = (raw, baseDir, opts = {}) => {
+		if (!raw || typeof raw !== "string") return;
+		let cleaned = raw.trim().replace(/^\d*(?:>>?|<<?|<&|>&|&>>?)/, "");
+		if (!cleaned || cleaned.length > 2048 || /^&(?:\d+|-)$/.test(cleaned) || cleaned.endsWith(">")) return;
+		if (cleaned.startsWith("/dev/") || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(cleaned)) return;
+		if (cleaned.startsWith("@")) cleaned = cleaned.slice(1);
+		if (!cleaned || /\$|\$\{/.test(cleaned)) return;
+		if (!opts.allowSpaces && /\s/.test(cleaned)) return;
+		const res = tryCanonicalTargetPath(cleaned, baseDir || cwd || "/");
+		const fatalErr = res.error && (opts.reportError || res.error === "ELOOP" || res.error === "EINVAL");
+		if (fatalErr) errors.push(`${cleaned}: ${res.error}`);
+		if (res.path) {
+			paths.add(res.path);
+			if (opts.isDir) dirs.add(res.path);
+		}
+	};
+
+	const visit = (text, baseDir, depth) => {
+		if (depth > 3 || !String(text || "").trim()) return;
+		let clauses = [];
+		try { clauses = shellClauses(String(text || "")); } catch {}
+		for (const c of clauses) {
+			if (Array.isArray(c) && (c[0] === "cd" || c[0] === "pushd") && c[1] && !c[1].startsWith("-")) {
+				addTarget(c[1], baseDir, { isDir: true, allowSpaces: true, reportError: depth === 0 });
+			}
+		}
+		let entries = [];
+		try { entries = effectiveCommands(String(text || ""), baseDir); } catch { return; }
+		for (const e of entries) {
+			const cDir = e.dir || baseDir || cwd || "/";
+			if (e.dir) addTarget(e.dir, baseDir, { isDir: true, allowSpaces: true, reportError: depth === 0 });
+			const tokens = Array.isArray(e.argv) ? e.argv : [];
+			const execWord = executedTargetWord(tokens);
+			if (execWord) {
+				const resolved = resolvePathWord(execWord.target, cDir, cDir, e.dirKnown !== false) || execWord.target;
+				addTarget(resolved, cDir, { allowSpaces: true, reportError: depth === 0 });
+			}
+			for (let i = 0; i < tokens.length; i++) {
+				const r = redirectSpan(tokens, i);
+				if (r) {
+					if (r === 2 && tokens[i + 1]) addTarget(tokens[i + 1], cDir, { allowSpaces: depth === 0 });
+					else addTarget(tokens[i], cDir, { allowSpaces: depth === 0 });
+					i += r - 1;
+					continue;
+				}
+				const t = String(tokens[i] || "");
+				if (!t || /^[A-Za-z_][A-Za-z0-9_]*=/.test(t) || /^[^/]+@[^/]+:/.test(t)) continue;
+				const eq = /^--?[A-Za-z0-9_-]+=(.+)$/.exec(t);
+				const val = eq ? eq[1] : t;
+				if (eq) {
+					if (val.startsWith("@") || val.startsWith("/") || val.startsWith("./") || val.startsWith("../") || val.includes("/")) addTarget(val, cDir);
+					continue;
+				}
+				if (t === "." || t === ".." || t.startsWith("/") || t.startsWith("./") || t.startsWith("../") || t.startsWith("@/") || t.startsWith("@./") || t.startsWith("@../") || (!t.startsWith("-") && t.includes("/"))) {
+					addTarget(t, cDir);
+				}
+			}
+			const sf = executedShellFile(tokens, cDir, e.dirKnown !== false, String(text || ""), false);
+			if (sf && !visitedScripts.has(sf)) {
+				visitedScripts.add(sf);
+				const body = scriptText(sf);
+				if (body) visit(body, cDir, depth + 1);
+			}
+		}
+	};
+
+	visit(command, cwd || "/", 0);
+	return { paths: [...paths], dirs: [...dirs], errors: [...new Set(errors)] };
+}
+
+/** 존재하지 않거나 읽을 수 없는 대본 실행 시도를 확인 불가로 차단한다(판단 불확실 시 fail-closed). */
+function classifyUnresolvedScriptTargets(command, cwd) {
+	const { effectiveCommands, resolvePathWord } = require("./effective-argv.js");
+	const { tryCanonicalTargetPath } = require("./deploy-readiness.js");
+	const hits = [];
+	const seen = new Set();
+	const visitedScripts = new Set();
+
+	const visit = (text, baseDir, depth) => {
+		if (depth > 3 || !String(text || "").trim()) return;
+		let entries = [];
+		try { entries = effectiveCommands(String(text || ""), baseDir); } catch { return; }
+		for (const e of entries) {
+			if (e.opaque) continue;
+			const tokens = Array.isArray(e.argv) ? e.argv : [];
+			const cDir = e.dir || baseDir || cwd || "/";
+			const dirKnown = e.dirKnown !== false;
+			const execWord = executedTargetWord(tokens);
+			if (execWord && execWord.target !== "-" && !execWord.target.startsWith("/dev/")) {
+				const raw = execWord.target;
+				const isShell = execWord.kind === "shell";
+				const isInterp = execWord.kind === "interpreter";
+				const isDirectScript = /\.(?:sh|bash|mjs|js|py)$/i.test(raw);
+				const isDynamic = /\$|\$\{/.test(raw);
+				if (!(depth > 0 && isDynamic)) {
+					const resolved = resolvePathWord(raw, cDir, cDir, dirKnown);
+					const clause = clauseText(tokens, e.assigns);
+					if (!resolved) {
+						if (isShell || isDirectScript) {
+							const key = `unresolved:${raw}`;
+							if (!seen.has(key)) {
+								seen.add(key);
+								hits.push({ service: "unclassified:missing-script", label: `분류 불가: 실행 대본 경로를 확인할 수 없음(${raw})`, clause, unclassified: true, tool: "missing-script" });
+							}
+						}
+					} else {
+						const probe = tryCanonicalTargetPath(resolved, cDir);
+						if (probe.error) {
+							const key = `err:${resolved}`;
+							if (!seen.has(key)) {
+								seen.add(key);
+								hits.push({ service: "unclassified:script-unreadable", label: `분류 불가: 대본 경로를 확인할 수 없음(${probe.error})`, clause, unclassified: true, tool: "script-unreadable" });
+							}
+						} else {
+							let st = null;
+							let statErr = null;
+							try { st = fs.statSync(resolved); } catch (err) { statErr = err; }
+							if (statErr) {
+								const unreadable = statErr.code === "EACCES" || statErr.code === "EPERM" || statErr.code === "ELOOP";
+								if (isShell || isInterp || isDirectScript || (tokens[0] || "").includes("/")) {
+									const key = `stat:${resolved}`;
+									if (!seen.has(key)) {
+										seen.add(key);
+										hits.push({
+											service: unreadable ? "unclassified:script-unreadable" : "unclassified:missing-script",
+											label: unreadable ? `분류 불가: 대본을 읽을 수 없음(${resolved}: ${statErr.code})` : `분류 불가: 실행하려는 대본 파일이 없어 내용을 확인할 수 없음(${resolved})`,
+											clause,
+											unclassified: true,
+											tool: unreadable ? "script-unreadable" : "missing-script",
+										});
+									}
+								}
+							} else if (!st.isFile()) {
+								if (isShell || isInterp || isDirectScript) {
+									const key = `nonfile:${resolved}`;
+									if (!seen.has(key)) {
+										seen.add(key);
+										hits.push({ service: "unclassified:script-unreadable", label: `분류 불가: 실행 대상이 일반 파일이 아님(${resolved})`, clause, unclassified: true, tool: "script-unreadable" });
+									}
+								}
+							} else if (isShell || isInterp || isDirectScript) {
+								try {
+									fs.accessSync(resolved, fs.constants.R_OK);
+								} catch (err) {
+									const key = `access:${resolved}`;
+									if (!seen.has(key)) {
+										seen.add(key);
+										hits.push({ service: "unclassified:script-unreadable", label: `분류 불가: 대본 읽기 권한이 없어 내용을 확인할 수 없음(${resolved}: ${err.code || "EACCES"})`, clause, unclassified: true, tool: "script-unreadable" });
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			const sf = executedShellFile(tokens, cDir, dirKnown, String(text || ""), false);
+			if (sf && !visitedScripts.has(sf)) {
+				visitedScripts.add(sf);
+				const body = scriptText(sf);
+				if (body) visit(body, cDir, depth + 1);
+			}
+		}
+	};
+
+	visit(command, cwd || "/", 0);
+	return hits;
+}
+
+const SUDO_VALUE_OPTS = {
+	sudo: /^(?:-u|--user|-g|--group|-C|-D|--chdir|-h|--host|-p|--prompt|-r|-t)$/,
+	doas: /^(?:-u|-C)$/,
+	env: /^(?:-u|--unset|-C|--chdir|-S|--split-string)$/,
+	timeout: /^(?:-k|--kill-after|-s|--signal)$/,
+	nice: /^(?:-n|--adjustment)$/,
+	ionice: /^(?:-c|-n|-t)$/,
+	stdbuf: /^(?:-i|-o|-e)$/,
+	flock: /^(?:-w|--wait)$/,
+};
+const PRIV_WRAPPERS = new Set(["sudo", "doas", "nohup", "time", "env", "exec", "command", "stdbuf", "nice", "ionice", "setsid", "chronic", "caffeinate", "timeout", "flock", "unbuffer", "builtin"]);
+const PRIV_LEAD = new Set(["!", "{", "if", "then", "elif", "else", "do", "while", "until"]);
+const PRIV_NOT_CMD = new Set(["for", "select", "case", "fi", "done", "esac", "}", "in", ";;"]);
+
+/** 저장소 정책을 찾지 못해도 sudo 명령을 기본 차단 목록과 보수적 규칙으로 검사한다. */
+function classifyBaselineSudo(command, cwd) {
+	const { shellClauses } = require("./git-command-parser.js");
+	const { redirectSpan, shellInvocation } = require("./effective-argv.js");
+	const hits = [];
+	const seen = new Set();
+	const visitedScripts = new Set();
+
+	const pushHit = (service, label, clause) => {
+		const key = `${service}:${clause}`;
+		if (seen.has(key)) return;
+		seen.add(key);
+		hits.push({ service, label, clause });
+	};
+
+	const unwrapAndInspectClause = (clauseTokens, baseDir, depth, inheritedSudo) => {
+		if (!Array.isArray(clauseTokens) || !clauseTokens.length) return;
+		if (Array.isArray(clauseTokens.subs)) {
+			for (const sub of clauseTokens.subs) inspectText(sub, baseDir, depth + 1, inheritedSudo);
+		}
+		let t = clauseTokens.slice();
+		let underSudo = inheritedSudo;
+		let sudoSawHelpOrVersion = false;
+		for (let guard = 0; guard < 20 && t.length; guard++) {
+			if (PRIV_LEAD.has(t[0])) { t = t.slice(1); continue; }
+			const r = redirectSpan(t, 0);
+			if (r && t.length > r) { t = t.slice(r); continue; }
+			if (PRIV_NOT_CMD.has(t[0])) return;
+			if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t[0])) { t = t.slice(1); continue; }
+			const w = path.basename(t[0]).toLowerCase();
+			if (!PRIV_WRAPPERS.has(w)) break;
+			if (w === "sudo" || w === "doas") underSudo = true;
+			t = t.slice(1);
+			while (t.length && t[0].startsWith("-")) {
+				const opt = t[0];
+				if ((w === "sudo" || w === "doas") && /^(?:-V|--version|-h|--help)$/.test(opt)) sudoSawHelpOrVersion = true;
+				if (w === "command" && /^-[a-zA-Z]*[vV]/.test(opt)) return;
+				if (w === "flock" && (opt === "-c" || opt === "--command") && t[1]) {
+					inspectText(t[1], baseDir, depth + 1, underSudo);
+					return;
+				}
+				if (w === "env" && (opt === "-S" || opt === "--split-string") && t.length > 1) {
+					inspectText(t.slice(1).join(" "), baseDir, depth + 1, underSudo);
+					return;
+				}
+				const valRe = SUDO_VALUE_OPTS[w];
+				t = t.slice(valRe && valRe.test(opt) ? 2 : 1);
+			}
+			if (w === "timeout" && t.length) t = t.slice(1);
+		}
+		const clean = [];
+		for (let i = 0; i < t.length; i++) {
+			const r = redirectSpan(t, i);
+			if (r) { i += r - 1; continue; }
+			clean.push(t[i]);
+		}
+		if (!clean.length) {
+			if (underSudo && !sudoSawHelpOrVersion) pushHit("sudo:unclassified", "기본 sudo 차단: 권한 실행 대상을 확인할 수 없음", clauseText(clauseTokens));
+			return;
+		}
+		const head = path.basename(clean[0]).toLowerCase();
+		if (SHELL_RE.test(clean[0])) {
+			const inv = shellInvocation(clean);
+			if (inv.command >= 0) inspectText(clean[inv.command], baseDir, depth + 1, underSudo);
+			if (Array.isArray(clauseTokens.heredocs)) {
+				for (const hb of clauseTokens.heredocs) inspectText(hb, baseDir, depth + 1, underSudo);
+			}
+		}
+		if (underSudo) {
+			const rawClause = clauseText(clean);
+			if (SHELL_RE.test(clean[0]) || head === "source" || head === ".") {
+				const inv = SHELL_RE.test(clean[0]) ? shellInvocation(clean) : { script: 1, command: -1 };
+				const svc = inv.script >= 0 ? "sudo:bash-script" : "sudo:shell";
+				pushHit(svc, `기본 sudo 차단 목록(sudo ${head})에 해당해 막습니다`, `sudo ${rawClause}`);
+				return;
+			}
+			if (head === "systemctl" || head === "service" || head === "journalctl") {
+				pushHit("sudo:systemctl", `기본 sudo 차단 목록(sudo ${head})에 해당해 막습니다`, `sudo ${rawClause}`);
+				return;
+			}
+			pushHit("sudo:unclassified", `저장소 승인 계획 없이 sudo(${head}) 는 실행할 수 없어 막습니다`, `sudo ${rawClause}`);
+			return;
+		}
+		// sudo 없이 부른 로컬 셸 스크립트 안의 sudo 도 검사한다.
+		const sf = executedShellFile(clean, baseDir, true, "", false);
+		if (sf && !visitedScripts.has(sf) && depth < 3) {
+			visitedScripts.add(sf);
+			const body = scriptText(sf);
+			if (body) inspectText(body, baseDir, depth + 1, false);
+		}
+	};
+
+	const inspectText = (text, baseDir, depth, inheritedSudo) => {
+		if (depth > 3 || !String(text || "").trim()) return;
+		let clauses = [];
+		try { clauses = shellClauses(String(text || "")); } catch { return; }
+		let curDir = baseDir || cwd || "/";
+		for (const c of clauses) {
+			if (Array.isArray(c) && c[0] === "cd" && c[1] && !c[1].startsWith("-") && !/\$|\$\{/.test(c[1])) {
+				curDir = path.resolve(curDir, c[1]);
+			}
+			unwrapAndInspectClause(c, curDir, depth, inheritedSudo);
+		}
+	};
+
+	inspectText(command, cwd || "/", 0, false);
+	return hits;
+}
+
 /** 실제로 도는 절을 다시 셸 글로 적는다(앞의 환경 변수 대입 포함). 글자가 있는 인자는 작은따옴표로 감싼다. */
 function shellQuote(t) {
 	return /^[A-Za-z0-9_@%+=:,./-]+$/.test(t) ? t : `'${t.replace(/'/g, `'\\''`)}'`;
@@ -2082,4 +2488,15 @@ function clauseText(argv, assigns = []) {
 	return [...assigns.map((a) => { const i = a.indexOf("="); return `${a.slice(0, i + 1)}${shellQuote(a.slice(i + 1))}`; }), ...argv.map(shellQuote)].join(" ");
 }
 
-module.exports = { classifyProdMutations, classifyGeneralCloudCli, isNonProd, executedShellFile, scriptText, clauseText, SCRIPT_READ_LIMIT };
+module.exports = {
+	classifyProdMutations,
+	classifyGeneralCloudCli,
+	isNonProd,
+	executedShellFile,
+	scriptText,
+	clauseText,
+	extractCommandTargets,
+	classifyUnresolvedScriptTargets,
+	classifyBaselineSudo,
+	SCRIPT_READ_LIMIT,
+};
