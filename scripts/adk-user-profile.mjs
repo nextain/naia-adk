@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-// Apply the shared Claude user profile (templates/claude-user-profile) to a user's
-// ~/.claude: env keys, absolute-path hooks for role sessions, and the compaction
-// summary rule block in ~/.claude/CLAUDE.md. Idempotent; existing settings are kept.
+// Apply the shared ADK user profile (templates/claude-user-profile and
+// templates/muse-user-profile) to a user's ~/.claude and ~/.config/muse:
+// env keys, absolute-path hooks for role sessions, and the compaction summary
+// rule block in ~/.claude/CLAUDE.md. Idempotent; existing settings are kept.
 //
-//   node scripts/adk-user-profile.mjs apply [--home <dir>] [--adk-root <dir>]
-//   node scripts/adk-user-profile.mjs check [--home <dir>] [--adk-root <dir>]   # exit 1 if drifted
+//   node scripts/adk-user-profile.mjs apply [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|muse]
+//   node scripts/adk-user-profile.mjs check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|muse]
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -15,23 +16,34 @@ import { createRequire } from "node:module"
 const BEGIN = "<!-- naia-adk claude-user-profile: begin -->"
 const END = "<!-- naia-adk claude-user-profile: end -->"
 const HOOK = ".claude/hooks/role-compact-brief.js"
+const MUSE_ADAPTER = ".agents/hooks/muse-pretooluse-adapter.cjs"
+const VALID_TARGETS = new Set(["all", "claude", "muse"])
 const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const require = createRequire(import.meta.url)
 
 export function parseArgs(raw) {
-  const args = { mode: raw[0], home: os.homedir(), adkRoot: scriptRoot, instanceRoot: null }
+  const args = { mode: raw[0], home: os.homedir(), homeExplicit: false, adkRoot: scriptRoot, instanceRoot: null, target: "all" }
   for (let i = 1; i < raw.length; i++) {
-    if (raw[i] === "--home") args.home = raw[++i]
+    if (raw[i] === "--home") { args.home = raw[++i]; args.homeExplicit = true }
     else if (raw[i] === "--adk-root") args.adkRoot = raw[++i]
     else if (raw[i] === "--instance-root") args.instanceRoot = raw[++i]
+    else if (raw[i] === "--target") args.target = raw[++i]
+    else if (raw[i] === "--muse-only") args.target = "muse"
+    else if (raw[i] === "--claude-only") args.target = "claude"
     else throw new Error(`unknown argument: ${raw[i]}`)
   }
-  if (!["apply", "check"].includes(args.mode)) throw new Error("usage: adk-user-profile.mjs apply|check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>]")
+  if (!["apply", "check"].includes(args.mode) || !VALID_TARGETS.has(args.target)) {
+    throw new Error("usage: adk-user-profile.mjs apply|check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|muse]")
+  }
   args.home = path.resolve(args.home)
   args.adkRoot = path.resolve(args.adkRoot)
   // Hook code runs from the ADK root; hooks read instance settings (deploy, gcs, identity) from NAIA_ADK_ROOT.
   args.instanceRoot = path.resolve(args.instanceRoot ?? args.adkRoot)
   if (!fs.existsSync(path.join(args.instanceRoot, ".claude"))) throw new Error(`missing instance .claude: ${args.instanceRoot}`)
+  const xdgConfig = !args.homeExplicit && process.env.XDG_CONFIG_HOME
+    ? path.resolve(process.env.XDG_CONFIG_HOME)
+    : path.join(args.home, ".config")
+  args.museSettingsFile = path.join(xdgConfig, "muse", "settings.json")
   return args
 }
 
@@ -50,7 +62,9 @@ export function loadProfile(adkRoot, home = os.homedir(), instanceRoot = adkRoot
 
 const commandsOf = (groups) => (groups ?? []).flatMap((g) => (g.hooks ?? []).map((h) => h.command))
 export const PROFILE_HOOKS = ["role-compact-brief.js", "destructive-git-guard.js", "catastrophic-delete-guard.js", "git-push-guard.js", "email-send-guard.js", "commit-guard.js", "deploy-guard.js", "remote-identity-gate.js", "gcs-guard.js", "prod-gateway-guard.js", "subagent-spawn-guard.js", "lead-write-guard.js", "cost-guard.cjs", "guard-runpod-create.cjs", "subagent-model-guard.cjs"]
+export const MUSE_PROFILE_HOOKS = [...PROFILE_HOOKS]
 const ownHook = (command) => typeof command === "string" && PROFILE_HOOKS.some((name) => command.includes(name))
+const ownMuseHook = (command) => typeof command === "string" && command.includes("muse-pretooluse-adapter.cjs")
 export function validateProfileHooks(settings) {
   const names = new Set(Object.values(settings.hooks ?? {}).flatMap(commandsOf).map((command) => {
     const match = command.match(/"([^"\n]+\.(?:js|cjs))"/)
@@ -58,6 +72,48 @@ export function validateProfileHooks(settings) {
     return path.basename(match[1])
   }))
   if (names.size !== PROFILE_HOOKS.length || PROFILE_HOOKS.some((name) => !names.has(name))) throw new Error("PROFILE_HOOKS and settings.json disagree")
+}
+
+export function validateMuseProfileHooks(settings) {
+  const names = new Set()
+  for (const group of settings.hooks?.PreToolUse ?? []) {
+    if (group.matcher !== undefined) {
+      throw new Error("muse profile PreToolUse groups must be catch-all (no enumerated matcher)")
+    }
+  }
+  for (const command of Object.values(settings.hooks ?? {}).flatMap(commandsOf)) {
+    const scripts = [...command.matchAll(/"([^"\n]+\.(?:js|cjs))"/g)].map((m) => m[1])
+    if (!scripts.some((s) => path.basename(s) === "muse-pretooluse-adapter.cjs")) {
+      throw new Error("muse profile hook command must invoke muse-pretooluse-adapter.cjs")
+    }
+    for (const s of scripts) {
+      if (path.basename(s) !== "muse-pretooluse-adapter.cjs") names.add(path.basename(s))
+    }
+  }
+  if (names.size !== MUSE_PROFILE_HOOKS.length || MUSE_PROFILE_HOOKS.some((name) => !names.has(name))) {
+    throw new Error("MUSE_PROFILE_HOOKS and templates/muse-user-profile/settings.json disagree")
+  }
+}
+
+export function loadMuseProfile(adkRoot, home = os.homedir(), instanceRoot = adkRoot) {
+  const adapter = path.join(adkRoot, MUSE_ADAPTER)
+  if (!fs.existsSync(adapter)) throw new Error(`missing hook: ${adapter}`)
+  const file = path.join(adkRoot, "templates", "muse-user-profile", "settings.json")
+  const text = fs.readFileSync(file, "utf8")
+    .replaceAll("{{INSTANCE_ROOT}}", instanceRoot.replace(/\\/g, "/"))
+    .replaceAll("{{ADK_ROOT}}", adkRoot.replace(/\\/g, "/"))
+    .replaceAll("{{NODE}}", process.execPath.replace(/\\/g, "/"))
+    .replaceAll("{{USER_HOME}}", home.replace(/\\/g, "/"))
+  const settings = JSON.parse(text)
+  validateMuseProfileHooks(settings)
+  for (const groups of Object.values(settings.hooks ?? {})) {
+    for (const command of commandsOf(groups)) {
+      for (const m of command.matchAll(/"([^"\n]+\.(?:js|cjs))"/g)) {
+        if (!fs.existsSync(m[1])) throw new Error(`missing hook: ${m[1]}`)
+      }
+    }
+  }
+  return { settings }
 }
 
 const POLICIES = [
@@ -102,27 +158,39 @@ function policyKeys(example, file, content, adkRoot) {
 
 // Drop every earlier profile hook (old ADK path, old PostCompact entry) so a
 // re-apply replaces it instead of injecting twice.
-function withoutOwnHooks(hooks) {
+function withoutOwnHooks(hooks, isOwn = ownHook) {
   const out = {}
   for (const [event, groups] of Object.entries(hooks ?? {})) {
     const kept = (groups ?? [])
-      .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !ownHook(h.command)) }))
+      .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !isOwn(h.command)) }))
       .filter((g) => g.hooks.length)
     if (kept.length) out[event] = kept
   }
   return out
 }
 
+function mergeHookGroups(currentHooks, profileHooks, isOwn) {
+  // Reconcile the event and matcher as well as the executable path.
+  const next = withoutOwnHooks(currentHooks, isOwn)
+  for (const [event, groups] of Object.entries(profileHooks ?? {})) {
+    const have = new Set(commandsOf(next[event]))
+    const missing = groups.filter((g) => commandsOf([g]).some((c) => !have.has(c)))
+    if (missing.length) next[event] = [...(next[event] ?? []), ...missing]
+  }
+  return next
+}
+
 export function mergeSettings(current, profile) {
   const next = structuredClone(current ?? {})
   next.env = { ...(next.env ?? {}), ...profile.env }
-  // Reconcile the event and matcher as well as the executable path.
-  next.hooks = withoutOwnHooks(next.hooks)
-  for (const [event, groups] of Object.entries(profile.hooks ?? {})) {
-    const have = new Set(commandsOf(next.hooks[event]))
-    const missing = groups.filter((g) => commandsOf([g]).some((c) => !have.has(c)))
-    if (missing.length) next.hooks[event] = [...(next.hooks[event] ?? []), ...missing]
-  }
+  next.hooks = mergeHookGroups(next.hooks, profile.hooks, ownHook)
+  return next
+}
+
+export function mergeMuseSettings(current, profile) {
+  const next = structuredClone(current ?? {})
+  if (next.schema_version === undefined) next.schema_version = profile.schema_version ?? 1
+  next.hooks = mergeHookGroups(next.hooks, profile.hooks, ownMuseHook)
   return next
 }
 
@@ -154,56 +222,87 @@ function writeWithBackup(file, text, stamp) {
 }
 
 export function run(args, now = new Date()) {
-  const profile = loadProfile(args.adkRoot, args.home, args.instanceRoot ?? args.adkRoot)
-  const settingsFile = path.join(args.home, ".claude", "settings.json")
-  const ruleFile = path.join(args.home, ".claude", "CLAUDE.md")
-  const currentSettings = readOptional(settingsFile)
-  const current = currentSettings ? JSON.parse(currentSettings) : {}
-  const overridden = Object.keys(profile.settings.env ?? {}).filter((key) => Object.hasOwn(current.env ?? {}, key) && current.env[key] !== profile.settings.env[key]).map((key) => `env.${key}`)
-  const nextSettings = `${JSON.stringify(mergeSettings(current, profile.settings), null, 2)}\n`
-  let nextRule
-  try { nextRule = mergeRule(readOptional(ruleFile), profile.rule) } catch (e) {
-    if (args.mode === "check") return { drift: [ruleFile], error: e.message }
-    throw e
-  }
+  const target = args.target ?? "all"
+  if (!VALID_TARGETS.has(target)) throw new Error(`invalid target: ${target}`)
+  const includesClaude = target === "all" || target === "claude"
+  const includesMuse = target === "all" || target === "muse"
+  const instanceRoot = args.instanceRoot ?? args.adkRoot
+  const museSettingsFile = args.museSettingsFile ?? path.join(args.home, ".config", "muse", "settings.json")
+
   const drift = []
+  const errors = []
+  const changed = []
+  let overridden = []
+  let settingsFile, nextSettings, ruleFile, nextRule
   const missingPolicies = []
-  for (const [example, target] of POLICIES) {
-    const file = path.join(args.home, ".claude", target)
-    const content = readOptional(file)
-    if (content === null) {
-      drift.push(file)
-      missingPolicies.push([file, fs.readFileSync(path.join(args.adkRoot, "templates/claude-user-profile", example), "utf8")])
-    } else if (policyKeys(example, file, content, args.adkRoot).length) drift.push(file)
+
+  if (includesClaude) {
+    const profile = loadProfile(args.adkRoot, args.home, instanceRoot)
+    settingsFile = path.join(args.home, ".claude", "settings.json")
+    ruleFile = path.join(args.home, ".claude", "CLAUDE.md")
+    const currentSettings = readOptional(settingsFile)
+    const current = currentSettings ? JSON.parse(currentSettings) : {}
+    overridden = Object.keys(profile.settings.env ?? {}).filter((key) => Object.hasOwn(current.env ?? {}, key) && current.env[key] !== profile.settings.env[key]).map((key) => `env.${key}`)
+    nextSettings = `${JSON.stringify(mergeSettings(current, profile.settings), null, 2)}\n`
+    try { nextRule = mergeRule(readOptional(ruleFile), profile.rule) } catch (e) {
+      if (args.mode === "check") return { drift: [ruleFile], error: e.message }
+      throw e
+    }
+    for (const [example, targetRel] of POLICIES) {
+      const file = path.join(args.home, ".claude", targetRel)
+      const content = readOptional(file)
+      if (content === null) {
+        drift.push(file)
+        missingPolicies.push([file, fs.readFileSync(path.join(args.adkRoot, "templates/claude-user-profile", example), "utf8")])
+      } else if (policyKeys(example, file, content, args.adkRoot).length) drift.push(file)
+    }
+    if (currentSettings === null || JSON.stringify(JSON.parse(currentSettings)) !== JSON.stringify(JSON.parse(nextSettings))) drift.push(settingsFile)
+    if (readOptional(ruleFile) !== nextRule) drift.push(ruleFile)
+    if (args.mode === "check") {
+      for (const [example, targetRel] of POLICIES) {
+        const file = path.join(args.home, ".claude", targetRel)
+        const content = readOptional(file)
+        if (content === null) errors.push(`policy required: ${file}; keys: policy`)
+        else errors.push(...policyKeys(example, file, content, args.adkRoot).map((key) => `policy required: ${file}; keys: ${key}`))
+      }
+    }
   }
-  if (currentSettings === null || JSON.stringify(JSON.parse(currentSettings)) !== JSON.stringify(JSON.parse(nextSettings))) drift.push(settingsFile)
-  if (readOptional(ruleFile) !== nextRule) drift.push(ruleFile)
+
+  let nextMuseSettings
+  if (includesMuse) {
+    const museProfile = loadMuseProfile(args.adkRoot, args.home, instanceRoot)
+    const currentMuse = readOptional(museSettingsFile)
+    const current = currentMuse ? JSON.parse(currentMuse) : {}
+    nextMuseSettings = `${JSON.stringify(mergeMuseSettings(current, museProfile.settings), null, 2)}\n`
+    if (currentMuse === null || JSON.stringify(JSON.parse(currentMuse)) !== JSON.stringify(JSON.parse(nextMuseSettings))) drift.push(museSettingsFile)
+  }
+
   if (args.mode === "check") {
     if (!fs.existsSync(process.execPath)) drift.push(process.execPath)
-    const errors = POLICIES.flatMap(([example, target]) => {
-      const file = path.join(args.home, ".claude", target)
-      const content = readOptional(file)
-      return content === null ? [`policy required: ${file}; keys: policy`] : policyKeys(example, file, content, args.adkRoot).map(key => `policy required: ${file}; keys: ${key}`)
-    })
     return { drift, ...(errors.length ? { error: errors.join("\n") } : {}) }
   }
+
   const stamp = now.toISOString().replace(/[-:]/g, "").slice(0, 15)
-  const changed = []
-  for (const [file, content] of missingPolicies) {
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    try {
-      fs.writeFileSync(file, content, { mode: 0o600, flag: "wx" })
-      changed.push(file)
-    } catch (error) { if (error.code !== "EEXIST") throw error }
+  if (includesClaude) {
+    for (const [file, content] of missingPolicies) {
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      try {
+        fs.writeFileSync(file, content, { mode: 0o600, flag: "wx" })
+        changed.push(file)
+      } catch (error) { if (error.code !== "EEXIST") throw error }
+    }
+    const policyErrors = POLICIES.flatMap(([example, targetRel]) => {
+      const file = path.join(args.home, ".claude", targetRel)
+      const keys = policyKeys(example, file, readOptional(file), args.adkRoot)
+      return keys.length ? [`policy required: ${file}; keys: ${keys.join(", ")}`] : []
+    })
+    if (policyErrors.length) throw new Error(policyErrors.join("\n"))
+    if (drift.includes(settingsFile) && writeWithBackup(settingsFile, nextSettings, stamp)) changed.push(settingsFile)
+    if (drift.includes(ruleFile) && writeWithBackup(ruleFile, nextRule, stamp)) changed.push(ruleFile)
   }
-  const policyErrors = POLICIES.flatMap(([example, target]) => {
-    const file = path.join(args.home, ".claude", target)
-    const keys = policyKeys(example, file, readOptional(file), args.adkRoot)
-    return keys.length ? [`policy required: ${file}; keys: ${keys.join(", ")}`] : []
-  })
-  if (policyErrors.length) throw new Error(policyErrors.join("\n"))
-  if (drift.includes(settingsFile) && writeWithBackup(settingsFile, nextSettings, stamp)) changed.push(settingsFile)
-  if (drift.includes(ruleFile) && writeWithBackup(ruleFile, nextRule, stamp)) changed.push(ruleFile)
+  if (includesMuse && drift.includes(museSettingsFile) && writeWithBackup(museSettingsFile, nextMuseSettings, stamp)) {
+    changed.push(museSettingsFile)
+  }
   return { drift, changed, overridden }
 }
 
