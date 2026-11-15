@@ -720,7 +720,7 @@ test('fault 4: work-ledger refuses >2 drops (including drop+recreate) and >2 due
   assert.equal(reasonsById.get('human-5001'), '장부에 없는 사람 글');
 });
 
-test('fault 5: multi-mount disk floor blocks worker launch when root/home/cache/tmp is <5G even if work mount has 310G free', async () => {
+test('fault 5: multi-mount disk floor blocks worker launch when root, home, cache, tmp is <5G even if work mount has 310G free', async () => {
   const dir = await makeTempDir('disk-floor-fault-');
   const fakeHome = path.join(dir, 'home');
   const fakeWork = path.join(dir, 'work');
@@ -742,10 +742,10 @@ test('fault 5: multi-mount disk floor blocks worker launch when root/home/cache/
   assert.ok(paths.includes(path.join(fakeHome, '.cache')));
   assert.ok(paths.includes('/tmp'));
 
-  // Simulate /dev/sdb1 (/home/nextain/work) = 310G free while /dev/root (/) = 3.4G free.
+  // Simulate /dev/sdb1 (/srv/work) = 310G free while /dev/root (/) = 3.4G free.
   const simulatedDf = [
     'Filesystem 1024-blocks Used Available Capacity Mounted on',
-    '/dev/sdb1 527433728 190000000 325058560 36% /home/nextain/work',
+    '/dev/sdb1 527433728 190000000 325058560 36% /srv/work',
     '/dev/root 258998272 255433112 3565160 99% /',
   ].join('\n');
 
