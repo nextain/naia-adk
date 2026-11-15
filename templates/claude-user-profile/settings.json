@@ -38,8 +38,17 @@
       ] }
     ],
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" UserPromptSubmit" }] }],
-    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" PostToolUse" }] }],
-    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" PostToolUseFailure" }] }],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" PostToolUse" }] },
+      { "matcher": "Task|Agent", "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/subagent-spawn-guard.js\" PostToolUse" }] }
+    ],
+    "PostToolUseFailure": [
+      { "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" PostToolUseFailure" }] },
+      { "matcher": "Task|Agent", "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/subagent-spawn-guard.js\" PostToolUseFailure" }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.claude/hooks/subagent-spawn-guard.js\" SubagentStop" }] }
+    ],
     "PostToolBatch": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" PostToolBatch" }] }],
     "Stop": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" Stop" }] }],
     "PreCompact": [{ "hooks": [{ "type": "command", "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" PreCompact" }] }],

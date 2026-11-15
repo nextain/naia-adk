@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { rmSync } from "node:fs";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const runner = path.resolve(here, "../scripts/invoke-reviewer.mjs");
 const dir = await mkdtemp(path.join(os.tmpdir(), "review-cli-"));
+process.on("exit", () => { try { rmSync(dir, { recursive: true, force: true }); } catch {} });
 const base = path.join(dir, "base.md");
 const atoms = path.join(dir, "atoms.json");
 const delta = path.join(dir, "delta.md");
@@ -23,8 +25,10 @@ case "$REVIEW_FAKE_MODE" in
   total) while :; do echo progress; sleep 0.02; done ;;
   empty) cat >/dev/null; exit 0 ;;
   missing-frame) cat >/dev/null; printf '%s\\n' '{"verdict":"CLEAN","coverage":[{"atom_id":"ATOM-1","status":"COVERED"}],"findings":[],"runtime_observed":false}'; exit 0 ;;
-  missing-runtime) cat >/dev/null; printf '%s\\n' '{"verdict":"CLEAN","coverage":[{"atom_id":"ATOM-1","status":"COVERED"}],"findings":[],"frame_assessment":{"scope_is_sufficient":true,"missing_concerns":[]}}'; exit 0 ;;
-  unknown-atom) cat >/dev/null; printf '%s\\n' '{"verdict":"CLEAN","coverage":[{"atom_id":"UNKNOWN","status":"COVERED"}],"findings":[],"frame_assessment":{"scope_is_sufficient":true,"missing_concerns":[]},"runtime_observed":false}'; exit 0 ;;
+  missing-arch-fit) cat >/dev/null; printf '%s\\n' '{"verdict":"CLEAN","coverage":[{"atom_id":"ATOM-1","status":"COVERED"}],"findings":[],"frame_assessment":{"scope_is_sufficient":true,"missing_concerns":[]},"runtime_observed":false}'; exit 0 ;;
+  narrow-arch-fit) cat >/dev/null; printf '%s\\n' '{"verdict":"CLEAN","coverage":[{"atom_id":"ATOM-1","status":"COVERED"}],"findings":[],"frame_assessment":{"scope_is_sufficient":true,"missing_concerns":[]},"architecture_fit_assessment":{"fit_is_sufficient":true,"original_request":"Review target carries original request aligned with parent ADK architecture","parent_structure":"prod-app-01","acceptance_rationale":"Extends existing review-pass stage validation cleanly","missing_or_invalid_reasons":[]},"runtime_observed":false}'; exit 0 ;;
+  missing-runtime) cat >/dev/null; printf '%s\\n' '{"verdict":"CLEAN","coverage":[{"atom_id":"ATOM-1","status":"COVERED"}],"findings":[],"frame_assessment":{"scope_is_sufficient":true,"missing_concerns":[]},"architecture_fit_assessment":{"fit_is_sufficient":true,"original_request":"Review target carries original request aligned with parent ADK architecture","parent_structure":"naia-adk review-pass skill and shared deploy-plan architecture fit gate","acceptance_rationale":"Extends existing review-pass stage validation cleanly","missing_or_invalid_reasons":[]}}'; exit 0 ;;
+  unknown-atom) cat >/dev/null; printf '%s\\n' '{"verdict":"CLEAN","coverage":[{"atom_id":"UNKNOWN","status":"COVERED"}],"findings":[],"frame_assessment":{"scope_is_sufficient":true,"missing_concerns":[]},"architecture_fit_assessment":{"fit_is_sufficient":true,"original_request":"Review target carries original request aligned with parent ADK architecture","parent_structure":"naia-adk review-pass skill and shared deploy-plan architecture fit gate","acceptance_rationale":"Extends existing review-pass stage validation cleanly","missing_or_invalid_reasons":[]},"runtime_observed":false}'; exit 0 ;;
   *) cat >/dev/null; echo "token=sk-secretvalue123" >&2; echo "provider login required" >&2; exit 7 ;;
 esac
 `);
@@ -83,8 +87,8 @@ assert.doesNotMatch(`${agyOptional.stdout}${agyOptional.stderr}`, /secretvalue/)
 // A provider that exits successfully with empty or schema-invalid output is
 // still an invalid review result. The failure category must remain stable, and
 // opting out may record NOT_RUN without turning malformed output into evidence.
-for (const mode of ["empty", "missing-frame", "missing-runtime", "unknown-atom"]) {
-	const invalidOutput = spawnSync(process.execPath, [...common], { encoding:"utf8", env:{ ...env, REVIEW_FAKE_MODE:mode } });
+for (const mode of ["empty", "missing-frame", "missing-arch-fit", "narrow-arch-fit", "missing-runtime", "unknown-atom"]) {
+	const invalidOutput = spawnSync(process.execPath, [...common, "--stage", "planning"], { encoding:"utf8", env:{ ...env, REVIEW_FAKE_MODE:mode } });
 	assert.equal(invalidOutput.status, 1, `${mode} must fail closed`);
 	assert.match(invalidOutput.stderr, /codex reviewer returned invalid output/);
 	assert.doesNotMatch(`${invalidOutput.stdout}${invalidOutput.stderr}`, /secretvalue/);
@@ -164,7 +168,17 @@ assert.equal(failEntry.outcome, "failed");
 
 // Successful CLI execution records reviewed outcome and exactly 1 line
 const isolatedLog = path.join(dir, "cli-isolated-success.jsonl");
-const frameOk = { runtime_observed:false, frame_assessment:{ scope_is_sufficient:true, missing_concerns:[] } };
+const frameOk = {
+	runtime_observed: false,
+	frame_assessment: { scope_is_sufficient: true, missing_concerns: [] },
+	architecture_fit_assessment: {
+		fit_is_sufficient: true,
+		original_request: "Review target carries original request aligned with parent ADK architecture",
+		parent_structure: "naia-adk review-pass skill and shared deploy-plan architecture fit gate",
+		acceptance_rationale: "Extends existing review-pass stage validation via shared architectureFitProblems rather than adding a new hook",
+		missing_or_invalid_reasons: [],
+	},
+};
 const validCliReview = JSON.stringify({ verdict:"CLEAN", coverage:[{ atom_id:"ATOM-1", status:"COVERED" }], findings:[], ...frameOk });
 await writeFile(executable, `#!/bin/sh\ncat >/dev/null\necho '${validCliReview}'\n`, { mode: 0o700 });
 

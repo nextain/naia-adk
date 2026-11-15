@@ -266,6 +266,7 @@ existing_hooks:
     H3: "PASS — PreToolUse, fires before git push"
     H4: "PASS — destructive remote-ref operations are blocked before execution; session-contract policy still governs remote effects."
     verified_date: "2026-04-05"
+  subagent_spawn_guard: "Caps concurrently running subagents via .claude/allow-subagents (maxConcurrent, memory-scaled auto cap, and MemAvailable floor), releasing on PostToolUse/PostToolUseFailure/SubagentStop or 30m stale timeout (docs/guides/claude-user-profile.md)."
 
 # ─── Design / Proposal Review Questions (G-AB01) ──────────────
 # Absorbed from harness-books Book1 Appendix A.8 (proposal review set, L106-119).

@@ -1,0 +1,22 @@
+{
+  "work": "session-health-stalled-card-wake",
+  "repository_docs": {
+    "status": "N/A",
+    "reason": "Extends existing session-health stalled card detection, wake-box delivery, and systemd templates without altering repository entrypoints."
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "paths": [
+      "docs/guides/session-health.md",
+      "config/session-health.example.json",
+      "templates/systemd/naia-session-health.service",
+      "templates/systemd/naia-session-health.timer"
+    ]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "paths": ["docs/guides/session-health.md"],
+    "reason": "Documents unified ADK-wide stalled card detection thresholds (staleMinutes 90, repeatMinutes 30, escalateAfterCount 3), evidence boundaries (excluding plain Discord replies), role wake-box routing, and 5-minute systemd timer installation and rollback."
+  },
+  "source_handling": "Generic derived requirements and placeholders only; private server details remain outside the repository."
+}

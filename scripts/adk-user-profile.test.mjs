@@ -10,6 +10,7 @@ import { loadProfile, mergeRule, mergeSettings, parseArgs, PROFILE_HOOKS, run, v
 import "../.claude/hooks/profile-role-guards.test.cjs"
 import "../.claude/hooks/profile-user-guards.test.cjs"
 import "../.claude/hooks/lead-write-guard.test.cjs"
+import "../.claude/hooks/subagent-spawn-guard.test.cjs"
 import "../.claude/hooks/plan-review-write-guard.test.cjs"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
@@ -206,8 +207,14 @@ test("PROFILE_HOOKS exactly matches settings and repository hook matchers", () =
   validateProfileHooks(settings)
   const repository = read(path.join(root, ".claude/settings.json"))
   for (const name of PROFILE_HOOKS.filter((name) => name.endsWith(".js") && name !== "role-compact-brief.js")) {
-    const matchers = (source) => source.hooks.PreToolUse.filter((group) => group.hooks.some((hook) => hook.command.includes(`/${name}`))).map((group) => group.matcher)
+    const matchers = (source, event = "PreToolUse") => (source.hooks[event] ?? []).filter((group) => group.hooks.some((hook) => hook.command.includes(`/${name}`))).map((group) => group.matcher ?? null)
     assert.deepEqual(matchers(settings), matchers(repository), name)
+    if (name === "subagent-spawn-guard.js") {
+      for (const event of ["PostToolUse", "PostToolUseFailure", "SubagentStop"]) {
+        assert.deepEqual(matchers(settings, event), matchers(repository, event), `${name} (${event})`)
+        assert.equal(matchers(settings, event).length, 1, `${name} (${event}) registered`)
+      }
+    }
   }
   const missing = structuredClone(settings)
   missing.hooks.SessionStart = []

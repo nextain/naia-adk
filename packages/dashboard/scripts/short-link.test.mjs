@@ -5,15 +5,20 @@ import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { describe, it } from "node:test"
+import { after, describe, it } from "node:test"
 import { shortKeyFor } from "../short-links.mjs"
 import { assertDashboardReadable, findAdkRoot, run, verifyShortLink } from "./short-link.mjs"
 
 const SCRIPT = new URL("./short-link.mjs", import.meta.url).pathname
 const BASE = "http://dash.example:3142"
+const createdDirs = []
+after(() => {
+  for (const dir of createdDirs) fs.rmSync(dir, { recursive: true, force: true })
+})
 
 function tmpAdk() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "short-link-adk-"))
+  createdDirs.push(root)
   fs.writeFileSync(path.join(root, "AGENTS.md"), "x")
   for (const rel of ["docs/developer/a.md", ".agents/progress/w/r.md", "projects/p/README.md", "FORK.md"]) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true })
@@ -95,6 +100,7 @@ describe("짧은 주소: 대시보드가 못 여는 경로 거절", () => {
 
   it("명령 줄: .agents 경로는 종료 코드 1, 표준 오류에 docs/ 안내, 표 파일을 만들지 않는다", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "short-link-table-"))
+    createdDirs.push(dir)
     const file = path.join(dir, "short-links.json")
     const env = { ...process.env, NAIA_SHORT_LINKS_FILE: file, NAIA_DASHBOARD_PUBLIC_URL: "http://127.0.0.1:9" }
     let err
@@ -142,7 +148,11 @@ describe("짧은 주소: --verify", () => {
 
 describe("짧은 주소: 대시보드가 응답하지 않을 때만 표에 직접 쓴다", () => {
   const answering = (status, body) => async () => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
-  const tableIn = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "short-link-fb-")), "other-copy.json")
+  const tableIn = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "short-link-fb-"))
+    createdDirs.push(dir)
+    return path.join(dir, "other-copy.json")
+  }
 
   it("대시보드가 507·500·400 으로 답하면 그 코드와 이유로 실패하고 다른 사본의 표에 쓰지 않는다", async () => {
     for (const [status, error] of [[507, "Short link table is full"], [500, "Could not save short link"], [400, "Invalid source or path"]]) {

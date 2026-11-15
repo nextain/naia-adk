@@ -1241,6 +1241,12 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	const toolInput = data.tool_input || {};
 	if (HARNESS_ENV_VARS.some((name) => HARNESS_OFF.has((env[name] || "").trim().toLowerCase()))) return null;
 	if (harnessSwitch.findHarnessMarker({ cwd, configDirs: HARNESS_CONFIG_DIRS })) return null;
+	if (normalizedToolName(toolName) === "shell") {
+		const detachedHit = bashPolicies.detachedWorker(String(toolInput.command || toolInput.cmd || ""), { ...data, cwd }, { env });
+		if (detachedHit && detachedHit.reason) {
+			return { decision: "block", reason: detachedHit.reason };
+		}
+	}
 	if (!sessionId) return null;
 	if (!sessionContract.findProjectRoot(cwd)) {
 		// cwd cannot be resolved to a governed project root (host-reported cwd

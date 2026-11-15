@@ -2,6 +2,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { acquirePidLockSync } = require("../../../scripts/lib/pid-lock.cjs");
 
 const MAX_STATE_BYTES = 65536;
 function regularRead(file, maxBytes, { tail = false } = {}) {
@@ -65,12 +66,12 @@ function withSession(directory, sessionId, update) {
   const file = sessionPath(directory, sessionId);
   if (!file) return { status: "unknown", reason: "invalid_session_id" };
   const lock = file + ".lock";
-  let locked = false;
+  let lockHandle = null;
   let temporary;
   try {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     if (!fs.lstatSync(directory).isDirectory() || fs.realpathSync(directory) !== path.resolve(directory)) return { status: "unknown", reason: "unsafe_state_directory" };
-    fs.mkdirSync(lock, { mode: 0o700 }); locked = true;
+    lockHandle = acquirePidLockSync(lock, { createParent: false });
     const previous = readJson(file);
     if (previous.status !== "known" && previous.status !== "missing") return { status: "unknown", reason: "state_" + previous.reason };
     const state = previous.status === "missing" ? { schema_version: 1, turn: null, held: null } : previous.data;
@@ -85,7 +86,7 @@ function withSession(directory, sessionId, update) {
   } catch (error) { return { status: "unknown", reason: error.code === "EEXIST" ? "state_busy" : "state_write_failed" }; }
   finally {
     if (temporary) { try { fs.unlinkSync(temporary); } catch {} }
-    if (locked) { try { fs.rmdirSync(lock); } catch {} }
+    if (lockHandle) { try { lockHandle.release(); } catch {} }
   }
 }
 module.exports = { regularRead, readJson, sessionPath, withSession, atomicJson, MAX_STATE_BYTES };

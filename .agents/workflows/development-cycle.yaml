@@ -10,6 +10,7 @@ phases:
   change:
     description: "Read, modify, verify"
     steps:
+      - "Confirm architecture_fit before editing (see architecture_fit_template & docs/guides/architecture-fit-before-fix.md): original_request, parent_structure (not just a single server/file), acceptance_rationale"
       - "Read the file to be modified"
       - "Make the requested change"
       - "Re-read the changed section once — confirm no unintended edits or typos (single-pass visual review)"
@@ -17,6 +18,7 @@ phases:
     rules:
       - "Minimal changes only — do exactly what was asked"
       - "No over-engineering or refactoring beyond the request"
+      - "Do not patch only a symptom card — state original_request, parent_structure, and acceptance_rationale first (validated by review-pass)"
     output: "Correct change applied"
 
   commit:
@@ -39,3 +41,10 @@ phases:
       - "Local build passing ≠ Vercel build passing — local has the file, Vercel does not if it is untracked"
       - "ENOENT on Vercel = file exists locally but not committed. Always run git status first"
     output: "Verified push"
+
+architecture_fit_template:
+  description: "Three fields required before editing (aligned with .claude/hooks/lib/deploy-plan.js architectureFitProblems and review-pass planning/development lens)"
+  architecture_fit:
+    original_request: "<who asked for what — original wording summary (>= 10 chars)>"
+    parent_structure: "<platform / ADK upstream / product layer where this fix attaches (>= 8 chars, not single server/IP/file)>"
+    acceptance_rationale: "<existing layer extension vs new shared layer, why not a one-off patch (>= 10 chars)>"

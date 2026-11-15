@@ -5,7 +5,9 @@
   "baselineSha": "<full-40-character-commit-sha>",
   "idleMinutes": 30,
   "stoppedRequiresWork": false,
-  "staleHours": 2,
+  "staleMinutes": 90,
+  "repeatMinutes": 30,
+  "escalateAfterCount": 3,
   "escalateMinutes": 30,
   "responseWatchState": "/<private>/response-watch-state.json",
   "tokenEnv": "DISCORD_BOT_TOKEN",
@@ -35,11 +37,21 @@
         "codex",
         "opencode"
       ],
-      "allowedOverrides": []
+      "allowedOverrides": [],
+      "wakeDir": "/<workspace>/.agents/work/l4/wake",
+      "reportChannel": "<human-channel-id>"
     }
   ],
   "workLedger": "/<private>/work-ledger.yaml",
+  "workLedgerConfig": "/<private>/config/work-ledger.json",
   "regularSchedule": "/<private>/regular-schedule.yaml",
+  "workWatch": {
+    "root": "/<upstream-checkout>"
+  },
+  "watcherUnits": {
+    "role": "role-a",
+    "wakeDir": "/<upstream-checkout>/.agents/work/wake/role-a"
+  },
   "messages": {
     "nudge": "<@{user}> {role}: {codeText} ({code}). 확인 후 조치 결과를 알려 주세요. 보고서: {report}",
     "escalate": "<@{user}> {role}의 문제가 계속됩니다: {codeText} ({code}). 담당자의 조치 여부를 확인해 주세요. 보고서: {report}"
