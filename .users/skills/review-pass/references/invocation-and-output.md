@@ -94,6 +94,10 @@ insufficient scope must name what is missing, and `CLEAN` is unavailable while
 the scope is insufficient. A scope objection alone is enough for `NOT_CLEAN`,
 with no in-frame finding.
 
+`architecture_fit_assessment` is required in `planning` and `development` stages:
+`{ fit_is_sufficient, original_request, parent_structure, acceptance_rationale, missing_or_invalid_reasons }`,
+validated with shared `.claude/hooks/lib/deploy-plan.js` (`architectureFitProblems`).
+
 `runtime_observed` is required. Reading files is not observing behaviour, and
 declaring which one happened keeps a text review from being quoted later as a
 runtime result.

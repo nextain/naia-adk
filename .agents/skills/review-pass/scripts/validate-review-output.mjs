@@ -5,7 +5,36 @@
  * wrapper only owns process lifecycle, while this module remains usable by
  * focused validation tests and other callers.
  */
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
 const COVERAGE_STATUSES = new Set(["COVERED", "NOT_COVERED"]);
+const ARCHITECTURE_FIT_STAGES = new Set(["planning", "development"]);
+
+let cachedArchitectureFitProblems = null;
+function getArchitectureFitProblems() {
+	if (cachedArchitectureFitProblems) return cachedArchitectureFitProblems;
+	for (const start of [dirname(fileURLToPath(import.meta.url)), process.cwd()]) {
+		let dir = start;
+		for (;;) {
+			const candidate = join(dir, ".claude", "hooks", "lib", "deploy-plan.js");
+			if (existsSync(candidate)) {
+				const mod = require(candidate);
+				if (typeof mod?.architectureFitProblems === "function") {
+					cachedArchitectureFitProblems = mod.architectureFitProblems;
+					return cachedArchitectureFitProblems;
+				}
+			}
+			const parent = dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
+		}
+	}
+	throw invalidOutput("shared architectureFitProblems helper (.claude/hooks/lib/deploy-plan.js) is unavailable");
+}
 
 function invalidOutput(message) {
 	const error = new Error(message);
@@ -189,7 +218,7 @@ export function rejectFailedStreamEvents(raw) {
 	if (!completed) throw invalidOutput("review output contains an incomplete or failed stream (missing terminal)");
 }
 
-export function validateReviewOutput(raw, atomIds) {
+export function validateReviewOutput(raw, atomIds, options = {}) {
 	rejectFailedStreamEvents(raw);
 	const candidates = [];
 	const eventTexts = [];
@@ -259,6 +288,41 @@ export function validateReviewOutput(raw, atomIds) {
 		throw invalidOutput("an insufficient scope must name what is missing");
 	}
 
+	const stage = options?.stage ?? null;
+	const requireArchFit = stage === null || stage === undefined || ARCHITECTURE_FIT_STAGES.has(stage);
+	const arch = review.architecture_fit_assessment;
+	if (requireArchFit || arch !== undefined) {
+		if (!arch || typeof arch !== "object" || Array.isArray(arch)) {
+			throw invalidOutput("review output has no architecture_fit_assessment");
+		}
+		if (typeof arch.fit_is_sufficient !== "boolean") {
+			throw invalidOutput("architecture_fit_assessment.fit_is_sufficient must be a boolean");
+		}
+		if (!Array.isArray(arch.missing_or_invalid_reasons) || arch.missing_or_invalid_reasons.some((item) => typeof item !== "string" || !item.trim())) {
+			throw invalidOutput("architecture_fit_assessment.missing_or_invalid_reasons must be an array of non-empty strings");
+		}
+		if (arch.fit_is_sufficient === false && arch.missing_or_invalid_reasons.length === 0) {
+			throw invalidOutput("an insufficient architecture fit must name missing_or_invalid_reasons");
+		}
+		if (arch.fit_is_sufficient === true) {
+			if (arch.missing_or_invalid_reasons.length > 0) {
+				throw invalidOutput("architecture_fit_assessment.fit_is_sufficient=true cannot carry missing_or_invalid_reasons");
+			}
+			const checkArchitectureFit = getArchitectureFitProblems();
+			const fitProblems = checkArchitectureFit({
+				architecture_fit: {
+					original_request: arch.original_request,
+					parent_structure: arch.parent_structure,
+					acceptance_rationale: arch.acceptance_rationale,
+				},
+				...(Array.isArray(options?.services) ? { services: options.services } : {}),
+			});
+			if (fitProblems.length > 0) {
+				throw invalidOutput(`architecture_fit_assessment failed architectureFitProblems: ${fitProblems[0]}`);
+			}
+		}
+	}
+
 	// Reading files is not observing behaviour. Saying which one happened keeps
 	// a text review from being quoted later as a runtime result.
 	if (typeof review.runtime_observed !== "boolean") {
@@ -272,9 +336,12 @@ export function validateReviewOutput(raw, atomIds) {
 		if (frame.scope_is_sufficient === false) {
 			throw invalidOutput("CLEAN is unavailable while the reviewed scope is insufficient");
 		}
+		if (arch?.fit_is_sufficient === false) {
+			throw invalidOutput("CLEAN is unavailable while architecture_fit_assessment is insufficient");
+		}
 	}
-	if (review.verdict === "NOT_CLEAN" && !review.findings.length && review.coverage.every(({ status }) => status === "COVERED") && frame.scope_is_sufficient !== false) {
-		throw invalidOutput("NOT_CLEAN review has no finding, uncovered atom, or scope objection");
+	if (review.verdict === "NOT_CLEAN" && !review.findings.length && review.coverage.every(({ status }) => status === "COVERED") && frame.scope_is_sufficient !== false && arch?.fit_is_sufficient !== false) {
+		throw invalidOutput("NOT_CLEAN review has no finding, uncovered atom, scope objection, or architecture fit objection");
 	}
 	return review;
 }

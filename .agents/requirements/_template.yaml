@@ -27,6 +27,12 @@ preserves: ["{surface-or-contract-id}"]
 must_not_change: ["{protected-behavior-or-boundary}"]
 destructive_approval: null  # destructive changes require an exact authority/receipt reference
 
+# Architecture fit (docs/guides/architecture-fit-before-fix.md). Required before planning/development review.
+architecture_fit:
+  original_request: ""      # 최초 요구 원문 요지 (min 10 chars)
+  parent_structure: ""      # 붙는 상위 구조 (min 8 chars; not single server/IP/file only)
+  acceptance_rationale: ""  # 상위 구조가 받아들이는 방식 (min 10 chars)
+
 description: |
   {What this requirement demands}
 

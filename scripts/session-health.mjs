@@ -5,7 +5,14 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { readWorkLedger, readScheduleLedger, scheduleStatus } from './lib/ledger.mjs';
+import { readScheduleLedger, scheduleStatus } from './lib/ledger.mjs';
+import {
+  collectRoleCards,
+  evaluateCardStall,
+  readWorkLedgerMeta,
+  resolveCardThresholds,
+  syncCardWakes,
+} from './lib/stalled-cards.mjs';
 import { acquirePidLock } from './lib/pid-lock.mjs';
 import { checkWatcherUnits, validateWatcherUnitConfig } from './watcher-unit-health.mjs';
 import { watchWorkers, defaultRegistryPath } from './work-watch.mjs';
@@ -16,7 +23,13 @@ const git = (cwd, args) => command('git', ['-C', cwd, ...args]);
 const json = async path => JSON.parse(await readFile(path, 'utf8'));
 const time = value => Number.isFinite(Date.parse(value)) ? Date.parse(value) : null;
 const stamp = value => value == null ? 'unknown' : new Date(value).toISOString();
-const signalFor = (code, config) => code.startsWith('schedule-missed:') ? 'schedule' : code === 'drift' ? 'rules' : code === 'stalled' ? (config.workLedger ? 'ledger' : 'progress') : 'window';
+const hasLedgerSource = (config, role) => Boolean(
+  config.workLedger
+  || config.workLedgerConfig
+  || config.workLedgerDir
+  || (role ? role.ledgerFile : config.roles?.some(r => r?.ledgerFile)),
+);
+const signalFor = (code, config, role) => code.startsWith('schedule-missed:') ? 'schedule' : code === 'drift' ? 'rules' : code === 'stalled' ? (hasLedgerSource(config, role) ? 'ledger' : 'progress') : 'window';
 const cell = value => String(value).replace(/[|\r\n]/g, ' ').replace(/[<>]/g, '');
 async function optionalStat(path) { try { return (await stat(path)).mtimeMs; } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
 
@@ -43,6 +56,7 @@ function resolveWatcherUnitOptions(c) {
 }
 
 export function validateConfig(c) {
+  if (!isObject(c)) throw Error('invalid config');
   if (c.stoppedRequiresWork !== undefined && typeof c.stoppedRequiresWork !== 'boolean') throw Error('stoppedRequiresWork must be a boolean');
   if (c.messages !== undefined) {
     if (!isObject(c.messages)) throw Error('messages must be an object');
@@ -57,16 +71,27 @@ export function validateConfig(c) {
   if (!Array.isArray(c.roles) || !c.roles.length) throw Error('roles required');
   const ids = new Set();
   for (const r of c.roles) {
-    if (!/^[a-zA-Z0-9_-]+$/.test(r.id) || ids.has(r.id)) throw Error('unique safe role id required');
+    if (!isObject(r) || typeof r.id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(r.id) || ids.has(r.id)) throw Error('unique safe role id required');
     ids.add(r.id);
-    if (!isAbsolute(r.workspace ?? '') || !r.window || !['tmux', 'herdr', 'snapshot'].includes(r.adapter?.kind)) throw Error('invalid role adapter');
-    for (const p of [...(r.workFiles ?? []), ...(r.sessionLog ? [r.sessionLog] : [])]) if (!isAbsolute(p)) throw Error('absolute evidence path required');
-    if (r.adapter.kind === 'snapshot' && !isAbsolute(r.adapter.path ?? '')) throw Error('absolute snapshot path required');
+    if (typeof r.workspace !== 'string' || !isAbsolute(r.workspace) || !r.window || !['tmux', 'herdr', 'snapshot'].includes(r.adapter?.kind)) throw Error('invalid role adapter');
+    if (r.workFiles !== undefined && !Array.isArray(r.workFiles)) throw Error('workFiles must be an array');
+    for (const p of r.workFiles ?? []) if (typeof p !== 'string' || !isAbsolute(p)) throw Error('absolute evidence path required');
+    for (const key of ['sessionLog', 'wakeDir', 'ledgerFile']) if (r[key] != null && (typeof r[key] !== 'string' || !isAbsolute(r[key]))) throw Error('absolute evidence path required');
+    if (r.reportChannel !== undefined && (typeof r.reportChannel !== 'string' || !r.reportChannel.trim() || /[\r\n]/.test(r.reportChannel))) throw Error('invalid report channel');
+    if (r.adapter.kind === 'snapshot' && (typeof r.adapter.path !== 'string' || !isAbsolute(r.adapter.path))) throw Error('absolute snapshot path required');
     if (r.adapter.kind === 'herdr' && (!Array.isArray(r.adapter.command) || !r.adapter.command.length || r.adapter.command.some(x => typeof x !== 'string'))) throw Error('herdr command argv required');
   }
-  for (const [key, fallback] of [['idleMinutes', 30], ['staleHours', 2], ['escalateMinutes', 30], ['waitMaxHours', 24]]) if (!(Number.isFinite(c[key] ?? fallback) && (c[key] ?? fallback) > 0)) throw Error('positive thresholds required');
-  for (const key of ['workLedger', 'regularSchedule']) if (c[key] != null && !isAbsolute(c[key])) throw Error('absolute ledger path required');
-  if (c.responseWatchState && !isAbsolute(c.responseWatchState)) throw Error('absolute response state required');
+  for (const [key, fallback] of [['idleMinutes', 30], ['staleHours', 2], ['staleMinutes', 90], ['repeatMinutes', 30], ['escalateMinutes', 30], ['waitMaxHours', 24]]) if (!(Number.isFinite(c[key] ?? fallback) && (c[key] ?? fallback) > 0)) throw Error('positive thresholds required');
+  if (c.escalateAfterCount !== undefined && (!Number.isInteger(c.escalateAfterCount) || c.escalateAfterCount < 1)) throw Error('positive escalateAfterCount required');
+  for (const key of ['workLedger', 'regularSchedule', 'workLedgerConfig', 'workLedgerDir', 'workLedgerRoot']) if (c[key] != null && (typeof c[key] !== 'string' || !isAbsolute(c[key]))) throw Error('absolute ledger path required');
+  if (!c.workLedgerConfig) {
+    for (const r of c.roles) {
+      if ((c.workLedger || c.workLedgerDir || r.ledgerFile) && !r.wakeDir) {
+        throw Error('wakeDir required for ledger role');
+      }
+    }
+  }
+  if (c.responseWatchState != null && (typeof c.responseWatchState !== 'string' || !isAbsolute(c.responseWatchState))) throw Error('absolute response state required');
   if (c.notifications) for (const id of [c.notifications.nudgeChannelId, c.notifications.escalation?.channelId, c.notifications.escalation?.userId, ...c.roles.map(r => r.botId)]) if (!/^\d+$/.test(id ?? '')) throw Error('invalid notification id');
   if (c.watcherUnits !== undefined && typeof c.watcherUnits !== 'boolean') {
     if (!isObject(c.watcherUnits)) throw Error('watcherUnits must be a boolean or object');
@@ -178,8 +203,19 @@ export function waitUntil(text, now) {
   return null;
 }
 
-export async function observeRole(config, role, previous, now, response, windowProbe = collectWindow) {
-  const record = { firstAt: previous?.firstAt ?? now, lastActivity: previous?.lastActivity ?? null, outputHash: previous?.outputHash, episodes: previous?.episodes ?? {}, sequence: previous?.sequence ?? 0, baselines: previous?.baselines ?? {} };
+export async function observeRole(config, role, previous, now, response, windowProbe = collectWindow, extra = {}) {
+  const record = {
+    firstAt: previous?.firstAt ?? now,
+    lastActivity: previous?.lastActivity ?? null,
+    outputHash: previous?.outputHash,
+    episodes: previous?.episodes ?? {},
+    sequence: previous?.sequence ?? 0,
+    baselines: previous?.baselines ?? {},
+    cardStalls: structuredClone(previous?.cardStalls ?? {}),
+    cardStatuses: structuredClone(previous?.cardStatuses ?? {}),
+    cardTransitions: structuredClone(previous?.cardTransitions ?? {}),
+    cardFirstSeen: structuredClone(previous?.cardFirstSeen ?? {}),
+  };
   const anomalies = [], errors = [];
   let alive = 'unknown', compact = 'unknown', tasks = [], progress = null, progressSources = [], rules = { status: 'unknown', diffs: [] };
   try {
@@ -191,18 +227,33 @@ export async function observeRole(config, role, previous, now, response, windowP
     if (role.sessionLog) { try { compact = compactEvidence(await readFile(role.sessionLog, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; } }
   } catch { errors.push('window/session evidence unavailable'); }
   const evidence = [];
-  let ledgerKnown = !config.workLedger, ledgerTasks = [], schedules = null;
-  if (config.workLedger) {
-    try {
-      ledgerTasks = (await readWorkLedger(config.workLedger, now)).filter(row => row.role === role.id && row.status === '진행 중');
-      tasks.push(...ledgerTasks.map(row => `${row.id}: ${row.task}`));
-      ledgerKnown = true;
-    } catch { errors.push('work ledger unavailable'); }
+  const hasLedger = hasLedgerSource(config, role);
+  const thresholds = resolveCardThresholds(config);
+  let meta = extra.meta ?? null, metaError = extra.metaError ?? false;
+  if (!meta && !metaError && (config.workLedgerConfig || config.workLedgerDir)) {
+    try { meta = await readWorkLedgerMeta(config); }
+    catch { metaError = true; }
   }
+  let ledgerKnown = !hasLedger, cards = [], schedules = null;
+  if (hasLedger) {
+    if (metaError) {
+      errors.push('work ledger unavailable');
+      ledgerKnown = false;
+    } else {
+      const collected = await collectRoleCards({ config, role, meta, now });
+      ledgerKnown = collected.ledgerKnown;
+      for (const err of collected.errors) errors.push(err);
+      for (const card of collected.cards) {
+        cards.push(await evaluateCardStall({ card, role, record, now, staleMs: thresholds.staleMs }));
+      }
+      for (const c of cards.filter(c => c.isOpen)) tasks.push(`${c.id}: ${c.title}`);
+    }
+  }
+  const openCards = cards.filter(c => c.isOpen);
   if (config.stoppedRequiresWork) {
     const pending = pendingWork(config, role, response);
     if (pending === null) errors.push('response evidence unavailable');
-    if (alive === 'stopped' && config.workLedger && ledgerKnown && !ledgerTasks.length && pending === false) alive = 'idle';
+    if (alive === 'stopped' && hasLedger && ledgerKnown && !openCards.length && pending === false) alive = 'idle';
   }
   if (alive === 'stopped') {
     const limit = (config.waitMaxHours ?? 24) * 3600000;
@@ -233,14 +284,16 @@ export async function observeRole(config, role, previous, now, response, windowP
   evidence.push({ source: 'confirmed reply', at: response?.replies?.[role.botId]?.at });
   progressSources = evidence.filter(e => Number.isFinite(e.at) && e.at <= now);
   progress = progressSources.length ? Math.max(...progressSources.map(e => e.at)) : null;
-  const staleMs = (config.staleHours ?? 2) * 3600000;
-  const ledgerProgress = ledgerTasks.map(row => ({ source: `work ${row.id}`, at: time(row.updated_at) }));
-  if (ledgerTasks.some(row => now - time(row.updated_at) >= staleMs) ||
+  const staleMs = thresholds.staleMs;
+  const ledgerProgress = openCards
+    .filter(c => c.lastEvidenceAt !== null)
+    .map(c => ({ source: `work ${c.id}`, at: c.lastEvidenceAt }));
+  if (openCards.some(c => c.stalled) ||
       (tasks.length > legacyStart && now - (progress ?? record.firstAt) >= staleMs)) anomalies.push('stalled');
   progressSources.push(...ledgerProgress);
   progress = progressSources.length ? Math.max(...progressSources.map(e => e.at)) : null;
   try { rules = await compareRules(config, role); if (rules.status === 'drift') anomalies.push('drift'); } catch { errors.push('rule evidence unavailable'); }
-  return { record, role: role.id, alive, compact, tasks, progress, progressSources, rules, anomalies, errors, ledgerKnown, schedules };
+  return { record, role: role.id, alive, compact, tasks, progress, progressSources, rules, anomalies, errors, ledgerKnown, schedules, cards };
 }
 
 export const atomic = async (path, text) => { await mkdir(dirname(path), { recursive: true, mode: 0o700 }); const tmp = `${path}.${process.pid}.tmp`; await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, path); };
@@ -256,23 +309,34 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
     let state; try { state = await json(config.stateFile); } catch (e) { if (e.code !== 'ENOENT') throw Error('state unreadable; refusing reset'); state = { version: 1, roles: {} }; }
     if (state.version !== 1 || !state.roles || typeof state.roles !== 'object' || Array.isArray(state.roles)) throw Error('invalid state');
     let response = {}; let responseError = false;
-    if (config.responseWatchState) try { response = await json(config.responseWatchState); } catch { response = null; responseError = true; }
+    if (config.responseWatchState) try {
+      response = await json(config.responseWatchState);
+      if (!isObject(response)) throw Error('invalid response state');
+    } catch { response = null; responseError = true; }
     const save = () => dry ? Promise.resolve() : atomic(config.stateFile, JSON.stringify(state, null, 2));
-    const rows = []; let previews = 0, degraded = responseError;
+    const thresholds = resolveCardThresholds(config);
+    let meta = null, metaError = false;
+    if (config.workLedgerConfig || config.workLedgerDir) try { meta = await readWorkLedgerMeta(config); } catch { metaError = true; }
+    const rows = [], wakes = []; let previews = 0, wakePreviews = 0, degraded = responseError;
     for (const role of config.roles) {
       const previous = state.roles[role.id];
-      const result = await observeRole(config, role, previous, now, response, windowProbe);
+      const result = await observeRole(config, role, previous, now, response, windowProbe, { meta, metaError });
       if (responseError && !result.errors.includes('response evidence unavailable')) result.errors.push('response evidence unavailable');
       rows.push(result); degraded ||= !!result.errors.length || !!result.anomalies.length;
       const rec = result.record; state.roles[role.id] = rec;
-      const observed = { ledger: Boolean(config.workLedger) && result.ledgerKnown, window: result.alive !== 'unknown', progress: result.progressSources.length > 0 || (Boolean(config.workLedger) && result.ledgerKnown), schedule: result.schedules !== null, rules: result.rules.status !== 'unknown' };
+      const hasLedger = hasLedgerSource(config, role);
+      const observed = { ledger: hasLedger && result.ledgerKnown, window: result.alive !== 'unknown', progress: result.progressSources.length > 0 || (hasLedger && result.ledgerKnown), schedule: result.schedules !== null, rules: result.rules.status !== 'unknown' };
       const baselines = { ...rec.baselines };
       for (const [signal, known] of Object.entries(observed)) if (known) rec.baselines[signal] ??= now;
       // Unknown probes cannot prove recovery; retain episodes until a complete observation.
-      for (const code of Object.keys(rec.episodes)) if (observed[signalFor(code, config)] && !(code === 'stalled' && (result.errors.includes('work evidence unavailable') || !result.ledgerKnown)) && !result.anomalies.includes(code)) delete rec.episodes[code];
+      for (const code of Object.keys(rec.episodes)) if (observed[signalFor(code, config, role)] && !(code === 'stalled' && (result.errors.includes('work evidence unavailable') || !result.ledgerKnown)) && !result.anomalies.includes(code)) delete rec.episodes[code];
+      const cardWake = await syncCardWakes({ role: result, cardResults: result.cards, ledgerKnown: result.ledgerKnown, now, dry, thresholds });
+      for (const err of cardWake.errors ?? []) if (!result.errors.includes(err)) result.errors.push(err);
+      degraded ||= !!result.errors.length;
+      wakes.push(...cardWake.wakes); wakePreviews += cardWake.previews; previews += cardWake.previews;
       for (const code of result.anomalies) {
         const episode = rec.episodes[code] ??= { at: now, sequence: ++rec.sequence, stages: {} };
-        const signal = signalFor(code, config);
+        const signal = signalFor(code, config, role);
         if (baselines[signal] == null || !config.notifications) continue;
         for (const stage of ['nudge', 'escalate']) {
           if (stage === 'escalate' && now - episode.at < (config.escalateMinutes ?? 30) * 60000) continue;
@@ -298,6 +362,8 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
       report += `| ${r.role} | ${r.alive} | ${stamp(r.record.lastActivity)} | ${cell(r.tasks.join('; ') || (!r.ledgerKnown ? 'unknown (ledger unavailable)' : 'none observed'))} | ${r.anomalies.includes('stalled') ? 'stalled' : (r.errors.includes('work evidence unavailable') || !r.ledgerKnown) ? 'unknown' : r.tasks.length ? 'active' : 'no active task'} | ${stamp(r.progress)} (${r.progressSources.map(e => `${e.source}: ${stamp(e.at)}`).join('; ')}) | ${r.rules.status} | ${r.compact} |\n`;
       if (config.regularSchedule) details.push(`\n${r.role} regular schedule: ${r.schedules === null ? 'unknown' : r.schedules.map(s => `${cell(s.id)}: ${s.status === 'missed' ? '안 돎 (missed)' : s.status} (due ${stamp(s.dueAt)})`).join('; ') || 'no installed schedule'}\n`);
       for (const d of r.rules.diffs) details.push(`\n${r.role}: ${d.path} lines ${d.lines.join(',')} (${d.allowed ? 'allowed' : 'unexpected'}); SHA256 ${d.expected} → ${d.actual}\n`);
+      const stalledCards = (r.cards ?? []).filter(c => c.stalled);
+      if (stalledCards.length) details.push(`\n${r.role} stalled cards: ${stalledCards.map(c => `${cell(c.id)} (${Math.floor(c.stalledMs / 60000)}m, last ${stamp(c.lastEvidenceAt)})`).join('; ')}\n`);
       if (r.errors.length) details.push(`\n${r.role}: ${r.errors.join('; ')}\n`);
     }
     let workWatch;
@@ -321,8 +387,8 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
     }
     report += details.join('');
     if (!dry) await atomic(config.reportFile, report);
-    emit({ stage: 'end', result: degraded ? 'degraded' : 'complete', previews, durationMs: Date.now() - started });
-    return { rows, report, degraded, previews, ...(workWatch ? { workWatch } : {}), ...(watcherUnits ? { watcherUnits } : {}) };
+    emit({ stage: 'end', result: degraded ? 'degraded' : 'complete', previews, wakePreviews, durationMs: Date.now() - started });
+    return { rows, report, degraded, previews, wakes, wakePreviews, ...(workWatch ? { workWatch } : {}), ...(watcherUnits ? { watcherUnits } : {}) };
   } catch (error) { emit({ stage: 'end', result: 'failed', durationMs: Date.now() - started }); throw error; } finally { if (lock) await lock.release(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

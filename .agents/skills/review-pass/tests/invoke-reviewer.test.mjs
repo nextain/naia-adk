@@ -55,7 +55,17 @@ assert.deepEqual(grokArgs.slice(0, 7), ["--output-format", "json", "--permission
 assert.deepEqual(grokArgs.slice(7), ["--model", "m"]);
 assert(commandFor("grok", "/r", "grok-4.6", { promptFile: "/r/prompt.txt" })[1].includes("grok-4.6"));
 assert(!commandFor("grok", "/r", "", { promptFile: "/r/prompt.txt" })[1].includes("--no-subagents"), "Grok review must keep subagents enabled");
-const frameOk = { runtime_observed:false, frame_assessment:{ scope_is_sufficient:true, missing_concerns:[] } };
+const frameOk = {
+	runtime_observed: false,
+	frame_assessment: { scope_is_sufficient: true, missing_concerns: [] },
+	architecture_fit_assessment: {
+		fit_is_sufficient: true,
+		original_request: "Review target carries original request aligned with parent ADK architecture",
+		parent_structure: "naia-adk review-pass skill and shared deploy-plan architecture fit gate",
+		acceptance_rationale: "Extends existing review-pass stage validation via shared architectureFitProblems rather than adding a new hook",
+		missing_or_invalid_reasons: [],
+	},
+};
 const validReview = JSON.stringify({ verdict:"CLEAN", coverage:[{ atom_id:"ATOM-1", status:"COVERED" }], findings:[], ...frameOk });
 assert.equal(validateReviewOutput(validReview, ["ATOM-1"]).verdict, "CLEAN");
 assert.equal(validateReviewOutput(`result\n\`\`\`json\n${validReview}\n\`\`\``, ["ATOM-1"]).verdict, "CLEAN");
@@ -110,6 +120,12 @@ const validReviewObject = {
 const invalidOutputCases = [
 	["", /no structured coverage/],
 	[JSON.stringify({ ...validReviewObject, frame_assessment: undefined }), /no frame_assessment/],
+	[JSON.stringify({ ...validReviewObject, architecture_fit_assessment: undefined }), /no architecture_fit_assessment/],
+	[JSON.stringify({ ...validReviewObject, architecture_fit_assessment: { fit_is_sufficient: "yes", missing_or_invalid_reasons: [] } }), /fit_is_sufficient must be a boolean/],
+	[JSON.stringify({ ...validReviewObject, architecture_fit_assessment: { ...frameOk.architecture_fit_assessment, fit_is_sufficient: false, missing_or_invalid_reasons: [] } }), /missing_or_invalid_reasons/],
+	[JSON.stringify({ ...validReviewObject, architecture_fit_assessment: { ...frameOk.architecture_fit_assessment, original_request: "<누가 바랐나>" } }), /architectureFitProblems/],
+	[JSON.stringify({ ...validReviewObject, architecture_fit_assessment: { ...frameOk.architecture_fit_assessment, parent_structure: "prod-app-01 서버만 수정" } }), /특정 서버·서비스 키·단일 파일명만 가리킴/],
+	[JSON.stringify({ ...validReviewObject, verdict: "CLEAN", architecture_fit_assessment: { fit_is_sufficient: false, original_request: "", parent_structure: "", acceptance_rationale: "", missing_or_invalid_reasons: ["architecture_fit 없음"] } }), /CLEAN is unavailable while architecture_fit_assessment is insufficient/],
 	[JSON.stringify({ ...validReviewObject, runtime_observed: undefined }), /runtime_observed/],
 	[JSON.stringify({ ...validReviewObject, coverage:[{ atom_id:"UNKNOWN", status:"COVERED" }] }), /unknown atom/],
 	[JSON.stringify({ ...validReviewObject, frame_assessment:{ scope_is_sufficient:"yes", missing_concerns:[] } }), /must be a boolean/],
@@ -120,6 +136,24 @@ for (const [raw, message] of invalidOutputCases) {
 		(error) => error?.kind === "invalid_output" && message.test(error.message),
 	);
 }
+assert.equal(
+	validateReviewOutput(JSON.stringify({
+		...validReviewObject,
+		verdict: "NOT_CLEAN",
+		architecture_fit_assessment: {
+			fit_is_sufficient: false,
+			original_request: "",
+			parent_structure: "prod-app-01",
+			acceptance_rationale: "",
+			missing_or_invalid_reasons: ["세 칸 누락"],
+		},
+	}), ["ATOM-1"], { stage: "planning" }).verdict,
+	"NOT_CLEAN",
+);
+assert.equal(
+	validateReviewOutput(JSON.stringify({ verdict: "CLEAN", coverage: [{ atom_id: "ATOM-1", status: "COVERED" }], findings: [], frame_assessment: { scope_is_sufficient: true, missing_concerns: [] }, runtime_observed: false }), ["ATOM-1"], { stage: "test" }).verdict,
+	"CLEAN",
+);
 assert.equal(
 	safeFailureReason("codex", new Error("provider authority policy denied")),
 	"codex reviewer process failed",

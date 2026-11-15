@@ -16,6 +16,7 @@ descendant workspaces. Those are two possible lineages, not one required chain.
 - Human-response observation and schedule ledger: `docs/guides/response-watch.md`, `docs/guides/regular-schedule-ledger.md`
 - Work instructions and execution records: `docs/guides/work-ledger.md`, `docs/guides/regular-schedule-ledger.md`
 - Session health: `docs/guides/session-health.md`
+- Architecture fit and original request check before fixes: `docs/guides/architecture-fit-before-fix.md`
 - Fork-specific additions belong in `FORK.md`, not this shared entrypoint.
 
 ## Mandatory Reads

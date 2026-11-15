@@ -171,7 +171,7 @@ export async function register({ root, config, role, ledger, opts, now }) {
 }
 
 const DEFAULT_PREAMBLE =
-  "업무 장부 항목 {id} ({role}): {title}\n결과를 이 파일에 쓴다: {result_file}\n지시서: {prompt}\n";
+  "업무 장부 항목 {id} ({role}): {title}\n결과를 이 파일에 쓴다: {result_file}\n지시서: {prompt}\n고치기 전 지시서·결과에 architecture_fit 세 칸(original_request · parent_structure · acceptance_rationale)을 확인한다(docs/guides/architecture-fit-before-fix.md).\n";
 const fill = (template, values) =>
   template.replace(/\{(\w+)\}/g, (all, key) =>
     Object.hasOwn(values, key) ? values[key] : all,

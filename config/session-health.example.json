@@ -5,7 +5,9 @@
   "baselineSha": "<full-40-character-commit-sha>",
   "idleMinutes": 30,
   "stoppedRequiresWork": false,
-  "staleHours": 2,
+  "staleMinutes": 90,
+  "repeatMinutes": 30,
+  "escalateAfterCount": 3,
   "escalateMinutes": 30,
   "responseWatchState": "/<private>/response-watch-state.json",
   "tokenEnv": "DISCORD_BOT_TOKEN",
@@ -35,10 +37,13 @@
         "codex",
         "opencode"
       ],
-      "allowedOverrides": []
+      "allowedOverrides": [],
+      "wakeDir": "/<workspace>/.agents/work/l4/wake",
+      "reportChannel": "<human-channel-id>"
     }
   ],
   "workLedger": "/<private>/work-ledger.yaml",
+  "workLedgerConfig": "/<private>/config/work-ledger.json",
   "regularSchedule": "/<private>/regular-schedule.yaml",
   "workWatch": {
     "root": "/<upstream-checkout>"

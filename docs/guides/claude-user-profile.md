@@ -28,9 +28,11 @@
 | `remote-identity-gate.js` | `Bash` | ADK 저장소 목록·공개 저장소 승인. 실제 Git 대상 경로도 검사 |
 | `gcs-guard.js` | `Bash` | ADK 버킷 정책. 정책 누락·손상 시 버킷 작업 차단 |
 | `prod-gateway-guard.js` | `Edit|Write` | 편집 입력의 운영 게이트웨이 값. 외부 정책 불필요 |
-| `subagent-spawn-guard.js` | `Task|Agent` | 역할 폴더의 `.claude/allow-subagents`와 생성 한도. 역할마다 카운터 분리 |
+| `subagent-spawn-guard.js` | `Task\|Agent` (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`), `SubagentStop` | 역할 폴더의 `.claude/allow-subagents`(`maxConcurrent`)와 동시 구동 한도. 역할마다 카운터 분리 |
 
 추가 사용자 훅은 비용 이벤트 일곱 개(`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Stop`, `PreCompact`), GPU 생성 확인(`PreToolUse`, `Bash`), 하위 모델 제한(`PreToolUse`, `Task|Agent|Workflow`)입니다. GPU 훅은 원본처럼 생성·재시도·백그라운드 실행에 확인을 요청합니다. 하위 모델 훅은 기본 `haiku`·`sonnet`과 `상위 목표:`·`막히면 올림:` 안내 줄을 요구합니다. 생성 허용 표지가 있어도 모델 검사는 함께 적용됩니다.
+
+`subagent-spawn-guard.js`는 세션 누적 생성 수가 아니라 **지금 동시에 돌고 있는 서브에이전트 수**만 제한합니다. `PreToolUse(Task|Agent)`가 `tool_use_id`별로 자리를 잡고(저장소·사용자 이중 등록 중복 제외), 앞단 완료(`PostToolUse`), 실패(`PostToolUseFailure`), 배경 실행(`run_in_background`) 종료(`PostToolUse(async_launched)`의 `agentId` → `SubagentStop`) 시 자리를 해제합니다. 종료 신호를 놓친 자리는 마지막 갱신 뒤 30분이 지나면 자동 해제되어 오래 연 세션이 잠기지 않습니다. `.claude/allow-subagents`는 `{ "maxConcurrent": 8 }`처럼 적으며(최대 40, 미지정 시 고정 4 상한 없이 `max(1, floor((MemTotal - 4GB) / 0.5GB / 2))`로 계산해 31GB 서버 기준 27로 잡히며 `reserveMemGb`·`memPerSubagentGb`·`estimatedSessions`·`defaultMaxConcurrentCap` 키로 조정 가능), 옛 `maxSpawns`는 `maxConcurrent`와 같은 뜻으로 읽고 `windowMinutes`와 옛 `{"spawns":N}` 카운터는 무시합니다. 또한 띄울 때 `/proc/meminfo`의 `MemAvailable`이 `reserveMemGb + max(1GB, memPerSubagentGb)`(기본 `5GB`) 미만이면 구동 수와 무관하게 차단합니다(`/proc/meminfo`가 없는 환경에서는 가용 메모리 검사만 건너뛰고 `MemTotal` 기준 상한만 적용).
 
 역할 모드의 커밋도 `P.commit`에 위임합니다. 가장 최근 기록 하나나 별도 단계 목록으로 판정하면 다른 작업의 기록과 새 단계 이름이 커밋을 막을 수 있기 때문입니다. 정책 모듈을 읽지 못하면 역할 모드에서는 차단합니다.
 
