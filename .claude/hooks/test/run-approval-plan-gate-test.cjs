@@ -77,6 +77,12 @@ function createValidPlan(root, overrides = {}) {
 		createdAt: new Date().toISOString(),
 		services: ["azure:containerapp:sample-web-prod"],
 		what_why: "샘플 웹 서비스를 v1 이미지로 갱신하여 기능 개선을 반영합니다.",
+		architecture_fit: {
+			original_request: "샘플 웹 서비스 기능 개선을 공통 배포 게이트 절차에 맞춰 운영 반영 요청",
+			parent_structure: "naia-adk 승인 계획 게이트 및 azure 컨테이너 앱 공통 배포 계층",
+			acceptance_rationale: "기존 공통 승인 게이트와 리비전 배포 절차를 그대로 확장해 단일 호스트 수동 패치를 만들지 않음",
+		},
+		changes: ["컨테이너 이미지 sample/web:v1 반영"],
 		changes: ["컨테이너 이미지 sample/web:v1 반영"],
 		scenario: [
 			{
@@ -408,6 +414,9 @@ test("7. approval-plan.mjs CLI (template, check, report, preapprove, step-ok) �
 	assert.equal(tplRes.status, 0, tplRes.stderr);
 	const tpl = JSON.parse(tplRes.stdout);
 	assert.equal(tpl.schema, "deploy-plan/v1");
+	assert.ok(tpl.architecture_fit && typeof tpl.architecture_fit === "object");
+	assert.ok("original_request" in tpl.architecture_fit && "parent_structure" in tpl.architecture_fit && "acceptance_rationale" in tpl.architecture_fit);
+	assert.ok(deployPlan.architectureFitProblems(tpl).length >= 3, "견본 <...> 자리표시자는 그대로 두면 막혀야 함");
 
 	// check
 	const chkRes = spawnSync(process.execPath, [workspaceScript, "check", planFile], { cwd: root, env, encoding: "utf8" });
@@ -1722,6 +1731,11 @@ function setupReadOnlyOpsWorkspace(t, {
 		createdAt: new Date().toISOString(),
 		services: [service],
 		what_why: "샘플 운영 VM 상태 읽기 점검",
+		architecture_fit: {
+			original_request: "운영 VM 상태를 읽기 전용 계약 범위 안에서 안전하게 점검 요청",
+			parent_structure: "naia-adk readOnlyScripts 무코드 읽기 전용 검증 계층 및 승인 게이트",
+			acceptance_rationale: "기존 승인 계획 게이트의 readOnlyScripts 표준 계층을 확장해 임의 일회성 명령을 막음",
+		},
 		changes: ["변경 없음(읽기 전용 상태 확인)"],
 		scenario: [
 			{
@@ -2809,6 +2823,11 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 		createdAt: new Date().toISOString(),
 		services: [opSvc],
 		what_why: "외부 cwd 실행에서도 소속 저장소 정책으로 통제되는지 확인하는 배포 작업입니다.",
+		architecture_fit: {
+			original_request: "외부 작업 폴더 실행에서도 소속 저장소 승인 정책을 일관되게 강제해 달라는 요청",
+			parent_structure: "naia-adk 저장소 경계 정책 및 승인 계획 게이트 계층",
+			acceptance_rationale: "기존 deploy-guard 와 승인 계획 게이트의 루트 해석 계층을 그대로 써서 우회 예외를 두지 않음",
+		},
 		changes: ["scripts/op.sh s2 고정 대본 단계 실행"],
 		scenario: [
 			{
@@ -3273,6 +3292,11 @@ test("2회차: sudo 기본 허용·거부 목록 (비파괴 조회 통과·상�
 		createdAt: new Date().toISOString(),
 		services: ["local:systemd:sample"],
 		what_why: "sample 서비스 재시작 승인 경로 확인",
+		architecture_fit: {
+			original_request: "로컬 systemd 유닛 재시작도 공통 승인 게이트를 거치도록 검증 요청",
+			parent_structure: "naia-adk 로컬 systemd 분류 계층 및 공통 승인 계획 게이트",
+			acceptance_rationale: "개별 호스트 수동 예외를 늘리지 않고 local:systemd 공통 분류와 승인 게이트 파이프라인에 통합함",
+		},
 		changes: ["sudo systemctl restart sample 실행"],
 		scenario: [
 			{
@@ -3311,4 +3335,106 @@ test("2회차: sudo 기본 허용·거부 목록 (비파괴 조회 통과·상�
 	}
 	assert.equal(runHook(planCmd, repo, "sess-sudo-approved"), null, "승인된 계획서의 sudo systemctl restart 명령은 통과해야 함");
 	assert.equal(runHook("sudo systemctl restart sample --no-block", repo, "sess-sudo-approved")?.decision, "block", "승인된 명령과 다른 글자가 붙으면 막혀야 함");
+});
+
+test("architecture_fit(최초 요구·붙는 상위 구조·수용 방식) 통과·차단 및 CLI 검사", (t) => {
+	const { root, stateDir } = makeWorkspace(t);
+	writeGateConfig(root);
+	const { planFile } = createValidPlan(root);
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
+	const base = JSON.parse(fs.readFileSync(planFile, "utf8"));
+	assert.deepEqual(deployPlan.formProblems(base), [], "기본 계획서는 architecture_fit 포함 시 양식 통과해야 함");
+	assert.ok(deployPlan.CRITERIA.some(([id]) => id === "architecture_fit"), "적대 리뷰 기준에 architecture_fit 포함");
+
+	const report = deployPlan.renderReport(base, "a".repeat(64));
+	assert.match(report, /최초 요구:/);
+	assert.match(report, /붙는 상위 구조:/);
+	assert.match(report, /수용 방식:/);
+
+	// 1. 누락·비객체·빈 칸·짧은 칸·견본 자리표시자 차단
+	const missingPlan = { ...base };
+	delete missingPlan.architecture_fit;
+	assert.ok(deployPlan.formProblems(missingPlan).some((m) => m.includes("architecture_fit")), "architecture_fit 자체가 없으면 차단");
+
+	for (const badFit of [null, [], "text"]) {
+		assert.ok(deployPlan.formProblems({ ...base, architecture_fit: badFit }).some((m) => m.includes("architecture_fit")), "architecture_fit 이 객체가 아니면 차단");
+	}
+
+	const shortPlan = {
+		...base,
+		architecture_fit: { original_request: "짧음", parent_structure: "짧다", acceptance_rationale: "그냥 수정" },
+	};
+	const shortMsgs = deployPlan.formProblems(shortPlan);
+	assert.equal(shortMsgs.filter((m) => m.startsWith("architecture_fit.")).length, 3, "세 칸 모두 최소 길이 미만이면 각각 차단");
+
+	const placeholderPlan = {
+		...base,
+		architecture_fit: {
+			original_request: "<누가 무엇을 바랐는지 최초 요구 원문 요지 (최소 10자)>",
+			parent_structure: "<붙는 플랫폼·ADK 업스트림·제품 상위 구조>",
+			acceptance_rationale: "<이 상위 구조가 기존 확장 또는 새 층으로 받아들이는 근거>",
+		},
+	};
+	const phMsgs = deployPlan.formProblems(placeholderPlan);
+	assert.equal(phMsgs.filter((m) => m.includes("견본 문구")).length, 3, "견본 <...> 문구 그대로면 세 칸 모두 차단");
+
+	// 2. (b)가 특정 서버·IP·서비스 키·단일 파일명뿐이면 차단
+	const narrowParents = [
+		"prod-app-01",
+		"prod-app-01 서버만 수정",
+		"/etc/systemd/system/sample.service 파일만 수정",
+		"deploy-plan.js 한 파일",
+		"azure:containerapp:sample-web-prod",
+		"azure:containerapp:sample-web-prod 서비스만",
+		"192.0.2.40 호스트 재시작",
+		"app-01.internal 호스트의 nginx.conf만 변경",
+		"단일 VM 서비스 배포",
+	];
+	for (const narrow of narrowParents) {
+		const probs = deployPlan.formProblems({
+			...base,
+			architecture_fit: { ...base.architecture_fit, parent_structure: narrow },
+		});
+		assert.ok(
+			probs.some((m) => m.includes("특정 서버·서비스 키·단일 파일명만 가리킴")),
+			`좁은 (b) '${narrow}' 는 차단돼야 함: ${JSON.stringify(probs)}`,
+		);
+	}
+
+	// 3. 경로·서비스를 언급하더라도 붙는 상위 구조 설명이 함께 있으면 통과
+	const validParents = [
+		"naia-adk 승인 계획 게이트 및 azure 컨테이너 앱 공통 배포 계층",
+		"naia-adk/.claude/hooks/lib/deploy-plan.js 승인 계획 게이트 공통 계층",
+		"플랫폼 공통 systemd 배포 표준 및 승인 계획 게이트",
+	];
+	for (const parent of validParents) {
+		const probs = deployPlan.formProblems({
+			...base,
+			architecture_fit: { ...base.architecture_fit, parent_structure: parent },
+		});
+		assert.deepEqual(probs, [], `상위 구조 '${parent}' 는 통과해야 함`);
+	}
+
+	// 4. approval-plan.mjs CLI check 연동 확인(좁은 (b) 차단 → 정상 복구 시 통과) + 적대 리뷰 architecture_fit FAIL 차단
+	const badGatesDir = path.join(root, ".agents", "progress", "bad-arch-fit", "gates");
+	fs.mkdirSync(badGatesDir, { recursive: true });
+	const badFile = path.join(badGatesDir, "deploy-plan.json");
+	fs.writeFileSync(badFile, JSON.stringify({
+		...base,
+		architecture_fit: { ...base.architecture_fit, parent_structure: "/opt/sample/deploy.sh 스크립트 파일 수정" },
+	}, null, 2));
+	const badChk = spawnSync(process.execPath, [workspaceScript, "check", badFile], { cwd: root, env, encoding: "utf8" });
+	assert.notEqual(badChk.status, 0, "좁은 parent_structure 계획서는 CLI check 에서 실패해야 함");
+	assert.match(badChk.stdout, /특정 서버·서비스 키·단일 파일명만 가리킴/);
+
+	writePassingReviewReceipt(root, planFile, { fail: ["architecture_fit"], open: 1 });
+	const failRevChk = spawnSync(process.execPath, [workspaceScript, "check", planFile], { cwd: root, env, encoding: "utf8" });
+	assert.notEqual(failRevChk.status, 0, "적대 리뷰 architecture_fit FAIL 시 check 통과 불가");
+
+	writePassingReviewReceipt(root, planFile);
+	const goodChk = spawnSync(process.execPath, [workspaceScript, "check", planFile], { cwd: root, env, encoding: "utf8" });
+	assert.equal(goodChk.status, 0, `${goodChk.stdout}\n${goodChk.stderr}`);
+	assert.match(goodChk.stdout, /양식: 통과/);
+	assert.match(goodChk.stdout, /적대 리뷰: 통과/);
 });

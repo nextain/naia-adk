@@ -49,6 +49,7 @@ const CRITERIA = [
 	["impact", "운영 영향(중단 시간·사용자 영향)이 정확한가"],
 	["honesty", "양식 정직성: 위험을 축소하거나 숨기지 않았는가"],
 	["incident_safety", "장애 시 선조치(incident.actions)가 있으면 그것이 상황을 더 나쁘게 만들 수 없는가. 비어 있으면([]) 위반이 아니다(선조치를 새로 요구하지 않는다)"],
+	["architecture_fit", "상위 구조·최초 요구 적합성: architecture_fit(original_request, parent_structure, acceptance_rationale)이 최초 요구 원문, 붙는 플랫폼·ADK·제품 구조(단일 서버·파일명 나열 아님), 수용 근거와 실제 맞고 일시 땜빵이 아닌가"],
 ];
 // 지적 분류. 차단 지적만 FAIL·남은 지적에 센다. 계획에 없는 새 장치를 더하라는 요구는 참고로만 남긴다.
 const BLOCKING_KINDS = [
@@ -57,6 +58,7 @@ const BLOCKING_KINDS = [
 	"비밀: 비밀·인증 정보 노출",
 	"위험숨김: 위험을 숨기거나 축소함(장치가 없어 생기는 위험이 계획서 위험·영향·남은 위험 칸에 적히지 않은 경우 포함)",
 	"선조치악화: 적힌 장애 선조치가 상황을 더 나쁘게 만듦",
+	"구조이탈: 단일 카드·서버·파일만 고치는 일시 땜빵이거나 architecture_fit 이 최초 요구·상위 구조와 어긋남",
 ];
 const ADVISORY_EXAMPLES = "자동 복구·자동 되돌리기, 추가 백업 사본, 임시 검증 컨테이너, 라우팅 통제, 새 잠금·감시 장치, 범위 밖 스크립트 개조, 승인 없이 도는 선조치 추가";
 
@@ -74,6 +76,79 @@ function readJson(file) {
 
 const str = (v, min = 1) => typeof v === "string" && v.trim().length >= min;
 const strList = (v, min = 1) => Array.isArray(v) && v.length > 0 && v.every((x) => str(x, min));
+
+const NARROW_WRAPPER_WORDS = new Set([
+	"서버", "호스트", "노드", "인스턴스", "기기", "장비", "머신", "서비스", "유닛", "컨테이너",
+	"파일", "스크립트", "대본", "설정", "문서", "경로", "특정", "개별", "단독", "단일",
+	"한", "하나", "해당", "이", "그", "것", "만", "뿐", "쪽", "수정", "고침", "변경",
+	"패치", "재시작", "배포", "점검", "확인", "추가", "삭제", "및", "와", "과", "의",
+	"server", "servers", "host", "hosts", "node", "nodes", "instance", "vm", "container",
+	"service", "services", "unit", "units", "file", "files", "script", "scripts",
+	"config", "cfg", "path", "only", "single", "just", "one", "this", "that", "the",
+	"a", "an", "in", "on", "at", "of", "to", "for", "and", "fix", "patch", "edit",
+	"update", "restart", "deploy", "check", "specific", "individual",
+]);
+const KOREAN_PARTICLES_RE = /(?:에서만|에서는|에서도|에서|으로|까지|부터|처럼|조차|밖에|만|뿐|의|에|로|을|를|은|는|이|가|와|과|도)$/;
+const COMMON_FILE_EXT_RE = /(?:^|[\s,.;:()[\]{}"'<>~·|/])[\w.-]+\.(?:js|cjs|mjs|ts|tsx|jsx|py|sh|bash|zsh|yaml|yml|json|toml|ini|conf|cfg|service|socket|timer|unit|env|sql|tf|md|txt|lock|log)(?=$|[\s,.;:()[\]{}"'<>~·|/\u3131-\uD7A3])/gi;
+
+function isTemplatePlaceholder(value) {
+	if (typeof value !== "string") return false;
+	return /^<[^<>]+>$/.test(value.trim());
+}
+
+/** (b) 붙는 상위 구조가 특정 서버·서비스 키·단일 파일명만 가리키는지 검사한다. */
+function isNarrowServerOrFileOnly(value, services = []) {
+	if (typeof value !== "string") return true;
+	const trimmed = value.trim();
+	if (!trimmed || !/\s/.test(trimmed)) return true;
+	const norm = trimmed.toLowerCase();
+	if (Array.isArray(services) && services.some((s) => typeof s === "string" && s.trim() && s.trim().toLowerCase() === norm)) return true;
+
+	let stripped = trimmed;
+	for (const svc of Array.isArray(services) ? services : []) {
+		if (typeof svc !== "string" || !svc.trim()) continue;
+		const esc = svc.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		stripped = stripped.replace(new RegExp(esc, "gi"), " ");
+	}
+	stripped = stripped
+		.replace(/https?:\/\/\S+/gi, " ")
+		.replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b/g, " ")
+		.replace(/\b[a-z0-9_-]+:[a-z0-9_.:-]+\b/gi, " ")
+		.replace(/(?:~\/|\/|\.\.?\/|[a-zA-Z0-9_.-]+\/)[^\s,)"']+/g, " ")
+		.replace(COMMON_FILE_EXT_RE, " ")
+		.replace(/\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|internal|local|lan|example|svc|cluster|kr|ai|cloud)\b/gi, " ")
+		.replace(/\b(?:prod|stg|staging|dev|test|srv|vm|node|host|db|web|app|api|worker|redis|pg)-[a-z0-9-]+\b/gi, " ")
+		.replace(/\b[a-z][a-z-]*\d+(?:-[a-z0-9]+)*\b/gi, " ");
+
+	const tokens = stripped
+		.split(/[\s,.;:()[\]{}"'<>~·/+|=!?&]+/)
+		.map((t) => t.replace(/^-+|-+$/g, "").trim().toLowerCase().replace(KOREAN_PARTICLES_RE, ""))
+		.filter((t) => t.length > 0 && !/^\d+$/.test(t) && !NARROW_WRAPPER_WORDS.has(t));
+
+	const totalChars = tokens.reduce((sum, t) => sum + t.length, 0);
+	return tokens.length < 2 || totalChars < 6;
+}
+
+/** (a) 최초 요구 원문, (b) 붙는 상위 구조, (c) 상위 구조 수용 방식을 모두 검사한다. */
+function architectureFitProblems(plan) {
+	const fit = plan?.architecture_fit;
+	if (!fit || typeof fit !== "object" || Array.isArray(fit)) {
+		return ["architecture_fit(최초 요구 원문·붙는 상위 구조·수용 방식) 없음"];
+	}
+	const p = [];
+	if (!str(fit.original_request, 10) || isTemplatePlaceholder(fit.original_request)) {
+		p.push("architecture_fit.original_request(최초 요구 원문, 최소 10자) 없음 또는 견본 문구 그대로임");
+	}
+	if (!str(fit.parent_structure, 8) || isTemplatePlaceholder(fit.parent_structure)) {
+		p.push("architecture_fit.parent_structure(붙는 플랫폼·ADK·제품 상위 구조, 최소 8자) 없음 또는 견본 문구 그대로임");
+	} else if (isNarrowServerOrFileOnly(fit.parent_structure, plan?.services)) {
+		p.push("architecture_fit.parent_structure 가 특정 서버·서비스 키·단일 파일명만 가리킴(붙는 상위 플랫폼·ADK·제품 구조가 필요)");
+	}
+	if (!str(fit.acceptance_rationale, 10) || isTemplatePlaceholder(fit.acceptance_rationale)) {
+		p.push("architecture_fit.acceptance_rationale(상위 구조 수용 방식·기존 확장/새 층·땜빵 아님 근거, 최소 10자) 없음 또는 견본 문구 그대로임");
+	}
+	return p;
+}
 
 // 승인자 위험 수용: security 기준 하나만, 이미 공개된 같은 값, 승인자 결정 글 주소, 끝나는 날이 있을 때만. 다른 기준 FAIL 은 그대로 막는다.
 const RISK_ACCEPTANCE_MAX_DAYS = 7;
@@ -192,6 +267,7 @@ function formProblems(plan) {
 	if (!Number.isFinite(at)) p.push("createdAt(ISO 시각) 없음");
 	if (!strList(plan.services)) p.push("services(운영 서비스 키 목록) 없음");
 	if (!str(plan.what_why, 10)) p.push("what_why(무엇을 왜 배포하나) 없음");
+	p.push(...architectureFitProblems(plan));
 	if (!strList(plan.changes, 3)) p.push("changes(바뀌는 것 목록) 없음");
 	const steps = Array.isArray(plan.scenario) ? plan.scenario : [];
 	if (steps.length === 0) p.push("scenario(단계 목록) 없음");
@@ -852,7 +928,7 @@ function reviewBodyProblems(text, sha, acceptSecurity = false) {
 	return { ok: problems.length === 0, riskAccepted: accepted.length > 0, problems, summary, openFindings: open ? Number(open[1]) : null, advisoryFindings: advisory ? Number(advisory[1]) : advisoryLines.length, body, prompt_sha256: tr?.prompt };
 }
 
-/** 리뷰 결과의 무결성·대상·작성자 분리·아홉 기준을 모두 확인한다. 새 모양(rotation:true)은 차례 리뷰어 1명, 옛 모양은 예전 구성(muse→argon 또는 codex 1명, sol·argon→2명)과 다르면 거절한다. */
+/** 리뷰 결과의 무결성·대상·작성자 분리·열 기준을 모두 확인한다. 새 모양(rotation:true)은 차례 리뷰어 1명, 옛 모양은 예전 구성(muse→argon 또는 codex 1명, sol·argon→2명)과 다르면 거절한다. */
 function reviewProblems(gatesDir, sha, root) {
 	const base = root ? path.resolve(root) : resolveRepoRoot(gatesDir);
 	const rec = readJson(path.join(gatesDir, REVIEW_FILE));
@@ -1262,6 +1338,11 @@ function renderReport(plan, sha, review) {
 	const L = [];
 	L.push(`[운영 배포 승인 요청] ${plan.planId}  (계획서 sha ${sha.slice(0, 12)})`);
 	L.push(`무엇을 왜: ${plan.what_why}`);
+	if (plan.architecture_fit && typeof plan.architecture_fit === "object") {
+		L.push(`최초 요구: ${plan.architecture_fit.original_request || ""}`);
+		L.push(`붙는 상위 구조: ${plan.architecture_fit.parent_structure || ""}`);
+		L.push(`수용 방식: ${plan.architecture_fit.acceptance_rationale || ""}`);
+	}
 	L.push(`서비스: ${(plan.services || []).join(", ")}`);
 	L.push("바뀌는 것:", ...(plan.changes || []).map((c) => `  - ${c}`));
 	L.push("시나리오:");
@@ -1555,6 +1636,11 @@ const TEMPLATE = {
 	createdAt: "<ISO 시각>",
 	services: ["<deploy-guard 가 알려 준 운영 서비스 키, 예: azure:containerapp:my-app-prod>"],
 	what_why: "<무엇을 왜 배포하나 한두 줄>",
+	architecture_fit: {
+		original_request: "<누가 무엇을 바랐는지 최초 요구 원문 요지 (최소 10자)>",
+		parent_structure: "<붙는 플랫폼·ADK 업스트림·제품 상위 구조, 예: naia-adk 승인 계획 게이트 및 공통 배포 계층>",
+		acceptance_rationale: "<이 상위 구조가 기존 확장 또는 새 공통 층으로 이 변경을 받아들이는 이유, 일시 땜빵이 아닌 근거>",
+	},
 	changes: ["<바뀌는 것 하나씩: 코드 판, 설정, 방화벽 규칙 등>"],
 	scenario: [
 		{ id: "s1", title: "<단계 이름>", commands: ["<실행할 명령 전문. 이 글자 그대로 실행해야 통과>"], success_check: "<이 단계 성공 확인 방법과 기대값>", on_failure: "<실패 시 갈림길: 예) r1 로 되돌리고 보고>" },
@@ -1693,5 +1779,5 @@ function referencedFiles(command, cwd) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
+	withStateLock, evaluate, formProblems, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile,
 };
