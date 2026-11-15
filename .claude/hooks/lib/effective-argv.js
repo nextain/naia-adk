@@ -1978,6 +1978,380 @@ function gitCommandDirectory(command, sessionCwd, subcommand) {
 	return cmds.length ? path.resolve(cmds[cmds.length - 1].dir) : path.resolve(sessionCwd || process.cwd());
 }
 
+const CLAUDE_VALUE_FLAGS = new Set([
+	"-m", "--model", "--fallback-model", "--append-system-prompt", "--system-prompt",
+	"--mcp-config", "--permission-mode", "--output-format", "--input-format",
+	"--max-turns", "--add-dir", "--allowedTools", "--disallowedTools", "--tools",
+	"--resume", "-r", "--session-id", "--agents", "--agent", "--betas", "--settings",
+]);
+
+function splitClausesWithAsync(command) {
+	const s = String(command || "");
+	const clauses = [];
+	let tokens = [];
+	let token = "";
+	let quote = null;
+	let escaped = false;
+	const groups = [];
+	let groupSeq = 0;
+	let lastClosedScope = null;
+	const heredocs = [];
+
+	const flushToken = () => {
+		if (!token) return;
+		if (tokens.length === 0) tokens.scope = groups.join(".");
+		tokens.push(token);
+		token = "";
+	};
+	const flushClause = (bg = false) => {
+		flushToken();
+		if (tokens.length) {
+			tokens.bg = Boolean(bg);
+			clauses.push(tokens);
+		}
+		tokens = [];
+	};
+
+	for (let i = 0; i < s.length; i++) {
+		const ch = s[i];
+		if (escaped) {
+			if (ch !== "\n") token += ch;
+			escaped = false;
+			continue;
+		}
+		if (quote === "$'") {
+			if (ch === "\\") {
+				token += s[i + 1] === "'" ? "'" : `\\${s[i + 1] ?? ""}`;
+				i++;
+				continue;
+			}
+			if (ch === "'") quote = null;
+			else token += ch;
+			continue;
+		}
+		if (ch === "\\" && quote === '"' && !/[$`"\\\n]/.test(s[i + 1] ?? "")) {
+			token += ch;
+			continue;
+		}
+		if (ch === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+		if (quote) {
+			if (ch === quote) quote = null;
+			else token += ch;
+			continue;
+		}
+		if (ch === "$" && s[i + 1] === "'") {
+			quote = "$'";
+			i++;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			continue;
+		}
+		if (ch === "#" && token === "") {
+			const nl = s.indexOf("\n", i);
+			i = (nl < 0 ? s.length : nl) - 1;
+			continue;
+		}
+		if (ch === "<" && s[i + 1] === "<" && s[i + 2] !== "<" && s[i - 1] !== "<") {
+			const m = s.slice(i).match(/^<<(-?)[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_.-]*)\2/);
+			if (m) heredocs.push({ delim: m[3], strip: m[1] === "-" });
+		}
+		if (ch === "\n") {
+			flushClause(false);
+			lastClosedScope = null;
+			while (heredocs.length) {
+				const { delim, strip } = heredocs.shift();
+				for (;;) {
+					const end = s.indexOf("\n", i + 1);
+					const line = s.slice(i + 1, end < 0 ? s.length : end);
+					i = end < 0 ? s.length : end;
+					const bare = strip ? line.replace(/^\t+/, "") : line;
+					if (bare.trim() === delim || end < 0) break;
+				}
+			}
+			continue;
+		}
+		if (/\s/.test(ch)) {
+			flushToken();
+			continue;
+		}
+		// Keep redirections like 2>&1, <&0, &>, >| inside tokens rather than splitting as '&' or '|'.
+		if ((ch === "&" && /[<>]$/.test(token)) || (ch === "|" && />$/.test(token) && !/>>$/.test(token))) {
+			token += ch;
+			continue;
+		}
+		if (ch === "&" && s[i + 1] === ">") {
+			flushToken();
+			token = "&";
+			continue;
+		}
+		if (ch === "&" && s[i + 1] !== "&") {
+			if (tokens.length || token) {
+				flushClause(true);
+			} else if (lastClosedScope) {
+				for (const prev of clauses) {
+					if (prev.scope === lastClosedScope || String(prev.scope || "").startsWith(`${lastClosedScope}.`)) {
+						prev.bg = true;
+					}
+				}
+			}
+			lastClosedScope = null;
+			continue;
+		}
+		if (ch === "&" && s[i + 1] === "&") {
+			flushClause(false);
+			lastClosedScope = null;
+			i++;
+			continue;
+		}
+		if (ch === "|" && (s[i + 1] === "|" || s[i + 1] === "&")) {
+			flushClause(false);
+			lastClosedScope = null;
+			i++;
+			continue;
+		}
+		if (ch === ";" || ch === "|") {
+			flushClause(false);
+			lastClosedScope = null;
+			continue;
+		}
+		if (ch === "(") {
+			flushClause(false);
+			groups.push(++groupSeq);
+			lastClosedScope = null;
+			continue;
+		}
+		if (ch === ")") {
+			flushClause(false);
+			lastClosedScope = groups.join(".");
+			groups.pop();
+			continue;
+		}
+		lastClosedScope = null;
+		token += ch;
+	}
+	if (escaped) token += "\\";
+	flushClause(false);
+	for (let idx = 0; idx < clauses.length - 1; idx++) {
+		const nextFirst = clauses[idx + 1][0];
+		if (nextFirst === "disown") clauses[idx].bg = true;
+	}
+	return clauses;
+}
+
+function stripRedirectionTokens(rawTokens) {
+	const out = [];
+	for (let i = 0; i < rawTokens.length; i++) {
+		const tok = rawTokens[i];
+		if (/^(?:\d*(?:>>?|<<?|<>|>&|<&|>\||<<<)|&>>?)$/.test(tok)) {
+			i++;
+			continue;
+		}
+		if (/^(?:\d*(?:>>?|<<?|<>|>&|<&|>\||<<<)|&>>?).+/.test(tok)) {
+			continue;
+		}
+		out.push(tok);
+	}
+	return out;
+}
+
+function detectDirectWorkerCli(argv) {
+	if (!argv || !argv.length) return null;
+	let idx = 0;
+	let head = path.basename(String(argv[0] || "")).toLowerCase();
+	if (/^(?:node|nodejs)(?:\.exe)?$/.test(head) && argv[1]) {
+		const scriptBase = path.basename(String(argv[1]));
+		if (/^(?:spawn-worker\.mjs|cli\.mjs|worker-runner-adapter\.sh)$/i.test(scriptBase)) return null;
+		head = scriptBase.toLowerCase();
+		idx = 1;
+	}
+	const rest = argv.slice(idx + 1);
+	if (/^agy(?:-cli)?(?:\.(?:c?js|mjs|sh))?$/.test(head)) return "agy";
+	if (/^codex(?:\.(?:c?js|mjs|sh))?$/.test(head)) return "codex";
+	if (/^claude(?:-code)?(?:\.(?:c?js|mjs|sh))?$/.test(head)) {
+		for (let i = 0; i < rest.length; i++) {
+			const arg = rest[i];
+			if (arg === "--") break;
+			if (arg === "-p" || arg === "--print") return "claude -p";
+			if (/^-[A-Za-z]{2,}$/.test(arg) && arg.includes("p")) return "claude -p";
+			if (CLAUDE_VALUE_FLAGS.has(arg)) {
+				i++;
+				continue;
+			}
+		}
+		return null;
+	}
+	if (/^muse(?:-bin)?(?:-[\d.]+)?(?:\.(?:c?js|mjs|sh))?$/.test(head)) {
+		if (rest.includes("exec")) return "muse exec";
+	}
+	return null;
+}
+
+function checkDetachedWorkerCommand(command, opts = {}) {
+	const depth = opts.depth || 0;
+	if (depth > 6 || !command) return null;
+	const inheritedDetach = opts.inheritedDetach || null;
+	const clauses = splitClausesWithAsync(command);
+
+	for (const rawClause of clauses) {
+		const tokens = stripRedirectionTokens(rawClause);
+		if (!tokens.length) continue;
+		let i = 0;
+		let detach = null;
+
+		while (i < tokens.length) {
+			const t = tokens[i];
+			if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t) || /^(?:!|\{|time)$/.test(t)) {
+				i++;
+				continue;
+			}
+			const base = path.basename(t).toLowerCase();
+			if (base === "nohup") {
+				detach = detach || "nohup";
+				i++;
+				continue;
+			}
+			if (base === "setsid") {
+				detach = detach || "setsid";
+				i++;
+				while (i < tokens.length && /^-[cfw]+$/.test(tokens[i])) i++;
+				continue;
+			}
+			if (base === "env") {
+				i++;
+				while (i < tokens.length) {
+					if (tokens[i] === "-u" || tokens[i] === "--unset" || tokens[i] === "-C" || tokens[i] === "--chdir") {
+						i += 2;
+						continue;
+					}
+					if (tokens[i].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) {
+						i++;
+						continue;
+					}
+					break;
+				}
+				continue;
+			}
+			if (base === "command" || base === "exec" || base === "builtin") {
+				i++;
+				while (i < tokens.length && tokens[i].startsWith("-")) i++;
+				continue;
+			}
+			if (base === "nice" || base === "ionice" || base === "chrt" || base === "stdbuf") {
+				i++;
+				while (i < tokens.length && tokens[i].startsWith("-")) {
+					if (/^-(?:n|c|p)$/.test(tokens[i])) i += 2;
+					else i++;
+				}
+				continue;
+			}
+			if (base === "timeout") {
+				i++;
+				while (i < tokens.length && tokens[i].startsWith("-")) {
+					if (/^-(?:k|s|--kill-after|--signal)$/.test(tokens[i])) i += 2;
+					else i++;
+				}
+				if (i < tokens.length) i++;
+				continue;
+			}
+			if (base === "npx") {
+				i++;
+				while (i < tokens.length && /^-(?:y|-yes|q|-quiet)$/.test(tokens[i])) i++;
+				continue;
+			}
+			if (base === "tmux" && (tokens[i + 1] === "new" || tokens[i + 1] === "new-session")) {
+				let k = i + 2;
+				let detachedTmux = false;
+				while (k < tokens.length && tokens[k].startsWith("-")) {
+					if (tokens[k] === "-d" || (/^-[A-Za-z]+$/.test(tokens[k]) && tokens[k].includes("d"))) detachedTmux = true;
+					if (/^-[stcnPFxXy]$/.test(tokens[k])) k += 2;
+					else k++;
+				}
+				if (detachedTmux) {
+					detach = detach || "tmux -d";
+					i = k;
+					if (i < tokens.length && tokens.length - i === 1) {
+						const nested = checkDetachedWorkerCommand(tokens[i], { inheritedDetach: detach, depth: depth + 1 });
+						if (nested) return nested;
+					}
+					continue;
+				}
+			}
+			if (base === "screen") {
+				let k = i + 1;
+				let detachedScreen = false;
+				while (k < tokens.length && tokens[k].startsWith("-")) {
+					if (/^-[A-Za-z]*d[A-Za-z]*m[A-Za-z]*$/.test(tokens[k]) || tokens[k] === "-d") detachedScreen = true;
+					if (/^-[A-Za-z]*[Stc]$/.test(tokens[k]) || tokens[k] === "-Logfile") k += 2;
+					else k++;
+				}
+				if (detachedScreen) {
+					detach = detach || "screen -dm";
+					i = k;
+					if (i < tokens.length && tokens.length - i === 1) {
+						const nested = checkDetachedWorkerCommand(tokens[i], { inheritedDetach: detach, depth: depth + 1 });
+						if (nested) return nested;
+					}
+					continue;
+				}
+			}
+			break;
+		}
+
+		const rest = tokens.slice(i);
+		if (!rest.length) continue;
+		const effectiveDetach = detach || (rawClause.bg ? "&" : null) || inheritedDetach;
+		const headBase = path.basename(rest[0]).toLowerCase();
+
+		// Sanctioned standard worker launchers pass when invoked normally.
+		if (
+			/(?:^|[\\/])(?:spawn-worker\.mjs|worker-runner[\\/]cli\.mjs|worker-runner-adapter\.sh)$/i.test(rest[0]) ||
+			(/^(?:node|nodejs|bash|sh)(?:\.exe)?$/i.test(headBase) &&
+				rest[1] &&
+				/(?:^|[\\/])(?:spawn-worker\.mjs|worker-runner[\\/]cli\.mjs|worker-runner-adapter\.sh)$/i.test(rest[1]))
+		) {
+			continue;
+		}
+
+		// Recurse into shell -c '<script>' invocations.
+		if (SHELLS.test(headBase)) {
+			for (let k = 1; k < rest.length; k++) {
+				const flag = rest[k];
+				if (flag === "-c" || (/^-[A-Za-z]+c$/.test(flag))) {
+					if (rest[k + 1]) {
+						const nested = checkDetachedWorkerCommand(rest[k + 1], {
+							inheritedDetach: effectiveDetach,
+							depth: depth + 1,
+						});
+						if (nested) return nested;
+					}
+					break;
+				}
+				if (!flag.startsWith("-")) break;
+			}
+			continue;
+		}
+
+		const worker = detectDirectWorkerCli(rest);
+		if (worker && effectiveDetach) {
+			return {
+				worker,
+				detach: effectiveDetach,
+				reason:
+					`[Harness] 감시 밖 일꾼 직접 띄우기 차단: \`${worker}\` (${effectiveDetach} 분리 실행)\n` +
+					"nohup·setsid·백그라운드(&)로 agy·codex·claude -p·muse exec 를 직접 띄우면 work-watch 감시 등록이 누락되어 멈추거나 죽어도 아무도 깨어나지 않습니다.\n" +
+					"표준 일꾼 실행 대본(자동 등록 + 다중 마운트 디스크 바닥선 검사)을 사용하세요:\n" +
+					"  node scripts/worker-runner/spawn-worker.mjs --id <작업ID> --role <역할> --work-dir <작업폴더> --watch-dir <감시폴더> --result-file <결과파일> -- <일꾼 명령...>",
+			};
+		}
+	}
+	return null;
+}
+
 module.exports = {
 	withLiteralValuesCache,
 	readCachedText,
@@ -2009,5 +2383,6 @@ module.exports = {
 	interpreterProgram,
 	gitClauseDirectory,
 	gitCommandDirectory,
+	checkDetachedWorkerCommand,
 };
 

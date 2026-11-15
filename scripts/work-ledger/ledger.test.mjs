@@ -345,7 +345,7 @@ test("concurrent watches deduplicate and corrupted state alerts", async () => {
     1,
   );
 });
-test("config report applies after add and roles keep independent replies", async () => {
+test("config report applies after add and unrecorded replies do not close human posts without ledger entry", async () => {
   const root = await setup();
   const conf = {
     roles: [
@@ -387,6 +387,35 @@ test("config report applies after add and roles keep independent replies", async
   );
   assert.deepEqual(
     result.wakes
+      .filter((w) => w.reason === "장부에 없는 사람 글")
+      .map((w) => w.role),
+    ["secretary", "reviewer"],
+  );
+  await main([
+    "add",
+    "--root",
+    root,
+    "--role",
+    "secretary",
+    "--id",
+    "q-item",
+    "--title",
+    "확인",
+    "--due",
+    "2026-11-08T14:00:00Z",
+    "--channel",
+    "channel",
+    "--msg-id",
+    "question",
+  ]);
+  const afterRecord = await watch({
+    root,
+    config: conf,
+    adapter,
+    now: now + 31 * 60000,
+  });
+  assert.deepEqual(
+    afterRecord.wakes
       .filter((w) => w.reason === "장부에 없는 사람 글")
       .map((w) => w.role),
     ["reviewer"],
@@ -566,8 +595,8 @@ test("role routing limits human wakes and optional later posts acknowledge", asy
   assert.deepEqual(result.wakes.map(w => w.id), ["human-mention", "human-array", "human-reply", "human-external-reply", "human-everyone", "human-here", "human-other", "human-both", "human-direct", "human-direct-other"]);
   const second = await setup();
   conf.roles[0].answered_by_any_role_post_after = true;
-  const acknowledged = await watch({ root: second, config: conf, adapter, now });
-  assert.deepEqual(acknowledged.wakes.map(w => w.id), ["human-direct", "human-direct-other"]);
+  const unacknowledgedWithoutLedger = await watch({ root: second, config: conf, adapter, now });
+  assert.deepEqual(unacknowledgedWithoutLedger.wakes.map(w => w.id), ["human-mention", "human-array", "human-reply", "human-external-reply", "human-everyone", "human-here", "human-other", "human-both", "human-direct", "human-direct-other"]);
 });
 
 test("replies to role, everyone/here, and direct channels wake even when another role is mentioned", async () => {
@@ -1601,17 +1630,19 @@ test("direct reply only: receipt ack, unrelated role post, parent reply, and par
     [
       "human-1569941406775246969",
       "human-h-parent-follow",
+      "human-burst-1",
       "human-burst-2",
       "human-h-other-direct",
     ],
   );
-  // 30분 쿨다운 뒤에도 미답변 4건이 계속 깨어남을 확인
+  // 30분 쿨다운 뒤에도 장부 미등록 건(직접 답글만 달린 burst-1 포함)이 모두 계속 깨어남을 확인
   const res2 = await watch({ root, config: conf, adapter, now: now + 30 * 60000 });
   assert.deepEqual(
     res2.wakes.map((w) => w.id),
     [
       "human-1569941406775246969",
       "human-h-parent-follow",
+      "human-burst-1",
       "human-burst-2",
       "human-h-other-direct",
     ],
@@ -1926,7 +1957,7 @@ test("unrecorded human posts exiting 24h since window register waiting_human bef
   assert.deepEqual(rDirect.wakes, []);
   const ledDirect = await readLedger(rootDirect, "secretary");
   assert.equal(ledDirect.items.find((i) => i.from.msg_id === "expired-unrecorded")?.status, "waiting_human");
-  assert.equal(ledDirect.items.some((i) => i.from.msg_id === "expired-replied"), false);
+  assert.equal(ledDirect.items.find((i) => i.from.msg_id === "expired-replied")?.status, "waiting_human");
 
   // 2. Discord처럼 since(24h) 이전 글을 API 응답에서 제외하는 어댑터에서도 wake_meta를 통해 waiting_human으로 보존
   const rootPaged = await setup();
@@ -2046,4 +2077,179 @@ test("max_human_wakes validation warns once to stderr and user_ids never inherit
   await watch({ root: rootInherit, config: confInherit, adapter: { messages: async () => posts }, now: now + 60 * 60000 });
   const ledInherit = await readLedger(rootInherit, "secretary");
   assert.equal(ledInherit.items.find((i) => i.from.msg_id === "cap-two")?.status, "waiting_human");
+});
+
+test("human instruction cards cap drop and due deferrals at 2 and escalate on 3rd attempt", async () => {
+  const root = await setup();
+  // 1) 같은 사람 지시(msg_id=msg-deepseek)를 drop 뒤 새 카드로 재생성하는 회피도 합산하여 3회째 drop에서 거절·사람에게 올림 전환
+  for (const round of [1, 2]) {
+    await main(
+      [
+        "add",
+        "--root",
+        root,
+        "--role",
+        "secretary",
+        "--id",
+        `ds-${round}`,
+        "--title",
+        `딥시크 점검 ${round}`,
+        "--due",
+        "2026-11-08T13:00:00Z",
+        "--channel",
+        "ch-infra",
+        "--msg-id",
+        "msg-deepseek",
+      ],
+      { now },
+    );
+    await main(
+      [
+        "drop",
+        `ds-${round}`,
+        "--root",
+        root,
+        "--role",
+        "secretary",
+        "--reason",
+        `재생성 ${round}`,
+      ],
+      { now },
+    );
+  }
+  await main(
+    [
+      "add",
+      "--root",
+      root,
+      "--role",
+      "secretary",
+      "--id",
+      "ds-3",
+      "--title",
+      "딥시크 점검 3",
+      "--due",
+      "2026-11-08T13:00:00Z",
+      "--channel",
+      "ch-infra",
+      "--msg-id",
+      "msg-deepseek",
+    ],
+    { now },
+  );
+  await assert.rejects(
+    main(
+      [
+        "drop",
+        "ds-3",
+        "--root",
+        root,
+        "--role",
+        "secretary",
+        "--reason",
+        "또 미룸",
+      ],
+      { now },
+    ),
+    /사람에게 올림/,
+  );
+  const afterDrop3 = await readLedger(root, "secretary");
+  const ds3 = afterDrop3.items.find((i) => i.id === "ds-3");
+  assert.equal(ds3.status, "escalated_human");
+  assert.match(ds3.note, /사람에게 올림 \(drop 3회 거절\)/);
+
+  // 사람에게 올림 상태인 동안 같은 msg_id로 새 카드 재생성 차단
+  await assert.rejects(
+    main(
+      [
+        "add",
+        "--root",
+        root,
+        "--role",
+        "secretary",
+        "--id",
+        "ds-4",
+        "--title",
+        "우회 재생성",
+        "--due",
+        "2026-11-08T14:00:00Z",
+        "--channel",
+        "ch-infra",
+        "--msg-id",
+        "msg-deepseek",
+      ],
+      { now },
+    ),
+    /사람에게 올림/,
+  );
+
+  // 감시가 사람에게 올림 항목을 깨움함에 알림
+  const watchRes = await watch({ root, config, now });
+  assert.deepEqual(
+    watchRes.wakes.map((w) => ({ id: w.id, reason: w.reason })),
+    [{ id: "ds-3", reason: "사람에게 올림" }],
+  );
+
+  // 완료(done) 처리 후에는 더 이상 깨우지 않음
+  await main(["done", "ds-3", "--root", root, "--role", "secretary", "--reason", "대표님 보고 후 완료"], { now });
+  assert.equal((await readLedger(root, "secretary")).items.find((i) => i.id === "ds-3")?.status, "done");
+  assert.deepEqual((await watch({ root, config, now: now + 31 * 60000 })).wakes, []);
+
+  // 2) 기한 미룸(due)도 2회까지 허용하고 3회째에 거절·사람에게 올림 전환
+  await main(
+    [
+      "add",
+      "--root",
+      root,
+      "--role",
+      "secretary",
+      "--id",
+      "defer-card",
+      "--title",
+      "기한 연기 시험",
+      "--due",
+      "2026-11-08T13:00:00Z",
+      "--channel",
+      "ch-infra",
+      "--msg-id",
+      "msg-defer",
+    ],
+    { now },
+  );
+  await main(["due", "defer-card", "--root", root, "--role", "secretary", "--due", "2026-11-08T14:00:00Z", "--reason", "1차 연기"], { now });
+  await main(["due", "defer-card", "--root", root, "--role", "secretary", "--due", "2026-11-08T15:00:00Z", "--reason", "2차 연기"], { now });
+  await assert.rejects(
+    main(["due", "defer-card", "--root", root, "--role", "secretary", "--due", "2026-11-08T16:00:00Z", "--reason", "3차 연기"], { now }),
+    /사람에게 올림/,
+  );
+  const deferItem = (await readLedger(root, "secretary")).items.find((i) => i.id === "defer-card");
+  assert.equal(deferItem.status, "escalated_human");
+  assert.equal(deferItem.due, "2026-11-08T15:00:00Z");
+  assert.match(deferItem.note, /기한 미룸 3회 거절/);
+
+  // 3) 사람 메시지 ID가 없는 자체 카드(--msg-id -)는 상한 적용 제외
+  for (const round of [1, 2, 3]) {
+    await main(
+      [
+        "add",
+        "--root",
+        root,
+        "--role",
+        "secretary",
+        "--id",
+        `self-${round}`,
+        "--title",
+        `자체 점검 ${round}`,
+        "--due",
+        "2026-11-08T13:00:00Z",
+        "--channel",
+        "internal",
+        "--msg-id",
+        "-",
+      ],
+      { now },
+    );
+    await main(["drop", `self-${round}`, "--root", root, "--role", "secretary", "--reason", "자체 정리"], { now });
+  }
+  assert.equal((await readLedger(root, "secretary")).items.find((i) => i.id === "self-3")?.status, "dropped");
 });

@@ -141,11 +141,30 @@ node scripts/session-health.mjs --config <private-config.json>
 ```
 
 DRY (`DRY_RUN=1` also supported) reads evidence and previews status/alert counts,
-without writing files, locking, or posting. Real runs use an exclusive state lock
-and atomic state/report replacement. On a stale lock, confirm the recorded PID
-and start time no longer own a runner before backing up state and removing only
-that lock. Malformed state fails closed. Use owner-only parent directories and
+without writing files, locking, or posting. Real runs use an exclusive PID-verified
+state lock (`scripts/lib/pid-lock.mjs`) and atomic state/report replacement. Lock
+files record `{ pid, start, boot, started }`: live owners still fail concurrent runs
+closed (`EEXIST`), while locks left behind by dead, zombie, PID-recycled, or pre-reboot
+processes (or legacy PID-less locks past the 30-second grace window) are automatically
+quarantined into `.recovered-locks/` and logged to `.recovered-locks/recovery.jsonl`.
+Malformed state fails closed. Use owner-only parent directories and
 platform journal rotation. Configure the response-watch service example with
 this script/config, a distinct unit name, and `OnUnitInactiveSec=5min` (or cron
 `*/5 * * * *`); install only after authorized instance acceptance. Stop the timer
 to roll back and retain state. No timers are installed by this repository.
+
+## Watcher unit failure monitoring (`watcherUnits`)
+
+Optional top-level `watcherUnits` (or standalone `node scripts/watcher-unit-health.mjs --config <file> [--dry]`)
+monitors `systemd --user` watcher units matching `patterns` (default `["naia-*", "minho-*"]`,
+excluding transient worker units `["*-worker-*", "worker-*"]`):
+
+- When a unit enters `failed` state or reaches `failureThreshold` consecutive failing
+  checks (default `2`), a `[감시 유닛 실패]` wake file is written to `watcherUnits.wakeDir`
+  for `watcherUnits.role` (deduplicated per `repeatMinutes`, default `30`).
+- When failures persist beyond `escalationAfterStreak` consecutive checks (default `2`,
+  meaning 3+ consecutive failures), the unit is recorded in `candidatesFile`
+  (`ceo-escalation-candidates.json` next to `stateFile` by default) and escalated once
+  per episode through the existing `notifications.escalation` Discord channel/mention
+  transport (or `watcherUnits.notifyCommand` argv with `{text}`). Recovery resets the
+  streak and marks the candidate `resolved`.

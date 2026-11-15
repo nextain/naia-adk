@@ -6,6 +6,8 @@ import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { readWorkLedger, readScheduleLedger, scheduleStatus } from './lib/ledger.mjs';
+import { acquirePidLock } from './lib/pid-lock.mjs';
+import { checkWatcherUnits, validateWatcherUnitConfig } from './watcher-unit-health.mjs';
 const exec = promisify(execFile);
 const hash = s => createHash('sha256').update(s).digest('hex');
 const command = async (file, args = [], cwd) => (await exec(file, args, { cwd, timeout: 15000, maxBuffer: 4 * 1024 * 1024 })).stdout;
@@ -54,6 +56,7 @@ export function validateConfig(c) {
   for (const key of ['workLedger', 'regularSchedule']) if (c[key] != null && !isAbsolute(c[key])) throw Error('absolute ledger path required');
   if (c.responseWatchState && !isAbsolute(c.responseWatchState)) throw Error('absolute response state required');
   if (c.notifications) for (const id of [c.notifications.nudgeChannelId, c.notifications.escalation?.channelId, c.notifications.escalation?.userId, ...c.roles.map(r => r.botId)]) if (!/^\d+$/.test(id ?? '')) throw Error('invalid notification id');
+  if (c.watcherUnits !== undefined) validateWatcherUnitConfig(c.watcherUnits);
 }
 
 // A configured watcher must be readable before absence of requests proves idle.
@@ -219,13 +222,13 @@ export async function observeRole(config, role, previous, now, response, windowP
 }
 
 export const atomic = async (path, text) => { await mkdir(dirname(path), { recursive: true, mode: 0o700 }); const tmp = `${path}.${process.pid}.tmp`; await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, path); };
-export async function runHealth(config, { now = Date.now(), dry = false, fetchImpl = fetch, token, windowProbe, log = e => console.log(JSON.stringify(e)) } = {}) {
+export async function runHealth(config, { now = Date.now(), dry = false, fetchImpl = fetch, token, windowProbe, unitProbe, log = e => console.log(JSON.stringify(e)) } = {}) {
   validateConfig(config);
   if (config.notifications && !dry && !token) throw Error('notification token missing');
   let lock;
-  if (!dry) { await mkdir(dirname(config.stateFile), { recursive: true, mode: 0o700 }); lock = await open(`${config.stateFile}.lock`, 'wx', 0o600); await lock.writeFile(JSON.stringify({ pid: process.pid, started: now })); }
   const started = Date.now(), trace = randomUUID();
   const emit = event => log({ trace, ...event });
+  if (!dry) { await mkdir(dirname(config.stateFile), { recursive: true, mode: 0o700 }); lock = await acquirePidLock(`${config.stateFile}.lock`, { onRecover: rec => emit({ stage: 'lock_recovered', deadPid: rec.deadPid, reason: rec.reason, quarantinedTo: rec.quarantinedTo }) }); }
   emit({ stage: 'start', dry });
   try {
     let state; try { state = await json(config.stateFile); } catch (e) { if (e.code !== 'ENOENT') throw Error('state unreadable; refusing reset'); state = { version: 1, roles: {} }; }
@@ -275,11 +278,18 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
       for (const d of r.rules.diffs) details.push(`\n${r.role}: ${d.path} lines ${d.lines.join(',')} (${d.allowed ? 'allowed' : 'unexpected'}); SHA256 ${d.expected} → ${d.actual}\n`);
       if (r.errors.length) details.push(`\n${r.role}: ${r.errors.join('; ')}\n`);
     }
+    let watcherUnits;
+    if (config.watcherUnits) {
+      state.watcherUnits ??= {};
+      watcherUnits = await checkWatcherUnits({ stateFile: config.stateFile, ...config.watcherUnits }, { unitState: state.watcherUnits, now, dry, unitProbe, fetchImpl, token, notifications: config.notifications, saveState: save, log: emit });
+      degraded ||= watcherUnits.degraded;
+      details.push(`\nwatcher units: ${watcherUnits.probeError ? 'probe unavailable' : watcherUnits.units.map(u => `${cell(u.unit)}: ${u.failing ? `failing (streak ${u.streak})` : 'healthy'}`).join('; ') || 'none observed'}\n`);
+    }
     report += details.join('');
     if (!dry) await atomic(config.reportFile, report);
     emit({ stage: 'end', result: degraded ? 'degraded' : 'complete', previews, durationMs: Date.now() - started });
-    return { rows, report, degraded, previews };
-  } catch (error) { emit({ stage: 'end', result: 'failed', durationMs: Date.now() - started }); throw error; } finally { if (lock) { await lock.close(); await unlink(`${config.stateFile}.lock`); } }
+    return { rows, report, degraded, previews, ...(watcherUnits ? { watcherUnits } : {}) };
+  } catch (error) { emit({ stage: 'end', result: 'failed', durationMs: Date.now() - started }); throw error; } finally { if (lock) await lock.release(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
+import { acquirePidLock } from './lib/pid-lock.mjs';
 // Instance-configurable message text; {name} placeholders are replaced, unknown ones are left as is.
 export function fill(template, values) { return String(template).replace(/\{(\w+)\}/g, (m, k) => (k in values ? String(values[k]) : m)); }
 
@@ -73,8 +74,9 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
   let lock;
   if (!dry) {
     await mkdir(dirname(stateFile), { recursive: true });
-    lock = await open(`${stateFile}.lock`, 'wx', 0o600);
-    await lock.writeFile(JSON.stringify({ pid: process.pid, started: new Date().toISOString() }));
+    lock = await acquirePidLock(`${stateFile}.lock`, {
+      onRecover: rec => emit('lock', 'recovered', { deadPid: rec.deadPid, reason: rec.reason, quarantinedTo: rec.quarantinedTo }),
+    });
   }
   let state, degraded = false;
   try {
@@ -211,7 +213,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
     emit('end', state.lastRun.result, { durationMs: Date.now() - started });
     return state;
   } catch (error) { emit('end', 'failed', { reason: error.message, durationMs: Date.now() - started }); throw error; }
-  finally { if (lock) { await lock.close(); await unlink(`${stateFile}.lock`); } }
+  finally { if (lock) await lock.release(); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

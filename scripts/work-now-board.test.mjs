@@ -1,16 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import http from 'node:http';
 import { startWorkNowBoard } from './work-now-board.mjs';
 
-const root = process.env.WORK_NOW_TEST_TMP ?? join(tmpdir(), 'work-now-board-test');
+const explicitRoot = process.env.WORK_NOW_TEST_TMP;
+const root = explicitRoot ?? await mkdtemp(join(tmpdir(), 'work-now-board-test-'));
+const createdDirs = [];
+test.after(async () => {
+  await Promise.all(createdDirs.map(d => rm(d, { recursive: true, force: true })));
+  if (!explicitRoot) await rm(root, { recursive: true, force: true });
+});
 const row = (id, role, status, task) => ({ id, role, status, task, requested_at: '2020-01-01T00:00:00Z', due_at: null, evidence: 'private evidence', result: status === '끝' ? 'done' : null, updated_at: '2020-01-01T00:00:00Z' });
 async function fixture() {
   await mkdir(root, { recursive: true });
   const dir = await mkdtemp(join(root, 'board-'));
+  createdDirs.push(dir);
   const ledgerPath = join(dir, 'work.json');
   const data = { version: 1, work: [row('a', 'role-a', '진행 중', '<script>alert("x")</script>'), row('b', 'role-b', '진행 중', 'Second role'), row('c', 'role-a', '막힘', 'Blocked'), row('d', 'role-a', '끝', 'Completed'), row('e', 'role-c', '대기', 'Pending')] };
   await writeFile(ledgerPath, JSON.stringify(data));

@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { enableDueTimer, main } from './enable-due-timer.mjs';
 
 test('W4 enable fails closed without matching watcher and deployment evidence', async t => {
-  const dir = await mkdtemp(path.resolve('tmp/w4-gate-'));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'w4-gate-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const configPath = path.join(dir, 'config.json');
   const watchPath = path.join(dir, 'work-watch.mjs');

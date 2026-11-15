@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-import { readFile, writeFile, mkdir, rename, open, unlink } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { dirname, resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { runHealth } from './session-health.mjs';
 import { fill } from './response-watch.mjs';
+import { acquirePidLock } from './lib/pid-lock.mjs';
 
 const id = value => typeof value === 'string' && /^\d+$/.test(value);
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -87,7 +88,12 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
   let lock, degraded = false;
   const atomic = writeWakeFile;
   try {
-    if (!dry) { await mkdir(dirname(stateFile), { recursive: true }); lock = await open(`${stateFile}.lock`, 'wx', 0o600); }
+    if (!dry) {
+      await mkdir(dirname(stateFile), { recursive: true });
+      lock = await acquirePidLock(`${stateFile}.lock`, {
+        onRecover: rec => emit('lock', 'recovered', { deadPid: rec.deadPid, reason: rec.reason, quarantinedTo: rec.quarantinedTo }),
+      });
+    }
     let state;
     try { state = JSON.parse(await readFile(stateFile, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw Error('state unreadable; refusing reset'); state = { version: 1, channels: {}, errors: {} }; }
     if (state.version !== 1 || !object(state.channels) || !object(state.errors)) throw Error('invalid state');
@@ -213,7 +219,7 @@ export async function runWatch(config, { token, fetchImpl = fetch, dry = false, 
     }
     state.lastRun = { at: now, result: degraded ? 'degraded' : 'complete' }; await save(); emit('end', state.lastRun.result, { durationMs: Date.now() - started }); return state;
   } catch (e) { emit('end', 'failed', { durationMs: Date.now() - started, reason: e.message }); throw e; }
-  finally { if (lock) { await lock.close(); await unlink(`${stateFile}.lock`); } }
+  finally { if (lock) await lock.release(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {

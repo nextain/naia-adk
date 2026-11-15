@@ -62,8 +62,9 @@ codex·agy·muse 는 Claude 훅이 안 돌므로 이 훅의 대상이 아니다(
 **자기 보호**(항상 막힘): `.naia-role.json`, `~/.claude/settings*.json`, `~/.claude/hooks`, `.agents/lead-guard/`, 표지의 `lead_guard.protect`.
 
 안내문은 하드코딩 대신 `.naia-role.json` 의 `lead_guard` 설정을 따른다(`work_dir` 기본 `<작업 폴더>`, `worker_guide` 선택, `approver_label` 기본 `승인자`):
-"2층 일꾼에게 지시서로 맡기십시오" + 한 줄 예시
-`claude -p --model sonnet "$(cat <작업 폴더>/<일>/prompt.md)" > <작업 폴더>/<일>/out.log 2>&1 &`.
+"2층 일꾼에게 지시서로 맡기십시오" + 표준 일꾼 실행 대본 예시
+`node scripts/worker-runner/spawn-worker.mjs --id <일> --role <역할> --work-dir <작업 폴더>/<일> --watch-dir <작업 폴더>/<일> --result-file <작업 폴더>/<일>/result.md -- claude -p --model sonnet "$(cat <작업 폴더>/<일>/prompt.md)"`.
+또한 PreToolUse 관문(`.claude/hooks/lead-write-guard.js`, `.agents/hooks/policies/bash.js`, `.codex/hooks/session-contract-gate.cjs`, `.pi/extensions/naia-harness.ts`)은 에이전트 셸에서 `nohup`·`setsid`·백그라운드(`&`)·`tmux -d`·`screen -dm` 으로 `agy`·`codex`·`claude -p`·`muse exec` 를 직접 띄우는 명령을 가로막고 `scripts/worker-runner/spawn-worker.mjs`(자동 `work-watch` 등록 + 다중 마운트 디스크 바닥선 검사)를 안내한다.
 막힘·예외 사용·훅 오류는 `.agents/lead-guard/audit.jsonl` 에 남는다(기기별, git 제외).
 
 ## 비상 길 (긴급 예외)

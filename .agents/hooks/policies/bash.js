@@ -18,7 +18,7 @@ const fs = require("fs");
 const os = require("os");
 const { spawnSync } = require("child_process");
 const core = require(path.join(__dirname, "..", "core", "harness-core.js"));
-const { SHELLS, MULTICALL_BINARIES } = require(path.resolve(__dirname, "..", "..", "..", ".claude", "hooks", "lib", "effective-argv.js"));
+const { SHELLS, MULTICALL_BINARIES, checkDetachedWorkerCommand } = require(path.resolve(__dirname, "..", "..", "..", ".claude", "hooks", "lib", "effective-argv.js"));
 function isShellBin(base) {
 	return SHELLS.test(String(base || "").toLowerCase());
 }
@@ -2154,6 +2154,17 @@ function uncommittedArtifact(command, data, opts) {
 	return null;
 }
 
+/**
+ * detached-worker-guard — block nohup/setsid/&/tmux -d/screen -dm launches of
+ * agy, codex, claude -p, muse exec that bypass work-watch registration, and
+ * guide callers to scripts/worker-runner/spawn-worker.mjs.
+ */
+function detachedWorker(command) {
+	const hit = checkDetachedWorkerCommand(command);
+	if (!hit) return null;
+	return { reason: hit.reason };
+}
+
 module.exports = {
 	destructiveGit,
 	catastrophicDelete,
@@ -2163,6 +2174,7 @@ module.exports = {
 	prGuard,
 	deploy,
 	uncommittedArtifact,
+	detachedWorker,
 	loadArtifactExtensions,
 	loadArtifactScriptDirs,
 	DEFAULT_ARTIFACT_EXTENSIONS,

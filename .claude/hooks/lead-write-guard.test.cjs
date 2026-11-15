@@ -99,7 +99,24 @@ test("3층: 허용 경로는 통과한다(지시서·결과, 임시 파일, 진�
 	passed(bash(`cd ${repo} && git status && cat src/app.js && grep -n a src/app.js`));
 	passed(bash(`cd ${repo} && git commit -m x`));
 	passed(bash(`sed -n 1,5p ${repo}/src/app.js`));
-	passed(bash(`claude -p "일" > ${work}/out.log 2>&1 &`));
+	passed(bash(`node scripts/worker-runner/spawn-worker.mjs --id job1 --role minho --work-dir ${work} --watch-dir ${work} --result-file ${work}/result.md -- claude -p "일"`));
+	passed(bash(`claude -p "일" > ${work}/out.log 2>&1`));
+});
+
+test("감시 밖 일꾼 직접 분리 실행 차단: nohup·setsid·& 로 agy·codex·claude -p·muse exec 띄우기는 막히고 표준 대본을 안내한다", () => {
+	for (const cmd of [
+		`claude -p "일" > ${work}/out.log 2>&1 &`,
+		`nohup agy --prompt "일" > ${work}/out.log 2>&1 &`,
+		`setsid codex exec "일" > ${work}/out.log 2>&1`,
+		`nohup muse exec "일" &`,
+	]) {
+		const r = bash(cmd);
+		blocked(r);
+		assert.match(r.reason, /spawn-worker\.mjs/);
+		const rWorker = bash(cmd, { cwd: repo });
+		blocked(rWorker);
+		assert.match(rWorker.reason, /spawn-worker\.mjs/);
+	}
 });
 
 test("자기 보호: 역할 표지·예외 기록·훅 등록·protect 경로는 3층이 못 바꾼다", () => {

@@ -1,14 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { parseLedgerYaml, serializeLedgerYaml, readWorkLedger, readScheduleLedger, scheduleStatus, recordSchedule, validateWorkLedger, validateScheduleLedger } from './lib/ledger.mjs';
-const root = process.env.LEDGER_TEST_TMP || process.env.SESSION_HEALTH_TEST_TMP || join((await import('node:os')).tmpdir(), 'ledger-test');
+const explicitRoot = process.env.LEDGER_TEST_TMP || process.env.SESSION_HEALTH_TEST_TMP;
+const root = explicitRoot || await mkdtemp(join(tmpdir(), 'ledger-test-'));
+const createdDirs = [];
+test.after(async () => {
+  await Promise.all(createdDirs.map(d => rm(d, { recursive: true, force: true })));
+  if (!explicitRoot) await rm(root, { recursive: true, force: true });
+});
 const now = Date.parse('2030-01-01T12:00:00Z');
 const work = () => ({ version: 1, work: [{ id: 'task-a', role: 'role-a', task: 'Review draft', status: '진행 중', requested_at: '2030-01-01T09:00:00Z', due_at: '2030-01-02T09:00:00Z', evidence: 'https://example.invalid/request/1', result: null, updated_at: '2030-01-01T10:00:00Z' }] });
 const schedule = () => ({ version: 1, timezone: 'UTC', schedules: [{ id: 'daily-a', role: 'role-a', task: 'Review draft', cadence: 'daily', time: '11:45', status: '있음', mechanism: { kind: 'timer', target: '<target>', timer: null }, approval: null, last_result: { at: null, outcome: 'not-run', evidence: '<artifact>' } }] });
-async function fixture(doc = schedule()) { await mkdir(root, { recursive: true }); const dir = await mkdtemp(join(root, 'ledger-')); const path = join(dir, 'ledger.yaml'); await writeFile(path, serializeLedgerYaml(doc)); return { dir, path }; }
+async function fixture(doc = schedule()) { await mkdir(root, { recursive: true }); const dir = await mkdtemp(join(root, 'ledger-')); createdDirs.push(dir); const path = join(dir, 'ledger.yaml'); await writeFile(path, serializeLedgerYaml(doc)); return { dir, path }; }
 test('block parser round trips examples, quotes and unknown fields', async () => {
   const doc = schedule(); doc.schedules[0].task = 'A: "quoted" # task'; doc.schedules[0].extra = { note: 'keep' };
   assert.deepEqual(parseLedgerYaml(serializeLedgerYaml(doc)), doc);

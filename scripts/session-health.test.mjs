@@ -1,14 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, utimes } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { runHealth, compareRules, compactEvidence, collectWindow, validateConfig } from './session-health.mjs';
-const root = process.env.SESSION_HEALTH_TEST_TMP || join((await import('node:os')).tmpdir(), 'session-health-test');
+const ownTmpRoot = !process.env.SESSION_HEALTH_TEST_TMP;
+const root = process.env.SESSION_HEALTH_TEST_TMP || await mkdtemp(join(tmpdir(), 'session-health-test-'));
+const createdDirs = [];
+test.after(async () => {
+  await Promise.all(createdDirs.map(d => rm(d, { recursive: true, force: true })));
+  if (ownTmpRoot) await rm(root, { recursive: true, force: true });
+});
 const now = Date.parse('2030-01-01T12:00:00Z');
 async function fixture() {
   await mkdir(root, { recursive: true });
   const dir = await mkdtemp(join(root, 'health-')), repo = join(dir, 'repo');
+  createdDirs.push(dir);
   await mkdir(join(repo, '.agents/context'), { recursive: true }); await mkdir(join(repo, '.claude'));
   for (const [name, text] of [['AGENTS.md', 'rules\n'], ['.agents/context/agents-rules.json', '{}'], ['.claude/settings.json', '{"hooks":{}}'], ['work.md', '- in progress: task\n']]) await writeFile(join(repo, name), text);
   const git = args => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid', GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.invalid', GIT_AUTHOR_DATE: '2029-12-30T00:00:00Z', GIT_COMMITTER_DATE: '2029-12-30T00:00:00Z' } }).trim();

@@ -1,4 +1,5 @@
 import { readFile, lstat, open, rename, unlink } from 'node:fs/promises';
+import { acquirePidLock } from './pid-lock.mjs';
 
 const object = x => x && typeof x === 'object' && !Array.isArray(x);
 const required = (x, label) => { if (typeof x !== 'string' || !x.trim() || /[\r\n]/.test(x)) throw Error(`invalid ${label}`); return x; };
@@ -154,9 +155,8 @@ export async function recordSchedule(path, id, outcome, { now = Date.now() } = {
   if (outcome === 'not-run') throw Error('execution result required');
   if (!Number.isFinite(now)) throw Error('invalid clock');
   const lockPath = `${path}.lock`, tmp = `${path}.${process.pid}.tmp`;
-  const lock = await open(lockPath, 'wx', 0o600); let temporary = false;
+  const lock = await acquirePidLock(lockPath, { createParent: false }); let temporary = false;
   try {
-    await lock.writeFile(JSON.stringify({ pid: process.pid, started: now }));
     const meta = await lstat(path); if (meta.isSymbolicLink() || !meta.isFile()) throw Error('regular ledger file required; symlinks are not replaced');
     const doc = await readScheduleLedger(path, now), row = doc.schedules.find(r => r.id === id);
     if (!row) throw Error('unknown schedule id');
@@ -165,5 +165,5 @@ export async function recordSchedule(path, id, outcome, { now = Date.now() } = {
     try { await handle.writeFile(serializeLedgerYaml(doc)); } finally { await handle.close(); }
     await rename(tmp, path); temporary = false;
     return row.last_result;
-  } finally { if (temporary) await unlink(tmp); await lock.close(); await unlink(lockPath); }
+  } finally { if (temporary) await unlink(tmp); await lock.release(); }
 }

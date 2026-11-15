@@ -570,6 +570,14 @@ export async function watch({
               target.due = nextDue;
             });
           }
+        } else if (item.status === "escalated_human") {
+          await wake(
+            role,
+            item.id,
+            "사람에게 올림",
+            item.title,
+            `${details}\n메모: ${item.note || "(없음)"}`,
+          );
         }
         if (item.worker) {
           try {
@@ -651,8 +659,6 @@ export async function watch({
           throw new Error(
             "Messenger watch requires human_ids and role user_ids",
           );
-        const answeredByAnyRolePostAfter =
-          roleOption(roleConfig, config, "answered_by_any_role_post_after", false) === true;
         const maxHumanWakes =
           roleMaxHumanWakes.get(role) ?? DEFAULT_MAX_HUMAN_WAKES;
         const checkUnrecordedHuman =
@@ -984,27 +990,7 @@ export async function watch({
               const { createdMs, editedMs, isEdited, effectiveMs } = messageTimes(m);
               if (!Number.isFinite(effectiveMs) || effectiveMs > now) continue;
               const msgChannel = m.channel || channel;
-              const replies = messages.filter(
-                (r) =>
-                  identities.includes(r.author_id) &&
-                  (r.channel || channel) === msgChannel &&
-                  r.reply_to_id === m.id,
-              );
-              const isReplied = isEdited
-                ? replies.some((r) => messageTimes(r).effectiveMs >= editedMs)
-                : replies.length > 0;
-              const isAnsweredAfter =
-                answeredByAnyRolePostAfter &&
-                messages.some((post) => {
-                  if (!identities.includes(post.author_id)) return false;
-                  if ((post.channel || channel) !== msgChannel) return false;
-                  const postEffMs = messageTimes(post).effectiveMs;
-                  return (
-                    Number.isFinite(postEffMs) &&
-                    postEffMs > effectiveMs &&
-                    postEffMs <= now
-                  );
-                });
+              // 사람 글은 장부 기록(또는 명시된 answered_elsewhere_file) 없이 답글·후속 글만으로 닫히지 않는다.
               const mThreadId =
                 msgChannel !== channel || discoveredThreads.has(msgChannel)
                   ? msgChannel
@@ -1087,8 +1073,6 @@ export async function watch({
                 bodyText.replace(/\s+/g, " ").slice(0, 120) || "(본문 없음)";
               if (effectiveMs < since) {
                 if (
-                  !isReplied &&
-                  !isAnsweredAfter &&
                   !recordedItems.length &&
                   !isRecordedElsewhere
                 ) {
@@ -1112,8 +1096,6 @@ export async function watch({
                 continue;
               }
               if (
-                isReplied ||
-                isAnsweredAfter ||
                 isRecorded ||
                 isRecordedElsewhere
               ) {
@@ -1222,25 +1204,7 @@ export async function watch({
             const metaElsewhereAt = elsewhereIds.get(meta.msg_id);
             const metaElsewhere =
               metaElsewhereAt !== undefined && metaElsewhereAt >= meta.effective_ms;
-            const metaReplied = messages.some(
-              (r) =>
-                identities.includes(r.author_id) &&
-                (r.channel || channel) === meta.channel &&
-                r.reply_to_id === meta.msg_id,
-            );
-            const metaAnsweredAfter =
-              answeredByAnyRolePostAfter &&
-              messages.some((post) => {
-                if (!identities.includes(post.author_id)) return false;
-                if ((post.channel || channel) !== meta.channel) return false;
-                const postEffMs = messageTimes(post).effectiveMs;
-                return (
-                  Number.isFinite(postEffMs) &&
-                  postEffMs > meta.effective_ms &&
-                  postEffMs <= now
-                );
-              });
-            if (!recorded && !metaElsewhere && !metaReplied && !metaAnsweredAfter) {
+            if (!recorded && !metaElsewhere) {
               ledger = await upsertWaitingHuman({
                 root,
                 role,

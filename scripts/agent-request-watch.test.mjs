@@ -1,15 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, readdir, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, readdir, rm, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { detectRequests, isReceipt, parseDeadline, validateConfig, runWatch } from './agent-request-watch.mjs';
+const createdDirs = [];
+test.after(async () => { await Promise.all(createdDirs.map(d => rm(d, { recursive: true, force: true }))); });
 const roles = [{ id: 'a', botId: '1', aliases: ['갑'] }, { id: 'b', botId: '2', aliases: ['을'] }, { id: 'ops', botId: '3', aliases: ['운영'] }];
 const at = Date.parse('2026-11-04T14:00:00Z');
 const message = (id, from, content, extra = {}) => ({ id, author: { id: from, bot: true }, timestamp: new Date(at).toISOString(), content, ...extra });
 const config = dir => ({ roles: structuredClone(roles), stateFile: join(dir, 'state.json'), sessionHealthConfig: join(dir, 'health.json'), recovery: { roleId: 'ops' }, guilds: [{ id: '10' }], timezoneOffsetMinutes: 540 });
 async function setup() {
   const dir = await mkdtemp(join(tmpdir(), 'agent-request-test-')), c = config(dir);
+  createdDirs.push(dir);
   let rows = [], sent = [], failPost = false, probes = 0;
   const fetchImpl = async (url, init) => {
     if (init.method === 'POST') { sent.push(JSON.parse(init.body)); if (failPost) throw Error('network failed'); return { ok: true, json: async () => ({ id: '999' }) }; }
@@ -185,6 +188,7 @@ test('uncertain notification echoed with nonce is not ingested as request', asyn
 const snowflake = time => ((BigInt(time - 1420070400000) << 22n) + 1n).toString();
 async function discoveryHarness() {
   const dir = await mkdtemp(join(tmpdir(), 'agent-request-discovery-')), c = config(dir), calls = [], logs = [];
+  createdDirs.push(dir);
   let listed = [0, 5, 15, 2].map((type, index) => ({ id: String(11 + index), guild_id: '10', type }));
   let threads = [{ id: '20', guild_id: '10', parent_id: '13', type: 11 }], denied = new Set(), rows = new Map();
   const run = (now = at) => runWatch(c, {
