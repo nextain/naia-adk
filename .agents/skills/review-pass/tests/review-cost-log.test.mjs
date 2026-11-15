@@ -10,7 +10,17 @@ import {
 	resolveCostLogPath,
 } from "../scripts/invoke-reviewer.mjs";
 
-const frameOk = { runtime_observed: false, frame_assessment: { scope_is_sufficient: true, missing_concerns: [] } };
+const frameOk = {
+	runtime_observed: false,
+	frame_assessment: { scope_is_sufficient: true, missing_concerns: [] },
+	architecture_fit_assessment: {
+		fit_is_sufficient: true,
+		original_request: "Review target carries original request aligned with parent ADK architecture",
+		parent_structure: "naia-adk review-pass skill and shared deploy-plan architecture fit gate",
+		acceptance_rationale: "Extends existing review-pass stage validation via shared architectureFitProblems rather than adding a new hook",
+		missing_or_invalid_reasons: [],
+	},
+};
 const validReview = JSON.stringify({ verdict: "CLEAN", coverage: [{ atom_id: "ATOM-1", status: "COVERED" }], findings: [], ...frameOk });
 
 // 1. fixture-based agy usage extraction

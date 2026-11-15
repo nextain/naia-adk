@@ -328,7 +328,7 @@ export async function invoke({ tool, repo, model, prompt, atomIds = [], startupM
 			throw Object.assign(new Error(`${tool} exited ${result.code}${diagnostic ? `: ${diagnostic}` : ""}`), { exitCode: result.code || 1 });
 		}
 		if (stdinError) throw Object.assign(new Error(`${tool} stdin failed: ${stdinError.code || stdinError.message}`), { exitCode: 1 });
-		const review = validateOutput ? validateReviewOutput(raw, atomIds) : undefined;
+		const review = validateOutput ? validateReviewOutput(raw, atomIds, { stage }) : undefined;
 		outcome = "reviewed";
 		verdict = review?.verdict ?? null;
 		findingsCount = Array.isArray(review?.findings) ? review.findings.length : null;

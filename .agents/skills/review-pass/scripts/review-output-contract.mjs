@@ -42,6 +42,13 @@ The JSON object must strictly match the following schema:
     "scope_is_sufficient": true | false,
     "missing_concerns": ["<unaddressed concern>", ...]
   },
+  "architecture_fit_assessment": {
+    "fit_is_sufficient": true | false,
+    "original_request": "<verbatim or faithful summary of original user request (min 10 chars)>",
+    "parent_structure": "<platform/ADK/product parent structure attached to (never single server/file)>",
+    "acceptance_rationale": "<why parent structure accepts this change as extension/new layer, not band-aid (min 10 chars)>",
+    "missing_or_invalid_reasons": ["<architecture fit problem>", ...]
+  },
   "runtime_observed": true | false
 }
 
@@ -59,10 +66,17 @@ Rules:
 4. "frame_assessment": Judge whether the ledger itself is sufficient for the original request.
    - "scope_is_sufficient": boolean.
    - "missing_concerns": Array of non-empty strings. If "scope_is_sufficient" is false, this array must not be empty.
-5. "runtime_observed": boolean. Set to true ONLY if you actually observed the running system. Reading files is not observing behaviour; if static review only, set to false.
-6. "verdict":
-   - "CLEAN" is ONLY valid when every atom is "COVERED", "findings" is empty ([]), and "scope_is_sufficient" is true.
-   - "NOT_CLEAN" must be used if any atom is "NOT_COVERED", any finding exists, or "scope_is_sufficient" is false.`;
+5. "architecture_fit_assessment" (mandatory in planning and development stages):
+   Verify the three fields in the review target (directive, PR description, plan) using the shared architectureFitProblems criteria:
+   - "original_request": Original user request summary (min 10 chars, no template placeholder).
+   - "parent_structure": Platform/ADK/product parent structure attached to (min 8 chars, no template placeholder, never only a single server/service key/file name).
+   - "acceptance_rationale": Why the parent structure accepts this change via extension or new layer rather than a one-off band-aid (min 10 chars, no template placeholder).
+   - "fit_is_sufficient": boolean. Must be false if any field is missing, blank, template placeholder (<...>), narrow server/file only, or contradicts parent structure.
+   - "missing_or_invalid_reasons": Array of non-empty strings. Must be non-empty when "fit_is_sufficient" is false, and empty [] when true.
+6. "runtime_observed": boolean. Set to true ONLY if you actually observed the running system. Reading files is not observing behaviour; if static review only, set to false.
+7. "verdict":
+   - "CLEAN" is ONLY valid when every atom is "COVERED", "findings" is empty ([]), "scope_is_sufficient" is true, and "fit_is_sufficient" is true (with valid original_request/parent_structure/acceptance_rationale).
+   - "NOT_CLEAN" must be used if any atom is "NOT_COVERED", any finding exists, "scope_is_sufficient" is false, or "fit_is_sufficient" is false.`;
 
 export const AGY_TOOL_POLICY = `--- TOOL USAGE POLICY ---
 Shell commands and web browsing are denied in this environment. Do not call run_command. Do not use web search or browser tools (such as search_web, read_url_content, read_browser_page). Web access is forbidden. If you need to inspect files, read them using local file viewing tools only. You must output the final review JSON as your response.`;

@@ -17,15 +17,28 @@ or a recent commit does not establish task correctness. Start with the
   `idleMinutes` (default 30) is `stopped`, subject to the optional work check
   below. The first output sample establishes a baseline, not historical activity.
   Adapter/read failures are `unknown`.
-- **Progress:** top-level `workLedger` supplies role-matched `진행 중` rows
-  from the [canonical work ledger](work-ledger.md). Each row uses its own
-  `updated_at`; unrelated commits, replies and other rows cannot refresh it. Any
-  stale active row produces `stalled`. Invalid ledgers display unknown and retain
-  existing episodes. Legacy configured Markdown work/todo files supply lines containing
-  `진행 중` or `in progress` (case insensitive). Last workspace commit, work-file
-  mtime and response-watch confirmed reply timestamp are separate evidence.
-  Active tasks without evidence for `staleHours` (default 2) are `stalled`.
-  With no progress evidence, time starts at the first observation. File edits or
+- **Progress:** top-level `workLedger` (`work-ledger.yaml` `진행 중` rows) and
+  optional `workLedgerConfig` / `workLedgerDir` / `roles[].ledgerFile`
+  (`scripts/work-ledger/` per-role `.json` `open` cards) supply each role's
+  open work cards. Each card evaluates its own last progress evidence:
+  ledger progress updates/transitions (`updated_at`, `checked_at`, `progress_at`,
+  `drive.run`, status re-entry into open) plus linked local result path
+  `mtime` and git commits on that result path. Plain Discord replies and `due`
+  postponements do not refresh ledger card progress. Regardless of future `due`
+  or `due_at`, any open card without progress for `staleMinutes` (default `90`;
+  legacy `staleHours` fallback applies only if `staleMinutes` is omitted) marks
+  `stalled`. Missing configured ledger files (`ENOENT`), invalid
+  `work-ledger.json` schemas, or unknown card `status` values fail just like
+  unreadable ledgers: they record `work ledger unavailable`, mark the run
+  `degraded` (exit 2), display `unknown (ledger unavailable)` in the report, and
+  retain existing card/stalled episodes rather than closing cards or reporting
+  `no active task`. Every ledger-configured role must resolve a `wakeDir` (via
+  `roles[].wakeDir` or `workLedgerConfig` `roles[].wake_dir`); missing `wakeDir`
+  is rejected by config validation when `workLedgerConfig` is omitted and
+  reported as `wake dir unavailable` (`degraded`) at runtime otherwise.
+  Legacy configured Markdown work/todo files supply lines containing `진행 중`
+  or `in progress` (case insensitive), checked alongside workspace commits,
+  work-file mtime and response-watch confirmed reply timestamp. File edits or
   replies are only progress proxies; inspect actual deliverables separately.
 - **Regular work:** top-level `regularSchedule` reads the
   [execution ledger](regular-schedule-ledger.md). Installed rows without a record
@@ -140,12 +153,67 @@ node scripts/session-health.mjs --config <private-config.json> --dry
 node scripts/session-health.mjs --config <private-config.json>
 ```
 
-DRY (`DRY_RUN=1` also supported) reads evidence and previews status/alert counts,
+DRY (`DRY_RUN=1` also supported) reads evidence and previews status/alert/wake counts,
 without writing files, locking, or posting. Real runs use an exclusive state lock
 and atomic state/report replacement. On a stale lock, confirm the recorded PID
 and start time no longer own a runner before backing up state and removing only
 that lock. Malformed state fails closed. Use owner-only parent directories and
-platform journal rotation. Configure the response-watch service example with
-this script/config, a distinct unit name, and `OnUnitInactiveSec=5min` (or cron
-`*/5 * * * *`); install only after authorized instance acceptance. Stop the timer
-to roll back and retain state. No timers are installed by this repository.
+platform journal rotation. No timers are installed or started by this repository.
+
+## 멈춘 카드 깨움 및 모든 ADK 서버 공통 5분 타이머 설치·되돌리기
+
+- **역할 깨움함 연결:** 각 역할은 `roles[].wakeDir` 또는 `workLedgerConfig`
+  (`config/work-ledger.json`)의 `roles[].wake_dir`를 사용합니다. 장부가 설정된
+  역할에 `wakeDir`이 없으면 설정 검증에서 거부하거나(`workLedgerConfig`가
+  있고 `roles[].wake_dir`이 빠진 경우) 실행 시 `wake dir unavailable` 오류와
+  `degraded`로 보고합니다. 열린 카드(`open`, `진행 중`)가 기한과 무관하게
+  `staleMinutes`(기본 `90`) 이상 진행 증거가 없으면 해당 역할 깨움함에
+  `<stamp>-stalled-<id>-route-<role>.md` 파일을 남깁니다. 본문에는
+  `멈춘 카드: <제목>`, `카드 id`, `멈춘 시간`, `마지막 증거`를 포함합니다.
+- **재깨움·보고 대상·중단 조건·중복 억제:** 같은 카드는 `repeatMinutes`(기본
+  `30`) 간격으로 재깨우며, 같은 에피소드 `escalateAfterCount`(기본 `3`)회째부터
+  장부(`report.channel` / `from.channel` 등) 또는 역할 `reportChannel`의 사람
+  채널을 `보고 대상(사람 채널)`으로 표시합니다. 새 진행 증거(결과 경로 mtime·커밋,
+  장부 진행 갱신)가 생기거나 상태가 사람 대기(`waiting_human`, `blocked-human`,
+  `human-approval-wait`, `waiting-approval`, `waiting`, `대기`, `막힘`)·종료(`done`,
+  `dropped`, `끝`)로 바뀌면 즉시 멈추고 에피소드를 정리합니다. `stateFile`
+  (`cardStalls`)로 같은 주기 내 중복 깨움을 막으며, `EEXIST`로 깨움 파일을 새로
+  만들지 못한 경우에는 `wakeCount`와 `lastWakeAt`을 올리지 않습니다.
+- **오류 비은폐 원칙(fail-loud):** 설정된 역할 JSON 장부 파일이 없거나(`ENOENT`)
+  읽기·구문·날짜 오류가 있거나, `status`가 허용된 집합 밖이거나,
+  `work-ledger.json` 형식이 어긋나면 0건·정상으로 처리하지 않습니다. 오류
+  (`work ledger unavailable`)와 `degraded`(종료 코드 `2`), 보고서 `unknown`을
+  남기고 기존 카드 에피소드 상태를 그대로 보존합니다.
+- **공통 설정 예시(모든 ADK 서버 동일 기준):** [설정 예시](../../config/session-health.example.json)를
+  비공개 경로(예: `/srv/adk/private/session-health.json`)로 복사한 뒤
+  `staleMinutes: 90`, `repeatMinutes: 30`, `escalateAfterCount: 3` 값을
+  유지하고 자리표시자 경로만 각 서버 경로로 바꿉니다.
+
+```sh
+# 1. 동작 확인 (드라이 런 — 파일 쓰기·발송 없음)
+node scripts/session-health.mjs --config /path/to/private/session-health.json --dry
+```
+
+- **systemd 5분 타이머 견본 설치 및 켜기 절차:** 저장소의
+  [서비스 견본](../../templates/systemd/naia-session-health.service)과
+  [타이머 견본](../../templates/systemd/naia-session-health.timer)(`OnUnitInactiveSec=5min`)을
+  사용자 유닛 디렉터리에 복사해 경로를 채운 뒤 수동으로 켭니다.
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp templates/systemd/naia-session-health.service ~/.config/systemd/user/
+cp templates/systemd/naia-session-health.timer ~/.config/systemd/user/
+# 서비스 파일의 WorkingDirectory, PATH, ExecStart 경로와 (필요 시) EnvironmentFile 수정
+systemctl --user daemon-reload
+systemctl --user enable --now naia-session-health.timer
+systemctl --user list-timers naia-session-health.timer
+journalctl --user -u naia-session-health.service -n 30 --no-pager
+```
+
+- **되돌리기 절차:** 타이머를 끄고 상태 파일(`stateFile`)을 보존한 채 이전 설정으로 복구합니다.
+
+```sh
+systemctl --user disable --now naia-session-health.timer
+# 필요 시 비공개 설정 백업으로 복원하고 daemon-reload
+systemctl --user daemon-reload
+```

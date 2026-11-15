@@ -95,6 +95,13 @@ insufficient scope must name what is missing, and `CLEAN` is unavailable while
 the scope is insufficient. A scope objection alone is enough for `NOT_CLEAN`,
 with no in-frame finding.
 
+`architecture_fit_assessment` is required in `planning` and `development` stages
+(and whenever `validateReviewOutput` runs without stage exclusion):
+`{ fit_is_sufficient, original_request, parent_structure, acceptance_rationale, missing_or_invalid_reasons }`.
+When `fit_is_sufficient` is `true`, the three fields are validated with the shared
+`.claude/hooks/lib/deploy-plan.js` (`architectureFitProblems`) check so missing,
+blank, placeholder (`<...>`), or narrow single-server/file values force blocking (`NOT_CLEAN`).
+
 `runtime_observed` is required. Reading files is not observing behaviour, and
 declaring which one happened keeps a text review from being quoted later as a
 runtime result.
@@ -291,6 +298,13 @@ The reviewer must output exactly one JSON object, with no Markdown formatting or
     "scope_is_sufficient": true | false,
     "missing_concerns": ["string"]
   },
+  "architecture_fit_assessment": {
+    "fit_is_sufficient": true | false,
+    "original_request": "string (min 10 chars, non-template)",
+    "parent_structure": "string (min 8 chars, platform/ADK/product parent structure, not single server/file)",
+    "acceptance_rationale": "string (min 10 chars, extension vs new layer rationale)",
+    "missing_or_invalid_reasons": ["string"]
+  },
   "runtime_observed": true | false
 }
 ```
@@ -303,10 +317,13 @@ The reviewer must output exactly one JSON object, with no Markdown formatting or
    - A defect outside the atom ledger is reported with `atom_id: null` and `scope: "outside_declared_atoms"`.
 4. **frame_assessment**: whether the atom ledger's scope is sufficient for the original request.
    - When `scope_is_sufficient` is `false`, `missing_concerns` must name at least one missing concern.
-5. **runtime_observed**: `true` only if the reviewer actually ran or observed the system. A static review must be `false`.
-6. **verdict**:
-   - `CLEAN`: allowed only when every atom is `COVERED`, `findings` is `[]`, and `scope_is_sufficient` is `true`.
-   - `NOT_CLEAN`: required when any atom is uncovered, any finding exists, or the scope is insufficient.
+5. **architecture_fit_assessment**: required for `planning`, `development`, and default (unspecified-stage) validation; validated using `.claude/hooks/lib/deploy-plan.js` (`architectureFitProblems`).
+   - When `fit_is_sufficient` is `true`, `original_request`, `parent_structure`, and `acceptance_rationale` must satisfy `architectureFitProblems` and `missing_or_invalid_reasons` must be `[]`.
+   - When `fit_is_sufficient` is `false`, `missing_or_invalid_reasons` must name at least one issue and `CLEAN` is disallowed.
+6. **runtime_observed**: `true` only if the reviewer actually ran or observed the system. A static review must be `false`.
+7. **verdict**:
+   - `CLEAN`: allowed only when every atom is `COVERED`, `findings` is `[]`, `scope_is_sufficient` is `true`, and (when applicable) `fit_is_sufficient` is `true` passing `architectureFitProblems`.
+   - `NOT_CLEAN`: required when any atom is uncovered, any finding exists, scope is insufficient, or architecture fit is insufficient.
 
 #### Clean Review Example
 
@@ -323,6 +340,13 @@ The reviewer must output exactly one JSON object, with no Markdown formatting or
   "frame_assessment": {
     "scope_is_sufficient": true,
     "missing_concerns": []
+  },
+  "architecture_fit_assessment": {
+    "fit_is_sufficient": true,
+    "original_request": "Review target carries verbatim original request matching upstream ADK rules",
+    "parent_structure": "naia-adk review-pass skill and shared deploy-plan architecture fit gate",
+    "acceptance_rationale": "Extends existing review-pass stage validation and shares architectureFitProblems from deploy-plan.js without adding a new hook",
+    "missing_or_invalid_reasons": []
   },
   "runtime_observed": false
 }
@@ -357,6 +381,13 @@ The reviewer must output exactly one JSON object, with no Markdown formatting or
   "frame_assessment": {
     "scope_is_sufficient": false,
     "missing_concerns": ["Output contract was not covered in original atom ledger"]
+  },
+  "architecture_fit_assessment": {
+    "fit_is_sufficient": false,
+    "original_request": "",
+    "parent_structure": "prod-app-01",
+    "acceptance_rationale": "",
+    "missing_or_invalid_reasons": ["architecture_fit.original_request 없음", "architecture_fit.parent_structure 가 특정 서버·서비스 키·단일 파일명만 가리킴"]
   },
   "runtime_observed": false
 }

@@ -69,14 +69,14 @@ stages:
     roles: [source_fidelity, baseline_preservation, implementation_test, authority_release]
     arbiter: null
     convergence: 2
-    lenses: [source_fidelity, design_coherence, feasibility, preservation_setup, context_output_separation, audience_surface_fit, unjustified_product_surface]
-    lenses_no_req: [source_fidelity, design_coherence, feasibility, preservation_setup, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses: [source_fidelity, design_coherence, feasibility, preservation_setup, architecture_fit, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses_no_req: [source_fidelity, design_coherence, feasibility, preservation_setup, architecture_fit, context_output_separation, audience_surface_fit, unjustified_product_surface]
   development:
     reviewers: []
     arbiter: null
     convergence: 2
-    lenses: [correctness, completeness, consistency, pattern_compliance, req_to_code, structural_complexity, context_output_separation, audience_surface_fit, unjustified_product_surface]
-    lenses_no_req: [correctness, completeness, consistency, pattern_compliance, structural_complexity, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses: [correctness, completeness, consistency, pattern_compliance, req_to_code, structural_complexity, architecture_fit, context_output_separation, audience_surface_fit, unjustified_product_surface]
+    lenses_no_req: [correctness, completeness, consistency, pattern_compliance, structural_complexity, architecture_fit, context_output_separation, audience_surface_fit, unjustified_product_surface]
   test:
     reviewers: []
     arbiter: null

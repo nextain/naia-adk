@@ -48,6 +48,11 @@ function createValidPlan(root, overrides = {}) {
 		createdAt: new Date().toISOString(),
 		services: ["azure:containerapp:sample-web-prod"],
 		what_why: "샘플 웹 서비스를 v1 이미지로 갱신하여 기능 개선을 반영합니다.",
+		architecture_fit: {
+			original_request: "샘플 웹 서비스 v1 갱신을 공통 배포 승인 차례 리뷰 절차로 진행 요청",
+			parent_structure: "naia-adk 승인 계획 게이트 및 모델 차례 적대 리뷰 계층",
+			acceptance_rationale: "기존 승인 계획 게이트와 ROTATION 리뷰 계층을 그대로 확장하며 일회성 우회를 두지 않음",
+		},
 		changes: ["컨테이너 이미지 sample/web:v1 반영"],
 		scenario: [
 			{

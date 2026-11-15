@@ -1,0 +1,13 @@
+[Unit]
+Description=Observe ADK session health and wake stalled cards
+
+[Service]
+Type=oneshot
+# Replace placeholder paths with absolute paths for this ADK server.
+WorkingDirectory=/path/to/naia-adk
+Environment=PATH=/path/to/node/bin:/usr/local/bin:/usr/bin
+# Keep Discord tokens only in an owner-private EnvironmentFile (optional when using wakeDir only).
+EnvironmentFile=-%h/.config/naia-session-health/environment
+ExecStart=/path/to/node /path/to/naia-adk/scripts/session-health.mjs --config /path/to/private/session-health.json
+UMask=0077
+NoNewPrivileges=yes

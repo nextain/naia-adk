@@ -45,12 +45,23 @@ assert.ok(FRAME_OBLIGATIONS.includes(`"${OUTSIDE_SCOPE_VALUE}"`), `FRAME_OBLIGAT
 for (const key of FINDING_REQUIRED_KEYS) {
 	assert.ok(FRAME_OBLIGATIONS.includes(`"${key}"`), `FRAME_OBLIGATIONS must declare finding key ${key}`);
 }
-for (const topKey of ["verdict", "coverage", "findings", "frame_assessment", "runtime_observed"]) {
+for (const topKey of ["verdict", "coverage", "findings", "frame_assessment", "architecture_fit_assessment", "runtime_observed"]) {
 	assert.ok(FRAME_OBLIGATIONS.includes(`"${topKey}"`), `FRAME_OBLIGATIONS must declare top-level key ${topKey}`);
 }
 for (const subKey of ["scope_is_sufficient", "missing_concerns"]) {
 	assert.ok(FRAME_OBLIGATIONS.includes(`"${subKey}"`), `FRAME_OBLIGATIONS must declare frame_assessment key ${subKey}`);
 }
+for (const archKey of ["fit_is_sufficient", "original_request", "parent_structure", "acceptance_rationale", "missing_or_invalid_reasons"]) {
+	assert.ok(FRAME_OBLIGATIONS.includes(`"${archKey}"`), `FRAME_OBLIGATIONS must declare architecture_fit_assessment key ${archKey}`);
+}
+
+const validArchFit = {
+	fit_is_sufficient: true,
+	original_request: "Review target carries original request aligned with parent ADK architecture",
+	parent_structure: "naia-adk review-pass skill and shared deploy-plan architecture fit gate",
+	acceptance_rationale: "Extends existing review-pass stage validation via shared architectureFitProblems rather than adding a new hook",
+	missing_or_invalid_reasons: [],
+};
 
 // Sample JSON conforming to FRAME_OBLIGATIONS passes validateReviewOutput
 const sampleCleanOutput = JSON.stringify({
@@ -58,9 +69,10 @@ const sampleCleanOutput = JSON.stringify({
 	coverage: [{ atom_id: "ATOM-1", status: "COVERED" }],
 	findings: [],
 	frame_assessment: { scope_is_sufficient: true, missing_concerns: [] },
+	architecture_fit_assessment: validArchFit,
 	runtime_observed: false,
 });
-const parsedClean = validateReviewOutput(sampleCleanOutput, ["ATOM-1"]);
+const parsedClean = validateReviewOutput(sampleCleanOutput, ["ATOM-1"], { stage: "development" });
 assert.equal(parsedClean.verdict, "CLEAN");
 
 const sampleNotCleanOutput = JSON.stringify({
@@ -76,12 +88,32 @@ const sampleNotCleanOutput = JSON.stringify({
 		},
 	],
 	frame_assessment: { scope_is_sufficient: false, missing_concerns: ["Crash handling omitted from ledger"] },
+	architecture_fit_assessment: {
+		fit_is_sufficient: false,
+		original_request: "",
+		parent_structure: "src/sample.js",
+		acceptance_rationale: "",
+		missing_or_invalid_reasons: ["architecture_fit.original_request 없음", "architecture_fit.parent_structure 가 특정 서버·서비스 키·단일 파일명만 가리킴"],
+	},
 	runtime_observed: false,
 });
-const parsedNotClean = validateReviewOutput(sampleNotCleanOutput, ["ATOM-1"]);
+const parsedNotClean = validateReviewOutput(sampleNotCleanOutput, ["ATOM-1"], { stage: "planning" });
 assert.equal(parsedNotClean.verdict, "NOT_CLEAN");
 assert.equal(parsedNotClean.findings.length, 1);
 assert.equal(parsedNotClean.findings[0].scope, "outside_declared_atoms");
+
+// Rejection when architecture_fit_assessment fails shared architectureFitProblems in planning/development
+assert.throws(
+	() => validateReviewOutput(JSON.stringify({
+		verdict: "CLEAN",
+		coverage: [{ atom_id: "ATOM-1", status: "COVERED" }],
+		findings: [],
+		frame_assessment: { scope_is_sufficient: true, missing_concerns: [] },
+		architecture_fit_assessment: { ...validArchFit, parent_structure: "deploy-plan.js" },
+		runtime_observed: false,
+	}), ["ATOM-1"], { stage: "planning" }),
+	/특정 서버·서비스 키·단일 파일명만 가리킴/,
+);
 
 // 3. prompts for other tools also carry the format section
 const toolsToTest = ["claude", "codex", "opencode", "grok", "agy", undefined];
@@ -92,6 +124,7 @@ for (const t of toolsToTest) {
 	assert.ok(promptForTool.includes('"coverage"'), `Prompt for tool ${t || "default"} must include coverage schema`);
 	assert.ok(promptForTool.includes('"findings"'), `Prompt for tool ${t || "default"} must include findings schema`);
 	assert.ok(promptForTool.includes('"frame_assessment"'), `Prompt for tool ${t || "default"} must include frame_assessment schema`);
+	assert.ok(promptForTool.includes('"architecture_fit_assessment"'), `Prompt for tool ${t || "default"} must include architecture_fit_assessment schema`);
 	assert.ok(promptForTool.includes('"runtime_observed"'), `Prompt for tool ${t || "default"} must include runtime_observed schema`);
 }
 
