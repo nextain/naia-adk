@@ -43,7 +43,7 @@
 2. 그 claude 가 `-p/--print` 가 아니고(값 옵션 `--append-system-prompt -p` 나 `--` 뒤 인자는 플래그로 오인하지 않음), 훅 입력에 `agent_id`(서브에이전트)가 없다.
 
 표지가 없거나 `enabled` 가 아니면 3층이 아니다. **기본은 허용**이다. 2층 일꾼(`claude -p`, 서브에이전트)은 통과한다.
-`muse` 는 `.agents/hooks/muse-pretooluse-adapter.cjs` 를 통해 `PreToolUse` 에서 같은 `lead-write-guard.js` 를 호출한다(저장소 `.muse/hooks.json`, 사용자 설정 `templates/muse-user-profile/settings.json` → `~/.config/muse/settings.json`). `codex·agy` 는 Claude·Muse 훅이 안 돌므로 이 훅의 대상이 아니다(3층이 `agy·codex` 인 환경은 해당 도구의 훅으로 별도 설계가 필요하다 — 미해결).
+`muse` 는 `.agents/hooks/muse-pretooluse-adapter.cjs` 로 `PreToolUse` (매처 없이 모든 도구·`multi_edit` 각 edit·`apply_patch` 각 파일·`workflow`·미지 도구 포함) 에서 같은 `lead-write-guard.js` 와 짝 관문들을 호출한다(저장소 `.muse/hooks.json`, 사용자 설정 `templates/muse-user-profile/settings.json` → 승인 후 `adk-user-profile.mjs` 로 `~/.config/muse/settings.json` 병합). 저장소 밖 폴더에서는 사용자 층(`~/.config/muse/settings.json`)만 걸리며 그 범위는 같은 층의 Claude Code 사용자 프로파일(`templates/claude-user-profile/settings.json`)과 같다. `codex·agy` 는 Claude·Muse 훅이 안 돌므로 이 훅의 대상이 아니다(3층이 `agy·codex` 인 환경은 해당 도구의 훅으로 별도 설계가 필요하다 — 미해결).
 역할 폴더에 표지를 두는 일은 켜는 절차의 일부다(아래).
 
 ## 무엇이 막히나

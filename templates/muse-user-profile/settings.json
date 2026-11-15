@@ -3,41 +3,87 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "^(?:bash|Bash|shell|shell_command|exec_command|execute_command|run_terminal_command)$",
         "hooks": [
           {
             "type": "command",
-            "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\" --adk-root \"{{INSTANCE_ROOT}}\" --hook \"{{ADK_ROOT}}/.claude/hooks/destructive-git-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/catastrophic-delete-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/git-push-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/email-send-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/commit-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/deploy-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/remote-identity-gate.js\" \"{{ADK_ROOT}}/.claude/hooks/gcs-guard.js\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/guard-runpod-create.cjs\"",
+            "command": "adapter=\"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\"; deny_json='{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"[muse-gate-adapter] Adapter or node unavailable (fail-closed).\"}}'; if [ ! -f \"$adapter\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$deny_json\"; exit 0; fi; if [ -n \"${NAIA_NODE_BIN:-}\" ]; then node_bin=\"$NAIA_NODE_BIN\"; else node_bin=\"{{NODE}}\"; if [ ! -x \"$node_bin\" ]; then node_bin=$(command -v node 2>/dev/null || true); fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then for cand in /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node \"$HOME\"/.local/bin/node \"$HOME\"/.volta/bin/node \"$HOME\"/.asdf/shims/node \"$HOME\"/.nvm/versions/node/*/bin/node; do [ -x \"$cand\" ] && node_bin=\"$cand\"; done; fi; fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$deny_json\"; exit 0; fi; out=$(\"$node_bin\" \"$adapter\" --event PreToolUse --deadline-ms 11000 --adk-root \"{{INSTANCE_ROOT}}\" --cost-policy \"{{USER_HOME}}/.claude/cost-guard/policy.json\" --model-policy \"{{USER_HOME}}/.claude/subagent-model-policy.json\" --when \"Bash\" --hook \"{{ADK_ROOT}}/.claude/hooks/destructive-git-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/catastrophic-delete-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/git-push-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/email-send-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/commit-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/deploy-guard.js\" \"{{ADK_ROOT}}/.claude/hooks/remote-identity-gate.js\" \"{{ADK_ROOT}}/.claude/hooks/gcs-guard.js\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/guard-runpod-create.cjs\" --when \"Edit|Write\" --hook \"{{ADK_ROOT}}/.claude/hooks/prod-gateway-guard.js\" --when \"Bash|Edit|Write|NotebookEdit|MultiEdit|apply_patch\" --hook \"{{ADK_ROOT}}/.claude/hooks/lead-write-guard.js\" --when \"Task|Agent|Workflow\" --hook \"{{ADK_ROOT}}/.claude/hooks/subagent-spawn-guard.js\" \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/subagent-model-guard.cjs\" --when \"*\" --hook \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" --arg PreToolUse) && printf '%s' \"$out\" || printf '%s' \"$deny_json\"",
             "timeout": 15
           }
         ]
-      },
+      }
+    ],
+    "UserPromptSubmit": [
       {
-        "matcher": "^(?:edit_file|write_file|multi_edit|apply_patch|Edit|Write|MultiEdit|NotebookEdit|edit|write|search_replace)$",
         "hooks": [
           {
             "type": "command",
-            "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\" --adk-root \"{{INSTANCE_ROOT}}\" --expand-patch --hook \"{{ADK_ROOT}}/.claude/hooks/prod-gateway-guard.js\"",
+            "command": "adapter=\"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\"; block_json='{\"decision\":\"block\",\"reason\":\"[muse-gate-adapter] Adapter or node unavailable on UserPromptSubmit (fail-closed).\"}'; if [ ! -f \"$adapter\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$block_json\"; exit 0; fi; if [ -n \"${NAIA_NODE_BIN:-}\" ]; then node_bin=\"$NAIA_NODE_BIN\"; else node_bin=\"{{NODE}}\"; if [ ! -x \"$node_bin\" ]; then node_bin=$(command -v node 2>/dev/null || true); fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then for cand in /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node \"$HOME\"/.local/bin/node \"$HOME\"/.volta/bin/node \"$HOME\"/.asdf/shims/node \"$HOME\"/.nvm/versions/node/*/bin/node; do [ -x \"$cand\" ] && node_bin=\"$cand\"; done; fi; fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$block_json\"; exit 0; fi; out=$(\"$node_bin\" \"$adapter\" --event UserPromptSubmit --deadline-ms 11000 --adk-root \"{{INSTANCE_ROOT}}\" --cost-policy \"{{USER_HOME}}/.claude/cost-guard/policy.json\" --hook \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" --arg UserPromptSubmit) && printf '%s' \"$out\" || printf '%s' \"$block_json\"",
             "timeout": 15
           }
         ]
-      },
+      }
+    ],
+    "PostToolUse": [
       {
-        "matcher": "^(?:bash|Bash|shell|shell_command|exec_command|execute_command|run_terminal_command|edit_file|write_file|multi_edit|apply_patch|Edit|Write|MultiEdit|NotebookEdit|edit|write|search_replace)$",
         "hooks": [
           {
             "type": "command",
-            "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\" --adk-root \"{{INSTANCE_ROOT}}\" --hook \"{{ADK_ROOT}}/.claude/hooks/lead-write-guard.js\"",
+            "command": "adapter=\"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\"; halt_json='{\"continue\":false,\"stopReason\":\"[muse-gate-adapter] Adapter or node unavailable on PostToolUse (fail-closed).\"}'; if [ ! -f \"$adapter\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; if [ -n \"${NAIA_NODE_BIN:-}\" ]; then node_bin=\"$NAIA_NODE_BIN\"; else node_bin=\"{{NODE}}\"; if [ ! -x \"$node_bin\" ]; then node_bin=$(command -v node 2>/dev/null || true); fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then for cand in /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node \"$HOME\"/.local/bin/node \"$HOME\"/.volta/bin/node \"$HOME\"/.asdf/shims/node \"$HOME\"/.nvm/versions/node/*/bin/node; do [ -x \"$cand\" ] && node_bin=\"$cand\"; done; fi; fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; out=$(\"$node_bin\" \"$adapter\" --event PostToolUse --deadline-ms 11000 --adk-root \"{{INSTANCE_ROOT}}\" --cost-policy \"{{USER_HOME}}/.claude/cost-guard/policy.json\" --hook \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" --arg PostToolUse) && printf '%s' \"$out\" || printf '%s' \"$halt_json\"",
             "timeout": 15
           }
         ]
-      },
+      }
+    ],
+    "PostToolUseFailure": [
       {
-        "matcher": "^(?:subagent_spawn|spawn_agent|Agent|Task|agent|task)$",
         "hooks": [
           {
             "type": "command",
-            "command": "\"{{NODE}}\" \"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\" --adk-root \"{{INSTANCE_ROOT}}\" --hook \"{{ADK_ROOT}}/.claude/hooks/subagent-spawn-guard.js\"",
+            "command": "adapter=\"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\"; halt_json='{\"continue\":false,\"stopReason\":\"[muse-gate-adapter] Adapter or node unavailable on PostToolUseFailure (fail-closed).\"}'; if [ ! -f \"$adapter\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; if [ -n \"${NAIA_NODE_BIN:-}\" ]; then node_bin=\"$NAIA_NODE_BIN\"; else node_bin=\"{{NODE}}\"; if [ ! -x \"$node_bin\" ]; then node_bin=$(command -v node 2>/dev/null || true); fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then for cand in /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node \"$HOME\"/.local/bin/node \"$HOME\"/.volta/bin/node \"$HOME\"/.asdf/shims/node \"$HOME\"/.nvm/versions/node/*/bin/node; do [ -x \"$cand\" ] && node_bin=\"$cand\"; done; fi; fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; out=$(\"$node_bin\" \"$adapter\" --event PostToolUseFailure --deadline-ms 11000 --adk-root \"{{INSTANCE_ROOT}}\" --cost-policy \"{{USER_HOME}}/.claude/cost-guard/policy.json\" --hook \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" --arg PostToolUseFailure) && printf '%s' \"$out\" || printf '%s' \"$halt_json\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "adapter=\"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\"; halt_json='{\"continue\":false,\"stopReason\":\"[muse-gate-adapter] Adapter or node unavailable on PostToolBatch (fail-closed).\"}'; if [ ! -f \"$adapter\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; if [ -n \"${NAIA_NODE_BIN:-}\" ]; then node_bin=\"$NAIA_NODE_BIN\"; else node_bin=\"{{NODE}}\"; if [ ! -x \"$node_bin\" ]; then node_bin=$(command -v node 2>/dev/null || true); fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then for cand in /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node \"$HOME\"/.local/bin/node \"$HOME\"/.volta/bin/node \"$HOME\"/.asdf/shims/node \"$HOME\"/.nvm/versions/node/*/bin/node; do [ -x \"$cand\" ] && node_bin=\"$cand\"; done; fi; fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; out=$(\"$node_bin\" \"$adapter\" --event PostToolBatch --deadline-ms 11000 --adk-root \"{{INSTANCE_ROOT}}\" --cost-policy \"{{USER_HOME}}/.claude/cost-guard/policy.json\" --hook \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" --arg PostToolBatch) && printf '%s' \"$out\" || printf '%s' \"$halt_json\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "adapter=\"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\"; halt_json='{\"continue\":false,\"stopReason\":\"[muse-gate-adapter] Adapter or node unavailable on Stop (fail-closed).\"}'; if [ ! -f \"$adapter\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; if [ -n \"${NAIA_NODE_BIN:-}\" ]; then node_bin=\"$NAIA_NODE_BIN\"; else node_bin=\"{{NODE}}\"; if [ ! -x \"$node_bin\" ]; then node_bin=$(command -v node 2>/dev/null || true); fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then for cand in /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node \"$HOME\"/.local/bin/node \"$HOME\"/.volta/bin/node \"$HOME\"/.asdf/shims/node \"$HOME\"/.nvm/versions/node/*/bin/node; do [ -x \"$cand\" ] && node_bin=\"$cand\"; done; fi; fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; out=$(\"$node_bin\" \"$adapter\" --event Stop --deadline-ms 11000 --adk-root \"{{INSTANCE_ROOT}}\" --cost-policy \"{{USER_HOME}}/.claude/cost-guard/policy.json\" --hook \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" --arg Stop) && printf '%s' \"$out\" || printf '%s' \"$halt_json\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "adapter=\"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\"; halt_json='{\"continue\":false,\"stopReason\":\"[muse-gate-adapter] Adapter or node unavailable on PreCompact (fail-closed).\"}'; if [ ! -f \"$adapter\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; if [ -n \"${NAIA_NODE_BIN:-}\" ]; then node_bin=\"$NAIA_NODE_BIN\"; else node_bin=\"{{NODE}}\"; if [ ! -x \"$node_bin\" ]; then node_bin=$(command -v node 2>/dev/null || true); fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then for cand in /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node \"$HOME\"/.local/bin/node \"$HOME\"/.volta/bin/node \"$HOME\"/.asdf/shims/node \"$HOME\"/.nvm/versions/node/*/bin/node; do [ -x \"$cand\" ] && node_bin=\"$cand\"; done; fi; fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; out=$(\"$node_bin\" \"$adapter\" --event PreCompact --deadline-ms 11000 --adk-root \"{{INSTANCE_ROOT}}\" --cost-policy \"{{USER_HOME}}/.claude/cost-guard/policy.json\" --hook \"{{ADK_ROOT}}/templates/claude-user-profile/hooks/cost-guard.cjs\" --arg PreCompact) && printf '%s' \"$out\" || printf '%s' \"$halt_json\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "adapter=\"{{ADK_ROOT}}/.agents/hooks/muse-pretooluse-adapter.cjs\"; halt_json='{\"continue\":false,\"stopReason\":\"[muse-gate-adapter] Adapter or node unavailable on SessionStart (fail-closed).\"}'; if [ ! -f \"$adapter\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; if [ -n \"${NAIA_NODE_BIN:-}\" ]; then node_bin=\"$NAIA_NODE_BIN\"; else node_bin=\"{{NODE}}\"; if [ ! -x \"$node_bin\" ]; then node_bin=$(command -v node 2>/dev/null || true); fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then for cand in /usr/bin/node /usr/local/bin/node /opt/homebrew/bin/node \"$HOME\"/.local/bin/node \"$HOME\"/.volta/bin/node \"$HOME\"/.asdf/shims/node \"$HOME\"/.nvm/versions/node/*/bin/node; do [ -x \"$cand\" ] && node_bin=\"$cand\"; done; fi; fi; if [ -z \"$node_bin\" ] || [ ! -x \"$node_bin\" ]; then cat >/dev/null 2>&1 || true; printf '%s' \"$halt_json\"; exit 0; fi; out=$(\"$node_bin\" \"$adapter\" --event SessionStart --deadline-ms 11000 --adk-root \"{{INSTANCE_ROOT}}\" --hook \"{{ADK_ROOT}}/.claude/hooks/role-compact-brief.js\") && printf '%s' \"$out\" || printf '%s' \"$halt_json\"",
             "timeout": 15
           }
         ]

@@ -388,12 +388,16 @@ test("MUSE_PROFILE_HOOKS matches templates/muse-user-profile/settings.json and v
   const { settings } = loadMuseProfile(root)
   validateMuseProfileHooks(settings)
   assert.equal(settings.schema_version, 1)
+  assert.deepEqual(MUSE_PROFILE_HOOKS, PROFILE_HOOKS)
   const missing = structuredClone(settings)
   missing.hooks.PreToolUse.pop()
   assert.throws(() => validateMuseProfileHooks(missing), /disagree/)
   const extra = structuredClone(settings)
   extra.hooks.PreToolUse.push({ hooks: [{ command: '"node" "/adk/muse-pretooluse-adapter.cjs" --hook "/adk/extra.js"' }] })
   assert.throws(() => validateMuseProfileHooks(extra), /disagree/)
+  const withMatcher = structuredClone(settings)
+  withMatcher.hooks.PreToolUse[0].matcher = "bash"
+  assert.throws(() => validateMuseProfileHooks(withMatcher), /catch-all/)
   const noAdapter = structuredClone(settings)
   noAdapter.hooks.PreToolUse[0].hooks[0].command = '"node" "/adk/direct.js"'
   assert.throws(() => validateMuseProfileHooks(noAdapter), /muse-pretooluse-adapter\.cjs/)
@@ -424,11 +428,12 @@ test("--target muse applies ~/.config/muse/settings.json without Claude policies
   const cmds = saved.hooks.PreToolUse.flatMap((g) => g.hooks.map((h) => h.command))
   assert.ok(cmds.includes("custom-user-hook"))
   assert.ok(!cmds.some((c) => c.includes("/old/adk/")))
-  assert.equal(cmds.filter((c) => c.includes("muse-pretooluse-adapter.cjs")).length, 4)
+  assert.equal(cmds.filter((c) => c.includes("muse-pretooluse-adapter.cjs")).length, 1)
+  assert.equal(Object.keys(saved.hooks).length, 8)
   assert.equal(run({ mode: "check", home, adkRoot: root, target: "muse" }).drift.length, 0)
 
   // Mutate a matcher -> check catches drift -> CLI --target muse apply restores cleanly.
-  saved.hooks.PreToolUse[1].matcher = "bogus"
+  saved.hooks.PreToolUse.find((g) => g.hooks.some((h) => h.command.includes("muse-pretooluse-adapter.cjs"))).matcher = "bogus"
   fs.writeFileSync(museFile, JSON.stringify(saved))
   assert.deepEqual(run({ mode: "check", home, adkRoot: root, target: "muse" }).drift, [museFile])
 

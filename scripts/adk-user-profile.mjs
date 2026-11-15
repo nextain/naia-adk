@@ -62,7 +62,7 @@ export function loadProfile(adkRoot, home = os.homedir(), instanceRoot = adkRoot
 
 const commandsOf = (groups) => (groups ?? []).flatMap((g) => (g.hooks ?? []).map((h) => h.command))
 export const PROFILE_HOOKS = ["role-compact-brief.js", "destructive-git-guard.js", "catastrophic-delete-guard.js", "git-push-guard.js", "email-send-guard.js", "commit-guard.js", "deploy-guard.js", "remote-identity-gate.js", "gcs-guard.js", "prod-gateway-guard.js", "subagent-spawn-guard.js", "lead-write-guard.js", "cost-guard.cjs", "guard-runpod-create.cjs", "subagent-model-guard.cjs"]
-export const MUSE_PROFILE_HOOKS = ["destructive-git-guard.js", "catastrophic-delete-guard.js", "git-push-guard.js", "email-send-guard.js", "commit-guard.js", "deploy-guard.js", "remote-identity-gate.js", "gcs-guard.js", "guard-runpod-create.cjs", "prod-gateway-guard.js", "lead-write-guard.js", "subagent-spawn-guard.js"]
+export const MUSE_PROFILE_HOOKS = [...PROFILE_HOOKS]
 const ownHook = (command) => typeof command === "string" && PROFILE_HOOKS.some((name) => command.includes(name))
 const ownMuseHook = (command) => typeof command === "string" && command.includes("muse-pretooluse-adapter.cjs")
 export function validateProfileHooks(settings) {
@@ -76,6 +76,11 @@ export function validateProfileHooks(settings) {
 
 export function validateMuseProfileHooks(settings) {
   const names = new Set()
+  for (const group of settings.hooks?.PreToolUse ?? []) {
+    if (group.matcher !== undefined) {
+      throw new Error("muse profile PreToolUse groups must be catch-all (no enumerated matcher)")
+    }
+  }
   for (const command of Object.values(settings.hooks ?? {}).flatMap(commandsOf)) {
     const scripts = [...command.matchAll(/"([^"\n]+\.(?:js|cjs))"/g)].map((m) => m[1])
     if (!scripts.some((s) => path.basename(s) === "muse-pretooluse-adapter.cjs")) {
@@ -90,7 +95,7 @@ export function validateMuseProfileHooks(settings) {
   }
 }
 
-export function loadMuseProfile(adkRoot, instanceRoot = adkRoot) {
+export function loadMuseProfile(adkRoot, home = os.homedir(), instanceRoot = adkRoot) {
   const adapter = path.join(adkRoot, MUSE_ADAPTER)
   if (!fs.existsSync(adapter)) throw new Error(`missing hook: ${adapter}`)
   const file = path.join(adkRoot, "templates", "muse-user-profile", "settings.json")
@@ -98,6 +103,7 @@ export function loadMuseProfile(adkRoot, instanceRoot = adkRoot) {
     .replaceAll("{{INSTANCE_ROOT}}", instanceRoot.replace(/\\/g, "/"))
     .replaceAll("{{ADK_ROOT}}", adkRoot.replace(/\\/g, "/"))
     .replaceAll("{{NODE}}", process.execPath.replace(/\\/g, "/"))
+    .replaceAll("{{USER_HOME}}", home.replace(/\\/g, "/"))
   const settings = JSON.parse(text)
   validateMuseProfileHooks(settings)
   for (const groups of Object.values(settings.hooks ?? {})) {
@@ -264,7 +270,7 @@ export function run(args, now = new Date()) {
 
   let nextMuseSettings
   if (includesMuse) {
-    const museProfile = loadMuseProfile(args.adkRoot, instanceRoot)
+    const museProfile = loadMuseProfile(args.adkRoot, args.home, instanceRoot)
     const currentMuse = readOptional(museSettingsFile)
     const current = currentMuse ? JSON.parse(currentMuse) : {}
     nextMuseSettings = `${JSON.stringify(mergeMuseSettings(current, museProfile.settings), null, 2)}\n`
