@@ -28,7 +28,7 @@ const alive = (pid, token) => {
         return e.code === 'EPERM';
     }
 };
-const args = process.argv.slice(2), action = args.shift(), options = {};
+const args = process.argv.slice(2), action = args.shift(), options = { 'watch-dirs': [] };
 let command = [];
 while (args.length) {
     const key = args.shift();
@@ -40,9 +40,21 @@ while (args.length) {
         options['no-review-cap'] = args.length && !args[0].startsWith('--') ? args.shift() : true;
         continue;
     }
+    if (key === '--allow-unregistered-test') {
+        options['allow-unregistered-test'] = true;
+        continue;
+    }
     if (!key.startsWith('--') || !args.length)
         throw Error(`Invalid option ${key}`);
-    options[key.slice(2)] = args.shift();
+    const optName = key.slice(2);
+    const optVal = args.shift();
+    if (optName === 'watch-dir') {
+        options['watch-dir'] = optVal;
+        options['watch-dirs'].push(optVal);
+    }
+    else {
+        options[optName] = optVal;
+    }
 }
 const stateDir = path.resolve(options['state-dir'] || process.env.WORKER_RUNNER_STATE_DIR || path.join(os.homedir(), '.local/state/worker-runner'));
 function noSymlinkAncestors(target) {
@@ -271,6 +283,12 @@ else if (action === 'register') {
 else if (action === 'run') {
     if (!command.length || !options.id || !options['work-dir'])
         throw Error('run requires --id, --work-dir and -- command');
+    const watchRole = (options.role || process.env.WORKER_ROLE || '').trim();
+    const watchResultFile = (options['result-file'] || process.env.WORKER_RESULT_FILE || '').trim();
+    const allowUnregisteredTest = Boolean(options['allow-unregistered-test']);
+    if ((!watchRole || !watchResultFile) && !allowUnregisteredTest) {
+        throw Error('unregistered worker-runner run refused: --role (or WORKER_ROLE) and --result-file (or WORKER_RESULT_FILE) are required so work-watch tracks every worker; use scripts/worker-runner/spawn-worker.mjs');
+    }
     if (!bootId || !pidNamespace) throw Error('Process identity metadata unavailable; admission refused');
     const tempName = options['temp-name'] || options.id;
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(tempName) || tempName.includes('..')) throw Error('Invalid temporary name');
@@ -313,28 +331,24 @@ else if (action === 'run') {
         if (capCheck.resetUsed)
             event('review-cap-reset', { id: options.id }, { lane: capCheck.lane, count: capCheck.count, fails: capCheck.fails, reset: capCheck.reset });
     }
-    const watchRole = options.role || process.env.WORKER_ROLE || '';
-    const watchResultFile = options['result-file'] || process.env.WORKER_RESULT_FILE || '';
     if (watchRole && watchResultFile) {
-        const watchDirs = options['watch-dir'] ? [path.resolve(workDir, options['watch-dir'])] : [workDir];
-        try {
-            await registerWorker({
-                root: options['adk-root'] ? path.resolve(options['adk-root']) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
-                registryFile: options['work-watch-registry'] || process.env.ADK_WORK_WATCH_REGISTRY,
-                id: options.id,
-                unit: options.unit || process.env.WORKER_UNIT || null,
-                role: watchRole,
-                wakeDir: options['wake-dir'] || reviewCapWakeDir || undefined,
-                resultFile: path.resolve(workDir, watchResultFile),
-                doneFile: options['done-file'] ? path.resolve(workDir, options['done-file']) : null,
-                watchDirs,
-                stallMinutes: options['stall-min'] !== undefined ? Number(options['stall-min']) : 15,
-                pid: process.pid,
-                command,
-            });
-        } catch (error) {
-            event('work-watch-register-error', { id: options.id }, { error: error.message });
-        }
+        const watchDirs = options['watch-dirs'].length
+            ? options['watch-dirs'].map(d => path.resolve(workDir, d))
+            : [workDir];
+        await registerWorker({
+            root: options['adk-root'] ? path.resolve(options['adk-root']) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
+            registryFile: options['work-watch-registry'] || process.env.ADK_WORK_WATCH_REGISTRY,
+            id: options.id,
+            unit: options.unit || process.env.WORKER_UNIT || null,
+            role: watchRole,
+            wakeDir: options['wake-dir'] || reviewCapWakeDir || undefined,
+            resultFile: path.resolve(workDir, watchResultFile),
+            doneFile: options['done-file'] ? path.resolve(workDir, options['done-file']) : null,
+            watchDirs,
+            stallMinutes: options['stall-min'] !== undefined ? Number(options['stall-min']) : 15,
+            pid: process.pid,
+            command,
+        });
     }
     const budget = parseBytes(options.budget || instruction.disk_budget || options['default-budget'] || '1G'), floor = parseBytes(options.floor || '5G');
     const p = options.priority || instruction.disk_priority || 'normal', priority = ({ low: -100, normal: 0, high: 100 })[p] ?? Number(p);

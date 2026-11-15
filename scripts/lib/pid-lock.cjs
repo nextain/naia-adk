@@ -8,8 +8,21 @@ const crypto = require('node:crypto');
 const MAX_LINUX_PID = 2147483647;
 const DEFAULT_ORPHAN_GRACE_MS = 30_000;
 const DEFAULT_UNVERIFIED_MAX_AGE_MS = 3_600_000;
+const DEFAULT_RECLAIM_RETRIES = 6;
+const DEFAULT_RECLAIM_RETRY_DELAY_MS = 25;
 const MAX_QUARANTINE_FILES = 20;
 const MAX_RECOVERY_LOG_LINES = 100;
+const SHARED_WAIT_ARRAY = new Int32Array(new SharedArrayBuffer(4));
+
+function sleepSync(ms) {
+  if (ms > 0) {
+    Atomics.wait(SHARED_WAIT_ARRAY, 0, 0, ms);
+  }
+}
+
+function sleepAsync(ms) {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
 
 function readBootIdSync(fsImpl = fs) {
   try {
@@ -154,6 +167,9 @@ function makeBusyError(lockPath, detail = '') {
   err.code = 'EEXIST';
   err.syscall = 'open';
   err.path = lockPath;
+  if (detail === 'reclaim-in-progress') {
+    err.reclaimInProgress = true;
+  }
   return err;
 }
 
@@ -330,41 +346,71 @@ function recoverStaleLockSync(lockPath, inspectOpts = {}, fsImpl = fs) {
   }
 }
 
+function makeSyncHandle(resolved, stat, recovered, fsImpl) {
+  let released = false;
+  return {
+    lockPath: resolved,
+    pid: process.pid,
+    ino: stat.ino,
+    recovered,
+    release() {
+      if (released) return;
+      released = true;
+      try {
+        const cur = fsImpl.lstatSync(resolved);
+        if (cur.ino === stat.ino) {
+          fsImpl.unlinkSync(resolved);
+        }
+      } catch (err) {
+        if (err && err.code !== 'ENOENT') throw err;
+      }
+    },
+  };
+}
+
+function resolveReclaimBounds(options) {
+  const maxReclaimRetries =
+    Number.isInteger(options.reclaimRetries) && options.reclaimRetries >= 0
+      ? options.reclaimRetries
+      : DEFAULT_RECLAIM_RETRIES;
+  const reclaimDelayMs =
+    Number.isFinite(options.reclaimRetryDelayMs) && options.reclaimRetryDelayMs >= 0
+      ? options.reclaimRetryDelayMs
+      : DEFAULT_RECLAIM_RETRY_DELAY_MS;
+  return { maxReclaimRetries, reclaimDelayMs };
+}
+
 function acquirePidLockSync(lockPath, options = {}) {
   const fsImpl = options.fsImpl || fs;
   const resolved = path.resolve(lockPath);
   if (options.createParent !== false) {
     fsImpl.mkdirSync(path.dirname(resolved), { recursive: true, mode: 0o700 });
   }
-  const nowMs = options.nowMs ?? Date.now();
-  const payload = buildLockPayload(nowMs, fsImpl);
+  const { maxReclaimRetries, reclaimDelayMs } = resolveReclaimBounds(options);
+  const sleepFn = options.sleepSyncImpl || sleepSync;
 
   let recovered = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  let staleAttempts = 0;
+  let reclaimWaits = 0;
+  while (staleAttempts < 3) {
+    const attemptNow = options.nowMs ?? Date.now();
+    const payload = buildLockPayload(attemptNow, fsImpl);
     try {
       const stat = writeAtomicLinkSync(resolved, payload, fsImpl);
-      let released = false;
-      return {
-        lockPath: resolved,
-        pid: process.pid,
-        ino: stat.ino,
-        recovered,
-        release() {
-          if (released) return;
-          released = true;
-          try {
-            const cur = fsImpl.lstatSync(resolved);
-            if (cur.ino === stat.ino) {
-              fsImpl.unlinkSync(resolved);
-            }
-          } catch (err) {
-            if (err && err.code !== 'ENOENT') throw err;
-          }
-        },
-      };
+      return makeSyncHandle(resolved, stat, recovered, fsImpl);
     } catch (err) {
       if (!err || err.code !== 'EEXIST') throw err;
-      recovered = recoverStaleLockSync(resolved, { ...options, nowMs }, fsImpl);
+      try {
+        recovered = recoverStaleLockSync(resolved, { ...options, nowMs: attemptNow }, fsImpl);
+        staleAttempts += 1;
+      } catch (recErr) {
+        if (recErr && recErr.reclaimInProgress && reclaimWaits < maxReclaimRetries) {
+          reclaimWaits += 1;
+          sleepFn(reclaimDelayMs);
+          continue;
+        }
+        throw recErr;
+      }
     }
   }
   throw makeBusyError(resolved, 'contention');
@@ -380,26 +426,58 @@ function withPidLockSync(lockPath, fn, options = {}) {
 }
 
 async function acquirePidLock(lockPath, options = {}) {
-  const syncHandle = acquirePidLockSync(lockPath, options);
-  let released = false;
-  return {
-    lockPath: syncHandle.lockPath,
-    pid: syncHandle.pid,
-    ino: syncHandle.ino,
-    recovered: syncHandle.recovered,
-    async release() {
-      if (released) return;
-      released = true;
+  const fsImpl = options.fsImpl || fs;
+  const resolved = path.resolve(lockPath);
+  if (options.createParent !== false) {
+    fsImpl.mkdirSync(path.dirname(resolved), { recursive: true, mode: 0o700 });
+  }
+  const { maxReclaimRetries, reclaimDelayMs } = resolveReclaimBounds(options);
+  const sleepFn = options.sleepImpl || sleepAsync;
+
+  let recovered = null;
+  let staleAttempts = 0;
+  let reclaimWaits = 0;
+  while (staleAttempts < 3) {
+    const attemptNow = options.nowMs ?? Date.now();
+    const payload = buildLockPayload(attemptNow, fsImpl);
+    try {
+      const stat = writeAtomicLinkSync(resolved, payload, fsImpl);
+      let released = false;
+      return {
+        lockPath: resolved,
+        pid: process.pid,
+        ino: stat.ino,
+        recovered,
+        async release() {
+          if (released) return;
+          released = true;
+          try {
+            const cur = options.fsImpl ? fsImpl.lstatSync(resolved) : await fsp.lstat(resolved);
+            if (cur.ino === stat.ino) {
+              if (options.fsImpl) fsImpl.unlinkSync(resolved);
+              else await fsp.unlink(resolved);
+            }
+          } catch (err) {
+            if (err && err.code !== 'ENOENT') throw err;
+          }
+        },
+      };
+    } catch (err) {
+      if (!err || err.code !== 'EEXIST') throw err;
       try {
-        const cur = await fsp.lstat(syncHandle.lockPath);
-        if (cur.ino === syncHandle.ino) {
-          await fsp.unlink(syncHandle.lockPath);
+        recovered = recoverStaleLockSync(resolved, { ...options, nowMs: attemptNow }, fsImpl);
+        staleAttempts += 1;
+      } catch (recErr) {
+        if (recErr && recErr.reclaimInProgress && reclaimWaits < maxReclaimRetries) {
+          reclaimWaits += 1;
+          await sleepFn(reclaimDelayMs);
+          continue;
         }
-      } catch (err) {
-        if (err && err.code !== 'ENOENT') throw err;
+        throw recErr;
       }
-    },
-  };
+    }
+  }
+  throw makeBusyError(resolved, 'contention');
 }
 
 async function withPidLock(lockPath, fn, options = {}) {
@@ -415,6 +493,8 @@ module.exports = {
   MAX_LINUX_PID,
   DEFAULT_ORPHAN_GRACE_MS,
   DEFAULT_UNVERIFIED_MAX_AGE_MS,
+  DEFAULT_RECLAIM_RETRIES,
+  DEFAULT_RECLAIM_RETRY_DELAY_MS,
   readBootIdSync,
   readProcStatSync,
   parseLockRecord,

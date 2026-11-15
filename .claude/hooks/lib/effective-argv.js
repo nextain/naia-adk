@@ -1985,6 +1985,113 @@ const CLAUDE_VALUE_FLAGS = new Set([
 	"--resume", "-r", "--session-id", "--agents", "--agent", "--betas", "--settings",
 ]);
 
+const ADK_HOOK_REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+const COMPOUND_OPEN_WORDS = new Set(["{", "if", "for", "while", "until", "case", "select"]);
+const COMPOUND_CLOSE_PAIRS = {
+	"}": "{",
+	fi: "if",
+	done: new Set(["for", "while", "until", "select"]),
+	esac: "case",
+};
+
+function scanSubstEnd(s, from, close) {
+	let depth = 0;
+	let q = null;
+	const hd = [];
+	for (let k = from; k < s.length; k++) {
+		const c = s[k];
+		if (q === "'") {
+			if (c === "'") q = null;
+			continue;
+		}
+		if (c === "\\") {
+			k++;
+			continue;
+		}
+		if (q === '"') {
+			if (c === '"') q = null;
+			else if (c === "$" && s[k + 1] === "(") {
+				const e = scanSubstEnd(s, k + 2, ")");
+				if (e < 0) return -1;
+				k = e;
+			} else if (c === "`") {
+				const e = scanSubstEnd(s, k + 1, "`");
+				if (e < 0) return -1;
+				k = e;
+			}
+			continue;
+		}
+		if (close === "`" && c === "`") return k;
+		if (c === "'" || c === '"') {
+			q = c;
+			continue;
+		}
+		if (c === "#" && (k === from || /\s/.test(s[k - 1]))) {
+			const nl = s.indexOf("\n", k);
+			if (nl < 0) return -1;
+			k = nl - 1;
+			continue;
+		}
+		if (c === "<" && s[k + 1] === "<" && s[k + 2] !== "<" && s[k - 1] !== "<") {
+			const m = s.slice(k).match(/^<<(-?)[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_.-]*)\2/);
+			if (m) {
+				hd.push({ delim: m[3], strip: m[1] === "-" });
+				k += m[0].length - 1;
+				continue;
+			}
+		}
+		if (c === "\n" && hd.length) {
+			while (hd.length) {
+				const { delim, strip } = hd.shift();
+				for (;;) {
+					const nl = s.indexOf("\n", k + 1);
+					const line = s.slice(k + 1, nl < 0 ? s.length : nl);
+					k = nl < 0 ? s.length : nl;
+					if ((strip ? line.replace(/^\t+/, "") : line).trim() === delim) break;
+					if (nl < 0) return -1;
+				}
+			}
+			continue;
+		}
+		if (close === ")") {
+			if (c === "$" && s[k + 1] === "(") {
+				const e = scanSubstEnd(s, k + 2, ")");
+				if (e < 0) return -1;
+				k = e;
+				continue;
+			}
+			if (c === "`") {
+				const e = scanSubstEnd(s, k + 1, "`");
+				if (e < 0) return -1;
+				k = e;
+				continue;
+			}
+			if (c === "(") depth++;
+			else if (c === ")") {
+				if (depth === 0) return k;
+				depth--;
+			}
+		}
+	}
+	return -1;
+}
+
+function stripRedirectionTokens(rawTokens) {
+	const out = [];
+	for (let i = 0; i < rawTokens.length; i++) {
+		const tok = rawTokens[i];
+		if (/^(?:\d*(?:>>?|<<-?|<>|>&|<&|>\||<<<)|&>>?)$/.test(tok)) {
+			i++;
+			continue;
+		}
+		if (/^(?:\d*(?:>>?|<<-?|<>|>&|<&|>\||<<<)|&>>?)(?!\()\S/.test(tok)) {
+			continue;
+		}
+		out.push(tok);
+	}
+	return out;
+}
+
 function splitClausesWithAsync(command) {
 	const s = String(command || "");
 	const clauses = [];
@@ -1995,20 +2102,89 @@ function splitClausesWithAsync(command) {
 	const groups = [];
 	let groupSeq = 0;
 	let lastClosedScope = null;
+	let pipelineId = 1;
+	let nextPiped = false;
+	let pendingCoproc = false;
 	const heredocs = [];
+
+	const currentScopePath = () => groups.map((g) => g.id).join(".");
+	const inCoprocScope = () => groups.some((g) => g.coproc);
+
+	const popMatchingGroup = (closeWord) => {
+		const expected = COMPOUND_CLOSE_PAIRS[closeWord];
+		if (!expected || !groups.length) return null;
+		for (let idx = groups.length - 1; idx >= 0; idx--) {
+			const kind = groups[idx].kind;
+			const matched = expected instanceof Set ? expected.has(kind) : kind === expected;
+			if (matched) {
+				const scopePath = groups.slice(0, idx + 1).map((g) => g.id).join(".");
+				groups.splice(idx);
+				return scopePath;
+			}
+		}
+		return null;
+	};
 
 	const flushToken = () => {
 		if (!token) return;
-		if (tokens.length === 0) tokens.scope = groups.join(".");
-		tokens.push(token);
+		const finished = token;
 		token = "";
+
+		const priorNonRedir = stripRedirectionTokens(tokens);
+		const atClauseHead = priorNonRedir.length === 0;
+
+		if (atClauseHead && Object.hasOwn(COMPOUND_CLOSE_PAIRS, finished)) {
+			const closed = popMatchingGroup(finished);
+			if (closed) {
+				tokens = [];
+				lastClosedScope = closed;
+				return;
+			}
+		}
+
+		if (tokens.length === 0) {
+			tokens.scope = currentScopePath();
+			tokens.pipelineId = pipelineId;
+			if (nextPiped) {
+				tokens.piped = true;
+				tokens.prevClause = clauses[clauses.length - 1] || null;
+				nextPiped = false;
+			}
+		}
+
+		if (
+			(atClauseHead ||
+				(priorNonRedir.length === 1 && priorNonRedir[0] === "coproc") ||
+				(priorNonRedir.length === 2 && priorNonRedir[0] === "coproc" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(priorNonRedir[1]))) &&
+			COMPOUND_OPEN_WORDS.has(finished)
+		) {
+			const isCoproc = pendingCoproc || priorNonRedir[0] === "coproc";
+			pendingCoproc = false;
+			if (priorNonRedir[0] === "coproc") {
+				tokens = [];
+			}
+			groups.push({ id: String(++groupSeq), kind: finished, coproc: isCoproc });
+			tokens.scope = currentScopePath();
+			tokens.pipelineId = pipelineId;
+		} else if (atClauseHead && finished === "coproc") {
+			pendingCoproc = true;
+		}
+
+		tokens.push(finished);
+		if (stripRedirectionTokens(tokens).length > 0) {
+			lastClosedScope = null;
+		}
 	};
-	const flushClause = (bg = false) => {
+
+	const flushClause = (bg = false, bgKind = null) => {
 		flushToken();
 		if (tokens.length) {
-			tokens.bg = Boolean(bg);
+			const coprocInherited = inCoprocScope();
+			tokens.bg = Boolean(bg || coprocInherited);
+			tokens.bgKind = bg ? (bgKind || "&") : (coprocInherited ? "coproc" : null);
 			clauses.push(tokens);
 		}
+		pendingCoproc = false;
 		tokens = [];
 	};
 
@@ -2037,6 +2213,28 @@ function splitClausesWithAsync(command) {
 			escaped = true;
 			continue;
 		}
+		if (
+			quote !== "'" &&
+			(ch === "`" ||
+				(ch === "$" && s[i + 1] === "(") ||
+				(!quote && (ch === "<" || ch === ">") && s[i + 1] === "("))
+		) {
+			const arith = ch === "$" && s[i + 2] === "(";
+			const from = ch === "`" ? i + 1 : i + 2;
+			const end = scanSubstEnd(s, from, ch === "`" ? "`" : ")");
+			if (end < 0) {
+				token += s.slice(i);
+				i = s.length;
+				continue;
+			}
+			if (!arith) {
+				const kind = ch === "`" ? "``" : ch === "$" ? "$()" : `${ch}()`;
+				(tokens.subs = tokens.subs || []).push({ body: s.slice(from, end), kind });
+			}
+			token += s.slice(i, end + 1);
+			i = end;
+			continue;
+		}
 		if (quote) {
 			if (ch === quote) quote = null;
 			else token += ch;
@@ -2058,19 +2256,34 @@ function splitClausesWithAsync(command) {
 		}
 		if (ch === "<" && s[i + 1] === "<" && s[i + 2] !== "<" && s[i - 1] !== "<") {
 			const m = s.slice(i).match(/^<<(-?)[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_.-]*)\2/);
-			if (m) heredocs.push({ delim: m[3], strip: m[1] === "-" });
+			if (m) {
+				if (tokens.length === 0 && !token) {
+					tokens.scope = currentScopePath();
+					tokens.pipelineId = pipelineId;
+				}
+				heredocs.push({ delim: m[3], strip: m[1] === "-", targetClause: tokens });
+			}
 		}
 		if (ch === "\n") {
+			const activeClause = tokens;
 			flushClause(false);
+			pipelineId++;
+			nextPiped = false;
 			lastClosedScope = null;
 			while (heredocs.length) {
-				const { delim, strip } = heredocs.shift();
+				const { delim, strip, targetClause } = heredocs.shift();
+				const lines = [];
 				for (;;) {
 					const end = s.indexOf("\n", i + 1);
 					const line = s.slice(i + 1, end < 0 ? s.length : end);
 					i = end < 0 ? s.length : end;
 					const bare = strip ? line.replace(/^\t+/, "") : line;
 					if (bare.trim() === delim || end < 0) break;
+					lines.push(bare);
+				}
+				const owner = targetClause && targetClause.length ? targetClause : activeClause;
+				if (owner) {
+					(owner.heredocs = owner.heredocs || []).push(lines.join("\n"));
 				}
 			}
 			continue;
@@ -2090,93 +2303,372 @@ function splitClausesWithAsync(command) {
 			continue;
 		}
 		if (ch === "&" && s[i + 1] !== "&") {
-			if (tokens.length || token) {
-				flushClause(true);
-			} else if (lastClosedScope) {
-				for (const prev of clauses) {
-					if (prev.scope === lastClosedScope || String(prev.scope || "").startsWith(`${lastClosedScope}.`)) {
-						prev.bg = true;
+			flushToken();
+			const nonRedir = stripRedirectionTokens(tokens);
+			const closedScope = lastClosedScope;
+			const activePipe = pipelineId;
+			if (nonRedir.length > 0) {
+				flushClause(true, "&");
+			} else {
+				tokens = [];
+				if (closedScope) {
+					for (const prev of clauses) {
+						if (prev.scope === closedScope || String(prev.scope || "").startsWith(`${closedScope}.`)) {
+							prev.bg = true;
+							prev.bgKind = prev.bgKind || "&";
+						}
 					}
 				}
 			}
+			for (const prev of clauses) {
+				if (prev.pipelineId === activePipe) {
+					prev.bg = true;
+					prev.bgKind = prev.bgKind || "&";
+				}
+			}
+			pipelineId++;
+			nextPiped = false;
 			lastClosedScope = null;
 			continue;
 		}
 		if (ch === "&" && s[i + 1] === "&") {
 			flushClause(false);
+			pipelineId++;
+			nextPiped = false;
 			lastClosedScope = null;
 			i++;
 			continue;
 		}
-		if (ch === "|" && (s[i + 1] === "|" || s[i + 1] === "&")) {
+		if (ch === "|" && s[i + 1] === "|") {
 			flushClause(false);
+			pipelineId++;
+			nextPiped = false;
 			lastClosedScope = null;
 			i++;
 			continue;
 		}
-		if (ch === ";" || ch === "|") {
+		if (ch === "|" && s[i + 1] === "&") {
 			flushClause(false);
+			nextPiped = true;
+			lastClosedScope = null;
+			i++;
+			continue;
+		}
+		if (ch === "|") {
+			flushClause(false);
+			nextPiped = true;
+			lastClosedScope = null;
+			continue;
+		}
+		if (ch === ";") {
+			flushClause(false);
+			pipelineId++;
+			nextPiped = false;
 			lastClosedScope = null;
 			continue;
 		}
 		if (ch === "(") {
-			flushClause(false);
-			groups.push(++groupSeq);
+			flushToken();
+			const nonRedir = stripRedirectionTokens(tokens);
+			const isCoproc =
+				pendingCoproc ||
+				(nonRedir.length === 1 && nonRedir[0] === "coproc") ||
+				(nonRedir.length === 2 && nonRedir[0] === "coproc" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(nonRedir[1]));
+			if (isCoproc) {
+				tokens = [];
+				pendingCoproc = false;
+			} else {
+				flushClause(false);
+			}
+			groups.push({ id: String(++groupSeq), kind: "(", coproc: isCoproc });
 			lastClosedScope = null;
 			continue;
 		}
 		if (ch === ")") {
 			flushClause(false);
-			lastClosedScope = groups.join(".");
-			groups.pop();
+			const closed = popMatchingGroup_subshell(groups);
+			lastClosedScope = closed;
 			continue;
 		}
-		lastClosedScope = null;
 		token += ch;
 	}
 	if (escaped) token += "\\";
 	flushClause(false);
-	for (let idx = 0; idx < clauses.length - 1; idx++) {
-		const nextFirst = clauses[idx + 1][0];
-		if (nextFirst === "disown") clauses[idx].bg = true;
+	for (let idx = 0; idx < clauses.length; idx++) {
+		const clean = stripRedirectionTokens(clauses[idx]);
+		let leadIdx = 0;
+		while (leadIdx < clean.length && (RESERVED_LEAD.has(clean[leadIdx]) || ASSIGN.test(clean[leadIdx]))) leadIdx++;
+		if (clean[leadIdx] === "disown" && idx > 0) {
+			clauses[idx - 1].bg = true;
+			clauses[idx - 1].bgKind = clauses[idx - 1].bgKind || "disown";
+		}
 	}
 	return clauses;
 }
 
-function stripRedirectionTokens(rawTokens) {
-	const out = [];
-	for (let i = 0; i < rawTokens.length; i++) {
-		const tok = rawTokens[i];
-		if (/^(?:\d*(?:>>?|<<?|<>|>&|<&|>\||<<<)|&>>?)$/.test(tok)) {
-			i++;
-			continue;
+function popMatchingGroup_subshell(groups) {
+	if (!groups.length) return null;
+	for (let idx = groups.length - 1; idx >= 0; idx--) {
+		if (groups[idx].kind === "(") {
+			const scopePath = groups.slice(0, idx + 1).map((g) => g.id).join(".");
+			groups.splice(idx);
+			return scopePath;
 		}
-		if (/^(?:\d*(?:>>?|<<?|<>|>&|<&|>\||<<<)|&>>?).+/.test(tok)) {
-			continue;
-		}
-		out.push(tok);
 	}
-	return out;
+	const fallback = groups.map((g) => g.id).join(".");
+	groups.pop();
+	return fallback;
+}
+
+function findEnclosingRepoRoot(startDir) {
+	const fs = require("fs");
+	let cur = path.resolve(startDir || process.cwd());
+	for (let depth = 0; depth < 25; depth++) {
+		try {
+			if (fs.existsSync(path.join(cur, ".agents")) || fs.existsSync(path.join(cur, ".git"))) {
+				return cur;
+			}
+		} catch {}
+		const parent = path.dirname(cur);
+		if (parent === cur) break;
+		cur = parent;
+	}
+	return null;
+}
+
+function addNormalizedAdapterPath(set, candidate, baseDir) {
+	if (typeof candidate !== "string" || !candidate.trim()) return;
+	const fs = require("fs");
+	const abs = path.resolve(baseDir || process.cwd(), candidate.trim());
+	set.add(abs);
+	try {
+		set.add(fs.realpathSync(abs));
+	} catch {}
+}
+
+function resolveAllowedAdapterPaths(cwd, env, opts = {}) {
+	const fs = require("fs");
+	const allowed = new Set();
+	const baseDir = path.resolve(cwd || process.cwd());
+	const repoRoot = findEnclosingRepoRoot(baseDir);
+
+	if (opts.standardAdapterPath) {
+		addNormalizedAdapterPath(allowed, opts.standardAdapterPath, baseDir);
+	}
+	if (Array.isArray(opts.allowedAdapterPaths)) {
+		for (const item of opts.allowedAdapterPaths) {
+			addNormalizedAdapterPath(allowed, item, baseDir);
+		}
+	}
+	const envAdapter = env && typeof env.ADK_WORKER_ADAPTER_PATH === "string" ? env.ADK_WORKER_ADAPTER_PATH : "";
+	if (envAdapter.trim()) {
+		for (const part of envAdapter.split(path.delimiter)) {
+			addNormalizedAdapterPath(allowed, part, baseDir);
+		}
+	}
+	if (repoRoot) {
+		try {
+			const cfgFile = path.join(repoRoot, ".agents", "config", "worker-runner.json");
+			if (fs.existsSync(cfgFile)) {
+				const parsed = JSON.parse(fs.readFileSync(cfgFile, "utf8"));
+				if (parsed && typeof parsed === "object") {
+					addNormalizedAdapterPath(allowed, parsed.standardAdapterPath, repoRoot);
+					addNormalizedAdapterPath(allowed, parsed.adapterPath, repoRoot);
+					if (Array.isArray(parsed.allowedAdapterPaths)) {
+						for (const item of parsed.allowedAdapterPaths) {
+							addNormalizedAdapterPath(allowed, item, repoRoot);
+						}
+					}
+				}
+			}
+		} catch {}
+	}
+	let cur = baseDir;
+	for (let depth = 0; depth < 25; depth++) {
+		try {
+			const roleFile = path.join(cur, ".naia-role.json");
+			if (fs.existsSync(roleFile)) {
+				const roleCfg = JSON.parse(fs.readFileSync(roleFile, "utf8"));
+				if (roleCfg && typeof roleCfg === "object") {
+					addNormalizedAdapterPath(allowed, roleCfg.worker_adapter, cur);
+					if (roleCfg.lead_guard && typeof roleCfg.lead_guard === "object") {
+						addNormalizedAdapterPath(allowed, roleCfg.lead_guard.worker_adapter, cur);
+					}
+				}
+				break;
+			}
+		} catch {}
+		const parent = path.dirname(cur);
+		if (parent === cur) break;
+		cur = parent;
+	}
+	return { allowed, repoRoot };
+}
+
+function isSpawnWorkerPath(scriptWord, cwd, repoRoot) {
+	if (typeof scriptWord !== "string" || !scriptWord || /[$`]/.test(scriptWord)) return false;
+	const fs = require("fs");
+	const slashNorm = scriptWord.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
+	if (slashNorm === "scripts/worker-runner/spawn-worker.mjs") {
+		return true;
+	}
+	const resolved = path.resolve(cwd || process.cwd(), scriptWord);
+	const candidates = [path.resolve(ADK_HOOK_REPO_ROOT, "scripts/worker-runner/spawn-worker.mjs")];
+	if (repoRoot) {
+		candidates.push(path.resolve(repoRoot, "scripts/worker-runner/spawn-worker.mjs"));
+	}
+	const parentRepo = findEnclosingRepoRoot(path.dirname(resolved));
+	if (parentRepo) {
+		candidates.push(path.resolve(parentRepo, "scripts/worker-runner/spawn-worker.mjs"));
+	}
+	for (const candidate of candidates) {
+		if (resolved === candidate) return true;
+		try {
+			if (fs.realpathSync(resolved) === fs.realpathSync(candidate)) return true;
+		} catch {}
+	}
+	return false;
+}
+
+function isConfiguredAdapterPath(scriptWord, cwd, allowedSet) {
+	if (!allowedSet || allowedSet.size === 0) return false;
+	if (typeof scriptWord !== "string" || !scriptWord || /[$`]/.test(scriptWord)) return false;
+	const fs = require("fs");
+	const resolved = path.resolve(cwd || process.cwd(), scriptWord);
+	if (allowedSet.has(resolved)) return true;
+	try {
+		if (allowedSet.has(fs.realpathSync(resolved))) return true;
+	} catch {}
+	return false;
+}
+
+function isAllowedStandardEntrypoint(argv, cwd, adapterCtx) {
+	if (!Array.isArray(argv) || !argv.length) return false;
+	const headBase = path.basename(String(argv[0] || "")).toLowerCase();
+
+	if (isSpawnWorkerPath(argv[0], cwd, adapterCtx.repoRoot)) return true;
+	if (isConfiguredAdapterPath(argv[0], cwd, adapterCtx.allowed)) return true;
+
+	if (/^(?:node|nodejs)(?:\.exe)?$/.test(headBase)) {
+		let k = 1;
+		while (k < argv.length && argv[k].startsWith("-")) {
+			if (/^(?:-r|--require|--import|--loader|--experimental-loader|--input-type|-C|--conditions)$/.test(argv[k])) {
+				k += 2;
+				continue;
+			}
+			if (/^(?:-e|--eval|-p|--print)$/.test(argv[k])) return false;
+			if (argv[k] === "--") {
+				k++;
+				break;
+			}
+			k++;
+		}
+		if (k < argv.length && isSpawnWorkerPath(argv[k], cwd, adapterCtx.repoRoot)) {
+			return true;
+		}
+		return false;
+	}
+
+	if (SHELLS.test(headBase)) {
+		const inv = shellInvocation(argv, { dir: cwd });
+		if (inv.command < 0 && !inv.readsStdin && inv.script >= 0 && argv[inv.script]) {
+			if (isConfiguredAdapterPath(argv[inv.script], cwd, adapterCtx.allowed)) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+function unwrapWorkerLauncherArgv(argv) {
+	let cur = Array.isArray(argv) ? argv.slice() : [];
+	for (let guard = 0; guard < 8 && cur.length; guard++) {
+		const head = path.basename(String(cur[0] || "")).toLowerCase();
+		if (/^(?:npx|pnpx|bunx|uvx)(?:\.(?:cmd|exe|js))?$/.test(head)) {
+			let k = 1;
+			while (k < cur.length && cur[k].startsWith("-")) {
+				if (/^(?:-p|--package|-c|--call)$/.test(cur[k])) k += 2;
+				else if (cur[k] === "--") { k++; break; }
+				else k++;
+			}
+			cur = cur.slice(k);
+			continue;
+		}
+		if (/^(?:pnpm|yarn|npm)(?:\.(?:cmd|exe|cjs|js))?$/.test(head)) {
+			if (cur[1] === "dlx" || cur[1] === "exec") {
+				let k = 2;
+				while (k < cur.length && cur[k].startsWith("-")) {
+					if (cur[k] === "--") { k++; break; }
+					if (/^(?:-p|--package)$/.test(cur[k])) k += 2;
+					else k++;
+				}
+				cur = cur.slice(k);
+				continue;
+			}
+		}
+		if (/^(?:node|nodejs|bun)(?:\.exe)?$/.test(head)) {
+			let k = 1;
+			while (k < cur.length && cur[k].startsWith("-")) {
+				if (/^(?:-r|--require|--import|--loader|--experimental-loader|--conditions|-C)$/.test(cur[k])) k += 2;
+				else if (/^(?:-e|--eval|-p|--print|--test)$/.test(cur[k])) return cur;
+				else if (cur[k] === "--") { k++; break; }
+				else k++;
+			}
+			if (k < cur.length) {
+				const scriptWord = String(cur[k] || "");
+				const scriptBase = path.basename(scriptWord).toLowerCase();
+				if (scriptBase === "cli.mjs" && /worker-runner/.test(scriptWord.replace(/\\/g, "/")) && cur[k + 1] === "run") {
+					const dashDash = cur.indexOf("--", k + 2);
+					if (dashDash >= 0 && dashDash + 1 < cur.length) {
+						const inner = detectDirectWorkerCli(cur.slice(dashDash + 1));
+						if (inner) return cur.slice(dashDash + 1);
+					}
+					return ["worker-runner/cli.mjs", "run"];
+				}
+				cur = cur.slice(k);
+				continue;
+			}
+		}
+		break;
+	}
+	return cur;
 }
 
 function detectDirectWorkerCli(argv) {
-	if (!argv || !argv.length) return null;
-	let idx = 0;
-	let head = path.basename(String(argv[0] || "")).toLowerCase();
-	if (/^(?:node|nodejs)(?:\.exe)?$/.test(head) && argv[1]) {
-		const scriptBase = path.basename(String(argv[1]));
-		if (/^(?:spawn-worker\.mjs|cli\.mjs|worker-runner-adapter\.sh)$/i.test(scriptBase)) return null;
-		head = scriptBase.toLowerCase();
-		idx = 1;
+	const unwrapped = unwrapWorkerLauncherArgv(argv);
+	if (!unwrapped.length) return null;
+	const rawHead = String(unwrapped[0] || "");
+	const head = path.basename(rawHead).toLowerCase();
+	const rest = unwrapped.slice(1);
+
+	if (rawHead === "worker-runner/cli.mjs" && rest[0] === "run") {
+		return "worker-runner/cli.mjs run";
 	}
-	const rest = argv.slice(idx + 1);
-	if (/^agy(?:-cli)?(?:\.(?:c?js|mjs|sh))?$/.test(head)) return "agy";
-	if (/^codex(?:\.(?:c?js|mjs|sh))?$/.test(head)) return "codex";
-	if (/^claude(?:-code)?(?:\.(?:c?js|mjs|sh))?$/.test(head)) {
+	if (head === "cli.mjs" && /worker-runner/.test(rawHead.replace(/\\/g, "/")) && rest[0] === "run") {
+		const dashDash = rest.indexOf("--");
+		if (dashDash >= 0 && dashDash + 1 < rest.length) {
+			const inner = detectDirectWorkerCli(rest.slice(dashDash + 1));
+			if (inner) return inner;
+		}
+		return "worker-runner/cli.mjs run";
+	}
+	if (head === "worker-runner-adapter.sh") {
+		for (let idx = 0; idx < rest.length; idx++) {
+			const inner = detectDirectWorkerCli(rest.slice(idx));
+			if (inner) return inner;
+		}
+		return "worker-runner-adapter.sh";
+	}
+
+	if (/^agy(?:-cli)?(?:\.(?:c?js|mjs|sh|exe))?$/.test(head)) return "agy";
+	if (/^codex(?:-cli)?(?:\.(?:c?js|mjs|sh|exe))?$/.test(head)) return "codex";
+
+	if (/^claude(?:-code)?(?:\.(?:c?js|mjs|sh|exe))?$/.test(head)) {
 		for (let i = 0; i < rest.length; i++) {
 			const arg = rest[i];
 			if (arg === "--") break;
-			if (arg === "-p" || arg === "--print") return "claude -p";
+			if (arg === "-p" || arg === "--print" || arg.startsWith("--print=")) return "claude -p";
 			if (/^-[A-Za-z]{2,}$/.test(arg) && arg.includes("p")) return "claude -p";
 			if (CLAUDE_VALUE_FLAGS.has(arg)) {
 				i++;
@@ -2185,168 +2677,857 @@ function detectDirectWorkerCli(argv) {
 		}
 		return null;
 	}
-	if (/^muse(?:-bin)?(?:-[\d.]+)?(?:\.(?:c?js|mjs|sh))?$/.test(head)) {
-		if (rest.includes("exec")) return "muse exec";
+
+	if (/^muse(?:-bin)?(?:-[\d.]+)?(?:\.(?:c?js|mjs|sh|exe))?$/.test(head)) {
+		const end = rest.indexOf("--");
+		const subArgs = end >= 0 ? rest.slice(0, end) : rest;
+		if (subArgs.includes("exec")) return "muse exec";
+		return null;
+	}
+
+	if (/^opencode(?:-cli)?(?:\.(?:c?js|mjs|sh|exe))?$/.test(head)) {
+		const end = rest.indexOf("--");
+		const subArgs = end >= 0 ? rest.slice(0, end) : rest;
+		if (
+			subArgs.includes("run") ||
+			subArgs.some((a) => a === "-p" || a === "--prompt" || a.startsWith("--prompt="))
+		) {
+			return "opencode run";
+		}
+		return null;
+	}
+
+	if (/^gemini(?:-cli)?(?:\.(?:c?js|mjs|sh|exe))?$/.test(head)) {
+		for (let i = 0; i < rest.length; i++) {
+			const arg = rest[i];
+			if (arg === "--") break;
+			if (arg === "-p" || arg === "--prompt" || arg.startsWith("--prompt=")) return "gemini -p";
+			if (/^-[A-Za-z]{2,}$/.test(arg) && arg.includes("p")) return "gemini -p";
+		}
+		return null;
+	}
+
+	if (/^goose(?:\.(?:c?js|mjs|sh|exe))?$/.test(head)) {
+		const end = rest.indexOf("--");
+		const subArgs = end >= 0 ? rest.slice(0, end) : rest;
+		if (subArgs.includes("run")) return "goose run";
+		return null;
+	}
+
+	if (/^droid(?:\.(?:c?js|mjs|sh|exe))?$/.test(head)) {
+		const end = rest.indexOf("--");
+		const subArgs = end >= 0 ? rest.slice(0, end) : rest;
+		if (subArgs.includes("exec")) return "droid exec";
+		return null;
+	}
+
+	if (/^aider(?:\.(?:c?js|mjs|sh|exe))?$/.test(head)) {
+		for (let i = 0; i < rest.length; i++) {
+			const arg = rest[i];
+			if (arg === "--") break;
+			if (arg === "-m" || arg === "--message" || arg.startsWith("--message=") || arg === "--yes" || arg === "--yes-always") {
+				return "aider";
+			}
+		}
+		return null;
+	}
+
+	if (/^grok(?:-cli)?(?:\.(?:c?js|mjs|sh|exe))?$/.test(head)) {
+		const end = rest.indexOf("--");
+		const subArgs = end >= 0 ? rest.slice(0, end) : rest;
+		if (subArgs.includes("exec") || subArgs.includes("run") || subArgs.some((a) => a === "-p" || a === "--prompt")) {
+			return "grok";
+		}
+		return null;
+	}
+
+	if (/^pi(?:\.(?:c?js|mjs|sh|exe))?$/.test(head)) {
+		for (let i = 0; i < rest.length; i++) {
+			const arg = rest[i];
+			if (arg === "--") break;
+			if (arg === "-p" || arg === "--print") return "pi -p";
+		}
+		return null;
+	}
+
+	return null;
+}
+
+function readSmallLocalScript(fileWord, cwd) {
+	if (typeof fileWord !== "string" || !fileWord || /[$`]/.test(fileWord)) return null;
+	const fs = require("fs");
+	try {
+		const resolved = path.resolve(cwd || process.cwd(), fileWord);
+		const st = fs.statSync(resolved);
+		if (!st.isFile() || st.size <= 0 || st.size > 262144) return null;
+		return { resolved, text: fs.readFileSync(resolved, "utf8") };
+	} catch {
+		return null;
+	}
+}
+
+function extractProducerText(prevClause, cwd) {
+	if (!prevClause || !prevClause.length) return null;
+	const clean = stripRedirectionTokens(prevClause);
+	let i = 0;
+	while (i < clean.length && (RESERVED_LEAD.has(clean[i]) || ASSIGN.test(clean[i]) || clean[i] === "command" || clean[i] === "builtin")) {
+		i++;
+	}
+	if (i >= clean.length) return null;
+	const head = path.basename(clean[i]).toLowerCase();
+	const args = clean.slice(i + 1);
+	if (head === "echo") {
+		let stopFlags = false;
+		const words = [];
+		for (const a of args) {
+			if (!stopFlags && /^-[neE]+$/.test(a)) continue;
+			stopFlags = true;
+			words.push(a);
+		}
+		return words.join(" ").replace(/\\n/g, "\n");
+	}
+	if (head === "printf") {
+		const formatted = formatPrintfPipe(args);
+		if (formatted !== null) return formatted;
+		return args.slice(1).join(" ").replace(/\\n/g, "\n") || (args[0] ? args[0].replace(/\\n/g, "\n") : null);
+	}
+	if (head === "cat") {
+		if (Array.isArray(prevClause.heredocs) && prevClause.heredocs.length) {
+			return prevClause.heredocs.join("\n");
+		}
+		const chunks = [];
+		for (const a of args) {
+			if (a === "--" || a.startsWith("-")) continue;
+			const f = readSmallLocalScript(a, cwd);
+			if (f) chunks.push(f.text);
+		}
+		return chunks.length ? chunks.join("\n") : null;
 	}
 	return null;
 }
 
-function checkDetachedWorkerCommand(command, opts = {}) {
-	const depth = opts.depth || 0;
-	if (depth > 6 || !command) return null;
-	const inheritedDetach = opts.inheritedDetach || null;
-	const clauses = splitClausesWithAsync(command);
+function extractClauseStdinBodies(rawClause, cwd) {
+	const bodies = [];
+	if (Array.isArray(rawClause.heredocs) && rawClause.heredocs.length) {
+		bodies.push(...rawClause.heredocs);
+	}
+	for (let i = 0; i < rawClause.length; i++) {
+		const tok = rawClause[i];
+		if (/^\d*<<<$/.test(tok) && rawClause[i + 1] !== undefined) {
+			bodies.push(rawClause[++i]);
+			continue;
+		}
+		const gluedHere = tok.match(/^\d*<<<(.+)$/s);
+		if (gluedHere) {
+			bodies.push(gluedHere[1]);
+			continue;
+		}
+		if (/^\d*<$/.test(tok) && rawClause[i + 1] !== undefined) {
+			const f = readSmallLocalScript(rawClause[++i], cwd);
+			if (f) bodies.push(f.text);
+			continue;
+		}
+		const gluedIn = tok.match(/^\d*<(?![<&(>])(.+)$/);
+		if (gluedIn) {
+			const f = readSmallLocalScript(gluedIn[1], cwd);
+			if (f) bodies.push(f.text);
+		}
+	}
+	if (rawClause.piped && rawClause.prevClause) {
+		const pipedBody = extractProducerText(rawClause.prevClause, cwd);
+		if (pipedBody) bodies.push(pipedBody);
+	}
+	return bodies;
+}
 
-	for (const rawClause of clauses) {
-		const tokens = stripRedirectionTokens(rawClause);
-		if (!tokens.length) continue;
-		let i = 0;
-		let detach = null;
+function detectInterpreterDetachedWorker(argv, effectiveDetach) {
+	if (!Array.isArray(argv) || argv.length < 2) return null;
+	const head = path.basename(String(argv[0] || "")).toLowerCase();
+	let code = null;
+	if (/^(?:node|nodejs|bun)(?:\.exe)?$/.test(head)) {
+		for (let i = 1; i < argv.length; i++) {
+			if ((argv[i] === "-e" || argv[i] === "--eval" || argv[i] === "-p" || argv[i] === "--print") && argv[i + 1]) {
+				code = argv[i + 1];
+				break;
+			}
+			if (!argv[i].startsWith("-")) break;
+		}
+	} else if (/^python(?:\d+(?:\.\d+)?)?(?:\.exe)?$/.test(head)) {
+		for (let i = 1; i < argv.length; i++) {
+			if (argv[i] === "-c" && argv[i + 1]) {
+				code = argv[i + 1];
+				break;
+			}
+			if (!argv[i].startsWith("-")) break;
+		}
+	} else if (/^(?:perl|ruby)(?:\.exe)?$/.test(head)) {
+		for (let i = 1; i < argv.length; i++) {
+			if (argv[i] === "-e" && argv[i + 1]) {
+				code = argv[i + 1];
+				break;
+			}
+			if (!argv[i].startsWith("-")) break;
+		}
+	}
+	if (!code) return null;
 
-		while (i < tokens.length) {
-			const t = tokens[i];
-			if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t) || /^(?:!|\{|time)$/.test(t)) {
-				i++;
-				continue;
+	const hasSpawnApi =
+		/\b(?:child_process|spawn|spawnSync|exec|execSync|execFile|execFileSync|subprocess\.(?:Popen|run|call|check_call|check_output)|os\.(?:system|popen|spawn\w*)|Kernel\.spawn|Process\.spawn)\b/.test(
+			code,
+		);
+	if (!hasSpawnApi) return null;
+
+	const inlineDetach =
+		effectiveDetach ||
+		(/\bdetached\s*:\s*true\b/.test(code)
+			? "node detached:true"
+			: /\.\s*unref\s*\(/.test(code)
+				? "node unref()"
+				: /\bstart_new_session\s*=\s*True\b/.test(code)
+					? "python start_new_session"
+					: /\bos\.setsid\b/.test(code)
+						? "python os.setsid"
+						: /\bsubprocess\.Popen\s*\(/.test(code) && !/\.wait\s*\(/.test(code)
+							? "python Popen"
+							: null);
+	if (!inlineDetach) return null;
+
+	const mWorker = code.match(/\b(agy|codex|claude|muse|opencode)\b/);
+	if (!mWorker) return null;
+	const bin = mWorker[1];
+	if (bin === "claude" && !/(?:['"]-p['"]|['"]--print['"]|\s-p\b|\s--print\b)/.test(code)) return null;
+	if (bin === "muse" && !/\bexec\b/.test(code)) return null;
+	if (bin === "opencode" && !/\brun\b/.test(code)) return null;
+	return {
+		worker: bin === "claude" ? "claude -p" : bin === "muse" ? "muse exec" : bin === "opencode" ? "opencode run" : bin,
+		detach: inlineDetach,
+	};
+}
+
+function buildDetachedBlockResult(worker, effectiveDetach) {
+	return {
+		worker,
+		detach: effectiveDetach,
+		reason:
+			`[Harness] 감시 밖 일꾼 분리 실행 차단: \`${worker}\` (${effectiveDetach} 분리 실행)\n` +
+			"일꾼 CLI(agy·codex·claude -p/--print·muse exec·opencode run 등)를 표준 진입점 밖에서 분리 실행(nohup·setsid·systemd-run·daemonize·at/batch·disown·&·부분 셸·tmux/screen 등)하면 work-watch 감시 등록이 누락되어 멈추거나 죽어도 아무도 깨어나지 않습니다.\n" +
+			"허용된 표준 진입점(spawn-worker.mjs 또는 설정된 서버 표준 어댑터 대본)을 사용하세요:\n" +
+			"  node scripts/worker-runner/spawn-worker.mjs --id <작업ID> --role <역할> --work-dir <작업폴더> --watch-dir <감시폴더> --result-file <결과파일> -- <일꾼 명령...>",
+	};
+}
+
+function peelLeadingWrappers(tokens, opts, depth, recurse) {
+	let i = 0;
+	let detach = null;
+
+	for (let guard = 0; guard < 32 && i < tokens.length; guard++) {
+		const t = tokens[i];
+		if (ASSIGN.test(t) || RESERVED_LEAD.has(t)) {
+			i++;
+			continue;
+		}
+		const base = path.basename(t).toLowerCase();
+
+		if (base === "time") {
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (/^(?:-f|--format|-o|--output)$/.test(tokens[i])) i += 2;
+				else i++;
 			}
-			const base = path.basename(t).toLowerCase();
-			if (base === "nohup") {
-				detach = detach || "nohup";
-				i++;
-				continue;
-			}
-			if (base === "setsid") {
-				detach = detach || "setsid";
-				i++;
-				while (i < tokens.length && /^-[cfw]+$/.test(tokens[i])) i++;
-				continue;
-			}
-			if (base === "env") {
-				i++;
-				while (i < tokens.length) {
-					if (tokens[i] === "-u" || tokens[i] === "--unset" || tokens[i] === "-C" || tokens[i] === "--chdir") {
-						i += 2;
-						continue;
-					}
-					if (tokens[i].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) {
-						i++;
-						continue;
-					}
-					break;
-				}
-				continue;
-			}
-			if (base === "command" || base === "exec" || base === "builtin") {
-				i++;
-				while (i < tokens.length && tokens[i].startsWith("-")) i++;
-				continue;
-			}
-			if (base === "nice" || base === "ionice" || base === "chrt" || base === "stdbuf") {
-				i++;
-				while (i < tokens.length && tokens[i].startsWith("-")) {
-					if (/^-(?:n|c|p)$/.test(tokens[i])) i += 2;
-					else i++;
-				}
-				continue;
-			}
-			if (base === "timeout") {
-				i++;
-				while (i < tokens.length && tokens[i].startsWith("-")) {
-					if (/^-(?:k|s|--kill-after|--signal)$/.test(tokens[i])) i += 2;
-					else i++;
-				}
-				if (i < tokens.length) i++;
-				continue;
-			}
-			if (base === "npx") {
-				i++;
-				while (i < tokens.length && /^-(?:y|-yes|q|-quiet)$/.test(tokens[i])) i++;
-				continue;
-			}
-			if (base === "tmux" && (tokens[i + 1] === "new" || tokens[i + 1] === "new-session")) {
-				let k = i + 2;
-				let detachedTmux = false;
-				while (k < tokens.length && tokens[k].startsWith("-")) {
-					if (tokens[k] === "-d" || (/^-[A-Za-z]+$/.test(tokens[k]) && tokens[k].includes("d"))) detachedTmux = true;
-					if (/^-[stcnPFxXy]$/.test(tokens[k])) k += 2;
-					else k++;
-				}
-				if (detachedTmux) {
-					detach = detach || "tmux -d";
-					i = k;
-					if (i < tokens.length && tokens.length - i === 1) {
-						const nested = checkDetachedWorkerCommand(tokens[i], { inheritedDetach: detach, depth: depth + 1 });
-						if (nested) return nested;
-					}
+			continue;
+		}
+		if (base === "coproc") {
+			detach = detach || "coproc";
+			i++;
+			continue;
+		}
+		if (base === "nohup") {
+			detach = detach || "nohup";
+			i++;
+			if (tokens[i] === "--") i++;
+			continue;
+		}
+		if (base === "setsid") {
+			detach = detach || "setsid";
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (/^-[cfw]+$/.test(tokens[i]) || /^--(?:fork|ctty|wait)$/.test(tokens[i])) {
+					i++;
 					continue;
 				}
+				break;
 			}
-			if (base === "screen") {
-				let k = i + 1;
-				let detachedScreen = false;
-				while (k < tokens.length && tokens[k].startsWith("-")) {
-					if (/^-[A-Za-z]*d[A-Za-z]*m[A-Za-z]*$/.test(tokens[k]) || tokens[k] === "-d") detachedScreen = true;
-					if (/^-[A-Za-z]*[Stc]$/.test(tokens[k]) || tokens[k] === "-Logfile") k += 2;
-					else k++;
-				}
-				if (detachedScreen) {
-					detach = detach || "screen -dm";
-					i = k;
-					if (i < tokens.length && tokens.length - i === 1) {
-						const nested = checkDetachedWorkerCommand(tokens[i], { inheritedDetach: detach, depth: depth + 1 });
-						if (nested) return nested;
-					}
+			continue;
+		}
+		if (base === "daemonize") {
+			detach = detach || "daemonize";
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (/^-(?:c|e|o|p|l|u|E)$/.test(tokens[i])) i += 2;
+				else i++;
+			}
+			continue;
+		}
+		if (base === "daemon") {
+			detach = detach || "daemon";
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				const f = tokens[i];
+				if (f === "--") { i++; break; }
+				if ((f === "--command" || f === "-c") && tokens[i + 1]) {
+					const hit = recurse(tokens[i + 1], detach);
+					if (hit) return { hit };
+					i += 2;
 					continue;
 				}
+				if (f.startsWith("--command=")) {
+					const hit = recurse(f.slice("--command=".length), detach);
+					if (hit) return { hit };
+					i++;
+					continue;
+				}
+				if (/^(?:-n|--name|-u|--user|-D|--chdir|-P|--pidfiles|-F|--pidfile|-o|--output|-O|--stdout|-E|--stderr|-a|--attempts|-d|--delay|-l|--limit|-M|--umask)$/.test(f)) {
+					i += 2;
+					continue;
+				}
+				i++;
+			}
+			continue;
+		}
+		if (base === "start-stop-daemon") {
+			let k = i + 1;
+			let isStopOrStatus = false;
+			let execBin = null;
+			while (k < tokens.length) {
+				const f = tokens[k];
+				if (f === "--") { k++; break; }
+				if (/^(?:-K|--stop|-T|--status|-H|--help|-V|--version)$/.test(f)) {
+					isStopOrStatus = true;
+				}
+				if (/^(?:-x|--exec|-a|--startas)$/.test(f) && tokens[k + 1]) {
+					execBin = tokens[k + 1];
+					k += 2;
+					continue;
+				}
+				const mEq = f.match(/^--(?:exec|startas)=(.+)$/);
+				if (mEq) {
+					execBin = mEq[1];
+					k++;
+					continue;
+				}
+				if (/^(?:-p|--pidfile|-u|--user|-g|--group|-c|--chuid|-r|--chroot|-d|--chdir|-n|--name|-s|--signal|-R|--retry|-k|--umask|-N|--nicelevel|-P|--procsched|-I|--iosched|-O|--output)$/.test(f)) {
+					k += 2;
+					continue;
+				}
+				if (f.startsWith("-")) { k++; continue; }
+				break;
+			}
+			if (!isStopOrStatus) {
+				detach = detach || "start-stop-daemon";
+				const tail = tokens.slice(k);
+				if (execBin) {
+					return { rest: [execBin, ...tail], detach };
+				}
+				i = k;
+				continue;
 			}
 			break;
 		}
+		if (base === "systemd-run") {
+			detach = detach || "systemd-run";
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				const f = tokens[i];
+				if (f === "--") { i++; break; }
+				if (/^(?:-u|--unit|-p|--property|-E|--setenv|-M|--machine|-H|--host|--slice|--description|--working-directory|--uid|--gid|--nice|--service-type|--timer-property|--on-active|--on-boot|--on-startup|--on-unit-active|--on-unit-inactive|--on-calendar|--accuracy-sec|--randomized-delay-sec)$/.test(f)) {
+					i += 2;
+					continue;
+				}
+				i++;
+			}
+			continue;
+		}
+		if (base === "sudo") {
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				const f = tokens[i];
+				if (f === "--") { i++; break; }
+				if (f === "-b" || f === "--background") {
+					detach = detach || "sudo -b";
+					i++;
+					continue;
+				}
+				if (/^(?:-u|--user|-U|--other-user|-g|--group|-C|--close-from|-D|--chdir|-h|--host|-p|--prompt|-r|--role|-t|--type|-T|--command-timeout)$/.test(f)) {
+					i += 2;
+					continue;
+				}
+				if (/^-[A-Za-z]{2,}$/.test(f)) {
+					if (f.includes("b")) detach = detach || "sudo -b";
+					if (/[uUgCDhprtT]$/.test(f)) {
+						i += 2;
+						continue;
+					}
+				}
+				i++;
+			}
+			continue;
+		}
+		if (base === "doas") {
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (/^-(?:u|C)$/.test(tokens[i])) i += 2;
+				else i++;
+			}
+			continue;
+		}
+		if (base === "env") {
+			i++;
+			while (i < tokens.length) {
+				const f = tokens[i];
+				if (f === "--") { i++; break; }
+				if (f === "-u" || f === "--unset" || f === "-C" || f === "--chdir") {
+					i += 2;
+					continue;
+				}
+				if ((f === "-S" || f === "--split-string") && tokens[i + 1]) {
+					const hit = recurse(tokens[i + 1], detach);
+					if (hit) return { hit };
+					i += 2;
+					continue;
+				}
+				if (f.startsWith("-") || ASSIGN.test(f)) {
+					i++;
+					continue;
+				}
+				break;
+			}
+			continue;
+		}
+		if (base === "command" || base === "exec" || base === "builtin" || base === "chronic" || base === "unbuffer" || base === "caffeinate") {
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				i++;
+			}
+			continue;
+		}
+		if (MULTICALL_BINARIES.includes(base)) {
+			i++;
+			if (tokens[i] === "--") i++;
+			continue;
+		}
+		if (base === "nice") {
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (tokens[i] === "-n" || tokens[i] === "--adjustment") i += 2;
+				else i++;
+			}
+			continue;
+		}
+		if (base === "ionice") {
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (/^(?:-c|-n|-p|--class|--classdata)$/.test(tokens[i])) i += 2;
+				else i++;
+			}
+			continue;
+		}
+		if (base === "chrt") {
+			i++;
+			let pidMode = false;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (tokens[i] === "-p" || tokens[i] === "--pid") pidMode = true;
+				i++;
+			}
+			if (!pidMode && i < tokens.length && /^-?\d+$/.test(tokens[i])) i++;
+			continue;
+		}
+		if (base === "taskset") {
+			i++;
+			let cpuList = false;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (tokens[i] === "-c" || tokens[i] === "--cpu-list") {
+					cpuList = true;
+					i += 2;
+					continue;
+				}
+				i++;
+			}
+			if (!cpuList && i < tokens.length) i++;
+			continue;
+		}
+		if (base === "stdbuf") {
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (/^-(?:i|o|e)$/.test(tokens[i])) i += 2;
+				else i++;
+			}
+			continue;
+		}
+		if (base === "timeout") {
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (/^(?:-k|-s|--kill-after|--signal)$/.test(tokens[i])) i += 2;
+				else i++;
+			}
+			if (i < tokens.length) i++;
+			continue;
+		}
+		if (base === "flock") {
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (/^(?:-w|--wait|--timeout|-E|--conflict-exit-code)$/.test(tokens[i])) i += 2;
+				else i++;
+			}
+			if (i < tokens.length) i++;
+			if ((tokens[i] === "-c" || tokens[i] === "--command") && tokens[i + 1]) {
+				const hit = recurse(tokens[i + 1], detach);
+				if (hit) return { hit };
+				return { rest: [], detach };
+			}
+			continue;
+		}
+		if (base === "xargs") {
+			i++;
+			while (i < tokens.length && tokens[i].startsWith("-")) {
+				if (tokens[i] === "--") { i++; break; }
+				if (VALUE_OPTS.xargs.test(tokens[i])) i += 2;
+				else i++;
+			}
+			continue;
+		}
+		if (base === "dtach") {
+			let k = i + 1;
+			let detachedDtach = false;
+			while (k < tokens.length && tokens[k].startsWith("-")) {
+				const f = tokens[k];
+				if (f === "--") { k++; break; }
+				if (/^-(?:n|A|a|c)$/.test(f)) {
+					if (f === "-n") detachedDtach = true;
+					k += 2;
+					continue;
+				}
+				if (/^-(?:e|r)$/.test(f)) { k += 2; continue; }
+				k++;
+			}
+			if (detachedDtach) detach = detach || "dtach -n";
+			i = k;
+			continue;
+		}
+		if (base === "abduco") {
+			let k = i + 1;
+			let detachedAbduco = false;
+			while (k < tokens.length && tokens[k].startsWith("-")) {
+				const f = tokens[k];
+				if (f === "--") { k++; break; }
+				if (/^-[A-Za-z]*[nAca]$/.test(f)) {
+					if (f.includes("n")) detachedAbduco = true;
+					k += 2;
+					continue;
+				}
+				if (f === "-e") { k += 2; continue; }
+				k++;
+			}
+			if (detachedAbduco) detach = detach || "abduco -n";
+			i = k;
+			continue;
+		}
+		if (base === "tmux" && tokens[i + 1]) {
+			const sub = tokens[i + 1];
+			if (/^(?:new|new-session|new-window|neww|split-window|splitw|respawn-pane|respawnp|respawn-window|respawnw)$/.test(sub)) {
+				let k = i + 2;
+				let isDetached = sub !== "new" && sub !== "new-session";
+				while (k < tokens.length && tokens[k].startsWith("-")) {
+					const f = tokens[k];
+					if (f === "--") { k++; break; }
+					if (f === "-d" || (/^-[A-Za-z]+$/.test(f) && f.includes("d"))) isDetached = true;
+					if (/^-[stcnPFxXyelpb]$/.test(f) && f !== "-b" && f !== "-d") k += 2;
+					else k++;
+				}
+				if (isDetached) {
+					detach = detach || (sub === "new" || sub === "new-session" ? "tmux -d" : `tmux ${sub}`);
+					i = k;
+					if (i < tokens.length && tokens.length - i === 1) {
+						const nested = recurse(tokens[i], detach);
+						if (nested) return { hit: nested };
+					}
+					continue;
+				}
+			}
+			if (sub === "send-keys" || sub === "send") {
+				let k = i + 2;
+				while (k < tokens.length && tokens[k].startsWith("-")) {
+					if (tokens[k] === "--") { k++; break; }
+					if (/^-[tN]$/.test(tokens[k])) k += 2;
+					else k++;
+				}
+				const keyWords = tokens.slice(k).filter((w) => !/^(?:Enter|C-m|C-j|KP_Enter)$/i.test(w));
+				if (keyWords.length) {
+					const nested = recurse(keyWords.join(" "), "tmux send-keys");
+					if (nested) return { hit: nested };
+				}
+				return { rest: [], detach };
+			}
+			if (sub === "run-shell" || sub === "run") {
+				let k = i + 2;
+				while (k < tokens.length && tokens[k].startsWith("-")) {
+					if (tokens[k] === "--") { k++; break; }
+					if (/^-[tcd]$/.test(tokens[k])) k += 2;
+					else k++;
+				}
+				if (k < tokens.length) {
+					const nested = recurse(tokens.slice(k).join(" "), "tmux run-shell");
+					if (nested) return { hit: nested };
+				}
+				return { rest: [], detach };
+			}
+		}
+		if (base === "screen") {
+			let k = i + 1;
+			let detachedScreen = false;
+			let stuffIdx = -1;
+			while (k < tokens.length && tokens[k].startsWith("-")) {
+				const f = tokens[k];
+				if (f === "--") { k++; break; }
+				if (/^-[A-Za-z]*d[A-Za-z]*m[A-Za-z]*$/.test(f) || f === "-d" || f === "-m") detachedScreen = true;
+				if (f === "-X" && tokens[k + 1] === "stuff" && tokens[k + 2]) {
+					stuffIdx = k + 2;
+					break;
+				}
+				if (/^-[A-Za-z]*[Stcpeh]$/.test(f) || f === "-Logfile") k += 2;
+				else k++;
+			}
+			if (stuffIdx >= 0) {
+				const nested = recurse(tokens[stuffIdx].replace(/\\[rn]/g, "\n"), "screen -X stuff");
+				if (nested) return { hit: nested };
+				return { rest: [], detach };
+			}
+			if (detachedScreen) {
+				detach = detach || "screen -dm";
+				i = k;
+				if (i < tokens.length && tokens.length - i === 1) {
+					const nested = recurse(tokens[i], detach);
+					if (nested) return { hit: nested };
+				}
+				continue;
+			}
+		}
+		break;
+	}
 
-		const rest = tokens.slice(i);
-		if (!rest.length) continue;
-		const effectiveDetach = detach || (rawClause.bg ? "&" : null) || inheritedDetach;
-		const headBase = path.basename(rest[0]).toLowerCase();
+	return { rest: tokens.slice(i), detach };
+}
 
-		// Sanctioned standard worker launchers pass when invoked normally.
-		if (
-			/(?:^|[\\/])(?:spawn-worker\.mjs|worker-runner[\\/]cli\.mjs|worker-runner-adapter\.sh)$/i.test(rest[0]) ||
-			(/^(?:node|nodejs|bash|sh)(?:\.exe)?$/i.test(headBase) &&
-				rest[1] &&
-				/(?:^|[\\/])(?:spawn-worker\.mjs|worker-runner[\\/]cli\.mjs|worker-runner-adapter\.sh)$/i.test(rest[1]))
-		) {
+function checkDetachedWorkerCommand(command, opts = {}) {
+	const depth = opts.depth || 0;
+	if (depth > 8 || !command) return null;
+	const inheritedDetach = opts.inheritedDetach || null;
+	const env = opts.env || process.env;
+	let currentCwd = path.resolve(opts.cwd || process.cwd());
+	const seenScripts = opts.seenScripts instanceof Set ? opts.seenScripts : new Set();
+	const adapterCtx = opts._adapterCtx || resolveAllowedAdapterPaths(currentCwd, env, opts);
+	const clauses = splitClausesWithAsync(command);
+
+	const recurse = (subCommand, subDetach, subCwd = currentCwd, nextSeen = seenScripts) =>
+		checkDetachedWorkerCommand(subCommand, {
+			...opts,
+			cwd: subCwd,
+			env,
+			inheritedDetach: subDetach,
+			depth: depth + 1,
+			seenScripts: nextSeen,
+			_adapterCtx: adapterCtx,
+		});
+
+	for (const rawClause of clauses) {
+		if (Array.isArray(rawClause.subs)) {
+			for (const sub of rawClause.subs) {
+				const subDetach = sub.kind === "<()" || sub.kind === ">()" ? sub.kind : null;
+				const subHit = recurse(sub.body, subDetach);
+				if (subHit) return subHit;
+			}
+		}
+
+		const tokens = stripRedirectionTokens(rawClause);
+		if (!tokens.length) continue;
+
+		if (tokens[0] === "cd" && tokens[1] && !rawClause.scope && !/[$`]/.test(tokens[1]) && tokens[1] !== "-") {
+			currentCwd = path.resolve(currentCwd, tokens[1]);
 			continue;
 		}
 
-		// Recurse into shell -c '<script>' invocations.
-		if (SHELLS.test(headBase)) {
+		const clauseAsyncDetach = rawClause.bg ? (rawClause.bgKind || "&") : null;
+		const peeled = peelLeadingWrappers(tokens, opts, depth, (subCmd, wrapperDetach) =>
+			recurse(subCmd, wrapperDetach || clauseAsyncDetach || inheritedDetach),
+		);
+		if (peeled.hit) return peeled.hit;
+
+		const rest = peeled.rest || [];
+		if (!rest.length) continue;
+
+		const effectiveDetach = peeled.detach || clauseAsyncDetach || inheritedDetach;
+		const headBase = path.basename(rest[0]).toLowerCase();
+
+		// Sanctioned standard entrypoints ONLY: (1) scripts/worker-runner/spawn-worker.mjs,
+		// (2) exact server standard adapter script path configured via opts/env/config.
+		if (isAllowedStandardEntrypoint(rest, currentCwd, adapterCtx)) {
+			continue;
+		}
+
+		// `at` / `batch` queue asynchronous execution via stdin (pipe, heredoc, herestring, `<`) or `-f <file>`.
+		if (headBase === "at" || headBase === "batch") {
+			let isQueryOrRemove = false;
+			let jobFile = null;
 			for (let k = 1; k < rest.length; k++) {
-				const flag = rest[k];
-				if (flag === "-c" || (/^-[A-Za-z]+c$/.test(flag))) {
-					if (rest[k + 1]) {
-						const nested = checkDetachedWorkerCommand(rest[k + 1], {
-							inheritedDetach: effectiveDetach,
-							depth: depth + 1,
-						});
-						if (nested) return nested;
-					}
+				const f = rest[k];
+				if (f === "--") break;
+				if (/^-(?:l|r|d|c|V)$/.test(f)) {
+					isQueryOrRemove = true;
 					break;
 				}
-				if (!flag.startsWith("-")) break;
+				if (f === "-f" && rest[k + 1]) {
+					jobFile = rest[++k];
+					continue;
+				}
+				if (f.startsWith("-f") && f.length > 2) {
+					jobFile = f.slice(2);
+					continue;
+				}
+				if (/^-(?:q|t)$/.test(f)) {
+					k++;
+					continue;
+				}
+			}
+			if (!isQueryOrRemove) {
+				if (jobFile) {
+					const loaded = readSmallLocalScript(jobFile, currentCwd);
+					if (loaded && !seenScripts.has(loaded.resolved)) {
+						const nextSeen = new Set(seenScripts);
+						nextSeen.add(loaded.resolved);
+						const hit = recurse(loaded.text, headBase, path.dirname(loaded.resolved), nextSeen);
+						if (hit) return hit;
+					}
+				}
+				for (const body of extractClauseStdinBodies(rawClause, currentCwd)) {
+					const hit = recurse(body, headBase);
+					if (hit) return hit;
+				}
 			}
 			continue;
 		}
 
+		// `eval`, `su -c`, `script -c`
+		if (headBase === "eval" && rest.length > 1) {
+			const hit = recurse(rest.slice(1).join(" "), effectiveDetach);
+			if (hit) return hit;
+			continue;
+		}
+		if (headBase === "su" || headBase === "script") {
+			for (let k = 1; k < rest.length; k++) {
+				const f = rest[k];
+				if ((f === "-c" || f === "--command" || f === "--session-command") && rest[k + 1]) {
+					const hit = recurse(rest[k + 1], effectiveDetach);
+					if (hit) return hit;
+					break;
+				}
+				if (f.startsWith("--command=")) {
+					const hit = recurse(f.slice("--command=".length), effectiveDetach);
+					if (hit) return hit;
+					break;
+				}
+				if (/^-[A-Za-z]*c$/.test(f) && rest[k + 1]) {
+					const hit = recurse(rest[k + 1], effectiveDetach);
+					if (hit) return hit;
+					break;
+				}
+			}
+			continue;
+		}
+
+		// Shell invocations: `-c <script>`, local script file, or stdin (pipe / heredoc / herestring / `<`).
+		if (SHELLS.test(headBase)) {
+			const inv = shellInvocation(rest, { dir: currentCwd });
+			if (inv.noexec) continue;
+			if (inv.command >= 0 && rest[inv.command]) {
+				const hit = recurse(rest[inv.command], effectiveDetach);
+				if (hit) return hit;
+				continue;
+			}
+			if (inv.script >= 0 && rest[inv.script]) {
+				const scriptWord = rest[inv.script];
+				if (path.basename(scriptWord).toLowerCase() === "worker-runner-adapter.sh") {
+					const adapterWorker = detectDirectWorkerCli(rest.slice(inv.script));
+					if (adapterWorker && effectiveDetach) {
+						return buildDetachedBlockResult(adapterWorker, effectiveDetach);
+					}
+				}
+				const loaded = readSmallLocalScript(scriptWord, currentCwd);
+				if (loaded && !seenScripts.has(loaded.resolved)) {
+					const nextSeen = new Set(seenScripts);
+					nextSeen.add(loaded.resolved);
+					const hit = recurse(loaded.text, effectiveDetach, path.dirname(loaded.resolved), nextSeen);
+					if (hit) return hit;
+				}
+				continue;
+			}
+			for (const body of extractClauseStdinBodies(rawClause, currentCwd)) {
+				const hit = recurse(body, effectiveDetach);
+				if (hit) return hit;
+			}
+			continue;
+		}
+
+		// `source` / `.` reading local script
+		if ((headBase === "source" || headBase === ".") && rest[1]) {
+			const loaded = readSmallLocalScript(rest[1], currentCwd);
+			if (loaded && !seenScripts.has(loaded.resolved)) {
+				const nextSeen = new Set(seenScripts);
+				nextSeen.add(loaded.resolved);
+				const hit = recurse(loaded.text, effectiveDetach, path.dirname(loaded.resolved), nextSeen);
+				if (hit) return hit;
+			}
+			continue;
+		}
+
+		// Inline interpreter detached spawns (`node -e`, `python -c`, `perl -e`, `ruby -e`).
+		const interpHit = detectInterpreterDetachedWorker(rest, effectiveDetach);
+		if (interpHit) {
+			return buildDetachedBlockResult(interpHit.worker, interpHit.detach);
+		}
+
+		// Direct worker CLI check (also block `--allow-unregistered-test` on worker-runner/cli.mjs run in shell commands).
 		const worker = detectDirectWorkerCli(rest);
-		if (worker && effectiveDetach) {
-			return {
-				worker,
-				detach: effectiveDetach,
-				reason:
-					`[Harness] 감시 밖 일꾼 직접 띄우기 차단: \`${worker}\` (${effectiveDetach} 분리 실행)\n` +
-					"nohup·setsid·백그라운드(&)로 agy·codex·claude -p·muse exec 를 직접 띄우면 work-watch 감시 등록이 누락되어 멈추거나 죽어도 아무도 깨어나지 않습니다.\n" +
-					"표준 일꾼 실행 대본(자동 등록 + 다중 마운트 디스크 바닥선 검사)을 사용하세요:\n" +
-					"  node scripts/worker-runner/spawn-worker.mjs --id <작업ID> --role <역할> --work-dir <작업폴더> --watch-dir <감시폴더> --result-file <결과파일> -- <일꾼 명령...>",
-			};
+		if (worker) {
+			const dashDashIdx = rest.indexOf("--");
+			const preDash = dashDashIdx >= 0 ? rest.slice(0, dashDashIdx) : rest;
+			if (preDash.includes("--allow-unregistered-test") && rest.some((t) => /cli\.mjs$/i.test(t))) {
+				return buildDetachedBlockResult("worker-runner/cli.mjs run", "--allow-unregistered-test");
+			}
+			if (effectiveDetach) {
+				return buildDetachedBlockResult(worker, effectiveDetach);
+			}
+		}
+
+		// Direct executable local shell script (`nohup ./launch.sh &`) not in standard entrypoint allowlist.
+		if (rest[0].includes("/") || rest[0].endsWith(".sh")) {
+			const loaded = readSmallLocalScript(rest[0], currentCwd);
+			if (loaded && !seenScripts.has(loaded.resolved) && /^(?:#!.*\b(?:sh|bash|dash|zsh|ksh)\b|\s*(?:nohup|setsid|systemd-run|codex|agy|claude|muse|opencode)\b)/m.test(loaded.text)) {
+				const nextSeen = new Set(seenScripts);
+				nextSeen.add(loaded.resolved);
+				const hit = recurse(loaded.text, effectiveDetach, path.dirname(loaded.resolved), nextSeen);
+				if (hit) return hit;
+			}
 		}
 	}
 	return null;

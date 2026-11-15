@@ -12,6 +12,7 @@ import {
   parseArgs,
   driven,
   closedProperly,
+  normalizeMsgId,
 } from "./ledger.mjs";
 import { createAdapter } from "./messenger.mjs";
 import { cleanReceipts, dueWake, receiptPath, reconcileCurrent } from "./due-timer.mjs";
@@ -277,8 +278,9 @@ async function upsertWaitingHuman({
     };
     const nextDue = new Date(now + 4 * 60 * 60000).toISOString();
     const nextCreated = new Date(now).toISOString();
+    const trimmedMsgId = normalizeMsgId(msgId);
     const existing = l.items.find(
-      (i) => i.from?.msg_id === msgId && i.status === "waiting_human",
+      (i) => normalizeMsgId(i.from?.msg_id) === trimmedMsgId && i.status === "waiting_human",
     );
     if (existing) {
       const handledMs = Date.parse(existing.checked_at || existing.created_at);
@@ -292,7 +294,7 @@ async function upsertWaitingHuman({
       }
       return;
     }
-    if (l.items.some((i) => i.from?.msg_id === msgId)) return;
+    if (l.items.some((i) => normalizeMsgId(i.from?.msg_id) === trimmedMsgId)) return;
     const baseId = `human-${safeName(msgId)}`;
     let itemId = baseId;
     let suffix = 2;
@@ -1021,7 +1023,7 @@ export async function watch({
               const { tokens: msgMentionTokens } = msgMentions;
               const mentionSignature = JSON.stringify(msgMentionTokens);
               const recordedItems = ledger.items.filter(
-                (i) => i.from.msg_id === m.id,
+                (i) => normalizeMsgId(i.from?.msg_id) === normalizeMsgId(m.id),
               );
               const isRecorded = recordedItems.some((i) => {
                 if (i.status === "waiting_human") {
@@ -1200,7 +1202,9 @@ export async function watch({
             if (seenInScan.has(meta.msg_id)) continue;
             if (!readChannelsInScan.has(meta.channel) && meta.channel !== channel) continue;
             if (!(meta.effective_ms < since)) continue;
-            const recorded = ledger.items.some((i) => i.from?.msg_id === meta.msg_id);
+            const recorded = ledger.items.some(
+              (i) => normalizeMsgId(i.from?.msg_id) === normalizeMsgId(meta.msg_id),
+            );
             const metaElsewhereAt = elsewhereIds.get(meta.msg_id);
             const metaElsewhere =
               metaElsewhereAt !== undefined && metaElsewhereAt >= meta.effective_ms;

@@ -819,6 +819,7 @@ test('fault 5: multi-mount disk floor blocks worker launch when root, home, cach
     [
       path.join(REPO_ROOT, 'scripts/worker-runner/cli.mjs'),
       'run',
+      '--allow-unregistered-test',
       '--state-dir',
       path.join(fakeWork, 'state'),
       '--id',
@@ -899,4 +900,340 @@ test('fault 5: multi-mount disk floor blocks worker launch when root, home, cach
       }),
     /Free space 2\.00 GB is below 5 GB/,
   );
+});
+
+test('rev1 blocker 1: generalized detached-worker gate blocks systemd-run, at/batch, daemonize, disown, setsid long flags, subshells, bash -c, and opencode run across .claude/.codex/.pi while allowing only 2 standard entrypoints and normal foreground commands', async () => {
+  const dir = await makeTempDir('rev1-gate-');
+  const jobFile = path.join(dir, 'queued-worker.sh');
+  await writeFile(jobFile, '#!/bin/sh\ncodex exec "queued job"\n');
+  const localLaunchSh = path.join(dir, 'bg-launch.sh');
+  await writeFile(localLaunchSh, '#!/bin/sh\nnohup opencode run "via script" &\n', { mode: 0o755 });
+  const configuredAdapter = path.join(dir, 'bin/worker-runner-adapter.sh');
+  await mkdir(path.dirname(configuredAdapter), { recursive: true });
+  await writeFile(configuredAdapter, '#!/bin/sh\necho ok\n', { mode: 0o755 });
+
+  const bypassAttempts = [
+    'systemd-run --user --unit=raw-codex codex exec "bypass"',
+    'systemd-run --user --collect node scripts/worker-runner/cli.mjs run --id r1 --work-dir /tmp -- claude -p "bypass"',
+    'echo \'codex exec "bypass"\' | at now',
+    'at now + 2 minutes <<\'EOF\'\nclaude --print "bypass"\nEOF',
+    'batch <<< \'muse exec "bypass"\'',
+    `at -f ${jobFile} now`,
+    'daemonize /usr/local/bin/codex exec "bypass"',
+    'daemon --name=w1 -- opencode run "bypass"',
+    'start-stop-daemon --start --background --exec /usr/bin/agy -- "bypass"',
+    'codex exec "bypass" & disown -h',
+    'coproc claude -p "bypass"',
+    'setsid --fork agy "bypass"',
+    'setsid --wait opencode run "bypass"',
+    'sudo -b codex exec "bypass"',
+    'sudo -E nohup claude -p "bypass" &',
+    '( cd /tmp && codex exec "bypass" ) &',
+    '( codex exec "bypass" ) > /tmp/out.log 2>&1 &',
+    '{ opencode run "bypass"; } > /tmp/out.log 2>&1 &',
+    'codex exec "bypass" | tee /tmp/out.log &',
+    'bash -euo pipefail -c \'nohup codex exec "bypass" &\'',
+    'nohup sh -c \'claude -p "bypass"\' &',
+    'echo \'opencode run "bypass" &\' | sh',
+    `: >(codex exec "bypass")`,
+    `nohup ${localLaunchSh} &`,
+    'node -e \'require("child_process").spawn("codex", ["exec", "x"], { detached: true, stdio: "ignore" }).unref()\'',
+    'nohup /srv/unconfigured/worker-runner-adapter.sh r1 &',
+  ];
+
+  for (const cmd of bypassAttempts) {
+    const det = checkDetachedWorkerCommand(cmd, { cwd: REPO_ROOT, env: {} });
+    assert.ok(det && det.worker && det.detach, `expected checkDetachedWorkerCommand to block: ${cmd}`);
+    const pol = detachedWorker(cmd, { cwd: REPO_ROOT }, { env: {} });
+    assert.ok(pol && pol.reason, `expected bash.detachedWorker to block: ${cmd}`);
+    assert.match(pol.reason, /spawn-worker\.mjs/);
+  }
+
+  // Allowed normal commands + the ONLY two standard entrypoints:
+  // (1) scripts/worker-runner/spawn-worker.mjs, (2) configured server standard adapter path.
+  const allowedCommands = [
+    'node --test scripts/watch-wake-faults.test.mjs',
+    'node -e \'const s = "nohup codex exec hi & setsid --fork agy"; console.log(s.length)\'',
+    'grep -rn "nohup codex\\|setsid --fork\\|systemd-run" scripts/',
+    'claude -p "2+2만 답해"',
+    'claude --print "한 줄로 요약해줘"',
+    'ans=$(claude -p "짧은 확인")',
+    'node scripts/worker-runner/spawn-worker.mjs --id w1 --role ops --work-dir /tmp/w1 --watch-dir /tmp/w1 --result-file /tmp/w1/res.md -- opencode run "task"',
+  ];
+  for (const cmd of allowedCommands) {
+    assert.equal(checkDetachedWorkerCommand(cmd, { cwd: REPO_ROOT, env: {} }), null, `expected allow: ${cmd}`);
+    assert.equal(detachedWorker(cmd, { cwd: REPO_ROOT }, { env: {} }), null, `expected policy allow: ${cmd}`);
+  }
+
+  // Standard entrypoint #2: configured server standard adapter path is allowed; wrong path with same basename is blocked.
+  assert.equal(
+    checkDetachedWorkerCommand(`systemd-run --user --unit=srv-w1 ${configuredAdapter} r1`, {
+      cwd: REPO_ROOT,
+      env: { ADK_WORKER_ADAPTER_PATH: configuredAdapter },
+    }),
+    null,
+  );
+  assert.equal(
+    checkDetachedWorkerCommand(`bash ${configuredAdapter} r1 &`, {
+      cwd: REPO_ROOT,
+      standardAdapterPath: configuredAdapter,
+      env: {},
+    }),
+    null,
+  );
+  assert.ok(
+    checkDetachedWorkerCommand('systemd-run --user --unit=srv-w1 /srv/other/worker-runner-adapter.sh r1', {
+      cwd: REPO_ROOT,
+      standardAdapterPath: configuredAdapter,
+      env: {},
+    }),
+  );
+
+  // Verify .claude (session-contract-gate.js & lead-write-guard.js), .codex (session-contract-gate.cjs), and .pi (naia-harness.ts) entrypoints all enforce the same gate.
+  const probeBlocked = '( codex exec "subshell-bg" ) > /tmp/out.log 2>&1 &';
+  const probeAllowed = 'claude -p "짧은 포그라운드 호출"';
+
+  for (const hookRel of [
+    '.claude/hooks/lead-write-guard.js',
+    '.claude/hooks/session-contract-gate.js',
+    '.codex/hooks/session-contract-gate.cjs',
+  ]) {
+    const blockedRun = spawnSync(process.execPath, [path.join(REPO_ROOT, hookRel)], {
+      input: JSON.stringify({ cwd: REPO_ROOT, tool_name: 'Bash', tool_input: { command: probeBlocked } }),
+      encoding: 'utf8',
+    });
+    assert.equal(blockedRun.status, 0, hookRel);
+    const blockedJson = JSON.parse(blockedRun.stdout);
+    assert.equal(blockedJson.decision, 'block', hookRel);
+    assert.match(blockedJson.reason, /spawn-worker\.mjs/, hookRel);
+
+    const allowedRun = spawnSync(process.execPath, [path.join(REPO_ROOT, hookRel)], {
+      input: JSON.stringify({ cwd: REPO_ROOT, tool_name: 'Bash', tool_input: { command: probeAllowed } }),
+      encoding: 'utf8',
+    });
+    assert.equal(allowedRun.status, 0, hookRel);
+    assert.equal(allowedRun.stdout.trim(), '', hookRel);
+  }
+
+  // .pi/extensions/naia-harness.ts entrypoint
+  const piHarnessPath = path.join(REPO_ROOT, '.pi/extensions/naia-harness.ts');
+  const prevFile = globalThis.__filename;
+  const prevDir = globalThis.__dirname;
+  globalThis.__filename = piHarnessPath;
+  globalThis.__dirname = path.dirname(piHarnessPath);
+  let registerPi;
+  try {
+    delete require.cache[piHarnessPath];
+    const piMod = require(piHarnessPath);
+    registerPi = piMod.default || piMod;
+  } finally {
+    if (prevFile === undefined) delete globalThis.__filename;
+    else globalThis.__filename = prevFile;
+    if (prevDir === undefined) delete globalThis.__dirname;
+    else globalThis.__dirname = prevDir;
+  }
+  const piHandlers = new Map();
+  registerPi({ on: (ev, fn) => piHandlers.set(ev, fn) });
+  const piToolCall = piHandlers.get('tool_call');
+  const piBlocked = await piToolCall(
+    { toolName: 'bash', input: { command: 'setsid --fork opencode run "bg"' } },
+    { cwd: REPO_ROOT },
+  );
+  assert.ok(piBlocked && piBlocked.block === true);
+  assert.match(piBlocked.reason, /spawn-worker\.mjs/);
+  const piAllowed = await piToolCall(
+    { toolName: 'bash', input: { command: probeAllowed } },
+    { cwd: REPO_ROOT },
+  );
+  assert.equal(piAllowed, undefined);
+});
+
+test('rev1 blocker 2 + ref 3: escalated_human done requires distinct --human-msg-id, post-done add stays blocked, and msg_id whitespace is normalized', async () => {
+  const root = await makeTempDir('rev1-ledger-');
+  const msgId = '1999000111222333444';
+
+  await ledgerCli([
+    'add', '--root', root, '--role', 'minho', '--id', 'esc-1',
+    '--title', '1차 카드', '--due', '2026-11-15T08:00:00Z', '--channel', 'ch-1', '--msg-id', `  ${msgId}  `,
+  ]);
+  await ledgerCli(['drop', '--root', root, '--role', 'minho', '--id', 'esc-1', '--reason', '1차']);
+  await ledgerCli([
+    'add', '--root', root, '--role', 'minho', '--id', 'esc-2',
+    '--title', '2차 카드', '--due', '2026-11-15T09:00:00Z', '--channel', 'ch-1', '--msg-id', msgId,
+  ]);
+  await ledgerCli(['drop', '--root', root, '--role', 'minho', '--id', 'esc-2', '--reason', '2차']);
+  await ledgerCli([
+    'add', '--root', root, '--role', 'minho', '--id', 'esc-3',
+    '--title', '3차 카드', '--due', '2026-11-15T10:00:00Z', '--channel', 'ch-1', '--msg-id', `\t${msgId}\n`,
+  ]);
+  await assert.rejects(
+    () => ledgerCli(['drop', '--root', root, '--role', 'minho', '--id', 'esc-3', '--reason', '3차']),
+    /사람에게 올림/,
+  );
+
+  // Closing escalated_human without --human-msg-id or with the original msg_id is refused.
+  await assert.rejects(
+    () => ledgerCli(['done', '--root', root, '--role', 'minho', '--id', 'esc-3', '--result', '우회 닫기 시도']),
+    /--human-msg-id/,
+  );
+  await assert.rejects(
+    () =>
+      ledgerCli([
+        'done', '--root', root, '--role', 'minho', '--id', 'esc-3',
+        '--result', '원래 글 번호 재사용 시도', '--human-msg-id', ` ${msgId} `,
+      ]),
+    /원 지시와 다른 사람 확인 답글 번호/,
+  );
+
+  // Closing with a distinct human reply message ID succeeds, AND re-adding the same msg_id is STILL blocked!
+  await ledgerCli([
+    'done', '--root', root, '--role', 'minho', '--id', 'esc-3',
+    '--result', '대표님 확인 완료', '--human-msg-id', ' 1999000999888777666 ',
+  ]);
+  const closedLedger = await readLedger(root, 'minho');
+  const closedCard = closedLedger.items.find((i) => i.id === 'esc-3');
+  assert.equal(closedCard.status, 'done');
+  assert.equal(closedCard.human_msg_id, '1999000999888777666');
+
+  await assert.rejects(
+    () =>
+      ledgerCli([
+        'add', '--root', root, '--role', 'minho', '--id', 'esc-4',
+        '--title', 'done 뒤 재생성 시도', '--due', '2026-11-15T11:00:00Z',
+        '--channel', 'ch-1', '--msg-id', ` ${msgId} `,
+      ]),
+    /취소·연기 상한을 넘긴 지시.*새 카드로 재생성할 수 없습니다/,
+  );
+});
+
+test('rev1 blocker 3: direct worker-runner/cli.mjs run without role/result-file is refused with spawn-worker.mjs guidance while spawn-worker foreground registers cleanly', async () => {
+  const dir = await makeTempDir('rev1-cli-reg-');
+  const marker = path.join(dir, 'should-not-run');
+  const cleanEnv = { ...process.env };
+  delete cleanEnv.WORKER_ROLE;
+  delete cleanEnv.WORKER_RESULT_FILE;
+  delete cleanEnv.WORKER_UNIT;
+  delete cleanEnv.WORKER_RUNNER_STATE_DIR;
+  delete cleanEnv.WORKER_RUNNER_TEMP_BASE;
+
+  const direct = spawnSync(
+    process.execPath,
+    [
+      path.join(REPO_ROOT, 'scripts/worker-runner/cli.mjs'),
+      'run',
+      '--state-dir',
+      path.join(dir, 'state'),
+      '--id',
+      'unreg-direct',
+      '--work-dir',
+      dir,
+      '--floor',
+      '1K',
+      '--',
+      process.execPath,
+      '-e',
+      `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran")`,
+    ],
+    { env: cleanEnv, encoding: 'utf8' },
+  );
+  assert.notEqual(direct.status, 0);
+  assert.match(direct.stderr, /spawn-worker\.mjs/);
+  await assert.rejects(() => readFile(marker, 'utf8'), /ENOENT/);
+
+  // Bash gate also blocks passing --allow-unregistered-test on cli.mjs run from agent shell commands.
+  const testFlagBypass = checkDetachedWorkerCommand(
+    'node scripts/worker-runner/cli.mjs run --allow-unregistered-test --id sneak --work-dir . -- codex exec "bypass"',
+    { cwd: REPO_ROOT, env: {} },
+  );
+  assert.ok(testFlagBypass, 'Bash gate must block --allow-unregistered-test on cli.mjs run');
+
+  const resFile = path.join(dir, 'fg-result.md');
+  const fg = await spawnWorker(
+    [
+      '--root',
+      dir,
+      '--foreground',
+      '--id',
+      'fg-w1',
+      '--role',
+      'infra',
+      '--work-dir',
+      dir,
+      '--result-file',
+      resFile,
+      '--floor',
+      '1K',
+      '--',
+      process.execPath,
+      '-e',
+      `require("node:fs").writeFileSync(${JSON.stringify(resFile)}, "끝: ok\\n")`,
+    ],
+    {
+      env: cleanEnv,
+      execFileSyncImpl: () =>
+        'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 100000000 50000000 20971520 50% /\n',
+    },
+  );
+  assert.equal(fg.exitCode, 0);
+  const regDoc = JSON.parse(await readFile(path.join(dir, '.agents/work/work-watch/registry.json'), 'utf8'));
+  assert.equal(regDoc.workers[0].id, 'fg-w1');
+  assert.equal(regDoc.workers[0].role, 'infra');
+});
+
+test('rev1 ref 1: pid-lock retries boundedly on .reclaim contention instead of failing immediately', async () => {
+  const dir = await makeTempDir('rev1-reclaim-');
+  const lockPath = path.join(dir, 'contended.lock');
+  const reclaimPath = `${lockPath}.reclaim`;
+  const deadPid = exitedChildPid();
+
+  // Async: dead lock + transient .reclaim guard removed after 40ms -> caller retries and acquires cleanly.
+  await writeFile(lockPath, `${JSON.stringify({ pid: deadPid, started: '2026-11-15T00:00:00Z' })}\n`);
+  await writeFile(reclaimPath, `${process.pid}\n`);
+  setTimeout(() => {
+    rm(reclaimPath, { force: true }).catch(() => {});
+  }, 40);
+  const asyncHandle = await acquirePidLock(lockPath, { reclaimRetries: 8, reclaimRetryDelayMs: 20 });
+  await asyncHandle.release();
+
+  // Persistent .reclaim guard still fails closed with reclaim-in-progress after bounded retries.
+  await writeFile(lockPath, `${JSON.stringify({ pid: deadPid, started: '2026-11-15T00:00:00Z' })}\n`);
+  await writeFile(reclaimPath, `${process.pid}\n`);
+  await assert.rejects(
+    () => acquirePidLock(lockPath, { reclaimRetries: 2, reclaimRetryDelayMs: 10 }),
+    /reclaim-in-progress/,
+  );
+  assert.throws(
+    () => acquirePidLockSync(lockPath, { reclaimRetries: 2, reclaimRetryDelayMs: 10 }),
+    /reclaim-in-progress/,
+  );
+  await rm(reclaimPath, { force: true });
+  await rm(lockPath, { force: true });
+
+  // Concurrent multi-process race on a dead-PID lock: one winner acquires, the other either acquires after release or sees live EEXIST (never crashes on ENOENT/.reclaim race).
+  await writeFile(lockPath, `${JSON.stringify({ pid: deadPid, started: '2026-11-15T00:00:00Z' })}\n`);
+  const workerCode = `
+    import { acquirePidLock } from ${JSON.stringify(path.join(REPO_ROOT, 'scripts/lib/pid-lock.mjs'))};
+    try {
+      const h = await acquirePidLock(${JSON.stringify(lockPath)});
+      await new Promise((r) => setTimeout(r, 40));
+      await h.release();
+      process.stdout.write('ACQUIRED\\n');
+    } catch (e) {
+      if (e.code === 'EEXIST' && !e.reclaimInProgress) process.stdout.write('LIVE_BUSY\\n');
+      else { console.error(e); process.exit(2); }
+    }
+  `;
+  const { spawn } = await import('node:child_process');
+  const runProc = () =>
+    new Promise((resolveProc) => {
+      const p = spawn(process.execPath, ['--input-type=module', '-e', workerCode], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '', err = '';
+      p.stdout.on('data', (d) => (out += d));
+      p.stderr.on('data', (d) => (err += d));
+      p.on('close', (code) => resolveProc({ code, out: out.trim(), err: err.trim() }));
+    });
+  const [p1, p2] = await Promise.all([runProc(), runProc()]);
+  assert.equal(p1.code, 0, p1.err);
+  assert.equal(p2.code, 0, p2.err);
+  assert.ok([p1.out, p2.out].includes('ACQUIRED'));
 });

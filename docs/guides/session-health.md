@@ -153,11 +153,29 @@ this script/config, a distinct unit name, and `OnUnitInactiveSec=5min` (or cron
 `*/5 * * * *`); install only after authorized instance acceptance. Stop the timer
 to roll back and retain state. No timers are installed by this repository.
 
-## Watcher unit failure monitoring (`watcherUnits`)
+## Periodic wiring for `work-watch` and `watcher-unit-health` (no extra timers)
 
-Optional top-level `watcherUnits` (or standalone `node scripts/watcher-unit-health.mjs --config <file> [--dry]`)
-monitors `systemd --user` watcher units matching `patterns` (default `["naia-*", "minho-*"]`,
-excluding transient worker units `["*-worker-*", "worker-*"]`):
+`session-health.mjs` runs both worker progress/death checks (`scripts/work-watch.mjs`) and
+watcher unit health checks (`scripts/watcher-unit-health.mjs`) inside its existing
+five-minute cycle by default, so no additional `systemd` timer or cron entry is needed:
+
+1. **Worker supervision (`workWatch`, enabled by default):** On every non-DRY
+   `session-health.mjs` run, if `<baselineRepo>/.agents/work/work-watch/registry.json`
+   exists (created automatically by `scripts/worker-runner/spawn-worker.mjs`) or top-level
+   `workWatch` is configured (`true` or `{"root": "/<adk>", "registryFile": "/<registry.json>"}`),
+   `watchWorkers` inspects registered workers and writes `[일꾼 감시]` wake files (`일꾼 끝`,
+   `진도 없음`, `유닛 죽음`) to each spawning role's `wakeDir`. Set `"workWatch": false` to
+   disable. If 1-minute worker completion latency is desired on a host that already runs an
+   existing 1-minute watcher service, append `ExecStartPost=-/usr/bin/env node /<adk>/scripts/work-watch.mjs watch --root /<adk>`
+   to that existing `.service` instead of adding a new `.timer`.
+2. **Watcher unit failure monitoring (`watcherUnits`, enabled by default on live adapters):**
+   On live `tmux`/`herdr` observer runs (or when `watcherUnits` is explicitly set to `true`
+   or an object), `checkWatcherUnits` monitors `systemd --user` watcher units matching
+   `patterns` (default `["naia-*", "minho-*"]`, excluding transient worker units
+   `["*-worker-*", "worker-*"]`). When `watcherUnits` is omitted, `role` defaults to
+   `roles[0].id` and `wakeDir` defaults to `<baselineRepo>/.agents/work/wake/<role>`. Set
+   `"watcherUnits": false` to opt out, or run standalone via
+   `node scripts/watcher-unit-health.mjs --config <file> [--dry]`:
 
 - When a unit enters `failed` state or reaches `failureThreshold` consecutive failing
   checks (default `2`), a `[감시 유닛 실패]` wake file is written to `watcherUnits.wakeDir`

@@ -2155,12 +2155,18 @@ function uncommittedArtifact(command, data, opts) {
 }
 
 /**
- * detached-worker-guard — block nohup/setsid/&/tmux -d/screen -dm launches of
- * agy, codex, claude -p, muse exec that bypass work-watch registration, and
- * guide callers to scripts/worker-runner/spawn-worker.mjs.
+ * detached-worker-guard — block detached/asynchronous launches of worker CLIs
+ * (agy, codex, claude -p/--print, muse exec, opencode run, etc.) outside the two
+ * sanctioned entrypoints (scripts/worker-runner/spawn-worker.mjs and configured
+ * server standard adapter script path).
  */
-function detachedWorker(command) {
-	const hit = checkDetachedWorkerCommand(command);
+function detachedWorker(command, data, opts) {
+	const cwd = (data && data.cwd) || (opts && opts.cwd) || process.cwd();
+	const hit = checkDetachedWorkerCommand(command, {
+		...(opts || {}),
+		cwd,
+		env: (opts && opts.env) || process.env,
+	});
 	if (!hit) return null;
 	return { reason: hit.reason };
 }

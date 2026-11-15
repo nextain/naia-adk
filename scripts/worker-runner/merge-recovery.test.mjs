@@ -45,7 +45,7 @@ test('foreign group EPERM cannot abort a healthy supervisor or authorize a signa
             id: 'foreign', owner: 99999999, ownerToken: 'dead', status: 'running', child: 888888,
             budget: 1024, remaining: 1024,
         }] }));
-        const r = spawnSync(process.execPath, ['--require', preload, cli, 'run', '--id', 'healthy', '--state-dir', state,
+        const r = spawnSync(process.execPath, ['--require', preload, cli, 'run', '--allow-unregistered-test', '--id', 'healthy', '--state-dir', state,
             '--work-dir', root, '--temp-base', root, '--budget', '1M', '--floor', '1K', '--poll-ms', '30', '--',
             '/bin/sh', '-c', 'echo survived > "$1"', 'fixture', result], { encoding: 'utf8', timeout: 10000 });
         assert.equal(r.status, 0, r.stderr);

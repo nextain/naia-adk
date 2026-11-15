@@ -43,7 +43,7 @@ test('B-1 CLI admits default temp base on split filesystem and rejects explicit 
         fs.writeFileSync(preload, `const fs = require('node:fs'); const original = fs.statSync; fs.statSync = function(p, ...args) { const value = original.call(this, p, ...args); if (p === '/tmp') return Object.assign(Object.create(Object.getPrototypeOf(value)), value, { dev: -999 }); return value; }; require('node:module').syncBuiltinESMExports();`);
         const env = { ...process.env, NODE_OPTIONS: `--require=${preload}` };
         delete env.WORKER_RUNNER_TEMP_BASE;
-        const args = [process.env.RUNNER_MERGE_TEST_CLI || 'scripts/worker-runner/cli.mjs', 'run', '--state-dir', state, '--work-dir', base, '--floor', '1K', '--budget', '1M', '--poll-ms', '20'];
+        const args = [process.env.RUNNER_MERGE_TEST_CLI || 'scripts/worker-runner/cli.mjs', 'run', '--allow-unregistered-test', '--state-dir', state, '--work-dir', base, '--floor', '1K', '--budget', '1M', '--poll-ms', '20'];
         const result = spawnSync(process.execPath, [...args, '--id', 'default', '--', process.execPath, '-e', "require('node:fs').writeFileSync('payload-root',process.env.WORKER_RUNNER_TMP_ROOT)"], { env, encoding: 'utf8', timeout: 15000 });
         assert.equal(result.status, 0, result.stderr);
         assert.equal(fs.readFileSync(path.join(base, 'payload-root'), 'utf8'), path.join(state, 'runs/default'));

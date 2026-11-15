@@ -1242,7 +1242,7 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	if (HARNESS_ENV_VARS.some((name) => HARNESS_OFF.has((env[name] || "").trim().toLowerCase()))) return null;
 	if (harnessSwitch.findHarnessMarker({ cwd, configDirs: HARNESS_CONFIG_DIRS })) return null;
 	if (normalizedToolName(toolName) === "shell") {
-		const detachedHit = bashPolicies.detachedWorker(String(toolInput.command || toolInput.cmd || ""), data);
+		const detachedHit = bashPolicies.detachedWorker(String(toolInput.command || toolInput.cmd || ""), { ...data, cwd }, { env });
 		if (detachedHit && detachedHit.reason) {
 			return { decision: "block", reason: detachedHit.reason };
 		}

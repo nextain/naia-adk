@@ -40,6 +40,13 @@
   ],
   "workLedger": "/<private>/work-ledger.yaml",
   "regularSchedule": "/<private>/regular-schedule.yaml",
+  "workWatch": {
+    "root": "/<upstream-checkout>"
+  },
+  "watcherUnits": {
+    "role": "role-a",
+    "wakeDir": "/<upstream-checkout>/.agents/work/wake/role-a"
+  },
   "messages": {
     "nudge": "<@{user}> {role}: {codeText} ({code}). 확인 후 조치 결과를 알려 주세요. 보고서: {report}",
     "escalate": "<@{user}> {role}의 문제가 계속됩니다: {codeText} ({code}). 담당자의 조치 여부를 확인해 주세요. 보고서: {report}"

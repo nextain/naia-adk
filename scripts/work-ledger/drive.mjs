@@ -243,7 +243,7 @@ async function launch({ root, config, cfg, role, item, now, env }) {
       resultFile: d.result_file,
       wakeDir: roleWakeDir(root, config, role),
       now: Date.parse(d.run.started_at),
-    }).catch(() => {});
+    });
     return null;
   } catch (error) {
     d.error = error.message;

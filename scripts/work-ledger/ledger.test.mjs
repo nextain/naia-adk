@@ -2190,10 +2190,123 @@ test("human instruction cards cap drop and due deferrals at 2 and escalate on 3r
     [{ id: "ds-3", reason: "사람에게 올림" }],
   );
 
-  // 완료(done) 처리 후에는 더 이상 깨우지 않음
-  await main(["done", "ds-3", "--root", root, "--role", "secretary", "--reason", "대표님 보고 후 완료"], { now });
-  assert.equal((await readLedger(root, "secretary")).items.find((i) => i.id === "ds-3")?.status, "done");
+  // 사람 확인 답글 번호(--human-msg-id) 없거나 원 지시와 같은 msg_id로 done 시도하면 거절됨
+  await assert.rejects(
+    main(["done", "ds-3", "--root", root, "--role", "secretary", "--reason", "근거 없이 닫기 시도"], { now }),
+    /--human-msg-id/,
+  );
+  await assert.rejects(
+    main(["done", "ds-3", "--root", root, "--role", "secretary", "--human-msg-id", "msg-deepseek", "--reason", "원 지시 번호 재사용 시도"], { now }),
+    /--human-msg-id/,
+  );
+  await assert.rejects(
+    main(["done", "ds-3", "--root", root, "--role", "secretary", "--human-msg-id", "-", "--reason", "빈 번호 시도"], { now }),
+    /--human-msg-id/,
+  );
+
+  // 사람 확인 답글 번호와 함께 완료(done) 처리하면 더 이상 깨우지 않지만, 같은 msg_id(공백 변형 포함) 재생성은 계속 차단됨
+  await main(
+    ["done", "ds-3", "--root", root, "--role", "secretary", "--human-msg-id", "msg-ceo-ack-1", "--reason", "대표님 보고 후 완료"],
+    { now },
+  );
+  const closedDs3 = (await readLedger(root, "secretary")).items.find((i) => i.id === "ds-3");
+  assert.equal(closedDs3?.status, "done");
+  assert.equal(closedDs3?.human_msg_id, "msg-ceo-ack-1");
   assert.deepEqual((await watch({ root, config, now: now + 31 * 60000 })).wakes, []);
+
+  for (const bypassedId of ["msg-deepseek", "  msg-deepseek  "]) {
+    await assert.rejects(
+      main(
+        [
+          "add",
+          "--root",
+          root,
+          "--role",
+          "secretary",
+          "--id",
+          "ds-after-done",
+          "--title",
+          "done 뒤 우회 재생성",
+          "--due",
+          "2026-11-08T15:00:00Z",
+          "--channel",
+          "ch-infra",
+          "--msg-id",
+          bypassedId,
+        ],
+        { now },
+      ),
+      /새 카드로 재생성할 수 없습니다/,
+    );
+  }
+
+  // 공백 섞인 msg_id로 add 뒤 drop해도 같은 msg_id로 정규화·합산되어 3회째 drop에서 차단됨
+  await main(
+    [
+      "add",
+      "--root",
+      root,
+      "--role",
+      "secretary",
+      "--id",
+      "trim-1",
+      "--title",
+      "공백 정규화 1",
+      "--due",
+      "2026-11-08T13:00:00Z",
+      "--channel",
+      "ch-infra",
+      "--msg-id",
+      "  msg-trim-check  ",
+    ],
+    { now },
+  );
+  await main(["drop", "trim-1", "--root", root, "--role", "secretary", "--reason", "1차"], { now });
+  await main(
+    [
+      "add",
+      "--root",
+      root,
+      "--role",
+      "secretary",
+      "--id",
+      "trim-2",
+      "--title",
+      "공백 정규화 2",
+      "--due",
+      "2026-11-08T13:00:00Z",
+      "--channel",
+      "ch-infra",
+      "--msg-id",
+      "msg-trim-check",
+    ],
+    { now },
+  );
+  await main(["drop", "trim-2", "--root", root, "--role", "secretary", "--reason", "2차"], { now });
+  await main(
+    [
+      "add",
+      "--root",
+      root,
+      "--role",
+      "secretary",
+      "--id",
+      "trim-3",
+      "--title",
+      "공백 정규화 3",
+      "--due",
+      "2026-11-08T13:00:00Z",
+      "--channel",
+      "ch-infra",
+      "--msg-id",
+      "\tmsg-trim-check\t",
+    ],
+    { now },
+  );
+  await assert.rejects(
+    main(["drop", "trim-3", "--root", root, "--role", "secretary", "--reason", "3차"], { now }),
+    /사람에게 올림/,
+  );
 
   // 2) 기한 미룸(due)도 2회까지 허용하고 3회째에 거절·사람에게 올림 전환
   await main(

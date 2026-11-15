@@ -38,7 +38,7 @@ test('EACCES cleanup is recorded, retained beyond history limit, and retried by 
         fs.writeFileSync(path.join(state, 'state.json'), JSON.stringify(paused));
         const statusProbe = fs.readFileSync(probe, 'utf8');
         const launch = id => {
-            const args = [process.execPath, cli, 'run', '--state-dir', state, '--temp-base', base, '--id', id, '--work-dir', base, '--budget', '1M', '--floor', '1K', '--poll-ms', '30', '--', '/bin/sh', '-c', 'echo survived'];
+            const args = [process.execPath, cli, 'run', '--allow-unregistered-test', '--state-dir', state, '--temp-base', base, '--id', id, '--work-dir', base, '--budget', '1M', '--floor', '1K', '--poll-ms', '30', '--', '/bin/sh', '-c', 'echo survived'];
             fs.writeFileSync(probe, statusProbe.replace(/process\.argv = .*;\n/, `process.argv = ${JSON.stringify(args)};\n`));
             return spawnSync(process.execPath, [probe], { encoding: 'utf8', timeout: 10000 });
         };

@@ -19,7 +19,7 @@ async function fixture(fn) {
     let child;
     const read = () => { try { return JSON.parse(fs.readFileSync(path.join(state, 'state.json'))).jobs; } catch { return []; } };
     const run = (command, tempBase = root, budget = '1M') => {
-        child = spawn(process.execPath, [cli, 'run', '--id', 'me', '--state-dir', state, '--work-dir', root, '--temp-base', tempBase,
+        child = spawn(process.execPath, [cli, 'run', '--allow-unregistered-test', '--id', 'me', '--state-dir', state, '--work-dir', root, '--temp-base', tempBase,
             '--budget', budget, '--floor', '1K', '--poll-ms', '50', '--timeout', '45', '--', '/bin/sh', '-c', command],
             { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, USAGE_FIXTURE_FREE: free }, stdio: ['ignore', 'pipe', 'pipe'] });
         child.output = ''; child.stdout.on('data', x => child.output += x); child.stderr.on('data', x => child.output += x);

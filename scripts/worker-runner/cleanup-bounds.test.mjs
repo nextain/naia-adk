@@ -34,7 +34,7 @@ test('preemption retains original work usage baseline across cleanup and resume'
 test('actual queued CLI round obeys timeout without launching payload', async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'queued-timeout-'));
     const state = path.join(base, 'state'), payload = path.join(base, 'payload');
-    const child = spawn(process.execPath, [cli, 'run', '--state-dir', state, '--temp-base', base, '--id', 'queue-timeout', '--work-dir', base, '--budget', '1M', '--floor', '1T', '--timeout', '0.2', '--poll-ms', '30', '--', '/bin/sh', '-c', `touch '${payload}'`], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', state, '--temp-base', base, '--id', 'queue-timeout', '--work-dir', base, '--budget', '1M', '--floor', '1T', '--timeout', '0.2', '--poll-ms', '30', '--', '/bin/sh', '-c', `touch '${payload}'`], { stdio: ['ignore', 'pipe', 'pipe'] });
     let output = ''; child.stdout.on('data', b => output += b); child.stderr.on('data', b => output += b);
     try {
         await until(() => child.exitCode !== null, 4000);

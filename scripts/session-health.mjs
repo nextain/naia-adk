@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { readWorkLedger, readScheduleLedger, scheduleStatus } from './lib/ledger.mjs';
 import { acquirePidLock } from './lib/pid-lock.mjs';
 import { checkWatcherUnits, validateWatcherUnitConfig } from './watcher-unit-health.mjs';
+import { watchWorkers, defaultRegistryPath } from './work-watch.mjs';
 const exec = promisify(execFile);
 const hash = s => createHash('sha256').update(s).digest('hex');
 const command = async (file, args = [], cwd) => (await exec(file, args, { cwd, timeout: 15000, maxBuffer: 4 * 1024 * 1024 })).stdout;
@@ -28,6 +29,17 @@ function notificationMessage(config, stage, user, role, code) {
   const values = { user, role, code, codeText, report: config.reportFile };
   return (config.messages?.[stage] ?? '<@{user}> Session health {role}: {code}')
     .replace(/\{(\w+)\}/g, (match, key) => Object.hasOwn(values, key) ? String(values[key]) : match);
+}
+
+function resolveWatcherUnitOptions(c) {
+  if (c.watcherUnits === false) return null;
+  const raw = isObject(c.watcherUnits) ? c.watcherUnits : {};
+  if (raw.enabled === false) return null;
+  const defaultRole = c.roles?.[0]?.id ?? 'infra';
+  const role = raw.role ?? defaultRole;
+  const wakeDir = raw.wakeDir ?? resolve(c.baselineRepo ?? '/', '.agents/work/wake', role);
+  const { enabled: _enabled, ...rest } = raw;
+  return { ...rest, role, wakeDir };
 }
 
 export function validateConfig(c) {
@@ -56,7 +68,17 @@ export function validateConfig(c) {
   for (const key of ['workLedger', 'regularSchedule']) if (c[key] != null && !isAbsolute(c[key])) throw Error('absolute ledger path required');
   if (c.responseWatchState && !isAbsolute(c.responseWatchState)) throw Error('absolute response state required');
   if (c.notifications) for (const id of [c.notifications.nudgeChannelId, c.notifications.escalation?.channelId, c.notifications.escalation?.userId, ...c.roles.map(r => r.botId)]) if (!/^\d+$/.test(id ?? '')) throw Error('invalid notification id');
-  if (c.watcherUnits !== undefined) validateWatcherUnitConfig(c.watcherUnits);
+  if (c.watcherUnits !== undefined && typeof c.watcherUnits !== 'boolean') {
+    if (!isObject(c.watcherUnits)) throw Error('watcherUnits must be a boolean or object');
+    const resolvedWu = resolveWatcherUnitOptions(c);
+    if (resolvedWu) validateWatcherUnitConfig(resolvedWu);
+  }
+  if (c.workWatch !== undefined && typeof c.workWatch !== 'boolean') {
+    if (!isObject(c.workWatch)) throw Error('workWatch must be a boolean or object');
+    if (c.workWatch.enabled !== undefined && typeof c.workWatch.enabled !== 'boolean') throw Error('workWatch.enabled must be a boolean');
+    if (c.workWatch.root !== undefined && !isAbsolute(c.workWatch.root)) throw Error('absolute workWatch.root required');
+    if (c.workWatch.registryFile !== undefined && !isAbsolute(c.workWatch.registryFile)) throw Error('absolute workWatch.registryFile required');
+  }
 }
 
 // A configured watcher must be readable before absence of requests proves idle.
@@ -222,7 +244,7 @@ export async function observeRole(config, role, previous, now, response, windowP
 }
 
 export const atomic = async (path, text) => { await mkdir(dirname(path), { recursive: true, mode: 0o700 }); const tmp = `${path}.${process.pid}.tmp`; await writeFile(tmp, text, { mode: 0o600 }); await rename(tmp, path); };
-export async function runHealth(config, { now = Date.now(), dry = false, fetchImpl = fetch, token, windowProbe, unitProbe, log = e => console.log(JSON.stringify(e)) } = {}) {
+export async function runHealth(config, { now = Date.now(), dry = false, fetchImpl = fetch, token, windowProbe, unitProbe, workWatchUnitProbe, workWatchPidProbe, log = e => console.log(JSON.stringify(e)) } = {}) {
   validateConfig(config);
   if (config.notifications && !dry && !token) throw Error('notification token missing');
   let lock;
@@ -278,17 +300,29 @@ export async function runHealth(config, { now = Date.now(), dry = false, fetchIm
       for (const d of r.rules.diffs) details.push(`\n${r.role}: ${d.path} lines ${d.lines.join(',')} (${d.allowed ? 'allowed' : 'unexpected'}); SHA256 ${d.expected} → ${d.actual}\n`);
       if (r.errors.length) details.push(`\n${r.role}: ${r.errors.join('; ')}\n`);
     }
+    let workWatch;
+    if (!dry && config.workWatch !== false && !(isObject(config.workWatch) && config.workWatch.enabled === false)) {
+      const wwCfg = isObject(config.workWatch) ? config.workWatch : {};
+      const wwRoot = wwCfg.root ?? config.baselineRepo;
+      const wwRegistry = wwCfg.registryFile ?? defaultRegistryPath(wwRoot, {});
+      if (config.workWatch === true || isObject(config.workWatch) || (await optionalStat(wwRegistry)) !== null) {
+        workWatch = await watchWorkers({ root: wwRoot, registryFile: wwRegistry, now, unitProbe: workWatchUnitProbe, pidProbe: workWatchPidProbe, log: emit });
+        details.push(`\nwork-watch: checked ${workWatch.checked}, completed ${workWatch.completed.length}, stalled ${workWatch.stalled.length}, dead ${workWatch.dead.length}, wakes ${workWatch.wakes.length}\n`);
+      }
+    }
     let watcherUnits;
-    if (config.watcherUnits) {
+    const wuOpts = resolveWatcherUnitOptions(config);
+    const liveWatcherDefault = config.watcherUnits !== undefined || Boolean(unitProbe) || config.roles.some(r => r.adapter.kind !== 'snapshot');
+    if (wuOpts && liveWatcherDefault) {
       state.watcherUnits ??= {};
-      watcherUnits = await checkWatcherUnits({ stateFile: config.stateFile, ...config.watcherUnits }, { unitState: state.watcherUnits, now, dry, unitProbe, fetchImpl, token, notifications: config.notifications, saveState: save, log: emit });
+      watcherUnits = await checkWatcherUnits({ stateFile: config.stateFile, ...wuOpts }, { unitState: state.watcherUnits, now, dry, unitProbe, fetchImpl, token, notifications: config.notifications, saveState: save, log: emit });
       degraded ||= watcherUnits.degraded;
       details.push(`\nwatcher units: ${watcherUnits.probeError ? 'probe unavailable' : watcherUnits.units.map(u => `${cell(u.unit)}: ${u.failing ? `failing (streak ${u.streak})` : 'healthy'}`).join('; ') || 'none observed'}\n`);
     }
     report += details.join('');
     if (!dry) await atomic(config.reportFile, report);
     emit({ stage: 'end', result: degraded ? 'degraded' : 'complete', previews, durationMs: Date.now() - started });
-    return { rows, report, degraded, previews, ...(watcherUnits ? { watcherUnits } : {}) };
+    return { rows, report, degraded, previews, ...(workWatch ? { workWatch } : {}), ...(watcherUnits ? { watcherUnits } : {}) };
   } catch (error) { emit({ stage: 'end', result: 'failed', durationMs: Date.now() - started }); throw error; } finally { if (lock) await lock.release(); }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

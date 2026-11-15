@@ -555,7 +555,8 @@ function main() {
 	const input = data.tool_input || {};
 	if (isShell) {
 		const rawCmd = String(input.command || input.cmd || "");
-		const detachedHit = checkDetachedWorkerCommand(rawCmd);
+		const hookCwd = typeof data.cwd === "string" ? data.cwd : process.cwd();
+		const detachedHit = checkDetachedWorkerCommand(rawCmd, { cwd: hookCwd, env: process.env });
 		if (detachedHit) {
 			const leadCheck = guard.leadSession(data);
 			if (leadCheck.lead) {

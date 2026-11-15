@@ -92,12 +92,17 @@ const oneLine = (value) =>
   typeof value === "string" && value.trim() !== "" && !/[\r\n]/ .test(value);
 export const MAX_HUMAN_DROPS = 2;
 export const MAX_HUMAN_DEFERS = 2;
+export function normalizeMsgId(msgId) {
+  return typeof msgId === "string" ? msgId.trim() : "";
+}
 export function hasHumanMsgId(msgId) {
-  if (typeof msgId !== "string") return false;
-  const trimmed = msgId.trim();
+  const trimmed = normalizeMsgId(msgId);
   if (!trimmed || trimmed === "-") return false;
   if (/^(?:none|null|self)(?:[-:]|$)/i.test(trimmed)) return false;
   return true;
+}
+function sameHumanMsgId(a, b) {
+  return hasHumanMsgId(a) && hasHumanMsgId(b) && normalizeMsgId(a) === normalizeMsgId(b);
 }
 function itemDropCount(item) {
   if (Number.isInteger(item?.drop_count) && item.drop_count > 0)
@@ -174,6 +179,7 @@ export function validateLedger(ledger, role) {
         (!Number.isInteger(item.drop_count) || item.drop_count < 0)) ||
       (item.defer_count !== undefined &&
         (!Number.isInteger(item.defer_count) || item.defer_count < 0)) ||
+      (item.human_msg_id !== undefined && !oneLine(item.human_msg_id)) ||
       (item.checked_at !== null && !validDate(item.checked_at)) ||
       (item.worker !== null &&
         (!item.worker ||
@@ -295,20 +301,27 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       l.report.channel = roleConfig.report.channel;
     }
     if (command === "add") {
-      if (!o.title || !validDate(o.due) || !o.channel || !o["msg-id"])
+      const normalizedMsgId = normalizeMsgId(o["msg-id"]);
+      if (!o.title || !validDate(o.due) || !o.channel || !normalizedMsgId)
         throw new Error(
           "add requires --title --due (UTC ISO) --channel --msg-id",
         );
-      if (
-        hasHumanMsgId(o["msg-id"]) &&
-        l.items.some(
-          (i) =>
-            i.from?.msg_id === o["msg-id"] && i.status === "escalated_human",
-        )
-      )
-        throw new Error(
-          `이미 사람에게 올림(escalated_human) 상태인 사람 지시(msg_id=${o["msg-id"]})는 새 카드로 재생성할 수 없습니다`,
+      if (hasHumanMsgId(normalizedMsgId)) {
+        const sameMsgItems = l.items.filter((i) =>
+          sameHumanMsgId(i.from?.msg_id, normalizedMsgId),
         );
+        const totalDrops = sameMsgItems.reduce((sum, i) => sum + itemDropCount(i), 0);
+        const totalDefers = sameMsgItems.reduce((sum, i) => sum + itemDeferCount(i), 0);
+        if (
+          sameMsgItems.some((i) => i.status === "escalated_human" || Boolean(i.human_msg_id)) ||
+          totalDrops > MAX_HUMAN_DROPS ||
+          totalDefers > MAX_HUMAN_DEFERS
+        ) {
+          throw new Error(
+            `이미 사람에게 올림(escalated_human) 상태인 사람 지시이거나 취소·연기 상한을 넘긴 지시(msg_id=${normalizedMsgId})는 새 카드로 재생성할 수 없습니다`,
+          );
+        }
+      }
       const itemId = safeName(o.id || randomUUID());
       if (l.items.some((i) => i.id === itemId)) throw new Error("Duplicate id");
       if (
@@ -320,7 +333,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       l.items.push({
         id: itemId,
         title: o.title,
-        from: { channel: o.channel, msg_id: o["msg-id"], quote: o.quote || "" },
+        from: { channel: o.channel, msg_id: normalizedMsgId, quote: o.quote || "" },
         due: o.due,
         created_at: new Date(clock()).toISOString(),
         status: "open",
@@ -402,7 +415,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       const isDefer = Date.parse(o.due) >= Date.parse(item.due);
       if (isDefer && hasHumanMsgId(item.from?.msg_id)) {
         const priorDefers = l.items
-          .filter((i) => i.from?.msg_id === item.from.msg_id)
+          .filter((i) => sameHumanMsgId(i.from?.msg_id, item.from.msg_id))
           .reduce((sum, i) => sum + itemDeferCount(i), 0);
         if (priorDefers >= MAX_HUMAN_DEFERS) {
           item.status = "escalated_human";
@@ -410,7 +423,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
           item.checked_at = new Date(clock()).toISOString();
           item.note = `사람에게 올림 (기한 미룸 ${priorDefers + 1}회 거절): ${o.reason.trim()}`;
           escalationError = new Error(
-            `사람 지시 카드(${item.id}, msg_id=${item.from.msg_id})는 기한 미룸 ${MAX_HUMAN_DEFERS}회를 넘어 거절되었으며 사람에게 올림(escalated_human) 상태로 전환되었습니다`,
+            `사람 지시 카드(${item.id}, msg_id=${normalizeMsgId(item.from.msg_id)})는 기한 미룸 ${MAX_HUMAN_DEFERS}회를 넘어 거절되었으며 사람에게 올림(escalated_human) 상태로 전환되었습니다`,
           );
           return item.id;
         }
@@ -423,7 +436,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
         item.drop_count ?? (item.status === "dropped" ? 1 : 0);
       if (hasHumanMsgId(item.from?.msg_id)) {
         const priorDrops = l.items
-          .filter((i) => i.from?.msg_id === item.from.msg_id)
+          .filter((i) => sameHumanMsgId(i.from?.msg_id, item.from.msg_id))
           .reduce((sum, i) => sum + itemDropCount(i), 0);
         if (item.status === "escalated_human" || priorDrops >= MAX_HUMAN_DROPS) {
           item.status = "escalated_human";
@@ -431,14 +444,31 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
           item.checked_at = new Date(clock()).toISOString();
           item.note = `사람에게 올림 (drop ${priorDrops + 1}회 거절): ${o.reason.trim()}`;
           escalationError = new Error(
-            `사람 지시 카드(${item.id}, msg_id=${item.from.msg_id})는 drop ${MAX_HUMAN_DROPS}회를 넘어 거절되었으며 사람에게 올림(escalated_human) 상태로 전환되었습니다`,
+            `사람 지시 카드(${item.id}, msg_id=${normalizeMsgId(item.from.msg_id)})는 drop ${MAX_HUMAN_DROPS}회를 넘어 거절되었으며 사람에게 올림(escalated_human) 상태로 전환되었습니다`,
           );
           return item.id;
         }
       }
       item.status = "dropped";
       item.drop_count = currentDrops + 1;
-    } else item.status = "done";
+    } else {
+      if (item.status === "escalated_human") {
+        const humanAck = normalizeMsgId(o["human-msg-id"]);
+        if (
+          !hasHumanMsgId(humanAck) ||
+          sameHumanMsgId(humanAck, item.from?.msg_id)
+        ) {
+          throw new Error(
+            `사람에게 올림(escalated_human) 상태인 카드(${item.id})를 완료(done)로 닫으려면 원 지시와 다른 사람 확인 답글 번호(--human-msg-id <msg_id>)가 필요합니다`,
+          );
+        }
+        item.human_msg_id = humanAck;
+      }
+      if (item.status === "dropped" && item.drop_count === undefined) {
+        item.drop_count = 1;
+      }
+      item.status = "done";
+    }
     if (o.reason) item.note = o.reason;
     return item.id;
   }).catch((error) => {

@@ -369,3 +369,50 @@ test('wait line accepts M/D HH:MM KST and rejects a zero waitMaxHours', async ()
   assert.equal(waitUntil('- in progress: waiting for review', now), null);
   const f = await fixture(); f.c.waitMaxHours = 0; assert.throws(() => validateConfig(f.c), /positive/);
 });
+
+test('periodic runHealth wires workWatch and watcherUnits by default without extra timers and honors opt-out', async () => {
+  const { registerWorker } = await import('./work-watch.mjs');
+  const f = await fixture();
+  const wakeDir = join(f.dir, 'wake-role-a');
+  const resultFile = join(f.dir, 'worker-result.md');
+  await writeFile(resultFile, '끝: 완료\n');
+  await registerWorker({
+    root: f.repo,
+    id: 'periodic-w1',
+    unit: 'role-a-worker-periodic-w1.service',
+    role: 'role-a',
+    wakeDir,
+    resultFile,
+    watchDirs: [f.dir],
+    stallMinutes: 15,
+    now: now - 120_000,
+  });
+  // overwrite initialResultSize so resultFile looks newly written after registration
+  const regPath = join(f.repo, '.agents/work/work-watch/registry.json');
+  const regDoc = JSON.parse(await readFile(regPath, 'utf8'));
+  regDoc.workers[0].initialResultMtimeMs = null;
+  regDoc.workers[0].initialResultSize = null;
+  await writeFile(regPath, JSON.stringify(regDoc, null, 2));
+
+  const res = await f.run({
+    workWatchUnitProbe: async () => ({ ok: true, loadState: 'loaded', activeState: 'inactive', subState: 'dead', result: 'success', execMainStatus: 0 }),
+    unitProbe: async () => [
+      { unit: 'naia-l4-watch.service', loadState: 'loaded', activeState: 'failed', subState: 'failed', result: 'exit-code', execMainStatus: 1, nRestarts: 0 },
+    ],
+  });
+  assert.ok(res.workWatch);
+  assert.deepEqual(res.workWatch.completed, ['periodic-w1']);
+  assert.ok(res.watcherUnits);
+  assert.equal(res.watcherUnits.wakes.length, 1);
+  assert.match(res.report, /work-watch: checked 1/);
+  assert.match(res.report, /watcher units: naia-l4-watch\.service: failing/);
+
+  // Explicit false disables both
+  f.c.workWatch = false;
+  f.c.watcherUnits = false;
+  const disabled = await f.run({
+    unitProbe: async () => { throw new Error('should not be called when watcherUnits is false'); },
+  });
+  assert.equal(disabled.workWatch, undefined);
+  assert.equal(disabled.watcherUnits, undefined);
+});

@@ -64,7 +64,7 @@ codex·agy·muse 는 Claude 훅이 안 돌므로 이 훅의 대상이 아니다(
 안내문은 하드코딩 대신 `.naia-role.json` 의 `lead_guard` 설정을 따른다(`work_dir` 기본 `<작업 폴더>`, `worker_guide` 선택, `approver_label` 기본 `승인자`):
 "2층 일꾼에게 지시서로 맡기십시오" + 표준 일꾼 실행 대본 예시
 `node scripts/worker-runner/spawn-worker.mjs --id <일> --role <역할> --work-dir <작업 폴더>/<일> --watch-dir <작업 폴더>/<일> --result-file <작업 폴더>/<일>/result.md -- claude -p --model sonnet "$(cat <작업 폴더>/<일>/prompt.md)"`.
-또한 PreToolUse 관문(`.claude/hooks/lead-write-guard.js`, `.agents/hooks/policies/bash.js`, `.codex/hooks/session-contract-gate.cjs`, `.pi/extensions/naia-harness.ts`)은 에이전트 셸에서 `nohup`·`setsid`·백그라운드(`&`)·`tmux -d`·`screen -dm` 으로 `agy`·`codex`·`claude -p`·`muse exec` 를 직접 띄우는 명령을 가로막고 `scripts/worker-runner/spawn-worker.mjs`(자동 `work-watch` 등록 + 다중 마운트 디스크 바닥선 검사)를 안내한다.
+또한 PreToolUse 관문(`.claude/hooks/lead-write-guard.js`, `.agents/hooks/policies/bash.js`, `.codex/hooks/session-contract-gate.cjs`, `.pi/extensions/naia-harness.ts`)은 에이전트 셸에서 일꾼 CLI(`agy`·`codex`·`claude -p`/`--print`·`muse exec`·`opencode run` 등)를 분리 실행(`nohup`, `setsid`/`setsid --fork`, `systemd-run`, `daemonize`, `at`/`batch`, `disown`, 백그라운드 `&`, `( … ) &`/`{ …; } &` 부분 셸, `bash -c`/`sh -c`, `tmux -d`/`send-keys`/`run-shell`, `screen -dm` 등)하는 명령을 가로막고, 허용된 두 표준 진입점(`scripts/worker-runner/spawn-worker.mjs` 또는 설정으로 지정된 서버 표준 어댑터 대본 경로)만 통과시킨다.
 막힘·예외 사용·훅 오류는 `.agents/lead-guard/audit.jsonl` 에 남는다(기기별, git 제외).
 
 ## 비상 길 (긴급 예외)

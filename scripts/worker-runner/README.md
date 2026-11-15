@@ -3,12 +3,15 @@
 This Linux/Node 22 runner shares a disk admission queue across independent invocations. It requires `df`, `du`, and `flock`; no package installation or service manager is needed. Use one private state directory on the filesystem being budgeted for every participating runner. Existing workers outside this runner are measured by free disk space but cannot be preempted.
 
 ```sh
-node scripts/worker-runner/cli.mjs run \
+node scripts/worker-runner/spawn-worker.mjs \
   --state-dir "$HOME/.local/state/worker-runner" \
-  --id review-001 --work-dir "$PWD" --budget 1G --priority normal \
-  -- bash -c 'echo finished'
+  --id review-001 --role infra --work-dir "$PWD" \
+  --result-file "$PWD/result-review-001.md" --budget 1G --priority normal \
+  -- bash -c 'echo finished > "$PWD/result-review-001.md"'
 node scripts/worker-runner/cli.mjs status --state-dir "$HOME/.local/state/worker-runner"
 ```
+
+Direct `cli.mjs run` without `--role` (or `WORKER_ROLE`) and `--result-file` (or `WORKER_RESULT_FILE`) is refused so every worker is tracked by `work-watch` (internal runner tests may pass `--allow-unregistered-test`).
 
 The default reservation is 1 GiB and disk floor is 5 GiB. Admission requires free bytes minus remaining reservations of running workers to cover the next budget plus floor. Remaining reservation is the original budget minus observed growth in the work directory and owned temporary directory, clamped at zero. This is an estimate rather than a filesystem quota. The strictest floor requested by any queued or running worker applies to admission and preemption. Priorities are `high`, `normal`, `low`, or numeric (larger first); ties use entry order. A queue head larger than filesystem free space minus the floor is skipped so fitting rounds can progress even while other rounds are active. A head that fits that total capacity but currently waits for reservations retains its place. Priority always precedes a resumed round's front flag; the flag only advances rounds within the same priority.
 

@@ -112,7 +112,7 @@ test('cli run survives a failing du and still finishes the worker', async () => 
         writeFileSync(join(bin, 'du'), '#!/bin/sh\necho "du: cannot access: No such file or directory" >&2\nexit 1\n');
         chmodSync(join(bin, 'du'), 0o755);
         const cli = new URL('./cli.mjs', import.meta.url).pathname;
-        const r = spawnSync(process.execPath, [cli, 'run', '--state-dir', join(base, 'state'), '--id', 'du-fail', '--work-dir', base,
+        const r = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', join(base, 'state'), '--id', 'du-fail', '--work-dir', base,
             '--budget', '1K', '--floor', '1K', '--timeout', '60', '--', '/bin/sh', '-c', 'echo ran > "$0"', join(base, 'out')],
             { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8', timeout: 60000 });
         assert.equal(r.status, 0, r.stderr);
@@ -140,7 +140,7 @@ function seed(root, jobs) {
     fs.writeFileSync(path.join(root, 'state/state.json'), JSON.stringify({ version: 1, sequence: jobs.length, jobs }));
 }
 function run(root, extra = [], env = {}) {
-    return spawnSync(process.execPath, [cli, 'run', '--state-dir', path.join(root, 'state'), '--id', 'same-id', '--work-dir', root,
+    return spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', path.join(root, 'state'), '--id', 'same-id', '--work-dir', root,
         '--budget', '1M', '--floor', '1K', '--poll-ms', '40', ...extra, '--', '/bin/sh', '-c', 'sleep 0.3; echo survived > out'],
         { env: { ...process.env, ...env }, encoding: 'utf8', timeout: 15000 });
 }
@@ -224,7 +224,7 @@ test('reconcile rejected cleanup root is isolated from a healthy CLI worker', ()
 test('stale done marker never converts a failing worker to success', () => fixture(root => {
     const done = path.join(root, 'done'); fs.writeFileSync(done, '');
     fs.utimesSync(done, new Date(1000), new Date(1000));
-    const r = spawnSync(process.execPath, [cli, 'run', '--state-dir', path.join(root, 'state'), '--id', 'done', '--work-dir', root,
+    const r = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', path.join(root, 'state'), '--id', 'done', '--work-dir', root,
         '--budget', '1K', '--floor', '1K', '--poll-ms', '30', '--done-file', done, '--', '/bin/sh', '-c', 'sleep 0.2; exit 7'], { encoding: 'utf8', timeout: 10000 });
     assert.equal(r.status, 7, r.stderr);
     assert.deepEqual(terminalOutcome({ doneAt: 1 }, { code: 7 }), { status: 'failed', code: 7 });
@@ -234,7 +234,7 @@ test('fake df and du count conventional temp and budget kill without automatic r
     fs.mkdirSync(bin); fs.mkdirSync(work);
     fs.writeFileSync(path.join(bin, 'df'), `#!/bin/sh\nfree=99999999\nfor p in '${process.env.WORKER_RUNNER_TEMP_BASE}/pressure/tmp/pressure'; do if [ -f "$p" ]; then free=0; fi; done\nprintf 'Filesystem 1024-blocks Used Available Capacity Mounted\\nfake 99999999 0 %s 0%% /\\n' "$free"\n`, { mode: 0o755 });
     fs.writeFileSync(path.join(bin, 'du'), `#!/bin/sh\nlast=''\nfor arg do last=$arg; done\nn=0\nif [ -f "$last/tmp/pressure" ]; then n=10240; fi\nprintf '%s\\t%s\\n' "$n" "$last"\n`, { mode: 0o755 });
-    const r = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'pressure', '--work-dir', work,
+    const r = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', state, '--id', 'pressure', '--work-dir', work,
         '--budget', '1K', '--floor', '1K', '--poll-ms', '40', '--timeout', '10', '--', '/bin/sh', '-c',
         'test "$TMPDIR" = "$TMP" && test "$TMPDIR" = "$TEMP" || exit 9; if [ "$WORKER_RUNNER_RESUME" = 0 ]; then touch "$TMPDIR/pressure"; sleep 8; else echo resumed > out; fi'],
         { encoding: 'utf8', timeout: 15000, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
@@ -258,7 +258,7 @@ test('terminal state retention is bounded and active jobs are retained', () => f
     assert.ok(!s.jobs.some(j => j.id === 'old-0'));
 }));
 test('launcher drains background writers before owned root cleanup', () => fixture(root => {
-    const r = spawnSync(process.execPath, [cli, 'run', '--state-dir', path.join(root, 'state'), '--id', 'background', '--work-dir', root,
+    const r = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', path.join(root, 'state'), '--id', 'background', '--work-dir', root,
         '--budget', '1M', '--floor', '1K', '--poll-ms', '30', '--timeout', '5', '--', '/bin/sh', '-c',
         'while :; do echo x >> "$TMPDIR/writer"; sleep 0.05; done & exit 0'], { encoding: 'utf8', timeout: 10000 });
     assert.equal(r.status, 0, r.stderr);
@@ -268,7 +268,7 @@ test('launcher drains background writers before owned root cleanup', () => fixtu
 test('successful measurements recover baseline after initial du failure', () => fixture(root => {
     fs.mkdirSync(path.join(root, 'bin')); fs.mkdirSync(path.join(root, 'work'));
     fs.writeFileSync(path.join(root, 'bin/du'), `#!/bin/sh\nlast=''\nfor arg do last=$arg; done\nif [ "$last" = '${root}/work' ]; then\n n=0; [ ! -f '${root}/count' ] || n=$(cat '${root}/count'); n=$((n+1)); echo "$n" > '${root}/count'; [ "$n" -ne 1 ] || exit 1; echo "$((n*100)) $last"\nelse echo "0 $last"; fi\n`, { mode: 0o755 });
-    const r = spawnSync(process.execPath, [cli, 'run', '--state-dir', path.join(root, 'state'), '--id', 'baseline', '--work-dir', path.join(root, 'work'),
+    const r = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', path.join(root, 'state'), '--id', 'baseline', '--work-dir', path.join(root, 'work'),
         '--budget', '1M', '--floor', '1K', '--poll-ms', '40', '--', '/bin/sh', '-c', `while [ ! -f '${root}/count' ] || [ "$(cat '${root}/count')" -lt 3 ]; do sleep 0.05; done; while ! node -e 'const fs=require("node:fs"); const s=JSON.parse(fs.readFileSync(process.argv[1])); process.exit(s.jobs.some(j=>j.id==="baseline" && j.used>=102400)?0:1)' '${root}/state/state.json'; do sleep 0.05; done`], { encoding: 'utf8', timeout: 10000, env: { ...process.env, PATH: `${root}/bin:${process.env.PATH}` } });
     assert.equal(r.status, 0, r.stderr);
     const j = JSON.parse(fs.readFileSync(path.join(root, 'state/state.json'))).jobs[0];
@@ -277,7 +277,7 @@ test('successful measurements recover baseline after initial du failure', () => 
 }));
 test('event log separates supervisor JSON while worker stderr stays in worker output', () => fixture(root => {
     const events = path.join(root, 'supervisor.jsonl');
-    const r = spawnSync(process.execPath, [cli, 'run', '--state-dir', path.join(root, 'state'), '--id', 'events', '--work-dir', root,
+    const r = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', path.join(root, 'state'), '--id', 'events', '--work-dir', root,
         '--budget', '1M', '--floor', '1K', '--poll-ms', '30', '--event-log', events, '--', '/bin/sh', '-c', 'echo worker-out; echo worker-error >&2'], { encoding: 'utf8', timeout: 10000 });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /worker-out/); assert.equal(r.stderr.trim(), 'worker-error');
@@ -344,7 +344,7 @@ test('detached concurrent writer cleanup preserves exit 23 and permits immediate
         }
         fs.writeFileSync(result, 'durable result');
         process.exit(23);`);
-    const args = [cli, 'run', '--state-dir', path.join(root, 'state'), '--id', 'concurrent', '--work-dir', root,
+    const args = [cli, 'run', '--allow-unregistered-test', '--state-dir', path.join(root, 'state'), '--id', 'concurrent', '--work-dir', root,
         '--temp-base', root, '--budget', '256M', '--floor', '1K', '--poll-ms', '30', '--timeout', '15', '--'];
     const first = spawnSync(process.execPath, [...args, process.execPath, payload, writer, ready, done, result], { encoding: 'utf8', timeout: 20000 });
     assert.equal(first.status, 23, first.stderr);
@@ -519,7 +519,7 @@ test('cli run enforces review-cap before execution, emits wake note after review
     writeTimed(path.join(root, 'brief-rev2.md'), 'review-lane: cli-lane\n', 20);
 
     // Running rev2 writes result-rev2.md with FAIL; after-hook writes wake note.
-    const revRun = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'cli-rev2', '--work-dir', root,
+    const revRun = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', state, '--id', 'cli-rev2', '--work-dir', root,
         '--budget', '64K', '--floor', '1K', '--poll-ms', '30', '--instruction', path.join(root, 'brief-rev2.md'),
         '--review-cap-wake-dir', wake, '--', '/bin/sh', '-c', `printf '판정: FAIL\\n' > '${path.join(root, 'result-rev2.md')}'`],
         { encoding: 'utf8', timeout: 10000 });
@@ -531,7 +531,7 @@ test('cli run enforces review-cap before execution, emits wake note after review
     // Next fix round without reset is blocked with exit code 3 and one-line stderr before running command.
     const marker = path.join(root, 'should-not-exist');
     writeTimed(path.join(root, 'brief-fix2.md'), 'review-lane: cli-lane\n', 30);
-    const blockedFix = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'cli-fix2', '--work-dir', root,
+    const blockedFix = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', state, '--id', 'cli-fix2', '--work-dir', root,
         '--budget', '64K', '--floor', '1K', '--poll-ms', '30', '--instruction', path.join(root, 'brief-fix2.md'),
         '--', '/bin/sh', '-c', `touch '${marker}'`],
         { encoding: 'utf8', timeout: 10000 });
@@ -541,7 +541,7 @@ test('cli run enforces review-cap before execution, emits wake note after review
     assert.match(blockedFix.stderr, /review-cap: 갈래 cli-lane 코드 검수 FAIL 2번\(rev1 rev2\) — fix2 를 막음/);
 
     // Raising cap via --review-cap 3 allows fix2 to run.
-    const capThree = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'cli-fix2-cap3', '--work-dir', root,
+    const capThree = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', state, '--id', 'cli-fix2-cap3', '--work-dir', root,
         '--budget', '64K', '--floor', '1K', '--poll-ms', '30', '--instruction', path.join(root, 'brief-fix2.md'),
         '--review-cap', '3', '--', '/bin/sh', '-c', `echo cap3 > '${marker}'`],
         { encoding: 'utf8', timeout: 10000 });
@@ -549,7 +549,7 @@ test('cli run enforces review-cap before execution, emits wake note after review
     assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'cap3');
 
     // Disabling via --no-review-cap allows execution and records review-cap-disabled in events and state.
-    const noCap = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'cli-fix2-nocap', '--work-dir', root,
+    const noCap = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', state, '--id', 'cli-fix2-nocap', '--work-dir', root,
         '--budget', '64K', '--floor', '1K', '--poll-ms', '30', '--instruction', path.join(root, 'brief-fix2.md'),
         '--no-review-cap', '--', '/bin/sh', '-c', `echo nocap > '${marker}'`],
         { encoding: 'utf8', timeout: 10000 });
@@ -562,21 +562,67 @@ test('cli run enforces review-cap before execution, emits wake note after review
 
     // Missing review-lane on fix/rev round exits 3 on CLI; word-internal rev (reviewcap1) without review-lane succeeds.
     writeTimed(path.join(root, 'brief-fix7j.md'), 'worker-disk-budget: 64K\n', 40);
-    const missingLaneCli = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'cli-fix7j', '--work-dir', root,
+    const missingLaneCli = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', state, '--id', 'cli-fix7j', '--work-dir', root,
         '--budget', '64K', '--floor', '1K', '--poll-ms', '30', '--instruction', path.join(root, 'brief-fix7j.md'),
         '--', '/bin/sh', '-c', 'exit 0'], { encoding: 'utf8', timeout: 10000 });
     assert.equal(missingLaneCli.status, 3);
     assert.match(missingLaneCli.stderr, /fix7j 는 고침·검수 회차인데 지시서에 'review-lane:' 줄이 없음/);
 
     writeTimed(path.join(root, 'brief-reviewcap1.md'), 'worker-disk-budget: 64K\n', 41);
-    const wordInternalCli = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'cli-reviewcap1', '--work-dir', root,
+    const wordInternalCli = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', state, '--id', 'cli-reviewcap1', '--work-dir', root,
         '--budget', '64K', '--floor', '1K', '--poll-ms', '30', '--instruction', path.join(root, 'brief-reviewcap1.md'),
         '--', '/bin/sh', '-c', `echo reviewcap1-ok > '${marker}'`], { encoding: 'utf8', timeout: 10000 });
     assert.equal(wordInternalCli.status, 0, wordInternalCli.stderr);
     assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'reviewcap1-ok');
 
     // Invalid --review-cap value fails closed.
-    const invalidCap = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'cli-bad-cap', '--work-dir', root,
+    const invalidCap = spawnSync(process.execPath, [cli, 'run', '--allow-unregistered-test', '--state-dir', state, '--id', 'cli-bad-cap', '--work-dir', root,
         '--budget', '1K', '--floor', '1K', '--review-cap', '0', '--', '/bin/sh', '-c', 'exit 0'], { encoding: 'utf8', timeout: 10000 });
     assert.notEqual(invalidCap.status, 0);
+}));
+
+test('cli run refuses unregistered invocation without role/result-file, guides to spawn-worker.mjs, and fails closed on registration error', () => fixture(root => {
+    const state = path.join(root, 'state');
+    const marker = path.join(root, 'unregistered-ran');
+    const cleanEnv = { ...process.env };
+    delete cleanEnv.WORKER_ROLE;
+    delete cleanEnv.WORKER_RESULT_FILE;
+
+    const noReg = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'unreg-1', '--work-dir', root,
+        '--budget', '1M', '--floor', '1K', '--', '/bin/sh', '-c', `touch '${marker}'`],
+        { env: cleanEnv, encoding: 'utf8', timeout: 10000 });
+    assert.notEqual(noReg.status, 0);
+    assert.match(noReg.stderr, /spawn-worker\.mjs/);
+    assert.equal(fs.existsSync(marker), false);
+
+    // Partial registration (role without result-file) is also refused.
+    const partialReg = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'unreg-2', '--work-dir', root,
+        '--role', 'infra', '--budget', '1M', '--floor', '1K', '--', '/bin/sh', '-c', `touch '${marker}'`],
+        { env: cleanEnv, encoding: 'utf8', timeout: 10000 });
+    assert.notEqual(partialReg.status, 0);
+    assert.match(partialReg.stderr, /spawn-worker\.mjs/);
+    assert.equal(fs.existsSync(marker), false);
+
+    // Corrupted work-watch registry fails closed instead of running unregistered.
+    const brokenReg = path.join(root, 'broken-registry.json');
+    fs.writeFileSync(brokenReg, '{corrupted', 'utf8');
+    const regFailed = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'reg-err', '--work-dir', root,
+        '--adk-root', root, '--work-watch-registry', brokenReg, '--role', 'infra', '--result-file', path.join(root, 'res.md'),
+        '--budget', '1M', '--floor', '1K', '--', '/bin/sh', '-c', `touch '${marker}'`],
+        { env: cleanEnv, encoding: 'utf8', timeout: 10000 });
+    assert.notEqual(regFailed.status, 0);
+    assert.equal(fs.existsSync(marker), false);
+
+    // Full registration succeeds and populates work-watch registry.
+    const validReg = path.join(root, 'valid-registry.json');
+    const resultPath = path.join(root, 'res-ok.md');
+    const okRun = spawnSync(process.execPath, [cli, 'run', '--state-dir', state, '--id', 'reg-ok', '--work-dir', root,
+        '--adk-root', root, '--work-watch-registry', validReg, '--role', 'infra', '--result-file', resultPath,
+        '--budget', '1M', '--floor', '1K', '--', '/bin/sh', '-c', `echo ok > '${resultPath}'`],
+        { env: cleanEnv, encoding: 'utf8', timeout: 10000 });
+    assert.equal(okRun.status, 0, okRun.stderr);
+    const regDoc = JSON.parse(fs.readFileSync(validReg, 'utf8'));
+    assert.equal(regDoc.workers.length, 1);
+    assert.equal(regDoc.workers[0].id, 'reg-ok');
+    assert.equal(regDoc.workers[0].role, 'infra');
 }));

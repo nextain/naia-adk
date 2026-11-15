@@ -66,7 +66,7 @@ test('actual run cleans chmod-0400 TMPDIR and chmod-0000 owner marker outside TM
     const { spawnSync } = await import('node:child_process');
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'cleanup-run-'));
     try {
-        const result = spawnSync(process.execPath, [new URL('./cli.mjs', import.meta.url).pathname, 'run', '--state-dir', path.join(base, 'state'), '--temp-base', base, '--id', 'locked-worker', '--work-dir', base, '--budget', '4M', '--floor', '1K', '--poll-ms', '30', '--', '/bin/sh', '-c', 'test "$TMPDIR" != "$WORKER_RUNNER_TMP_ROOT" || exit 31; test -f "$WORKER_RUNNER_TMP_ROOT/.worker-runner-owner" || exit 32; test ! -e "$TMPDIR/.worker-runner-owner" || exit 33; chmod 0000 "$WORKER_RUNNER_TMP_ROOT/.worker-runner-owner"; chmod 0400 "$TMPDIR"; chmod 0400 "$WORKER_RUNNER_TMP_ROOT"'], { encoding: 'utf8', timeout: 10000 });
+        const result = spawnSync(process.execPath, [new URL('./cli.mjs', import.meta.url).pathname, 'run', '--allow-unregistered-test', '--state-dir', path.join(base, 'state'), '--temp-base', base, '--id', 'locked-worker', '--work-dir', base, '--budget', '4M', '--floor', '1K', '--poll-ms', '30', '--', '/bin/sh', '-c', 'test "$TMPDIR" != "$WORKER_RUNNER_TMP_ROOT" || exit 31; test -f "$WORKER_RUNNER_TMP_ROOT/.worker-runner-owner" || exit 32; test ! -e "$TMPDIR/.worker-runner-owner" || exit 33; chmod 0000 "$WORKER_RUNNER_TMP_ROOT/.worker-runner-owner"; chmod 0400 "$TMPDIR"; chmod 0400 "$WORKER_RUNNER_TMP_ROOT"'], { encoding: 'utf8', timeout: 10000 });
         assert.equal(result.status, 0, result.stderr);
         const job = JSON.parse(fs.readFileSync(path.join(base, 'state/state.json'), 'utf8')).jobs.find(j => j.id === 'locked-worker');
         assert.equal(job.cleanupRoot, undefined);
