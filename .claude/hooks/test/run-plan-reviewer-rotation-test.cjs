@@ -30,6 +30,14 @@ function makeWorkspace(t) {
 	return { tmp, root, stateDir };
 }
 
+async function withMockApproval(root, fn) {
+ const pin = require("../lib/gate-config-pin.js");
+ const code = pin.approvalCode(pin.snapshotGateConfig(root).hash);
+ const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
+ return deployPlan.withGateConfig({root, approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+  fetchImpl: async () => ({ok: true, json: async () => ({id: message, channel_id: channel, author: {id}, content: code})})}, fn);
+}
+
 function createValidPlan(root, overrides = {}) {
 	const gatesDir = path.join(root, ".agents", "progress", "sample-work", "gates");
 	fs.mkdirSync(gatesDir, { recursive: true });
@@ -131,6 +139,7 @@ function writeRotationReceipt(root, planFile, reviewer, extra = {}) {
 				target_sha256: planSha,
 				receipt: {
 					model: deployPlan.REVIEW_MODELS[reviewer].model,
+					effort: deployPlan.REVIEW_MODELS[reviewer].effort,
 					started_at: new Date(Date.now() - 2000).toISOString(),
 					ended_at: endedAt,
 					exit_code: 0,
@@ -165,36 +174,25 @@ test("차례: 작성자 다음 모델이 먼저, 나머지가 다음", (t) => {
 	}
 });
 
-test("고정 planReview: 유효하면 먼저 쓰고, 지났거나 없으면 차례만 쓴다", (t) => {
-	const { root } = makeWorkspace(t);
-	const now = Date.now();
-	const file = path.join(root, ".claude/deploy/config.json");
-	const set = (planReview) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(planReview === undefined ? {} : { planReview })); };
-	set({ reviewer: "codex", until: new Date(now + 60000).toISOString(), reason: "승인자 결정" });
-	assert.deepEqual(deployPlan.orderedReviewers("muse", root, now), ["codex", "argon"]);
-	set({ reviewer: "muse", until: new Date(now + 60000).toISOString(), reason: "승인자 결정" });
-	assert.deepEqual(deployPlan.orderedReviewers("argon", root, now), ["muse", "codex"]);
-	// 기한이 지났으면 차례만 쓴다
-	set({ reviewer: "codex", until: new Date(now - 60000).toISOString(), reason: "승인자 결정" });
-	assert.deepEqual(deployPlan.orderedReviewers("muse", root, now), ["argon", "codex"]);
-	// until 이 없으면 차례만 쓴다
-	set({ reviewer: "codex", reason: "승인자 결정" });
-	assert.deepEqual(deployPlan.orderedReviewers("muse", root, now), ["argon", "codex"]);
-	// 작성자 자신을 고정했으면 차례만 쓴다
-	set({ reviewer: "muse", until: new Date(now + 60000).toISOString(), reason: "승인자 결정" });
-	assert.deepEqual(deployPlan.orderedReviewers("muse", root, now), ["argon", "codex"]);
-	// 형식이 틀리면 던진다: 차례 밖 리뷰어, 읽을 수 없는 until, 객체 아님
-	set({ reviewer: "sol", until: new Date(now + 60000).toISOString(), reason: "승인자 결정" });
-	assert.throws(() => deployPlan.orderedReviewers("muse", root, now), /reviewer/);
-	set({ reviewer: "codxe", until: "not-a-date" });
-	assert.throws(() => deployPlan.orderedReviewers("muse", root, now), /reviewer/);
-	set({ reviewer: "codex", until: "not-a-date" });
-	assert.throws(() => deployPlan.orderedReviewers("muse", root, now), /until/);
-	set("codex");
-	assert.throws(() => deployPlan.orderedReviewers("muse", root, now), /형식/);
-	// 설정 JSON 깨짐은 예전처럼 던진다
-	fs.writeFileSync(file, "{");
-	assert.throws(() => deployPlan.orderedReviewers("muse", root, now));
+test("승인된 planReview: 유효하면 먼저 쓰고, 지났거나 없으면 차례만 쓴다", async (t) => {
+ const {root} = makeWorkspace(t), now = Date.now();
+ const file = path.join(root, ".claude/deploy/config.json");
+ fs.mkdirSync(path.dirname(file), {recursive: true});
+ const check = async (planReview, author = "muse") => {
+  fs.writeFileSync(file, JSON.stringify(planReview === undefined ? {} : {planReview}));
+  return withMockApproval(root, () => deployPlan.orderedReviewers(author, root, now));
+ };
+ assert.deepEqual(await check({reviewer: "codex", until: new Date(now + 60000).toISOString()}), ["codex", "argon"]);
+ assert.deepEqual(await check({reviewer: "muse", until: new Date(now + 60000).toISOString()}, "argon"), ["muse", "codex"]);
+ assert.deepEqual(await check({reviewer: "codex", until: new Date(now - 60000).toISOString()}), ["argon", "codex"]);
+ assert.deepEqual(await check({reviewer: "codex"}), ["argon", "codex"]);
+ assert.deepEqual(await check({reviewer: "muse", until: new Date(now + 60000).toISOString()}), ["argon", "codex"]);
+ await assert.rejects(check({reviewer: "sol", until: new Date(now + 60000).toISOString()}), /reviewer/);
+ await assert.rejects(check({reviewer: "codxe", until: "not-a-date"}), /reviewer/);
+ await assert.rejects(check({reviewer: "codex", until: "not-a-date"}), /until/);
+ await assert.rejects(check("codex"), /형식/);
+ fs.writeFileSync(file, "{");
+ assert.deepEqual(deployPlan.orderedReviewers("muse", root, now), ["argon", "codex"]);
 });
 
 test("한도 판별식: 종료 코드가 0이 아니고 출력이 맞을 때만 참", () => {
@@ -311,6 +309,7 @@ function swapReviewer(file, id) {
 	r.model = deployPlan.REVIEW_MODELS[id].model;
 	r.effort = deployPlan.REVIEW_MODELS[id].effort;
 	r.receipt.model = r.model;
+	r.receipt.effort = r.effort;
 	fs.writeFileSync(file, JSON.stringify(record));
 }
 
@@ -375,13 +374,14 @@ test("관문이 차례와 skipped 를 대조한다", (t) => {
 	}
 });
 
-test("관문이 reviewedAt 을 영수증 시작 시각과 대조한다(고정 리뷰어 피하기 막음)", (t) => {
+test("관문이 reviewedAt 을 영수증 시작 시각과 대조한다(고정 리뷰어 피하기 막음)", async (t) => {
 	const { root } = makeWorkspace(t);
 	const now = Date.now();
 	const file = path.join(root, ".claude/deploy/config.json");
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(file, JSON.stringify({ planReview: { reviewer: "codex", until: new Date(now + 3600 * 1000).toISOString(), reason: "승인자 결정" } }));
 	const { planFile, gatesDir } = createValidPlan(root, { author_model: "muse" });
+	await withMockApproval(root, async () => {
 	const ok = (reviewer, extra) => deployPlan.reviewProblems(gatesDir, writeRotationReceipt(root, planFile, reviewer, extra).planSha, root);
 	assert.equal(ok("codex").ok, true, "고정 리뷰어 영수증");
 	assert.equal(ok("argon").ok, false, "고정 기한 안 argon");
@@ -391,6 +391,7 @@ test("관문이 reviewedAt 을 영수증 시작 시각과 대조한다(고정 �
 	// 시각이 없거나 영수증보다 너무 이르면 막는다
 	assert.ok(ok("codex", { reviewedAt: undefined }).problems.some((p) => p.includes("reviewedAt(UTC ISO 시각)")));
 	assert.ok(ok("codex", { reviewedAt: new Date(now - 3 * 3600 * 1000).toISOString() }).problems.some((p) => p.includes("시작 전 90분 안")));
+	});
 });
 
 test("관문이 차례 도입 뒤 옛 모양 기록(rotation 칸 없음)을 막는다", (t) => {

@@ -29,6 +29,7 @@ const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
 // 기동 시점 실행기 해시: 해시한 동일 바이트를 실행한다.
 const PINNED_CJS_EXECUTORS = [
 	".claude/hooks/lib/deploy-human-approval.js",
+	".claude/hooks/lib/gate-config-pin.js",
 	".claude/hooks/lib/deploy-plan.js",
 ];
 const preloadFlag = /(?:^|[\s"'])(?:--(?:require|import|(?:experimental-)?loader)(?=$|[\s="'])|-r)/;
@@ -45,10 +46,9 @@ for (const { requested, filename } of pinnedExecutors) {
 	}
 }
 const bootEntryAbs = (() => {
-	const fromArgv = process.argv[1] ? path.resolve(process.argv[1]) : null;
-	const fallback = fileURLToPath(import.meta.url);
-	try { return fs.realpathSync(fromArgv || fallback); }
-	catch { return path.resolve(fromArgv || fallback); }
+	const entry = fileURLToPath(import.meta.url);
+	try { return fs.realpathSync(entry); }
+	catch { return path.resolve(entry); }
 })();
 let BOOT_ENTRY_SHA = null;
 try { BOOT_ENTRY_SHA = sha256(fs.readFileSync(bootEntryAbs)); }
@@ -71,9 +71,10 @@ let lib, commandHash, statePath;
 			mod.filename = filename;
 			mod.paths = Module._nodeModulePaths(path.dirname(filename));
 			if (compiled.length) {
-				const dependency = compiled[0];
 				mod.require = function (request) {
-					return request === "./deploy-human-approval.js" ? dependency.exports : Module.prototype.require.call(this, request);
+					if (request === "./deploy-human-approval.js") return compiled[0].exports;
+					if (request === "./gate-config-pin.js" && compiled.length > 1) return compiled[1].exports;
+					return Module.prototype.require.call(this, request);
 				};
 			}
 			require.cache[filename] = mod;
@@ -82,7 +83,7 @@ let lib, commandHash, statePath;
 			mod.loaded = true;
 		}
 		({ commandHash, statePath } = compiled[0].exports);
-		lib = compiled[1].exports;
+		lib = compiled[2].exports;
 	} catch (error) {
 		for (const mod of compiled) delete require.cache[mod.filename];
 		throw error;
@@ -403,7 +404,7 @@ function reviewerSandboxArgs(promptDir, id, rootDir = ROOT) {
 	const root = fs.realpathSync(rootDir), cwd = fs.realpathSync(process.cwd());
 	const overlaps = (a, b) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
 	const home = fs.realpathSync(os.homedir());
-	const runtime = id === "argon" ? fs.realpathSync(path.join(home, ".gemini")) : null;
+	const runtime = id === "agy" ? fs.realpathSync(path.join(home, ".gemini")) : null;
 	if (runtime && (!fs.statSync(runtime).isDirectory() || !runtime.startsWith(home + path.sep) || [root, cwd].some(p => overlaps(p, runtime)))) throw new Error("reviewer home overlaps protected workspace");
 	const protectedDirs = new Set([root, cwd, fs.realpathSync(promptDir)]);
 	for (const state of new Set([statePath(process.env), lib.stateFile(process.env)])) {
@@ -443,9 +444,11 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 		fs.writeFileSync(file, prompt, { mode: 0o600 });
 		stage = "sandbox-prepare";
 		const bwrap = findBwrap();
-		if (ids.includes("codex") && !bwrap) throw new Error("codex 리뷰어: bwrap 읽기 전용 격리 없음");
-		if (isRecoveryMode(planRoot) && ids.some((id) => id === "argon" || id === "codex") && !bwrap) throw new Error("복구 모드: bwrap 읽기 전용 격리 없음");
-		const sandboxArgs = ids.some((id) => id === "argon" || id === "codex") && bwrap ? reviewerSandboxArgs(dir, ids.includes("argon") ? "argon" : "codex", planRoot) : null;
+		const configs = Object.fromEntries(ids.map((id) => [id, lib.validateReviewModelEntry(id, models[id])]));
+		const runners = ids.map((id) => configs[id].runner);
+		if (runners.some((runner) => runner === "codex" || runner === "claude") && !bwrap) throw new Error("리뷰어: bwrap 읽기 전용 격리 없음");
+		if (isRecoveryMode(planRoot) && runners.some((runner) => runner !== "muse") && !bwrap) throw new Error("복구 모드: bwrap 읽기 전용 격리 없음");
+		const sandboxArgs = runners.some((runner) => runner !== "muse") && bwrap ? reviewerSandboxArgs(dir, runners.includes("agy") ? "agy" : runners.includes("codex") ? "codex" : "claude", planRoot) : null;
 		const boundedRecovery = isRecoveryMode(planRoot) && Boolean(sandboxArgs);
 		stage = "snapshot-before";
 		const before = boundedRecovery ? null : readOnlySnapshot(Boolean(sandboxArgs), planRoot);
@@ -453,22 +456,26 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 		const beforeManifest = preManifest === undefined ? (() => { try { return lib.reviewInputManifest(abs, planRoot, roOpt); } catch { return null; } })() : preManifest;
 		stage = "reviewers";
 		const results = await Promise.all(ids.map(async (id) => {
-			const config = lib.validateReviewModelEntry(id, models[id]);
+			const config = configs[id];
 			let bin, args, input = "";
-			if (id === "muse") {
+			if (config.runner === "muse") {
 				bin = MUSE;
 				args = ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", config.model, "--reasoning-effort", config.effort, "--prompt-file", file];
-			} else if (id === "codex") {
+			} else if (config.runner === "codex") {
 				bin = process.env.APPROVAL_PLAN_CODEX_BIN || "codex";
 				args = ["exec", "-m", config.model, "-c", `model_reasoning_effort=${config.effort}`, "-s", "read-only", "--skip-git-repo-check", "--ephemeral", "-"];
+				input = prompt;
+			} else if (config.runner === "claude") {
+				bin = process.env.APPROVAL_PLAN_CLAUDE_BIN || "claude";
+				args = ["-p", "--model", config.model];
 				input = prompt;
 			} else {
 				bin = process.env.APPROVAL_PLAN_ARGON_BIN || "agy";
 				args = ["--model", config.model, "--effort", config.effort, "--mode", "plan", "--sandbox", "--disable-slash-commands", "--output-format", "text"];
 				input = prompt;
 			}
-			let isolation = (id === "argon" || id === "codex") ? "snapshot-only" : "cli-read-only";
-			if ((id === "argon" || id === "codex") && bwrap) {
+			let isolation = config.runner !== "muse" ? "snapshot-only" : "cli-read-only";
+			if (config.runner !== "muse" && bwrap) {
 				args = [...sandboxArgs, "--", bin, ...args];
 				bin = bwrap; isolation = "bwrap-ro-bind";
 			}
@@ -526,7 +533,8 @@ function reviewStatus(gatesDir, sha, writeFindings = false, root = ROOT) {
 	return r;
 }
 
-const [cmd, ...args] = process.argv.slice(2);
+export async function runApprovalPlan(argv = process.argv.slice(2)) {
+const [cmd, ...args] = argv;
 switch (cmd) {
 	case "template":
 		console.log(JSON.stringify({ ...lib.TEMPLATE, createdAt: new Date().toISOString() }, null, 2));
@@ -606,6 +614,8 @@ switch (cmd) {
 		let ids;
 		try { ids = lib.orderedReviewers(author, planRoot, reviewedAt); }
 		catch (error) { die(`리뷰 차례를 정하지 못함: ${error.message}`); }
+		const activeModels = lib.reviewModelsFor(planRoot);
+		if (ids.some((id) => id === author || activeModels[id]?.model === activeModels[author]?.model || activeModels[id]?.model === lib.REVIEW_MODELS[author]?.model)) die("작성자와 같은 모델은 리뷰할 수 없습니다", 1);
 		try { lib.reviewModelsFor(planRoot); }
 		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`); }
 		const parsed = path.parse(base);
@@ -635,7 +645,7 @@ switch (cmd) {
 			const roOpt = { readOnlyScripts: roBind.items };
 			try {
 				const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt, planRoot);
-				if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first))) {
+				if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first)) && ids.length > 1) {
 					rec.skipped.push({ id: ids[0], model: first.model, effort: first.effort, reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
 					console.log(`한도 실패로 다음 차례 리뷰어로 넘어감: ${ids[0]} → ${ids[1]}`);
 					const [second] = await runReviewers([ids[1]], prompt, abs, early.digest, roOpt, planRoot);
@@ -700,6 +710,7 @@ switch (cmd) {
 		let museCfg;
 		try { museCfg = lib.reviewModelsFor(planRoot).muse; }
 		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
+		if (!museCfg || (museCfg.runner && museCfg.runner !== "muse")) die("장애 판정자는 muse 실행기여야 합니다", 1);
 		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
 		if (!roBind.ok) die(roBind.why, 1);
 		let judgeManifest;
@@ -750,3 +761,14 @@ switch (cmd) {
 	default:
 		die("사용: approval-plan.mjs template|check|report|review|review-prompt|preapprove|step-ok|judge (docs/guides/approval-plan-gate.md)");
 }
+
+}
+// An instance supplies the code-pinned approver identity and Discord details here.
+export async function runApprovedApprovalPlan(options, argv = process.argv.slice(2)) {
+	return lib.withGateConfig(options, () => runApprovalPlan(argv));
+}
+const invokedDirectly = (() => {
+	try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === bootEntryAbs; }
+	catch { return false; }
+})();
+if (invokedDirectly) await runApprovalPlan();

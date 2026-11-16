@@ -16,8 +16,10 @@
     }
   },
   "review_models": {
-    "_comment": "Optional. Override plan-review model/effort per reviewer id (argon|codex|muse). Allowed families: argon=gemini-*-argon-*, codex=gpt-*, muse=muse-* (excluding -low/-none/-minimal); allowed effort: medium|high|xhigh|max. Resolved review_models binds into input_manifest_sha256, so changing it invalidates open-plan review receipts and judge verdicts.",
-    "argon": { "model": "gemini-4-argon-high", "effort": "high" }
+    "_comment": "Optional. The complete reviewer list with exact model, minimum effort, and runner (agy|muse|codex|claude) is used only after approval by the instance approver. Otherwise code defaults apply. Changes to resolved review_models invalidate open-plan review receipts and judge verdicts.",
+    "argon": { "model": "gemini-4-argon-high", "effort": "high", "runner": "agy" },
+    "codex": { "model": "gpt-6.1-terra", "effort": "high", "runner": "codex" },
+    "muse": { "model": "muse-spark-1.3", "effort": "xhigh", "runner": "muse" }
   },
   "default_ttl_minutes": 30,
   "max_ttl_minutes": 60
