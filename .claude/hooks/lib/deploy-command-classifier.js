@@ -1642,9 +1642,11 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 		try {
 			const plugin = loadDeployGatePlugin(root, cfg);
 			if (plugin && typeof plugin.classifyCommand === "function") {
-				const res = plugin.classifyCommand(command, { tokens, assigns, dir, root, config: cfg, clause });
+				const res = plugin.classifyCommand(command, { tokens, assigns, dir, dirKnown: entry ? entry.dirKnown !== false : true, root, config: cfg, clause, fs });
 				for (const h of Array.isArray(res) ? res : res ? [res] : []) {
-					if (h && typeof h.service === "string" && h.service) {
+					if (h && h.read === true) {
+						hits.read = true;
+					} else if (h && typeof h.service === "string" && h.service) {
 						hits.push({ ...h, label: h.label || h.summary || h.service, clause: h.clause || clause });
 					}
 				}
@@ -2026,7 +2028,7 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 			continue;
 		}
 		const extHits = classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, false, entry);
-		if (extHits.length) {
+		if (extHits.length || extHits.read) {
 			for (const h of extHits) found.push(h);
 			continue;
 		}
