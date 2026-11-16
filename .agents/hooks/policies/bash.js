@@ -110,24 +110,49 @@ function commit(command, data) {
 }
 
 function gitCommandArgs(command, subcommand) {
+	const found = gitInvocation(command, subcommand);
+	return found ? found.args : null;
+}
+
+/** Directory arithmetic that stays relative until the hook's own cwd is known. */
+function joinDir(base, next) {
+	return path.isAbsolute(next) ? path.normalize(next) : path.join(base || ".", next);
+}
+
+/** Like gitCommandArgs, plus the directory the command runs in: earlier `cd <dir>` segments and `git -C <dir>` / `--git-dir` / `--work-tree`. */
+function gitInvocation(command, subcommand) {
 	const normalized = core.stripQuotesUnwrap(command);
 	const optionWithValue = new Set(["-c", "-C", "--config-env", "--git-dir", "--work-tree", "--namespace"]);
 	const optionWithoutValue = new Set([
 		"-p", "--paginate", "-P", "--no-pager", "--bare", "--no-replace-objects",
 		"--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs", "--icase-pathspecs",
 	]);
+	let cdDir = "";
 	for (const segment of normalized.split(/[;&|\r\n]+/)) {
-		const tokens = segment.trim().split(/\s+/).filter(Boolean);
+		const tokens = segment.trim().replace(/^[({\s]+/, "").replace(/[)}\s]+$/, "").split(/\s+/).filter(Boolean);
+		if (tokens[0] === "cd" && tokens[1] && tokens[1] !== "-" && !tokens[1].startsWith("~") && !/[$`]/.test(tokens[1])) {
+			cdDir = joinDir(cdDir, tokens[1].replace(/^["']|["']$/g, ""));
+			continue;
+		}
 		for (let i = 0; i < tokens.length; i++) {
 			if (!/(?:^|[\\/])git(?:\.exe)?$/i.test(tokens[i])) continue;
 			let j = i + 1;
+			let dir = cdDir;
+			let gitDir = "";
+			let workTree = "";
 			while (j < tokens.length) {
 				const token = tokens[j];
+				const strip = (value) => (value || "").replace(/^["']|["']$/g, "");
+				if (token === "-C") { dir = joinDir(dir, strip(tokens[j + 1])); j += 2; continue; }
+				if (token === "--git-dir") { gitDir = strip(tokens[j + 1]); j += 2; continue; }
+				if (token === "--work-tree") { workTree = strip(tokens[j + 1]); j += 2; continue; }
+				if (/^--git-dir=\S+$/.test(token)) { gitDir = strip(token.slice(token.indexOf("=") + 1)); j += 1; continue; }
+				if (/^--work-tree=\S+$/.test(token)) { workTree = strip(token.slice(token.indexOf("=") + 1)); j += 1; continue; }
 				if (optionWithValue.has(token)) { j += 2; continue; }
-				if (optionWithoutValue.has(token) || /^--(?:config-env|git-dir|work-tree|namespace)=\S+$/.test(token)) { j += 1; continue; }
+				if (optionWithoutValue.has(token) || /^--(?:config-env|namespace)=\S+$/.test(token)) { j += 1; continue; }
 				break;
 			}
-			if (tokens[j] === subcommand) return tokens.slice(j + 1);
+			if (tokens[j] === subcommand) return { args: tokens.slice(j + 1), dir, gitDir, workTree };
 		}
 	}
 	return null;
@@ -146,21 +171,26 @@ function readProtectedBranches(opts) {
 	}
 }
 
-function currentBranchOf(opts) {
+function currentBranchOf(opts, target = {}) {
 	if (opts && typeof opts.currentBranch === "string") return opts.currentBranch;
 	try {
-		const { execSync } = require("child_process");
-		return execSync("git rev-parse --abbrev-ref HEAD", { cwd: (opts && opts.cwd) || process.cwd(), timeout: 3000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+		const { execFileSync } = require("child_process");
+		const base = (opts && opts.cwd) || process.cwd();
+		const gitArgs = [];
+		if (target.gitDir) gitArgs.push("--git-dir", path.resolve(target.dir || base, target.gitDir));
+		if (target.workTree) gitArgs.push("--work-tree", path.resolve(target.dir || base, target.workTree));
+		gitArgs.push("rev-parse", "--abbrev-ref", "HEAD");
+		return execFileSync("git", gitArgs, { cwd: path.resolve(base, target.dir || "."), timeout: 3000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 	} catch {
 		return "";
 	}
 }
 
-/** Non-force, non-deleting push: block `--all`, and a direct push to a protected branch when the list is not empty. */
-function pushScopeViolation(args, opts) {
+/** Non-force, non-deleting push: block `--all` / `--branches`, and a direct push to a protected branch when the list is not empty. */
+function pushScopeViolation(args, opts, target) {
 	const clean = args.map((arg) => arg.replace(/^["']|["']$/g, ""));
-	if (clean.some((arg) => arg === "--all")) {
-		return { reason: "[Harness] ⚠️ PUSH --all 차단\n\n--all 은 모든 로컬 브랜치를 한꺼번에 밀어 보호 가지까지 건드립니다. 가지를 하나씩 지정하세요." };
+	if (clean.some((arg) => arg === "--all" || arg === "--branches")) {
+		return { reason: "[Harness] ⚠️ PUSH --all 차단\n\n--all(--branches) 는 모든 로컬 브랜치를 한꺼번에 밀어 보호 가지까지 건드립니다. 가지를 하나씩 지정하세요." };
 	}
 	const protectedBranches = readProtectedBranches(opts);
 	if (!protectedBranches.length) return null;
@@ -173,7 +203,7 @@ function pushScopeViolation(args, opts) {
 		if (!arg.startsWith("-")) positional.push(arg);
 	}
 	const refspecs = positional.slice(1);
-	const current = currentBranchOf(opts);
+	const current = currentBranchOf(opts, target);
 	const targets = refspecs.length
 		? refspecs.map((spec) => {
 			const dst = spec.includes(":") ? spec.slice(spec.indexOf(":") + 1) : spec;
@@ -190,8 +220,9 @@ function pushScopeViolation(args, opts) {
 function gitPush(command, opts = {}) {
 	const stripped = core.stripQuotesBlank(command);
 	if (/^\s*(echo|printf)\s/.test(stripped) && !stripped.includes("|")) return null;
-	const args = gitCommandArgs(command, "push");
-	if (!args) return null;
+	const invocation = gitInvocation(command, "push");
+	if (!invocation) return null;
+	const args = invocation.args;
 	const pushClause = ` ${args.join(" ")}`;
 	const isRemoteRefDelete = /(?:^|\s)--delete(?:=|\s|$)/.test(pushClause)
 		|| /(?:^|\s)-d(?:\s|$)/.test(pushClause)
@@ -200,7 +231,7 @@ function gitPush(command, opts = {}) {
 	const isForce = /(?:^|\s)--force(?:-with-lease|-if-includes)?(?:=\S+)?(?:\s|$)/.test(pushClause)
 		|| /(?:^|\s)-(?!-)[A-Za-z]*f[A-Za-z]*(?:\s|$)/.test(pushClause)
 		|| /(?:^|\s)\+\S+/.test(pushClause);
-	if (!isRemoteRefDelete && !isForce) return pushScopeViolation(args, opts);
+	if (!isRemoteRefDelete && !isForce) return pushScopeViolation(args, opts, invocation);
 	let remote = "", branch = "";
 	const positional = args.filter((arg) => !/^--?[A-Za-z]/.test(arg));
 	if (positional.length >= 1) remote = positional[0];
