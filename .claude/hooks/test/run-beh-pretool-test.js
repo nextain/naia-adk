@@ -103,6 +103,10 @@ const SID = "pt-sess";
 	const cwd = setup();
 	const out = fire("beh-pretool.js", { cwd, session_id: SID, tool_name: "Bash", tool_input: { command: "sleep 99 &" } });
 	assert(blocked(out) && /Unsupervised background/.test(out), "2. backgrounded Bash → block", out.slice(0, 160));
+	for (const tool of ["run_terminal_command", "functions.run_terminal_command"]) {
+		const alias = fire("beh-pretool.js", { cwd, session_id: SID, tool_name: tool, tool_input: { command: "sleep 99 &" } });
+		assert(blocked(alias) && /Unsupervised background/.test(alias), `2. backgrounded ${tool} → block`, alias.slice(0, 160));
+	}
 	fs.rmSync(cwd, { recursive: true, force: true });
 }
 // valid handshake + run_in_background → block.
@@ -160,6 +164,8 @@ function launchFixture(registerAll = true) {
 	for (const c of ["beh-ledger.js", "beh-receipts.js", "beh-supervise-core.js", "beh-launch-core.js"]) {
 		fs.copyFileSync(path.join(CORE, c), path.join(dstCore, c));
 	}
+	fs.mkdirSync(path.join(cwd, ".claude", "hooks"), { recursive: true });
+	fs.copyFileSync(path.join(HOOKS, "tool-names.js"), path.join(cwd, ".claude", "hooks", "tool-names.js"));
 	const registered = {
 		UserPromptSubmit: "beh-tick.js",
 		PostToolUse: "beh-record.js",

@@ -4,7 +4,7 @@
  * Factors the I/O machinery common to every .claude Bash guard so each
  * guard file carries ONLY its policy. Behavior is a byte-identical port
  * of the original per-guard envelope (stdin read → JSON.parse[fail=exit0]
- * → tool_name!=="Bash"[exit0] → policy → {decision:"block",reason} on
+ * → shell tool check → policy → {decision:"block",reason} on
  * stdout → exit0). G-OC01 part1 Slice 2, scope A (pure refactor).
  *
  * Guard-specific policy + path constants stay in each guard file so
@@ -16,6 +16,8 @@
  * opts.failClosed   — on a thrown error emit a block (pr-guard parity).
  * opts.failClosedReason — the block reason used when failClosed.
  */
+
+const { isShellTool } = require("./tool-names.js");
 
 async function runBashGuard(policy, opts) {
 	const failClosed = opts.failClosed !== false;
@@ -37,7 +39,7 @@ async function runBashGuard(policy, opts) {
 	}
 
 	const toolName = data.tool_name || "";
-	if (toolName !== "Bash") {
+	if (!isShellTool(toolName)) {
 		process.exit(0);
 	}
 

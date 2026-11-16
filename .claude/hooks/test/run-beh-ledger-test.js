@@ -39,6 +39,9 @@ function invs(r) {
 	assert(c === "file:src/x.ts", "canon: Edit abs→rel", `got ${c}`);
 	const b = beh.canonTarget("Bash", { command: "npm   test  'foo bar'" });
 	assert(b === "bash:npm test ''", "canon: Bash collapse+quote-blank", `got ${b}`);
+	for (const tool of ["run_terminal_command", "functions.run_terminal_command"]) {
+		assert(beh.canonTarget(tool, { command: "npm   test  'foo bar'" }) === b, `canon: ${tool} matches Bash`);
+	}
 	const posixBackslash = beh.canonTarget("Edit", { file_path: "src/a\\b.ts" }, { cwd: "/repo", platform: "linux" });
 	const posixSlash = beh.canonTarget("Edit", { file_path: "src/a/b.ts" }, { cwd: "/repo", platform: "linux" });
 	assert(posixBackslash === "file:src/a\\b.ts" && posixBackslash !== posixSlash, "canon: POSIX literal backslash remains distinct", `${posixBackslash} vs ${posixSlash}`);
@@ -62,6 +65,7 @@ function invs(r) {
 		beh.matchMilestone(item, { tool: "Bash", target_canon: "bash:npm test x", outcome: "ok" }) === "m2",
 		"match: bash_ok",
 	);
+	assert(beh.matchMilestone(item, { tool: "functions.run_terminal_command", target_canon: "bash:npm test x", outcome: "ok" }) === "m2", "match: shell alias bash_ok");
 	assert(
 		beh.matchMilestone(item, { tool: "Edit", target_canon: "file:docs/x.md", outcome: "ok" }) === null,
 		"match: non-matching path → null",

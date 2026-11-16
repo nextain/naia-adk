@@ -15,6 +15,7 @@ const os = require("os");
 const HOOK_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "gcs-guard-test-"));
 const HOOK = path.join(HOOK_DIR, "gcs-guard.js");
 fs.copyFileSync(path.join(__dirname, "..", "gcs-guard.js"), HOOK);
+fs.copyFileSync(path.join(__dirname, "..", "tool-names.js"), path.join(HOOK_DIR, "tool-names.js"));
 fs.copyFileSync(path.join(__dirname, "..", "gcs-guard.config.example.json"), path.join(HOOK_DIR, "gcs-guard.config.json"));
 process.on("exit", () => fs.rmSync(HOOK_DIR, { recursive: true, force: true }));
 const HOOK_ENV = { ...process.env, CLAUDE_PROJECT_DIR: HOOK_DIR };
@@ -50,6 +51,13 @@ for (const c of FX.cases) {
 	else { fail++; fails.push(`${c.name}: expect ${c.expect}, got ${got} | ${c.cmd}`); }
 	const gap = c.gap ? `  (known-gap: ${c.gap})` : "";
 	console.log(`  ${ok ? "✓" : "✗"} [${c.expect}] ${c.name}${gap}`);
+}
+
+for (const c of FX.cases.filter((item) => item.expect === "block")) {
+	for (const tool of ["run_terminal_command", "functions.run_terminal_command"]) {
+		const got = decisionOf(runHook(JSON.stringify({ tool_name: tool, tool_input: { command: c.cmd } })));
+		if (got === "block") pass++; else { fail++; fails.push(`${c.name}: ${tool} bypassed block`); }
+	}
 }
 
 console.log("\n=== fail-open 점검 (비정상 입력에 crash/오작동 없어야) ===");
