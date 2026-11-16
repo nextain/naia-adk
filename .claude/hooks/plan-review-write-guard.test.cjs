@@ -577,3 +577,49 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 	assert.equal(fs.existsSync(lockPath), false, "lock file must be removed on SIGTERM");
 	assert.equal(fs.existsSync(path.join(root, ".agents/state")), false, "empty .agents/state must be removed on SIGTERM");
 });
+
+test("10. 리뷰 회차 폴더(review-rounds/): 잠금이 없어도 지우기·위조는 막고, 읽기는 통과하며, 리뷰 실행기 계보는 통과한다", () => {
+	const fx = makeRepoFixture("rounds-protect-");
+	const roundsDir = path.join(fx.repo, ".agents/progress/sample-work/gates/review-rounds");
+	fs.mkdirSync(roundsDir, { recursive: true });
+	const round = path.join(roundsDir, "round-001.json");
+	fs.writeFileSync(round, "{}\n");
+
+	assert.equal(deployPlan.isPlanReviewRoundsPath(round, fx.repo), true);
+	assert.equal(deployPlan.isPlanReviewRoundsPath(roundsDir, fx.repo), true);
+	assert.equal(deployPlan.isPlanReviewRecordPath(round, fx.repo), true);
+	assert.equal(deployPlan.isPlanReviewRoundsPath(path.join(fx.repo, "src/app.js"), fx.repo), false);
+
+	const attempts = [
+		{ tool_name: "Write", tool_input: { file_path: path.join(roundsDir, "round-009.json"), content: "{}" } },
+		{ tool_name: "Edit", tool_input: { file_path: round } },
+		{ tool_name: "Bash", tool_input: { command: `rm "${round}"` } },
+		{ tool_name: "Bash", tool_input: { command: `rm -rf "${roundsDir}"` } },
+		{ tool_name: "Bash", tool_input: { command: `printf '{}' > "${path.join(roundsDir, "round-002.ok")}"` } },
+	];
+	// 잠금 없음: 막힌다
+	for (const a of attempts) {
+		const res = runHook({ ...a, cwd: fx.repo }, { cwd: fx.repo });
+		assert.equal(res.json?.decision, "block", `no lock must block: ${JSON.stringify(a.tool_input)}`);
+	}
+	// 읽기는 통과
+	const readRes = runHook({ tool_name: "Bash", cwd: fx.repo, tool_input: { command: `cat "${round}"` } }, { cwd: fx.repo });
+	assert.equal(readRes.json, null);
+
+	// 다른 프로세스가 쥔 살아 있는 잠금: 여전히 막힌다(리뷰 기록 예외로 풀리지 않음)
+	const holder = spawnLiveHolder();
+	const acq = deployPlan.acquirePlanReviewLock({ repoRoot: fx.repo, plan: fx.planRel, pid: holder.pid, ttlMs: 30 * 60 * 1000 });
+	assert.equal(acq.ok, true);
+	for (const a of attempts) {
+		const res = runHook({ ...a, cwd: fx.repo }, { cwd: fx.repo });
+		assert.equal(res.json?.decision, "block", `other-holder lock must block: ${JSON.stringify(a.tool_input)}`);
+	}
+	deployPlan.releasePlanReviewLock(acq);
+
+	// 이 프로세스(계보)가 쥔 잠금이면 통과(리뷰 실행기 자신)
+	const selfAcq = deployPlan.acquirePlanReviewLock({ repoRoot: fx.repo, plan: fx.planRel, pid: process.pid, ttlMs: 30 * 60 * 1000 });
+	assert.equal(selfAcq.ok, true);
+	const selfRes = runHook({ ...attempts[0], cwd: fx.repo }, { cwd: fx.repo });
+	assert.equal(selfRes.json, null, "runner lineage may write rounds");
+	deployPlan.releasePlanReviewLock(selfAcq);
+});
