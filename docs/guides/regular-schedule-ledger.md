@@ -52,6 +52,8 @@ wake alone does not mean the task produced its promised result.
    Disable/replace only the exact reviewed old mechanism after saving rollback
    instructions. Failures update `last_result` and a repair work document.
 
+`node scripts/work-ledger/schedule-timer.mjs --schedule <regular-schedule.yaml> --commands <target-to-argv.json> --out <dir>` writes `adk-sched-<id>.service/.timer` drafts (with `Persistent=true` and the recorder as `ExecStopPost`) only for approved `새로` timer rows that have a reviewed command mapping; other rows are reported as skipped. It never installs or enables; review, then copy by hand.
+
 The procedure intentionally produces reviewable drafts; the ledger itself does
 not activate work. Follow [server onboarding](server-wake-onboarding.md) for
 rollout evidence and [wake completion](wake-completion-contract.md) for results.
