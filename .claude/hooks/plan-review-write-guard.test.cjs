@@ -439,8 +439,8 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 		const pin = require(${JSON.stringify(path.join(root, ".claude/hooks/lib/gate-config-pin.js"))});
 		const root = ${JSON.stringify(root)}, files = ${JSON.stringify(files)};
 		const id = "123456789012345678", channelId = "234567890123456789", messageId = "345678901234567890";
-		const code = pin.approvalCode(pin.snapshotGateConfig(root, files).hash);
-		await runApprovedApprovalPlan({ root, files, approverId: id, token: "fixture", refs: [{code, channelId, messageId}],
+		const code = pin.approvalCode(pin.snapshotGateConfig(root, files, "fixture-instance").hash);
+		await runApprovedApprovalPlan({ root, files, instanceId: "fixture-instance", approverId: id, token: "fixture", refs: [{code, channelId, messageId}],
 			fetchImpl: async () => ({ok: true, json: async () => ({id: messageId, channel_id: channelId, author: {id}, content: code})}) }, process.argv.slice(2));
 	`);
 	fs.writeFileSync(path.join(root, ".gitignore"), ".agents/state/\n.agents/work/\n");

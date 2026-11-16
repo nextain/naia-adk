@@ -39,9 +39,9 @@ function fixture(t) {
 		const files = [".claude/deploy/config.json", "config/deploy-gate.json"];
 		const id = "123456789012345678", channelId = "234567890123456789", messageId = "345678901234567890";
 		module.exports = { ...policy, deploy: (command, data, opts) => {
-			const code = pin.approvalCode(pin.snapshotGateConfig(root, files).hash);
+			const code = pin.approvalCode(pin.snapshotGateConfig(root, files, "fixture-instance").hash);
 			return policy.deploy(command, data, { ...opts, rootDir: root, gateConfig: {
-				files, approverId: id, token: "fixture", refs: [{code, channelId, messageId}],
+				files, instanceId: "fixture-instance", approverId: id, token: "fixture", refs: [{code, channelId, messageId}],
 				fetchImpl: async () => ({ok: true, json: async () => ({id: messageId, channel_id: channelId, author: {id}, content: code})}),
 			}});
 		} };

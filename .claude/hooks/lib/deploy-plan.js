@@ -211,6 +211,10 @@ async function withGateConfig(options, fn) {
 	const trusted = approved ? { root, ...approved, names: [...options.files], plugins: options.plugins || {} } : { root, approved: false };
 	return gateConfigContext.run(trusted, fn);
 }
+// Run a strict preliminary evaluation without trusting any local state.
+function withStrictGateConfig(root, fn) {
+ return gateConfigContext.run({ root: path.resolve(root || ROOT), approved: false }, fn);
+}
 function trustedGateConfigFile(root, name) {
 	const ctx = gateConfigContext.getStore();
 	if (!ctx || ctx.root !== path.resolve(root) || !ctx.files || !ctx.hash || !Object.hasOwn(ctx.files, name)) return null;
@@ -1280,14 +1284,16 @@ async function discordConfirms({ code, sinceIso, refs, approverId, expectedAppro
 	}
 	if (typeof token !== "string" || !token) return { ok: false, why: "token-unavailable" };
 	const since = Date.parse(sinceIso) || 0;
+	let unavailable = false;
 	for (const r of Array.isArray(refs) ? refs : []) {
 		if (!r || r.code !== code || !SNOWFLAKE.test(String(r.channelId || "")) || !SNOWFLAKE.test(String(r.messageId || ""))) continue;
 		let m;
 		try {
 			const res = await fetchImpl(`https://discord.com/api/v10/channels/${r.channelId}/messages/${r.messageId}`, { headers: { authorization: `Bot ${token}` }, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000) });
-			if (!res || !res.ok) continue;
+			if (!res || !res.ok) { unavailable = true; continue; }
 			m = await res.json();
 		} catch {
+			unavailable = true;
 			continue;
 		}
 		if (!m || String(m.id) !== String(r.messageId)) continue;
@@ -1299,7 +1305,7 @@ async function discordConfirms({ code, sinceIso, refs, approverId, expectedAppro
 		if (checkTimestamp && (!Number.isFinite(at) || at < since)) continue;
 		return { ok: true, at: m.timestamp, via: `discord:${r.channelId}/${r.messageId}` };
 	}
-	return { ok: false, why: "no-discord-confirmation" };
+	return { ok: false, why: "no-discord-confirmation", unavailable };
 }
 
 /** 저장소 정본 설정에서 봇 열쇠를 읽는다. 실패하면 null. 값은 출력하지 않는다. */
@@ -2219,5 +2225,5 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 }
 
 module.exports = {
-	loadDiscordToken, withStateLock, withGateConfig, trustedGatePlugin, trustedGateConfigName, trustedGateConfig, trustedDeployGateConfig, trustedGateConfigFile, hasTrustedGateConfig, reviewModelsFor, resolveReviewModels, orderedReviewersForConfig, selfReview, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
+	loadDiscordToken, withStateLock, withGateConfig, withStrictGateConfig, trustedGatePlugin, trustedGateConfigName, trustedGateConfig, trustedDeployGateConfig, trustedGateConfigFile, hasTrustedGateConfig, reviewModelsFor, resolveReviewModels, orderedReviewersForConfig, selfReview, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
 };

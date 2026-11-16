@@ -359,14 +359,23 @@ function findApprovalGateRoot() {
  * @param opts.deployDir REQUIRED — host config dir (adapter passes
  *   path.resolve(its __dirname,"..","deploy")).
  */
+const FIRST_GATE_APPROVAL = "첫 승인을 받으려면 node .claude/hooks/gate-config-approval.js 를 실행하십시오.";
+
 async function deploy(command, data, opts = {}) {
 	const root = opts.rootDir ? path.resolve(opts.rootDir) : findApprovalGateRoot();
 	const plan = require(path.resolve(__dirname, "../../../.claude/hooks/lib/deploy-plan.js"));
 	const instance = opts.gateConfig || require(path.resolve(__dirname, "../../../.claude/hooks/gate-instance.js"));
-	let refs = [];
-	try { refs = JSON.parse(fs.readFileSync(path.join(root, ".claude/deploy/gate-config-approvals.json"), "utf8")).approvals || []; } catch {}
-	const token = instance.token !== undefined ? instance.token : await plan.loadDiscordToken(root, instance.discordInstances);
-	return plan.withGateConfig({ ...instance, root, refs: instance.refs || refs, token }, () => deployImpl(command, data, opts, { ...instance, token }));
+ const strict = await plan.withStrictGateConfig(root, () => deployImpl(command, data, opts, instance));
+ // Only a classification blocked for lack of an approved configuration can be
+ // changed by its exemptions or reviewer settings. Ordinary commands do not look up Discord.
+ if (!strict?.needsGateConfig) return strict;
+ let refs = [];
+ try { refs = JSON.parse(fs.readFileSync(path.join(root, ".claude/deploy/gate-config-approvals.json"), "utf8")).approvals || []; } catch {}
+ const token = instance.token !== undefined ? instance.token : await plan.loadDiscordToken(root, instance.discordInstances);
+ return plan.withGateConfig({ ...instance, root, refs: instance.refs || refs, token }, async () => {
+  if (!plan.hasTrustedGateConfig(root)) return { reason: `${strict.reason}\n디스코드 승인 확인에 실패했거나 조회가 지연되어 엄격한 판정을 유지합니다.` };
+  return deployImpl(command, data, opts, { ...instance, token });
+ });
 }
 
 async function deployImpl(command, data, opts, instance) {
@@ -473,6 +482,16 @@ async function deployImpl(command, data, opts, instance) {
 	const clauses = shellClauses(command);
 
 	const evaluateRootClassification = (rootDir) => {
+		const trusted = deployPlan.hasTrustedGateConfig(rootDir);
+		// Unapproved rules may only add a block; never use their exemptions or execute their plugins.
+		let untrustedHints = null;
+		if (Array.isArray(instance.files) && instance.files.length >= 2) {
+			try {
+				const snapshot = require(path.join(hooksLibDir, "gate-config-pin.js")).snapshotGateConfig(rootDir, [instance.files[1]], instance.instanceId);
+				const parsed = snapshot && JSON.parse(snapshot.files[instance.files[1]].toString("utf8"));
+				if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) untrustedHints = parsed;
+			} catch {}
+		}
 		const rConfig = deployPlan.trustedGateConfig(rootDir) || { projects: {} };
 		const isDevService = (service) => {
 			if (!service) return false;
@@ -499,13 +518,22 @@ async function deployImpl(command, data, opts, instance) {
 			return null;
 		};
 
-		const precomputedMutations = classifyProdMutations(command, cwd, 0, false, rootDir, { untrusted: !deployPlan.hasTrustedGateConfig(rootDir) }).filter((hit) => {
-			if (hit && typeof hit.service === "string" && hit.service.startsWith("gcloud:run:")) {
+		const configuredFloor = instance.floor && typeof instance.floor === "object" ? instance.floor : null;
+		const floor = configuredFloor && (configuredFloor.prodPatterns?.length || Object.keys(configuredFloor.services || {}).length || configuredFloor.sshAlwaysGated?.length) ? configuredFloor : null;
+		const precomputedMutations = classifyProdMutations(command, cwd, 0, false, rootDir, { untrusted: !trusted, untrustedHints, restrictiveHints: trusted ? untrustedHints : null, floorHints: floor }).filter((hit) => {
+			if (hit && !hit.untrustedHint && typeof hit.service === "string" && hit.service.startsWith("gcloud:run:")) {
 				const svcName = hit.service.slice("gcloud:run:".length);
 				if (svcName !== "replace" && isDevService(svcName)) return false;
 			}
 			return true;
 		});
+		// Classify registered floor services without exemptions as well, so an
+		// approved test host cannot hide a target registered in the floor.
+		if (floor && floor.services && Object.keys(floor.services).length) {
+			const { matchServiceRule } = require(path.join(hooksLibDir, "deploy-readiness.js"));
+			const floorServices = classifyProdMutations(command, cwd, 0, false, rootDir, { untrusted: true, untrustedHints: floor, floorHints: floor, ignoreNonProd: true });
+			precomputedMutations.push(...floorServices.filter((hit) => matchServiceRule(hit.service, floor)).map((hit) => ({ ...hit, untrustedHint: true })));
+		}
 		const nonDevLegacyMatches = [];
 		for (const tokens of clauses) {
 			if (tokens.length === 0 || /^(?:echo|printf)$/.test(tokens[0])) continue;
@@ -563,6 +591,10 @@ async function deployImpl(command, data, opts, instance) {
 	};
 
 	const rootResults = evalRoots.map((r) => evaluateRootClassification(r));
+
+	if (!deployPlan.hasTrustedGateConfig(primaryRoot) && rootResults.some((rr) => rr.matched)) {
+		return { needsGateConfig: true, reason: `[Harness] 승인된 관문 설정이 없어 운영·원격·배포 명령을 막습니다. ${FIRST_GATE_APPROVAL}` };
+	}
 
 	const allUnclassified = rootResults.flatMap((rr) => rr.unclassified || []);
 	if (allUnclassified.length) {

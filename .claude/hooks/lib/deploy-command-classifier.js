@@ -689,6 +689,7 @@ function optionValue(tokens, names) {
 }
 
 let activeGateRoot = "";
+let ignoreNonProd = false;
 
 function loadTestHosts(rootDir = "") {
 	try {
@@ -710,6 +711,7 @@ function loadTestHosts(rootDir = "") {
 }
 
 function isNonProd(...names) {
+	if (ignoreNonProd) return false;
 	// Cloudflare API 쓰기는 도메인에 dev/test 가 들어가도 운영 관문에서 제외하지 않는다.
 	if (names.some((n) => typeof n === "string" && /^(?:cloudflare:|local:systemd:)/i.test(n))) return false;
 	const joined = names.filter(Boolean).join(" ");
@@ -919,7 +921,7 @@ function sshBodySedWrites(body) {
 	return false;
 }
 // scp 의 원격 쪽(호스트:경로)이 운영 호스트면 ssh 와 같은 서비스로 본다(PC 원격 관문 검수 1회차: scp 가 관문 밖으로 나감).
-function classifyScp(tokens) {
+function classifyScp(tokens, untrusted = false) {
 	if (path.basename(tokens[0] || "") !== "scp") return [];
 	const hits = [];
 	for (let i = 1; i < tokens.length; i++) {
@@ -931,13 +933,13 @@ function classifyScp(tokens) {
 		const m = /^scp:\/\//i.test(t) ? t.slice(6).match(/^(?:[^@/]+@)?(\[[^\]]+\]|[^/:]+)(?::\d+)?(?:\/|$)/) : t.match(/^(?:[^@/:]+@)?(\[[^\]]+\]|[^/:]+):/);
 		if (!m) continue;
 		const host = m[1].replace(/^\[|\]$/g, "");
-		if (isNonProd(host)) continue;
+		if (!untrusted && isNonProd(host)) continue;
 		const service = `ssh:${host.toLowerCase()}`;
 		if (!hits.some((h) => h.service === service)) hits.push({ service, label: `scp ${host} (운영 호스트 파일 복사)` });
 	}
 	return hits;
 }
-function classifySsh(tokens, cwd, depth = 0, rootDir = "") {
+function classifySsh(tokens, cwd, depth = 0, rootDir = "", options = {}) {
 	if (path.basename(tokens[0] || "") !== "ssh") return [];
 	let queryOnly = false;
 	const optVals = [];
@@ -975,25 +977,28 @@ function classifySsh(tokens, cwd, depth = 0, rootDir = "") {
 	const { loadDeployGateConfig } = require("./deploy-readiness.js");
 	const gateRoot = rootDir || resolveGateRoot();
 	const gateCfg = loadDeployGateConfig(gateRoot);
-	const alwaysGatedList = Array.isArray(gateCfg?.sshAlwaysGated) ? gateCfg.sshAlwaysGated : [];
+	const alwaysGatedList = [...(Array.isArray(gateCfg?.sshAlwaysGated) ? gateCfg.sshAlwaysGated : []), ...(Array.isArray(options.untrustedHints?.sshAlwaysGated) ? options.untrustedHints.sshAlwaysGated : []), ...(Array.isArray(options.restrictiveHints?.sshAlwaysGated) ? options.restrictiveHints.sshAlwaysGated : []), ...(Array.isArray(options.floorHints?.sshAlwaysGated) ? options.floorHints.sshAlwaysGated : [])];
+ const alwaysGatedHits = [];
 	for (const rule of alwaysGatedList) {
 		const hosts = Array.isArray(rule?.hosts) ? rule.hosts.map((h) => String(h).toLowerCase()) : [];
 		if (!hosts.length) continue;
 		const viaOpt = optVals.some(({ value }) => hosts.some((h) => String(value || "").toLowerCase().includes(h)));
 		if (viaOpt || hosts.includes(host.toLowerCase().replace(/\.$/, ""))) {
-			return [{ service: rule.service || `ssh:${host.toLowerCase()}`, label: rule.label || `ssh ${host} (항상 관문 대상)` }];
+   alwaysGatedHits.push({ service: rule.service || `ssh:${host.toLowerCase()}`, label: rule.label || `ssh ${host} (항상 관문 대상)` });
 		}
 	}
-	if (!override && isNonProd(host)) {
+ if (alwaysGatedHits.length) return alwaysGatedHits;
+	if (!options.untrusted && !override && isNonProd(host)) {
 		if (!body.trim()) return [];
-		return classifyProdMutations(body, cwd, (depth || 0) + 1, false, gateRoot).map((h) => ({ ...h, label: `${h.label} (ssh ${host} 안)` }));
+		return classifyProdMutations(body, cwd, (depth || 0) + 1, false, gateRoot, options).map((h) => ({ ...h, label: `${h.label} (ssh ${host} 안)` }));
 	}
 	const hit = { service: `ssh:${host.toLowerCase()}`, label: `ssh ${host} (운영 호스트 원격 변경)` };
+	if (options.untrusted) return [hit];
 	// -o HostName 등으로 실제 대상을 덮어썼으면 호스트 낱말을 믿지 않으므로 variable 을 달지 않는다(검수 2회차 3번).
 	if (host.includes("$") && !override) hit.variable = host;
 	if (!body.trim()) return [hit];
 	// 운영 호스트의 읽기 판정 경로에서도 본문 속 운영 변경은 hit 로 본다.
-	if (classifyProdMutations(body, cwd, (depth || 0) + 1, false, gateRoot).length) return [hit];
+	if (classifyProdMutations(body, cwd, (depth || 0) + 1, false, gateRoot, options).length) return [hit];
 	// 본문이 전부 읽기 전용 sed 절이면 통과한다. 따옴표+절대경로 모양('…' /경로)은 불투명으로 보아 막히므로 그보다 먼저 본다.
 	if (sshBodyAllSedReads(body)) return [];
 	// 읽기면 통과: 불투명하지 않고, 안쪽 판정이 읽기이며, 변경 동사 낱말이 없고, sed 쓰기가 없을 때.
@@ -1576,7 +1581,7 @@ function classifyLocalSystemd(command, tokens, dir, cfg) {
 }
 
 /** 인스턴스 확장(config/deploy-gate.json 의 prodPatterns 및 선택 플러그인 classifyCommand). */
-function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", localOnly = false, entry = null) {
+function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", localOnly = false, entry = null, hints = null) {
 	const hits = [];
 	const clause = clauseText(tokens, assigns);
 	const pushErrorHit = (msg) => {
@@ -1592,7 +1597,7 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 		const { deployGateConfigPath, loadDeployGateConfig, loadDeployGatePlugin } = require("./deploy-readiness.js");
 		const root = rootDir || resolveGateRoot();
 		const cfgPath = deployGateConfigPath(root);
-		const cfg = loadDeployGateConfig(root);
+		const cfg = hints || loadDeployGateConfig(root);
 		if (!cfg) {
 			if (!localOnly && cfgPath && fs.existsSync(cfgPath)) {
 				pushErrorHit("config/deploy-gate.json 파싱 실패");
@@ -1616,7 +1621,7 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 		}
 		hits.push(...classifyRegisteredAllowedCommands(command, clause, tokens, dir, root, cfg, pushErrorHit, entry));
 		try {
-			const plugin = loadDeployGatePlugin(root, cfg);
+			const plugin = hints ? null : loadDeployGatePlugin(root, cfg);
 			if (plugin && typeof plugin.classifyCommand === "function") {
 				const res = plugin.classifyCommand(command, { tokens, assigns, dir, root, config: cfg, clause });
 				for (const h of Array.isArray(res) ? res : res ? [res] : []) {
@@ -1976,17 +1981,13 @@ function scriptTooLarge(file) {
 /** 운영 변경 명령 목록을 돌려준다. 없으면 빈 배열. */
 function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, rootDir = "", options = {}) {
 	const found = [];
-	// Without any approved configuration even instance-specific commands are unknown.
-	// Reject every nonempty shell input; do not rely on a list of command spellings or
-	// on the parser recognizing every possible wrapper, substitution, or script.
-	if (options.untrusted) return String(command || "").trim()
-		? [{ service: "unclassified:untrusted-config", label: "승인된 관문 설정이 없어 실행을 막습니다", clause: String(command), unclassified: true, tool: "untrusted-config" }]
-		: found;
 	// 중첩 한도를 넘으면 안을 읽지 않으므로 확인 불가로 막는다(빈 결과로 통과시키지 않음, #95 검수 4단계 감싸기).
 	if (depth > 3) return String(command || "").trim() ? [{ service: "unclassified:depth-limit", label: "분류 불가: 셸 대본 중첩이 3단계를 넘어 안의 명령을 확인할 수 없음", clause: "", unclassified: true, tool: "depth-limit" }] : found;
 	const gateRoot = rootDir || resolveGateRoot();
 	const prevGateRoot = activeGateRoot;
+	const prevIgnoreNonProd = ignoreNonProd;
 	activeGateRoot = gateRoot;
+	ignoreNonProd = !!options.ignoreNonProd;
 	try {
 	// 앞 절의 cd 를 따라간다(설계 검수 6회차 2번): "cd <워크트리> && ./deploy/vm/deploy.sh prod" 는
 	// 세션 cwd 가 아니라 그 워크트리의 스크립트다. 배포 준비 기록은 이 경로의 저장소 HEAD 를 본다.
@@ -2004,13 +2005,18 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 			continue;
 		}
 		if (/^(?:echo|printf|cat|grep|rg|sed|awk|head|tail|less|wc|git|man)$/.test(path.basename(tokens[0]))) {
-			found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true, entry));
+			if (!options.untrusted || options.untrustedHints) found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true, entry, options.untrusted ? options.untrustedHints : null).filter(hit => !options.untrusted || !hit.unclassified).map(hit => options.untrusted ? { ...hit, untrustedHint: true } : hit));
+   if (options.restrictiveHints) found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true, entry, options.restrictiveHints).filter(hit => !hit.unclassified).map(hit => ({...hit, untrustedHint:true})));
+   if (options.floorHints) found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true, entry, options.floorHints).map(hit => ({...hit, untrustedHint:true})));
 			continue;
 		}
-		const extHits = classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, false, entry);
+		const extHits = options.untrusted && !options.untrustedHints ? [] : classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, false, entry, options.untrusted ? options.untrustedHints : null).filter(hit => !options.untrusted || !hit.unclassified);
+  const restrictiveHits = options.restrictiveHints ? classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, false, entry, options.restrictiveHints).filter(hit => !hit.unclassified).map(hit => ({...hit, untrustedHint:true})) : [];
+  found.push(...restrictiveHits);
+  if (options.floorHints) found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, false, entry, options.floorHints).map(hit => ({...hit, untrustedHint:true})));
 		if (extHits.length) {
-			for (const h of extHits) found.push(h);
-			continue;
+			for (const h of extHits) found.push(options.untrusted ? { ...h, untrustedHint: true } : h);
+			if (!options.untrusted && !options.floorHints) continue;
 		}
 		// --ids 가 여러 운영 대상을 가리키면 hit 도 여러 개다. classifyAz 는 첫 원소만 내고, 여기서는 전부를 쓴다.
 		const azHits = classifyAzAll(tokens);
@@ -2021,7 +2027,7 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 			if (cloudHits.length) for (const h of cloudHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
 			else {
 				// classifySsh 는 여러 hit 를 낼 수 있다(비운영 호스트 안의 운영 변경 재분류, 검수 2회차 1번).
-				const sshHits = [...classifySsh(tokens, dir, depth, gateRoot), ...classifyScp(tokens)];
+				const sshHits = [...classifySsh(tokens, dir, depth, gateRoot, options), ...classifyScp(tokens, options.untrusted)];
 				if (sshHits.length) for (const h of sshHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
 				else {
 					const hit = classifyDeployScript(tokens, dir, assigns, entry) || classifyPackageScript(tokens, dir);
@@ -2039,7 +2045,7 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 							continue;
 						}
 						const text = file ? selectCaseArms(scriptText(file), scriptArgs(tokens), command, assigns) : "";
-						if (file) for (const h of classifyProdMutations(text, dir, depth + 1, true, gateRoot)) {
+						if (file) for (const h of classifyProdMutations(text, dir, depth + 1, true, gateRoot, options)) {
 							if (h.variable && variableTargetIsNonProd(h.variable, text, dir, nonProdCall, assigns)) continue;
 							// 목록 밖 그룹(network 등)의 변수 대상이 스크립트 안에서 글자 그대로 한 값이면 서비스 이름을 그 값으로 적는다.
 							let service = h.service;
@@ -2070,13 +2076,14 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 		const invocation = SHELLS.test(program) ? parser.shellInvocation(argv) : null;
 		const readsShellInput = invocation && invocation.command < 0 && invocation.script < 0 && !invocation.noexec;
 		if (!readsShellInput && !remoteShell) continue;
-		for (const body of clause.heredocs || []) for (const hit of classifyProdMutations(body, cwd, depth + 1, false, gateRoot)) {
+		for (const body of clause.heredocs || []) for (const hit of classifyProdMutations(body, cwd, depth + 1, false, gateRoot, options)) {
 			if (/^(?:cloudflare:|network:write:)/.test(hit.service) && !found.some((h) => h.service === hit.service)) found.push(hit);
 		}
 	}
 	return found;
 	} finally {
 		activeGateRoot = prevGateRoot;
+		ignoreNonProd = prevIgnoreNonProd;
 	}
 }
 

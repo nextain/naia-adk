@@ -42,8 +42,8 @@ const pin = require("./.claude/hooks/lib/gate-config-pin.js");
 const files = [".claude/deploy/config.json", "config/deploy-gate.json"];
 const root = process.cwd(), approverId = "123456789012345678";
 const channelId = "234567890123456789", messageId = "345678901234567890";
-const code = pin.approvalCode(pin.snapshotGateConfig(root, files).hash);
-await runApprovedApprovalPlan({ root, files, approverId, token: "test-only",
+const code = pin.approvalCode(pin.snapshotGateConfig(root, files, "fixture-instance").hash);
+await runApprovedApprovalPlan({ root, files, instanceId: "fixture-instance", approverId, token: "test-only",
   refs: [{ code, channelId, messageId }],
   fetchImpl: async () => ({ ok: true, json: async () => ({ id: messageId, channel_id: channelId, author: { id: approverId }, content: code }) })
 });
@@ -54,9 +54,9 @@ await runApprovedApprovalPlan({ root, files, approverId, token: "test-only",
 async function withMockApproval(root, fn) {
  const pin = require("../lib/gate-config-pin.js");
  const files = [".claude/deploy/config.json", "config/deploy-gate.json"];
- const code = pin.approvalCode(pin.snapshotGateConfig(root, files).hash);
+ const code = pin.approvalCode(pin.snapshotGateConfig(root, files, "fixture-instance").hash);
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
- return deployPlan.withGateConfig({root, files, approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+ return deployPlan.withGateConfig({root, files, instanceId: "fixture-instance", approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
   fetchImpl: async () => ({ok: true, json: async () => ({id: message, channel_id: channel, author: {id}, content: code})})}, fn);
 }
 

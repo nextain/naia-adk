@@ -32,9 +32,9 @@ const gateFiles = [".claude/deploy/config.json", "config/deploy-gate.json"];
 function fixtureGateConfig(root) {
 	const pin = require("../lib/gate-config-pin.js");
 	const id = "123456789012345678", channelId = "234567890123456789", messageId = "345678901234567890";
-	const snapshot = pin.snapshotGateConfig(root, gateFiles);
+	const snapshot = pin.snapshotGateConfig(root, gateFiles, "fixture-instance");
 	const code = snapshot && pin.approvalCode(snapshot.hash);
-	return {root, files: gateFiles, approverId: id, token: "fixture", env: {...process.env, DEPLOY_APPROVAL_STATE_DIR: path.join(path.dirname(root), "state")}, refs: code ? [{code, channelId, messageId}] : [],
+	return {root, files: gateFiles, instanceId: "fixture-instance", approverId: id, token: "fixture", env: {...process.env, DEPLOY_APPROVAL_STATE_DIR: path.join(path.dirname(root), "state")}, refs: code ? [{code, channelId, messageId}] : [],
 		fetchImpl: async () => ({ok: true, json: async () => ({id: messageId, channel_id: channelId, author: {id}, content: code, timestamp: "2026-01-01T00:00:00Z"})})};
 }
 function withApprovedConfig(root, fn) {
@@ -75,8 +75,8 @@ function approvedRunner(root, tmp, planFile, argv = ["review", planFile, "--auth
   `const pin = req(${JSON.stringify(path.join(root, ".claude/hooks/lib/gate-config-pin.js"))});\n` +
   `const root = ${JSON.stringify(configRoot)}, plan = ${JSON.stringify(planFile)};\n` +
   `const id='123456789012345678', channel='234567890123456789', message='345678901234567890';\n` +
-  `const files=['.claude/deploy/config.json','config/deploy-gate.json']; const code=pin.approvalCode(pin.snapshotGateConfig(root,files).hash);\n` +
-  `await runApprovedApprovalPlan({root, files, approverId:id, token:'test-only', refs:[{code,channelId:channel,messageId:message}], fetchImpl:async()=>({ok:true,json:async()=>({id:message,channel_id:channel,author:{id},content:code})})}, ${JSON.stringify(argv)});\n`);
+  `const files=['.claude/deploy/config.json','config/deploy-gate.json']; const code=pin.approvalCode(pin.snapshotGateConfig(root,files,'fixture-instance').hash);\n` +
+  `await runApprovedApprovalPlan({root, files, instanceId:'fixture-instance', approverId:id, token:'test-only', refs:[{code,channelId:channel,messageId:message}], fetchImpl:async()=>({ok:true,json:async()=>({id:message,channel_id:channel,author:{id},content:code})})}, ${JSON.stringify(argv)});\n`);
  return runner;
 }
 
@@ -274,10 +274,10 @@ function runDeployGuardHook(command, { cwd, root, stateDir, transcriptPath, sess
 		const pin=require(${JSON.stringify(path.join(REPO_ROOT, ".claude/hooks/lib/gate-config-pin.js"))});
 		const root=${JSON.stringify(root)}, files=['.claude/deploy/config.json','config/deploy-gate.json'];
 		const id='123456789012345678', channelId='234567890123456789', messageId='345678901234567890';
-		const snap=pin.snapshotGateConfig(root,files), code=snap && pin.approvalCode(snap.hash);
+		const snap=pin.snapshotGateConfig(root,files,'fixture-instance'), code=snap && pin.approvalCode(snap.hash);
 		const plugin='config/custom-gate-plugin.cjs', plugins={};
 		if(fs.existsSync(path.join(root,plugin))) plugins[plugin]=require(path.join(root,plugin));
-		H.start((command,data)=>P.deploy(command,data,{rootDir:root,deployDir:path.join(root,'.claude/deploy'),gateConfig:{files,approverId:id,token:'fixture',refs:code?[{code,channelId,messageId}]:[],plugins,fetchImpl:async()=>({ok:true,json:async()=>({id:messageId,channel_id:channelId,author:{id},content:code})})}}));
+		H.start((command,data)=>P.deploy(command,data,{rootDir:root,deployDir:path.join(root,'.claude/deploy'),gateConfig:{files,instanceId:'fixture-instance',approverId:id,token:'fixture',refs:code?[{code,channelId,messageId}]:[],plugins,fetchImpl:async()=>({ok:true,json:async()=>({id:messageId,channel_id:channelId,author:{id},content:code})})}}));
 	`);
 	const res = spawnSync(process.execPath, [runner], {
 		cwd,
@@ -1367,8 +1367,8 @@ test("approved reviewer aliases cannot review the author's original model", asyn
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
  const run = async (models) => {
   fs.writeFileSync(cfg, JSON.stringify({review_models: models}));
-  const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
-  return deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+  const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"], "fixture-instance").hash);
+  return deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], instanceId: "fixture-instance", approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
    fetchImpl: async () => ({ok: true, json: async () => ({id: message, channel_id: channel, author: {id}, content: code})})}, () => {
     const {planSha} = writePassingReviewReceipt(root, planFile, {reviewer: "fable"});
     const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
@@ -1430,8 +1430,8 @@ test("reviewer selection uses only the approved configuration", async (t) => {
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
  const check = async (planReview) => {
   fs.writeFileSync(file, JSON.stringify({planReview}));
-  const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
-  return deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+  const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"], "fixture-instance").hash);
+  return deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], instanceId: "fixture-instance", approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
    fetchImpl: async () => ({ok: true, json: async () => ({id: message, channel_id: channel, author: {id}, content: code})})},
    () => deployPlan.reviewerIdsFor("muse", root, now));
  };
@@ -1454,9 +1454,9 @@ test("review models use only the Discord-approved configuration", async (t) => {
  const set = (models) => fs.writeFileSync(cfg, JSON.stringify({review_models: models}));
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
  let calls = 0;
- const options = (code, author = id, extras = {}) => ({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+ const options = (code, author = id, extras = {}) => ({root, env: {...process.env, XDG_STATE_HOME: path.join(root, "fixture-state")}, files: [".claude/deploy/config.json", "config/deploy-gate.json"], instanceId: "fixture-instance", approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
   fetchImpl: async () => { calls++; return {ok: true, json: async () => ({id: message, channel_id: channel, author: {id: author}, content: `approve ${code}`, timestamp: "2000-01-01T00:00:00.000Z", ...extras})}; }});
- const currentCode = () => pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
+ const currentCode = () => pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"], "fixture-instance").hash);
  assert.equal(pin.approvalCode("0".repeat(64)), "CFG-M2Q4VMRQV3", "formula uses standard base32 and the NUL separator");
  const {planSha, manifestSha: defaultManifest} = writePassingReviewReceipt(root, planFile, {reviewer: "argon"});
  const oldReceipt = JSON.parse(fs.readFileSync(file));
@@ -1515,9 +1515,9 @@ test("approved Fable review invokes the Claude runner and accepts its receipt", 
 ` +
   `const id='123456789012345678', channel='234567890123456789', message='345678901234567890';
 ` +
-  `const code=pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
+  `const code=pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"], "fixture-instance").hash);
 ` +
-  `await runApprovedApprovalPlan({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId:id, token:'test-only', refs:[{code,channelId:channel,messageId:message}], fetchImpl:async()=>({ok:true,json:async()=>({id:message,channel_id:channel,author:{id},content:code})})}, ['review',plan,'--author','muse']);
+  `await runApprovedApprovalPlan({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], instanceId: "fixture-instance", approverId:id, token:'test-only', refs:[{code,channelId:channel,messageId:message}], fetchImpl:async()=>({ok:true,json:async()=>({id:message,channel_id:channel,author:{id},content:code})})}, ['review',plan,'--author','muse']);
 `);
  const result = spawnSync(process.execPath, [runner], {cwd: root, encoding: "utf8", timeout: 30000,
   env: {...process.env, HOME: fakeHome, XDG_STATE_HOME: path.join(tmp, "xdg-state"), PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CLAUDE_BIN: fakeClaude, CLAUDE_CODE_EFFORT_LEVEL: "low", DEPLOY_APPROVAL_STATE_DIR: stateDir}});
@@ -1552,8 +1552,8 @@ test("approved judge settings bind the incident verdict to the manifest", async 
  const planSha = sha256(fs.readFileSync(planFile));
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
  const check = () => {
-  const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
-  return deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+  const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"], "fixture-instance").hash);
+  return deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], instanceId: "fixture-instance", approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
    fetchImpl: async () => ({ok: true, json: async () => ({id: message, channel_id: channel, author: {id}, content: code})})},
    () => deployPlan.incidentVerdict(gatesDir, planSha, "exec-sess-1", Date.now(), root));
  };
@@ -1582,9 +1582,9 @@ test("old fallback receipt cannot survive an approved reviewer change", async (t
  assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, true, "fallback receipt passes before change");
  fs.mkdirSync(path.dirname(cfg), {recursive: true});
  fs.writeFileSync(cfg, JSON.stringify({review_models: {argon: {model: "fable", effort: "high", runner: "claude"}}}));
- const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
+ const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"], "fixture-instance").hash);
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
- await deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+ await deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], instanceId: "fixture-instance", approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
   fetchImpl: async () => ({ok: true, json: async () => ({id: message, channel_id: channel, author: {id}, content: code})})}, async () => {
    assert.notEqual(deployPlan.reviewInputManifest(planFile, root), oldManifest);
    const result = deployPlan.reviewProblems(gatesDir, planSha, root);

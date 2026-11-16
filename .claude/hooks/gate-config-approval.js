@@ -36,7 +36,7 @@ async function main() {
 		if (String(options["--approver-id"]) !== String(instance.approverId)) throw new Error("승인자 번호는 인스턴스 코드 상수와 같아야 합니다");
 		const before = snapshotGateConfig(approvedRoot, GATE_CONFIG_FILES);
 		const code = before && approvalCode(before.hash);
-		const approved = before && await approvedGateConfig({ root: approvedRoot, files: GATE_CONFIG_FILES, approverId: instance.approverId, token: process.env.DISCORD_BOT_TOKEN, refs: [{ code, channelId: options["--channel-id"], messageId: options["--message-id"] }] });
+		const approved = before && await approvedGateConfig({ root: approvedRoot, files: GATE_CONFIG_FILES, instanceId: instance.instanceId, approverId: instance.approverId, token: process.env.DISCORD_BOT_TOKEN, refs: [{ code, channelId: options["--channel-id"], messageId: options["--message-id"] }] });
 		if (!approved || approved.hash !== before.hash) throw new Error("비교할 승인 판을 확인하지 못했습니다");
 		const old = new Map(canonicalReviewModels(resolveReviewModels(approved.config)).map((m) => [m.id, m]));
 		const next = new Map(models.map((m) => [m.id, m]));

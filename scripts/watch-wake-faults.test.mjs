@@ -1040,16 +1040,12 @@ test('rev1 blocker 1: generalized detached-worker gate blocks systemd-run, at/ba
     { cwd: REPO_ROOT },
   );
   assert.ok(piBlocked && piBlocked.block === true);
-  // Without an approved gate configuration, the deploy guard runs first and
-  // denies shell input. The detached-worker detector and policy were checked
-  // independently for every bypass above.
-  assert.match(piBlocked.reason, /승인된 관문 설정이 없어/);
+  assert.match(piBlocked.reason, /spawn-worker\.mjs/);
   const piAllowed = await piToolCall(
     { toolName: 'bash', input: { command: probeAllowed } },
     { cwd: REPO_ROOT },
   );
-  assert.ok(piAllowed && piAllowed.block === true);
-  assert.match(piAllowed.reason, /승인된 관문 설정이 없어/);
+  assert.equal(piAllowed, undefined);
 });
 
 test('rev1 blocker 2 + ref 3: escalated_human done requires distinct --human-msg-id, post-done add stays blocked, and msg_id whitespace is normalized', async () => {

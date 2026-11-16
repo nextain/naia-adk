@@ -7,6 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const pin = require("../lib/gate-config-pin.js");
 
+const instanceId = "fixture-instance";
 const approverId = "123456789012345678";
 const channelId = "234567890123456789";
 const messageId = "345678901234567890";
@@ -17,7 +18,7 @@ function fixture(t) {
 	const file = path.join(root, ".claude/deploy/config.json");
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	fs.writeFileSync(file, '{"review_models":{"fable":{"model":"claude-fable","effort":"high","executor":"claude"}}}\n');
-	const hash = pin.snapshotGateConfig(root, [".claude/deploy/config.json"]).hash;
+	const hash = pin.snapshotGateConfig(root, [".claude/deploy/config.json"], instanceId).hash;
 	const code = pin.approvalCode(hash);
 	const refs = [{ code, channelId, messageId }];
 	const message = { id: messageId, channel_id: channelId, author: { id: approverId }, content: `승인 ${code}` };
@@ -25,7 +26,7 @@ function fixture(t) {
 }
 
 function confirm(f, message = f.message, fetchImpl = async () => ({ ok: true, json: async () => message })) {
-	return pin.approvedGateConfig({ root: f.root, files: [".claude/deploy/config.json"], approverId, refs: f.refs, token: "mock-token", fetchImpl });
+	return pin.approvedGateConfig({ root: f.root, files: [".claude/deploy/config.json"], instanceId, env: {XDG_STATE_HOME: fs.mkdtempSync(path.join(f.root, "state-"))}, approverId, refs: f.refs, token: "mock-token", fetchImpl });
 }
 
 test("approval code uses the documented SHA-256 and RFC 4648 Base32 formula", () => {
@@ -52,7 +53,7 @@ test("only the configured human's own Discord message approves a snapshot", asyn
 test("a changed byte or a change during the fetch invalidates approval", async (t) => {
 	const f = fixture(t);
 	fs.appendFileSync(f.file, " ");
-	assert.notEqual(pin.snapshotGateConfig(f.root, [".claude/deploy/config.json"]).hash, f.hash);
+	assert.notEqual(pin.snapshotGateConfig(f.root, [".claude/deploy/config.json"], instanceId).hash, f.hash);
 	assert.equal(await confirm(f), null);
 	fs.writeFileSync(f.file, '{"review_models":{"fable":{"model":"claude-fable","effort":"high","executor":"claude"}}}\n');
 	assert.equal(await confirm(f, f.message, async () => {
@@ -77,17 +78,17 @@ test("approval CLI shows committed resolved models and current order; compares o
 	const cli = path.join(__dirname, "../gate-config-approval.js");
 	const preload = path.join(root, "fetch.cjs");
 	const instancePath = path.join(__dirname, "../gate-instance.js");
-	const setup = `const instancePath = ${JSON.stringify(instancePath)}; require.cache[require.resolve(instancePath)] = { id: instancePath, filename: instancePath, loaded: true, exports: ${JSON.stringify({approverId, files: names})} };\n`;
+	const setup = `const instancePath = ${JSON.stringify(instancePath)}; require.cache[require.resolve(instancePath)] = { id: instancePath, filename: instancePath, loaded: true, exports: ${JSON.stringify({instanceId, approverId, files: names})} };\n`;
 	fs.writeFileSync(preload, setup);
-	const run = (args, env = {}) => spawnSync(process.execPath, [cli, current, ...args], {encoding: "utf8", env: {...process.env, NODE_OPTIONS: `--require=${preload}`, ...env}});
+	const run = (args, env = {}) => spawnSync(process.execPath, [cli, current, ...args], {encoding: "utf8", env: {...process.env, XDG_STATE_HOME: fs.mkdtempSync(path.join(root, "state-")), NODE_OPTIONS: `--require=${preload}`, ...env}});
 	const plain = run([]);
 	assert.equal(plain.status, 0, plain.stderr);
 	assert.match(plain.stdout, /"fable" \/ "f \/ tricky" \/ "max" \/ "claude"/);
 	assert.match(plain.stdout, /muse: fable → argon(?:\n|\r)/);
 	assert.match(plain.stdout, /claude: argon → codex/);
-	assert.match(plain.stdout, new RegExp(pin.approvalCode(pin.snapshotGateConfig(current, names).hash)));
+	assert.match(plain.stdout, new RegExp(pin.approvalCode(pin.snapshotGateConfig(current, names, instanceId).hash)));
 	assert.doesNotMatch(plain.stdout, /승인 판 .* 대비/);
-	const code = pin.approvalCode(pin.snapshotGateConfig(previous, names).hash);
+	const code = pin.approvalCode(pin.snapshotGateConfig(previous, names, instanceId).hash);
 	fs.writeFileSync(preload, setup + `globalThis.fetch = async () => ({ok:true,json:async()=>(${JSON.stringify({id: messageId, channel_id: channelId, author: {id: approverId}, content: code})})});`);
 	const flags = ["--approved-root", previous, "--approver-id", approverId, "--channel-id", channelId, "--message-id", messageId];
 	const compared = run(flags, {NODE_OPTIONS: `--require=${preload}`, DISCORD_BOT_TOKEN: "test"});
