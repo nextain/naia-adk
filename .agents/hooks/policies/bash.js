@@ -133,8 +133,61 @@ function gitCommandArgs(command, subcommand) {
 	return null;
 }
 
+const PROTECTED_BRANCHES_FILE = path.join(__dirname, "..", "..", "context", "push-protected-branches.json");
+
+/** Opt-in list of branches that take no direct push. Empty (the default) keeps routine push open. */
+function readProtectedBranches(opts) {
+	if (Array.isArray(opts && opts.protectedBranches)) return opts.protectedBranches;
+	try {
+		const list = JSON.parse(fs.readFileSync(PROTECTED_BRANCHES_FILE, "utf8")).protected_branches;
+		return Array.isArray(list) ? list.filter((name) => typeof name === "string" && name) : [];
+	} catch {
+		return [];
+	}
+}
+
+function currentBranchOf(opts) {
+	if (opts && typeof opts.currentBranch === "string") return opts.currentBranch;
+	try {
+		const { execSync } = require("child_process");
+		return execSync("git rev-parse --abbrev-ref HEAD", { cwd: (opts && opts.cwd) || process.cwd(), timeout: 3000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+	} catch {
+		return "";
+	}
+}
+
+/** Non-force, non-deleting push: block `--all`, and a direct push to a protected branch when the list is not empty. */
+function pushScopeViolation(args, opts) {
+	const clean = args.map((arg) => arg.replace(/^["']|["']$/g, ""));
+	if (clean.some((arg) => arg === "--all")) {
+		return { reason: "[Harness] ⚠️ PUSH --all 차단\n\n--all 은 모든 로컬 브랜치를 한꺼번에 밀어 보호 가지까지 건드립니다. 가지를 하나씩 지정하세요." };
+	}
+	const protectedBranches = readProtectedBranches(opts);
+	if (!protectedBranches.length) return null;
+	const valueOptions = new Set(["-o", "--push-option", "--receive-pack", "--exec", "--repo"]);
+	const positional = [];
+	for (let i = 0; i < clean.length; i++) {
+		const arg = clean[i];
+		if (arg === "--") { positional.push(...clean.slice(i + 1)); break; }
+		if (valueOptions.has(arg)) { i += 1; continue; }
+		if (!arg.startsWith("-")) positional.push(arg);
+	}
+	const refspecs = positional.slice(1);
+	const current = currentBranchOf(opts);
+	const targets = refspecs.length
+		? refspecs.map((spec) => {
+			const dst = spec.includes(":") ? spec.slice(spec.indexOf(":") + 1) : spec;
+			const name = dst.replace(/^refs\/heads\//, "");
+			return name === "HEAD" || name === "@" ? current : name;
+		})
+		: [current];
+	const hit = targets.find((name) => name && protectedBranches.includes(name));
+	if (!hit) return null;
+	return { reason: `[Harness] ⚠️ 보호 가지 직접 push 차단\n가지: ${hit}\n\n이 가지는 push-protected-branches.json 의 보호 목록에 있습니다. 작업 가지로 올려 PR 로 병합하세요.` };
+}
+
 /** git-push-guard — allow routine push; block remote deletion/history rewriting */
-function gitPush(command) {
+function gitPush(command, opts = {}) {
 	const stripped = core.stripQuotesBlank(command);
 	if (/^\s*(echo|printf)\s/.test(stripped) && !stripped.includes("|")) return null;
 	const args = gitCommandArgs(command, "push");
@@ -147,7 +200,7 @@ function gitPush(command) {
 	const isForce = /(?:^|\s)--force(?:-with-lease|-if-includes)?(?:=\S+)?(?:\s|$)/.test(pushClause)
 		|| /(?:^|\s)-(?!-)[A-Za-z]*f[A-Za-z]*(?:\s|$)/.test(pushClause)
 		|| /(?:^|\s)\+\S+/.test(pushClause);
-	if (!isRemoteRefDelete && !isForce) return null;
+	if (!isRemoteRefDelete && !isForce) return pushScopeViolation(args, opts);
 	let remote = "", branch = "";
 	const positional = args.filter((arg) => !/^--?[A-Za-z]/.test(arg));
 	if (positional.length >= 1) remote = positional[0];

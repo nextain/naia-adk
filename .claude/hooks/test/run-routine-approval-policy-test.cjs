@@ -50,6 +50,26 @@ for (const command of [
   assert.equal(policy.gitPush(command), null, `routine command must not ask again: ${command}`);
 }
 
+// Opt-in protected branches: the shipped list is empty, so routine push above stays open;
+// `git push --all` is blocked regardless.
+assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, ".agents", "context", "push-protected-branches.json"), "utf8")).protected_branches, [], "protected branches must be opt-in (default empty)");
+for (const command of ["git push --all", "git push --all origin", "git push origin --all", "git -c push.default=current push --all origin", "git push -u --all origin"]) {
+  assert.match(policy.gitPush(command)?.reason || "", /PUSH --all/, `--all must be blocked: ${command}`);
+}
+const protectedOn = { protectedBranches: ["main", "master"], currentBranch: "feature/x" };
+for (const command of ["git push origin main", "git push origin HEAD:main", "git push origin feature/x:refs/heads/master", "git push --set-upstream origin main", "git push origin 'main'", "git push -o ci.skip origin main"]) {
+  assert.match(policy.gitPush(command, protectedOn)?.reason || "", /보호 가지/, `protected push must be blocked: ${command}`);
+}
+for (const command of ["git push", "git push origin", "git push origin HEAD"]) {
+  assert.equal(policy.gitPush(command, protectedOn), null, `non-protected current branch push stays open: ${command}`);
+  assert.match(policy.gitPush(command, { ...protectedOn, currentBranch: "main" })?.reason || "", /보호 가지/, `bare push from a protected branch must be blocked: ${command}`);
+}
+for (const command of ["git push origin feature/x", "git push origin HEAD:feature/y", "git push origin refs/tags/v1.0.0", "git push --tags origin", "git push origin main-fix"]) {
+  assert.equal(policy.gitPush(command, protectedOn), null, `other targets stay open: ${command}`);
+}
+assert.equal(policy.gitPush("git push origin main", { protectedBranches: [] }), null, "empty list keeps main open");
+assert.match(policy.gitPush("git push --force origin main", protectedOn)?.reason || "", /FORCE PUSH/, "force wording is unchanged");
+
 for (const command of [
   "git push --force origin main",
   "git push --force-with-lease origin main",
