@@ -63,7 +63,7 @@ function createValidPlan(root, overrides = {}) {
 	const scriptAbs = path.join(root, scriptRel);
 	fs.mkdirSync(path.dirname(scriptAbs), { recursive: true });
 	if (!fs.existsSync(scriptAbs)) {
-		fs.writeFileSync(scriptAbs, "#!/usr/bin/env bash\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1\n");
+		fs.writeFileSync(scriptAbs, `#!/usr/bin/env bash\nnode ${SCRIPT_PATH} assert ${path.join(gatesDir, "deploy-plan.json")} s1 || exit 1\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1\n`);
 	}
 	const scriptSha = sha256(fs.readFileSync(scriptAbs));
 	const step1Cmd = `bash ${scriptRel} prod`;
@@ -341,6 +341,8 @@ test("4. 코드 맞는 단계 통과 (preapprove 발급 코드 + 사람 입력 �
 	// 정확한 단계 명령 실행 → 통과(null)
 	const passDecision = runDeployGuardHook(step1Cmd, { cwd: root, root, stateDir, transcriptPath, sessionId });
 	assert.equal(passDecision, null, `코드가 맞으면 통과해야 함: ${JSON.stringify(passDecision)}`);
+	const asserted = spawnSync(process.execPath, [SCRIPT_PATH, "assert", planFile, "s1"], { cwd: root, env, encoding: "utf8" });
+	assert.equal(asserted.status, 0, asserted.stderr);
 
 	// 같은 명령을 한 번 더 실행하면 1회용 STEP 코드가 이미 소진되어 다시 막혀야 함
 	const secondAttempt = runDeployGuardHook(step1Cmd, { cwd: root, root, stateDir, transcriptPath, sessionId });
@@ -407,7 +409,7 @@ test("7. approval-plan.mjs CLI (template, check, report, preapprove, step-ok) �
 	writePassingReviewReceipt(root, planFile);
 
 	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
-	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
+	const workspaceScript = SCRIPT_PATH;
 
 	// template
 	const tplRes = spawnSync(process.execPath, [workspaceScript, "template"], { cwd: root, env, encoding: "utf8" });
@@ -925,8 +927,8 @@ test("16. 2회차 지적 2 재현: 사전승인(preapprove_steps)에서 s1 미�
 	const script1Abs = path.join(root, script1Rel);
 	const script2Abs = path.join(root, script2Rel);
 	fs.mkdirSync(path.dirname(script1Abs), { recursive: true });
-	fs.writeFileSync(script1Abs, "#!/usr/bin/env bash\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1-stage1\n");
-	fs.writeFileSync(script2Abs, "#!/usr/bin/env bash\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1-stage2\n");
+	fs.writeFileSync(script1Abs, `#!/usr/bin/env bash\nnode ${SCRIPT_PATH} assert ${path.join(root, ".agents/progress/sample-work/gates/deploy-plan.json")} s1 || exit 1\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1-stage1\n`);
+	fs.writeFileSync(script2Abs, `#!/usr/bin/env bash\nnode ${SCRIPT_PATH} assert ${path.join(root, ".agents/progress/sample-work/gates/deploy-plan.json")} s2 || exit 1\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1-stage2\n`);
 	const s1Sha = sha256(fs.readFileSync(script1Abs));
 	const s2Sha = sha256(fs.readFileSync(script2Abs));
 	const s1Cmd = `bash ${script1Rel} prod`;
@@ -974,7 +976,7 @@ test("16. 2회차 지적 2 재현: 사전승인(preapprove_steps)에서 s1 미�
 	appendHumanTurn(transcriptPath, `승인: ${pre.plan_code} ${s1Code} ${s2Code}`);
 
 	// s1 을 실제로 실행하지 않고 step-ok 만 먼저 호출해 s1.json 생성
-	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
+	const workspaceScript = SCRIPT_PATH;
 	const evFile = path.join(stateDir, "fake-s1-ok.txt");
 	fs.writeFileSync(evFile, "HTTP/1.1 200 OK\ncanary=ok\n");
 	const stepOkRes = spawnSync(process.execPath, [workspaceScript, "step-ok", planFile, "s1", "--evidence", evFile], { cwd: root, env, encoding: "utf8" });
@@ -1307,7 +1309,7 @@ test("fake codex reviewer runs through the complete review flow", (t) => {
  fs.writeFileSync(bwrap, '#!/bin/sh\nwhile [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done\nshift\nexec "$@"\n', { mode: 0o755 });
  const body = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "남은 지적: 0"].join("\n");
  fs.writeFileSync(codex, `#!/bin/sh\n[ "$1" = exec ] || exit 19\nfor arg do last="$arg"; done\n[ "$last" = - ] || exit 20\ncat >/dev/null\nprintf 'codex\\n'\ncat <<'REVIEW_EOF'\n${body}\nREVIEW_EOF\nprintf 'tokens used\\n'\n`, { mode: 0o755 });
- const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
+ const run = spawnSync(process.execPath, [SCRIPT_PATH, "review", planFile, "--author", "muse"], {
   cwd: root, encoding: "utf8", timeout: 30000,
   env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CODEX_BIN: codex, DEPLOY_APPROVAL_STATE_DIR: stateDir },
  });
@@ -1395,7 +1397,7 @@ test("codex reviewer refuses to run without bwrap outside recovery mode", (t) =>
  fs.mkdirSync(binDir); fs.mkdirSync(fakeHome);
  fs.symlinkSync(process.platform === "win32" ? "git.exe" : "/usr/bin/git", path.join(binDir,"git"));
  fs.writeFileSync(codex, `#!/bin/sh\n : > "${marker}"\nexit 0\n`, {mode:0o755});
- const run=spawnSync(process.execPath,[path.join(root,".agents/scripts/approval-plan.mjs"),"review",planFile,"--author","muse"], {cwd:root, encoding:"utf8", timeout:30000, env:{...process.env, HOME:fakeHome, PATH:binDir, APPROVAL_PLAN_CODEX_BIN:codex, DEPLOY_APPROVAL_STATE_DIR:stateDir}});
+ const run=spawnSync(process.execPath,[SCRIPT_PATH,"review",planFile,"--author","muse"], {cwd:root, encoding:"utf8", timeout:30000, env:{...process.env, HOME:fakeHome, PATH:binDir, APPROVAL_PLAN_CODEX_BIN:codex, DEPLOY_APPROVAL_STATE_DIR:stateDir}});
  assert.notEqual(run.status, 0, `${run.stdout}\n${run.stderr}`);
  assert.match(`${run.stdout}\n${run.stderr}`, /sandbox-prepare/);
  assert.equal(fs.existsSync(marker), false);
@@ -1555,6 +1557,7 @@ test("읽기 전용 단계: 글자를 덧붙인 단계 명령은 막히고, 글�
 	const scriptAbs = path.join(root, scriptRel);
 	fs.mkdirSync(path.dirname(scriptAbs), { recursive: true });
 	fs.writeFileSync(scriptAbs, "#!/usr/bin/env bash\ncase \"$1\" in\n  s0) echo candidate-ok ;;\n  s1) echo secret-ok ;;\n  *) exit 2 ;;\nesac\n");
+	fs.writeFileSync(scriptAbs, fs.readFileSync(scriptAbs, "utf8").replace("#!/usr/bin/env bash\n", `#!/usr/bin/env bash\nnode ${SCRIPT_PATH} assert ${path.join(root, ".agents/progress/sample-work/gates/deploy-plan.json")} "$1" || exit 1\n`));
 	const scriptSha = sha256(fs.readFileSync(scriptAbs));
 	const s0Cmd = `bash ${scriptRel} s0`;
 	const s1Cmd = `bash ${scriptRel} s1`;
@@ -1638,6 +1641,7 @@ test("읽기 전용 단계: 덧붙여 돌린 s0 과 step-ok 기록만으로는 s
 	const scriptAbs = path.join(root, scriptRel);
 	fs.mkdirSync(path.dirname(scriptAbs), { recursive: true });
 	fs.writeFileSync(scriptAbs, "#!/usr/bin/env bash\necho ok \"$1\"\n");
+	fs.writeFileSync(scriptAbs, fs.readFileSync(scriptAbs, "utf8").replace("#!/usr/bin/env bash\n", `#!/usr/bin/env bash\nnode ${SCRIPT_PATH} assert ${path.join(root, ".agents/progress/sample-work/gates/deploy-plan.json")} "$1" || exit 1\n`));
 	const scriptSha = sha256(fs.readFileSync(scriptAbs));
 	const step = (id) => ({ id, title: `${id} 확인(읽기만)`, commands: [`bash ${scriptRel} ${id}`], files: { [scriptRel]: scriptSha }, success_check: "끝줄 ok 확인", on_failure: "멈추고 보고" });
 	const { planFile } = createValidPlan(root, { approval_mode: undefined, scenario: [step("s0"), step("s1")], rollback: { method: "읽기만 하는 계획이라 되돌릴 것이 없음", duration: "0분", step_ids: [] } });
@@ -1697,7 +1701,7 @@ function setupReadOnlyOpsWorkspace(t, {
 
 	const scriptAbs = path.join(root, scriptRel);
 	fs.mkdirSync(path.dirname(scriptAbs), { recursive: true });
-	fs.writeFileSync(scriptAbs, scriptBody);
+	fs.writeFileSync(scriptAbs, typeof scriptBody === "function" ? scriptBody(root) : scriptBody);
 	const scriptSha = sha256(fs.readFileSync(scriptAbs));
 
 	const cfgPath = path.join(root, "config", "deploy-gate.json");
@@ -1932,7 +1936,7 @@ test("읽기 전용 ops B2: --parameters·다중 --scripts·모르는 옵션·�
 		const fR5 = setupReadOnlyOpsWorkspace(t, {
 			service: "ssh:sample-vm",
 			scriptRel: "scripts/ro-ssh-check.sh",
-			scriptBody: sshScript,
+			scriptBody: (root) => `#!/usr/bin/env bash\nnode ${SCRIPT_PATH} assert ${path.join(root, ".agents/progress/sample-ro-work/gates/deploy-plan.json")} s1 || exit 1\nssh sample-vm uptime\n`,
 			configServices: { "ssh:sample-vm": { label: "SSH VM", allowOps: true, allowCustomCommands: true } },
 			customCommand: cmd,
 		});
@@ -2332,7 +2336,7 @@ test("cross-repo: 다른 git 저장소·worktree 계획서 check·report·review
 	fs.mkdirSync(stateDir, { recursive: true });
 	populatePlanRepo(foreignRoot, { foreignMarker: "foreign-repo-only" });
 	const { planFile, scriptRel } = createValidPlan(foreignRoot);
-	const customScript = "#!/usr/bin/env bash\n# foreign-only-rollout\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1\n";
+	const customScript = `#!/usr/bin/env bash\n# foreign-only-rollout\nnode ${SCRIPT_PATH} assert ${planFile} s1 || exit 1\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1\n`;
 	fs.writeFileSync(path.join(foreignRoot, scriptRel), customScript);
 	const customSha = sha256(Buffer.from(customScript, "utf8"));
 	const loadedForeignPlan = JSON.parse(fs.readFileSync(planFile, "utf8"));
@@ -2387,7 +2391,12 @@ test("cross-repo: 다른 git 저장소·worktree 계획서 check·report·review
 	// 3. 자기 저장소(ROOT) 안 계획서
 	const toolRoot = path.join(tmp, "self-repo");
 	populatePlanRepo(toolRoot);
-	const { planFile: selfPlan } = createValidPlan(toolRoot);
+	const { planFile: selfPlan, scriptRel: selfRel } = createValidPlan(toolRoot);
+	const selfBody = fs.readFileSync(path.join(toolRoot, selfRel), "utf8").replace(SCRIPT_PATH, path.join(toolRoot, ".agents/scripts/approval-plan.mjs"));
+	fs.writeFileSync(path.join(toolRoot, selfRel), selfBody);
+	const selfData = JSON.parse(fs.readFileSync(selfPlan));
+	selfData.scenario[0].files[selfRel] = sha256(selfBody);
+	fs.writeFileSync(selfPlan, JSON.stringify(selfData, null, 2));
 	writePassingReviewReceipt(toolRoot, selfPlan);
 	const selfScript = path.join(toolRoot, ".agents/scripts/approval-plan.mjs");
 	assert.equal(spawnSync(process.execPath, [selfScript, "check", selfPlan], { cwd: toolRoot, env, encoding: "utf8" }).status, 0);
@@ -2549,7 +2558,7 @@ test("cross-repo review: 외부 저장소 계획서 review 가 planRoot 기준�
 	fs.rmSync(path.join(extRoot, ".claude/hooks"), { recursive: true, force: true });
 	fs.rmSync(path.join(extRoot, ".claude/deploy"), { recursive: true, force: true });
 
-	const pinnedScript = "#!/usr/bin/env bash\n# external-pinned-unique-marker\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v9\n";
+	const pinnedScript = `#!/usr/bin/env bash\n# external-pinned-unique-marker\nnode ${SCRIPT_PATH} assert ${planFile} s1 || exit 1\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v9\n`;
 	fs.writeFileSync(path.join(extRoot, scriptRel), pinnedScript, { mode: 0o755 });
 	const pinnedSha = sha256(Buffer.from(pinnedScript, "utf8"));
 
@@ -2800,6 +2809,7 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 	fs.mkdirSync(path.join(repoB, ".agents", "progress", "rollout-1", "gates"), { recursive: true });
 	const opScript = path.join(repoB, "scripts", "op.sh");
 	fs.writeFileSync(opScript, "#!/usr/bin/env bash\necho \"op $1\"\n", { mode: 0o755 });
+	fs.writeFileSync(opScript, `#!/usr/bin/env bash\nnode ${SCRIPT_PATH} assert ${path.join(repoB, ".agents/progress/rollout-1/gates/deploy-plan.json")} "$1" || exit 1\necho "op $1"\n`);
 	const opSha = sha256(fs.readFileSync(opScript));
 	const opEsc = opScript.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const opSvc = "local:systemd:sample-op";
@@ -2811,7 +2821,7 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 				allowOps: true,
 				allowRollback: true,
 				allowCustomCommands: true,
-				allowedCommands: [`^bash ${opEsc} (?:s2|rollback)$`],
+				allowedCommands: [`^bash ${opEsc} (?:s2|r1)$`],
 			},
 		},
 	}, null, 2));
@@ -2842,7 +2852,7 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 				id: "r1",
 				branch: "rollback",
 				title: "직전 상태로 복귀",
-				commands: [`bash ${opScript} rollback`],
+				commands: [`bash ${opScript} r1`],
 				files: { "scripts/op.sh": opSha },
 				success_check: "복귀 상태 정상 확인",
 				on_failure: "운영 변경 중단 후 보고",
@@ -3342,7 +3352,7 @@ test("architecture_fit(최초 요구·붙는 상위 구조·수용 방식) 통�
 	writeGateConfig(root);
 	const { planFile } = createValidPlan(root);
 	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
-	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
+	const workspaceScript = SCRIPT_PATH;
 	const base = JSON.parse(fs.readFileSync(planFile, "utf8"));
 	assert.deepEqual(deployPlan.formProblems(base), [], "기본 계획서는 architecture_fit 포함 시 양식 통과해야 함");
 	assert.ok(deployPlan.CRITERIA.some(([id]) => id === "architecture_fit"), "적대 리뷰 기준에 architecture_fit 포함");
@@ -3475,6 +3485,10 @@ test("참고-4: 기준 시각 이전 옛 계획서·기존 승인 영수증은 �
 
 	fs.mkdirSync(legacyGatesDir, { recursive: true });
 	const legacyPlanFile = path.join(legacyGatesDir, "deploy-plan.json");
+	const legacyScript = path.join(root, "scripts/rollout.sh");
+	const legacyBody = fs.readFileSync(legacyScript, "utf8").replace(tmpPlanFile, legacyPlanFile);
+	fs.writeFileSync(legacyScript, legacyBody);
+	legacyPlan.scenario[0].files["scripts/rollout.sh"] = sha256(legacyBody);
 	fs.writeFileSync(legacyPlanFile, JSON.stringify(legacyPlan, null, 2));
 
 	assert.equal(deployPlan.requiresArchitectureFit(legacyPlan), false, "기준 시각 이전 옛 계획서는 architecture_fit 의무 면제");
@@ -3530,7 +3544,7 @@ test("참고-4: 기준 시각 이전 옛 계획서·기존 승인 영수증은 �
 	assert.equal(revStatus.ok, true, `옛 계획서 9기준 영수증 통과: ${revStatus.problems.join("; ")}`);
 
 	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
-	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
+	const workspaceScript = SCRIPT_PATH;
 	const chk = spawnSync(process.execPath, [workspaceScript, "check", legacyPlanFile], { cwd: root, env, encoding: "utf8" });
 	assert.equal(chk.status, 0, `${chk.stdout}\n${chk.stderr}`);
 	assert.match(chk.stdout, /양식: 통과/);

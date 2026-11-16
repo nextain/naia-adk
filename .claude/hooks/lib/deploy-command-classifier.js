@@ -714,9 +714,27 @@ function loadTestHosts(rootDir = "") {
 	}
 }
 
+function isRegisteredTarget(...names) {
+	const root = activeGateRoot || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+	const cfg = require("./deploy-readiness.js").loadDeployGateConfig(root);
+	const keys = Array.isArray(cfg?.services)
+		? cfg.services.map((s) => typeof s === "string" ? s : s?.service)
+		: Object.entries(cfg?.services || {}).filter(([, rule]) => rule).map(([key]) => key);
+	const targets = names.filter((n) => typeof n === "string" && n).map((n) => n.toLowerCase().replace(/\.$/, ""));
+	return keys.some((key) => {
+		if (typeof key !== "string") return false;
+		const parts = key.toLowerCase().split(":");
+		const target = parts[parts.length - 1].replace(/\.$/, "");
+		if (!target || /[*?\[\]]/.test(target)) return false;
+		return targets.includes(target);
+	});
+}
+
 function isNonProd(...names) {
 	// Cloudflare API 쓰기는 도메인에 dev/test 가 들어가도 운영 관문에서 제외하지 않는다.
 	if (names.some((n) => typeof n === "string" && /^(?:cloudflare:|local:systemd:)/i.test(n))) return false;
+	// The service registry is authoritative over name-based and test-host guesses.
+	if (isRegisteredTarget(...names)) return false;
 	const joined = names.filter(Boolean).join(" ");
 	if (!joined) return false;
 	if (/prod/i.test(joined)) return false;
@@ -810,8 +828,11 @@ function classifyAzAll(tokens) {
 	const names = vmOpt ? [vmOpt] : ids.length ? ids.map((id) => (id.match(/\/virtualMachines\/([^/\s]+)/i) || [])[1] || lastIdPart(id)) : [optionValue(rest, ["-n", "--name"])];
 	const rg = optionValue(rest, ["-g", "--resource-group"]);
 	const hits = [];
-	for (const name of names) {
-		if (isNonProd(name, rg)) continue;
+	for (const [index, name] of names.entries()) {
+		const idGroup = ids[index]?.match(/\/resourceGroups\/([^/\s]+)/i)?.[1];
+		// Registered resource groups still take precedence when supplied through an ID.
+		const registeredIdGroup = idGroup && isRegisteredTarget(idGroup);
+		if (!registeredIdGroup && isNonProd(name, rg)) continue;
 		hits.push({
 			service: `azure:${groupLower}:${(name || "(이름 없음)").toLowerCase()}`,
 			label: `az ${group} ${verbs.join(" ")}${name ? ` -n ${name}` : ""}`,

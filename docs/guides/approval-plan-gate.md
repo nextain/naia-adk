@@ -63,6 +63,21 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 - `scenario[].files`: 명령이 읽거나 실행하는 스크립트·설정 파일(`bash ./deploy.sh`, `--yaml app.yaml`, `@body.json` 등)은 반드시 `"경로": "<sha256>"` 형태로 고정합니다. 파일 내용이 1바이트라도 바뀌면 실행이 차단됩니다(`bash scripts/rollout.sh` 재귀 검사는 스크립트 폴더로 자동 이동하지 않고 호출자 작업 디렉터리를 유지하며, 스크립트 안의 명시적 `cd`만 반영합니다).
 - 사전승인 코드 일괄 발급(`preapprove`)을 쓰려면 최상위에 `"approval_mode": "preapprove_steps"`를 넣습니다.
 
+### 고정 실행 대본의 assert
+
+단계가 실행하는 고정 대본은 주석과 셔뱅 다음 첫 동작에서 그 계획과 단계의 승인을 확인하고, 실패하면 즉시 끝나야 합니다. 관문이 남긴 해당 계획 SHA와 STEP 코드 소비 기록, 그 단계 `files`의 실제 SHA를 로컬에서 확인하므로 네트워크나 디스코드 재조회가 필요 없습니다. `check`와 리뷰 준비 검사는 확인이 빠진 대본을 거부합니다. 읽기 전용 확인 칸과 기존 무코드 읽기 대본은 제외합니다.
+
+셸 대본의 예(절대 경로는 실제 경로로 바꿉니다):
+
+```sh
+#!/bin/sh
+node /절대경로/naia-adk/.agents/scripts/approval-plan.mjs assert /절대경로/작업/.agents/progress/작업/gates/deploy-plan.json s1 || exit 1
+```
+
+Node CommonJS 대본은 첫 동작으로 `require("node:child_process").execFileSync("node", ["/절대경로/naia-adk/.agents/scripts/approval-plan.mjs", "assert", "/절대경로/작업/.agents/progress/작업/gates/deploy-plan.json", "s1"])`를, Python 대본은 `__import__("subprocess").run(["node", "/절대경로/naia-adk/.agents/scripts/approval-plan.mjs", "assert", "/절대경로/작업/.agents/progress/작업/gates/deploy-plan.json", "s1"], check=True)`를 쓸 수 있습니다. 경로와 단계 ID는 고정된 계획과 일치해야 합니다. 첫 assert 줄의 계획 경로와 관문 실행기는 `files`에 넣지 않습니다. 실행기는 훅이 설치된 관문 뿌리 아래의 `.agents/scripts/approval-plan.mjs`만 허용하고, 나머지 줄의 참조 파일은 평소처럼 고정합니다. 기록은 코드가 관문에서 사용되었는지 확인하며 대본의 실행 횟수를 새로 제한하지 않습니다.
+
+여러 단계가 같은 셸 대본을 쓰고 단계 ID가 첫 번째 인자라면 예시의 `s1` 대신 `"$1"`을 쓸 수 있습니다. 계획의 각 명령에도 해당 단계 ID를 첫 인자로 적습니다. Node ES 모듈에서는 첫 동작으로 `(await import("node:child_process")).execFileSync("node", ["/절대경로/naia-adk/.agents/scripts/approval-plan.mjs", "assert", "/절대경로/작업/.agents/progress/작업/gates/deploy-plan.json", "s1"])`를 씁니다.
+
 ### 여러 절 고정 대본 돌리기
 대본(예: `sudo bash <대본 절대 경로> <단계id>`)을 계획 단계 `commands` 에 그대로 적고, 대본과 대본이 원격에 올리는 본문까지 `files` 에 `{경로: sha256}` 로 고정합니다. 이런 대본은 **ops 로 받지 않습니다.** 대본 본문(변수·eval·here-doc·원격 본문·kubectl 등)이 판을 바꾸는지 관문 분류기가 다 읽을 수 없기 때문입니다. `kind: "ops"` 준비 기록(`deploy.json`)으로 `bash /…` 대본을 부르면 "계획 고정 대본은 ops 로 받지 않음" 으로 막힙니다(`config/deploy-gate.json` 에서 그 서비스에 `allowCustomCommands` 를 명시해 `PLAN`/`STEP` 사람 승인을 받거나, git 커밋된 `readOnlyScripts` 에 `{sha256, path, service}` 가 등록된 **정확히 2토큰** `bash <등록 경로>`/`sh <등록 경로>` 또는 허용 옵션만 쓰는 `az vm run-command invoke ... --scripts @<등록 경로>` 단일 읽기 대본을 적대 리뷰 PASS 뒤에 돌리는 경우만 예외; `sudo bash ...` 나 `bash <대본> <인자>` 3토큰 이상은 `readOnlyScripts` 무코드 대상이 아님).
 고정 대본은 준비 기록 없이 계획 승인으로 돌립니다. 적대 리뷰·PLAN·STEP 승인을 받은 계획의 명령 바이트와 `files` 지문이 실행 때와 같으면 받고, 대본이나 고정 파일이 1바이트라도 바뀌면 `고정 파일 sha256 불일치` 로 막습니다. `config/deploy-gate.json` 서비스 규칙(`allowedCommands` 등)은 그대로 따로 요구하며, 계획 경로·지문은 계획에서 읽으므로 계획마다 코드를 고칠 필요가 없습니다. 같은 서비스로 12시간 안의 `deploy.json` 이 있으면 그 기록의 kind 로 판정하므로, ops 기록을 남겨 두면 대본이 막힙니다. 설정에 `requireReadiness: true` 가 있으면 계획 승인 경로를 쓸 수 없습니다.

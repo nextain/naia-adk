@@ -4,6 +4,7 @@
  *
  *   template                         빈 양식(JSON) 출력
  *   check <plan>                     양식 칸·적대 리뷰 기록 점검, 명령별 sha 출력
+ *   assert <plan> <step>             승인 코드 소비와 고정 파일 확인
  *   report <plan>                    승인자에게 올릴 보고문 출력(리뷰 통과 시)
  *   review <plan> --author <argon|codex|muse> [--out <file>] 차례(작성자 다음 모델) 1명 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json. 고정 planReview 가 유효하면 그 리뷰어를 먼저 쓰고, 한도 실패 때만 차례대로 넘어간다(넘긴 리뷰어는 skipped 로 남긴다)
  *   review-prompt <plan>             리뷰 요청문만 출력
@@ -29,6 +30,8 @@ const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
 // 기동 시점 실행기 해시: 해시한 동일 바이트를 실행한다.
 const PINNED_CJS_EXECUTORS = [
 	".claude/hooks/lib/deploy-human-approval.js",
+	".claude/hooks/lib/git-command-parser.js",
+	".claude/hooks/lib/effective-argv.js",
 	".claude/hooks/lib/deploy-plan.js",
 ];
 const preloadFlag = /(?:^|[\s"'])(?:--(?:require|import|(?:experimental-)?loader)(?=$|[\s="'])|-r)/;
@@ -70,19 +73,17 @@ let lib, commandHash, statePath;
 			const mod = new Module(filename);
 			mod.filename = filename;
 			mod.paths = Module._nodeModulePaths(path.dirname(filename));
-			if (compiled.length) {
-				const dependency = compiled[0];
-				mod.require = function (request) {
-					return request === "./deploy-human-approval.js" ? dependency.exports : Module.prototype.require.call(this, request);
-				};
-			}
+			mod.require = function (request) {
+				const dependency = compiled.find((m) => m.filename === path.resolve(path.dirname(filename), request));
+				return dependency ? dependency.exports : Module.prototype.require.call(this, request);
+			};
 			require.cache[filename] = mod;
 			compiled.push(mod);
 			mod._compile(buffer.toString(), filename);
 			mod.loaded = true;
 		}
 		({ commandHash, statePath } = compiled[0].exports);
-		lib = compiled[1].exports;
+		lib = compiled[compiled.length - 1].exports;
 	} catch (error) {
 		for (const mod of compiled) delete require.cache[mod.filename];
 		throw error;
@@ -178,13 +179,14 @@ function loadPlan(p) {
 	const abs = path.resolve(p);
 	if (path.basename(abs) !== lib.PLAN_FILE || path.basename(path.dirname(abs)) !== "gates") die(`계획서는 .agents/progress/<작업>/gates/${lib.PLAN_FILE} 여야 합니다`);
 	const root = resolvePlanRoot(abs);
-	let plan;
+	let plan, bytes;
 	try {
-		plan = JSON.parse(fs.readFileSync(abs, "utf8"));
+		bytes = fs.readFileSync(abs);
+		plan = JSON.parse(bytes.toString("utf8"));
 	} catch (e) {
 		die(`계획서를 읽지 못함: ${e.message}`);
 	}
-	return { abs, plan, gatesDir: path.dirname(abs), sha: sha256(fs.readFileSync(abs)), root };
+	return { abs, plan, gatesDir: path.dirname(abs), sha: sha256(bytes), root };
 }
 
 function runMuse(prompt) {
@@ -527,6 +529,15 @@ function reviewStatus(gatesDir, sha, writeFindings = false, root = ROOT) {
 
 const [cmd, ...args] = process.argv.slice(2);
 switch (cmd) {
+	case "assert": {
+		if (path.resolve(process.argv[1]) !== path.join(ROOT, ".agents/scripts/approval-plan.mjs") || bootEntryAbs !== fs.realpathSync(path.join(ROOT, ".agents/scripts/approval-plan.mjs"))) die("assert 실패: 관문 뿌리 밖 실행기", 1);
+		if (args.length !== 2 || !args[1]) die("사용: approval-plan.mjs assert <계획서> <단계>", 1);
+		const { plan, sha, root } = loadPlan(args[0]);
+		const problem = lib.assertApprovedStep(plan, sha, args[1], root);
+		if (problem) die(`assert 실패: ${problem.replace(/[\r\n]+/g, " ")}`, 1);
+		console.log("assert 통과");
+		break;
+	}
 	case "template":
 		console.log(JSON.stringify({ ...lib.TEMPLATE, createdAt: new Date().toISOString() }, null, 2));
 		break;
@@ -593,6 +604,8 @@ switch (cmd) {
 		for (const w of warnings) console.error(w);
 		const pins = lib.pinnedFileProblems(plan, planRoot);
 		if (pins.length) die(pins.join("\n"), 1);
+		const asserts = lib.assertScriptProblems(plan, planRoot, abs);
+		if (asserts.length) die(asserts.join("\n"), 1);
 		const prompt = lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items });
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID();
 		const base = path.resolve(opt(args, "--out") || path.join(gatesDir, `deploy-plan-review-${stamp}.md`));

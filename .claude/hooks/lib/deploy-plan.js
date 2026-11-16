@@ -723,6 +723,84 @@ function directCommandScriptPaths(command, base) {
 	return [...new Set(out)];
 }
 
+// The self-check executable belongs to this hook installation, never a copied tree.
+function validAssertCli(candidate, base) {
+	const target = path.resolve(base, candidate);
+	const expected = path.join(ROOT, ".agents/scripts/approval-plan.mjs");
+	try { return target === expected && fs.realpathSync(target) === fs.realpathSync(expected) && fs.realpathSync(expected).startsWith(fs.realpathSync(ROOT) + path.sep); }
+	catch { return false; }
+}
+
+// Exempt exactly the first executable self-check line, never later references.
+function stripFirstAssertLine(body, dir) {
+	const lines = body.split(/\r?\n/);
+	const i = lines.findIndex((line) => { const t = line.trim(); return t && !t.startsWith("#") && !t.startsWith("//"); });
+	if (i < 0) return body;
+	const line = lines[i].trim();
+	const shell = line.match(/^(?:(exec)\s+)?node\s+(\S+)\s+assert\s+(\S+)\s+(\S+)(?:\s+\|\|\s+exit(?:\s+[1-9][0-9]*)?)?\s*;?$/);
+	let cli = shell && (shell[1] || /\|\|/.test(line)) ? shell[2] : null;
+	const other = line.match(/^(?:(?:require\(["'](?:node:)?child_process["']\)|\(await import\(["']node:child_process["']\)\))\.execFileSync\(["']node["'],\s*(\[.*\])\)|__import__\(["']subprocess["']\)\.run\((\[.*\]),\s*check=True\))\s*;?$/);
+	if (other) try {
+		const args = JSON.parse(other[1] || other[2]);
+		if (other[2] && args.shift() !== "node") return body;
+		if (args.length === 4 && args[1] === "assert" && args.every((a) => typeof a === "string" && !/[$`]/.test(a))) cli = args[0];
+	} catch {}
+	if (cli && validAssertCli(cli, dir)) lines[i] = "";
+	return lines.join("\n");
+}
+
+// Only inspect scripts actually named as executables by a step; data files and
+// the human-readable success_check field are not execution instructions.
+function assertScriptProblems(plan, root, planFile) {
+	const base = path.resolve(root || ROOT);
+	const expectedPlan = path.resolve(planFile || path.join(base, ".agents/progress/unknown/gates", PLAN_FILE));
+	const ro = planReadOnlyScriptsBinding(plan, base);
+	const readonly = new Set((ro.ok ? ro.items : []).map((item) => path.resolve(base, item.path)));
+	const problems = [];
+	for (const step of Array.isArray(plan?.scenario) ? plan.scenario : []) {
+		const pins = new Set(Object.keys(step?.files || {}).map((p) => path.resolve(base, p)));
+		for (const command of Array.isArray(step?.commands) ? step.commands : []) {
+			const entries = require("./effective-argv.js").effectiveCommands(command, base);
+			for (const entry of entries) {
+				const argv = entry.argv || [];
+				const program = path.basename(argv[0] || "").toLowerCase();
+				let arg = null;
+				if (/^(?:ba|da|z|k)?sh$|^node(?:js)?$|^python(?:\d+(?:\.\d+)?)?$/.test(program)) {
+					if (!argv.slice(1).some((a) => /^(?:-c|-e|--eval|--print|-p)$/.test(a))) arg = argv.slice(1).find((a) => !a.startsWith("-") && pins.has(path.resolve(entry.dir || base, a)));
+				} else if (argv[0] && (argv[0].includes("/") || /\.(?:sh|bash|zsh|mjs|cjs|js|py)$/i.test(argv[0]))) arg = argv[0];
+				if (!arg || /[$`]/.test(arg)) continue;
+				const file = path.resolve(entry.dir || base, arg);
+				if (!pins.has(file)) continue;
+				// The no-code read-only route accepts only the registered two-token shell form.
+				if (readonly.has(file) && /^(?:bash|sh)$/.test(program) && argv.length === 2 && command.trim() === argv.join(" ")) continue;
+				let first, body;
+				try { body = fs.readFileSync(file, "utf8"); first = body.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !l.startsWith("#") && !l.startsWith("//")); }
+				catch { continue; } // The pin checker reports unreadable files.
+				const scriptKind = /^(?:ba|da|z|k)?sh$|^node(?:js)?$|^python(?:\d+(?:\.\d+)?)?$/.test(program) || /\.(?:sh|bash|zsh|mjs|cjs|js|py)$/i.test(file) || /^#![^\n]*\b(?:bash|sh|zsh|node|nodejs|python\d*(?:\.\d+)?)\b/.test(body);
+				if (!scriptKind) continue;
+				let args = null;
+				if (/^(?:ba|da|z|k)?sh$/.test(program) || /\.(?:sh|bash|zsh)$/i.test(file) || /^#![^\n]*\b(?:bash|sh|zsh)\b/.test(body)) {
+					const match = first?.match(/^(?:(exec)\s+)?node\s+(\S+)\s+assert\s+(\S+)\s+(\S+)(?:\s+\|\|\s+exit(?:\s+[1-9][0-9]*)?)?\s*;?$/);
+					if (match && (match[1] || /\|\|/.test(first))) args = [match[2], match[3], match[4]];
+				} else {
+					// A single expression throws on failure, before any other action.
+					const match = first?.match(/^(?:(?:require\(["'](?:node:)?child_process["']\)|\(await import\(["']node:child_process["']\)\))\.execFileSync\(["']node["'],\s*(\[.*\])\)|__import__\(["']subprocess["']\)\.run\((\[.*\]),\s*check=True\))\s*;?$/);
+					if (match) try {
+						const a = JSON.parse(match[1] || match[2]);
+						if ((!match[2] || a.shift() === "node") && a.length === 4 && a[1] === "assert" && a.every((v) => typeof v === "string")) args = [a[0], a[2], a[3]];
+					} catch {}
+				}
+				const scriptIndex = argv.indexOf(arg);
+				const passedStep = args && (args[2] === step.id || ((args[2] === '"$1"' || args[2] === '${1}' || args[2] === '"${1}"') && argv[scriptIndex + 1] === step.id));
+				if (!args || !validAssertCli(args[0], base) || path.resolve(base, args[1]) !== expectedPlan || !passedStep || args.slice(0, 2).some((a) => /[$`]/.test(a))) {
+					problems.push(`${step.id}: 실행 대본 첫 동작에 실패 시 종료하는 assert 필요: ${file}`);
+				}
+			}
+		}
+	}
+	return problems;
+}
+
 /** 계획서 소속 저장소 root 기준. 모든 단계와 선조치의 고정 파일을 검사한다. */
 function pinnedFileProblems(plan, root) {
 	const base = root ? path.resolve(root) : ROOT;
@@ -841,6 +919,8 @@ const REVIEW_EXECUTOR_FILES = [
 	".agents/scripts/approval-plan.mjs",
 	".claude/hooks/lib/deploy-plan.js",
 	".claude/hooks/lib/deploy-human-approval.js",
+	".claude/hooks/lib/git-command-parser.js",
+	".claude/hooks/lib/effective-argv.js",
 ];
 /**
  * 계획서 소속 저장소 root 기준으로 항목을 읽는다. root 미지정 시 planFile에서 역산.
@@ -985,6 +1065,7 @@ function reviewProblems(gatesDir, sha, root) {
 	if (plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && !riskAcceptanceActive(plan)) problems.push("risk_acceptance 끝남(expires_at 지남)");
 	const acceptSecurity = riskAcceptanceActive(plan);
 	problems.push(...pinnedFileProblems(plan, base));
+	problems.push(...assertScriptProblems(plan, base, path.join(gatesDir, PLAN_FILE)));
 	let roOpt = null;
 	if (rec && rec.read_only_scripts !== undefined) {
 		const validRo = validateReadOnlyBindingRecords(rec.read_only_scripts);
@@ -1117,6 +1198,22 @@ function stateFile(env) {
 function loadState(env) {
 	const d = readJson(stateFile(env));
 	return { challenges: Array.isArray(d?.challenges) ? d.challenges : [], incidents: Array.isArray(d?.incidents) ? d.incidents : [] };
+}
+
+function assertApprovedStep(plan, sha, stepId, root, env = process.env) {
+	const matches = (Array.isArray(plan?.scenario) ? plan.scenario : []).filter((s) => s?.id === stepId);
+	if (matches.length !== 1) return "단계를 하나로 찾지 못함";
+	const step = matches[0];
+	if (!step.files || typeof step.files !== "object" || Array.isArray(step.files)) return "단계 고정 파일 없음";
+	for (const [file, want] of Object.entries(step.files)) {
+		try {
+			const abs = path.resolve(root, file);
+			if (!/^[a-f0-9]{64}$/i.test(String(want)) || !fs.statSync(abs).isFile() || sha256(fs.readFileSync(abs)) !== String(want).toLowerCase()) return `고정 파일 sha256 불일치: ${file}`;
+		} catch { return `고정 파일을 읽지 못함: ${file}`; }
+	}
+	const hashes = new Set((Array.isArray(step.commands) ? step.commands : []).map(commandHash));
+	const used = loadState(env).challenges.some((c) => c?.kind === "step" && c.planSha === sha && c.step === stepId && /^STEP-/.test(c.code || "") && c.approvedAt && c.approvedVia && c.approvedVia !== "readonly-no-code" && Array.isArray(c.executed) && c.executed.some((h) => hashes.has(h)));
+	return used ? null : "이 계획과 단계의 승인 코드 소비 기록 없음";
 }
 function saveState(env, data) {
 	const file = stateFile(env);
@@ -1814,7 +1911,7 @@ function referencedFiles(command, cwd) {
 			if (script && !seen.has(script)) {
 				seen.add(script);
 				const body = readSmallText(script, "/");
-				if (body) visit(body, e.dir || dir || cwd || "/", depth + 1);
+				if (body) visit(stripFirstAssertLine(body, e.dir || dir || cwd || "/"), e.dir || dir || cwd || "/", depth + 1);
 			}
 		}
 	};
@@ -2101,5 +2198,5 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
+	withStateLock, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, assertScriptProblems, assertApprovedStep, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
 };

@@ -431,7 +431,7 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 	const scriptRel = "scripts/rollout.sh";
 	const scriptAbs = path.join(root, scriptRel);
 	fs.mkdirSync(path.dirname(scriptAbs), { recursive: true });
-	fs.writeFileSync(scriptAbs, "#!/usr/bin/env bash\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1\n");
+	fs.writeFileSync(scriptAbs, `#!/usr/bin/env bash\nnode ${path.join(root, ".agents/scripts/approval-plan.mjs")} assert ${path.join(root, ".agents/progress/sample-work/gates/deploy-plan.json")} s1 || exit 1\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1\n`);
 	const scriptSha = crypto.createHash("sha256").update(fs.readFileSync(scriptAbs)).digest("hex");
 
 	spawnSync("git", ["init", "-q"], { cwd: root });
@@ -530,7 +530,7 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 	// 중단(SIGTERM) 시에도 trap/핸들러가 잠금과 빈 폴더를 지워야 하며, 도는 동안에는 중복 리뷰와 외부 Edit 를 모두 막는다.
 	const slowMuse = path.join(base, "slow-muse.js");
 	fs.writeFileSync(slowMuse, "#!/usr/bin/env node\nsetInterval(() => {}, 10000);\n", { mode: 0o755 });
-	const child = spawn(process.execPath, [APPROVAL_SCRIPT, "review", planPath, "--author", "codex", "--out", path.join(gatesDir, "deploy-plan-review-sigterm.md")], {
+	const child = spawn(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planPath, "--author", "codex", "--out", path.join(gatesDir, "deploy-plan-review-sigterm.md")], {
 		cwd: root,
 		env: {
 			PATH: process.env.PATH,
@@ -558,7 +558,7 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 	assert.match(midReviewEdit.json.reason, /계획 리뷰 중\(\.agents\/progress\/sample-work\/gates\/deploy-plan\.json, .*\) — 끝난 뒤 다시/);
 
 	// 같은 저장소에서 두 번째 review 를 동시에 띄우면 잠금 충돌로 즉시 거절된다.
-	const secondReview = spawnSync(process.execPath, [APPROVAL_SCRIPT, "review", planPath, "--author", "codex", "--out", path.join(gatesDir, "deploy-plan-review-second.md")], {
+	const secondReview = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planPath, "--author", "codex", "--out", path.join(gatesDir, "deploy-plan-review-second.md")], {
 		cwd: root,
 		encoding: "utf8",
 		env: {
