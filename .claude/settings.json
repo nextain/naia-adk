@@ -114,6 +114,15 @@
         ]
       },
       {
+        "matcher": "Read|Grep|Glob|NotebookRead",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/protected-path-read-guard.js\""
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|NotebookEdit|MultiEdit",
         "hooks": [
           {

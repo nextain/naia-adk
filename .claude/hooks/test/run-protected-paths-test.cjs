@@ -53,12 +53,60 @@ for (const c of [
 	assert.strictEqual(cmd(c), null, `must allow: ${c}`);
 }
 
+// operands resolve against the effective working directory and protected root
+const inSecrets = (c) => policy.commandPath(c, { ...opts, cwd: "/ws/secrets" });
+assert.match(inSecrets("cat human-only.md")?.reason || "", /보호 경로 차단/, "relative operand from inside the protected directory");
+assert.match(inSecrets("cat ./human-only.md")?.reason || "", /보호 경로 차단/);
+assert.match(inSecrets("cat ../secrets/human-only.md")?.reason || "", /보호 경로 차단/);
+assert.strictEqual(inSecrets("cat other.md"), null);
+assert.match(cmd("cd secrets && cat human-only.md")?.reason || "", /보호 경로 차단/, "cd then relative operand");
+assert.match(cmd("cd ops; node approve.mjs")?.reason || "", /보호 경로 차단/);
+assert.match(cmd("(cd private-dir && cat x)")?.reason || "", /보호 경로 차단/);
+assert.strictEqual(cmd("cd secrets && cat other.md"), null);
+assert.strictEqual(cmd("cd secrets && cd .. && cat human-only.md"), null, "cd back out of the directory");
+// quoted operands with spaces and shell program text
+for (const c of ['cat "private-dir/a b.txt"', "cat 'private-dir/a b.txt'", 'bash -lc "cat private-dir/x"', "sh -c 'cd secrets && cat human-only.md'", 'eval "cat private-dir/x"', "cat private-dir/a\\ b.txt", 'tar -cf out.tar "private-dir/my files"']) {
+  assert.match(cmd(c)?.reason || "", /보호 경로 차단/, `must block: ${c}`);
+}
+for (const c of ['gh pr create --title "fix private-dir/x handling" --body "notes about secrets/human-only.md"', 'echo "see secrets/human-only.md for details"', 'git commit -m "touch ops/approve.mjs docs"', 'git commit --message="private-dir/a b"']) {
+  assert.strictEqual(cmd(c), null, `prose stays allowed: ${c}`);
+}
+
+// ── native read tools (Read / Grep / Glob) ──
+const rd = (tool_name, tool_input, cwd = "/ws") => policy.readPath({ tool_name, cwd, tool_input }, opts);
+for (const [tool, input] of [
+  ["Read", { file_path: "/ws/secrets/human-only.md" }],
+  ["Read", { file_path: "secrets/human-only.md" }],
+  ["Read", { file_path: "/ws/private-dir/a/b.txt" }],
+  ["NotebookRead", { notebook_path: "/ws/private-dir/n.ipynb" }],
+  ["Grep", { pattern: "x", path: "/ws/private-dir" }],
+  ["Grep", { pattern: "x", path: "/ws/secrets", glob: "human-only.md" }],
+  ["Grep", { pattern: "x", output_mode: "content" }], // rooted above protected entries, prints lines
+  ["Grep", { pattern: "x", path: "/ws/secrets", output_mode: "content" }],
+  ["Glob", { pattern: "private-dir/**" }],
+  ["Glob", { pattern: "*.md", path: "/ws/private-dir" }],
+  ["Glob", { pattern: "secrets/human-only.md" }],
+]) {
+  assert.match(rd(tool, input)?.block || "", /보호 경로 차단/, `must block: ${tool} ${JSON.stringify(input)}`);
+}
+for (const [tool, input] of [
+  ["Read", { file_path: "/ws/README.md" }],
+  ["Read", { file_path: "/ws/secrets/other.md" }],
+  ["Grep", { pattern: "x", path: "/ws/docs", output_mode: "content" }],
+  ["Grep", { pattern: "x" }], // names only: reveals no content
+  ["Glob", { pattern: "**/*.md" }],
+  ["Bash", { command: "cat secrets/human-only.md" }],
+]) {
+  assert.strictEqual(rd(tool, input), null, `must allow: ${tool} ${JSON.stringify(input)}`);
+}
+assert.strictEqual(policy.readPath({ tool_name: "Read", cwd: "/ws", tool_input: { file_path: "/ws/secrets/human-only.md" } }, { protectedPaths: [], root: "/ws", cwd: "/ws" }), null, "no list → reads open");
+
 // ── no list → nothing is blocked ──
 const empty = { protectedPaths: [], root: "/ws", cwd: "/ws" };
 assert.strictEqual(policy.editPath({ cwd: "/ws", tool_input: { file_path: "/ws/secrets/human-only.md" } }, empty), null);
 assert.strictEqual(policy.commandPath("cat secrets/human-only.md", empty), null);
 const bare = fs.mkdtempSync(path.join(os.tmpdir(), "protected-paths-"));
-assert.deepStrictEqual(policy.loadProtectedPaths(bare, {}).list.filter(() => false), []);
+assert.deepStrictEqual(policy.loadProtectedPaths(bare, {}).list, [], "no policy file → empty list");
 // shipped policy file is empty, so the repository itself blocks nothing by default
 assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(root, ".agents", "context", "protected-paths.json"), "utf8")).protected_paths, []);
 
@@ -89,10 +137,23 @@ const ran = run("protected-path-command-guard.js", { tool_name: "Bash", cwd: ws,
 assert.strictEqual(ran?.decision, "block");
 assert.strictEqual(run("protected-path-command-guard.js", { tool_name: "Bash", cwd: ws, tool_input: { command: "cat keys/ok.txt" } }, ws), null);
 
+const readHook = (payload) => run("protected-path-read-guard.js", payload, ws);
+assert.strictEqual(readHook({ tool_name: "Read", cwd: ws, tool_input: { file_path: path.join(ws, "keys", "human.txt") } })?.decision, "block");
+assert.strictEqual(readHook({ tool_name: "Read", cwd: ws, tool_input: { file_path: path.join(ws, "keys", "ok.txt") } }), null);
+assert.strictEqual(readHook({ tool_name: "Grep", cwd: ws, tool_input: { pattern: "x", path: path.join(ws, "keys"), output_mode: "content" } })?.decision, "block");
+assert.strictEqual(readHook({ tool_name: "Glob", cwd: ws, tool_input: { pattern: "keys/human.txt" } })?.decision, "block");
+{
+  const r = spawnSync(process.execPath, [path.join(root, ".claude", "hooks", "protected-path-read-guard.js")], { input: "not json", encoding: "utf8", cwd: ws });
+  assert.strictEqual(JSON.parse(r.stdout).decision, "block", "unparseable input fails closed");
+}
+
 // ── registered in the project settings ──
 const settings = JSON.parse(fs.readFileSync(path.join(root, ".claude", "settings.json"), "utf8"));
 const registered = (name) => settings.hooks.PreToolUse.some((g) => (g.hooks || []).some((h) => (h.command || "").includes(name)));
 assert.ok(registered("protected-path-guard.js"), "edit adapter registered");
 assert.ok(registered("protected-path-command-guard.js"), "command adapter registered");
+const readGroup = settings.hooks.PreToolUse.find((g) => (g.hooks || []).some((h) => (h.command || "").includes("protected-path-read-guard.js")));
+assert.ok(readGroup && ["Read", "Grep", "Glob"].every((t) => readGroup.matcher.split("|").includes(t)), "read adapter registered for Read|Grep|Glob");
+assert.ok(fs.readFileSync(path.join(root, ".muse", "hooks.json"), "utf8").includes("protected-path-read-guard.js"), "read adapter mirrored in .muse/hooks.json");
 
 console.log("protected-paths: ok");
