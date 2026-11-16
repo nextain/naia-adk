@@ -61,6 +61,22 @@ test("a changed byte or a change during the fetch invalidates approval", async (
 	}), null);
 });
 
+test("the optional instance deploy configuration is bound to the same approval hash", async (t) => {
+	const f = fixture(t);
+	const deploy = path.join(f.root, "config/deploy-gate.json");
+	fs.mkdirSync(path.dirname(deploy), { recursive: true });
+	fs.writeFileSync(deploy, '{"testHosts":["box.example.invalid"]}');
+	assert.notEqual(pin.snapshotGateConfig(f.root).hash, f.hash);
+	assert.equal(await confirm(f), null);
+	const newHash = pin.snapshotGateConfig(f.root).hash;
+	const code = pin.approvalCode(newHash);
+	f.refs = [{ code, channelId, messageId }];
+	f.message.content = code;
+	assert.equal((await confirm(f)).hash, newHash);
+	fs.appendFileSync(deploy, " ");
+	assert.equal(await confirm(f), null);
+});
+
 test("approval CLI shows committed resolved models and current order; compares only a verified prior snapshot", (t) => {
 	const { spawnSync } = require("child_process");
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "gate-approval-cli-"));
