@@ -27,7 +27,10 @@ const NON_PROD = /(?:^|[-_.\/])(dev|develop|development|staging|stage|stg|previe
 const PROD_ARG = /^(?:--?)?(prod|production|live)$/i;
 // 스크립트 이름·인자·--k=v·앞의 KEY=value 어디든 prod 가 단어로 있으면 운영이다(설계 검수 7회차 3번: deploy-prod.sh, ENV=prod ./deploy.sh).
 const PROD_WORD = /(?:^|[-_.\/=:])(prod|production|live)(?:[-_.\/:]|$)/i;
-const INTERPRETERS = new RegExp(`(?:^|/)(?:${SHELL_ALT}|node|python3?|pwsh|bun|deno|tsx|ts-node)$`);
+const INTERPRETERS = new RegExp(`(?:^|/)(?:${SHELL_ALT}|node|python3?(?:\\.\\d+)?|pwsh|bun|deno|tsx|ts-node)$`);
+const NODE_PRELOAD_OPTIONS = new Set(["-r", "--require", "--import", "--loader", "--experimental-loader"]);
+const NODE_VALUE_OPTIONS = new Set([...NODE_PRELOAD_OPTIONS, "-C", "--conditions", "--inspect-port", "--title", "--env-file", "--env-file-if-exists"]);
+const PYTHON_VALUE_OPTIONS = new Set(["-W", "-X", "--check-hash-based-pycs"]);
 const QUOTED_SHELLS = new RegExp(`^(?:["'\`])(?:[^"'\`]*\\/)?(?:${SHELL_ALT})["'\`]$`);
 const SHEBANG_SHELLS = new RegExp(`^#!.*\\b(?:${SHELL_ALT})\\b`);
 const REMOTE_SHELLS = new RegExp(`(?:^|[\\s/])(?:${SHELL_ALT})(?:\\s|$)`);
@@ -2025,6 +2028,34 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 			found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true, entry));
 			continue;
 		}
+		// 실행 파일이 어떤 계획에든 고정돼 있으면 본문의 대상 이름 판정보다 먼저 관문에 건다.
+		const execWord = executedTargetWord(tokens);
+		const stdinScripts = SHELLS.test(tokens[0] || "") && !require("./effective-argv.js").shellInvocation(tokens).noexec ? (entry.stdinSourceFiles || []) : [];
+		const preloads = [];
+		if (path.basename(tokens[0] || "") === "node") {
+			for (let i = 1; i < tokens.length; i++) {
+				const t = tokens[i];
+				if (NODE_PRELOAD_OPTIONS.has(t)) { if (tokens[i + 1]) preloads.push(tokens[++i]); continue; }
+				if (NODE_VALUE_OPTIONS.has(t)) { i++; continue; }
+				const m = /^(?:--require|--import|--loader|--experimental-loader)=(.+)$/.exec(t) || /^-r(.+)$/.exec(t);
+				if (m) { preloads.push(m[1]); continue; }
+				if (t === "--" || /^(?:-e|-p|--eval|--print)$/.test(t) || !t.startsWith("-")) break;
+			}
+		}
+		if (execWord || stdinScripts.length || preloads.length) {
+			const { resolvePathWord } = require("./effective-argv.js");
+			const targets = [execWord?.target, ...stdinScripts, ...preloads].filter(Boolean).map((word) => resolvePathWord(word, dir, command, dirKnown !== false)).filter(Boolean);
+			for (const target of new Set(targets)) {
+				const plans = require("./deploy-plan.js");
+				const pinned = plans.plansPinningFile(target, gateRoot);
+				if (pinned.length) {
+					const exact = plans.plansForCommand(command, gateRoot).filter((p) => pinned.some((q) => q.file === p.file));
+					const services = exact.length === 1 && Array.isArray(exact[0].plan.services) && exact[0].plan.services.length
+						? exact[0].plan.services : [`script:${require("./deploy-readiness.js").canonicalTargetPath(target, dir)}`];
+					for (const service of services) found.push({ service, label: "계획에 고정된 대본 실행", clause: clauseText(tokens, assigns) });
+				}
+			}
+		}
 		const extHits = classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, false, entry);
 		if (extHits.length) {
 			for (const h of extHits) found.push(h);
@@ -2114,11 +2145,15 @@ function executedTargetWord(tokens) {
 		return idx >= 0 && tokens[idx] ? { target: tokens[idx], kind: "shell" } : null;
 	}
 	if (INTERPRETERS.test(head)) {
+		const python = /^python3?(?:\.\d+)?$/.test(headBase);
+		const node = headBase === "node";
+		const takesValue = python ? PYTHON_VALUE_OPTIONS : node ? NODE_VALUE_OPTIONS : new Set();
 		for (let i = 1; i < tokens.length; i++) {
 			const t = tokens[i];
 			if (/^(?:-e|-c|-p|--eval|--print|-m)$/.test(t)) return null;
 			if (/^(?:-v|-V|--version|-h|--help)$/.test(t)) return null;
 			if (t === "--") return tokens[i + 1] ? { target: tokens[i + 1], kind: "interpreter" } : null;
+			if (takesValue.has(t)) { i++; continue; }
 			if (t.startsWith("-")) continue;
 			return { target: t, kind: "interpreter" };
 		}

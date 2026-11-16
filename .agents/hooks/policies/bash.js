@@ -781,6 +781,7 @@ async function deploy(command, data, opts) {
 		const res = await deployPlan.evaluate({
 			command,
 			cwd,
+			pinnedScript: mr.hits.some((h) => h.label === "계획에 고정된 대본 실행"),
 			services: prodServices,
 			sessionId,
 			transcriptPath: data && data.transcript_path,

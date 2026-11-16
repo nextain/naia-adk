@@ -346,28 +346,59 @@ function planSha(file) {
 	return sha256(fs.readFileSync(file));
 }
 
-/** 24시간 안에 만든 계획서들. */
-function recentPlans(root, now = Date.now()) {
-	const base = path.join(root, ".agents", "progress");
-	let dirs = [];
-	try {
-		dirs = fs.readdirSync(base, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith("_"));
-	} catch {
-		return [];
+/** 기본 진행 폴더와 인스턴스가 지정한 계획 폴더. 상대 경로는 관문 루트 기준이다. */
+function planRoots(root) {
+	const base = path.resolve(root || ROOT);
+	const cfg = require("./deploy-readiness.js").loadDeployGateConfig(base);
+	const extra = cfg?.plan_roots;
+	if (extra !== undefined && (!Array.isArray(extra) || extra.some((p) => typeof p !== "string" || !p.trim() || p.includes("\0")))) {
+		throw new Error("config/deploy-gate.json plan_roots 는 비어 있지 않은 경로 문자열의 배열이어야 함");
 	}
+	const { canonicalTargetPath } = require("./deploy-readiness.js");
+	const roots = [path.join(base, ".agents", "progress"), ...(extra || []).map((p) => path.resolve(base, p))];
+	const seen = new Set();
+	return roots.filter((p) => { const key = canonicalTargetPath(p, base); if (seen.has(key)) return false; seen.add(key); return true; });
+}
+
+/** 나이가 지난 계획도 핀 식별에는 사용한다. 승인에는 recentPlans 만 사용한다. */
+function allPlans(root) {
 	const out = [];
-	for (const d of dirs) {
-		const file = path.join(base, d.name, "gates", PLAN_FILE);
-		if (!fs.existsSync(file)) continue;
-		const plan = readJson(file);
-		if (!plan) continue;
-		const at = Date.parse(plan.createdAt || "");
-		if (!Number.isFinite(at) || now - at > PLAN_MAX_AGE_MS || at - now > 5 * 60 * 1000) continue;
-		const steps = Array.isArray(plan.scenario) ? plan.scenario : [];
-		const actions = plan.incident && Array.isArray(plan.incident.actions) ? plan.incident.actions : [];
-		out.push({ file, plan, steps, actions });
+	const defaultBase = path.join(path.resolve(root || ROOT), ".agents", "progress");
+	for (const base of planRoots(root)) {
+		let dirs;
+		try { dirs = fs.readdirSync(base, { withFileTypes: true }).filter((d) => (d.isDirectory() || d.isSymbolicLink()) && (base !== defaultBase || !d.name.startsWith("_"))); }
+		catch (e) {
+			if (base === defaultBase && e.code === "ENOENT") continue;
+			throw new Error(`계획 폴더를 읽지 못함 (${base}): ${e.message}`);
+		}
+		for (const d of dirs) {
+			const file = path.join(base, d.name, "gates", PLAN_FILE);
+			if (!fs.existsSync(file)) continue;
+			const plan = readJson(file);
+			if (!plan) continue;
+			const steps = Array.isArray(plan.scenario) ? plan.scenario : [];
+			const actions = plan.incident && Array.isArray(plan.incident.actions) ? plan.incident.actions : [];
+			out.push({ file, plan, steps, actions });
+		}
 	}
 	return out;
+}
+
+/** 24시간 안에 만든 계획서들. */
+function recentPlans(root, now = Date.now()) {
+	return allPlans(root).filter(({ plan }) => {
+		const at = Date.parse(plan.createdAt || "");
+		return Number.isFinite(at) && now - at <= PLAN_MAX_AGE_MS && at - now <= 5 * 60 * 1000;
+	});
+}
+
+/** 실행 경로가 계획의 file_pins 또는 단계/선조치 files 에 있으면 해당 계획을 돌려준다. */
+function plansPinningFile(file, root) {
+	const { canonicalTargetPath } = require("./deploy-readiness.js");
+	const base = path.resolve(root || ROOT);
+	const target = canonicalTargetPath(file, base);
+	return allPlans(base).filter(({ plan, steps, actions }) => [plan.file_pins, ...steps.map((s) => s?.files), ...actions.map((a) => a?.files)].some((pins) =>
+		pins && typeof pins === "object" && !Array.isArray(pins) && Object.keys(pins).some((p) => canonicalTargetPath(p, base) === target)));
 }
 
 /** 명령의 sha 가 든 계획서들. 24시간 안의 것만. */
@@ -1430,6 +1461,7 @@ async function evaluate(ctx) {
 		}
 		return { allow: false, audit: { event: "blocked-out-of-plan", command_sha256: h }, reason: [
 			"[Harness] 계획 밖 운영 명령이라 막습니다.",
+			...(ctx.pinnedScript ? ["계획에 고정된 대본 실행이지만 이 명령에 맞는 유효한 계획을 찾지 못했습니다."] : []),
 			`명령 sha256(공백 정규화): ${h}`,
 			"이 명령이 바꾸는 운영 서비스:",
 			...(ctx.services || []).map((sv) => `  "${sv}"`),
@@ -2101,5 +2133,5 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
+	withStateLock, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, planRoots, plansPinningFile, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
 };
