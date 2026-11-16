@@ -222,8 +222,8 @@ function validateReviewModelEntry(id, v) {
 function canonicalReviewModels(models) {
 	return Object.keys(models).sort().map((id) => ({ id, model: models[id].model, effort: models[id].effort, runner: models[id].runner || DEFAULT_RUNNERS[id] }));
 }
-function reviewModelsFor(root = ROOT) {
-	const cfg = trustedGateConfig(root)?.review_models;
+function resolveReviewModels(config) {
+	const cfg = config?.review_models;
 	if (cfg === undefined) return REVIEW_MODELS;
 	if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) throw new Error("review_models 형식이 틀림(객체여야 함)");
 	const out = {};
@@ -236,11 +236,15 @@ function reviewModelsFor(root = ROOT) {
 	if (new Set(Object.values(out).map((m) => m.model)).size !== Object.keys(out).length) throw new Error("review_models 의 모델 이름이 서로 겹침");
 	return Object.freeze(out);
 }
+function reviewModelsFor(root = ROOT) { return resolveReviewModels(trustedGateConfig(root)); }
 const AUTHOR_IDS = ["sol", "muse", "argon"];
 // 리뷰 차례(번갈아): ROTATION 순서대로 작성자 다음 모델이 먼저 리뷰하고, 한도에 걸리면 나머지 하나로 넘어간다. 작성자 자신은 절대 리뷰하지 않는다.
-const ROTATION = Object.freeze(["argon", "codex", "muse"]);
-// 새 모양 작성자(차례 셋)와 옛 모양 작성자(sol 포함)를 함께 받는다. 옛 sol·argon 2인 기록은 그대로 읽는다.
-const AUTHOR_MODELS = Object.freeze(["sol", "muse", "argon", "codex"]);
+const ROTATION = Object.freeze(["argon", "codex", "muse", "claude"]);
+// 차례 작성자와 옛 모양 작성자(sol 포함)를 함께 받는다. 옛 sol·argon 2인 기록은 그대로 읽는다.
+const AUTHOR_MODELS = Object.freeze(["sol", "muse", "argon", "codex", "claude"]);
+function selfReview(author, id, models) {
+	return id === author || (author === "claude" && models[id]?.runner === "claude") || (models[id]?.model && (models[id].model === models[author]?.model || models[id].model === REVIEW_MODELS[author]?.model));
+}
 // 한도 실패 판별식: 종료 코드가 0이 아니고 실행기 진단(stderr·실행 오류)이 이 식과 맞을 때만 다음 후보로 넘어간다. 리뷰 본문(stdout)은 계획서 낱말을 되풀이할 수 있어 보지 않는다.
 const LIMIT_RE = /rate.?limit|quota|usage limit|\b429\b|RESOURCE_EXHAUSTED|\bexhausted\b/i;
 function reviewerIdsFor(author, root = ROOT, at = Date.now()) {
@@ -258,38 +262,44 @@ function reviewerIdsFor(author, root = ROOT, at = Date.now()) {
 }
 
 // 차례상 후보 순서(작성자 제외): 작성자 다음 모델이 먼저, 그 다음이 나머지 하나다. 옛 reviewerIdsFor 는 손대지 않고 새 review 흐름만 이 순서를 쓴다.
-function rotationOrder(author, root = ROOT) {
-	const models = reviewModelsFor(root);
-	const i = ROTATION.indexOf(author);
-	if (i < 0) return [];
-	const preferred = [ROTATION[(i + 1) % ROTATION.length], ROTATION[(i + 2) % ROTATION.length]];
-	const extras = Object.keys(models).filter((id) => !ROTATION.includes(id) && id !== "sol" && id !== author).sort();
-	return [...preferred.filter((id) => Object.hasOwn(models, id)), ...extras].slice(0, 2);
+function rotationOrderForModels(author, models) {
+	const reviewRotation = ROTATION.slice(0, 3);
+	if (!ROTATION.includes(author)) return [];
+	const i = reviewRotation.indexOf(author);
+	const preferred = i < 0 ? reviewRotation : [reviewRotation[(i + 1) % 3], reviewRotation[(i + 2) % 3]];
+	const extras = Object.keys(models).filter((id) => !reviewRotation.includes(id) && id !== "sol" && id !== author).sort();
+	return [...preferred.filter((id) => Object.hasOwn(models, id) && !selfReview(author, id, models)), ...extras.filter((id) => !selfReview(author, id, models))].slice(0, 2);
 }
 
+function rotationOrder(author, root = ROOT) { return rotationOrderForModels(author, reviewModelsFor(root)); }
+
 // 차례 후보 둘(먼저 쓸 리뷰어, 한도 실패 때 넘어갈 리뷰어). 고정 planReview 가 기한 안이고 작성자와 다르면 맨 앞에 두고, 지났거나 until 이 없거나 작성자 자신이면 차례만 쓴다. 설정 JSON 깨짐·형식 틀림(차례 밖 리뷰어, 읽을 수 없는 until)은 던진다.
-function orderedReviewers(author, root = ROOT, at = Date.now()) {
-	if (!ROTATION.includes(author)) return reviewerIdsFor(author, root, at);
-	const base = rotationOrder(author, root);
+function orderedReviewersForConfig(author, configData, at = Date.now()) {
+	const models = resolveReviewModels(configData);
+	const base = rotationOrderForModels(author, models);
 	if (!base.length) throw new Error("작성자 외 승인된 리뷰어 없음");
 	const started = typeof at === "number" ? at : Date.parse(at);
 	if (!Number.isFinite(started)) throw new Error("리뷰 시각을 읽지 못함");
-	const config = trustedGateConfig(root)?.planReview;
+	const config = configData?.planReview;
 	if (config === undefined) return base;
 	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("planReview 형식이 틀림(객체여야 함)");
-	if (!Object.hasOwn(reviewModelsFor(root), config.reviewer) || config.reviewer === "sol") throw new Error("planReview.reviewer 는 승인된 리뷰어여야 함");
+	if (!Object.hasOwn(models, config.reviewer) || config.reviewer === "sol") throw new Error("planReview.reviewer 는 승인된 리뷰어여야 함");
 	const until = config.until;
 	if (until === undefined) return base;
 	const date = typeof until === "string" ? /^(\d{4})-(\d{2})-(\d{2})T/.exec(until) : null;
 	const validDate = date && Number(date[2]) >= 1 && Number(date[2]) <= 12 && Number(date[3]) >= 1 && Number(date[3]) <= new Date(Date.UTC(Number(date[1]), Number(date[2]), 0)).getUTCDate();
 	if (!validDate || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(until) || !Number.isFinite(Date.parse(until))) throw new Error("planReview.until 형식이 틀림(ISO 시각)");
-	if (started >= Date.parse(until) || config.reviewer === author) return base;
+	if (started >= Date.parse(until) || selfReview(author, config.reviewer, models)) return base;
 	if (config.reviewer === base[0]) return base;
 	return [config.reviewer, ...base.filter((id) => id !== config.reviewer)];
 }
 
-// 한도 실패인가: 종료 코드가 0이 아니고 실행기 진단(stderr·실행 오류문)이 LIMIT_RE 와 맞을 때만 참이다.
-// 신호로 끝난 실행(종료 코드 null)은 한도로 보지 않는다. 관문의 skipped exit_code 검사(0 아닌 정수)와 같은 기준이다.
+function orderedReviewers(author, root = ROOT, at = Date.now()) {
+	if (!ROTATION.includes(author)) return reviewerIdsFor(author, root, at);
+	return orderedReviewersForConfig(author, trustedGateConfig(root), at);
+}
+
+// 한도 실패는 0이 아닌 정수 종료 코드와 실행기 진단으로만 판별한다.
 function isLimitFailure(exitCode, text) {
 	return Number.isInteger(exitCode) && exitCode !== 0 && LIMIT_RE.test(String(text || ""));
 }
@@ -328,7 +338,7 @@ function formProblems(plan) {
 	const p = [];
 	if (!plan || typeof plan !== "object") return ["계획서를 JSON 으로 읽지 못함"];
 	if (plan.schema !== "deploy-plan/v1") p.push('schema 가 "deploy-plan/v1" 이 아님');
-	if (!AUTHOR_MODELS.includes(plan.author_model)) p.push("author_model(sol|muse|argon|codex) 필수");
+	if (!AUTHOR_MODELS.includes(plan.author_model)) p.push("author_model(sol|muse|argon|codex|claude) 필수");
 	p.push(...riskAcceptanceProblems(plan));
 	if (plan.approval_mode !== undefined && plan.approval_mode !== "preapprove_steps") p.push('approval_mode 는 "preapprove_steps" 만 쓸 수 있음');
 	if (!str(plan.planId, 3)) p.push("planId(계획 이름) 없음");
@@ -1038,7 +1048,7 @@ function reviewProblems(gatesDir, sha, root) {
 		}
 		return { ok: problems.length === 0, problems, reviewers, summary: reviewers.flatMap((r) => r.summary.map((s) => ({ ...s, reviewer: r.id }))) };
 	};
-	if (!plan || !AUTHOR_MODELS.includes(plan.author_model)) problems.push("계획서 author_model(sol|muse|argon|codex) 필수");
+	if (!plan || !AUTHOR_MODELS.includes(plan.author_model)) problems.push("계획서 author_model(sol|muse|argon|codex|claude) 필수");
 	if (plan) problems.push(...riskAcceptanceProblems(plan));
 	if (plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && !riskAcceptanceActive(plan)) problems.push("risk_acceptance 끝남(expires_at 지남)");
 	const acceptSecurity = riskAcceptanceActive(plan);
@@ -1064,7 +1074,7 @@ function reviewProblems(gatesDir, sha, root) {
 		if (!times.every((t) => Number.isFinite(t) && t < cutoff)) problems.push(`옛 모양 리뷰 기록(rotation 칸 없음)은 ${LEGACY_REVIEW_CUTOFF} 앞선 것만 받음(reviewedAt·영수증 시작 시각). 차례 리뷰로 다시 받을 것`);
 	}
 	if (isRotationRecord(rec)) {
-		if (!ROTATION.includes(rec.author_model)) problems.push("차례 기록(rotation:true)의 작성자는 argon·codex·muse 중 하나여야 함");
+		if (!ROTATION.includes(rec.author_model)) problems.push("차례 기록(rotation:true)의 작성자는 argon·codex·muse·claude 중 하나여야 함");
 		if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 1) problems.push("차례 기록(rotation:true)은 리뷰어 1명의 기록이 필요함");
 		// 차례 대조: 리뷰 시각의 차례(고정 설정 포함)에서 skipped 는 앞에서부터 건너뛴 후보 그대로, 실제 리뷰어는 그 다음 후보여야 한다. 한도 실패 없이 뒤 후보를 쓰거나 모순된 skipped 는 막는다.
 		// 차례를 다시 만들 시각(reviewedAt)은 실제 리뷰 시작보다 늦을 수 없고, 90분보다 앞설 수 없다(첫 후보 45분 제한 + 준비 여유). 시각을 미래로 옮겨 고정 리뷰어를 피하는 길을 막는다.
@@ -1121,7 +1131,7 @@ function reviewProblems(gatesDir, sha, root) {
 		else if (isRotationRecord(rec) && id === "sol") own.push("허용되지 않은 모델");
 		else if (!isRotationRecord(rec) && rec.author_model === "muse" && !["argon", "codex"].includes(id)) own.push("허용되지 않은 모델");
 		else if (r.effort !== MODELS[id].effort) own.push("리뷰어 추론 강도가 다름");
-		if (id === rec.author_model || id === plan?.author_model || r?.model === MODELS[plan?.author_model]?.model || r?.model === REVIEW_MODELS[plan?.author_model]?.model) own.push("작성자와 같은 모델이 리뷰함");
+		if (selfReview(plan?.author_model, id, MODELS) || id === rec.author_model) own.push("작성자와 같은 모델이 리뷰함");
 		if (entries.filter((x) => x?.model === r?.model).length !== 1) own.push("리뷰어 모델 기록 중복");
 		if (r?.target_sha256 !== sha) own.push("리뷰어 target_sha256 이 지금 계획서와 다름");
 		if (r?.execution_error) own.push("리뷰어 실행 실패: " + r.execution_error);
@@ -2182,5 +2192,5 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 }
 
 module.exports = {
-	withStateLock, withGateConfig, reviewModelsFor, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
+	withStateLock, withGateConfig, reviewModelsFor, resolveReviewModels, orderedReviewersForConfig, selfReview, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
 };

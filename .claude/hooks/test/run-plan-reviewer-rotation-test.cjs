@@ -430,3 +430,44 @@ test("리뷰 본문의 한도 낱말로는 넘어가지 않는다", (t) => {
 	assert.notEqual(run.status, 0, `${run.stdout}\n${run.stderr}`);
 	assert.equal(fs.existsSync(marker), false, "본문 낱말로 다음 리뷰어를 실행하면 안 됨");
 });
+
+test("Claude author cannot be reviewed by any Claude runner, including a different reviewer id", async (t) => {
+ const {root} = makeWorkspace(t);
+ const cfg = path.join(root, ".claude/deploy/config.json");
+ fs.mkdirSync(path.dirname(cfg), {recursive: true});
+ fs.writeFileSync(cfg, JSON.stringify({review_models: {
+  argon: {model: "gemini-4-argon-medium", effort: "medium", runner: "agy"},
+  fable: {model: "any-model-name", effort: "high", runner: "claude"},
+ }, planReview: {reviewer: "fable", until: "2099-01-01T00:00:00Z"}}));
+ const {planFile, gatesDir, plan} = createValidPlan(root, {author_model: "claude"});
+ assert.ok(!deployPlan.formProblems(plan).some((p) => p.includes("author_model")));
+ await withMockApproval(root, () => {
+  assert.deepEqual(deployPlan.orderedReviewers("claude", root), ["argon"]);
+  const {planSha} = writeRotationReceipt(root, planFile, "argon");
+  assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, true, "independent runner accepts a Claude-authored plan");
+  const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+  const record = JSON.parse(fs.readFileSync(file));
+  record.reviewers[0].model = "any-model-name";
+  fs.writeFileSync(file, JSON.stringify(record));
+  const result = deployPlan.reviewProblems(gatesDir, planSha, root);
+  assert.ok(result.reviewers[0].problems.some((p) => p.includes("작성자와 같은 모델이 리뷰함")));
+  assert.equal(result.ok, false);
+  assert.equal(deployPlan.selfReview("muse", "fable", deployPlan.reviewModelsFor(root)), false);
+ });
+});
+
+test("Claude author can request an independent review through the CLI", (t) => {
+ const {root, tmp, stateDir} = makeWorkspace(t);
+ const {planFile, gatesDir} = createValidPlan(root, {author_model: "claude"});
+ assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
+ const body = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "참고 지적: 0", "남은 지적: 0"].join("\n");
+ const {binDir, fakeHome} = writeFakeBins(tmp, {argonBody: body, argonStatus: 0});
+ const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "claude"], {
+  cwd: root, encoding: "utf8", timeout: 30000,
+  env: {...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_ARGON_BIN: path.join(binDir, "fake-agy"), DEPLOY_APPROVAL_STATE_DIR: stateDir},
+ });
+ assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+ const record = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE), "utf8"));
+ assert.equal(record.author_model, "claude");
+ assert.equal(record.reviewers[0].id, "argon");
+});

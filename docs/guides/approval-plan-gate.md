@@ -72,9 +72,9 @@ node .agents/scripts/approval-plan.mjs check .agents/progress/<작업ID>/gates/d
 
 ## 2. 적대 리뷰 받기 (`review`)
 
-계획서 양식과 고정 파일 SHA-256이 모두 맞으면 차례상 다음 모델(`argon`→`codex`→`muse`→`argon`) 한 명에게 열 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`, `architecture_fit` — 단 기준 시각 이전 옛 계획서는 기존 9기준 호환) 적대 리뷰를 받습니다. 작성자는 셋 중 누구나 될 수 있고, 첫 후보가 한도에 걸리면 남은 하나로 넘어가며 넘긴 기록은 `skipped`로 남깁니다.
+계획서 양식과 고정 파일 SHA-256이 모두 맞으면 차례상 다음 모델(`argon`→`codex`→`muse`→`argon`) 한 명에게 열 가지 기준(`correctness`, `disconnect`, `rerun`, `rollback`, `irreversible`, `security`, `impact`, `honesty`, `incident_safety`, `architecture_fit` — 단 기준 시각 이전 옛 계획서는 기존 9기준 호환) 적대 리뷰를 받습니다. 작성자는 `argon`, `codex`, `muse`, `claude` 중 하나이며, 첫 후보가 한도에 걸리면 남은 하나로 넘어가며 넘긴 기록은 `skipped`로 남깁니다.
 
-Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그대로 돌리고, Codex·Argon 리뷰어 실행에는 복구 모드 여부와 관계없이 `bwrap` 읽기 전용 격리가 필요합니다. 고정 `planReview`가 없으면 차례상 다음 모델이 먼저 리뷰합니다. 승인자 결정으로 승인된 인스턴스 설정 `.claude/deploy/config.json`에 다음 `planReview`를 추가하면 지정한 시각 전까지 그 리뷰어를 먼저 쓰고, 한도 실패일 때만 남은 하나로 넘어갑니다. 한도 실패는 종료 코드가 0이 아닌 정수이고 실행기 stderr·실행 오류에 한도 문구(rate limit, quota, usage limit, 429, RESOURCE_EXHAUSTED, exhausted)가 있을 때입니다. 리뷰 본문은 판별에 쓰지 않습니다. 신호로 끝난 실행(종료 코드 없음)은 한도로 보지 않습니다. 기존 설정의 다른 항목은 유지합니다.
+Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그대로 돌리고, Codex·Argon·Claude 리뷰어 실행에는 복구 모드 여부와 관계없이 `bwrap` 읽기 전용 격리가 필요합니다. 고정 `planReview`가 없으면 차례상 다음 모델이 먼저 리뷰합니다. 승인자 결정으로 승인된 인스턴스 설정 `.claude/deploy/config.json`에 다음 `planReview`를 추가하면 지정한 시각 전까지 그 리뷰어를 먼저 쓰고, 한도 실패일 때만 남은 하나로 넘어갑니다. 한도 실패는 종료 코드가 0이 아닌 정수이고 실행기 stderr·실행 오류에 한도 문구(rate limit, quota, usage limit, 429, RESOURCE_EXHAUSTED, exhausted)가 있을 때입니다. 리뷰 본문은 판별에 쓰지 않습니다. 신호로 끝난 실행(종료 코드 없음)은 한도로 보지 않습니다. 기존 설정의 다른 항목은 유지합니다.
 
 ```json
 "planReview": {
@@ -86,11 +86,13 @@ Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그
 
 `until`이 없거나 지났을 때, 또는 `reviewer`가 작성자와 같을 때는 차례만 씁니다. 승인되지 않았거나 읽을 수 없는 설정은 기본 차례를 씁니다. 승인된 설정의 형식 오류(`reviewer`가 승인된 목록 밖, `until`이 ISO 시각이 아님)는 거부합니다. 관문은 차례 기록(`rotation: true`)의 리뷰어 영수증 1명을 받습니다. 기록 시각(`reviewedAt`)의 차례를 다시 만들어, `skipped`가 앞에서부터 건너뛴 후보 그대로이고(각각 0이 아닌 `exit_code`) 실제 리뷰어가 그 다음 후보인지 대조합니다. `reviewedAt`은 UTC ISO 시각이어야 하고, 리뷰어 영수증 시작 시각(`started_at`) 이전 90분 안이어야 합니다. 시각을 옮겨 다른 차례를 만드는 기록은 막습니다. 작성자와 같은 모델, 차례 밖 모델, 한도 기록 없는 뒤 후보, 2인 기록은 막습니다. 옛 모양 기록(`rotation` 칸 없음)은 `reviewedAt`과 리뷰어 영수증 시작 시각이 모두 차례 도입 시각(`2026-11-10T10:00:00Z`)보다 앞설 때만 받습니다. 새 기록에서 `rotation` 칸을 지워 차례 대조를 건너뛰는 길을 막습니다. 리뷰 뒤 `planReview`를 바꾸면 차례가 달라져 다시 리뷰해야 할 수 있습니다. 작성자와 리뷰어는 같을 수 없습니다.
 
-리뷰어별 기본 모델·최소 강도는 코드에 고정합니다(`argon`: `gemini-4-argon-medium`/`medium`, `codex`: `gpt-6.1-terra`/`high`, `muse`: `muse-spark-1.3`/`xhigh`, 옛 기록용 `sol`: `gpt-6.1-sol`/`high`). 인스턴스의 `.claude/deploy/config.json`에 `review_models`를 쓰면 승인된 설정에 한해 리뷰어 ID별 정확한 모델 이름(`model`), 최소 강도(`effort`), 실행기(`runner`: `agy`, `muse`, `codex`, `claude`)를 적용합니다. 승인된 `review_models`는 사용할 리뷰어의 전체 목록이며 기본 리뷰어를 함께 쓰려면 목록에 명시해야 합니다. Claude 실행기는 `claude -p --model <정확한 이름>`으로 호출합니다. 모델 이름의 계통이나 단어로 승인 여부를 판단하지 않습니다. 승인 확인이 안 된 설정은 코드 기본값을 씁니다. 영수증의 `receipt.effort`도 필수이며 설정에 맞아야 합니다.
+리뷰어별 기본 모델·최소 강도는 코드에 고정합니다(`argon`: `gemini-4-argon-medium`/`medium`, `codex`: `gpt-6.1-terra`/`high`, `muse`: `muse-spark-1.3`/`xhigh`, 옛 기록용 `sol`: `gpt-6.1-sol`/`high`). 인스턴스의 `.claude/deploy/config.json`에 `review_models`를 쓰면 승인된 설정에 한해 리뷰어 ID별 정확한 모델 이름(`model`), 최소 강도(`effort`), 실행기(`runner`: `agy`, `muse`, `codex`, `claude`)를 적용합니다. 승인된 `review_models`는 사용할 리뷰어의 전체 목록이며 기본 리뷰어를 함께 쓰려면 목록에 명시해야 합니다. Claude 실행기는 `claude -p --model <정확한 이름> --effort <강도>`으로 호출합니다. 모델 이름의 계통이나 단어로 승인 여부를 판단하지 않습니다. 승인 확인이 안 된 설정은 코드 기본값을 씁니다. 영수증의 `receipt.effort`도 필수이며 설정에 맞아야 합니다.
+
+기본 회전은 작성자를 제외한 우선순위의 앞 두 후보만 사용하며, 다른 리뷰어는 유효한 `planReview.reviewer`로 먼저 지정할 수 있습니다. Claude 작성자의 리뷰에는 `claude` 실행기 리뷰어를 쓰지 않습니다.
 
 관문 설정을 바꾼 뒤에는 다음 순서로 승인받습니다.
 
-1. 설정을 바꾸고 `node .claude/hooks/gate-config-approval.js`를 실행해 설정 해시, 승인 코드, 이전 커밋 대비 변경 줄을 확인합니다.
+1. 설정을 바꾸고 `node .claude/hooks/gate-config-approval.js`를 실행해 설정 해시, 승인 코드, 풀린 리뷰어 전체 목록과 작성자별 실제 리뷰어 차례를 확인합니다. 승인된 이전 설정의 별도 디렉터리와 `--approved-root`, `--approver-id`, `--channel-id`, `--message-id` 및 환경 변수 `DISCORD_BOT_TOKEN`을 제공하면 디스코드 승인을 확인한 뒤 리뷰어 차이도 표시합니다.
 2. 승인자가 이 변경을 살펴보고 본인 디스코드 글에 승인 코드를 남깁니다. 봇·웹훅 글은 인정하지 않습니다. 인스턴스 관문 코드는 설정 밖에 고정된 승인자 번호와 해당 글 참조를 승인 확인에 전달해야 합니다. 공통 저장소에는 승인자 번호가 없으므로 기본 CLI에서는 승인된 설정도 적용되지 않습니다. 인스턴스에서 승인 확인을 관문 실행에 연결한 뒤 사용합니다.
 3. 관문은 코드에 고정된 설정 파일의 현재 내용으로 해시와 `CFG-` 승인 코드를 다시 계산해 본인 글과 대조합니다. 파일이 한 글자라도 바뀌면 새 승인 코드가 필요합니다. 로컬 발급 기록이나 발급 시각은 확인하지 않습니다. 확인할 수 없거나 승인이 없으면 기본값을 사용합니다.
 

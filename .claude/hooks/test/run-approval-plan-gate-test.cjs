@@ -1463,7 +1463,7 @@ test("approved Fable review invokes the Claude runner and accepts its receipt", 
  const result = spawnSync(process.execPath, [runner], {cwd: root, encoding: "utf8", timeout: 30000,
   env: {...process.env, HOME: fakeHome, XDG_STATE_HOME: path.join(tmp, "xdg-state"), PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CLAUDE_BIN: fakeClaude, DEPLOY_APPROVAL_STATE_DIR: stateDir}});
  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
- assert.deepEqual(fs.readFileSync(argvFile, "utf8").trim().split("\n"), ["-p", "--model", "claude-fable-5-2"]);
+ assert.deepEqual(fs.readFileSync(argvFile, "utf8").trim().split("\n"), ["-p", "--model", "claude-fable-5-2", "--effort", "high"]);
  const receipt = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE)));
  assert.equal(receipt.reviewers[0].id, "fable");
  assert.equal(receipt.reviewers[0].receipt.effort, "high");

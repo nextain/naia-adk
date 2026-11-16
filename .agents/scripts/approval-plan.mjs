@@ -5,7 +5,7 @@
  *   template                         빈 양식(JSON) 출력
  *   check <plan>                     양식 칸·적대 리뷰 기록 점검, 명령별 sha 출력
  *   report <plan>                    승인자에게 올릴 보고문 출력(리뷰 통과 시)
- *   review <plan> --author <argon|codex|muse> [--out <file>] 차례(작성자 다음 모델) 1명 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json. 고정 planReview 가 유효하면 그 리뷰어를 먼저 쓰고, 한도 실패 때만 차례대로 넘어간다(넘긴 리뷰어는 skipped 로 남긴다)
+ *   review <plan> --author <argon|codex|muse|claude> [--out <file>] 차례(작성자 다음 모델) 1명 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json. 고정 planReview 가 유효하면 그 리뷰어를 먼저 쓰고, 한도 실패 때만 차례대로 넘어간다(넘긴 리뷰어는 skipped 로 남긴다)
  *   review-prompt <plan>             리뷰 요청문만 출력
  *   preapprove <plan> --session <id>      사전승인 코드 발급(승인 아님: PLAN+전단계 코드, approval_mode 사전 계획만)
  *   step-ok <plan> <step> --evidence <file>   단계 성공 확인 증거 기록(gates/deploy-steps/<step>.json)
@@ -467,7 +467,7 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 				input = prompt;
 			} else if (config.runner === "claude") {
 				bin = process.env.APPROVAL_PLAN_CLAUDE_BIN || "claude";
-				args = ["-p", "--model", config.model];
+				args = ["-p", "--model", config.model, "--effort", config.effort];
 				input = prompt;
 			} else {
 				bin = process.env.APPROVAL_PLAN_ARGON_BIN || "agy";
@@ -598,8 +598,8 @@ switch (cmd) {
 		}
 		if (bindProblems.length) die(bindProblems.join("\n"), 1);
 		const author = opt(args, "--author");
-		if (!lib.ROTATION.includes(author)) die("--author argon|codex|muse 가 필요합니다(차례 셋 중 계획서 author_model 과 같은 것)");
-		if (!Object.hasOwn(lib.REVIEW_MODELS, plan.author_model || "") || plan.author_model !== author) die("--author(argon|codex|muse) 와 계획서 author_model 이 다릅니다");
+		if (!lib.ROTATION.includes(author)) die("--author argon|codex|muse|claude 가 필요합니다(차례 작성자 중 계획서 author_model 과 같은 것)");
+		if (plan.author_model !== author) die("--author(argon|codex|muse|claude) 와 계획서 author_model 이 다릅니다");
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 먼저 채우십시오\n${form.join("\n")}`, 1);
 		const warnings = typeof lib.formWarnings === "function" ? lib.formWarnings(plan) : [];
@@ -615,7 +615,7 @@ switch (cmd) {
 		try { ids = lib.orderedReviewers(author, planRoot, reviewedAt); }
 		catch (error) { die(`리뷰 차례를 정하지 못함: ${error.message}`); }
 		const activeModels = lib.reviewModelsFor(planRoot);
-		if (ids.some((id) => id === author || activeModels[id]?.model === activeModels[author]?.model || activeModels[id]?.model === lib.REVIEW_MODELS[author]?.model)) die("작성자와 같은 모델은 리뷰할 수 없습니다", 1);
+		if (ids.some((id) => lib.selfReview(author, id, activeModels))) die("작성자와 같은 모델은 리뷰할 수 없습니다", 1);
 		try { lib.reviewModelsFor(planRoot); }
 		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`); }
 		const parsed = path.parse(base);
