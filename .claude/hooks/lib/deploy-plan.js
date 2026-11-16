@@ -2277,13 +2277,28 @@ function releasePlanReviewLock(handle) {
 	return true;
 }
 
-function isPlanReviewRecordPath(targetPath, repoRoot) {
-	if (!targetPath || !repoRoot) return false;
+// gates/review-rounds/ 폴더와 그 아래 모든 것(회차 파일·표식·임시 파일). 지우면 연속 FAIL 수가 초기화되므로
+// 리뷰 실행기 계보 밖에서는 잠금 유무와 상관없이 쓰기·지우기를 막는 대상이다.
+function isPlanReviewRoundsPath(targetPath, repoRoot) {
+	const rel = repoRelForRecord(targetPath, repoRoot);
+	if (!rel) return false;
+	return new RegExp(`^(?:\\.agents/progress/[^/]+/gates|gates)/${ROUNDS_DIR}(?:/.*)?$`).test(rel);
+}
+
+function repoRelForRecord(targetPath, repoRoot) {
+	if (!targetPath || !repoRoot) return "";
 	let realRepo;
-	try { realRepo = fs.realpathSync(repoRoot); } catch { return false; }
+	try { realRepo = fs.realpathSync(repoRoot); } catch { return ""; }
 	const realTarget = realPathLooseForLock(targetPath);
 	const rel = path.relative(realRepo, realTarget).replace(/\\/g, "/");
-	if (!rel || rel === "." || rel.startsWith("..") || path.isAbsolute(rel)) return false;
+	if (!rel || rel === "." || rel.startsWith("..") || path.isAbsolute(rel)) return "";
+	return rel;
+}
+
+function isPlanReviewRecordPath(targetPath, repoRoot) {
+	const rel = repoRelForRecord(targetPath, repoRoot);
+	if (!rel) return false;
+	if (isPlanReviewRoundsPath(targetPath, repoRoot)) return true;
 	const m = rel.match(/^(?:\.agents\/progress\/[^/]+\/gates|gates)\/([^/]+)$/);
 	if (!m) return false;
 	const base = m[1];
@@ -2298,5 +2313,5 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 
 module.exports = {
 	roundFiles, readRound, roundOutcome, writeRound, markRound, writeReviewRecord, recordBytes, confirmedRound, roundConfirmProblem, priorRound, failStreak, loadPriorRound, changedFields, humanDecisionRequest, ROUNDS_DIR, ROUND_FAIL_LIMIT,
-	withStateLock, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
+	withStateLock, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath, isPlanReviewRoundsPath,
 };

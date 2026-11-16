@@ -16,6 +16,7 @@
  * 안내 문서: docs/guides/plan-review-write-guard.md
  */
 const fs = require("fs");
+const path = require("path");
 
 function writeAll(buf) {
 	for (let o = 0; o < buf.length;) {
@@ -55,10 +56,10 @@ if (runWithWatchdog({
 }
 
 function main() {
-	let isFileMutationTool, isShellTool, inspectPlanReviewLock, isPidInLineage, isPlanReviewRecordPath, extractWriteTargets, repoRootOf;
+	let isFileMutationTool, isShellTool, inspectPlanReviewLock, isPidInLineage, isPlanReviewRecordPath, isPlanReviewRoundsPath, extractWriteTargets, repoRootOf;
 	try {
 		({ isFileMutationTool, isShellTool } = require("./tool-names.js"));
-		({ inspectPlanReviewLock, isPidInLineage, isPlanReviewRecordPath } = require("./lib/deploy-plan.js"));
+		({ inspectPlanReviewLock, isPidInLineage, isPlanReviewRecordPath, isPlanReviewRoundsPath } = require("./lib/deploy-plan.js"));
 		({ extractWriteTargets, repoRootOf } = require("./lib/plan-review-write-targets.js"));
 	} catch (error) {
 		block(`[Harness] 계획 리뷰 쓰기 관문 핵심 모듈을 불러오지 못해 막습니다 (fail-closed): ${error && (error.code || error.message)}`);
@@ -129,6 +130,20 @@ function main() {
 		for (const [repo, entries] of writeByRepo.entries()) {
 			checkedRepos.add(repo);
 			const status = inspectPlanReviewLock(repo, now);
+			// 리뷰 회차 폴더는 잠금이 없어도 보호한다: 회차를 지우거나 꾸며 연속 FAIL 상한을 되돌리지 못하게 한다.
+			// 통과하는 쪽은 살아 있는 잠금을 쥔 리뷰 실행기 계보뿐이다.
+			const touchesRounds = (e) => {
+				if (isPlanReviewRoundsPath(e.path, repo)) return true;
+				// rm -rf 처럼 폴더째 지우는 명령은 wholeRepo 로 잡힌다: 그 폴더가 회차 폴더이거나 바로 위(gates/)면 회차까지 지운다.
+				if (!e.wholeRepo) return false;
+				return [path.join(e.path, "review-rounds"), path.join(e.path, "gates", "review-rounds")].some((c) => isPlanReviewRoundsPath(c, repo) && fs.existsSync(c));
+			};
+			if (entries.some(touchesRounds)) {
+				const runnerLineage = status.state === "active" && isPidInLineage(process.pid, status.lock.pid, status.lock.pidStartTicks);
+				if (!runnerLineage) {
+					block("[Harness] 계획 리뷰 회차 기록(gates/review-rounds/)은 리뷰 실행기만 쓸 수 있습니다. 지우거나 고치면 연속 FAIL 상한이 우회되므로 막습니다.");
+				}
+			}
 			if (status.state === "none") continue;
 			if (status.state === "corrupt") {
 				block(`[Harness] 계획 리뷰 잠금 파일을 검증하지 못해 쓰기를 막습니다 (fail-closed): ${status.reason}`);
