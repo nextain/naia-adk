@@ -6,6 +6,7 @@
  *   check <plan>                     양식 칸·적대 리뷰 기록 점검, 명령별 sha 출력
  *   report <plan>                    승인자에게 올릴 보고문 출력(리뷰 통과 시)
  *   review <plan> --author <argon|codex|muse> [--out <file>] 차례(작성자 다음 모델) 1명 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json. 고정 planReview 가 유효하면 그 리뷰어를 먼저 쓰고, 한도 실패 때만 차례대로 넘어간다(넘긴 리뷰어는 skipped 로 남긴다)
+ *       리뷰마다 gates/review-rounds/round-<NNN>.json 을 쌓고, 직전 회차 판정·차단 지적을 요청문에 붙인다. 연속 3회 FAIL 이면 리뷰 대신 사람 판정 요청을 내고 코드 4로 끝낸다
  *   review-prompt <plan>             리뷰 요청문만 출력
  *   preapprove <plan> --session <id>      사전승인 코드 발급(승인 아님: PLAN+전단계 코드, approval_mode 사전 계획만)
  *   step-ok <plan> <step> --evidence <file>   단계 성공 확인 증거 기록(gates/deploy-steps/<step>.json)
@@ -511,8 +512,8 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 	}
 }
 
-function reviewStatus(gatesDir, sha, writeFindings = false, root = ROOT) {
-	const r = lib.reviewProblems(gatesDir, sha, root);
+function reviewStatus(gatesDir, sha, writeFindings = false, root = ROOT, record = undefined) {
+	const r = lib.reviewProblems(gatesDir, sha, root, { record });
 	for (const row of r.reviewers) {
 		const fail = row.summary.filter((s) => s.verdict !== "PASS").map((s) => s.id);
 		console.log(`리뷰어 ${row.id}: ${row.body ? (row.ok ? "PASS" : "FAIL") : "결과 없음"}; 불통과 기준 ${fail.join(", ") || (row.summary.length === lib.CRITERIA.length ? "없음" : "결과 없음")}; 남은 지적(차단) ${row.openFindings ?? "확인 불가"}; 참고 지적 ${row.advisoryFindings ?? 0}(차단 아님)`);
@@ -555,10 +556,10 @@ switch (cmd) {
 		break;
 	}
 	case "review-prompt": {
-		const { plan, sha, root: planRoot } = loadPlan(args[0]);
+		const { plan, sha, gatesDir, root: planRoot } = loadPlan(args[0]);
 		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
 		if (!roBind.ok) die(roBind.why, 1);
-		console.log(lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items }));
+		console.log(lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items, prior: lib.priorRound(gatesDir) }));
 		break;
 	}
 	case "review": {
@@ -593,7 +594,6 @@ switch (cmd) {
 		for (const w of warnings) console.error(w);
 		const pins = lib.pinnedFileProblems(plan, planRoot);
 		if (pins.length) die(pins.join("\n"), 1);
-		const prompt = lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items });
 		const stamp = new Date().toISOString().replace(/[:.]/g, "-") + "-" + crypto.randomUUID();
 		const base = path.resolve(opt(args, "--out") || path.join(gatesDir, `deploy-plan-review-${stamp}.md`));
 		// 차례는 기록 reviewedAt 과 같은 시각으로 고른다. 관문이 같은 시각으로 차례를 다시 만들어 대조한다.
@@ -618,7 +618,26 @@ switch (cmd) {
 		process.once("SIGTERM", onSigTerm);
 		process.once("SIGHUP", onSigHup);
 		try {
-			const rec = { plan_sha256: sha, plan: planRel, author_model: author, prompt_sha256: sha256(prompt), read_only_scripts: roBind.items, rotation: true, skipped: [], reviewers: [], reviewedAt };
+			// 회차: 회차 파일이 아직 없고 앞 리뷰 기록이 있으면 그것을 첫 회차로 옮겨 둔다(회차 도입 전 기록도 직전 회차로 쓴다).
+			// 계획 리뷰 잠금 안에서 읽고 쓴다(다른 리뷰가 같은 회차 번호를 잡지 못하게). 이 아래 die 는 exit 훅이 잠금을 푼다.
+			if (!lib.roundFiles(gatesDir).length) {
+				let old = null, oldSha = null;
+				try { const buf = fs.readFileSync(path.join(gatesDir, lib.REVIEW_FILE)); oldSha = sha256(buf); old = JSON.parse(buf.toString("utf8")); } catch { old = null; }
+				if (old && typeof old.plan_sha256 === "string" && Array.isArray(old.reviewers) && old.reviewers.some((r) => r && r.result)) {
+					// 옛 기록도 관문을 통과해야 PASS 다. 무효 영수증의 본문 PASS 는 판정 "없음"과 실패 이유로 남는다(roundOutcome).
+					let outcome = { verdict: "없음", criteria: [], blocking: [], reasons: ["옛 리뷰 기록을 관문으로 확인하지 못함"] };
+					try { outcome = lib.roundOutcome(lib.reviewProblems(gatesDir, old.plan_sha256, planRoot), plan); } catch {}
+					// 옮길 때 영수증은 그대로이므로 그 바이트 sha 로 확정 표지를 함께 쓴다.
+					const moved = lib.writeRound(gatesDir, { plan_sha256: old.plan_sha256, plan: old.plan_sha256 === sha ? plan : null, record: old, outcome, legacy: true });
+					lib.markRound(gatesDir, moved.rel, oldSha);
+				}
+			}
+			// 같은 계획서가 연속 상한만큼 FAIL 이면 리뷰를 돌리지 않고 사람 판정을 요청한다.
+			const streak = lib.failStreak(gatesDir);
+			if (streak.count >= lib.ROUND_FAIL_LIMIT) die(lib.humanDecisionRequest(planRel, streak), 4);
+			const prior = lib.priorRound(gatesDir);
+			const prompt = lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items, prior });
+			const rec = { plan_sha256: sha, plan: planRel, author_model: author, prompt_sha256: sha256(prompt), read_only_scripts: roBind.items, rotation: true, skipped: [], reviewers: [], reviewedAt, ...(prior ? { prior_round: { round: prior.data.round, file: prior.rel, sha256: prior.sha256 } } : {}) };
 			const recordFile = path.join(gatesDir, lib.REVIEW_FILE);
 			fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
 			const reviewStartedAt = Date.now();
@@ -649,8 +668,21 @@ switch (cmd) {
 				rec.reviewers.push({ id: r.id, model: r.model, effort: r.effort, result: path.relative(gatesDir, actualOutput), result_sha256: sha256(final), target_sha256: sha, receipt: { ...r.receipt, stdout_sha256: sha256(text), isolation: r.isolation }, ...(r.error ? { execution_error: r.error } : {}) });
 				console.log(`결과 ${r.id}: ${path.relative(planRoot, actualOutput)}`);
 			}
-			fs.writeFileSync(recordFile, `${JSON.stringify(rec, null, 2)}\n`);
-			const r = reviewStatus(gatesDir, sha, true, planRoot);
+			// 회차 파일 → 최신 영수증 → 확정 표지(round-NNN.ok, 영수증 바이트 sha) 순서로 쓴다. 어느 단계든 실패하면 표지가 없거나
+			// 디스크 영수증과 맞지 않아 관문이 막고, 회차 판정도 "없음"으로 본다(실패 시 닫힘).
+			const r = reviewStatus(gatesDir, sha, true, planRoot, rec);
+			const outcome = lib.roundOutcome(r, plan);
+			let saved, recordSha;
+			try { saved = lib.writeRound(gatesDir, { plan_sha256: sha, plan, record: rec, outcome }); }
+			catch (error) { die(`회차 기록 저장 실패(${error.code || error.message}). 최신 리뷰 영수증을 확정하지 않았으므로 이번 리뷰는 무효입니다. 다시 리뷰하십시오`, 3); }
+			try { recordSha = lib.writeReviewRecord(gatesDir, rec); }
+			catch (error) { die(`최신 리뷰 영수증 저장 실패(${error.code || error.message}). 회차를 확정하지 않았으므로 이번 리뷰는 무효입니다. 다시 리뷰하십시오`, 3); }
+			try { lib.markRound(gatesDir, saved.rel, recordSha); }
+			catch (error) {
+				if (error.uncertain) die(`회차 확정 여부 불명(${error.code || error.message}). 판정은 디스크를 따릅니다: approval-plan check 로 관문 상태를 확인하고, 막히면 다시 리뷰하십시오`, 5);
+				die(`회차 확정 표지 저장 실패(${error.code || error.message}). 이번 리뷰는 무효입니다. 다시 리뷰하십시오`, 3);
+			}
+			console.log(`회차 기록: gates/${saved.rel} (판정 ${outcome.verdict})`);
 			console.log(r.ok ? "적대 리뷰: 통과 — 승인 요청 가능" : `적대 리뷰: 미통과\n${r.problems.map((x) => `- ${x}`).join("\n")}`);
 			cleanupLock();
 			process.exit(r.ok ? 0 : 1);
