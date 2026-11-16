@@ -15,6 +15,7 @@ const runs=[
   ["agents-rules core/detail split",[".agents/hooks/core/agents-rules-load.test.js"]],
   ["agents context mirror",[".claude/hooks/test/run-agents-context-mirror-test.cjs"]],
   ["session contract resolver",[".agents/hooks/core/session-contract.test.js"]],
+  ["time window decisions",[".agents/hooks/core/time-window.test.js"]],
   ["harness session injection",[".agents/hooks/core/harness-session-inject.test.js"]],
   ["session contract gate parity",[".codex/hooks/test-session-contract-gate.cjs"]],
   ["session baseline",[".agents/harness/test-session-baseline.cjs"]],

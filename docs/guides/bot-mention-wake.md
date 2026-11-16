@@ -69,6 +69,22 @@ the room found or the lookup error, so a monitor such as the
 quiet room. Failures log `dm_catchup_failed` or `dm_room_lookup_failed` with
 the status only.
 
+## Read receipt
+
+When a person's post is handed to the wake box, the ingress puts a reaction on
+it with the role's own credential (`PUT /channels/{c}/messages/{m}/reactions/{emoji}/@me`),
+so the person sees it was received before any work starts. Bots, webhooks and
+the role's own posts get none. A failed reaction (missing Add Reactions
+permission, 429, network) is logged as `ack_reaction_failed` with the status
+only and never blocks the wake. Each message is reacted to once because it is
+published once (`seen`).
+
+Top-level `ack` (all keys optional): `enabled` (default `true`; `false` turns
+it off), `emoji` (default `👀`; a Unicode emoji or `name:id` custom emoji, at
+most 64 characters), `humanUserIds` (restrict to these people; empty means
+every non-bot author). The reaction is only a receipt of ingress. The "answered
+within N minutes" deadline is `ack` in [response-watch](response-watch.md).
+
 ## User service example
 
 Save this as `~/.config/systemd/user/bot-mention-wake.service`, substituting
