@@ -168,6 +168,7 @@ function writePassingReviewReceipt(root, planFile, options = {}) {
 	const legacyEnd = Date.parse(deployPlan.LEGACY_REVIEW_CUTOFF) - 60_000;
 	const startedAt = options.startedAt || new Date(legacyEnd - 2000).toISOString();
 	const endedAt = new Date(legacyEnd).toISOString();
+	const reviewerCfg = deployPlan.reviewModelsFor(root)[reviewer];
 	const reviewRecord = {
 		plan_sha256: planSha,
 		plan: path.relative(root, planFile),
@@ -177,13 +178,14 @@ function writePassingReviewReceipt(root, planFile, options = {}) {
 		reviewedAt: endedAt,
 		reviewers: [
 			{
-				model: deployPlan.REVIEW_MODELS[reviewer].model,
-				effort: deployPlan.REVIEW_MODELS[reviewer].effort,
+				model: reviewerCfg.model,
+				effort: reviewerCfg.effort,
 				result: resultRel,
 				result_sha256: sha256(finalText),
 				target_sha256: planSha,
 				receipt: {
-					model: deployPlan.REVIEW_MODELS[reviewer].model,
+					model: reviewerCfg.model,
+					effort: reviewerCfg.effort,
 					started_at: startedAt,
 					ended_at: endedAt,
 					exit_code: 0,
@@ -1342,43 +1344,67 @@ test("reviewer configuration boundaries are fail closed", (t) => {
  fs.writeFileSync(file, "{"); assert.throws(() => deployPlan.reviewerIdsFor("muse", root, now));
 });
 
-test("review_models config: argon-high accepts only high receipts, default keeps medium", (t) => {
+test("review_models config: policy allowlist, manifest binding, skipped invalidation, and judge path", (t) => {
  const {root, tmp, stateDir} = makeWorkspace(t);
  const {planFile, gatesDir} = createValidPlan(root);
  const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
  const cfg = path.join(root, ".claude/deploy/config.json");
- const {planSha} = writePassingReviewReceipt(root, planFile, {reviewer: "argon"});
+ const {planSha, manifestSha: defaultManifest} = writePassingReviewReceipt(root, planFile, {reviewer: "argon"});
  const medium = JSON.parse(fs.readFileSync(file));
- const high = structuredClone(medium);
- high.reviewers[0].model = high.reviewers[0].receipt.model = "gemini-4-argon-high"; high.reviewers[0].effort = "high";
+ const tamperedHigh = structuredClone(medium);
+ tamperedHigh.reviewers[0].model = tamperedHigh.reviewers[0].receipt.model = "gemini-4-argon-high";
+ tamperedHigh.reviewers[0].effort = tamperedHigh.reviewers[0].receipt.effort = "high";
  const run = (rec) => { fs.writeFileSync(file, JSON.stringify(rec)); return deployPlan.reviewProblems(gatesDir, planSha, root); };
  fs.rmSync(cfg, {force: true});
  assert.deepEqual(deployPlan.reviewModelsFor(root).argon, {model: "gemini-4-argon-medium", effort: "medium"});
  assert.equal(run(medium).ok, true, "default: medium receipt passes");
- assert.equal(run(high).ok, false, "default: high receipt rejected");
+ assert.equal(run(tamperedHigh).ok, false, "default: tampered high receipt rejected");
  fs.mkdirSync(path.dirname(cfg), {recursive: true});
  fs.writeFileSync(cfg, JSON.stringify({projects: {}}));
+ assert.equal(deployPlan.reviewInputManifest(planFile, root), defaultManifest, "config without review_models preserves manifest");
  assert.equal(run(medium).ok, true, "config without review_models: medium receipt passes");
+
+ // Switch to argon-high: manifest must change and BOTH old medium AND JSON-tampered medium->high must fail
  fs.writeFileSync(cfg, JSON.stringify({review_models: {_comment: "layer 4 override", argon: {model: "gemini-4-argon-high", effort: "high"}}}));
  assert.deepEqual(deployPlan.reviewModelsFor(root).argon, {model: "gemini-4-argon-high", effort: "high"});
  assert.equal(deployPlan.reviewModelsFor(root).codex.model, deployPlan.REVIEW_MODELS.codex.model);
- assert.equal(run(high).ok, true, "override: high receipt passes");
+ const highManifest = deployPlan.reviewInputManifest(planFile, root);
+ assert.notEqual(highManifest, defaultManifest, "review_models override must change input_manifest_sha256");
+ const tamperedRes = run(tamperedHigh);
+ assert.equal(tamperedRes.ok, false, "tampered medium->high JSON must fail manifest check");
+ assert.ok(tamperedRes.problems.some((p) => p.includes("input manifest")), tamperedRes.problems.join("; "));
  const medRes = run(medium);
  assert.equal(medRes.ok, false, "override: medium receipt rejected");
  assert.ok(medRes.problems.some((p) => p.includes("허용되지 않은 모델")), medRes.problems.join("; "));
- const wrongEffortOnHigh = structuredClone(high); wrongEffortOnHigh.reviewers[0].effort = "medium";
+
+ // Genuinely issued high receipt under argon-high passes; field mismatches fail
+ writePassingReviewReceipt(root, planFile, {reviewer: "argon"});
+ const genuineHigh = JSON.parse(fs.readFileSync(file));
+ assert.equal(run(genuineHigh).ok, true, "override: genuinely issued high receipt passes");
+ const wrongEffortOnHigh = structuredClone(genuineHigh); wrongEffortOnHigh.reviewers[0].effort = "medium";
  const effRes = run(wrongEffortOnHigh);
  assert.equal(effRes.ok, false, "override: high model with medium effort rejected");
  assert.ok(effRes.problems.some((p) => p.includes("리뷰어 추론 강도가 다름")), effRes.problems.join("; "));
- const sameName = structuredClone(medium); sameName.reviewers[0].effort = "high";
- assert.equal(run(sameName).ok, false, "override: medium model with high effort rejected");
- const receiptMismatch = structuredClone(high); receiptMismatch.reviewers[0].receipt.model = "gemini-4-argon-medium";
- assert.equal(run(receiptMismatch).ok, false, "override: receipt.model mismatch rejected");
+ const receiptEffortMismatch = structuredClone(genuineHigh); receiptEffortMismatch.reviewers[0].receipt.effort = "medium";
+ assert.equal(run(receiptEffortMismatch).ok, false, "override: receipt.effort mismatch rejected");
+ const receiptModelMismatch = structuredClone(genuineHigh); receiptModelMismatch.reviewers[0].receipt.model = "gemini-4-argon-medium";
+ assert.equal(run(receiptModelMismatch).ok, false, "override: receipt.model mismatch rejected");
+
+ // Valid family & effort combinations in REVIEW_MODEL_POLICY succeed
+ fs.writeFileSync(cfg, JSON.stringify({review_models: {
+  argon: {model: "gemini-5-argon-xhigh", effort: "xhigh"},
+  codex: {model: "gpt-6.2-pro", effort: "max"},
+  muse: {model: "muse-spark-2.0", effort: "medium"},
+ }}));
+ assert.equal(deployPlan.reviewModelsFor(root).argon.effort, "xhigh");
+ assert.equal(deployPlan.reviewModelsFor(root).codex.effort, "max");
+ assert.equal(deployPlan.reviewModelsFor(root).muse.model, "muse-spark-2.0");
 
  // CLI end-to-end: approval-plan.mjs review passes configured model & effort to agy and writes passing high receipt
+ fs.writeFileSync(cfg, JSON.stringify({review_models: {argon: {model: "gemini-4-argon-high", effort: "high"}}}));
  assert.equal(spawnSync("git", ["init", "-q", root], {encoding: "utf8"}).status, 0);
  const binDir = path.join(tmp, "bin"), fakeHome = path.join(tmp, "home"), argvFile = path.join(tmp, "agy-argv.txt");
- fs.mkdirSync(binDir, {recursive: true}); fs.mkdirSync(path.join(fakeHome, ".gemini"), {recursive: true});
+ fs.mkdirSync(binDir, {recursive: true}); fs.mkdirSync(path.join(fakeHome, ".gemini"), {recursive: true}); fs.mkdirSync(path.join(fakeHome, ".codex"), {recursive: true});
  fs.writeFileSync(path.join(binDir, "bwrap"), '#!/bin/sh\nwhile [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done\nshift\nexec "$@"\n', {mode: 0o755});
  const passBody = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "참고 지적: 0", "남은 지적: 0"].join("\n");
  const fakeAgy = path.join(binDir, "fake-agy");
@@ -1392,28 +1418,116 @@ test("review_models config: argon-high accepts only high receipts, default keeps
  const savedRec = JSON.parse(fs.readFileSync(file, "utf8"));
  assert.equal(savedRec.reviewers[0].model, "gemini-4-argon-high");
  assert.equal(savedRec.reviewers[0].effort, "high");
+ assert.equal(savedRec.reviewers[0].receipt.effort, "high");
  assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, true);
 
- // Invalid configs fail closed in reviewModelsFor, reviewProblems, and CLI review (without wiping existing receipt)
+ // RESULT2-review [차단 2] exact scenario: skipped argon under default medium -> codex receipt -> upgrade to argon-high invalidates receipt
+ {
+  fs.rmSync(cfg, {force: true});
+  const now = new Date().toISOString();
+  const promptSha = sha256(deployPlan.reviewPrompt(JSON.parse(fs.readFileSync(planFile, "utf8")), planSha, root));
+  const body = `${passBody}\n`;
+  const ft = `${body}review-run: target_sha256=${planSha} prompt_sha256=${promptSha} stdout_sha256=${sha256(body)}\n`;
+  fs.writeFileSync(path.join(gatesDir, "codex-fallback.md"), ft);
+  const m1 = deployPlan.reviewInputManifest(planFile, root);
+  const skippedReceipt = {
+   plan_sha256: planSha, plan: path.relative(root, planFile), author_model: "muse", prompt_sha256: promptSha,
+   rotation: true, skipped: [{id: "argon", reason: "limit", exit_code: 1, ended_at: now}], reviewedAt: now,
+   reviewers: [{id: "codex", model: "gpt-6.1-terra", effort: "high", result: "codex-fallback.md", result_sha256: sha256(ft), target_sha256: planSha,
+    receipt: {model: "gpt-6.1-terra", started_at: now, ended_at: now, exit_code: 0, prompt_sha256: promptSha, stdout_sha256: sha256(body), input_manifest_sha256: m1}}],
+  };
+  assert.equal(run(skippedReceipt).ok, true, "default: codex fallback after argon limit passes before config upgrade");
+  fs.writeFileSync(cfg, JSON.stringify({review_models: {argon: {model: "gemini-4-argon-high", effort: "high"}}}));
+  const m2 = deployPlan.reviewInputManifest(planFile, root);
+  assert.equal(m1 === m2, false, "sameManifest must be false after argon-high config change");
+  const afterUpgrade = run(skippedReceipt);
+  assert.equal(afterUpgrade.ok, false, "oldReceiptPasses must be false after argon-high config change");
+  assert.ok(afterUpgrade.problems.some((p) => p.includes("skipped[0](argon)")), afterUpgrade.problems.join("; "));
+  assert.ok(afterUpgrade.problems.some((p) => p.includes("input manifest")), afterUpgrade.problems.join("; "));
+  // Even if an attacker rewrites input_manifest_sha256 to m2 without re-running argon-high, skipped check still rejects
+  const forgedManifest = structuredClone(skippedReceipt);
+  forgedManifest.reviewers[0].receipt.input_manifest_sha256 = m2;
+  const forgedRes = run(forgedManifest);
+  assert.equal(forgedRes.ok, false, "forged manifest on old skipped argon receipt must still fail");
+  assert.ok(forgedRes.problems.some((p) => p.includes("skipped[0](argon)")), forgedRes.problems.join("; "));
+ }
+ // Restore passing CLI receipt before CLI preflight preservation check
+ fs.writeFileSync(file, `${JSON.stringify(savedRec, null, 2)}\n`);
+ assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, true);
+
+ // CLI judge & incidentVerdict end-to-end: enforces muse family/effort & binds input_manifest_sha256
+ {
+  const museArgvFile = path.join(tmp, "muse-argv.txt");
+  const fakeMuse = path.join(binDir, "fake-muse");
+  fs.writeFileSync(fakeMuse, `#!/bin/sh\nprintf '%s\\n' "$@" > "${museArgvFile}"\nprintf '근거 요약\\nVERDICT: incident\\n'\n`, {mode: 0o755});
+  const evFile = path.join(tmp, "health.log");
+  fs.writeFileSync(evFile, "500 Internal Server Error x5\n");
+  const judgeEnv = {...cliEnv, APPROVAL_PLAN_MUSE_BIN: fakeMuse};
+  fs.writeFileSync(cfg, JSON.stringify({review_models: {muse: {model: "muse-spark-2.0", effort: "high"}}}));
+  const judgeOk = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "judge", planFile, "--evidence", evFile, "--executor-session", "exec-sess-1"], {cwd: root, encoding: "utf8", timeout: 30000, env: judgeEnv});
+  assert.equal(judgeOk.status, 0, `${judgeOk.stdout}\n${judgeOk.stderr}`);
+  const museArgv = fs.readFileSync(museArgvFile, "utf8").trim().split("\n");
+  assert.equal(museArgv[museArgv.indexOf("--model") + 1], "muse-spark-2.0");
+  assert.equal(museArgv[museArgv.indexOf("--reasoning-effort") + 1], "high");
+  assert.equal(deployPlan.incidentVerdict(gatesDir, planSha, "exec-sess-1", Date.now(), root).ok, true);
+  // Changing review_models invalidates old judge verdict (even if argon changes via manifest, or muse changes)
+  fs.writeFileSync(cfg, JSON.stringify({review_models: {muse: {model: "muse-spark-2.0", effort: "xhigh"}}}));
+  assert.equal(deployPlan.incidentVerdict(gatesDir, planSha, "exec-sess-1", Date.now(), root).ok, false);
+  // Invalid review_models fails closed in incidentVerdict and CLI judge preflight
+  fs.writeFileSync(cfg, JSON.stringify({review_models: {muse: {model: "muse-spark-low", effort: "low"}}}));
+  assert.equal(deployPlan.incidentVerdict(gatesDir, planSha, "exec-sess-1", Date.now(), root).ok, false);
+  const badJudge = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "judge", planFile, "--evidence", evFile, "--executor-session", "exec-sess-1"], {cwd: root, encoding: "utf8", timeout: 30000, env: judgeEnv});
+  assert.notEqual(badJudge.status, 0);
+  fs.writeFileSync(cfg, JSON.stringify({review_models: {argon: {model: "gemini-4-argon-high", effort: "high"}}}));
+ }
+
+ // RESULT2-review [차단 1] + policy boundaries fail closed in reviewModelsFor, reviewProblems, and CLI preflight (without wiping existing receipt)
  for (const bad of [
   [],
   {review_models: []},
+  {review_models: {argon: {model: "dummy-weak", effort: "low"}, codex: {model: "echo", effort: "none"}}},
+  {review_models: {argon: {model: "gemini-4-argon-medium", effort: "low"}}},
+  {review_models: {argon: {model: "gemini-4-argon-medium", effort: "none"}}},
+  {review_models: {argon: {model: "gemini-4-argon-medium", effort: "0"}}},
+  {review_models: {argon: {model: "gemini-4-argon-medium", effort: "MEDIUM"}}},
+  {review_models: {argon: {model: "gemini-4-argon-low", effort: "high"}}},
+  {review_models: {argon: {model: "gemini-4-argon-low-preview", effort: "high"}}},
+  {review_models: {_argon: {model: "gemini-4-argon-high", effort: "high"}}},
+  {review_models: {argon: {model: "gemini-4-carbon-high", effort: "high"}}},
+  {review_models: {argon: {model: "gemini--argon-high", effort: "high"}}},
+  {review_models: {codex: {model: "gemini-4-argon-high", effort: "high"}}},
+  {review_models: {codex: {model: "gpt-5-low", effort: "high"}}},
+  {review_models: {codex: {model: "gpt-6.1-sol", effort: "high"}}},
+  {review_models: {muse: {model: "gpt-6.1-terra", effort: "xhigh"}}},
+  {review_models: {muse: {model: "muse-spark-minimal", effort: "xhigh"}}},
+  {review_models: {sol: {model: "gpt-6.1-sol", effort: "high"}}},
   {review_models: {nobody: {model: "x", effort: "high"}}},
   {review_models: {argon: []}},
+  {review_models: {argon: {model: "gemini-4-argon-high", effort: "high", extra: true}}},
   {review_models: {argon: {model: "a b", effort: "high"}}},
   {review_models: {argon: {model: "-flag", effort: "high"}}},
-  {review_models: {argon: {model: "x", effort: "-bad"}}},
-  {review_models: {argon: {model: "x"}}},
+  {review_models: {argon: {model: "gemini-4-argon-high", effort: "-bad"}}},
+  {review_models: {argon: {model: "gemini-4-argon-high"}}},
   {review_models: {argon: {model: deployPlan.REVIEW_MODELS.codex.model, effort: "high"}}},
  ]) {
   fs.writeFileSync(cfg, JSON.stringify(bad));
   assert.throws(() => deployPlan.reviewModelsFor(root), JSON.stringify(bad));
+  assert.throws(() => deployPlan.reviewInputManifest(planFile, root), JSON.stringify(bad));
   const prob = deployPlan.reviewProblems(gatesDir, planSha, root);
   assert.equal(prob.ok, false, JSON.stringify(bad));
+  assert.ok(prob.problems.some((p) => p.includes("review_models")), JSON.stringify(bad));
  }
  const beforeBytes = fs.readFileSync(file, "utf8");
- const badCli = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {cwd: root, encoding: "utf8", timeout: 30000, env: cliEnv});
- assert.notEqual(badCli.status, 0);
+ for (const subArgs of [
+  ["review", planFile, "--author", "muse"],
+  ["check", planFile],
+  ["report", planFile],
+  ["review-prompt", planFile],
+  ["preapprove", planFile, "--session", "sess-1"],
+ ]) {
+  const badCli = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), ...subArgs], {cwd: root, encoding: "utf8", timeout: 30000, env: cliEnv});
+  assert.notEqual(badCli.status, 0, subArgs.join(" "));
+ }
  assert.equal(fs.readFileSync(file, "utf8"), beforeBytes, "existing review receipt must not be wiped on invalid review_models");
  fs.writeFileSync(cfg, "{");
  assert.throws(() => deployPlan.reviewModelsFor(root));

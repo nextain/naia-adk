@@ -186,12 +186,13 @@ function loadPlan(p) {
 }
 
 function runMuse(prompt, museCfg = lib.REVIEW_MODELS.muse) {
+	const validated = lib.validateReviewModelEntry("muse", museCfg);
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-"));
 	const file = path.join(dir, "prompt.txt");
 	fs.writeFileSync(file, prompt, { mode: 0o600 });
 	let res;
 	try {
-		res = spawnSync(MUSE, ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", museCfg.model, "--reasoning-effort", museCfg.effort, "--prompt-file", file], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 45 * 60 * 1000 });
+		res = spawnSync(MUSE, ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", validated.model, "--reasoning-effort", validated.effort, "--prompt-file", file], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 45 * 60 * 1000 });
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
@@ -199,7 +200,7 @@ function runMuse(prompt, museCfg = lib.REVIEW_MODELS.muse) {
 	return String(res.stdout);
 }
 
-function execReviewer(bin, args, input = "", promptSha = "", model = "", cwd = ROOT) {
+function execReviewer(bin, args, input = "", promptSha = "", model = "", effort = "", cwd = ROOT) {
 	return new Promise((resolve) => {
 		const startedAt = new Date().toISOString();
 		let stdout = "", stderr = "", bytes = 0, finished = false, failed = "";
@@ -207,7 +208,7 @@ function execReviewer(bin, args, input = "", promptSha = "", model = "", cwd = R
 		const finish = (status, error = "") => {
 			if (finished) return;
 			finished = true; clearTimeout(timer);
-			resolve({ body: stdout, stderr, receipt: { model, started_at: startedAt, ended_at: new Date().toISOString(), exit_code: status, prompt_sha256: promptSha }, error: failed || error || (status !== 0 ? `status ${status}` : !stdout.trim() ? "빈 출력" : "") });
+			resolve({ body: stdout, stderr, receipt: { model, effort, started_at: startedAt, ended_at: new Date().toISOString(), exit_code: status, prompt_sha256: promptSha }, error: failed || error || (status !== 0 ? `status ${status}` : !stdout.trim() ? "빈 출력" : "") });
 		};
 		const timer = setTimeout(() => { failed = "45분 실행 제한 초과"; child.kill("SIGKILL"); }, 45 * 60 * 1000);
 		child.on("error", () => finish(null, "실행 파일을 시작하지 못함"));
@@ -452,7 +453,7 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 		const beforeManifest = preManifest === undefined ? (() => { try { return lib.reviewInputManifest(abs, planRoot, roOpt); } catch { return null; } })() : preManifest;
 		stage = "reviewers";
 		const results = await Promise.all(ids.map(async (id) => {
-			const config = models[id];
+			const config = lib.validateReviewModelEntry(id, models[id]);
 			let bin, args, input = "";
 			if (id === "muse") {
 				bin = MUSE;
@@ -471,7 +472,7 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 				args = [...sandboxArgs, "--", bin, ...args];
 				bin = bwrap; isolation = "bwrap-ro-bind";
 			}
-			return { id, ...config, isolation, ...await execReviewer(bin, args, input, sha256(prompt), config.model, planRoot) };
+			return { id, ...config, isolation, ...await execReviewer(bin, args, input, sha256(prompt), config.model, config.effort, planRoot) };
 		}));
 		stage = "manifest-after";
 		let afterManifest = null;
@@ -556,6 +557,8 @@ switch (cmd) {
 	}
 	case "review-prompt": {
 		const { plan, sha, root: planRoot } = loadPlan(args[0]);
+		try { lib.reviewModelsFor(planRoot); }
+		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
 		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
 		if (!roBind.ok) die(roBind.why, 1);
 		console.log(lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items }));
@@ -563,6 +566,8 @@ switch (cmd) {
 	}
 	case "review": {
 		const { abs, plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
+		try { lib.reviewModelsFor(planRoot); }
+		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
 		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
 		if (!roBind.ok) die(roBind.why, 1);
 		let early = null;
@@ -631,7 +636,7 @@ switch (cmd) {
 			try {
 				const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt, planRoot);
 				if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first))) {
-					rec.skipped.push({ id: ids[0], reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
+					rec.skipped.push({ id: ids[0], model: first.model, effort: first.effort, reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
 					console.log(`한도 실패로 다음 차례 리뷰어로 넘어감: ${ids[0]} → ${ids[1]}`);
 					const [second] = await runReviewers([ids[1]], prompt, abs, early.digest, roOpt, planRoot);
 					actual = second; actualOutput = outputs[1];
@@ -675,6 +680,8 @@ switch (cmd) {
 	}
 	case "step-ok": {
 		const { plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
+		try { lib.reviewModelsFor(planRoot); }
+		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
 		const step = args[1];
 		if (!(plan.scenario || []).some((s) => s.id === step)) die(`단계 ${step} 가 계획서에 없습니다`);
 		const ev = opt(args, "--evidence");
@@ -689,12 +696,20 @@ switch (cmd) {
 		break;
 	}
 	case "judge": {
-		const { plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
+		const { abs, plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
+		let museCfg;
+		try { museCfg = lib.reviewModelsFor(planRoot).muse; }
+		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
+		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
+		if (!roBind.ok) die(roBind.why, 1);
+		let judgeManifest;
+		try { judgeManifest = lib.reviewInputManifest(abs, planRoot, { readOnlyScripts: roBind.items }); }
+		catch (error) { die(`판정 입력 목록(input manifest)을 읽지 못함: ${error.message}`, 1); }
 		const evidence = optAll(args, "--evidence");
 		const executor = opt(args, "--executor-session") || process.env.CLAUDE_SESSION_ID || "";
 		if (!executor) die("--executor-session <실행 세션 id> 가 필요합니다");
 		if (evidence.length === 0) die("--evidence <확인 결과·헬스·오류 로그 파일> 이 하나 이상 필요합니다");
-		const ev = evidence.map((p) => { const abs = path.resolve(p); const buf = fs.readFileSync(abs); return { path: abs, sha256: sha256(buf), text: buf.toString("utf8").slice(0, 20000) }; });
+		const ev = evidence.map((p) => { const evAbs = path.resolve(p); const buf = fs.readFileSync(evAbs); return { path: evAbs, sha256: sha256(buf), text: buf.toString("utf8").slice(0, 20000) }; });
 		const prompt = [
 			"당신은 운영 배포를 실행하는 세션과 다른, 독립 판정자입니다. 지금 상황이 '장애'인지 '개발'인지 판정하십시오.",
 			"장애(incident): 운영 사용자에게 지금 영향이 있거나 곧 생기며, 계획서의 장애 판단 기준에 해당한다. 계획서에 미리 적은 선조치를 바로 해야 한다.",
@@ -710,17 +725,23 @@ switch (cmd) {
 			"",
 			"출력 마지막 줄을 정확히 'VERDICT: incident' 또는 'VERDICT: development' 로 쓰고, 그 위에 근거를 3줄 이내로 적으십시오.",
 		].join("\n");
-		let museCfg;
-		try { museCfg = lib.reviewModelsFor(planRoot).muse; }
-		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`); }
 		const raw = runMuse(prompt, museCfg);
+		let afterJudgeManifest = null;
+		try {
+			const planAfter = JSON.parse(fs.readFileSync(abs, "utf8"));
+			const afterRo = lib.planReadOnlyScriptsBinding(planAfter, planRoot);
+			if (afterRo.ok) afterJudgeManifest = lib.reviewInputManifest(abs, planRoot, { readOnlyScripts: afterRo.items });
+		} catch { afterJudgeManifest = null; }
+		if (!afterJudgeManifest || afterJudgeManifest !== judgeManifest) {
+			die("판정 중 계획서·설정·실행기가 바뀌어 판정 기록을 남기지 않음", 3);
+		}
 		const lastLine = raw.trim().split(/\r?\n/).filter((l) => l.trim()).pop() || "";
 		const m = lastLine.match(/^\s*VERDICT:\s*(incident|development)\s*$/i);
 		const verdict = m ? m[1].toLowerCase() : "development";
 		const judgeSession = `muse-judge-${crypto.randomUUID()}`;
 		const dir = path.join(gatesDir, "deploy-incident");
 		fs.mkdirSync(dir, { recursive: true });
-		const rec = { plan_sha256: sha, verdict, judge: { model: museCfg.model, effort: museCfg.effort, session: judgeSession }, executor_session: executor, evidence: ev.map(({ path: p, sha256: s }) => ({ path: p, sha256: s })), decidedAt: new Date().toISOString(), raw_output: raw.slice(-4000), raw_sha256: sha256(raw) };
+		const rec = { plan_sha256: sha, input_manifest_sha256: judgeManifest, verdict, judge: { model: museCfg.model, effort: museCfg.effort, session: judgeSession }, executor_session: executor, evidence: ev.map(({ path: p, sha256: s }) => ({ path: p, sha256: s })), decidedAt: new Date().toISOString(), raw_output: raw.slice(-4000), raw_sha256: sha256(raw) };
 		const file = path.join(dir, `${rec.decidedAt.replace(/[:.]/g, "-")}.json`);
 		fs.writeFileSync(file, `${JSON.stringify(rec, null, 2)}\n`);
 		console.log(`판정: ${verdict === "incident" ? "장애 — 계획서의 선조치만 실행하고 바로 보고" : "개발 — 선조치 불가, 멈추고 보고"}\n기록: ${path.relative(planRoot, file)}`);

@@ -16,7 +16,7 @@
     }
   },
   "review_models": {
-    "_comment": "Optional. Override plan-review model/effort per reviewer id (sol|muse|argon|codex). Omit to keep built-in defaults (argon = gemini-4-argon-medium/medium). Existing review receipts must match; changing this invalidates receipts of open plans.",
+    "_comment": "Optional. Override plan-review model/effort per reviewer id (argon|codex|muse). Allowed families: argon=gemini-*-argon-*, codex=gpt-*, muse=muse-* (excluding -low/-none/-minimal); allowed effort: medium|high|xhigh|max. Resolved review_models binds into input_manifest_sha256, so changing it invalidates open-plan review receipts and judge verdicts.",
     "argon": { "model": "gemini-4-argon-high", "effort": "high" }
   },
   "default_ttl_minutes": 30,

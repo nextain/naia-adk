@@ -86,7 +86,7 @@ Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그
 
 `until`이 없거나 지났을 때, 또는 `reviewer`가 작성자와 같을 때는 차례만 씁니다. 설정 JSON 파스 오류와 형식 오류(`reviewer`가 차례 셋 밖, `until`이 ISO 시각이 아님)는 거부합니다. 관문은 차례 기록(`rotation: true`)의 리뷰어 영수증 1명을 받습니다. 기록 시각(`reviewedAt`)의 차례를 다시 만들어, `skipped`가 앞에서부터 건너뛴 후보 그대로이고(각각 0이 아닌 `exit_code`) 실제 리뷰어가 그 다음 후보인지 대조합니다. `reviewedAt`은 UTC ISO 시각이어야 하고, 리뷰어 영수증 시작 시각(`started_at`) 이전 90분 안이어야 합니다. 시각을 옮겨 다른 차례를 만드는 기록은 막습니다. 작성자와 같은 모델, 차례 밖 모델, 한도 기록 없는 뒤 후보, 2인 기록은 막습니다. 옛 모양 기록(`rotation` 칸 없음)은 `reviewedAt`과 리뷰어 영수증 시작 시각이 모두 차례 도입 시각(`2026-11-10T10:00:00Z`)보다 앞설 때만 받습니다. 새 기록에서 `rotation` 칸을 지워 차례 대조를 건너뛰는 길을 막습니다. 리뷰 뒤 `planReview`를 바꾸면 차례가 달라져 다시 리뷰해야 할 수 있습니다. 작성자와 리뷰어는 같을 수 없습니다.
 
-리뷰어별 모델 이름과 추론 강도는 기본값(`argon`: `gemini-4-argon-medium`/`medium`, `codex`: `gpt-6.1-terra`/`high`, `muse`: `muse-spark-1.3`/`xhigh`, `sol`: `gpt-6.1-sol`/`high`)을 쓰며, 인스턴스의 `.claude/deploy/config.json`에 `review_models`를 두어 필요한 리뷰어 칸만 덮어쓸 수 있습니다(생략 시 기본값 유지로 기존 영수증 유효). 잘못된 형식·모르는 리뷰어 ID·중복 모델 이름은 기본값으로 되돌리지 않고 차단합니다. **경고**: 인스턴스가 `argon`을 `gemini-4-argon-high`/`high`로 덮어쓰면 그 뒤 리뷰부터 적용되며, 열린 계획에 남아 있는 이전 `medium` 영수증은 모델·추론 강도 대조에서 무효가 되어 다시 리뷰를 받아야 합니다.
+리뷰어별 모델 이름과 추론 강도는 기본값(`argon`: `gemini-4-argon-medium`/`medium`, `codex`: `gpt-6.1-terra`/`high`, `muse`: `muse-spark-1.3`/`xhigh`, 옛 기록용 고정 `sol`: `gpt-6.1-sol`/`high`)을 쓰며, 인스턴스의 `.claude/deploy/config.json`에 `review_models`를 두어 현행 리뷰어(`argon`|`codex`|`muse`) 칸만 덮어쓸 수 있습니다(생략 시 기본값 유지로 기존 영수증 유효). 허용 목록은 `.claude/hooks/lib/deploy-plan.js`의 `REVIEW_MODEL_POLICY` 상수 한 곳으로 고정됩니다: 모델 계통은 `argon`=`gemini-*-argon-*`, `codex`=`gpt-*`, `muse`=`muse-*`(약한 접미사 `-low`·`-none`·`-minimal` 제외, 리뷰어 간 중복 모델 금지) 안에서만 받고, 추론 강도는 최소 `medium` 이상(`medium`|`high`|`xhigh`|`max`)만 허용합니다. 잘못된 JSON·모르는 칸·허용 계통 밖 모델·약한 강도는 기본값으로 되돌리지 않고 `reviewProblems`·`incidentVerdict`·`approval-plan.mjs` 사전 검증에서 닫힌 실패로 차단합니다. **경고**: 확정된 `review_models`(리뷰어별 `model`·`effort`)는 `input_manifest_sha256` 해시 입력에도 함께 묶이므로, `argon`을 `gemini-4-argon-high`/`high`로 바꾸면 이전 `medium` 영수증은 물론 `medium` 시절 `argon` 한도 실패(`skipped`)로 `codex`가 발급한 옛 영수증과 옛 `judge` 판정 기록까지 모두 무효가 되어 다시 리뷰·판정을 받아야 합니다.
 
 ```json
 "review_models": {
@@ -100,7 +100,7 @@ node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/
 
 - 모든 기준이 `PASS`이고 `남은 지적: 0`(차단 지적 0건)이어야 통과합니다.
 - 예외는 좁은 위험 수용 하나입니다. 승인자가 결정 글로 받아들인 경우 계획서에 `risk_acceptance` 칸(`criterion: "security"`, `accepted_by`, `decision_url`, `same_value_as`, `no_new_exposure: true`, `reason`, `expires_at`)을 모두 적으면, `security` 기준 하나의 `FAIL`과 그 기준을 적은 차단 지적 한 건만 면제합니다(`남은 지적`도 1이어야 합니다). 다른 기준이 하나라도 `FAIL`이거나, 차단 지적이 두 건 이상이거나, `security`를 적지 않은 차단 지적이 남거나, `expires_at`이 지났거나 `createdAt` 뒤 7일을 넘으면 그대로 막힙니다. 모르는 칸은 거부합니다. 이미 나간 값과 같은 값을 다시 내보낼 때만 쓰고, 새 노출을 만드는 계획에는 쓰지 않습니다.
-- 리뷰 영수증(`gates/deploy-plan-review.json`)에는 계획서 SHA-256, 요청문 SHA-256, 고정 파일·실행기 입력 목록 해시(`input_manifest_sha256`), 그리고 리뷰 시점의 `readOnlyScripts` 바인딩 목록(`read_only_scripts`, 항목별 `sha256`·`path`·`service`)이 함께 묶입니다.
+- 리뷰 영수증(`gates/deploy-plan-review.json`)에는 계획서 SHA-256, 요청문 SHA-256, 고정 파일·실행기·확정 `review_models`(리뷰어별 `model`·`effort`) 입력 목록 해시(`input_manifest_sha256`), 건너뛴 리뷰어(`skipped`)의 모델·강도, 그리고 리뷰 시점의 `readOnlyScripts` 바인딩 목록(`read_only_scripts`, 항목별 `sha256`·`path`·`service`)이 함께 묶입니다.
 - **리뷰 뒤에 계획서나 고정 파일을 고치면 이전 리뷰와 승인 코드는 즉시 무효**가 되며 다시 리뷰를 받아야 합니다.
 
 ### 2.1 리뷰 중 저장소 쓰기 잠금 (`plan-review.lock` + `plan-review-write-guard`)
@@ -161,4 +161,4 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
    ```
 3. **실패·장애 시**:
    - 단계 확인이 실패하면 계획서의 `on_failure` 갈림길(예: 되돌리기 단계 `r1`)대로 행동하고 보고합니다.
-   - 운영 장애 기준(`incident.criteria`)에 해당해 선조치(`incident.actions`)를 실행해야 할 때는 다른 독립 세션 판정(`node .agents/scripts/approval-plan.mjs judge <계획서> --evidence <로그> --executor-session <세션ID>`)을 받아야 하며, 선조치 직후 `gates/deploy-incident-report-*.md` 보고서를 작성해야 다음 단계로 진행할 수 있습니다.
+   - 운영 장애 기준(`incident.criteria`)에 해당해 선조치(`incident.actions`)를 실행해야 할 때는 다른 독립 세션 판정(`node .agents/scripts/approval-plan.mjs judge <계획서> --evidence <로그> --executor-session <세션ID>`)을 받아야 하며(판정 모델·강도 `review_models.muse` 및 `input_manifest_sha256`이 현 설정과 일치해야 통과), 선조치 직후 `gates/deploy-incident-report-*.md` 보고서를 작성해야 다음 단계로 진행할 수 있습니다.
