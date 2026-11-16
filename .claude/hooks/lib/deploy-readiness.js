@@ -510,10 +510,6 @@ function inspectDeployPolicyErrors(root, opts = {}) {
 	if (root) {
 		const cfgDirProbe = probePathError(path.join(root, "config"));
 		if (cfgDirProbe.error) pushErr(`정책 디렉터리(config) 접근 실패: ${cfgDirProbe.error}`);
-		pushErr(checkJsonObjectFile(path.join(root, "config", "deploy-gate.json"), "config/deploy-gate.json"));
-		if (opts.checkDeployGateEnv && process.env.DEPLOY_GATE_CONFIG) {
-			pushErr(checkJsonObjectFile(path.resolve(process.env.DEPLOY_GATE_CONFIG), "DEPLOY_GATE_CONFIG"));
-		}
 		const progressDir = path.join(root, ".agents", "progress");
 		const pProbe = probePathError(progressDir);
 		if (pProbe.error) {
@@ -541,7 +537,6 @@ function inspectDeployPolicyErrors(root, opts = {}) {
 		if (ldProbe.error) {
 			pushErr(`정책 디렉터리(.claude/deploy) 접근 실패: ${ldProbe.error}`);
 		} else if (ldProbe.exists) {
-			pushErr(checkJsonObjectFile(path.join(localDeployDir, "config.json"), ".claude/deploy/config.json"));
 			pushErr(checkJsonObjectFile(path.join(localDeployDir, "approvals.json"), ".claude/deploy/approvals.json"));
 		}
 	}
@@ -550,7 +545,6 @@ function inspectDeployPolicyErrors(root, opts = {}) {
 		if (ddProbe.error) {
 			pushErr(`정책 디렉터리(.claude/deploy) 접근 실패: ${ddProbe.error}`);
 		} else if (ddProbe.exists) {
-			pushErr(checkJsonObjectFile(path.join(opts.deployDir, "config.json"), ".claude/deploy/config.json"));
 			pushErr(checkJsonObjectFile(path.join(opts.deployDir, "approvals.json"), ".claude/deploy/approvals.json"));
 		}
 	}
@@ -558,24 +552,20 @@ function inspectDeployPolicyErrors(root, opts = {}) {
 }
 
 function deployGateConfigPath(root) {
-	if (process.env.DEPLOY_GATE_CONFIG) return path.resolve(process.env.DEPLOY_GATE_CONFIG);
-	const base = root || process.env.DEPLOY_READINESS_ROOT || path.resolve(__dirname, "../../..");
-	return path.join(base, "config", "deploy-gate.json");
+	const base = root || path.resolve(__dirname, "../../..");
+	const name = require("./deploy-plan.js").trustedGateConfigName(base, 1);
+	return path.join(base, name || "config/deploy-gate.json");
 }
 
 function loadDeployGateConfig(root) {
-	const file = deployGateConfigPath(root);
-	if (!fs.existsSync(file)) return null;
-	return readJson(file);
+	const base = root || path.resolve(__dirname, "../../..");
+	return require("./deploy-plan.js").trustedDeployGateConfig(base);
 }
 
 function loadDeployGatePlugin(root, cfg) {
 	const config = cfg || loadDeployGateConfig(root);
 	if (!config || typeof config.plugin !== "string" || !config.plugin.trim()) return null;
-	const base = root || process.env.DEPLOY_READINESS_ROOT || path.resolve(__dirname, "../../..");
-	const pluginPath = path.isAbsolute(config.plugin) ? config.plugin : path.resolve(base, config.plugin);
-	if (!fs.existsSync(pluginPath)) throw new Error(`config/deploy-gate.json 의 plugin 모듈을 찾지 못함: ${config.plugin}`);
-	return require(pluginPath);
+	return require("./deploy-plan.js").trustedGatePlugin(root || path.resolve(__dirname, "../../.."), config.plugin);
 }
 
 function globMatch(pattern, value) {
@@ -994,7 +984,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	if (!Array.isArray(services) || services.length === 0) return no("운영 서비스 집합이 비어 있음");
 	if (!planBinding || !planBinding.plan || !planBinding.entry || typeof planBinding.command !== "string") return no("계획·단계·명령 문맥이 없음");
 	const { plan, entry, command, cwd = "" } = planBinding;
-	const root = rootDir || process.env.DEPLOY_READINESS_ROOT || cwd || path.resolve(__dirname, "../../..");
+	const root = rootDir || path.resolve(__dirname, "../../..");
 	const plannedServices = Array.isArray(plan.services) ? plan.services : [];
 	if (services.some((s) => !plannedServices.includes(s))) return no("명령이 바꾸는 서비스가 계획서 services 에 없음");
 	if (!(entry.commands || []).includes(command)) return no("실행 명령 바이트가 승인된 단계 명령과 다름");
@@ -1134,7 +1124,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
  * @returns {{ok:boolean, problems:string[], facts:string[], file?:string, kind?:string}}
  */
 function assessReadiness(services, { root, auditPath, command = "", cwd = "", now = Date.now(), planBinding = null } = {}) {
-	const baseRoot = root || process.env.DEPLOY_READINESS_ROOT || cwd || path.resolve(__dirname, "../../..");
+	const baseRoot = root || path.resolve(__dirname, "../../..");
 	if (!Array.isArray(services) || services.length === 0) {
 		return { ok: false, problems: ["운영 서비스 집합이 비어 있습니다."], facts: [] };
 	}

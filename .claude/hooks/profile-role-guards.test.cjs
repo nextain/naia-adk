@@ -23,6 +23,7 @@ function fixture(t) {
 	write(path.join(adk, ".agents/context/agents-rules.json"), {});
 	write(path.join(adk, ".agents/progress/work.json"), { current_phase: "build" });
 	write(path.join(adk, ".claude/deploy/config.json"), { projects: {} });
+	write(path.join(adk, "config/deploy-gate.json"), {});
 	write(path.join(adk, ".claude/hooks/gcs-guard.config.json"), { buckets: { "example-archive": "archive" } });
 	const deploymentHook = path.join(adk, ".claude/hooks/deploy-guard.js");
 	fs.copyFileSync(path.join(__dirname, "deploy-guard.js"), deploymentHook);
@@ -31,8 +32,20 @@ function fixture(t) {
 	fs.copyFileSync(path.join(__dirname, "lib/hook-watchdog.js"), path.join(adk, ".claude/hooks/lib/hook-watchdog.js"));
 	// Route the isolated adapter to the real shared policy, without replacing
 	// its implementation or letting approvals/audit touch the checkout.
-	write(path.join(adk, ".agents/hooks/policies/bash.js"),
-		`module.exports = require(${JSON.stringify(path.resolve(__dirname, "../../.agents/hooks/policies/bash.js"))});\n`);
+	write(path.join(adk, ".agents/hooks/policies/bash.js"), `
+		const policy = require(${JSON.stringify(path.resolve(__dirname, "../../.agents/hooks/policies/bash.js"))});
+		const pin = require(${JSON.stringify(path.resolve(__dirname, "lib/gate-config-pin.js"))});
+		const root = ${JSON.stringify(adk)};
+		const files = [".claude/deploy/config.json", "config/deploy-gate.json"];
+		const id = "123456789012345678", channelId = "234567890123456789", messageId = "345678901234567890";
+		module.exports = { ...policy, deploy: (command, data, opts) => {
+			const code = pin.approvalCode(pin.snapshotGateConfig(root, files).hash);
+			return policy.deploy(command, data, { ...opts, rootDir: root, gateConfig: {
+				files, approverId: id, token: "fixture", refs: [{code, channelId, messageId}],
+				fetchImpl: async () => ({ok: true, json: async () => ({id: messageId, channel_id: channelId, author: {id}, content: code})}),
+			}});
+		} };
+	`);
 	return { base, role, adk, deploymentHook };
 }
 async function run(name, cwd, payload, adkRoot = "", hookPath = null, extraEnv = {}, expectedCode = 0) {
@@ -198,7 +211,7 @@ test("role deployment remains blocked with absent policy and approval records", 
 	assert.equal((await run("deploy-guard.js", role, bash("ls"), path.join(base, "absent"), deploymentHook)), null);
 });
 
-test("role deployment reads and consumes approval at the central ADK root", async (t) => {
+test("approved gate settings do not let a legacy single-use approval bypass the plan gate", async (t) => {
 	const { role, adk, deploymentHook } = fixture(t);
 	write(path.join(adk, ".claude/deploy/config.json"), { projects: { sample: { platform: "gcloud", dev_service: "sample-dev" } } });
 	const record = path.join(adk, ".claude/deploy/approvals.json");
@@ -207,11 +220,10 @@ test("role deployment reads and consumes approval at the central ADK root", asyn
 		expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(), single_use: true,
 	}] });
 	const payload = bash("gcloud run deploy sample");
-	assert.equal((await run("deploy-guard.js", role, payload, adk, deploymentHook)), null);
-	assert.deepEqual(JSON.parse(fs.readFileSync(record, "utf8")).approvals, []);
+	assert.equal((await run("deploy-guard.js", role, payload, adk, deploymentHook))?.decision, "block");
+	assert.equal(JSON.parse(fs.readFileSync(record, "utf8")).approvals.length, 1);
 	assert.equal((await run("deploy-guard.js", role, payload, adk, deploymentHook))?.decision, "block");
 	assert.equal((await run("deploy-guard.js", role, bash("gcloud run deploy sample-dev"), adk, deploymentHook)), null);
-	assert.ok(fs.readFileSync(path.join(adk, ".claude/deploy/audit.jsonl"), "utf8").includes("approval_consumed"));
 	assert.deepEqual(fs.readdirSync(role), [".naia-role.json"]);
 });
 
@@ -332,7 +344,7 @@ test("without a role file NAIA_ADK_ROOT does not redirect deployment approvals",
 	assert.equal(expected, "block", "repository without approval blocks");
 	assert.equal((await run("deploy-guard.js", repository, payload, adk, repositoryHook))?.decision, expected, "no role file + NAIA_ADK_ROOT = original decision");
 	assert.equal(JSON.parse(fs.readFileSync(record, "utf8")).approvals.length, 1, "central approval is not consumed");
-	assert.equal((await run("deploy-guard.js", role, payload, adk, deploymentHook)), null, "a role session still uses the central approval");
+	assert.equal((await run("deploy-guard.js", role, payload, adk, deploymentHook))?.decision, "block", "a role session cannot use legacy approval to bypass the plan gate");
 });
 
 test("without a role file NAIA_ADK_ROOT does not redirect the GCS bucket policy", async (t) => {

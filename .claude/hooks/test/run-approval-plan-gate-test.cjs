@@ -5,7 +5,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
+const { spawnSync: spawnSyncRaw } = require("node:child_process");
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 const HOOK_PATH = path.join(REPO_ROOT, ".claude/hooks/deploy-guard.js");
@@ -14,7 +14,32 @@ const deployPlan = require("../lib/deploy-plan.js");
 const { assessReadiness } = require("../lib/deploy-readiness.js");
 const { classifyProdMutations } = require("../lib/deploy-command-classifier.js");
 
+// Fixture CLIs receive the same synthetic Discord confirmation as fixture
+// guards. Real checkout and unrelated scripts remain untouched.
+function spawnSync(program, args, opts) {
+	if (program === process.execPath && Array.isArray(args) && /[/\\]\.agents[/\\]scripts[/\\]approval-plan\.mjs$/.test(args[0] || "")) {
+		const root = path.resolve(path.dirname(args[0]), "../..");
+		if (root !== REPO_ROOT && fs.existsSync(path.join(root, ".claude/deploy/config.json")) && fs.existsSync(path.join(root, "config/deploy-gate.json"))) {
+			return spawnSyncRaw(program, [approvedRunner(root, path.dirname(root), "", args.slice(1))], opts);
+		}
+	}
+	return spawnSyncRaw(program, args, opts);
+}
+
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+const gateFiles = [".claude/deploy/config.json", "config/deploy-gate.json"];
+
+function fixtureGateConfig(root) {
+	const pin = require("../lib/gate-config-pin.js");
+	const id = "123456789012345678", channelId = "234567890123456789", messageId = "345678901234567890";
+	const snapshot = pin.snapshotGateConfig(root, gateFiles);
+	const code = snapshot && pin.approvalCode(snapshot.hash);
+	return {root, files: gateFiles, approverId: id, token: "fixture", env: {...process.env, DEPLOY_APPROVAL_STATE_DIR: path.join(path.dirname(root), "state")}, refs: code ? [{code, channelId, messageId}] : [],
+		fetchImpl: async () => ({ok: true, json: async () => ({id: messageId, channel_id: channelId, author: {id}, content: code, timestamp: "2026-01-01T00:00:00Z"})})};
+}
+function withApprovedConfig(root, fn) {
+	return deployPlan.withGateConfig(fixtureGateConfig(root), fn);
+}
 
 function makeWorkspace(t) {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sample-approval-plan-gate-test-"));
@@ -33,20 +58,25 @@ function makeWorkspace(t) {
 		fs.mkdirSync(path.dirname(dst), { recursive: true });
 		fs.copyFileSync(src, dst);
 	}
+	for (const name of [".claude/deploy/config.json", "config/deploy-gate.json"]) {
+		const target = path.join(root, name);
+		fs.mkdirSync(path.dirname(target), { recursive: true });
+		fs.writeFileSync(target, "{}");
+	}
 	return { tmp, root, stateDir, transcriptPath };
 }
 
 // Test-only child entrypoint: all Discord reads are supplied by this mock fetch.
-function approvedRunner(root, tmp, planFile, argv = ["review", planFile, "--author", "muse"]) {
+function approvedRunner(root, tmp, planFile, argv = ["review", planFile, "--author", "muse"], configRoot = root) {
  const cli = path.join(root, ".agents/scripts/approval-plan.mjs");
  const runner = path.join(tmp, "run-approved.mjs");
  fs.writeFileSync(runner, `import {runApprovedApprovalPlan} from ${JSON.stringify(require("node:url").pathToFileURL(cli).href)};\n` +
   `const {createRequire} = await import('node:module'); const req = createRequire(import.meta.url);\n` +
   `const pin = req(${JSON.stringify(path.join(root, ".claude/hooks/lib/gate-config-pin.js"))});\n` +
-  `const root = ${JSON.stringify(root)}, plan = ${JSON.stringify(planFile)};\n` +
+  `const root = ${JSON.stringify(configRoot)}, plan = ${JSON.stringify(planFile)};\n` +
   `const id='123456789012345678', channel='234567890123456789', message='345678901234567890';\n` +
-  `const code=pin.approvalCode(pin.snapshotGateConfig(root).hash);\n` +
-  `await runApprovedApprovalPlan({root, approverId:id, token:'test-only', refs:[{code,channelId:channel,messageId:message}], fetchImpl:async()=>({ok:true,json:async()=>({id:message,channel_id:channel,author:{id},content:code})})}, ${JSON.stringify(argv)});\n`);
+  `const files=['.claude/deploy/config.json','config/deploy-gate.json']; const code=pin.approvalCode(pin.snapshotGateConfig(root,files).hash);\n` +
+  `await runApprovedApprovalPlan({root, files, approverId:id, token:'test-only', refs:[{code,channelId:channel,messageId:message}], fetchImpl:async()=>({ok:true,json:async()=>({id:message,channel_id:channel,author:{id},content:code})})}, ${JSON.stringify(argv)});\n`);
  return runner;
 }
 
@@ -235,7 +265,21 @@ function runDeployGuardHook(command, { cwd, root, stateDir, transcriptPath, sess
 		session_id: sessionId,
 		transcript_path: transcriptPath,
 	});
-	const res = spawnSync(process.execPath, [HOOK_PATH], {
+	const runner = path.join(stateDir, "approved-guard.cjs");
+	fs.writeFileSync(runner, `
+		const fs=require('node:fs'), path=require('node:path');
+		process.stdout.write=(s)=>{const b=Buffer.from(String(s)); for(let i=0;i<b.length;) {try{i+=fs.writeSync(1,b,i);}catch(e){if(e.code!=='EAGAIN') throw e;}} return true;};
+		const H=require(${JSON.stringify(path.join(REPO_ROOT, ".claude/hooks/_claude-bash-guard.js"))});
+		const P=require(${JSON.stringify(path.join(REPO_ROOT, ".agents/hooks/policies/bash.js"))});
+		const pin=require(${JSON.stringify(path.join(REPO_ROOT, ".claude/hooks/lib/gate-config-pin.js"))});
+		const root=${JSON.stringify(root)}, files=['.claude/deploy/config.json','config/deploy-gate.json'];
+		const id='123456789012345678', channelId='234567890123456789', messageId='345678901234567890';
+		const snap=pin.snapshotGateConfig(root,files), code=snap && pin.approvalCode(snap.hash);
+		const plugin='config/custom-gate-plugin.cjs', plugins={};
+		if(fs.existsSync(path.join(root,plugin))) plugins[plugin]=require(path.join(root,plugin));
+		H.start((command,data)=>P.deploy(command,data,{rootDir:root,deployDir:path.join(root,'.claude/deploy'),gateConfig:{files,approverId:id,token:'fixture',refs:code?[{code,channelId,messageId}]:[],plugins,fetchImpl:async()=>({ok:true,json:async()=>({id:messageId,channel_id:channelId,author:{id},content:code})})}}));
+	`);
+	const res = spawnSync(process.execPath, [runner], {
 		cwd,
 		input: payload,
 		encoding: "utf8",
@@ -268,11 +312,12 @@ test("2. 인스턴스 설정(config/deploy-gate.json) 없는 알 수 없는 운�
 	const { planFile, step1Cmd } = createValidPlan(root);
 	writePassingReviewReceipt(root, planFile);
 
-	// config/deploy-gate.json 이 없을 때: "알 수 없는 운영 명령은 막음"
+	// No approved snapshot is a closed state.
+	fs.unlinkSync(path.join(root, "config/deploy-gate.json"));
 	const noCfgDecision = runDeployGuardHook(step1Cmd, { cwd: root, root, stateDir, transcriptPath });
 	assert.ok(noCfgDecision);
 	assert.equal(noCfgDecision.decision, "block");
-	assert.match(noCfgDecision.reason, /알 수 없는 운영 명령은 막음/);
+	assert.match(noCfgDecision.reason, /승인된 관문 설정이 없어/);
 
 	// 다른 미등록 서비스만 들어 있는 config/deploy-gate.json 일 때도 차단
 	writeGateConfig(root, { services: { "azure:containerapp:other-prod": { allowOps: true } } });
@@ -483,13 +528,13 @@ test("8. 차단 1 재현: 옛 승인(approvals.json) 분기에서도 설정·계
 
 	// approvals.json 만 있고 config/deploy-gate.json 및 계획서가 없는 상태에서 az 운영 명령 실행
 	const cmd = "az containerapp update -n sample-web-prod -g rg --image x:v1";
-	const res = await P.deploy(cmd, { cwd: root, session_id: "legacy-bypass-test" }, { deployDir });
+	const res = await P.deploy(cmd, { cwd: root, session_id: "legacy-bypass-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 	assert.ok(res && res.reason, "approvals.json 만 있는 레거시 상태에서도 az 운영 명령은 통과(null)하면 안 되고 차단되어야 함");
 	assert.match(res.reason, /계획 밖 운영 명령이라 막습니다|알 수 없는 운영 명령은 막음/);
 	assert.match(res.reason, /azure:containerapp:sample-web-prod/);
 });
 
-test("9. 차단 2 재현: classifyInstanceExtension 플러그인 로드 실패·정규식 오류 때 unclassified 차단 및 prodPatterns 적중 보존", (t) => {
+test("9. 차단 2 재현: classifyInstanceExtension 플러그인 로드 실패·정규식 오류 때 unclassified 차단 및 prodPatterns 적중 보존", async (t) => {
 	const { root, stateDir, transcriptPath } = makeWorkspace(t);
 
 	// 9-A) prodPatterns 적중 + 깨진 plugin 경로 → prodPatterns 적중 보존 + unclassified 적중으로 blocked-unclassified 차단
@@ -500,7 +545,7 @@ test("9. 차단 2 재현: classifyInstanceExtension 플러그인 로드 실패·
 		plugin: "config/missing-plugin.cjs",
 	});
 	const cmd = "custom-deploy-cli --prod";
-	const hits = classifyProdMutations(cmd, root);
+	const hits = await withApprovedConfig(root, () => classifyProdMutations(cmd, root, 0, false, root));
 	assert.ok(hits.some((h) => h.service === "custom:prod-svc"), "이미 모은 prodPatterns 적중을 버리지 않아야 함");
 	assert.ok(hits.some((h) => h.unclassified), "플러그인 로드 실패 시 unclassified 적중을 내야 함");
 
@@ -519,7 +564,7 @@ test("9. 차단 2 재현: classifyInstanceExtension 플러그인 로드 실패·
 			{ pattern: "[invalid-regex", service: "custom:bad-regex", summary: "잘못된 정규식" },
 		],
 	});
-	const regexHits = classifyProdMutations(cmd, root);
+	const regexHits = await withApprovedConfig(root, () => classifyProdMutations(cmd, root, 0, false, root));
 	assert.ok(regexHits.some((h) => h.service === "custom:prod-svc"), "유효한 prodPatterns 적중은 보존되어야 함");
 	assert.ok(regexHits.some((h) => h.unclassified), "정규식 오류 시 unclassified 적중을 내야 함");
 
@@ -598,14 +643,14 @@ test("10. 유효한 옛 승인(approvals.json)과 프로젝트 설정이 있어�
 	});
 
 	// 1) vercel --prod 차단 확인
-	const vercelRes = await P.deploy("vercel --prod", { cwd: root, session_id: "legacy-overlap-test" }, { deployDir });
+	const vercelRes = await P.deploy("vercel --prod", { cwd: root, session_id: "legacy-overlap-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 	assert.ok(vercelRes && vercelRes.reason, "유효한 옛 승인이 있어도 vercel --prod 는 차단되어야 함");
 	assert.match(vercelRes.reason, /계획 밖 운영 명령이라 막습니다|알 수 없는 운영 명령은 막음/);
 	assert.match(vercelRes.reason, /vercel:prod/);
 
 	// 2) gcloud run deploy <서비스> --project <x> 차단 확인
 	const gcloudCmd = "gcloud run deploy sample-svc --project sample-proj";
-	const gcloudRes = await P.deploy(gcloudCmd, { cwd: root, session_id: "legacy-overlap-test" }, { deployDir });
+	const gcloudRes = await P.deploy(gcloudCmd, { cwd: root, session_id: "legacy-overlap-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 	assert.ok(gcloudRes && gcloudRes.reason, "유효한 옛 승인이 있어도 gcloud run deploy 는 차단되어야 함");
 	assert.match(gcloudRes.reason, /계획 밖 운영 명령이라 막습니다|알 수 없는 운영 명령은 막음/);
 	assert.match(gcloudRes.reason, /gcloud:run:sample-svc/);
@@ -620,7 +665,7 @@ test("10. 유효한 옛 승인(approvals.json)과 프로젝트 설정이 있어�
 	];
 
 	for (const { name, cmd, expectedService } of bypassCases) {
-		const legacyRes = await P.deploy(cmd, { cwd: root, session_id: "legacy-overlap-test" }, { deployDir });
+		const legacyRes = await P.deploy(cmd, { cwd: root, session_id: "legacy-overlap-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 		assert.ok(legacyRes && legacyRes.reason, `우회 변형(${name})은 옛 승인 상태에서 차단되어야 함`);
 		assert.match(legacyRes.reason, /계획 밖 운영 명령이라 막습니다|알 수 없는 운영 명령은 막음/);
 		assert.match(legacyRes.reason, expectedService);
@@ -667,14 +712,14 @@ test("11. P1-1 재현: Pi 어댑터(.pi/extensions/naia-harness.ts) tool_call �
 		{ cwd: root }
 	);
 	assert.ok(res1 && res1.block === true, "Pi 어댑터에서 vercel --prod 배포 명령이 차단되어야 함");
-	assert.match(res1.reason || "", /계획 밖 운영 명령이라 막습니다|알 수 없는 운영 명령은 막음|prod 배포/);
+	assert.match(res1.reason || "", /승인된 관문 설정이 없어/);
 
 	const res2 = await onToolCall(
 		{ toolName: "bash", input: { command: "az containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1" } },
 		{ cwd: root }
 	);
 	assert.ok(res2 && res2.block === true, "Pi 어댑터에서 az containerapp update 운영 명령이 차단되어야 함");
-	assert.match(res2.reason || "", /azure:containerapp:sample-web-prod/);
+	assert.match(res2.reason || "", /승인된 관문 설정이 없어/);
 });
 
 test("12. P1-2 재현: 복합 명령 안 개발 서비스(gcloud run deploy sample-dev) 일치만으로 앞뒤 절의 운영 배포(vercel --prod 등)가 통과하지 않음", async (t) => {
@@ -698,31 +743,31 @@ test("12. P1-2 재현: 복합 명령 안 개발 서비스(gcloud run deploy samp
 	);
 
 	// 단독 개발 서비스 배포 절은 그대로 통과 (-dev 접미사 및 dev_service 지정 이름 모두)
-	const devOnlyRes = await P.deploy("gcloud run deploy sample-dev", { cwd: root, session_id: "dev-clause-test" }, { deployDir });
+	const devOnlyRes = await P.deploy("gcloud run deploy sample-dev", { cwd: root, session_id: "dev-clause-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 	assert.equal(devOnlyRes, null, "단독 개발 서비스 배포 명령은 예외로 통과해야 함");
-	const customDevOnlyRes = await P.deploy("gcloud run deploy custom-sandbox-svc", { cwd: root, session_id: "dev-clause-test" }, { deployDir });
+	const customDevOnlyRes = await P.deploy("gcloud run deploy custom-sandbox-svc", { cwd: root, session_id: "dev-clause-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 	assert.equal(customDevOnlyRes, null, "config.json dev_service 에 등록된 단독 개발 서비스 배포 명령도 예외로 통과해야 함");
 
 	// 첫 절이 vercel 운영 배포(--prod), 둘째 절이 gcloud run deploy sample-dev 인 복합 명령은 차단되어야 함
 	const compoundCmd = "vercel --prod && gcloud run deploy sample-dev";
-	const compoundRes = await P.deploy(compoundCmd, { cwd: root, session_id: "dev-clause-test" }, { deployDir });
+	const compoundRes = await P.deploy(compoundCmd, { cwd: root, session_id: "dev-clause-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 	assert.ok(compoundRes && compoundRes.reason, "복합 명령 안 개발 서비스 절 때문에 vercel --prod 절이 통과하면 안 됨");
 	assert.match(compoundRes.reason, /vercel:prod/);
 
 	// dev_service 이름(custom-sandbox-svc)과 함께 묶인 복합 명령도 운영 절만 정확히 검출·차단되어야 함
-	const customCompoundRes = await P.deploy("vercel --prod && gcloud run deploy custom-sandbox-svc", { cwd: root, session_id: "dev-clause-test" }, { deployDir });
+	const customCompoundRes = await P.deploy("vercel --prod && gcloud run deploy custom-sandbox-svc", { cwd: root, session_id: "dev-clause-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 	assert.ok(customCompoundRes && customCompoundRes.reason, "custom dev_service 절이 섞여 있어도 vercel --prod 절은 차단되어야 함");
 	assert.match(customCompoundRes.reason, /vercel:prod/);
 	assert.doesNotMatch(customCompoundRes.reason, /custom-sandbox-svc/);
 
 	// 역순(첫 절이 sample-dev, 둘째 절이 vercel --prod) 및 레거시 패턴 복합 명령도 차단 확인
 	const reverseCmd = "gcloud run deploy sample-dev && vercel --prod";
-	const reverseRes = await P.deploy(reverseCmd, { cwd: root, session_id: "dev-clause-test" }, { deployDir });
+	const reverseRes = await P.deploy(reverseCmd, { cwd: root, session_id: "dev-clause-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 	assert.ok(reverseRes && reverseRes.reason, "첫 절이 개발 서비스여도 둘째 절의 운영 배포는 차단되어야 함");
 	assert.match(reverseRes.reason, /vercel:prod/);
 
 	const legacyCompoundCmd = "gcloud run deploy sample-dev && gcloud run services update sample-prod";
-	const legacyCompoundRes = await P.deploy(legacyCompoundCmd, { cwd: root, session_id: "dev-clause-test" }, { deployDir });
+	const legacyCompoundRes = await P.deploy(legacyCompoundCmd, { cwd: root, session_id: "dev-clause-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 	assert.ok(legacyCompoundRes && legacyCompoundRes.reason, "첫 절이 개발 서비스여도 둘째 절의 gcloud run services update sample-prod 는 차단되어야 함");
 
 	const hookDecision = runDeployGuardHook(compoundCmd, { cwd: root, root, stateDir, transcriptPath });
@@ -762,17 +807,17 @@ test("13. P1-3 재현: 하위 폴더로 cd 한 뒤 사용자 정의 운영 패�
 
 	// 1) 루트에서 하위 폴더로 cd 한 뒤 release-control --live 실행
 	const cdCmd = "cd packages/subapp && release-control --live";
-	const hitsFromCd = classifyProdMutations(cdCmd, root);
+	const hitsFromCd = await withApprovedConfig(root, () => classifyProdMutations(cdCmd, root, 0, false, root));
 	assert.ok(
 		hitsFromCd.some((h) => h.service === "custom:release-control:live"),
 		"하위 폴더로 cd 한 뒤에도 루트 config/deploy-gate.json 의 prodPatterns 가 적중해야 함"
 	);
-	const resFromCd = await P.deploy(cdCmd, { cwd: root, session_id: "subdir-ext-test" }, { deployDir });
+	const resFromCd = await P.deploy(cdCmd, { cwd: root, session_id: "subdir-ext-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 	assert.ok(resFromCd && resFromCd.reason, "cd 뒤 사용자 정의 운영 패턴 명령은 차단되어야 함");
 	assert.match(resFromCd.reason, /custom:release-control:live/);
 
 	// 2) 하위 폴더 자체가 cwd 인 상태에서 release-control --live 실행
-	const resFromSubCwd = await P.deploy("release-control --live", { cwd: subDir, session_id: "subdir-ext-test" }, { deployDir });
+	const resFromSubCwd = await P.deploy("release-control --live", { cwd: subDir, session_id: "subdir-ext-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 	assert.ok(resFromSubCwd && resFromSubCwd.reason, "하위 폴더 cwd 에서 실행한 사용자 정의 운영 패턴 명령도 관문 루트 설정으로 차단되어야 함");
 	assert.match(resFromSubCwd.reason, /custom:release-control:live/);
 });
@@ -878,7 +923,7 @@ test("15. 2회차 지적 1 재현: 명령 앞 전역 옵션 우회 12종 + 미�
 			hits.some((h) => expectedService.test(h.service)),
 			`[${name}] 분류기가 운영 서비스를 잡아야 함 (실제: ${JSON.stringify(hits)})`
 		);
-		const res = await P.deploy(cmd, { cwd: root, session_id: "leading-opt-test" }, { deployDir });
+		const res = await P.deploy(cmd, { cwd: root, session_id: "leading-opt-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 		assert.ok(res && res.reason, `[${name}] P.deploy 에서 차단되어야 함`);
 		assert.match(res.reason, expectedService);
 
@@ -896,7 +941,7 @@ test("15. 2회차 지적 1 재현: 명령 앞 전역 옵션 우회 12종 + 미�
 		"docker image push gcr.io/sample/app:v1",
 	];
 	for (const cmd of dockerCases) {
-		const res = await P.deploy(cmd, { cwd: root, session_id: "docker-opt-test" }, { deployDir });
+		const res = await P.deploy(cmd, { cwd: root, session_id: "docker-opt-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 		assert.ok(res && res.reason, `docker 앞 옵션 명령(${cmd})은 P.deploy 에서 차단되어야 함`);
 	}
 
@@ -914,7 +959,7 @@ test("15. 2회차 지적 1 재현: 명령 앞 전역 옵션 우회 12종 + 미�
 	for (const cmd of unknownOptCases) {
 		const hits = classifyProdMutations(cmd, root);
 		assert.ok(hits.length > 0, `모르는 앞 옵션 명령(${cmd})은 막는 쪽으로 분류되어야 함`);
-		const res = await P.deploy(cmd, { cwd: root, session_id: "unknown-opt-test" }, { deployDir });
+		const res = await P.deploy(cmd, { cwd: root, session_id: "unknown-opt-test" }, { deployDir, rootDir: root, gateConfig: fixtureGateConfig(root) });
 		assert.ok(res && res.reason, `모르는 앞 옵션 명령(${cmd})은 P.deploy 에서 차단되어야 함`);
 	}
 
@@ -1081,12 +1126,13 @@ test("큰 실행 파일: 셸 대본인지 볼 때 앞부분만 읽고 전체를 
 	assert.ok(maxRead <= 4096, `큰 파일을 ${maxRead} 바이트 읽음`);
 });
 
-test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음·막음 검증 (문서용 주소·example 이름만 사용)", (t) => {
+test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음·막음 검증 (문서용 주소·example 이름만 사용)", async (t) => {
 	const { root, stateDir, transcriptPath } = makeWorkspace(t);
 	writeGateConfig(root, {
 		testHosts: ["192.0.2.10", "GPU-BOX.example.", "lab-node.example.com", "*.wildcard.example"],
 	});
 
+	await withApprovedConfig(root, async () => {
 	// 1) 설정된 시험 기기로의 읽기·루프·복사·사용자 서비스 재시작은 비운영으로 통과
 	const allowedCmds = [
 		"ssh user@192.0.2.10 nvidia-smi",
@@ -1099,14 +1145,14 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 		"scp a.txt user@192.0.2.10:~/work/",
 	];
 	for (const cmd of allowedCmds) {
-		assert.deepEqual(classifyProdMutations(cmd, root), [], `시험 기기 명령은 비운영으로 분류되어야 함: ${cmd}`);
+		assert.deepEqual(classifyProdMutations(cmd, root, 0, false, root), [], `시험 기기 명령은 비운영으로 분류되어야 함: ${cmd}`);
 		const decision = runDeployGuardHook(cmd, { cwd: root, root, stateDir, transcriptPath });
 		assert.equal(decision, null, `시험 기기 명령은 관문을 통과해야 함: ${cmd}`);
 	}
 
 	// 2) 시험 기기 안이라도 원격 본문의 운영 변경(az vm delete 등)은 다시 분류해 차단
 	const remoteProdCmd = "ssh user@192.0.2.10 az vm delete -n sample-vm -g sample-rg";
-	const remoteProdHits = classifyProdMutations(remoteProdCmd, root);
+	const remoteProdHits = classifyProdMutations(remoteProdCmd, root, 0, false, root);
 	assert.ok(remoteProdHits.some((h) => h.service === "azure:vm:sample-vm"), `시험 기기 안 운영 변경은 잡혀야 함: ${JSON.stringify(remoteProdHits)}`);
 	const remoteProdDecision = runDeployGuardHook(remoteProdCmd, { cwd: root, root, stateDir, transcriptPath });
 	assert.ok(remoteProdDecision && remoteProdDecision.decision === "block", "시험 기기 안 az vm delete 는 막혀야 함");
@@ -1116,7 +1162,7 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 		"ssh -o HostName=192.0.2.20 user@192.0.2.10 sudo systemctl restart sample",
 		"ssh -F /tmp/custom_ssh_config user@192.0.2.10 sudo systemctl restart sample",
 	]) {
-		const hits = classifyProdMutations(overrideCmd, root);
+		const hits = classifyProdMutations(overrideCmd, root, 0, false, root);
 		assert.ok(hits.length > 0, `덮어쓰기 옵션 명령은 막아야 함: ${overrideCmd}`);
 		const decision = runDeployGuardHook(overrideCmd, { cwd: root, root, stateDir, transcriptPath });
 		assert.ok(decision && decision.decision === "block", `덮어쓰기 옵션 명령은 훅에서 막혀야 함: ${overrideCmd}`);
@@ -1129,10 +1175,11 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 		"ssh -l user sub.gpu-box.example sudo systemctl restart sample",
 		"ssh -l user host.wildcard.example sudo systemctl restart sample",
 	]) {
-		const hits = classifyProdMutations(blockedCmd, root);
+		const hits = classifyProdMutations(blockedCmd, root, 0, false, root);
 		assert.ok(hits.length > 0, `목록 밖/와일드카드 호스트는 운영으로 분류되어야 함: ${blockedCmd}`);
 	}
 
+	});
 	// 5) 설정이 없거나 깨졌으면 빈 목록(기존 동작대로 막힘)
 	const cfgPath = path.join(root, "config", "deploy-gate.json");
 	fs.writeFileSync(cfgPath, "{ broken json");
@@ -1142,10 +1189,11 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 });
 
 
-test("local systemd: configured mutations require a plan across shell forms", (t) => {
+test("local systemd: configured mutations require a plan across shell forms", async (t) => {
 	const { root, stateDir, transcriptPath } = makeWorkspace(t);
 	const service = "local:systemd:sample-web";
 	writeGateConfig(root, { services: { [service]: { requireDeployGate: false, allowOps: true, paths: ["/opt/sample-web"] } } });
+	await withApprovedConfig(root, async () => {
 	const commands = [
 		...["stop", "start", "restart", "reload", "enable", "disable", "mask", "kill"].map(v => `/usr/bin/sudo /usr/bin/env MODE=sample /usr/bin/systemctl ${v} sample-web.service sample-web.socket`),
 		"sh -c 'systemctl stop sample-web'", "sudo sh -c 'systemctl stop sample-web'",
@@ -1172,6 +1220,7 @@ test("local systemd: configured mutations require a plan across shell forms", (t
 	for (const command of ["systemctl status sample-web", "systemctl status stop sample-web", "sed -i /opt/sample-web /tmp/unrelated", "systemctl show sample-web", "systemctl is-active sample-web", "systemctl cat sample-web", "systemctl list-units sample-web", "systemctl stop sample-other", "cp /opt/sample-web/readme /tmp/sample-copy", "cp source /opt/sample-web-other/file", "cat /etc/systemd/system/sample-web.service"]) {
 		assert.deepEqual(classifyProdMutations(command, root, 0, false, root), [], command);
 	}
+	});
 });
 
 test("local systemd: reviewed plan issues PLAN and STEP codes", (t) => {
@@ -1205,28 +1254,34 @@ const localRegressionCases = {
  "F-8 write tools": ["dd if=/tmp/sample-source of=/etc/systemd/system/sample-web.service", "truncate -s0 /opt/sample-web/app.conf", "truncate --size 0 /opt/sample-web/app.conf", "rsync -a /tmp/sample-source/ /opt/sample-web/", "chmod 644 /etc/systemd/system/sample-web.service", "chmod -w /opt/sample-web/app.conf", "chmod --reference /tmp/sample-mode /opt/sample-web/app.conf", "chown --reference=/tmp/sample-owner /opt/sample-web/app.conf", "chown sample-user /opt/sample-web/app.conf", "install -m 644 /tmp/sample-source /opt/sample-web/app.conf"],
  "F-9 link path": ["systemctl link /tmp/sample-web.service"],
 };
-for (const [finding, commands] of Object.entries(localRegressionCases)) test(`local systemd regression: ${finding}`, t => {
+for (const [finding, commands] of Object.entries(localRegressionCases)) test(`local systemd regression: ${finding}`, async t => {
  const {root, stateDir, transcriptPath} = makeWorkspace(t);
  const service = "local:systemd:sample-web";
  writeGateConfig(root, {services: {[service]: {paths: ["/opt/sample-web"]}}});
+ await withApprovedConfig(root, async () => {
  for (const command of commands) {
   assert.ok(classifyProdMutations(command, root, 0, false, root).some(h => h.service === service), command);
   assert.equal(runDeployGuardHook(command, {cwd:root, root, stateDir, transcriptPath})?.decision, "block", command);
  }
+ });
 });
-test("local systemd regression: precise unrelated targets and reads stay open", t => {
+test("local systemd regression: precise unrelated targets and reads stay open", async t => {
  const {root,stateDir,transcriptPath} = makeWorkspace(t);
  writeGateConfig(root, {services: {"local:systemd:sample-web": {paths:["/opt/sample-web"]}}});
+ await withApprovedConfig(root, async () => {
  for (const command of ["systemctl --user daemon-reload", "systemctl stop sample-other", "systemctl status sample-web", "service sample-web status", "cp sample-source /opt/sample-web2/file", "cat /etc/systemd/system/sample-web.service", "dd if=/opt/sample-web/app.conf of=/tmp/sample-output", "rsync /opt/sample-web/app.conf /tmp/sample-output", "chmod --reference /opt/sample-web/app.conf /tmp/sample-output", "chown --reference=/opt/sample-web/app.conf /tmp/sample-output"]) {
   assert.deepEqual(classifyProdMutations(command, root, 0, false, root), [], command);
   assert.equal(runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath}),null,command);
  }
+ });
 });
 
-test("local systemd regression: globs select matching registered units", t => {
+test("local systemd regression: globs select matching registered units", async t => {
  const {root} = makeWorkspace(t);
  writeGateConfig(root, {services: {"local:systemd:sample-web": {}, "local:systemd:sample-api": {}}});
+ await withApprovedConfig(root, async () => {
  assert.deepEqual(classifyProdMutations("systemctl stop 'sample-web*'",root,0,false,root).map(h => h.service), ["local:systemd:sample-web"]);
+ });
 });
 for (const changed of [false,true]) test(`local systemd approval: ${changed ? "changed plan invalidates codes" : "STEP is consumed once"}`, async t => {
  const {root,stateDir,transcriptPath} = makeWorkspace(t);
@@ -1243,22 +1298,26 @@ for (const changed of [false,true]) test(`local systemd approval: ${changed ? "c
  assert.equal(decision?.decision,"block");
  assert.match(decision.reason,changed ? /적대 리뷰를 통과하지 않아|지금 계획서가 아닌 판을 검수함/ : /단계 승인 필요/);
 });
-test("local systemd regression: unresolved write destinations fail closed", t => {
+test("local systemd regression: unresolved write destinations fail closed", async t => {
  const {root,stateDir,transcriptPath} = makeWorkspace(t);
  writeGateConfig(root,{services:{"local:systemd:sample-web":{paths:["/opt/sample-web"]}}});
+ await withApprovedConfig(root, async () => {
  for(const command of ["echo x > $P","cp /tmp/sample-source $P","dd of=${P}","truncate -s0 /opt/sample-*/app.conf"]) {
   assert.ok(classifyProdMutations(command,root,0,false,root).some(h=>h.service==="local:systemd:sample-web"),command);
   assert.equal(runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath})?.decision,"block",command);
  }
+ });
 });
 
-test("local systemd regression: comma separated negative chmod modes", t => {
+test("local systemd regression: comma separated negative chmod modes", async t => {
  const {root,stateDir,transcriptPath} = makeWorkspace(t);
  writeGateConfig(root,{services:{"local:systemd:sample-web":{paths:["/opt/sample-web"]}}});
+ await withApprovedConfig(root, async () => {
  for(const command of ["chmod -w,+x /opt/sample-web/app.conf", "chmod -w,u+x /opt/sample-web/app.conf"]) {
   assert.ok(classifyProdMutations(command,root,0,false,root).some(h=>h.service==="local:systemd:sample-web"),command);
   assert.equal(runDeployGuardHook(command,{cwd:root,root,stateDir,transcriptPath})?.decision,"block",command);
  }
+ });
 });
 
 test("unapproved temporary reviewer selection uses the default", (t) => {
@@ -1308,8 +1367,8 @@ test("approved reviewer aliases cannot review the author's original model", asyn
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
  const run = async (models) => {
   fs.writeFileSync(cfg, JSON.stringify({review_models: models}));
-  const code = pin.approvalCode(pin.snapshotGateConfig(root).hash);
-  return deployPlan.withGateConfig({root, approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+  const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
+  return deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
    fetchImpl: async () => ({ok: true, json: async () => ({id: message, channel_id: channel, author: {id}, content: code})})}, () => {
     const {planSha} = writePassingReviewReceipt(root, planFile, {reviewer: "fable"});
     const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
@@ -1371,8 +1430,8 @@ test("reviewer selection uses only the approved configuration", async (t) => {
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
  const check = async (planReview) => {
   fs.writeFileSync(file, JSON.stringify({planReview}));
-  const code = pin.approvalCode(pin.snapshotGateConfig(root).hash);
-  return deployPlan.withGateConfig({root, approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+  const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
+  return deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
    fetchImpl: async () => ({ok: true, json: async () => ({id: message, channel_id: channel, author: {id}, content: code})})},
    () => deployPlan.reviewerIdsFor("muse", root, now));
  };
@@ -1395,9 +1454,9 @@ test("review models use only the Discord-approved configuration", async (t) => {
  const set = (models) => fs.writeFileSync(cfg, JSON.stringify({review_models: models}));
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
  let calls = 0;
- const options = (code, author = id, extras = {}) => ({root, approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+ const options = (code, author = id, extras = {}) => ({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
   fetchImpl: async () => { calls++; return {ok: true, json: async () => ({id: message, channel_id: channel, author: {id: author}, content: `approve ${code}`, timestamp: "2000-01-01T00:00:00.000Z", ...extras})}; }});
- const currentCode = () => pin.approvalCode(pin.snapshotGateConfig(root).hash);
+ const currentCode = () => pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
  assert.equal(pin.approvalCode("0".repeat(64)), "CFG-M2Q4VMRQV3", "formula uses standard base32 and the NUL separator");
  const {planSha, manifestSha: defaultManifest} = writePassingReviewReceipt(root, planFile, {reviewer: "argon"});
  const oldReceipt = JSON.parse(fs.readFileSync(file));
@@ -1421,9 +1480,9 @@ test("review models use only the Discord-approved configuration", async (t) => {
   const fableReceipt = JSON.parse(fs.readFileSync(file));
   assert.equal(check(fableReceipt).ok, true, "genuine approved Fable receipt accepted");
   fs.appendFileSync(cfg, " ");
-  assert.deepEqual(deployPlan.reviewModelsFor(root), deployPlan.REVIEW_MODELS, "one byte change revokes the snapshot immediately");
+	  assert.deepEqual(deployPlan.reviewModelsFor(root).argon, {model: "fable", effort: "high", runner: "claude"}, "the in-flight operation keeps its verified snapshot");
  });
- await deployPlan.withGateConfig(options(approvedCode), async () => assert.deepEqual(deployPlan.reviewModelsFor(root), deployPlan.REVIEW_MODELS, "old approval does not approve changed content"));
+	 await deployPlan.withGateConfig(options(approvedCode), async () => assert.deepEqual(deployPlan.reviewModelsFor(root).argon, {model: "fable", effort: "high", runner: "claude"}, "changed current bytes fall back to the reverified approved snapshot"));
  for (const model of ["-flag", "model\nflag"]) {
   set({argon: {model, effort: "high", runner: "claude"}});
   await deployPlan.withGateConfig(options(currentCode()), async () => assert.throws(() => deployPlan.reviewModelsFor(root), /model/));
@@ -1456,9 +1515,9 @@ test("approved Fable review invokes the Claude runner and accepts its receipt", 
 ` +
   `const id='123456789012345678', channel='234567890123456789', message='345678901234567890';
 ` +
-  `const code=pin.approvalCode(pin.snapshotGateConfig(root).hash);
+  `const code=pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
 ` +
-  `await runApprovedApprovalPlan({root, approverId:id, token:'test-only', refs:[{code,channelId:channel,messageId:message}], fetchImpl:async()=>({ok:true,json:async()=>({id:message,channel_id:channel,author:{id},content:code})})}, ['review',plan,'--author','muse']);
+  `await runApprovedApprovalPlan({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId:id, token:'test-only', refs:[{code,channelId:channel,messageId:message}], fetchImpl:async()=>({ok:true,json:async()=>({id:message,channel_id:channel,author:{id},content:code})})}, ['review',plan,'--author','muse']);
 `);
  const result = spawnSync(process.execPath, [runner], {cwd: root, encoding: "utf8", timeout: 30000,
   env: {...process.env, HOME: fakeHome, XDG_STATE_HOME: path.join(tmp, "xdg-state"), PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CLAUDE_BIN: fakeClaude, CLAUDE_CODE_EFFORT_LEVEL: "low", DEPLOY_APPROVAL_STATE_DIR: stateDir}});
@@ -1493,8 +1552,8 @@ test("approved judge settings bind the incident verdict to the manifest", async 
  const planSha = sha256(fs.readFileSync(planFile));
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
  const check = () => {
-  const code = pin.approvalCode(pin.snapshotGateConfig(root).hash);
-  return deployPlan.withGateConfig({root, approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+  const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
+  return deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
    fetchImpl: async () => ({ok: true, json: async () => ({id: message, channel_id: channel, author: {id}, content: code})})},
    () => deployPlan.incidentVerdict(gatesDir, planSha, "exec-sess-1", Date.now(), root));
  };
@@ -1523,9 +1582,9 @@ test("old fallback receipt cannot survive an approved reviewer change", async (t
  assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, true, "fallback receipt passes before change");
  fs.mkdirSync(path.dirname(cfg), {recursive: true});
  fs.writeFileSync(cfg, JSON.stringify({review_models: {argon: {model: "fable", effort: "high", runner: "claude"}}}));
- const code = pin.approvalCode(pin.snapshotGateConfig(root).hash);
+ const code = pin.approvalCode(pin.snapshotGateConfig(root, [".claude/deploy/config.json", "config/deploy-gate.json"]).hash);
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
- await deployPlan.withGateConfig({root, approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+ await deployPlan.withGateConfig({root, files: [".claude/deploy/config.json", "config/deploy-gate.json"], approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
   fetchImpl: async () => ({ok: true, json: async () => ({id: message, channel_id: channel, author: {id}, content: code})})}, async () => {
    assert.notEqual(deployPlan.reviewInputManifest(planFile, root), oldManifest);
    const result = deployPlan.reviewProblems(gatesDir, planSha, root);
@@ -1628,7 +1687,7 @@ const { verifiedPlanBinding } = require("../lib/deploy-readiness.js");
 const PIN_SERVICE = "azure:vm:sample-vm";
 const PIN_OPS_WHY = /계획 고정 대본은 ops 로 받지 않음/;
 
-function pinnedScriptFixture(t, { body = 'case "$1" in s1) az vm run-command invoke -g sample-rg -n sample-vm --command-id RunShellScript --scripts @remote-s1.sh ;; r1) echo "$2" ;; esac\n', remote = "#!/usr/bin/env bash\nsystemctl restart sample-web\n", services = null } = {}) {
+async function pinnedScriptFixture(t, { body = 'case "$1" in s1) az vm run-command invoke -g sample-rg -n sample-vm --command-id RunShellScript --scripts @remote-s1.sh ;; r1) echo "$2" ;; esac\n', remote = "#!/usr/bin/env bash\nsystemctl restart sample-web\n", services = null } = {}) {
 	const { root } = makeWorkspace(t);
 	const planDir = path.join(root, ".agents", "progress", "sample-vm-work");
 	const gatesDir = path.join(planDir, "gates");
@@ -1638,11 +1697,11 @@ function pinnedScriptFixture(t, { body = 'case "$1" in s1) az vm run-command inv
 	fs.writeFileSync(script, `#!/usr/bin/env bash\nset -euo pipefail\n${body}`);
 	fs.writeFileSync(remotePath, remote);
 	const files = { [script]: sha256(fs.readFileSync(script)), [remotePath]: sha256(fs.readFileSync(remotePath)) };
-	const real = services || (() => {
+	const real = services || await withApprovedConfig(root, () => {
 		// 훅처럼 분류기(classifyProdMutations)가 낸 서비스 집합을 쓴다.
 		const hits = classifyProdMutations(`sudo bash ${script} s1`, root, 0, false, root);
 		return [...new Set(hits.map((h) => h.service))];
-	})();
+	});
 	assert.ok(real.length > 0, "분류기 서비스 집합이 비어 있지 않아야 함");
 	fs.mkdirSync(path.join(root, "config"), { recursive: true });
 	fs.writeFileSync(path.join(root, "config", "deploy-gate.json"), JSON.stringify({ schema: "deploy-gate/v1", services: Object.fromEntries(real.map((s) => [s, { label: s, allowOps: true }])) }));
@@ -1658,57 +1717,57 @@ function pinnedScriptFixture(t, { body = 'case "$1" in s1) az vm run-command inv
 	const assess = (stepId = "s1") => {
 		const entry = plan.scenario.find((s) => s.id === stepId);
 		const command = entry.commands[0];
-		return assessReadiness(real, { root, command, cwd: root, planBinding: { plan, entry, command, cwd: root, gatesDir } });
+		return withApprovedConfig(root, () => assessReadiness(real, { root, command, cwd: root, planBinding: { plan, entry, command, cwd: root, gatesDir } }));
 	};
 	const writeOps = () => fs.writeFileSync(path.join(gatesDir, "deploy.json"), JSON.stringify({ kind: "ops", services: real, reason: "고정 대본 운영 작업", createdAt: new Date().toISOString() }));
 	const bind = (stepId = "s1", kind = "ops") => {
 		const entry = plan.scenario.find((s) => s.id === stepId);
-		return verifiedPlanBinding({ plan, entry, command: entry.commands[0], cwd: root, gatesDir }, "", kind, real, root);
+		return withApprovedConfig(root, () => verifiedPlanBinding({ plan, entry, command: entry.commands[0], cwd: root, gatesDir }, "", kind, real, root));
 	};
 	return { root, planDir, gatesDir, script, remote: remotePath, files, plan, services: real, assess, writeOps, bind };
 }
 
-test("계획 고정 대본: 준비 기록 없는 계획 승인으로는 지문이 맞으면 받고, 대본·files 지문이 바뀌면 막는다", (t) => {
-	const f = pinnedScriptFixture(t);
+test("계획 고정 대본: 준비 기록 없는 계획 승인으로는 지문이 맞으면 받고, 대본·files 지문이 바뀌면 막는다", async (t) => {
+	const f = await pinnedScriptFixture(t);
 	assert.deepEqual(f.services, [PIN_SERVICE]);
 	for (const id of ["s1", "r1"]) {
-		const res = f.assess(id);
+		const res = await f.assess(id);
 		assert.equal(res.ok, true, `${id}: ${res.problems.join(" / ")}`);
 		assert.equal(res.kind, "plan");
 	}
 	for (const target of ["script", "remote"]) {
-		const g = pinnedScriptFixture(t);
+		const g = await pinnedScriptFixture(t);
 		fs.appendFileSync(g[target], "#");
-		const res = g.assess("s1");
+		const res = await g.assess("s1");
 		assert.equal(res.ok, false, `${target} 지문이 바뀌면 받히면 안 됨`);
 		assert.ok(res.problems.some((x) => /고정 파일 sha256 불일치/.test(x)), res.problems.join(" / "));
 	}
 });
 
-test("계획 고정 대본: 계획 승인에서도 서비스 허용 규칙(allowedCommands)은 그대로 따로 요구한다", (t) => {
-	const f = pinnedScriptFixture(t);
+test("계획 고정 대본: 계획 승인에서도 서비스 허용 규칙(allowedCommands)은 그대로 따로 요구한다", async (t) => {
+	const f = await pinnedScriptFixture(t);
 	fs.writeFileSync(path.join(f.root, "config", "deploy-gate.json"), JSON.stringify({ schema: "deploy-gate/v1", services: { [PIN_SERVICE]: { label: "샘플 VM", allowedCommands: ["^az vm restart "] } } }));
-	const r = f.bind("s1", "plan");
+	const r = await f.bind("s1", "plan");
 	assert.equal(r.ok, false);
 	assert.match(r.why, /allowedCommands/);
 });
 
-test("계획 고정 대본: 정상 대본이라도 ops 준비 기록으로는 받지 않는다", (t) => {
-	const f = pinnedScriptFixture(t);
+test("계획 고정 대본: 정상 대본이라도 ops 준비 기록으로는 받지 않는다", async (t) => {
+	const f = await pinnedScriptFixture(t);
 	for (const id of ["s1", "r1"]) {
-		const r = f.bind(id);
+		const r = await f.bind(id);
 		assert.equal(r.ok, false, `${id}: ops 로 받히면 안 됨`);
 		assert.match(r.why, PIN_OPS_WHY);
 	}
 	f.writeOps();
-	const res = f.assess("s1");
+	const res = await f.assess("s1");
 	assert.equal(res.ok, false);
 	assert.ok(res.problems.some((x) => PIN_OPS_WHY.test(x)), res.problems.join(" / "));
 });
 
-test("계획 고정 대본: kind=feature 는 ops 거부 문구 없이 기존 판정을 탄다", (t) => {
-	const f = pinnedScriptFixture(t);
-	const r = f.bind("s1", "feature");
+test("계획 고정 대본: kind=feature 는 ops 거부 문구 없이 기존 판정을 탄다", async (t) => {
+	const f = await pinnedScriptFixture(t);
+	const r = await f.bind("s1", "feature");
 	assert.equal(r.ok, false);
 	assert.doesNotMatch(r.why, PIN_OPS_WHY);
 	assert.match(r.why, /지원하지 않는 실행 형식/);
@@ -1728,17 +1787,17 @@ test("계획 고정 대본: 리뷰 a5 우회 1~5 는 ops 로 통과하지 못한
 		{ desc: "5 kubectl apply", body: 'case "$1" in s1) kubectl apply -f deploy.yaml ;; esac\n' },
 	];
 	for (const c of cases) {
-		await t.test(c.desc, (st) => {
-			const f = pinnedScriptFixture(st, { body: c.body, ...(c.remote ? { remote: c.remote } : {}) });
+		await t.test(c.desc, async (st) => {
+			const f = await pinnedScriptFixture(st, { body: c.body, ...(c.remote ? { remote: c.remote } : {}) });
 			f.writeOps();
-			const res = f.assess("s1");
+			const res = await f.assess("s1");
 			assert.equal(res.ok, false, `${c.desc}: ops 로 받히면 안 됨 (서비스 ${f.services.join(", ")})`);
 			assert.ok(res.problems.some((x) => PIN_OPS_WHY.test(x)), `${c.desc}: ${res.problems.join(" / ")}`);
 		});
 	}
 });
 
-test("읽기 전용 단계: 글자를 덧붙인 단계 명령은 막히고, 글자 그대로 낸 s0 은 승인·실행 기록을 남겨 s1 승인 요청까지 감", (t) => {
+test("읽기 전용 단계: 글자를 덧붙인 단계 명령은 막히고, 글자 그대로 낸 s0 은 승인·실행 기록을 남겨 s1 승인 요청까지 감", async (t) => {
 	const { root, stateDir, transcriptPath } = makeWorkspace(t);
 	writeGateConfig(root);
 
@@ -1750,7 +1809,7 @@ test("읽기 전용 단계: 글자를 덧붙인 단계 명령은 막히고, 글�
 	const scriptSha = sha256(fs.readFileSync(scriptAbs));
 	const s0Cmd = `bash ${scriptRel} s0`;
 	const s1Cmd = `bash ${scriptRel} s1`;
-	assert.deepEqual(classifyProdMutations(s0Cmd, root, 0, false, root), [], "이 시험은 분류기가 못 알아보는 단계 명령을 다룬다");
+	assert.deepEqual(await withApprovedConfig(root, () => classifyProdMutations(s0Cmd, root, 0, false, root)), [], "이 시험은 분류기가 못 알아보는 단계 명령을 다룬다");
 
 	const step = (id, cmd, title) => ({ id, title, commands: [cmd], files: { [scriptRel]: scriptSha }, success_check: "끝줄 ok 확인", on_failure: "멈추고 보고" });
 	const { planFile } = createValidPlan(root, {
@@ -1863,7 +1922,7 @@ function gitRun(root, args) {
 	return r.stdout;
 }
 
-function setupReadOnlyOpsWorkspace(t, {
+async function setupReadOnlyOpsWorkspace(t, {
 	scriptRel = ".agents/progress/sample-ro-work/gates/ops/ro-check.sh",
 	scriptBody = "#!/usr/bin/env bash\nset -euo pipefail\ndocker inspect sample-app >/dev/null\ndf -h / | tail -1\n",
 	service = "azure:vm:sample-vm",
@@ -1960,7 +2019,7 @@ function setupReadOnlyOpsWorkspace(t, {
 	}, null, 2));
 
 	if (withReview) {
-		writePassingReviewReceipt(root, planFile, { fail: reviewFail, bindReadOnlyScripts });
+		await withApprovedConfig(root, () => writePassingReviewReceipt(root, planFile, { fail: reviewFail, bindReadOnlyScripts }));
 	}
 	const readAudit = () => {
 		const auditFile = path.join(stateDir, "audit.jsonl");
@@ -1970,9 +2029,9 @@ function setupReadOnlyOpsWorkspace(t, {
 	return { tmp, root, stateDir, transcriptPath, cfgPath, scriptRel, scriptAbs, scriptSha, gatesDir, planFile, command, readAudit };
 }
 
-test("읽기 전용 ops 대본: 리뷰 PASS + 커밋된 readOnlyScripts(sha·path·service) 일치 시 승인 코드 없이 반복 실행 및 readonly-no-code 감사", (t) => {
+test("읽기 전용 ops 대본: 리뷰 PASS + 커밋된 readOnlyScripts(sha·path·service) 일치 시 승인 코드 없이 반복 실행 및 readonly-no-code 감사", async (t) => {
 	// 1. az vm run-command invoke --scripts @<상대 경로> (+ 허용 옵션)
-	const fAz = setupReadOnlyOpsWorkspace(t, {
+	const fAz = await setupReadOnlyOpsWorkspace(t, {
 		commandKind: "az",
 		customCommand: "az vm run-command invoke --subscription sub-1 --resource-group sample-rg --name sample-vm --command-id RunShellScript --scripts @.agents/progress/sample-ro-work/gates/ops/ro-check.sh --query 'value[0].message' --output tsv --only-show-errors",
 	});
@@ -1989,7 +2048,7 @@ test("읽기 전용 ops 대본: 리뷰 PASS + 커밋된 readOnlyScripts(sha·pat
 	// 2. 정확히 2토큰 bash / sh <script>
 	const sshScript = "#!/usr/bin/env bash\nset -euo pipefail\nssh sample-vm 'uptime && df -h /'\n";
 	for (const shKind of ["bash", "sh"]) {
-		const fSh = setupReadOnlyOpsWorkspace(t, {
+		const fSh = await setupReadOnlyOpsWorkspace(t, {
 			commandKind: shKind,
 			service: "ssh:sample-vm",
 			scriptRel: "scripts/ro-ssh-check.sh",
@@ -2003,16 +2062,16 @@ test("읽기 전용 ops 대본: 리뷰 PASS + 커밋된 readOnlyScripts(sha·pat
 	}
 });
 
-test("읽기 전용 ops 우회: 설정에 없는 sha 는 막히고 allowCustomCommands 여도 승인 코드 생략 불가", (t) => {
+test("읽기 전용 ops 우회: 설정에 없는 sha 는 막히고 allowCustomCommands 여도 승인 코드 생략 불가", async (t) => {
 	const wrongSha = "0".repeat(64);
-	const f1 = setupReadOnlyOpsWorkspace(t, {
+	const f1 = await setupReadOnlyOpsWorkspace(t, {
 		readOnlyScripts: [{ sha256: wrongSha, path: ".agents/progress/sample-ro-work/gates/ops/ro-check.sh", service: "azure:vm:sample-vm", note: "다른 대본" }],
 	});
 	const d1 = runDeployGuardHook(f1.command, { cwd: f1.root, root: f1.root, stateDir: f1.stateDir, transcriptPath: f1.transcriptPath });
 	assert.equal(d1?.decision, "block");
 	assert.ok(!f1.readAudit().some((a) => a.approved_by === "readonly-no-code"));
 
-	const f2 = setupReadOnlyOpsWorkspace(t, {
+	const f2 = await setupReadOnlyOpsWorkspace(t, {
 		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } },
 		readOnlyScripts: [],
 	});
@@ -2021,9 +2080,9 @@ test("읽기 전용 ops 우회: 설정에 없는 sha 는 막히고 allowCustomCo
 	assert.match(d2.reason, /PLAN-/);
 });
 
-test("읽기 전용 ops B1: 리뷰 뒤 readOnlyScripts 자가 커밋 시 무코드 불가(승인 코드 필요) + 영수증 위조 차단 + 리뷰어 대본 본문 고정", (t) => {
+test("읽기 전용 ops B1: 리뷰 뒤 readOnlyScripts 자가 커밋 시 무코드 불가(승인 코드 필요) + 영수증 위조 차단 + 리뷰어 대본 본문 고정", async (t) => {
 	// 1. 리뷰 시점에는 readOnlyScripts: [] → 리뷰 통과 뒤 config/deploy-gate.json 에 항목을 추가 커밋 → 무코드 거부, PLAN- 코드 필요
-	const fSelfCommit = setupReadOnlyOpsWorkspace(t, {
+	const fSelfCommit = await setupReadOnlyOpsWorkspace(t, {
 		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } },
 		readOnlyScripts: [],
 	});
@@ -2048,7 +2107,7 @@ test("읽기 전용 ops B1: 리뷰 뒤 readOnlyScripts 자가 커밋 시 무코�
 	assert.match(dTampered.reason, /적대 리뷰를 통과하지 않아/);
 
 	// 3. 계획서 files 에 대본을 고정하지 않으면 리뷰 전 pinnedFileProblems 가 거부하고 훅도 차단함
-	const fNoPin = setupReadOnlyOpsWorkspace(t, { pinFiles: false, withReview: false });
+	const fNoPin = await setupReadOnlyOpsWorkspace(t, { pinFiles: false, withReview: false });
 	const planNoPin = JSON.parse(fs.readFileSync(fNoPin.planFile, "utf8"));
 	const pinProbs = deployPlan.pinnedFileProblems(planNoPin, fNoPin.root);
 	assert.ok(pinProbs.some((p) => p.includes("실행 대본이 files 에 고정되지 않음")), pinProbs.join("; "));
@@ -2058,9 +2117,9 @@ test("읽기 전용 ops B1: 리뷰 뒤 readOnlyScripts 자가 커밋 시 무코�
 	assert.ok(promptOut.stdout.includes("docker inspect sample-app"), "review-prompt 에 대본 본문 포함");
 });
 
-test("읽기 전용 ops 우회: config/deploy-gate.json 미커밋 변경·스테이징·미추적 시 모두 막힘", (t) => {
+test("읽기 전용 ops 우회: config/deploy-gate.json 미커밋 변경·스테이징·미추적 시 모두 막힘", async (t) => {
 	// 미커밋 작업 트리 변경 (allowCustomCommands 로도 우회 불가 검증 포함)
-	const fDirty = setupReadOnlyOpsWorkspace(t, {
+	const fDirty = await setupReadOnlyOpsWorkspace(t, {
 		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } },
 	});
 	const cur = JSON.parse(fs.readFileSync(fDirty.cfgPath, "utf8"));
@@ -2070,7 +2129,7 @@ test("읽기 전용 ops 우회: config/deploy-gate.json 미커밋 변경·스테
 	assert.equal(dDirty?.decision, "block", "작업 트리 미커밋 변경은 막혀야 함");
 
 	// git add 만 하고 커밋 안 함
-	const fStaged = setupReadOnlyOpsWorkspace(t);
+	const fStaged = await setupReadOnlyOpsWorkspace(t);
 	const stagedCur = JSON.parse(fs.readFileSync(fStaged.cfgPath, "utf8"));
 	stagedCur.readOnlyScripts[0].note = "스테이징만 함";
 	fs.writeFileSync(fStaged.cfgPath, JSON.stringify(stagedCur, null, 2));
@@ -2079,12 +2138,12 @@ test("읽기 전용 ops 우회: config/deploy-gate.json 미커밋 변경·스테
 	assert.equal(dStaged?.decision, "block", "스테이징 미커밋 변경은 막혀야 함");
 
 	// git 미추적
-	const fUntracked = setupReadOnlyOpsWorkspace(t, { commitConfig: false });
+	const fUntracked = await setupReadOnlyOpsWorkspace(t, { commitConfig: false });
 	const dUntracked = runDeployGuardHook(fUntracked.command, { cwd: fUntracked.root, root: fUntracked.root, stateDir: fUntracked.stateDir, transcriptPath: fUntracked.transcriptPath });
 	assert.equal(dUntracked?.decision, "block", "git 미추적 config/deploy-gate.json 은 막혀야 함");
 });
 
-test("읽기 전용 ops B2: --parameters·다중 --scripts·모르는 옵션·셸 연산자·따옴표 쪼개기·R5(sudo bash/3토큰)·opsProblem 누락 방지", (t) => {
+test("읽기 전용 ops B2: --parameters·다중 --scripts·모르는 옵션·셸 연산자·따옴표 쪼개기·R5(sudo bash/3토큰)·opsProblem 누락 방지", async (t) => {
 	const scriptRel = ".agents/progress/sample-ro-work/gates/ops/ro-check.sh";
 	const allowCfg = { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } };
 	const badAzCommands = [
@@ -2106,7 +2165,7 @@ test("읽기 전용 ops B2: --parameters·다중 --scripts·모르는 옵션·�
 		["opsProblem VERSION_CHANGE", `az vm run-command invoke -g sample-rg -n sample-vm --command-id RunShellScript --scripts @${scriptRel} --query '--image'`],
 	];
 	for (const [label, cmd] of badAzCommands) {
-		const fx = setupReadOnlyOpsWorkspace(t, {
+		const fx = await setupReadOnlyOpsWorkspace(t, {
 			configServices: allowCfg,
 			customCommand: cmd,
 		});
@@ -2121,7 +2180,7 @@ test("읽기 전용 ops B2: --parameters·다중 --scripts·모르는 옵션·�
 		["sudo bash", "sudo bash scripts/ro-ssh-check.sh"],
 		["3토큰 bash 인자", "bash scripts/ro-ssh-check.sh s1"],
 	]) {
-		const fR5 = setupReadOnlyOpsWorkspace(t, {
+		const fR5 = await setupReadOnlyOpsWorkspace(t, {
 			service: "ssh:sample-vm",
 			scriptRel: "scripts/ro-ssh-check.sh",
 			scriptBody: sshScript,
@@ -2134,11 +2193,11 @@ test("읽기 전용 ops B2: --parameters·다중 --scripts·모르는 옵션·�
 	}
 });
 
-test("읽기 전용 ops B3: 심볼릭 링크·상위 심볼릭 링크·미추적 파일·HEAD 불일치 파일 → 코드 필요(무코드 불가)", (t) => {
+test("읽기 전용 ops B3: 심볼릭 링크·상위 심볼릭 링크·미추적 파일·HEAD 불일치 파일 → 코드 필요(무코드 불가)", async (t) => {
 	const allowCfg = { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } };
 
 	// 1. 대본 자체가 심볼릭 링크
-	const fSym = setupReadOnlyOpsWorkspace(t, {
+	const fSym = await setupReadOnlyOpsWorkspace(t, {
 		configServices: allowCfg,
 		commitScript: false,
 		readOnlyScripts: [],
@@ -2165,7 +2224,7 @@ test("읽기 전용 ops B3: 심볼릭 링크·상위 심볼릭 링크·미추적
 	assert.match(dSym.reason, /PLAN-/, "심볼릭 링크 대본은 무코드가 아니라 승인 코드 필요로 떨어져야 함");
 
 	// 2. 상위 폴더가 심볼릭 링크
-	const fDirSym = setupReadOnlyOpsWorkspace(t, {
+	const fDirSym = await setupReadOnlyOpsWorkspace(t, {
 		configServices: allowCfg,
 		commitScript: false,
 		readOnlyScripts: [],
@@ -2193,7 +2252,7 @@ test("읽기 전용 ops B3: 심볼릭 링크·상위 심볼릭 링크·미추적
 	assert.match(dDirSym.reason, /PLAN-/, "상위 심볼릭 링크 대본도 승인 코드 필요");
 
 	// 3. 미추적 쓰기 가능 대본 파일 (설정에 sha+path+service 를 맞춰 커밋해도 대본이 git 미추적이면 무코드 불가)
-	const fUntrackedScript = setupReadOnlyOpsWorkspace(t, {
+	const fUntrackedScript = await setupReadOnlyOpsWorkspace(t, {
 		configServices: allowCfg,
 		commitScript: false,
 		readOnlyScripts: null,
@@ -2207,7 +2266,7 @@ test("읽기 전용 ops B3: 심볼릭 링크·상위 심볼릭 링크·미추적
 	assert.match(dUntrackedScript.reason, /PLAN-/, "git 미추적 대본은 무코드 불가 → 승인 코드 필요");
 
 	// 4. 추적 중이지만 작업 트리 내용이 HEAD 블롭과 다름
-	const fModifiedHead = setupReadOnlyOpsWorkspace(t, {
+	const fModifiedHead = await setupReadOnlyOpsWorkspace(t, {
 		configServices: allowCfg,
 		commitScript: true,
 		readOnlyScripts: [],
@@ -2232,10 +2291,10 @@ test("읽기 전용 ops B3: 심볼릭 링크·상위 심볼릭 링크·미추적
 	assert.match(dMod.reason, /PLAN-/, "HEAD 블롭과 다른 작업 트리 대본은 무코드 불가 → 승인 코드 필요");
 });
 
-test("읽기 전용 ops B4: 와일드카드 service 설정 오류 및 다른 경로·서비스 sha 재사용 차단", (t) => {
+test("읽기 전용 ops B4: 와일드카드 service 설정 오류 및 다른 경로·서비스 sha 재사용 차단", async (t) => {
 	// 1. 와일드카드(*, ?) service → config 설정 오류로 즉시 차단
 	for (const globSvc of ["azure:vm:*", "azure:vm:sample-?m", "azure:vm:[s]ample-vm"]) {
-		const fGlob = setupReadOnlyOpsWorkspace(t, {
+		const fGlob = await setupReadOnlyOpsWorkspace(t, {
 			configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } },
 			readOnlyScripts: [{ sha256: "a".repeat(64), path: ".agents/progress/sample-ro-work/gates/ops/ro-check.sh", service: globSvc }],
 			bindReadOnlyScripts: false,
@@ -2246,7 +2305,7 @@ test("읽기 전용 ops B4: 와일드카드 service 설정 오류 및 다른 경
 	}
 
 	// 2. path 누락 → config 설정 오류로 즉시 차단
-	const fNoPath = setupReadOnlyOpsWorkspace(t, {
+	const fNoPath = await setupReadOnlyOpsWorkspace(t, {
 		readOnlyScripts: [{ sha256: "a".repeat(64), service: "azure:vm:sample-vm" }],
 		bindReadOnlyScripts: false,
 	});
@@ -2257,7 +2316,7 @@ test("읽기 전용 ops B4: 와일드카드 service 설정 오류 및 다른 경
 	// 3. 같은 sha 를 다른 경로(copy)에 재사용 → 무코드 불가, 승인 코드 필요 (리뷰 영수증이 registered-other.sh 를 묶고 있어도 ro-copy.sh 는 거부)
 	const copyRel = ".agents/progress/sample-ro-work/gates/ops/ro-copy.sh";
 	const regOtherRel = ".agents/progress/sample-ro-work/gates/ops/registered-other.sh";
-	const fReusePath = setupReadOnlyOpsWorkspace(t, {
+	const fReusePath = await setupReadOnlyOpsWorkspace(t, {
 		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } },
 		scriptRel: copyRel,
 		readOnlyScripts: [{ sha256: "0".repeat(64), path: regOtherRel, service: "azure:vm:sample-vm" }],
@@ -2278,7 +2337,7 @@ test("읽기 전용 ops B4: 와일드카드 service 설정 오류 및 다른 경
 	assert.match(dReusePath.reason, /PLAN-/, "같은 sha 여도 등록된 path 와 다르면 승인 코드 필요");
 
 	// 4. 같은 sha+path 를 다른 service 로 재사용 → 무코드 불가, 승인 코드 필요
-	const fReuseSvc = setupReadOnlyOpsWorkspace(t, {
+	const fReuseSvc = await setupReadOnlyOpsWorkspace(t, {
 		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } },
 		readOnlyScripts: [],
 		bindReadOnlyScripts: false,
@@ -2296,14 +2355,14 @@ test("읽기 전용 ops B4: 와일드카드 service 설정 오류 및 다른 경
 	assert.match(dReuseSvc.reason, /PLAN-/, "다른 service 에 등록된 항목 재사용 시 승인 코드 필요");
 });
 
-test("읽기 전용 ops 우회: 대본 실행 직전 바뀜 및 계획서 변경 시 리뷰 무효화", (t) => {
-	const fEditScript = setupReadOnlyOpsWorkspace(t);
+test("읽기 전용 ops 우회: 대본 실행 직전 바뀜 및 계획서 변경 시 리뷰 무효화", async (t) => {
+	const fEditScript = await setupReadOnlyOpsWorkspace(t);
 	fs.appendFileSync(fEditScript.scriptAbs, "# tampered right before run\n");
 	const d1 = runDeployGuardHook(fEditScript.command, { cwd: fEditScript.root, root: fEditScript.root, stateDir: fEditScript.stateDir, transcriptPath: fEditScript.transcriptPath });
 	assert.equal(d1?.decision, "block");
 	assert.match(d1.reason, /고정되지 않았거나, 고정한 뒤 바뀌었습니다/);
 
-	const fEditPlan = setupReadOnlyOpsWorkspace(t);
+	const fEditPlan = await setupReadOnlyOpsWorkspace(t);
 	const p = JSON.parse(fs.readFileSync(fEditPlan.planFile, "utf8"));
 	p.what_why = "리뷰 뒤 계획서 수정";
 	fs.writeFileSync(fEditPlan.planFile, JSON.stringify(p, null, 2));
@@ -2312,8 +2371,8 @@ test("읽기 전용 ops 우회: 대본 실행 직전 바뀜 및 계획서 변경
 	assert.match(d2.reason, /적대 리뷰를 통과하지 않아/);
 });
 
-test("읽기 전용 ops 우회: kind=feature 는 readOnlyScripts 에 있는 대본이어도 막히고 readonly-no-code 불가", (t) => {
-	const f = setupReadOnlyOpsWorkspace(t, {
+test("읽기 전용 ops 우회: kind=feature 는 readOnlyScripts 에 있는 대본이어도 막히고 readonly-no-code 불가", async (t) => {
+	const f = await setupReadOnlyOpsWorkspace(t, {
 		kind: "feature",
 		candidate: "abc1234",
 		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } },
@@ -2334,21 +2393,21 @@ test("읽기 전용 ops 우회: kind=feature 는 readOnlyScripts 에 있는 대�
 	assert.ok(!bind.readOnlyNoCode, "kind=feature 는 readOnlyNoCode 가 켜질 수 없음");
 });
 
-test("읽기 전용 ops 우회: 적대 리뷰 없음·FAIL 이면 막힘", (t) => {
-	const fNoRev = setupReadOnlyOpsWorkspace(t, { withReview: false });
+test("읽기 전용 ops 우회: 적대 리뷰 없음·FAIL 이면 막힘", async (t) => {
+	const fNoRev = await setupReadOnlyOpsWorkspace(t, { withReview: false });
 	const d1 = runDeployGuardHook(fNoRev.command, { cwd: fNoRev.root, root: fNoRev.root, stateDir: fNoRev.stateDir, transcriptPath: fNoRev.transcriptPath });
 	assert.equal(d1?.decision, "block");
 	assert.match(d1.reason, /적대 리뷰를 통과하지 않아/);
 
-	const fFailRev = setupReadOnlyOpsWorkspace(t, { withReview: true, reviewFail: ["a1"] });
+	const fFailRev = await setupReadOnlyOpsWorkspace(t, { withReview: true, reviewFail: ["a1"] });
 	const d2 = runDeployGuardHook(fFailRev.command, { cwd: fFailRev.root, root: fFailRev.root, stateDir: fFailRev.stateDir, transcriptPath: fFailRev.transcriptPath });
 	assert.equal(d2?.decision, "block");
 	assert.match(d2.reason, /적대 리뷰를 통과하지 않아/);
 });
 
-test("읽기 전용 ops 우회: 인라인 명령·다른 service·덧붙인 명령·계획서 자체 읽기 선언·readOnlyScripts 없을 때 기존 동작", (t) => {
+test("읽기 전용 ops 우회: 인라인 명령·다른 service·덧붙인 명령·계획서 자체 읽기 선언·readOnlyScripts 없을 때 기존 동작", async (t) => {
 	// 1. service 불일치
-	const fSvc = setupReadOnlyOpsWorkspace(t, {
+	const fSvc = await setupReadOnlyOpsWorkspace(t, {
 		scriptBody: "#!/usr/bin/env bash\necho ok\n",
 		readOnlyScripts: null,
 	});
@@ -2361,7 +2420,7 @@ test("읽기 전용 ops 우회: 인라인 명령·다른 service·덧붙인 명�
 	assert.equal(dSvc?.decision, "block", "service 불일치 막힘");
 
 	// 2. 인라인 명령 (az --scripts "echo ok && df -h")
-	const fInline = setupReadOnlyOpsWorkspace(t, {
+	const fInline = await setupReadOnlyOpsWorkspace(t, {
 		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true } },
 		readOnlyScripts: [],
 	});
@@ -2375,12 +2434,12 @@ test("읽기 전용 ops 우회: 인라인 명령·다른 service·덧붙인 명�
 	assert.equal(dIn?.decision, "block", "인라인 명령은 기존처럼 막힘");
 
 	// 3. 덧붙인 명령
-	const fChain = setupReadOnlyOpsWorkspace(t);
+	const fChain = await setupReadOnlyOpsWorkspace(t);
 	const dChain = runDeployGuardHook(`${fChain.command} && echo extra`, { cwd: fChain.root, root: fChain.root, stateDir: fChain.stateDir, transcriptPath: fChain.transcriptPath });
 	assert.equal(dChain?.decision, "block", "덧붙인 명령 막힘");
 
 	// 4. 계획서 자체 읽기 전용 주장(설정에 없는 대본 + planExtras.readOnly: true)
-	const fProse = setupReadOnlyOpsWorkspace(t, {
+	const fProse = await setupReadOnlyOpsWorkspace(t, {
 		readOnlyScripts: [],
 		planExtras: { readOnly: true, approval_mode: "readonly-no-code" },
 	});
@@ -2388,7 +2447,7 @@ test("읽기 전용 ops 우회: 인라인 명령·다른 service·덧붙인 명�
 	assert.equal(dProse?.decision, "block", "계획서 글 자체 읽기 선언으로 우회 불가");
 
 	// 5. readOnlyScripts 자체가 설정에 없을 때 기존 승인 코드 동작 유지
-	const fNoRo = setupReadOnlyOpsWorkspace(t, {
+	const fNoRo = await setupReadOnlyOpsWorkspace(t, {
 		configServices: { "azure:vm:sample-vm": { label: "샘플 VM", allowOps: true, allowCustomCommands: true } },
 		readOnlyScripts: [],
 	});
@@ -2408,7 +2467,7 @@ test("읽기 전용 ops 우회: 인라인 명령·다른 service·덧붙인 명�
 	assert.equal(runDeployGuardHook(fNoRo.command, { cwd: fNoRo.root, root: fNoRo.root, stateDir: fNoRo.stateDir, transcriptPath: fNoRo.transcriptPath, sessionId: "sess-no-ro" }), null, "readOnlyScripts 없으면 기존 PLAN/STEP 승인으로 통과");
 });
 
-test("목록 그룹(vm) run-command 의 변수 대상도 스크립트 안 한 값으로 서비스 이름을 정함", (t) => {
+test("목록 그룹(vm) run-command 의 변수 대상도 스크립트 안 한 값으로 서비스 이름을 정함", async (t) => {
 	const { root } = makeWorkspace(t);
 	const dir = path.join(root, "runner");
 	fs.mkdirSync(dir, { recursive: true });
@@ -2427,7 +2486,7 @@ test("목록 그룹(vm) run-command 의 변수 대상도 스크립트 안 한 �
 	assert.ok(!hits.some((h) => /\$/.test(h.service)), `변수 이름이 서비스에 남으면 안 됨: ${JSON.stringify(hits)}`);
 });
 
-test("한 줄 여러 대입·heredoc 안 함수와 source 가 있어도 prod 갈래 값으로 VM 이름을 정하고, 명령 앞 대입은 묶지 않음", (t) => {
+test("한 줄 여러 대입·heredoc 안 함수와 source 가 있어도 prod 갈래 값으로 VM 이름을 정하고, 명령 앞 대입은 묶지 않음", async (t) => {
 	const { root } = makeWorkspace(t);
 	const dir = path.join(root, "runner");
 	fs.mkdirSync(dir, { recursive: true });
@@ -2509,14 +2568,17 @@ function populatePlanRepo(repoRoot, options = {}) {
 		fs.mkdirSync(path.dirname(dst), { recursive: true });
 		fs.copyFileSync(path.join(REPO_ROOT, rel), dst);
 	}
+	for (const name of gateFiles) { const target = path.join(repoRoot, name); fs.mkdirSync(path.dirname(target), {recursive:true}); fs.writeFileSync(target, "{}"); }
 	if (options.foreignMarker) {
 		fs.appendFileSync(path.join(repoRoot, ".agents/scripts/approval-plan.mjs"), `\n// ${options.foreignMarker}\n`);
 	}
 }
 
-test("cross-repo: 다른 git 저장소·worktree 계획서 check·report·review-prompt(readOnlyScripts)·preapprove·step-ok 및 심볼릭 거부", (t) => {
+test("cross-repo: 다른 git 저장소·worktree 계획서 check·report·review-prompt(readOnlyScripts)·preapprove·step-ok 및 심볼릭 거부", async (t) => {
 	const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-cross-repo-")));
 	t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+	const {root: anchorRoot} = makeWorkspace(t);
+	const anchorScript = path.join(anchorRoot, ".agents/scripts/approval-plan.mjs");
 
 	// 1. 다른 git 저장소(.git 디렉토리) + 실행기 해시가 REPO_ROOT 와 다른 경우
 	const foreignRoot = path.join(tmp, "foreign-repo");
@@ -2533,47 +2595,45 @@ test("cross-repo: 다른 git 저장소·worktree 계획서 check·report·review
 	writePassingReviewReceipt(foreignRoot, planFile);
 
 	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
-	const chk = spawnSync(process.execPath, [SCRIPT_PATH, "check", planFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	const chk = spawnSync(process.execPath, [anchorScript, "check", planFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
 	assert.equal(chk.status, 0, `check failed:\n${chk.stdout}\n${chk.stderr}`);
 	assert.match(chk.stdout, /계획서: \.agents\/progress\/sample-work\/gates\/deploy-plan\.json/);
 	assert.match(chk.stdout, /적대 리뷰: 통과/);
 
-	const rep = spawnSync(process.execPath, [SCRIPT_PATH, "report", planFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	const rep = spawnSync(process.execPath, [anchorScript, "report", planFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
 	assert.equal(rep.status, 0, `report failed:\n${rep.stderr}`);
 	assert.match(rep.stdout, /\[운영 배포 승인 요청\] sample-web-rollout-01/);
 
-	const rp = spawnSync(process.execPath, [SCRIPT_PATH, "review-prompt", planFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
-	assert.equal(rp.status, 0, `review-prompt failed:\n${rp.stderr}`);
-	assert.match(rp.stdout, new RegExp(`\\(sha ${customSha}\\)`));
-	assert.match(rp.stdout, /# foreign-only-rollout/);
+	const rp = spawnSync(process.execPath, [anchorScript, "review-prompt", planFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	assert.notEqual(rp.status, 0, "foreign settings cannot supply review-prompt without their own approved gate context");
+	assert.match(rp.stderr, /승인된 관문 설정이 없습니다/);
 
-	const pre = spawnSync(process.execPath, [SCRIPT_PATH, "preapprove", planFile, "--session", "cross-repo-sess-1"], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	const pre = spawnSync(process.execPath, [anchorScript, "preapprove", planFile, "--session", "cross-repo-sess-1"], { cwd: REPO_ROOT, env, encoding: "utf8" });
 	assert.equal(pre.status, 0, `preapprove failed:\n${pre.stdout}\n${pre.stderr}`);
 	assert.match(pre.stdout, /사전발급 코드\(사용자 본인이 한 메시지로 승인\): PLAN PLAN-[A-Z0-9]{6} s1 STEP-[A-Z0-9]{6} r1 STEP-[A-Z0-9]{6}/);
 
 	const evFile = path.join(stateDir, "s1-ok.txt");
 	fs.writeFileSync(evFile, "HTTP/1.1 200 OK\n");
-	const okRes = spawnSync(process.execPath, [SCRIPT_PATH, "step-ok", planFile, "s1", "--evidence", evFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	const okRes = spawnSync(process.execPath, [anchorScript, "step-ok", planFile, "s1", "--evidence", evFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
 	assert.equal(okRes.status, 0, `step-ok failed:\n${okRes.stderr}`);
 	assert.match(okRes.stdout, /단계 s1 성공 확인 기록: \.agents\/progress\/sample-work\/gates\/deploy-steps\/s1\.json/);
 
 	// 1b. 다른 git 저장소의 readOnlyScripts 가 review-prompt 에도 planRoot 기준으로 실림(PR147 결합)
-	const fRoForeign = setupReadOnlyOpsWorkspace(t);
+	const fRoForeign = await setupReadOnlyOpsWorkspace(t);
 	const realRoRoot = fs.realpathSync(fRoForeign.root);
 	const realRoPlan = path.join(realRoRoot, ".agents", "progress", "sample-ro-work", "gates", "deploy-plan.json");
-	const rpRo = spawnSync(process.execPath, [SCRIPT_PATH, "review-prompt", realRoPlan], { cwd: REPO_ROOT, env, encoding: "utf8" });
-	assert.equal(rpRo.status, 0, `cross-repo readOnlyScripts review-prompt failed:\n${rpRo.stderr}`);
-	assert.match(rpRo.stdout, /readOnlyScripts/);
-	assert.match(rpRo.stdout, new RegExp(fRoForeign.scriptSha));
+	const rpRo = spawnSync(process.execPath, [anchorScript, "review-prompt", realRoPlan], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	assert.notEqual(rpRo.status, 0, "foreign readOnlyScripts cannot be used without an approved configuration for that root");
+	assert.match(rpRo.stderr, /승인된 관문 설정이 없습니다/);
 
 	// 2. 다른 git worktree(.git 파일) 저장소
 	const wtRoot = path.join(tmp, "foreign-wt");
 	populatePlanRepo(wtRoot, { gitMode: "worktree", foreignMarker: "foreign-wt-only" });
 	const { planFile: wtPlan } = createValidPlan(wtRoot);
 	writePassingReviewReceipt(wtRoot, wtPlan);
-	const wtChk = spawnSync(process.execPath, [SCRIPT_PATH, "check", wtPlan], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	const wtChk = spawnSync(process.execPath, [anchorScript, "check", wtPlan], { cwd: REPO_ROOT, env, encoding: "utf8" });
 	assert.equal(wtChk.status, 0, `worktree check failed:\n${wtChk.stdout}\n${wtChk.stderr}`);
-	const wtPre = spawnSync(process.execPath, [SCRIPT_PATH, "preapprove", wtPlan, "--session", "cross-repo-wt-1"], { cwd: REPO_ROOT, env, encoding: "utf8" });
+	const wtPre = spawnSync(process.execPath, [anchorScript, "preapprove", wtPlan, "--session", "cross-repo-wt-1"], { cwd: REPO_ROOT, env, encoding: "utf8" });
 	assert.equal(wtPre.status, 0, `worktree preapprove failed:\n${wtPre.stderr}`);
 
 	// 3. 자기 저장소(ROOT) 안 계획서
@@ -2617,11 +2677,11 @@ test("cross-repo: 다른 git 저장소·worktree 계획서 check·report·review
 	writePassingReviewReceipt(symGitRepo, symGitPlan);
 
 	for (const [label, script, planArg] of [
-		["symlinked plan file", SCRIPT_PATH, targetCopy],
-		["symlinked repo dir", SCRIPT_PATH, linkedPlan],
+		["symlinked plan file", anchorScript, targetCopy],
+		["symlinked repo dir", anchorScript, linkedPlan],
 		["symlink inside ROOT", selfScript, selfSymPlan],
-		["no .git directory", SCRIPT_PATH, noGitPlan],
-		["symlinked .git", SCRIPT_PATH, symGitPlan],
+		["no .git directory", anchorScript, noGitPlan],
+		["symlinked .git", anchorScript, symGitPlan],
 	]) {
 		assert.notEqual(spawnSync(process.execPath, [script, "check", planArg], { cwd: REPO_ROOT, env, encoding: "utf8" }).status, 0, `${label}: check must fail closed`);
 		assert.notEqual(spawnSync(process.execPath, [script, "preapprove", planArg, "--session", "deny-sess"], { cwd: REPO_ROOT, env, encoding: "utf8" }).status, 0, `${label}: preapprove must fail closed`);
@@ -2728,6 +2788,7 @@ test("차단-1·2: deploy-guard 는 hook-watchdog 누락·예외 및 정책 로�
 test("cross-repo review: 외부 저장소 계획서 review 가 planRoot 기준으로 프롬프트·매니페스트·bwrap --chdir 를 쓰고 check/preapprove 를 통과함", (t) => {
 	const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-cross-review-")));
 	t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+	const {root: anchorRoot} = makeWorkspace(t);
 	const extRoot = path.join(tmp, "external-app");
 	fs.mkdirSync(path.join(extRoot, "scripts"), { recursive: true });
 	assert.equal(spawnSync("git", ["init", "-q", extRoot], { encoding: "utf8" }).status, 0);
@@ -2740,6 +2801,8 @@ test("cross-repo review: 외부 저장소 계획서 review 가 planRoot 기준�
 	fs.rmSync(path.join(extRoot, ".agents/scripts"), { recursive: true, force: true });
 	fs.rmSync(path.join(extRoot, ".claude/hooks"), { recursive: true, force: true });
 	fs.rmSync(path.join(extRoot, ".claude/deploy"), { recursive: true, force: true });
+	fs.mkdirSync(path.join(extRoot, ".claude/deploy"), {recursive:true});
+	fs.writeFileSync(path.join(extRoot, ".claude/deploy/config.json"), "{}");
 
 	const pinnedScript = "#!/usr/bin/env bash\n# external-pinned-unique-marker\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v9\n";
 	fs.writeFileSync(path.join(extRoot, scriptRel), pinnedScript, { mode: 0o755 });
@@ -2800,7 +2863,7 @@ REVIEW_EOF
 	};
 
 	// ADK 저장소 루트(REPO_ROOT)에서 외부 계획서를 리뷰해도 planRoot(extRoot) 기준으로 동작해야 함
-	const rev = spawnSync(process.execPath, [SCRIPT_PATH, "review", planFile, "--author", "muse"], {
+	const rev = spawnSync(process.execPath, [approvedRunner(anchorRoot, tmp, planFile, ["review", planFile, "--author", "muse"], extRoot)], {
 		cwd: REPO_ROOT, encoding: "utf8", timeout: 30000, env,
 	});
 	assert.equal(rev.status, 0, `cross-repo review failed:\n${rev.stdout}\n${rev.stderr}`);
@@ -2825,9 +2888,9 @@ REVIEW_EOF
 	const expectedManifest = deployPlan.reviewInputManifest(planFile, extRoot, { readOnlyScripts: rec.read_only_scripts });
 	assert.equal(rec.reviewers[0].receipt.input_manifest_sha256, expectedManifest, "manifest 는 planRoot 기준으로 계산돼야 함");
 
-	const chk = spawnSync(process.execPath, [SCRIPT_PATH, "check", planFile], { cwd: REPO_ROOT, encoding: "utf8", env });
+	const chk = spawnSync(process.execPath, [approvedRunner(anchorRoot, tmp, planFile, ["check", planFile], extRoot)], { cwd: REPO_ROOT, encoding: "utf8", env });
 	assert.equal(chk.status, 0, `cross-repo check after review failed:\n${chk.stdout}\n${chk.stderr}`);
-	const pre = spawnSync(process.execPath, [SCRIPT_PATH, "preapprove", planFile, "--session", "ext-review-sess-1"], { cwd: REPO_ROOT, encoding: "utf8", env });
+	const pre = spawnSync(process.execPath, [approvedRunner(anchorRoot, tmp, planFile, ["preapprove", planFile, "--session", "ext-review-sess-1"], extRoot)], { cwd: REPO_ROOT, encoding: "utf8", env });
 	assert.equal(pre.status, 0, `cross-repo preapprove after review failed:\n${pre.stdout}\n${pre.stderr}`);
 
 	// 다른 실행기 해시(foreignMarker)가 있는 외부 저장소에서도 ADK(ROOT) 실행기 기준으로 review 통과(deploy-plan.js:732 회귀 방지)
@@ -2839,7 +2902,7 @@ REVIEW_EOF
 	const { planFile: markedPlan } = createValidPlan(markedRoot, { name: "marked-ext-rollout-01" });
 	assert.equal(spawnSync("git", ["-C", markedRoot, "add", "-A"], { encoding: "utf8" }).status, 0);
 	assert.equal(spawnSync("git", ["-C", markedRoot, "commit", "-qm", "init marked"], { encoding: "utf8" }).status, 0);
-	const markedRev = spawnSync(process.execPath, [SCRIPT_PATH, "review", markedPlan, "--author", "muse"], {
+	const markedRev = spawnSync(process.execPath, [approvedRunner(anchorRoot, tmp, markedPlan, ["review", markedPlan, "--author", "muse"], markedRoot)], {
 		cwd: markedRoot, encoding: "utf8", timeout: 30000, env,
 	});
 	assert.equal(markedRev.status, 0, `marked foreign review failed:\n${markedRev.stdout}\n${markedRev.stderr}`);
@@ -2952,29 +3015,8 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 	const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "deploy-guard-cross-cwd-")));
 	t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-	const runAutoRootHook = (command, { cwd, stateDir, transcriptPath, sessionId = "sess-cross-cwd" }) => {
-		const env = { ...process.env };
-		delete env.NAIA_ADK_ROOT;
-		delete env.CLAUDE_PROJECT_DIR;
-		delete env.DEPLOY_READINESS_ROOT;
-		delete env.DEPLOY_GATE_CONFIG;
-		env.DEPLOY_APPROVAL_STATE_DIR = stateDir;
-		env.DEPLOY_AUDIT_PATH = path.join(stateDir, "audit.jsonl");
-		const res = spawnSync(process.execPath, [HOOK_PATH], {
-			cwd: cwd && fs.existsSync(cwd) ? cwd : tmp,
-			input: JSON.stringify({
-				tool_name: "Bash",
-				tool_input: { command },
-				cwd,
-				session_id: sessionId,
-				transcript_path: transcriptPath,
-			}),
-			encoding: "utf8",
-			env,
-		});
-		assert.equal(res.status, 0, `deploy-guard exited ${res.status}: ${res.stderr}`);
-		return res.stdout.trim() ? JSON.parse(res.stdout) : null;
-	};
+	const runAutoRootHook = (command, { cwd, stateDir, transcriptPath, sessionId = "sess-cross-cwd" }) =>
+		runDeployGuardHook(command, {cwd: cwd && fs.existsSync(cwd) ? cwd : tmp, root: repoB, stateDir, transcriptPath, sessionId});
 
 	const outside = path.join(tmp, "outside");
 	const stateDir = path.join(tmp, "state");
@@ -2987,6 +3029,8 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 	const repoB = path.join(tmp, "repoB-ops");
 	fs.mkdirSync(path.join(repoB, ".git"), { recursive: true });
 	fs.mkdirSync(path.join(repoB, "config"), { recursive: true });
+	fs.mkdirSync(path.join(repoB, ".claude/deploy"), { recursive: true });
+	fs.writeFileSync(path.join(repoB, ".claude/deploy/config.json"), "{}");
 	fs.mkdirSync(path.join(repoB, "scripts"), { recursive: true });
 	fs.mkdirSync(path.join(repoB, "sub"), { recursive: true });
 	fs.mkdirSync(path.join(repoB, ".agents", "progress", "rollout-1", "gates"), { recursive: true });
@@ -3115,9 +3159,9 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 	const mustBlock = [
 		["다른 저장소 대본, cwd=outside", `bash ${opScript} s2`, outside],
 		["다른 저장소 대본(allowedCommands만), cwd=outside", `sudo bash ${repoCScript} s2`, outside],
-		["다른 저장소 대본(sudo 없는 호출도), cwd=outside", `bash ${repoCScript} s2`, outside],
+		["다른 저장소 미등록 대본, cwd=outside", `bash ${repoCScript} s2`, outside, false],
 		["다른 저장소 대본, cwd=repoA", `bash ${opScript} s2`, repoA],
-		["일반 저장소 대본 + 엄격 cwd=repoAStrict (둘 다 적용)", `bash ${safeHelper}`, repoAStrict],
+		["일반 대본 + 외부 cwd 설정은 신뢰하지 않음", `bash ${safeHelper}`, repoAStrict, false],
 		["cd X && 대본, cwd=outside", `cd ${repoB} && bash scripts/op.sh s2`, outside],
 		["cd X/sub && ../scripts/op.sh, cwd=outside", `cd ${repoB}/sub && bash ../scripts/op.sh s2`, outside],
 		["bash -c 감싼 다른 저장소 대본", `bash -c "bash ${opScript} s2"`, outside],
@@ -3132,9 +3176,9 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 		["없는 경로(저장소 밖 .. 경로 + sudo)", `sudo bash ${tmp}/fake-kit/../fake-adk/scripts/op.sh s2`, outside],
 		["없는 경로(저장소 밖 일반 bash)", `bash ${tmp}/nowhere/missing.sh s2`, outside],
 	];
-	for (const [desc, cmd, cwd] of mustBlock) {
+	for (const [desc, cmd, cwd, blocked = true] of mustBlock) {
 		const res = runAutoRootHook(cmd, { cwd, stateDir, transcriptPath });
-		assert.equal(res?.decision, "block", `차단되어야 함 [${desc}]: ${cmd} -> ${JSON.stringify(res)}`);
+		assert.equal(res?.decision || null, blocked ? "block" : null, `[${desc}]: ${cmd} -> ${JSON.stringify(res)}`);
 	}
 
 	// 2) 정책 파일·대본 파일 파싱/권한 오류 fail-closed
@@ -3144,7 +3188,7 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 	fs.mkdirSync(path.join(badGateRepo, "scripts"), { recursive: true });
 	fs.writeFileSync(path.join(badGateRepo, "config", "deploy-gate.json"), "{ invalid json");
 	fs.writeFileSync(path.join(badGateRepo, "scripts", "task.sh"), "#!/usr/bin/env bash\necho ok\n");
-	assert.equal(runAutoRootHook(`bash ${path.join(badGateRepo, "scripts", "task.sh")}`, { cwd: outside, stateDir, transcriptPath })?.decision, "block", "깨진 deploy-gate.json 차단");
+	assert.equal(runAutoRootHook(`bash ${path.join(badGateRepo, "scripts", "task.sh")}`, { cwd: outside, stateDir, transcriptPath }), null, "다른 저장소의 설정 손상은 고정 뿌리 판정을 바꾸지 않음");
 
 	const badPlanRepo = path.join(tmp, "repo-bad-plan");
 	fs.mkdirSync(path.join(badPlanRepo, ".git"), { recursive: true });
@@ -3152,7 +3196,7 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 	fs.mkdirSync(path.join(badPlanRepo, "scripts"), { recursive: true });
 	fs.writeFileSync(path.join(badPlanRepo, ".agents", "progress", "w", "gates", "deploy-plan.json"), "{ bad plan");
 	fs.writeFileSync(path.join(badPlanRepo, "scripts", "task.sh"), "#!/usr/bin/env bash\necho ok\n");
-	assert.equal(runAutoRootHook(`bash ${path.join(badPlanRepo, "scripts", "task.sh")}`, { cwd: outside, stateDir, transcriptPath })?.decision, "block", "깨진 deploy-plan.json 차단");
+	assert.equal(runAutoRootHook(`bash ${path.join(badPlanRepo, "scripts", "task.sh")}`, { cwd: outside, stateDir, transcriptPath }), null, "다른 저장소의 계획 손상은 고정 뿌리 판정을 바꾸지 않음");
 
 	if (typeof process.getuid === "function" && process.getuid() !== 0) {
 		const permGate = path.join(badGateRepo, "config", "deploy-gate.json");
@@ -3160,7 +3204,7 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 		fs.chmodSync(permGate, 0o000);
 		try {
 			const rPermGate = runAutoRootHook(`bash ${path.join(badGateRepo, "scripts", "task.sh")}`, { cwd: outside, stateDir, transcriptPath });
-			assert.equal(rPermGate?.decision, "block", "읽기 권한 없는 deploy-gate.json 차단");
+			assert.equal(rPermGate, null, "다른 저장소 설정의 권한은 고정 뿌리 판정에 영향 없음");
 		} finally {
 			fs.chmodSync(permGate, 0o644);
 		}
@@ -3222,7 +3266,7 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 		"리뷰·승인을 모두 마친 정확 명령은 cwd=outside 에서도 통과해야 함",
 	);
 
-	// 새 세션으로 PLAN·STEP 을 다시 발급·승인한 상태에서도 cwd=repoAStrict 이면 더 엄격한 쪽(cwd 정책)으로 막혀야 함
+	// 새 세션의 정확 명령도 cwd 옆의 비승인 설정에 영향받지 않는다.
 	const sessStrict = "sess-cross-strict";
 	const askPlanStrict = runAutoRootHook(exactCmd, { cwd: outside, stateDir, transcriptPath, sessionId: sessStrict });
 	const planCodeStrict = askPlanStrict?.reason.match(/\b(PLAN-[A-Z0-9]{6})\b/);
@@ -3232,9 +3276,9 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 	assert.ok(stepCodeStrict, `단계 승인 코드가 발급돼야 함: ${askStepStrict && askStepStrict.reason}`);
 	appendHumanTurn(transcriptPath, `승인합니다 ${stepCodeStrict[1]}`);
 	assert.equal(
-		runAutoRootHook(exactCmd, { cwd: repoAStrict, stateDir, transcriptPath, sessionId: sessStrict })?.decision,
-		"block",
-		"repoB 가 승인돼도 cwd=repoAStrict 정책이 더 엄격하므로 막혀야 함",
+		runAutoRootHook(exactCmd, { cwd: repoAStrict, stateDir, transcriptPath, sessionId: sessStrict }),
+		null,
+		"repoB 의 승인 설정만 사용하며 cwd 설정은 적용하지 않음",
 	);
 });
 
@@ -3249,6 +3293,8 @@ test("2회차: 표준입력·파일설명자 실행 갈래(/dev/stdin·/dev/fd/N
 	fs.mkdirSync(outside, { recursive: true });
 	fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
 	fs.mkdirSync(path.join(repo, "config"), { recursive: true });
+	fs.mkdirSync(path.join(repo, ".claude/deploy"), { recursive: true });
+	fs.writeFileSync(path.join(repo, ".claude/deploy/config.json"), "{}");
 	fs.mkdirSync(path.join(repo, "scripts"), { recursive: true });
 	fs.mkdirSync(stateDir, { recursive: true });
 	fs.writeFileSync(transcriptPath, "");
@@ -3277,23 +3323,7 @@ test("2회차: 표준입력·파일설명자 실행 갈래(/dev/stdin·/dev/fd/N
 		},
 	}, null, 2));
 
-	const runHook = (command, cwd = outside) => {
-		const env = { ...process.env };
-		delete env.NAIA_ADK_ROOT;
-		delete env.CLAUDE_PROJECT_DIR;
-		delete env.DEPLOY_READINESS_ROOT;
-		delete env.DEPLOY_GATE_CONFIG;
-		env.DEPLOY_APPROVAL_STATE_DIR = stateDir;
-		env.DEPLOY_AUDIT_PATH = path.join(stateDir, "audit.jsonl");
-		const res = spawnSync(process.execPath, [HOOK_PATH], {
-			cwd,
-			input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd, session_id: "sess-stdin-branch", transcript_path: transcriptPath }),
-			encoding: "utf8",
-			env,
-		});
-		assert.equal(res.status, 0, `deploy-guard exited ${res.status}: ${res.stderr}`);
-		return res.stdout.trim() ? JSON.parse(res.stdout) : null;
-	};
+	const runHook = (command, cwd = outside) => runDeployGuardHook(command, {cwd, root: repo, stateDir, transcriptPath, sessionId: "sess-stdin-branch"});
 
 	const blockCases = [
 		["pipe /dev/stdin go", `cat ${prodScript} | bash /dev/stdin go`],
@@ -3398,6 +3428,8 @@ test("2회차: sudo 기본 허용·거부 목록 (비파괴 조회 통과·상�
 	fs.mkdirSync(outside, { recursive: true });
 	fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
 	fs.mkdirSync(path.join(repo, "config"), { recursive: true });
+	fs.mkdirSync(path.join(repo, ".claude/deploy"), { recursive: true });
+	fs.writeFileSync(path.join(repo, ".claude/deploy/config.json"), "{}");
 	fs.mkdirSync(path.join(repo, ".agents", "progress", "sudo-rollout", "gates"), { recursive: true });
 	fs.mkdirSync(stateDir, { recursive: true });
 	fs.writeFileSync(transcriptPath, "");
@@ -3411,23 +3443,7 @@ test("2회차: sudo 기본 허용·거부 목록 (비파괴 조회 통과·상�
 		},
 	}, null, 2));
 
-	const runHook = (command, cwd, sessionId = "sess-sudo-scope") => {
-		const env = { ...process.env };
-		delete env.NAIA_ADK_ROOT;
-		delete env.CLAUDE_PROJECT_DIR;
-		delete env.DEPLOY_READINESS_ROOT;
-		delete env.DEPLOY_GATE_CONFIG;
-		env.DEPLOY_APPROVAL_STATE_DIR = stateDir;
-		env.DEPLOY_AUDIT_PATH = path.join(stateDir, "audit.jsonl");
-		const res = spawnSync(process.execPath, [HOOK_PATH], {
-			cwd,
-			input: JSON.stringify({ tool_name: "Bash", tool_input: { command }, cwd, session_id: sessionId, transcript_path: transcriptPath }),
-			encoding: "utf8",
-			env,
-		});
-		assert.equal(res.status, 0, `deploy-guard exited ${res.status}: ${res.stderr}`);
-		return res.stdout.trim() ? JSON.parse(res.stdout) : null;
-	};
+	const runHook = (command, cwd, sessionId = "sess-sudo-scope") => runDeployGuardHook(command, {cwd, root: repo, stateDir, transcriptPath, sessionId});
 
 	const allowedReadOnly = [
 		"sudo -n true",

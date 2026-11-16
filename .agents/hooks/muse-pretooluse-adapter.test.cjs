@@ -765,7 +765,10 @@ test("real Claude gates allow safe Muse tool calls and lead-write-guard passes s
 		JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "bash", tool_input: { command: "ls" }, cwd: role, permission_mode: "bypassPermissions" }),
 		{ cwd: role, env: { PATH: process.env.PATH } },
 	));
-	assert.equal(bashAllow, null);
+	// This fixture has no Discord-approved gate configuration. The deploy
+	// guard must close even otherwise routine shell calls in that state.
+	assert.equal(bashAllow?.hookSpecificOutput?.permissionDecision, "deny");
+	assert.match(bashAllow?.hookSpecificOutput?.permissionDecisionReason || "", /승인된 관문 설정이 없어/);
 
 	const leadAllowRead = parseDecision(runAdapter(
 		["--adk-root", adk, "--hook", path.join(root, ".claude/hooks/lead-write-guard.js")],

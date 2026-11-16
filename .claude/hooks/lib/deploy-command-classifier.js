@@ -692,14 +692,9 @@ let activeGateRoot = "";
 
 function loadTestHosts(rootDir = "") {
 	try {
-		const root = rootDir || activeGateRoot || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
-		const cfgPath = process.env.DEPLOY_GATE_CONFIG
-			? path.resolve(process.env.DEPLOY_GATE_CONFIG)
-			: root
-				? path.join(root, "config", "deploy-gate.json")
-				: "";
-		if (!cfgPath || !fs.existsSync(cfgPath)) return new Set();
-		const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+		const root = rootDir || activeGateRoot || resolveGateRoot();
+		const { loadDeployGateConfig } = require("./deploy-readiness.js");
+		const cfg = loadDeployGateConfig(root);
 		if (!cfg || typeof cfg !== "object" || !Array.isArray(cfg.testHosts)) return new Set();
 		const out = new Set();
 		for (const h of cfg.testHosts) {
@@ -978,7 +973,7 @@ function classifySsh(tokens, cwd, depth = 0, rootDir = "") {
 	if (body.trim() && (depth || 0) + 1 > 3) return [{ service: "ssh:depth-limit", label: `ssh ${host} (ssh 중첩 한도 초과)` }];
 	// 인스턴스 설정(config/deploy-gate.json)의 sshAlwaysGated 호스트는 읽기도 관문을 탄다.
 	const { loadDeployGateConfig } = require("./deploy-readiness.js");
-	const gateRoot = rootDir || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(cwd);
+	const gateRoot = rootDir || resolveGateRoot();
 	const gateCfg = loadDeployGateConfig(gateRoot);
 	const alwaysGatedList = Array.isArray(gateCfg?.sshAlwaysGated) ? gateCfg.sshAlwaysGated : [];
 	for (const rule of alwaysGatedList) {
@@ -1459,27 +1454,8 @@ function classifyGeneralCloudCli(tokens) {
 	return [];
 }
 
-function resolveGateRoot(startDir) {
-	const base = startDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-	if (!base) return "";
-	let cur = path.resolve(base);
-	const candidates = [cur];
-	for (;;) {
-		if (
-			fs.existsSync(path.join(cur, "config", "deploy-gate.json")) ||
-			fs.existsSync(path.join(cur, ".agents", "progress")) ||
-			fs.existsSync(path.join(cur, ".git"))
-		) {
-			if (!candidates.includes(cur)) candidates.push(cur);
-		}
-		const parent = path.dirname(cur);
-		if (parent === cur) break;
-		cur = parent;
-	}
-	for (const c of candidates) {
-		if (fs.existsSync(path.join(c, "config", "deploy-gate.json"))) return c;
-	}
-	return candidates[0];
+function resolveGateRoot() {
+	return path.resolve(__dirname, "../../..");
 }
 
 // Unresolved local mutations fail closed whenever a local service is registered.
@@ -1614,7 +1590,7 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 	};
 	try {
 		const { deployGateConfigPath, loadDeployGateConfig, loadDeployGatePlugin } = require("./deploy-readiness.js");
-		const root = rootDir || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(dir);
+		const root = rootDir || resolveGateRoot();
 		const cfgPath = deployGateConfigPath(root);
 		const cfg = loadDeployGateConfig(root);
 		if (!cfg) {
@@ -1998,11 +1974,17 @@ function scriptTooLarge(file) {
 }
 
 /** 운영 변경 명령 목록을 돌려준다. 없으면 빈 배열. */
-function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, rootDir = "") {
+function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, rootDir = "", options = {}) {
 	const found = [];
+	// Without any approved configuration even instance-specific commands are unknown.
+	// Reject every nonempty shell input; do not rely on a list of command spellings or
+	// on the parser recognizing every possible wrapper, substitution, or script.
+	if (options.untrusted) return String(command || "").trim()
+		? [{ service: "unclassified:untrusted-config", label: "승인된 관문 설정이 없어 실행을 막습니다", clause: String(command), unclassified: true, tool: "untrusted-config" }]
+		: found;
 	// 중첩 한도를 넘으면 안을 읽지 않으므로 확인 불가로 막는다(빈 결과로 통과시키지 않음, #95 검수 4단계 감싸기).
 	if (depth > 3) return String(command || "").trim() ? [{ service: "unclassified:depth-limit", label: "분류 불가: 셸 대본 중첩이 3단계를 넘어 안의 명령을 확인할 수 없음", clause: "", unclassified: true, tool: "depth-limit" }] : found;
-	const gateRoot = rootDir || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(cwd);
+	const gateRoot = rootDir || resolveGateRoot();
 	const prevGateRoot = activeGateRoot;
 	activeGateRoot = gateRoot;
 	try {

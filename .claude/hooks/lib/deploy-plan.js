@@ -18,7 +18,7 @@
  *    명령마다 한 번) 순서로만 통과.
  *
  * 사람 승인 = 대화창에 사람이 친 코드(deploy-human-approval.humanTyped) 또는 승인자 본인 디스코드 글(디스코드 REST 로
- * 직접 받아 작성자 번호를 인스턴스 설정 approver.discordUserId 와 대조, 봇·웹훅·앱 글 불인정).
+ * 직접 받아 작성자 번호를 인스턴스 코드의 승인자 상수와 대조, 봇·웹훅·앱 글 불인정).
  */
 const { execFileSync } = require("child_process");
 const crypto = require("crypto");
@@ -195,17 +195,47 @@ const REVIEW_MODELS = Object.freeze({
 const gateConfigContext = new AsyncLocalStorage();
 async function withGateConfig(options, fn) {
 	const root = path.resolve(options.root || ROOT);
-	const before = gateConfigPin.snapshotGateConfig(root);
-	const approved = before ? await gateConfigPin.approvedGateConfig({ ...options, root, discordConfirms }) : null;
-	const after = gateConfigPin.snapshotGateConfig(root);
-	const trusted = approved && before && after && before.hash === approved.hash && after.hash === approved.hash ? { root, hash: approved.hash, config: approved.config } : null;
+	// A writable reference list must not hold the hook past its own deadline.
+	const controller = new AbortController();
+	let timer;
+	const deadline = new Promise((resolve) => {
+		timer = setTimeout(() => { controller.abort(); resolve(null); }, 10000);
+	});
+	let approved;
+	try {
+		approved = await Promise.race([
+			gateConfigPin.approvedGateConfig({ ...options, root, discordConfirms, signal: controller.signal }).catch(() => null),
+			deadline,
+		]);
+	} finally { clearTimeout(timer); }
+	const trusted = approved ? { root, ...approved, names: [...options.files], plugins: options.plugins || {} } : { root, approved: false };
 	return gateConfigContext.run(trusted, fn);
 }
-function trustedGateConfig(root) {
+function trustedGateConfigFile(root, name) {
 	const ctx = gateConfigContext.getStore();
-	if (!ctx || ctx.root !== path.resolve(root)) return null;
-	const current = gateConfigPin.snapshotGateConfig(root);
-	return current && current.hash === ctx.hash ? ctx.config : null;
+	if (!ctx || ctx.root !== path.resolve(root) || !ctx.files || !ctx.hash || !Object.hasOwn(ctx.files, name)) return null;
+	try {
+		const value = JSON.parse(ctx.files[name].toString("utf8"));
+		return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+	} catch { return null; }
+}
+function trustedGateConfigName(root, index) {
+	const ctx = gateConfigContext.getStore();
+	return ctx && ctx.root === path.resolve(root) && ctx.hash && Array.isArray(ctx.names) && ctx.names.length >= 2 ? ctx.names[index] : undefined;
+}
+function trustedGateConfig(root) {
+	return trustedGateConfigFile(root, trustedGateConfigName(root, 0));
+}
+function trustedDeployGateConfig(root) {
+	return trustedGateConfigFile(root, trustedGateConfigName(root, 1));
+}
+function hasTrustedGateConfig(root) {
+	return !!(trustedGateConfig(root) && trustedDeployGateConfig(root));
+}
+function trustedGatePlugin(root, name) {
+	const ctx = gateConfigContext.getStore();
+	if (!ctx || ctx.root !== path.resolve(root) || !ctx.hash || !Object.hasOwn(ctx.plugins, name)) throw new Error("unknown gate plugin");
+	return ctx.plugins[name];
 }
 const REVIEW_MODEL_POLICY = Object.freeze({ efforts: Object.freeze(["medium", "high", "xhigh", "max"]), runners: Object.freeze(["agy", "muse", "codex", "claude"]) });
 const DEFAULT_RUNNERS = Object.freeze({ sol: "codex", muse: "muse", argon: "agy", codex: "codex" });
@@ -698,11 +728,10 @@ function validateReadOnlyBindingRecords(records) {
 /** 계획서의 services·고정 files 와 git HEAD 일치 config/deploy-gate.json readOnlyScripts 를 대조해 리뷰 시점 바인딩 목록을 만든다. */
 function planReadOnlyScriptsBinding(plan, root) {
 	const base = root ? path.resolve(root) : ROOT;
-	const cfgPath = path.join(base, "config", "deploy-gate.json");
-	if (!fs.existsSync(cfgPath)) return { ok: true, items: [] };
-	let cfg;
-	try { cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); }
-	catch (e) { return { ok: false, why: `config/deploy-gate.json 파싱 실패: ${e.message}`, items: [] }; }
+	const cfgName = trustedGateConfigName(base, 1);
+	const cfgPath = path.join(base, cfgName || "config/deploy-gate.json");
+	const cfg = trustedDeployGateConfig(base);
+	if (!cfg) return { ok: false, why: "승인된 관문 설정이 없습니다", items: [] };
 	const valid = validateReadOnlyScriptsConfig(cfg);
 	if (!valid.ok) return { ok: false, why: valid.why, items: [] };
 	if (valid.items.length === 0) return { ok: true, items: [] };
@@ -894,6 +923,7 @@ function resolveRepoRoot(startDir) {
 /** 리뷰 입력 고정 목록(계획서·핀·실행기)의 내용 해시. 전후 대조와 영수증 결박에 쓴다. */
 const REVIEW_EXECUTOR_FILES = [
 	".agents/scripts/approval-plan.mjs",
+	".claude/hooks/gate-instance.js",
 	".claude/hooks/lib/deploy-plan.js",
 	".claude/hooks/lib/deploy-human-approval.js",
 	".claude/hooks/lib/gate-config-pin.js",
@@ -1240,7 +1270,7 @@ const SNOWFLAKE = /^\d{17,20}$/;
  * 승인자 본인 디스코드 글에 code 가 있는가. 메시지는 AI 가 준 파일이 아니라 디스코드 REST 에서 직접 받는다.
  * 작성자 번호 = approverId(인스턴스 설정값), 봇·웹훅·앱 글 불인정, 글 시각은 코드 발급 뒤.
  */
-async function discordConfirms({ code, sinceIso, refs, approverId, expectedApproverId, token, fetchImpl = globalThis.fetch, checkTimestamp = true }) {
+async function discordConfirms({ code, sinceIso, refs, approverId, expectedApproverId, token, fetchImpl = globalThis.fetch, checkTimestamp = true, signal }) {
 	const configuredId = expectedApproverId !== undefined ? expectedApproverId : approverId;
 	if (!SNOWFLAKE.test(String(approverId || "")) || !SNOWFLAKE.test(String(configuredId || ""))) {
 		return { ok: false, why: "approver-id-unset" };
@@ -1254,7 +1284,7 @@ async function discordConfirms({ code, sinceIso, refs, approverId, expectedAppro
 		if (!r || r.code !== code || !SNOWFLAKE.test(String(r.channelId || "")) || !SNOWFLAKE.test(String(r.messageId || ""))) continue;
 		let m;
 		try {
-			const res = await fetchImpl(`https://discord.com/api/v10/channels/${r.channelId}/messages/${r.messageId}`, { headers: { authorization: `Bot ${token}` }, signal: AbortSignal.timeout(8000) });
+			const res = await fetchImpl(`https://discord.com/api/v10/channels/${r.channelId}/messages/${r.messageId}`, { headers: { authorization: `Bot ${token}` }, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000) });
 			if (!res || !res.ok) continue;
 			m = await res.json();
 		} catch {
@@ -1273,12 +1303,10 @@ async function discordConfirms({ code, sinceIso, refs, approverId, expectedAppro
 }
 
 /** 저장소 정본 설정에서 봇 열쇠를 읽는다. 실패하면 null. 값은 출력하지 않는다. */
-async function loadDiscordToken(repoRoot) {
+async function loadDiscordToken(repoRoot, configuredInstances = []) {
 	try {
 		const { pathToFileURL } = require("url");
-		const gateCfg = readJson(path.join(repoRoot, "config", "deploy-gate.json")) || {};
-		const configuredInstances = Array.isArray(gateCfg?.discord?.instances) ? gateCfg.discord.instances : [];
-		const instances = [...new Set([process.env.NAIA_MESSENGER_INSTANCE, ...configuredInstances].filter(Boolean))];
+		const instances = [...new Set((Array.isArray(configuredInstances) ? configuredInstances : []).filter(Boolean))];
 		if (instances.length === 0) return null;
 		const helperDir = path.join(repoRoot, ".agents", "skills", "manage-discord-sessions", "helper");
 		const { loadMessengerConfig, FileCredentialResolver } = await import(pathToFileURL(path.join(helperDir, "discord-config.mjs")).href);
@@ -1304,9 +1332,8 @@ async function humanConfirmed(code, sinceIso, ctx) {
 	const refs = readJson(refsFile);
 	const list = Array.isArray(refs?.approvals) ? refs.approvals.filter((r) => r && r.code === code) : [];
 	if (list.length === 0) return { ok: false, why: typed.why };
-	const gateCfg = readJson(path.join(ctx.repoRoot || ROOT, "config", "deploy-gate.json")) || {};
-	const expectedApproverId = gateCfg?.approver?.discordUserId !== undefined ? gateCfg.approver.discordUserId : ctx.approverId;
-	const approverId = ctx.approverId !== undefined ? ctx.approverId : expectedApproverId;
+	const approverId = ctx.approverId;
+	const expectedApproverId = ctx.approverId;
 	const token = ctx.discordToken !== undefined ? ctx.discordToken : await loadDiscordToken(ctx.repoRoot);
 	const d = await discordConfirms({ code, sinceIso, refs: list, approverId, expectedApproverId, token, fetchImpl: ctx.fetchImpl });
 	return d.ok ? d : { ok: false, why: d.why };
@@ -2192,5 +2219,5 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 }
 
 module.exports = {
-	withStateLock, withGateConfig, reviewModelsFor, resolveReviewModels, orderedReviewersForConfig, selfReview, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
+	loadDiscordToken, withStateLock, withGateConfig, trustedGatePlugin, trustedGateConfigName, trustedGateConfig, trustedDeployGateConfig, trustedGateConfigFile, hasTrustedGateConfig, reviewModelsFor, resolveReviewModels, orderedReviewersForConfig, selfReview, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
 };

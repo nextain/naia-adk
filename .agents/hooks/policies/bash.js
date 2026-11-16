@@ -349,42 +349,8 @@ const PROD_PATTERNS = [
 	{ pattern: /\bdocker(?:\s+(?:--?[a-zA-Z0-9-]+(?:=\S+|\s+\S+)?))*\s+(?:image\s+)?push\s+\S*(?:pkg\.dev|gcr\.io)\b/, platform: "gcloud", label: "docker push (registry)" },
 ];
 
-function findApprovalGateRoot(cwd, deployDir) {
-	if (process.env.DEPLOY_READINESS_ROOT) return path.resolve(process.env.DEPLOY_READINESS_ROOT);
-	const candidates = [];
-	if (cwd) {
-		candidates.push(path.resolve(cwd));
-		let cur = path.resolve(cwd);
-		for (;;) {
-			if (fs.existsSync(path.join(cur, ".agents", "progress")) || fs.existsSync(path.join(cur, "config", "deploy-gate.json")) || fs.existsSync(path.join(cur, ".git"))) {
-				if (!candidates.includes(cur)) candidates.push(cur);
-			}
-			const parent = path.dirname(cur);
-			if (parent === cur) break;
-			cur = parent;
-		}
-	}
-	if (deployDir) candidates.push(path.resolve(deployDir, "..", ".."));
-	for (const c of candidates) {
-		if (fs.existsSync(path.join(c, "config", "deploy-gate.json")) || hasAnyDeployPlan(c)) return c;
-	}
-	return candidates[0] || path.resolve(__dirname, "..", "..", "..");
-}
-
-function hasAnyDeployPlan(root) {
-	const hooksLibDir = path.resolve(__dirname, "..", "..", "..", ".claude", "hooks", "lib");
-	const { hasDeployPlanMarker } = require(path.join(hooksLibDir, "deploy-readiness.js"));
-	const res = hasDeployPlanMarker(root);
-	return Boolean(res.present || res.error);
-}
-
-function hasApprovalPlanGate(root) {
-	if (!root) return false;
-	return (
-		fs.existsSync(path.join(root, "config", "deploy-gate.json")) ||
-		fs.existsSync(path.join(root, ".agents", "scripts", "approval-plan.mjs")) ||
-		hasAnyDeployPlan(root)
-	);
+function findApprovalGateRoot() {
+	return path.resolve(__dirname, "../../..");
 }
 
 /**
@@ -393,10 +359,19 @@ function hasApprovalPlanGate(root) {
  * @param opts.deployDir REQUIRED — host config dir (adapter passes
  *   path.resolve(its __dirname,"..","deploy")).
  */
-async function deploy(command, data, opts) {
+async function deploy(command, data, opts = {}) {
+	const root = opts.rootDir ? path.resolve(opts.rootDir) : findApprovalGateRoot();
+	const plan = require(path.resolve(__dirname, "../../../.claude/hooks/lib/deploy-plan.js"));
+	const instance = opts.gateConfig || require(path.resolve(__dirname, "../../../.claude/hooks/gate-instance.js"));
+	let refs = [];
+	try { refs = JSON.parse(fs.readFileSync(path.join(root, ".claude/deploy/gate-config-approvals.json"), "utf8")).approvals || []; } catch {}
+	const token = instance.token !== undefined ? instance.token : await plan.loadDiscordToken(root, instance.discordInstances);
+	return plan.withGateConfig({ ...instance, root, refs: instance.refs || refs, token }, () => deployImpl(command, data, opts, { ...instance, token }));
+}
+
+async function deployImpl(command, data, opts, instance) {
 	const DEPLOY_DIR = (opts && opts.deployDir) || path.resolve(__dirname, "..", "..", "..", ".claude", "deploy");
 	const AUDIT_PATH = process.env.DEPLOY_AUDIT_PATH || path.join(DEPLOY_DIR, "audit.jsonl");
-	const loadJSON = (fp, fb) => { try { return JSON.parse(fs.readFileSync(fp, "utf8")); } catch { return fb; } };
 	const appendAudit = (entry) => {
 		try {
 			fs.mkdirSync(path.dirname(AUDIT_PATH), { recursive: true });
@@ -427,30 +402,10 @@ async function deploy(command, data, opts) {
 		}
 		return null;
 	};
-	const findApproval = (approvalsPath, project) => {
-		const approvals = loadJSON(approvalsPath, { approvals: [] });
-		const now = new Date();
-		for (const a of approvals.approvals || []) {
-			if (a.project !== project) continue;
-			if (new Date(a.expires_at) > now) return a;
-		}
-		return null;
-	};
-	const consumeApproval = (approvalsPath, project, approvedAt) => {
-		try {
-			const raw = fs.readFileSync(approvalsPath, "utf8");
-			const approvals = JSON.parse(raw);
-			const before = approvals.approvals.length;
-			approvals.approvals = approvals.approvals.filter(
-				(a) => !(a.project === project && a.approved_at === approvedAt && a.single_use));
-			if (approvals.approvals.length < before) fs.writeFileSync(approvalsPath, JSON.stringify(approvals, null, 2));
-		} catch {}
-	};
 
 	const cwd = (data && data.cwd) || process.cwd();
 	const sessionId = (data && data.session_id) || "unknown";
 	const primaryRoot = (opts && opts.rootDir) ? path.resolve(opts.rootDir) : findApprovalGateRoot(cwd, DEPLOY_DIR);
-	const stripped = core.stripQuotesUnwrap(command);
 
 	const hooksLibDir = path.resolve(__dirname, "..", "..", "..", ".claude", "hooks", "lib");
 	const { shellClauses } = require(path.join(hooksLibDir, "git-command-parser.js"));
@@ -466,9 +421,7 @@ async function deploy(command, data, opts) {
 	const { effectiveCommands } = require(path.join(hooksLibDir, "effective-argv.js"));
 	const {
 		assessReadiness,
-		loadDeployGateConfig,
 		canonicalTargetPath,
-		findPolicyRootForPath,
 		inspectDeployPolicyErrors,
 		TEMPLATE: READINESS_TEMPLATE,
 	} = require(path.join(hooksLibDir, "deploy-readiness.js"));
@@ -497,14 +450,6 @@ async function deploy(command, data, opts) {
 			].join("\n"),
 		};
 	}
-	if (!(opts && opts.rootDir) && !process.env.DEPLOY_READINESS_ROOT) {
-		const cwdPolicyRoot = findPolicyRootForPath(canonicalTargetPath(cwd, "/"));
-		if (cwdPolicyRoot) addRoot(cwdPolicyRoot);
-		for (const tp of [...targets.paths, ...targets.dirs]) {
-			const scriptRoot = findPolicyRootForPath(tp);
-			if (scriptRoot) addRoot(scriptRoot);
-		}
-	}
 
 	const policyReadErrors = [];
 	for (let i = 0; i < evalRoots.length; i++) {
@@ -526,21 +471,9 @@ async function deploy(command, data, opts) {
 	}
 
 	const clauses = shellClauses(command);
-	const isCoveredByLegacyPlatform = (hit) => {
-		if (!hit || hit.unclassified || typeof hit.service !== "string") return false;
-		return (
-			hit.service === "vercel:prod" ||
-			hit.service === "gcloud:app:default" ||
-			hit.service === "gcloud:builds:submit" ||
-			hit.service.startsWith("gcloud:run:")
-		);
-	};
 
-	const evaluateRootClassification = (rootDir, isPrimary) => {
-		const rDeployDir = isPrimary ? DEPLOY_DIR : path.join(rootDir, ".claude", "deploy");
-		const rConfigPath = path.join(rDeployDir, "config.json");
-		const rApprovalsPath = path.join(rDeployDir, "approvals.json");
-		const rConfig = loadJSON(rConfigPath, { projects: {} });
+	const evaluateRootClassification = (rootDir) => {
+		const rConfig = deployPlan.trustedGateConfig(rootDir) || { projects: {} };
 		const isDevService = (service) => {
 			if (!service) return false;
 			const s = String(service).toLowerCase();
@@ -566,12 +499,7 @@ async function deploy(command, data, opts) {
 			return null;
 		};
 
-		const useLegacyApprovals =
-			fs.existsSync(rApprovalsPath) &&
-			(!isPrimary || (!process.env.DEPLOY_READINESS_ROOT && !process.env.DEPLOY_APPROVAL_STATE_DIR)) &&
-			!hasApprovalPlanGate(rootDir);
-
-		const precomputedMutations = classifyProdMutations(command, cwd, 0, false, rootDir).filter((hit) => {
+		const precomputedMutations = classifyProdMutations(command, cwd, 0, false, rootDir, { untrusted: !deployPlan.hasTrustedGateConfig(rootDir) }).filter((hit) => {
 			if (hit && typeof hit.service === "string" && hit.service.startsWith("gcloud:run:")) {
 				const svcName = hit.service.slice("gcloud:run:".length);
 				if (svcName !== "replace" && isDevService(svcName)) return false;
@@ -585,45 +513,6 @@ async function deploy(command, data, opts) {
 			const matched = matchLegacy(rawClause);
 			if (matched) nonDevLegacyMatches.push({ ...matched, tokens });
 		}
-		const onlyLegacyMutations =
-			precomputedMutations.length === 0 ||
-			(nonDevLegacyMatches.length > 0 && precomputedMutations.every(isCoveredByLegacyPlatform));
-
-		if (useLegacyApprovals && onlyLegacyMutations) {
-			const firstLegacy = nonDevLegacyMatches[0];
-			const matchedPattern = firstLegacy ? firstLegacy.pattern : null;
-			if (!matchedPattern) return { matched: false };
-			const project = detectProject(firstLegacy.clause, rConfig, cwd);
-			const approval = !matchedPattern.alwaysBlock ? findApproval(rApprovalsPath, project) : null;
-			if (approval) {
-				return {
-					matched: true,
-					legacyApproved: { approvalsPath: rApprovalsPath, project, approval },
-				};
-			}
-			const projectLabel = project || "(project not detected from cwd)";
-			const remainingMin = rConfig.default_ttl_minutes || 30;
-			return {
-				matched: true,
-				legacyBlock: {
-					audit: {
-						event: "blocked", project: project || "unknown",
-						command: stripped.substring(0, 200), session: sessionId,
-						reason: project ? "no_approval" : "unknown_project",
-					},
-					reason:
-						`[Harness] prod 배포 명령 차단: \`${matchedPattern.label}\`\n` +
-						`프로젝트: ${projectLabel}\n\n` +
-						"prod 배포는 사전 승인이 필요합니다.\n\n" +
-						"승인 방법:\n" +
-						`  1. .claude/deploy/approvals.json에 "${project || "project"}" 승인 항목 추가\n` +
-						`  2. 또는 .claude/deploy/prod-deploy.sh 사용\n\n` +
-						`승인 TTL: ${remainingMin}분\n` +
-						"AI는 prod 배포를 직접 실행하지 않습니다.",
-				},
-			};
-		}
-
 		const hits = [...precomputedMutations];
 		for (const { pattern: p, clause, tokens } of nonDevLegacyMatches) {
 			if (
@@ -673,7 +562,7 @@ async function deploy(command, data, opts) {
 		};
 	};
 
-	const rootResults = evalRoots.map((r, i) => evaluateRootClassification(r, i === 0));
+	const rootResults = evalRoots.map((r) => evaluateRootClassification(r));
 
 	const allUnclassified = rootResults.flatMap((rr) => rr.unclassified || []);
 	if (allUnclassified.length) {
@@ -760,24 +649,11 @@ async function deploy(command, data, opts) {
 
 	if (matchedRoots.length === 0) return blockOnBaseline();
 
-	const pendingLegacy = [];
 	const notices = [];
-	let hadPlanEvaluation = false;
 
 	for (const mr of matchedRoots) {
-		if (mr.legacyBlock) {
-			appendAudit(mr.legacyBlock.audit);
-			return { reason: mr.legacyBlock.reason };
-		}
-		if (mr.legacyApproved) {
-			pendingLegacy.push(mr.legacyApproved);
-			continue;
-		}
-		hadPlanEvaluation = true;
 		const prodServices = mr.unique.map((h) => h.service);
 		const runText = [...new Set(mr.hits.map((h) => h.clause).filter(Boolean))].join(" ; ") || command;
-		const gateConfigInfo = loadDeployGateConfig(mr.root);
-		const gateConfig = (gateConfigInfo && gateConfigInfo.config) || {};
 		const res = await deployPlan.evaluate({
 			command,
 			cwd,
@@ -785,7 +661,8 @@ async function deploy(command, data, opts) {
 			sessionId,
 			transcriptPath: data && data.transcript_path,
 			root: mr.root,
-			approverId: (gateConfig.approver && gateConfig.approver.discordUserId) || (mr.config.approver && mr.config.approver.discordUserId),
+			approverId: instance.approverId,
+			discordToken: instance.token,
 			readiness: (planBinding) => assessReadiness(prodServices, { root: mr.root, auditPath: AUDIT_PATH, command: runText, cwd, planBinding }),
 			readinessTemplate: READINESS_TEMPLATE,
 			fileRefs: () => deployPlan.referencedFiles(command, cwd),
@@ -795,22 +672,6 @@ async function deploy(command, data, opts) {
 		if (res.notice) notices.push(res.notice);
 	}
 
-	if (!hadPlanEvaluation) {
-		const baselineBlock = blockOnBaseline();
-		if (baselineBlock) return baselineBlock;
-	}
-
-	for (const { approvalsPath, project, approval } of pendingLegacy) {
-		appendAudit({
-			event: "executed", project: project || "unknown", session: sessionId,
-			command: stripped.substring(0, 200), original_command: command.substring(0, 200),
-			approved_by: approval.approved_by, approval_expires: approval.expires_at,
-		});
-		if (approval.single_use) {
-			consumeApproval(approvalsPath, project, approval.approved_at);
-			appendAudit({ event: "approval_consumed", project: project || "unknown", single_use: true });
-		}
-	}
 	for (const notice of notices) process.stderr.write(`${notice}\n`);
 	return null;
 }

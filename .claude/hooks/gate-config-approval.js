@@ -2,19 +2,21 @@
 "use strict";
 
 const path = require("path");
-const { GATE_CONFIG_FILES, snapshotGateConfig, approvalCode, approvedGateConfig } = require("./lib/gate-config-pin.js");
+const { snapshotGateConfig, approvalCode, approvedGateConfig } = require("./lib/gate-config-pin.js");
+const instance = require("./gate-instance.js");
+const GATE_CONFIG_FILES = instance.files;
 const { resolveReviewModels, canonicalReviewModels, orderedReviewersForConfig, ROTATION } = require("./lib/deploy-plan.js");
 
 async function main() {
 	const args = process.argv.slice(2);
-	const root = path.resolve(args[0] && !args[0].startsWith("--") ? args.shift() : process.cwd());
+	const root = path.resolve(args[0] && !args[0].startsWith("--") ? args.shift() : path.resolve(__dirname, "../.."));
 	const options = {};
 	while (args.length) {
 		const flag = args.shift();
 		if (!["--approved-root", "--approver-id", "--channel-id", "--message-id"].includes(flag) || !args.length) throw new Error("사용법: gate-config-approval.js [root] [--approved-root root --approver-id id --channel-id id --message-id id]");
 		options[flag] = args.shift();
 	}
-	const snapshot = snapshotGateConfig(root);
+	const snapshot = snapshotGateConfig(root, GATE_CONFIG_FILES);
 	if (!snapshot) throw new Error("관문 설정 파일을 읽을 수 없습니다: " + GATE_CONFIG_FILES.join(", "));
 	const config = JSON.parse(snapshot.files[GATE_CONFIG_FILES[0]].toString("utf8"));
 	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("관문 설정은 객체여야 합니다");
@@ -31,9 +33,10 @@ async function main() {
 	if (Object.keys(options).length) {
 		if (!["--approved-root", "--approver-id", "--channel-id", "--message-id"].every((key) => options[key]) || !process.env.DISCORD_BOT_TOKEN) throw new Error("승인 판 비교에는 네 옵션과 DISCORD_BOT_TOKEN이 모두 필요합니다");
 		const approvedRoot = path.resolve(options["--approved-root"]);
-		const before = snapshotGateConfig(approvedRoot);
+		if (String(options["--approver-id"]) !== String(instance.approverId)) throw new Error("승인자 번호는 인스턴스 코드 상수와 같아야 합니다");
+		const before = snapshotGateConfig(approvedRoot, GATE_CONFIG_FILES);
 		const code = before && approvalCode(before.hash);
-		const approved = before && await approvedGateConfig({ root: approvedRoot, approverId: options["--approver-id"], token: process.env.DISCORD_BOT_TOKEN, refs: [{ code, channelId: options["--channel-id"], messageId: options["--message-id"] }] });
+		const approved = before && await approvedGateConfig({ root: approvedRoot, files: GATE_CONFIG_FILES, approverId: instance.approverId, token: process.env.DISCORD_BOT_TOKEN, refs: [{ code, channelId: options["--channel-id"], messageId: options["--message-id"] }] });
 		if (!approved || approved.hash !== before.hash) throw new Error("비교할 승인 판을 확인하지 못했습니다");
 		const old = new Map(canonicalReviewModels(resolveReviewModels(approved.config)).map((m) => [m.id, m]));
 		const next = new Map(models.map((m) => [m.id, m]));
