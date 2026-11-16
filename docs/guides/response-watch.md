@@ -52,6 +52,21 @@ closes a pending request. Configure the executor to use that reference. Bot
 chatter and another bot's reply do not prove response. A receipt may acknowledge
 an unfinished task; assess the actual work result separately.
 
+## Late notice for a person's request
+
+Optional top-level `ack`: `humanUserIds` (required to turn it on; people whose
+requests are watched, never bots) and `minutes` (default 5). If the assigned
+bot has posted nothing in the same channel or thread within `minutes` of such
+a person's request, the next poll posts one line in that channel,
+`[늦음] <@bot> 가 {minutes}분 안에 받았다는 답을 하지 않았습니다: {link}`
+(`messages.late`, placeholders `{bot}`, `{minutes}`, `{link}`). The mention
+wakes the bot again. The notice is a persisted stage like the nudge, so it is
+sent once and never repeated; an uncertain send needs the same reconciliation.
+Any post by the assigned bot counts as the receipt, not only a reference
+reply; the 10/30 minute nudge and owner notice still wait for a referenced
+reply. Requests from bots, from unlisted people, or aimed at another bot are
+not subject. The matching reaction receipt is in [bot mention wake](bot-mention-wake.md).
+
 ## State, failures and recovery
 
 State version 1 contains channel cursors, pending request identifiers, timestamps,
@@ -146,4 +161,4 @@ claiming an instance is aligned.
 
 ## Message text
 
-Each instance may set `messages.nudge`, `messages.escalate`, `messages.siteFailure` and `messages.siteRecovered` in its config, for example in its team language or with a prefix its wake sensor recognises. Placeholders: `{bot}`, `{user}`, `{link}`, `{site}`. Missing keys fall back to the English defaults.
+Each instance may set `messages.nudge`, `messages.late`, `messages.escalate`, `messages.siteFailure` and `messages.siteRecovered` in its config, for example in its team language or with a prefix its wake sensor recognises. Placeholders: `{bot}`, `{user}`, `{link}`, `{site}`. Missing keys fall back to the English defaults.

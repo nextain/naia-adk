@@ -176,3 +176,32 @@ test('instance message templates replace known placeholders and keep unknown one
   assert.equal(fill('<@{bot}> 답해 주세요: {link}', { bot: '1', link: 'https://x/y' }), '<@1> 답해 주세요: https://x/y');
   assert.equal(fill('{site} {unknown}', { site: 'a' }), 'a {unknown}');
 });
+
+// Read-receipt deadline for listed people: any post by the assigned bot in the channel clears it.
+const ackSetup = async () => { const f = await fixture(); f.config.ack = { humanUserIds: ['40'] }; return f; };
+test('late notice: posted once in the source channel after the deadline, with the bot re-called', async () => {
+  const { remote, run } = await ackSetup(); await run(); remote.messages.push(human(2));
+  await run(4); assert.equal(remote.posts.length, 0);
+  await run(5); assert.equal(remote.posts.length, 1);
+  assert.ok(remote.posts[0].content.startsWith('[늦음] <@20> 가 5분 안에')); assert.deepEqual(remote.posts[0].allowed_mentions.users, ['20']);
+  assert.ok(remote.events.some(e => e.stage === 'send' && e.result === 'confirmed'));
+  await run(6); await run(9); assert.equal(remote.posts.length, 1);
+});
+test('late notice: a bot post in the channel inside the deadline means no notice', async () => {
+  const { remote, run } = await ackSetup(); await run(); remote.messages.push(human(2)); await run(1);
+  remote.messages.push(human(3, { author: { id: '20', bot: true }, timestamp: new Date(epoch + 2 * 60000).toISOString(), mentions: [] }));
+  await run(5); await run(9); assert.equal(remote.posts.length, 0);
+});
+test('late notice: another bot, a bot-to-bot mention and unlisted people are not subject', async () => {
+  const { remote, run } = await ackSetup(); await run();
+  remote.messages.push(human(2, { author: { id: '21', bot: true } }), human(3, { author: { id: '42' } }), human(4, { author: { id: '40' }, mentions: [{ id: '21', bot: true }] }));
+  await run(5); assert.equal(remote.posts.length, 0);
+  remote.messages.push(human(5)); remote.messages.push(human(6, { author: { id: '21', bot: true }, timestamp: new Date(epoch + 5 * 60000).toISOString(), mentions: [] }));
+  await run(6); assert.equal(remote.posts.length, 1); assert.ok(remote.posts[0].content.endsWith('/5'));
+});
+test('late notice stays off without a human list and validates its settings', async () => {
+  const { config, remote, run } = await fixture(); await run(); remote.messages.push(human(2)); await run(5); assert.equal(remote.posts.length, 0);
+  config.ack = { minutes: 5 }; assert.throws(() => validateConfig(config), /invalid ack/);
+  config.ack = { minutes: 0, humanUserIds: ['40'] }; assert.throws(() => validateConfig(config), /invalid ack/);
+  config.ack = { humanUserIds: ['40'] }; validateConfig(config);
+});

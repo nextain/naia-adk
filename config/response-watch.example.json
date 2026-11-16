@@ -5,6 +5,10 @@
     "nudgeMinutes": 10,
     "escalateMinutes": 30
   },
+  "ack": {
+    "humanUserIds": ["<human-user-id>"],
+    "minutes": 5
+  },
   "maxPages": 100,
   "guilds": [
     {
@@ -49,6 +53,7 @@
     "nudge": "<@{bot}> Please respond to the pending request: {link}",
     "escalate": "<@{user}> Response remains unconfirmed: {link}",
     "siteFailure": "Configured site check {site} failed repeatedly.",
+    "late": "[늦음] <@{bot}> 가 {minutes}분 안에 받았다는 답을 하지 않았습니다: {link}",
     "siteRecovered": "Configured site check {site} recovered."
   }
 }
