@@ -292,3 +292,42 @@ test('config accepts DM rooms and a catch-up period and rejects malformed ones',
   assert.throws(() => load({ roles: [{ ...role, dmUserIds: ['someone'] }] }), /invalid role/);
   assert.throws(() => load({ dmCatchupSeconds: 0, roles: [role] }), /dmCatchupSeconds/);
 });
+
+// Read receipt: a reaction on a person's post once it is in the wake box.
+const reactionCalls = () => { const calls = []; return { calls, fetchImpl: async (url, init) => { calls.push({ url, method: init.method, authorization: init.headers.Authorization }); return { ok: true, status: 204 }; } }; };
+test('a person\'s mention gets a read reaction once; the wake is not blocked by a failing reaction', async t => {
+  const api = reactionCalls();
+  const f = setup(t, { ack: { enabled: true, emoji: '👀' } }, { fetchImpl: api.fetchImpl });
+  await f.dispatch('MESSAGE_CREATE', f.message('01'));
+  await f.dispatch('MESSAGE_CREATE', f.message('01'));
+  assert.equal(api.calls.length, 1); assert.equal(api.calls[0].method, 'PUT');
+  assert.ok(api.calls[0].url.endsWith(`/channels/${channel}/messages/200000000000000001/reactions/${encodeURIComponent('👀')}/@me`));
+  assert.equal(api.calls[0].authorization, `Bot ${f.role.token}`);
+  const failing = setup(t, { ack: { enabled: true, emoji: '👀' } }, { fetchImpl: async () => ({ ok: false, status: 403 }) });
+  await failing.dispatch('MESSAGE_CREATE', failing.message('02'));
+  assert.equal(failing.files().length, 1); assert.deepEqual(failing.logs, [{ event: 'ack_reaction_failed', role: 'assistant', status: 403 }]);
+  const broken = setup(t, { ack: { enabled: true, emoji: '👀' } }, { fetchImpl: async () => { throw new Error('private'); } });
+  await broken.dispatch('MESSAGE_CREATE', broken.message('03'));
+  assert.equal(broken.files().length, 1); assert.equal(broken.logs[0].status, 'unreachable');
+});
+test('ack off, bot authors and non-listed people get no reaction', async t => {
+  const off = reactionCalls();
+  const a = setup(t, { ack: { enabled: false, emoji: '👀' } }, { fetchImpl: off.fetchImpl });
+  await a.dispatch('MESSAGE_CREATE', a.message('01')); assert.equal(a.files().length, 1); assert.equal(off.calls.length, 0);
+  const on = reactionCalls();
+  const b = setup(t, { ack: { enabled: true, emoji: '✅', humanUserIds: [bot] } }, { fetchImpl: on.fetchImpl });
+  await b.dispatch('MESSAGE_CREATE', b.message('01')); assert.equal(on.calls.length, 0);
+  const c = setup(t, { ack: { enabled: true, emoji: '✅' } }, { fetchImpl: on.fetchImpl });
+  await c.dispatch('MESSAGE_CREATE', c.message('02', { author: { id: other, bot: true } }));
+  await c.dispatch('MESSAGE_CREATE', c.message('03', { webhook_id: '100000000000000009' }));
+  assert.equal(on.calls.length, 0);
+  await c.dispatch('MESSAGE_CREATE', c.message('04')); assert.equal(on.calls.length, 1); assert.ok(on.calls[0].url.includes(encodeURIComponent('✅')));
+});
+test('ack config defaults on with the eyes emoji and rejects a malformed one', t => {
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), 'bot-wake-ack-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'config.json'), role = { id: 'assistant', botUserId: bot, tokenEnv: 'TEST_TOKEN', wakeDir: 'wake' }, env = { TEST_TOKEN: 'credential-long-enough' };
+  fs.writeFileSync(file, JSON.stringify({ roles: [role] })); assert.deepEqual(loadConfig(file, env)[0].ack, { enabled: true, emoji: '👀', humanUserIds: [] });
+  fs.writeFileSync(file, JSON.stringify({ ack: { enabled: false, emoji: '✅' }, roles: [role] })); assert.equal(loadConfig(file, env)[0].ack.enabled, false);
+  fs.writeFileSync(file, JSON.stringify({ ack: { emoji: 'a/b' }, roles: [role] })); assert.throws(() => loadConfig(file, env));
+});

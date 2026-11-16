@@ -27,6 +27,11 @@ export function validateConfig(config) {
   const nudge = config.thresholds?.nudgeMinutes ?? 10;
   const escalate = config.thresholds?.escalateMinutes ?? 30;
   if (!(Number.isFinite(nudge) && nudge > 0 && Number.isFinite(escalate) && escalate > nudge)) throw new Error('invalid thresholds');
+  // Optional read-receipt deadline for people listed in `ack.humanUserIds` (off without that list).
+  if (config.ack) {
+    const minutes = config.ack.minutes ?? 5;
+    if (!Number.isFinite(minutes) || minutes <= 0 || !Array.isArray(config.ack.humanUserIds) || !config.ack.humanUserIds.length || !config.ack.humanUserIds.every(id)) throw new Error('invalid ack');
+  }
   if (!Number.isInteger(config.maxPages ?? 100) || (config.maxPages ?? 100) < 1) throw new Error('invalid maxPages');
   const channels = new Set();
   for (const guild of config.guilds) {
@@ -144,6 +149,9 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         for (const message of messages.sort((a, b) => compare(a.id, b.id))) {
           if (![0, 19].includes(message.type ?? 0)) continue;
           if (message.author?.bot) {
+            // Any post by the assigned bot after a person's request, in this channel or thread, is a receipt for the late notice — only when it landed inside the deadline.
+            const postedAt = Date.parse(message.timestamp) || now;
+            for (const [id, pending] of Object.entries(next.pending)) if (pending.human && !pending.ackedAt && pending.botId === message.author.id && compare(message.id, id) > 0 && postedAt < pending.at + (config.ack?.minutes ?? 5) * 60000) pending.ackedAt = postedAt;
             const request = next.pending[ref(message)];
             if (request && message.author.id === request.botId) {
               const at = Date.parse(message.timestamp);
@@ -167,7 +175,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
           if (!assigned) continue;
           const timestamp = Date.parse(message.timestamp);
           if (!Number.isFinite(timestamp)) throw new Error('invalid request timestamp');
-          next.pending[message.id] = { botId: assigned, at: timestamp, stages: {} };
+          next.pending[message.id] = { botId: assigned, at: timestamp, stages: {}, ...(config.ack?.humanUserIds.includes(message.author.id) ? { human: true } : {}) };
         }
         if (messages.length) next.cursor = messages.at(-1).id;
         delete next.error;
@@ -176,6 +184,9 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         for (const [messageId, request] of Object.entries(next.pending)) {
           const age = (now - request.at) / 60000;
           const link = `https://discord.com/channels/${guild.id}/${channel.id}/${messageId}`;
+          // Same-channel late notice: re-calls the bot (its mention wakes it) and tells the room once.
+          const ackMinutes = config.ack?.minutes ?? 5;
+          if (config.ack && request.human && !request.ackedAt && age >= ackMinutes) await send(request.stages, `${key}/${messageId}/late`, channel.id, fill(config.messages?.late ?? '[늦음] <@{bot}> 가 {minutes}분 안에 받았다는 답을 하지 않았습니다: {link}', { bot: request.botId, minutes: ackMinutes, link }), [request.botId]);
           if (age >= (config.thresholds?.nudgeMinutes ?? 10)) await send(request.stages, `${key}/${messageId}/nudge`, guild.nudgeChannelId, fill(config.messages?.nudge ?? '<@{bot}> Please respond to the pending request: {link}', { bot: request.botId, link }), [request.botId]);
           if (age >= (config.thresholds?.escalateMinutes ?? 30)) await send(request.stages, `${key}/${messageId}/escalate`, guild.escalation.channelId, fill(config.messages?.escalate ?? '<@{user}> Response remains unconfirmed: {link}', { user: guild.escalation.userId, link }), [guild.escalation.userId]);
         }

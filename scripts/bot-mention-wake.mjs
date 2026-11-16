@@ -25,6 +25,9 @@ export function loadConfig(file, env = process.env) {
   if (!Array.isArray(config.roles) || !config.roles.length) throw new Error('invalid roles');
   const dmCatchupMs = (config.dmCatchupSeconds ?? 300) * 1_000;
   if (!Number.isFinite(dmCatchupMs) || dmCatchupMs < 30_000) throw new Error('dmCatchupSeconds must be 30 or more');
+  // Read receipt: a reaction on a person's post as soon as it is handed to the wake box. On unless `ack.enabled` is false.
+  const ack = { enabled: config.ack?.enabled !== false, emoji: config.ack?.emoji ?? '👀', humanUserIds: config.ack?.humanUserIds ?? [] };
+  if (typeof ack.emoji !== 'string' || !ack.emoji || ack.emoji.length > 64 || /[\s/?#%]/u.test(ack.emoji) || !Array.isArray(ack.humanUserIds) || !ack.humanUserIds.every(snowflake)) throw new Error('invalid ack');
   const ids = new Set(), bots = new Set(), dirs = new Set();
   return config.roles.map(role => {
     if (!/^[a-zA-Z0-9_-]+$/.test(role.id ?? '') || !snowflake(role.botUserId) || !role.wakeDir || Boolean(role.tokenFile) === Boolean(role.tokenEnv)) throw new Error('invalid role');
@@ -36,7 +39,7 @@ export function loadConfig(file, env = process.env) {
     ids.add(role.id); bots.add(role.botUserId); dirs.add(wakeDir);
     const token = (role.tokenFile ? fs.readFileSync(path.resolve(base, role.tokenFile), 'utf8') : env[role.tokenEnv])?.trim();
     if (!token || token.length < 16) throw new Error('credential unavailable');
-    return { id: role.id, botUserId: role.botUserId, wakeDir, token, dmChannelIds, dmUserIds, dmCatchupMs };
+    return { id: role.id, botUserId: role.botUserId, wakeDir, token, dmChannelIds, dmUserIds, dmCatchupMs, ack };
   });
 }
 
@@ -111,6 +114,18 @@ export function createRoleWake(role, { gatewayOptions = {}, log = record => proc
     const body = `# Discord wake\n\nRole: ${role.id}\nGuild: ${clean(state.guilds[guild] ?? (direct ? 'DM' : guild))} (${guild})\nChannel: ${clean(state.channels[data.channel_id] ?? data.channel_id)} (${data.channel_id})\nAuthor: ${clean(data.author?.global_name ?? data.author?.username ?? 'unknown')} (${clean(data.author?.id)})\nMessage ID: ${data.id}\nURL: https://discord.com/channels/${guild}/${data.channel_id}/${data.id}\n\n${safe(data.content).slice(0, 1_000)}\n`;
     state.pending = { id: data.id, filename: `${now()}-${data.id}-gw.md`, body };
     persist(); finishPending();
+    void acknowledge(data);
+  }
+  // Read receipt for a person's post (not a bot, webhook or a configured-away author). It never blocks the wake:
+  // a failure is logged with the status only and the post stays woken.
+  async function acknowledge(data) {
+    const ack = role.ack;
+    if (!ack?.enabled || !data.author?.id || data.author.bot || data.webhook_id) return;
+    if (ack.humanUserIds?.length && !ack.humanUserIds.includes(data.author.id)) return;
+    try {
+      const response = await fetchImpl(`${apiBase}/channels/${data.channel_id}/messages/${data.id}/reactions/${encodeURIComponent(ack.emoji)}/@me`, { method: 'PUT', headers: { Authorization: `Bot ${role.token}` }, signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) log({ event: 'ack_reaction_failed', role: role.id, status: response.status });
+    } catch { log({ event: 'ack_reaction_failed', role: role.id, status: 'unreachable' }); }
   }
   // The gateway does not replay what it missed beyond its resume window. Each DM
   // room is therefore also read over REST with this role's own credential, from a

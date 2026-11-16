@@ -1,5 +1,6 @@
 {
   "dmCatchupSeconds": 300,
+  "ack": { "enabled": true, "emoji": "👀" },
   "roles": [
     {
       "id": "assistant",
