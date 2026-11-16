@@ -532,7 +532,7 @@ async function deployImpl(command, data, opts, instance) {
 		if (floor && floor.services && Object.keys(floor.services).length) {
 			const { matchServiceRule } = require(path.join(hooksLibDir, "deploy-readiness.js"));
 			const floorServices = classifyProdMutations(command, cwd, 0, false, rootDir, { untrusted: true, untrustedHints: floor, floorHints: floor, ignoreNonProd: true });
-			precomputedMutations.push(...floorServices.filter((hit) => matchServiceRule(hit.service, floor)).map((hit) => ({ ...hit, untrustedHint: true })));
+			precomputedMutations.push(...floorServices.filter((hit) => matchServiceRule(hit.service, floor) || matchServiceRule(String(hit.service || "").replace(/\.$/, ""), floor)).map((hit) => ({ ...hit, untrustedHint: true })));
 		}
 		const nonDevLegacyMatches = [];
 		for (const tokens of clauses) {

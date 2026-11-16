@@ -183,7 +183,7 @@ test("reviewed floor survives removal and approved exemptions while extra curren
   assert.ok(hits.some(hit=>hit.service==="custom:overlap"));
   assert.ok(hits.some(hit=>hit.service==="ssh:fixture-read"),"an approved overlapping pattern cannot hide the floor service");
  });
- for(const cmd of ["floortool ship now","extratool ship now","ssh fixture-read uptime","ssh fixture-host uptime","scp file fixture-host:/tmp/file","gcloud run deploy fixture-test","systemctl restart fixture.service"]) assert.ok((await run(cmd))?.reason,`approved: ${cmd}`);
+ for(const cmd of ["floortool ship now","extratool ship now","ssh fixture-read uptime","ssh fixture-host uptime","ssh fixture-host. uptime","scp file fixture-host:/tmp/file","scp file fixture-host.:/tmp/file","gcloud run deploy fixture-test","systemctl restart fixture.service"]) assert.ok((await run(cmd))?.reason,`approved: ${cmd}`);
  fs.writeFileSync(gatePath,JSON.stringify({testHosts:["fixture-host","fixture-read","fixture-test"]}));
  for(const cmd of ["floortool ship now","ssh fixture-read uptime","ssh fixture-host uptime","scp file fixture-host:/tmp/file","gcloud run deploy fixture-test","systemctl restart fixture.service"]) assert.ok((await run(cmd))?.reason,`removed: ${cmd}`);
  assert.equal(await run("extratool ship now"),null,"current-only restriction can be removed");
