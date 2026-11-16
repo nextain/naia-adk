@@ -72,6 +72,7 @@ try {
     write(contract.progress_file,{contract_id:contract.id,contract_digest:digest});
     const registry={schema_version:'1.0',bindings:{'SESSION-1':{contract_id:contract.id,contract_path:'.agents/session-contracts/gate-test.json',contract_digest:digest}}};
     write('.agents/session-contracts/.session-map.json',registry);
+    blocked(run(adapter,'Write',{file_path:path.join(fixture,contract.progress_file),content:JSON.stringify({contract_id:contract.id,contract_digest:digest,approver:{discordUserId:'333333333333333333'}})},{DEPLOY_GATE_CONFIG:path.join(fixture,contract.progress_file)}),'bootstrap cannot replace an approver when the selected config is also the progress file');
     allowed(run(adapter,'Write',{file_path:path.join(fixture,'product.txt'),content:'bound'}),'bound file');
     allowed(run(adapter,'Bash',{command:'git branch -D protected'}),'exact contracted shell (hook decision only)');
     blocked(run(adapter,'Bash',{command:'git branch -D protected; true'}),'extra shell clause');
