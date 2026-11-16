@@ -467,6 +467,7 @@ async function deploy(command, data, opts) {
 	const {
 		assessReadiness,
 		loadDeployGateConfig,
+		loadDeployGatePlugin,
 		canonicalTargetPath,
 		findPolicyRootForPath,
 		inspectDeployPolicyErrors,
@@ -777,7 +778,49 @@ async function deploy(command, data, opts) {
 		const prodServices = mr.unique.map((h) => h.service);
 		const runText = [...new Set(mr.hits.map((h) => h.clause).filter(Boolean))].join(" ; ") || command;
 		const gateConfigInfo = loadDeployGateConfig(mr.root);
-		const gateConfig = (gateConfigInfo && gateConfigInfo.config) || {};
+		const gateConfig = (gateConfigInfo && (gateConfigInfo.config || gateConfigInfo)) || {};
+		const approverId = (gateConfig.approver && gateConfig.approver.discordUserId) || (mr.config.approver && mr.config.approver.discordUserId);
+		const readinessFn = (planBinding) => assessReadiness(prodServices, { root: mr.root, auditPath: AUDIT_PATH, command: runText, cwd, planBinding });
+		const fileRefsFn = () => deployPlan.referencedFiles(command, cwd);
+		let gatePlugin = null;
+		if (gateConfig && typeof gateConfig.plugin === "string" && gateConfig.plugin.trim()) {
+			try {
+				gatePlugin = loadDeployGatePlugin(mr.root, gateConfig);
+			} catch (err) {
+				const msg = err && err.message ? err.message : String(err);
+				appendAudit({ event: "blocked-policy-error", session: sessionId, command: command.substring(0, 300), root: mr.root, errors: [msg] });
+				return { reason: `[Harness] 인스턴스 배포 플러그인 로드 실패로 막습니다(fail-closed): ${msg}` };
+			}
+		}
+		if (gatePlugin && typeof gatePlugin.evaluatePlan === "function") {
+			let pluginRes;
+			try {
+				pluginRes = await gatePlugin.evaluatePlan({
+					command,
+					cwd,
+					services: prodServices,
+					sessionId,
+					transcriptPath: data && data.transcript_path,
+					root: mr.root,
+					approverId,
+					config: gateConfig,
+					deployPlan,
+					readiness: readinessFn,
+					readinessTemplate: READINESS_TEMPLATE,
+					fileRefs: fileRefsFn,
+				});
+			} catch (err) {
+				const msg = err && err.message ? err.message : String(err);
+				appendAudit({ event: "blocked-policy-error", session: sessionId, command: command.substring(0, 300), root: mr.root, errors: [msg] });
+				return { reason: `[Harness] 인스턴스 배포 플러그인 실행 오류로 막습니다(fail-closed): ${msg}` };
+			}
+			if (pluginRes) {
+				appendAudit({ ...(pluginRes.audit || {}), services: prodServices, session: sessionId, command: command.substring(0, 300) });
+				if (!pluginRes.allow) return { reason: pluginRes.reason };
+				if (pluginRes.notice) notices.push(pluginRes.notice);
+				continue;
+			}
+		}
 		const res = await deployPlan.evaluate({
 			command,
 			cwd,
@@ -785,10 +828,10 @@ async function deploy(command, data, opts) {
 			sessionId,
 			transcriptPath: data && data.transcript_path,
 			root: mr.root,
-			approverId: (gateConfig.approver && gateConfig.approver.discordUserId) || (mr.config.approver && mr.config.approver.discordUserId),
-			readiness: (planBinding) => assessReadiness(prodServices, { root: mr.root, auditPath: AUDIT_PATH, command: runText, cwd, planBinding }),
+			approverId,
+			readiness: readinessFn,
 			readinessTemplate: READINESS_TEMPLATE,
-			fileRefs: () => deployPlan.referencedFiles(command, cwd),
+			fileRefs: fileRefsFn,
 		});
 		appendAudit({ ...(res.audit || {}), services: prodServices, session: sessionId, command: command.substring(0, 300) });
 		if (!res.allow) return { reason: res.reason };

@@ -44,8 +44,9 @@ async function main() {
 		&& !OFF_VALUES.has(String(process.env.BEH || "").trim().toLowerCase());
 	if (!enabled) process.exit(0);
 
-	let beh, lc;
+	let beh, lc, isShellTool;
 	try {
+		({ isShellTool } = require("./tool-names.js"));
 		const hostRoot = path.resolve(__dirname, "..", "..");
 		beh = require(path.join(hostRoot, ".agents", "hooks", "core", "beh-ledger.js"));
 		lc = require(path.join(hostRoot, ".agents", "hooks", "core", "beh-launch-core.js"));
@@ -56,7 +57,7 @@ async function main() {
 
 	const tool = data.tool_name;
 	const toolInput = data.tool_input || {};
-	const command = tool === "Bash" ? String(toolInput.command || "") : "";
+	const command = isShellTool(tool) ? String(toolInput.command || "") : "";
 	if (lc.isLauncher(command)) process.exit(0);
 
 	const bypass = path.join(configDir, "beh-launch-bypass");
@@ -82,7 +83,7 @@ async function main() {
 		);
 	}
 
-	if (tool === "Bash" && (lc.isBackgrounded(command) || toolInput.run_in_background === true) && !lc.isSuperviseWrapper(command)) {
+	if (isShellTool(tool) && (lc.isBackgrounded(command) || toolInput.run_in_background === true) && !lc.isSuperviseWrapper(command)) {
 		block(
 			"[BEH] Unsupervised background execution is blocked. Use the bounded wrapper:\n"
 			+ "node .claude/hooks/beh-supervise.js --probe-type <type> --probe-arg <path> "

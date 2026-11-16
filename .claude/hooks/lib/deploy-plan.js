@@ -1164,8 +1164,9 @@ const SNOWFLAKE = /^\d{17,20}$/;
  * 승인자 본인 디스코드 글에 code 가 있는가. 메시지는 AI 가 준 파일이 아니라 디스코드 REST 에서 직접 받는다.
  * 작성자 번호 = approverId(인스턴스 설정값), 봇·웹훅·앱 글 불인정, 글 시각은 코드 발급 뒤.
  */
-async function discordConfirms({ code, sinceIso, refs, approverId, expectedApproverId, token, fetchImpl = globalThis.fetch }) {
-	const configuredId = expectedApproverId !== undefined ? expectedApproverId : approverId;
+async function discordConfirms({ code, sinceIso, refs, approverId, root = ROOT, env = process.env, token, fetchImpl = globalThis.fetch }) {
+	const configPath = env.DEPLOY_GATE_CONFIG ? path.resolve(env.DEPLOY_GATE_CONFIG) : path.join(root, "config", "deploy-gate.json");
+	const configuredId = readJson(configPath)?.approver?.discordUserId;
 	if (!SNOWFLAKE.test(String(approverId || "")) || !SNOWFLAKE.test(String(configuredId || ""))) {
 		return { ok: false, why: "approver-id-unset" };
 	}
@@ -1228,11 +1229,12 @@ async function humanConfirmed(code, sinceIso, ctx) {
 	const refs = readJson(refsFile);
 	const list = Array.isArray(refs?.approvals) ? refs.approvals.filter((r) => r && r.code === code) : [];
 	if (list.length === 0) return { ok: false, why: typed.why };
-	const gateCfg = readJson(path.join(ctx.repoRoot || ROOT, "config", "deploy-gate.json")) || {};
-	const expectedApproverId = gateCfg?.approver?.discordUserId !== undefined ? gateCfg.approver.discordUserId : ctx.approverId;
+	const configPath = ctx.env?.DEPLOY_GATE_CONFIG ? path.resolve(ctx.env.DEPLOY_GATE_CONFIG) : path.join(ctx.repoRoot || ROOT, "config", "deploy-gate.json");
+	const gateCfg = readJson(configPath) || {};
+	const expectedApproverId = gateCfg?.approver?.discordUserId;
 	const approverId = ctx.approverId !== undefined ? ctx.approverId : expectedApproverId;
 	const token = ctx.discordToken !== undefined ? ctx.discordToken : await loadDiscordToken(ctx.repoRoot);
-	const d = await discordConfirms({ code, sinceIso, refs: list, approverId, expectedApproverId, token, fetchImpl: ctx.fetchImpl });
+	const d = await discordConfirms({ code, sinceIso, refs: list, approverId, root: ctx.repoRoot || ROOT, env: ctx.env, token, fetchImpl: ctx.fetchImpl });
 	return d.ok ? d : { ok: false, why: d.why };
 }
 
@@ -1537,7 +1539,7 @@ async function evaluate(ctx) {
 
 async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostNote, verdictEarly, readOnlyNoCode = false }) {
 	const state = loadState(env);
-	const ctxH = { transcriptPath: ctx.transcriptPath, gatesDir: f.gatesDir, repoRoot: ctx.root, approverId: ctx.approverId, fetchImpl: ctx.fetchImpl, discordToken: ctx.discordToken };
+	const ctxH = { transcriptPath: ctx.transcriptPath, gatesDir: f.gatesDir, repoRoot: ctx.root, env, approverId: ctx.approverId, fetchImpl: ctx.fetchImpl, discordToken: ctx.discordToken };
 
 	// 전체 계획 승인 (검수 통과한 읽기 전용 고정 ops 대본은 사람 승인 코드 단계를 건너뜀)
 	let planCh = null;

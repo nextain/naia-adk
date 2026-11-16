@@ -17,7 +17,7 @@
  */
 
 const SHELL = ["bash", "shell_command", "exec_command", "run_terminal_command"];
-const FILE_MUTATION = ["write", "edit", "notebookedit", "apply_patch", "search_replace"];
+const FILE_MUTATION = ["write", "edit", "multiedit", "notebookedit", "apply_patch", "search_replace"];
 
 /** 호스트 도구 이름을 `shell`, `file-mutation`, 또는 원래 잎 이름으로 옮긴다. */
 function normalizedToolName(name) {

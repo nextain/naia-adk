@@ -13,7 +13,11 @@ const put = (file, text = "x\n") => { fs.mkdirSync(path.dirname(file), { recursi
 // 픽스처: 복사한 훅(ADK 루트가 픽스처가 되도록), 역할 폴더, 저장소 둘, 저장소 밖 작업 폴더.
 const adk = path.join(scratch, "adk");
 const hookDir = path.join(adk, ".claude/hooks");
-for (const f of ["lead-write-guard.js", "tool-names.js", "lib/effective-argv.js", "lib/git-command-parser.js", "lib/lead-guard.js"]) put(path.join(hookDir, f), fs.readFileSync(path.join(__dirname, f), "utf8"));
+for (const f of ["lead-write-guard.js", "tool-names.js", "lib/effective-argv.js", "lib/git-command-parser.js", "lib/lead-guard.js"]) {
+	const src = fs.readFileSync(path.join(__dirname, f), "utf8");
+	// 시험 러너 자체가 3층 세션의 하위 프로세스에서 돌더라도 픽스처 밖 조상 프로세스는 보지 않게 경계를 끊는다.
+	put(path.join(hookDir, f), f === "lib/lead-guard.js" ? src.replace("pid > 1", `pid > 1 && pid !== ${process.pid}`) : src);
+}
 fs.mkdirSync(path.join(adk, ".git"));
 const role = path.join(scratch, "role");
 put(path.join(role, ".naia-role.json"), JSON.stringify({ role: "minho", lead_guard: { enabled: true, protect: [path.join(scratch, "kit")] } }));

@@ -24,6 +24,8 @@
  * opts.failClosedReason — the block reason used when failClosed.
  */
 
+const { isFileMutationTool } = require("./tool-names.js");
+
 async function runEditHook(policy, opts) {
 	const failClosed = Boolean(opts && opts.failClosed);
 	const failReason = (opts && opts.failClosedReason) || "[Harness] Edit policy could not be verified (fail-closed).";
@@ -44,12 +46,7 @@ async function runEditHook(policy, opts) {
 	}
 
 	const toolName = data.tool_name || "";
-	if (
-		toolName !== "Edit" &&
-		toolName !== "Write" &&
-		toolName !== "NotebookEdit" &&
-		toolName !== "MultiEdit"
-	) {
+	if (!isFileMutationTool(toolName)) {
 		process.exit(0);
 	}
 

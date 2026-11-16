@@ -271,9 +271,34 @@ function fileMutationTargets(toolInput) {
  * session must never be able to widen its own authority, so these stay behind a
  * contract even though ordinary project files no longer do.
  */
+function deployGateTarget(target, projectRoot) {
+	// Gate configuration and its executable extension determine the same authority
+	// as hook code. Include the selected alternate config and plugin as well.
+	const defaultConfig = path.join(projectRoot, "config", "deploy-gate.json");
+	const selectedConfig = process.env.DEPLOY_GATE_CONFIG ? path.resolve(process.env.DEPLOY_GATE_CONFIG) : defaultConfig;
+	const readinessRoot = process.env.DEPLOY_READINESS_ROOT ? path.resolve(process.env.DEPLOY_READINESS_ROOT) : projectRoot;
+	const readinessConfig = path.join(readinessRoot, "config", "deploy-gate.json");
+	const protectedFiles = [defaultConfig, path.join(projectRoot, "config", "deploy-gate-plugin.cjs"), selectedConfig, readinessConfig, path.join(readinessRoot, "config", "deploy-gate-plugin.cjs")];
+	for (const configFile of new Set([defaultConfig, selectedConfig, readinessConfig])) {
+		try {
+			const cfg = JSON.parse(fs.readFileSync(configFile, "utf8"));
+			if (typeof cfg.plugin === "string" && cfg.plugin.trim()) {
+				protectedFiles.push(path.resolve(projectRoot, cfg.plugin));
+				if (configFile === readinessConfig) protectedFiles.push(path.resolve(readinessRoot, cfg.plugin));
+				if (configFile === selectedConfig && process.env.DEPLOY_GATE_CONFIG) {
+					protectedFiles.push(path.resolve(path.dirname(configFile), "..", cfg.plugin));
+				}
+			}
+		} catch { /* Invalid or missing configuration remains protected itself. */ }
+	}
+	const physicalTarget = physicalPath(target);
+	return protectedFiles.some((file) => physicalPath(file) === physicalTarget);
+}
+
 function governedTarget(target, projectRoot) {
 	const relative = path.relative(projectRoot, target).replaceAll("\\", "/");
 	if (relative === ".agents" || relative.startsWith(".agents/")) return true;
+	if (deployGateTarget(target, projectRoot)) return true;
 	return HARNESS_CONFIG_DIRS.some((dir) => relative === dir || relative.startsWith(dir + "/"));
 }
 
@@ -373,7 +398,7 @@ function governanceWriteCommand(command, cwd, projectRoot) {
 		// destination is judged again where it physically lands.
 		if (!sessionContract.inside(physicalPath(projectRoot), physicalPath(resolved))) return true;
 		const state = stateTarget(resolved, cwd);
-		if (state?.kind === "progress") continue;
+		if (state?.kind === "progress" && !deployGateTarget(resolved, projectRoot)) continue;
 		if (state || governedTarget(resolved, projectRoot)) return true;
 		if (ENTRY_POINTS.has(path.basename(resolved)) && path.dirname(resolved) === projectRoot) return true;
 	}
@@ -1313,7 +1338,10 @@ function decide(data = {}, env = process.env, dependencies = {}) {
 	const resolution = resolveSessionContract({ cwd, sessionId });
 	// A derived worker already has a verified, parent-owned contract. It must
 	// never replace that authority by bootstrapping an explicit child contract.
-	if (resolution.reason !== "derived_delegation_verified" && bootstrapMutationAllowed(toolName, toolInput, cwd, sessionId)) return null;
+	const projectRoot = sessionContract.findProjectRoot(cwd);
+	const bootstrapTargets = normalizedToolName(toolName) === "file-mutation" ? fileMutationTargets(toolInput) : [];
+	const changesDeployGate = bootstrapTargets.some((target) => deployGateTarget(path.resolve(cwd, target), projectRoot));
+	if (!changesDeployGate && resolution.reason !== "derived_delegation_verified" && bootstrapMutationAllowed(toolName, toolInput, cwd, sessionId)) return null;
 	if (resolution.status !== sessionContract.STATES.BOUND && unboundOrdinaryMutationAllowed(toolName, toolInput, cwd)) return null;
 	if (resolution.status !== sessionContract.STATES.BOUND &&
 		resolution.reason !== "derived_delegation_verified" &&

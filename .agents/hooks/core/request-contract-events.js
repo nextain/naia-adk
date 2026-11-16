@@ -1,4 +1,5 @@
 "use strict";
+const { isShellTool: isKnownShellTool } = require("../../../.claude/hooks/tool-names.js");
 module.exports = function createRequestContractModule(api) {
 const {
 	fs, path, CLASSIFICATIONS, REQUIRED_CLIENT_EVENTS, CONTROL_INPUT_NAMES, sha256, opaqueId, canonicalJson,
@@ -94,7 +95,7 @@ function exactScriptWord(word, expected, cwd) {
 }
 
 function governedControlCommand(event, cwd, unit) {
-	if (!unit || event.toolName !== "Bash") return false;
+	if (!unit || !isShellTool(event)) return false;
 	const words = safeShellWords(event.toolInput && event.toolInput.command);
 	if (!words || words.length < 3 || !trustedNodeWord(words[0], cwd)) return false;
 	const operatorScript = path.join(cwd, "scripts", "request-contract.cjs");
@@ -180,9 +181,7 @@ function configuredShellTools(config = null) {
 
 function isShellTool(event, config = null) {
 	const toolName = String(event.toolName || "");
-	return configuredShellTools(config).includes(toolName)
-		|| toolName === "exec_command"
-		|| /(?:^|[.:/])(?:exec_command|shell_command)$/u.test(toolName);
+	return configuredShellTools(config).includes(toolName) || isKnownShellTool(toolName);
 }
 
 function mutationFromEvent(event, cwd = null, unit = null, config = null) {

@@ -18,6 +18,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { isShellTool } = require("./tool-names.js");
 
 const VALID_RISK = new Set(["archive", "prod"]);
 
@@ -92,7 +93,7 @@ async function main() {
 		}
 		process.exit(0);
 	}
-	if ((data.tool_name || "") !== "Bash") process.exit(0);
+	if (!isShellTool(data.tool_name)) process.exit(0);
 
 	const command = data.tool_input?.command || "";
 	const pol = loadPolicy();

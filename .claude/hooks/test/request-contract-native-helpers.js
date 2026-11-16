@@ -59,6 +59,7 @@ function installProductionControlSurface(fx) {
 		".agents/hooks/core/request-contract-adapter.js",
 		".agents/hooks/core/request-contract-review-runner.js",
 		".claude/hooks/request-contract.js",
+		".claude/hooks/tool-names.js",
 		".codex/hooks/request-contract.cjs",
 		"scripts/request-contract.cjs",
 		"scripts/request-contract-review-runner.cjs",

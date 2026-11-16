@@ -1748,7 +1748,8 @@ function effectiveCommandsInner(command, cwd, depth, root, spawned, inherited) {
 			const dyn = target >= 0 && depth < 4 ? dynamicWord(argv[target], root, dir, dirKnown, written) : undefined;
 			if (dyn === null) {
 				const sub = extractReadSubFile(argv[target]);
-				const resolvedSub = sub ? resolvePathWord(sub.file, dir, root, dirKnown) || sub.file : argv[target];
+				const isStdinLike = Boolean(sub) || (target > 0 && (fdStdinSpec(argv[target], dir, root, dirKnown) || /^<\(/.test(String(argv[target] || "")) || argv[target] === "-" || argv[target] === "-s"));
+				const resolvedSub = sub ? (resolvePathWord(sub.file, dir, root, dirKnown) || sub.file) : (isStdinLike ? argv[target] : "");
 				out.push({ argv: ["<dynamic-program>"], assigns: [], dir, dirKnown, clause, stdinTarget: resolvedSub, stdinSourceFiles: sub && resolvedSub ? [resolvedSub] : [], opaque: `실행 중에 정해지는 프로그램(${argv[target]}). 훅이 읽은 글과 실제로 도는 글이 다를 수 있음` });
 				prev = { ...e, dir, dirKnown };
 				continue;

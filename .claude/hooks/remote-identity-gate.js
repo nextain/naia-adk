@@ -13,8 +13,9 @@ const fs = require("fs");
 const path = require("path");
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const roleMode = fs.existsSync(path.join(projectDir, ".naia-role.json"));
-let core;
+let core, isShellTool;
 try {
+	({ isShellTool } = require("./tool-names.js"));
 	core = require("../../.agents/hooks/core/remote-identity.js");
 } catch {
 	process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Remote identity policy module is unavailable (fail-closed)." }));
@@ -82,7 +83,7 @@ async function main() {
 		process.stdout.write(JSON.stringify({ decision: "block", reason: "[Harness] Remote identity input could not be parsed (fail-closed)." }));
 		process.exit(0);
 	}
-	if ((data.tool_name || "") !== "Bash") process.exit(0);
+	if (!isShellTool(data.tool_name)) process.exit(0);
 	const command = data.tool_input?.command || "";
 	let result = null;
 	try { result = evaluateProfile(command, data.cwd || process.cwd()); }

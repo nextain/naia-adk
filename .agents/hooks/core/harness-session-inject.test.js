@@ -42,6 +42,7 @@ function workspace() {
 		".agents/hooks/core/subagent-failure-receipt.js",
 		".codex/hooks/session-inject.cjs",
 		".claude/hooks/session-inject.js",
+		".claude/hooks/tool-names.js",
 	]) {
 		const target = path.join(cwd, relative);
 		fs.mkdirSync(path.dirname(target), { recursive: true });

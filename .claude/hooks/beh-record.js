@@ -11,6 +11,7 @@
  * opt-in per session (`.claude/beh-on`); inert otherwise.
  */
 const path = require("path");
+const { isShellTool } = require("./tool-names.js");
 let beh, rcpt;
 try {
 	beh = require(path.join(__dirname, "..", "..", ".agents", "hooks", "core", "beh-ledger.js"));
@@ -75,7 +76,7 @@ async function main() {
 	// §3.2 receipt: a SUCCESSFUL Bash matching ANY item's pre-declared
 	// verify.cmd_pattern records a completion receipt (closure hashed NOW).
 	// Cold path — only after a cheap pattern match (no repo walk otherwise).
-	if (tool === "Bash" && outcome === "ok") {
+	if (isShellTool(tool) && outcome === "ok") {
 		try {
 			const vItem = items.find((it) => rcpt.isVerifyCommand(it, target));
 			if (vItem) {

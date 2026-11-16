@@ -29,6 +29,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { isShellTool } = require("../../../.claude/hooks/tool-names.js");
 
 // ── Defaults (overridable via state.config) ──────────────────────────────
 const DEFAULT_CONFIG = {
@@ -120,7 +121,7 @@ function canonTarget(tool, input, opts) {
 			return String(p);
 		}
 	};
-	switch (tool) {
+	switch (isShellTool(tool) ? "Bash" : tool) {
 		case "Edit":
 		case "Write":
 		case "Read":
@@ -180,7 +181,7 @@ function matchMilestone(item, ev) {
 			if (fp && globToRe(k.glob).test(fp)) return m.id;
 		} else if (k.kind === "bash_ok") {
 			if (!ok) continue;
-			if (ev.tool !== "Bash") continue;
+			if (!isShellTool(ev.tool)) continue;
 			const cmd = ev.target_canon.startsWith("bash:") ? ev.target_canon.slice(5) : "";
 			try {
 				if (new RegExp(k.pattern).test(cmd)) return m.id;

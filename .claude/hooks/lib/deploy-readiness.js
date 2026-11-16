@@ -573,7 +573,12 @@ function loadDeployGatePlugin(root, cfg) {
 	const config = cfg || loadDeployGateConfig(root);
 	if (!config || typeof config.plugin !== "string" || !config.plugin.trim()) return null;
 	const base = root || process.env.DEPLOY_READINESS_ROOT || path.resolve(__dirname, "../../..");
-	const pluginPath = path.isAbsolute(config.plugin) ? config.plugin : path.resolve(base, config.plugin);
+	let pluginPath = path.isAbsolute(config.plugin) ? config.plugin : path.resolve(base, config.plugin);
+	if (!fs.existsSync(pluginPath) && !path.isAbsolute(config.plugin) && process.env.DEPLOY_GATE_CONFIG) {
+		const envBase = path.resolve(path.dirname(path.resolve(process.env.DEPLOY_GATE_CONFIG)), "..");
+		const altPath = path.resolve(envBase, config.plugin);
+		if (fs.existsSync(altPath)) pluginPath = altPath;
+	}
 	if (!fs.existsSync(pluginPath)) throw new Error(`config/deploy-gate.json 의 plugin 모듈을 찾지 못함: ${config.plugin}`);
 	return require(pluginPath);
 }
@@ -1033,7 +1038,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	}
 
 	if (plugin && typeof plugin.verifyPlanBinding === "function") {
-		const pluginRes = plugin.verifyPlanBinding({ plan, entry, command, candidate, kind, services, cwd, root, config: cfg, files });
+		const pluginRes = plugin.verifyPlanBinding({ plan, entry, command, candidate, kind, services, cwd, root, gatesDir: planBinding.gatesDir, config: cfg, files, fs });
 		if (pluginRes && pluginRes.ok === false) {
 			return no(pluginRes.why || pluginRes.problem || "인스턴스 플러그인 결합 거부");
 		}
@@ -1051,7 +1056,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	const pluginFacts = [];
 	for (const s of services) {
 		if (plugin && typeof plugin.assessService === "function") {
-			const res = plugin.assessService(s, { plan, entry, command, candidate, kind, services, cwd, root, config: cfg, files });
+			const res = plugin.assessService(s, { plan, entry, command, candidate, kind, services, cwd, root, gatesDir: planBinding.gatesDir, config: cfg, files, fs });
 			if (res && res.ok === false) {
 				const why = (Array.isArray(res.problems) && res.problems[0]) || res.why || res.problem || `인스턴스 플러그인 결합 거부(${s})`;
 				return no(why);

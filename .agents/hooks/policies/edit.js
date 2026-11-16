@@ -61,18 +61,18 @@ function prodGateway(data) {
 	// may override the host prefix / key digest via env without code changes.
 	const PROD_GATEWAY_HOST_FRAGMENT =
 		process.env.PROD_GATEWAY_HOST_FRAGMENT || "naia-gateway-";
-	const PROD_MASTER_KEY_SHA256 =
-		process.env.PROD_MASTER_KEY_SHA256 ||
-		"800749e91c9a52d265927d03d0b4281052da96c898a7607d3feb9c969e6230de";
+	const prodKeyDigests = new Set([
+		"800749e91c9a52d265927d03d0b4281052da96c898a7607d3feb9c969e6230de",
+		process.env.PROD_MASTER_KEY_SHA256,
+	].filter((value) => /^[a-f0-9]{64}$/.test(value || "")));
 	const sha256 = (s) => createHash("sha256").update(s, "utf8").digest("hex");
 	const contentToCheck =
 		data.tool_input?.content || data.tool_input?.new_string || "";
-	const hasProdUrl =
-		/naia-gateway-\d{6,}\.[a-z0-9-]+\.run\.app/.test(contentToCheck) &&
-		contentToCheck.includes(PROD_GATEWAY_HOST_FRAGMENT) &&
-		!/naia-gateway-dev-/.test(contentToCheck);
+	const hasProdUrl = /https?:\/\/naia-gateway-\d+\.[a-z0-9-]+\.run\.app(?:[/:?#]|$)/i.test(contentToCheck) ||
+		(PROD_GATEWAY_HOST_FRAGMENT !== "naia-gateway-" && contentToCheck.includes(PROD_GATEWAY_HOST_FRAGMENT)) ||
+		/naia-gateway-\d{6,}\.[a-z0-9-]+\.run\.app/.test(contentToCheck);
 	const hasProdKey = [...contentToCheck.matchAll(/[A-Za-z0-9_-]{20,}/g)].some(
-		(m) => sha256(m[0]) === PROD_MASTER_KEY_SHA256,
+		(m) => prodKeyDigests.has(sha256(m[0])),
 	);
 	if (hasProdUrl || hasProdKey) {
 		const detected = [
