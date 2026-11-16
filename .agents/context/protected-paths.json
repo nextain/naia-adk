@@ -1,0 +1,4 @@
+{
+  "$comment": "Human-only paths. Agents may not read, write, or run an entry (files: exact path or trailing path segment; directories: everything below). Enforced by .claude/hooks/protected-path-guard.js and protected-path-command-guard.js via .agents/hooks/policies/protected-paths.js. An empty list blocks nothing.",
+  "protected_paths": []
+}

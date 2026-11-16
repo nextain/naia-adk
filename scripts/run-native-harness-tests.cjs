@@ -27,6 +27,7 @@ const runs=[
   ["review-pass distribution parity",[".agents/skills/review-pass/test-distribution-parity.cjs"]],
   ["Discord requirement traces",[".agents/skills/manage-discord-sessions/tests/requirements-trace.test.mjs"]],
   ["routine approval policy",[".claude/hooks/test/run-routine-approval-policy-test.cjs"]],
+  ["protected paths",[".claude/hooks/test/run-protected-paths-test.cjs"]],
   ["BEH ledger",[".claude/hooks/test/run-beh-ledger-test.js"]],
   ["BEH receipts",[".claude/hooks/test/run-beh-receipts-test.js"]],
   ["BEH supervise",[".claude/hooks/test/run-beh-supervise-test.js"]],
