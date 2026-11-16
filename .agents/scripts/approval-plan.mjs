@@ -31,6 +31,7 @@ const PINNED_CJS_EXECUTORS = [
 	".claude/hooks/lib/deploy-human-approval.js",
 	".claude/hooks/lib/gate-config-pin.js",
 	".claude/hooks/lib/deploy-plan.js",
+	".claude/hooks/gate-instance.js",
 ];
 const preloadFlag = /(?:^|[\s"'])(?:--(?:require|import|(?:experimental-)?loader)(?=$|[\s="'])|-r)/;
 if (preloadFlag.test(process.env.NODE_OPTIONS || "") || process.execArgv.some((arg) => preloadFlag.test(arg))) {
@@ -535,7 +536,7 @@ function reviewStatus(gatesDir, sha, writeFindings = false, root = ROOT) {
 	return r;
 }
 
-export async function runApprovalPlan(argv = process.argv.slice(2)) {
+async function runApprovalPlan(argv = process.argv.slice(2)) {
 const [cmd, ...args] = argv;
 switch (cmd) {
 	case "template":
@@ -767,10 +768,19 @@ switch (cmd) {
 }
 // An instance supplies the code-pinned approver identity and Discord details here.
 export async function runApprovedApprovalPlan(options, argv = process.argv.slice(2)) {
-	return lib.withGateConfig(options, () => runApprovalPlan(argv));
+	return lib.withGateConfig(options, () => {
+		if (argv[0] !== "template" && !lib.hasTrustedGateConfig(options.root || ROOT)) throw new Error("승인된 관문 설정이 없습니다");
+		return runApprovalPlan(argv);
+	});
 }
 const invokedDirectly = (() => {
 	try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === bootEntryAbs; }
 	catch { return false; }
 })();
-if (invokedDirectly) await runApprovalPlan();
+if (invokedDirectly) {
+	const instance = require(path.join(ROOT, ".claude/hooks/gate-instance.js"));
+	let refs = [];
+	try { refs = JSON.parse(fs.readFileSync(path.join(ROOT, ".claude/deploy/gate-config-approvals.json"), "utf8")).approvals || []; } catch {}
+	const token = await lib.loadDiscordToken(ROOT, instance.discordInstances);
+	await runApprovedApprovalPlan({ ...instance, root: ROOT, refs, token });
+}

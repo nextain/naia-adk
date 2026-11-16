@@ -7,12 +7,12 @@
 ## 0. 인스턴스 확장 설정 (`config/deploy-gate.json`)
 
 업스트림(`naia-adk`)에는 공통 관문 뼈대만 들어 있으며, 회사·서버 이름·IP·구독 ID·채널 ID 같은 인스턴스 전용 정보는 넣지 않습니다.
-각 인스턴스 저장소는 `config/deploy-gate.json`(예시: `config/deploy-gate.example.json`)과 선택 플러그인 모듈(`plugin`)로 자신의 운영 서비스 목록과 결합 규칙을 등록합니다.
+각 인스턴스는 승인된 `config/deploy-gate.json`(예시: `config/deploy-gate.example.json`)과 코드에서 등록한 선택 플러그인으로 운영 서비스 목록과 결합 규칙을 정합니다.
 
 - **기본 동작(Fail-Closed)**: `config/deploy-gate.json`이 없거나 명령의 운영 서비스 키가 인스턴스 설정·플러그인에 등록되어 있지 않으면 **"알 수 없는 운영 명령은 막음"** 규칙에 따라 즉시 차단됩니다.
 - **명령 앞 전역 옵션 건너뛰기 및 미지 옵션 차단**: `gcloud`(`run deploy`, `run services update|replace`, `builds submit`, `app deploy`, `functions deploy`, `compute scp|ssh`), `kubectl`, `helm`, `terraform`, `fly`/`flyctl`, `wrangler`, `railway`, `supabase` 분류기는 하위 명령 앞의 알려진 전역 옵션(값을 받는 옵션은 그 값 토큰까지)을 건너뛰어 하위 명령을 찾으며, 하위 명령 앞에 모르는 옵션이 오면 승인 필요(`*:unknown-option`)로 판정해 차단합니다. `bash release.sh` 등 감싼 셸 대본 실행도 본문을 재귀 분류합니다.
-- **옛 승인(`approvals.json`) 분기 방어**: 저장소에 승인 계획 관문(`config/deploy-gate.json`, `.agents/scripts/approval-plan.mjs`, `gates/deploy-plan.json`)이 설치된 환경에서는 유효한 옛 `approvals.json` 항목이 있어도 옛 분기를 타지 않고 새 승인 계획 관문으로 검사합니다. 관문 파일이 없는 순수 옛 환경에서만 옛 `PROD_PATTERNS` 범위 명령에 한해 `approvals.json` 흐름을 허용하며, 그 밖의 운영 명령(`az`, `kubectl` 등)은 항상 차단합니다. 옛 `.claude/deploy/config.json`의 개발 서비스(`dev_service`·`-dev`) 예외는 복합 명령에서 해당 절(clause)에만 적용됩니다.
-- **관문 루트 기준 확장 설정 로드**: `config/deploy-gate.json`은 명령이 하위 폴더에서 실행되거나 `cd <하위폴더>` 뒤 실행되더라도 정책이 찾은 관문 루트(저장소 루트)에서 읽습니다.
+- **옛 승인(`approvals.json`) 분기 방어**: 승인 계획 관문이 설치된 인스턴스에서는 옛 단발 승인 파일만으로 배포를 통과시킬 수 없습니다. 설정 해시 승인과 승인 계획을 사용합니다.
+- **관문 루트 기준 확장 설정 로드**: 관문 루트는 훅 파일 위치를 기준으로 고정합니다. 현재 작업 폴더와 환경 변수의 다른 설정은 이 루트를 바꾸지 않습니다.
 - **인스턴스 확장 오류 시 차단**: `config/deploy-gate.json`의 `prodPatterns` 정규식 오류나 `plugin` 모듈 로드 실패가 나면 이미 모은 `prodPatterns` 적중을 보존한 채 `unclassified` 적중을 내어 즉시 차단합니다.
 - **설정 항목**:
   - `services`: 운영 서비스 키(`azure:containerapp:<이름>`, `gcp:cloudrun:<이름>`, `vercel:deploy:prod` 등)별 준비 기록(`gates/deploy.json`) 요구 여부, `ops`/`rollback` 허용 여부, 명령 결합 규칙(`commandMustContain` 등)
@@ -22,8 +22,8 @@
     - 등록 서비스가 하나라도 있을 때 변경 대상의 `$변수`·`${변수}`·명령 치환을 정확히 풀 수 없거나, 대상이 비어 stdin·`xargs`에서 올 수 있으면 등록 서비스 전체를 대상으로 보아 차단합니다. 글롭(`*`·`?`·`[`)은 등록 유닛에 맞춰 보고, 대상을 확정할 수 없으면 차단합니다. 정확히 풀리는 미등록 유닛과 읽기 동사(`status`, `show`, `cat` 등)는 기존대로 처리합니다.
     - `/etc/systemd/system/<유닛>.service`, `.socket`, 각 유닛의 `.d/` 및 선택 항목 `paths`(절대 경로 배열)의 경로 자체와 하위 파일 변경도 같은 서비스로 분류합니다. 대상 도구는 `install`, `cp`, `mv`, `tee`, `sed -i`, `rm`, `ln`, `dd`의 `of=`, `truncate`, `rsync`의 목적지, `chmod`, `chown`입니다. `>`·`>>`·`>|`·`&>` 리다이렉트도 포함하므로 `echo`·`printf`·`cat`으로 쓰는 경우도 검사합니다. 경로는 디렉터리 경계로 맞추므로 `/opt/sample-web2`는 `/opt/sample-web`에 속하지 않습니다. 등록 서비스가 있을 때 쓰기 대상 경로에 풀리지 않는 변수·명령 치환·글롭이 남으면 등록 서비스 전체를 대상으로 보아 차단합니다.
     - 이 분류는 유닛과 파일 경로를 기준으로 합니다. PID를 직접 지정하는 `kill`이나 프로세스 문자열을 찾는 `pkill -f`는 유닛 소유 관계를 조회하지 않으므로 이 로컬 분류의 보장 범위 밖에 남습니다. `systemctl kill <등록 유닛>`은 위 변경 동사에 포함합니다.
-  - `prodPatterns` / `sshAlwaysGated`: 인스턴스 추가 운영 명령·SSH 호스트 분류 패턴
-  - `testHosts`: 비운영(시험) 기기 호스트·IP 문자열 목록. 소문자·끝 점(`.`)을 정규화하여 와일드카드 없이 정확히 같은 이름만 비운영으로 판정하며, 설정이 없거나 깨졌으면 빈 목록으로 동작합니다. 비운영 호스트로 판정되어도 `ssh` 원격 본문은 다시 분류하므로 시험 기기 안에서 실행하는 운영 변경(`az vm delete` 등)과 `-F`·`-o HostName` 대상 덮어쓰기는 그대로 차단됩니다.
+  - `prodPatterns` / `sshAlwaysGated`: 인스턴스 추가 운영 명령 패턴과 항상 관문을 적용할 SSH 호스트(`hosts` 배열)
+  - `testHosts`: 비운영(시험) 기기 호스트·IP 문자열 목록. 소문자·끝 점(`.`)을 정규화하여 와일드카드 없이 정확히 같은 이름만 비운영으로 판정하며, 현재 설정이 바뀌거나 깨졌으면 마지막으로 확인된 승인본을 사용합니다. 비운영 호스트로 판정되어도 `ssh` 원격 본문은 다시 분류하므로 시험 기기 안에서 실행하는 운영 변경(`az vm delete` 등)과 `-F`·`-o HostName` 대상 덮어쓰기는 그대로 차단됩니다.
   - `readOnlyScripts`: `[{ "sha256": "<64자리 hex>", "path": "<저장소 상대 경로>", "service": "<정확한 서비스 키>", "note": "<설명>" }]` 배열. `gates/deploy.json`이 `kind: "ops"`이고 아래 허용 명령 꼴의 대본이 등록된 `{sha256, path, service}` 셋과 모두 맞으면, **관문이 `config/deploy-gate.json`과 대본 파일이 심볼릭 링크 없이 git으로 추적되고 작업 트리·인덱스 내용이 HEAD 블롭과 동일한지 직접 검증하며** 적대 리뷰(PASS) 통과 이후 `PLAN`/`STEP` 사람 승인 코드 입력 단계를 건너뜁니다.
     - `service` 와일드카드 금지: `service`에는 `*`, `?`, `[`, `{` 등 글롭을 쓸 수 없으며 정확한 서비스 키 하나만 적어야 합니다(글롭 발견 시 설정 검사 오류). 같은 `sha256`이라도 다른 `path`나 다른 `service`로 재사용하면 무코드가 되지 않습니다.
     - 허용 명령 꼴(정확한 형태만 무코드 인정, 의심 시 기존 승인 코드·차단 경로로 복귀):
@@ -35,8 +35,8 @@
     - 실행은 감사 기록(`audit.jsonl`)에 `"readonly-no-code"`(`approved_by: "readonly-no-code"`)로 남으며, 계획서·대본·설정이 리뷰 당시와 같은 동안만 승인 코드 없이 반복 실행할 수 있습니다.
     - 설정에 없는 `(sha256, path, service)`, `config/deploy-gate.json`이나 대본의 미추적·미커밋 변경, 인라인 명령(`bash -c`·`--scripts "..."`), `kind !== "ops"`, 적대 리뷰 미통과 시에는 기존 동작 그대로 차단되거나 사람 승인 코드를 요구합니다.
     - **남는 위험**: (1) 관문 훅은 실행 시점에 리뷰 영수증·HEAD 일치를 검사할 뿐 `git commit` 자체를 막지는 않으므로(범위 밖), 설정 파일(`config/deploy-gate.json`) 변경 커밋 통제는 PR 리뷰·브랜치 보호에 의존합니다. (2) 훅이 대본 `sha256`과 HEAD 일치를 검사한 시각과 실제 `az`/`bash` 프로세스가 대본을 여는 시각 사이에는 짧은 TOCTOU 창이 남습니다(실행 중 디스크 변경 시 다른 내용이 실행될 수 있음).
-  - `approver.discordUserId`: 디스코드 승인 시 대조할 승인자 본인의 디스코드 사용자 ID(Snowflake)
-  - `plugin`: 서비스별 세부 결합 검증(`assessService(service, ctx)`)이나 추가 명령 분류(`classifyCommand(ctx)`)를 수행하는 선택 모듈 경로
+  - 승인자 ID는 인스턴스 코드의 상수입니다. 설정 안의 승인자 값은 사용하지 않습니다.
+  - `plugin`: 인스턴스 코드의 `plugins` 맵에 등록된 이름입니다. 설정은 임의 모듈 경로를 로드할 수 없습니다.
 
 ---
 
@@ -84,19 +84,27 @@ Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그
 }
 ```
 
-`until`이 없거나 지났을 때, 또는 `reviewer`가 작성자와 같을 때는 차례만 씁니다. 승인되지 않았거나 읽을 수 없는 설정은 기본 차례를 씁니다. 승인된 설정의 형식 오류(`reviewer`가 승인된 목록 밖, `until`이 ISO 시각이 아님)는 거부합니다. 관문은 차례 기록(`rotation: true`)의 리뷰어 영수증 1명을 받습니다. 기록 시각(`reviewedAt`)의 차례를 다시 만들어, `skipped`가 앞에서부터 건너뛴 후보 그대로이고(각각 0이 아닌 `exit_code`) 실제 리뷰어가 그 다음 후보인지 대조합니다. `reviewedAt`은 UTC ISO 시각이어야 하고, 리뷰어 영수증 시작 시각(`started_at`) 이전 90분 안이어야 합니다. 시각을 옮겨 다른 차례를 만드는 기록은 막습니다. 작성자와 같은 모델, 차례 밖 모델, 한도 기록 없는 뒤 후보, 2인 기록은 막습니다. 옛 모양 기록(`rotation` 칸 없음)은 `reviewedAt`과 리뷰어 영수증 시작 시각이 모두 차례 도입 시각(`2026-11-10T10:00:00Z`)보다 앞설 때만 받습니다. 새 기록에서 `rotation` 칸을 지워 차례 대조를 건너뛰는 길을 막습니다. 리뷰 뒤 `planReview`를 바꾸면 차례가 달라져 다시 리뷰해야 할 수 있습니다. 작성자와 리뷰어는 같을 수 없습니다.
+`until`이 없거나 지났을 때, 또는 `reviewer`가 작성자와 같을 때는 차례만 씁니다. 현재 설정이 승인되지 않았으면 검증된 마지막 승인본의 차례를 씁니다. 승인된 설정의 형식 오류(`reviewer`가 승인된 목록 밖, `until`이 ISO 시각이 아님)는 거부합니다. 관문은 차례 기록(`rotation: true`)의 리뷰어 영수증 1명을 받습니다. 기록 시각(`reviewedAt`)의 차례를 다시 만들어, `skipped`가 앞에서부터 건너뛴 후보 그대로이고(각각 0이 아닌 `exit_code`) 실제 리뷰어가 그 다음 후보인지 대조합니다. `reviewedAt`은 UTC ISO 시각이어야 하고, 리뷰어 영수증 시작 시각(`started_at`) 이전 90분 안이어야 합니다. 시각을 옮겨 다른 차례를 만드는 기록은 막습니다. 작성자와 같은 모델, 차례 밖 모델, 한도 기록 없는 뒤 후보, 2인 기록은 막습니다. 옛 모양 기록(`rotation` 칸 없음)은 `reviewedAt`과 리뷰어 영수증 시작 시각이 모두 차례 도입 시각(`2026-11-10T10:00:00Z`)보다 앞설 때만 받습니다. 새 기록에서 `rotation` 칸을 지워 차례 대조를 건너뛰는 길을 막습니다. 리뷰 뒤 `planReview`를 바꾸면 차례가 달라져 다시 리뷰해야 할 수 있습니다. 작성자와 리뷰어는 같을 수 없습니다.
 
-리뷰어별 기본 모델·최소 강도는 코드에 고정합니다(`argon`: `gemini-4-argon-medium`/`medium`, `codex`: `gpt-6.1-terra`/`high`, `muse`: `muse-spark-1.3`/`xhigh`, 옛 기록용 `sol`: `gpt-6.1-sol`/`high`). 인스턴스의 `.claude/deploy/config.json`에 `review_models`를 쓰면 승인된 설정에 한해 리뷰어 ID별 정확한 모델 이름(`model`), 최소 강도(`effort`), 실행기(`runner`: `agy`, `muse`, `codex`, `claude`)를 적용합니다. 승인된 `review_models`는 사용할 리뷰어의 전체 목록이며 기본 리뷰어를 함께 쓰려면 목록에 명시해야 합니다. Claude 실행기는 `claude -p --model <정확한 이름> --effort <강도>`으로 호출합니다. 모델 이름의 계통이나 단어로 승인 여부를 판단하지 않습니다. 승인 확인이 안 된 설정은 코드 기본값을 씁니다. 영수증의 `receipt.effort`도 필수이며 설정에 맞아야 합니다.
+리뷰어별 기본 모델·최소 강도는 코드에 고정합니다(`argon`: `gemini-4-argon-medium`/`medium`, `codex`: `gpt-6.1-terra`/`high`, `muse`: `muse-spark-1.3`/`xhigh`, 옛 기록용 `sol`: `gpt-6.1-sol`/`high`). 인스턴스의 `.claude/deploy/config.json`에 `review_models`를 쓰면 승인된 설정에 한해 리뷰어 ID별 정확한 모델 이름(`model`), 최소 강도(`effort`), 실행기(`runner`: `agy`, `muse`, `codex`, `claude`)를 적용합니다. 승인된 `review_models`는 사용할 리뷰어의 전체 목록이며 기본 리뷰어를 함께 쓰려면 목록에 명시해야 합니다. Claude 실행기는 `claude -p --model <정확한 이름> --effort <강도>`으로 호출합니다. 모델 이름의 계통이나 단어로 승인 여부를 판단하지 않습니다. 승인본이 없으면 리뷰 실행을 막습니다. 영수증의 `receipt.effort`도 필수이며 설정에 맞아야 합니다.
 
 기본 회전은 작성자를 제외한 우선순위의 앞 두 후보만 사용하며, 다른 리뷰어는 유효한 `planReview.reviewer`로 먼저 지정할 수 있습니다. Claude 작성자의 리뷰에는 `claude` 실행기 리뷰어를 쓰지 않습니다.
 
+인스턴스는 `.claude/hooks/gate-instance.js`에 승인자 ID, 인스턴스마다 고유하고 안정적인 식별값, 해시할 상대 파일 목록, 디스코드 인스턴스와 플러그인 맵을 코드 상수로 둡니다. 기본 ID는 비어 있으므로 인스턴스가 코드 리뷰를 거쳐 채워야 합니다. 파일 목록은 리뷰 설정과 배포 설정을 이 순서로 담으며, 이 인스턴스 예시는 `.claude/deploy/config.json`과 `config/deploy-gate.json`입니다. 추가 설정 파일도 같은 목록에 넣습니다. 메일·DM 등 다른 승인 호출도 동일한 코드 상수를 `discordConfirms`에 전달합니다.
+
 관문 설정을 바꾼 뒤에는 다음 순서로 승인받습니다.
 
-1. 설정을 바꾸고 `node .claude/hooks/gate-config-approval.js`를 실행해 설정 해시, 승인 코드, 풀린 리뷰어 전체 목록과 작성자별 실제 리뷰어 차례를 확인합니다. 승인된 이전 설정의 별도 디렉터리와 `--approved-root`, `--approver-id`, `--channel-id`, `--message-id` 및 환경 변수 `DISCORD_BOT_TOKEN`을 제공하면 디스코드 승인을 확인한 뒤 리뷰어 차이도 표시합니다.
-2. 승인자가 이 변경을 살펴보고 본인 디스코드 글에 승인 코드를 남깁니다. 봇·웹훅 글은 인정하지 않습니다. 인스턴스 관문 코드는 설정 밖에 고정된 승인자 번호와 해당 글 참조를 승인 확인에 전달해야 합니다. 공통 저장소에는 승인자 번호가 없으므로 기본 CLI에서는 승인된 설정도 적용되지 않습니다. 인스턴스에서 승인 확인을 관문 실행에 연결한 뒤 사용합니다.
-3. 관문은 코드에 고정된 설정 파일의 현재 내용으로 해시와 `CFG-` 승인 코드를 다시 계산해 본인 글과 대조합니다. 파일이 한 글자라도 바뀌면 새 승인 코드가 필요합니다. 로컬 발급 기록이나 발급 시각은 확인하지 않습니다. 확인할 수 없거나 승인이 없으면 기본값을 사용합니다.
+1. `node .claude/hooks/gate-config-approval.js`로 두 파일을 포함한 전체 해시와 승인 코드, 리뷰어 목록과 차례를 확인합니다. 승인자에게 두 파일의 전체 변경을 보여줍니다.
+2. 승인자가 본인 디스코드 글에 코드를 남기면 `.claude/deploy/gate-config-approvals.json`의 `approvals`에 `{"code":"CFG-...","channelId":"...","messageId":"..."}`를 추가합니다. 봇·웹훅·다른 작성자의 글은 인정하지 않습니다.
+3. 훅과 계획서 CLI는 같은 인스턴스 상수로 디스코드 원문을 확인하고, 승인된 설정 바이트를 인스턴스별 상태 폴더의 해시 이름 사본에 보관합니다. 사본은 후보일 뿐이며 푸는 설정이 필요한 판정마다 디스코드 원문을 다시 확인합니다. 조회 실패나 지연 시에는 엄격한 판정을 유지하고 사유를 안내합니다. 평범한 명령은 조회하지 않습니다. 바이트 해시가 맞지 않는 사본은 버립니다. 현재 파일의 차단 범위를 넓히는 규칙은 승인 여부와 관계없이 적용합니다.
 
-인스턴스 코드는 `deploy-plan.js`의 `withGateConfig({root, approverId, refs, token}, () => evaluate(ctx))`로 관문 검사를 감싸고, CLI에는 `approval-plan.mjs`의 `runApprovedApprovalPlan(options, argv)`를 호출합니다. `approverId`는 인스턴스 관문 코드의 상수이고, `refs`에는 확인할 코드와 디스코드 `channelId`·`messageId`를 넣습니다. 두 경로가 같은 승인 맥락을 써야 승인된 리뷰어로 작성한 영수증을 관문에서도 확인할 수 있습니다.
+검증된 승인본이 없거나 승인자 또는 인스턴스 식별값이 비어 있으면 운영·원격·배포 대상으로 분류되는 명령을 막습니다. 일반 명령과 승인 도구는 실행할 수 있습니다. 미승인 파일의 대상 규칙은 차단 대상을 더 찾는 데만 쓰며 면제나 플러그인은 적용하지 않습니다. 인스턴스 식별값을 변경하면 새 인스턴스처럼 다시 승인받아야 합니다.
+
+하위 프로젝트의 운영 대상은 뿌리 관문 설정에 등록합니다.
+
+지워져서는 안 되는 막는 범위는 gate-instance.js 바닥에 둔다.
+
+공통 진입점은 `withGateConfig({root, files, instanceId, approverId, refs, token, plugins}, () => evaluate(ctx))`와 `runApprovedApprovalPlan(options, argv)`입니다. 훅은 인스턴스 코드에서 이 값과 디스코드 인스턴스 목록을 읽습니다. 다른 승인 기능도 파일의 승인자 필드를 쓰지 않고 같은 `approverId` 상수를 전달해야 합니다.
 
 ```json
 "review_models": {

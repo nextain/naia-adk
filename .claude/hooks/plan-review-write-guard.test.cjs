@@ -426,6 +426,23 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 		fs.mkdirSync(path.dirname(dst), { recursive: true });
 		fs.copyFileSync(path.join(REPO_ROOT, rel), dst);
 	}
+	const files = [".claude/deploy/config.json", "config/deploy-gate.json"];
+	for (const name of files) {
+		fs.mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+		fs.writeFileSync(path.join(root, name), "{}");
+	}
+	const runner = path.join(base, "approved-runner.mjs");
+	fs.writeFileSync(runner, `
+		import { runApprovedApprovalPlan } from ${JSON.stringify(require("node:url").pathToFileURL(path.join(root, ".agents/scripts/approval-plan.mjs")).href)};
+		import { createRequire } from "node:module";
+		const require = createRequire(import.meta.url);
+		const pin = require(${JSON.stringify(path.join(root, ".claude/hooks/lib/gate-config-pin.js"))});
+		const root = ${JSON.stringify(root)}, files = ${JSON.stringify(files)};
+		const id = "123456789012345678", channelId = "234567890123456789", messageId = "345678901234567890";
+		const code = pin.approvalCode(pin.snapshotGateConfig(root, files, "fixture-instance").hash);
+		await runApprovedApprovalPlan({ root, files, instanceId: "fixture-instance", approverId: id, token: "fixture", refs: [{code, channelId, messageId}],
+			fetchImpl: async () => ({ok: true, json: async () => ({id: messageId, channel_id: channelId, author: {id}, content: code})}) }, process.argv.slice(2));
+	`);
 	fs.writeFileSync(path.join(root, ".gitignore"), ".agents/state/\n.agents/work/\n");
 
 	const scriptRel = "scripts/rollout.sh";
@@ -508,7 +525,7 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 	].join("\n"), { mode: 0o755 });
 
 	const beforeSnap = snap();
-	const runRes = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planPath, "--author", "codex"], {
+	const runRes = spawnSync(process.execPath, [runner, "review", planPath, "--author", "codex"], {
 		cwd: root,
 		encoding: "utf8",
 		env: {
@@ -530,7 +547,7 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 	// 중단(SIGTERM) 시에도 trap/핸들러가 잠금과 빈 폴더를 지워야 하며, 도는 동안에는 중복 리뷰와 외부 Edit 를 모두 막는다.
 	const slowMuse = path.join(base, "slow-muse.js");
 	fs.writeFileSync(slowMuse, "#!/usr/bin/env node\nsetInterval(() => {}, 10000);\n", { mode: 0o755 });
-	const child = spawn(process.execPath, [APPROVAL_SCRIPT, "review", planPath, "--author", "codex", "--out", path.join(gatesDir, "deploy-plan-review-sigterm.md")], {
+	const child = spawn(process.execPath, [runner, "review", planPath, "--author", "codex", "--out", path.join(gatesDir, "deploy-plan-review-sigterm.md")], {
 		cwd: root,
 		env: {
 			PATH: process.env.PATH,
@@ -558,7 +575,7 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 	assert.match(midReviewEdit.json.reason, /계획 리뷰 중\(\.agents\/progress\/sample-work\/gates\/deploy-plan\.json, .*\) — 끝난 뒤 다시/);
 
 	// 같은 저장소에서 두 번째 review 를 동시에 띄우면 잠금 충돌로 즉시 거절된다.
-	const secondReview = spawnSync(process.execPath, [APPROVAL_SCRIPT, "review", planPath, "--author", "codex", "--out", path.join(gatesDir, "deploy-plan-review-second.md")], {
+	const secondReview = spawnSync(process.execPath, [runner, "review", planPath, "--author", "codex", "--out", path.join(gatesDir, "deploy-plan-review-second.md")], {
 		cwd: root,
 		encoding: "utf8",
 		env: {

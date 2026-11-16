@@ -27,14 +27,36 @@ function makeWorkspace(t) {
 		fs.mkdirSync(path.dirname(dst), { recursive: true });
 		fs.copyFileSync(src, dst);
 	}
+	// Supply both files required by the instance's approval policy. The CLI
+	// fixture invokes the real entry point with a verified fake Discord reply.
+	for (const rel of [".claude/deploy/config.json", "config/deploy-gate.json"]) {
+		const file = path.join(root, rel);
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, "{}");
+	}
+	fs.writeFileSync(path.join(root, "fixture-approved-cli.mjs"), `
+import { createRequire } from "node:module";
+import { runApprovedApprovalPlan } from "./.agents/scripts/approval-plan.mjs";
+const require = createRequire(import.meta.url);
+const pin = require("./.claude/hooks/lib/gate-config-pin.js");
+const files = [".claude/deploy/config.json", "config/deploy-gate.json"];
+const root = process.cwd(), approverId = "123456789012345678";
+const channelId = "234567890123456789", messageId = "345678901234567890";
+const code = pin.approvalCode(pin.snapshotGateConfig(root, files, "fixture-instance").hash);
+await runApprovedApprovalPlan({ root, files, instanceId: "fixture-instance", approverId, token: "test-only",
+  refs: [{ code, channelId, messageId }],
+  fetchImpl: async () => ({ ok: true, json: async () => ({ id: messageId, channel_id: channelId, author: { id: approverId }, content: code }) })
+});
+`);
 	return { tmp, root, stateDir };
 }
 
 async function withMockApproval(root, fn) {
  const pin = require("../lib/gate-config-pin.js");
- const code = pin.approvalCode(pin.snapshotGateConfig(root).hash);
+ const files = [".claude/deploy/config.json", "config/deploy-gate.json"];
+ const code = pin.approvalCode(pin.snapshotGateConfig(root, files, "fixture-instance").hash);
  const id = "123456789012345678", channel = "234567890123456789", message = "345678901234567890";
- return deployPlan.withGateConfig({root, approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
+ return deployPlan.withGateConfig({root, files, instanceId: "fixture-instance", approverId: id, token: "test-only", refs: [{code, channelId: channel, messageId: message}],
   fetchImpl: async () => ({ok: true, json: async () => ({id: message, channel_id: channel, author: {id}, content: code})})}, fn);
 }
 
@@ -238,7 +260,7 @@ test("codex 는 큰 요청문을 마지막 인자 - 와 stdin 으로 받는다",
 	fs.writeFileSync(fakeCodex, `#!/bin/sh\nfor arg do last="$arg"; done\nprintf '%s' "$last" > "${lastArg}"\ncat > "${received}"\ncat <<'REVIEW_EOF'\n${passBody}\nREVIEW_EOF\n`, { mode: 0o755 });
 	const prompt = deployPlan.reviewPrompt(plan, sha256(fs.readFileSync(planFile)), root);
 	assert.ok(Buffer.byteLength(prompt) > 300 * 1024);
-	const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
+	const run = spawnSync(process.execPath, [path.join(root, "fixture-approved-cli.mjs"), "review", planFile, "--author", "muse"], {
 		cwd: root, encoding: "utf8", timeout: 30000,
 		env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_ARGON_BIN: path.join(binDir, "fake-agy"), APPROVAL_PLAN_CODEX_BIN: fakeCodex, DEPLOY_APPROVAL_STATE_DIR: stateDir },
 	});
@@ -252,7 +274,7 @@ test("한도 실패에서 다음 차례로 넘어간다 (가짜 실행 파일)",
 	const { planFile, gatesDir } = createValidPlan(root);
 	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
 	const { binDir, fakeHome } = writeFakeBins(tmp, { argonBody: "", argonStderr: "Error: request hit rate limit, retry later", argonStatus: 1 });
-	const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
+	const run = spawnSync(process.execPath, [path.join(root, "fixture-approved-cli.mjs"), "review", planFile, "--author", "muse"], {
 		cwd: root, encoding: "utf8", timeout: 30000,
 		env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_ARGON_BIN: path.join(binDir, "fake-agy"), APPROVAL_PLAN_CODEX_BIN: path.join(binDir, "fake-codex"), DEPLOY_APPROVAL_STATE_DIR: stateDir },
 	});
@@ -275,7 +297,7 @@ test("한도가 아닌 실패에서는 넘어가지 않는다", (t) => {
 	const { planFile, gatesDir } = createValidPlan(root);
 	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
 	const { binDir, fakeHome, marker } = writeFakeBins(tmp, { argonBody: "boom: reviewer crashed", argonStatus: 2, withMarker: true });
-	const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
+	const run = spawnSync(process.execPath, [path.join(root, "fixture-approved-cli.mjs"), "review", planFile, "--author", "muse"], {
 		cwd: root, encoding: "utf8", timeout: 30000,
 		env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_ARGON_BIN: path.join(binDir, "fake-agy"), APPROVAL_PLAN_CODEX_BIN: path.join(binDir, "fake-codex"), DEPLOY_APPROVAL_STATE_DIR: stateDir },
 	});
@@ -423,7 +445,7 @@ test("리뷰 본문의 한도 낱말로는 넘어가지 않는다", (t) => {
 	const { planFile } = createValidPlan(root);
 	assert.equal(spawnSync("git", ["init", "-q", root], { encoding: "utf8" }).status, 0);
 	const { binDir, fakeHome, marker } = writeFakeBins(tmp, { argonBody: "판정: FAIL; 계획의 quota 설정이 틀림 429 rate limit", argonStatus: 1, withMarker: true });
-	const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {
+	const run = spawnSync(process.execPath, [path.join(root, "fixture-approved-cli.mjs"), "review", planFile, "--author", "muse"], {
 		cwd: root, encoding: "utf8", timeout: 30000,
 		env: { ...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_ARGON_BIN: path.join(binDir, "fake-agy"), APPROVAL_PLAN_CODEX_BIN: path.join(binDir, "fake-codex"), DEPLOY_APPROVAL_STATE_DIR: stateDir },
 	});
@@ -462,7 +484,7 @@ test("Claude author can request an independent review through the CLI", (t) => {
  assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
  const body = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "참고 지적: 0", "남은 지적: 0"].join("\n");
  const {binDir, fakeHome} = writeFakeBins(tmp, {argonBody: body, argonStatus: 0});
- const run = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "claude"], {
+ const run = spawnSync(process.execPath, [path.join(root, "fixture-approved-cli.mjs"), "review", planFile, "--author", "claude"], {
   cwd: root, encoding: "utf8", timeout: 30000,
   env: {...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_ARGON_BIN: path.join(binDir, "fake-agy"), DEPLOY_APPROVAL_STATE_DIR: stateDir},
  });
