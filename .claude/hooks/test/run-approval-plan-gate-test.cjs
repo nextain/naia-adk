@@ -1,4 +1,5 @@
 "use strict";
+require("./state-isolation.cjs");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
@@ -1627,7 +1628,7 @@ test("읽기 전용 단계: 글자를 덧붙인 단계 명령은 막히고, 글�
 	assert.match(hook(s1Cmd).reason, /앞 단계 성공 확인 전에는/);
 	const evFile = path.join(stateDir, "s0-ok.txt");
 	fs.writeFileSync(evFile, "candidate-ok\n");
-	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir };
 	const ok = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "step-ok", planFile, "s0", "--evidence", evFile], { cwd: root, env, encoding: "utf8" });
 	assert.equal(ok.status, 0, ok.stderr);
 	const s1Ask = hook(s1Cmd);
@@ -1660,7 +1661,7 @@ test("읽기 전용 단계: 덧붙여 돌린 s0 과 step-ok 기록만으로는 s
 	assert.equal(hook(`bash ${scriptRel} s0 2>&1 | tail -30`).decision, "block");
 	const evFile = path.join(stateDir, "s0-ok.txt");
 	fs.writeFileSync(evFile, "ok s0\n");
-	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir };
 	assert.equal(spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "step-ok", planFile, "s0", "--evidence", evFile], { cwd: root, env, encoding: "utf8" }).status, 0);
 	const blocked = hook(`bash ${scriptRel} s1`);
 	assert.equal(blocked.decision, "block");
@@ -2346,7 +2347,7 @@ test("cross-repo: 다른 git 저장소·worktree 계획서 check·report·review
 	fs.writeFileSync(planFile, JSON.stringify(loadedForeignPlan, null, 2));
 	writePassingReviewReceipt(foreignRoot, planFile);
 
-	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir };
 	const chk = spawnSync(process.execPath, [SCRIPT_PATH, "check", planFile], { cwd: REPO_ROOT, env, encoding: "utf8" });
 	assert.equal(chk.status, 0, `check failed:\n${chk.stdout}\n${chk.stderr}`);
 	assert.match(chk.stdout, /계획서: \.agents\/progress\/sample-work\/gates\/deploy-plan\.json/);
@@ -2611,6 +2612,7 @@ REVIEW_EOF
 		PATH: `${binDir}${path.delimiter}${process.env.PATH}`,
 		APPROVAL_PLAN_ARGON_BIN: fakeArgon,
 		DEPLOY_APPROVAL_STATE_DIR: stateDir,
+		DEPLOY_PLAN_STATE_DIR: stateDir,
 	};
 
 	// ADK 저장소 루트(REPO_ROOT)에서 외부 계획서를 리뷰해도 planRoot(extRoot) 기준으로 동작해야 함
@@ -2773,6 +2775,7 @@ test("교차 저장소·cwd 밖 대본 정책 선택: realpath·상대경로·cd
 		delete env.DEPLOY_READINESS_ROOT;
 		delete env.DEPLOY_GATE_CONFIG;
 		env.DEPLOY_APPROVAL_STATE_DIR = stateDir;
+		env.DEPLOY_PLAN_STATE_DIR = stateDir;
 		env.DEPLOY_AUDIT_PATH = path.join(stateDir, "audit.jsonl");
 		const res = spawnSync(process.execPath, [HOOK_PATH], {
 			cwd: cwd && fs.existsSync(cwd) ? cwd : tmp,
@@ -3098,6 +3101,7 @@ test("2회차: 표준입력·파일설명자 실행 갈래(/dev/stdin·/dev/fd/N
 		delete env.DEPLOY_READINESS_ROOT;
 		delete env.DEPLOY_GATE_CONFIG;
 		env.DEPLOY_APPROVAL_STATE_DIR = stateDir;
+		env.DEPLOY_PLAN_STATE_DIR = stateDir;
 		env.DEPLOY_AUDIT_PATH = path.join(stateDir, "audit.jsonl");
 		const res = spawnSync(process.execPath, [HOOK_PATH], {
 			cwd,
@@ -3232,6 +3236,7 @@ test("2회차: sudo 기본 허용·거부 목록 (비파괴 조회 통과·상�
 		delete env.DEPLOY_READINESS_ROOT;
 		delete env.DEPLOY_GATE_CONFIG;
 		env.DEPLOY_APPROVAL_STATE_DIR = stateDir;
+		env.DEPLOY_PLAN_STATE_DIR = stateDir;
 		env.DEPLOY_AUDIT_PATH = path.join(stateDir, "audit.jsonl");
 		const res = spawnSync(process.execPath, [HOOK_PATH], {
 			cwd,
@@ -3347,7 +3352,7 @@ test("architecture_fit(최초 요구·붙는 상위 구조·수용 방식) 통�
 	const { root, stateDir } = makeWorkspace(t);
 	writeGateConfig(root);
 	const { planFile } = createValidPlan(root);
-	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir };
 	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
 	const base = JSON.parse(fs.readFileSync(planFile, "utf8"));
 	assert.deepEqual(deployPlan.formProblems(base), [], "기본 계획서는 architecture_fit 포함 시 양식 통과해야 함");
@@ -3535,7 +3540,7 @@ test("참고-4: 기준 시각 이전 옛 계획서·기존 승인 영수증은 �
 	const revStatus = deployPlan.reviewProblems(legacyGatesDir, legacySha, root);
 	assert.equal(revStatus.ok, true, `옛 계획서 9기준 영수증 통과: ${revStatus.problems.join("; ")}`);
 
-	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir };
+	const env = { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir, DEPLOY_PLAN_STATE_DIR: stateDir };
 	const workspaceScript = path.join(root, ".agents/scripts/approval-plan.mjs");
 	const chk = spawnSync(process.execPath, [workspaceScript, "check", legacyPlanFile], { cwd: root, env, encoding: "utf8" });
 	assert.equal(chk.status, 0, `${chk.stdout}\n${chk.stderr}`);
@@ -3810,7 +3815,7 @@ test("공통 상태 11. 관문 식별자는 실제 경로: 같은 상태 폴더�
 });
 
 // ── 호출 ID 문맥은 root 반복 바깥에서 한 번(main 의 deploy() matchedRoots 구조) ──────────────
-test("공통 상태 9. 호출 ID 문맥을 한 호출에 하나만 만들고, 같은 호출에서 같은 계획·단계는 한 번만 결합 판정한다", async (t) => {
+test("공통 상태 12. 호출 ID 문맥을 한 호출에 하나만 만들고, 같은 호출에서 같은 계획·단계는 한 번만 결합 판정한다", async (t) => {
 	const g = twoGateFixture(t);
 	await g.approve();
 	const evalWith = (gateEnv, toolCall) => deployPlan.evaluate({
@@ -3841,7 +3846,7 @@ test("공통 상태 9. 호출 ID 문맥을 한 호출에 하나만 만들고, �
 	assert.deepEqual([none.ok, none.toolUseId, none.gate], [true, null, null]);
 });
 
-test("공통 상태 10. 관문 식별자를 못 정하면 호출 문맥 단계에서 한 번 막고 코드를 소비하지 않는다", async (t) => {
+test("공통 상태 13. 관문 식별자를 못 정하면 호출 문맥 단계에서 한 번 막고 코드를 소비하지 않는다", async (t) => {
 	const g = twoGateFixture(t);
 	await g.approve();
 	const notDir = path.join(g.stateDir, "ctx-not-a-dir");
