@@ -50,6 +50,49 @@ for (const command of [
   assert.equal(policy.gitPush(command), null, `routine command must not ask again: ${command}`);
 }
 
+// Opt-in protected branches: the shipped list is empty, so routine push above stays open;
+// `git push --all` is blocked regardless.
+assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, ".agents", "context", "push-protected-branches.json"), "utf8")).protected_branches, [], "protected branches must be opt-in (default empty)");
+for (const command of ["git push --all", "git push --all origin", "git push origin --all", "git -c push.default=current push --all origin", "git push -u --all origin"]) {
+  assert.match(policy.gitPush(command)?.reason || "", /PUSH --all/, `--all must be blocked: ${command}`);
+}
+const protectedOn = { protectedBranches: ["main", "master"], currentBranch: "feature/x" };
+for (const command of ["git push origin main", "git push origin HEAD:main", "git push origin feature/x:refs/heads/master", "git push --set-upstream origin main", "git push origin 'main'", "git push -o ci.skip origin main"]) {
+  assert.match(policy.gitPush(command, protectedOn)?.reason || "", /보호 가지/, `protected push must be blocked: ${command}`);
+}
+for (const command of ["git push", "git push origin", "git push origin HEAD"]) {
+  assert.equal(policy.gitPush(command, protectedOn), null, `non-protected current branch push stays open: ${command}`);
+  assert.match(policy.gitPush(command, { ...protectedOn, currentBranch: "main" })?.reason || "", /보호 가지/, `bare push from a protected branch must be blocked: ${command}`);
+}
+for (const command of ["git push origin feature/x", "git push origin HEAD:feature/y", "git push origin refs/tags/v1.0.0", "git push --tags origin", "git push origin main-fix"]) {
+  assert.equal(policy.gitPush(command, protectedOn), null, `other targets stay open: ${command}`);
+}
+for (const command of ["git push --branches", "git push --branches origin", "git push origin --branches"]) {
+  assert.match(policy.gitPush(command)?.reason || "", /PUSH --all/, `--branches (alias of --all) must be blocked: ${command}`);
+}
+// The branch checked is the one of the repository the command really pushes from (cd / -C / --git-dir), not the hook's cwd.
+{
+  const { execFileSync } = require("child_process");
+  const os = require("os");
+  const top = fs.mkdtempSync(path.join(os.tmpdir(), "push-scope-"));
+  const child = path.join(top, "child");
+  fs.mkdirSync(child);
+  const git = (cwd, ...args) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, stdio: "ignore" });
+  git(top, "init", "-q", "-b", "work"); git(top, "commit", "-q", "--allow-empty", "-m", "i");
+  git(child, "init", "-q", "-b", "main"); git(child, "commit", "-q", "--allow-empty", "-m", "i");
+  const onTop = { protectedBranches: ["main"], cwd: top };
+  for (const command of ["git -C child push origin HEAD", "git -C child push", "cd child && git push origin HEAD", "cd child; git push", "(cd child && git push origin HEAD)", "git --git-dir=child/.git push origin HEAD", "git -C . -C child push origin HEAD"]) {
+    assert.match(policy.gitPush(command, onTop)?.reason || "", /보호 가지/, `push from the child repo on a protected branch must be blocked: ${command}`);
+  }
+  for (const command of ["git push origin HEAD", "git -C . push origin HEAD", "cd child && cd .. && git push origin HEAD"]) {
+    assert.equal(policy.gitPush(command, onTop), null, `push from the unprotected top repo stays open: ${command}`);
+  }
+  assert.match(policy.gitPush("git push origin HEAD", { protectedBranches: ["main"], cwd: child })?.reason || "", /보호 가지/, "hook cwd inside the protected repo is still checked");
+  fs.rmSync(top, { recursive: true, force: true });
+}
+assert.equal(policy.gitPush("git push origin main", { protectedBranches: [] }), null, "empty list keeps main open");
+assert.match(policy.gitPush("git push --force origin main", protectedOn)?.reason || "", /FORCE PUSH/, "force wording is unchanged");
+
 for (const command of [
   "git push --force origin main",
   "git push --force-with-lease origin main",

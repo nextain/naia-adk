@@ -16,6 +16,15 @@ policy:
     2. service 영향 (prod 사용자) 없는 변경에 동일 수준 게이트 = 과도.
     3. 단계별 권한 분리 = ADK 의 RBAC 정합.
 
+protected_branches:
+  file: .agents/context/push-protected-branches.json
+  default: "empty list (opt-in); routine push to any branch stays open"
+  when_listed: |
+    A direct push to a listed branch is blocked, including a bare `git push` while that branch is
+    checked out. Merge through a pull request instead. An instance (for example one that requires
+    reviewed merges) lists its branches such as ["main", "master"]. Force and ref deletion keep their
+    own messages. `git push --all` is blocked for every instance because it reaches every branch.
+
 three_tier_classification:
   research:
     description: |

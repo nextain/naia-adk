@@ -1,0 +1,4 @@
+{
+  "_doc": "Opt-in list of branches that take no direct git push (the current branch counts for a bare `git push`). Empty by default: routine push stays open per push-policy.yaml. An instance that wants PR-only merges lists its branches, e.g. [\"main\", \"master\"]. `git push --all` is always blocked.",
+  "protected_branches": []
+}
