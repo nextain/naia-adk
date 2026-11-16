@@ -2015,6 +2015,41 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 	// effective-argv 가 벗긴다(설계 검수 9회차 2번).
 	const { effectiveCommands } = require("./effective-argv.js");
 	const entries = effectiveCommands(command, cwd);
+	const plans = require("./deploy-plan.js");
+	const touched = plans.touchedPlans(command, cwd, gateRoot);
+	if (touched.length) {
+		const exact = plans.plansForCommand(command, gateRoot, Date.now(), cwd).filter(p => touched.some(q => q.file === p.file));
+		const services = exact.length === 1 && Array.isArray(exact[0].plan.services) && exact[0].plan.services.length ? exact[0].plan.services : ["plan:touched"];
+		for (const service of services) found.push({ service, label: "계획에 고정된 파일 또는 gates 경로 접근", pinnedTouch: true, clause: command });
+	}
+	// Node preload 는 실행 대상이므로 없거나 이 명령이 쓴 파일은 확인 불가다.
+	const written = new Set();
+	const { resolvePathWord, writtenPaths } = require("./effective-argv.js");
+	for (const e of entries) {
+		const argv = e.argv || [];
+		if (path.basename(argv[0] || "") === "node") {
+			for (let i = 1; i < argv.length; i++) {
+				let value = null, t = argv[i], preload = false;
+				if (NODE_PRELOAD_OPTIONS.has(t)) { preload = true; value = argv[++i]; }
+				else {
+					const m = /^(?:--require|--import|--loader|--experimental-loader)=(.+)$|^-r(.+)$/.exec(t);
+					if (m) { preload = true; value = m[1] || m[2]; }
+					else if (NODE_VALUE_OPTIONS.has(t)) { i++; continue; }
+				}
+				if (preload) {
+					let f = value && (value.startsWith(".") || value.startsWith("/")) ? resolvePathWord(value, e.dir, command, e.dirKnown !== false) : null;
+					if (value?.startsWith("file:")) { try { f = require("url").fileURLToPath(value); } catch {} }
+					if (value && !f && !value.startsWith(".") && !value.startsWith("/")) {
+						try { f = require.resolve(value, { paths: [e.dir || cwd || "/"] }); } catch {}
+					}
+					if (!f || written.has(f) || (path.isAbsolute(f) && !fs.existsSync(f))) found.push({ service: "unclassified:missing-preload", label: `분류 불가: Node 미리 읽기 파일을 확인할 수 없음(${value || t})`, clause: command, unclassified: true, tool: "missing-preload" });
+					continue;
+				}
+				if (t === "--" || /^(?:-e|-p|--eval|--print)$/.test(t) || !t.startsWith("-")) break;
+			}
+		}
+		for (const [file] of writtenPaths(e.clause || argv, e.dir, command, e.dirKnown !== false, e.heredocs)) written.add(file);
+	}
 	for (const entry of entries) {
 		const { argv: tokens, assigns, dir, dirKnown } = entry;
 		const variableProgram = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\}|[0-9]+|[@*?#$!])$/.test(tokens[0] || "");
@@ -2027,34 +2062,6 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 		if (/^(?:echo|printf|cat|grep|rg|sed|awk|head|tail|less|wc|git|man)$/.test(path.basename(tokens[0]))) {
 			found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true, entry));
 			continue;
-		}
-		// 실행 파일이 어떤 계획에든 고정돼 있으면 본문의 대상 이름 판정보다 먼저 관문에 건다.
-		const execWord = executedTargetWord(tokens);
-		const stdinScripts = SHELLS.test(tokens[0] || "") && !require("./effective-argv.js").shellInvocation(tokens).noexec ? (entry.stdinSourceFiles || []) : [];
-		const preloads = [];
-		if (path.basename(tokens[0] || "") === "node") {
-			for (let i = 1; i < tokens.length; i++) {
-				const t = tokens[i];
-				if (NODE_PRELOAD_OPTIONS.has(t)) { if (tokens[i + 1]) preloads.push(tokens[++i]); continue; }
-				if (NODE_VALUE_OPTIONS.has(t)) { i++; continue; }
-				const m = /^(?:--require|--import|--loader|--experimental-loader)=(.+)$/.exec(t) || /^-r(.+)$/.exec(t);
-				if (m) { preloads.push(m[1]); continue; }
-				if (t === "--" || /^(?:-e|-p|--eval|--print)$/.test(t) || !t.startsWith("-")) break;
-			}
-		}
-		if (execWord || stdinScripts.length || preloads.length) {
-			const { resolvePathWord } = require("./effective-argv.js");
-			const targets = [execWord?.target, ...stdinScripts, ...preloads].filter(Boolean).map((word) => resolvePathWord(word, dir, command, dirKnown !== false)).filter(Boolean);
-			for (const target of new Set(targets)) {
-				const plans = require("./deploy-plan.js");
-				const pinned = plans.plansPinningFile(target, gateRoot);
-				if (pinned.length) {
-					const exact = plans.plansForCommand(command, gateRoot).filter((p) => pinned.some((q) => q.file === p.file));
-					const services = exact.length === 1 && Array.isArray(exact[0].plan.services) && exact[0].plan.services.length
-						? exact[0].plan.services : [`script:${require("./deploy-readiness.js").canonicalTargetPath(target, dir)}`];
-					for (const service of services) found.push({ service, label: "계획에 고정된 대본 실행", clause: clauseText(tokens, assigns) });
-				}
-			}
 		}
 		const extHits = classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, false, entry);
 		if (extHits.length) {

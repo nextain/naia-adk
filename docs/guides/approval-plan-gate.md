@@ -155,8 +155,6 @@ node .agents/scripts/approval-plan.mjs report .agents/progress/<작업ID>/gates/
    - 단계 확인이 실패하면 계획서의 `on_failure` 갈림길(예: 되돌리기 단계 `r1`)대로 행동하고 보고합니다.
    - 운영 장애 기준(`incident.criteria`)에 해당해 선조치(`incident.actions`)를 실행해야 할 때는 다른 독립 세션 판정(`node .agents/scripts/approval-plan.mjs judge <계획서> --evidence <로그> --executor-session <세션ID>`)을 받아야 하며, 선조치 직후 `gates/deploy-incident-report-*.md` 보고서를 작성해야 다음 단계로 진행할 수 있습니다.
 
-## 추가 계획 폴더
+## 계획 경로와 고정 파일
 
-기본 `.agents/progress` 외의 계획은 `config/deploy-gate.json`의 `plan_roots` 배열에 부모 폴더를 추가한다. 각 폴더에서 `<작업>/gates/deploy-plan.json`을 찾는다. 상대 경로는 관문 루트 기준이고 절대 경로도 허용한다. 폴더나 설정을 읽을 수 없으면 차단한다. 계획 위치를 등록하지 않으면 그 계획의 핀을 발견할 수 없다. 설정 파일에는 다른 배포 관문 설정과 같은 신뢰 경계가 적용된다.
-
-발견된 계획의 `file_pins` 또는 단계·선조치 `files`에 고정된 파일을 실행하면 대상 이름과 무관하게 계획 승인이 필요하다. 기간이 지난 계획의 핀도 실행을 감지하지만 그 계획은 승인에 사용할 수 없다. 승인에는 기존대로 정확한 단계 명령과 단계의 `files` 해시가 필요하다.
+명령의 경로에서 위로 올라가 가장 가까운 `gates/deploy-plan.json`을 찾고, 기본 `.agents/progress` 탐색도 유지합니다. 계획에 고정된 파일이나 `gates/` 경로를 Bash 명령으로 건드리려면 해당 계획의 승인이 필요합니다. 고정 파일을 읽을 때는 Read 도구를 사용합니다. 만료된 계획의 파일도 보호하지만 승인에는 유효한 계획과 정확한 단계 명령, 고정 해시가 필요합니다.

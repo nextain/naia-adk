@@ -249,18 +249,17 @@ test("1. 계획 없는 운영 명령 막힘 (Operational command without a plan 
 
 test("고정 대본은 외부 계획 폴더와 대상 이름에 관계없이 승인 관문을 통과해야 한다", async (t) => {
 	const { tmp, root, stateDir, transcriptPath } = makeWorkspace(t);
-	const extraRoot = path.join(tmp, "external-progress");
-	writeGateConfig(root, { plan_roots: [extraRoot] });
+	writeGateConfig(root);
 	const fixture = createValidPlan(root);
 	// 온맘 s1 과 같은 비운영 이름의 VM 변경: 대본 내용만 분류하면 놓친다.
 	fs.writeFileSync(fixture.scriptAbs, "#!/usr/bin/env bash\naz vm run-command invoke -g sample-rg -n onmam-dev-01 --command-id RunShellScript --scripts 'echo ok'\n", { mode: 0o755 });
 	fixture.plan.scenario[0].files[fixture.scriptRel] = sha256(fs.readFileSync(fixture.scriptAbs));
-	const externalGates = path.join(extraRoot, "rollout", "gates");
+	const externalGates = path.join(root, "gates");
 	fs.mkdirSync(externalGates, { recursive: true });
 	const planFile = path.join(externalGates, "deploy-plan.json");
 	fs.writeFileSync(planFile, JSON.stringify(fixture.plan, null, 2));
 	fs.rmSync(fixture.gatesDir, { recursive: true, force: true });
-	assert.equal(deployPlan.plansForCommand(fixture.step1Cmd, root).length, 1, "설정된 외부 폴더에서 정확한 단계를 찾아야 함");
+	assert.equal(deployPlan.plansForCommand(fixture.step1Cmd, root, Date.now(), root).length, 1, "경로 조상에서 정확한 단계를 찾아야 함");
 	writePassingReviewReceipt(root, planFile);
 	const sessionId = "pinned-external-plan";
 	const options = { cwd: root, root, stateDir, transcriptPath, sessionId };
@@ -274,12 +273,12 @@ test("고정 대본은 외부 계획 폴더와 대상 이름에 관계없이 승
 	const other = runDeployGuardHook(`bash ${fixture.scriptRel} other`, options);
 	assert.equal(other?.decision, "block", "같은 고정 대본의 계획 밖 인자도 차단");
 	assert.match(other.reason, /계획/);
-	assert.match(other.reason, /고정된 대본 실행/);
+	assert.match(other.reason, /고정 파일|gates/);
 });
 
 test("계획에 고정된 파일의 여러 실행 방식은 막고 일반 대본은 그대로 둔다", (t) => {
 	const { root, stateDir, transcriptPath } = makeWorkspace(t);
-	writeGateConfig(root, { plan_roots: ["more-plans"] });
+	writeGateConfig(root);
 	const scripts = { shell: "scripts/fixed.sh", node: "scripts/fixed.js", python: "scripts/fixed.py", builder: "scripts/builder-read.sh" };
 	fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
 	for (const [kind, rel] of Object.entries(scripts)) {
@@ -290,10 +289,9 @@ test("계획에 고정된 파일의 여러 실행 방식은 막고 일반 대본
 	// top-level file_pins 와 step.files 를 각각 독립적으로 확인한다.
 	fixture.plan.file_pins = { [scripts.shell]: sha256(fs.readFileSync(path.join(root, scripts.shell))) };
 	fixture.plan.scenario[0].files = Object.fromEntries([scripts.node, scripts.python, scripts.builder].map((rel) => [rel, sha256(fs.readFileSync(path.join(root, rel)))]));
-	const gates = path.join(root, "more-plans", "work", "gates");
+	const gates = fixture.gatesDir;
 	fs.mkdirSync(gates, { recursive: true });
 	fs.writeFileSync(path.join(gates, "deploy-plan.json"), JSON.stringify(fixture.plan));
-	fs.rmSync(fixture.gatesDir, { recursive: true, force: true });
 	const options = { cwd: root, root, stateDir, transcriptPath };
 	for (const command of ["bash scripts/fixed.sh s1", "sh scripts/fixed.sh s1", "./scripts/fixed.sh s1", "source scripts/fixed.sh", ". scripts/fixed.sh", "bash < scripts/fixed.sh", `cd "$UNSET_PINNED_TEST_DIR"; bash ${path.join(root, scripts.shell)}`, "node scripts/fixed.js", "node --require path scripts/fixed.js", "node -r path scripts/fixed.js", "node -r ./scripts/fixed.js -e 1", "node --require=./scripts/fixed.js -e 1", "node --import ./scripts/fixed.js -e 1", "node -C production -r ./scripts/fixed.js -e 1", "python scripts/fixed.py", "python3 scripts/fixed.py", "python3.11 scripts/fixed.py", "env python3.11 scripts/fixed.py", "python -W ignore scripts/fixed.py", "python -X dev scripts/fixed.py", "python --check-hash-based-pycs always scripts/fixed.py", "bash scripts/builder-read.sh s1"]) {
 		const result = runDeployGuardHook(command, options);
@@ -307,19 +305,48 @@ test("계획에 고정된 파일의 여러 실행 방식은 막고 일반 대본
 	assert.equal(runDeployGuardHook("bash scripts/fixed.sh s1", options)?.decision, "block", "만료 계획의 고정 대본도 승인 없이 실행할 수 없음");
 });
 
-test("plan_roots 설정 오류는 관문을 통과시키지 않는다", (t) => {
-	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+test("모든 경로 접근은 프로그램에 관계없이 계획을 찾고 승인한다", (t) => {
+	const { tmp, root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root);
+	const work = path.join(tmp, "external", "work");
+	const gates = path.join(work, "gates");
+	const file = path.join(gates, "ops", "fixed.sh");
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.writeFileSync(file, "#!/bin/sh\necho safe\n");
+	const fixture = createValidPlan(root);
+	fixture.plan.scenario[0].files = { [file]: sha256(fs.readFileSync(file)) };
+	fs.writeFileSync(path.join(gates, "deploy-plan.json"), JSON.stringify(fixture.plan));
+	fs.rmSync(fixture.gatesDir, { recursive: true, force: true });
 	const options = { cwd: root, root, stateDir, transcriptPath };
-	fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
-	fs.writeFileSync(path.join(root, "scripts", "l3.sh"), "#!/bin/sh\necho ordinary\n");
-	writeGateConfig(root, { plan_roots: "not-a-list" });
-	const invalid = runDeployGuardHook("bash scripts/l3.sh", options);
-	assert.equal(invalid?.decision, "block", "잘못된 plan_roots 설정은 차단");
-	assert.match(invalid.reason, /plan_roots|계획 폴더/);
-	writeGateConfig(root, { plan_roots: ["missing-plans"] });
-	const missing = runDeployGuardHook("bash scripts/l3.sh", options);
-	assert.equal(missing?.decision, "block", "지정된 계획 폴더를 읽지 못하면 차단");
-	assert.match(missing.reason, /계획 폴더/);
+	for (const command of [
+		`chrt -i 0 bash ${file} s1`, `strace -f bash ${file} s1`,
+		`BASH_ENV=${file} bash -c true`, `bash -c "$(cat ${file})"`,
+		`eval "$(cat ${file})"`, `cp ${file} ${tmp}/copy.sh`, `ln ${file} ${tmp}/hard.sh`,
+		`find ${work} -name fixed.sh -exec bash {} s1 \\;`, `cat ${file}`,
+		`D=${gates}; cat "$D/ops/fixed.sh"`, `cat ${gates}/ops/*.sh`,
+	]) assert.equal(runDeployGuardHook(command, options)?.decision, "block", command);
+	assert.equal(runDeployGuardHook("bash fixed.sh", { ...options, cwd: path.dirname(file) })?.decision, "block", "gates 내부 cwd 에서도 탐색");
+	fixture.plan.services = ["gcloud:run:sample-dev"];
+	fixture.plan.scenario[0].commands = [`cat ${file}`];
+	fs.writeFileSync(path.join(gates, "deploy-plan.json"), JSON.stringify(fixture.plan));
+	assert.equal(runDeployGuardHook(`cat ${file}`, options)?.decision, "block", "개발 서비스 이름도 계획 승인 대상");
+	fs.mkdirSync(fixture.gatesDir, { recursive: true });
+	fs.writeFileSync(fixture.planFile, JSON.stringify(fixture.plan));
+	const hard = path.join(tmp, "already-linked.sh");
+	fs.linkSync(file, hard);
+	assert.equal(runDeployGuardHook(`cat ${hard}`, options)?.decision, "block", "발견된 계획과 inode 대조");
+	fs.writeFileSync(path.join(root, "ordinary.sh"), "#!/bin/sh\necho safe\n");
+	assert.equal(runDeployGuardHook("bash ./ordinary.sh", options), null);
+});
+
+test("Node 미리 읽기 파일은 존재하고 이전 절에서 쓰지 않았어야 한다", (t) => {
+	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	writeGateConfig(root);
+	const options = { cwd: root, root, stateDir, transcriptPath };
+	fs.writeFileSync(path.join(root, "ok.js"), "console.log('ok')");
+	for (const command of ["node -r ./missing.js -e 1", "node -C default --require ./missing.js -e 1", "node --import missing-module-for-test -e 1", "echo x > ./new.js && node --import ./new.js ./ok.js", "printf x > ./new2.js; node --require ./new2.js ./ok.js"]) {
+		assert.equal(runDeployGuardHook(command, options)?.decision, "block", command);
+	}
 });
 
 test("2. 인스턴스 설정(config/deploy-gate.json) 없는 알 수 없는 운영 명령은 막힘 & 플러그인 확장 동작", async (t) => {
@@ -1674,12 +1701,12 @@ test("읽기 전용 단계: 글자를 덧붙인 단계 명령은 막히고, 글�
 	// 2. 단계 명령을 말하기만 하는 명령은 막지 않는다.
 	const noteFile = path.join(stateDir, "note.txt");
 	fs.writeFileSync(noteFile, `${s0Cmd}\n`);
-	for (const cmd of [`grep -n '${s0Cmd}' ${noteFile}`, `echo ${s0Cmd}`, `cat ${scriptAbs}`]) {
+	for (const cmd of [`grep -n '${s0Cmd}' ${noteFile}`]) {
 		assert.equal(hook(cmd), null, `단계 명령을 실행하지 않는 명령은 통과: ${cmd}`);
 	}
 	const otherStep = hook(`bash ${scriptRel} s9`);
 	assert.equal(otherStep?.decision, "block", "고정 대본의 계획 밖 인자는 차단");
-	assert.match(otherStep.reason, /고정된 대본 실행/);
+	assert.match(otherStep.reason, /고정 파일|gates/);
 
 	// 3. 글자 그대로 낸 s0: 계획 승인 → 단계 승인 → 통과, 실행 기록이 남는다.
 	const planAsk = hook(s0Cmd);

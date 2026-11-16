@@ -572,7 +572,7 @@ async function deploy(command, data, opts) {
 			!hasApprovalPlanGate(rootDir);
 
 		const precomputedMutations = classifyProdMutations(command, cwd, 0, false, rootDir).filter((hit) => {
-			if (hit && typeof hit.service === "string" && hit.service.startsWith("gcloud:run:")) {
+			if (hit && !hit.pinnedTouch && typeof hit.service === "string" && hit.service.startsWith("gcloud:run:")) {
 				const svcName = hit.service.slice("gcloud:run:".length);
 				if (svcName !== "replace" && isDevService(svcName)) return false;
 			}
@@ -781,7 +781,6 @@ async function deploy(command, data, opts) {
 		const res = await deployPlan.evaluate({
 			command,
 			cwd,
-			pinnedScript: mr.hits.some((h) => h.label === "계획에 고정된 대본 실행"),
 			services: prodServices,
 			sessionId,
 			transcriptPath: data && data.transcript_path,
@@ -792,7 +791,7 @@ async function deploy(command, data, opts) {
 			fileRefs: () => deployPlan.referencedFiles(command, cwd),
 		});
 		appendAudit({ ...(res.audit || {}), services: prodServices, session: sessionId, command: command.substring(0, 300) });
-		if (!res.allow) return { reason: res.reason };
+		if (!res.allow) return { reason: mr.hits.some((h) => h.pinnedTouch) && !res.reason.includes("Read 도구") ? `${res.reason}\n고정 파일을 읽을 때는 Bash 대신 Read 도구를 사용하십시오.` : res.reason };
 		if (res.notice) notices.push(res.notice);
 	}
 

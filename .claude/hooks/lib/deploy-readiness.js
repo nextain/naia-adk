@@ -536,20 +536,6 @@ function inspectDeployPolicyErrors(root, opts = {}) {
 				pushErr(`정책 디렉터리(.agents/progress) 읽기 실패: ${err && err.message ? err.message : String(err)}`);
 			}
 		}
-		// 추가 계획 폴더도 기본 progress 와 같은 정책 읽기 실패 처리를 적용한다.
-		try {
-			const roots = require("./deploy-plan.js").planRoots(root);
-			for (const base of roots.slice(1)) {
-				const entries = fs.readdirSync(base, { withFileTypes: true });
-				for (const d of entries) {
-					if (!d.isDirectory() && !d.isSymbolicLink()) continue;
-					const gates = path.join(base, d.name, "gates");
-					const probe = probePathError(gates);
-					if (probe.error) pushErr(`계획 폴더 접근 실패(${gates}): ${probe.error}`);
-					else if (probe.exists) pushErr(checkJsonObjectFile(path.join(gates, "deploy-plan.json"), path.join(gates, "deploy-plan.json")));
-				}
-			}
-		} catch (err) { pushErr(`계획 폴더 설정 또는 읽기 실패: ${err.message}`); }
 		const localDeployDir = path.join(root, ".claude", "deploy");
 		const ldProbe = probePathError(localDeployDir);
 		if (ldProbe.error) {
