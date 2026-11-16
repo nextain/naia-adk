@@ -714,28 +714,34 @@ function loadTestHosts(rootDir = "") {
 	}
 }
 
-function isRegisteredTarget(...names) {
-	const root = activeGateRoot || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
-	const cfg = require("./deploy-readiness.js").loadDeployGateConfig(root);
-	const keys = Array.isArray(cfg?.services)
-		? cfg.services.map((s) => typeof s === "string" ? s : s?.service)
-		: Object.entries(cfg?.services || {}).filter(([, rule]) => rule).map(([key]) => key);
-	const targets = names.filter((n) => typeof n === "string" && n).map((n) => n.toLowerCase().replace(/\.$/, ""));
-	return keys.some((key) => {
-		if (typeof key !== "string") return false;
-		const parts = key.toLowerCase().split(":");
-		const target = parts[parts.length - 1].replace(/\.$/, "");
-		if (!target || /[*?\[\]]/.test(target)) return false;
-		return targets.includes(target);
-	});
+function registeredKeys() {
+ const root = activeGateRoot || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+ const cfg = require("./deploy-readiness.js").loadDeployGateConfig(root);
+ return (Array.isArray(cfg?.services) ? cfg.services.map(s => typeof s === "string" ? s : s?.service) : Object.entries(cfg?.services || {}).filter(([, rule]) => rule).map(([key]) => key)).filter(k => typeof k === "string");
 }
+function isRegisteredTarget(type, name) {
+ if (typeof name !== "string" || !name) return false;
+ const target = name.toLowerCase().replace(/\.$/, "");
+ return registeredKeys().some(key => {
+  const prefix = type.toLowerCase() + ":";
+  const k = key.toLowerCase();
+  return k.startsWith(prefix) && !/[*?\[\]]/.test(k.slice(prefix.length)) && k.slice(prefix.length).replace(/\.$/, "") === target;
+ });
+}
+function targetUnknown(...values) {
+ return registeredKeys().length > 0 && values.some(v => /[$`]/.test(String(v || "")));
+}
+function duplicateOption(tokens, names) {
+ let count = 0;
+ for (const token of tokens) if (names.some(n => token === n || token.startsWith(n + "=") || (/^-[A-Za-z]$/.test(n) && token.startsWith(n) && !token.startsWith("--") && token.length > 2))) count++;
+ return count > 1;
+}
+function unknownTarget(label) { return [{ service: "unclassified:target", label: `분류 불가: ${label}`, unclassified: true }]; }
 
 function isNonProd(...names) {
 	// Cloudflare API 쓰기는 도메인에 dev/test 가 들어가도 운영 관문에서 제외하지 않는다.
 	if (names.some((n) => typeof n === "string" && /^(?:cloudflare:|local:systemd:)/i.test(n))) return false;
-	// The service registry is authoritative over name-based and test-host guesses.
-	if (isRegisteredTarget(...names)) return false;
-	const joined = names.filter(Boolean).join(" ");
+		const joined = names.filter(Boolean).join(" ");
 	if (!joined) return false;
 	if (/prod/i.test(joined)) return false;
 	const testHosts = loadTestHosts();
@@ -805,10 +811,13 @@ function classifyAzAll(tokens) {
 		const names = optName ? [optName] : idsValues(rest).map(lastIdPart);
 		const targets = names.length ? names : [""];
 		const rg = optionValue(rest, ["-g", "--resource-group"]);
+  const ids = idsValues(rest);
+  if (registeredKeys().length && (duplicateOption(rest, nameOpts) || duplicateOption(rest, ["-g", "--resource-group"]) || duplicateOption(rest, ["--ids"]) || targetUnknown(...names, rg, ...ids))) return unknownTarget("az 이름 또는 리소스 그룹");
+  const idGroups = ids.map(id => (id.match(/\/resourceGroups\/([^/\s]+)/i) || [])[1]);
 		const hits = [];
 		for (const name of targets) {
 			const target = name || "(이름 없음)";
-			if (isNonProd(target, rg)) continue;
+			if (!isRegisteredTarget("azure:group", rg) && !(groupLower === "group" && isRegisteredTarget("azure:group", target)) && !((groupLower === "vm" || groupLower === "ssh") && isRegisteredTarget("azure:vm", target)) && !idGroups.some(g => isRegisteredTarget("azure:group", g)) && isNonProd(target, rg)) continue;
 			hits.push({
 				service: `azure:${groupLower}:${target.toLowerCase()}`,
 				label: `az ${group} ${verbs.join(" ")}${name ? ` -n ${name}` : ""}`,
@@ -822,17 +831,18 @@ function classifyAzAll(tokens) {
 	if (verbs.length === 0 || verbs.some((v) => READ_VERBS.has(v) || v.startsWith("list-") || v.startsWith("show-"))) return [];
 	const rest = tokens.slice(azIndex + 2);
 	// VM 의 run-command create·invoke 는 --vm-name 이나 --ids 가 VM 이다(설계 검수 11회차 4번: -n 은 run-command 이름이었다).
-	// ID 안 resourceGroups 조각은 판정 근거에 넣지 않는다. --ids …/rg-dev/…/myvm 도 지금처럼 운영으로 둔다.
+	// Every supplied ID can identify a registered resource group.
 	const ids = idsValues(rest);
 	const vmOpt = optionValue(rest, ["--vm-name"]);
 	const names = vmOpt ? [vmOpt] : ids.length ? ids.map((id) => (id.match(/\/virtualMachines\/([^/\s]+)/i) || [])[1] || lastIdPart(id)) : [optionValue(rest, ["-n", "--name"])];
 	const rg = optionValue(rest, ["-g", "--resource-group"]);
+ if (registeredKeys().length && (duplicateOption(rest, ["--vm-name", "-n", "--name"]) || duplicateOption(rest, ["-g", "--resource-group"]) || duplicateOption(rest, ["--ids"]) || targetUnknown(...names, rg, ...ids))) return unknownTarget("az 이름 또는 리소스 그룹");
 	const hits = [];
 	for (const [index, name] of names.entries()) {
 		const idGroup = ids[index]?.match(/\/resourceGroups\/([^/\s]+)/i)?.[1];
 		// Registered resource groups still take precedence when supplied through an ID.
-		const registeredIdGroup = idGroup && isRegisteredTarget(idGroup);
-		if (!registeredIdGroup && isNonProd(name, rg)) continue;
+		const registeredIdGroup = (idGroup && isRegisteredTarget("azure:group", idGroup)) || ids.some(id => isRegisteredTarget("azure:group", (id.match(/\/resourceGroups\/([^/\s]+)/i) || [])[1]));
+		if (!registeredIdGroup && !isRegisteredTarget("azure:group", rg) && !((groupLower === "vm" || groupLower === "ssh") && isRegisteredTarget("azure:vm", name)) && !(groupLower === "group" && isRegisteredTarget("azure:group", name)) && isNonProd(name, rg)) continue;
 		hits.push({
 			service: `azure:${groupLower}:${(name || "(이름 없음)").toLowerCase()}`,
 			label: `az ${group} ${verbs.join(" ")}${name ? ` -n ${name}` : ""}`,
@@ -957,7 +967,8 @@ function classifyScp(tokens) {
 		const m = /^scp:\/\//i.test(t) ? t.slice(6).match(/^(?:[^@/]+@)?(\[[^\]]+\]|[^/:]+)(?::\d+)?(?:\/|$)/) : t.match(/^(?:[^@/:]+@)?(\[[^\]]+\]|[^/:]+):/);
 		if (!m) continue;
 		const host = m[1].replace(/^\[|\]$/g, "");
-		if (isNonProd(host)) continue;
+		if (targetUnknown(host)) return unknownTarget("scp 대상");
+		if (!isRegisteredTarget("ssh", host) && !isRegisteredTarget("azure:vm", host) && isNonProd(host)) continue;
 		const service = `ssh:${host.toLowerCase()}`;
 		if (!hits.some((h) => h.service === service)) hits.push({ service, label: `scp ${host} (운영 호스트 파일 복사)` });
 	}
@@ -1010,7 +1021,8 @@ function classifySsh(tokens, cwd, depth = 0, rootDir = "") {
 			return [{ service: rule.service || `ssh:${host.toLowerCase()}`, label: rule.label || `ssh ${host} (항상 관문 대상)` }];
 		}
 	}
-	if (!override && isNonProd(host)) {
+	if (targetUnknown(host)) return unknownTarget("ssh 대상");
+	if (!override && !isRegisteredTarget("ssh", host) && !isRegisteredTarget("azure:vm", host) && isNonProd(host)) {
 		if (!body.trim()) return [];
 		return classifyProdMutations(body, cwd, (depth || 0) + 1, false, gateRoot).map((h) => ({ ...h, label: `${h.label} (ssh ${host} 안)` }));
 	}

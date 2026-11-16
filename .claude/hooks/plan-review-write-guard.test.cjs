@@ -431,7 +431,9 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중�
 	const scriptRel = "scripts/rollout.sh";
 	const scriptAbs = path.join(root, scriptRel);
 	fs.mkdirSync(path.dirname(scriptAbs), { recursive: true });
-	fs.writeFileSync(scriptAbs, `#!/usr/bin/env bash\nnode ${path.join(root, ".agents/scripts/approval-plan.mjs")} assert ${path.join(root, ".agents/progress/sample-work/gates/deploy-plan.json")} s1 || exit 1\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1\n`);
+	fs.writeFileSync(scriptAbs, "#!/usr/bin/env bash\n");
+ const instancePlan = require(path.join(root, ".claude/hooks/lib/deploy-plan.js"));
+ fs.appendFileSync(scriptAbs, `${instancePlan.assertLine(path.join(root, ".agents/progress/sample-work/gates/deploy-plan.json"), "s1", scriptAbs)}\naz containerapp update -n sample-web-prod -g sample-rg --image sample/web:v1\n`);
 	const scriptSha = crypto.createHash("sha256").update(fs.readFileSync(scriptAbs)).digest("hex");
 
 	spawnSync("git", ["init", "-q"], { cwd: root });

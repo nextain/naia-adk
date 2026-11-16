@@ -32,6 +32,7 @@ const PINNED_CJS_EXECUTORS = [
 	".claude/hooks/lib/deploy-human-approval.js",
 	".claude/hooks/lib/git-command-parser.js",
 	".claude/hooks/lib/effective-argv.js",
+	".claude/hooks/lib/deploy-instance-identity.js",
 	".claude/hooks/lib/deploy-plan.js",
 ];
 const preloadFlag = /(?:^|[\s"'])(?:--(?:require|import|(?:experimental-)?loader)(?=$|[\s="'])|-r)/;
@@ -57,7 +58,7 @@ let BOOT_ENTRY_SHA = null;
 try { BOOT_ENTRY_SHA = sha256(fs.readFileSync(bootEntryAbs)); }
 catch { BOOT_ENTRY_SHA = null; }
 const STARTUP_EXECUTOR_SHAS = new Map();
-let lib, commandHash, statePath;
+let lib, commandHash, statePath, INSTANCE_APPROVER_DISCORD_ID;
 {
 	for (const executor of pinnedExecutors) {
 		const { rel, filename } = executor;
@@ -83,6 +84,7 @@ let lib, commandHash, statePath;
 			mod.loaded = true;
 		}
 		({ commandHash, statePath } = compiled[0].exports);
+		({ APPROVER_DISCORD_ID: INSTANCE_APPROVER_DISCORD_ID } = compiled[compiled.length - 2].exports);
 		lib = compiled[compiled.length - 1].exports;
 	} catch (error) {
 		for (const mod of compiled) delete require.cache[mod.filename];
@@ -529,11 +531,19 @@ function reviewStatus(gatesDir, sha, writeFindings = false, root = ROOT) {
 
 const [cmd, ...args] = process.argv.slice(2);
 switch (cmd) {
+	case "assert-line": {
+		if (args.length !== 3) die("사용: approval-plan.mjs assert-line <계획서> <단계> <대본>", 1);
+		let line;
+		try { line = lib.assertLine(args[0], args[1], args[2]); } catch { die("assert 형식을 만들 대본을 읽지 못함", 1); }
+		if (!line) die("assert 형식 없는 언어", 1);
+		console.log(line);
+		break;
+	}
 	case "assert": {
 		if (path.resolve(process.argv[1]) !== path.join(ROOT, ".agents/scripts/approval-plan.mjs") || bootEntryAbs !== fs.realpathSync(path.join(ROOT, ".agents/scripts/approval-plan.mjs"))) die("assert 실패: 관문 뿌리 밖 실행기", 1);
 		if (args.length !== 2 || !args[1]) die("사용: approval-plan.mjs assert <계획서> <단계>", 1);
 		const { plan, sha, root } = loadPlan(args[0]);
-		const problem = lib.assertApprovedStep(plan, sha, args[1], root);
+		const problem = await lib.assertApprovedStep(plan, sha, args[1], root, { approverId: INSTANCE_APPROVER_DISCORD_ID, gatesDir: path.dirname(path.resolve(args[0])) });
 		if (problem) die(`assert 실패: ${problem.replace(/[\r\n]+/g, " ")}`, 1);
 		console.log("assert 통과");
 		break;
