@@ -305,6 +305,15 @@ function findExternalUpstream(cwd) {
 /** pr-guard — block GitHub writes to non-nextain repos (fail-closed via adapter) */
 function prGuard(command, data) {
 	const cwd = (data && data.cwd) || process.cwd();
+	// Branch-protection bypass: `gh pr merge --admin` (flag position free, `--admin=true` too) and
+	// the REST merge endpoint (`gh api -X PUT .../pulls/N/merge`) skip the protection a PR merge must respect.
+	const flat = core.stripQuotesCollapse(command).replace(/\\\n/g, " ");
+	for (const clause of flat.split(/&&|\|\||;|\||\n/)) {
+		if ((/\bgh\b[^\n]*\bpr\s+merge\b/.test(clause) && /(?:^|\s)--admin(?:=\S*)?(?:\s|$)/.test(clause))
+			|| (/\bgh\s+api\b/.test(clause) && /\/pulls\/\d+\/merge\b/.test(clause))) {
+			return { reason: "[Guard] 관리자 우회 병합 차단 (gh pr merge --admin / gh api .../merge)\n보호 가지의 필수 검사·리뷰를 건너뛰는 병합입니다. --admin 없이 병합하거나 저장소 메인테이너가 직접 실행하세요." };
+		}
+	}
 	const WRITE_KEYWORDS = [
 		"gh issue create", "gh issue comment", "gh issue edit",
 		"gh pr create", "gh pr comment", "gh pr reopen", "gh pr edit",
