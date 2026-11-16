@@ -69,7 +69,7 @@ test("approval CLI shows committed resolved models and current order; compares o
 	const write = (dir, config) => { const file = path.join(dir, ".claude/deploy/config.json"); fs.mkdirSync(path.dirname(file), {recursive: true}); fs.writeFileSync(file, JSON.stringify(config, null, 2)); };
 	const models = {argon: {model: "a", effort: "medium", runner: "agy"}, codex: {model: "c", effort: "high", runner: "codex"}, muse: {model: "m", effort: "high", runner: "muse"}, fable: {model: "f", effort: "high", runner: "claude"}};
 	write(previous, {review_models: models});
-	write(current, {review_models: {...models, fable: {...models.fable, effort: "max"}}, planReview: {reviewer: "fable", until: "2099-01-01T00:00:00Z"}});
+	write(current, {review_models: {...models, fable: {...models.fable, model: "f / tricky", effort: "max"}}, planReview: {reviewer: "fable", until: "2099-01-01T00:00:00Z"}});
 	assert.equal(spawnSync("git", ["init", "-q", current]).status, 0);
 	assert.equal(spawnSync("git", ["-C", current, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "add", "."]).status, 0);
 	assert.equal(spawnSync("git", ["-C", current, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "config"]).status, 0);
@@ -77,7 +77,7 @@ test("approval CLI shows committed resolved models and current order; compares o
 	const run = (args, env = {}) => spawnSync(process.execPath, [cli, current, ...args], {encoding: "utf8", env: {...process.env, ...env}});
 	const plain = run([]);
 	assert.equal(plain.status, 0, plain.stderr);
-	assert.match(plain.stdout, /fable \/ f \/ max \/ claude/);
+	assert.match(plain.stdout, /"fable" \/ "f \/ tricky" \/ "max" \/ "claude"/);
 	assert.match(plain.stdout, /muse: fable → argon(?:\n|\r)/);
 	assert.match(plain.stdout, /claude: argon → codex/);
 	assert.match(plain.stdout, new RegExp(pin.approvalCode(pin.snapshotGateConfig(current).hash)));
@@ -88,9 +88,15 @@ test("approval CLI shows committed resolved models and current order; compares o
 	const flags = ["--approved-root", previous, "--approver-id", approverId, "--channel-id", channelId, "--message-id", messageId];
 	const compared = run(flags, {NODE_OPTIONS: `--require=${preload}`, DISCORD_BOT_TOKEN: "test"});
 	assert.equal(compared.status, 0, compared.stderr);
-	assert.match(compared.stdout, /- fable \/ f \/ high \/ claude/);
-	assert.match(compared.stdout, /\+ fable \/ f \/ max \/ claude/);
+	assert.match(compared.stdout, /- "fable" \/ "f" \/ "high" \/ "claude"/);
+	assert.match(compared.stdout, /\+ "fable" \/ "f \/ tricky" \/ "max" \/ "claude"/);
 	assert.match(compared.stdout, /승인 판 대비 설정 줄/);
 	fs.writeFileSync(preload, `globalThis.fetch = async () => ({ok:true,json:async()=>({id:${JSON.stringify(messageId)},author:{id:"999999999999999999"},content:${JSON.stringify(code)}})});`);
 	assert.notEqual(run(flags, {NODE_OPTIONS: `--require=${preload}`, DISCORD_BOT_TOKEN: "test"}).status, 0);
+	for (const invalid of ["{", JSON.stringify({review_models: {fable: {...models.fable, effort: "low"}}})]) {
+		fs.writeFileSync(path.join(current, ".claude/deploy/config.json"), invalid);
+		const result = run([]);
+		assert.notEqual(result.status, 0);
+		assert.doesNotMatch(result.stdout, /SHA-256:|승인 코드:|CFG-/);
+	}
 });

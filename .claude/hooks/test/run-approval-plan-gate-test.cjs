@@ -1438,12 +1438,12 @@ test("approved Fable review invokes the Claude runner and accepts its receipt", 
  fs.mkdirSync(path.dirname(cfg), {recursive: true});
  fs.writeFileSync(cfg, JSON.stringify({review_models: {fable: {model: "claude-fable-5-2", effort: "high", runner: "claude"}}, planReview: {reviewer: "fable", until: "2099-01-01T00:00:00Z"}}));
  assert.equal(spawnSync("git", ["init", "-q", root], {encoding: "utf8"}).status, 0);
- const binDir = path.join(tmp, "bin"), fakeHome = path.join(tmp, "home"), argvFile = path.join(tmp, "claude-argv.txt");
+ const binDir = path.join(tmp, "bin"), fakeHome = path.join(tmp, "home"), argvFile = path.join(tmp, "claude-argv.txt"), envFile = path.join(tmp, "claude-env.txt");
  fs.mkdirSync(binDir, {recursive: true}); fs.mkdirSync(fakeHome, {recursive: true});
  fs.writeFileSync(path.join(binDir, "bwrap"), '#!/bin/sh\nwhile [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done\nshift\nexec "$@"\n', {mode: 0o755});
  const body = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "참고 지적: 0", "남은 지적: 0"].join("\n");
  const fakeClaude = path.join(binDir, "fake-claude");
- fs.writeFileSync(fakeClaude, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argvFile}"\ncat >/dev/null\ncat <<'REVIEW_EOF'\n${body}\nREVIEW_EOF\n`, {mode: 0o755});
+ fs.writeFileSync(fakeClaude, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argvFile}"\nif [ "\${CLAUDE_CODE_EFFORT_LEVEL+x}" = x ]; then printf present > "${envFile}"; else printf absent > "${envFile}"; fi\ncat >/dev/null\ncat <<'REVIEW_EOF'\n${body}\nREVIEW_EOF\n`, {mode: 0o755});
  const cli = path.join(root, ".agents/scripts/approval-plan.mjs");
  const runner = path.join(tmp, "run-approved.mjs");
  fs.writeFileSync(runner, `import {runApprovedApprovalPlan} from ${JSON.stringify(require("node:url").pathToFileURL(cli).href)};
@@ -1461,9 +1461,10 @@ test("approved Fable review invokes the Claude runner and accepts its receipt", 
   `await runApprovedApprovalPlan({root, approverId:id, token:'test-only', refs:[{code,channelId:channel,messageId:message}], fetchImpl:async()=>({ok:true,json:async()=>({id:message,channel_id:channel,author:{id},content:code})})}, ['review',plan,'--author','muse']);
 `);
  const result = spawnSync(process.execPath, [runner], {cwd: root, encoding: "utf8", timeout: 30000,
-  env: {...process.env, HOME: fakeHome, XDG_STATE_HOME: path.join(tmp, "xdg-state"), PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CLAUDE_BIN: fakeClaude, DEPLOY_APPROVAL_STATE_DIR: stateDir}});
+  env: {...process.env, HOME: fakeHome, XDG_STATE_HOME: path.join(tmp, "xdg-state"), PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_CLAUDE_BIN: fakeClaude, CLAUDE_CODE_EFFORT_LEVEL: "low", DEPLOY_APPROVAL_STATE_DIR: stateDir}});
  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
- assert.deepEqual(fs.readFileSync(argvFile, "utf8").trim().split("\n"), ["-p", "--model", "claude-fable-5-2", "--effort", "high"]);
+ assert.deepEqual(fs.readFileSync(argvFile, "utf8").split("\n"), ["-p", "--model", "claude-fable-5-2", "--effort", "high", "--setting-sources", "", ""]);
+ assert.equal(fs.readFileSync(envFile, "utf8"), "absent");
  const receipt = JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE)));
  assert.equal(receipt.reviewers[0].id, "fable");
  assert.equal(receipt.reviewers[0].receipt.effort, "high");

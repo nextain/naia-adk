@@ -16,12 +16,13 @@ async function main() {
 	}
 	const snapshot = snapshotGateConfig(root);
 	if (!snapshot) throw new Error("관문 설정 파일을 읽을 수 없습니다: " + GATE_CONFIG_FILES.join(", "));
-	console.log(`관문 설정 승인 요청\nSHA-256: ${snapshot.hash}\n승인 코드: ${approvalCode(snapshot.hash)}`);
 	const config = JSON.parse(snapshot.files[GATE_CONFIG_FILES[0]].toString("utf8"));
 	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("관문 설정은 객체여야 합니다");
 	const models = canonicalReviewModels(resolveReviewModels(config));
+	const formatModel = (m) => [m.id, m.model, m.effort, m.runner].map(JSON.stringify).join(" / ");
+	console.log(`관문 설정 승인 요청\nSHA-256: ${snapshot.hash}\n승인 코드: ${approvalCode(snapshot.hash)}`);
 	console.log("풀린 리뷰어 전체 목록 (id / 모델 / 강도 / 실행기):");
-	for (const m of models) console.log(`${m.id} / ${m.model} / ${m.effort} / ${m.runner}`);
+	for (const m of models) console.log(formatModel(m));
 	console.log("실제 불릴 리뷰어 차례 (이 설정 승인 시, 작성자별, 현재 시각):");
 	for (const author of ROTATION) {
 		try { console.log(`${author}: ${orderedReviewersForConfig(author, config).slice(0, 2).join(" → ")}`); }
@@ -42,8 +43,8 @@ async function main() {
 			const a = old.get(id), b = next.get(id);
 			if (JSON.stringify(a) === JSON.stringify(b)) continue;
 			changed = true;
-			if (a) console.log(`- ${a.id} / ${a.model} / ${a.effort} / ${a.runner}`);
-			if (b) console.log(`+ ${b.id} / ${b.model} / ${b.effort} / ${b.runner}`);
+			if (a) console.log(`- ${formatModel(a)}`);
+			if (b) console.log(`+ ${formatModel(b)}`);
 		}
 		if (!changed) console.log("(리뷰어 변경 없음)");
 		for (const name of GATE_CONFIG_FILES) {

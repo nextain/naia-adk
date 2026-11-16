@@ -201,11 +201,11 @@ function runMuse(prompt, museCfg = lib.REVIEW_MODELS.muse) {
 	return String(res.stdout);
 }
 
-function execReviewer(bin, args, input = "", promptSha = "", model = "", effort = "", cwd = ROOT) {
+function execReviewer(bin, args, input = "", promptSha = "", model = "", effort = "", cwd = ROOT, env = process.env) {
 	return new Promise((resolve) => {
 		const startedAt = new Date().toISOString();
 		let stdout = "", stderr = "", bytes = 0, finished = false, failed = "";
-		const child = spawn(bin, args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
+		const child = spawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
 		const finish = (status, error = "") => {
 			if (finished) return;
 			finished = true; clearTimeout(timer);
@@ -467,7 +467,7 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 				input = prompt;
 			} else if (config.runner === "claude") {
 				bin = process.env.APPROVAL_PLAN_CLAUDE_BIN || "claude";
-				args = ["-p", "--model", config.model, "--effort", config.effort];
+				args = ["-p", "--model", config.model, "--effort", config.effort, "--setting-sources", ""];
 				input = prompt;
 			} else {
 				bin = process.env.APPROVAL_PLAN_ARGON_BIN || "agy";
@@ -479,7 +479,9 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 				args = [...sandboxArgs, "--", bin, ...args];
 				bin = bwrap; isolation = "bwrap-ro-bind";
 			}
-			return { id, ...config, isolation, ...await execReviewer(bin, args, input, sha256(prompt), config.model, config.effort, planRoot) };
+			const env = { ...process.env };
+			if (config.runner === "claude") delete env.CLAUDE_CODE_EFFORT_LEVEL;
+			return { id, ...config, isolation, ...await execReviewer(bin, args, input, sha256(prompt), config.model, config.effort, planRoot, env) };
 		}));
 		stage = "manifest-after";
 		let afterManifest = null;
