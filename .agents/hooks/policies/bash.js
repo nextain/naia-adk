@@ -788,7 +788,7 @@ async function deploy(command, data, opts) {
 			approverId: (gateConfig.approver && gateConfig.approver.discordUserId) || (mr.config.approver && mr.config.approver.discordUserId),
 			readiness: (planBinding) => assessReadiness(prodServices, { root: mr.root, auditPath: AUDIT_PATH, command: runText, cwd, planBinding }),
 			readinessTemplate: READINESS_TEMPLATE,
-			fileRefs: () => deployPlan.referencedFiles(command, cwd),
+			fileRefs: (assertContext) => deployPlan.referencedFiles(command, cwd, assertContext),
 		});
 		appendAudit({ ...(res.audit || {}), services: prodServices, session: sessionId, command: command.substring(0, 300) });
 		if (!res.allow) return { reason: res.reason };
