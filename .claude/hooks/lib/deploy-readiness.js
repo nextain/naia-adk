@@ -572,10 +572,12 @@ function loadDeployGateConfig(root) {
 function loadDeployGatePlugin(root, cfg) {
 	const config = cfg || loadDeployGateConfig(root);
 	if (!config || typeof config.plugin !== "string" || !config.plugin.trim()) return null;
-	const base = root || process.env.DEPLOY_READINESS_ROOT || path.resolve(__dirname, "../../..");
-	const pluginPath = path.isAbsolute(config.plugin) ? config.plugin : path.resolve(base, config.plugin);
-	if (!fs.existsSync(pluginPath)) throw new Error(`config/deploy-gate.json 의 plugin 모듈을 찾지 못함: ${config.plugin}`);
-	return require(pluginPath);
+	const base = fs.realpathSync(path.resolve(__dirname, "../../.."));
+	const pluginPath = path.resolve(base, config.plugin);
+	const realPlugin = fs.realpathSync(pluginPath);
+	const relative = path.relative(base, realPlugin);
+	if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error("plugin 은 훅 설치 위치 안에 있어야 함");
+	return require(realPlugin);
 }
 
 function globMatch(pattern, value) {

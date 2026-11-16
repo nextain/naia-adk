@@ -10,7 +10,7 @@ const { loadDiscordToken } = require("./deploy-plan.js");
 
 async function main(root) {
 	try {
-		const { discordUserId } = require(path.join(root, ".claude/hooks/instance/gate-approver.js"));
+		const { discordUserId } = require(path.join(__dirname, "../instance/gate-approver.js"));
 		const refFile = path.join(path.dirname(statePath(process.env)), "gate-config-approval.json");
 		const ref = JSON.parse(fs.readFileSync(refFile, "utf8"));
 		const token = await loadDiscordToken(root);

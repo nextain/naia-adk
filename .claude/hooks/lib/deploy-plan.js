@@ -1280,7 +1280,7 @@ async function loadDiscordToken(repoRoot) {
 		const configuredInstances = Array.isArray(gateCfg?.discord?.instances) ? gateCfg.discord.instances : [];
 		const instances = [...new Set([process.env.NAIA_MESSENGER_INSTANCE, ...configuredInstances].filter(Boolean))];
 		if (instances.length === 0) return null;
-		const helperDir = path.join(repoRoot, ".agents", "skills", "manage-discord-sessions", "helper");
+		const helperDir = path.resolve(__dirname, "../../../.agents/skills/manage-discord-sessions/helper");
 		const { loadMessengerConfig, FileCredentialResolver } = await import(pathToFileURL(path.join(helperDir, "discord-config.mjs")).href);
 		const { messengerInstancePaths } = await import(pathToFileURL(path.join(helperDir, "instance-paths.mjs")).href);
 		for (const inst of instances) {

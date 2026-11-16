@@ -36,7 +36,7 @@
     - 설정에 없는 `(sha256, path, service)`, `config/deploy-gate.json`이나 대본의 미추적·미커밋 변경, 인라인 명령(`bash -c`·`--scripts "..."`), `kind !== "ops"`, 적대 리뷰 미통과 시에는 기존 동작 그대로 차단되거나 사람 승인 코드를 요구합니다.
     - **남는 위험**: (1) 관문 훅은 실행 시점에 리뷰 영수증·HEAD 일치를 검사할 뿐 `git commit` 자체를 막지는 않으므로(범위 밖), 설정 파일(`config/deploy-gate.json`) 변경 커밋 통제는 PR 리뷰·브랜치 보호에 의존합니다. (2) 훅이 대본 `sha256`과 HEAD 일치를 검사한 시각과 실제 `az`/`bash` 프로세스가 대본을 여는 시각 사이에는 짧은 TOCTOU 창이 남습니다(실행 중 디스크 변경 시 다른 내용이 실행될 수 있음).
   - `approver.discordUserId`: 디스코드 승인 시 대조할 승인자 본인의 디스코드 사용자 ID(Snowflake)
-  - `plugin`: 서비스별 세부 결합 검증(`assessService(service, ctx)`)이나 추가 명령 분류(`classifyCommand(ctx)`)를 수행하는 선택 모듈 경로
+  - `plugin`: 훅 설치 저장소를 기준으로 하는 선택 모듈 경로. 서비스별 세부 결합 검증(`assessService(service, ctx)`)이나 추가 명령 분류(`classifyCommand(ctx)`)를 수행하며 실제 파일도 설치 저장소 안에 있어야 합니다.
 
 ---
 
@@ -97,6 +97,10 @@ Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그
 3. 관문은 코드에 고정된 설정 파일의 현재 내용으로 해시와 `CFG-` 승인 코드를 다시 계산해 본인 글과 대조합니다. 파일이 한 글자라도 바뀌면 새 승인 코드가 필요합니다. 로컬 발급 기록이나 발급 시각은 확인하지 않습니다. 확인할 수 없거나 승인이 없으면 기본값을 사용합니다.
 
 `testHosts`를 쓰는 인스턴스는 `.claude/hooks/instance/gate-approver.js`에서 `module.exports = { discordUserId: "<승인자 번호>" }`를 내보내고, 상태 폴더의 `gate-config-approval.json`에 `{ "code": "CFG-…", "channelId": "…", "messageId": "…" }`를 기록합니다. 상태 폴더는 `DEPLOY_APPROVAL_STATE_DIR`, 또는 `$XDG_STATE_HOME/naia-harness`(기본 `~/.local/state/naia-harness`)입니다. 토큰은 기존 Discord 인스턴스 자격 증명에서 읽습니다. 승인 해시는 `.claude/deploy/config.json`과 존재하는 `config/deploy-gate.json`의 내용을 묶습니다. 대상이 목록과 실제로 일치할 때만 Discord를 확인합니다. 인스턴스 승인자 코드가 없으면 예외는 적용되지 않습니다.
+
+목록을 좁혀 재승인할 때는 옛 승인 글을 삭제합니다. 옛 설정과 참조를 복원하면 삭제되지 않은 옛 승인으로 예외가 되살아날 수 있기 때문입니다.
+
+이 변경을 병합한 뒤 `config/deploy-gate.json`이 있는 인스턴스는 이 파일이 해시에 추가되므로 기존 리뷰어 설정의 `CFG-` 승인을 새 해시로 다시 받아야 합니다. 이후에도 해당 파일을 수정하면 두 설정 모두 재승인이 필요합니다.
 
 인스턴스 코드는 `deploy-plan.js`의 `withGateConfig({root, approverId, refs, token}, () => evaluate(ctx))`로 관문 검사를 감싸고, CLI에는 `approval-plan.mjs`의 `runApprovedApprovalPlan(options, argv)`를 호출합니다. `approverId`는 인스턴스 관문 코드의 상수이고, `refs`에는 확인할 코드와 디스코드 `channelId`·`messageId`를 넣습니다. 두 경로가 같은 승인 맥락을 써야 승인된 리뷰어로 작성한 영수증을 관문에서도 확인할 수 있습니다.
 
