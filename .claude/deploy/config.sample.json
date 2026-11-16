@@ -15,6 +15,10 @@
       "dev_service": "your-gateway-dev"
     }
   },
+  "review_models": {
+    "_comment": "Optional. Override plan-review model/effort per reviewer id (sol|muse|argon|codex). Omit to keep built-in defaults (argon = gemini-4-argon-medium/medium). Existing review receipts must match; changing this invalidates receipts of open plans.",
+    "argon": { "model": "gemini-4-argon-high", "effort": "high" }
+  },
   "default_ttl_minutes": 30,
   "max_ttl_minutes": 60
 }

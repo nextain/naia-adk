@@ -90,8 +90,6 @@ let lib, commandHash, statePath;
 }
 
 const MUSE = process.env.APPROVAL_PLAN_MUSE_BIN || "muse";
-const MODEL = "muse-spark-1.3";
-const EFFORT = "xhigh";
 
 function die(msg, code = 2) {
 	console.error(msg);
@@ -187,13 +185,13 @@ function loadPlan(p) {
 	return { abs, plan, gatesDir: path.dirname(abs), sha: sha256(fs.readFileSync(abs)), root };
 }
 
-function runMuse(prompt) {
+function runMuse(prompt, museCfg = lib.REVIEW_MODELS.muse) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-"));
 	const file = path.join(dir, "prompt.txt");
 	fs.writeFileSync(file, prompt, { mode: 0o600 });
 	let res;
 	try {
-		res = spawnSync(MUSE, ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", MODEL, "--reasoning-effort", EFFORT, "--prompt-file", file], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 45 * 60 * 1000 });
+		res = spawnSync(MUSE, ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", museCfg.model, "--reasoning-effort", museCfg.effort, "--prompt-file", file], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 45 * 60 * 1000 });
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
@@ -434,9 +432,11 @@ function reviewerSandboxArgs(promptDir, id, rootDir = ROOT) {
 
 async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = null, planRoot = ROOT) {
 	let dir, failure;
-	let stage = "prompt-create";
+	let stage = "config-read";
 	const startedAt = Date.now();
 	try {
+		const models = lib.reviewModelsFor(planRoot);
+		stage = "prompt-create";
 		dir = fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-dual-"));
 		const file = path.join(dir, "prompt.txt");
 		fs.writeFileSync(file, prompt, { mode: 0o600 });
@@ -452,7 +452,7 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 		const beforeManifest = preManifest === undefined ? (() => { try { return lib.reviewInputManifest(abs, planRoot, roOpt); } catch { return null; } })() : preManifest;
 		stage = "reviewers";
 		const results = await Promise.all(ids.map(async (id) => {
-			const config = lib.REVIEW_MODELS[id];
+			const config = models[id];
 			let bin, args, input = "";
 			if (id === "muse") {
 				bin = MUSE;
@@ -601,6 +601,8 @@ switch (cmd) {
 		let ids;
 		try { ids = lib.orderedReviewers(author, planRoot, reviewedAt); }
 		catch (error) { die(`리뷰 차례를 정하지 못함: ${error.message}`); }
+		try { lib.reviewModelsFor(planRoot); }
+		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`); }
 		const parsed = path.parse(base);
 		const outputs = ids.map((id) => path.join(parsed.dir, `${parsed.name}-${id}${parsed.ext || ".md"}`));
 		for (const out of outputs) if (out === abs || fs.existsSync(out)) die("리뷰 결과 경로가 이미 있습니다. 새 --out 경로를 쓰십시오");
@@ -708,14 +710,17 @@ switch (cmd) {
 			"",
 			"출력 마지막 줄을 정확히 'VERDICT: incident' 또는 'VERDICT: development' 로 쓰고, 그 위에 근거를 3줄 이내로 적으십시오.",
 		].join("\n");
-		const raw = runMuse(prompt);
+		let museCfg;
+		try { museCfg = lib.reviewModelsFor(planRoot).muse; }
+		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`); }
+		const raw = runMuse(prompt, museCfg);
 		const lastLine = raw.trim().split(/\r?\n/).filter((l) => l.trim()).pop() || "";
 		const m = lastLine.match(/^\s*VERDICT:\s*(incident|development)\s*$/i);
 		const verdict = m ? m[1].toLowerCase() : "development";
 		const judgeSession = `muse-judge-${crypto.randomUUID()}`;
 		const dir = path.join(gatesDir, "deploy-incident");
 		fs.mkdirSync(dir, { recursive: true });
-		const rec = { plan_sha256: sha, verdict, judge: { model: MODEL, effort: EFFORT, session: judgeSession }, executor_session: executor, evidence: ev.map(({ path: p, sha256: s }) => ({ path: p, sha256: s })), decidedAt: new Date().toISOString(), raw_output: raw.slice(-4000), raw_sha256: sha256(raw) };
+		const rec = { plan_sha256: sha, verdict, judge: { model: museCfg.model, effort: museCfg.effort, session: judgeSession }, executor_session: executor, evidence: ev.map(({ path: p, sha256: s }) => ({ path: p, sha256: s })), decidedAt: new Date().toISOString(), raw_output: raw.slice(-4000), raw_sha256: sha256(raw) };
 		const file = path.join(dir, `${rec.decidedAt.replace(/[:.]/g, "-")}.json`);
 		fs.writeFileSync(file, `${JSON.stringify(rec, null, 2)}\n`);
 		console.log(`판정: ${verdict === "incident" ? "장애 — 계획서의 선조치만 실행하고 바로 보고" : "개발 — 선조치 불가, 멈추고 보고"}\n기록: ${path.relative(planRoot, file)}`);

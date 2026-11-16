@@ -1342,6 +1342,84 @@ test("reviewer configuration boundaries are fail closed", (t) => {
  fs.writeFileSync(file, "{"); assert.throws(() => deployPlan.reviewerIdsFor("muse", root, now));
 });
 
+test("review_models config: argon-high accepts only high receipts, default keeps medium", (t) => {
+ const {root, tmp, stateDir} = makeWorkspace(t);
+ const {planFile, gatesDir} = createValidPlan(root);
+ const file = path.join(gatesDir, deployPlan.REVIEW_FILE);
+ const cfg = path.join(root, ".claude/deploy/config.json");
+ const {planSha} = writePassingReviewReceipt(root, planFile, {reviewer: "argon"});
+ const medium = JSON.parse(fs.readFileSync(file));
+ const high = structuredClone(medium);
+ high.reviewers[0].model = high.reviewers[0].receipt.model = "gemini-4-argon-high"; high.reviewers[0].effort = "high";
+ const run = (rec) => { fs.writeFileSync(file, JSON.stringify(rec)); return deployPlan.reviewProblems(gatesDir, planSha, root); };
+ fs.rmSync(cfg, {force: true});
+ assert.deepEqual(deployPlan.reviewModelsFor(root).argon, {model: "gemini-4-argon-medium", effort: "medium"});
+ assert.equal(run(medium).ok, true, "default: medium receipt passes");
+ assert.equal(run(high).ok, false, "default: high receipt rejected");
+ fs.mkdirSync(path.dirname(cfg), {recursive: true});
+ fs.writeFileSync(cfg, JSON.stringify({projects: {}}));
+ assert.equal(run(medium).ok, true, "config without review_models: medium receipt passes");
+ fs.writeFileSync(cfg, JSON.stringify({review_models: {_comment: "layer 4 override", argon: {model: "gemini-4-argon-high", effort: "high"}}}));
+ assert.deepEqual(deployPlan.reviewModelsFor(root).argon, {model: "gemini-4-argon-high", effort: "high"});
+ assert.equal(deployPlan.reviewModelsFor(root).codex.model, deployPlan.REVIEW_MODELS.codex.model);
+ assert.equal(run(high).ok, true, "override: high receipt passes");
+ const medRes = run(medium);
+ assert.equal(medRes.ok, false, "override: medium receipt rejected");
+ assert.ok(medRes.problems.some((p) => p.includes("허용되지 않은 모델")), medRes.problems.join("; "));
+ const wrongEffortOnHigh = structuredClone(high); wrongEffortOnHigh.reviewers[0].effort = "medium";
+ const effRes = run(wrongEffortOnHigh);
+ assert.equal(effRes.ok, false, "override: high model with medium effort rejected");
+ assert.ok(effRes.problems.some((p) => p.includes("리뷰어 추론 강도가 다름")), effRes.problems.join("; "));
+ const sameName = structuredClone(medium); sameName.reviewers[0].effort = "high";
+ assert.equal(run(sameName).ok, false, "override: medium model with high effort rejected");
+ const receiptMismatch = structuredClone(high); receiptMismatch.reviewers[0].receipt.model = "gemini-4-argon-medium";
+ assert.equal(run(receiptMismatch).ok, false, "override: receipt.model mismatch rejected");
+
+ // CLI end-to-end: approval-plan.mjs review passes configured model & effort to agy and writes passing high receipt
+ assert.equal(spawnSync("git", ["init", "-q", root], {encoding: "utf8"}).status, 0);
+ const binDir = path.join(tmp, "bin"), fakeHome = path.join(tmp, "home"), argvFile = path.join(tmp, "agy-argv.txt");
+ fs.mkdirSync(binDir, {recursive: true}); fs.mkdirSync(path.join(fakeHome, ".gemini"), {recursive: true});
+ fs.writeFileSync(path.join(binDir, "bwrap"), '#!/bin/sh\nwhile [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done\nshift\nexec "$@"\n', {mode: 0o755});
+ const passBody = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "참고 지적: 0", "남은 지적: 0"].join("\n");
+ const fakeAgy = path.join(binDir, "fake-agy");
+ fs.writeFileSync(fakeAgy, `#!/bin/sh\nprintf '%s\\n' "$@" > "${argvFile}"\ncat >/dev/null\ncat <<'REVIEW_EOF'\n${passBody}\nREVIEW_EOF\n`, {mode: 0o755});
+ const cliEnv = {...process.env, HOME: fakeHome, PATH: `${binDir}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_ARGON_BIN: fakeAgy, DEPLOY_APPROVAL_STATE_DIR: stateDir};
+ const rev = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {cwd: root, encoding: "utf8", timeout: 30000, env: cliEnv});
+ assert.equal(rev.status, 0, `${rev.stdout}\n${rev.stderr}`);
+ const agyArgv = fs.readFileSync(argvFile, "utf8").trim().split("\n");
+ assert.equal(agyArgv[agyArgv.indexOf("--model") + 1], "gemini-4-argon-high");
+ assert.equal(agyArgv[agyArgv.indexOf("--effort") + 1], "high");
+ const savedRec = JSON.parse(fs.readFileSync(file, "utf8"));
+ assert.equal(savedRec.reviewers[0].model, "gemini-4-argon-high");
+ assert.equal(savedRec.reviewers[0].effort, "high");
+ assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, true);
+
+ // Invalid configs fail closed in reviewModelsFor, reviewProblems, and CLI review (without wiping existing receipt)
+ for (const bad of [
+  [],
+  {review_models: []},
+  {review_models: {nobody: {model: "x", effort: "high"}}},
+  {review_models: {argon: []}},
+  {review_models: {argon: {model: "a b", effort: "high"}}},
+  {review_models: {argon: {model: "-flag", effort: "high"}}},
+  {review_models: {argon: {model: "x", effort: "-bad"}}},
+  {review_models: {argon: {model: "x"}}},
+  {review_models: {argon: {model: deployPlan.REVIEW_MODELS.codex.model, effort: "high"}}},
+ ]) {
+  fs.writeFileSync(cfg, JSON.stringify(bad));
+  assert.throws(() => deployPlan.reviewModelsFor(root), JSON.stringify(bad));
+  const prob = deployPlan.reviewProblems(gatesDir, planSha, root);
+  assert.equal(prob.ok, false, JSON.stringify(bad));
+ }
+ const beforeBytes = fs.readFileSync(file, "utf8");
+ const badCli = spawnSync(process.execPath, [path.join(root, ".agents/scripts/approval-plan.mjs"), "review", planFile, "--author", "muse"], {cwd: root, encoding: "utf8", timeout: 30000, env: cliEnv});
+ assert.notEqual(badCli.status, 0);
+ assert.equal(fs.readFileSync(file, "utf8"), beforeBytes, "existing review receipt must not be wiped on invalid review_models");
+ fs.writeFileSync(cfg, "{");
+ assert.throws(() => deployPlan.reviewModelsFor(root));
+ assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, false);
+});
+
 test("review gate enforces reviewer identity, count and effort", (t) => {
  const {root} = makeWorkspace(t);
  const {planFile, gatesDir} = createValidPlan(root);
