@@ -28,8 +28,8 @@
   "drive": {
     "enabled": false,
     "worker": {
-      "command": ["claude", "-p", "--model", "{model}"],
-      "models": ["MODEL_ID"],
+      "command": ["<WORKER_CLI>", "--model", "{model}"],
+      "models": ["<TIER2_MODEL_ID>"],
       "cwd": ".",
       "max_parallel": 2,
       "max_attempts": 3,

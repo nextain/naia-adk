@@ -37,6 +37,7 @@ let seq = 0;
 function cleanEnv(extra = {}) {
 	const env = { ...process.env, ...extra };
 	if (!Object.prototype.hasOwnProperty.call(extra, "CLAUDE_PROJECT_DIR")) delete env.CLAUDE_PROJECT_DIR;
+	if (!Object.prototype.hasOwnProperty.call(extra, "NAIA_ADK_ROOT")) delete env.NAIA_ADK_ROOT;
 	return env;
 }
 
@@ -56,11 +57,12 @@ const edit = (tool, file, o) => run({ tool_name: tool, tool_input: { file_path: 
 const blocked = (r) => assert.equal(r && r.decision, "block", JSON.stringify(r));
 const passed = (r) => assert.equal(r, null, JSON.stringify(r));
 
-test("3층: Edit·Write·NotebookEdit 로 저장소 코드 쓰기는 막히고, 안내문에 지시서와 한 줄 예시가 있다", () => {
+test("3층: Edit·Write·NotebookEdit 로 저장소 코드 쓰기는 막히고, 안내문에 지시서와 층 프로파일 안내가 있다", () => {
 	const r = edit("Edit", path.join(repo, "src/app.js"));
 	blocked(r);
 	assert.match(r.reason, /지시서/);
-	assert.match(r.reason, /claude -p/);
+	assert.match(r.reason, /층 프로파일 설정 없음: config\/tier-profile\.json 을 만드세요/);
+	assert.doesNotMatch(r.reason, /\b(?:claude|sonnet|opus|haiku|codex|muse|agy|gemini)\b/i);
 	blocked(edit("Write", path.join(repo, "src/new.js")));
 	blocked(run({ tool_name: "NotebookEdit", tool_input: { notebook_path: path.join(repo, "n.ipynb") } }));
 	blocked(run({ tool_name: "apply_patch", tool_input: { input: `*** Begin Patch\n*** Update File: ${path.join(repo, "src/app.js")}\n*** End Patch` } }));
@@ -409,4 +411,147 @@ test("B-4 설정 분리: 기본 안내문에 박힌 경로/이름이 없고, 표
 	const denied = spawnSync(wrapper, ["open", "--scope", "/a/b/c", "--ttl-min", "10", "--approved-by", "x", "--approval-ref", "long-enough-ref", "--reason", "test"], { cwd: customRole, encoding: "utf8", env: cleanEnv() });
 	assert.notEqual(denied.status, 0);
 	assert.match(denied.stderr, /운영자가 직접 엽니다/);
+});
+
+test("층 프로파일(config/tier-profile.json) 안내문: 설정 있음·없음·깨짐 세 경우와 NAIA_ADK_ROOT·자기 보호 검증", () => {
+	const tierFile = path.join(adk, "config/tier-profile.json");
+	const exampleRaw = fs.readFileSync(path.join(__dirname, "../../config/tier-profile.example.json"), "utf8");
+	const noModelGuessRe = /\b(?:claude|sonnet|opus|haiku|codex|muse|agy|gemini)\b/i;
+
+	try {
+		// 1) 설정 없음: config/tier-profile.json 만 안내하고 모델·CLI 이름을 지어내지 않는다.
+		fs.rmSync(tierFile, { force: true });
+		const missingRes = edit("Edit", path.join(repo, "src/app.js"));
+		blocked(missingRes);
+		assert.match(missingRes.reason, /층 프로파일 설정 없음: config\/tier-profile\.json 을 만드세요/);
+		assert.doesNotMatch(missingRes.reason, noModelGuessRe);
+
+		// 2) 설정 있음: 설정의 2층 명령 틀(1순위 + 차순위 + 동시 상한 + work_dir 치환)을 보여 준다.
+		const validProfile = {
+			schema: "tier-profile/v1",
+			priority: ["runner-primary", "runner-secondary"],
+			tiers: {
+				"1": {
+					purpose: "가벼운 확인",
+					candidates: [{ cli: "runner-primary", model: "tier1-fast-v1" }],
+				},
+				"2": {
+					purpose: "2층 일꾼",
+					max_parallel: 4,
+					candidates: [
+						{
+							cli: "runner-primary",
+							model: "tier2-worker-v1",
+							command_template: "{cli} --model {model} --dangerously-skip-permissions -p \"$(cat {prompt_file})\"",
+						},
+						{
+							cli: "runner-secondary",
+							model: "tier2-worker-v2",
+							effort: "xhigh",
+							command_template: "{cli} exec --model {model} --effort {effort} \"$(cat {prompt_file})\"",
+						},
+					],
+				},
+				"3": {
+					purpose: "3층 역할",
+					candidates: [{ cli: "runner-primary", model: "tier3-lead-v1" }],
+				},
+				"4": {
+					purpose: "4층 검수",
+					candidates: [{ cli: "runner-primary", model: "tier4-review-v1" }],
+				},
+			},
+		};
+		put(tierFile, JSON.stringify(validProfile, null, 2));
+
+		const okRes = edit("Edit", path.join(repo, "src/app.js"));
+		blocked(okRes);
+		assert.match(okRes.reason, /spawn-worker\.mjs --id <일> --role <역할> --work-dir <작업 폴더>\/<일> --watch-dir <작업 폴더>\/<일> --result-file <작업 폴더>\/<일>\/result\.md -- runner-primary --model tier2-worker-v1 --dangerously-skip-permissions -p "\$\(cat <작업 폴더>\/<일>\/prompt\.md\)"/);
+		assert.match(okRes.reason, /차순위: 2순위 `-- runner-secondary exec --model tier2-worker-v2 --effort xhigh "\$\(cat <작업 폴더>\/<일>\/prompt\.md\)"`/);
+		assert.match(okRes.reason, /동시 상한 4/);
+		assert.doesNotMatch(okRes.reason, noModelGuessRe);
+
+		// 역할 표지에 work_dir 이 있으면 {prompt_file} 도 그 경로로 치환된다.
+		const customRole = path.join(scratch, "tier-custom-role");
+		put(path.join(customRole, ".naia-role.json"), JSON.stringify({
+			role: "custom",
+			lead_guard: { enabled: true, work_dir: "/srv/jobs" },
+		}));
+		const customOk = edit("Edit", path.join(repo, "src/app.js"), { cwd: customRole });
+		blocked(customOk);
+		assert.match(customOk.reason, /-- runner-primary --model tier2-worker-v1 --dangerously-skip-permissions -p "\$\(cat \/srv\/jobs\/<일>\/prompt\.md\)"/);
+
+		// NAIA_ADK_ROOT 가 별도 인스턴스 루트를 가리키면 그쪽 config/tier-profile.json 을 읽는다.
+		fs.rmSync(tierFile, { force: true });
+		const instanceRoot = path.join(scratch, "instance-root");
+		put(path.join(instanceRoot, "config/tier-profile.json"), JSON.stringify({
+			schema: "tier-profile/v1",
+			tiers: {
+				"2": {
+					candidates: [
+						{
+							cli: "inst-cli",
+							model: "inst-tier2-model",
+							command_template: "{cli} --model {model} -p \"$(cat {prompt_file})\"",
+						},
+					],
+				},
+			},
+		}));
+		const instRes = edit("Edit", path.join(repo, "src/app.js"), { env: { NAIA_ADK_ROOT: instanceRoot } });
+		blocked(instRes);
+		assert.match(instRes.reason, /-- inst-cli --model inst-tier2-model -p "\$\(cat <작업 폴더>\/<일>\/prompt\.md\)"/);
+		assert.doesNotMatch(instRes.reason, noModelGuessRe);
+
+		// 자기 보호: 3층은 config/tier-profile.json 을 고칠 수 없다(비상 예외가 열려 있어도 막힘).
+		const ex = path.join(adk, ".agents/lead-guard/exception.json");
+		put(ex, JSON.stringify({
+			id: "EX-TIER",
+			approved_by: "승인자",
+			approval_ref: "승인자 긴급 허락 참조문",
+			reason: "긴급",
+			scope: [path.join(adk, "config"), path.join(instanceRoot, "config")],
+			created_at: new Date().toISOString(),
+			expires_at: new Date(Date.now() + 600e3).toISOString(),
+		}));
+		const selfAdk = edit("Write", tierFile);
+		blocked(selfAdk);
+		assert.match(selfAdk.reason, /3층이 바꿀 수 없습니다/);
+		const selfInst = edit("Write", path.join(instanceRoot, "config/tier-profile.json"), { env: { NAIA_ADK_ROOT: instanceRoot } });
+		blocked(selfInst);
+		assert.match(selfInst.reason, /3층이 바꿀 수 없습니다/);
+		fs.rmSync(ex, { force: true });
+
+		// 3) 설정 깨짐: 잘못된 JSON·비객체·tiers.2 누락·빈 후보·모델 누락·예시 자리표시자 미치환·{effort} 누락·cli/model 불일치 모두 깨짐 안내만 내고 모델을 지어내지 않는다.
+		const brokenCases = [
+			"{not-valid-json",
+			"[]",
+			JSON.stringify({ schema: "unknown/v9", tiers: { "2": { candidates: [] } } }),
+			JSON.stringify({ schema: "tier-profile/v1", tiers: {} }),
+			JSON.stringify({ schema: "tier-profile/v1", tiers: { "2": { candidates: [] } } }),
+			JSON.stringify({
+				schema: "tier-profile/v1",
+				tiers: { "2": { candidates: [{ cli: "runner-primary", model: "", command_template: "runner-primary -p {prompt_file}" }] } },
+			}),
+			exampleRaw, // 업스트림 예시(<CLI_1>, <TIER2_MODEL_1>)를 치환 없이 그대로 복사한 경우
+			JSON.stringify({
+				schema: "tier-profile/v1",
+				tiers: { "2": { candidates: [{ cli: "runner-primary", model: "tier2-v1", command_template: "{cli} --model {model} --effort {effort} -p {prompt_file}" }] } },
+			}),
+			JSON.stringify({
+				schema: "tier-profile/v1",
+				tiers: { "2": { candidates: [{ cli: "runner-primary", model: "tier2-v1", command_template: "runner-primary -p {prompt_file}" }] } },
+			}),
+		];
+		for (const raw of brokenCases) {
+			put(tierFile, raw);
+			const brokenRes = edit("Edit", path.join(repo, "src/app.js"));
+			blocked(brokenRes);
+			assert.match(brokenRes.reason, /층 프로파일 설정 깨짐\(config\/tier-profile\.json:/, `expected broken message for: ${raw.slice(0, 60)}`);
+			assert.doesNotMatch(brokenRes.reason, noModelGuessRe);
+			assert.doesNotMatch(brokenRes.reason, /not-valid-json|<TIER2_MODEL_1>/);
+		}
+	} finally {
+		fs.rmSync(tierFile, { force: true });
+	}
 });

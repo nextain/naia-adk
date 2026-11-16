@@ -2911,7 +2911,7 @@ function buildDetachedBlockResult(worker, effectiveDetach) {
 		reason:
 			`[Harness] 감시 밖 일꾼 분리 실행 차단: \`${worker}\` (${effectiveDetach} 분리 실행)\n` +
 			"일꾼 CLI(agy·codex·claude -p/--print·muse exec·opencode run 등)를 표준 진입점 밖에서 분리 실행(nohup·setsid·systemd-run·daemonize·at/batch·disown·&·부분 셸·tmux/screen 등)하면 work-watch 감시 등록이 누락되어 멈추거나 죽어도 아무도 깨어나지 않습니다.\n" +
-			"허용된 표준 진입점(spawn-worker.mjs 또는 설정된 서버 표준 어댑터 대본)을 사용하세요:\n" +
+			"허용된 표준 진입점(spawn-worker.mjs 또는 설정된 서버 표준 어댑터 대본, 2층 일꾼 명령 틀은 config/tier-profile.json 참고)을 사용하세요:\n" +
 			"  node scripts/worker-runner/spawn-worker.mjs --id <작업ID> --role <역할> --work-dir <작업폴더> --watch-dir <감시폴더> --result-file <결과파일> -- <일꾼 명령...>",
 	};
 }

@@ -25,15 +25,29 @@ function block(reason, event) {
 	process.exit(0);
 }
 
-function guideMessage(target, rule, lead) {
+function guideMessage(target, rule, lead, env = process.env) {
 	const { workDir, workerGuide, approverLabel } = guard.guardMeta(lead);
 	if (rule === "self:role-file" || rule === "self:protected-path") {
 		return `[3층 쓰기 막기] ${target} 는 역할 표지·훅 설정·예외 기록이라 3층이 바꿀 수 없습니다. ${approverLabel} 쪽에서 직접 바꾸어야 합니다.`;
 	}
 	const extra = workerGuide ? ` (다른 도구 예시는 ${workerGuide})` : "";
+	const profile = guard.loadTierProfile({ env, role: lead });
+	let step2;
+	if (profile.status === "missing") {
+		step2 = `층 프로파일 설정 없음: ${profile.configRel} 을 만드세요${extra}`;
+	} else if (profile.status !== "ok") {
+		step2 = `층 프로파일 설정 깨짐(${profile.configRel}: ${profile.reason}): 형식과 필수 칸(tiers.2.candidates[].cli·model·command_template)을 고치세요${extra}`;
+	} else {
+		const cmds = profile.tier2.candidates.map((c) => guard.renderTier2Command(c, { workDir }));
+		const primary = `\`node scripts/worker-runner/spawn-worker.mjs --id <일> --role <역할> --work-dir ${workDir}/<일> --watch-dir ${workDir}/<일> --result-file ${workDir}/<일>/result.md -- ${cmds[0]}\``;
+		const fallbacks = cmds.length > 1
+			? ` (차순위: ${cmds.slice(1).map((cmd, i) => `${i + 2}순위 \`-- ${cmd}\``).join(", ")})`
+			: "";
+		const cap = profile.tier2.maxParallel ? `, 동시 상한 ${profile.tier2.maxParallel}` : "";
+		step2 = `표준 대본으로 띄웁니다(work-watch 자동 등록, ${profile.configRel} 2층${cap}): ${primary}${fallbacks}${extra}`;
+	}
 	return `[3층 쓰기 막기] 3층은 저장소 코드를 직접 쓰지 않습니다(${target}). 2층 일꾼에게 지시서로 맡기십시오.\n`
-		+ `1) ${workDir}/<일>/prompt.md 에 지시서를 씁니다(허용). 2) 표준 대본으로 띄웁니다(work-watch 자동 등록): `
-		+ `\`node scripts/worker-runner/spawn-worker.mjs --id <일> --role <역할> --work-dir ${workDir}/<일> --watch-dir ${workDir}/<일> --result-file ${workDir}/<일>/result.md -- claude -p --model sonnet "$(cat ${workDir}/<일>/prompt.md)"\`${extra}. `
+		+ `1) ${workDir}/<일>/prompt.md 에 지시서를 씁니다(허용). 2) ${step2}. `
 		+ "3) 결과 파일을 읽고 평가합니다.\n"
 		+ `허용 경로: 저장소 밖 파일, docs/common/<역할>/, docs/common/team/now/<역할>.md, .agents/progress/, .agents/work/. 긴급 예외는 ${approverLabel} 허락이 있어야 하고 3층이 열 수 없습니다.`;
 }
@@ -597,3 +611,5 @@ function main() {
 if (require.main === module) {
 	try { main(); } catch (e) { try { guard.audit({ event: "guard-error", error: String(e && e.message || e).slice(0, 200) }); } catch {} }
 }
+
+module.exports = { guideMessage };
