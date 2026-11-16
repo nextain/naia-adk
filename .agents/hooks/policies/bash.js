@@ -764,6 +764,17 @@ async function deploy(command, data, opts) {
 	const notices = [];
 	let hadPlanEvaluation = false;
 
+	// 호출 ID(tool_use_id)와 이 관문의 식별자는 도구 호출 한 번에 하나다. root 반복 바깥에서 한 번만 정하고 모든 evaluate 에 넘긴다
+	// (같은 호출 ID 가 root 마다 따로 판정되거나 식별자 실패가 root 마다 되풀이되지 않게). 식별자를 정하지 못하면 한 번 막는다.
+	let toolCall = null;
+	if (matchedRoots.some((mr) => !mr.legacyBlock && !mr.legacyApproved)) {
+		toolCall = deployPlan.toolCallContext(data && data.tool_use_id);
+		if (!toolCall.ok) {
+			appendAudit({ ...toolCall.audit, session: sessionId, command: command.substring(0, 300) });
+			return { reason: toolCall.reason };
+		}
+	}
+
 	for (const mr of matchedRoots) {
 		if (mr.legacyBlock) {
 			appendAudit(mr.legacyBlock.audit);
@@ -783,6 +794,7 @@ async function deploy(command, data, opts) {
 			cwd,
 			services: prodServices,
 			sessionId,
+			toolCall,
 			transcriptPath: data && data.transcript_path,
 			root: mr.root,
 			approverId: (gateConfig.approver && gateConfig.approver.discordUserId) || (mr.config.approver && mr.config.approver.discordUserId),
