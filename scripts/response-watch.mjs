@@ -149,8 +149,9 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         for (const message of messages.sort((a, b) => compare(a.id, b.id))) {
           if (![0, 19].includes(message.type ?? 0)) continue;
           if (message.author?.bot) {
-            // Any post by the assigned bot after a person's request, in this channel or thread, is a receipt for the late notice.
-            for (const [id, pending] of Object.entries(next.pending)) if (pending.human && !pending.ackedAt && pending.botId === message.author.id && compare(message.id, id) > 0) pending.ackedAt = Date.parse(message.timestamp) || now;
+            // Any post by the assigned bot after a person's request, in this channel or thread, is a receipt for the late notice — only when it landed inside the deadline.
+            const postedAt = Date.parse(message.timestamp) || now;
+            for (const [id, pending] of Object.entries(next.pending)) if (pending.human && !pending.ackedAt && pending.botId === message.author.id && compare(message.id, id) > 0 && postedAt < pending.at + (config.ack?.minutes ?? 5) * 60000) pending.ackedAt = postedAt;
             const request = next.pending[ref(message)];
             if (request && message.author.id === request.botId) {
               const at = Date.parse(message.timestamp);

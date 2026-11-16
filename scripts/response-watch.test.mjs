@@ -192,6 +192,11 @@ test('late notice: a bot post in the channel inside the deadline means no notice
   remote.messages.push(human(3, { author: { id: '20', bot: true }, timestamp: new Date(epoch + 2 * 60000).toISOString(), mentions: [] }));
   await run(5); await run(9); assert.equal(remote.posts.length, 0);
 });
+test('late notice: a bot post after the deadline but before the next poll does not cancel the notice', async () => {
+  const { remote, run } = await ackSetup(); await run(); remote.messages.push(human(2)); await run(1);
+  remote.messages.push(human(3, { author: { id: '20', bot: true }, timestamp: new Date(epoch + 7 * 60000).toISOString(), mentions: [] }));
+  await run(8); assert.equal(remote.posts.length, 1); assert.ok(remote.posts[0].content.endsWith('/2'));
+});
 test('late notice: another bot, a bot-to-bot mention and unlisted people are not subject', async () => {
   const { remote, run } = await ackSetup(); await run();
   remote.messages.push(human(2, { author: { id: '21', bot: true } }), human(3, { author: { id: '42' } }), human(4, { author: { id: '40' }, mentions: [{ id: '21', bot: true }] }));
