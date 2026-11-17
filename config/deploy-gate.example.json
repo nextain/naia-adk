@@ -6,7 +6,7 @@
   "discord": {
     "instances": ["default"]
   },
-  "plugin": "./config/deploy-gate-plugin.cjs",
+  "plugin": "./.claude/hooks/instance/deploy-gate-plugin.cjs",
   "prodPatterns": [
     {
       "pattern": "\\bmy-custom-deploy\\b.*--prod\\b",

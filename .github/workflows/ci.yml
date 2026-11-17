@@ -72,6 +72,10 @@ jobs:
         run: pnpm test:harness-native
       - name: Approval plan deploy gate
         run: node .claude/hooks/test/run-approval-plan-gate-test.cjs
+      - name: Gate test host approval
+        run: node .claude/hooks/test/run-gate-testhosts-approval-test.cjs
+      - name: Gate config pin
+        run: node .claude/hooks/test/run-gate-config-pin-test.cjs
       - name: Plan reviewer rotation gate
         run: node .claude/hooks/test/run-plan-reviewer-rotation-test.cjs
       - name: Naia account document translation adapter

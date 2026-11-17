@@ -393,7 +393,7 @@ function hasApprovalPlanGate(root) {
  * @param opts.deployDir REQUIRED — host config dir (adapter passes
  *   path.resolve(its __dirname,"..","deploy")).
  */
-async function deploy(command, data, opts) {
+async function deployImpl(command, data, opts) {
 	const DEPLOY_DIR = (opts && opts.deployDir) || path.resolve(__dirname, "..", "..", "..", ".claude", "deploy");
 	const AUDIT_PATH = process.env.DEPLOY_AUDIT_PATH || path.join(DEPLOY_DIR, "audit.jsonl");
 	const loadJSON = (fp, fb) => { try { return JSON.parse(fs.readFileSync(fp, "utf8")); } catch { return fb; } };
@@ -2253,6 +2253,11 @@ function detachedWorker(command, data, opts) {
 	});
 	if (!hit) return null;
 	return { reason: hit.reason };
+}
+
+async function deploy(command, data, opts) {
+	const lib = path.resolve(__dirname, "../../../.claude/hooks/lib/deploy-command-classifier.js");
+	return require(lib).withGateApprovalCache(() => deployImpl(command, data, opts));
 }
 
 module.exports = {

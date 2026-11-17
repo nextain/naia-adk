@@ -689,6 +689,12 @@ function optionValue(tokens, names) {
 }
 
 let activeGateRoot = "";
+let activeApprovalCache = null;
+const approvalCacheScope = new (require("async_hooks").AsyncLocalStorage)();
+
+function withGateApprovalCache(fn) {
+	return approvalCacheScope.run(new Map(), fn);
+}
 
 function loadTestHosts(rootDir = "") {
 	try {
@@ -721,8 +727,35 @@ function isNonProd(...names) {
 	if (!joined) return false;
 	if (/prod/i.test(joined)) return false;
 	const testHosts = loadTestHosts();
-	if (testHosts.size > 0 && names.some((n) => typeof n === "string" && testHosts.has(n.toLowerCase().replace(/\.$/, "")))) return true;
-	return names.some((n) => n && NON_PROD.test(n));
+	if (names.some((n) => n && NON_PROD.test(n))) return true;
+	if (testHosts.size > 0 && names.some((n) => typeof n === "string" && testHosts.has(n.toLowerCase().replace(/\.$/, "")))) {
+		return approvedTestHost(names);
+	}
+	return false;
+}
+
+function approvedTestHost(names) {
+	try {
+		const root = activeGateRoot || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+		const canonical = path.join(root, "config", "deploy-gate.json");
+		if (process.env.DEPLOY_GATE_CONFIG && path.resolve(process.env.DEPLOY_GATE_CONFIG) !== canonical) return false;
+		const pin = require("./gate-config-pin.js");
+		const before = pin.snapshotGateConfig(root);
+		const bytes = before?.files["config/deploy-gate.json"];
+		if (!bytes) return false;
+		const hosts = JSON.parse(bytes.toString("utf8")).testHosts;
+		if (!Array.isArray(hosts) || !names.some((n) => typeof n === "string" && hosts.some((h) => typeof h === "string" && !/[*?\s]/.test(h) && h.toLowerCase().replace(/\.$/, "") === n.toLowerCase().replace(/\.$/, "")))) return false;
+		const key = `${root}\0${before.hash}`;
+		const cache = approvalCacheScope.getStore() || activeApprovalCache;
+		let confirmed = cache?.get(key);
+		if (confirmed === undefined) {
+			const { spawnSync } = require("child_process");
+			const result = spawnSync(process.execPath, [path.join(__dirname, "gate-config-confirm.js"), root], { encoding: "utf8", timeout: 12000, maxBuffer: 1024 });
+			confirmed = result.status === 0 && result.stdout === before.hash;
+			cache?.set(key, confirmed);
+		}
+		return confirmed && pin.snapshotGateConfig(root)?.hash === before.hash;
+	} catch { return false; }
 }
 
 
@@ -2004,6 +2037,8 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 	if (depth > 3) return String(command || "").trim() ? [{ service: "unclassified:depth-limit", label: "분류 불가: 셸 대본 중첩이 3단계를 넘어 안의 명령을 확인할 수 없음", clause: "", unclassified: true, tool: "depth-limit" }] : found;
 	const gateRoot = rootDir || process.env.DEPLOY_READINESS_ROOT || resolveGateRoot(cwd);
 	const prevGateRoot = activeGateRoot;
+	const prevApprovalCache = activeApprovalCache;
+	if (!activeApprovalCache) activeApprovalCache = new Map();
 	activeGateRoot = gateRoot;
 	try {
 	// 앞 절의 cd 를 따라간다(설계 검수 6회차 2번): "cd <워크트리> && ./deploy/vm/deploy.sh prod" 는
@@ -2095,6 +2130,7 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 	return found;
 	} finally {
 		activeGateRoot = prevGateRoot;
+		activeApprovalCache = prevApprovalCache;
 	}
 }
 
@@ -2685,6 +2721,7 @@ function clauseText(argv, assigns = []) {
 
 module.exports = {
 	classifyProdMutations,
+	withGateApprovalCache,
 	classifyGeneralCloudCli,
 	isNonProd,
 	executedShellFile,

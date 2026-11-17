@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 
 // This list belongs to the gate code, never to the configuration being approved.
-const GATE_CONFIG_FILES = Object.freeze([".claude/deploy/config.json"]);
+const GATE_CONFIG_FILES = Object.freeze([".claude/deploy/config.json", "config/deploy-gate.json"]);
 const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 function snapshotGateConfig(root) {
@@ -13,7 +13,14 @@ function snapshotGateConfig(root) {
 		const hash = crypto.createHash("sha256").update("gate-config-files-v1\0");
 		const files = {};
 		for (const name of GATE_CONFIG_FILES) {
-			const bytes = fs.readFileSync(path.join(root, name));
+			let bytes;
+			try { bytes = fs.readFileSync(path.join(root, name)); }
+			catch (error) {
+				// The instance deploy configuration is optional. Its absence retains
+				// the existing review-model snapshot; any other read error fails closed.
+				if (name === GATE_CONFIG_FILES[1] && error.code === "ENOENT") continue;
+				throw error;
+			}
 			const nameBytes = Buffer.from(name, "utf8");
 			const lengths = Buffer.alloc(16);
 			lengths.writeBigUInt64BE(BigInt(nameBytes.length), 0);

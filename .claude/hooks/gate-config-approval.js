@@ -48,8 +48,8 @@ async function main() {
 		}
 		if (!changed) console.log("(리뷰어 변경 없음)");
 		for (const name of GATE_CONFIG_FILES) {
-			const a = before.files[name].toString("utf8").split("\n");
-			const b = snapshot.files[name].toString("utf8").split("\n");
+			const a = (before.files[name]?.toString("utf8") ?? "").split("\n");
+			const b = (snapshot.files[name]?.toString("utf8") ?? "").split("\n");
 			let start = 0, ae = a.length, be = b.length;
 			while (start < ae && start < be && a[start] === b[start]) start++;
 			while (ae > start && be > start && a[ae - 1] === b[be - 1]) { ae--; be--; }

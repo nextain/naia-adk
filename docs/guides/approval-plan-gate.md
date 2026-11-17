@@ -23,7 +23,7 @@
     - `/etc/systemd/system/<유닛>.service`, `.socket`, 각 유닛의 `.d/` 및 선택 항목 `paths`(절대 경로 배열)의 경로 자체와 하위 파일 변경도 같은 서비스로 분류합니다. 대상 도구는 `install`, `cp`, `mv`, `tee`, `sed -i`, `rm`, `ln`, `dd`의 `of=`, `truncate`, `rsync`의 목적지, `chmod`, `chown`입니다. `>`·`>>`·`>|`·`&>` 리다이렉트도 포함하므로 `echo`·`printf`·`cat`으로 쓰는 경우도 검사합니다. 경로는 디렉터리 경계로 맞추므로 `/opt/sample-web2`는 `/opt/sample-web`에 속하지 않습니다. 등록 서비스가 있을 때 쓰기 대상 경로에 풀리지 않는 변수·명령 치환·글롭이 남으면 등록 서비스 전체를 대상으로 보아 차단합니다.
     - 이 분류는 유닛과 파일 경로를 기준으로 합니다. PID를 직접 지정하는 `kill`이나 프로세스 문자열을 찾는 `pkill -f`는 유닛 소유 관계를 조회하지 않으므로 이 로컬 분류의 보장 범위 밖에 남습니다. `systemctl kill <등록 유닛>`은 위 변경 동사에 포함합니다.
   - `prodPatterns` / `sshAlwaysGated`: 인스턴스 추가 운영 명령·SSH 호스트 분류 패턴
-  - `testHosts`: 비운영(시험) 기기 호스트·IP 문자열 목록. 소문자·끝 점(`.`)을 정규화하여 와일드카드 없이 정확히 같은 이름만 비운영으로 판정하며, 설정이 없거나 깨졌으면 빈 목록으로 동작합니다. 비운영 호스트로 판정되어도 `ssh` 원격 본문은 다시 분류하므로 시험 기기 안에서 실행하는 운영 변경(`az vm delete` 등)과 `-F`·`-o HostName` 대상 덮어쓰기는 그대로 차단됩니다.
+  - `testHosts`: 비운영 대상 문자열 목록. 소문자·끝 점(`.`)을 정규화하여 와일드카드 없이 정확히 같은 이름만 비운영으로 판정합니다. 호스트와 리소스 그룹 등 기존 판정에 쓰이는 모든 대상에 같은 승인이 필요합니다. 미승인·설정 오류·확인 실패 시 빈 목록으로 동작합니다. 비운영 호스트의 `ssh` 원격 본문은 다시 분류합니다.
   - `readOnlyScripts`: `[{ "sha256": "<64자리 hex>", "path": "<저장소 상대 경로>", "service": "<정확한 서비스 키>", "note": "<설명>" }]` 배열. `gates/deploy.json`이 `kind: "ops"`이고 아래 허용 명령 꼴의 대본이 등록된 `{sha256, path, service}` 셋과 모두 맞으면, **관문이 `config/deploy-gate.json`과 대본 파일이 심볼릭 링크 없이 git으로 추적되고 작업 트리·인덱스 내용이 HEAD 블롭과 동일한지 직접 검증하며** 적대 리뷰(PASS) 통과 이후 `PLAN`/`STEP` 사람 승인 코드 입력 단계를 건너뜁니다.
     - `service` 와일드카드 금지: `service`에는 `*`, `?`, `[`, `{` 등 글롭을 쓸 수 없으며 정확한 서비스 키 하나만 적어야 합니다(글롭 발견 시 설정 검사 오류). 같은 `sha256`이라도 다른 `path`나 다른 `service`로 재사용하면 무코드가 되지 않습니다.
     - 허용 명령 꼴(정확한 형태만 무코드 인정, 의심 시 기존 승인 코드·차단 경로로 복귀):
@@ -36,7 +36,7 @@
     - 설정에 없는 `(sha256, path, service)`, `config/deploy-gate.json`이나 대본의 미추적·미커밋 변경, 인라인 명령(`bash -c`·`--scripts "..."`), `kind !== "ops"`, 적대 리뷰 미통과 시에는 기존 동작 그대로 차단되거나 사람 승인 코드를 요구합니다.
     - **남는 위험**: (1) 관문 훅은 실행 시점에 리뷰 영수증·HEAD 일치를 검사할 뿐 `git commit` 자체를 막지는 않으므로(범위 밖), 설정 파일(`config/deploy-gate.json`) 변경 커밋 통제는 PR 리뷰·브랜치 보호에 의존합니다. (2) 훅이 대본 `sha256`과 HEAD 일치를 검사한 시각과 실제 `az`/`bash` 프로세스가 대본을 여는 시각 사이에는 짧은 TOCTOU 창이 남습니다(실행 중 디스크 변경 시 다른 내용이 실행될 수 있음).
   - `approver.discordUserId`: 디스코드 승인 시 대조할 승인자 본인의 디스코드 사용자 ID(Snowflake)
-  - `plugin`: 서비스별 세부 결합 검증(`assessService(service, ctx)`)이나 추가 명령 분류(`classifyCommand(ctx)`)를 수행하는 선택 모듈 경로
+  - `plugin`: 훅 설치 저장소를 기준으로 하는 선택 모듈 경로. 서비스별 세부 결합 검증(`assessService(service, ctx)`)이나 추가 명령 분류(`classifyCommand(ctx)`)를 수행하며 실제 파일은 설치 위치의 `.claude/hooks/instance/` 안에 있어야 합니다.
 
 ---
 
@@ -95,6 +95,14 @@ Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그
 1. 설정을 바꾸고 `node .claude/hooks/gate-config-approval.js`를 실행해 설정 해시, 승인 코드, 풀린 리뷰어 전체 목록과 작성자별 실제 리뷰어 차례를 확인합니다. 승인된 이전 설정의 별도 디렉터리와 `--approved-root`, `--approver-id`, `--channel-id`, `--message-id` 및 환경 변수 `DISCORD_BOT_TOKEN`을 제공하면 디스코드 승인을 확인한 뒤 리뷰어 차이도 표시합니다.
 2. 승인자가 이 변경을 살펴보고 본인 디스코드 글에 승인 코드를 남깁니다. 봇·웹훅 글은 인정하지 않습니다. 인스턴스 관문 코드는 설정 밖에 고정된 승인자 번호와 해당 글 참조를 승인 확인에 전달해야 합니다. 공통 저장소에는 승인자 번호가 없으므로 기본 CLI에서는 승인된 설정도 적용되지 않습니다. 인스턴스에서 승인 확인을 관문 실행에 연결한 뒤 사용합니다.
 3. 관문은 코드에 고정된 설정 파일의 현재 내용으로 해시와 `CFG-` 승인 코드를 다시 계산해 본인 글과 대조합니다. 파일이 한 글자라도 바뀌면 새 승인 코드가 필요합니다. 로컬 발급 기록이나 발급 시각은 확인하지 않습니다. 확인할 수 없거나 승인이 없으면 기본값을 사용합니다.
+
+`testHosts`를 쓰는 인스턴스는 `.claude/hooks/instance/gate-approver.js`에서 `module.exports = { discordUserId: "<승인자 번호>" }`를 내보내고, 상태 폴더의 `gate-config-approval.json`에 `{ "code": "CFG-…", "channelId": "…", "messageId": "…" }`를 기록합니다. 상태 폴더는 `DEPLOY_APPROVAL_STATE_DIR`, 또는 `$XDG_STATE_HOME/naia-harness`(기본 `~/.local/state/naia-harness`)입니다. 토큰은 기존 Discord 인스턴스 자격 증명에서 읽습니다. 승인 해시는 `.claude/deploy/config.json`과 존재하는 `config/deploy-gate.json`의 내용을 묶습니다. 대상이 목록과 실제로 일치할 때만 Discord를 확인합니다. 인스턴스 승인자 코드가 없으면 예외는 적용되지 않습니다.
+
+목록을 좁혀 재승인할 때는 옛 승인 글을 반드시 삭제합니다. 현재 인스턴스의 설정을 복원하지 않아도, 다른 폴더에 옛 승인 설정 바이트를 두고 그 폴더를 작업 폴더로 삼아 옛 승인 글을 참조하면 예외가 되살아납니다. 같은 승인자가 여러 인스턴스를 승인한 경우 한 인스턴스의 승인이 다른 인스턴스 세션에서도 통할 수 있습니다. 해시에 인스턴스 식별값을 넣는 일은 실행 계정 분리 안(신뢰 경계 이전) 뒤의 과제입니다.
+
+이 변경을 병합한 뒤 `config/deploy-gate.json`이 있는 인스턴스는 이 파일이 해시에 추가되므로 기존 리뷰어 설정의 `CFG-` 승인을 새 해시로 다시 받아야 합니다. 이후에도 해당 파일을 수정하면 두 설정 모두 재승인이 필요합니다.
+
+외부 플러그인을 쓰는 인스턴스는 플러그인을 훅 설치 위치의 `.claude/hooks/instance/` 안으로 옮겨야 합니다. 옮기지 않으면 운영 도구 명령이 거의 모두 막히는 안전 쪽 호환 깨짐이 발생합니다. 플러그인 상대 경로의 기준도 인스턴스 루트에서 훅 설치 저장소로 바뀌므로 설정 경로를 함께 고쳐야 합니다.
 
 인스턴스 코드는 `deploy-plan.js`의 `withGateConfig({root, approverId, refs, token}, () => evaluate(ctx))`로 관문 검사를 감싸고, CLI에는 `approval-plan.mjs`의 `runApprovedApprovalPlan(options, argv)`를 호출합니다. `approverId`는 인스턴스 관문 코드의 상수이고, `refs`에는 확인할 코드와 디스코드 `channelId`·`messageId`를 넣습니다. 두 경로가 같은 승인 맥락을 써야 승인된 리뷰어로 작성한 영수증을 관문에서도 확인할 수 있습니다.
 

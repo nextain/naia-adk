@@ -227,7 +227,7 @@ function appendHumanTurn(transcriptPath, text) {
 	fs.appendFileSync(transcriptPath, JSON.stringify(entry) + "\n");
 }
 
-function runDeployGuardHook(command, { cwd, root, stateDir, transcriptPath, sessionId = "sess-test-1" }) {
+function runDeployGuardHook(command, { cwd, root, stateDir, transcriptPath, sessionId = "sess-test-1", hookPath = HOOK_PATH }) {
 	const payload = JSON.stringify({
 		tool_name: "Bash",
 		tool_input: { command },
@@ -235,7 +235,7 @@ function runDeployGuardHook(command, { cwd, root, stateDir, transcriptPath, sess
 		session_id: sessionId,
 		transcript_path: transcriptPath,
 	});
-	const res = spawnSync(process.execPath, [HOOK_PATH], {
+	const res = spawnSync(process.execPath, [hookPath], {
 		cwd,
 		input: payload,
 		encoding: "utf8",
@@ -264,7 +264,7 @@ test("1. 계획 없는 운영 명령 막힘 (Operational command without a plan 
 });
 
 test("2. 인스턴스 설정(config/deploy-gate.json) 없는 알 수 없는 운영 명령은 막힘 & 플러그인 확장 동작", async (t) => {
-	const { root, stateDir, transcriptPath } = makeWorkspace(t);
+	const { tmp, root, stateDir, transcriptPath } = makeWorkspace(t);
 	const { planFile, step1Cmd } = createValidPlan(root);
 	writePassingReviewReceipt(root, planFile);
 
@@ -282,9 +282,15 @@ test("2. 인스턴스 설정(config/deploy-gate.json) 없는 알 수 없는 운�
 	assert.match(unregDecision.reason, /등록되지 않은 운영 서비스/);
 
 	// 플러그인 모듈(plugin)을 통해 결합 규칙을 제공하면 준비 검사를 통과하고 승인 코드 단계로 진입
-	const pluginRel = "config/custom-gate-plugin.cjs";
+	const install = path.join(tmp, "install");
+	fs.cpSync(path.join(REPO_ROOT, ".claude/hooks"), path.join(install, ".claude/hooks"), { recursive: true });
+	fs.cpSync(path.join(REPO_ROOT, ".agents/hooks"), path.join(install, ".agents/hooks"), { recursive: true });
+	fs.mkdirSync(path.join(install, ".agents/scripts"), { recursive: true });
+	fs.copyFileSync(SCRIPT_PATH, path.join(install, ".agents/scripts/approval-plan.mjs"));
+	fs.mkdirSync(path.join(install, ".claude/hooks/instance"), { recursive: true });
+	const pluginRel = ".claude/hooks/instance/custom-gate-plugin.cjs";
 	fs.writeFileSync(
-		path.join(root, pluginRel),
+		path.join(install, pluginRel),
 		`module.exports = {
 			assessService(service, ctx) {
 				if (service === "azure:containerapp:sample-web-prod") {
@@ -295,7 +301,7 @@ test("2. 인스턴스 설정(config/deploy-gate.json) 없는 알 수 없는 운�
 		};\n`
 	);
 	writeGateConfig(root, { plugin: pluginRel, services: {} });
-	const withPluginDecision = runDeployGuardHook(step1Cmd, { cwd: root, root, stateDir, transcriptPath });
+	const withPluginDecision = runDeployGuardHook(step1Cmd, { cwd: root, root, stateDir, transcriptPath, hookPath: path.join(install, ".claude/hooks/deploy-guard.js") });
 	assert.ok(withPluginDecision);
 	assert.equal(withPluginDecision.decision, "block");
 	assert.match(withPluginDecision.reason, /전체 계획 승인이 아직 없습니다/);
@@ -1087,27 +1093,19 @@ test("testHosts 설정: config/deploy-gate.json 의 시험 기기 목록 받음�
 		testHosts: ["192.0.2.10", "GPU-BOX.example.", "lab-node.example.com", "*.wildcard.example"],
 	});
 
-	// 1) 설정된 시험 기기로의 읽기·루프·복사·사용자 서비스 재시작은 비운영으로 통과
-	const allowedCmds = [
-		"ssh user@192.0.2.10 nvidia-smi",
-		"ssh user@192.0.2.10 'podman ps --format \"{{.Names}}\"'",
-		"ssh user@192.0.2.10 'for p in 1 2; do ps -p $p; done'",
-		"ssh user@192.0.2.10. ls",
-		"ssh -l user gpu-box.example ls",
-		"ssh -l user GPU-BOX.EXAMPLE. ls",
+	// 승인 기록이 없으면 목록에 있는 이름도 예외가 아니다.
+	for (const cmd of [
 		"ssh -l user lab-node.example.com systemctl --user restart sample-worker",
 		"scp a.txt user@192.0.2.10:~/work/",
-	];
-	for (const cmd of allowedCmds) {
-		assert.deepEqual(classifyProdMutations(cmd, root), [], `시험 기기 명령은 비운영으로 분류되어야 함: ${cmd}`);
-		const decision = runDeployGuardHook(cmd, { cwd: root, root, stateDir, transcriptPath });
-		assert.equal(decision, null, `시험 기기 명령은 관문을 통과해야 함: ${cmd}`);
+	]) {
+		assert.ok(classifyProdMutations(cmd, root).length, `미승인 시험 기기 명령: ${cmd}`);
+		assert.ok(runDeployGuardHook(cmd, { cwd: root, root, stateDir, transcriptPath })?.decision === "block");
 	}
 
 	// 2) 시험 기기 안이라도 원격 본문의 운영 변경(az vm delete 등)은 다시 분류해 차단
 	const remoteProdCmd = "ssh user@192.0.2.10 az vm delete -n sample-vm -g sample-rg";
 	const remoteProdHits = classifyProdMutations(remoteProdCmd, root);
-	assert.ok(remoteProdHits.some((h) => h.service === "azure:vm:sample-vm"), `시험 기기 안 운영 변경은 잡혀야 함: ${JSON.stringify(remoteProdHits)}`);
+	assert.ok(remoteProdHits.length, `미승인 기기의 운영 변경은 잡혀야 함: ${JSON.stringify(remoteProdHits)}`);
 	const remoteProdDecision = runDeployGuardHook(remoteProdCmd, { cwd: root, root, stateDir, transcriptPath });
 	assert.ok(remoteProdDecision && remoteProdDecision.decision === "block", "시험 기기 안 az vm delete 는 막혀야 함");
 
