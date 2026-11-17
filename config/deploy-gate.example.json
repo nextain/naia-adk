@@ -4,7 +4,9 @@
     "discordUserId": "<승인자 디스코드 사용자 번호(17~20자리 Snowflake)>"
   },
   "discord": {
-    "instances": ["default"]
+    "instances": [
+      "default"
+    ]
   },
   "plugin": "./config/deploy-gate-plugin.cjs",
   "prodPatterns": [
@@ -32,13 +34,27 @@
       "allowOps": true,
       "allowRollback": true,
       "opsCommandPattern": "\\baz\\s+containerapp\\s+(?:update\\b(?![^\\n]*--image\\b)|ingress\\b|revision\\b)",
-      "commandMustContain": ["my-app-prod"]
+      "commandMustContain": [
+        "my-app-prod"
+      ]
     },
     "gcp:cloudrun:my-api-prod": {
       "label": "운영 Cloud Run API",
       "requireDeployGate": true,
       "allowOps": true,
       "allowRollback": true
+    },
+    "azure:vm:naia-gateway-prod-az": {
+      "label": "Gateway production runner",
+      "requireDeployGate": true,
+      "requireReadiness": true,
+      "allowCustomCommands": true,
+      "allowedCommands": [
+        "^bash /[A-Za-z0-9_./-]+/launch-local\\.sh prod [0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,32} [A-Za-z0-9_.-]{1,128} sha256:[a-f0-9]{64} sha256:[a-f0-9]{64} [A-Za-z0-9_.-]{1,128}(?: backup(?: (?:-|azure-tts-key-v1|azure-tts-region-v1|azure-tts-key-v1,azure-tts-region-v1))?| cleanup(?: -)?)?$",
+        "^bash /[A-Za-z0-9_./-]+/operation-local\\.sh prod [0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,32} (?:deploy|verify|status|rollback)$",
+        "^bash /[A-Za-z0-9_./-]+/status-local\\.sh prod [0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,32}(?: (?:recent|full-log|env-names|installed-hashes))?$",
+        "^bash /[A-Za-z0-9_./-]+/rollback-local\\.sh prod [0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,32}$"
+      ]
     }
   }
 }

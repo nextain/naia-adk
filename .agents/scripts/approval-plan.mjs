@@ -30,6 +30,9 @@ const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
 const PINNED_CJS_EXECUTORS = [
 	".claude/hooks/lib/deploy-human-approval.js",
 	".claude/hooks/lib/deploy-plan.js",
+	".claude/hooks/lib/gateway-environment.js",
+	".claude/hooks/lib/deploy-command-classifier.js",
+	".claude/hooks/lib/deploy-readiness.js",
 ];
 const preloadFlag = /(?:^|[\s"'])(?:--(?:require|import|(?:experimental-)?loader)(?=$|[\s="'])|-r)/;
 if (preloadFlag.test(process.env.NODE_OPTIONS || "") || process.execArgv.some((arg) => preloadFlag.test(arg))) {
@@ -66,7 +69,8 @@ let lib, commandHash, statePath;
 	STARTUP_EXECUTOR_SHAS.set(entryRel, BOOT_ENTRY_SHA);
 	const compiled = [];
 	try {
-		for (const { filename, buffer } of pinnedExecutors) {
+		// The remaining gate files are review inputs, but are not executed by this CLI.
+		for (const { filename, buffer } of pinnedExecutors.slice(0, 3)) {
 			const mod = new Module(filename);
 			mod.filename = filename;
 			mod.paths = Module._nodeModulePaths(path.dirname(filename));

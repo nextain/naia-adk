@@ -1659,6 +1659,29 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 	}
 }
 
+const GATEWAY_RUNNER_FORMATS = Object.freeze({
+ "launch-local.sh": "59a8268ead306b83363461c6357bb6e960aa5b7b4645114f6ad5247c788d635c",
+ "operation-local.sh": "816a36c16b03197f3f1a1992bac781dd51d7e5bdef8b70a5b19f5ab4a4c8dfa9",
+ "status-local.sh": "37f437afa983ab07ca8a950eb9873ff07e305dece49bfa4d80cebcb0282c8644",
+ "rollback-local.sh": "0c473db41ebc292c988f737f66984d54254117eb4d72ba86b6a44abbffcb1b3e",
+ "naia-gw-deploy.sh": "9d25e23fdabc97d62f8463bc5d60dc526b5ae7bbecd00ca0f0883eb7594eb823",
+ "gateway-operation.py": "12bd501743183b3098bbfc98f9f3ba2a10a4ff6dbefff5b7ba9cc05c6e43166c"
+});
+function classifyGatewayLocal(tokens) {
+ // 이 분류기는 "게이트웨이 운영 실행기 호출인가"만 판정한다. 본문이 승인된 지문과 같은지는
+ // 준비 검사(deploy-readiness.js 의 wrapper)와 계획서 파일 고정(deploy-plan.js)이 검사한다(검수 2회차 2번).
+ // 그래서 파일 이름이 고정 실행기 이름이면 지문이 달라도 같은 운영 hit 를 낸다(막는 쪽). 첫 인자 dev 같은 비운영 조건은 그대로 둔다.
+ const shell = /^(?:bash|sh|dash|zsh|ksh|ash)$/.test(path.basename(tokens[0] || ""));
+ const scriptIndex = shell ? require("./effective-argv.js").shellInvocation(tokens).script : 0;
+ const script = tokens[scriptIndex];
+ const name = path.basename(script || "");
+ if (!Object.prototype.hasOwnProperty.call(GATEWAY_RUNNER_FORMATS, name) || !name.endsWith("-local.sh") || tokens[scriptIndex + 1] !== "prod") return null;
+ if (tokens[0] !== "bash" || !path.isAbsolute(script || "") || tokens[2] !== "prod") return { service: "azure:vm:naia-gateway-prod-az", label: tokens.join(" ") + " (직접 고정 호출 아님)", verified: false };
+ let verified = false;
+ try { verified = require("crypto").createHash("sha256").update(scriptText(tokens[1])).digest("hex") === GATEWAY_RUNNER_FORMATS[name]; } catch {}
+ return { service: "azure:vm:naia-gateway-prod-az", label: tokens.join(" ") + (verified ? "" : " (고정 지문과 다름)"), verified };
+}
+
 function classifyDeployScript(tokens, cwd, assigns = [], entry = null) {
 	const checkTokens = (toks) => {
 		for (let i = 0; i < toks.length; i++) {
@@ -2031,7 +2054,10 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 			continue;
 		}
 		// --ids 가 여러 운영 대상을 가리키면 hit 도 여러 개다. classifyAz 는 첫 원소만 내고, 여기서는 전부를 쓴다.
-		const azHits = classifyAzAll(tokens);
+		const runnerHit = classifyGatewayLocal(tokens);
+		if (runnerHit && !runnerHit.verified) found.push({ service: runnerHit.service, label: runnerHit.label, clause: clauseText(tokens, assigns) });
+		const gwHit = runnerHit?.verified ? { service: runnerHit.service, label: runnerHit.label } : null;
+		const azHits = gwHit ? [gwHit] : classifyAzAll(tokens);
 		// 준비 기록 검사는 바깥 글자가 아니라 실제로 도는 절을 본다(설계 검수 10회차 2번: bash -c "…", 스크립트 파일 속 --image 가 ops 로 통과).
 		if (azHits.length) for (const h of azHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
 		else {
@@ -2684,6 +2710,7 @@ function clauseText(argv, assigns = []) {
 }
 
 module.exports = {
+	GATEWAY_RUNNER_FORMATS,
 	classifyProdMutations,
 	classifyGeneralCloudCli,
 	isNonProd,
