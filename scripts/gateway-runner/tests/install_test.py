@@ -9,7 +9,7 @@ class AtomicInstallTest(unittest.TestCase):
     def test_legacy_migration_and_followup_preserve_previous_versions(self):
         script = (Path(__file__).parents[1] / 'launch-local.sh').read_text()
         code = script.split("<<'PYINSTALL'\n", 1)[1].split('\nPYINSTALL', 1)[0]
-        with tempfile.TemporaryDirectory(dir='/dev/shm') as d:
+        with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             target = root / 'deploy-runner'
             target.mkdir()
@@ -37,7 +37,7 @@ class InterruptedInstallTest(unittest.TestCase):
         import hashlib
         script = (Path(__file__).parents[1] / 'launch-local.sh').read_text()
         remote = script.split("cat <<'REMOTE'\n", 1)[1].split('\nREMOTE', 1)[0]
-        with tempfile.TemporaryDirectory(dir='/dev/shm') as d:
+        with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             old = root / 'deploy-runner'
             old.mkdir()
@@ -78,7 +78,7 @@ class UntrustedResponseTest(unittest.TestCase):
         import shutil
         bundle = Path(__file__).parents[1]
         secret = 'FAKE_SECRET_MALICIOUS_TOKEN_1234'
-        with tempfile.TemporaryDirectory(dir='/dev/shm') as d:
+        with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             (root / '.git').mkdir()
             (root / 'AGENTS.md').write_text('test')
@@ -127,6 +127,13 @@ esac
                 self.assertNotIn(secret, result.stdout + result.stderr)
                 if not failure:
                     self.assertEqual(result.stdout.strip(), receipts)
+            environment['AZ_RESULT'] = json.dumps({'executionState':'Succeeded','exitCode':0,
+                                                    'output':f'CLEANUP_OK run_id={run}', 'error':''})
+            result = subprocess.run(['bash', str(target / 'launch-local.sh'), 'dev', run, 'tag', digest,
+                                     current, 'revision', 'cleanup', '-'], env=environment,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), f'CLEANUP_OK run_id={run}')
 
 
 class CleanupArgumentsTest(unittest.TestCase):
@@ -148,7 +155,7 @@ class ProtectedEnvironmentTest(unittest.TestCase):
         script = (Path(__file__).parents[1] / 'launch-local.sh').read_text()
         source = script.split("cat <<'REMOTE'\n", 1)[1].split('\nREMOTE', 1)[0]
         for backup_rc in (0, 27):
-            with tempfile.TemporaryDirectory(dir='/dev/shm') as d:
+            with tempfile.TemporaryDirectory() as d:
                 root = Path(d)
                 target = root / 'deploy-runner'
                 target.mkdir()
@@ -180,3 +187,26 @@ class ProtectedEnvironmentTest(unittest.TestCase):
                 self.assertFalse(marker.exists(), 'protected parameter reached an unrelated child')
                 self.assertNotIn('fake_motif_secret', result.stdout + result.stderr)
                 self.assertNotIn('fake_acr_secret', result.stdout + result.stderr)
+
+class CleanupThenBackupTest(unittest.TestCase):
+    def test_cleanup_does_not_switch_install_before_backup_same_run(self):
+        import base64, hashlib, shlex
+        script = (Path(__file__).parents[1] / 'launch-local.sh').read_text()
+        remote = script.split("cat <<'REMOTE'\n", 1)[1].split('\nREMOTE', 1)[0]
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); old = root / 'deploy-runner'; old.mkdir()
+            (old / 'naia-gw-deploy.sh').write_text('old')
+            (old / 'gateway-operation.py').write_text('old')
+            entry = b'#!/bin/bash\nprintf "%s_OK run_id=%s\\n" "${1^^}" "$3"\n'
+            operation = b'new operation'
+            remote = remote.replace("'/opt/naia-gateway/deploy-runner'", repr(str(old))).replace("'/opt/naia-gateway/.deploy-runner-versions'", repr(str(root / 'versions'))).replace("'/run'", repr(str(root))).replace('/run/lock/naia-gateway-runner-install.lock', str(root / 'lock')).replace('0:0:700', f'{os.getuid()}:{os.getgid()}:700')
+            values = {'RUN_ID':'same', 'ENVIRONMENT':'dev', 'IMAGE':'image', 'CURRENT':'current', 'REVISION':'revision', 'ADDITIONS':'-', 'ACR_TOKEN':'fake', 'ENTRY_B64':base64.b64encode(entry).decode(), 'ENTRY_SHA':hashlib.sha256(entry).hexdigest(), 'OPERATION_B64':base64.b64encode(operation).decode(), 'OPERATION_SHA':hashlib.sha256(operation).hexdigest()}
+            def invoke(stage):
+                setup='\n'.join(f'{k}={shlex.quote(v)}' for k,v in {**values,'STAGE':stage}.items()) + '\ntimeout() { shift; "$@"; }\ndocker() { return 0; }\n'
+                return subprocess.run(['bash','-eu'],input=setup+remote,text=True,capture_output=True)
+            first=invoke('cleanup')
+            after_cleanup=(old/'naia-gw-deploy.sh').read_text()
+            second=invoke('backup')
+            self.assertEqual((first.returncode,second.returncode),(0,0),first.stderr+second.stderr)
+            self.assertEqual(after_cleanup,'old')
+            self.assertIn('BACKUP_OK run_id=same',second.stdout)

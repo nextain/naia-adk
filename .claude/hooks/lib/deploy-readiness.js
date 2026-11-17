@@ -1128,12 +1128,26 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
  if (current) {
   if (clauses.length !== 1) return no("실행기 뒤에 지원하지 않는 절이 있음");
   if (!sameServices([GATEWAY_SERVICE])) return no("실행기 서비스·환경 불일치");
+  const additions = require("./gateway-environment.js").additionsSpec(plan.environment_additions);
+  const additionsProblem = require("./gateway-environment.js").additionsBindingProblem(plan);
+  if (additionsProblem) return no(additionsProblem);
   if (current.name === "status-local.sh" && ["env-names", "installed-hashes"].includes(current.mode)) {
+   if (additions !== "-") {
+    const backupEntry = (plan.scenario || []).find(s => (s.commands || []).some(cmd => {
+     const parts = shellClauses(cmd);
+     return parts.length === 1 && path.basename(parts[0][1] || "") === "launch-local.sh" && parts[0][8] === "backup" && parts[0][9] === additions;
+    }));
+    const backupCommand = (backupEntry?.commands || []).find(cmd => {
+     const parts = shellClauses(cmd);
+     return parts.length === 1 && path.basename(parts[0][1] || "") === "launch-local.sh" && parts[0][8] === "backup" && parts[0][9] === additions;
+    });
+    const backupArgs = backupCommand && shellClauses(backupCommand)[0];
+    const boundBackup = backupArgs && verifiedPlanBinding({ plan, entry: backupEntry, command: backupCommand, cwd }, backupArgs[4], "feature", services, root);
+    if (!boundBackup?.ok) return no("환경 추가 backup 의 지문·인자 결합 오류");
+   }
    if (clauses.length !== 1 || kind !== "ops") return no("환경 이름 조회 명령 불일치");
    return yes("고정 환경 이름 조회 및 실행기 지문 확인", true);
   }
-  const additions = require("./gateway-environment.js").additionsSpec(plan.environment_additions);
-  if (additions === null) return no("환경 추가 선언 오류");
   let launches = [];
   for (const s of plan.scenario || []) {
    const pins = texts(s);
@@ -1145,8 +1159,10 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
    }
   }
   const targets = new Set(launches.map((w) => JSON.stringify([w.tag, w.digest, w.previous, w.revision, w.additions])));
-  const w = launches[0];
-  if (launches.length !== 1 || targets.size !== 1 || !w || w.additions !== additions) return no("실행번호·환경에 결합된 유일한 반영 원천 없음");
+  const cleanup = current.name === "launch-local.sh" && current.stage === "cleanup";
+  if (cleanup && launches.length > 1) return no("실행번호에 중복된 반영 원천");
+  const w = cleanup && launches.length === 0 ? current : launches[0];
+  if ((!cleanup && (launches.length !== 1 || targets.size !== 1 || w?.additions !== additions)) || !w) return no("실행번호·환경에 결합된 유일한 반영 원천 없음");
   if (current.name === "launch-local.sh" && current.stage === "cleanup" && (current.tag !== w.tag || current.digest !== w.digest || current.previous !== w.previous || current.revision !== w.revision)) return no("정리 명령의 후보·이전 이미지 불일치");
   const forward = gateway.find((x) => x.tag === w.tag && x.digest === w.digest);
   const previous = gateway.find((x) => x.digest === w.previous && x.digest !== w.digest);

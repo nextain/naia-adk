@@ -1660,7 +1660,7 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 }
 
 const GATEWAY_RUNNER_FORMATS = Object.freeze({
- "launch-local.sh": "59a8268ead306b83363461c6357bb6e960aa5b7b4645114f6ad5247c788d635c",
+ "launch-local.sh": "822450994b7c69e6c2b9104e0e6e328f12ee2e1d378d6e5a1116c40c93a9a375",
  "operation-local.sh": "816a36c16b03197f3f1a1992bac781dd51d7e5bdef8b70a5b19f5ab4a4c8dfa9",
  "status-local.sh": "37f437afa983ab07ca8a950eb9873ff07e305dece49bfa4d80cebcb0282c8644",
  "rollback-local.sh": "0c473db41ebc292c988f737f66984d54254117eb4d72ba86b6a44abbffcb1b3e",
@@ -2048,19 +2048,39 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 			found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true, entry));
 			continue;
 		}
+		const runnerHit = classifyGatewayLocal(tokens);
+		// A name match with a different fingerprint never makes the script opaque:
+		// inspect its body before any registered command or cloud-CLI fast path.
+		if (runnerHit && !runnerHit.verified) {
+			found.push({ service: runnerHit.service, label: runnerHit.label, clause: clauseText(tokens, assigns) });
+			const file = executedShellFile(tokens, dir, dirKnown, command, true);
+			if (file && scriptTooLarge(file)) {
+				found.push({ service: "unclassified:script-too-large", label: `분류 불가: 대본이 커서 안을 읽지 않음(${path.basename(file)})`, clause: clauseText(tokens, assigns), unclassified: true, tool: "script-too-large", file });
+			} else if (file) {
+				const body = selectCaseArms(scriptText(file), scriptArgs(tokens), command, assigns);
+				const nonProdCall = invokedNonProd(tokens, file, assigns);
+				for (const h of classifyProdMutations(body, dir, depth + 1, true, gateRoot)) {
+					if (h.variable && variableTargetIsNonProd(h.variable, body, dir, nonProdCall, assigns)) continue;
+					let service = h.service;
+					if (h.variable && (h.unlistedGroup || h.resolveGroup)) {
+						const r = require("./effective-argv.js").dynamicWord(h.variable, body, dir);
+						if (r && r.words && r.words.length === 1 && /^[A-Za-z0-9._-]+$/.test(r.words[0])) service = `azure:${h.unlistedGroup || h.resolveGroup}:${r.words[0].toLowerCase()}`;
+					}
+					found.push({ ...h, service, ...(h.unclassified ? { file: h.file || file } : {}), variable: "", label: `${h.label} (${path.basename(file)} 안)` });
+				}
+			}
+		}
 		const extHits = classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, false, entry);
 		if (extHits.length) {
 			for (const h of extHits) found.push(h);
 			continue;
 		}
 		// --ids 가 여러 운영 대상을 가리키면 hit 도 여러 개다. classifyAz 는 첫 원소만 내고, 여기서는 전부를 쓴다.
-		const runnerHit = classifyGatewayLocal(tokens);
-		if (runnerHit && !runnerHit.verified) found.push({ service: runnerHit.service, label: runnerHit.label, clause: clauseText(tokens, assigns) });
 		const gwHit = runnerHit?.verified ? { service: runnerHit.service, label: runnerHit.label } : null;
-		const azHits = gwHit ? [gwHit] : classifyAzAll(tokens);
+		const azHits = gwHit ? [gwHit] : runnerHit ? [] : classifyAzAll(tokens);
 		// 준비 기록 검사는 바깥 글자가 아니라 실제로 도는 절을 본다(설계 검수 10회차 2번: bash -c "…", 스크립트 파일 속 --image 가 ops 로 통과).
 		if (azHits.length) for (const h of azHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
-		else {
+		if (!azHits.length && !runnerHit) {
 			const cloudHits = classifyGeneralCloudCli(tokens);
 			if (cloudHits.length) for (const h of cloudHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
 			else {

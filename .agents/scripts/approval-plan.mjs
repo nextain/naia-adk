@@ -29,8 +29,8 @@ const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
 // 기동 시점 실행기 해시: 해시한 동일 바이트를 실행한다.
 const PINNED_CJS_EXECUTORS = [
 	".claude/hooks/lib/deploy-human-approval.js",
-	".claude/hooks/lib/deploy-plan.js",
 	".claude/hooks/lib/gateway-environment.js",
+	".claude/hooks/lib/deploy-plan.js",
 	".claude/hooks/lib/deploy-command-classifier.js",
 	".claude/hooks/lib/deploy-readiness.js",
 ];
@@ -75,9 +75,10 @@ let lib, commandHash, statePath;
 			mod.filename = filename;
 			mod.paths = Module._nodeModulePaths(path.dirname(filename));
 			if (compiled.length) {
-				const dependency = compiled[0];
 				mod.require = function (request) {
-					return request === "./deploy-human-approval.js" ? dependency.exports : Module.prototype.require.call(this, request);
+					if (request === "./deploy-human-approval.js") return compiled[0].exports;
+					if (request === "./gateway-environment.js" && compiled[1]) return compiled[1].exports;
+					return Module.prototype.require.call(this, request);
 				};
 			}
 			require.cache[filename] = mod;
@@ -86,7 +87,7 @@ let lib, commandHash, statePath;
 			mod.loaded = true;
 		}
 		({ commandHash, statePath } = compiled[0].exports);
-		lib = compiled[1].exports;
+		lib = compiled[2].exports;
 	} catch (error) {
 		for (const mod of compiled) delete require.cache[mod.filename];
 		throw error;

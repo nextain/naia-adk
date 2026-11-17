@@ -136,6 +136,11 @@ else
 fi
 unset MOTIF_SECRET
 [[ "$BACKUP_RC" == 0 ]] || exit "$BACKUP_RC"
+# Cleanup runs the verified staged runner but does not install it.  The trap
+# removes staging, leaving the same RUN_ID available for the backup switch.
+if [[ "$STAGE" == cleanup ]]; then
+  exit 0
+fi
 # Swap the whole version as one namespace operation, including on first migration
 # from the legacy directory. Retain the displaced version for approved recovery.
 INSTALLED=1 # Never remove a version once a switch may have started.
@@ -195,9 +200,10 @@ stage=sys.argv[2]
 expected=('CLEANUP_OK' if stage=='cleanup' else 'BACKUP_OK')+' run_id='+sys.argv[3]
 create_rc=sys.argv[4]
 install='INSTALL_OK run_id='+sys.argv[3]+' entry='+sys.argv[5]+' operation='+sys.argv[6]
-if r.get('executionState','').lower()!='succeeded' or r.get('exitCode')!=0 or (r.get('error') or '').strip() or expected not in (r.get('output') or '').splitlines() or install not in (r.get('output') or '').splitlines() or create_rc!='0':
+if r.get('executionState','').lower()!='succeeded' or r.get('exitCode')!=0 or (r.get('error') or '').strip() or expected not in (r.get('output') or '').splitlines() or (stage == 'backup' and install not in (r.get('output') or '').splitlines()) or create_rc!='0':
     raise SystemExit('PREPARE_UNVERIFIED inspect_run_command_before_retry')
 print(expected)
-print(install)
+if stage == 'backup':
+    print(install)
 PY
 timeout 60 az vm run-command delete --subscription "$SUBSCRIPTION" -g "$RG" --vm-name "$VM" --run-command-name "$NAME" --yes -o none >/dev/null 2>&1 || { echo PREPARE_RESOURCE_DELETE_UNVERIFIED; exit 1; }

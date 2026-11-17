@@ -293,7 +293,8 @@ function formProblems(plan) {
 	if (!str(plan.what_why, 10)) p.push("what_why(무엇을 왜 배포하나) 없음");
 	if (requiresArchitectureFit(plan)) p.push(...architectureFitProblems(plan));
 	if (!strList(plan.changes, 3)) p.push("changes(바뀌는 것 목록) 없음");
-	if (require("./gateway-environment.js").additionsSpec(plan.environment_additions) === null) p.push("environment_additions 허용 쌍·순서·중복 오류");
+	const environmentProblem = require("./gateway-environment.js").additionsBindingProblem(plan);
+	if (environmentProblem) p.push(environmentProblem);
 	const steps = Array.isArray(plan.scenario) ? plan.scenario : [];
 	if (steps.length === 0) p.push("scenario(단계 목록) 없음");
 	const ids = new Set();
@@ -1509,7 +1510,7 @@ async function evaluate(ctx) {
 	const verdictEarly = f.action ? incidentVerdict(f.gatesDir, f.sha, ctx.sessionId, now) : { ok: false };
 	let facts = [];
 	let readOnlyNoCode = false;
-	if (f.step && !verdictEarly.ok && typeof ctx.readiness === "function") {
+	if ((f.step || f.action) && typeof ctx.readiness === "function") {
 		const r = ctx.readiness({ plan: f.plan, entry, command: ctx.command, cwd: ctx.cwd || ctx.root, gatesDir: f.gatesDir });
 		if (r && !r.ok) return { allow: false, audit: { event: "blocked-not-ready", plan: rel, problems: r.problems.slice(0, 20) }, reason: [
 			`[Harness] 운영 변경 준비 안 됨: ${(ctx.services || []).join(", ")}`,

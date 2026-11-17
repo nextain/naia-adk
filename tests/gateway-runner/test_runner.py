@@ -12,9 +12,17 @@ gw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gw)
 
 
-class RunnerTests(unittest.TestCase):
+class RunnerFixture:
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp(prefix='gateway-test-', dir='/dev/shm'))
+        self.tmp = tempfile.TemporaryDirectory(prefix='gateway-test-')
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        old = {k: os.environ.get(k) for k in ('NAIA_GW_TEST_MODE', 'NAIA_GW_TEST_ROOT')}
+        def restore():
+            for key, value in old.items():
+                if value is None: os.environ.pop(key, None)
+                else: os.environ[key] = value
+        self.addCleanup(restore)
         os.environ['NAIA_GW_TEST_MODE'] = '1'
         os.environ['NAIA_GW_TEST_ROOT'] = str(self.root)
         self.op = gw.Operation('dev', '20261117T120000Z-test')
@@ -38,6 +46,7 @@ class RunnerTests(unittest.TestCase):
                 for secret in ('fake-test-key', 'fake-motif-key-1234', 'fake-secret'):
                     self.assertNotIn(secret, text)
 
+class RunnerTests(RunnerFixture, unittest.TestCase):
     def test_source_names_cannot_conflict_with_forced_values(self):
         from unittest.mock import patch
         for name in (*gw.CANDIDATE_ENV, *gw.CANDIDATE_SECRET_KEYS, 'FORWARDED_ALLOW_IPS', 'NVA_MEDIA_WORKER_URL'):
@@ -115,13 +124,17 @@ class RunnerTests(unittest.TestCase):
         key.write_text('fake-secret'); key.chmod(0o600)
         actual_fstat = os.fstat
         for field in ('st_uid', 'st_gid'):
+            reached = []
             def bad(fd):
                 info = actual_fstat(fd)
                 attrs = {name: getattr(info, name) for name in ('st_uid', 'st_gid', 'st_mode', 'st_size', 'st_dev', 'st_ino', 'st_mtime_ns', 'st_ctime_ns')}
-                attrs[field] += 1
+                if info.st_ino == key.stat().st_ino and info.st_dev == key.stat().st_dev:
+                    attrs[field] += 1
+                    reached.append(True)
                 return SimpleNamespace(**attrs)
             with patch.object(gw.os, 'fstat', side_effect=bad):
                 with self.assertRaises(gw.Refused): self.op.source_values(['azure-tts-key-v1'])
+            self.assertTrue(reached, field)
 
     def test_preflight_rejects_current_and_backup_stage(self):
         current = 'sha256:' + 'a' * 64
@@ -166,7 +179,9 @@ class LocalParserTests(unittest.TestCase):
     def setUp(self):
         import subprocess
         self.subprocess = subprocess
-        self.root = Path(tempfile.mkdtemp(prefix='gateway-az-test-', dir='/dev/shm'))
+        self.tmp = tempfile.TemporaryDirectory(prefix='gateway-az-test-')
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
         az = self.root / 'az'
         az.write_text('#!/bin/sh\nprintf "%s" "$FAKE_RESPONSE"\nprintf "%s" "$FAKE_ERROR" >&2\nexit "${FAKE_EXIT:-0}"\n')
         az.chmod(0o700)
@@ -228,7 +243,7 @@ print('Enable succeeded:\n[stdout]\n' + r.stdout.rstrip('\n') + '\n[stderr]\n' +
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('must-not-run', result.stdout + result.stderr)
 
-class BackupDeployTests(RunnerTests):
+class BackupDeployTests(RunnerFixture, unittest.TestCase):
     def test_backup_deploy_and_rollback_environment(self):
         import json
         for prior in (None, '', 'old-value', 'duplicate'):
@@ -315,7 +330,7 @@ class BackupDeployTests(RunnerTests):
         live['Config']['Env'].pop()
         with self.capture_safe_output('verify-restore-failed'), self.assertRaises(gw.Refused): op.verify(rec, restored=True, record=False)
 
-class CleanupTests(RunnerTests):
+class CleanupTests(RunnerFixture, unittest.TestCase):
     def test_classification_and_container_parse(self):
         cid = 'a' * 64
         old = 'sha256:' + 'b' * 64
@@ -401,7 +416,9 @@ class CleanupTests(RunnerTests):
 
     def test_recent_and_full_log_are_legacy_status_aliases(self):
         import subprocess, shutil
-        d = Path(tempfile.mkdtemp(prefix='gw-status-alias-', dir='/dev/shm'))
+        tmp = tempfile.TemporaryDirectory(prefix='gw-status-alias-')
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name)
         shutil.copyfile(ROOT / 'scripts/gateway-runner/status-local.sh', d / 'status-local.sh')
         (d / 'operation-local.sh').write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
         for mode in ('recent', 'full-log'):
