@@ -98,9 +98,11 @@ Muse 리뷰어는 읽기 전용 호출(`--disable-write --disable-shell`)로 그
 
 `testHosts`를 쓰는 인스턴스는 `.claude/hooks/instance/gate-approver.js`에서 `module.exports = { discordUserId: "<승인자 번호>" }`를 내보내고, 상태 폴더의 `gate-config-approval.json`에 `{ "code": "CFG-…", "channelId": "…", "messageId": "…" }`를 기록합니다. 상태 폴더는 `DEPLOY_APPROVAL_STATE_DIR`, 또는 `$XDG_STATE_HOME/naia-harness`(기본 `~/.local/state/naia-harness`)입니다. 토큰은 기존 Discord 인스턴스 자격 증명에서 읽습니다. 승인 해시는 `.claude/deploy/config.json`과 존재하는 `config/deploy-gate.json`의 내용을 묶습니다. 대상이 목록과 실제로 일치할 때만 Discord를 확인합니다. 인스턴스 승인자 코드가 없으면 예외는 적용되지 않습니다.
 
-목록을 좁혀 재승인할 때는 옛 승인 글을 삭제합니다. 옛 설정과 참조를 복원하면 삭제되지 않은 옛 승인으로 예외가 되살아날 수 있기 때문입니다.
+목록을 좁혀 재승인할 때는 옛 승인 글을 반드시 삭제합니다. 현재 인스턴스의 설정을 복원하지 않아도, 다른 폴더에 옛 승인 설정 바이트를 두고 그 폴더를 작업 폴더로 삼아 옛 승인 글을 참조하면 예외가 되살아납니다. 같은 승인자가 여러 인스턴스를 승인한 경우 한 인스턴스의 승인이 다른 인스턴스 세션에서도 통할 수 있습니다. 해시에 인스턴스 식별값을 넣는 일은 실행 계정 분리 안(신뢰 경계 이전) 뒤의 과제입니다.
 
 이 변경을 병합한 뒤 `config/deploy-gate.json`이 있는 인스턴스는 이 파일이 해시에 추가되므로 기존 리뷰어 설정의 `CFG-` 승인을 새 해시로 다시 받아야 합니다. 이후에도 해당 파일을 수정하면 두 설정 모두 재승인이 필요합니다.
+
+외부 플러그인을 쓰는 인스턴스는 플러그인을 훅 설치 위치의 `.claude/hooks/instance/` 안으로 옮겨야 합니다. 옮기지 않으면 운영 도구 명령이 거의 모두 막히는 안전 쪽 호환 깨짐이 발생합니다. 플러그인 상대 경로의 기준도 인스턴스 루트에서 훅 설치 저장소로 바뀌므로 설정 경로를 함께 고쳐야 합니다.
 
 인스턴스 코드는 `deploy-plan.js`의 `withGateConfig({root, approverId, refs, token}, () => evaluate(ctx))`로 관문 검사를 감싸고, CLI에는 `approval-plan.mjs`의 `runApprovedApprovalPlan(options, argv)`를 호출합니다. `approverId`는 인스턴스 관문 코드의 상수이고, `refs`에는 확인할 코드와 디스코드 `channelId`·`messageId`를 넣습니다. 두 경로가 같은 승인 맥락을 써야 승인된 리뷰어로 작성한 영수증을 관문에서도 확인할 수 있습니다.
 
