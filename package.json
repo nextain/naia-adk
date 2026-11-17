@@ -22,6 +22,7 @@
     "adk:setup": "node scripts/adk-setup.mjs",
     "adk:user-profile": "node scripts/adk-user-profile.mjs",
     "test:adk-v020": "node --test tests/adk-v020.test.mjs",
+    "test:group-sensors": "node --test tests/group-sensors.test.mjs",
     "test:adk-v200": "node --test tests/adk-v200.test.mjs",
     "adk:validate": "node scripts/adk-link.mjs --validate .",
     "adk:check": "node scripts/adk-link.mjs --check .",

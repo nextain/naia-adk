@@ -24,6 +24,10 @@ This directory is the public skeleton for a Naia ADK 2.0 **group** instance (a t
    - To fill a seat, copy `templates/agent-skeleton/` into `agents/<id>-adk/`. User and project ADKs attach as described in the Naia ADK guide `docs/guides/adk-four-kinds.md`.
    - To run seats as live sessions on the group development server, see [`agents/README.md`](agents/README.md#running-seats-as-sessions) and the Naia ADK guide `docs/guides/agent-role-sessions.md`.
 
+6. **Session sensors (`group_config.operations.sensors_file`)**:
+   - Fill `operations/sensors.example.json` with role and source references, then set `enabled: true`.
+   - Run the separate sensor timer with a trusted local adapter. See `docs/guides/group-session-sensors.md` in the Naia ADK distribution for header-only mail wake, unanswered messages, one authoritative sensor, diagnosis, and bounded recovery.
+
 ## Verification
 
 ```bash
