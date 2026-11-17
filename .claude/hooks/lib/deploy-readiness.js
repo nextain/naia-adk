@@ -572,11 +572,12 @@ function loadDeployGateConfig(root) {
 function loadDeployGatePlugin(root, cfg) {
 	const config = cfg || loadDeployGateConfig(root);
 	if (!config || typeof config.plugin !== "string" || !config.plugin.trim()) return null;
-	const base = fs.realpathSync(path.resolve(__dirname, "../../.."));
-	const pluginPath = path.resolve(base, config.plugin);
+	const installRoot = path.resolve(__dirname, "../../..");
+	const base = fs.realpathSync(path.join(__dirname, "../instance"));
+	const pluginPath = path.resolve(installRoot, config.plugin);
 	const realPlugin = fs.realpathSync(pluginPath);
 	const relative = path.relative(base, realPlugin);
-	if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error("plugin 은 훅 설치 위치 안에 있어야 함");
+	if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw new Error("plugin 은 훅 설치 위치의 instance 폴더 안에 있어야 함");
 	return require(realPlugin);
 }
 

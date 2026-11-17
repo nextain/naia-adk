@@ -287,8 +287,8 @@ test("2. 인스턴스 설정(config/deploy-gate.json) 없는 알 수 없는 운�
 	fs.cpSync(path.join(REPO_ROOT, ".agents/hooks"), path.join(install, ".agents/hooks"), { recursive: true });
 	fs.mkdirSync(path.join(install, ".agents/scripts"), { recursive: true });
 	fs.copyFileSync(SCRIPT_PATH, path.join(install, ".agents/scripts/approval-plan.mjs"));
-	fs.mkdirSync(path.join(install, "config"), { recursive: true });
-	const pluginRel = "config/custom-gate-plugin.cjs";
+	fs.mkdirSync(path.join(install, ".claude/hooks/instance"), { recursive: true });
+	const pluginRel = ".claude/hooks/instance/custom-gate-plugin.cjs";
 	fs.writeFileSync(
 		path.join(install, pluginRel),
 		`module.exports = {

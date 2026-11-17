@@ -36,7 +36,7 @@
     - 설정에 없는 `(sha256, path, service)`, `config/deploy-gate.json`이나 대본의 미추적·미커밋 변경, 인라인 명령(`bash -c`·`--scripts "..."`), `kind !== "ops"`, 적대 리뷰 미통과 시에는 기존 동작 그대로 차단되거나 사람 승인 코드를 요구합니다.
     - **남는 위험**: (1) 관문 훅은 실행 시점에 리뷰 영수증·HEAD 일치를 검사할 뿐 `git commit` 자체를 막지는 않으므로(범위 밖), 설정 파일(`config/deploy-gate.json`) 변경 커밋 통제는 PR 리뷰·브랜치 보호에 의존합니다. (2) 훅이 대본 `sha256`과 HEAD 일치를 검사한 시각과 실제 `az`/`bash` 프로세스가 대본을 여는 시각 사이에는 짧은 TOCTOU 창이 남습니다(실행 중 디스크 변경 시 다른 내용이 실행될 수 있음).
   - `approver.discordUserId`: 디스코드 승인 시 대조할 승인자 본인의 디스코드 사용자 ID(Snowflake)
-  - `plugin`: 훅 설치 저장소를 기준으로 하는 선택 모듈 경로. 서비스별 세부 결합 검증(`assessService(service, ctx)`)이나 추가 명령 분류(`classifyCommand(ctx)`)를 수행하며 실제 파일도 설치 저장소 안에 있어야 합니다.
+  - `plugin`: 훅 설치 저장소를 기준으로 하는 선택 모듈 경로. 서비스별 세부 결합 검증(`assessService(service, ctx)`)이나 추가 명령 분류(`classifyCommand(ctx)`)를 수행하며 실제 파일은 설치 위치의 `.claude/hooks/instance/` 안에 있어야 합니다.
 
 ---
 

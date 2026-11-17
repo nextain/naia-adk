@@ -83,8 +83,8 @@ test("sshAlwaysGated stays effective without approval, and config cannot nominat
 
 test("plugin and invalid production patterns retain their existing classifications", (t) => {
 	const f = fixture(t);
-	f.installWrite("config/fixture-plugin.cjs", 'module.exports = { classifyCommand: command => /\\bfakeship\\b/.test(command) ? [{ service: "custom:fakeship", label: "fixture" }] : [] };');
-	fs.writeFileSync(f.config, JSON.stringify({ testHosts: ["box.example.invalid"], plugin: "./config/fixture-plugin.cjs", discord: { instances: ["fixture"] } }));
+	f.installWrite(".claude/hooks/instance/fixture-plugin.cjs", 'module.exports = { classifyCommand: command => /\\bfakeship\\b/.test(command) ? [{ service: "custom:fakeship", label: "fixture" }] : [] };');
+	fs.writeFileSync(f.config, JSON.stringify({ testHosts: ["box.example.invalid"], plugin: "./.claude/hooks/instance/fixture-plugin.cjs", discord: { instances: ["fixture"] } }));
 	f.record();
 	for (const cmd of ["fakeship now", 'bash -c "fakeship now"']) assert.equal(f.run(cmd), true, cmd);
 	fs.writeFileSync(f.config, JSON.stringify({ testHosts: ["box.example.invalid"], prodPatterns: [{ pattern: "(broken", service: "custom:broken" }], discord: { instances: ["fixture"] } }));
@@ -116,11 +116,16 @@ test("working directory cannot supply approver, token helpers, or plugin code", 
 	fs.writeFileSync(f.config, JSON.stringify({ plugin: path.join(f.root, "config/hostile.cjs") }));
 	assert.equal(f.run("ls"), true);
 	assert.equal(fs.existsSync(marker), false);
-	f.installWrite("config/escape.cjs", "");
-	fs.unlinkSync(path.join(f.install, "config/escape.cjs"));
-	fs.symlinkSync(path.join(f.root, "config/hostile.cjs"), path.join(f.install, "config/escape.cjs"));
-	fs.writeFileSync(f.config, JSON.stringify({ plugin: "config/escape.cjs" }));
+	f.installWrite(".claude/hooks/instance/escape.cjs", "");
+	fs.unlinkSync(path.join(f.install, ".claude/hooks/instance/escape.cjs"));
+	fs.symlinkSync(path.join(f.root, "config/hostile.cjs"), path.join(f.install, ".claude/hooks/instance/escape.cjs"));
+	fs.writeFileSync(f.config, JSON.stringify({ plugin: ".claude/hooks/instance/escape.cjs" }));
 	assert.equal(f.run("ls"), true);
+	assert.equal(fs.existsSync(marker), false);
+	const nested = path.join(f.install, "tmp/sub");
+	f.installWrite("tmp/sub/config/deploy-gate.json", JSON.stringify({ plugin: "tmp/sub/hostile.cjs" }));
+	f.installWrite("tmp/sub/hostile.cjs", `require('fs').writeFileSync(${JSON.stringify(marker)}, 'ran'); module.exports = {};`);
+	assert.equal(f.run("ls", { cwd: nested }), true, "an attacker directory inside the install tree is not a trusted plugin directory");
 	assert.equal(fs.existsSync(marker), false);
 });
 
