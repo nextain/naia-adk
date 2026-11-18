@@ -509,15 +509,36 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
     // An item with an instruction closes only on a result address or an owner confirmation.
     if (driven(item) && command === "drop")
       throw new Error("drop is not available for an item with an instruction file. Close with: done <id> --result <file or URL>, or confirm <id> --channel <id> --msg-id <id> (owner confirmation)");
-    if (driven(item) && command === "done") {
-      if (!oneLine(o.result)) throw new Error("done requires --result <file or URL> for an item with an instruction file");
-      let address = o.result;
-      if (!/^https?:\/\/\S+$/.test(address)) {
-        address = path.resolve(root, address);
-        const info = await stat(address).catch(() => null);
-        if (!info?.isFile() || info.size === 0) throw new Error(`Result file is missing or empty: ${address}`);
+    if (command === "done") {
+      if (item.status === "escalated_human") {
+        const humanAck = normalizeMsgId(o["human-msg-id"]);
+        if (
+          !hasHumanMsgId(humanAck) ||
+          sameHumanMsgId(humanAck, item.from?.msg_id)
+        ) {
+          throw new Error(
+            `사람에게 올림(escalated_human) 상태인 카드(${item.id})를 완료(done)로 닫으려면 원 지시와 다른 사람 확인 답글 번호(--human-msg-id <msg_id>)가 필요합니다`,
+          );
+        }
+        item.human_msg_id = humanAck;
       }
-      close(item, "done", { by: "result", result: address });
+
+      if (!o.result) throw new Error("done requires --result <file, URL, or commit SHA>");
+      
+      const isUrl = /^https?:\/\/\S+$/.test(o.result);
+      const isSha = /^[0-9a-f]{40}$/i.test(o.result);
+      let isFile = false;
+      if (!isUrl && !isSha) {
+          const filePath = path.resolve(root, o.result);
+          const info = await stat(filePath).catch(() => null);
+          isFile = info?.isFile() && info.size > 0;
+      }
+      
+      if (!isUrl && !isSha && !isFile) {
+          throw new Error(`Invalid evidence: ${o.result}. Must be a URL, commit SHA, or existing non-empty file.`);
+      }
+      
+      close(item, "done", { by: "result", result: o.result });
       if (o.reason) item.note = o.reason;
       return item.id;
     }

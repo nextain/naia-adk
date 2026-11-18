@@ -1,6 +1,9 @@
 {
   "schema": "tier-profile/v1",
   "priority": ["<CLI_1>", "<CLI_2>"],
+  "model_quotas": {
+    "<MODEL_ID>": 2
+  },
   "tiers": {
     "1": {
       "purpose": "가벼운 확인·분류",

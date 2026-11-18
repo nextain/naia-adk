@@ -5,7 +5,10 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseBytes } from './core.mjs';
 import { measureMinFreeBytesSync } from '../lib/disk-free.mjs';
-import { registerWorker, updateWorkerRuntime, safeToken } from '../work-watch.mjs';
+import { registerWorker, updateWorkerRuntime, safeToken, readRegistryUnlocked } from '../work-watch.mjs';
+import { readLedger } from '../work-ledger/ledger.mjs';
+import fsp from 'node:fs/promises';
+import { defaultRegistryPath } from '../work-watch.mjs';
 
 const CLI_PATH = fileURLToPath(new URL('./cli.mjs', import.meta.url));
 const REPO_ROOT = path.resolve(path.dirname(CLI_PATH), '../..');
@@ -30,6 +33,7 @@ function parseArgs(argv) {
     const name = key.slice(2);
     const val = args.shift();
     if (name === 'watch-dir') opts.watchDirs.push(val);
+    else if (name === 'card-id') opts.cardId = val;
     else opts[name] = val;
   }
   return { opts, command };
@@ -41,6 +45,31 @@ export async function spawnWorker(argv = process.argv.slice(2), deps = {}) {
   const root = path.resolve(opts.root || env.ADK_ROOT || REPO_ROOT);
   const id = safeToken(opts.id, 'worker id');
   const role = safeToken(opts.role || env.ADK_ROLE || env.NAIA_ROLE, 'role');
+  const cardId = opts.cardId;
+  if (cardId) {
+    const l = await readLedger(root, role);
+    const item = l.items.find(i => i.id === cardId);
+    if (!item) throw new Error(`Card ${cardId} not found in ledger`);
+    if (item.status !== 'open') throw new Error(`Card ${cardId} is not open (status: ${item.status})`);
+  }
+
+  const model = opts.model;
+  if (model) {
+      const profilePath = path.resolve(root, 'config/tier-profile.json');
+      if (fs.existsSync(profilePath)) {
+          const profile = JSON.parse(await fsp.readFile(profilePath, 'utf8'));
+          const max = profile.model_quotas?.[model];
+          if (max) {
+              const registryFile = path.resolve(opts.registry || defaultRegistryPath(root, env));
+              const registry = await readRegistryUnlocked(registryFile);
+              const running = registry.workers.filter(w => w.status === 'running' && w.command?.includes(model));
+              if (running.length >= max) {
+                  throw new Error(`Model quota exceeded for ${model}`);
+              }
+          }
+      }
+  }
+
   if (!opts['result-file']) {
     throw new Error('spawn-worker requires --result-file <path>');
   }

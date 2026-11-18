@@ -154,7 +154,7 @@ export function defaultPidProbe(pid, startToken = null) {
   return true;
 }
 
-async function readRegistryUnlocked(registryFile) {
+export async function readRegistryUnlocked(registryFile) {
   try {
     const raw = await fsp.readFile(registryFile, 'utf8');
     const parsed = JSON.parse(raw);
