@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath, readFile, mkdir, writeFile, readdir, stat, unlink } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { parseArgs, safeName, validDate, ledgerPath, readLedger, withLock, atomicJson, driven } from './ledger.mjs';
+import { parseArgs, safeName, validDate, ledgerPath, readLedger, withLock, atomicJson, driven, isWorkerItem, loadLedgerConfig, runtimeEnv, systemRunner } from './ledger.mjs';
+export { systemRunner };
 
 const HOUR = 60 * 60 * 1000;
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -45,7 +45,7 @@ export function plan({ root, ledgers, timers, now = Date.now(), horizonMs = 24 *
     for (const item of ledger.items) {
       safeName(item.id);
       if (!validDate(item.due)) throw new Error('Invalid due date (UTC ISO required)');
-      if (item.status !== 'open') continue;
+      if (isWorkerItem(item) || item.status !== 'open') continue;
       const unit = unitName(root, role, item.id);
       if (desired.has(unit)) throw new Error('Duplicate timer identity');
       desired.set(unit, { unit, role, id: item.id, due: item.due });
@@ -87,21 +87,6 @@ export function plan({ root, ledgers, timers, now = Date.now(), horizonMs = 24 *
   return actions;
 }
 
-// The runner receives an argv array, never shell text. Tests inject a fake.
-export function systemRunner(command, args, options = {}) {
-  if (process.env.NODE_TEST_CONTEXT || process.env.ADK_FORBID_SYSTEM_RUNNER === '1') throw new Error('System runner forbidden in tests; inject a runner');
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', chunk => { stdout += chunk; });
-    child.stderr.on('data', chunk => { stderr += chunk; });
-    child.once('error', reject);
-    child.once('close', code => code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `${command} exited ${code}`)));
-  });
-}
-function runtimeEnv() {
-  return { ...process.env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? ''}` };
-}
 const enabled = config => config?.due_timer?.enabled === true;
 function parseCalendar(value) {
   const matches = [...value.matchAll(/(?:OnCalendar=|^\s*)(?:[A-Za-z]{3}\s+)?(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) UTC(?=\s*(?:[;}]|$))/gm)];
@@ -252,17 +237,20 @@ export async function reconcile({ root, config, ledgers, now, clock = now === un
 
 // Revalidate each snapshot after listing under the scheduler lock; a concurrent
 // ledger commit during enumeration must not be overwritten by stale decisions.
-export async function reconcileCurrent({ root, config, roles, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, configPath, overdueViaWatch = false, pruneUnknownRoles = false }) {
+export async function reconcileCurrent({ root, config, roles, now, clock = now === undefined ? Date.now : () => now, runner = systemRunner, configPath, overdueViaWatch = false, pruneUnknownRoles = false, reconcileWorkers = !overdueViaWatch }) {
   if (!enabled(config)) return [];
   root = await canonicalRoot(root);
   if (!await proofValid(root, config, configPath)) return [proofWarning];
   const at = now ?? clock();
-  return withLock(timerLockPath(root), async () => {
+  let hasRunningWorkers = false;
+  let checkedRoles = [];
+  const timerWarnings = await withLock(timerLockPath(root), async () => {
     if (!await proofValid(root, config, configPath)) return [proofWarning];
     for (let attempt = 0; attempt < 3; attempt++) {
       const ledgers = [], versions = [], warnings = [];
       const seenRoles = new Set();
       for (const role of roles) { if (seenRoles.has(role)) warnings.push(`ledger:${role}: Duplicate role`); else seenRoles.add(role); }
+      checkedRoles = [...seenRoles];
       for (const role of seenRoles) {
         try {
           safeName(role);
@@ -285,9 +273,16 @@ export async function reconcileCurrent({ root, config, roles, now, clock = now =
         catch (error) { if (!(version.digest === null && error.code === 'ENOENT')) changed = true; }
       }
       if (changed) { if (attempt < 2) continue; throw Error('Ledger changed during reconciliation after 3 attempts'); }
+      hasRunningWorkers = ledgers.some(ledger => ledger.items.some(item => isWorkerItem(item) && item.status === 'running'));
       return reconcile({ root, config, ledgers, timers, warnings, skippedUnits, now: at, runner, configPath, pruneUnknownRoles, configuredRoles: roles, fire: action => overdueViaWatch && Date.parse(action.due) < at ? false : fire({ root, config, configPath, now: at, runner, ...action }) });
     }
   });
+  if (reconcileWorkers && hasRunningWorkers) {
+    const { reconcileWorkerRuns } = await import('./worker-run.mjs');
+    const workerRec = await reconcileWorkerRuns({ root, config, roles: checkedRoles, now: at, runner });
+    for (const err of workerRec.errors) timerWarnings.push(`worker-reconcile:${err}`);
+  }
+  return timerWarnings;
 }
 
 // The full identity is hashed to avoid filesystem name limits and delimiter ambiguity.
@@ -401,9 +396,7 @@ export async function main(args = process.argv.slice(2), { runner, now } = {}) {
   args = args.flatMap((arg, i) => arg === '--include-legacy' && (!args[i + 1] || args[i + 1].startsWith('--')) ? [arg, 'true'] : [arg]);
   const { opts, positional: [command] } = parseArgs(args);
   const root = await canonicalRoot(opts.root || process.cwd());
-  let config;
-  try { config = JSON.parse(await readFile(path.resolve(root, opts.config || 'config/work-ledger.json'), 'utf8')); }
-  catch (error) { if (error.code !== 'ENOENT' || opts.config) throw error; config = {}; }
+  const { config } = await loadLedgerConfig({ root, configPath: opts.config, requireRole: false });
   if (command === 'fire') return fire({ root, role: opts.role, id: opts.id, due: opts.due, config, configPath: opts.config, runner, now });
   if (command === 'list') {
     const warnings = [];

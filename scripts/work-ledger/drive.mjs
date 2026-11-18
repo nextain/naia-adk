@@ -3,7 +3,7 @@
 // This file holds no ledger of its own: paths, locking, validation and writes
 // all come from ledger.mjs.
 import { mkdir, open, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -12,11 +12,13 @@ import {
   closedProperly,
   driven,
   ledgerPath,
+  processStart,
   readLedger,
   safeName,
   validateLedger,
   withLock,
 } from "./ledger.mjs";
+export { processStart };
 import { createAdapter } from "./messenger.mjs";
 import { measureMinFreeGb } from "../lib/disk-free.mjs";
 import { registerWorker } from "../work-watch.mjs";
@@ -93,25 +95,6 @@ export function roleWakeDir(root, config, role) {
   return path.resolve(root, entry.wake_dir);
 }
 
-// Process identity = pid + kernel start time, so a reused pid is not mistaken for the worker.
-export function processStart(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return null;
-  if (!existsSync("/proc/self/stat")) {
-    try {
-      process.kill(pid, 0);
-      return "unknown";
-    } catch {
-      return null;
-    }
-  }
-  try {
-    const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
-    return fields[0] === "Z" ? null : fields[19];
-  } catch {
-    return null;
-  }
-}
 export const workerAlive = (run) =>
   isObject(run) &&
   run.ended_at === null &&

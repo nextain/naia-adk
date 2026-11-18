@@ -220,3 +220,7 @@ bash scripts/work-ledger/install-timer.sh --root "$PWD" --config "$PWD/config/wo
 ```
 
 대본이 출력하는 `systemctl --user daemon-reload`와 `systemctl --user enable --now work-ledger-watch.timer` 명령을 운영자가 실행하면 10분 타이머가 시작됩니다. 토큰 환경 변수는 서비스 실행 환경에 별도로 전달해야 합니다. 설치 대본은 토큰을 읽거나 저장하지 않습니다. 타이머 상태는 `systemctl --user status work-ledger-watch.timer`, 검사 기록은 `journalctl --user -u work-ledger-watch.service`로 확인합니다. 정지는 `systemctl --user disable --now work-ledger-watch.timer`입니다.
+
+## 일꾼 실행 등록 (`worker-run.mjs`)
+
+역할이 `agy`, `codex`, `muse` 같은 일꾼을 `systemd-run --user`로 직접 띄울 때도 같은 역할 장부(`<ADK 뿌리>/.agents/work/ledger/<역할>.json`)에 `kind: "worker"` 줄(`status: "running" → "done" | "failed"`)로 남깁니다. `ledger-watch.mjs`와 `due-timer.mjs`는 유닛이 사라졌는데 `running`으로 남은 줄을 찾아 닫습니다. 자세한 줄 스키마·소비자 계약·CLI는 [일꾼 실행 업무 장부 계약](worker-run-ledger-contract.md)을 따릅니다.

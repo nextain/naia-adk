@@ -60,3 +60,8 @@ Keep names, links, paths and task contents in private instance files. Follow
 To have an overdue item start its own worker from an instruction file, see the
 drive section of the [work-ledger watcher](../common/work-ledger.md). It extends
 the JSON ledger the watcher already reads; there is no separate drive ledger.
+
+When a role launches a worker process directly via `systemd-run --user`, use
+`scripts/work-ledger/worker-run.mjs` so each run is recorded in the same JSON
+ledger (`kind: "worker"`, `status: "running" -> "done" | "failed"`). See the
+[worker-run ledger contract](../common/worker-run-ledger-contract.md).
