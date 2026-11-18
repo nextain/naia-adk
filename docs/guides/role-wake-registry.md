@@ -18,6 +18,7 @@ only; the script is the same on every server.
 | `unit_dirs` | Directories of timer and service files scanned for retired roots. |
 | `roles.<id>.find.pane_id` | The session pane. The foreground program of this pane decides whether the session is alive and which tool it runs. |
 | `roles.<id>.tool`, `tools` | First-choice tool and the ordered list a start script may fall back to. `tool` must equal `tools[0]`. |
+| `tool_caps` | Per-tool wake behavior. Capabilities follow the tool name, not the role name; absent values use the defaults below. |
 | `roles.<id>.wake_subdir` | Folder under `wake_root`; `""` is the top-level box. |
 | `roles.<id>.extra_boxes` | More boxes of the same role outside `root`: `[{ "path": "/abs", "via": ["sudo", "-n"] }]`. `via` is the command prefix that can read a box another account owns; without it the box is read directly. |
 | `roles.<id>.dm_channels`, `dm_users` | DM rooms whose REST catch-up by [bot-mention-wake](bot-mention-wake.md) is checked: by room id, or by the id of the person on the other side when the room id is not known. |
@@ -31,6 +32,32 @@ only; the script is the same on every server.
 The role block keeps the keys the pane liveness tool already reads (`user`,
 `find`, `tool`, `restart_cmd`, `wait`), so that tool can read the registry
 file directly instead of a second list.
+
+## Tool capability table / 도구 능력 표
+
+The optional top-level `tool_caps` map records capabilities by tool name:
+`tool_caps.bg_notify.<tool>` is a boolean, and
+`tool_caps.submit_keys.<tool>` is a non-empty list of key names. An omitted
+entry uses the defaults in this table; unknown tools default to
+`bg_notify: false` and `submit_keys: ["Enter"]`.
+
+| Tool | `bg_notify` | `submit_keys` |
+|---|---:|---|
+| `claude` | `true` | `["Enter"]` |
+| `codex` | `false` | `["Enter", "Tab"]` |
+| `agy` | `false` | `["Enter"]` |
+| `opencode` | `false` | `["Enter"]` |
+
+When `bg_notify` is false, put the wake body directly into the role's pane and
+send that tool's configured keys in order. Do not send a `run_in_background`
+completion nudge: those tools do not receive that notification. The instance
+pane adapter consumes these values; this registry validates and reports them.
+The `validate` command preserves its existing role-ID list and adds one compact
+capability row per role under `tool_caps`.
+
+When changing a role's tool, check in one pass that `tool` equals `tools[0]`,
+the wake body still reaches the intended pane through the configured wake path,
+and the startup script still loads the memory index.
 
 ## Consumers do not depend on the tool
 

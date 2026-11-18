@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { boardSection, compareViews, deliver, detectTool, inspect, legacyView, loadRegistry, main, readFailures, readLedger, sweep, waitRunning, watch } from './role-wake.mjs';
+import * as roleWake from './role-wake.mjs';
+
+const { boardSection, compareViews, deliver, detectTool, inspect, legacyView, loadRegistry, main, readFailures, readLedger, resolveToolCaps, sweep, waitRunning, watch } = roleWake;
 
 const NOW = Date.parse('2026-01-10T00:00:00Z');
 const DAY = 86_400_000;
@@ -51,7 +53,8 @@ test('registry rejects roles without a consumer, duplicate boxes and a retired r
   assert.throws(broken(doc => { doc.roles['role-b'].wake_subdir = ''; }), /duplicate/);
   assert.throws(broken(doc => { doc.roles['role-b'].find.pane_id = 'w1:p1'; }), /duplicate/);
   assert.throws(broken(doc => { doc.roles['role-b'].wake_subdir = '../x'; }), /wake_subdir/);
-  assert.throws(broken(doc => { doc.roles['role-a'].tools = ['agy', 'claude']; }), /tool must equal tools\[0\]/);
+  assert.throws(broken(doc => { doc.roles['role-a'].tools = ['agy', 'claude']; }), /role role-a: tool must equal tools\[0\]/);
+  assert.throws(broken(doc => { doc.roles['role-a'].tools = ['claude']; doc.roles['role-a'].tool = 'codex'; }), /role role-a: tool must equal tools\[0\]/);
   assert.throws(broken(doc => { doc.retired_roots = [path.dirname(f.root)]; }), /inside a retired root/);
   assert.throws(broken(doc => { doc.retention = { archive_dir: 'wake/done' }; }), /outside wake_root/);
   assert.throws(broken(doc => { doc.wake_root = '../elsewhere'; }), /inside root/);
@@ -68,6 +71,41 @@ test('registry rejects roles without a consumer, duplicate boxes and a retired r
   assert.throws(broken(doc => { doc.role_views = [{ kind: 'session-health', path: '/tmp/h.json', roles: 'role-a' }]; }), /role_views roles/);
   assert.throws(broken(doc => { doc.role_views = [{ kind: 'session-health', path: '/tmp/h.json', roles: ['   '] }]; }), /role_views roles/);
   assert.throws(broken(doc => { doc.role_views = [{ kind: 'session-health', path: '/tmp/h.json', roles: [123] }]; }), /role_views roles/);
+});
+
+test('tool caps validate types and resolve per-tool defaults and overrides', t => {
+  const f = setup(t);
+  const defaults = [
+    ['claude', { bgNotify: true, submitKeys: ['Enter'] }],
+    ['codex', { bgNotify: false, submitKeys: ['Enter', 'Tab'] }],
+    ['agy', { bgNotify: false, submitKeys: ['Enter'] }],
+    ['opencode', { bgNotify: false, submitKeys: ['Enter'] }],
+    ['unknown-tool', { bgNotify: false, submitKeys: ['Enter'] }],
+  ];
+  for (const [tool, expected] of defaults) assert.deepEqual(resolveToolCaps({}, { tool }), expected);
+  assert.deepEqual(resolveToolCaps({ tool_caps: { bg_notify: { codex: true }, submit_keys: { codex: ['Tab'] } } }, { tool: 'codex' }), { bgNotify: true, submitKeys: ['Tab'] });
+  assert.deepEqual(resolveToolCaps({ tool_caps: { bg_notify: { claude: false }, submit_keys: { claude: ['Tab'] } } }, { tool: 'claude' }), { bgNotify: false, submitKeys: ['Tab'] });
+
+  const broken = change => { const copy = structuredClone(f.doc); change(copy); fs.writeFileSync(f.file, JSON.stringify(copy)); return () => loadRegistry(f.file); };
+  assert.throws(broken(doc => { doc.tool_caps = 'bad'; }), /tool_caps must be an object/);
+  assert.throws(broken(doc => { doc.tool_caps = { bg_notify: true }; }), /tool_caps\.bg_notify must be an object/);
+  assert.throws(broken(doc => { doc.tool_caps = { bg_notify: { codex: 'true' } }; }), /tool_caps\.bg_notify\.codex must be a boolean/);
+  assert.throws(broken(doc => { doc.tool_caps = { submit_keys: true }; }), /tool_caps\.submit_keys must be an object/);
+  assert.throws(broken(doc => { doc.tool_caps = { submit_keys: { codex: [] } }; }), /tool_caps\.submit_keys\.codex must be a non-empty string array/);
+  assert.throws(broken(doc => { doc.tool_caps = { submit_keys: { codex: ['Enter', 2] } }; }), /tool_caps\.submit_keys\.codex must be a non-empty string array/);
+});
+
+test('validate prints one capability row per role', t => {
+  const f = setup(t, { tool_caps: { bg_notify: { claude: true, agy: false } } });
+  let output = '';
+  assert.equal(main(['validate', '--config', f.file], {}, f.deps, chunk => { output += chunk; }), 0);
+  const parsed = JSON.parse(output);
+  assert.deepEqual(parsed.roles, ['role-a', 'role-b']);
+  assert.deepEqual(parsed.tool_caps, [
+    { id: 'role-a', tool: 'claude', bg_notify: true, submit_keys: ['Enter'] },
+    { id: 'role-b', tool: 'agy', bg_notify: false, submit_keys: ['Enter'] },
+  ]);
+  assert.equal(output.split('\n').filter(line => line.includes('"bg_notify"')).length, 2);
 });
 
 test('tool detection reads the foreground program, not the registry', () => {
@@ -654,6 +692,10 @@ test('the example configuration is a valid registry', () => {
   const example = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../config/role-wake.example.json');
   const registry = loadRegistry(example);
   assert.deepEqual(registry.roles.map(role => role.id), ['role-a', 'role-b']);
+  assert.deepEqual(registry.roles.map(({ tool, bgNotify, submitKeys }) => ({ tool, bgNotify, submitKeys })), [
+    { tool: 'claude', bgNotify: true, submitKeys: ['Enter'] },
+    { tool: 'agy', bgNotify: false, submitKeys: ['Enter'] },
+  ]);
   assert.deepEqual(registry.roleViews.map(view => ({ kind: view.kind, roles: view.roles })), [
     { kind: 'wake-routes', roles: null },
     { kind: 'session-health', roles: ['role-a'] },

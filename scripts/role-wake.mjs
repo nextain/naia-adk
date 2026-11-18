@@ -12,6 +12,12 @@ const WRAPPERS = new Set(['sudo', 'env', 'nice', 'setsid', 'stdbuf', 'timeout'])
 const INTERPRETERS = new Set(['node', 'python3', 'python']);
 const VIEW_KINDS = new Set(['l4-roles', 'wake-routes', 'liveness', 'session-health', 'bot-mention-wake']);
 const DEFAULTS = { heartbeatMaxAge: 300, maxPerRun: 50, lagSeconds: 600, retryMaxSeconds: 300, deliveredDays: 3, maxBoxFiles: 500, repeatSeconds: 3600, dmBackupMaxAge: 900 };
+const TOOL_CAPS_DEFAULTS = {
+  claude: { bgNotify: true, submitKeys: ['Enter'] },
+  codex: { bgNotify: false, submitKeys: ['Enter', 'Tab'] },
+  agy: { bgNotify: false, submitKeys: ['Enter'] },
+  opencode: { bgNotify: false, submitKeys: ['Enter'] },
+};
 // A role whose session is down fails every file; stop that role for the run after this many in a row.
 const FAIL_STREAK = 3;
 // One run is bounded by max_per_run and the command timeouts; a lock older than this has no running owner.
@@ -22,6 +28,39 @@ const isObject = value => value !== null && typeof value === 'object' && !Array.
 const fail = message => { throw new Error(message); };
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const positive = (value, fallback, name) => value === undefined ? fallback : Number.isFinite(value) && value > 0 ? value : fail(`${name} must be a positive number`);
+
+function validateToolCaps(value) {
+  if (value === undefined) return { bg_notify: {}, submit_keys: {} };
+  if (!isObject(value)) fail('tool_caps must be an object');
+  if (Object.keys(value).some(key => !['bg_notify', 'submit_keys'].includes(key))) fail('tool_caps has an unsupported capability');
+  const bgNotify = value.bg_notify === undefined ? {} : value.bg_notify;
+  const submitKeys = value.submit_keys === undefined ? {} : value.submit_keys;
+  if (!isObject(bgNotify)) fail('tool_caps.bg_notify must be an object');
+  if (!isObject(submitKeys)) fail('tool_caps.submit_keys must be an object');
+  for (const [tool, enabled] of Object.entries(bgNotify)) {
+    if (!ROLE_ID.test(tool)) fail(`tool_caps.bg_notify has invalid tool ${tool}`);
+    if (typeof enabled !== 'boolean') fail(`tool_caps.bg_notify.${tool} must be a boolean`);
+  }
+  for (const [tool, keys] of Object.entries(submitKeys)) {
+    if (!ROLE_ID.test(tool)) fail(`tool_caps.submit_keys has invalid tool ${tool}`);
+    if (!Array.isArray(keys) || !keys.length || keys.some(key => typeof key !== 'string' || !key.trim())) fail(`tool_caps.submit_keys.${tool} must be a non-empty string array`);
+  }
+  return { bg_notify: bgNotify, submit_keys: submitKeys };
+}
+
+export function resolveToolCaps(config, role) {
+  const tool = role?.tool ?? role?.tools?.[0];
+  if (typeof tool !== 'string' || !tool) fail('role tool is required to resolve tool_caps');
+  const defaults = TOOL_CAPS_DEFAULTS[tool] ?? { bgNotify: false, submitKeys: ['Enter'] };
+  const configured = config?.tool_caps ?? {};
+  const bgNotify = isObject(configured.bg_notify) && Object.hasOwn(configured.bg_notify, tool)
+    ? configured.bg_notify[tool]
+    : defaults.bgNotify;
+  const submitKeys = isObject(configured.submit_keys) && Object.hasOwn(configured.submit_keys, tool)
+    ? configured.submit_keys[tool]
+    : defaults.submitKeys;
+  return { bgNotify, submitKeys: [...submitKeys] };
+}
 
 function atomic(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -43,6 +82,7 @@ export function loadRegistry(file) {
     return resolved;
   };
   const wakeRoot = inRoot(doc.wake_root, 'wake_root');
+  const toolCaps = validateToolCaps(doc.tool_caps);
   const retiredRoots = (doc.retired_roots ?? []).map(value => typeof value === 'string' && path.isAbsolute(value) ? path.resolve(value) : fail('retired_roots must be absolute paths'));
   if (retiredRoots.some(value => value === root || root.startsWith(value + path.sep))) fail('root is inside a retired root');
   const delivery = doc.delivery === undefined ? null : {
@@ -73,6 +113,8 @@ export function loadRegistry(file) {
     const tools = role.tools ?? (role.tool ? [role.tool] : []);
     if (!Array.isArray(tools) || !tools.length || tools.some(tool => typeof tool !== 'string' || !ROLE_ID.test(tool))) fail(`role ${id}: tools must list at least one tool`);
     if (role.tool !== undefined && role.tool !== tools[0]) fail(`role ${id}: tool must equal tools[0]`);
+    const tool = role.tool ?? tools[0];
+    const caps = resolveToolCaps({ tool_caps: toolCaps }, { tool });
     if (typeof role.wake_subdir !== 'string' || role.wake_subdir.includes('/') || role.wake_subdir.startsWith('.')) fail(`role ${id}: wake_subdir must be one folder name or ""`);
     const wakeDir = path.join(wakeRoot, role.wake_subdir);
     const paneId = role.find?.pane_id;
@@ -100,7 +142,7 @@ export function loadRegistry(file) {
       wait = { script: role.wait.script, mode: role.wait.mode ?? 'nudge' };
     }
     if (!wait && !delivery) fail(`role ${id}: no wake consumer (declare delivery or wait)`);
-    return { id, names: Array.isArray(role.names) && role.names.length ? role.names : [id], botId: role.bot_id ?? null, user: role.user ?? null, paneId, cwd: role.find.cwd ?? null, tools, wakeSubdir: role.wake_subdir, wakeDir, extraBoxes, dmChannels, dmUsers, wait };
+    return { id, names: Array.isArray(role.names) && role.names.length ? role.names : [id], botId: role.bot_id ?? null, user: role.user ?? null, paneId, cwd: role.find.cwd ?? null, tool, tools, bgNotify: caps.bgNotify, submitKeys: caps.submitKeys, wakeSubdir: role.wake_subdir, wakeDir, extraBoxes, dmChannels, dmUsers, wait };
   });
   const paneBin = doc.pane?.bin;
   if (doc.pane?.kind !== 'herdr' || typeof paneBin !== 'string' || !path.isAbsolute(paneBin)) fail('pane must be {"kind":"herdr","bin":"/abs/path"}');
@@ -110,7 +152,7 @@ export function loadRegistry(file) {
   };
   const unitDirs = (doc.unit_dirs ?? []).map(value => typeof value === 'string' && path.isAbsolute(value) ? value : fail('unit_dirs must be absolute paths'));
   const dmBackupMaxAge = positive(doc.dm_backup?.max_age_seconds, DEFAULTS.dmBackupMaxAge, 'dm_backup.max_age_seconds');
-  return { file: path.resolve(file), root, wakeRoot, stateDir: path.resolve(doc.state_dir), retiredRoots, unitDirs, paneBin, delivery, retention, roleViews, notify, dmBackupMaxAge, roles };
+  return { file: path.resolve(file), root, wakeRoot, stateDir: path.resolve(doc.state_dir), retiredRoots, unitDirs, paneBin, delivery, retention, roleViews, notify, dmBackupMaxAge, toolCaps, roles };
 }
 
 // Wake files of one role across its boxes, in arrival order (mtime, then name):
@@ -619,7 +661,22 @@ export function main(argv = process.argv.slice(2), env = process.env, deps = def
   const file = value('--config') ?? env.ADK_ROLE_WAKE_CONFIG ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../config/role-wake.json');
   const registry = loadRegistry(file);
   const print = data => out(`${JSON.stringify(data, null, 2)}\n`);
-  if (command === 'validate') { print({ ok: true, root: registry.root, roles: registry.roles.map(role => role.id) }); return 0; }
+  if (command === 'validate') {
+    const rows = registry.roles.map(role => ({ id: role.id, tool: role.tool, bg_notify: role.bgNotify, submit_keys: role.submitKeys }));
+    const lines = [
+      '{',
+      '  "ok": true,',
+      `  "root": ${JSON.stringify(registry.root)},`,
+      `  "roles": ${JSON.stringify(registry.roles.map(role => role.id))},`,
+      '  "tool_caps": [',
+      ...rows.map((row, index) => `    ${JSON.stringify(row)}${index + 1 < rows.length ? ',' : ''}`),
+      '  ]',
+      '}',
+      '',
+    ];
+    out(lines.join('\n'));
+    return 0;
+  }
   if (command === 'check' || command === 'watch') {
     const report = command === 'watch' ? watch(registry, deps, { repair: flag('--repair') }) : inspect(registry, deps);
     if (flag('--json')) print(report); else out(boardSection(report));

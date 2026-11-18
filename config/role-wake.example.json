@@ -6,6 +6,15 @@
   "retired_roots": ["/<old-workspace-copy>"],
   "unit_dirs": ["/<home>/.config/systemd/user"],
   "pane": { "kind": "herdr", "bin": "/<home>/.local/bin/herdr" },
+  "tool_caps": {
+    "bg_notify": { "claude": true, "codex": false, "agy": false, "opencode": false },
+    "submit_keys": {
+      "claude": ["Enter"],
+      "codex": ["Enter", "Tab"],
+      "agy": ["Enter"],
+      "opencode": ["Enter"]
+    }
+  },
   "delivery": {
     "command": ["/<private>/role-wake.sh", "{role}", "{file}"],
     "heartbeat_max_age_seconds": 300,
