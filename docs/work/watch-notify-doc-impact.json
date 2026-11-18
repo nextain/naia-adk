@@ -1,0 +1,29 @@
+{
+  "work": "watch-notify",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/watch-notify.md",
+      "docs/guides/response-watch.md",
+      "docs/guides/session-health.md",
+      "docs/guides/agent-request-followup.md"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/watch-notify.md",
+      "config/watch-notify-messenger.example.json",
+      "config/response-watch.example.json",
+      "config/session-health.example.json",
+      "config/agent-request-watch.example.json"
+    ]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "files": [
+      "docs/guides/watch-notify.md"
+    ],
+    "detail": "One alert module for the watch scripts. The messenger API has no idempotency key, so only HTTP 429 is retried in-process (messenger by default, Discord only with notify.retries); setup failures are rejected and resent in every watch; other failures keep the rejected/uncertain receipt rules."
+  }
+}

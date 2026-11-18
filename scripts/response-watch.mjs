@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { acquirePidLock } from './lib/pid-lock.mjs';
+import { createNotifier, validateNotify, recipientOk, notifyKind } from './notify.mjs';
 // Instance-configurable message text; {name} placeholders are replaced, unknown ones are left as is.
 export function fill(template, values) { return String(template).replace(/\{(\w+)\}/g, (m, k) => (k in values ? String(values[k]) : m)); }
 
@@ -33,9 +34,13 @@ export function validateConfig(config) {
     if (!Number.isFinite(minutes) || minutes <= 0 || !Array.isArray(config.ack.humanUserIds) || !config.ack.humanUserIds.length || !config.ack.humanUserIds.every(id)) throw new Error('invalid ack');
   }
   if (!Number.isInteger(config.maxPages ?? 100) || (config.maxPages ?? 100) < 1) throw new Error('invalid maxPages');
+  validateNotify(config.notify);
+  const messenger = notifyKind(config.notify) === 'messenger';
   const channels = new Set();
   for (const guild of config.guilds) {
-    [guild.id, guild.defaultBotId, guild.nudgeChannelId, guild.escalation?.channelId, guild.escalation?.userId].forEach(requireId);
+    // In messenger mode alerts go to notify.channel, and the escalation user may be a messenger name.
+    [guild.id, guild.defaultBotId, ...(messenger ? [] : [guild.nudgeChannelId, guild.escalation?.channelId])].forEach(requireId);
+    if (!recipientOk(config.notify, guild.escalation?.userId)) throw new Error('invalid escalation user');
     if (!Array.isArray(guild.channels) || !guild.channels.length) throw new Error('channels required');
     for (const channel of guild.channels) {
       requireId(channel.id); if (channel.botId) requireId(channel.botId);
@@ -44,12 +49,14 @@ export function validateConfig(config) {
       if (channel.mode && !['mentions', 'all-human'].includes(channel.mode)) throw new Error('invalid channel mode');
     }
     for (const role of guild.roles ?? []) { requireId(role.id); requireId(role.botId); }
+    // Role IDs here are Discord role IDs, so in messenger mode every bot a nudge can mention needs its messenger name.
+    if (messenger) for (const bot of [guild.defaultBotId, ...guild.channels.map(c => c.botId), ...(guild.roles ?? []).map(r => r.botId)]) if (bot && !Object.hasOwn(config.notify.mentions ?? {}, bot)) throw new Error(`notify.mentions needs a messenger name for bot ${bot}`);
     (guild.excludeChannelIds ?? []).forEach(requireId);
   }
   for (const site of config.sites ?? []) {
     const url = new URL(site.url);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('site URL must have no credentials, query or fragment');
-    requireId(site.channelId);
+    if (!messenger) requireId(site.channelId);
     if (!Number.isInteger(site.failureThreshold ?? 2) || (site.failureThreshold ?? 2) < 1) throw new Error('invalid site threshold');
   }
   return config;
@@ -70,8 +77,9 @@ export async function postDiscord(api, { channelId, content, mentions, nonce }) 
   return api(`/channels/${channelId}/messages`, { content, allowed_mentions: { parse: [], users: mentions }, nonce, enforce_nonce: true });
 }
 
-export async function runWatch(config, { fetchImpl = fetch, token, dry = false, now = Date.now(), log = event => console.log(JSON.stringify(event)) } = {}) {
+export async function runWatch(config, { fetchImpl = fetch, token, dry = false, now = Date.now(), log = event => console.log(JSON.stringify(event)), notifier, env = process.env } = {}) {
   validateConfig(config);
+  notifier ??= createNotifier(config.notify, { token, env, fetchImpl });
   if (!token) throw new Error('configured token environment variable is empty');
   const trace = randomUUID(), started = Date.now(), stateFile = resolve(config.stateFile);
   const emit = (stage, result, extra = {}) => log({ trace, stage, result, ...extra });
@@ -96,7 +104,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
       await rename(temporary, stateFile);
     };
     const api = createDiscordApi(fetchImpl, token);
-    const send = async (holder, key, channelId, content, mentions) => {
+    const send = async (holder, key, channelId, content, mentions, stage, people) => {
       const existing = holder[key];
       if (existing?.status === 'confirmed' || existing?.status === 'intent' || existing?.status === 'uncertain') {
         if (existing.status !== 'confirmed') { degraded = true; emit('send', 'reconciliation_required', { key: fingerprint(key) }); }
@@ -106,8 +114,10 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
       holder[key] = { status: 'intent', at: now };
       await save();
       try {
-        const receipt = await postDiscord(api, { channelId, content, mentions, nonce: fingerprint(key) });
-        if (!receipt.id) { const error = new Error('Discord missing send receipt'); error.uncertain = true; throw error; }
+        const receipt = stage === 'late'
+          ? await postDiscord(api, { channelId, content, mentions, nonce: fingerprint(key) })
+          : await notifier.send({ stage, channelId, content, mentions, people, nonce: fingerprint(key) });
+        if (!receipt.id) { const error = new Error('notification missing send receipt'); error.uncertain = true; throw error; }
         holder[key] = { status: 'confirmed', at: now, messageId: receipt.id };
         emit('send', 'confirmed', { key: fingerprint(key) });
       } catch (error) {
@@ -186,9 +196,9 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
           const link = `https://discord.com/channels/${guild.id}/${channel.id}/${messageId}`;
           // Same-channel late notice: re-calls the bot (its mention wakes it) and tells the room once.
           const ackMinutes = config.ack?.minutes ?? 5;
-          if (config.ack && request.human && !request.ackedAt && age >= ackMinutes) await send(request.stages, `${key}/${messageId}/late`, channel.id, fill(config.messages?.late ?? '[늦음] <@{bot}> 가 {minutes}분 안에 받았다는 답을 하지 않았습니다: {link}', { bot: request.botId, minutes: ackMinutes, link }), [request.botId]);
-          if (age >= (config.thresholds?.nudgeMinutes ?? 10)) await send(request.stages, `${key}/${messageId}/nudge`, guild.nudgeChannelId, fill(config.messages?.nudge ?? '<@{bot}> Please respond to the pending request: {link}', { bot: request.botId, link }), [request.botId]);
-          if (age >= (config.thresholds?.escalateMinutes ?? 30)) await send(request.stages, `${key}/${messageId}/escalate`, guild.escalation.channelId, fill(config.messages?.escalate ?? '<@{user}> Response remains unconfirmed: {link}', { user: guild.escalation.userId, link }), [guild.escalation.userId]);
+          if (config.ack && request.human && !request.ackedAt && age >= ackMinutes) await send(request.stages, `${key}/${messageId}/late`, channel.id, fill(config.messages?.late ?? '[늦음] <@{bot}> 가 {minutes}분 안에 받았다는 답을 하지 않았습니다: {link}', { bot: request.botId, minutes: ackMinutes, link }), [request.botId], 'late');
+          if (age >= (config.thresholds?.nudgeMinutes ?? 10)) await send(request.stages, `${key}/${messageId}/nudge`, guild.nudgeChannelId, fill(config.messages?.nudge ?? '<@{bot}> Please respond to the pending request: {link}', { bot: request.botId, link }), [request.botId], 'nudge');
+          if (age >= (config.thresholds?.escalateMinutes ?? 30)) await send(request.stages, `${key}/${messageId}/escalate`, guild.escalation.channelId, fill(config.messages?.escalate ?? '<@{user}> Response remains unconfirmed: {link}', { user: guild.escalation.userId, link }), [guild.escalation.userId], 'escalate', [guild.escalation.userId]);
         }
       } catch (error) {
         degraded = true;
@@ -205,7 +215,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
       try { healthy = (await fetchImpl(site.url, { redirect: 'error', signal: AbortSignal.timeout(15000) })).ok; } catch { /* Count timeout and transport failures without logging the URL. */ }
       if (healthy) {
         if (record.alerted) {
-          await send(record.stages, `site/${key}/${record.cycle}/recovery`, site.channelId, fill(config.messages?.siteRecovered ?? 'Configured site check {site} recovered.', { site: key }), []);
+          await send(record.stages, `site/${key}/${record.cycle}/recovery`, site.channelId, fill(config.messages?.siteRecovered ?? 'Configured site check {site} recovered.', { site: key }), [], 'siteRecovered');
           if (record.stages[`site/${key}/${record.cycle}/recovery`]?.status === 'confirmed') { record.alerted = false; record.cycle++; record.stages = {}; }
         }
         record.failures = 0;
@@ -213,7 +223,7 @@ export async function runWatch(config, { fetchImpl = fetch, token, dry = false, 
         degraded = true;
         record.failures++;
         if (!baseline && record.failures >= (site.failureThreshold ?? 2)) {
-          await send(record.stages, `site/${key}/${record.cycle}/failure`, site.channelId, fill(config.messages?.siteFailure ?? 'Configured site check {site} failed repeatedly.', { site: key }), []);
+          await send(record.stages, `site/${key}/${record.cycle}/failure`, site.channelId, fill(config.messages?.siteFailure ?? 'Configured site check {site} failed repeatedly.', { site: key }), [], 'siteFailure');
           record.alerted = true;
         }
       }

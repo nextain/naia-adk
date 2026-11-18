@@ -6,22 +6,24 @@
     "dev": "node server.mjs -p 3142",
     "build": "next build",
     "start": "node server.mjs -p 3142",
-    "test": "node --test app/docs/markdown.test.ts app/docs/tabs.test.ts app/docs/kinds.test.ts app/work/work-ledger-view.test.ts host-guard.test.mjs server.test.mjs scripts/short-link.test.mjs && node --import tsx --test app/docs/doc-save.test.ts app/docs/*.render.test.tsx app/work/*.render.test.tsx short-link-standalone.test.mjs"
+    "test": "node --test app/docs/markdown.test.ts app/docs/tabs.test.ts app/docs/kinds.test.ts app/components/nav-tabs.test.ts app/messages/messenger.test.ts app/work/work-ledger-view.test.ts host-guard.test.mjs identity-header-guard.test.mjs messenger-gate.test.mjs merged-identity.test.mjs public-access.test.mjs server.test.mjs scripts/short-link.test.mjs && node --import tsx --test app/docs/doc-save.test.ts app/docs/*.render.test.tsx app/work/*.render.test.tsx app/messages/*.render.test.tsx app/messages/schedule-from-message.test.ts app/schedule/*.test.ts short-link-standalone.test.mjs"
   },
   "dependencies": {
+    "@naia-adk/core": "workspace:*",
+    "lucide-react": "^0.503.0",
     "next": "^15.3.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "lucide-react": "^0.503.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "swr": "^2.3.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "22.19.18",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
-    "typescript": "^5.8.0",
     "tailwindcss": "^4.1.0",
-    "@tailwindcss/postcss": "^4.1.0"
+    "typescript": "^5.8.0"
   }
 }

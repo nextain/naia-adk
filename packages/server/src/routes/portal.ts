@@ -30,6 +30,12 @@ import {
 } from "../favorites.js"
 import { withFileLock, FileLockTimeoutError } from "../file-lock.js"
 import { isLedgerRequestAllowed, queryPortalWorkLedger, type LedgerQueryParams } from "../work-ledger-portal.js"
+import { messengerEnabled } from "./portal-messenger.js"
+import {
+  clampDateRange,
+  parseStatesQueryParam,
+  readCompanySchedules,
+} from "../company-schedule.js"
 
 export type FileKind = "doc" | "image" | "video" | "audio" | "pdf" | "text" | "other"
 
@@ -60,6 +66,7 @@ export interface PortalBoardInfo {
 export interface PortalResponse {
   sources: PortalSource[]
   board: PortalBoardInfo | null
+  messenger?: { enabled: boolean }
 }
 
 export function getFileKind(fileName: string): FileKind {
@@ -1099,6 +1106,8 @@ export function isSourceAllowedForUntrusted(sourceId: string, isTrusted: boolean
 
 export interface PortalOptions {
   beforeRename?: () => Promise<void> | void
+  /** Messenger state shared with portal-messenger; off when disabled or its initialization failed. */
+  messengerStatus?: { enabled: boolean }
 }
 
 const docWriteLocks = new Map<string, Promise<void>>()
@@ -1128,6 +1137,8 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
 
   // GET /api/portal
   app.get("/", async (req, reply) => {
+    // The dashboard hides its messages tab when NAIA_MESSENGER_ENABLED turns the messenger routes off or they failed to start.
+    const messenger = { enabled: opts?.messengerStatus?.enabled ?? messengerEnabled() }
     const { sources, board } = getSourcesAndBoard(root, getFolderCtx())
     const isTrusted = (req as any).trust?.trusted === true
     const resultSources = isTrusted
@@ -1138,7 +1149,7 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
             ...s,
             tree: filterUntrustedTree(s.tree),
           }))
-    return reply.send({ sources: resultSources, board })
+    return reply.send({ sources: resultSources, board, messenger })
   })
 
   // GET /api/portal/workspace
@@ -1150,6 +1161,36 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       // 실제 경로를 못 얻으면 받은 경로를 그대로 알린다.
     }
     return reply.send({ root: resolved })
+  })
+
+  // GET /api/portal/schedule/company?from=YYYY-MM-DD&to=YYYY-MM-DD
+  app.get("/schedule/company", async (req, reply) => {
+    const secFetchSite = req.headers["sec-fetch-site"]
+    if (typeof secFetchSite === "string" && secFetchSite.toLowerCase() === "cross-site") {
+      return reply.code(403).send({ error: "Forbidden" })
+    }
+
+    const query = req.query as Record<string, unknown>
+    const rawFrom = typeof query.from === "string" && query.from.trim() ? query.from.trim() : undefined
+    const rawTo = typeof query.to === "string" && query.to.trim() ? query.to.trim() : undefined
+
+    const range = clampDateRange(rawFrom, rawTo)
+    if (!range.ok) {
+      return reply.code(400).send({ error: range.error })
+    }
+
+    const includeCanceled = query.includeCanceled === "1" || query.includeCanceled === "true"
+    const allowedRegularStates = parseStatesQueryParam(query.states)
+
+    const result = readCompanySchedules({
+      adkRoot: root,
+      from: range.from,
+      to: range.to,
+      includeCanceled,
+      allowedRegularStates,
+    })
+
+    return reply.send(result)
   })
 
   // GET /api/portal/search?q=<검색어>[&archived=1]

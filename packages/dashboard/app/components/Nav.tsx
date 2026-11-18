@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { isTopNavTabActive, visibleTopNavTabs } from "./nav-tabs"
 import {
   DEFAULT_FONT_SIZE_STEP,
   DEFAULT_THEME_PREFERENCE,
@@ -22,13 +23,17 @@ import {
 
 interface PortalData {
   board: { port: number } | null
+  messenger?: { enabled: boolean }
 }
+
+const BOARD_DISABLED_TITLE = "회사 설정이 없어 작업보드가 없습니다. pnpm adk:setup으로 회사 설정을 먼저 하세요."
 
 export interface NavProps {
   initialTheme?: ThemePreference
   initialFontSize?: FontSizeStep
   hasBoard?: boolean | null
   hasLedger?: boolean | null
+  hasMessenger?: boolean | null
   todoBadgeCount?: number | null
 }
 
@@ -37,31 +42,85 @@ const tabClass = (active: boolean) =>
     active ? "bg-neutral-800 text-white" : "text-neutral-400 hover:text-white hover:bg-neutral-900"
   }`
 
+export interface NavTabsProps {
+  pathname: string
+  hasBoard: boolean | null
+  hasLedger?: boolean | null
+  hasMessenger?: boolean | null
+}
+
+export function NavTabs({ pathname, hasBoard, hasLedger, hasMessenger }: NavTabsProps) {
+  return (
+    <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
+      {visibleTopNavTabs(hasMessenger).map((tab) => {
+        if (tab.requiresBoard && hasBoard === false && hasLedger !== true) {
+          return (
+            <span
+              key={tab.id}
+              data-testid={`nav-tab-${tab.id}`}
+              aria-disabled="true"
+              className="px-1.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-sm font-medium text-neutral-600 cursor-not-allowed whitespace-nowrap"
+              title={BOARD_DISABLED_TITLE}
+            >
+              {tab.label}
+            </span>
+          )
+        }
+        const active = isTopNavTabActive(tab, pathname)
+        return (
+          <Link
+            key={tab.id}
+            href={tab.href}
+            data-testid={`nav-tab-${tab.id}`}
+            aria-current={active ? "page" : undefined}
+            className={tabClass(active)}
+          >
+            {tab.label}
+          </Link>
+        )
+      })}
+    </div>
+  )
+}
+
 export function Nav({
   initialTheme = DEFAULT_THEME_PREFERENCE,
   initialFontSize = DEFAULT_FONT_SIZE_STEP,
   hasBoard: hasBoardProp,
   hasLedger: hasLedgerProp,
+  hasMessenger: hasMessengerProp,
   todoBadgeCount: todoBadgeCountProp,
 }: NavProps = {}) {
   const pathname = usePathname() || "/"
   const [fetchedHasBoard, setFetchedHasBoard] = useState<boolean | null>(null)
   const [fetchedHasLedger, setFetchedHasLedger] = useState<boolean | null>(null)
+  const [fetchedHasMessenger, setFetchedHasMessenger] = useState<boolean | null>(null)
   const [fetchedTodoCount, setFetchedTodoCount] = useState<number | null>(null)
   const [themePref, setThemePref] = useState<ThemePreference>(initialTheme)
   const [fontSize, setFontSize] = useState<FontSizeStep>(initialFontSize)
 
   const hasBoard = hasBoardProp !== undefined ? hasBoardProp : fetchedHasBoard
   const hasLedger = hasLedgerProp !== undefined ? hasLedgerProp : fetchedHasLedger
+  const hasMessenger = hasMessengerProp !== undefined ? hasMessengerProp : fetchedHasMessenger
   const todoCount = todoBadgeCountProp !== undefined ? todoBadgeCountProp : fetchedTodoCount
 
   useEffect(() => {
-    if (hasBoardProp !== undefined) return
+    if (hasBoardProp !== undefined && hasMessengerProp !== undefined) return
     fetch("/api/portal")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: PortalData | null) => setFetchedHasBoard(Boolean(data?.board?.port)))
-      .catch(() => setFetchedHasBoard(false))
-  }, [hasBoardProp])
+      .then((data: PortalData | null) => {
+        if (hasBoardProp === undefined) {
+          setFetchedHasBoard(Boolean(data?.board?.port))
+        }
+        if (hasMessengerProp === undefined) {
+          // Older servers do not send messenger; keep the tab then.
+          setFetchedHasMessenger(typeof data?.messenger?.enabled === "boolean" ? data.messenger.enabled : null)
+        }
+      })
+      .catch(() => {
+        if (hasBoardProp === undefined) setFetchedHasBoard(false)
+      })
+  }, [hasBoardProp, hasMessengerProp])
 
   useEffect(() => {
     if (todoBadgeCountProp !== undefined && hasLedgerProp !== undefined) return
@@ -140,26 +199,7 @@ export function Nav({
         Naia ADK
       </Link>
 
-      <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
-        <Link href="/docs" className={tabClass(isActive("/docs"))}>
-          문서
-        </Link>
-        <Link href="/decisions" className={tabClass(isActive("/decisions"))}>
-          결정
-        </Link>
-        {hasBoard === false && hasLedger !== true ? (
-          <span
-            className="px-1.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-sm font-medium text-neutral-600 cursor-not-allowed whitespace-nowrap"
-            title="회사 설정이 없어 작업보드가 없습니다. pnpm adk:setup으로 회사 설정을 먼저 하세요."
-          >
-            작업
-          </span>
-        ) : (
-          <Link href="/work" className={tabClass(isActive("/work"))}>
-            작업
-          </Link>
-        )}
-      </div>
+      <NavTabs pathname={pathname} hasBoard={hasBoard} hasLedger={hasLedger} hasMessenger={hasMessenger} />
 
       <div className="ml-auto flex items-center gap-1 sm:gap-3 shrink-0">
         {typeof todoCount === "number" && (
