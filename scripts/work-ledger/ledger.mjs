@@ -402,8 +402,9 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
     if (closedProperly(item)) throw new Error("Item is already closed");
     const at = new Date(clock()).toISOString();
     item.status = status;
-    if (!item.drive) item.drive = {};
-    item.drive.closed = { ...record, at };
+    if (item.drive) {
+      item.drive.closed = { ...record, at };
+    }
     item.checked_at = at;
   };
   let ownerRecord;
