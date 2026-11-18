@@ -197,7 +197,7 @@ export function resolveShortPath(rawPathname, { table = emptyTable(), tabFor } =
     } catch {
       tab = undefined
     }
-    return { status: 302, location: longDocHref(source, docPath, tab) }
+    return { status: 302, location: longDocHref(source, docPath, tab), source, path: docPath }
   }
 
   if (segs.length === 1) {

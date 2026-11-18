@@ -1,4 +1,7 @@
 {
+  "notify": {
+    "kind": "discord"
+  },
   "stateFile": "/<private>/session-health-state.json",
   "reportFile": "/<private>/session-health.md",
   "baselineRepo": "/<upstream-checkout>",

@@ -1,0 +1,11 @@
+[Unit]
+Description=Naia ADK dashboard port hold (127.0.0.1:3142)
+
+[Socket]
+ListenStream=127.0.0.1:3142
+# systemd keeps the port while the service restarts or stops, so another local account cannot take it and receive the login gate secret.
+# Past the default trigger limit the socket fails and frees the port, so it is off. PollLimit defaults slow down connection floods.
+TriggerLimitIntervalSec=0
+
+[Install]
+WantedBy=sockets.target

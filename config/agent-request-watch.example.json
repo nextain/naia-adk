@@ -1,4 +1,7 @@
 {
+  "notify": {
+    "kind": "discord"
+  },
   "tokenEnv": "DISCORD_BOT_TOKEN",
   "stateFile": "/srv/example/state/agent-request-watch.json",
   "sessionHealthConfig": "/srv/example/config/session-health.json",

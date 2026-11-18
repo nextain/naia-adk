@@ -1,4 +1,5 @@
 import http from "node:http"
+import { randomUUID } from "node:crypto"
 import path from "node:path"
 import fs from "node:fs"
 import os from "node:os"
@@ -6,6 +7,14 @@ import process from "node:process"
 import { fileURLToPath } from "node:url"
 import next from "next"
 import { hostGuard } from "./host-guard.mjs"
+import { readGateSecret } from "./gate-secret.mjs"
+import { applyMessengerIdentity, isMessengerGateVerified, verifyMessengerGate } from "./messenger-gate.mjs"
+import {
+  GATE_ACCOUNT_HEADER,
+  getVerifiedPublishActor,
+  inspectSingleHeaderOnReq,
+  stripUntrustedIdentityHeaders,
+} from "./identity-header-guard.mjs"
 import {
   createTableReader,
   defaultTableFile,
@@ -14,6 +23,7 @@ import {
   registerShortLink,
   resolveShortPath,
 } from "./short-links.mjs"
+import { classifyPublicPath, createAccessVerifier, publicConfigFromEnv } from "./public-access.mjs"
 
 const __filename = fileURLToPath(import.meta.url)
 const MAX_SHORT_LINK_BODY_BYTES = 4096
@@ -108,24 +118,38 @@ export function clearProxySecretCache() {
 
 /**
  * x-naia-* 머리글을 지우고 다시 붙이는 함수 (FE 8장 136~137행)
- * - 받은 x-naia-peer, x-naia-local, x-naia-proxy-secret, x-naia-origin-ok 제거
+ * - 받은 x-naia-*, cf-access-*, x-ax-account-key 제거
  * - 소켓 실제 주소를 x-naia-peer로
  * - 소켓 이 PC 쪽 주소를 x-naia-local로
  * - 비밀 값을 x-naia-proxy-secret으로
+ * - 같은 요청의 관문 검사를 통과한 계정만 내부 actor와 검증표시로 새로 생성
  * - 쓰기 메서드(PUT·POST·PATCH·DELETE)이고 Origin이 scheme://Host와 같으면 x-naia-origin-ok: 1
+ *   (게이트가 확인한 메신저 요청은 X-Forwarded-Proto 나 NAIA_DASHBOARD_PUBLIC_URL 원점도 받는다)
  * - Host를 127.0.0.1:<포트>로 설정
  */
-export function buildProxyHeaders(req, socket, proxySecret, apiPort) {
+export function buildProxyHeaders(req, socket, proxySecret, apiPort, envOrIdentity = process.env, customEnv = process.env) {
+  const publicIdentity = envOrIdentity && typeof envOrIdentity.email === "string" ? envOrIdentity : null
+  const env = publicIdentity ? customEnv : (envOrIdentity || customEnv)
   const sock = socket || req.socket || {}
   const remoteAddr = normalizeIp(sock.remoteAddress || "")
   const localAddr = normalizeIp(sock.localAddress || "")
 
   const outHeaders = {}
   for (const [key, val] of Object.entries(req.headers || {})) {
-    if (key.toLowerCase().startsWith("x-naia-")) {
+    const lower = key.toLowerCase()
+    // x-naia-* 는 이 대시보드만 붙인다. cf-access-* 는 서명 없는 신원 머리글이라 API 로 넘기지 않는다.
+    if (lower.startsWith("x-naia-") || lower.startsWith("cf-access-") || lower === GATE_ACCOUNT_HEADER) {
+      continue
+    }
+    // 공개 모드: 접근 제어 쿠키(CF_Authorization)는 API 에 필요 없다.
+    if (publicIdentity && lower === "cookie") {
       continue
     }
     outHeaders[key] = val
+  }
+
+  if (!publicIdentity) {
+    applyMessengerIdentity(outHeaders, req, env)
   }
 
   outHeaders["host"] = `127.0.0.1:${apiPort}`
@@ -137,17 +161,39 @@ export function buildProxyHeaders(req, socket, proxySecret, apiPort) {
   }
   if (proxySecret) {
     outHeaders["x-naia-proxy-secret"] = proxySecret
+    if (!publicIdentity) {
+      const actor = getVerifiedPublishActor(req, env)
+      if (actor) {
+        outHeaders["x-naia-actor-id"] = actor
+        outHeaders["x-naia-actor-verified"] = "1"
+      }
+    }
+  }
+  if (publicIdentity?.email) {
+    // 공개 모드: 서명 검증을 마친 메일만 비밀 값과 함께 넘긴다(API 는 비밀이 맞을 때만 읽는다).
+    outHeaders["x-naia-user-email"] = publicIdentity.email
   }
 
   const method = (req.method || "GET").toUpperCase()
-  if (["PUT", "POST", "PATCH", "DELETE"].includes(method)) {
+  if (!publicIdentity && ["PUT", "POST", "PATCH", "DELETE"].includes(method)) {
     const isEncrypted = Boolean(sock.encrypted)
     const scheme = isEncrypted ? "https" : "http"
-    const hostHeader = req.headers?.host
-    if (hostHeader) {
-      const expectedOrigin = `${scheme}://${hostHeader}`
-      const incomingOrigin = req.headers?.origin
-      if (incomingOrigin && incomingOrigin === expectedOrigin) {
+    const hostHeader = inspectSingleHeaderOnReq(req, "host")
+    const incomingOrigin = inspectSingleHeaderOnReq(req, "origin")
+    if (hostHeader.present && hostHeader.valid && incomingOrigin.present && incomingOrigin.valid) {
+      const allowed = new Set([`${scheme}://${hostHeader.value}`])
+      // 앞단 로그인 게이트가 TLS 를 끝내면 이 소켓은 평문이다. 게이트 비밀이 확인된 요청만
+      // 앞단이 보낸 프로토콜(한 개)이나 설정된 공개 주소로 원점을 맞춘다.
+      if (isMessengerGateVerified(req)) {
+        const proto = inspectSingleHeaderOnReq(req, "x-forwarded-proto")
+        if (proto.present && proto.valid && /^https?$/.test(proto.value ?? "")) {
+          allowed.add(`${proto.value}://${hostHeader.value}`)
+        }
+        try {
+          if (env?.NAIA_DASHBOARD_PUBLIC_URL) allowed.add(new URL(env.NAIA_DASHBOARD_PUBLIC_URL).origin)
+        } catch {}
+      }
+      if (incomingOrigin.value && allowed.has(incomingOrigin.value)) {
         outHeaders["x-naia-origin-ok"] = "1"
       }
     }
@@ -199,6 +245,16 @@ export function validatePortalPathname(rawPathname) {
   }
 }
 
+function isPublishPathname(pathname) {
+  try {
+    // 차단 판정에만 별칭을 푼다. 실제 전달 경로와 경로 탈출 검사는 바꾸지 않는다.
+    const decoded = decodeURIComponent(pathname).replace(/\/+/g, "/").replace(/\/$/, "")
+    return /^\/api\/portal\/publish(?:\/|$)/.test(decoded)
+  } catch {
+    return false
+  }
+}
+
 /**
  * API 프록시 전송 함수 (FE 8장 127행, 140행)
  * - 런타임 NAIA_API_PORT의 127.0.0.1로 직접 전달
@@ -207,9 +263,10 @@ export function validatePortalPathname(rawPathname) {
  * - frame-ancestors 'self'는 두 번째 Content-Security-Policy 머리글로 더함
  * - X-Frame-Options는 없을 때만 SAMEORIGIN 추가
  */
-export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket = null) {
+export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket = null, envOrIdentity = process.env, customEnv = process.env) {
   const sock = socket || req.socket
-  const headers = buildProxyHeaders(req, sock, proxySecret, apiPort)
+  const publicIdentity = envOrIdentity && typeof envOrIdentity.email === "string" ? envOrIdentity : null
+  const headers = buildProxyHeaders(req, sock, proxySecret, apiPort, envOrIdentity, customEnv)
 
   const reqOptions = {
     hostname: "127.0.0.1",
@@ -250,6 +307,14 @@ export function proxyToApi(req, res, forwardPath, apiPort, proxySecret, socket =
       res.setHeader("x-frame-options", "SAMEORIGIN")
     }
 
+    if (publicIdentity) {
+      // 공개 주소 앞단(클라우드플레어)이 사람별 문서를 저장해 두지 않게 한다.
+      res.setHeader("cache-control", "private, no-store")
+    }
+
+    // If the API side drops mid-response (restart etc.), drop the browser side too so messenger SSE notices and reconnects.
+    apiRes.on("aborted", () => res.destroy())
+    apiRes.on("error", () => res.destroy())
     apiRes.pipe(res)
   })
 
@@ -360,16 +425,39 @@ export function handleShortLink(req, res, rawPathname, opts = {}) {
 /**
  * 대시보드 HTTP 요청 처리기 생성
  * - shortLinkOpts: { tableFile, readTable, tabFor, maxLinks, maxBytes } (시험에서 바꿔 끼운다)
+ * - envOrPublicOpts / explicitPublicOpts: 기존 3인자 호출(env 또는 publicOpts)과
+ *   4인자 호출(customEnv, publicOpts) 모두 지원한다.
  */
-export function createRequestHandler(nextHandler, shortLinkOpts = {}) {
+export function createRequestHandler(nextHandler, shortLinkOpts = {}, envOrPublicOpts = process.env, explicitPublicOpts = null) {
+  const thirdIsPublic = Boolean(
+    envOrPublicOpts &&
+    typeof envOrPublicOpts === "object" &&
+    typeof envOrPublicOpts.verifier?.verify === "function",
+  )
+  if (
+    explicitPublicOpts !== null &&
+    explicitPublicOpts !== undefined &&
+    typeof explicitPublicOpts?.verifier?.verify !== "function"
+  ) {
+    throw new Error("public mode: publicOpts.verifier.verify is required")
+  }
+  const env = thirdIsPublic ? process.env : (envOrPublicOpts || process.env)
+  const publicOpts = explicitPublicOpts || (thirdIsPublic ? envOrPublicOpts : null)
+  if (env?.NAIA_DASHBOARD_PUBLIC === "1" && !publicOpts) {
+    throw new Error("public mode: publicOpts is required when NAIA_DASHBOARD_PUBLIC=1")
+  }
   const shortOpts = {
     ...shortLinkOpts,
-    tableFile: shortLinkOpts.tableFile || defaultTableFile(),
+    tableFile: shortLinkOpts.tableFile || defaultTableFile(env?.NAIA_SHORT_LINKS_FILE ? env : process.env),
   }
   if (!shortOpts.readTable) shortOpts.readTable = createTableReader(shortOpts.tableFile)
   return function handleRequest(req, res) {
+    // Check the login gate before anything else reads or strips its headers (messenger paths only).
+    if (!publicOpts) verifyMessengerGate(req, env)
+    stripUntrustedIdentityHeaders(req, env)
     // 0. 프록시 경고 머리글 감지 (FE 8장 145행)
-    if (req.headers["x-forwarded-for"] || req.headers["tailscale-user-login"]) {
+    // 공개 모드는 터널(cloudflared)이 앞에 서는 구성이라 x-forwarded-for 가 늘 붙는다. 경고는 내부 모드에서만.
+    if (!publicOpts && (req.headers["x-forwarded-for"] || req.headers["tailscale-user-login"])) {
       console.warn("[WARN] Proxy header detected (x-forwarded-for or tailscale-user-login). Reverse proxy / tailscale serve should not be used in front of dashboard.")
     }
 
@@ -387,6 +475,11 @@ export function createRequestHandler(nextHandler, shortLinkOpts = {}) {
     const rawPathname = qIdx >= 0 ? url.slice(0, qIdx) : url
     const rawQuery = qIdx >= 0 ? url.slice(qIdx) : ""
 
+    if (publicOpts) {
+      handlePublicRequest(req, res, rawPathname, rawQuery, nextHandler, shortOpts, publicOpts, env)
+      return
+    }
+
     if (rawPathname.toLowerCase().startsWith("/api/portal")) {
       const valResult = validatePortalPathname(rawPathname)
       if (!valResult.valid) {
@@ -397,9 +490,24 @@ export function createRequestHandler(nextHandler, shortLinkOpts = {}) {
       }
 
       const forwardPath = valResult.resolvedPathname + rawQuery
-      const apiPort = Number(process.env.NAIA_API_PORT) || 3141
+      if (isPublishPathname(valResult.resolvedPathname) && env.PUBLISH_GATEWAY_OVERWRITE_CONFIRMED !== "1") {
+        res.statusCode = 403
+        res.setHeader("content-type", "application/json; charset=utf-8")
+        res.setHeader("cache-control", "no-store")
+        res.end(JSON.stringify({
+          ok: false,
+          code: "publish_gateway_unconfirmed",
+          message: "관문의 계정 덮어쓰기 확인이 필요합니다.",
+          retryable: false,
+          request_id: randomUUID(),
+          operation_id: null,
+          issues: [],
+        }))
+        return
+      }
+      const apiPort = Number(env.NAIA_API_PORT) || 3141
       const secret = readProxySecret(apiPort)
-      proxyToApi(req, res, forwardPath, apiPort, secret)
+      proxyToApi(req, res, forwardPath, apiPort, secret, null, env)
       return
     }
 
@@ -419,18 +527,202 @@ export function createRequestHandler(nextHandler, shortLinkOpts = {}) {
   }
 }
 
+function sendPlain(res, status, text) {
+  res.statusCode = status
+  res.setHeader("content-type", "text/plain; charset=utf-8")
+  res.setHeader("cache-control", "no-store")
+  res.end(text)
+}
+
+/**
+ * 공개 모드 요청 처리 (읽기 전용 공개 문서 화면)
+ * - GET·HEAD 말고는 405
+ * - 문서 화면에 필요한 경로(/docs, /_next/static, /api/portal, /d/키, /favicon.ico)만, 나머지 404(/board·메신저 포함)
+ * - 서명된 신원 토큰(Cf-Access-Jwt-Assertion)이 맞아야 하고, 아니면 403
+ * - API 에는 검증한 메일만 넘기고, 그룹·폴더 권한은 API 가 권한표로 거른다
+ */
+export function handlePublicRequest(req, res, rawPathname, rawQuery, nextHandler, shortOpts, publicOpts, env = process.env) {
+  const method = (req.method || "GET").toUpperCase()
+  if (method !== "GET" && method !== "HEAD") {
+    res.setHeader("allow", "GET, HEAD")
+    return sendPlain(res, 405, "Method Not Allowed")
+  }
+
+  const kind = classifyPublicPath(rawPathname)
+  if (!kind) return sendPlain(res, 404, "Not Found")
+
+  const rawToken = req.headers["cf-access-jwt-assertion"]
+  const token = Array.isArray(rawToken) ? rawToken[0] : rawToken
+  publicOpts.verifier.verify(token).then(
+    (result) => {
+      if (!result.ok) {
+        console.warn(`[public] 신원 토큰 거부: ${result.reason} ${method} ${rawPathname}`)
+        return sendPlain(res, 403, "Forbidden")
+      }
+      const identity = { email: result.email }
+      res.setHeader("Content-Security-Policy", "frame-ancestors 'self'")
+      res.setHeader("X-Frame-Options", "SAMEORIGIN")
+
+      if (kind === "redirect-docs") {
+        res.statusCode = 302
+        res.setHeader("location", "/docs")
+        res.setHeader("cache-control", "no-store")
+        return res.end()
+      }
+      if (kind === "api") {
+        const valResult = validatePortalPathname(rawPathname)
+        if (!valResult.valid) {
+          res.statusCode = 400
+          res.setHeader("content-type", "application/json; charset=utf-8")
+          return res.end(JSON.stringify({ error: "Invalid path" }))
+        }
+        const apiPort = publicApiPort(publicOpts, env)
+        if (!apiPort) return sendPlain(res, 503, "Service Unavailable")
+        const secret = readProxySecret(apiPort)
+        return proxyToApi(req, res, valResult.resolvedPathname + rawQuery, apiPort, secret, null, identity, env)
+      }
+      if (kind === "short") {
+        return handlePublicShortLink(req, res, rawPathname, shortOpts, publicOpts, identity, env)
+      }
+      pinCacheControl(res, rawPathname.startsWith("/_next/static/") ? "public, max-age=31536000, immutable" : "private, no-store")
+      return nextHandler(req, res)
+    },
+    (err) => {
+      console.warn(`[public] 신원 토큰 검증 오류: ${err?.message}`)
+      sendPlain(res, 403, "Forbidden")
+    },
+  )
+}
+
+/**
+ * 공개 모드 문서 서버 포트. 기동 때 정한 값(publicOpts.apiPort)을 쓰고, 없으면 환경 변수.
+ * 둘 다 없거나 내부 문서 서버(3141)면 null — 권한표 없는 내부 서버로 넘기지 않는다.
+ */
+export function publicApiPort(publicOpts, env = process.env) {
+  const p = Number(publicOpts?.apiPort ?? env?.NAIA_API_PORT)
+  if (!Number.isInteger(p) || p < 1 || p > 65535 || p === 3141) return null
+  return p
+}
+
+/**
+ * 응답의 cache-control 을 이 값으로 고정한다(뒤에서 Next 가 다른 값을 붙여도 덮이지 않게).
+ */
+export function pinCacheControl(res, value) {
+  const origSet = res.setHeader.bind(res)
+  origSet("cache-control", value)
+  res.setHeader = (name, v) => (String(name).toLowerCase() === "cache-control" ? res : origSet(name, v))
+  if (typeof res.appendHeader === "function") {
+    const origAppend = res.appendHeader.bind(res)
+    res.appendHeader = (name, v) => (String(name).toLowerCase() === "cache-control" ? res : origAppend(name, v))
+  }
+  const origWriteHead = res.writeHead.bind(res)
+  res.writeHead = (status, ...rest) => {
+    const args = rest.map((a) => {
+      if (Array.isArray(a)) {
+        // [이름, 값, 이름, 값 …] 꼴
+        const out = []
+        for (let i = 0; i + 1 < a.length; i += 2) {
+          if (String(a[i]).toLowerCase() !== "cache-control") out.push(a[i], a[i + 1])
+        }
+        return out
+      }
+      if (a && typeof a === "object") {
+        const out = {}
+        for (const [k, v] of Object.entries(a)) {
+          if (k.toLowerCase() !== "cache-control") out[k] = v
+        }
+        return out
+      }
+      return a
+    })
+    return origWriteHead(status, ...args)
+  }
+}
+
+/** 문서 서버에 이 사람이 그 문서를 읽을 수 있는지 묻는다(204 면 참). 오류·시간 초과는 거짓. */
+export function checkPublicDocAccess(req, source, docPath, identity, apiPort, secret, env = process.env) {
+  return new Promise((resolve) => {
+    const headers = buildProxyHeaders({ headers: req.headers, method: "GET" }, req.socket, secret, apiPort, identity, env)
+    delete headers["content-length"]
+    delete headers["transfer-encoding"]
+    const qs = `source=${encodeURIComponent(source)}&path=${encodeURIComponent(docPath)}`
+    const r = http.request(
+      { hostname: "127.0.0.1", port: apiPort, path: `/api/portal/access-check?${qs}`, method: "GET", headers, timeout: 5000 },
+      (apiRes) => {
+        apiRes.resume()
+        resolve(apiRes.statusCode === 204)
+      },
+    )
+    r.on("timeout", () => {
+      r.destroy()
+      resolve(false)
+    })
+    r.on("error", () => resolve(false))
+    r.end()
+  })
+}
+
+/**
+ * 공개 모드 짧은 주소: 가리키는 문서를 이 사람이 읽을 수 있을 때만 긴 주소로 넘긴다.
+ * 없는 키·잘못된 주소·권한 밖은 모두 같은 404(넘길 주소 없음)라 닫힌 문서가 있는지도 드러나지 않는다.
+ */
+export function handlePublicShortLink(req, res, rawPathname, shortOpts, publicOpts, identity, env = process.env) {
+  const notFound = () => sendPlain(res, 404, "Short link not found")
+  if (rawPathname === "/d/") return notFound()
+  const result = resolveShortPath(rawPathname, { table: shortOpts.readTable(), tabFor: shortOpts.tabFor })
+  if (result.status !== 302 || !result.source || !result.path) return notFound()
+  const check = publicOpts.accessCheck ||
+    ((r, source, docPath, ident) => {
+      const apiPort = publicApiPort(publicOpts, env)
+      if (!apiPort) return false
+      return checkPublicDocAccess(r, source, docPath, ident, apiPort, readProxySecret(apiPort), env)
+    })
+  Promise.resolve(check(req, result.source, result.path, identity)).then(
+    (ok) => {
+      if (!ok) return notFound()
+      res.statusCode = 302
+      res.setHeader("location", result.location)
+      res.setHeader("cache-control", "no-store")
+      res.end()
+    },
+    () => notFound(),
+  )
+}
+
+/**
+ * fd of a port inherited through systemd socket activation, or null to listen with -p/-H.
+ * sd_listen_fds rules: trust it only when LISTEN_PID is this process; fds start at 3; accept exactly one.
+ */
+export function inheritedSocketFd(env = process.env, pid = process.pid) {
+  if (env.LISTEN_FDS === undefined || env.LISTEN_PID !== String(pid)) return null
+  if (env.LISTEN_FDS !== "1") throw new Error(`Expected one inherited socket, got LISTEN_FDS=${env.LISTEN_FDS}`)
+  return 3
+}
+
 /**
  * 대시보드 서버 기동
  */
-export async function startServer(customArgv = process.argv.slice(2), customEnv = process.env) {
+export async function startServer(customArgv = process.argv.slice(2), customEnv = process.env, deps = {}) {
+  if (!process.env.NAIA_PERSONAL_SCHEDULE_DIR) {
+    process.env.NAIA_PERSONAL_SCHEDULE_DIR = path.join(__dirname, "data", "schedule", "personal")
+  }
   const { port, host } = parseArgs(customArgv, customEnv)
+  // 공개 모드는 값이 모자라면 기동하지 않는다(열린 채로 뜨지 않게).
+  const publicConfig = publicConfigFromEnv(customEnv, host)
+  const publicOpts = publicConfig ? { verifier: createAccessVerifier(publicConfig), apiPort: publicConfig.apiPort } : null
+  if (publicOpts) console.log(`> Public read-only mode: Access team ${publicConfig.teamDomain}, ${publicConfig.audiences.length} audience(s)`)
   const dev = customEnv.NODE_ENV === "development" || (
     customEnv.NODE_ENV !== "production" && !fs.existsSync(path.join(__dirname, ".next", "BUILD_ID"))
   )
 
-  const nextApp = next({ dev, hostname: host, port, dir: __dirname })
+  const createNextApp = deps.createNextApp || next
+  const nextApp = createNextApp({ dev, hostname: host, port, dir: __dirname })
   await nextApp.prepare()
   const nextHandler = nextApp.getRequestHandler()
+
+  if (!publicOpts && !readGateSecret(customEnv)) {
+    console.warn("[WARN] Login gate secret unavailable (NAIA_GATE_SECRET_FILE): people get 401 on the messenger")
+  }
 
   // 짧은 주소가 넘겨 줄 때 문서 탭을 붙이려고 대시보드 탭 규칙을 읽는다. 못 읽으면 탭 없이 넘긴다(화면이 탭을 고른다).
   let tabFor
@@ -441,13 +733,14 @@ export async function startServer(customArgv = process.argv.slice(2), customEnv 
     console.warn("[WARN] short links: tab rules unavailable, redirecting without tab:", err?.message)
   }
 
-  const requestHandler = createRequestHandler(nextHandler, { tabFor })
+  const requestHandler = createRequestHandler(nextHandler, { tabFor }, customEnv, publicOpts)
   const server = http.createServer(requestHandler)
+  const fd = inheritedSocketFd(customEnv)
 
   return new Promise((resolve, reject) => {
     server.on("error", reject)
-    server.listen(port, host, () => {
-      console.log(`> Dashboard ready on http://${host}:${port}`)
+    server.listen(fd === null ? { port, host } : { fd }, () => {
+      console.log(fd === null ? `> Dashboard ready on http://${host}:${port}` : `> Dashboard ready on inherited socket fd ${fd}`)
       resolve(server)
     })
   })

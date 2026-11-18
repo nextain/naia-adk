@@ -1,5 +1,6 @@
 import test, { describe, it } from "node:test"
 import assert from "node:assert/strict"
+import crypto from "node:crypto"
 import http from "node:http"
 import { execSync } from "node:child_process"
 import {
@@ -7,11 +8,47 @@ import {
   validatePortalPathname,
   proxyToApi,
   createRequestHandler,
+  startServer,
   parseArgs,
   normalizeIp,
+  inheritedSocketFd,
 } from "./server.mjs"
+import { clearGateSecretCache } from "./identity-header-guard.mjs"
+
+describe("물려받은 포트 fd", () => {
+  it("LISTEN_PID 가 이 과정이고 LISTEN_FDS 가 1 이면 fd 3 을 쓴다", () => {
+    assert.equal(inheritedSocketFd({ LISTEN_FDS: "1", LISTEN_PID: "42" }, 42), 3)
+  })
+  it("없거나 다른 과정 몫이면 -p/-H 로 listen 한다", () => {
+    assert.equal(inheritedSocketFd({}, 42), null)
+    assert.equal(inheritedSocketFd({ LISTEN_FDS: "1" }, 42), null)
+    assert.equal(inheritedSocketFd({ LISTEN_FDS: "1", LISTEN_PID: "41" }, 42), null)
+  })
+  it("이 과정 몫인데 하나가 아니면 고르지 않고 멈춘다", () => {
+    assert.throws(() => inheritedSocketFd({ LISTEN_FDS: "2", LISTEN_PID: "42" }, 42), /LISTEN_FDS=2/)
+    assert.throws(() => inheritedSocketFd({ LISTEN_FDS: "0", LISTEN_PID: "42" }, 42), /LISTEN_FDS=0/)
+  })
+})
 
 describe("Server.mjs 단위 시험", () => {
+  it("일정 화면 요청은 신원 검증 표시를 제거한 뒤 화면으로 넘긴다", () => {
+    const req = {
+      url: "/schedule",
+      headers: { host: "127.0.0.1:3142", "x-naia-gate-verified": "forged", "x-naia-actor-id": "forged" },
+      rawHeaders: ["Host", "127.0.0.1:3142", "X-Naia-Gate-Verified", "forged", "X-Naia-Actor-Id", "forged"],
+      socket: { remoteAddress: "192.0.2.10" },
+    }
+    let forwarded = false
+    const handler = createRequestHandler((incoming) => {
+      forwarded = true
+      assert.equal(incoming.headers["x-naia-gate-verified"], undefined)
+      assert.equal(incoming.headers["x-naia-actor-id"], undefined)
+      assert.deepEqual(incoming.rawHeaders, ["Host", "127.0.0.1:3142"])
+    })
+    handler(req, { setHeader() {} })
+    assert.equal(forwarded, true)
+  })
+
   it("server.mjs 모듈을 import했을 때 listen 소켓을 열지 않는다", async () => {
     // 1. server.mjs 모듈 import
     const serverModule = await import("./server.mjs")
@@ -121,11 +158,12 @@ describe("Server.mjs 단위 시험", () => {
 
   it("쓰기 메서드(POST, PUT, PATCH, DELETE)에서 Origin이 scheme://Host와 일치할 때만 x-naia-origin-ok: 1을 붙인다", () => {
     const fakeSocket = { remoteAddress: "127.0.0.1", localAddress: "127.0.0.1" }
-    
+
     // 1. POST + 일치하는 Origin
     const req1 = {
       method: "POST",
       headers: { host: "127.0.0.1:3172", origin: "http://127.0.0.1:3172" },
+      rawHeaders: ["host", "127.0.0.1:3172", "origin", "http://127.0.0.1:3172"],
       socket: fakeSocket,
     }
     const h1 = buildProxyHeaders(req1, fakeSocket, "secret", 3171)
@@ -135,6 +173,7 @@ describe("Server.mjs 단위 시험", () => {
     const req2 = {
       method: "POST",
       headers: { host: "127.0.0.1:3172", origin: "http://127.0.0.1:3179" },
+      rawHeaders: ["host", "127.0.0.1:3172", "origin", "http://127.0.0.1:3179"],
       socket: fakeSocket,
     }
     const h2 = buildProxyHeaders(req2, fakeSocket, "secret", 3171)
@@ -144,6 +183,7 @@ describe("Server.mjs 단위 시험", () => {
     const req3 = {
       method: "GET",
       headers: { host: "127.0.0.1:3172", origin: "http://127.0.0.1:3172" },
+      rawHeaders: ["host", "127.0.0.1:3172", "origin", "http://127.0.0.1:3172"],
       socket: fakeSocket,
     }
     const h3 = buildProxyHeaders(req3, fakeSocket, "secret", 3171)
@@ -157,6 +197,105 @@ describe("Server.mjs 단위 시험", () => {
     })
     assert.equal(port, 3175)
     assert.equal(host, "127.0.0.1")
+  })
+})
+
+describe("메신저 SSE 프록시", () => {
+  it("API 쪽이 응답 도중 끊기면 브라우저 쪽 연결도 1초 안에 끊긴다(메신저 SSE 다시 붙기)", async () => {
+    const dummyApi = http.createServer((apiReq, apiRes) => {
+      apiRes.writeHead(200, { "content-type": "text/event-stream" })
+      apiRes.write(": hello\n\n")
+      setTimeout(() => apiRes.socket.destroy(), 50)
+    })
+    await new Promise((resolve) => dummyApi.listen(0, "127.0.0.1", resolve))
+    const apiPort = dummyApi.address().port
+    const dashServer = http.createServer((req, res) => {
+      proxyToApi(req, res, "/api/portal/messenger/stream", apiPort, "test-secret", req.socket)
+    })
+    await new Promise((resolve) => dashServer.listen(0, "127.0.0.1", resolve))
+    const dashPort = dashServer.address().port
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("browser side stayed open")), 1000)
+        const clientReq = http.get(`http://127.0.0.1:${dashPort}/api/portal/messenger/stream`, (clientRes) => {
+          clientRes.resume()
+          clientRes.on("close", () => {
+            clearTimeout(timer)
+            resolve()
+          })
+        })
+        clientReq.on("error", () => {})
+      })
+    } finally {
+      if (typeof dashServer.closeAllConnections === "function") {
+        dashServer.closeAllConnections()
+      }
+      if (typeof dummyApi.closeAllConnections === "function") {
+        dummyApi.closeAllConnections()
+      }
+      await new Promise((resolve) => dashServer.close(resolve))
+      await new Promise((resolve) => dummyApi.close(resolve))
+    }
+  })
+
+  it("게시 게이트 확인 표시가 꺼지면 문서 발견·상태·미리보기·할 일·요청·승인과 인코딩 별칭을 프록시 전에 403으로 거절한다", (t) => {
+    const upstream = t.mock.method(http, "request", () => assert.fail("차단된 승인 요청이 API 프록시를 호출함"))
+    const paths = [
+      "/api/portal/publish/document?source=adk&path=article.md",
+      "/api/portal/publish/test-post/status",
+      "/api/portal/publish/test-post/preview?review_id=review&revision_id=revision",
+      "/api/portal/publish/review-todos",
+      "/api/portal/publish/operations/op-test",
+      "/api/portal/publish/test-post/request-review",
+      "/api/portal/%70ublish/document?source=adk&path=article.md",
+      "/api/portal/publish/test-post/approve",
+      "/api/portal/publish/test-post/%61pprove",
+      "/api/portal/publish/test-post/appro%76e",
+      "/api/portal/publish/test-post/approv%65?ignored=%2f",
+      "/api/portal/publish/test-post/%61%70%70%72%6f%76%65",
+      "/api/portal/publish/test-post/%61%70%70%72%6F%76%65",
+      "/api/portal/%70ublish/test-post/%61pprove",
+      "/api/portal/publish/%74est-post/%61pprove",
+      "/api/portal/publish/test-post//approve",
+      "/api/portal//publish//test-post///%61pprove/",
+      "/api/portal/publish/test-post/approve/",
+    ]
+    const requestIds = new Set()
+    for (const flag of [undefined, "", "0", "true"]) {
+      const handler = createRequestHandler(() => assert.fail("승인 차단 뒤 화면 처리기로 넘어감"), {}, { PUBLISH_GATEWAY_OVERWRITE_CONFIRMED: flag })
+      for (const [index, url] of paths.entries()) {
+        const headers = { host: "localhost:3142" }
+        const req = { method: index < 5 || index === 6 ? "GET" : "POST", url, headers, rawHeaders: Object.entries(headers).flat(), socket: { remoteAddress: "127.0.0.1" } }
+        const res = { statusCode: 0, headers: {}, body: "", setHeader(key, value) { this.headers[key] = value }, end(value) { this.body = value } }
+        handler(req, res)
+        assert.equal(res.statusCode, 403, `${url}, flag=${flag}`)
+        const body = JSON.parse(res.body)
+        assert.deepEqual(Object.keys(body).sort(), ["code", "issues", "message", "ok", "operation_id", "request_id", "retryable"])
+        assert.equal(body.ok, false)
+        assert.equal(body.code, "publish_gateway_unconfirmed")
+        assert.equal(body.message, "관문의 계정 덮어쓰기 확인이 필요합니다.")
+        assert.equal(body.retryable, false)
+        assert.match(body.request_id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+        assert.equal(requestIds.has(body.request_id), false)
+        requestIds.add(body.request_id)
+        assert.equal(body.operation_id, null)
+        assert.deepEqual(body.issues, [])
+        assert.equal(res.headers["content-type"], "application/json; charset=utf-8")
+        assert.equal(res.headers["cache-control"], "no-store")
+      }
+    }
+    const handler = createRequestHandler(() => assert.fail("잘못된 경로가 화면 처리기로 넘어감"), {}, {})
+    for (const url of [
+      "/api/portal/publish/test-post%2fapprove",
+      "/api/portal/publish/test-post%2Fapprove",
+      "/api/portal/publish/test-post/%2e%2e/approve",
+    ]) {
+      const req = { method: "POST", url, headers: { host: "localhost:3142" }, rawHeaders: ["host", "localhost:3142"], socket: { remoteAddress: "127.0.0.1" } }
+      const res = { statusCode: 0, setHeader() {}, end() {} }
+      handler(req, res)
+      assert.equal(res.statusCode, 400, url)
+    }
+    assert.equal(upstream.mock.callCount(), 0)
   })
 })
 
@@ -520,3 +659,258 @@ describe("문서 짧은 주소", () => {
     })
   })
 })
+
+describe("startServer 공개 모드 publicOpts 전달 회귀 시험", () => {
+  const TEAM = "example-test.cloudflareaccess.com"
+  const AUD = "aud0123456789abcdef"
+  const KID = "kid-start-1"
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
+  const jwk = { ...publicKey.export({ format: "jwk" }), kid: KID, alg: "RS256", use: "sig" }
+
+  function signAccessJwt(email = "Staff@Example.com") {
+    const nowSec = Math.floor(Date.now() / 1000)
+    const header = Buffer.from(JSON.stringify({ alg: "RS256", kid: KID, typ: "JWT" })).toString("base64url")
+    const payload = Buffer.from(
+      JSON.stringify({ iss: `https://${TEAM}`, aud: [AUD], email, exp: nowSec + 600, nbf: nowSec - 10, iat: nowSec - 10 }),
+    ).toString("base64url")
+    const sig = crypto.sign("RSA-SHA256", Buffer.from(`${header}.${payload}`), privateKey).toString("base64url")
+    return `${header}.${payload}.${sig}`
+  }
+
+  function httpCall(port, { method = "GET", path: reqPath = "/", headers = {}, body } = {}) {
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        { host: "127.0.0.1", port, method, path: reqPath, headers: { host: `127.0.0.1:${port}`, ...headers } },
+        (res) => {
+          let data = ""
+          res.setEncoding("utf8")
+          res.on("data", (c) => (data += c))
+          res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body: data }))
+        },
+      )
+      req.on("error", reject)
+      if (body) req.write(body)
+      req.end()
+    })
+  }
+
+  async function closeServer(srv) {
+    if (!srv) return
+    srv.closeAllConnections?.()
+    await new Promise((resolve) => srv.close(resolve))
+  }
+
+  it("NAIA_DASHBOARD_PUBLIC=1 로 startServer 를 띄우면 토큰 없는 요청이 내부 모드로 통과하지 않고 공개 모드 403/404/405 로 차단된다", async (t) => {
+    const apiCalls = []
+    const api = http.createServer((req, res) => {
+      apiCalls.push({ method: req.method, url: req.url, headers: { ...req.headers } })
+      res.statusCode = 200
+      res.setHeader("content-type", "application/json")
+      res.end(JSON.stringify({ ok: true }))
+    })
+    await new Promise((resolve) => api.listen(0, "127.0.0.1", resolve))
+    const apiPort = api.address().port
+
+    t.mock.method(globalThis, "fetch", async (url) => {
+      assert.equal(String(url), `https://${TEAM}/cdn-cgi/access/certs`)
+      return { ok: true, status: 200, json: async () => ({ keys: [jwk] }) }
+    })
+
+    const nextCalls = []
+    let dashServer
+    try {
+      dashServer = await startServer(
+        ["-H", "127.0.0.1", "-p", "0"],
+        {
+          NODE_ENV: "production",
+          NAIA_DASHBOARD_PUBLIC: "1",
+          NAIA_ACCESS_TEAM_DOMAIN: TEAM,
+          NAIA_ACCESS_AUD: AUD,
+          NAIA_API_PORT: String(apiPort),
+        },
+        {
+          createNextApp: () => ({
+            prepare: async () => {},
+            getRequestHandler: () => (req, res) => {
+              nextCalls.push(req.url)
+              res.statusCode = 200
+              res.end("next-ok")
+            },
+          }),
+        },
+      )
+      const dashPort = dashServer.address().port
+
+      // 1. 토큰 없는 /docs, /api/portal/doc 요청은 내부 모드로 통과하지 않고 403 이어야 한다.
+      const unauthDocs = await httpCall(dashPort, { path: "/docs" })
+      assert.equal(unauthDocs.status, 403)
+      assert.equal(nextCalls.length, 0)
+
+      const unauthApi = await httpCall(dashPort, { path: "/api/portal/doc?source=adk&path=common%2Fok.md" })
+      assert.equal(unauthApi.status, 403)
+      assert.equal(apiCalls.length, 0)
+
+      const unauthShort = await httpCall(dashPort, { path: "/d/abcdef" })
+      assert.equal(unauthShort.status, 403)
+
+      // 2. 공개 모드 비허용 경로(/board)는 404, 쓰기 메서드(POST)는 405 로 거절된다.
+      const boardRes = await httpCall(dashPort, { path: "/board" })
+      assert.equal(boardRes.status, 404)
+      assert.equal(nextCalls.length, 0)
+
+      const postPublish = await httpCall(dashPort, { method: "POST", path: "/api/portal/publish/test-post/approve" })
+      assert.equal(postPublish.status, 405)
+      assert.equal(apiCalls.length, 0)
+
+      // 3. 서명된 Access JWT 가 있으면 공개 경로(/docs, /api/portal)만 검증된 메일과 함께 통과한다.
+      const jwt = signAccessJwt("Staff@Example.com")
+      const authDocs = await httpCall(dashPort, { path: "/docs", headers: { "cf-access-jwt-assertion": jwt } })
+      assert.equal(authDocs.status, 200)
+      assert.equal(authDocs.headers["cache-control"], "private, no-store")
+      assert.deepEqual(nextCalls, ["/docs"])
+
+      const authBoard = await httpCall(dashPort, { path: "/board", headers: { "cf-access-jwt-assertion": jwt } })
+      assert.equal(authBoard.status, 404)
+      assert.deepEqual(nextCalls, ["/docs"])
+
+      const authApi = await httpCall(dashPort, {
+        path: "/api/portal/doc?source=adk&path=common%2Fok.md",
+        headers: {
+          "cf-access-jwt-assertion": jwt,
+          cookie: "CF_Authorization=secret",
+          "x-naia-user-email": "boss@example.com",
+        },
+      })
+      assert.equal(authApi.status, 200)
+      assert.equal(apiCalls.length, 1)
+      assert.equal(apiCalls[0].headers["x-naia-user-email"], "staff@example.com")
+      assert.equal(apiCalls[0].headers.cookie, undefined)
+      assert.equal(apiCalls[0].headers["cf-access-jwt-assertion"], undefined)
+    } finally {
+      await closeServer(dashServer)
+      await closeServer(api)
+    }
+  })
+
+  it("공개 모드 startServer 에서도 customEnv 의 신원 머리 가드 설정(NAIA_GATE_SECRET_FILE·NAIA_NOTE_USER_HEADER)을 함께 적용한다", async (t) => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "start-public-env-"))
+    const gateSecret = "gate-secret-" + crypto.randomBytes(24).toString("hex")
+    const gateFile = path.join(tmpDir, "gate.key")
+    fs.writeFileSync(gateFile, gateSecret, { mode: 0o600 })
+    clearGateSecretCache()
+
+    t.mock.method(globalThis, "fetch", async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ keys: [jwk] }),
+    }))
+
+    const capturedHeaders = []
+    let dashServer
+    try {
+      dashServer = await startServer(
+        ["-H", "127.0.0.1", "-p", "0"],
+        {
+          NODE_ENV: "production",
+          NAIA_DASHBOARD_PUBLIC: "1",
+          NAIA_ACCESS_TEAM_DOMAIN: TEAM,
+          NAIA_ACCESS_AUD: AUD,
+          NAIA_API_PORT: "3144",
+          NAIA_GATE_SECRET_FILE: gateFile,
+          NAIA_NOTE_USER_HEADER: "x-note-user",
+        },
+        {
+          createNextApp: () => ({
+            prepare: async () => {},
+            getRequestHandler: () => (req, res) => {
+              capturedHeaders.push({ ...req.headers })
+              res.statusCode = 200
+              res.end("ok")
+            },
+          }),
+        },
+      )
+      const dashPort = dashServer.address().port
+      const jwt = signAccessJwt("staff@example.com")
+
+      const noJwtRes = await httpCall(dashPort, { path: "/docs" })
+      assert.equal(noJwtRes.status, 403)
+      assert.equal(capturedHeaders.length, 0)
+
+      const forgedRes = await httpCall(dashPort, {
+        path: "/docs",
+        headers: {
+          "cf-access-jwt-assertion": jwt,
+          "x-note-user": "boss",
+        },
+      })
+      assert.equal(forgedRes.status, 200)
+      assert.equal(capturedHeaders.at(-1)["x-note-user"], undefined)
+
+      const verifiedRes = await httpCall(dashPort, {
+        path: "/docs",
+        headers: {
+          "cf-access-jwt-assertion": jwt,
+          "x-naia-gate-secret": gateSecret,
+          "x-note-user": "staff",
+        },
+      })
+      assert.equal(verifiedRes.status, 200)
+      assert.equal(capturedHeaders.at(-1)["x-note-user"], "staff")
+      assert.equal(capturedHeaders.at(-1)["x-naia-gate-secret"], undefined)
+    } finally {
+      clearGateSecretCache()
+      await closeServer(dashServer)
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  it("내부 모드 startServer 는 기존처럼 customEnv 를 유지해 게시 확인 미설정 차단과 일반 화면을 처리한다", async () => {
+    const nextCalls = []
+    let dashServer
+    try {
+      dashServer = await startServer(
+        ["-H", "127.0.0.1", "-p", "0"],
+        {
+          NODE_ENV: "production",
+          PUBLISH_GATEWAY_OVERWRITE_CONFIRMED: "0",
+        },
+        {
+          createNextApp: () => ({
+            prepare: async () => {},
+            getRequestHandler: () => (req, res) => {
+              nextCalls.push(req.url)
+              res.statusCode = 200
+              res.end("internal-ok")
+            },
+          }),
+        },
+      )
+      const dashPort = dashServer.address().port
+
+      const docsRes = await httpCall(dashPort, { path: "/docs" })
+      assert.equal(docsRes.status, 200)
+      assert.deepEqual(nextCalls, ["/docs"])
+
+      const publishRes = await httpCall(dashPort, { method: "POST", path: "/api/portal/publish/test-post/approve" })
+      assert.equal(publishRes.status, 403)
+      assert.equal(JSON.parse(publishRes.body).code, "publish_gateway_unconfirmed")
+    } finally {
+      await closeServer(dashServer)
+    }
+  })
+
+  it("createRequestHandler 는 NAIA_DASHBOARD_PUBLIC=1 에서 publicOpts 가 없거나 잘못되면 열리지 않고 예외를 던진다", () => {
+    const noop = () => {}
+    assert.throws(
+      () => createRequestHandler(noop, {}, { NAIA_DASHBOARD_PUBLIC: "1" }),
+      /publicOpts is required/,
+    )
+    assert.throws(
+      () => createRequestHandler(noop, {}, {}, {}),
+      /verifier\.verify is required/,
+    )
+  })
+})
+
+import "./identity-header-guard.test.mjs"
