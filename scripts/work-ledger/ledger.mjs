@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync, readFileSync } from "node:fs";
 import {
   mkdir,
   open,
@@ -19,6 +20,74 @@ export function safeName(value) {
 }
 export function ledgerPath(root, role) {
   return path.join(root, ".agents/work/ledger", `${safeName(role)}.json`);
+}
+export function resolveConfigPath(root, configPath) {
+  return configPath
+    ? path.resolve(root, configPath)
+    : path.join(root, "config/work-ledger.json");
+}
+export async function loadLedgerConfig({
+  root,
+  configPath,
+  role,
+  requireConfig = false,
+  requireRole = Boolean(role),
+} = {}) {
+  const configFile = resolveConfigPath(root, configPath);
+  let config = {};
+  let loaded = false;
+  try {
+    config = JSON.parse(await readFile(configFile, "utf8"));
+    loaded = true;
+  } catch (error) {
+    if (error.code !== "ENOENT" || configPath || requireConfig) throw error;
+  }
+  let roleConfig;
+  if (loaded && role !== undefined) {
+    roleConfig = config.roles?.find((entry) => entry.role === role);
+    if (requireRole && !roleConfig) throw new Error("Role missing in configuration");
+  }
+  return { configFile, config, roleConfig, loaded };
+}
+export function runtimeEnv(env = process.env) {
+  return {
+    ...env,
+    XDG_RUNTIME_DIR: env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? ""}`,
+  };
+}
+// The runner receives an argv array, never shell text. Tests inject a fake.
+export function systemRunner(command, args, options = {}) {
+  if (process.env.NODE_TEST_CONTEXT || process.env.ADK_FORBID_SYSTEM_RUNNER === "1")
+    throw new Error("System runner forbidden in tests; inject a runner");
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) =>
+      code === 0 ? resolve(stdout) : reject(new Error(stderr.trim() || `${command} exited ${code}`)),
+    );
+  });
+}
+// Process identity = pid + kernel start time, so a reused pid is not mistaken for the worker.
+export function processStart(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (!existsSync("/proc/self/stat")) {
+    try {
+      process.kill(pid, 0);
+      return "unknown";
+    } catch {
+      return null;
+    }
+  }
+  try {
+    const raw = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
+    return fields[0] === "Z" ? null : fields[19];
+  } catch {
+    return null;
+  }
 }
 // Kernel locks survive stale lock files and release automatically after a crash.
 // The helper holds flock until its parent closes stdin (including on SIGKILL).
@@ -86,10 +155,21 @@ export function validDate(value) {
       value.replace(/Z$/, value.includes(".") ? "Z" : ".000Z")
   );
 }
-const isObject = (value) =>
+export const isObject = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
-const oneLine = (value) =>
-  typeof value === "string" && value.trim() !== "" && !/[\r\n]/ .test(value);
+export const oneLine = (value) =>
+  typeof value === "string" && value.trim() !== "" && !/[\r\n]/.test(value);
+export const isWorkerItem = (item) => item?.kind === "worker";
+export function validUnitName(value) {
+  return (
+    oneLine(value) &&
+    Buffer.byteLength(value) <= 255 &&
+    /^[a-zA-Z0-9][a-zA-Z0-9:_.@-]*\.(?:service|scope)$/.test(value)
+  );
+}
+export function validToolName(value) {
+  return oneLine(value) && /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(value);
+}
 export const MAX_HUMAN_DROPS = 2;
 export const MAX_HUMAN_DEFERS = 2;
 export function normalizeMsgId(msgId) {
@@ -147,6 +227,42 @@ function validDrive(drive) {
     Object.values(drive.alerts).every(validDate)
   );
 }
+function validWorkerItem(item, role) {
+  if (
+    item.kind !== "worker" ||
+    item.role !== role ||
+    (item.name !== undefined && !oneLine(item.name)) ||
+    (item.parent !== null &&
+      (item.parent === item.id ||
+        typeof item.parent !== "string" ||
+        !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(item.parent))) ||
+    (item.unit !== null && !validUnitName(item.unit)) ||
+    !validToolName(item.tool) ||
+    !["running", "done", "failed"].includes(item.status) ||
+    !validDate(item.started) ||
+    (item.status === "running" ? item.ended !== null : !validDate(item.ended)) ||
+    (item.result !== null && !oneLine(item.result)) ||
+    (item.status === "running"
+      ? item.exit !== null
+      : item.exit !== null && !Number.isInteger(item.exit)) ||
+    (item.pid !== undefined && item.pid !== null && (!Number.isInteger(item.pid) || item.pid <= 0)) ||
+    (item.start_token !== undefined && item.start_token !== null && !oneLine(item.start_token)) ||
+    (item.log !== undefined && item.log !== null && !oneLine(item.log)) ||
+    (item.cwd !== undefined && item.cwd !== null && !oneLine(item.cwd)) ||
+    (item.reason !== undefined && item.reason !== null && !oneLine(item.reason)) ||
+    (item.launch_pending !== undefined && typeof item.launch_pending !== "boolean") ||
+    (item.initial_result !== undefined &&
+      item.initial_result !== null &&
+      (!isObject(item.initial_result) ||
+        !Number.isInteger(item.initial_result.size) ||
+        item.initial_result.size < 0 ||
+        typeof item.initial_result.mtime_ns !== "string")) ||
+    item.worker !== null ||
+    item.drive !== undefined
+  )
+    return false;
+  return true;
+}
 export function validateLedger(ledger, role) {
   if (
     !ledger ||
@@ -174,13 +290,19 @@ export function validateLedger(ledger, role) {
       typeof item.note !== "string" ||
       !validDate(item.due) ||
       (item.created_at !== undefined && !validDate(item.created_at)) ||
+      (item.checked_at !== null && !validDate(item.checked_at))
+    )
+      throw new Error("Invalid ledger item");
+    if (isWorkerItem(item)) {
+      if (!validWorkerItem(item, role)) throw new Error("Invalid ledger item");
+    } else if (
+      (item.kind !== undefined && item.kind !== "task") ||
       !["open", "waiting_human", "escalated_human", "done", "dropped"].includes(item.status) ||
       (item.drop_count !== undefined &&
         (!Number.isInteger(item.drop_count) || item.drop_count < 0)) ||
       (item.defer_count !== undefined &&
         (!Number.isInteger(item.defer_count) || item.defer_count < 0)) ||
       (item.human_msg_id !== undefined && !oneLine(item.human_msg_id)) ||
-      (item.checked_at !== null && !validDate(item.checked_at)) ||
       (item.worker !== null &&
         (!item.worker ||
           typeof item.worker.done_file !== "string" ||
@@ -244,7 +366,12 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
   const root = path.resolve(o.root || process.cwd());
   if (command === "drive") {
     // One pass over every configured role: start workers for overdue items that carry an instruction.
-    const driveConfig = JSON.parse(await readFile(o.config ? path.resolve(root, o.config) : path.join(root, "config/work-ledger.json"), "utf8"));
+    const { config: driveConfig } = await loadLedgerConfig({
+      root,
+      configPath: o.config,
+      requireConfig: true,
+      requireRole: false,
+    });
     return (await import("./drive.mjs")).tick({ root, config: driveConfig, now: clock(), dry: o.dry === true, env, freeGb });
   }
   const role = safeName(o.role);
@@ -256,18 +383,11 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
         .join("\n") || "(빈 장부)"
     );
   }
-  let roleConfig;
-  let config = {};
-  const configFile = o.config
-    ? path.resolve(root, o.config)
-    : path.join(root, "config/work-ledger.json");
-  try {
-    config = JSON.parse(await readFile(configFile, "utf8"));
-    roleConfig = config.roles?.find((entry) => entry.role === role);
-    if (!roleConfig) throw new Error("Role missing in configuration");
-  } catch (error) {
-    if (error.code !== "ENOENT" || o.config) throw error;
-  }
+  const { configFile, config, roleConfig } = await loadLedgerConfig({
+    root,
+    configPath: o.config,
+    role,
+  });
   const instructed = Boolean(o.prompt || o["result-file"] || o.model);
   const drive =
     ["adopt", "start", "attach", "confirm"].includes(command) || (command === "add" && instructed)
@@ -308,7 +428,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
         );
       if (hasHumanMsgId(normalizedMsgId)) {
         const sameMsgItems = l.items.filter((i) =>
-          sameHumanMsgId(i.from?.msg_id, normalizedMsgId),
+          !isWorkerItem(i) && sameHumanMsgId(i.from?.msg_id, normalizedMsgId),
         );
         const totalDrops = sameMsgItems.reduce((sum, i) => sum + itemDropCount(i), 0);
         const totalDefers = sameMsgItems.reduce((sum, i) => sum + itemDeferCount(i), 0);
@@ -366,6 +486,8 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
     if (!["done", "drop", "touch", "due", "adopt", "start", "attach", "confirm"].includes(command))
       throw new Error("Commands: add due done drop touch report list adopt start attach confirm drive");
     const item = find(l);
+    if (isWorkerItem(item) && command !== "touch")
+      throw new Error(`Worker run item (${item.id}) is managed by worker-run.mjs`);
     if (command === "adopt") {
       if (driven(item)) throw new Error("Item already has an instruction file");
       if (item.status !== "open") throw new Error("adopt requires an open item");

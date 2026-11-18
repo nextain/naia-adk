@@ -13,9 +13,12 @@ import {
   driven,
   closedProperly,
   normalizeMsgId,
+  isWorkerItem,
+  loadLedgerConfig,
 } from "./ledger.mjs";
 import { createAdapter } from "./messenger.mjs";
 import { cleanReceipts, dueWake, receiptPath, reconcileCurrent } from "./due-timer.mjs";
+import { reconcileWorkerRuns } from "./worker-run.mjs";
 
 const DEFAULT_MAX_HUMAN_WAKES = 3;
 const MENTION_ONLY_MAX_WAKES = 1;
@@ -318,6 +321,8 @@ export async function watch({
   config,
   adapter,
   runner,
+  unitProbe,
+  pidProbe,
   configPath,
   now,
   clock = now === undefined ? Date.now : () => now,
@@ -331,7 +336,7 @@ export async function watch({
   const timerWarnings = [];
   if (config.due_timer?.enabled === true && Array.isArray(config.roles)) {
     try {
-      timerWarnings.push(...await reconcileCurrent({ root, config, roles: config.roles.map(entry => entry.role), now, runner, configPath, overdueViaWatch: true, pruneUnknownRoles: true }));
+      timerWarnings.push(...await reconcileCurrent({ root, config, roles: config.roles.map(entry => entry.role), now, runner, configPath, overdueViaWatch: true, pruneUnknownRoles: true, reconcileWorkers: false }));
     } catch (error) { timerWarnings.push(`timer: 못 걺 (${error.message})`); }
   }
   // Instructed items are driven on the watcher's own schedule. An item the pass
@@ -344,6 +349,22 @@ export async function watch({
     catch (error) { driveFailure = error.message || String(error); }
   }
   const handled = new Set(drive?.handled ?? []);
+  let workerReconcile = { checked: 0, closed: [], errors: [] };
+  if (Array.isArray(config.roles) && config.roles.length) {
+    try {
+      workerReconcile = await reconcileWorkerRuns({
+        root,
+        config,
+        configPath,
+        now,
+        runner,
+        unitProbe,
+        pidProbe,
+      });
+    } catch (error) {
+      workerReconcile = { checked: 0, closed: [], errors: [error.message || String(error)] };
+    }
+  }
   return withLock(stateFile, async () => {
     const warnings = [...timerWarnings];
     const roleMaxHumanWakes = resolveMaxHumanWakesByRole(config, warnings, _emitWarnings !== false);
@@ -535,7 +556,32 @@ export async function watch({
           `장부: .agents/work/ledger/${role}.json\n오류: ${driveErrors.join("\n")}`,
         );
       }
+      const workerProbeErrors = workerReconcile.errors.filter((text) => text.startsWith(`${role}/`));
+      if (workerProbeErrors.length) {
+        errors.push(`worker-reconcile:${role}`);
+        await wake(
+          role,
+          "worker-reconcile-error",
+          "감시 실패",
+          "일꾼 상태 확인 실패",
+          `장부: .agents/work/ledger/${role}.json\n오류: ${workerProbeErrors.join("\n")}`,
+        );
+      }
+      for (const closedWorker of workerReconcile.closed.filter((entry) => entry.role === role && entry.status === "failed")) {
+        const wakeReason =
+          closedWorker.reason === "unit-missing" || closedWorker.reason === "process-missing" || closedWorker.reason === "no-unit-or-pid"
+            ? "일꾼 유닛 사라짐"
+            : "일꾼 비정상 종료";
+        await wake(
+          role,
+          safeIdPart(`worker-dead-${closedWorker.id}`),
+          wakeReason,
+          closedWorker.title || closedWorker.id,
+          `일꾼 ID: ${closedWorker.id}\n부모 줄: ${closedWorker.parent ?? "(없음)"}\n도구: ${closedWorker.tool}\n유닛: ${closedWorker.unit ?? "(없음)"}\n사유: ${closedWorker.reason ?? "(없음)"}\n결과: ${closedWorker.result ?? "(없음)"}\n로그: ${closedWorker.log ?? "(없음)"}`,
+        );
+      }
       for (const item of ledger.items) {
+        if (isWorkerItem(item)) continue;
         const details = `출처: ${item.from.channel}/${item.from.msg_id}\n기한: ${item.due}\n결과: ${item.worker?.result || "(없음)"}`;
         if (item.status === "open" && Date.parse(item.due) < now && !handled.has(`${role}/${item.id}`)) {
           const key = JSON.stringify([role, item.id, "기한 넘음", item.due]);
@@ -1280,18 +1326,19 @@ export async function watch({
       errors,
       warnings,
       ...(drive ? { drive: { launched: drive.launched, alerts: drive.alerts, skipped: drive.skipped } } : {}),
+      ...(workerReconcile.closed.length ? { workerReconcile } : {}),
     };
   });
 }
 export async function main(args = process.argv.slice(2)) {
   const { opts } = parseArgs(args);
   const root = path.resolve(opts.root || process.cwd());
-  const config = JSON.parse(
-    await readFile(
-      path.resolve(root, opts.config || "config/work-ledger.json"),
-      "utf8",
-    ),
-  );
+  const { config } = await loadLedgerConfig({
+    root,
+    configPath: opts.config,
+    requireConfig: true,
+    requireRole: false,
+  });
   const result = await watch({
     root,
     config,
