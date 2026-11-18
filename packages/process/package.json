@@ -1,6 +1,6 @@
 {
   "name": "@naia-adk/process",
-  "version": "0.0.1",
+  "version": "2.0.0",
   "description": "Process spec — workflow patterns for naia (review→decide→execute, IDD, single-PR, etc). Zero runtime deps.",
   "type": "module",
   "main": "./dist/index.js",

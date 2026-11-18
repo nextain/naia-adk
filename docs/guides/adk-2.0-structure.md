@@ -53,7 +53,7 @@ Naia ADK 는 "AI 가 읽고 따르는 일하는 방식"을 저장소 하나에 �
 
 ## 4. 계보와 동기화
 
-- 기준판 판 번호는 `VERSION` 과 `adk.json` 의 `adk_version` 에 있습니다(지금 `2.0.0`).
+- ADK 판 번호의 정본은 저장소 루트 `VERSION`입니다. 화면, API와 서버 명령은 이 파일을 읽습니다. 루트와 `packages/*` 패키지 버전 및 `adk.json`의 `adk_version`도 같은 값으로 유지하며 `node --test tests/version.test.mjs`로 확인합니다. 독립 스킬과 프로젝트 템플릿의 패키지 버전은 ADK 버전이 아닙니다.
 - 인스턴스는 `.agents/upstream-sync.yaml` 에 위 저장소(`upstream_repo`), 마지막으로 맞춘 커밋(`upstream_commit`), 그때 판 번호(`upstream_version`)를 적습니다. 이 값이 실제 공통 조상과 맞지 않으면 드리프트입니다.
 - 그룹·사용자 ADK 매니페스트의 `base_commit` 에는 따라 만든 기준판 판 번호를 적습니다.
 - 동기화는 `sync-upstream` 스킬로 하고, 충돌이 나면 위 저장소 구조를 먼저 따릅니다(`conflict_policy: upstream-structure-first`).

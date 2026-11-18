@@ -1,3 +1,4 @@
+import { readAdkVersion } from "../version.js"
 import type { FastifyInstance, FastifyPluginCallback } from "fastify"
 import {
   loadProjectIndex,
@@ -14,7 +15,7 @@ export const workspaceRoutes: FastifyPluginCallback = (app, _opts, done) => {
   app.get("/meta", async () => {
     const meta = getWorkspaceMeta(root)
     const rules = loadAgentsRules(root)
-    return { meta, rules: rules ? Object.keys(rules as Record<string, unknown>) : [] }
+    return { version: readAdkVersion(), meta, rules: rules ? Object.keys(rules as Record<string, unknown>) : [] }
   })
 
   app.get("/index", async () => {

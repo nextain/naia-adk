@@ -51,6 +51,7 @@ export default async function Home() {
       <div>
         <h1 className="text-2xl font-bold">{meta?.meta?.name || "Naia ADK"}</h1>
         <p className="text-neutral-400 mt-1">{meta?.meta?.org}/{meta?.meta?.repo}</p>
+        {meta?.version && <p className="text-neutral-400 mt-1">ADK {meta.version}</p>}
       </div>
 
       <div className="grid grid-cols-4 gap-4">
