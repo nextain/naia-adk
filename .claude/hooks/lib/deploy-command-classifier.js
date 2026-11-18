@@ -1659,6 +1659,35 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 	}
 }
 
+const GATEWAY_RUNNER_FORMATS = Object.freeze({
+ "launch-local.sh": "d9fdd0c9daeb8a4a7947d990e64579e0b325ab1980d7dd20819e84e35d97aa60",
+ "operation-local.sh": "3f9380eb18c71c1fe789149e0450f15ab2711e758a4d6a67225057a6b0397973",
+ "status-local.sh": "37f437afa983ab07ca8a950eb9873ff07e305dece49bfa4d80cebcb0282c8644",
+ "rollback-local.sh": "0c473db41ebc292c988f737f66984d54254117eb4d72ba86b6a44abbffcb1b3e",
+ "naia-gw-deploy.sh": "9d25e23fdabc97d62f8463bc5d60dc526b5ae7bbecd00ca0f0883eb7594eb823",
+ "gateway-operation.py": "52e080ae634c85ab4fda0161f522208665e3692ebdef7913213ff86c8317b52d"
+});
+function classifyGatewayLocal(tokens, gateRoot = "") {
+ // 이 분류기는 "게이트웨이 운영 실행기 호출인가"만 판정한다. 본문이 승인된 지문과 같은지는
+ // 준비 검사(deploy-readiness.js 의 wrapper)와 계획서 파일 고정(deploy-plan.js)이 검사한다(검수 2회차 2번).
+ // 그래서 파일 이름이 고정 실행기 이름이면 지문이 달라도 같은 운영 hit 를 낸다(막는 쪽). 첫 인자 dev 같은 비운영 조건은 그대로 둔다.
+ const shell = /^(?:bash|sh|dash|zsh|ksh|ash)$/.test(path.basename(tokens[0] || ""));
+ const scriptIndex = shell ? require("./effective-argv.js").shellInvocation(tokens).script : 0;
+ const script = tokens[scriptIndex];
+ const name = path.basename(script || "");
+ if (!Object.prototype.hasOwnProperty.call(GATEWAY_RUNNER_FORMATS, name) || !name.endsWith("-local.sh") || tokens[scriptIndex + 1] !== "prod") return null;
+ const { DEFAULT_GATEWAY_SERVICE, resolveGatewayService } = require("./gateway-environment.js");
+ let service = DEFAULT_GATEWAY_SERVICE;
+ try {
+  const { loadDeployGateConfig } = require("./deploy-readiness.js");
+  service = resolveGatewayService(loadDeployGateConfig(gateRoot || activeGateRoot));
+ } catch {}
+ if (tokens[0] !== "bash" || !path.isAbsolute(script || "") || tokens[2] !== "prod") return { service, label: tokens.join(" ") + " (직접 고정 호출 아님)", verified: false };
+ let verified = false;
+ try { verified = require("crypto").createHash("sha256").update(scriptText(tokens[1])).digest("hex") === GATEWAY_RUNNER_FORMATS[name]; } catch {}
+ return { service, label: tokens.join(" ") + (verified ? "" : " (고정 지문과 다름)"), verified };
+}
+
 function classifyDeployScript(tokens, cwd, assigns = [], entry = null) {
 	const checkTokens = (toks) => {
 		for (let i = 0; i < toks.length; i++) {
@@ -2025,16 +2054,39 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 			found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true, entry));
 			continue;
 		}
+		const runnerHit = classifyGatewayLocal(tokens, gateRoot);
+		// A name match with a different fingerprint never makes the script opaque:
+		// inspect its body before any registered command or cloud-CLI fast path.
+		if (runnerHit && !runnerHit.verified) {
+			found.push({ service: runnerHit.service, label: runnerHit.label, clause: clauseText(tokens, assigns) });
+			const file = executedShellFile(tokens, dir, dirKnown, command, true);
+			if (file && scriptTooLarge(file)) {
+				found.push({ service: "unclassified:script-too-large", label: `분류 불가: 대본이 커서 안을 읽지 않음(${path.basename(file)})`, clause: clauseText(tokens, assigns), unclassified: true, tool: "script-too-large", file });
+			} else if (file) {
+				const body = selectCaseArms(scriptText(file), scriptArgs(tokens), command, assigns);
+				const nonProdCall = invokedNonProd(tokens, file, assigns);
+				for (const h of classifyProdMutations(body, dir, depth + 1, true, gateRoot)) {
+					if (h.variable && variableTargetIsNonProd(h.variable, body, dir, nonProdCall, assigns)) continue;
+					let service = h.service;
+					if (h.variable && (h.unlistedGroup || h.resolveGroup)) {
+						const r = require("./effective-argv.js").dynamicWord(h.variable, body, dir);
+						if (r && r.words && r.words.length === 1 && /^[A-Za-z0-9._-]+$/.test(r.words[0])) service = `azure:${h.unlistedGroup || h.resolveGroup}:${r.words[0].toLowerCase()}`;
+					}
+					found.push({ ...h, service, ...(h.unclassified ? { file: h.file || file } : {}), variable: "", label: `${h.label} (${path.basename(file)} 안)` });
+				}
+			}
+		}
 		const extHits = classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, false, entry);
 		if (extHits.length) {
 			for (const h of extHits) found.push(h);
 			continue;
 		}
 		// --ids 가 여러 운영 대상을 가리키면 hit 도 여러 개다. classifyAz 는 첫 원소만 내고, 여기서는 전부를 쓴다.
-		const azHits = classifyAzAll(tokens);
+		const gwHit = runnerHit?.verified ? { service: runnerHit.service, label: runnerHit.label } : null;
+		const azHits = gwHit ? [gwHit] : runnerHit ? [] : classifyAzAll(tokens);
 		// 준비 기록 검사는 바깥 글자가 아니라 실제로 도는 절을 본다(설계 검수 10회차 2번: bash -c "…", 스크립트 파일 속 --image 가 ops 로 통과).
 		if (azHits.length) for (const h of azHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
-		else {
+		if (!azHits.length && !runnerHit) {
 			const cloudHits = classifyGeneralCloudCli(tokens);
 			if (cloudHits.length) for (const h of cloudHits) found.push({ ...h, clause: clauseText(tokens, assigns) });
 			else {
@@ -2684,6 +2736,7 @@ function clauseText(argv, assigns = []) {
 }
 
 module.exports = {
+	GATEWAY_RUNNER_FORMATS,
 	classifyProdMutations,
 	classifyGeneralCloudCli,
 	isNonProd,

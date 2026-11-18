@@ -3565,3 +3565,32 @@ test("참고-4: 기준 시각 이전 옛 계획서·기존 승인 영수증은 �
 	assert.equal(deployPlan.requiresArchitectureFit(newDatedV1), true);
 	assert.ok(deployPlan.formProblems(newDatedV1).some((m) => m.includes("architecture_fit")));
 });
+
+test('2-2 incident action must pass readiness binding before approval', async t => {
+ const {root,stateDir,transcriptPath}=makeWorkspace(t);
+ writeGateConfig(root);
+ const command='az containerapp update -n sample-web-prod -g sample-rg --min-replicas 2';
+ const {planFile}=createValidPlan(root,{incident:{criteria:['health fails'],actions:[{id:'a1',title:'recover service',why_safe:'Restore known safe service capacity',commands:[command],success_check:'health recovers',on_failure:'stop and report'}]}});
+ writePassingReviewReceipt(root,planFile);
+ const result=await deployPlan.evaluate({command,cwd:root,root,services:['azure:containerapp:sample-web-prod'],sessionId:'r3',transcriptPath,env:{...process.env,DEPLOY_APPROVAL_STATE_DIR:stateDir},readiness:()=>({ok:false,problems:['binding rejected'],facts:[]})});
+ assert.equal(result.audit?.event,'blocked-not-ready',JSON.stringify(result));
+});
+
+test('2-2 incident runner rejects modified body and unapproved arguments', async t => {
+ const {root,stateDir,transcriptPath}=makeWorkspace(t);
+ const service='azure:vm:sample-gateway-prod';
+ const dir=path.join(root,'runner'); fs.cpSync(path.join(REPO_ROOT,'scripts/gateway-runner'),dir,{recursive:true});
+ writeGateConfig(root,{services:{[service]:{allowedCommands:['^bash /.*$']}}});
+ const status=path.join(dir,'status-local.sh'); fs.appendFileSync(status,'\naz vm restart -g rg-prod -n another-prod\n');
+ const files=Object.fromEntries(['launch-local.sh','operation-local.sh','status-local.sh','rollback-local.sh','naia-gw-deploy.sh','gateway-operation.py'].map(n=>[path.join(dir,n),sha256(fs.readFileSync(path.join(dir,n)))]));
+ const command=`bash ${status} prod 20261117T120000Z-check env-names`;
+ const {planFile}=createValidPlan(root,{services:[service],incident:{criteria:['health fails'],actions:[{id:'a1',why_safe:'Inspect gateway status before recovery',commands:[command],files}]}});
+ writePassingReviewReceipt(root,planFile);
+ const binding=require('../lib/deploy-readiness.js').verifiedPlanBinding;
+ const result=await deployPlan.evaluate({command,cwd:root,root,services:[service],sessionId:'r3-real',transcriptPath,env:{...process.env,DEPLOY_APPROVAL_STATE_DIR:stateDir},readiness:ctx=>{const r=binding(ctx,'','ops',[service],root);return {ok:r.ok,problems:[r.why],facts:[]};}});
+ assert.equal(result.audit?.event,'blocked-not-ready',JSON.stringify(result));
+ assert.match(result.reason,/실행기 본문/);
+ const unapproved=command.replace(' env-names',' invalid-mode');
+ const other={commands:[unapproved],files};
+ assert.equal(binding({plan:{services:[service],scenario:[other]},entry:other,command:unapproved,cwd:root},'','ops',[service],root).ok,false);
+});
