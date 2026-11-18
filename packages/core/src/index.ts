@@ -17,6 +17,7 @@ export {
   validateCompanyConfig,
   parseCompanyConfig,
 } from "./company.js"
+export * from "./work-ledger.js"
 
 export function loadProjectIndex(root: string): ProjectIndex | null {
   const indexPath = path.join(root, ".agents", "context", "project-index.yaml")

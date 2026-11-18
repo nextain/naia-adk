@@ -27,6 +27,9 @@ interface PortalData {
 export interface NavProps {
   initialTheme?: ThemePreference
   initialFontSize?: FontSizeStep
+  hasBoard?: boolean | null
+  hasLedger?: boolean | null
+  todoBadgeCount?: number | null
 }
 
 const tabClass = (active: boolean) =>
@@ -37,18 +40,47 @@ const tabClass = (active: boolean) =>
 export function Nav({
   initialTheme = DEFAULT_THEME_PREFERENCE,
   initialFontSize = DEFAULT_FONT_SIZE_STEP,
+  hasBoard: hasBoardProp,
+  hasLedger: hasLedgerProp,
+  todoBadgeCount: todoBadgeCountProp,
 }: NavProps = {}) {
   const pathname = usePathname() || "/"
-  const [hasBoard, setHasBoard] = useState<boolean | null>(null)
+  const [fetchedHasBoard, setFetchedHasBoard] = useState<boolean | null>(null)
+  const [fetchedHasLedger, setFetchedHasLedger] = useState<boolean | null>(null)
+  const [fetchedTodoCount, setFetchedTodoCount] = useState<number | null>(null)
   const [themePref, setThemePref] = useState<ThemePreference>(initialTheme)
   const [fontSize, setFontSize] = useState<FontSizeStep>(initialFontSize)
 
+  const hasBoard = hasBoardProp !== undefined ? hasBoardProp : fetchedHasBoard
+  const hasLedger = hasLedgerProp !== undefined ? hasLedgerProp : fetchedHasLedger
+  const todoCount = todoBadgeCountProp !== undefined ? todoBadgeCountProp : fetchedTodoCount
+
   useEffect(() => {
+    if (hasBoardProp !== undefined) return
     fetch("/api/portal")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data: PortalData | null) => setHasBoard(Boolean(data?.board?.port)))
-      .catch(() => setHasBoard(false))
-  }, [])
+      .then((data: PortalData | null) => setFetchedHasBoard(Boolean(data?.board?.port)))
+      .catch(() => setFetchedHasBoard(false))
+  }, [hasBoardProp])
+
+  useEffect(() => {
+    if (todoBadgeCountProp !== undefined && hasLedgerProp !== undefined) return
+    fetch("/api/portal/ledger?status=todo", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { configured?: boolean; summary?: { todoCount?: number } } | null) => {
+        if (data?.configured) {
+          setFetchedHasLedger(true)
+          setFetchedTodoCount(typeof data.summary?.todoCount === "number" ? data.summary.todoCount : 0)
+        } else {
+          setFetchedHasLedger(false)
+          setFetchedTodoCount(null)
+        }
+      })
+      .catch(() => {
+        setFetchedHasLedger(false)
+        setFetchedTodoCount(null)
+      })
+  }, [todoBadgeCountProp, hasLedgerProp])
 
   useEffect(() => {
     const storedTheme = readThemePreference()
@@ -115,7 +147,7 @@ export function Nav({
         <Link href="/decisions" className={tabClass(isActive("/decisions"))}>
           결정
         </Link>
-        {hasBoard === false ? (
+        {hasBoard === false && hasLedger !== true ? (
           <span
             className="px-1.5 sm:px-3 py-1 sm:py-1.5 text-[12px] sm:text-sm font-medium text-neutral-600 cursor-not-allowed whitespace-nowrap"
             title="회사 설정이 없어 작업보드가 없습니다. pnpm adk:setup으로 회사 설정을 먼저 하세요."
@@ -130,6 +162,16 @@ export function Nav({
       </div>
 
       <div className="ml-auto flex items-center gap-1 sm:gap-3 shrink-0">
+        {typeof todoCount === "number" && (
+          <Link
+            href="/work"
+            data-testid="nav-todo-badge"
+            title="업무 장부 열린 할 일 (진행 중 + 사람 확인 대기)"
+            className="px-2 sm:px-2.5 py-1 rounded-full border border-blue-800/70 bg-blue-950/60 text-blue-300 hover:bg-blue-900/60 text-[11px] sm:text-xs font-medium whitespace-nowrap transition-colors"
+          >
+            할 일 {todoCount}
+          </Link>
+        )}
         {/* 개발자용 화면은 뒤로 뺀다. 좁은 화면에서는 숨긴다. */}
         <div className="hidden xl:flex items-center gap-1">
           <span className="px-2 text-xs text-neutral-600 whitespace-nowrap">개발자 도구</span>

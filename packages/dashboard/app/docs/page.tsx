@@ -25,6 +25,7 @@ import {
 import { addFavorite, removeFavorite } from "./Favorites"
 import { DocsView, type SearchHit, type Source } from "./DocsView"
 import { canNavigateWithDiscardConfirm, loadDocsViewState } from "./docs-handlers"
+import type { LedgerCardItem } from "../work/work-ledger-view"
 
 interface PortalResponse {
   sources: Source[]
@@ -115,6 +116,9 @@ function DocsViewer() {
   // 즐겨찾기 데이터
   const [favorites, setFavorites] = useState<FavoriteItem[]>([])
 
+  // 연결된 업무 장부 카드
+  const [linkedCards, setLinkedCards] = useState<LedgerCardItem[]>([])
+
   // 권한 제한 여부 (SP-06 403)
   const [forbidden, setForbidden] = useState(false)
 
@@ -198,6 +202,28 @@ function DocsViewer() {
   useEffect(() => {
     refreshFavorites()
   }, [])
+
+  // 현재 문서를 결과로 걸고 있는 업무 장부 카드 조회 (문서↔카드 연결)
+  useEffect(() => {
+    if (!sourceParam || !pathParam || viewMode === "grid") {
+      setLinkedCards([])
+      return
+    }
+    const controller = new AbortController()
+    fetch(`/api/portal/ledger?source=${encodeURIComponent(sourceParam)}&path=${encodeURIComponent(pathParam)}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { configured?: boolean; items?: LedgerCardItem[] } | null) => {
+        if (controller.signal.aborted) return
+        setLinkedCards(data?.configured && Array.isArray(data.items) ? data.items : [])
+      })
+      .catch((err) => {
+        if (err?.name !== "AbortError") setLinkedCards([])
+      })
+    return () => controller.abort()
+  }, [sourceParam, pathParam, viewMode])
 
   // 4. 주소에 따른 보기 상태 및 데이터 통합 로딩 (loadDocsViewState, 1·2번 보강)
   useEffect(() => {
@@ -444,6 +470,7 @@ function DocsViewer() {
       onNotesChange={refreshNotes}
       fileData={fileData}
       hasCompanySource={hasCompanySource}
+      linkedCards={linkedCards}
     />
   )
 }

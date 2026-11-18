@@ -15,6 +15,8 @@ import {
   type FileKind,
 } from "./kinds"
 import { docHref, type DocTab } from "./tabs"
+import { LinkedCardsPanel } from "./LinkedCardsPanel"
+import type { LedgerCardItem } from "../work/work-ledger-view"
 
 export interface FileViewProps {
   sourceId: string
@@ -29,6 +31,7 @@ export interface FileViewProps {
   onToggleFavorite?: () => void
   starError?: string | null
   onNavigate?: (targetHref: string) => boolean
+  linkedCards?: LedgerCardItem[]
 }
 
 export function FileView({
@@ -44,6 +47,7 @@ export function FileView({
   onToggleFavorite,
   starError,
   onNavigate,
+  linkedCards = [],
 }: FileViewProps) {
   const fileName = getFileName(path)
   const kind = propKind || inferKindFromPath(path)
@@ -221,6 +225,8 @@ export function FileView({
           </div>
         )}
       </div>
+
+      <LinkedCardsPanel cards={linkedCards} />
     </div>
   )
 }

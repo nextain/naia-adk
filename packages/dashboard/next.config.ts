@@ -9,6 +9,7 @@ const nextConfig: NextConfig = {
   rewrites: async () => [
     { source: "/api/portal", destination: `${apiTarget}/api/portal` },
     { source: "/api/portal/:path*", destination: `${apiTarget}/api/portal/:path*` },
+    { source: "/api/ledger", destination: `${apiTarget}/api/ledger` },
   ],
 }
 

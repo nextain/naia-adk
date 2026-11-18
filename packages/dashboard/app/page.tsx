@@ -1,4 +1,5 @@
 import { apiBase } from "./api-base"
+import { HomeTodoSummary } from "./components/HomeTodoSummary"
 
 type IndexEntry = {
   path?: string;
@@ -59,6 +60,8 @@ export default async function Home() {
         <Card label="References" value={presentRefs} declared={refKeys.length} />
         <Card label="Skills" value={Array.isArray(skills) ? skills.length : 0} />
       </div>
+
+      <HomeTodoSummary />
 
       <div className="grid grid-cols-2 gap-6">
         <div>

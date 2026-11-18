@@ -57,6 +57,8 @@ import { FileView } from "./FileView"
 import { DocEditor } from "./DocEditor"
 import { NotesBanner, NotesPanel } from "./NotesPanel"
 import { ShortLinkButton } from "./ShortLinkButton"
+import { LinkedCardsPanel } from "./LinkedCardsPanel"
+import type { LedgerCardItem } from "../work/work-ledger-view"
 
 export type TreeNode = DocTreeNode
 
@@ -356,6 +358,9 @@ export interface DocsViewProps {
   // 별 및 즐겨찾기 실패 안내 (결함 5)
   starError?: string | null
   groupFavoriteError?: string | null
+
+  // 결과 문서에 걸린 업무 장부 카드 (문서↔카드 연결)
+  linkedCards?: LedgerCardItem[]
 }
 
 export function DocsView({
@@ -409,6 +414,7 @@ export function DocsView({
   onChangeEditContent,
   starError = null,
   groupFavoriteError = null,
+  linkedCards = [],
 }: DocsViewProps) {
   const currentSourceObj = sources.find((s) => s.id === currentSource)
   const sourceTitle = currentSourceObj?.title || currentSource || "문서"
@@ -833,6 +839,7 @@ export function DocsView({
                   onToggleFavorite={onToggleFavorite}
                   starError={starError}
                   onNavigate={onNavigate}
+                  linkedCards={linkedCards}
                 />
               )}
 
@@ -1039,21 +1046,24 @@ export function DocsView({
                               </ReactMarkdown>
                             </div>
 
-                            {/* 메모 목록 (1열, SP-05) */}
-                            <div className="lg:col-span-1 rounded-lg border border-neutral-800 bg-neutral-900/30 p-4">
-                              <NotesPanel
-                                source={currentSource || "adk"}
-                                path={currentPath || ""}
-                                notes={notes}
-                                selectedQuote={activeSelection ? truncateQuote(activeSelection, 2000) : selectedQuote}
-                                onClearQuote={() => {
-                                  setLocalSelection(null)
-                                  onClearQuote?.()
-                                }}
-                                onNotesChange={onNotesChange}
-                                forbidden={forbidden}
-                                onNavigate={onNavigate}
-                              />
+                            {/* 연결된 업무 카드 + 메모 목록 (1열, SP-05) */}
+                            <div className="lg:col-span-1 space-y-4">
+                              <LinkedCardsPanel cards={linkedCards} />
+                              <div className="rounded-lg border border-neutral-800 bg-neutral-900/30 p-4">
+                                <NotesPanel
+                                  source={currentSource || "adk"}
+                                  path={currentPath || ""}
+                                  notes={notes}
+                                  selectedQuote={activeSelection ? truncateQuote(activeSelection, 2000) : selectedQuote}
+                                  onClearQuote={() => {
+                                    setLocalSelection(null)
+                                    onClearQuote?.()
+                                  }}
+                                  onNotesChange={onNotesChange}
+                                  forbidden={forbidden}
+                                  onNavigate={onNavigate}
+                                />
+                              </div>
                             </div>
                           </div>
                         </div>

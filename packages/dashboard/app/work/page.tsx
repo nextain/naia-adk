@@ -1,10 +1,64 @@
-// 작업 탭: 작업보드를 대시보드 안에 그대로 보여 준다. 위쪽 탭은 대시보드 것 하나만 쓴다.
+"use client"
+
+import React, { Suspense, useCallback, useEffect, useState } from "react"
+import { useSearchParams } from "next/navigation"
+import { WorkBoard } from "./WorkBoard"
+import { normalizeWorkTab, type LedgerPayload } from "./work-ledger-view"
+
+function WorkPageContent() {
+  const searchParams = useSearchParams()
+  const initialTab = normalizeWorkTab(searchParams?.get("tab"), searchParams?.get("view"))
+  const initialRole = searchParams?.get("role") ?? ""
+
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading")
+  const [ledger, setLedger] = useState<LedgerPayload | null>(null)
+  const [hasBoard, setHasBoard] = useState<boolean | null>(null)
+
+  const loadData = useCallback(async () => {
+    setStatus("loading")
+    try {
+      const [ledgerRes, portalRes] = await Promise.all([
+        fetch("/api/portal/ledger", { cache: "no-store" }),
+        fetch("/api/portal", { cache: "no-store" }).catch(() => null),
+      ])
+      if (!ledgerRes.ok) {
+        throw new Error(`HTTP ${ledgerRes.status}`)
+      }
+      const ledgerJson = (await ledgerRes.json()) as LedgerPayload
+      setLedger(ledgerJson)
+      if (portalRes && portalRes.ok) {
+        const portalJson = (await portalRes.json()) as { board?: { port?: number } | null }
+        setHasBoard(Boolean(portalJson?.board?.port))
+      } else {
+        setHasBoard(false)
+      }
+      setStatus("ready")
+    } catch {
+      setStatus("error")
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadData()
+  }, [loadData])
+
+  return (
+    <WorkBoard
+      key={`${initialTab}:${initialRole}`}
+      status={status}
+      ledger={ledger}
+      hasBoard={hasBoard}
+      initialTab={initialTab}
+      initialRole={initialRole}
+      onRefresh={() => void loadData()}
+    />
+  )
+}
+
 export default function WorkPage() {
   return (
-    <iframe
-      src="/board/index.html"
-      title="작업보드"
-      className="fixed inset-x-0 top-14 h-[calc(100dvh-3.5rem)] w-full border-0 bg-neutral-950"
-    />
+    <Suspense fallback={<div className="py-12 text-center text-sm text-neutral-400">작업 보드 로딩 중...</div>}>
+      <WorkPageContent />
+    </Suspense>
   )
 }

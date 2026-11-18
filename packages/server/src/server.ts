@@ -5,6 +5,7 @@ import { workspaceRoutes } from "./routes/workspace.js"
 import { skillRoutes } from "./routes/skills.js"
 import { watchRoutes } from "./routes/watch.js"
 import { portalRoutes } from "./routes/portal.js"
+import { isLedgerRequestAllowed, queryPortalWorkLedger, type LedgerQueryParams } from "./work-ledger-portal.js"
 import {
   validateHost,
   validatePath,
@@ -93,6 +94,19 @@ export async function createServer(config: ServerConfig) {
   app.register(portalRoutes, {
     prefix: "/api/portal",
     beforeRename: config.beforeRenameHook,
+  })
+
+  // GET /api/ledger (일정·보드 공용 읽기 API 별칭, /api/portal/ledger 와 동일)
+  app.get("/api/ledger", async (req, reply) => {
+    if (!isLedgerRequestAllowed(req.headers, (req as any).trust)) {
+      return reply.code(403).send({ error: "Forbidden" })
+    }
+    const query = (req.query || {}) as LedgerQueryParams
+    const data = await queryPortalWorkLedger(config.root, {
+      folderCtx: config.folderCheckContext,
+      query,
+    })
+    return reply.header("cache-control", "no-store").send(data)
   })
 
   app.get("/api/health", async () => ({
