@@ -11,7 +11,17 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { main, readLedger, ledgerPath, changeLedger } from "./ledger.mjs";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import {
+  main,
+  readLedger,
+  ledgerPath,
+  changeLedger,
+  validateLedger,
+  PLAN_ROW_KEYWORDS,
+  isPlanRowTitle,
+} from "./ledger.mjs";
 import { watch } from "./ledger-watch.mjs";
 import { createAdapter } from "./messenger.mjs";
 const now = Date.parse("2026-11-08T12:00:00Z");
@@ -2365,4 +2375,160 @@ test("human instruction cards cap drop and due deferrals at 2 and escalate on 3r
     await main(["drop", `self-${round}`, "--root", root, "--role", "secretary", "--reason", "자체 정리"], { now });
   }
   assert.equal((await readLedger(root, "secretary")).items.find((i) => i.id === "self-3")?.status, "dropped");
+});
+
+test("plan/schedule recording rows require --next <open work item id> on done, exit 2 on refusal, keep drop with --reason, and leave normal rows unchanged", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "work-ledger-plan-gate-"));
+  createdRoots.push(root);
+  const ledgerScript = fileURLToPath(new URL("./ledger.mjs", import.meta.url));
+  const addItem = (role, id, title, msgId = `msg-${id}`) =>
+    main(
+      [
+        "add",
+        "--root",
+        root,
+        "--role",
+        role,
+        "--id",
+        id,
+        "--title",
+        title,
+        "--due",
+        "2026-11-08T13:00:00Z",
+        "--channel",
+        "ch-marketing",
+        "--msg-id",
+        msgId,
+      ],
+      { now },
+    );
+
+  // 1) PLAN_ROW_KEYWORDS 상수 및 5d6611a8 형태 포함 판정
+  for (const kw of ["일정 적기", "일정에 넣기", "계획 잡기", "장부에 적기", "일정 등록"]) {
+    assert.ok(PLAN_ROW_KEYWORDS.includes(kw), `missing keyword: ${kw}`);
+    assert.equal(isPlanRowTitle(kw), true);
+  }
+  assert.equal(
+    isPlanRowTitle("대시보드 글 내보내기 2단계 구현 일정을 나이아 정리 문서에 넣고 #마켓팅에 알림"),
+    true,
+  );
+  assert.equal(
+    isPlanRowTitle("계획 리뷰 읽기 전용 검사에서 관문 감사 기록 덧붙임 제외"),
+    false,
+  );
+
+  // 2) 계획 줄 단독 done 거절 (CLI 종료 코드 2 + 한국어 한 줄 안내 + open 유지)
+  await addItem("secretary", "plan-1", "웹툰 배포 일정 적기", "msg-plan-1");
+  await assert.rejects(
+    main(["done", "plan-1", "--root", root, "--role", "secretary"], { now }),
+    (err) =>
+      err.exitCode === 2 &&
+      !String(err.message).includes("\n") &&
+      /본 일 줄을 add 한 뒤 --next/.test(err.message),
+  );
+  const cliNoNext = spawnSync(
+    process.execPath,
+    [ledgerScript, "done", "plan-1", "--root", root, "--role", "secretary"],
+    { encoding: "utf8" },
+  );
+  assert.equal(cliNoNext.status, 2);
+  assert.equal(cliNoNext.stderr.trim().split(/\r?\n/).length, 1);
+  assert.match(cliNoNext.stderr, /본 일 줄을 add 한 뒤 --next/);
+  assert.equal(
+    (await readLedger(root, "secretary")).items.find((i) => i.id === "plan-1")?.status,
+    "open",
+  );
+
+  // 5d6611a8 실사례 제목 형태도 단독 done 거절
+  await addItem(
+    "secretary",
+    "plan-real-shape",
+    "대시보드 글 내보내기 2단계 구현 일정을 나이아 정리 문서에 넣고 #마켓팅에 알림",
+    "msg-real",
+  );
+  await assert.rejects(
+    main(["done", "plan-real-shape", "--root", root, "--role", "secretary"], { now }),
+    (err) => err.exitCode === 2 && /--next/.test(err.message),
+  );
+
+  // 3) --next 없는 id / 자기 자신 / open 아님(done·dropped) 거절 (종료 코드 2)
+  await assert.rejects(
+    main(["done", "plan-1", "--root", root, "--role", "secretary", "--next", "does-not-exist"], { now }),
+    (err) => err.exitCode === 2 && /같은 장부에 없습니다/.test(err.message),
+  );
+  const cliMissingId = spawnSync(
+    process.execPath,
+    [ledgerScript, "done", "plan-1", "--root", root, "--role", "secretary", "--next", "does-not-exist"],
+    { encoding: "utf8" },
+  );
+  assert.equal(cliMissingId.status, 2);
+
+  await assert.rejects(
+    main(["done", "plan-1", "--root", root, "--role", "secretary", "--next", "plan-1"], { now }),
+    (err) => err.exitCode === 2 && /자기 자신/.test(err.message),
+  );
+
+  await addItem("secretary", "already-done", "이미 끝난 일반 일", "msg-done");
+  await main(["done", "already-done", "--root", root, "--role", "secretary"], { now });
+  await assert.rejects(
+    main(["done", "plan-1", "--root", root, "--role", "secretary", "--next", "already-done"], { now }),
+    (err) => err.exitCode === 2 && /open 상태가 아닙니다/.test(err.message),
+  );
+
+  // 4) 일반 줄 done 은 --next 없이 그대로 통과 (false positive 방지 포함)
+  await addItem("secretary", "normal-audit", "계획 리뷰 읽기 전용 검사에서 관문 감사 기록 덧붙임 제외", "msg-normal");
+  await main(["done", "normal-audit", "--root", root, "--role", "secretary"], { now });
+  const normalSaved = (await readLedger(root, "secretary")).items.find((i) => i.id === "normal-audit");
+  assert.equal(normalSaved?.status, "done");
+  assert.equal(normalSaved?.next, undefined);
+
+  // 5) 같은 역할 장부의 open 본 일 줄을 --next 로 가리키면 통과 및 next 기록
+  await addItem("secretary", "work-same-role", "웹툰·포스팅 배포 기능 구현", "msg-plan-1");
+  await main(
+    ["done", "plan-1", "--root", root, "--role", "secretary", "--next", "work-same-role"],
+    { now },
+  );
+  const closedPlan1 = (await readLedger(root, "secretary")).items.find((i) => i.id === "plan-1");
+  assert.equal(closedPlan1?.status, "done");
+  assert.equal(closedPlan1?.next, "work-same-role");
+
+  // 6) 같은 장부 폴더의 다른 역할(역할 무관) open 본 일 줄도 --next 허용, waiting_human 은 거절
+  await addItem("worker-b", "work-other-role", "대시보드 2단계 구현", "msg-real");
+  await addItem("worker-b", "wait-other-role", "사람 답 대기 중 일감", "msg-wait-other");
+  await changeLedger(root, "worker-b", (l) => {
+    l.items.find((i) => i.id === "wait-other-role").status = "waiting_human";
+  });
+  await assert.rejects(
+    main(["done", "plan-real-shape", "--root", root, "--role", "secretary", "--next", "wait-other-role"], { now }),
+    (err) => err.exitCode === 2 && /open 상태가 아닙니다/.test(err.message),
+  );
+  await main(
+    ["done", "plan-real-shape", "--root", root, "--role", "secretary", "--next", "work-other-role"],
+    { now },
+  );
+  const closedReal = (await readLedger(root, "secretary")).items.find((i) => i.id === "plan-real-shape");
+  assert.equal(closedReal?.status, "done");
+  assert.equal(closedReal?.next, "work-other-role");
+
+  // 7) 계획 줄 drop 은 막지 않되 --reason 은 그대로 요구
+  await addItem("secretary", "plan-drop", "일정 등록", "msg-drop");
+  await assert.rejects(
+    main(["drop", "plan-drop", "--root", root, "--role", "secretary"], { now }),
+    /drop requires --reason/,
+  );
+  await main(
+    ["drop", "plan-drop", "--root", root, "--role", "secretary", "--reason", "요청 취소"],
+    { now },
+  );
+  assert.equal(
+    (await readLedger(root, "secretary")).items.find((i) => i.id === "plan-drop")?.status,
+    "dropped",
+  );
+
+  // 8) validateLedger 는 잘못된 next 또는 자기 참조 next 를 거절
+  const badLedger = await readLedger(root, "secretary");
+  badLedger.items[0].next = badLedger.items[0].id;
+  assert.throws(() => validateLedger(badLedger, "secretary"), /Invalid ledger item/);
+  badLedger.items[0].next = "bad/id";
+  assert.throws(() => validateLedger(badLedger, "secretary"), /Invalid role or item id/);
 });

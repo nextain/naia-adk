@@ -44,6 +44,15 @@
 - **기한 미룸(`due`) 2회 상한**: 사람 지시 카드의 기한을 기존 기한보다 뒤로 미루는 변경이 2회를 넘으면(3회째 연기 시도) 명령을 거절하고 `escalated_human` 상태로 전환합니다. 기한을 앞당기거나 내부 카드(`--msg-id -`)를 조정하는 경우에는 상한이 걸리지 않습니다.
 - **사람 확인 뒤 완료(`done --human-msg-id`)**: `escalated_human` 상태인 카드를 `done`으로 닫을 때는 원래 지시 `msg_id`와 다른 사람 확인 답글 번호(`--human-msg-id <답글 ID>`)를 함께 적어야 합니다. 확인 근거 없는 단독 `done`은 거절됩니다.
 
+### 계획·일정 등록 줄 닫기(`--next`)
+
+제목이 "계획·일정을 적는 일"(`일정 적기`, `일정에 넣기`, `계획 잡기`, `장부에 적기`, `일정 등록` 등 `scripts/work-ledger/ledger.mjs`의 `PLAN_ROW_KEYWORDS` 상수와 그 조사·목적지 변형)인 줄을 `done`으로 닫을 때는 본 일(구현·실행) 줄을 `add`한 뒤 `--next <다른 줄 id>`로 가리켜야 합니다.
+
+- `--next` 없이 `done`으로 닫으려 하면 종료 코드 `2`와 함께 본 일 줄을 `add`한 뒤 `--next`로 닫으라는 한 줄 안내를 출력하고 거절합니다.
+- `--next <다른 줄 id>`가 가리키는 줄은 같은 장부(`<ADK 뿌리>/.agents/work/ledger/*.json`, 역할 무관)에 존재해야 하며 자기 자신이 아니고 `open` 상태여야 합니다. 없는 ID이거나 `open`이 아닌 줄을 가리켜도 종료 코드 `2`로 거절합니다.
+- 통과하면 닫힌 계획 줄에 `next` 칸(`"next": "<다른 줄 id>"`)을 남깁니다.
+- `drop`은 막지 않으며 기존대로 `--reason`이 필요합니다.
+
 ## 명령
 
 저장소 뿌리에서 실행합니다. 다른 디렉터리에서는 `--root`에 ADK 뿌리를 지정합니다. 예시의 ID와 시각을 실제 값으로 바꿉니다.
@@ -53,6 +62,7 @@ node scripts/work-ledger/ledger.mjs --root . --role secretary add --title '초�
 node scripts/work-ledger/ledger.mjs --root . --role secretary list
 node scripts/work-ledger/ledger.mjs --root . --role secretary touch --id ITEM_ID
 node scripts/work-ledger/ledger.mjs --root . --role secretary done --id ITEM_ID
+node scripts/work-ledger/ledger.mjs --root . --role secretary done --id PLAN_ITEM_ID --next WORK_ITEM_ID
 node scripts/work-ledger/ledger.mjs --root . --role secretary drop --id ITEM_ID --reason '요청자가 중단함'
 node scripts/work-ledger/ledger.mjs --root . --role secretary report --every-min 60 --channel CHANNEL_ID --msg-id REPORT_MESSAGE_ID
 ```
@@ -149,7 +159,8 @@ node scripts/work-ledger/ledger.mjs --root . --role secretary add --title '초�
 node scripts/work-ledger/ledger.mjs --root . --role secretary adopt --id ITEM_ID --prompt work/draft-review.md --result-file results/draft-review.md --model MODEL_ID
 node scripts/work-ledger/ledger.mjs --root . --role secretary start --id ITEM_ID
 node scripts/work-ledger/ledger.mjs --root . --role secretary attach --id ITEM_ID --pid WORKER_PID
-node scripts/work-ledger/ledger.mjs --root . --role secretary done --id ITEM_ID --result results/draft-review.md
+node scripts/work-ledger/ledger.mjs --root . --role secretary done --id ITEM_ID
+node scripts/work-ledger/ledger.mjs --root . --role secretary done --id PLAN_ITEM_ID --next WORK_ITEM_ID --result results/draft-review.md
 node scripts/work-ledger/ledger.mjs --root . --role secretary confirm --id ITEM_ID --channel CHANNEL_ID --msg-id OWNER_MESSAGE_ID --as dropped --reason '요청자가 중단함'
 node scripts/work-ledger/ledger.mjs --root . drive --dry
 ```
