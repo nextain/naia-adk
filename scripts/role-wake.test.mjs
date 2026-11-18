@@ -142,7 +142,34 @@ test('inspect and deliver resolve capabilities from the actual fallback foregrou
   }, { ROLE_WAKE_TOOL: 'muse', ROLE_WAKE_SUBMIT_KEYS: '["F4"]', ROLE_WAKE_BG_NOTIFY: 'false' });
 });
 
-test('tool names normalize case and close typos or unused capability keys are rejected', t => {
+test('delivery refreshes the foreground tool and capabilities before every file', t => {
+  const f = setup(t);
+  f.doc.roles['role-a'].tools = ['claude', 'codex'];
+  f.write();
+  const registry = f.load();
+  deliver(registry, f.deps, { only: 'role-a' });
+  const first = f.put('role-a', '001-first.md', 0.000002);
+  const second = f.put('role-a', '002-second.md', 0.000001);
+  const run = f.deps.run;
+  f.deps.run = (command, args, options = {}) => {
+    const result = run(command, args, options);
+    if (command === '/opt/deliver' && args[1] === first) {
+      f.state.panes['w1:p1'] = [{ argv: ['codex'], pid: 10 }];
+    }
+    return result;
+  };
+
+  const result = deliver(registry, f.deps, { only: 'role-a' });
+
+  assert.deepEqual(result.roles['role-a'], { delivered: 2, failed: 0, pending: 0 });
+  assert.deepEqual(f.state.runs.map(([, , file]) => file), [first, second]);
+  assert.deepEqual(f.state.runOptions.map(({ env }) => [env.ROLE_WAKE_TOOL, env.ROLE_WAKE_SUBMIT_KEYS, env.ROLE_WAKE_BG_NOTIFY]), [
+    ['claude', '["Enter"]', 'true'],
+    ['codex', '["Enter","Tab"]', 'false'],
+  ]);
+});
+
+test('tool names normalize case, allow unknown names with a generic warning, and reject unused capability keys', t => {
   const f = setup(t);
   f.doc.roles['role-b'].tool = 'Codex';
   f.doc.roles['role-b'].tools = ['codex', 'MUSE'];
@@ -151,18 +178,19 @@ test('tool names normalize case and close typos or unused capability keys are re
   const role = f.load().roles.find(item => item.id === 'role-b');
   assert.deepEqual([role.tool, role.tools, role.bgNotify, role.submitKeys], ['codex', ['codex', 'muse'], true, ['F8']]);
 
-  f.doc.roles['role-b'].tool = 'codxe';
-  f.doc.roles['role-b'].tools = ['codxe'];
+  f.doc.roles['role-b'].tool = 'code';
+  f.doc.roles['role-b'].tools = ['code'];
   f.doc.tool_caps = {};
   f.write();
-  assert.throws(() => f.load(), /codxe.*codex/i);
+  const customRegistry = f.load();
+  assert.deepEqual(resolveToolCaps({}, { tool: 'code' }), { bgNotify: false, submitKeys: ['Enter'] });
+  f.state.panes['w1:p2'] = [{ argv: ['code'], pid: 20 }];
+  const customInspect = inspect(customRegistry, f.deps);
+  assert.equal(customInspect.findings.filter(finding => finding.code === 'tool-capability-fallback' && finding.role === 'role-b').length, 1);
+  assert.equal(customInspect.findings.find(finding => finding.code === 'tool-capability-fallback' && finding.role === 'role-b').level, 'warn');
 
   f.doc.roles['role-b'].tool = 'agy';
   f.doc.roles['role-b'].tools = ['agy', 'muse'];
-  f.doc.tool_caps = { bg_notify: { codxe: false } };
-  f.write();
-  assert.throws(() => f.load(), /codxe.*codex/i);
-
   f.doc.tool_caps = { submit_keys: { codex: ['Tab'] } };
   f.write();
   assert.throws(() => f.load(), /tool_caps\.submit_keys\.codex.*unused/i);
@@ -188,6 +216,13 @@ test('tool detection reads the foreground program, not the registry', () => {
   assert.deepEqual(detectTool([{ argv: ['env', '-u', 'TOKEN', 'A=1', 'timeout', '30', 'claude'] }], known), { alive: true, tool: 'claude' });
   assert.deepEqual(detectTool([{ argv: ['node', '/opt/tools/muse.mjs'] }, { argv: ['python3'] }], known), { alive: true, tool: 'muse' });
   assert.deepEqual(detectTool([{ argv: ['python3'] }], known), { alive: false, tool: 'shell' });
+});
+
+test('tool detection prefers actual foreground executables over shell startup scripts', () => {
+  const known = ['claude', 'codex'];
+  assert.deepEqual(detectTool([{ argv: ['bash', '/opt/claude-start.sh'] }, { argv: ['codex'] }], known), { alive: true, tool: 'codex' });
+  assert.deepEqual(detectTool([{ argv: ['sh', '/opt/claude-start.sh'] }, { argv: ['/opt/bin/codex'] }], known), { alive: true, tool: 'codex' });
+  assert.deepEqual(detectTool([{ argv: ['bash', '/opt/claude-start.sh'] }], known), { alive: true, tool: 'claude' });
 });
 
 test('a wait script counts only under the pane agent', () => {

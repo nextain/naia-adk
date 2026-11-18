@@ -52,7 +52,7 @@
 
 ## 도구 능력
 
-기본값 표의 정본과 인스턴스 전달 계약은 [역할 깨움 레지스트리](role-wake-registry.md)에 있습니다. `delivery.command`를 실행할 때 레지스트리는 선택한 도구와 해석한 능력을 `ROLE_WAKE_TOOL`, JSON 배열인 `ROLE_WAKE_SUBMIT_KEYS`, `ROLE_WAKE_BG_NOTIFY` 환경 변수로 전달합니다. 인스턴스 어댑터는 이 값을 사용해야 합니다.
+기본값 표의 정본과 인스턴스 전달 계약은 [역할 깨움 레지스트리](role-wake-registry.md)에 있습니다. `delivery.command`를 실행할 때 레지스트리는 파일마다 다시 판별한 도구와 능력을 `ROLE_WAKE_TOOL`, JSON 배열인 `ROLE_WAKE_SUBMIT_KEYS`, `ROLE_WAKE_BG_NOTIFY` 환경 변수로 전달합니다. 인스턴스 어댑터는 세 값을 모두 읽어 사용해야 합니다. 값이 없거나 적용할 수 없으면 성공을 반환하지 말고 비정상 종료해야 합니다.
 
 `ROLE_WAKE_BG_NOTIFY=false`이면 어댑터가 깨움 본문을 칸에 직접 넣고 `ROLE_WAKE_SUBMIT_KEYS`의 키를 순서대로 보내야 합니다. `run_in_background` 완료 알림을 받으라고 재촉하지 않습니다. 도구를 바꿀 때는 `tool`과 `tools[0]`이 일치하는지, 실제 전경 도구로 능력을 해석하는지, 깨움 본문이 해당 칸에 도달하는지, 시작 대본이 기억 색인을 읽는지 함께 확인합니다.
 

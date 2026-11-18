@@ -40,8 +40,10 @@ The optional top-level `tool_caps` map records capabilities by tool name:
 `tool_caps.submit_keys.<tool>` is a non-empty list of key names. An omitted
 entry uses the defaults in this table; unknown tools default to
 `bg_notify: false` and `submit_keys: ["Enter"]`. Tool names are normalized to
-lowercase. A close misspelling of a known tool or a capability key that no role
-declares in `tool` or `tools` is a validation error.
+lowercase. Unknown tool names are allowed and use those generic defaults; an
+inspection emits one `tool-capability-fallback` warning for an active unknown
+tool. The registry does not guess whether a name is a misspelling. A capability
+key that no role declares in `tool` or `tools` remains a validation error.
 
 | Tool | `bg_notify` | `submit_keys` |
 |---|---:|---|
@@ -57,11 +59,20 @@ configuration has no `muse` override, so `muse` keeps the resolver's existing
 conservative fallback of `false`/`Enter`; the example registry writes that
 fallback explicitly because one role allows `muse` as a fallback tool.
 
-For each file, `deliver` passes the selected tool and its resolved capabilities
-to `delivery.command` in the environment: `ROLE_WAKE_TOOL` is the lowercase tool
+For each file, `deliver` re-detects the foreground tool immediately before
+delivery, resolves that tool's capabilities, and passes them to
+`delivery.command` in the environment: `ROLE_WAKE_TOOL` is the lowercase tool
 name, `ROLE_WAKE_SUBMIT_KEYS` is a JSON string array, and `ROLE_WAKE_BG_NOTIFY`
-is the string `true` or `false`. An instance adapter must read these variables
-instead of re-reading a separate capability map. When `ROLE_WAKE_BG_NOTIFY` is
+is the string `true` or `false`. When process information contains both a
+shell-started `*.sh` launcher and a tool executable, the executable takes
+priority; the launcher is used only when no tool executable is found.
+
+The instance adapter **must read all three `ROLE_WAKE_*` variables** instead
+of re-reading a separate capability map. If a variable is absent or malformed,
+or the adapter cannot apply the selected capability, it must exit nonzero and
+must not report successful delivery. Exit code zero is reserved for a
+successful action that used the supplied values; merely starting the adapter
+or queueing the file is not delivery success. When `ROLE_WAKE_BG_NOTIFY` is
 `false`, the adapter must put the wake body directly into the role's pane and
 send each key in `ROLE_WAKE_SUBMIT_KEYS` in order; it must not send a
 `run_in_background` completion nudge. When it is `true`, the adapter may use

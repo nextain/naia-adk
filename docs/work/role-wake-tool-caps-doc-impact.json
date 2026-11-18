@@ -4,21 +4,19 @@
     "status": "UPDATED",
     "files": [
       "docs/guides/role-wake-registry.md",
-      "docs/guides/agent-role-sessions.md",
-      "config/role-wake.example.json"
+      "docs/guides/agent-role-sessions.md"
     ]
   },
   "user_manual": {
     "status": "UPDATED",
     "files": [
       "docs/guides/role-wake-registry.md",
-      "docs/guides/agent-role-sessions.md",
-      "config/role-wake.example.json"
+      "docs/guides/agent-role-sessions.md"
     ]
   },
   "reusable_learning": {
     "status": "UPDATED",
     "files": ["docs/guides/role-wake-registry.md"],
-    "detail": "Delivery must pass the observed foreground tool and resolved capabilities to the instance adapter; tools without background notifications require direct pane delivery. The registry resolves capabilities and validates defaults, overrides, misspellings and unused keys. Live pane delivery remains an instance acceptance check."
+    "detail": "Delivery must re-detect the foreground tool before each file and pass resolved capabilities to an adapter that reads all ROLE_WAKE_* values and fails when it cannot apply them; tools without background notifications require direct pane delivery. Unknown tool names use generic defaults with an inspection warning, while unused capability overrides remain invalid. Live pane delivery remains an instance acceptance check."
   }
 }

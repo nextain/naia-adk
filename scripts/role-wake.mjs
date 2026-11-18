@@ -22,7 +22,6 @@ const TOOL_CAPS_DEFAULTS = Object.assign(Object.create(null), {
   muse: { bgNotify: false, submitKeys: ['Enter'] },
   opencode: { bgNotify: false, submitKeys: ['Enter'] },
 });
-const KNOWN_TOOL_NAMES = Object.keys(TOOL_CAPS_DEFAULTS);
 // A role whose session is down fails every file; stop that role for the run after this many in a row.
 const FAIL_STREAK = 3;
 // One run is bounded by max_per_run and the command timeouts; a lock older than this has no running owner.
@@ -34,31 +33,9 @@ const fail = message => { throw new Error(message); };
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const positive = (value, fallback, name) => value === undefined ? fallback : Number.isFinite(value) && value > 0 ? value : fail(`${name} must be a positive number`);
 
-function editDistance(left, right) {
-  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
-  for (let row = 1; row <= left.length; row += 1) {
-    const current = [row];
-    for (let column = 1; column <= right.length; column += 1) {
-      current[column] = Math.min(current[column - 1] + 1, previous[column] + 1, previous[column - 1] + (left[row - 1] === right[column - 1] ? 0 : 1));
-    }
-    previous = current;
-  }
-  return previous[right.length];
-}
-
-function toolTypo(value) {
-  if (KNOWN_TOOL_NAMES.includes(value)) return null;
-  const limit = value.length < 4 ? 1 : 2;
-  const matches = KNOWN_TOOL_NAMES.map(name => [name, editDistance(value, name)]).filter(([, distance]) => distance <= limit).sort((left, right) => left[1] - right[1]);
-  return matches[0]?.[0] ?? null;
-}
-
 function normalizedToolName(value, label) {
   if (typeof value !== 'string' || !ROLE_ID.test(value)) fail(`${label} has invalid tool ${value}`);
-  const normalized = value.toLowerCase();
-  const suggestion = toolTypo(normalized);
-  if (suggestion) fail(`${label} tool ${value} looks like a typo of known tool ${suggestion}`);
-  return normalized;
+  return value.toLowerCase();
 }
 
 function validateToolCaps(value) {
@@ -261,7 +238,6 @@ export function boxEntries(role, deps = defaultDeps()) {
 // shell or interpreter the script it was given. Arguments of any other program
 // (`vim claude.log`) say nothing about the program.
 function programWords(argv) {
-  const words = [];
   for (let index = 0; index < argv.length; index += 1) {
     const word = argv[index];
     const base = path.basename(word).replace(/^-/, '');
@@ -274,29 +250,44 @@ function programWords(argv) {
       }
       continue;
     }
-    words.push(base);
+    let script = null;
     if (SHELLS.has(base) || INTERPRETERS.has(base)) {
-      const script = argv.slice(index + 1).find(next => !next.startsWith('-'));
-      if (script) words.push(path.basename(script.trim().split(/\s+/)[0]));
+      const argument = argv.slice(index + 1).find(next => !next.startsWith('-'));
+      if (argument) script = path.basename(argument.trim().split(/\s+/)[0]);
     }
-    break;
+    return { executable: base, script };
   }
-  return words;
+  return { executable: null, script: null };
 }
 
 // A pane whose foreground is only a shell has no agent, whatever tool the registry names.
 export function detectTool(processes, knownTools) {
   let sawProgram = false;
+  const executables = [], scripts = [];
   for (const proc of processes ?? []) {
     const argv = Array.isArray(proc.argv) && proc.argv.length ? proc.argv : String(proc.cmdline ?? proc.name ?? '').split(/\s+/).filter(Boolean);
-    const words = programWords(argv);
+    const { executable, script } = programWords(argv);
+    if (executable && !SHELLS.has(executable) && !INTERPRETERS.has(executable)) {
+      executables.push(executable);
+      sawProgram = true;
+    }
+    if (script) {
+      scripts.push(script);
+      sawProgram = true;
+    }
+  }
+  const match = words => {
     for (const word of words) {
       const normalizedWord = word.toLowerCase();
       const tool = knownTools.find(name => normalizedWord === name.toLowerCase() || normalizedWord.startsWith(`${name.toLowerCase()}-`) || normalizedWord.startsWith(`${name.toLowerCase()}.`));
-      if (tool) return { alive: true, tool: tool.toLowerCase() };
+      if (tool) return tool.toLowerCase();
     }
-    if (words.some(word => !SHELLS.has(word) && !INTERPRETERS.has(word))) sawProgram = true;
-  }
+    return null;
+  };
+  const executableTool = match(executables);
+  if (executableTool) return { alive: true, tool: executableTool };
+  const scriptTool = match(scripts);
+  if (scriptTool) return { alive: true, tool: scriptTool };
   return sawProgram ? { alive: true, tool: 'unknown' } : { alive: false, tool: 'shell' };
 }
 
@@ -464,13 +455,15 @@ function deliverRole(registry, role, deps, now, at) {
   // it is retried with backoff.
   const retries = fresh.filter(entry => failures[entry.key] && failures[entry.key].next <= now).sort((a, b) => failures[a.key].count - failures[b.key].count);
   const order = [...fresh.filter(entry => !failures[entry.key]), ...retries];
-  const caps = order.length ? runningToolCaps(registry, role, deps) : null;
   let delivered = 0, attempts = 0, streak = 0;
   for (const entry of order) {
     if (attempts >= registry.delivery.maxPerRun || streak >= FAIL_STREAK) break;
     attempts += 1;
     let ok = true;
-    try { handOver(registry, role, entry, deps, caps); } catch { ok = false; }
+    try {
+      const caps = runningToolCaps(registry, role, deps);
+      handOver(registry, role, entry, deps, caps);
+    } catch { ok = false; }
     if (ok) {
       append([entry.key], 'delivered');
       delete failures[entry.key];
@@ -603,6 +596,7 @@ export function inspect(registry, deps = defaultDeps()) {
     if (row.alive === false) add('error', 'session-down', role.id, `pane ${role.paneId} runs only a shell`);
     if (row.alive && !role.tools.includes(row.tool)) add('error', 'tool-drift', role.id, `pane runs ${row.tool}, registry allows ${role.tools.join(', ')}`);
     else if (row.alive && row.tool !== role.tools[0]) add('warn', 'tool-fallback', role.id, `pane runs ${row.tool}, first choice is ${role.tools[0]}`);
+    if (row.alive && !Object.hasOwn(TOOL_CAPS_DEFAULTS, row.tool)) add('warn', 'tool-capability-fallback', role.id, `tool ${row.tool} uses generic bg_notify=false and submit_keys=Enter defaults`);
     if (role.wait) {
       // A `nudge` wait script is one the role depends on (it may be the only reader
       // of the box, or the role's channel poller), so its stop is an error even
