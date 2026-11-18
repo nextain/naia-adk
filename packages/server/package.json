@@ -1,6 +1,6 @@
 {
   "name": "@naia-adk/server",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Naia ADK backend server with REST/WS API",
   "type": "module",
   "bin": {

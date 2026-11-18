@@ -1,3 +1,4 @@
+import { readAdkVersion } from "./version.js"
 import { Command } from "commander"
 import { startServer } from "./server.js"
 
@@ -6,7 +7,7 @@ const program = new Command()
 program
   .name("naia-adk")
   .description("Naia ADK backend server")
-  .version("0.1.0")
+  .version(readAdkVersion())
 
 program
   .command("serve")

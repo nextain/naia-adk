@@ -1,6 +1,6 @@
 {
   "name": "@naia-adk/naia-anyllm",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "LLM adapter for naia-adk — connects to any-llm gateway or direct providers",
   "type": "module",
   "main": "src/index.ts",

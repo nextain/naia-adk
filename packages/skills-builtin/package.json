@@ -1,6 +1,6 @@
 {
   "name": "@naia-adk/skills-builtin",
-  "version": "0.0.1",
+  "version": "2.0.0",
   "description": "Generic skills catalog for Naia (10 skills migrated from naia-os): TTS / Cron / Memo / Time / Weather / Notify / Diagnostics / Sessions / Skill-manager / Config / SystemStatus. Zero runtime deps.",
   "type": "module",
   "main": "./dist/index.js",

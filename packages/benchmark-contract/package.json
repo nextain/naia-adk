@@ -1,6 +1,6 @@
 {
   "name": "@naia-adk/benchmark-contract",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "description": "Permanent benchmark and governance evidence contracts shared by naia-adk and naia-agent",
   "private": true,
   "license": "Apache-2.0",
