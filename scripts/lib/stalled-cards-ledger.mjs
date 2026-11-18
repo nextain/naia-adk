@@ -73,6 +73,11 @@ function resolveWakeDir(role, wlRole, meta) {
   return isAbsolute(raw) ? raw : resolve(meta.root, raw);
 }
 
+/** Return true when a ledger row tracks a worker run rather than a task card. */
+function isWorkerLedgerItem(item) {
+  return Boolean(item && typeof item === 'object' && !Array.isArray(item) && item.kind === 'worker');
+}
+
 function validateJsonItem(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) throw Error('invalid json ledger item');
   safeName(item.id);
@@ -91,7 +96,8 @@ async function readRoleJsonLedger(filePath, roleId) {
   }
   const seen = new Set();
   for (const item of doc.items) {
-    validateJsonItem(item);
+    if (isWorkerLedgerItem(item)) safeName(item.id);
+    else validateJsonItem(item);
     if (seen.has(item.id)) throw Error('duplicate json ledger item');
     seen.add(item.id);
   }
@@ -139,6 +145,7 @@ export async function collectRoleCards({ config, role, meta, now }) {
       const rows = (await readWorkLedger(config.workLedger, now)).filter(r => r.role === role.id);
       yamlKnown = true;
       for (const row of rows) {
+        if (isWorkerLedgerItem(row)) continue;
         const isOpen = OPEN_STATUSES.has(row.status);
         const progressDisabled = row.progress === false;
         const ledgerEvidence = collectLedgerTimestamps([
@@ -177,6 +184,7 @@ export async function collectRoleCards({ config, role, meta, now }) {
       const doc = await readRoleJsonLedger(jsonPath, role.id);
       jsonKnown = true;
       for (const item of doc.items) {
+        if (isWorkerLedgerItem(item)) continue;
         const isOpen = OPEN_STATUSES.has(item.status);
         const progressDisabled = item.progress === false;
         const rawProgress = [

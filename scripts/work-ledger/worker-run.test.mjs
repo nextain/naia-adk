@@ -510,9 +510,16 @@ test("coexistence with existing ledger rows, due-timer, drive, ledger-watch, and
   const actions = planDueTimers({ root, ledgers: [ledger], timers: [], now });
   assert.deepEqual(actions.map((a) => [a.type, a.id]), [["arm", "card-open"]]);
 
-  // 5. ledger-watch never wakes for overdue on kind=worker rows while active.
+  // 5. ledger-watch never wakes for overdue on kind=worker rows while active,
+  //    but still wakes normally for an overdue regular task card in the same ledger.
   const watchRes = await watch({ root, config, runner: fake.runner, now });
   assert.equal(watchRes.wakes.length, 0);
+  await ledgerMain([
+    "add", "--root", root, "--role", "minho", "--id", "card-overdue",
+    "--title", "기한 지난 일반 일감", "--due", PAST, "--channel", "ch-1", "--msg-id", "human-2",
+  ], { now });
+  const watchMixed = await watch({ root, config, runner: fake.runner, now });
+  assert.deepEqual(watchMixed.wakes.map((w) => [w.id, w.reason]), [["card-overdue", "기한 넘음"]]);
 
   // 6. drive.tick() ignores kind=worker rows.
   const driveCfg = {

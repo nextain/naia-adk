@@ -420,3 +420,57 @@ test('same-branch fixes: per-role ledger scoping, malformed workLedgerConfig, ba
   }
   assert.throws(() => validateConfig({ ...fVal.c, responseWatchState: '' }), /absolute response state/);
 });
+
+test('stalled-cards-ledger skips kind:"worker" rows even past due while waking normal stalled cards', async () => {
+  const pastDue = new Date(now - 2 * 3600000).toISOString();
+  const startedAt = new Date(now - 3 * 3600000).toISOString();
+  const makeWorkerRow = (dir, id, status) => ({
+    id,
+    kind: 'worker',
+    title: `일꾼 ${id}`,
+    name: id,
+    role: 'role-a',
+    parent: 'webgpu-15',
+    unit: `adk-worker-test-role-a-${id}.service`,
+    tool: 'codex',
+    status,
+    started: startedAt,
+    ended: status === 'running' ? null : new Date(now - 3600000).toISOString(),
+    result: join(dir, `${id}.md`),
+    exit: status === 'running' ? null : 1,
+    from: { channel: '', msg_id: '-', quote: '' },
+    due: pastDue,
+    created_at: startedAt,
+    worker: null,
+    checked_at: null,
+    note: '',
+  });
+
+  // Worker-only ledger past due and stale threshold: no degradation and no stalled wake.
+  const fOnly = await cardWakeFixture({ cardDue: pastDue, createdHoursAgo: 3, status: 'open' });
+  fOnly.ledger.items = [makeWorkerRow(fOnly.dir, 'w-run-overdue', 'running'), makeWorkerRow(fOnly.dir, 'w-fail-old', 'failed')];
+  await fOnly.saveJsonLedger();
+  const onlyRes = await fOnly.run();
+  assert.equal(onlyRes.degraded, false);
+  assert.equal(onlyRes.rows[0].ledgerKnown, true);
+  assert.deepEqual(onlyRes.rows[0].errors, []);
+  assert.equal(onlyRes.rows[0].cards.length, 0);
+  assert.ok(!onlyRes.rows[0].anomalies.includes('stalled'));
+  assert.equal(onlyRes.wakes.length, 0);
+  assert.equal((await fOnly.readWakes()).length, 0);
+
+  // Mixed ledger: overdue kind:"worker" row is skipped while normal open card still wakes.
+  const fMixed = await cardWakeFixture({ cardDue: pastDue, createdHoursAgo: 3, status: 'open' });
+  fMixed.ledger.items.push(makeWorkerRow(fMixed.dir, 'w-mix-overdue', 'running'));
+  await fMixed.saveJsonLedger();
+  const mixRes = await fMixed.run();
+  assert.equal(mixRes.rows[0].ledgerKnown, true);
+  assert.deepEqual(mixRes.rows[0].errors, []);
+  assert.equal(mixRes.rows[0].cards.length, 1);
+  assert.equal(mixRes.rows[0].cards[0].id, 'webgpu-15');
+  assert.equal(mixRes.wakes.length, 1);
+  assert.equal(mixRes.wakes[0].cardId, 'webgpu-15');
+  const wakes = await fMixed.readWakes();
+  assert.equal(wakes.length, 1);
+  assert.match(wakes[0].name, /-stalled-webgpu-15-route-role-a\.md$/);
+});

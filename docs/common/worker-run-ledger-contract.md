@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | 생산자·실행기 | `scripts/work-ledger/worker-run.mjs` | 실행 전 `running` 줄을 열고 `systemd-run --user`로 일꾼을 띄우며, 종료 뒤 종료 코드와 결과 파일 유무로 `done`/`failed`를 닫습니다. |
 | 정본 스키마·설정 | `scripts/work-ledger/ledger.mjs` | 설정 읽기(`loadLedgerConfig`), 장부 경로(`ledgerPath`), 잠금(`withLock`), 스키마 검증(`validateLedger`)을 제공합니다. |
-| 감시·사라짐 정리기 | `scripts/work-ledger/ledger-watch.mjs`, `scripts/work-ledger/due-timer.mjs` | `kind: "worker"` 줄을 일반 기한·사람 대기 감시에서 빼고, 유닛이나 프로세스가 사라진 `running` 줄을 `failed`로 닫습니다. |
+| 감시·사라짐 정리기 | `scripts/work-ledger/ledger-watch.mjs`, `scripts/work-ledger/due-timer.mjs`, `scripts/lib/stalled-cards-ledger.mjs` | `kind: "worker"` 줄을 일반 기한·사람 대기·카드 정체 감시에서 건너뛰고, 일꾼 줄은 `worker-run.mjs`의 유닛 대조(`reconcileWorkerRuns`)가 맡아 사라진 `running` 줄을 `failed`로 닫습니다. |
 | 소비자 | 대시보드, 작업 보드, 외부 상태 서버 | 읽기 전용으로 설정과 역할별 장부를 읽어 `running` 일꾼 목록, 부모 일감 연결, 최근 완료·실패 이력을 보여 줍니다. |
 
 ## 설정과 장부 경로 해석
@@ -189,7 +189,7 @@ node scripts/work-ledger/worker-run.mjs list --root . --status running --json
 
 이 계약은 `scripts/work-ledger/`와 `docs/` 범위에서 먼저 확정되었습니다. 병렬 개발 이후 통합 단계에서 아래 인접 모듈을 함께 맞춥니다.
 
-1. **`scripts/lib/stalled-cards-ledger.mjs` (`session-health.mjs`)**: 현재 `validateJsonItem`이 `running`/`failed`/`escalated_human` 상태를 알지 못해 `.agents/work/ledger/<role>.json`에 `kind: "worker"` 줄이 들어가면 `work ledger unavailable`로 실패합니다. 통합 시 `item.kind === "worker"` 줄을 카드 정체 검증에서 건너뛰거나 별도 집계로 분리해야 합니다.
+1. **`scripts/lib/stalled-cards-ledger.mjs` (`session-health.mjs`)**: `kind: "worker"` 줄은 사람·카드 기한·정체 감시에서 건너뛰며, 대신 일꾼 줄 감시는 `worker-run.mjs`의 유닛 대조(`reconcileWorkerRuns`)가 맡습니다(일반 카드의 `escalated_human` 상태 확장만 작업 보드 통합 시 별도 반영).
 2. **`.claude/hooks/lib/effective-argv.js`**: 역할이 배경/래퍼 명령 안에서 `scripts/work-ledger/worker-run.mjs`를 호출하도록 표준 진입점 허용 목록(`isAllowedStandardEntrypoint`)에 추가하거나 `scripts/worker-runner/spawn-worker.mjs`와 연결할 수 있습니다.
 
 ## 시험 및 근거
