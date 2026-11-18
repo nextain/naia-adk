@@ -140,6 +140,27 @@ for (const command of ["git status", "git.exe clean -n", "git --no-pager checkou
 }
 assert.match(policy.emailSend("node send.js send")?.reason || "", /외부 이메일 발송/);
 assert.match(policy.prGuard("gh issue create --repo third-party/project --title x --body y", {})?.reason || "", /외부 repo/);
+for (const command of [
+  "gh pr merge 5 --admin",
+  "gh pr merge --admin 5 --squash",
+  "gh pr merge 5 --squash --admin --repo nextain/naia-adk",
+  "gh pr merge 5 --admin=true",
+  "gh pr merge 5 --repo nextain/naia-adk --admin",
+  "gh -R nextain/naia-adk pr merge 5 --admin",
+  "cd x && gh pr merge 5 --admin",
+  "gh pr merge 5 \"--admin\"",
+  "gh api -X PUT repos/nextain/naia-adk/pulls/5/merge",
+]) {
+  assert.match(policy.prGuard(command, {})?.reason || "", /관리자 우회/, `admin merge must be blocked: ${command}`);
+}
+assert.equal(policy.prGuard("gh pr merge 5 --squash --repo nextain/naia-adk", {}) , null, "plain squash merge to nextain passes");
+assert.equal(policy.prGuard("git push origin feature", {}), null, "feature push is not a gh write");
+assert.equal(policy.prGuard("echo admin; gh pr view 5", {}), null);
+// Force pushes (--force, --force-with-lease, +refspec) are blocked for every branch, main included.
+for (const command of ["git push --force origin main", "git push origin --force-with-lease main", "git push origin +main", "git push origin +HEAD:main", "git push -f origin main"]) {
+  assert.match(policy.gitPush(command)?.reason || "", /FORCE PUSH/, `force push must be blocked: ${command}`);
+}
+assert.equal(policy.gitPush("git push origin feature"), null);
 
 const routing = fs.readFileSync(path.join(root, ".agents", "context", "development-model-routing.yaml"), "utf8");
 assert.match(routing, /Every delegated or nested role inherits/);
