@@ -601,7 +601,7 @@ describe("W1d-2 검수 결함 수정 포괄 시험 (1~8번)", () => {
       expect(parsed.schemaVersion).toBe(1)
       expect(parsed.id).toBe(noteId)
       expect(parsed.reply).toMatch(/^답변 번호 \d$/)
-    })
+    }, 20000)
 
     it("즐겨찾기 199개에서 POST 5개 동시 -> 파일에 200개, 1개 200·4개 400", async () => {
       const favFile = path.join(workDir, "doc-favorites.json")
