@@ -422,3 +422,214 @@ export function extractBoardSchedule(snapshot: unknown, fallbackToday?: string):
     milestones,
   }
 }
+
+// ── 업무 장부(/api/portal/ledger?view=due) → 통합 일정 투영 변환 ─────────────
+
+const SAFE_SCHEDULE_LOCAL_ID_RE = /^[A-Za-z0-9._:\-가-힣]{1,120}$/
+
+function strictDateOnly(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  const match = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const dt = new Date(Date.UTC(year, month - 1, day))
+  if (
+    dt.getUTCFullYear() !== year
+    || dt.getUTCMonth() !== month - 1
+    || dt.getUTCDate() !== day
+  ) {
+    return null
+  }
+  return trimmed
+}
+
+export function isSafeScheduleLocalId(value: unknown): value is string {
+  return typeof value === "string" && SAFE_SCHEDULE_LOCAL_ID_RE.test(value)
+}
+
+function sanitizeLedgerItemId(rawId: unknown): string | null {
+  if (typeof rawId !== "string") return null
+  const trimmed = rawId.trim()
+  if (!trimmed) return null
+  if (SAFE_SCHEDULE_LOCAL_ID_RE.test(trimmed)) return trimmed
+  const cleaned = trimmed.replace(/[^A-Za-z0-9._:\-가-힣]/g, "_").slice(0, 120)
+  return cleaned && SAFE_SCHEDULE_LOCAL_ID_RE.test(cleaned) ? cleaned : null
+}
+
+function formatLedgerStatusLabel(rawStatus: unknown): string {
+  const status = typeof rawStatus === "string" ? rawStatus.trim() : ""
+  switch (status) {
+    case "open":
+      return "진행 중"
+    case "waiting_human":
+      return "확인 대기"
+    case "escalated_human":
+      return "사람 개입"
+    case "done":
+      return "완료"
+    case "dropped":
+      return "제외"
+    default:
+      return truncateText(status, MAX_TASK_TEXT_LENGTH) || "미확인"
+  }
+}
+
+export function sanitizeLedgerDocHref(rawHref: unknown): string | null {
+  if (typeof rawHref !== "string") return null
+  const trimmed = rawHref.trim()
+  if (!trimmed || trimmed.length > 2048) return null
+  if (trimmed.startsWith("//") || trimmed.includes("\\") || /[\u0000-\u001f\u007f]/.test(trimmed)) {
+    return null
+  }
+  if (!(trimmed === "/docs" || trimmed.startsWith("/docs?") || trimmed.startsWith("/d/"))) {
+    return null
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed, "http://placeholder.invalid")
+  } catch {
+    return null
+  }
+  if (parsed.origin !== "http://placeholder.invalid") return null
+  if (parsed.pathname !== "/docs" && !parsed.pathname.startsWith("/d/")) return null
+  const segments = parsed.pathname.split("/").slice(1)
+  for (const seg of segments) {
+    if (seg === "." || seg === "..") return null
+    try {
+      const dec = decodeURIComponent(seg)
+      if (dec === "." || dec === ".." || dec.includes("\\")) return null
+    } catch {
+      return null
+    }
+  }
+  return trimmed
+}
+
+function pickLedgerDocLink(rawLinks: unknown): string | null {
+  if (!Array.isArray(rawLinks)) return null
+  for (const entry of rawLinks) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue
+    const link = entry as Record<string, unknown>
+    if (link.kind !== "doc") continue
+    const safeHref = sanitizeLedgerDocHref(link.href)
+    if (safeHref) return safeHref
+  }
+  return null
+}
+
+/**
+ * 읽기 전용 업무 장부 응답(`/api/portal/ledger?view=due`)을 통합 일정 달력용 `BoardScheduleProjection`으로 변환한다.
+ * - `dueDate`가 유효한 `YYYY-MM-DD`인 항목은 모두 `workItems`에 포함한다.
+ * - 기한이 없는 활성(`!done && !dropped`) 항목만 `undatedItems`에 포함하고, 완료·제외 무기한 항목은 제외한다.
+ * - `kind: "work_document"`로 투영해 기본 켜짐(`layers.work`) 및 `work:<id>` 딥링크 조회와 1:1로 맞춘다.
+ */
+export function extractLedgerDueSchedule(payload: unknown, fallbackToday?: string): BoardScheduleProjection {
+  const p = (payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {}) as Record<string, unknown>
+  const observedAt = typeof p.observedAt === "string" ? p.observedAt : null
+  const todayDate =
+    strictDateOnly(p.todayDate)
+    ?? strictDateOnly(fallbackToday)
+    ?? localDateOnly(fallbackToday)
+    ?? localDateOnly(new Date())
+    ?? "2000-01-01"
+
+  const rawItems = Array.isArray(p.items) ? p.items : []
+  const workItems: WorkScheduleItem[] = []
+  const undatedItems: WorkScheduleItem[] = []
+
+  for (const rawEntry of rawItems) {
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) continue
+    const item = rawEntry as Record<string, unknown>
+    const id = sanitizeLedgerItemId(item.id)
+    if (!id) continue
+
+    const rawStatus = typeof item.status === "string" ? item.status.trim() : ""
+    const completed = rawStatus === "done"
+    const cancelled = rawStatus === "dropped"
+    const overdue = Boolean(item.overdue) && !completed && !cancelled
+    const status = formatLedgerStatusLabel(rawStatus)
+    const title = truncateText(item.title, MAX_TASK_TEXT_LENGTH) || id
+    const assignee =
+      typeof item.role === "string" && item.role.trim()
+        ? truncateText(item.role, MAX_TASK_TEXT_LENGTH)
+        : null
+    const description = truncateText(item.note, MAX_QUEUE_DESCRIPTION_LENGTH)
+    const docLink = pickLedgerDocLink(item.resultLinks)
+    const dueDate = strictDateOnly(item.dueDate)
+
+    if (dueDate) {
+      workItems.push({
+        id,
+        title,
+        issue: "",
+        status,
+        kind: "work_document",
+        completed,
+        cancelled,
+        overdue,
+        hasDates: true,
+        startDate: dueDate,
+        endDate: dueDate,
+        dueDate,
+        startSource: "ledger.due",
+        endSource: "ledger.due",
+        dueSource: "ledger.due",
+        dateSources: ["ledger.due"],
+        milestoneId: null,
+        milestoneName: null,
+        parentGroupId: null,
+        parentGroupName: null,
+        assignee,
+        tasks: [],
+        taskTotal: 0,
+        taskDone: 0,
+        docLink,
+        attemptCount: 0,
+        description,
+        openEnded: false,
+      })
+    } else if (!completed && !cancelled) {
+      undatedItems.push({
+        id,
+        title,
+        issue: "",
+        status,
+        kind: "work_document",
+        completed,
+        cancelled,
+        overdue,
+        hasDates: false,
+        startDate: null,
+        endDate: null,
+        dueDate: null,
+        startSource: null,
+        endSource: null,
+        dueSource: null,
+        dateSources: [],
+        milestoneId: null,
+        milestoneName: null,
+        parentGroupId: null,
+        parentGroupName: null,
+        assignee,
+        tasks: [],
+        taskTotal: 0,
+        taskDone: 0,
+        docLink,
+        attemptCount: 0,
+        description,
+        openEnded: false,
+      })
+    }
+  }
+
+  return {
+    observedAt,
+    todayDate,
+    workItems,
+    undatedItems,
+    milestones: [],
+  }
+}

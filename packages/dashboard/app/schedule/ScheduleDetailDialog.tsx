@@ -106,10 +106,13 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
   const tasks = w?.tasks ?? []
   const taskTotal = w?.taskTotal ?? tasks.length
   const taskDone = w?.taskDone ?? tasks.filter((t) => t.done).length
+  const isLedgerDue = w?.dueSource === "ledger.due"
   const kindLabel = w
-    ? w.kind === "work_document"
-      ? "작업 문서"
-      : "큐 항목"
+    ? isLedgerDue
+      ? "업무 장부"
+      : w.kind === "work_document"
+        ? "작업 문서"
+        : "큐 항목"
     : c
       ? c.kind === "regular"
         ? "정기 반복"
@@ -259,8 +262,8 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
                 </div>
               )}
 
-              {/* 세부 작업 목록 (작업 문서이거나 세부 작업이 있는 경우) */}
-              {(w?.kind === "work_document" || taskTotal > 0) && (
+              {/* 세부 작업 목록 (작업 문서이거나 세부 작업이 있는 경우, 단 업무 장부 카드의 빈 목록은 숨김) */}
+              {((w?.kind === "work_document" && !isLedgerDue) || taskTotal > 0) && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <h3 data-testid="schedule-detail-task-summary" className="text-xs font-bold text-sky-300">
@@ -318,22 +321,24 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
                 </div>
               )}
 
-              {/* 큐 항목: 시도 횟수 · 설명 */}
-              {w?.kind === "queue" && (
+              {/* 큐 항목 또는 업무 장부 설명 */}
+              {(w?.kind === "queue" || (isLedgerDue && Boolean(w?.description))) && (
                 <div className="space-y-2 rounded-lg border border-neutral-800 bg-neutral-950/70 p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-neutral-400">시도 횟수</span>
-                    <span data-testid="schedule-detail-attempt-count" className="font-semibold text-neutral-200">
-                      {w.attemptCount ?? 0}회
-                    </span>
-                  </div>
+                  {w?.kind === "queue" && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-neutral-400">시도 횟수</span>
+                      <span data-testid="schedule-detail-attempt-count" className="font-semibold text-neutral-200">
+                        {w.attemptCount ?? 0}회
+                      </span>
+                    </div>
+                  )}
                   <div>
                     <div className="text-[11px] text-neutral-400 mb-1">설명</div>
                     <p
                       data-testid="schedule-detail-description"
                       className="text-xs text-neutral-200 whitespace-pre-wrap break-words leading-relaxed"
                     >
-                      {w.description || "설명이 없습니다."}
+                      {w?.description || "설명이 없습니다."}
                     </p>
                   </div>
                 </div>
