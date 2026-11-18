@@ -1,0 +1,153 @@
+id: REQ-GOV-001
+title: "Harness governance: role tier write guard, review cap, and plan-review write lock"
+title_ko: "하네스 거버넌스: 층 분리·리뷰 상한·계획 쓰기 잠금"
+product: naia-adk
+module: harness-governance
+status: candidate
+source: candidate
+source_provenance: pending
+source_kind: candidate
+created: 2026-11-18
+updated: 2026-11-18
+change_effect: extend
+preserves:
+  - two-tier-execution-three-tier-coordination-boundary
+  - approval-plan-sha256-digest-binding
+  - fail-closed-pretool-hooks
+must_not_change:
+  - lead-role-env-spoofing-must-not-bypass-guard
+  - worker-cli-must-not-auto-reset-review-cap
+architecture_fit:
+  original_request: "모든 서비스와 기능은 문서화·시험·회귀시험이 가능해야 하며 상위기획부터 통합시험까지 문서 사슬을 갖춘다."
+  parent_structure: ".claude/hooks/* + .agents/hooks/* + .agents/scripts/approval-plan.mjs + scripts/worker-runner/*"
+  acceptance_rationale: "기존 가이드(lead-write-guard.md, plan-review-write-guard.md, approval-plan-gate.md, drift-guard.md, worker-runner/README.md)와 실제 훅/러너 시험을 하나의 요구 사슬로 묶고 비Claude 도구·운영 핀 빈칸을 드러낸다."
+description: |
+  [목적]
+  역할 세션(3층)이 저장소 코드를 직접 수정하지 않고 2층 일꾼에게 위임하도록 쓰기 경계를 강제하고, 일꾼 코드 검수가 연속 실패(2회 FAIL)할 때 무한 재수정을 멈추고 방식을 재설계하도록 상한을 걸며, 운영 계획 적대 리뷰가 도는 동안 저장소가 변경되어 리뷰 영수증이 무효화되는 사고를 배타 잠금으로 막는다.
+
+  [기능 목록 (하네스북 괴리 P2 · 1-1 거버넌스 장치)]
+  1. 층 분리 쓰기 막기 (lead-write-guard):
+     - 조상 claude /proc/<pid>/cwd 기반 .naia-role.json(lead_guard.enabled) 및 -p/agent_id 판정 (환경 변수 스푸핑 무시): .claude/hooks/lead-write-guard.js, .claude/hooks/lib/lead-guard.js.
+     - 저장소 내 파일 변이·셸/git/스크립트 쓰기 및 비표준 분리 일꾼 실행(nohup/setsid/&/tmux/screen) 차단, docs/common/<역할>/·.agents/progress/·.agents/work/·일회용 worktree 루트 정리만 허용.
+     - 비상 예외 기록(.agents/lead-guard/exception.json) 열기/닫기/조회 및 3층 자가 오픈 거부: scripts/lead-guard-exception.mjs.
+     - Muse PreToolUse 어댑터 연동: .agents/hooks/muse-pretooluse-adapter.cjs (비고: agy·codex 3층 세션용 동등 훅은 미구현).
+  2. 코드 검수 회차 상한 (review-cap):
+     - brief-*.md 헤더(review-lane:, review-cap-reset:) 및 fix/rev 회차 분류: scripts/worker-runner/review-cap.mjs.
+     - 동일 lane 내 result-rev*.md 첫 줄 '판정: FAIL'이 cap(기본 2회)에 도달하면 다음 fix 회차를 exit 3으로 차단하고 wake 노트 생성, review-cap-reset: 지정 시 이후부터 재계산.
+     - runner CLI 연동(--review-cap, --no-review-cap, --review-cap-wake-dir): scripts/worker-runner/cli.mjs, spawn-worker.mjs.
+  3. 계획 리뷰 중 저장소 쓰기 잠금 (plan-review-write-guard):
+     - approval-plan.mjs review 실행 시 대상 저장소 .agents/state/plan-review.lock(plan-review-lock/v1, TTL 기본 60분) 배타 생성 및 정상/오류/시그널 종료 정리: .agents/scripts/approval-plan.mjs, .claude/hooks/lib/deploy-plan.js.
+     - 살아 있는 잠금 중 해당 저장소 변이 도구·쓰기 셸 명령 차단(읽기·저장소 밖·리뷰 PID 계보·gates/ 리뷰 기록은 통과, deploy-plan.json·잠금 삭제는 차단) + hook-watchdog 15초 시한 fail-closed: .claude/hooks/plan-review-write-guard.js, lib/plan-review-write-targets.js, lib/hook-watchdog.js.
+  4. 연관 산출물·사본·보호 경로·설계 문서 보호 훅:
+     - artifact-drift-guard.js, copy-file-guard.js, protected-path-guard.js, protected-path-command-guard.js, protected-path-read-guard.js, design-doc-guard.js.
+
+  [사용자 시나리오]
+  - UC-GOV-001-1 (3층 위임 경계): 3층 역할 세션(Claude/Muse)이 저장소 코드를 Edit 또는 sed -i로 수정하려 하면 차단되고 spawn-worker.mjs 지시서 위임 안내를 받으며, docs/common/<역할>/ 문서와 2층 claude -p 일꾼 쓰기는 통과한다.
+  - UC-GOV-001-2 (검수 2회 상한): 같은 review-lane에서 rev1·rev2 연속 FAIL 후 fix2를 실행하면 cli.mjs가 exit 3으로 막고 wake 노트를 남기며, 반례 고정 후 review-cap-reset: 헤더를 추가하면 재개된다.
+  - UC-GOV-001-3 (계획 리뷰 잠금): approval-plan.mjs review 진행 중 다른 세션이 같은 저장소를 수정하려 하면 plan-review-write-guard가 차단하고, 리뷰 종료·중단 시 잠금이 자동 해제된다.
+acceptance_criteria:
+  - ".claude/hooks/lead-write-guard.test.cjs, profile-role-guards.test.cjs, .agents/hooks/muse-pretooluse-adapter.test.cjs 전수 통과"
+  - "scripts/worker-runner/runner.test.mjs의 review-cap 2회 차단·reset·lane 격리·wake 노트·CLI 옵션 시험 전수 통과"
+  - ".claude/hooks/plan-review-write-guard.test.cjs 및 test/run-approval-plan-gate-test.cjs 전수 통과"
+  - ".claude/hooks/drift-guard.test.cjs 및 test/run-protected-paths-test.cjs 전수 통과"
+  - "빈칸 목록(agy·codex 3층 세션용 lead-write-guard/plan-review-write-guard 어댑터 미구현 및 운영 핀 체크아웃 동기화 검사 시험 없음)이 기록된다"
+trace:
+  code:
+    - path: .claude/hooks/lead-write-guard.js
+      symbol: guideMessage
+      coverage: full
+    - path: .claude/hooks/lib/lead-guard.js
+      symbol: leadSession
+      coverage: full
+    - path: scripts/lead-guard-exception.mjs
+      symbol: activeException
+      coverage: partial
+    - path: .agents/hooks/muse-pretooluse-adapter.cjs
+      symbol: evaluateMusePreToolUse
+      coverage: full
+    - path: scripts/worker-runner/review-cap.mjs
+      symbol: evaluateReviewCap
+      coverage: full
+    - path: scripts/worker-runner/cli.mjs
+      symbol: checkReviewCap
+      coverage: full
+    - path: scripts/worker-runner/spawn-worker.mjs
+      symbol: spawnWorker
+      coverage: full
+    - path: .claude/hooks/plan-review-write-guard.js
+      symbol: inspectPlanReviewLock
+      coverage: full
+    - path: .claude/hooks/lib/deploy-plan.js
+      symbol: acquirePlanReviewLock
+      coverage: full
+    - path: .claude/hooks/lib/plan-review-write-targets.js
+      symbol: extractWriteTargets
+      coverage: full
+    - path: .claude/hooks/lib/hook-watchdog.js
+      symbol: runWithWatchdog
+      coverage: full
+    - path: .agents/scripts/approval-plan.mjs
+      symbol: acquirePlanReviewLock
+      coverage: full
+    - path: .claude/hooks/artifact-drift-guard.js
+      symbol: uncommittedArtifact
+      coverage: full
+    - path: .claude/hooks/copy-file-guard.js
+      symbol: duplicateCodeFile
+      coverage: full
+    - path: .claude/hooks/protected-path-guard.js
+      symbol: editPath
+      coverage: full
+    - path: .claude/hooks/protected-path-command-guard.js
+      symbol: commandPath
+      coverage: full
+    - path: .claude/hooks/protected-path-read-guard.js
+      symbol: readPath
+      coverage: full
+    - path: .claude/hooks/design-doc-guard.js
+      symbol: designDoc
+      coverage: full
+  tests:
+    - path: .claude/hooks/lead-write-guard.test.cjs
+      symbol: "3층: Edit·Write·NotebookEdit 로 저장소 코드 쓰기는 막히고, 안내문에 지시서와 한 줄 예시가 있다"
+      coverage: full
+    - path: .claude/hooks/profile-role-guards.test.cjs
+      symbol: "role detection follows CLAUDE_PROJECT_DIR before payload cwd and process cwd"
+      coverage: full
+    - path: .agents/hooks/muse-pretooluse-adapter.test.cjs
+      symbol: "real Claude gates allow safe Muse tool calls and lead-write-guard passes subagents and non-repo work files"
+      coverage: full
+    - path: scripts/worker-runner/runner.test.mjs
+      symbol: "review-cap-reset allows the reset fix round and recounts FAILs only after that brief timestamp"
+      coverage: full
+    - path: .claude/hooks/plan-review-write-guard.test.cjs
+      symbol: "9. approval-plan.mjs review 실행 중 잠금을 잡고 끝나거나 중단되면 잠금과 빈 폴더를 깨끗이 지운다"
+      coverage: full
+    - path: .claude/hooks/test/run-approval-plan-gate-test.cjs
+      symbol: "assessReadiness"
+      coverage: full
+    - path: .claude/hooks/drift-guard.test.cjs
+      symbol: "1. Artifact Gate (artifact-drift-guard.js)"
+      coverage: full
+    - path: .claude/hooks/test/run-protected-paths-test.cjs
+      symbol: "보호 경로 차단"
+      coverage: full
+    - path: "없음"
+      symbol: "agy·codex 등 비Claude/비Muse 3층 세션용 lead-write-guard 및 plan-review-write-guard 어댑터·시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "운영 훅·worker-runner 핀 체크아웃 일치 및 우회 방지 통합 점검 시험 없음"
+      coverage: none
+  documents:
+    - docs/design/dashboard-plan.md
+    - docs/guides/lead-write-guard.md
+    - docs/guides/plan-review-write-guard.md
+    - docs/guides/approval-plan-gate.md
+    - docs/guides/drift-guard.md
+    - scripts/worker-runner/README.md
+  reviews:
+    planning: null
+    development: null
+    test: null
+    integration: null
+decisions: []

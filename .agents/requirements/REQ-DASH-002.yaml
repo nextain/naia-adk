@@ -1,0 +1,147 @@
+id: REQ-DASH-002
+title: "Dashboard work board, work ledger, schedule, timeline todos, and decisions"
+title_ko: "대시보드 작업·장부·일정·할 일·결정 목록"
+product: naia-adk
+module: dashboard-work
+status: candidate
+source: candidate
+source_provenance: pending
+source_kind: candidate
+created: 2026-11-18
+updated: 2026-11-18
+change_effect: extend
+preserves:
+  - work-ledger-single-source-of-truth
+  - work-now-board-local-loopback-auth
+  - decision-doc-read-only-link-safety
+  - board-proxy-header-allowlist
+must_not_change:
+  - unconfigured-company-must-not-open-unverified-board
+  - work-now-board-must-not-auto-expose-on-dashboard
+architecture_fit:
+  original_request: "모든 서비스와 기능은 문서화·시험·회귀시험이 가능해야 하며 상위기획부터 통합시험까지 문서 사슬을 갖춘다."
+  parent_structure: "packages/dashboard(/work, /board, /decisions) + scripts/adk-board.mjs + scripts/work-ledger/* + scripts/work-now-board.mjs + scripts/lib/adk-schedule.mjs"
+  acceptance_rationale: "기존 REQ-WAKE-001 장부·일정 기록을 보존하면서 대시보드 작업·일정·할일·결정 화면 기능 전수와 미병합/미연결 빈칸을 요구 사슬로 등록한다."
+description: |
+  [목적]
+  사용자와 운영자가 팀 및 AI 에이전트의 현재 진행 작업, 대기·확인 필요 항목, 역할별 업무 장부와 기한 타이머, 개인·그룹·마일스톤 일정, 문서 기반 결정 목록을 대시보드와 장부 도구에서 추적·처리할 수 있게 한다.
+
+  [기능 목록 (화면 점검 1-1 할일 · 1-4 작업 · 1-5 일정 · 1-7 결정)]
+  1. 상단 '할 일 N' 배지 및 옆창 (TimelinePanel: 확정 요청·의견 요청 /board-waits·회신 알림·게시 확인): origin/main 미병합 (운영 3142 기능).
+  2. /work iframe '작업보드' 로딩 · 8894 스냅샷 응답 및 /board/[[...path]] 프록시 (adk-company.json의 board.port 조회, 미설정 시 작업 탭 비활성 및 503 안내): app/work/page.tsx, app/board/[[...path]]/route.ts, scripts/adk-board.mjs, scripts/adk-setup.mjs.
+  3. 작업보드 iframe 상단 '보기' & '🌐 English' 전환: 외부 보드 저장소 UI (origin/main 대시보드 내장 아님).
+  4. 작업보드 '요약' 탭 (#summaryRepoFilter, 진행 중, 확인 필요, 최근 끝남, 작업 문서): 외부 보드 저장소 UI.
+  5. 작업보드 '상세' 탭 (출처 칩 6종, 지표 9카드, 동시성 매트릭스 표, 필터/검색, 모달 3종): 외부 보드 저장소 UI.
+  6. 작업보드 iframe 내 '일정' 탭 & '마일스톤' 탭: 외부 보드 저장소 UI.
+  7. 역할별 업무 장부(work-ledger) · 자동 실행(drive) · 감시(ledger-watch) · 마감 타이머(due-timer) · 현재 업무 판(work-now-board): scripts/work-ledger/{ledger,drive,ledger-watch,due-timer}.mjs, scripts/work-now-board.mjs (비고: work-now-board는 기본 대시보드에 자동 연결되지 않음).
+  8. 일정 화면 (/work?view=schedule · /schedule · /board-schedule · /schedule-personal): '내 일정' 개인 일정 YAML CRUD, 레이어 4종 토글(개인·그룹·마일스톤·대기)·미완료/전체 필터, '월/주 단위' 및 이전/다음/오늘 이동, 일정 막대 클릭 ScheduleDetailDialog 상세창 및 +N건 더보기, '달력/목록 보기' 전환은 origin/main 미병합. 작업 문서 머리말(마일스톤:, 기한:) 및 할 일 표 검증은 scripts/lib/adk-schedule.mjs에 존재.
+  9. 결정 목록 화면 (/decisions): '지금 정할 것 N' 미결 결정 목록, '끝난 결정 N개 보기' 접기/펼침, '이전 결정 보관 문서 보기'(운영 3142 확장), localStorage 기반 문서 출처·경로·표 제목 설정 및 /docs 원본 문서 이동: app/decisions/page.tsx, DecisionList.tsx, decisions.ts (인라인 [확정]/[반려] 및 서버 저장 API는 미구현).
+
+  [사용자 시나리오]
+  - UC-DASH-002-1 (작업보드 열람): 사용자가 /work에 진입하면 회사 설정의 board.port로 프록시된 작업보드를 iframe으로 열람한다(미설정 시 안내 문구 표시).
+  - UC-DASH-002-2 (업무 장부·현재 판): 역할·운영자가 ledger.mjs로 항목을 추가·갱신·마감하고, work-now-board.mjs 인증 화면에서 현재 '진행 중' 업무만 역할별로 확인한다.
+  - UC-DASH-002-3 (결정 목록 열람): 사용자가 /decisions에서 대상 마크다운 문서와 대기/완료 제목을 저장하면 미결·완료 건수가 구분 표출되고 항목 클릭 시 /docs 해당 문서로 이동한다.
+  - UC-DASH-002-4 (목표 일정·할 일 루프 — 현 미병합): 사용자가 상단 '할 일' 옆창에서 확정/의견/회신 대기를 훑고 /work?view=schedule 달력에서 4개 레이어 일정을 조회하며 /decisions에서 인라인 확정을 처리한다.
+acceptance_criteria:
+  - "scripts/adk-board.test.mjs, scripts/work-now-board.test.mjs, scripts/work-ledger/{ledger,drive,due-integration,due-timer,human-wait}.test.mjs 전수 통과"
+  - "tests/adk-v200.test.mjs의 작업 문서 일정(마일스톤:, 기한:, ## 할 일) 검사 통과"
+  - "packages/dashboard/app/docs/decision-list.render.test.tsx의 대기/완료 표 파싱 및 오류/이스케이프 처리 통과"
+  - "빈칸 목록(work/page.tsx & board 프록시 시험 없음, decisions/page.tsx 상태·저장 시험 및 인라인 확정 미구현, ScheduleView·TimelinePanel·/board-waits·/board-schedule·/schedule-personal 미병합, work-ledger↔/work E2E 연결 없음)이 명확히 기록된다"
+trace:
+  code:
+    - path: packages/dashboard/app/work/page.tsx
+      symbol: WorkPage
+      coverage: none
+    - path: packages/dashboard/app/board/[[...path]]/route.ts
+      symbol: GET
+      coverage: none
+    - path: packages/dashboard/app/decisions/page.tsx
+      symbol: DecisionsPage
+      coverage: none
+    - path: packages/dashboard/app/decisions/DecisionList.tsx
+      symbol: DecisionList
+      coverage: full
+    - path: packages/dashboard/app/decisions/decisions.ts
+      symbol: parseDecisionSection
+      coverage: full
+    - path: scripts/adk-board.mjs
+      symbol: resolveBoardConfig
+      coverage: full
+    - path: scripts/adk-setup.mjs
+      symbol: validateCompanyConfigRaw
+      coverage: full
+    - path: scripts/work-now-board.mjs
+      symbol: startWorkNowBoard
+      coverage: full
+    - path: scripts/work-ledger/ledger.mjs
+      symbol: validateLedger
+      coverage: full
+    - path: scripts/work-ledger/drive.mjs
+      symbol: tick
+      coverage: full
+    - path: scripts/work-ledger/ledger-watch.mjs
+      symbol: watch
+      coverage: full
+    - path: scripts/work-ledger/due-timer.mjs
+      symbol: reconcileCurrent
+      coverage: full
+    - path: scripts/lib/adk-schedule.mjs
+      symbol: validateWorkDocSchedule
+      coverage: full
+  tests:
+    - path: packages/dashboard/app/docs/decision-list.render.test.tsx
+      symbol: "decision lists"
+      coverage: full
+    - path: scripts/adk-board.test.mjs
+      symbol: "adk-board (scripts/adk-board.mjs)"
+      coverage: full
+    - path: scripts/work-now-board.test.mjs
+      symbol: "private authenticated board uses the current ledger, escapes HTML and groups open work"
+      coverage: full
+    - path: scripts/work-ledger/ledger.test.mjs
+      symbol: "overdue open and waiting_human repeat wake rules, 30 minute dedup and independent reasons"
+      coverage: full
+    - path: scripts/work-ledger/drive.test.mjs
+      symbol: "a drive pass leaves waiting_human and every item without an instruction alone"
+      coverage: full
+    - path: scripts/work-ledger/due-integration.test.mjs
+      symbol: "add, due, done and drop reconcile, preserving the ledger on timer failure"
+      coverage: full
+    - path: scripts/work-ledger/due-timer.test.mjs
+      symbol: "planning arms, replaces, removes, fires, and ignores another role/root"
+      coverage: full
+    - path: scripts/work-ledger/human-wait.test.mjs
+      symbol: "incident: each pending question wakes once, using existing role route"
+      coverage: full
+    - path: tests/adk-v200.test.mjs
+      symbol: "8. parseWorkDocSchedule counts done rows and validateWorkDocSchedule checks milestone, 기한, and 할 일 table"
+      coverage: full
+    - path: "없음"
+      symbol: "WorkPage(app/work/page.tsx) 및 /board/[[...path]]/route.ts 프록시·503/502·헤더 전달 단위/IT/E2E 시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "DecisionsPage(app/decisions/page.tsx) localStorage 설정·/api/portal/text 연동·인라인 [확정]/[반려] 시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "일정 화면(ScheduleView, /work?view=schedule, /schedule, /board-schedule, /schedule-personal, ScheduleDetailDialog) origin/main 미병합 및 시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "'할 일 N' 배지 및 옆창(TimelinePanel, /board-waits) origin/main 미병합 및 시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "work-ledger / work-now-board ↔ 대시보드 /work 실시간 연결 및 iframe 8894(English/보기/요약/상세/일정/마일스톤) E2E 시험 없음"
+      coverage: none
+  documents:
+    - docs/design/dashboard-plan.md
+    - docs/guides/decision-list.md
+    - docs/guides/work-now-board.md
+    - docs/guides/work-ledger.md
+    - docs/common/work-ledger.md
+    - docs/work/work-ledger-schedule.md
+    - docs/guides/regular-schedule-ledger.md
+  reviews:
+    planning: null
+    development: null
+    test: null
+    integration: null
+decisions: []
