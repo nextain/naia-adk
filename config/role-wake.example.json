@@ -7,12 +7,11 @@
   "unit_dirs": ["/<home>/.config/systemd/user"],
   "pane": { "kind": "herdr", "bin": "/<home>/.local/bin/herdr" },
   "tool_caps": {
-    "bg_notify": { "claude": true, "codex": false, "agy": false, "opencode": false },
+    "bg_notify": { "claude": true, "agy": false, "muse": false },
     "submit_keys": {
       "claude": ["Enter"],
-      "codex": ["Enter", "Tab"],
       "agy": ["Enter"],
-      "opencode": ["Enter"]
+      "muse": ["Enter"]
     }
   },
   "delivery": {

@@ -50,20 +50,11 @@
    herdr pane read <칸> --source recent-unwrapped --lines 40
    ```
 
-## 도구 능력 표
+## 도구 능력
 
-깨움 동작은 역할 이름이 아니라 공통 역할 깨움 레지스트리의 도구 이름으로 정합니다. `tool_caps.bg_notify.<tool>`은 불리언이고, `tool_caps.submit_keys.<tool>`은 입력 뒤에 보낼 키 목록입니다. 값이 빠졌을 때의 기본값은 다음과 같습니다.
+기본값 표의 정본과 인스턴스 전달 계약은 [역할 깨움 레지스트리](role-wake-registry.md)에 있습니다. `delivery.command`를 실행할 때 레지스트리는 선택한 도구와 해석한 능력을 `ROLE_WAKE_TOOL`, JSON 배열인 `ROLE_WAKE_SUBMIT_KEYS`, `ROLE_WAKE_BG_NOTIFY` 환경 변수로 전달합니다. 인스턴스 어댑터는 이 값을 사용해야 합니다.
 
-| 도구 | `bg_notify` | `submit_keys` |
-|---|---:|---|
-| `claude` | `true` | `["Enter"]` |
-| `codex` | `false` | `["Enter", "Tab"]` |
-| `agy` | `false` | `["Enter"]` |
-| `opencode` | `false` | `["Enter"]` |
-
-명령행 검증은 기존 `roles` ID 목록을 유지하고 `tool_caps`에 역할별 한 줄을 덧붙입니다.
-
-`bg_notify=false`인 도구는 깨움 본문을 칸에 직접 넣고 설정된 키를 보냅니다. `run_in_background` 완료 알림을 받으라고 재촉하지 않습니다. 도구를 바꿀 때는 `tool`과 `tools[0]`이 일치하는지, 깨움 본문이 설정된 경로로 해당 칸에 도달하는지, 시작 대본이 기억 색인을 읽는지 함께 확인합니다. 상세 설정은 [역할 깨움 레지스트리](role-wake-registry.md)를 봅니다.
+`ROLE_WAKE_BG_NOTIFY=false`이면 어댑터가 깨움 본문을 칸에 직접 넣고 `ROLE_WAKE_SUBMIT_KEYS`의 키를 순서대로 보내야 합니다. `run_in_background` 완료 알림을 받으라고 재촉하지 않습니다. 도구를 바꿀 때는 `tool`과 `tools[0]`이 일치하는지, 실제 전경 도구로 능력을 해석하는지, 깨움 본문이 해당 칸에 도달하는지, 시작 대본이 기억 색인을 읽는지 함께 확인합니다.
 
 ## 4. 기록하는 법
 

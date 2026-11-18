@@ -4,7 +4,8 @@
     "status": "UPDATED",
     "files": [
       "docs/guides/role-wake-registry.md",
-      "docs/guides/agent-role-sessions.md"
+      "docs/guides/agent-role-sessions.md",
+      "config/role-wake.example.json"
     ]
   },
   "user_manual": {
@@ -18,6 +19,6 @@
   "reusable_learning": {
     "status": "UPDATED",
     "files": ["docs/guides/role-wake-registry.md"],
-    "detail": "Wake submission and background-notification behavior belongs to tool capabilities, not role names. Registry and unit tests cover defaults, overrides and schema validation; live pane delivery remains an instance acceptance check."
+    "detail": "Delivery must pass the observed foreground tool and resolved capabilities to the instance adapter; tools without background notifications require direct pane delivery. The registry resolves capabilities and validates defaults, overrides, misspellings and unused keys. Live pane delivery remains an instance acceptance check."
   }
 }

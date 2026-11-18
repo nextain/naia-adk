@@ -12,12 +12,17 @@ const WRAPPERS = new Set(['sudo', 'env', 'nice', 'setsid', 'stdbuf', 'timeout'])
 const INTERPRETERS = new Set(['node', 'python3', 'python']);
 const VIEW_KINDS = new Set(['l4-roles', 'wake-routes', 'liveness', 'session-health', 'bot-mention-wake']);
 const DEFAULTS = { heartbeatMaxAge: 300, maxPerRun: 50, lagSeconds: 600, retryMaxSeconds: 300, deliveredDays: 3, maxBoxFiles: 500, repeatSeconds: 3600, dmBackupMaxAge: 900 };
-const TOOL_CAPS_DEFAULTS = {
+const FALLBACK_TOOL_CAPS = Object.freeze({ bgNotify: false, submitKeys: Object.freeze(['Enter']) });
+const TOOL_CAPS_DEFAULTS = Object.assign(Object.create(null), {
   claude: { bgNotify: true, submitKeys: ['Enter'] },
   codex: { bgNotify: false, submitKeys: ['Enter', 'Tab'] },
+  // agy matches the instance configuration; muse has no instance override and
+  // keeps the existing conservative false/Enter fallback.
   agy: { bgNotify: false, submitKeys: ['Enter'] },
+  muse: { bgNotify: false, submitKeys: ['Enter'] },
   opencode: { bgNotify: false, submitKeys: ['Enter'] },
-};
+});
+const KNOWN_TOOL_NAMES = Object.keys(TOOL_CAPS_DEFAULTS);
 // A role whose session is down fails every file; stop that role for the run after this many in a row.
 const FAIL_STREAK = 3;
 // One run is bounded by max_per_run and the command timeouts; a lock older than this has no running owner.
@@ -29,6 +34,33 @@ const fail = message => { throw new Error(message); };
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const positive = (value, fallback, name) => value === undefined ? fallback : Number.isFinite(value) && value > 0 ? value : fail(`${name} must be a positive number`);
 
+function editDistance(left, right) {
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let row = 1; row <= left.length; row += 1) {
+    const current = [row];
+    for (let column = 1; column <= right.length; column += 1) {
+      current[column] = Math.min(current[column - 1] + 1, previous[column] + 1, previous[column - 1] + (left[row - 1] === right[column - 1] ? 0 : 1));
+    }
+    previous = current;
+  }
+  return previous[right.length];
+}
+
+function toolTypo(value) {
+  if (KNOWN_TOOL_NAMES.includes(value)) return null;
+  const limit = value.length < 4 ? 1 : 2;
+  const matches = KNOWN_TOOL_NAMES.map(name => [name, editDistance(value, name)]).filter(([, distance]) => distance <= limit).sort((left, right) => left[1] - right[1]);
+  return matches[0]?.[0] ?? null;
+}
+
+function normalizedToolName(value, label) {
+  if (typeof value !== 'string' || !ROLE_ID.test(value)) fail(`${label} has invalid tool ${value}`);
+  const normalized = value.toLowerCase();
+  const suggestion = toolTypo(normalized);
+  if (suggestion) fail(`${label} tool ${value} looks like a typo of known tool ${suggestion}`);
+  return normalized;
+}
+
 function validateToolCaps(value) {
   if (value === undefined) return { bg_notify: {}, submit_keys: {} };
   if (!isObject(value)) fail('tool_caps must be an object');
@@ -37,29 +69,49 @@ function validateToolCaps(value) {
   const submitKeys = value.submit_keys === undefined ? {} : value.submit_keys;
   if (!isObject(bgNotify)) fail('tool_caps.bg_notify must be an object');
   if (!isObject(submitKeys)) fail('tool_caps.submit_keys must be an object');
-  for (const [tool, enabled] of Object.entries(bgNotify)) {
-    if (!ROLE_ID.test(tool)) fail(`tool_caps.bg_notify has invalid tool ${tool}`);
-    if (typeof enabled !== 'boolean') fail(`tool_caps.bg_notify.${tool} must be a boolean`);
-  }
-  for (const [tool, keys] of Object.entries(submitKeys)) {
-    if (!ROLE_ID.test(tool)) fail(`tool_caps.submit_keys has invalid tool ${tool}`);
-    if (!Array.isArray(keys) || !keys.length || keys.some(key => typeof key !== 'string' || !key.trim())) fail(`tool_caps.submit_keys.${tool} must be a non-empty string array`);
-  }
-  return { bg_notify: bgNotify, submit_keys: submitKeys };
+  const normalizeEntries = (entries, capability) => {
+    const normalized = Object.create(null);
+    for (const [tool, setting] of Object.entries(entries)) {
+      const name = normalizedToolName(tool, `tool_caps.${capability}`);
+      if (Object.hasOwn(normalized, name)) fail(`tool_caps.${capability} has duplicate tool ${name} after lowercase normalization`);
+      if (capability === 'bg_notify' && typeof setting !== 'boolean') fail(`tool_caps.bg_notify.${tool} must be a boolean`);
+      if (capability === 'submit_keys' && (!Array.isArray(setting) || !setting.length || setting.some(key => typeof key !== 'string' || !key.trim()))) {
+        fail(`tool_caps.submit_keys.${tool} must be a non-empty string array`);
+      }
+      normalized[name] = capability === 'submit_keys' ? [...setting] : setting;
+    }
+    return normalized;
+  };
+  const normalizedBgNotify = normalizeEntries(bgNotify, 'bg_notify');
+  const normalizedSubmitKeys = normalizeEntries(submitKeys, 'submit_keys');
+  return { bg_notify: normalizedBgNotify, submit_keys: normalizedSubmitKeys };
+}
+
+function configuredToolCap(map, tool) {
+  if (!isObject(map)) return { found: false };
+  const key = Object.keys(map).find(name => name.toLowerCase() === tool);
+  return key === undefined ? { found: false } : { found: true, value: map[key] };
 }
 
 export function resolveToolCaps(config, role) {
-  const tool = role?.tool ?? role?.tools?.[0];
-  if (typeof tool !== 'string' || !tool) fail('role tool is required to resolve tool_caps');
-  const defaults = TOOL_CAPS_DEFAULTS[tool] ?? { bgNotify: false, submitKeys: ['Enter'] };
+  const requestedTool = role?.tool ?? role?.tools?.[0];
+  if (typeof requestedTool !== 'string' || !requestedTool) fail('role tool is required to resolve tool_caps');
+  const tool = requestedTool.toLowerCase();
+  const defaults = Object.hasOwn(TOOL_CAPS_DEFAULTS, tool) ? TOOL_CAPS_DEFAULTS[tool] : FALLBACK_TOOL_CAPS;
   const configured = config?.tool_caps ?? {};
-  const bgNotify = isObject(configured.bg_notify) && Object.hasOwn(configured.bg_notify, tool)
-    ? configured.bg_notify[tool]
-    : defaults.bgNotify;
-  const submitKeys = isObject(configured.submit_keys) && Object.hasOwn(configured.submit_keys, tool)
-    ? configured.submit_keys[tool]
-    : defaults.submitKeys;
+  const bgOverride = configuredToolCap(configured.bg_notify, tool);
+  const keysOverride = configuredToolCap(configured.submit_keys, tool);
+  const bgNotify = bgOverride.found ? bgOverride.value : defaults.bgNotify;
+  const submitKeys = keysOverride.found ? keysOverride.value : defaults.submitKeys;
   return { bgNotify, submitKeys: [...submitKeys] };
+}
+
+function rejectUnusedToolCaps(toolCaps, usedTools) {
+  for (const capability of ['bg_notify', 'submit_keys']) {
+    for (const tool of Object.keys(toolCaps[capability])) {
+      if (!usedTools.has(tool)) fail(`tool_caps.${capability}.${tool} is unused; no role declares this tool`);
+    }
+  }
 }
 
 function atomic(file, text) {
@@ -110,10 +162,15 @@ export function loadRegistry(file) {
   const bots = new Set(), dirs = new Set(), panes = new Set();
   const roles = Object.entries(doc.roles).map(([id, role]) => {
     if (!ROLE_ID.test(id) || !isObject(role)) fail(`invalid role ${id}`);
-    const tools = role.tools ?? (role.tool ? [role.tool] : []);
-    if (!Array.isArray(tools) || !tools.length || tools.some(tool => typeof tool !== 'string' || !ROLE_ID.test(tool))) fail(`role ${id}: tools must list at least one tool`);
-    if (role.tool !== undefined && role.tool !== tools[0]) fail(`role ${id}: tool must equal tools[0]`);
-    const tool = role.tool ?? tools[0];
+    const declaredTools = role.tools ?? (role.tool ? [role.tool] : []);
+    if (!Array.isArray(declaredTools) || !declaredTools.length || declaredTools.some(name => typeof name !== 'string' || !ROLE_ID.test(name))) fail(`role ${id}: tools must list at least one tool`);
+    const tools = declaredTools.map(name => normalizedToolName(name, `role ${id}`));
+    let tool = tools[0];
+    if (role.tool !== undefined) {
+      const normalizedPrimary = normalizedToolName(role.tool, `role ${id}`);
+      if (normalizedPrimary !== tools[0]) fail(`role ${id}: tool must equal tools[0] after lowercase normalization`);
+      tool = normalizedPrimary;
+    }
     const caps = resolveToolCaps({ tool_caps: toolCaps }, { tool });
     if (typeof role.wake_subdir !== 'string' || role.wake_subdir.includes('/') || role.wake_subdir.startsWith('.')) fail(`role ${id}: wake_subdir must be one folder name or ""`);
     const wakeDir = path.join(wakeRoot, role.wake_subdir);
@@ -142,8 +199,12 @@ export function loadRegistry(file) {
       wait = { script: role.wait.script, mode: role.wait.mode ?? 'nudge' };
     }
     if (!wait && !delivery) fail(`role ${id}: no wake consumer (declare delivery or wait)`);
+    if (tools.some(candidate => !resolveToolCaps({ tool_caps: toolCaps }, { tool: candidate }).bgNotify) && !delivery) {
+      fail(`role ${id}: bg_notify=false tool requires delivery.command as a direct pane consumer`);
+    }
     return { id, names: Array.isArray(role.names) && role.names.length ? role.names : [id], botId: role.bot_id ?? null, user: role.user ?? null, paneId, cwd: role.find.cwd ?? null, tool, tools, bgNotify: caps.bgNotify, submitKeys: caps.submitKeys, wakeSubdir: role.wake_subdir, wakeDir, extraBoxes, dmChannels, dmUsers, wait };
   });
+  rejectUnusedToolCaps(toolCaps, new Set(roles.flatMap(role => role.tools)));
   const paneBin = doc.pane?.bin;
   if (doc.pane?.kind !== 'herdr' || typeof paneBin !== 'string' || !path.isAbsolute(paneBin)) fail('pane must be {"kind":"herdr","bin":"/abs/path"}');
   const notify = doc.notify === undefined ? null : {
@@ -230,12 +291,25 @@ export function detectTool(processes, knownTools) {
     const argv = Array.isArray(proc.argv) && proc.argv.length ? proc.argv : String(proc.cmdline ?? proc.name ?? '').split(/\s+/).filter(Boolean);
     const words = programWords(argv);
     for (const word of words) {
-      const tool = knownTools.find(name => word === name || word.startsWith(`${name}-`) || word.startsWith(`${name}.`));
-      if (tool) return { alive: true, tool };
+      const normalizedWord = word.toLowerCase();
+      const tool = knownTools.find(name => normalizedWord === name.toLowerCase() || normalizedWord.startsWith(`${name.toLowerCase()}-`) || normalizedWord.startsWith(`${name.toLowerCase()}.`));
+      if (tool) return { alive: true, tool: tool.toLowerCase() };
     }
     if (words.some(word => !SHELLS.has(word) && !INTERPRETERS.has(word))) sawProgram = true;
   }
   return sawProgram ? { alive: true, tool: 'unknown' } : { alive: false, tool: 'shell' };
+}
+
+function knownToolsFor(registry) {
+  return [...new Set([...registry.roles.flatMap(role => role.tools), 'claude', 'codex', 'agy', 'muse', 'opencode'])].sort((left, right) => right.length - left.length);
+}
+
+function runningToolCaps(registry, role, deps) {
+  const foreground = deps.paneProcesses(registry.paneBin, role.paneId);
+  const running = detectTool(foreground, knownToolsFor(registry));
+  if (!running.alive) fail(`role ${role.id}: pane ${role.paneId} runs only a shell`);
+  if (!role.tools.includes(running.tool)) fail(`role ${role.id}: pane runs ${running.tool}, registry allows ${role.tools.join(', ')}`);
+  return { tool: running.tool, ...resolveToolCaps({ tool_caps: registry.toolCaps }, { tool: running.tool }) };
 }
 
 export function defaultDeps() {
@@ -332,7 +406,7 @@ function readSeenFile(file) {
 
 // Runs the delivery command on one wake file. A file in a box read through `via`
 // is copied to a private spool first and the copy is delivered.
-function handOver(registry, role, entry, deps) {
+function handOver(registry, role, entry, deps, caps) {
   let file = entry.file, spooled = null;
   try {
     if (entry.box?.via) {
@@ -344,7 +418,15 @@ function handOver(registry, role, entry, deps) {
       file = spooled;
     }
     const [command, ...args] = registry.delivery.command.map(part => part.replaceAll('{role}', role.id).replaceAll('{file}', file));
-    deps.run(command, args, { timeout: 60_000 });
+    deps.run(command, args, {
+      timeout: 60_000,
+      env: {
+        ...process.env,
+        ROLE_WAKE_TOOL: caps.tool,
+        ROLE_WAKE_SUBMIT_KEYS: JSON.stringify(caps.submitKeys),
+        ROLE_WAKE_BG_NOTIFY: String(caps.bgNotify),
+      },
+    });
   } finally { if (spooled) fs.rmSync(spooled, { force: true }); }
 }
 
@@ -382,12 +464,13 @@ function deliverRole(registry, role, deps, now, at) {
   // it is retried with backoff.
   const retries = fresh.filter(entry => failures[entry.key] && failures[entry.key].next <= now).sort((a, b) => failures[a.key].count - failures[b.key].count);
   const order = [...fresh.filter(entry => !failures[entry.key]), ...retries];
+  const caps = order.length ? runningToolCaps(registry, role, deps) : null;
   let delivered = 0, attempts = 0, streak = 0;
   for (const entry of order) {
     if (attempts >= registry.delivery.maxPerRun || streak >= FAIL_STREAK) break;
     attempts += 1;
     let ok = true;
-    try { handOver(registry, role, entry, deps); } catch { ok = false; }
+    try { handOver(registry, role, entry, deps, caps); } catch { ok = false; }
     if (ok) {
       append([entry.key], 'delivered');
       delete failures[entry.key];
@@ -498,7 +581,7 @@ export function inspect(registry, deps = defaultDeps()) {
   const now = deps.now();
   let processes = null;
   try { processes = deps.processes(); } catch { /* reported per role below */ }
-  const known = [...new Set([...registry.roles.flatMap(role => role.tools), 'claude', 'codex', 'opencode'])];
+  const known = knownToolsFor(registry);
   let heartbeat = null, lastRun = {};
   try { const doc = readJson(heartbeatFile(registry)); heartbeat = Date.parse(doc.at); if (isObject(doc.roles)) lastRun = doc.roles; } catch { /* never ran */ }
   const findings = [...retiredUse(registry, deps, processes), ...compareViews(registry)];
@@ -510,6 +593,11 @@ export function inspect(registry, deps = defaultDeps()) {
     try {
       const fg = deps.paneProcesses(registry.paneBin, role.paneId);
       Object.assign(row, detectTool(fg, known));
+      if (row.alive) {
+        const caps = resolveToolCaps({ tool_caps: registry.toolCaps }, { tool: row.tool });
+        row.bgNotify = caps.bgNotify;
+        row.submitKeys = caps.submitKeys;
+      }
       pids = fg.map(proc => proc.pid).filter(Number.isInteger);
     } catch { add('error', 'pane-unreadable', role.id, `pane ${role.paneId} could not be read`); }
     if (row.alive === false) add('error', 'session-down', role.id, `pane ${role.paneId} runs only a shell`);

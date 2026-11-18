@@ -32,10 +32,10 @@ function setup(t, patch = {}) {
   const file = path.join(dir, 'role-wake.json');
   const write = () => fs.writeFileSync(file, JSON.stringify(doc));
   write();
-  const state = { now: NOW, runs: [], failOn: null, crontab: '', panes: { 'w1:p1': [{ argv: ['claude', '--resume', 'x'], pid: 10 }], 'w1:p2': [{ argv: ['/opt/bin/muse-bin-1.4', '--yolo'], pid: 20 }] }, processes: [{ pid: 10, ppid: 1, args: 'claude --resume x' }, { pid: 11, ppid: 10, args: `bash ${waitScript}` }, { pid: 20, ppid: 1, args: '/opt/bin/muse-bin-1.4 --yolo' }] };
+  const state = { now: NOW, runs: [], runOptions: [], failOn: null, crontab: '', panes: { 'w1:p1': [{ argv: ['claude', '--resume', 'x'], pid: 10 }], 'w1:p2': [{ argv: ['/opt/bin/muse-bin-1.4', '--yolo'], pid: 20 }] }, processes: [{ pid: 10, ppid: 1, args: 'claude --resume x' }, { pid: 11, ppid: 10, args: `bash ${waitScript}` }, { pid: 20, ppid: 1, args: '/opt/bin/muse-bin-1.4 --yolo' }] };
   const deps = {
     now: () => state.now,
-    run: (command, args) => { state.runs.push([command, ...args]); if (state.failOn && args.some(arg => arg.includes(state.failOn))) throw new Error('exit 1'); return ''; },
+    run: (command, args, options = {}) => { state.runs.push([command, ...args]); state.runOptions.push(options); if (state.failOn && args.some(arg => arg.includes(state.failOn))) throw new Error('exit 1'); return ''; },
     paneProcesses: (bin, paneId) => { if (!state.panes[paneId]) throw new Error('no pane'); return state.panes[paneId]; },
     processes: () => state.processes,
     crontab: () => state.crontab,
@@ -79,6 +79,7 @@ test('tool caps validate types and resolve per-tool defaults and overrides', t =
     ['claude', { bgNotify: true, submitKeys: ['Enter'] }],
     ['codex', { bgNotify: false, submitKeys: ['Enter', 'Tab'] }],
     ['agy', { bgNotify: false, submitKeys: ['Enter'] }],
+    ['muse', { bgNotify: false, submitKeys: ['Enter'] }],
     ['opencode', { bgNotify: false, submitKeys: ['Enter'] }],
     ['unknown-tool', { bgNotify: false, submitKeys: ['Enter'] }],
   ];
@@ -108,8 +109,72 @@ test('validate prints one capability row per role', t => {
   assert.equal(output.split('\n').filter(line => line.includes('"bg_notify"')).length, 2);
 });
 
+test('deliver forwards the resolved tool capabilities to the instance adapter', t => {
+  const f = setup(t);
+  deliver(f.load(), f.deps);
+  const file = f.put('role-a', '001-wake.md');
+
+  deliver(f.load(), f.deps);
+
+  assert.equal(f.state.runs.at(-1)[2], file);
+  assert.deepEqual({
+    ROLE_WAKE_TOOL: f.state.runOptions.at(-1)?.env?.ROLE_WAKE_TOOL,
+    ROLE_WAKE_SUBMIT_KEYS: f.state.runOptions.at(-1)?.env?.ROLE_WAKE_SUBMIT_KEYS,
+    ROLE_WAKE_BG_NOTIFY: f.state.runOptions.at(-1)?.env?.ROLE_WAKE_BG_NOTIFY,
+  }, { ROLE_WAKE_TOOL: 'claude', ROLE_WAKE_SUBMIT_KEYS: '["Enter"]', ROLE_WAKE_BG_NOTIFY: 'true' });
+});
+
+test('inspect and deliver resolve capabilities from the actual fallback foreground tool', t => {
+  const f = setup(t, { tool_caps: { bg_notify: { agy: true, muse: false }, submit_keys: { agy: ['Space'], muse: ['F4'] } } });
+  const registry = f.load();
+  const row = inspect(registry, f.deps).rows.find(item => item.id === 'role-b');
+  assert.deepEqual([row.tool, row.bgNotify, row.submitKeys], ['muse', false, ['F4']]);
+
+  deliver(registry, f.deps);
+  const file = f.put('role-b', '001-fallback.md');
+  deliver(registry, f.deps);
+
+  const deliveryIndex = f.state.runs.findIndex(run => run[2] === file);
+  assert.deepEqual({
+    ROLE_WAKE_TOOL: f.state.runOptions[deliveryIndex]?.env?.ROLE_WAKE_TOOL,
+    ROLE_WAKE_SUBMIT_KEYS: f.state.runOptions[deliveryIndex]?.env?.ROLE_WAKE_SUBMIT_KEYS,
+    ROLE_WAKE_BG_NOTIFY: f.state.runOptions[deliveryIndex]?.env?.ROLE_WAKE_BG_NOTIFY,
+  }, { ROLE_WAKE_TOOL: 'muse', ROLE_WAKE_SUBMIT_KEYS: '["F4"]', ROLE_WAKE_BG_NOTIFY: 'false' });
+});
+
+test('tool names normalize case and close typos or unused capability keys are rejected', t => {
+  const f = setup(t);
+  f.doc.roles['role-b'].tool = 'Codex';
+  f.doc.roles['role-b'].tools = ['codex', 'MUSE'];
+  f.doc.tool_caps = { bg_notify: { CODEX: true }, submit_keys: { Codex: ['F8'] } };
+  f.write();
+  const role = f.load().roles.find(item => item.id === 'role-b');
+  assert.deepEqual([role.tool, role.tools, role.bgNotify, role.submitKeys], ['codex', ['codex', 'muse'], true, ['F8']]);
+
+  f.doc.roles['role-b'].tool = 'codxe';
+  f.doc.roles['role-b'].tools = ['codxe'];
+  f.doc.tool_caps = {};
+  f.write();
+  assert.throws(() => f.load(), /codxe.*codex/i);
+
+  f.doc.roles['role-b'].tool = 'agy';
+  f.doc.roles['role-b'].tools = ['agy', 'muse'];
+  f.doc.tool_caps = { bg_notify: { codxe: false } };
+  f.write();
+  assert.throws(() => f.load(), /codxe.*codex/i);
+
+  f.doc.tool_caps = { submit_keys: { codex: ['Tab'] } };
+  f.write();
+  assert.throws(() => f.load(), /tool_caps\.submit_keys\.codex.*unused/i);
+});
+
+test('prototype property names use the generic tool capability defaults', () => {
+  assert.deepEqual(resolveToolCaps({}, { tool: 'constructor' }), { bgNotify: false, submitKeys: ['Enter'] });
+});
+
 test('tool detection reads the foreground program, not the registry', () => {
-  const known = ['claude', 'agy', 'muse'];
+  const known = ['claude', 'agy', 'muse', 'codex'];
+  assert.deepEqual(detectTool([{ argv: ['/opt/bin/Codex'] }], known), { alive: true, tool: 'codex' });
   assert.deepEqual(detectTool([{ argv: ['/x/muse-bin-1.4.20', '--yolo', 'you are agy'] }], known), { alive: true, tool: 'muse' });
   assert.deepEqual(detectTool([{ argv: ['sudo', '-iu', 'svc', 'bash', '/opt/kit/agy-start-1.sh'] }], known), { alive: true, tool: 'agy' });
   assert.deepEqual(detectTool([{ cmdline: 'claude --resume abc' }], known), { alive: true, tool: 'claude' });
@@ -506,11 +571,22 @@ test('a stopped nudge wait script alone fails the check while delivery runs; an 
 test('a stopped wait script is an error when nothing else delivers', t => {
   const f = setup(t);
   delete f.doc.delivery;
+  f.doc.roles['role-b'].tool = 'claude';
+  f.doc.roles['role-b'].tools = ['claude'];
   f.doc.roles['role-b'].wait = { script: f.waitScript, mode: 'observe' };
   f.write();
   f.state.processes = f.state.processes.filter(proc => proc.pid !== 11);
   const findings = inspect(f.load(), f.deps).findings.filter(finding => finding.code === 'wait-down');
   assert.deepEqual(findings.map(finding => [finding.role, finding.level]), [['role-a', 'error'], ['role-b', 'warn']]);
+});
+
+test('a tool without background notification needs a direct delivery consumer', t => {
+  const f = setup(t);
+  delete f.doc.delivery;
+  f.doc.roles['role-b'].wait = { script: f.waitScript, mode: 'observe' };
+  f.write();
+
+  assert.throws(() => f.load(), /role-b:.*bg_notify=false.*delivery\.command/);
 });
 
 test('a retired root still wired into a unit, crontab or process is reported', t => {
