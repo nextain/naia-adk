@@ -2,6 +2,7 @@
 import {
   mkdir,
   open,
+  readdir,
   readFile,
   rename,
   stat,
@@ -92,6 +93,148 @@ const oneLine = (value) =>
   typeof value === "string" && value.trim() !== "" && !/[\r\n]/ .test(value);
 export const MAX_HUMAN_DROPS = 2;
 export const MAX_HUMAN_DEFERS = 2;
+export const PLAN_ROW_KEYWORDS = Object.freeze([
+  "일정 적기",
+  "일정에 넣기",
+  "일정 넣기",
+  "일정 등록",
+  "일정 추가",
+  "일정 잡기",
+  "일정 기입",
+  "일정 기록",
+  "일정 수립",
+  "일정 짜기",
+  "일정표 적기",
+  "일정표에 넣기",
+  "일정판 적기",
+  "일정판에 넣기",
+  "일정판에 적기",
+  "계획 잡기",
+  "계획 적기",
+  "계획 등록",
+  "계획 추가",
+  "계획에 넣기",
+  "계획 세우기",
+  "계획 수립",
+  "계획 짜기",
+  "장부에 적기",
+  "장부 적기",
+  "장부에 넣기",
+  "장부 넣기",
+  "장부 등록",
+  "장부 추가",
+  "장부 기입",
+  "장부 기록",
+  "할 일 적기",
+  "할일 적기",
+  "할 일 등록",
+  "할일 등록",
+  "할 일에 넣기",
+  "할일에 넣기",
+]);
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const PLAN_ROW_COMPACT_KEYWORDS = PLAN_ROW_KEYWORDS.map((kw) => kw.replace(/\s+/g, ""));
+const PLAN_ROW_PATTERNS = (() => {
+  const pairs = PLAN_ROW_KEYWORDS.map((kw) => {
+    const parts = kw.trim().split(/\s+/);
+    const verb = parts.pop();
+    const noun = parts.map(escapeRegExp).join("\\s*").replace(/에$/, "");
+    const verbAlt = verb.endsWith("기")
+      ? `(?:${escapeRegExp(verb)}|${escapeRegExp(verb.slice(0, -1))}고)`
+      : escapeRegExp(verb);
+    return { kw, noun, verbAlt };
+  });
+  const direct = new RegExp(
+    pairs.map((p) => `(?:${p.noun}(?:을|를|에)?\\s*${p.verbAlt})`).join("|"),
+  );
+  // Match separated clauses such as "구현 일정을 ... 정리 문서에 넣고" while
+  // excluding "기록" so phrases like "계획 리뷰 ... 감사 기록" are not flagged.
+  const indirect = new RegExp(
+    pairs
+      .filter((p) => !p.kw.endsWith("기록"))
+      .map((p) => `(?:${p.noun}(?:을|를)\\s+[^·→\\n]{1,30}에\\s*${p.verbAlt})`)
+      .join("|"),
+  );
+  return { direct, indirect };
+})();
+export function isPlanRowTitle(title) {
+  if (typeof title !== "string") return false;
+  const compact = title.replace(/\s+/g, "");
+  if (PLAN_ROW_COMPACT_KEYWORDS.some((kw) => compact.includes(kw))) return true;
+  return PLAN_ROW_PATTERNS.direct.test(title) || PLAN_ROW_PATTERNS.indirect.test(title);
+}
+function ledgerExitError(message, exitCode = 2) {
+  const error = new Error(message);
+  error.exitCode = exitCode;
+  return error;
+}
+async function resolveDoneNextId({ root, ledger, role, item, nextOpt }) {
+  const planRow = isPlanRowTitle(item.title);
+  if (nextOpt === undefined) {
+    if (!planRow) return null;
+    throw ledgerExitError(
+      `계획·일정 줄(${item.id})은 본 일 줄을 add 한 뒤 --next <다른 줄 id> 로 닫으라`,
+    );
+  }
+  const nextId = typeof nextOpt === "string" ? nextOpt.trim() : "";
+  if (!nextId || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(nextId)) {
+    throw ledgerExitError(
+      `유효하지 않은 --next 줄 id 입니다. 본 일 줄을 add 한 뒤 --next <다른 줄 id> 로 닫으라`,
+    );
+  }
+  if (nextId === item.id) {
+    throw ledgerExitError(
+      `--next 는 자기 자신(${item.id})이 아닌 다른 본 일 줄 id 를 가리켜야 합니다. 본 일 줄을 add 한 뒤 --next <다른 줄 id> 로 닫으라`,
+    );
+  }
+  const localMatch = ledger.items.find((candidate) => candidate.id === nextId);
+  if (localMatch) {
+    if (localMatch.status !== "open") {
+      throw ledgerExitError(
+        `--next 대상 줄(${nextId})이 open 상태가 아닙니다(${localMatch.status}). 본 일 줄을 add 한 뒤 --next <다른 줄 id> 로 닫으라`,
+      );
+    }
+    return localMatch.id;
+  }
+  const ledgerDir = path.dirname(ledgerPath(root, role));
+  let entries = [];
+  try {
+    entries = await readdir(ledgerDir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+  let nonOpenStatus = null;
+  for (const entry of entries) {
+    if (!entry.name.endsWith(".json") || entry.name === "watch-state.json") continue;
+    if (!entry.isFile() || entry.isSymbolicLink()) continue;
+    const otherRole = entry.name.slice(0, -5);
+    if (otherRole === role) continue;
+    try {
+      safeName(otherRole);
+    } catch {
+      continue;
+    }
+    let doc;
+    try {
+      doc = JSON.parse(await readFile(path.join(ledgerDir, entry.name), "utf8"));
+    } catch {
+      continue;
+    }
+    if (!doc || doc.version !== 1 || doc.role !== otherRole || !Array.isArray(doc.items)) continue;
+    const match = doc.items.find((candidate) => candidate?.id === nextId);
+    if (!match) continue;
+    if (match.status === "open") return match.id;
+    nonOpenStatus ??= match.status;
+  }
+  if (nonOpenStatus !== null) {
+    throw ledgerExitError(
+      `--next 대상 줄(${nextId})이 open 상태가 아닙니다(${nonOpenStatus}). 본 일 줄을 add 한 뒤 --next <다른 줄 id> 로 닫으라`,
+    );
+  }
+  throw ledgerExitError(
+    `--next 대상 줄(${nextId})이 같은 장부에 없습니다. 본 일 줄을 add 한 뒤 --next <다른 줄 id> 로 닫으라`,
+  );
+}
 export function normalizeMsgId(msgId) {
   return typeof msgId === "string" ? msgId.trim() : "";
 }
@@ -164,6 +307,10 @@ export function validateLedger(ledger, role) {
   const ids = new Set();
   for (const item of ledger.items) {
     safeName(item.id);
+    if (item.next !== undefined) {
+      safeName(item.next);
+      if (item.next === item.id) throw new Error("Invalid ledger item");
+    }
     if (
       ids.has(item.id) ||
       typeof item.title !== "string" ||
@@ -395,7 +542,9 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
         const info = await stat(address).catch(() => null);
         if (!info?.isFile() || info.size === 0) throw new Error(`Result file is missing or empty: ${address}`);
       }
+      const nextId = await resolveDoneNextId({ root, ledger: l, role, item, nextOpt: o.next });
       close(item, "done", { by: "result", result: address });
+      if (nextId) item.next = nextId;
       if (o.reason) item.note = o.reason;
       return item.id;
     }
@@ -452,8 +601,9 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       item.status = "dropped";
       item.drop_count = currentDrops + 1;
     } else {
+      let humanAck = null;
       if (item.status === "escalated_human") {
-        const humanAck = normalizeMsgId(o["human-msg-id"]);
+        humanAck = normalizeMsgId(o["human-msg-id"]);
         if (
           !hasHumanMsgId(humanAck) ||
           sameHumanMsgId(humanAck, item.from?.msg_id)
@@ -462,12 +612,14 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
             `사람에게 올림(escalated_human) 상태인 카드(${item.id})를 완료(done)로 닫으려면 원 지시와 다른 사람 확인 답글 번호(--human-msg-id <msg_id>)가 필요합니다`,
           );
         }
-        item.human_msg_id = humanAck;
       }
+      const nextId = await resolveDoneNextId({ root, ledger: l, role, item, nextOpt: o.next });
+      if (humanAck !== null) item.human_msg_id = humanAck;
       if (item.status === "dropped" && item.drop_count === undefined) {
         item.drop_count = 1;
       }
       item.status = "done";
+      if (nextId) item.next = nextId;
     }
     if (o.reason) item.note = o.reason;
     return item.id;
@@ -502,5 +654,5 @@ if (
     )
     .catch((error) => {
       console.error(error.message);
-      process.exitCode = 1;
+      process.exitCode = Number.isInteger(error?.exitCode) ? error.exitCode : 1;
     });
