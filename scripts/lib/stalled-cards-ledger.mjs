@@ -1,7 +1,10 @@
 import { readFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { readWorkLedger } from './ledger.mjs';
 import { safeName } from '../work-ledger/ledger.mjs';
+import { readWorkLedgerMeta } from '../../packages/core/work-ledger-meta.mjs';
+
+export { readWorkLedgerMeta };
 
 const OPEN_STATUSES = new Set(['open', '진행 중']);
 const HUMAN_WAIT_STATUSES = new Set([
@@ -34,35 +37,6 @@ export function parseIsoTime(value) {
   if (!Number.isFinite(ms)) return NaN;
   const wall = new Date(Date.parse(value.slice(0, 19) + 'Z'));
   return wall.toISOString().slice(0, 19) === value.slice(0, 19) ? ms : NaN;
-}
-
-/**
- * Read optional work-ledger.json metadata to find ledger dir, wake_dir, and report channel per role.
- */
-export async function readWorkLedgerMeta(config) {
-  if (!config.workLedgerConfig && !config.workLedgerDir) return null;
-  let ledgerConfig = null;
-  let root = config.workLedgerRoot ?? null;
-  if (config.workLedgerConfig) {
-    ledgerConfig = JSON.parse(await readFile(config.workLedgerConfig, 'utf8'));
-    if (
-      !ledgerConfig
-      || typeof ledgerConfig !== 'object'
-      || Array.isArray(ledgerConfig)
-      || (ledgerConfig.version !== undefined && ledgerConfig.version !== 1)
-      || !Array.isArray(ledgerConfig.roles)
-      || ledgerConfig.roles.some(r => !r || typeof r !== 'object' || Array.isArray(r) || typeof r.role !== 'string' || !r.role.trim())
-    ) {
-      throw Error('invalid workLedgerConfig');
-    }
-    if (!root) {
-      const parent = dirname(config.workLedgerConfig);
-      root = parent.endsWith(`${sep}config`) || parent.endsWith('/config') ? dirname(parent) : parent;
-    }
-  }
-  const dir = config.workLedgerDir ?? join(root, '.agents/work/ledger');
-  if (!root) root = dirname(dirname(dirname(dir)));
-  return { root, dir, config: ledgerConfig };
 }
 
 function resolveWakeDir(role, wlRole, meta) {

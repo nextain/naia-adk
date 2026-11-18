@@ -29,6 +29,7 @@ import {
   type DocFavoriteItem,
 } from "../favorites.js"
 import { withFileLock, FileLockTimeoutError } from "../file-lock.js"
+import { isLedgerRequestAllowed, queryPortalWorkLedger, type LedgerQueryParams } from "../work-ledger-portal.js"
 
 export type FileKind = "doc" | "image" | "video" | "audio" | "pdf" | "text" | "other"
 
@@ -2201,6 +2202,19 @@ export const portalRoutes: FastifyPluginCallback<PortalOptions> = (app, opts, do
       }
       throw err
     }
+  })
+
+  // GET /api/portal/ledger (읽기 전용 업무 장부 조회)
+  app.get("/ledger", async (req, reply) => {
+    if (!isLedgerRequestAllowed(req.headers, (req as any).trust)) {
+      return reply.code(403).send({ error: "Forbidden" })
+    }
+    const query = (req.query || {}) as LedgerQueryParams
+    const data = await queryPortalWorkLedger(root, {
+      folderCtx: getFolderCtx(),
+      query,
+    })
+    return reply.header("cache-control", "no-store").send(data)
   })
 
   done()
