@@ -39,7 +39,8 @@ const runs=[
   ["BEH watchdog",[".claude/hooks/beh-watchdog.js","--selftest"]],
   ["GCS guard",[".claude/hooks/test/run-gcs-guard-test.js"]],
   ["GCS fixture check",["scripts/test-gcs-fixture-check.cjs"]],
-  ["request contract",["scripts/run-request-contract-tests.cjs"]]
+  ["request contract",["scripts/run-request-contract-tests.cjs"]],
+  ["guide freshness and doc-test sync",["scripts/check-guide-freshness.test.mjs"]]
 ];
 
 for(const [label,args] of runs){

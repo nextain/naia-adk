@@ -78,3 +78,32 @@ jobs:
         run: python .agents/skills/translate-doc/tests/test_naia_translate.py
       - name: Natural writing skill linter tests
         run: node --test .agents/skills/natural-writing/tests/lint-writing.test.mjs
+      - name: Doc and test sync check (PR diff advisory)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.number }}
+        run: |
+          # Advisory warning: 7/29 open main PRs (incl. #184, #78) fail current heuristics;
+          # scope to PR diff against PR base so existing open PRs and pre-existing debt are not broken.
+          if [ -f .git/shallow ] && [ -n "${GITHUB_REF:-}" ]; then
+            git fetch --no-tags --deepen=1 origin "$GITHUB_REF" >/dev/null 2>&1 || true
+          fi
+          if [ "$(git rev-parse -q --verify HEAD^2 2>/dev/null)" = "$HEAD_SHA" ] && git rev-parse -q --verify HEAD^1 >/dev/null 2>&1; then
+            RANGE="HEAD^1..HEAD"
+          else
+            if [ -f .git/shallow ]; then
+              git fetch --no-tags --unshallow origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-head" || true
+            else
+              git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr-head" >/dev/null 2>&1 || true
+            fi
+            MERGE_BASE="$(git merge-base "$BASE_SHA" "$HEAD_SHA" 2>/dev/null || git merge-base "origin/${BASE_REF}" HEAD)"
+            RANGE="${MERGE_BASE}..HEAD"
+          fi
+          if ! node scripts/check-guide-freshness.mjs --sync-check --range "$RANGE"; then
+            echo "::warning::Doc/test sync check reported code/doc/test gaps or broken links in PR diff (advisory; see docs/guides/development-method.md)."
+            exit 1
+          fi

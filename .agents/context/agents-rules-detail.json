@@ -129,7 +129,8 @@
         "reusable_learning_threshold": "Update only when the lesson is reusable, non-duplicative, backed by an immutable source, and states its validation limits."
       },
       "receipt": "Use one tracked, per-issue JSON receipt. New or migrated template-based projects define its path and enforce it in local hooks and CI; existing projects require an explicit project migration before claiming machine enforcement.",
-      "completion_rule": "The receipt is finalized during Sync, checked again during Sync Verify, included in Report, and required before Commit."
+      "feature_code_sync": "Feature or service code edits require matching documentation and test updates in the same commit, from upper planning through integration tests (docs/guides/development-method.md); verify deterministically with scripts/check-guide-freshness.mjs --sync-check.",
+      "completion_rule": "The receipt is finalized during Sync, checked again during Sync Verify (with scripts/check-guide-freshness.mjs --sync-check), included in Report, and required before Commit."
     },
     "permission_model": {
       "code_files": "AI = implementer. Can read, modify, create, delete freely.",

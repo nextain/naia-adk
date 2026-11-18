@@ -42,6 +42,10 @@ on_demand_loading:
       file: docs/guides/wake-completion-contract.md
       description: "Wake stages and server acceptance"
       tags: [discord, wake, response-watch, session-health, schedule, onboarding]
+    - id: naia-adk:development_method
+      file: docs/guides/development-method.md
+      description: "Interface-first -> parallel branches (worktree+ledger) -> serial integration/IT/regression & same-commit doc/test sync"
+      tags: [workflow, interface-first, parallel, integration, regression, sync]
     - id: naia-adk:agents_rules_detail
       file: .agents/context/agents-rules-detail.json
       description: "Full text of the sections agents-rules.json summarizes in one line, under the same key paths. Read only the section a task touches (approval exceptions, command lists, work-file lifecycle, public release gate, and so on)"
