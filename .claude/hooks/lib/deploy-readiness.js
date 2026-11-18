@@ -1001,6 +1001,9 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 
 	const files = new Map();
 	const fileHashes = new Map();
+	let targets;
+	try { targets = require("./deploy-plan.js").targetPins(plan, root); }
+	catch (e) { return no(`대상 파일 검사 실패: ${e.message}`); }
 	for (const [p, want] of Object.entries(entry.files || {})) {
 		if (!/^[a-f0-9]{64}$/i.test(String(want))) return no(`고정 파일 sha256 형식이 아님: ${p}`);
 		const full = path.isAbsolute(p) ? path.resolve(p) : path.resolve(root || cwd || ".", p);
@@ -1012,11 +1015,11 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 			return no(`고정 파일을 읽지 못함: ${p}`);
 		}
 		const actualSha = crypto.createHash("sha256").update(body).digest("hex");
-		if (actualSha !== String(want).toLowerCase()) return no(`고정 파일 sha256 불일치: ${p}`);
+		const target = targets.get(full);
+		if (target ? ![target.before, target.after].includes(String(want).toLowerCase()) || ![target.before, target.after].includes(actualSha) : actualSha !== String(want).toLowerCase()) return no(`고정 파일 sha256 불일치: ${p}`);
 		files.set(full, body.toString("utf8"));
 		fileHashes.set(full, actualSha);
 	}
-
 	const cfg = loadDeployGateConfig(root);
 	if (cfg) {
 		const { validateReadOnlyScriptsConfig } = require("./deploy-plan.js");
