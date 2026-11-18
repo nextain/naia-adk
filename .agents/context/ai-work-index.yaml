@@ -52,7 +52,7 @@ categories:
       - ".agents/workflows/research-driven-development.yaml"
 
   - name: "issue-driven-development"
-    keywords: ["feature", "feature development", "upstream", "investigate", "plan", "review", "bug fix"]
+    keywords: ["feature", "feature development", "upstream", "investigate", "plan", "review", "bug fix", "parallel", "interface"]
     quick_ref: "Feature-level work (default, 13 phases). ISSUE → UNDERSTAND → SCOPE → INVESTIGATE → PLAN → BUILD → REVIEW → E2E TEST → POST-TEST REVIEW → SYNC → SYNC VERIFY → REPORT → COMMIT"
     workflows:
       - ".agents/workflows/issue-driven-development.yaml"
@@ -60,5 +60,5 @@ notes:
   - "Each submodule has its own entry point - read it before modifications"
   - "Add workflow files to .agents/workflows/ as needed"
   - "Workflows are loaded on demand, not all at once"
-  - "Default for feature-level work (new features, broad bug fixes): issue-driven-development.yaml"
+  - "Default for feature-level work (new features, broad bug fixes): issue-driven-development.yaml; order & sync: docs/guides/development-method.md"
   - "For non-feature changes (typos, config values, simple directives): development-cycle.yaml"

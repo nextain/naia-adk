@@ -193,6 +193,7 @@ quick_start_profiles:
   orchestrator_execution:
     default: delegate_required
     root_role: L3 Secretary and L2 Issue Leader perform triage, scope, SoT and contract management, bounded delegation, integration, acceptance, and handoff; implementation, testing, and translation are worker roles
+    parallel_execution_order: "Confirm, implement, and test shared components and interfaces first; run independent feature branches concurrently via subagents/workers with one isolated worktree and ledger row per branch, then integrate serially with contract, integration, and regression tests (docs/guides/development-method.md)."
     intent_preservation: every session start, resume, and post-compaction injection restores the bound parent contract goal, scope, acceptance criteria, non-goals, and intent references; current_task is always labeled as a child execution unit
     no_implicit_shrink: neither a child task nor worker-local progress may replace, delete, supersede, narrow, or complete parent obligations; only an explicit contract amendment with owner authority may change parent intent
     responsibility_boundary: L1 reports task evidence only, L2 owns issue-wide remaining obligations, and L3 preserves the user request and portfolio-wide SoT across issue handoffs
