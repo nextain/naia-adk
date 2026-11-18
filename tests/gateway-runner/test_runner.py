@@ -1,8 +1,11 @@
+import base64
 import contextlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
@@ -10,6 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('gateway_operation', ROOT / 'scripts/gateway-runner/gateway-operation.py')
 gw = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gw)
+
+TEST_REPO = 'myregistry.azurecr.io/sample/gateway'
+FAKE_SIGNING_PUBKEY = base64.b64encode(b'\x11' * 32).decode('ascii')
 
 
 class RunnerFixture:
@@ -43,13 +49,14 @@ class RunnerFixture:
             log_path = self.root / (label + '.log')
             log_path.write_text(stdout.getvalue() + stderr.getvalue())
             for text in (stdout.getvalue(), stderr.getvalue(), log_path.read_text()):
-                for secret in ('fake-test-key', 'fake-motif-key-1234', 'fake-secret'):
+                for secret in ('fake-test-key', 'fake-motif-key-1234', 'fake-secret', FAKE_SIGNING_PUBKEY):
                     self.assertNotIn(secret, text)
+
 
 class RunnerTests(RunnerFixture, unittest.TestCase):
     def test_source_names_cannot_conflict_with_forced_values(self):
         from unittest.mock import patch
-        for name in (*gw.CANDIDATE_ENV, *gw.CANDIDATE_SECRET_KEYS, 'FORWARDED_ALLOW_IPS', 'NVA_MEDIA_WORKER_URL'):
+        for name in (*gw.CANDIDATE_ENV_KEYS, *gw.CANDIDATE_SECRET_KEYS, 'FORWARDED_ALLOW_IPS', 'NVA_MEDIA_WORKER_URL'):
             with patch.object(gw, 'SOURCES', {'unsafe': name}), self.assertRaises(gw.Refused):
                 gw.parse_additions('unsafe')
         with patch.object(gw, 'SOURCES', {'one': 'AZURE_TTS_KEY', 'two': 'AZURE_TTS_KEY'}), self.assertRaises(gw.Refused):
@@ -57,14 +64,16 @@ class RunnerTests(RunnerFixture, unittest.TestCase):
 
     def test_names_never_print_values_and_duplicate_refused(self):
         secret = 'fake-secret-DO-NOT-PRINT'
-        self.op.inspect = lambda: {'Config': {'Env': ['AZURE_TTS_KEY=' + secret, 'AZURE_TTS_REGION=']}}
+        self.op.inspect = lambda: {'Config': {'Env': ['AZURE_TTS_KEY=' + secret, 'AZURE_TTS_REGION=', 'APP_SIGNING_PUBLIC_KEY=' + FAKE_SIGNING_PUBKEY]}}
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.op.env_names()
         self.assertNotIn(secret, out.getvalue())
+        self.assertNotIn(FAKE_SIGNING_PUBKEY, out.getvalue())
         self.assertIn('AZURE_TTS_KEY=PRESENT', out.getvalue())
         self.assertIn('AZURE_TTS_REGION=EMPTY', out.getvalue())
         self.assertIn('AZURE_SPEECH_KEY=ABSENT', out.getvalue())
+        self.assertIn('APP_SIGNING_PUBLIC_KEY=PRESENT', out.getvalue())
         self.op.inspect = lambda: {'Config': {'Env': ['AZURE_TTS_KEY=x', 'AZURE_TTS_KEY=y']}}
         out = io.StringIO()
         with contextlib.redirect_stdout(out), self.assertRaises(gw.Refused):
@@ -82,15 +91,25 @@ class RunnerTests(RunnerFixture, unittest.TestCase):
     def test_sources_and_validation(self):
         key = self.sources / 'azure-tts-key-v1'
         region = self.sources / 'azure-tts-region-v1'
+        signing = self.sources / 'app-signing-public-key-v1'
         key.write_text('fake-key-value\n'); key.chmod(0o600)
         region.write_text('eastus2\n'); region.chmod(0o600)
-        ids = gw.parse_additions('azure-tts-key-v1,azure-tts-region-v1')
+        signing.write_text(FAKE_SIGNING_PUBKEY + '\n'); signing.chmod(0o600)
+        ids = gw.parse_additions('azure-tts-key-v1,azure-tts-region-v1,app-signing-public-key-v1')
         values = self.op.source_values(ids)
         self.assertEqual(values['AZURE_TTS_REGION'], 'eastus2')
+        self.assertEqual(values['APP_SIGNING_PUBLIC_KEY'], FAKE_SIGNING_PUBKEY)
         key.write_text('changed-value')
         self.assertEqual(values['AZURE_TTS_KEY'], 'fake-key-value')
-        for bad in ('azure-tts-key-v1,azure-tts-key-v1', 'other', 'azure-tts-region-v1,azure-tts-key-v1'):
+        for bad in ('azure-tts-key-v1,azure-tts-key-v1', 'other', 'azure-tts-region-v1,azure-tts-key-v1',
+                    'app-signing-public-key-v1,azure-tts-key-v1', 'app-signing-public-key-v1,azure-tts-region-v1'):
             with self.assertRaises(gw.Refused): gw.parse_additions(bad)
+        non_canonical = FAKE_SIGNING_PUBKEY[:-2] + 'F='
+        for bad_key in ('', 'not-base64', base64.b64encode(b'\x11' * 31).decode('ascii'),
+                        base64.b64encode(b'\x11' * 33).decode('ascii'), non_canonical):
+            signing.write_text(bad_key)
+            with self.assertRaises(gw.Refused): self.op.source_values(['app-signing-public-key-v1'])
+        signing.write_text(FAKE_SIGNING_PUBKEY)
         for data in ('', 'wrong-region', 'eastus2\nsecret', 'eastus2\0'):
             region.write_text(data)
             with self.assertRaises(gw.Refused): self.op.source_values(ids)
@@ -138,7 +157,7 @@ class RunnerTests(RunnerFixture, unittest.TestCase):
 
     def test_preflight_rejects_current_and_backup_stage(self):
         current = 'sha256:' + 'a' * 64
-        image = gw.REPO + '@sha256:' + 'b' * 64
+        image = TEST_REPO + '@sha256:' + 'b' * 64
         self.op.inspect = lambda: {'Image': 'sha256:' + 'c' * 64, 'State': {'Running': True}}
         with self.assertRaises(gw.Refused): self.op.preflight(image, current, 'rev')
         self.op.directory.mkdir(parents=True)
@@ -148,11 +167,13 @@ class RunnerTests(RunnerFixture, unittest.TestCase):
 
     def test_preflight_revision_rejection_does_not_print_secrets(self):
         current = 'sha256:' + 'a' * 64
-        image = gw.REPO + '@sha256:' + 'b' * 64
+        image = TEST_REPO + '@sha256:' + 'b' * 64
         secret = 'fake-super-secret'
         self.op.runs.mkdir(parents=True)
         self.op.inspect = lambda: {'Image': current, 'State': {'Running': True, 'Health': {'Status': 'healthy'}},
-                                   'Config': {'Env': ['AZURE_STORAGE_CONTAINER=user-data', 'AZURE_TTS_KEY=' + secret, 'NVA_MEDIA_WORKER_MODE=' + secret]}}
+                                   'Config': {'Env': ['AZURE_STORAGE_CONTAINER=user-data',
+                                                      'AZURE_STORAGE_ACCOUNT_URL=https://samplestorage.blob.core.windows.net',
+                                                      'AZURE_TTS_KEY=' + secret, 'NVA_MEDIA_WORKER_MODE=' + secret]}}
         self.op.previous_named = lambda _: None
         self.op.pg_env = lambda _: {}
         self.op.identity = lambda _: {'server_major': 16}
@@ -164,6 +185,18 @@ class RunnerTests(RunnerFixture, unittest.TestCase):
             self.op.preflight(image, current, 'expected-revision')
         self.assertNotIn(secret, output.getvalue() + error.getvalue())
 
+    def test_storage_account_and_pg_env_validation(self):
+        self.assertEqual(gw.storage_account('AZURE_STORAGE_ACCOUNT_URL=https://samplestorage.blob.core.windows.net\n', required=True), 'samplestorage')
+        with self.assertRaises(gw.Refused):
+            gw.storage_account('OTHER=1\n', required=True)
+        with self.assertRaises(gw.Refused):
+            gw.storage_account('AZURE_STORAGE_ACCOUNT_NAME=samplestorage\nAZURE_STORAGE_ACCOUNT_URL=https://otherstorage.blob.core.windows.net\n', required=True)
+        dev_env = 'DATABASE_URL=postgresql://user:pass@sample-pg-dev.postgres.database.azure.com:5432/any_llm_gateway_dev?sslmode=require\n'
+        self.assertEqual(self.op.pg_env(dev_env)['PGHOST'], 'sample-pg-dev.postgres.database.azure.com')
+        prod_op = gw.Operation('prod', '20261117T120000Z-prod')
+        with self.assertRaises(gw.Refused):
+            prod_op.pg_env('DATABASE_URL=postgresql://user:pass@sample-pg-dev.postgres.database.azure.com:5432/any_llm_gateway?sslmode=require\n')
+
     def test_inspect_error_has_no_secret_output(self):
         def fail(): raise gw.Refused('docker_failed')
         self.op.inspect = fail
@@ -173,8 +206,6 @@ class RunnerTests(RunnerFixture, unittest.TestCase):
         self.assertEqual(output.getvalue() + error.getvalue(), '')
 
 
-if __name__ == '__main__': unittest.main()
-
 class LocalParserTests(unittest.TestCase):
     def setUp(self):
         import subprocess
@@ -182,15 +213,40 @@ class LocalParserTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(prefix='gateway-az-test-')
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        self.repo = self.root / 'repo'
+        (self.repo / '.git').mkdir(parents=True)
+        (self.repo / 'AGENTS.md').write_text('test')
+        runner_dir = self.repo / 'scripts' / 'gateway-runner'
+        runner_dir.mkdir(parents=True)
+        for name in ('operation-local.sh', 'naia-gw-deploy.sh', 'gateway-operation.py'):
+            shutil.copyfile(ROOT / 'scripts/gateway-runner' / name, runner_dir / name)
+        cfg_dir = self.repo / 'config'
+        cfg_dir.mkdir(mode=0o700)
+        gate_cfg = {
+            'services': {
+                'azure:vm:sample-gateway-prod': {
+                    'gatewayRunner': {
+                        'subscriptionId': '00000000-0000-0000-0000-000000000000',
+                        'environments': {
+                            'prod': {'resourceGroup': 'rg-gateway-prod', 'vmName': 'sample-gateway-prod'},
+                            'dev': {'resourceGroup': 'rg-gateway-dev', 'vmName': 'sample-gateway-dev'},
+                        },
+                    },
+                },
+            },
+        }
+        (cfg_dir / 'deploy-gate.json').write_text(json.dumps(gate_cfg))
+        (cfg_dir / 'deploy-gate.json').chmod(0o600)
+        self.repo.chmod(0o700)
         az = self.root / 'az'
         az.write_text('#!/bin/sh\nprintf "%s" "$FAKE_RESPONSE"\nprintf "%s" "$FAKE_ERROR" >&2\nexit "${FAKE_EXIT:-0}"\n')
         az.chmod(0o700)
         self.env = dict(os.environ, PATH=str(self.root) + ':' + os.environ['PATH'])
         self.run_id = '20261117T120000Z-test'
 
-    def invoke(self, phase, response, error='', code='0'):
+    def invoke(self, phase, response, error='', code='0', env_name='dev'):
         env = dict(self.env, FAKE_RESPONSE=response, FAKE_ERROR=error, FAKE_EXIT=code)
-        return self.subprocess.run(['bash', str(ROOT / 'scripts/gateway-runner/operation-local.sh'), 'dev', self.run_id, phase],
+        return self.subprocess.run(['bash', str(self.repo / 'scripts/gateway-runner/operation-local.sh'), env_name, self.run_id, phase],
                                    env=env, capture_output=True, text=True)
 
     def test_status_parser_and_no_raw_output(self):
@@ -213,9 +269,13 @@ class LocalParserTests(unittest.TestCase):
                 log_path.write_text(result.stdout + result.stderr)
                 self.assertNotIn(secret, log_path.read_text())
                 self.assertNotEqual(result.returncode, 0)
+        cfg_file = self.repo / 'config' / 'deploy-gate.json'
+        cfg_file.chmod(0o664)
+        bad_mode = self.invoke('env-names', wrap(body))
+        self.assertNotEqual(bad_mode.returncode, 0)
+        cfg_file.chmod(0o600)
 
     def test_remote_rejects_mixed_bundle(self):
-        import shutil
         remote = self.root / 'remote'
         remote.mkdir()
         for name in ('naia-gw-deploy.sh', 'gateway-operation.py'):
@@ -243,16 +303,18 @@ print('Enable succeeded:\n[stdout]\n' + r.stdout.rstrip('\n') + '\n[stderr]\n' +
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('must-not-run', result.stdout + result.stderr)
 
+
 class BackupDeployTests(RunnerFixture, unittest.TestCase):
     def test_backup_deploy_and_rollback_environment(self):
-        import json
         for prior in (None, '', 'old-value', 'duplicate'):
             op = gw.Operation('dev', '20261117T120000Z-' + ('none' if prior is None else prior or 'empty'))
             for name in ('config.yml', '.env.azure', 'gcp-wif.json'):
                 (op.config / name).write_text('config')
             source = self.sources / 'azure-tts-key-v1'
             source.write_text('fake-test-key'); source.chmod(0o600)
-            entries = ['OTHER=kept', 'DATABASE_URL=unused']
+            signing_source = self.sources / 'app-signing-public-key-v1'
+            signing_source.write_text(FAKE_SIGNING_PUBKEY); signing_source.chmod(0o600)
+            entries = ['OTHER=kept', 'DATABASE_URL=unused', 'AZURE_STORAGE_ACCOUNT_URL=https://samplestorage.blob.core.windows.net']
             if prior is not None:
                 entries.append('AZURE_TTS_KEY=' + prior)
             if prior == 'duplicate': entries.append('AZURE_TTS_KEY=second')
@@ -266,17 +328,18 @@ class BackupDeployTests(RunnerFixture, unittest.TestCase):
                 return ''
             op.pg = pg
             op.load_backup = lambda: (json.loads((op.directory / 'backup.json').read_text()), {})
-            image = gw.REPO + '@sha256:' + 'b' * 64
+            image = TEST_REPO + '@sha256:' + 'b' * 64
             # Capture operator-visible logs as files and inspect persisted receipts;
             # the protected environment and snapshot intentionally contain values.
             label = 'backup-' + ('none' if prior is None else prior or 'empty')
             log_path = self.root / (label + '.log')
             with self.capture_safe_output(label):
-                op.backup(image, live['Image'], 'rev', 'azure-tts-key-v1', secrets={'MOTIF_API_KEY': 'fake-motif-key-1234'})
+                op.backup(image, live['Image'], 'rev', 'azure-tts-key-v1,app-signing-public-key-v1', secrets={'MOTIF_API_KEY': 'fake-motif-key-1234'})
             for path in (log_path, op.directory / 'backup.json', op.directory / 'backup.sha256', op.directory / 'state.json'):
                 content = path.read_text()
                 self.assertNotIn('fake-test-key', content)
                 self.assertNotIn('fake-motif-key-1234', content)
+                self.assertNotIn(FAKE_SIGNING_PUBKEY, content)
             self.assertEqual((op.directory / 'environment').read_text(), env_text)
             source.write_text('changed-source')
             rec, _ = op.load_backup()
@@ -286,6 +349,7 @@ class BackupDeployTests(RunnerFixture, unittest.TestCase):
             op.previous_named = lambda _: None
             gw.Operation.load_backup(op)
             self.assertEqual(op.candidate_secrets(rec)['AZURE_TTS_KEY'], 'fake-test-key')
+            self.assertEqual(op.candidate_secrets(rec)['APP_SIGNING_PUBLIC_KEY'], FAKE_SIGNING_PUBKEY)
             op.owned = lambda rec: live
             op.gateway_network = lambda: '127.0.0.1'
             op.stop = lambda live: None
@@ -294,6 +358,8 @@ class BackupDeployTests(RunnerFixture, unittest.TestCase):
             op.create = lambda image, path: created.append((image, Path(path).read_text()))
             with self.capture_safe_output('deploy'): op.deploy()
             self.assertIn('AZURE_TTS_KEY=fake-test-key', created[-1][1])
+            self.assertIn('APP_SIGNING_PUBLIC_KEY=' + FAKE_SIGNING_PUBKEY, created[-1][1])
+            self.assertIn('AZURE_STORAGE_ACCOUNT_NAME=samplestorage', created[-1][1])
             self.assertIn('OTHER=kept', created[-1][1])
             op.verify = lambda rec, restored=False: None
             with self.capture_safe_output('rollback'): op.rollback()
@@ -304,31 +370,37 @@ class BackupDeployTests(RunnerFixture, unittest.TestCase):
     def test_real_verify_checks_additions_and_restoration(self):
         op = self.op
         op.directory.mkdir(parents=True)
-        (op.directory / 'environment').write_text('AZURE_TTS_KEY=old\nAZURE_TTS_KEY=second\n')
+        (op.directory / 'environment').write_text('AZURE_TTS_KEY=old\nAZURE_TTS_KEY=second\nAZURE_STORAGE_ACCOUNT_URL=https://samplestorage.blob.core.windows.net\n')
         source = self.sources / 'azure-tts-key-v1'
         source.write_text('fake-secret'); source.chmod(0o600)
         secret_path = op.directory / gw.SECRET_FILE
-        secret_path.write_text('MOTIF_API_KEY=fake-motif-key-1234\nAZURE_TTS_KEY=fake-secret\n'); secret_path.chmod(0o600)
-        rec = {'candidate': gw.REPO + '@sha256:' + 'b' * 64, 'previous_digest': 'sha256:' + 'a' * 64,
-               'environment_additions': ['azure-tts-key-v1'],
-               'candidate_secret_keys': ['MOTIF_API_KEY', 'AZURE_TTS_KEY'],
+        secret_path.write_text(f'MOTIF_API_KEY=fake-motif-key-1234\nAZURE_TTS_KEY=fake-secret\nAPP_SIGNING_PUBLIC_KEY={FAKE_SIGNING_PUBKEY}\n'); secret_path.chmod(0o600)
+        rec = {'candidate': TEST_REPO + '@sha256:' + 'b' * 64, 'previous_digest': 'sha256:' + 'a' * 64,
+               'environment_additions': ['azure-tts-key-v1', 'app-signing-public-key-v1'],
+               'candidate_secret_keys': ['MOTIF_API_KEY', 'AZURE_TTS_KEY', 'APP_SIGNING_PUBLIC_KEY'],
                'candidate_secrets_sha256': gw.sha(secret_path), 'previous_nva_media_worker_mode': None, 'revision': 'rev'}
-        entries = [k + '=' + v for k, v in gw.CANDIDATE_ENV.items()] + ['MOTIF_API_KEY=fake-motif-key-1234', 'AZURE_TTS_KEY=fake-secret']
+        entries = [k + '=' + v for k, v in gw.CANDIDATE_ENV.items()] + [
+            'AZURE_STORAGE_ACCOUNT_NAME=samplestorage',
+            'MOTIF_API_KEY=fake-motif-key-1234',
+            'AZURE_TTS_KEY=fake-secret',
+            'APP_SIGNING_PUBLIC_KEY=' + FAKE_SIGNING_PUBKEY,
+        ]
         live = {'Image': rec['previous_digest'], 'Config': {'Env': entries}, 'State': {'Running': True, 'Health': {'Status': 'healthy'}}}
         op.owned = lambda _: live
-        op.digest = lambda _: 'sha256:' + 'b' * 64
+        op.digest = lambda *_: 'sha256:' + 'b' * 64
         op.http = lambda path: (200, b'{"paths":{"/v1/studio/speech-plan":{}}}')
         op.pg_env = lambda _: {}
         op.pg = lambda *a, **kw: 'rev'
         with self.capture_safe_output('verify-ok'):
             op.verify(rec, record=False)
-        live['Config']['Env'][-1] = 'AZURE_TTS_KEY=wrong'
+        live['Config']['Env'][-1] = 'APP_SIGNING_PUBLIC_KEY=wrong'
         with self.capture_safe_output('verify-failed'), self.assertRaises(gw.Refused): op.verify(rec, record=False)
-        live['Config']['Env'] = ['AZURE_TTS_KEY=old', 'AZURE_TTS_KEY=second']
+        live['Config']['Env'] = ['AZURE_TTS_KEY=old', 'AZURE_TTS_KEY=second', 'AZURE_STORAGE_ACCOUNT_URL=https://samplestorage.blob.core.windows.net']
         with self.capture_safe_output('verify-restore-ok'):
             op.verify(rec, restored=True, record=False)
-        live['Config']['Env'].pop()
+        live['Config']['Env'].pop(0)
         with self.capture_safe_output('verify-restore-failed'), self.assertRaises(gw.Refused): op.verify(rec, restored=True, record=False)
+
 
 class CleanupTests(RunnerFixture, unittest.TestCase):
     def test_classification_and_container_parse(self):
@@ -344,6 +416,7 @@ class CleanupTests(RunnerFixture, unittest.TestCase):
         self.assertEqual(classify(info, {old}, set()), 'keep')
         self.assertEqual(classify(info, set(), {old}), 'in_use')
         self.assertEqual(classify(info, set(), set()), 'gateway_old')
+        self.assertEqual(classify({'Id': old, 'RepoTags': [], 'RepoDigests': [TEST_REPO + '@' + old]}, set(), set(), (TEST_REPO, *gw.GATEWAY_LOCAL_IMAGE_REPOS)), 'gateway_old')
         self.assertEqual(classify({'Id': old, 'RepoTags': [], 'RepoDigests': []}, set(), set()), 'dangling')
         self.assertEqual(classify({'Id': old, 'RepoTags': ['other:tag'], 'RepoDigests': []}, set(), set()), 'other')
         self.assertEqual(classify({'Id': old, 'RepoTags': ['naia-gateway:old', 'other:tag']}, set(), set()), 'other')
@@ -358,9 +431,8 @@ class CleanupTests(RunnerFixture, unittest.TestCase):
         self.assertEqual(gw.Operation.cleanup_container_priority('other'), 'none')
 
     def test_keep_set_requires_matching_live_candidate_and_postgres(self):
-        import json
         current = 'sha256:' + 'a' * 64
-        candidate = gw.REPO + '@sha256:' + 'b' * 64
+        candidate = TEST_REPO + '@sha256:' + 'b' * 64
         self.op.inspect = lambda: {'Image': current, 'State': {'Running': True}}
         self.op.pg_images = lambda: ['postgres:16', 'postgres:15', 'postgres:16-bookworm']
         replies = {current: {'Id': current, 'RepoTags': ['naia-gateway:live']},
@@ -377,7 +449,7 @@ class CleanupTests(RunnerFixture, unittest.TestCase):
         for fail in (False, True):
             op = gw.Operation('dev', '20261117T120000Z-' + ('fail' if fail else 'success'))
             current = 'sha256:' + 'a' * 64
-            image = gw.REPO + '@sha256:' + 'b' * 64
+            image = TEST_REPO + '@sha256:' + 'b' * 64
             old = 'sha256:' + 'c' * 64
             cid = 'd' * 64
             entry = {'Id': cid, 'Name': 'old', 'Image': old, 'Status': 'exited', 'Created': '2026-11-17T12:00:00Z'}
@@ -415,7 +487,7 @@ class CleanupTests(RunnerFixture, unittest.TestCase):
                 self.assertGreater(min(image_rms), container_rm)
 
     def test_recent_and_full_log_are_legacy_status_aliases(self):
-        import subprocess, shutil
+        import subprocess
         tmp = tempfile.TemporaryDirectory(prefix='gw-status-alias-')
         self.addCleanup(tmp.cleanup)
         d = Path(tmp.name)
@@ -425,3 +497,7 @@ class CleanupTests(RunnerFixture, unittest.TestCase):
             r = subprocess.run(['bash', str(d / 'status-local.sh'), 'dev', '20261117T120000Z-test', mode], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0)
             self.assertEqual(r.stdout.splitlines(), ['dev', '20261117T120000Z-test', 'status'])
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -44,12 +44,28 @@
       "allowOps": true,
       "allowRollback": true
     },
-    "azure:vm:naia-gateway-prod-az": {
+    "azure:vm:my-gateway-prod": {
       "label": "Gateway production runner",
       "requireDeployGate": true,
       "requireReadiness": true,
+      "gatewayRunner": {
+        "subscriptionId": "00000000-0000-0000-0000-000000000000",
+        "location": "koreacentral",
+        "acrName": "myregistry",
+        "imageRepo": "myregistry.azurecr.io/my-org/gateway",
+        "environments": {
+          "prod": {
+            "resourceGroup": "rg-my-gateway-prod",
+            "vmName": "my-gateway-prod"
+          },
+          "dev": {
+            "resourceGroup": "rg-my-gateway-dev",
+            "vmName": "my-gateway-dev"
+          }
+        }
+      },
       "allowedCommands": [
-        "^bash /[A-Za-z0-9_./-]+/launch-local\\.sh prod [0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,32} [A-Za-z0-9_.-]{1,128} sha256:[a-f0-9]{64} sha256:[a-f0-9]{64} [A-Za-z0-9_.-]{1,128}(?: backup(?: (?:-|azure-tts-key-v1|azure-tts-region-v1|azure-tts-key-v1,azure-tts-region-v1))?| cleanup(?: -)?)?$",
+        "^bash /[A-Za-z0-9_./-]+/launch-local\\.sh prod [0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,32} [A-Za-z0-9_.-]{1,128} sha256:[a-f0-9]{64} sha256:[a-f0-9]{64} [A-Za-z0-9_.-]{1,128}(?: backup(?: (?:-|azure-tts-key-v1(?:,azure-tts-region-v1)?(?:,app-signing-public-key-v1)?|azure-tts-region-v1(?:,app-signing-public-key-v1)?|app-signing-public-key-v1))?| cleanup(?: -)?)?$",
         "^bash /[A-Za-z0-9_./-]+/operation-local\\.sh prod [0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,32} (?:deploy|verify|status|rollback)$",
         "^bash /[A-Za-z0-9_./-]+/status-local\\.sh prod [0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,32}(?: (?:recent|full-log|env-names|installed-hashes))?$",
         "^bash /[A-Za-z0-9_./-]+/rollback-local\\.sh prod [0-9]{8}T[0-9]{6}Z-[a-z0-9-]{1,32}$"

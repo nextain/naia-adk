@@ -9,16 +9,15 @@ ENVIRONMENT="$1" RUN_ID="$2" TAG="$3" DIGEST="$4" CURRENT="$5" REVISION="$6" STA
    "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ && "$CURRENT" =~ ^sha256:[0-9a-f]{64}$ &&
    "$REVISION" =~ ^[A-Za-z0-9_.-]{1,128}$ ]] || exit 64
 [[ "$STAGE" == backup || "$STAGE" == cleanup ]] || exit 64
-[[ "$ADDITIONS" == - || "$ADDITIONS" == azure-tts-key-v1 || "$ADDITIONS" == azure-tts-region-v1 || "$ADDITIONS" == azure-tts-key-v1,azure-tts-region-v1 ]] || exit 64
-[[ "$STAGE" != cleanup || "$ADDITIONS" == - ]] || exit 64
-case "$ENVIRONMENT" in
-  prod) RG=RG-NAIA-PROD-KOREACENTRAL; VM=naia-gateway-prod-az ;;
-  dev) RG=RG-NAIA-DEV-KOREACENTRAL; VM=naia-gateway-dev-az ;;
+case "$ADDITIONS" in
+  -|azure-tts-key-v1|azure-tts-region-v1|app-signing-public-key-v1|\
+  azure-tts-key-v1,azure-tts-region-v1|azure-tts-key-v1,app-signing-public-key-v1|\
+  azure-tts-region-v1,app-signing-public-key-v1|\
+  azure-tts-key-v1,azure-tts-region-v1,app-signing-public-key-v1) ;;
   *) exit 64 ;;
 esac
-SUBSCRIPTION=83b29893-2929-4593-bf1f-1f7b8aa53630
-ACR=acrnaia83b29893
-REPO=acrnaia83b29893.azurecr.io/naia/gateway
+[[ "$STAGE" != cleanup || "$ADDITIONS" == - ]] || exit 64
+case "$ENVIRONMENT" in prod|dev) ;; *) exit 64 ;; esac
 trap 'echo MOTIF_KEY_FILE_INVALID; exit 1' ERR
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 trap - ERR
@@ -50,8 +49,8 @@ for KEY_DIR in "$ROOT" "$ROOT/data-private" "$ROOT/data-private/key"; do
     { echo MOTIF_KEY_FILE_INVALID; exit 1; }
 done
 if [[ "$STAGE" == backup ]]; then
-  # fit075 decision "가" (2026-10-24T23:43Z): the candidate container also gets MOTIF_API_KEY.
-  # The value leaves this PC only as a Managed Run Command protected parameter.
+  # The candidate container also gets MOTIF_API_KEY; the value leaves this host
+  # only as a Managed Run Command protected parameter.
   [[ -f "$MOTIF_KEY_FILE" && ! -L "$MOTIF_KEY_FILE" && "$(stat -c '%a %u' -- "$MOTIF_KEY_FILE")" == "600 $(id -u)" ]] ||
     { echo MOTIF_KEY_FILE_INVALID; exit 1; }
   MOTIF_VALUE=''
@@ -65,7 +64,69 @@ if [[ "$STAGE" == backup ]]; then
   unset MOTIF_VALUE MOTIF_SIZE
   PROTECTED+=("@$TMP/protected-motif.txt")
 fi
-ACTUAL="$(timeout 60 az acr repository show --subscription "$SUBSCRIPTION" -n "$ACR" --image "naia/gateway:$TAG" --query digest -o tsv 2>/dev/null)" || { echo PREPARE_UNVERIFIED; exit 1; }
+CFG_FILE="$ROOT/config/deploy-gate.json"
+for CFG_PATH in "$ROOT/config" "$CFG_FILE"; do
+  [[ -e "$CFG_PATH" && ! -L "$CFG_PATH" ]] || { echo PREPARE_UNVERIFIED; exit 1; }
+  CFG_MODE="$(stat -c '%a' -- "$CFG_PATH")" || { echo PREPARE_UNVERIFIED; exit 1; }
+  CFG_UID="$(stat -c '%u' -- "$CFG_PATH")" || { echo PREPARE_UNVERIFIED; exit 1; }
+  [[ "$CFG_MODE" =~ ^[0-7]{3,4}$ && "$CFG_UID" =~ ^[0-9]+$ ]] &&
+    (( (8#$CFG_MODE & 0022) == 0 )) &&
+    { [[ "$CFG_UID" == "$(id -u)" ]] || (( (8#$CFG_MODE & 0200) == 0 )); } ||
+    { echo PREPARE_UNVERIFIED; exit 1; }
+done
+[[ -f "$CFG_FILE" ]] || { echo PREPARE_UNVERIFIED; exit 1; }
+TARGET_RAW="$(python3 -I -c '
+import json, re, sys
+cfg_path, env_name = sys.argv[1:]
+with open(cfg_path, encoding="utf-8") as f:
+    cfg = json.load(f)
+if not isinstance(cfg, dict):
+    raise SystemExit(1)
+candidates = []
+if isinstance(cfg.get("gatewayRunner"), dict):
+    candidates.append((cfg["gatewayRunner"].get("service"), cfg["gatewayRunner"]))
+services = cfg.get("services")
+if isinstance(services, dict):
+    for svc, rule in services.items():
+        if isinstance(rule, dict) and isinstance(rule.get("gatewayRunner"), dict):
+            candidates.append((svc, rule["gatewayRunner"]))
+if len(candidates) != 1:
+    raise SystemExit(1)
+svc, gw = candidates[0]
+sub = gw.get("subscriptionId", "")
+location = gw.get("location", "")
+acr = gw.get("acrName", "")
+repo = gw.get("imageRepo", "")
+envs = gw.get("environments")
+target = envs.get(env_name) if isinstance(envs, dict) else None
+if not isinstance(sub, str) or not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", sub):
+    raise SystemExit(1)
+if not isinstance(location, str) or not re.fullmatch(r"[a-z0-9]{1,64}", location):
+    raise SystemExit(1)
+if not isinstance(acr, str) or not re.fullmatch(r"[a-z0-9]{5,50}", acr):
+    raise SystemExit(1)
+if not isinstance(repo, str) or not re.fullmatch(r"[a-z0-9]{5,50}\.azurecr\.io/[a-z0-9._/-]{1,128}", repo) or not repo.startswith(acr + ".azurecr.io/"):
+    raise SystemExit(1)
+if not isinstance(target, dict):
+    raise SystemExit(1)
+rg, vm = target.get("resourceGroup", ""), target.get("vmName", "")
+if not isinstance(rg, str) or not re.fullmatch(r"[A-Za-z0-9._()-]{1,90}", rg):
+    raise SystemExit(1)
+if not isinstance(vm, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", vm):
+    raise SystemExit(1)
+if env_name == "prod" and isinstance(svc, str) and svc.startswith("azure:vm:"):
+    if vm.lower() != svc[len("azure:vm:"):].lower():
+        raise SystemExit(1)
+print(sub.lower(), location, acr, repo, rg, vm)
+' "$CFG_FILE" "$ENVIRONMENT" 2>/dev/null)" || { echo PREPARE_UNVERIFIED; exit 1; }
+SUBSCRIPTION='' LOCATION='' ACR='' REPO='' RG='' VM='' EXTRA=''
+IFS=' ' read -r SUBSCRIPTION LOCATION ACR REPO RG VM EXTRA <<<"$TARGET_RAW"
+[[ -z "$EXTRA" && "$SUBSCRIPTION" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ &&
+   "$LOCATION" =~ ^[a-z0-9]{1,64}$ && "$ACR" =~ ^[a-z0-9]{5,50}$ &&
+   "$REPO" =~ ^[a-z0-9]{5,50}\.azurecr\.io/[a-z0-9._/-]{1,128}$ && "$REPO" == "$ACR.azurecr.io/"* &&
+   "$RG" =~ ^[A-Za-z0-9._()-]{1,90}$ && "$VM" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { echo PREPARE_UNVERIFIED; exit 1; }
+IMAGE_NAME="${REPO#"$ACR.azurecr.io/"}"
+ACTUAL="$(timeout 60 az acr repository show --subscription "$SUBSCRIPTION" -n "$ACR" --image "$IMAGE_NAME:$TAG" --query digest -o tsv 2>/dev/null)" || { echo PREPARE_UNVERIFIED; exit 1; }
 [[ "$ACTUAL" == "$DIGEST" ]] || { echo TAG_DIGEST_MISMATCH; exit 1; }
 # Existing run-command names are never deleted/reused to make a retry fit.
 EXISTS="$(timeout 30 az vm run-command list --subscription "$SUBSCRIPTION" -g "$RG" --vm-name "$VM" --query "[?name=='$NAME'].name" -o tsv 2>/dev/null)" || { echo PREPARE_UNVERIFIED; exit 1; }
@@ -114,10 +175,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 export DOCKER_CONFIG="$AUTH"
-printf '%s' "$AUTH_TOKEN" | timeout 30 docker login acrnaia83b29893.azurecr.io --username 00000000-0000-0000-0000-000000000000 --password-stdin >/dev/null 2>&1
+printf '%s' "$AUTH_TOKEN" | timeout 30 docker login "${IMAGE%%/*}" --username 00000000-0000-0000-0000-000000000000 --password-stdin >/dev/null 2>&1
 unset AUTH_TOKEN
 timeout 240 docker pull "$IMAGE" >/dev/null 2>&1
-timeout 10 docker logout acrnaia83b29893.azurecr.io >/dev/null 2>&1 || true
+timeout 10 docker logout "${IMAGE%%/*}" >/dev/null 2>&1 || true
 unset DOCKER_CONFIG
 printf '%s' "$ENTRY_B64" | base64 -d >"$STAGING/naia-gw-deploy.sh"
 printf '%s' "$OPERATION_B64" | base64 -d >"$STAGING/gateway-operation.py"
@@ -175,7 +236,7 @@ REMOTE
 # value, script literal, shell trace, or ordinary Docker config on either host.
 CREATE_RC=0
 timeout 1000 az vm run-command create --subscription "$SUBSCRIPTION" -g "$RG" --vm-name "$VM" \
-  --run-command-name "$NAME" --location koreacentral --async-execution false --timeout-in-seconds 950 \
+  --run-command-name "$NAME" --location "$LOCATION" --async-execution false --timeout-in-seconds 950 \
   --script "@$TMP/script.sh" --protected-parameters "${PROTECTED[@]}" \
   -o none >/dev/null 2>&1 || CREATE_RC=$?
 rm -f -- "$TMP/protected.txt" "$TMP/protected-motif.txt"

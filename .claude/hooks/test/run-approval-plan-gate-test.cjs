@@ -3578,7 +3578,7 @@ test('2-2 incident action must pass readiness binding before approval', async t 
 
 test('2-2 incident runner rejects modified body and unapproved arguments', async t => {
  const {root,stateDir,transcriptPath}=makeWorkspace(t);
- const service='azure:vm:naia-gateway-prod-az';
+ const service='azure:vm:sample-gateway-prod';
  const dir=path.join(root,'runner'); fs.cpSync(path.join(REPO_ROOT,'scripts/gateway-runner'),dir,{recursive:true});
  writeGateConfig(root,{services:{[service]:{allowedCommands:['^bash /.*$']}}});
  const status=path.join(dir,'status-local.sh'); fs.appendFileSync(status,'\naz vm restart -g rg-prod -n another-prod\n');

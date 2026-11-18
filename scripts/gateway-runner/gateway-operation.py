@@ -43,6 +43,7 @@ removal stops the phase (no image/builder/journal/apt work afterwards) and refus
 with cleanup_container_remove_failed. used_ids and the image table are re-read
 after container removal. The 6GiB bar and no automatic recovery or retry are kept.
 """
+import base64
 import datetime
 import fcntl
 import hashlib
@@ -60,8 +61,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-REPO = 'acrnaia83b29893.azurecr.io/naia/gateway'
-GATEWAY_IMAGE_REPOS = ('acrnaia83b29893.azurecr.io/naia/gateway', 'naia-gateway', 'gw-basefee-local')
+IMAGE_REPO_RE = re.compile(r'[a-z0-9]{5,50}\.azurecr\.io/[a-z0-9._/-]{1,128}')
+GATEWAY_LOCAL_IMAGE_REPOS = ('naia-gateway', 'gw-basefee-local')
+PG_HOST_RE = re.compile(r'[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\.postgres\.database\.azure\.com')
+STORAGE_ACCOUNT_RE = re.compile(r'[a-z0-9]{3,24}')
+STORAGE_URL_RE = re.compile(r'https://([a-z0-9]{3,24})\.blob\.core\.windows\.net/?')
 CLEANUP_THRESHOLD_BYTES = 6 * 1024**3
 CLEANUP_OBSERVED_PREFIXES = ('PREFLIGHT_OBSERVED', 'CLEANUP_OBSERVED', 'CLEANUP_INVENTORY', 'CLEANUP_REMOVED')
 CLEANUP_CONTAINER_FORMAT = '{{.Id}} {{.Name}} {{.Image}} {{.State.Status}} {{.Created}}'
@@ -84,20 +88,19 @@ SPEECH_SET_SQL = ("select count(*) filter (where status in ('queued', 'assigned'
                   "count(*) filter (where billing_status = 'reserved') from media_jobs where kind = 'nva_speech_set'")
 FILES = ('database.dump', 'environment', 'config.yml', '.env.azure', 'gcp-wif.json')
 
-# Studio export price (credits). The only place the price is set; decided 2026-10-20 01:41Z ("5로 하자").
+# Studio export price (credits).
 STUDIO_EXPORT_CREDITS = '5'
-# Media pool daily cost cap (USD). The only place the cap is set. The fit075 p1 read on 2026-10-25 found no
-# NAIA_MEDIA_POOL_DAILY_COST_CAP_USD on production (unset = no cap); decision "가" = 5 USD per day.
-# The gateway accepts 0 < Decimal(value) <= 1000 (media_pool/config.py).
+# Media pool daily cost cap (USD). The gateway accepts 0 < Decimal(value) <= 1000 (media_pool/config.py).
 MEDIA_POOL_DAILY_COST_CAP_USD = '5'
 # Candidate generation: injected into the new container's env file at deploy and
-# checked on the live new container at verify. Never required at preflight.
+# checked on the live new container at verify. AZURE_STORAGE_ACCOUNT_NAME is derived
+# from the backed-up container's storage configuration without hardcoding an account slug.
 CANDIDATE_ENV = {'STUDIO_EXPORT_CREDITS': STUDIO_EXPORT_CREDITS,
                  'NAIA_VIDEO_AVATAR_MIN_START_CREDITS': '1500',
-                 'AZURE_STORAGE_ACCOUNT_NAME': 'stnaia83b29893',
                  'NAIA_MEDIA_POOL_DAILY_COST_CAP_USD': MEDIA_POOL_DAILY_COST_CAP_USD}
-# Candidate secrets (2026-10-25, fit075 decision "가"): values never live in this file, argv, logs or
-# stdout. launch-local.sh reads them on the operator PC and sends them as Managed Run Command protected
+CANDIDATE_ENV_KEYS = (*CANDIDATE_ENV, 'AZURE_STORAGE_ACCOUNT_NAME')
+# Candidate secrets: values never live in this file, argv, logs or stdout.
+# launch-local.sh reads them on the operator host and sends them as Managed Run Command protected
 # parameters; the backup phase takes them from its environment (and removes them there so no child
 # process inherits them), stores them root-only in the run directory, and records only their sha256.
 # deploy adds them to the new container; verify compares them on the live container without printing;
@@ -108,8 +111,11 @@ SECRET_VALUE = re.compile(r'[A-Za-z0-9._-]{16,256}')
 
 
 ENV_NAMES = ('AZURE_TTS_KEY', 'AZURE_SPEECH_KEY', 'AZURE_FOUNDRY_API_KEY',
-             'AZURE_TTS_REGION', 'AZURE_SPEECH_REGION', 'AZURE_TTS_ENDPOINT')
-SOURCES = {'azure-tts-key-v1': 'AZURE_TTS_KEY', 'azure-tts-region-v1': 'AZURE_TTS_REGION'}
+             'AZURE_TTS_REGION', 'AZURE_SPEECH_REGION', 'AZURE_TTS_ENDPOINT',
+             'APP_SIGNING_PUBLIC_KEY')
+SOURCES = {'azure-tts-key-v1': 'AZURE_TTS_KEY',
+           'azure-tts-region-v1': 'AZURE_TTS_REGION',
+           'app-signing-public-key-v1': 'APP_SIGNING_PUBLIC_KEY'}
 REGIONS = frozenset(('eastus', 'eastus2', 'westus', 'westus2', 'westus3', 'centralus',
                      'northcentralus', 'southcentralus', 'westcentralus', 'canadacentral',
                      'brazilsouth', 'northeurope', 'westeurope', 'uksouth', 'francecentral',
@@ -118,9 +124,15 @@ REGIONS = frozenset(('eastus', 'eastus2', 'westus', 'westus2', 'westus3', 'centr
                      'australiaeast', 'centralindia', 'southafricanorth', 'uaenorth'))
 
 
+def parse_image_ref(image):
+    repo, sep, digest = image.partition('@') if isinstance(image, str) else ('', '', '')
+    require(bool(sep) and bool(IMAGE_REPO_RE.fullmatch(repo)) and bool(DIGEST.fullmatch(digest)), 'invalid_image')
+    return repo, digest
+
+
 def parse_additions(spec):
     names = list(SOURCES.values())
-    forbidden = set(CANDIDATE_ENV) | set(CANDIDATE_SECRET_KEYS) | {'FORWARDED_ALLOW_IPS', 'NVA_MEDIA_WORKER_URL'}
+    forbidden = set(CANDIDATE_ENV_KEYS) | set(CANDIDATE_SECRET_KEYS) | {'FORWARDED_ALLOW_IPS', 'NVA_MEDIA_WORKER_URL'}
     require(len(names) == len(set(names)) and not (set(names) & forbidden), 'environment_additions_invalid')
     ids = [] if spec == '-' else spec.split(',')
     require(ids == [s for s in SOURCES if s in ids] and all(s in SOURCES for s in ids),
@@ -131,7 +143,17 @@ def parse_additions(spec):
 def valid_addition(name, value):
     if name == 'AZURE_TTS_KEY':
         return bool(re.fullmatch(r'[A-Za-z0-9._-]{1,256}', value))
-    return name == 'AZURE_TTS_REGION' and value in REGIONS
+    if name == 'AZURE_TTS_REGION':
+        return value in REGIONS
+    if name == 'APP_SIGNING_PUBLIC_KEY':
+        if not re.fullmatch(r'[A-Za-z0-9+/]{43}=', value):
+            return False
+        try:
+            raw = base64.b64decode(value, validate=True)
+        except ValueError:
+            return False
+        return len(raw) == 32 and base64.b64encode(raw).decode('ascii') == value
+    return False
 
 
 def with_env(env_text, values):
@@ -151,9 +173,35 @@ def with_env(env_text, values):
     return '\n'.join(out) + '\n'
 
 
+def storage_account(env_text, *, required=False):
+    found_name, name = last_env_value(env_text, 'AZURE_STORAGE_ACCOUNT_NAME')
+    found_url, url = last_env_value(env_text, 'AZURE_STORAGE_ACCOUNT_URL')
+    from_url = None
+    if found_url and url:
+        m = STORAGE_URL_RE.fullmatch(url)
+        require(bool(m), 'storage_account_invalid')
+        from_url = m.group(1)
+    if found_name and name:
+        require(bool(STORAGE_ACCOUNT_RE.fullmatch(name)), 'storage_account_invalid')
+        require(from_url is None or name == from_url, 'storage_account_invalid')
+        return name
+    if from_url is not None:
+        return from_url
+    require(not required, 'storage_account_missing')
+    return None
+
+
+def candidate_env_for(env_text):
+    values = dict(CANDIDATE_ENV)
+    acct = storage_account(env_text, required=False)
+    if acct is not None:
+        values['AZURE_STORAGE_ACCOUNT_NAME'] = acct
+    return values
+
+
 def with_candidate_env(env_text):
-    """Keep every other line of the backed-up env; add or replace only CANDIDATE_ENV keys."""
-    return with_env(env_text, CANDIDATE_ENV)
+    """Keep every other line of the backed-up env; add or replace only candidate env keys."""
+    return with_env(env_text, candidate_env_for(env_text))
 
 
 def take_candidate_secrets():
@@ -240,8 +288,8 @@ class Operation:
         self.directory = self.runs / run_id
         self.lock = root / 'run/lock/naia-gw-deploy.lock'
         self.environment, self.run_id = environment, run_id
-        self.host = f'pg-naia-{environment}-83b29893.postgres.database.azure.com'
         self.database = 'any_llm_gateway' + ('_dev' if environment == 'dev' else '')
+        self.gateway_repos = GATEWAY_LOCAL_IMAGE_REPOS
         self.deadline = time.monotonic() + 600
         self.pg_image = None
         self.pg_major = None
@@ -334,9 +382,9 @@ class Operation:
             return None
         return json.loads(self.docker('inspect', '--format', '{{json .}}', 'naia-gateway'))
 
-    def digest(self, container):
+    def digest(self, container, repo):
         refs = json.loads(self.docker('image', 'inspect', '--format', '{{json .RepoDigests}}', container['Image']))
-        digests = {ref.split('@', 1)[1] for ref in refs if ref.startswith(REPO + '@')}
+        digests = {ref.split('@', 1)[1] for ref in refs if ref.startswith(repo + '@')}
         require(len(digests) == 1 and DIGEST.fullmatch(next(iter(digests))), 'image_digest_unverified')
         return next(iter(digests))
 
@@ -353,12 +401,15 @@ class Operation:
         values = dict(line.split('=', 1) for line in env_text.splitlines() if '=' in line)
         url = urllib.parse.urlsplit(values.get('DATABASE_URL', ''))
         require(url.scheme in ('postgresql', 'postgres', 'postgresql+psycopg', 'postgresql+psycopg2', 'postgresql+asyncpg'), 'unsupported_database_url')
-        require(url.hostname == self.host and urllib.parse.unquote(url.path[1:]) == self.database and (url.port or 5432) == 5432, 'database_target_mismatch')
+        host = (url.hostname or '').lower()
+        require(bool(PG_HOST_RE.fullmatch(host)), 'database_target_mismatch')
+        require(('-dev' not in host) if self.environment == 'prod' else ('-prod' not in host), 'database_target_mismatch')
+        require(urllib.parse.unquote(url.path[1:]) == self.database and (url.port or 5432) == 5432, 'database_target_mismatch')
         query = urllib.parse.parse_qs(url.query, strict_parsing=True)
         require(set(query) <= {'sslmode', 'connect_timeout', 'application_name', 'channel_binding'}, 'unsupported_database_url_option')
         require(all(len(v) == 1 for v in query.values()), 'duplicate_database_url_option')
         env = {k: v for k, v in os.environ.items() if not k.startswith('PG')}
-        env.update(PGHOST=self.host, PGPORT='5432', PGDATABASE=self.database,
+        env.update(PGHOST=host, PGPORT='5432', PGDATABASE=self.database,
                    PGUSER=urllib.parse.unquote(url.username or ''),
                    PGPASSWORD=urllib.parse.unquote(url.password or ''), PGSSLMODE='require',
                    PGCONNECT_TIMEOUT='10', PGOPTIONS='-c lock_timeout=5000 -c statement_timeout=120000')
@@ -425,7 +476,8 @@ class Operation:
         return '\n'.join(lines) + '\n'
 
     def preflight(self, image, current, revision):
-        require(image.startswith(REPO + '@') and DIGEST.fullmatch(image.split('@', 1)[1]) and DIGEST.fullmatch(current), 'invalid_image')
+        parse_image_ref(image)
+        require(DIGEST.fullmatch(current), 'invalid_image')
         live = self.inspect()
         require(live and live.get('State', {}).get('Running') is True and self.is_previous(live, current), 'current_image_or_state_mismatch')
         require(live.get('State', {}).get('Health', {}).get('Status') == 'healthy', 'current_gateway_not_healthy')
@@ -433,9 +485,10 @@ class Operation:
         env_text = self.current_env(live)
         actual = None
         try:
-            values = dict(s.split('=', 1) for s in env_text.splitlines())
+            values = dict(s.split('=', 1) for s in env_text.splitlines() if '=' in s)
             containers = {values[k] for k in ('AZURE_STORAGE_CONTAINER', 'AZURE_STORAGE_CONTAINER_NAME') if k in values}
             require(containers == {'user-data'}, 'studio_storage_container_mismatch')
+            storage_account(env_text, required=True)
             env = self.pg_env(env_text)
             identity = self.identity(env)
             self.tools(identity)
@@ -569,7 +622,8 @@ class Operation:
         for name, digest in rec['files'].items():
             p = self.directory / name
             require(p.is_file() and not p.is_symlink() and sha(p) == digest, 'backup_file_changed')
-        require(DIGEST.fullmatch(rec['previous_digest']) and rec['candidate'].startswith(REPO + '@') and DIGEST.fullmatch(rec['candidate'].split('@', 1)[1]), 'backup_images_invalid')
+        cand_repo, cand_sep, cand_digest = rec.get('candidate', '').partition('@') if isinstance(rec.get('candidate'), str) else ('', '', '')
+        require(DIGEST.fullmatch(rec['previous_digest']) and bool(cand_sep) and bool(IMAGE_REPO_RE.fullmatch(cand_repo)) and bool(DIGEST.fullmatch(cand_digest)), 'backup_images_invalid')
         env = self.pg_env((self.directory / 'environment').read_text())
         identity = self.identity(env)
         require(identity == rec['identity'], 'database_identity_changed')
@@ -603,7 +657,8 @@ class Operation:
     def owned(self, rec):
         live = self.inspect()
         if live:
-            require(self.is_previous(live, rec) or self.digest(live) == rec['candidate'].split('@', 1)[1], 'current_container_not_owned')
+            cand_repo, cand_digest = rec['candidate'].split('@', 1)
+            require(self.is_previous(live, rec) or self.digest(live, cand_repo) == cand_digest, 'current_container_not_owned')
         return live
 
     def stop(self, live):
@@ -686,7 +741,8 @@ class Operation:
             return 0, b''
 
     def verify(self, rec, restored=False, record=True):
-        expected = lambda c: self.is_previous(c, rec) if restored else self.digest(c) == rec['candidate'].split('@', 1)[1]
+        cand_repo, cand_digest = rec['candidate'].split('@', 1)
+        expected = lambda c: self.is_previous(c, rec) if restored else self.digest(c, cand_repo) == cand_digest
         live = self.owned(rec)
         require(live and expected(live) and live.get('State', {}).get('Running'), 'verification_image_or_state_failed')
         for i in range(2 if self.test else 30):
@@ -707,7 +763,8 @@ class Operation:
         if not restored:
             # The new values are checked on the live new container; every copy must match.
             values = live_env_values(live)
-            require(all(values.get(k) and all(x == v for x in values[k]) for k, v in CANDIDATE_ENV.items()),
+            expected_env = candidate_env_for((self.directory / 'environment').read_text())
+            require(all(values.get(k) and all(x == v for x in values[k]) for k, v in expected_env.items()),
                     'candidate_environment_mismatch')
             require('previous_nva_media_worker_mode' in rec, 'worker_mode_not_inherited')
             worker_copies = values.get('NVA_MEDIA_WORKER_MODE')
@@ -724,7 +781,7 @@ class Operation:
             require(all(sorted(values.get(k, [])) == sorted(before.get(k, [])) for k in rec.get('candidate_secret_keys', CANDIDATE_SECRET_KEYS)),
                     'restored_secret_mismatch')
             # The fixed candidate values return to the backed-up ones too (an absent cap stays absent).
-            require(all(sorted(values.get(k, [])) == sorted(before.get(k, [])) for k in CANDIDATE_ENV),
+            require(all(sorted(values.get(k, [])) == sorted(before.get(k, [])) for k in CANDIDATE_ENV_KEYS),
                     'restored_environment_mismatch')
             env = self.pg_env((self.directory / 'environment').read_text())
             revision = self.pg('psql', ['-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-c', REVISION_SQL], env=env).strip()
@@ -768,7 +825,8 @@ class Operation:
         print('PHASE=' + state['phase'], 'run_id=' + self.run_id)
         rec, env = self.load_backup()
         live = self.owned(rec)
-        digest = 'missing' if not live else live['Image'] if self.is_previous(live, rec) else self.digest(live)
+        cand_repo = rec['candidate'].split('@', 1)[0]
+        digest = 'missing' if not live else live['Image'] if self.is_previous(live, rec) else self.digest(live, cand_repo)
         print('LIVE_DIGEST=' + digest, 'RUNNING=' + str(bool(live and live.get('State', {}).get('Running'))).lower())
         if state['phase'] == 'BACKUP_OK':
             # q0: the plan sends deploy only when this reads open=0 reserved=0.
@@ -921,18 +979,18 @@ class Operation:
         return by_id
 
     @staticmethod
-    def cleanup_classify_container(entry, keep_ids, infos_by_id):
+    def cleanup_classify_container(entry, keep_ids, infos_by_id, gateway_repos=GATEWAY_LOCAL_IMAGE_REPOS):
         if entry.get('Name') == 'naia-gateway':
             return 'naia_gateway'
         if entry.get('Status') not in ('exited', 'created', 'dead'):
             info = infos_by_id.get(entry.get('Image'))
-            if info is not None and Operation.cleanup_classify(info, keep_ids, set()) == 'gateway_old':
+            if info is not None and Operation.cleanup_classify(info, keep_ids, set(), gateway_repos) == 'gateway_old':
                 return 'gateway_active'
             return 'active'
         if entry.get('Image') in keep_ids:
             return 'keep_image'
         info = infos_by_id.get(entry.get('Image'))
-        if info is not None and Operation.cleanup_classify(info, keep_ids, set()) == 'gateway_old':
+        if info is not None and Operation.cleanup_classify(info, keep_ids, set(), gateway_repos) == 'gateway_old':
             return 'gateway_stopped'
         return 'other'
 
@@ -962,7 +1020,7 @@ class Operation:
         return used_ids, infos, containers
 
     @staticmethod
-    def cleanup_classify(info, keep_ids, used_ids):
+    def cleanup_classify(info, keep_ids, used_ids, gateway_repos=GATEWAY_LOCAL_IMAGE_REPOS):
         iid = info.get('Id')
         if iid in keep_ids:
             return 'keep'
@@ -975,10 +1033,10 @@ class Operation:
         if not rt and not rd:
             return 'dangling'
         for t in rt:
-            if t.rsplit(':', 1)[0] not in GATEWAY_IMAGE_REPOS:
+            if t.rsplit(':', 1)[0] not in gateway_repos:
                 return 'other'
         for d in rd:
-            if d.split('@', 1)[0] not in GATEWAY_IMAGE_REPOS:
+            if d.split('@', 1)[0] not in gateway_repos:
                 return 'other'
         return 'gateway_old'
 
@@ -1124,7 +1182,7 @@ class Operation:
                     lines.append(cleanup_sanitize(f'CLEANUP_INVENTORY stage={stage} kind=docker_df {row}'))
         decorated = []
         for info in infos:
-            cls = self.cleanup_classify(info, keep_ids, used_ids)
+            cls = self.cleanup_classify(info, keep_ids, used_ids, self.gateway_repos)
             iid = info.get('Id')
             size = info.get('Size')
             size = size if isinstance(size, int) and size >= 0 else 0
@@ -1147,7 +1205,7 @@ class Operation:
             by_class = {'naia_gateway': [], 'active': [], 'keep_image': [],
                         'other': [], 'gateway_active': [], 'gateway_stopped': []}
             for entry in containers:
-                cls = self.cleanup_classify_container(entry, keep_ids, infos_by_id)
+                cls = self.cleanup_classify_container(entry, keep_ids, infos_by_id, self.gateway_repos)
                 counts[cls] = counts.get(cls, 0) + 1
                 by_class.setdefault(cls, []).append(entry)
             lines.append(cleanup_sanitize(f'CLEANUP_INVENTORY stage={stage} kind=container '
@@ -1215,9 +1273,10 @@ class Operation:
         return lines
 
     def cleanup(self, image, current, revision):
-        require(image.startswith(REPO + '@') and DIGEST.fullmatch(image.split('@', 1)[1])
-                and DIGEST.fullmatch(current), 'invalid_image')
+        repo, _ = parse_image_ref(image)
+        require(DIGEST.fullmatch(current), 'invalid_image')
         require(bool(re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', revision)), 'invalid_image')
+        self.gateway_repos = (repo, *GATEWAY_LOCAL_IMAGE_REPOS)
         root = Path(os.environ['NAIA_GW_TEST_ROOT']) if self.test else Path('/')
         base = root / 'var/lib/naia-gw-deploy'
         cleanup_dir = base / 'cleanup' / self.run_id
@@ -1248,12 +1307,12 @@ class Operation:
         infos_by_id = self.cleanup_infos_by_id(infos)
         container_targets = sorted(
             (entry for entry in containers_before
-             if self.cleanup_classify_container(entry, keep_ids, infos_by_id) == 'gateway_stopped'),
+             if self.cleanup_classify_container(entry, keep_ids, infos_by_id, self.gateway_repos) == 'gateway_stopped'),
             key=lambda e: (self.cleanup_created_key(e.get('Created') or ''),
                            (e.get('Name') or ''), (e.get('Id') or '')))
         kept_active_entries = sorted(
             (entry for entry in containers_before
-             if self.cleanup_classify_container(entry, keep_ids, infos_by_id) == 'gateway_active'),
+             if self.cleanup_classify_container(entry, keep_ids, infos_by_id, self.gateway_repos) == 'gateway_active'),
             key=lambda e: (self.cleanup_created_key(e.get('Created') or ''),
                            (e.get('Name') or ''), (e.get('Id') or '')))
         kept_active_records = [self.cleanup_gateway_active_kept_record(e) for e in kept_active_entries]
@@ -1274,7 +1333,7 @@ class Operation:
                 rows = self.cleanup_parse_container_rows(out) if ok else None
                 if (rows is None or len(rows) != 1 or rows[0] != entry
                         or self.cleanup_classify_container(rows[0], keep_ids,
-                                                           infos_by_id) != 'gateway_stopped'):
+                                                           infos_by_id, self.gateway_repos) != 'gateway_stopped'):
                     result = 'failed'
                 else:
                     ok, _ = self.try_command(['docker', 'container', 'rm', cid], limit=60)
@@ -1324,7 +1383,7 @@ class Operation:
                 raise Refused('cleanup_inventory_failed') from None
             mid_used, mid_infos = used_ids, infos
             infos_by_id = self.cleanup_infos_by_id(infos)
-            classified = [(self.cleanup_classify(info, keep_ids, used_ids), info) for info in infos]
+            classified = [(self.cleanup_classify(info, keep_ids, used_ids, self.gateway_repos), info) for info in infos]
             targets = [(info.get('Size') if isinstance(info.get('Size'), int) else 0,
                         info.get('Id'), cls, info)
                        for cls, info in classified if cls in ('gateway_old', 'dangling')]

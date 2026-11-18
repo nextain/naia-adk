@@ -91,6 +91,27 @@ class UntrustedResponseTest(unittest.TestCase):
             (root / 'data-private').chmod(0o700)
             (source / 'motif-api-key.env').write_text(secret)
             (source / 'motif-api-key.env').chmod(0o600)
+            config = root / 'config'
+            config.mkdir(mode=0o700)
+            gate_cfg = {
+                'services': {
+                    'azure:vm:sample-gateway-prod': {
+                        'gatewayRunner': {
+                            'subscriptionId': '00000000-0000-0000-0000-000000000000',
+                            'location': 'koreacentral',
+                            'acrName': 'myregistry',
+                            'imageRepo': 'myregistry.azurecr.io/sample/gateway',
+                            'environments': {
+                                'prod': {'resourceGroup': 'rg-gateway-prod', 'vmName': 'sample-gateway-prod'},
+                                'dev': {'resourceGroup': 'rg-gateway-dev', 'vmName': 'sample-gateway-dev'},
+                            },
+                        },
+                    },
+                },
+            }
+            (config / 'deploy-gate.json').write_text(json.dumps(gate_cfg))
+            (config / 'deploy-gate.json').chmod(0o600)
+            root.chmod(0o700)
             binary = root / 'bin'
             binary.mkdir()
             az = binary / 'az'
@@ -134,18 +155,31 @@ esac
                                     text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), f'CLEANUP_OK run_id={run}')
+            result = subprocess.run(['bash', str(target / 'launch-local.sh'), 'dev', run, 'tag', digest,
+                                     current, 'revision', 'backup', 'app-signing-public-key-v1'],
+                                    env=dict(environment, AZ_RESULT=json.dumps({'executionState': 'Succeeded', 'exitCode': 0, 'output': receipts, 'error': ''})),
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            (config / 'deploy-gate.json').chmod(0o664)
+            bad_cfg = subprocess.run(['bash', str(target / 'launch-local.sh'), 'dev', run, 'tag', digest,
+                                      current, 'revision', 'backup', '-'], env=environment,
+                                     text=True, capture_output=True)
+            self.assertNotEqual(bad_cfg.returncode, 0)
+            self.assertNotIn(secret, bad_cfg.stdout + bad_cfg.stderr)
 
 
 class CleanupArgumentsTest(unittest.TestCase):
     def test_cleanup_rejects_additions_before_remote_work(self):
         script = Path(__file__).parents[1] / 'launch-local.sh'
-        result = subprocess.run(
-            ['bash', str(script), 'dev', '20261117T120000Z-test', 'tag',
-             'sha256:' + 'a' * 64, 'sha256:' + 'b' * 64, 'revision',
-             'cleanup', 'azure-tts-key-v1'],
-            text=True, capture_output=True)
-        self.assertEqual(result.returncode, 64)
-        self.assertEqual(result.stdout + result.stderr, '')
+        for bad_args in (('cleanup', 'azure-tts-key-v1'),
+                         ('cleanup', 'app-signing-public-key-v1'),
+                         ('backup', 'app-signing-public-key-v1,azure-tts-key-v1')):
+            result = subprocess.run(
+                ['bash', str(script), 'dev', '20261117T120000Z-test', 'tag',
+                 'sha256:' + 'a' * 64, 'sha256:' + 'b' * 64, 'revision', *bad_args],
+                text=True, capture_output=True)
+            self.assertEqual(result.returncode, 64, bad_args)
+            self.assertEqual(result.stdout + result.stderr, '')
 
 class ProtectedEnvironmentTest(unittest.TestCase):
     def test_backup_secret_is_confined_on_success_and_failure(self):

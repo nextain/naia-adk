@@ -7,19 +7,31 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const os = require('node:os');
-const { additionsSpec } = require('../lib/gateway-environment.js');
+const { DEFAULT_GATEWAY_SERVICE, additionsSpec, isValidAdditionsArg } = require('../lib/gateway-environment.js');
 const { verifiedPlanBinding } = require('../lib/deploy-readiness.js');
 const { GATEWAY_RUNNER_FORMATS, classifyProdMutations } = require('../lib/deploy-command-classifier.js');
 const runner = path.resolve(__dirname, '../../../scripts/gateway-runner');
-const service = 'azure:vm:naia-gateway-prod-az';
+const service = 'azure:vm:my-gateway-prod';
+const imageRepo = 'myregistry.azurecr.io/my-org/gateway';
 const hash = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
 test('environment declarations accept only unique ordered fixed pairs', () => {
   const key = {name:'AZURE_TTS_KEY', source_id:'azure-tts-key-v1'};
   const region = {name:'AZURE_TTS_REGION', source_id:'azure-tts-region-v1'};
+  const signing = {name:'APP_SIGNING_PUBLIC_KEY', source_id:'app-signing-public-key-v1'};
   assert.equal(additionsSpec(), '-');
+  assert.equal(additionsSpec([signing]), 'app-signing-public-key-v1');
   assert.equal(additionsSpec([key, region]), 'azure-tts-key-v1,azure-tts-region-v1');
-  for (const bad of [[key,key], [region,key], [{...key, value:'secret'}], [{...key, source_id:'other'}], 'bad']) assert.equal(additionsSpec(bad), null);
+  assert.equal(additionsSpec([key, signing]), 'azure-tts-key-v1,app-signing-public-key-v1');
+  assert.equal(additionsSpec([region, signing]), 'azure-tts-region-v1,app-signing-public-key-v1');
+  assert.equal(additionsSpec([key, region, signing]), 'azure-tts-key-v1,azure-tts-region-v1,app-signing-public-key-v1');
+  for (const okArg of ['-', 'azure-tts-key-v1', 'azure-tts-region-v1', 'app-signing-public-key-v1', 'azure-tts-key-v1,azure-tts-region-v1', 'azure-tts-key-v1,app-signing-public-key-v1', 'azure-tts-region-v1,app-signing-public-key-v1', 'azure-tts-key-v1,azure-tts-region-v1,app-signing-public-key-v1']) {
+    assert.equal(isValidAdditionsArg(okArg), true, okArg);
+  }
+  for (const bad of [[key,key], [region,key], [signing,key], [signing,region], [{...key, value:'secret'}], [{...key, source_id:'other'}], 'bad']) assert.equal(additionsSpec(bad), null);
+  for (const badArg of ['', 'app-signing-public-key-v1,azure-tts-key-v1', 'app-signing-public-key-v1,app-signing-public-key-v1', 'unknown']) {
+    assert.equal(isValidAdditionsArg(badArg), false, badArg);
+  }
 });
 
 test('bundle fingerprints, classifier and independent read binding reject tampering', () => {
@@ -39,39 +51,54 @@ test('bundle fingerprints, classifier and independent read binding reject tamper
   assert.equal(verifiedPlanBinding(binding, '', 'ops', [service], root).ok, true);
   assert.equal(verifiedPlanBinding({...binding, command:cmd+'; id'}, '', 'ops', [service], root).ok, false);
   assert.equal(verifiedPlanBinding({...binding, entry:{...entry,files:{}}}, '', 'ops', [service], root).ok, false);
-  assert.ok(classifyProdMutations(cmd, root).some(hit => hit.service === service));
-  assert.ok(!classifyProdMutations(`bash ${runner}/status-local.sh dev 20261117T120000Z-check env-names`, path.resolve(__dirname, "../../..")).some(hit => hit.service === service));
-  assert.ok(!classifyProdMutations('bash /tmp/status-local.sh test', path.resolve(__dirname, '../../..')).some(hit => hit.service === service));
+  assert.ok(classifyProdMutations(cmd, root, 0, false, root).some(hit => hit.service === service));
+  assert.ok(!classifyProdMutations(`bash ${runner}/status-local.sh dev 20261117T120000Z-check env-names`, path.resolve(__dirname, '../../..')).some(hit => hit.service === DEFAULT_GATEWAY_SERVICE || hit.service === service));
+  assert.ok(!classifyProdMutations('bash /tmp/status-local.sh test', path.resolve(__dirname, '../../..')).some(hit => hit.service === DEFAULT_GATEWAY_SERVICE || hit.service === service));
   for (const invocation of [`bash -e ${runner}/status-local.sh prod 20261117T120000Z-check env-names`, `sh ${runner}/status-local.sh prod 20261117T120000Z-check env-names`, `bash scripts/gateway-runner/status-local.sh prod 20261117T120000Z-check env-names`, `env bash ${runner}/status-local.sh prod 20261117T120000Z-check env-names`, `${runner}/status-local.sh prod 20261117T120000Z-check env-names`]) {
-    assert.ok(classifyProdMutations(invocation, path.resolve(__dirname, '../../..')).some(hit => hit.service === service), invocation);
+    assert.ok(classifyProdMutations(invocation, path.resolve(__dirname, '../../..')).some(hit => hit.service === DEFAULT_GATEWAY_SERVICE), invocation);
+    assert.ok(classifyProdMutations(invocation, root, 0, false, root).some(hit => hit.service === service), invocation);
     assert.equal(verifiedPlanBinding({...binding,command:invocation,entry:{...entry,commands:[invocation]}},'', 'ops',[service],root).ok,false,invocation);
   }
-
 });
 
 test('launch, later phases and rollback bind run, files, images, and declaration', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gateway-gate-'));
   tempRoots.push(root);
   fs.mkdirSync(path.join(root, 'config'));
-  fs.writeFileSync(path.join(root, 'config/deploy-gate.json'), JSON.stringify({services:{[service]:{allowedCommands:['^bash /[^ ;]+(?: [A-Za-z0-9_:.,-]+)*$']}}}));
+  fs.writeFileSync(path.join(root, 'config/deploy-gate.json'), JSON.stringify({
+    services:{[service]:{
+      gatewayRunner:{
+        subscriptionId:'00000000-0000-0000-0000-000000000000',
+        location:'koreacentral',
+        acrName:'myregistry',
+        imageRepo,
+        environments:{
+          prod:{resourceGroup:'rg-my-gateway-prod',vmName:'my-gateway-prod'},
+          dev:{resourceGroup:'rg-my-gateway-dev',vmName:'my-gateway-dev'}
+        }
+      },
+      allowedCommands:['^bash /[^ ;]+(?: [A-Za-z0-9_:.,-]+)*$']
+    }}
+  }));
   const files = Object.fromEntries(Object.keys(GATEWAY_RUNNER_FORMATS).map(name => { const file=path.join(runner,name); return [file,hash(file)]; }));
   const run='20261117T120000Z-check', previous='sha256:'+'a'.repeat(64), candidate='sha256:'+'b'.repeat(64);
-  const launch=`bash ${runner}/launch-local.sh prod ${run} v1 ${candidate} ${previous} rev backup azure-tts-key-v1`;
+  const launch=`bash ${runner}/launch-local.sh prod ${run} v1 ${candidate} ${previous} rev backup azure-tts-key-v1,app-signing-public-key-v1`;
   const deploy=`bash ${runner}/operation-local.sh prod ${run} deploy`;
   const rollback=`bash ${runner}/rollback-local.sh prod ${run}`;
   const entries=[launch,deploy,rollback].map((command,i)=>({id:`s${i}`, commands:[command],files}));
-  const plan={services:[service],environment_additions:[{name:'AZURE_TTS_KEY',source_id:'azure-tts-key-v1'}],changes:[`naia-gateway-prod-az acrnaia83b29893.azurecr.io/naia/gateway old (${previous})`,`naia-gateway-prod-az acrnaia83b29893.azurecr.io/naia/gateway v1 (${candidate})`],scenario:entries};
+  const plan={services:[service],environment_additions:[{name:'AZURE_TTS_KEY',source_id:'azure-tts-key-v1'},{name:'APP_SIGNING_PUBLIC_KEY',source_id:'app-signing-public-key-v1'}],changes:[`my-gateway-prod ${imageRepo} old (${previous})`,`my-gateway-prod ${imageRepo} v1 (${candidate})`],scenario:entries};
   const check=(index, kind, image, p=plan, command=entries[index].commands[0], entry=entries[index]) => verifiedPlanBinding({plan:p,entry,command,cwd:root},image,kind,[service],root);
   for (const i of [0,1]) assert.equal(check(i,'feature','v1').ok,true,JSON.stringify(check(i,'feature','v1')));
   assert.equal(check(2,'rollback',previous).ok,true,JSON.stringify(check(2,'rollback',previous)));
   assert.equal(check(1,'feature','v1',{...plan,environment_additions:[]}).ok,false);
   assert.equal(check(1,'feature','v1',{...plan,changes:[plan.changes[0],plan.changes[1].replace(candidate,'sha256:'+'c'.repeat(64))]}).ok,false);
+  assert.equal(check(1,'feature','v1',{...plan,changes:plan.changes.map(c=>c.replace(imageRepo,'otheracr.azurecr.io/my-org/gateway'))}).ok,false);
   const changed=deploy.replace(run,'20261117T120000Z-other');
   assert.equal(check(1,'feature','v1',plan,changed,{...entries[1],commands:[changed]}).ok,false);
   const extra=deploy+' && echo INCIDENT_A1_STATUS_CHECKED';
   assert.equal(check(1,'feature','v1',plan,extra,{...entries[1],commands:[extra]}).ok,false);
   assert.equal(check(1,'feature','v1',plan,deploy,{...entries[1],files:{}}).ok,false);
-  const cleanup=launch.replace(' backup azure-tts-key-v1', ' cleanup -');
+  const cleanup=launch.replace(' backup azure-tts-key-v1,app-signing-public-key-v1', ' cleanup -');
   const cleanupEntry={...entries[0],id:'cleanup',commands:[cleanup]};
   const withCleanup={...plan,scenario:[...entries,cleanupEntry]};
   assert.equal(check(0,'feature','v1',withCleanup).ok,true);
@@ -114,8 +141,6 @@ test('launch, later phases and rollback bind run, files, images, and declaration
   assert.equal(spawnSync(process.execPath,[cli,planFile,'s1',deploy,'feature','v1'],{cwd:root}).status,1);
   const extraLaunch = {...entries[0],id:'extra'};
   assert.ok(formProblems({...fullPlan,scenario:[...fullPlan.scenario,extraLaunch]}).some(x=>x.includes('environment_additions')));
-
-
 });
 
 test('other services can use unrelated same-named scripts while gateway prod remains gated', () => {
@@ -161,7 +186,17 @@ test('gateway binding honors plugin denials and configuration without allowing p
   assert.equal(check({...binding,entry:{...entry,files:{}}}).ok,false);
   policy('./accept.cjs',{services:{[service]:{allowedCommands:['^never$']}}});
   assert.equal(check().ok,false);
-  for (const rule of [{}, {allowedCommands:[]}, {allowedCommands:'^bash'}, {allowedCommands:['[']}, {allowedCommands:['^bash',7]}, {allowedCommands:['^bash'],requiredFiles:'invalid'}]) {
+  for (const rule of [
+    {},
+    {allowedCommands:[]},
+    {allowedCommands:'^bash'},
+    {allowedCommands:['[']},
+    {allowedCommands:['^bash',7]},
+    {allowedCommands:['^bash'],requiredFiles:'invalid'},
+    {allowedCommands:['^bash'],gatewayRunner:'invalid'},
+    {allowedCommands:['^bash'],gatewayRunner:{acrName:'myregistry',imageRepo:'otheracr.azurecr.io/my-org/gateway'}},
+    {allowedCommands:['^bash'],gatewayRunner:{environments:{prod:{resourceGroup:'rg-prod',vmName:'wrong-vm-name'}}}}
+  ]) {
     policy('./accept.cjs',{services:{[service]:rule}});
     assert.equal(check().ok,false,JSON.stringify(rule));
   }
@@ -174,6 +209,33 @@ test('example policy permits only supported runner command shapes', () => {
   const prefix='/opt/example/gateway-runner';
   const run='20261117T120000Z-check', digest='sha256:'+'a'.repeat(64);
   const base=`bash ${prefix}/launch-local.sh prod ${run} v1 ${digest} ${digest} rev`;
-  for(const command of [base,`${base} backup`,`${base} backup azure-tts-key-v1,azure-tts-region-v1`,`${base} cleanup`,`${base} cleanup -`, ...['deploy','verify','status','rollback'].map(x=>`bash ${prefix}/operation-local.sh prod ${run} ${x}`),...['',' recent',' full-log',' env-names',' installed-hashes'].map(x=>`bash ${prefix}/status-local.sh prod ${run}${x}`),`bash ${prefix}/rollback-local.sh prod ${run}`]) assert.ok(allowed(command),command);
-  for(const command of [`${base} cleanup azure-tts-key-v1`,`${base} backup unknown`,`${base} backup - extra`,`${base} ; id`,`bash ${prefix}/status-local.sh prod ${run} env-names extra`,`bash ${prefix}/operation-local.sh prod ${run} env-names`,`bash ${prefix}/rollback-local.sh prod ${run} extra`]) assert.ok(!allowed(command),command);
+  for(const command of [
+    base,
+    `${base} backup`,
+    `${base} backup -`,
+    `${base} backup azure-tts-key-v1`,
+    `${base} backup azure-tts-region-v1`,
+    `${base} backup app-signing-public-key-v1`,
+    `${base} backup azure-tts-key-v1,azure-tts-region-v1`,
+    `${base} backup azure-tts-key-v1,app-signing-public-key-v1`,
+    `${base} backup azure-tts-region-v1,app-signing-public-key-v1`,
+    `${base} backup azure-tts-key-v1,azure-tts-region-v1,app-signing-public-key-v1`,
+    `${base} cleanup`,
+    `${base} cleanup -`,
+    ...['deploy','verify','status','rollback'].map(x=>`bash ${prefix}/operation-local.sh prod ${run} ${x}`),
+    ...['',' recent',' full-log',' env-names',' installed-hashes'].map(x=>`bash ${prefix}/status-local.sh prod ${run}${x}`),
+    `bash ${prefix}/rollback-local.sh prod ${run}`
+  ]) assert.ok(allowed(command),command);
+  for(const command of [
+    `${base} cleanup azure-tts-key-v1`,
+    `${base} cleanup app-signing-public-key-v1`,
+    `${base} backup app-signing-public-key-v1,azure-tts-key-v1`,
+    `${base} backup app-signing-public-key-v1,app-signing-public-key-v1`,
+    `${base} backup unknown`,
+    `${base} backup - extra`,
+    `${base} ; id`,
+    `bash ${prefix}/status-local.sh prod ${run} env-names extra`,
+    `bash ${prefix}/operation-local.sh prod ${run} env-names`,
+    `bash ${prefix}/rollback-local.sh prod ${run} extra`
+  ]) assert.ok(!allowed(command),command);
 });

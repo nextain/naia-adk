@@ -1660,14 +1660,14 @@ function classifyInstanceExtension(command, tokens, dir, assigns, rootDir = "", 
 }
 
 const GATEWAY_RUNNER_FORMATS = Object.freeze({
- "launch-local.sh": "822450994b7c69e6c2b9104e0e6e328f12ee2e1d378d6e5a1116c40c93a9a375",
- "operation-local.sh": "816a36c16b03197f3f1a1992bac781dd51d7e5bdef8b70a5b19f5ab4a4c8dfa9",
+ "launch-local.sh": "d9fdd0c9daeb8a4a7947d990e64579e0b325ab1980d7dd20819e84e35d97aa60",
+ "operation-local.sh": "3f9380eb18c71c1fe789149e0450f15ab2711e758a4d6a67225057a6b0397973",
  "status-local.sh": "37f437afa983ab07ca8a950eb9873ff07e305dece49bfa4d80cebcb0282c8644",
  "rollback-local.sh": "0c473db41ebc292c988f737f66984d54254117eb4d72ba86b6a44abbffcb1b3e",
  "naia-gw-deploy.sh": "9d25e23fdabc97d62f8463bc5d60dc526b5ae7bbecd00ca0f0883eb7594eb823",
- "gateway-operation.py": "12bd501743183b3098bbfc98f9f3ba2a10a4ff6dbefff5b7ba9cc05c6e43166c"
+ "gateway-operation.py": "52e080ae634c85ab4fda0161f522208665e3692ebdef7913213ff86c8317b52d"
 });
-function classifyGatewayLocal(tokens) {
+function classifyGatewayLocal(tokens, gateRoot = "") {
  // 이 분류기는 "게이트웨이 운영 실행기 호출인가"만 판정한다. 본문이 승인된 지문과 같은지는
  // 준비 검사(deploy-readiness.js 의 wrapper)와 계획서 파일 고정(deploy-plan.js)이 검사한다(검수 2회차 2번).
  // 그래서 파일 이름이 고정 실행기 이름이면 지문이 달라도 같은 운영 hit 를 낸다(막는 쪽). 첫 인자 dev 같은 비운영 조건은 그대로 둔다.
@@ -1676,10 +1676,16 @@ function classifyGatewayLocal(tokens) {
  const script = tokens[scriptIndex];
  const name = path.basename(script || "");
  if (!Object.prototype.hasOwnProperty.call(GATEWAY_RUNNER_FORMATS, name) || !name.endsWith("-local.sh") || tokens[scriptIndex + 1] !== "prod") return null;
- if (tokens[0] !== "bash" || !path.isAbsolute(script || "") || tokens[2] !== "prod") return { service: "azure:vm:naia-gateway-prod-az", label: tokens.join(" ") + " (직접 고정 호출 아님)", verified: false };
+ const { DEFAULT_GATEWAY_SERVICE, resolveGatewayService } = require("./gateway-environment.js");
+ let service = DEFAULT_GATEWAY_SERVICE;
+ try {
+  const { loadDeployGateConfig } = require("./deploy-readiness.js");
+  service = resolveGatewayService(loadDeployGateConfig(gateRoot || activeGateRoot));
+ } catch {}
+ if (tokens[0] !== "bash" || !path.isAbsolute(script || "") || tokens[2] !== "prod") return { service, label: tokens.join(" ") + " (직접 고정 호출 아님)", verified: false };
  let verified = false;
  try { verified = require("crypto").createHash("sha256").update(scriptText(tokens[1])).digest("hex") === GATEWAY_RUNNER_FORMATS[name]; } catch {}
- return { service: "azure:vm:naia-gateway-prod-az", label: tokens.join(" ") + (verified ? "" : " (고정 지문과 다름)"), verified };
+ return { service, label: tokens.join(" ") + (verified ? "" : " (고정 지문과 다름)"), verified };
 }
 
 function classifyDeployScript(tokens, cwd, assigns = [], entry = null) {
@@ -2048,7 +2054,7 @@ function classifyProdMutations(command, cwd, depth = 0, scriptContext = false, r
 			found.push(...classifyInstanceExtension(command, tokens, dir, assigns, gateRoot, true, entry));
 			continue;
 		}
-		const runnerHit = classifyGatewayLocal(tokens);
+		const runnerHit = classifyGatewayLocal(tokens, gateRoot);
 		// A name match with a different fingerprint never makes the script opaque:
 		// inspect its body before any registered command or cloud-CLI fast path.
 		if (runnerHit && !runnerHit.verified) {

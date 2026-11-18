@@ -1032,10 +1032,12 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 		return runnerNames.includes(path.basename(argv[index] || "")) && argv[index + 1] === "prod";
 	});
 	if (wrappedRunner && !(runnerArgs[0] === "bash" && runnerNames.includes(path.basename(runnerArgs[1] || "")))) return no("실행기는 직접 호출해야 함");
-	if (runnerArgs[0] === "bash" && ((runnerNames.includes(path.basename(runnerArgs[1] || "")) && (runnerArgs[2] === "prod" || services.includes("azure:vm:naia-gateway-prod-az"))) || (services.includes("azure:vm:naia-gateway-prod-az") && (runnerArgs[1] || "").endsWith("-local.sh")))) {
+	const gatewayEnv = require("./gateway-environment.js");
+	const preCfg = loadDeployGateConfig(root);
+	const resolvedGatewayService = gatewayEnv.resolveGatewayService(preCfg);
+	if (runnerArgs[0] === "bash" && ((runnerNames.includes(path.basename(runnerArgs[1] || "")) && (runnerArgs[2] === "prod" || services.includes(resolvedGatewayService))) || (services.includes(resolvedGatewayService) && (runnerArgs[1] || "").endsWith("-local.sh")))) {
 	 const RUNNER_FORMATS = require("./deploy-command-classifier.js").GATEWAY_RUNNER_FORMATS;
-	 const GATEWAY_SERVICE = "azure:vm:naia-gateway-prod-az";
-	 const GATEWAY_REPO = "acrnaia83b29893.azurecr.io/naia/gateway";
+	 const GATEWAY_SERVICE = resolvedGatewayService;
 	 const textSha = (s) => crypto.createHash("sha256").update(s).digest("hex");
 	 const sameServices = wanted => services.length === wanted.length && services.every(x => wanted.includes(x));
 	 const clauses = parsedRunner, c = runnerArgs, shellClauses = runnerClauses;
@@ -1048,7 +1050,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	  return out;
 	 };
 	 if (parsedRunner.unbalanced || !sameServices([GATEWAY_SERVICE]) || !plannedServices.includes(GATEWAY_SERVICE)) return no("실행기 서비스 또는 명령 불일치");
-	 const cfg = loadDeployGateConfig(root);
+	 const cfg = preCfg;
 	 if (cfg) {
 	  const valid = require("./deploy-plan.js").validateReadOnlyScriptsConfig(cfg);
 	  if (!valid.ok) return no(valid.why);
@@ -1066,6 +1068,9 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 	  }
 	 } catch (e) { return no(e && e.message ? e.message : String(e)); }
 	 const rule = cfg && matchServiceRule(GATEWAY_SERVICE, cfg);
+	 const runnerCfgCheck = gatewayEnv.validateGatewayRunnerConfig(GATEWAY_SERVICE, rule, cfg);
+	 if (!runnerCfgCheck.ok) return no("실행기 서비스 설정 불일치");
+	 const GATEWAY_REPO = runnerCfgCheck.imageRepo;
 	 let policyAllows = false;
 	 try {
 	  policyAllows = !!rule && Array.isArray(rule.allowedCommands) && rule.allowedCommands.length > 0 &&
@@ -1102,7 +1107,8 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
   }
  }
  const matchesCandidate = (x) => x.tag === candidate || `${x.repo}:${x.tag}` === candidate || x.tag.endsWith(`-${candidate}`) || (x.commit && x.commit === candidate) || candidate === x.digest;
- const gateway = declarations.filter((x) => x.repo === GATEWAY_REPO && x.targets.includes(GATEWAY_SERVICE));
+ const validGatewayRepo = (r) => typeof r === "string" && gatewayEnv.IMAGE_REPO_RE.test(r) && (!GATEWAY_REPO || r === GATEWAY_REPO);
+ const gateway = declarations.filter((x) => validGatewayRepo(x.repo) && x.targets.includes(GATEWAY_SERVICE));
  const format = (p, pins, name) => pins.has(p) && RUNNER_FORMATS[name] === textSha(pins.get(p));
  const wrapper = (argv, pins) => {
   if (argv[0] !== "bash" || !path.isAbsolute(argv[1] || "")) return null;
@@ -1113,7 +1119,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
    if (argv.length < 8 || argv.length > 10 || !/^[A-Za-z0-9_.-]{1,128}$/.test(argv[4]) ||
        !/^sha256:[a-f0-9]{64}$/.test(argv[5]) || !/^sha256:[a-f0-9]{64}$/.test(argv[6]) ||
        !/^[A-Za-z0-9_.-]{1,128}$/.test(argv[7]) ||
-       (argv[8] && !["backup", "cleanup"].includes(argv[8])) || (argv[9] && !/^(?:-|azure-tts-key-v1|azure-tts-region-v1|azure-tts-key-v1,azure-tts-region-v1)$/.test(argv[9])) || (argv[8] === "cleanup" && argv[9] && argv[9] !== "-")) return null;
+       (argv[8] && !["backup", "cleanup"].includes(argv[8])) || (argv[9] && !gatewayEnv.isValidAdditionsArg(argv[9])) || (argv[8] === "cleanup" && argv[9] && argv[9] !== "-")) return null;
   }
   if (name === "operation-local.sh" && (argv.length !== 5 || !["deploy", "verify", "status", "rollback"].includes(argv[4]))) return null;
   if (name === "rollback-local.sh" && argv.length !== 4) return null;
@@ -1128,8 +1134,8 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
  if (current) {
   if (clauses.length !== 1) return no("실행기 뒤에 지원하지 않는 절이 있음");
   if (!sameServices([GATEWAY_SERVICE])) return no("실행기 서비스·환경 불일치");
-  const additions = require("./gateway-environment.js").additionsSpec(plan.environment_additions);
-  const additionsProblem = require("./gateway-environment.js").additionsBindingProblem(plan);
+  const additions = gatewayEnv.additionsSpec(plan.environment_additions);
+  const additionsProblem = gatewayEnv.additionsBindingProblem(plan, GATEWAY_SERVICE);
   if (additionsProblem) return no(additionsProblem);
   if (current.name === "status-local.sh" && ["env-names", "installed-hashes"].includes(current.mode)) {
    if (additions !== "-") {
@@ -1166,7 +1172,7 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
   if (current.name === "launch-local.sh" && current.stage === "cleanup" && (current.tag !== w.tag || current.digest !== w.digest || current.previous !== w.previous || current.revision !== w.revision)) return no("정리 명령의 후보·이전 이미지 불일치");
   const forward = gateway.find((x) => x.tag === w.tag && x.digest === w.digest);
   const previous = gateway.find((x) => x.digest === w.previous && x.digest !== w.digest);
-  if (!forward || !previous || forward !== gateway.at(-1) || previous !== gateway[0] || gateway.indexOf(previous) >= gateway.indexOf(forward)) return no("후보 또는 이전 digest가 서비스의 계획 선언과 다름");
+  if (!forward || !previous || forward.repo !== previous.repo || new Set(gateway.map((x) => x.repo)).size !== 1 || forward !== gateway.at(-1) || previous !== gateway[0] || gateway.indexOf(previous) >= gateway.indexOf(forward)) return no("후보 또는 이전 digest가 서비스의 계획 선언과 다름");
   const rollback = current.phase === "rollback";
   if ((current.name === "launch-local.sh" || current.phase === "deploy" || current.phase === "verify") && kind !== "feature") return no("정방향 반영은 feature 준비 기록과 새 후보 영수증이 필요함");
   const selected = rollback ? previous : forward;

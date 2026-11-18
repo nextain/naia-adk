@@ -8,7 +8,7 @@ const crypto=require('node:crypto');
 const {verifiedPlanBinding}=require('../lib/deploy-readiness.js');
 const {classifyProdMutations,GATEWAY_RUNNER_FORMATS}=require('../lib/deploy-command-classifier.js');
 const {formProblems}=require('../lib/deploy-plan.js');
-const service='azure:vm:naia-gateway-prod-az';
+const service='azure:vm:sample-gateway-prod';
 const src=path.resolve(__dirname,'../../../scripts/gateway-runner');
 const sha=p=>crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 function fixture(t) {
@@ -18,7 +18,7 @@ function fixture(t) {
  const files=Object.fromEntries(Object.keys(GATEWAY_RUNNER_FORMATS).map(n=>[path.join(dir,n),sha(path.join(dir,n))]));
  const run='20261117T120000Z-test', old='sha256:'+'a'.repeat(64), next='sha256:'+'b'.repeat(64);
  const launch=`bash ${dir}/launch-local.sh prod ${run} v1 ${next} ${old} rev`;
- const changes=[`${service} acrnaia83b29893.azurecr.io/naia/gateway old (${old})`,`${service} acrnaia83b29893.azurecr.io/naia/gateway v1 (${next})`];
+ const changes=[`${service} myregistry.azurecr.io/sample/gateway old (${old})`,`${service} myregistry.azurecr.io/sample/gateway v1 (${next})`];
  return {root,dir,files,run,launch,changes};
 }
 for (const separate of [false,true]) test(`1-1 cleanup ${separate ? 'different run from backup' : 'standalone'}`,t=>{
