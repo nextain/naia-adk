@@ -5,7 +5,6 @@ import { execSync } from "node:child_process"
 import {
   buildProxyHeaders,
   validatePortalPathname,
-  validateLedgerPathname,
   proxyToApi,
   createRequestHandler,
   parseArgs,
@@ -118,53 +117,6 @@ describe("Server.mjs 단위 시험", () => {
     const normal = validatePortalPathname("/api/portal/doc")
     assert.equal(normal.valid, true)
     assert.equal(normal.resolvedPathname, "/api/portal/doc")
-
-    // /api/ledger 프록시 경로 검증
-    assert.equal(validateLedgerPathname("/api/ledger").valid, true)
-    assert.equal(validateLedgerPathname("/API/ledger").valid, false)
-    assert.equal(validateLedgerPathname("/api/ledger/extra").valid, false)
-    assert.equal(validateLedgerPathname("/api/ledger/%2e%2e").valid, false)
-    assert.equal(validateLedgerPathname("/api/ledger\\x").valid, false)
-  })
-
-  it("createRequestHandler가 /api/ledger?view=due 요청을 API 서버로 프록시하고 /API/ledger는 400 거절한다", async () => {
-    const received = []
-    const dummyApi = http.createServer((apiReq, apiRes) => {
-      received.push({ url: apiReq.url, headers: apiReq.headers })
-      apiRes.statusCode = 200
-      apiRes.setHeader("content-type", "application/json; charset=utf-8")
-      apiRes.end(JSON.stringify({ configured: true, view: "due", dates: [], items: [] }))
-    })
-    await new Promise((r) => dummyApi.listen(0, "127.0.0.1", r))
-    const prevApiPort = process.env.NAIA_API_PORT
-    process.env.NAIA_API_PORT = String(dummyApi.address().port)
-
-    const dashServer = http.createServer(
-      createRequestHandler((_req, res) => {
-        res.statusCode = 404
-        res.end("next")
-      }),
-    )
-    await new Promise((r) => dashServer.listen(0, "127.0.0.1", r))
-    const dashPort = dashServer.address().port
-
-    try {
-      const okRes = await fetch(`http://127.0.0.1:${dashPort}/api/ledger?view=due`)
-      assert.equal(okRes.status, 200)
-      const json = await okRes.json()
-      assert.equal(json.view, "due")
-      assert.equal(received.length, 1)
-      assert.equal(received[0].url, "/api/ledger?view=due")
-      assert.equal(received[0].headers["x-naia-peer"], "127.0.0.1")
-
-      const badRes = await fetch(`http://127.0.0.1:${dashPort}/API/ledger?view=due`)
-      assert.equal(badRes.status, 400)
-    } finally {
-      if (prevApiPort === undefined) delete process.env.NAIA_API_PORT
-      else process.env.NAIA_API_PORT = prevApiPort
-      await new Promise((r) => dashServer.close(r))
-      await new Promise((r) => dummyApi.close(r))
-    }
   })
 
   it("쓰기 메서드(POST, PUT, PATCH, DELETE)에서 Origin이 scheme://Host와 일치할 때만 x-naia-origin-ok: 1을 붙인다", () => {

@@ -4,7 +4,7 @@ import path from "node:path"
 import os from "node:os"
 import { createServer } from "../src/server.js"
 
-describe("Portal & /api/ledger work-ledger routes", () => {
+describe("Portal work-ledger routes (/api/portal/ledger)", () => {
   const TEST_SECRET = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
   const TRUSTED_HEADERS = {
     host: "localhost:3141",
@@ -150,7 +150,7 @@ describe("Portal & /api/ledger work-ledger routes", () => {
 
     const crossSite = await appConfigured.inject({
       method: "GET",
-      url: "/api/ledger?view=due",
+      url: "/api/portal/ledger?view=due",
       headers: { ...TRUSTED_HEADERS, "sec-fetch-site": "cross-site" },
     })
     expect(crossSite.statusCode).toBe(403)
@@ -242,10 +242,10 @@ describe("Portal & /api/ledger work-ledger routes", () => {
     expect(dataDocBody.items.map((i: any) => i.id)).toEqual(["j-data-res"])
   })
 
-  it("serves GET /api/ledger?view=due grouped by Asia/Seoul due date", async () => {
+  it("serves GET /api/portal/ledger?view=due grouped by Asia/Seoul due date", async () => {
     const res = await appConfigured.inject({
       method: "GET",
-      url: "/api/ledger?view=due",
+      url: "/api/portal/ledger?view=due",
       headers: TRUSTED_HEADERS,
     })
     expect(res.statusCode).toBe(200)

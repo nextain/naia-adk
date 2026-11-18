@@ -162,21 +162,23 @@ export function buildProxyHeaders(req, socket, proxySecret, apiPort) {
  * - 경로 부분에 '..', '.' 조각, %2e, %2f, %5c (대소문자 무관), 역슬래시가 있으면 400
  * - WHATWG URL로 푼 경로가 /api/portal 또는 /api/portal/로 시작해야 함
  */
-export function validateProxyPathname(rawPathname, prefix, allowSubpaths = true) {
-  const matchesExact = rawPathname === prefix
-  const matchesSub = allowSubpaths && rawPathname.startsWith(`${prefix}/`)
-  if (!matchesExact && !matchesSub) {
+export function validatePortalPathname(rawPathname) {
+  // 1. 소문자 /api/portal 시작 확인
+  if (rawPathname !== "/api/portal" && !rawPathname.startsWith("/api/portal/")) {
     return { valid: false }
   }
 
+  // 2. 역슬래시 검사
   if (rawPathname.includes("\\")) {
     return { valid: false }
   }
 
+  // 3. %2e, %2f, %5c 퍼센트 인코딩 검사
   if (/%2e|%2f|%5c/i.test(rawPathname)) {
     return { valid: false }
   }
 
+  // 4. '.' 또는 '..' 경로 조각 검사
   const segments = rawPathname.split("/")
   for (const seg of segments) {
     if (seg === "." || seg === "..") {
@@ -184,26 +186,17 @@ export function validateProxyPathname(rawPathname, prefix, allowSubpaths = true)
     }
   }
 
+  // 5. WHATWG URL 해석 후 재검증
   try {
     const dummy = new URL(rawPathname, "http://127.0.0.1")
     const resolved = dummy.pathname
-    const okExact = resolved === prefix
-    const okSub = allowSubpaths && resolved.startsWith(`${prefix}/`)
-    if (!okExact && !okSub) {
+    if (resolved !== "/api/portal" && !resolved.startsWith("/api/portal/")) {
       return { valid: false }
     }
     return { valid: true, resolvedPathname: resolved }
   } catch {
     return { valid: false }
   }
-}
-
-export function validatePortalPathname(rawPathname) {
-  return validateProxyPathname(rawPathname, "/api/portal", true)
-}
-
-export function validateLedgerPathname(rawPathname) {
-  return validateProxyPathname(rawPathname, "/api/ledger", false)
 }
 
 /**
@@ -388,17 +381,14 @@ export function createRequestHandler(nextHandler, shortLinkOpts = {}) {
       return
     }
 
-    // 2. /api/portal* 및 /api/ledger 가로채기 (대소문자 무관하게 감지)
+    // 2. /api/portal* 가로채기 (대소문자 무관하게 감지)
     const url = req.url || "/"
     const qIdx = url.indexOf("?")
     const rawPathname = qIdx >= 0 ? url.slice(0, qIdx) : url
     const rawQuery = qIdx >= 0 ? url.slice(qIdx) : ""
-    const lowerPath = rawPathname.toLowerCase()
 
-    if (lowerPath.startsWith("/api/portal") || lowerPath.startsWith("/api/ledger")) {
-      const valResult = lowerPath.startsWith("/api/portal")
-        ? validatePortalPathname(rawPathname)
-        : validateLedgerPathname(rawPathname)
+    if (rawPathname.toLowerCase().startsWith("/api/portal")) {
+      const valResult = validatePortalPathname(rawPathname)
       if (!valResult.valid) {
         res.statusCode = 400
         res.setHeader("content-type", "application/json; charset=utf-8")
