@@ -15,7 +15,6 @@
     }
   },
   "delivery": {
-    "command": ["/<private>/role-wake.sh", "{role}", "{file}"],
     "heartbeat_max_age_seconds": 300,
     "lag_seconds": 600,
     "max_per_run": 50,
@@ -38,6 +37,7 @@
   "roles": {
     "role-a": {
       "names": ["Role A"],
+      "pane_label": "<role-a herdr agent label>",
       "bot_id": "100000000000000001",
       "user": "<os-user>",
       "find": { "type": "cwd", "cwd": "/<home>/role-a", "pane_id": "w1:p1" },
@@ -49,6 +49,7 @@
     },
     "role-b": {
       "names": ["Role B"],
+      "pane_label": "<role-b herdr agent label>",
       "bot_id": "100000000000000002",
       "user": "<os-user>",
       "find": { "type": "cwd", "cwd": "/<home>/role-b", "pane_id": "w1:p2" },

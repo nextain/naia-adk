@@ -3,6 +3,7 @@
   "repository_docs": {
     "status": "UPDATED",
     "files": [
+      "config/role-wake.example.json",
       "docs/guides/role-wake-registry.md",
       "docs/guides/agent-role-sessions.md"
     ]
@@ -17,6 +18,6 @@
   "reusable_learning": {
     "status": "UPDATED",
     "files": ["docs/guides/role-wake-registry.md"],
-    "detail": "Delivery must re-detect the foreground tool before each file and pass resolved capabilities to an adapter that reads all ROLE_WAKE_* values and fails when it cannot apply them; tools without background notifications require direct pane delivery. Unknown tool names use generic defaults with an inspection warning, while unused capability overrides remain invalid. Live pane delivery remains an instance acceptance check."
+    "detail": "The common deliverer resolves one pane ID, inspects the foreground tool on that pane, and directly sends the body and tool submit keys to the same ID. An instance adapter only resolves role to pane ID. A bg_notify wait is successful only when its declared nudge script exists and runs under that pane; otherwise delivery falls back to direct input. Launcher-only processes are unknown and use generic Enter with bg_notify disabled."
   }
 }

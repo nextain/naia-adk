@@ -16,22 +16,38 @@ only; the script is the same on every server.
 | `root` | The one live workspace. `wake_root` and `retention.archive_dir` must stay inside it. |
 | `retired_roots` | Old workspace copies. Any unit file, crontab line or process that still uses one is an error. |
 | `unit_dirs` | Directories of timer and service files scanned for retired roots. |
-| `roles.<id>.find.pane_id` | The session pane. The foreground program of this pane decides whether the session is alive and which tool it runs. |
+| `roles.<id>.pane_label` | Exact `herdr agent list` label used when no instance pane adapter is configured. Defaults to the role's first `names` entry. |
+| `pane.adapter` | Optional command that maps `{role}` to one plain pane ID. The adapter must only look up and print that ID; it does not receive the wake file or choose a tool or keys. |
 | `roles.<id>.tool`, `tools` | First-choice tool and the ordered list a start script may fall back to. Names are compared lowercase; `tool` must equal normalized `tools[0]`. |
 | `tool_caps` | Per-tool wake behavior. Capabilities follow the tool name, not the role name; absent values use the defaults below. |
 | `roles.<id>.wake_subdir` | Folder under `wake_root`; `""` is the top-level box. |
 | `roles.<id>.extra_boxes` | More boxes of the same role outside `root`: `[{ "path": "/abs", "via": ["sudo", "-n"] }]`. `via` is the command prefix that can read a box another account owns; without it the box is read directly. |
 | `roles.<id>.dm_channels`, `dm_users` | DM rooms whose REST catch-up by [bot-mention-wake](bot-mention-wake.md) is checked: by room id, or by the id of the person on the other side when the room id is not known. |
 | `roles.<id>.wait` | Optional in-session wait script, checked under the pane's own process tree. `mode: "nudge"` (default) marks a script the role depends on; `"observe"` is recorded only. |
-| `delivery.command` | Instance command that puts one wake file in front of a role (`{role}`, `{file}`). It receives the active tool capabilities through `ROLE_WAKE_TOOL`, `ROLE_WAKE_SUBMIT_KEYS` (JSON array), and `ROLE_WAKE_BG_NOTIFY` (`true` or `false`). |
+| `delivery` | Common runner settings (`heartbeat_max_age_seconds`, `max_per_run`, `lag_seconds`, `retry_max_seconds`, and optional `baseline_seen_file`). `scripts/role-wake.mjs` reads the file, selects the pane, detects the tool, and delivers directly. |
 | `delivery.retry_max_seconds` | Longest gap between retries of a file that failed (default 300). |
 | `delivery.baseline_seen_file` | The old deliverer's record, one delivered path per line. Used when a box is first seen; see Migration order. |
 | `dm_backup.max_age_seconds` | How old a DM room's last good catch-up may be (default 900). |
 | `role_views` | Role lists other tools still keep (`l4-roles`, `wake-routes`, `liveness`, `session-health`, `bot-mention-wake`). Each entry `{ kind, path, roles? }` accepts an optional non-empty string array `roles` listing the role ids that view covers: when set, `role is missing` checks only those ids and any unknown id in `roles` is an error; when omitted, every registry role is required. Every row present in the file—even outside `roles`—is still checked against the registry for unknown roles and mismatched fields (`bot_id`, etc.). |
 
-The role block keeps the keys the pane liveness tool already reads (`user`,
-`find`, `tool`, `restart_cmd`, `wait`), so that tool can read the registry
-file directly instead of a second list.
+The role block may keep `user`, `find`, `tool`, `restart_cmd`, and `wait` for
+the instance's liveness tool. When `pane.adapter` is set, its command is the
+only role-to-pane lookup used by the common deliverer. Without it, the common
+deliverer matches `pane_label` against `herdr agent list` labels. A configured
+adapter failure is an error; it does not fall through to another pane lookup.
+An adapter command can be configured like this:
+
+```json
+"pane": {
+  "kind": "herdr",
+  "bin": "/<home>/.local/bin/herdr",
+  "adapter": ["python3", "/<private>/liveness.py", "--config", "/<private>/agent-roles.json", "resolve-pane", "{role}"]
+}
+```
+
+The final output must be one pane ID followed by an optional newline. The
+adapter receives the role ID only; the common deliverer passes no wake path,
+body, selected tool, or submit keys to it.
 
 ## Tool capability table / 도구 능력 표
 
@@ -50,35 +66,41 @@ key that no role declares in `tool` or `tools` remains a validation error.
 | `claude` | `true` | `["Enter"]` |
 | `codex` | `false` | `["Enter", "Tab"]` |
 | `agy` | `false` | `["Enter"]` |
+| `gemini` | `false` | `["Enter"]` |
 | `muse` | `false` | `["Enter"]` |
 | `opencode` | `false` | `["Enter"]` |
 
 The values in this table are the single documented default source. `agy` keeps
-the inspected instance configuration's `false`/`Enter` values. The instance
-configuration has no `muse` override, so `muse` keeps the resolver's existing
-conservative fallback of `false`/`Enter`; the example registry writes that
-fallback explicitly because one role allows `muse` as a fallback tool.
+the inspected instance configuration's `false`/`Enter` values. Gemini, Muse,
+and OpenCode use the same conservative defaults. The example registry records
+Muse explicitly because one role allows it as a fallback tool.
 
-For each file, `deliver` re-detects the foreground tool immediately before
-delivery, resolves that tool's capabilities, and passes them to
-`delivery.command` in the environment: `ROLE_WAKE_TOOL` is the lowercase tool
-name, `ROLE_WAKE_SUBMIT_KEYS` is a JSON string array, and `ROLE_WAKE_BG_NOTIFY`
-is the string `true` or `false`. When process information contains both a
-shell-started `*.sh` launcher and a tool executable, the executable takes
-priority; the launcher is used only when no tool executable is found.
+For every file, the common deliverer resolves one pane ID, reads that pane's
+foreground process list, detects the running tool, resolves that tool's
+capabilities, then uses the same pane ID for input. It sends the file body with
+`herdr pane send-text <pane-id> <body>` and sends each configured key in order
+with `herdr pane send-keys <pane-id> <key>`. The pane adapter never receives
+the body or capability values and cannot choose a different input pane.
 
-The instance adapter **must read all three `ROLE_WAKE_*` variables** instead
-of re-reading a separate capability map. If a variable is absent or malformed,
-or the adapter cannot apply the selected capability, it must exit nonzero and
-must not report successful delivery. Exit code zero is reserved for a
-successful action that used the supplied values; merely starting the adapter
-or queueing the file is not delivery success. When `ROLE_WAKE_BG_NOTIFY` is
-`false`, the adapter must put the wake body directly into the role's pane and
-send each key in `ROLE_WAKE_SUBMIT_KEYS` in order; it must not send a
-`run_in_background` completion nudge. When it is `true`, the adapter may use
-that tool's supported background-completion path. The registry validates and
-reports the capabilities; the adapter owns pane text and key delivery. The
-`validate` command preserves its existing role-ID list and adds one compact
+Tool detection uses executable names in the configured `tools` lists. A shell
+launcher name such as `claude-start.sh` does not identify the running tool. If
+the foreground process has no configured tool executable, the tool is
+`unknown`; delivery uses `bg_notify: false` and `submit_keys: ["Enter"]` and
+`check` reports one `tool-capability-fallback` warning. A process that is only
+a shell is still a down session.
+
+`bg_notify: true` uses the wake file only when the role declares a
+`wait.script` with `mode: "nudge"`, that file exists, and the wait process is
+running under the same pane's foreground process tree. In all other cases the
+common deliverer sends the body and keys directly to the resolved pane. A file
+being present in a wake box, by itself, is not a successful delivery. A wait
+entry with `mode: "observe"` is not a delivery consumer. Files read from
+`extra_boxes` also use direct pane input because the role's wait process cannot
+be assumed to read another box. The old
+`ROLE_WAKE_TOOL`, `ROLE_WAKE_SUBMIT_KEYS`, and `ROLE_WAKE_BG_NOTIFY` variables
+are no longer emitted and have no effect on delivery.
+
+The `validate` command preserves its existing role-ID list and adds one compact
 capability row per role under `tool_caps`.
 
 When changing a role's tool, check in one pass that `tool` equals `tools[0]`,
@@ -89,10 +111,11 @@ and the startup script still loads the memory index.
 
 A wait script started inside a session exists only for tools that can run
 background commands, and it stops whenever the session restarts or compacts.
-Every role needs a declared wake consumer; a tool with `bg_notify: false` also
-needs the outside-session direct pane adapter:
+The common deliverer is every role's direct pane consumer. A live declared
+wait process can handle a `bg_notify: true` wake; otherwise delivery falls
+back to direct pane input:
 
-- `deliver` hands each new wake file to `delivery.command` in arrival order
+- `deliver` sends each new wake file in arrival order
   (file time, then name: box names mix clocks and free titles) and records it
   in `state_dir/delivered-<role>.jsonl`.
 - A file that fails is written to `state_dir/failed-<role>.json` and the run
@@ -113,13 +136,10 @@ needs the outside-session direct pane adapter:
 - `state_dir/deliver-heartbeat.json`: `at` says the runner ran, `ok_at` moves
   only when nothing failed. The check reads failures from their own records,
   so a run that fails is not hidden by a fresh `at`.
-- A role with neither `delivery` nor `wait` is rejected when the file loads. If
-  any allowed tool has `bg_notify: false`, `delivery.command` is mandatory as
-  the direct pane consumer; an in-session `wait` alone cannot wake that tool.
-- `wait` stays optional. A stopped `nudge` wait script is an error whether or
-  not delivery runs, because the role depends on it (it may be the only reader
-  of the box, or the role's channel poller); so is a wait state that cannot be
-  read. An `observe` script only warns.
+- `wait` stays optional for direct pane input. A stopped `nudge` wait script is
+  an error whether or not delivery runs, because the role depends on it; so is
+  a wait state that cannot be read. An `observe` script only warns and never
+  counts as the consumer for `bg_notify`.
 
 ## DM rooms
 

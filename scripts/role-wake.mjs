@@ -10,15 +10,17 @@ import { fileURLToPath } from 'node:url';
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh']);
 const WRAPPERS = new Set(['sudo', 'env', 'nice', 'setsid', 'stdbuf', 'timeout']);
 const INTERPRETERS = new Set(['node', 'python3', 'python']);
+const STANDARD_TOOLS = ['claude', 'codex', 'agy', 'gemini', 'muse', 'opencode'];
 const VIEW_KINDS = new Set(['l4-roles', 'wake-routes', 'liveness', 'session-health', 'bot-mention-wake']);
 const DEFAULTS = { heartbeatMaxAge: 300, maxPerRun: 50, lagSeconds: 600, retryMaxSeconds: 300, deliveredDays: 3, maxBoxFiles: 500, repeatSeconds: 3600, dmBackupMaxAge: 900 };
 const FALLBACK_TOOL_CAPS = Object.freeze({ bgNotify: false, submitKeys: Object.freeze(['Enter']) });
 const TOOL_CAPS_DEFAULTS = Object.assign(Object.create(null), {
   claude: { bgNotify: true, submitKeys: ['Enter'] },
   codex: { bgNotify: false, submitKeys: ['Enter', 'Tab'] },
-  // agy matches the instance configuration; muse has no instance override and
-  // keeps the existing conservative false/Enter fallback.
+  // agy matches the instance configuration; the other tools use conservative
+  // false/Enter defaults unless a tool-specific override is registered.
   agy: { bgNotify: false, submitKeys: ['Enter'] },
+  gemini: { bgNotify: false, submitKeys: ['Enter'] },
   muse: { bgNotify: false, submitKeys: ['Enter'] },
   opencode: { bgNotify: false, submitKeys: ['Enter'] },
 });
@@ -112,17 +114,22 @@ export function loadRegistry(file) {
   };
   const wakeRoot = inRoot(doc.wake_root, 'wake_root');
   const toolCaps = validateToolCaps(doc.tool_caps);
+  if (!isObject(doc.pane) || doc.pane.kind !== 'herdr' || typeof doc.pane.bin !== 'string' || !path.isAbsolute(doc.pane.bin)) fail('pane must be {"kind":"herdr","bin":"/abs/path"}');
+  const paneAdapter = doc.pane.adapter === undefined ? null :
+    Array.isArray(doc.pane.adapter) && doc.pane.adapter.length && doc.pane.adapter.every(part => typeof part === 'string') && doc.pane.adapter.some(part => part.includes('{role}'))
+      ? [...doc.pane.adapter]
+      : fail('pane.adapter must be a command array with a {role} placeholder');
+  if (paneAdapter?.some(part => /\{(?!role\})[^}]+\}/.test(part))) fail('pane.adapter only accepts the {role} placeholder');
   const retiredRoots = (doc.retired_roots ?? []).map(value => typeof value === 'string' && path.isAbsolute(value) ? path.resolve(value) : fail('retired_roots must be absolute paths'));
   if (retiredRoots.some(value => value === root || root.startsWith(value + path.sep))) fail('root is inside a retired root');
+  if (doc.delivery !== undefined && !isObject(doc.delivery)) fail('delivery must be an object');
   const delivery = doc.delivery === undefined ? null : {
-    command: Array.isArray(doc.delivery?.command) && doc.delivery.command.length && doc.delivery.command.every(part => typeof part === 'string') ? doc.delivery.command : fail('delivery.command must be a string array'),
     heartbeatMaxAge: positive(doc.delivery.heartbeat_max_age_seconds, DEFAULTS.heartbeatMaxAge, 'delivery.heartbeat_max_age_seconds'),
     maxPerRun: positive(doc.delivery.max_per_run, DEFAULTS.maxPerRun, 'delivery.max_per_run'),
     lagSeconds: positive(doc.delivery.lag_seconds, DEFAULTS.lagSeconds, 'delivery.lag_seconds'),
     retryMaxSeconds: positive(doc.delivery.retry_max_seconds, DEFAULTS.retryMaxSeconds, 'delivery.retry_max_seconds'),
     baselineSeenFile: doc.delivery.baseline_seen_file === undefined ? null : typeof doc.delivery.baseline_seen_file === 'string' && path.isAbsolute(doc.delivery.baseline_seen_file) ? doc.delivery.baseline_seen_file : fail('delivery.baseline_seen_file must be an absolute path'),
   };
-  if (delivery && !delivery.command.some(part => part.includes('{file}'))) fail('delivery.command needs a {file} placeholder');
   const retention = {
     deliveredDays: positive(doc.retention?.delivered_days, DEFAULTS.deliveredDays, 'retention.delivered_days'),
     maxBoxFiles: positive(doc.retention?.max_box_files, DEFAULTS.maxBoxFiles, 'retention.max_box_files'),
@@ -136,7 +143,7 @@ export function loadRegistry(file) {
     return { kind: view.kind, path: view.path, roles: view.roles === undefined ? null : [...new Set(view.roles)] };
   });
   if (!isObject(doc.roles) || !Object.keys(doc.roles).length) fail('roles must be a non-empty object');
-  const bots = new Set(), dirs = new Set(), panes = new Set();
+  const bots = new Set(), dirs = new Set(), labels = new Set();
   const roles = Object.entries(doc.roles).map(([id, role]) => {
     if (!ROLE_ID.test(id) || !isObject(role)) fail(`invalid role ${id}`);
     const declaredTools = role.tools ?? (role.tool ? [role.tool] : []);
@@ -151,11 +158,14 @@ export function loadRegistry(file) {
     const caps = resolveToolCaps({ tool_caps: toolCaps }, { tool });
     if (typeof role.wake_subdir !== 'string' || role.wake_subdir.includes('/') || role.wake_subdir.startsWith('.')) fail(`role ${id}: wake_subdir must be one folder name or ""`);
     const wakeDir = path.join(wakeRoot, role.wake_subdir);
-    const paneId = role.find?.pane_id;
-    if (typeof paneId !== 'string' || !paneId) fail(`role ${id}: find.pane_id is required`);
+    const names = Array.isArray(role.names) && role.names.length ? role.names : [id];
+    const paneLabel = role.pane_label ?? names[0];
+    if (typeof paneLabel !== 'string' || !paneLabel.trim()) fail(`role ${id}: pane_label must be a non-empty string`);
+    const paneId = role.find?.pane_id ?? null;
+    if (paneId !== null && (typeof paneId !== 'string' || !paneId)) fail(`role ${id}: find.pane_id must be a non-empty string when set`);
     if (role.bot_id !== undefined && !SNOWFLAKE.test(role.bot_id)) fail(`role ${id}: invalid bot_id`);
-    if (dirs.has(wakeDir) || panes.has(paneId) || (role.bot_id && bots.has(role.bot_id))) fail(`role ${id}: duplicate wake_subdir, pane or bot_id`);
-    dirs.add(wakeDir); panes.add(paneId); if (role.bot_id) bots.add(role.bot_id);
+    if (dirs.has(wakeDir) || (!paneAdapter && labels.has(paneLabel.toLowerCase())) || (role.bot_id && bots.has(role.bot_id))) fail(`role ${id}: duplicate wake_subdir, pane label or bot_id`);
+    dirs.add(wakeDir); if (!paneAdapter) labels.add(paneLabel.toLowerCase()); if (role.bot_id) bots.add(role.bot_id);
     // A box another account owns, outside root. `via` is the command prefix that can read it.
     const extraBoxes = (role.extra_boxes ?? []).map(box => {
       if (!isObject(box) || typeof box.path !== 'string' || !path.isAbsolute(box.path)) fail(`role ${id}: extra_boxes path must be absolute`);
@@ -173,24 +183,22 @@ export function loadRegistry(file) {
     let wait = null;
     if (role.wait !== undefined) {
       if (!isObject(role.wait) || typeof role.wait.script !== 'string' || !path.isAbsolute(role.wait.script)) fail(`role ${id}: wait.script must be an absolute path`);
-      wait = { script: role.wait.script, mode: role.wait.mode ?? 'nudge' };
+      const mode = role.wait.mode ?? 'nudge';
+      if (!['nudge', 'observe'].includes(mode)) fail(`role ${id}: wait.mode must be nudge or observe`);
+      wait = { script: role.wait.script, mode };
     }
     if (!wait && !delivery) fail(`role ${id}: no wake consumer (declare delivery or wait)`);
-    if (tools.some(candidate => !resolveToolCaps({ tool_caps: toolCaps }, { tool: candidate }).bgNotify) && !delivery) {
-      fail(`role ${id}: bg_notify=false tool requires delivery.command as a direct pane consumer`);
-    }
-    return { id, names: Array.isArray(role.names) && role.names.length ? role.names : [id], botId: role.bot_id ?? null, user: role.user ?? null, paneId, cwd: role.find.cwd ?? null, tool, tools, bgNotify: caps.bgNotify, submitKeys: caps.submitKeys, wakeSubdir: role.wake_subdir, wakeDir, extraBoxes, dmChannels, dmUsers, wait };
+    return { id, names, paneLabel, botId: role.bot_id ?? null, user: role.user ?? null, paneId, cwd: role.find?.cwd ?? null, tool, tools, bgNotify: caps.bgNotify, submitKeys: caps.submitKeys, wakeSubdir: role.wake_subdir, wakeDir, extraBoxes, dmChannels, dmUsers, wait };
   });
   rejectUnusedToolCaps(toolCaps, new Set(roles.flatMap(role => role.tools)));
-  const paneBin = doc.pane?.bin;
-  if (doc.pane?.kind !== 'herdr' || typeof paneBin !== 'string' || !path.isAbsolute(paneBin)) fail('pane must be {"kind":"herdr","bin":"/abs/path"}');
+  const paneBin = doc.pane.bin;
   const notify = doc.notify === undefined ? null : {
     command: Array.isArray(doc.notify?.command) && doc.notify.command.some(part => typeof part === 'string' && part.includes('{text}')) ? doc.notify.command : fail('notify.command needs a {text} placeholder'),
     repeatSeconds: positive(doc.notify.repeat_seconds, DEFAULTS.repeatSeconds, 'notify.repeat_seconds'),
   };
   const unitDirs = (doc.unit_dirs ?? []).map(value => typeof value === 'string' && path.isAbsolute(value) ? value : fail('unit_dirs must be absolute paths'));
   const dmBackupMaxAge = positive(doc.dm_backup?.max_age_seconds, DEFAULTS.dmBackupMaxAge, 'dm_backup.max_age_seconds');
-  return { file: path.resolve(file), root, wakeRoot, stateDir: path.resolve(doc.state_dir), retiredRoots, unitDirs, paneBin, delivery, retention, roleViews, notify, dmBackupMaxAge, toolCaps, roles };
+  return { file: path.resolve(file), root, wakeRoot, stateDir: path.resolve(doc.state_dir), retiredRoots, unitDirs, paneBin, paneAdapter, delivery, retention, roleViews, notify, dmBackupMaxAge, toolCaps, roles };
 }
 
 // Wake files of one role across its boxes, in arrival order (mtime, then name):
@@ -234,10 +242,10 @@ export function boxEntries(role, deps = defaultDeps()) {
   return { entries, errors, unreadable };
 }
 
-// The words that name what a process runs: the command after wrappers, and for a
-// shell or interpreter the script it was given. Arguments of any other program
-// (`vim claude.log`) say nothing about the program.
-function programWords(argv) {
+// Resolve wrappers to the process executable. A shell/interpreter script name
+// is not the tool executable; ordinary arguments such as `vim claude.log` are
+// not executable names either.
+function programExecutable(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const word = argv[index];
     const base = path.basename(word).replace(/^-/, '');
@@ -250,30 +258,21 @@ function programWords(argv) {
       }
       continue;
     }
-    let script = null;
-    if (SHELLS.has(base) || INTERPRETERS.has(base)) {
-      const argument = argv.slice(index + 1).find(next => !next.startsWith('-'));
-      if (argument) script = path.basename(argument.trim().split(/\s+/)[0]);
-    }
-    return { executable: base, script };
+    return base;
   }
-  return { executable: null, script: null };
+  return null;
 }
 
 // A pane whose foreground is only a shell has no agent, whatever tool the registry names.
 export function detectTool(processes, knownTools) {
   let sawProgram = false;
-  const executables = [], scripts = [];
+  const executables = [];
   for (const proc of processes ?? []) {
     const argv = Array.isArray(proc.argv) && proc.argv.length ? proc.argv : String(proc.cmdline ?? proc.name ?? '').split(/\s+/).filter(Boolean);
-    const { executable, script } = programWords(argv);
-    if (executable && !SHELLS.has(executable) && !INTERPRETERS.has(executable)) {
-      executables.push(executable);
+    const executable = programExecutable(argv);
+    if (executable && !SHELLS.has(executable)) {
       sawProgram = true;
-    }
-    if (script) {
-      scripts.push(script);
-      sawProgram = true;
+      if (!INTERPRETERS.has(executable)) executables.push(executable);
     }
   }
   const match = words => {
@@ -286,21 +285,38 @@ export function detectTool(processes, knownTools) {
   };
   const executableTool = match(executables);
   if (executableTool) return { alive: true, tool: executableTool };
-  const scriptTool = match(scripts);
-  if (scriptTool) return { alive: true, tool: scriptTool };
   return sawProgram ? { alive: true, tool: 'unknown' } : { alive: false, tool: 'shell' };
 }
 
 function knownToolsFor(registry) {
-  return [...new Set([...registry.roles.flatMap(role => role.tools), 'claude', 'codex', 'agy', 'muse', 'opencode'])].sort((left, right) => right.length - left.length);
+  return [...new Set([...registry.roles.flatMap(role => role.tools), ...STANDARD_TOOLS])].sort((left, right) => right.length - left.length);
+}
+
+function resolvePaneId(registry, role, deps) {
+  if (registry.paneAdapter) {
+    const [command, ...args] = registry.paneAdapter.map(part => part.replaceAll('{role}', role.id));
+    const output = String(deps.run(command, args, { timeout: 15_000 }));
+    const match = /^([^\s\r\n]+)(?:\r?\n)?$/.exec(output);
+    if (!match || match[0] !== output) fail(`role ${role.id}: pane adapter did not return one pane ID`);
+    return match[1];
+  }
+  const listing = JSON.parse(deps.run(registry.paneBin, ['agent', 'list'], { timeout: 15_000 }));
+  const agents = listing?.result?.agents;
+  if (!Array.isArray(agents)) fail('herdr agent list did not return result.agents');
+  const matches = agents.filter(agent => String(agent?.label ?? '').toLowerCase() === role.paneLabel.toLowerCase());
+  if (matches.length !== 1 || typeof matches[0]?.pane_id !== 'string' || !matches[0].pane_id) {
+    fail(`role ${role.id}: expected one herdr agent label ${role.paneLabel}, found ${matches.length}`);
+  }
+  return matches[0].pane_id;
 }
 
 function runningToolCaps(registry, role, deps) {
-  const foreground = deps.paneProcesses(registry.paneBin, role.paneId);
+  const paneId = resolvePaneId(registry, role, deps);
+  const foreground = deps.paneProcesses(registry.paneBin, paneId);
   const running = detectTool(foreground, knownToolsFor(registry));
-  if (!running.alive) fail(`role ${role.id}: pane ${role.paneId} runs only a shell`);
-  if (!role.tools.includes(running.tool)) fail(`role ${role.id}: pane runs ${running.tool}, registry allows ${role.tools.join(', ')}`);
-  return { tool: running.tool, ...resolveToolCaps({ tool_caps: registry.toolCaps }, { tool: running.tool }) };
+  if (!running.alive) fail(`role ${role.id}: pane ${paneId} runs only a shell`);
+  if (running.tool !== 'unknown' && !role.tools.includes(running.tool)) fail(`role ${role.id}: pane runs ${running.tool}, registry allows ${role.tools.join(', ')}`);
+  return { paneId, foreground, tool: running.tool, ...resolveToolCaps({ tool_caps: registry.toolCaps }, { tool: running.tool }) };
 }
 
 export function defaultDeps() {
@@ -310,6 +326,8 @@ export function defaultDeps() {
     run,
     paneProcesses: (bin, paneId) => JSON.parse(run(bin, ['pane', 'process-info', '--pane', paneId])).result.process_info.foreground_processes,
     processes: () => run('ps', ['-ww', '-eo', 'pid=,ppid=,args=']).split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)).filter(Boolean).map(match => ({ pid: Number(match[1]), ppid: Number(match[2]), args: match[3] })),
+    sleep: ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
+    warn: message => process.stderr.write(`${message}\n`),
     crontab: () => run('crontab', ['-l']),
   };
 }
@@ -395,30 +413,29 @@ function readSeenFile(file) {
   return new Set(fs.readFileSync(file, 'utf8').split('\n').map(line => line.trim()).filter(Boolean).map(line => path.resolve(line)));
 }
 
-// Runs the delivery command on one wake file. A file in a box read through `via`
-// is copied to a private spool first and the copy is delivered.
+// The common deliverer owns pane choice, tool choice and every input action.
+// A live declared wait process can consume an own-box file for background tools;
+// otherwise the same resolved pane receives the body and keys directly.
 function handOver(registry, role, entry, deps, caps) {
-  let file = entry.file, spooled = null;
-  try {
-    if (entry.box?.via) {
-      const [reader, ...prefix] = entry.box.via;
-      const body = deps.run(reader, [...prefix, 'cat', entry.file]);
-      spooled = path.join(registry.stateDir, 'spool', role.id, entry.name);
-      fs.mkdirSync(path.dirname(spooled), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(spooled, body, { mode: 0o600 });
-      file = spooled;
-    }
-    const [command, ...args] = registry.delivery.command.map(part => part.replaceAll('{role}', role.id).replaceAll('{file}', file));
-    deps.run(command, args, {
-      timeout: 60_000,
-      env: {
-        ...process.env,
-        ROLE_WAKE_TOOL: caps.tool,
-        ROLE_WAKE_SUBMIT_KEYS: JSON.stringify(caps.submitKeys),
-        ROLE_WAKE_BG_NOTIFY: String(caps.bgNotify),
-      },
-    });
-  } finally { if (spooled) fs.rmSync(spooled, { force: true }); }
+  let body;
+  if (entry.box?.via) {
+    const [reader, ...prefix] = entry.box.via;
+    body = deps.run(reader, [...prefix, 'cat', entry.file], { timeout: 15_000 });
+  } else body = fs.readFileSync(entry.file, 'utf8');
+
+  if (caps.bgNotify && role.wait?.mode === 'nudge' && entry.box === null && fs.existsSync(role.wait.script)) {
+    try {
+      const processes = deps.processes();
+      const pids = caps.foreground.map(proc => proc.pid).filter(Number.isInteger);
+      if (waitRunning(processes, role.wait.script, pids)) return;
+    } catch { /* an unverified wait is not a consumer; fall back to pane input */ }
+  }
+
+  deps.run(registry.paneBin, ['pane', 'send-text', caps.paneId, body], { timeout: 15_000 });
+  for (const key of caps.submitKeys) {
+    deps.sleep?.(1000);
+    deps.run(registry.paneBin, ['pane', 'send-keys', caps.paneId, key], { timeout: 15_000 });
+  }
 }
 
 const boxMark = box => `box:${box.dir}`;
@@ -456,12 +473,17 @@ function deliverRole(registry, role, deps, now, at) {
   const retries = fresh.filter(entry => failures[entry.key] && failures[entry.key].next <= now).sort((a, b) => failures[a.key].count - failures[b.key].count);
   const order = [...fresh.filter(entry => !failures[entry.key]), ...retries];
   let delivered = 0, attempts = 0, streak = 0;
+  const warnedTools = new Set();
   for (const entry of order) {
     if (attempts >= registry.delivery.maxPerRun || streak >= FAIL_STREAK) break;
     attempts += 1;
     let ok = true;
     try {
       const caps = runningToolCaps(registry, role, deps);
+      if (caps.tool === 'unknown' && !warnedTools.has(caps.tool)) {
+        warnedTools.add(caps.tool);
+        deps.warn?.(`role ${role.id}: foreground tool unknown; using bg_notify=false and submit_keys=Enter`);
+      }
       handOver(registry, role, entry, deps, caps);
     } catch { ok = false; }
     if (ok) {
@@ -478,9 +500,9 @@ function deliverRole(registry, role, deps, now, at) {
   return { ...(baseline === null ? {} : { baseline }), delivered, failed: Object.keys(failures).length, pending: fresh.length - delivered, ...error };
 }
 
-// Hands each new wake file to the instance delivery command, in arrival order. A
-// box seen for the first time is recorded, not replayed. A failed file is kept
-// for retry and reported; it stops neither the files behind it nor other roles.
+// Delivers each new wake file through the common pane input, in arrival order.
+// A box seen for the first time is recorded, not replayed. A failed file is
+// kept for retry and reported; it stops neither the files behind it nor others.
 export function deliver(registry, deps = defaultDeps(), { only = null } = {}) {
   if (!registry.delivery) fail('delivery is not configured');
   const release = acquireLock(registry);
@@ -581,10 +603,11 @@ export function inspect(registry, deps = defaultDeps()) {
   const add = (level, code, role, detail) => findings.push({ level, code, role, detail });
   if (registry.delivery && !(Number.isFinite(heartbeat) && now - heartbeat <= registry.delivery.heartbeatMaxAge * 1000)) add('error', 'delivery-stale', null, Number.isFinite(heartbeat) ? `last delivery run ${Math.round((now - heartbeat) / 1000)}s ago` : 'delivery has never run');
   const rows = registry.roles.map(role => {
-    const row = { id: role.id, name: role.names[0], paneId: role.paneId, registeredTools: role.tools, alive: null, tool: null, wait: role.wait ? 'unknown' : 'none', box: 0, pending: null, oldestPendingMs: null, newestMs: null };
+    const row = { id: role.id, name: role.names[0], paneId: null, registeredTools: role.tools, alive: null, tool: null, wait: role.wait ? 'unknown' : 'none', box: 0, pending: null, oldestPendingMs: null, newestMs: null };
     let pids = [];
     try {
-      const fg = deps.paneProcesses(registry.paneBin, role.paneId);
+      row.paneId = resolvePaneId(registry, role, deps);
+      const fg = deps.paneProcesses(registry.paneBin, row.paneId);
       Object.assign(row, detectTool(fg, known));
       if (row.alive) {
         const caps = resolveToolCaps({ tool_caps: registry.toolCaps }, { tool: row.tool });
@@ -592,10 +615,10 @@ export function inspect(registry, deps = defaultDeps()) {
         row.submitKeys = caps.submitKeys;
       }
       pids = fg.map(proc => proc.pid).filter(Number.isInteger);
-    } catch { add('error', 'pane-unreadable', role.id, `pane ${role.paneId} could not be read`); }
-    if (row.alive === false) add('error', 'session-down', role.id, `pane ${role.paneId} runs only a shell`);
-    if (row.alive && !role.tools.includes(row.tool)) add('error', 'tool-drift', role.id, `pane runs ${row.tool}, registry allows ${role.tools.join(', ')}`);
-    else if (row.alive && row.tool !== role.tools[0]) add('warn', 'tool-fallback', role.id, `pane runs ${row.tool}, first choice is ${role.tools[0]}`);
+    } catch (error) { add('error', 'pane-unreadable', role.id, `pane for label ${role.paneLabel} could not be read: ${String(error?.message ?? error).split('\n')[0]}`); }
+    if (row.alive === false) add('error', 'session-down', role.id, `pane ${row.paneId ?? role.paneLabel} runs only a shell`);
+    if (row.alive && row.tool !== 'unknown' && !role.tools.includes(row.tool)) add('error', 'tool-drift', role.id, `pane runs ${row.tool}, registry allows ${role.tools.join(', ')}`);
+    else if (row.alive && row.tool !== 'unknown' && row.tool !== role.tools[0]) add('warn', 'tool-fallback', role.id, `pane runs ${row.tool}, first choice is ${role.tools[0]}`);
     if (row.alive && !Object.hasOwn(TOOL_CAPS_DEFAULTS, row.tool)) add('warn', 'tool-capability-fallback', role.id, `tool ${row.tool} uses generic bg_notify=false and submit_keys=Enter defaults`);
     if (role.wait) {
       // A `nudge` wait script is one the role depends on (it may be the only reader
@@ -604,9 +627,9 @@ export function inspect(registry, deps = defaultDeps()) {
       const waitLevel = role.wait.mode === 'nudge' ? 'error' : 'warn';
       if (!fs.existsSync(role.wait.script)) { row.wait = 'missing'; add('error', 'wait-script-missing', role.id, role.wait.script); }
       else if (!processes) add(waitLevel, 'wait-unknown', role.id, 'process list could not be read');
-      else if (!pids.length) add(waitLevel, 'wait-unknown', role.id, `pane ${role.paneId} foreground pids could not be read`);
+      else if (!pids.length) add(waitLevel, 'wait-unknown', role.id, `pane ${row.paneId ?? role.paneLabel} foreground pids could not be read`);
       else if (waitRunning(processes, role.wait.script, pids)) row.wait = 'running';
-      else { row.wait = 'down'; add(waitLevel, 'wait-down', role.id, `${role.wait.script} is not running under pane ${role.paneId}`); }
+      else { row.wait = 'down'; add(waitLevel, 'wait-down', role.id, `${role.wait.script} is not running under pane ${row.paneId ?? role.paneLabel}`); }
     }
     const { entries, errors } = boxEntries(role, deps);
     for (const detail of errors) add('error', 'box-unreadable', role.id, detail);

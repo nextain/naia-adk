@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as roleWake from './role-wake.mjs';
 
@@ -22,7 +23,8 @@ function setup(t, patch = {}) {
   const doc = {
     schema_version: 1, root, wake_root: 'wake', state_dir: path.join(dir, 'state'), retired_roots: [retired], unit_dirs: [units],
     pane: { kind: 'herdr', bin: '/opt/herdr' },
-    delivery: { command: ['/opt/deliver', '{role}', '{file}'] },
+    tool_caps: { bg_notify: { claude: false } },
+    delivery: {},
     roles: {
       'role-a': { names: ['Role A'], bot_id: botA, user: 'svc', find: { type: 'pane', pane_id: 'w1:p1' }, tool: 'claude', wake_subdir: '', wait: { script: waitScript, mode: 'nudge' } },
       'role-b': { names: ['Role B'], bot_id: botB, user: 'svc', find: { type: 'pane', pane_id: 'w1:p2' }, tools: ['agy', 'muse'], wake_subdir: 'role-b' },
@@ -32,18 +34,39 @@ function setup(t, patch = {}) {
   const file = path.join(dir, 'role-wake.json');
   const write = () => fs.writeFileSync(file, JSON.stringify(doc));
   write();
-  const state = { now: NOW, runs: [], runOptions: [], failOn: null, crontab: '', panes: { 'w1:p1': [{ argv: ['claude', '--resume', 'x'], pid: 10 }], 'w1:p2': [{ argv: ['/opt/bin/muse-bin-1.4', '--yolo'], pid: 20 }] }, processes: [{ pid: 10, ppid: 1, args: 'claude --resume x' }, { pid: 11, ppid: 10, args: `bash ${waitScript}` }, { pid: 20, ppid: 1, args: '/opt/bin/muse-bin-1.4 --yolo' }] };
+  const state = { now: NOW, runs: [], runOptions: [], warnings: [], deliveries: [], paneCalls: [], paneProcessLookups: [], resolverRoles: [], adapterPane: 'w9:p88', adapterOutput: null, failOn: null, crontab: '', labels: { 'w1:p1': 'Role A', 'w1:p2': 'Role B' }, panes: { 'w1:p1': [{ argv: ['claude', '--resume', 'x'], pid: 10 }], 'w1:p2': [{ argv: ['/opt/bin/muse-bin-1.4', '--yolo'], pid: 20 }] }, processes: [{ pid: 10, ppid: 1, args: 'claude --resume x' }, { pid: 11, ppid: 10, args: `bash ${waitScript}` }, { pid: 20, ppid: 1, args: '/opt/bin/muse-bin-1.4 --yolo' }] };
   const deps = {
     now: () => state.now,
-    run: (command, args, options = {}) => { state.runs.push([command, ...args]); state.runOptions.push(options); if (state.failOn && args.some(arg => arg.includes(state.failOn))) throw new Error('exit 1'); return ''; },
-    paneProcesses: (bin, paneId) => { if (!state.panes[paneId]) throw new Error('no pane'); return state.panes[paneId]; },
+    run: (command, args, options = {}) => {
+      state.runOptions.push(options);
+      if (command === '/opt/herdr' && args[0] === 'agent' && args[1] === 'list') {
+        return JSON.stringify({ result: { agents: Object.entries(state.labels).map(([pane_id, label]) => ({ pane_id, label })) } });
+      }
+      if (command === '/opt/resolve-pane') { state.resolverRoles.push(args[0]); return state.adapterOutput ?? `${state.adapterPane}\n`; }
+      if (command === '/opt/herdr' && args[0] === 'pane' && ['send-text', 'send-keys'].includes(args[1])) {
+        state.paneCalls.push([...args]);
+        if (args[1] === 'send-text') {
+          const paneId = args[2], roleId = state.labels[paneId] === 'Role A' ? 'role-a' : state.labels[paneId] === 'Role B' ? 'role-b' : 'adapter-role';
+          state.deliveries.push([roleId, args[3]]);
+        }
+        if (state.failOn && args.some(arg => String(arg).includes(state.failOn))) throw new Error('exit 1');
+        return '';
+      }
+      state.runs.push([command, ...args]);
+      if (state.failOn && args.some(arg => String(arg).includes(state.failOn))) throw new Error('exit 1');
+      return '';
+    },
+    paneProcesses: (bin, paneId) => { state.paneProcessLookups.push(paneId); if (!state.panes[paneId]) throw new Error('no pane'); return state.panes[paneId]; },
     processes: () => state.processes,
+    sleep: () => {},
+    warn: message => state.warnings.push(message),
     crontab: () => state.crontab,
   };
-  const put = (role, name, ageDays = 0) => { const target = path.join(root, 'wake', role === 'role-a' ? '' : role, name); fs.writeFileSync(target, 'wake\n'); const at = new Date(NOW - ageDays * DAY); fs.utimesSync(target, at, at); return target; };
+  const put = (role, name, ageDays = 0) => { const target = path.join(root, 'wake', role === 'role-a' ? '' : role, name); fs.writeFileSync(target, `wake ${role}/${name}\n`); const at = new Date(NOW - ageDays * DAY); fs.utimesSync(target, at, at); return target; };
   return { dir, root, retired, units, waitScript, doc, file, write, state, deps, put, load: () => loadRegistry(file) };
 }
 const codes = report => report.findings.map(finding => `${finding.code}:${finding.role ?? ''}`).sort();
+const deliveryNames = f => f.state.deliveries.map(([, body]) => path.basename(body.trim().split(/\s+/).at(-1)));
 
 test('registry rejects roles without a consumer, duplicate boxes and a retired root', t => {
   const f = setup(t);
@@ -51,14 +74,16 @@ test('registry rejects roles without a consumer, duplicate boxes and a retired r
   const broken = change => { const copy = structuredClone(f.doc); change(copy); fs.writeFileSync(f.file, JSON.stringify(copy)); return () => loadRegistry(f.file); };
   assert.throws(broken(doc => { delete doc.delivery; }), /role-b: no wake consumer/);
   assert.throws(broken(doc => { doc.roles['role-b'].wake_subdir = ''; }), /duplicate/);
-  assert.throws(broken(doc => { doc.roles['role-b'].find.pane_id = 'w1:p1'; }), /duplicate/);
+  assert.doesNotThrow(broken(doc => { doc.roles['role-b'].find.pane_id = 'w1:p1'; }));
+  assert.throws(broken(doc => { doc.roles['role-b'].pane_label = 'Role A'; }), /duplicate wake_subdir, pane label/);
   assert.throws(broken(doc => { doc.roles['role-b'].wake_subdir = '../x'; }), /wake_subdir/);
   assert.throws(broken(doc => { doc.roles['role-a'].tools = ['agy', 'claude']; }), /role role-a: tool must equal tools\[0\]/);
   assert.throws(broken(doc => { doc.roles['role-a'].tools = ['claude']; doc.roles['role-a'].tool = 'codex'; }), /role role-a: tool must equal tools\[0\]/);
   assert.throws(broken(doc => { doc.retired_roots = [path.dirname(f.root)]; }), /inside a retired root/);
   assert.throws(broken(doc => { doc.retention = { archive_dir: 'wake/done' }; }), /outside wake_root/);
   assert.throws(broken(doc => { doc.wake_root = '../elsewhere'; }), /inside root/);
-  assert.throws(broken(doc => { doc.delivery.command = ['/opt/deliver']; }), /\{file\}/);
+  assert.throws(broken(doc => { doc.pane.adapter = ['/opt/resolve-pane']; }), /\{role\}/);
+  assert.throws(broken(doc => { doc.pane.adapter = ['/opt/resolve-pane', '{role}', '{pane}']; }), /only accepts the \{role\}/);
   assert.throws(broken(doc => { doc.roles['role-b'].extra_boxes = [{ path: 'relative/box' }]; }), /extra_boxes path/);
   assert.throws(broken(doc => { doc.roles['role-b'].extra_boxes = [{ path: path.join(f.root, 'wake') }]; }), /duplicate wake box/);
   assert.throws(broken(doc => { doc.roles['role-b'].extra_boxes = [{ path: '/srv/other/wake', via: [] }]; }), /via must be a command prefix/);
@@ -79,6 +104,7 @@ test('tool caps validate types and resolve per-tool defaults and overrides', t =
     ['claude', { bgNotify: true, submitKeys: ['Enter'] }],
     ['codex', { bgNotify: false, submitKeys: ['Enter', 'Tab'] }],
     ['agy', { bgNotify: false, submitKeys: ['Enter'] }],
+    ['gemini', { bgNotify: false, submitKeys: ['Enter'] }],
     ['muse', { bgNotify: false, submitKeys: ['Enter'] }],
     ['opencode', { bgNotify: false, submitKeys: ['Enter'] }],
     ['unknown-tool', { bgNotify: false, submitKeys: ['Enter'] }],
@@ -109,37 +135,32 @@ test('validate prints one capability row per role', t => {
   assert.equal(output.split('\n').filter(line => line.includes('"bg_notify"')).length, 2);
 });
 
-test('deliver forwards the resolved tool capabilities to the instance adapter', t => {
+test('common delivery reads the wake body and sends pane input without capability environment variables', t => {
   const f = setup(t);
+  f.doc.roles['role-a'].find.pane_id = 'stale-pane-id';
+  f.write();
   deliver(f.load(), f.deps);
   const file = f.put('role-a', '001-wake.md');
 
-  deliver(f.load(), f.deps);
+  const result = deliver(f.load(), f.deps);
 
-  assert.equal(f.state.runs.at(-1)[2], file);
-  assert.deepEqual({
-    ROLE_WAKE_TOOL: f.state.runOptions.at(-1)?.env?.ROLE_WAKE_TOOL,
-    ROLE_WAKE_SUBMIT_KEYS: f.state.runOptions.at(-1)?.env?.ROLE_WAKE_SUBMIT_KEYS,
-    ROLE_WAKE_BG_NOTIFY: f.state.runOptions.at(-1)?.env?.ROLE_WAKE_BG_NOTIFY,
-  }, { ROLE_WAKE_TOOL: 'claude', ROLE_WAKE_SUBMIT_KEYS: '["Enter"]', ROLE_WAKE_BG_NOTIFY: 'true' });
+  assert.equal(result.roles['role-a'].delivered, 1);
+  assert.deepEqual(f.state.deliveries.at(-1), ['role-a', 'wake role-a/001-wake.md\n']);
+  assert.deepEqual(f.state.paneCalls.slice(-2), [['pane', 'send-text', 'w1:p1', 'wake role-a/001-wake.md\n'], ['pane', 'send-keys', 'w1:p1', 'Enter']]);
+  assert.ok(!f.state.runOptions.some(options => options.env?.ROLE_WAKE_TOOL || options.env?.ROLE_WAKE_SUBMIT_KEYS || options.env?.ROLE_WAKE_BG_NOTIFY));
 });
 
-test('inspect and deliver resolve capabilities from the actual fallback foreground tool', t => {
+test('inspect and direct delivery resolve capabilities from the actual fallback foreground tool', t => {
   const f = setup(t, { tool_caps: { bg_notify: { agy: true, muse: false }, submit_keys: { agy: ['Space'], muse: ['F4'] } } });
   const registry = f.load();
   const row = inspect(registry, f.deps).rows.find(item => item.id === 'role-b');
   assert.deepEqual([row.tool, row.bgNotify, row.submitKeys], ['muse', false, ['F4']]);
 
   deliver(registry, f.deps);
-  const file = f.put('role-b', '001-fallback.md');
+  f.put('role-b', '001-fallback.md');
   deliver(registry, f.deps);
 
-  const deliveryIndex = f.state.runs.findIndex(run => run[2] === file);
-  assert.deepEqual({
-    ROLE_WAKE_TOOL: f.state.runOptions[deliveryIndex]?.env?.ROLE_WAKE_TOOL,
-    ROLE_WAKE_SUBMIT_KEYS: f.state.runOptions[deliveryIndex]?.env?.ROLE_WAKE_SUBMIT_KEYS,
-    ROLE_WAKE_BG_NOTIFY: f.state.runOptions[deliveryIndex]?.env?.ROLE_WAKE_BG_NOTIFY,
-  }, { ROLE_WAKE_TOOL: 'muse', ROLE_WAKE_SUBMIT_KEYS: '["F4"]', ROLE_WAKE_BG_NOTIFY: 'false' });
+  assert.deepEqual(f.state.paneCalls.slice(-2), [['pane', 'send-text', 'w1:p2', 'wake role-b/001-fallback.md\n'], ['pane', 'send-keys', 'w1:p2', 'F4']]);
 });
 
 test('delivery refreshes the foreground tool and capabilities before every file', t => {
@@ -153,7 +174,7 @@ test('delivery refreshes the foreground tool and capabilities before every file'
   const run = f.deps.run;
   f.deps.run = (command, args, options = {}) => {
     const result = run(command, args, options);
-    if (command === '/opt/deliver' && args[1] === first) {
+    if (command === '/opt/herdr' && args[0] === 'pane' && args[1] === 'send-text' && args[3].includes('001-first.md')) {
       f.state.panes['w1:p1'] = [{ argv: ['codex'], pid: 10 }];
     }
     return result;
@@ -162,10 +183,9 @@ test('delivery refreshes the foreground tool and capabilities before every file'
   const result = deliver(registry, f.deps, { only: 'role-a' });
 
   assert.deepEqual(result.roles['role-a'], { delivered: 2, failed: 0, pending: 0 });
-  assert.deepEqual(f.state.runs.map(([, , file]) => file), [first, second]);
-  assert.deepEqual(f.state.runOptions.map(({ env }) => [env.ROLE_WAKE_TOOL, env.ROLE_WAKE_SUBMIT_KEYS, env.ROLE_WAKE_BG_NOTIFY]), [
-    ['claude', '["Enter"]', 'true'],
-    ['codex', '["Enter","Tab"]', 'false'],
+  assert.deepEqual(f.state.deliveries.map(([, body]) => path.basename(body.trim().split('/').at(-1))), ['001-first.md', '002-second.md']);
+  assert.deepEqual(f.state.paneCalls.filter(call => call[1] === 'send-keys').map(([, , paneId, key]) => [paneId, key]), [
+    ['w1:p1', 'Enter'], ['w1:p1', 'Enter'], ['w1:p1', 'Tab'],
   ]);
 });
 
@@ -204,7 +224,7 @@ test('tool detection reads the foreground program, not the registry', () => {
   const known = ['claude', 'agy', 'muse', 'codex'];
   assert.deepEqual(detectTool([{ argv: ['/opt/bin/Codex'] }], known), { alive: true, tool: 'codex' });
   assert.deepEqual(detectTool([{ argv: ['/x/muse-bin-1.4.20', '--yolo', 'you are agy'] }], known), { alive: true, tool: 'muse' });
-  assert.deepEqual(detectTool([{ argv: ['sudo', '-iu', 'svc', 'bash', '/opt/kit/agy-start-1.sh'] }], known), { alive: true, tool: 'agy' });
+  assert.deepEqual(detectTool([{ argv: ['sudo', '-iu', 'svc', 'bash', '/opt/kit/agy-start-1.sh'] }], known), { alive: false, tool: 'shell' });
   assert.deepEqual(detectTool([{ cmdline: 'claude --resume abc' }], known), { alive: true, tool: 'claude' });
   assert.deepEqual(detectTool([{ argv: ['-bash'] }, { argv: ['sudo', '-iu', 'svc', 'bash'] }], known), { alive: false, tool: 'shell' });
   assert.deepEqual(detectTool([{ argv: ['vim', 'notes'] }], known), { alive: true, tool: 'unknown' });
@@ -212,17 +232,165 @@ test('tool detection reads the foreground program, not the registry', () => {
   // An argument that looks like a tool name is not the program.
   assert.deepEqual(detectTool([{ argv: ['vim', 'claude.log'] }], known), { alive: true, tool: 'unknown' });
   assert.deepEqual(detectTool([{ argv: ['tail', '-f', '/var/log/agy-1.log'] }], known), { alive: true, tool: 'unknown' });
-  assert.deepEqual(detectTool([{ argv: ['bash', '-c', 'claude --resume x'] }], known), { alive: true, tool: 'claude' });
+  assert.deepEqual(detectTool([{ argv: ['bash', '-c', 'claude --resume x'] }], known), { alive: false, tool: 'shell' });
   assert.deepEqual(detectTool([{ argv: ['env', '-u', 'TOKEN', 'A=1', 'timeout', '30', 'claude'] }], known), { alive: true, tool: 'claude' });
-  assert.deepEqual(detectTool([{ argv: ['node', '/opt/tools/muse.mjs'] }, { argv: ['python3'] }], known), { alive: true, tool: 'muse' });
-  assert.deepEqual(detectTool([{ argv: ['python3'] }], known), { alive: false, tool: 'shell' });
+  assert.deepEqual(detectTool([{ argv: ['node', '/opt/tools/muse.mjs'] }, { argv: ['python3'] }], known), { alive: true, tool: 'unknown' });
+  assert.deepEqual(detectTool([{ argv: ['python3'] }], known), { alive: true, tool: 'unknown' });
 });
 
 test('tool detection prefers actual foreground executables over shell startup scripts', () => {
   const known = ['claude', 'codex'];
   assert.deepEqual(detectTool([{ argv: ['bash', '/opt/claude-start.sh'] }, { argv: ['codex'] }], known), { alive: true, tool: 'codex' });
   assert.deepEqual(detectTool([{ argv: ['sh', '/opt/claude-start.sh'] }, { argv: ['/opt/bin/codex'] }], known), { alive: true, tool: 'codex' });
-  assert.deepEqual(detectTool([{ argv: ['bash', '/opt/claude-start.sh'] }], known), { alive: true, tool: 'claude' });
+  assert.deepEqual(detectTool([{ argv: ['bash', '/opt/claude-start.sh'] }], known), { alive: false, tool: 'shell' });
+});
+
+test('redesign regression: common delivery sends Codex body and both submit keys itself', t => {
+  const f = setup(t);
+  f.doc.roles['role-a'].tool = 'codex';
+  f.doc.roles['role-a'].tools = ['codex'];
+  f.doc.tool_caps = {};
+  delete f.doc.roles['role-a'].wait;
+  f.state.panes['w1:p1'] = [{ argv: ['/opt/bin/codex'], pid: 10 }];
+  f.state.processes = [{ pid: 10, ppid: 1, args: '/opt/bin/codex' }];
+  f.write();
+  const registry = f.load();
+  deliver(registry, f.deps);
+  f.state.paneCalls.length = 0;
+  f.put('role-a', '001-codex.md');
+
+  const result = deliver(registry, f.deps);
+
+  assert.equal(result.roles['role-a'].delivered, 1);
+  assert.deepEqual(f.state.paneCalls, [
+    ['pane', 'send-text', 'w1:p1', 'wake role-a/001-codex.md\n'],
+    ['pane', 'send-keys', 'w1:p1', 'Enter'],
+    ['pane', 'send-keys', 'w1:p1', 'Tab'],
+  ]);
+  assert.ok(!f.state.runs.some(([command]) => command === '/opt/deliver'));
+});
+
+test('redesign regression: bg_notify falls back to direct input if its declared wait is missing', t => {
+  const f = setup(t);
+  delete f.doc.roles['role-a'].wait;
+  f.doc.tool_caps.bg_notify.claude = true;
+  f.write();
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const file = f.put('role-a', '002-wait-missing.md');
+  fs.writeFileSync(file, 'wake-body-must-be-submitted\n');
+  f.state.failOn = 'wake-body-must-be-submitted';
+
+  const result = deliver(registry, f.deps);
+
+  assert.equal(result.roles['role-a'].delivered, 0);
+  assert.equal(result.roles['role-a'].failed, 1);
+  assert.equal(readLedger(registry, registry.roles[0]).has(path.basename(file)), false);
+  assert.ok(f.state.paneCalls.some(call => call[1] === 'send-text' && call[3] === 'wake-body-must-be-submitted\n'));
+});
+
+test('bg_notify uses only a live declared nudge wait; observe and stopped waits use direct pane input', t => {
+  const f = setup(t);
+  f.doc.tool_caps.bg_notify.claude = true;
+  f.write();
+  const registry = f.load();
+  deliver(registry, f.deps);
+
+  f.put('role-a', 'live-wait.md');
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  assert.equal(f.state.paneCalls.length, 0);
+
+  f.doc.roles['role-a'].wait.mode = 'observe';
+  f.write();
+  f.put('role-a', 'observe-only.md');
+  assert.equal(deliver(f.load(), f.deps).roles['role-a'].delivered, 1);
+  assert.ok(f.state.paneCalls.some(call => call[1] === 'send-text' && call[3].includes('observe-only.md')));
+
+  f.doc.roles['role-a'].wait.mode = 'nudge';
+  f.write();
+  f.state.processes = f.state.processes.filter(proc => proc.pid !== 11);
+  f.put('role-a', 'stopped-wait.md');
+  assert.equal(deliver(f.load(), f.deps).roles['role-a'].delivered, 1);
+  assert.ok(f.state.paneCalls.some(call => call[1] === 'send-text' && call[3].includes('stopped-wait.md')));
+});
+
+test('redesign regression: adapter-selected pane ID is the ID inspected and directly written', t => {
+  const f = setup(t);
+  f.doc.pane.adapter = ['/opt/resolve-pane', '{role}'];
+  f.doc.roles['role-a'].tool = 'agy';
+  f.doc.roles['role-a'].tools = ['agy'];
+  f.doc.tool_caps = {};
+  delete f.doc.roles['role-a'].wait;
+  f.state.panes[f.state.adapterPane] = [{ argv: ['/opt/bin/agy'], pid: 88 }];
+  f.state.processes = [{ pid: 88, ppid: 1, args: '/opt/bin/agy' }];
+  f.write();
+  const registry = f.load();
+  deliver(registry, f.deps);
+  f.state.paneCalls.length = 0;
+  f.state.paneProcessLookups.length = 0;
+  f.state.resolverRoles.length = 0;
+  f.put('role-a', '003-pane-bound.md');
+
+  const result = deliver(registry, f.deps);
+
+  assert.equal(result.roles['role-a'].delivered, 1);
+  assert.deepEqual(f.state.resolverRoles, ['role-a']);
+  assert.deepEqual(f.state.paneProcessLookups, [f.state.adapterPane]);
+  assert.ok(f.state.paneCalls.length > 0);
+  assert.ok(f.state.paneCalls.every(call => call[2] === f.state.adapterPane));
+});
+
+test('pane adapters must print exactly one plain pane ID', t => {
+  const f = setup(t);
+  f.doc.pane.adapter = ['/opt/resolve-pane', '{role}'];
+  f.state.adapterOutput = 'w9:p88\nw10:p90\n';
+  f.write();
+  const registry = f.load();
+  deliver(registry, f.deps);
+  f.put('role-a', '004-invalid-pane-output.md');
+
+  const result = deliver(registry, f.deps);
+
+  assert.equal(result.roles['role-a'].delivered, 0);
+  assert.equal(result.roles['role-a'].failed, 1);
+  assert.deepEqual(f.state.paneCalls, []);
+  assert.deepEqual(f.state.paneProcessLookups, []);
+});
+
+test('redesign regression: a real launcher-only process is unknown and cannot inherit Claude defaults', t => {
+  if (process.platform !== 'linux') return t.skip('reads /proc process argv');
+  const dir = fs.mkdtempSync(path.join(process.env.TMPDIR ?? os.tmpdir(), 'role-wake-process-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const script = path.join(dir, 'claude-start.sh');
+  fs.writeFileSync(script, '#!/bin/bash\nsleep 30\n');
+  const child = spawn('bash', [script], { detached: true, stdio: 'ignore' });
+  t.after(() => { try { process.kill(-child.pid, 'SIGTERM'); } catch { /* already exited */ } });
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  const processes = execFileSync('ps', ['-eo', 'pid=,ppid=,pgid=', '--no-headers'], { encoding: 'utf8' })
+    .trim().split('\n').map(line => line.trim().split(/\s+/).map(Number)).filter(([, , pgid]) => pgid === child.pid)
+    .map(([pid, ppid]) => {
+      const argv = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean);
+      return { pid, ppid, argv, args: argv.join(' ') };
+    });
+
+  assert.deepEqual(detectTool(processes, ['claude']), { alive: true, tool: 'unknown' });
+  assert.deepEqual(resolveToolCaps({}, { tool: 'unknown' }), { bgNotify: false, submitKeys: ['Enter'] });
+
+  const f = setup(t);
+  delete f.doc.roles['role-a'].wait;
+  f.state.panes['w1:p1'] = processes;
+  f.state.processes = processes;
+  f.write();
+  const registry = f.load();
+  const report = inspect(registry, f.deps);
+  const row = report.rows[0];
+  assert.deepEqual([row.tool, row.bgNotify, row.submitKeys], ['unknown', false, ['Enter']]);
+  assert.match(boardSection(report), /warn tool-capability-fallback role-a: tool unknown uses generic/);
+  deliver(registry, f.deps);
+  f.put('role-a', 'unknown-tool.md');
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, 1);
+  assert.deepEqual(f.state.warnings, ['role role-a: foreground tool unknown; using bg_notify=false and submit_keys=Enter']);
+  assert.deepEqual(f.state.paneCalls.slice(-2), [['pane', 'send-text', 'w1:p1', 'wake role-a/unknown-tool.md\n'], ['pane', 'send-keys', 'w1:p1', 'Enter']]);
 });
 
 test('a wait script counts only under the pane agent', () => {
@@ -256,12 +424,14 @@ test('delivery records a first-seen box without replaying it, then delivers in o
   fs.writeFileSync(path.join(f.root, 'wake', 'note.txt'), 'not a wake');
   const registry = f.load();
   assert.deepEqual(deliver(registry, f.deps).roles, { 'role-a': { baseline: 1, delivered: 0, failed: 0, pending: 0 }, 'role-b': { baseline: 1, delivered: 0, failed: 0, pending: 0 } });
-  assert.equal(f.state.runs.length, 0);
+  assert.equal(f.state.deliveries.length, 0);
   const a2 = f.put('role-a', '002-new.md'), b3 = f.put('role-b', '003-new.md'), b2 = f.put('role-b', '002-new.md');
   assert.deepEqual(deliver(registry, f.deps).roles, { 'role-a': { delivered: 1, failed: 0, pending: 0 }, 'role-b': { delivered: 2, failed: 0, pending: 0 } });
-  assert.deepEqual(f.state.runs, [['/opt/deliver', 'role-a', a2], ['/opt/deliver', 'role-b', b2], ['/opt/deliver', 'role-b', b3]]);
+  assert.deepEqual(deliveryNames(f), ['002-new.md', '002-new.md', '003-new.md']);
+  assert.deepEqual(f.state.deliveries.map(([role]) => role), ['role-a', 'role-b', 'role-b']);
+  assert.equal(f.state.deliveries[0][1].includes(path.basename(a2)), true);
   deliver(registry, f.deps);
-  assert.equal(f.state.runs.length, 3);
+  assert.equal(f.state.deliveries.length, 3);
 });
 
 test('a failed file does not stop the files behind it, is reported at once and is retried with backoff', t => {
@@ -280,7 +450,7 @@ test('a failed file does not stop the files behind it, is reported at once and i
   assert.equal(report.findings.find(finding => finding.code === 'delivery-failed').level, 'error');
   assert.equal(main(['deliver', '--config', f.file], {}, f.deps, () => {}), 1);
   // Inside the backoff the file is not tried again; after it, it is.
-  const tries = () => f.state.runs.filter(run => run[2].endsWith('002-a.md')).length;
+  const tries = () => f.state.deliveries.filter(([, body]) => body.includes('002-a.md')).length;
   assert.equal(tries(), 1);
   f.state.now = NOW + 61_000;
   deliver(registry, f.deps);
@@ -317,16 +487,17 @@ test('new files go before retries and a role that fails three in a row stops for
   deliver(registry, f.deps);
   for (const [index, name] of ['010.md', '011.md', '012.md', '013.md', '014.md'].entries()) f.put('role-a', name, (10 - index) / 1000);
   f.put('role-b', '010.md');
-  f.state.failOn = path.join(f.root, 'wake', '01');
+  f.state.failOn = 'role-a/01';
   // The session is down: three tries, then the role waits for the next run; role-b is untouched.
   assert.deepEqual(deliver(registry, f.deps).roles, { 'role-a': { delivered: 0, failed: 3, pending: 5 }, 'role-b': { delivered: 1, failed: 0, pending: 0 } });
-  assert.deepEqual(f.state.runs.filter(run => run[1] === 'role-a').map(run => path.basename(run[2])), ['010.md', '011.md', '012.md']);
+  assert.deepEqual(deliveryNames(f).filter((_, index) => f.state.deliveries[index][0] === 'role-a'), ['010.md', '011.md', '012.md']);
   // Next run: the two untried files go first even though the first three are due again.
-  f.state.failOn = '010.md';
+  f.state.failOn = 'role-a/010.md';
   f.state.now = NOW + 301_000;
-  f.state.runs.length = 0;
+  f.state.deliveries.length = 0;
+  f.state.paneCalls.length = 0;
   assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 4, failed: 1, pending: 1 });
-  assert.deepEqual(f.state.runs.map(run => path.basename(run[2])), ['013.md', '014.md', '010.md', '011.md', '012.md']);
+  assert.deepEqual(deliveryNames(f), ['013.md', '014.md', '010.md', '011.md', '012.md']);
 });
 
 test('a file that failed once is retried before files that keep failing', t => {
@@ -345,9 +516,10 @@ test('a file that failed once is retried before files that keep failing', t => {
   deliver(registry, f.deps);
   f.state.failOn = 'refused';
   f.state.now = NOW + 800_000;
-  f.state.runs.length = 0;
+  f.state.deliveries.length = 0;
+  f.state.paneCalls.length = 0;
   assert.deepEqual(deliver(registry, f.deps).roles['role-a'], { delivered: 1, failed: 3, pending: 3 });
-  assert.equal(path.basename(f.state.runs[0][2]), '030-blink.md');
+  assert.equal(deliveryNames(f)[0], '030-blink.md');
 });
 
 test('a role whose delivery run breaks is named by the check, not hidden behind a fresh heartbeat', t => {
@@ -392,7 +564,7 @@ test('delivery and the table follow arrival time, not file names', t => {
   f.put('role-b', '20260109000000000-date-stamp.md', 1);
   f.put('role-b', '1767916800000-epoch.md', 0.001);
   deliver(registry, f.deps);
-  assert.deepEqual(f.state.runs.map(run => path.basename(run[2])), ['old-title-note.md', '20260109000000000-date-stamp.md', '1767916800000-epoch.md']);
+  assert.deepEqual(deliveryNames(f), ['old-title-note.md', '20260109000000000-date-stamp.md', '1767916800000-epoch.md']);
   f.put('role-b', 'another-title.md', 0.01);
   const row = inspect(registry, f.deps).rows[1];
   assert.equal(Math.round(row.newestMs), NOW - 0.001 * DAY);
@@ -437,12 +609,10 @@ test('an extra box outside root is delivered, through its reader command when it
   f.write();
   const registry = f.load();
   const remote = {};
-  const delivered = [];
   const run = f.deps.run;
   f.deps.run = (command, args) => {
     if (command === 'sudo' && args[1] === 'find') { assert.equal(args[2], closed); return Object.entries(remote).map(([name, item]) => `${item.at / 1000}\t${name}\n`).join(''); }
     if (command === 'sudo' && args[1] === 'cat') { const item = remote[path.basename(args[2])]; if (!item) throw new Error('exit 1'); return item.body; }
-    if (command === '/opt/deliver') delivered.push([args[0], args[1], fs.readFileSync(args[1], 'utf8')]);
     return run(command, args);
   };
   remote['001-before.md'] = { at: NOW - DAY, body: 'before\n' };
@@ -452,12 +622,10 @@ test('an extra box outside root is delivered, through its reader command when it
   fs.writeFileSync(path.join(open, '003-open.md'), 'open box\n');
   fs.utimesSync(path.join(open, '003-open.md'), new Date(NOW + 1000), new Date(NOW + 1000));
   assert.deepEqual(deliver(registry, f.deps).roles['role-b'], { delivered: 2, failed: 0, pending: 0 });
-  const spool = path.join(registry.stateDir, 'spool', 'role-b', '002-letter.md');
-  assert.deepEqual(delivered, [['role-b', path.join(open, '003-open.md'), 'open box\n'], ['role-b', spool, 'letter draft\n']]);
-  assert.equal(fs.existsSync(spool), false);
+  assert.deepEqual(f.state.deliveries.map(([role, body]) => [role, body]), [['role-b', 'open box\n'], ['role-b', 'letter draft\n']]);
   assert.equal(readLedger(registry, registry.roles[1]).has(path.join(closed, '002-letter.md')), true);
   deliver(registry, f.deps);
-  assert.equal(delivered.length, 2);
+  assert.equal(f.state.deliveries.length, 2);
   const row = inspect(registry, f.deps).rows[1];
   assert.deepEqual([row.box, row.pending], [4, 0]);
   // Extra boxes are another owner's: sweep counts them and moves nothing.
@@ -485,10 +653,10 @@ test('an extra box added to a role that already delivers is recorded, not replay
   f.write();
   const registry = f.load();
   assert.deepEqual(deliver(registry, f.deps).roles['role-b'], { baseline: 2, delivered: 0, failed: 0, pending: 0 });
-  assert.equal(f.state.runs.length, 0);
+  assert.equal(f.state.deliveries.length, 0);
   fs.writeFileSync(path.join(added, '003-new.md'), 'new\n');
   assert.deepEqual(deliver(registry, f.deps).roles['role-b'], { delivered: 1, failed: 0, pending: 0 });
-  assert.deepEqual(f.state.runs.map(run => run[2]), [path.join(added, '003-new.md')]);
+  assert.deepEqual(f.state.deliveries.map(([, body]) => body), ['new\n']);
   // A box that cannot be read on its first look is looked at again later, still without a replay.
   const late = path.join(f.dir, 'late-box');
   f.doc.roles['role-b'].extra_boxes.push({ path: late });
@@ -497,7 +665,7 @@ test('an extra box added to a role that already delivers is recorded, not replay
   fs.mkdirSync(late);
   fs.writeFileSync(path.join(late, '001-history.md'), 'old\n');
   assert.deepEqual(deliver(f.load(), f.deps).roles['role-b'], { baseline: 1, delivered: 0, failed: 0, pending: 0 });
-  assert.equal(f.state.runs.length, 1);
+  assert.equal(f.state.deliveries.length, 1);
 });
 
 test('taking over from an old deliverer keeps its record and delivers what it had not', t => {
@@ -510,9 +678,9 @@ test('taking over from an old deliverer keeps its record and delivers what it ha
   f.write();
   const registry = f.load();
   assert.deepEqual(deliver(registry, f.deps).roles, { 'role-a': { baseline: 1, delivered: 1, failed: 0, pending: 0 }, 'role-b': { baseline: 0, delivered: 1, failed: 0, pending: 0 } });
-  assert.deepEqual(f.state.runs.map(run => run[2]), [left, path.join(f.root, 'wake', 'role-b', '001-left.md')]);
+  assert.deepEqual(deliveryNames(f), ['002-left.md', '001-left.md']);
   deliver(registry, f.deps);
-  assert.equal(f.state.runs.length, 2);
+  assert.equal(f.state.deliveries.length, 2);
   // The same record decides for an extra box, whenever that box is first seen.
   const extra = path.join(f.dir, 'extra-box');
   fs.mkdirSync(extra);
@@ -521,7 +689,7 @@ test('taking over from an old deliverer keeps its record and delivers what it ha
   f.doc.roles['role-b'].extra_boxes = [{ path: extra }];
   f.write();
   assert.deepEqual(deliver(f.load(), f.deps).roles['role-b'], { baseline: 1, delivered: 1, failed: 0, pending: 0 });
-  assert.equal(f.state.runs.at(-1)[2], path.join(extra, '002-left.md'));
+  assert.equal(f.state.deliveries.at(-1)[1], 'x\n');
   delete f.doc.roles['role-b'].extra_boxes;
   f.write();
   // A configured record that is missing stops the takeover instead of swallowing the box.
@@ -615,13 +783,15 @@ test('a stopped wait script is an error when nothing else delivers', t => {
   assert.deepEqual(findings.map(finding => [finding.role, finding.level]), [['role-a', 'error'], ['role-b', 'warn']]);
 });
 
-test('a tool without background notification needs a direct delivery consumer', t => {
+test('a role without a wait consumer still uses common direct pane delivery', t => {
   const f = setup(t);
-  delete f.doc.delivery;
-  f.doc.roles['role-b'].wait = { script: f.waitScript, mode: 'observe' };
+  delete f.doc.roles['role-b'].wait;
   f.write();
-
-  assert.throws(() => f.load(), /role-b:.*bg_notify=false.*delivery\.command/);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  f.put('role-b', 'common-direct.md');
+  assert.equal(deliver(registry, f.deps).roles['role-b'].delivered, 1);
+  assert.ok(f.state.paneCalls.some(call => call[1] === 'send-text' && call[2] === 'w1:p2'));
 });
 
 test('a retired root still wired into a unit, crontab or process is reported', t => {
@@ -720,11 +890,11 @@ test('watch --repair restarts a stopped delivery run and notifies once per perio
   f.put('role-b', '002-new.md');
   f.state.now = NOW + 400_000;
   assert.ok(codes(watch(registry, f.deps)).includes('delivery-stale:'));
-  assert.equal(f.state.runs.length, 0);
+  assert.equal(f.state.deliveries.length, 0);
   const repaired = watch(registry, f.deps, { repair: true });
   assert.deepEqual(codes(repaired), ['tool-fallback:role-b']);
   assert.deepEqual(repaired.actions.map(action => action.action), ['deliver']);
-  assert.equal(f.state.runs.filter(run => run[0] === '/opt/deliver').length, 1);
+  assert.equal(f.state.deliveries.length, 1);
 
   f.state.panes['w1:p1'] = [{ argv: ['bash'], pid: 10 }];
   const notices = () => f.state.runs.filter(run => run[0] === '/opt/notify');
@@ -760,12 +930,12 @@ test('sweep archives only delivered files past retention and deletes nothing', t
   assert.equal(fs.existsSync(path.join(f.root, 'wake-archive')), false);
   assert.deepEqual(sweep(registry, f.deps, { apply: true }).roles['role-a'], { moved: 1, undelivered: 1, recent: 1 });
   const stamp = new Date(NOW - 5 * DAY).toISOString().slice(0, 10).replaceAll('-', '');
-  assert.equal(fs.readFileSync(path.join(f.root, 'wake-archive', '_top', stamp, '001-old.md'), 'utf8'), 'wake\n');
+  assert.equal(fs.readFileSync(path.join(f.root, 'wake-archive', '_top', stamp, '001-old.md'), 'utf8'), 'wake role-a/001-old.md\n');
   assert.equal(fs.existsSync(path.join(f.root, 'wake-archive', 'role-b')), true);
   assert.deepEqual(fs.readdirSync(path.join(f.root, 'wake')).sort(), ['002-recent.md', '003-undelivered.md', 'done', 'role-b']);
   assert.equal(fs.existsSync(undelivered), true);
   deliver(registry, f.deps);
-  assert.deepEqual(f.state.runs.map(run => path.basename(run[2])), ['003-undelivered.md']);
+  assert.deepEqual(deliveryNames(f).slice(-1), ['003-undelivered.md']);
 });
 
 test('sweep keeps going past an archive name collision and past a role in trouble', t => {
