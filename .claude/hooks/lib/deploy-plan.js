@@ -723,10 +723,36 @@ function directCommandScriptPaths(command, base) {
 	return [...new Set(out)];
 }
 
+// Target evidence must be stable even when the live file has already changed.
+// A separately pinned before_source provides the original body in both states.
+function targetPins(plan, root) {
+	const base = root ? path.resolve(root) : ROOT;
+	const pins = new Map();
+	if (plan.file_pins === undefined) return pins;
+	if (plan.file_pins && !Array.isArray(plan.file_pins) && typeof plan.file_pins === "object" && ("role" in plan.file_pins || "path" in plan.file_pins)) throw new Error("target file_pins must be an array or targets array");
+	const declarations = Array.isArray(plan.file_pins) ? plan.file_pins : (plan.file_pins && typeof plan.file_pins === "object" && !Array.isArray(plan.file_pins) ? (plan.file_pins.targets === undefined ? [] : plan.file_pins.targets) : null);
+	if (!Array.isArray(declarations)) throw new Error("file_pins targets must be an array");
+	for (const pin of declarations) {
+		if (!pin || pin.role !== "target" || typeof pin.path !== "string" || !pin.path || typeof pin.before_source !== "string" || !pin.before_source || typeof pin.after_source !== "string" || !pin.after_source || !/^[a-f0-9]{64}$/i.test(pin.before || "") || !/^[a-f0-9]{64}$/i.test(pin.after || "")) throw new Error("invalid target file_pins entry");
+		const abs = path.resolve(base, pin.path);
+		if (pins.has(abs)) throw new Error(`duplicate target pin: ${pin.path}`);
+		const before = pin.before.toLowerCase(), after = pin.after.toLowerCase();
+		const read = (p) => { const f = path.resolve(base, p); if (!fs.statSync(f).isFile()) throw new Error(`not a file: ${p}`); return fs.readFileSync(f); };
+		const currentBody = read(pin.path), beforeBody = read(pin.before_source), afterBody = read(pin.after_source);
+		const current = sha256(currentBody);
+		if (current !== before && current !== after) throw new Error(`target sha256 mismatch: ${pin.path}`);
+		if (sha256(beforeBody) !== before || sha256(afterBody) !== after) throw new Error(`target source sha256 mismatch: ${pin.path}`);
+		pins.set(abs, { ...pin, before, after, current, beforeBody, afterBody });
+	}
+	return pins;
+}
+
 /** 계획서 소속 저장소 root 기준. 모든 단계와 선조치의 고정 파일을 검사한다. */
 function pinnedFileProblems(plan, root) {
 	const base = root ? path.resolve(root) : ROOT;
 	const problems = [];
+	let targets;
+	try { targets = targetPins(plan, base); } catch (e) { return [String(e.message)]; }
 	for (const entry of [...(Array.isArray(plan?.scenario) ? plan.scenario : []), ...(Array.isArray(plan?.incident?.actions) ? plan.incident.actions : [])]) {
 		if (!entry) continue;
 		const pinnedAbs = new Map();
@@ -736,7 +762,8 @@ function pinnedFileProblems(plan, root) {
 				try {
 					const abs = path.isAbsolute(file) ? path.resolve(file) : path.resolve(base, file);
 					const actual = sha256(fs.readFileSync(abs));
-					if (!/^[a-f0-9]{64}$/i.test(String(want)) || !fs.statSync(abs).isFile() || actual !== String(want).toLowerCase()) problems.push(`${entry.id}: 고정 파일 sha256 불일치: ${file}`);
+					const target = targets.get(abs);
+					if (!/^[a-f0-9]{64}$/i.test(String(want)) || !fs.statSync(abs).isFile() || (target ? ![target.before, target.after].includes(String(want).toLowerCase()) || ![target.before, target.after].includes(actual) : actual !== String(want).toLowerCase())) problems.push(`${entry.id}: 고정 파일 sha256 불일치: ${file}`);
 					else pinnedAbs.set(abs, actual);
 				} catch { problems.push(`${entry.id}: 고정 파일을 읽지 못함: ${file}`); }
 			}
@@ -864,19 +891,27 @@ function reviewInputEntries(planFile, root, opts = null) {
 		}
 	}
 	const pins = [];
+	let targets = new Map();
+	try { targets = targetPins(plan, base); } catch (e) { problems.push(String(e.message)); }
 	for (const entry of [...(Array.isArray(plan.scenario) ? plan.scenario : []), ...(Array.isArray(plan.incident?.actions) ? plan.incident.actions : [])]) {
 		if (!entry || !entry.files || typeof entry.files !== "object" || Array.isArray(entry.files)) continue;
 		for (const [f, want] of Object.entries(entry.files)) pins.push([entry.id, f, want]);
 	}
-	for (const [id, f, want] of [...new Map(pins.map((p) => [path.normalize(p[1]), p])).values()].sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))) {
-		if (seen.has(f)) continue;
-		seen.add(f);
+	for (const [id, f, want] of pins.sort((a, b) => (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0))) {
 		const abs = path.isAbsolute(f) ? f : path.join(base, f);
+		const target = targets.get(path.resolve(abs));
+		if (target) {
+			if (![target.before, target.after].includes(String(want).toLowerCase())) problems.push(`${id}: target pin mismatch: ${f}`);
+			continue;
+		}
 		let actual = null;
 		try { actual = sha256(fs.readFileSync(abs)); } catch { problems.push(`${id}: 고정 파일을 읽지 못함: ${f}`); continue; }
 		if (!/^[a-f0-9]{64}$/i.test(String(want)) || actual !== String(want).toLowerCase()) { problems.push(`${id}: 고정 파일 sha256 불일치: ${f}`); continue; }
+		if (seen.has(f)) continue;
+		seen.add(f);
 		entries.push({ file: f, sha256: actual });
 	}
+	for (const target of targets.values()) entries.push({ file: target.path, before: target.before, after: target.after });
 	for (const rel of REVIEW_EXECUTOR_FILES) {
 		try { entries.push({ file: rel, sha256: sha256(fs.readFileSync(path.join(ROOT, rel))) }); }
 		catch { problems.push(`실행기를 읽지 못함: ${rel}`); }
@@ -893,12 +928,20 @@ function reviewInputManifest(planFile, root, opts = null) {
 /** 단계·선조치의 files 에 고정한 파일(감싼 스크립트 등)의 글. 검수자가 명령 바깥 글만 보고 PASS 하지 않게 한다. */
 function pinnedFilesText(plan, root) {
 	const base = root ? path.resolve(root) : ROOT;
+	let targets;
+	try { targets = targetPins(plan, base); } catch (e) { return [`대상 파일 검사 실패: ${e.message}. PASS 하지 마십시오`]; }
 	const entries = [...(plan.scenario || []), ...((plan.incident && plan.incident.actions) || [])].filter((x) => x && x.files && typeof x.files === "object");
-	if (!entries.length) return [];
+	if (!entries.length && !targets.size) return [];
 	const L = ["고정 파일(명령이 읽거나 실행하는 파일, 훅이 sha 로 대조):"];
+	for (const target of targets.values()) {
+		for (const [label, digest, body] of [["before", target.before, target.beforeBody], ["after", target.after, target.afterBody]]) {
+			L.push(`- ${target.path} ${label} (sha ${digest}):`, "```", body.length > 200 * 1024 ? `${body.subarray(0, 200 * 1024).toString("utf8")}\n…(200KB 넘어 잘림: 잘린 파일은 FAIL)` : body.toString("utf8"), "```");
+		}
+	}
 	const shown = new Set();
 	for (const x of entries) {
 		for (const [p, want] of Object.entries(x.files)) {
+			if (targets.has(path.resolve(base, p))) continue;
 			const key = `${p}\0${String(want).toLowerCase()}`;
 			if (shown.has(key)) {
 				L.push(`- ${x.id} ${p} (sha ${want}): 위에 같은 sha 로 이미 실음`);
@@ -1465,9 +1508,14 @@ async function evaluate(ctx) {
 	const { canonicalTargetPath } = require("./deploy-readiness.js");
 	const pinned = new Map();
 	const pinnedCanonical = new Map();
+	let targets;
+	try { targets = targetPins(f.plan, fileBase); } catch (e) {
+		return { allow: false, audit: { event: "blocked-plan-file-unpinned", plan: rel }, reason: `대상 파일 검사 실패: ${e.message}` };
+	}
 	for (const [p, h] of Object.entries(entry.files || {})) {
 		const abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(fileBase, p);
-		const low = String(h).toLowerCase();
+		const target = targets.get(abs);
+		const low = target && [target.before, target.after].includes(String(h).toLowerCase()) ? target.current : String(h).toLowerCase();
 		pinned.set(abs, low);
 		pinnedCanonical.set(canonicalTargetPath(abs, fileBase), low);
 	}
@@ -2101,5 +2149,6 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 }
 
 module.exports = {
+	targetPins,
 	withStateLock, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
 };

@@ -1476,6 +1476,62 @@ function pinnedScriptFixture(t, { body = 'case "$1" in s1) az vm run-command inv
 	return { root, planDir, gatesDir, script, remote: remotePath, files, plan, services: real, assess, writeOps, bind };
 }
 
+test("실행 관문은 동일 영수증으로 대상 교체 전후를 검사한다", async (t) => {
+	const { root, stateDir } = makeWorkspace(t);
+	writeGateConfig(root);
+	const f = createValidPlan(root);
+	const before = fs.readFileSync(f.scriptAbs);
+	const after = Buffer.from("#!/bin/sh\necho replacement\n");
+	const beforeSource = path.join(root, "scripts/before-source");
+	const afterSource = path.join(root, "scripts/after-source");
+	fs.writeFileSync(beforeSource, before);
+	fs.writeFileSync(afterSource, after);
+	f.plan.file_pins = [{ path: f.scriptRel, role: "target", before: sha256(before), after: sha256(after), before_source: beforeSource, after_source: afterSource }];
+	f.plan.scenario[1].files = { [f.scriptRel]: sha256(before) };
+	fs.writeFileSync(f.planFile, JSON.stringify(f.plan, null, 2));
+	writePassingReviewReceipt(root, f.planFile);
+	const services = f.plan.services;
+	const run = async (command) => deployPlan.evaluate({
+		command, cwd: root, root, services, sessionId: "target-test", env: { ...process.env, DEPLOY_APPROVAL_STATE_DIR: stateDir },
+		fileRefs: () => [{ path: f.scriptAbs, sha: sha256(fs.readFileSync(f.scriptAbs)) }],
+		readiness: (binding) => {
+			const r = verifiedPlanBinding(binding, "", "plan", services, root);
+			return { ok: r.ok, problems: r.ok ? [] : [r.why], facts: [], readOnlyNoCode: true };
+		},
+	});
+	assert.equal((await run(f.step1Cmd)).allow, true);
+	fs.writeFileSync(f.scriptAbs, after);
+	assert.equal((await run(f.rollbackCmd)).allow, true);
+	fs.writeFileSync(f.scriptAbs, "third");
+	assert.equal((await run(f.rollbackCmd)).allow, false);
+	fs.writeFileSync(f.scriptAbs, after);
+	fs.writeFileSync(afterSource, "tampered");
+	assert.equal((await run(f.rollbackCmd)).allow, false);
+});
+
+test("대상 고정은 교체 및 복구 단계에서 전후 지문만 허용한다", (t) => {
+	const f = pinnedScriptFixture(t);
+	const before = fs.readFileSync(f.remote);
+	const after = Buffer.from("#!/bin/sh\necho replacement\n");
+	const beforeSource = path.join(f.planDir, "before-source");
+	const afterSource = path.join(f.planDir, "after-source");
+	fs.writeFileSync(beforeSource, before);
+	fs.writeFileSync(afterSource, after);
+	f.plan.file_pins = [{ path: f.remote, role: "target", before: sha256(before), after: sha256(after), before_source: beforeSource, after_source: afterSource }];
+	for (const id of ["s1", "r1"]) assert.equal(f.bind(id, "plan").ok, true);
+	fs.writeFileSync(f.remote, after);
+	for (const id of ["s1", "r1"]) assert.equal(f.bind(id, "plan").ok, true);
+	fs.writeFileSync(f.remote, "third");
+	assert.equal(f.bind("s1", "plan").ok, false);
+	fs.writeFileSync(f.remote, before);
+	fs.writeFileSync(afterSource, "tampered");
+	assert.equal(f.bind("r1", "plan").ok, false);
+	fs.writeFileSync(afterSource, after);
+	delete f.plan.file_pins;
+	fs.writeFileSync(f.remote, after);
+	assert.equal(f.bind("s1", "plan").ok, false);
+});
+
 test("계획 고정 대본: 준비 기록 없는 계획 승인으로는 지문이 맞으면 받고, 대본·files 지문이 바뀌면 막는다", (t) => {
 	const f = pinnedScriptFixture(t);
 	assert.deepEqual(f.services, [PIN_SERVICE]);
