@@ -270,3 +270,44 @@ test('repo development-method changes and scan() compatibility pass', () => {
   assert.ok(Array.isArray(guides) && guides.length > 0);
   assert.ok('rel' in guides[0] && 'missing' in guides[0] && 'newer' in guides[0]);
 });
+
+test('CI PR-merge range excludes unrelated base commits and ci.yml wires advisory --sync-check', () => {
+  withTempWorkspace({
+    'scripts/base.mjs': 'export const b = 1;\n'
+  }, (dir) => {
+    git(dir, ['init']);
+    git(dir, ['config', 'user.email', 'test@example.com']);
+    git(dir, ['config', 'user.name', 'Test']);
+    git(dir, ['add', '.']);
+    git(dir, ['commit', '-m', 'base init']);
+    const baseBranch = git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+
+    // Branch a clean PR that changes docs+code+test together.
+    git(dir, ['checkout', '-b', 'pr-feature']);
+    writeFiles(dir, {
+      'scripts/feat.mjs': 'export const f = 1;\n',
+      'scripts/feat.test.mjs': "import { f } from './feat.mjs';\nconsole.log(f);\n",
+      'docs/feat.md': '# Feat\nScript: `scripts/feat.mjs`.\n'
+    });
+    git(dir, ['add', '.']);
+    git(dir, ['commit', '-m', 'pr feature']);
+
+    // Advance base branch with an unrelated code-only commit; PR merge check must ignore it.
+    git(dir, ['checkout', baseBranch]);
+    writeFiles(dir, { 'scripts/base.mjs': 'export const b = 2;\n' });
+    git(dir, ['add', 'scripts/base.mjs']);
+    git(dir, ['commit', '-m', 'unrelated main commit']);
+
+    git(dir, ['merge', '--no-ff', 'pr-feature', '-m', 'merge pr']);
+    const res = runCli(['--sync-check', '--root', dir, '--range', 'HEAD^1..HEAD', '--json']);
+    assert.equal(res.status, 0, res.stderr || res.stdout);
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.ok, true);
+    assert.deepEqual(parsed.files, ['docs/feat.md', 'scripts/feat.mjs', 'scripts/feat.test.mjs']);
+  });
+
+  const ciYml = fs.readFileSync(path.join(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8');
+  assert.match(ciYml, /check-guide-freshness\.mjs --sync-check --range/);
+  assert.match(ciYml, /github\.event_name == 'pull_request'/);
+  assert.match(ciYml, /continue-on-error:\s*true/);
+});
