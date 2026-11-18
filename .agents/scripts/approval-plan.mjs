@@ -5,7 +5,7 @@
  *   template                         빈 양식(JSON) 출력
  *   check <plan>                     양식 칸·적대 리뷰 기록 점검, 명령별 sha 출력
  *   report <plan>                    승인자에게 올릴 보고문 출력(리뷰 통과 시)
- *   review <plan> --author <argon|codex|muse> [--out <file>] 차례(작성자 다음 모델) 1명 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json. 고정 planReview 가 유효하면 그 리뷰어를 먼저 쓰고, 한도 실패 때만 차례대로 넘어간다(넘긴 리뷰어는 skipped 로 남긴다)
+ *   review <plan> --author <argon|codex|muse|claude> [--out <file>] 차례(작성자 다음 모델) 1명 적대 리뷰(읽기 전용) → 결과 파일 + gates/deploy-plan-review.json. 고정 planReview 가 유효하면 그 리뷰어를 먼저 쓰고, 한도 실패 때만 차례대로 넘어간다(넘긴 리뷰어는 skipped 로 남긴다)
  *   review-prompt <plan>             리뷰 요청문만 출력
  *   preapprove <plan> --session <id>      사전승인 코드 발급(승인 아님: PLAN+전단계 코드, approval_mode 사전 계획만)
  *   step-ok <plan> <step> --evidence <file>   단계 성공 확인 증거 기록(gates/deploy-steps/<step>.json)
@@ -29,6 +29,7 @@ const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
 // 기동 시점 실행기 해시: 해시한 동일 바이트를 실행한다.
 const PINNED_CJS_EXECUTORS = [
 	".claude/hooks/lib/deploy-human-approval.js",
+	".claude/hooks/lib/gate-config-pin.js",
 	".claude/hooks/lib/deploy-plan.js",
 ];
 const preloadFlag = /(?:^|[\s"'])(?:--(?:require|import|(?:experimental-)?loader)(?=$|[\s="'])|-r)/;
@@ -45,10 +46,9 @@ for (const { requested, filename } of pinnedExecutors) {
 	}
 }
 const bootEntryAbs = (() => {
-	const fromArgv = process.argv[1] ? path.resolve(process.argv[1]) : null;
-	const fallback = fileURLToPath(import.meta.url);
-	try { return fs.realpathSync(fromArgv || fallback); }
-	catch { return path.resolve(fromArgv || fallback); }
+	const entry = fileURLToPath(import.meta.url);
+	try { return fs.realpathSync(entry); }
+	catch { return path.resolve(entry); }
 })();
 let BOOT_ENTRY_SHA = null;
 try { BOOT_ENTRY_SHA = sha256(fs.readFileSync(bootEntryAbs)); }
@@ -71,9 +71,10 @@ let lib, commandHash, statePath;
 			mod.filename = filename;
 			mod.paths = Module._nodeModulePaths(path.dirname(filename));
 			if (compiled.length) {
-				const dependency = compiled[0];
 				mod.require = function (request) {
-					return request === "./deploy-human-approval.js" ? dependency.exports : Module.prototype.require.call(this, request);
+					if (request === "./deploy-human-approval.js") return compiled[0].exports;
+					if (request === "./gate-config-pin.js" && compiled.length > 1) return compiled[1].exports;
+					return Module.prototype.require.call(this, request);
 				};
 			}
 			require.cache[filename] = mod;
@@ -82,7 +83,7 @@ let lib, commandHash, statePath;
 			mod.loaded = true;
 		}
 		({ commandHash, statePath } = compiled[0].exports);
-		lib = compiled[1].exports;
+		lib = compiled[2].exports;
 	} catch (error) {
 		for (const mod of compiled) delete require.cache[mod.filename];
 		throw error;
@@ -90,8 +91,6 @@ let lib, commandHash, statePath;
 }
 
 const MUSE = process.env.APPROVAL_PLAN_MUSE_BIN || "muse";
-const MODEL = "muse-spark-1.3";
-const EFFORT = "xhigh";
 
 function die(msg, code = 2) {
 	console.error(msg);
@@ -187,13 +186,14 @@ function loadPlan(p) {
 	return { abs, plan, gatesDir: path.dirname(abs), sha: sha256(fs.readFileSync(abs)), root };
 }
 
-function runMuse(prompt) {
+function runMuse(prompt, museCfg = lib.REVIEW_MODELS.muse) {
+	const validated = lib.validateReviewModelEntry("muse", museCfg);
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-"));
 	const file = path.join(dir, "prompt.txt");
 	fs.writeFileSync(file, prompt, { mode: 0o600 });
 	let res;
 	try {
-		res = spawnSync(MUSE, ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", MODEL, "--reasoning-effort", EFFORT, "--prompt-file", file], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 45 * 60 * 1000 });
+		res = spawnSync(MUSE, ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", validated.model, "--reasoning-effort", validated.effort, "--prompt-file", file], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, timeout: 45 * 60 * 1000 });
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
@@ -201,15 +201,15 @@ function runMuse(prompt) {
 	return String(res.stdout);
 }
 
-function execReviewer(bin, args, input = "", promptSha = "", model = "", cwd = ROOT) {
+function execReviewer(bin, args, input = "", promptSha = "", model = "", effort = "", cwd = ROOT, env = process.env) {
 	return new Promise((resolve) => {
 		const startedAt = new Date().toISOString();
 		let stdout = "", stderr = "", bytes = 0, finished = false, failed = "";
-		const child = spawn(bin, args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
+		const child = spawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
 		const finish = (status, error = "") => {
 			if (finished) return;
 			finished = true; clearTimeout(timer);
-			resolve({ body: stdout, stderr, receipt: { model, started_at: startedAt, ended_at: new Date().toISOString(), exit_code: status, prompt_sha256: promptSha }, error: failed || error || (status !== 0 ? `status ${status}` : !stdout.trim() ? "빈 출력" : "") });
+			resolve({ body: stdout, stderr, receipt: { model, effort, started_at: startedAt, ended_at: new Date().toISOString(), exit_code: status, prompt_sha256: promptSha }, error: failed || error || (status !== 0 ? `status ${status}` : !stdout.trim() ? "빈 출력" : "") });
 		};
 		const timer = setTimeout(() => { failed = "45분 실행 제한 초과"; child.kill("SIGKILL"); }, 45 * 60 * 1000);
 		child.on("error", () => finish(null, "실행 파일을 시작하지 못함"));
@@ -404,7 +404,7 @@ function reviewerSandboxArgs(promptDir, id, rootDir = ROOT) {
 	const root = fs.realpathSync(rootDir), cwd = fs.realpathSync(process.cwd());
 	const overlaps = (a, b) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
 	const home = fs.realpathSync(os.homedir());
-	const runtime = id === "argon" ? fs.realpathSync(path.join(home, ".gemini")) : null;
+	const runtime = id === "agy" ? fs.realpathSync(path.join(home, ".gemini")) : null;
 	if (runtime && (!fs.statSync(runtime).isDirectory() || !runtime.startsWith(home + path.sep) || [root, cwd].some(p => overlaps(p, runtime)))) throw new Error("reviewer home overlaps protected workspace");
 	const protectedDirs = new Set([root, cwd, fs.realpathSync(promptDir)]);
 	for (const state of new Set([statePath(process.env), lib.stateFile(process.env)])) {
@@ -434,17 +434,21 @@ function reviewerSandboxArgs(promptDir, id, rootDir = ROOT) {
 
 async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = null, planRoot = ROOT) {
 	let dir, failure;
-	let stage = "prompt-create";
+	let stage = "config-read";
 	const startedAt = Date.now();
 	try {
+		const models = lib.reviewModelsFor(planRoot);
+		stage = "prompt-create";
 		dir = fs.mkdtempSync(path.join(os.tmpdir(), "approval-plan-dual-"));
 		const file = path.join(dir, "prompt.txt");
 		fs.writeFileSync(file, prompt, { mode: 0o600 });
 		stage = "sandbox-prepare";
 		const bwrap = findBwrap();
-		if (ids.includes("codex") && !bwrap) throw new Error("codex 리뷰어: bwrap 읽기 전용 격리 없음");
-		if (isRecoveryMode(planRoot) && ids.some((id) => id === "argon" || id === "codex") && !bwrap) throw new Error("복구 모드: bwrap 읽기 전용 격리 없음");
-		const sandboxArgs = ids.some((id) => id === "argon" || id === "codex") && bwrap ? reviewerSandboxArgs(dir, ids.includes("argon") ? "argon" : "codex", planRoot) : null;
+		const configs = Object.fromEntries(ids.map((id) => [id, lib.validateReviewModelEntry(id, models[id])]));
+		const runners = ids.map((id) => configs[id].runner);
+		if (runners.some((runner) => runner === "codex" || runner === "claude") && !bwrap) throw new Error("리뷰어: bwrap 읽기 전용 격리 없음");
+		if (isRecoveryMode(planRoot) && runners.some((runner) => runner !== "muse") && !bwrap) throw new Error("복구 모드: bwrap 읽기 전용 격리 없음");
+		const sandboxArgs = runners.some((runner) => runner !== "muse") && bwrap ? reviewerSandboxArgs(dir, runners.includes("agy") ? "agy" : runners.includes("codex") ? "codex" : "claude", planRoot) : null;
 		const boundedRecovery = isRecoveryMode(planRoot) && Boolean(sandboxArgs);
 		stage = "snapshot-before";
 		const before = boundedRecovery ? null : readOnlySnapshot(Boolean(sandboxArgs), planRoot);
@@ -452,26 +456,32 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 		const beforeManifest = preManifest === undefined ? (() => { try { return lib.reviewInputManifest(abs, planRoot, roOpt); } catch { return null; } })() : preManifest;
 		stage = "reviewers";
 		const results = await Promise.all(ids.map(async (id) => {
-			const config = lib.REVIEW_MODELS[id];
+			const config = configs[id];
 			let bin, args, input = "";
-			if (id === "muse") {
+			if (config.runner === "muse") {
 				bin = MUSE;
 				args = ["exec", "--disable-approval", "--disable-sandbox", "--disable-write", "--disable-shell", "--no-session-log", "--model", config.model, "--reasoning-effort", config.effort, "--prompt-file", file];
-			} else if (id === "codex") {
+			} else if (config.runner === "codex") {
 				bin = process.env.APPROVAL_PLAN_CODEX_BIN || "codex";
 				args = ["exec", "-m", config.model, "-c", `model_reasoning_effort=${config.effort}`, "-s", "read-only", "--skip-git-repo-check", "--ephemeral", "-"];
+				input = prompt;
+			} else if (config.runner === "claude") {
+				bin = process.env.APPROVAL_PLAN_CLAUDE_BIN || "claude";
+				args = ["-p", "--model", config.model, "--effort", config.effort, "--setting-sources", ""];
 				input = prompt;
 			} else {
 				bin = process.env.APPROVAL_PLAN_ARGON_BIN || "agy";
 				args = ["--model", config.model, "--effort", config.effort, "--mode", "plan", "--sandbox", "--disable-slash-commands", "--output-format", "text"];
 				input = prompt;
 			}
-			let isolation = (id === "argon" || id === "codex") ? "snapshot-only" : "cli-read-only";
-			if ((id === "argon" || id === "codex") && bwrap) {
+			let isolation = config.runner !== "muse" ? "snapshot-only" : "cli-read-only";
+			if (config.runner !== "muse" && bwrap) {
 				args = [...sandboxArgs, "--", bin, ...args];
 				bin = bwrap; isolation = "bwrap-ro-bind";
 			}
-			return { id, ...config, isolation, ...await execReviewer(bin, args, input, sha256(prompt), config.model, planRoot) };
+			const env = { ...process.env };
+			if (config.runner === "claude") delete env.CLAUDE_CODE_EFFORT_LEVEL;
+			return { id, ...config, isolation, ...await execReviewer(bin, args, input, sha256(prompt), config.model, config.effort, planRoot, env) };
 		}));
 		stage = "manifest-after";
 		let afterManifest = null;
@@ -525,7 +535,8 @@ function reviewStatus(gatesDir, sha, writeFindings = false, root = ROOT) {
 	return r;
 }
 
-const [cmd, ...args] = process.argv.slice(2);
+export async function runApprovalPlan(argv = process.argv.slice(2)) {
+const [cmd, ...args] = argv;
 switch (cmd) {
 	case "template":
 		console.log(JSON.stringify({ ...lib.TEMPLATE, createdAt: new Date().toISOString() }, null, 2));
@@ -556,6 +567,8 @@ switch (cmd) {
 	}
 	case "review-prompt": {
 		const { plan, sha, root: planRoot } = loadPlan(args[0]);
+		try { lib.reviewModelsFor(planRoot); }
+		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
 		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
 		if (!roBind.ok) die(roBind.why, 1);
 		console.log(lib.reviewPrompt(plan, sha, planRoot, { readOnlyScripts: roBind.items }));
@@ -563,6 +576,8 @@ switch (cmd) {
 	}
 	case "review": {
 		const { abs, plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
+		try { lib.reviewModelsFor(planRoot); }
+		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
 		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
 		if (!roBind.ok) die(roBind.why, 1);
 		let early = null;
@@ -585,8 +600,8 @@ switch (cmd) {
 		}
 		if (bindProblems.length) die(bindProblems.join("\n"), 1);
 		const author = opt(args, "--author");
-		if (!lib.ROTATION.includes(author)) die("--author argon|codex|muse 가 필요합니다(차례 셋 중 계획서 author_model 과 같은 것)");
-		if (!Object.hasOwn(lib.REVIEW_MODELS, plan.author_model || "") || plan.author_model !== author) die("--author(argon|codex|muse) 와 계획서 author_model 이 다릅니다");
+		if (!lib.ROTATION.includes(author)) die("--author argon|codex|muse|claude 가 필요합니다(차례 작성자 중 계획서 author_model 과 같은 것)");
+		if (plan.author_model !== author) die("--author(argon|codex|muse|claude) 와 계획서 author_model 이 다릅니다");
 		const form = lib.formProblems(plan);
 		if (form.length) die(`양식 빈 칸 ${form.length}건 — 먼저 채우십시오\n${form.join("\n")}`, 1);
 		const warnings = typeof lib.formWarnings === "function" ? lib.formWarnings(plan) : [];
@@ -601,6 +616,10 @@ switch (cmd) {
 		let ids;
 		try { ids = lib.orderedReviewers(author, planRoot, reviewedAt); }
 		catch (error) { die(`리뷰 차례를 정하지 못함: ${error.message}`); }
+		const activeModels = lib.reviewModelsFor(planRoot);
+		if (ids.some((id) => lib.selfReview(author, id, activeModels))) die("작성자와 같은 모델은 리뷰할 수 없습니다", 1);
+		try { lib.reviewModelsFor(planRoot); }
+		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`); }
 		const parsed = path.parse(base);
 		const outputs = ids.map((id) => path.join(parsed.dir, `${parsed.name}-${id}${parsed.ext || ".md"}`));
 		for (const out of outputs) if (out === abs || fs.existsSync(out)) die("리뷰 결과 경로가 이미 있습니다. 새 --out 경로를 쓰십시오");
@@ -628,8 +647,8 @@ switch (cmd) {
 			const roOpt = { readOnlyScripts: roBind.items };
 			try {
 				const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt, planRoot);
-				if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first))) {
-					rec.skipped.push({ id: ids[0], reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
+				if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first)) && ids.length > 1) {
+					rec.skipped.push({ id: ids[0], model: first.model, effort: first.effort, reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
 					console.log(`한도 실패로 다음 차례 리뷰어로 넘어감: ${ids[0]} → ${ids[1]}`);
 					const [second] = await runReviewers([ids[1]], prompt, abs, early.digest, roOpt, planRoot);
 					actual = second; actualOutput = outputs[1];
@@ -673,6 +692,8 @@ switch (cmd) {
 	}
 	case "step-ok": {
 		const { plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
+		try { lib.reviewModelsFor(planRoot); }
+		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
 		const step = args[1];
 		if (!(plan.scenario || []).some((s) => s.id === step)) die(`단계 ${step} 가 계획서에 없습니다`);
 		const ev = opt(args, "--evidence");
@@ -687,12 +708,21 @@ switch (cmd) {
 		break;
 	}
 	case "judge": {
-		const { plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
+		const { abs, plan, gatesDir, sha, root: planRoot } = loadPlan(args[0]);
+		let museCfg;
+		try { museCfg = lib.reviewModelsFor(planRoot).muse; }
+		catch (error) { die(`리뷰 모델 설정을 읽지 못함: ${error.message}`, 1); }
+		if (!museCfg || (museCfg.runner && museCfg.runner !== "muse")) die("장애 판정자는 muse 실행기여야 합니다", 1);
+		const roBind = lib.planReadOnlyScriptsBinding(plan, planRoot);
+		if (!roBind.ok) die(roBind.why, 1);
+		let judgeManifest;
+		try { judgeManifest = lib.reviewInputManifest(abs, planRoot, { readOnlyScripts: roBind.items }); }
+		catch (error) { die(`판정 입력 목록(input manifest)을 읽지 못함: ${error.message}`, 1); }
 		const evidence = optAll(args, "--evidence");
 		const executor = opt(args, "--executor-session") || process.env.CLAUDE_SESSION_ID || "";
 		if (!executor) die("--executor-session <실행 세션 id> 가 필요합니다");
 		if (evidence.length === 0) die("--evidence <확인 결과·헬스·오류 로그 파일> 이 하나 이상 필요합니다");
-		const ev = evidence.map((p) => { const abs = path.resolve(p); const buf = fs.readFileSync(abs); return { path: abs, sha256: sha256(buf), text: buf.toString("utf8").slice(0, 20000) }; });
+		const ev = evidence.map((p) => { const evAbs = path.resolve(p); const buf = fs.readFileSync(evAbs); return { path: evAbs, sha256: sha256(buf), text: buf.toString("utf8").slice(0, 20000) }; });
 		const prompt = [
 			"당신은 운영 배포를 실행하는 세션과 다른, 독립 판정자입니다. 지금 상황이 '장애'인지 '개발'인지 판정하십시오.",
 			"장애(incident): 운영 사용자에게 지금 영향이 있거나 곧 생기며, 계획서의 장애 판단 기준에 해당한다. 계획서에 미리 적은 선조치를 바로 해야 한다.",
@@ -708,14 +738,23 @@ switch (cmd) {
 			"",
 			"출력 마지막 줄을 정확히 'VERDICT: incident' 또는 'VERDICT: development' 로 쓰고, 그 위에 근거를 3줄 이내로 적으십시오.",
 		].join("\n");
-		const raw = runMuse(prompt);
+		const raw = runMuse(prompt, museCfg);
+		let afterJudgeManifest = null;
+		try {
+			const planAfter = JSON.parse(fs.readFileSync(abs, "utf8"));
+			const afterRo = lib.planReadOnlyScriptsBinding(planAfter, planRoot);
+			if (afterRo.ok) afterJudgeManifest = lib.reviewInputManifest(abs, planRoot, { readOnlyScripts: afterRo.items });
+		} catch { afterJudgeManifest = null; }
+		if (!afterJudgeManifest || afterJudgeManifest !== judgeManifest) {
+			die("판정 중 계획서·설정·실행기가 바뀌어 판정 기록을 남기지 않음", 3);
+		}
 		const lastLine = raw.trim().split(/\r?\n/).filter((l) => l.trim()).pop() || "";
 		const m = lastLine.match(/^\s*VERDICT:\s*(incident|development)\s*$/i);
 		const verdict = m ? m[1].toLowerCase() : "development";
 		const judgeSession = `muse-judge-${crypto.randomUUID()}`;
 		const dir = path.join(gatesDir, "deploy-incident");
 		fs.mkdirSync(dir, { recursive: true });
-		const rec = { plan_sha256: sha, verdict, judge: { model: MODEL, effort: EFFORT, session: judgeSession }, executor_session: executor, evidence: ev.map(({ path: p, sha256: s }) => ({ path: p, sha256: s })), decidedAt: new Date().toISOString(), raw_output: raw.slice(-4000), raw_sha256: sha256(raw) };
+		const rec = { plan_sha256: sha, input_manifest_sha256: judgeManifest, verdict, judge: { model: museCfg.model, effort: museCfg.effort, session: judgeSession }, executor_session: executor, evidence: ev.map(({ path: p, sha256: s }) => ({ path: p, sha256: s })), decidedAt: new Date().toISOString(), raw_output: raw.slice(-4000), raw_sha256: sha256(raw) };
 		const file = path.join(dir, `${rec.decidedAt.replace(/[:.]/g, "-")}.json`);
 		fs.writeFileSync(file, `${JSON.stringify(rec, null, 2)}\n`);
 		console.log(`판정: ${verdict === "incident" ? "장애 — 계획서의 선조치만 실행하고 바로 보고" : "개발 — 선조치 불가, 멈추고 보고"}\n기록: ${path.relative(planRoot, file)}`);
@@ -724,3 +763,14 @@ switch (cmd) {
 	default:
 		die("사용: approval-plan.mjs template|check|report|review|review-prompt|preapprove|step-ok|judge (docs/guides/approval-plan-gate.md)");
 }
+
+}
+// An instance supplies the code-pinned approver identity and Discord details here.
+export async function runApprovedApprovalPlan(options, argv = process.argv.slice(2)) {
+	return lib.withGateConfig(options, () => runApprovalPlan(argv));
+}
+const invokedDirectly = (() => {
+	try { return !!process.argv[1] && fs.realpathSync(process.argv[1]) === bootEntryAbs; }
+	catch { return false; }
+})();
+if (invokedDirectly) await runApprovalPlan();

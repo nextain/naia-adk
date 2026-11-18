@@ -24,6 +24,8 @@ const { execFileSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const { AsyncLocalStorage } = require("async_hooks");
+const gateConfigPin = require("./gate-config-pin.js");
 const { humanTyped, commandHash, statePath } = require("./deploy-human-approval.js");
 
 const ROOT = path.resolve(__dirname, "../../..");
@@ -184,25 +186,71 @@ function riskAcceptanceActive(plan, now = Date.now()) {
 
 // 리뷰 배치: author muse → planReview 설정에 따라 argon 또는 codex 1명. 옛 author(sol|argon)의 2인 기록은 재리뷰까지만 구 기록으로 인정한다.
 const REVIEW_MODELS = Object.freeze({
-	sol: { model: "gpt-6.1-sol", effort: "high" },
-	muse: { model: "muse-spark-1.3", effort: "xhigh" },
-	argon: { model: "gemini-4-argon-medium", effort: "medium" },
-	codex: { model: "gpt-6.1-terra", effort: "high" },
+	sol: Object.freeze({ model: "gpt-6.1-sol", effort: "high" }),
+	muse: Object.freeze({ model: "muse-spark-1.3", effort: "xhigh" }),
+	argon: Object.freeze({ model: "gemini-4-argon-medium", effort: "medium" }),
+	codex: Object.freeze({ model: "gpt-6.1-terra", effort: "high" }),
 });
+// 승인 확인은 비동기이며 검증 함수들은 동기식이다. 검증 범위마다 확인된 스냅샷만 전달한다.
+const gateConfigContext = new AsyncLocalStorage();
+async function withGateConfig(options, fn) {
+	const root = path.resolve(options.root || ROOT);
+	const before = gateConfigPin.snapshotGateConfig(root);
+	const approved = before ? await gateConfigPin.approvedGateConfig({ ...options, root, discordConfirms }) : null;
+	const after = gateConfigPin.snapshotGateConfig(root);
+	const trusted = approved && before && after && before.hash === approved.hash && after.hash === approved.hash ? { root, hash: approved.hash, config: approved.config } : null;
+	return gateConfigContext.run(trusted, fn);
+}
+function trustedGateConfig(root) {
+	const ctx = gateConfigContext.getStore();
+	if (!ctx || ctx.root !== path.resolve(root)) return null;
+	const current = gateConfigPin.snapshotGateConfig(root);
+	return current && current.hash === ctx.hash ? ctx.config : null;
+}
+const REVIEW_MODEL_POLICY = Object.freeze({ efforts: Object.freeze(["medium", "high", "xhigh", "max"]), runners: Object.freeze(["agy", "muse", "codex", "claude"]) });
+const DEFAULT_RUNNERS = Object.freeze({ sol: "codex", muse: "muse", argon: "agy", codex: "codex" });
+function validateReviewModelEntry(id, v) {
+	if (typeof id !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(id)) throw new Error(`review_models.${id}: 리뷰어 id 오류`);
+	if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error(`review_models.${id}: 객체 필요`);
+	for (const k of Object.keys(v)) if (!["model", "effort", "runner", "_comment"].includes(k)) throw new Error(`review_models.${id}: 알 수 없는 칸 ${k}`);
+	if (typeof v.model !== "string" || !v.model || v.model.length > 512 || v.model.startsWith("-") || /[\x00-\x1f\x7f]/.test(v.model)) throw new Error(`review_models.${id}.model: 정확한 모델 이름 필요`);
+	if (!REVIEW_MODEL_POLICY.efforts.includes(v.effort)) throw new Error(`review_models.${id}.effort: medium 이상 필요`);
+	const runner = v.runner === undefined ? DEFAULT_RUNNERS[id] : v.runner;
+	if (!REVIEW_MODEL_POLICY.runners.includes(runner)) throw new Error(`review_models.${id}.runner: 실행기 오류`);
+	return Object.freeze({ model: v.model, effort: v.effort, runner });
+}
+function canonicalReviewModels(models) {
+	return Object.keys(models).sort().map((id) => ({ id, model: models[id].model, effort: models[id].effort, runner: models[id].runner || DEFAULT_RUNNERS[id] }));
+}
+function resolveReviewModels(config) {
+	const cfg = config?.review_models;
+	if (cfg === undefined) return REVIEW_MODELS;
+	if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) throw new Error("review_models 형식이 틀림(객체여야 함)");
+	const out = {};
+	for (const [id, v] of Object.entries(cfg)) {
+		if (id === "_comment") continue;
+		if (!v || !Object.hasOwn(v, "runner")) throw new Error(`review_models.${id}.runner 필수`);
+		out[id] = validateReviewModelEntry(id, v);
+	}
+	if (!Object.keys(out).length) throw new Error("review_models 에 리뷰어가 없음");
+	if (new Set(Object.values(out).map((m) => m.model)).size !== Object.keys(out).length) throw new Error("review_models 의 모델 이름이 서로 겹침");
+	return Object.freeze(out);
+}
+function reviewModelsFor(root = ROOT) { return resolveReviewModels(trustedGateConfig(root)); }
 const AUTHOR_IDS = ["sol", "muse", "argon"];
 // 리뷰 차례(번갈아): ROTATION 순서대로 작성자 다음 모델이 먼저 리뷰하고, 한도에 걸리면 나머지 하나로 넘어간다. 작성자 자신은 절대 리뷰하지 않는다.
-const ROTATION = Object.freeze(["argon", "codex", "muse"]);
-// 새 모양 작성자(차례 셋)와 옛 모양 작성자(sol 포함)를 함께 받는다. 옛 sol·argon 2인 기록은 그대로 읽는다.
-const AUTHOR_MODELS = Object.freeze(["sol", "muse", "argon", "codex"]);
+const ROTATION = Object.freeze(["argon", "codex", "muse", "claude"]);
+// 차례 작성자와 옛 모양 작성자(sol 포함)를 함께 받는다. 옛 sol·argon 2인 기록은 그대로 읽는다.
+const AUTHOR_MODELS = Object.freeze(["sol", "muse", "argon", "codex", "claude"]);
+function selfReview(author, id, models) {
+	return id === author || (author === "claude" && models[id]?.runner === "claude") || (models[id]?.model && (models[id].model === models[author]?.model || models[id].model === REVIEW_MODELS[author]?.model));
+}
 // 한도 실패 판별식: 종료 코드가 0이 아니고 실행기 진단(stderr·실행 오류)이 이 식과 맞을 때만 다음 후보로 넘어간다. 리뷰 본문(stdout)은 계획서 낱말을 되풀이할 수 있어 보지 않는다.
 const LIMIT_RE = /rate.?limit|quota|usage limit|\b429\b|RESOURCE_EXHAUSTED|\bexhausted\b/i;
 function reviewerIdsFor(author, root = ROOT, at = Date.now()) {
 	if (author !== "muse") return AUTHOR_IDS.filter((id) => id !== author);
-	const file = path.join(root, ".claude/deploy/config.json");
 	const started = typeof at === "number" ? at : Date.parse(at);
-	let config;
-	try { config = JSON.parse(fs.readFileSync(file, "utf8"))?.planReview; }
-	catch (error) { if (error.code === "ENOENT") return ["argon"]; throw error; }
+	const config = trustedGateConfig(root)?.planReview;
 	const until = config?.until;
 	const date = typeof until === "string" ? /^(\d{4})-(\d{2})-(\d{2})T/.exec(until) : null;
 	const validDate = date && Number(date[2]) >= 1 && Number(date[2]) <= 12 && Number(date[3]) >= 1 && Number(date[3]) <= new Date(Date.UTC(Number(date[1]), Number(date[2]), 0)).getUTCDate();
@@ -214,37 +262,44 @@ function reviewerIdsFor(author, root = ROOT, at = Date.now()) {
 }
 
 // 차례상 후보 순서(작성자 제외): 작성자 다음 모델이 먼저, 그 다음이 나머지 하나다. 옛 reviewerIdsFor 는 손대지 않고 새 review 흐름만 이 순서를 쓴다.
-function rotationOrder(author) {
-	const i = ROTATION.indexOf(author);
-	if (i < 0) return [];
-	return [ROTATION[(i + 1) % ROTATION.length], ROTATION[(i + 2) % ROTATION.length]];
+function rotationOrderForModels(author, models) {
+	const reviewRotation = ROTATION.slice(0, 3);
+	if (!ROTATION.includes(author)) return [];
+	const i = reviewRotation.indexOf(author);
+	const preferred = i < 0 ? reviewRotation : [reviewRotation[(i + 1) % 3], reviewRotation[(i + 2) % 3]];
+	const extras = Object.keys(models).filter((id) => !reviewRotation.includes(id) && id !== "sol" && id !== author).sort();
+	return [...preferred.filter((id) => Object.hasOwn(models, id) && !selfReview(author, id, models)), ...extras.filter((id) => !selfReview(author, id, models))].slice(0, 2);
 }
 
+function rotationOrder(author, root = ROOT) { return rotationOrderForModels(author, reviewModelsFor(root)); }
+
 // 차례 후보 둘(먼저 쓸 리뷰어, 한도 실패 때 넘어갈 리뷰어). 고정 planReview 가 기한 안이고 작성자와 다르면 맨 앞에 두고, 지났거나 until 이 없거나 작성자 자신이면 차례만 쓴다. 설정 JSON 깨짐·형식 틀림(차례 밖 리뷰어, 읽을 수 없는 until)은 던진다.
-function orderedReviewers(author, root = ROOT, at = Date.now()) {
-	if (!ROTATION.includes(author)) return reviewerIdsFor(author, root, at);
-	const base = rotationOrder(author);
-	const file = path.join(root, ".claude/deploy/config.json");
+function orderedReviewersForConfig(author, configData, at = Date.now()) {
+	const models = resolveReviewModels(configData);
+	const base = rotationOrderForModels(author, models);
+	if (!base.length) throw new Error("작성자 외 승인된 리뷰어 없음");
 	const started = typeof at === "number" ? at : Date.parse(at);
 	if (!Number.isFinite(started)) throw new Error("리뷰 시각을 읽지 못함");
-	let config;
-	try { config = JSON.parse(fs.readFileSync(file, "utf8"))?.planReview; }
-	catch (error) { if (error.code === "ENOENT") return base; throw error; }
+	const config = configData?.planReview;
 	if (config === undefined) return base;
 	if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("planReview 형식이 틀림(객체여야 함)");
-	if (!ROTATION.includes(config.reviewer)) throw new Error("planReview.reviewer 는 argon·codex·muse 중 하나여야 함");
+	if (!Object.hasOwn(models, config.reviewer) || config.reviewer === "sol") throw new Error("planReview.reviewer 는 승인된 리뷰어여야 함");
 	const until = config.until;
 	if (until === undefined) return base;
 	const date = typeof until === "string" ? /^(\d{4})-(\d{2})-(\d{2})T/.exec(until) : null;
 	const validDate = date && Number(date[2]) >= 1 && Number(date[2]) <= 12 && Number(date[3]) >= 1 && Number(date[3]) <= new Date(Date.UTC(Number(date[1]), Number(date[2]), 0)).getUTCDate();
 	if (!validDate || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(until) || !Number.isFinite(Date.parse(until))) throw new Error("planReview.until 형식이 틀림(ISO 시각)");
-	if (started >= Date.parse(until) || config.reviewer === author) return base;
+	if (started >= Date.parse(until) || selfReview(author, config.reviewer, models)) return base;
 	if (config.reviewer === base[0]) return base;
 	return [config.reviewer, ...base.filter((id) => id !== config.reviewer)];
 }
 
-// 한도 실패인가: 종료 코드가 0이 아니고 실행기 진단(stderr·실행 오류문)이 LIMIT_RE 와 맞을 때만 참이다.
-// 신호로 끝난 실행(종료 코드 null)은 한도로 보지 않는다. 관문의 skipped exit_code 검사(0 아닌 정수)와 같은 기준이다.
+function orderedReviewers(author, root = ROOT, at = Date.now()) {
+	if (!ROTATION.includes(author)) return reviewerIdsFor(author, root, at);
+	return orderedReviewersForConfig(author, trustedGateConfig(root), at);
+}
+
+// 한도 실패는 0이 아닌 정수 종료 코드와 실행기 진단으로만 판별한다.
 function isLimitFailure(exitCode, text) {
 	return Number.isInteger(exitCode) && exitCode !== 0 && LIMIT_RE.test(String(text || ""));
 }
@@ -283,7 +338,7 @@ function formProblems(plan) {
 	const p = [];
 	if (!plan || typeof plan !== "object") return ["계획서를 JSON 으로 읽지 못함"];
 	if (plan.schema !== "deploy-plan/v1") p.push('schema 가 "deploy-plan/v1" 이 아님');
-	if (!AUTHOR_MODELS.includes(plan.author_model)) p.push("author_model(sol|muse|argon|codex) 필수");
+	if (!AUTHOR_MODELS.includes(plan.author_model)) p.push("author_model(sol|muse|argon|codex|claude) 필수");
 	p.push(...riskAcceptanceProblems(plan));
 	if (plan.approval_mode !== undefined && plan.approval_mode !== "preapprove_steps") p.push('approval_mode 는 "preapprove_steps" 만 쓸 수 있음');
 	if (!str(plan.planId, 3)) p.push("planId(계획 이름) 없음");
@@ -841,6 +896,7 @@ const REVIEW_EXECUTOR_FILES = [
 	".agents/scripts/approval-plan.mjs",
 	".claude/hooks/lib/deploy-plan.js",
 	".claude/hooks/lib/deploy-human-approval.js",
+	".claude/hooks/lib/gate-config-pin.js",
 ];
 /**
  * 계획서 소속 저장소 root 기준으로 항목을 읽는다. root 미지정 시 planFile에서 역산.
@@ -856,6 +912,13 @@ function reviewInputEntries(planFile, root, opts = null) {
 	const entries = [{ file: "\0plan", sha256: planSha256 }];
 	const problems = [];
 	const seen = new Set(["\0plan"]);
+	let resolvedModels = null;
+	try { resolvedModels = reviewModelsFor(base); }
+	catch (error) { problems.push(`review_models 설정을 읽지 못함: ${error.message}`); }
+	if (resolvedModels) {
+		seen.add("\0review_models");
+		entries.push({ file: "\0review_models", sha256: sha256(JSON.stringify(canonicalReviewModels(resolvedModels))) });
+	}
 	if (opts && Array.isArray(opts.readOnlyScripts)) {
 		const canonicalRo = canonicalReadOnlyBinding(opts.readOnlyScripts);
 		if (canonicalRo.length) {
@@ -965,6 +1028,11 @@ function reviewBodyProblems(text, sha, acceptSecurity = false, opts = null) {
 /** 리뷰 결과의 무결성·대상·작성자 분리·열 기준을 모두 확인한다. 새 모양(rotation:true)은 차례 리뷰어 1명, 옛 모양은 예전 구성(muse→argon 또는 codex 1명, sol·argon→2명)과 다르면 거절한다. */
 function reviewProblems(gatesDir, sha, root) {
 	const base = root ? path.resolve(root) : resolveRepoRoot(gatesDir);
+	let MODELS;
+	try { MODELS = reviewModelsFor(base); }
+	catch (error) {
+		return { ok: false, problems: [`review_models 설정을 읽지 못함: ${error.message}`], reviewers: [], summary: [] };
+	}
 	const rec = readJson(path.join(gatesDir, REVIEW_FILE));
 	const plan = readJson(path.join(gatesDir, PLAN_FILE));
 	const problems = [];
@@ -974,13 +1042,13 @@ function reviewProblems(gatesDir, sha, root) {
 			const author = rec?.author_model || plan?.author_model;
 			if (AUTHOR_IDS.includes(author)) {
 				for (const id of (author === "muse" ? [] : reviewerIdsFor(author))) {
-					if (!reviewers.some((r) => r.id === id)) reviewers.push({ id, ...REVIEW_MODELS[id], ok: false, summary: [], openFindings: null, body: "", problems: ["리뷰어 결과 없음"] });
+					if (!reviewers.some((r) => r.id === id)) reviewers.push({ id, ...MODELS[id], ok: false, summary: [], openFindings: null, body: "", problems: ["리뷰어 결과 없음"] });
 				}
 			}
 		}
 		return { ok: problems.length === 0, problems, reviewers, summary: reviewers.flatMap((r) => r.summary.map((s) => ({ ...s, reviewer: r.id }))) };
 	};
-	if (!plan || !AUTHOR_MODELS.includes(plan.author_model)) problems.push("계획서 author_model(sol|muse|argon|codex) 필수");
+	if (!plan || !AUTHOR_MODELS.includes(plan.author_model)) problems.push("계획서 author_model(sol|muse|argon|codex|claude) 필수");
 	if (plan) problems.push(...riskAcceptanceProblems(plan));
 	if (plan?.risk_acceptance !== undefined && riskAcceptanceProblems(plan).length === 0 && !riskAcceptanceActive(plan)) problems.push("risk_acceptance 끝남(expires_at 지남)");
 	const acceptSecurity = riskAcceptanceActive(plan);
@@ -1006,7 +1074,7 @@ function reviewProblems(gatesDir, sha, root) {
 		if (!times.every((t) => Number.isFinite(t) && t < cutoff)) problems.push(`옛 모양 리뷰 기록(rotation 칸 없음)은 ${LEGACY_REVIEW_CUTOFF} 앞선 것만 받음(reviewedAt·영수증 시작 시각). 차례 리뷰로 다시 받을 것`);
 	}
 	if (isRotationRecord(rec)) {
-		if (!ROTATION.includes(rec.author_model)) problems.push("차례 기록(rotation:true)의 작성자는 argon·codex·muse 중 하나여야 함");
+		if (!ROTATION.includes(rec.author_model)) problems.push("차례 기록(rotation:true)의 작성자는 argon·codex·muse·claude 중 하나여야 함");
 		if (!Array.isArray(rec.reviewers) || rec.reviewers.length !== 1) problems.push("차례 기록(rotation:true)은 리뷰어 1명의 기록이 필요함");
 		// 차례 대조: 리뷰 시각의 차례(고정 설정 포함)에서 skipped 는 앞에서부터 건너뛴 후보 그대로, 실제 리뷰어는 그 다음 후보여야 한다. 한도 실패 없이 뒤 후보를 쓰거나 모순된 skipped 는 막는다.
 		// 차례를 다시 만들 시각(reviewedAt)은 실제 리뷰 시작보다 늦을 수 없고, 90분보다 앞설 수 없다(첫 후보 45분 제한 + 준비 여유). 시각을 미래로 옮겨 고정 리뷰어를 피하는 길을 막는다.
@@ -1022,13 +1090,20 @@ function reviewProblems(gatesDir, sha, root) {
 			if (rec.skipped.length > 1) problems.push("차례 기록의 skipped 는 최대 1개여야 함");
 			for (const [i, s] of rec.skipped.entries()) {
 				if (!s || typeof s !== "object") { problems.push(`차례 기록의 skipped[${i}] 모양이 틀림`); continue; }
-				if (!ROTATION.includes(s.id)) problems.push(`차례 기록의 skipped[${i}] id 는 차례 셋 안이어야 함`);
+				if (!MODELS[s.id] || s.id === "sol") problems.push(`차례 기록의 skipped[${i}] id 는 승인된 리뷰어여야 함`);
 				if (s.id === rec.author_model) problems.push(`차례 기록의 skipped[${i}] 가 작성자와 같음`);
 				if (s.reason !== "limit") problems.push(`차례 기록의 skipped[${i}] reason 은 "limit" 이어야 함`);
 				if (!Number.isInteger(s.exit_code) || s.exit_code === 0) problems.push(`차례 기록의 skipped[${i}] exit_code 는 0이 아닌 정수여야 함`);
 				if (order && s.id !== order[i]) problems.push(`차례 기록의 skipped[${i}] 가 차례(${order[i]})와 다름`);
+				if (MODELS[s.id]) {
+					const skippedModel = s.model ?? REVIEW_MODELS[s.id]?.model;
+					const skippedEffort = s.effort ?? REVIEW_MODELS[s.id]?.effort;
+					if (skippedModel !== MODELS[s.id].model || skippedEffort !== MODELS[s.id].effort) {
+						problems.push(`차례 기록의 skipped[${i}](${s.id}) 모델·강도가 지금 설정(${MODELS[s.id].model}/${MODELS[s.id].effort})과 다름`);
+					}
+				}
 			}
-			const reviewer = Array.isArray(rec.reviewers) && rec.reviewers.length === 1 ? Object.keys(REVIEW_MODELS).find((k) => REVIEW_MODELS[k].model === rec.reviewers[0]?.model) : undefined;
+			const reviewer = Array.isArray(rec.reviewers) && rec.reviewers.length === 1 ? Object.keys(MODELS).find((k) => MODELS[k].model === rec.reviewers[0]?.model) : undefined;
 			if (order && reviewer !== undefined && reviewer !== order[rec.skipped.length]) problems.push(`차례 기록의 리뷰어가 차례(${order[rec.skipped.length] ?? "없음"})와 다름`);
 		}
 	} else if (rec.author_model === "codex") {
@@ -1041,21 +1116,22 @@ function reviewProblems(gatesDir, sha, root) {
 	if (entries.length === 2 && entries[0]?.result === entries[1]?.result) problems.push("리뷰어 결과 파일이 서로 같음");
 	const expected = (isRotationRecord(rec) || rec.author_model === "muse" || rec.author_model === "codex") ? [] : reviewerIdsFor(rec.author_model);
 	for (const id of expected) {
-		const config = REVIEW_MODELS[id];
+		const config = MODELS[id];
+		if (!config) { problems.push(`[${id}] 승인된 리뷰어 없음`); continue; }
 		const matches = entries.filter((r) => r && r.model === config.model);
 		if (matches.length !== 1) problems.push(`[${id}] 리뷰어 기록 누락 또는 중복`);
 	}
 	const resultIdentities = new Set();
 	const bodyHashes = new Set();
 	for (const [i, r] of entries.entries()) {
-		const id = Object.keys(REVIEW_MODELS).find((k) => REVIEW_MODELS[k].model === r?.model) || `unknown-${i}`;
+		const id = Object.keys(MODELS).find((k) => MODELS[k].model === r?.model) || `unknown-${i}`;
 		const own = [];
 		if (r?.id !== undefined && r.id !== id) own.push("리뷰어 id 와 모델이 다름");
-		if (!REVIEW_MODELS[id]) own.push("허용되지 않은 모델");
-		else if (isRotationRecord(rec) && !ROTATION.includes(id)) own.push("허용되지 않은 모델");
+		if (!MODELS[id]) own.push("허용되지 않은 모델");
+		else if (isRotationRecord(rec) && id === "sol") own.push("허용되지 않은 모델");
 		else if (!isRotationRecord(rec) && rec.author_model === "muse" && !["argon", "codex"].includes(id)) own.push("허용되지 않은 모델");
-		else if (r.effort !== REVIEW_MODELS[id].effort) own.push("리뷰어 추론 강도가 다름");
-		if (id === rec.author_model || id === plan?.author_model) own.push("작성자와 같은 모델이 리뷰함");
+		else if (r.effort !== MODELS[id].effort) own.push("리뷰어 추론 강도가 다름");
+		if (selfReview(plan?.author_model, id, MODELS) || id === rec.author_model) own.push("작성자와 같은 모델이 리뷰함");
 		if (entries.filter((x) => x?.model === r?.model).length !== 1) own.push("리뷰어 모델 기록 중복");
 		if (r?.target_sha256 !== sha) own.push("리뷰어 target_sha256 이 지금 계획서와 다름");
 		if (r?.execution_error) own.push("리뷰어 실행 실패: " + r.execution_error);
@@ -1078,7 +1154,7 @@ function reviewProblems(gatesDir, sha, root) {
 			own.push(...parsed.problems);
 			if (!parsed.prompt_sha256 || parsed.prompt_sha256 !== rec.prompt_sha256 || parsed.prompt_sha256 !== promptSha) own.push("결과 prompt_sha256 이 기록 또는 현재 요청문과 다름");
 			const receipt = r.receipt;
-			if (!receipt || receipt.model !== r.model || receipt.prompt_sha256 !== promptSha || receipt.exit_code !== 0 || !Number.isFinite(Date.parse(receipt.started_at)) || !Number.isFinite(Date.parse(receipt.ended_at)) || Date.parse(receipt.started_at) > Date.parse(receipt.ended_at) || receipt.stdout_sha256 !== sha256(parsed.body)) own.push("리뷰어 실행 영수증(모델·시작·끝·종료 코드·요청문·본문 해시) 불일치");
+			if (!receipt || receipt.model !== r.model || receipt.effort !== r.effort || receipt.prompt_sha256 !== promptSha || receipt.exit_code !== 0 || !Number.isFinite(Date.parse(receipt.started_at)) || !Number.isFinite(Date.parse(receipt.ended_at)) || Date.parse(receipt.started_at) > Date.parse(receipt.ended_at) || receipt.stdout_sha256 !== sha256(parsed.body)) own.push("리뷰어 실행 영수증(모델·강도·시작·끝·종료 코드·요청문·본문 해시) 불일치");
 			// 승인에 쓰는 영수증의 manifest는 필수다. 없거나 현재 값과 다르면 승인 불가(옛 기록은 재리뷰 필요).
 			let current = null;
 			try { current = reviewInputManifest(path.join(gatesDir, PLAN_FILE), base, roOpt); } catch { current = null; }
@@ -1164,7 +1240,7 @@ const SNOWFLAKE = /^\d{17,20}$/;
  * 승인자 본인 디스코드 글에 code 가 있는가. 메시지는 AI 가 준 파일이 아니라 디스코드 REST 에서 직접 받는다.
  * 작성자 번호 = approverId(인스턴스 설정값), 봇·웹훅·앱 글 불인정, 글 시각은 코드 발급 뒤.
  */
-async function discordConfirms({ code, sinceIso, refs, approverId, expectedApproverId, token, fetchImpl = globalThis.fetch }) {
+async function discordConfirms({ code, sinceIso, refs, approverId, expectedApproverId, token, fetchImpl = globalThis.fetch, checkTimestamp = true }) {
 	const configuredId = expectedApproverId !== undefined ? expectedApproverId : approverId;
 	if (!SNOWFLAKE.test(String(approverId || "")) || !SNOWFLAKE.test(String(configuredId || ""))) {
 		return { ok: false, why: "approver-id-unset" };
@@ -1190,7 +1266,7 @@ async function discordConfirms({ code, sinceIso, refs, approverId, expectedAppro
 		if (String(a.id || "") !== String(approverId) || a.bot === true || a.system === true || m.webhook_id || m.application_id) continue;
 		if (!String(m.content || "").includes(code)) continue;
 		const at = Date.parse(m.timestamp || "");
-		if (!Number.isFinite(at) || at < since) continue;
+		if (checkTimestamp && (!Number.isFinite(at) || at < since)) continue;
 		return { ok: true, at: m.timestamp, via: `discord:${r.channelId}/${r.messageId}` };
 	}
 	return { ok: false, why: "no-discord-confirmation" };
@@ -1261,8 +1337,21 @@ function stepSuccessSummary(gatesDir, stepId) {
 	}
 }
 
-/** 독립 장애 판정 기록. 판정자 세션은 실행 세션과 달라야 한다. */
-function incidentVerdict(gatesDir, sha, sessionId, now = Date.now()) {
+/** 독립 장애 판정 기록. 판정자 세션은 실행 세션과 달라야 하며, 판정 모델·강도·manifest 가 지금 설정과 맞아야 한다. */
+function incidentVerdict(gatesDir, sha, sessionId, now = Date.now(), root) {
+	const base = root ? path.resolve(root) : resolveRepoRoot(gatesDir);
+	let museCfg;
+	try { museCfg = reviewModelsFor(base).muse; }
+	catch (error) {
+		return { ok: false, why: `review_models 설정을 읽지 못함: ${error.message}` };
+	}
+	if (!museCfg || (museCfg.runner && museCfg.runner !== "muse")) return { ok: false, why: "장애 판정자는 muse 실행기여야 함" };
+	let currentManifest = null;
+	try {
+		const plan = readJson(path.join(gatesDir, PLAN_FILE));
+		const roBind = plan ? planReadOnlyScriptsBinding(plan, base) : { ok: false, items: [] };
+		if (roBind.ok) currentManifest = reviewInputManifest(path.join(gatesDir, PLAN_FILE), base, { readOnlyScripts: roBind.items });
+	} catch { currentManifest = null; }
 	const dir = path.join(gatesDir, "deploy-incident");
 	let files = [];
 	try {
@@ -1279,6 +1368,8 @@ function incidentVerdict(gatesDir, sha, sessionId, now = Date.now()) {
 		if (!Number.isFinite(at) || now - at > INCIDENT_VERDICT_TTL_MS || at - now > 60 * 1000) { last = `판정 기록 ${f} 이 30분보다 오래됨`; continue; }
 		const judge = r.judge || {};
 		if (!str(judge.session, 3) || judge.session === sessionId || judge.session === r.executor_session) { last = `판정 기록 ${f} 의 판정자 세션이 비었거나 실행 세션과 같음`; continue; }
+		if (judge.model !== museCfg.model || judge.effort !== museCfg.effort) { last = `판정 기록 ${f} 의 판정자 모델·강도(${judge.model || "없음"}/${judge.effort || "없음"})가 지금 설정(${museCfg.model}/${museCfg.effort})과 다름`; continue; }
+		if (typeof r.input_manifest_sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(r.input_manifest_sha256) || !currentManifest || r.input_manifest_sha256.toLowerCase() !== currentManifest) { last = `판정 기록 ${f} 의 input_manifest_sha256 이 없거나 지금 설정·계획서와 다름`; continue; }
 		if (r.executor_session !== sessionId) { last = `판정 기록 ${f} 의 실행 세션(${r.executor_session || "없음"})이 지금 세션과 다름`; continue; }
 		const ev = Array.isArray(r.evidence) ? r.evidence : [];
 		if (ev.length === 0 || ev.some((e) => { try { return sha256(fs.readFileSync(e.path)) !== e.sha256; } catch { return true; } })) { last = `판정 기록 ${f} 의 증거 파일이 없거나 sha256 이 다름`; continue; }
@@ -1501,7 +1592,7 @@ async function evaluate(ctx) {
 
 	// 배포 준비 기록(gates/deploy.json 및 인스턴스 설정 config/deploy-gate.json)은 승인 요청 전에 맞아야 한다.
 	// 독립 판정된 장애 선조치만 뺀다.
-	const verdictEarly = f.action ? incidentVerdict(f.gatesDir, f.sha, ctx.sessionId, now) : { ok: false };
+	const verdictEarly = f.action ? incidentVerdict(f.gatesDir, f.sha, ctx.sessionId, now, ctx.root) : { ok: false };
 	let facts = [];
 	let readOnlyNoCode = false;
 	if (f.step && !verdictEarly.ok && typeof ctx.readiness === "function") {
@@ -1573,7 +1664,7 @@ async function approvalFlow({ ctx, env, now, h, f, rel, review, factLines, hostN
 
 	// 장애 선조치: 계획 승인 + 독립 판정
 	if (f.action) {
-		const v = verdictEarly.ok ? verdictEarly : incidentVerdict(f.gatesDir, f.sha, ctx.sessionId, now);
+		const v = verdictEarly.ok ? verdictEarly : incidentVerdict(f.gatesDir, f.sha, ctx.sessionId, now, ctx.root);
 		if (v.ok) {
 			state.incidents.push({ planSha: f.sha, plan: rel, action: f.action.id, command_sha256: h, at: new Date(now).toISOString(), judge: v.judge });
 			saveState(env, state);
@@ -2101,5 +2192,5 @@ function isPlanReviewRecordPath(targetPath, repoRoot) {
 }
 
 module.exports = {
-	withStateLock, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
+	withStateLock, withGateConfig, reviewModelsFor, resolveReviewModels, orderedReviewersForConfig, selfReview, validateReviewModelEntry, canonicalReviewModels, REVIEW_MODEL_POLICY, evaluate, formProblems, formWarnings, requiresArchitectureFit, ARCHITECTURE_FIT_CUTOFF, architectureFitProblems, isNarrowServerOrFileOnly, isTemplatePlaceholder, reviewProblems, riskAcceptanceProblems, riskAcceptanceActive, reviewerIdsFor, rotationOrder, orderedReviewers, isLimitFailure, isRotationRecord, LEGACY_REVIEW_CUTOFF, plansForCommand, plansCarryingCommand, discordConfirms, incidentVerdict, renderReport, reviewPrompt, pinnedFileProblems, referencedFiles, resultFile, reviewTrailer, renderMergedFindings, reviewInputManifest, reviewInputEntries, resolveRepoRoot, preapproveStepCodes, stepCodeTtlMs, normalizeRepoRelPath, validateReadOnlyScriptsConfig, verifyRepoFileGitClean, canonicalReadOnlyBinding, validateReadOnlyBindingRecords, planReadOnlyScriptsBinding, REVIEW_EXECUTOR_FILES, REVIEW_MODELS, ROTATION, AUTHOR_MODELS, LIMIT_RE, CRITERIA, CRITERIA_TEXT, TEMPLATE, PLAN_FILE, REVIEW_FILE, DISCORD_FILE, PREAPPROVE_STEP_TTL_MS, PLAN_APPROVAL_TTL_MS, STEP_CODE_TTL_MS, stateFile, PLAN_REVIEW_LOCK_REL, PLAN_REVIEW_LOCK_SCHEMA, PLAN_REVIEW_LOCK_DEFAULT_TTL_MS, planReviewLockPath, isPidAlive, isPidInLineage, inspectPlanReviewLock, acquirePlanReviewLock, releasePlanReviewLock, isPlanReviewRecordPath,
 };
