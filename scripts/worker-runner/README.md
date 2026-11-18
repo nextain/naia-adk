@@ -40,9 +40,11 @@ Use `scripts/worker-runner/spawn-worker.mjs` as the standard launcher so every w
 node scripts/worker-runner/spawn-worker.mjs \
   --id fix-001 --role infra --work-dir "$PWD/run-001" --watch-dir "$PWD/run-001" \
   --result-file "$PWD/run-001/result.md" --stall-min 15 \
-  -- codex exec "implement fix"
+  -- <tier-2-worker-command> "$(cat "$PWD/run-001/prompt.md")"
 node scripts/work-watch.mjs watch --root "$PWD"
 ```
+
+Choose `<tier-2-worker-command>` from the instance's `config/tier-profile.json` (`config/tier-profile.example.json` shows the schema without default model names).
 
 `scripts/work-watch.mjs` treats non-empty `resultFile` creation as completion (`[일꾼 감시] 일꾼 끝`), and wakes the spawning role's `wakeDir` when output files in `watchDirs` show no progress for `--stall-min` minutes (`[일꾼 감시] 진도 없음`) or when the worker unit/PID exits before writing `resultFile` (`[일꾼 감시] 유닛 죽음`). Direct detached shell launches (`nohup`, `setsid`, `&`, `tmux -d`, `screen -dm`) of `agy`, `codex`, `claude -p`, and `muse exec` are blocked by the PreToolUse bash guards.
 

@@ -97,7 +97,7 @@ node .agents/scripts/approval-plan.mjs review .agents/progress/<작업ID>/gates/
 
 ### 2.1 리뷰 중 저장소 쓰기 잠금 (`plan-review.lock` + `plan-review-write-guard`)
 
-적대 리뷰가 도는 동안 다른 세션(3층 역할 세션, 2층 `claude -p` 일꾼, 서브에이전트, 저장소 직접 세션)이 같은 인스턴스 저장소 안 파일을 고치면 입력 매니페스트·작업 트리 스냅샷이 어긋나 리뷰가 무효가 되거나 PASS 직후 관문이 막힙니다. 이를 글 규칙이 아니라 장치로 막습니다(상세: `docs/guides/plan-review-write-guard.md`).
+적대 리뷰가 도는 동안 다른 세션(3층 역할 세션, 2층 일꾼, 서브에이전트, 저장소 직접 세션)이 같은 인스턴스 저장소 안 파일을 고치면 입력 매니페스트·작업 트리 스냅샷이 어긋나 리뷰가 무효가 되거나 PASS 직후 관문이 막힙니다. 이를 글 규칙이 아니라 장치로 막습니다(상세: `docs/guides/plan-review-write-guard.md`).
 
 - **잠금 파일**: `approval-plan.mjs review` 실행기는 시작할 때 계획서가 속한 저장소 뿌리 아래 `.agents/state/plan-review.lock`(`schema: "plan-review-lock/v1"`, `pid`, `pidStartTicks`, `plan`, `repoRoot`, `startedAt`, `expiresAt`, 기본 시한 60분·`APPROVAL_PLAN_REVIEW_LOCK_TTL_MS` 조정 가능)을 배타 생성(`wx`)하고, 정상 종료·실패·신호 중단(`SIGINT`/`SIGTERM`/`SIGHUP`) 모두에서 잠금 파일과 비어 있는 `.agents/state` 폴더를 지웁니다. 이미 살아 있는 잠금이 있으면 중복 리뷰 시작을 거부합니다.
 - **PreToolUse 차단**: `.claude/hooks/plan-review-write-guard.js`(저장소 `.claude/settings.json` 및 사용자 프로파일 `templates/claude-user-profile/settings.json` 동시 등록)가 잠긴 저장소 안을 바꾸는 `Write`/`Edit`/`NotebookEdit`/`MultiEdit`/`apply_patch` 와 쓰기 셸 명령(리다이렉션, `sed -i`, `rm/cp/mv/touch/mkdir`, `git add/commit/checkout/reset/stash`, 인라인 Python/Node 파일 쓰기, 심볼릭 링크 우회 포함)을 가로채어 `"계획 리뷰 중(<계획 경로>, <시작 시각>) — 끝난 뒤 다시"` 안내와 함께 막습니다.
