@@ -14,13 +14,14 @@
 
 export type ScheduleDisplayMode = "calendar" | "list"
 export type CalendarUnit = "month" | "week"
-export type ScheduleLayerKey = "personal" | "work" | "milestone" | "queue"
+export type ScheduleLayerKey = "personal" | "company" | "work" | "milestone" | "queue"
 export type WorkScheduleFilter = "open" | "all"
 export type SpanPosition = "single" | "start" | "middle" | "end"
 export type TaskStatusBadge = "완료" | "진행" | "대기" | "미완료"
 
 export interface ScheduleLayers {
   personal: boolean
+  company: boolean
   work: boolean
   milestone: boolean
   queue: boolean
@@ -28,6 +29,7 @@ export interface ScheduleLayers {
 
 export const DEFAULT_SCHEDULE_LAYERS: ScheduleLayers = {
   personal: true,
+  company: true,
   work: true,
   milestone: true,
   queue: false,
@@ -37,9 +39,11 @@ export const SCHEDULE_MODE_STORAGE_KEY = "portal.schedule.mode.v1"
 export const SCHEDULE_UNIT_STORAGE_KEY = "portal.schedule.unit.v1"
 export const SCHEDULE_LAYERS_STORAGE_KEY = "portal.schedule.layers.v1"
 export const SCHEDULE_WORK_FILTER_STORAGE_KEY = "portal.schedule.workFilter.v1"
+export const SCHEDULE_REGULAR_STORAGE_KEY = "portal.schedule.regular.v1"
 
 export const LAYER_LABELS: Record<ScheduleLayerKey, string> = {
   personal: "개인 일정",
+  company: "회사 일정",
   work: "그룹(작업) 일정",
   milestone: "마일스톤",
   queue: "대기 중인 작업",
@@ -72,6 +76,7 @@ export function normalizeScheduleLayers(value: unknown): ScheduleLayers {
   const v = value as Record<string, unknown>
   return {
     personal: typeof v.personal === "boolean" ? v.personal : true,
+    company: typeof v.company === "boolean" ? v.company : true,
     work: typeof v.work === "boolean" ? v.work : true,
     milestone: typeof v.milestone === "boolean" ? v.milestone : true,
     queue: typeof v.queue === "boolean" ? v.queue : false,
@@ -121,12 +126,28 @@ export function readStoredScheduleLayers(storage?: Pick<Storage, "getItem"> | nu
 }
 
 export function writeStoredScheduleLayers(
-  layers: Omit<ScheduleLayers, "queue"> & { queue?: boolean },
+  layers: Omit<ScheduleLayers, "queue" | "company"> & { queue?: boolean; company?: boolean },
   storage?: Pick<Storage, "setItem"> | null,
 ): void {
   try {
     const store = storage ?? (typeof window !== "undefined" ? window.localStorage : null)
     store?.setItem(SCHEDULE_LAYERS_STORAGE_KEY, JSON.stringify(normalizeScheduleLayers(layers)))
+  } catch {}
+}
+
+export function readStoredShowRegular(storage?: Pick<Storage, "getItem"> | null): boolean {
+  try {
+    const store = storage ?? (typeof window !== "undefined" ? window.localStorage : null)
+    return store?.getItem(SCHEDULE_REGULAR_STORAGE_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+export function writeStoredShowRegular(show: boolean, storage?: Pick<Storage, "setItem"> | null): void {
+  try {
+    const store = storage ?? (typeof window !== "undefined" ? window.localStorage : null)
+    store?.setItem(SCHEDULE_REGULAR_STORAGE_KEY, show ? "1" : "0")
   } catch {}
 }
 

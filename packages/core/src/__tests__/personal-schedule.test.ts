@@ -3,7 +3,22 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import YAML from "yaml"
-import { MAX_PERSONAL_FILE_BYTES, parsePersonalScheduleYaml, parseScheduleDateTime, readPersonalSchedule, validateAndNormalizeItem } from "../personal-schedule.js"
+import {
+  acquirePersonalScheduleLockSync,
+  appendPersonalScheduleAuditLog,
+  ensurePersonalScheduleDir,
+  MAX_PERSONAL_FILE_BYTES,
+  parsePersonalScheduleYaml,
+  parseScheduleDateTime,
+  PERSONAL_SCHEDULE_LOCK_STALE_MS,
+  PersonalScheduleBusyError,
+  PersonalScheduleUnsafeError,
+  readPersonalSchedule,
+  safeUserKey,
+  serializePersonalScheduleYaml,
+  validateAndNormalizeItem,
+  writePersonalScheduleAtomic,
+} from "../personal-schedule.js"
 
 const dirs: string[] = []
 function tempDir() {
@@ -106,5 +121,65 @@ describe("personal schedules", () => {
     expect(() => readPersonalSchedule("hard", dir)).toThrow()
     fs.writeFileSync(path.join(dir, "large.yaml"), Buffer.alloc(MAX_PERSONAL_FILE_BYTES + 1))
     expect(() => readPersonalSchedule("large", dir)).toThrow()
+  })
+  it("validates beforeMinutes, enforces safeUserKey, and round-trips serialized YAML", () => {
+    expect(() => safeUserKey("luke")).not.toThrow()
+    expect(() => safeUserKey("user_1.a-b")).not.toThrow()
+    for (const bad of ["../luke", "Luke", "a/b", "a\\b", ".hidden", "a..b", "a@b.com", ""]) {
+      expect(() => safeUserKey(bad)).toThrow()
+    }
+    const ok = validateAndNormalizeItem({ title: "Standup", start: "2026-11-20 09:30", beforeMinutes: 15 })
+    expect(ok).toMatchObject({ ok: true, item: { title: "Standup", start: "2026-11-20 09:30", beforeMinutes: 15 } })
+    expect(validateAndNormalizeItem({ title: "Bad", start: "2026-11-20 09:30", beforeMinutes: 0 }).ok).toBe(false)
+    expect(validateAndNormalizeItem({ title: "Bad", start: "2026-11-20 09:30", beforeMinutes: -5 }).ok).toBe(false)
+    expect(validateAndNormalizeItem({ title: "Bad", start: "2026-11-20 09:30", beforeMinutes: 1.5 }).ok).toBe(false)
+    if (ok.ok) {
+      const yamlText = serializePersonalScheduleYaml("luke", [ok.item])
+      const parsed = parsePersonalScheduleYaml(yamlText, "luke")
+      expect(parsed.warnings).toEqual([])
+      expect(parsed.items).toEqual([ok.item])
+    }
+  })
+  it("enforces 0700 dir, 0600 files, O_NOFOLLOW symlinks, 30s stale lock, and audit log", () => {
+    const base = tempDir()
+    const schedDir = path.join(base, "sched")
+    fs.mkdirSync(schedDir, { mode: 0o755 })
+    const safeDir = ensurePersonalScheduleDir(schedDir)
+    expect(fs.lstatSync(safeDir).mode & 0o777).toBe(0o700)
+
+    const targetFile = path.join(safeDir, "luke.yaml")
+    const lockPath = `${targetFile}.lock`
+    const release = acquirePersonalScheduleLockSync(targetFile)
+    expect(fs.lstatSync(lockPath).mode & 0o777).toBe(0o600)
+    expect(() => acquirePersonalScheduleLockSync(targetFile)).toThrow(PersonalScheduleBusyError)
+    release()
+    expect(fs.existsSync(lockPath)).toBe(false)
+
+    // Fresh lock (<= 30s) is not reclaimed; stale lock (> 30s) is reclaimed
+    fs.writeFileSync(lockPath, "999999\n", { mode: 0o600 })
+    const almostStale = new Date(Date.now() - (PERSONAL_SCHEDULE_LOCK_STALE_MS - 5000))
+    fs.utimesSync(lockPath, almostStale, almostStale)
+    expect(() => acquirePersonalScheduleLockSync(targetFile)).toThrow(PersonalScheduleBusyError)
+    const staleAt = new Date(Date.now() - (PERSONAL_SCHEDULE_LOCK_STALE_MS + 2000))
+    fs.utimesSync(lockPath, staleAt, staleAt)
+    const release2 = acquirePersonalScheduleLockSync(targetFile)
+    writePersonalScheduleAtomic(targetFile, serializePersonalScheduleYaml("luke", []), null)
+    expect(fs.lstatSync(targetFile).mode & 0o777).toBe(0o600)
+    appendPersonalScheduleAuditLog(safeDir, { action: "add", actorRole: "alpha", user: "luke", itemId: "ps-1" })
+    const auditPath = path.join(safeDir, ".audit.jsonl")
+    expect(fs.lstatSync(auditPath).mode & 0o777).toBe(0o600)
+    const logged = JSON.parse(fs.readFileSync(auditPath, "utf8").trim())
+    expect(logged).toMatchObject({ action: "add", actor: "role:alpha", user: "luke", itemId: "ps-1" })
+    release2()
+
+    // Symlink lock refusal
+    fs.symlinkSync(path.join(base, "victim"), lockPath)
+    expect(() => acquirePersonalScheduleLockSync(targetFile)).toThrow(PersonalScheduleUnsafeError)
+    fs.unlinkSync(lockPath)
+
+    // Symlink dir refusal
+    const symDir = path.join(base, "symdir")
+    fs.symlinkSync(safeDir, symDir)
+    expect(() => ensurePersonalScheduleDir(symDir)).toThrow(PersonalScheduleUnsafeError)
   })
 })

@@ -45,13 +45,15 @@ export function layoutCalendarWeeks(
   const needsPlacement =
     opts.layers !== undefined &&
     inputCells.every((c) => c.events.length === 0) &&
-    Boolean(opts.personalItems?.length || opts.workItems?.length || opts.milestones?.length)
+    Boolean(opts.personalItems?.length || opts.companyItems?.length || opts.workItems?.length || opts.milestones?.length)
 
   const cells = needsPlacement
     ? placeScheduleOnCalendar(inputCells, {
         layers: opts.layers!,
         workFilter: opts.workFilter,
+        includeRegular: opts.includeRegular,
         personalItems: opts.personalItems,
+        companyItems: opts.companyItems,
         workItems: opts.workItems,
         milestones: opts.milestones,
       })

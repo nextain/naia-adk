@@ -51,6 +51,15 @@ function barColorClass(ev: CalendarCellEvent): string {
   if (ev.layer === "personal") {
     return "bg-emerald-950/90 border-emerald-500/75 text-emerald-100 hover:bg-emerald-900/90"
   }
+  if (ev.layer === "company") {
+    if (ev.companyItem?.kind === "regular") {
+      return "bg-fuchsia-950/80 border-fuchsia-500/70 text-fuchsia-100 hover:bg-fuchsia-900/85"
+    }
+    if (ev.completed) {
+      return "bg-violet-950/50 border-violet-700/60 text-violet-200/85 hover:bg-violet-900/60"
+    }
+    return "bg-violet-950/90 border-violet-500/75 text-violet-100 hover:bg-violet-900/90"
+  }
   if (ev.layer === "milestone") {
     if (ev.overdue) {
       return "bg-amber-950/90 border-rose-500/85 text-amber-100 font-medium hover:bg-amber-900/90"
@@ -184,7 +193,16 @@ export function ScheduleCalendarGrid({
                     {week.bars.map((bar) => {
                       const ev = bar.event
                       const taskBadge = getBarTaskBadge(ev)
-                      const icon = ev.layer === "milestone" ? "🏁" : ev.layer === "personal" ? "●" : "▪"
+                      const icon =
+                        ev.layer === "milestone"
+                          ? "🏁"
+                          : ev.layer === "personal"
+                            ? "●"
+                            : ev.layer === "company"
+                              ? ev.companyItem?.kind === "regular"
+                                ? "↻"
+                                : "◆"
+                              : "▪"
                       return (
                         <button
                           key={bar.key}
@@ -215,7 +233,7 @@ export function ScheduleCalendarGrid({
                               </span>
                             )}
                             <span className="font-semibold shrink-0">{icon}</span>
-                            {ev.layer === "personal" && !ev.allDay && (
+                            {(ev.layer === "personal" || ev.layer === "company") && !ev.allDay && (
                               <span className="opacity-80 text-[9px] sm:text-[10px] shrink-0 hidden sm:inline">
                                 {ev.timeLabel}
                               </span>

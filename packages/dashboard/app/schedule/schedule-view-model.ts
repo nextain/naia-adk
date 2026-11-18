@@ -1,6 +1,6 @@
 import type { PersonalScheduleItem } from "@naia-adk/core/src/personal-schedule"
 import type { ScheduleLinkTarget } from "@naia-adk/core/src/schedule-link"
-import type { BoardScheduleProjection, CalendarCellEvent, CalendarUnit, ScheduleDisplayMode, ScheduleLayers, WorkScheduleFilter } from "./schedule-calendar"
+import type { BoardScheduleProjection, CalendarCellEvent, CalendarUnit, CompanyScheduleItem, ScheduleDisplayMode, ScheduleLayers, WorkScheduleFilter } from "./schedule-calendar"
 
 export const PERSONAL_IDENTITY_REQUIRED_NOTICE =
   "개인 일정은 로그인 연결 설정 뒤에 켜집니다(다른 분 일정이 섞이지 않게 지금은 꺼 두었습니다)"
@@ -83,17 +83,42 @@ export function personalLayerStateFromResponse(
   }
 }
 
+export type CompanyLayerStatus = "loading" | "ready" | "unavailable"
+
+export type CompanyScheduleResult =
+  | { status: "ready"; items: CompanyScheduleItem[] }
+  | { status: "unavailable" }
+
+export async function requestCompanySchedule(
+  from: string,
+  to: string,
+  fetcher: typeof fetch = fetch,
+): Promise<CompanyScheduleResult> {
+  try {
+    const query = new URLSearchParams({ from, to })
+    const res = await fetcher(`/api/portal/schedule/company?${query.toString()}`, { cache: "no-store" })
+    if (!res.ok) return { status: "unavailable" }
+    const data = (await res.json().catch(() => null)) as { items?: unknown } | null
+    if (!data || !Array.isArray(data.items)) return { status: "unavailable" }
+    return { status: "ready", items: data.items as CompanyScheduleItem[] }
+  } catch {
+    return { status: "unavailable" }
+  }
+}
+
 export interface ScheduleViewProps {
   hasBoard: boolean | null
   initialMode?: ScheduleDisplayMode
   initialUnit?: CalendarUnit
   initialLayers?: Partial<ScheduleLayers>
   initialWorkFilter?: WorkScheduleFilter
+  initialShowRegular?: boolean
   initialAnchorDate?: string
   initialPersonalItems?: PersonalScheduleItem[]
   initialPersonalWarnings?: string[]
   initialPersonalIdentityRequired?: boolean
   initialPersonalLayerState?: PersonalLayerState
+  initialCompanyItems?: CompanyScheduleItem[]
   initialUserKey?: string
   initialUserLabel?: string
   initialBoardSchedule?: BoardScheduleProjection

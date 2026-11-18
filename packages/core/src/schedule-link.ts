@@ -1,7 +1,7 @@
 // Schedule screen deep link: /schedule?item=<layer>:<id>&date=YYYY-MM-DD.
 // The messenger notifier writes it and the schedule screen opens the matching detail.
 
-export const SCHEDULE_LINK_LAYERS = ["personal", "milestone", "work", "queue"] as const
+export const SCHEDULE_LINK_LAYERS = ["personal", "milestone", "work", "queue", "company"] as const
 export type ScheduleLinkLayer = (typeof SCHEDULE_LINK_LAYERS)[number]
 
 export interface ScheduleLinkTarget {

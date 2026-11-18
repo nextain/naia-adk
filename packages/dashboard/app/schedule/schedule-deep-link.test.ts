@@ -56,6 +56,31 @@ const cells = placeScheduleOnCalendar(buildCalendarCells("2026-11-12", "month", 
     },
   ],
   milestones: [{ id: "m1", name: "Beta", description: "", order: 1, dueDate: "2026-11-20", daysRemaining: 8, completed: 0, total: 1, overdue: false }],
+  companyItems: [
+    {
+      id: "company:md:a1b2c3d4e5f6",
+      title: "웹GPU 시연 열쇠 분리",
+      startDate: "2026-11-18",
+      endDate: "2026-11-18",
+      role: "민호",
+      status: "진행 대기",
+      sourceDocPath: "common/alpha/schedule.md",
+      kind: "company",
+    },
+    {
+      id: "company:reg:retro-daily-alpha:2026-11-18",
+      title: "매일 회고",
+      startDate: "2026-11-18",
+      endDate: "2026-11-18",
+      startTime: "22:00",
+      role: "alpha",
+      roleLabel: "알파",
+      state: "있음",
+      status: "있음",
+      sourceDocPath: "common/team/regular-schedule.yaml",
+      kind: "regular",
+    },
+  ],
 })
 
 describe("일정 상세 링크", () => {
@@ -124,5 +149,36 @@ describe("일정 상세 링크", () => {
     assert.equal(findLinkedEvent(cells, { layer: "work", id: "doc-1", date: "2026-11-15" })?.workItem?.kind, "work_document")
     assert.equal(findLinkedEvent(cells, { layer: "work", id: "q-1", date: "2026-11-15" }), null)
     assert.equal(findLinkedEvent(cells, { layer: "queue", id: "doc-1", date: "2026-11-15" }), null)
+  })
+
+  it("회사·정기 일정(company:<id>) 딥링크를 해석해 달력 셀의 회사/정기 이벤트를 연다", () => {
+    const mdTarget = readScheduleDeepLink("?item=company%3Amd%3Aa1b2c3d4e5f6&date=2026-11-18")
+    assert.deepEqual(mdTarget, { layer: "company", id: "md:a1b2c3d4e5f6", date: "2026-11-18" })
+    const foundMd = resolveDeepLink(cells, mdTarget!, { sourceLoaded: true, layerShown: true })
+    assert.equal(foundMd.status, "found")
+    if (foundMd.status === "found") {
+      assert.equal(foundMd.event.title, "웹GPU 시연 열쇠 분리")
+      assert.equal(foundMd.event.companyItem?.sourceDocPath, "common/alpha/schedule.md")
+    }
+
+    const regTarget = readScheduleDeepLink("?item=company%3Areg%3Aretro-daily-alpha%3A2026-11-18&date=2026-11-18")
+    assert.deepEqual(regTarget, { layer: "company", id: "reg:retro-daily-alpha:2026-11-18", date: "2026-11-18" })
+    const foundReg = resolveDeepLink(cells, regTarget!, { sourceLoaded: true, layerShown: true })
+    assert.equal(foundReg.status, "found")
+    if (foundReg.status === "found") {
+      assert.equal(foundReg.event.title, "매일 회고")
+      assert.equal(foundReg.event.companyItem?.kind, "regular")
+    }
+
+    // company:company:md:... 전체 id 형태도 매칭된다
+    const fullPrefixTarget = readScheduleDeepLink("?item=company%3Acompany%3Amd%3Aa1b2c3d4e5f6&date=2026-11-18")
+    assert.equal(findLinkedEvent(cells, fullPrefixTarget!)?.title, "웹GPU 시연 열쇠 분리")
+
+    // 데이터 로딩 중이면 기다리고, 로드 완료 후 없는 항목은 missing 처리
+    assert.deepEqual(resolveDeepLink(cells, mdTarget!, { sourceLoaded: false, layerShown: true }), { status: "wait" })
+    assert.deepEqual(
+      resolveDeepLink(cells, { layer: "company", id: "md:missing", date: "2026-11-18" }, { sourceLoaded: true, layerShown: true }),
+      { status: "missing" },
+    )
   })
 })

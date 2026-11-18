@@ -11,6 +11,24 @@ describe("schedule deep link", () => {
     )
   })
 
+  it("round-trips a company or regular item link", () => {
+    const companyHref = scheduleDetailHref({ layer: "company", id: "md:abc123def456", date: "2026-11-18" })
+    expect(companyHref).toBe("/schedule?item=company%3Amd%3Aabc123def456&date=2026-11-18")
+    expect(parseScheduleDetailSearch(companyHref.split("?")[1])).toEqual({
+      layer: "company",
+      id: "md:abc123def456",
+      date: "2026-11-18",
+    })
+
+    const regHref = scheduleDetailHref({ layer: "company", id: "reg:retro-daily-alpha:2026-11-18", date: "2026-11-18" })
+    expect(parseScheduleDetailSearch(regHref.split("?")[1])).toEqual({
+      layer: "company",
+      id: "reg:retro-daily-alpha:2026-11-18",
+      date: "2026-11-18",
+    })
+    expect(scheduleLinkPath(regHref)).toBe(regHref)
+  })
+
   it("rejects unknown layers, bad ids and impossible dates", () => {
     expect(parseScheduleDetailSearch("item=other:x&date=2026-11-12")).toBeNull()
     expect(parseScheduleDetailSearch("item=personal:a/b&date=2026-11-12")).toBeNull()

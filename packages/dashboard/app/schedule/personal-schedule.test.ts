@@ -222,3 +222,82 @@ test("a commented YAML file is not rewritten by dashboard mutations", async () =
     assert.equal(fs.readFileSync(file, "utf8"), original)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })
+
+test("dashboard enforces 0700 dir, 0600 file, live vs 30s stale lock, symlink refusal, and preserves beforeMinutes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "schedule-lock-perm-"))
+  const dir = path.join(root, "personal")
+  const opts = { env: { NAIA_SCHEDULE_SINGLE_USER: "person-a" }, dir }
+  try {
+    // 0700 dir & 0600 yaml + beforeMinutes preservation
+    const created = await handlePersonalScheduleRequest(
+      makeRequest("POST", await revisionHeaders(new Headers(), opts), {
+        title: "Morning Sync",
+        start: "2026-11-20 09:30",
+        end: "2026-11-20 10:00",
+        allDay: false,
+        beforeMinutes: 15,
+        memo: "Desk",
+      }),
+      opts,
+    )
+    assert.equal(created.status, 201)
+    const createdBody = await created.json()
+    assert.equal(createdBody.items[0].beforeMinutes, 15)
+    assert.equal(fs.lstatSync(dir).mode & 0o777, 0o700)
+    const yamlFile = path.join(dir, "person-a.yaml")
+    assert.equal(fs.lstatSync(yamlFile).mode & 0o777, 0o600)
+
+    // PUT without beforeMinutes keeps existing beforeMinutes
+    const id = createdBody.items[0].id
+    const putRes = await handlePersonalScheduleRequest(
+      makeRequest("PUT", await revisionHeaders(new Headers(), opts), {
+        id,
+        title: "Morning Sync Updated",
+        start: "2026-11-20 09:30",
+        end: "2026-11-20 10:00",
+        allDay: false,
+        memo: "Room 2",
+      }),
+      opts,
+    )
+    assert.equal(putRes.status, 200)
+    const putBody = await putRes.json()
+    assert.equal(putBody.items[0].beforeMinutes, 15)
+    assert.equal(putBody.items[0].title, "Morning Sync Updated")
+
+    // Active lock blocks write with 409 personal-schedule-busy
+    const lockFile = `${yamlFile}.lock`
+    fs.writeFileSync(lockFile, "999999\n", { mode: 0o600 })
+    const busyRes = await handlePersonalScheduleRequest(
+      makeRequest("PATCH", await revisionHeaders(new Headers(), opts), { id, title: "Blocked" }),
+      opts,
+    )
+    assert.equal(busyRes.status, 409)
+    assert.equal((await busyRes.json()).error, "personal-schedule-busy")
+    assert.ok(fs.existsSync(lockFile))
+
+    // Stale lock (> 30s) is reclaimed automatically
+    const staleDate = new Date(Date.now() - 35_000)
+    fs.utimesSync(lockFile, staleDate, staleDate)
+    const reclaimedRes = await handlePersonalScheduleRequest(
+      makeRequest("PATCH", await revisionHeaders(new Headers(), opts), { id, title: "After Stale Reclaim" }),
+      opts,
+    )
+    assert.equal(reclaimedRes.status, 200)
+    assert.equal((await reclaimedRes.json()).items[0].title, "After Stale Reclaim")
+    assert.equal(fs.existsSync(lockFile), false)
+
+    // Symlink lock is refused without touching symlink target
+    const victim = path.join(root, "victim.txt")
+    fs.writeFileSync(victim, "keep-me")
+    fs.symlinkSync(victim, lockFile)
+    const symRes = await handlePersonalScheduleRequest(
+      makeRequest("PATCH", await revisionHeaders(new Headers(), opts), { id, title: "Should Fail" }),
+      opts,
+    )
+    assert.equal(symRes.status, 500)
+    assert.equal(fs.readFileSync(victim, "utf8"), "keep-me")
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

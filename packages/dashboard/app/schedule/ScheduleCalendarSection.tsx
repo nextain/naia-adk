@@ -1,6 +1,7 @@
 "use client"
 import React from "react"
 import type { useScheduleView } from "./useScheduleView"
+import { companyItemToCalendarEvent } from "./useScheduleView"
 import { PERSONAL_IDENTITY_REQUIRED_NOTICE, PERSONAL_LOADING_NOTICE, PERSONAL_WARNINGS_LOCKED_NOTICE, MAX_VISIBLE_PERSONAL_WARNINGS } from "./schedule-view-model"
 import { shiftCalendarAnchor } from "./schedule-calendar"
 import { ScheduleCalendarGrid } from "./ScheduleCalendarGrid"
@@ -284,6 +285,65 @@ export function ScheduleCalendarSection({ view }: { view: View }) {
                         <span className="text-[11px] tabular-nums px-2 py-0.5 rounded bg-neutral-900 text-neutral-300 shrink-0">
                           {ms.completed}/{ms.total}
                         </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            )}
+
+            {/* 회사 일정 요약 */}
+            {layers.company && (
+              <section
+                data-testid="company-schedule-panel"
+                className="rounded-lg border border-violet-900/60 bg-neutral-900/50 p-3 space-y-2 lg:col-span-2"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-xs font-bold text-violet-300">
+                    회사 일정 ({(view.companyMdItems ?? []).length}건
+                    {view.showRegular ? ` · 정기 반복 ${(view.regularItems ?? []).length}건` : ""})
+                  </h3>
+                  {view.companyStatus === "unavailable" && (
+                    <button
+                      type="button"
+                      className="text-[11px] text-amber-300 underline"
+                      onClick={() => void view.loadCompanySchedule?.()}
+                    >
+                      다시 시도
+                    </button>
+                  )}
+                </div>
+                {(view.companyMdItems ?? []).length === 0 && (!view.showRegular || (view.regularItems ?? []).length === 0) ? (
+                  <p className="text-xs text-neutral-500">
+                    {view.companyStatus === "loading" ? "회사 일정 불러오는 중" : "이 기간에 표시할 회사 일정이 없습니다."}
+                  </p>
+                ) : (
+                  <ul className="grid grid-cols-1 md:grid-cols-2 gap-1.5 max-h-60 overflow-y-auto pr-1">
+                    {[
+                      ...(view.companyMdItems ?? []),
+                      ...(view.showRegular ? (view.regularItems ?? []) : []),
+                    ].map((item) => (
+                      <li key={item.id}>
+                        <button
+                          type="button"
+                          data-testid={`company-panel-item-${item.id}`}
+                          onClick={() => handleSelectCalendarEvent(companyItemToCalendarEvent(item))}
+                          className="w-full text-left p-2 rounded border border-neutral-800 bg-neutral-950/80 hover:border-violet-600/70 hover:bg-neutral-900 transition-colors flex items-start justify-between gap-2 text-xs cursor-pointer"
+                        >
+                          <div className="min-w-0">
+                            <div className={`font-semibold truncate ${item.kind === "regular" ? "text-fuchsia-200" : "text-violet-200"}`}>
+                              {item.title}
+                            </div>
+                            <div className="text-[11px] text-neutral-400">
+                              {item.startDate === item.endDate ? item.startDate : `${item.startDate} ~ ${item.endDate}`}
+                              {item.startTime ? ` ${item.startTime}${item.endTime ? `~${item.endTime}` : ""}` : ""}
+                              {item.roleLabel || item.role ? ` · ${item.roleLabel || item.role}` : ""}
+                            </div>
+                          </div>
+                          <span className="text-[11px] px-1.5 py-0.5 rounded bg-neutral-900 text-neutral-300 shrink-0 max-w-[8rem] truncate">
+                            {item.state || item.status}
+                          </span>
+                        </button>
                       </li>
                     ))}
                   </ul>

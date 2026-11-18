@@ -38,8 +38,9 @@ validated Host. Forwarded-protocol headers alone do not grant this trust.
 
 The file contains an `items` list. Dates are local calendar values, expressed
 as `YYYY-MM-DD` for all-day events or `YYYY-MM-DD HH:mm` for timed events.
-The calendar uses the browser's local time zone; the work-board projection uses
-the server runtime's local time zone. For example:
+Items may also include an optional `beforeMinutes` positive integer for
+per-item reminder lead time. The calendar uses the browser's local time zone;
+the work-board projection uses the server runtime's local time zone. For example:
 
 ```yaml
 user: "person"
@@ -50,6 +51,7 @@ items:
     end: "2026-11-11 11:00"
     allDay: false
     memo: ""
+    beforeMinutes: 15
 ```
 
 The dashboard's `/schedule-personal` endpoint reads and modifies only the
@@ -58,26 +60,69 @@ writes with HTTP 409, so unsupported or invalid content is not silently lost.
 GET returns a `revision` string. Every POST, PUT, PATCH and DELETE must send
 the latest revision in the `If-Match` header; missing or malformed values are
 rejected with 428, and a revision from an older file produces 409. Reload after
-a conflict before applying the change again. Messenger or other future clients
-must follow the same read-then-write contract.
+a conflict before applying the change again. Both dashboard and CLI writes share
+the same storage, locking and permission rules.
 Comments also produce warnings and block screen edits because rewriting the
 file would discard them; edit such files directly or preserve the comments
-elsewhere before removing them. Dashboard writes use an exclusive lock and
-compare the file identity and bytes around the read and immediately before
-replacement. If the file changed, the API returns 409 and leaves the changed
-file in place. An external editor that does not use the lock can still write
-between the final comparison and replacement, so the comparison cannot promise
-an atomic compare-and-replace. Coordinate external edits with dashboard writes
-or stop writes while editing the file.
+elsewhere before removing them. Writes ensure the personal schedule directory
+is `0700` (non-symlink) and write `<user>.yaml` via an `0600` temp file and
+atomic `rename` after comparing the file identity and bytes around the read and
+immediately before replacement. If the file changed, writes abort with conflict
+and leave the changed file in place. An external editor that does not use the
+lock can still write between the final comparison and replacement, so coordinate
+external edits with scheduled writes or stop writes while editing the file.
 
-If a dashboard process exits while holding the lock, its `<user>.yaml.lock`
-file may remain and subsequent writes return `personal-schedule-busy`. Before
-removing a stale lock, confirm that no dashboard process is currently writing
-that user's file; preserve the schedule file and inspect it for incomplete
-external edits. Do not remove a lock merely because it is old.
+Both `/schedule-personal` and the secretary CLI use an exclusive `<user>.yaml.lock`
+file (`O_CREAT | O_EXCL`, mode `0600`, `O_NOFOLLOW`, rejecting symlinks). If a
+writer crashes while holding the lock, the lock stays blocking (`personal-schedule-busy`)
+for 30 seconds; locks older than 30 seconds are safely reclaimed via a verified
+lock-break check before re-acquiring, and each writer only removes the lock whose
+device and inode it created.
 The shared `readPersonalSchedule(userKey, dir)` function in `@naia-adk/core`
-is read-only; server-side consumers can use it without introducing a second
-write path. A future messenger integration can consume this boundary.
+is read-only; server-side and notification consumers read through it without
+bypassing the write lock contract.
+
+## Secretary CLI and Delegation ACL
+
+Secretary agents write to a user's personal schedule through
+`scripts/schedule/personal-schedule-cli.mjs` rather than editing `<user>.yaml`
+directly:
+
+```sh
+node scripts/schedule/personal-schedule-cli.mjs read \
+  --dir /path/to/personal --user luke
+
+node scripts/schedule/personal-schedule-cli.mjs add \
+  --dir /path/to/personal --user luke --actor-role alpha \
+  --title "1:1 Sync" --start "2026-11-20 14:00" --end "2026-11-20 15:00" \
+  --before-minutes 15 --memo "Room B"
+
+node scripts/schedule/personal-schedule-cli.mjs update \
+  --dir /path/to/personal --user luke --actor-role alpha \
+  --if-match '"<64-hex-sha256>"' --id ps-... --title "Updated Sync"
+
+node scripts/schedule/personal-schedule-cli.mjs delete \
+  --dir /path/to/personal --user luke --actor-role alpha \
+  --if-match '"<64-hex-sha256>"' --id ps-...
+```
+
+- **Directory and target validation**: `--dir` defaults to
+  `NAIA_PERSONAL_SCHEDULE_DIR` (or `packages/dashboard/data/schedule/personal`).
+  `--user` is checked with `safeUserKey` (canonical lowercase, no `..`, `/`,
+  or symlinks).
+- **Optimistic concurrency**: `update` and `delete` require `--if-match <revision>`;
+  `add` optionally accepts `--if-match <revision>` to guard against concurrent
+  changes. Commented or warned YAML files are never overwritten.
+- **Delegation ACL (`NAIA_SCHEDULE_DELEGATES` / `--delegates`)**: Every write
+  (`add`, `update`, `delete`) requires `--actor-role <role>` and an explicit
+  `(actorRole -> targetUser)` entry in `NAIA_SCHEDULE_DELEGATES` (for example
+  `alpha:luke,jina:luke`) or `--delegates` (comma-separated pairs, JSON string,
+  or non-symlink JSON file path; wildcards are rejected). Unlisted pairs fail
+  immediately with exit code `1` and `403 Forbidden: role not delegated`.
+- **Audit log and output**: Each authorized write appends one line to
+  `<dir>/.audit.jsonl` (mode `0600`, `O_NOFOLLOW`) with
+  `{ "at", "action", "actor": "role:<role>", "user", "itemId" }` and prints JSON
+  containing `{ "ok": true, "id", "revision", "href": "/schedule?item=personal%3A<id>&date=<YYYY-MM-DD>" }`.
 
 The [regular schedule ledger](regular-schedule-ledger.md) is a separate record
 of recurring work, approvals and execution results. Personal calendar entries

@@ -2,7 +2,25 @@ import type { PersonalScheduleItem } from "@naia-adk/core/src/personal-schedule"
 import { addDays, daysBetweenDates, formatUtcDate, parseDateParts, type CalendarUnit, type ScheduleLayerKey, type SpanPosition, type ScheduleLayers, type WorkScheduleFilter } from "./schedule-calendar-base"
 import type { WorkScheduleItem, MilestoneScheduleItem } from "./schedule-board-projection"
 
-// ── 달력 칸 생성 및 3개 겹 배치 ──────────────────────────────────────────────
+// ── 달력 칸 생성 및 5개 겹 배치 ──────────────────────────────────────────────
+
+export interface CompanyScheduleItem {
+  id: string
+  title: string
+  startDate: string
+  endDate: string
+  startTime?: string | null
+  endTime?: string | null
+  times?: string[]
+  role?: string | null
+  roleLabel?: string | null
+  status?: string | null
+  state?: string | null
+  sourceDocPath?: string | null
+  kind: "company" | "regular"
+  repeatSummary?: string | null
+  isDaily?: boolean
+}
 
 export interface CalendarCellEvent {
   key: string
@@ -18,6 +36,7 @@ export interface CalendarCellEvent {
   overdue: boolean
   completed: boolean
   personalItem?: PersonalScheduleItem
+  companyItem?: CompanyScheduleItem
   workItem?: WorkScheduleItem
   milestoneItem?: MilestoneScheduleItem
 }
@@ -118,15 +137,50 @@ function formatPersonalTimeLabel(item: PersonalScheduleItem, spanPos: SpanPositi
   return "계속"
 }
 
+function formatCompanyTimeLabel(item: CompanyScheduleItem, spanPos: SpanPosition): string {
+  const startTime = item.startTime || null
+  const endTime = item.endTime || null
+  if (!startTime && !endTime) return "종일"
+  if (spanPos === "single") {
+    if (item.times && item.times.length > 1) return item.times.join(", ")
+    if (startTime && endTime && startTime !== endTime) return `${startTime}~${endTime}`
+    return startTime ?? endTime ?? "종일"
+  }
+  if (spanPos === "start") return startTime ? `${startTime}~` : "시작"
+  if (spanPos === "end") return endTime ? `~${endTime}` : "종료"
+  return "계속"
+}
+
+export function buildCompanyDocLink(sourceDocPath: unknown): string | null {
+  if (typeof sourceDocPath !== "string") return null
+  const trimmed = sourceDocPath.trim().replace(/^\/+/, "")
+  if (!trimmed || trimmed.length > 1024 || trimmed.includes("\\") || /[\u0000-\u001f\u007f]/.test(trimmed)) {
+    return null
+  }
+  const segments = trimmed.split("/")
+  if (segments.some((seg) => seg === "" || seg === "." || seg === "..")) {
+    return null
+  }
+  return `/docs?source=adk&path=${encodeURIComponent(trimmed)}`
+}
+
+function isCompanyItemCompleted(item: CompanyScheduleItem): boolean {
+  const s = (item.status || "").trim()
+  if (!s) return false
+  return /^(?:완료|발송\s*완료|출원\s*완료|제출\s*완료)(?:\s|\(|$)/.test(s)
+}
+
 /**
  * 줄(lane) 배정 및 날짜 칸 정렬 우선순위 그룹:
- * 0: 마일스톤 -> 1: 개인 일정 -> 2: 작업 문서(그룹 작업) -> 3: 큐 항목
+ * 0: 마일스톤 -> 1: 개인 일정 -> 2: 회사 일정(schedule.md) -> 3: 작업 문서(그룹 작업) -> 4: 정기 반복 -> 5: 큐 항목
  */
 export function eventSortGroup(ev: CalendarCellEvent): number {
   if (ev.layer === "milestone") return 0
   if (ev.layer === "personal") return 1
-  if (ev.layer === "work" && ev.workItem?.kind === "work_document") return 2
-  return 3
+  if (ev.layer === "company" && ev.companyItem?.kind !== "regular") return 2
+  if (ev.layer === "work" && ev.workItem?.kind === "work_document") return 3
+  if (ev.layer === "company" && ev.companyItem?.kind === "regular") return 4
+  return 5
 }
 
 /**
@@ -157,9 +211,11 @@ export function compareCalendarEvents(a: CalendarCellEvent, b: CalendarCellEvent
 }
 
 export interface PlaceScheduleOptions {
-  layers: Omit<ScheduleLayers, "queue"> & { queue?: boolean }
+  layers: Omit<ScheduleLayers, "queue" | "company"> & { queue?: boolean; company?: boolean }
   workFilter?: WorkScheduleFilter
+  includeRegular?: boolean
   personalItems?: PersonalScheduleItem[]
+  companyItems?: CompanyScheduleItem[]
   workItems?: WorkScheduleItem[]
   milestones?: MilestoneScheduleItem[]
 }
@@ -246,6 +302,41 @@ export function placeScheduleOnCalendar(
         overdue: false,
         completed: false,
         personalItem: p,
+      }))
+    }
+  }
+
+  // 2.5) 회사·정기 일정 겹
+  if (opts.layers.company !== false) {
+    const includeRegular = opts.includeRegular ?? true
+    for (const c of opts.companyItems ?? []) {
+      if (!includeRegular && c.kind === "regular") continue
+      if (!c.startDate) continue
+      const rawEnd = c.endDate || c.startDate
+      const spanStart = c.startDate <= rawEnd ? c.startDate : rawEnd
+      const spanEnd = c.startDate <= rawEnd ? rawEnd : c.startDate
+      const allDay = !c.startTime && !c.endTime && !(c.times && c.times.length > 0)
+      const completed = isCompanyItemCompleted(c)
+      addRangeToCells(spanStart, spanEnd, (cellDate, spanPos) => ({
+        key: `company-${c.id}-${cellDate}`,
+        id: c.id,
+        layer: "company",
+        title: c.title,
+        startDate: spanStart,
+        endDate: spanEnd,
+        spanPosition: spanPos,
+        allDay,
+        timeLabel: formatCompanyTimeLabel(c, spanPos),
+        subtitle: [
+          c.kind === "regular" ? "정기 반복" : "회사 일정",
+          c.roleLabel || c.role,
+          c.state || c.status,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        overdue: false,
+        completed,
+        companyItem: c,
       }))
     }
   }

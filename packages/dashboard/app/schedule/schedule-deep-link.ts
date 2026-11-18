@@ -18,9 +18,17 @@ function matchesTargetLayer(ev: CalendarCellEvent, targetLayer: ScheduleLinkTarg
   return ev.layer === targetLayer
 }
 
+function matchesTargetEventId(ev: CalendarCellEvent, target: ScheduleLinkTarget): boolean {
+  if (ev.id === target.id) return true
+  if (target.layer === "company") {
+    return ev.id === `company:${target.id}` || `company:${ev.id}` === target.id
+  }
+  return false
+}
+
 /** The event the link points at, looked up on the linked date first and then anywhere on the grid. */
 export function findLinkedEvent(cells: CalendarDayCell[], target: ScheduleLinkTarget): CalendarCellEvent | null {
-  const match = (ev: CalendarCellEvent) => matchesTargetLayer(ev, target.layer) && ev.id === target.id
+  const match = (ev: CalendarCellEvent) => matchesTargetLayer(ev, target.layer) && matchesTargetEventId(ev, target)
   const onDate = cells.find((c) => c.date === target.date)?.events.find(match)
   if (onDate) return onDate
   for (const cell of cells) {

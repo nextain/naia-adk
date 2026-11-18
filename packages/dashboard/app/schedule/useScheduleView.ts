@@ -5,14 +5,16 @@ import type { PersonalScheduleItem } from "@naia-adk/core/src/personal-schedule"
 import {
   buildCalendarCells, DEFAULT_SCHEDULE_LAYERS, formatCalendarPeriodTitle, localDateOnly,
   layoutCalendarWeeks, placeScheduleOnCalendar, readStoredCalendarUnit, readStoredDisplayMode,
-  readStoredScheduleLayers, readStoredWorkFilter, writeStoredCalendarUnit, writeStoredDisplayMode,
-  writeStoredScheduleLayers, writeStoredWorkFilter, type BoardScheduleProjection,
-  type CalendarCellEvent, type CalendarDayCell, type CalendarUnit, type ScheduleDisplayMode,
-  type ScheduleLayerKey, type ScheduleLayers, type WorkScheduleFilter,
+  readStoredScheduleLayers, readStoredShowRegular, readStoredWorkFilter, writeStoredCalendarUnit,
+  writeStoredDisplayMode, writeStoredScheduleLayers, writeStoredShowRegular, writeStoredWorkFilter,
+  type BoardScheduleProjection, type CalendarCellEvent, type CalendarDayCell, type CalendarUnit,
+  type CompanyScheduleItem, type ScheduleDisplayMode, type ScheduleLayerKey, type ScheduleLayers,
+  type WorkScheduleFilter,
 } from "./schedule-calendar"
 import {
-  buildInitialPersonalLayerState, emptyFormState, formStateFromItem, personalLayerStateFromResponse, shouldDiscardPersonalDraft,
-  type FormState, type PersonalLayerState, type ScheduleViewProps,
+  buildInitialPersonalLayerState, emptyFormState, formStateFromItem, personalLayerStateFromResponse,
+  requestCompanySchedule, shouldDiscardPersonalDraft, type CompanyLayerStatus, type FormState,
+  type PersonalLayerState, type ScheduleViewProps,
 } from "./schedule-view-model"
 import { requestBoardSchedule, retainLocalToday, type BoardScheduleStatus } from "./schedule-board-state"
 import { readScheduleDeepLink, resolveDeepLink, type ScheduleLinkTarget } from "./schedule-deep-link"
@@ -25,6 +27,44 @@ export function createLatestRequestGuard() {
   }
 }
 
+export function companyItemToCalendarEvent(item: CompanyScheduleItem): CalendarCellEvent {
+  const rawEnd = item.endDate || item.startDate
+  const startDate = item.startDate <= rawEnd ? item.startDate : rawEnd
+  const endDate = item.startDate <= rawEnd ? rawEnd : item.startDate
+  const allDay = !item.startTime && !item.endTime && !(item.times && item.times.length > 0)
+  const timeLabel = allDay
+    ? "종일"
+    : item.times && item.times.length > 1
+      ? item.times.join(", ")
+      : item.startTime && item.endTime && item.startTime !== item.endTime
+        ? `${item.startTime}~${item.endTime}`
+        : item.startTime ?? item.endTime ?? "종일"
+  const completed = Boolean(
+    item.status && /^(?:완료|발송\s*완료|출원\s*완료|제출\s*완료)(?:\s|\(|$)/.test(item.status.trim()),
+  )
+  return {
+    key: `company-${item.id}-${startDate}`,
+    id: item.id,
+    layer: "company",
+    title: item.title,
+    startDate,
+    endDate,
+    spanPosition: startDate === endDate ? "single" : "start",
+    allDay,
+    timeLabel,
+    subtitle: [
+      item.kind === "regular" ? "정기 반복" : "회사 일정",
+      item.roleLabel || item.role,
+      item.state || item.status,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    overdue: false,
+    completed,
+    companyItem: item,
+  }
+}
+
 export function useScheduleView(props: ScheduleViewProps) {
   const {
     hasBoard,
@@ -32,11 +72,13 @@ export function useScheduleView(props: ScheduleViewProps) {
     initialUnit,
     initialLayers,
     initialWorkFilter,
+    initialShowRegular,
     initialAnchorDate,
     initialPersonalItems,
     initialPersonalWarnings,
     initialPersonalIdentityRequired = false,
     initialPersonalLayerState,
+    initialCompanyItems,
     initialBoardSchedule,
     initialFormOpen = false,
     initialSelectedEvent = null,
@@ -54,7 +96,11 @@ export function useScheduleView(props: ScheduleViewProps) {
     ...initialLayers,
   })
   const [workFilter, setWorkFilterState] = useState<WorkScheduleFilter>(initialWorkFilter ?? "open")
+  const [showRegular, setShowRegularState] = useState<boolean>(initialShowRegular ?? false)
   const [anchorDate, setAnchorDate] = useState<string>(initialDeepLink?.date ?? defaultToday)
+  const [anchorReady, setAnchorReady] = useState<boolean>(
+    initialAnchorDate !== undefined || initialBoardSchedule !== undefined || initialDeepLink?.date !== undefined,
+  )
   // Detail link waiting for its event to appear (personal and board data load after mount).
   const pendingDeepLink = useRef<ScheduleLinkTarget | null>(initialDeepLink ?? null)
   const [deepLinkMissing, setDeepLinkMissing] = useState<boolean>(false)
@@ -85,12 +131,42 @@ export function useScheduleView(props: ScheduleViewProps) {
   )
   const [boardStatus, setBoardStatus] = useState<BoardScheduleStatus>(initialBoardSchedule ? "ready" : "loading")
 
+  const [companyItems, setCompanyItems] = useState<CompanyScheduleItem[]>(initialCompanyItems ?? [])
+  const [companyStatus, setCompanyStatus] = useState<CompanyLayerStatus>(
+    initialCompanyItems !== undefined ? "ready" : "loading",
+  )
+  const companyRequests = useRef(createLatestRequestGuard())
+  const skipInitialCompanyFetch = useRef(initialCompanyItems !== undefined)
+
+  // Read the detail link from the address once; show its layer even if the stored view hides it.
+  useEffect(() => {
+    if (initialDeepLink === undefined && typeof window !== "undefined") {
+      const link = readScheduleDeepLink(window.location.search)
+      if (link) {
+        pendingDeepLink.current = link
+        setAnchorDate(link.date)
+        setAnchorReady(true)
+      }
+    }
+    const link = pendingDeepLink.current
+    if (link) {
+      setLayersState((prev) => (prev[link.layer] ? prev : { ...prev, [link.layer]: true }))
+      setModeState("calendar")
+      if (link.layer === "work" || link.layer === "queue") setWorkFilterState("all")
+      if (link.layer === "company" && (link.id.startsWith("reg:") || link.id.startsWith("company:reg:"))) {
+        setShowRegularState(true)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   useEffect(() => {
     if (initialAnchorDate !== undefined || initialBoardSchedule !== undefined) return
     const today = localDateOnly(new Date())
     if (!today) return
     setAnchorDate(pendingDeepLink.current?.date ?? today)
     setBoardSchedule((current) => ({ ...current, todayDate: today }))
+    setAnchorReady(true)
   }, [initialAnchorDate, initialBoardSchedule])
 
   const [formOpen, setFormOpen] = useState<boolean>(() =>
@@ -116,23 +192,8 @@ export function useScheduleView(props: ScheduleViewProps) {
     if (initialWorkFilter === undefined) {
       setWorkFilterState(readStoredWorkFilter())
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // Read the detail link from the address once; show its layer even if the stored view hides it.
-  useEffect(() => {
-    if (initialDeepLink === undefined && typeof window !== "undefined") {
-      const link = readScheduleDeepLink(window.location.search)
-      if (link) {
-        pendingDeepLink.current = link
-        setAnchorDate(link.date)
-      }
-    }
-    const link = pendingDeepLink.current
-    if (link) {
-      setLayersState((prev) => (prev[link.layer] ? prev : { ...prev, [link.layer]: true }))
-      setModeState("calendar")
-      if (link.layer === "work" || link.layer === "queue") setWorkFilterState("all")
+    if (initialShowRegular === undefined) {
+      setShowRegularState(readStoredShowRegular())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -158,6 +219,21 @@ export function useScheduleView(props: ScheduleViewProps) {
   const setWorkFilter = (next: WorkScheduleFilter) => {
     setWorkFilterState(next)
     writeStoredWorkFilter(next)
+  }
+
+  const toggleRegular = () => {
+    setShowRegularState((prev) => {
+      const next = !prev
+      writeStoredShowRegular(next)
+      if (next && !layers.company) {
+        setLayersState((prevLayers) => {
+          const nextLayers = { ...prevLayers, company: true }
+          writeStoredScheduleLayers(nextLayers)
+          return nextLayers
+        })
+      }
+      return next
+    })
   }
 
   const loadPersonal = useCallback(async () => {
@@ -194,6 +270,36 @@ export function useScheduleView(props: ScheduleViewProps) {
     if (result.status === "ready") setBoardSchedule((current) => retainLocalToday(current, result.data))
     setBoardStatus(result.status)
   }, [fetchFn])
+
+  const baseGridCells = useMemo(
+    () => buildCalendarCells(anchorDate, unit, boardSchedule.todayDate),
+    [anchorDate, unit, boardSchedule.todayDate],
+  )
+  const visibleFrom = baseGridCells[0]?.date ?? anchorDate
+  const visibleTo = baseGridCells[baseGridCells.length - 1]?.date ?? anchorDate
+
+  const loadCompanySchedule = useCallback(
+    async (from = visibleFrom, to = visibleTo) => {
+      const generation = companyRequests.current.begin()
+      setCompanyStatus("loading")
+      const result = await requestCompanySchedule(from, to, fetchFn ?? fetch)
+      if (!companyRequests.current.isCurrent(generation)) return
+      if (result.status === "ready") {
+        setCompanyItems(result.items)
+      }
+      setCompanyStatus(result.status)
+    },
+    [fetchFn, visibleFrom, visibleTo],
+  )
+
+  useEffect(() => {
+    if (!anchorReady) return
+    if (skipInitialCompanyFetch.current) {
+      skipInitialCompanyFetch.current = false
+      return
+    }
+    void loadCompanySchedule(visibleFrom, visibleTo)
+  }, [anchorReady, visibleFrom, visibleTo, loadCompanySchedule])
 
   useEffect(() => {
     if (
@@ -421,15 +527,16 @@ export function useScheduleView(props: ScheduleViewProps) {
   )
 
   const calendarCells = useMemo(() => {
-    const base = buildCalendarCells(anchorDate, unit, boardSchedule.todayDate)
-    return placeScheduleOnCalendar(base, {
+    return placeScheduleOnCalendar(baseGridCells, {
       layers,
       workFilter,
+      includeRegular: showRegular,
       personalItems,
+      companyItems,
       workItems: boardSchedule.workItems,
       milestones: boardSchedule.milestones,
     })
-  }, [anchorDate, unit, boardSchedule.todayDate, layers, workFilter, personalItems, boardSchedule.workItems, boardSchedule.milestones])
+  }, [baseGridCells, layers, workFilter, showRegular, personalItems, companyItems, boardSchedule.workItems, boardSchedule.milestones])
 
   const calendarWeeks = useMemo(
     () => layoutCalendarWeeks(calendarCells, { unit }),
@@ -458,8 +565,14 @@ export function useScheduleView(props: ScheduleViewProps) {
   useEffect(() => {
     const link = pendingDeepLink.current
     if (!link) return
+    const sourceLoaded =
+      link.layer === "personal"
+        ? !personalLoading
+        : link.layer === "company"
+          ? companyStatus !== "loading"
+          : boardStatus !== "loading"
     const result = resolveDeepLink(calendarCells, link, {
-      sourceLoaded: link.layer === "personal" ? !personalLoading : boardStatus !== "loading",
+      sourceLoaded,
       layerShown: layers[link.layer],
       mode,
       workFilter,
@@ -468,10 +581,20 @@ export function useScheduleView(props: ScheduleViewProps) {
     pendingDeepLink.current = null
     if (result.status === "found") handleSelectCalendarEvent(result.event)
     else setDeepLinkMissing(true)
-  }, [calendarCells, handleSelectCalendarEvent, personalLoading, boardStatus, layers, mode, workFilter])
+  }, [calendarCells, handleSelectCalendarEvent, personalLoading, companyStatus, boardStatus, layers, mode, workFilter])
+
+  const companyMdItems = useMemo(
+    () => companyItems.filter((c) => c.kind !== "regular"),
+    [companyItems],
+  )
+  const regularItems = useMemo(
+    () => companyItems.filter((c) => c.kind === "regular"),
+    [companyItems],
+  )
 
   const layerCounts: Record<ScheduleLayerKey, number> = {
     personal: personalItems.length,
+    company: companyMdItems.length,
     work: filteredWorkDocCount,
     milestone: boardSchedule.milestones.length,
     queue: filteredQueueCount,
@@ -480,9 +603,10 @@ export function useScheduleView(props: ScheduleViewProps) {
   const periodTitle = formatCalendarPeriodTitle(anchorDate, unit)
 
   return {
-    hasBoard, mode, unit, layers, workFilter, anchorDate, setAnchorDate,
+    hasBoard, mode, unit, layers, workFilter, showRegular, toggleRegular, anchorDate, setAnchorDate,
     userLabel, personalIdentityRequired, personalWarningsLocked, personalLoading,
     personalUnavailable, canMutatePersonal, personalItems, personalWarnings,
+    companyItems, companyMdItems, regularItems, regularCount: regularItems.length, companyStatus, loadCompanySchedule,
     boardSchedule, boardStatus, loadBoardSchedule, formOpen, setFormOpen, form, setForm, formError, saving,
     selectedWorkEvent, setSelectedWorkEvent, setDayListDate, setMode, setUnit,
     toggleLayer, setWorkFilter, loadPersonal, openAddForm, openEditForm,

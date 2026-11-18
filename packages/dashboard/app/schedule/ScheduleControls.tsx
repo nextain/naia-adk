@@ -7,6 +7,7 @@ import { LAYER_LABELS, type ScheduleLayerKey } from "./schedule-calendar"
 type View = ReturnType<typeof useScheduleView>
 const LAYER_DOT_CLASS: Record<ScheduleLayerKey, string> = {
   personal: "bg-emerald-400",
+  company: "bg-violet-400",
   work: "bg-sky-400",
   milestone: "bg-amber-400",
   queue: "bg-slate-400",
@@ -14,12 +15,13 @@ const LAYER_DOT_CLASS: Record<ScheduleLayerKey, string> = {
 
 const LAYER_ACTIVE_BTN_CLASS: Record<ScheduleLayerKey, string> = {
   personal: "bg-emerald-950/80 border-emerald-500/80 text-emerald-200",
+  company: "bg-violet-950/80 border-violet-500/80 text-violet-200",
   work: "bg-sky-950/80 border-sky-500/80 text-sky-200",
   milestone: "bg-amber-950/80 border-amber-500/80 text-amber-200",
   queue: "bg-slate-900/90 border-slate-500/80 text-slate-200",
 }
 
-const SCHEDULE_LAYER_KEYS: ScheduleLayerKey[] = ["personal", "work", "milestone", "queue"]
+const SCHEDULE_LAYER_KEYS: ScheduleLayerKey[] = ["personal", "company", "work", "milestone", "queue"]
 
 
 export function ScheduleControls({ view }: { view: View }) {
@@ -101,10 +103,10 @@ export function ScheduleControls({ view }: { view: View }) {
           </button>
         </div>
 
-        {/* 네 겹 켜고 끄기 단추 */}
+        {/* 다섯 겹 켜고 끄기 단추 + 정기 반복 토글 */}
         <div role="group" aria-label="일정 겹 켜고 끄기" className="flex flex-wrap items-center gap-1.5">
           {SCHEDULE_LAYER_KEYS.map((key) => {
-            const active = layers[key]
+            const active = Boolean(layers[key])
             return (
               <button
                 key={key}
@@ -120,10 +122,26 @@ export function ScheduleControls({ view }: { view: View }) {
               >
                 <span className={`w-2 h-2 rounded-full ${active ? LAYER_DOT_CLASS[key] : "bg-neutral-600"}`} />
                 <span>{LAYER_LABELS[key]}</span>
-                <span className="text-[11px] tabular-nums opacity-80">{layerCounts[key]}</span>
+                <span className="text-[11px] tabular-nums opacity-80">{layerCounts?.[key] ?? 0}</span>
               </button>
             )
           })}
+          <button
+            type="button"
+            data-testid="schedule-toggle-regular"
+            aria-pressed={Boolean(view.showRegular)}
+            onClick={() => view.toggleRegular?.()}
+            title="정기 반복 일정(regular-schedule.yaml) 표시 켜기/끄기"
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium transition-colors ${
+              view.showRegular
+                ? "bg-fuchsia-950/80 border-fuchsia-500/80 text-fuchsia-200"
+                : "bg-neutral-900/70 border-neutral-800 text-neutral-500 hover:text-neutral-300"
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${view.showRegular ? "bg-fuchsia-400" : "bg-neutral-600"}`} />
+            <span>정기 반복</span>
+            <span className="text-[11px] tabular-nums opacity-80">{view.regularCount ?? 0}</span>
+          </button>
         </div>
 
         {canMutatePersonal && (

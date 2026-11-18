@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
   buildCalendarCells,
+  buildCompanyDocLink,
   buildShortDocLink,
   DEFAULT_SCHEDULE_LAYERS,
   extractBoardSchedule,
@@ -14,6 +15,7 @@ import {
   readStoredCalendarUnit,
   readStoredDisplayMode,
   readStoredScheduleLayers,
+  readStoredShowRegular,
   readStoredWorkFilter,
   SCHEDULE_LAYERS_STORAGE_KEY,
   shiftCalendarAnchor,
@@ -21,7 +23,9 @@ import {
   writeStoredCalendarUnit,
   writeStoredDisplayMode,
   writeStoredScheduleLayers,
+  writeStoredShowRegular,
   writeStoredWorkFilter,
+  type CompanyScheduleItem,
 } from "./schedule-calendar.ts"
 import type { PersonalScheduleItem } from "@naia-adk/core/src/personal-schedule"
 
@@ -266,31 +270,39 @@ describe("세 겹(개인 일정 · 그룹 작업 일정 · 마일스톤) 켜고 
     writeStoredCalendarUnit("week", store)
     assert.equal(readStoredCalendarUnit(store), "week")
 
-    // 저장값이 비어 있으면 queue 기본값은 false
+    // 저장값이 비어 있으면 company 기본값은 true, queue 기본값은 false
     assert.deepEqual(readStoredScheduleLayers(store), {
       personal: true,
+      company: true,
       work: true,
       milestone: true,
       queue: false,
     })
 
-    // 예전 저장값(queue 키 없음)을 읽으면 queue: false 로 시작한다
+    // 예전 저장값(company/queue 키 없음)을 읽으면 company: true, queue: false 로 시작한다
     store.setItem(SCHEDULE_LAYERS_STORAGE_KEY, JSON.stringify({ personal: true, work: false, milestone: true }))
     assert.deepEqual(readStoredScheduleLayers(store), {
       personal: true,
+      company: true,
       work: false,
       milestone: true,
       queue: false,
     })
 
-    // queue: true 저장 후 읽기
-    writeStoredScheduleLayers({ personal: true, work: false, milestone: true, queue: true }, store)
+    // company: false, queue: true 저장 후 읽기
+    writeStoredScheduleLayers({ personal: true, company: false, work: false, milestone: true, queue: true }, store)
     assert.deepEqual(readStoredScheduleLayers(store), {
       personal: true,
+      company: false,
       work: false,
       milestone: true,
       queue: true,
     })
+
+    // 정기 반복 토글 저장/읽기 (기본 false)
+    assert.equal(readStoredShowRegular(store), false)
+    writeStoredShowRegular(true, store)
+    assert.equal(readStoredShowRegular(store), true)
 
     // 저장소 읽기·쓰기가 실패해도 예외 없이 기본값으로 동작한다
     const throwingStore = {
@@ -301,13 +313,15 @@ describe("세 겹(개인 일정 · 그룹 작업 일정 · 마일스톤) 켜고 
         throw new Error("storage disabled")
       },
     }
-    assert.doesNotThrow(() => writeStoredScheduleLayers({ personal: false, work: false, milestone: false, queue: true }, throwingStore))
+    assert.doesNotThrow(() => writeStoredScheduleLayers({ personal: false, company: true, work: false, milestone: false, queue: true }, throwingStore))
     assert.deepEqual(readStoredScheduleLayers(throwingStore), {
       personal: true,
+      company: true,
       work: true,
       milestone: true,
       queue: false,
     })
+    assert.equal(readStoredShowRegular(throwingStore), false)
 
     writeStoredWorkFilter("all", store)
     assert.equal(readStoredWorkFilter(store), "all")
@@ -376,5 +390,75 @@ describe("세 겹(개인 일정 · 그룹 작업 일정 · 마일스톤) 켜고 
     assert.equal(oct25Events.length, 1)
     assert.equal(oct25Events[0].id, "w-long-with-due")
     assert.equal(oct25Events[0].spanPosition, "end")
+  })
+
+  it("회사·정기 일정(companyItems)은 달력 칸에 투영되고 includeRegular 및 company 층 토글에 따라 필터링된다", () => {
+    const novCells = buildCalendarCells("2026-11-18", "month", "2026-11-18")
+    const companyItems: CompanyScheduleItem[] = [
+      {
+        id: "company:md:aa1122334455",
+        title: "양평 AX 강의",
+        startDate: "2026-11-17",
+        endDate: "2026-11-18",
+        startTime: "09:00",
+        endTime: "12:00",
+        role: "루크·지나",
+        status: "확정",
+        sourceDocPath: "common/alpha/schedule.md",
+        kind: "company",
+      },
+      {
+        id: "company:reg:retro-daily:2026-11-18",
+        title: "매일 회고",
+        startDate: "2026-11-18",
+        endDate: "2026-11-18",
+        startTime: "22:00",
+        role: "alpha",
+        roleLabel: "알파",
+        state: "있음",
+        status: "있음",
+        sourceDocPath: "common/team/regular-schedule.yaml",
+        kind: "regular",
+      },
+    ]
+
+    // includeRegular=false면 schedule.md 일정만 배치됨
+    const mdOnly = placeScheduleOnCalendar(novCells, {
+      layers: DEFAULT_SCHEDULE_LAYERS,
+      includeRegular: false,
+      companyItems,
+    })
+    const nov18MdOnly = mdOnly.find((c) => c.date === "2026-11-18")!.events
+    assert.deepEqual(nov18MdOnly.map((e) => e.id), ["company:md:aa1122334455"])
+    assert.equal(nov18MdOnly[0].spanPosition, "end")
+    assert.equal(nov18MdOnly[0].timeLabel, "~12:00")
+
+    // includeRegular=true면 정기 반복도 배치됨
+    const withRegular = placeScheduleOnCalendar(novCells, {
+      layers: DEFAULT_SCHEDULE_LAYERS,
+      includeRegular: true,
+      companyItems,
+    })
+    const nov18All = withRegular.find((c) => c.date === "2026-11-18")!.events
+    assert.deepEqual(nov18All.map((e) => e.id), [
+      "company:md:aa1122334455",
+      "company:reg:retro-daily:2026-11-18",
+    ])
+
+    // company=false면 모두 숨겨짐
+    const companyOff = placeScheduleOnCalendar(novCells, {
+      layers: { ...DEFAULT_SCHEDULE_LAYERS, company: false },
+      includeRegular: true,
+      companyItems,
+    })
+    assert.equal(companyOff.find((c) => c.date === "2026-11-18")!.events.length, 0)
+
+    // 원본 문서 링크 생성 및 경로 탈출 차단
+    assert.equal(
+      buildCompanyDocLink("common/alpha/schedule.md"),
+      "/docs?source=adk&path=common%2Falpha%2Fschedule.md",
+    )
+    assert.equal(buildCompanyDocLink("../secret.md"), null)
+    assert.equal(buildCompanyDocLink(null), null)
   })
 })

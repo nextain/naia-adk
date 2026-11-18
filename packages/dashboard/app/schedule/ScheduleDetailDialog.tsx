@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef } from "react"
 import {
+  buildCompanyDocLink,
   LAYER_LABELS,
   taskStatusBadge,
   type CalendarCellEvent,
@@ -40,6 +41,18 @@ function formatEventPeriodLabel(ev: CalendarCellEvent): string {
     const p = ev.personalItem
     const range = p.start === p.end ? p.start : `${p.start} ~ ${p.end}`
     return `${range} (${p.allDay ? "종일" : "시각 지정"})`
+  }
+  if (ev.layer === "company" && ev.companyItem) {
+    const c = ev.companyItem
+    const startTime = c.startTime ? ` ${c.startTime}` : ""
+    const endTime = c.endTime ? ` ${c.endTime}` : ""
+    if (c.startDate === c.endDate) {
+      if (c.times && c.times.length > 1) return `${c.startDate} (${c.times.join(", ")})`
+      if (c.startTime && c.endTime && c.startTime !== c.endTime) return `${c.startDate} ${c.startTime}~${c.endTime}`
+      if (c.startTime) return `${c.startDate} ${c.startTime}`
+      return `${c.startDate} (종일)`
+    }
+    return `${c.startDate}${startTime} ~ ${c.endDate}${endTime}`
   }
   return ev.startDate === ev.endDate ? ev.startDate : `${ev.startDate} ~ ${ev.endDate}`
 }
@@ -87,11 +100,21 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
   const w = event.workItem
   const ms = event.milestoneItem
   const p = event.personalItem
+  const c = event.companyItem
+  const companyDocLink = c ? buildCompanyDocLink(c.sourceDocPath) : null
 
   const tasks = w?.tasks ?? []
   const taskTotal = w?.taskTotal ?? tasks.length
   const taskDone = w?.taskDone ?? tasks.filter((t) => t.done).length
-  const kindLabel = w ? (w.kind === "work_document" ? "작업 문서" : "큐 항목") : null
+  const kindLabel = w
+    ? w.kind === "work_document"
+      ? "작업 문서"
+      : "큐 항목"
+    : c
+      ? c.kind === "regular"
+        ? "정기 반복"
+        : "회사 일정"
+      : null
 
   return (
     <div
@@ -373,6 +396,58 @@ export function ScheduleDetailDialog({ event, onClose }: ScheduleDetailDialogPro
               </div>
             </dl>
           )}
+
+          {/* 4) 회사 · 정기 일정 상세 */}
+          {event.layer === "company" && (
+            <>
+              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 rounded-lg border border-neutral-800 bg-neutral-950/70 p-3">
+                <div>
+                  <dt className="text-[11px] text-neutral-400">기간 · 시각</dt>
+                  <dd data-testid="schedule-detail-company-period" className="font-medium text-neutral-100 mt-0.5 break-words">
+                    {formatEventPeriodLabel(event)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-[11px] text-neutral-400">담당</dt>
+                  <dd data-testid="schedule-detail-company-role" className="font-medium text-neutral-100 mt-0.5 break-words">
+                    {c?.roleLabel || c?.role || "미지정"}
+                  </dd>
+                </div>
+                <div className={c?.repeatSummary ? "" : "sm:col-span-2"}>
+                  <dt className="text-[11px] text-neutral-400">상태</dt>
+                  <dd data-testid="schedule-detail-company-status" className="font-medium text-neutral-100 mt-0.5 break-words">
+                    {c?.state || c?.status || "-"}
+                  </dd>
+                </div>
+                {c?.repeatSummary && (
+                  <div>
+                    <dt className="text-[11px] text-neutral-400">반복 주기</dt>
+                    <dd data-testid="schedule-detail-company-repeat" className="font-medium text-neutral-100 mt-0.5 break-words">
+                      {c.repeatSummary}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+
+              {companyDocLink && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-violet-800/70 bg-violet-950/30 p-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[11px] text-neutral-400">원본 문서 경로</div>
+                    <code className="text-xs text-violet-200 break-all">{c?.sourceDocPath}</code>
+                  </div>
+                  <a
+                    href={companyDocLink}
+                    target="_blank"
+                    rel="noopener"
+                    data-testid="schedule-detail-company-doc-link"
+                    className="px-3 py-1.5 rounded-md bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold shrink-0 transition-colors"
+                  >
+                    원본 문서 보기
+                  </a>
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -402,7 +477,7 @@ export function ScheduleDayListDialog({ cell, onClose, onSelectEvent }: Schedule
   if (!cell) return null
 
   const groups: Array<{ layer: ScheduleLayerKey; label: string; items: CalendarCellEvent[] }> = (
-    ["milestone", "personal", "work"] as const
+    ["milestone", "company", "personal", "work"] as const
   )
     .map((layer) => ({
       layer,
