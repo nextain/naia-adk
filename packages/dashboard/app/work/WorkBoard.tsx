@@ -195,13 +195,13 @@ export function WorkBoard({
   const [query, setQuery] = useState<string>(initialQuery)
 
   const items = ledger?.items ?? []
-  const roleBuckets = useMemo(
-    () => summarizeRoles(items, ledger?.roles ?? []),
-    [items, ledger?.roles],
-  )
   const visibleActiveItems = useMemo(
     () => filterLedgerCards(items, { role: selectedRole, overdueOnly, query }).filter((item) => isActiveStatus(item.status)),
     [items, selectedRole, overdueOnly, query],
+  )
+  const roleBuckets = useMemo(
+    () => summarizeRoles(visibleActiveItems, ledger?.roles ?? []),
+    [visibleActiveItems, ledger?.roles],
   )
   const detailItems = useMemo(
     () => filterLedgerCards(items, { role: selectedRole, statusFilter: detailStatus, overdueOnly, query }),
@@ -295,27 +295,27 @@ export function WorkBoard({
       {/* 핵심 지표 카드 */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
-          <div className="text-xs text-neutral-400">할 일 (열림+대기)</div>
+          <div className="text-xs text-neutral-400">전체 장부 할 일 (열림+대기)</div>
           <div data-testid="summary-todo-count" className="text-2xl font-bold text-white mt-1">
             {summary.todoCount}
           </div>
         </div>
         <div className="rounded-lg border border-rose-900/60 bg-rose-950/20 p-3">
-          <div className="text-xs text-rose-300">기한 넘음</div>
+          <div className="text-xs text-rose-300">전체 장부 기한 넘음</div>
           <div data-testid="summary-overdue-count" className="text-2xl font-bold text-rose-300 mt-1">
             {summary.overdue}
           </div>
         </div>
         <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
-          <div className="text-xs text-neutral-400">진행 중</div>
+          <div className="text-xs text-neutral-400">전체 장부 진행 중</div>
           <div className="text-2xl font-bold text-blue-300 mt-1">{summary.open}</div>
         </div>
         <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
-          <div className="text-xs text-neutral-400">사람 확인 대기</div>
+          <div className="text-xs text-neutral-400">전체 장부 사람 확인 대기</div>
           <div className="text-2xl font-bold text-amber-300 mt-1">{summary.waiting_human}</div>
         </div>
         <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-3">
-          <div className="text-xs text-neutral-400">완료 · 취소</div>
+          <div className="text-xs text-neutral-400">전체 장부 완료 · 취소</div>
           <div className="text-2xl font-bold text-neutral-300 mt-1">{summary.done + summary.dropped}</div>
         </div>
       </div>
@@ -359,7 +359,7 @@ export function WorkBoard({
                   : "border-neutral-800 bg-neutral-900 text-neutral-300 hover:border-neutral-700"
               }`}
             >
-              전체 역할 ({summary.todoCount})
+              전체 역할 ({roleBuckets.reduce((sum, bucket) => sum + bucket.todoCount, 0)})
             </button>
             {roleBuckets.map((rb) => {
               const active = selectedRole === rb.role

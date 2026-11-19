@@ -1776,6 +1776,8 @@ test("waiting_human handles cap transition, overdue daily reminders, and edit/sa
   const ledCap = await readLedger(root, "secretary");
   const wh = ledCap.items.find((i) => i.from.msg_id === "th-post");
   assert.equal(wh.status, "waiting_human");
+  assert.equal(wh.title, "사람 글 th-1/th-post");
+  assert.equal(wh.from.quote, "<@bot> 쓰레드 작업 처리");
 
   // waiting_human 기한(+4시간) 전에는 조용하고, 기한 지나면 "기한 넘음"으로 한 번 깨우고 다음 날로 민다 (HIGH #6)
   assert.deepEqual(
@@ -1976,6 +1978,7 @@ test("unrecorded human posts exiting 24h since window register waiting_human bef
   const ledPaged = await readLedger(rootPaged, "secretary");
   const expiredItem = ledPaged.items.find((i) => i.from.msg_id === "will-expire");
   assert.equal(expiredItem?.status, "waiting_human");
+  assert.equal(expiredItem?.title, "사람 글 ch/will-expire");
   assert.match(expiredItem?.note, /24시간/);
 });
 

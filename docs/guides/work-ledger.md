@@ -89,10 +89,10 @@ read access. Use a shared group for the directory; files are published as 0644.
 Protect access to the output directory according to the sensitivity of task
 names and channel/message identifiers. The exporter writes only active items
 (`open`, `waiting_human`, `escalated_human`), their board fields, and a worker's
-explicit `alive` boolean if present. Unknown worker liveness remains unknown.
+explicit `alive` boolean if present. Titles default to `작업`; set `public_title` only for text approved for the board. The exporter masks email and recognizable secret patterns as a further precaution. Unknown worker liveness remains unknown.
 The update time is `updated_at`, falling back to `checked_at`; missing times
 remain unknown. It omits notes, original quotations and worker file paths.
-Each file is written to a fresh temporary file and renamed into place. A missing
+The output directory must not be a source ledger directory or its ancestor; resolved symlink paths are checked before writing. Each file is written to a fresh temporary file and renamed into place. A missing
 or malformed source fails the command and leaves its previous export untouched;
 other selected roles are still attempted. Monitor cron failures and export age.
 

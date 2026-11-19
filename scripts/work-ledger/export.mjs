@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 // Publish the minimal board projection, separately for each source owner.
-import { open, readFile, rename, unlink } from "node:fs/promises";
+import { open, readFile, realpath, rename, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { validateLedger } from "./ledger.mjs";
+import { redact } from "../bot-mention-wake.mjs";
 
 const ACTIVE = new Set(["open", "waiting_human", "escalated_human"]);
-const textOrNull = (value) => typeof value === "string" ? value : null;
+const textOrNull = (value) => typeof value === "string" ? redact(value).replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[REDACTED]") : null;
 const safeRole = (role) => typeof role === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(role);
 
 export function projectLedger(ledger, role) {
-  if (!ledger || ledger.version !== 1 || ledger.role !== role || !Array.isArray(ledger.items))
-    throw new Error(`Invalid ledger for ${role}`);
+  validateLedger(ledger, role);
   return {
     version: 1,
     role,
@@ -20,11 +21,11 @@ export function projectLedger(ledger, role) {
         throw new Error(`Invalid active item in ${role}`);
       const worker = item.worker && typeof item.worker === "object" ? item.worker : null;
       return {
-        id: item.id,
-        title: item.title,
+        id: textOrNull(item.id),
+        title: textOrNull(item.public_title) || "작업",
         due: textOrNull(item.due),
         status: item.status,
-        worker: worker ? { name: typeof worker.name === "string" ? worker.name : null, alive: typeof worker.alive === "boolean" ? worker.alive : null } : null,
+        worker: worker ? { name: textOrNull(worker.name), alive: typeof worker.alive === "boolean" ? worker.alive : null } : null,
         updated_at: textOrNull(item.updated_at) ?? textOrNull(item.checked_at),
         from: { channel: textOrNull(item.from?.channel), msg_id: textOrNull(item.from?.msg_id) },
       };
@@ -64,6 +65,31 @@ export async function atomicExport(file, value, renameFile = rename) {
   }
 }
 
+// Resolve symlinks even when a source does not yet exist.
+async function canonicalPath(file) {
+  try { return await realpath(file); }
+  catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    const parent = path.dirname(file);
+    if (parent === file) throw error;
+    return path.join(await canonicalPath(parent), path.basename(file));
+  }
+}
+
+async function validatePaths(config) {
+  const output = await canonicalPath(path.resolve(config.outputDir));
+  for (const source of config.sources) {
+    const input = await canonicalPath(path.resolve(source.path));
+    const relative = path.relative(output, path.dirname(input));
+    if (relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)))
+      throw new Error(`Output directory overlaps source: ${source.role}`);
+    for (const target of config.sources) {
+      if (await canonicalPath(path.join(output, `${target.role}.json`)) === input)
+        throw new Error(`Output file overlaps source: ${source.role}`);
+    }
+  }
+}
+
 export async function exportLedgers(config, roles) {
   validateConfig(config);
   if (!Array.isArray(roles) || !roles.length || new Set(roles).size !== roles.length)
@@ -73,6 +99,7 @@ export async function exportLedgers(config, roles) {
     if (!source) throw new Error(`Role not configured: ${role}`);
     return source;
   });
+  await validatePaths(config);
   const errors = [];
   for (const source of selected) {
     try {

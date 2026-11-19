@@ -194,7 +194,7 @@ export function summarizeRoles(items: LedgerCardItem[], configuredRoles: string[
     }
     bucket.total++
     if (isActiveStatus(item.status)) bucket.todoCount++
-    if (item.overdue) bucket.overdueCount++
+    if (isActiveStatus(item.status) && item.overdue) bucket.overdueCount++
   }
   return [...map.values()].sort((a, b) => a.role.localeCompare(b.role, "ko"))
 }
