@@ -47,6 +47,7 @@ const sampleLedger: LedgerPayload = {
       isTodo: true,
       createdAt: null,
       checkedAt: null,
+      updatedAt: "2026-11-18T03:59:59Z",
       note: "기한 넘긴 작업",
       channel: "100",
       msgId: "200",
@@ -62,7 +63,8 @@ const sampleLedger: LedgerPayload = {
           path: "guides/result.md",
         },
       ],
-      workerName: null,
+      workerName: "worker-1",
+      workerAlive: null,
       hasDrive: false,
     },
     {
@@ -137,6 +139,11 @@ describe("WorkBoard render", () => {
     assert.ok(html.includes('data-testid="role-filter-minho"'))
     assert.ok(html.includes('data-testid="role-filter-jina"'))
     assert.ok(html.includes('data-testid="ledger-overdue-card-overdue"'))
+    assert.ok(html.includes('data-testid="role-column-minho"'))
+    assert.ok(html.includes('data-testid="role-column-jina"'))
+    assert.ok(html.includes('data-testid="ledger-stalled-card-overdue"'))
+    assert.ok(html.includes("worker-1 (상태 확인 불가)"))
+    assert.ok(html.includes("열린 작업 1 · 기한 넘음 1"))
     assert.ok(html.includes('href="https://discord.com/channels/999/100/200"'))
     assert.ok(html.includes('href="/docs?tab=developer&amp;source=adk&amp;path=guides%2Fresult.md"'))
 

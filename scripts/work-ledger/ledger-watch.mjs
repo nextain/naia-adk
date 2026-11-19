@@ -1118,7 +1118,7 @@ export async function watch({
               };
               const bodyText = String(m.body || "").trim();
               const itemTitle =
-                bodyText.replace(/\s+/g, " ").slice(0, 120) || "(본문 없음)";
+                `사람 글 ${msgChannel}/${m.id}`;
               if (effectiveMs < since) {
                 if (
                   !recordedItems.length &&
@@ -1260,7 +1260,7 @@ export async function watch({
                 role,
                 msgId: meta.msg_id,
                 msgChannel: meta.channel,
-                title: meta.title || "(본문 없음)",
+                title: `사람 글 ${meta.channel}/${meta.msg_id}`,
                 quote: meta.quote || "",
                 mentions: Array.isArray(meta.mentions) ? meta.mentions : [],
                 roleMentions: Array.isArray(meta.mention_roles)

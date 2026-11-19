@@ -82,3 +82,17 @@ describe("work-ledger-view pure helpers", () => {
     assert.equal(isSafeHttpUrl("javascript:alert(1)"), false)
   })
 })
+
+
+describe("stalled work", () => {
+  it("requires an active item and a valid update older than two hours", async () => {
+    const { isStalled } = await import("./work-ledger-view.ts")
+    const now = Date.parse("2026-11-18T06:00:00Z")
+    const item = { status: "open", updatedAt: "2026-11-18T04:00:00Z" } as import("./work-ledger-view.ts").LedgerCardItem
+    assert.equal(isStalled(item, now), false)
+    assert.equal(isStalled({ ...item, updatedAt: "2026-11-18T03:59:59Z" }, now), true)
+    assert.equal(isStalled({ ...item, updatedAt: null }, now), false)
+    assert.equal(isStalled({ ...item, updatedAt: "bad" }, now), false)
+    assert.equal(isStalled({ ...item, status: "done", updatedAt: "2020-01-01" }, now), false)
+  })
+})
