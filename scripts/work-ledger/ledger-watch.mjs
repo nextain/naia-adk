@@ -28,6 +28,30 @@ const ELSEWHERE_MAX_AGE_MS = 7 * DAY_MS;
 const ISO_TIMESTAMP_RE =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
 
+export async function writeLedgerWake(wakeDir, { stamp, role, id, reason, title, details }) {
+  const route = `-route-${role}.md`;
+  const filename = (nonce = "") => {
+    const normal = `${stamp}-ledger-${id}${nonce}${route}`;
+    if (Buffer.byteLength(normal) <= 255) return normal;
+    const available = 255 - Buffer.byteLength(route);
+    if (available < 5) throw new Error("Role too long for wake filename");
+    const digest = createHash("sha256").update(JSON.stringify([role, id, reason, stamp, nonce])).digest("hex");
+    return `${digest.slice(0, available)}${route}`;
+  };
+  const write = (nonce) => writeFile(
+    path.join(wakeDir, filename(nonce)),
+    `[장부] ${reason}: ${String(title).replace(/[\r\n]/g, " ")}\n${details}\n`,
+    { flag: "wx", mode: 0o600 },
+  );
+  // wx prevents overwriting an existing wake when a prior state write failed.
+  try {
+    await write();
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    await write(`-${randomUUID().slice(0, 8)}`);
+  }
+}
+
 function roleOption(roleConfig, config, key, fallback) {
   if (roleConfig?.[key] !== undefined) return roleConfig[key];
   if (config?.defaults?.[key] !== undefined) return config.defaults[key];
@@ -476,30 +500,7 @@ export async function watch({
       if (!force && state.sent[key] !== undefined && now - state.sent[key] < WAKE_COOLDOWN_MS)
         return;
       const stamp = new Date(now + sequence++).toISOString().replace(/\D/g, "");
-      const route = `-route-${role}.md`;
-      const filename = (nonce = "") => {
-        const normal = `${stamp}-ledger-${id}${nonce}${route}`;
-        if (Buffer.byteLength(normal) <= 255) return normal;
-        const available = 255 - Buffer.byteLength(route);
-        if (available < 5) throw new Error("Role too long for wake filename");
-        return `${createHash("sha256").update(JSON.stringify([role, id, reason, stamp, nonce])).digest("hex").slice(0, available)}${route}`;
-      };
-      const file = path.join(wakeDir, filename());
-      // wx prevents overwriting an existing wake when a prior state write failed.
-      try {
-        await writeFile(
-          file,
-          `[장부] ${reason}: ${String(title).replace(/[\r\n]/g, " ")}\n${details}\n`,
-          { flag: "wx", mode: 0o600 },
-        );
-      } catch (error) {
-        if (error.code !== "EEXIST") throw error;
-        const alternate = path.join(wakeDir, filename(`-${randomUUID().slice(0, 8)}`));
-        await writeFile(alternate, `[장부] ${reason}: ${title}\n${details}\n`, {
-          flag: "wx",
-          mode: 0o600,
-        });
-      }
+      await writeLedgerWake(wakeDir, { stamp, role, id, reason, title, details });
       state.sent[key] = now;
       wakes.push({ role, id, reason });
       return true;

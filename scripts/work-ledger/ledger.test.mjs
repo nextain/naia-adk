@@ -11,10 +11,61 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { main, readLedger, ledgerPath, changeLedger } from "./ledger.mjs";
+import { main, readLedger, ledgerPath, changeLedger, wakeHeader } from "./ledger.mjs";
 import { watch } from "./ledger-watch.mjs";
 import { createAdapter } from "./messenger.mjs";
 const now = Date.parse("2026-11-08T12:00:00Z");
+const headerRow = (id, changes = {}) => ({
+  id, title: id, due: "2026-11-08T10:00:00Z", status: "open",
+  from: { channel: "channel", msg_id: id },
+  ...changes,
+});
+
+test("wake header shows an empty ledger and puts a single open item on one line", () => {
+  assert.equal(wakeHeader([], {}, now), "[내 장부 먼저]\n열린 업무 없음 — 이 글이 업무면 장부에 올릴 것");
+  const item = headerRow("123456789", { title: ` ${"한".repeat(80)}\n끝버림` });
+  assert.equal(wakeHeader([item], { msgId: item.id }, now),
+    `[내 장부 먼저]\n- 12345678 | open | ${"한".repeat(80)} | ${item.due}`);
+  assert.equal(wakeHeader([headerRow("waiting", { status: "waiting_human" })], {}, now),
+    "[내 장부 먼저]\n- waiting | waiting_human | waiting | 2026-11-08T10:00:00Z");
+});
+
+test("wake header matches the channel and message, or a message ID on its own", () => {
+  const sameId = { channel: "other", msg_id: "original" };
+  const matched = headerRow("matched", { status: "done", from: { channel: "channel", msg_id: "original" } });
+  const recent = headerRow("recent", { due: "2026-11-08T13:00:00Z", from: sameId });
+  assert.match(wakeHeader([recent, matched], { channel: "channel", msgId: "original" }, now), /^\[내 장부 먼저\]\n- matched.*\n- recent/);
+  assert.match(wakeHeader([matched, recent], { msgId: "original" }, now), /^\[내 장부 먼저\]\n- recent/);
+  assert.doesNotMatch(wakeHeader([recent, matched], { channel: "missing", msgId: "original" }, now), /matched/);
+  assert.doesNotMatch(wakeHeader([recent, matched], {}, now), /matched/);
+});
+
+test("wake header orders and counts unique overdue rows in a mixed 25-item ledger", () => {
+  const rows = [
+    headerRow("match-01", { status: "waiting_human", checked_at: "2026-11-08T11:00:00Z", from: { channel: "channel", msg_id: "wanted" } }),
+    headerRow("latest01", { checked_at: "2026-11-08T11:30:00Z" }),
+    headerRow("tie-bbbb", { from: { channel: "", msg_id: "-" }, status: "waiting_human" }),
+    headerRow("tie-aaaa", { from: { channel: "", msg_id: "-" } }),
+    headerRow("oldest01", { due: "2026-11-08T01:00:00Z", created_at: "2026-11-08T09:00:00Z" }),
+    headerRow("old-copy", { due: "2026-11-08T06:00:00Z", from: { channel: "channel", msg_id: "oldest01" } }),
+    headerRow("lt-copy1", { due: "2026-11-08T07:00:00Z", from: { channel: "channel", msg_id: "latest01" } }),
+    headerRow("mt-copy1", { due: "2026-11-08T08:00:00Z", from: { channel: "channel", msg_id: "wanted" } }),
+    headerRow("later001", { due: "2026-11-08T11:00:00Z" }),
+    headerRow("next001", { due: "2026-11-08T11:01:00Z" }),
+    headerRow("due-now", { status: "waiting_human", due: "2026-11-08T12:00:00Z" }),
+    ...Array.from({ length: 14 }, (_, index) =>
+      headerRow(`closed-${index}`, { status: ["done", "dropped", "escalated_human"][index % 3] })),
+  ];
+  const snapshot = structuredClone(rows);
+  const summary = wakeHeader(rows, { channel: "channel", msgId: "wanted" }, now);
+  assert.deepEqual(summary.split("\n").slice(1).map(line => line.startsWith("- ") ? line.slice(2, 10) : line),
+    ["match-01", "latest01", "oldest01", "tie-aaaa", "tie-bbbb", "외 2건"]);
+  assert.equal(wakeHeader(rows.toReversed(), { msgId: "wanted" }, now), summary);
+  assert.deepEqual(rows, snapshot);
+  rows[8].updated_at = "2026-11-08T11:59:00Z";
+  assert.match(wakeHeader(rows, {}, now), /^\[내 장부 먼저\]\n- later001/);
+});
+
 const createdRoots = [];
 test.after(async () => {
   await Promise.all(

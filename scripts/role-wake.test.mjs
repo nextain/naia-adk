@@ -5,6 +5,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { boardSection, compareViews, deliver, detectTool, inspect, legacyView, loadRegistry, main, readFailures, readLedger, sweep, waitRunning, watch } from './role-wake.mjs';
+import { ledgerPath } from './work-ledger/ledger.mjs';
+import { writeLedgerWake } from './work-ledger/ledger-watch.mjs';
 
 const NOW = Date.parse('2026-01-10T00:00:00Z');
 const DAY = 86_400_000;
@@ -42,6 +44,193 @@ function setup(t, patch = {}) {
   return { dir, root, retired, units, waitScript, doc, file, write, state, deps, put, load: () => loadRegistry(file) };
 }
 const codes = report => report.findings.map(finding => `${finding.code}:${finding.role ?? ''}`).sort();
+const SOURCE_CHANNEL = '300000000000000002';
+const ORIGINAL_MESSAGE = '300000000000000003';
+const STAGE_MESSAGE = '300000000000000004';
+const ledgerRow = (id, patch = {}) => ({
+  id, title: id, status: 'open', from: { channel: SOURCE_CHANNEL, msg_id: ORIGINAL_MESSAGE, quote: '' },
+  due: '2026-01-11T00:00:00Z', checked_at: null, note: '', worker: null, ...patch,
+});
+
+function writeWorkLedger(file, role, items) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ version: 1, role, items,
+    report: { every_min: 0, channel: '', last_msg_id: null, last_at: null } }));
+}
+
+function readAtDelivery(f) {
+  const run = f.deps.run;
+  const received = [];
+  f.deps.run = (bin, args, options) => {
+    if (bin === '/opt/deliver') {
+      const [role, file] = args;
+      received.push({ role, file, body: fs.readFileSync(file, 'utf8') });
+    }
+    return run(bin, args, options);
+  };
+  return received;
+}
+
+test('work-header delivery uses producer metadata, falls back to recent work, and leaves the original intact', t => {
+  const f = setup(t);
+  f.doc.delivery.workHeader = true;
+  f.doc.roles['role-a'].ledger = 'custom/role-a.json';
+  writeWorkLedger(path.join(f.root, 'custom/role-a.json'), 'role-a', [
+    ledgerRow('original'),
+    ledgerRow('synthetic', { from: { channel: SOURCE_CHANNEL, msg_id: STAGE_MESSAGE, quote: '' }, due: '2026-01-12T00:00:00Z' }),
+    ledgerRow('recent-1', { from: { channel: '', msg_id: '-', quote: '' }, due: '2026-01-13T00:00:00Z' }),
+  ]);
+  f.write();
+  const received = readAtDelivery(f);
+  const registry = f.load();
+  deliver(registry, f.deps);
+  const discordWake = auth => `# Discord wake\r\n\r\nRole: role-a\r\nChannel: general (${SOURCE_CHANNEL})\r\n${auth}\r\n\r\nWake body\r\n`;
+  const bodies = [
+    discordWake(`Author: Human\r\nMessage ID: ${ORIGINAL_MESSAGE}`),
+    discordWake(`Author: agent-request-watch\r\nMessage ID: ${STAGE_MESSAGE}\r\nOriginal Message ID: ${ORIGINAL_MESSAGE}`),
+    `# Liveness wake\n\nMessage ID: ${ORIGINAL_MESSAGE}\n`,
+    discordWake(`Author: agent-request-watch\r\nMessage ID: ${STAGE_MESSAGE}`),
+  ];
+  const files = bodies.map((body, i) => {
+    const file = f.put('role-a', `0${i}-wake.md`);
+    fs.writeFileSync(file, body);
+    fs.utimesSync(file, new Date(NOW), new Date(NOW));
+    return file;
+  });
+  assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, bodies.length);
+  for (const [i, attempt] of received.entries()) {
+    assert.equal(attempt.file, path.join(registry.stateDir, 'spool', 'role-a', path.basename(files[i])));
+    assert.ok(attempt.body.startsWith(`[내 장부 먼저]\n- ${i < 2 ? 'original' : 'recent-1'} | open |`));
+    assert.doesNotMatch(attempt.body.split('\n\n')[0], /synthetic/);
+    assert.ok(attempt.body.endsWith(`\n\n${bodies[i]}`));
+    assert.equal(fs.readFileSync(files[i], 'utf8'), bodies[i]);
+    assert.equal(fs.existsSync(attempt.file), false);
+  }
+});
+
+test('configured work ledgers fail open with one diagnostic and unconfigured roles use the original path', t => {
+  const f = setup(t);
+  f.doc.delivery.workHeader = true;
+  f.write();
+  const config = path.join(f.root, 'config/work-ledger.json');
+  fs.mkdirSync(path.dirname(config));
+  fs.writeFileSync(config, JSON.stringify({ roles: [{ role: 'role-a' }] }));
+  const registry = f.load();
+  const received = readAtDelivery(f);
+  deliver(registry, f.deps);
+  const noLedger = f.put('role-a', '01-missing.md');
+  const unconfigured = f.put('role-b', '01-unconfigured.md');
+  deliver(registry, f.deps);
+  const file = ledgerPath(f.root, 'role-a');
+  writeWorkLedger(file, 'role-a', []);
+  f.put('role-a', '02-empty.md');
+  deliver(registry, f.deps);
+  fs.writeFileSync(file, '{"broken": PRIVATE');
+  const broken = f.put('role-a', '03-broken.md');
+  deliver(registry, f.deps);
+  fs.rmSync(file);
+  fs.mkdirSync(file);
+  f.put('role-a', '04-unreadable.md');
+  deliver(registry, f.deps);
+  assert.deepEqual(received.map(attempt => attempt.body), [
+    '[장부 읽기 실패: ENOENT]\n\nwake\n',
+    'wake\n',
+    '[내 장부 먼저]\n열린 업무 없음 — 이 글이 업무면 장부에 올릴 것\n\nwake\n',
+    '[장부 읽기 실패: 잘못된 JSON]\n\nwake\n',
+    '[장부 읽기 실패: EISDIR]\n\nwake\n',
+  ]);
+  assert.equal(received[1].file, unconfigured);
+  assert.equal(fs.readFileSync(noLedger, 'utf8'), 'wake\n');
+  assert.equal(fs.readFileSync(broken, 'utf8'), 'wake\n');
+});
+
+test('a via wake retries with the latest work header, keeping the original delivery key', t => {
+  const f = setup(t);
+  f.doc.delivery.workHeader = true;
+  const outside = path.join(f.dir, 'extra');
+  const source = path.join(outside, 'via-wake.md');
+  const ledgerFile = path.join(f.root, 'custom.json');
+  f.doc.roles['role-a'].ledger = ledgerFile;
+  f.doc.roles['role-a'].extra_boxes = [{ path: outside, via: ['/opt/read'] }];
+  f.write();
+  const received = readAtDelivery(f);
+  const run = f.deps.run;
+  let found = false, reads = 0;
+  f.deps.run = (bin, args, options) => {
+    if (bin === '/opt/read' && args[0] === 'find') return found ? `${NOW / 1000}\tvia-wake.md\n` : '';
+    if (bin === '/opt/read' && args[0] === 'cat') {
+      assert.deepEqual(args, ['cat', source]);
+      reads += 1;
+      return Buffer.from('via body\n');
+    }
+    return run(bin, args, options);
+  };
+  const registry = f.load();
+  const [role] = registry.roles;
+  deliver(registry, f.deps);
+  found = true;
+  f.state.failOn = 'via-wake.md';
+  writeWorkLedger(ledgerFile, role.id, [ledgerRow('first')]);
+  assert.equal(deliver(registry, f.deps).roles[role.id].failed, 1);
+  assert.deepEqual(Object.keys(readFailures(registry, role)), [source]);
+  assert.equal(fs.existsSync(received[0].file), false);
+  writeWorkLedger(ledgerFile, role.id, [ledgerRow('second')]);
+  f.state.now += 61_000;
+  f.state.failOn = null;
+  assert.equal(deliver(f.load(), f.deps).roles[role.id].delivered, 1);
+  assert.equal(readLedger(registry, role).has(source), true);
+  assert.deepEqual(readFailures(registry, role), {});
+  assert.equal(reads, 2);
+  assert.ok(received.every(attempt => attempt.file !== source && attempt.body.endsWith('\n\nvia body\n')));
+  assert.deepEqual(received.map(attempt => attempt.body.split('\n')[1].split(' | ')[0]), ['- first', '- second']);
+  assert.equal(readLedger(registry, role).has(received[1].file), false);
+});
+
+test('real work-ledger wake files in the shared box only reach their addressed roles', async t => {
+  const f = setup(t);
+  const shared = path.join(f.root, '.agents/work/l4/wake');
+  f.doc.wake_root = path.relative(f.root, shared);
+  f.write();
+  fs.mkdirSync(path.join(shared, 'role-b'), { recursive: true });
+  const registry = f.load();
+  deliver(registry, f.deps);
+  for (const [i, { id: role }] of registry.roles.entries()) {
+    const stamp = new Date(NOW + i).toISOString().replace(/\D/g, '');
+    await writeLedgerWake(shared, { stamp, role, id: `task-${role}`, reason: '기한 넘음', title: role, details: '' });
+  }
+  const generated = fs.readdirSync(shared).filter(name => name.endsWith('.md')).sort();
+  assert.equal(generated.length, 2);
+  assert.match(generated[0], /-ledger-task-role-a-route-role-a\.md$/);
+  assert.match(generated[1], /-ledger-task-role-b-route-role-b\.md$/);
+  fs.writeFileSync(path.join(shared, 'unknown-route-unregistered.md'), 'unknown\n');
+  assert.equal(deliver(registry, f.deps, { only: 'role-a' }).roles['role-a'].delivered, 1);
+  assert.equal(deliver(registry, f.deps, { only: 'role-b' }).roles['role-b'].delivered, 1);
+  assert.deepEqual(f.state.runs, [
+    ['/opt/deliver', 'role-a', path.join(shared, generated[0])],
+    ['/opt/deliver', 'role-b', path.join(shared, generated[1])],
+  ]);
+});
+
+test('optional busy probe observes the pane while normal delivery continues', t => {
+  const f = setup(t);
+  f.doc.delivery.busy_probe = ['/opt/status', '{role}', '{pane}'];
+  f.write();
+  const registry = f.load();
+  let status = 'busy';
+  const run = f.deps.run;
+  f.deps.run = (bin, args, options) => {
+    if (bin !== '/opt/status') return run(bin, args, options);
+    assert.deepEqual(args, ['role-a', 'w1:p1']);
+    return status;
+  };
+  const onlyA = { only: 'role-a' };
+  assert.equal(Object.hasOwn(deliver(registry, f.deps, onlyA).roles['role-a'], 'busy'), false);
+  for (const [i, [reply, expected]] of [['busy', true], ['idle', false], ['', null]].entries()) {
+    status = reply;
+    f.put('role-a', `new-${i}.md`);
+    assert.deepEqual(deliver(registry, f.deps, onlyA).roles['role-a'], { delivered: 1, failed: 0, pending: 0, busy: expected });
+  }
+});
 
 test('registry rejects roles without a consumer, duplicate boxes and a retired root', t => {
   const f = setup(t);
