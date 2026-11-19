@@ -61,7 +61,7 @@
     "concise_session_output": "Keep AI responses under 3 lines; avoid long Korean preambles."
   },
   "work_ledger": "Add requests to the ledger before replying: docs/common/work-ledger.md.",
-  "agent_messaging": "Mention the other person or agent when requesting and replying: docs/guides/agent-messaging.md.",
+  "agent_messaging": "For direct asks/replies, use platform mentions; names/refs do not notify. Broadcast/self-reply exempt. docs/guides/agent-messaging.md.",
   "document_size_refactoring": "Archive eligible history from oversized documents per docs/guides/doc-size-refactor.md.",
   "conventions": {
     "response_language": "Korean (한국어로 응답)",
