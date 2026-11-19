@@ -65,3 +65,21 @@ When a role launches a worker process directly via `systemd-run --user`, use
 `scripts/work-ledger/worker-run.mjs` so each run is recorded in the same JSON
 ledger (`kind: "worker"`, `status: "running" -> "done" | "failed"`). See the
 [worker-run ledger contract](../common/worker-run-ledger-contract.md).
+
+## Work ledger in a pane wake
+
+Enable `delivery.workHeader` in the role wake registry to put
+`[내 장부 먼저]` at the top of the delivery copy for each configured role.
+The header uses the role's JSON task ledger. It shows a source match first,
+then the most recently updated `open` item, then up to three overdue `open`
+or `waiting_human` items in order of earliest deadline, with a count of the rest.
+Discord mention wakes use `Message ID` and agent-request wakes use
+`Original Message ID`. Wakes without a source start with the recent work.
+For recency, the first valid timestamp in `updated_at`, `checked_at`,
+`created_at`, and `due` wins. Ties use item ID. The header shows duplicate
+channel and message pairs once. Rows without a source use their own item ID.
+Per-item alerts and drive execution continue to use the underlying rows.
+
+Wait-only consumers, in-session liveness wakes, drive notifications
+(`drive.notify.command`), and the Gateway router use separate delivery paths.
+See the [role wake registry](role-wake-registry.md) for ledger paths and copy handling.

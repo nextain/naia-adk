@@ -1,9 +1,8 @@
 # Role wake registry
 
 One private instance file names the live workspace, the wake boxes and every
-role. `scripts/role-wake.mjs` reads only that file, so role lookup, wake
-delivery, consumer checks, the role-session table and wake-box retention cannot
-point at different trees or different role lists.
+role. Role lookup, wake delivery, consumer checks, the role-session table and
+wake-box retention use the workspace and role list from this registry.
 
 Copy `config/role-wake.example.json` to a private path and pass it with
 `--config` or `ADK_ROLE_WAKE_CONFIG`. Server differences live in this file
@@ -19,10 +18,13 @@ only; the script is the same on every server.
 | `roles.<id>.find.pane_id` | The session pane. The foreground program of this pane decides whether the session is alive and which tool it runs. |
 | `roles.<id>.tool`, `tools` | First-choice tool and the ordered list a start script may fall back to. `tool` must equal `tools[0]`. |
 | `roles.<id>.wake_subdir` | Folder under `wake_root`; `""` is the top-level box. |
+| `roles.<id>.ledger` | Optional path to the role's JSON work ledger, relative to `root` or absolute. A role listed in `config/work-ledger.json` uses the standard ledger path when this field is omitted. |
 | `roles.<id>.extra_boxes` | More boxes of the same role outside `root`: `[{ "path": "/abs", "via": ["sudo", "-n"] }]`. `via` is the command prefix that can read a box another account owns; without it the box is read directly. |
 | `roles.<id>.dm_channels`, `dm_users` | DM rooms whose REST catch-up by [bot-mention-wake](bot-mention-wake.md) is checked: by room id, or by the id of the person on the other side when the room id is not known. |
 | `roles.<id>.wait` | Optional in-session wait script, checked under the pane's own process tree. `mode: "nudge"` (default) marks a script the role depends on; `"observe"` is recorded only. |
 | `delivery.command` | Instance command that puts one wake file in front of a role (`{role}`, `{file}`). |
+| `delivery.workHeader` | Set to `true` to prepend the role's work ledger summary to a private delivery copy. Defaults to `false`. |
+| `delivery.busy_probe` | Optional command array with `{role}` and `{pane}` placeholders. At the start of a role's delivery attempts it may report `busy` or `idle` on stdout. The delivery summary records `true`, `false`, or `null` when the probe fails, times out after five seconds, or returns another value. Delivery proceeds in each case. |
 | `delivery.retry_max_seconds` | Longest gap between retries of a file that failed (default 300). |
 | `delivery.baseline_seen_file` | The old deliverer's record, one delivered path per line. Used when a box is first seen; see Migration order. |
 | `dm_backup.max_age_seconds` | How old a DM room's last good catch-up may be (default 900). |
@@ -52,6 +54,10 @@ The registry therefore requires a consumer that runs outside the session:
   and the rest are delivered.
 - A file in a box read through `via` is copied to `state_dir/spool/<role>/`,
   the copy is delivered, and the copy is removed. Extra boxes are never swept.
+- The work-ledger watcher writes addressed files to the top-level wake box.
+  A file ending in `-route-<role>.md` is eligible only for the named registered
+  role, including roles with their own subdirectories. Untagged files belong to
+  the role configured for their directory.
 - A box that cannot be read is an error (`box-unreadable`), never an empty box.
 - One run at a time: `state_dir/deliver.lock` carries the owner's pid and
   start time. An empty or damaged lock, a dead owner or a recycled pid is
@@ -64,6 +70,22 @@ The registry therefore requires a consumer that runs outside the session:
   not delivery runs, because the role depends on it (it may be the only reader
   of the box, or the role's channel poller); so is a wait state that cannot be
   read. An `observe` script only warns.
+
+## Work ledger at delivery
+
+With `delivery.workHeader` enabled and a ledger configured for the role,
+`deliver` places the header and a blank line before the original body in a
+private spool copy. A missing, unreadable or invalid ledger gives the wake
+a single `[장부 읽기 실패: …]` line and its original body. The deliverer reads
+the ledger as its own OS user, including when `via` reads the wake file.
+Retries keep the original wake's key and read the current ledger each time.
+For an instance acceptance check, confirm that the configured delivery
+command forwards the spool copy's header to the pane along with the body.
+
+The header applies to `delivery.command`. Wait-only consumers, in-session
+liveness wakes, drive notifications (`drive.notify.command`), and the Gateway
+router use their own delivery paths. The optional busy probe records status
+while the configured delivery command handles queuing.
 
 ## DM rooms
 

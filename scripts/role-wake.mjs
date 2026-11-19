@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { ledgerPath, readLedgerFileSync, resolveConfigPath, wakeHeader } from './work-ledger/ledger.mjs';
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh']);
 const WRAPPERS = new Set(['sudo', 'env', 'nice', 'setsid', 'stdbuf', 'timeout']);
@@ -47,6 +48,8 @@ export function loadRegistry(file) {
   if (retiredRoots.some(value => value === root || root.startsWith(value + path.sep))) fail('root is inside a retired root');
   const delivery = doc.delivery === undefined ? null : {
     command: Array.isArray(doc.delivery?.command) && doc.delivery.command.length && doc.delivery.command.every(part => typeof part === 'string') ? doc.delivery.command : fail('delivery.command must be a string array'),
+    workHeader: doc.delivery.workHeader === undefined ? false : typeof doc.delivery.workHeader === 'boolean' ? doc.delivery.workHeader : fail('delivery.workHeader must be a boolean'),
+    busyProbe: doc.delivery.busy_probe === undefined ? null : Array.isArray(doc.delivery.busy_probe) && doc.delivery.busy_probe.length && doc.delivery.busy_probe.every(part => typeof part === 'string' && part) ? doc.delivery.busy_probe : fail('delivery.busy_probe must be a command array'),
     heartbeatMaxAge: positive(doc.delivery.heartbeat_max_age_seconds, DEFAULTS.heartbeatMaxAge, 'delivery.heartbeat_max_age_seconds'),
     maxPerRun: positive(doc.delivery.max_per_run, DEFAULTS.maxPerRun, 'delivery.max_per_run'),
     lagSeconds: positive(doc.delivery.lag_seconds, DEFAULTS.lagSeconds, 'delivery.lag_seconds'),
@@ -67,6 +70,7 @@ export function loadRegistry(file) {
     return { kind: view.kind, path: view.path, roles: view.roles === undefined ? null : [...new Set(view.roles)] };
   });
   if (!isObject(doc.roles) || !Object.keys(doc.roles).length) fail('roles must be a non-empty object');
+  const routeIds = Object.keys(doc.roles).sort((a, b) => b.length - a.length);
   const bots = new Set(), dirs = new Set(), panes = new Set();
   const roles = Object.entries(doc.roles).map(([id, role]) => {
     if (!ROLE_ID.test(id) || !isObject(role)) fail(`invalid role ${id}`);
@@ -100,7 +104,9 @@ export function loadRegistry(file) {
       wait = { script: role.wait.script, mode: role.wait.mode ?? 'nudge' };
     }
     if (!wait && !delivery) fail(`role ${id}: no wake consumer (declare delivery or wait)`);
-    return { id, names: Array.isArray(role.names) && role.names.length ? role.names : [id], botId: role.bot_id ?? null, user: role.user ?? null, paneId, cwd: role.find.cwd ?? null, tools, wakeSubdir: role.wake_subdir, wakeDir, extraBoxes, dmChannels, dmUsers, wait };
+    const ledger = role.ledger === undefined ? null : typeof role.ledger === 'string' && role.ledger.trim() ? path.resolve(root, role.ledger) : fail(`role ${id}: ledger must be a path`);
+    const routedWakeDir = wakeDir !== wakeRoot && routeIds.length > 1 && !extraBoxes.some(box => box.dir === wakeRoot) ? wakeRoot : null;
+    return { id, names: Array.isArray(role.names) && role.names.length ? role.names : [id], botId: role.bot_id ?? null, user: role.user ?? null, paneId, cwd: role.find.cwd ?? null, tools, wakeSubdir: role.wake_subdir, wakeDir, extraBoxes, dmChannels, dmUsers, wait, ledger, routeIds, routedWakeDir };
   });
   const paneBin = doc.pane?.bin;
   if (doc.pane?.kind !== 'herdr' || typeof paneBin !== 'string' || !path.isAbsolute(paneBin)) fail('pane must be {"kind":"herdr","bin":"/abs/path"}');
@@ -117,19 +123,29 @@ export function loadRegistry(file) {
 // box names mix clocks and free titles, so name order is not time order. A box
 // that cannot be read is an error for the caller to report, never an empty box
 // (`unreadable` lists those boxes). `key` is the ledger name: the bare file name
-// in the role's own box, the full path in an extra box.
+// in the role's own box, the full path elsewhere.
 export function boxEntries(role, deps = defaultDeps()) {
   const entries = [], errors = [], unreadable = [];
   const missed = (dir, error) => { unreadable.push(dir); errors.push(`${dir}: ${error?.code === 'ENOENT' ? 'not found' : 'unreadable'}`); };
-  try {
-    for (const entry of fs.readdirSync(role.wakeDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-      const file = path.join(role.wakeDir, entry.name);
+  const addressed = (name, routedOnly) => {
+    if (!/-route-[a-zA-Z0-9_-]+\.md$/.test(name)) return !routedOnly;
+    return role.routeIds.find(id => name.endsWith(`-route-${id}.md`)) === role.id;
+  };
+  const scan = (dir, box, routedOnly = false) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.md') || !addressed(entry.name, routedOnly)) continue;
+      const file = path.join(dir, entry.name);
       let mtimeMs;
       try { mtimeMs = fs.statSync(file).mtimeMs; } catch { continue; }
-      entries.push({ key: entry.name, name: entry.name, file, mtimeMs, box: null });
+      entries.push({ key: dir === role.wakeDir ? entry.name : file, name: entry.name, file, mtimeMs, box });
     }
-  } catch (error) { missed(role.wakeDir, error); }
+  };
+  try { scan(role.wakeDir, null); } catch (error) { missed(role.wakeDir, error); }
+  // The ledger watcher writes addressed wakes to the top level, even for roles
+  // whose ordinary wake files live in their own subdirectory.
+  if (role.routedWakeDir) {
+    try { scan(role.routedWakeDir, null, true); } catch (error) { missed(role.routedWakeDir, error); }
+  }
   for (const box of role.extraBoxes) {
     try {
       if (box.via) {
@@ -137,16 +153,10 @@ export function boxEntries(role, deps = defaultDeps()) {
         const listing = deps.run(command, [...prefix, 'find', box.dir, '-maxdepth', '1', '-type', 'f', '-name', '*.md', '-printf', '%T@\\t%f\\n']);
         for (const line of listing.split('\n')) {
           const match = /^(\d+(?:\.\d+)?)\t(.+\.md)$/.exec(line);
-          if (match) entries.push({ key: path.join(box.dir, match[2]), name: match[2], file: path.join(box.dir, match[2]), mtimeMs: Number(match[1]) * 1000, box });
+          if (match && addressed(match[2], false)) entries.push({ key: path.join(box.dir, match[2]), name: match[2], file: path.join(box.dir, match[2]), mtimeMs: Number(match[1]) * 1000, box });
         }
       } else {
-        for (const entry of fs.readdirSync(box.dir, { withFileTypes: true })) {
-          if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
-          const file = path.join(box.dir, entry.name);
-          let mtimeMs;
-          try { mtimeMs = fs.statSync(file).mtimeMs; } catch { continue; }
-          entries.push({ key: file, name: entry.name, file, mtimeMs, box });
-        }
+        scan(box.dir, box);
       }
     } catch (error) { missed(box.dir, error); }
   }
@@ -288,22 +298,73 @@ function readSeenFile(file) {
   return new Set(fs.readFileSync(file, 'utf8').split('\n').map(line => line.trim()).filter(Boolean).map(line => path.resolve(line)));
 }
 
-// Runs the delivery command on one wake file. A file in a box read through `via`
-// is copied to a private spool first and the copy is delivered.
+function wakeSource(body) {
+  const [, metadata] = /^# Discord wake\r?\n\r?\n([^]*?)(?:\r?\n\r?\n|$)/.exec(body) ?? [];
+  if (!metadata) return {};
+  const field = name => new RegExp(`^${name}: (.*)$`, 'm').exec(metadata)?.[1]?.trim();
+  // Agent-request wakes use a synthetic Message ID for the delivery stage.
+  const original = field('Original Message ID');
+  const msgId = original ?? (field('Author') === 'agent-request-watch' ? null : field('Message ID'));
+  if (!SNOWFLAKE.test(msgId ?? '')) return {};
+  const channelField = field('Channel') ?? '';
+  const channel = /\((\d{17,20})\)$/.exec(channelField)?.[1] ?? (SNOWFLAKE.test(channelField) ? channelField : undefined);
+  return { channel, msgId };
+}
+
+function workLedgerFile(registry, role) {
+  if (role.ledger) return role.ledger;
+  let config;
+  try { config = readJson(resolveConfigPath(registry.root)); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  if (config.roles?.some(entry => entry.role === role.id)) return ledgerPath(registry.root, role.id);
+  return null;
+}
+
+function workHeader(registry, role, readBody, now) {
+  let items;
+  try {
+    const file = workLedgerFile(registry, role);
+    if (!file) return null;
+    ({ items } = readLedgerFileSync(file, role.id));
+  } catch (error) {
+    const reason = error instanceof SyntaxError ? '잘못된 JSON' : error.code ?? error.message;
+    return `[장부 읽기 실패: ${reason.replace(/[\r\n]+/g, ' ')}]`;
+  }
+  return wakeHeader(items, wakeSource(readBody().toString('utf8')), now);
+}
+
+// Runs the delivery command on the original or on a private spool copy.
 function handOver(registry, role, entry, deps) {
   let file = entry.file, spooled = null;
+  let body;
+  const readBody = () => {
+    if (body) return body;
+    if (!entry.box?.via) return (body = fs.readFileSync(entry.file));
+    const [reader, ...prefix] = entry.box.via;
+    return (body = Buffer.from(deps.run(reader, [...prefix, 'cat', entry.file], { encoding: 'buffer' })));
+  };
   try {
-    if (entry.box?.via) {
-      const [reader, ...prefix] = entry.box.via;
-      const body = deps.run(reader, [...prefix, 'cat', entry.file]);
+    const header = registry.delivery.workHeader ? workHeader(registry, role, readBody, deps.now()) : null;
+    if (header !== null || entry.box?.via) {
+      const original = readBody();
       spooled = path.join(registry.stateDir, 'spool', role.id, entry.name);
       fs.mkdirSync(path.dirname(spooled), { recursive: true, mode: 0o700 });
-      fs.writeFileSync(spooled, body, { mode: 0o600 });
+      fs.writeFileSync(spooled, header === null ? original : Buffer.concat([Buffer.from(`${header}\n\n`), original]), { mode: 0o600 });
       file = spooled;
     }
     const [command, ...args] = registry.delivery.command.map(part => part.replaceAll('{role}', role.id).replaceAll('{file}', file));
     deps.run(command, args, { timeout: 60_000 });
   } finally { if (spooled) fs.rmSync(spooled, { force: true }); }
+}
+
+function probeBusy(command, role, deps) {
+  const [bin, ...args] = command.map(part => part.replaceAll('{role}', role.id).replaceAll('{pane}', role.paneId));
+  try {
+    const answer = deps.run(bin, args, { timeout: 5_000 }).trim();
+    if (answer === 'busy') return true;
+    if (answer === 'idle') return false;
+  } catch { /* Delivery continues when the status cannot be read. */ }
+  return null;
 }
 
 const boxMark = box => `box:${box.dir}`;
@@ -340,6 +401,7 @@ function deliverRole(registry, role, deps, now, at) {
   // it is retried with backoff.
   const retries = fresh.filter(entry => failures[entry.key] && failures[entry.key].next <= now).sort((a, b) => failures[a.key].count - failures[b.key].count);
   const order = [...fresh.filter(entry => !failures[entry.key]), ...retries];
+  const busy = order.length && registry.delivery.busyProbe ? { busy: probeBusy(registry.delivery.busyProbe, role, deps) } : {};
   let delivered = 0, attempts = 0, streak = 0;
   for (const entry of order) {
     if (attempts >= registry.delivery.maxPerRun || streak >= FAIL_STREAK) break;
@@ -357,7 +419,7 @@ function deliverRole(registry, role, deps, now, at) {
     }
   }
   if (JSON.stringify(failures) !== JSON.stringify(before)) atomic(failureFile(registry, role), JSON.stringify(failures));
-  return { ...(baseline === null ? {} : { baseline }), delivered, failed: Object.keys(failures).length, pending: fresh.length - delivered, ...error };
+  return { ...(baseline === null ? {} : { baseline }), delivered, failed: Object.keys(failures).length, pending: fresh.length - delivered, ...error, ...busy };
 }
 
 // Hands each new wake file to the instance delivery command, in arrival order. A

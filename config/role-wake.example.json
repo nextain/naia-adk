@@ -8,6 +8,8 @@
   "pane": { "kind": "herdr", "bin": "/<home>/.local/bin/herdr" },
   "delivery": {
     "command": ["/<private>/role-wake.sh", "{role}", "{file}"],
+    "workHeader": false,
+    "_workHeader_excludes": ["wait-only", "in-session liveness", "drive notify", "Gateway router"],
     "heartbeat_max_age_seconds": 300,
     "lag_seconds": 600,
     "max_per_run": 50,
@@ -36,6 +38,7 @@
       "tool": "claude",
       "restart_cmd": "cd /<home>/role-a && claude --resume {resume}",
       "wake_subdir": "",
+      "ledger": ".agents/work/ledger/role-a.json",
       "dm_channels": ["300000000000000001"],
       "wait": { "script": "/<private>/role-a/wait.sh", "mode": "nudge" }
     },

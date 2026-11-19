@@ -317,11 +317,50 @@ export function validateLedger(ledger, role) {
     throw new Error("Invalid report date");
   return ledger;
 }
+function parseLedger(text, role) {
+  return validateLedger(JSON.parse(text), role);
+}
 export async function readLedger(root, role) {
-  return validateLedger(
-    JSON.parse(await readFile(ledgerPath(root, role), "utf8")),
-    role,
-  );
+  return parseLedger(await readFile(ledgerPath(root, role), "utf8"), role);
+}
+export function readLedgerFileSync(file, role) {
+  return parseLedger(readFileSync(file, "utf8"), role);
+}
+
+export function wakeHeader(items, { channel, msgId } = {}, nowMs) {
+  const sourceKey = (item) => hasHumanMsgId(item.from?.msg_id)
+    ? JSON.stringify([item.from.channel, normalizeMsgId(item.from.msg_id)])
+    : item.id;
+  const lastUpdate = (item) => [item.updated_at, item.checked_at, item.created_at, item.due]
+    .map((date) => Date.parse(date)).find(Number.isFinite);
+  const byId = (a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  const recent = items.filter((item) => !isWorkerItem(item))
+    .sort((a, b) => lastUpdate(b) - lastUpdate(a) || byId(a, b));
+  const matched = recent.find((item) =>
+    sameHumanMsgId(item.from?.msg_id, msgId) && (!channel || item.from.channel === channel));
+  const latest = recent.find((item) => item.status === "open");
+  const seen = new Set();
+  const selected = [matched, latest].filter((item) => {
+    if (!item || seen.has(sourceKey(item))) return false;
+    seen.add(sourceKey(item));
+    return true;
+  });
+  const overdue = recent.filter((item) =>
+    ["open", "waiting_human"].includes(item.status) && Date.parse(item.due) < nowMs)
+    .sort((a, b) => Date.parse(a.due) - Date.parse(b.due) || byId(a, b))
+    .filter((item) => {
+      const key = sourceKey(item);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  const lines = [...selected, ...overdue.slice(0, 3)].map((item) => {
+    const title = [...item.title.replace(/\s+/g, " ").trim()].slice(0, 80).join("");
+    return `- ${item.id.slice(0, 8)} | ${item.status} | ${title} | ${item.due}`;
+  });
+  if (overdue.length > 3) lines.push(`외 ${overdue.length - 3}건`);
+  if (!lines.length) lines.push("열린 업무 없음 — 이 글이 업무면 장부에 올릴 것");
+  return ["[내 장부 먼저]", ...lines].join("\n");
 }
 export async function changeLedger(root, role, update) {
   const file = ledgerPath(root, role);
