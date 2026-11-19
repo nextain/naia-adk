@@ -61,7 +61,7 @@
     "concise_session_output": "Keep AI responses under 3 lines; avoid long Korean preambles."
   },
   "work_ledger": "Add requests to the ledger before replying: docs/common/work-ledger.md.",
-  "agent_messaging": "Directed asks/replies need platform mentions; names do not notify; reply refs only track. Exceptions: docs/guides/agent-messaging.md.",
+  "agent_messaging": "Directed asks/replies need mentions; names do not notify. No unsupported effort, reflection, promises or progress claims; give facts, one action, mechanism/file/command and ledger deadline. See docs/guides/agent-messaging.md.",
   "document_size_refactoring": "Archive eligible history from oversized documents per docs/guides/doc-size-refactor.md.",
   "conventions": {
     "response_language": "Korean (한국어로 응답)",
@@ -70,7 +70,7 @@
     "artifact_drift_guard": "Never generate artifacts (.nva, .exe, .msi, .dmg, .AppImage, .apk, .vrm; configurable in .agents/context/drift-guard.json) from uncommitted or out-of-repo scripts; commit to shared code and open a PR first (.claude/hooks/artifact-drift-guard.js, docs/guides/drift-guard.md).",
     "copy_file_guard": "Never create variant or copy code files (*_v2, *-v3, *_new, *_old, *_copy, *-copy, *_backup, *_fixed, *_final, number-only variants, ' (1)') in the same folder; edit the original file instead, except test files and migrations/ (.claude/hooks/copy-file-guard.js, docs/guides/drift-guard.md).",
     "stale_uncommitted_notice": "Do not leave uncommitted changes older than 4 hours across the workspace or projects/*; SessionStart warns via scripts/check-stale-uncommitted.cjs (.claude/hooks/stale-uncommitted-notice.js, docs/guides/drift-guard.md).",
-    "architecture_fit_before_fix": "Before any fix or new mechanism, state (a) original request, (b) parent platform/ADK/product structure (never one server/file), and (c) how that structure accepts it (extension vs new layer, not band-aid); never patch from one card/host alone (docs/guides/architecture-fit-before-fix.md)."
+    "architecture_fit_before_fix": "Before any fix or new mechanism, state the request, parent platform/ADK structure and how it accepts the change; never patch from one host alone. See docs/guides/architecture-fit-before-fix.md."
   },
   "workflows": {
     "instruction": "Read workflows on demand. Do not load all at once.",

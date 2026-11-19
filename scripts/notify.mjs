@@ -5,6 +5,7 @@
 // lookup). HTTP 429 is retried in-process only in messenger mode or when notify.retries is set; Discord by
 // default sends once, as the watch scripts did before.
 import { setTimeout as delay } from 'node:timers/promises';
+import { assertMessage } from './lib/message-guard.mjs';
 
 const KINDS = ['discord', 'messenger'];
 const NAME = /^[\p{L}\p{N}_-]+$/u;
@@ -75,6 +76,7 @@ export function createNotifier(notify = {}, { token, env = process.env, fetchImp
   const kind = notifyKind(notify), retries = notify.retries ?? (kind === 'messenger' ? 2 : 0);
   if (kind === 'discord') {
     return { kind, async send({ channelId, content, mentions = [], nonce }) {
+      try { assertMessage(content); } catch (error) { throw setupFailure(error.message); }
       if (!token) throw setupFailure('Discord token missing');
       return post(fetchImpl, `https://discord.com/api/v10/channels/${channelId}/messages`, { method: 'POST', headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content, allowed_mentions: { parse: [], users: mentions }, ...(nonce ? { nonce, enforce_nonce: true } : {}) }) }, 'Discord', retries, sleep);
     } };
@@ -84,6 +86,7 @@ export function createNotifier(notify = {}, { token, env = process.env, fetchImp
   const nameOf = value => own(notify.mentions, value) ? notify.mentions[value] : own(names, value) ? names[value] : value;
   let channels;
   return { kind, async send({ stage, content, people = [] }) {
+    try { assertMessage(content); } catch (error) { throw setupFailure(error.message); }
     if (!url || !agentToken) throw setupFailure('messenger URL or token missing');
     if (!originOk(url)) throw setupFailure('messenger URL must be http(s) with no credentials, query or fragment');
     const base = new URL(url);

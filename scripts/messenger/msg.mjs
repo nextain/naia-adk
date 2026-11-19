@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
+import { assertMessage } from '../lib/message-guard.mjs';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -45,6 +46,7 @@ export function createClient({ url, token, fetchImpl = fetch }) {
       const ch = await channel(value), body = readFileSync(bodyFile, 'utf8');
       if (!body.trim() || body.length > 64000) throw new Error('본문은 1~64000자입니다');
       validateApproval(body, ch.name);
+      assertMessage(body);
       const files = attachments.map(path => ({name:basename(path), bytes:readFileSync(path)}));
       for (const file of files) {
         if (file.bytes.length > 25 * 1024 * 1024 || !/^[^.]+\.(png|jpg|webp|gif|pdf|txt|md|csv|json|zip)$/i.test(file.name)) throw new Error('첨부 확장자 또는 25MB 제한을 확인하세요');

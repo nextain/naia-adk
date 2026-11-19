@@ -111,3 +111,14 @@ test('watch accepts CR-only events and flushes final split CR delimiter', async(
  await watch(client,{role:'tester',signal:controller.signal,reconnectMs:5,output:line=>{received.push(JSON.parse(line));if(received.length===2)controller.abort();}});
  clearTimeout(timeout);assert.deepEqual(received.map(m=>m.id),['cr1','cr2']);
 });
+
+test('post blocks unsupported claims before sending', async () => {
+ const calls=[];
+ const client=createClient({url:'http://localhost:3142',token:'test',fetchImpl:async (url, options) => {
+  calls.push({url, options});
+  return {ok:true, text:async () => JSON.stringify([{id:'c',name:'자유'}])};
+ }});
+ const file=join(temporary(),'body.md'); writeFileSync(file,'깊이 반성합니다.');
+ await assert.rejects(client.post('자유','-',file), /구체 근거/);
+ assert.equal(calls.filter(c => c.options.method === 'POST').length, 0);
+});

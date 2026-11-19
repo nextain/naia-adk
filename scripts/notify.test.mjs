@@ -222,3 +222,10 @@ test('messenger sends alerts to DM channels configured by DM ID or DM display na
     );
   } finally { await fake.close(); }
 });
+
+test('notifier blocks unsupported claims before network access', async () => {
+  let called = false;
+  const notifier = createNotifier({}, {token: 'test', fetchImpl: async () => { called = true; }});
+  await assert.rejects(notifier.send({channelId: '1', content: '즉시 구동하였고 확인 중입니다.'}), /진행 주장/);
+  assert.equal(called, false);
+});
