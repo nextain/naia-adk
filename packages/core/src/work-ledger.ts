@@ -48,6 +48,7 @@ export interface WorkLedgerNormalizedItem {
   isTodo: boolean
   createdAt: string | null
   checkedAt: string | null
+  updatedAt: string | null
   note: string
   channel: string
   msgId: string
@@ -55,6 +56,7 @@ export interface WorkLedgerNormalizedItem {
   sourceUrl: string | null
   rawResults: string[]
   workerName: string | null
+  workerAlive: boolean | null
   hasDrive: boolean
 }
 
@@ -259,6 +261,7 @@ function normalizeRoleLedgerItem(
   const { iso: due, ms: dueMs } = validIsoOrNull(item.due)
   const { iso: createdAt } = validIsoOrNull(item.created_at)
   const { iso: checkedAt } = validIsoOrNull(item.checked_at)
+  const { iso: updatedAt } = validIsoOrNull(item.updated_at ?? item.checked_at)
   const from = item.from && typeof item.from === "object" && !Array.isArray(item.from)
     ? (item.from as Record<string, unknown>)
     : {}
@@ -270,6 +273,7 @@ function normalizeRoleLedgerItem(
     ? (item.worker as Record<string, unknown>)
     : null
   const workerName = nonEmpty(workerObj?.name)
+  const workerAlive = typeof workerObj?.alive === "boolean" ? workerObj.alive : null
   const hasDrive = item.drive !== undefined && item.drive !== null
   const active = isActiveWorkLedgerStatus(status)
   const overdue = active && dueMs !== null && dueMs < nowMs
@@ -285,6 +289,7 @@ function normalizeRoleLedgerItem(
     isTodo: isTodoWorkLedgerStatus(status),
     createdAt,
     checkedAt,
+    updatedAt,
     note,
     channel,
     msgId,
@@ -292,6 +297,7 @@ function normalizeRoleLedgerItem(
     sourceUrl: buildDiscordMessageUrl(guildId, channel, msgId, directChannels),
     rawResults: collectRawResultCandidates(item),
     workerName,
+    workerAlive,
     hasDrive,
   }
 }
@@ -301,10 +307,13 @@ export async function loadWorkLedgers(
   options: {
     env?: NodeJS.ProcessEnv | Record<string, string | undefined>
     now?: number
+    exportLocation?: { dir: string; roles: string[]; guildId?: string | null }
   } = {},
 ): Promise<LoadedWorkLedgers> {
   const nowMs = options.now ?? Date.now()
-  const location = await resolveWorkLedgerLocation(adkRoot, options.env)
+  const location = options.exportLocation
+    ? { configured: true, available: true, root: null, dir: options.exportLocation.dir, guildId: options.exportLocation.guildId ?? null, config: { roles: options.exportLocation.roles.map((role) => ({ role })) }, error: null }
+    : await resolveWorkLedgerLocation(adkRoot, options.env)
   const emptySummary = summarizeWorkLedgerItems([])
 
   if (!location.configured) {
@@ -351,7 +360,7 @@ export async function loadWorkLedgers(
   // Discover `<role>.json` files inside ledger dir (supports multi-role instances where
   // work-ledger.json only configures watcher channels for a subset of roles).
   let realLedgerDir = location.dir
-  if (fs.existsSync(location.dir)) {
+  if (fs.existsSync(location.dir) && !options.exportLocation) {
     try {
       realLedgerDir = fs.realpathSync.native(location.dir)
       const dirEntries = fs.readdirSync(realLedgerDir, { withFileTypes: true })
@@ -377,7 +386,10 @@ export async function loadWorkLedgers(
 
   for (const role of roles) {
     const filePath = path.join(realLedgerDir, `${role}.json`)
-    if (!fs.existsSync(filePath)) continue
+    if (!fs.existsSync(filePath)) {
+      if (options.exportLocation) warnings.push(`${role}: export missing`)
+      continue
+    }
     try {
       const lstat = fs.lstatSync(filePath)
       if (lstat.isSymbolicLink() || !lstat.isFile()) {

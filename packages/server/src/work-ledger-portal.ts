@@ -36,6 +36,7 @@ export interface PublicWorkLedgerItem {
   isTodo: boolean
   createdAt: string | null
   checkedAt: string | null
+  updatedAt: string | null
   note: string
   channel: string
   msgId: string
@@ -43,6 +44,7 @@ export interface PublicWorkLedgerItem {
   sourceUrl: string | null
   resultLinks: PublicLedgerResultLink[]
   workerName: string | null
+  workerAlive: boolean | null
   hasDrive: boolean
 }
 
@@ -328,6 +330,7 @@ function toPublicItem(
     isTodo: item.isTodo,
     createdAt: item.createdAt,
     checkedAt: item.checkedAt,
+    updatedAt: item.updatedAt,
     note: item.note,
     channel: item.channel,
     msgId: item.msgId,
@@ -335,6 +338,7 @@ function toPublicItem(
     sourceUrl: item.sourceUrl,
     resultLinks,
     workerName: item.workerName,
+    workerAlive: item.workerAlive,
     hasDrive: item.hasDrive,
   }
 }
@@ -400,7 +404,26 @@ export async function queryPortalWorkLedger(
   const observedAt = new Date(nowMs).toISOString()
   const todayDate = formatDateInTimeZone(nowMs, timezone) ?? observedAt.slice(0, 10)
 
-  const loaded = await loadWorkLedgers(adkRoot, { env, now: nowMs })
+  // The portal reads only explicit exports, never the private work-ledger location.
+  const configPath = path.resolve(adkRoot, env.NAIA_WORK_BOARD_CONFIG || "config/work-board.json")
+  let boardConfig: { exportDir: string; roles: string[]; guildId?: string } | null = null
+  let configError: string | null = null
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"))
+    if (!config || typeof config.exportDir !== "string" || !config.exportDir.trim()
+      || !Array.isArray(config.roles) || config.roles.length === 0
+      || config.roles.some((r: unknown) => typeof r !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(r))
+      || new Set(config.roles).size !== config.roles.length) throw new Error("invalid work-board config")
+    boardConfig = config
+  } catch (error: any) {
+    if (error?.code !== "ENOENT") configError = "work-board configuration unreadable or invalid"
+  }
+  const loaded = boardConfig
+    ? await loadWorkLedgers(adkRoot, { env, now: nowMs, exportLocation: {
+      dir: path.resolve(path.dirname(configPath), boardConfig.exportDir), roles: boardConfig.roles,
+      guildId: typeof boardConfig.guildId === "string" ? boardConfig.guildId : null,
+    } })
+    : { configured: Boolean(configError), available: false, root: null, roles: [] as string[], items: [] as WorkLedgerNormalizedItem[], summary: summarizeWorkLedgerItems([]), warnings: configError ? [configError] : [] }
   if (!loaded.configured) {
     return {
       configured: false,

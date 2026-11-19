@@ -10,7 +10,8 @@ import {
   filterLedgerCards,
   formatDueLabel,
   isSafeHttpUrl,
-  splitSummaryColumns,
+  isActiveStatus,
+  isStalled,
   summarizeRoles,
   type DetailStatusFilter,
   type LedgerCardItem,
@@ -122,6 +123,9 @@ function LedgerCard({ item, nowMs }: { item: LedgerCardItem; nowMs?: number }) {
           >
             {LEDGER_STATUS_LABEL[item.status]}
           </span>
+          {isStalled(item, nowMs ?? Date.now()) && (
+            <span data-testid={`ledger-stalled-${item.id}`} className="rounded-full border border-amber-700 px-2 py-0.5 text-[11px] text-amber-300">서 있음</span>
+          )}
           {item.overdue && (
             <span
               data-testid={`ledger-overdue-${item.id}`}
@@ -138,6 +142,10 @@ function LedgerCard({ item, nowMs }: { item: LedgerCardItem; nowMs?: number }) {
       </div>
 
       <div className="text-sm font-medium text-white break-words">{item.title}</div>
+      <div className="text-[11px] text-neutral-400">
+        갱신: {item.updatedAt ?? "확인되지 않음"}
+        {item.workerName && <span> · 일꾼: {item.workerName} ({item.workerAlive === true ? "살아 있음" : item.workerAlive === false ? "종료됨" : "상태 확인 불가"})</span>}
+      </div>
 
       {item.note && (
         <p className="text-xs text-neutral-400 break-words whitespace-pre-wrap">{item.note}</p>
@@ -191,8 +199,8 @@ export function WorkBoard({
     () => summarizeRoles(items, ledger?.roles ?? []),
     [items, ledger?.roles],
   )
-  const summaryColumns = useMemo(
-    () => splitSummaryColumns(items, { role: selectedRole, overdueOnly, query, recentDoneLimit: 20 }),
+  const visibleActiveItems = useMemo(
+    () => filterLedgerCards(items, { role: selectedRole, overdueOnly, query }).filter((item) => isActiveStatus(item.status)),
     [items, selectedRole, overdueOnly, query],
   )
   const detailItems = useMemo(
@@ -252,7 +260,7 @@ export function WorkBoard({
             </span>
           </div>
           <p className="text-xs text-neutral-400 mt-1">
-            각 역할의 업무 장부를 그대로 보여 줍니다. 기한이 넘은 미완료 항목이 먼저 옵니다.
+            역할별 열린 작업입니다. 기한이 넘은 항목이 먼저 옵니다.
           </p>
         </div>
 
@@ -401,65 +409,23 @@ export function WorkBoard({
         </div>
       )}
 
-      {/* 1. 요약 탭 */}
+      {/* 역할별 열린 작업 */}
       {activeTab === "summary" && (
-        <div data-testid="work-summary-view" className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
-          <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-3 space-y-3">
-            <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
-              <div>
-                <h2 className="text-sm font-semibold text-white">진행 중</h2>
-                <p className="text-[11px] text-neutral-500">기한 넘은 것 먼저</p>
-              </div>
-              <span className="rounded-full bg-neutral-800 px-2 py-0.5 text-xs text-neutral-200">
-                {summaryColumns.openItems.length}
-              </span>
-            </div>
-            <div className="space-y-2.5 max-h-[65vh] overflow-y-auto pr-1">
-              {summaryColumns.openItems.length === 0 ? (
-                <p className="py-6 text-center text-xs text-neutral-500">열린 작업이 없습니다.</p>
-              ) : (
-                summaryColumns.openItems.map((item) => <LedgerCard key={`${item.role}:${item.id}`} item={item} nowMs={nowMs} />)
-              )}
-            </div>
-          </section>
-
-          <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-3 space-y-3">
-            <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
-              <div>
-                <h2 className="text-sm font-semibold text-white">사람 확인 대기</h2>
-                <p className="text-[11px] text-neutral-500">확인·승인을 기다리는 일</p>
-              </div>
-              <span className="rounded-full bg-neutral-800 px-2 py-0.5 text-xs text-neutral-200">
-                {summaryColumns.waitingItems.length}
-              </span>
-            </div>
-            <div className="space-y-2.5 max-h-[65vh] overflow-y-auto pr-1">
-              {summaryColumns.waitingItems.length === 0 ? (
-                <p className="py-6 text-center text-xs text-neutral-500">확인 대기 중인 작업이 없습니다.</p>
-              ) : (
-                summaryColumns.waitingItems.map((item) => <LedgerCard key={`${item.role}:${item.id}`} item={item} nowMs={nowMs} />)
-              )}
-            </div>
-          </section>
-
-          <section className="rounded-lg border border-neutral-800 bg-neutral-950 p-3 space-y-3">
-            <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
-              <div>
-                <h2 className="text-sm font-semibold text-white">최근 끝남</h2>
-                <p className="text-[11px] text-neutral-500">완료·취소 최근 20건</p>
-              </div>
-              <span className="rounded-full bg-neutral-800 px-2 py-0.5 text-xs text-neutral-200">
-                {summaryColumns.recentDoneItems.length}
-              </span>
-            </div>
-            <div className="space-y-2.5 max-h-[65vh] overflow-y-auto pr-1">
-              {summaryColumns.recentDoneItems.length === 0 ? (
-                <p className="py-6 text-center text-xs text-neutral-500">최근 끝난 작업이 없습니다.</p>
-              ) : (
-                summaryColumns.recentDoneItems.map((item) => <LedgerCard key={`${item.role}:${item.id}`} item={item} nowMs={nowMs} />)
-              )}
-            </div>
-          </section>
+        <div data-testid="work-summary-view" className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
+          {roleBuckets.filter((bucket) => !selectedRole || bucket.role === selectedRole).map((bucket) => {
+            const roleItems = visibleActiveItems.filter((item) => item.role === bucket.role)
+            return (
+              <section key={bucket.role} data-testid={`role-column-${bucket.role}`} className="rounded-lg border border-neutral-800 bg-neutral-950 p-3 space-y-3">
+                <div className="border-b border-neutral-800 pb-2">
+                  <h2 className="text-sm font-semibold text-white">{bucket.role}</h2>
+                  <p className="text-xs text-neutral-400">열린 작업 {bucket.todoCount} · 기한 넘음 {bucket.overdueCount}</p>
+                </div>
+                <div className="space-y-2.5 max-h-[65vh] overflow-y-auto pr-1">
+                  {roleItems.length === 0 ? <p className="py-6 text-center text-xs text-neutral-500">열린 작업이 없습니다.</p> : roleItems.map((item) => <LedgerCard key={`${item.role}:${item.id}`} item={item} nowMs={nowMs} />)}
+                </div>
+              </section>
+            )
+          })}
         </div>
       )}
 

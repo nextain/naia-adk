@@ -50,6 +50,11 @@ describe("Portal work-ledger routes (/api/portal/ledger)", () => {
     )
 
     fs.writeFileSync(
+      path.join(configuredRoot, "config/work-board.json"),
+      JSON.stringify({ exportDir: "../.agents/work/ledger", roles: ["minho", "jina"], guildId: "999888777" }),
+    )
+
+    fs.writeFileSync(
       path.join(configuredRoot, ".agents/work/ledger/minho.json"),
       JSON.stringify({
         version: 1,

@@ -20,6 +20,7 @@ export interface LedgerCardItem {
   isTodo: boolean
   createdAt: string | null
   checkedAt: string | null
+  updatedAt?: string | null
   note: string
   channel: string
   msgId: string
@@ -27,6 +28,7 @@ export interface LedgerCardItem {
   sourceUrl: string | null
   resultLinks: LedgerResultLink[]
   workerName: string | null
+  workerAlive?: boolean | null
   hasDrive: boolean
 }
 
@@ -191,7 +193,7 @@ export function summarizeRoles(items: LedgerCardItem[], configuredRoles: string[
       map.set(item.role, bucket)
     }
     bucket.total++
-    if (item.isTodo) bucket.todoCount++
+    if (isActiveStatus(item.status)) bucket.todoCount++
     if (item.overdue) bucket.overdueCount++
   }
   return [...map.values()].sort((a, b) => a.role.localeCompare(b.role, "ko"))
@@ -226,4 +228,11 @@ export function formatDueLabel(
   if (diffHours < 48) return `${formatted} (${diffHours}시간 지남)`
   const diffDays = Math.round(diffHours / 24)
   return `${formatted} (${diffDays}일 지남)`
+}
+
+/** A missing or invalid update timestamp is unknown, not evidence of a stall. */
+export function isStalled(item: LedgerCardItem, nowMs: number): boolean {
+  if (!isActiveStatus(item.status)) return false
+  const updated = Date.parse(item.updatedAt ?? "")
+  return Number.isFinite(updated) && nowMs - updated > 2 * 60 * 60 * 1000
 }
