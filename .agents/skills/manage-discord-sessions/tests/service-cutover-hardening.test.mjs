@@ -101,6 +101,21 @@ test("managed install runtime stays immutable and mutable checkout B cannot impe
 	assert.throws(() => verifyManagedServiceRuntimeEnvironment({ environment, runtimePath: artifact.runtimePath }), /startup_or_runtime_failure/);
 });
 
+test("managed artifact includes and protects the message guard used by Discord delivery", async () => {
+	const fixture = committedRuntimeFixture();
+	const artifact = createManagedRuntimeArtifact({ adkRoot: fixture.root, sourceRevision: fixture.revision, sourceRuntimeTreeId: fixture.runtimeTreeId, tokenFingerprint: TOKEN_FINGERPRINT, nodePath: process.execPath });
+	const { postDiscordMessage } = await import(pathToFileURL(join(artifact.runtimePath, "helper/discord-delivery.mjs")).href);
+	let posts = 0;
+	const fetchImpl = async () => { posts++; return { ok: true, status: 200, json: async () => ({ id: "111111111111111111", channel_id: "222222222222222222" }) }; };
+	const send = content => postDiscordMessage({ token: "token-value-long-enough", channelId: "222222222222222222", content, nonce: "n", fetchImpl });
+	await assert.rejects(send("철저히 하겠습니다."));
+	assert.equal(posts, 0);
+	await send("확인했습니다.");
+	assert.equal(posts, 1);
+	writeFileSync(join(artifact.runtimePath, "helper/message-guard-patterns.json"), "{}\n");
+	assert.throws(() => verifyManagedServiceRuntimeEnvironment({ environment: runtimeEnvironment(artifact), runtimePath: artifact.runtimePath }), /startup_or_runtime_failure/);
+});
+
 test("Windows generated launchers may enter the explicit direct runtime boundary", () => {
 	assert.equal(runtimeLaunchForEntrypoint({ NAIA_DISCORD_LAUNCH_MODE: "direct" }, "win32"), "direct");
 	assert.equal(runtimeLaunchForEntrypoint({}, "win32"), "environment");

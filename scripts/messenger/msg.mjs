@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
+import { assertMessage } from '../lib/message-guard.mjs';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -29,6 +30,11 @@ export function createClient({ url, token, fetchImpl = fetch }) {
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password) throw new Error('HTTP(S) 서버 주소가 필요합니다');
   const prefix = base.href.replace(/\/$/, '') + '/api/portal/messenger';
   async function request(path, options = {}) {
+    if (options.method?.toUpperCase() === 'POST' && /^\/channels\/[^/]+\/messages(?:\?.*)?$/.test(path)) {
+      const payload = JSON.parse(options.body);
+      if (typeof payload.body !== 'string') throw new Error('본문이 필요합니다');
+      assertMessage(payload.body);
+    }
     const response = await fetchImpl(prefix + path, { ...options, redirect: 'error', headers: { 'X-AX-Agent-Token': token, ...options.headers } });
     if (!response.ok) throw new Error(`메신저 요청 실패 (${response.status})`);
     return response;

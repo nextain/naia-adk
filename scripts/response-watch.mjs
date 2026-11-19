@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { acquirePidLock } from './lib/pid-lock.mjs';
 import { createNotifier, validateNotify, recipientOk, notifyKind } from './notify.mjs';
+import { assertMessage } from './lib/message-guard.mjs';
 // Instance-configurable message text; {name} placeholders are replaced, unknown ones are left as is.
 export function fill(template, values) { return String(template).replace(/\{(\w+)\}/g, (m, k) => (k in values ? String(values[k]) : m)); }
 
@@ -65,6 +66,7 @@ export function validateConfig(config) {
 // Shared Discord transport used by watchers; callers supply their own durable intent policy.
 export function createDiscordApi(fetchImpl, token) {
   return async (path, body) => {
+    if (body && /^\/channels\/[^/]+\/messages(?:\/[^/]+)?$/.test(path) && typeof body.content === 'string') assertMessage(body.content);
     let response;
     try { response = await fetchImpl(`https://discord.com/api/v10${path}`, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15000) }); }
     catch { const error = new Error('Discord transport failure'); error.uncertain = !!body; throw error; }

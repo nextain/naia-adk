@@ -44,6 +44,24 @@ async function readStream(app:any,url:string,headers:Record<string,string>,ms:nu
  return {status:stream.status,text,closedByServer}
 }
 describe('messenger REST',()=>{
+ it('guards agent posts and replies while allowing human text',async()=>{
+  const {app,headers,agent,url,post,root}=await fixture()
+  fs.mkdirSync(path.join(root,'worker'))
+  fs.writeFileSync(path.join(root,'worker','brief.md'),'work')
+  expect((await post('worker/ 일꾼 구동했습니다.',agent as any)).statusCode).toBe(400)
+  fs.writeFileSync(path.join(root,'worker','run.done'),'done')
+  expect((await post('worker/ 일꾼 구동했습니다.',agent as any)).statusCode).toBe(200)
+  const bad='철저히 하겠습니다.'
+  expect((await post(bad,agent as any)).statusCode).toBe(400)
+  const good=await post('PR #191을 병합했습니다.',agent as any)
+  expect(good.statusCode).toBe(200)
+  const reply=await app.inject({method:'POST',url:url+'/channels/'+encodeURIComponent('업무-요청')+'/messages',headers:agent,payload:{body:bad,reply_to_id:good.json().id}})
+  expect(reply.statusCode).toBe(400)
+  expect((await post(bad,headers)).statusCode).toBe(200)
+  const list=(await app.inject({url:url+'/channels/'+encodeURIComponent('업무-요청')+'/messages',headers})).json().messages
+  expect(list.filter((m:any)=>m.author_kind==='agent')).toHaveLength(2)
+  expect(list.filter((m:any)=>m.author_kind==='human' && m.body===bad)).toHaveLength(1)
+ })
  it('writes, lists, reacts, reads and accepts 64000 characters',async()=>{
   const {app,headers,url,post}=await fixture()
   const response=await post('한'.repeat(64000));expect(response.statusCode).toBe(200)

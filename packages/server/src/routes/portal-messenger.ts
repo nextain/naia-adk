@@ -7,6 +7,8 @@ import { MessengerStore, MAX_LIST_LIMIT, approvalDocWarning } from '../messenger
 import { MessengerWatch } from '../messenger-watch.js'
 import { validateAttachment, parseMultipartAttachment, MAX_ATTACHMENT_BYTES } from '../messenger-attachments.js'
 import { messengerRoles } from '../messenger-roles.js'
+// @ts-expect-error Shared JavaScript guard is also used by the CLI.
+import { assertMessage } from '../../../../scripts/lib/message-guard.mjs'
 
 export interface MessengerOptions {
   dbPath?: string; now?: () => number; dashboardUrl?: string; tokensFile?: string
@@ -130,6 +132,9 @@ export const portalMessengerRoutes: FastifyPluginAsync<MessengerOptions> = async
   app.post('/channels/:id/messages', {bodyLimit: 1024*1024}, async req => {
     const body = req.body as any
     if (!body || typeof body.body !== 'string' || (body.reply_to_id !== undefined && typeof body.reply_to_id !== 'string')) throw failure(400,'Invalid message')
+    if (actor(req).kind === 'agent') {
+      try { assertMessage(body.body, { cwd: root }) } catch (error: any) { throw failure(400, String(error.message)) }
+    }
     if (body.attachment_ids !== undefined) {
       if (!Array.isArray(body.attachment_ids) || body.attachment_ids.length > 20 || body.attachment_ids.some((value:unknown)=>typeof value !== 'string')) throw failure(400,'Invalid attachments')
       for (const attachmentId of body.attachment_ids) {

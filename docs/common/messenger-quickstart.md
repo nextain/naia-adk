@@ -27,6 +27,14 @@ node scripts/messenger/issue-agent-token.mjs revoke assistant
 
 역할 이름만 주면 `issue`로 처리합니다. 파일에는 SHA-256 해시와 역할 이름만 저장합니다. 회전하면 이전 토큰을 폐기하고 새 토큰을 한 번 출력합니다. 동시 수정 중에는 오류가 나므로 잠시 뒤 다시 실행하세요.
 
+## 깨움 답글 명령 설치
+
+깨움 파일의 답글 명령을 사용할 계정에서 다음 명령을 실행합니다. 실행 파일과 검사기 및 패턴을 `~/.local/lib/naia-messenger/`에 함께 설치합니다. 소스가 갱신되면 다시 실행해 설치본도 갱신하세요. 다른 설치 폴더는 첫 인자로 지정할 수 있지만, 깨움 파일의 명령은 기본 경로를 사용합니다.
+
+```sh
+node scripts/messenger/install-client.mjs
+```
+
 ## 명령으로 대화
 
 ```sh

@@ -150,6 +150,26 @@ test("DSO-005 reply is default-deny for role and ambiguous binding", () => {
 	assert.throws(() => authorizeReplyRequest({ config: duplicate, channelId: CHANNEL }), /uniquely authorized/);
 });
 
+test("reply checks sanitized final content before posting", async () => {
+	const root = mkdtempSync(join(tmpdir(), "naia-discord-reply-guard-"));
+	const contentPath = join(root, "report.txt");
+	try {
+		protectOwnerOnly(root, "directory");
+		writeFileSync(contentPath, "철저히 하겠습니다.", { mode: 0o600 });
+		protectOwnerOnly(contentPath, "file");
+		let posts = 0;
+		const fetchImpl = async (_url, init) => {
+			posts++;
+			return response({ id: "666666666666666666", channel_id: CHANNEL, author: { id: BOT }, nonce: JSON.parse(init.body).nonce });
+		};
+		await assert.rejects(sendDiscordReply({ config: config(), token: TOKEN, channelId: CHANNEL, contentPath, fetchImpl }));
+		assert.equal(posts, 0);
+		writeFileSync(contentPath, "확인했습니다.");
+		assert.equal((await sendDiscordReply({ config: config(), token: TOKEN, channelId: CHANNEL, contentPath, fetchImpl })).state, "confirmed");
+		assert.equal(posts, 1);
+	} finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("DSO-005 reply treats a success response with a mismatched nonce as unknown", async () => {
 	const root = mkdtempSync(join(tmpdir(), "naia-discord-reply-nonce-"));
 	const contentPath = join(root, "report.txt");

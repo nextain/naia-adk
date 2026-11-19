@@ -5,6 +5,7 @@
 // lookup). HTTP 429 is retried in-process only in messenger mode or when notify.retries is set; Discord by
 // default sends once, as the watch scripts did before.
 import { setTimeout as delay } from 'node:timers/promises';
+import { assertMessage } from './lib/message-guard.mjs';
 
 const KINDS = ['discord', 'messenger'];
 const NAME = /^[\p{L}\p{N}_-]+$/u;
@@ -75,6 +76,7 @@ export function createNotifier(notify = {}, { token, env = process.env, fetchImp
   const kind = notifyKind(notify), retries = notify.retries ?? (kind === 'messenger' ? 2 : 0);
   if (kind === 'discord') {
     return { kind, async send({ channelId, content, mentions = [], nonce }) {
+      try { assertMessage(content); } catch (error) { throw setupFailure(error.message); }
       if (!token) throw setupFailure('Discord token missing');
       return post(fetchImpl, `https://discord.com/api/v10/channels/${channelId}/messages`, { method: 'POST', headers: { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ content, allowed_mentions: { parse: [], users: mentions }, ...(nonce ? { nonce, enforce_nonce: true } : {}) }) }, 'Discord', retries, sleep);
     } };
@@ -103,6 +105,7 @@ export function createNotifier(notify = {}, { token, env = process.env, fetchImp
     if (!channel) throw setupFailure('messenger channel not found');
     // Discord-style <@id> becomes a messenger @name so the person or role is mentioned there.
     const body = String(content).replace(/<@!?([\p{L}\p{N}_-]+)>/gu, (m, value) => `@${people.includes(value) ? value : nameOf(value)}`);
+    try { assertMessage(body); } catch (error) { throw setupFailure(error.message); }
     return post(fetchImpl, `${prefix}/channels/${encodeURIComponent(channel.id)}/messages`, { method: 'POST', redirect: 'error', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ body, ...(threadId ? { reply_to_id: threadId } : {}) }) }, 'messenger', retries, sleep);
   } };
 }
