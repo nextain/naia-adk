@@ -34,13 +34,13 @@ function setup(t, patch = {}) {
   const file = path.join(dir, 'role-wake.json');
   const write = () => fs.writeFileSync(file, JSON.stringify(doc));
   write();
-  const state = { now: NOW, runs: [], runOptions: [], warnings: [], deliveries: [], paneCalls: [], paneProcessLookups: [], resolverRoles: [], adapterPane: 'w9:p88', adapterOutput: null, failOn: null, crontab: '', labels: { 'w1:p1': 'Role A', 'w1:p2': 'Role B' }, panes: { 'w1:p1': [{ argv: ['claude', '--resume', 'x'], pid: 10 }], 'w1:p2': [{ argv: ['/opt/bin/muse-bin-1.4', '--yolo'], pid: 20 }] }, processes: [{ pid: 10, ppid: 1, args: 'claude --resume x' }, { pid: 11, ppid: 10, args: `bash ${waitScript}` }, { pid: 20, ppid: 1, args: '/opt/bin/muse-bin-1.4 --yolo' }] };
+  const state = { now: NOW, runs: [], runOptions: [], warnings: [], deliveries: [], paneCalls: [], paneProcessLookups: [], resolverRoles: [], adapterPane: 'w9:p88', adapterOutput: null, failOn: null, crontab: '', labels: { 'w1:p1': 'Role A', 'w1:p2': 'Role B' }, panes: { 'w1:p1': [{ argv: ['claude', '--resume', 'x'], pid: 10 }], 'w1:p2': [{ argv: ['/opt/bin/muse', '--yolo'], pid: 20 }] }, processes: [{ pid: 10, ppid: 1, args: 'claude --resume x' }, { pid: 11, ppid: 10, args: `bash ${waitScript}` }, { pid: 20, ppid: 1, args: '/opt/bin/muse --yolo' }] };
   const deps = {
     now: () => state.now,
     run: (command, args, options = {}) => {
       state.runOptions.push(options);
-      if (command === '/opt/herdr' && args[0] === 'agent' && args[1] === 'list') {
-        return JSON.stringify({ result: { agents: Object.entries(state.labels).map(([pane_id, label]) => ({ pane_id, label })) } });
+      if (command === '/opt/herdr' && args[0] === 'pane' && args[1] === 'list') {
+        return JSON.stringify({ id: 'cli:pane:list', result: { type: 'pane_list', panes: Object.entries(state.labels).map(([pane_id, label]) => ({ pane_id, label, agent_status: 'idle', workspace_id: 'w1' })) } });
       }
       if (command === '/opt/resolve-pane') { state.resolverRoles.push(args[0]); return state.adapterOutput ?? `${state.adapterPane}\n`; }
       if (command === '/opt/herdr' && args[0] === 'pane' && ['send-text', 'send-keys'].includes(args[1])) {
@@ -137,7 +137,6 @@ test('validate prints one capability row per role', t => {
 
 test('common delivery reads the wake body and sends pane input without capability environment variables', t => {
   const f = setup(t);
-  f.doc.roles['role-a'].find.pane_id = 'stale-pane-id';
   f.write();
   deliver(f.load(), f.deps);
   const file = f.put('role-a', '001-wake.md');
@@ -223,7 +222,7 @@ test('prototype property names use the generic tool capability defaults', () => 
 test('tool detection reads the foreground program, not the registry', () => {
   const known = ['claude', 'agy', 'muse', 'codex'];
   assert.deepEqual(detectTool([{ argv: ['/opt/bin/Codex'] }], known), { alive: true, tool: 'codex' });
-  assert.deepEqual(detectTool([{ argv: ['/x/muse-bin-1.4.20', '--yolo', 'you are agy'] }], known), { alive: true, tool: 'muse' });
+  assert.deepEqual(detectTool([{ argv: ['/x/muse', '--yolo', 'you are agy'] }], known), { alive: true, tool: 'muse' });
   assert.deepEqual(detectTool([{ argv: ['sudo', '-iu', 'svc', 'bash', '/opt/kit/agy-start-1.sh'] }], known), { alive: false, tool: 'shell' });
   assert.deepEqual(detectTool([{ cmdline: 'claude --resume abc' }], known), { alive: true, tool: 'claude' });
   assert.deepEqual(detectTool([{ argv: ['-bash'] }, { argv: ['sudo', '-iu', 'svc', 'bash'] }], known), { alive: false, tool: 'shell' });
@@ -981,4 +980,70 @@ test('the example configuration is a valid registry', () => {
     { kind: 'wake-routes', roles: null },
     { kind: 'session-health', roles: ['role-a'] },
   ]);
+});
+
+test('real pane list resolves labels and explicit pane IDs', t => {
+  const f = setup(t);
+  delete f.doc.roles['role-a'].find.pane_id;
+  f.doc.roles['role-b'].find.pane_id = 'w1:p3';
+  f.state.labels['w1:p3'] = 'Different label';
+  f.state.panes['w1:p3'] = [{ argv: ['claude'], pid: 10 }];
+  f.doc.roles['role-b'].tools = ['claude'];
+  f.write();
+  const report = inspect(f.load(), f.deps);
+  assert.equal(report.rows.find(r => r.id === 'role-a').paneId, 'w1:p1');
+  assert.equal(report.rows.find(r => r.id === 'role-b').paneId, 'w1:p3');
+});
+
+test('foreground descendants reveal agents under sudo and shell wrappers', () => {
+  const roots = [{ pid: 10, argv: ['sudo', '-iu', 'luke', 'bash', '-c', 'cd /home/luke && exec ~/.local/bin/agy'] }];
+  const descendants = [{ pid: 11, ppid: 10, args: 'bash -c exec' }, { pid: 12, ppid: 11, args: '/home/luke/.local/bin/agy' }];
+  assert.deepEqual(detectTool(roots, ['agy', 'codex'], descendants), { alive: true, tool: 'agy' });
+  assert.deepEqual(detectTool([{ pid: 20, argv: ['bash', '-c', 'exec codex'] }], ['codex'], [{ pid: 21, ppid: 20, args: '/usr/bin/codex' }]), { alive: true, tool: 'codex' });
+});
+
+test('node entry point matches exactly and executable prefixes are not tools', () => {
+  assert.deepEqual(detectTool([{ argv: ['node', '/opt/codex/bin/codex.js'] }], ['codex']), { alive: true, tool: 'codex' });
+  for (const name of ['codex-notes', 'claude-helper', 'codex.log']) assert.deepEqual(detectTool([{ argv: [name] }], ['codex', 'claude']), { alive: true, tool: 'unknown' });
+});
+
+test('stopped wait processes cannot consume wake files', () => {
+  const procs = [{ pid: 10, ppid: 1, args: 'claude', state: 'S' }, { pid: 11, ppid: 10, args: 'bash /kit/wait.sh', state: 'T' }];
+  assert.equal(waitRunning(procs, '/kit/wait.sh', [10]), false);
+});
+
+
+test('a missing configured pane ID never falls back to a different label', t => {
+  const f = setup(t);
+  f.doc.roles['role-a'].find.pane_id = 'stale-pane-id';
+  f.write();
+  deliver(f.load(), f.deps);
+  f.put('role-a', '001-wake.md');
+  assert.equal(deliver(f.load(), f.deps).roles['role-a'].failed, 1);
+  assert.equal(f.state.paneCalls.length, 0);
+});
+
+test('executable prefixes do not select capabilities', () => {
+  for (const name of ['codex-notes', 'claude-helper', 'codex.log']) assert.deepEqual(detectTool([{ argv: [name] }], ['codex', 'claude']), { alive: true, tool: 'unknown' });
+});
+
+test('delivery uses descendant codex keys and bypasses a stopped wait', t => {
+  const f = setup(t);
+  f.doc.roles['role-a'].tool = 'codex';
+  f.doc.tool_caps = {};
+  f.state.panes['w1:p1'] = [{ pid: 10, argv: ['sudo', '-iu', 'svc', 'bash', '-c', 'exec codex'] }];
+  f.state.processes = [{ pid: 10, ppid: 1, args: 'sudo -iu svc bash -c exec codex', state: 'S' }, { pid: 12, ppid: 10, args: 'node /opt/codex/bin/codex.js', state: 'S' }];
+  f.write();
+  deliver(f.load(), f.deps);
+  f.put('role-a', '001-wake.md');
+  assert.equal(deliver(f.load(), f.deps).roles['role-a'].delivered, 1);
+  assert.deepEqual(f.state.paneCalls.slice(-2).map(call => call[3]), ['Enter', 'Tab']);
+  const g = setup(t);
+  g.doc.tool_caps = {};
+  g.state.processes[1].state = 'T';
+  g.write();
+  deliver(g.load(), g.deps);
+  g.put('role-a', '001-wake.md');
+  assert.equal(deliver(g.load(), g.deps).roles['role-a'].delivered, 1);
+  assert.equal(g.state.deliveries.length, 1);
 });

@@ -16,7 +16,8 @@ only; the script is the same on every server.
 | `root` | The one live workspace. `wake_root` and `retention.archive_dir` must stay inside it. |
 | `retired_roots` | Old workspace copies. Any unit file, crontab line or process that still uses one is an error. |
 | `unit_dirs` | Directories of timer and service files scanned for retired roots. |
-| `roles.<id>.pane_label` | Exact `herdr agent list` label used when no instance pane adapter is configured. Defaults to the role's first `names` entry. |
+| `roles.<id>.pane_label` | Exact `herdr pane list` label used when no instance pane adapter or `find.pane_id` is configured. Defaults to the role's first `names` entry. |
+| `roles.<id>.find.pane_id` | Optional exact pane ID; without an adapter it takes precedence over the label and must exist in `herdr pane list`. |
 | `pane.adapter` | Optional command that maps `{role}` to one plain pane ID. The adapter must only look up and print that ID; it does not receive the wake file or choose a tool or keys. |
 | `roles.<id>.tool`, `tools` | First-choice tool and the ordered list a start script may fall back to. Names are compared lowercase; `tool` must equal normalized `tools[0]`. |
 | `tool_caps` | Per-tool wake behavior. Capabilities follow the tool name, not the role name; absent values use the defaults below. |
@@ -33,7 +34,7 @@ only; the script is the same on every server.
 The role block may keep `user`, `find`, `tool`, `restart_cmd`, and `wait` for
 the instance's liveness tool. When `pane.adapter` is set, its command is the
 only role-to-pane lookup used by the common deliverer. Without it, the common
-deliverer matches `pane_label` against `herdr agent list` labels. A configured
+deliverer matches `find.pane_id` if present, or matches `pane_label` against `herdr pane list` labels. A configured
 adapter failure is an error; it does not fall through to another pane lookup.
 An adapter command can be configured like this:
 
@@ -82,7 +83,7 @@ capabilities, then uses the same pane ID for input. It sends the file body with
 with `herdr pane send-keys <pane-id> <key>`. The pane adapter never receives
 the body or capability values and cannot choose a different input pane.
 
-Tool detection uses executable names in the configured `tools` lists. A shell
+Tool detection uses exact executable names in the configured `tools` lists, including descendants of the foreground process and Node `.js` entry points. A shell
 launcher name such as `claude-start.sh` does not identify the running tool. If
 the foreground process has no configured tool executable, the tool is
 `unknown`; delivery uses `bg_notify: false` and `submit_keys: ["Enter"]` and
@@ -91,7 +92,7 @@ a shell is still a down session.
 
 `bg_notify: true` uses the wake file only when the role declares a
 `wait.script` with `mode: "nudge"`, that file exists, and the wait process is
-running under the same pane's foreground process tree. In all other cases the
+running under the same pane's foreground process tree and is not stopped or a zombie. In all other cases the
 common deliverer sends the body and keys directly to the resolved pane. A file
 being present in a wake box, by itself, is not a successful delivery. A wait
 entry with `mode: "observe"` is not a delivery consumer. Files read from

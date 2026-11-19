@@ -264,27 +264,35 @@ function programExecutable(argv) {
 }
 
 // A pane whose foreground is only a shell has no agent, whatever tool the registry names.
-export function detectTool(processes, knownTools) {
-  let sawProgram = false;
-  const executables = [];
-  for (const proc of processes ?? []) {
-    const argv = Array.isArray(proc.argv) && proc.argv.length ? proc.argv : String(proc.cmdline ?? proc.name ?? '').split(/\s+/).filter(Boolean);
-    const executable = programExecutable(argv);
-    if (executable && !SHELLS.has(executable)) {
-      sawProgram = true;
-      if (!INTERPRETERS.has(executable)) executables.push(executable);
+export function detectTool(processes, knownTools, processTable = []) {
+  const roots = new Set((processes ?? []).map(proc => proc.pid).filter(Number.isInteger));
+  const descendants = new Set(roots);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const proc of processTable ?? []) {
+      if (descendants.has(proc.ppid) && !descendants.has(proc.pid)) { descendants.add(proc.pid); changed = true; }
     }
   }
-  const match = words => {
-    for (const word of words) {
-      const normalizedWord = word.toLowerCase();
-      const tool = knownTools.find(name => normalizedWord === name.toLowerCase() || normalizedWord.startsWith(`${name.toLowerCase()}-`) || normalizedWord.startsWith(`${name.toLowerCase()}.`));
-      if (tool) return tool.toLowerCase();
-    }
-    return null;
-  };
-  const executableTool = match(executables);
-  if (executableTool) return { alive: true, tool: executableTool };
+  const candidates = [...(processes ?? []), ...(processTable ?? []).filter(proc => descendants.has(proc.pid) && !roots.has(proc.pid))];
+  let sawProgram = false;
+  const found = new Set();
+  for (const proc of candidates) {
+    if (/^[TtZ]/.test(proc.state ?? '')) continue;
+    const argv = Array.isArray(proc.argv) && proc.argv.length ? proc.argv : String(proc.args ?? proc.cmdline ?? proc.name ?? '').split(/\s+/).filter(Boolean);
+    const executable = programExecutable(argv);
+    if (!executable || SHELLS.has(executable)) continue;
+    sawProgram = true;
+    let name = executable.toLowerCase();
+    if (name === 'node') {
+      const nodeIndex = argv.findIndex(word => path.basename(word).toLowerCase() === 'node');
+      const entry = argv[nodeIndex + 1];
+      name = entry && !entry.startsWith('-') && /\.js$/i.test(entry) ? path.basename(entry, path.extname(entry)).toLowerCase() : '';
+    } else if (INTERPRETERS.has(name)) continue;
+    const tool = knownTools.find(item => item.toLowerCase() === name);
+    if (tool) found.add(tool.toLowerCase());
+  }
+  if (found.size === 1) return { alive: true, tool: [...found][0] };
   return sawProgram ? { alive: true, tool: 'unknown' } : { alive: false, tool: 'shell' };
 }
 
@@ -300,12 +308,12 @@ function resolvePaneId(registry, role, deps) {
     if (!match || match[0] !== output) fail(`role ${role.id}: pane adapter did not return one pane ID`);
     return match[1];
   }
-  const listing = JSON.parse(deps.run(registry.paneBin, ['agent', 'list'], { timeout: 15_000 }));
-  const agents = listing?.result?.agents;
-  if (!Array.isArray(agents)) fail('herdr agent list did not return result.agents');
-  const matches = agents.filter(agent => String(agent?.label ?? '').toLowerCase() === role.paneLabel.toLowerCase());
+  const listing = JSON.parse(deps.run(registry.paneBin, ['pane', 'list'], { timeout: 15_000 }));
+  const panes = listing?.result?.panes;
+  if (!Array.isArray(panes)) fail('herdr pane list did not return result.panes');
+  const matches = panes.filter(pane => role.paneId ? pane?.pane_id === role.paneId : String(pane?.label ?? '').toLowerCase() === role.paneLabel.toLowerCase());
   if (matches.length !== 1 || typeof matches[0]?.pane_id !== 'string' || !matches[0].pane_id) {
-    fail(`role ${role.id}: expected one herdr agent label ${role.paneLabel}, found ${matches.length}`);
+    fail(`role ${role.id}: expected one herdr pane ${role.paneId ?? role.paneLabel}, found ${matches.length}`);
   }
   return matches[0].pane_id;
 }
@@ -313,7 +321,9 @@ function resolvePaneId(registry, role, deps) {
 function runningToolCaps(registry, role, deps) {
   const paneId = resolvePaneId(registry, role, deps);
   const foreground = deps.paneProcesses(registry.paneBin, paneId);
-  const running = detectTool(foreground, knownToolsFor(registry));
+  let processes = [];
+  try { processes = deps.processes(); } catch { /* foreground remains available */ }
+  const running = detectTool(foreground, knownToolsFor(registry), processes);
   if (!running.alive) fail(`role ${role.id}: pane ${paneId} runs only a shell`);
   if (running.tool !== 'unknown' && !role.tools.includes(running.tool)) fail(`role ${role.id}: pane runs ${running.tool}, registry allows ${role.tools.join(', ')}`);
   return { paneId, foreground, tool: running.tool, ...resolveToolCaps({ tool_caps: registry.toolCaps }, { tool: running.tool }) };
@@ -325,7 +335,7 @@ export function defaultDeps() {
     now: () => Date.now(),
     run,
     paneProcesses: (bin, paneId) => JSON.parse(run(bin, ['pane', 'process-info', '--pane', paneId])).result.process_info.foreground_processes,
-    processes: () => run('ps', ['-ww', '-eo', 'pid=,ppid=,args=']).split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)).filter(Boolean).map(match => ({ pid: Number(match[1]), ppid: Number(match[2]), args: match[3] })),
+    processes: () => run('ps', ['-ww', '-eo', 'pid=,ppid=,stat=,args=']).split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line)).filter(Boolean).map(match => ({ pid: Number(match[1]), ppid: Number(match[2]), state: match[3], args: match[4] })),
     sleep: ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
     warn: message => process.stderr.write(`${message}\n`),
     crontab: () => run('crontab', ['-l']),
@@ -339,6 +349,7 @@ export function waitRunning(processes, script, rootPids) {
   const byPid = new Map(processes.map(proc => [proc.pid, proc]));
   const roots = new Set(rootPids.filter(pid => byPid.has(pid)));
   return processes.some(proc => {
+    if (/^[TtZ]/.test(proc.state ?? '')) return false;
     const words = proc.args.split(/\s+/);
     if (!SHELLS.has(path.basename(words[0] ?? '').replace(/^-/, ''))) return false;
     const target = words.slice(1).find(word => !word.startsWith('-'));
@@ -608,7 +619,7 @@ export function inspect(registry, deps = defaultDeps()) {
     try {
       row.paneId = resolvePaneId(registry, role, deps);
       const fg = deps.paneProcesses(registry.paneBin, row.paneId);
-      Object.assign(row, detectTool(fg, known));
+      Object.assign(row, detectTool(fg, known, processes ?? []));
       if (row.alive) {
         const caps = resolveToolCaps({ tool_caps: registry.toolCaps }, { tool: row.tool });
         row.bgNotify = caps.bgNotify;
