@@ -216,7 +216,7 @@ export function renderChannelsMarkdown({ resolvedCompanies, skippedServers }) {
       for (const ch of srv.channels) {
         const wakeText = ch.wakeRoles.map(formatRoleName).join('·');
         const primaryText = formatRoleName(ch.primaryRole);
-        const outsideText = ch.outsideCall === 'mention' ? '안 됨(봇 언급만)' : '됨';
+        const outsideText = ch.outsideCall === 'mention-or-name' ? '됨' : '안 됨(봇 언급만)';
         const statusText = ch.archived ? '보관(읽기 전용)' : '활성';
         lines.push(
           `| ${comp.company} | ${srv.key} (\`${srv.guildId}\`) | ${ch.name} | ${ch.channelId} | ${wakeText} | ${primaryText} | ${outsideText} | ${statusText} |`,

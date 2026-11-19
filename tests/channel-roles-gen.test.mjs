@@ -340,3 +340,25 @@ test('3. All 7 deterministic rejection rules exit with non-zero and write zero f
   }, new Set(['coordinator']));
   assert.ok(directErrs.some((e) => e.includes('[검사 7]')));
 });
+
+test('outsideCall omitted defaults to mention; name wake only when mention-or-name is explicit', () => {
+  const channelIds = {
+    schemaVersion: 1,
+    companies: { nextain: { servers: { internal: { guildId: '1000000000000000001', channels: { a: '2000000000000000001', b: '2000000000000000002', c: '2000000000000000003' } } } } },
+    allowedUserIds: ['9000000000000000001'],
+    readerInstance: 'coordinator',
+    teamMessengerChannelId: '3000000000000000001',
+  };
+  const mk = (key, outsideCall) => ({ key, name: key, wakeRoles: ['coordinator'], primaryRole: 'coordinator', ...(outsideCall === undefined ? {} : { outsideCall }) });
+  const r = generateChannelRolesArtifacts({
+    tables: [makeTable('nextain', ['coordinator'], [mk('a'), mk('b', 'mention'), mk('c', 'mention-or-name')])],
+    channelIds,
+  });
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  const byName = Object.fromEntries(r.watchConfig.targets.filter((t) => t.generatedBy === 'channel-roles').map((t) => [t.name, t.outsideCall]));
+  assert.deepEqual(byName, { a: 'mention', b: 'mention', c: 'mention-or-name' });
+  const rows = r.markdownContent.split('\n');
+  assert.ok(rows.find((l) => l.includes('| a |')).includes('안 됨(봇 언급만)'));
+  assert.ok(rows.find((l) => l.includes('| b |')).includes('안 됨(봇 언급만)'));
+  assert.ok(!rows.find((l) => l.includes('| c |')).includes('안 됨'));
+});
