@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { formatOperatorStatus, postDiscordMessage } from "./discord-delivery.mjs";
+import { assertDiscordContent, formatOperatorStatus, postDiscordMessage } from "./discord-delivery.mjs";
 
 const DISCORD_API = "https://discord.com/api/v10";
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
@@ -45,6 +45,7 @@ export class DiscordStatusProjection {
 
 	async publishScope({ scopeKey, channelId, signal }) {
 		const content = formatOperatorStatus(this.store.status(), this.store.listJobsForScope(scopeKey));
+		assertDiscordContent(content);
 		const existing = this.store.loadDiscordProjection(scopeKey);
 		if (existing?.channelId === channelId) {
 			try {

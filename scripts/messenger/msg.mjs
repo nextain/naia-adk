@@ -30,6 +30,11 @@ export function createClient({ url, token, fetchImpl = fetch }) {
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password) throw new Error('HTTP(S) 서버 주소가 필요합니다');
   const prefix = base.href.replace(/\/$/, '') + '/api/portal/messenger';
   async function request(path, options = {}) {
+    if (options.method?.toUpperCase() === 'POST' && /^\/channels\/[^/]+\/messages(?:\?.*)?$/.test(path)) {
+      const payload = JSON.parse(options.body);
+      if (typeof payload.body !== 'string') throw new Error('본문이 필요합니다');
+      assertMessage(payload.body);
+    }
     const response = await fetchImpl(prefix + path, { ...options, redirect: 'error', headers: { 'X-AX-Agent-Token': token, ...options.headers } });
     if (!response.ok) throw new Error(`메신저 요청 실패 (${response.status})`);
     return response;
@@ -46,7 +51,6 @@ export function createClient({ url, token, fetchImpl = fetch }) {
       const ch = await channel(value), body = readFileSync(bodyFile, 'utf8');
       if (!body.trim() || body.length > 64000) throw new Error('본문은 1~64000자입니다');
       validateApproval(body, ch.name);
-      assertMessage(body);
       const files = attachments.map(path => ({name:basename(path), bytes:readFileSync(path)}));
       for (const file of files) {
         if (file.bytes.length > 25 * 1024 * 1024 || !/^[^.]+\.(png|jpg|webp|gif|pdf|txt|md|csv|json|zip)$/i.test(file.name)) throw new Error('첨부 확장자 또는 25MB 제한을 확인하세요');

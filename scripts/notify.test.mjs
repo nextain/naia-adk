@@ -229,3 +229,14 @@ test('notifier blocks unsupported claims before network access', async () => {
   await assert.rejects(notifier.send({channelId: '1', content: '즉시 구동하였고 확인 중입니다.'}), /진행 주장/);
   assert.equal(called, false);
 });
+
+test('messenger guards the final body and keeps mention names separate from claims', async () => {
+  const fake = await fakeMessenger();
+  try {
+    const notifier = createNotifier({ kind: 'messenger', url: fake.url, channel: 'ops', mentions: { 42: '철저히' } }, { env: { NAIA_MESSENGER_TOKEN: 'agent-token' } });
+    await assert.rejects(notifier.send({ content: '<@42> 철저히 하겠습니다.' }));
+    assert.equal(fake.posts.length, 0);
+    await notifier.send({ content: '<@42> 확인해 주세요.' });
+    assert.deepEqual(fake.posts.map(post => post.body), ['@철저히 확인해 주세요.']);
+  } finally { await fake.close(); }
+});

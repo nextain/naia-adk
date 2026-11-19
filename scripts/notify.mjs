@@ -86,7 +86,6 @@ export function createNotifier(notify = {}, { token, env = process.env, fetchImp
   const nameOf = value => own(notify.mentions, value) ? notify.mentions[value] : own(names, value) ? names[value] : value;
   let channels;
   return { kind, async send({ stage, content, people = [] }) {
-    try { assertMessage(content); } catch (error) { throw setupFailure(error.message); }
     if (!url || !agentToken) throw setupFailure('messenger URL or token missing');
     if (!originOk(url)) throw setupFailure('messenger URL must be http(s) with no credentials, query or fragment');
     const base = new URL(url);
@@ -106,6 +105,7 @@ export function createNotifier(notify = {}, { token, env = process.env, fetchImp
     if (!channel) throw setupFailure('messenger channel not found');
     // Discord-style <@id> becomes a messenger @name so the person or role is mentioned there.
     const body = String(content).replace(/<@!?([\p{L}\p{N}_-]+)>/gu, (m, value) => `@${people.includes(value) ? value : nameOf(value)}`);
+    try { assertMessage(body); } catch (error) { throw setupFailure(error.message); }
     return post(fetchImpl, `${prefix}/channels/${encodeURIComponent(channel.id)}/messages`, { method: 'POST', redirect: 'error', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ body, ...(threadId ? { reply_to_id: threadId } : {}) }) }, 'messenger', retries, sleep);
   } };
 }

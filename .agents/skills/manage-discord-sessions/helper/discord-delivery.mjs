@@ -1,5 +1,8 @@
 import { sanitizeFinalResponse } from "./sanitize.mjs";
 import { randomUUID } from "node:crypto";
+import { assertMessage } from "./message-guard.mjs";
+
+export { assertMessage as assertDiscordContent };
 
 const DISCORD_API = "https://discord.com/api/v10";
 const MAX_DELIVERY_CHUNK_CHARS = 900;
@@ -23,6 +26,7 @@ export async function postDiscordMessage({ token, channelId, content, nonce, bot
 	snowflake(channelId, "channelId");
 	if (typeof token !== "string" || token.length < 16) throw new Error("Discord credential is not ready");
 	if (typeof content !== "string" || content.length === 0 || content.length > 2_000) throw new Error("Discord message length is invalid");
+	assertMessage(content);
 	if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 60_000) throw new Error("Discord request timeout is invalid");
 	if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 3) throw new Error("Discord retry count is invalid");
 	if (!Number.isSafeInteger(retryDelayMs) || retryDelayMs < 0 || retryDelayMs > 5_000) throw new Error("Discord retry delay is invalid");
@@ -63,6 +67,7 @@ export async function postDiscordMessage({ token, channelId, content, nonce, bot
 
 export async function postDiscordDirectMessage({ token, userId, content, nonce, botUserId, fetchImpl = fetch, signal, timeoutMs = 15_000 }) {
 	snowflake(userId, "userId");
+	assertMessage(content);
 	if (typeof token !== "string" || token.length < 16) throw new Error("Discord credential is not ready");
 	const controller = new AbortController();
 	const abort = () => controller.abort();
@@ -103,6 +108,9 @@ function chunkNonce(nonce, index) {
 export async function deliverJobResult({ store, jobId, attemptId, token, channelId, botUserId, content, fetchImpl = fetch, signal, now = () => new Date().toISOString() }) {
 	const safeContent = sanitizeFinalResponse(content);
 	const chunks = splitDiscordContent(safeContent);
+	// Validate all final chunks before reserving or sending any part of the result.
+	assertMessage(safeContent);
+	for (const chunk of chunks) assertMessage(chunk);
 	const candidateNonce = randomUUID().replaceAll("-", "").slice(0, 24);
 	const reserved = store.reserveDelivery({ deliveryKey: `delivery:${candidateNonce}`, jobId, attemptId, nonce: candidateNonce, channelId, now: now() });
 	if (reserved.status !== "started" || reserved.existing) return { state: reserved.status === "confirmed" ? "confirmed" : "unknown", receipts: [] };

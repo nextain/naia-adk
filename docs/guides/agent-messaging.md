@@ -67,8 +67,8 @@
 
 사람에게 보내는 글에서 구체 방법이나 근거 없는 노력·다짐·반성 표현을 쓰지 않는다. 사과나 다짐 대신 확인된 사실과 다음 행동 한 가지를 쓴다. 약속에는 무엇을 할지, 어떤 장치·파일·명령으로 할지, 업무 장부에 기록한 기한을 함께 적는다. 예: `검사가 빠져 있었다. scripts/message-guard.mjs를 연결하고 장부 기한 18:30까지 시험한다.`
 
-일꾼을 띄웠거나 구동했다고 할 때는 실제 일꾼 폴더와 상태를 확인한다. 해소·병합·배포 등 진행 주장은 해당 폴더, 커밋 해시, PR 또는 배포 주소를 같은 문장에 적는다. 폴더만 만들거나 깨움 파일만 남긴 것은 구동 성공의 증거가 아니다.
+일꾼을 띄웠거나 구동했다고 할 때는 실제 일꾼 폴더와 상태를 확인한다. 해소·병합·배포 등 진행 주장은 커밋 해시, PR 번호 또는 배포 주소를 같은 문장에 적는다. 폴더만 만들거나 깨움 파일만 남긴 것은 구동 성공의 증거가 아니다.
 
-공통 검사기 `scripts/lib/message-guard.mjs`의 `assertMessage(body, options)`는 차단 사유와 바꿔 쓸 꼴을 담아 오류를 던진다. `checkMessage`는 `{ok, issues}`를 돌려준다. `node scripts/message-guard.mjs 본문파일` 또는 표준 입력으로 검사하며 차단 시 종료 코드 1, 설정·입력 오류 시 2를 반환한다. 금지 패턴은 `scripts/lib/message-guard-patterns.json`에서 관리한다. 검사기는 문장 단위의 패턴 검사이므로 사실 여부와 약속의 모든 필수 요소를 이해하거나 보증하지 않는다. 작성자가 근거와 장부 기한을 직접 확인해야 한다.
+공통 검사기 `scripts/lib/message-guard.mjs`의 `assertMessage(body, options)`는 차단 사유와 바꿔 쓸 꼴을 담아 오류를 던진다. `checkMessage`는 `{ok, issues}`를 돌려준다. `node scripts/message-guard.mjs 본문파일` 또는 표준 입력으로 검사하며 차단 시 종료 코드 1, 설정·입력 오류 시 2를 반환한다. 금지 패턴은 `.agents/skills/manage-discord-sessions/helper/message-guard-patterns.json`에서 관리하며, 바로 옆 `message-guard-cases.json`에 고정 차단·통과 사례를 둔다. 검사기는 문장 단위의 패턴 검사이므로 사실 여부와 약속의 모든 필수 요소를 이해하거나 보증하지 않는다. 작성자가 근거와 장부 기한을 직접 확인해야 한다.
 
-`scripts/messenger/msg.mjs`의 `post`와 `scripts/notify.mjs`의 `send`는 전송 전에 검사한다. 별도 인스턴스의 Discord 도구도 본문 전송 직전에 `assertMessage(body)`를 호출해야 한다. 상대 경로는 프로세스 작업 디렉터리를 기준으로 확인하며, 필요하면 `assertMessage(body, { cwd: 작업기준경로, unitStatus: (dir, sentence) => 상태확인결과 })`로 기준과 동기식 유닛 확인 훅을 지정한다. 훅은 성공일 때만 `true`를 반환해야 한다. 훅을 생략하면 폴더의 `brief.md` 또는 `run.sh` 존재만 검사하며 유닛 구동 성공을 확인하지 않는다.
+메신저 서버는 인증된 에이전트의 글과 답글을 저장하기 직전에 검사하며 사람 글은 검사하지 않는다. CLI, 알림 및 Discord 전송·수정 경로도 최종 본문을 검사한다. 멘션 이름은 주장으로 취급하지 않는다. 일꾼 구동 주장에는 폴더 경로와 그 폴더의 `run.done`, 또는 해당 폴더를 `WorkingDirectory`로 쓰는 active 상태의 사용자 systemd `.service` 이름을 적는다. 서버 검사는 서버의 ADK 뿌리를 상대 경로 기준으로 사용하므로 근거는 서버에서 읽을 수 있어야 한다. 유닛은 서버 프로세스 사용자의 systemd에서 확인한다. 원격 호스트나 다른 계정의 근거는 공유 가능한 `run.done` 등으로 확인해야 한다. 폴더나 `brief.md`만으로는 통과하지 않는다.

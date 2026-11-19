@@ -122,3 +122,18 @@ test('post blocks unsupported claims before sending', async () => {
  await assert.rejects(client.post('자유','-',file), /구체 근거/);
  assert.equal(calls.filter(c => c.options.method === 'POST').length, 0);
 });
+
+test('public request and schedule sender guard message POSTs', async () => {
+ const { messengerSender } = await import('../schedule/schedule-notify.mjs');
+ const posts=[];
+ const client=createClient({url:'http://localhost:3142',token:'test',fetchImpl:async (url, options) => {
+  if (options.method === 'POST') posts.push(JSON.parse(options.body));
+  return {ok:true,text:async()=>JSON.stringify([{id:'c',name:'자유'}]),json:async()=>({id:'posted'})};
+ }});
+ const send=messengerSender(client);
+ await assert.rejects(client.request('/channels/c/messages',{method:'POST',body:JSON.stringify({body:'철저히 하겠습니다.'})}));
+ await assert.rejects(send('자유','자동 검증 스크립트를 도입하겠습니다'));
+ assert.equal(posts.length,0);
+ await send('자유','PR #191을 병합했습니다.');
+ assert.deepEqual(posts,[{body:'PR #191을 병합했습니다.'}]);
+});
