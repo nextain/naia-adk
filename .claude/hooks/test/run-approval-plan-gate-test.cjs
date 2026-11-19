@@ -2845,6 +2845,38 @@ REVIEW_EOF
 	assert.equal(markedRev.status, 0, `marked foreign review failed:\n${markedRev.stdout}\n${markedRev.stderr}`);
 });
 
+test("review snapshot ignores only the deploy audit log during review", (t) => {
+	for (const [changed, shouldPass] of [[".claude/deploy/audit.jsonl", true], ["src/code.js", false], [".claude/deploy/audit.jsonl.extra", false]]) {
+		const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "review-audit-snapshot-")));
+		t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+		const root = path.join(tmp, "repo");
+		fs.mkdirSync(root);
+		gitRun(root, ["init", "-q"]);
+		gitRun(root, ["config", "user.email", "test@example.invalid"]);
+		gitRun(root, ["config", "user.name", "Test"]);
+		const { planFile } = createValidPlan(root);
+		writeGateConfig(root, { planReview: { reviewer: "argon", until: new Date(Date.now() + 60000).toISOString() } });
+		for (const rel of [".claude/deploy/audit.jsonl", "src/code.js", ".claude/deploy/audit.jsonl.extra"]) {
+			const file = path.join(root, rel);
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, "initial\n");
+		}
+		gitRun(root, ["add", "-A"]);
+		gitRun(root, ["commit", "-qm", "initial"]);
+		const bin = path.join(tmp, "bin"), home = path.join(tmp, "home"), state = path.join(tmp, "state");
+		fs.mkdirSync(bin); fs.mkdirSync(path.join(home, ".gemini"), { recursive: true }); fs.mkdirSync(state);
+		fs.writeFileSync(path.join(bin, "bwrap"), '#!/bin/sh\nwhile [ "$1" != "--" ] && [ "$#" -gt 0 ]; do shift; done\nshift\nexec "$@"\n', { mode: 0o755 });
+		const body = ["판정: PASS", ...deployPlan.CRITERIA.map(([id]) => `${id}: PASS`), "참고 지적: 0", "남은 지적: 0"].join("\n");
+		const reviewer = path.join(bin, "reviewer");
+		const mutation = shouldPass ? `printf '%s\\n' '{"event":"blocked-state-lock"}'` : "printf x";
+		fs.writeFileSync(reviewer, `#!/bin/sh\ncat >/dev/null\n${mutation} >> ${JSON.stringify(path.join(root, changed))}\ncat <<'EOF'\n${body}\nEOF\n`, { mode: 0o755 });
+		const env = { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH}`, APPROVAL_PLAN_ARGON_BIN: reviewer, DEPLOY_APPROVAL_STATE_DIR: state };
+		const result = spawnSync(process.execPath, [SCRIPT_PATH, "review", planFile, "--author", "muse"], { cwd: root, env, encoding: "utf8", timeout: 30000 });
+		if (shouldPass) assert.equal(result.status, 0, `${changed}: ${result.stdout} ${result.stderr}`);
+		else { assert.notEqual(result.status, 0, changed); assert.match(result.stdout + result.stderr, /읽기 전용 검사 실패/); }
+	}
+});
+
 test("참고-1: heredoc 꼴(<<-, 따옴표 구분자, 한 줄 둘, 닫힘 없음, bash/ssh/az run-command) 분류기 검증", (t) => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "heredoc-classifier-"));
 	t.after(() => fs.rmSync(root, { recursive: true, force: true }));

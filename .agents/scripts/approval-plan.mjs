@@ -255,8 +255,9 @@ function gitSnapshot(cwd = ROOT, seen = new Set(), isolated = false, baseRoot = 
 	const h = crypto.createHash("sha256");
 	h.update(filterSnapshotStatus(git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"]), cwd, baseRoot));
 	const hasHead = git(["rev-parse", "--verify", "HEAD"], true) !== null;
-	h.update(git(["diff", "--binary", ...(hasHead ? ["HEAD"] : []), "--ignore-submodules=all"]));
-	h.update(git(["diff", "--cached", "--binary", "--ignore-submodules=all"]));
+	const auditPathspec = cwd === fs.realpathSync(baseRoot) ? ["--", ".", ":(exclude,literal).claude/deploy/audit.jsonl"] : [];
+	h.update(git(["diff", "--binary", ...(hasHead ? ["HEAD"] : []), "--ignore-submodules=all", ...auditPathspec]));
+	h.update(git(["diff", "--cached", "--binary", "--ignore-submodules=all", ...auditPathspec]));
 	const untracked = git(["ls-files", "--others", "--exclude-standard", "-z"]).toString("utf8").split("\0").filter(Boolean).filter((f) => !isSnapshotExcluded(cwd, f, baseRoot));
 	const ignored = git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]).toString("utf8").split("\0").filter(Boolean).filter((f) => !isSnapshotExcluded(cwd, f, baseRoot));
 	for (const file of ignored.sort()) hashIgnoredPath(h, path.resolve(cwd, file), path.relative(baseRoot, path.resolve(cwd, file)) || ".");
@@ -325,6 +326,7 @@ function hashPath(h, file, recurse = true) {
 	}
 }
 
+const REVIEW_SNAPSHOT_EXCLUDED_FILES = new Set([".claude/deploy/audit.jsonl"]);
 const REVIEW_SNAPSHOT_EXCLUDED_PREFIXES = [".agents/progress/", ".agents/work/", ".agents/state/", ".agents/.dm-outbox/", "gates/", "tmp/"];
 function isRecoveryMode(root = ROOT) {
 	for (const marker of [".codex/no-harness", ".claude/no-harness", ".pi/no-harness"]) {
@@ -345,7 +347,7 @@ function isSnapshotExcluded(top, file, root = ROOT) {
 	if (rel.startsWith("./")) rel = rel.slice(2);
 	if (path.isAbsolute(rel)) rel = path.relative(top, rel).replace(/\\/g, "/");
 	if (!rel || rel === "." || rel.startsWith("..")) return false;
-	return REVIEW_SNAPSHOT_EXCLUDED_PREFIXES.some((p) => rel === p.replace(/\/+$/, "") || rel.startsWith(p));
+	return REVIEW_SNAPSHOT_EXCLUDED_FILES.has(rel) || REVIEW_SNAPSHOT_EXCLUDED_PREFIXES.some((p) => rel === p.replace(/\/+$/, "") || rel.startsWith(p));
 }
 function filterSnapshotStatus(buf, top, root = ROOT) {
 	if (!buf || buf.length === 0) return buf;
@@ -353,7 +355,8 @@ function filterSnapshotStatus(buf, top, root = ROOT) {
 	for (const chunk of buf.toString("utf8").split("\0")) {
 		if (chunk === "") continue;
 		const m = chunk.match(/^(.{2}) (.*)$/s);
-		if (m && (m[1] === "??" || m[1] === "!!") && isSnapshotExcluded(top, m[2], root)) continue;
+		if (m && isSnapshotExcluded(top, m[2], root) &&
+			((m[1] === "??" || m[1] === "!!") || (m[2] === ".claude/deploy/audit.jsonl" && !/[RC]/.test(m[1])))) continue;
 		kept.push(chunk);
 	}
 	if (!kept.length) return Buffer.alloc(0);
