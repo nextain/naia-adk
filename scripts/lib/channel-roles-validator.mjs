@@ -232,7 +232,7 @@ export function validateAndResolveTables({ tables, channelIds, outDir = null, in
         if (Array.isArray(ch.wakeRoles) && !ch.wakeRoles.includes(ch.primaryRole)) {
           errors.push(`[검사 2] ${chLabel}: primaryRole("${String(ch.primaryRole)}")은 반드시 wakeRoles 안에 있어야 합니다.`);
         }
-        const outsideCall = ch.outsideCall === undefined ? 'mention-or-name' : ch.outsideCall;
+        const outsideCall = ch.outsideCall === undefined ? 'mention' : ch.outsideCall;
         if (!OUTSIDE_CALL_VALUES.has(outsideCall)) {
           errors.push(`[검사 2] ${chLabel}: outsideCall("${String(outsideCall)}")은 mention 또는 mention-or-name만 허용됩니다.`);
         }
