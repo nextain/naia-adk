@@ -246,6 +246,31 @@ test("timer launch resolves the installed card profile and records the actual ar
   assert.match(await readFile(result, "utf8"), /model=installation-model/);
 });
 
+test("queued registration and launch retain the original card's shuffled assignment", async () => {
+  const { root, config } = await setup();
+  config.roles[1].tier_profile = "config/writer.json";
+  await writeFile(path.join(root, "config/work-ledger.json"), JSON.stringify(config));
+  const candidates = ["first", "second"].map(id => ({
+    id, family: id, model: id, cli: process.execPath,
+    argv: ["{cli}", path.join(root, "worker.mjs"), "{model}"],
+  }));
+  const profile = { tiers: { 2: { candidates } }, worker_steps: { implementation: { tier: 2, selection: "shuffle" } } };
+  const save = () => writeFile(path.join(root, "config/writer.json"), JSON.stringify(profile));
+  await save();
+  await cli(root, "add", "--role", "writer", "--id", "queued-card", "--title", "plan", "--due", PAST,
+    "--channel", "111", "--msg-id", "222", "--prompt", "task.md", "--result-file", "queued-result.md");
+  const assigned = (await item(root, "writer", "queued-card")).drive.model;
+  candidates.reverse();
+  await save();
+  const { launched } = await pass(root, config);
+  assert.deepEqual(launched.map(({ role, id }) => [role, id]), [["writer", "queued-card"]]);
+  const run = (await item(root, "writer", "queued-card")).drive.run;
+  assert.equal(run.profile.candidate, assigned);
+  assert.equal(run.profile.model, assigned);
+  await until(() => existsSync(path.join(root, "queued-result.md")), "shuffled worker result");
+});
+
+
 test("a role without a wake box gets nothing started and the pass reports it", async () => {
   const { root, config } = await setup();
   await addDriven(root, "writer", "draft");

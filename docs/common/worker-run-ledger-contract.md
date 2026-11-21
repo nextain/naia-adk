@@ -31,7 +31,9 @@
 
 역할 장부에 등록한 카드의 `worker_step`으로 설치 프로파일의 `worker_steps`를 찾습니다. 기본 단계는 `implementation`입니다. `config/work-ledger.json`의 `tier_profile`은 설치 공통 경로이고 `roles[].tier_profile`은 해당 역할의 경로입니다. 경로는 설치 루트를 기준으로 해석합니다. 기본 위치 `config/tier-profile.json`에 들어 있는 프로파일도 읽습니다.
 
-`config/tier-profile.example.json`의 자리표시자를 설치에서 쓰는 값으로 채웁니다. 각 단계가 한 층과 후보 ID를 가리킵니다. 후보의 `argv` 배열에서 `{cli}`, `{model}`, 설정한 `{effort}`를 치환해 프로그램을 직접 실행합니다. 지시서는 표준 입력으로 전달하며 설치 CLI가 파일 경로를 요구하면 `{prompt_file}`, `{result_file}`, `{work_dir}`를 쓸 수 있습니다. 출력 경로는 환경 변수 `LEDGER_RESULT_FILE`로도 전달합니다. 실제 CLI의 인자 형식과 결과 저장 방법을 설치에서 지정해야 합니다.
+`config/tier-profile.example.json`의 자리표시자를 설치에서 쓰는 값으로 채웁니다. 단계에 한 층과 후보 ID를 지정하거나, `{"tier":2,"selection":"shuffle"}`로 그 층의 후보 중 하나를 뽑을 수 있습니다. 섞기 순서는 역할과 원본 카드·메시지의 식별자로 정합니다. 같은 카드에서 같은 후보 구성을 쓰면 재시작과 예약 실행에서도 같은 일꾼을 고릅니다. 같은 층의 `review`에도 섞기를 지정하면 실제 구현을 수행한 모델과 계열을 제외하고 뽑습니다. 검수 후보가 없으면 실행을 멈춥니다.
+
+후보의 `argv` 배열에서 `{cli}`, `{model}`, 설정한 `{effort}`를 치환해 프로그램을 직접 실행합니다. 지시서는 표준 입력으로 전달하며 설치 CLI가 파일 경로를 요구하면 `{prompt_file}`, `{result_file}`, `{work_dir}`를 쓸 수 있습니다. 출력 경로는 환경 변수 `LEDGER_RESULT_FILE`로도 전달합니다. 실제 CLI의 인자 형식과 결과 저장 방법을 설치에서 지정해야 합니다.
 
 ```sh
 node scripts/work-ledger/ledger.mjs add --root . --role editor --id t1 --title Draft \

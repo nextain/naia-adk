@@ -125,7 +125,7 @@ export async function freeGb(dir) {
 
 // Drive fields for add/adopt. An existing result file is refused in both, so
 // an old file can never stand in for work that was not done.
-export async function register({ root, config, role, ledger, opts, now, workerStep }) {
+export async function register({ root, config, role, ledger, opts, now, card, workerStep = card?.worker_step }) {
   const cfg = driveConfig(config);
   roleWakeDir(root, config, role);
   const profileFile = workerProfilePath(root, config, role);
@@ -137,7 +137,7 @@ export async function register({ root, config, role, ledger, opts, now, workerSt
   if (profileFile) {
     if (workerStep === "review") throw new Error("Use worker-run --review-of to review a completed producer");
     const { binding } = resolveWorkerStep(profileFile, workerStep ?? "implementation", {
-      workDir: path.resolve(root, opts.cwd ?? cfg.cwd), prompt, result: resultFile,
+      workDir: path.resolve(root, opts.cwd ?? cfg.cwd), prompt, result: resultFile, role, card,
     });
     if (model !== undefined && model !== binding.model) throw new Error("Model differs from the role profile");
     model = binding.model;
@@ -183,7 +183,7 @@ function launchPlan(root, config, cfg, role, item) {
   const step = item.worker_step ?? "implementation";
   if (profileFile && step === "review") throw new Error("Review requires a completed profiled producer on the same card");
   if (!profileFile && (d.profiled || !cfg.command)) throw new Error("Configured worker profile is missing");
-  const selection = profileFile && resolveWorkerStep(profileFile, step, { workDir, prompt: promptFile, result: d.result_file });
+  const selection = profileFile && resolveWorkerStep(profileFile, step, { workDir, prompt: promptFile, result: d.result_file, role, card: item });
   const model = selection ? selection.binding.model : d.model;
   const values = { id: item.id, role, title: item.title, model, prompt: d.prompt, result_file: d.result_file };
   const command = selection ? selection.command : cfg.command.map(part => fill(part, values));

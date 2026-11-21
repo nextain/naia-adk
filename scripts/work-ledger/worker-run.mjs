@@ -618,9 +618,9 @@ export async function startWorkerRun(
       if (error.code === "ENOENT") return null;
       throw error;
     });
-    const { step, producer } = cardContext(ledger);
+    const { card, step, producer } = cardContext(ledger);
     if (profileFile) {
-      selection = resolveWorkerStep(profileFile, step, { workDir: workCwd, prompt, result: resultPath });
+      selection = resolveWorkerStep(profileFile, step, { workDir: workCwd, prompt, result: resultPath, role, card, producer: producer?.profile });
       checkIndependentReviewer(producer?.profile, selection.binding);
       command = selection.command;
     }
