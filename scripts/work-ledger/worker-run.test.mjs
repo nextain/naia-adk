@@ -189,6 +189,22 @@ test("strict parent blocks untracked starts and checks the selected role in dry 
   await assert.rejects(readLedger(root, "minho"), { code: "ENOENT" });
 });
 
+test("strict parent admits only an open work card before any process or ledger reservation", async () => {
+  const { root } = await setup();
+  const service = systemdFake();
+  for (const status of ["done", "dropped"]) {
+    await ledgerMain(["add", "--root", root, "--role", "minho", "--id", status, "--title", status,
+      "--due", "2026-11-18T12:00:00Z", "--channel", "test-channel", "--msg-id", status], { now });
+    await ledgerMain([status === "done" ? "done" : "drop", status, "--root", root, "--role", "minho", "--reason", "test closed card"], { now });
+    for (const dry of [true, false]) {
+      await assert.rejects(startWorkerRun({ root, role: "minho", id: "worker-" + status, parent: status,
+        name: "closed card", result: "out.md", "strict-parent": true, dry }, ["codex", "exec"], { runner: service.runner, now }), /open parent card/);
+    }
+  }
+  assert.equal(service.calls.length, 0);
+  assert.equal((await readLedger(root, "minho")).items.filter(row => row.kind === "worker").length, 0);
+});
+
 test("the installed role profile selects the actual worker and an independent reviewer for the same card", async () => {
   const { root } = await setup({ tier_profile: "config/tier-profile.json", roles: [{ role: "editor" }, { role: "translator" }] });
   const prompt = path.join(root, "instruction with spaces.md");
