@@ -8,7 +8,7 @@
 //   node scripts/adk-user-profile.mjs check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|codex|muse]
 import fs from "node:fs"
 import os from "node:os"
-import { roleWorkspace } from "./work-ledger/role-handoff.mjs"
+import { HANDOFF_CONTEXT_TOKENS, roleWorkspace } from "./work-ledger/role-handoff.mjs"
 import path from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
@@ -302,7 +302,7 @@ export function run(args, now = new Date()) {
       const argv = [process.execPath, hookScript, "--codex-hook", instanceRoot]
       const command = argv.map(arg => "'" + arg.replaceAll("'", "'\\''") + "'").join(" ")
       const commandWindows = "& " + argv.map(arg => "'" + arg.replaceAll("'", "''") + "'").join(" ")
-      const hooks = { SessionStart: [{ hooks: [{ type: "command", command, commandWindows, statusMessage: "Restoring the role work card and memory" }] }] }
+      const hooks = { SessionStart: [{ hooks: [{ type: "command", command, commandWindows, additionalContextLimit: HANDOFF_CONTEXT_TOKENS, statusMessage: "Restoring the role work card and memory" }] }] }
       const instanceArg = command.slice(command.lastIndexOf(" '--codex-hook'"))
       const owned = existing => typeof existing === "string" && existing.replaceAll("\\", "/").includes("/scripts/work-ledger/role-handoff.mjs") && existing.endsWith(instanceArg)
       nextCodex = JSON.stringify({ ...current, hooks: mergeHookGroups(current.hooks, hooks, owned) }, null, 2) + "\n"
@@ -360,6 +360,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     }
     for (const key of result.overridden) console.log(`overridden: ${key}`)
     for (const f of result.changed) console.log(`updated: ${f}`)
+    if (result.changed.includes(args.codexHooksFile)) console.log("Review this ADK SessionStart hook in Codex /hooks. The CLI skips a new or changed user hook until its exact definition is trusted.")
     if (!result.changed.length) console.log("already up to date")
   } catch (e) {
     console.error(e.message)

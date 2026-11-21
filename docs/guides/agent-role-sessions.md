@@ -118,6 +118,8 @@ node scripts/adk-user-profile.mjs apply --adk-root "$runtime" --instance-root "$
 node scripts/adk-user-profile.mjs check --adk-root "$runtime" --instance-root "$instance"
 ```
 
+Codex에서 새 사용자 훅을 등록하거나 정의가 바뀌면 `/hooks`에서 이 설치판의 `role-handoff.mjs` 명령과 위치를 검토하고 해당 훅을 신뢰합니다. 등록만 된 훅은 첫 입력에서 빠질 수 있습니다. [Codex 훅의 신뢰 설정](https://developers.openai.com/codex/hooks#review-and-trust-hooks)
+
 Claude와 Codex의 세션 시작 훅은 같은 원본의 노트, 최근 미완료 카드 12개, 각 카드의 원글과 최근 일꾼 결과를 읽습니다. 같은 원본이면 인계문의 SHA-256도 같습니다. 새 카드는 등록 시 소유 그룹을 기록합니다. 기존 카드에는 그룹이 없을 수 있습니다. 해당 그룹 전용으로 확인한 원본 채널만 `legacy_card_channels`에 등록하면 그 채널의 기존 카드도 복원됩니다. 다른 세션 폴더와 하위 일꾼에는 역할 기억을 싣지 않습니다.
 
 `claude_auto_memory`를 켜면 설치기가 해당 세션의 `.claude/settings.local.json`에 그룹 기억 폴더를 지정합니다. Claude가 저장하는 `MEMORY.md`를 Codex도 다음 기동 때 읽고, 두 도구가 같은 폴더의 주제 파일을 열 수 있습니다. 기존 Claude 전용 기록을 옮길 때는 해당 역할과 그룹에 속한다고 확인된 인덱스와 주제 파일만 이 폴더에 보관합니다. 한 저장소의 여러 작업 폴더는 Claude 기본 기억을 공유할 수 있습니다. [Claude Code 기억 저장 위치](https://code.claude.com/docs/en/memory#storage-location)
