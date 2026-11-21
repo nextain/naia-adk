@@ -1,41 +1,55 @@
 {
   "schema": "tier-profile/v1",
   "priority": ["<CLI_1>", "<CLI_2>"],
+  "worker_steps": {
+    "implementation": { "tier": 2, "candidate": "primary" },
+    "design": { "tier": 2, "candidate": "designer" },
+    "review": { "tier": 4, "candidate": "reviewer" }
+  },
   "tiers": {
     "1": {
       "purpose": "가벼운 확인·분류",
       "candidates": [
-        { "cli": "<CLI_1>", "model": "<TIER1_MODEL_1>" },
-        { "cli": "<CLI_2>", "model": "<TIER1_MODEL_2>", "effort": "<EFFORT>" }
+        { "cli": "<CLI_1>", "model": "<TIER1_MODEL_1>" }
       ]
     },
     "2": {
-      "purpose": "2층 일꾼 여러 개 동시 (조사·설계·구현·검증)",
+      "purpose": "설계·구현",
       "max_parallel": 4,
       "candidates": [
         {
+          "id": "primary",
           "cli": "<CLI_1>",
+          "family": "<FAMILY_1>",
           "model": "<TIER2_MODEL_1>",
-          "command_template": "{cli} --model {model} -p \"$(cat {prompt_file})\""
+          "argv": ["{cli}", "--model", "{model}"]
         },
         {
+          "id": "designer",
           "cli": "<CLI_2>",
+          "family": "<FAMILY_2>",
           "model": "<TIER2_MODEL_2>",
           "effort": "<EFFORT>",
-          "command_template": "{cli} exec --model {model} --effort {effort} \"$(cat {prompt_file})\""
+          "argv": ["{cli}", "exec", "--model", "{model}", "--effort", "{effort}", "-"]
         }
       ]
     },
     "3": {
-      "purpose": "3층 역할 세션 (감시·평가·소통)",
+      "purpose": "역할 세션",
       "candidates": [
         { "cli": "<CLI_1>", "model": "<TIER3_MODEL_1>" }
       ]
     },
     "4": {
-      "purpose": "4층 검수",
+      "purpose": "독립 검수",
       "candidates": [
-        { "cli": "<CLI_1>", "model": "<TIER4_MODEL_1>" }
+        {
+          "id": "reviewer",
+          "cli": "<CLI_2>",
+          "family": "<FAMILY_2>",
+          "model": "<TIER4_MODEL_1>",
+          "argv": ["{cli}", "--model", "{model}"]
+        }
       ]
     }
   }

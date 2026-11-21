@@ -38,6 +38,9 @@ function guideMessage(target, rule, lead, env = process.env) {
 	} else if (profile.status !== "ok") {
 		step2 = `층 프로파일 설정 깨짐(${profile.configRel}: ${profile.reason}): 형식과 필수 칸(tiers.2.candidates[].cli·model·command_template)을 고치세요${extra}`;
 	} else {
+		if (profile.document.worker_steps) {
+			return `[3층 쓰기 막기] ${target} 변경은 열린 작업카드의 단계에 지정된 일꾼에게 맡깁니다. 지시서를 쓴 뒤 \`node scripts/work-ledger/worker-run.mjs start --role <역할> --parent <카드> --name <일> --prompt <지시서> --result <결과>\`로 실행합니다. 검수는 같은 카드에서 --review-of <생산 실행 ID>로 요청합니다.`;
+		}
 		const cmds = profile.tier2.candidates.map((c) => guard.renderTier2Command(c, { workDir }));
 		const primary = `\`node scripts/worker-runner/spawn-worker.mjs --id <일> --role <역할> --work-dir ${workDir}/<일> --watch-dir ${workDir}/<일> --result-file ${workDir}/<일>/result.md -- ${cmds[0]}\``;
 		const fallbacks = cmds.length > 1

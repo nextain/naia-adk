@@ -189,6 +189,83 @@ test("strict parent blocks untracked starts and checks the selected role in dry 
   await assert.rejects(readLedger(root, "minho"), { code: "ENOENT" });
 });
 
+test("the installed role profile selects the actual worker and an independent reviewer for the same card", async () => {
+  const { root } = await setup({ tier_profile: "config/tier-profile.json", roles: [{ role: "editor" }, { role: "translator" }] });
+  const prompt = path.join(root, "instruction with spaces.md");
+  await writeFile(prompt, "Read the same card.\n");
+  const probe = path.join(root, "record-args.mjs");
+  await writeFile(probe, `
+    import { readFileSync, writeFileSync } from "node:fs";
+    const [result, model, effort] = process.argv.slice(2);
+    writeFileSync(result, JSON.stringify({ model, effort, role: process.env.LEDGER_ROLE, parent: process.env.LEDGER_PARENT_ID, text: readFileSync(0, "utf8") }));
+  `);
+  const candidate = (id, family, model, effort) => ({
+    id, cli: process.execPath, family, model, effort, argv: ["{cli}", probe, "{result_file}", "{model}", "{effort}"],
+  });
+  const profile = {
+    schema: "tier-profile/v1",
+    tiers: {
+      "2": { candidates: [candidate("writer", "family-a", "model-a", "medium")] },
+      "4": { candidates: [candidate("inspector", "family-b", "model-b", "high")] },
+    },
+    worker_steps: { design: { tier: 2, candidate: "writer" }, review: { tier: 4, candidate: "inspector" } },
+  };
+  const profileFile = path.join(root, "config/tier-profile.json");
+  await writeFile(profileFile, JSON.stringify(profile));
+  await ledgerMain(["add", "--root", root, "--role", "editor", "--id", "card-01", "--title", "Draft", "--worker-step", "design",
+    "--channel", "source", "--msg-id", "1234", "--due", "2026-11-22T12:00:00Z"]);
+  const opts = { root, role: "editor", parent: "card-01", name: "draft", result: "result.json", prompt, foreground: true };
+  await assert.rejects(startWorkerRun({ ...opts, parent: null }, []), /requires --parent/);
+  await assert.rejects(startWorkerRun({ ...opts, role: "translator" }, []), /Parent item not found/);
+  await assert.rejects(startWorkerRun(opts, ["arbitrary"]), /role profile supplies/);
+  await assert.rejects(startWorkerRun({ ...opts, model: "caller-model" }, []), /role profile supplies/);
+  const pendingOpts = { ...opts, id: "scheduled", foreground: false, result: "scheduled.json" };
+  await startWorkerRun(pendingOpts, [], { runner: async () => {} });
+  await writeFile(path.join(root, "scheduled.json"), "unrelated");
+  await assert.rejects(finishWorkerRun({ ...pendingOpts, result: "another.json", exit: 0 }), /recorded result file/);
+  const unfinished = await finishWorkerRun({ ...pendingOpts, exit: 0 });
+  assert.equal(unfinished.reason, "missing-launch-receipt");
+  const run = await startWorkerRun({ ...opts, id: "writer-run" }, []);
+  assert.equal(run.status, "done");
+  assert.equal(run.from.msg_id, "1234");
+  assert.equal(run.profile.step, "design");
+  assert.ok(run.profile_started_at);
+  assert.deepEqual(JSON.parse(await readFile(path.join(root, "result.json"))), { model: "model-a", effort: "medium", role: "editor", parent: "card-01", text: "Read the same card.\n" });
+  const { supervisorCommand } = await import("./worker-profile.mjs");
+  const supervised = { root, role: "editor", id: "budgeted", workDir: root, result: path.join(root, "supervised.json"), opts, command: [] };
+  const payload = await supervisorCommand(supervised);
+  assert.ok(payload.includes("--foreground"));
+  await assert.rejects(supervisorCommand({ ...supervised, command: ["wrong-cli"] }), /role profile supplies/);
+  const supervisor = fileURLToPath(new URL("../worker-runner/spawn-worker.mjs", import.meta.url));
+  await execFileAsync(process.execPath, [supervisor, "--foreground", "--root", root, "--role", "editor",
+    "--parent", "card-01", "--id", "budgeted", "--work-dir", root, "--wake-dir", path.join(root, "wake"),
+    "--prompt", prompt, "--result-file", supervised.result, "--floor", "1K", "--budget", "8M", "--timeout", "15"],
+    { timeout: 30000 });
+  assert.equal((await readLedger(root, "editor")).items.find(item => item.id === "budgeted").profile.model, "model-a");
+  const interruptedOpts = { ...opts, id: "queued", result: "queued.json" };
+  const supervisedEnv = { ...process.env, WORKER_RUNNER_ID: "queued", WORKER_RUNNER_DISPATCH: "test-dispatch", WORKER_RUNNER_ATTEMPT: "1" };
+  const first = await startWorkerRun({ ...interruptedOpts, foreground: false }, [], { env: supervisedEnv, runner: async () => {} });
+  assert.equal(first.status, "running");
+  const resumed = await startWorkerRun(interruptedOpts, [], { env: { ...supervisedEnv, WORKER_RUNNER_ATTEMPT: "2", WORKER_RUNNER_RESUME: "1" } });
+  assert.equal(resumed.parent, "card-01");
+  assert.equal(resumed.status, "done");
+  assert.equal(resumed.supervisor.attempt, 2);
+  assert.equal((await readLedger(root, "editor")).items.find(item => item.id === "queued").reason, "supervisor-preempted");
+  const settled = await startWorkerRun(interruptedOpts, [], { env: { ...supervisedEnv, WORKER_RUNNER_ATTEMPT: "3", WORKER_RUNNER_RESUME: "1" } });
+  assert.equal(settled.id, resumed.id);
+  assert.equal((await readLedger(root, "editor")).items.filter(item => item.supervisor?.id === "queued").length, 2);
+  const review = { ...opts, result: "review.json", "review-of": "writer-run" };
+  profile.tiers["4"].candidates[0].family = "family-a";
+  await writeFile(profileFile, JSON.stringify(profile));
+  await assert.rejects(startWorkerRun(review, []), /different configured model family/);
+  profile.tiers["4"].candidates[0].family = "family-b";
+  await writeFile(profileFile, JSON.stringify(profile));
+  const reviewed = await startWorkerRun(review, []);
+  assert.equal(reviewed.review_of, run.id);
+  assert.equal(reviewed.profile.family, "family-b");
+  assert.deepEqual(JSON.parse(await readFile(path.join(root, "review.json"))), { model: "model-b", effort: "high", role: "editor", parent: "card-01", text: "Read the same card.\n" });
+});
+
 test("start & finish lifecycle: opens running row, launches systemd-run --user, closes done/failed by exit & result", async () => {
   const { root } = await setup();
   const fake = systemdFake();

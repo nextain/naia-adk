@@ -9,6 +9,7 @@ import { removeOwnedRoot } from './cleanup.mjs';
 import { schedule, finish, cleanupFailure, cleanupPaths, parseBytes, terminalOutcome, selectTempBase, attentionOwner, groupSettled } from './core.mjs';
 import { checkReviewCap, afterReviewCap, DEFAULT_REVIEW_CAP_CONFIG } from './review-cap.mjs';
 import { measureMinFreeBytesSync } from '../lib/disk-free.mjs';
+import { supervisorCommand } from '../work-ledger/worker-profile.mjs';
 import { registerWorker, updateWorkerRuntime } from '../work-watch.mjs';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 import { identity, processInfo, ownerIdentity, localIdentity, bootId, pidNamespace, ownedGroupAlive, stopOwned } from './process.mjs';
@@ -281,7 +282,7 @@ else if (action === 'register') {
     });
 }
 else if (action === 'run') {
-    if (!command.length || !options.id || !options['work-dir'])
+    if (!options.id || !options['work-dir'])
         throw Error('run requires --id, --work-dir and -- command');
     const watchRole = (options.role || process.env.WORKER_ROLE || '').trim();
     const watchResultFile = (options['result-file'] || process.env.WORKER_RESULT_FILE || '').trim();
@@ -289,6 +290,8 @@ else if (action === 'run') {
     if ((!watchRole || !watchResultFile) && !allowUnregisteredTest) {
         throw Error('unregistered worker-runner run refused: --role (or WORKER_ROLE) and --result-file (or WORKER_RESULT_FILE) are required so work-watch tracks every worker; use scripts/worker-runner/spawn-worker.mjs');
     }
+    const adkRoot = path.resolve(options['adk-root'] || process.env.ADK_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'));
+    command = await supervisorCommand({ root: adkRoot, role: watchRole, id: options.id, workDir: path.resolve(options['work-dir']), result: watchResultFile, opts: options, command });
     if (!bootId || !pidNamespace) throw Error('Process identity metadata unavailable; admission refused');
     const tempName = options['temp-name'] || options.id;
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(tempName) || tempName.includes('..')) throw Error('Invalid temporary name');
@@ -336,7 +339,7 @@ else if (action === 'run') {
             ? options['watch-dirs'].map(d => path.resolve(workDir, d))
             : [workDir];
         await registerWorker({
-            root: options['adk-root'] ? path.resolve(options['adk-root']) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
+            root: adkRoot,
             registryFile: options['work-watch-registry'] || process.env.ADK_WORK_WATCH_REGISTRY,
             id: options.id,
             unit: options.unit || process.env.WORKER_UNIT || null,
@@ -363,6 +366,7 @@ else if (action === 'run') {
     for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'])
         process.on(sig, () => { requestedSignal = sig; });
     try { fs.unlinkSync(path.join(stateDir, `.attention-${process.pid}`)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const dispatchId = randomUUID();
     let admitted = false, admissionError;
     while (!admitted) {
         admitted = await transaction(async state => {
@@ -506,6 +510,7 @@ else if (action === 'run') {
                 }
                 if (j.status === 'running' && !child) {
                     event('start', j, { resume: !!j.resume });
+                    j.attempt = (j.attempt ?? 0) + 1;
                     j.used = 0; delete j.overBudget;
                     j.tempBase = tempBase; j.tempRoot = path.join(tempBase, tempName); j.tempToken = randomUUID();
                     noSymlinkAncestors(j.tempRoot);
@@ -517,7 +522,7 @@ else if (action === 'run') {
                     j.initialUsage ??= startUsage ?? latestUsage?.[0];
                     const payloadTmp = path.join(j.root, 'tmp'); fs.mkdirSync(payloadTmp, { mode: 0o700 });
                     try { j.initialTempUsage = await usage(j.root); } catch { j.initialTempUsage = 0; }
-                    child = spawn(process.execPath, [fileURLToPath(new URL('./launch.mjs', import.meta.url)), stateFile, j.id, j.root, ...command], { cwd: workDir, stdio: 'inherit', detached: true, env: { ...process.env, TMPDIR: payloadTmp, TMP: payloadTmp, TEMP: payloadTmp, WORKER_RUNNER_TMP_ROOT: j.root, WORKER_RUNNER_STATE_DIR: stateDir, WORKER_RUNNER_ID: j.id, WORKER_RUNNER_RESUME: j.resume ? '1' : '0' } });
+                    child = spawn(process.execPath, [fileURLToPath(new URL('./launch.mjs', import.meta.url)), stateFile, j.id, j.root, ...command], { cwd: workDir, stdio: 'inherit', detached: true, env: { ...process.env, TMPDIR: payloadTmp, TMP: payloadTmp, TEMP: payloadTmp, WORKER_RUNNER_TMP_ROOT: j.root, WORKER_RUNNER_STATE_DIR: stateDir, WORKER_RUNNER_ID: j.id, WORKER_RUNNER_DISPATCH: dispatchId, WORKER_RUNNER_ATTEMPT: String(j.attempt), WORKER_RUNNER_RESUME: j.resume ? '1' : '0' } });
                     j.child = child.pid;
                     j.childToken = identity(child.pid);
                     ownedAttempt = { root: j.root, child: j.child, childToken: j.childToken, initialUsage: j.initialUsage, tempRoot: j.tempRoot, tempBase: j.tempBase, tempToken: j.tempToken, ownerBootId: bootId, ownerNamespace: pidNamespace };
@@ -546,7 +551,7 @@ else if (action === 'run') {
     if (watchRole && watchResultFile && process.exitCode && process.exitCode !== 0) {
         try {
             await updateWorkerRuntime({
-                root: options['adk-root'] ? path.resolve(options['adk-root']) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
+                root: adkRoot,
                 registryFile: options['work-watch-registry'] || process.env.ADK_WORK_WATCH_REGISTRY,
                 id: options.id,
                 role: watchRole,

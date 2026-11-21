@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, realpath, stat } from "node:fs/promises";
+import { mkdir, open, realpath, stat } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { checkIndependentReviewer, commandDigest, resolveWorkerStep, workerProfilePath } from "./worker-profile.mjs";
 import {
   changeLedger,
   isWorkerItem,
@@ -319,8 +320,11 @@ export async function finishWorkerRun(
           : path.resolve(workCwd, opts.result)
       : existing.result;
 
+  if (existing.profile && effectiveResult !== existing.result) {
+    throw new Error("A profiled worker must finish with its recorded result file");
+  }
   const resultCheck = await inspectResultFile(effectiveResult, existing.initial_result, {
-    allowUnchanged: opts.allowUnchangedResult === true || opts["allow-unchanged-result"] === true,
+    allowUnchanged: !existing.profile && (opts.allowUnchangedResult === true || opts["allow-unchanged-result"] === true),
   });
 
   let nextStatus = "failed";
@@ -346,6 +350,10 @@ export async function finishWorkerRun(
       if (opts.ifRunning) return item;
       throw new Error(`Worker run ${id} is already ${item.status}`);
     }
+    if (nextStatus === "done" && item.profile && !item.profile_started_at) {
+      nextStatus = "failed";
+      nextReason = "missing-launch-receipt";
+    }
     item.status = nextStatus;
     item.ended = endedIso;
     item.exit = exitCode;
@@ -364,17 +372,25 @@ export async function finishWorkerRun(
 }
 
 async function runSubprocessAndRecord(
-  { root, configPath, config, role, id, parent, resultPath, unit, tool, workCwd, command, env, stdio = ["ignore", "inherit", "inherit"] },
+  { root, configPath, config, role, id, parent, resultPath, unit, tool, workCwd, command, env, prompt, stdio = ["ignore", "inherit", "inherit"] },
   { clock = Date.now } = {},
 ) {
   const childEnv = buildChildEnv({ env, config, role, id, parent, resultPath, unit, tool });
-  const child = spawn(command[0], command.slice(1), {
-    cwd: workCwd,
-    env: childEnv,
-    stdio,
-  });
+  let child;
+  let input;
+  try {
+    if (prompt) input = await open(prompt, "r");
+    child = spawn(command[0], command.slice(1), {
+      cwd: workCwd,
+      env: childEnv,
+      stdio: input ? [input.fd, stdio[1], stdio[2]] : stdio,
+    });
+  } catch (error) {
+    await input?.close();
+    const item = await finishWorkerRun({ root, config: configPath, role, id, exit: 127, reason: "launch-failed", note: error.message, ifRunning: true }, { clock });
+    return { exitCode: 127, item, error };
+  }
 
-  let pidUpdatePromise = Promise.resolve();
   let spawnError = null;
   const spawned = await new Promise((resolve) => {
     child.once("spawn", () => resolve(true));
@@ -383,6 +399,7 @@ async function runSubprocessAndRecord(
       resolve(false);
     });
   });
+  if (input) void input.close().catch(() => {});
 
   if (!spawned) {
     const item = await finishWorkerRun(
@@ -403,14 +420,16 @@ async function runSubprocessAndRecord(
 
   const pid = child.pid;
   const startToken = processStart(pid);
-  pidUpdatePromise = changeLedger(root, role, async (l) => {
+  const spawnedAt = new Date(clock()).toISOString();
+  const receipt = changeLedger(root, role, async (l) => {
     const item = l.items.find((i) => i.id === id);
     if (item && isWorkerItem(item) && item.status === "running") {
       item.pid = pid;
       item.start_token = startToken;
       item.launch_pending = false;
+      if (item.profile) item.profile_started_at = spawnedAt;
     }
-  }).catch(() => {});
+  }).then(() => null, error => error);
 
   let receivedSignal = null;
   const forwardSignal = (sig) => {
@@ -425,7 +444,7 @@ async function runSubprocessAndRecord(
   });
   process.removeListener("SIGTERM", forwardSignal);
   process.removeListener("SIGINT", forwardSignal);
-  await pidUpdatePromise;
+  const receiptError = await receipt;
 
   const finalSig = signal || receivedSignal;
   const exitCode =
@@ -440,11 +459,12 @@ async function runSubprocessAndRecord(
       id,
       exit: exitCode,
       ...(finalSig ? { reason: `signal-${finalSig}` } : {}),
+      ...(prompt && receiptError ? { reason: "missing-launch-receipt", note: receiptError.message } : {}),
       ifRunning: true,
     },
     { clock },
   );
-  return { exitCode, item, error: null };
+  return { exitCode: prompt && item.status === "failed" ? exitCode || 1 : exitCode, item, error: receiptError };
 }
 
 export async function execWorkerRun(
@@ -461,8 +481,19 @@ export async function execWorkerRun(
   const item = ledger.items.find((i) => i.id === id);
   if (!item || !isWorkerItem(item)) throw new Error(`Unknown worker run: ${id}`);
   if (item.status !== "running") return { exitCode: item.exit ?? 1, item };
-
   const workCwd = opts.cwd ? path.resolve(root, opts.cwd) : item.cwd || root;
+  if (item.profile) {
+    if (workCwd !== item.cwd || commandDigest(command) !== item.profile.argv_sha256) {
+      throw new Error("Worker command or cwd differs from its recorded profile");
+    }
+    await changeLedger(root, role, ledger => {
+      const run = ledger.items.find(row => row.id === id);
+      if (run.status !== "running" || run.exec_claimed_at || run.profile_started_at) {
+        throw new Error("Profiled worker launch already claimed");
+      }
+      run.exec_claimed_at = new Date(clock()).toISOString();
+    });
+  }
   return runSubprocessAndRecord(
     {
       root,
@@ -476,6 +507,7 @@ export async function execWorkerRun(
       tool: item.tool,
       workCwd,
       command,
+      prompt: item.prompt,
       env,
       stdio,
     },
@@ -499,27 +531,67 @@ export async function startWorkerRun(
   const role = safeName(opts.role);
   const { config, roleConfig } = await loadLedgerConfig({ root, configPath: opts.config, role });
   if (!oneLine(opts.name)) throw new Error("worker-run requires --name <name>");
-  if (!Array.isArray(command) || !command.length) {
-    throw new Error("worker-run requires -- <command...>");
-  }
-
   const workCwd = opts.cwd ? path.resolve(root, opts.cwd) : root;
   const resultPath = await resolveRootAndResult(opts, workCwd);
   const at = clock();
   const startedIso = new Date(at).toISOString();
-  const id = opts.id ? safeName(opts.id) : makeWorkerId(opts.name, at);
+  const requestId = opts.id ? safeName(opts.id) : makeWorkerId(opts.name, at);
+  const profileFile = workerProfilePath(root, config, role);
+  const supervised = profileFile && !opts.dry && env.WORKER_RUNNER_ID === requestId && env.WORKER_RUNNER_DISPATCH;
+  const attempt = supervised ? Number(env.WORKER_RUNNER_ATTEMPT) : 1;
+  if (!Number.isSafeInteger(attempt) || attempt < 1) throw new Error("Invalid supervisor attempt");
+  const id = attempt === 1 ? requestId : `${requestId}-attempt-${attempt}`;
   const parent =
     !opts.parent || opts.parent === "-" || opts.parent === "none"
       ? null
       : safeName(opts.parent);
-  if (opts["strict-parent"] && parent === null) {
-    throw new Error("worker-run --strict-parent requires --parent <card-id>");
+  const requireParent = Boolean(profileFile || opts["strict-parent"]);
+  if (requireParent && parent === null) {
+    throw new Error("Worker requires --parent <card-id>");
   }
-  if (parent === id) throw new Error("parent cannot equal worker id");
+  if (parent === id || parent === requestId) throw new Error("parent cannot equal worker id");
   const dueIso = opts.due !== undefined ? opts.due : startedIso;
   if (!validDate(dueIso)) throw new Error("Invalid --due (UTC ISO required)");
 
-  const tool = detectTool(command, opts.tool);
+  let selection;
+  let prompt;
+  const reviewOf = opts["review-of"];
+  function cardContext(ledger) {
+    const card = ledger?.items.find(item => item.id === parent && (!requireParent || !isWorkerItem(item)));
+    if (requireParent && !card) throw new Error(`Parent item not found: ${parent}`);
+    if (profileFile && card.status !== "open") throw new Error("Worker requires an open parent card");
+    const producer = reviewOf && ledger?.items.find(item => item.id === reviewOf && isWorkerItem(item));
+    if (profileFile && card.worker_step === "review") throw new Error("Use --review-of to review a completed producer");
+    if (reviewOf && (!producer?.profile_started_at || !producer.profile?.family || producer.status !== "done" || producer.parent !== parent || producer.profile.step === "review")) {
+      throw new Error("Review requires a completed profiled producer on the same card");
+    }
+    return { card, step: reviewOf ? "review" : card?.worker_step ?? "implementation", producer };
+  }
+  if (profileFile) {
+    if (command?.length || ["tool", "model", "effort", "step", "profile"].some(key => Object.hasOwn(opts, key))) {
+      throw new Error("The role profile supplies the worker command, model, effort and step");
+    }
+    if (!oneLine(opts.prompt)) throw new Error("Profiled worker requires --prompt <file>");
+    prompt = path.resolve(workCwd, opts.prompt);
+    if (!(await stat(prompt)).isFile() || prompt === resultPath) throw new Error("Worker prompt must be a file distinct from the result");
+  } else if (opts.prompt || reviewOf) {
+    throw new Error("Profiled start requires a configured tier_profile for the role");
+  } else if (!Array.isArray(command) || !command.length) {
+    throw new Error("worker-run requires -- <command...>");
+  }
+  if (requireParent) {
+    const ledger = await readLedger(root, role).catch(error => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    const { step, producer } = cardContext(ledger);
+    if (profileFile) {
+      selection = resolveWorkerStep(profileFile, step, { workDir: workCwd, prompt, result: resultPath });
+      checkIndependentReviewer(producer?.profile, selection.binding);
+      command = selection.command;
+    }
+  }
+  const tool = selection ? detectTool([selection.binding.cli]) : detectTool(command, opts.tool);
   const foreground = opts.foreground === true;
   const unit = foreground
     ? null
@@ -533,15 +605,6 @@ export async function startWorkerRun(
     : path.join(path.dirname(ledgerPath(root, role)), "worker-runs", role, `${id}.log`);
 
   if (opts.dry) {
-    if (opts["strict-parent"]) {
-      const ledger = await readLedger(root, role).catch((error) => {
-        if (error.code === "ENOENT") return null;
-        throw error;
-      });
-      if (!ledger?.items.some((item) => item.id === parent)) {
-        throw new Error(`Parent item not found: ${parent}`);
-      }
-    }
     return {
       event: "worker-dry",
       id,
@@ -557,6 +620,7 @@ export async function startWorkerRun(
       log: logFile,
       cwd: workCwd,
       command,
+      ...(selection ? { profile: selection.binding } : {}),
     };
   }
 
@@ -564,15 +628,32 @@ export async function startWorkerRun(
   await mkdir(path.dirname(logFile), { recursive: true, mode: 0o700 });
   const initialResult = await snapshotResultBaseline(resultPath);
 
-  await changeLedger(root, role, async (l) => {
+  const alreadyFinished = await changeLedger(root, role, async (l) => {
     if (l.report.every_min === 0 && roleConfig?.report) {
       l.report.every_min = roleConfig.report.every_min;
       l.report.channel = roleConfig.report.channel;
     }
+    if (supervised && attempt > 1) {
+      const previous = l.items.filter(run => run.supervisor?.dispatch === supervised && run.supervisor.id === requestId);
+      for (const run of previous) {
+        if (run.parent !== parent || run.result !== resultPath || run.prompt !== prompt || run.profile.argv_sha256 !== selection.binding.argv_sha256) {
+          throw new Error("Profiled supervisor resumption differs from its original dispatch");
+        }
+        if (run.status === "done") return run;
+        if (run.status === "running") {
+          if (defaultPidProbe(run.pid, run.start_token)) throw new Error("Previous worker attempt is still running");
+          run.status = "failed";
+          run.ended = startedIso;
+          run.reason = "supervisor-preempted";
+          run.launch_pending = false;
+        }
+      }
+    }
     if (l.items.some((i) => i.id === id)) throw new Error("Duplicate id");
-    const parentItem = parent ? l.items.find((i) => i.id === parent) : null;
-    if (opts["strict-parent"] && !parentItem) {
-      throw new Error(`Parent item not found: ${parent}`);
+    const { card: parentItem, step, producer } = cardContext(l);
+    if (selection) {
+      if (step !== selection.binding.step) throw new Error("Card step changed before worker start");
+      checkIndependentReviewer(producer?.profile, selection.binding);
     }
     l.items.push({
       id,
@@ -595,9 +676,11 @@ export async function startWorkerRun(
       reason: null,
       launch_pending: true,
       initial_result: initialResult,
+      ...(supervised ? { supervisor: { id: requestId, dispatch: supervised, attempt } } : {}),
+      ...(selection ? { profile: selection.binding, prompt, ...(foreground ? { exec_claimed_at: startedIso } : {}), ...(reviewOf ? { review_of: reviewOf } : {}) } : {}),
       from: {
         channel: parentItem?.from?.channel || roleConfig?.report?.channel || "",
-        msg_id: "-",
+        msg_id: selection ? parentItem.from.msg_id : "-",
         quote: "",
       },
       due: dueIso,
@@ -607,6 +690,10 @@ export async function startWorkerRun(
       note: opts.note ? String(opts.note) : "",
     });
   });
+
+  if (isWorkerItem(alreadyFinished)) {
+    return { event: "worker-finished", ...alreadyFinished, exitCode: 0, ledger_file: ledgerPath(root, role) };
+  }
 
   if (foreground) {
     const out = await runSubprocessAndRecord(
@@ -622,6 +709,7 @@ export async function startWorkerRun(
         tool,
         workCwd,
         command,
+        prompt,
         env,
         stdio,
       },
@@ -709,7 +797,7 @@ export async function startWorkerRun(
 
   await changeLedger(root, role, async (l) => {
     const item = l.items.find((i) => i.id === id);
-    if (item && isWorkerItem(item) && item.status === "running") {
+    if (item && isWorkerItem(item) && item.status === "running" && !item.profile) {
       item.launch_pending = false;
     }
   });
@@ -831,7 +919,9 @@ export async function reconcileWorkerRuns({
 
         if ((active === "inactive" || active === "deactivating") && sub === "dead") {
           if (probe.result === "success" && probe.execMainStatus === 0) {
-            const check = await inspectResultFile(item.result, item.initial_result);
+            const check = item.profile && !item.profile_started_at
+              ? { valid: false, reason: "missing-launch-receipt" }
+              : await inspectResultFile(item.result, item.initial_result);
             if (check.valid) {
               planned.push({
                 id: item.id,
@@ -966,7 +1056,9 @@ export async function listWorkerRuns({ root, configPath, role, status } = {}) {
 export async function main(args = process.argv.slice(2), deps = {}) {
   const { commandName, opts, command } = parseWorkerArgs(args);
   if (commandName === "start") {
-    return startWorkerRun(opts, command, deps);
+    const run = await startWorkerRun(opts, command, deps);
+    if (run.profile && run.exitCode && deps.setExitCode !== false) process.exitCode = run.exitCode;
+    return run;
   }
   if (commandName === "finish") {
     return finishWorkerRun(opts, deps);

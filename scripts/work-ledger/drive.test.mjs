@@ -220,6 +220,32 @@ test("an overdue instructed item starts one worker and notifies only its own rol
   assert.deepEqual([last.launched, last.alerts, last.errors], [[], [], []]);
 });
 
+test("timer launch resolves the installed card profile and records the actual argument selection", async () => {
+  const { root, config } = await setup();
+  config.roles[1].tier_profile = "config/writer.json";
+  delete config.drive.worker.command;
+  const candidate = { id: "default", family: "family", cli: process.execPath, model: "installation-model",
+    argv: ["{cli}", path.join(root, "worker.mjs"), "{model}"] };
+  await writeFile(path.join(root, "config/work-ledger.json"), JSON.stringify(config));
+  await writeFile(path.join(root, "config/writer.json"), JSON.stringify({
+    tiers: { 2: { candidates: [candidate] } }, worker_steps: { design: { tier: 2, candidate: "default" } },
+  }));
+  const fields = ["add", "--role", "writer", "--id", "design", "--title", "plan", "--worker-step", "design",
+    "--due", PAST, "--channel", "111", "--msg-id", "222", "--prompt", "task.md", "--result-file", "result.md"];
+  await assert.rejects(cli(root, ...fields, "--model", "wrong"), /differs from the role profile/);
+  await cli(root, ...fields);
+  await assert.rejects(cli(root, "attach", "design", "--role", "writer", "--pid", String(process.pid)), /recorded worker launch/);
+  const out = await pass(root, config);
+  assert.equal(out.launched.length, 1);
+  const card = await item(root, "writer", "design");
+  assert.equal(card.drive.run.profile.model, "installation-model");
+  assert.equal(card.drive.run.profile.step, "design");
+  assert.equal(card.drive.run.profile.cli, process.execPath);
+  const result = path.join(root, "result.md");
+  await until(() => existsSync(result), "profiled worker result");
+  assert.match(await readFile(result, "utf8"), /model=installation-model/);
+});
+
 test("a role without a wake box gets nothing started and the pass reports it", async () => {
   const { root, config } = await setup();
   await addDriven(root, "writer", "draft");
