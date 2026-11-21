@@ -287,7 +287,7 @@ export async function registerWorker(options = {}) {
       lastProgressSig: progress.signature,
       alerts: {},
     };
-    doc.workers = doc.workers.filter((w) => w.id !== id);
+    doc.workers = doc.workers.filter((w) => w.role !== role || w.id !== id);
     doc.workers.push(entry);
     await writeRegistryUnlocked(registryFile, doc);
     return entry;
@@ -300,10 +300,13 @@ export async function updateWorkerRuntime(options = {}) {
   const registryFile = path.resolve(options.registryFile || defaultRegistryPath(root, env));
   const now = options.now ?? Date.now();
   const id = safeToken(options.id, 'worker id');
+  const role = options.role === undefined ? undefined : safeToken(options.role, 'role');
 
   return withPidLock(`${registryFile}.lock`, async () => {
     const doc = await readRegistryUnlocked(registryFile);
-    const worker = doc.workers.find((w) => w.id === id);
+    const matches = doc.workers.filter((w) => w.id === id && (role === undefined || w.role === role));
+    if (matches.length > 1) throw new Error('Worker ID is ambiguous; specify its role');
+    const [worker] = matches;
     if (!worker) return null;
     if (options.unit !== undefined) worker.unit = options.unit ? safeToken(options.unit, 'unit') : null;
     if (options.pid !== undefined) {

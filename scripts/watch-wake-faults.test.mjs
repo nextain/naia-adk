@@ -18,7 +18,7 @@ import {
   measureMinFreeBytesSync,
   measureMinFreeGb,
 } from './lib/disk-free.mjs';
-import { registerWorker, watchWorkers } from './work-watch.mjs';
+import { registerWorker, updateWorkerRuntime, watchWorkers } from './work-watch.mjs';
 import { spawnWorker } from './worker-runner/spawn-worker.mjs';
 import { runWatcherUnitHealth } from './watcher-unit-health.mjs';
 import { runWatch as runResponseWatch } from './response-watch.mjs';
@@ -286,6 +286,35 @@ test('fault 1b: dead-PID .lock self-heals across response-watch, session-health,
   const wwRes = await watchWorkers({ root: wwDir, registryFile: regFile });
   assert.equal(wwRes.checked, 0);
   assert.ok((await readdir(path.join(wwDir, '.recovered-locks'))).includes('recovery.jsonl'));
+});
+
+test('two roles can track the same worker ID without replacing records or crossing wake directories', async () => {
+  const root = await makeTempDir();
+  const id = 'draft';
+  const registryFile = path.join(root, 'registry.json');
+  const result = role => path.join(root, role, 'result.md');
+  const wakeDir = role => path.join(root, role, 'wake');
+  const launch = (role, systemdRunImpl) => spawnWorker([
+    '--root', root, '--registry', registryFile, '--role', role, '--id', id,
+    '--work-dir', path.join(root, role), '--result-file', result(role), '--wake-dir', wakeDir(role),
+    '--', 'node', '--version',
+  ], {
+    systemdRunImpl,
+    execFileSyncImpl: () => 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root 100000000 2000000 98000000 2% /\n',
+  });
+  await launch('editor', () => '');
+  const editor = await updateWorkerRuntime({ root, registryFile, id, pid: process.pid });
+  assert.equal(editor.role, 'editor');
+  await assert.rejects(launch('designer', () => { throw new Error('worker did not start'); }), /worker did not start/);
+  const rows = async () => JSON.parse(await readFile(registryFile, 'utf8')).workers;
+  assert.deepEqual((await rows()).map(worker => worker.role).sort(), ['designer', 'editor']);
+  await assert.rejects(updateWorkerRuntime({ root, registryFile, id, launchFailed: true }), /role/i);
+  await writeFile(result('editor'), 'finished\n');
+  const report = await watchWorkers({ root, registryFile });
+  assert.deepEqual(report.wakes.map(w => [w.role, w.reason]).sort(), [['designer', 'dead'], ['editor', 'done']]);
+  for (const wake of report.wakes) assert.equal(path.dirname(wake.wakeFile), wakeDir(wake.role));
+  assert.deepEqual((await watchWorkers({ root, registryFile })).wakes, []);
+  assert.equal(await updateWorkerRuntime({ root, registryFile, id, role: 'other', launchFailed: true }), null);
 });
 
 test('fault 2a: spawn-worker auto-registers into work-watch; work-watch wakes role on stall, unit death, and result completion', async () => {

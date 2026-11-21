@@ -549,6 +549,7 @@ else if (action === 'run') {
                 root: options['adk-root'] ? path.resolve(options['adk-root']) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
                 registryFile: options['work-watch-registry'] || process.env.ADK_WORK_WATCH_REGISTRY,
                 id: options.id,
+                role: watchRole,
                 launchFailed: false,
             });
         } catch { /* best-effort runtime update */ }
