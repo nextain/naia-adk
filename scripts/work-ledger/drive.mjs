@@ -7,10 +7,12 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   atomicJson,
   closedProperly,
   driven,
+  isWorkerItem,
   ledgerPath,
   processStart,
   readLedger,
@@ -102,6 +104,25 @@ export const workerAlive = (run) =>
   processStart(run.pid) !== null &&
   processStart(run.pid) === run.start;
 
+function trackedWorker(ledger, item) {
+  const run = item.drive?.run;
+  if (!run?.worker_id) return null;
+  return ledger?.items.find(row => isWorkerItem(row) && row.id === run.worker_id &&
+    row.parent === item.id && row.result === item.drive.result_file);
+}
+
+function driveWorkerAlive(item, ledger) {
+  if (workerAlive(item.drive.run)) return true;
+  const worker = trackedWorker(ledger, item);
+  return worker?.status === "running" && worker.start_token && processStart(worker.pid) === worker.start_token;
+}
+
+export function verifiedDriveResult(item, ledger) {
+  if (!item.drive?.run?.worker_id) return !(item.drive?.profiled || item.drive?.run?.profile);
+  const worker = trackedWorker(ledger, item);
+  return Boolean(worker?.profile_started_at && worker.status === "done" && worker.exit === 0);
+}
+
 async function hasContent(file) {
   try {
     const info = await stat(file);
@@ -173,7 +194,7 @@ const fill = (template, values) =>
     Object.hasOwn(values, key) ? values[key] : all,
   );
 
-function launchPlan(root, config, cfg, role, item) {
+function launchPlan(root, config, cfg, role, item, configPath) {
   const d = item.drive;
   const attempt = (d.run?.attempts ?? 0) + 1;
   const dir = path.join(path.dirname(ledgerPath(root, role)), "runs", role, item.id);
@@ -186,12 +207,19 @@ function launchPlan(root, config, cfg, role, item) {
   const selection = profileFile && resolveWorkerStep(profileFile, step, { workDir, prompt: promptFile, result: d.result_file, role, card: item });
   const model = selection ? selection.binding.model : d.model;
   const values = { id: item.id, role, title: item.title, model, prompt: d.prompt, result_file: d.result_file };
-  const command = selection ? selection.command : cfg.command.map(part => fill(part, values));
-  return { attempt, dir, promptFile, workDir, values, command, binding: selection?.binding };
+  if (!selection) return { attempt, dir, promptFile, workDir, values, command: cfg.command.map(part => fill(part, values)) };
+  const key = createHash("sha256").update(JSON.stringify([role, item.id, d.registered_at])).digest("hex").slice(0, 24);
+  const workerId = `scheduled-${key}-${attempt}`;
+  const launcher = fileURLToPath(new URL("./worker-run.mjs", import.meta.url));
+  const command = [process.execPath, launcher, "start", "--foreground", "--root", root, "--role", role,
+    "--id", workerId, "--name", workerId, "--parent", item.id, "--cwd", workDir, "--prompt", promptFile,
+    "--result", d.result_file, "--expected-profile", selection.binding.profile_sha256,
+    ...(configPath ? ["--config", configPath] : [])];
+  return { attempt, dir, promptFile, workDir, values, command, binding: selection.binding, workerId };
 }
 
 // A failed spawn records no run: it costs no attempt and no retry wait.
-async function launch({ root, config, cfg, role, item, now, env }) {
+async function launch({ root, config, configPath, cfg, role, item, now, env }) {
   const d = item.drive;
   const childEnv = {
     ...env,
@@ -205,7 +233,7 @@ async function launch({ root, config, cfg, role, item, now, env }) {
   let input;
   let output;
   try {
-    const { attempt, dir, promptFile, workDir, values, command, binding } = launchPlan(root, config, cfg, role, item);
+    const { attempt, dir, promptFile, workDir, values, command, binding, workerId } = launchPlan(root, config, cfg, role, item, configPath);
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await mkdir(path.dirname(d.result_file), { recursive: true });
     const log = path.join(dir, `${attempt}.log`);
@@ -214,12 +242,12 @@ async function launch({ root, config, cfg, role, item, now, env }) {
       `${fill(cfg.preamble ?? DEFAULT_PREAMBLE, values)}\n${await readFile(d.prompt, "utf8")}`,
       { mode: 0o600 },
     );
-    input = await open(promptFile, "r");
+    if (!binding) input = await open(promptFile, "r");
     output = await open(log, "a", 0o600);
     const child = spawn(command[0], command.slice(1), {
       cwd: workDir,
       detached: true,
-      stdio: [input.fd, output.fd, output.fd],
+      stdio: [input?.fd ?? "ignore", output.fd, output.fd],
       env: childEnv,
     });
     await new Promise((resolve, reject) => {
@@ -232,7 +260,7 @@ async function launch({ root, config, cfg, role, item, now, env }) {
       d.profiled = true;
     }
     d.run = {
-      ...(binding ? { profile: binding } : {}),
+      ...(binding ? { profile: binding, worker_id: workerId } : {}),
       pid: child.pid,
       start: processStart(child.pid),
       started_at: iso(now),
@@ -250,6 +278,7 @@ async function launch({ root, config, cfg, role, item, now, env }) {
       watchDirs: [dir, path.dirname(d.result_file)],
       resultFile: d.result_file,
       wakeDir: roleWakeDir(root, config, role),
+      ...(binding ? { ledgerWorker: { id: workerId, parent: item.id } } : {}),
       now: Date.parse(d.run.started_at),
     });
     return null;
@@ -262,20 +291,28 @@ async function launch({ root, config, cfg, role, item, now, env }) {
   }
 }
 
-export async function start({ root, config, role, item, now, env = process.env, freeGb: freeGbImpl = freeGb }) {
+export async function start({ root, config, configPath, role, item, ledger, now, env = process.env, freeGb: freeGbImpl = freeGb }) {
   const cfg = driveConfig(config);
   roleWakeDir(root, config, role);
   if (!driven(item) || CLOSED.includes(item.status))
     throw new Error("start requires an open item with an instruction file");
-  if (workerAlive(item.drive.run))
+  if (item.drive.run?.worker_id && !ledger) ledger = await readLedger(root, role);
+  if (driveWorkerAlive(item, ledger))
     throw new Error(`Worker already running (pid ${item.drive.run.pid})`);
+  if (item.drive.run?.worker_id) {
+    const tracked = trackedWorker(ledger, item);
+    if (!tracked || tracked.status === "running") throw new Error("Previous scheduled worker has no terminal receipt");
+    if (tracked.status === "done" && await hasContent(item.drive.result_file)) {
+      throw new Error("Scheduled worker already completed this card's result");
+    }
+  }
   const problem = await instructionProblem(item.drive.prompt);
   if (problem) throw new Error(`${problem}: ${item.drive.prompt}`);
   const free = await freeGbImpl(cfg.diskPath);
   if (free < cfg.minFreeGb)
     throw new Error(`Free space ${free.toFixed(2)} GB is below ${cfg.minFreeGb} GB`);
   if (item.drive.run && item.drive.run.ended_at === null) item.drive.run.ended_at = iso(now);
-  const failure = await launch({ root, config, cfg, role, item, now, env });
+  const failure = await launch({ root, config, configPath, cfg, role, item, now, env });
   if (failure) throw new Error(`Worker command failed to start: ${failure}`);
   return `${item.id} worker pid ${item.drive.run.pid} (attempt ${item.drive.run.attempts})`;
 }
@@ -355,7 +392,7 @@ async function deliver({ root, config, cfg, role, alert, stamp, env }) {
 // closes an item and never touches an item without an instruction.
 // handled lists "<role>/<id>" for each instructed item this pass dealt with
 // without an error; the watcher keeps its own overdue wake for every other item.
-export async function tick({ root, config, now = Date.now(), dry = false, env = process.env, freeGb: freeGbImpl = freeGb }) {
+export async function tick({ root, config, configPath, now = Date.now(), dry = false, env = process.env, freeGb: freeGbImpl = freeGb }) {
   const cfg = driveConfig(config);
   const out = { launched: [], alerts: [], errors: [], skipped: [], handled: [] };
   if (!cfg.enabled && !dry) {
@@ -372,7 +409,7 @@ export async function tick({ root, config, now = Date.now(), dry = false, env = 
       try {
         const ledger = await readLedger(root, role);
         ledgers.set(role, ledger);
-        live += ledger.items.filter((item) => driven(item) && !closedProperly(item) && workerAlive(item.drive.run)).length;
+        live += ledger.items.filter((item) => driven(item) && !closedProperly(item) && driveWorkerAlive(item, ledger)).length;
       } catch (error) {
         if (error.code === "ENOENT") out.skipped.push(`${role}: no ledger file`);
         else out.errors.push(`${role}: ${error.message}`);
@@ -418,15 +455,24 @@ export async function tick({ root, config, now = Date.now(), dry = false, env = 
             if (d.reopened)
               alert(item, "reopened", `${d.reopened.from} 로 닫혔으나 결과 주소나 소유자 확인 기록이 없어 다시 열었음.\n닫기: done ${item.id} --result <결과 주소> 또는 confirm ${item.id} --channel <채널> --msg-id <글>`, d.reopened.at);
             if (item.status !== "open") continue;
-            if (workerAlive(d.run)) {
+            if (driveWorkerAlive(item, ledger)) {
               alert(item, "launched", `기한: ${item.due}\n모델: ${d.model}\n일꾼 pid: ${d.run.pid} (${d.run.attempts}번째)\n지시서: ${d.prompt}\n결과: ${d.result_file}\n기록: ${d.run.log ?? "(없음)"}`, d.run.started_at);
               if (now - Date.parse(d.run.started_at) > cfg.maxRunMin * 60000)
                 alert(item, "long-run", `일꾼 pid ${d.run.pid} 가 ${d.run.started_at} 부터 돌고 있음.\n기록: ${d.run.log ?? "(없음)"}`);
               continue;
             }
             if (d.run && d.run.ended_at === null) d.run.ended_at = iso(now);
+            if (d.run?.worker_id) {
+              const tracked = trackedWorker(ledger, item);
+              if (!tracked || tracked.status === "running") {
+                alert(item, "launch-failed", `일꾼 ${d.run.worker_id}의 종료 기록을 확인할 수 없습니다. 시작 기록: ${d.run.log}`);
+                continue;
+              }
+            }
             if (await hasContent(d.result_file)) {
-              if (d.run) alert(item, "result-ready", `결과: ${d.result_file}\n읽고 닫기: done ${item.id} --result <결과 주소>`);
+              if (d.profiled && !d.run) alert(item, "result-preexisting", `예약 일꾼 기동 전에 생긴 파일: ${d.result_file}. 담당자가 결과를 확인한 경우 confirm 명령을 사용하세요.`);
+              else if (!verifiedDriveResult(item, ledger)) alert(item, "launch-failed", `예약 일꾼의 성공 종료가 확인되지 않았습니다. 실행 기록: ${d.run.log}`);
+              else if (d.run) alert(item, "result-ready", `결과: ${d.result_file}\n읽고 닫기: done ${item.id} --result <결과 주소>`);
               else alert(item, "result-preexisting", `결과: ${d.result_file}\n일꾼을 띄운 적이 없는데 결과 파일에 내용이 있어 띄우지 않음. 맞는 결과면 done ${item.id} --result <결과 주소>, 아니면 파일을 치움.`);
               continue;
             }
@@ -452,13 +498,13 @@ export async function tick({ root, config, now = Date.now(), dry = false, env = 
               continue;
             }
             if (dry) {
-              try { launchPlan(root, config, cfg, role, item); }
+              try { launchPlan(root, config, cfg, role, item, configPath); }
               catch (error) { alert(item, "launch-failed", error.message); continue; }
               out.launched.push({ role, id: item.id, dry: true });
               live++;
               continue;
             }
-            const failure = await launch({ root, config, cfg, role, item, now, env });
+            const failure = await launch({ root, config, configPath, cfg, role, item, now, env });
             if (failure) {
               alert(item, "launch-failed", `일꾼 명령을 띄우지 못함: ${failure}\n다음 순회에 다시 시도함.`);
               continue;

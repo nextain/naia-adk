@@ -406,13 +406,13 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
   const root = path.resolve(o.root || process.cwd());
   if (command === "drive") {
     // One pass over every configured role: start workers for overdue items that carry an instruction.
-    const { config: driveConfig } = await loadLedgerConfig({
+    const { config: driveConfig, configFile } = await loadLedgerConfig({
       root,
       configPath: o.config,
       requireConfig: true,
       requireRole: false,
     });
-    return (await import("./drive.mjs")).tick({ root, config: driveConfig, now: clock(), dry: o.dry === true, env, freeGb });
+    return (await import("./drive.mjs")).tick({ root, config: driveConfig, configPath: configFile, now: clock(), dry: o.dry === true, env, freeGb });
   }
   const role = safeName(o.role);
   if (command === "list") {
@@ -540,7 +540,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       return item.id;
     }
     if (command === "start") {
-      const text = await drive.start({ root, config, role, item, now: clock(), env, freeGb });
+      const text = await drive.start({ root, config, configPath: configFile, role, item, ledger: l, now: clock(), env, freeGb });
       startedItem = item;
       return text;
     }
@@ -555,6 +555,9 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
     if (driven(item) && command === "drop")
       throw new Error("drop is not available for an item with an instruction file. Close with: done <id> --result <file or URL>, or confirm <id> --channel <id> --msg-id <id> (owner confirmation)");
     if (driven(item) && command === "done") {
+      if ((item.drive.profiled || item.drive.run?.profile) && !(await import("./drive.mjs")).verifiedDriveResult(item, l)) {
+        throw new Error("A scheduled worker requires its successful terminal receipt");
+      }
       if (!oneLine(o.result)) throw new Error("done requires --result <file or URL> for an item with an instruction file");
       let address = o.result;
       if (!/^https?:\/\/\S+$/.test(address)) {

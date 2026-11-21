@@ -369,7 +369,7 @@ export async function watch({
   let drive;
   let driveFailure;
   if (config.drive?.enabled === true) {
-    try { drive = await (await import("./drive.mjs")).tick({ root, config, now }); }
+    try { drive = await (await import("./drive.mjs")).tick({ root, config, configPath, now }); }
     catch (error) { driveFailure = error.message || String(error); }
   }
   const handled = new Set(drive?.handled ?? []);

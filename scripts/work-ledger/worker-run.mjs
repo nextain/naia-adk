@@ -621,6 +621,9 @@ export async function startWorkerRun(
     const { card, step, producer } = cardContext(ledger);
     if (profileFile) {
       selection = resolveWorkerStep(profileFile, step, { workDir: workCwd, prompt, result: resultPath, role, card, producer: producer?.profile });
+      if (opts["expected-profile"] !== undefined && opts["expected-profile"] !== selection.binding.profile_sha256) {
+        throw new Error("Installed profile changed after scheduling");
+      }
       checkIndependentReviewer(producer?.profile, selection.binding);
       command = selection.command;
     }

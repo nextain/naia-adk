@@ -48,6 +48,8 @@ node scripts/work-ledger/worker-run.mjs start --root . --role editor --parent t1
 
 디스크와 동시 실행을 관리하는 `scripts/worker-runner/spawn-worker.mjs`에서도 `--parent`, `--prompt`, `--result-file`로 같은 실행기를 사용합니다. 장부의 `drive`로 기동하면 카드 단계에 지정된 프로파일을 자동·수동 기동 때 다시 읽고 실제로 선택한 값을 `drive.run.profile`에 보관합니다. 프로파일이 없는 기존 설치의 명령 배열과 기존 장부 이력은 계속 읽을 수 있습니다.
 
+예약 실행도 설치 프로파일을 사용하는 경우 같은 실행기를 거칩니다. 원본 카드의 `drive.run.worker_id`로 일꾼의 실제 기동, 종료값과 결과를 확인하고 이 ID로 검수를 요청할 수 있습니다. 프로파일을 바꾼 사이에 예약 실행이 시작되면 해당 회차가 멈춥니다. 일부만 쓴 결과 파일이나 과거 예약의 기동 기록만 남은 경우에는 장부에서 성공으로 알리지 않습니다. 담당자가 직접 결과를 확인한 기록은 기존 `confirm` 경로로 남길 수 있습니다.
+
 ## 장부 줄 스키마 (`kind: "worker"`)
 
 기존 `ledger.mjs` 줄(`items[]`) 모양을 그대로 유지하고 일꾼 실행용 칸만 더합니다. 일반 작업 줄은 `kind`를 비워 두거나 `"worker"`가 아닌 값을 쓰며, 기존 칸의 의미와 상태(`open`, `waiting_human`, `escalated_human`, `done`, `dropped`)는 바뀌지 않습니다.
