@@ -280,6 +280,7 @@ export function validateLedger(ledger, role) {
   const ids = new Set();
   for (const item of ledger.items) {
     safeName(item.id);
+    if (item.group !== undefined) safeName(item.group);
     if (
       ids.has(item.id) ||
       typeof item.title !== "string" ||
@@ -493,6 +494,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       const driveFields = drive ? await drive.register({ root, config, role, ledger: l, opts: o, now: clock(), workerStep }) : undefined;
       l.items.push({
         id: itemId,
+        ...(roleConfig?.handoff ? { group: safeName(roleConfig.handoff.group) } : {}),
         title: o.title,
         from: { channel: o.channel, msg_id: normalizedMsgId, quote: o.quote || "" },
         ...(workerStep ? { worker_step: workerStep } : {}),

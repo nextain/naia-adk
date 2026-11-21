@@ -173,7 +173,7 @@ function renderStablePrefix(entries, contextHash, agentId) {
 	return lines.join("\n");
 }
 
-function snapshotResolvedWorkspace(resolvedWorkspace, agentId) {
+function readWorkspaceEntries(resolvedWorkspace) {
 	let totalBytes = 0;
 	const entries = resolvedWorkspace.files.map((file) => {
 		const bytes = readBoundedContextFile(file.absolutePath, file.relativePath, resolvedWorkspace.workspaceRoot);
@@ -184,6 +184,18 @@ function snapshotResolvedWorkspace(resolvedWorkspace, agentId) {
 		catch { throw new Error("agent context files must be valid UTF-8"); }
 		return { ...file, bytes, text, sha256: createHash("sha256").update(bytes).digest("hex") };
 	});
+	return { entries, totalBytes };
+}
+
+// Working notes use the same bounded file reader as project instructions,
+// while their consumers keep the two kinds of content in distinct prompt parts.
+export function readAgentWorkspaceFiles(config) {
+	const { entries } = readWorkspaceEntries(resolveAgentContextWorkspace(config));
+	return entries.map(({ relativePath, text, sha256 }) => ({ path: relativePath, text, sha256 }));
+}
+
+function snapshotResolvedWorkspace(resolvedWorkspace, agentId) {
+	const { entries, totalBytes } = readWorkspaceEntries(resolvedWorkspace);
 	const contextHash = hashSnapshotEntries(entries, agentId);
 	const manifestFiles = entries.map((entry) => Object.freeze({
 		kind: entry.kind,
