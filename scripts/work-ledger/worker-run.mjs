@@ -593,7 +593,7 @@ export async function startWorkerRun(
   function cardContext(ledger) {
     const card = ledger?.items.find(item => item.id === parent && (!requireParent || !isWorkerItem(item)));
     if (requireParent && !card) throw new Error(`Parent item not found: ${parent}`);
-    if (profileFile && card.status !== "open") throw new Error("Worker requires an open parent card");
+    if (requireParent && card.status !== "open") throw new Error("Worker requires an open parent card");
     const producer = reviewOf && ledger?.items.find(item => item.id === reviewOf && isWorkerItem(item));
     if (profileFile && card.worker_step === "review") throw new Error("Use --review-of to review a completed producer");
     if (reviewOf && (!producer?.profile_started_at || !producer.profile?.family || producer.status !== "done" || producer.parent !== parent || producer.profile.step === "review")) {
