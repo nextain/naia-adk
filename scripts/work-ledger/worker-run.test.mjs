@@ -266,6 +266,46 @@ test("the installed role profile selects the actual worker and an independent re
   assert.deepEqual(JSON.parse(await readFile(path.join(root, "review.json"))), { model: "model-b", effort: "high", role: "editor", parent: "card-01", text: "Read the same card.\n" });
 });
 
+test("a profile can publish a CLI answer from stdout and preserve the last result on failure", async () => {
+  const { root } = await setup({ roles: [{ role: "editor" }] });
+  const prompt = path.join(root, "instruction.md");
+  await writeFile(prompt, "Only the answer.");
+  const program = path.join(root, "reply.mjs");
+  await writeFile(program, `import fs from "node:fs"; process.stdout.write(fs.readFileSync(0)); process.stderr.write("progress"); process.exitCode = Number(process.argv[2]);`);
+  const candidate = { id: "writer", family: "writer", cli: process.execPath, model: "test-model",
+    result_mode: "stdout", argv: ["{cli}", program, "0", "{model}"] };
+  const profile = { tiers: { "2": { candidates: [candidate] } }, worker_steps: { write: { tier: 2, candidate: "writer" } } };
+  const save = () => writeFile(path.join(root, "config/tier-profile.json"), JSON.stringify(profile));
+  await save();
+  await ledgerMain(["add", "--root", root, "--role", "editor", "--id", "card", "--worker-step", "write",
+    "--title", "test", "--channel", "source", "--msg-id", "1234", "--due", "2026-11-23T00:00:00Z"]);
+  const opts = { root, role: "editor", parent: "card", prompt, cwd: root, result: "result.md", name: "answer", foreground: true };
+  const resources = { stdio: ["ignore", "ignore", "ignore"] };
+  const result = path.join(root, "result.md");
+  await writeFile(result, "previous result");
+  const done = await startWorkerRun({ ...opts, id: "success" }, [], resources);
+  assert.equal(done.status, "done");
+  assert.equal(done.profile.result_mode, "stdout");
+  assert.equal(await readFile(result, "utf8"), "Only the answer.");
+  await writeFile(prompt, "partial reply");
+  candidate.argv[2] = "8";
+  await save();
+  const failed = await startWorkerRun({ ...opts, id: "failed" }, [], resources);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.exit, 8);
+  assert.equal(await readFile(result, "utf8"), "Only the answer.");
+  candidate.argv[2] = "0";
+  await save();
+  await writeFile(prompt, "");
+  const empty = await startWorkerRun({ ...opts, id: "empty" }, [], resources);
+  assert.equal(empty.reason, "stdout-result-failed");
+  assert.equal(await readFile(result, "utf8"), "Only the answer.");
+  assert.deepEqual((await readdir(root)).filter(name => name.startsWith(".adk-stdout-")), []);
+  candidate.argv.push("{result_file}");
+  await save();
+  await assert.rejects(startWorkerRun({ ...opts, id: "ambiguous" }, [], resources), /cannot also write/);
+});
+
 test("start & finish lifecycle: opens running row, launches systemd-run --user, closes done/failed by exit & result", async () => {
   const { root } = await setup();
   const fake = systemdFake();

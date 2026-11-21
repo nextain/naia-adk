@@ -221,3 +221,6 @@ node scripts/work-ledger/worker-run.mjs list --root . --status running --json
   ```sh
   node --test scripts/work-ledger/*.test.mjs
   ```
+
+
+CLI가 최종 답을 표준 출력으로 주면 해당 후보에 `"result_mode": "stdout"`을 지정합니다. 실행기는 출력을 임시 파일에 모으고 종료값 0과 실제 기동 기록, 내용이 있는 새 출력이 확인되면 결과 파일을 원자적으로 교체합니다. 표준 오류는 실행 로그로 갑니다. 기존 결과는 실패 뒤에도 보존됩니다. 결과 파일을 직접 쓰는 CLI는 기존 `{result_file}` 인자를 씁니다.

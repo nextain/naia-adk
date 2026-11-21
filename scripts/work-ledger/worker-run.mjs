@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, open, realpath, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, open, realpath, rename, rm, stat } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkIndependentReviewer, commandDigest, resolveWorkerStep, workerProfilePath } from "./worker-profile.mjs";
 import {
@@ -371,22 +371,50 @@ export async function finishWorkerRun(
   });
 }
 
+// Keep partial output private. A later write by an inherited child descriptor
+// cannot change the result inode once the finished snapshot has been published.
+async function captureStdout(resultPath) {
+  const dir = await mkdtemp(path.join(path.dirname(resultPath), ".adk-stdout-"));
+  const output = path.join(dir, "output");
+  let handle;
+  try { handle = await open(output, "wx", 0o600); }
+  catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
+  return {
+    fd: handle.fd,
+    async finish(publish) {
+      try {
+        await handle.close();
+        if (!publish) return;
+        const snapshot = path.join(dir, "finished");
+        await copyFile(output, snapshot);
+        if ((await stat(snapshot)).size === 0) throw new Error("Worker stdout was empty");
+        await rename(snapshot, resultPath);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  };
+}
+
 async function runSubprocessAndRecord(
-  { root, configPath, config, role, id, parent, resultPath, unit, tool, workCwd, command, env, prompt, stdio = ["ignore", "inherit", "inherit"] },
+  { root, configPath, config, role, id, parent, resultPath, unit, tool, workCwd, command, env, prompt, resultMode, stdio = ["ignore", "inherit", "inherit"] },
   { clock = Date.now } = {},
 ) {
   const childEnv = buildChildEnv({ env, config, role, id, parent, resultPath, unit, tool });
   let child;
   let input;
+  let capture;
   try {
+    if (resultMode === "stdout") capture = await captureStdout(resultPath);
     if (prompt) input = await open(prompt, "r");
     child = spawn(command[0], command.slice(1), {
       cwd: workCwd,
       env: childEnv,
-      stdio: input ? [input.fd, stdio[1], stdio[2]] : stdio,
+      stdio: input ? [input.fd, capture?.fd ?? stdio[1], stdio[2]] : stdio,
     });
   } catch (error) {
     await input?.close();
+    await capture?.finish(false);
     const item = await finishWorkerRun({ root, config: configPath, role, id, exit: 127, reason: "launch-failed", note: error.message, ifRunning: true }, { clock });
     return { exitCode: 127, item, error };
   }
@@ -402,6 +430,7 @@ async function runSubprocessAndRecord(
   if (input) void input.close().catch(() => {});
 
   if (!spawned) {
+    await capture?.finish(false);
     const item = await finishWorkerRun(
       {
         root,
@@ -451,6 +480,9 @@ async function runSubprocessAndRecord(
     code !== null
       ? code
       : 128 + (os.constants.signals[finalSig] || 15);
+  let captureError;
+  try { await capture?.finish(exitCode === 0 && !finalSig && !receiptError); }
+  catch (error) { captureError = error; }
   const item = await finishWorkerRun(
     {
       root,
@@ -458,6 +490,7 @@ async function runSubprocessAndRecord(
       role,
       id,
       exit: exitCode,
+      ...(captureError ? { reason: "stdout-result-failed", note: captureError.message } : {}),
       ...(finalSig ? { reason: `signal-${finalSig}` } : {}),
       ...(prompt && receiptError ? { reason: "missing-launch-receipt", note: receiptError.message } : {}),
       ifRunning: true,
@@ -508,6 +541,7 @@ export async function execWorkerRun(
       workCwd,
       command,
       prompt: item.prompt,
+      resultMode: item.profile?.result_mode,
       env,
       stdio,
     },
@@ -636,7 +670,7 @@ export async function startWorkerRun(
     if (supervised && attempt > 1) {
       const previous = l.items.filter(run => run.supervisor?.dispatch === supervised && run.supervisor.id === requestId);
       for (const run of previous) {
-        if (run.parent !== parent || run.result !== resultPath || run.prompt !== prompt || run.profile.argv_sha256 !== selection.binding.argv_sha256) {
+        if (run.parent !== parent || run.result !== resultPath || run.prompt !== prompt || run.profile.argv_sha256 !== selection.binding.argv_sha256 || run.profile.result_mode !== selection.binding.result_mode) {
           throw new Error("Profiled supervisor resumption differs from its original dispatch");
         }
         if (run.status === "done") return run;
@@ -710,6 +744,7 @@ export async function startWorkerRun(
         workCwd,
         command,
         prompt,
+        resultMode: selection?.binding.result_mode,
         env,
         stdio,
       },

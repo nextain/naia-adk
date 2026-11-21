@@ -43,6 +43,12 @@ export function resolveWorkerStep(file, step, { workDir, prompt, result }) {
   if (!tierProfile.validTierToken(candidate.family) || !tierProfile.validWorkerArgv(candidate)) {
     throw new Error(`Worker step ${step} needs a model family and explicit argv for the configured model and effort`);
   }
+  if (candidate.result_mode !== undefined && !["file", "stdout"].includes(candidate.result_mode)) {
+    throw new Error("Worker result_mode must be file or stdout");
+  }
+  if (candidate.result_mode === "stdout" && candidate.argv.some(arg => arg.includes("{result_file}"))) {
+    throw new Error("A stdout worker cannot also write the result file");
+  }
   const command = tierProfile.expandWorkerArgv(candidate, { work_dir: workDir, prompt_file: prompt, result_file: result });
   return {
     command,
@@ -54,6 +60,7 @@ export function resolveWorkerStep(file, step, { workDir, prompt, result }) {
       model: candidate.model,
       effort: candidate.effort ?? null,
       argv_sha256: commandDigest(command),
+      ...(candidate.result_mode === "stdout" ? { result_mode: "stdout" } : {}),
     },
   };
 }
