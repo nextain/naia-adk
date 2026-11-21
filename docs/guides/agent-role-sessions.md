@@ -92,3 +92,34 @@
 
 1. 봇 깨움 연결: 메신저에 글이 오면 해당 역할 세션을 깨우는 연결 방식. 정해지면 매니페스트의 `bot.status` 를 `planned` 에서 `active` 로 바꿉니다.
 2. 에이전트별 작업 폴더: 처음에는 여러 역할이 한 작업 폴더를 함께 쓸 수 있습니다. 역할마다 자기 자리(`agents/<id>-adk`, 에이전트 뼈대는 `templates/agent-skeleton/`)를 서버의 작업 폴더로 두고 역할 문서 사본을 그 안으로 옮기는 방식을 다음 판에서 정합니다. 네 갈래 뼈대와 연결은 [네 갈래 ADK 뼈대와 연결](adk-four-kinds.md)에 있습니다.
+
+## 도구를 바꿔도 같은 역할로 이어가기
+
+설치판 `config/work-ledger.json` 안에서 각 역할이 읽을 자리와 그룹을 지정합니다. 예를 들어 검수 역할의 설정은 다음과 같습니다.
+
+```json
+{
+  "role": "reviewer",
+  "handoff": {
+    "workspace": "agents/reviewer-adk",
+    "agent_id": "reviewer-adk",
+    "session_dir": "sessions/reviewer",
+    "group": "team",
+    "notes": { "common": ["preferences.md"], "group": ["handoff.md"] },
+    "claude_auto_memory": true
+  }
+}
+```
+
+역할 매니페스트 `adk.json`의 ID와 소속 그룹, 실제 세션 폴더가 설정과 일치해야 합니다. `session_dir`을 생략하면 에이전트 자리를 사용합니다. 설치판의 세션 관리자가 역할 폴더에서 `NAIA_ROLE=reviewer`를 지정해 세션을 시작합니다. 언급된 노트에는 역할 공통 선호와 현재 그룹의 기록을 각각 둡니다.
+
+```bash
+node scripts/adk-user-profile.mjs apply --adk-root "$runtime" --instance-root "$instance"
+node scripts/adk-user-profile.mjs check --adk-root "$runtime" --instance-root "$instance"
+```
+
+Claude와 Codex의 세션 시작 훅은 같은 원본의 노트, 최근 미완료 카드 12개, 각 카드의 원글과 최근 일꾼 결과를 읽습니다. 같은 원본이면 인계문의 SHA-256도 같습니다. 새 카드는 등록 시 소유 그룹을 기록합니다. 기존 카드에는 그룹이 없을 수 있습니다. 해당 그룹 전용으로 확인한 원본 채널만 `legacy_card_channels`에 등록하면 그 채널의 기존 카드도 복원됩니다. 다른 세션 폴더와 하위 일꾼에는 역할 기억을 싣지 않습니다.
+
+`claude_auto_memory`를 켜면 설치기가 해당 세션의 `.claude/settings.local.json`에 그룹 기억 폴더를 지정합니다. Claude가 저장하는 `MEMORY.md`를 Codex도 다음 기동 때 읽고, 두 도구가 같은 폴더의 주제 파일을 열 수 있습니다. 기존 Claude 전용 기록을 옮길 때는 해당 역할과 그룹에 속한다고 확인된 인덱스와 주제 파일만 이 폴더에 보관합니다. 한 저장소의 여러 작업 폴더는 Claude 기본 기억을 공유할 수 있습니다. [Claude Code 기억 저장 위치](https://code.claude.com/docs/en/memory#storage-location)
+
+다른 CLI가 시작 훅을 지원하지 않으면 세션 시작기가 `node scripts/work-ledger/role-handoff.mjs "$instance" reviewer "$session_dir"`의 출력을 첫 입력으로 전달할 수 있습니다. 자동 연결이 된 설치판은 실제 이름표와 원글이 있는 카드를 만든 뒤, 같은 역할의 두 CLI에서 이어진 기록과 다른 역할에서 제외된 기록을 확인합니다.

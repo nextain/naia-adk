@@ -4,10 +4,11 @@
 // env keys, absolute-path hooks for role sessions, and the compaction summary
 // rule block in ~/.claude/CLAUDE.md. Idempotent; existing settings are kept.
 //
-//   node scripts/adk-user-profile.mjs apply [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|muse]
-//   node scripts/adk-user-profile.mjs check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|muse]
+//   node scripts/adk-user-profile.mjs apply [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|codex|muse]
+//   node scripts/adk-user-profile.mjs check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|codex|muse]
 import fs from "node:fs"
 import os from "node:os"
+import { roleWorkspace } from "./work-ledger/role-handoff.mjs"
 import path from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
@@ -17,7 +18,7 @@ const BEGIN = "<!-- naia-adk claude-user-profile: begin -->"
 const END = "<!-- naia-adk claude-user-profile: end -->"
 const HOOK = ".claude/hooks/role-compact-brief.js"
 const MUSE_ADAPTER = ".agents/hooks/muse-pretooluse-adapter.cjs"
-const VALID_TARGETS = new Set(["all", "claude", "muse"])
+const VALID_TARGETS = new Set(["all", "claude", "codex", "muse"])
 const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const require = createRequire(import.meta.url)
 
@@ -33,17 +34,19 @@ export function parseArgs(raw) {
     else throw new Error(`unknown argument: ${raw[i]}`)
   }
   if (!["apply", "check"].includes(args.mode) || !VALID_TARGETS.has(args.target)) {
-    throw new Error("usage: adk-user-profile.mjs apply|check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|muse]")
+    throw new Error("usage: adk-user-profile.mjs apply|check [--home <dir>] [--adk-root <dir>] [--instance-root <dir>] [--target all|claude|codex|muse]")
   }
   args.home = path.resolve(args.home)
   args.adkRoot = path.resolve(args.adkRoot)
   // Hook code runs from the ADK root; hooks read instance settings (deploy, gcs, identity) from NAIA_ADK_ROOT.
   args.instanceRoot = path.resolve(args.instanceRoot ?? args.adkRoot)
-  if (!fs.existsSync(path.join(args.instanceRoot, ".claude"))) throw new Error(`missing instance .claude: ${args.instanceRoot}`)
+  if (args.target !== "codex" && !fs.existsSync(path.join(args.instanceRoot, ".claude"))) throw new Error(`missing instance .claude: ${args.instanceRoot}`)
   const xdgConfig = !args.homeExplicit && process.env.XDG_CONFIG_HOME
     ? path.resolve(process.env.XDG_CONFIG_HOME)
     : path.join(args.home, ".config")
   args.museSettingsFile = path.join(xdgConfig, "muse", "settings.json")
+  const codexDir = (!args.homeExplicit && process.env.CODEX_HOME) || path.join(args.home, ".codex")
+  args.codexHooksFile = path.resolve(codexDir, "hooks.json")
   return args
 }
 
@@ -268,6 +271,44 @@ export function run(args, now = new Date()) {
     }
   }
 
+  const installedRoles = target === "muse" ? [] : (JSON.parse(readOptional(path.join(instanceRoot, "config", "work-ledger.json")) ?? "{}").roles ?? [])
+  const localMemorySettings = new Map()
+  if (includesClaude) {
+    for (const role of installedRoles.filter(entry => entry.handoff?.claude_auto_memory === true)) {
+      const { session, workspace, nativeDir } = roleWorkspace(instanceRoot, role)
+      const otherOwner = installedRoles.some(entry => entry !== role && entry.handoff &&
+        (path.resolve(instanceRoot, entry.handoff.session_dir ?? entry.handoff.workspace) === session ||
+         path.resolve(instanceRoot, entry.handoff.workspace) === workspace))
+      if (otherOwner) throw new Error("Claude auto memory requires a distinct workspace and session for each role")
+      const file = path.join(session, ".claude", "settings.local.json")
+      for (const candidate of [path.dirname(file), file]) {
+        const stat = fs.lstatSync(candidate, { throwIfNoEntry: false })
+        if (stat?.isSymbolicLink()) throw new Error("Claude role settings must be inside the session directory")
+      }
+      const current = JSON.parse(readOptional(file) ?? "{}")
+      if (current.autoMemoryDirectory !== nativeDir) {
+        localMemorySettings.set(file, JSON.stringify({ ...current, autoMemoryDirectory: nativeDir }, null, 2) + "\n")
+        drift.push(file)
+      }
+    }
+  }
+  let codexFile, nextCodex
+  if (target === "codex" || target === "all") {
+    if (target === "codex" || installedRoles.some(role => role.handoff)) {
+      const hookScript = path.join(args.adkRoot, "scripts/work-ledger/role-handoff.mjs")
+      if (!fs.existsSync(hookScript)) throw new Error(`missing hook: ${hookScript}`)
+      codexFile = args.codexHooksFile ?? path.join(args.home, ".codex", "hooks.json")
+      const current = JSON.parse(readOptional(codexFile) ?? "{}")
+      const argv = [process.execPath, hookScript, "--codex-hook", instanceRoot]
+      const command = argv.map(arg => "'" + arg.replaceAll("'", "'\\''") + "'").join(" ")
+      const commandWindows = "& " + argv.map(arg => "'" + arg.replaceAll("'", "''") + "'").join(" ")
+      const hooks = { SessionStart: [{ hooks: [{ type: "command", command, commandWindows, statusMessage: "Restoring the role work card and memory" }] }] }
+      const instanceArg = command.slice(command.lastIndexOf(" '--codex-hook'"))
+      const owned = existing => typeof existing === "string" && existing.replaceAll("\\", "/").includes("/scripts/work-ledger/role-handoff.mjs") && existing.endsWith(instanceArg)
+      nextCodex = JSON.stringify({ ...current, hooks: mergeHookGroups(current.hooks, hooks, owned) }, null, 2) + "\n"
+      if (JSON.stringify(current) !== JSON.stringify(JSON.parse(nextCodex))) drift.push(codexFile)
+    }
+  }
   let nextMuseSettings
   if (includesMuse) {
     const museProfile = loadMuseProfile(args.adkRoot, args.home, instanceRoot)
@@ -300,6 +341,8 @@ export function run(args, now = new Date()) {
     if (drift.includes(settingsFile) && writeWithBackup(settingsFile, nextSettings, stamp)) changed.push(settingsFile)
     if (drift.includes(ruleFile) && writeWithBackup(ruleFile, nextRule, stamp)) changed.push(ruleFile)
   }
+  for (const [file, content] of localMemorySettings) if (writeWithBackup(file, content, stamp)) changed.push(file)
+  if (codexFile && drift.includes(codexFile) && writeWithBackup(codexFile, nextCodex, stamp)) changed.push(codexFile)
   if (includesMuse && drift.includes(museSettingsFile) && writeWithBackup(museSettingsFile, nextMuseSettings, stamp)) {
     changed.push(museSettingsFile)
   }

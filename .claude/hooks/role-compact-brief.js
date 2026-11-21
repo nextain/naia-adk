@@ -6,9 +6,8 @@
 // Reads `<session cwd>/.naia-role.json` — {"role": "<id>", "read": ["<abs path>", ...]} —
 // and injects the role's mission paths. SessionStart fires again with
 // source "compact" after compaction, so one hook covers both; PostCompact output
-// is shown to the user only and never reaches the model. Paths only, at most
-// 20 lines; free text from the listed files is never copied into the prompt.
-// Silent on any error: an inject hook must never break the session.
+// is shown to the user only. The legacy mission list contains paths only.
+// The installed role handoff adds its own configured notes and open cards.
 const fs = require("fs");
 const path = require("path");
 
@@ -24,11 +23,13 @@ function readStdin() {
 	}
 }
 
-function brief(cwd, source) {
+function brief(cwd, source, managed) {
 	let role = {};
-	try {
-		role = JSON.parse(fs.readFileSync(path.join(cwd, ".naia-role.json"), "utf8"));
-	} catch {}
+	if (managed) {
+		role = { role: managed.role, read: [path.join(managed.workspace, "adk.json")] };
+	} else {
+		try { role = JSON.parse(fs.readFileSync(path.join(cwd, ".naia-role.json"), "utf8")); } catch {}
+	}
 	const read = (Array.isArray(role.read) ? role.read : []).filter((p) => typeof p === "string");
 	const mandatory = MANDATORY.map((p) => path.join(ADK_ROOT, p));
 	const fork = path.join(ADK_ROOT, "FORK.md");
@@ -45,20 +46,19 @@ function brief(cwd, source) {
 	return lines.join("\n");
 }
 
-function main() {
+async function main() {
 	const input = readStdin();
-	const text = brief(typeof input.cwd === "string" ? input.cwd : process.cwd(), input.source);
-	if (!text) return;
+	const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
+	const { roleHandoff } = await import("../../scripts/work-ledger/role-handoff.mjs");
+	const handoff = await roleHandoff({ root: process.env.NAIA_ADK_ROOT || ADK_ROOT, cwd, checkClaudeMemory: true });
+	const text = [brief(cwd, input.source, handoff?.data), handoff?.text].filter(Boolean).join("\n\n");
 	process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } }));
 }
 
 if (require.main === module) {
-	try {
-		main();
-	} catch {
-		// fail silent
-	}
-	process.exit(0);
+	main().catch(error => {
+		process.stdout.write(JSON.stringify({ continue: false, stopReason: `Role handoff unavailable: ${error.message}` }));
+	});
 }
 
 module.exports = { brief, MANDATORY };

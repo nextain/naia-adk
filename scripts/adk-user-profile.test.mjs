@@ -459,3 +459,110 @@ test("--target claude leaves ~/.config/muse untouched", () => {
   assert.equal(fs.existsSync(path.join(home, ".config", "muse", "settings.json")), false)
   assert.deepEqual(run({ mode: "check", home, adkRoot: root, target: "claude" }).drift, [])
 })
+
+test("Claude and Codex recover the same installed role's memory and open cards across a provider change", async () => {
+  const { main: ledger } = await import("./work-ledger/ledger.mjs")
+  const instance = tmpHome(), home = readyHome()
+  fs.mkdirSync(path.join(instance, ".claude"))
+  const roles = ["writer", "auditor"].map(role => ({
+    role, handoff: {
+      workspace: "agents/" + role, group: "team-a",
+      notes: { common: ["preferences.md"], group: ["handoff.md"] },
+      legacy_card_channels: ["approved-legacy"],
+    },
+  }))
+  fs.mkdirSync(path.join(instance, "config"))
+  const configFile = path.join(instance, "config/work-ledger.json")
+  const configure = () => fs.writeFileSync(configFile, JSON.stringify({ roles }))
+  for (const entry of roles) {
+    const workspace = path.join(instance, entry.handoff.workspace)
+    for (const group of ["team-a", "team-b"]) {
+      const dir = path.join(workspace, "memory/groups", group)
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, "handoff.md"), entry.role + "-" + group)
+    }
+    fs.mkdirSync(path.join(workspace, "memory/common"))
+    fs.writeFileSync(path.join(workspace, "memory/common/preferences.md"), "preference-" + entry.role)
+    fs.writeFileSync(path.join(workspace, "adk.json"), JSON.stringify({
+      kind: "agent", id: entry.role, agent_config: { groups: ["team-a", "team-b"] },
+    }))
+  }
+  const add = (role, id, channel = "test-channel") => ledger(["add", "--root", instance, "--role", role, "--id", id,
+    "--title", id, "--channel", channel, "--msg-id", "1100000000000000001", "--due", "2027-01-01T00:00:00Z"])
+  await add("writer", "legacy-allowed", "approved-legacy")
+  await add("writer", "legacy-unknown")
+  configure()
+  await add("writer", "writer-card")
+  await add("auditor", "auditor-card")
+  const cwd = path.join(instance, roles[0].handoff.workspace)
+  const env = { ...process.env, NAIA_ROLE: "writer", NAIA_ADK_ROOT: instance, ADK_ROLE: "", LEDGER_ITEM_ID: "", WORKER_RUNNER_ID: "" }
+  const codex = [path.join(root, "scripts/work-ledger/role-handoff.mjs"), "--codex-hook", instance]
+  const claude = [path.join(root, ".claude/hooks/role-compact-brief.js")]
+  const event = (where = cwd) => JSON.stringify({ hook_event_name: "SessionStart", cwd: where, source: "startup" })
+  const fire = async (cmd, vars = env, where = cwd) => JSON.parse(await hookOutput(cmd, { env: vars, input: event(where), cwd: where }))
+
+  const hooksFile = path.join(home, ".codex/hooks.json")
+  fs.mkdirSync(path.dirname(hooksFile))
+  fs.writeFileSync(hooksFile, JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "another-hook" }] }] } }))
+  const args = parseArgs(["apply", "--target", "codex", "--home", home, "--adk-root", root, "--instance-root", instance])
+  assert.deepEqual(run(args).changed, [hooksFile])
+  assert.deepEqual(run({ ...args, mode: "check" }).drift, [])
+  assert.deepEqual(run(args).changed, [])
+  const commands = read(hooksFile).hooks.SessionStart.flatMap(group => group.hooks.map(h => h.command))
+  assert.equal(commands[0], "another-hook")
+  assert.ok(commands[1].includes(codex[0]) && commands[1].includes(instance))
+
+  roles[0].handoff.claude_auto_memory = true
+  configure()
+  const localSettings = path.join(cwd, ".claude/settings.local.json")
+  fs.mkdirSync(path.dirname(localSettings))
+  fs.writeFileSync(localSettings, JSON.stringify({ existingRoleSetting: 42 }))
+  const fullArgs = { ...args, target: "all" }
+  assert.ok(run(fullArgs).changed.includes(localSettings))
+  const nativeDir = path.join(cwd, "memory/groups/team-a")
+  assert.deepEqual(read(localSettings), { existingRoleSetting: 42, autoMemoryDirectory: nativeDir })
+  assert.deepEqual(run({ ...fullArgs, mode: "check" }).drift, [])
+  fs.writeFileSync(path.join(nativeDir, "MEMORY.md"), "memory index from the existing Claude role")
+
+  fs.writeFileSync(path.join(cwd, ".naia-role.json"), JSON.stringify({ role: "stale-role", read: ["/stale-mission"] }))
+  const fromCodex = (await fire(codex)).hookSpecificOutput.additionalContext
+  const fromClaude = (await fire(claude)).hookSpecificOutput.additionalContext
+  assert.equal(fromClaude.slice(fromClaude.indexOf("Role handoff (")), fromCodex)
+  assert.doesNotMatch(fromClaude, /stale-role|stale-mission/)
+  const first = JSON.parse(fromCodex.split("\n").at(-1))
+  assert.deepEqual(first.cards.map(card => card.id).sort(), ["legacy-allowed", "writer-card"])
+  assert.equal(first.cards[0].source.msg_id, "1100000000000000001")
+  assert.match(fromCodex, /preference-writer/)
+  assert.match(fromCodex, /memory index from the existing Claude role/)
+  assert.match(fromCodex, /writer-team-a/)
+  assert.doesNotMatch(fromCodex, /auditor|writer-team-b|legacy-unknown/)
+
+  fs.writeFileSync(path.join(cwd, "memory/groups/team-a/handoff.md"), "new shared memory")
+  const next = (await fire(codex)).hookSpecificOutput.additionalContext
+  assert.match(next, /new shared memory/)
+  assert.notEqual(next.split("\n")[0], fromCodex.split("\n")[0])
+  assert.deepEqual((await fire(claude)).hookSpecificOutput.additionalContext.split("Role handoff (").at(-1), next.split("Role handoff (").at(-1))
+  assert.equal((await fire(codex, { ...env, NAIA_ROLE: "auditor" })).continue, false)
+  assert.equal((await fire(codex, { ...env, ADK_ROLE: "auditor" })).continue, false)
+  assert.equal(await hookOutput(codex, { input: event(), env: { ...env, LEDGER_ITEM_ID: "child" } }), "")
+  assert.equal(await hookOutput(codex, { input: event(home), env }), "")
+
+  roles[0].handoff.group = "team-b"
+  roles[0].handoff.legacy_card_channels = []
+  configure()
+  await add("writer", "writer-second-group")
+  const switched = (await fire(codex)).hookSpecificOutput.additionalContext
+  assert.match(switched, /writer-second-group/)
+  assert.match(switched, /writer-team-b/)
+  assert.doesNotMatch(switched, /writer-card|legacy-allowed|new shared memory|auditor/)
+  assert.equal((await fire(claude)).continue, false)
+  assert.ok(run(fullArgs).changed.includes(localSettings))
+  assert.equal(read(localSettings).autoMemoryDirectory, path.join(cwd, "memory/groups/team-b"))
+  roles[0].handoff.notes.group = ["../team-a/handoff.md"]
+  configure()
+  for (const hook of [claude, codex]) {
+    const denied = await fire(hook)
+    assert.equal(denied.continue, false)
+    assert.equal(denied.hookSpecificOutput, undefined)
+  }
+})
