@@ -282,6 +282,45 @@ test("the installed role profile selects the actual worker and an independent re
   assert.deepEqual(JSON.parse(await readFile(path.join(root, "review.json"))), { model: "model-b", effort: "high", role: "editor", parent: "card-01", text: "Read the same card.\n" });
 });
 
+test("a card keeps its shuffled producer and reviews with another configured family", async () => {
+  const { root } = await setup({ roles: [{ role: "editor", tier_profile: "config/team.json" }] });
+  const prompt = path.join(root, "prompt.md");
+  await writeFile(prompt, "Review the card.");
+  const candidates = ["first", "second"].map(id => ({
+    id, family: id, cli: process.execPath, model: id + "-model", result_mode: "stdout",
+    argv: ["{cli}", "-e", "process.stdout.write(process.argv[1])", "{model}"],
+  }));
+  const pool = { tier: 2, selection: "shuffle" };
+  const profile = { tiers: { 2: { candidates } }, worker_steps: { implementation: pool, review: pool } };
+  const save = () => writeFile(path.join(root, "config/team.json"), JSON.stringify(profile));
+  await save();
+  const choices = new Set();
+  for (let i = 0; i < 24; i++) {
+    const parent = "source-" + i;
+    await ledgerMain(["add", "--root", root, "--role", "editor", "--id", parent, "--title", "Draft",
+      "--channel", "source", "--msg-id", String(1000 + i), "--due", "2026-11-22T12:00:00Z"]);
+    const opts = { root, role: "editor", parent, id: "worker-" + i, name: "draft", result: parent + ".txt", prompt, foreground: true };
+    const dry = await startWorkerRun({ ...opts, dry: true }, []);
+    choices.add(dry.profile.candidate);
+    if (i !== 0) continue;
+    candidates.reverse();
+    await save();
+    const produced = await startWorkerRun(opts, []);
+    assert.equal(produced.profile.model, dry.profile.model);
+    assert.equal(await readFile(path.join(root, opts.result), "utf8"), produced.profile.model);
+    const review = { ...opts, id: "review-0", "review-of": produced.id, result: "review-0.txt" };
+    const reviewed = await startWorkerRun(review, []);
+    assert.notEqual(reviewed.profile.family, produced.profile.family);
+    assert.equal(await readFile(path.join(root, review.result), "utf8"), reviewed.profile.model);
+    profile.tiers[2].candidates = candidates.filter(c => c.family === produced.profile.family);
+    await save();
+    await assert.rejects(startWorkerRun({ ...review, id: "review-blocked" }, []), /different configured model family/);
+    profile.tiers[2].candidates = candidates;
+    await save();
+  }
+  assert.deepEqual(choices, new Set(["first", "second"]));
+});
+
 test("a profile can publish a CLI answer from stdout and preserve the last result on failure", async () => {
   const { root } = await setup({ roles: [{ role: "editor" }] });
   const prompt = path.join(root, "instruction.md");

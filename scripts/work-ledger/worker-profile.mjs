@@ -25,21 +25,52 @@ export function workerProfilePath(root, config, role) {
   return path.resolve(root, file);
 }
 
-// The work step selects a configured candidate. CLI names, model names, and
-// argv are installation data, shared with the role-session profile reader.
-export function resolveWorkerStep(file, step, { workDir, prompt, result }) {
+function independentModels(producer, reviewer) {
+  const normalize = value => value.trim().toLowerCase();
+  return normalize(producer.family) !== normalize(reviewer.family) && normalize(producer.model) !== normalize(reviewer.model);
+}
+
+// Rendezvous hashing gives each card a reproducible draw. Reordering a profile,
+// inspecting a queued card, or retrying a launch cannot pick its producer anew.
+function selectCandidate(step, assignment, pool, { role, card, producer }) {
+  if (assignment.selection === undefined) {
+    if (!tierProfile.validTierToken(assignment.candidate)) throw new Error(`Invalid tier or candidate for worker step: ${step}`);
+    const matches = pool.filter(candidate => (candidate.id ?? candidate.cli) === assignment.candidate);
+    if (matches.length !== 1) throw new Error(`Worker step ${step} must select one configured candidate`);
+    return matches[0];
+  }
+  if (assignment.selection !== "shuffle" || Object.hasOwn(assignment, "candidate")) {
+    throw new Error(`Choose a single candidate or shuffle the tier for worker step: ${step}`);
+  }
+  if (!role || !card?.id) throw new Error("Shuffled dispatch requires the original card and role");
+  const ids = new Set();
+  const candidates = [];
+  for (const candidate of pool) {
+    const id = candidate.id ?? candidate.cli;
+    if (!tierProfile.validTierToken(id) || ids.has(id) || !tierProfile.validTierToken(candidate.family) || !tierProfile.validWorkerArgv(candidate)) {
+      throw new Error("Shuffled candidates need unique IDs, model families and configured argv");
+    }
+    ids.add(id);
+    if (producer && !independentModels(producer, candidate)) continue;
+    const rank = createHash("sha256").update(JSON.stringify([role, card.id, card.from?.channel, card.from?.msg_id, String(assignment.tier), id])).digest("hex");
+    candidates.push({ candidate, rank });
+  }
+  if (!candidates.length) throw new Error(producer ? "Independent review requires a different configured model family and model" : "Worker step has no configured candidates");
+  candidates.sort((a, b) => a.rank.localeCompare(b.rank));
+  return candidates[0].candidate;
+}
+
+export function resolveWorkerStep(file, step, context) {
   const profile = tierProfile.loadTierProfileFile(file);
   if (profile.status !== "ok") throw new Error(`Cannot load worker profile: ${file} (${profile.reason ?? profile.status})`);
   const steps = profile.document.worker_steps;
   if (!steps || !Object.hasOwn(steps, step)) throw new Error(`Unknown worker step: ${step}`);
   const assignment = steps[step];
-  if (!assignment || !tierProfile.validTierToken(assignment.candidate) || !/^[1-4]$/.test(String(assignment.tier))) {
+  if (!assignment || !/^[1-4]$/.test(String(assignment.tier))) {
     throw new Error(`Invalid tier or candidate for worker step: ${step}`);
   }
   const pool = profile.document.tiers[assignment.tier]?.candidates ?? [];
-  const matches = pool.filter(candidate => (candidate.id ?? candidate.cli) === assignment.candidate);
-  if (matches.length !== 1) throw new Error(`Worker step ${step} must select one configured candidate`);
-  const [candidate] = matches;
+  const candidate = selectCandidate(step, assignment, pool, context);
   if (!tierProfile.validTierToken(candidate.family) || !tierProfile.validWorkerArgv(candidate)) {
     throw new Error(`Worker step ${step} needs a model family and explicit argv for the configured model and effort`);
   }
@@ -49,11 +80,12 @@ export function resolveWorkerStep(file, step, { workDir, prompt, result }) {
   if (candidate.result_mode === "stdout" && candidate.argv.some(arg => arg.includes("{result_file}"))) {
     throw new Error("A stdout worker cannot also write the result file");
   }
-  const command = tierProfile.expandWorkerArgv(candidate, { work_dir: workDir, prompt_file: prompt, result_file: result });
+  const command = tierProfile.expandWorkerArgv(candidate, { work_dir: context.workDir, prompt_file: context.prompt, result_file: context.result });
   return {
     command,
     binding: {
       step,
+      ...(assignment.selection ? { selection: assignment.selection, candidate: candidate.id ?? candidate.cli } : {}),
       profile_sha256: profile.sha256,
       cli: candidate.cli,
       family: candidate.family,
@@ -66,9 +98,7 @@ export function resolveWorkerStep(file, step, { workDir, prompt, result }) {
 }
 
 export function checkIndependentReviewer(producer, reviewer) {
-  if (!producer) return;
-  const normalize = value => value.trim().toLowerCase();
-  if (normalize(producer.family) === normalize(reviewer.family) || normalize(producer.model) === normalize(reviewer.model)) {
+  if (producer && !independentModels(producer, reviewer)) {
     throw new Error("Independent review requires a different configured model family and model");
   }
 }

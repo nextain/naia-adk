@@ -491,8 +491,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
         !(o["worker-name"] && o.result && o["done-file"])
       )
         throw new Error("Worker requires --worker-name --result --done-file");
-      const driveFields = drive ? await drive.register({ root, config, role, ledger: l, opts: o, now: clock(), workerStep }) : undefined;
-      l.items.push({
+      const card = {
         id: itemId,
         ...(roleConfig?.handoff ? { group: safeName(roleConfig.handoff.group) } : {}),
         title: o.title,
@@ -510,8 +509,9 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
           : null,
         checked_at: null,
         note: o.note || "",
-        ...(driveFields ? { drive: driveFields } : {}),
-      });
+      };
+      if (drive) card.drive = await drive.register({ root, config, role, ledger: l, opts: o, now: clock(), card });
+      l.items.push(card);
       return itemId;
     }
     if (command === "report") {
@@ -536,7 +536,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       if (driven(item)) throw new Error("Item already has an instruction file");
       if (item.status !== "open") throw new Error("adopt requires an open item");
       if (o["worker-step"] !== undefined && o["worker-step"] !== item.worker_step) throw new Error("The work step is set on the original card");
-      item.drive = await drive.register({ root, config, role, ledger: l, opts: o, now: clock(), workerStep: item.worker_step });
+      item.drive = await drive.register({ root, config, role, ledger: l, opts: o, now: clock(), card: item });
       return item.id;
     }
     if (command === "start") {
