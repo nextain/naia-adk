@@ -173,6 +173,8 @@ node scripts/work-ledger/worker-run.mjs list --root . --status running --json
 
 주요 선택 옵션: `--config <경로>`, `--tool <이름>`, `--id <ID>`, `--unit <유닛명>`, `--cwd <작업폴더>`, `--log <로그경로>`, `--wait`, `--foreground`, `--dry`, `--strict-parent`.
 
+`--strict-parent`를 사용하면 `--parent <카드 ID>`를 지정해야 합니다. 실행 전과 `--dry`에서 모두 해당 역할의 장부에 부모 카드가 있는지 확인합니다.
+
 ## 소비자(대시보드·작업 보드·다른 서버) 읽기 계약
 
 대시보드·작업 보드·외부 관측기는 다음 순서로 읽습니다.

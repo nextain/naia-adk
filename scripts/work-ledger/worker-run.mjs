@@ -512,6 +512,9 @@ export async function startWorkerRun(
     !opts.parent || opts.parent === "-" || opts.parent === "none"
       ? null
       : safeName(opts.parent);
+  if (opts["strict-parent"] && parent === null) {
+    throw new Error("worker-run --strict-parent requires --parent <card-id>");
+  }
   if (parent === id) throw new Error("parent cannot equal worker id");
   const dueIso = opts.due !== undefined ? opts.due : startedIso;
   if (!validDate(dueIso)) throw new Error("Invalid --due (UTC ISO required)");
@@ -530,6 +533,15 @@ export async function startWorkerRun(
     : path.join(path.dirname(ledgerPath(root, role)), "worker-runs", role, `${id}.log`);
 
   if (opts.dry) {
+    if (opts["strict-parent"]) {
+      const ledger = await readLedger(root, role).catch((error) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
+      if (!ledger?.items.some((item) => item.id === parent)) {
+        throw new Error(`Parent item not found: ${parent}`);
+      }
+    }
     return {
       event: "worker-dry",
       id,
@@ -559,7 +571,7 @@ export async function startWorkerRun(
     }
     if (l.items.some((i) => i.id === id)) throw new Error("Duplicate id");
     const parentItem = parent ? l.items.find((i) => i.id === parent) : null;
-    if (opts["strict-parent"] && parent && !parentItem) {
+    if (opts["strict-parent"] && !parentItem) {
       throw new Error(`Parent item not found: ${parent}`);
     }
     l.items.push({
