@@ -164,6 +164,31 @@ test("config reuse & parent/tool validation: reads ledger.mjs config, no hardcod
   assert.equal(detectTool(["node", "script.mjs"], "codex"), "codex");
 });
 
+test("strict parent blocks untracked starts and checks the selected role in dry runs", async () => {
+  const { root } = await setup();
+  const fake = systemdFake();
+  const options = { root, role: "minho", name: "untracked", result: "out.md", "strict-parent": true };
+  const command = ["codex", "exec"];
+  const deps = { runner: fake.runner, now };
+
+  await assert.rejects(startWorkerRun(options, command, deps), /requires --parent/);
+  await assert.rejects(
+    startWorkerRun({ ...options, parent: "none", dry: true }, command, deps),
+    /requires --parent/,
+  );
+  await ledgerMain([
+    "add", "--root", root, "--role", "jisu", "--id", "task-100",
+    "--title", "Other role's card", "--due", "2026-11-18T12:00:00Z",
+    "--channel", "ch-parent", "--msg-id", "9001",
+  ], { now });
+  await assert.rejects(
+    startWorkerRun({ ...options, parent: "task-100", dry: true }, command, deps),
+    /Parent item not found: task-100/,
+  );
+  assert.equal(fake.calls.length, 0);
+  await assert.rejects(readLedger(root, "minho"), { code: "ENOENT" });
+});
+
 test("start & finish lifecycle: opens running row, launches systemd-run --user, closes done/failed by exit & result", async () => {
   const { root } = await setup();
   const fake = systemdFake();
@@ -177,7 +202,7 @@ test("start & finish lifecycle: opens running row, launches systemd-run --user, 
 
   // Dry run writes nothing and executes no runner.
   const dryRes = await startWorkerRun(
-    { root, role: "minho", parent: "task-100", name: "dry-check", result: "results/dry.md", dry: true },
+    { root, role: "minho", parent: "task-100", name: "dry-check", result: "results/dry.md", dry: true, "strict-parent": true },
     ["codex", "exec", "plan"],
     { runner: fake.runner, now },
   );
@@ -187,7 +212,7 @@ test("start & finish lifecycle: opens running row, launches systemd-run --user, 
 
   // Real start writes running row BEFORE systemd-run and records full schema.
   const started = await startWorkerRun(
-    { root, role: "minho", parent: "task-100", name: "impl-pass", result: "results/impl.md", id: "w-impl" },
+    { root, role: "minho", parent: "task-100", name: "impl-pass", result: "results/impl.md", id: "w-impl", "strict-parent": true },
     ["codex", "exec", "implement"],
     { runner: fake.runner, now, env: { ...process.env, TEST_BOT_TOKEN: "secret-should-not-leak" } },
   );
