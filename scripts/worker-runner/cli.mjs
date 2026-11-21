@@ -9,6 +9,7 @@ import { removeOwnedRoot } from './cleanup.mjs';
 import { schedule, finish, cleanupFailure, cleanupPaths, parseBytes, terminalOutcome, selectTempBase, attentionOwner, groupSettled } from './core.mjs';
 import { checkReviewCap, afterReviewCap, DEFAULT_REVIEW_CAP_CONFIG } from './review-cap.mjs';
 import { measureMinFreeBytesSync } from '../lib/disk-free.mjs';
+import { supervisorCommand } from '../work-ledger/worker-profile.mjs';
 import { registerWorker, updateWorkerRuntime } from '../work-watch.mjs';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 import { identity, processInfo, ownerIdentity, localIdentity, bootId, pidNamespace, ownedGroupAlive, stopOwned } from './process.mjs';
@@ -281,7 +282,7 @@ else if (action === 'register') {
     });
 }
 else if (action === 'run') {
-    if (!command.length || !options.id || !options['work-dir'])
+    if (!options.id || !options['work-dir'])
         throw Error('run requires --id, --work-dir and -- command');
     const watchRole = (options.role || process.env.WORKER_ROLE || '').trim();
     const watchResultFile = (options['result-file'] || process.env.WORKER_RESULT_FILE || '').trim();
@@ -289,6 +290,8 @@ else if (action === 'run') {
     if ((!watchRole || !watchResultFile) && !allowUnregisteredTest) {
         throw Error('unregistered worker-runner run refused: --role (or WORKER_ROLE) and --result-file (or WORKER_RESULT_FILE) are required so work-watch tracks every worker; use scripts/worker-runner/spawn-worker.mjs');
     }
+    const adkRoot = path.resolve(options['adk-root'] || process.env.ADK_ROOT || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'));
+    command = await supervisorCommand({ root: adkRoot, role: watchRole, id: options.id, workDir: path.resolve(options['work-dir']), result: watchResultFile, opts: options, command });
     if (!bootId || !pidNamespace) throw Error('Process identity metadata unavailable; admission refused');
     const tempName = options['temp-name'] || options.id;
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(tempName) || tempName.includes('..')) throw Error('Invalid temporary name');
@@ -336,7 +339,7 @@ else if (action === 'run') {
             ? options['watch-dirs'].map(d => path.resolve(workDir, d))
             : [workDir];
         await registerWorker({
-            root: options['adk-root'] ? path.resolve(options['adk-root']) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
+            root: adkRoot,
             registryFile: options['work-watch-registry'] || process.env.ADK_WORK_WATCH_REGISTRY,
             id: options.id,
             unit: options.unit || process.env.WORKER_UNIT || null,
@@ -546,7 +549,7 @@ else if (action === 'run') {
     if (watchRole && watchResultFile && process.exitCode && process.exitCode !== 0) {
         try {
             await updateWorkerRuntime({
-                root: options['adk-root'] ? path.resolve(options['adk-root']) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'),
+                root: adkRoot,
                 registryFile: options['work-watch-registry'] || process.env.ADK_WORK_WATCH_REGISTRY,
                 id: options.id,
                 role: watchRole,

@@ -19,6 +19,7 @@ import {
   withLock,
 } from "./ledger.mjs";
 export { processStart };
+import { resolveWorkerStep, workerProfilePath } from "./worker-profile.mjs";
 import { createAdapter } from "./messenger.mjs";
 import { measureMinFreeGb } from "../lib/disk-free.mjs";
 import { registerWorker } from "../work-watch.mjs";
@@ -55,7 +56,7 @@ export function driveConfig(config) {
   const d = config?.drive;
   if (!isObject(d)) throw new Error("Configuration has no drive section");
   const w = d.worker;
-  if (!isObject(w) || !argv(w.command))
+  if (!isObject(w) || (w.command !== undefined && !argv(w.command)))
     throw new Error("drive.worker.command must be a non-empty argument list");
   if (w.models !== undefined && !(Array.isArray(w.models) && w.models.every(oneLine)))
     throw new Error("Invalid drive.worker.models");
@@ -124,15 +125,26 @@ export async function freeGb(dir) {
 
 // Drive fields for add/adopt. An existing result file is refused in both, so
 // an old file can never stand in for work that was not done.
-export async function register({ root, config, role, ledger, opts, now }) {
+export async function register({ root, config, role, ledger, opts, now, workerStep }) {
   const cfg = driveConfig(config);
   roleWakeDir(root, config, role);
-  if (!opts.prompt || !opts["result-file"] || !oneLine(opts.model))
-    throw new Error("An instruction requires --prompt --result-file --model");
-  if (cfg.models && !cfg.models.includes(opts.model))
-    throw new Error(`Model ${opts.model} is not in drive.worker.models`);
+  const profileFile = workerProfilePath(root, config, role);
+  if (!oneLine(opts.prompt) || !oneLine(opts["result-file"]) || (!profileFile && !oneLine(opts.model)))
+    throw new Error("An instruction requires --prompt --result-file --model (the profile supplies the model when configured)");
   const prompt = path.resolve(root, opts.prompt);
   const resultFile = path.resolve(root, opts["result-file"]);
+  let model = opts.model;
+  if (profileFile) {
+    if (workerStep === "review") throw new Error("Use worker-run --review-of to review a completed producer");
+    const { binding } = resolveWorkerStep(profileFile, workerStep ?? "implementation", {
+      workDir: path.resolve(root, opts.cwd ?? cfg.cwd), prompt, result: resultFile,
+    });
+    if (model !== undefined && model !== binding.model) throw new Error("Model differs from the role profile");
+    model = binding.model;
+  } else {
+    if (!cfg.command) throw new Error("drive.worker.command is required without a tier profile");
+    if (cfg.models && !cfg.models.includes(model)) throw new Error(`Model ${model} is not in drive.worker.models`);
+  }
   const problem = await instructionProblem(prompt);
   if (problem) throw new Error(`Registration refused: ${problem}: ${prompt}`);
   if (resultFile === prompt)
@@ -144,7 +156,8 @@ export async function register({ root, config, role, ledger, opts, now }) {
   return {
     prompt,
     result_file: resultFile,
-    model: opts.model,
+    model,
+    ...(profileFile ? { profiled: true } : {}),
     ...(opts.cwd ? { cwd: opts.cwd } : {}),
     registered_at: iso(now),
     run: null,
@@ -160,20 +173,26 @@ const fill = (template, values) =>
     Object.hasOwn(values, key) ? values[key] : all,
   );
 
-// A failed spawn records no run: it costs no attempt and no retry wait.
-async function launch({ root, config, cfg, role, item, now, env }) {
+function launchPlan(root, config, cfg, role, item) {
   const d = item.drive;
   const attempt = (d.run?.attempts ?? 0) + 1;
   const dir = path.join(path.dirname(ledgerPath(root, role)), "runs", role, item.id);
-  const values = {
-    id: item.id,
-    role,
-    title: item.title,
-    model: d.model,
-    prompt: d.prompt,
-    result_file: d.result_file,
-  };
-  const [command, ...args] = cfg.command.map((part) => fill(part, values));
+  const promptFile = path.join(dir, `${attempt}.prompt.md`);
+  const workDir = path.resolve(root, d.cwd ?? cfg.cwd);
+  const profileFile = workerProfilePath(root, config, role);
+  const step = item.worker_step ?? "implementation";
+  if (profileFile && step === "review") throw new Error("Review requires a completed profiled producer on the same card");
+  if (!profileFile && (d.profiled || !cfg.command)) throw new Error("Configured worker profile is missing");
+  const selection = profileFile && resolveWorkerStep(profileFile, step, { workDir, prompt: promptFile, result: d.result_file });
+  const model = selection ? selection.binding.model : d.model;
+  const values = { id: item.id, role, title: item.title, model, prompt: d.prompt, result_file: d.result_file };
+  const command = selection ? selection.command : cfg.command.map(part => fill(part, values));
+  return { attempt, dir, promptFile, workDir, values, command, binding: selection?.binding };
+}
+
+// A failed spawn records no run: it costs no attempt and no retry wait.
+async function launch({ root, config, cfg, role, item, now, env }) {
+  const d = item.drive;
   const childEnv = {
     ...env,
     LEDGER_ROLE: role,
@@ -182,12 +201,13 @@ async function launch({ root, config, cfg, role, item, now, env }) {
   };
   // The messenger token is for reading owner confirmations; a worker never receives it.
   delete childEnv[config.provider?.token_env || "DISCORD_BOT_TOKEN"];
+  delete childEnv.DISCORD_BOT_TOKEN;
   let input;
   let output;
   try {
+    const { attempt, dir, promptFile, workDir, values, command, binding } = launchPlan(root, config, cfg, role, item);
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await mkdir(path.dirname(d.result_file), { recursive: true });
-    const promptFile = path.join(dir, `${attempt}.prompt.md`);
     const log = path.join(dir, `${attempt}.log`);
     await writeFile(
       promptFile,
@@ -196,8 +216,8 @@ async function launch({ root, config, cfg, role, item, now, env }) {
     );
     input = await open(promptFile, "r");
     output = await open(log, "a", 0o600);
-    const child = spawn(command, args, {
-      cwd: path.resolve(root, d.cwd ?? cfg.cwd),
+    const child = spawn(command[0], command.slice(1), {
+      cwd: workDir,
       detached: true,
       stdio: [input.fd, output.fd, output.fd],
       env: childEnv,
@@ -207,7 +227,12 @@ async function launch({ root, config, cfg, role, item, now, env }) {
       child.once("error", reject);
     });
     child.unref();
+    if (binding) {
+      d.model = binding.model;
+      d.profiled = true;
+    }
     d.run = {
+      ...(binding ? { profile: binding } : {}),
       pid: child.pid,
       start: processStart(child.pid),
       started_at: iso(now),
@@ -254,7 +279,8 @@ export async function start({ root, config, role, item, now, env = process.env, 
   if (failure) throw new Error(`Worker command failed to start: ${failure}`);
   return `${item.id} worker pid ${item.drive.run.pid} (attempt ${item.drive.run.attempts})`;
 }
-export function attach(item, pidText, now) {
+export function attach(item, pidText, now, { root, config, role }) {
+  if (item.drive?.profiled || workerProfilePath(root, config, role)) throw new Error("A profiled card requires a recorded worker launch");
   const pid = Number(pidText);
   const started = processStart(pid);
   if (!driven(item) || CLOSED.includes(item.status))
@@ -426,6 +452,8 @@ export async function tick({ root, config, now = Date.now(), dry = false, env = 
               continue;
             }
             if (dry) {
+              try { launchPlan(root, config, cfg, role, item); }
+              catch (error) { alert(item, "launch-failed", error.message); continue; }
               out.launched.push({ role, id: item.id, dry: true });
               live++;
               continue;

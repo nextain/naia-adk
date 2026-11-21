@@ -483,16 +483,19 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       }
       const itemId = safeName(o.id || randomUUID());
       if (l.items.some((i) => i.id === itemId)) throw new Error("Duplicate id");
+      const workerStep = o["worker-step"] === undefined ? undefined : safeName(o["worker-step"]);
+      if (workerStep === "review") throw new Error("Use worker-run --review-of to review a completed producer");
       if (
         (o["worker-name"] || o.result || o["done-file"]) &&
         !(o["worker-name"] && o.result && o["done-file"])
       )
         throw new Error("Worker requires --worker-name --result --done-file");
-      const driveFields = drive ? await drive.register({ root, config, role, ledger: l, opts: o, now: clock() }) : undefined;
+      const driveFields = drive ? await drive.register({ root, config, role, ledger: l, opts: o, now: clock(), workerStep }) : undefined;
       l.items.push({
         id: itemId,
         title: o.title,
         from: { channel: o.channel, msg_id: normalizedMsgId, quote: o.quote || "" },
+        ...(workerStep ? { worker_step: workerStep } : {}),
         due: o.due,
         created_at: new Date(clock()).toISOString(),
         status: "open",
@@ -530,7 +533,8 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
     if (command === "adopt") {
       if (driven(item)) throw new Error("Item already has an instruction file");
       if (item.status !== "open") throw new Error("adopt requires an open item");
-      item.drive = await drive.register({ root, config, role, ledger: l, opts: o, now: clock() });
+      if (o["worker-step"] !== undefined && o["worker-step"] !== item.worker_step) throw new Error("The work step is set on the original card");
+      item.drive = await drive.register({ root, config, role, ledger: l, opts: o, now: clock(), workerStep: item.worker_step });
       return item.id;
     }
     if (command === "start") {
@@ -538,7 +542,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       startedItem = item;
       return text;
     }
-    if (command === "attach") return drive.attach(item, o.pid, clock());
+    if (command === "attach") return drive.attach(item, o.pid, clock(), { root, config, role });
     if (command === "confirm") {
       if (!driven(item)) throw new Error("confirm requires an item with an instruction file");
       close(item, o.as ?? "dropped", { by: "owner", ...ownerRecord });

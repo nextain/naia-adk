@@ -27,6 +27,25 @@
 4. **장부 파일 경로(`ledgerPath`)**: `<root>/.agents/work/ledger/<role>.json` (`safeName(role)` 검증).
 5. **실행 로그 기본 경로**: `<root>/.agents/work/ledger/worker-runs/<role>/<id>.log` (`--log`로 덮어쓸 수 있음).
 
+## 카드에서 실행할 일꾼 정하기
+
+역할 장부에 등록한 카드의 `worker_step`으로 설치 프로파일의 `worker_steps`를 찾습니다. 기본 단계는 `implementation`입니다. `config/work-ledger.json`의 `tier_profile`은 설치 공통 경로이고 `roles[].tier_profile`은 해당 역할의 경로입니다. 경로는 설치 루트를 기준으로 해석합니다. 기본 위치 `config/tier-profile.json`에 들어 있는 프로파일도 읽습니다.
+
+`config/tier-profile.example.json`의 자리표시자를 설치에서 쓰는 값으로 채웁니다. 각 단계가 한 층과 후보 ID를 가리킵니다. 후보의 `argv` 배열에서 `{cli}`, `{model}`, 설정한 `{effort}`를 치환해 프로그램을 직접 실행합니다. 지시서는 표준 입력으로 전달하며 설치 CLI가 파일 경로를 요구하면 `{prompt_file}`, `{result_file}`, `{work_dir}`를 쓸 수 있습니다. 출력 경로는 환경 변수 `LEDGER_RESULT_FILE`로도 전달합니다. 실제 CLI의 인자 형식과 결과 저장 방법을 설치에서 지정해야 합니다.
+
+```sh
+node scripts/work-ledger/ledger.mjs add --root . --role editor --id t1 --title Draft \
+  --channel project --msg-id 1001 --due 2026-12-01T09:00:00Z --worker-step implementation
+node scripts/work-ledger/worker-run.mjs start --root . --role editor --parent t1 \
+  --name draft --id draft1 --prompt draft.md --result results/draft.md
+node scripts/work-ledger/worker-run.mjs start --root . --role editor --parent t1 \
+  --name review --review-of draft1 --prompt review.md --result results/review.md
+```
+
+각 실행 줄은 역할·부모 카드·원래 요청을 함께 보관합니다. `profile`에는 선택한 단계, CLI, 모델, 추론 설정, 모델 계열, 프로파일 파일과 실행 인자의 SHA-256이 들어갑니다. 실제 프로세스가 시작되면 `profile_started_at`과 PID를 기록합니다. 제공자가 실제로 사용한 모델을 확인하려면 해당 CLI의 결과를 이 실행과 대조해야 합니다. 독립 검수는 같은 카드에서 끝난 생산 실행 ID를 받아 구성에 명시된 모델과 계열이 모두 다를 때 기동합니다.
+
+디스크와 동시 실행을 관리하는 `scripts/worker-runner/spawn-worker.mjs`에서도 `--parent`, `--prompt`, `--result-file`로 같은 실행기를 사용합니다. 장부의 `drive`로 기동하면 카드 단계에 지정된 프로파일을 자동·수동 기동 때 다시 읽고 실제로 선택한 값을 `drive.run.profile`에 보관합니다. 프로파일이 없는 기존 설치의 명령 배열과 기존 장부 이력은 계속 읽을 수 있습니다.
+
 ## 장부 줄 스키마 (`kind: "worker"`)
 
 기존 `ledger.mjs` 줄(`items[]`) 모양을 그대로 유지하고 일꾼 실행용 칸만 더합니다. 일반 작업 줄은 `kind`를 비워 두거나 `"worker"`가 아닌 값을 쓰며, 기존 칸의 의미와 상태(`open`, `waiting_human`, `escalated_human`, `done`, `dropped`)는 바뀌지 않습니다.

@@ -14,6 +14,7 @@ const put = (file, text = "x\n") => { fs.mkdirSync(path.dirname(file), { recursi
 const adk = path.join(scratch, "adk");
 const hookDir = path.join(adk, ".claude/hooks");
 for (const f of ["lead-write-guard.js", "tool-names.js", "lib/effective-argv.js", "lib/git-command-parser.js", "lib/lead-guard.js"]) put(path.join(hookDir, f), fs.readFileSync(path.join(__dirname, f), "utf8"));
+put(path.join(adk, "scripts/lib/tier-profile.cjs"), fs.readFileSync(path.join(__dirname, "../../scripts/lib/tier-profile.cjs"), "utf8"));
 fs.mkdirSync(path.join(adk, ".git"));
 const role = path.join(scratch, "role");
 put(path.join(role, ".naia-role.json"), JSON.stringify({ role: "minho", lead_guard: { enabled: true, protect: [path.join(scratch, "kit")] } }));

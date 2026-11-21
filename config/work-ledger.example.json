@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "tier_profile": "config/tier-profile.json",
   "provider": {
     "type": "discord",
     "token_env": "DISCORD_BOT_TOKEN",

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { supervisorCommand } from '../work-ledger/worker-profile.mjs';
 import { parseBytes } from './core.mjs';
 import { measureMinFreeBytesSync } from '../lib/disk-free.mjs';
 import { registerWorker, updateWorkerRuntime, safeToken } from '../work-watch.mjs';
@@ -44,13 +45,11 @@ export async function spawnWorker(argv = process.argv.slice(2), deps = {}) {
   if (!opts['result-file']) {
     throw new Error('spawn-worker requires --result-file <path>');
   }
-  if (!command.length) {
-    throw new Error('spawn-worker requires -- <command...>');
-  }
 
   const workDir = path.resolve(opts['work-dir'] || process.cwd());
   fs.mkdirSync(workDir, { recursive: true });
   const resultFile = path.resolve(workDir, opts['result-file']);
+  const payload = await supervisorCommand({ root, role, id, workDir, result: resultFile, opts, command });
   const doneFile = opts['done-file'] ? path.resolve(workDir, opts['done-file']) : null;
   const watchDirs = opts.watchDirs.length
     ? opts.watchDirs.map((d) => path.resolve(workDir, d))
@@ -87,7 +86,7 @@ export async function spawnWorker(argv = process.argv.slice(2), deps = {}) {
     doneFile,
     watchDirs,
     stallMinutes,
-    command,
+    command: payload,
     env,
     now: deps.now,
   });
@@ -123,6 +122,7 @@ export async function spawnWorker(argv = process.argv.slice(2), deps = {}) {
     ...(opts['review-cap'] ? ['--review-cap', String(opts['review-cap'])] : []),
     ...(opts['no-review-cap'] ? ['--no-review-cap'] : []),
     ...(opts['disk-paths'] ? ['--disk-paths', String(opts['disk-paths'])] : []),
+    ...['parent', 'prompt', 'name', 'review-of'].flatMap(key => opts[key] ? [`--${key}`, opts[key]] : []),
     '--',
     ...command,
   ];
