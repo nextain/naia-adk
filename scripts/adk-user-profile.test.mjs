@@ -520,7 +520,7 @@ test("Claude and Codex recover the same installed role's memory and open cards a
   const fullArgs = { ...args, target: "all" }
   assert.ok(run(fullArgs).changed.includes(localSettings))
   const nativeDir = path.join(cwd, "memory/groups/team-a")
-  assert.deepEqual(read(localSettings), { existingRoleSetting: 42, autoMemoryDirectory: nativeDir })
+  assert.deepEqual(read(localSettings), { existingRoleSetting: 42, autoMemoryEnabled: true, autoMemoryDirectory: nativeDir })
   assert.deepEqual(run({ ...fullArgs, mode: "check" }).drift, [])
   fs.writeFileSync(path.join(nativeDir, "MEMORY.md"), "memory index from the existing Claude role")
 
@@ -558,6 +558,16 @@ test("Claude and Codex recover the same installed role's memory and open cards a
   assert.equal((await fire(claude)).continue, false)
   assert.ok(run(fullArgs).changed.includes(localSettings))
   assert.equal(read(localSettings).autoMemoryDirectory, path.join(cwd, "memory/groups/team-b"))
+  roles[0].handoff.claude_auto_memory = false
+  roles[0].handoff.group = "team-a"
+  configure()
+  assert.equal((await fire(claude)).continue, false)
+  assert.ok(run({ ...fullArgs, mode: "check" }).drift.includes(localSettings))
+  assert.ok(run(fullArgs).changed.includes(localSettings))
+  assert.deepEqual(read(localSettings), { existingRoleSetting: 42, autoMemoryEnabled: false })
+  const disabled = (await fire(claude)).hookSpecificOutput.additionalContext
+  assert.match(disabled, /new shared memory/)
+  assert.doesNotMatch(disabled, /writer-second-group|memory index from the existing Claude role/)
   roles[0].handoff.notes.group = ["../team-a/handoff.md"]
   configure()
   for (const hook of [claude, codex]) {

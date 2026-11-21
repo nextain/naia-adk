@@ -122,9 +122,12 @@ export async function roleHandoff({ root, cwd, role, checkClaudeMemory = false, 
   }
   const group = handoff.group;
   const { fileOptions, manifestFile, files, nativeDir } = roleWorkspace(root, matches[0]);
-  if (checkClaudeMemory && handoff.claude_auto_memory === true) {
+  if (checkClaudeMemory) {
     const settings = JSON.parse(await readFile(path.join(session, ".claude/settings.local.json"), "utf8"));
-    if (settings.autoMemoryDirectory !== nativeDir) throw new Error("The installed Claude memory directory differs from the current role group");
+    const enabled = handoff.claude_auto_memory === true;
+    if (settings.autoMemoryEnabled !== enabled || (enabled ? settings.autoMemoryDirectory !== nativeDir : Object.hasOwn(settings, "autoMemoryDirectory"))) {
+      throw new Error("The installed Claude memory settings differ from the current role group");
+    }
   }
   const [checkedManifest, ...notes] = readAgentWorkspaceFiles({ ...fileOptions, contextFiles: files });
   if (checkedManifest.sha256 !== manifestFile.sha256) throw new Error("Agent manifest changed during handoff");

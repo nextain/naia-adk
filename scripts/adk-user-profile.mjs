@@ -274,7 +274,7 @@ export function run(args, now = new Date()) {
   const installedRoles = target === "muse" ? [] : (JSON.parse(readOptional(path.join(instanceRoot, "config", "work-ledger.json")) ?? "{}").roles ?? [])
   const localMemorySettings = new Map()
   if (includesClaude) {
-    for (const role of installedRoles.filter(entry => entry.handoff?.claude_auto_memory === true)) {
+    for (const role of installedRoles.filter(entry => entry.handoff)) {
       const { session, workspace, nativeDir } = roleWorkspace(instanceRoot, role)
       const otherOwner = installedRoles.some(entry => entry !== role && entry.handoff &&
         (path.resolve(instanceRoot, entry.handoff.session_dir ?? entry.handoff.workspace) === session ||
@@ -286,8 +286,12 @@ export function run(args, now = new Date()) {
         if (stat?.isSymbolicLink()) throw new Error("Claude role settings must be inside the session directory")
       }
       const current = JSON.parse(readOptional(file) ?? "{}")
-      if (current.autoMemoryDirectory !== nativeDir) {
-        localMemorySettings.set(file, JSON.stringify({ ...current, autoMemoryDirectory: nativeDir }, null, 2) + "\n")
+      const enabled = role.handoff.claude_auto_memory === true
+      const desired = { ...current, autoMemoryEnabled: enabled }
+      if (enabled) desired.autoMemoryDirectory = nativeDir
+      else delete desired.autoMemoryDirectory
+      if (JSON.stringify(current) !== JSON.stringify(desired)) {
+        localMemorySettings.set(file, JSON.stringify(desired, null, 2) + "\n")
         drift.push(file)
       }
     }
