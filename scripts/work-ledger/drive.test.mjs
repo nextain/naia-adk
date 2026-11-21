@@ -246,6 +246,73 @@ test("timer launch resolves the installed card profile and records the actual ar
   assert.match(await readFile(result, "utf8"), /model=installation-model/);
 });
 
+test("a scheduled stdout producer has a completed worker receipt usable by an independent reviewer", async () => {
+  const { root, config } = await setup();
+  config.roles[1].tier_profile = "config/selected.json";
+  const configPath = path.join(root, "config/scheduled.json");
+  await writeFile(configPath, JSON.stringify(config));
+  const candidate = (id, program) => ({ id, family: id, model: id, cli: process.execPath, result_mode: "stdout",
+    argv: ["{cli}", "-e", program, "{model}"] });
+  const writer = candidate("writer", "process.stdout.write(process.argv[1] + ':' + process.env.LEDGER_PARENT_ID)");
+  const reviewer = candidate("reviewer", "process.stdout.write(process.argv[1])");
+  await writeFile(path.join(root, "config/selected.json"), JSON.stringify({ tiers: { 2: { candidates: [writer, reviewer] } },
+    worker_steps: { implementation: { tier: 2, candidate: "writer" }, review: { tier: 2, candidate: "reviewer" } } }));
+  await cli(root, "add", "--config", configPath, "--role", "writer", "--id", "queued", "--title", "Draft",
+    "--due", PAST, "--channel", "111", "--msg-id", "222", "--prompt", "task.md", "--result-file", "scheduled-answer.txt");
+  await assert.rejects(cli(root, "done", "queued", "--role", "writer", "--config", configPath, "--result", "task.md"), /successful terminal receipt/);
+  const missingConfig = path.join(root, "config/not-installed.json");
+  const first = await pass(root, config, now, { configPath: missingConfig });
+  assert.equal(first.launched.length, 1);
+  const beforeInstall = (await item(root, "writer", "queued")).drive.run;
+  await until(async () => !(await drive()).workerAlive(beforeInstall), "failed wrapper exited before reserving a worker");
+  assert.equal(await item(root, "writer", beforeInstall.worker_id), undefined);
+  const out = await pass(root, config, now + 31 * MIN, { configPath });
+  assert.equal(out.launched.length, 1);
+  const run = (await item(root, "writer", "queued")).drive.run;
+  assert.equal(run.attempts, 2);
+  assert.ok(run.worker_id, "scheduled runs must reference their tracked worker");
+  await until(async () => (await item(root, "writer", run.worker_id))?.status === "done", "worker terminal receipt");
+  const producer = await item(root, "writer", run.worker_id);
+  assert.equal(producer.parent, "queued");
+  assert.equal(producer.from.msg_id, "222");
+  assert.ok(producer.profile_started_at);
+  assert.equal(await readFile(path.join(root, "scheduled-answer.txt"), "utf8"), "writer:queued");
+  await until(async () => !(await drive()).workerAlive(run), "wrapper exited");
+  const { watchWorkers } = await import("../work-watch.mjs");
+  assert.deepEqual((await watchWorkers({ root })).wakes.map(w => [w.role, w.reason]), [["writer", "done"]]);
+  await assert.rejects(cli(root, "start", "queued", "--role", "writer", "--config", configPath), /already completed/);
+  const { startWorkerRun } = await import("./worker-run.mjs");
+  const review = await startWorkerRun({ root, config: configPath, role: "writer", parent: "queued", id: "reviewed", name: "Review",
+    "review-of": producer.id, foreground: true, prompt: "scheduled-answer.txt", result: "reviewed.txt" }, []);
+  assert.equal(review.status, "done");
+  assert.equal(review.review_of, producer.id);
+});
+
+test("a partial scheduled result from a failing native worker stays open", async () => {
+  const { root, config } = await setup();
+  config.roles[1].tier_profile = "config/writer.json";
+  await writeFile(path.join(root, "config/work-ledger.json"), JSON.stringify(config));
+  const program = "require('node:fs').writeFileSync(process.argv[1], 'partial'); process.exitCode = 3";
+  const candidate = { id: "writer", family: "one", model: "one", cli: process.execPath,
+    argv: ["{cli}", "-e", program, "{result_file}", "{model}"] };
+  await writeFile(path.join(root, "config/writer.json"), JSON.stringify({ tiers: { 2: { candidates: [candidate] } },
+    worker_steps: { implementation: { tier: 2, candidate: "writer" } } }));
+  await cli(root, "add", "--role", "writer", "--id", "partial", "--title", "Draft", "--due", PAST,
+    "--channel", "111", "--msg-id", "222", "--prompt", "task.md", "--result-file", "partial-answer.txt");
+  await pass(root, config);
+  const run = (await item(root, "writer", "partial")).drive.run;
+  await until(async () => (await item(root, "writer", run.worker_id))?.status === "failed", "failed worker");
+  await until(async () => !(await drive()).workerAlive(run), "wrapper exited");
+  const { watchWorkers } = await import("../work-watch.mjs");
+  assert.deepEqual((await watchWorkers({ root })).wakes.map(w => [w.role, w.reason]), [["writer", "dead"]]);
+  const next = await pass(root, config, now + 2 * MIN);
+  assert.deepEqual(next.launched, []);
+  assert.deepEqual(next.alerts.map(a => a.reason), ["launch-failed"]);
+  await assert.rejects(cli(root, "done", "partial", "--role", "writer", "--result", "partial-answer.txt"),
+    /successful terminal receipt/);
+  assert.equal((await item(root, "writer", "partial")).status, "open");
+});
+
 test("queued registration and launch retain the original card's shuffled assignment", async () => {
   const { root, config } = await setup();
   config.roles[1].tier_profile = "config/writer.json";

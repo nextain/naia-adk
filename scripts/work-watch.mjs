@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { withPidLock, readProcStatSync } from './lib/pid-lock.mjs';
+import { isWorkerItem, readLedger, safeName } from './work-ledger/ledger.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -207,7 +208,7 @@ function inspectResultCompletionSync(worker, fsImpl = fs) {
       return { done: false };
     }
     if (
-      worker.initialResultMtimeMs != null &&
+      !worker.ledgerWorker && worker.initialResultMtimeMs != null &&
       Math.floor(st.mtimeMs) <= worker.initialResultMtimeMs &&
       st.size === worker.initialResultSize
     ) {
@@ -219,6 +220,19 @@ function inspectResultCompletionSync(worker, fsImpl = fs) {
   }
 }
 
+async function readTrackedWorker(worker) {
+  const ref = worker.ledgerWorker;
+  if (!ref) return null;
+  try {
+    const ledger = await readLedger(ref.root, worker.role);
+    return ledger.items.find(row => isWorkerItem(row) && row.id === ref.id &&
+      row.parent === ref.parent && row.result === worker.resultFile);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 export async function registerWorker(options = {}) {
   const root = path.resolve(options.root || process.cwd());
   const env = options.env || process.env;
@@ -226,6 +240,8 @@ export async function registerWorker(options = {}) {
   const now = options.now ?? Date.now();
   const id = safeToken(options.id, 'worker id');
   const role = safeToken(options.role, 'role');
+  const ref = options.ledgerWorker;
+  const ledgerWorker = ref && { root, id: safeName(ref.id), parent: safeName(ref.parent) };
   if (!options.resultFile) {
     throw new Error('registerWorker requires resultFile');
   }
@@ -272,6 +288,7 @@ export async function registerWorker(options = {}) {
       role,
       wakeDir,
       resultFile,
+      ...(ledgerWorker ? { ledgerWorker } : {}),
       doneFile,
       watchDirs,
       stallMinutes,
@@ -340,6 +357,7 @@ export async function watchWorkers(options = {}) {
     const doc = await readRegistryUnlocked(registryFile);
     const wakes = [];
     const completed = [];
+    const errors = [];
     const dead = [];
     const stalled = [];
     let dirty = false;
@@ -348,9 +366,16 @@ export async function watchWorkers(options = {}) {
     const activeWorkers = doc.workers.filter((w) => w.status === 'running');
 
     for (const worker of activeWorkers) {
-      // 1. Result file created (non-empty) => Done!
+      // Profiled jobs also require the native process's successful exit.
+      let tracked;
+      try {
+        tracked = await readTrackedWorker(worker);
+      } catch (error) {
+        errors.push({ role: worker.role, id: worker.id, error: error.message });
+        continue;
+      }
       const completion = inspectResultCompletionSync(worker);
-      if (completion.done) {
+      if (completion.done && (!worker.ledgerWorker || (tracked?.profile_started_at && tracked.status === 'done' && tracked.exit === 0))) {
         worker.status = 'done';
         worker.completedAt = new Date(now).toISOString();
         worker.stalled = false;
@@ -381,7 +406,9 @@ export async function watchWorkers(options = {}) {
 
       // 2. Unit / PID liveness check before result file exists.
       let deadReason = null;
-      if (worker.launchFailed) {
+      if (tracked?.status === 'failed') {
+        deadReason = `일꾼 종료: ${tracked.reason} (exit=${tracked.exit ?? '?'})`;
+      } else if (worker.launchFailed) {
         deadReason = `띄우기 실패: ${worker.launchError || 'launch failed'}`;
       } else if (worker.unit) {
         const u = await unitProbe(worker.unit);
@@ -402,8 +429,8 @@ export async function watchWorkers(options = {}) {
         } else if (worker.pid && !pidProbe(worker.pid, worker.startToken)) {
           deadReason = `프로세스 종료됨 (pid=${worker.pid}, 결과 파일 없음)`;
         }
-      } else if (worker.pid && !pidProbe(worker.pid, worker.startToken)) {
-        deadReason = `프로세스 종료됨 (pid=${worker.pid}, 결과 파일 없음)`;
+      } else if (worker.pid && !pidProbe(worker.pid, worker.startToken) && !(tracked?.pid && pidProbe(tracked.pid, tracked.start_token))) {
+        deadReason = `프로세스 종료됨 (pid=${worker.pid}, 성공 결과 미확인)`;
       }
 
       if (deadReason) {
@@ -424,7 +451,7 @@ export async function watchWorkers(options = {}) {
               worker.unit ? `유닛: ${worker.unit}` : null,
               worker.pid ? `PID: ${worker.pid}` : null,
               `원인: ${deadReason}`,
-              `기대 결과 파일: ${worker.resultFile} (없음/비어 있음)`,
+              `기대 결과 파일: ${worker.resultFile}`,
               `감시 폴더: ${(worker.watchDirs || []).join(', ')}`,
             ],
             now,
@@ -511,6 +538,7 @@ export async function watchWorkers(options = {}) {
 
     return {
       checked: activeWorkers.length,
+      ...(errors.length ? { errors } : {}),
       completed,
       dead,
       stalled,
