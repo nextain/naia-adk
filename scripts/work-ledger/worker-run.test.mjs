@@ -242,6 +242,18 @@ test("the installed role profile selects the actual worker and an independent re
     "--prompt", prompt, "--result-file", supervised.result, "--floor", "1K", "--budget", "8M", "--timeout", "15"],
     { timeout: 30000 });
   assert.equal((await readLedger(root, "editor")).items.find(item => item.id === "budgeted").profile.model, "model-a");
+  const interruptedOpts = { ...opts, id: "queued", result: "queued.json" };
+  const supervisedEnv = { ...process.env, WORKER_RUNNER_ID: "queued", WORKER_RUNNER_DISPATCH: "test-dispatch", WORKER_RUNNER_ATTEMPT: "1" };
+  const first = await startWorkerRun({ ...interruptedOpts, foreground: false }, [], { env: supervisedEnv, runner: async () => {} });
+  assert.equal(first.status, "running");
+  const resumed = await startWorkerRun(interruptedOpts, [], { env: { ...supervisedEnv, WORKER_RUNNER_ATTEMPT: "2", WORKER_RUNNER_RESUME: "1" } });
+  assert.equal(resumed.parent, "card-01");
+  assert.equal(resumed.status, "done");
+  assert.equal(resumed.supervisor.attempt, 2);
+  assert.equal((await readLedger(root, "editor")).items.find(item => item.id === "queued").reason, "supervisor-preempted");
+  const settled = await startWorkerRun(interruptedOpts, [], { env: { ...supervisedEnv, WORKER_RUNNER_ATTEMPT: "3", WORKER_RUNNER_RESUME: "1" } });
+  assert.equal(settled.id, resumed.id);
+  assert.equal((await readLedger(root, "editor")).items.filter(item => item.supervisor?.id === "queued").length, 2);
   const review = { ...opts, result: "review.json", "review-of": "writer-run" };
   profile.tiers["4"].candidates[0].family = "family-a";
   await writeFile(profileFile, JSON.stringify(profile));

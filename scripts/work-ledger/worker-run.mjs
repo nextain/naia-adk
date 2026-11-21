@@ -535,17 +535,21 @@ export async function startWorkerRun(
   const resultPath = await resolveRootAndResult(opts, workCwd);
   const at = clock();
   const startedIso = new Date(at).toISOString();
-  const id = opts.id ? safeName(opts.id) : makeWorkerId(opts.name, at);
+  const requestId = opts.id ? safeName(opts.id) : makeWorkerId(opts.name, at);
+  const profileFile = workerProfilePath(root, config, role);
+  const supervised = profileFile && !opts.dry && env.WORKER_RUNNER_ID === requestId && env.WORKER_RUNNER_DISPATCH;
+  const attempt = supervised ? Number(env.WORKER_RUNNER_ATTEMPT) : 1;
+  if (!Number.isSafeInteger(attempt) || attempt < 1) throw new Error("Invalid supervisor attempt");
+  const id = attempt === 1 ? requestId : `${requestId}-attempt-${attempt}`;
   const parent =
     !opts.parent || opts.parent === "-" || opts.parent === "none"
       ? null
       : safeName(opts.parent);
-  const profileFile = workerProfilePath(root, config, role);
   const requireParent = Boolean(profileFile || opts["strict-parent"]);
   if (requireParent && parent === null) {
     throw new Error("Worker requires --parent <card-id>");
   }
-  if (parent === id) throw new Error("parent cannot equal worker id");
+  if (parent === id || parent === requestId) throw new Error("parent cannot equal worker id");
   const dueIso = opts.due !== undefined ? opts.due : startedIso;
   if (!validDate(dueIso)) throw new Error("Invalid --due (UTC ISO required)");
 
@@ -624,10 +628,26 @@ export async function startWorkerRun(
   await mkdir(path.dirname(logFile), { recursive: true, mode: 0o700 });
   const initialResult = await snapshotResultBaseline(resultPath);
 
-  await changeLedger(root, role, async (l) => {
+  const alreadyFinished = await changeLedger(root, role, async (l) => {
     if (l.report.every_min === 0 && roleConfig?.report) {
       l.report.every_min = roleConfig.report.every_min;
       l.report.channel = roleConfig.report.channel;
+    }
+    if (supervised && attempt > 1) {
+      const previous = l.items.filter(run => run.supervisor?.dispatch === supervised && run.supervisor.id === requestId);
+      for (const run of previous) {
+        if (run.parent !== parent || run.result !== resultPath || run.prompt !== prompt || run.profile.argv_sha256 !== selection.binding.argv_sha256) {
+          throw new Error("Profiled supervisor resumption differs from its original dispatch");
+        }
+        if (run.status === "done") return run;
+        if (run.status === "running") {
+          if (defaultPidProbe(run.pid, run.start_token)) throw new Error("Previous worker attempt is still running");
+          run.status = "failed";
+          run.ended = startedIso;
+          run.reason = "supervisor-preempted";
+          run.launch_pending = false;
+        }
+      }
     }
     if (l.items.some((i) => i.id === id)) throw new Error("Duplicate id");
     const { card: parentItem, step, producer } = cardContext(l);
@@ -656,6 +676,7 @@ export async function startWorkerRun(
       reason: null,
       launch_pending: true,
       initial_result: initialResult,
+      ...(supervised ? { supervisor: { id: requestId, dispatch: supervised, attempt } } : {}),
       ...(selection ? { profile: selection.binding, prompt, ...(foreground ? { exec_claimed_at: startedIso } : {}), ...(reviewOf ? { review_of: reviewOf } : {}) } : {}),
       from: {
         channel: parentItem?.from?.channel || roleConfig?.report?.channel || "",
@@ -669,6 +690,10 @@ export async function startWorkerRun(
       note: opts.note ? String(opts.note) : "",
     });
   });
+
+  if (isWorkerItem(alreadyFinished)) {
+    return { event: "worker-finished", ...alreadyFinished, exitCode: 0, ledger_file: ledgerPath(root, role) };
+  }
 
   if (foreground) {
     const out = await runSubprocessAndRecord(

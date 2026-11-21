@@ -366,6 +366,7 @@ else if (action === 'run') {
     for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'])
         process.on(sig, () => { requestedSignal = sig; });
     try { fs.unlinkSync(path.join(stateDir, `.attention-${process.pid}`)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const dispatchId = randomUUID();
     let admitted = false, admissionError;
     while (!admitted) {
         admitted = await transaction(async state => {
@@ -509,6 +510,7 @@ else if (action === 'run') {
                 }
                 if (j.status === 'running' && !child) {
                     event('start', j, { resume: !!j.resume });
+                    j.attempt = (j.attempt ?? 0) + 1;
                     j.used = 0; delete j.overBudget;
                     j.tempBase = tempBase; j.tempRoot = path.join(tempBase, tempName); j.tempToken = randomUUID();
                     noSymlinkAncestors(j.tempRoot);
@@ -520,7 +522,7 @@ else if (action === 'run') {
                     j.initialUsage ??= startUsage ?? latestUsage?.[0];
                     const payloadTmp = path.join(j.root, 'tmp'); fs.mkdirSync(payloadTmp, { mode: 0o700 });
                     try { j.initialTempUsage = await usage(j.root); } catch { j.initialTempUsage = 0; }
-                    child = spawn(process.execPath, [fileURLToPath(new URL('./launch.mjs', import.meta.url)), stateFile, j.id, j.root, ...command], { cwd: workDir, stdio: 'inherit', detached: true, env: { ...process.env, TMPDIR: payloadTmp, TMP: payloadTmp, TEMP: payloadTmp, WORKER_RUNNER_TMP_ROOT: j.root, WORKER_RUNNER_STATE_DIR: stateDir, WORKER_RUNNER_ID: j.id, WORKER_RUNNER_RESUME: j.resume ? '1' : '0' } });
+                    child = spawn(process.execPath, [fileURLToPath(new URL('./launch.mjs', import.meta.url)), stateFile, j.id, j.root, ...command], { cwd: workDir, stdio: 'inherit', detached: true, env: { ...process.env, TMPDIR: payloadTmp, TMP: payloadTmp, TEMP: payloadTmp, WORKER_RUNNER_TMP_ROOT: j.root, WORKER_RUNNER_STATE_DIR: stateDir, WORKER_RUNNER_ID: j.id, WORKER_RUNNER_DISPATCH: dispatchId, WORKER_RUNNER_ATTEMPT: String(j.attempt), WORKER_RUNNER_RESUME: j.resume ? '1' : '0' } });
                     j.child = child.pid;
                     j.childToken = identity(child.pid);
                     ownedAttempt = { root: j.root, child: j.child, childToken: j.childToken, initialUsage: j.initialUsage, tempRoot: j.tempRoot, tempBase: j.tempBase, tempToken: j.tempToken, ownerBootId: bootId, ownerNamespace: pidNamespace };
