@@ -107,8 +107,11 @@ export const workerAlive = (run) =>
 function trackedWorker(ledger, item) {
   const run = item.drive?.run;
   if (!run?.worker_id) return null;
-  return ledger?.items.find(row => isWorkerItem(row) && row.id === run.worker_id &&
-    row.parent === item.id && row.result === item.drive.result_file);
+  const worker = ledger?.items.find(row => row.id === run.worker_id);
+  if (worker && (!isWorkerItem(worker) || worker.parent !== item.id || worker.result !== item.drive.result_file)) {
+    throw new Error(`Scheduled worker ${run.worker_id} does not belong to this card and result`);
+  }
+  return worker;
 }
 
 function driveWorkerAlive(item, ledger) {
@@ -301,8 +304,10 @@ export async function start({ root, config, configPath, role, item, ledger, now,
     throw new Error(`Worker already running (pid ${item.drive.run.pid})`);
   if (item.drive.run?.worker_id) {
     const tracked = trackedWorker(ledger, item);
-    if (!tracked || tracked.status === "running") throw new Error("Previous scheduled worker has no terminal receipt");
-    if (tracked.status === "done" && await hasContent(item.drive.result_file)) {
+    // The runner reserves its ledger row before it can start a native process.
+    if (tracked?.status === "running") throw new Error("Previous scheduled worker has no terminal receipt");
+    if (!tracked && await hasContent(item.drive.result_file)) throw new Error("Result exists without a scheduled worker receipt");
+    if (tracked?.status === "done" && await hasContent(item.drive.result_file)) {
       throw new Error("Scheduled worker already completed this card's result");
     }
   }
@@ -464,7 +469,7 @@ export async function tick({ root, config, configPath, now = Date.now(), dry = f
             if (d.run && d.run.ended_at === null) d.run.ended_at = iso(now);
             if (d.run?.worker_id) {
               const tracked = trackedWorker(ledger, item);
-              if (!tracked || tracked.status === "running") {
+              if (tracked?.status === "running") {
                 alert(item, "launch-failed", `일꾼 ${d.run.worker_id}의 종료 기록을 확인할 수 없습니다. 시작 기록: ${d.run.log}`);
                 continue;
               }

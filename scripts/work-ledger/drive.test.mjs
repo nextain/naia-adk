@@ -260,9 +260,16 @@ test("a scheduled stdout producer has a completed worker receipt usable by an in
   await cli(root, "add", "--config", configPath, "--role", "writer", "--id", "queued", "--title", "Draft",
     "--due", PAST, "--channel", "111", "--msg-id", "222", "--prompt", "task.md", "--result-file", "scheduled-answer.txt");
   await assert.rejects(cli(root, "done", "queued", "--role", "writer", "--config", configPath, "--result", "task.md"), /successful terminal receipt/);
-  const out = await pass(root, config, now, { configPath });
+  const missingConfig = path.join(root, "config/not-installed.json");
+  const first = await pass(root, config, now, { configPath: missingConfig });
+  assert.equal(first.launched.length, 1);
+  const beforeInstall = (await item(root, "writer", "queued")).drive.run;
+  await until(async () => !(await drive()).workerAlive(beforeInstall), "failed wrapper exited before reserving a worker");
+  assert.equal(await item(root, "writer", beforeInstall.worker_id), undefined);
+  const out = await pass(root, config, now + 31 * MIN, { configPath });
   assert.equal(out.launched.length, 1);
   const run = (await item(root, "writer", "queued")).drive.run;
+  assert.equal(run.attempts, 2);
   assert.ok(run.worker_id, "scheduled runs must reference their tracked worker");
   await until(async () => (await item(root, "writer", run.worker_id))?.status === "done", "worker terminal receipt");
   const producer = await item(root, "writer", run.worker_id);
