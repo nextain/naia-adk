@@ -18,7 +18,7 @@ node scripts/adk-link.mjs --check <ADK 폴더>
 | 에이전트 | `agent` | `templates/agent-skeleton/` | 역할 하나를 맡은 에이전트의 역할 문서, 성격, 기억 | 두지 않음 |
 | 프로젝트 | `project` | `templates/project-skeleton/` | 만드는 것 하나의 명세 사슬, 소스, 검사 | 둠 |
 
-에이전트 ADK 에는 업무 장부를 두지 않습니다(매니페스트 `work_ledger_policy`). 에이전트가 한 일은 소속 그룹이나 프로젝트의 작업 문서에 적습니다.
+에이전트 ADK 에는 업무 장부를 두지 않습니다(매니페스트 `work_ledger_policy`). 에이전트가 한 일은 소속 그룹이나 프로젝트의 작업 문서에 적습니다. `ledger.mjs --root`에는 일을 소유한 사용자·그룹·프로젝트의 폴더를 지정합니다. 그 안의 역할별 장부에 카드가 기록됩니다. 에이전트 자리의 옛 장부는 `list`로 읽어 원본 카드와 대조할 수 있습니다.
 
 ## 2. 뼈대마다 공통으로 있는 것
 

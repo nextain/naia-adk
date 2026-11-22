@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { assertLedgerOwner } from "../lib/work-ledger-owner.mjs";
 import { readFile, mkdir, writeFile, stat, readdir, unlink, link } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -372,6 +373,7 @@ export async function watch({
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   _emitWarnings = true,
 }) {
+  await assertLedgerOwner(root);
   now ??= clock();
   const wakeDir = path.join(root, ".agents/work/l4/wake");
   const stateFile = path.join(root, ".agents/work/ledger", "watch-state.json");

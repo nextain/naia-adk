@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { withPidLock, readProcStatSync } from './lib/pid-lock.mjs';
+import { assertLedgerOwner } from './lib/work-ledger-owner.mjs';
 import { isWorkerItem, readLedger, safeName } from './work-ledger/ledger.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -235,6 +236,7 @@ async function readTrackedWorker(worker) {
 
 export async function registerWorker(options = {}) {
   const root = path.resolve(options.root || process.cwd());
+  await assertLedgerOwner(root);
   const env = options.env || process.env;
   const registryFile = path.resolve(options.registryFile || defaultRegistryPath(root, env));
   const now = options.now ?? Date.now();
@@ -313,6 +315,7 @@ export async function registerWorker(options = {}) {
 
 export async function updateWorkerRuntime(options = {}) {
   const root = path.resolve(options.root || process.cwd());
+  await assertLedgerOwner(root);
   const env = options.env || process.env;
   const registryFile = path.resolve(options.registryFile || defaultRegistryPath(root, env));
   const now = options.now ?? Date.now();
@@ -346,6 +349,7 @@ export async function updateWorkerRuntime(options = {}) {
 
 export async function watchWorkers(options = {}) {
   const root = path.resolve(options.root || process.cwd());
+  await assertLedgerOwner(root);
   const env = options.env || process.env;
   const registryFile = path.resolve(options.registryFile || defaultRegistryPath(root, env));
   const now = options.now ?? Date.now();

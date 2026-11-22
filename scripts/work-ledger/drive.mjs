@@ -24,6 +24,7 @@ export { processStart };
 import { resolveWorkerStep, workerProfilePath } from "./worker-profile.mjs";
 import { createAdapter, verifyCardReply } from "./messenger.mjs";
 import { measureMinFreeGb } from "../lib/disk-free.mjs";
+import { assertLedgerOwner } from "../lib/work-ledger-owner.mjs";
 import { registerWorker } from "../work-watch.mjs";
 
 const CLOSED = ["done", "dropped"];
@@ -405,6 +406,7 @@ export async function tick({ root, config, configPath, now = Date.now(), dry = f
     out.skipped.push("drive.enabled is not true");
     return out;
   }
+  if (!dry) await assertLedgerOwner(root);
   if (!Array.isArray(config.roles) || !config.roles.length)
     throw new Error("Configuration requires roles");
   const roles = config.roles.map((entry) => safeName(entry?.role));

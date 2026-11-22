@@ -5,6 +5,7 @@ import {
   readFile,
   writeFile,
   utimes,
+  symlink,
   mkdir,
   readdir,
   rm,
@@ -13,6 +14,10 @@ import os from "node:os";
 import path from "node:path";
 import { main, readLedger, ledgerPath, changeLedger, wakeHeader } from "./ledger.mjs";
 import { watch } from "./ledger-watch.mjs";
+import { startWorkerRun } from "./worker-run.mjs";
+import { dueWake } from "./due-timer.mjs";
+import { tick as drive } from "./drive.mjs";
+import { registerWorker, updateWorkerRuntime, watchWorkers } from "../work-watch.mjs";
 import { createAdapter } from "./messenger.mjs";
 const now = Date.parse("2026-11-08T12:00:00Z");
 const headerRow = (id, changes = {}) => ({
@@ -2421,4 +2426,44 @@ test("human instruction cards cap drop and due deferrals at 2 and escalate on 3r
     await main(["drop", `self-${round}`, "--root", root, "--role", "secretary", "--reason", "자체 정리"], { now });
   }
   assert.equal((await readLedger(root, "secretary")).items.find((i) => i.id === "self-3")?.status, "dropped");
+});
+
+test('the owning workspace keeps the role ledger across agent seats and existing installations', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ledger-owner-'));
+  createdRoots.push(root);
+  const agent = path.join(root, 'agent');
+  const memory = path.join(agent, 'memory');
+  const project = path.join(agent, 'project');
+  await mkdir(memory, { recursive: true });
+  await mkdir(project);
+  await writeFile(path.join(root, 'adk.json'), JSON.stringify({ kind: 'group' }));
+  await writeFile(path.join(agent, 'adk.json'), JSON.stringify({ kind: 'agent' }));
+  await writeFile(path.join(project, 'adk.json'), JSON.stringify({ kind: 'project' }));
+  const add = directory => main(['add', '--root', directory, '--role', 'secretary', '--id', 'job',
+    '--title', 'Owner check', '--due', '2026-11-09T00:00:00Z', '--channel', 'channel', '--msg-id', 'source']);
+  await writeFile(path.join(memory, 'adk.json'), '{}');
+  const alias = path.join(root, 'role-memory');
+  await symlink(memory, alias, 'dir');
+  const scheduled = { ...config, drive: { enabled: true, worker: { command: [process.execPath] } } };
+  for (const directory of [agent, memory, path.join(alias, 'new')]) {
+    const denied = /Agent workspaces cannot own a work ledger/;
+    await assert.rejects(add(directory), denied);
+    await assert.rejects(drive({ root: directory, config: scheduled, now }), denied);
+    await assert.rejects(registerWorker({ root: directory, role: 'secretary', id: 'worker', resultFile: 'result' }), denied);
+    await assert.rejects(updateWorkerRuntime({ root: directory, role: 'secretary', id: 'worker' }), denied);
+    await assert.rejects(watchWorkers({ root: directory }), denied);
+    await assert.rejects(watch({ root: directory, config, now }), denied);
+    await assert.rejects(startWorkerRun({ root: directory, role: 'secretary', name: 'job' }, []), denied);
+    await assert.rejects(dueWake({ root: directory, role: 'secretary', id: 'job', due: '2026-11-08T11:00:00Z', now }), denied);
+    await assert.rejects(readdir(path.join(directory, '.agents/work')), { code: 'ENOENT' });
+  }
+  for (const owner of [root, project]) {
+    await add(owner);
+    assert.equal((await readLedger(owner, 'secretary')).items[0].id, 'job');
+  }
+  // A misplaced legacy ledger can still be inspected and moved by its operator.
+  await mkdir(path.dirname(ledgerPath(agent, 'secretary')), { recursive: true });
+  await writeFile(ledgerPath(agent, 'secretary'), await readFile(ledgerPath(root, 'secretary')));
+  assert.equal((await readLedger(agent, 'secretary')).items[0].id, 'job');
+  await assert.rejects(changeLedger(agent, 'secretary', () => {}), /Agent workspaces cannot own a work ledger/);
 });

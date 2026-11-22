@@ -13,6 +13,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
+import { assertLedgerOwner } from "../lib/work-ledger-owner.mjs";
 import { configuredHumans, createAdapter, verifyCardReply } from "./messenger.mjs";
 export function safeName(value) {
   if (typeof value !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(value))
@@ -389,6 +390,7 @@ export function wakeHeader(items, { channel, msgId, cardId } = {}, nowMs) {
   return ["[내 장부 먼저]", ...lines].join("\n");
 }
 export async function changeLedger(root, role, update) {
+  await assertLedgerOwner(root);
   const file = ledgerPath(root, role);
   return withLock(file, async () => {
     let ledger;
