@@ -13,7 +13,7 @@
 
 ## 2. 띄우는 법
 
-1. 서버의 탭에서 칸을 나누고 칸마다 에이전트 세션을 실행합니다.
+1. 서버의 탭에서 칸을 나눕니다. 역할 인계를 설정한 칸은 아래의 [역할 세션 시작 명령](#역할-세션-시작-명령)으로 엽니다.
 2. 칸 번호를 확인합니다.
 
    ```bash
@@ -118,7 +118,19 @@ node scripts/adk-user-profile.mjs apply --adk-root "$runtime" --instance-root "$
 node scripts/adk-user-profile.mjs check --adk-root "$runtime" --instance-root "$instance"
 ```
 
-Codex에서 새 사용자 훅을 등록하거나 정의가 바뀌면 `/hooks`에서 이 설치판의 `role-handoff.mjs` 명령과 위치를 검토하고 해당 훅을 신뢰합니다. 등록만 된 훅은 첫 입력에서 빠질 수 있습니다. [Codex 훅의 신뢰 설정](https://developers.openai.com/codex/hooks#review-and-trust-hooks)
+### 역할 세션 시작 명령
+
+서비스를 운영하는 계정의 실제 홈에 위 설정을 적용합니다. 리눅스에서는 설치판의 세션 관리자가 프로파일에서 고른 실행 파일과 인수를 그대로 공통 시작 명령에 넘깁니다. 아래에서 `"$@"`는 그 인수 배열이며 첫 인수는 기본 CLI 실행 파일입니다.
+
+```sh
+cd "$session_dir" || exit 1
+export NAIA_ADK_ROOT="$instance" NAIA_ROLE="$role"
+exec "$runtime/scripts/work-ledger/start-role-session.sh" "$@"
+```
+
+공통 명령은 실제 작업 폴더에서 역할·그룹·메모·열린 카드를 읽습니다. 역할이 비었거나 폴더와 다르거나 인계를 읽을 수 없으면 이유를 표준 오류에 쓰고 CLI를 시작하기 전에 실패합니다. 검사를 통과하면 선택된 CLI가 같은 터미널과 인수를 이어받습니다. 다른 운영체제의 시작기에서도 같은 폴더와 환경으로 `node scripts/work-ledger/role-handoff.mjs --check-start <CLI 실행 파일>`을 실행하고 종료값 0일 때만 그 CLI를 시작합니다. 하위 일꾼은 기존 작업카드 실행기를 사용합니다.
+
+Codex에서 새 사용자 훅을 등록하거나 정의가 바뀌면 해당 서비스 계정의 `/hooks`에서 이 설치판의 `role-handoff.mjs` 명령과 위치를 검토하고 해당 훅을 신뢰합니다. 설치 확인 때 시험 카드와 메모를 둔 역할을 Claude와 Codex로 열어 첫 요청의 인계 지문을 대조합니다. [Codex 훅의 신뢰 설정](https://developers.openai.com/codex/hooks#review-and-trust-hooks)
 
 Claude와 Codex의 세션 시작 훅은 같은 원본의 노트, 최근 미완료 카드 12개, 각 카드의 원글과 최근 일꾼 결과를 읽습니다. 같은 원본이면 인계문의 SHA-256도 같습니다. 새 카드는 등록 시 소유 그룹을 기록합니다. 기존 카드에는 그룹이 없을 수 있습니다. 해당 그룹 전용으로 확인한 원본 채널만 `legacy_card_channels`에 등록하면 그 채널의 기존 카드도 복원됩니다. 다른 세션 폴더와 하위 일꾼에는 역할 기억을 싣지 않습니다.
 
