@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import test from "node:test"
 import {
   AX_AI_FALLBACK_MESSAGE,
@@ -225,7 +226,7 @@ test("기관별 기록의 호출 수와 모델 사용량 합이 응답 합과 �
 
 // 기록에 비밀값·본문 없음.
 test("호출 기록·사용량 기록에 열쇠·대화 본문이 남지 않는다", async () => {
-  const apiKey = "canary-SECRET-ax104-do-not-log"
+  const apiKey = randomUUID()
   const body = "이 문장은 기록에 남으면 안 되는 대화 본문이다"
   const usage = createUsageCollector()
   const strict = createAiService(
@@ -234,7 +235,7 @@ test("호출 기록·사용량 기록에 열쇠·대화 본문이 남지 않는�
   )
   await strict.answer({ orgId: "org-a", input: body })
   const dumped = JSON.stringify({ calls: strict.providerCalls, entries: usage.entries })
-  assert.doesNotMatch(dumped, /canary-SECRET/)
+  assert.ok(!dumped.includes(apiKey))
   assert.ok(!dumped.includes(body))
 })
 

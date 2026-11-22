@@ -155,8 +155,8 @@ test("원격 http 주소는 열쇠를 보내기 전에 시작 오류다", () => 
   }
   // 원격 http·비 http(s)는 시작 오류다.
   for (const baseUrl of [
-    "http://192.168.10.11:8080/v1",
-    "http://10.0.0.5/v1",
+    "http://192.0.2.11:8080/v1",
+    "http://198.51.100.5/v1",
     "http://api.example.com/v1",
     "http://[2001:db8::1]/v1",
     "ftp://x",

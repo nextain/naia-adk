@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
+import { randomBytes, randomUUID } from "node:crypto"
 import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises"
 import path from "node:path"
 import os from "node:os"
@@ -83,14 +84,16 @@ test("답 없음, 미전달 답과 열쇠 모양 답은 보내지 않고 거부 
   try {
     await f.relay.forward(f.question("$none")); await f.relay.forward(f.question("$secret"))
     await writeFile(f.reply("$none"), "답 없음\nignored")
-    await writeFile(f.reply("$secret"), "sk-abcdefghijklmnopqrstuvwxyz")
+    const apiKey = `sk-${randomBytes(16).toString("hex")}`
+    await writeFile(f.reply("$secret"), apiKey)
     await writeFile(f.reply("$unknown"), "unforwarded")
     await f.relay.poll()
     assert.equal(f.sent.length, 0)
     const log = await readFile(f.store.usageFile, "utf8")
     assert.match(log, /"status":"rejected"/)
     assert.match(log, /"status":"no-answer"/)
-    assert.doesNotMatch(log, /sk-abcdefghijklmnopqrstuvwxyz|question/)
+    assert.ok(!log.includes(apiKey))
+    assert.doesNotMatch(log, /question/)
   } finally { await f.cleanup() }
 })
 test("답 없음 접두 판정: 답 없음. 및 답 없음 (까닭)도 보내지 않고 no-answer 기록", async () => {
@@ -527,6 +530,11 @@ test("relay-session-run.mjs: 격리 작업 칸·안내문·최소 환경·죽은
 
     const fakeSession = path.join(f.dir, "fake-session.mjs")
     const inspectOut = path.join(f.dir, "inspect.jsonl")
+    const matrixToken = `syt_${randomBytes(12).toString("hex")}`
+    const providerKey = `sk-${randomBytes(12).toString("hex")}`
+    const stderrToken = `syt_${randomBytes(12).toString("hex")}`
+    const bearerToken = randomUUID()
+    const password = randomUUID()
     await writeFile(
       fakeSession,
       `import { appendFileSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -554,18 +562,18 @@ appendFileSync(${JSON.stringify(inspectOut)}, JSON.stringify({
   timestamp: q.timestamp,
 }) + "\\n");
 // 청크 경계에 걸친 비밀 열쇠(syt_, sk-, Bearer, token=) 출력 시험
-process.stdout.write("chunk1 token=syt_split");
+process.stdout.write("chunk1 token=" + ${JSON.stringify(matrixToken.slice(0, 10))});
 await delay(30);
-process.stdout.write("_secret_value_123 and sk-partOne");
+process.stdout.write(${JSON.stringify(matrixToken.slice(10))} + " and " + ${JSON.stringify(providerKey.slice(0, 10))});
 await delay(30);
-process.stdout.write("PartTwoKey999\\nBearer ");
+process.stdout.write(${JSON.stringify(providerKey.slice(10))} + "\\nBearer ");
 await delay(30);
-process.stdout.write("bearer_split_token_abc\\npassword=");
+process.stdout.write(${JSON.stringify(bearerToken)} + "\\npassword=");
 await delay(30);
-process.stderr.write(" split_err syt_err1");
+process.stderr.write(" split_err " + ${JSON.stringify(stderrToken.slice(0, 10))});
 await delay(30);
-process.stderr.write("2345_end\\n");
-process.stdout.write("my_split_pass_xyz");
+process.stderr.write(${JSON.stringify(stderrToken.slice(10))} + "\\n");
+process.stdout.write(${JSON.stringify(password)});
 writeFileSync("answer.md", "역할답:" + q.body + "\\n", { mode: 0o600 });
 `,
       { mode: 0o600 },
@@ -654,11 +662,11 @@ writeFileSync("answer.md", "역할답:" + q.body + "\\n", { mode: 0o600 });
     const outLog = path.join(outDir, `${relayName("$q1")}.log`)
     assert.equal((await lstat(outLog)).mode & 0o777, 0o600)
     const outText = await readFile(outLog, "utf8")
-    assert.ok(!outText.includes("syt_split_secret_value_123"), "청크 경계에 걸친 syt_ 토큰이 가려져야 한다")
-    assert.ok(!outText.includes("sk-partOnePartTwoKey999"), "청크 경계에 걸친 sk- 열쇠가 가려져야 한다")
-    assert.ok(!outText.includes("bearer_split_token_abc"), "청크 경계에 걸친 Bearer 토큰이 가려져야 한다")
-    assert.ok(!outText.includes("my_split_pass_xyz"), "청크 경계에 걸친 password 값이 가려져야 한다")
-    assert.ok(!outText.includes("syt_err12345_end"), "stderr 청크 경계에 걸친 토큰도 가려져야 한다")
+    assert.ok(!outText.includes(matrixToken), "청크 경계에 걸친 syt_ 토큰이 가려져야 한다")
+    assert.ok(!outText.includes(providerKey), "청크 경계에 걸친 sk- 열쇠가 가려져야 한다")
+    assert.ok(!outText.includes(bearerToken), "청크 경계에 걸친 Bearer 토큰이 가려져야 한다")
+    assert.ok(!outText.includes(password), "청크 경계에 걸친 password 값이 가려져야 한다")
+    assert.ok(!outText.includes(stderrToken), "stderr 청크 경계에 걸친 토큰도 가려져야 한다")
     assert.match(outText, /\[REDACTED\]/)
   } finally { await f.cleanup() }
 })
@@ -2506,7 +2514,7 @@ writeFileSync("answer.md", "옛잠금상한답:" + q.body, { mode: 0o600 });
     await writeFile(
       lockPath,
       `${JSON.stringify({
-        token: "r20-legacy-missing-field-token",
+        token: randomUUID(),
         pid: legacyPid,
         starttime: legacyProc.starttime,
         boot_id: legacyProc.bootId,
@@ -3334,7 +3342,7 @@ writeFileSync("answer.md", "세갈래답:" + q.body, { mode: 0o600 });
     await writeFile(
       lockPath,
       `${JSON.stringify({
-        token: "r21-live-same-starttime-token",
+        token: randomUUID(),
         pid: livePair.pid,
         starttime: liveProc.starttime,
         boot_id: liveProc.bootId,

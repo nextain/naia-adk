@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -55,7 +56,7 @@ test("호출 기록과 사용량이 줄 단위 JSON으로 쌓인다", async () =
 test("저장 줄에 비밀값·대화 본문이 남지 않는다", async () => {
   await withStore(async (dir) => {
     const store = createAiFileStore(dir)
-    const apiKey = "canary-SECRET-ax104-store-do-not-log"
+    const apiKey = randomUUID()
     const body = "이 문장은 저장 줄에 남으면 안 되는 대화 본문이다"
     // 호출부가 실수로 여분을 실어도 아는 칸만 골라 담는다.
     await store.appendCall({
@@ -77,7 +78,7 @@ test("저장 줄에 비밀값·대화 본문이 남지 않는다", async () => {
       token: apiKey,
     } as never)
     const dumped = `${await readFile(store.callFile, "utf8")}\n${await readFile(store.usageFile, "utf8")}`
-    assert.doesNotMatch(dumped, /canary-SECRET/)
+    assert.ok(!dumped.includes(apiKey))
     assert.ok(!dumped.includes(body))
     // 형부터 본문 칸이 없어 남길 수 없다.
     for (const line of dumped.split("\n").map((part) => part.trim()).filter(Boolean)) {
@@ -140,6 +141,7 @@ test("호출 기록과 결과 기록이 같은 callId로 1:1로 쌓인다", asyn
 test("결과 줄에도 비밀값·대화 본문이 남지 않고 상태 없으면 막힌다", async () => {
   await withStore(async (dir) => {
     const store = createAiFileStore(dir)
+    const apiKey = randomUUID()
     await store.appendCallResult({
       callId: "tag-secret",
       orgId: "org-a",
@@ -147,11 +149,11 @@ test("결과 줄에도 비밀값·대화 본문이 남지 않고 상태 없으�
       status: "success",
       provider: "fake",
       usage: { inputTokens: 9, outputTokens: 8 },
-      apiKey: "canary-SECRET-ax104-result-do-not-log",
+      apiKey,
       input: "이 문장은 결과 줄에 남으면 안 되는 대화 본문이다",
     } as never)
     const dumped = await readFile(store.callFile, "utf8")
-    assert.doesNotMatch(dumped, /canary-SECRET/)
+    assert.ok(!dumped.includes(apiKey))
     assert.ok(!dumped.includes("남으면 안 되는 대화 본문"))
     await assert.rejects(store.appendCallResult({ callId: "tag-x", orgId: "org-a", at: 1, status: " " } as never))
   })
@@ -160,6 +162,7 @@ test("결과 줄에도 비밀값·대화 본문이 남지 않고 상태 없으�
 test("예비 파일에 같은 결과 줄을 한 번 더 쓰고 비밀값·본문을 남기지 않는다", async () => {
   await withStore(async (dir) => {
     const store = createAiFileStore(dir)
+    const apiKey = randomUUID()
     await store.appendCallResultFallback({
       callId: "tag-fb-1",
       orgId: "org-a",
@@ -167,7 +170,7 @@ test("예비 파일에 같은 결과 줄을 한 번 더 쓰고 비밀값·본문
       status: "success",
       provider: "fake",
       usage: { inputTokens: 9, outputTokens: 8 },
-      apiKey: "canary-SECRET-ax104-fallback-do-not-log",
+      apiKey,
       input: "이 문장은 예비 줄에 남으면 안 되는 대화 본문이다",
     } as never)
     const dumped = await readFile(store.fallbackFile, "utf8")
@@ -180,7 +183,7 @@ test("예비 파일에 같은 결과 줄을 한 번 더 쓰고 비밀값·본문
       provider: "fake",
       usage: { inputTokens: 9, outputTokens: 8 },
     })
-    assert.doesNotMatch(dumped, /canary-SECRET/)
+    assert.ok(!dumped.includes(apiKey))
     assert.ok(!dumped.includes("예비 줄에 남으면 안 되는 대화 본문"))
     assert.equal((await stat(store.fallbackFile)).mode & 0o777, 0o600)
   })
@@ -236,6 +239,7 @@ test("호출·사용량 줄에 제공자 표지와 초과 표시가 남는다", 
 test("호출·결과 줄에 eventId가 남고 비밀값·본문은 남지 않는다", async () => {
   await withStore(async (dir) => {
     const store = createAiFileStore(dir)
+    const apiKey = randomUUID()
     await store.appendCall({
       callId: "tag-ev-secret",
       orgId: "org-a",
@@ -244,7 +248,7 @@ test("호출·결과 줄에 eventId가 남고 비밀값·본문은 남지 않는
       maxOutputTokens: 200,
       provider: "fake",
       eventId: "$event-1",
-      apiKey: "canary-SECRET-ax104-ev-do-not-log",
+      apiKey,
       input: "이 문장은 호출 줄에 남으면 안 되는 대화 본문이다",
     } as never)
     await store.appendCallResult({
@@ -267,7 +271,7 @@ test("호출·결과 줄에 eventId가 남고 비밀값·본문은 남지 않는
     const dumped = `${await readFile(store.callFile, "utf8")}\n${await readFile(store.fallbackFile, "utf8")}`
     assert.ok(dumped.includes("$event-1"))
     assert.ok(dumped.includes("$event-2"))
-    assert.doesNotMatch(dumped, /canary-SECRET/)
+    assert.ok(!dumped.includes(apiKey))
     assert.ok(!dumped.includes("남으면 안 되는 대화 본문"))
   })
 })
