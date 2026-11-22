@@ -70,7 +70,30 @@ export function resolveWorkerStep(file, step, context) {
     throw new Error(`Invalid tier or candidate for worker step: ${step}`);
   }
   const pool = profile.document.tiers[assignment.tier]?.candidates ?? [];
-  const candidate = selectCandidate(step, assignment, pool, context);
+  if (assignment.selection === "ordered") {
+    if (Number(assignment.tier) !== 1 || context.producer || Object.hasOwn(assignment, "candidate")) {
+      throw new Error("Ordered selection is for tier 1 sensor steps");
+    }
+    if (!pool.length) throw new Error("Ordered sensor step has no configured candidates");
+    const seen = new Set();
+    const ordered = pool.map(candidate => {
+      const id = candidate.id ?? candidate.cli;
+      const codes = candidate.unavailable_exit_codes ?? [];
+      if (!tierProfile.validTierToken(id) || seen.has(id) || candidate.result_mode !== "stdout") {
+        throw new Error("Ordered sensors require unique candidate IDs and stdout results");
+      }
+      if (!Array.isArray(codes) || !codes.every(n => Number.isInteger(n) && n > 0 && n < 126)) {
+        throw new Error("Invalid unavailable_exit_codes for sensor " + id);
+      }
+      seen.add(id);
+      return { ...bindCandidate(profile, step, assignment, candidate, context), unavailableExitCodes: codes };
+    });
+    return { ...ordered[0], ordered };
+  }
+  return bindCandidate(profile, step, assignment, selectCandidate(step, assignment, pool, context), context);
+}
+
+function bindCandidate(profile, step, assignment, candidate, context) {
   if (!tierProfile.validTierToken(candidate.family) || !tierProfile.validWorkerArgv(candidate)) {
     throw new Error(`Worker step ${step} needs a model family and explicit argv for the configured model and effort`);
   }

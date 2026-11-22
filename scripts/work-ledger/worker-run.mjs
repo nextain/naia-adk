@@ -359,6 +359,7 @@ export async function finishWorkerRun(
     item.exit = exitCode;
     item.reason = nextReason;
     item.launch_pending = false;
+    delete item.sensor_controller;
     if (effectiveResult !== existing.result) item.result = effectiveResult;
     if (opts.note !== undefined) item.note = String(opts.note);
     else if (nextStatus === "failed" && !item.note && nextReason) {
@@ -384,7 +385,7 @@ async function captureStdout(resultPath) {
     async finish(publish) {
       try {
         await handle.close();
-        if (!publish) return;
+        if (!publish) return (await stat(output)).size;
         const snapshot = path.join(dir, "finished");
         await copyFile(output, snapshot);
         if ((await stat(snapshot)).size === 0) throw new Error("Worker stdout was empty");
@@ -396,9 +397,49 @@ async function captureStdout(resultPath) {
   };
 }
 
-async function runSubprocessAndRecord(
+async function runSubprocessAndRecord(params, { clock = Date.now } = {}) {
+  if (!params.ordered) return runWorkerAttempt(params, { clock });
+  for (const [index, route] of params.ordered.entries()) {
+    const next = params.ordered[index + 1];
+    const out = await runWorkerAttempt({
+      ...params, command: route.command, tool: detectTool([route.binding.cli]),
+    }, { clock, next, unavailableExitCodes: route.unavailableExitCodes });
+    if (!out.unavailable) return out;
+    const advanced = await changeLedger(params.root, params.role, ledger => {
+      const item = ledger.items.find(row => row.id === params.id);
+      const card = ledger.items.find(row => row.id === params.parent);
+      if (item?.status !== "running" || card?.status !== "open" ||
+          (card.worker_step ?? "implementation") !== route.binding.step || item.profile.argv_sha256 !== route.binding.argv_sha256) return false;
+      (item.profile_attempts ??= []).push({
+        profile: item.profile, pid: item.pid, started_at: item.profile_started_at ?? null,
+        ended_at: new Date(clock()).toISOString(), exit: out.exitCode, reason: out.unavailable,
+      });
+      item.profile = next.binding;
+      item.tool = detectTool([next.binding.cli]);
+      if (card.drive?.run?.worker_id === item.id) {
+        card.drive.run.profile = next.binding;
+        card.drive.model = next.binding.model;
+      }
+      item.pid = null;
+      item.start_token = null;
+      item.profile_started_at = null;
+      item.launch_pending = true;
+      return true;
+    });
+    if (!advanced) {
+      const item = await finishWorkerRun({
+        root: params.root, config: params.configPath, role: params.role, id: params.id,
+        exit: out.exitCode, reason: "sensor-dispatch-stopped", ifRunning: true,
+      }, { clock });
+      return { item, exitCode: out.exitCode };
+    }
+  }
+  throw new Error("Empty ordered sensor dispatch");
+}
+
+async function runWorkerAttempt(
   { root, configPath, config, role, id, parent, resultPath, unit, tool, workCwd, command, env, prompt, resultMode, stdio = ["ignore", "inherit", "inherit"] },
-  { clock = Date.now } = {},
+  { clock, next, unavailableExitCodes },
 ) {
   const childEnv = buildChildEnv({ env, config, role, id, parent, resultPath, unit, tool });
   let child;
@@ -431,6 +472,7 @@ async function runSubprocessAndRecord(
 
   if (!spawned) {
     await capture?.finish(false);
+    if (next && spawnError?.code === "ENOENT") return { exitCode: 127, unavailable: "executable-missing" };
     const item = await finishWorkerRun(
       {
         root,
@@ -481,8 +523,12 @@ async function runSubprocessAndRecord(
       ? code
       : 128 + (os.constants.signals[finalSig] || 15);
   let captureError;
-  try { await capture?.finish(exitCode === 0 && !finalSig && !receiptError); }
+  let discardedBytes;
+  try { discardedBytes = await capture?.finish(exitCode === 0 && !finalSig && !receiptError); }
   catch (error) { captureError = error; }
+  if (next && !finalSig && !receiptError && !captureError && discardedBytes === 0 && unavailableExitCodes.includes(exitCode)) {
+    return { exitCode, unavailable: "provider-unavailable" };
+  }
   const item = await finishWorkerRun(
     {
       root,
@@ -515,9 +561,20 @@ export async function execWorkerRun(
   if (!item || !isWorkerItem(item)) throw new Error(`Unknown worker run: ${id}`);
   if (item.status !== "running") return { exitCode: item.exit ?? 1, item };
   const workCwd = opts.cwd ? path.resolve(root, opts.cwd) : item.cwd || root;
+  let ordered;
   if (item.profile) {
     if (workCwd !== item.cwd || commandDigest(command) !== item.profile.argv_sha256) {
       throw new Error("Worker command or cwd differs from its recorded profile");
+    }
+    if (item.profile.selection === "ordered") {
+      const file = workerProfilePath(root, config, role);
+      const card = ledger.items.find(row => row.id === item.parent);
+      if (card?.status !== "open" || (card.worker_step ?? "implementation") !== item.profile.step) {
+        throw new Error("Ordered sensor requires its original open card and step");
+      }
+      const selection = resolveWorkerStep(file, item.profile.step, { workDir: workCwd, prompt: item.prompt, result: item.result, role, card });
+      if (selection.binding.profile_sha256 !== item.profile.profile_sha256) throw new Error("Installed sensor profile changed after reservation");
+      ordered = selection.ordered;
     }
     await changeLedger(root, role, ledger => {
       const run = ledger.items.find(row => row.id === id);
@@ -525,6 +582,7 @@ export async function execWorkerRun(
         throw new Error("Profiled worker launch already claimed");
       }
       run.exec_claimed_at = new Date(clock()).toISOString();
+      if (ordered) run.sensor_controller = { pid: process.pid, start_token: processStart(process.pid) };
     });
   }
   return runSubprocessAndRecord(
@@ -542,6 +600,7 @@ export async function execWorkerRun(
       command,
       prompt: item.prompt,
       resultMode: item.profile?.result_mode,
+      ordered,
       env,
       stdio,
     },
@@ -673,12 +732,16 @@ export async function startWorkerRun(
     if (supervised && attempt > 1) {
       const previous = l.items.filter(run => run.supervisor?.dispatch === supervised && run.supervisor.id === requestId);
       for (const run of previous) {
-        if (run.parent !== parent || run.result !== resultPath || run.prompt !== prompt || run.profile.argv_sha256 !== selection.binding.argv_sha256 || run.profile.result_mode !== selection.binding.result_mode) {
+        const initialProfile = run.profile_attempts?.[0]?.profile ?? run.profile;
+        if (run.parent !== parent || run.result !== resultPath || run.prompt !== prompt || initialProfile.argv_sha256 !== selection.binding.argv_sha256 ||
+            initialProfile.result_mode !== selection.binding.result_mode || (initialProfile.selection === "ordered" && initialProfile.profile_sha256 !== selection.binding.profile_sha256)) {
           throw new Error("Profiled supervisor resumption differs from its original dispatch");
         }
         if (run.status === "done") return run;
         if (run.status === "running") {
-          if (defaultPidProbe(run.pid, run.start_token)) throw new Error("Previous worker attempt is still running");
+          if (defaultPidProbe(run.pid, run.start_token) || (run.sensor_controller && defaultPidProbe(run.sensor_controller.pid, run.sensor_controller.start_token))) {
+            throw new Error("Previous worker attempt is still running");
+          }
           run.status = "failed";
           run.ended = startedIso;
           run.reason = "supervisor-preempted";
@@ -713,6 +776,7 @@ export async function startWorkerRun(
       reason: null,
       launch_pending: true,
       initial_result: initialResult,
+      ...(foreground && selection?.ordered ? { sensor_controller: { pid: process.pid, start_token: processStart(process.pid) } } : {}),
       ...(supervised ? { supervisor: { id: requestId, dispatch: supervised, attempt } } : {}),
       ...(selection ? { profile: selection.binding, prompt, ...(foreground ? { exec_claimed_at: startedIso } : {}), ...(reviewOf ? { review_of: reviewOf } : {}) } : {}),
       from: {
@@ -748,6 +812,7 @@ export async function startWorkerRun(
         command,
         prompt,
         resultMode: selection?.binding.result_mode,
+        ordered: selection?.ordered,
         env,
         stdio,
       },
@@ -906,6 +971,7 @@ export async function reconcileWorkerRuns({
 
     const planned = [];
     for (const item of runningItems) {
+      if (item.sensor_controller && pidProbe(item.sensor_controller.pid, item.sensor_controller.start_token)) continue;
       out.checked++;
       const startedMs = Date.parse(item.started);
       if (item.launch_pending === true && Number.isFinite(startedMs) && at - startedMs < STARTUP_GRACE_MS) {

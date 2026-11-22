@@ -220,6 +220,31 @@ test("an overdue instructed item starts one worker and notifies only its own rol
   assert.deepEqual([last.launched, last.alerts, last.errors], [[], [], []]);
 });
 
+test("a scheduled sensor records the model that actually classified the original message", async () => {
+  const { root, config } = await setup();
+  config.roles[1].tier_profile = "config/sensors.json";
+  const primary = { id: "primary", cli: path.join(root, "missing-sensor"), family: "alpha", model: "first",
+    result_mode: "stdout", argv: ["{cli}", "--model", "{model}"] };
+  const secondary = { id: "second", cli: process.execPath, family: "beta", model: "second",
+    result_mode: "stdout", argv: ["{cli}", "-e", "console.log(process.argv[1])", "{model}"] };
+  await writeFile(path.join(root, "config/work-ledger.json"), JSON.stringify(config));
+  await writeFile(path.join(root, "config/sensors.json"), JSON.stringify({
+    tiers: { 1: { candidates: [primary, secondary] }, 2: { candidates: [secondary] } },
+    worker_steps: { classify: { tier: 1, selection: "ordered" } },
+  }));
+  await cli(root, "add", "--role", "writer", "--id", "incoming", "--title", "Classify", "--due", PAST,
+    "--channel", "source", "--msg-id", "22", "--prompt", "task.md", "--result-file", "results/decision", "--worker-step", "classify");
+  const started = await pass(root, config);
+  assert.equal(started.launched.length, 1);
+  const run = (await item(root, "writer", "incoming")).drive.run;
+  await until(async () => (await item(root, "writer", run.worker_id))?.status === "done", "scheduled sensor classified message");
+  const card = await item(root, "writer", "incoming");
+  assert.equal(card.drive.model, "second");
+  assert.equal(card.drive.run.profile.candidate, "second");
+  assert.equal((await item(root, "writer", run.worker_id)).from.msg_id, "22");
+  assert.equal((await readFile(path.join(root, "results/decision"), "utf8")).trim(), "second");
+});
+
 test("timer launch resolves the installed card profile and records the actual argument selection", async () => {
   const { root, config } = await setup();
   config.roles[1].tier_profile = "config/writer.json";

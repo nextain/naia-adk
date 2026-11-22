@@ -321,6 +321,84 @@ test("a card keeps its shuffled producer and reviews with another configured fam
   assert.deepEqual(choices, new Set(["first", "second"]));
 });
 
+test("a tier-one card tries its configured order only when a sensor is unavailable", async () => {
+  const { root } = await setup({ roles: [{ role: "triage", tier_profile: "config/team.json" }] });
+  const prompt = path.join(root, "message.md");
+  const program = path.join(root, "sensor.mjs");
+  const trace = path.join(root, "attempts.log");
+  await writeFile(prompt, "message for classification");
+  await writeFile(program, `
+    import { appendFileSync, readFileSync } from "node:fs";
+    const [model, behavior, trace] = process.argv.slice(2);
+    appendFileSync(trace, model + "\\n");
+    if (behavior === "partial") process.stdout.write("an incomplete decision");
+    if (behavior === "unavailable" || behavior === "partial") process.exit(75);
+    if (behavior === "error") process.exit(2);
+    process.stdout.write(model + ":" + readFileSync(0, "utf8"));
+  `);
+  const sensor = (id, behavior) => ({
+    id, cli: process.execPath, family: id, model: id, result_mode: "stdout",
+    argv: ["{cli}", program, "{model}", behavior, trace], unavailable_exit_codes: [75],
+  });
+  const first = sensor("first", "unavailable");
+  const second = sensor("second", "ok");
+  const profile = { tiers: { 1: { candidates: [first, second] }, 2: { candidates: [second] } },
+    worker_steps: { classify: { tier: 1, selection: "ordered" } } };
+  const file = path.join(root, "config/team.json");
+  const save = () => writeFile(file, JSON.stringify(profile));
+  await save();
+  await ledgerMain(["add", "--root", root, "--role", "triage", "--id", "message", "--worker-step", "classify",
+    "--title", "Classify", "--channel", "inbox", "--msg-id", "42", "--due", "2026-11-22T12:00:00Z"]);
+  const opts = { root, role: "triage", parent: "message", name: "classify", prompt, result: "decision", foreground: true };
+  const plan = await startWorkerRun({ ...opts, dry: true }, []);
+  assert.equal(plan.profile.model, "first");
+  const run = await startWorkerRun({ ...opts, id: "foreground" }, []);
+  assert.equal(run.status, "done");
+  assert.equal(run.profile.model, "second");
+  assert.equal(run.from.msg_id, "42");
+  assert.equal(run.profile_attempts[0].profile.model, "first");
+  assert.equal(run.profile_attempts[0].exit, 75);
+  assert.ok(run.profile_attempts[0].pid && run.profile_attempts[0].started_at);
+  assert.equal(await readFile(trace, "utf8"), "first\nsecond\n");
+  assert.equal(await readFile(path.join(root, "decision"), "utf8"), "second:message for classification");
+  for (const [index, behavior] of ["partial", "error", "ok"].entries()) {
+    first.argv[3] = behavior;
+    await save();
+    await writeFile(trace, "");
+    const actual = await startWorkerRun({ ...opts, id: "one-" + index }, []);
+    assert.equal(actual.status, behavior === "ok" ? "done" : "failed");
+    assert.equal(actual.profile.model, "first");
+    assert.equal(await readFile(trace, "utf8"), "first\n");
+    if (behavior !== "ok") assert.equal(await readFile(path.join(root, "decision"), "utf8"), "second:message for classification");
+  }
+  first.cli = path.join(root, "absent-sensor");
+  await save();
+  const detached = { ...opts, id: "unit", foreground: false };
+  const command = (await startWorkerRun({ ...detached, dry: true }, [])).command;
+  await startWorkerRun(detached, [], { runner: async () => {} });
+  const repaired = await execWorkerRun(detached, command);
+  assert.equal(repaired.item.status, "done");
+  assert.equal(repaired.item.profile.candidate, "second");
+  assert.equal(repaired.item.profile_attempts[0].exit, 127);
+  assert.equal(repaired.item.profile_attempts[0].started_at, null);
+  const supervised = { ...opts, id: "supervised" };
+  const env = { ...process.env, WORKER_RUNNER_ID: supervised.id, WORKER_RUNNER_DISPATCH: "slot", WORKER_RUNNER_ATTEMPT: "1" };
+  await writeFile(trace, "");
+  assert.equal((await startWorkerRun(supervised, [], { env })).status, "done");
+  const reuse = await startWorkerRun(supervised, [], { env: { ...env, WORKER_RUNNER_ATTEMPT: "2" } });
+  assert.equal(reuse.id, supervised.id);
+  assert.equal(await readFile(trace, "utf8"), "second\n");
+  const reserved = { ...detached, id: "reserved" };
+  await startWorkerRun(reserved, [], { runner: async () => {} });
+  first.unavailable_exit_codes = [78];
+  await save();
+  await assert.rejects(execWorkerRun(reserved, command), /profile changed after reservation/);
+  assert.equal(await readFile(trace, "utf8"), "second\n");
+  profile.worker_steps.classify.tier = 2;
+  await save();
+  await assert.rejects(startWorkerRun({ ...opts, dry: true }, []), /tier 1/i);
+});
+
 test("a profile can publish a CLI answer from stdout and preserve the last result on failure", async () => {
   const { root } = await setup({ roles: [{ role: "editor" }] });
   const prompt = path.join(root, "instruction.md");
