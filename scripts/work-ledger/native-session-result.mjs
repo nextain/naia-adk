@@ -1,4 +1,6 @@
 import { createReadStream } from "node:fs";
+import { open, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { createInterface } from "node:readline";
 
 const modes = new Set(["codex-jsonl", "muse-jsonl", "claude-jsonl", "agy-jsonl"]);
@@ -8,18 +10,39 @@ export function requireFreshInvocation(mode, command) {
   const args = command.slice(1);
   const opts = args.map(arg => arg.split("=", 1)[0]);
   const resumeOptions = ["resume", "fork", "--resume", "--continue", "--conversation", "--session-id",
-    "--fork-session", "--from-pr", "--teleport", "--cloud", "--remote-agent", "--input-format"];
+    "--fork-session", "--from-pr", "--teleport", "--cloud", "--remote-agent"];
   const exec = mode === "codex-jsonl" || mode === "muse-jsonl";
-  const stream = args.includes("--output-format=stream-json") ||
-    args.some((arg, i) => arg === "--output-format" && args[i + 1] === "stream-json");
+  const format = (flag, value) => args.includes(flag + "=" + value) || args.some((arg, i) => arg === flag && args[i + 1] === value);
+  const stream = format("--output-format", "stream-json");
+  const print = args.includes("--print") || args.includes("-p");
   const required = exec
     ? args[0] === "exec" && args.includes("--json") && (mode !== "codex-jsonl" || args.includes("--ephemeral"))
-    : (args.includes("--print") || args.includes("-p")) && stream;
+    : mode === "agy-jsonl" ? !print && stream && format("--input-format", "stream-json")
+    : print && stream && (!opts.includes("--input-format") || format("--input-format", "text"));
   // Claude also accepts attached short options such as -r<session>.
   if (!required || opts.some(arg => resumeOptions.includes(arg)) ||
       (mode === "claude-jsonl" && args.some(arg => /^-[^-]*[cr]/.test(arg)))) {
     throw new Error(mode + " requires a fresh non-interactive native session");
   }
+}
+
+// AGY's headless interface reads user events, not a positional print prompt.
+// Also accept the single user envelope used by the existing review adapter.
+export async function openWorkerPrompt(file, mode, directory) {
+  if (mode !== "agy-jsonl") return open(file, "r");
+  let text = await readFile(file, "utf8");
+  let input;
+  try { input = JSON.parse(text); } catch { /* plain task text */ }
+  if (input?.event === "user" && (!input.message?.role || input.message.role === "user")) {
+    const content = input.message?.content;
+    if (typeof content === "string") text = content;
+    else if (Array.isArray(content) && content.length && content.every(p => p?.type === "text" && typeof p.text === "string")) {
+      text = content.map(p => p.text).join("\n");
+    }
+  }
+  const target = path.join(directory, "stdin");
+  await writeFile(target, JSON.stringify({ event: "user", message: { role: "user", content: text } }) + "\n", { flag: "wx", mode: 0o600 });
+  return open(target, "r");
 }
 
 function startId(mode, e) {

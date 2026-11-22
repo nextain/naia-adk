@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, open, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkIndependentReviewer, commandDigest, resolveWorkerStep, workerProfilePath } from "./worker-profile.mjs";
-import { isNativeResult, readNativeResult } from "./native-session-result.mjs";
+import { isNativeResult, openWorkerPrompt, readNativeResult } from "./native-session-result.mjs";
 import {
   changeLedger,
   isWorkerItem,
@@ -396,6 +396,7 @@ async function captureStdout(resultPath) {
   catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
   return {
     fd: handle.fd,
+    directory: dir,
     async finish(publish, commit = snapshot => rename(snapshot, resultPath)) {
       try {
         await handle.close();
@@ -475,7 +476,7 @@ async function runWorkerAttempt(
   let capture;
   try {
     if (resultMode === "stdout" || isNativeResult(resultMode)) capture = await captureStdout(resultPath);
-    if (prompt) input = await open(prompt, "r");
+    if (prompt) input = await openWorkerPrompt(prompt, resultMode, capture?.directory);
     child = spawn(command[0], command.slice(1), {
       cwd: workCwd,
       env: childEnv,

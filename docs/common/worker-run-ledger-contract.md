@@ -62,9 +62,11 @@ node scripts/work-ledger/worker-run.mjs start --root . --role editor --parent t1
 | `codex-jsonl` | `exec --ephemeral --json` | `thread.started`의 스레드 ID |
 | `muse-jsonl` | `exec --json` | 첫 `runtime.command.accepted`의 세션 ID |
 | `claude-jsonl` | `--print --verbose --output-format stream-json` | `system/init`의 세션 ID |
-| `agy-jsonl` | `--print --output-format stream-json` | `init`의 대화 ID |
+| `agy-jsonl` | `--input-format stream-json --output-format stream-json` | `init`의 대화 ID |
 
 모델과 추론 인자는 설치 프로파일에서 정합니다. 검수 호출에 `--review-of <구현 일꾼 ID>`를 전달하고 결과 경로를 따로 줍니다. 각 프로세스가 새 세션을 열어 최종 답을 반환하면 실행기는 `profile.session_id`와 답을 기록합니다. 이전 세션 재개, 이미 장부에 있는 세션 ID, 끝나지 않은 응답은 실패 처리하며 이전 결과 파일을 보존합니다. 후보가 여럿일 때는 서로 다른 계열과 모델을 골라 검수합니다.
+
+AGY의 평문 지시와 기존 검수 대본이 만든 단일 사용자 메시지는 모두 표준 입력의 사용자 이벤트 한 건으로 전달됩니다. 이전 판에서 이미 끝난 카드에 구현 세션 식별자가 없으면 기존의 다른 계열 검수를 이용할 수 있습니다. 같은 모델로 검수하려면 원본 카드에서 새 구현 세션의 식별자를 먼저 확보합니다.
 
 ## 장부 줄 스키마 (`kind: "worker"`)
 

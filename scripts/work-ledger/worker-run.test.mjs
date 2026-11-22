@@ -11,7 +11,7 @@ import { watch } from "./ledger-watch.mjs";
 import { plan as planDueTimers, reconcileCurrent } from "./due-timer.mjs";
 import { approveFixture } from "./due-test-helper.mjs";
 import { tick as driveTick } from "./drive.mjs";
-import { readNativeResult, requireFreshInvocation } from "./native-session-result.mjs";
+import { openWorkerPrompt, readNativeResult, requireFreshInvocation } from "./native-session-result.mjs";
 import {
   detectTool,
   execWorkerRun,
@@ -184,7 +184,7 @@ test("native result modes require matching runtime envelopes and a completed ans
       { stream: { kind: "session", id: session }, payload_type: "run.terminal.completed",
         payload: { command_id: "turn", terminal: "completed", text: answer } },
     ], { stream: { kind: "session", id: "another" } }],
-    ["agy-jsonl", ["agy", "--print", "--output-format", "stream-json"], [
+    ["agy-jsonl", ["agy", "--input-format", "stream-json", "--output-format", "stream-json"], [
       { event: "init", conversation_id: session },
       { event: "result", result: { conversation_id: session, status: "SUCCESS", response: answer } },
     ], { result: { conversation_id: "another", status: "SUCCESS", response: answer } }],
@@ -204,6 +204,27 @@ test("native result modes require matching runtime envelopes and a completed ans
     await assert.rejects(readNativeResult(mode, file));
     await writeFile(file, contents + "\n" + contents);
     await assert.rejects(readNativeResult(mode, file), /extra/);
+  }
+});
+
+test("the native AGY route accepts the installed review adapter and sends one user event", async () => {
+  const { root } = await setup();
+  const { commandFor, stdinPayload } = await import("../../skills/review-pass/scripts/invoke-reviewer.mjs");
+  const [exe, argv] = commandFor("agy", root, "fixture-model");
+  requireFreshInvocation("agy-jsonl", [exe, ...argv]);
+  assert.throws(() => requireFreshInvocation("agy-jsonl", [exe, ...argv, "--print"]), /fresh/);
+  const file = path.join(root, "task");
+  for (const [raw, expected] of [
+    ["Review the code.", "Review the code."],
+    [stdinPayload("agy", "Review the code."), "Review the code."],
+    [JSON.stringify({ event: "user", message: { content: [{ type: "text", text: "Project review" }] } }), "Project review"],
+    ['{"event":"user"}\n{"event":"user"}', '{"event":"user"}\n{"event":"user"}'],
+  ]) {
+    await writeFile(file, raw);
+    const directory = await mkdtemp(path.join(root, "io-"));
+    const fd = await openWorkerPrompt(file, "agy-jsonl", directory);
+    try { assert.equal(await fd.readFile("utf8"), stdinPayload("agy", expected)); }
+    finally { await fd.close(); }
   }
 });
 
