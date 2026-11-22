@@ -52,17 +52,24 @@ def main():
             for target, expected in cases:
                 page = browser.new_page()
                 try:
-                    page.add_init_script("localStorage.setItem('portal.schedule.mode.v1','list'); localStorage.setItem('portal.schedule.workFilter.v1','open')")
+                    page.add_init_script("""
+                        localStorage.setItem('portal.schedule.mode.v1', 'list');
+                        localStorage.setItem('portal.schedule.workFilter.v1', 'open');
+                        localStorage.setItem('portal.schedule.layers.v1', JSON.stringify({work:false, queue:false, milestone:false}));
+                    """)
+                    page.route("**/api/portal/ledger**", lambda route: route.fulfill(json={"configured": False}))
                     page.route("**/board-schedule", lambda route: route.fulfill(status=200, content_type="application/json", body=json.dumps(BOARD, ensure_ascii=False)))
                     page.route("**/schedule-personal", lambda route: route.fulfill(status=403, content_type="application/json", body='{"error":"personal-schedule-identity-required"}'))
                     page.route("**/api/portal", lambda route: route.fulfill(status=200, content_type="application/json", body='{"board":{"port":1}}'))
-                    page.goto(f"{args.base.rstrip('/')}/schedule?{urlencode({'item': target, 'date': DATE})}", wait_until="networkidle")
+                    page.goto(f"{args.base.rstrip('/')}/schedule?{urlencode({'item': target, 'date': DATE})}", wait_until="domcontentloaded")
                     detail = page.get_by_test_id("schedule-event-detail-backdrop")
                     detail.wait_for(state="visible", timeout=10000)
                     assert expected in detail.inner_text(), target
                     assert page.get_by_text("일정을 찾지 못했습니다.", exact=False).count() == 0, target
                     assert page.evaluate("localStorage.getItem('portal.schedule.mode.v1')") == "list", target
                     assert page.evaluate("localStorage.getItem('portal.schedule.workFilter.v1')") == "open", target
+                    hidden = page.evaluate("JSON.parse(localStorage.getItem('portal.schedule.layers.v1'))")
+                    assert hidden[target.split(':', 1)[0]] is False, target
                     print(f"PASS {target}")
                 finally:
                     page.close()
