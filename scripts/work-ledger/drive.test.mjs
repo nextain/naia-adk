@@ -117,8 +117,8 @@ for (const withDrive of [false, true])
     delete env.NODE_TEST_CONTEXT;
     const call = async (...args) => (await run(process.execPath, [ledgerScript, ...args], { cwd: root, env })).stdout.trim();
     // Promise-only registration, as the post guard instructs: title, due, channel, message.
-    const first = (await call("add", "--role", "lead", "--title", "15시까지 올림", "--due", "2099-01-02T06:00:00Z", "--channel", "111", "--msg-id", "222")).split("\n")[0];
-    const second = (await call("add", "--role", "lead", "--title", "둘째", "--due", "2099-01-02T07:00:00Z", "--channel", "111", "--msg-id", "223", ...config)).split("\n")[0];
+    const first = await call("add", "--role", "lead", "--title", "15시까지 올림", "--due", "2099-01-02T06:00:00Z", "--channel", "111", "--msg-id", "222");
+    const second = await call("add", "--role", "lead", "--title", "둘째", "--due", "2099-01-02T07:00:00Z", "--channel", "111", "--msg-id", "223", ...config);
     // The same wrapper can record a result with or without a drive configuration.
     await call("touch", first, "--role", "lead", ...config);
     const resultUrl = "https://example.org/reports/first";
@@ -133,6 +133,28 @@ for (const withDrive of [false, true])
     assert.deepEqual([ledger.report.last_msg_id, ledger.report.every_min, ledger.report.channel], ["333", 120, "111"]);
     assert.match(await call("list", "--role", "lead"), new RegExp(`${first} \\[done\\] 2099-01-02T06:00:00Z 15시까지 올림`));
   });
+
+test("add prints only the card ID to stdout and leaves it last when the shell merges stderr", async () => {
+  const { root } = await setup(config => ({ ...config, intake: { enabled: true } }));
+  const add = [ledgerScript, "add", "--title", "Draft", "--due", "2099-01-02T06:00:00Z",
+    "--channel", "room", "--msg-id", "request", "--role", "lead", "--root", root];
+  const id = "draft_1-review";
+  const { stdout, stderr } = await run(process.execPath, [...add, "--id", id]);
+  assert.equal(stdout, `${id}\n`);
+  assert.match(stderr, /^지금부터 -?\d+분 뒤\n$/);
+
+  // Hold stderr until the event loop is idle to reproduce a backed-up pipe deterministically.
+  const bufferedStderr = "data:text/javascript," +
+    "process.stderr.cork(); process.once('beforeExit', () => process.stderr.uncork());";
+  const replay = await run("bash", ["-o", "pipefail", "-c", '"$@" 2>&1 | tail -n 1',
+    "ledger-add", process.execPath, "--import", bufferedStderr, ...add]);
+  assert.equal(replay.stdout, `${id}\n`);
+
+  await assert.rejects(run(process.execPath, [...add, "--id", "another-card"]), {
+    code: 1, stdout: "", stderr: /^Source already belongs to card .+\n$/,
+  });
+  assert.deepEqual((await readLedger(root, "lead")).items.map(item => item.id), [id]);
+});
 
 test("a drive pass leaves waiting_human and every item without an instruction alone", async () => {
   const { root, config } = await setup();

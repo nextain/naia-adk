@@ -1,0 +1,16 @@
+{
+  "work": "work-ledger-add-output",
+  "repository_docs": {
+    "status": "UPDATED",
+    "files": ["docs/common/work-ledger.md"]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "files": ["docs/common/work-ledger.md"],
+    "detail": "The CLI guide identifies the card ID on stdout and the due-time hint on stderr."
+  },
+  "reusable_learning": {
+    "status": "N/A",
+    "reason": "The CLI guide and its regression tests cover this existing card-ID contract."
+  }
+}

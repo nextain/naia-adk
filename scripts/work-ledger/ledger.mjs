@@ -710,15 +710,16 @@ if (
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
 )
   main()
-    .then((value) =>
-      {
-        console.log(typeof value === "string" ? value : JSON.stringify(value));
-        const { opts, positional } = parseArgs(process.argv.slice(2));
-        if (positional[0] === "drive" && value.errors.length) process.exitCode = 1;
-        if (positional[0] === "add" && validDate(opts.due))
-          console.log(`지금부터 ${Math.round((Date.parse(opts.due) - Date.now()) / 60000)}분 뒤`);
-      },
-    )
+    .then(async (value) => {
+      const { opts, positional } = parseArgs(process.argv.slice(2));
+      if (positional[0] === "add" && validDate(opts.due)) {
+        console.error(`지금부터 ${Math.round((Date.parse(opts.due) - Date.now()) / 60000)}분 뒤`);
+        // Flush queued diagnostics before the ID when the shell merges stderr and stdout.
+        await new Promise(resolve => process.stderr.write("", resolve));
+      }
+      console.log(typeof value === "string" ? value : JSON.stringify(value));
+      if (positional[0] === "drive" && value.errors.length) process.exitCode = 1;
+    })
     .catch((error) => {
       console.error(error.message);
       process.exitCode = 1;
