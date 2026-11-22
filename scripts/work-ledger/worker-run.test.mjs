@@ -11,7 +11,7 @@ import { watch } from "./ledger-watch.mjs";
 import { plan as planDueTimers, reconcileCurrent } from "./due-timer.mjs";
 import { approveFixture } from "./due-test-helper.mjs";
 import { tick as driveTick } from "./drive.mjs";
-import { openWorkerPrompt, readNativeResult, requireFreshInvocation } from "./native-session-result.mjs";
+import { isInitialCapacityRefusal, openWorkerPrompt, readNativeResult, requireFreshInvocation } from "./native-session-result.mjs";
 import {
   detectTool,
   execWorkerRun,
@@ -447,6 +447,111 @@ test("a card keeps its shuffled producer and reviews with another configured fam
     await save();
   }
   assert.deepEqual(choices, new Set(["first", "second"]));
+});
+
+test("a tier-two capacity refusal keeps the card and hands review to another eligible family", async () => {
+  const { root } = await setup({ roles: [{ role: "editor", tier_profile: "config/team.json" }] });
+  const prompt = path.join(root, "task.md");
+  const trace = path.join(root, "calls");
+  const adapter = path.join(root, "worker.cjs");
+  await writeFile(prompt, "The original task.");
+  await writeFile(adapter, `
+    const fs = require("node:fs");
+    const [model, trace] = process.argv.slice(2);
+    const input = fs.readFileSync(0, "utf8");
+    fs.appendFileSync(trace, model + "\\n");
+    if (fs.readFileSync(trace, "utf8").trim().split("\\n").length === 1) process.exit(75);
+    process.stdout.write(model + ": " + input);
+  `);
+  const candidates = ["red", "blue", "green"].map(model => ({
+    id: model, family: model, cli: process.execPath, model, result_mode: "stdout", unavailable_exit_codes: [75],
+    argv: ["{cli}", adapter, "{model}", trace],
+  }));
+  const shuffle = { tier: 2, selection: "shuffle" };
+  await writeFile(path.join(root, "config/team.json"), JSON.stringify({
+    tiers: { 2: { candidates } }, worker_steps: { implementation: shuffle, review: shuffle },
+  }));
+  await ledgerMain(["add", "--root", root, "--role", "editor", "--id", "document", "--title", "Draft",
+    "--channel", "original", "--msg-id", "21", "--due", "2026-11-22T12:00:00Z"]);
+  const options = { root, role: "editor", parent: "document", id: "writer", name: "Draft", result: "answer", prompt, foreground: true };
+  const draft = await startWorkerRun(options, []);
+  assert.equal(draft.status, "done");
+  assert.equal(draft.parent, "document");
+  assert.equal(draft.from.msg_id, "21");
+  assert.equal(draft.profile_attempts[0].exit, 75);
+  assert.equal(draft.profile_attempts[0].reason, "provider-unavailable");
+  assert.notEqual(draft.profile_attempts[0].profile.family, draft.profile.family);
+  assert.equal(await readFile(path.join(root, "answer"), "utf8"), draft.profile.model + ": The original task.");
+
+  await writeFile(trace, "");
+  const review = { ...options, foreground: false, id: "reviewer", result: "judgment",
+    prompt: path.join(root, "answer"), "review-of": "writer" };
+  const plan = await startWorkerRun({ ...review, dry: true }, []);
+  await startWorkerRun(review, [], { runner: async () => {} });
+  const { item } = await execWorkerRun(review, plan.command);
+  assert.equal(item.status, "done");
+  assert.equal(item.review_of, "writer");
+  assert.equal(item.profile_attempts[0].profile.model, plan.profile.model);
+  assert.equal(new Set([draft.profile.family, item.profile.family, item.profile_attempts[0].profile.family]).size, 3);
+  assert.equal(await readFile(path.join(root, "judgment"), "utf8"), item.profile.model + ": " + draft.profile.model + ": The original task.");
+});
+
+test("native quota refusals can advance only before any assistant output or tool use", async () => {
+  const { root } = await setup();
+  const file = path.join(root, "events.jsonl");
+  const message = "You’ve hit your usage limit. Try again later.";
+  const codex = [{ type: "thread.started", thread_id: "c1" }, { type: "turn.started" },
+    { type: "error", message }, { type: "turn.failed", error: { message } }];
+  const claude = [{ type: "system", subtype: "init", session_id: "c1" },
+    { type: "assistant", session_id: "c1", is_api_error_message: true, error: "rate_limit", api_error_status: 429 },
+    { type: "result", session_id: "c1", is_error: true, api_error_status: 429, num_turns: 1, usage: { input_tokens: 0, output_tokens: 0 } }];
+  const check = async (mode, events, expected) => {
+    await writeFile(file, events.map(e => JSON.stringify(e)).join("\n"));
+    assert.equal(await isInitialCapacityRefusal(mode, file), expected);
+  };
+  await check("codex-jsonl", codex, true);
+  await check("claude-jsonl", claude, true);
+  await check("codex-jsonl", [codex[0], codex[1], { type: "item.started", item: { type: "command_execution" } }, ...codex.slice(2)], false);
+  await check("codex-jsonl", [codex[0], codex[1], { type: "error", message: "Internal server error" }, codex[3]], false);
+  await check("claude-jsonl", [claude[0], { type: "assistant", message: { content: [{ type: "text", text: message }] } }, claude[2]], false);
+  await check("claude-jsonl", [claude[0], claude[1], { ...claude[2], usage: { input_tokens: 80, output_tokens: 1 } }], false);
+  await check("claude-jsonl", [claude[0], claude[1], { ...claude[2], session_id: "another" }], false);
+  await check("codex-jsonl", [codex[0], null, ...codex.slice(2)], false);
+  await check("stdout", codex, false);
+});
+
+test("Muse can retry internally, but every provider attempt must be a refusal on the same model task", async () => {
+  const { root } = await setup();
+  const file = path.join(root, "muse.jsonl");
+  const frame = (type, event) => ({ payload_type: type, stream: { kind: "session", id: "s" },
+    payload: { command_id: "c", ...(event ? { task_id: "t", event } : {}) } });
+  const start = ["runtime.command.accepted", "session.run.linked", "run.model.configured", "turn.input.user",
+    "run.lifecycle.started", "task.stream.linked", "task.lifecycle.proposed", "task.lifecycle.accepted",
+    "task.lifecycle.side_effect_intent", "task.lifecycle.started"].map(type => frame(type));
+  start[0].payload.command_kind = "turn.submit";
+  start[5].payload.task_id = "t";
+  start[6].payload.event = { task_kind: "model.meta.response" };
+  start[8].payload.event = { operation: "model.meta.response" };
+  const status = (attempt, phase, failure = {}) => frame("task.lifecycle.status", { details: { phase,
+    facets: [{ kind: "external_attempt", operation: "model.response", attempt, ...failure }] } });
+  const quota = { error_kind: "rate_limited", http_status: 429 };
+  const stream = [...start, status(1, "opening_stream"), status(1, "retry_scheduled", quota),
+    status(2, "opening_stream"), status(2, "stream_failed", quota), frame("task.lifecycle.failed"), frame("run.terminal.failed")];
+  stream.at(-1).payload.terminal = "failed";
+  const usage = { payload_type: "run.usage", stream: { kind: "exec.usage" },
+    payload: { command_id: "c", run_stream: { id: "c" }, calls: 2, failed_calls: 2, completed_calls: 0, cancelled_calls: 0 } };
+  const check = async (frames, expected) => {
+    const events = frames.map((f, i) => ({ ...f, sequence: i + 1 }));
+    events.splice(-1, 0, usage);
+    await writeFile(file, events.map(e => JSON.stringify(e)).join("\n"));
+    assert.equal(await isInitialCapacityRefusal("muse-jsonl", file), expected);
+  };
+  await check(stream, true);
+  await check(stream.toSpliced(11, 1, status(1, "retry_scheduled", { error_kind: "network", http_status: 502 })), false);
+  await check(stream.toSpliced(8, 1, frame("task.lifecycle.side_effect_intent", { operation: "shell" })), false);
+  await check(stream.toSpliced(12, 0, frame("turn.output.assistant")), false);
+  usage.payload.completed_calls = 1;
+  await check(stream, false);
 });
 
 test("a tier-one card tries its configured order only when a sensor is unavailable", async () => {

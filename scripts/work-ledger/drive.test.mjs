@@ -338,6 +338,43 @@ test("a partial scheduled result from a failing native worker stays open", async
   assert.equal((await item(root, "writer", "partial")).status, "open");
 });
 
+test("an exhausted scheduled tier waits on its original card without spending another attempt", async () => {
+  const { root, config } = await setup();
+  config.roles[1].tier_profile = "config/writer.json";
+  await writeFile(path.join(root, "config/work-ledger.json"), JSON.stringify(config));
+  const candidates = ["first", "second"].map(id => ({
+    id, family: id, model: id, cli: process.execPath, result_mode: "stdout", unavailable_exit_codes: [75],
+    argv: ["{cli}", "-e", "process.exit(75)", "{model}"],
+  }));
+  const profile = { tiers: { 2: { candidates } }, worker_steps: { implementation: { tier: 2, selection: "shuffle" } } };
+  const file = path.join(root, "config/writer.json");
+  await writeFile(file, JSON.stringify(profile));
+  await cli(root, "add", "--role", "writer", "--id", "capacity", "--title", "Draft", "--due", PAST,
+    "--channel", "111", "--msg-id", "222", "--prompt", "task.md", "--result-file", "reply.md");
+  await pass(root, config);
+  const run = (await item(root, "writer", "capacity")).drive.run;
+  await until(async () => (await item(root, "writer", run.worker_id))?.status === "failed", "provider refusals");
+  await until(async () => !(await drive()).workerAlive(run), "admission process exited");
+  const refused = await item(root, "writer", run.worker_id);
+  assert.equal(refused.reason, "provider-unavailable");
+  assert.equal(refused.profile_attempts.length, 1);
+  assert.notEqual(refused.profile_attempts[0].profile.candidate, refused.profile.candidate);
+  for (const delay of [60, 120]) {
+    const check = await pass(root, config, now + delay * MIN);
+    assert.deepEqual(check.launched, []);
+    assert.ok(check.alerts.some(alert => alert.reason === "worker-unavailable"));
+  }
+  const card = await item(root, "writer", "capacity");
+  assert.equal(card.status, "open");
+  assert.equal(card.drive.run.attempts, 1);
+  assert.equal(card.drive.model, refused.profile.model);
+  for (const candidate of candidates) candidate.argv[2] = "process.stdout.write('accepted')";
+  await writeFile(file, JSON.stringify(profile));
+  await cli(root, "start", "capacity", "--role", "writer");
+  await until(() => existsSync(path.join(root, "reply.md")), "answer after capacity returned");
+  assert.equal(await readFile(path.join(root, "reply.md"), "utf8"), "accepted");
+});
+
 test("queued registration and launch retain the original card's shuffled assignment", async () => {
   const { root, config } = await setup();
   config.roles[1].tier_profile = "config/writer.json";

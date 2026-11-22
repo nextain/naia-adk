@@ -55,6 +55,75 @@ function startId(mode, e) {
   }
 }
 
+// Muse may retry its first model request internally. Only a single model task
+// whose provider attempts all ended in a 429 can be offered to another worker.
+function museCapacityRefusal(events, session) {
+  const start = ["runtime.command.accepted", "session.run.linked", "run.model.configured", "turn.input.user",
+    "run.lifecycle.started", "task.stream.linked", "task.lifecycle.proposed", "task.lifecycle.accepted",
+    "task.lifecycle.side_effect_intent", "task.lifecycle.started"];
+  if (!start.every((type, i) => events[i]?.payload_type === type)) return false;
+  const command = events[0].payload.command_id;
+  const task = events[5].payload?.task_id;
+  const usages = events.filter(e => e?.stream?.kind === "exec.usage");
+  if (!command || !task || usages.length !== 1) return false;
+  const usage = usages[0];
+  const frames = events.filter(e => e !== usage);
+  if (usage.payload_type !== "run.usage" || usage.payload?.command_id !== command || usage.payload?.run_stream?.id !== command ||
+      usage.payload.completed_calls !== 0 || usage.payload.cancelled_calls !== 0 ||
+      !frames.every((e, i) => e?.stream?.kind === "session" && e.stream.id === session && e.sequence === i + 1 &&
+        e.payload?.command_id === command && (!e.payload.task_id || e.payload.task_id === task))) return false;
+  if (frames[6]?.payload.event?.task_kind !== "model.meta.response" || frames[8]?.payload.event?.operation !== "model.meta.response") return false;
+  const statuses = frames.slice(start.length, -2);
+  const failed = frames.at(-2), terminal = frames.at(-1);
+  if (failed?.payload_type !== "task.lifecycle.failed" || terminal?.payload_type !== "run.terminal.failed" ||
+      terminal.payload.terminal !== "failed" || terminal.payload.text || !statuses.length || statuses.length % 2 !== 0 ||
+      usage.payload.calls !== statuses.length / 2 || usage.payload.failed_calls !== usage.payload.calls) return false;
+  return statuses.every((frame, i) => {
+    const info = frame.payload.event?.details;
+    const attempt = info?.facets?.find(f => f?.kind === "external_attempt");
+    if (frame.payload_type !== "task.lifecycle.status" || frame.payload.task_id !== task ||
+        attempt?.operation !== "model.response" || attempt.attempt !== Math.floor(i / 2) + 1) return false;
+    if (i % 2 === 0) return info.phase === "opening_stream";
+    return info.phase === (i === statuses.length - 1 ? "stream_failed" : "retry_scheduled") &&
+      attempt.error_kind === "rate_limited" && attempt.http_status === 429;
+  });
+}
+
+// Match only a provider's initial refusal. Any intervening assistant, tool or
+// unknown event is evidence that work may already have started on this card.
+export async function isInitialCapacityRefusal(mode, file) {
+  if (!["codex-jsonl", "claude-jsonl", "muse-jsonl"].includes(mode)) return false;
+  const input = await open(file, "r");
+  let events;
+  try {
+    const limit = 128 * 1024;
+    const size = (await input.stat()).size;
+    if (!size || size > limit) return false;
+    const buf = Buffer.alloc(size + 1);
+    const { bytesRead } = await input.read(buf);
+    if (bytesRead !== size) return false;
+    events = buf.toString("utf8", 0, size).trim().split(/\r?\n/).map(line => JSON.parse(line));
+  } catch (error) {
+    if (error instanceof SyntaxError) return false;
+    throw error;
+  } finally { await input.close(); }
+  const [start, second, third, last] = events;
+  const session = start && startId(mode, start);
+  if (typeof session !== "string" || !session) return false;
+  if (mode === "muse-jsonl") return museCapacityRefusal(events, session);
+  if (mode === "codex-jsonl") {
+    const message = third?.message;
+    return events.length === 4 && second?.type === "turn.started" && third?.type === "error" &&
+      events.every(e => !e?.thread_id || e.thread_id === session) &&
+      typeof message === "string" && /^you['’]ve hit your usage limit\b/i.test(message) &&
+      last?.type === "turn.failed" && last.error?.message === message;
+  }
+  return events.length === 3 && second?.type === "assistant" && second.is_api_error_message === true &&
+    second.error === "rate_limit" && second.api_error_status === 429 && second.session_id === session &&
+    third?.type === "result" && third.is_error === true && third.api_error_status === 429 &&
+    third.session_id === session && third.num_turns === 1 && third.usage?.input_tokens === 0 && third.usage?.output_tokens === 0;
+}
+
 // Parse the private stdout snapshot of the launched process. Only native
 // envelopes can open or finish the run. Text inside an assistant message is data.
 export async function readNativeResult(mode, file) {
