@@ -43,6 +43,7 @@ async function setup(customConfig) {
         role: "minho",
         wake_dir: ".agents/work/l4/wake",
         channels: [],
+        human_ids: ["900"],
         report: { every_min: 0, channel: "ch-report" },
       },
       {
@@ -317,6 +318,15 @@ test("strict parent blocks untracked starts and checks the selected role in dry 
   await assert.rejects(readLedger(root, "minho"), { code: "ENOENT" });
 });
 
+const cancellationDeps = {
+  now, env: { TEST_BOT_TOKEN: "fixture" },
+  fetchImpl: async url => {
+    const id = url.pathname.split("/").at(-1);
+    const card = { 901: "dropped", 902: "card-open" }[id];
+    return card ? Response.json({ id, author: { id: "900" }, content: "cancel " + card }) : new Response("", { status: 404 });
+  },
+};
+
 test("strict parent admits only an open work card before any process or ledger reservation", async () => {
   const { root } = await setup();
   const service = systemdFake();
@@ -325,8 +335,8 @@ test("strict parent admits only an open work card before any process or ledger r
       "--due", "2026-11-18T12:00:00Z", "--channel", "test-channel", "--msg-id", status], { now });
     const close = status === "done"
       ? ["done", status, "--result", "https://example.org/results/job"]
-      : ["drop", status, "--reason", "test closed card"];
-    await ledgerMain([...close, "--root", root, "--role", "minho"], { now });
+      : ["drop", status, "--reason", "test closed card", "--channel", "111", "--human-msg-id", "901"];
+    await ledgerMain([...close, "--root", root, "--role", "minho"], cancellationDeps);
     for (const dry of [true, false]) {
       await assert.rejects(startWorkerRun({ root, role: "minho", id: "worker-" + status, parent: status,
         name: "closed card", result: "out.md", "strict-parent": true, dry }, ["codex", "exec"], { runner: service.runner, now }), /open parent card/);
@@ -1045,8 +1055,10 @@ test("coexistence with existing ledger rows, due-timer, drive, ledger-watch, and
   assert.deepEqual(driveOut.launched, []);
 
   // 7. Parent human card drop/defer counts are unaffected by child worker rows.
-  await ledgerMain(["drop", "card-open", "--root", root, "--role", "minho", "--reason", "취소1"], { now });
-  assert.equal((await readLedger(root, "minho")).items.find((i) => i.id === "card-open").status, "dropped");
+  await ledgerMain(["drop", "card-open", "--root", root, "--role", "minho", "--reason", "취소1",
+    "--channel", "111", "--human-msg-id", "902"], cancellationDeps);
+  const parent = (await readLedger(root, "minho")).items.find((i) => i.id === "card-open");
+  assert.deepEqual([parent.status, parent.drop_count], ["dropped", 1]);
 
   // 8. validateLedger rejects malformed worker rows.
   const bad = structuredClone(await readLedger(root, "minho"));

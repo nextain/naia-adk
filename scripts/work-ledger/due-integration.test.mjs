@@ -45,7 +45,8 @@ const args = (root, command, id, more = []) => [command, ...(id ? [id] : []), '-
 const add = (root, more = []) => args(root, 'add', null, ['--id', 'job', '--title', 'work', '--due', due, '--channel', 'c', '--msg-id', 'm', ...more]);
 
 test('add, due, done and drop reconcile, preserving the ledger on timer failure', async t => {
-  const root = await setup(t), f = systemFake();
+  const root = await setup(t, { ...config, human_ids: ['900'], provider: { type: 'discord', token_env: 'FIXTURE_TOKEN' } });
+  const f = systemFake();
   assert.equal(await ledgerMain(add(root), { runner: f.runner, now }), 'job');
   assert.equal(f.timers.size, 1);
   const item = (await readLedger(root, 'a')).items[0];
@@ -61,7 +62,13 @@ test('add, due, done and drop reconcile, preserving the ledger on timer failure'
   assert.equal(f.timers.size, 0);
   await assert.rejects(ledgerMain(args(root, 'due', 'job', ['--due', due, '--reason', 'no']), { runner: f.runner, now }), /open/);
   await ledgerMain(add(root, ['--id', 'second']), { runner: f.runner, now });
-  await ledgerMain(args(root, 'drop', 'second', ['--reason', 'cancel']), { runner: f.runner, now });
+  const drop = args(root, 'drop', 'second', ['--reason', 'cancel']);
+  await assert.rejects(ledgerMain(drop, { runner: f.runner, now }), /--human-msg-id/);
+  assert.equal(f.timers.size, 1);
+  await ledgerMain([...drop, '--channel', '111', '--human-msg-id', '222'], {
+    runner: f.runner, now, env: { FIXTURE_TOKEN: 'fixture' },
+    fetchImpl: async () => Response.json({ id: '222', author: { id: '900' }, content: 'cancel second' }),
+  });
   assert.equal(f.timers.size, 0);
   const warnings = [];
   const failed = async () => { throw Error('fake unavailable'); };

@@ -641,30 +641,48 @@ test('fault 3: watcher-unit-health wakes role on failed or N consecutive failure
   assert.equal(candidatesAfterRecovery.candidates['naia-l4-watch.service'].status, 'resolved');
 });
 
+async function cancellationFixture(root, cardIds) {
+  await mkdir(path.join(root, 'config'), { recursive: true });
+  await writeFile(path.join(root, 'config/work-ledger.json'), JSON.stringify({
+    provider: { type: 'discord', token_env: 'FIXTURE_TOKEN', guild_id: '777' },
+    roles: [{ role: 'minho', human_ids: ['900'] }],
+  }));
+  const messages = Object.fromEntries(cardIds.map((id, i) => [`200000000000000000${i}`, id]));
+  return (card, reason) => ledgerCli(['drop', '--root', root, '--role', 'minho', '--id', card, '--reason', reason,
+    '--channel', '111', '--human-msg-id', `200000000000000000${cardIds.indexOf(card)}`], {
+    env: { FIXTURE_TOKEN: 'fixture' },
+    fetchImpl: async url => {
+      const id = url.pathname.split('/').at(-1);
+      return Response.json({ id, author: { id: '900' }, content: 'cancel ' + messages[id] });
+    },
+  });
+}
+
 test('fault 4: work-ledger refuses >2 drops (including drop+recreate) and >2 due deferrals on human cards into escalated_human, and blocks reply-without-ledger closure', async () => {
   const root = await makeTempDir('ledger-fault-');
   const t0 = Date.parse('2026-11-15T06:00:00Z');
   const msgDrop = '1568971282698211489';
+  const drop = await cancellationFixture(root, ['dsk-1', 'dsk-2', 'dsk-3']);
 
   // (a) Drop+recreate 3 times on same human msg_id -> 3rd drop refused & transitioned to escalated_human.
   await ledgerCli([
     'add', '--root', root, '--role', 'minho', '--id', 'dsk-1',
     '--title', '딥시크 검토 1', '--due', '2026-11-15T08:00:00Z', '--channel', 'ch-infra', '--msg-id', msgDrop,
   ]);
-  await ledgerCli(['drop', '--root', root, '--role', 'minho', '--id', 'dsk-1', '--reason', '1차 취소']);
+  await drop('dsk-1', '1차 취소');
 
   await ledgerCli([
     'add', '--root', root, '--role', 'minho', '--id', 'dsk-2',
     '--title', '딥시크 검토 2', '--due', '2026-11-15T09:00:00Z', '--channel', 'ch-infra', '--msg-id', msgDrop,
   ]);
-  await ledgerCli(['drop', '--root', root, '--role', 'minho', '--id', 'dsk-2', '--reason', '2차 취소']);
+  await drop('dsk-2', '2차 취소');
 
   await ledgerCli([
     'add', '--root', root, '--role', 'minho', '--id', 'dsk-3',
     '--title', '딥시크 검토 3', '--due', '2026-11-15T10:00:00Z', '--channel', 'ch-infra', '--msg-id', msgDrop,
   ]);
   await assert.rejects(
-    () => ledgerCli(['drop', '--root', root, '--role', 'minho', '--id', 'dsk-3', '--reason', '3차 취소 시도']),
+    () => drop('dsk-3', '3차 취소 시도'),
     /사람에게 올림/,
   );
 
@@ -1080,23 +1098,24 @@ test('rev1 blocker 1: generalized detached-worker gate blocks systemd-run, at/ba
 test('rev1 blocker 2 + ref 3: escalated_human done requires distinct --human-msg-id, post-done add stays blocked, and msg_id whitespace is normalized', async () => {
   const root = await makeTempDir('rev1-ledger-');
   const msgId = '1999000111222333444';
+  const drop = await cancellationFixture(root, ['esc-1', 'esc-2', 'esc-3']);
 
   await ledgerCli([
     'add', '--root', root, '--role', 'minho', '--id', 'esc-1',
     '--title', '1차 카드', '--due', '2026-11-15T08:00:00Z', '--channel', 'ch-1', '--msg-id', `  ${msgId}  `,
   ]);
-  await ledgerCli(['drop', '--root', root, '--role', 'minho', '--id', 'esc-1', '--reason', '1차']);
+  await drop('esc-1', '1차');
   await ledgerCli([
     'add', '--root', root, '--role', 'minho', '--id', 'esc-2',
     '--title', '2차 카드', '--due', '2026-11-15T09:00:00Z', '--channel', 'ch-1', '--msg-id', msgId,
   ]);
-  await ledgerCli(['drop', '--root', root, '--role', 'minho', '--id', 'esc-2', '--reason', '2차']);
+  await drop('esc-2', '2차');
   await ledgerCli([
     'add', '--root', root, '--role', 'minho', '--id', 'esc-3',
     '--title', '3차 카드', '--due', '2026-11-15T10:00:00Z', '--channel', 'ch-1', '--msg-id', `\t${msgId}\n`,
   ]);
   await assert.rejects(
-    () => ledgerCli(['drop', '--root', root, '--role', 'minho', '--id', 'esc-3', '--reason', '3차']),
+    () => drop('esc-3', '3차'),
     /사람에게 올림/,
   );
 
@@ -1114,11 +1133,6 @@ test('rev1 blocker 2 + ref 3: escalated_human done requires distinct --human-msg
     /원 지시와 다른 사람 확인 답글 번호/,
   );
 
-  await mkdir(path.join(root, 'config'), { recursive: true });
-  await writeFile(path.join(root, 'config/work-ledger.json'), JSON.stringify({
-    provider: { type: 'discord', token_env: 'FIXTURE_TOKEN', guild_id: '777' },
-    roles: [{ role: 'minho', human_ids: ['900'] }],
-  }));
   // The configured person's reply closes this card. The original remains reserved.
   await ledgerCli([
     'done', '--root', root, '--role', 'minho', '--id', 'esc-3',
