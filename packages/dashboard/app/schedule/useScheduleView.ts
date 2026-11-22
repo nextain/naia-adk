@@ -138,8 +138,24 @@ export function useScheduleView(props: ScheduleViewProps) {
   const companyRequests = useRef(createLatestRequestGuard())
   const skipInitialCompanyFetch = useRef(initialCompanyItems !== undefined)
 
-  // Read the detail link from the address once; show its layer even if the stored view hides it.
+  // Restore saved preferences first. A detail link overrides them for this visit only.
   useEffect(() => {
+    if (initialMode === undefined) {
+      setModeState(readStoredDisplayMode())
+    }
+    if (initialUnit === undefined) {
+      setUnitState(readStoredCalendarUnit())
+    }
+    if (initialLayers === undefined) {
+      setLayersState(readStoredScheduleLayers())
+    }
+    if (initialWorkFilter === undefined) {
+      setWorkFilterState(readStoredWorkFilter())
+    }
+    if (initialShowRegular === undefined) {
+      setShowRegularState(readStoredShowRegular())
+    }
+
     if (initialDeepLink === undefined && typeof window !== "undefined") {
       const link = readScheduleDeepLink(window.location.search)
       if (link) {
@@ -177,26 +193,6 @@ export function useScheduleView(props: ScheduleViewProps) {
   const [saving, setSaving] = useState<boolean>(false)
   const [selectedWorkEvent, setSelectedWorkEvent] = useState<CalendarCellEvent | null>(initialSelectedEvent)
   const [dayListDate, setDayListDate] = useState<string | null>(initialDayListDate)
-
-  // 브라우저 저장소에서 보기 설정 복원 (시험용 초기값이 없을 때)
-  useEffect(() => {
-    if (initialMode === undefined) {
-      setModeState(readStoredDisplayMode())
-    }
-    if (initialUnit === undefined) {
-      setUnitState(readStoredCalendarUnit())
-    }
-    if (initialLayers === undefined) {
-      setLayersState(readStoredScheduleLayers())
-    }
-    if (initialWorkFilter === undefined) {
-      setWorkFilterState(readStoredWorkFilter())
-    }
-    if (initialShowRegular === undefined) {
-      setShowRegularState(readStoredShowRegular())
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
 
   const setMode = (next: ScheduleDisplayMode) => {
     setModeState(next)
