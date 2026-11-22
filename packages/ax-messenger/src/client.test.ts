@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { EventEmitter } from "node:events"
 import test from "node:test"
 import { MatrixEvent } from "matrix-js-sdk"
 import { AxMessengerClient } from "./client.js"
@@ -99,6 +100,7 @@ test("시작 성공은 새 대화·방 바뀜 받기를 건다", async () => {
   let stopped = false
   const client = AxMessengerClient.fromSession(SESSION, fakeClient({
     on: (event: string, handler: (...args: never[]) => void) => { handlers.set(event, handler) },
+    off: (event: string) => { handlers.delete(event) },
     getRooms: () => [],
     startClient: async () => undefined,
     stopClient: () => { stopped = true },
@@ -116,6 +118,119 @@ test("시작 성공은 새 대화·방 바뀜 받기를 건다", async () => {
   assert.equal(roomsChanged, 1)
   client.stop()
   assert.equal(stopped, true)
+})
+
+test("정지 전 시작한 초대 수락이 나중에 끝나도 방 변경을 알리지 않는다", async () => {
+  const events = new EventEmitter()
+  let finishJoin!: () => void
+  const pendingJoin = new Promise<void>((resolve) => { finishJoin = resolve })
+  let joins = 0
+  let changes = 0
+  const client = AxMessengerClient.fromSession(SESSION, fakeClient({
+    on: events.on.bind(events),
+    off: events.off.bind(events),
+    getRooms: () => [{ roomId: "!invite:example.test", getMyMembership: () => "invite" }],
+    joinRoom: () => { joins += 1; return pendingJoin },
+    startClient: async () => undefined,
+    stopClient: () => undefined,
+  }))
+  await client.start(undefined, () => { changes += 1 })
+  events.emit("sync")
+  assert.equal(joins, 1)
+  client.stop()
+  finishJoin()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(changes, 0)
+})
+
+test("정지 후 다시 시작하면 이전 방 콜백을 막고 새 콜백은 받는다", async () => {
+  const events = new EventEmitter()
+  let finishJoin!: () => void
+  const pendingJoin = new Promise<void>((resolve) => { finishJoin = resolve })
+  let invited = true
+  let oldChanges = 0
+  let newChanges = 0
+  let stopCalls = 0
+  const client = AxMessengerClient.fromSession(SESSION, fakeClient({
+    on: events.on.bind(events),
+    off: events.off.bind(events),
+    getRooms: () => invited ? [{ roomId: "!invite:example.test", getMyMembership: () => "invite" }] : [],
+    joinRoom: () => pendingJoin,
+    startClient: async () => undefined,
+    stopClient: () => { stopCalls += 1 },
+  }))
+  await client.start(undefined, () => { oldChanges += 1 })
+  events.emit("sync")
+  client.stop()
+  client.stop()
+  invited = false
+  await client.start(undefined, () => { newChanges += 1 })
+  events.emit("sync")
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(newChanges, 1)
+  finishJoin()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(oldChanges, 0)
+  assert.equal(newChanges, 1)
+  client.stop()
+  assert.equal(stopCalls, 3)
+})
+
+test("정지 전 여러 번 시작한 호출자의 콜백은 각각 동작하고 정지하면 해제된다", async () => {
+  const events = new EventEmitter()
+  let external = 0
+  events.on("sync", () => { external += 1 })
+  const client = AxMessengerClient.fromSession(SESSION, fakeClient({
+    on: events.on.bind(events),
+    off: events.off.bind(events),
+    getRooms: () => [],
+    startClient: async () => undefined,
+    stopClient: () => undefined,
+  }))
+  let first = 0
+  let second = 0
+  await client.start(undefined, () => { first += 1 })
+  await client.start(undefined, () => { second += 1 })
+  events.emit("sync")
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual([first, second], [1, 1])
+  client.stop()
+  assert.equal(events.listenerCount("sync"), 1)
+  events.emit("sync")
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.deepEqual([first, second], [1, 1])
+  assert.equal(external, 2)
+})
+
+test("정지 직전 전달 중이던 이전 리스너는 메시지나 동기화 작업을 넘기지 않는다", async () => {
+  const events = new EventEmitter()
+  let oldMessages = 0
+  let newMessages = 0
+  let roomReads = 0
+  const client = AxMessengerClient.fromSession(SESSION, fakeClient({
+    on: events.on.bind(events),
+    off: events.off.bind(events),
+    getRoom: () => fakeRoom(),
+    getRooms: () => { roomReads += 1; return [] },
+    startClient: async () => undefined,
+    stopClient: () => undefined,
+  }))
+  await client.start(() => { oldMessages += 1 })
+  const [oldMessage] = events.listeners("event")
+  const [oldSync] = events.listeners("sync")
+  assert.ok(oldMessage)
+  assert.ok(oldSync)
+  client.stop()
+  await client.start(() => { newMessages += 1 })
+  oldMessage(textEvent("이전", 1))
+  oldSync()
+  events.emit("event", textEvent("새 메시지", 2))
+  assert.equal(oldMessages, 0)
+  assert.equal(newMessages, 1)
+  assert.equal(roomReads, 0)
+  client.stop()
+  assert.equal(events.listenerCount("event"), 0)
+  assert.equal(events.listenerCount("sync"), 0)
 })
 
 test("시작 실패는 사용자 문구로 감싼다", async () => {

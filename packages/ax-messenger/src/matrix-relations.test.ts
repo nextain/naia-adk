@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { MatrixEvent } from "matrix-js-sdk"
+import { createClient, MatrixEvent } from "matrix-js-sdk"
 import { AxMessengerClient, messageFromEvent, type MatrixClient } from "./index.js"
 
 const roomId = "!shared:local"
@@ -134,4 +134,103 @@ test("실시간 콜백은 가입한 방의 메시지만 전달한다", async () 
   membership = "join"
   handler(incoming)
   assert.deepEqual(seen, ["내용"])
+})
+
+test("각 세션은 캐시 밖 원문을 자기 방에서 조회해 답한다", async () => {
+  const calls: string[] = []
+  const sent: Record<string, unknown>[] = []
+  const make = (userId: string) => AxMessengerClient.fromSession(session(userId), {
+    getRoom: (id: string) => id === roomId ? { getMyMembership: () => "join", getLiveTimeline: () => ({ getEvents: () => [] }) } : null,
+    fetchRoomEvent: async (room: string, id: string) => { calls.push(`${userId}:${room}:${id}`); return event(id, alice, { msgtype: "m.text", body: "지난 글" }).event },
+    sendMessage: async (_room: string, content: Record<string, unknown>) => { sent.push(content) },
+  } as unknown as MatrixClient)
+  await make(alice).sendText(roomId, "답1", { replyToEventId: "$old" })
+  await make(bob).sendText(roomId, "답2", { replyToEventId: "$old" })
+  assert.deepEqual(calls, [`${alice}:${roomId}:$old`, `${bob}:${roomId}:$old`])
+  assert.equal(sent[0].body, "> <@alice:local> 지난 글\n\n답1")
+  assert.deepEqual(sent[1]["m.relates_to"], { "m.in_reply_to": { event_id: "$old" } })
+})
+
+test("SDK 단건 조회는 세션별 인증과 요청한 방·이벤트 경로를 사용한다", async () => {
+  const requests: Array<{ path: string; authorization: string | null }> = []
+  const fetchFn: typeof fetch = async (input, init) => {
+    requests.push({ path: new URL(String(input)).pathname, authorization: new Headers(init?.headers).get("authorization") })
+    return new Response(JSON.stringify(event("$old", alice, { msgtype: "m.text", body: "지난 글" }).event), { status: 200, headers: { "Content-Type": "application/json" } })
+  }
+  for (const userId of [alice, bob]) {
+    const matrix = createClient({ baseUrl: "http://127.0.0.1:1", userId, accessToken: `${userId}-token`, fetchFn })
+    matrix.getRoom = (() => ({ getMyMembership: () => "join", getLiveTimeline: () => ({ getEvents: () => [] }) })) as unknown as MatrixClient["getRoom"]
+    matrix.sendMessage = (async () => ({})) as unknown as MatrixClient["sendMessage"]
+    await AxMessengerClient.fromSession(session(userId), matrix).sendText(roomId, "답", { replyToEventId: "$old" })
+  }
+  assert.deepEqual(requests, [alice, bob].map((userId) => ({
+    path: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/event/${encodeURIComponent("$old")}`,
+    authorization: `Bearer ${userId}-token`,
+  })))
+})
+
+test("가입하지 않은 방과 잘못된 ID는 조회하거나 발송하지 않는다", async () => {
+  let fetches = 0, sends = 0
+  let membership = "invite"
+  const client = AxMessengerClient.fromSession(session(bob), {
+    getRoom: (id: string) => id === roomId ? { getMyMembership: () => membership, getLiveTimeline: () => ({ getEvents: () => [] }) } : null,
+    fetchRoomEvent: async () => { fetches++; throw new Error("unexpected") },
+    sendMessage: async () => { sends++ },
+  } as unknown as MatrixClient)
+  await assert.rejects(client.sendText(roomId, "답", { replyToEventId: "$old" }))
+  await assert.rejects(client.sendText("!other:local", "답", { replyToEventId: "$old" }))
+  membership = "join"
+  for (const id of ["", "invalid", "$bad id"]) await assert.rejects(client.sendText(roomId, "답", { replyToEventId: id }))
+  assert.equal(fetches, 0)
+  assert.equal(sends, 0)
+})
+
+test("캐시 원문을 우선하고 반환 원문의 방·ID·열람 가능성을 검사한다", async () => {
+  const original = event("$old", alice, { msgtype: "m.text", body: "원문" })
+  let cached: MatrixEvent[] = [original]
+  let response = original.event
+  let fetches = 0, sends = 0
+  const client = AxMessengerClient.fromSession(session(bob), {
+    getRoom: () => ({ getMyMembership: () => "join", getLiveTimeline: () => ({ getEvents: () => cached }) }),
+    fetchRoomEvent: async () => { fetches++; return response },
+    sendMessage: async () => { sends++ },
+  } as unknown as MatrixClient)
+  await client.sendText(roomId, "답", { replyToEventId: "$old" })
+  assert.equal(fetches, 0)
+  cached = []
+  for (const invalid of [
+    { ...original.event, room_id: "!other:local" },
+    { ...original.event, room_id: undefined },
+    { ...original.event, event_id: "$other" },
+    { ...original.event, type: "m.room.member" },
+    { ...original.event, content: {} },
+    { ...original.event, sender: undefined },
+    { ...original.event, unsigned: { redacted_because: { type: "m.room.redaction" } } },
+  ]) {
+    response = invalid
+    await assert.rejects(client.sendText(roomId, "답", { replyToEventId: "$old" }))
+  }
+  assert.equal(fetches, 7)
+  assert.equal(sends, 1)
+})
+
+test("조회 실패와 조회 중 세션 종료 또는 탈퇴는 발송하지 않는다", async () => {
+  let sends = 0, membership = "join"
+  let fetchEvent: () => Promise<ReturnType<typeof event>["event"]> = async () => { throw { httpStatus: 403, errcode: "M_FORBIDDEN" } }
+  const client = AxMessengerClient.fromSession(session(bob), {
+    getRoom: () => ({ getMyMembership: () => membership, getLiveTimeline: () => ({ getEvents: () => [] }) }),
+    fetchRoomEvent: () => fetchEvent(),
+    sendMessage: async () => { sends++ },
+    stopClient: () => undefined,
+  } as unknown as MatrixClient)
+  for (const [status, errcode, kind] of [[403, "M_FORBIDDEN", "forbidden"], [404, "M_NOT_FOUND", "unknown"], [401, "M_UNKNOWN_TOKEN", "auth"], [500, "M_UNKNOWN", "server"]] as const) {
+    fetchEvent = async () => { throw { httpStatus: status, errcode } }
+    await assert.rejects(client.sendText(roomId, "답", { replyToEventId: "$old" }), (error: any) => error.status === status && error.kind === kind)
+  }
+  fetchEvent = async () => { membership = "leave"; return event("$old", alice, { msgtype: "m.text", body: "원문" }).event }
+  await assert.rejects(client.sendText(roomId, "답", { replyToEventId: "$old" }))
+  membership = "join"
+  fetchEvent = async () => { client.stop(); return event("$old", alice, { msgtype: "m.text", body: "원문" }).event }
+  await assert.rejects(client.sendText(roomId, "답", { replyToEventId: "$old" }))
+  assert.equal(sends, 0)
 })

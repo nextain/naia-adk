@@ -2,9 +2,9 @@ import {
   ClientEvent,
   createClient,
   EventType,
+  MatrixEvent,
   MsgType,
   type MatrixClient,
-  type MatrixEvent,
   type Room,
 } from "matrix-js-sdk"
 import { AxMessengerError, invalidInput, isAxMessengerError, toAxError } from "./errors.js"
@@ -57,6 +57,10 @@ export function messageFromEvent(event: MatrixEvent, roomId: string): AxChatMess
 
 // 직접 길. 화면이 부르는 읽기·보내기만 둔다. 발급·방 만들기·초대는 admin 출입구 몫이다.
 export class AxMessengerClient {
+  private generation = 0
+  private readonly messageListeners: Array<(event: MatrixEvent) => void> = []
+  private readonly syncListeners: Array<() => void> = []
+
   private constructor(
     readonly session: AxSession,
     private readonly matrix: MatrixClient,
@@ -136,24 +140,36 @@ export class AxMessengerClient {
     onMessage?: (message: AxChatMessage) => void,
     onRoomsChanged?: () => void,
   ): Promise<void> {
+    const generation = this.generation
     if (onMessage) {
-      this.matrix.on(ClientEvent.Event, (event) => {
+      const listener = (event: MatrixEvent) => {
+        if (generation !== this.generation) return
         const roomId = event.getRoomId()
         if (!roomId) return
         if (this.matrix.getRoom(roomId)?.getMyMembership() !== "join") return
         const message = messageFromEvent(event, roomId)
         if (message) onMessage(message)
+      }
+      this.messageListeners.push(listener)
+      this.matrix.on(ClientEvent.Event, listener)
+    }
+    const listener = () => {
+      if (generation !== this.generation) return
+      void this.acceptInvites().then(() => {
+        if (generation === this.generation) onRoomsChanged?.()
       })
     }
-    this.matrix.on(ClientEvent.Sync, () => {
-      void this.acceptInvites().then(() => onRoomsChanged?.())
-    })
+    this.syncListeners.push(listener)
+    this.matrix.on(ClientEvent.Sync, listener)
     return this.matrix.startClient({ initialSyncLimit: 30 }).catch((error: unknown) => {
       throw toAxError(error, "실시간 연결을 시작하지 못했습니다. 잠시 뒤 다시 시도해 주세요.")
     })
   }
 
   stop(): void {
+    this.generation += 1
+    for (const listener of this.messageListeners.splice(0)) this.matrix.off(ClientEvent.Event, listener)
+    for (const listener of this.syncListeners.splice(0)) this.matrix.off(ClientEvent.Sync, listener)
     this.matrix.stopClient()
   }
 
@@ -197,18 +213,24 @@ export class AxMessengerClient {
       throw invalidInput("멘션할 사용자 아이디를 확인해 주세요.")
     }
     const replyId = options?.replyToEventId
-    let replyEvent: MatrixEvent | undefined
-    if (replyId !== undefined) {
-      const room = this.matrix.getRoom(roomId)
-      replyEvent = room?.getMyMembership() === "join"
-        ? room.getLiveTimeline().getEvents().find((event) => event.getId() === replyId && event.getType() === EventType.RoomMessage)
-        : undefined
-      if (typeof replyId !== "string" || !/^\$\S+$/.test(replyId) ||
-        !replyEvent || !messageFromEvent(replyEvent, roomId) || !replyEvent.getSender()) {
-        throw invalidInput("답할 원문을 확인해 주세요.")
-      }
-    }
     try {
+      let replyEvent: MatrixEvent | undefined
+      if (replyId !== undefined) {
+        const room = this.matrix.getRoom(roomId)
+        if (typeof replyId !== "string" || !/^\$\S+$/.test(replyId) || room?.getMyMembership() !== "join") {
+          throw invalidInput("답할 원문을 확인해 주세요.")
+        }
+        const generation = this.generation
+        replyEvent = room.getLiveTimeline().getEvents().find((event) => event.getId() === replyId)
+        if (!replyEvent) {
+          replyEvent = new MatrixEvent(await this.matrix.fetchRoomEvent(roomId, replyId))
+        }
+        if (generation !== this.generation || this.matrix.getRoom(roomId)?.getMyMembership() !== "join" ||
+          replyEvent.getRoomId() !== roomId || replyEvent.getId() !== replyId || replyEvent.isRedacted() ||
+          !messageFromEvent(replyEvent, roomId) || !replyEvent.getSender()) {
+          throw invalidInput("답할 원문을 확인해 주세요.")
+        }
+      }
       if (replyId || mentionIds?.length) {
         const original = replyEvent && messageFromEvent(replyEvent, roomId)
         const quoted = original?.body.replace(/\r\n?/g, "\n").split("\n")
