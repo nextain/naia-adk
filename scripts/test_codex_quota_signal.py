@@ -49,6 +49,15 @@ class SignalTest(unittest.TestCase):
         self.assertEqual([self.state(self.at + n) for n in range(5)],
                          ["near", "near", "denied", "denied", "ok"])
 
+    def test_repeated_full_sample_preserves_denial_until_recovery(self):
+        self.sample(self.at, 100)
+        self.denial(self.at + 1)
+        self.sample(self.at + 2, 100)
+        self.assertEqual(self.state(self.at + 2), "denied")
+        self.sample(self.at + 3, 0)
+        self.sample(self.at + 4, 100)
+        self.assertEqual(self.state(self.at + 4), "near")
+
     def test_quoted_chat_and_nonweekly_buckets_do_not_alert(self):
         self.sample(self.at, 10)
         self.sample(self.at + 1, 100, minutes=300)

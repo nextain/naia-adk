@@ -27,7 +27,7 @@ def reverse_lines(path):
             yield rest
 
 
-def weekly_sample(path, now):
+def weekly_sample(path, now, since, below_full):
     for line in reverse_lines(path):
         if b'"token_count"' not in line or b'"rate_limits"' not in line:
             continue
@@ -39,7 +39,7 @@ def weekly_sample(path, now):
             stamp = dt.datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).timestamp()
             if stamp > now:
                 continue
-            if stamp < now - WEEK_SECONDS:
+            if stamp < since:
                 break
             rates = info.get("rate_limits") or {}
             if rates.get("limit_id") not in (None, "codex"):
@@ -49,27 +49,30 @@ def weekly_sample(path, now):
                     continue
                 used, resets = window.get("used_percent"), window.get("resets_at")
                 if isinstance(used, (float, int)) and 0 <= used <= 100 and isinstance(resets, int):
-                    return (stamp, used, resets)
+                    if not below_full or used < 100:
+                        return (stamp, used, resets)
         except (ValueError, TypeError, AttributeError, KeyError, UnicodeError):
             continue
     return None
 
 
-def latest_week(home, now):
+def latest_week(home, now, since=None, below_full=False):
+    if since is None:
+        since = now - WEEK_SECONDS
     recent = []
     for path in (home / "sessions").glob("*/*/*/rollout-*.jsonl"):
         try:
             modified = path.stat().st_mtime
         except FileNotFoundError:
             continue
-        if modified >= now - WEEK_SECONDS:
+        if modified + 1 >= since:
             recent.append((modified, path))
     latest = None
     for modified, path in sorted(recent, reverse=True):
         if latest and modified + 1 < latest[0]:
             break
         try:
-            sample = weekly_sample(path, now)
+            sample = weekly_sample(path, now, since, below_full)
         except FileNotFoundError:
             continue
         if sample and (latest is None or sample[0] > latest[0]):
@@ -105,6 +108,11 @@ def signal(home, now, warning_percent):
     sample_at, used, resets_at = weekly or (None, None, None)
     valid = resets_at is not None and now < resets_at
     rejection_is_current = denied is not None and (sample_at is None or denied >= sample_at)
+    if valid and used == 100 and denied is not None and denied < sample_at and denied >= resets_at - WEEK_SECONDS:
+        # Some clients emit another full window after a refusal. A later non-full
+        # sample distinguishes recovery from a repeated exhausted measurement.
+        recovered = latest_week(home, now, since=denied, below_full=True)
+        rejection_is_current = recovered is None
     if not valid and resets_at is not None and denied is not None and denied <= resets_at:
         rejection_is_current = False
     if rejection_is_current:
