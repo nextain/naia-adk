@@ -2256,13 +2256,18 @@ test("human instruction cards cap drop and due deferrals at 2 and escalate on 3r
   );
 
   // 사람 확인 답글 번호와 함께 완료(done) 처리하면 더 이상 깨우지 않지만, 같은 msg_id(공백 변형 포함) 재생성은 계속 차단됨
+  await mkdir(path.join(root, "config"), { recursive: true });
+  await writeFile(path.join(root, "config/work-ledger.json"), JSON.stringify({
+    ...config, provider: { type: "discord", token_env: "FIXTURE_TOKEN", guild_id: "777" },
+  }));
   await main(
-    ["done", "ds-3", "--root", root, "--role", "secretary", "--human-msg-id", "msg-ceo-ack-1", "--reason", "대표님 보고 후 완료"],
-    { now },
+    ["done", "ds-3", "--root", root, "--role", "secretary", "--channel", "111", "--human-msg-id", "504", "--reason", "대표님 보고 후 완료"],
+    { now, env: { FIXTURE_TOKEN: "fixture" }, fetchImpl: async () => Response.json({ id: "504", author: { id: "human" }, content: "ds-3 확인" }) },
   );
   const closedDs3 = (await readLedger(root, "secretary")).items.find((i) => i.id === "ds-3");
   assert.equal(closedDs3?.status, "done");
-  assert.equal(closedDs3?.human_msg_id, "msg-ceo-ack-1");
+  assert.equal(closedDs3?.human_msg_id, "504");
+  assert.equal(closedDs3?.result, "https://discord.com/channels/777/111/504");
   assert.deepEqual((await watch({ root, config, now: now + 31 * 60000 })).wakes, []);
 
   for (const bypassedId of ["msg-deepseek", "  msg-deepseek  "]) {

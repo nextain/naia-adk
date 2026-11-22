@@ -55,7 +55,9 @@ test('add, due, done and drop reconcile, preserving the ledger on timer failure'
   await ledgerMain(args(root, 'due', 'job', ['--due', later, '--reason', 'changed']), { runner: f.runner, now });
   assert.equal([...f.timers.values()][0].originalDue, later);
   assert.equal(f.calls.filter(call => call.args.includes('stop')).length, 1);
-  await ledgerMain(args(root, 'done', 'job'), { runner: f.runner, now });
+  await assert.rejects(ledgerMain(args(root, 'done', 'job'), { runner: f.runner, now }), /--result/);
+  assert.equal(f.timers.size, 1);
+  await ledgerMain(args(root, 'done', 'job', ['--result', 'https://example.org/results/job']), { runner: f.runner, now });
   assert.equal(f.timers.size, 0);
   await assert.rejects(ledgerMain(args(root, 'due', 'job', ['--due', due, '--reason', 'no']), { runner: f.runner, now }), /open/);
   await ledgerMain(add(root, ['--id', 'second']), { runner: f.runner, now });

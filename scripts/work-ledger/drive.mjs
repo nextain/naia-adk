@@ -22,7 +22,7 @@ import {
 } from "./ledger.mjs";
 export { processStart };
 import { resolveWorkerStep, workerProfilePath } from "./worker-profile.mjs";
-import { createAdapter } from "./messenger.mjs";
+import { createAdapter, verifyCardReply } from "./messenger.mjs";
 import { measureMinFreeGb } from "../lib/disk-free.mjs";
 import { registerWorker } from "../work-watch.mjs";
 
@@ -583,25 +583,7 @@ export async function tick({ root, config, configPath, now = Date.now(), dry = f
 export async function verifyOwner({ config, item, channel, msgId, fetchImpl, env, sleep }) {
   const cfg = driveConfig(config);
   if (!cfg.owners.length) throw new Error("drive.owner_ids is not configured");
-  if (!/^\d+$/.test(channel ?? "") || !/^\d+$/.test(msgId ?? ""))
-    throw new Error("confirm requires numeric --channel and --msg-id");
-  const adapter = createAdapter(config.provider, {
-    ...(fetchImpl ? { fetchImpl } : {}),
-    ...(env ? { env } : {}),
-    ...(sleep ? { sleep } : {}),
-  });
-  const message = await adapter.message(channel, msgId);
-  if (message?.id !== msgId || !cfg.owners.includes(message.author?.id))
-    throw new Error("Message was not written by a configured owner");
-  const key = item.id.slice(0, 8);
-  let named = typeof message.content === "string" && message.content.includes(key);
-  if (!named && message.message_reference?.message_id) {
-    const parent =
-      message.referenced_message ??
-      (await adapter.message(message.message_reference.channel_id ?? channel, message.message_reference.message_id));
-    named = typeof parent?.content === "string" && parent.content.includes(key);
-  }
-  if (!named)
-    throw new Error(`Owner message does not name item ${key} (in its text or in the message it replies to)`);
+  const adapter = createAdapter(config.provider, { fetchImpl, env, sleep });
+  const message = await verifyCardReply({ adapter, authors: cfg.owners, item, channel, msgId });
   return { channel, msg_id: msgId, author: message.author.id };
 }

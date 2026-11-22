@@ -13,6 +13,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
+import { configuredHumans, createAdapter, verifyCardReply } from "./messenger.mjs";
 export function safeName(value) {
   if (typeof value !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(value))
     throw new Error("Invalid role or item id");
@@ -159,6 +160,17 @@ export const isObject = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 export const oneLine = (value) =>
   typeof value === "string" && value.trim() !== "" && !/[\r\n]/.test(value);
+async function resultAddress(root, value) {
+  if (!oneLine(value)) throw new Error("done requires --result <file or URL>");
+  if (/^https?:\/\//i.test(value)) {
+    if (/[\s\\]/.test(value) || !URL.canParse(value)) throw new Error("Invalid HTTP(S) result URL");
+    return value;
+  }
+  const address = path.resolve(root, value);
+  const info = await stat(address).catch(() => null);
+  if (!info?.isFile() || info.size === 0) throw new Error(`Result file is missing or empty: ${address}`);
+  return address;
+}
 export const isWorkerItem = (item) => item?.kind === "worker";
 export function validUnitName(value) {
   return (
@@ -459,12 +471,28 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
     item.checked_at = at;
   };
   let ownerRecord;
+  const humanAck = normalizeMsgId(o["human-msg-id"]);
+  let humanResult;
   if (command === "confirm") {
     if (!["done", "dropped"].includes(o.as ?? "dropped")) throw new Error("--as must be done or dropped");
     const target = find(await readLedger(root, role));
     if (!driven(target)) throw new Error("confirm requires an item with an instruction file");
     // The messenger is read before the ledger lock is taken.
     ownerRecord = await drive.verifyOwner({ config, item: target, channel: o.channel, msgId: o["msg-id"], fetchImpl, env, sleep });
+  } else if (command === "done" && o["human-msg-id"] !== undefined) {
+    const target = find(await readLedger(root, role));
+    if (!isWorkerItem(target) && !driven(target) && target.status !== "done") {
+      if (!hasHumanMsgId(humanAck) || sameHumanMsgId(humanAck, target.from.msg_id))
+        throw new Error("--human-msg-id에는 원 지시와 다른 사람 확인 답글 번호가 필요합니다");
+      const authors = configuredHumans(config, roleConfig);
+      if (!Array.isArray(authors) || !authors.length) throw new Error("No configured humans for this role's --human-msg-id");
+      const channel = o.channel ?? target.from.channel;
+      const adapter = createAdapter(config.provider, { fetchImpl, env, sleep });
+      const message = await verifyCardReply({ adapter, authors, item: target, channel, msgId: humanAck, ordinary: true });
+      const direct = (roleConfig?.direct_channels ?? config.defaults?.direct_channels ?? config.direct_channels ?? []).includes(channel);
+      const guildId = message.guild_id || roleConfig?.guild_id || config.defaults?.guild_id || config.guild_id;
+      humanResult = adapter.messageUrl(channel, humanAck, { direct, guildId }) ?? `${channel}/${humanAck}`;
+    }
   }
   let startedItem;
   let escalationError = null;
@@ -579,13 +607,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       if ((item.drive.profiled || item.drive.run?.profile) && !(await import("./drive.mjs")).verifiedDriveResult(item, l)) {
         throw new Error("A scheduled worker requires its successful terminal receipt");
       }
-      if (!oneLine(o.result)) throw new Error("done requires --result <file or URL> for an item with an instruction file");
-      let address = o.result;
-      if (!/^https?:\/\/\S+$/.test(address)) {
-        address = path.resolve(root, address);
-        const info = await stat(address).catch(() => null);
-        if (!info?.isFile() || info.size === 0) throw new Error(`Result file is missing or empty: ${address}`);
-      }
+      const address = await resultAddress(root, o.result);
       close(item, "done", { by: "result", result: address });
       if (o.reason) item.note = o.reason;
       return item.id;
@@ -644,22 +666,25 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
       item.status = "dropped";
       item.drop_count = currentDrops + 1;
     } else {
-      if (item.status === "escalated_human") {
-        const humanAck = normalizeMsgId(o["human-msg-id"]);
-        if (
-          !hasHumanMsgId(humanAck) ||
-          sameHumanMsgId(humanAck, item.from?.msg_id)
-        ) {
-          throw new Error(
-            `사람에게 올림(escalated_human) 상태인 카드(${item.id})를 완료(done)로 닫으려면 원 지시와 다른 사람 확인 답글 번호(--human-msg-id <msg_id>)가 필요합니다`,
-          );
-        }
-        item.human_msg_id = humanAck;
+      if (item.status === "done") {
+        if ((o.result !== undefined && item.result !== o.result && item.result !== path.resolve(root, o.result)) ||
+            (o["human-msg-id"] !== undefined && item.human_msg_id !== humanAck))
+          throw new Error("Item is already closed with different evidence");
+        return item.id;
       }
+      if (item.status === "escalated_human" && !humanResult)
+        throw new Error(`사람에게 올림(escalated_human) 상태인 카드(${item.id})를 닫으려면 --human-msg-id <확인 답글 ID>가 필요합니다`);
+      if (o.result === undefined && !humanResult)
+        throw new Error("done requires --result <file or URL> or --human-msg-id <confirmation ID>");
+      item.result = o.result === undefined ? humanResult : await resultAddress(root, o.result);
+      if (humanResult) item.human_msg_id = humanAck;
+      else delete item.human_msg_id;
       if (item.status === "dropped" && item.drop_count === undefined) {
         item.drop_count = 1;
       }
       item.status = "done";
+      item.completed_at = new Date(clock()).toISOString();
+      item.checked_at = item.completed_at;
     }
     if (o.reason) item.note = o.reason;
     return item.id;

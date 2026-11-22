@@ -323,7 +323,10 @@ test("strict parent admits only an open work card before any process or ledger r
   for (const status of ["done", "dropped"]) {
     await ledgerMain(["add", "--root", root, "--role", "minho", "--id", status, "--title", status,
       "--due", "2026-11-18T12:00:00Z", "--channel", "test-channel", "--msg-id", status], { now });
-    await ledgerMain([status === "done" ? "done" : "drop", status, "--root", root, "--role", "minho", "--reason", "test closed card"], { now });
+    const close = status === "done"
+      ? ["done", status, "--result", "https://example.org/results/job"]
+      : ["drop", status, "--reason", "test closed card"];
+    await ledgerMain([...close, "--root", root, "--role", "minho"], { now });
     for (const dry of [true, false]) {
       await assert.rejects(startWorkerRun({ root, role: "minho", id: "worker-" + status, parent: status,
         name: "closed card", result: "out.md", "strict-parent": true, dry }, ["codex", "exec"], { runner: service.runner, now }), /open parent card/);

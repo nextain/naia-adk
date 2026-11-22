@@ -212,6 +212,7 @@ function collectRawResultCandidates(raw: Record<string, unknown>): string[] {
     : null
 
   pushUnique(closed?.result)
+  if (raw.status === "done") pushUnique(raw.result)
   pushUnique(worker?.result)
   pushUnique(raw.result)
   pushUnique(raw.result_path)
