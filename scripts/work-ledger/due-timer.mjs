@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { assertLedgerOwner } from "../lib/work-ledger-owner.mjs";
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath, readFile, mkdir, writeFile, readdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
@@ -8,7 +9,11 @@ export { systemRunner };
 
 const HOUR = 60 * 60 * 1000;
 const hash = value => createHash('sha256').update(value).digest('hex');
-export const canonicalRoot = root => realpath(path.resolve(root));
+export async function canonicalRoot(root) {
+  const directory = await realpath(path.resolve(root));
+  await assertLedgerOwner(directory);
+  return directory;
+}
 export const rootPrefix = root => `adk-due-${hash(root).slice(0, 8)}-`;
 // The role hash makes ownership unambiguous even when role and id contain '-'.
 export function rolePrefix(root, role) {
@@ -300,6 +305,7 @@ function receiptLock(root, file) {
 export async function dueWake({ root, role, id, due, now = Date.now(), source = 'timer', lastSent, emit }) {
   safeName(role); safeName(id);
   if (!validDate(due) || !Number.isFinite(now) || !['timer', 'watch'].includes(source)) throw new Error('Invalid due wake');
+  await assertLedgerOwner(root);
   const file = receiptPath(root, role, id, due);
   let entered = false;
   try { return await withLock(ledgerPath(root, role), async () => {
@@ -334,6 +340,7 @@ export async function dueWake({ root, role, id, due, now = Date.now(), source = 
 }
 
 export async function cleanReceipts(root, now = Date.now()) {
+  await assertLedgerOwner(root);
   const dir = path.join(root, '.agents/work/ledger/due-fired');
   let names;
   try { names = await readdir(dir); } catch (error) { if (error.code === 'ENOENT') return; throw error; }

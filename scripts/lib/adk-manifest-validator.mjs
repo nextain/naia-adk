@@ -5,6 +5,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { WORK_LEDGER_OWNER_KINDS } from './work-ledger-owner.mjs';
 import {
   isNonEmptyString,
   isValidIdentifier,
@@ -188,12 +189,39 @@ export function validateAdkManifest(manifest, adkDir = null) {
     }
   }
 
+  const policy = manifest.work_ledger_policy;
+  if (policy !== undefined) {
+    if (policy === null || typeof policy !== 'object' || Array.isArray(policy)) {
+      errors.push('work_ledger_policy must be an object');
+    } else {
+      const { allowed_kinds, prohibited_kinds } = policy;
+      if (allowed_kinds !== undefined && (!Array.isArray(allowed_kinds) ||
+          allowed_kinds.some(kind => !WORK_LEDGER_OWNER_KINDS.includes(kind)))) {
+        errors.push('work_ledger_policy.allowed_kinds can contain only user, project, group or legacy org');
+      }
+      if (prohibited_kinds !== undefined && (!Array.isArray(prohibited_kinds) ||
+          prohibited_kinds.some(kind => kind !== 'agent'))) {
+        errors.push('work_ledger_policy.prohibited_kinds can contain only agent');
+      }
+    }
+  }
+
   if (manifest.kind === 'user' || manifest.user_config !== undefined) {
     validateUserGroupsSection(manifest, errors);
   }
 
   if (manifest.kind === 'agent' || manifest.agent_config !== undefined) {
     const ac = manifest.agent_config || {};
+    if (ac.work_ledger_prohibited !== undefined && ac.work_ledger_prohibited !== true) {
+      errors.push('agent_config.work_ledger_prohibited must be true');
+    }
+    if (manifest.kind === 'agent' && adkDir) {
+      for (const entry of ['.agents/work', 'docs/work']) {
+        if (fs.lstatSync(path.join(adkDir, entry), { throwIfNoEntry: false })) {
+          errors.push(`Agent workspaces cannot own a work ledger (${entry}); use the owning user, group or project workspace`);
+        }
+      }
+    }
     if (ac.organizations !== undefined) {
       if (!Array.isArray(ac.organizations) || ac.organizations.some((o) => !isNonEmptyString(o) || o.includes('/') || o.includes('\\'))) {
         errors.push('agent_config.organizations must be an array of organization name strings (never paths/links)');

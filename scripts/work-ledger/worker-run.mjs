@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { assertLedgerOwner } from "../lib/work-ledger-owner.mjs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -667,6 +668,7 @@ export async function startWorkerRun(
   } = {},
 ) {
   const root = path.resolve(opts.root || process.cwd());
+  await assertLedgerOwner(root);
   const canonical = await realpath(root).catch(() => root);
   const role = safeName(opts.role);
   const { config, roleConfig } = await loadLedgerConfig({ root, configPath: opts.config, role });

@@ -761,3 +761,22 @@ test('13. Agent and user ADK skeletons validate, and a copied agent skeleton mak
   assert.equal(checkAdkInstance(seatDir).ok, true);
   assert.equal(checkAdkInstance(userDir).ok, true);
 });
+
+test('agent workspaces reject local work records and policy overrides', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'adk-agent-ledger-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.cpSync(path.join(naiaAdkRoot, 'templates/agent-skeleton'), root, { recursive: true });
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, 'adk.json'), 'utf8'));
+  assert.equal(checkAdkInstance(root).ok, true);
+  for (const entry of ['.agents/work', 'docs/work']) {
+    const target = path.join(root, entry);
+    fs.mkdirSync(target, { recursive: true });
+    assert.ok(checkAdkInstance(root).errors.some(error => error.includes(entry)));
+    fs.rmdirSync(target);
+  }
+  manifest.agent_config.work_ledger_prohibited = false;
+  manifest.work_ledger_policy = { allowed_kinds: ['agent'] };
+  const { errors } = validateAdkManifest(manifest);
+  assert.ok(errors.some(error => error.includes('work_ledger_prohibited')));
+  assert.ok(errors.some(error => error.includes('allowed_kinds')));
+});
