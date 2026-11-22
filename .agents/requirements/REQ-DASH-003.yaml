@@ -1,0 +1,128 @@
+id: REQ-DASH-003
+title: "Dashboard overview, skills catalog, workspace, and settings pages"
+title_ko: "대시보드 개요·스킬·설정·작업 공간 화면"
+product: naia-adk
+module: dashboard-admin
+status: candidate
+source: candidate
+source_provenance: pending
+source_kind: candidate
+created: 2026-11-18
+updated: 2026-11-18
+change_effect: extend
+preserves:
+  - workspace-index-presence-read-only
+  - skill-discovery-fail-closed-on-malformed-frontmatter
+  - api-keys-never-exposed-in-settings-ui
+must_not_change:
+  - data-private-env-never-read-into-public-api
+architecture_fit:
+  original_request: "모든 서비스와 기능은 문서화·시험·회귀시험이 가능해야 하며 상위기획부터 통합시험까지 문서 사슬을 갖춘다."
+  parent_structure: "packages/dashboard(/, /workspace, /skills, /settings, /settings/llm) + packages/server(workspace/skills/watch/health) + packages/core"
+  acceptance_rationale: "기존 core 단위시험(discoverSkills, resolveIndexPresence)과 연결하되 프론트 렌더 시험 0건·전용 API 라우트 시험 0건·미연결 정적 UI 빈칸을 정확히 기록한다."
+description: |
+  [목적]
+  사용자와 관리자가 현재 ADK 워크스페이스의 구성 규모(프로젝트·서브모듈·레퍼런스·스킬), 등록된 스킬 카탈로그, 로컬 작업 공간 구조와 파일 트리, 백엔드 서버 연결 상태 및 설정·AI 제공자 안내를 한 곳에서 점검하고 상세 위치로 이동할 수 있게 한다.
+
+  [기능 목록 (화면 점검 1-1 더보기 · 1-2 개요 · 1-6 작업 공간 · 1-8 스킬 · 1-9 설정 · 1-10 AI 설정)]
+  1. 전역 개발자 도구 진입 ('⋯' 더보기 메뉴 또는 상단 xl '개발자 도구' 링크: 개요 /, 작업 공간 /workspace, 스킬 /skills, 설정 /settings 이동): Nav.tsx (운영 3142 '⋯' 드롭다운은 origin/main 미병합).
+  2. 개요(/) — 워크스페이스 제목·부제목: app/page.tsx, GET /api/workspace/meta (화면 점검 지적: org/repo 결합 시 org 중복 표기 주의, 인스턴스 브랜드명 설정 미연결).
+  3. 개요(/) — 상단 요약 4카드 (Projects, Submodules, References, Skills): app/page.tsx Card, /api/workspace/index, /api/skills (현재 정적 <div> 카드·영문 라벨).
+  4. 개요(/) — 왼쪽 Skills 목록 (/skills#<name> 연결): app/page.tsx.
+  5. 개요(/) — 오른쪽 Projects 목록 (/workspace#<name> 연결, missing/visibility 배지): app/page.tsx.
+  6. 작업 공간(/workspace) — 4분류 카드 (Projects·Data·Libraries·References, missing/visibility/entryPoint 배지): app/workspace/page.tsx, GET /api/workspace/index (현재 정적 <div>·영문 UI).
+  7. 작업 공간(/workspace) — 하단 'File Tree' JSON 출력: app/workspace/page.tsx, GET /api/workspace/tree?depth=1.
+  8. 스킬 카탈로그(/skills) — Skills 목록 (skills/*/SKILL.md, trigger, management 배지): app/skills/page.tsx, GET /api/skills, packages/core discoverSkills (현재 정적 카드·상세/한국어 요약 미구현).
+  9. 설정(/settings) — '통합 사용량' 2카드 (Claude 계정 통합 사용량, 다른 구독 잔여량, '문서로 열기'): UsagePanel.tsx (origin/main 미병합).
+  10. 설정(/settings) — 'AI 연결' → 'LLM Providers & Models' 카드 (/settings/llm 이동 링크): app/settings/page.tsx.
+  11. 설정(/settings) — 'Server' / '연결 상태' (Status, API Port, Dashboard Port, Host, Workspace): app/settings/page.tsx, GET /api/health.
+  12. 설정(/settings) — 'Workspace Clients' / '작업 도구 연결' (opencode, Claude Code, Codex, naia-os): app/settings/page.tsx (현재 실연결 검사 API 없이 정적 표시).
+  13. 설정(/settings) — 'Configuration Files' / '추가 설정' 목록 (.agents/context/*, AGENTS.md 등): app/settings/page.tsx.
+  14. 설정(/settings) — 'Data Directories' / '자료 종류' 6개 카드 (data-company, data-teams, data-private, projects, skills, scripts): app/settings/page.tsx (현재 링크 없는 정적 <div>).
+  15. AI 연결 설정(/settings/llm) — 'Providers' 4카드(OpenAI·Anthropic·Google·Any-LLM) + 'Default Model' + 'API Keys': app/settings/llm/page.tsx (정적 목록, 실서버 조회 및 /settings 복귀 링크 미구현).
+
+  [사용자 시나리오]
+  - UC-DASH-003-1 (개요 점검): 사용자가 / 를 열어 워크스페이스 이름과 프로젝트·서브모듈·레퍼런스·스킬 수치를 확인하고, 개별 스킬·프로젝트 카드를 눌러 /skills#<name> 또는 /workspace#<name>으로 이동한다.
+  - UC-DASH-003-2 (작업 공간·스킬 열람): 사용자가 /workspace에서 각 저장소의 로컬 존재 여부(missing)와 루트 트리를 보고, /skills에서 등록된 스킬 이름·설명·트리거를 확인한다.
+  - UC-DASH-003-3 (서버·설정·LLM 안내 확인): 사용자가 /settings에서 API 서버(/api/health) 연결 여부와 설정 파일·폴더 구조를 점검한 뒤 /settings/llm으로 이동해 기본 모델·키 설정 파일 경로를 확인한다.
+acceptance_criteria:
+  - "packages/core의 discoverSkills(잘못된 SKILL.md fail-closed 포함)와 resolveIndexPresence 단위 시험 통과"
+  - "packages/server의 /api/health 보안·경로 검사(security.test.ts) 통과"
+  - "빈칸 목록(/, /workspace, /skills, /settings, /settings/llm 프론트 렌더/E2E 시험 0건 및 /api/workspace/*, /api/skills/*, /api/ws/* 서버 라우트 시험 0건, UsagePanel 미병합)을 누락 없이 기록해 다음 시험 작성 대상으로 추적한다"
+trace:
+  code:
+    - path: packages/dashboard/app/page.tsx
+      symbol: Home
+      coverage: none
+    - path: packages/dashboard/app/workspace/page.tsx
+      symbol: WorkspacePage
+      coverage: none
+    - path: packages/dashboard/app/skills/page.tsx
+      symbol: SkillsPage
+      coverage: none
+    - path: packages/dashboard/app/settings/page.tsx
+      symbol: SettingsPage
+      coverage: none
+    - path: packages/dashboard/app/settings/llm/page.tsx
+      symbol: LLMSettingsPage
+      coverage: none
+    - path: packages/dashboard/app/api-base.ts
+      symbol: apiBase
+      coverage: none
+    - path: packages/server/src/routes/workspace.ts
+      symbol: workspaceRoutes
+      coverage: none
+    - path: packages/server/src/routes/skills.ts
+      symbol: skillRoutes
+      coverage: none
+    - path: packages/server/src/routes/watch.ts
+      symbol: watchRoutes
+      coverage: none
+    - path: packages/server/src/routes/files.ts
+      symbol: fileRoutes
+      coverage: none
+    - path: packages/server/src/server.ts
+      symbol: createServer
+      coverage: partial
+    - path: packages/core/src/index.ts
+      symbol: discoverSkills
+      coverage: full
+  tests:
+    - path: packages/core/src/__tests__/discover-skills.test.ts
+      symbol: "discoverSkills — real workspace (regression)"
+      coverage: full
+    - path: packages/core/src/__tests__/resolve-index-presence.test.ts
+      symbol: "resolveIndexPresence"
+      coverage: full
+    - path: packages/server/test/security.test.ts
+      symbol: "Fastify 서버 통합 보호 검사 (W1a-2)"
+      coverage: partial
+    - path: "없음"
+      symbol: "개요 화면(packages/dashboard/app/page.tsx) 렌더·부제목·카드 링크·한국어화 시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "작업 공간 화면(packages/dashboard/app/workspace/page.tsx) 렌더·분류·File Tree 시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "스킬 카탈로그(packages/dashboard/app/skills/page.tsx) 렌더·상세 링크 시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "설정 화면(packages/dashboard/app/settings/page.tsx, llm/page.tsx) 및 UsagePanel(origin/main 미병합) 렌더·실상태 조회 시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "서버 라우트(packages/server/src/routes/workspace.ts, skills.ts, watch.ts) 전용 단위·통합 시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "Nav '⋯' 더보기 메뉴(origin/main은 개발자 도구 링크) 및 /workspace·/skills·/settings E2E 시험 없음"
+      coverage: none
+  documents:
+    - docs/design/dashboard-plan.md
+    - docs/ARCHITECTURE.md
+    - docs/guides/adk-2.0-structure.md
+    - docs/guides/company-config.ko.md
+  reviews:
+    planning: null
+    development: null
+    test: null
+    integration: null
+decisions: []

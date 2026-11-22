@@ -1,0 +1,246 @@
+id: REQ-DASH-001
+title: "Dashboard documentation portal, short links, inline notes, and access guard"
+title_ko: "대시보드 문서 포털·짧은 주소·메모·접속 검사"
+product: naia-adk
+module: dashboard-docs
+status: candidate
+source: candidate
+source_provenance: pending
+source_kind: candidate
+created: 2026-11-18
+updated: 2026-11-18
+change_effect: extend
+preserves:
+  - host-guard-fail-closed
+  - proxy-secret-trust-evaluation
+  - origin-same-scheme-host-check
+  - hardlink-and-traversal-blocking
+  - data-source-read-only-boundary
+must_not_change:
+  - keys-and-private-data-never-served
+  - external-reverse-proxy-not-trusted
+architecture_fit:
+  original_request: "모든 서비스와 기능은 문서화·시험·회귀시험이 가능해야 하며 상위기획부터 통합시험까지 문서 사슬을 갖춘다."
+  parent_structure: "packages/dashboard Next.js BFF(:3142) + packages/server Fastify Portal API(:3141) + .agents/requirements 사슬"
+  acceptance_rationale: "기존 REQ-WAKE-001 양식과 docs/design/dashboard-plan.md 상위 기획 아래 화면 점검 1-1·1-3 전 기능, API/파일 원천, 실제 시험과 빈칸을 연결한다."
+description: |
+  [목적]
+  사용자가 터미널·Git·파일 시스템을 직접 열지 않고도 PC와 모바일(테일넷) 브라우저에서 ADK·회사·연결 데이터 폴더의 문서와 파일을 탐색·검색·열람·편집하고, 특정 문장이나 문서 전체에 메모를 남겨 AI와 협업하며, 긴 문서 경로 대신 짧은 주소(/d/<키>)로 즉시 공유·열람할 수 있게 한다. 동시에 Host 검사, 프록시 신뢰 판정, Origin 검증, 경로 탈출·숨김·하드링크 차단으로 비인가 접근과 비밀 노출을 막는다.
+
+  [기능 목록 (화면 점검 1-1 · 1-3 + 접속 검사 · Mermaid 뷰어)]
+  1. 창 제목(<title>) & 좌측 브랜드 링크 (/docs 이동): layout.tsx, Nav.tsx (비고: 인스턴스별 브랜드 설정 연동은 미연결).
+  2. 상단 핵심 탭 (문서·결정·작업): Nav.tsx (origin/main은 문서·결정·작업, 운영 3142는 문서·일정·작업).
+  3. '보기' 설정 (화면 테마 라이트/다크/시스템 · 글자 크기 4단계 및 localStorage 유지): theme-prefs.ts, Nav.tsx, layout.tsx (운영 3142 ViewSettings의 '또렷하게'·고대비·색상은 origin/main 미병합).
+  4. '문서 검색' + '보관 문서도 찾기' (archived=1): DocsView.tsx, tabs.ts searchApiUrl, GET /api/portal/search.
+  5. 좌측 사이드바 ('폴더 목록', 모바일 접기/펼치기): DocsView.tsx (데스크톱 접기·리사이저는 origin/main 미병합).
+  6. 문서 탭 분리 (공통 / 브랜드·마케팅 / 개발자 / [분류 안 됨]): tabs.ts (운영 3142의 4번째 '사업' 탭은 origin/main 미병합).
+  7. 좌측 폴더 트리 & archive / 지난 기록 보관 폴더 정렬·배지: DocsView.tsx, tabs.ts orderArchiveLast.
+  8. 폴더 격자 보기 (500개 상한·커버 이미지): FolderGrid.tsx, kinds.ts, GET /api/portal/folder (운영 3142의 목차/목록/썸네일 전환은 origin/main 미병합).
+  9. 다중 선택 '편집' 모드 (일괄 zip 내려받기): origin/main 미구현 (운영 3142 select-mode-toggle 기능).
+  10. 문서 본문 보기 · 편집(ETag 409 충돌 방지 · readOnly/data: 차단) · 즐겨찾기(200개 상한) · [짧은 주소]: DocsView.tsx, DocEditor.tsx, Favorites.tsx, ShortLinkButton.tsx, GET/PUT /api/portal/doc, /api/portal/favorites (운영 3142의 '이 폴더 파일 목록'·'인쇄·PDF'·RichDocEditor 3탭·Mermaid 확대 뷰어는 origin/main 미병합/미구현).
+  11. 문서 상단 게시 승인 상태 (PublishReview): origin/main 미구현 (운영 3142 기능).
+  12. 문서 짧은 주소 (/d/<키>, /d/<출처>/<경로>, POST /d, CLI short-link.mjs): short-links.mjs, server.mjs handleShortLink, scripts/short-link.mjs, config/short-link.example.json.
+  13. '메모 열기 (N)' 배너 & 인용 메모 패널 (추가·수정·답변·해결·다시 열기·삭제): NotesBanner, NotesPanel.tsx, notes.ts, /api/portal/notes*, scripts/doc-notes.mjs.
+  14. 파일 보기 (이미지 확대/폭맞춤·동영상·오디오·PDF·텍스트 1MB·미지원 파일 내려받기, Range 206): FileView.tsx, GET /api/portal/asset, GET /api/portal/text (운영 3142의 이전/다음 파일 탐색은 origin/main 미병합).
+  15. 접속 검사 및 데이터 폴더 경계: hostGuard(421), middleware.ts, server.mjs validatePortalPathname(400)/buildProxyHeaders, security.ts evaluateTrust/writeProxySecret, portal.ts 하드링크(nlink>1) 404·숨김/탈출 차단·Origin 불일치 403, view-folders.ts & scripts/view-folders.mjs.
+
+  [사용자 시나리오]
+  - UC-DASH-001-1 (문서 탐색·편집): 사용자가 /docs에 접속해 탭과 트리로 문서를 열고, 즐겨찾기 추가 후 편집기에서 내용을 고쳐 저장하면 ETag 일치 시 저장되고 동시 수정 시 409 충돌 안내를 받는다.
+  - UC-DASH-001-2 (인용 메모 협업): 사용자가 본문 문장을 선택해 [메모]를 등록하면 상단 '열린 메모 N건' 배너와 문서 옆 메모 목록에 표시되고, AI 답변 후 해결/다시 열기를 전환할 수 있다.
+  - UC-DASH-001-3 (짧은 주소 공유): 사용자가 [짧은 주소] 단추 또는 short-link.mjs CLI로 /d/<키>를 발급받아 모바일에서 열면 302 리다이렉트로 원래 탭·출처·문서가 열린다.
+  - UC-DASH-001-4 (파일 미리보기·검색): 사용자가 이미지·PDF·텍스트·영상 파일을 미리보고 내려받으며, 검색어와 '보관 문서도 찾기'로 보관함 문서를 포함해 검색한다.
+  - UC-DASH-001-5 (접속·보안 차단): 허용 목록 밖 Host 헤더(421), 경로 탈출(400), 비신뢰 peer의 data: 접근 및 교차 출처 쓰기(403), 하드링크(404)가 모두 차단된다.
+acceptance_criteria:
+  - "packages/dashboard 문서·짧은주소·테마·Host 검사 단위/렌더/독립 통합 시험 전수 통과"
+  - "packages/server 보안·포털·경로가드·하드링크·검색·데이터폴더·편집/메모/즐겨찾기 통합 시험 및 scripts/view-folders.test.mjs 전수 통과"
+  - "화면 응답 텍스트에 내부 /api/ 경로, 파일 시스템 절대 경로, 64자리 SHA-256 해시가 노출되지 않는다 (isSafeVisibleText)"
+  - "미구현·미시험 항목(docs/page.tsx 통합 시험, RichDocEditor, PublishReview, 다중선택 zip, 데스크톱 접기, 사업 탭, Mermaid 확대 뷰어, E2E pnpm test 편입)은 빈칸 목록으로 추적한다"
+trace:
+  code:
+    - path: packages/dashboard/app/layout.tsx
+      symbol: RootLayout
+      coverage: full
+    - path: packages/dashboard/app/components/Nav.tsx
+      symbol: Nav
+      coverage: partial
+    - path: packages/dashboard/app/theme-prefs.ts
+      symbol: buildThemeInitScript
+      coverage: full
+    - path: packages/dashboard/app/docs/page.tsx
+      symbol: DocsPage
+      coverage: none
+    - path: packages/dashboard/app/docs/DocsView.tsx
+      symbol: DocsView
+      coverage: full
+    - path: packages/dashboard/app/docs/FolderGrid.tsx
+      symbol: FolderGrid
+      coverage: full
+    - path: packages/dashboard/app/docs/FileView.tsx
+      symbol: FileView
+      coverage: full
+    - path: packages/dashboard/app/docs/DocEditor.tsx
+      symbol: saveDocument
+      coverage: partial
+    - path: packages/dashboard/app/docs/NotesPanel.tsx
+      symbol: NotesPanel
+      coverage: full
+    - path: packages/dashboard/app/docs/Favorites.tsx
+      symbol: FavoritesGroup
+      coverage: partial
+    - path: packages/dashboard/app/docs/ShortLinkButton.tsx
+      symbol: ShortLinkButton
+      coverage: full
+    - path: packages/dashboard/app/docs/docs-handlers.ts
+      symbol: loadDocsViewState
+      coverage: full
+    - path: packages/dashboard/app/docs/tabs.ts
+      symbol: computeActiveTab
+      coverage: full
+    - path: packages/dashboard/app/docs/kinds.ts
+      symbol: determineDocViewMode
+      coverage: full
+    - path: packages/dashboard/app/docs/markdown.ts
+      symbol: splitFrontmatter
+      coverage: full
+    - path: packages/dashboard/server.mjs
+      symbol: createRequestHandler
+      coverage: full
+    - path: packages/dashboard/middleware.ts
+      symbol: middleware
+      coverage: partial
+    - path: packages/dashboard/host-guard.mjs
+      symbol: hostGuard
+      coverage: full
+    - path: packages/dashboard/short-links.mjs
+      symbol: resolveShortPath
+      coverage: full
+    - path: packages/dashboard/scripts/short-link.mjs
+      symbol: verifyShortLink
+      coverage: full
+    - path: packages/server/src/server.ts
+      symbol: createServer
+      coverage: full
+    - path: packages/server/src/security.ts
+      symbol: evaluateTrust
+      coverage: full
+    - path: packages/server/src/routes/portal.ts
+      symbol: portalRoutes
+      coverage: full
+    - path: packages/server/src/notes.ts
+      symbol: readNoteSecure
+      coverage: full
+    - path: packages/server/src/favorites.ts
+      symbol: readFavoritesSecure
+      coverage: full
+    - path: packages/server/src/view-folders.ts
+      symbol: evaluateViewFolder
+      coverage: full
+    - path: packages/server/src/file-lock.ts
+      symbol: withFileLock
+      coverage: full
+    - path: scripts/doc-notes.mjs
+      symbol: runCli
+      coverage: full
+    - path: scripts/view-folders.mjs
+      symbol: validateFolder
+      coverage: full
+  tests:
+    - path: packages/dashboard/app/docs/markdown.test.ts
+      symbol: "docs markdown helpers"
+      coverage: full
+    - path: packages/dashboard/app/docs/tabs.test.ts
+      symbol: "탭 목록"
+      coverage: full
+    - path: packages/dashboard/app/docs/kinds.test.ts
+      symbol: "파일 종류 판정 (inferKindFromPath)"
+      coverage: full
+    - path: packages/dashboard/app/docs/doc-save.test.ts
+      symbol: "문서 저장 계약 시험"
+      coverage: full
+    - path: packages/dashboard/app/docs/docs-view.render.test.tsx
+      symbol: "DocsView 화면 전체 렌더 시험"
+      coverage: full
+    - path: packages/dashboard/app/docs/file-grid.render.test.tsx
+      symbol: "FileView 렌더 시험"
+      coverage: full
+    - path: packages/dashboard/app/docs/notes.render.test.tsx
+      symbol: "NotesPanel 렌더 시험"
+      coverage: full
+    - path: packages/dashboard/app/docs/short-link-button.render.test.tsx
+      symbol: "짧은 주소 단추"
+      coverage: full
+    - path: packages/dashboard/app/docs/theme-fontsize.render.test.tsx
+      symbol: "Nav 및 RootLayout 렌더·WCAG AA 대비 시험"
+      coverage: full
+    - path: packages/dashboard/app/docs/ui1b-defects.render.test.tsx
+      symbol: "UI1b 화면 결함 11건 사전 실패 및 검증 시험"
+      coverage: full
+    - path: packages/dashboard/host-guard.test.mjs
+      symbol: "Host Guard 단위 시험"
+      coverage: full
+    - path: packages/dashboard/server.test.mjs
+      symbol: "Server.mjs 단위 시험"
+      coverage: full
+    - path: packages/dashboard/scripts/short-link.test.mjs
+      symbol: "assertDashboardReadable"
+      coverage: full
+    - path: packages/dashboard/short-link-standalone.test.mjs
+      symbol: "naia-adk 단독 설치: /d/<키> 가 문서를 연다"
+      coverage: full
+    - path: packages/server/test/security.test.ts
+      symbol: "Fastify 서버 통합 보호 검사"
+      coverage: full
+    - path: packages/server/test/portal.test.ts
+      symbol: "Portal Routes (/api/portal)"
+      coverage: full
+    - path: packages/server/test/portal-path-guard.test.ts
+      symbol: "Path Guard & Exclusion Protection"
+      coverage: full
+    - path: packages/server/test/portal-hardlink.test.ts
+      symbol: "Hardlink Guard"
+      coverage: full
+    - path: packages/server/test/portal-search.test.ts
+      symbol: "GET /api/portal/search"
+      coverage: full
+    - path: packages/server/test/portal-w1b.test.ts
+      symbol: "W1b 지시서 포괄 시험"
+      coverage: full
+    - path: packages/server/test/portal-w1b2.test.ts
+      symbol: "W1b-2 검수 결함 보완 시험"
+      coverage: full
+    - path: packages/server/test/portal-w1c.test.ts
+      symbol: "W1c 데이터 폴더 단위 및 통합 시험"
+      coverage: full
+    - path: packages/server/test/portal-w1d.test.ts
+      symbol: "W1d Integration: 문서 편집·메모·즐겨찾기·쓰기보호·doc-notes.mjs"
+      coverage: full
+    - path: packages/server/test/portal-w1d2.test.ts
+      symbol: "W1d-2 검수 결함 수정 포괄 시험"
+      coverage: full
+    - path: scripts/view-folders.test.mjs
+      symbol: "view-folders.mjs 도구 시험"
+      coverage: full
+    - path: scripts/it/workspace-docs-it.mjs
+      symbol: "REQUIRED_TEST_IDS (수동 IT, pnpm test 미포함)"
+      coverage: partial
+    - path: scripts/e2e/workspace-docs-e2e.mjs
+      symbol: "runScratchMode (수동 Playwright E2E, pnpm test 미포함)"
+      coverage: partial
+    - path: "없음"
+      symbol: "DocsPage(packages/dashboard/app/docs/page.tsx) 상태 흐름·FavoritesGroup/DocEditor 단독 렌더 시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "RichDocEditor·PublishReview·다중선택 zip·데스크톱 사이드바 접기·목록/썸네일 전환·사업 탭·이 폴더 파일 목록·인쇄/PDF·이전/다음 파일·Mermaid 확대 뷰어 구현 및 시험 없음"
+      coverage: none
+    - path: "없음"
+      symbol: "ShortLinkButton 클립보드/수동 복사 브라우저 E2E 및 Nav 브랜드명 설정 시험 없음"
+      coverage: none
+  documents:
+    - docs/design/dashboard-plan.md
+    - docs/guides/dashboard-short-links.md
+  reviews:
+    planning: null
+    development: null
+    test: null
+    integration: null
+decisions: []

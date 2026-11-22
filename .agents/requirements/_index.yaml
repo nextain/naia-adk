@@ -1,5 +1,6 @@
-# Product requirement index - fresh workspace.
-# Add entries as requirements are created (see _template.yaml).
 requirements:
-  - id: REQ-WAKE-001
-    path: REQ-WAKE-001.yaml
+- {id: REQ-WAKE-001, path: REQ-WAKE-001.yaml}
+- {id: REQ-DASH-001, path: REQ-DASH-001.yaml}
+- {id: REQ-DASH-002, path: REQ-DASH-002.yaml}
+- {id: REQ-DASH-003, path: REQ-DASH-003.yaml}
+- {id: REQ-GOV-001, path: REQ-GOV-001.yaml}
