@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { main, readLedger, wakeHeader } from "./ledger.mjs";
+import { changeLedger, main, readLedger, wakeHeader } from "./ledger.mjs";
 import { watch, writeLedgerWake } from "./ledger-watch.mjs";
 import { createAdapter } from "./messenger.mjs";
 import { deliverIntake, receiveWork } from "./work-intake.mjs";
@@ -50,7 +50,8 @@ test("first receipt creates one card for each addressee; concurrent watches and 
   await main(["due", card.id, "--root", root, "--role", "editor", "--due", iso(now + 60000),
     "--reason", "confirmed by the requester"], { now });
   assert.equal((await rows("editor"))[0].due_assumed, undefined);
-  await main(["done", card.id, "--root", root, "--role", "editor"], { now });
+  await writeFile(path.join(root, "review.txt"), "Sample reviewed.\n");
+  await main(["done", card.id, "--root", root, "--role", "editor", "--result", "review.txt"], { now });
   await run([task], now + 31 * 60000);
   assert.deepEqual((await rows("editor")).map(c => [c.id, c.status]), [[card.id, "done"]]);
   const both = post("team-task", "<@editor> <@writer> shared review");
@@ -183,4 +184,71 @@ test("a failed intake is retried on the same thread page before the scan moves o
   const next = await watch({ root, config, adapter, now: now + 1000 });
   assert.deepEqual(next.errors, []);
   assert.deepEqual((await rows("editor")).map(c => [c.from.channel, c.from.msg_id]), [["thread-a", "thread-task"]]);
+});
+
+test("ordinary completion keeps one actual result across retries and simultaneous close attempts", async t => {
+  const { root, run, rows } = await setup(t);
+  await run([post("request", "<@writer> prepare a short note")]);
+  const [card] = await rows("writer");
+  const close = (...opts) => main(["done", card.id, "--root", root, "--role", "writer", ...opts], { now });
+  await assert.rejects(close(), /--result/);
+  await assert.rejects(close("--result", "missing.txt"), /missing or empty/);
+  await writeFile(path.join(root, "empty.txt"), "");
+  await assert.rejects(close("--result", "empty.txt"), /missing or empty/);
+  assert.equal((await rows("writer"))[0].status, "open");
+  await writeFile(path.join(root, "answer.txt"), "Answer for the original request.\n");
+  const url = "https://example.org/work/results/2";
+  const closes = await Promise.allSettled([close("--result", "answer.txt"), close("--result", url)]);
+  assert.equal(closes.filter(c => c.status === "fulfilled").length, 1);
+  const [done] = await rows("writer");
+  assert.equal(done.status, "done");
+  assert.equal(done.checked_at, iso(now));
+  assert.ok([path.join(root, "answer.txt"), url].includes(done.result));
+  assert.equal(await close("--result", done.result), card.id);
+  assert.equal((await rows("writer"))[0].result, done.result);
+});
+
+test("previously completed ordinary cards stay readable without inventing missing evidence", async t => {
+  const { root, run, rows } = await setup(t);
+  await run([post("old-request", "<@writer> prepare the old note")]);
+  const [card] = await rows("writer");
+  await changeLedger(root, "writer", ledger => { ledger.items[0].status = "done"; });
+  const args = ["done", card.id, "--root", root, "--role", "writer"];
+  assert.equal(await main(args, { now }), card.id);
+  await assert.rejects(main([...args, "--result", "https://example.org/later"], { now }), /already closed/);
+  assert.equal((await rows("writer"))[0].result, undefined);
+});
+
+test("a stored human completion refers to an actual reply by the configured person for this card", async t => {
+  const { root, run, rows } = await setup(t, {
+    roles: [{ role: "writer", channels: ["100"], user_ids: ["300"], human_ids: ["500"] }],
+    provider: { type: "discord", guild_id: "777", token_env: "FIXTURE_TOKEN" },
+  });
+  await run([post("600", "<@300> prepare the note", { author_id: "500", channel: "100" })]);
+  const [card] = await rows("writer");
+  const messages = {
+    "700": { author: { id: "500" }, content: "Received", message_reference: { channel_id: "100", message_id: "600" } },
+    "701": { author: { id: "999" }, content: card.id },
+    "702": { author: { id: "500" }, content: card.id + "-other" },
+  };
+  let reads = 0;
+  const fetchImpl = async url => {
+    const id = url.pathname.split("/").at(-1);
+    reads++;
+    return messages[id] ? Response.json({ ...messages[id], id }) : new Response("", { status: 404 });
+  };
+  const close = id => main(["done", card.id, "--root", root, "--role", "writer", "--human-msg-id", id], {
+    now, fetchImpl, env: { FIXTURE_TOKEN: "fixture" },
+  });
+  await assert.rejects(close("600"), /--human-msg-id/);
+  await assert.rejects(close("701"), /configured human/);
+  await assert.rejects(close("702"), /does not name item/);
+  await assert.rejects(close("799"), /404/);
+  assert.equal((await rows("writer"))[0].status, "open");
+  assert.equal(await close("700"), card.id);
+  const [done] = await rows("writer");
+  assert.deepEqual([done.status, done.human_msg_id, done.result], ["done", "700", "https://discord.com/channels/777/100/700"]);
+  const previous = reads;
+  assert.equal(await close("700"), card.id);
+  assert.equal(reads, previous);
 });

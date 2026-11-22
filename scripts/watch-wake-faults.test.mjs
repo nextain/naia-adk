@@ -1114,11 +1114,19 @@ test('rev1 blocker 2 + ref 3: escalated_human done requires distinct --human-msg
     /원 지시와 다른 사람 확인 답글 번호/,
   );
 
-  // Closing with a distinct human reply message ID succeeds, AND re-adding the same msg_id is STILL blocked!
+  await mkdir(path.join(root, 'config'), { recursive: true });
+  await writeFile(path.join(root, 'config/work-ledger.json'), JSON.stringify({
+    provider: { type: 'discord', token_env: 'FIXTURE_TOKEN', guild_id: '777' },
+    roles: [{ role: 'minho', human_ids: ['900'] }],
+  }));
+  // The configured person's reply closes this card. The original remains reserved.
   await ledgerCli([
     'done', '--root', root, '--role', 'minho', '--id', 'esc-3',
-    '--result', '대표님 확인 완료', '--human-msg-id', ' 1999000999888777666 ',
-  ]);
+    '--channel', '111', '--human-msg-id', ' 1999000999888777666 ',
+  ], {
+    env: { FIXTURE_TOKEN: 'fixture' },
+    fetchImpl: async () => Response.json({ id: '1999000999888777666', author: { id: '900' }, content: 'esc-3 확인' }),
+  });
   const closedLedger = await readLedger(root, 'minho');
   const closedCard = closedLedger.items.find((i) => i.id === 'esc-3');
   assert.equal(closedCard.status, 'done');

@@ -21,7 +21,7 @@ import {
   isWorkerItem,
   loadLedgerConfig,
 } from "./ledger.mjs";
-import { createAdapter } from "./messenger.mjs";
+import { configuredHumans, createAdapter } from "./messenger.mjs";
 import { cleanReceipts, dueWake, receiptPath, reconcileCurrent } from "./due-timer.mjs";
 import { reconcileWorkerRuns } from "./worker-run.mjs";
 import { deliverIntake, orderForIntake, receiveWork, relatedSources, relatedTask } from "./work-intake.mjs";
@@ -716,9 +716,7 @@ export async function watch({
           ...roleOption(roleConfig, config, "channels", []),
           ...directChannels,
         ])];
-        const humans = roleConfig.human_ids ?? roleConfig.humans ??
-          config.defaults?.human_ids ?? config.defaults?.humans ??
-          config.human_ids ?? config.humans ?? [];
+        const humans = configuredHumans(config, roleConfig);
         const relays = [
           ...new Set([
             ...(roleConfig.relay_ids ?? []),

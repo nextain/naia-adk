@@ -1,5 +1,35 @@
 // Providers return normalized messages;
 // Watchers never depend on a local messenger script.
+export function configuredHumans(config, role) {
+  return role?.human_ids ?? role?.humans ?? config.defaults?.human_ids ?? config.defaults?.humans ??
+    config.human_ids ?? config.humans ?? [];
+}
+
+// Instructed work uses the owner's short card reference. Ordinary work can
+// also be acknowledged by directly replying to a source recorded on the card.
+export async function verifyCardReply({ adapter, authors, item, channel, msgId, ordinary = false }) {
+  if (!/^\d+$/.test(channel ?? "") || !/^\d+$/.test(msgId ?? ""))
+    throw new Error(ordinary ? "done requires a numeric confirmation channel and --human-msg-id" : "confirm requires numeric --channel and --msg-id");
+  const message = await adapter.message(channel, msgId);
+  const sender = ordinary ? "human" : "owner";
+  if (message?.id !== msgId || !authors.includes(message.author?.id))
+    throw new Error(`Message was not written by a configured ${sender}`);
+  const key = ordinary ? item.id : item.id.slice(0, 8);
+  const namesCard = text => typeof text === "string" && (ordinary
+    ? (text.match(/[A-Za-z0-9_-]+/g) ?? []).includes(key)
+    : text.includes(key));
+  if (namesCard(message.content)) return message;
+  const ref = message.message_reference;
+  if (ref?.message_id) {
+    const parentChannel = ref.channel_id ?? channel;
+    if (ordinary && [item.from, ...(item.intake_messages ?? [])].some(source =>
+      source.channel === parentChannel && source.msg_id?.trim() === ref.message_id)) return message;
+    const parent = message.referenced_message ?? await adapter.message(parentChannel, ref.message_id);
+    if (namesCard(parent?.content)) return message;
+  }
+  throw new Error(`Confirmation does not name item ${key} or reply to its record`);
+}
+
 export function createAdapter(
   provider,
   {
@@ -54,9 +84,9 @@ export function createAdapter(
   const directChannels = new Set();
   return {
     beginRound() { activeGuilds.clear(); referencedAuthors.clear(); threadOwners.clear(); retryWaitMs = 0; },
-    messageUrl(channel, messageId) {
-      if (directChannels.has(channel)) return `https://discord.com/channels/@me/${channel}/${messageId}`;
-      const guild = provider.guild_id || provider.guildId || channelGuilds.get(channel);
+    messageUrl(channel, messageId, { direct = false, guildId } = {}) {
+      if (direct || directChannels.has(channel)) return `https://discord.com/channels/@me/${channel}/${messageId}`;
+      const guild = guildId || provider.guild_id || provider.guildId || channelGuilds.get(channel);
       return guild
         ? `https://discord.com/channels/${guild}/${channel}/${messageId}`
         : null;

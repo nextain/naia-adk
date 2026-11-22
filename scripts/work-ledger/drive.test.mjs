@@ -109,7 +109,7 @@ const reasons = (out) => out.alerts.map((entry) => `${entry.role}:${entry.id}:${
 // ---- 갈래 B-1: 지금 쓰는 장부를 깨지 않음 ----
 
 for (const withDrive of [false, true])
-  test(`current command shapes pass unchanged (${withDrive ? "drive configured" : "no configuration"})`, async () => {
+  test(`ordinary work records its result through the CLI (${withDrive ? "drive configured" : "no configuration"})`, async () => {
     const { root } = await setup();
     if (!withDrive) await rm(path.join(root, "config/work-ledger.json"));
     const config = withDrive ? ["--config", path.join(root, "config/work-ledger.json")] : [];
@@ -119,13 +119,15 @@ for (const withDrive of [false, true])
     // Promise-only registration, as the post guard instructs: title, due, channel, message.
     const first = (await call("add", "--role", "lead", "--title", "15시까지 올림", "--due", "2099-01-02T06:00:00Z", "--channel", "111", "--msg-id", "222")).split("\n")[0];
     const second = (await call("add", "--role", "lead", "--title", "둘째", "--due", "2099-01-02T07:00:00Z", "--channel", "111", "--msg-id", "223", ...config)).split("\n")[0];
-    // Wrapper shape: touch, then done / drop with the same arguments.
+    // The same wrapper can record a result with or without a drive configuration.
     await call("touch", first, "--role", "lead", ...config);
-    assert.equal(await call("done", first, "--role", "lead", ...config), first);
+    const resultUrl = "https://example.org/reports/first";
+    assert.equal(await call("done", first, "--role", "lead", "--result", resultUrl, ...config), first);
     await call("touch", "--id", second, "--reason", "요청자가 중단함", "--role", "lead", ...config);
     assert.equal(await call("drop", "--id", second, "--reason", "요청자가 중단함", "--role", "lead", ...config), second);
     assert.equal(await call("report", "--role", "lead", ...config, "--channel", "111", "--msg-id", "333", "--every-min", "120"), "보고 기록");
     const ledger = await readLedger(root, "lead");
+    assert.equal(ledger.items[0].result, resultUrl);
     assert.deepEqual(ledger.items.map((entry) => [entry.status, entry.checked_at !== null, entry.drive]), [["done", true, undefined], ["dropped", true, undefined]]);
     assert.equal(ledger.items[1].note, "요청자가 중단함");
     assert.deepEqual([ledger.report.last_msg_id, ledger.report.every_min, ledger.report.channel], ["333", 120, "111"]);

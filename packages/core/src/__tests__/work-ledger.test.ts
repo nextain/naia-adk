@@ -71,6 +71,7 @@ describe("work-ledger core loader", () => {
             due: "2026-11-16T12:00:00Z",
             status: "done",
             worker: { name: "w1", result: "docs/guides/out.md", done_file: "w1.done" },
+            result: "https://example.org/reviewed-result",
             checked_at: "2026-11-17T01:00:00Z",
             note: "",
           },
@@ -123,7 +124,7 @@ describe("work-ledger core loader", () => {
     expect(res.items[0].sourceUrl).toBe("https://discord.com/channels/777888999/ch-2/333")
     expect(res.items[1].sourceUrl).toBe("https://discord.com/channels/@me/dm-1/222")
     expect(res.items[3].sourceUrl).toBeNull()
-    expect(res.items[3].rawResults).toEqual(["docs/guides/out.md"])
+    expect(res.items[3].rawResults).toEqual(["https://example.org/reviewed-result", "docs/guides/out.md"])
   })
 
   it("supports external kit config via NAIA_WORK_LEDGER_CONFIG + NAIA_WORK_LEDGER_ROOT + NAIA_DISCORD_GUILD_ID", async () => {
