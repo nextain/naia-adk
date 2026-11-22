@@ -16,6 +16,8 @@ import { main, readLedger, ledgerPath, changeLedger, wakeHeader } from "./ledger
 import { watch } from "./ledger-watch.mjs";
 import { startWorkerRun } from "./worker-run.mjs";
 import { dueWake } from "./due-timer.mjs";
+import { tick as drive } from "./drive.mjs";
+import { registerWorker, updateWorkerRuntime, watchWorkers } from "../work-watch.mjs";
 import { createAdapter } from "./messenger.mjs";
 const now = Date.parse("2026-11-08T12:00:00Z");
 const headerRow = (id, changes = {}) => ({
@@ -2442,9 +2444,14 @@ test('the owning workspace keeps the role ledger across agent seats and existing
   await writeFile(path.join(memory, 'adk.json'), '{}');
   const alias = path.join(root, 'role-memory');
   await symlink(memory, alias, 'dir');
+  const scheduled = { ...config, drive: { enabled: true, worker: { command: [process.execPath] } } };
   for (const directory of [agent, memory, path.join(alias, 'new')]) {
-    await assert.rejects(add(directory), /Agent workspaces cannot own a work ledger/);
     const denied = /Agent workspaces cannot own a work ledger/;
+    await assert.rejects(add(directory), denied);
+    await assert.rejects(drive({ root: directory, config: scheduled, now }), denied);
+    await assert.rejects(registerWorker({ root: directory, role: 'secretary', id: 'worker', resultFile: 'result' }), denied);
+    await assert.rejects(updateWorkerRuntime({ root: directory, role: 'secretary', id: 'worker' }), denied);
+    await assert.rejects(watchWorkers({ root: directory }), denied);
     await assert.rejects(watch({ root: directory, config, now }), denied);
     await assert.rejects(startWorkerRun({ root: directory, role: 'secretary', name: 'job' }, []), denied);
     await assert.rejects(dueWake({ root: directory, role: 'secretary', id: 'job', due: '2026-11-08T11:00:00Z', now }), denied);
