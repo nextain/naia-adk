@@ -812,6 +812,7 @@ export async function watch({
           );
           const threadLimit = Math.max(0, maxThreads);
           const cursorKey = `${role}:${channel}`;
+          const previousThreadCursor = state.thread_cursors[cursorKey];
           let threadIds = [];
           if (threadLimit > 0 && candidateThreads.length > 0) {
             if (candidateThreads.length <= threadLimit) {
@@ -1281,6 +1282,10 @@ export async function watch({
               }
             } catch (error) {
               const sourceChannel = m?.channel || channel;
+              if (intake.enabled === true && sourceChannel !== channel) {
+                if (previousThreadCursor === undefined) delete state.thread_cursors[cursorKey];
+                else state.thread_cursors[cursorKey] = previousThreadCursor;
+              }
               errors.push(`messenger:${role}:${sourceChannel}:${m?.id}`);
               await wake(
                 role,

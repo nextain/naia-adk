@@ -126,3 +126,18 @@ test("a queued notice survives restart without a messenger; already published fi
   assert.ok((await readFile(path.join(box, files[0]), "utf8")).includes((await rows("writer"))[0].id));
   assert.equal((await rows("writer"))[0].intake_messages[0].pending, undefined);
 });
+
+test("a failed intake is retried on the same thread page before the scan moves on", async t => {
+  const { root, config, rows } = await setup(t, { max_threads: 1, intake: { enabled: true, defaultDueMinutes: 0 } });
+  const adapter = {
+    messages: async ch => ch === "thread-a" ? [post("thread-task", "<@editor> record this", { channel: ch })] : [],
+    threads: async ch => ch === "room" ? ["thread-a", "thread-b"] : [],
+  };
+  const failed = await watch({ root, config, adapter, now });
+  assert.ok(failed.errors.includes("messenger:editor:thread-a:thread-task"));
+  assert.deepEqual(await rows("editor"), []);
+  config.intake.defaultDueMinutes = 30;
+  const next = await watch({ root, config, adapter, now: now + 1000 });
+  assert.deepEqual(next.errors, []);
+  assert.deepEqual((await rows("editor")).map(c => [c.from.channel, c.from.msg_id]), [["thread-a", "thread-task"]]);
+});
