@@ -57,7 +57,7 @@ node scripts/work-ledger/ledger.mjs --root . --role secretary drop --id ITEM_ID 
 node scripts/work-ledger/ledger.mjs --root . --role secretary report --every-min 60 --channel CHANNEL_ID --msg-id REPORT_MESSAGE_ID
 ```
 
-`add`가 출력한 항목 ID를 이후 명령에 씁니다. `touch`는 결과를 읽었다는 표시입니다. 일반 카드는 `done --result`에 내용이 있는 결과 파일 또는 HTTP(S) 주소를 주면 그 위치와 완료 시각을 같은 카드에 기록합니다. 상대 파일 경로의 기준은 `--root`입니다. HTTP(S) 주소는 참조용으로 저장합니다.
+`add`가 출력한 항목 ID를 이후 명령에 씁니다. `touch`는 결과를 읽은 시각(`checked_at`)을 갱신합니다. 일반 카드는 `done --result`에 내용이 있는 결과 파일 또는 HTTP(S) 주소를 주면 그 위치(`result`)와 완료 시각(`completed_at`)을 같은 카드에 기록합니다. 상대 파일 경로의 기준은 `--root`입니다. HTTP(S) 주소는 참조용으로 저장합니다.
 
 설정에 등록한 사람이 이미 확인한 경우에는 `--human-msg-id 답글_ID`로 그 답글을 결과로 남길 수도 있습니다. 답글에 카드 ID가 있거나 해당 카드의 원글에 단 답글이어야 합니다. 다른 채널의 답글은 `--channel 채널_ID`를 함께 줍니다. 이전에 완료한 카드는 기존 기록대로 조회됩니다.
 

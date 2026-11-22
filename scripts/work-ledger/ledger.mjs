@@ -683,7 +683,8 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
         item.drop_count = 1;
       }
       item.status = "done";
-      item.checked_at = new Date(clock()).toISOString();
+      item.completed_at = new Date(clock()).toISOString();
+      item.checked_at = item.completed_at;
     }
     if (o.reason) item.note = o.reason;
     return item.id;

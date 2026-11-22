@@ -203,8 +203,11 @@ test("ordinary completion keeps one actual result across retries and simultaneou
   const [done] = await rows("writer");
   assert.equal(done.status, "done");
   assert.equal(done.checked_at, iso(now));
+  assert.equal(done.completed_at, iso(now));
   assert.ok([path.join(root, "answer.txt"), url].includes(done.result));
   assert.equal(await close("--result", done.result), card.id);
+  await main(["touch", card.id, "--root", root, "--role", "writer"]);
+  assert.equal((await rows("writer"))[0].completed_at, iso(now));
   assert.equal((await rows("writer"))[0].result, done.result);
 });
 
