@@ -173,6 +173,11 @@ export function validateGroupManifestSection(manifest, adkDir = null, errors = [
   }
 
   scanForForbiddenSecretFields(gc, 'group_config', errors);
+  if (gc.operations !== undefined) {
+    if (!gc.operations || typeof gc.operations !== 'object' || Array.isArray(gc.operations)) errors.push('group_config.operations must be an object');
+    else validateSafeRelFile(gc.operations.sensors_file, 'group_config.operations.sensors_file', adkDir, errors);
+  }
+
 
   // 1. Calendar & milestones
   const milestoneIds = new Set();

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ACTIVITY_DETAILS, DEFAULT_SOFT_SILENCE_MS } from "./constants.mjs";
-import { projectServiceHealth } from "./projector.mjs";
+import { projectServiceHealth, readProcessWorkingDirectory } from "./projector.mjs";
 import { buildSafeEventSummary, canonicalTimestamp, safeIdentifier, validateBackendCapabilities } from "./sanitize.mjs";
 import { validateDurableExecutionBinding } from "./execution-profile.mjs";
 
@@ -20,6 +20,7 @@ export class SessionJobWriter {
 	heartbeatService({ generation = randomUUID(), status = "running", pid = process.pid, now = new Date().toISOString() } = {}) {
 		const bootId = this.readBootId();
 		const processStartIdentity = this.readProcessStartIdentity(pid);
+		const processWorkingDirectory = readProcessWorkingDirectory(pid);
 		safeIdentifier(generation, "generation");
 		if (!new Set(["running", "stopped"]).has(status)) throw new Error("service status is not allowed");
 		if (pid !== null && (!Number.isSafeInteger(pid) || pid <= 0)) throw new Error("service pid must be a positive safe integer or null");
@@ -43,6 +44,7 @@ export class SessionJobWriter {
 					&& currentOwnerStartIdentity !== null
 					&& existing.process_start_identity !== null
 					&& existing.process_start_identity === currentOwnerStartIdentity;
+				if (existing.generation === generation && existing.process_cwd && processWorkingDirectory && existing.process_cwd !== processWorkingDirectory && !stoppingCurrentOwner) throw new Error("service working directory conflict within generation");
 				if (existing.generation === generation && !sameOwnerTuple && !stoppingCurrentOwner) throw new Error(`service ownership conflict within generation ${generation}`);
 				if (existing.generation !== generation && existing.boot_id === bootId) {
 					const existingHealth = projectServiceHealth(existing, Date.parse(now));
@@ -50,12 +52,12 @@ export class SessionJobWriter {
 				}
 			}
 			this.db.prepare(`
-				INSERT INTO service_state(id, generation, status, pid, started_at, heartbeat_at, boot_id, process_start_identity)
-				VALUES(1, ?, ?, ?, ?, ?, ?, ?)
+				INSERT INTO service_state(id, generation, status, pid, started_at, heartbeat_at, boot_id, process_start_identity, process_cwd)
+				VALUES(1, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT(id) DO UPDATE SET generation = excluded.generation, status = excluded.status,
 					pid = excluded.pid, heartbeat_at = excluded.heartbeat_at, boot_id = excluded.boot_id,
-					process_start_identity = excluded.process_start_identity
-			`).run(generation, status, pid, now, now, bootId, processStartIdentity);
+					process_start_identity = excluded.process_start_identity, process_cwd = excluded.process_cwd
+			`).run(generation, status, pid, now, now, bootId, processStartIdentity, processWorkingDirectory);
 			this.db.exec("COMMIT");
 			return generation;
 		} catch (error) {

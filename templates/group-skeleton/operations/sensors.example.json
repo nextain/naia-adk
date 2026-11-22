@@ -1,0 +1,28 @@
+{
+  "enabled": false,
+  "authority": { "instance_id": "sensor-primary" },
+  "state_directory": "sensor-state",
+  "messenger": {
+    "unanswered_seconds": 1800,
+    "routes": [
+      { "id": "support-room", "server_ref": "server-a", "role": "support" },
+      { "id": "development-room", "server_ref": "server-b", "role": "developer" }
+    ]
+  },
+  "mail": {
+    "metadata_only": true,
+    "agent_sender_refs": ["developer-agent", "support-agent"],
+    "sources": [
+      { "id": "support-inbox", "kind": "mailbox", "resource_ref": "support-mailbox", "role": "support" },
+      { "id": "development-mail", "kind": "group", "resource_ref": "development-group", "role": "developer" }
+    ]
+  },
+  "sessions": [
+    {
+      "id": "developer-session",
+      "workspace": "agents/developer-agent-adk",
+      "expected_account_ref": "approved-account",
+      "recovery_actions": ["restart_sensor", "enable_wait", "clear_input"]
+    }
+  ]
+}

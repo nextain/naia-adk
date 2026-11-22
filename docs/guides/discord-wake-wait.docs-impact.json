@@ -1,0 +1,16 @@
+{
+  "work": "unified-wake-wait-20261104",
+  "repository_docs": {
+    "status": "UPDATED",
+    "evidence": ["docs/guides/discord-wake-wait.md", ".agents/skills/manage-discord-sessions/SKILL.md"]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "evidence": ["docs/guides/discord-wake-wait.md"]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "evidence": ["docs/guides/discord-wake-wait.md"],
+    "validation_limits": "Local deterministic Gateway, inbox, summary delivery, and Linux process tests. Windows cwd and live Discord deployment are outside this validation."
+  }
+}

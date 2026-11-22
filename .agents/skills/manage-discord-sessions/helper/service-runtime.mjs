@@ -14,6 +14,7 @@ import { assertOwnerOnly, protectOwnerOnly } from "./platform-security.mjs";
 import { fetchDiscordConversation } from "./discord-conversation.mjs";
 import { buildAgentContextSnapshot } from "./agent-context.mjs";
 import { acquireDiscordTokenOwnerLock, defaultDiscordTokenLockDirectory, discordTokenFingerprint } from "./token-owner-lock.mjs";
+import { WakeInbox } from "./wake-inbox.mjs";
 import { DISCORD_SERVICE_FAILURE_REASONS } from "./constants.mjs";
 
 export function configuredBackendCommand(name) {
@@ -266,6 +267,7 @@ export async function runDiscordService({ adkRoot, instance = "default", managed
 		const loadHistory = (input) => fetchDiscordConversation({ ...input, fetchImpl: fetchImpl ?? fetch });
 		const defaultContext = agentContexts.default ?? Object.values(agentContexts)[0];
 		router = new DiscordMessageRouter({ config, store, token, botUserId: config.discord.botUserId, cwd: defaultContext.cwd, allowedPaths: defaultContext.allowedPaths, agentContexts, runtimeRoot: paths.runtimeRoot, instance: paths.instance, agentContextSnapshot: defaultContext.snapshot, runtimeRevision: managedRuntimeRevision ?? null, recoveryCodec, projectStatus: projection ? (input) => projection.publishScope(input) : null, deliver: delivery, send, loadHistory, backendExecutables, verifyRuntimeInputs });
+		const wakeInbox = new WakeInbox({ paths, bindings: config.discord.bindings, submit: (request) => router.submitOperatorRequest(request) });
 		let reconnectDelay = 1_000;
 		const heartbeat = () => heartbeatServiceSafely(store, { generation, status: stopping ? "stopped" : "running", pid: stopping ? null : process.pid });
 		heartbeat();
@@ -289,6 +291,7 @@ export async function runDiscordService({ adkRoot, instance = "default", managed
 			if (controlBusy) return;
 			controlBusy = true;
 			try {
+			try { await wakeInbox.poll(); } catch { console.error("naia-discord-service: wake_inbox_poll_failed"); }
 			if (existsSync(paths.jobControlRequestPath)) {
 				let receipt = null;
 				try {

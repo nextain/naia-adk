@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { UnansweredDigest } from "./unanswered-digest.mjs";
 import { getBackendAdapter, readOnlyBackendOptions } from "./adapters.mjs";
 import { authorizeDiscordMessage } from "./discord-scope.mjs";
 import { deliverJobResult, formatOperatorStatus, postDiscordDirectMessage } from "./discord-delivery.mjs";
@@ -76,6 +77,8 @@ export class DiscordMessageRouter {
 		this.recoveryCodec = recoveryCodec;
 		this.projectStatus = projectStatus;
 		this.now = now;
+		this.unansweredDigest = new UnansweredDigest();
+		this.digestSending = false;
 		this.threadParents = new Map();
 		for (const binding of config.discord.bindings) {
 			if (binding.kind === "thread") this.threadParents.set(binding.threadId, { parentChannelId: binding.channelId, guildId: binding.guildId });
@@ -94,7 +97,7 @@ export class DiscordMessageRouter {
 		this.outboundClosed = false;
 	}
 
-	async onDispatch(type, data, sequence, { accessCeiling = null } = {}) {
+	async onDispatch(type, data, sequence, { accessCeiling = null, trackDigest = true } = {}) {
 		if (!this.accepting) return { state: "stopping" };
 		if (type === "THREAD_CREATE" || type === "THREAD_UPDATE") {
 			if (data?.id && data?.parent_id) this.threadParents.set(data.id, { parentChannelId: data.parent_id, guildId: data.guild_id });
@@ -105,6 +108,7 @@ export class DiscordMessageRouter {
 			return { state: "threads_cached" };
 		}
 		if (type !== "MESSAGE_CREATE") return { state: "ignored" };
+		if (this.config.discord.unansweredDigest === true) this.unansweredDigest.observeReply(data, [this.botUserId, ...(this.config.discord.teamBotUserIds ?? [])], this.now());
 		const authorization = authorizeDiscordMessage({ message: data, bindings: this.config.discord.bindings, operatorUserIds: this.config.discord.operatorUserIds, participantProfiles: this.config.discord.participantProfiles, botUserId: this.botUserId, threadParents: this.threadParents });
 		const sourceMessageId = data.id;
 		if (!authorization.allowed) {
@@ -173,6 +177,7 @@ export class DiscordMessageRouter {
 			softSilenceMs: (this.config.runtime?.softSilenceSeconds ?? 120) * 1_000, recoveryEnvelope, executionBinding, now: this.#nowIso() });
 		if (ingress.duplicate) return { state: "duplicate", jobId: ingress.jobId };
 		const item = { jobId, backendId, prompt, currentRequest, channelId, scopeKey: authorization.scopeKey, sourceMessageId, allowedUserIds: authorization.binding.allowedUserIds, binding: authorization.binding, participantUserId: authorization.scope.authorId, authority, commandOptions, executionProfile, accessCeiling: effectiveAccessCeiling, ...(this.config.schemaVersion === 2 ? { originalAccessCeiling: accessCeiling, windowClosed } : {}), agentContext: selected };
+		if (trackDigest && this.config.discord.unansweredDigest === true) this.unansweredDigest.track(data, this.now());
 		this.workItems.set(jobId, item);
 		if (windowClosed) {
 			try { this.store.recordEvent({ jobId, source: "helper", kind: "profile_replaced", safePayload: { reasonCode: "mutation_window_closed" } }); }
@@ -185,8 +190,8 @@ export class DiscordMessageRouter {
 		return { state: "accepted", jobId };
 	}
 
-	async submitOperatorRequest({ channelId, authorId, content, access = null }) {
-		if (!/^\d{17,20}$/.test(channelId ?? "") || !/^\d{17,20}$/.test(authorId ?? "") || typeof content !== "string" || !content.trim() || content.length > 4_000) {
+	async submitOperatorRequest({ channelId, authorId, content, access = null, sourceMessageId = null }) {
+		if ((sourceMessageId !== null && !/^\d{17,20}$/.test(sourceMessageId)) || !/^\d{17,20}$/.test(channelId ?? "") || !/^\d{17,20}$/.test(authorId ?? "") || typeof content !== "string" || !content.trim() || content.length > 4_000) {
 			return { state: "rejected", action: "submit", reasonCode: "invalid_operator_submission" };
 		}
 		const binding = this.config.discord.bindings.find((candidate) =>
@@ -196,7 +201,7 @@ export class DiscordMessageRouter {
 			&& (candidate.threadId ?? candidate.channelId) === channelId);
 		if (!binding || !this.config.discord.operatorUserIds.includes(authorId)) return { state: "rejected", action: "submit", reasonCode: "operator_binding_unavailable" };
 		const data = {
-			id: localOperatorSnowflake(this.now()),
+			id: sourceMessageId ?? localOperatorSnowflake(this.now()),
 			channel_id: channelId,
 			...(binding.guildId ? { guild_id: binding.guildId } : {}),
 			author: { id: authorId, bot: false },
@@ -205,7 +210,7 @@ export class DiscordMessageRouter {
 		};
 		// 상한은 낮추는 방향으로만 받는다. 다른 값이 오면 권한을 넓히려는 시도로 본다.
 		if (access !== null && access !== "read-only") return { state: "rejected", action: "submit", reasonCode: "invalid_access_attenuation" };
-		const result = await this.onDispatch("MESSAGE_CREATE", data, null, { accessCeiling: access });
+		const result = await this.onDispatch("MESSAGE_CREATE", data, null, { accessCeiling: access, trackDigest: false });
 		return { ...result, action: "submit", semantics: access === "read-only" ? "owner_controlled_read_only_submission" : "owner_controlled_operator_submission" };
 	}
 
@@ -684,6 +689,15 @@ export class DiscordMessageRouter {
 				try { this.store.recordEvent({ jobId: job.jobId, attemptId: job.attemptId ?? undefined, source: "helper", kind: "failed", safePayload: { reasonCode: "no_progress_timeout" } }); } catch {}
 			}
 			outcome.noProgress += 1;
+		}
+		const recipient = proactiveDmRecipient(this.config);
+		const due = this.unansweredDigest.due(nowMs);
+		if (this.accepting && this.config.discord.unansweredDigest === true && recipient && due.length && !this.digestSending) {
+			this.digestSending = true;
+			try {
+				const receipt = await this.#runOutbound((signal) => this.directMessage({ token: this.token, userId: recipient, content: this.unansweredDigest.format(due), nonce: randomUUID().replaceAll("-", "").slice(0, 24), botUserId: this.botUserId, signal })).promise;
+				if (receipt?.state === "confirmed") this.unansweredDigest.markSent(due);
+			} catch { /* Retry eligible entries on the next watchdog without delaying job health checks. */ } finally { this.digestSending = false; }
 		}
 		return outcome;
 	}

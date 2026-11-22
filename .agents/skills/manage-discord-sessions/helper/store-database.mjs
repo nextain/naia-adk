@@ -181,6 +181,7 @@ function migrate(db) {
 	};
 	ensureColumn("service_state", "boot_id", "TEXT");
 	ensureColumn("service_state", "process_start_identity", "TEXT");
+	ensureColumn("service_state", "process_cwd", "TEXT");
 	ensureColumn("jobs", "child_pid", "INTEGER");
 	ensureColumn("jobs", "child_boot_id", "TEXT");
 	ensureColumn("jobs", "child_start_identity", "TEXT");

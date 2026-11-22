@@ -1,0 +1,29 @@
+{
+  "work": "group-session-sensors",
+  "repository_docs": {
+    "status": "UPDATED",
+    "evidence": [
+      "docs/guides/group-session-sensors.md",
+      "templates/group-skeleton/operations/sensors.example.json"
+    ]
+  },
+  "user_manual": {
+    "status": "UPDATED",
+    "evidence": [
+      "docs/guides/group-session-sensors.md"
+    ]
+  },
+  "reusable_learning": {
+    "status": "UPDATED",
+    "evidence": [
+      "docs/guides/group-session-sensors.md"
+    ],
+    "validation_limits": "Local deterministic adapters only; provider and host integration are instance responsibilities."
+  },
+  "harness_book": {
+    "status": "UPDATED",
+    "evidence": [
+      "Downstream Korean harness book, chapter 17 section 17.9"
+    ]
+  }
+}
