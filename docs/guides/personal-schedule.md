@@ -1,5 +1,8 @@
 # Personal schedule
 
+Open `/schedule` for the calendar. Existing `/work?view=schedule` bookmarks
+redirect there and keep the query, including the item and date in a calendar link.
+
 The dashboard schedule combines a personal calendar with work items and
 milestones from the work board. The personal layer is stored separately for
 each authenticated user as `schedule/personal/<user>.yaml`. Configure

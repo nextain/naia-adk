@@ -12,6 +12,12 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/*": ["./ax-messenger-gateway.mjs", "./messenger-gate.mjs", "../ax-messenger/package.json", "../ax-messenger/dist/**/*"],
   },
+  redirects: async () => [{
+    source: "/work",
+    has: [{ type: "query", key: "view", value: "schedule" }],
+    destination: "/schedule",
+    permanent: false,
+  }],
   // 포털 API만 백엔드로 넘긴다. Matrix API는 대시보드 커스텀 서버가 직접 처리한다.
   // 전부 넘기면 대시보드를 다른 기기에 열었을 때 /api/files로 작업 공간 전체 파일이 보이므로 포털만 넘긴다.
   rewrites: async () => [
