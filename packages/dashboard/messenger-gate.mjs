@@ -16,10 +16,12 @@ const DISPLAY_HEADER = "x-ax-user"
 const ACCOUNT_KEY_RE = /^[a-z][a-z0-9-]{1,31}$/
 const verifiedAccounts = new WeakMap()
 
+export function verifiedMessengerAccount(req) { return verifiedAccounts.get(req)?.account ?? null }
+
 function isMessengerApiPath(url) {
   if (typeof url !== "string") return false
   const pathname = url.split("?")[0]
-  return pathname === MESSENGER_API_PATH || pathname.startsWith(`${MESSENGER_API_PATH}/`)
+  return pathname === MESSENGER_API_PATH || pathname.startsWith(`${MESSENGER_API_PATH}/`) || pathname === "/api/ax-messenger" || pathname.startsWith("/api/ax-messenger/") || pathname === "/ax/messenger" || pathname.startsWith("/ax/messenger/")
 }
 
 /**
@@ -46,6 +48,39 @@ export function verifyMessengerGate(req, env = process.env) {
 /** verifyMessengerGate 가 이 요청의 게이트 비밀·계정을 확인했는지. */
 export function isMessengerGateVerified(req) {
   return verifiedAccounts.has(req)
+}
+
+/**
+ * 쓰기 요청의 Origin 이 같은 호스트 또는 (확인된 요청에 한해) 앞단 프로토콜·공개 주소와 일치하는지 검사한다.
+ * host·origin·x-forwarded-proto 는 단일 머리글 규칙(배열·쉼표·중복 키 거부)으로 읽는다.
+ */
+export function isAllowedMessengerOrigin(
+  req,
+  env = process.env,
+  { socket = req?.socket, allowProxyOrigin = isMessengerGateVerified(req) } = {},
+) {
+  const hostHeader = inspectSingleHeaderOnReq(req, "host")
+  const incomingOrigin = inspectSingleHeaderOnReq(req, "origin")
+  if (!hostHeader.present || !hostHeader.valid || !hostHeader.value || !incomingOrigin.present || !incomingOrigin.valid || !incomingOrigin.value) {
+    return false
+  }
+  const scheme = socket?.encrypted ? "https" : "http"
+  const allowed = new Set([`${scheme}://${hostHeader.value}`])
+  if (allowProxyOrigin) {
+    const proto = inspectSingleHeaderOnReq(req, "x-forwarded-proto")
+    if (proto.present && proto.valid && /^(http|https)$/.test(proto.value ?? "")) {
+      allowed.add(`${proto.value}://${hostHeader.value}`)
+    }
+    try {
+      if (env?.NAIA_DASHBOARD_PUBLIC_URL) {
+        const publicUrl = new URL(env.NAIA_DASHBOARD_PUBLIC_URL)
+        if (publicUrl.protocol === "http:" || publicUrl.protocol === "https:") {
+          allowed.add(publicUrl.origin)
+        }
+      }
+    } catch {}
+  }
+  return allowed.has(incomingOrigin.value)
 }
 
 /**

@@ -1,6 +1,6 @@
 // Top tabs and main-area width. hasMessenger is /api/portal messenger.enabled: the 대화 tab hides only
 // when the server says the messenger is off; older servers that omit it keep the tab.
-export type TopNavTabId = "docs" | "schedule" | "decisions" | "work" | "messages"
+export type TopNavTabId = "docs" | "schedule" | "decisions" | "work" | "messages" | "ax-messenger"
 
 export interface TopNavTabItem {
   id: TopNavTabId
@@ -15,10 +15,11 @@ export const TOP_NAV_TABS: readonly TopNavTabItem[] = [
   { id: "decisions", label: "결정", href: "/decisions", requiresBoard: false },
   { id: "work", label: "작업", href: "/work", requiresBoard: true },
   { id: "messages", label: "대화", href: "/messages", requiresBoard: false },
+  { id: "ax-messenger", label: "Matrix 대화", href: "/ax/messenger", requiresBoard: false },
 ]
 
-export function visibleTopNavTabs(hasMessenger: boolean | null | undefined): readonly TopNavTabItem[] {
-  return hasMessenger === false ? TOP_NAV_TABS.filter((tab) => tab.id !== "messages") : TOP_NAV_TABS
+export function visibleTopNavTabs(hasMessenger: boolean | null | undefined, hasAxMessenger?: boolean | null): readonly TopNavTabItem[] {
+  return TOP_NAV_TABS.filter(tab => (tab.id !== "messages" || hasMessenger !== false) && (tab.id !== "ax-messenger" || hasAxMessenger === true))
 }
 
 const under = (pathname: string | null, href: string) =>
@@ -34,6 +35,6 @@ export function isTopNavTabActive(tab: TopNavTabItem, pathname: string | null): 
 
 export function mainClassForPath(pathname: string | null): string {
   // The messages screen fills the space under the nav bar; its message list scrolls by itself.
-  if (isMessagesPath(pathname)) return "w-full"
+  if (isMessagesPath(pathname) || under(pathname, "/ax/messenger")) return "w-full"
   return "max-w-7xl mx-auto px-6 py-8"
 }
