@@ -299,6 +299,8 @@ function readSeenFile(file) {
 }
 
 function wakeSource(body) {
+  const cardId = /^\[장부\] 접수한 작업: [^\r\n]*\r?\n작업카드: ([A-Za-z0-9][A-Za-z0-9_-]*)\r?\n/.exec(body)?.[1];
+  if (cardId) return { cardId };
   const [, metadata] = /^# Discord wake\r?\n\r?\n([^]*?)(?:\r?\n\r?\n|$)/.exec(body) ?? [];
   if (!metadata) return {};
   const field = name => new RegExp(`^${name}: (.*)$`, 'm').exec(metadata)?.[1]?.trim();

@@ -168,6 +168,7 @@ export function createAdapter(
               edited_timestamp: m.edited_timestamp || null,
               body: m.content || "",
               reply_to_id: m.message_reference?.message_id || null,
+              reply_to_channel: m.message_reference?.channel_id || null,
               reply_to_author_id: replyAuthor,
               mentions: (m.mentions || []).map((mention) =>
                 typeof mention === "string" ? mention : mention.id,

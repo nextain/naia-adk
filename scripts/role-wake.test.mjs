@@ -88,6 +88,7 @@ test('work-header delivery uses producer metadata, falls back to recent work, an
   const bodies = [
     discordWake(`Author: Human\r\nMessage ID: ${ORIGINAL_MESSAGE}`),
     discordWake(`Author: agent-request-watch\r\nMessage ID: ${STAGE_MESSAGE}\r\nOriginal Message ID: ${ORIGINAL_MESSAGE}`),
+    '[장부] 접수한 작업: a later reply\n작업카드: original\n출처: channel/follow-up\n',
     `# Liveness wake\n\nMessage ID: ${ORIGINAL_MESSAGE}\n`,
     discordWake(`Author: agent-request-watch\r\nMessage ID: ${STAGE_MESSAGE}`),
   ];
@@ -100,7 +101,7 @@ test('work-header delivery uses producer metadata, falls back to recent work, an
   assert.equal(deliver(registry, f.deps).roles['role-a'].delivered, bodies.length);
   for (const [i, attempt] of received.entries()) {
     assert.equal(attempt.file, path.join(registry.stateDir, 'spool', 'role-a', path.basename(files[i])));
-    assert.ok(attempt.body.startsWith(`[내 장부 먼저]\n- ${i < 2 ? 'original' : 'recent-1'} | open |`));
+    assert.ok(attempt.body.startsWith(`[내 장부 먼저]\n- ${i < 3 ? 'original' : 'recent-1'} | open |`));
     assert.doesNotMatch(attempt.body.split('\n\n')[0], /synthetic/);
     assert.ok(attempt.body.endsWith(`\n\n${bodies[i]}`));
     assert.equal(fs.readFileSync(files[i], 'utf8'), bodies[i]);
