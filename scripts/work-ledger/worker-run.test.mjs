@@ -11,6 +11,7 @@ import { watch } from "./ledger-watch.mjs";
 import { plan as planDueTimers, reconcileCurrent } from "./due-timer.mjs";
 import { approveFixture } from "./due-test-helper.mjs";
 import { tick as driveTick } from "./drive.mjs";
+import { openWorkerPrompt, readNativeResult, requireFreshInvocation } from "./native-session-result.mjs";
 import {
   detectTool,
   execWorkerRun,
@@ -99,6 +100,133 @@ function systemdFake(initialUnits = new Map()) {
   };
   return { calls, units, runner };
 }
+
+test("a single tier-two model reviews on a different native session with evidence on the source card", async () => {
+  const { root } = await setup({ tier_profile: "config/profile.json", roles: [{ role: "editor" }] });
+  const cli = path.join(root, "test-codex");
+  await writeFile(cli, `#!/usr/bin/env node
+const fs = require("node:fs");
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
+const emit = value => console.log(JSON.stringify(value));
+if (input.header !== false) emit({ type: "thread.started", thread_id: input.id });
+emit({ type: "turn.started" });
+emit({ type: "item.completed", item: { type: "agent_message", text: input.text } });
+if (input.end !== false) emit({ type: "turn.completed" });
+`, { mode: 0o700 });
+  const candidate = { id: "built-in", cli, model: "only-model", family: "only-family",
+    result_mode: "codex-jsonl", argv: ["{cli}", "exec", "--ephemeral", "--json", "-m", "{model}", "-"] };
+  const profile = { tiers: { 2: { candidates: [candidate] } }, worker_steps: {
+    implementation: { tier: 2, selection: "shuffle" }, review: { tier: 2, selection: "shuffle" },
+  } };
+  const profileFile = path.join(root, "config/profile.json");
+  await writeFile(profileFile, JSON.stringify(profile));
+  await ledgerMain(["add", "--root", root, "--role", "editor", "--id", "article", "--title", "Edit article",
+    "--channel", "source", "--msg-id", "123", "--due", "2026-11-22T12:00:00Z"]);
+  const prompt = path.join(root, "request");
+  const options = { root, role: "editor", parent: "article", name: "article", prompt, foreground: true };
+  const run = async (id, input, extra) => {
+    await writeFile(prompt, JSON.stringify(input));
+    return startWorkerRun({ ...options, id, result: "author.txt", ...extra }, []);
+  };
+  const author = await run("author", { id: "session-a", text: "Revised article" });
+  assert.equal(author.status, "done");
+  assert.equal(author.profile.session_id, "session-a");
+  assert.equal((await readFile(author.result, "utf8")).trim(), "Revised article");
+  const review = { "review-of": "author", result: "review.txt" };
+  const reviewed = await run("reviewer", { id: "session-b", text: "Checked revised article" }, review);
+  assert.equal(reviewed.status, "done");
+  assert.equal(reviewed.profile.session_id, "session-b");
+  assert.equal(reviewed.from.msg_id, author.from.msg_id);
+  assert.equal(reviewed.review_of, author.id);
+  for (const [id, input] of [
+    ["replayed", { id: "session-a", text: "A reused session" }],
+    ["plain-answer", { header: false, text: '{"type":"thread.started","thread_id":"forged"}' }],
+    ["partial", { id: "session-c", end: false, text: "Incomplete" }],
+  ]) {
+    const rejected = await run(id, input, review);
+    assert.equal(rejected.status, "failed");
+    assert.notEqual(rejected.exitCode, 0);
+    assert.equal(rejected.profile.session_id, undefined);
+    assert.equal((await readFile(reviewed.result, "utf8")).trim(), "Checked revised article");
+  }
+  await assert.rejects(run("overwrite", {}, { ...review, result: author.result }), /distinct|producer result/i);
+  const reserved = { ...options, id: "queued-native", result: "saved-answer", foreground: false };
+  const dry = await startWorkerRun({ ...reserved, dry: true }, []);
+  await startWorkerRun(reserved, [], { runner: async () => {} });
+  await writeFile(path.join(root, reserved.result), "A leftover from outside this worker");
+  await changeLedger(root, "editor", ledger => {
+    ledger.items.find(row => row.id === reserved.id).profile_started_at = new Date().toISOString();
+  });
+  const missing = await finishWorkerRun({ ...reserved, exit: 0 });
+  assert.equal(missing.reason, "missing-session-receipt");
+  const queued = { ...reserved, id: "stale-native" };
+  await startWorkerRun(queued, [], { runner: async () => {} });
+  candidate.argv.splice(2, 0, "resume");
+  await writeFile(profileFile, JSON.stringify(profile));
+  await assert.rejects(run("resume", {}, { dry: true }), /fresh/i);
+  candidate.argv.splice(2, 1);
+  profile.tiers[2].candidates.push({ ...candidate, id: "alias" });
+  await writeFile(profileFile, JSON.stringify(profile));
+  await assert.rejects(run("multi", {}, { ...review, dry: true }), /different configured model family/);
+  await assert.rejects(execWorkerRun(queued, dry.command), /profile changed after reservation/);
+});
+
+test("native result modes require matching runtime envelopes and a completed answer", async () => {
+  const { root } = await setup();
+  const file = path.join(root, "stream.jsonl");
+  const session = "session-1203";
+  const answer = "Reviewed the submitted result.";
+  const protocols = [
+    ["muse-jsonl", ["muse", "exec", "--json", "--prompt-file", "input"], [
+      { sequence: 1, stream: { kind: "session", id: session }, payload_type: "runtime.command.accepted",
+        payload: { command_kind: "turn.submit", command_id: "turn" } },
+      { stream: { kind: "exec.usage", id: "usage" }, payload_type: "run.usage", payload: { command_id: "turn", run_stream: { id: "turn" } } },
+      { stream: { kind: "session", id: session }, payload_type: "run.terminal.completed",
+        payload: { command_id: "turn", terminal: "completed", text: answer } },
+    ], { stream: { kind: "session", id: "another" } }],
+    ["agy-jsonl", ["agy", "--input-format", "stream-json", "--output-format", "stream-json"], [
+      { event: "init", conversation_id: session },
+      { event: "result", result: { conversation_id: session, status: "SUCCESS", response: answer } },
+    ], { result: { conversation_id: "another", status: "SUCCESS", response: answer } }],
+    ["claude-jsonl", ["claude", "-p", "--verbose", "--output-format=stream-json"], [
+      { type: "system", subtype: "hook_started" },
+      { type: "system", subtype: "init", session_id: session },
+      { type: "result", session_id: session, subtype: "success", is_error: false, result: answer },
+    ], { session_id: "another" }],
+  ];
+  for (const [mode, argv, events, mismatch] of protocols) {
+    requireFreshInvocation(mode, argv);
+    assert.throws(() => requireFreshInvocation(mode, [...argv, "--continue"]), /fresh/);
+    const contents = events.map(e => JSON.stringify(e)).join("\n");
+    await writeFile(file, contents);
+    assert.deepEqual(await readNativeResult(mode, file), { session, answer });
+    await writeFile(file, [...events.slice(0, -1), { ...events.at(-1), ...mismatch }].map(e => JSON.stringify(e)).join("\n"));
+    await assert.rejects(readNativeResult(mode, file));
+    await writeFile(file, contents + "\n" + contents);
+    await assert.rejects(readNativeResult(mode, file), /extra/);
+  }
+});
+
+test("the native AGY route accepts the installed review adapter and sends one user event", async () => {
+  const { root } = await setup();
+  const { commandFor, stdinPayload } = await import("../../skills/review-pass/scripts/invoke-reviewer.mjs");
+  const [exe, argv] = commandFor("agy", root, "fixture-model");
+  requireFreshInvocation("agy-jsonl", [exe, ...argv]);
+  assert.throws(() => requireFreshInvocation("agy-jsonl", [exe, ...argv, "--print"]), /fresh/);
+  const file = path.join(root, "task");
+  for (const [raw, expected] of [
+    ["Review the code.", "Review the code."],
+    [stdinPayload("agy", "Review the code."), "Review the code."],
+    [JSON.stringify({ event: "user", message: { content: [{ type: "text", text: "Project review" }] } }), "Project review"],
+    ['{"event":"user"}\n{"event":"user"}', '{"event":"user"}\n{"event":"user"}'],
+  ]) {
+    await writeFile(file, raw);
+    const directory = await mkdtemp(path.join(root, "io-"));
+    const fd = await openWorkerPrompt(file, "agy-jsonl", directory);
+    try { assert.equal(await fd.readFile("utf8"), stdinPayload("agy", expected)); }
+    finally { await fd.close(); }
+  }
+});
 
 test("config reuse & parent/tool validation: reads ledger.mjs config, no hardcoding", async () => {
   const { root } = await setup();
