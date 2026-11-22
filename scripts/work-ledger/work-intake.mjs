@@ -3,17 +3,22 @@ import { changeLedger, matchesSource, readLedger, safeName, taskForSource } from
 
 // The provider may return replies before their parent. A reply can also point to
 // an agent's answer, whose own reply reference leads back to the original task.
-export function relatedSources(post, channel, parentChannel, messages, threadStarter) {
+export async function relatedSources(post, parentChannel, page, items, lookup) {
+  const channel = post.channel || parentChannel;
+  const threadStarter = page.starters.get(channel);
   const related = [];
   let current = post;
   let currentChannel = channel;
-  const seen = new Set([post]);
+  const seen = new Set([JSON.stringify([channel, post.id])]);
   while (current?.reply_to_id) {
     currentChannel = current.reply_to_channel || currentChannel;
-    related.push([currentChannel, current.reply_to_id]);
-    current = messages.get(JSON.stringify([currentChannel, current.reply_to_id]));
-    if (seen.has(current)) break;
-    seen.add(current);
+    const id = current.reply_to_id;
+    const key = JSON.stringify([currentChannel, id]);
+    if (seen.has(key)) break;
+    seen.add(key);
+    related.push([currentChannel, id]);
+    if (taskForSource(items, currentChannel, id)) break;
+    current = page.bySource.get(key) ?? await lookup(currentChannel, id);
   }
   if (threadStarter && parentChannel !== channel) related.push([parentChannel, threadStarter]);
   return related;

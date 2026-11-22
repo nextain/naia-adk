@@ -210,6 +210,13 @@ export function createAdapter(
       });
       return messages;
     },
+    async replyReference(channel, messageId) {
+      const message = await this.message(channel, messageId);
+      return {
+        reply_to_id: message.message_reference?.message_id,
+        reply_to_channel: message.message_reference?.channel_id,
+      };
+    },
     // One message by id, with the same time limit and 429 handling as channel reads.
     async message(channel, messageId) {
       const token = env[provider.token_env || "DISCORD_BOT_TOKEN"];

@@ -456,6 +456,17 @@ export async function watch({
         readCache.set(key, readWithRetry(() => messenger.messages(channel, since)));
       return readCache.get(key);
     }
+    async function readReply(messenger, channel, id) {
+      if (!messenger.replyReference) return null;
+      const key = `reply:${JSON.stringify([channel, id])}`;
+      if (!readCache.has(key)) {
+        readCache.set(key, readWithRetry(() => messenger.replyReference(channel, id)).catch(error => {
+          if (error.status === 403 || error.status === 404) return null;
+          throw error;
+        }));
+      }
+      return readCache.get(key);
+    }
     async function readWithRetry(read) {
       const interval = config.channel_read_interval_ms ?? 300;
       if (readStarted && interval > 0) await sleep(interval);
@@ -1071,12 +1082,14 @@ export async function watch({
                 if (!humans.includes(m.author_id) && !relays.includes(m.author_id) && !relays.includes(m.webhook_id)) continue;
                 const answered = elsewhereIds.get(m.id);
                 if (answered !== undefined && answered >= effectiveMs) continue;
-                const related = relatedSources(m, msgChannel, channel, intakePage.bySource, intakePage.starters.get(msgChannel));
                 const mentions = extractMentions(m);
                 const pointsElsewhere = otherIdentities.some(id => mentions.allMentions.has(id));
                 if (pointsElsewhere && !mentions.everyoneOrHere && !ownTargets.some(id => mentions.allMentions.has(id))) continue;
-                const recorded = taskForSource(ledger.items, msgChannel, m.id) || relatedTask(ledger.items, related);
-                if (!addressed(m, Boolean(recorded))) continue;
+                if (!addressed(m, true)) continue;
+                const recorded = taskForSource(ledger.items, msgChannel, m.id);
+                const related = recorded ? [] : await relatedSources(m, channel, intakePage, ledger.items,
+                  (referenceChannel, id) => readReply(messenger, referenceChannel, id));
+                if (!addressed(m, Boolean(recorded || relatedTask(ledger.items, related)))) continue;
                 const body = String(m.body || "").trim();
                 ledger = await receiveWork({
                   root, roleConfig, ledger, related, revision: effectiveMs, edited: isEdited, now, minutes: intake.defaultDueMinutes ?? 120,

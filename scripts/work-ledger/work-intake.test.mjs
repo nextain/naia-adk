@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { main, readLedger, wakeHeader } from "./ledger.mjs";
 import { watch, writeLedgerWake } from "./ledger-watch.mjs";
+import { createAdapter } from "./messenger.mjs";
 import { deliverIntake, receiveWork } from "./work-intake.mjs";
 
 const now = Date.parse("2026-01-03T12:00:00Z");
@@ -116,6 +117,37 @@ test("a reply to one role on shared work reaches only the role whose answer it a
   const messages = async role => (await rows(role)).map(card => card.intake_messages.map(event => event.msg_id));
   assert.deepEqual(await messages("editor"), [["shared", "answer-to-editor"]]);
   assert.deepEqual(await messages("writer"), [["shared"]]);
+});
+
+test("a reply to an older agent response recovers the original card after a temporary read error", async t => {
+  const { root, config, run, rows } = await setup(t);
+  await run([post("old-request", "<@writer> prepare the sample")]);
+  const [original] = await rows("writer");
+  const later = now + 25 * 60 * 60000;
+  const followup = post("next-day", "please include the index", {
+    created_at: iso(later), reply_to_id: "old-answer", reply_to_author_id: "writer",
+  });
+  let status = 503;
+  let lookups = 0;
+  const provider = createAdapter({ type: "discord" }, { env: { DISCORD_BOT_TOKEN: "fixture" }, fetchImpl: async url => {
+    assert.equal(url.pathname, "/api/v10/channels/room/messages/old-answer");
+    lookups++;
+    return Response.json({ id: "old-answer", message_reference: { channel_id: "room", message_id: "old-request" } }, { status });
+  } });
+  const adapter = {
+    messages: async channel => channel === "room" ? [followup] : [],
+    replyReference: (channel, id) => provider.replyReference(channel, id),
+  };
+  const first = await watch({ root, config, adapter, now: later });
+  assert.ok(first.errors.includes("messenger:writer:room:next-day"));
+  assert.equal((await rows("writer")).length, 1);
+  status = 200;
+  assert.deepEqual((await watch({ root, config, adapter, now: later + 1000 })).errors, []);
+  assert.deepEqual((await rows("writer")).map(c => [c.id, c.due, c.intake_messages.map(e => e.msg_id)]),
+    [[original.id, original.due, ["old-request", "next-day"]]]);
+  assert.deepEqual(await rows("editor"), []);
+  await watch({ root, config, adapter, now: later + 2000 });
+  assert.equal(lookups, 2);
 });
 
 test("a queued notice survives restart without a messenger; already published filenames are not delivered twice", async t => {
