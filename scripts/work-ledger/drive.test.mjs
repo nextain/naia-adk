@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -209,6 +209,11 @@ test("an overdue instructed item starts one worker and notifies only its own rol
   assert.match(text, /초안을 검토해 결과 파일에 적는다/);
   const third = await pass(root, config, now + 2 * MIN);
   assert.deepEqual([third.launched, reasons(third)], [[], ["writer:draft:result-ready:true"]]);
+  const beforeWatch = await box(root, WRITER_BOX);
+  assert.equal(beforeWatch.length, 2, "one launch and one completion");
+  const { watchWorkers } = await import("../work-watch.mjs");
+  assert.deepEqual((await watchWorkers({ root, now: now + 3 * MIN })).wakes, []);
+  assert.deepEqual(await box(root, WRITER_BOX), beforeWatch);
   assert.deepEqual(await box(root, LEAD_BOX), []);
   // Closing an instructed item needs its record.
   await assert.rejects(cli(root, "drop", "draft", "--role", "writer", "--reason", "새 기한으로 옮김"), /drop is not available/);
@@ -221,6 +226,84 @@ test("an overdue instructed item starts one worker and notifies only its own rol
   const last = await pass(root, config, now + 3 * MIN);
   assert.deepEqual([last.launched, last.alerts, last.errors], [[], [], []]);
 });
+
+test("concurrent completion polls and a retried callback deliver one inbox message per run", async () => {
+  const { root, config } = await setup();
+  await addDriven(root, "writer", "concurrent");
+  await pass(root, config);
+  const run = (await item(root, "writer", "concurrent")).drive.run;
+  await until(async () => !(await drive()).workerAlive(run), "worker exited");
+  const launchFiles = await box(root, WRITER_BOX);
+  config.drive.notify.command = [process.execPath, path.join(root, "notify.mjs"), root];
+  const { watchWorkers } = await import("../work-watch.mjs");
+  const [polled] = await Promise.all([
+    pass(root, config, now + MIN),
+    watchWorkers({ root, now: now + MIN }),
+  ]);
+  assert.deepEqual(reasons(polled), ["writer:concurrent:result-ready:false"]);
+  const completion = (await box(root, WRITER_BOX)).filter(file => !launchFiles.includes(file));
+  assert.equal(completion.length, 1);
+  assert.match(await readFile(path.join(root, WRITER_BOX, completion[0]), "utf8"), /done concurrent --result/);
+  await rm(path.join(root, WRITER_BOX, completion[0]));
+  const later = now + 8 * 24 * 60 * MIN;
+  await watchWorkers({ root, now: later }); // Past terminal registry retention.
+  await writeFile(path.join(root, "notify-ok"), "");
+  const retry = await pass(root, config, later);
+  assert.deepEqual(reasons(retry), ["writer:concurrent:result-ready:true"]);
+  assert.deepEqual((await pass(root, config, later + 61 * MIN)).alerts, []);
+  assert.deepEqual(await box(root, WRITER_BOX), launchFiles);
+  assert.equal(await readFile(path.join(root, "notify-log"), "utf8"), "writer result-ready\n");
+});
+
+test("an interrupted inbox publication resumes once and a later run can notify again", async () => {
+  const { root } = await setup();
+  const { publishScheduledCompletion } = await import("./completion-wake.mjs");
+  const wakeDir = path.join(root, WRITER_BOX);
+  const event = { wakeDir, role: "writer", cardId: "draft", startedAt: PAST, pid: 123, resultFile: "answer", now };
+  const first = await publishScheduledCompletion(event);
+  const receipts = path.join(wakeDir, ".work-watch-completions");
+  const [receipt] = await readdir(receipts);
+  await rename(first, path.join(receipts, receipt, "pending")); // Restored at the commit-before-publication boundary.
+  await mkdir(first); // The destination is temporarily unavailable.
+  await assert.rejects(publishScheduledCompletion(event), { code: "EISDIR" });
+  await rm(first, { recursive: true });
+  const recovered = await publishScheduledCompletion(event);
+  assert.equal(recovered, first);
+  await rm(recovered);
+  assert.equal(await publishScheduledCompletion(event), null);
+  assert.deepEqual(await box(root, WRITER_BOX), []);
+  const next = await publishScheduledCompletion({ ...event, startedAt: FUTURE });
+  assert.notEqual(next, first);
+  assert.deepEqual(await box(root, WRITER_BOX), [path.basename(next)]);
+});
+
+for (const first of ["scheduler", "watcher"]) {
+  test(`an upgraded installation honors the previous ${first}'s completion receipt`, async () => {
+    const { root, config } = await setup();
+    await addDriven(root, "writer", "legacy");
+    await pass(root, config);
+    const run = (await item(root, "writer", "legacy")).drive.run;
+    await until(async () => !(await drive()).workerAlive(run), "worker exited");
+    const { defaultRegistryPath, watchWorkers } = await import("../work-watch.mjs");
+    const file = defaultRegistryPath(root);
+    const registry = JSON.parse(await readFile(file, "utf8"));
+    delete registry.workers[0].scheduledCard;
+    if (first === "watcher") {
+      registry.workers[0].status = "done";
+      registry.workers[0].alerts.doneAt = now + MIN;
+    }
+    await writeFile(file, JSON.stringify(registry));
+    await changeLedger(root, "writer", ledger => {
+      const d = ledger.items.find(row => row.id === "legacy").drive;
+      delete d.run.wake_dir;
+      if (first === "scheduler") d.alerts["result-ready"] = new Date(now + MIN).toISOString();
+    });
+    const before = await box(root, WRITER_BOX);
+    assert.deepEqual((await pass(root, config, now + 2 * MIN)).errors, []);
+    assert.deepEqual((await watchWorkers({ root, now: now + 2 * MIN })).wakes, []);
+    assert.deepEqual(await box(root, WRITER_BOX), before);
+  });
+}
 
 test("a scheduled sensor records the model that actually classified the original message", async () => {
   const { root, config } = await setup();
@@ -300,13 +383,22 @@ test("a scheduled stdout producer has a completed worker receipt usable by an in
   assert.ok(run.worker_id, "scheduled runs must reference their tracked worker");
   await until(async () => (await item(root, "writer", run.worker_id))?.status === "done", "worker terminal receipt");
   const producer = await item(root, "writer", run.worker_id);
+  assert.equal((await item(root, "writer", "queued")).drive.run.ended_at, producer.ended, "native exit updates the card before polling");
   assert.equal(producer.parent, "queued");
   assert.equal(producer.from.msg_id, "222");
   assert.ok(producer.profile_started_at);
   assert.equal(await readFile(path.join(root, "scheduled-answer.txt"), "utf8"), "writer:queued");
   await until(async () => !(await drive()).workerAlive(run), "wrapper exited");
   const { watchWorkers } = await import("../work-watch.mjs");
-  assert.deepEqual((await watchWorkers({ root })).wakes.map(w => [w.role, w.reason]), [["writer", "done"]]);
+  const watched = await watchWorkers({ root, now: now + 32 * MIN });
+  assert.deepEqual(watched.wakes.map(w => [w.role, w.reason]), [["writer", "done"]]);
+  await rm(watched.wakes[0].wakeFile); // The role has already consumed its completion.
+  const beforePoll = await box(root, WRITER_BOX);
+  const polled = await pass(root, config, now + 36 * MIN, { configPath });
+  assert.deepEqual(polled.errors, []);
+  assert.deepEqual(await box(root, WRITER_BOX), beforePoll, "the scheduler repeats a consumed worker completion");
+  assert.equal((await item(root, "writer", "queued")).drive.run.ended_at, producer.ended);
+  assert.deepEqual((await pass(root, config, now + 101 * MIN, { configPath })).alerts, []);
   await assert.rejects(cli(root, "start", "queued", "--role", "writer", "--config", configPath), /already completed/);
   const { startWorkerRun } = await import("./worker-run.mjs");
   const review = await startWorkerRun({ root, config: configPath, role: "writer", parent: "queued", id: "reviewed", name: "Review",

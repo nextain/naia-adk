@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { withPidLock, readProcStatSync } from './lib/pid-lock.mjs';
 import { assertLedgerOwner } from './lib/work-ledger-owner.mjs';
+import { publishScheduledCompletion } from './work-ledger/completion-wake.mjs';
 import { isWorkerItem, readLedger, safeName } from './work-ledger/ledger.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -291,6 +292,7 @@ export async function registerWorker(options = {}) {
       wakeDir,
       resultFile,
       ...(ledgerWorker ? { ledgerWorker } : {}),
+      ...(options.scheduledCard ? { scheduledCard: safeName(options.scheduledCard) } : {}),
       doneFile,
       watchDirs,
       stallMinutes,
@@ -347,6 +349,46 @@ export async function updateWorkerRuntime(options = {}) {
   }, { nowMs: now });
 }
 
+// Older installations recorded the two deliveries independently. Honor their
+// existing receipts when one of their polls first runs the newer code.
+export async function previousScheduledRegistration(root, env, role, card, run, resultFile) {
+  const doc = await readRegistryUnlocked(defaultRegistryPath(root, env));
+  return doc.workers.find(w => w.role === role && w.id === `ledger-${role}-${card}` &&
+    w.startedAt === run.started_at && w.pid === run.pid && w.resultFile === resultFile && w.ledgerWorker?.id === run.worker_id);
+}
+
+async function scheduledCard(root, worker) {
+  if (worker.scheduledCard) return { id: worker.scheduledCard };
+  const prefix = `ledger-${worker.role}-`;
+  if (!worker.id.startsWith(prefix) || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(worker.role)) return null;
+  const id = worker.id.slice(prefix.length);
+  const ledger = await readLedger(worker.ledgerWorker?.root || root, worker.role).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+  });
+  const drive = ledger?.items.find(row => row.id === id)?.drive;
+  if (!drive?.run || drive.run.pid !== worker.pid || drive.run.started_at !== worker.startedAt || drive.result_file !== worker.resultFile) return null;
+  return { id, notified: Date.parse(drive.alerts['result-ready']) >= Date.parse(worker.startedAt) };
+}
+
+async function completionWake(root, worker, size, now, seq) {
+  const card = await scheduledCard(root, worker);
+  if (card?.notified) return null;
+  if (card) {
+    return publishScheduledCompletion({
+      wakeDir: worker.wakeDir, role: worker.role, cardId: card.id,
+      startedAt: worker.startedAt, pid: worker.pid, resultFile: worker.resultFile, now,
+    });
+  }
+  return writeRoleWakeFile(worker.wakeDir, worker.role, worker.id, 'done',
+    `[일꾼 감시] 일꾼 끝: ${worker.id}`, [
+      `역할: ${worker.role}`,
+      worker.unit ? `유닛: ${worker.unit}` : null,
+      `결과: ${worker.resultFile} (${size} bytes)`,
+      `감시 폴더: ${(worker.watchDirs || []).join(', ')}`,
+      '결과 파일을 읽고 후속 조치를 진행하세요.',
+    ], now, seq);
+}
+
 export async function watchWorkers(options = {}) {
   const root = path.resolve(options.root || process.cwd());
   await assertLedgerOwner(root);
@@ -380,31 +422,16 @@ export async function watchWorkers(options = {}) {
       }
       const completion = inspectResultCompletionSync(worker);
       if (completion.done && (!worker.ledgerWorker || (tracked?.profile_started_at && tracked.status === 'done' && tracked.exit === 0))) {
+        if (worker.alerts?.doneAt == null) {
+          const wakeFile = await completionWake(root, worker, completion.size, now, seq++);
+          if (wakeFile) wakes.push({ role: worker.role, id: worker.id, reason: 'done', wakeFile });
+          worker.alerts = { ...worker.alerts, doneAt: now };
+        }
         worker.status = 'done';
-        worker.completedAt = new Date(now).toISOString();
+        worker.completedAt = tracked?.ended || new Date(now).toISOString();
         worker.stalled = false;
         dirty = true;
         completed.push(worker.id);
-        if (!worker.alerts?.doneAt) {
-          const wakeFile = await writeRoleWakeFile(
-            worker.wakeDir,
-            worker.role,
-            worker.id,
-            'done',
-            `[일꾼 감시] 일꾼 끝: ${worker.id}`,
-            [
-              `역할: ${worker.role}`,
-              worker.unit ? `유닛: ${worker.unit}` : null,
-              `결과: ${worker.resultFile} (${completion.size} bytes)`,
-              `감시 폴더: ${(worker.watchDirs || []).join(', ')}`,
-              '결과 파일을 읽고 후속 조치를 진행하세요.',
-            ],
-            now,
-            seq++,
-          );
-          worker.alerts = { ...(worker.alerts || {}), doneAt: now };
-          wakes.push({ role: worker.role, id: worker.id, reason: 'done', wakeFile });
-        }
         continue;
       }
 
