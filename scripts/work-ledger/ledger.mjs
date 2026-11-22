@@ -184,6 +184,16 @@ export function hasHumanMsgId(msgId) {
 function sameHumanMsgId(a, b) {
   return hasHumanMsgId(a) && hasHumanMsgId(b) && normalizeMsgId(a) === normalizeMsgId(b);
 }
+export function matchesSource(source, channel, msgId) {
+  return source?.channel === channel && sameHumanMsgId(source?.msg_id, msgId);
+}
+export function taskForSource(items, channel, msgId) {
+  return items.find(item => !isWorkerItem(item) && (matchesSource(item.from, channel, msgId) ||
+    item.intake_messages?.some(message => matchesSource(message, channel, msgId))));
+}
+export function intakeSettings(config, roleConfig) {
+  return { ...config.intake, ...config.defaults?.intake, ...roleConfig?.intake };
+}
 function itemDropCount(item) {
   if (Number.isInteger(item?.drop_count) && item.drop_count > 0)
     return item.drop_count;
@@ -304,6 +314,9 @@ export function validateLedger(ledger, role) {
       (item.defer_count !== undefined &&
         (!Number.isInteger(item.defer_count) || item.defer_count < 0)) ||
       (item.human_msg_id !== undefined && !oneLine(item.human_msg_id)) ||
+      (item.intake_messages !== undefined && (!Array.isArray(item.intake_messages) ||
+        !item.intake_messages.every(e => oneLine(e?.channel) && oneLine(e.msg_id) && validDate(e.at) &&
+          (e.pending === undefined || (oneLine(e.pending?.title) && validDate(e.pending.due)))))) ||
       (item.worker !== null &&
         (!item.worker ||
           typeof item.worker.done_file !== "string" ||
@@ -328,7 +341,7 @@ export function readLedgerFileSync(file, role) {
   return parseLedger(readFileSync(file, "utf8"), role);
 }
 
-export function wakeHeader(items, { channel, msgId } = {}, nowMs) {
+export function wakeHeader(items, { channel, msgId, cardId } = {}, nowMs) {
   const sourceKey = (item) => hasHumanMsgId(item.from?.msg_id)
     ? JSON.stringify([item.from.channel, normalizeMsgId(item.from.msg_id)])
     : item.id;
@@ -337,8 +350,8 @@ export function wakeHeader(items, { channel, msgId } = {}, nowMs) {
   const byId = (a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   const recent = items.filter((item) => !isWorkerItem(item))
     .sort((a, b) => lastUpdate(b) - lastUpdate(a) || byId(a, b));
-  const matched = recent.find((item) =>
-    sameHumanMsgId(item.from?.msg_id, msgId) && (!channel || item.from.channel === channel));
+  const matched = recent.find(item => cardId && item.id === cardId) ??
+    (channel ? taskForSource(recent, channel, msgId) : recent.find(item => sameHumanMsgId(item.from?.msg_id, msgId)));
   const latest = recent.find((item) => item.status === "open");
   const seen = new Set();
   const selected = [matched, latest].filter((item) => {
@@ -466,6 +479,14 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
         throw new Error(
           "add requires --title --due (UTC ISO) --channel --msg-id",
         );
+      const received = taskForSource(l.items, o.channel, normalizedMsgId);
+      if (received && (received.intake_messages || intakeSettings(config, roleConfig).enabled === true)) {
+        if (instructed || o["worker-name"] || o["done-file"] || o.result || o["worker-step"] ||
+            (o.id && o.id !== received.id)) {
+          throw new Error(`Source already belongs to card ${received.id}. Use that card ID; use adopt to attach instructions.`);
+        }
+        return received.id;
+      }
       if (hasHumanMsgId(normalizedMsgId)) {
         const sameMsgItems = l.items.filter((i) =>
           !isWorkerItem(i) && sameHumanMsgId(i.from?.msg_id, normalizedMsgId),
@@ -599,6 +620,7 @@ export async function main(args = process.argv.slice(2), { runner, now, clock = 
         }
       }
       item.due = o.due;
+      if (item.due_assumed === true) delete item.due_assumed;
       if (isDefer) item.defer_count = (item.defer_count ?? 0) + 1;
     } else if (command === "touch") item.checked_at = new Date().toISOString();
     else if (command === "drop") {

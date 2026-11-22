@@ -168,6 +168,7 @@ export function createAdapter(
               edited_timestamp: m.edited_timestamp || null,
               body: m.content || "",
               reply_to_id: m.message_reference?.message_id || null,
+              reply_to_channel: m.message_reference?.channel_id || null,
               reply_to_author_id: replyAuthor,
               mentions: (m.mentions || []).map((mention) =>
                 typeof mention === "string" ? mention : mention.id,
@@ -208,6 +209,13 @@ export function createAdapter(
         enumerable: false,
       });
       return messages;
+    },
+    async replyReference(channel, messageId) {
+      const message = await this.message(channel, messageId);
+      return {
+        reply_to_id: message.message_reference?.message_id,
+        reply_to_channel: message.message_reference?.channel_id,
+      };
     },
     // One message by id, with the same time limit and 429 handling as channel reads.
     async message(channel, messageId) {

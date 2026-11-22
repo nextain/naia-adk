@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFile, mkdir, writeFile, stat, readdir, unlink } from "node:fs/promises";
+import { readFile, mkdir, writeFile, stat, readdir, unlink, link } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
@@ -13,12 +13,18 @@ import {
   driven,
   closedProperly,
   normalizeMsgId,
+  hasHumanMsgId,
+  validDate,
+  matchesSource,
+  taskForSource,
+  intakeSettings,
   isWorkerItem,
   loadLedgerConfig,
 } from "./ledger.mjs";
 import { createAdapter } from "./messenger.mjs";
 import { cleanReceipts, dueWake, receiptPath, reconcileCurrent } from "./due-timer.mjs";
 import { reconcileWorkerRuns } from "./worker-run.mjs";
+import { deliverIntake, orderForIntake, receiveWork, relatedSources, relatedTask } from "./work-intake.mjs";
 
 const DEFAULT_MAX_HUMAN_WAKES = 3;
 const MENTION_ONLY_MAX_WAKES = 1;
@@ -28,7 +34,7 @@ const ELSEWHERE_MAX_AGE_MS = 7 * DAY_MS;
 const ISO_TIMESTAMP_RE =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
 
-export async function writeLedgerWake(wakeDir, { stamp, role, id, reason, title, details }) {
+export async function writeLedgerWake(wakeDir, { stamp, role, id, reason, title, details, once = false }) {
   const route = `-route-${role}.md`;
   const filename = (nonce = "") => {
     const normal = `${stamp}-ledger-${id}${nonce}${route}`;
@@ -38,17 +44,30 @@ export async function writeLedgerWake(wakeDir, { stamp, role, id, reason, title,
     const digest = createHash("sha256").update(JSON.stringify([role, id, reason, stamp, nonce])).digest("hex");
     return `${digest.slice(0, available)}${route}`;
   };
-  const write = (nonce) => writeFile(
-    path.join(wakeDir, filename(nonce)),
-    `[장부] ${reason}: ${String(title).replace(/[\r\n]/g, " ")}\n${details}\n`,
-    { flag: "wx", mode: 0o600 },
-  );
+  const content = `[장부] ${reason}: ${String(title).replace(/[\r\n]/g, " ")}\n${details}\n`;
+  const write = file => writeFile(file, content, { flag: "wx", mode: 0o600 });
+  const target = path.join(wakeDir, filename());
+  if (once) {
+    const temporary = path.join(wakeDir, `.${randomUUID()}.tmp`);
+    try {
+      await write(temporary);
+      try { await link(temporary, target); }
+      catch (error) {
+        if (error.code !== "EEXIST") throw error;
+        if (await readFile(target, "utf8") !== content) throw new Error("Existing intake wake has different content");
+        return false;
+      }
+      return true;
+    } finally {
+      await unlink(temporary).catch(error => { if (error.code !== "ENOENT") throw error; });
+    }
+  }
   // wx prevents overwriting an existing wake when a prior state write failed.
   try {
-    await write();
+    await write(target);
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
-    await write(`-${randomUUID().slice(0, 8)}`);
+    await write(path.join(wakeDir, filename(`-${randomUUID().slice(0, 8)}`)));
   }
 }
 
@@ -307,7 +326,7 @@ async function upsertWaitingHuman({
     const nextCreated = new Date(now).toISOString();
     const trimmedMsgId = normalizeMsgId(msgId);
     const existing = l.items.find(
-      (i) => normalizeMsgId(i.from?.msg_id) === trimmedMsgId && i.status === "waiting_human",
+      (i) => matchesSource(i.from, msgChannel, trimmedMsgId) && i.status === "waiting_human",
     );
     if (existing) {
       const handledMs = Date.parse(existing.checked_at || existing.created_at);
@@ -321,7 +340,7 @@ async function upsertWaitingHuman({
       }
       return;
     }
-    if (l.items.some((i) => normalizeMsgId(i.from?.msg_id) === trimmedMsgId)) return;
+    if (taskForSource(l.items, msgChannel, trimmedMsgId)) return;
     const baseId = `human-${safeName(msgId)}`;
     let itemId = baseId;
     let suffix = 2;
@@ -430,10 +449,22 @@ export async function watch({
     let sharedMessenger = adapter;
     let messengerRoundStarted = false;
     const networkChecks = [];
+    const intakeRoles = [];
     async function readMessages(messenger, channel, since) {
       const key = `messages:${channel}`;
       if (!readCache.has(key))
         readCache.set(key, readWithRetry(() => messenger.messages(channel, since)));
+      return readCache.get(key);
+    }
+    async function readReply(messenger, channel, id) {
+      if (!messenger.replyReference) return null;
+      const key = `reply:${JSON.stringify([channel, id])}`;
+      if (!readCache.has(key)) {
+        readCache.set(key, readWithRetry(() => messenger.replyReference(channel, id)).catch(error => {
+          if (error.status === 403 || error.status === 404) return null;
+          throw error;
+        }));
+      }
       return readCache.get(key);
     }
     async function readWithRetry(read) {
@@ -674,8 +705,12 @@ export async function watch({
           `${report.every_min}분 정기 보고`,
           `출처: ${report.channel}\n기한: ${report.last_at ? new Date(Date.parse(report.last_at) + report.every_min * 60000).toISOString() : "첫 보고 대기"}\n결과: (없음)`,
         );
+      const intake = intakeSettings(config, roleConfig);
+      if (intake.enabled === true) intakeRoles.push(role);
       networkChecks.push(async () => {
       try {
+        if (intake.enabled === true && intake.since !== undefined && !validDate(intake.since))
+          throw new Error("intake.since must be a UTC ISO date");
         const directChannels = roleOption(roleConfig, config, "direct_channels", []);
         const channels = [...new Set([
           ...roleOption(roleConfig, config, "channels", []),
@@ -788,6 +823,7 @@ export async function watch({
           );
           const threadLimit = Math.max(0, maxThreads);
           const cursorKey = `${role}:${channel}`;
+          const previousThreadCursor = state.thread_cursors[cursorKey];
           let threadIds = [];
           if (threadLimit > 0 && candidateThreads.length > 0) {
             if (candidateThreads.length <= threadLimit) {
@@ -902,7 +938,7 @@ export async function watch({
               ...(everyoneOrHere ? ["all"] : []),
             ]);
           }
-          function addressed(m) {
+          function addressed(m, followsRecordedTask = false) {
             const { allMentions, everyoneOrHere } = extractMentions(m);
             const ownMention = ownTargets.some((id) => allMentions.has(id));
             const parentAuthor =
@@ -924,8 +960,7 @@ export async function watch({
                     !relays.includes(parentAuthor))),
             );
             if (otherReply) return false;
-            if (everyoneOrHere) return true;
-            return false;
+            return everyoneOrHere || followsRecordedTask;
           }
           function messageTimes(m) {
             const createdMs = Date.parse(m.created_at || m.timestamp);
@@ -1030,15 +1065,41 @@ export async function watch({
               state.human_wait_sent[partKey] = now;
             }
           }
-          if (!checkUnrecordedHuman) continue;
+          if (!checkUnrecordedHuman && intake.enabled !== true) continue;
           const seenInScan = new Set();
-          for (const m of messages) {
+          const intakePage = intake.enabled === true ? orderForIntake(messages, channel, discoveredThreads) : null;
+          for (const m of intakePage?.ordered ?? messages) {
             seenInScan.add(m.id);
             try {
-              if (!isHumanOrRelay(m) || !addressed(m)) continue;
+              if (!isHumanOrRelay(m)) continue;
               const { createdMs, editedMs, isEdited, effectiveMs } = messageTimes(m);
               if (!Number.isFinite(effectiveMs) || effectiveMs > now) continue;
+              if (intake.enabled === true && intake.since && createdMs < Date.parse(intake.since)) continue;
               const msgChannel = m.channel || channel;
+              if (intake.enabled === true && hasHumanMsgId(m.id) && effectiveMs >= since && !isMentionOnlyBody(m)) {
+                // The legacy reminder also recognizes quoted identities. Creating
+                // a work item requires an identity from the installation settings.
+                if (!humans.includes(m.author_id) && !relays.includes(m.author_id) && !relays.includes(m.webhook_id)) continue;
+                const answered = elsewhereIds.get(m.id);
+                if (answered !== undefined && answered >= effectiveMs) continue;
+                const mentions = extractMentions(m);
+                const pointsElsewhere = otherIdentities.some(id => mentions.allMentions.has(id));
+                if (pointsElsewhere && !mentions.everyoneOrHere && !ownTargets.some(id => mentions.allMentions.has(id))) continue;
+                if (!addressed(m, true)) continue;
+                const recorded = taskForSource(ledger.items, msgChannel, m.id);
+                const related = recorded ? [] : await relatedSources(m, channel, intakePage, ledger.items,
+                  (referenceChannel, id) => readReply(messenger, referenceChannel, id));
+                if (!addressed(m, Boolean(recorded || relatedTask(ledger.items, related)))) continue;
+                const body = String(m.body || "").trim();
+                ledger = await receiveWork({
+                  root, roleConfig, ledger, related, revision: effectiveMs, edited: isEdited, now, minutes: intake.defaultDueMinutes ?? 120,
+                  title: body.replace(/\s+/g, " ").slice(0, 120) || "(본문 없음)",
+                  source: { channel: msgChannel, msg_id: normalizeMsgId(m.id), quote: body.slice(0, 200),
+                    mentions: [...mentions.mentions], mention_roles: [...mentions.roleMentions], mention_everyone: mentions.everyoneOrHere },
+                });
+                continue;
+              }
+              if (!checkUnrecordedHuman || !addressed(m)) continue;
               // 사람 글은 장부 기록(또는 명시된 answered_elsewhere_file) 없이 답글·후속 글만으로 닫히지 않는다.
               const mThreadId =
                 msgChannel !== channel || discoveredThreads.has(msgChannel)
@@ -1070,7 +1131,7 @@ export async function watch({
               const { tokens: msgMentionTokens } = msgMentions;
               const mentionSignature = JSON.stringify(msgMentionTokens);
               const recordedItems = ledger.items.filter(
-                (i) => normalizeMsgId(i.from?.msg_id) === normalizeMsgId(m.id),
+                (i) => !isWorkerItem(i) && matchesSource(i.from, msgChannel, m.id),
               );
               const isRecorded = recordedItems.some((i) => {
                 if (i.status === "waiting_human") {
@@ -1233,6 +1294,10 @@ export async function watch({
               }
             } catch (error) {
               const sourceChannel = m?.channel || channel;
+              if (intake.enabled === true && sourceChannel !== channel) {
+                if (previousThreadCursor === undefined) delete state.thread_cursors[cursorKey];
+                else state.thread_cursors[cursorKey] = previousThreadCursor;
+              }
               errors.push(`messenger:${role}:${sourceChannel}:${m?.id}`);
               await wake(
                 role,
@@ -1243,19 +1308,19 @@ export async function watch({
               );
             }
           }
+          if (!checkUnrecordedHuman) continue;
           // 24시간 감시 창을 벗어나 API 응답에서 빠진 미등록 사람 글을 버리기 전에 waiting_human으로 등록한다.
           for (const [wk, meta] of Object.entries(state.wake_meta)) {
             if (meta.role !== role || meta.scan_channel !== channel) continue;
             if (seenInScan.has(meta.msg_id)) continue;
             if (!readChannelsInScan.has(meta.channel) && meta.channel !== channel) continue;
             if (!(meta.effective_ms < since)) continue;
-            const recorded = ledger.items.some(
-              (i) => normalizeMsgId(i.from?.msg_id) === normalizeMsgId(meta.msg_id),
-            );
+            const recorded = taskForSource(ledger.items, meta.channel, meta.msg_id);
             const metaElsewhereAt = elsewhereIds.get(meta.msg_id);
             const metaElsewhere =
               metaElsewhereAt !== undefined && metaElsewhereAt >= meta.effective_ms;
-            if (!recorded && !metaElsewhere) {
+            const beforeIntake = intake.enabled === true && intake.since && meta.effective_ms < Date.parse(intake.since);
+            if (!recorded && !metaElsewhere && !beforeIntake) {
               ledger = await upsertWaitingHuman({
                 root,
                 role,
@@ -1294,6 +1359,13 @@ export async function watch({
       });
     }
     for (const check of networkChecks) await check();
+    for (const role of intakeRoles) {
+      try {
+        wakes.push(...await deliverIntake(root, role, notice => writeLedgerWake(wakeDir, notice)));
+      } catch (error) {
+        errors.push(`intake:${role}: ${error.message}`);
+      }
+    }
     // Keep only recent dedup entries; timers do not grow the state indefinitely.
     state.sent = Object.fromEntries(
       Object.entries(state.sent).filter(([, at]) => now - at < 24 * 60 * 60000),
