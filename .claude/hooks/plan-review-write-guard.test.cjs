@@ -518,6 +518,7 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 중단하면 검�
 		`const lockPath = ${JSON.stringify(deployPlan.planReviewLockPath(root))};`,
 		`if (fs.existsSync(lockPath)) fs.copyFileSync(lockPath, ${JSON.stringify(observedLockFile)});`,
 		`process.stdout.write(${JSON.stringify(`판정: PASS\n${passCriteria}\n참고 지적: 0\n남은 지적: 0\n`)});`,
+		"if (process.env.TEST_REVIEW_FINISHED) fs.writeFileSync(process.env.TEST_REVIEW_FINISHED, 'done');",
 	].join("\n"), { mode: 0o755 });
 
 	const beforeSnap = snap();
@@ -541,6 +542,35 @@ test("9. approval-plan.mjs review 실행 중 잠금을 잡고 중단하면 검�
 	assert.equal(fs.existsSync(deployPlan.planReviewLockPath(root)), false, "lock file must be removed after review");
 	assert.equal(fs.existsSync(path.join(root, ".agents/state")), false, "empty .agents/state dir must be removed after review");
 	assert.equal(snap(), beforeSnap, "plan-review.sh snap() before and after must match byte-for-byte");
+
+	// Deliver a real stop signal during Git's final snapshot, after the reviewer returned PASS.
+	if (process.platform !== "win32") {
+		const observerBin = fs.mkdtempSync(path.join(base, "final-snapshot-"));
+		const finished = path.join(base, "finished");
+		fs.writeFileSync(path.join(observerBin, "git"), [
+			"#!/bin/sh",
+			'if [ -f "$TEST_REVIEW_FINISHED" ]; then',
+			'  mv "$TEST_REVIEW_FINISHED" "$TEST_REVIEW_FINISHED.sent" && kill -TERM "$PPID"',
+			"fi",
+			'PATH="$TEST_ORIGINAL_PATH" exec git "$@"',
+		].join("\n"), { mode: 0o755 });
+		const lateOutput = "deploy-plan-review-interrupted";
+		const stopped = spawnSync(process.execPath, [APPROVAL_SCRIPT, "review", planPath, "--author", "codex", "--out", path.join(gatesDir, lateOutput + ".md")], {
+			cwd: root, encoding: "utf8", timeout: 10000,
+			env: {
+				HOME: base,
+				PATH: observerBin + path.delimiter + process.env.PATH,
+				TEST_ORIGINAL_PATH: process.env.PATH,
+				TEST_REVIEW_FINISHED: finished,
+				DEPLOY_GUARD_STATE_DIR: stateDir,
+				APPROVAL_PLAN_MUSE_BIN: mockMuse,
+			},
+		});
+		assert.ok(fs.existsSync(finished + ".sent"), "final snapshot received the stop");
+		assert.equal(stopped.status, 143, stopped.stdout + stopped.stderr);
+		assert.ok(!fs.readdirSync(gatesDir).some(name => name.startsWith(lateOutput)));
+		assert.deepEqual(JSON.parse(fs.readFileSync(path.join(gatesDir, deployPlan.REVIEW_FILE))).reviewers, []);
+	}
 
 	// 중단(SIGTERM) 시에도 trap/핸들러가 잠금과 빈 폴더를 지워야 하며, 도는 동안에는 중복 리뷰와 외부 Edit 를 모두 막는다.
 	const slowMuse = path.join(base, "slow-muse.js");

@@ -540,7 +540,8 @@ async function runReviewers(ids, prompt, abs, preManifest, roOpt, planRoot, sign
 		error.reviewStage = stage;
 		throw error;
 	} finally {
-		try { if (dir) fs.rmSync(dir, { recursive: true, force: true }); }
+		// Synchronous Git snapshots can leave a stop signal pending until the event loop runs again.
+		try { if (dir) await fs.promises.rm(dir, { recursive: true, force: true }); }
 		catch (error) {
 			if (failure) console.error(reviewErrorDetails(error, "prompt-cleanup", startedAt, planRoot));
 			else { error.reviewStage = "prompt-cleanup"; throw error; }
@@ -680,6 +681,7 @@ switch (cmd) {
 			const roOpt = { readOnlyScripts: roBind.items };
 			try {
 				const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt, planRoot, cancellation.signal);
+				if (cancellation.signal.aborted) return;
 				if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first)) && ids.length > 1) {
 					rec.skipped.push({ id: ids[0], model: first.model, effort: first.effort, reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
 					console.log(`한도 실패로 다음 차례 리뷰어로 넘어감: ${ids[0]} → ${ids[1]}`);
@@ -693,6 +695,7 @@ switch (cmd) {
 				if (cancellation.signal.aborted) return;
 				die(`읽기 전용 실행 준비 실패. 이전 리뷰 기록은 무효입니다 ${reviewErrorDetails(error, error.reviewStage || "review-prepare", reviewStartedAt, planRoot)}`, 3);
 			}
+			if (cancellation.signal.aborted) return;
 			{
 				const r = actual;
 				const text = r.body.endsWith("\n") ? r.body : `${r.body}\n`;
