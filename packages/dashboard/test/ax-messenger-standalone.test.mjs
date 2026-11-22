@@ -99,27 +99,48 @@ test("standalone server.js starts the guarded server", async () => {
     await new Promise(resolve => reserver.listen(0, "127.0.0.1", resolve))
     const port = reserver.address().port
     await new Promise(resolve => reserver.close(resolve))
-    const code = `
+    const probe = path.join(temporary, "probe.mjs")
+    fs.writeFileSync(probe, `
+      import assert from "node:assert/strict"
+      import { readFileSync } from "node:fs"
       import http from "node:http"
       const original = http.createServer
-      let finish
-      const listening = new Promise(resolve => { finish = resolve })
       http.createServer = (...args) => {
         const server = original(...args)
-        server.once("listening", () => finish(server))
+        server.once("listening", async () => {
+          try {
+            assert.equal(server.address().port, ${port}, "launcher ignored requested port")
+            assert.equal(server.address().address, "127.0.0.1", "launcher ignored requested hostname")
+            assert.equal(process.cwd(), ${JSON.stringify(dashboard)})
+            const manifest = JSON.parse(readFileSync(".next/required-server-files.json", "utf8"))
+            assert.deepEqual(JSON.parse(process.env.__NEXT_PRIVATE_STANDALONE_CONFIG), manifest.config)
+            const response = await fetch("http://127.0.0.1:${port}/ax/messenger")
+            assert.equal(response.status, 404)
+            await response.text()
+            console.log("LAUNCHER_GUARDED")
+          } catch (error) {
+            console.error(error)
+            process.exitCode = 1
+          } finally { server.close() }
+        })
         return server
       }
-      await import(${JSON.stringify(pathToFileURL(path.join(dashboard, "server.js")).href)})
-      const server = await listening
-      const response = await fetch("http://127.0.0.1:${port}/ax/messenger")
-      console.log("GUARDED_STATUS=" + response.status)
-      await response.text()
-      await new Promise(resolve => server.close(resolve))
-    `
-    const result = spawnSync(process.execPath, ["--input-type=module", "-e", code], {
-      cwd: dashboard, encoding: "utf8", env: { ...process.env, NODE_ENV: "production", PORT: String(port), HOSTNAME: "127.0.0.1", NAIA_DASHBOARD_PORT: String(port), NAIA_DASHBOARD_HOST: "127.0.0.1", NAIA_INSTANCE_CONFIG: "" },
-    })
-    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
-    assert.match(result.stdout, /GUARDED_STATUS=404/)
+    `)
+    const environment = { ...process.env, NAIA_INSTANCE_CONFIG: "" }
+    delete environment.NAIA_DASHBOARD_PORT
+    delete environment.NAIA_DASHBOARD_HOST
+    delete environment.__NEXT_PRIVATE_STANDALONE_CONFIG
+    const cases = [
+      { label: "Next environment", env: { PORT: String(port), HOSTNAME: "127.0.0.1" }, args: [] },
+      { label: "ADK environment", env: { PORT: "1", HOSTNAME: "invalid.example", NAIA_DASHBOARD_PORT: String(port), NAIA_DASHBOARD_HOST: "127.0.0.1" }, args: [] },
+      { label: "CLI flags", env: { PORT: "1", HOSTNAME: "invalid.example", NAIA_DASHBOARD_PORT: "2", NAIA_DASHBOARD_HOST: "invalid.example" }, args: ["-p", String(port), "-H", "127.0.0.1"] },
+    ]
+    for (const scenario of cases) {
+      const result = spawnSync(process.execPath, ["--import", probe, path.join(dashboard, "server.js"), ...scenario.args], {
+        cwd: temporary, encoding: "utf8", timeout: 15_000, env: { ...environment, ...scenario.env },
+      })
+      assert.equal(result.status, 0, `${scenario.label}: ${result.error?.message ?? ""}\n${result.stdout}\n${result.stderr}`)
+      assert.match(result.stdout, /LAUNCHER_GUARDED/, scenario.label)
+    }
   } finally { fs.rmSync(temporary, { recursive: true, force: true }) }
 })

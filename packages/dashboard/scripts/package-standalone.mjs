@@ -60,4 +60,4 @@ fs.cpSync(path.join(dashboard, ".next/static"), path.join(standaloneDashboard, "
 const publicDir = path.join(dashboard, "public")
 if (fs.existsSync(publicDir)) fs.cpSync(publicDir, path.join(standaloneDashboard, "public"), { recursive: true })
 // Next's generated server bypasses the custom authentication and messenger routes.
-fs.writeFileSync(path.join(standaloneDashboard, "server.js"), `process.env.NODE_ENV = "production"\nimport("./server.mjs").then(({ startServer }) => startServer()).catch(error => { console.error(error); process.exitCode = 1 })\n`)
+fs.copyFileSync(path.join(dashboard, "scripts/standalone-launcher.cjs"), path.join(standaloneDashboard, "server.js"))
