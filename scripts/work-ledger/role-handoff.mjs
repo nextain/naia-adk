@@ -1,8 +1,8 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
-import { lstatSync, realpathSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { loadLedgerConfig, readLedger, safeName, isWorkerItem } from "./ledger.mjs";
 import { readAgentWorkspaceFiles } from "../../.agents/skills/manage-discord-sessions/helper/agent-context.mjs";
 
@@ -107,7 +107,9 @@ export async function roleHandoff({ root, cwd, role, checkClaudeMemory = false, 
   const matches = roles.filter(entry => location(root, entry.handoff.session_dir ?? entry.handoff.workspace) === session);
   const bound = role || env.NAIA_ROLE || env.ADK_ROLE;
   if (!matches.length) {
-    if (role) throw new Error("Role session directory differs from its installation");
+    if (role || (bound && env.NAIA_ADK_ROOT && path.resolve(env.NAIA_ADK_ROOT) === path.resolve(root))) {
+      throw new Error("Role session directory differs from its installation");
+    }
     return null;
   }
   if (matches.length !== 1 || !bound || matches[0].role !== bound ||
@@ -141,7 +143,8 @@ export async function roleHandoff({ root, cwd, role, checkClaudeMemory = false, 
   return { data, sha256, text };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (import.meta.main ?? (process.argv[1] && existsSync(process.argv[1]) &&
+    realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)))) {
   const [first, second, third] = process.argv.slice(2);
   const hook = first === "--codex-hook";
   try {
@@ -154,6 +157,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
         const handoff = await roleHandoff({ root: path.resolve(second), cwd: event.cwd || process.cwd() });
         if (handoff) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: handoff.text } }));
       }
+    } else if (first === "--check-start") {
+      const root = process.env.NAIA_ADK_ROOT;
+      const role = process.env.NAIA_ROLE || process.env.ADK_ROLE;
+      if (!second || third || !root || !role) {
+        throw new Error("Role session start requires the profile executable, NAIA_ADK_ROOT, and NAIA_ROLE or ADK_ROLE");
+      }
+      const handoff = await roleHandoff({
+        root: path.resolve(root), role, cwd: process.cwd(),
+        checkClaudeMemory: /^claude(?:\.exe|\.cmd)?$/i.test(path.basename(second)),
+      });
+      if (!handoff) throw new Error("No lead role handoff is configured for this session");
     } else {
       if (!first || !second || !third) throw new Error("Usage: role-handoff.mjs INSTANCE_ROOT ROLE SESSION_DIRECTORY");
       const handoff = await roleHandoff({ root: path.resolve(first), role: second, cwd: third });

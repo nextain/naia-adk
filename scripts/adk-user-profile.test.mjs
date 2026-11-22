@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { spawn } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { loadMuseProfile, loadProfile, mergeMuseSettings, mergeRule, mergeSettings, MUSE_PROFILE_HOOKS, parseArgs, PROFILE_HOOKS, run, validateMuseProfileHooks, validateProfileHooks } from "./adk-user-profile.mjs"
@@ -28,6 +28,52 @@ const writeReadyPolicies = (home) => {
   fs.copyFileSync(path.join(root, "templates/claude-user-profile/subagent-model.policy.example.json"), modelFile(home))
 }
 const readyHome = () => { const home = tmpHome(); writeReadyPolicies(home); return home }
+
+test("the installed lead launcher checks its real working directory and role before executing the profile command", { skip: process.platform === "win32" }, () => {
+  const instance = tmpHome()
+  const workspace = path.join(instance, "writer")
+  fs.mkdirSync(path.join(instance, "config"))
+  fs.mkdirSync(path.join(workspace, "memory/groups/team"), { recursive: true })
+  fs.mkdirSync(path.join(workspace, "memory/common"), { recursive: true })
+  fs.mkdirSync(path.join(workspace, ".claude"))
+  fs.writeFileSync(path.join(workspace, "adk.json"), JSON.stringify({ kind: "agent", id: "writer", agent_config: { groups: ["team"] } }))
+  fs.writeFileSync(path.join(instance, "config/work-ledger.json"), JSON.stringify({ roles: [{ role: "writer", handoff: { group: "team", workspace: "writer" } }] }))
+  const settings = path.join(workspace, ".claude/settings.local.json")
+  fs.writeFileSync(settings, JSON.stringify({ autoMemoryEnabled: false }))
+  const marker = path.join(instance, "started")
+  const launcher = path.join(instance, "role launcher")
+  fs.symlinkSync(path.join(root, "scripts/work-ledger/start-role-session.sh"), launcher)
+  const env = { PATH: process.env.PATH, HOME: instance, NAIA_ADK_ROOT: instance, NAIA_ROLE: "writer", MARKER: marker }
+  for (const provider of ["claude", "codex"]) {
+    const cli = path.join(instance, provider)
+    fs.writeFileSync(cli, '#!/bin/sh\nprintf "%s\\n" "$1" >> "$MARKER"\nexit 17\n', { mode: 0o755 })
+    const start = (extra, cwd = workspace) => spawnSync(launcher, [cli, "two words"], {
+      cwd, env: { ...env, ...extra }, encoding: "utf8", timeout: 10000,
+    })
+    for (const [overrides, cwd] of [
+      [{ NAIA_ROLE: "" }, workspace], [{ NAIA_ROLE: "other" }, workspace], [{}, instance],
+      [{ ADK_ROLE: "other" }, workspace], [{ WORKER_RUNNER_ID: "child" }, workspace],
+      [{ NAIA_ADK_ROOT: "" }, workspace],
+    ]) {
+      const denied = start(overrides, cwd)
+      assert.ok(denied.status > 0 && denied.status !== 17, denied.stderr)
+      assert.ok(denied.stderr.trim())
+      assert.equal(fs.existsSync(marker), false)
+    }
+    if (provider === "claude") {
+      fs.writeFileSync(settings, JSON.stringify({ autoMemoryEnabled: true }))
+      const denied = start({})
+      assert.match(denied.stderr, /Claude memory settings/)
+      assert.equal(fs.existsSync(marker), false)
+      fs.writeFileSync(settings, JSON.stringify({ autoMemoryEnabled: false }))
+    }
+    const started = start({ NAIA_ROLE: "", ADK_ROLE: "writer" })
+    assert.equal(started.status, 17, started.stderr)
+    assert.equal(started.stdout, "")
+    assert.equal(fs.readFileSync(marker, "utf8"), "two words\n")
+    fs.unlinkSync(marker)
+  }
+})
 
 const nodeProcess = (args, options = {}) => new Promise((resolve, reject) => {
   // Regular descriptors preserve actual stdin JSON on hosts whose sandbox
@@ -545,7 +591,13 @@ test("Claude and Codex recover the same installed role's memory and open cards a
   assert.equal((await fire(codex, { ...env, NAIA_ROLE: "auditor" })).continue, false)
   assert.equal((await fire(codex, { ...env, ADK_ROLE: "auditor" })).continue, false)
   assert.equal(await hookOutput(codex, { input: event(), env: { ...env, LEDGER_ITEM_ID: "child" } }), "")
-  assert.equal(await hookOutput(codex, { input: event(home), env }), "")
+  for (const hook of [claude, codex]) {
+    const outside = JSON.parse(await hookOutput(hook, { input: event(home), env }))
+    assert.equal(outside.continue, false)
+    assert.match(outside.stopReason, /directory differs/)
+  }
+  assert.equal(await hookOutput(codex, { input: event(home), env: { ...env, NAIA_ROLE: "", ADK_ROLE: "" } }), "")
+  assert.equal(await hookOutput(codex, { input: event(home), env: { ...env, NAIA_ADK_ROOT: home } }), "")
 
   roles[0].handoff.group = "team-b"
   roles[0].handoff.legacy_card_channels = []
