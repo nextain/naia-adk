@@ -56,8 +56,9 @@ test("standalone carries the guarded dashboard and a loadable Matrix client", as
         const base = `http://127.0.0.1:${disabledServer.address().port}`
         const response = await fetch(`${base}/ax/messenger`)
         assert.equal(response.status, 404, "disabled feature must be guarded by the standalone server")
-        const home = await fetch(base)
-        assert.equal(home.status, 200, "the actual Next server must start in the copied output")
+        const schedule = await fetch(`${base}/schedule`)
+        assert.equal(schedule.status, 200, "the copied Next server must serve the schedule page")
+        assert.match(await schedule.text(), /data-testid="schedule-calendar-section"/)
       } finally { await new Promise(resolve => disabledServer.close(resolve)) }
 
       const enabledServer = await startServer(["-p", "0", "-H", "127.0.0.1"], {
