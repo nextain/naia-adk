@@ -1,0 +1,17 @@
+{
+  "features": {
+    "messenger": {
+      "enabled": false,
+      "backend": "matrix",
+      "homeserverUrl": "https://matrix.example.invalid",
+      "roles": {
+        "reader": ["read"],
+        "writer": ["read", "write"],
+        "manager": ["read", "write", "manage"]
+      },
+      "accounts": {
+        "account-a": { "roles": ["writer"], "matrixUserId": "@account-a:example.invalid" }
+      }
+    }
+  }
+}

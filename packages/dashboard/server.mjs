@@ -8,7 +8,8 @@ import { fileURLToPath } from "node:url"
 import next from "next"
 import { hostGuard } from "./host-guard.mjs"
 import { readGateSecret } from "./gate-secret.mjs"
-import { applyMessengerIdentity, isMessengerGateVerified, verifyMessengerGate } from "./messenger-gate.mjs"
+import { applyMessengerIdentity, isAllowedMessengerOrigin, isMessengerGateVerified, verifyMessengerGate, verifiedMessengerAccount } from "./messenger-gate.mjs"
+import { authorizeMessenger, createAxMessengerHandler, readMessengerConfig } from "./ax-messenger-gateway.mjs"
 import {
   GATE_ACCOUNT_HEADER,
   getVerifiedPublishActor,
@@ -176,26 +177,8 @@ export function buildProxyHeaders(req, socket, proxySecret, apiPort, envOrIdenti
 
   const method = (req.method || "GET").toUpperCase()
   if (!publicIdentity && ["PUT", "POST", "PATCH", "DELETE"].includes(method)) {
-    const isEncrypted = Boolean(sock.encrypted)
-    const scheme = isEncrypted ? "https" : "http"
-    const hostHeader = inspectSingleHeaderOnReq(req, "host")
-    const incomingOrigin = inspectSingleHeaderOnReq(req, "origin")
-    if (hostHeader.present && hostHeader.valid && incomingOrigin.present && incomingOrigin.valid) {
-      const allowed = new Set([`${scheme}://${hostHeader.value}`])
-      // 앞단 로그인 게이트가 TLS 를 끝내면 이 소켓은 평문이다. 게이트 비밀이 확인된 요청만
-      // 앞단이 보낸 프로토콜(한 개)이나 설정된 공개 주소로 원점을 맞춘다.
-      if (isMessengerGateVerified(req)) {
-        const proto = inspectSingleHeaderOnReq(req, "x-forwarded-proto")
-        if (proto.present && proto.valid && /^https?$/.test(proto.value ?? "")) {
-          allowed.add(`${proto.value}://${hostHeader.value}`)
-        }
-        try {
-          if (env?.NAIA_DASHBOARD_PUBLIC_URL) allowed.add(new URL(env.NAIA_DASHBOARD_PUBLIC_URL).origin)
-        } catch {}
-      }
-      if (incomingOrigin.value && allowed.has(incomingOrigin.value)) {
-        outHeaders["x-naia-origin-ok"] = "1"
-      }
+    if (isAllowedMessengerOrigin(req, env, { socket: sock, allowProxyOrigin: isMessengerGateVerified(req) })) {
+      outHeaders["x-naia-origin-ok"] = "1"
     }
   }
 
@@ -451,7 +434,12 @@ export function createRequestHandler(nextHandler, shortLinkOpts = {}, envOrPubli
     tableFile: shortLinkOpts.tableFile || defaultTableFile(env?.NAIA_SHORT_LINKS_FILE ? env : process.env),
   }
   if (!shortOpts.readTable) shortOpts.readTable = createTableReader(shortOpts.tableFile)
-  return function handleRequest(req, res) {
+  const axMessengerHandler = createAxMessengerHandler({
+    readConfig: () => readMessengerConfig(env),
+    env,
+    trustProxyOrigin: isMessengerGateVerified,
+  })
+  const handleRequest = function handleRequest(req, res) {
     // Check the login gate before anything else reads or strips its headers (messenger paths only).
     if (!publicOpts) verifyMessengerGate(req, env)
     stripUntrustedIdentityHeaders(req, env)
@@ -478,6 +466,19 @@ export function createRequestHandler(nextHandler, shortLinkOpts = {}, envOrPubli
     if (publicOpts) {
       handlePublicRequest(req, res, rawPathname, rawQuery, nextHandler, shortOpts, publicOpts, env)
       return
+    }
+
+    if (rawPathname === "/api/ax-messenger" || rawPathname.startsWith("/api/ax-messenger/")) {
+      return axMessengerHandler(req, res, verifiedMessengerAccount(req))
+    }
+    if (rawPathname === "/ax/messenger" || rawPathname.startsWith("/ax/messenger/")) {
+      let config
+      try { config = readMessengerConfig(env) } catch { return sendPlain(res, 503, "메신저 설정을 읽지 못했습니다.") }
+      if (config?.features?.messenger?.enabled !== true || config?.features?.messenger?.backend !== "matrix") return sendPlain(res, 404, "메신저가 꺼져 있습니다.")
+      const account = verifiedMessengerAccount(req)
+      if (!account) return sendPlain(res, 401, "로그인이 필요합니다.")
+      if (!authorizeMessenger(config, account, "read")) return sendPlain(res, 403, "메신저 접근 권한이 없습니다.")
+      res.setHeader("cache-control", "no-store")
     }
 
     if (rawPathname.toLowerCase().startsWith("/api/portal")) {
@@ -525,6 +526,8 @@ export function createRequestHandler(nextHandler, shortLinkOpts = {}, envOrPubli
 
     return nextHandler(req, res)
   }
+  handleRequest.close = () => axMessengerHandler.close()
+  return handleRequest
 }
 
 function sendPlain(res, status, text) {
@@ -735,11 +738,26 @@ export async function startServer(customArgv = process.argv.slice(2), customEnv 
 
   const requestHandler = createRequestHandler(nextHandler, { tabFor }, customEnv, publicOpts)
   const server = http.createServer(requestHandler)
+  server.on("close", requestHandler.close)
   const fd = inheritedSocketFd(customEnv)
 
   return new Promise((resolve, reject) => {
     server.on("error", reject)
     server.listen(fd === null ? { port, host } : { fd }, () => {
+      if (deps.handleSignals && !customEnv.NEXT_MANUAL_SIG_HANDLE) {
+        let stopping = false
+        const shutdown = () => {
+          if (stopping) return
+          stopping = true
+          server.close(async error => {
+            if (error) console.error(error)
+            try { await nextApp.close() } catch (error) { console.error(error) }
+            process.exit(0)
+          })
+        }
+        process.on("SIGTERM", shutdown)
+        process.on("SIGINT", shutdown)
+      }
       console.log(fd === null ? `> Dashboard ready on http://${host}:${port}` : `> Dashboard ready on inherited socket fd ${fd}`)
       resolve(server)
     })

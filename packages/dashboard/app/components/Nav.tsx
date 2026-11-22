@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { isTopNavTabActive, visibleTopNavTabs } from "./nav-tabs"
+import { observeAxMessengerStatus } from "./ax-messenger-status.mjs"
 import {
   DEFAULT_FONT_SIZE_STEP,
   DEFAULT_THEME_PREFERENCE,
@@ -34,6 +35,7 @@ export interface NavProps {
   hasBoard?: boolean | null
   hasLedger?: boolean | null
   hasMessenger?: boolean | null
+  hasAxMessenger?: boolean | null
   todoBadgeCount?: number | null
 }
 
@@ -47,12 +49,13 @@ export interface NavTabsProps {
   hasBoard: boolean | null
   hasLedger?: boolean | null
   hasMessenger?: boolean | null
+  hasAxMessenger?: boolean | null
 }
 
-export function NavTabs({ pathname, hasBoard, hasLedger, hasMessenger }: NavTabsProps) {
+export function NavTabs({ pathname, hasBoard, hasLedger, hasMessenger, hasAxMessenger }: NavTabsProps) {
   return (
     <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
-      {visibleTopNavTabs(hasMessenger).map((tab) => {
+      {visibleTopNavTabs(hasMessenger, hasAxMessenger).map((tab) => {
         if (tab.requiresBoard && hasBoard === false && hasLedger !== true) {
           return (
             <span
@@ -89,12 +92,14 @@ export function Nav({
   hasBoard: hasBoardProp,
   hasLedger: hasLedgerProp,
   hasMessenger: hasMessengerProp,
+  hasAxMessenger: hasAxMessengerProp,
   todoBadgeCount: todoBadgeCountProp,
 }: NavProps = {}) {
   const pathname = usePathname() || "/"
   const [fetchedHasBoard, setFetchedHasBoard] = useState<boolean | null>(null)
   const [fetchedHasLedger, setFetchedHasLedger] = useState<boolean | null>(null)
   const [fetchedHasMessenger, setFetchedHasMessenger] = useState<boolean | null>(null)
+  const [fetchedHasAxMessenger, setFetchedHasAxMessenger] = useState(false)
   const [fetchedTodoCount, setFetchedTodoCount] = useState<number | null>(null)
   const [themePref, setThemePref] = useState<ThemePreference>(initialTheme)
   const [fontSize, setFontSize] = useState<FontSizeStep>(initialFontSize)
@@ -102,6 +107,7 @@ export function Nav({
   const hasBoard = hasBoardProp !== undefined ? hasBoardProp : fetchedHasBoard
   const hasLedger = hasLedgerProp !== undefined ? hasLedgerProp : fetchedHasLedger
   const hasMessenger = hasMessengerProp !== undefined ? hasMessengerProp : fetchedHasMessenger
+  const hasAxMessenger = hasAxMessengerProp !== undefined ? hasAxMessengerProp : fetchedHasAxMessenger
   const todoCount = todoBadgeCountProp !== undefined ? todoBadgeCountProp : fetchedTodoCount
 
   useEffect(() => {
@@ -121,6 +127,14 @@ export function Nav({
         if (hasBoardProp === undefined) setFetchedHasBoard(false)
       })
   }, [hasBoardProp, hasMessengerProp])
+
+  useEffect(() => {
+    if (hasAxMessengerProp !== undefined) return
+    return observeAxMessengerStatus(
+      (signal: AbortSignal) => fetch("/api/ax-messenger/status", { cache: "no-store", signal }),
+      setFetchedHasAxMessenger,
+    )
+  }, [hasAxMessengerProp])
 
   useEffect(() => {
     if (todoBadgeCountProp !== undefined && hasLedgerProp !== undefined) return
@@ -199,7 +213,7 @@ export function Nav({
         Naia ADK
       </Link>
 
-      <NavTabs pathname={pathname} hasBoard={hasBoard} hasLedger={hasLedger} hasMessenger={hasMessenger} />
+      <NavTabs pathname={pathname} hasBoard={hasBoard} hasLedger={hasLedger} hasMessenger={hasMessenger} hasAxMessenger={hasAxMessenger} />
 
       <div className="ml-auto flex items-center gap-1 sm:gap-3 shrink-0">
         {typeof todoCount === "number" && (
