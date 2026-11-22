@@ -1706,6 +1706,72 @@ test("계획 고정 대본: 정상 대본이라도 ops 준비 기록으로는 �
 	assert.ok(res.problems.some((x) => PIN_OPS_WHY.test(x)), res.problems.join(" / "));
 });
 
+// 계획서 file_pins(경로 → sha256): 단계 files 와 같은 고정을 계획 단위로 한 번 더 건다.
+// 계획서 바이트가 바뀌면 계획 sha 가 달라져 리뷰 영수증(plan_sha256·prompt_sha256)이 무효가 되는 것까지 함께 본다.
+test("file_pins: 대본·원격 본문이 계획서 지문과 같으면 받는다", (t) => {
+	const f = pinnedScriptFixture(t);
+	f.plan.file_pins = { ...f.files };
+	for (const id of ["s1", "r1"]) {
+		const res = f.assess(id);
+		assert.equal(res.ok, true, `${id}: ${res.problems.join(" / ")}`);
+	}
+});
+
+test("file_pins: 대본 바꿔치기(단계 files 도 새 sha 로 맞춰 둠)는 file_pins 가 막는다", (t) => {
+	for (const target of ["script", "remote"]) {
+		const f = pinnedScriptFixture(t);
+		f.plan.file_pins = { ...f.files };
+		fs.appendFileSync(f[target], "# swapped\n");
+		const now = sha256(fs.readFileSync(f[target]));
+		for (const e of f.plan.scenario) e.files[f[target]] = now;
+		const r = f.bind("s1", "plan");
+		assert.equal(r.ok, false, `${target}`);
+		assert.match(r.why, /file_pins sha256 불일치/);
+	}
+});
+
+test("file_pins: file_pins 에 없는 단계 파일·잘못된 sha 형식·읽을 수 없는 경로는 막는다", (t) => {
+	const f = pinnedScriptFixture(t);
+	f.plan.file_pins = { [f.script]: f.files[f.script] };
+	let r = f.bind("s1", "plan");
+	assert.equal(r.ok, false);
+	assert.match(r.why, /file_pins 에 없거나/);
+	f.plan.file_pins = { ...f.files, [f.script]: "xyz" };
+	r = f.bind("s1", "plan");
+	assert.equal(r.ok, false);
+	assert.match(r.why, /file_pins sha256 형식/);
+	f.plan.file_pins = { ...f.files, [path.join(f.planDir, "missing.sh")]: "a".repeat(64) };
+	r = f.bind("s1", "plan");
+	assert.equal(r.ok, false);
+	assert.match(r.why, /file_pins 파일을 읽지 못함/);
+	f.plan.file_pins = ["x"];
+	r = f.bind("s1", "plan");
+	assert.equal(r.ok, false);
+	assert.match(r.why, /file_pins 는 경로와 sha256 사전/);
+});
+
+test("file_pins: 옛 설명 글 형태(경로 키 없음)는 전환 기간 동안 무시하고 단계 files 만 본다", (t) => {
+	const f = pinnedScriptFixture(t);
+	f.plan.file_pins = { rule: "단계 files 에 고정한다", note: "설명 글" };
+	assert.equal(f.assess("s1").ok, true);
+	fs.appendFileSync(f.script, "#");
+	assert.equal(f.assess("s1").ok, false);
+});
+
+test("file_pins: 계획서(file_pins) 바이트가 바뀌면 리뷰 영수증이 무효가 된다", (t) => {
+	const { root } = makeWorkspace(t);
+	writeGateConfig(root);
+	const { planFile, gatesDir } = createValidPlan(root);
+	const { planSha } = writePassingReviewReceipt(root, planFile, {});
+	assert.equal(deployPlan.reviewProblems(gatesDir, planSha, root).ok, true);
+	const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
+	plan.file_pins = { "/tmp/forged.sh": "b".repeat(64) };
+	fs.writeFileSync(planFile, JSON.stringify(plan, null, 2));
+	const after = deployPlan.reviewProblems(gatesDir, sha256(fs.readFileSync(planFile)), root);
+	assert.equal(after.ok, false);
+	assert.ok(after.problems.some((x) => /계획서가 아닌 판|prompt_sha256|target_sha256/.test(x)), after.problems.join(" / "));
+});
+
 test("계획 고정 대본: kind=feature 는 ops 거부 문구 없이 기존 판정을 탄다", (t) => {
 	const f = pinnedScriptFixture(t);
 	const r = f.bind("s1", "feature");

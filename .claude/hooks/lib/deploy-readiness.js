@@ -986,6 +986,25 @@ function matchReadOnlyScriptBinding({ cfg, root, command, clauses, files, fileHa
 }
 
 /**
+ * 계획서 최상위 file_pins(경로 → sha256 사전)를 읽는다. 승인된 계획서 바이트 안에 있으므로 계획 sha(승인 코드·리뷰 요청문)에 묶인다.
+ * 옛 계획서의 file_pins 는 설명 글(값이 sha 가 아닌 항목)이라, 경로 모양(/ 포함) 키만 고정으로 보고 나머지는 설명으로 넘긴다.
+ * 경로 모양 키의 값이 64자리 hex 가 아니면 위조·오기이므로 거부한다.
+ */
+function planFilePins(plan, root, cwd) {
+	const raw = plan && plan.file_pins;
+	if (raw === undefined) return { ok: true, pins: new Map() };
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, why: "file_pins 는 경로와 sha256 사전이어야 함" };
+	const pins = new Map();
+	for (const [p, want] of Object.entries(raw)) {
+		if (!p.includes("/")) continue;
+		if (typeof want !== "string" || !/^[a-f0-9]{64}$/i.test(want)) return { ok: false, why: `file_pins sha256 형식이 아님: ${p}` };
+		const full = path.isAbsolute(p) ? path.resolve(p) : path.resolve(root || cwd || ".", p);
+		pins.set(full, want.toLowerCase());
+	}
+	return { ok: true, pins };
+}
+
+/**
  * 계획서 단계·명령·고정 파일·인스턴스 확장(config/deploy-gate.json + 선택 plugin)의 결합을 검증한다.
  */
 function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
@@ -1015,6 +1034,24 @@ function verifiedPlanBinding(planBinding, candidate, kind, services, rootDir) {
 		if (actualSha !== String(want).toLowerCase()) return no(`고정 파일 sha256 불일치: ${p}`);
 		files.set(full, body.toString("utf8"));
 		fileHashes.set(full, actualSha);
+	}
+
+	const filePins = planFilePins(plan, root, cwd);
+	if (!filePins.ok) return no(filePins.why);
+	for (const [full, want] of filePins.pins) {
+		let actual;
+		try {
+			if (!fs.statSync(full).isFile()) return no(`file_pins 파일이 일반 파일이 아님: ${full}`);
+			actual = crypto.createHash("sha256").update(fs.readFileSync(full)).digest("hex");
+		} catch {
+			return no(`file_pins 파일을 읽지 못함: ${full}`);
+		}
+		if (actual !== want) return no(`file_pins sha256 불일치: ${full}`);
+	}
+	if (filePins.pins.size > 0) {
+		for (const full of files.keys()) {
+			if (filePins.pins.get(full) !== fileHashes.get(full)) return no(`단계 고정 파일이 계획서 file_pins 에 없거나 sha256 이 다름: ${full}`);
+		}
 	}
 
 	const cfg = loadDeployGateConfig(root);
