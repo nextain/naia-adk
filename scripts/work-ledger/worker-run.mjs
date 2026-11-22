@@ -296,6 +296,14 @@ function controllerAlive(item, probe) {
   return controller && probe(controller.pid, controller.start_token);
 }
 
+function recordWorkerEnd(ledger, worker, ended) {
+  worker.ended = ended;
+  const parent = ledger.items.find(row => row.id === worker.parent);
+  if (parent?.drive?.run?.worker_id === worker.id && parent.drive.result_file === worker.result) {
+    parent.drive.run.ended_at = ended;
+  }
+}
+
 export async function finishWorkerRun(
   opts,
   { now, clock = now === undefined ? Date.now : () => now } = {},
@@ -369,7 +377,7 @@ export async function finishWorkerRun(
       nextReason = missing;
     }
     item.status = nextStatus;
-    item.ended = endedIso;
+    recordWorkerEnd(l, item, endedIso);
     item.exit = exitCode;
     item.reason = nextReason;
     item.launch_pending = false;
@@ -800,7 +808,7 @@ export async function startWorkerRun(
             throw new Error("Previous worker attempt is still running");
           }
           run.status = "failed";
-          run.ended = startedIso;
+          recordWorkerEnd(l, run, startedIso);
           run.reason = "supervisor-preempted";
           run.launch_pending = false;
         }
@@ -1156,7 +1164,7 @@ export async function reconcileWorkerRuns({
         const target = l.items.find((i) => i.id === entry.id);
         if (!target || !isWorkerItem(target) || target.status !== "running") continue;
         target.status = entry.status;
-        target.ended = endedIso;
+        recordWorkerEnd(l, target, endedIso);
         target.exit = entry.exit;
         target.reason = entry.reason;
         target.launch_pending = false;
