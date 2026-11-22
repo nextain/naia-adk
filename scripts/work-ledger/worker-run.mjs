@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, open, realpath, rename, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, open, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkIndependentReviewer, commandDigest, resolveWorkerStep, workerProfilePath } from "./worker-profile.mjs";
+import { isNativeResult, readNativeResult } from "./native-session-result.mjs";
 import {
   changeLedger,
   isWorkerItem,
@@ -283,6 +284,17 @@ async function resolveRootAndResult(opts, workCwd) {
     : path.resolve(workCwd, opts.result);
 }
 
+function missingReceipt(item) {
+  if (item.profile && !item.profile_started_at) return "missing-launch-receipt";
+  if (isNativeResult(item.profile?.result_mode) && !item.profile.session_id) return "missing-session-receipt";
+  return null;
+}
+
+function controllerAlive(item, probe) {
+  const controller = item.dispatch_controller ?? item.sensor_controller;
+  return controller && probe(controller.pid, controller.start_token);
+}
+
 export async function finishWorkerRun(
   opts,
   { now, clock = now === undefined ? Date.now : () => now } = {},
@@ -350,9 +362,10 @@ export async function finishWorkerRun(
       if (opts.ifRunning) return item;
       throw new Error(`Worker run ${id} is already ${item.status}`);
     }
-    if (nextStatus === "done" && item.profile && !item.profile_started_at) {
+    const missing = missingReceipt(item);
+    if (nextStatus === "done" && missing) {
       nextStatus = "failed";
-      nextReason = "missing-launch-receipt";
+      nextReason = missing;
     }
     item.status = nextStatus;
     item.ended = endedIso;
@@ -360,6 +373,7 @@ export async function finishWorkerRun(
     item.reason = nextReason;
     item.launch_pending = false;
     delete item.sensor_controller;
+    delete item.dispatch_controller;
     if (effectiveResult !== existing.result) item.result = effectiveResult;
     if (opts.note !== undefined) item.note = String(opts.note);
     else if (nextStatus === "failed" && !item.note && nextReason) {
@@ -382,19 +396,33 @@ async function captureStdout(resultPath) {
   catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
   return {
     fd: handle.fd,
-    async finish(publish) {
+    async finish(publish, commit = snapshot => rename(snapshot, resultPath)) {
       try {
         await handle.close();
         if (!publish) return (await stat(output)).size;
         const snapshot = path.join(dir, "finished");
         await copyFile(output, snapshot);
         if ((await stat(snapshot)).size === 0) throw new Error("Worker stdout was empty");
-        await rename(snapshot, resultPath);
+        await commit(snapshot);
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
     },
   };
+}
+
+async function publishNativeAnswer({ root, role, id, pid, resultMode, resultPath }, snapshot) {
+  const { session, answer } = await readNativeResult(resultMode, snapshot);
+  await writeFile(snapshot, answer);
+  await changeLedger(root, role, async ledger => {
+    const item = ledger.items.find(row => row.id === id);
+    if (item?.status !== "running" || item.pid !== pid || !item.profile_started_at || item.profile?.result_mode !== resultMode) {
+      throw new Error("Native answer no longer belongs to the running worker");
+    }
+    if (ledger.items.some(row => row.profile?.session_id === session)) throw new Error("Native session already used by a worker");
+    await rename(snapshot, resultPath);
+    item.profile.session_id = session;
+  });
 }
 
 async function runSubprocessAndRecord(params, { clock = Date.now } = {}) {
@@ -446,7 +474,7 @@ async function runWorkerAttempt(
   let input;
   let capture;
   try {
-    if (resultMode === "stdout") capture = await captureStdout(resultPath);
+    if (resultMode === "stdout" || isNativeResult(resultMode)) capture = await captureStdout(resultPath);
     if (prompt) input = await open(prompt, "r");
     child = spawn(command[0], command.slice(1), {
       cwd: workCwd,
@@ -524,7 +552,9 @@ async function runWorkerAttempt(
       : 128 + (os.constants.signals[finalSig] || 15);
   let captureError;
   let discardedBytes;
-  try { discardedBytes = await capture?.finish(exitCode === 0 && !finalSig && !receiptError); }
+  const commit = isNativeResult(resultMode)
+    ? snapshot => publishNativeAnswer({ root, role, id, pid, resultMode, resultPath }, snapshot) : undefined;
+  try { discardedBytes = await capture?.finish(exitCode === 0 && !finalSig && !receiptError, commit); }
   catch (error) { captureError = error; }
   if (next && !finalSig && !receiptError && !captureError && discardedBytes === 0 && unavailableExitCodes.includes(exitCode)) {
     return { exitCode, unavailable: "provider-unavailable" };
@@ -566,14 +596,18 @@ export async function execWorkerRun(
     if (workCwd !== item.cwd || commandDigest(command) !== item.profile.argv_sha256) {
       throw new Error("Worker command or cwd differs from its recorded profile");
     }
-    if (item.profile.selection === "ordered") {
+    if (item.profile.selection === "ordered" || isNativeResult(item.profile.result_mode)) {
       const file = workerProfilePath(root, config, role);
       const card = ledger.items.find(row => row.id === item.parent);
-      if (card?.status !== "open" || (card.worker_step ?? "implementation") !== item.profile.step) {
-        throw new Error("Ordered sensor requires its original open card and step");
+      const step = item.review_of ? "review" : card?.worker_step ?? "implementation";
+      if (card?.status !== "open" || step !== item.profile.step) {
+        throw new Error("Worker requires its original open card and step");
       }
-      const selection = resolveWorkerStep(file, item.profile.step, { workDir: workCwd, prompt: item.prompt, result: item.result, role, card });
-      if (selection.binding.profile_sha256 !== item.profile.profile_sha256) throw new Error("Installed sensor profile changed after reservation");
+      const producer = item.review_of && ledger.items.find(row => row.id === item.review_of && row.parent === card.id);
+      if (item.review_of && (producer?.status !== "done" || !producer.profile_started_at)) throw new Error("Missing completed review source");
+      const selection = resolveWorkerStep(file, step, { workDir: workCwd, prompt: item.prompt, result: item.result, role, card, producer: producer?.profile });
+      if (selection.binding.profile_sha256 !== item.profile.profile_sha256) throw new Error("Installed worker profile changed after reservation");
+      checkIndependentReviewer(producer?.profile, selection.binding);
       ordered = selection.ordered;
     }
     await changeLedger(root, role, ledger => {
@@ -581,8 +615,11 @@ export async function execWorkerRun(
       if (run.status !== "running" || run.exec_claimed_at || run.profile_started_at) {
         throw new Error("Profiled worker launch already claimed");
       }
+      if (!ledger.items.some(row => row.id === run.parent && row.status === "open" && !isWorkerItem(row))) {
+        throw new Error("Worker requires an open parent card at launch");
+      }
       run.exec_claimed_at = new Date(clock()).toISOString();
-      if (ordered) run.sensor_controller = { pid: process.pid, start_token: processStart(process.pid) };
+      if (ordered || isNativeResult(item.profile.result_mode)) run.dispatch_controller = { pid: process.pid, start_token: processStart(process.pid) };
     });
   }
   return runSubprocessAndRecord(
@@ -684,6 +721,14 @@ export async function startWorkerRun(
         throw new Error("Installed profile changed after scheduling");
       }
       checkIndependentReviewer(producer?.profile, selection.binding);
+      if (producer && isNativeResult(selection.binding.result_mode)) {
+        const previous = await realpath(producer.result);
+        const target = await realpath(resultPath).catch(error => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+        if (target === previous) throw new Error("Review output must be distinct from the producer result");
+      }
       command = selection.command;
     }
   }
@@ -739,7 +784,7 @@ export async function startWorkerRun(
         }
         if (run.status === "done") return run;
         if (run.status === "running") {
-          if (defaultPidProbe(run.pid, run.start_token) || (run.sensor_controller && defaultPidProbe(run.sensor_controller.pid, run.sensor_controller.start_token))) {
+          if (defaultPidProbe(run.pid, run.start_token) || controllerAlive(run, defaultPidProbe)) {
             throw new Error("Previous worker attempt is still running");
           }
           run.status = "failed";
@@ -776,7 +821,8 @@ export async function startWorkerRun(
       reason: null,
       launch_pending: true,
       initial_result: initialResult,
-      ...(foreground && selection?.ordered ? { sensor_controller: { pid: process.pid, start_token: processStart(process.pid) } } : {}),
+      ...(foreground && (selection?.ordered || isNativeResult(selection?.binding.result_mode))
+        ? { dispatch_controller: { pid: process.pid, start_token: processStart(process.pid) } } : {}),
       ...(supervised ? { supervisor: { id: requestId, dispatch: supervised, attempt } } : {}),
       ...(selection ? { profile: selection.binding, prompt, ...(foreground ? { exec_claimed_at: startedIso } : {}), ...(reviewOf ? { review_of: reviewOf } : {}) } : {}),
       from: {
@@ -971,7 +1017,7 @@ export async function reconcileWorkerRuns({
 
     const planned = [];
     for (const item of runningItems) {
-      if (item.sensor_controller && pidProbe(item.sensor_controller.pid, item.sensor_controller.start_token)) continue;
+      if (controllerAlive(item, pidProbe)) continue;
       out.checked++;
       const startedMs = Date.parse(item.started);
       if (item.launch_pending === true && Number.isFinite(startedMs) && at - startedMs < STARTUP_GRACE_MS) {
@@ -1023,8 +1069,9 @@ export async function reconcileWorkerRuns({
 
         if ((active === "inactive" || active === "deactivating") && sub === "dead") {
           if (probe.result === "success" && probe.execMainStatus === 0) {
-            const check = item.profile && !item.profile_started_at
-              ? { valid: false, reason: "missing-launch-receipt" }
+            const missing = missingReceipt(item);
+            const check = missing
+              ? { valid: false, reason: missing }
               : await inspectResultFile(item.result, item.initial_result);
             if (check.valid) {
               planned.push({

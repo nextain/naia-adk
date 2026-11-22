@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import tierProfile from "../lib/tier-profile.cjs";
+import { isNativeResult, requireFreshInvocation } from "./native-session-result.mjs";
 
 export function commandDigest(command) {
   return createHash("sha256").update(JSON.stringify(command)).digest("hex");
@@ -51,7 +52,8 @@ function selectCandidate(step, assignment, pool, { role, card, producer }) {
       throw new Error("Shuffled candidates need unique IDs, model families and configured argv");
     }
     ids.add(id);
-    if (producer && !independentModels(producer, candidate)) continue;
+    if (producer && !independentModels(producer, candidate) &&
+        !(Number(assignment.tier) === 2 && pool.length === 1 && isNativeResult(candidate.result_mode))) continue;
     const rank = createHash("sha256").update(JSON.stringify([role, card.id, card.from?.channel, card.from?.msg_id, String(assignment.tier), id])).digest("hex");
     candidates.push({ candidate, rank });
   }
@@ -97,13 +99,15 @@ function bindCandidate(profile, step, assignment, candidate, context) {
   if (!tierProfile.validTierToken(candidate.family) || !tierProfile.validWorkerArgv(candidate)) {
     throw new Error(`Worker step ${step} needs a model family and explicit argv for the configured model and effort`);
   }
-  if (candidate.result_mode !== undefined && !["file", "stdout"].includes(candidate.result_mode)) {
-    throw new Error("Worker result_mode must be file or stdout");
+  const mode = candidate.result_mode ?? "file";
+  if (!["file", "stdout"].includes(mode) && !isNativeResult(mode)) {
+    throw new Error("Unknown worker result_mode: " + mode);
   }
-  if (candidate.result_mode === "stdout" && candidate.argv.some(arg => arg.includes("{result_file}"))) {
+  if (mode !== "file" && candidate.argv.some(arg => arg.includes("{result_file}"))) {
     throw new Error("A stdout worker cannot also write the result file");
   }
   const command = tierProfile.expandWorkerArgv(candidate, { work_dir: context.workDir, prompt_file: context.prompt, result_file: context.result });
+  if (isNativeResult(mode)) requireFreshInvocation(mode, command);
   return {
     command,
     binding: {
@@ -115,13 +119,18 @@ function bindCandidate(profile, step, assignment, candidate, context) {
       model: candidate.model,
       effort: candidate.effort ?? null,
       argv_sha256: commandDigest(command),
-      ...(candidate.result_mode === "stdout" ? { result_mode: "stdout" } : {}),
+      ...(mode !== "file" ? { result_mode: mode } : {}),
+      ...(isNativeResult(mode) && Number(assignment.tier) === 2 && profile.document.tiers["2"].candidates.length === 1
+        ? { single_model_review: true } : {}),
     },
   };
 }
 
 export function checkIndependentReviewer(producer, reviewer) {
   if (producer && !independentModels(producer, reviewer)) {
+    if (producer.single_model_review && reviewer.single_model_review && producer.session_id &&
+        producer.profile_sha256 === reviewer.profile_sha256 && producer.result_mode === reviewer.result_mode &&
+        producer.cli === reviewer.cli && producer.model === reviewer.model && producer.family === reviewer.family) return;
     throw new Error("Independent review requires a different configured model family and model");
   }
 }

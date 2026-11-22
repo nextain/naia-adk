@@ -31,7 +31,7 @@
 
 역할 장부에 등록한 카드의 `worker_step`으로 설치 프로파일의 `worker_steps`를 찾습니다. 기본 단계는 `implementation`입니다. `config/work-ledger.json`의 `tier_profile`은 설치 공통 경로이고 `roles[].tier_profile`은 해당 역할의 경로입니다. 경로는 설치 루트를 기준으로 해석합니다. 기본 위치 `config/tier-profile.json`에 들어 있는 프로파일도 읽습니다.
 
-`config/tier-profile.example.json`의 자리표시자를 설치에서 쓰는 값으로 채웁니다. 단계에 한 층과 후보 ID를 지정하거나, `{"tier":2,"selection":"shuffle"}`로 그 층의 후보 중 하나를 뽑을 수 있습니다. 섞기 순서는 역할과 원본 카드·메시지의 식별자로 정합니다. 같은 카드에서 같은 후보 구성을 쓰면 재시작과 예약 실행에서도 같은 일꾼을 고릅니다. 같은 층의 `review`에도 섞기를 지정하면 실제 구현을 수행한 모델과 계열을 제외하고 뽑습니다. 검수 후보가 없으면 실행을 멈춥니다.
+`config/tier-profile.example.json`의 자리표시자를 설치에서 쓰는 값으로 채웁니다. 단계에 한 층과 후보 ID를 지정하거나, `{"tier":2,"selection":"shuffle"}`로 그 층의 후보 중 하나를 뽑을 수 있습니다. 섞기 순서는 역할과 원본 카드·메시지의 식별자로 정합니다. 같은 카드에서 같은 후보 구성을 쓰면 재시작과 예약 실행에서도 같은 일꾼을 고릅니다. 후보가 여럿인 층의 `review`에 섞기를 지정하면 실제 구현을 수행한 모델과 계열을 제외하고 뽑습니다. 검수 후보가 없으면 실행을 멈춥니다.
 
 1층의 읽기 전용 분류 단계에 `{"tier":1,"selection":"ordered"}`를 지정하면 `tiers.1.candidates` 배열 순서로 시도합니다. 후보마다 고유 ID, 계열, 모델, 실행 인수와 `"result_mode":"stdout"`를 둡니다. CLI가 요청을 수락하기 전에 용량 부족을 구별해 내는 종료값은 해당 후보의 `unavailable_exit_codes` 배열에 적습니다. 예를 들어 어댑터가 이 경우에만 75를 반환하면 `[75]`입니다. 실행 파일을 찾을 수 없거나 지정한 종료값으로 출력 없이 끝났을 때 다음 후보가 같은 카드와 입력을 받습니다. 부분 출력, 신호 종료와 그 밖의 오류는 해당 실행을 실패로 닫습니다. 앞선 시도의 모델·기동 시각·종료값은 일꾼의 `profile_attempts`에, 마지막 후보는 `profile`에 기록합니다.
 
@@ -46,11 +46,25 @@ node scripts/work-ledger/worker-run.mjs start --root . --role editor --parent t1
   --name review --review-of draft1 --prompt review.md --result results/review.md
 ```
 
-각 실행 줄은 역할·부모 카드·원래 요청을 함께 보관합니다. `profile`에는 선택한 단계, CLI, 모델, 추론 설정, 모델 계열, 프로파일 파일과 실행 인자의 SHA-256이 들어갑니다. 실제 프로세스가 시작되면 `profile_started_at`과 PID를 기록합니다. 제공자가 실제로 사용한 모델을 확인하려면 해당 CLI의 결과를 이 실행과 대조해야 합니다. 독립 검수는 같은 카드에서 끝난 생산 실행 ID를 받아 구성에 명시된 모델과 계열이 모두 다를 때 기동합니다.
+각 실행 줄은 역할·부모 카드·원래 요청을 함께 보관합니다. `profile`에는 선택한 단계, CLI, 모델, 추론 설정, 모델 계열, 프로파일 파일과 실행 인자의 SHA-256이 들어갑니다. 실제 프로세스가 시작되면 `profile_started_at`과 PID를 기록합니다. 제공자가 실제로 사용한 모델을 확인하려면 해당 CLI의 결과를 이 실행과 대조해야 합니다. 독립 검수는 같은 카드에서 끝난 구현 실행 ID를 받습니다. 기본 구성에서는 구현과 검수의 모델과 계열이 모두 달라야 합니다. 2층에 후보가 하나뿐일 때의 세션 검증 방법은 아래 표에 있습니다.
 
 디스크와 동시 실행을 관리하는 `scripts/worker-runner/spawn-worker.mjs`에서도 `--parent`, `--prompt`, `--result-file`로 같은 실행기를 사용합니다. 장부의 `drive`로 기동하면 카드 단계에 지정된 프로파일을 자동·수동 기동 때 다시 읽고 실제로 선택한 값을 `drive.run.profile`에 보관합니다. 프로파일이 없는 기존 설치의 명령 배열과 기존 장부 이력은 계속 읽을 수 있습니다.
 
 예약 실행도 설치 프로파일을 사용하는 경우 같은 실행기를 거칩니다. 원본 카드의 `drive.run.worker_id`로 일꾼의 실제 기동, 종료값과 결과를 확인하고 이 ID로 검수를 요청할 수 있습니다. 프로파일을 바꾼 사이에 예약 실행이 시작되면 해당 회차가 멈춥니다. 일부만 쓴 결과 파일이나 과거 예약의 기동 기록만 남은 경우에는 장부에서 성공으로 알리지 않습니다. 담당자가 직접 결과를 확인한 기록은 기존 `confirm` 경로로 남길 수 있습니다.
+
+
+### 2층에 모델이 하나일 때의 독립 검수
+
+구현과 검수에 같은 후보를 쓰려면 두 단계 모두 같은 설치 프로파일의 2층을 사용하고, 후보의 `result_mode`에는 CLI의 세션 이벤트 형식을 지정합니다.
+
+| `result_mode` | 프로파일의 실행 인자 | 세션 식별 근거 |
+| --- | --- | --- |
+| `codex-jsonl` | `exec --ephemeral --json` | `thread.started`의 스레드 ID |
+| `muse-jsonl` | `exec --json` | 첫 `runtime.command.accepted`의 세션 ID |
+| `claude-jsonl` | `--print --verbose --output-format stream-json` | `system/init`의 세션 ID |
+| `agy-jsonl` | `--print --output-format stream-json` | `init`의 대화 ID |
+
+모델과 추론 인자는 설치 프로파일에서 정합니다. 검수 호출에 `--review-of <구현 일꾼 ID>`를 전달하고 결과 경로를 따로 줍니다. 각 프로세스가 새 세션을 열어 최종 답을 반환하면 실행기는 `profile.session_id`와 답을 기록합니다. 이전 세션 재개, 이미 장부에 있는 세션 ID, 끝나지 않은 응답은 실패 처리하며 이전 결과 파일을 보존합니다. 후보가 여럿일 때는 서로 다른 계열과 모델을 골라 검수합니다.
 
 ## 장부 줄 스키마 (`kind: "worker"`)
 
