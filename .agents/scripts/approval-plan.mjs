@@ -201,22 +201,45 @@ function runMuse(prompt, museCfg = lib.REVIEW_MODELS.muse) {
 	return String(res.stdout);
 }
 
-function execReviewer(bin, args, input = "", promptSha = "", model = "", effort = "", cwd = ROOT, env = process.env) {
+function execReviewer(bin, args, input, promptSha, model, effort, cwd, env, signal) {
+	signal.throwIfAborted();
 	return new Promise((resolve) => {
 		const startedAt = new Date().toISOString();
 		let stdout = "", stderr = "", bytes = 0, finished = false, failed = "";
-		const child = spawn(bin, args, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
+		const processGroup = process.platform !== "win32";
+		const child = spawn(bin, args, { cwd, env, detached: processGroup, stdio: ["pipe", "pipe", "pipe"] });
+		let stopped = false;
+		const stop = () => {
+			if (!child.pid || stopped) return;
+			stopped = true;
+			if (processGroup) {
+				try { process.kill(-child.pid, "SIGKILL"); }
+				catch (error) {
+					if (error.code === "ESRCH") return;
+					failed = `검수 프로세스 그룹 종료 실패 (${error.code})`;
+					child.kill("SIGKILL");
+				}
+			} else {
+				const taskkill = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe");
+				const result = spawnSync(taskkill, ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
+				if (result.status !== 0) child.kill("SIGKILL");
+			}
+		};
+		signal.addEventListener("abort", stop, { once: true });
+		// A wrapper may exit while a helper still owns its pipes or the shared test slot.
+		if (processGroup) child.once("exit", stop);
 		const finish = (status, error = "") => {
 			if (finished) return;
 			finished = true; clearTimeout(timer);
+			signal.removeEventListener("abort", stop);
 			resolve({ body: stdout, stderr, receipt: { model, effort, started_at: startedAt, ended_at: new Date().toISOString(), exit_code: status, prompt_sha256: promptSha }, error: failed || error || (status !== 0 ? `status ${status}` : !stdout.trim() ? "빈 출력" : "") });
 		};
-		const timer = setTimeout(() => { failed = "45분 실행 제한 초과"; child.kill("SIGKILL"); }, 45 * 60 * 1000);
+		const timer = setTimeout(() => { failed = "45분 실행 제한 초과"; stop(); }, 45 * 60 * 1000);
 		child.on("error", () => finish(null, "실행 파일을 시작하지 못함"));
 		child.stdout.setEncoding("utf8");
 		child.stdout.on("data", (b) => {
 			bytes += Buffer.byteLength(b, "utf8");
-			if (bytes > 64 * 1024 * 1024) { failed = "출력 크기 제한 초과"; child.kill("SIGKILL"); }
+			if (bytes > 64 * 1024 * 1024) { failed = "출력 크기 제한 초과"; stop(); }
 			else stdout += b;
 		});
 		// stderr 는 한도 판별에만 쓰고 기록에는 남기지 않는다. 끝 16KB 만 둔다.
@@ -435,7 +458,7 @@ function reviewerSandboxArgs(promptDir, id, rootDir = ROOT) {
 	return [...args, "--chdir", root];
 }
 
-async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = null, planRoot = ROOT) {
+async function runReviewers(ids, prompt, abs, preManifest, roOpt, planRoot, signal) {
 	let dir, failure;
 	let stage = "config-read";
 	const startedAt = Date.now();
@@ -484,8 +507,9 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 			}
 			const env = { ...process.env };
 			if (config.runner === "claude") delete env.CLAUDE_CODE_EFFORT_LEVEL;
-			return { id, ...config, isolation, ...await execReviewer(bin, args, input, sha256(prompt), config.model, config.effort, planRoot, env) };
+			return { id, ...config, isolation, ...await execReviewer(bin, args, input, sha256(prompt), config.model, config.effort, planRoot, env, signal) };
 		}));
+		signal.throwIfAborted();
 		stage = "manifest-after";
 		let afterManifest = null;
 		try {
@@ -516,7 +540,8 @@ async function runReviewers(ids, prompt, abs, preManifest = undefined, roOpt = n
 		error.reviewStage = stage;
 		throw error;
 	} finally {
-		try { if (dir) fs.rmSync(dir, { recursive: true, force: true }); }
+		// Synchronous Git snapshots can leave a stop signal pending until the event loop runs again.
+		try { if (dir) await fs.promises.rm(dir, { recursive: true, force: true }); }
 		catch (error) {
 			if (failure) console.error(reviewErrorDetails(error, "prompt-cleanup", startedAt, planRoot));
 			else { error.reviewStage = "prompt-cleanup"; throw error; }
@@ -632,13 +657,19 @@ switch (cmd) {
 		const lockHandle = lib.acquirePlanReviewLock({ repoRoot: planRoot, plan: planRel, pid: process.pid, env: process.env });
 		if (!lockHandle.ok) die(lockHandle.why, 1);
 		const cleanupLock = () => { try { lib.releasePlanReviewLock(lockHandle); } catch {} };
-		const onSigInt = () => { cleanupLock(); process.exit(130); };
-		const onSigTerm = () => { cleanupLock(); process.exit(143); };
-		const onSigHup = () => { cleanupLock(); process.exit(129); };
+		const cancellation = new AbortController();
+		const cancel = (code) => {
+			if (cancellation.signal.aborted) return;
+			process.exitCode = code;
+			cancellation.abort();
+		};
+		const onSigInt = () => cancel(130);
+		const onSigTerm = () => cancel(143);
+		const onSigHup = () => cancel(129);
 		process.once("exit", cleanupLock);
-		process.once("SIGINT", onSigInt);
-		process.once("SIGTERM", onSigTerm);
-		process.once("SIGHUP", onSigHup);
+		process.on("SIGINT", onSigInt);
+		process.on("SIGTERM", onSigTerm);
+		process.on("SIGHUP", onSigHup);
 		try {
 			const rec = { plan_sha256: sha, plan: planRel, author_model: author, prompt_sha256: sha256(prompt), read_only_scripts: roBind.items, rotation: true, skipped: [], reviewers: [], reviewedAt };
 			const recordFile = path.join(gatesDir, lib.REVIEW_FILE);
@@ -649,17 +680,22 @@ switch (cmd) {
 			let actual = null, actualOutput = null;
 			const roOpt = { readOnlyScripts: roBind.items };
 			try {
-				const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt, planRoot);
+				const [first] = await runReviewers([ids[0]], prompt, abs, early.digest, roOpt, planRoot, cancellation.signal);
+				if (cancellation.signal.aborted) return;
 				if (lib.isLimitFailure(first.receipt?.exit_code, limitTextOf(first)) && ids.length > 1) {
 					rec.skipped.push({ id: ids[0], model: first.model, effort: first.effort, reason: "limit", exit_code: first.receipt.exit_code, ended_at: first.receipt.ended_at });
 					console.log(`한도 실패로 다음 차례 리뷰어로 넘어감: ${ids[0]} → ${ids[1]}`);
-					const [second] = await runReviewers([ids[1]], prompt, abs, early.digest, roOpt, planRoot);
+					const [second] = await runReviewers([ids[1]], prompt, abs, early.digest, roOpt, planRoot, cancellation.signal);
 					actual = second; actualOutput = outputs[1];
 				} else {
 					actual = first; actualOutput = outputs[0];
 				}
 			}
-			catch (error) { die(`읽기 전용 실행 준비 실패. 이전 리뷰 기록은 무효입니다 ${reviewErrorDetails(error, error.reviewStage || "review-prepare", reviewStartedAt, planRoot)}`, 3); }
+			catch (error) {
+				if (cancellation.signal.aborted) return;
+				die(`읽기 전용 실행 준비 실패. 이전 리뷰 기록은 무효입니다 ${reviewErrorDetails(error, error.reviewStage || "review-prepare", reviewStartedAt, planRoot)}`, 3);
+			}
+			if (cancellation.signal.aborted) return;
 			{
 				const r = actual;
 				const text = r.body.endsWith("\n") ? r.body : `${r.body}\n`;
@@ -678,6 +714,7 @@ switch (cmd) {
 			process.exit(r.ok ? 0 : 1);
 		} finally {
 			cleanupLock();
+			process.removeListener("exit", cleanupLock);
 			process.removeListener("SIGINT", onSigInt);
 			process.removeListener("SIGTERM", onSigTerm);
 			process.removeListener("SIGHUP", onSigHup);
