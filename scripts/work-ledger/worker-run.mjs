@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, open, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkIndependentReviewer, commandDigest, resolveWorkerStep, workerProfilePath } from "./worker-profile.mjs";
-import { isNativeResult, openWorkerPrompt, readNativeResult } from "./native-session-result.mjs";
+import { isInitialCapacityRefusal, isNativeResult, openWorkerPrompt, readNativeResult } from "./native-session-result.mjs";
 import {
   changeLedger,
   isWorkerItem,
@@ -397,10 +397,10 @@ async function captureStdout(resultPath) {
   return {
     fd: handle.fd,
     directory: dir,
-    async finish(publish, commit = snapshot => rename(snapshot, resultPath)) {
+    async finish(publish, commit = snapshot => rename(snapshot, resultPath), inspectFailure) {
       try {
         await handle.close();
-        if (!publish) return (await stat(output)).size;
+        if (!publish) return inspectFailure ? await inspectFailure(output) : false;
         const snapshot = path.join(dir, "finished");
         await copyFile(output, snapshot);
         if ((await stat(snapshot)).size === 0) throw new Error("Worker stdout was empty");
@@ -431,14 +431,19 @@ async function runSubprocessAndRecord(params, { clock = Date.now } = {}) {
   for (const [index, route] of params.ordered.entries()) {
     const next = params.ordered[index + 1];
     const out = await runWorkerAttempt({
-      ...params, command: route.command, tool: detectTool([route.binding.cli]),
+      ...params, command: route.command, tool: detectTool([route.binding.cli]), resultMode: route.binding.result_mode,
     }, { clock, next, unavailableExitCodes: route.unavailableExitCodes });
     if (!out.unavailable) return out;
     const advanced = await changeLedger(params.root, params.role, ledger => {
       const item = ledger.items.find(row => row.id === params.id);
       const card = ledger.items.find(row => row.id === params.parent);
-      if (item?.status !== "running" || card?.status !== "open" ||
-          (card.worker_step ?? "implementation") !== route.binding.step || item.profile.argv_sha256 !== route.binding.argv_sha256) return false;
+      if (item?.status !== "running" || card?.status !== "open" || item.profile.argv_sha256 !== route.binding.argv_sha256) return false;
+      if ((item.review_of ? "review" : card.worker_step ?? "implementation") !== route.binding.step) return false;
+      if (item.review_of) {
+        const producer = ledger.items.find(row => row.id === item.review_of && row.parent === card.id);
+        if (producer?.status !== "done" || !producer.profile_started_at) return false;
+        checkIndependentReviewer(producer.profile, next.binding);
+      }
       (item.profile_attempts ??= []).push({
         profile: item.profile, pid: item.pid, started_at: item.profile_started_at ?? null,
         ended_at: new Date(clock()).toISOString(), exit: out.exitCode, reason: out.unavailable,
@@ -458,12 +463,12 @@ async function runSubprocessAndRecord(params, { clock = Date.now } = {}) {
     if (!advanced) {
       const item = await finishWorkerRun({
         root: params.root, config: params.configPath, role: params.role, id: params.id,
-        exit: out.exitCode, reason: "sensor-dispatch-stopped", ifRunning: true,
+        exit: out.exitCode, reason: route.binding.selection === "ordered" ? "sensor-dispatch-stopped" : "worker-dispatch-stopped", ifRunning: true,
       }, { clock });
       return { item, exitCode: out.exitCode };
     }
   }
-  throw new Error("Empty ordered sensor dispatch");
+  throw new Error("Empty candidate list for worker dispatch");
 }
 
 async function runWorkerAttempt(
@@ -509,7 +514,7 @@ async function runWorkerAttempt(
         role,
         id,
         exit: 127,
-        reason: "launch-failed",
+        reason: unavailableExitCodes && spawnError?.code === "ENOENT" ? "executable-missing" : "launch-failed",
         note: spawnError?.message || "Failed to spawn worker command",
         ifRunning: true,
       },
@@ -552,14 +557,16 @@ async function runWorkerAttempt(
       ? code
       : 128 + (os.constants.signals[finalSig] || 15);
   let captureError;
-  let discardedBytes;
+  let capacityRefused;
   const commit = isNativeResult(resultMode)
     ? snapshot => publishNativeAnswer({ root, role, id, pid, resultMode, resultPath }, snapshot) : undefined;
-  try { discardedBytes = await capture?.finish(exitCode === 0 && !finalSig && !receiptError, commit); }
+  const inspectFailure = unavailableExitCodes && exitCode > 0 && !finalSig && !receiptError ? async file => {
+    if ((await stat(file)).size === 0) return unavailableExitCodes.includes(exitCode);
+    return isInitialCapacityRefusal(resultMode, file);
+  } : undefined;
+  try { capacityRefused = await capture?.finish(exitCode === 0 && !finalSig && !receiptError, commit, inspectFailure); }
   catch (error) { captureError = error; }
-  if (next && !finalSig && !receiptError && !captureError && discardedBytes === 0 && unavailableExitCodes.includes(exitCode)) {
-    return { exitCode, unavailable: "provider-unavailable" };
-  }
+  if (capacityRefused && next) return { exitCode, unavailable: "provider-unavailable" };
   const item = await finishWorkerRun(
     {
       root,
@@ -567,6 +574,7 @@ async function runWorkerAttempt(
       role,
       id,
       exit: exitCode,
+      ...(capacityRefused ? { reason: "provider-unavailable" } : {}),
       ...(captureError ? { reason: "stdout-result-failed", note: captureError.message } : {}),
       ...(finalSig ? { reason: `signal-${finalSig}` } : {}),
       ...(prompt && receiptError ? { reason: "missing-launch-receipt", note: receiptError.message } : {}),
@@ -597,7 +605,7 @@ export async function execWorkerRun(
     if (workCwd !== item.cwd || commandDigest(command) !== item.profile.argv_sha256) {
       throw new Error("Worker command or cwd differs from its recorded profile");
     }
-    if (item.profile.selection === "ordered" || isNativeResult(item.profile.result_mode)) {
+    if (item.profile.selection || isNativeResult(item.profile.result_mode)) {
       const file = workerProfilePath(root, config, role);
       const card = ledger.items.find(row => row.id === item.parent);
       const step = item.review_of ? "review" : card?.worker_step ?? "implementation";
@@ -608,6 +616,7 @@ export async function execWorkerRun(
       if (item.review_of && (producer?.status !== "done" || !producer.profile_started_at)) throw new Error("Missing completed review source");
       const selection = resolveWorkerStep(file, step, { workDir: workCwd, prompt: item.prompt, result: item.result, role, card, producer: producer?.profile });
       if (selection.binding.profile_sha256 !== item.profile.profile_sha256) throw new Error("Installed worker profile changed after reservation");
+      if (selection.binding.argv_sha256 !== item.profile.argv_sha256) throw new Error("Selected worker changed after reservation");
       checkIndependentReviewer(producer?.profile, selection.binding);
       ordered = selection.ordered;
     }
@@ -722,7 +731,7 @@ export async function startWorkerRun(
         throw new Error("Installed profile changed after scheduling");
       }
       checkIndependentReviewer(producer?.profile, selection.binding);
-      if (producer && isNativeResult(selection.binding.result_mode)) {
+      if (producer) {
         const previous = await realpath(producer.result);
         const target = await realpath(resultPath).catch(error => {
           if (error.code === "ENOENT") return null;
@@ -780,7 +789,7 @@ export async function startWorkerRun(
       for (const run of previous) {
         const initialProfile = run.profile_attempts?.[0]?.profile ?? run.profile;
         if (run.parent !== parent || run.result !== resultPath || run.prompt !== prompt || initialProfile.argv_sha256 !== selection.binding.argv_sha256 ||
-            initialProfile.result_mode !== selection.binding.result_mode || (initialProfile.selection === "ordered" && initialProfile.profile_sha256 !== selection.binding.profile_sha256)) {
+            initialProfile.result_mode !== selection.binding.result_mode || (initialProfile.selection && initialProfile.profile_sha256 !== selection.binding.profile_sha256)) {
           throw new Error("Profiled supervisor resumption differs from its original dispatch");
         }
         if (run.status === "done") return run;

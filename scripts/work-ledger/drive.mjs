@@ -52,6 +52,7 @@ const LABELS = {
   "disk-low": "디스크 부족으로 안 띄움",
   queued: "동시 수 상한으로 대기",
   "launch-failed": "일꾼 띄우기 실패",
+  "worker-unavailable": "프로파일에 지정한 후보 대기",
 };
 
 export function driveConfig(config) {
@@ -471,6 +472,10 @@ export async function tick({ root, config, configPath, now = Date.now(), dry = f
               const tracked = trackedWorker(ledger, item);
               if (tracked?.status === "running") {
                 alert(item, "launch-failed", `일꾼 ${d.run.worker_id}의 종료 기록을 확인할 수 없습니다. 시작 기록: ${d.run.log}`);
+                continue;
+              }
+              if (tracked?.status === "failed" && ["provider-unavailable", "executable-missing"].includes(tracked.reason)) {
+                alert(item, "worker-unavailable", `후보를 사용할 수 없어 원본 카드를 열어 두었습니다 (${tracked.reason}). 복구 확인 후 같은 카드로 재개: start ${item.id}`);
                 continue;
               }
             }

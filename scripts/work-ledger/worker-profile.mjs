@@ -33,12 +33,12 @@ function independentModels(producer, reviewer) {
 
 // Rendezvous hashing gives each card a reproducible draw. Reordering a profile,
 // inspecting a queued card, or retrying a launch cannot pick its producer anew.
-function selectCandidate(step, assignment, pool, { role, card, producer }) {
+function selectCandidates(step, assignment, pool, { role, card, producer }) {
   if (assignment.selection === undefined) {
     if (!tierProfile.validTierToken(assignment.candidate)) throw new Error(`Invalid tier or candidate for worker step: ${step}`);
     const matches = pool.filter(candidate => (candidate.id ?? candidate.cli) === assignment.candidate);
     if (matches.length !== 1) throw new Error(`Worker step ${step} must select one configured candidate`);
-    return matches[0];
+    return matches;
   }
   if (assignment.selection !== "shuffle" || Object.hasOwn(assignment, "candidate")) {
     throw new Error(`Choose a single candidate or shuffle the tier for worker step: ${step}`);
@@ -59,7 +59,7 @@ function selectCandidate(step, assignment, pool, { role, card, producer }) {
   }
   if (!candidates.length) throw new Error(producer ? "Independent review requires a different configured model family and model" : "Worker step has no configured candidates");
   candidates.sort((a, b) => a.rank.localeCompare(b.rank));
-  return candidates[0].candidate;
+  return candidates.map(entry => entry.candidate);
 }
 
 export function resolveWorkerStep(file, step, context) {
@@ -72,27 +72,34 @@ export function resolveWorkerStep(file, step, context) {
     throw new Error(`Invalid tier or candidate for worker step: ${step}`);
   }
   const pool = profile.document.tiers[assignment.tier]?.candidates ?? [];
+  let candidates;
   if (assignment.selection === "ordered") {
     if (Number(assignment.tier) !== 1 || context.producer || Object.hasOwn(assignment, "candidate")) {
       throw new Error("Ordered selection is for tier 1 sensor steps");
     }
     if (!pool.length) throw new Error("Ordered sensor step has no configured candidates");
     const seen = new Set();
-    const ordered = pool.map(candidate => {
+    for (const candidate of pool) {
       const id = candidate.id ?? candidate.cli;
-      const codes = candidate.unavailable_exit_codes ?? [];
       if (!tierProfile.validTierToken(id) || seen.has(id) || candidate.result_mode !== "stdout") {
         throw new Error("Ordered sensors require unique candidate IDs and stdout results");
       }
-      if (!Array.isArray(codes) || !codes.every(n => Number.isInteger(n) && n > 0 && n < 126)) {
-        throw new Error("Invalid unavailable_exit_codes for sensor " + id);
-      }
       seen.add(id);
-      return { ...bindCandidate(profile, step, assignment, candidate, context), unavailableExitCodes: codes };
-    });
-    return { ...ordered[0], ordered };
+    }
+    candidates = pool;
+  } else {
+    candidates = selectCandidates(step, assignment, pool, context);
   }
-  return bindCandidate(profile, step, assignment, selectCandidate(step, assignment, pool, context), context);
+  const routesByProfile = assignment.selection === "ordered" || (Number(assignment.tier) === 2 && assignment.selection === "shuffle");
+  if (!routesByProfile) return bindCandidate(profile, step, assignment, candidates[0], context);
+  const ordered = candidates.map(candidate => {
+    const codes = candidate.unavailable_exit_codes ?? [];
+    if (!Array.isArray(codes) || !codes.every(n => Number.isInteger(n) && n > 0 && n < 126)) {
+      throw new Error("Invalid unavailable_exit_codes for candidate " + (candidate.id ?? candidate.cli));
+    }
+    return { ...bindCandidate(profile, step, assignment, candidate, context), unavailableExitCodes: codes };
+  });
+  return { ...ordered[0], ordered };
 }
 
 function bindCandidate(profile, step, assignment, candidate, context) {
