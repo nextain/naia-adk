@@ -107,8 +107,13 @@ test("standalone server.js starts the guarded server", async () => {
       const original = http.createServer
       http.createServer = (...args) => {
         const server = original(...args)
+        const defaultKeepAlive = server.keepAliveTimeout
         server.once("listening", async () => {
           try {
+            await new Promise(resolve => setImmediate(resolve))
+            if (process.env.KEEP_ALIVE_TIMEOUT !== undefined) {
+              assert.equal(server.keepAliveTimeout, Number(process.env.KEEP_ALIVE_TIMEOUT) || defaultKeepAlive, "unexpected keep-alive timeout")
+            }
             assert.equal(server.address().port, ${port}, "launcher ignored requested port")
             assert.equal(server.address().address, "127.0.0.1", "launcher ignored requested hostname")
             assert.equal(process.cwd(), ${JSON.stringify(dashboard)})
@@ -130,10 +135,11 @@ test("standalone server.js starts the guarded server", async () => {
     delete environment.NAIA_DASHBOARD_PORT
     delete environment.NAIA_DASHBOARD_HOST
     delete environment.__NEXT_PRIVATE_STANDALONE_CONFIG
+    delete environment.KEEP_ALIVE_TIMEOUT
     const cases = [
       { label: "Next environment", env: { PORT: String(port), HOSTNAME: "127.0.0.1" }, args: [] },
-      { label: "ADK environment", env: { PORT: "1", HOSTNAME: "invalid.example", NAIA_DASHBOARD_PORT: String(port), NAIA_DASHBOARD_HOST: "127.0.0.1" }, args: [] },
-      { label: "CLI flags", env: { PORT: "1", HOSTNAME: "invalid.example", NAIA_DASHBOARD_PORT: "2", NAIA_DASHBOARD_HOST: "invalid.example" }, args: ["-p", String(port), "-H", "127.0.0.1"] },
+      { label: "ADK environment", env: { KEEP_ALIVE_TIMEOUT: "0", PORT: "1", HOSTNAME: "invalid.example", NAIA_DASHBOARD_PORT: String(port), NAIA_DASHBOARD_HOST: "127.0.0.1" }, args: [] },
+      { label: "CLI flags", env: { KEEP_ALIVE_TIMEOUT: "12000", PORT: "1", HOSTNAME: "invalid.example", NAIA_DASHBOARD_PORT: "2", NAIA_DASHBOARD_HOST: "invalid.example" }, args: ["-p", String(port), "-H", "127.0.0.1"] },
     ]
     for (const scenario of cases) {
       const result = spawnSync(process.execPath, ["--import", probe, path.join(dashboard, "server.js"), ...scenario.args], {

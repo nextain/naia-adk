@@ -12,7 +12,7 @@ async function main() {
     NAIA_DASHBOARD_HOST: process.env.NAIA_DASHBOARD_HOST || process.env.HOSTNAME || "0.0.0.0",
   })
   const keepAliveTimeout = Number.parseInt(process.env.KEEP_ALIVE_TIMEOUT, 10)
-  if (Number.isFinite(keepAliveTimeout) && keepAliveTimeout >= 0) server.keepAliveTimeout = keepAliveTimeout
+  if (Number.isFinite(keepAliveTimeout) && keepAliveTimeout > 0) server.keepAliveTimeout = keepAliveTimeout
 }
 
 main().catch(error => {
