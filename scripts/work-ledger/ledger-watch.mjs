@@ -927,7 +927,7 @@ export async function watch({
               ...(everyoneOrHere ? ["all"] : []),
             ]);
           }
-          function addressed(m) {
+          function addressed(m, followsRecordedTask = false) {
             const { allMentions, everyoneOrHere } = extractMentions(m);
             const ownMention = ownTargets.some((id) => allMentions.has(id));
             const parentAuthor =
@@ -949,8 +949,7 @@ export async function watch({
                     !relays.includes(parentAuthor))),
             );
             if (otherReply) return false;
-            if (everyoneOrHere) return true;
-            return false;
+            return everyoneOrHere || followsRecordedTask;
           }
           function messageTimes(m) {
             const createdMs = Date.parse(m.created_at || m.timestamp);
@@ -1066,7 +1065,6 @@ export async function watch({
               if (!Number.isFinite(effectiveMs) || effectiveMs > now) continue;
               if (intake.enabled === true && intake.since && createdMs < Date.parse(intake.since)) continue;
               const msgChannel = m.channel || channel;
-              const roleAddressed = addressed(m);
               if (intake.enabled === true && hasHumanMsgId(m.id) && effectiveMs >= since && !isMentionOnlyBody(m)) {
                 // The legacy reminder also recognizes quoted identities. Creating
                 // a work item requires an identity from the installation settings.
@@ -1077,7 +1075,8 @@ export async function watch({
                 const mentions = extractMentions(m);
                 const pointsElsewhere = otherIdentities.some(id => mentions.allMentions.has(id));
                 if (pointsElsewhere && !mentions.everyoneOrHere && !ownTargets.some(id => mentions.allMentions.has(id))) continue;
-                if (!roleAddressed && !(taskForSource(ledger.items, msgChannel, m.id) || relatedTask(ledger.items, related))) continue;
+                const recorded = taskForSource(ledger.items, msgChannel, m.id) || relatedTask(ledger.items, related);
+                if (!addressed(m, Boolean(recorded))) continue;
                 const body = String(m.body || "").trim();
                 ledger = await receiveWork({
                   root, roleConfig, ledger, related, revision: effectiveMs, edited: isEdited, now, minutes: intake.defaultDueMinutes ?? 120,
@@ -1087,7 +1086,7 @@ export async function watch({
                 });
                 continue;
               }
-              if (!checkUnrecordedHuman || !roleAddressed) continue;
+              if (!checkUnrecordedHuman || !addressed(m)) continue;
               // 사람 글은 장부 기록(또는 명시된 answered_elsewhere_file) 없이 답글·후속 글만으로 닫히지 않는다.
               const mThreadId =
                 msgChannel !== channel || discoveredThreads.has(msgChannel)

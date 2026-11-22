@@ -107,6 +107,17 @@ test("intake can run without unregistered reminders; a redirect belongs only to 
   assert.deepEqual((await rows("editor")).map(c => c.from.msg_id), ["redirect"]);
 });
 
+test("a reply to one role on shared work reaches only the role whose answer it addresses", async t => {
+  const { run, rows } = await setup(t);
+  const shared = post("shared", "<@writer> <@editor> review this together");
+  const answer = post("editor-answer", "I have a question", { author_id: "editor", reply_to_id: shared.id });
+  const reply = post("answer-to-editor", "Use the short version", { reply_to_id: answer.id, reply_to_author_id: "editor" });
+  await run([reply, answer, shared]);
+  const messages = async role => (await rows(role)).map(card => card.intake_messages.map(event => event.msg_id));
+  assert.deepEqual(await messages("editor"), [["shared", "answer-to-editor"]]);
+  assert.deepEqual(await messages("writer"), [["shared"]]);
+});
+
 test("a queued notice survives restart without a messenger; already published filenames are not delivered twice", async t => {
   const { root, config, run, rows } = await setup(t);
   await run([]);
